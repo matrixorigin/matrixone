@@ -1025,14 +1025,16 @@ func (builder *QueryBuilder) rewriteEffectlessAggToProjectImpl(
 		len(node.BindingTags) == 0 {
 		return
 	}
-	if len(node.AggList) > 0 &&
-		(!limitDemand || hasInactiveGroupingColumn(node.GroupingFlag)) {
+	if hasInactiveGroupingColumn(node.GroupingFlag) {
+		// An inactive key emits NULL for this grouping-set branch.  A Project
+		// cannot reproduce that row even when the branch has no aggregate
+		// functions, so this is an unconditional semantic barrier.
+		return
+	}
+	if len(node.AggList) > 0 && !limitDemand {
 		// Aggregate-bearing rewrites are a limit-aware optimization, not a
 		// general plan-shape canonicalization.  Requiring a bounded demand
-		// keeps unlimited queries on their established physical path.  An
-		// inactive grouping key belongs to a GROUPING SETS / ROLLUP / CUBE
-		// branch.  The all-active sibling is protected by the UNION boundary,
-		// across which bounded demand is deliberately never propagated.
+		// keeps unlimited queries on their established physical path.
 		return
 	}
 	scan := builder.qry.Nodes[node.Children[0]]
@@ -1237,26 +1239,200 @@ func isTruncationSafePredicateExpr(expr *plan.Expr) bool {
 	case function.EQUAL, function.NOT_EQUAL,
 		function.GREAT_THAN, function.GREAT_EQUAL,
 		function.LESS_THAN, function.LESS_EQUAL:
-		return len(fn.Args) == 2 &&
-			isTruncationSafePredicateValue(fn.Args[0]) &&
-			isTruncationSafePredicateValue(fn.Args[1])
+		return isTruncationSafeComparison(functionID, fn.Args)
 	case function.BETWEEN:
-		return len(fn.Args) == 3 &&
-			isTruncationSafePredicateValue(fn.Args[0]) &&
-			isTruncationSafePredicateValue(fn.Args[1]) &&
-			isTruncationSafePredicateValue(fn.Args[2])
+		return isTruncationSafeBetween(fn.Args)
 	case function.IN, function.NOT_IN:
-		return len(fn.Args) == 2 &&
-			isTruncationSafePredicateValue(fn.Args[0]) &&
-			isTruncationSafePredicateValue(fn.Args[1])
+		return isTruncationSafeIn(fn.Args)
 	case function.IS, function.ISNOT:
-		return len(fn.Args) == 2 &&
-			isTruncationSafePredicateValue(fn.Args[0]) &&
-			isTruncationSafePredicateValue(fn.Args[1])
+		return isTruncationSafeComparison(functionID, fn.Args)
 	case function.ISNULL, function.ISNOTNULL,
 		function.ISTRUE, function.ISNOTTRUE,
 		function.ISFALSE, function.ISNOTFALSE:
 		return len(fn.Args) == 1 && isTruncationSafePredicateValue(fn.Args[0])
+	default:
+		return false
+	}
+}
+
+func isTruncationSafeComparison(functionID int32, args []*plan.Expr) bool {
+	return len(args) == 2 &&
+		isTruncationSafePredicateValue(args[0]) &&
+		isTruncationSafePredicateValue(args[1]) &&
+		comparisonEvaluationIsTotal(functionID, args[0].Typ, args[1].Typ)
+}
+
+// comparisonEvaluationIsTotal proves the resolved comparison implementation,
+// not merely the shape of its operands. Keep the supported type domains
+// explicit so a newly added comparison overload is rejected until its failure
+// behavior has been reviewed.
+func comparisonEvaluationIsTotal(functionID int32, left, right plan.Type) bool {
+	leftID := types.T(left.Id)
+	rightID := types.T(right.Id)
+
+	if functionID == function.IS || functionID == function.ISNOT {
+		return leftID == types.T_bool && rightID == types.T_bool
+	}
+	if !isTruncationSafeEquality(functionID) && !isTruncationSafeOrdering(functionID) {
+		return false
+	}
+	if isDatetimeTimestampTypePair(leftID, rightID) {
+		return true
+	}
+	if leftID != rightID {
+		// Equality has a direct JSON/BOOL overload.  Valid JSON containers can
+		// fail its scalar coercion, so that mixed domain is intentionally not
+		// included here.
+		return false
+	}
+
+	if leftID.IsDecimal() {
+		if !validDecimalPlanType(left) || !validDecimalPlanType(right) {
+			return false
+		}
+		if leftID != types.T_decimal256 || left.Scale == right.Scale {
+			return true
+		}
+		// Decimal256 comparisons align scales at execution time.  Scaling the
+		// lower-scale coefficient is total only when every value in its declared
+		// precision still fits the 76-digit Decimal256 domain.
+		lowerScale := left
+		if right.Scale < left.Scale {
+			lowerScale = right
+		}
+		delta := left.Scale - right.Scale
+		if delta < 0 {
+			delta = -delta
+		}
+		return lowerScale.Width+delta <= types.T_decimal256.ToType().Width
+	}
+
+	switch leftID {
+	case types.T_bool,
+		types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64,
+		types.T_int8, types.T_int16, types.T_int32, types.T_int64,
+		types.T_float32, types.T_float64,
+		types.T_char, types.T_varchar,
+		types.T_date, types.T_datetime, types.T_timestamp, types.T_time,
+		types.T_blob, types.T_text, types.T_datalink,
+		types.T_binary, types.T_varbinary,
+		types.T_json, types.T_uuid, types.T_Rowid,
+		types.T_array_float32, types.T_array_float64,
+		types.T_array_bf16, types.T_array_float16,
+		types.T_array_int8, types.T_array_uint8,
+		types.T_year:
+		return true
+	case types.T_bit:
+		// notEqualFn currently routes BIT through the varlena executor even
+		// though BIT is fixed-width.  Keep that resolved overload behind the
+		// blocking Aggregate; equality and ordering use fixed-width executors.
+		return functionID != function.NOT_EQUAL
+	case types.T_geometry, types.T_geometry32:
+		return isTruncationSafeEquality(functionID)
+	case types.T_enum:
+		// EQUAL has a concrete ENUM executor, while NOT_EQUAL is accepted by
+		// the registry but has no execution case.
+		return functionID == function.EQUAL
+	default:
+		return false
+	}
+}
+
+func isTruncationSafeEquality(functionID int32) bool {
+	return functionID == function.EQUAL || functionID == function.NOT_EQUAL
+}
+
+func isTruncationSafeOrdering(functionID int32) bool {
+	switch functionID {
+	case function.GREAT_THAN, function.GREAT_EQUAL,
+		function.LESS_THAN, function.LESS_EQUAL:
+		return true
+	default:
+		return false
+	}
+}
+
+func isDatetimeTimestampTypePair(left, right types.T) bool {
+	return left == types.T_datetime && right == types.T_timestamp ||
+		left == types.T_timestamp && right == types.T_datetime
+}
+
+func isTruncationSafeBetween(args []*plan.Expr) bool {
+	if len(args) != 3 {
+		return false
+	}
+	for _, arg := range args {
+		if !isTruncationSafePredicateValue(arg) {
+			return false
+		}
+	}
+
+	ids := [3]types.T{
+		types.T(args[0].Typ.Id),
+		types.T(args[1].Typ.Id),
+		types.T(args[2].Typ.Id),
+	}
+	if ids[0] == types.T_datetime || ids[0] == types.T_timestamp {
+		for _, id := range ids[1:] {
+			if id != types.T_datetime && id != types.T_timestamp {
+				return false
+			}
+		}
+		return true
+	}
+	if ids[0] != ids[1] || ids[0] != ids[2] {
+		return false
+	}
+	if ids[0].IsDecimal() {
+		return validDecimalPlanType(args[0].Typ) &&
+			validDecimalPlanType(args[1].Typ) &&
+			validDecimalPlanType(args[2].Typ)
+	}
+
+	// This is the exact total domain implemented by betweenImpl.  The
+	// function registry accepts some additional comparison-capable types whose
+	// BETWEEN executor currently has no case, so do not infer safety from the
+	// registry's generic comparison check.
+	switch ids[0] {
+	case types.T_bool, types.T_bit,
+		types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64,
+		types.T_int8, types.T_int16, types.T_int32, types.T_int64,
+		types.T_float32, types.T_float64,
+		types.T_date, types.T_datetime, types.T_timestamp, types.T_time,
+		types.T_uuid, types.T_Rowid,
+		types.T_char, types.T_varchar,
+		types.T_blob, types.T_text, types.T_datalink,
+		types.T_binary, types.T_varbinary:
+		return true
+	default:
+		return false
+	}
+}
+
+func isTruncationSafeIn(args []*plan.Expr) bool {
+	if len(args) != 2 ||
+		!isTruncationSafePredicateValue(args[0]) ||
+		!isTruncationSafePredicateValue(args[1]) {
+		return false
+	}
+
+	left := args[0].Typ
+	leftID := types.T(left.Id)
+	if leftID.IsDecimal() {
+		return validDecimalPlanType(left)
+	}
+	// IN is implemented as a typed hash lookup.  This list mirrors its concrete
+	// overloads; unknown future overloads remain behind the Aggregate barrier.
+	switch leftID {
+	case types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64,
+		types.T_int8, types.T_int16, types.T_int32, types.T_int64,
+		types.T_float32, types.T_float64,
+		types.T_varchar, types.T_char,
+		types.T_date, types.T_datetime, types.T_bool, types.T_timestamp,
+		types.T_blob, types.T_uuid, types.T_text, types.T_time,
+		types.T_binary, types.T_varbinary, types.T_year,
+		types.T_array_float32, types.T_array_float64, types.T_enum:
+		return true
 	default:
 		return false
 	}

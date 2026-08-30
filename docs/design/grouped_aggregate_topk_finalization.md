@@ -82,8 +82,13 @@ The aggregate-bearing extension accepts only all of the following:
   structurally proven total, side-effect-free cast whose target range covers the
   complete source domain;
 - every semantic row predicate already owned by the direct scan is
-  truncation-safe. The proof accepts typed values, total casts, boolean
-  connectors, comparisons, BETWEEN/IN and NULL/boolean tests; an arbitrary
+  truncation-safe. The proof accepts typed values, total casts and boolean
+  connectors, then separately proves that the resolved comparison, BETWEEN or
+  IN executor is total over the complete operand type domains. The proof is an
+  explicit allowlist: a new overload remains ineligible until its execution
+  failure behavior is reviewed. In particular, Decimal256 scale alignment must
+  fit the complete 76-digit domain and mixed JSON/BOOL equality is rejected
+  because valid JSON containers can fail scalar coercion. An arbitrary
   deterministic scalar is not assumed total;
 - every Filter predicate on the bounded-demand path to Aggregate, including
   HAVING before the first filter-pushdown pass, satisfies the same proof;
@@ -167,7 +172,9 @@ OFFSET and any rank/tie semantics.
   externally visible evaluations, including the first-pass HAVING path before
   filter pushdown. `BlockFilterList` holds derived pruning copies; the semantic
   predicate remains in `FilterList`, so it is not a second unproved evaluation
-  owner.
+  owner. Predicate operators are proven against their resolved execution type
+  domains rather than operand shape alone; registry-accepted combinations with
+  fallible coercion or no matching executor case fail closed.
 - Binding remapping is performed only after every aggregate expression in the
   candidate has been proven, preventing partial rewrites.
 
@@ -218,9 +225,11 @@ requires service-level evidence.
 - focused planner tests: PK elimination, aggregate family, nullable COUNT, HAVING,
   missing PK, DISTINCT/configured aggregate, grouping family, unbounded fallback,
   decimal domain containment, floating-point signed-zero fallback, fallible and
-  volatile expression plus WHERE/HAVING predicate fallback, safe
-  comparison/boolean/range predicate controls, and a total widening-cast
-  control;
+  volatile expression plus WHERE/HAVING predicate fallback, Decimal256
+  comparison scale-overflow and mixed JSON/BOOL counterexamples, resolved
+  operator totality boundaries, aggregate-free inactive ROLLUP/CUBE/GROUPING
+  SETS branches, safe comparison/boolean/range predicate controls, and total
+  comparison/cast controls;
 - exhaustive small-window LIMIT/OFFSET composition against sequential slice
   semantics, plus public nested-query plans, dynamic-expression fallback,
   overflow fallback and repeated-pass idempotence;

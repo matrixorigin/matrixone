@@ -21,6 +21,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 )
 
 func TestPrimaryKeyGroupEliminationUnlocksScanLimit(t *testing.T) {
@@ -219,6 +220,85 @@ func TestPrimaryKeyGroupEliminationRequiresTruncationSafeScanPredicates(t *testi
 	}
 }
 
+func TestPrimaryKeyGroupEliminationRequiresTotalResolvedComparisons(t *testing.T) {
+	tests := []struct {
+		name        string
+		sql         string
+		columnTypes map[string]planpb.Type
+		wantAgg     bool
+	}{
+		{
+			name: "decimal256 scale alignment can overflow",
+			sql:  "select empno, count(*) from constraint_test.emp where sal < comm group by empno limit 1",
+			columnTypes: map[string]planpb.Type{
+				"sal":  {Id: int32(types.T_decimal256), Width: 65, Scale: 0},
+				"comm": {Id: int32(types.T_decimal256), Width: 65, Scale: 12},
+			},
+			wantAgg: true,
+		},
+		{
+			name: "decimal256 scale alignment proven total",
+			sql:  "select empno, count(*) from constraint_test.emp where sal < comm group by empno limit 1",
+			columnTypes: map[string]planpb.Type{
+				"sal":  {Id: int32(types.T_decimal256), Width: 64, Scale: 0},
+				"comm": {Id: int32(types.T_decimal256), Width: 65, Scale: 12},
+			},
+		},
+		{
+			name: "json boolean coercion can reject containers",
+			sql:  "select empno, count(*) from constraint_test.emp where ename = true group by empno limit 1",
+			columnTypes: map[string]planpb.Type{
+				"ename": {Id: int32(types.T_json)},
+			},
+			wantAgg: true,
+		},
+		{
+			name: "json comparison in one domain remains eligible",
+			sql:  "select empno, count(*) from constraint_test.emp where ename = job group by empno limit 1",
+			columnTypes: map[string]planpb.Type{
+				"ename": {Id: int32(types.T_json)},
+				"job":   {Id: int32(types.T_json)},
+			},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			optimizer := NewMockOptimizer(false)
+			table := optimizer.ctxt.tablesByQualifiedName[mockQualifiedTableName("constraint_test", "emp")]
+			require.NotNil(t, table)
+			// Keep the plan on the direct table-scan path whose predicate owner and
+			// bounded-demand behavior this test is proving.
+			table.Indexes = nil
+			for name, typ := range test.columnTypes {
+				var found bool
+				for _, col := range table.Cols {
+					if col.Name == name {
+						col.Typ = typ
+						found = true
+						break
+					}
+				}
+				require.True(t, found, "missing mock column %s", name)
+			}
+
+			logical, err := runOneStmt(optimizer, t, test.sql)
+			require.NoError(t, err)
+			query := logical.GetQuery()
+			require.Equal(t, test.wantAgg, reachableNodeType(query, planpb.Node_AGG))
+
+			scan := firstReachableNode(query, planpb.Node_TABLE_SCAN)
+			require.NotNil(t, scan)
+			require.NotEmpty(t, scan.FilterList)
+			if test.wantAgg {
+				require.Nil(t, scan.Limit)
+			} else {
+				require.NotNil(t, scan.Limit)
+			}
+		})
+	}
+}
+
 func TestPrimaryKeyGroupEliminationRequiresTruncationSafeHavingPredicates(t *testing.T) {
 	tests := []struct {
 		name    string
@@ -333,6 +413,77 @@ func TestSingleRowCastIsTotal(t *testing.T) {
 	}
 }
 
+func TestPredicateOperatorEvaluationTotality(t *testing.T) {
+	typ := func(oid types.T) planpb.Type {
+		return planpb.Type{Id: int32(oid)}
+	}
+	decimal := func(width, scale int32) planpb.Type {
+		return planpb.Type{Id: int32(types.T_decimal256), Width: width, Scale: scale}
+	}
+
+	tests := []struct {
+		name       string
+		functionID int32
+		left       planpb.Type
+		right      planpb.Type
+		want       bool
+	}{
+		{"integer equality", function.EQUAL, typ(types.T_int64), typ(types.T_int64), true},
+		{"mixed datetime timestamp", function.LESS_THAN, typ(types.T_datetime), typ(types.T_timestamp), true},
+		{"json equality", function.EQUAL, typ(types.T_json), typ(types.T_json), true},
+		{"json boolean equality", function.EQUAL, typ(types.T_json), typ(types.T_bool), false},
+		{"decimal256 equal scale", function.GREAT_THAN, decimal(76, 12), decimal(76, 12), true},
+		{"decimal256 safe scale boundary", function.LESS_THAN, decimal(64, 0), decimal(65, 12), true},
+		{"decimal256 scale overflow", function.LESS_THAN, decimal(65, 0), decimal(65, 12), false},
+		{"decimal256 reverse scale overflow", function.LESS_THAN, decimal(65, 12), decimal(65, 0), false},
+		{"malformed decimal metadata", function.EQUAL, decimal(77, 0), decimal(77, 0), false},
+		{"enum equality has executor", function.EQUAL, typ(types.T_enum), typ(types.T_enum), true},
+		{"enum inequality lacks executor", function.NOT_EQUAL, typ(types.T_enum), typ(types.T_enum), false},
+		{"bit inequality executor mismatch", function.NOT_EQUAL, typ(types.T_bit), typ(types.T_bit), false},
+		{"geometry ordering unsupported", function.GREAT_THAN, typ(types.T_geometry), typ(types.T_geometry), false},
+		{"unknown comparison function", function.ABS, typ(types.T_int64), typ(types.T_int64), false},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			require.Equal(t, test.want,
+				comparisonEvaluationIsTotal(test.functionID, test.left, test.right))
+		})
+	}
+
+	value := func(valueType planpb.Type) *planpb.Expr {
+		return &planpb.Expr{
+			Typ:  valueType,
+			Expr: &planpb.Expr_Col{Col: &planpb.ColRef{}},
+		}
+	}
+	require.True(t, isTruncationSafeBetween([]*planpb.Expr{
+		value(typ(types.T_int64)), value(typ(types.T_int64)), value(typ(types.T_int64)),
+	}))
+	require.False(t, isTruncationSafeBetween([]*planpb.Expr{
+		value(typ(types.T_json)), value(typ(types.T_json)), value(typ(types.T_json)),
+	}))
+	require.False(t, isTruncationSafeBetween([]*planpb.Expr{
+		value(typ(types.T_year)), value(typ(types.T_year)), value(typ(types.T_year)),
+	}))
+	inArgs := func(valueType planpb.Type) []*planpb.Expr {
+		return []*planpb.Expr{
+			value(valueType),
+			{
+				Typ: planpb.Type{Id: int32(types.T_tuple)},
+				Expr: &planpb.Expr_List{List: &planpb.ExprList{
+					List: []*planpb.Expr{value(valueType)},
+				}},
+			},
+		}
+	}
+	require.True(t, isTruncationSafeIn(inArgs(typ(types.T_int64))))
+	require.True(t, isTruncationSafeIn(inArgs(decimal(65, 12))))
+	require.False(t, isTruncationSafeIn(inArgs(decimal(77, 12))))
+	require.False(t, isTruncationSafeIn(inArgs(typ(types.T_json))))
+	require.False(t, isTruncationSafeIn(inArgs(typ(types.T_array_bf16))))
+}
+
 func TestPrimaryKeyGroupEliminationPreservesBoundedDemand(t *testing.T) {
 	tests := []struct {
 		name       string
@@ -434,6 +585,44 @@ func TestPrimaryKeyGroupEliminationRequiresCompleteCompositeKey(t *testing.T) {
 	)
 	require.NoError(t, err)
 	require.True(t, reachableNodeType(logical.GetQuery(), planpb.Node_AGG))
+}
+
+func TestPrimaryKeyGroupEliminationPreservesInactiveGroupingSetsWithoutAggregates(t *testing.T) {
+	tests := []struct {
+		name string
+		sql  string
+	}{
+		{
+			name: "rollup",
+			sql:  "select empno from constraint_test.emp group by rollup(empno) limit 10",
+		},
+		{
+			name: "cube",
+			sql:  "select empno from constraint_test.emp group by cube(empno) limit 10",
+		},
+		{
+			name: "grouping sets",
+			sql:  "select empno from constraint_test.emp group by grouping sets ((empno), ()) limit 10",
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			logical, err := runOneStmt(NewMockOptimizer(false), t, test.sql)
+			require.NoError(t, err)
+			agg := firstReachableNode(logical.GetQuery(), planpb.Node_AGG)
+			require.NotNil(t, agg)
+			require.True(t, hasInactiveGroupingColumn(agg.GroupingFlag))
+		})
+	}
+
+	logical, err := runOneStmt(
+		NewMockOptimizer(false),
+		t,
+		"select empno from constraint_test.emp group by empno limit 10",
+	)
+	require.NoError(t, err)
+	require.False(t, reachableNodeType(logical.GetQuery(), planpb.Node_AGG))
 }
 
 func TestPrimaryKeyGroupEliminationFailsClosed(t *testing.T) {
