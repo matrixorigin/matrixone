@@ -1,6 +1,10 @@
 # docker compose extension fields
 # https://github.com/docker/compose/pull/5140
 # https://stackoverflow.com/questions/45805380/meaning-of-ampersand-in-docker-compose-yml-file
+# Versioned producer/consumer marker used by shared CI before it spends time
+# building a prebuilt jstfu artifact for this exact MatrixOne head.
+x-jstfu-prebuilt-contract: "1"
+
 x-mo-common: &mo-common
     build:
       context: ../../

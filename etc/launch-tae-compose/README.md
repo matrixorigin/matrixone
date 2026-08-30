@@ -39,6 +39,10 @@ Prebuilt mode is fail-closed: a missing jar, malformed checksum, or checksum
 mismatch prevents the dependent jstfu sidecars and the BVT workload from
 starting.
 
+MatrixOne's trusted main-branch cache warmer keeps the Maven repository and
+wrapper distribution available to PR CI. Pull-request jobs restore that cache
+read-only; they never publish dependencies resolved from an untrusted head.
+
 ## Check log
 
 ```shell
