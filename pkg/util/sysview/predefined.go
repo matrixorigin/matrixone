@@ -62,8 +62,6 @@ const (
 )
 
 var (
-	informationSchemaViewDefinitionPrefixLengthSQL = "char_length(coalesce(regexp_substr(" +
-		informationSchemaViewStatementWithoutTerminatorSQL + ", '" + strings.ReplaceAll(informationSchemaViewDefinitionPrefixPattern, "\\", "\\\\") + "'), ''))"
 	// IF is already used by persisted information_schema definitions. Only an
 	// executable-comment wrapper removes its first closing */; an ordinary
 	// application comment after that wrapper remains part of the definition.
