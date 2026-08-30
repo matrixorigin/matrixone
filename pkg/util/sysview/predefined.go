@@ -37,7 +37,7 @@ const (
 		informationSchemaViewBlockCommentPattern + "|" +
 		informationSchemaViewLineCommentPattern + "|" +
 		"`(?:``|[^`])*`|\"(?:\"\"|[^\"])*\"|" +
-		"/(?:[^/*]|$)|-(?:[^-]|$)|[^`\"/#-])*?"
+		"/(?:[^/\\*]|$)|-(?:[^-]|$)|[^`\"/#-])*?"
 	// The non-greedy span before VIEW covers MatrixOne's supported ALGORITHM,
 	// DEFINER, and SQL SECURITY clauses. mysqldump executable comments carry SQL
 	// themselves, so retain their existing wrapper-aware path separately.
