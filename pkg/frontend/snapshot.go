@@ -741,7 +741,7 @@ func shouldInvalidateTimestampSnapshotBindings(
 }
 
 func doRestoreSnapshot(ctx context.Context, ses *Session, stmt *tree.RestoreSnapShot) (stats statistic.StatsArray, err error) {
-	bh := ses.GetBackgroundExec(ctx)
+	bh := ses.GetBackgroundExec(ctx, &BackgroundExecOption{forcePessimisticRC: true})
 	bh.SetRestore(true)
 	defer func() {
 		stats = bh.GetExecStatsArray()
