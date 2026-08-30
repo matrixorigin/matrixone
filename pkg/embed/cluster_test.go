@@ -291,7 +291,7 @@ func TestMultiClusterCanWork(t *testing.T) {
 }
 
 func TestBaseClusterCanWorkWithNewCluster(t *testing.T) {
-	RunBaseClusterTests(
+	RunBaseClusterTests(t,
 		func(c Cluster) {
 			validCNCanWork(t, c, 0)
 			validCNCanWork(t, c, 1)
@@ -310,13 +310,13 @@ func TestBaseClusterCanWorkWithNewCluster(t *testing.T) {
 
 func TestBaseClusterOnlyStartOnce(t *testing.T) {
 	var id1, id2 uint64
-	RunBaseClusterTests(
+	RunBaseClusterTests(t,
 		func(c Cluster) {
 			id1 = c.ID()
 		},
 	)
 
-	RunBaseClusterTests(
+	RunBaseClusterTests(t,
 		func(c Cluster) {
 			id2 = c.ID()
 		},
@@ -327,7 +327,7 @@ func TestBaseClusterOnlyStartOnce(t *testing.T) {
 
 func TestRestartCN(t *testing.T) {
 	t.SkipNow()
-	RunBaseClusterTests(
+	RunBaseClusterTests(t,
 		func(c Cluster) {
 			svc, err := c.GetCNService(0)
 			require.NoError(t, err)
@@ -340,7 +340,7 @@ func TestRestartCN(t *testing.T) {
 }
 
 func TestRunSQLWithFrontend(t *testing.T) {
-	RunBaseClusterTests(
+	RunBaseClusterTests(t,
 		func(c Cluster) {
 			cn0, err := c.GetCNService(0)
 			require.NoError(t, err)
@@ -425,7 +425,7 @@ func validCNCanWork(
 }
 
 func TestCreateDB(t *testing.T) {
-	RunBaseClusterTests(
+	RunBaseClusterTests(t,
 		func(c Cluster) {
 			cn0, err := c.GetCNService(0)
 			require.NoError(t, err)

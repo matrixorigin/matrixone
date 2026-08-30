@@ -32,7 +32,7 @@ import (
 )
 
 func TestDataBranchPick(t *testing.T) {
-	embed.RunBaseClusterTests(
+	embed.RunBaseClusterTests(t,
 		func(c embed.Cluster) {
 			ctx, cancel := context.WithTimeout(context.Background(), time.Second*360)
 			defer cancel()
