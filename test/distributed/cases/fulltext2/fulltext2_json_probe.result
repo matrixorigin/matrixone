@@ -151,6 +151,70 @@ select id from t_plain where json_extract_string(j,'$.foo') > 'a' order by id;
 ➤ id[4,32,0]  𝄀
 3  𝄀
 5
+select id from t where json_extract_string(j,'$.foo') >= 'bar' and json_extract_string(j,'$.foo') <= 'baz' order by id;
+➤ id[4,32,0]  𝄀
+3
+select id from t_plain where json_extract_string(j,'$.foo') >= 'bar' and json_extract_string(j,'$.foo') <= 'baz' order by id;
+➤ id[4,32,0]  𝄀
+3
+select id from t where json_extract_float64(j,'$.n') > 20 order by id;
+➤ id[4,32,0]  𝄀
+3  𝄀
+4  𝄀
+5  𝄀
+8
+select id from t_plain where json_extract_float64(j,'$.n') > 20 order by id;
+➤ id[4,32,0]  𝄀
+3  𝄀
+4  𝄀
+5  𝄀
+8
+create table w (id int primary key, j json);
+create table w_plain (id int primary key, j json);
+insert into w values
+(1, '{"v":[1,2,3,4,5,6,7,8,9,10]}'),
+(2, '{"v":[11,12,13,14,15,16,17,18,19,20]}'),
+(3, '{"v":[100,200,300]}'),
+(4, '{"v":["a","b","c","d"]}'),
+(5, '{"v":[-1,-2,-3]}');
+insert into w_plain select * from w;
+create fulltext2 index wtj on w(j) with parser json;
+select id from w where json_extract_float64(j,'$.v[0]') > -1000 order by id;
+➤ id[4,32,0]  𝄀
+1  𝄀
+2  𝄀
+3  𝄀
+5
+select id from w_plain where json_extract_float64(j,'$.v[0]') > -1000 order by id;
+➤ id[4,32,0]  𝄀
+1  𝄀
+2  𝄀
+3  𝄀
+5
+select count(*) from w where json_extract_float64(j,'$.v[0]') > -1000;
+➤ count(*)[-5,64,0]  𝄀
+4
+select count(*) from w_plain where json_extract_float64(j,'$.v[0]') > -1000;
+➤ count(*)[-5,64,0]  𝄀
+4
+select id from w where json_extract_float64(j,'$.v[0]') < 5 order by id;
+➤ id[4,32,0]  𝄀
+1  𝄀
+5
+select id from w_plain where json_extract_float64(j,'$.v[0]') < 5 order by id;
+➤ id[4,32,0]  𝄀
+1  𝄀
+5
+select id from w where json_extract_string(j,'$.v[0]') >= 'a' order by id;
+➤ id[4,32,0]  𝄀
+4
+select id from w_plain where json_extract_string(j,'$.v[0]') >= 'a' order by id;
+➤ id[4,32,0]  𝄀
+4
+select id from w where json_extract_string(j,'$.v[0]') < 'a' order by id;
+➤ id[4,32,0]
+select id from w_plain where json_extract_string(j,'$.v[0]') < 'a' order by id;
+➤ id[4,32,0]
 select id from t where json_extract_string(j,'$.foo') = 'bar' and id > 1 order by id;
 ➤ id[4,32,0]  𝄀
 3

@@ -16,6 +16,7 @@ package fulltext2
 
 import (
 	"encoding/binary"
+	"errors"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex"
@@ -121,41 +122,134 @@ func DecodeJSONProbePayload(s string) (JSONProbePayload, bool) {
 	return p, true
 }
 
-// resolveJSONProbeTerms expands a probe into the concrete term list to search.
+// maxProbeTermExpansion bounds the MATERIALIZING expansion used by the bounded
+// top-k path. The streaming path has no such limit because it never holds more
+// than one term; this cap exists so that if a probe with ranges ever reaches
+// top-k (the planner cannot push a LIMIT onto a probe, so it should not) it
+// fails loudly instead of expanding a whole vocabulary into clauses.
+const maxProbeTermExpansion = 4096
+
+// resolveJSONProbeTerms expands a probe into a concrete term list.
 //
-// Ranges are expanded against EVERY segment and unioned into one global list,
-// rather than per segment. streamDisjunction already walks all segments with one
-// shared term list, and a term absent from a segment simply contributes no
-// postings — so the union costs nothing but keeps this off the hot path and out
-// of the segment walk.
+// This is the MATERIALIZING form, used only by the bounded top-k path. Ranges
+// are expanded against EVERY segment and unioned into one global list: the
+// disjunctive walk takes one shared term list, and a term absent from a segment
+// simply contributes no postings.
+//
+// The streaming path does NOT use this — see streamJSONProbeDocs, which visits
+// one term at a time and never builds this list.
 func (idx *Index) resolveJSONProbeTerms(p JSONProbePayload) ([]string, error) {
 	seen := make(map[string]struct{}, len(p.Terms))
 	out := make([]string, 0, len(p.Terms))
-	add := func(t string) {
+	add := func(t string) error {
 		if t == "" {
-			return
+			return nil
 		}
 		if _, dup := seen[t]; dup {
-			return
+			return nil
+		}
+		if len(out) >= maxProbeTermExpansion {
+			return moerr.NewInternalErrorNoCtx(
+				"fulltext2: json probe range expands past the term cap; this probe must be streamed, not top-k'd")
 		}
 		seen[t] = struct{}{}
 		out = append(out, t)
+		return nil
 	}
 	for _, t := range p.Terms {
-		add(t)
+		if err := add(t); err != nil {
+			return nil, err
+		}
 	}
 	for _, r := range p.Ranges {
 		for _, seg := range idx.segments {
-			terms, err := seg.termRangeTerms(r[0], r[1])
-			if err != nil {
+			if err := seg.forEachTermInRange(r[0], r[1], add); err != nil {
 				return nil, err
-			}
-			for _, t := range terms {
-				add(t)
 			}
 		}
 	}
 	return out, nil
+}
+
+// streamJSONProbeDocs streams every doc the probe matches, WITHOUT materializing
+// the matched term set.
+//
+// This is what makes an inequality probe affordable. A range over a
+// high-cardinality key covers most of that key's vocabulary, and the ranked walk
+// (streamWAND over one clause per term) holds a posting cursor and a block-sized
+// decode buffer for EVERY term at once — O(vocabulary x segments) live. But a
+// probe is a PREFILTER: it needs doc ids, not a ranking. Nothing orders by its
+// score, so the terms never have to be merged, and each can be walked and
+// dropped in turn. Peak cost is one term and one block buffer.
+//
+// A doc holding several terms of the range is therefore emitted once per term.
+// That is intentional: de-duplication belongs to the GROUP BY the planner puts
+// over this scan (addJSONFulltextProbes), not to a second bespoke copy of it
+// here. The aggregate already spills and is already tested.
+func (idx *Index) streamJSONProbeDocs(p JSONProbePayload, filter *prefilter, sink *streamSink) error {
+	var docs [BlockSize]int64
+	for si, seg := range idx.segments {
+		allow := andAllow(mkAllow(seg, filter), &livenessMembership{idx: idx, si: si})
+
+		// emit walks ONE term's postings a block at a time.
+		emit := func(term string) error {
+			if sink.stopped {
+				return errProbeStopped
+			}
+			pl, ok := seg.lookup(term)
+			if !ok {
+				return nil
+			}
+			for b := range pl.nblk() {
+				n := pl.fillBlockDocs(b, docs[:])
+				for _, ord := range docs[:n] {
+					if !allowed(allow, ord) {
+						continue
+					}
+					// score 0: a probe has no ranking, and nothing above it
+					// reads the score column.
+					sink.pushPk(seg, ord, 0)
+					if sink.stopped {
+						return errProbeStopped
+					}
+				}
+			}
+			return sink.err
+		}
+
+		if err := probeWalk(seg, p, emit); err != nil {
+			if errors.Is(err, errProbeStopped) {
+				sink.flush()
+				return sink.err
+			}
+			return err
+		}
+		if sink.err != nil {
+			return sink.err
+		}
+	}
+	sink.flush()
+	return sink.err
+}
+
+// errProbeStopped unwinds the term walk when the sink has stopped (a cancelled
+// query or a full downstream). It never escapes streamJSONProbeDocs.
+var errProbeStopped = errors.New("fulltext2: json probe stream stopped")
+
+// probeWalk visits every term the probe selects in one segment: its exact terms,
+// then each range streamed from the term dictionary.
+func probeWalk(seg *Segment, p JSONProbePayload, fn func(term string) error) error {
+	for _, t := range p.Terms {
+		if err := fn(t); err != nil {
+			return err
+		}
+	}
+	for _, r := range p.Ranges {
+		if err := seg.forEachTermInRange(r[0], r[1], fn); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // buildJSONProbeQuery turns a probe into a pure disjunction of single terms —
@@ -195,20 +289,21 @@ func (idx *Index) SearchJSONProbe(pattern []byte, algo ScoreAlgo, k int, filter 
 }
 
 // StreamJSONProbe answers a probe by streaming every matching doc, the
-// no-pushed-LIMIT path. Mirrors StreamBagOfWords: same disjunctive walk, only
-// the term list is built from the probe instead of tokenized text.
-func (idx *Index) StreamJSONProbe(pattern []byte, algo ScoreAlgo, filter *prefilter, wantInclude bool,
+// no-pushed-LIMIT path a probe always takes (the planner cannot push a LIMIT
+// onto a probe: the retained predicate keeps the scan's filter list non-empty).
+//
+// Unlike StreamBagOfWords this does NOT go through the disjunctive walk. A probe
+// is unranked, so its terms need no merging and are walked one at a time —
+// see streamJSONProbeDocs. algo is unused for the same reason, and is kept only
+// so the probe matches the other stream entry points.
+func (idx *Index) StreamJSONProbe(pattern []byte, _ ScoreAlgo, filter *prefilter, wantInclude bool,
 	emit func(out *vectorindex.SearchOutput) error) error {
 	if idx.globalN == 0 {
 		return nil
 	}
-	q, err := idx.buildJSONProbeQuery(pattern)
-	if err != nil {
-		return err
-	}
-	terms, ok := disjunctiveTerms(q)
+	p, ok := DecodeJSONProbePayload(string(pattern))
 	if !ok {
-		return nil // no resolvable terms -> nothing to stream
+		return moerr.NewInternalErrorNoCtx("fulltext2: malformed json probe payload")
 	}
-	return idx.streamDisjunction(terms, algo, filter, newStreamSink(idx, wantInclude, filter, emit))
+	return idx.streamJSONProbeDocs(p, filter, newStreamSink(idx, wantInclude, filter, emit))
 }

@@ -531,3 +531,56 @@ accessor today.
 
 Until that half is built, the protocol is in place, the watermark it reads is
 fresh, and the gate is safe — it declines rather than dropping rows.
+
+## 11. Range probes
+
+An inequality (`>`, `>=`, `<`, `<=`) becomes a single inclusive term RANGE
+rather than a set of terms. It works because the tuple encoding is
+order-preserving: types.Packer writes a type code then an order-preserving body,
+so terms under one tag sort by value and the two leaf types occupy disjoint
+stretches — a numeric range can never sweep up a string term. The open end of
+the range is the tag's own type bound, not the whole dictionary.
+
+Both ends are inclusive, so a STRICT inequality is a superset by exactly the
+boundary value. That is deliberate: a probe only has to be a NECESSARY
+condition, the original predicate is retained, and it removes a whole class of
+off-by-one. Truncation is superset-safe for the same reason it is for equality —
+truncation is monotone, so a bound longer than the value cap can only widen the
+range.
+
+### 11.1 Why an unranked walk, not a merge
+
+The first cut of this design declined inequalities outright, on the grounds that
+a range over a high-cardinality key IS most of that key's vocabulary, and the
+ranked walk holds a posting cursor plus a block-sized decode buffer for EVERY
+term at once — O(vocabulary x segments) live.
+
+That reasoning was wrong about what a probe needs. The merge exists to compute a
+SCORE across terms; a probe is a prefilter that only needs doc ids, and nothing
+above it ranks by relevance. So the terms never have to be merged: the walk
+visits one term at a time, streamed from the term dictionary (never
+materialized), drains its postings a block at a time, and drops it. Peak cost is
+one term and one block buffer, whatever the range covers.
+
+### 11.2 Duplicates belong to the GROUP BY
+
+Not merging means a document holding several terms of the range is emitted once
+per term, and the probe feeds an INNER JOIN on the pk where a repeated pk
+multiplies base-table rows. The planner therefore puts an aggregate over the
+probe's index scan — `Node_AGG` grouping on the doc id, built by
+`QueryBuilder.dedupFulltextDocIDs` — instead of the index carrying a second,
+bespoke de-duplication of its own. The aggregate already spills and is already
+tested; an in-index structure would have to bound its own memory by hand.
+
+The same fact removes the score sort. The generic fulltext path adds an implicit
+`ORDER BY score DESC` for every stream, but an injected prefilter has no
+relevance to rank on and its score is a constant, so probe streams are skipped
+in that pass and a probe-only query builds no SORT node at all. The resulting
+plan is just:
+
+```
+Join (INNER, on pk)
+  ->  Table Scan            (the retained predicate)
+  ->  Aggregate             (Group Key: __mo_ft_doc_id)
+        ->  Table Function on fulltext2_search
+```

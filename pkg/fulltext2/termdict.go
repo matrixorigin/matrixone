@@ -132,34 +132,36 @@ func (d *termDict) prefixTerms(prefix string) ([]string, error) {
 	return out, nil
 }
 
-// rangeTerms collects every term in [lo, hi] — both ends INCLUSIVE — into an
-// ascending slice. The FST iterator takes an EXCLUSIVE upper bound, so hi is
-// bumped to its immediate successor (one 0x00 byte appended, which is the
-// smallest string strictly greater than hi).
-func (d *termDict) rangeTerms(lo, hi string) ([]string, error) {
+// forEachTermInRange streams every term in the inclusive [lo,hi] range through fn
+// WITHOUT materializing the range as a []string the way rangeTerms does. For a
+// high-cardinality key an inequality's range IS most of that key's vocabulary,
+// so the materializing form is only safe when the caller already bounds it.
+func (d *termDict) forEachTermInRange(lo, hi string, fn func(term string) error) error {
 	if lo > hi {
-		return nil, nil
+		return nil
 	}
+	// vellum's upper bound is exclusive; one 0x00 past hi makes it inclusive,
+	// since no term sorts between hi and hi+"\x00".
 	end := append([]byte(hi), 0x00)
 	it, err := d.fst.Iterator([]byte(lo), end)
 	if err == vellum.ErrIteratorDone {
-		return nil, nil
+		return nil
 	}
 	if err != nil {
-		return nil, err
+		return err
 	}
 	defer func() { _ = it.Close() }()
-	var out []string
 	for {
 		term, _ := it.Current()
-		out = append(out, string(term))
+		if err := fn(string(term)); err != nil {
+			return err
+		}
 		if err := it.Next(); err == vellum.ErrIteratorDone {
-			break
+			return nil
 		} else if err != nil {
-			return nil, err
+			return err
 		}
 	}
-	return out, nil
 }
 
 // forEachTerm streams every term (ascending) through fn WITHOUT materializing the whole

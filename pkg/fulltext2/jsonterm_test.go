@@ -533,3 +533,133 @@ func TestJSONTupleColumnAcceptsEveryShape(t *testing.T) {
 	_, err = JSONTupleColumn(`{not json`, opt)
 	require.Error(t, err)
 }
+
+// streamProbeHits runs the STREAMING probe path and returns the pks it emitted,
+// in emission order and WITHOUT sorting or de-duplicating — so a caller can
+// assert that the walk itself yields each document exactly once.
+func streamProbeHits(t *testing.T, idx *Index, terms []string, ranges [][2]string) []int64 {
+	t.Helper()
+	mp := mpool.MustNewZero()
+	out := vector.NewVec(types.T_int64.ToType())
+	err := idx.StreamJSONProbe([]byte(EncodeJSONProbePayload(terms, ranges)), TfIdf, nil, false,
+		func(o *vectorindex.SearchOutput) error {
+			e := vectorindex.AppendColumnBuffer(o.Keys, out, mp)
+			PutColumnBuffer(o.Keys)
+			return e
+		})
+	require.NoError(t, err)
+	return append([]int64(nil), vector.MustFixedColWithTypeCheck[int64](out)...)
+}
+
+// The streaming walk visits one term at a time instead of merging them, so a
+// document holding SEVERAL terms of a range is emitted once per term. That is
+// the index's contract, not a defect: de-duplication is the GROUP BY the planner
+// puts over this scan (QueryBuilder.dedupFulltextDocIDs), so the index does not
+// carry a second copy of it. What must hold here is that the DISTINCT set is
+// right and nothing is lost.
+func TestStreamJSONProbeRangeEmitsEveryMatchingTerm(t *testing.T) {
+	// every doc has three leaves under "n", so a full-range sweep reaches each
+	// document three times
+	docs := map[int64]string{
+		1: `{"n":[1,2,3]}`,
+		2: `{"n":[4,5,6]}`,
+		3: `{"n":[7,8,9]}`,
+	}
+	lo, hi := JSONNumericTermBounds("n")
+	full := [][2]string{{lo, hi}}
+
+	for _, tc := range []struct {
+		name string
+		idx  *Index
+	}{
+		{"build-side", jsonProbeIndex(t, docs)},
+		{"loaded/FST", jsonProbeLoadedIndex(t, docs)},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got := streamProbeHits(t, tc.idx, nil, full)
+			require.ElementsMatch(t, []int64{1, 2, 3}, distinctInt64(got),
+				"the distinct doc set is what the probe asserts")
+			require.Len(t, got, 9, "one emission per matching term, deduped by the planner's GROUP BY")
+		})
+	}
+}
+
+// distinctInt64 is what the planner's GROUP BY does, applied here so a test can
+// state the probe's real contract: the DISTINCT set is correct.
+func distinctInt64(in []int64) []int64 {
+	seen := make(map[int64]bool, len(in))
+	out := make([]int64, 0, len(in))
+	for _, v := range in {
+		if !seen[v] {
+			seen[v] = true
+			out = append(out, v)
+		}
+	}
+	return out
+}
+
+// An exact term that also falls inside a range is walked twice, for the same
+// reason. The distinct set is still exactly right.
+func TestStreamJSONProbeOverlappingTermsAndRanges(t *testing.T) {
+	docs := map[int64]string{1: `{"n":10}`, 2: `{"n":20}`, 3: `{"n":30}`}
+	lo, hi := JSONNumericTermBounds("n")
+
+	got := streamProbeHits(t, jsonProbeIndex(t, docs),
+		[]string{JSONFloatTerm("n", 20)}, [][2]string{{lo, hi}})
+	require.ElementsMatch(t, []int64{1, 2, 3}, distinctInt64(got))
+	require.Len(t, got, 4, "doc 2 is reached by both the exact term and the range")
+}
+
+// The streaming range answer must equal the materializing top-k answer on both
+// segment representations — they are two different walks over the same range.
+func TestStreamJSONProbeRangeMatchesSearch(t *testing.T) {
+	docs := map[int64]string{
+		1: `{"n":10}`, 2: `{"n":20}`, 3: `{"n":30}`, 4: `{"n":-5}`, 5: `{"foo":"bar"}`,
+	}
+	_, hi := JSONNumericTermBounds("n")
+	ge20 := [][2]string{{JSONFloatTerm("n", 20), hi}}
+
+	for _, tc := range []struct {
+		name string
+		make func() *Index
+	}{
+		{"build-side", func() *Index { return jsonProbeIndex(t, docs) }},
+		{"loaded/FST", func() *Index { return jsonProbeLoadedIndex(t, docs) }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			streamed := streamProbeHits(t, tc.make(), nil, ge20)
+			require.ElementsMatch(t, []int64{2, 3}, streamed)
+			require.ElementsMatch(t, probeHits(t, tc.make(), nil, ge20), streamed)
+		})
+	}
+}
+
+// A range that selects nothing must stream nothing rather than everything — the
+// failure mode that would turn a prefilter into a no-op.
+func TestStreamJSONProbeEmptyRange(t *testing.T) {
+	docs := map[int64]string{1: `{"n":10}`, 2: `{"n":20}`}
+	above := [][2]string{{JSONFloatTerm("n", 1000), JSONFloatTerm("n", 2000)}}
+	require.Empty(t, streamProbeHits(t, jsonProbeIndex(t, docs), nil, above))
+	require.Empty(t, streamProbeHits(t, jsonProbeLoadedIndex(t, docs), nil, above))
+
+	// an inverted range (lo > hi) selects nothing, and must not error
+	inverted := [][2]string{{JSONFloatTerm("n", 100), JSONFloatTerm("n", 1)}}
+	require.Empty(t, streamProbeHits(t, jsonProbeIndex(t, docs), nil, inverted))
+	require.Empty(t, streamProbeHits(t, jsonProbeLoadedIndex(t, docs), nil, inverted))
+}
+
+// A string range must not sweep up numeric leaves under the same key, and the
+// reverse — the disjointness the encoding guarantees, asserted through a real
+// index rather than on the terms alone.
+func TestStreamJSONProbeRangeRespectsLeafType(t *testing.T) {
+	docs := map[int64]string{
+		1: `{"v":"apple"}`, 2: `{"v":"pear"}`, 3: `{"v":10}`, 4: `{"v":20}`,
+	}
+	slo, shi := JSONStringTermBounds("v")
+	nlo, nhi := JSONNumericTermBounds("v")
+
+	require.ElementsMatch(t, []int64{1, 2},
+		streamProbeHits(t, jsonProbeLoadedIndex(t, docs), nil, [][2]string{{slo, shi}}))
+	require.ElementsMatch(t, []int64{3, 4},
+		streamProbeHits(t, jsonProbeLoadedIndex(t, docs), nil, [][2]string{{nlo, nhi}}))
+}

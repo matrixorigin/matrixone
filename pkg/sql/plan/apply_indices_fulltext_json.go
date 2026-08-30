@@ -16,6 +16,7 @@ package plan
 
 import (
 	"encoding/json"
+	"math"
 	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/container/bytejson"
@@ -157,21 +158,58 @@ func jsonEqualProbe(col int32, tag string, lit *plan.Literal, isString bool) (js
 	}, true
 }
 
-// jsonRangeProbe declines: v1 probes EQUALITY only.
+// jsonRangeProbe builds the probe for >, >=, < and <= as a single term RANGE.
 //
-// A range probe has to enumerate every indexed term between its bounds. For a
-// high-cardinality key that is the key's whole vocabulary, and each resolved
-// term then costs a clause, a posting cursor and a block-sized decode buffer per
-// segment — O(vocabulary x segments) memory on a query the optimizer injected by
-// itself. Truncating the enumeration is not an option either: the probe is
-// ANDed, so dropping terms drops qualifying rows.
+// The tuple encoding is order-preserving — types.Packer writes a type code then
+// an order-preserving body, so terms under one tag sort by value, and the two
+// leaf types occupy disjoint stretches (a numeric range can never sweep up a
+// string term). So an inequality on a value maps to an inequality on terms, and
+// the open end is the tag's own type bound rather than the whole dictionary.
 //
-// Doing this properly needs a range-aware merged/streaming postings walk with
-// cancellation and a cost budget, which is a larger piece of work than the
-// encoding this PR adds. Until then an inequality is simply not accelerated —
-// correct, just no faster than before.
-func jsonRangeProbe(_ int32, _ string, _ *plan.Literal, _ string, _ bool) (jsonProbe, bool) {
-	return jsonProbe{}, false
+// Both ends are INCLUSIVE, which makes a strict > or < a superset by exactly the
+// boundary value. That is deliberate: a probe only has to be a NECESSARY
+// condition, and the original predicate is retained and re-evaluated above the
+// join, so the boundary row is filtered there. It costs one term and removes a
+// whole class of off-by-one.
+//
+// Truncation is superset-safe for the same reason it is for equality. Values are
+// cut to maxTermValueBytes before encoding, and truncation is monotone: if
+// w < v then trunc(w) <= trunc(v), because either they first differ inside the
+// kept prefix (the order survives) or they agree on it (the terms collapse and
+// the inclusive bound keeps the row). So a truncated bound never excludes a
+// qualifying document.
+func jsonRangeProbe(col int32, tag string, lit *plan.Literal, op string, isString bool) (jsonProbe, bool) {
+	var bound, loAll, hiAll string
+	if isString {
+		s, ok := lit.Value.(*plan.Literal_Sval)
+		if !ok {
+			return jsonProbe{}, false
+		}
+		bound = fulltext2.JSONStringTerm(tag, s.Sval)
+		loAll, hiAll = fulltext2.JSONStringTermBounds(tag)
+	} else {
+		f, ok := litAsFloat(lit)
+		if !ok {
+			return jsonProbe{}, false
+		}
+		// NaN has no position in the encoded order, so no range can bracket it.
+		if math.IsNaN(f) {
+			return jsonProbe{}, false
+		}
+		bound = fulltext2.JSONFloatTerm(tag, f)
+		loAll, hiAll = fulltext2.JSONNumericTermBounds(tag)
+	}
+
+	var r jsonTermRange
+	switch op {
+	case ">", ">=":
+		r = jsonTermRange{Lo: bound, Hi: hiAll}
+	case "<", "<=":
+		r = jsonTermRange{Lo: loAll, Hi: bound}
+	default:
+		return jsonProbe{}, false
+	}
+	return jsonProbe{ColPos: col, Tag: tag, Ranges: []jsonTermRange{r}}, true
 }
 
 // jsonExtractTarget matches json_extract_string|json_extract_float64(col, 'path')
@@ -456,4 +494,41 @@ func isJSONProbeMatch(expr *plan.Expr) bool {
 	}
 	v, ok := lit.Value.(*plan.Literal_I64Val)
 	return ok && v.I64Val == fulltext2.JSONProbeMode
+}
+
+// dedupFulltextDocIDs puts a GROUP BY on the doc id over a json probe's index
+// scan, and returns the new node plus the pk reference to read it through.
+//
+// The probe's scan walks one term at a time instead of merging them, so it
+// yields a document once per matching term. Those repeats cannot reach the INNER
+// JOIN below — a repeated pk there multiplies base-table rows — and the fix
+// belongs to the aggregate operator rather than to a second de-duplication
+// written inside the index: the aggregate already spills, and already handles
+// volumes a bespoke in-index structure would have to bound by hand.
+//
+// Only the doc id is carried up. A probe's score is a constant nobody selects or
+// orders by, so the group needs no aggregate at all.
+func (builder *QueryBuilder) dedupFulltextDocIDs(ctx *BindContext, ftNodeID int32, pkCol *plan.Expr) (int32, *plan.Expr) {
+	groupTag := builder.genNewBindTag()
+	aggTag := builder.genNewBindTag()
+	nodeID := builder.appendNode(&plan.Node{
+		NodeType:    plan.Node_AGG,
+		Children:    []int32{ftNodeID},
+		GroupBy:     []*plan.Expr{DeepCopyExpr(pkCol)},
+		BindingTags: []int32{groupTag, aggTag},
+		SpillMem:    builder.aggSpillMem,
+	}, ctx)
+
+	if builder.jsonProbeFtNodes == nil {
+		builder.jsonProbeFtNodes = make(map[int32]bool)
+	}
+	// Recorded against the SCAN, not the group: the scan is what the score-sort
+	// and runtime-filter passes still hold ids for, and both must know this
+	// stream is a probe.
+	builder.jsonProbeFtNodes[ftNodeID] = true
+
+	return nodeID, &plan.Expr{
+		Typ:  pkCol.Typ,
+		Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: groupTag, ColPos: 0}},
+	}
 }

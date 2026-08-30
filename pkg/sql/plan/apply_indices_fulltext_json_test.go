@@ -15,6 +15,7 @@
 package plan
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -72,18 +73,8 @@ func TestJSONProbeStringEquality(t *testing.T) {
 // document that satisfies the comparison, the probe's term set must intersect
 // the document's indexed terms — otherwise the rewrite drops the row.
 func TestJSONProbeTermsArePresentInMatchingDocuments(t *testing.T) {
-	opt := fulltext2.JSONTermOptions{IncludeKeys: true}
-	docTerms := func(doc string) map[string]bool {
-		bj, err := bytejson.ParseFromString(doc)
-		require.NoError(t, err)
-		m := map[string]bool{}
-		for _, term := range fulltext2.JSONTupleTerms(bj, opt) {
-			m[term] = true
-		}
-		return m
-	}
 	intersects := func(p jsonProbe, doc string) bool {
-		terms := docTerms(doc)
+		terms := jpDocTerms(t, doc)
 		for _, term := range p.Terms {
 			if terms[term] {
 				return true
@@ -130,7 +121,7 @@ func TestJSONProbeDeclines(t *testing.T) {
 		{"non-constant rhs", jpCallExpr("=", jpExtractStr(0, "$.a"), jpColExpr(9))},
 		{"non-constant path", jpCallExpr("=",
 			jpCallExpr("json_extract_string", jpColExpr(0), jpColExpr(1)), jpStrLit("x"))},
-		{"unsupported operator", jpCallExpr("!=", jpExtractStr(0, "$.a"), jpStrLit("x"))},
+		{"not-equal is not a range", jpCallExpr("!=", jpExtractStr(0, "$.a"), jpStrLit("x"))},
 		{"not a json_extract", jpCallExpr("=", jpCallExpr("lower", jpColExpr(0)), jpStrLit("x"))},
 		{"json_extract on an expression, not a column", jpCallExpr("=",
 			jpCallExpr("json_extract_string", jpCallExpr("lower", jpColExpr(0)), jpStrLit("$.a")),
@@ -138,13 +129,7 @@ func TestJSONProbeDeclines(t *testing.T) {
 		// numeric equality with a string constant would change which leaves the
 		// probe reaches
 		{"float compared to a string constant", jpCallExpr("=", jpExtractFloat(0, "$.n"), jpStrLit("3"))},
-		// v1 accelerates equality only; a range would have to enumerate the
-		// key's vocabulary (see jsonRangeProbe)
-		{"greater than", jpCallExpr(">", jpExtractFloat(0, "$.n"), jpFltLit(1))},
-		{"greater or equal", jpCallExpr(">=", jpExtractFloat(0, "$.n"), jpFltLit(1))},
-		{"less than", jpCallExpr("<", jpExtractFloat(0, "$.n"), jpFltLit(1))},
-		{"less or equal", jpCallExpr("<=", jpExtractFloat(0, "$.n"), jpFltLit(1))},
-		{"string inequality", jpCallExpr(">", jpExtractStr(0, "$.a"), jpStrLit("m"))},
+		{"unsupported operator", jpCallExpr("<=>", jpExtractStr(0, "$.a"), jpStrLit("x"))},
 	} {
 		_, ok := jsonExtractProbeFromExpr(tc.expr)
 		require.False(t, ok, tc.name)
@@ -360,4 +345,138 @@ func TestIndexCoversSnapshotFailsClosed(t *testing.T) {
 	noRef := jpScanNode("j", jpJSONIndex("j", `{"parser":"json"}`))
 	noRef.ObjRef = nil
 	require.False(t, b.indexCoversSnapshot(noRef, noRef.TableDef.Indexes[0]))
+}
+
+// jpDocTerms is the document's indexed tuple terms — what a probe must actually
+// intersect for the rewrite to keep the row.
+func jpDocTerms(t *testing.T, doc string) map[string]bool {
+	t.Helper()
+	bj, err := bytejson.ParseFromString(doc)
+	require.NoError(t, err)
+	m := map[string]bool{}
+	for _, term := range fulltext2.JSONTupleTerms(bj, fulltext2.JSONTermOptions{IncludeKeys: true}) {
+		m[term] = true
+	}
+	return m
+}
+
+// rangeCovers reports whether any of the document's tuple terms falls inside one
+// of the probe's ranges — the necessary condition a range probe asserts.
+func rangeCovers(t *testing.T, p jsonProbe, doc string) bool {
+	t.Helper()
+	for term := range jpDocTerms(t, doc) {
+		for _, r := range p.Ranges {
+			if r.Lo <= term && term <= r.Hi {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// The four inequalities become a single term RANGE. The property that matters is
+// implication: every document the ORIGINAL predicate accepts must hold a term
+// inside the range, or the ANDed probe would drop it.
+func TestJSONProbeNumericRanges(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		op      string
+		bound   float64
+		accepts []string // the predicate is TRUE for these
+		rejects []string // ... and FALSE for these
+	}{
+		{"greater than", ">", 15,
+			[]string{`{"n":20}`, `{"n":30}`, `{"n":15.5}`, `{"n":1e300}`},
+			[]string{`{"n":10}`, `{"n":-5}`}},
+		{"greater or equal", ">=", 15,
+			[]string{`{"n":15}`, `{"n":20}`},
+			[]string{`{"n":14.9}`, `{"n":-5}`}},
+		{"less than", "<", 15,
+			[]string{`{"n":10}`, `{"n":-5}`, `{"n":-1e300}`},
+			[]string{`{"n":20}`, `{"n":15.5}`}},
+		{"less or equal", "<=", 15,
+			[]string{`{"n":15}`, `{"n":10}`},
+			[]string{`{"n":15.1}`, `{"n":20}`}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			p, ok := jsonExtractProbeFromExpr(
+				jpCallExpr(tc.op, jpExtractFloat(0, "$.n"), jpFltLit(tc.bound)))
+			require.True(t, ok)
+			require.Len(t, p.Ranges, 1)
+			require.Empty(t, p.Terms, "a range probe carries no exact term")
+
+			for _, doc := range tc.accepts {
+				require.True(t, rangeCovers(t, p, doc),
+					"%s must be reachable: dropping it would lose a qualifying row", doc)
+			}
+			for _, doc := range tc.rejects {
+				// the probe MAY be a superset, but on these it should also be
+				// tight enough to exclude — except at the strict boundary,
+				// checked separately below
+				require.False(t, rangeCovers(t, p, doc), "%s should not be selected", doc)
+			}
+
+			// a different key never satisfies the range
+			require.False(t, rangeCovers(t, p, `{"other":20}`))
+			// a STRING leaf under the same key is not in a numeric range
+			require.False(t, rangeCovers(t, p, `{"n":"20"}`))
+		})
+	}
+}
+
+// Both ends are inclusive, so a STRICT inequality is a superset by exactly the
+// boundary value. That is intentional — the retained predicate removes it — and
+// this pins it as a deliberate choice rather than an off-by-one.
+func TestJSONProbeStrictInequalityIsSupersetAtTheBoundary(t *testing.T) {
+	gt, ok := jsonExtractProbeFromExpr(jpCallExpr(">", jpExtractFloat(0, "$.n"), jpFltLit(15)))
+	require.True(t, ok)
+	require.True(t, rangeCovers(t, gt, `{"n":15}`),
+		"the boundary value is included on purpose; the retained predicate drops it")
+
+	lt, ok := jsonExtractProbeFromExpr(jpCallExpr("<", jpExtractFloat(0, "$.n"), jpFltLit(15)))
+	require.True(t, ok)
+	require.True(t, rangeCovers(t, lt, `{"n":15}`))
+}
+
+// String inequalities range over the STRING encoding only, so they never reach a
+// numeric leaf — json_extract_string is NULL for one, so no numeric document can
+// satisfy the predicate anyway.
+func TestJSONProbeStringRanges(t *testing.T) {
+	p, ok := jsonExtractProbeFromExpr(jpCallExpr(">", jpExtractStr(0, "$.a"), jpStrLit("m")))
+	require.True(t, ok)
+	require.Len(t, p.Ranges, 1)
+	require.True(t, rangeCovers(t, p, `{"a":"n"}`))
+	require.True(t, rangeCovers(t, p, `{"a":"zzz"}`))
+	require.False(t, rangeCovers(t, p, `{"a":"a"}`))
+	require.False(t, rangeCovers(t, p, `{"a":20}`), "a numeric leaf is NULL for json_extract_string")
+
+	p, ok = jsonExtractProbeFromExpr(jpCallExpr("<=", jpExtractStr(0, "$.a"), jpStrLit("m")))
+	require.True(t, ok)
+	require.True(t, rangeCovers(t, p, `{"a":"a"}`))
+	require.True(t, rangeCovers(t, p, `{"a":"m"}`))
+	require.False(t, rangeCovers(t, p, `{"a":"n"}`))
+}
+
+// The operand order flips the operator, so a constant on the left builds the
+// mirrored range rather than declining or — worse — the wrong half.
+func TestJSONProbeRangeFlipsOperandOrder(t *testing.T) {
+	// 15 < n  ==  n > 15
+	flipped, ok := jsonExtractProbeFromExpr(
+		jpCallExpr("<", jpFltLit(15), jpExtractFloat(0, "$.n")))
+	require.True(t, ok)
+	direct, ok := jsonExtractProbeFromExpr(
+		jpCallExpr(">", jpExtractFloat(0, "$.n"), jpFltLit(15)))
+	require.True(t, ok)
+	require.Equal(t, direct.Ranges, flipped.Ranges)
+}
+
+// A value past the truncation limit must still produce a SUPERSET: truncation is
+// monotone, so a long bound can only widen the range, never cut a qualifying row.
+func TestJSONProbeRangeWithOverlongBound(t *testing.T) {
+	long := strings.Repeat("a", 300)
+	p, ok := jsonExtractProbeFromExpr(jpCallExpr(">", jpExtractStr(0, "$.a"), jpStrLit(long)))
+	require.True(t, ok)
+	// a value greater than the bound and sharing its truncated prefix still lands
+	// in range rather than being lost to the cut
+	require.True(t, rangeCovers(t, p, `{"a":"`+long+`zzz"}`))
 }
