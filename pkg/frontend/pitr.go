@@ -310,7 +310,7 @@ func doCreatePitr(ctx context.Context, ses *Session, stmt *tree.CreatePitr) (err
 	// Hold the stable owner-publication write barrier through PITR creation.
 	// COPY ALTER crosses the same barrier before probing historical owners, so
 	// an empty probe cannot race a PITR whose create time was already chosen.
-	if err = lockDataBranchLineageOwnerPublication(ctx, bh); err != nil {
+	if err = lockDataBranchLineageOwnerLifecycle(ctx, bh); err != nil {
 		return err
 	}
 
@@ -787,6 +787,9 @@ func doDropPitr(ctx context.Context, ses *Session, stmt *tree.DropPitr) (err err
 	if err != nil {
 		return err
 	}
+	if err = lockDataBranchLineageOwnerLifecycle(ctx, bh); err != nil {
+		return err
+	}
 
 	// check pitr exists or not
 	tenantInfo := ses.GetTenantInfo()
@@ -880,6 +883,9 @@ func doAlterPitr(ctx context.Context, ses *Session, stmt *tree.AlterPitr) (err e
 	if err != nil {
 		return err
 	}
+	if err = lockDataBranchLineageOwnerLifecycle(ctx, bh); err != nil {
+		return err
+	}
 
 	// check pitr exists or not
 	tenantInfo := ses.GetTenantInfo()
@@ -922,7 +928,7 @@ func doAlterPitr(ctx context.Context, ses *Session, stmt *tree.AlterPitr) (err e
 }
 
 func doRestorePitr(ctx context.Context, ses *Session, stmt *tree.RestorePitr) (stats statistic.StatsArray, err error) {
-	bh := ses.GetBackgroundExec(ctx)
+	bh := ses.GetBackgroundExec(ctx, &BackgroundExecOption{forcePessimisticRC: true})
 	bh.SetRestore(true)
 	defer func() {
 		stats = bh.GetExecStatsArray()
@@ -961,6 +967,9 @@ func doRestorePitr(ctx context.Context, ses *Session, stmt *tree.RestorePitr) (s
 	defer func() {
 		err = finishTxnAndRetireMongoDBAccounts(ctx, bh, ses.GetService(), retiredMongoDBAccountIDs, err)
 	}()
+	if err = lockRestoreLineageOwnerLifecycle(ctx, bh, stmt.Level); err != nil {
+		return stats, err
+	}
 	if err = bh.Exec(ctx, catalog.ViewMetadataLifecycleGateSQL); err != nil {
 		return stats, err
 	}

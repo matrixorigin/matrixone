@@ -36,6 +36,81 @@ func testPublisher() *Publisher {
 	}
 }
 
+type recordingQueryClient struct {
+	response *querypb.Response
+	err      error
+	request  *querypb.Request
+	address  string
+	released bool
+}
+
+func (*recordingQueryClient) ServiceID() string { return "test" }
+func (c *recordingQueryClient) SendMessage(_ context.Context, address string, req *querypb.Request) (*querypb.Response, error) {
+	c.address = address
+	c.request = req
+	return c.response, c.err
+}
+func (*recordingQueryClient) NewRequest(method querypb.CmdMethod) *querypb.Request {
+	return &querypb.Request{CmdMethod: method}
+}
+func (c *recordingQueryClient) Release(*querypb.Response) { c.released = true }
+func (*recordingQueryClient) Close() error                { return nil }
+
+func TestSendBuildsFenceRequestAndRequiresAck(t *testing.T) {
+	item := pendingFence{
+		identity:   testIdentity("storage"),
+		generation: fulltext2.Generation{BaseTimestamp: 11, TailChunk: 22},
+	}
+	client := &recordingQueryClient{response: &querypb.Response{
+		Fulltext2CacheFenceResponse: querypb.Fulltext2CacheFenceResponse{
+			RequiredBaseTimestamp: 11,
+			RequiredTailChunk:     22,
+			EvictionClaimed:       true,
+		},
+	}}
+	p := testPublisher()
+	p.client = client
+	require.True(t, p.send(item, metadata.CNService{QueryAddress: "query-address"}))
+	require.True(t, client.released)
+	require.Equal(t, "query-address", client.address)
+	require.Equal(t, querypb.CmdMethod_Fulltext2CacheFence, client.request.CmdMethod)
+	require.Equal(t, item.identity.AccountID, client.request.Fulltext2CacheFenceRequest.AccountID)
+	require.Equal(t, item.identity.Database, client.request.Fulltext2CacheFenceRequest.Database)
+	require.Equal(t, item.identity.StorageTable, client.request.Fulltext2CacheFenceRequest.StorageTable)
+	require.Equal(t, item.identity.MetadataTable, client.request.Fulltext2CacheFenceRequest.MetadataTable)
+	require.Equal(t, item.generation.BaseTimestamp, client.request.Fulltext2CacheFenceRequest.BaseTimestamp)
+	require.Equal(t, item.generation.TailChunk, client.request.Fulltext2CacheFenceRequest.TailChunk)
+
+	client = &recordingQueryClient{err: fmt.Errorf("send failed")}
+	p.client = client
+	require.False(t, p.send(item, metadata.CNService{QueryAddress: "query-address"}))
+	require.False(t, client.released)
+}
+
+func TestBroadcastRetriesInventoryErrorAndSkipsDuplicateAckedService(t *testing.T) {
+	p := testPublisher()
+	p.delays = []time.Duration{0, 0, 0}
+	lookups := 0
+	p.nodesFn = func(context.Context) ([]metadata.CNService, error) {
+		lookups++
+		if lookups == 1 {
+			return nil, fmt.Errorf("inventory unavailable")
+		}
+		return []metadata.CNService{
+			{ServiceID: "a", QueryAddress: "first"},
+			{ServiceID: "a", QueryAddress: "duplicate"},
+		}, nil
+	}
+	sends := 0
+	p.sendFn = func(pendingFence, metadata.CNService) bool {
+		sends++
+		return true
+	}
+	p.broadcast(pendingFence{identity: testIdentity("storage"), generation: fulltext2.Generation{BaseTimestamp: 1}})
+	require.Equal(t, 2, lookups)
+	require.Equal(t, 1, sends)
+}
+
 func TestConcurrentBroadcastsShareRPCParallelBound(t *testing.T) {
 	p := testPublisher()
 	nodes := make([]metadata.CNService, rpcParallel+4)

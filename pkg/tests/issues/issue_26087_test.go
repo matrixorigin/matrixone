@@ -26,8 +26,6 @@ import (
 	_ "github.com/go-sql-driver/mysql"
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/embed"
-	"github.com/matrixorigin/matrixone/pkg/lockservice"
-	pblock "github.com/matrixorigin/matrixone/pkg/pb/lock"
 	pbtxn "github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/tests/testutils"
 	"github.com/stretchr/testify/require"
@@ -66,11 +64,6 @@ func TestIssue26087ConcurrentDataBranchQuota(t *testing.T) {
 			execSQLRequire(t, ctx, sysDB, fmt.Sprintf("select mo_feature_limit_upsert(%d, 'branch', '', 1)", accountID))
 			execSQLRequire(t, ctx, sysDB, fmt.Sprintf("select mo_feature_limit_upsert(%d, 'snapshot', 'table', -1)", accountID))
 
-			var featureLimitTableID uint64
-			require.NoError(t, sysDB.QueryRowContext(ctx,
-				"select rel_id from mo_catalog.mo_tables where reldatabase = 'mo_catalog' and relname = 'mo_feature_limit'",
-			).Scan(&featureLimitTableID))
-
 			tenantDB, err := sql.Open("mysql", fmt.Sprintf("%s#root#accountadmin:111@tcp(127.0.0.1:%d)/", accountName, port))
 			require.NoError(t, err)
 			defer tenantDB.Close()
@@ -81,6 +74,7 @@ func TestIssue26087ConcurrentDataBranchQuota(t *testing.T) {
 			execSQLRequire(t, ctx, tenantDB, "create database branch_quota_race")
 			execSQLRequire(t, ctx, tenantDB, "create table branch_quota_race.src (a int primary key)")
 			execSQLRequire(t, ctx, tenantDB, "create table branch_quota_race.mode_probe (a int primary key)")
+			execSQLRequire(t, ctx, tenantDB, "create table branch_quota_race.logtail_marker (a int primary key)")
 			execSQLRequire(t, ctx, tenantDB, "insert into branch_quota_race.src values (1)")
 			execSQLRequire(t, ctx, tenantDB, "create snapshot issue_26087_sp for table branch_quota_race src")
 			waitForCatalog := func(
@@ -160,18 +154,11 @@ func TestIssue26087ConcurrentDataBranchQuota(t *testing.T) {
 			require.NoError(t, err)
 
 			execCtx, cancelExec := context.WithCancel(ctx)
-			var pendingCreate chan error
 			defer func() {
 				cancelExec()
 				cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 10*time.Second)
 				defer cleanupCancel()
 				_, _ = conn1.ExecContext(cleanupCtx, "rollback")
-				if pendingCreate != nil {
-					select {
-					case <-pendingCreate:
-					case <-cleanupCtx.Done():
-					}
-				}
 				_, _ = conn2.ExecContext(cleanupCtx, "rollback")
 				_ = conn1.Close()
 				_ = conn2.Close()
@@ -181,45 +168,98 @@ func TestIssue26087ConcurrentDataBranchQuota(t *testing.T) {
 				_, execErr := conn.ExecContext(execCtx, statement)
 				return execErr
 			}
-			ls := lockservice.GetLockServiceByServiceID(cn.ServiceID())
-			waitForQuotaWaiter := func() {
-				require.Eventually(t, func() bool {
-					found := false
-					ls.IterLocks(func(tableID uint64, _ [][]byte, lock lockservice.Lock) bool {
-						if tableID != featureLimitTableID {
-							return true
-						}
-						lock.IterWaiters(func(_ pblock.WaitTxn) bool {
-							found = true
-							return false
-						})
-						return !found
-					})
-					return found
-				}, 30*time.Second, 10*time.Millisecond, "second branch creator did not wait for the quota-row lock")
+			runConcurrent := func(statements ...struct {
+				conn *sql.Conn
+				sql  string
+			}) []error {
+				start := make(chan struct{})
+				done := make(chan error, len(statements))
+				for _, statement := range statements {
+					go func(statement struct {
+						conn *sql.Conn
+						sql  string
+					}) {
+						<-start
+						done <- execConn(statement.conn, statement.sql)
+					}(statement)
+				}
+				close(start)
+				errs := make([]error, 0, len(statements))
+				for range statements {
+					select {
+					case err := <-done:
+						errs = append(errs, err)
+					case <-time.After(30 * time.Second):
+						t.Fatal("concurrent data-branch mutation did not return")
+					}
+				}
+				return errs
 			}
 
-			require.NoError(t, execConn(conn1, "begin"))
-			require.NoError(t, execConn(conn1, "data branch create table branch_quota_race.b1 from branch_quota_race.src{snapshot='issue_26087_sp'}"))
+			terminalPaths := []struct {
+				name      string
+				statement string
+			}{
+				{name: "commit", statement: "commit"},
+				{name: "replacement_begin", statement: "begin"},
+			}
+			for i, terminalPath := range terminalPaths {
+				tableName := fmt.Sprintf("explicit_holder_%d", i)
+				snapshotName := fmt.Sprintf("issue_26087_holder_probe_%d", i)
+				require.NoError(t, execConn(conn1, "begin"))
+				require.NoError(t, execConn(conn1,
+					"data branch create table branch_quota_race."+tableName+" from branch_quota_race.src"))
+				// The explicit tenant transaction has already mutated owner catalogs
+				// but must not own the global lifecycle row between statements. A
+				// system owner writer therefore completes before every reachable
+				// terminal commit path validates the tenant transaction.
+				snapshotDone := make(chan error, 1)
+				go func() {
+					_, snapshotErr := sysDB.ExecContext(execCtx,
+						"create snapshot "+snapshotName+" for account "+accountName)
+					snapshotDone <- snapshotErr
+				}()
+				select {
+				case snapshotErr := <-snapshotDone:
+					require.NoError(t, snapshotErr)
+				case <-time.After(5 * time.Second):
+					t.Fatalf("system snapshot waited for the open tenant transaction before %s", terminalPath.name)
+				}
+				terminalErr := execConn(conn1, terminalPath.statement)
+				require.Error(t, terminalErr,
+					"%s must validate and lose to the completed lifecycle writer", terminalPath.name)
+				require.NotContains(t, strings.ToLower(terminalErr.Error()), "deadlock")
+				require.NotContains(t, strings.ToLower(terminalErr.Error()), "lock wait timeout")
+				var explicitHolderCount int
+				require.NoError(t, conn1.QueryRowContext(execCtx,
+					"select count(*) from mo_catalog.mo_tables where reldatabase = 'branch_quota_race' and relname = '"+tableName+"'",
+				).Scan(&explicitHolderCount))
+				require.Zero(t, explicitHolderCount)
+				execSQLRequire(t, ctx, sysDB, "drop snapshot "+snapshotName)
+			}
 
-			createDone := make(chan error, 1)
-			pendingCreate = createDone
-			go func(done chan<- error) {
-				done <- execConn(conn2, "data branch create table branch_quota_race.b2 from branch_quota_race.src{snapshot='issue_26087_sp'}")
-			}(createDone)
-
-			waitForQuotaWaiter()
-
-			require.NoError(t, execConn(conn1, "commit"))
-			select {
-			case createErr := <-createDone:
-				pendingCreate = nil
-				require.Error(t, createErr)
+			createErrs := runConcurrent(
+				struct {
+					conn *sql.Conn
+					sql  string
+				}{conn1, "data branch create table branch_quota_race.b1 from branch_quota_race.src{snapshot='issue_26087_sp'}"},
+				struct {
+					conn *sql.Conn
+					sql  string
+				}{conn2, "data branch create table branch_quota_race.b2 from branch_quota_race.src{snapshot='issue_26087_sp'}"},
+			)
+			var createSuccesses, quotaFailures int
+			for _, createErr := range createErrs {
+				if createErr == nil {
+					createSuccesses++
+					continue
+				}
+				quotaFailures++
 				require.Contains(t, createErr.Error(), "feature BRANCH with scope  has reached the limit of 1")
 				require.NotContains(t, strings.ToLower(createErr.Error()), "txn need retry")
-			case <-time.After(30 * time.Second):
-				t.Fatal("second branch creator did not return after the quota-row lock was released")
 			}
+			require.Equal(t, 1, createSuccesses)
+			require.Equal(t, 1, quotaFailures)
 
 			var branchCount int
 			require.NoError(t, conn1.QueryRowContext(execCtx,
@@ -227,31 +267,30 @@ func TestIssue26087ConcurrentDataBranchQuota(t *testing.T) {
 			).Scan(&branchCount))
 			require.Equal(t, 1, branchCount)
 
-			require.NoError(t, execConn(conn1, "data branch delete table branch_quota_race.b1"))
+			var createdBranchName string
+			require.NoError(t, conn1.QueryRowContext(execCtx,
+				"select relname from mo_catalog.mo_tables where reldatabase = 'branch_quota_race' and relname in ('b1', 'b2')",
+			).Scan(&createdBranchName))
+			require.NoError(t, execConn(conn1,
+				"data branch delete table branch_quota_race."+createdBranchName))
 			require.NoError(t, execConn(conn1, "create database branch_quota_source"))
 			require.NoError(t, execConn(conn1, "create table branch_quota_source.t1 (a int primary key)"))
 			require.NoError(t, execConn(conn1, "create table branch_quota_source.t2 (a int primary key)"))
 			execSQLRequire(t, ctx, sysDB, fmt.Sprintf("select mo_feature_limit_upsert(%d, 'branch', '', 3)", accountID))
 
-			require.NoError(t, execConn(conn1, "begin"))
-			require.NoError(t, execConn(conn1, "data branch create table branch_quota_race.b1 from branch_quota_race.src{snapshot='issue_26087_sp'}"))
-			require.NoError(t, execConn(conn2, "begin"))
-			createDone = make(chan error, 1)
-			pendingCreate = createDone
-			go func(done chan<- error) {
-				done <- execConn(conn2, "data branch create database branch_quota_destination from branch_quota_source")
-			}(createDone)
-
-			waitForQuotaWaiter()
-			require.NoError(t, execConn(conn1, "commit"))
-			select {
-			case createErr := <-createDone:
-				pendingCreate = nil
+			createErrs = runConcurrent(
+				struct {
+					conn *sql.Conn
+					sql  string
+				}{conn1, "data branch create table branch_quota_race.b1 from branch_quota_race.src{snapshot='issue_26087_sp'}"},
+				struct {
+					conn *sql.Conn
+					sql  string
+				}{conn2, "data branch create database branch_quota_destination from branch_quota_source"},
+			)
+			for _, createErr := range createErrs {
 				require.NoError(t, createErr)
-			case <-time.After(30 * time.Second):
-				t.Fatal("database branch creator did not return after the quota-row lock was released")
 			}
-			require.NoError(t, execConn(conn2, "commit"))
 
 			var databaseBranchCount int
 			require.NoError(t, conn1.QueryRowContext(execCtx,
@@ -297,14 +336,31 @@ func TestIssue26087ConcurrentDataBranchQuota(t *testing.T) {
 				"data branch create table branch_quota_race.explicit_branch from branch_quota_race.src{snapshot='issue_26087_sp'}")
 			require.Error(t, explicitErr)
 			require.Contains(t, explicitErr.Error(),
-				"finite branch quota requires a pessimistic read committed transaction; retry outside the active transaction")
+				"finite branch quota requires a pessimistic read committed transaction")
 			require.NoError(t, conn1.QueryRowContext(execCtx,
 				"select count(*) from branch_quota_race.mode_probe where a = 2",
 			).Scan(&fixedSnapshotProbe))
 			require.Zero(t, fixedSnapshotProbe,
 				"feature-limit freshness must not advance the outer SI transaction")
 			require.NoError(t, execConn(conn1, "rollback"))
-			require.NoError(t, execConn(conn2, "delete from branch_quota_race.mode_probe where a = 2"))
+			cleanupResult, err := conn2.ExecContext(execCtx,
+				"delete from branch_quota_race.mode_probe where a = 2")
+			require.NoError(t, err)
+			cleanupRows, err := cleanupResult.RowsAffected()
+			require.NoError(t, err)
+			require.EqualValues(t, 1, cleanupRows)
+			// The driver acknowledges conn2's commit before CN0 necessarily applies
+			// its logtail. Commit a later write marker and wait for its frontier before
+			// conn1 opens the next SI snapshot.
+			markerCommitTS := testutils.ExecSQLWithReadResultAndAccount(
+				t,
+				accountID,
+				"branch_quota_race",
+				cn,
+				nil,
+				"insert into branch_quota_race.logtail_marker values (1)",
+			)
+			require.False(t, markerCommitTS.IsEmpty())
 
 			require.NoError(t, execConn(conn1, "set autocommit = 0"))
 			var modeProbeCount int

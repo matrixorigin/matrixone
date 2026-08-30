@@ -206,6 +206,7 @@ func (c *Compile) Compile(
 	// initialize some attributes for Compile.
 	c.fill = resultWriteBack
 	c.pn = queryPlan
+	c.prepareLoadUniqueIndexPromotion(queryPlan)
 
 	// combine top context with some values and replace.
 	topContext := context.WithValue(execTopContext, defines.EngineKey{}, c.e)
@@ -531,6 +532,7 @@ func (c *Compile) Run(_ uint64) (queryResult *util2.RunResult, err error) {
 		}
 		defChanged := moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetryWithDefChanged)
 		forcePreMode := moerr.IsMoErrCode(err, moerr.ErrVectorNeedRetryWithPreMode)
+		c.onLoadUniqueIndexPromotionRetry(defChanged || forcePreMode)
 		if forcePreMode {
 			// NOTE: This in-place modification of the AST will persist if the statement
 			// is part of a prepared statement. This is generally desirable as it
@@ -965,13 +967,18 @@ func measureRetryRemoteWait(total *time.Duration, wait func() error) (err error)
 // into the previous attempt's closing phase.
 func (c *Compile) buildRetryCompile(rebuildPlan bool) (*Compile, error) {
 	topContext := c.proc.GetTopContext()
+	// Invalidate a completed proof before a different logical generation can be
+	// built or observed.
+	c.onLoadUniqueIndexPromotionRetry(rebuildPlan)
 
 	// FIXME: the current retry method is quite bad, the overhead is relatively large, and needs to be
 	// improved to refresh expression in the future.
 
 	var e error
 	runC := NewCompile(c.addr, c.db, c.sql, c.tenant, c.uid, c.e, c.proc, c.stmt, c.isInternal, c.cnLabel, c.startAt)
+	runC.inheritLoadUniqueIndexPromotion(c)
 	c.bindRetryPlanGeneration(runC, rebuildPlan)
+	c.bindLoadUniqueIndexPromotionSnapshot(runC, rebuildPlan)
 	runC.resultSink = c.resultSink
 	runC.executionGeneration = c.executionGeneration
 	c.copyAllocationAccountLifecycleTo(runC)

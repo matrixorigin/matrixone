@@ -285,6 +285,9 @@ func (c *Compile) Reset(proc *process.Process, startAt time.Time, fill func(*bat
 	c.fill = fill
 	c.sql = sql
 	c.affectRows.Store(0)
+	// Reset reuses an existing logical/physical generation. Reused generations
+	// are deliberately ineligible for LOAD unique-index promotion.
+	c.clearLoadUniqueIndexPromotion()
 	c.executionGeneration = 0
 	c.resultMetadataFrozen = false
 	c.anal.Reset(c.isPrepare, c.IsTpQuery())
@@ -467,6 +470,7 @@ func (c *Compile) clear() {
 	c.originSQL = ""
 	c.anal = nil
 	c.e = nil
+	c.clearLoadUniqueIndexPromotion()
 
 	if c.lockMeta != nil {
 		c.lockMeta.clear(c.proc)
@@ -885,6 +889,9 @@ func (c *Compile) prePipelineInitializer() (err error) {
 		return err
 	}
 	if err = c.lockTable(); err != nil {
+		return err
+	}
+	if err = c.maybePromoteLoadUniqueIndexes(); err != nil {
 		return err
 	}
 
@@ -4930,14 +4937,32 @@ func (c *Compile) mergeDistinctSetScopes(node *plan.Node, scopes []*Scope, isFir
 		gn.GroupBy[i] = plan2.DeepCopyExpr(node.ProjectList[i])
 		gn.GroupBy[i].Typ.NotNullable = false
 	}
+	if len(node.PhysicalEqualityKeyList) > 0 {
+		visibleCount := len(gn.GroupBy)
+		for i, expr := range node.PhysicalEqualityKeyList {
+			key := plan2.DeepCopyExpr(expr)
+			key.Typ.NotNullable = false
+			gn.GroupBy = append(gn.GroupBy, key)
+			gn.GroupByHashKey = append(gn.GroupByHashKey, int32(visibleCount+i))
+		}
+	}
 	op := constructGroup(c.proc.Ctx, gn, node, true, 0, c.proc)
+	if len(node.PhysicalEqualityKeyList) > 0 {
+		op.ProjectList = make([]*plan.Expr, len(node.ProjectList))
+		for i, expr := range node.ProjectList {
+			op.ProjectList[i] = &plan.Expr{
+				Typ:  expr.Typ,
+				Expr: &plan.Expr_Col{Col: &plan.ColRef{ColPos: int32(i)}},
+			}
+		}
+	}
 	op.SetAnalyzeControl(c.anal.curNodeIdx, isFirst)
 	rs.setRootOperator(op)
 	c.anal.isFirst = false
 	return []*Scope{rs}
 }
 
-func (c *Compile) compileTpMinusAndIntersect(left []*Scope, right []*Scope, nodeType plan.Node_NodeType) []*Scope {
+func (c *Compile) compileTpMinusAndIntersect(node *plan.Node, left []*Scope, right []*Scope, nodeType plan.Node_NodeType) []*Scope {
 	rs := c.newScopeListOnSingleWorkerStage(2, 1)
 	rs[0].PreScopes = append(rs[0].PreScopes, left[0], right[0])
 
@@ -4958,16 +4983,19 @@ func (c *Compile) compileTpMinusAndIntersect(left []*Scope, right []*Scope, node
 	switch nodeType {
 	case plan.Node_MINUS:
 		arg := minus.NewArgument()
+		arg.KeyExprs = node.PhysicalEqualityKeyList
 		arg.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
 		rs[0].setRootOperator(arg)
 		arg.AppendChild(merge1)
 	case plan.Node_INTERSECT:
 		arg := intersect.NewArgument()
+		arg.KeyExprs = node.PhysicalEqualityKeyList
 		arg.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
 		rs[0].setRootOperator(arg)
 		arg.AppendChild(merge1)
 	case plan.Node_INTERSECT_ALL:
 		arg := intersectall.NewArgument()
+		arg.KeyExprs = node.PhysicalEqualityKeyList
 		arg.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
 		rs[0].setRootOperator(arg)
 		arg.AppendChild(merge1)
@@ -4978,7 +5006,7 @@ func (c *Compile) compileTpMinusAndIntersect(left []*Scope, right []*Scope, node
 
 func (c *Compile) compileMinusAndIntersect(node *plan.Node, left []*Scope, right []*Scope, nodeType plan.Node_NodeType) []*Scope {
 	if c.IsSingleScope(left) && c.IsSingleScope(right) {
-		return c.compileTpMinusAndIntersect(left, right, nodeType)
+		return c.compileTpMinusAndIntersect(node, left, right, nodeType)
 	}
 	rs := c.newScopeListOnSingleWorkerStage(2, int(node.Stats.Dop))
 	rs = c.newScopeListForMinusAndIntersect(rs, left, right, node)
@@ -4992,6 +5020,7 @@ func (c *Compile) compileMinusAndIntersect(node *plan.Node, left []*Scope, right
 			merge0.WithPartial(0, 1)
 			merge1 := merge.NewArgument().WithPartial(1, 2)
 			arg := minus.NewArgument()
+			arg.KeyExprs = node.PhysicalEqualityKeyList
 			arg.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
 			rs[i].setRootOperator(arg)
 			arg.AppendChild(merge1)
@@ -5002,6 +5031,7 @@ func (c *Compile) compileMinusAndIntersect(node *plan.Node, left []*Scope, right
 			merge0.WithPartial(0, 1)
 			merge1 := merge.NewArgument().WithPartial(1, 2)
 			arg := intersect.NewArgument()
+			arg.KeyExprs = node.PhysicalEqualityKeyList
 			arg.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
 			rs[i].setRootOperator(arg)
 			arg.AppendChild(merge1)
@@ -5012,6 +5042,7 @@ func (c *Compile) compileMinusAndIntersect(node *plan.Node, left []*Scope, right
 			merge0.WithPartial(0, 1)
 			merge1 := merge.NewArgument().WithPartial(1, 2)
 			arg := intersectall.NewArgument()
+			arg.KeyExprs = node.PhysicalEqualityKeyList
 			arg.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
 			rs[i].setRootOperator(arg)
 			arg.AppendChild(merge1)
@@ -6706,6 +6737,19 @@ func supportsRemoteUpdateChangedRows(service string) bool {
 	return ok && protocolVersion >= defines.MORPCVersion25
 }
 
+func supportsRemotePadSpaceSemantics(service string) bool {
+	rt := moruntime.ServiceRuntime(service)
+	if rt == nil {
+		return false
+	}
+	version, ok := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
+	if !ok {
+		return false
+	}
+	protocolVersion, ok := version.(int64)
+	return ok && protocolVersion >= defines.MORPCVersion40
+}
+
 func (c *Compile) canCompileShuffleGroup(node *plan.Node) bool {
 	return node.Stats.HashmapStats != nil &&
 		node.Stats.HashmapStats.Shuffle &&
@@ -7210,7 +7254,27 @@ func (c *Compile) compileDelete(node *plan.Node, ss []*Scope) ([]*Scope, error) 
 
 func (c *Compile) compileLock(node *plan.Node, ss []*Scope) ([]*Scope, error) {
 	lockRows := make([]*plan.LockTarget, 0, len(node.LockTargets))
-	for _, tbl := range node.LockTargets {
+	localizeLoadPlan := c.loadUniqueIndexPromotion != nil
+	filterPromotedRows := false
+	if state := c.loadUniqueIndexPromotion; state != nil &&
+		state.phase == loadUniqueIndexPromotionFenced {
+		if err := state.validateRetryProof(c); err != nil {
+			return nil, err
+		}
+		filterPromotedRows = true
+	}
+	for _, canonicalTarget := range node.LockTargets {
+		if filterPromotedRows && c.loadUniqueIndexPromotion.coversRowTarget(canonicalTarget) {
+			continue
+		}
+		tbl := canonicalTarget
+		if localizeLoadPlan && (canonicalTarget.LockTable || canonicalTarget.LockTableAtTheEnd) {
+			// Only table-lock disposition is annotated during physical compile. A
+			// shallow value copy keeps the canonical generation immutable without
+			// changing allocation or mutation behavior for non-candidate statements.
+			localTarget := *canonicalTarget
+			tbl = &localTarget
+		}
 		if c.shouldPrePipelineLockTable(tbl) {
 			c.lockTables[tbl.TableId] = tbl
 		} else {
@@ -7219,15 +7283,19 @@ func (c *Compile) compileLock(node *plan.Node, ss []*Scope) ([]*Scope, error) {
 			}
 		}
 	}
-	node.LockTargets = lockRows
-	if len(node.LockTargets) == 0 {
+	if !localizeLoadPlan {
+		// Preserve exact-main compile behavior outside the positively admitted
+		// LOAD path, including its existing canonical-node reuse contract.
+		node.LockTargets = lockRows
+	}
+	if len(lockRows) == 0 {
 		return ss, nil
 	}
 
 	block := false
 	// only pessimistic txn needs to block downstream operators.
 	if c.proc.GetTxnOperator().Txn().IsPessimistic() {
-		block = node.LockTargets[0].Block
+		block = lockRows[0].Block
 		if block {
 			c.needBlock = true
 		}
@@ -7240,7 +7308,13 @@ func (c *Compile) compileLock(node *plan.Node, ss []*Scope) ([]*Scope, error) {
 	}
 	var err error
 	var lockOpArg *lockop.LockOp
-	lockOpArg, err = constructLockOp(node, c.e)
+	lockNode := node
+	if localizeLoadPlan {
+		localNode := *node
+		localNode.LockTargets = lockRows
+		lockNode = &localNode
+	}
+	lockOpArg, err = constructLockOp(lockNode, c.e)
 	if err != nil {
 		return nil, err
 	}
@@ -8668,9 +8742,11 @@ func (c *Compile) runSqlWithResultAndOptions(
 
 	lower := c.getLower()
 
-	if qry, ok := c.pn.Plan.(*plan.Plan_Ddl); ok {
-		if qry.Ddl.DdlType == plan.DataDefinition_DROP_DATABASE {
-			options = options.WithIgnoreForeignKey()
+	if c.pn != nil {
+		if qry, ok := c.pn.Plan.(*plan.Plan_Ddl); ok {
+			if qry.Ddl.DdlType == plan.DataDefinition_DROP_DATABASE {
+				options = options.WithIgnoreForeignKey()
+			}
 		}
 	}
 

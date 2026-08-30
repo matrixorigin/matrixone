@@ -530,20 +530,37 @@ func TestWithTestingBoundsHeartbeatRecoveryInsideStoreLiveness(t *testing.T) {
 
 	for _, svc := range c.services {
 		cfg := svc.GetServiceConfig()
+		require.Equal(t, testHAKeeperBackendReadTimeout,
+			cfg.HAKeeperClient.BackendReadTimeout.Duration)
 		switch svc.ServiceType() {
 		case metadata.ServiceType_CN:
 			require.Equal(t, testHAKeeperHeartbeatTimeout,
 				cfg.CN.HAKeeper.HeatbeatTimeout.Duration)
+			require.Less(t, cfg.CN.HAKeeper.HeatbeatTimeout.Duration,
+				cfg.HAKeeperClient.BackendReadTimeout.Duration)
 		case metadata.ServiceType_TN:
 			require.Equal(t, testHAKeeperHeartbeatTimeout,
 				cfg.getTNServiceConfig().HAKeeper.HeatbeatTimeout.Duration)
+			require.Less(t, cfg.getTNServiceConfig().HAKeeper.HeatbeatTimeout.Duration,
+				cfg.HAKeeperClient.BackendReadTimeout.Duration)
 		case metadata.ServiceType_LOG:
 			require.Equal(t, testHAKeeperStoreTimeout,
 				cfg.LogService.HAKeeperConfig.TNStoreTimeout.Duration)
 			require.Equal(t, testHAKeeperStoreTimeout,
 				cfg.LogService.HAKeeperConfig.CNStoreTimeout.Duration)
+			require.Less(t, cfg.HAKeeperClient.BackendReadTimeout.Duration,
+				cfg.LogService.HAKeeperConfig.TNStoreTimeout.Duration)
 		}
 	}
+}
+
+func TestTestingHAKeeperBackendReadTimeoutPreservesExplicitValue(t *testing.T) {
+	const explicit = 7 * time.Second
+	cfg := newServiceConfig()
+	cfg.HAKeeperClient.BackendReadTimeout.Duration = explicit
+
+	applyTestingHAKeeperBackendReadTimeout(&cfg)
+	require.Equal(t, explicit, cfg.HAKeeperClient.BackendReadTimeout.Duration)
 }
 
 func TestWithTestingPreservesExplicitHeartbeatTimeout(t *testing.T) {

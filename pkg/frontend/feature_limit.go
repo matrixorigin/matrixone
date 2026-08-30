@@ -122,19 +122,18 @@ func featureLimitCheckerForAccount(
 		sqlRet.Close()
 	}()
 
-	// Feature limits are admission-control state. Establish the operation's
-	// cross-CN linearization point before deciding whether the feature is
-	// disabled, finite, or unlimited. A branch running inside an explicit SI
-	// transaction uses an independent short RC transaction for this control-plane
-	// read; advancing the caller's fixed snapshot would violate its isolation.
+	// Feature limits are admission-control state. The owning mutation installs
+	// its TN-ordered catalog frontier before writing the shared lifecycle gate;
+	// do not advance that transaction snapshot again after the write. A branch
+	// running inside an explicit SI transaction instead uses an independent short
+	// RC transaction for this control-plane read, because advancing the caller's
+	// fixed snapshot would violate its isolation.
 	if featureCode == featureCodeBranch && featureLimitTxnUsesFixedSnapshot(bh) {
 		limitQuota, err = queryQuotaInIndependentTxn(
 			ctx, ses, accId, featureCode, featureScope,
 		)
 	} else {
-		if err = advanceFeatureLimitSnapshot(ctx, ses, bh); err == nil {
-			limitQuota, err = queryQuota(ctx, ses, bh, accId, featureCode, featureScope)
-		}
+		limitQuota, err = queryQuota(ctx, ses, bh, accId, featureCode, featureScope)
 	}
 	if err != nil {
 		return err

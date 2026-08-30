@@ -15,12 +15,26 @@
 package compile
 
 import (
+	"context"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	compileplugin "github.com/matrixorigin/matrixone/pkg/indexplugin/compile"
 	"github.com/stretchr/testify/require"
 )
+
+func TestCompileAccountID(t *testing.T) {
+	_, err := compileAccountID(nil)
+	require.ErrorContains(t, err, "tenant context missing")
+
+	_, err = compileAccountID(context.WithValue(context.Background(), defines.TenantIDKey{}, "wrong-type"))
+	require.ErrorContains(t, err, "tenant identity missing")
+
+	accountID, err := compileAccountID(context.WithValue(context.Background(), defines.TenantIDKey{}, uint32(7)))
+	require.NoError(t, err)
+	require.Equal(t, uint32(7), accountID)
+}
 
 // TestValidateReindexParams covers the fulltext2 ALTER REINDEX param merge — in
 // particular that max_postings_capacity is APPLIED (not the silent no-op it was

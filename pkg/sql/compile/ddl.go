@@ -120,6 +120,12 @@ func (s *Scope) DropDatabase(c *Compile) error {
 	}
 	s.ScopeAnalyzer.Start()
 	defer s.ScopeAnalyzer.Stop()
+	// DROP DATABASE changes PITR ownership and can reclaim branch metadata
+	// through its nested table drops. Enter the shared lifecycle before any
+	// account, database, or relation lookup/lock.
+	if err := c.lockDataBranchLineageOwnerLifecycle(); err != nil {
+		return err
+	}
 
 	accountId, err := defines.GetAccountId(c.proc.Ctx)
 	if err != nil {
@@ -206,11 +212,14 @@ func (s *Scope) DropDatabase(c *Compile) error {
 	if err != nil {
 		return err
 	}
-	if c.proc.Base.IsFrontend && !needSkipDbs[dbName] {
-		droppedDatabaseID, parseErr := strconv.ParseUint(database.GetDatabaseId(c.proc.Ctx), 10, 64)
-		if parseErr != nil {
-			return parseErr
+	var droppedDatabaseID uint64
+	if !needSkipDbs[dbName] {
+		droppedDatabaseID, err = strconv.ParseUint(database.GetDatabaseId(c.proc.Ctx), 10, 64)
+		if err != nil {
+			return err
 		}
+	}
+	if c.proc.Base.IsFrontend && !needSkipDbs[dbName] {
 		generation := uint64(c.proc.GetTxnOperator().SnapshotTS().PhysicalTime)
 		if err = c.enqueueViewsAfterDatabaseRemoval(accountId, droppedDatabaseID, generation); err != nil {
 			return err
@@ -263,6 +272,12 @@ func (s *Scope) DropDatabase(c *Compile) error {
 		}
 		if !isIndexTable {
 			deleteTables = append(deleteTables, r)
+		}
+	}
+
+	if !needSkipDbs[dbName] {
+		if err = c.deleteRolePrivilegesForDroppedDatabase(accountId, droppedDatabaseID); err != nil {
+			return err
 		}
 	}
 
@@ -504,7 +519,11 @@ func (s *Scope) AlterView(c *Compile) error {
 		return err
 	}
 
-	if err = dbSource.Create(context.WithValue(c.proc.Ctx, defines.SqlKey{}, c.sql), tblName, append(exeCols, exeDefs...)); err != nil {
+	createCtx := context.WithValue(c.proc.Ctx, defines.SqlKey{}, c.sql)
+	// ALTER VIEW replaces the physical catalog row but preserves the logical
+	// object identity, so exact-view grants remain attached to the view.
+	createCtx = context.WithValue(createCtx, defines.LogicalIdKey{}, oldLogicalID)
+	if err = dbSource.Create(createCtx, tblName, append(exeCols, exeDefs...)); err != nil {
 		return err
 	}
 	if err = c.persistViewDependencies(dbSource, dbName, qry.GetTableDef()); err != nil {
@@ -2601,7 +2620,8 @@ func (s *Scope) CreateView(c *Compile) error {
 
 		if qry.GetReplace() {
 			if err = c.runSqlWithOptions(
-				fmt.Sprintf("DROP VIEW IF EXISTS %s", viewName), executor.StatementOption{}.WithDisableLog(),
+				fmt.Sprintf("DROP VIEW IF EXISTS %s", quoteAlterCopyTableName(dbName, viewName)),
+				executor.StatementOption{}.WithDisableLog(),
 			); err != nil {
 				getLogger(s.Proc.GetService()).Error("drop existing view failed",
 					zap.String("databaseName", c.db),
@@ -3007,22 +3027,10 @@ func (s *Scope) DropIndex(c *Compile) error {
 
 	//2. drop index table
 	for _, indexTableName := range dropIndexTableNames {
-		if _, err = d.Relation(c.proc.Ctx, indexTableName, nil); err != nil {
+		if err = c.dropIndexChildRelation(
+			d, indexTableName, oldTableDef.GetIsTemporary(),
+		); err != nil {
 			return err
-		}
-
-		if err = maybeDeleteAutoIncrement(c.proc.Ctx, c.proc.GetService(), d, indexTableName, c.proc.GetTxnOperator()); err != nil {
-			return err
-		}
-
-		if err = d.Delete(c.proc.Ctx, indexTableName); err != nil {
-			return err
-		}
-
-		if oldTableDef.GetIsTemporary() {
-			if session := c.proc.GetSession(); session != nil {
-				session.RemoveTempTableByRealName(indexTableName)
-			}
 		}
 	}
 
@@ -3600,6 +3608,9 @@ func (s *Scope) DropSequence(c *Compile) error {
 	var err error
 
 	tblName := qry.GetTable()
+	if err = lockMoDatabase(c, dbName, lock.LockMode_Shared); err != nil {
+		return err
+	}
 	dbSource, err = c.e.Database(c.proc.Ctx, dbName, c.proc.GetTxnOperator())
 	if err != nil {
 		if qry.GetIfExists() {
@@ -3620,10 +3631,117 @@ func (s *Scope) DropSequence(c *Compile) error {
 		return err
 	}
 
+	// Sequence grants resolve through mo_tables and therefore use the same
+	// logical object identity as table/view grants.
+	droppedObjectID := plan2.SnapshotTableID(rel.GetTableDef(c.proc.Ctx))
+
 	// Delete the stored session value.
 	c.proc.GetSessionInfo().SeqDeleteKeys = append(c.proc.GetSessionInfo().SeqDeleteKeys, rel.GetTableID(c.proc.Ctx))
 
-	return dbSource.Delete(c.proc.Ctx, tblName)
+	if err = dbSource.Delete(c.proc.Ctx, tblName); err != nil {
+		return err
+	}
+	return c.deleteRolePrivilegesForDroppedRelation(droppedObjectID)
+}
+
+func (c *Compile) deleteRolePrivilegesForDroppedDatabase(accountID uint32, databaseID uint64) error {
+	ignoreForeignKey, _ := c.proc.Ctx.Value(defines.IgnoreForeignKey{}).(bool)
+	// DROP ACCOUNT sets this flag and removes the tenant's privilege catalog
+	// before dropping its databases, so the outer lifecycle already owns cleanup.
+	if ignoreForeignKey {
+		return nil
+	}
+	if databaseID == 0 {
+		return moerr.NewInternalError(c.proc.Ctx, "cannot clean role privileges for database ID 0")
+	}
+	return c.runSqlWithOptions(
+		fmt.Sprintf(deleteMoRolePrivsWithDatabaseIdFormat, databaseID, accountID, databaseID),
+		executor.StatementOption{}.WithDisableLog(),
+	)
+}
+
+func (c *Compile) deleteRolePrivilegesForDroppedRelation(objectID uint64) error {
+	ignoreForeignKey, _ := c.proc.Ctx.Value(defines.IgnoreForeignKey{}).(bool)
+	// Database recursion and ALTER/TRUNCATE replacement set this flag. The
+	// former is cleaned once by DropDatabase; the latter preserves logical ID.
+	if ignoreForeignKey {
+		return nil
+	}
+	if objectID == 0 {
+		return moerr.NewInternalError(c.proc.Ctx, "cannot clean role privileges for relation ID 0")
+	}
+	return c.runSqlWithOptions(
+		fmt.Sprintf(deleteMoRolePrivsWithObjectIdFormat, objectID),
+		executor.StatementOption{}.WithDisableLog(),
+	)
+}
+
+func (c *Compile) dropIndexChildRelation(
+	database engine.Database,
+	relationName string,
+	isTemporary bool,
+) error {
+	var logicalID uint64
+	// Hidden relations are owned by the parent table lifecycle and cannot be a
+	// GRANT target. Do not add a second child metadata lock here: DML acquires
+	// shared locks for all index write targets, and upgrading one child while
+	// retaining another creates a cross-index wait cycle. We only need the child
+	// identity to remove legacy privilege rows after its parent-owned deletion.
+	relation, err := database.Relation(c.proc.Ctx, relationName, nil)
+	if err != nil {
+		return err
+	}
+	if !isTemporary {
+		logicalID = plan2.SnapshotTableID(relation.GetTableDef(c.proc.Ctx))
+	}
+	if err = maybeDeleteAutoIncrement(
+		c.proc.Ctx, c.proc.GetService(), database, relationName, c.proc.GetTxnOperator(),
+	); err != nil {
+		return err
+	}
+	if err = database.Delete(c.proc.Ctx, relationName); err != nil {
+		return err
+	}
+	if logicalID != 0 {
+		if err = c.deleteRolePrivilegesForDroppedRelation(logicalID); err != nil {
+			return err
+		}
+	}
+	if isTemporary {
+		if session := c.proc.GetSession(); session != nil {
+			session.RemoveTempTableByRealName(relationName)
+		}
+	}
+	return nil
+}
+
+func lockDroppedRelation(
+	c *Compile,
+	dbName string,
+	relationName string,
+	relation engine.Relation,
+	lockStorage bool,
+) error {
+	var retryErr error
+	if err := lockMoTable(c, dbName, relationName, lock.LockMode_Exclusive); err != nil {
+		if !moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetry) &&
+			!moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetryWithDefChanged) {
+			return err
+		}
+		retryErr = err
+	}
+	// Every persistent relation, including a source, owns a mo_tables lifecycle
+	// row. Only ordinary stored tables also have user-table storage to lock.
+	if lockStorage {
+		if err := lockTable(c.proc.Ctx, c.e, c.proc, relation, dbName, true); err != nil {
+			if !moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetry) &&
+				!moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetryWithDefChanged) {
+				return err
+			}
+			retryErr = err
+		}
+	}
+	return retryErr
 }
 
 func (s *Scope) DropTable(c *Compile) error {
@@ -3689,6 +3807,13 @@ func (s *Scope) dropTableSingle(c *Compile, qry *plan.DropTable) error {
 			return nil
 		}
 	}
+	if !isTemp {
+		// A plain DROP TABLE updates PITR state and may reclaim branch-owner
+		// rows. The gate must precede mo_database/mo_tables locks.
+		if err = c.lockDataBranchLineageOwnerLifecycle(); err != nil {
+			return err
+		}
+	}
 
 	if !c.disableLock {
 		if err := lockMoDatabase(c, dbName, lock.LockMode_Shared); err != nil {
@@ -3714,6 +3839,7 @@ func (s *Scope) dropTableSingle(c *Compile, qry *plan.DropTable) error {
 	droppedRelationID := rel.GetTableID(c.proc.Ctx)
 	droppedTableDef := rel.GetTableDef(c.proc.Ctx)
 	droppedLogicalID := droppedTableDef.GetLogicalId()
+	droppedObjectID := plan2.SnapshotTableID(droppedTableDef)
 	droppedDatabaseID := droppedTableDef.GetDbId()
 	if c.proc.Base.IsFrontend && !isTemp && !c.ignorePublish && !needSkipDbs[dbName] &&
 		(!c.proc.GetSessionInfo().IsRestore || restoreInvalidatesViewMetadata(c.proc.Ctx)) {
@@ -3738,26 +3864,8 @@ func (s *Scope) dropTableSingle(c *Compile, qry *plan.DropTable) error {
 
 	if !c.disableLock &&
 		!isTemp &&
-		!isView &&
-		!isSource &&
 		c.proc.GetTxnOperator().Txn().IsPessimistic() {
-		var err error
-		if e := lockMoTable(c, dbName, tblName, lock.LockMode_Exclusive); e != nil {
-			if !moerr.IsMoErrCode(e, moerr.ErrTxnNeedRetry) &&
-				!moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetryWithDefChanged) {
-				return e
-			}
-			err = e
-		}
-		// before dropping table, lock it.
-		if e := lockTable(c.proc.Ctx, c.e, c.proc, rel, dbName, true); e != nil {
-			if !moerr.IsMoErrCode(e, moerr.ErrTxnNeedRetry) &&
-				!moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetryWithDefChanged) {
-				return e
-			}
-			err = e
-		}
-		if err != nil {
+		if err = lockDroppedRelation(c, dbName, tblName, rel, !isView && !isSource); err != nil {
 			return err
 		}
 	}
@@ -3884,6 +3992,11 @@ func (s *Scope) dropTableSingle(c *Compile, qry *plan.DropTable) error {
 	if err := dbSource.Delete(c.proc.Ctx, tblName); err != nil {
 		return err
 	}
+	if !isTemp && !needSkipDbs[dbName] {
+		if err = c.deleteRolePrivilegesForDroppedRelation(droppedObjectID); err != nil {
+			return err
+		}
+	}
 	if !isTemp && !c.ignorePublish && c.proc.Base.IsFrontend {
 		if err = c.enqueueViewsAfterRelationRemoval(
 			dbName, tblName, droppedDatabaseID, droppedRelationID, droppedLogicalID); err != nil {
@@ -3907,20 +4020,9 @@ func (s *Scope) dropTableSingle(c *Compile, qry *plan.DropTable) error {
 	}
 
 	for _, name := range qry.IndexTableNames {
-		if err = maybeDeleteAutoIncrement(c.proc.Ctx, c.proc.GetService(), dbSource, name, c.proc.GetTxnOperator()); err != nil {
+		if err = c.dropIndexChildRelation(dbSource, name, isTemp); err != nil {
 			return err
 		}
-
-		if err := dbSource.Delete(c.proc.Ctx, name); err != nil {
-			return err
-		}
-
-		if isTemp {
-			if sess := c.proc.GetSession(); sess != nil {
-				sess.RemoveTempTableByRealName(name)
-			}
-		}
-
 	}
 
 	if dbName != catalog.MO_CATALOG && tblName != catalog.MO_INDEXES {
@@ -4116,6 +4218,7 @@ func (s *Scope) AlterSequence(c *Compile) error {
 
 	var values []interface{}
 	var curval string
+	var oldLogicalID uint64
 	qry := s.Plan.GetDdl().GetAlterSequence()
 	// convert the plan's cols to the execution's cols
 	planCols := qry.GetTableDef().GetCols()
@@ -4141,6 +4244,9 @@ func (s *Scope) AlterSequence(c *Compile) error {
 	}
 
 	if rel, err := dbSource.Relation(c.proc.Ctx, tblName, nil); err == nil {
+		// ALTER SEQUENCE replaces the physical relation but preserves the logical
+		// privilege identity, like ALTER VIEW/TABLE replacement.
+		oldLogicalID = plan2.SnapshotTableID(rel.GetTableDef(c.proc.Ctx))
 		// sequence table exists
 		// get pre sequence table row values
 		_values, err := c.proc.GetSessionInfo().SqlHelper.ExecSql(fmt.Sprintf("select * from `%s`.`%s`", dbName, tblName))
@@ -4157,7 +4263,8 @@ func (s *Scope) AlterSequence(c *Compile) error {
 		curval = c.proc.GetSessionInfo().SeqCurValues[rel.GetTableID(c.proc.Ctx)]
 		// dorp the pre sequence
 		if err = c.runSqlWithOptions(
-			fmt.Sprintf("DROP SEQUENCE %s", tblName), executor.StatementOption{}.WithDisableLog(),
+			fmt.Sprintf("DROP SEQUENCE %s", quoteAlterCopyTableName(dbName, tblName)),
+			executor.StatementOption{}.WithDisableLog().WithIgnoreForeignKey(),
 		); err != nil {
 			return err
 		}
@@ -4173,7 +4280,9 @@ func (s *Scope) AlterSequence(c *Compile) error {
 		return err
 	}
 
-	if err := dbSource.Create(context.WithValue(c.proc.Ctx, defines.SqlKey{}, c.sql), tblName, append(exeCols, exeDefs...)); err != nil {
+	createCtx := context.WithValue(c.proc.Ctx, defines.SqlKey{}, c.sql)
+	createCtx = context.WithValue(createCtx, defines.LogicalIdKey{}, oldLogicalID)
+	if err := dbSource.Create(createCtx, tblName, append(exeCols, exeDefs...)); err != nil {
 		return err
 	}
 
@@ -5386,7 +5495,7 @@ func (s *Scope) CreatePitr(c *Compile) error {
 	// This prevents COPY ALTER from swapping the table generation between
 	// planning and publication.
 	pitrObjectID, err := preparePitrPublication(
-		c.lockDataBranchLineageOwnerPublication,
+		c.lockDataBranchLineageOwnerLifecycle,
 		func() error {
 			txnMeta := c.proc.GetTxnOperator().Txn()
 			if shouldAdvanceAlterDataBranchLineageSnapshot(
@@ -5634,6 +5743,9 @@ func (s *Scope) DropPitr(c *Compile) error {
 	}
 	s.ScopeAnalyzer.Start()
 	defer s.ScopeAnalyzer.Stop()
+	if err := c.lockDataBranchLineageOwnerLifecycle(); err != nil {
+		return err
+	}
 
 	dropPitr := s.Plan.GetDdl().GetDropPitr()
 	pitrName := dropPitr.GetName()

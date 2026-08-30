@@ -114,7 +114,7 @@ func buildAndRegisterCDC(ctx compileplugin.CompileContext, storeDef, metaDef *pl
 		}
 	}
 	if clearTail {
-		accountID, err := compileAccountID(ctx)
+		accountID, err := compileAccountID(ctx.Ctx())
 		if err != nil {
 			return err
 		}
@@ -434,7 +434,7 @@ func (Hooks) HandleDropIndex(ctx compileplugin.CompileContext, indexDefs map[str
 	if !ok || metaDef == nil || metaDef.IndexTableName == "" {
 		return moerr.NewInternalErrorNoCtx("fulltext2 metadata identity missing during DROP")
 	}
-	accountID, err := compileAccountID(ctx)
+	accountID, err := compileAccountID(ctx.Ctx())
 	if err != nil {
 		return err
 	}
@@ -443,11 +443,11 @@ func (Hooks) HandleDropIndex(ctx compileplugin.CompileContext, indexDefs map[str
 	return nil
 }
 
-func compileAccountID(ctx compileplugin.CompileContext) (uint32, error) {
-	if ctx == nil || ctx.Ctx() == nil {
+func compileAccountID(ctx compileplugin.Context) (uint32, error) {
+	if ctx == nil {
 		return 0, moerr.NewInternalErrorNoCtx("fulltext2 compile tenant context missing")
 	}
-	accountID, ok := ctx.Ctx().Value(defines.TenantIDKey{}).(uint32)
+	accountID, ok := ctx.Value(defines.TenantIDKey{}).(uint32)
 	if !ok {
 		return 0, moerr.NewInternalErrorNoCtx("fulltext2 compile tenant identity missing")
 	}
