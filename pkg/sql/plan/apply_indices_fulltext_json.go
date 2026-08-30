@@ -18,8 +18,11 @@ import (
 	"encoding/json"
 	"strings"
 
+	"github.com/matrixorigin/matrixone/pkg/container/bytejson"
+
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/fulltext2"
+	indexplugin "github.com/matrixorigin/matrixone/pkg/indexplugin"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 )
 
@@ -151,66 +154,21 @@ func jsonEqualProbe(col int32, tag string, lit *plan.Literal, isString bool) (js
 	}, true
 }
 
-// jsonRangeProbe builds the >, >=, < and <= probe.
+// jsonRangeProbe declines: v1 probes EQUALITY only.
 //
-// ONE range, in the encoding matching the extractor, because the two are
-// disjoint on leaf type (see jsonEqualProbe): a json_extract_string comparison
-// can only be satisfied by a string leaf, and a json_extract_float64 one only
-// by a numeric leaf. Text order IS the comparison order within each, so each
-// range is exactly implied.
+// A range probe has to enumerate every indexed term between its bounds. For a
+// high-cardinality key that is the key's whole vocabulary, and each resolved
+// term then costs a clause, a posting cursor and a block-sized decode buffer per
+// segment — O(vocabulary x segments) memory on a query the optimizer injected by
+// itself. Truncating the enumeration is not an option either: the probe is
+// ANDed, so dropping terms drops qualifying rows.
 //
-// An earlier version unioned the string range with EVERY numeric term under the
-// tag, on the mistaken belief that json_extract_string renders numbers. That was
-// not just redundant: expanding [-Inf,+Inf] materializes the whole numeric
-// vocabulary of the tag, so a selective string predicate turned into a near-full
-// term scan.
-func jsonRangeProbe(col int32, tag string, lit *plan.Literal, op string, isString bool) (jsonProbe, bool) {
-	p := jsonProbe{ColPos: col, Tag: tag}
-
-	if isString {
-		s, ok := lit.Value.(*plan.Literal_Sval)
-		if !ok {
-			return jsonProbe{}, false
-		}
-		slo, shi := fulltext2.JSONStringTermBounds(tag)
-		r, ok := boundedRange(fulltext2.JSONStringTerm(tag, s.Sval), op, slo, shi)
-		if !ok {
-			return jsonProbe{}, false
-		}
-		p.Ranges = []jsonTermRange{r}
-		return p, true
-	}
-
-	f, ok := litAsFloat(lit)
-	if !ok {
-		return jsonProbe{}, false
-	}
-	nlo, nhi := fulltext2.JSONNumericTermBounds(tag)
-	r, ok := boundedRange(fulltext2.JSONFloatTerm(tag, f), op, nlo, nhi)
-	if !ok {
-		return jsonProbe{}, false
-	}
-	p.Ranges = []jsonTermRange{r}
-	return p, true
-}
-
-// boundedRange places bound on the side op dictates and pins the open end to
-// the type's own extreme, so the range never escapes one encoding.
-//
-// > and >= produce the same range, as do < and <=: the bound is included either
-// way (see jsonTermRange). The strict forms simply return one extra term, which
-// the retained predicate drops.
-func boundedRange(bound, op, typeLo, typeHi string) (jsonTermRange, bool) {
-	r := jsonTermRange{Lo: typeLo, Hi: typeHi}
-	switch op {
-	case ">", ">=":
-		r.Lo = bound
-	case "<", "<=":
-		r.Hi = bound
-	default:
-		return jsonTermRange{}, false
-	}
-	return r, true
+// Doing this properly needs a range-aware merged/streaming postings walk with
+// cancellation and a cost budget, which is a larger piece of work than the
+// encoding this PR adds. Until then an inequality is simply not accelerated —
+// correct, just no faster than before.
+func jsonRangeProbe(_ int32, _ string, _ *plan.Literal, _ string, _ bool) (jsonProbe, bool) {
+	return jsonProbe{}, false
 }
 
 // jsonExtractTarget matches json_extract_string|json_extract_float64(col, 'path')
@@ -247,41 +205,21 @@ func jsonExtractTarget(expr *plan.Expr) (col int32, tag string, isString, ok boo
 	return c.ColPos, tag, isString, true
 }
 
-// jsonPathTag returns the trailing object key of a literal JSON path.
+// jsonPathTag returns the trailing object KEY of a literal JSON path, using the
+// CANONICAL parser that execution uses.
 //
-// The index term is keyed on that key, so a path whose last step is not one —
-// '$', '$[0]' — has no probe. Wildcards are rejected outright: '$.a.*' and
-// '$**.b' can resolve to many leaves and the tag is not determined.
-//
-// A trailing subscript is fine and keeps the enclosing key: '$.a[0]' probes
-// tag "a", because an array element is indexed under the key that holds the
-// array (see bytejson.Leaf).
+// It must not be a string scan. `$."a.b"` splits on the last '.' as `b"`, while
+// the index stores the key `a.b`; the probe built from that wrong key matches
+// nothing and, being ANDed in, drops a qualifying row. Escaped and bracketed
+// keys fail the same way. bytejson.TerminalKey also rejects any path that is not
+// deterministic (`**`, wildcards, `[*]`, ranges), so only a path addressing one
+// key is ever optimized.
 func jsonPathTag(path string) (string, bool) {
-	p := strings.TrimSpace(path)
-	if !strings.HasPrefix(p, "$") {
+	p, err := bytejson.ParseJsonPath(strings.TrimSpace(path))
+	if err != nil {
 		return "", false
 	}
-	if strings.ContainsAny(p, "*") {
-		return "", false
-	}
-	p = p[1:]
-	// drop trailing subscripts: the tag is the last KEY above them
-	for strings.HasSuffix(p, "]") {
-		i := strings.LastIndexByte(p, '[')
-		if i < 0 {
-			return "", false
-		}
-		p = p[:i]
-	}
-	i := strings.LastIndexByte(p, '.')
-	if i < 0 {
-		return "", false
-	}
-	tag := p[i+1:]
-	if tag == "" || strings.ContainsAny(tag, "[]") {
-		return "", false
-	}
-	return tag, true
+	return p.TerminalKey()
 }
 
 func flipComparison(op string) (string, bool) {
@@ -377,9 +315,24 @@ func (builder *QueryBuilder) findJSONTupleIndex(scanNode *plan.Node, colPos int3
 		if idx == nil || !idx.TableExist {
 			continue
 		}
+		// Route through the plugin registry rather than branching on the algo
+		// name in the SQL layer: an unregistered algo is simply not probeable.
+		if _, registered := indexplugin.Get(catalog.ToLower(idx.IndexAlgo)); !registered {
+			continue
+		}
 		// resolve against the STORAGE def, as findMatchFullTextIndex does
-		if !catalog.IsFullText2IndexAlgo(idx.IndexAlgo) ||
-			idx.IndexAlgoTableType != catalog.FullText2Index_TblType_Storage {
+		if idx.IndexAlgoTableType != catalog.FullText2Index_TblType_Storage {
+			continue
+		}
+		// An ALWAYS-ASYNC index is CDC-maintained: its postings trail the base
+		// table. Injecting `predicate AND probe` on it would turn a strongly
+		// consistent SQL predicate into an eventually consistent one — a row
+		// inserted or updated inside the ISCP lag satisfies the retained
+		// predicate but has no current posting, and the ANDed probe removes it
+		// before the predicate ever runs. That is a wrong answer, not a stale
+		// score, so the probe is refused until the index can prove its watermark
+		// covers the query snapshot (or the uncovered base delta is unioned in).
+		if indexplugin.AlwaysAsync(catalog.ToLower(idx.IndexAlgo), idx.IndexAlgoParams) {
 			continue
 		}
 		if len(idx.Parts) != 1 {

@@ -116,112 +116,6 @@ func TestJSONProbeTermsArePresentInMatchingDocuments(t *testing.T) {
 	require.False(t, intersects(p, `{"n":4}`))
 }
 
-// Ranges: the bound must sit on the correct side. Both ends are inclusive, so
-// > and >= produce the SAME range (and < and <=) — the strict form just returns
-// the boundary term too, which the retained predicate removes.
-func TestJSONProbeRanges(t *testing.T) {
-	at := fulltext2.JSONFloatTerm("n", 3.14)
-	lo, hi := fulltext2.JSONNumericTermBounds("n")
-
-	for _, tc := range []struct {
-		op             string
-		wantLo, wantHi string
-	}{
-		{">", at, hi},
-		{">=", at, hi},
-		{"<", lo, at},
-		{"<=", lo, at},
-	} {
-		p, ok := jsonExtractProbeFromExpr(
-			jpCallExpr(tc.op, jpExtractFloat(1, "$.n"), jpFltLit(3.14)))
-		require.True(t, ok, tc.op)
-		require.Empty(t, p.Terms, tc.op)
-		require.Len(t, p.Ranges, 1, "a float range needs only the numeric encoding")
-		require.Equal(t, jsonTermRange{Lo: tc.wantLo, Hi: tc.wantHi}, p.Ranges[0], tc.op)
-		require.Less(t, p.Ranges[0].Lo, p.Ranges[0].Hi, "range must be non-empty for %s", tc.op)
-	}
-}
-
-// json_extract_string inequality probes the STRING range only. The numeric side
-// is not needed (json_extract_string is NULL for numbers) and unioning it would
-// expand [-Inf,+Inf] into the tag's whole numeric vocabulary, turning a
-// selective predicate into a near-full term scan.
-func TestJSONProbeStringRangeIsStringOnly(t *testing.T) {
-	p, ok := jsonExtractProbeFromExpr(
-		jpCallExpr(">", jpExtractStr(0, "$.n"), jpStrLit("m")))
-	require.True(t, ok)
-	require.Len(t, p.Ranges, 1, "string side only")
-
-	slo, shi := fulltext2.JSONStringTermBounds("n")
-	require.Equal(t, fulltext2.JSONStringTerm("n", "m"), p.Ranges[0].Lo)
-	require.Equal(t, shi, p.Ranges[0].Hi)
-	require.Less(t, slo, shi)
-	// the whole range stays inside the string encoding
-	nlo, _ := fulltext2.JSONNumericTermBounds("n")
-	require.NotEqual(t, nlo, p.Ranges[0].Lo)
-
-	// every leaf that satisfies the predicate must land in one of the ranges
-	opt := fulltext2.JSONTermOptions{IncludeKeys: true}
-	covered := func(doc string) bool {
-		bj, err := bytejson.ParseFromString(doc)
-		require.NoError(t, err)
-		for _, term := range fulltext2.JSONTupleTerms(bj, opt) {
-			for _, r := range p.Ranges {
-				if inTermRange(r, term) {
-					return true
-				}
-			}
-		}
-		return false
-	}
-	require.True(t, covered(`{"n":"zebra"}`), "string leaf above the bound")
-	require.False(t, covered(`{"n":9}`),
-		"a numeric leaf is NULL for json_extract_string, so it must not be probed for")
-}
-
-// inTermRange mirrors the scan's own test: both ends inclusive.
-func inTermRange(r jsonTermRange, term string) bool {
-	return term >= r.Lo && term <= r.Hi
-}
-
-// A range must actually bracket the terms of documents that satisfy it.
-func TestJSONProbeRangeBracketsMatchingDocuments(t *testing.T) {
-	opt := fulltext2.JSONTermOptions{IncludeKeys: true}
-	termOf := func(doc string) string {
-		bj, err := bytejson.ParseFromString(doc)
-		require.NoError(t, err)
-		ts := fulltext2.JSONTupleTerms(bj, opt)
-		require.Len(t, ts, 1)
-		return ts[0]
-	}
-	inRange := func(p jsonProbe, term string) bool {
-		require.Len(t, p.Ranges, 1)
-		return inTermRange(p.Ranges[0], term)
-	}
-
-	p, ok := jsonExtractProbeFromExpr(jpCallExpr(">", jpExtractFloat(0, "$.n"), jpFltLit(3.0)))
-	require.True(t, ok)
-	require.True(t, inRange(p, termOf(`{"n":3.5}`)))
-	require.True(t, inRange(p, termOf(`{"n":1e9}`)))
-	require.True(t, inRange(p, termOf(`{"n":3.0}`)),
-		"the bound itself is returned: a superset the retained predicate filters")
-	require.False(t, inRange(p, termOf(`{"n":-5}`)), "below the bound is still excluded")
-
-	p, ok = jsonExtractProbeFromExpr(jpCallExpr(">=", jpExtractFloat(0, "$.n"), jpFltLit(3.0)))
-	require.True(t, ok)
-	require.True(t, inRange(p, termOf(`{"n":3.0}`)), ">= includes the bound")
-	require.True(t, inRange(p, termOf(`{"n":3}`)), "integer leaf normalizes into the same range")
-}
-
-// Reversed operand order is the same predicate with the operator flipped.
-func TestJSONProbeFlipsReversedOperands(t *testing.T) {
-	fwd, ok := jsonExtractProbeFromExpr(jpCallExpr("<", jpExtractFloat(0, "$.n"), jpFltLit(7)))
-	require.True(t, ok)
-	rev, ok := jsonExtractProbeFromExpr(jpCallExpr(">", jpFltLit(7), jpExtractFloat(0, "$.n")))
-	require.True(t, ok)
-	require.Equal(t, fwd, rev, "7 > x must probe the same range as x < 7")
-}
-
 // Everything the rule must decline. Declining is always safe — the original
 // predicate stands alone — so these guard against a probe that is NOT implied.
 func TestJSONProbeDeclines(t *testing.T) {
@@ -244,6 +138,13 @@ func TestJSONProbeDeclines(t *testing.T) {
 		// numeric equality with a string constant would change which leaves the
 		// probe reaches
 		{"float compared to a string constant", jpCallExpr("=", jpExtractFloat(0, "$.n"), jpStrLit("3"))},
+		// v1 accelerates equality only; a range would have to enumerate the
+		// key's vocabulary (see jsonRangeProbe)
+		{"greater than", jpCallExpr(">", jpExtractFloat(0, "$.n"), jpFltLit(1))},
+		{"greater or equal", jpCallExpr(">=", jpExtractFloat(0, "$.n"), jpFltLit(1))},
+		{"less than", jpCallExpr("<", jpExtractFloat(0, "$.n"), jpFltLit(1))},
+		{"less or equal", jpCallExpr("<=", jpExtractFloat(0, "$.n"), jpFltLit(1))},
+		{"string inequality", jpCallExpr(">", jpExtractStr(0, "$.a"), jpStrLit("m"))},
 	} {
 		_, ok := jsonExtractProbeFromExpr(tc.expr)
 		require.False(t, ok, tc.name)
@@ -309,11 +210,15 @@ func jpJSONIndex(col, params string) *plan.IndexDef {
 // nothing, which would drop every row.
 func TestFindJSONTupleIndex(t *testing.T) {
 	var b *QueryBuilder
-	ok := jpJSONIndex("j", `{"parser":"json"}`)
-	require.NotNil(t, b.findJSONTupleIndex(jpScanNode("j", ok), 1))
+	// fulltext2 is ALWAYS ASYNC, so even a correctly-shaped json index is
+	// refused: its postings trail the base table, and an ANDed probe would drop
+	// rows written inside the ISCP lag.
+	shaped := jpJSONIndex("j", `{"parser":"json"}`)
+	require.Nil(t, b.findJSONTupleIndex(jpScanNode("j", shaped), 1),
+		"an always-async index must not back a mandatory filter")
 
 	// wrong column position
-	require.Nil(t, b.findJSONTupleIndex(jpScanNode("j", ok), 0))
+	require.Nil(t, b.findJSONTupleIndex(jpScanNode("j", shaped), 0))
 
 	for _, tc := range []struct {
 		name string
@@ -353,26 +258,36 @@ func TestJSONIndexTermShapeParams(t *testing.T) {
 	require.Equal(t, "", jsonIndexParam(jpJSONIndex("j", ""), "include_keys"))
 }
 
-func TestAddJSONFulltextProbes(t *testing.T) {
+// No probe is injected today: every fulltext2 index is always-async, and the
+// gate in findJSONTupleIndex refuses those. The filter list must come back
+// untouched — the query is answered by the retained predicate alone.
+func TestAddJSONFulltextProbesRefusesAsyncIndex(t *testing.T) {
 	var b *QueryBuilder
 	node := jpScanNode("j", jpJSONIndex("j", `{"parser":"json"}`))
 	node.FilterList = []*plan.Expr{
 		jpCallExpr("=", jpExtractStr(1, "$.foo"), jpStrLit("bar")),
 	}
 	b.addJSONFulltextProbes(node)
-	require.Len(t, node.FilterList, 2, "the probe is ADDED; the original is retained")
-	require.True(t, isJSONProbeMatch(node.FilterList[1]))
+	require.Len(t, node.FilterList, 1, "no probe may be added for an async index")
+	require.False(t, isJSONProbeMatch(node.FilterList[0]))
+}
 
-	// idempotent: a second pass must not stack probes
-	b.addJSONFulltextProbes(node)
-	require.Len(t, node.FilterList, 2)
+// makeJSONProbeMatch is still exercised directly: it is what a future
+// watermark-gated caller will use, and its shape is what findMatchFullTextIndex
+// resolves against.
+func TestMakeJSONProbeMatchShape(t *testing.T) {
+	var b *QueryBuilder
+	node := jpScanNode("j", jpJSONIndex("j", `{"parser":"json"}`))
+	probe, ok := jsonExtractProbeFromExpr(jpCallExpr("=", jpExtractStr(1, "$.foo"), jpStrLit("bar")))
+	require.True(t, ok)
 
-	// the synthesized MATCH must reference the scan's binding tag, which is how
-	// findMatchFullTextIndex resolves it back to the index
-	fn := node.FilterList[1].GetF()
+	m := b.makeJSONProbeMatch(node, 1, probe)
+	require.NotNil(t, m)
+	require.True(t, isJSONProbeMatch(m))
+	fn := m.GetF()
 	require.Equal(t, "fulltext_match", fn.Func.ObjName)
 	col := fn.Args[2].GetCol()
-	require.Equal(t, int32(7), col.RelPos)
+	require.Equal(t, int32(7), col.RelPos, "must carry the scan binding tag")
 	require.Equal(t, "j", col.Name)
 	mode := fn.Args[1].GetLit().Value.(*plan.Literal_I64Val).I64Val
 	require.Equal(t, fulltext2.JSONProbeMode, mode)
