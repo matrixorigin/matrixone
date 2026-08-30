@@ -103,6 +103,26 @@ func TestMySQLTimeRange(t *testing.T) {
 	require.Equal(t, functionMax, MySQLTimeFunctionMaxForScale(6))
 }
 
+func TestIsTimeStringOutOfInternalRange(t *testing.T) {
+	for _, test := range []struct {
+		value    string
+		negative bool
+		outside  bool
+	}{
+		{value: "2562047788:00:00", outside: true},
+		{value: "-2562047788:00:00.000001", negative: true, outside: true},
+		{value: "2562047787:59:59", outside: false},
+		{value: "2562047788:60:00", outside: false},
+		{value: "not-a-time", outside: false},
+	} {
+		t.Run(test.value, func(t *testing.T) {
+			negative, outside := IsTimeStringOutOfInternalRange(test.value)
+			require.Equal(t, test.negative, negative)
+			require.Equal(t, test.outside, outside)
+		})
+	}
+}
+
 func TestTime_ParseTimeFromString(t *testing.T) {
 	testCases := []struct {
 		name     string

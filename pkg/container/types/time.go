@@ -540,6 +540,47 @@ func ClampMySQLTimeFunctionForScale(value Time, scale int32) Time {
 	return value
 }
 
+// IsTimeStringOutOfInternalRange recognizes the colon-delimited TIME spelling
+// accepted by MySQL but too large for MatrixOne's internal Time representation.
+// Callers can then apply their assignment policy instead of treating it as a
+// malformed temporal literal.
+func IsTimeStringOutOfInternalRange(value string) (negative bool, outOfRange bool) {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return false, false
+	}
+	if value[0] == '+' || value[0] == '-' {
+		negative = value[0] == '-'
+		value = value[1:]
+	}
+	if dot := strings.IndexByte(value, '.'); dot >= 0 {
+		fraction := value[dot+1:]
+		if fraction == "" || strings.IndexFunc(fraction, func(r rune) bool { return r < '0' || r > '9' }) >= 0 {
+			return false, false
+		}
+		value = value[:dot]
+	}
+	parts := strings.Split(value, ":")
+	if len(parts) != 3 || parts[0] == "" || parts[1] == "" || parts[2] == "" {
+		return false, false
+	}
+	for _, part := range parts {
+		if strings.IndexFunc(part, func(r rune) bool { return r < '0' || r > '9' }) >= 0 {
+			return false, false
+		}
+	}
+	minute, minuteErr := strconv.ParseUint(parts[1], 10, 64)
+	second, secondErr := strconv.ParseUint(parts[2], 10, 64)
+	if minuteErr != nil || secondErr != nil || minute > 59 || second > 59 {
+		return false, false
+	}
+	maxHour := strconv.FormatUint(MaxHourInTime, 10)
+	if len(parts[0]) > len(maxHour) || (len(parts[0]) == len(maxHour) && parts[0] > maxHour) {
+		return negative, true
+	}
+	return false, false
+}
+
 func isDateType(s string) bool {
 	strArr := strings.Split(s, " ")
 	if len(strArr) > 1 {

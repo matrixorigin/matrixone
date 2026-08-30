@@ -201,6 +201,9 @@ func (r *ConstantFold) constantFold(expr *plan.Expr, proc *process.Process) *pla
 	if f.CannotFold() { // function cannot be fold
 		return expr
 	}
+	if IsLegacyTimeAssignmentOutsideInternalRange(fn) {
+		return expr
+	}
 	if f.IsRealTimeRelated() && r.isPrepared {
 		return expr
 	}
@@ -863,6 +866,28 @@ func isSqlModeDependentTemporalCast(fn *plan.Function) bool {
 	default:
 		return false
 	}
+}
+
+// IsLegacyTimeAssignmentOutsideInternalRange identifies a CAST_STRICT literal
+// produced for an older protocol's TIME assignment. The literal is valid MySQL
+// TIME syntax but exceeds MatrixOne's internal representation, so it must reach
+// the runtime assignment cast where strict/non-strict policy is available.
+func IsLegacyTimeAssignmentOutsideInternalRange(fn *plan.Function) bool {
+	functionID, _ := function.DecodeOverloadID(fn.Func.GetObj())
+	if functionID != function.CAST_STRICT || len(fn.Args) != 2 ||
+		types.T(fn.Args[1].Typ.Id) != types.T_time {
+		return false
+	}
+	literal := fn.Args[0].GetLit()
+	if literal == nil {
+		return false
+	}
+	value, ok := literal.Value.(*plan.Literal_Sval)
+	if !ok {
+		return false
+	}
+	_, outOfRange := types.IsTimeStringOutOfInternalRange(value.Sval)
+	return outOfRange
 }
 
 func IsConstant(e *plan.Expr, varAndParamIsConst bool) bool {

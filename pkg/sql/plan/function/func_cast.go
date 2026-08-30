@@ -8049,7 +8049,7 @@ func strToTime(
 			val, err := types.ParseTime(s, totype.Scale)
 			if err != nil {
 				if mode.isAssignment() {
-					if negative, outOfRange := timeStringOutOfInternalRange(s); outOfRange {
+					if negative, outOfRange := types.IsTimeStringOutOfInternalRange(s); outOfRange {
 						val, err = mysqlTimeOutOfRangeForCast(ctx, proc, mode, s, negative, i)
 						if err != nil {
 							return err
@@ -8072,49 +8072,6 @@ func strToTime(
 		}
 	}
 	return nil
-}
-
-// timeStringOutOfInternalRange recognizes the colon-delimited TIME spelling
-// that ParseTime rejects only because it exceeds MatrixOne's internal Time
-// representation. Assignment casts can then apply MySQL's strict-or-clamp
-// policy, while malformed strings retain ParseTime's existing error behavior.
-func timeStringOutOfInternalRange(value string) (negative bool, outOfRange bool) {
-	value = strings.TrimSpace(value)
-	if value == "" {
-		return false, false
-	}
-	if value[0] == '+' || value[0] == '-' {
-		negative = value[0] == '-'
-		value = value[1:]
-	}
-	if dot := strings.IndexByte(value, '.'); dot >= 0 {
-		fraction := value[dot+1:]
-		if fraction == "" || strings.IndexFunc(fraction, func(r rune) bool { return r < '0' || r > '9' }) >= 0 {
-			return false, false
-		}
-		value = value[:dot]
-	}
-	parts := strings.Split(value, ":")
-	if len(parts) != 3 || parts[0] == "" || parts[1] == "" || parts[2] == "" {
-		return false, false
-	}
-	for _, part := range parts {
-		if strings.IndexFunc(part, func(r rune) bool { return r < '0' || r > '9' }) >= 0 {
-			return false, false
-		}
-	}
-	minute, minuteErr := strconv.ParseUint(parts[1], 10, 64)
-	second, secondErr := strconv.ParseUint(parts[2], 10, 64)
-	if minuteErr != nil || secondErr != nil || minute > 59 || second > 59 {
-		return false, false
-	}
-	// Avoid parsing an arbitrarily large hour just to classify an already-valid
-	// range overflow.
-	maxHour := strconv.FormatUint(types.MaxHourInTime, 10)
-	if len(parts[0]) > len(maxHour) || (len(parts[0]) == len(maxHour) && parts[0] > maxHour) {
-		return negative, true
-	}
-	return false, false
 }
 
 func strToDatetime(proc *process.Process,
