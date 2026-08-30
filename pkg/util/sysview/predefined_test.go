@@ -437,7 +437,12 @@ func TestInformationSchemaCharacterSetsData(t *testing.T) {
 
 func TestInformationSchemaViewsMetadata(t *testing.T) {
 	assert.Contains(t, InformationSchemaViewsDDL,
-		"char_length(coalesce(regexp_substr(trim(regexp_replace(trim(coalesce(json_extract_string(tbl.viewdef, '$.Stmt'), tbl.rel_createsql))")
+		"char_length(coalesce(regexp_substr(trim(regexp_replace(trim(coalesce(tbl.rel_createsql, json_extract_string(tbl.viewdef, '$.Stmt')))")
+	// rel_createsql preserves adjacent block comments while ViewData.Stmt is
+	// normalized by cleanHint. Its precedence keeps `v/* comment */as` from
+	// becoming the ambiguous identifier `vas` before structural AS extraction.
+	assert.Contains(t, InformationSchemaViewsDDL,
+		"coalesce(tbl.rel_createsql, json_extract_string(tbl.viewdef, '$.Stmt'))")
 	// The regular expression is embedded in a SQL string literal. Keep its
 	// line-break escapes doubled so SQL passes them through to regexp_substr
 	// instead of turning them into physical newlines.

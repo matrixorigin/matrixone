@@ -51,7 +51,11 @@ const (
 		informationSchemaViewOptionalSeparatorPattern + "(?:[(]" + informationSchemaViewOptionalSeparatorPattern + informationSchemaViewIdentifierPattern +
 		"(?:" + informationSchemaViewOptionalSeparatorPattern + "[,]" + informationSchemaViewOptionalSeparatorPattern + informationSchemaViewIdentifierPattern + ")*" + informationSchemaViewOptionalSeparatorPattern + "[)])?" +
 		informationSchemaViewRequiredSeparatorPattern + "as" + informationSchemaViewRequiredSeparatorPattern
-	informationSchemaViewStatementSQL                  = "coalesce(json_extract_string(tbl.viewdef, '$.Stmt'), tbl.rel_createsql)"
+	// rel_createsql is the authoritative root statement and, unlike the
+	// normalized ViewData.Stmt, retains a separator when a block comment is
+	// adjacent to a structural token (for example, `v/* note */as`). Use it
+	// first so the lexer-accepted statement remains distinguishable here.
+	informationSchemaViewStatementSQL                  = "coalesce(tbl.rel_createsql, json_extract_string(tbl.viewdef, '$.Stmt'))"
 	informationSchemaViewStatementWithoutTerminatorSQL = "trim(regexp_replace(trim(" +
 		informationSchemaViewStatementSQL + "), '[;][[:space:]]*$', '', 1, 1))"
 )
