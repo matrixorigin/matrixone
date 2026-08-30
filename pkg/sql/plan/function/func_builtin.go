@@ -1686,21 +1686,17 @@ func writePadResult(dst []byte, src string, target int, pad string, left bool) {
 	}
 }
 
-func maxStringFunctionResultLength(result vector.FunctionResultWrapper, source *vector.Vector) int64 {
-	if source != nil {
-		switch source.GetType().Oid {
-		case types.T_blob, types.T_text:
-			return int64(types.MaxBlobLen)
-		}
-	}
-	if result.GetResultVector().GetType().Oid == types.T_blob {
+func maxStringFunctionResultLength(result vector.FunctionResultWrapper) int64 {
+	switch result.GetResultVector().GetType().Oid {
+	case types.T_blob, types.T_text:
 		return int64(types.MaxBlobLen)
+	default:
+		return int64(types.MaxVarcharLen)
 	}
-	return int64(types.MaxVarcharLen)
 }
 
 func builtInRepeat(parameters []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int, selectList *FunctionSelectList) error {
-	maxResultLen := maxStringFunctionResultLength(result, parameters[0])
+	maxResultLen := maxStringFunctionResultLength(result)
 
 	p1 := vector.GenerateFunctionStrParameter(parameters[0])
 	p2 := vector.GenerateFunctionFixedTypeParameter[int64](parameters[1])
@@ -1739,7 +1735,7 @@ func builtInLpad(parameters []*vector.Vector, result vector.FunctionResultWrappe
 	p3 := vector.GenerateFunctionStrParameter(parameters[2])
 
 	rs := vector.MustFunctionResult[types.Varlena](result)
-	maxResultLen := maxStringFunctionResultLength(result, parameters[0])
+	maxResultLen := maxStringFunctionResultLength(result)
 	for i := uint64(0); i < uint64(length); i++ {
 		v1, null1 := p1.GetStrValue(i)
 		v2, null2 := p2.GetValue(i)
@@ -1769,7 +1765,7 @@ func builtInRpad(parameters []*vector.Vector, result vector.FunctionResultWrappe
 	p3 := vector.GenerateFunctionStrParameter(parameters[2])
 
 	rs := vector.MustFunctionResult[types.Varlena](result)
-	maxResultLen := maxStringFunctionResultLength(result, parameters[0])
+	maxResultLen := maxStringFunctionResultLength(result)
 	for i := uint64(0); i < uint64(length); i++ {
 		v1, null1 := p1.GetStrValue(i)
 		v2, null2 := p2.GetValue(i)

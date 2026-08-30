@@ -39,3 +39,11 @@
 3. 补普通/binary 小表达式、REGEXP_REPLACE 4-byte 与 80,000-byte TEXT、prepared/CTAS metadata focused tests。
 4. 拉取并分类 exact-head SCA、Proxy/Pessimistic BVT、Coverage 失败，修复所有 PR-caused golden/check 问题。
 5. 跑 owning package、targeted golangci-lint、相关 BVT/self-review，commit 并 push。
+
+# PR #27841 第九轮 review 修复
+
+1. runtime 容量以 authoritative result OID 为准，TEXT/BLOB 均允许 MaxBlobLen，补 VARCHAR source + TEXT result 大值 UT。
+2. 按既有 ownership 决议撤回 REGEXP_REPLACE checker/runtime-domain 扩张，match-memory Q3 与 direct writer 留在 #27217。
+3. 删除随 REGEXP 扩张新增的 protocol/CTAS/runtime 测试与专用 checker，只保留本 PR 有 ownership 的普通 REPLACE/INSERT bounds。
+4. 按 exact-head Proxy 输出恢复两个 DESC golden 的尾部空 Extra/Comment 分隔符。
+5. 跑 focused/owning packages、targeted golangci-lint 与 self-review，commit 并 push。

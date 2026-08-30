@@ -2736,7 +2736,6 @@ func TestPreparedExpandingTextResultMetadata(t *testing.T) {
 		sql  string
 	}{
 		{name: "replace", sql: "select replace(cast(repeat('a', 40000) as text), 'a', 'bb') as result"},
-		{name: "regexp replace", sql: "select regexp_replace(cast(repeat('a', 40000) as text), 'a', 'bb') as result"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			conn := &prepareResponseCaptureConn{}

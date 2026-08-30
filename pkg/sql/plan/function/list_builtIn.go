@@ -99,7 +99,7 @@ func expandingStringReturnType(parameters []types.Type, sourceIndex int) types.T
 	return stringResultTypeForDomain(parameters, sourceIndex, unknownStringResultBound())
 }
 
-func replacementStringReturnType(parameters []types.Type, regexp bool) types.Type {
+func replacementStringReturnType(parameters []types.Type) types.Type {
 	if len(parameters) < 3 {
 		return types.T_varchar.ToType()
 	}
@@ -110,16 +110,6 @@ func replacementStringReturnType(parameters []types.Type, regexp bool) types.Typ
 	}
 	source := boundFor(parameters[0])
 	replacement := boundFor(parameters[2])
-	if regexp {
-		// An empty regexp can match before, between, and after every source
-		// character. Keep the untouched source plus every replacement.
-		bound := addStringResultBounds(source, multiplyStringResultBound(
-			addStringResultBounds(source, stringResultBound{bytes: 1}), replacement.bytes))
-		if replacement.unknown {
-			bound = unknownStringResultBound()
-		}
-		return stringResultTypeForDomain(parameters, 0, bound)
-	}
 	if replacement.unknown || source.unknown {
 		return stringResultTypeForDomain(parameters, 0, unknownStringResultBound())
 	}
@@ -2879,7 +2869,7 @@ var supportedStringBuiltIns = []FuncNew{
 				overloadId: 0,
 				args:       []types.T{types.T_varchar, types.T_varchar, types.T_varchar},
 				retType: func(parameters []types.Type) types.Type {
-					return replacementStringReturnType(parameters, false)
+					return replacementStringReturnType(parameters)
 				},
 				newOp: func() executeLogicOfOverload {
 					return Replace
@@ -3027,14 +3017,14 @@ var supportedStringBuiltIns = []FuncNew{
 		functionId: REGEXP_REPLACE,
 		class:      plan.Function_STRICT,
 		layout:     STANDARD_FUNCTION,
-		checkFn:    textStringDomainFixedTypeMatch,
+		checkFn:    fixedTypeMatch,
 
 		Overloads: []overload{
 			{
 				overloadId: 0,
 				args:       []types.T{types.T_varchar, types.T_varchar, types.T_varchar},
 				retType: func(parameters []types.Type) types.Type {
-					return replacementStringReturnType(parameters, true)
+					return derivedStringReturnType(parameters, 0, types.T_varchar)
 				},
 				newOp: func() executeLogicOfOverload {
 					return newOpBuiltInRegexp().builtInRegexpReplace
@@ -3044,7 +3034,7 @@ var supportedStringBuiltIns = []FuncNew{
 				overloadId: 1,
 				args:       []types.T{types.T_varchar, types.T_varchar, types.T_varchar, types.T_int64},
 				retType: func(parameters []types.Type) types.Type {
-					return replacementStringReturnType(parameters, true)
+					return derivedStringReturnType(parameters, 0, types.T_varchar)
 				},
 				newOp: func() executeLogicOfOverload {
 					return newOpBuiltInRegexp().builtInRegexpReplace
@@ -3054,7 +3044,7 @@ var supportedStringBuiltIns = []FuncNew{
 				overloadId: 2,
 				args:       []types.T{types.T_varchar, types.T_varchar, types.T_varchar, types.T_int64, types.T_int64},
 				retType: func(parameters []types.Type) types.Type {
-					return replacementStringReturnType(parameters, true)
+					return derivedStringReturnType(parameters, 0, types.T_varchar)
 				},
 				newOp: func() executeLogicOfOverload {
 					return newOpBuiltInRegexp().builtInRegexpReplace
