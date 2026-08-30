@@ -27,7 +27,7 @@ create pitr p02 for account acc01 range 1 'd';
 show pitr;
 -- @ignore:0,2,3,4,6,7,10
 select `pitr_id`, `pitr_name`, `create_account`, `create_time`, `modified_time`, `level`, `account_id`, `account_name`, `database_name`, `table_name`, `obj_id`, `pitr_length`, `pitr_unit` from mo_catalog.mo_pitr Where pitr_name != 'sys_mo_catalog_pitr';
-alter pitr p02 range 100 'd';
+alter pitr p02 range 1 'h';
 -- @ignore:1,2
 show pitr;
 -- @ignore:0,2,3,4,6,7,10
@@ -49,7 +49,7 @@ show pitr;
 -- @ignore:0,2,3,4,6,7,10
 select `pitr_id`, `pitr_name`, `create_account`, `create_time`, `modified_time`, `level`, `account_id`, `account_name`, `database_name`, `table_name`, `obj_id`, `pitr_length`, `pitr_unit` from mo_catalog.mo_pitr Where pitr_name != 'sys_mo_catalog_pitr';
 -- @session:id=1&user=acc01:test_account&password=111
-alter pitr `select` range 30 'd';
+alter pitr `select` range 5 'd';
 -- @ignore:1,2
 show pitr;
 -- @session
@@ -70,7 +70,7 @@ create pitr account for database test01 range 1 'mo';
 show pitr;
 -- @ignore:0,2,3,4,6,7,10
 select `pitr_id`, `pitr_name`, `create_account`, `create_time`, `modified_time`, `level`, `account_id`, `account_name`, `database_name`, `table_name`, `obj_id`, `pitr_length`, `pitr_unit` from mo_catalog.mo_pitr Where pitr_name != 'sys_mo_catalog_pitr';
-alter pitr account range 4 'mo';
+alter pitr account range 28 'd';
 -- @ignore:1,2
 show pitr;
 -- @ignore:0,2,3,4,6,7,10
