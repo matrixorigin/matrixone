@@ -871,7 +871,8 @@ func (builder *QueryBuilder) pushdownLimitToTableScan(nodeID int32) {
 	for _, childID := range node.Children {
 		builder.pushdownLimitToTableScan(childID)
 	}
-	if node.NodeType == plan.Node_PROJECT && len(node.Children) > 0 {
+	if node.NodeType == plan.Node_PROJECT && len(node.Children) > 0 &&
+		(node.Limit != nil || node.Offset != nil) {
 		child := builder.qry.Nodes[node.Children[0]]
 		if child.NodeType == plan.Node_TABLE_SCAN {
 			child.Limit, child.Offset = node.Limit, node.Offset

@@ -101,9 +101,6 @@ type Top struct {
 	ctr         container
 	Fs          []*plan.OrderBySpec
 
-	finalizedSource colexec.FinalizedBatchSource
-	finalizedToken  colexec.FinalizedBatchConsumerToken
-
 	vm.OperatorBase
 }
 
@@ -144,27 +141,16 @@ func (top *Top) WithFs(fs []*plan.OrderBySpec) *Top {
 
 func (top *Top) Release() {
 	if top != nil {
-		top.detachFinalizedSource()
 		reuse.Free(top, nil)
 	}
 }
 
 func (top *Top) Reset(proc *process.Process, pipelineFailed bool, err error) {
-	top.detachFinalizedSource()
 	top.ctr.reset(proc)
 }
 
 func (top *Top) Free(proc *process.Process, pipelineFailed bool, err error) {
-	top.detachFinalizedSource()
 	top.ctr.free(proc)
-}
-
-func (top *Top) detachFinalizedSource() {
-	if top.finalizedSource != nil {
-		top.finalizedSource.DetachFinalizedBatchConsumer(top.finalizedToken)
-	}
-	top.finalizedSource = nil
-	top.finalizedToken = 0
 }
 
 func (top *Top) ExecProjection(proc *process.Process, input *batch.Batch) (*batch.Batch, error) {

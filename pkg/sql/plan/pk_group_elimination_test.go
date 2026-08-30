@@ -1,0 +1,248 @@
+// Copyright 2026 Matrix Origin
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//      http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+package plan
+
+import (
+	"testing"
+
+	"github.com/stretchr/testify/require"
+
+	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
+)
+
+func TestPrimaryKeyGroupEliminationUnlocksScanLimit(t *testing.T) {
+	logical, err := runOneStmt(
+		NewMockOptimizer(false),
+		t,
+		"select empno, count(*) from constraint_test.emp group by empno limit 10",
+	)
+	require.NoError(t, err)
+
+	query := logical.GetQuery()
+	require.NotNil(t, query)
+	require.False(t, reachableNodeType(query, planpb.Node_AGG))
+
+	scan := firstReachableNode(query, planpb.Node_TABLE_SCAN)
+	require.NotNil(t, scan)
+	require.NotNil(t, scan.Limit)
+	require.Equal(t, uint64(10), scan.Limit.GetLit().GetU64Val())
+}
+
+func TestPrimaryKeyGroupEliminationSupportsSingleRowAggregates(t *testing.T) {
+	logical, err := runOneStmt(
+		NewMockOptimizer(false),
+		t,
+		`select empno,
+		        count(comm), sum(sal), avg(sal), min(ename), max(ename),
+		        any_value(job)
+		   from constraint_test.emp
+		  group by empno
+		  limit 7`,
+	)
+	require.NoError(t, err)
+
+	query := logical.GetQuery()
+	require.False(t, reachableNodeType(query, planpb.Node_AGG))
+	scan := firstReachableNode(query, planpb.Node_TABLE_SCAN)
+	require.NotNil(t, scan)
+	require.NotNil(t, scan.Limit)
+	require.Equal(t, uint64(7), scan.Limit.GetLit().GetU64Val())
+}
+
+func TestPrimaryKeyGroupEliminationPreservesBoundedDemand(t *testing.T) {
+	tests := []struct {
+		name       string
+		sql        string
+		wantLimit  uint64
+		wantOffset uint64
+	}{
+		{
+			name:       "offset reaches scan",
+			sql:        "select empno, count(*) from constraint_test.emp group by empno limit 10 offset 25",
+			wantLimit:  10,
+			wantOffset: 25,
+		},
+		{
+			name:      "scan filter precedes bounded demand",
+			sql:       "select empno, count(*) from constraint_test.emp where sal > 100 group by empno limit 6",
+			wantLimit: 6,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			logical, err := runOneStmt(NewMockOptimizer(false), t, test.sql)
+			require.NoError(t, err)
+			query := logical.GetQuery()
+			require.False(t, reachableNodeType(query, planpb.Node_AGG))
+			scan := firstReachableNode(query, planpb.Node_TABLE_SCAN)
+			require.NotNil(t, scan)
+			require.NotNil(t, scan.Limit)
+			require.Equal(t, test.wantLimit, scan.Limit.GetLit().GetU64Val())
+			if test.wantOffset == 0 {
+				require.Nil(t, scan.Offset)
+			} else {
+				require.NotNil(t, scan.Offset)
+				require.Equal(t, test.wantOffset, scan.Offset.GetLit().GetU64Val())
+			}
+		})
+	}
+}
+
+func TestPrimaryKeyGroupEliminationWithOrderRemovesHashButNotScan(t *testing.T) {
+	logical, err := runOneStmt(
+		NewMockOptimizer(false),
+		t,
+		"select empno, count(*) c from constraint_test.emp group by empno order by c desc limit 10",
+	)
+	require.NoError(t, err)
+
+	query := logical.GetQuery()
+	require.False(t, reachableNodeType(query, planpb.Node_AGG))
+	require.True(t, reachableNodeType(query, planpb.Node_SORT))
+	scan := firstReachableNode(query, planpb.Node_TABLE_SCAN)
+	require.NotNil(t, scan)
+	require.Nil(t, scan.Limit, "Sort remains a semantic barrier to scan LIMIT")
+}
+
+func TestPrimaryKeyGroupEliminationDoesNotCrossJoin(t *testing.T) {
+	logical, err := runOneStmt(
+		NewMockOptimizer(false),
+		t,
+		`select e.empno, count(*)
+		   from constraint_test.emp e
+		   join constraint_test.dept d on e.deptno = d.deptno
+		  group by e.empno
+		  limit 10`,
+	)
+	require.NoError(t, err)
+	require.True(t, reachableNodeType(logical.GetQuery(), planpb.Node_AGG))
+}
+
+func TestPrimaryKeyGroupEliminationRequiresCompleteCompositeKey(t *testing.T) {
+	optimizer := NewMockOptimizer(false)
+	partsupp := optimizer.ctxt.tablesByQualifiedName[mockQualifiedTableName("tpch", "partsupp")]
+	require.NotNil(t, partsupp)
+	require.NotNil(t, partsupp.Pkey)
+	// The shared legacy mock has malformed composite-name padding. Repair only
+	// this optimizer instance so the rule is exercised against the same
+	// metadata shape emitted by a real catalog.
+	partsupp.Pkey.Names = []string{"ps_partkey", "ps_suppkey"}
+
+	logical, err := runOneStmt(
+		optimizer,
+		t,
+		`select ps_partkey, ps_suppkey, count(*)
+		   from tpch.partsupp
+		  group by ps_partkey, ps_suppkey
+		  limit 10`,
+	)
+	require.NoError(t, err)
+	require.False(t, reachableNodeType(logical.GetQuery(), planpb.Node_AGG))
+
+	logical, err = runOneStmt(
+		optimizer,
+		t,
+		`select ps_partkey, count(*)
+		   from tpch.partsupp
+		  group by ps_partkey
+		  limit 10`,
+	)
+	require.NoError(t, err)
+	require.True(t, reachableNodeType(logical.GetQuery(), planpb.Node_AGG))
+}
+
+func TestPrimaryKeyGroupEliminationFailsClosed(t *testing.T) {
+	tests := []struct {
+		name string
+		sql  string
+	}{
+		{
+			name: "missing primary key",
+			sql:  "select deptno, count(*) from constraint_test.emp group by deptno limit 10",
+		},
+		{
+			name: "distinct aggregate",
+			sql:  "select empno, count(distinct deptno) from constraint_test.emp group by empno limit 10",
+		},
+		{
+			name: "unsupported aggregate",
+			sql:  "select empno, group_concat(ename) from constraint_test.emp group by empno limit 10",
+		},
+		{
+			name: "unbounded aggregate keeps established plan",
+			sql:  "select empno, count(*) from constraint_test.emp group by empno",
+		},
+		{
+			name: "grouping family stays atomic",
+			sql:  "select empno, count(*) from constraint_test.emp group by cube(empno) limit 10",
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			logical, err := runOneStmt(NewMockOptimizer(false), t, test.sql)
+			require.NoError(t, err)
+			require.True(t, reachableNodeType(logical.GetQuery(), planpb.Node_AGG))
+		})
+	}
+}
+
+func TestPrimaryKeyGroupEliminationPreservesHavingAboveProject(t *testing.T) {
+	logical, err := runOneStmt(
+		NewMockOptimizer(false),
+		t,
+		"select empno, sum(sal) from constraint_test.emp group by empno having sum(sal) > 100 limit 10",
+	)
+	require.NoError(t, err)
+	require.False(t, reachableNodeType(logical.GetQuery(), planpb.Node_AGG))
+}
+
+func reachableNodeType(query *planpb.Query, typ planpb.Node_NodeType) bool {
+	return firstReachableNode(query, typ) != nil
+}
+
+func firstReachableNode(query *planpb.Query, typ planpb.Node_NodeType) *planpb.Node {
+	if query == nil {
+		return nil
+	}
+	seen := make(map[int32]struct{})
+	var visit func(int32) *planpb.Node
+	visit = func(nodeID int32) *planpb.Node {
+		if nodeID < 0 || int(nodeID) >= len(query.Nodes) {
+			return nil
+		}
+		if _, ok := seen[nodeID]; ok {
+			return nil
+		}
+		seen[nodeID] = struct{}{}
+		node := query.Nodes[nodeID]
+		if node.NodeType == typ {
+			return node
+		}
+		for _, child := range node.Children {
+			if found := visit(child); found != nil {
+				return found
+			}
+		}
+		return nil
+	}
+	for _, root := range query.Steps {
+		if found := visit(root); found != nil {
+			return found
+		}
+	}
+	return nil
+}

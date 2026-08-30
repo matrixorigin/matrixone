@@ -15,7 +15,6 @@
 package aggexec
 
 import (
-	"context"
 	"slices"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -136,51 +135,22 @@ func (exec *countStarExec) SetExtraInformation(partialResult any, _ int) error {
 }
 
 func (exec *countStarExec) Flush() ([]*vector.Vector, error) {
+	// transfer vector to result
 	vecs := make([]*vector.Vector, len(exec.state))
 	for i := range vecs {
-		var err error
-		vecs[i], err = exec.FinalizeChunk(context.Background(), i)
-		if err != nil {
-			for _, vec := range vecs {
-				if vec != nil {
-					vec.Free(exec.mp)
-				}
+		vecs[i] = exec.state[i].vecs[0]
+		exec.state[i].vecs[0] = nil
+		exec.state[i].length = 0
+		exec.state[i].capacity = 0
+
+		if exec.extra != 0 {
+			vals := vector.MustFixedColNoTypeCheck[int64](vecs[i])
+			for j := range vals {
+				vals[j] += exec.extra
 			}
-			return nil, err
 		}
 	}
 	return vecs, nil
-}
-
-func (exec *countStarExec) FinalizeChunk(
-	ctx context.Context,
-	chunk int,
-) (*vector.Vector, error) {
-	if err := context.Cause(ctx); err != nil {
-		return nil, err
-	}
-	if chunk < 0 || chunk >= len(exec.state) {
-		return nil, moerr.NewInvalidInputNoCtxf(
-			"aggregate chunk %d out of range", chunk)
-	}
-	vec := exec.state[chunk].vecs[0]
-	if vec == nil {
-		return nil, moerr.NewInvalidStateNoCtxf(
-			"aggregate chunk %d was already finalized", chunk)
-	}
-	if exec.extra != 0 {
-		vals := vector.MustFixedColNoTypeCheck[int64](vec)
-		for i := range vals {
-			if err := checkChunkFinalizeContext(ctx, i); err != nil {
-				return nil, err
-			}
-			vals[i] += exec.extra
-		}
-	}
-	exec.state[chunk].vecs[0] = nil
-	exec.state[chunk].length = 0
-	exec.state[chunk].capacity = 0
-	return vec, nil
 }
 
 type countColumnExec struct {
@@ -336,49 +306,19 @@ func (exec *countColumnExec) Flush() (_ []*vector.Vector, retErr error) {
 		}
 	} else {
 		for i := range vecs {
-			var err error
-			vecs[i], err = exec.FinalizeChunk(context.Background(), i)
-			if err != nil {
-				return nil, err
+			vecs[i] = exec.state[i].vecs[0]
+			exec.state[i].vecs[0] = nil
+			exec.state[i].length = 0
+			exec.state[i].capacity = 0
+			if exec.extra != 0 {
+				vals := vector.MustFixedColNoTypeCheck[int64](vecs[i])
+				for j := range vals {
+					vals[j] += int64(exec.extra)
+				}
 			}
 		}
 	}
 	return vecs, nil
-}
-
-func (exec *countColumnExec) FinalizeChunk(
-	ctx context.Context,
-	chunk int,
-) (*vector.Vector, error) {
-	if err := context.Cause(ctx); err != nil {
-		return nil, err
-	}
-	if exec.IsDistinct() {
-		return nil, moerr.NewInvalidStateNoCtx(
-			"distinct count does not support chunk finalization")
-	}
-	if chunk < 0 || chunk >= len(exec.state) {
-		return nil, moerr.NewInvalidInputNoCtxf(
-			"aggregate chunk %d out of range", chunk)
-	}
-	vec := exec.state[chunk].vecs[0]
-	if vec == nil {
-		return nil, moerr.NewInvalidStateNoCtxf(
-			"aggregate chunk %d was already finalized", chunk)
-	}
-	if exec.extra != 0 {
-		vals := vector.MustFixedColNoTypeCheck[int64](vec)
-		for i := range vals {
-			if err := checkChunkFinalizeContext(ctx, i); err != nil {
-				return nil, err
-			}
-			vals[i] += exec.extra
-		}
-	}
-	exec.state[chunk].vecs[0] = nil
-	exec.state[chunk].length = 0
-	exec.state[chunk].capacity = 0
-	return vec, nil
 }
 
 func makeCount(

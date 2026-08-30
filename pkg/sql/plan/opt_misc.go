@@ -977,35 +977,185 @@ func (builder *QueryBuilder) rewriteDistinctToAGG(nodeID int32) {
 
 // reuse removeSimpleProjections to delete this plan node
 func (builder *QueryBuilder) rewriteEffectlessAggToProject(nodeID int32) {
+	remap := make(map[[2]int32]*plan.Expr)
+	builder.rewriteEffectlessAggToProjectImpl(nodeID, false, remap)
+	if len(remap) == 0 {
+		return
+	}
+	builder.applyEffectlessAggRemap(nodeID, remap)
+}
+
+func (builder *QueryBuilder) rewriteEffectlessAggToProjectImpl(
+	nodeID int32,
+	limitDemand bool,
+	remap map[[2]int32]*plan.Expr,
+) {
 	node := builder.qry.Nodes[nodeID]
+	childLimitDemand := false
+	if len(node.Children) == 1 {
+		switch node.NodeType {
+		case plan.Node_PROJECT, plan.Node_FILTER, plan.Node_SORT:
+			// Only unary operators that preserve a single input relation may
+			// carry a bounded row demand to an aggregate below them.  In
+			// particular, never let an outer LIMIT cross a join or a shared CTE
+			// boundary and accidentally rewrite an unrelated aggregate.
+			childLimitDemand = limitDemand || node.Limit != nil
+		}
+	}
 	if len(node.Children) > 0 {
 		for _, child := range node.Children {
-			builder.rewriteEffectlessAggToProject(child)
+			builder.rewriteEffectlessAggToProjectImpl(child, childLimitDemand, remap)
 		}
 	}
 	if node.NodeType != plan.Node_AGG {
 		return
 	}
-	if node.AggList != nil || node.ProjectList != nil || node.FilterList != nil {
+	if node.ProjectList != nil || node.FilterList != nil ||
+		len(node.Children) != 1 ||
+		len(node.BindingTags) == 0 {
+		return
+	}
+	if len(node.AggList) > 0 &&
+		(!limitDemand || hasInactiveGroupingColumn(node.GroupingFlag)) {
+		// Aggregate-bearing rewrites are a limit-aware optimization, not a
+		// general plan-shape canonicalization.  Requiring a bounded demand
+		// keeps unlimited queries on their established physical path.  An
+		// inactive grouping key belongs to a GROUPING SETS / ROLLUP / CUBE
+		// branch.  The all-active sibling is protected by the UNION boundary,
+		// across which bounded demand is deliberately never propagated.
 		return
 	}
 	scan := builder.qry.Nodes[node.Children[0]]
 	if scan.NodeType != plan.Node_TABLE_SCAN || scan.TableDef == nil || scan.TableDef.Pkey == nil {
 		return
 	}
+	pkPositions, ok := primaryKeyColumnPositions(scan.TableDef)
+	if !ok || len(scan.BindingTags) != 1 {
+		return
+	}
 	groupCol := make([]int32, 0)
 	for _, expr := range node.GroupBy {
-		if col := expr.GetCol(); col != nil {
+		if col := expr.GetCol(); col != nil && col.RelPos == scan.BindingTags[0] {
 			groupCol = append(groupCol, col.ColPos)
 		}
 	}
-	if !containsAllPKs(groupCol, scan.TableDef) {
-		return
+	for _, pk := range pkPositions {
+		found := false
+		for _, group := range groupCol {
+			if group == pk {
+				found = true
+				break
+			}
+		}
+		if !found {
+			return
+		}
 	}
+
+	projectList := make([]*plan.Expr, 0, len(node.GroupBy)+len(node.AggList))
+	projectList = append(projectList, node.GroupBy...)
+	if len(node.AggList) > 0 {
+		if len(node.BindingTags) < 2 {
+			return
+		}
+		for _, agg := range node.AggList {
+			rowExpr, ok := builder.singleRowAggregateExpr(agg)
+			if !ok {
+				return
+			}
+			projectList = append(projectList, rowExpr)
+		}
+
+		groupTag := node.BindingTags[0]
+		aggTag := node.BindingTags[1]
+		for i, agg := range node.AggList {
+			remap[[2]int32{aggTag, int32(i)}] = GetColExpr(
+				agg.Typ,
+				groupTag,
+				int32(len(node.GroupBy)+i),
+			)
+		}
+	}
+
 	node.NodeType = plan.Node_PROJECT
 	node.BindingTags = node.BindingTags[:1]
-	node.ProjectList = node.GroupBy
+	node.ProjectList = projectList
 	node.GroupBy = nil
+	node.AggList = nil
+	node.GroupingFlag = nil
+	node.GroupByHashKey = nil
+	node.SpillMem = 0
+}
+
+func (builder *QueryBuilder) singleRowAggregateExpr(
+	agg *plan.Expr,
+) (*plan.Expr, bool) {
+	if agg == nil {
+		return nil, false
+	}
+	fn := agg.GetF()
+	if fn == nil || fn.Func == nil || fn.AggConfigType != plan.AggregateConfigType_AGG_CONFIG_NONE ||
+		len(fn.AggConfig) != 0 || uint64(fn.Func.Obj)&function.Distinct != 0 {
+		return nil, false
+	}
+
+	switch fn.Func.ObjName {
+	case "starcount":
+		return makePlan2Int64ConstExprWithType(1), true
+
+	case "count":
+		if len(fn.Args) != 1 {
+			return nil, false
+		}
+		// A direct non-null scan column has no evaluation behavior to retain.
+		// Do not use type nullability alone for an arbitrary expression: turning
+		// COUNT(expr) into a constant could suppress expression evaluation.
+		if fn.Args[0].GetCol() != nil && fn.Args[0].Typ.NotNullable {
+			return makePlan2Int64ConstExprWithType(1), true
+		}
+		isNull, err := BindFuncExprImplByPlanExpr(
+			builder.GetContext(), "isnull", []*plan.Expr{DeepCopyExpr(fn.Args[0])})
+		if err != nil {
+			return nil, false
+		}
+		rowCount, err := BindFuncExprImplByPlanExpr(
+			builder.GetContext(), "if", []*plan.Expr{
+				isNull,
+				makePlan2Int64ConstExprWithType(0),
+				makePlan2Int64ConstExprWithType(1),
+			})
+		if err != nil {
+			return nil, false
+		}
+		return rowCount, true
+
+	case "sum", "avg", "min", "max", "any_value":
+		if len(fn.Args) != 1 {
+			return nil, false
+		}
+		target := makeTypeByPlan2Type(agg.Typ)
+		rowValue, err := makePlan2CastExpr(
+			builder.GetContext(),
+			DeepCopyExpr(fn.Args[0]),
+			makePlan2Type(&target),
+		)
+		if err != nil {
+			return nil, false
+		}
+		return rowValue, true
+	}
+	return nil, false
+}
+
+func (builder *QueryBuilder) applyEffectlessAggRemap(
+	nodeID int32,
+	remap map[[2]int32]*plan.Expr,
+) {
+	node := builder.qry.Nodes[nodeID]
+	replaceColumnsForNode(node, remap)
+	for _, child := range node.Children {
+		builder.applyEffectlessAggRemap(child, remap)
+	}
 }
 
 func makeBetweenExprFromDateFormat(equalFunc *plan.Function, dateformatFunc *plan.Function, intervalStr string, builder *QueryBuilder) *plan.Expr {

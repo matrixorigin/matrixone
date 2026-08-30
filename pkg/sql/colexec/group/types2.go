@@ -264,15 +264,6 @@ type container struct {
 	// A spill reload may preallocate up to this proven in-memory high-water mark,
 	// but never up to an unbounded bucket row count.
 	spillHashPreAllocSize uint64
-
-	// Local finalization handshake. nextFinalConsumerToken is intentionally not
-	// reset so a delayed detach from an older Prepare generation cannot detach a
-	// newer consumer after operator reuse.
-	finalConsumer          colexec.FinalizedBatchConsumer
-	finalConsumerToken     colexec.FinalizedBatchConsumerToken
-	nextFinalConsumerToken colexec.FinalizedBatchConsumerToken
-	finalConsumerDisabled  bool
-	finalBatchAdmitted     bool
 }
 
 func (ctr *container) setAllocationAccount(
@@ -646,10 +637,6 @@ func (ctr *container) free() {
 	ctr.groupByHashKey = nil
 	ctr.hashKeyVecs = nil
 	ctr.mergePartialMetadataSet = false
-	ctr.finalConsumer = nil
-	ctr.finalConsumerToken = 0
-	ctr.finalConsumerDisabled = false
-	ctr.finalBatchAdmitted = false
 	ctr.budget = nil
 
 	mpool.DeleteMPool(ctr.mp)

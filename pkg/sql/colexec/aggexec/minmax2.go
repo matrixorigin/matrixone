@@ -16,7 +16,6 @@ package aggexec
 
 import (
 	"bytes"
-	"context"
 	"slices"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -363,96 +362,69 @@ func (exec *minMaxExecFixed[T]) SetExtraInformation(partialResult any, _ int) er
 }
 
 func (exec *minMaxExecFixed[T]) Flush() ([]*vector.Vector, error) {
+	// transfer vector to result
 	vecs := make([]*vector.Vector, len(exec.state))
 	for i := range vecs {
-		var err error
-		vecs[i], err = exec.FinalizeChunk(context.Background(), i)
-		if err != nil {
-			for _, vec := range vecs {
-				if vec != nil {
-					vec.Free(exec.mp)
-				}
+		vecs[i] = exec.state[i].vecs[0]
+		exec.state[i].vecs[0] = nil
+		exec.state[i].length = 0
+		exec.state[i].capacity = 0
+	}
+	freeResultsOnError := func(err error) ([]*vector.Vector, error) {
+		for _, vec := range vecs {
+			if vec != nil {
+				vec.Free(exec.mp)
 			}
-			return nil, err
 		}
-	}
-	return vecs, nil
-}
-
-func (exec *minMaxExecFixed[T]) FinalizeChunk(
-	ctx context.Context,
-	chunk int,
-) (*vector.Vector, error) {
-	if err := context.Cause(ctx); err != nil {
 		return nil, err
-	}
-	if exec.IsDistinct() {
-		return nil, moerr.NewInvalidStateNoCtx(
-			"distinct min/max does not support chunk finalization")
-	}
-	if chunk < 0 || chunk >= len(exec.state) {
-		return nil, moerr.NewInvalidInputNoCtxf(
-			"aggregate chunk %d out of range", chunk)
-	}
-	vec := exec.state[chunk].vecs[0]
-	if vec == nil {
-		return nil, moerr.NewInvalidStateNoCtxf(
-			"aggregate chunk %d was already finalized", chunk)
 	}
 
 	if exec.hasExtra {
-		for i := range vec.Length() {
-			if err := checkChunkFinalizeContext(ctx, i); err != nil {
-				return nil, err
-			}
-			if err := vec.PreflightSetStringSourceAt(
-				i, types.StringSourceExpression, exec.mp); err != nil {
-				return nil, err
-			}
-		}
-		for i := range vec.Length() {
-			if err := checkChunkFinalizeContext(ctx, i); err != nil {
-				return nil, err
-			}
-			if vec.IsNull(uint64(i)) {
-				vec.UnsetNull(uint64(i))
-				if err := vector.SetFixedAtNoTypeCheck(vec, int(i), exec.extra); err != nil {
-					return nil, err
+		for _, vec := range vecs {
+			for i := range vec.Length() {
+				if err := vec.PreflightSetStringSourceAt(
+					i, types.StringSourceExpression, exec.mp); err != nil {
+					return freeResultsOnError(err)
 				}
-				if err := vec.SetPrepareParamKindAtWithMP(i, vector.PrepareParamNone, exec.mp); err != nil {
-					return nil, err
-				}
-				if err := vec.SetStringSourceAtWithMP(i, types.StringSourceExpression, exec.mp); err != nil {
-					return nil, err
-				}
-			} else {
-				oldValue := vector.GetFixedAtNoTypeCheck[T](vec, int(i))
-				switch cmp := exec.comp(exec.extra, oldValue); {
-				case cmp < 0:
+			}
+			for i := range vec.Length() {
+				if vec.IsNull(uint64(i)) {
+					vec.UnsetNull(uint64(i))
 					if err := vector.SetFixedAtNoTypeCheck(vec, int(i), exec.extra); err != nil {
-						return nil, err
+						return freeResultsOnError(err)
 					}
 					if err := vec.SetPrepareParamKindAtWithMP(i, vector.PrepareParamNone, exec.mp); err != nil {
-						return nil, err
+						return freeResultsOnError(err)
 					}
 					if err := vec.SetStringSourceAtWithMP(i, types.StringSourceExpression, exec.mp); err != nil {
-						return nil, err
+						return freeResultsOnError(err)
 					}
-				case cmp == 0:
-					if err := mergeMinMaxPrepareParamKind(vec, i, vector.PrepareParamNone, exec.mp); err != nil {
-						return nil, err
-					}
-					if err := vec.SetStringSourceAtWithMP(i, types.StringSourceExpression, exec.mp); err != nil {
-						return nil, err
+				} else {
+					oldValue := vector.GetFixedAtNoTypeCheck[T](vec, int(i))
+					switch cmp := exec.comp(exec.extra, oldValue); {
+					case cmp < 0:
+						if err := vector.SetFixedAtNoTypeCheck(vec, int(i), exec.extra); err != nil {
+							return freeResultsOnError(err)
+						}
+						if err := vec.SetPrepareParamKindAtWithMP(i, vector.PrepareParamNone, exec.mp); err != nil {
+							return freeResultsOnError(err)
+						}
+						if err := vec.SetStringSourceAtWithMP(i, types.StringSourceExpression, exec.mp); err != nil {
+							return freeResultsOnError(err)
+						}
+					case cmp == 0:
+						if err := mergeMinMaxPrepareParamKind(vec, i, vector.PrepareParamNone, exec.mp); err != nil {
+							return freeResultsOnError(err)
+						}
+						if err := vec.SetStringSourceAtWithMP(i, types.StringSourceExpression, exec.mp); err != nil {
+							return freeResultsOnError(err)
+						}
 					}
 				}
 			}
 		}
 	}
-	exec.state[chunk].vecs[0] = nil
-	exec.state[chunk].length = 0
-	exec.state[chunk].capacity = 0
-	return vec, nil
+	return vecs, nil
 }
 
 func (exec *minMaxExecBytes) Fill(groupIndex int, row int, vectors []*vector.Vector) error {
@@ -582,96 +554,69 @@ func (exec *minMaxExecBytes) SetExtraInformation(partialResult any, _ int) error
 }
 
 func (exec *minMaxExecBytes) Flush() ([]*vector.Vector, error) {
+	// transfer vector to result
 	vecs := make([]*vector.Vector, len(exec.state))
 	for i := range vecs {
-		var err error
-		vecs[i], err = exec.FinalizeChunk(context.Background(), i)
-		if err != nil {
-			for _, vec := range vecs {
-				if vec != nil {
-					vec.Free(exec.mp)
-				}
+		vecs[i] = exec.state[i].vecs[0]
+		exec.state[i].vecs[0] = nil
+		exec.state[i].length = 0
+		exec.state[i].capacity = 0
+	}
+	freeResultsOnError := func(err error) ([]*vector.Vector, error) {
+		for _, vec := range vecs {
+			if vec != nil {
+				vec.Free(exec.mp)
 			}
-			return nil, err
 		}
-	}
-	return vecs, nil
-}
-
-func (exec *minMaxExecBytes) FinalizeChunk(
-	ctx context.Context,
-	chunk int,
-) (*vector.Vector, error) {
-	if err := context.Cause(ctx); err != nil {
 		return nil, err
-	}
-	if exec.IsDistinct() {
-		return nil, moerr.NewInvalidStateNoCtx(
-			"distinct min/max does not support chunk finalization")
-	}
-	if chunk < 0 || chunk >= len(exec.state) {
-		return nil, moerr.NewInvalidInputNoCtxf(
-			"aggregate chunk %d out of range", chunk)
-	}
-	vec := exec.state[chunk].vecs[0]
-	if vec == nil {
-		return nil, moerr.NewInvalidStateNoCtxf(
-			"aggregate chunk %d was already finalized", chunk)
 	}
 
 	if exec.hasExtra {
-		for i := range vec.Length() {
-			if err := checkChunkFinalizeContext(ctx, i); err != nil {
-				return nil, err
-			}
-			if err := vec.PreflightSetStringSourceAt(
-				i, types.StringSourceExpression, exec.mp); err != nil {
-				return nil, err
-			}
-		}
-		for i := range vec.Length() {
-			if err := checkChunkFinalizeContext(ctx, i); err != nil {
-				return nil, err
-			}
-			if vec.IsNull(uint64(i)) {
-				vec.UnsetNull(uint64(i))
-				if err := vector.SetBytesAtWithBinaryString(vec, int(i), exec.extra, false, exec.mp); err != nil {
-					return nil, err
+		for _, vec := range vecs {
+			for i := range vec.Length() {
+				if err := vec.PreflightSetStringSourceAt(
+					i, types.StringSourceExpression, exec.mp); err != nil {
+					return freeResultsOnError(err)
 				}
-				if err := vec.SetPrepareParamKindAtWithMP(i, vector.PrepareParamNone, exec.mp); err != nil {
-					return nil, err
-				}
-				if err := vec.SetStringSourceAtWithMP(i, types.StringSourceExpression, exec.mp); err != nil {
-					return nil, err
-				}
-			} else {
-				oldValue := vec.GetBytesAt(int(i))
-				switch cmp := exec.comp(exec.extra, oldValue); {
-				case cmp < 0:
+			}
+			for i := range vec.Length() {
+				if vec.IsNull(uint64(i)) {
+					vec.UnsetNull(uint64(i))
 					if err := vector.SetBytesAtWithBinaryString(vec, int(i), exec.extra, false, exec.mp); err != nil {
-						return nil, err
+						return freeResultsOnError(err)
 					}
 					if err := vec.SetPrepareParamKindAtWithMP(i, vector.PrepareParamNone, exec.mp); err != nil {
-						return nil, err
+						return freeResultsOnError(err)
 					}
 					if err := vec.SetStringSourceAtWithMP(i, types.StringSourceExpression, exec.mp); err != nil {
-						return nil, err
+						return freeResultsOnError(err)
 					}
-				case cmp == 0:
-					if err := mergeMinMaxPrepareParamKind(vec, i, vector.PrepareParamNone, exec.mp); err != nil {
-						return nil, err
-					}
-					if err := vec.SetStringSourceAtWithMP(i, types.StringSourceExpression, exec.mp); err != nil {
-						return nil, err
+				} else {
+					oldValue := vec.GetBytesAt(int(i))
+					switch cmp := exec.comp(exec.extra, oldValue); {
+					case cmp < 0:
+						if err := vector.SetBytesAtWithBinaryString(vec, int(i), exec.extra, false, exec.mp); err != nil {
+							return freeResultsOnError(err)
+						}
+						if err := vec.SetPrepareParamKindAtWithMP(i, vector.PrepareParamNone, exec.mp); err != nil {
+							return freeResultsOnError(err)
+						}
+						if err := vec.SetStringSourceAtWithMP(i, types.StringSourceExpression, exec.mp); err != nil {
+							return freeResultsOnError(err)
+						}
+					case cmp == 0:
+						if err := mergeMinMaxPrepareParamKind(vec, i, vector.PrepareParamNone, exec.mp); err != nil {
+							return freeResultsOnError(err)
+						}
+						if err := vec.SetStringSourceAtWithMP(i, types.StringSourceExpression, exec.mp); err != nil {
+							return freeResultsOnError(err)
+						}
 					}
 				}
 			}
 		}
 	}
-	exec.state[chunk].vecs[0] = nil
-	exec.state[chunk].length = 0
-	exec.state[chunk].capacity = 0
-	return vec, nil
+	return vecs, nil
 }
 
 func makeMinMaxExec(mp *mpool.MPool, aggID int64, isMin bool, param types.Type) AggFuncExec {

@@ -152,37 +152,9 @@ func (mergeGroup *MergeGroup) Call(proc *process.Process) (vm.CallResult, error)
 		}
 
 		// output the final result.
-		used, err := mergeGroup.ctr.drainFinalResults(
-			proc,
-			mergeGroup.OpAnalyzer,
-			mergeGroup.Aggs,
-			func(input *batch.Batch) (*batch.Batch, error) {
-				return mergeGroup.ExecProjection(proc, input)
-			},
-		)
-		if err != nil {
-			return vm.CancelResult, err
-		}
-		if used {
-			return vm.CancelResult, nil
-		}
 		return mergeGroup.ctr.outputOneBatchFinal(proc, mergeGroup.OpAnalyzer, mergeGroup.Aggs)
 
 	case vm.Eval:
-		used, err := mergeGroup.ctr.drainFinalResults(
-			proc,
-			mergeGroup.OpAnalyzer,
-			mergeGroup.Aggs,
-			func(input *batch.Batch) (*batch.Batch, error) {
-				return mergeGroup.ExecProjection(proc, input)
-			},
-		)
-		if err != nil {
-			return vm.CancelResult, err
-		}
-		if used {
-			return vm.CancelResult, nil
-		}
 		return mergeGroup.ctr.outputOneBatchFinal(proc, mergeGroup.OpAnalyzer, mergeGroup.Aggs)
 	case vm.End:
 		return vm.CancelResult, nil

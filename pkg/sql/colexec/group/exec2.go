@@ -956,20 +956,6 @@ func (group *Group) outputOneBatch(proc *process.Process) (vm.CallResult, error)
 	}
 
 	if group.NeedEval {
-		used, err := group.ctr.drainFinalResults(
-			proc,
-			group.OpAnalyzer,
-			group.Aggs,
-			func(input *batch.Batch) (*batch.Batch, error) {
-				return group.ExecProjection(proc, input)
-			},
-		)
-		if err != nil {
-			return vm.CancelResult, err
-		}
-		if used {
-			return vm.CancelResult, nil
-		}
 		return group.ctr.outputOneBatchFinal(proc, group.OpAnalyzer, group.Aggs)
 	} else {
 		// no need to eval, we are in streaming mode.  spill never happen
