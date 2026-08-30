@@ -63,9 +63,9 @@ ifeq ($(MO_CL_CUDA),1)
 # (The wildcard normal-prereqs add no "no rule" errors on a clean build — they
 # match only already-built objects; the order-only sub-makes create them.)
 cuda_objs:
-	$(MAKE) -C cuda
+	$(MAKE) -C cuda $(if $(filter debug,$(DEBUG_OPT)),dbg=1)
 cuvs_objs:
-	$(MAKE) -C cuvs
+	$(MAKE) -C cuvs $(if $(filter debug,$(DEBUG_OPT)),debug)
 LIB_PREREQS := $(OBJS) $(wildcard cuda/*.o cuvs/*.o) | cuda_objs cuvs_objs
 else
 LIB_PREREQS := $(OBJS)

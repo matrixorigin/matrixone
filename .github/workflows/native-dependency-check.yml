@@ -4,6 +4,7 @@ on:
   pull_request:
     paths:
       - ".github/workflows/native-dependency-check.yml"
+      - ".agents/skills/mo-dev/**"
       - ".dockerignore"
       - "Makefile"
       - "cgo/**"
@@ -16,6 +17,7 @@ on:
       - main
     paths:
       - ".github/workflows/native-dependency-check.yml"
+      - ".agents/skills/mo-dev/**"
       - ".dockerignore"
       - "Makefile"
       - "cgo/**"
@@ -33,6 +35,33 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  native-contract:
+    name: Native contract (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os:
+          - ubuntu-22.04
+          - macos-14
+    runs-on: ${{ matrix.os }}
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Validate native state, staging, and Make DAG
+        run: |
+          sh -n \
+            cgo/mo-native-provenance \
+            cgo/mo-stage-native-libs \
+            .agents/skills/mo-dev/scripts/mo-cgo-test \
+            .agents/skills/mo-dev/scripts/mo-cgo-test-tags-test \
+            .agents/skills/mo-dev/scripts/mo-cgo-test-worktree-artifacts-test \
+            .agents/skills/mo-dev/scripts/mo-native-build-contract-test \
+            .agents/skills/mo-dev/scripts/mo-native-provenance-test
+          .agents/skills/mo-dev/scripts/mo-native-provenance-test
+          .agents/skills/mo-dev/scripts/mo-native-build-contract-test
+          .agents/skills/mo-dev/scripts/mo-cgo-test-tags-test
+          .agents/skills/mo-dev/scripts/mo-cgo-test-worktree-artifacts-test
+
   downloader:
     name: Downloader (${{ matrix.os }})
     strategy:

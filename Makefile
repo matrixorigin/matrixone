@@ -231,6 +231,13 @@ DEBUG_OPT :=
 CGO_DEBUG_OPT :=
 TAGS :=
 
+# Native artifacts are reusable only when every semantic build input matches.
+# Keep these dimensions independent so adding one feature cannot silently alias
+# an existing artifact generation.
+NATIVE_PROVENANCE_ACCELERATOR = $(if $(filter 1,$(MO_CL_CUDA)),gpu,cpu)
+NATIVE_PROVENANCE_OPTIMIZATION = $(if $(filter debug,$(CGO_DEBUG_OPT)),debug,release)
+NATIVE_PROVENANCE_SIMSIMD = $(if $(filter 1,$(MO_CL_SIMSIMD)),1,0)
+
 # Env-var prefix for the build command. On x86_64 the arch-specific SIMD kernels in
 # pkg/vectorindex/metric are compiled by default (ARCHSIMD=1): GOAMD64 defaults to v3
 # (Haswell baseline -- AVX2/FMA/BMI, required by the Go simd experiment) and
@@ -290,32 +297,15 @@ endif
 
 define BUILD_THIRDPARTIES
 @$(MAKE) -C thirdparties $(if $(NATIVE_BUILD_JOBS),-j$(NATIVE_BUILD_JOBS))
-@mkdir -p "$(ROOT_DIR)/lib"
-@for source in "$(THIRDPARTIES_INSTALL_DIR)"/lib/*; do \
-	[ -e "$$source" ] || continue; \
-	destination="$(ROOT_DIR)/lib/$${source##*/}"; \
-	if [ -L "$$source" ]; then \
-		link_target=$$(readlink "$$source"); \
-		if [ ! -L "$$destination" ] || [ "$$(readlink "$$destination")" != "$$link_target" ]; then \
-			temporary="$$destination.tmp.$$$$"; \
-			ln -s "$$link_target" "$$temporary"; \
-			mv -f "$$temporary" "$$destination"; \
-		fi; \
-	elif [ -d "$$source" ]; then \
-		cp -R "$$source" "$(ROOT_DIR)/lib/"; \
-	elif [ ! -f "$$destination" ] || [ -L "$$destination" ] || ! cmp -s "$$source" "$$destination"; then \
-		temporary="$$destination.tmp.$$$$"; \
-		cp "$$source" "$$temporary"; \
-		mv -f "$$temporary" "$$destination"; \
-	fi; \
-done
+@"$(ROOT_DIR)/cgo/mo-stage-native-libs" "$(THIRDPARTIES_INSTALL_DIR)/lib" "$(ROOT_DIR)/lib"
 endef
 
 .PHONY: cgo cgo-native-prepare-internal cgo-native-thirdparties-internal
-cgo: NATIVE_PROVENANCE_VARIANT = $(if $(filter 1,$(MO_CL_CUDA)),gpu,cpu)$(if $(filter debug,$(CGO_DEBUG_OPT)),-debug,)
 cgo: cgo-native-thirdparties-internal
 	@(cd cgo; ${MAKE} $(if $(NATIVE_BUILD_JOBS),-j$(NATIVE_BUILD_JOBS)) ${CGO_DEBUG_OPT})
-	@GO="$(GO)" ./cgo/mo-native-provenance record "$(ROOT_DIR)" "$(NATIVE_PROVENANCE_VARIANT)"
+	@GO="$(GO)" ./cgo/mo-native-provenance record "$(ROOT_DIR)" \
+		"$(NATIVE_PROVENANCE_ACCELERATOR)" "$(NATIVE_PROVENANCE_OPTIMIZATION)" \
+		"$(NATIVE_PROVENANCE_SIMSIMD)"
 
 cgo-native-thirdparties-internal: cgo-native-prepare-internal
 	$(BUILD_THIRDPARTIES)
@@ -330,24 +320,54 @@ cgo-native-prepare-internal:
 			*" -n "*|*" -t "*|*" -q "*|*" --just-print "*|*" --dry-run "*|*" --recon "*|*" --touch "*|*" --question "*) exit 0 ;; \
 		esac; \
 		action=$$(GO="$(GO)" ./cgo/mo-native-provenance prepare \
-			"$(ROOT_DIR)" "$(NATIVE_PROVENANCE_VARIANT)"); \
+			"$(ROOT_DIR)" "$(NATIVE_PROVENANCE_ACCELERATOR)" \
+			"$(NATIVE_PROVENANCE_OPTIMIZATION)" "$(NATIVE_PROVENANCE_SIMSIMD)"); \
 		case "$$action" in \
 			local|reuse) ;; \
 			rebuild-cgo) \
-				echo "native provenance: cleaning CGo outputs before rebuilding $(NATIVE_PROVENANCE_VARIANT)"; \
+				echo "native provenance: cleaning CGo outputs before rebuilding $(NATIVE_PROVENANCE_ACCELERATOR)/$(NATIVE_PROVENANCE_OPTIMIZATION)"; \
 				$(MAKE) -C cgo clean ;; \
 			rebuild-all) \
-				echo "native provenance: cleaning thirdparty and CGo outputs before rebuilding $(NATIVE_PROVENANCE_VARIANT)"; \
+				echo "native provenance: cleaning thirdparty and CGo outputs before rebuilding $(NATIVE_PROVENANCE_ACCELERATOR)/$(NATIVE_PROVENANCE_OPTIMIZATION), simsimd=$(NATIVE_PROVENANCE_SIMSIMD)"; \
 				$(MAKE) -C cgo clean; \
 				$(MAKE) -C thirdparties clean ;; \
 			*) echo "invalid native rebuild action: $$action" >&2; exit 1 ;; \
 		esac; \
 		GO="$(GO)" ./cgo/mo-native-provenance begin \
-			"$(ROOT_DIR)" "$(NATIVE_PROVENANCE_VARIANT)"
+			"$(ROOT_DIR)" "$(NATIVE_PROVENANCE_ACCELERATOR)" \
+			"$(NATIVE_PROVENANCE_OPTIMIZATION)" "$(NATIVE_PROVENANCE_SIMSIMD)"
 
 .PHONY: thirdparties
+
+# GNU/BSD make deduplicate a shared target, but not two different targets that
+# expand the same recipe. When users explicitly request `thirdparties` beside a
+# native consumer, make the public goal wait for that consumer instead of
+# becoming a second thirdparty owner.
+NATIVE_RELEASE_OWNER_GOALS := all cgo build build-typecheck mo-tool ut \
+	dev-create-dashboard dev-list-dashboard dev-delete-dashboard launch-minio
+NATIVE_DEBUG_OWNER_GOALS := debug launch-minio-debug
+NATIVE_REQUESTED_RELEASE_OWNER := $(firstword $(filter $(NATIVE_RELEASE_OWNER_GOALS),$(MAKECMDGOALS)))
+NATIVE_REQUESTED_DEBUG_OWNER := $(firstword $(filter $(NATIVE_DEBUG_OWNER_GOALS),$(MAKECMDGOALS)))
+
+ifneq ($(NATIVE_REQUESTED_RELEASE_OWNER),)
+ifneq ($(NATIVE_REQUESTED_DEBUG_OWNER),)
+$(error release and debug native build goals cannot share one invocation)
+endif
+endif
+
+ifneq ($(filter thirdparties,$(MAKECMDGOALS)),)
+ifneq ($(NATIVE_REQUESTED_DEBUG_OWNER),)
+thirdparties: $(NATIVE_REQUESTED_DEBUG_OWNER)
+else ifneq ($(NATIVE_REQUESTED_RELEASE_OWNER),)
+thirdparties: $(NATIVE_REQUESTED_RELEASE_OWNER)
+else
 thirdparties:
 	$(BUILD_THIRDPARTIES)
+endif
+else
+thirdparties:
+	$(BUILD_THIRDPARTIES)
+endif
 
 # Stage the jieba dictionary next to the binary, the same way thirdparties/lib
 # is staged. jiebaDictPaths() in pkg/monlp/tokenizer/jieba_dict.go searches

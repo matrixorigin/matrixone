@@ -78,15 +78,17 @@ mkdir -p "$exported/cgo" "$exported/thirdparties/install/include" \
 cp "$repo/cgo/mo-native-provenance" "$exported/cgo/mo-native-provenance"
 printf 'existing library\n' >"$exported/cgo/libmo.dylib"
 exported_action=$(PATH="$work/bin:$PATH" "$exported/cgo/mo-native-provenance" \
-    prepare "$exported" cpu)
+    prepare "$exported" cpu release 0)
 if [ "$exported_action" = local ]; then
     echo "ok   exported source keeps the local incremental path"
 else
     printf 'FAIL exported source expected local, got %s\n' "$exported_action"
     failures=$((failures + 1))
 fi
-PATH="$work/bin:$PATH" "$exported/cgo/mo-native-provenance" begin "$exported" cpu
-PATH="$work/bin:$PATH" "$exported/cgo/mo-native-provenance" record "$exported" cpu
+PATH="$work/bin:$PATH" "$exported/cgo/mo-native-provenance" \
+    begin "$exported" cpu release 0
+PATH="$work/bin:$PATH" "$exported/cgo/mo-native-provenance" \
+    record "$exported" cpu release 0
 if [ -e "$exported/cgo/.mo-native-provenance" ]; then
     echo "FAIL exported source published a reusable stamp"
     failures=$((failures + 1))
@@ -95,13 +97,17 @@ else
 fi
 
 expect_action() {
-    variant=$1
-    expected=$2
-    actual=$(native prepare "$repo" "$variant")
+    accelerator=$1
+    optimization=$2
+    simsimd=$3
+    expected=$4
+    build_key="$accelerator/$optimization/simsimd=$simsimd"
+    actual=$(native prepare "$repo" "$accelerator" "$optimization" "$simsimd")
     if [ "$actual" = "$expected" ]; then
-        printf 'ok   %-18s -> %s\n' "$variant" "$expected"
+        printf 'ok   %-30s -> %s\n' "$build_key" "$expected"
     else
-        printf 'FAIL %-18s expected %s, got %s\n' "$variant" "$expected" "$actual"
+        printf 'FAIL %-30s expected %s, got %s\n' \
+            "$build_key" "$expected" "$actual"
         failures=$((failures + 1))
     fi
 }
@@ -142,120 +148,173 @@ produce_outputs() {
 }
 
 finish_build() {
-    variant=$1
-    native begin "$repo" "$variant"
+    accelerator=$1
+    optimization=$2
+    simsimd=$3
+    native begin "$repo" "$accelerator" "$optimization" "$simsimd"
     produce_outputs
-    native record "$repo" "$variant"
+    native record "$repo" "$accelerator" "$optimization" "$simsimd"
 }
 
 produce_outputs
-expect_action cpu rebuild-all
+expect_action cpu release 0 rebuild-all
 expect_failure "a stale no-op cannot begin the first stamped build" \
-    native begin "$repo" cpu
+    native begin "$repo" cpu release 0
 clean_all
-finish_build cpu
-native verify "$repo" "$repo/cgo/libmo.dylib" darwin amd64 cpu
+finish_build cpu release 0
+native verify "$repo" "$repo/cgo/libmo.dylib" darwin amd64 cpu release 0
 echo "ok   a cleaned first build publishes a verifiable stamp"
 
 printf 'corrupt stamp\n' >"$repo/cgo/.mo-native-provenance"
-expect_action cpu rebuild-all
+expect_action cpu release 0 rebuild-all
 clean_all
-finish_build cpu
+finish_build cpu release 0
 echo "ok   a corrupt stamp requires a full native rebuild"
 
 printf 'DYNAMIC LIBRARY\n' >"$repo/cgo/libmo.dylib"
 touch -r "$repo/cgo/.mo-native-provenance" "$repo/cgo/libmo.dylib"
-expect_action cpu rebuild-cgo
+expect_action cpu release 0 rebuild-cgo
 clean_cgo
-finish_build cpu
+finish_build cpu release 0
 echo "ok   a same-size/mtime libmo change requires a CGo rebuild"
 
 printf 'INSTALLED HEADER\n' >"$repo/thirdparties/install/include/native.h"
 touch -r "$repo/cgo/.mo-native-provenance" \
     "$repo/thirdparties/install/include/native.h"
-expect_action cpu rebuild-all
+expect_action cpu release 0 rebuild-all
 clean_all
-finish_build cpu
+finish_build cpu release 0
 echo "ok   a same-size/mtime thirdparty change requires a full rebuild"
 
 expect_failure "record cannot publish without a build-generation marker" \
-    native record "$repo" cpu
+    native record "$repo" cpu release 0
 
-expect_action cpu reuse
+expect_action cpu release 0 reuse
 expect_failure "a prepared generation is not reusable before completion" \
-    native verify "$repo" "$repo/cgo/libmo.dylib" darwin amd64 cpu
-native begin "$repo" cpu
-native record "$repo" cpu
+    native verify "$repo" "$repo/cgo/libmo.dylib" darwin amd64 cpu release 0
+native begin "$repo" cpu release 0
+native record "$repo" cpu release 0
 echo "ok   unchanged inputs keep the incremental no-clean path"
 
 # A nominally reusable generation must fail closed if an ordinary build step
 # changes an output after prepare. The incomplete generation then requires a
 # CGo cleanup before it can publish again.
-expect_action cpu reuse
-native begin "$repo" cpu
+expect_action cpu release 0 reuse
+native begin "$repo" cpu release 0
 printf 'changed while building\n' >>"$repo/cgo/libmo.dylib"
 expect_failure "reuse rejects an artifact changed during the build" \
-    native record "$repo" cpu
-expect_action cpu rebuild-cgo
+    native record "$repo" cpu release 0
+expect_action cpu release 0 rebuild-cgo
 clean_cgo
-finish_build cpu
+finish_build cpu release 0
 echo "ok   a changed reuse generation recovers through CGo cleanup"
 
 # An interrupted incremental build must not trust its old stamp on the next
 # invocation. It escalates only to a CGo rebuild, not an expensive full rebuild.
-expect_action cpu reuse
-expect_action cpu rebuild-cgo
+expect_action cpu release 0 reuse
+expect_action cpu release 0 rebuild-cgo
 clean_cgo
-finish_build cpu
+finish_build cpu release 0
 echo "ok   interrupted incremental build resumes with CGo cleanup"
 
 printf '#define VALUE 2\n' >"$repo/cgo/native.h"
 git -C "$repo" add cgo/native.h
 git -C "$repo" -c user.name=test -c user.email=test@example.com \
     commit --quiet -m 'header-only native change'
-expect_action cpu rebuild-cgo
+expect_action cpu release 0 rebuild-cgo
 expect_failure "header-only source drift cannot relabel the old libmo" \
-    native begin "$repo" cpu
+    native begin "$repo" cpu release 0
 clean_cgo
-finish_build cpu
-native verify "$repo" "$repo/cgo/libmo.dylib" darwin amd64 cpu
+finish_build cpu release 0
+native verify "$repo" "$repo/cgo/libmo.dylib" darwin amd64 cpu release 0
 echo "ok   header-only drift requires and records a CGo rebuild"
 
-expect_action cpu-debug rebuild-cgo
+expect_action cpu debug 0 rebuild-cgo
 clean_cgo
-finish_build cpu-debug
-native verify "$repo" "$repo/cgo/libmo.dylib" darwin amd64 cpu-debug
+finish_build cpu debug 0
+native verify "$repo" "$repo/cgo/libmo.dylib" darwin amd64 cpu debug 0
 echo "ok   release/debug switching cannot reuse the previous objects"
+
+# SIMSIMD changes the usearch CMake flags and therefore the thirdparty artifact
+# set. It is a full-generation input, not a cosmetic environment variable.
+expect_action cpu debug 1 rebuild-all
+clean_all
+finish_build cpu debug 1
+native verify "$repo" "$repo/cgo/libmo.dylib" darwin amd64 cpu debug 1
+echo "ok   SIMSIMD switching cannot reuse thirdparty artifacts"
+
+custom_action=$(CC=alternate-cc native prepare "$repo" cpu debug 1)
+if [ "$custom_action" = rebuild-all ]; then
+    echo "ok   a custom native toolchain profile cannot alias default artifacts"
+else
+    printf 'FAIL custom toolchain expected rebuild-all, got %s\n' "$custom_action"
+    failures=$((failures + 1))
+fi
+clean_all
+CC=alternate-cc native begin "$repo" cpu debug 1
+produce_outputs
+CC=alternate-cc native record "$repo" cpu debug 1
+unset CC
+expect_action cpu debug 1 rebuild-all
+clean_all
+finish_build cpu debug 1
+echo "ok   returning to the default toolchain rebuilds one complete generation"
+
+gpu_action=$(CONDA_PREFIX="$work/gpu-a" native prepare "$repo" gpu debug 1)
+if [ "$gpu_action" = rebuild-cgo ]; then
+    echo "ok   CPU/GPU switching preserves compatible thirdparties"
+else
+    printf 'FAIL CPU/GPU switch expected rebuild-cgo, got %s\n' "$gpu_action"
+    failures=$((failures + 1))
+fi
+clean_cgo
+(CONDA_PREFIX="$work/gpu-a" native begin "$repo" gpu debug 1)
+produce_outputs
+(CONDA_PREFIX="$work/gpu-a" native record "$repo" gpu debug 1)
+
+gpu_environment_action=$(CONDA_PREFIX="$work/gpu-b" \
+    native prepare "$repo" gpu debug 1)
+if [ "$gpu_environment_action" = rebuild-cgo ]; then
+    echo "ok   GPU environment switching rebuilds CGo but not thirdparties"
+else
+    printf 'FAIL GPU environment switch expected rebuild-cgo, got %s\n' \
+        "$gpu_environment_action"
+    failures=$((failures + 1))
+fi
+clean_cgo
+(CONDA_PREFIX="$work/gpu-b" native begin "$repo" gpu debug 1)
+produce_outputs
+(CONDA_PREFIX="$work/gpu-b" native record "$repo" gpu debug 1)
 
 printf 'new thirdparty source\n' >>"$repo/thirdparties/source.txt"
 git -C "$repo" add thirdparties/source.txt
 git -C "$repo" -c user.name=test -c user.email=test@example.com \
     commit --quiet -m 'thirdparty source change'
-expect_action cpu-debug rebuild-all
+expect_action cpu debug 1 rebuild-all
 clean_all
-finish_build cpu-debug
+finish_build cpu debug 1
 echo "ok   thirdparty drift requires a full native rebuild"
 
 printf '#define VALUE 3\n' >"$repo/cgo/native.h"
 git -C "$repo" add cgo/native.h
 git -C "$repo" -c user.name=test -c user.email=test@example.com \
     commit --quiet -m 'second header-only change'
-expect_action cpu-debug rebuild-cgo
+expect_action cpu debug 1 rebuild-cgo
 clean_cgo
-native begin "$repo" cpu-debug
+native begin "$repo" cpu debug 1
 expect_failure "an interrupted build generation is rejected" \
-    native verify "$repo" "$repo/cgo/libmo.dylib" darwin amd64 cpu-debug
-expect_action cpu-debug rebuild-cgo
+    native verify "$repo" "$repo/cgo/libmo.dylib" darwin amd64 cpu debug 1
+expect_action cpu debug 1 rebuild-cgo
 clean_cgo
-finish_build cpu-debug
+finish_build cpu debug 1
 echo "ok   partial failure retains the narrow rebuild requirement"
 
 printf 'dirty edit\n' >>"$repo/cgo/native.c"
-expect_action cpu-debug rebuild-cgo
+expect_action cpu debug 1 rebuild-cgo
 clean_cgo
-finish_build cpu-debug
+finish_build cpu debug 1
 expect_failure "dirty native builds remain local-only" \
-    native verify "$repo" "$repo/cgo/libmo.dylib" darwin amd64 cpu-debug
+    native verify "$repo" "$repo/cgo/libmo.dylib" darwin amd64 cpu debug 1
 
 if [ "$failures" -ne 0 ]; then
     printf '\n%d check(s) failed\n' "$failures"

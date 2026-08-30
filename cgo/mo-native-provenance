@@ -22,19 +22,33 @@
 set -eu
 
 usage() {
-    echo "usage: $0 prepare <repository-root> <cpu|gpu|cpu-debug|gpu-debug>" >&2
-    echo "       $0 begin   <repository-root> <cpu|gpu|cpu-debug|gpu-debug>" >&2
-    echo "       $0 record  <repository-root> <cpu|gpu|cpu-debug|gpu-debug>" >&2
-    echo "       $0 verify  <artifact-root> <libmo-path> <goos> <goarch> <variant>" >&2
+    echo "usage: $0 prepare <repository-root> <cpu|gpu> <release|debug> <simsimd:0|1>" >&2
+    echo "       $0 begin   <repository-root> <cpu|gpu> <release|debug> <simsimd:0|1>" >&2
+    echo "       $0 record  <repository-root> <cpu|gpu> <release|debug> <simsimd:0|1>" >&2
+    echo "       $0 verify  <artifact-root> <libmo-path> <goos> <goarch> <cpu|gpu> <release|debug> <simsimd:0|1>" >&2
 }
 
 native_paths="Makefile cgo thirdparties"
 
-validate_variant() {
+validate_build_key() {
     case "$1" in
-        cpu | gpu | cpu-debug | gpu-debug) ;;
+        cpu | gpu) ;;
         *)
-            echo "unsupported MatrixOne native build variant: $1" >&2
+            echo "unsupported MatrixOne native accelerator: $1" >&2
+            exit 2
+            ;;
+    esac
+    case "$2" in
+        release | debug) ;;
+        *)
+            echo "unsupported MatrixOne native optimization mode: $2" >&2
+            exit 2
+            ;;
+    esac
+    case "$3" in
+        0 | 1) ;;
+        *)
+            echo "unsupported MatrixOne native SIMSIMD mode: $3" >&2
             exit 2
             ;;
     esac
@@ -54,23 +68,85 @@ host_platform() {
     esac
 }
 
+native_common_environment_hash() {
+    {
+        # These are the supported Make/toolchain overrides that can change
+        # regular CGo or thirdparty bytes. Empty values represent repository
+        # defaults; build and verify must observe the same override profile.
+        printf 'CC=%s\n' "${CC-}"
+        printf 'CXX=%s\n' "${CXX-}"
+        printf 'AR=%s\n' "${AR-}"
+        printf 'CFLAGS=%s\n' "${CFLAGS-}"
+        printf 'CXXFLAGS=%s\n' "${CXXFLAGS-}"
+        printf 'CPPFLAGS=%s\n' "${CPPFLAGS-}"
+        printf 'LDFLAGS=%s\n' "${LDFLAGS-}"
+        printf 'OPT_LV=%s\n' "${OPT_LV-}"
+        printf 'COMMON_CFLAGS=%s\n' "${COMMON_CFLAGS-}"
+        printf 'USEARCH_CMAKE_FLAG=%s\n' "${USEARCH_CMAKE_FLAG-}"
+        printf 'CROARING_CFLAGS=%s\n' "${CROARING_CFLAGS-}"
+        printf 'JEMALLOC_CONFIGURE_FLAGS=%s\n' "${JEMALLOC_CONFIGURE_FLAGS-}"
+        printf 'MUSL=%s\n' "${MUSL-}"
+        printf 'SDKROOT=%s\n' "${SDKROOT-}"
+        printf 'MACOSX_DEPLOYMENT_TARGET=%s\n' "${MACOSX_DEPLOYMENT_TARGET-}"
+        printf 'UNAME_S=%s\n' "${UNAME_S-}"
+        printf 'UNAME_M=%s\n' "${UNAME_M-}"
+    } | git hash-object --stdin
+}
+
+native_accelerator_environment_hash() {
+    environment_accelerator=$1
+    {
+        printf 'accelerator=%s\n' "$environment_accelerator"
+        if [ "$environment_accelerator" = gpu ]; then
+            printf 'CONDA_PREFIX=%s\n' "${CONDA_PREFIX-}"
+            printf 'CUDA_PATH=%s\n' "${CUDA_PATH-}"
+            printf 'HOST_ARCH=%s\n' "${HOST_ARCH-}"
+            printf 'TARGET_ARCH=%s\n' "${TARGET_ARCH-}"
+            printf 'TARGET_OS=%s\n' "${TARGET_OS-}"
+            printf 'TARGET_SIZE=%s\n' "${TARGET_SIZE-}"
+            printf 'TARGET_FS=%s\n' "${TARGET_FS-}"
+            printf 'TARGET_OVERRIDE=%s\n' "${TARGET_OVERRIDE-}"
+            printf 'SMS=%s\n' "${SMS-}"
+            printf 'GENCODE_FLAGS=%s\n' "${GENCODE_FLAGS-}"
+            printf 'HOST_COMPILER=%s\n' "${HOST_COMPILER-}"
+            printf 'GCC=%s\n' "${GCC-}"
+            printf 'NVCCFLAGS=%s\n' "${NVCCFLAGS-}"
+            printf 'CCFLAGS=%s\n' "${CCFLAGS-}"
+            printf 'CUDA_OPT_LEVEL=%s\n' "${CUDA_OPT_LEVEL-}"
+            printf 'EXTRA_NVCCFLAGS=%s\n' "${EXTRA_NVCCFLAGS-}"
+            printf 'EXTRA_CCFLAGS=%s\n' "${EXTRA_CCFLAGS-}"
+            printf 'EXTRA_LDFLAGS=%s\n' "${EXTRA_LDFLAGS-}"
+        fi
+    } | git hash-object --stdin
+}
+
 emit_provenance() {
     root=$1
     provenance_goos=$2
     provenance_goarch=$3
-    variant=$4
+    accelerator=$4
+    optimization=$5
+    simsimd=$6
     head=$(git -C "$root" rev-parse HEAD) || return 1
     makefile_hash=$(git -C "$root" rev-parse "$head:Makefile") || return 1
     cgo_hash=$(git -C "$root" rev-parse "$head:cgo") || return 1
     thirdparties_hash=$(git -C "$root" rev-parse "$head:thirdparties") || return 1
 
-    printf 'format=3\n'
+    common_environment_hash=$(native_common_environment_hash) || return 1
+    accelerator_environment_hash=$(native_accelerator_environment_hash \
+        "$accelerator") || return 1
+
+    printf 'format=6\n'
     printf 'makefile=%s\n' "$makefile_hash"
     printf 'cgo=%s\n' "$cgo_hash"
     printf 'thirdparties=%s\n' "$thirdparties_hash"
     printf 'goos=%s\n' "$provenance_goos"
     printf 'goarch=%s\n' "$provenance_goarch"
-    printf 'variant=%s\n' "$variant"
+    printf 'accelerator=%s\n' "$accelerator"
+    printf 'optimization=%s\n' "$optimization"
+    printf 'simsimd=%s\n' "$simsimd"
+    printf 'common-environment=%s\n' "$common_environment_hash"
+    printf 'accelerator-environment=%s\n' "$accelerator_environment_hash"
 }
 
 file_value() {
@@ -82,17 +158,27 @@ file_value() {
 stamp_is_well_formed() {
     candidate_stamp=$1
     [ -f "$candidate_stamp" ] || return 1
-    [ "$(wc -l <"$candidate_stamp" | tr -d ' ')" -eq 9 ] || return 1
-    [ "$(file_value format "$candidate_stamp")" = 3 ] || return 1
+    [ "$(wc -l <"$candidate_stamp" | tr -d ' ')" -eq 13 ] || return 1
+    [ "$(file_value format "$candidate_stamp")" = 6 ] || return 1
     [ -n "$(file_value makefile "$candidate_stamp")" ] || return 1
     [ -n "$(file_value cgo "$candidate_stamp")" ] || return 1
     [ -n "$(file_value thirdparties "$candidate_stamp")" ] || return 1
     [ -n "$(file_value goos "$candidate_stamp")" ] || return 1
     [ -n "$(file_value goarch "$candidate_stamp")" ] || return 1
-    case "$(file_value variant "$candidate_stamp")" in
-        cpu | gpu | cpu-debug | gpu-debug) ;;
+    case "$(file_value accelerator "$candidate_stamp")" in
+        cpu | gpu) ;;
         *) return 1 ;;
     esac
+    case "$(file_value optimization "$candidate_stamp")" in
+        release | debug) ;;
+        *) return 1 ;;
+    esac
+    case "$(file_value simsimd "$candidate_stamp")" in
+        0 | 1) ;;
+        *) return 1 ;;
+    esac
+    [ -n "$(file_value common-environment "$candidate_stamp")" ] || return 1
+    [ -n "$(file_value accelerator-environment "$candidate_stamp")" ] || return 1
     [ -n "$(file_value libmo-hash "$candidate_stamp")" ] || return 1
     [ -n "$(file_value thirdparty-hash "$candidate_stamp")" ] || return 1
 }
@@ -101,7 +187,7 @@ stamp_matches() {
     candidate_stamp=$1
     expected=$2
     stamp_is_well_formed "$candidate_stamp" || return 1
-    [ "$(sed -n '1,7p' "$candidate_stamp")" = "$expected" ]
+    [ "$(sed -n '1,11p' "$candidate_stamp")" = "$expected" ]
 }
 
 libmo_matches_stamp() {
@@ -184,8 +270,8 @@ read_build_marker() {
     esac
     case "$marker_reusable" in
         yes)
-            [ "$(wc -l <"$marker" | tr -d ' ')" -eq 10 ] || return 1
-            marker_provenance=$(sed -n '4,10p' "$marker")
+            [ "$(wc -l <"$marker" | tr -d ' ')" -eq 14 ] || return 1
+            marker_provenance=$(sed -n '4,14p' "$marker")
             ;;
         no)
             [ "$(wc -l <"$marker" | tr -d ' ')" -eq 3 ] || return 1
@@ -219,13 +305,15 @@ shift
 
 case "$operation" in
     prepare)
-        if [ "$#" -ne 2 ]; then
+        if [ "$#" -ne 4 ]; then
             usage
             exit 2
         fi
         root=$1
-        variant=$2
-        validate_variant "$variant"
+        accelerator=$2
+        optimization=$3
+        simsimd=$4
+        validate_build_key "$accelerator" "$optimization" "$simsimd"
         host_platform
 
         stamp="$root/cgo/.mo-native-provenance"
@@ -241,7 +329,8 @@ case "$operation" in
             action=rebuild-all
             if [ -z "$native_status" ]; then
                 reusable=yes
-                expected=$(emit_provenance "$root" "$goos" "$goarch" "$variant")
+                expected=$(emit_provenance "$root" "$goos" "$goarch" \
+                    "$accelerator" "$optimization" "$simsimd")
                 if stamp_matches "$stamp" "$expected" &&
                    [ -d "$root/thirdparties/install/include" ] &&
                    [ -d "$root/thirdparties/install/lib" ]; then
@@ -262,10 +351,14 @@ case "$operation" in
                     expected_thirdparties=$(printf '%s\n' "$expected" | sed -n 's/^thirdparties=//p')
                     expected_goos=$(printf '%s\n' "$expected" | sed -n 's/^goos=//p')
                     expected_goarch=$(printf '%s\n' "$expected" | sed -n 's/^goarch=//p')
+                    expected_simsimd=$(printf '%s\n' "$expected" | sed -n 's/^simsimd=//p')
+                    expected_common_environment=$(printf '%s\n' "$expected" | sed -n 's/^common-environment=//p')
                     if [ "$(file_value makefile "$stamp")" = "$expected_makefile" ] &&
                        [ "$(file_value thirdparties "$stamp")" = "$expected_thirdparties" ] &&
                        [ "$(file_value goos "$stamp")" = "$expected_goos" ] &&
-                       [ "$(file_value goarch "$stamp")" = "$expected_goarch" ]; then
+                       [ "$(file_value goarch "$stamp")" = "$expected_goarch" ] &&
+                       [ "$(file_value simsimd "$stamp")" = "$expected_simsimd" ] &&
+                       [ "$(file_value common-environment "$stamp")" = "$expected_common_environment" ]; then
                         action=rebuild-cgo
                     fi
                 fi
@@ -317,13 +410,15 @@ case "$operation" in
         ;;
 
     begin)
-        if [ "$#" -ne 2 ]; then
+        if [ "$#" -ne 4 ]; then
             usage
             exit 2
         fi
         root=$1
-        variant=$2
-        validate_variant "$variant"
+        accelerator=$2
+        optimization=$3
+        simsimd=$4
+        validate_build_key "$accelerator" "$optimization" "$simsimd"
         host_platform
         stamp="$root/cgo/.mo-native-provenance"
         pending="$stamp.pending"
@@ -334,7 +429,8 @@ case "$operation" in
         }
 
         if [ "$marker_reusable" = yes ]; then
-            current=$(emit_provenance "$root" "$goos" "$goarch" "$variant")
+            current=$(emit_provenance "$root" "$goos" "$goarch" \
+                "$accelerator" "$optimization" "$simsimd")
             if [ "$current" != "$marker_provenance" ] ||
                [ -n "$(git -C "$root" status --porcelain \
                     --untracked-files=all -- $native_paths)" ]; then
@@ -375,7 +471,7 @@ case "$operation" in
                         exit 1
                     fi
                 done
-                if [ "${variant%%-*}" = gpu ]; then
+                if [ "$accelerator" = gpu ]; then
                     leftover_gpu_object=$(find "$root/cgo/cuda" "$root/cgo/cuvs" \
                         -type f -name '*.o' -print -quit 2>/dev/null || true)
                     if [ -n "$leftover_gpu_object" ]; then
@@ -396,13 +492,15 @@ case "$operation" in
         ;;
 
     record)
-        if [ "$#" -ne 2 ]; then
+        if [ "$#" -ne 4 ]; then
             usage
             exit 2
         fi
         root=$1
-        variant=$2
-        validate_variant "$variant"
+        accelerator=$2
+        optimization=$3
+        simsimd=$4
+        validate_build_key "$accelerator" "$optimization" "$simsimd"
         host_platform
         stamp="$root/cgo/.mo-native-provenance"
         building="$stamp.building"
@@ -436,7 +534,8 @@ case "$operation" in
             exit 0
         fi
 
-        current=$(emit_provenance "$root" "$goos" "$goarch" "$variant")
+        current=$(emit_provenance "$root" "$goos" "$goarch" \
+            "$accelerator" "$optimization" "$simsimd")
         if [ "$current" != "$marker_provenance" ] ||
            [ -n "$(git -C "$root" status --porcelain \
                 --untracked-files=all -- $native_paths)" ]; then
@@ -445,12 +544,14 @@ case "$operation" in
             exit 1
         fi
 
-        # prepare already proved the exact artifact hashes for a reuse
-        # generation. The intervening thirdparty and CGo makes must be no-ops;
-        # reject any ordinary output change and retain the existing stamp
-        # instead of reading the same large libraries two more times.
+        # prepare proved the exact artifact hashes for a reuse generation. The
+        # intervening thirdparty and CGo makes must be no-ops. Recheck contents
+        # at commit time as well: timestamp freshness alone misses replacements
+        # made within one filesystem clock tick or with a restored mtime.
         if [ "$marker_action" = reuse ]; then
             if ! stamp_matches "$stamp" "$marker_provenance" ||
+               ! libmo_matches_stamp "$stamp" "$root/cgo/$libmo_name" ||
+               ! thirdparty_matches_stamp "$stamp" "$root" ||
                [ "$root/cgo/$libmo_name" -nt "$stamp" ]; then
                 echo "reusable native artifacts changed while the build was running" >&2
                 exit 1
@@ -473,7 +574,7 @@ case "$operation" in
         ;;
 
     verify)
-        if [ "$#" -ne 5 ]; then
+        if [ "$#" -ne 7 ]; then
             usage
             exit 2
         fi
@@ -481,8 +582,10 @@ case "$operation" in
         libmo=$2
         provenance_goos=$3
         provenance_goarch=$4
-        variant=$5
-        validate_variant "$variant"
+        accelerator=$5
+        optimization=$6
+        simsimd=$7
+        validate_build_key "$accelerator" "$optimization" "$simsimd"
         stamp="$root/cgo/.mo-native-provenance"
         pending="$stamp.pending"
         building="$stamp.building"
@@ -505,9 +608,10 @@ case "$operation" in
             exit 1
         fi
 
-        expected=$(emit_provenance "$root" "$provenance_goos" "$provenance_goarch" "$variant")
+        expected=$(emit_provenance "$root" "$provenance_goos" \
+            "$provenance_goarch" "$accelerator" "$optimization" "$simsimd")
         if ! stamp_matches "$stamp" "$expected"; then
-            echo "native artifact provenance does not match source, platform, or build variant" >&2
+            echo "native artifact provenance does not match source, platform, or build key" >&2
             exit 1
         fi
         if [ ! -f "$libmo" ] ||

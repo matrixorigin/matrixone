@@ -1,0 +1,261 @@
+#!/bin/sh
+
+# Copyright 2021 - 2026 Matrix Origin
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#      http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# Deterministic contract tests for the top-level native Make DAG, GPU debug
+# propagation, and thirdparty-library publication. No compiler or CUDA toolkit
+# is required.
+
+set -eu
+
+script_dir=$(CDPATH= cd -P "$(dirname "$0")" && pwd)
+repo_root=$(CDPATH= cd -P "$script_dir/../../../.." && pwd)
+stage="$repo_root/cgo/mo-stage-native-libs"
+work=$(mktemp -d)
+trap 'rm -rf "$work"' EXIT
+source_dir="$work/source"
+destination_dir="$work/destination"
+mkdir -p "$source_dir" "$destination_dir" "$work/bin"
+
+failures=0
+
+pass() {
+    printf 'ok   %s\n' "$1"
+}
+
+fail() {
+    printf 'FAIL %s\n' "$1"
+    failures=$((failures + 1))
+}
+
+expect_failure() {
+    description=$1
+    shift
+    set +e
+    "$@" >"$work/failure.out" 2>&1
+    status=$?
+    set -e
+    if [ "$status" -ne 0 ]; then
+        pass "$description"
+    else
+        fail "$description"
+    fi
+}
+
+no_stage_temporary() {
+    [ -z "$(find "$destination_dir" -name '*.tmp.*' -print -quit)" ]
+}
+
+printf 'first generation\n' >"$source_dir/libnative.a"
+ln -s libnative.a "$source_dir/libnative-current.a"
+"$stage" "$source_dir" "$destination_dir"
+if cmp -s "$source_dir/libnative.a" "$destination_dir/libnative.a" &&
+   [ "$(readlink "$destination_dir/libnative-current.a")" = libnative.a ]; then
+    pass "files and relative symlinks are staged without changing link meaning"
+else
+    fail "files and relative symlinks are staged without changing link meaning"
+fi
+
+# An unchanged second pass must perform no copy. This is the hot incremental
+# path and avoids relinking binaries merely because make was invoked again.
+cat >"$work/bin/cp" <<'EOF'
+#!/bin/sh
+echo "unexpected copy of an unchanged native library" >&2
+exit 91
+EOF
+chmod +x "$work/bin/cp"
+if PATH="$work/bin:$PATH" "$stage" "$source_dir" "$destination_dir"; then
+    pass "unchanged libraries stay on the zero-copy path"
+else
+    fail "unchanged libraries stay on the zero-copy path"
+fi
+
+# A partial copy must not replace the last complete destination, and its temp
+# file must be reclaimed by the EXIT trap.
+printf 'second generation\n' >"$source_dir/libnative.a"
+cat >"$work/bin/cp" <<'EOF'
+#!/bin/sh
+last=
+for argument in "$@"; do last=$argument; done
+printf 'partial generation\n' >"$last"
+exit 17
+EOF
+chmod +x "$work/bin/cp"
+expect_failure "copy failure is reported by the staging owner" \
+    env PATH="$work/bin:$PATH" "$stage" "$source_dir" "$destination_dir"
+if grep -q '^first generation$' "$destination_dir/libnative.a" &&
+   no_stage_temporary; then
+    pass "copy failure preserves the prior generation and recycles temp state"
+else
+    fail "copy failure preserves the prior generation and recycles temp state"
+fi
+
+# The commit rename is the publication linearization point. A failed rename
+# leaves the prior destination intact and the completed temporary unpublished.
+rm -f "$work/bin/cp"
+cat >"$work/bin/mv" <<'EOF'
+#!/bin/sh
+exit 18
+EOF
+chmod +x "$work/bin/mv"
+expect_failure "rename failure is reported by the staging owner" \
+    env PATH="$work/bin:$PATH" "$stage" "$source_dir" "$destination_dir"
+if grep -q '^first generation$' "$destination_dir/libnative.a" &&
+   no_stage_temporary; then
+    pass "rename failure preserves the prior generation and recycles temp state"
+else
+    fail "rename failure preserves the prior generation and recycles temp state"
+fi
+
+# Symlink publication has the same temporary owner and must retain the previous
+# link target when link creation fails.
+rm -f "$work/bin/mv" "$source_dir/libnative-current.a"
+ln -s alternate-native.a "$source_dir/libnative-current.a"
+cat >"$work/bin/ln" <<'EOF'
+#!/bin/sh
+exit 20
+EOF
+chmod +x "$work/bin/ln"
+expect_failure "symlink creation failure is reported by the staging owner" \
+    env PATH="$work/bin:$PATH" "$stage" "$source_dir" "$destination_dir"
+if [ "$(readlink "$destination_dir/libnative-current.a")" = libnative.a ] &&
+   no_stage_temporary; then
+    pass "symlink failure preserves the prior target and recycles temp state"
+else
+    fail "symlink failure preserves the prior target and recycles temp state"
+fi
+rm -f "$work/bin/ln" "$source_dir/libnative-current.a"
+ln -s libnative.a "$source_dir/libnative-current.a"
+
+# Signal cleanup exercises the same owner while a partial file exists.
+cat >"$work/bin/cp" <<'EOF'
+#!/bin/sh
+last=
+for argument in "$@"; do last=$argument; done
+printf 'partial generation\n' >"$last"
+kill -TERM "$PPID"
+exit 19
+EOF
+chmod +x "$work/bin/cp"
+expect_failure "termination during copy is reported by the staging owner" \
+    env PATH="$work/bin:$PATH" "$stage" "$source_dir" "$destination_dir"
+if grep -q '^first generation$' "$destination_dir/libnative.a" &&
+   no_stage_temporary; then
+    pass "signal cleanup preserves the prior generation and recycles temp state"
+else
+    fail "signal cleanup preserves the prior generation and recycles temp state"
+fi
+
+# Leftovers from an older interrupted owner are generation-local garbage and
+# are removed before the corresponding destination is considered.
+rm -f "$work/bin/cp"
+printf 'stale\n' >"$destination_dir/libnative.a.tmp.999999"
+"$stage" "$source_dir" "$destination_dir"
+if grep -q '^second generation$' "$destination_dir/libnative.a" &&
+   no_stage_temporary; then
+    pass "the next owner recycles stale staging temporaries"
+else
+    fail "the next owner recycles stale staging temporaries"
+fi
+
+mkdir "$source_dir/unexpected-directory"
+expect_failure "unsupported directory input fails closed" \
+    "$stage" "$source_dir" "$destination_dir"
+rm -rf "$source_dir/unexpected-directory"
+
+count_thirdparty_owners() {
+    goals=$1
+    output=$2
+    set +e
+    # shellcheck disable=SC2086 # goals intentionally represent make argv.
+    (CDPATH= cd "$repo_root" && make -n -j2 NATIVE_BUILD_JOBS=7 $goals) \
+        >"$output" 2>&1
+    status=$?
+    set -e
+    [ "$status" -eq 0 ] || return 1
+    count=$(grep -c -- '-C thirdparties -j7$' "$output" || true)
+    [ "$count" -eq 1 ]
+}
+
+if count_thirdparty_owners "thirdparties cgo" "$work/release-dag.out"; then
+    pass "parallel release goals have one thirdparty build owner"
+else
+    fail "parallel release goals have one thirdparty build owner"
+fi
+if count_thirdparty_owners "thirdparties debug" "$work/debug-dag.out"; then
+    pass "parallel debug goals have one thirdparty build owner"
+else
+    fail "parallel debug goals have one thirdparty build owner"
+fi
+expect_failure "mixed release/debug roots fail before sharing native objects" \
+    make -C "$repo_root" -n build debug
+
+cpu_release=$(make -C "$repo_root/cgo" -Bn all 2>&1)
+cpu_debug=$(make -C "$repo_root/cgo" -Bn debug 2>&1)
+if printf '%s\n' "$cpu_release" | grep -q -- ' -O3 ' &&
+   ! printf '%s\n' "$cpu_release" | grep -q -- ' -O0 '; then
+    pass "CPU release compilation preserves -O3"
+else
+    fail "CPU release compilation preserves -O3"
+fi
+if printf '%s\n' "$cpu_debug" | grep -q -- ' -O0 ' &&
+   ! printf '%s\n' "$cpu_debug" | grep -q -- ' -O3 '; then
+    pass "CPU debug compilation contains -O0 and no -O3"
+else
+    fail "CPU debug compilation contains -O0 and no -O3"
+fi
+
+set +e
+gpu_debug=$(make -C "$repo_root/cgo" -n MO_CL_CUDA=1 \
+    CONDA_PREFIX="$work/conda" HOST_ARCH=x86_64 TARGET_ARCH=x86_64 \
+    TARGET_OS=linux debug 2>&1)
+gpu_debug_status=$?
+set -e
+if [ "$gpu_debug_status" -eq 0 ] &&
+   printf '%s\n' "$gpu_debug" | grep -q -- '-C cuda dbg=1' &&
+   printf '%s\n' "$gpu_debug" | grep -q -- '-C cuvs debug'; then
+    pass "GPU debug mode reaches both native sub-builds"
+else
+    fail "GPU debug mode reaches both native sub-builds"
+fi
+
+set +e
+cuda_debug=$(make -C "$repo_root/cgo/cuda" -n HOST_ARCH=x86_64 \
+    TARGET_ARCH=x86_64 TARGET_OS=linux dbg=1 cuda.o 2>&1)
+cuda_debug_status=$?
+cuvs_debug=$(make -C "$repo_root/cgo/cuvs" -n \
+    CONDA_PREFIX="$work/conda" HOST_ARCH=x86_64 debug 2>&1)
+cuvs_debug_status=$?
+set -e
+if [ "$cuda_debug_status" -eq 0 ] &&
+   printf '%s\n' "$cuda_debug" | grep -q -- ' -O0 ' &&
+   ! printf '%s\n' "$cuda_debug" | grep -q -- ' -O3 '; then
+    pass "CUDA debug compilation contains -O0 and no -O3"
+else
+    fail "CUDA debug compilation contains -O0 and no -O3"
+fi
+if [ "$cuvs_debug_status" -eq 0 ] &&
+   printf '%s\n' "$cuvs_debug" | grep -q -- ' -O0 ' &&
+   ! printf '%s\n' "$cuvs_debug" | grep -q -- ' -O3 '; then
+    pass "cuVS debug compilation contains -O0 and no -O3"
+else
+    fail "cuVS debug compilation contains -O0 and no -O3"
+fi
+
+if [ "$failures" -ne 0 ]; then
+    printf '\n%d check(s) failed\n' "$failures"
+    exit 1
+fi
+printf '\nall checks passed\n'

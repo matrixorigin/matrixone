@@ -87,17 +87,17 @@ worktree lacks `cgo/libmo.dylib` on macOS or `cgo/libmo.so` on Linux (or lacks
 `thirdparties/install`), the wrapper automatically considers the primary
 worktree's platform-matched artifacts. It reuses them only when `Makefile`,
 `cgo/`, and `thirdparties/` are clean and identical at both revisions and the
-primary artifact carries a matching source/platform/build-variant provenance
+primary artifact carries a matching source/platform/build-key provenance
 stamp written by the top-level `make cgo` target. The target owns a
 `prepare -> clean when required -> begin -> build -> record` protocol: CGo
 source/header and CPU/GPU or release/debug changes clean all CGo outputs;
-Makefile, thirdparty, platform, missing-stamp, or corrupt-stamp changes clean
-both thirdparties and CGo. An interrupted generation stays non-reusable and is
-cleaned again on the next build. This prevents an incremental no-op from simply
-relabeling an old library as current. Missing, stale, CPU/GPU-mismatched, or
-post-stamp-modified artifacts are rejected with a local rebuild request. The
-first top-level build after this guard is introduced intentionally performs one
-full native rebuild before reuse is possible.
+SIMSIMD, Makefile, thirdparty, platform, missing-stamp, or corrupt-stamp changes
+clean both thirdparties and CGo. An interrupted generation stays non-reusable
+and is cleaned again on the next build. This prevents an incremental no-op from
+simply relabeling an old library as current. Missing, stale, CPU/GPU/SIMSIMD-
+mismatched, or post-stamp-modified artifacts are rejected with a local rebuild
+request. The first top-level build after this guard is introduced intentionally
+performs one full native rebuild before reuse is possible.
 
 Cross-worktree reuse is best-effort, never required for correctness. Git
 layouts that do not expose a real primary checkout (for example, a linked
@@ -117,6 +117,7 @@ setup residue in the review worktree. Validate changes to this protocol with:
 
 ```bash
 .agents/skills/mo-dev/scripts/mo-native-provenance-test
+.agents/skills/mo-dev/scripts/mo-native-build-contract-test
 .agents/skills/mo-dev/scripts/mo-cgo-test-worktree-artifacts-test
 ```
 
@@ -125,9 +126,12 @@ It verifies host/target and CGo prerequisites, enforces the repository's
 chooses the supported OS library/loader form, and gives temporary test
 executables absolute rpaths. It is a local CPU-test entry point; GPU and static
 cross-builds have different toolchain contracts and remain explicit workflows.
-`GOFLAGS`, `GOEXPERIMENT`, `CC`, and `CXX` remain caller-owned inputs; record
-them when attribution or reproducibility depends on them, and ensure native
-artifacts were built from the same source generation.
+`GOFLAGS` and `GOEXPERIMENT` remain caller-owned Go inputs. Native provenance
+also hashes supported compiler/SDK/flag override values (including `CC`,
+`CXX`, and GPU environment selectors), so a custom profile cannot alias the
+default profile. It does not fingerprint compiler or SDK installation bytes;
+record exact tool versions separately when attribution or reproducibility
+depends on them.
 
 ### Why test rpaths differ from packaged binaries
 

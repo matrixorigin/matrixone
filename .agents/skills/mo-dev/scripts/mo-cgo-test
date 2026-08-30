@@ -89,12 +89,17 @@ native_inputs_match() {
 native_artifact_provenance_matches() {
     candidate_root=$1
     candidate_lib=$2
-    build_variant=cpu
+    accelerator=cpu
     if [ "${MO_CL_CUDA:-}" = "1" ]; then
-        build_variant=gpu
+        accelerator=gpu
+    fi
+    simsimd=0
+    if [ "${MO_CL_SIMSIMD:-}" = "1" ]; then
+        simsimd=1
     fi
     "$source_cgo_dir/mo-native-provenance" verify \
-        "$candidate_root" "$candidate_lib" "$goos" "$goarch" "$build_variant"
+        "$candidate_root" "$candidate_lib" "$goos" "$goarch" \
+        "$accelerator" release "$simsimd"
 }
 
 artifact_root="$repo_root"

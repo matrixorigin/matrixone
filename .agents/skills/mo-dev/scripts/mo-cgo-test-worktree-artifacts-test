@@ -100,7 +100,7 @@ failures=0
 record_provenance() {
     platform=$1
     action=$(env FAKE_GOOS="$platform" PATH="$work/bin:$PATH" \
-        "$primary/cgo/mo-native-provenance" prepare "$primary" cpu)
+        "$primary/cgo/mo-native-provenance" prepare "$primary" cpu release 0)
     case "$action" in
         rebuild-all)
             rm -rf "$primary/thirdparties/install"
@@ -113,7 +113,7 @@ record_provenance() {
         *) printf 'unexpected build action: %s\n' "$action" >&2; exit 1 ;;
     esac
     env FAKE_GOOS="$platform" PATH="$work/bin:$PATH" \
-        "$primary/cgo/mo-native-provenance" begin "$primary" cpu
+        "$primary/cgo/mo-native-provenance" begin "$primary" cpu release 0
     mkdir -p "$primary/thirdparties/install/include" \
         "$primary/thirdparties/install/lib"
     printf 'header\n' > "$primary/thirdparties/install/include/native.h"
@@ -121,7 +121,7 @@ record_provenance() {
     printf '%s library\n' "$platform" > "$primary/cgo/libmo.so"
     printf '%s library\n' "$platform" > "$primary/cgo/libmo.dylib"
     env FAKE_GOOS="$platform" PATH="$work/bin:$PATH" \
-        "$primary/cgo/mo-native-provenance" record "$primary" cpu
+        "$primary/cgo/mo-native-provenance" record "$primary" cpu release 0
 }
 
 set +e
@@ -185,10 +185,28 @@ if [ "$variant_status" -eq 0 ]; then
     failures=$((failures + 1))
 else
     case "$variant_output" in
-        *"primary-worktree reuse rejected: native artifact provenance does not match source, platform, or build variant"*)
+        *"primary-worktree reuse rejected: native artifact provenance does not match source, platform, or build key"*)
             echo "ok   CPU/GPU artifact variant mismatch is rejected" ;;
         *)
             printf 'FAIL build-variant mismatch had the wrong error: %s\n' "$variant_output"
+            failures=$((failures + 1)) ;;
+    esac
+fi
+
+set +e
+simsimd_output=$(env FAKE_GOOS=linux MO_CL_SIMSIMD=1 PATH="$work/bin:$PATH" \
+    sh "$linked_wrapper" ./pkg/x/ 2>&1)
+simsimd_status=$?
+set -e
+if [ "$simsimd_status" -eq 0 ]; then
+    echo "FAIL a non-SIMSIMD primary artifact was reused for a SIMSIMD test"
+    failures=$((failures + 1))
+else
+    case "$simsimd_output" in
+        *"primary-worktree reuse rejected: native artifact provenance does not match source, platform, or build key"*)
+            echo "ok   SIMSIMD artifact-key mismatch is rejected" ;;
+        *)
+            printf 'FAIL SIMSIMD mismatch had the wrong error: %s\n' "$simsimd_output"
             failures=$((failures + 1)) ;;
     esac
 fi

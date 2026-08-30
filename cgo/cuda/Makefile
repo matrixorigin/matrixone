@@ -254,9 +254,12 @@ else ifeq ($(TARGET_ARCH),ppc64le)
     CUDA_INSTALL_TARGET_DIR = targets/ppc64le-linux/
 endif
 
-# Debug build flags
+# Debug build flags. Keep optimization explicit because cuda.o used to add a
+# hard-coded -O3 after the debug flags and produced an optimized "debug" object.
+CUDA_OPT_LEVEL := -O3
 ifeq ($(dbg),1)
       NVCCFLAGS += -g -G
+      CUDA_OPT_LEVEL := -O0
       BUILD_TYPE := debug
 else
       BUILD_TYPE := release
@@ -395,7 +398,7 @@ $(FATBIN_FILE): mocl.cu
 	$(EXEC) $(NVCC) $(INCLUDES) $(ALL_CCFLAGS) $(GENCODE_FLAGS) -o $@ -fatbin $<
 
 cuda.o: cuda.cpp
-	$(EXEC) $(NVCC) $(INCLUDES) -O3 --shared -Xcompiler -fPIC $(ALL_CCFLAGS) $(GENCODE_FLAGS) -o $@ -c $<
+	$(EXEC) $(NVCC) $(INCLUDES) $(CUDA_OPT_LEVEL) --shared -Xcompiler -fPIC $(ALL_CCFLAGS) $(GENCODE_FLAGS) -o $@ -c $<
 
 mytest.o: cuda.cpp $(FATBIN_FILE)
 	$(EXEC) $(NVCC) $(INCLUDES) -DTEST_RUN -g -O0 $(ALL_CCFLAGS) $(GENCODE_FLAGS) -o $@ -c $<
