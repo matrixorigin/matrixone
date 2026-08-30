@@ -69,10 +69,12 @@ var (
 	// Prefix lengths are counted in characters so they match substr even for
 	// multibyte view identifiers. Only a mysqldump executable-comment wrapper
 	// loses its final */.
-	informationSchemaViewDefinitionSQL = "trim(substr(" + informationSchemaViewStatementWithoutTerminatorSQL +
+	// The extraction helpers return VARCHAR, but VIEWS has historically exposed
+	// VIEW_DEFINITION as TEXT. Keep that public metadata type stable.
+	informationSchemaViewDefinitionSQL = "cast(trim(substr(" + informationSchemaViewStatementWithoutTerminatorSQL +
 		", " + informationSchemaViewDefinitionPrefixLengthSQL + " + 1, char_length(" +
 		informationSchemaViewStatementWithoutTerminatorSQL + ") - " + informationSchemaViewDefinitionPrefixLengthSQL + " - " +
-		"2 * if(left(" + informationSchemaViewStatementWithoutTerminatorSQL + ", 3) = '/*!', 1, 0)))"
+		"2 * if(left(" + informationSchemaViewStatementWithoutTerminatorSQL + ", 3) = '/*!', 1, 0))) as text)"
 )
 
 // `mysql` database system tables

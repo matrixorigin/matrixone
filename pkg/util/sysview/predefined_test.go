@@ -455,10 +455,10 @@ func TestInformationSchemaViewsMetadata(t *testing.T) {
 	assert.Contains(t, InformationSchemaViewsDDL, "2 * if(left(trim(regexp_replace(")
 	// System-view definitions are replayed by database clone. Use the same IF
 	// form as other persisted information_schema views for the wrapper-only
-	// suffix adjustment, without type wrappers or unsupported SIGN/LEAST calls.
-	assert.Contains(t, InformationSchemaViewsDDL, "trim(substr(")
+	// suffix adjustment, and preserve the public TEXT metadata type.
+	assert.Contains(t, InformationSchemaViewsDDL, "cast(trim(substr(")
 	assert.NotContains(t, InformationSchemaViewsDDL, "concat('', trim(substr(")
-	assert.NotContains(t, InformationSchemaViewsDDL, "cast(trim(substr(")
+	assert.Contains(t, InformationSchemaViewsDDL, ")) as text) AS `VIEW_DEFINITION`")
 	assert.NotContains(t, InformationSchemaViewsDDL, "case when")
 	assert.NotContains(t, InformationSchemaViewsDDL, "sign(")
 	assert.NotContains(t, InformationSchemaViewsDDL, "least(")
