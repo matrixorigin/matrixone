@@ -1325,11 +1325,27 @@ func (tcc *TxnCompilerContext) GetSubscriptionMeta(dbName string, snapshot *plan
 // deleted publications out of account-wide information_schema metadata.
 func (tcc *TxnCompilerContext) GetSubscriptionMetas(snapshot *plan2.Snapshot) ([]*plan.SubscriptionMeta, error) {
 	tempCtx := tcc.execCtx.reqCtx
-	if plan2.IsSnapshotValid(snapshot) && snapshot.Tenant != nil {
-		tempCtx = context.WithValue(tempCtx, defines.TenantIDKey{}, snapshot.Tenant.TenantID)
+	txn := tcc.GetTxnHandler().GetTxn()
+	var bh BackgroundExec
+	if plan2.IsSnapshotValid(snapshot) && snapshot.TS.Less(txn.Txn().SnapshotTS) {
+		txn = txn.CloneSnapshotOp(*snapshot.TS)
+		if snapshot.Tenant != nil {
+			tempCtx = context.WithValue(tempCtx, defines.TenantIDKey{}, snapshot.Tenant.TenantID)
+		}
+
+		// The cached executor intentionally follows the session transaction. Use a
+		// short-lived shared executor for historical metadata so the mo_subs branch
+		// set and every catalog branch are read at the same snapshot.
+		ses := tcc.execCtx.ses
+		bh = ses.InitBackExec(txn, ses.GetDatabaseName(), fakeDataSetFetcher2)
+		if back, ok := bh.(*backExec); ok {
+			back.backSes.ReplaceDerivedStmt(true)
+		}
+		defer bh.Close()
+	} else {
+		bh = tcc.getOrCreateBackExec(tempCtx)
 	}
 
-	bh := tcc.getOrCreateBackExec(tempCtx)
 	bh.ClearExecResultSet()
 	subInfos, err := getSubInfosFromSub(tempCtx, bh, "")
 	if err != nil {

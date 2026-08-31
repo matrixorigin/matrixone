@@ -2259,7 +2259,8 @@ func shouldRebuildPreparePlan(schemaChanged bool, p *plan.Plan) bool {
 		return schemaChanged
 	}
 	query := p.GetQuery()
-	return query != nil && query.GetHasForeignKeyAction()
+	return query != nil && (query.GetHasForeignKeyAction() ||
+		plan2.PreparedPlanDependsOnSubscriptionMetadata(p))
 }
 
 func createCompile(

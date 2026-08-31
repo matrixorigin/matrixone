@@ -49,6 +49,12 @@ func TestShouldCachePrepareCompileForeignKeyActions(t *testing.T) {
 	require.False(t, shouldRebuildPreparePlan(false, makePlan(plan.Query_INSERT, false)))
 	require.True(t, shouldRebuildPreparePlan(false, makePlan(plan.Query_INSERT, true)))
 	require.True(t, shouldRebuildPreparePlan(true, makePlan(plan.Query_INSERT, false)))
+
+	subscriptionMetadataPlan := makePlan(plan.Query_SELECT, false)
+	subscriptionMetadataPlan.GetQuery().Nodes = []*plan.Node{{
+		OriginViews: []string{"information_schema#statistics"},
+	}}
+	require.True(t, shouldRebuildPreparePlan(false, subscriptionMetadataPlan))
 }
 
 func TestInitExecuteStmtParamRebuildsAcrossForeignKeyChecksTransitions(t *testing.T) {

@@ -21,7 +21,9 @@ drop publication if exists idx_meta_pub_b;
 drop database if exists idx_meta_src;
 drop database if exists idx_meta_src_b;
 drop account if exists idx_meta_sub;
+drop account if exists idx_meta_other;
 create account idx_meta_sub ADMIN_NAME 'admin' IDENTIFIED BY '111';
+create account idx_meta_other ADMIN_NAME 'admin' IDENTIFIED BY '111';
 create database idx_meta_src;
 create table idx_meta_src.visible_t(
     id int primary key,
@@ -112,8 +114,49 @@ set @jdbc_schema = 'idx_meta_local';
 set @jdbc_table = 'local_t';
 execute jdbc_primary_keys using @jdbc_schema, @jdbc_table;
 deallocate prepare jdbc_primary_keys;
-drop database idx_meta_sub_db;
+
+-- Historical STATISTICS must enumerate subscriptions from the requested
+-- snapshot, not from the current session transaction.
+drop snapshot if exists idx_meta_with_sub_b;
+create snapshot idx_meta_with_sub_b for account idx_meta_sub;
 drop database idx_meta_sub_b;
+select count(*) as current_dropped_subscription_rows
+from information_schema.statistics
+where table_schema = 'idx_meta_sub_b' and table_name = 'second_t';
+select count(*) as historical_subscription_rows
+from information_schema.statistics {snapshot = 'idx_meta_with_sub_b'}
+where table_schema = 'idx_meta_sub_b' and table_name = 'second_t';
+drop snapshot if exists idx_meta_without_sub_b;
+create snapshot idx_meta_without_sub_b for account idx_meta_sub;
+
+-- A prepared STATISTICS plan must refresh its complete subscription set after
+-- create, withdraw, reauthorize, and drop transitions.
+set @membership_schema = 'idx_meta_sub_b';
+set @membership_table = 'second_t';
+prepare subscription_membership_stmt from
+    'select count(*) as prepared_subscription_rows
+     from information_schema.statistics
+     where table_schema = ? and table_name = ?';
+execute subscription_membership_stmt using @membership_schema, @membership_table;
+create database idx_meta_sub_b from sys publication idx_meta_pub_b;
+execute subscription_membership_stmt using @membership_schema, @membership_table;
+select count(*) as historical_absent_subscription_rows
+from information_schema.statistics {snapshot = 'idx_meta_without_sub_b'}
+where table_schema = 'idx_meta_sub_b' and table_name = 'second_t';
+-- @session
+alter publication idx_meta_pub_b account idx_meta_other;
+-- @session:id=2&user=idx_meta_sub:admin&password=111
+execute subscription_membership_stmt using @membership_schema, @membership_table;
+-- @session
+alter publication idx_meta_pub_b account idx_meta_sub;
+-- @session:id=2&user=idx_meta_sub:admin&password=111
+execute subscription_membership_stmt using @membership_schema, @membership_table;
+drop database idx_meta_sub_b;
+execute subscription_membership_stmt using @membership_schema, @membership_table;
+deallocate prepare subscription_membership_stmt;
+drop snapshot idx_meta_with_sub_b;
+drop snapshot idx_meta_without_sub_b;
+drop database idx_meta_sub_db;
 drop database idx_meta_local;
 -- @session
 
@@ -122,3 +165,4 @@ drop publication idx_meta_pub_b;
 drop database idx_meta_src;
 drop database idx_meta_src_b;
 drop account idx_meta_sub;
+drop account idx_meta_other;

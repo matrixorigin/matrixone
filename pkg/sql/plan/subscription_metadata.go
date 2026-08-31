@@ -20,11 +20,39 @@ import (
 	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/objectkey"
 	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 )
 
 const informationSchemaStatistics = "statistics"
+
+// PreparedPlanDependsOnSubscriptionMetadata reports whether a prepared plan
+// expands INFORMATION_SCHEMA.STATISTICS. The expansion captures the complete
+// visible subscription set while the plan is built, so reusing that plan after
+// a subscription is created, dropped, or withdrawn would retain stale UNION
+// branches even though no table schema version changed.
+func PreparedPlanDependsOnSubscriptionMetadata(p *Plan) bool {
+	if p == nil {
+		return false
+	}
+	query := p.GetQuery()
+	if query == nil {
+		return false
+	}
+	statisticsView := objectkey.Encode(INFORMATION_SCHEMA, informationSchemaStatistics)
+	for _, node := range query.GetNodes() {
+		if node == nil {
+			continue
+		}
+		for _, originView := range node.GetOriginViews() {
+			if strings.EqualFold(originView, statisticsView) {
+				return true
+			}
+		}
+	}
+	return false
+}
 
 // bindSubscriptionStatisticsView exposes one relational source containing the
 // subscriber's local catalog and every subscription visible to that account.

@@ -339,6 +339,7 @@ func TestPreparedSubscriptionMetadataPreservesAllSources(t *testing.T) {
 	defer statements[0].Free()
 	queryPlan, err := BuildPlan(ctx, statements[0], true)
 	require.NoError(t, err)
+	require.True(t, PreparedPlanDependsOnSubscriptionMetadata(queryPlan))
 	requireStatisticsPublisherScopes(t, queryPlan.GetQuery(), map[string]int32{
 		"sub_db": 0,
 		"sub_b":  0,

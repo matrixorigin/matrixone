@@ -13,7 +13,9 @@ drop publication if exists idx_meta_pub_b;
 drop database if exists idx_meta_src;
 drop database if exists idx_meta_src_b;
 drop account if exists idx_meta_sub;
+drop account if exists idx_meta_other;
 create account idx_meta_sub ADMIN_NAME 'admin' IDENTIFIED BY '111';
+create account idx_meta_other ADMIN_NAME 'admin' IDENTIFIED BY '111';
 create database idx_meta_src;
 create table idx_meta_src.visible_t(
 id int primary key,
@@ -140,11 +142,58 @@ execute jdbc_primary_keys using @jdbc_schema, @jdbc_table;
 ➤ table_cat[12,5000,0]  ¦  table_schem[12,1,0]  ¦  table_name[12,5000,0]  ¦  column_name[12,256,0]  ¦  key_seq[4,32,0]  ¦  pk_name[12,7,0]  𝄀
 idx_meta_local  ¦  null  ¦  local_t  ¦  id  ¦  1  ¦  PRIMARY
 deallocate prepare jdbc_primary_keys;
-drop database idx_meta_sub_db;
+drop snapshot if exists idx_meta_with_sub_b;
+create snapshot idx_meta_with_sub_b for account idx_meta_sub;
 drop database idx_meta_sub_b;
+select count(*) as current_dropped_subscription_rows
+from information_schema.statistics
+where table_schema = 'idx_meta_sub_b' and table_name = 'second_t';
+➤ current_dropped_subscription_rows[-5,64,0]  𝄀
+0
+select count(*) as historical_subscription_rows
+from information_schema.statistics {snapshot = 'idx_meta_with_sub_b'}
+where table_schema = 'idx_meta_sub_b' and table_name = 'second_t';
+➤ historical_subscription_rows[-5,64,0]  𝄀
+1
+drop snapshot if exists idx_meta_without_sub_b;
+create snapshot idx_meta_without_sub_b for account idx_meta_sub;
+set @membership_schema = 'idx_meta_sub_b';
+set @membership_table = 'second_t';
+prepare subscription_membership_stmt from
+'select count(*) as prepared_subscription_rows
+from information_schema.statistics
+where table_schema = ? and table_name = ?';
+execute subscription_membership_stmt using @membership_schema, @membership_table;
+➤ prepared_subscription_rows[-5,64,0]  𝄀
+0
+create database idx_meta_sub_b from sys publication idx_meta_pub_b;
+execute subscription_membership_stmt using @membership_schema, @membership_table;
+➤ prepared_subscription_rows[-5,64,0]  𝄀
+1
+select count(*) as historical_absent_subscription_rows
+from information_schema.statistics {snapshot = 'idx_meta_without_sub_b'}
+where table_schema = 'idx_meta_sub_b' and table_name = 'second_t';
+➤ historical_absent_subscription_rows[-5,64,0]  𝄀
+0
+alter publication idx_meta_pub_b account idx_meta_other;
+execute subscription_membership_stmt using @membership_schema, @membership_table;
+internal error: the account idx_meta_sub is not allowed to subscribe the publication idx_meta_pub_b
+alter publication idx_meta_pub_b account idx_meta_sub;
+execute subscription_membership_stmt using @membership_schema, @membership_table;
+➤ prepared_subscription_rows[-5,64,0]  𝄀
+1
+drop database idx_meta_sub_b;
+execute subscription_membership_stmt using @membership_schema, @membership_table;
+➤ prepared_subscription_rows[-5,64,0]  𝄀
+0
+deallocate prepare subscription_membership_stmt;
+drop snapshot idx_meta_with_sub_b;
+drop snapshot idx_meta_without_sub_b;
+drop database idx_meta_sub_db;
 drop database idx_meta_local;
 drop publication idx_meta_pub;
 drop publication idx_meta_pub_b;
 drop database idx_meta_src;
 drop database idx_meta_src_b;
 drop account idx_meta_sub;
+drop account idx_meta_other;
