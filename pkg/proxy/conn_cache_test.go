@@ -18,6 +18,7 @@ import (
 	"context"
 	"crypto/sha1"
 	"fmt"
+	"io"
 	"math/rand"
 	"net"
 	"sync"
@@ -27,6 +28,7 @@ import (
 	"github.com/lni/goutils/leaktest"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
+	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/frontend"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	query "github.com/matrixorigin/matrixone/pkg/pb/query"
@@ -676,6 +678,10 @@ func TestPreparedShortConnectionQuitPublishesReusableBackend(t *testing.T) {
 		tun.trackClientRequest(prepare)
 		tun.trackServerResponse(makePrepareOKPacket(0, 0))
 		require.False(t, tun.hasInFlightClientRequest())
+		closeStmt := makeStmtCommandPacket(frontend.COM_STMT_CLOSE, 0)
+		closeCommit := tun.trackClientRequest(closeStmt)
+		tun.commitClientRequest(closeCommit)
+		require.True(t, tun.hasUnsafeClientState())
 
 		clientSide, backendSide := net.Pipe()
 		defer clientSide.Close()
@@ -719,5 +725,283 @@ func TestPreparedShortConnectionQuitPublishesReusableBackend(t *testing.T) {
 		ok, err = reused.ExecStmt(internalStmt{cmdType: cmdQuery, s: "select 1"}, nil)
 		require.NoError(t, err)
 		require.True(t, ok)
+	})
+}
+
+func readProxyTestPacket(r io.Reader) ([]byte, error) {
+	header := make([]byte, mysqlHeadLen)
+	if _, err := io.ReadFull(r, header); err != nil {
+		return nil, err
+	}
+	length := int(header[0]) | int(header[1])<<8 | int(header[2])<<16
+	payload := make([]byte, length)
+	if _, err := io.ReadFull(r, payload); err != nil {
+		return nil, err
+	}
+	return append(header, payload...), nil
+}
+
+func newPipeServerConnForCacheTest(t *testing.T) (*serverConn, net.Conn, func()) {
+	local, remote := net.Pipe()
+	frontend.InitServerLevelVars("cn1")
+	fp := config.FrontendParameters{}
+	fp.SetDefaultValues()
+	pu := config.NewParameterUnit(&fp, nil, nil, nil)
+	allocator := frontend.NewLeakCheckAllocator()
+	ios, err := frontend.NewIOSessionWithOptions(
+		local,
+		pu,
+		"cn1",
+		frontend.WithIOSessionBufferSize(proxyIOSessionBufferSize),
+		frontend.WithIOSessionAllowedPacketSize(proxyBackendPacketLimit),
+		frontend.WithIOSessionAllocator(allocator),
+	)
+	require.NoError(t, err)
+	sc := &serverConn{
+		cnServer:   &CNServer{connID: 27, uuid: "cn1"},
+		conn:       local,
+		connID:     27,
+		createTime: time.Now(),
+		mysqlProto: frontend.NewMysqlClientProtocol(
+			"cn1", 27, ios, 0, &fp),
+	}
+	return sc, remote, func() {
+		_ = sc.Close()
+		_ = remote.Close()
+		require.True(t, allocator.CheckBalance())
+	}
+}
+
+func TestPreparedShortConnectionQuitProductionPath(t *testing.T) {
+	cn := metadata.CNService{ServiceID: "s1", SQLAddress: "pipe"}
+	resetEntered := make(chan struct{})
+	var resetOnce sync.Once
+	runTestWithQueryServiceResetHandler(t, cn, func(ctx context.Context, req *query.Request, resp *query.Response, _ *morpc.Buffer) error {
+		if req.ResetSessionRequest == nil {
+			return fmt.Errorf("missing ResetSession request")
+		}
+		if _, ok := ctx.Deadline(); !ok {
+			return fmt.Errorf("ResetSession request is missing its production deadline")
+		}
+		resetOnce.Do(func() { close(resetEntered) })
+		resp.ResetSessionResponse = &query.ResetSessionResponse{Success: true}
+		return nil
+	}, func(cc *clientConn, _ string) {
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+
+		clientProxy, client := net.Pipe()
+		defer client.Close()
+		cc.conn.UseConn(clientProxy)
+		cc.mysqlProto.UseConn(clientProxy)
+
+		sc, backend := func() (*serverConn, net.Conn) {
+			conn, peer, cleanup := newPipeServerConnForCacheTest(t)
+			t.Cleanup(cleanup)
+			return conn, peer
+		}()
+		defer backend.Close()
+
+		commands := make(chan byte, 512)
+		closeSeen := make(chan struct{})
+		pingSeen := make(chan struct{})
+		var closeOnce, pingOnce sync.Once
+		backendDone := make(chan error, 1)
+		go func() {
+			receiver := newMySQLConn("cache-test-backend", backend, 0, nil, nil, false, 0)
+			for {
+				packet, err := receiver.receive()
+				if err != nil {
+					backendDone <- err
+					return
+				}
+				if len(packet) <= mysqlHeadLen {
+					backendDone <- fmt.Errorf("backend received an empty command")
+					return
+				}
+				cmd := packet[4]
+				commands <- cmd
+				switch frontend.CommandType(cmd) {
+				case frontend.COM_STMT_CLOSE:
+					closeOnce.Do(func() { close(closeSeen) })
+				case frontend.COM_STMT_PREPARE:
+					if err := writeAll(backend, makePrepareOKPacket(0, 0)); err != nil {
+						backendDone <- err
+						return
+					}
+				case frontend.CommandType(cmdPing):
+					if err := writeAll(backend, makeOKPacket(8)); err != nil {
+						backendDone <- err
+						return
+					}
+					pingOnce.Do(func() { close(pingSeen) })
+				default:
+					if err := writeAll(backend, makeOKPacket(8)); err != nil {
+						backendDone <- err
+						return
+					}
+				}
+			}
+		}()
+
+		responses := make(chan []byte, 8)
+		clientReaderDone := make(chan error, 1)
+		go func() {
+			for {
+				packet, err := readProxyTestPacket(client)
+				if err != nil {
+					clientReaderDone <- err
+					return
+				}
+				responses <- packet
+			}
+		}()
+
+		cache := newConnCache(
+			ctx,
+			"",
+			runtime.DefaultRuntime().Logger(),
+			withMOCluster(cc.moCluster),
+			withQueryClient(cc.queryClient),
+			withAuthConstructor(nil),
+		)
+		defer cache.Close()
+		cc.connCache = cache
+		cc.clientInfo.hash = LabelHash("tenant-a")
+
+		tun := newTunnel(ctx, runtime.DefaultRuntime().Logger(), newCounterSet(), withConnCacheEnabled(true))
+		defer tun.Close()
+		cc.tun = tun
+		cc.sc = sc
+		require.True(t, tun.connCacheEnabled)
+		require.NoError(t, tun.run(cc, sc))
+
+		eventDone := make(chan error, 1)
+		quitHandled := make(chan struct{})
+		go func() {
+			for {
+				select {
+				case event, ok := <-tun.reqC:
+					if !ok {
+						eventDone <- nil
+						return
+					}
+					if err := cc.HandleEvent(ctx, event, tun.respC); err != nil {
+						eventDone <- err
+						return
+					}
+					if _, ok := event.(*quitEvent); ok {
+						close(quitHandled)
+					}
+				case <-ctx.Done():
+					eventDone <- ctx.Err()
+					return
+				}
+			}
+		}()
+
+		writeClient := func(packet []byte) {
+			t.Helper()
+			_, err := client.Write(packet)
+			require.NoError(t, err)
+		}
+		waitResponse := func() []byte {
+			t.Helper()
+			select {
+			case packet := <-responses:
+				return packet
+			case <-time.After(time.Second):
+				require.FailNow(t, "timed out waiting for backend response")
+				return nil
+			}
+		}
+
+		prepare := makeSimplePacket("select 1")
+		prepare[4] = byte(frontend.COM_STMT_PREPARE)
+		writeClient(prepare)
+		require.Equal(t, byte(1), waitResponse()[3])
+		writeClient(makeStmtCommandPacket(frontend.COM_STMT_EXECUTE, 1))
+		require.True(t, isOKPacket(waitResponse()))
+		writeClient(makeStmtCommandPacket(frontend.COM_STMT_CLOSE, 1))
+		select {
+		case <-closeSeen:
+		case <-time.After(time.Second):
+			t.Fatal("COM_STMT_CLOSE was not forwarded to the backend")
+		}
+		writeClient(makeQuitPacket())
+		select {
+		case <-quitHandled:
+		case <-time.After(time.Second):
+			t.Fatal("quit event handler did not finish")
+		}
+		select {
+		case <-pingSeen:
+		case <-time.After(time.Second):
+			t.Fatal("COM_PING fence was not sent after COM_STMT_CLOSE")
+		}
+		select {
+		case <-resetEntered:
+		case <-time.After(time.Second):
+			t.Fatal("cache publication did not call ResetSession")
+		}
+		require.True(t, cc.isConnCached())
+		require.Equal(t, 1, cache.Count())
+
+		reused := cache.Pop("tenant-a", 99, nil, nil, clientInfo{})
+		require.NotNil(t, reused)
+		require.Same(t, sc, reused)
+		ok, err := reused.ExecStmt(internalStmt{cmdType: cmdStmtPrepare, s: "select 1"}, nil)
+		require.NoError(t, err)
+		require.True(t, ok)
+		ok, err = reused.ExecStmt(internalStmt{cmdType: MySQLCmd(frontend.COM_STMT_EXECUTE)}, nil)
+		require.NoError(t, err)
+		require.True(t, ok)
+
+		// A short-connection workload must reuse the same backend rather than
+		// creating a fresh Proxy-to-CN socket for every client generation.
+		for i := 0; i < 100; i++ {
+			require.True(t, cache.Push("tenant-a", reused))
+			reused = cache.Pop("tenant-a", uint32(100+i), nil, nil, clientInfo{})
+			require.Same(t, sc, reused)
+			require.Equal(t, 0, cache.Count())
+		}
+
+		var ordered []byte
+		for {
+			select {
+			case cmd := <-commands:
+				ordered = append(ordered, cmd)
+			default:
+				goto done
+			}
+		}
+	done:
+		require.GreaterOrEqual(t, len(ordered), 5)
+		require.Equal(t, byte(frontend.COM_STMT_PREPARE), ordered[0])
+		require.Equal(t, byte(frontend.COM_STMT_EXECUTE), ordered[1])
+		require.Equal(t, byte(frontend.COM_STMT_CLOSE), ordered[2])
+		require.Equal(t, byte(cmdPing), ordered[3])
+		require.Equal(t, byte(cmdQuery), ordered[4], "cache Pop must reset the connection ID after the fence")
+		_ = client.Close()
+		_ = tun.Close()
+		select {
+		case err := <-eventDone:
+			require.NoError(t, err)
+		case <-time.After(time.Second):
+			t.Fatal("quit event loop did not terminate")
+		}
+		select {
+		case <-clientReaderDone:
+		case <-time.After(time.Second):
+			t.Fatal("client reader did not terminate")
+		}
+		require.NoError(t, cache.Close())
+		require.NoError(t, reused.Close())
+		select {
+		case err := <-backendDone:
+			require.Error(t, err)
+		case <-time.After(time.Second):
+			t.Fatal("backend responder did not terminate")
+		}
 	})
 }

@@ -300,6 +300,70 @@ func TestTextMinMaxGeneralCIMerge(t *testing.T) {
 	}
 }
 
+func TestMinMaxMergePreservesSourceContract(t *testing.T) {
+	for _, test := range []struct {
+		name string
+		typ  types.Type
+		want any
+		fill func(*testing.T, *vector.Vector, *mpool.MPool, int)
+		read func(*vector.Vector) any
+	}{
+		{
+			name: "fixed",
+			typ:  types.T_int64.ToType(),
+			want: int64(7),
+			fill: func(t *testing.T, vec *vector.Vector, mp *mpool.MPool, value int) {
+				require.NoError(t, vector.AppendFixed(vec, int64(value), false, mp))
+			},
+			read: func(vec *vector.Vector) any {
+				return vector.MustFixedColWithTypeCheck[int64](vec)[0]
+			},
+		},
+		{
+			name: "bytes",
+			typ:  types.T_varchar.ToType(),
+			want: "7",
+			fill: func(t *testing.T, vec *vector.Vector, mp *mpool.MPool, value int) {
+				require.NoError(t, vector.AppendBytes(vec, []byte(fmt.Sprint(value)), false, mp))
+			},
+			read: func(vec *vector.Vector) any {
+				return string(vec.GetBytesAt(0))
+			},
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			mp := mpool.MustNewZero()
+			makeState := func(value int) AggFuncExec {
+				input := vector.NewVec(test.typ)
+				test.fill(t, input, mp, value)
+				agg := makeMinMaxExec(mp, AggIdOfMax, false, test.typ)
+				require.NoError(t, agg.GroupGrow(1))
+				require.NoError(t, agg.Fill(0, 0, []*vector.Vector{input}))
+				input.Free(mp)
+				return agg
+			}
+
+			destination, source := makeState(3), makeState(7)
+			require.True(t, MergePreservesSource(source))
+			require.NoError(t, destination.Merge(source, 0, 0))
+			require.NoError(t, destination.Merge(source, 0, 0))
+
+			sourceResult, err := source.Flush()
+			require.NoError(t, err)
+			require.Equal(t, test.want, test.read(sourceResult[0]))
+			destinationResult, err := destination.Flush()
+			require.NoError(t, err)
+			require.Equal(t, test.want, test.read(destinationResult[0]))
+
+			sourceResult[0].Free(mp)
+			destinationResult[0].Free(mp)
+			source.Free()
+			destination.Free()
+			require.Zero(t, mp.CurrNB())
+		})
+	}
+}
+
 func mustParseAggDecimal256(t *testing.T, value string, scale int32) types.Decimal256 {
 	t.Helper()
 	dec, err := types.ParseDecimal256(value, 65, scale)
