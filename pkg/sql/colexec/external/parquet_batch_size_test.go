@@ -111,6 +111,37 @@ func TestParquetReaderBatchByteBudget(t *testing.T) {
 		require.Equal(t, len(values), total)
 	})
 
+	t.Run("nested row mode seeks back after byte-boundary prefetch", func(t *testing.T) {
+		values := []string{
+			"",
+			strings.Repeat("x", 4<<10),
+			"tail-one",
+			"tail-two",
+		}
+		data := writeBatchBudgetNestedParquet(t, values)
+		reader, _, proc := newBatchBudgetParquetReader(t, data, types.T_text, 1<<10)
+		defer reader.Close()
+
+		var got []string
+		for {
+			bat := batchBudgetVectorBatch(types.T_text)
+			finished, err := reader.ReadBatch(context.Background(), bat, proc, nil)
+			require.NoError(t, err)
+			for row := 0; row < bat.RowCount(); row++ {
+				got = append(got, bat.Vecs[0].GetStringAt(row))
+			}
+			bat.Clean(proc.Mp())
+			if finished {
+				break
+			}
+		}
+
+		require.Len(t, got, len(values))
+		for i, value := range values {
+			require.JSONEq(t, `{"v":"`+value+`"}`, got[i])
+		}
+	})
+
 	t.Run("dictionary sharing still makes forward progress", func(t *testing.T) {
 		values := make([]string, 100)
 		for i := range values {
