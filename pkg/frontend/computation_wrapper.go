@@ -62,6 +62,11 @@ type Compile interface {
 	SetOriginSQL(string)
 }
 
+type retiredRuntimeCompile struct {
+	owner   *PrepareStmt
+	compile *compile.Compile
+}
+
 type TxnComputationWrapper struct {
 	stmt      tree.Statement
 	plan      *plan2.Plan
@@ -87,9 +92,10 @@ type TxnComputationWrapper struct {
 	// specialization outside the live PrepareStmt cache. The candidate is
 	// installed only after its Compile succeeds, so a failed replacement leaves
 	// the preceding category and Compile intact.
-	runtimeCacheTarget *PrepareStmt
-	runtimeCacheKey    string
-	runtimeCachePlan   *plan.Plan
+	runtimeCacheTarget          *PrepareStmt
+	runtimeCacheKey             string
+	runtimeCachePlan            *plan.Plan
+	runtimeCacheRetiredCompiles []retiredRuntimeCompile
 
 	explainBuffer *bytes.Buffer
 	binaryPrepare bool
@@ -233,6 +239,7 @@ func (cwft *TxnComputationWrapper) freeStmt() {
 }
 
 func (cwft *TxnComputationWrapper) Clear() {
+	cwft.releaseRuntimeCacheRetiredCompiles()
 	cwft.plan = nil
 	cwft.proc = nil
 	cwft.ses = nil
@@ -1633,10 +1640,26 @@ func (cwft *TxnComputationWrapper) installRuntimeCacheCandidate(runtimeCompile *
 		cwft.runtimeCachePlan == nil || runtimeCompile == nil {
 		return false
 	}
-	cwft.runtimeCacheTarget.installRuntimeSpecializationCache(
+	retiredCompile := cwft.runtimeCacheTarget.installRuntimeSpecializationCache(
 		cwft.runtimeCacheKey, cwft.runtimeCachePlan, runtimeCompile)
+	if retiredCompile != nil {
+		// NewCompile has already installed runtimeCompile's execution state on the
+		// shared session Process. Releasing the displaced compile here would call
+		// Process.Free and erase that state before runtimeCompile can run. Keep the
+		// old topology alive until this statement wrapper has fully finished.
+		cwft.runtimeCacheRetiredCompiles = append(cwft.runtimeCacheRetiredCompiles, retiredRuntimeCompile{
+			owner: cwft.runtimeCacheTarget, compile: retiredCompile,
+		})
+	}
 	cwft.discardRuntimeCacheCandidate()
 	return true
+}
+
+func (cwft *TxnComputationWrapper) releaseRuntimeCacheRetiredCompiles() {
+	for _, retired := range cwft.runtimeCacheRetiredCompiles {
+		retired.owner.releaseRuntimeCompile(retired.compile)
+	}
+	cwft.runtimeCacheRetiredCompiles = nil
 }
 
 func retainPreparedRuntimeParamRefs(paramVals []any) {

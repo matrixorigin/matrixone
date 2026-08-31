@@ -1743,6 +1743,8 @@ func TestRuntimeSpecializationReplacementCommitsOnlyAfterCompileSuccess(t *testi
 		"", "", prepareStmt.Sql, "", "", nil,
 		cw.proc, prepareStmt.PrepareStmt, false, nil, time.Now())
 	prepareStmt.installRuntimeSpecializationCache("old", oldPlan, oldCompile)
+	require.Nil(t, prepareStmt.installRuntimeSpecializationCache("old", oldPlan, oldCompile),
+		"reinstalling the live compile must not retire it")
 
 	failedPlan := &plan.Plan{Plan: &plan.Plan_Query{Query: &plan.Query{StmtType: plan.Query_SELECT}}}
 	cw.runtimeCacheTarget = prepareStmt
@@ -1759,6 +1761,8 @@ func TestRuntimeSpecializationReplacementCommitsOnlyAfterCompileSuccess(t *testi
 	newCompile := compile.NewCompile(
 		"", "", prepareStmt.Sql, "", "", nil,
 		cw.proc, prepareStmt.PrepareStmt, false, nil, time.Now())
+	newMessageBoard := cw.proc.GetMessageBoard()
+	require.NotNil(t, newMessageBoard)
 	cw.runtimeCacheTarget = prepareStmt
 	cw.runtimeCacheKey = "new"
 	cw.runtimeCachePlan = newPlan
@@ -1768,6 +1772,15 @@ func TestRuntimeSpecializationReplacementCommitsOnlyAfterCompileSuccess(t *testi
 	require.Same(t, newCompile, prepareStmt.runtimeCompile)
 	require.Nil(t, cw.runtimeCacheTarget)
 	require.Nil(t, cw.runtimeCachePlan)
+	require.Same(t, newMessageBoard, cw.proc.GetMessageBoard(),
+		"publishing the replacement must not release the old compile into the shared Process")
+	require.Len(t, cw.runtimeCacheRetiredCompiles, 1)
+	require.Same(t, oldCompile, cw.runtimeCacheRetiredCompiles[0].compile)
+
+	cw.releaseRuntimeCacheRetiredCompiles()
+	require.Empty(t, cw.runtimeCacheRetiredCompiles)
+	require.Nil(t, cw.proc.GetMessageBoard(),
+		"the displaced compile is released only after the candidate statement finishes")
 
 	prepareStmt.clearRuntimeSpecializationCache()
 	require.Empty(t, prepareStmt.runtimeSpecializationKey)
