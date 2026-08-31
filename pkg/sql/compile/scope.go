@@ -759,6 +759,72 @@ func validateRemoteRunAddress(scopeAddr, localAddr string) error {
 	return nil
 }
 
+const (
+	parallelScopeBuildInternalCancel     = "parallel_scope_build_internal_cancel"
+	parallelScopeBuildQueryCancel        = "parallel_scope_build_query_cancel"
+	parallelScopeBuildCancelWithCause    = "parallel_scope_build_cancel_with_cause"
+	parallelScopeBuildUnattributedCancel = "parallel_scope_build_unattributed_cancel"
+)
+
+func scopeCancellationContextState(ctx context.Context) (error, error) {
+	if ctx == nil {
+		return nil, nil
+	}
+	return ctx.Err(), context.Cause(ctx)
+}
+
+func reportParallelScopeBuildCancellation(
+	s *Scope,
+	rawErr error,
+	normalizedErr error,
+	normalized bool,
+	queryCtx context.Context,
+) {
+	pipelineErr, pipelineCause := scopeCancellationContextState(s.Proc.Ctx)
+	queryErr, queryCause := scopeCancellationContextState(queryCtx)
+
+	key := parallelScopeBuildUnattributedCancel
+	switch {
+	case queryErr != nil:
+		key = parallelScopeBuildQueryCancel
+	case normalized && normalizedErr == nil:
+		key = parallelScopeBuildInternalCancel
+	case normalized:
+		key = parallelScopeBuildCancelWithCause
+	}
+
+	terminalEvent := process.EventError.String()
+	if normalizedErr == nil {
+		terminalEvent = process.EventEnd.String()
+	}
+	queryID := ""
+	if s.Proc.Base != nil {
+		queryID = s.Proc.QueryId()
+	}
+	rootOp := ""
+	if s.RootOp != nil {
+		rootOp = s.RootOp.OpType().String()
+	}
+	process.WarnPipelineCleanupf(
+		s.Proc,
+		key,
+		"parallel scope build cleanup classified cancellation: classification=%s phase=build_parallel_scope query_id=%s node_id=%s node_addr=%s mcpu=%d root_op=%s normalized=%t terminal=%s raw_err=%v normalized_err=%v pipeline_err=%v pipeline_cause=%v query_err=%v query_cause=%v",
+		key,
+		queryID,
+		s.NodeInfo.Id,
+		s.NodeInfo.Addr,
+		s.NodeInfo.Mcpu,
+		rootOp,
+		normalized,
+		terminalEvent,
+		rawErr,
+		normalizedErr,
+		pipelineErr,
+		pipelineCause,
+		queryErr,
+		queryCause)
+}
+
 // ParallelRun run a pipeline in parallel.
 func (s *Scope) ParallelRun(c *Compile) (err error) {
 	var parallelScope *Scope
@@ -781,11 +847,17 @@ func (s *Scope) ParallelRun(c *Compile) (err error) {
 			// parallel scope. StopSending can cancel the pipeline while reader
 			// construction is still in flight, so classify that cancellation at
 			// this boundary before cleanup chooses EventEnd versus EventError.
-			err, _ = normalizeScopeRunError(
+			rawErr := err
+			queryCtx := scopeRunQueryContext(s.Proc)
+			var normalized bool
+			err, normalized = normalizeScopeRunError(
 				err,
 				s.Proc.Ctx,
-				scopeRunQueryContext(s.Proc),
+				queryCtx,
 			)
+			if isScopeCancellationError(rawErr) {
+				reportParallelScopeBuildCancellation(s, rawErr, err, normalized, queryCtx)
+			}
 			pipeline.NewMerge(s.RootOp).Cleanup(s.Proc, err != nil, c.isPrepare, err)
 		}
 	}()

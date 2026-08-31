@@ -30,9 +30,11 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/table_scan"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
+	metricv2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
+	promtestutil "github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/stretchr/testify/require"
 )
 
@@ -140,6 +142,11 @@ func TestIssue27261StopSendingCancelsOnlyRemotePipeline(t *testing.T) {
 // producer on the shared edge models a genuine fan-in sibling that has already
 // ended normally.
 func TestIssue27261StopSendingDuringParallelReaderBuildStaysGraceful(t *testing.T) {
+	cleanupCounter := metricv2.PipelineCleanupEventCounter.WithLabelValues(
+		parallelScopeBuildInternalCancel,
+	)
+	cleanupCountBefore := promtestutil.ToFloat64(cleanupCounter)
+
 	oldRuntime := runtime.ServiceRuntime("")
 	runtime.SetupServiceBasedRuntime("", runtime.DefaultRuntime())
 	t.Cleanup(func() { runtime.SetupServiceBasedRuntime("", oldRuntime) })
@@ -211,9 +218,16 @@ func TestIssue27261StopSendingDuringParallelReaderBuildStaysGraceful(t *testing.
 	require.NoError(t, reg.Err(), "StopSending cancellation must publish End, not Error")
 	require.NoError(t, rootProc.GetQueryContextError(),
 		"StopSending must leave the remote query context active")
+	require.Equal(t, cleanupCountBefore+1, promtestutil.ToFloat64(cleanupCounter),
+		"the cleanup decision must leave a durable internal-cancellation signal")
 }
 
 func TestParallelReaderBuildPreservesQueryCancellation(t *testing.T) {
+	cleanupCounter := metricv2.PipelineCleanupEventCounter.WithLabelValues(
+		parallelScopeBuildQueryCancel,
+	)
+	cleanupCountBefore := promtestutil.ToFloat64(cleanupCounter)
+
 	rootProc := testutil.NewProcess(t)
 	queryCtx := rootProc.Base.GetContextBase().BuildQueryCtx(rootProc.GetTopContext())
 	_, cancelQuery := process.GetQueryCtxFromProc(rootProc)
@@ -260,4 +274,6 @@ func TestParallelReaderBuildPreservesQueryCancellation(t *testing.T) {
 	require.Nil(t, batch)
 	require.ErrorIs(t, err, context.Canceled,
 		"query cancellation must remain a terminal pipeline error")
+	require.Equal(t, cleanupCountBefore+1, promtestutil.ToFloat64(cleanupCounter),
+		"the cleanup decision must leave a durable query-cancellation signal")
 }
