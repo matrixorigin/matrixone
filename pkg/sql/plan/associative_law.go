@@ -86,15 +86,18 @@ func formatStatsInfo(stats *plan.Stats) string {
 // key.  The INNER JOIN can only remove rows from A, so doing it first cannot
 // increase the input of the LEFT JOIN.  This is especially important when B
 // is a large fact table and C carries a selective dimension predicate.
-func (builder *QueryBuilder) applyOuterJoinPreservedSideRule(nodeID int32) int32 {
+func (builder *QueryBuilder) applyOuterJoinPreservedSideRule(nodeID int32) (int32, bool) {
 	node := builder.qry.Nodes[nodeID]
+	changed := false
 	for i, child := range node.Children {
-		node.Children[i] = builder.applyOuterJoinPreservedSideRule(child)
+		var childChanged bool
+		node.Children[i], childChanged = builder.applyOuterJoinPreservedSideRule(child)
+		changed = changed || childChanged
 	}
 
 	if node.NodeType != plan.Node_JOIN || node.JoinType != plan.Node_INNER ||
 		joinNodeHasLocalSemantics(node) {
-		return nodeID
+		return nodeID, changed
 	}
 
 	outerPos := -1
@@ -107,7 +110,7 @@ func (builder *QueryBuilder) applyOuterJoinPreservedSideRule(nodeID int32) int32
 		}
 	}
 	if outerPos == -1 {
-		return nodeID
+		return nodeID, changed
 	}
 
 	outer := builder.qry.Nodes[node.Children[outerPos]]
@@ -123,11 +126,11 @@ func (builder *QueryBuilder) applyOuterJoinPreservedSideRule(nodeID int32) int32
 	}
 	if !areTruncationSafePredicates(node.OnList) ||
 		!areTruncationSafePredicates(outer.OnList) {
-		return nodeID
+		return nodeID, changed
 	}
 	for _, cond := range node.OnList {
 		if !containsOnlyTags(cond, allowedTags) {
-			return nodeID
+			return nodeID, changed
 		}
 	}
 
@@ -140,7 +143,11 @@ func (builder *QueryBuilder) applyOuterJoinPreservedSideRule(nodeID int32) int32
 	determineHashOnPK(node.NodeId, builder)
 	if node.Stats == nil || node.Stats.HashmapStats == nil || !node.Stats.HashmapStats.HashOnPK {
 		node.Children = originalChildren
-		return nodeID
+		if node.Stats != nil && node.Stats.HashmapStats != nil {
+			node.Stats.HashmapStats.HashOnPK = false
+		}
+		determineHashOnPK(node.NodeId, builder)
+		return nodeID, changed
 	}
 
 	outer.Children[0] = node.NodeId
@@ -148,7 +155,7 @@ func (builder *QueryBuilder) applyOuterJoinPreservedSideRule(nodeID int32) int32
 	ReCalcNodeStats(outer.NodeId, builder, true, false, true)
 	builder.optimizationHistory = append(builder.optimizationHistory,
 		fmt.Sprintf("outer-preserved-side: inner=%d outer=%d", node.NodeId, outer.NodeId))
-	return outer.NodeId
+	return outer.NodeId, true
 }
 
 // applyOuterJoinNullableSideRule rewrites
@@ -165,15 +172,18 @@ func (builder *QueryBuilder) applyOuterJoinPreservedSideRule(nodeID int32) int32
 // equivalent and lets selective C predicates shrink B before it meets A.
 // Keep the proof independent of stats and fail closed for local/volatile
 // semantics or any upper condition that also references A.
-func (builder *QueryBuilder) applyOuterJoinNullableSideRule(nodeID int32) int32 {
+func (builder *QueryBuilder) applyOuterJoinNullableSideRule(nodeID int32) (int32, bool) {
 	node := builder.qry.Nodes[nodeID]
+	changed := false
 	for i, child := range node.Children {
-		node.Children[i] = builder.applyOuterJoinNullableSideRule(child)
+		var childChanged bool
+		node.Children[i], childChanged = builder.applyOuterJoinNullableSideRule(child)
+		changed = changed || childChanged
 	}
 
 	if node.NodeType != plan.Node_JOIN || node.JoinType != plan.Node_INNER ||
 		joinNodeHasLocalSemantics(node) {
-		return nodeID
+		return nodeID, changed
 	}
 
 	outerPos := -1
@@ -186,7 +196,7 @@ func (builder *QueryBuilder) applyOuterJoinNullableSideRule(nodeID int32) int32 
 		}
 	}
 	if outerPos == -1 {
-		return nodeID
+		return nodeID, changed
 	}
 
 	outer := builder.qry.Nodes[node.Children[outerPos]]
@@ -207,20 +217,20 @@ func (builder *QueryBuilder) applyOuterJoinNullableSideRule(nodeID int32) int32 
 	}
 	if !areTruncationSafePredicates(node.OnList) ||
 		!areTruncationSafePredicates(outer.OnList) {
-		return nodeID
+		return nodeID, changed
 	}
 
 	nullExtendedRowRejected := false
 	for _, cond := range node.OnList {
 		if !containsOnlyTags(cond, allowedTags) {
-			return nodeID
+			return nodeID, changed
 		}
 		if equalityHasBareColumnFromTags(cond, nullableTags) {
 			nullExtendedRowRejected = true
 		}
 	}
 	if !nullExtendedRowRejected {
-		return nodeID
+		return nodeID, changed
 	}
 	node.Children[0] = nullableID
 	node.Children[1] = otherID
@@ -233,7 +243,7 @@ func (builder *QueryBuilder) applyOuterJoinNullableSideRule(nodeID int32) int32 
 	ReCalcNodeStats(outer.NodeId, builder, true, false, true)
 	builder.optimizationHistory = append(builder.optimizationHistory,
 		fmt.Sprintf("outer-nullable-side: inner=%d outer=%d", node.NodeId, outer.NodeId))
-	return outer.NodeId
+	return outer.NodeId, true
 }
 
 func equalityHasBareColumnFromTags(expr *plan.Expr, tags map[int32]bool) bool {
@@ -423,10 +433,15 @@ func (builder *QueryBuilder) applyAssociativeLaw(nodeID int32) int32 {
 	if builder.optimizerHints != nil && builder.optimizerHints.joinOrdering != 0 {
 		return nodeID
 	}
-	nodeID = builder.applyOuterJoinPreservedSideRule(nodeID)
-	builder.determineBuildAndProbeSide(nodeID, true)
-	nodeID = builder.applyOuterJoinNullableSideRule(nodeID)
-	builder.determineBuildAndProbeSide(nodeID, true)
+	var changed bool
+	nodeID, changed = builder.applyOuterJoinPreservedSideRule(nodeID)
+	if changed {
+		builder.determineBuildAndProbeSide(nodeID, true)
+	}
+	nodeID, changed = builder.applyOuterJoinNullableSideRule(nodeID)
+	if changed {
+		builder.determineBuildAndProbeSide(nodeID, true)
+	}
 	nodeID = builder.applyAssociativeLawRule1(nodeID)
 	builder.determineBuildAndProbeSide(nodeID, true)
 	nodeID = builder.applyAssociativeLawRule2(nodeID)

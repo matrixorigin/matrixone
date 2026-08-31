@@ -27,8 +27,9 @@ func TestOuterJoinPreservedSideAssociativity(t *testing.T) {
 	t.Run("moves unique inner join below left join", func(t *testing.T) {
 		builder := newOuterJoinAssociativityBuilder(true, false)
 
-		root := builder.applyOuterJoinPreservedSideRule(4)
+		root, changed := builder.applyOuterJoinPreservedSideRule(4)
 
+		require.True(t, changed)
 		require.Equal(t, int32(3), root)
 		require.Equal(t, []int32{4, 1}, builder.qry.Nodes[3].Children)
 		require.Equal(t, []int32{0, 2}, builder.qry.Nodes[4].Children)
@@ -37,8 +38,9 @@ func TestOuterJoinPreservedSideAssociativity(t *testing.T) {
 	t.Run("handles commuted upper inner join", func(t *testing.T) {
 		builder := newOuterJoinAssociativityBuilder(true, true)
 
-		root := builder.applyOuterJoinPreservedSideRule(4)
+		root, changed := builder.applyOuterJoinPreservedSideRule(4)
 
+		require.True(t, changed)
 		require.Equal(t, int32(3), root)
 		require.Equal(t, []int32{4, 1}, builder.qry.Nodes[3].Children)
 		require.Equal(t, []int32{0, 2}, builder.qry.Nodes[4].Children)
@@ -47,8 +49,9 @@ func TestOuterJoinPreservedSideAssociativity(t *testing.T) {
 	t.Run("keeps non unique inner input above left join", func(t *testing.T) {
 		builder := newOuterJoinAssociativityBuilder(false, false)
 
-		root := builder.applyOuterJoinPreservedSideRule(4)
+		root, changed := builder.applyOuterJoinPreservedSideRule(4)
 
+		require.False(t, changed)
 		require.Equal(t, int32(4), root)
 		require.Equal(t, []int32{3, 2}, builder.qry.Nodes[4].Children)
 		require.Equal(t, []int32{0, 1}, builder.qry.Nodes[3].Children)
@@ -58,8 +61,9 @@ func TestOuterJoinPreservedSideAssociativity(t *testing.T) {
 		builder := newOuterJoinAssociativityBuilder(true, false)
 		builder.qry.Nodes[4].OnList = []*planpb.Expr{associativityEqExpr(1, 2)}
 
-		root := builder.applyOuterJoinPreservedSideRule(4)
+		root, changed := builder.applyOuterJoinPreservedSideRule(4)
 
+		require.False(t, changed)
 		require.Equal(t, int32(4), root)
 		require.Equal(t, []int32{3, 2}, builder.qry.Nodes[4].Children)
 	})
@@ -71,8 +75,9 @@ func TestOuterJoinPreservedSideAssociativity(t *testing.T) {
 			Expr: &planpb.Expr_Lit{Lit: &planpb.Literal{Value: &planpb.Literal_U64Val{U64Val: 1}}},
 		}
 
-		root := builder.applyOuterJoinPreservedSideRule(4)
+		root, changed := builder.applyOuterJoinPreservedSideRule(4)
 
+		require.False(t, changed)
 		require.Equal(t, int32(4), root)
 		require.Equal(t, []int32{3, 2}, builder.qry.Nodes[4].Children)
 	})
@@ -82,8 +87,9 @@ func TestOuterJoinPreservedSideAssociativity(t *testing.T) {
 		builder.qry.Nodes[3].OnList = append(builder.qry.Nodes[3].OnList,
 			associativityUnsafeCastEqExpr(t, builder, 1, 2))
 
-		root := builder.applyOuterJoinPreservedSideRule(4)
+		root, changed := builder.applyOuterJoinPreservedSideRule(4)
 
+		require.False(t, changed)
 		require.Equal(t, int32(4), root)
 		require.Equal(t, []int32{3, 2}, builder.qry.Nodes[4].Children)
 		require.Equal(t, []int32{0, 1}, builder.qry.Nodes[3].Children)
@@ -95,8 +101,9 @@ func TestOuterJoinNullableSideAssociativity(t *testing.T) {
 		builder := newOuterJoinAssociativityBuilder(false, false)
 		builder.qry.Nodes[4].OnList = []*planpb.Expr{associativityEqExpr(2, 3)}
 
-		root := builder.applyOuterJoinNullableSideRule(4)
+		root, changed := builder.applyOuterJoinNullableSideRule(4)
 
+		require.True(t, changed)
 		require.Equal(t, int32(3), root)
 		require.Equal(t, planpb.Node_INNER, builder.qry.Nodes[3].JoinType)
 		require.Equal(t, []int32{0, 4}, builder.qry.Nodes[3].Children)
@@ -107,8 +114,9 @@ func TestOuterJoinNullableSideAssociativity(t *testing.T) {
 		builder := newOuterJoinAssociativityBuilder(false, true)
 		builder.qry.Nodes[4].OnList = []*planpb.Expr{associativityEqExpr(2, 3)}
 
-		root := builder.applyOuterJoinNullableSideRule(4)
+		root, changed := builder.applyOuterJoinNullableSideRule(4)
 
+		require.True(t, changed)
 		require.Equal(t, int32(3), root)
 		require.Equal(t, planpb.Node_INNER, builder.qry.Nodes[3].JoinType)
 		require.Equal(t, []int32{0, 4}, builder.qry.Nodes[3].Children)
@@ -118,8 +126,9 @@ func TestOuterJoinNullableSideAssociativity(t *testing.T) {
 	t.Run("keeps condition that references preserved side", func(t *testing.T) {
 		builder := newOuterJoinAssociativityBuilder(false, false)
 
-		root := builder.applyOuterJoinNullableSideRule(4)
+		root, changed := builder.applyOuterJoinNullableSideRule(4)
 
+		require.False(t, changed)
 		require.Equal(t, int32(4), root)
 		require.Equal(t, planpb.Node_LEFT, builder.qry.Nodes[3].JoinType)
 		require.Equal(t, []int32{3, 2}, builder.qry.Nodes[4].Children)
@@ -132,8 +141,9 @@ func TestOuterJoinNullableSideAssociativity(t *testing.T) {
 			associativityEqExpr(1, 3),
 		}
 
-		root := builder.applyOuterJoinNullableSideRule(4)
+		root, changed := builder.applyOuterJoinNullableSideRule(4)
 
+		require.False(t, changed)
 		require.Equal(t, int32(4), root)
 		require.Equal(t, planpb.Node_LEFT, builder.qry.Nodes[3].JoinType)
 	})
@@ -142,8 +152,9 @@ func TestOuterJoinNullableSideAssociativity(t *testing.T) {
 		builder := newOuterJoinAssociativityBuilder(false, false)
 		builder.qry.Nodes[4].OnList = []*planpb.Expr{associativityEqExpr(3, 3)}
 
-		root := builder.applyOuterJoinNullableSideRule(4)
+		root, changed := builder.applyOuterJoinNullableSideRule(4)
 
+		require.False(t, changed)
 		require.Equal(t, int32(4), root)
 		require.Equal(t, planpb.Node_LEFT, builder.qry.Nodes[3].JoinType)
 	})
@@ -156,8 +167,9 @@ func TestOuterJoinNullableSideAssociativity(t *testing.T) {
 			Expr: &planpb.Expr_Lit{Lit: &planpb.Literal{Value: &planpb.Literal_U64Val{U64Val: 1}}},
 		}
 
-		root := builder.applyOuterJoinNullableSideRule(4)
+		root, changed := builder.applyOuterJoinNullableSideRule(4)
 
+		require.False(t, changed)
 		require.Equal(t, int32(4), root)
 		require.Equal(t, planpb.Node_LEFT, builder.qry.Nodes[3].JoinType)
 	})
@@ -169,12 +181,26 @@ func TestOuterJoinNullableSideAssociativity(t *testing.T) {
 			associativityUnsafeCastEqExpr(t, builder, 2, 3),
 		}
 
-		root := builder.applyOuterJoinNullableSideRule(4)
+		root, changed := builder.applyOuterJoinNullableSideRule(4)
 
+		require.False(t, changed)
 		require.Equal(t, int32(4), root)
 		require.Equal(t, planpb.Node_LEFT, builder.qry.Nodes[3].JoinType)
 		require.Equal(t, []int32{3, 2}, builder.qry.Nodes[4].Children)
 	})
+}
+
+func TestOuterJoinAssociativityReportsNoChangeForInnerOnlyTree(t *testing.T) {
+	builder := newOuterJoinAssociativityBuilder(true, false)
+	builder.qry.Nodes[3].JoinType = planpb.Node_INNER
+
+	root, changed := builder.applyOuterJoinPreservedSideRule(4)
+	require.False(t, changed)
+	require.Equal(t, int32(4), root)
+
+	root, changed = builder.applyOuterJoinNullableSideRule(root)
+	require.False(t, changed)
+	require.Equal(t, int32(4), root)
 }
 
 func newOuterJoinAssociativityBuilder(uniqueInner, commuteUpper bool) *QueryBuilder {
