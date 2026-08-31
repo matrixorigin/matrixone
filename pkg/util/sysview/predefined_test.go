@@ -573,6 +573,11 @@ func TestInformationSchemaViewsMetadata(t *testing.T) {
 			definition: "SELECT 1",
 		},
 		{
+			name:       "escaped definer quote cannot supply view as",
+			createSQL:  "CREATE DEFINER=' view fake \\' VIEW fake AS select 0'@'%' VIEW v AS SELECT 1;",
+			definition: "SELECT 1",
+		},
+		{
 			name:       "unrecognized metadata remains visible",
 			createSQL:  "select 1",
 			definition: "select 1",
@@ -604,6 +609,7 @@ func TestInformationSchemaViewsMetadata(t *testing.T) {
 		"/*!50001 CREATE VIEW executable_trailing_comment_v AS SELECT 1 */ /* application */;",
 		"/*!50001 CREATE VIEW executable_string_terminator_v AS SELECT 'x*/y' AS s */;",
 		"CREATE DEFINER=' view fake as select 0'@'%' VIEW quoted_definer_v AS SELECT 1;",
+		"CREATE DEFINER=' view fake \\' VIEW fake AS select 0'@'%' VIEW escaped_quoted_definer_v AS SELECT 1;",
 	} {
 		statements, err := mysql.Parse(context.Background(), createSQL, 1)
 		assert.NoError(t, err)
