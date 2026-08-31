@@ -1,11 +1,11 @@
 # Cross-CN DDL Visibility Fence
 
 - Status: **Approved**
-- Revision: 2
+- Revision: 3
 - Approval: user approval recorded in the PR implementation session on 2026-08-30
 - Owning issue: #27743
 - Implementation PR: #27756
-- Protocol version: MORPC v41
+- Protocol version: MORPC v43
 
 ## 1. Classification and motivation
 
@@ -17,22 +17,22 @@ Issue #27743 demonstrates a missing catalog-visibility invariant: a DDL can comm
 
 ### Safety invariant
 
-After the v41 deployment epoch is committed, every CN capable of public DDL production must satisfy both conditions:
+After the v43 deployment epoch is committed, every CN capable of public DDL production must satisfy both conditions:
 
-1. its runtime protocol is at least v41, so DDL commit performs `SyncCommitV2` fan-out; and
+1. its runtime protocol is at least v43, so DDL commit performs `SyncCommitV2` fan-out; and
 2. it belongs to the exact generation/address membership set atomically committed by HAKeeper, or it remains fail-closed until it joins a later exact cut.
 
 Before a CN opens public ingress, its local catalog frontier must be at least the maximum frontier reported by all participants in the applicable cut.
 
 ### Negation
 
-It is unsafe for any public or already-connected CN to commit DDL below v41 while another public CN can admit a snapshot that has not applied that commit.
+It is unsafe for any public or already-connected CN to commit DDL below v43 while another public CN can admit a snapshot that has not applied that commit.
 
 ### Measurable criteria
 
 - A create on CN0 followed immediately by a first read/load on CN1 succeeds without explicit `SYNCCOMMIT`.
-- Markerless startup preserves the current-main v40 baseline before the v41 cut.
-- No local downgrade below v41 is accepted after the monotonic v41 epoch is committed.
+- Markerless startup preserves the current-main v40 baseline before the v43 cut.
+- No local downgrade below v43 is accepted after the monotonic v43 epoch is committed.
 - Membership change between final scan and epoch commit rejects the old target set atomically.
 - Restart, timeout, persistence failure, response loss, and leader failover remain fail-closed.
 
@@ -45,7 +45,7 @@ It is unsafe for any public or already-connected CN to commit DDL below v41 whil
 | Cluster deployed epoch | HAKeeper CNState | replicated snapshot/log | Monotonic cluster-wide committed cut |
 | Admission generation/address | HAKeeper CNState | replicated snapshot/log | Identity of one CN incarnation |
 | Prepared/Fenced/Complete | CN service and HAKeeper CNState | heartbeat-replicated phase proof plus local marker | Progress bound to one authoritative CN incarnation |
-| Last committed DDL frontier | DDLCommitGate and HAKeeper CNState | monotonic process state replicated by heartbeat | Catalog frontier produced by that CN, excluding unrelated/no-op snapshot timestamps |
+| Last committed DDL frontier | DDLCommitGate and HAKeeper CNState | monotonic cluster-lifetime maximum replicated in HAKeeper state | Durable activation high-water mark that survives CN restart, replacement, and store removal |
 | Public DDL gate | frontend `DDLCommitGate` | process-local | Whether new public/background DDL may enter |
 | Proxy ingress readiness | CN heartbeat/HAKeeper | replicated latest state | Whether new routed sessions may enter |
 
@@ -55,36 +55,36 @@ HAKeeper is the first owner of cluster epoch and membership linearization. CN lo
 
 A CN is in one of these logical states:
 
-1. **Baseline v40**: v41 not deployed; existing v38-v40 contracts remain active. Public ingress may be open.
+1. **Baseline v40**: v43 not deployed; existing v38-v40 contracts remain active. Public ingress may be open.
 2. **Withdrawing**: activation blocks new DDL, withdraws ingress, and drains active DDL.
-3. **Prepared v41**: local old-protocol producers are drained; runtime can receive v41 RPCs.
-4. **Provisionally fenced**: local frontier synchronization completed and `-41` is durable; ingress remains closed.
-5. **Cluster committed**: HAKeeper atomically validated exact `(serviceID, generation, queryAddress)` membership and advanced epoch to 41.
-6. **Locally committed**: CN persisted `41`; only then may it republish ingress and unblock DDL.
-7. **Markerless post-cut**: no local marker but HAKeeper epoch is 41; runtime remains v41 and ingress/DDL remain closed until a complete retry.
+3. **Prepared v43**: local old-protocol producers are drained; runtime can receive v43 RPCs.
+4. **Provisionally fenced**: local frontier synchronization completed and `-43` is durable; ingress remains closed.
+5. **Cluster committed**: HAKeeper atomically validated exact `(serviceID, generation, queryAddress)` membership and advanced epoch to 43.
+6. **Locally committed**: CN persisted `43`; only then may it republish ingress and unblock DDL.
+7. **Markerless post-cut**: no local marker but HAKeeper epoch is 43; runtime remains v43 and ingress/DDL remain closed until a complete retry.
 
-The cluster epoch commit is the linearization point. Prepared, Fenced, and the last committed DDL frontier are published through each incarnation's heartbeat. The commit heartbeat contains the exact target tuples. In one replicated transition HAKeeper updates the sender heartbeat, compares all eligible raw CNState members, exact generation/address, receiver capability, and that each current incarnation itself published Prepared and Fenced, then advances the epoch only on exact equality. A replacement cannot reuse an older incarnation's Fenced proof. A join before this transition invalidates the target set; a join after it observes epoch 41 and is rejected as ingress-ready.
+The cluster epoch commit is the linearization point. Prepared, Fenced, and the last committed DDL frontier are published through each incarnation's heartbeat. The commit heartbeat contains the exact target tuples. In one replicated transition HAKeeper updates the sender heartbeat, compares all eligible raw CNState members, exact generation/address, receiver capability, and that each current incarnation itself published Prepared and Fenced, then advances the epoch only on exact equality. A replacement cannot reuse an older incarnation's Fenced proof. A join before this transition invalidates the target set; a join after it observes epoch 43 and is rejected as ingress-ready.
 
 ## 5. End-to-end flow
 
 ### First rollout
 
 1. All LogStore/HAKeeper replicas advertise support for the epoch schema.
-2. Every CN runs v41-capable code but markerless CNs keep protocol baseline v40.
+2. Every CN runs v43-capable code but markerless CNs keep protocol baseline v40.
 3. `mo_ctl SetProtocolVersion` refreshes raw authoritative CN membership.
-4. The requested set must exactly match all eligible CN tuples and each target must advertise the v41 receiver/barrier capability.
-5. Targets concurrently withdraw ingress, block and drain DDL, then heartbeat Prepared together with their monotonic last committed DDL frontier.
-6. Each target reads the replicated HAKeeper phase/frontier inventory, applies every remote producer frontier, durably enters provisional Fenced, and heartbeats Fenced. This avoids cyclic QueryService control RPCs while every target is already serving a long-running activation RPC.
-7. Each target confirms all exact current incarnations are Fenced in HAKeeper; HAKeeper atomically revalidates those tuple-bound proofs and commits epoch 41.
-8. Each CN persists local committed 41, republishes ingress if listeners are live, and unblocks public DDL.
+4. The requested set must exactly match all eligible CN tuples and each target must advertise the v43 receiver/barrier capability.
+5. Targets concurrently withdraw ingress, block and drain DDL, capture their reconstructed latest committed timestamp, then heartbeat Prepared together with that frontier. HAKeeper advances a cluster-lifetime maximum and never lowers it when an incarnation restarts, is replaced, or is removed.
+6. Each target reads and applies the replicated cluster-lifetime frontier, durably enters provisional Fenced, and heartbeats Fenced. This avoids cyclic QueryService control RPCs while every target is already serving a long-running activation RPC.
+7. Each target confirms all exact current incarnations are Fenced in HAKeeper; HAKeeper atomically revalidates those tuple-bound proofs and commits epoch 43.
+8. Each CN persists local committed 43, republishes ingress if listeners are live, and unblocks public DDL.
 
 ### Steady-state DDL
 
-A public real-user DDL, and background DDL after public listeners are enabled, enters `DDLCommitGate`. After commit, protocol v41 triggers `SyncCommitV2` to all barrier-ready CNs. The operation succeeds only after required receivers have applied/synchronized the commit frontier. Bootstrap background work before ingress remains exempt to avoid depending on an unavailable QueryService.
+A public real-user DDL, and background DDL after public listeners are enabled, enters `DDLCommitGate`. After commit, protocol v43 triggers `SyncCommitV2` to all barrier-ready CNs. The operation succeeds only after required receivers have applied/synchronized the commit frontier. Bootstrap background work before ingress remains exempt to avoid depending on an unavailable QueryService.
 
 ### Scale-out and replacement
 
-A markerless CN performs an atomic ingress heartbeat handshake. If it linearizes before the cluster commit, it becomes authoritative membership and invalidates any old target proof. If it linearizes after commit, HAKeeper forces ingress false and returns epoch 41. It never becomes a public v40 producer after the cut.
+A markerless CN performs an atomic ingress heartbeat handshake. If it linearizes before the cluster commit, it becomes authoritative membership and invalidates any old target proof. If it linearizes after commit, HAKeeper forces ingress false and returns epoch 43. It never becomes a public v40 producer after the cut.
 
 ## 6. Failure, retry, and lifecycle behavior
 
@@ -95,7 +95,7 @@ A markerless CN performs an atomic ingress heartbeat handshake. If it linearizes
 - **Epoch response loss**: epoch may be committed, but local marker remains provisional and ingress closed; retry learns the committed epoch.
 - **Committed local persistence failure**: cluster epoch remains committed; this CN remains closed and restarts from provisional state.
 - **Ingress publication uncertainty**: perform a bounded cleanup withdrawal; never assume publication failed.
-- **Restart**: committed marker runs startup frontier synchronization before opening; provisional or markerless post-cut starts v41 fail-closed.
+- **Restart**: committed marker runs startup frontier synchronization before opening; provisional or markerless post-cut starts v43 fail-closed.
 - **Shutdown**: stop periodic heartbeat publication, then withdraw ingress/barrier state before stopping QueryService.
 - **Leader failover**: activation is gated until every voting and non-voting LogStore advertises epoch-schema capability, so any eligible HAKeeper leader preserves the field.
 
@@ -105,20 +105,20 @@ Retries are idempotent for the same generation and target set. Replacement gener
 
 ### Mixed-version baseline
 
-Current main already deploys v40 semantics. A fresh v41-capable process without a DDL marker therefore remains at v40, not v37. The v41 DDL state is separate from unrelated v38-v40 capabilities.
+Current main already deploys v40 semantics. A fresh v43-capable process without a DDL marker therefore remains at v40, not v37. The v43 DDL state is separate from unrelated v38-v40 capabilities.
 
 ### Rollout order
 
 1. Upgrade all voting and non-voting LogStores/HAKeeper replicas.
 2. Upgrade every CN; verify barrier receiver capability in raw inventory.
-3. Invoke one exact complete-target v41 activation.
-4. Verify epoch 41 and all eligible CN ingress/committed markers.
+3. Invoke one exact complete-target v43 activation.
+4. Verify epoch 43 and all eligible CN ingress/committed markers.
 
 ### Downgrade policy
 
-Before epoch 41, ordinary protocol changes at or below v40 remain possible. After epoch 41, local downgrade below v41 is rejected. A safe rollback would require a separately designed atomic cluster rollback that withdraws and drains every DDL producer before lowering the epoch; this revision deliberately does not implement epoch rollback.
+Before epoch 43, ordinary protocol changes at or below v40 remain possible. After epoch 43, local downgrade below v43 is rejected. A safe rollback would require a separately designed atomic cluster rollback that withdraws and drains every DDL producer before lowering the epoch; this revision deliberately does not implement epoch rollback.
 
-Binary rollback after epoch 41 is unsupported until such a rollback protocol exists. Operators must restore forward to a v41-capable binary.
+Binary rollback after epoch 43 is unsupported until such a rollback protocol exists. Operators must restore forward to a v43-capable binary.
 
 ## 8. Proxy and direct ingress
 
@@ -159,7 +159,7 @@ Rejected: compiled capability is not proof that every producer completed the dis
 
 ### D. Separate DDL feature epoch from the shared MORPC scalar
 
-Architecturally clean and avoids scalar coupling, but still requires the same membership/ingress linearization and broader API migration. This revision retains MORPC v41 as the sender/receiver capability gate while storing deployment completion separately.
+Architecturally clean and avoids scalar coupling, but still requires the same membership/ingress linearization and broader API migration. This revision retains MORPC v43 as the sender/receiver capability gate while storing deployment completion separately.
 
 ### E. TN-only global catalog barrier on every new transaction
 
@@ -169,8 +169,8 @@ Could provide a stronger generic read contract, but materially changes every tra
 
 | Contract | Deterministic evidence |
 |---|---|
-| v40 baseline preserved | markerless default-v41 startup UT |
-| post-cut downgrade rejected | completed-v41 downgrade UT |
+| v40 baseline preserved | markerless default-v43 startup UT |
+| post-cut downgrade rejected | completed-v43 downgrade UT |
 | exact authoritative targets | ctl raw-membership omission/capability UT |
 | join/commit atomicity | CNState RSM ordering UT: final scan, join, stale commit |
 | HAKeeper failover compatibility | old capability view rejection UT |
@@ -182,7 +182,7 @@ Could provide a stronger generic read contract, but materially changes every tra
 ## 14. Decision log and open items
 
 - Chosen linearization point: HAKeeper replicated heartbeat transition with exact tuple proof.
-- Chosen baseline: preserve current-main v40 before v41 activation.
+- Chosen baseline: preserve current-main v40 before v43 activation.
 - Chosen downgrade behavior: reject after monotonic epoch commit.
 - Chosen direct-ingress protection: local DDL gate in addition to proxy admission.
 - Non-blocking follow-up: add dedicated activation/fan-out metrics and publish N-CN staging latency evidence.

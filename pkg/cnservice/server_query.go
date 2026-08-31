@@ -245,7 +245,7 @@ func (s *service) handleSetProtocolVersion(
 		return moerr.NewInternalError(ctx, "bad request")
 	}
 	version := req.SetProtocolVersion.Version
-	if version >= defines.MORPCVersion41 &&
+	if version >= defines.MORPCVersion43 &&
 		len(req.SetProtocolVersion.DDLVisibilityActivationTargets) > 0 {
 		expectedGeneration := req.SetProtocolVersion.DDLVisibilityTargetGeneration
 		expectedAddress := req.SetProtocolVersion.DDLVisibilityTargetQueryAddress

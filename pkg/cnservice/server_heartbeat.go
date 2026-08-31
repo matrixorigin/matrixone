@@ -218,7 +218,7 @@ func (s *service) newCNStoreHeartbeat() logservicepb.CNStoreHeartbeat {
 	if s.ddlCommitGate != nil {
 		hb.DDLVisibilityFrontier = s.ddlCommitGate.LatestDDLFrontier()
 	}
-	if deployed := s.loadDDLVisibilityDeployedProtocol(); deployed >= defines.MORPCVersion41 {
+	if deployed := s.loadDDLVisibilityDeployedProtocol(); deployed >= defines.MORPCVersion43 {
 		hb.DDLVisibilityDeployedProtocol = deployed
 	}
 	if s.viewMetadataEpochFence != nil {

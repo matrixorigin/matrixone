@@ -217,9 +217,9 @@ func TestHandleSetProtocolVersionDispatchesCompleteTargetSetConcurrently(t *test
 	proc := &process.Process{Base: &process.BaseProcess{QueryClient: qcli}}
 
 	result, err := handleSetProtocolVersion(
-		proc, cn, strings.Join(targets, ",")+":41", nil)
+		proc, cn, strings.Join(targets, ",")+":43", nil)
 	require.NoError(t, err)
-	require.Equal(t, "activation-cn-1:41, activation-cn-2:41", result.Data)
+	require.Equal(t, "activation-cn-1:43, activation-cn-2:43", result.Data)
 	require.Equal(t, int32(2), qcli.started.Load())
 	require.Equal(t, int32(2), qcli.releases.Load())
 	qcli.mu.Lock()
@@ -229,7 +229,7 @@ func TestHandleSetProtocolVersionDispatchesCompleteTargetSetConcurrently(t *test
 		require.Equal(t, targets, requestTargets)
 	}
 
-	_, err = handleSetProtocolVersion(proc, cn, "activation-cn-1,activation-cn-1:41", nil)
+	_, err = handleSetProtocolVersion(proc, cn, "activation-cn-1,activation-cn-1:43", nil)
 	require.ErrorContains(t, err, "duplicated")
 }
 
@@ -249,7 +249,7 @@ func TestHandleSetProtocolVersionRejectsOmittedAuthoritativeCN(t *testing.T) {
 	rt.SetGlobalVariables(runtime.ClusterService, mc)
 	proc := &process.Process{Base: &process.BaseProcess{QueryClient: &concurrentProtocolQueryClient{both: make(chan struct{})}}}
 
-	_, err := handleSetProtocolVersion(proc, cn, "new-cn:41", nil)
+	_, err := handleSetProtocolVersion(proc, cn, "new-cn:43", nil)
 	require.ErrorContains(t, err, "does not match authoritative CN membership")
 }
 
@@ -275,7 +275,7 @@ func TestTransferToCNAllowsActivationFence(t *testing.T) {
 
 	qcli := &addressRecordingQueryClient{}
 	started := time.Now()
-	_, err := transferToCN(qcli, serviceID, defines.MORPCVersion41, []string{serviceID})
+	_, err := transferToCN(qcli, serviceID, defines.MORPCVersion43, []string{serviceID})
 	require.Error(t, err)
 	require.Equal(t, "activation-cn:6001", qcli.address)
 	require.Equal(t, []string{serviceID},

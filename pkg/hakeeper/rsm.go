@@ -1710,6 +1710,7 @@ func (s *stateMachine) handleClusterDetailsQuery(cfg Config) *pb.ClusterDetails 
 		LogStores:                     make([]pb.LogStore, 0, len(s.state.LogState.Stores)),
 		ProxyStores:                   make([]pb.ProxyStore, 0, len(s.state.ProxyState.Stores)),
 		DDLVisibilityDeployedProtocol: s.state.CNState.DDLVisibilityDeployedProtocol,
+		DDLVisibilityFrontier:         s.state.CNState.DDLVisibilityFrontier,
 	}
 	if s.viewMetadataAdmissionActive() {
 		cd.ViewMetadataAdmission = &pb.ViewMetadataAdmission{

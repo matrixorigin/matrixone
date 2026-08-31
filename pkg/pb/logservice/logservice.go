@@ -175,6 +175,9 @@ func (s *CNState) Update(hb CNStoreHeartbeat, tick uint64) {
 	storeInfo.DDLVisibilityActivationFenced = hb.DDLVisibilityActivationFenced
 	storeInfo.DDLVisibilityFrontier = hb.DDLVisibilityFrontier
 	s.Stores[hb.UUID] = storeInfo
+	if s.DDLVisibilityFrontier.Less(hb.DDLVisibilityFrontier) {
+		s.DDLVisibilityFrontier = hb.DDLVisibilityFrontier
+	}
 	if hb.DDLVisibilityDeployedProtocol > s.DDLVisibilityDeployedProtocol &&
 		len(hb.DDLVisibilityEpochCommitTargets) > 0 &&
 		s.matchesDDLVisibilityEpochCommitTargets(hb.DDLVisibilityEpochCommitTargets) {

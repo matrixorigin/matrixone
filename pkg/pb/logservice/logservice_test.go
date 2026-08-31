@@ -18,6 +18,7 @@ import (
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
+	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -569,10 +570,11 @@ func TestCNStateAtomicallyRejectsEpochCommitAfterMarkerlessJoin(t *testing.T) {
 
 func TestCNStateAtomicallyRejectsEpochCommitFromUnfencedReplacement(t *testing.T) {
 	state := NewCNState()
+	oldFrontier := timestamp.Timestamp{PhysicalTime: 300}
 	state.Update(CNStoreHeartbeat{
 		UUID: "target-cn", QueryAddress: "old:6001", ViewMetadataAdmissionGeneration: 1,
 		DDLVisibilityBarrierReady: true, DDLVisibilityActivationPrepared: true,
-		DDLVisibilityActivationFenced: true,
+		DDLVisibilityActivationFenced: true, DDLVisibilityFrontier: oldFrontier,
 	}, 1)
 
 	// Replacement occurs after the old generation supplied Fenced. Even if the
@@ -592,6 +594,11 @@ func TestCNStateAtomicallyRejectsEpochCommitFromUnfencedReplacement(t *testing.T
 
 	assert.Equal(t, int64(0), state.DDLVisibilityDeployedProtocol)
 	assert.True(t, state.Stores["target-cn"].ViewMetadataIngressReady)
+	assert.Equal(t, oldFrontier, state.DDLVisibilityFrontier,
+		"replacement heartbeat must not erase the cluster-lifetime DDL frontier")
+	delete(state.Stores, "target-cn")
+	assert.Equal(t, oldFrontier, state.DDLVisibilityFrontier,
+		"store removal must not erase the cluster-lifetime DDL frontier")
 }
 
 func TestCNStateRejectsMarkerlessIngressAfterCommittedDDLCut(t *testing.T) {

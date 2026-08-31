@@ -35,49 +35,51 @@ const (
 )
 
 const (
-	MORPCMinVersion    int64 = math.MinInt64
-	MORPCVersion1      int64 = 1
-	MORPCVersion2      int64 = 2
-	MORPCVersion3      int64 = 3  // start from 1.3.0
-	MORPCVersion4      int64 = 4  // start from 2.0.1
-	MORPCVersion5      int64 = 5  // assignment-aware CHAR/VARCHAR casts
-	MORPCVersion6      int64 = 6  // ordered aggregate pipeline configuration
-	MORPCVersion7      int64 = 7  // structured CHECK constraint metadata and enforcement
-	MORPCVersion8      int64 = 8  // versioned exact runtime-filter key contract
-	MORPCVersion9      int64 = 9  // AUTO_INCREMENT epoch-fenced commit
-	MORPCVersion10     int64 = 10 // bounded Sorted64 membership-filter wire format
-	MORPCVersion11     int64 = 11 // persisted appendable-object abort metadata
-	MORPCVersion12     int64 = 12 // prepared-parameter provenance in remote process metadata and aggregate trailers
-	MORPCVersion13     int64 = 13 // lossless v2 prefix-index metadata
-	MORPCVersion14     int64 = 14 // utf8mb4 text MIN/MAX collation semantics
-	MORPCVersion15     int64 = 15 // CHECK metadata in rename-column alter requests
-	MORPCVersion16     int64 = 16 // information_schema CHECK_CONSTRAINTS table function
-	MORPCVersion17     int64 = 17 // ordered-set percentile aggregate IDs
-	MORPCVersion18     int64 = 18 // prepared-parameter binary-string metadata
-	MORPCVersion19     int64 = 19 // remote bounded partition Top-N operator
-	MORPCVersion20     int64 = 20 // target-aware multi-table UPDATE pipeline fields
-	MORPCVersion21     int64 = 21 // lookup-only RIGHT DEDUP for proven-unique insert input
-	MORPCVersion22     int64 = 22 // typed user-defined variable migration
-	MORPCVersion23     int64 = 23 // explicit-text runtime string provenance
-	MORPCVersion24     int64 = 24 // per-target affected-row selectors for repeated physical UPDATE targets
-	MORPCVersion25     int64 = 25 // UPDATE changed-row counting
-	MORPCVersion26     int64 = 26 // statement LAST_INSERT_ID in remote terminal results
-	MORPCVersion27     int64 = 27 // native ASOF join pipeline fields and semantics
-	MORPCVersion28     int64 = 28 // owner-local lock snapshots and table-scoped remote unlock
-	MORPCVersion29     int64 = 29 // FOUND_ROWS connection migration state
-	MORPCVersion30     int64 = 30 // prepared numeric-prefix common-type casts
-	MORPCVersion31     int64 = 31 // batched multi-table remote transaction unlock
-	MORPCVersion32     int64 = 32 // cross-transaction logical-plan generation snapshot
-	MORPCVersion33     int64 = 33 // stable complete-key distributed string shuffle hash
-	MORPCVersion34     int64 = 34 // correct persisted unsigned-column metadata
-	MORPCVersion35     int64 = 35 // scaled variance state with exact numeric origins
-	MORPCVersion36     int64 = 36 // prepared JSON comparison execution and exact parameter types
-	MORPCVersion37     int64 = 37 // independent prepared-parameter string source
-	MORPCVersion38     int64 = 38 // session temporary-table connection migration
-	MORPCVersion39     int64 = 39 // linearizable TN-ordered logtail read barrier
-	MORPCVersion40     int64 = 40 // PAD SPACE comparison casts and set-operation equality keys
-	MORPCVersion41     int64 = 41 // cancellable cross-CN DDL visibility fence
-	MORPCLatestVersion       = MORPCVersion41
+	MORPCMinVersion int64 = math.MinInt64
+	MORPCVersion1   int64 = 1
+	MORPCVersion2   int64 = 2
+	MORPCVersion3   int64 = 3  // start from 1.3.0
+	MORPCVersion4   int64 = 4  // start from 2.0.1
+	MORPCVersion5   int64 = 5  // assignment-aware CHAR/VARCHAR casts
+	MORPCVersion6   int64 = 6  // ordered aggregate pipeline configuration
+	MORPCVersion7   int64 = 7  // structured CHECK constraint metadata and enforcement
+	MORPCVersion8   int64 = 8  // versioned exact runtime-filter key contract
+	MORPCVersion9   int64 = 9  // AUTO_INCREMENT epoch-fenced commit
+	MORPCVersion10  int64 = 10 // bounded Sorted64 membership-filter wire format
+	MORPCVersion11  int64 = 11 // persisted appendable-object abort metadata
+	MORPCVersion12  int64 = 12 // prepared-parameter provenance in remote process metadata and aggregate trailers
+	MORPCVersion13  int64 = 13 // lossless v2 prefix-index metadata
+	MORPCVersion14  int64 = 14 // utf8mb4 text MIN/MAX collation semantics
+	MORPCVersion15  int64 = 15 // CHECK metadata in rename-column alter requests
+	MORPCVersion16  int64 = 16 // information_schema CHECK_CONSTRAINTS table function
+	MORPCVersion17  int64 = 17 // ordered-set percentile aggregate IDs
+	MORPCVersion18  int64 = 18 // prepared-parameter binary-string metadata
+	MORPCVersion19  int64 = 19 // remote bounded partition Top-N operator
+	MORPCVersion20  int64 = 20 // target-aware multi-table UPDATE pipeline fields
+	MORPCVersion21  int64 = 21 // lookup-only RIGHT DEDUP for proven-unique insert input
+	MORPCVersion22  int64 = 22 // typed user-defined variable migration
+	MORPCVersion23  int64 = 23 // explicit-text runtime string provenance
+	MORPCVersion24  int64 = 24 // per-target affected-row selectors for repeated physical UPDATE targets
+	MORPCVersion25  int64 = 25 // UPDATE changed-row counting
+	MORPCVersion26  int64 = 26 // statement LAST_INSERT_ID in remote terminal results
+	MORPCVersion27  int64 = 27 // native ASOF join pipeline fields and semantics
+	MORPCVersion28  int64 = 28 // owner-local lock snapshots and table-scoped remote unlock
+	MORPCVersion29  int64 = 29 // FOUND_ROWS connection migration state
+	MORPCVersion30  int64 = 30 // prepared numeric-prefix common-type casts
+	MORPCVersion31  int64 = 31 // batched multi-table remote transaction unlock
+	MORPCVersion32  int64 = 32 // cross-transaction logical-plan generation snapshot
+	MORPCVersion33  int64 = 33 // stable complete-key distributed string shuffle hash
+	MORPCVersion34  int64 = 34 // correct persisted unsigned-column metadata
+	MORPCVersion35  int64 = 35 // scaled variance state with exact numeric origins
+	MORPCVersion36  int64 = 36 // prepared JSON comparison execution and exact parameter types
+	MORPCVersion37  int64 = 37 // independent prepared-parameter string source
+	MORPCVersion38  int64 = 38 // session temporary-table connection migration
+	MORPCVersion39  int64 = 39 // linearizable TN-ordered logtail read barrier
+	MORPCVersion40  int64 = 40 // PAD SPACE comparison casts and set-operation equality keys
+	// Versions 41 and 42 are reserved for the two concurrent MORPC owners that
+	// were already under review when this capability was allocated.
+	MORPCVersion43     int64 = 43 // cancellable cross-CN DDL visibility fence
+	MORPCLatestVersion       = MORPCVersion43
 )
 
 // DefaultLockWaitTimeoutSeconds is shared by the frontend default and by

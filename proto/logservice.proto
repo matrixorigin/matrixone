@@ -738,6 +738,9 @@ message CNState {
   // Once a complete-target cut commits, markerless replacement/scale-out CNs
   // must join that fence instead of reopening on an older protocol.
   int64 DDLVisibilityDeployedProtocol = 2;
+  // DDLVisibilityFrontier is the monotonic cluster-lifetime maximum committed
+  // DDL timestamp. It survives CN restart, replacement, and store removal.
+  timestamp.Timestamp DDLVisibilityFrontier = 3 [(gogoproto.nullable) = false];
 }
 
 
@@ -804,6 +807,7 @@ message ClusterDetails {
   repeated DeletedStore DeletedStores = 5 [(gogoproto.nullable) = false];
   ViewMetadataAdmission ViewMetadataAdmission = 6;
   int64 DDLVisibilityDeployedProtocol = 7;
+  timestamp.Timestamp DDLVisibilityFrontier = 8 [(gogoproto.nullable) = false];
 }
 
 // ClusterInfo provides a global view of all shards in the cluster. It
