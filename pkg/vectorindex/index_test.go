@@ -15,10 +15,10 @@ package vectorindex
 
 import (
 	"fmt"
-	"runtime"
 	"sync"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/common/system"
 	"github.com/stretchr/testify/require"
 	usearch "github.com/unum-cloud/usearch/golang"
 )
@@ -234,18 +234,24 @@ func TestChecksum(t *testing.T) {
 
 func TestGetConcurrency(t *testing.T) {
 	nthread := GetConcurrency(0)
-	require.Equal(t, int64(runtime.NumCPU()), nthread)
+	require.Equal(t, int64(system.GoMaxProcs()), nthread)
 
 	concurrent := int64(64)
 	nthread = GetConcurrency(concurrent)
 	require.Equal(t, concurrent, nthread)
 
 	nthread = GetConcurrencyForBuild(0)
-	require.Equal(t, int64(runtime.NumCPU()), nthread)
+	require.Equal(t, int64(system.GoMaxProcs()), nthread)
 
 	nthread = GetConcurrencyForBuild(4)
 	require.Equal(t, int64(4), nthread)
 
+	// A container can see many host CPUs while its scheduler is quota-limited.
+	// Defaults must use that effective limit; explicit settings remain honored.
+	require.Equal(t, int64(2), resolveConcurrency(0, 2))
+	require.Equal(t, int64(2), resolveConcurrency(-1, 2))
+	require.Equal(t, int64(64), resolveConcurrency(64, 2))
+	require.Equal(t, int64(1), resolveConcurrency(0, 0))
 }
 
 func TestFastMaxHeap(t *testing.T) {
