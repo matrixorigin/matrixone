@@ -1304,6 +1304,67 @@ func TestRelationScannerDefersWideVectorUntilAfterIncludeFilter(t *testing.T) {
 	require.Equal(t, 1, reader.closed)
 }
 
+func TestRelationScannerFallsBackWhenReaderCannotDelayVectorLoading(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	proc := testutil.NewProc(t)
+	t.Cleanup(proc.Free)
+	eng := mock_frontend.NewMockEngine(ctrl)
+	db := mock_frontend.NewMockDatabase(ctrl)
+	rel := mock_frontend.NewMockRelation(ctrl)
+	proc.Base.SessionInfo.StorageEngine = eng
+	tableDef := &plan.TableDef{
+		Name: "fallback_entries",
+		Cols: []*plan.ColDef{
+			{Name: "entry", Typ: plan.Type{Id: int32(types.T_array_float64), Width: 2}},
+			{Name: "filter_bucket", Typ: plan.Type{Id: int32(types.T_int64)}},
+		},
+		Name2ColIndex: map[string]int32{"entry": 0, "filter_bucket": 1},
+	}
+	reader := &fillRelationReader{fill: func(out *batch.Batch, mp *mpool.MPool) error {
+		for _, row := range []struct {
+			entry  []float64
+			bucket int64
+		}{
+			{entry: []float64{1, 0}, bucket: 10},
+			{entry: []float64{2, 0}, bucket: 70},
+		} {
+			if err := vector.AppendArray(out.Vecs[0], row.entry, false, mp); err != nil {
+				return err
+			}
+			if err := vector.AppendFixed(out.Vecs[1], row.bucket, false, mp); err != nil {
+				return err
+			}
+		}
+		out.SetRowCount(2)
+		return nil
+	}}
+	eng.EXPECT().Database(gomock.Any(), "db", nil).Return(db, nil)
+	db.EXPECT().Relation(gomock.Any(), "fallback_entries", proc).Return(rel, nil)
+	rel.EXPECT().GetTableDef(gomock.Any()).Return(tableDef)
+	rel.EXPECT().Ranges(gomock.Any(), gomock.Any()).Return(nil, nil)
+	rel.EXPECT().BuildReaders(
+		gomock.Any(), proc, gomock.Any(), gomock.Nil(), 1, 0, false,
+		gomock.Any(), gomock.Any()).Return([]engine.Reader{reader}, nil)
+
+	filter, err := ivfFuncExpr(proc.Ctx, "=",
+		ivfColExpr(1, plan.Type{Id: int32(types.T_int64)}), ivfInt64Expr(10))
+	require.NoError(t, err)
+	res, err := (&relationScanner{proc: proc}).ScanRelation(sqlexec.RelationScanRequest{
+		Schema:            "db",
+		Table:             "fallback_entries",
+		Columns:           []string{"entry", "filter_bucket"},
+		Filter:            filter,
+		PostFilterTopOnly: true,
+	})
+	require.NoError(t, err)
+	defer res.Close()
+	require.Len(t, res.Batches, 1)
+	require.Equal(t, 1, res.Batches[0].RowCount())
+	require.Equal(t, []float64{1, 0}, types.BytesToArray[float64](res.Batches[0].Vecs[0].GetBytesAt(0)))
+	require.Equal(t, int64(10), vector.GetFixedAtNoTypeCheck[int64](res.Batches[0].Vecs[1], 0))
+	require.Equal(t, 1, reader.closed)
+}
+
 func TestPlanReaderShortCircuitsEmptySearches(t *testing.T) {
 	r := &planReader{req: searchplugin.Request{CandidateBudget: 0}}
 	require.NoError(t, r.initialize())
