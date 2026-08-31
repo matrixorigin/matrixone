@@ -510,17 +510,33 @@ partition p202607 values less than (to_days('2026-08-01')),
 partition p202608 values less than (to_days('2026-09-01'))
 );
 create fulltext index ft_body on ft_partitioned_gojieba(body) with parser gojieba;
-show index from ft_partitioned_gojieba;
-➤ Table[12,-1,0]  ¦  Non_unique[-5,64,0]  ¦  Key_name[12,-1,0]  ¦  Seq_in_index[4,32,0]  ¦  Column_name[12,-1,0]  ¦  Collation[12,-1,0]  ¦  Cardinality[-5,64,0]  ¦  Sub_part[12,-1,0]  ¦  Packed[12,-1,0]  ¦  Null[12,-1,0]  ¦  Index_type[12,-1,0]  ¦  Comment[1,0,0]  ¦  Index_comment[12,-1,0]  ¦  Index_params[12,-1,0]  ¦  Visible[12,-1,0]  ¦  Expression[12,-1,0]  𝄀
-ft_partitioned_gojieba  ¦  0  ¦  PRIMARY  ¦  1  ¦  id  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦    ¦    ¦    ¦    ¦    ¦  YES  ¦  id  𝄀
-ft_partitioned_gojieba  ¦  0  ¦  PRIMARY  ¦  2  ¦  created_at  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦    ¦    ¦    ¦    ¦    ¦  YES  ¦  created_at  𝄀
-ft_partitioned_gojieba  ¦  1  ¦  ft_body  ¦  1  ¦  body  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦  YES  ¦  fulltext  ¦    ¦    ¦    ¦  YES  ¦  body
-select count(*) from mo_catalog.mo_indexes
-where name = 'ft_body'
-and type = 'FULLTEXT'
-and algo_params = '{"parser":"gojieba"}'
-and options = 'parser=gojieba,ngram_token_size=3'
-and index_table_name <> '';
-count(*)
-3
+select count(*) as index_rows,
+count(distinct idx.table_id) as physical_tables,
+count(distinct idx.index_table_name) as index_tables
+from mo_catalog.mo_indexes idx
+join mo_catalog.mo_tables ptbl
+on ptbl.rel_id = idx.table_id
+join mo_catalog.mo_partition_tables pt
+on pt.partition_id = ptbl.rel_id
+and pt.partition_table_name = ptbl.relname
+and ptbl.reldatabase = database()
+join mo_catalog.mo_partition_metadata pm
+on pm.table_id = pt.primary_table_id
+join mo_catalog.mo_tables ltbl
+on ltbl.rel_id = pm.table_id
+and ltbl.rel_id = pt.primary_table_id
+and ltbl.reldatabase = ptbl.reldatabase
+and ltbl.account_id = ptbl.account_id
+where ltbl.reldatabase = database()
+and ltbl.relname = 'ft_partitioned_gojieba'
+and ltbl.account_id = current_account_id()
+and pm.table_name = ltbl.relname
+and pm.database_name = ltbl.reldatabase
+and idx.name = 'ft_body'
+and idx.type = 'FULLTEXT'
+and idx.algo_params = '{"parser":"gojieba"}'
+and idx.options = 'parser=gojieba,ngram_token_size=3'
+and idx.index_table_name <> '';
+index_rows  ¦  physical_tables  ¦  index_tables
+3  ¦  3  ¦  3
 drop table ft_partitioned_gojieba;
