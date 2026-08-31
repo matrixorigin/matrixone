@@ -736,17 +736,15 @@ func captureCatalogLifecycleLockIdentity(ctx context.Context, db *sql.DB, catalo
 	if err != nil {
 		return catalogLifecycleLockIdentity{}, err
 	}
+	defer func() { _ = rows.Close() }()
 	if !rows.Next() {
 		if err := rows.Err(); err != nil {
-			_ = rows.Close()
 			return catalogLifecycleLockIdentity{}, err
 		}
-		_ = rows.Close()
 		return catalogLifecycleLockIdentity{}, errors.New("catalog lifecycle lock probe selected no row")
 	}
 	var catalogID uint64
 	if err := rows.Scan(&catalogID); err != nil {
-		_ = rows.Close()
 		return catalogLifecycleLockIdentity{}, err
 	}
 	if err := rows.Close(); err != nil {
