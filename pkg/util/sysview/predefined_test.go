@@ -503,10 +503,22 @@ func TestInformationSchemaViewsMetadata(t *testing.T) {
 			definition: "SELECT 1",
 		},
 		{
+			name:       "leading block comment before create",
+			createSQL:  "/* migration */ CREATE VIEW v AS SELECT 1;",
+			definition: "SELECT 1",
+		},
+		{
 			name: "mysqldump version comments",
 			createSQL: "/*!50001 CREATE ALGORITHM=UNDEFINED *//*!50013 DEFINER=`root`@`%` SQL SECURITY DEFINER */" +
 				"/*!50001 VIEW `v` AS select 1 */;",
 			definition: "select 1",
+		},
+		{
+			name: "mysqldump split definition with quoted definer",
+			createSQL: "/*!50001 CREATE ALGORITHM=UNDEFINED */\n" +
+				"/*!50013 DEFINER=`user view fake as select 0`@`%` SQL SECURITY DEFINER */\n" +
+				"/*!50001 VIEW v AS SELECT 1 */;",
+			definition: "SELECT 1",
 		},
 		{
 			name:       "select block comment remains intact",
@@ -599,6 +611,7 @@ func TestInformationSchemaViewsMetadata(t *testing.T) {
 		})
 	}
 	for _, createSQL := range []string{
+		"/* migration */ CREATE VIEW leading_block_comment_v AS SELECT 1;",
 		"create view hash_comment_v # migration comment\n as select 1;",
 		"create view slash_comment_v // migration comment\n as select 1;",
 		"create view block_comment_v /* migration */ as select 1;",
@@ -609,6 +622,7 @@ func TestInformationSchemaViewsMetadata(t *testing.T) {
 		"/*! CREATE VIEW executable_without_version_v AS SELECT 1 */;",
 		"/*!50001 CREATE VIEW executable_trailing_comment_v AS SELECT 1 */ /* application */;",
 		"/*!50001 CREATE VIEW executable_string_terminator_v AS SELECT 'x*/y' AS s */;",
+		"/*!50001 CREATE ALGORITHM=UNDEFINED */\n/*!50013 DEFINER=`user view fake as select 0`@`%` SQL SECURITY DEFINER */\n/*!50001 VIEW split_dump_v AS SELECT 1 */;",
 		"CREATE DEFINER=' view fake as select 0'@'%' VIEW quoted_definer_v AS SELECT 1;",
 		"CREATE DEFINER=' view fake \\' VIEW fake AS select 0'@'%' VIEW escaped_quoted_definer_v AS SELECT 1;",
 	} {
