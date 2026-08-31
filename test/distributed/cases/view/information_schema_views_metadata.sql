@@ -23,6 +23,7 @@ create view long_repeated_star_comment_v /*****/ as select a from t;
 /*!50001 CREATE VIEW executable_trailing_comment_v AS select a from t */ /* application */;
 /*!50001 CREATE VIEW executable_string_terminator_v AS select 'x*/y' as s */;
 CREATE DEFINER=' view fake as select 0'@'%' VIEW quoted_definer_v AS select a from t;
+CREATE DEFINER=' view fake \' VIEW fake AS select 0'@'%' VIEW escaped_quoted_definer_v AS select a from t;
 
 select table_name, view_definition, is_updatable
 from information_schema.views
