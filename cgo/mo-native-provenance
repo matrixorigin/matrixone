@@ -1,0 +1,754 @@
+#!/bin/sh
+
+# Copyright 2021 - 2026 Matrix Origin
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#      http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# Owns the small build-state protocol required to reuse MatrixOne's ignored
+# native artifacts from another linked worktree. A reusable stamp is published
+# only after the top-level build has prepared the generation, proved the
+# required cleanup happened, completed the build, and recorded that generation.
+
+set -eu
+
+usage() {
+    echo "usage: $0 prepare <repository-root> <cpu|gpu> <release|debug> <simsimd:0|1>" >&2
+    echo "       $0 begin   <repository-root> <cpu|gpu> <release|debug> <simsimd:0|1>" >&2
+    echo "       $0 record  <repository-root> <cpu|gpu> <release|debug> <simsimd:0|1>" >&2
+    echo "       $0 verify  <artifact-root> <libmo-path> <goos> <goarch> <cpu|gpu> <release|debug> <simsimd:0|1>" >&2
+}
+
+native_paths="Makefile cgo thirdparties"
+
+validate_build_key() {
+    case "$1" in
+        cpu | gpu) ;;
+        *)
+            echo "unsupported MatrixOne native accelerator: $1" >&2
+            exit 2
+            ;;
+    esac
+    case "$2" in
+        release | debug) ;;
+        *)
+            echo "unsupported MatrixOne native optimization mode: $2" >&2
+            exit 2
+            ;;
+    esac
+    case "$3" in
+        0 | 1) ;;
+        *)
+            echo "unsupported MatrixOne native SIMSIMD mode: $3" >&2
+            exit 2
+            ;;
+    esac
+    if [ "$1" = gpu ] && [ "${TARGET_SIZE:-64}" != 64 ]; then
+        echo "MatrixOne's GPU runtime supports only TARGET_SIZE=64" >&2
+        exit 2
+    fi
+}
+
+host_platform() {
+    go_command=${GO:-go}
+    goos=$("$go_command" env GOHOSTOS)
+    goarch=$("$go_command" env GOHOSTARCH)
+    case "$goos" in
+        darwin) libmo_name=libmo.dylib ;;
+        linux) libmo_name=libmo.so ;;
+        *)
+            echo "unsupported MatrixOne native build host: $goos/$goarch" >&2
+            return 1
+            ;;
+    esac
+}
+
+native_common_environment_hash() {
+    {
+        # These are the supported Make/toolchain overrides that can change
+        # regular CGo or thirdparty bytes. Empty values represent repository
+        # defaults; build and verify must observe the same override profile.
+        printf 'CC=%s\n' "${CC-}"
+        printf 'CXX=%s\n' "${CXX-}"
+        printf 'AR=%s\n' "${AR-}"
+        printf 'CFLAGS=%s\n' "${CFLAGS-}"
+        printf 'CXXFLAGS=%s\n' "${CXXFLAGS-}"
+        printf 'CPPFLAGS=%s\n' "${CPPFLAGS-}"
+        printf 'LDFLAGS=%s\n' "${LDFLAGS-}"
+        printf 'OPT_LV=%s\n' "${OPT_LV-}"
+        printf 'COMMON_CFLAGS=%s\n' "${COMMON_CFLAGS-}"
+        printf 'USEARCH_CMAKE_FLAG=%s\n' "${USEARCH_CMAKE_FLAG-}"
+        printf 'SIMSIMD_TARGET=%s\n' "${SIMSIMD_TARGET-}"
+        printf 'CROARING_CFLAGS=%s\n' "${CROARING_CFLAGS-}"
+        printf 'JEMALLOC_CONFIGURE_FLAGS=%s\n' "${JEMALLOC_CONFIGURE_FLAGS-}"
+        printf 'MUSL=%s\n' "${MUSL-}"
+        printf 'SDKROOT=%s\n' "${SDKROOT-}"
+        printf 'MACOSX_DEPLOYMENT_TARGET=%s\n' "${MACOSX_DEPLOYMENT_TARGET-}"
+        printf 'UNAME_S=%s\n' "${UNAME_S-}"
+        printf 'UNAME_M=%s\n' "${UNAME_M-}"
+    } | git hash-object --stdin
+}
+
+native_accelerator_environment_hash() {
+    environment_accelerator=$1
+    {
+        printf 'accelerator=%s\n' "$environment_accelerator"
+        if [ "$environment_accelerator" = gpu ]; then
+            # Keep both GPU sub-build variable families explicit. cuda uses
+            # NVCCFLAGS while cuVS uses NVCC_FLAGS; treating them as aliases
+            # lets a real compiler-profile change reuse the previous objects.
+            printf 'CONDA_PREFIX=%s\n' "${CONDA_PREFIX-}"
+            printf 'CUDA_PATH=%s\n' "${CUDA_PATH-}"
+            printf 'CUDA_CFLAGS=%s\n' "${CUDA_CFLAGS-}"
+            printf 'CUDA_LDFLAGS=%s\n' "${CUDA_LDFLAGS-}"
+            printf 'CUVS_CFLAGS=%s\n' "${CUVS_CFLAGS-}"
+            printf 'CUVS_LDFLAGS=%s\n' "${CUVS_LDFLAGS-}"
+            printf 'HOST_ARCH=%s\n' "${HOST_ARCH-}"
+            printf 'TARGET_ARCH=%s\n' "${TARGET_ARCH-}"
+            printf 'TARGET_OS=%s\n' "${TARGET_OS-}"
+            printf 'TARGET_SIZE=%s\n' "${TARGET_SIZE-}"
+            printf 'TARGET_FS=%s\n' "${TARGET_FS-}"
+            printf 'TARGET_OVERRIDE=%s\n' "${TARGET_OVERRIDE-}"
+            printf 'SMS=%s\n' "${SMS-}"
+            printf 'GENCODE_FLAGS=%s\n' "${GENCODE_FLAGS-}"
+            printf 'HOST_COMPILER=%s\n' "${HOST_COMPILER-}"
+            printf 'GCC=%s\n' "${GCC-}"
+            printf 'NVCC=%s\n' "${NVCC-}"
+            printf 'NVCCFLAGS=%s\n' "${NVCCFLAGS-}"
+            printf 'NVCC_FLAGS=%s\n' "${NVCC_FLAGS-}"
+            printf 'CCFLAGS=%s\n' "${CCFLAGS-}"
+            printf 'CUDA_OPT_LEVEL=%s\n' "${CUDA_OPT_LEVEL-}"
+            printf 'EXTRA_NVCCFLAGS=%s\n' "${EXTRA_NVCCFLAGS-}"
+            printf 'EXTRA_CCFLAGS=%s\n' "${EXTRA_CCFLAGS-}"
+            printf 'EXTRA_LDFLAGS=%s\n' "${EXTRA_LDFLAGS-}"
+            printf 'LIBS=%s\n' "${LIBS-}"
+            printf 'INCLUDES=%s\n' "${INCLUDES-}"
+            printf 'CUDALIB=%s\n' "${CUDALIB-}"
+            printf 'CUDA_SEARCH_PATH=%s\n' "${CUDA_SEARCH_PATH-}"
+            printf 'QNX_HOST=%s\n' "${QNX_HOST-}"
+            printf 'QNX_TARGET=%s\n' "${QNX_TARGET-}"
+        fi
+    } | git hash-object --stdin
+}
+
+emit_provenance() {
+    root=$1
+    provenance_goos=$2
+    provenance_goarch=$3
+    accelerator=$4
+    optimization=$5
+    simsimd=$6
+    head=$(git -C "$root" rev-parse HEAD) || return 1
+    makefile_hash=$(git -C "$root" rev-parse "$head:Makefile") || return 1
+    cgo_hash=$(git -C "$root" rev-parse "$head:cgo") || return 1
+    thirdparties_hash=$(git -C "$root" rev-parse "$head:thirdparties") || return 1
+
+    common_environment_hash=$(native_common_environment_hash) || return 1
+    accelerator_environment_hash=$(native_accelerator_environment_hash \
+        "$accelerator") || return 1
+
+    printf 'format=7\n'
+    printf 'makefile=%s\n' "$makefile_hash"
+    printf 'cgo=%s\n' "$cgo_hash"
+    printf 'thirdparties=%s\n' "$thirdparties_hash"
+    printf 'goos=%s\n' "$provenance_goos"
+    printf 'goarch=%s\n' "$provenance_goarch"
+    printf 'accelerator=%s\n' "$accelerator"
+    printf 'optimization=%s\n' "$optimization"
+    printf 'simsimd=%s\n' "$simsimd"
+    printf 'common-environment=%s\n' "$common_environment_hash"
+    printf 'accelerator-environment=%s\n' "$accelerator_environment_hash"
+}
+
+file_value() {
+    key=$1
+    file=$2
+    sed -n "s/^$key=//p" "$file"
+}
+
+stamp_is_well_formed() {
+    candidate_stamp=$1
+    [ -f "$candidate_stamp" ] || return 1
+    [ "$(wc -l <"$candidate_stamp" | tr -d ' ')" -eq 14 ] || return 1
+    [ "$(file_value format "$candidate_stamp")" = 7 ] || return 1
+    [ -n "$(file_value makefile "$candidate_stamp")" ] || return 1
+    [ -n "$(file_value cgo "$candidate_stamp")" ] || return 1
+    [ -n "$(file_value thirdparties "$candidate_stamp")" ] || return 1
+    [ -n "$(file_value goos "$candidate_stamp")" ] || return 1
+    [ -n "$(file_value goarch "$candidate_stamp")" ] || return 1
+    case "$(file_value accelerator "$candidate_stamp")" in
+        cpu | gpu) ;;
+        *) return 1 ;;
+    esac
+    case "$(file_value optimization "$candidate_stamp")" in
+        release | debug) ;;
+        *) return 1 ;;
+    esac
+    case "$(file_value simsimd "$candidate_stamp")" in
+        0 | 1) ;;
+        *) return 1 ;;
+    esac
+    [ -n "$(file_value common-environment "$candidate_stamp")" ] || return 1
+    [ -n "$(file_value accelerator-environment "$candidate_stamp")" ] || return 1
+    [ -n "$(file_value libmo-hash "$candidate_stamp")" ] || return 1
+    [ -n "$(file_value thirdparty-hash "$candidate_stamp")" ] || return 1
+    case "$(file_value accelerator "$candidate_stamp"):$(file_value cuda-fatbin-hash "$candidate_stamp")" in
+        cpu:none) ;;
+        gpu:none | gpu:) return 1 ;;
+        gpu:*) ;;
+        *) return 1 ;;
+    esac
+}
+
+stamp_matches() {
+    candidate_stamp=$1
+    expected=$2
+    stamp_is_well_formed "$candidate_stamp" || return 1
+    [ "$(sed -n '1,11p' "$candidate_stamp")" = "$expected" ]
+}
+
+libmo_matches_stamp() {
+    candidate_stamp=$1
+    libmo=$2
+    [ -f "$libmo" ] || return 1
+    [ "$(git hash-object --no-filters "$libmo")" = \
+        "$(file_value libmo-hash "$candidate_stamp")" ]
+}
+
+thirdparty_hash() {
+    metadata_root=$1
+    paths=$(CDPATH= cd "$metadata_root" &&
+        find thirdparties/install/include thirdparties/install/lib \
+            \( -type f -o -type l \) -print | LC_ALL=C sort) || return 1
+    [ -n "$paths" ] || return 1
+
+    # hash-object interprets --stdin-paths from the repository root and hashes
+    # all files in one process. Bind the sorted names and their ordered content
+    # hashes so additions, removals, renames, symlink changes, and byte changes
+    # all invalidate the aggregate without spawning one Git process per file.
+    hashes=$(CDPATH= cd "$metadata_root" &&
+        printf '%s\n' "$paths" |
+            git hash-object --no-filters --stdin-paths) || return 1
+    [ "$(printf '%s\n' "$paths" | wc -l | tr -d ' ')" = \
+        "$(printf '%s\n' "$hashes" | wc -l | tr -d ' ')" ] || return 1
+    printf 'paths\n%s\nhashes\n%s\n' "$paths" "$hashes" |
+        git hash-object --stdin
+}
+
+thirdparty_matches_stamp() {
+    candidate_stamp=$1
+    metadata_root=$2
+    [ "$(thirdparty_hash "$metadata_root")" = \
+        "$(file_value thirdparty-hash "$candidate_stamp")" ]
+}
+
+cuda_fatbin_hash() {
+    metadata_root=$1
+    source_fatbin="$metadata_root/cgo/cuda/mocl_kernel64.fatbin"
+    staged_fatbin="$metadata_root/mocl_kernel64.fatbin"
+    [ -f "$source_fatbin" ] && [ -f "$staged_fatbin" ] || return 1
+    source_hash=$(git hash-object --no-filters "$source_fatbin") || return 1
+    staged_hash=$(git hash-object --no-filters "$staged_fatbin") || return 1
+    [ "$source_hash" = "$staged_hash" ] || return 1
+    printf '%s\n' "$source_hash"
+}
+
+cuda_fatbin_matches_stamp() {
+    candidate_stamp=$1
+    metadata_root=$2
+    accelerator=$(file_value accelerator "$candidate_stamp")
+    if [ "$accelerator" = cpu ]; then
+        [ "$(file_value cuda-fatbin-hash "$candidate_stamp")" = none ] &&
+            [ ! -e "$metadata_root/cgo/cuda/mocl_kernel64.fatbin" ] &&
+            [ ! -e "$metadata_root/mocl_kernel64.fatbin" ]
+        return
+    fi
+    [ "$(cuda_fatbin_hash "$metadata_root")" = \
+        "$(file_value cuda-fatbin-hash "$candidate_stamp")" ]
+}
+
+cuda_fatbin_is_newer() {
+    metadata_root=$1
+    reference=$2
+    [ "$metadata_root/cgo/cuda/mocl_kernel64.fatbin" -nt "$reference" ] ||
+        [ "$metadata_root/mocl_kernel64.fatbin" -nt "$reference" ]
+}
+
+emit_artifact_metadata() {
+    root=$1
+    libmo=$2
+    accelerator=$3
+    libmo_hash=$(git hash-object --no-filters "$libmo") || return 1
+    installed_thirdparty_hash=$(thirdparty_hash "$root") || return 1
+    cuda_fatbin_hash_value=none
+    if [ "$accelerator" = gpu ]; then
+        cuda_fatbin_hash_value=$(cuda_fatbin_hash "$root") || return 1
+    fi
+    printf 'libmo-hash=%s\n' "$libmo_hash"
+    printf 'thirdparty-hash=%s\n' "$installed_thirdparty_hash"
+    printf 'cuda-fatbin-hash=%s\n' "$cuda_fatbin_hash_value"
+}
+
+newer_thirdparty_output() {
+    root=$1
+    reference=$2
+    find "$root/thirdparties/install/include" "$root/thirdparties/install/lib" \
+        \( -type f -o -type l \) -newer "$reference" -print -quit
+}
+
+write_build_marker() {
+    marker=$1
+    action=$2
+    reusable=$3
+    expected=${4:-}
+    marker_temporary="$marker.tmp"
+    rm -f "$marker_temporary"
+    trap 'rm -f "$marker_temporary"' EXIT
+    trap 'exit 129' HUP
+    trap 'exit 130' INT
+    trap 'exit 143' TERM
+    {
+        printf 'pending-format=1\n'
+        printf 'action=%s\n' "$action"
+        printf 'reusable=%s\n' "$reusable"
+        if [ "$reusable" = yes ]; then
+            printf '%s\n' "$expected"
+        fi
+    } >"$marker_temporary"
+    mv "$marker_temporary" "$marker"
+    marker_temporary=
+    trap - EXIT HUP INT TERM
+}
+
+read_build_marker() {
+    marker=$1
+    [ -f "$marker" ] || return 1
+    marker_format=$(file_value pending-format "$marker")
+    marker_action=$(file_value action "$marker")
+    marker_reusable=$(file_value reusable "$marker")
+    [ "$marker_format" = 1 ] || return 1
+    case "$marker_action" in
+        local | reuse | rebuild-cgo | rebuild-all) ;;
+        *) return 1 ;;
+    esac
+    case "$marker_reusable" in
+        yes)
+            [ "$(wc -l <"$marker" | tr -d ' ')" -eq 14 ] || return 1
+            marker_provenance=$(sed -n '4,14p' "$marker")
+            ;;
+        no)
+            [ "$(wc -l <"$marker" | tr -d ' ')" -eq 3 ] || return 1
+            marker_provenance=
+            ;;
+        *) return 1 ;;
+    esac
+}
+
+max_action() {
+    first=$1
+    second=$2
+    if [ "$first" = rebuild-all ] || [ "$second" = rebuild-all ]; then
+        printf 'rebuild-all\n'
+    elif [ "$first" = rebuild-cgo ] || [ "$second" = rebuild-cgo ]; then
+        printf 'rebuild-cgo\n'
+    elif [ "$first" = local ] || [ "$second" = local ]; then
+        printf 'local\n'
+    else
+        printf 'reuse\n'
+    fi
+}
+
+if [ "$#" -lt 1 ]; then
+    usage
+    exit 2
+fi
+
+operation=$1
+shift
+
+case "$operation" in
+    prepare)
+        if [ "$#" -ne 4 ]; then
+            usage
+            exit 2
+        fi
+        root=$1
+        accelerator=$2
+        optimization=$3
+        simsimd=$4
+        validate_build_key "$accelerator" "$optimization" "$simsimd"
+        host_platform
+
+        stamp="$root/cgo/.mo-native-provenance"
+        pending="$stamp.pending"
+        building="$stamp.building"
+        # A failed/signal-interrupted marker publication from an older
+        # generation is unpublished scratch, not a native source edit. Recycle
+        # it before Git status classification so it cannot force a local-only
+        # build followed by another full migration rebuild.
+        rm -f "$pending.tmp" "$building.tmp"
+        action=local
+        reusable=no
+        expected=
+
+        if git -C "$root" rev-parse --verify HEAD >/dev/null 2>&1 &&
+           native_status=$(git -C "$root" status \
+                --porcelain --untracked-files=all -- $native_paths); then
+            action=rebuild-all
+            if [ -z "$native_status" ]; then
+                reusable=yes
+                expected=$(emit_provenance "$root" "$goos" "$goarch" \
+                    "$accelerator" "$optimization" "$simsimd")
+                if stamp_matches "$stamp" "$expected" &&
+                   [ -d "$root/thirdparties/install/include" ] &&
+                   [ -d "$root/thirdparties/install/lib" ]; then
+                    if ! thirdparty_matches_stamp "$stamp" "$root"; then
+                        action=rebuild-all
+                    elif ! newer_thirdparty=$(newer_thirdparty_output "$root" "$stamp"); then
+                        action=rebuild-all
+                    elif [ -n "$newer_thirdparty" ]; then
+                        action=rebuild-all
+                    elif ! libmo_matches_stamp "$stamp" "$root/cgo/$libmo_name" ||
+                         ! cuda_fatbin_matches_stamp "$stamp" "$root" ||
+                         [ "$root/cgo/$libmo_name" -nt "$stamp" ] ||
+                         cuda_fatbin_is_newer "$root" "$stamp"; then
+                        action=rebuild-cgo
+                    else
+                        action=reuse
+                    fi
+                elif stamp_is_well_formed "$stamp"; then
+                    expected_makefile=$(printf '%s\n' "$expected" | sed -n 's/^makefile=//p')
+                    expected_thirdparties=$(printf '%s\n' "$expected" | sed -n 's/^thirdparties=//p')
+                    expected_goos=$(printf '%s\n' "$expected" | sed -n 's/^goos=//p')
+                    expected_goarch=$(printf '%s\n' "$expected" | sed -n 's/^goarch=//p')
+                    expected_simsimd=$(printf '%s\n' "$expected" | sed -n 's/^simsimd=//p')
+                    expected_common_environment=$(printf '%s\n' "$expected" | sed -n 's/^common-environment=//p')
+                    if [ "$(file_value makefile "$stamp")" = "$expected_makefile" ] &&
+                       [ "$(file_value thirdparties "$stamp")" = "$expected_thirdparties" ] &&
+                       [ "$(file_value goos "$stamp")" = "$expected_goos" ] &&
+                       [ "$(file_value goarch "$stamp")" = "$expected_goarch" ] &&
+                       [ "$(file_value simsimd "$stamp")" = "$expected_simsimd" ] &&
+                       [ "$(file_value common-environment "$stamp")" = "$expected_common_environment" ] &&
+                       [ -d "$root/thirdparties/install/include" ] &&
+                       [ -d "$root/thirdparties/install/lib" ] &&
+                       thirdparty_matches_stamp "$stamp" "$root" &&
+                       newer_thirdparty=$(newer_thirdparty_output "$root" "$stamp") &&
+                       [ -z "$newer_thirdparty" ]; then
+                        action=rebuild-cgo
+                    fi
+                fi
+            else
+                # Dirty CGo inputs cannot be shared, but a CGo-only edit does
+                # not need an expensive thirdparty rebuild on every iteration.
+                if ! non_cgo_status=$(git -C "$root" status --porcelain \
+                    --untracked-files=all -- Makefile thirdparties); then
+                    action=local
+                    reusable=no
+                    expected=
+                elif [ -z "$non_cgo_status" ]; then
+                    action=rebuild-cgo
+                fi
+            fi
+        fi
+
+        # An interrupted generation is never considered complete. Preserve a
+        # prior full-rebuild requirement; otherwise at least clean CGo before
+        # resuming, even when the old generation had been reusable.
+        old_action=
+        if read_build_marker "$pending"; then
+            old_action=$marker_action
+        elif read_build_marker "$building"; then
+            old_action=$marker_action
+        elif [ -e "$pending" ] || [ -e "$building" ]; then
+            old_action=rebuild-all
+        fi
+        if [ -n "$old_action" ]; then
+            case "$old_action" in
+                reuse | local)
+                    # Neither action proves that a started generation left CGo
+                    # objects untouched. In particular, local may mean Git
+                    # inspection failed transiently and an untracked object was
+                    # compiled before interruption. Never let that unknown
+                    # generation participate in the next incremental relink.
+                    old_action=rebuild-cgo
+                    ;;
+            esac
+            # Recovery requirements are monotonic. The old incomplete
+            # generation can only strengthen the action diagnosed from current
+            # source/artifact state; matching provenance never makes current
+            # corruption safe to keep.
+            action=$(max_action "$action" "$old_action")
+        fi
+
+        rm -f "$pending" "$building"
+        # The old stamp remains the last committed generation. pending/building
+        # prevents its reuse while a replacement is incomplete; retaining it
+        # preserves the exact thirdparty baseline needed to recover a narrow
+        # CGo rebuild without hiding newly detected artifact corruption.
+        write_build_marker "$pending" "$action" "$reusable" "$expected"
+        printf '%s\n' "$action"
+        ;;
+
+    begin)
+        if [ "$#" -ne 4 ]; then
+            usage
+            exit 2
+        fi
+        root=$1
+        accelerator=$2
+        optimization=$3
+        simsimd=$4
+        validate_build_key "$accelerator" "$optimization" "$simsimd"
+        host_platform
+        stamp="$root/cgo/.mo-native-provenance"
+        pending="$stamp.pending"
+        building="$stamp.building"
+        read_build_marker "$pending" || {
+            echo "native build preparation marker is missing or invalid" >&2
+            exit 1
+        }
+
+        if [ "$marker_reusable" = yes ]; then
+            current=$(emit_provenance "$root" "$goos" "$goarch" \
+                "$accelerator" "$optimization" "$simsimd")
+            if ! native_status=$(git -C "$root" status --porcelain \
+                --untracked-files=all -- $native_paths); then
+                echo "cannot inspect native inputs after build preparation" >&2
+                exit 1
+            fi
+            if [ "$current" != "$marker_provenance" ] || [ -n "$native_status" ]; then
+                echo "native inputs changed after build preparation" >&2
+                exit 1
+            fi
+        fi
+
+        case "$marker_action" in
+            local)
+                # Source archives and exported trees have no Git identity to
+                # stamp. Preserve their historical incremental-build behavior
+                # while keeping the result local-only.
+                ;;
+            reuse)
+                stamp_matches "$stamp" "$marker_provenance" || {
+                    echo "reusable native generation changed after preparation" >&2
+                    exit 1
+                }
+                if [ ! -f "$root/cgo/$libmo_name" ] ||
+                   [ ! -d "$root/thirdparties/install/include" ] ||
+                   [ ! -d "$root/thirdparties/install/lib" ] ||
+                   [ "$root/cgo/$libmo_name" -nt "$stamp" ] ||
+                   ! libmo_matches_stamp "$stamp" "$root/cgo/$libmo_name" ||
+                   ! thirdparty_matches_stamp "$stamp" "$root" ||
+                   ! cuda_fatbin_matches_stamp "$stamp" "$root" ||
+                   cuda_fatbin_is_newer "$root" "$stamp"; then
+                    echo "reusable native artifact set changed after preparation" >&2
+                    exit 1
+                fi
+                if ! newer_thirdparty=$(newer_thirdparty_output "$root" "$stamp") ||
+                   [ -n "$newer_thirdparty" ]; then
+                    echo "reusable native thirdparty outputs changed after preparation" >&2
+                    exit 1
+                fi
+                ;;
+            rebuild-cgo | rebuild-all)
+                for output in "$root"/cgo/*.o "$root"/cgo/*.a \
+                    "$root"/cgo/*.so "$root"/cgo/*.dylib \
+                    "$root"/mocl_kernel64.fatbin; do
+                    if [ -e "$output" ]; then
+                        echo "native CGo cleanup did not remove $output" >&2
+                        exit 1
+                    fi
+                done
+                leftover_gpu_output=$(find "$root/cgo/cuda" "$root/cgo/cuvs" \
+                    -type f \( -name '*.o' -o -name '*.a' -o -name '*.so' \
+                    -o -name '*.dylib' -o -name '*.fatbin' \) \
+                    -print -quit 2>/dev/null || true)
+                if [ -n "$leftover_gpu_output" ]; then
+                    echo "native GPU cleanup did not remove $leftover_gpu_output" >&2
+                    exit 1
+                fi
+                if [ "$marker_action" = rebuild-all ] &&
+                   [ -e "$root/thirdparties/install" ]; then
+                    echo "native thirdparty cleanup did not remove thirdparties/install" >&2
+                    exit 1
+                fi
+                ;;
+        esac
+
+        rm -f "$building"
+        mv "$pending" "$building"
+        ;;
+
+    record)
+        if [ "$#" -ne 4 ]; then
+            usage
+            exit 2
+        fi
+        root=$1
+        accelerator=$2
+        optimization=$3
+        simsimd=$4
+        validate_build_key "$accelerator" "$optimization" "$simsimd"
+        host_platform
+        stamp="$root/cgo/.mo-native-provenance"
+        building="$stamp.building"
+        temporary_stamp="$stamp.tmp"
+        rm -f "$temporary_stamp"
+        trap 'rm -f "$temporary_stamp"' EXIT
+        trap 'exit 129' HUP
+        trap 'exit 130' INT
+        trap 'exit 143' TERM
+
+        read_build_marker "$building" || {
+            echo "native build completion marker is missing or invalid" >&2
+            exit 1
+        }
+        [ -f "$root/cgo/$libmo_name" ] || {
+            echo "native build did not produce cgo/$libmo_name" >&2
+            exit 1
+        }
+        [ -d "$root/thirdparties/install/include" ] &&
+            [ -d "$root/thirdparties/install/lib" ] || {
+            echo "native build did not produce thirdparties/install" >&2
+            exit 1
+        }
+        if [ "$accelerator" = gpu ] && ! cuda_fatbin_hash "$root" >/dev/null; then
+            echo "native GPU build did not produce matching source and staged fatbins" >&2
+            exit 1
+        fi
+
+        # Dirty or non-Git builds remain valid locally but are never advertised
+        # to another worktree as reproducible.
+        if [ "$marker_reusable" = no ]; then
+            rm -f "$stamp" "$building"
+            echo "native artifacts are not reusable: tracked native inputs are dirty or unavailable" >&2
+            trap - EXIT HUP INT TERM
+            exit 0
+        fi
+
+        current=$(emit_provenance "$root" "$goos" "$goarch" \
+            "$accelerator" "$optimization" "$simsimd")
+        if ! native_status=$(git -C "$root" status --porcelain \
+            --untracked-files=all -- $native_paths); then
+            echo "cannot inspect native inputs while recording the build" >&2
+            exit 1
+        fi
+        if [ "$current" != "$marker_provenance" ] || [ -n "$native_status" ]; then
+            echo "native inputs changed while the build was running" >&2
+            exit 1
+        fi
+
+        # prepare proved the exact artifact hashes for a reuse generation. The
+        # intervening thirdparty and CGo makes must be no-ops. Recheck contents
+        # at commit time as well: timestamp freshness alone misses replacements
+        # made within one filesystem clock tick or with a restored mtime.
+        if [ "$marker_action" = reuse ]; then
+            if ! stamp_matches "$stamp" "$marker_provenance" ||
+               ! libmo_matches_stamp "$stamp" "$root/cgo/$libmo_name" ||
+               ! thirdparty_matches_stamp "$stamp" "$root" ||
+               ! cuda_fatbin_matches_stamp "$stamp" "$root" ||
+               [ "$root/cgo/$libmo_name" -nt "$stamp" ] ||
+               cuda_fatbin_is_newer "$root" "$stamp"; then
+                echo "reusable native artifacts changed while the build was running" >&2
+                exit 1
+            fi
+            if ! newer_thirdparty=$(newer_thirdparty_output "$root" "$stamp") ||
+               [ -n "$newer_thirdparty" ]; then
+                echo "reusable native thirdparty outputs changed while the build was running" >&2
+                exit 1
+            fi
+            rm -f "$building"
+            trap - EXIT HUP INT TERM
+            exit 0
+        fi
+
+        printf '%s\n' "$current" >"$temporary_stamp"
+        emit_artifact_metadata "$root" "$root/cgo/$libmo_name" \
+            "$accelerator" >>"$temporary_stamp"
+        mv "$temporary_stamp" "$stamp"
+        rm -f "$building"
+        trap - EXIT HUP INT TERM
+        ;;
+
+    verify)
+        if [ "$#" -ne 7 ]; then
+            usage
+            exit 2
+        fi
+        root=$1
+        libmo=$2
+        provenance_goos=$3
+        provenance_goarch=$4
+        accelerator=$5
+        optimization=$6
+        simsimd=$7
+        validate_build_key "$accelerator" "$optimization" "$simsimd"
+        stamp="$root/cgo/.mo-native-provenance"
+        pending="$stamp.pending"
+        building="$stamp.building"
+
+        if [ -e "$pending" ] || [ -e "$building" ]; then
+            echo "native artifact build is incomplete" >&2
+            exit 1
+        fi
+        if [ ! -f "$stamp" ]; then
+            echo "native artifact provenance stamp is missing" >&2
+            exit 1
+        fi
+        if ! native_status=$(git -C "$root" status \
+            --porcelain --untracked-files=all -- $native_paths); then
+            echo "cannot inspect native inputs" >&2
+            exit 1
+        fi
+        if [ -n "$native_status" ]; then
+            echo "native inputs are dirty" >&2
+            exit 1
+        fi
+
+        expected=$(emit_provenance "$root" "$provenance_goos" \
+            "$provenance_goarch" "$accelerator" "$optimization" "$simsimd")
+        if ! stamp_matches "$stamp" "$expected"; then
+            echo "native artifact provenance does not match source, platform, or build key" >&2
+            exit 1
+        fi
+        if [ ! -f "$libmo" ] ||
+           [ ! -d "$root/thirdparties/install/include" ] ||
+           [ ! -d "$root/thirdparties/install/lib" ]; then
+            echo "native artifact set is incomplete" >&2
+            exit 1
+        fi
+        if ! libmo_matches_stamp "$stamp" "$libmo" ||
+           ! thirdparty_matches_stamp "$stamp" "$root" ||
+           ! cuda_fatbin_matches_stamp "$stamp" "$root"; then
+            echo "native artifact contents do not match provenance" >&2
+            exit 1
+        fi
+
+        # Direct `make -C cgo`, manual replacement, or a thirdparty rebuild can
+        # change ignored artifacts without changing Git state. The top-level
+        # build writes the stamp last, so anything newer invalidates reuse.
+        if ! newer_thirdparty=$(newer_thirdparty_output "$root" "$stamp"); then
+            echo "cannot inspect native artifact freshness" >&2
+            exit 1
+        fi
+        if [ "$libmo" -nt "$stamp" ] || [ -n "$newer_thirdparty" ] ||
+           cuda_fatbin_is_newer "$root" "$stamp"; then
+            echo "native artifacts changed after provenance was recorded" >&2
+            exit 1
+        fi
+        ;;
+
+    *)
+        usage
+        exit 2
+        ;;
+esac
