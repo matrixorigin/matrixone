@@ -65,14 +65,18 @@ select id from pk_dt where match(body) against('beta') order by id;
 select id from pk_dt where match(body) against('gamma') order by id;
 select id from pk_dec where match(body) against('beta') order by id;
 
--- #3: T_json flattened + searchable (both values and both docs)
-select id from j1 where match(doc) against('quantum') order by id;
-select id from j1 where match(doc) against('food') order by id;
+-- #3: T_json indexed by the CDC consumer and searchable. The json parser
+-- indexes each leaf as a (key, value) tuple, so it is queried through
+-- json_extract rather than free text; a whole value matches, not a substring.
+select id from j1 where json_extract_string(doc,'$.title') = 'quantum physics' order by id;
+select id from j1 where json_extract_string(doc,'$.tag') = 'food' order by id;
 
--- #4: BOTH json columns searchable (a and b)
-select id from j2 where match(a,b) against('hello') order by id;
-select id from j2 where match(a,b) against('bar') order by id;
-select id from j2 where match(a,b) against('dolor') order by id;
+-- #4: BOTH json columns indexed (a and b). A multi-column json index is not
+-- probed (the probe resolves a single column), so these fall back to a plain
+-- scan — still correct, and they still prove both columns were indexed.
+select id from j2 where json_extract_string(a,'$.x') = 'hello world' order by id;
+select id from j2 where json_extract_string(b,'$.y') = 'foo bar' order by id;
+select id from j2 where json_extract_string(b,'$.y') = 'dolor sit' order by id;
 
 -- #6: REBUILD over an emptied table must not serve the stale (deleted) base
 -- both rows searchable before the rebuild

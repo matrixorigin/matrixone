@@ -1,0 +1,347 @@
+set experimental_fulltext2_index = 1;
+drop database if exists fulltext2_candidate_limit;
+create database fulltext2_candidate_limit;
+use fulltext2_candidate_limit;
+create table ft_exact (
+id bigint primary key,
+body text not null,
+category varchar(20) not null
+);
+insert into ft_exact values
+(1, 'needle needle needle needle needle', 'drop'),
+(2, 'needle needle needle', 'drop'),
+(3, 'needle', 'keep'),
+(4, 'needle', 'keep'),
+(5, 'needle', 'keep');
+create fulltext2 index ft_exact_idx on ft_exact(body) with parser gojieba;
+set fulltext_bloom_filter_pushdown = 0;
+select id from ft_exact
+where match(body) against('+needle' in boolean mode) and category = 'keep'
+limit 2 offset 1;
+➤ id[-5,64,0]  𝄀
+5  𝄀
+3
+set fulltext_bloom_filter_pushdown = 1;
+select id from ft_exact
+where match(body) against('+needle' in boolean mode) and category = 'keep'
+limit 2 offset 1;
+➤ id[-5,64,0]  𝄀
+5  𝄀
+3
+select id from ft_exact
+where match(body) against('+needle' in boolean mode) and category = 'keep'
+limit 2;
+➤ id[-5,64,0]  𝄀
+4  𝄀
+3
+explain select id from ft_exact
+where match(body) against('+needle' in boolean mode) and category = 'keep'
+limit 2 offset 1;
+-- @regex("Limit: 3", true)
+➤ TP QUERY PLAN[12,-1,0]  𝄀
+Project  𝄀
+  ->  Sort  𝄀
+        Sort Key: mo_fulltext_alias_0.__mo_ft_score DESC  𝄀
+        Limit: 2, Offset: 1  𝄀
+        ->  Join  𝄀
+              Join Type: INNER  𝄀
+              Join Cond: (ft_exact.id = mo_fulltext_alias_0.__mo_ft_doc_id)  𝄀
+              Runtime Filter Build: #[-1,0]  𝄀
+              ->  Table Scan on fulltext2_candidate_limit.ft_exact  𝄀
+                    Filter Cond: (ft_exact.category = 'keep')  𝄀
+                    Runtime Filter Probe: ft_exact.id  𝄀
+              ->  Join  𝄀
+                    Join Type: INNER  𝄀
+                    Join Cond: (mo_fulltext_alias_0.__mo_ft_doc_id = ft_exact.id)  𝄀
+                    Runtime Filter Build: #[9,0]  𝄀
+                    ->  Table Function on fulltext2_search  𝄀
+                          Runtime Filter Probe: #[7,0]  𝄀
+                          Limit: 3  𝄀
+                    ->  Table Scan on fulltext2_candidate_limit.ft_exact  𝄀
+                          Filter Cond: (ft_exact.category = 'keep')
+create table ft_varchar (
+id varchar(20) primary key,
+body text not null,
+category varchar(20) not null
+);
+insert into ft_varchar values
+('doc-1', 'needle needle needle needle needle', 'drop'),
+('doc-2', 'needle needle needle', 'drop'),
+('doc-3', 'needle', 'keep'),
+('doc-4', 'needle', 'keep'),
+('doc-5', 'needle', 'keep');
+create fulltext2 index ft_varchar_idx on ft_varchar(body) with parser gojieba;
+set fulltext_bloom_filter_pushdown = 1;
+select id from ft_varchar
+where match(body) against('+needle' in boolean mode) and category = 'keep'
+limit 2 offset 1;
+➤ id[12,20,0]  𝄀
+doc-5  𝄀
+doc-3
+explain select id from ft_varchar
+where match(body) against('+needle' in boolean mode) and category = 'keep'
+limit 2 offset 1;
+-- @regex("Limit: 3", false)
+➤ TP QUERY PLAN[12,-1,0]  𝄀
+Project  𝄀
+  ->  Sort  𝄀
+        Sort Key: mo_fulltext_alias_0.__mo_ft_score DESC  𝄀
+        Limit: 2, Offset: 1  𝄀
+        ->  Join  𝄀
+              Join Type: INNER  𝄀
+              Join Cond: (ft_varchar.id = mo_fulltext_alias_0.__mo_ft_doc_id)  𝄀
+              Runtime Filter Build: #[-1,0]  𝄀
+              ->  Table Scan on fulltext2_candidate_limit.ft_varchar  𝄀
+                    Filter Cond: (ft_varchar.category = 'keep')  𝄀
+                    Runtime Filter Probe: ft_varchar.id  𝄀
+              ->  Join  𝄀
+                    Join Type: INNER  𝄀
+                    Join Cond: (mo_fulltext_alias_0.__mo_ft_doc_id = ft_varchar.id)  𝄀
+                    Runtime Filter Build: #[9,0]  𝄀
+                    ->  Table Function on fulltext2_search  𝄀
+                          Runtime Filter Probe: #[7,0]  𝄀
+                    ->  Table Scan on fulltext2_candidate_limit.ft_varchar  𝄀
+                          Filter Cond: (ft_varchar.category = 'keep')
+explain select id from ft_exact
+where match(body) against('+needle other' in boolean mode) and category = 'keep'
+limit 2 offset 1;
+-- @regex("Limit: 3", false)
+➤ TP QUERY PLAN[12,-1,0]  𝄀
+Project  𝄀
+  ->  Sort  𝄀
+        Sort Key: mo_fulltext_alias_0.__mo_ft_score DESC  𝄀
+        Limit: 2, Offset: 1  𝄀
+        ->  Join  𝄀
+              Join Type: INNER  𝄀
+              Join Cond: (ft_exact.id = mo_fulltext_alias_0.__mo_ft_doc_id)  𝄀
+              Runtime Filter Build: #[-1,0]  𝄀
+              ->  Table Scan on fulltext2_candidate_limit.ft_exact  𝄀
+                    Filter Cond: (ft_exact.category = 'keep')  𝄀
+                    Runtime Filter Probe: ft_exact.id  𝄀
+              ->  Join  𝄀
+                    Join Type: INNER  𝄀
+                    Join Cond: (mo_fulltext_alias_0.__mo_ft_doc_id = ft_exact.id)  𝄀
+                    Runtime Filter Build: #[9,0]  𝄀
+                    ->  Table Function on fulltext2_search  𝄀
+                          Runtime Filter Probe: #[7,0]  𝄀
+                    ->  Table Scan on fulltext2_candidate_limit.ft_exact  𝄀
+                          Filter Cond: (ft_exact.category = 'keep')
+explain select id from ft_exact
+where match(body) against('"needle other"' in boolean mode) and category = 'keep'
+limit 2 offset 1;
+-- @regex("Limit: 3", false)
+➤ TP QUERY PLAN[12,-1,0]  𝄀
+Project  𝄀
+  ->  Sort  𝄀
+        Sort Key: mo_fulltext_alias_0.__mo_ft_score DESC  𝄀
+        Limit: 2, Offset: 1  𝄀
+        ->  Join  𝄀
+              Join Type: INNER  𝄀
+              Join Cond: (ft_exact.id = mo_fulltext_alias_0.__mo_ft_doc_id)  𝄀
+              Runtime Filter Build: #[-1,0]  𝄀
+              ->  Table Scan on fulltext2_candidate_limit.ft_exact  𝄀
+                    Filter Cond: (ft_exact.category = 'keep')  𝄀
+                    Runtime Filter Probe: ft_exact.id  𝄀
+              ->  Join  𝄀
+                    Join Type: INNER  𝄀
+                    Join Cond: (mo_fulltext_alias_0.__mo_ft_doc_id = ft_exact.id)  𝄀
+                    Runtime Filter Build: #[9,0]  𝄀
+                    ->  Table Function on fulltext2_search  𝄀
+                          Runtime Filter Probe: #[7,0]  𝄀
+                    ->  Table Scan on fulltext2_candidate_limit.ft_exact  𝄀
+                          Filter Cond: (ft_exact.category = 'keep')
+explain select id from ft_exact
+where match(body) against('need*' in boolean mode) and category = 'keep'
+limit 2 offset 1;
+-- @regex("Limit: 3", false)
+➤ TP QUERY PLAN[12,-1,0]  𝄀
+Project  𝄀
+  ->  Sort  𝄀
+        Sort Key: mo_fulltext_alias_0.__mo_ft_score DESC  𝄀
+        Limit: 2, Offset: 1  𝄀
+        ->  Join  𝄀
+              Join Type: INNER  𝄀
+              Join Cond: (ft_exact.id = mo_fulltext_alias_0.__mo_ft_doc_id)  𝄀
+              Runtime Filter Build: #[-1,0]  𝄀
+              ->  Table Scan on fulltext2_candidate_limit.ft_exact  𝄀
+                    Filter Cond: (ft_exact.category = 'keep')  𝄀
+                    Runtime Filter Probe: ft_exact.id  𝄀
+              ->  Join  𝄀
+                    Join Type: INNER  𝄀
+                    Join Cond: (mo_fulltext_alias_0.__mo_ft_doc_id = ft_exact.id)  𝄀
+                    Runtime Filter Build: #[9,0]  𝄀
+                    ->  Table Function on fulltext2_search  𝄀
+                          Runtime Filter Probe: #[7,0]  𝄀
+                    ->  Table Scan on fulltext2_candidate_limit.ft_exact  𝄀
+                          Filter Cond: (ft_exact.category = 'keep')
+explain select id from ft_exact
+where match(body) against('+needle -other' in boolean mode) and category = 'keep'
+limit 2 offset 1;
+-- @regex("Limit: 3", false)
+➤ TP QUERY PLAN[12,-1,0]  𝄀
+Project  𝄀
+  ->  Sort  𝄀
+        Sort Key: mo_fulltext_alias_0.__mo_ft_score DESC  𝄀
+        Limit: 2, Offset: 1  𝄀
+        ->  Join  𝄀
+              Join Type: INNER  𝄀
+              Join Cond: (ft_exact.id = mo_fulltext_alias_0.__mo_ft_doc_id)  𝄀
+              Runtime Filter Build: #[-1,0]  𝄀
+              ->  Table Scan on fulltext2_candidate_limit.ft_exact  𝄀
+                    Filter Cond: (ft_exact.category = 'keep')  𝄀
+                    Runtime Filter Probe: ft_exact.id  𝄀
+              ->  Join  𝄀
+                    Join Type: INNER  𝄀
+                    Join Cond: (mo_fulltext_alias_0.__mo_ft_doc_id = ft_exact.id)  𝄀
+                    Runtime Filter Build: #[9,0]  𝄀
+                    ->  Table Function on fulltext2_search  𝄀
+                          Runtime Filter Probe: #[7,0]  𝄀
+                    ->  Table Scan on fulltext2_candidate_limit.ft_exact  𝄀
+                          Filter Cond: (ft_exact.category = 'keep')
+explain select id from ft_exact
+where match(body) against('+(needle other)' in boolean mode) and category = 'keep'
+limit 2 offset 1;
+-- @regex("Limit: 3", false)
+➤ TP QUERY PLAN[12,-1,0]  𝄀
+Project  𝄀
+  ->  Sort  𝄀
+        Sort Key: mo_fulltext_alias_0.__mo_ft_score DESC  𝄀
+        Limit: 2, Offset: 1  𝄀
+        ->  Join  𝄀
+              Join Type: INNER  𝄀
+              Join Cond: (ft_exact.id = mo_fulltext_alias_0.__mo_ft_doc_id)  𝄀
+              Runtime Filter Build: #[-1,0]  𝄀
+              ->  Table Scan on fulltext2_candidate_limit.ft_exact  𝄀
+                    Filter Cond: (ft_exact.category = 'keep')  𝄀
+                    Runtime Filter Probe: ft_exact.id  𝄀
+              ->  Join  𝄀
+                    Join Type: INNER  𝄀
+                    Join Cond: (mo_fulltext_alias_0.__mo_ft_doc_id = ft_exact.id)  𝄀
+                    Runtime Filter Build: #[9,0]  𝄀
+                    ->  Table Function on fulltext2_search  𝄀
+                          Runtime Filter Probe: #[7,0]  𝄀
+                    ->  Table Scan on fulltext2_candidate_limit.ft_exact  𝄀
+                          Filter Cond: (ft_exact.category = 'keep')
+explain select id from ft_exact
+where match(body) against('+needle ~other' in boolean mode) and category = 'keep'
+limit 2 offset 1;
+-- @regex("Limit: 3", false)
+➤ TP QUERY PLAN[12,-1,0]  𝄀
+Project  𝄀
+  ->  Sort  𝄀
+        Sort Key: mo_fulltext_alias_0.__mo_ft_score DESC  𝄀
+        Limit: 2, Offset: 1  𝄀
+        ->  Join  𝄀
+              Join Type: INNER  𝄀
+              Join Cond: (ft_exact.id = mo_fulltext_alias_0.__mo_ft_doc_id)  𝄀
+              Runtime Filter Build: #[-1,0]  𝄀
+              ->  Table Scan on fulltext2_candidate_limit.ft_exact  𝄀
+                    Filter Cond: (ft_exact.category = 'keep')  𝄀
+                    Runtime Filter Probe: ft_exact.id  𝄀
+              ->  Join  𝄀
+                    Join Type: INNER  𝄀
+                    Join Cond: (mo_fulltext_alias_0.__mo_ft_doc_id = ft_exact.id)  𝄀
+                    Runtime Filter Build: #[9,0]  𝄀
+                    ->  Table Function on fulltext2_search  𝄀
+                          Runtime Filter Probe: #[7,0]  𝄀
+                    ->  Table Scan on fulltext2_candidate_limit.ft_exact  𝄀
+                          Filter Cond: (ft_exact.category = 'keep')
+explain select id from ft_exact
+where match(body) against('+needle +world' in boolean mode) and category = 'keep' and rand() < 0.5
+limit 2 offset 1;
+-- @regex("Limit: 3", false)
+➤ TP QUERY PLAN[12,-1,0]  𝄀
+Project  𝄀
+  ->  Sort  𝄀
+        Sort Key: mo_fulltext_alias_0.__mo_ft_score DESC  𝄀
+        Limit: 2, Offset: 1  𝄀
+        ->  Join  𝄀
+              Join Type: INNER  𝄀
+              Join Cond: (ft_exact.id = mo_fulltext_alias_0.__mo_ft_doc_id)  𝄀
+              Runtime Filter Build: #[-1,0]  𝄀
+              ->  Table Scan on fulltext2_candidate_limit.ft_exact  𝄀
+                    Filter Cond: (ft_exact.category = 'keep'), (rand() < 0.5)  𝄀
+                    Runtime Filter Probe: ft_exact.id  𝄀
+              ->  Table Function on fulltext2_search  𝄀
+                    Runtime Filter Probe: #[7,0]
+explain select id from ft_exact
+where match(body) against('needle' in natural language mode)
+limit 2 offset 1;
+-- @regex("Limit: 3", true)
+➤ TP QUERY PLAN[12,-1,0]  𝄀
+Project  𝄀
+  ->  Sort  𝄀
+        Sort Key: mo_fulltext_alias_0.__mo_ft_score DESC  𝄀
+        Limit: 2, Offset: 1  𝄀
+        ->  Join  𝄀
+              Join Type: INNER  𝄀
+              Join Cond: (ft_exact.id = mo_fulltext_alias_0.__mo_ft_doc_id)  𝄀
+              Runtime Filter Build: #[-1,0]  𝄀
+              ->  Table Scan on fulltext2_candidate_limit.ft_exact  𝄀
+                    Runtime Filter Probe: ft_exact.id  𝄀
+              ->  Table Function on fulltext2_search  𝄀
+                    Limit: 3
+create table ft_ngram (
+id bigint primary key,
+body text not null,
+category varchar(20) not null
+);
+insert into ft_ngram values
+(1, '中文 中文', 'drop'),
+(2, '中文', 'keep'),
+(3, '中文', 'keep');
+create fulltext2 index ft_ngram_idx on ft_ngram(body) with parser ngram;
+explain select id from ft_ngram
+where match(body) against('+中文' in boolean mode) and category = 'keep'
+limit 2 offset 1;
+-- @regex("Limit: 3", false)
+➤ TP QUERY PLAN[12,-1,0]  𝄀
+Project  𝄀
+  ->  Sort  𝄀
+        Sort Key: mo_fulltext_alias_0.__mo_ft_score DESC  𝄀
+        Limit: 2, Offset: 1  𝄀
+        ->  Join  𝄀
+              Join Type: INNER  𝄀
+              Join Cond: (ft_ngram.id = mo_fulltext_alias_0.__mo_ft_doc_id)  𝄀
+              Runtime Filter Build: #[-1,0]  𝄀
+              ->  Table Scan on fulltext2_candidate_limit.ft_ngram  𝄀
+                    Filter Cond: (ft_ngram.category = 'keep')  𝄀
+                    Runtime Filter Probe: ft_ngram.id  𝄀
+              ->  Join  𝄀
+                    Join Type: INNER  𝄀
+                    Join Cond: (mo_fulltext_alias_0.__mo_ft_doc_id = ft_ngram.id)  𝄀
+                    Runtime Filter Build: #[9,0]  𝄀
+                    ->  Table Function on fulltext2_search  𝄀
+                          Runtime Filter Probe: #[7,0]  𝄀
+                    ->  Table Scan on fulltext2_candidate_limit.ft_ngram  𝄀
+                          Filter Cond: (ft_ngram.category = 'keep')
+create table ft_include (
+id bigint primary key,
+body text not null,
+category bigint not null,
+payload varchar(20) not null
+);
+insert into ft_include values
+(1, 'needle needle needle', 0, 'a'),
+(2, 'needle', 1, 'b'),
+(3, 'needle', 1, 'c'),
+(4, 'needle', 1, 'd');
+create fulltext2 index ft_include_idx on ft_include(body) include(category) with parser gojieba;
+explain select id, payload from ft_include
+where match(body) against('needle' in natural language mode) and category = 1
+limit 2 offset 1;
+-- @regex("Limit: 3", true)
+➤ TP QUERY PLAN[12,-1,0]  𝄀
+Project  𝄀
+  ->  Sort  𝄀
+        Sort Key: mo_fulltext_alias_0.__mo_ft_score DESC  𝄀
+        Limit: 2, Offset: 1  𝄀
+        ->  Join  𝄀
+              Join Type: INNER  𝄀
+              Join Cond: (ft_include.id = mo_fulltext_alias_0.__mo_ft_doc_id)  𝄀
+              Runtime Filter Build: #[-1,0]  𝄀
+              ->  Table Scan on fulltext2_candidate_limit.ft_include  𝄀
+                    Runtime Filter Probe: ft_include.id  𝄀
+              ->  Table Function on fulltext2_search  𝄀
+                    Limit: 3
+drop database fulltext2_candidate_limit;

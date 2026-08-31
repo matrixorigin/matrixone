@@ -695,3 +695,40 @@ func appendZero(buf []byte, length int) []byte {
 	}
 	return buf
 }
+
+// TerminalKey returns the path's final object KEY, and whether the path is
+// deterministic enough to derive one.
+//
+// It exists so a caller that wants to reason about "which key does this path
+// address" uses the canonical parsed representation rather than re-scanning the
+// literal. A string scan gets `$."a.b"` wrong — splitting on the last '.' yields
+// `b"` where the real key is `a.b` — and an index probe built from that wrong
+// key silently matches nothing.
+//
+// Trailing subscripts keep the enclosing key: `$.a[0]` and `$.a[0][1]` both
+// report "a", matching how array elements are indexed under the key that holds
+// the array. A path with no key at all (`$`, `$[0]`) reports ok=false.
+//
+// Any non-deterministic step — `**`, a key wildcard, `[*]`, or a range — reports
+// ok=false: such a path can address many leaves, so no single key is implied.
+func (p Path) TerminalKey() (string, bool) {
+	key := ""
+	found := false
+	for i := range p.paths {
+		switch p.paths[i].tp {
+		case subPathKey:
+			key = p.paths[i].key
+			found = true
+		case subPathIdx:
+			// a concrete subscript is fine and leaves the key unchanged; [*]
+			// and ranges are not
+			if p.paths[i].idx == nil || p.paths[i].idx.num == subPathIdxALL {
+				return "", false
+			}
+		default:
+			// subPathDoubleStar, subPathKeyWildcard, range expressions
+			return "", false
+		}
+	}
+	return key, found
+}

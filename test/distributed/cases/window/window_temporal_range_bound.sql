@@ -60,15 +60,13 @@ select id, dt, sum(v) over (
 from t
 order by dt, id;
 
--- TIME and TIMESTAMP use the same out-of-domain insertion-point rule.
+-- TIME uses its MySQL column domain while TIMESTAMP uses its own endpoint.
 create table temporal_time_timestamp_bound(id int primary key, tm time(6), ts timestamp(6), v int);
 insert into temporal_time_timestamp_bound values
-  (1, '2562047787:59:59.999998', '9999-12-30 23:59:59.999999', 40),
-  (2, '2562047787:59:59.999999', '9999-12-31 23:59:59.999999', 50);
+  (1, '838:59:58.999998', '9999-12-30 23:59:59.999999', 40),
+  (2, '838:59:58.999999', '9999-12-31 23:59:59.999999', 50);
 
--- Keep the out-of-MySQL-display-range TIME value as the ordering key only:
--- Connector/J rejects a 23-character TIME text representation before it can
--- compare the window result.
+-- Keep TIME as the ordering key without returning it to the client.
 select id, sum(v) over (
          order by tm
          range between current row and interval 1 microsecond following

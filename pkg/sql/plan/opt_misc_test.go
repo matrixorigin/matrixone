@@ -76,6 +76,161 @@ func TestDetermineHashOnPKAllowsUntaggedInternalScan(t *testing.T) {
 	})
 }
 
+func TestDetermineHashOnPKRequiresGroupingCompatiblePrimaryKey(t *testing.T) {
+	tests := []struct {
+		name         string
+		typ          plan.Type
+		wantHashOnPK bool
+	}{
+		{
+			name:         "varchar control",
+			typ:          plan.Type{Id: int32(types.T_varchar), Width: 8, NotNullable: true},
+			wantHashOnPK: true,
+		},
+		{
+			name: "float64 signed zero",
+			typ:  plan.Type{Id: int32(types.T_float64), NotNullable: true},
+		},
+		{
+			name: "char trailing spaces",
+			typ:  plan.Type{Id: int32(types.T_char), Width: 8, NotNullable: true},
+		},
+		{
+			name: "collated varchar",
+			typ: plan.Type{
+				Id: int32(types.T_varchar), Width: 8, Charset: uint32(types.CharsetUTF8), NotNullable: true,
+			},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			builder := buildHashOnPKTestBuilder(true, true)
+			builder.qry.Nodes[0].TableDef.Cols[0].Typ = test.typ
+			builder.qry.Nodes[1].TableDef.Cols[0].Typ = test.typ
+			joinFn := builder.qry.Nodes[2].OnList[0].GetF()
+			require.NotNil(t, joinFn)
+			joinFn.Args[0].Typ = test.typ
+			joinFn.Args[1].Typ = test.typ
+
+			determineHashOnPK(2, builder)
+
+			require.Equal(t, test.wantHashOnPK,
+				builder.qry.Nodes[2].Stats.HashmapStats.HashOnPK)
+		})
+	}
+}
+
+func TestDetermineHashOnPKRequiresDirectColumnEquality(t *testing.T) {
+	tests := []struct {
+		name         string
+		wrapRightKey bool
+		wantHashOnPK bool
+	}{
+		{
+			name:         "zero tag direct primary key control",
+			wantHashOnPK: true,
+		},
+		{
+			name:         "zero tag wrapped primary key is not a proof",
+			wrapRightKey: true,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			builder := buildHashOnPKTestBuilder(true, true)
+			builder.qry.Nodes[1].BindingTags[0] = 0
+			joinFn := builder.qry.Nodes[2].OnList[0].GetF()
+			require.NotNil(t, joinFn)
+			rightKey := joinFn.Args[1]
+			rightKey.GetCol().RelPos = 0
+			if test.wrapRightKey {
+				joinFn.Args[1] = &plan.Expr{
+					Typ: rightKey.Typ,
+					Expr: &plan.Expr_F{F: &plan.Function{
+						Func: getFunctionObjRef(0, "cast"),
+						Args: []*plan.Expr{rightKey},
+					}},
+				}
+			}
+
+			determineHashOnPK(2, builder)
+
+			require.Equal(t, test.wantHashOnPK,
+				builder.qry.Nodes[2].Stats.HashmapStats.HashOnPK)
+		})
+	}
+}
+
+func TestDetermineHashOnPKRejectsCrossTypeDirectEquality(t *testing.T) {
+	tests := []struct {
+		name      string
+		leftType  plan.Type
+		rightType plan.Type
+	}{
+		{
+			name:      "datetime probe to timestamp primary key",
+			leftType:  plan.Type{Id: int32(types.T_datetime), NotNullable: true},
+			rightType: plan.Type{Id: int32(types.T_timestamp), NotNullable: true},
+		},
+		{
+			name:      "timestamp probe to datetime primary key",
+			leftType:  plan.Type{Id: int32(types.T_timestamp), NotNullable: true},
+			rightType: plan.Type{Id: int32(types.T_datetime), NotNullable: true},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			builder := buildHashOnPKTestBuilder(true, true)
+			builder.qry.Nodes[0].TableDef.Cols[0].Typ = test.leftType
+			builder.qry.Nodes[1].TableDef.Cols[0].Typ = test.rightType
+			joinFn := builder.qry.Nodes[2].OnList[0].GetF()
+			joinFn.Args[0].Typ = test.leftType
+			joinFn.Args[1].Typ = test.rightType
+
+			determineHashOnPK(2, builder)
+
+			require.False(t, builder.qry.Nodes[2].Stats.HashmapStats.HashOnPK,
+				"session-time-zone conversion is not a storage-key uniqueness proof")
+		})
+	}
+}
+
+func TestDetermineHashOnPKRequiresTypeMetadataToMatchReferencedColumns(t *testing.T) {
+	tests := []struct {
+		name         string
+		exprType     plan.Type
+		wantHashOnPK bool
+	}{
+		{
+			name:         "matching expression and schema types",
+			exprType:     plan.Type{Id: int32(types.T_int64), NotNullable: true},
+			wantHashOnPK: true,
+		},
+		{
+			name:     "join expressions agree but disagree with schema",
+			exprType: plan.Type{Id: int32(types.T_uint64), NotNullable: true},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			builder := buildHashOnPKTestBuilder(true, true)
+			joinFn := builder.qry.Nodes[2].OnList[0].GetF()
+			require.NotNil(t, joinFn)
+			joinFn.Args[0].Typ = test.exprType
+			joinFn.Args[1].Typ = test.exprType
+
+			determineHashOnPK(2, builder)
+
+			require.Equal(t, test.wantHashOnPK,
+				builder.qry.Nodes[2].Stats.HashmapStats.HashOnPK)
+		})
+	}
+}
+
 func buildHashOnPKTestBuilder(leftNotNullable bool, rightNotNullable bool) *QueryBuilder {
 	leftType := plan.Type{Id: int32(types.T_int64), NotNullable: leftNotNullable}
 	rightType := plan.Type{Id: int32(types.T_int64), NotNullable: rightNotNullable}
@@ -353,6 +508,74 @@ func TestRemapHavingClause(t *testing.T) {
 		err := b.remapHavingClause(expr, 1, 2, 1, 3, []int32{0})
 		require.Error(t, err)
 	})
+}
+
+func TestReplaceColumnsForExprTraversesEveryNestedExpressionContainer(t *testing.T) {
+	const (
+		oldTag = int32(7)
+		newTag = int32(9)
+	)
+	oldCol := func() *plan.Expr {
+		return GetColExpr(plan.Type{Id: int32(types.T_int64)}, oldTag, 0)
+	}
+	tests := []struct {
+		name             string
+		expr             *plan.Expr
+		wantReplacements int
+	}{
+		{
+			name: "literal source",
+			expr: &plan.Expr{Expr: &plan.Expr_Lit{Lit: &plan.Literal{
+				Value: &plan.Literal_I64Val{I64Val: 1},
+				Src:   oldCol(),
+			}}},
+			wantReplacements: 1,
+		},
+		{
+			name: "expression list",
+			expr: &plan.Expr{Expr: &plan.Expr_List{List: &plan.ExprList{
+				List: []*plan.Expr{oldCol(), oldCol()},
+			}}},
+			wantReplacements: 2,
+		},
+		{
+			name: "subquery child",
+			expr: &plan.Expr{Expr: &plan.Expr_Sub{Sub: &plan.SubqueryRef{
+				Child: oldCol(),
+			}}},
+			wantReplacements: 1,
+		},
+		{
+			name: "window frame",
+			expr: &plan.Expr{Expr: &plan.Expr_W{W: &plan.WindowSpec{
+				Frame: &plan.FrameClause{
+					Start: &plan.FrameBound{Val: oldCol()},
+					End:   &plan.FrameBound{Val: oldCol()},
+				},
+			}}},
+			wantReplacements: 2,
+		},
+	}
+
+	projMap := map[[2]int32]*plan.Expr{
+		{oldTag, 0}: GetColExpr(plan.Type{Id: int32(types.T_int64)}, newTag, 3),
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			got := replaceColumnsForExpr(test.expr, projMap)
+			replacements := 0
+			require.NoError(t, plan.VisitExprTree(got, func(expr *plan.Expr) error {
+				if col := expr.GetCol(); col != nil {
+					require.NotEqual(t, oldTag, col.RelPos)
+					if col.RelPos == newTag && col.ColPos == 3 {
+						replacements++
+					}
+				}
+				return nil
+			}))
+			require.Equal(t, test.wantReplacements, replacements)
+		})
+	}
 }
 
 func TestAggregateDependsOnInputOrder(t *testing.T) {

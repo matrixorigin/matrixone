@@ -1692,6 +1692,9 @@ func constantFoldWithPreparedExactSource(
 	if f.CannotFold() {
 		return expr, nil
 	}
+	if rule.IsLegacyTimeAssignmentOutsideInternalRange(fn) {
+		return expr, nil
+	}
 	if f.IsRealTimeRelated() && !varAndParamIsConst {
 		return expr, nil
 	}
