@@ -412,6 +412,13 @@ func splitAndBindCondition(astExpr tree.Expr, expandAlias ExpandAliasMode, ctx *
 		if err != nil {
 			return nil, err
 		}
+		// WHERE, HAVING and JOIN ON are executable scalar boundaries. Check
+		// before boolean coercion so an interval pseudo-value reports the real
+		// contract violation instead of an incidental INTERVAL-to-BOOL cast
+		// overload error.
+		if err = rejectStandaloneIntervalExpr(ctx.binder.GetContext(), expr, "predicate"); err != nil {
+			return nil, err
+		}
 		needCast := true
 		fn := expr.GetF()
 		if fn != nil {
@@ -1619,7 +1626,11 @@ func constantFoldWithPreparedExactSource(
 	preservePreparedExactSource bool,
 ) (*plan.Expr, error) {
 	if expr.Typ.Id == int32(types.T_interval) {
-		panic(moerr.NewInternalError(proc.Ctx, "not supported type INTERVAL"))
+		// INTERVAL is an executable argument type but has no standalone scalar
+		// constant-fold representation. Keep it unchanged so callers can fold an
+		// enclosing temporal expression or let a public scalar boundary reject it
+		// without turning a bound expression into a planner panic.
+		return expr, nil
 	}
 
 	// If it is Expr_List, perform constant folding on its elements
