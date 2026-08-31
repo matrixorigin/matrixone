@@ -81,6 +81,24 @@ func TestIssue27443BinaryPreparedDMLAndAggregate(t *testing.T) {
 		require.Equal(t, "updated", payload)
 		require.Equal(t, "23.45", amount)
 
+		// Repeated arithmetic DML uses the runtime-specialized compile after the
+		// first execution. The cached plan must still read the current packet,
+		// rather than retaining the first increment or row key (#27807).
+		arithmeticStmt, err := db.PrepareContext(ctx,
+			"update `"+dbName+"`.dst set tenant = tenant + ? where id = ?")
+		require.NoError(t, err)
+		defer func() {
+			require.NoError(t, arithmeticStmt.Close())
+		}()
+		_, err = arithmeticStmt.ExecContext(ctx, int64(2), int64(1))
+		require.NoError(t, err)
+		_, err = arithmeticStmt.ExecContext(ctx, int64(3), int64(1))
+		require.NoError(t, err)
+		var tenant int64
+		require.NoError(t, db.QueryRowContext(ctx,
+			"select tenant from `"+dbName+"`.dst where id = 1").Scan(&tenant))
+		require.Equal(t, int64(12), tenant)
+
 		execSQLRequire(t, ctx, db, "create table `"+dbName+"`.pp_dst (tenant int, id int, status int, amount decimal(12,2), dt datetime, tm time, bin varbinary(16), u bigint unsigned, primary key (tenant, id))")
 		execSQLRequire(t, ctx, db, "insert into `"+dbName+"`.pp_dst values (1, 1, 999, 1.00, '2026-08-21 01:02:03', '01:02:03', x'6131', 7)")
 		ppStmt, err := db.PrepareContext(ctx, "update `"+dbName+"`.pp_dst set status=?, amount=?, dt=?, tm=?, bin=?, u=? where tenant=? and id=?")

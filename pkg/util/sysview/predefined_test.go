@@ -51,6 +51,81 @@ func TestInformationSchemaMetadataViewsHideTemporaryTables(t *testing.T) {
 	}
 }
 
+func TestInformationSchemaMetadataViewsEnforceObjectPrivileges(t *testing.T) {
+	tests := []struct {
+		name string
+		ddl  string
+	}{
+		{name: "tables", ddl: InformationSchemaTablesDDL},
+		{name: "columns", ddl: InformationSchemaColumnsDDL},
+		{name: "statistics", ddl: InformationSchemaStatisticsDDL},
+		{name: "table constraints", ddl: InformationSchemaTableConstraintsDDL},
+		{name: "legacy table constraints", ddl: InformationSchemaTableConstraintsLegacyDDL},
+		{name: "key column usage", ddl: InformationSchemaKeyColumnUsageDDL},
+		{name: "referential constraints", ddl: InformationSchemaReferentialConstraintsDDL},
+		{name: "check constraints", ddl: InformationSchemaCheckConstraintsDDL},
+		{name: "views", ddl: InformationSchemaViewsDDL},
+		{name: "partitions", ddl: InformationSchemaPartitionsDDL},
+		{name: "schemata", ddl: InformationSchemaSchemataDDL},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			for _, expected := range []string{
+				"WITH __mo_active_roles(role_id)",
+				"SELECT role_id FROM mo_current_roles() role_closure",
+				"__mo_visible_tables AS",
+				"__mo_visible_databases AS",
+				"tbl.account_id = current_account_id()",
+				"tbl.owner IN (SELECT role_id FROM __mo_active_roles)",
+				"db.owner = ar.role_id",
+				"rp.obj_type IN ('table','view')",
+				"rp.privilege_level = '*.*'",
+				"rp.privilege_level IN ('d.*','*')",
+				"rp.privilege_level IN ('d.t','t')",
+				"rp.privilege_name IN ('show tables','database all','database ownership')",
+			} {
+				assert.Contains(t, test.ddl, expected)
+			}
+			assert.NotContains(t, test.ddl, "WITH RECURSIVE")
+			assert.NotContains(t, test.ddl, "mo_catalog.mo_role_grant")
+			assert.NotContains(t, test.ddl, "SELECT tbl.*")
+			assert.NotContains(t, test.ddl, "current_role()")
+			assert.NotContains(t, test.ddl, "FROM mo_catalog.mo_role ")
+
+			statements, err := mysql.Parse(context.Background(), test.ddl, 1)
+			assert.NoError(t, err)
+			for _, statement := range statements {
+				statement.Free()
+			}
+		})
+	}
+
+	assert.Contains(t, InformationSchemaTablesDDL, "FROM __mo_visible_tables tbl")
+	assert.Contains(t, InformationSchemaColumnsDDL, "join __mo_visible_tables mt")
+	assert.Contains(t, InformationSchemaStatisticsDDL, "join `__mo_visible_tables` `tbl`")
+	assert.Contains(t, InformationSchemaTableConstraintsDDL, "join __mo_visible_tables tbl")
+	assert.Contains(t, InformationSchemaTableConstraintsDDL, "join __mo_visible_tables check_tbl")
+	fkVisibilityJoin := "ON fk.db_name = fk_tbl.reldatabase AND fk.table_name = fk_tbl.relname"
+	assert.Contains(t, InformationSchemaKeyColumnUsageDDL, "JOIN __mo_visible_tables fk_tbl")
+	assert.Contains(t, InformationSchemaKeyColumnUsageDDL, fkVisibilityJoin)
+	assert.Contains(t, InformationSchemaReferentialConstraintsDDL, "JOIN __mo_visible_tables fk_tbl")
+	assert.Contains(t, InformationSchemaReferentialConstraintsDDL, fkVisibilityJoin)
+	assert.NotContains(t, InformationSchemaKeyColumnUsageDDL, "fk.table_id = fk_tbl.rel_id")
+	assert.NotContains(t, InformationSchemaReferentialConstraintsDDL, "fk.table_id = fk_tbl.rel_id")
+	assert.Contains(t, InformationSchemaCheckConstraintsDDL, "JOIN __mo_visible_tables check_tbl")
+	assert.Contains(t, InformationSchemaViewsDDL, "JOIN __mo_visible_tables visible_tbl")
+	assert.Contains(t, InformationSchemaPartitionsDDL, "FROM `__mo_visible_tables` `tbl`")
+	assert.Contains(t, InformationSchemaSchemataDDL, "FROM __mo_visible_databases")
+	assert.Contains(t, InformationSchemaSchemataDDL, "db.owner IN (SELECT role_id FROM __mo_active_roles)")
+	assert.Contains(t, InformationSchemaSchemataDDL,
+		"EXISTS (SELECT 1 FROM __mo_visible_tables tbl WHERE tbl.reldatabase_id = db.dat_id)")
+	assert.Contains(t, InformationSchemaSchemataDDL,
+		"rp.obj_type = 'account' AND rp.privilege_name IN ('show databases','account all')")
+	assert.Contains(t, InformationSchemaSchemataDDL,
+		"rp.privilege_level = '*' AND rp.obj_id = 0")
+}
+
 func TestInformationSchemaStatisticsDDL_ContainsIdxAlgo(t *testing.T) {
 	assert.True(t, strings.Contains(InformationSchemaStatisticsDDL, "`idx`.`algo` AS `INDEX_TYPE`"))
 	assert.False(t, strings.Contains(InformationSchemaStatisticsDDL, "NULL AS `INDEX_TYPE`"))
@@ -96,14 +171,47 @@ func TestInitInformationSchemaSysTablesForProtocol(t *testing.T) {
 	legacy := InitInformationSchemaSysTablesForProtocol(defines.MORPCVersion15)
 	assert.NotContains(t, legacy, InformationSchemaCheckConstraintsDDL)
 	assert.NotContains(t, legacy, InformationSchemaTableConstraintsDDL)
-	assert.Contains(t, legacy, InformationSchemaTableConstraintsLegacyDDL)
+	assert.Contains(t, legacy,
+		informationSchemaMetadataVisibilityCompatibilityDDL(InformationSchemaTableConstraintsLegacyDDL))
 	assert.Contains(t, legacy, InformationSchemaCollationCharacterSetApplicabilityDDL)
 	for _, sql := range legacy {
 		assert.NotContains(t, sql, "mo_check_constraints()")
+		assert.NotContains(t, sql, "mo_current_roles()")
+		assertInformationSchemaInitSQLParses(t, sql)
 	}
 
-	latest := InitInformationSchemaSysTablesForProtocol(defines.MORPCVersion16)
+	for _, protocol := range []int64{
+		defines.MORPCVersion16,
+		defines.MORPCVersion32,
+		defines.MORPCVersion34,
+		defines.MORPCVersion35,
+	} {
+		t.Run(fmt.Sprintf("compatibility-v%d", protocol), func(t *testing.T) {
+			compatibility := InitInformationSchemaSysTablesForProtocol(protocol)
+			assert.Len(t, compatibility, len(InitInformationSchemaSysTables))
+			assert.Contains(t, compatibility,
+				informationSchemaMetadataVisibilityCompatibilityDDL(InformationSchemaCheckConstraintsDDL))
+			assert.Contains(t, compatibility,
+				informationSchemaMetadataVisibilityCompatibilityDDL(InformationSchemaTableConstraintsDDL))
+			for _, sql := range compatibility {
+				assert.NotContains(t, sql, "mo_current_roles()")
+				assertInformationSchemaInitSQLParses(t, sql)
+			}
+			assert.Contains(t, strings.Join(compatibility, "\n"), "FROM mo_catalog.mo_role_grant rg")
+		})
+	}
+
+	latest := InitInformationSchemaSysTablesForProtocol(defines.MORPCVersion41)
 	assert.Equal(t, InitInformationSchemaSysTables, latest)
+}
+
+func assertInformationSchemaInitSQLParses(t *testing.T, sql string) {
+	t.Helper()
+	statements, err := mysql.Parse(context.Background(), sql, 1)
+	assert.NoError(t, err)
+	for _, statement := range statements {
+		statement.Free()
+	}
 }
 
 func TestInformationSchemaStatisticsDDL_RestrictsCatalogJoins(t *testing.T) {

@@ -109,3 +109,9 @@
 1. stringDomainFixedTypeMatchIf 对 fixed scalar→VARCHAR cast 同样使用 formattedScalarStringType。
 2. 补 QUOTE(SIGNED) resolver 与 CTAS metadata 回归，期望 VARCHAR(42)。
 3. 运行 owning packages/lint/diff check 后 commit/push。
+
+# PR #27841 main conflict 修复
+
+1. 合并最新 `mo/main@b23beeea89`，按本 PR 的 result-domain invariants 解决冲突。
+2. 检查完整 conflict resolution diff，运行受影响 owning packages、lint 与 diff check。
+3. 创建 merge commit 并 push 到 `origin/issue-27218-main`。

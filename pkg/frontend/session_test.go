@@ -1856,6 +1856,62 @@ func TestSessionCloseDropsTemporaryTablesAsOwningTenant(t *testing.T) {
 	require.Equal(t, uint32(9), statementOpts.RoleID())
 }
 
+type resetTempTableExecutor struct {
+	sql      []string
+	failures int
+	failAt   int
+}
+
+func (e *resetTempTableExecutor) Exec(
+	_ context.Context, sql string, _ executor.Options,
+) (executor.Result, error) {
+	e.sql = append(e.sql, sql)
+	if e.failAt > 0 && len(e.sql) == e.failAt {
+		return executor.Result{}, assert.AnError
+	}
+	if e.failures > 0 {
+		e.failures--
+		return executor.Result{}, assert.AnError
+	}
+	return executor.Result{}, nil
+}
+
+func (e *resetTempTableExecutor) ExecTxn(
+	context.Context, func(executor.TxnExecutor) error, executor.Options,
+) error {
+	return nil
+}
+
+func TestSessionResetTempTablesIsSynchronousAndRetryable(t *testing.T) {
+	const service = "session-reset-temp-table"
+	sv := &config.FrontendParameters{}
+	sv.SetDefaultValues()
+	InitServerLevelVars(service)
+	setPu(service, config.NewParameterUnit(sv, nil, nil, nil))
+	runtime.SetupServiceBasedRuntime(service, runtime.DefaultRuntime())
+	exec := &resetTempTableExecutor{failures: 1}
+	runtime.ServiceRuntime(service).SetGlobalVariables(runtime.InternalSQLExecutor, exec)
+
+	ses := NewSession(context.Background(), service, &testMysqlWriter{}, nil)
+	ses.SetTenantInfo(&TenantInfo{Tenant: "tenant", TenantID: 42})
+	ses.AddTempTable("db", "alias", "physical")
+	t.Cleanup(ses.Close)
+
+	err := ses.resetTempTables(context.Background())
+	require.ErrorIs(t, err, assert.AnError)
+	realName, ok := ses.GetTempTable("db", "alias")
+	require.True(t, ok, "failed cleanup must retain an owner for retry")
+	require.Equal(t, "physical", realName)
+
+	require.NoError(t, ses.resetTempTables(context.Background()))
+	_, ok = ses.GetTempTable("db", "alias")
+	require.False(t, ok)
+	require.Equal(t, []string{
+		"DROP TABLE IF EXISTS " + sqlquote.QualifiedIdent("db", "physical"),
+		"DROP TABLE IF EXISTS " + sqlquote.QualifiedIdent("db", "physical"),
+	}, exec.sql)
+}
+
 func TestRemoveAllPrepareStmts(t *testing.T) {
 	ses := &Session{}
 	ses.prepareStmts = map[string]*PrepareStmt{
