@@ -1199,19 +1199,6 @@ func TestTextResultCapacityUsesResultDomain(t *testing.T) {
 	require.True(t, ok, info)
 }
 
-func TestBinaryInsertPreservesInvalidUTF8Bytes(t *testing.T) {
-	proc := testutil.NewProcess(t)
-	fcTC := NewFunctionTestCase(proc, []FunctionTestInput{
-		NewFunctionTestConstInput(types.New(types.T_varbinary, 1, 0), []string{string([]byte{0xff})}, nil),
-		NewFunctionTestConstInput(types.T_int64.ToType(), []int64{1}, nil),
-		NewFunctionTestConstInput(types.T_int64.ToType(), []int64{0}, nil),
-		NewFunctionTestConstInput(types.New(types.T_varbinary, 1, 0), []string{"b"}, nil),
-	}, NewFunctionTestResult(types.New(types.T_varbinary, 2, 0), false, []string{string([]byte{'b', 0xff})}, nil),
-		fEvalFn(Insert))
-	ok, info := fcTC.Run()
-	require.True(t, ok, info)
-}
-
 func TestExpandingFunctionsRejectMPoolBeforeBuildingResult(t *testing.T) {
 	mp, err := mpool.NewMPool("expanding-allocation-rejection", 1<<20, mpool.NoFixed)
 	require.NoError(t, err)

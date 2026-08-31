@@ -218,6 +218,17 @@ func fixedTypeMatch(overloads []overload, inputs []types.Type) checkResult {
 // them through VARCHAR would truncate BLOB and erase the binary domain before
 // return-type derivation.
 func stringDomainFixedTypeMatch(overloads []overload, inputs []types.Type) checkResult {
+	return stringDomainFixedTypeMatchIf(overloads, inputs, func(oid types.T) bool { return oid.IsMySQLString() })
+}
+
+// collatedTextFixedTypeMatch preserves CHAR/VARCHAR/TEXT metadata, but leaves
+// binary families on ordinary overload casts until their rune-based consumers
+// have byte-preserving kernels.
+func collatedTextFixedTypeMatch(overloads []overload, inputs []types.Type) checkResult {
+	return stringDomainFixedTypeMatchIf(overloads, inputs, isCollatedTextType)
+}
+
+func stringDomainFixedTypeMatchIf(overloads []overload, inputs []types.Type, preserve func(types.T) bool) checkResult {
 	for overloadIndex, ov := range overloads {
 		if len(ov.args) != len(inputs) {
 			continue
@@ -226,7 +237,7 @@ func stringDomainFixedTypeMatch(overloads []overload, inputs []types.Type) check
 		needsCast := false
 		matched := true
 		for i, expected := range ov.args {
-			if expected.IsMySQLString() && inputs[i].Oid.IsMySQLString() {
+			if expected.IsMySQLString() && preserve(inputs[i].Oid) {
 				targets[i] = inputs[i]
 				continue
 			}

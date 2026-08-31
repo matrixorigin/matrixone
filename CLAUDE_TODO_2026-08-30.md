@@ -55,3 +55,10 @@
 3. REGEXP_REPLACE 仅修正现有 VARCHAR operand 的 result bound，不扩大 TEXT operand/runtime ownership。
 4. Binary INSERT 使用 raw byte range，避免 invalid UTF-8 被 RuneError 重编码并突破静态 bound。
 5. 修正 LTRIM/RTRIM bounded metadata、7 个 exact-head BVT golden，补 focused/consumer tests 后跑 owning packages/lint/self-review 并 push。
+
+# PR #27841 第十一轮 review 修复
+
+1. 将 consumer domain preservation 收窄到 CHAR/VARCHAR/TEXT；binary inputs 继续走既有 overload cast，避免 rune kernel 扩张非法 UTF-8。
+2. 为 REGEXP_REPLACE 恢复零宽匹配专用 checked bound：`source + (source + 1) * replacement`。
+3. 回退 binary INSERT byte-position 改动及对应测试，保持 #27216 ownership 与当前设计范围。
+4. 按 review 修正两处 DESC 空 Comment 分隔符，运行 focused/owning tests、lint 后 commit/push。

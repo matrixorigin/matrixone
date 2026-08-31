@@ -99,7 +99,7 @@ func expandingStringReturnType(parameters []types.Type, sourceIndex int) types.T
 	return stringResultTypeForDomain(parameters, sourceIndex, unknownStringResultBound())
 }
 
-func replacementStringReturnType(parameters []types.Type) types.Type {
+func replacementStringReturnType(parameters []types.Type, regexp bool) types.Type {
 	if len(parameters) < 3 {
 		return types.T_varchar.ToType()
 	}
@@ -110,6 +110,16 @@ func replacementStringReturnType(parameters []types.Type) types.Type {
 	}
 	source := boundFor(parameters[0])
 	replacement := boundFor(parameters[2])
+	if regexp {
+		// A zero-width regexp can match before, between, and after every source
+		// character, while retaining the complete source value.
+		bound := addStringResultBounds(source, multiplyStringResultBound(
+			addStringResultBounds(source, stringResultBound{bytes: 1}), replacement.bytes))
+		if source.unknown || replacement.unknown {
+			bound = unknownStringResultBound()
+		}
+		return stringResultTypeForDomain(parameters, 0, bound)
+	}
 	if replacement.unknown || source.unknown {
 		return stringResultTypeForDomain(parameters, 0, unknownStringResultBound())
 	}
@@ -2585,7 +2595,7 @@ var supportedStringBuiltIns = []FuncNew{
 		functionId: LEFT,
 		class:      plan.Function_STRICT,
 		layout:     STANDARD_FUNCTION,
-		checkFn:    stringDomainFixedTypeMatch,
+		checkFn:    collatedTextFixedTypeMatch,
 
 		Overloads: []overload{
 			{
@@ -2616,7 +2626,7 @@ var supportedStringBuiltIns = []FuncNew{
 		functionId: RIGHT,
 		class:      plan.Function_STRICT,
 		layout:     STANDARD_FUNCTION,
-		checkFn:    stringDomainFixedTypeMatch,
+		checkFn:    collatedTextFixedTypeMatch,
 
 		Overloads: []overload{
 			{
@@ -2810,7 +2820,7 @@ var supportedStringBuiltIns = []FuncNew{
 		functionId: LTRIM,
 		class:      plan.Function_STRICT,
 		layout:     STANDARD_FUNCTION,
-		checkFn:    stringDomainFixedTypeMatch,
+		checkFn:    collatedTextFixedTypeMatch,
 
 		Overloads: []overload{
 			{
@@ -2869,7 +2879,7 @@ var supportedStringBuiltIns = []FuncNew{
 				overloadId: 0,
 				args:       []types.T{types.T_varchar, types.T_varchar, types.T_varchar},
 				retType: func(parameters []types.Type) types.Type {
-					return replacementStringReturnType(parameters)
+					return replacementStringReturnType(parameters, false)
 				},
 				newOp: func() executeLogicOfOverload {
 					return Replace
@@ -3024,7 +3034,7 @@ var supportedStringBuiltIns = []FuncNew{
 				overloadId: 0,
 				args:       []types.T{types.T_varchar, types.T_varchar, types.T_varchar},
 				retType: func(parameters []types.Type) types.Type {
-					return replacementStringReturnType(parameters)
+					return replacementStringReturnType(parameters, true)
 				},
 				newOp: func() executeLogicOfOverload {
 					return newOpBuiltInRegexp().builtInRegexpReplace
@@ -3034,7 +3044,7 @@ var supportedStringBuiltIns = []FuncNew{
 				overloadId: 1,
 				args:       []types.T{types.T_varchar, types.T_varchar, types.T_varchar, types.T_int64},
 				retType: func(parameters []types.Type) types.Type {
-					return replacementStringReturnType(parameters)
+					return replacementStringReturnType(parameters, true)
 				},
 				newOp: func() executeLogicOfOverload {
 					return newOpBuiltInRegexp().builtInRegexpReplace
@@ -3044,7 +3054,7 @@ var supportedStringBuiltIns = []FuncNew{
 				overloadId: 2,
 				args:       []types.T{types.T_varchar, types.T_varchar, types.T_varchar, types.T_int64, types.T_int64},
 				retType: func(parameters []types.Type) types.Type {
-					return replacementStringReturnType(parameters)
+					return replacementStringReturnType(parameters, true)
 				},
 				newOp: func() executeLogicOfOverload {
 					return newOpBuiltInRegexp().builtInRegexpReplace
@@ -3122,7 +3132,7 @@ var supportedStringBuiltIns = []FuncNew{
 		functionId: REVERSE,
 		class:      plan.Function_STRICT,
 		layout:     STANDARD_FUNCTION,
-		checkFn:    stringDomainFixedTypeMatch,
+		checkFn:    collatedTextFixedTypeMatch,
 
 		Overloads: []overload{
 			{
@@ -3204,7 +3214,7 @@ var supportedStringBuiltIns = []FuncNew{
 		functionId: RTRIM,
 		class:      plan.Function_STRICT,
 		layout:     STANDARD_FUNCTION,
-		checkFn:    stringDomainFixedTypeMatch,
+		checkFn:    collatedTextFixedTypeMatch,
 
 		Overloads: []overload{
 			{
@@ -3341,7 +3351,7 @@ var supportedStringBuiltIns = []FuncNew{
 		functionId: SPLIT_PART,
 		class:      plan.Function_STRICT,
 		layout:     STANDARD_FUNCTION,
-		checkFn:    stringDomainFixedTypeMatch,
+		checkFn:    collatedTextFixedTypeMatch,
 
 		Overloads: []overload{
 			{
@@ -3963,7 +3973,7 @@ var supportedStringBuiltIns = []FuncNew{
 		functionId: SUBSTRING,
 		class:      plan.Function_STRICT,
 		layout:     STANDARD_FUNCTION,
-		checkFn:    stringDomainFixedTypeMatch,
+		checkFn:    collatedTextFixedTypeMatch,
 
 		Overloads: []overload{
 			{
@@ -4044,7 +4054,7 @@ var supportedStringBuiltIns = []FuncNew{
 		functionId: SUBSTRING_INDEX,
 		class:      plan.Function_STRICT,
 		layout:     STANDARD_FUNCTION,
-		checkFn:    stringDomainFixedTypeMatch, // TODO:
+		checkFn:    collatedTextFixedTypeMatch, // TODO:
 
 		Overloads: []overload{
 			{
@@ -4309,7 +4319,7 @@ var supportedStringBuiltIns = []FuncNew{
 		functionId: TRIM,
 		class:      plan.Function_STRICT,
 		layout:     STANDARD_FUNCTION,
-		checkFn:    stringDomainFixedTypeMatch,
+		checkFn:    collatedTextFixedTypeMatch,
 
 		Overloads: []overload{
 			{

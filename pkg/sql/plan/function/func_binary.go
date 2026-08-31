@@ -9101,22 +9101,6 @@ func replaceResultByteLength(src, needle, replacement []byte, maxBytes int64) (i
 	}
 	return int(n), true
 }
-func insertBinaryResultLayout(source []byte, pos, remove int64, replacement []byte) (size, start, end int, raw bool) {
-	count := len(source)
-	if pos <= 0 || pos > int64(count) {
-		return count, 0, 0, true
-	}
-	start = int(pos - 1)
-	end = count
-	remain := int64(count - start)
-	if remove == 0 {
-		end = start
-	} else if remove > 0 && remove < remain {
-		end = start + int(remove)
-	}
-	return start + len(replacement) + count - end, start, end, false
-}
-
 func insertResultLayout(source []byte, pos, remove int64, replacement []byte) (size, start, end int, raw bool) {
 	count := utf8.RuneCount(source)
 	if pos <= 0 || pos > int64(count) {
@@ -9172,11 +9156,7 @@ func Insert(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *proc
 			}
 			continue
 		}
-		binary := types.StaticStringDomain(*ivecs[0].GetType()) == types.StringDomainBinary
 		size, start, end, raw := insertResultLayout(v1, pos, remove, v4)
-		if binary {
-			size, start, end, raw = insertBinaryResultLayout(v1, pos, remove, v4)
-		}
 		if int64(size) > maxStringFunctionResultLength(result) {
 			if err = rs.AppendBytes(nil, true); err != nil {
 				return err
@@ -9186,12 +9166,6 @@ func Insert(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *proc
 		if err = rs.AppendBytesWithWriter(size, func(dst []byte) error {
 			if raw {
 				copy(dst, v1)
-				return nil
-			}
-			if binary {
-				at := copy(dst, v1[:start])
-				at += copy(dst[at:], v4)
-				copy(dst[at:], v1[end:])
 				return nil
 			}
 			at := writeEncodedRuneRange(dst, v1, 0, start)
