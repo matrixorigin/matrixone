@@ -641,7 +641,8 @@ EXECUTE s USING @maxint;
 DEALLOCATE PREPARE s;
 PREPARE s FROM 'SELECT 0 + ?';
 EXECUTE s USING @maxint;
-Data truncation: data out of range: data type int64, value '18446744073709551615'
+➤ 0 + ?[3,38,0]  𝄀
+18446744073709551615
 DEALLOCATE PREPARE s;
 PREPARE s FROM 'SELECT concat(?,"")';
 EXECUTE s USING @maxint;
@@ -836,4 +837,138 @@ deallocate prepare prepared_set_error;
 deallocate prepare prepared_set_reserved_error;
 deallocate prepare prepared_set_system_error;
 drop table prepared_set_values;
+prepare issue25408_runtime_reexecute from 'select ? + 1 as plus_one';
+set @issue25408_runtime_value = '2';
+execute issue25408_runtime_reexecute using @issue25408_runtime_value;
+➤ plus_one[-5,64,0]  𝄀
+3
+set @issue25408_runtime_value = 2.5;
+execute issue25408_runtime_reexecute using @issue25408_runtime_value;
+➤ plus_one[3,38,1]  𝄀
+3.5
+set @issue25408_runtime_value = 3.5;
+execute issue25408_runtime_reexecute using @issue25408_runtime_value;
+➤ plus_one[3,38,1]  𝄀
+4.5
+set @issue25408_runtime_value = -2;
+execute issue25408_runtime_reexecute using @issue25408_runtime_value;
+➤ plus_one[-5,64,0]  𝄀
+-1
+deallocate prepare issue25408_runtime_reexecute;
+prepare issue25408_runtime_divide from 'select ? / 2 as quotient';
+set @issue25408_runtime_value = 2.5;
+execute issue25408_runtime_divide using @issue25408_runtime_value;
+➤ quotient[3,38,7]  𝄀
+1.2500000
+set @issue25408_runtime_value = 9007199254740993.5;
+execute issue25408_runtime_divide using @issue25408_runtime_value;
+➤ quotient[3,38,7]  𝄀
+4503599627370496.7500000
+set @issue25408_runtime_value = 3.5;
+execute issue25408_runtime_divide using @issue25408_runtime_value;
+➤ quotient[3,38,7]  𝄀
+1.7500000
+deallocate prepare issue25408_runtime_divide;
+set @issue25408_runtime_value = 9007199254740993.5;
+select (@issue25408_runtime_value / 2) + 1 as result;
+➤ result[3,38,7]  𝄀
+4503599627370497.7500000
+prepare issue25408_nested_add from 'select (? / 2) + 1 as result';
+execute issue25408_nested_add using @issue25408_runtime_value;
+➤ result[3,38,7]  𝄀
+4503599627370497.7500000
+deallocate prepare issue25408_nested_add;
+select (@issue25408_runtime_value / 2) + 1e0 as result;
+➤ result[5,0,0]  𝄀
+4.503599627370498e+15
+prepare issue25408_nested_scientific from 'select (? / 2) + 1e0 as result';
+execute issue25408_nested_scientific using @issue25408_runtime_value;
+➤ result[5,0,0]  𝄀
+4.503599627370498e+15
+deallocate prepare issue25408_nested_scientific;
+select (@issue25408_runtime_value / 2) + 1e-1 as result;
+➤ result[5,0,0]  𝄀
+4.503599627370497e+15
+prepare issue25408_nested_fractional from 'select (? / 2) + 1e-1 as result';
+execute issue25408_nested_fractional using @issue25408_runtime_value;
+➤ result[5,0,0]  𝄀
+4.503599627370497e+15
+deallocate prepare issue25408_nested_fractional;
+select (@issue25408_runtime_value / 2) + cast(1 as double) as result;
+➤ result[5,0,0]  𝄀
+4.503599627370498e+15
+prepare issue25408_nested_explicit_double from 'select (? / 2) + cast(1 as double) as result';
+execute issue25408_nested_explicit_double using @issue25408_runtime_value;
+➤ result[5,0,0]  𝄀
+4.503599627370498e+15
+deallocate prepare issue25408_nested_explicit_double;
+prepare issue25408_nested_abs from 'select abs(? / 2) as result';
+execute issue25408_nested_abs using @issue25408_runtime_value;
+➤ result[3,38,7]  𝄀
+4503599627370496.7500000
+deallocate prepare issue25408_nested_abs;
+prepare issue25408_nested_multiply from 'select (? / 2) * 3 as result';
+execute issue25408_nested_multiply using @issue25408_runtime_value;
+➤ result[3,38,7]  𝄀
+13510798882111490.2500000
+deallocate prepare issue25408_nested_multiply;
+select abs(@issue25408_runtime_value + 1) as result;
+➤ result[3,38,1]  𝄀
+9007199254740994.5
+prepare issue25408_abs_exact from 'select abs(? + 1) as result';
+execute issue25408_abs_exact using @issue25408_runtime_value;
+➤ result[3,38,1]  𝄀
+9007199254740994.5
+deallocate prepare issue25408_abs_exact;
+select abs(@issue25408_runtime_value + 1e0) as result;
+➤ result[5,0,0]  𝄀
+9.007199254740996e+15
+prepare issue25408_abs_scientific from 'select abs(? + 1e0) as result';
+execute issue25408_abs_scientific using @issue25408_runtime_value;
+➤ result[5,0,0]  𝄀
+9.007199254740996e+15
+deallocate prepare issue25408_abs_scientific;
+select abs(@issue25408_runtime_value + 1e-1) as result;
+➤ result[5,0,0]  𝄀
+9.007199254740994e+15
+prepare issue25408_abs_fractional from 'select abs(? + 1e-1) as result';
+execute issue25408_abs_fractional using @issue25408_runtime_value;
+➤ result[5,0,0]  𝄀
+9.007199254740994e+15
+deallocate prepare issue25408_abs_fractional;
+select abs(@issue25408_runtime_value + cast(1 as double)) as result;
+➤ result[5,0,0]  𝄀
+9.007199254740996e+15
+prepare issue25408_abs_explicit_double from 'select abs(? + cast(1 as double)) as result';
+execute issue25408_abs_explicit_double using @issue25408_runtime_value;
+➤ result[5,0,0]  𝄀
+9.007199254740996e+15
+deallocate prepare issue25408_abs_explicit_double;
+drop table if exists issue27492_exact_cmp;
+create table issue27492_exact_cmp(id int primary key, u bigint unsigned, b bit(64));
+insert into issue27492_exact_cmp values (1, 9007199254740992, 9007199254740992), (2, 9007199254740993, 9007199254740993), (3, 9007199254740994, 9007199254740994);
+prepare issue27492_bigint from 'select id from issue27492_exact_cmp where u = ? order by id';
+prepare issue27492_bit from 'select id from issue27492_exact_cmp where b = ? order by id';
+set @issue27492_value = '9007199254740993';
+execute issue27492_bigint using @issue27492_value;
+➤ id[4,32,0]  𝄀
+2
+execute issue27492_bit using @issue27492_value;
+➤ id[4,32,0]  𝄀
+2
+set @issue27492_value = null;
+execute issue27492_bigint using @issue27492_value;
+➤ id[4,32,0]  𝄀
+execute issue27492_bit using @issue27492_value;
+➤ id[4,32,0]  𝄀
+set @issue27492_value = '9007199254740993';
+execute issue27492_bigint using @issue27492_value;
+➤ id[4,32,0]  𝄀
+2
+execute issue27492_bit using @issue27492_value;
+➤ id[4,32,0]  𝄀
+2
+deallocate prepare issue27492_bigint;
+deallocate prepare issue27492_bit;
+drop table issue27492_exact_cmp;
 SET TIME_ZONE = "SYSTEM";

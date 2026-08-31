@@ -475,6 +475,44 @@ func TestPreparedRuntimeTypeFromString(t *testing.T) {
 	}
 }
 
+func TestPreparedSQLExecuteNumericParamExprPreservesSourceDomain(t *testing.T) {
+	ctx := context.Background()
+	for _, test := range []struct {
+		name       string
+		value      any
+		sourceType types.Type
+		wantType   types.T
+		wantNil    bool
+	}{
+		{name: "string uses approximate numeric conversion", value: "2tail",
+			sourceType: types.New(types.T_varchar, 5, 0), wantType: types.T_float64},
+		{name: "string without numeric prefix keeps existing error path", value: "not-a-number",
+			sourceType: types.New(types.T_varchar, 12, 0), wantNil: true},
+		{name: "boolean uses integer arithmetic", value: true,
+			sourceType: types.T_bool.ToType(), wantType: types.T_int64},
+		{name: "bit uses unsigned arithmetic", value: "5",
+			sourceType: types.T_bit.ToType(), wantType: types.T_uint64},
+		{name: "integer retains exact type", value: int64(5),
+			sourceType: types.T_int64.ToType(), wantType: types.T_int64},
+		{name: "year retains numeric type", value: int32(2026),
+			sourceType: types.T_year.ToType(), wantType: types.T_year},
+		{name: "date is not an arithmetic source", value: "2026-08-28",
+			sourceType: types.T_date.ToType(), wantNil: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			expr, err := preparedSQLExecuteNumericParamExpr(
+				ctx, test.value, false, test.sourceType)
+			require.NoError(t, err)
+			if test.wantNil {
+				require.Nil(t, expr)
+				return
+			}
+			require.NotNil(t, expr)
+			require.Equal(t, int32(test.wantType), expr.Typ.Id)
+		})
+	}
+}
+
 func TestPreparedRuntimeDecimalTypeBoundaries(t *testing.T) {
 	for _, digits := range []int{65, 66, 67, 76} {
 		value := strings.Repeat("9", digits)
@@ -1043,6 +1081,25 @@ func TestValidatePreparedPaginationParams(t *testing.T) {
 	}
 
 	limitPlan := buildPreparedPlan(t, "select n_nationkey from nation limit ?")
+	t.Run("SQL source type does not replace limit domain", func(t *testing.T) {
+		value := ParamValue{
+			Value: int64(2), PrepareParamKind: vector.PrepareParamInteger,
+			SourceType: types.New(types.T_decimal128, 1, 0), HasSourceType: true,
+		}
+		require.NoError(t, ValidatePreparedPaginationParams(context.Background(), limitPlan, []any{value}))
+		filled := DeepCopyPlan(limitPlan)
+		_, err := replaceParamVals(context.Background(), filled, []any{value})
+		require.NoError(t, err)
+		var limit *plan.Expr
+		for _, node := range filled.GetQuery().Nodes {
+			if node.Limit != nil {
+				limit = node.Limit
+				break
+			}
+		}
+		require.NotNil(t, limit)
+		require.Equal(t, int32(types.T_uint64), limit.Typ.Id, limit.String())
+	})
 	for _, test := range []struct {
 		name       string
 		value      any
