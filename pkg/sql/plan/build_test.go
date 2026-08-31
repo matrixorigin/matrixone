@@ -3682,6 +3682,13 @@ func TestInsertIgnoreCheckCompositeUniqueNeedsLockKeyProjection(t *testing.T) {
 	needsProjection, err = hasMaterializedInsertUniqueLockKey(tableDef, []bool{false, true})
 	require.NoError(t, err)
 	require.False(t, needsProjection)
+
+	_, err = hasMaterializedInsertUniqueLockKey(&plan.TableDef{Indexes: []*plan.IndexDef{{
+		Unique:          true,
+		Parts:           []string{"a", "b"},
+		IndexAlgoParams: "not-json",
+	}}}, []bool{false})
+	require.Error(t, err)
 }
 
 func TestInsertIgnoreCheckCompositeUniqueBuildsPlan(t *testing.T) {
