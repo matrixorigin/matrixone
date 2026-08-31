@@ -777,7 +777,16 @@ func (s *Scope) ParallelRun(c *Compile) (err error) {
 		// if codes run here, it means some error happens during build the parallel scope.
 		// we should do clean work for source-scope to avoid receiver hung.
 		if parallelScope == nil {
-			pipeline.NewMerge(s.RootOp).Cleanup(s.Proc, true, c.isPrepare, err)
+			// ParallelRun owns the source operator until construction publishes a
+			// parallel scope. StopSending can cancel the pipeline while reader
+			// construction is still in flight, so classify that cancellation at
+			// this boundary before cleanup chooses EventEnd versus EventError.
+			err, _ = normalizeScopeRunError(
+				err,
+				s.Proc.Ctx,
+				scopeRunQueryContext(s.Proc),
+			)
+			pipeline.NewMerge(s.RootOp).Cleanup(s.Proc, err != nil, c.isPrepare, err)
 		}
 	}()
 
