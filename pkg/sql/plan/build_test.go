@@ -3519,31 +3519,27 @@ func TestAssignmentCastRollingUpgradePlanGate(t *testing.T) {
 	require.Contains(t, upgradedPlan, `"obj_name":"cast_assign"`)
 }
 
+func addPositiveCheck(t *testing.T, mock *MockOptimizer, tableName, columnName string) {
+	t.Helper()
+	tableDef := mock.ctxt.tables[tableName]
+	colPos := tableDef.Name2ColIndex[columnName]
+	checkExpr, err := BindFuncExprImplByPlanExpr(
+		t.Context(),
+		">",
+		[]*plan.Expr{
+			{Typ: tableDef.Cols[colPos].Typ, Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: 0, ColPos: colPos}}},
+			MakePlan2Int64ConstExprWithType(0),
+		},
+	)
+	require.NoError(t, err)
+	tableDef.Checks = []*plan.CheckDef{{Name: "positive_check", Check: checkExpr}}
+}
+
 func TestInsertAddsCheckConstraintFilter(t *testing.T) {
-	addDeptCheck := func(mock *MockOptimizer) {
-		tableDef := mock.ctxt.tables["dept"]
-		colPos := tableDef.Name2ColIndex["deptno"]
-		colExpr := &plan.Expr{
-			Typ: tableDef.Cols[colPos].Typ,
-			Expr: &plan.Expr_Col{
-				Col: &plan.ColRef{RelPos: 0, ColPos: colPos},
-			},
-		}
-		checkExpr, err := BindFuncExprImplByPlanExpr(
-			t.Context(),
-			">",
-			[]*plan.Expr{colExpr, MakePlan2Int64ConstExprWithType(0)},
-		)
-		require.NoError(t, err)
-		tableDef.Checks = []*plan.CheckDef{{
-			Name:  "dept_chk_1",
-			Check: checkExpr,
-		}}
-	}
 
 	build := func(sql string) *plan.Query {
 		mock := NewMockOptimizer(true)
-		addDeptCheck(mock)
+		addPositiveCheck(t, mock, "dept", "deptno")
 
 		stmt, err := mysql.ParseOne(t.Context(), sql, 1)
 		require.NoError(t, err)
@@ -3571,7 +3567,7 @@ func TestInsertAddsCheckConstraintFilter(t *testing.T) {
 
 	t.Run("replace rejects mixed-version cluster", func(t *testing.T) {
 		mock := NewMockOptimizer(true)
-		addDeptCheck(mock)
+		addPositiveCheck(t, mock, "dept", "deptno")
 		proc := testutil.NewProc(nil)
 		rt := moruntime.ServiceRuntime(proc.GetService())
 		defer rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCLatestVersion)
@@ -3686,6 +3682,32 @@ func TestInsertIgnoreCheckCompositeUniqueNeedsLockKeyProjection(t *testing.T) {
 	needsProjection, err = hasMaterializedInsertUniqueLockKey(tableDef, []bool{false, true})
 	require.NoError(t, err)
 	require.False(t, needsProjection)
+}
+
+func TestInsertIgnoreCheckCompositeUniqueBuildsPlan(t *testing.T) {
+	mock := NewMockOptimizer(true)
+	tableDef := mock.ctxt.tables["dept_composite_uk"]
+	addPositiveCheck(t, mock, tableDef.Name, "deptno")
+
+	stmt, err := mysql.ParseOne(
+		t.Context(),
+		"insert ignore into dept_composite_uk values (1, 'Sales', 'NY')",
+		1,
+	)
+	require.NoError(t, err)
+	query, err := mock.Optimize(stmt)
+	require.NoError(t, err)
+
+	foundCheckFilter := false
+	for _, node := range query.Nodes {
+		if node.NodeType != plan.Node_FILTER {
+			continue
+		}
+		for _, expr := range node.FilterList {
+			foundCheckFilter = foundCheckFilter || exprContainsFuncName(expr, "coalesce")
+		}
+	}
+	require.True(t, foundCheckFilter)
 }
 
 func TestReplaceSetColRefAsDefault(t *testing.T) {
