@@ -18,6 +18,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"math"
 	"strconv"
 	"strings"
 	"testing"
@@ -1032,6 +1033,20 @@ func TestBuildCreateOrReplaceViewRejectsRecursiveDefinition(t *testing.T) {
 
 	lctn0 := int64(0)
 	lctn2 := int64(2)
+	// AS OF TIMESTAMP is parsed in the MACHINE's zone — doResolveTimeStamp uses
+	// time.LoadLocation("Local") — and converted with UnixNano, so a fixed
+	// literal is not timezone-independent. '2262-04-11 23:47:16' sits on the
+	// int64-nanosecond ceiling (2262-04-11 23:47:16.854775807 UTC): west of UTC
+	// it converts PAST the ceiling, overflows to a negative value, and is
+	// rejected as "invalid timestamp value" before the recursion check this case
+	// is actually about ever runs.
+	//
+	// Derive the literal from the ceiling in the local zone instead, so the
+	// expected message is the same everywhere. A full day of margin absorbs the
+	// widest real UTC offset and any DST rule extrapolated into 2262, and
+	// formatting to second precision only ever rounds down.
+	farFutureAsOf := time.Unix(0, math.MaxInt64).In(time.Local).
+		Add(-24 * time.Hour).Format("2006-01-02 15:04:05")
 	for _, test := range []struct {
 		name            string
 		sql             string
@@ -1156,7 +1171,7 @@ func TestBuildCreateOrReplaceViewRejectsRecursiveDefinition(t *testing.T) {
 		},
 		{
 			name:    "future AS OF timestamp",
-			sql:     "create or replace view v as select n_nationkey from v {as of timestamp '2262-04-11 23:47:16'}",
+			sql:     "create or replace view v as select n_nationkey from v {as of timestamp '" + farFutureAsOf + "'}",
 			wantErr: "internal error: there is a recursive reference to the view v",
 		},
 		{

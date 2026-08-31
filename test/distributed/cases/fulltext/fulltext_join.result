@@ -54,7 +54,7 @@ where match(f.title, f.body) against('hello');
 ➤ TP QUERY PLAN[12,0,0]  𝄀
 Project  𝄀
   ->  Join  𝄀
-        Join Type: INNER   hashOnPK  𝄀
+        Join Type: INNER  𝄀
         Join Cond: (f.base_id = b.id)  𝄀
         ->  Join  𝄀
               Join Type: INNER  𝄀
