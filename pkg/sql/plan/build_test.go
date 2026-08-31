@@ -3606,11 +3606,12 @@ func TestInsertAddsCheckConstraintFilter(t *testing.T) {
 
 	t.Run("insert ignore materializes composite unique lock key before check filter", func(t *testing.T) {
 		mock := NewMockOptimizer(true)
-		addPositiveCheck(mock, "emp", "empno")
+		addPositiveCheck(mock, "dept", "deptno")
+		mock.ctxt.tables["dept"].Indexes[1].Unique = true
 
 		stmt, err := mysql.ParseOne(
 			t.Context(),
-			"insert ignore into emp values (1, 'Alice', 'Engineer', 1, '2024-01-01', 1.00, 1.00, 1)",
+			"insert ignore into dept values (1, 'Alice', 'NY')",
 			1,
 		)
 		require.NoError(t, err)
