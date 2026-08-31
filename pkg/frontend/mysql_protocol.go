@@ -660,6 +660,177 @@ type response320 struct {
 	isAskForTlsHeader bool
 }
 
+// changeUserRequest is the command-phase authentication payload described by
+// COM_CHANGE_USER. It is intentionally parsed from the negotiated capability
+// mask rather than accepting a handshake-response packet: the two layouts are
+// similar, but not interchangeable.
+type changeUserRequest struct {
+	username         string
+	authResponse     []byte
+	database         string
+	collationID      int
+	hasCollation     bool
+	clientPluginName string
+	connectAttrs     map[string]string
+}
+
+type mysqlProtocolSessionState struct {
+	session       *Session
+	username      string
+	database      string
+	authResponse  []byte
+	authString    []byte
+	collationID   int
+	collationName string
+	charset       string
+	connectAttrs  map[string]string
+}
+
+func cloneProtocolStringMap(src map[string]string) map[string]string {
+	if src == nil {
+		return nil
+	}
+	dst := make(map[string]string, len(src))
+	for key, value := range src {
+		dst[key] = value
+	}
+	return dst
+}
+
+func (mp *MysqlProtocolImpl) snapshotSessionState() mysqlProtocolSessionState {
+	mp.m.Lock()
+	defer mp.m.Unlock()
+	return mysqlProtocolSessionState{
+		session:       mp.ses,
+		username:      mp.GetUserName(),
+		database:      mp.GetDatabaseName(),
+		authResponse:  append([]byte(nil), mp.authResponse...),
+		authString:    append([]byte(nil), mp.authString...),
+		collationID:   mp.collationID,
+		collationName: mp.collationName,
+		charset:       mp.charset,
+		connectAttrs:  cloneProtocolStringMap(mp.connectAttrs),
+	}
+}
+
+func (mp *MysqlProtocolImpl) setSessionState(state mysqlProtocolSessionState) {
+	mp.m.Lock()
+	defer mp.m.Unlock()
+	mp.ses = state.session
+	if mp.tcpConn != nil {
+		mp.tcpConn.SetSession(state.session)
+	}
+	mp.username.Store(state.username)
+	mp.database.Store(state.database)
+	mp.authResponse = append(mp.authResponse[:0], state.authResponse...)
+	mp.authString = append(mp.authString[:0], state.authString...)
+	mp.collationID = state.collationID
+	mp.collationName = state.collationName
+	mp.charset = state.charset
+	mp.connectAttrs = cloneProtocolStringMap(state.connectAttrs)
+}
+
+func (mp *MysqlProtocolImpl) setChangeUserState(ses *Session, req changeUserRequest) {
+	state := mysqlProtocolSessionState{
+		session:      ses,
+		username:     req.username,
+		database:     req.database,
+		authResponse: req.authResponse,
+		connectAttrs: req.connectAttrs,
+	}
+	if req.hasCollation {
+		collation := collationID2CharsetAndName[req.collationID]
+		state.collationID = req.collationID
+		state.collationName = collation.collationName
+		state.charset = collation.charset
+	} else {
+		current := mp.snapshotSessionState()
+		state.collationID = current.collationID
+		state.collationName = current.collationName
+		state.charset = current.charset
+	}
+	mp.setSessionState(state)
+}
+
+func (mp *MysqlProtocolImpl) parseChangeUserRequest(ctx context.Context, data []byte) (changeUserRequest, error) {
+	var req changeUserRequest
+	pos := 0
+	var ok bool
+	req.username, pos, ok = mp.readStringNUL(data, pos)
+	if !ok {
+		return req, moerr.NewInvalidInput(ctx, "malformed COM_CHANGE_USER username")
+	}
+
+	capability := mp.GetCapability()
+	if capability&CLIENT_SECURE_CONNECTION != 0 {
+		var authLength uint8
+		authLength, pos, ok = mp.io.ReadUint8(data, pos)
+		if !ok {
+			return req, moerr.NewInvalidInput(ctx, "malformed COM_CHANGE_USER auth-response length")
+		}
+		req.authResponse, pos, ok = mp.readCountOfBytes(data, pos, int(authLength))
+		if !ok {
+			return req, moerr.NewInvalidInput(ctx, "malformed COM_CHANGE_USER auth-response")
+		}
+	} else {
+		var auth string
+		auth, pos, ok = mp.readStringNUL(data, pos)
+		if !ok {
+			return req, moerr.NewInvalidInput(ctx, "malformed COM_CHANGE_USER auth-response")
+		}
+		req.authResponse = []byte(auth)
+	}
+
+	req.database, pos, ok = mp.readStringNUL(data, pos)
+	if !ok {
+		return req, moerr.NewInvalidInput(ctx, "malformed COM_CHANGE_USER database")
+	}
+	if pos < len(data) && capability&CLIENT_PROTOCOL_41 != 0 {
+		var collationID uint16
+		collationID, pos, ok = mp.io.ReadUint16(data, pos)
+		if !ok {
+			return req, moerr.NewInvalidInput(ctx, "malformed COM_CHANGE_USER character set")
+		}
+		req.collationID = int(collationID)
+		if _, exists := collationID2CharsetAndName[req.collationID]; !exists {
+			return req, moerr.NewInvalidInputf(ctx, "unsupported COM_CHANGE_USER character set %d", collationID)
+		}
+		req.hasCollation = true
+	}
+	if pos < len(data) && capability&CLIENT_PLUGIN_AUTH != 0 {
+		req.clientPluginName, pos, ok = mp.readStringNUL(data, pos)
+		if !ok {
+			return req, moerr.NewInvalidInput(ctx, "malformed COM_CHANGE_USER authentication plugin")
+		}
+	}
+	if pos < len(data) && capability&CLIENT_CONNECT_ATTRS != 0 {
+		var attrsLength uint64
+		attrsLength, pos, ok = mp.readIntLenEnc(data, pos)
+		if !ok || attrsLength > uint64(len(data)-pos) {
+			return req, moerr.NewInvalidInput(ctx, "malformed COM_CHANGE_USER connection attributes length")
+		}
+		end := pos + int(attrsLength)
+		req.connectAttrs = make(map[string]string)
+		for pos < end {
+			var key, value string
+			key, pos, ok = mp.readStringLenEnc(data[:end], pos)
+			if !ok {
+				return req, moerr.NewInvalidInput(ctx, "malformed COM_CHANGE_USER connection attribute key")
+			}
+			value, pos, ok = mp.readStringLenEnc(data[:end], pos)
+			if !ok {
+				return req, moerr.NewInvalidInput(ctx, "malformed COM_CHANGE_USER connection attribute value")
+			}
+			req.connectAttrs[key] = value
+		}
+	}
+	if pos != len(data) {
+		return req, moerr.NewInvalidInput(ctx, "malformed COM_CHANGE_USER trailing data")
+	}
+	req.authResponse = append([]byte(nil), req.authResponse...)
+	return req, nil
+}
+
 func (mp *MysqlProtocolImpl) SendPrepareResponse(ctx context.Context, stmt *PrepareStmt) error {
 	dcPrepare, ok := stmt.PreparePlan.GetDcl().Control.(*planPb.DataControl_Prepare)
 	if !ok {
