@@ -47,3 +47,11 @@
 3. 删除随 REGEXP 扩张新增的 protocol/CTAS/runtime 测试与专用 checker，只保留本 PR 有 ownership 的普通 REPLACE/INSERT bounds。
 4. 按 exact-head Proxy 输出恢复两个 DESC golden 的尾部空 Extra/Comment 分隔符。
 5. 跑 focused/owning packages、targeted golangci-lint 与 self-review，commit 并 push。
+
+# PR #27841 第十轮 review 与 CI 修复
+
+1. 让 `+` 的 string concat rewrite 与 REVERSE/LEFT/RIGHT/TRIM 等 consumers 接受并保留 CHAR/VARCHAR/TEXT domain。
+2. VARCHAR text admission 按字符宽度折算 UTF-8 最大 bytes；TEXT/BLOB 继续以 MaxBlobLen 为上限。
+3. REGEXP_REPLACE 仅修正现有 VARCHAR operand 的 result bound，不扩大 TEXT operand/runtime ownership。
+4. Binary INSERT 使用 raw byte range，避免 invalid UTF-8 被 RuneError 重编码并突破静态 bound。
+5. 修正 LTRIM/RTRIM bounded metadata、7 个 exact-head BVT golden，补 focused/consumer tests 后跑 owning packages/lint/self-review 并 push。

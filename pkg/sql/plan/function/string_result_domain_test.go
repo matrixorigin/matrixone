@@ -224,6 +224,32 @@ func TestExpandingReplacementAndInsertBounds(t *testing.T) {
 
 }
 
+func TestStringConsumersPreserveTextAndBoundedWidths(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	for _, test := range []struct {
+		name      string
+		inputs    []types.Type
+		wantOID   types.T
+		wantWidth int32
+	}{
+		{name: "reverse", inputs: []types.Type{types.T_text.ToType()}, wantOID: types.T_text},
+		{name: "left", inputs: []types.Type{types.T_text.ToType(), types.T_int64.ToType()}, wantOID: types.T_text},
+		{name: "ltrim", inputs: []types.Type{types.New(types.T_varchar, 40, 0)}, wantOID: types.T_varchar, wantWidth: 40},
+		{name: "rtrim", inputs: []types.Type{types.New(types.T_varchar, 40, 0)}, wantOID: types.T_varchar, wantWidth: 40},
+		{name: "regexp_replace", inputs: []types.Type{types.New(types.T_varchar, 2, 0), types.New(types.T_varchar, 1, 0), types.New(types.T_varchar, 2, 0)}, wantOID: types.T_varchar, wantWidth: 4},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			resolved, err := GetFunctionByName(proc.Ctx, test.name, test.inputs)
+			require.NoError(t, err)
+			result := resolved.GetReturnType()
+			require.Equal(t, test.wantOID, result.Oid)
+			if test.wantWidth != 0 {
+				require.Equal(t, test.wantWidth, result.Width)
+			}
+		})
+	}
+}
+
 func TestConcatReturnTypePromotesWithoutCapping(t *testing.T) {
 	binary := func(width int32) types.Type {
 		return types.NewWithCharset(types.T_varbinary, width, 0, types.CharsetBinary)

@@ -1189,6 +1189,27 @@ func TestTextResultCapacityUsesResultDomain(t *testing.T) {
 	}, NewFunctionTestResult(types.T_text.ToType(), false, []string{strings.Repeat("bb", 40000)}, nil), fEvalFn(Replace))
 	ok, info = replaceCase.Run()
 	require.True(t, ok, info)
+
+	multibyteRepeat := NewFunctionTestCase(proc, []FunctionTestInput{
+		NewFunctionTestConstInput(types.New(types.T_varchar, 1, 0), []string{"😀"}, nil),
+		NewFunctionTestConstInput(types.T_int64.ToType(), []int64{20000}, nil),
+	}, NewFunctionTestResult(types.New(types.T_varchar, 20000, 0), false, []string{strings.Repeat("😀", 20000)}, nil),
+		fEvalFn(builtInRepeat))
+	ok, info = multibyteRepeat.Run()
+	require.True(t, ok, info)
+}
+
+func TestBinaryInsertPreservesInvalidUTF8Bytes(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	fcTC := NewFunctionTestCase(proc, []FunctionTestInput{
+		NewFunctionTestConstInput(types.New(types.T_varbinary, 1, 0), []string{string([]byte{0xff})}, nil),
+		NewFunctionTestConstInput(types.T_int64.ToType(), []int64{1}, nil),
+		NewFunctionTestConstInput(types.T_int64.ToType(), []int64{0}, nil),
+		NewFunctionTestConstInput(types.New(types.T_varbinary, 1, 0), []string{"b"}, nil),
+	}, NewFunctionTestResult(types.New(types.T_varbinary, 2, 0), false, []string{string([]byte{'b', 0xff})}, nil),
+		fEvalFn(Insert))
+	ok, info := fcTC.Run()
+	require.True(t, ok, info)
 }
 
 func TestExpandingFunctionsRejectMPoolBeforeBuildingResult(t *testing.T) {

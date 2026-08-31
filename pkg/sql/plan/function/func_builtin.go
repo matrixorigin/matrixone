@@ -1690,6 +1690,9 @@ func maxStringFunctionResultLength(result vector.FunctionResultWrapper) int64 {
 	switch result.GetResultVector().GetType().Oid {
 	case types.T_blob, types.T_text:
 		return int64(types.MaxBlobLen)
+	case types.T_char, types.T_varchar:
+		// CHAR/VARCHAR width is a character contract, not a byte contract.
+		return int64(types.MaxVarcharLen * utf8.UTFMax)
 	default:
 		return int64(types.MaxVarcharLen)
 	}

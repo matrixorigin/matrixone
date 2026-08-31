@@ -2990,7 +2990,9 @@ func TestBuildCTASNarrowsKnownExpandingStringResults(t *testing.T) {
 		replace('a', 'a', 'b') replaced,
 		insert('a', 1, 0, 'b') inserted,
 		replace(X'61', X'61', X'62') binary_replaced,
-		insert(X'61', 1, 0, X'62') binary_inserted`
+		insert(X'61', 1, 0, X'62') binary_inserted,
+		reverse(space(500) + space(600)) reversed_text,
+		reverse('123' + space(1) + '456') chained_text`
 	stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, sql, 1)
 	require.NoError(t, err)
 	defer stmt.Free()
@@ -2998,7 +3000,7 @@ func TestBuildCTASNarrowsKnownExpandingStringResults(t *testing.T) {
 	p, err := BuildPlan(NewMockCompilerContext(false), stmt, false)
 	require.NoError(t, err)
 	cols := p.GetDdl().GetCreateTable().GetTableDef().GetCols()
-	require.GreaterOrEqual(t, len(cols), 7)
+	require.GreaterOrEqual(t, len(cols), 9)
 	for _, index := range []int{0, 1, 2, 3, 4} {
 		require.Equal(t, int32(types.T_varchar), cols[index].Typ.Id, cols[index].Name)
 		require.LessOrEqual(t, cols[index].Typ.Width, int32(types.MaxVarcharLen), cols[index].Name)
@@ -3007,6 +3009,8 @@ func TestBuildCTASNarrowsKnownExpandingStringResults(t *testing.T) {
 		require.Equal(t, int32(types.T_varbinary), cols[index].Typ.Id, cols[index].Name)
 		require.LessOrEqual(t, cols[index].Typ.Width, int32(types.MaxVarBinaryLen), cols[index].Name)
 	}
+	require.Equal(t, int32(types.T_text), cols[7].Typ.Id)
+	require.Equal(t, int32(types.T_text), cols[8].Typ.Id)
 }
 
 func TestViewRebindPreservesMySQLSpecialColumnSemantics(t *testing.T) {
