@@ -1311,25 +1311,63 @@ func TestCompileExternScanParquetLoadFileFanout(t *testing.T) {
 	require.Equal(t, len(fileList), totalFiles)
 }
 
-func TestParquetLoadFileFanoutSaturatesWithoutFooterPlanning(t *testing.T) {
+func TestCompileExternScanParquetLoadDefaultAtThresholdUsesFileFanoutWithoutFooterReads(t *testing.T) {
 	testCompile := NewMockCompile(t)
-	testCompile.cnList = engine.Nodes{{Addr: "cn1:6001", Mcpu: 2}, {Addr: "cn2:6001", Mcpu: 2}}
 	testCompile.addr = "cn1:6001"
-	testCompile.execType = plan2.ExecTypeAP_MULTICN
+	testCompile.ncpu = 2
+	testCompile.anal = &AnalyzeModule{qry: &plan.Query{}}
+	testCompile.proc.SetResolveVariableFunc(func(varName string, isSystemVar, isGlobalVar bool) (interface{}, error) {
+		if varName == "sql_mode" {
+			return "", nil
+		}
+		return nil, nil
+	})
 
-	param := &tree.ExternParam{ExParamConst: tree.ExParamConst{ScanType: tree.S3, Format: tree.PARQUET}}
-	require.Equal(t, 4, testCompile.parquetLoadFileFanoutDOP(param))
-	require.True(t, testCompile.parquetLoadFileFanoutSaturates(param, 4))
-	require.True(t, testCompile.parquetLoadFileFanoutSaturates(param, 5))
-	require.False(t, testCompile.parquetLoadFileFanoutSaturates(param, 3))
+	// This is the post-bind form of an omitted PARALLEL clause that crossed the
+	// admission threshold. The files are deliberately not Parquet: successful
+	// compilation proves the file-fanout branch does not open a footer before it
+	// creates the independently executable scopes.
+	dir := t.TempDir()
+	for _, name := range []string{"part-0.parquet", "part-1.parquet"} {
+		require.NoError(t, os.WriteFile(filepath.Join(dir, name), []byte("not a parquet file"), 0o600))
+	}
+	param := &tree.ExternParam{
+		ExParamConst: tree.ExParamConst{
+			ScanType: tree.INFILE,
+			Filepath: filepath.Join(dir, "part-*.parquet"),
+			Format:   tree.PARQUET,
+			FileSize: int64(plan2.LoadParallelMinSize),
+			Tail:     &tree.TailParameter{},
+		},
+		ExParam: tree.ExParam{
+			ExternType:            int32(plan.ExternType_LOAD),
+			Parallel:              true,
+			ParallelLoadRequested: true,
+		},
+	}
+	createSQL, err := json.Marshal(param)
+	require.NoError(t, err)
+	n := &plan.Node{
+		Stats:    &plan.Stats{Cost: float64(plan2.LoadParallelMinSize), Rowsize: 1},
+		TableDef: &plan.TableDef{Createsql: string(createSQL)},
+		ExternScan: &plan.ExternScan{
+			Type:           int32(plan.ExternType_LOAD),
+			TbColToDataCol: map[string]int32{},
+		},
+	}
 
-	// The defaulted planner sets Parallel without ParallelSpecified.  Once the
-	// aggregate input crossed LoadParallelMinSize, four one-row-group files can
-	// execute in parallel without probing any footer.
-	param.Parallel = true
-	param.ParallelSpecified = false
-	require.True(t, param.Parallel)
-	require.False(t, param.ParallelSpecified)
+	ss, err := testCompile.compileExternScan(n)
+	require.NoError(t, err)
+	require.Len(t, ss, 2)
+	for _, scope := range ss {
+		require.NoError(t, checkScopeWithExpectedList(scope, []vm.OpType{vm.External}))
+		ext, ok := scope.RootOp.(*external.External)
+		require.True(t, ok)
+		require.False(t, ext.Es.Extern.Parallel)
+		require.True(t, ext.Es.Extern.ParallelLoadRequested)
+		require.Empty(t, ext.Es.ParquetRowGroupShards)
+		require.Len(t, ext.Es.FileList, 1)
+	}
 }
 
 func TestSplitIcebergDataFileShardsBalancesFiles(t *testing.T) {

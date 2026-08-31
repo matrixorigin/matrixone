@@ -1,4 +1,5 @@
-- Status: drafted
+- Status: draft — independent design approval pending
+- Revision: 1
 - Start Date: 2026-08-31
 - Authors: iamlinjunhong
 - Implementation PR: [#27903](https://github.com/matrixorigin/matrixone/pull/27903)
@@ -51,6 +52,34 @@ than four times a small request (requests above 256 KiB bypass it).  The cache
 is owned by one active external operator and is released with that operator;
 there is no query-global cache, background worker, or cross-query state.
 
+### State and ownership
+
+```text
+parse -> bind default -> size admission -> compile fanout -> LOAD scopes
+                  |             |                |
+                  |             |                +-- file count fills DOP: no footer reads
+                  |             +-- below 128 MiB: serial path
+                  +-- explicit false: serial path
+```
+
+The binder owns the omitted-versus-explicit distinction and writes the admitted
+parameter into the plan. The compiler owns choosing the bounded fanout shape;
+it does not re-admit based on the per-file listing. Every resulting scope is
+owned by the existing statement transaction. A scope can produce batches, but
+cannot independently commit. The transaction owner alone publishes rows at
+commit; it rolls back on any scope error or statement cancellation.
+
+| Resource | Effective owner | Bound | Terminal path |
+|---|---|---:|---|
+| Load scopes | existing scheduler | bounded DOP | normal scope completion, statement error, or context cancellation |
+| Footer planning | compiler | at most one sequential open per file, only below file-fanout saturation | compile return |
+| ReaderAt cache | one active Parquet external operator | 1 MiB retained; at most 4x a small request; requests above 256 KiB bypass | operator close / scope cleanup |
+| Transaction visibility | existing LOAD transaction | one statement transaction | commit publishes all rows; any error/cancel rolls back all rows |
+
+There is no added goroutine, retry loop, query-global cache, or persistent
+state. Cancellation follows the existing statement context into every scope;
+the new code has no separate wait or cleanup protocol.
+
 ## Failure, cancellation, and compatibility
 
 This changes no persisted, catalog, wire, or mixed-version format.  It uses the
@@ -59,6 +88,12 @@ creates no scope, and any running-scope failure/cancellation flows through the
 existing statement cancellation and transaction rollback path.  `PARALLEL
 'false'` is the immediate operational rollback switch; the size guard keeps
 small/local loads serial.
+
+This change has no catalog, storage, wire, or mixed-version surface. It is safe
+to roll back by reverting the code or by using explicit `PARALLEL 'false'` for
+an affected statement. It adds debug-only footer planning counters (file count,
+row groups, calls, bytes, duration) and does not add a metric with unbounded
+labels.
 
 ## Alternatives
 
@@ -72,14 +107,22 @@ small/local loads serial.
 
 ## Verification and evidence
 
-Focused planner tests cover omitted/default state, explicit serial opt-out,
-row-group scope construction, contiguous shard assignment, and the
-many-small-file admission decision.  The new DOP test proves that a
-threshold-admitted omitted default with four one-row-group files takes the
-whole-file path before any footer enumeration.  The existing distributed LOAD
-transaction path remains the atomic-failure and cancellation owner; before this
-RFC advances, its exact default-parallel failure/cancellation acceptance case
-must assert zero visible rows after an injected shard failure.
+| Invariant | Deterministic witness | Oracle |
+|---|---|---|
+| Omitted clause admits at the threshold; explicit false remains serial | `TestDefaultParquetLoadParallelAdmission` | bound parameter flags |
+| A threshold-admitted omitted default reaches whole-file fanout before metadata I/O when files fill DOP | `TestCompileExternScanParquetLoadDefaultAtThresholdUsesFileFanoutWithoutFooterReads` | deliberately invalid `.parquet` files compile into one-file scopes, proving no footer open occurred |
+| Row-group selection preserves rows and nullable values | `TestParquet_RowGroupSelection_SerialVsShards_Nulls` | serial/sharded result equality |
+| A selected shard reports a NOT NULL failure | `TestParquet_RowGroupSelection_NotNullViolation` | constraint error class |
+| Public LOAD failure keeps the seed row only | distributed `load_data_parquet` rollback cases | post-failure row count and aggregates |
+
+The threshold fanout test uses the post-bind parameter as the test seam, so it
+does not need a 128 MiB fixture or a timing assertion. The distributed rollback
+fixtures remain below the admission threshold and are intentionally a serial
+control; they do not claim to prove a threshold-admitted fanout transaction.
+An exact default-fanout shard-failure/cancellation test requires a supported
+test-owned multi-CN fault-injection seam at the transaction boundary. That
+acceptance proof, plus endpoint rollout measurements, remains required before
+this RFC can move from draft to in-progress.
 
 `BenchmarkParquetRangeReadAheadSequential` reports range calls per operation,
 fetched bytes per operation, peak cache bytes, and simulated range latency for
@@ -88,8 +131,14 @@ not a claim about a particular object-store endpoint.  Endpoint wall time and
 resource measurements are required as rollout evidence before enabling this in
 a release benchmark environment.
 
+The terminal local benchmark record is in
+[`docs/design/evidence/27903_parquet_range_read_ahead_benchmark.md`](../design/evidence/27903_parquet_range_read_ahead_benchmark.md): direct/read-ahead
+range calls are 128/32, fetched bytes are both 8 MiB, and retained cache is
+0/256 KiB. These values are local synthetic evidence only; the linked issue's
+object-store observations are problem evidence, not before/after rollout proof.
+
 ## Open questions
 
-No implementation-blocking question remains.  Independent design approval and
-endpoint benchmark evidence are required before this RFC can move to
-`in-progress`.
+No implementation decision is deferred. Independent design approval, an exact
+default-fanout transaction fault/cancellation witness, and endpoint benchmark
+evidence are required before this RFC can move to `in-progress`.
