@@ -113,6 +113,11 @@ func (s *service) prepareDDLVisibilityBarrierLocked() error {
 	defer cancel()
 
 	s.ddlCommitGate.RecordDDLFrontier(s._txnClient.GetLatestCommitTS())
+	if s.ddlVisibilityActivationComplete.Load() {
+		// No DDL producer exists before listeners start, so this new incarnation
+		// is already drained and may publish its own Prepared proof.
+		s.ddlVisibilityActivationPrepared.Store(true)
+	}
 	// Startup owns this mutex, so relying on the periodic heartbeat (which uses
 	// the same mutex to order readiness snapshots) would deadlock publication.
 	// Publish the startup barrier directly before waiting for its authoritative
@@ -128,7 +133,19 @@ func (s *service) prepareDDLVisibilityBarrierLocked() error {
 	if err := s.waitForDDLVisibilityBarrierPublication(ctx, retryInterval); err != nil {
 		return err
 	}
-	return s.syncStartupDDLVisibilityFrontier(ctx)
+	if err := s.syncStartupDDLVisibilityFrontier(ctx); err != nil {
+		return err
+	}
+	if s.ddlVisibilityActivationComplete.Load() {
+		// The reconstructed frontier is now applied locally. Publish a Fenced
+		// proof bound to this restart/replacement incarnation so future scale-out
+		// activation does not wait on stale proof from its predecessor.
+		s.ddlVisibilityActivationFenced.Store(true)
+		if _, err := s._hakeeperClient.SendCNHeartbeat(ctx, s.newCNStoreHeartbeat()); err != nil {
+			return moerr.AttachCause(ctx, err)
+		}
+	}
+	return nil
 }
 
 // withdrawDDLVisibilityBarrier closes both externally published gates before
