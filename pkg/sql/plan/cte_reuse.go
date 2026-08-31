@@ -141,7 +141,7 @@ func (builder *QueryBuilder) reusableCTEProducer(
 	storageTypes := first.types
 	if requiredTypes, narrowed := builder.cteStorageOutputTypes(rootID, cteRef.occurrences); narrowed {
 		storageTypes = requiredTypes
-		if rowSize, fixed := fixedOutputRowSize(requiredTypes); fixed && stats != nil {
+		if rowSize, fixed := fixedOutputRowSize(requiredTypes); fixed {
 			storageStats = &planpb.Stats{Outcnt: stats.Outcnt, Rowsize: rowSize}
 		}
 	}

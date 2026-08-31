@@ -19,6 +19,7 @@ import (
 	"testing"
 
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
@@ -79,6 +80,47 @@ func TestGroupingSetInputSharingProtocolGate(t *testing.T) {
 	require.Equal(t, 1, shared.aggregatesOnExpand)
 	require.Equal(t, 3, shared.sinkScans)
 	require.Equal(t, []bool{true, true, true, false, false, false}, shared.flags)
+}
+
+func TestRewriteGroupingSetExprPreservesSQLBitOrder(t *testing.T) {
+	groupingExpr := func() *planpb.Expr {
+		args := make([]*planpb.Expr, 3)
+		for i := range args {
+			args[i] = groupingSetCol(
+				planpb.Type{Id: int32(types.T_int64)}, 7, int32(i))
+		}
+		return &planpb.Expr{
+			Typ: planpb.Type{Id: int32(types.T_int64)},
+			Expr: &planpb.Expr_F{F: &planpb.Function{
+				Func: &planpb.ObjectRef{ObjName: "grouping"},
+				Args: args,
+			}},
+		}
+	}
+
+	for _, test := range []struct {
+		name  string
+		flags []bool
+		want  int64
+	}{
+		{name: "all active", flags: []bool{true, true, true}, want: 0},
+		{name: "rightmost inactive", flags: []bool{true, true, false}, want: 1},
+		{name: "middle inactive", flags: []bool{true, false, true}, want: 2},
+		{name: "leftmost inactive", flags: []bool{false, true, true}, want: 4},
+		{name: "outer inactive", flags: []bool{false, true, false}, want: 5},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			expr := groupingExpr()
+			agg := &planpb.Node{
+				BindingTags:  []int32{7, 8},
+				GroupingFlag: test.flags,
+			}
+
+			rewriteGroupingSetExpr(expr, agg, 9, len(test.flags))
+
+			require.Equal(t, test.want, expr.GetLit().GetI64Val())
+		})
+	}
 }
 
 type groupingSetShape struct {
