@@ -402,6 +402,7 @@ func TestInitExecuteStmtParamPreservesBinaryFlagPerUserVariable(t *testing.T) {
 	require.False(t, cw.proc.GetPrepareParamIsBin(1))
 	require.Equal(t, plan2.ParamValue{
 		Value: "AB\x00\x00", IsBin: true, EnableNumericPrefix: true,
+		SourceType: types.T_varbinary.ToType(), HasSourceType: true,
 	}, cw.paramVals[0])
 	require.Equal(t, plan2.ParamValue{
 		Value: "text", IsBin: false, EnableNumericPrefix: true,
@@ -1614,11 +1615,63 @@ func TestSpecializePreparedExecutionPlanSkipsIneligibleSQLPlan(t *testing.T) {
 		plan2.ParamValue{
 			Value: "1.2345678", PrepareParamKind: vector.PrepareParamDecimal, EnableNumericPrefix: true,
 		},
-	}, false, false, false, false, false, nil, nil)
+	}, false, false, false, false, false, nil, nil, false, true, false)
 	require.NoError(t, err)
 	require.False(t, specialized)
 	require.False(t, applied)
 	require.Same(t, original, runtimePlan, "ineligible SQL EXECUTE must not deep-copy the cached plan")
+}
+
+func TestPreparedRuntimeTextComparisonTypesSkipsNonStringParams(t *testing.T) {
+	require.Nil(t, preparedRuntimeTextComparisonTypes([]any{
+		plan2.ParamValue{Value: "1.5", HasSourceType: true, SourceType: types.T_decimal128.ToType()},
+		plan2.ParamValue{Value: int64(1), HasRuntimeType: true, RuntimeType: types.T_int64.ToType(), IsBinaryProtocol: true},
+	}))
+	require.NotNil(t, preparedRuntimeTextComparisonTypes([]any{
+		plan2.ParamValue{Value: "text", HasSourceType: true, SourceType: types.T_varchar.ToType()},
+	}))
+}
+
+func TestSpecializePreparedExecutionPlanAppliesBitTextComparison(t *testing.T) {
+	ctx := context.Background()
+	bitType := plan.Type{Id: int32(types.T_bit), Width: 64}
+	predicate, err := plan2.BindFuncExprImplByPlanExpr(ctx, "=", []*plan.Expr{
+		{
+			Typ: bitType,
+			Expr: &plan.Expr_Col{Col: &plan.ColRef{
+				RelPos: 0,
+				ColPos: 0,
+			}},
+		},
+		{
+			Typ:  plan.Type{Id: int32(types.T_text)},
+			Expr: &plan.Expr_P{P: &plan.ParamRef{Pos: 0}},
+		},
+	})
+	require.NoError(t, err)
+	original := &plan.Plan{Plan: &plan.Plan_Query{Query: &plan.Query{
+		StmtType: plan.Query_SELECT,
+		Steps:    []int32{0},
+		Nodes: []*plan.Node{{
+			NodeType:   plan.Node_VALUE_SCAN,
+			FilterList: []*plan.Expr{predicate},
+		}},
+	}}, IsPrepare: true}
+
+	runtimePlan, specialized, applied, err := specializePreparedExecutionPlan(ctx, original, []any{
+		plan2.ParamValue{
+			Value:            "9007199254740993",
+			RuntimeType:      types.T_text.ToType(),
+			HasRuntimeType:   true,
+			IsBinaryProtocol: true,
+		},
+	}, true, false, false, false, false, nil, nil, false, false, false)
+	require.NoError(t, err)
+	require.True(t, specialized)
+	require.True(t, applied)
+	comparison := runtimePlan.GetQuery().Nodes[0].FilterList[0]
+	require.Equal(t, int32(types.T_bit), comparison.GetF().Args[0].Typ.Id)
+	require.Equal(t, int32(types.T_bit), comparison.GetF().Args[1].Typ.Id)
 }
 
 func TestPreparedPlanHasNumericPrefixConsumerCachesOnlyStaticDecimalContexts(t *testing.T) {
@@ -2053,6 +2106,32 @@ func TestPreparedRuntimeCacheSupportsMixedAndStringCategories(t *testing.T) {
 	require.True(t, preparedRuntimeCacheSupports(textA))
 	require.Equal(t, preparedRuntimeSemanticKey(textA), preparedRuntimeSemanticKey(textB))
 	require.False(t, preparedRuntimeCacheSupports([]any{plan2.ParamValue{}}))
+}
+
+func TestPreparedRuntimeSemanticKeyKeepsValueAndSQLSourceDomains(t *testing.T) {
+	integer := func(value string) []any {
+		return []any{plan2.ParamValue{
+			Value: value, PrepareParamKind: vector.PrepareParamInteger,
+			SourceType: types.T_int64.ToType(), HasSourceType: true,
+		}}
+	}
+	require.NotEqual(t, preparedRuntimeSemanticKey(integer("200")), preparedRuntimeSemanticKey(integer("10")),
+		"SQL source metadata must not replace the value-derived comparison domain")
+
+	decimal := func(value string, width, scale int32) []any {
+		return []any{plan2.ParamValue{
+			Value: value, PrepareParamKind: vector.PrepareParamDecimal,
+			SourceType: types.New(types.T_decimal128, width, scale), HasSourceType: true,
+		}}
+	}
+	require.Equal(t,
+		preparedRuntimeSemanticKey(decimal("2.5", 20, 5)),
+		preparedRuntimeSemanticKey(decimal("3.5", 20, 5)),
+		"values in one SQL arithmetic domain should reuse the specialized plan")
+	require.NotEqual(t,
+		preparedRuntimeSemanticKey(decimal("2.5", 20, 5)),
+		preparedRuntimeSemanticKey(decimal("2.5", 30, 8)),
+		"a different SQL source domain must not reuse stale arithmetic metadata")
 }
 
 func TestPreparedDirectResultSemanticKeyPreservesDecimalMetadataDomain(t *testing.T) {
@@ -2491,11 +2570,63 @@ func TestBuildExecuteUserParamsHonorsStoredProcedureScope(t *testing.T) {
 		plan2.ParamValue{
 			Value: int64(20), IsBin: false, PrepareParamKind: vector.PrepareParamInteger, EnableNumericPrefix: true,
 		},
-		plan2.ParamValue{Value: "session-binary", IsBin: true, EnableNumericPrefix: true},
+		plan2.ParamValue{
+			Value: "session-binary", IsBin: true, EnableNumericPrefix: true,
+			SourceType: types.T_varbinary.ToType(), HasSourceType: true,
+		},
 	}, paramVals)
 	require.Equal(t, "10", params.GetStringAt(0))
 	require.Equal(t, "20", params.GetStringAt(1))
 	require.Equal(t, "session-binary", params.GetStringAt(2))
+}
+
+func TestBuildExecuteUserParamsRetainsExecuteArgumentSourceType(t *testing.T) {
+	ses, prepareStmt, cw, _ := newPreparedExecuteEnv(t, 106)
+	defer prepareStmt.Close()
+
+	decimalType := plan.Type{Id: int32(types.T_decimal128), Width: 12, Scale: 3}
+	require.NoError(t, ses.setUserDefinedVarWithTypeAndKind(
+		"runtime_decimal", "2.500", "", false, decimalType, vector.PrepareParamDecimal))
+	require.NoError(t, ses.SetUserDefinedVar("runtime_text", "2.500", ""))
+	binaryTextType := plan.Type{
+		Id: int32(types.T_varchar), Width: 8, Charset: uint32(types.CharsetBinary),
+	}
+	require.NoError(t, ses.setUserDefinedVarWithType(
+		"runtime_binary", "12.5tail", "", false, binaryTextType))
+
+	args := []*plan.Expr{
+		{
+			Typ:  decimalType,
+			Expr: &plan.Expr_V{V: &plan.VarRef{Name: "runtime_decimal"}},
+		},
+		{
+			Expr: &plan.Expr_V{V: &plan.VarRef{Name: "runtime_text"}},
+		},
+		{
+			Typ:  binaryTextType,
+			Expr: &plan.Expr_V{V: &plan.VarRef{Name: "runtime_binary"}},
+		},
+	}
+	params, paramVals, _, _, _, err := buildExecuteUserParams(cw.proc, args, nil)
+	require.NoError(t, err)
+	defer params.Free(cw.proc.Mp())
+
+	require.Equal(t, "2.500", params.GetStringAt(0))
+	decimalParam, ok := paramVals[0].(plan2.ParamValue)
+	require.True(t, ok)
+	require.True(t, decimalParam.HasSourceType)
+	require.Equal(t, types.New(types.T_decimal128, 12, 3), decimalParam.SourceType)
+	require.Equal(t, vector.PrepareParamDecimal, decimalParam.PrepareParamKind)
+
+	textParam, ok := paramVals[1].(plan2.ParamValue)
+	require.True(t, ok)
+	require.False(t, textParam.HasSourceType,
+		"an unresolved execute argument must keep the existing text fallback")
+
+	binaryParam, ok := paramVals[2].(plan2.ParamValue)
+	require.True(t, ok)
+	require.True(t, binaryParam.HasSourceType)
+	require.Equal(t, types.NewWithCharset(types.T_varbinary, 8, 0, types.CharsetBinary), binaryParam.SourceType)
 }
 
 // A nil cached compile means the statement was rejected for prepare-time
