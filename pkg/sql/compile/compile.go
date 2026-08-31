@@ -6804,8 +6804,11 @@ func supportsRemoteAsofJoin(service string) bool {
 // execute the legacy unfiltered Find path, so explicit queries must wait until
 // deployment has raised the cluster's oldest-live protocol version.
 func supportsRemoteMongoUserQuery(service string) bool {
-	version, ok := moruntime.ServiceRuntime(service).
-		GetGlobalVariables(moruntime.MOProtocolVersion)
+	rt := moruntime.ServiceRuntime(service)
+	if rt == nil {
+		return false
+	}
+	version, ok := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
 	if !ok {
 		return false
 	}

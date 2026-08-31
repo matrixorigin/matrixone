@@ -200,7 +200,11 @@ func supportsMongoUserQueryProtocol(proc *process.Process) bool {
 	if proc == nil {
 		return false
 	}
-	version, ok := moruntime.ServiceRuntime(proc.GetService()).GetGlobalVariables(moruntime.MOProtocolVersion)
+	rt := moruntime.ServiceRuntime(proc.GetService())
+	if rt == nil {
+		return false
+	}
+	version, ok := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
 	if !ok {
 		return false
 	}

@@ -22,11 +22,14 @@ import (
 	"testing"
 	"time"
 
+	"github.com/golang/mock/gomock"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
+	mock_lock "github.com/matrixorigin/matrixone/pkg/frontend/test/mock_lock"
+	"github.com/matrixorigin/matrixone/pkg/lockservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/mongodb"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
@@ -637,6 +640,17 @@ func TestMongoScanPrepareRejectsV41SemanticsOnV40(t *testing.T) {
 			proc.Free()
 		})
 	}
+}
+
+func TestSupportsMongoUserQueryProtocolRejectsMissingRuntime(t *testing.T) {
+	const service = "mongodb-missing-execution-runtime"
+	require.Nil(t, moruntime.ServiceRuntime(service))
+	proc := testutil.NewProcess(t)
+	lockService := mock_lock.NewMockLockService(gomock.NewController(t))
+	lockService.EXPECT().GetConfig().Return(lockservice.Config{ServiceID: service})
+	proc.Base.LockService = lockService
+	require.False(t, supportsMongoUserQueryProtocol(proc))
+	proc.Free()
 }
 
 func TestMongoScanEmptyAndFindFailureReleaseResources(t *testing.T) {

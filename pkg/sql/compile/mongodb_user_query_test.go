@@ -244,3 +244,9 @@ func TestConfigureMongoUserQueryRequiresCompatibleProtocol(t *testing.T) {
 		})
 	}
 }
+
+func TestSupportsRemoteMongoUserQueryRejectsMissingRuntime(t *testing.T) {
+	const service = "mongodb-missing-compile-runtime"
+	require.Nil(t, runtime.ServiceRuntime(service))
+	require.False(t, supportsRemoteMongoUserQuery(service))
+}
