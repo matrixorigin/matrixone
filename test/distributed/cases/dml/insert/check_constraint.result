@@ -67,4 +67,16 @@ select * from replace_check order by id;
 id    v
 1    20
 2    NULL
+create table insert_ignore_check_composite_unique(
+a int not null,
+b int not null,
+c int not null,
+primary key(a, b),
+unique key uk(a, b, c),
+constraint positive_c check(c > 0)
+);
+insert ignore into insert_ignore_check_composite_unique values (1, 2, 3), (4, 5, -1);
+select * from insert_ignore_check_composite_unique order by a, b, c;
+a    b    c
+1    2    3
 drop database check_constraint_test;
