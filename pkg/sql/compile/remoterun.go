@@ -1874,7 +1874,7 @@ func validateRemoteMongoUserQueryPipelineProtocol(
 	}
 	for _, instruction := range p.InstructionList {
 		scan := instruction.GetMongodbScan()
-		if scan == nil || scan.UserQueryKind == 0 {
+		if !mongoScanUsesV41Payload(scan) {
 			continue
 		}
 		if proc == nil || !supportsRemoteMongoUserQuery(proc.GetService()) {

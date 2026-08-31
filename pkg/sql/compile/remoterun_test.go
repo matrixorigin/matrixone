@@ -4955,21 +4955,30 @@ func TestMongoScanRemoteProtocolValidationAtSendAndReceiveBoundaries(t *testing.
 
 	query, err := sqlmongodb.ParseUserQuery(t.Context(), `{"filter":{"value":1}}`)
 	require.NoError(t, err)
-	spec := &planpb.MongoScan{MaxParallelism: 1}
-	require.NoError(t, sqlmongodb.ApplyUserQueryToPlan(t.Context(), query, spec))
-	scope := &Scope{Proc: proc, RootOp: mongoscan.NewArgument().WithScan(spec)}
+	explicitQuery := &planpb.MongoScan{MaxParallelism: 1}
+	require.NoError(t, sqlmongodb.ApplyUserQueryToPlan(t.Context(), query, explicitQuery))
 
-	// A statement can compile while v41 is live, then encounter a rollback
-	// before remote encoding. The sender must not serialize a payload that an
-	// older receiver would silently interpret as a legacy Find.
-	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion41)
-	data, err := encodeRemoteScope(scope, proc)
-	require.NoError(t, err)
-	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion40)
-	_, err = encodeRemoteScope(scope, proc)
-	require.ErrorContains(t, err, "MORPC protocol version 41")
-	_, err = decodeScope(data, proc, true, nil)
-	require.ErrorContains(t, err, "MORPC protocol version 41")
+	for name, spec := range map[string]*planpb.MongoScan{
+		"explicit query":       explicitQuery,
+		"query column carrier": {MaxParallelism: 1, IncludeQueryColumn: true},
+		"pruned empty result":  {MaxParallelism: 1, EmptyResult: true},
+	} {
+		t.Run(name, func(t *testing.T) {
+			scope := &Scope{Proc: proc, RootOp: mongoscan.NewArgument().WithScan(spec)}
+
+			// A statement can compile while v41 is live, then encounter a rollback
+			// before remote encoding. The sender must not serialize a payload that an
+			// older receiver would silently interpret as a legacy Find.
+			rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion41)
+			data, err := encodeRemoteScope(scope, proc)
+			require.NoError(t, err)
+			rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion40)
+			_, err = encodeRemoteScope(scope, proc)
+			require.ErrorContains(t, err, "MORPC protocol version 41")
+			_, err = decodeScope(data, proc, true, nil)
+			require.ErrorContains(t, err, "MORPC protocol version 41")
+		})
+	}
 }
 
 func TestPartitionTopNPipelineRoundTrip(t *testing.T) {

@@ -26,6 +26,16 @@ log() { printf '[mongodb-ci] %s\n' "$*"; }
 die() { printf '[mongodb-ci] ERROR: %s\n' "$*" >&2; exit 1; }
 require() { command -v "$1" >/dev/null 2>&1 || die "required command not found: $1"; }
 
+e2e_tmp_root() {
+  if [[ -n "${MO_MONGODB_TMPDIR:-}" ]]; then
+    printf '%s\n' "$MO_MONGODB_TMPDIR"
+  elif [[ "$(uname -s)" == Darwin ]]; then
+    printf '%s\n' /private/tmp
+  else
+    printf '%s\n' /tmp
+  fi
+}
+
 sanitize() {
   local source="$1" target="$2"
   if [[ ! -f "$source" ]]; then printf 'not captured\n' >"$target"; return; fi
@@ -78,7 +88,7 @@ cleanup() {
     if [[ -n "$MONGODB_KEYFILE" && -f "$MONGODB_KEYFILE" ]]; then
       unlink "$MONGODB_KEYFILE" || true
     fi
-    if [[ -n "$MONGODB_KEYFILE_DIR" && -d "$MONGODB_KEYFILE_DIR" && "$(basename "$MONGODB_KEYFILE_DIR")" == mo-mongodb-key-source.* ]]; then
+    if [[ -n "$MONGODB_KEYFILE_DIR" && -d "$MONGODB_KEYFILE_DIR" && "$(basename "$MONGODB_KEYFILE_DIR")" == .mo-mongodb-key-source.* ]]; then
       rmdir "$MONGODB_KEYFILE_DIR" || log "refusing to remove non-empty MongoDB keyfile directory: $MONGODB_KEYFILE_DIR"
     fi
     # TMP_DIR is created by the exact mktemp template below. Refuse a broad
@@ -413,7 +423,10 @@ run_e2e() {
   require docker; require go; require python3; require openssl
   mkdir -p "$REPORT_DIR"
   # Keep test-owned build and service artifacts out of the worktree.
-  TMP_DIR="$(mktemp -d /private/tmp/mo-mongodb-e2e.XXXXXX)"
+  local tmp_root
+  tmp_root="$(e2e_tmp_root)"
+  [[ -d "$tmp_root" && -w "$tmp_root" ]] || die "MongoDB E2E temporary root is not writable: $tmp_root"
+  TMP_DIR="$(mktemp -d "${tmp_root%/}/mo-mongodb-e2e.XXXXXX")"
   trap cleanup EXIT
   export COMPOSE_PROJECT_NAME="mo-mongodb-$(basename "$TMP_DIR" | tr '[:upper:].' '[:lower:]-')"
   # Docker owns its published listener. MatrixOne treats a frontend port of 0

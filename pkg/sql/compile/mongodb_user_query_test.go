@@ -203,11 +203,6 @@ func TestConfigureMongoUserQueryLeavesLegacyFindPathUnchanged(t *testing.T) {
 }
 
 func TestConfigureMongoUserQueryRequiresCompatibleProtocol(t *testing.T) {
-	node := mongoUserQueryNode()
-	queryColumn := mongoQueryTestColumn(1, catalog.ExternalQuery, types.T_varchar)
-	node.FilterList = []*plan.Expr{
-		mongoQueryTestFunction("=", function.EQUAL, queryColumn, mongoQueryTestString(`{"filter":{"value":1}}`)),
-	}
 	compiler := &Compile{proc: testutil.NewProcess(t)}
 	rt := runtime.ServiceRuntime(compiler.proc.GetService())
 	previous, hadPrevious := rt.GetGlobalVariables(runtime.MOProtocolVersion)
@@ -220,7 +215,32 @@ func TestConfigureMongoUserQueryRequiresCompatibleProtocol(t *testing.T) {
 	})
 	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion40)
 
-	err := compiler.configureMongoUserQuery(node)
-	require.True(t, moerr.IsMoErrCode(err, moerr.ErrNotSupported), err)
-	require.Zero(t, node.ExternScan.MongodbScan.UserQueryKind)
+	queryColumn := mongoQueryTestColumn(1, catalog.ExternalQuery, types.T_varchar)
+	for name, node := range map[string]*plan.Node{
+		"explicit query": func() *plan.Node {
+			node := mongoUserQueryNode()
+			node.FilterList = []*plan.Expr{
+				mongoQueryTestFunction("=", function.EQUAL, queryColumn, mongoQueryTestString(`{"filter":{"value":1}}`)),
+			}
+			return node
+		}(),
+		"query column carrier": func() *plan.Node {
+			node := mongoUserQueryNode()
+			node.ProjectList = []*plan.Expr{queryColumn}
+			return node
+		}(),
+		"pruned empty result": func() *plan.Node {
+			node := mongoUserQueryNode()
+			node.FilterList = []*plan.Expr{
+				mongoQueryTestFunction("=", function.EQUAL, queryColumn, mongoQueryTestString(`{"filter":{"value":1}}`)),
+				mongoQueryTestFunction("like", function.LIKE, queryColumn, mongoQueryTestString("does-not-match")),
+			}
+			return node
+		}(),
+	} {
+		t.Run(name, func(t *testing.T) {
+			err := compiler.configureMongoUserQuery(node)
+			require.True(t, moerr.IsMoErrCode(err, moerr.ErrNotSupported), err)
+		})
+	}
 }

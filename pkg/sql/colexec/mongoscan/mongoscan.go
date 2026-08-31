@@ -26,6 +26,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/mongodb"
 	metric "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/util/resource"
@@ -55,8 +56,8 @@ func (scan *MongoScan) Prepare(proc *process.Process) (err error) {
 	if scan.Scan.Split != nil {
 		return moerr.NewNotSupported(proc.Ctx, "MongoDB local split execution is not enabled in the MVP")
 	}
-	if scan.Scan.UserQueryKind != int32(mongodb.UserQueryInvalid) && !supportsMongoUserQueryProtocol(proc) {
-		return moerr.NewNotSupported(proc.Ctx, "MongoDB explicit queries require MORPC protocol version 41")
+	if mongoScanUsesV41Payload(scan.Scan) && !supportsMongoUserQueryProtocol(proc) {
+		return moerr.NewNotSupported(proc.Ctx, "MongoDB query semantics require MORPC protocol version 41")
 	}
 	scan.ctr.userQuery, err = mongodb.UserQueryFromPlan(proc.Ctx, scan.Scan)
 	if err != nil {
@@ -205,6 +206,11 @@ func supportsMongoUserQueryProtocol(proc *process.Process) bool {
 	}
 	protocolVersion, ok := version.(int64)
 	return ok && protocolVersion >= defines.MORPCVersion41
+}
+
+func mongoScanUsesV41Payload(scan *plan.MongoScan) bool {
+	return scan != nil && (scan.UserQueryKind != int32(mongodb.UserQueryInvalid) ||
+		scan.IncludeQueryColumn || scan.EmptyResult)
 }
 
 func (scan *MongoScan) Call(proc *process.Process) (vm.CallResult, error) {

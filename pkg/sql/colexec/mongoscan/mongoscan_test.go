@@ -607,6 +607,38 @@ func TestMongoScanExplicitQueryDeadlineRejectsBufferedDocument(t *testing.T) {
 	proc.Free()
 }
 
+func TestMongoScanPrepareRejectsV41SemanticsOnV40(t *testing.T) {
+	for name, spec := range map[string]*plan.MongoScan{
+		"explicit query": func() *plan.MongoScan {
+			spec := testScanPlan()
+			applyTestUserQueryPlan(t, spec, `{"filter":{"value":1}}`, false)
+			return spec
+		}(),
+		"query column carrier": {MaxParallelism: 1, IncludeQueryColumn: true},
+		"pruned empty result":  {MaxParallelism: 1, EmptyResult: true},
+	} {
+		t.Run(name, func(t *testing.T) {
+			proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+			proc.Ctx = defines.AttachAccountId(proc.Ctx, 7)
+			rt := moruntime.ServiceRuntime(proc.GetService())
+			previous, hadPrevious := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
+			rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion40)
+			t.Cleanup(func() {
+				if hadPrevious {
+					rt.SetGlobalVariables(moruntime.MOProtocolVersion, previous)
+				} else {
+					rt.CompareAndDeleteGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion40)
+				}
+			})
+
+			scan := NewArgument().WithScan(spec)
+			err := scan.Prepare(proc)
+			require.ErrorContains(t, err, "MORPC protocol version 41")
+			proc.Free()
+		})
+	}
+}
+
 func TestMongoScanEmptyAndFindFailureReleaseResources(t *testing.T) {
 	t.Run("empty", func(t *testing.T) {
 		cursor := &testCursor{}

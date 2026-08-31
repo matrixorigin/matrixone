@@ -2978,6 +2978,12 @@ func (c *Compile) configureMongoUserQuery(node *plan.Node) error {
 			return moerr.NewNotSupported(c.proc.Ctx, "MongoDB MVP requires __mo_query = <constant>")
 		}
 		scan.IncludeQueryColumn = mongoQueryColumnUsed(node, node.ProjectList)
+		if mongoScanUsesV41Payload(scan) && !supportsRemoteMongoUserQuery(c.proc.GetService()) {
+			return moerr.NewNotSupported(
+				c.proc.Ctx,
+				"MongoDB query semantics require MORPC protocol version 41",
+			)
+		}
 		return nil
 	}
 
@@ -2991,6 +2997,12 @@ func (c *Compile) configureMongoUserQuery(node *plan.Node) error {
 		mongoQueryColumnUsed(node, node.ProjectList)
 	if len(queryList) == 0 {
 		scan.EmptyResult = true
+		if !supportsRemoteMongoUserQuery(c.proc.GetService()) {
+			return moerr.NewNotSupported(
+				c.proc.Ctx,
+				"MongoDB query semantics require MORPC protocol version 41",
+			)
+		}
 		return nil
 	}
 	if len(queryList) != 1 {
@@ -6799,6 +6811,13 @@ func supportsRemoteMongoUserQuery(service string) bool {
 	}
 	protocolVersion, ok := version.(int64)
 	return ok && protocolVersion >= defines.MORPCVersion41
+}
+
+// mongoScanUsesV41Payload reports whether a scan uses any field introduced by
+// the MongoDB query protocol. Older receivers ignore all three fields, so each
+// one must be rejected during a mixed-version rollout.
+func mongoScanUsesV41Payload(scan *plan.MongoScan) bool {
+	return scan != nil && (scan.UserQueryKind != 0 || scan.IncludeQueryColumn || scan.EmptyResult)
 }
 
 func supportsRemoteTargetAwareUpdate(service string) bool {

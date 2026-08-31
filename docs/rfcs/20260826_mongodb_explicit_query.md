@@ -209,10 +209,11 @@ not retain a prior query/cursor/client lease.
 `MongoScan` adds protobuf fields numbered 16–21. The legacy zero values retain
 the old find behavior; newer readers treat a zero kind as no explicit query.
 Older readers ignore unknown fields and consequently cannot execute the new
-operation semantics. `MORPCVersion41` is therefore the capability gate: a
-nonzero `user_query_kind` is rejected while the service-local oldest-live
-deployment version is below 41, rather than silently falling back to an
-unfiltered find. Versions 37–39 are implemented by the independently reviewed
+operation semantics. `MORPCVersion41` is therefore the capability gate: any
+nonzero `user_query_kind`, `include_query_column`, or `empty_result` is rejected
+while the service-local oldest-live deployment version is below 41, rather than
+silently falling back to an unfiltered find or omitting the hidden carrier.
+Versions 37–39 are implemented by the independently reviewed
 capabilities now present in the rebased `main`; this branch reserves only the
 next version, 41, for MongoDB, after inheriting main's v40 PAD SPACE capability. The
 gate is checked while compiling, immediately before a
