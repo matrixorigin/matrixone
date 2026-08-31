@@ -32,14 +32,24 @@ import (
 )
 
 type admissionProxyApplication struct {
-	stopped chan struct{}
-	once    sync.Once
+	started   chan struct{}
+	stopped   chan struct{}
+	startErr  error
+	startOnce sync.Once
+	stopOnce  sync.Once
 }
 
-func (a *admissionProxyApplication) Start() error { return nil }
+func (a *admissionProxyApplication) Start() error {
+	if a.started != nil {
+		a.startOnce.Do(func() { close(a.started) })
+	}
+	return a.startErr
+}
 
 func (a *admissionProxyApplication) Stop() error {
-	a.once.Do(func() { close(a.stopped) })
+	if a.stopped != nil {
+		a.stopOnce.Do(func() { close(a.stopped) })
+	}
 	return nil
 }
 
@@ -211,6 +221,106 @@ func TestProxyAdmissionWaitsForAuthoritativeResponse(t *testing.T) {
 
 	require.NoError(t, s.applyViewMetadataAdmission(context.Background(), nil))
 	require.NoError(t, <-done)
+}
+
+func TestProxyStartRetriesAdmissionTimeoutUntilReady(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	app := &admissionProxyApplication{
+		started: make(chan struct{}),
+		stopped: make(chan struct{}),
+	}
+	s := &Server{
+		config: Config{
+			UUID: "proxy-admission-retry",
+		},
+		runtime:                         runtime.DefaultRuntime(),
+		app:                             app,
+		viewMetadataAdmissionGeneration: 12,
+		viewMetadataAdmissionUpdated:    make(chan struct{}, 1),
+		viewMetadataAdmissionContext:    ctx,
+		viewMetadataAdmissionCancel:     cancel,
+	}
+	s.config.HAKeeper.HeartbeatInterval.Duration = time.Millisecond
+	s.config.HAKeeper.HeartbeatTimeout.Duration = time.Millisecond
+
+	// Synchronize with the waiter before crossing its first admission timeout.
+	s.viewMetadataAdmissionUpdated <- struct{}{}
+	done := make(chan error, 1)
+	go func() { done <- s.Start() }()
+	require.Eventually(t, func() bool {
+		return len(s.viewMetadataAdmissionUpdated) == 0
+	}, time.Second, time.Millisecond)
+
+	select {
+	case err := <-done:
+		t.Fatalf("Proxy Start returned on a transient admission timeout: %v", err)
+	case <-time.After(100 * time.Millisecond):
+	}
+	select {
+	case <-app.started:
+		t.Fatal("Proxy ingress started before admission became ready")
+	default:
+	}
+
+	require.NoError(t, s.applyViewMetadataAdmission(context.Background(), nil))
+	select {
+	case err := <-done:
+		require.NoError(t, err)
+	case <-time.After(time.Second):
+		t.Fatal("Proxy did not start after admission became ready")
+	}
+	select {
+	case <-app.started:
+	default:
+		t.Fatal("Proxy ingress was not started after admission became ready")
+	}
+	require.NoError(t, s.Close())
+}
+
+func TestProxyStartHonorsAdmissionCancellation(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	app := &admissionProxyApplication{started: make(chan struct{})}
+	s := &Server{
+		config:                          Config{UUID: "proxy-admission-canceled"},
+		runtime:                         runtime.DefaultRuntime(),
+		app:                             app,
+		viewMetadataAdmissionGeneration: 12,
+		viewMetadataAdmissionUpdated:    make(chan struct{}, 1),
+		viewMetadataAdmissionContext:    ctx,
+		viewMetadataAdmissionCancel:     cancel,
+	}
+	s.config.HAKeeper.HeartbeatInterval.Duration = time.Millisecond
+	s.config.HAKeeper.HeartbeatTimeout.Duration = time.Millisecond
+	s.viewMetadataAdmissionUpdated <- struct{}{}
+	done := make(chan error, 1)
+	go func() { done <- s.Start() }()
+	require.Eventually(t, func() bool {
+		return len(s.viewMetadataAdmissionUpdated) == 0
+	}, time.Second, time.Millisecond)
+	cancel()
+	select {
+	case err := <-done:
+		require.ErrorIs(t, err, context.Canceled)
+	case <-time.After(time.Second):
+		t.Fatal("Proxy Start did not return after admission cancellation")
+	}
+	select {
+	case <-app.started:
+		t.Fatal("Proxy ingress started after admission cancellation")
+	default:
+	}
+	require.NoError(t, s.Close())
+}
+
+func TestProxyStartPreservesIngressError(t *testing.T) {
+	startErr := errors.New("proxy listener failed")
+	s := &Server{
+		runtime: runtime.DefaultRuntime(),
+		app:     &admissionProxyApplication{startErr: startErr},
+	}
+	require.ErrorIs(t, s.Start(), startErr)
+	require.NoError(t, s.Close())
 }
 
 func TestProxyAdmissionTimeoutTracksHeartbeatConfiguration(t *testing.T) {
