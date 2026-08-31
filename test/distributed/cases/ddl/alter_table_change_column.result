@@ -829,7 +829,7 @@ col1    col2
 1    cdsdsa
 drop table t1;
 drop table if exists name01;
-create table name01 (col1 int, col2 decimal);
+create table name01 (col1 int, col2 decimal(38,0));
 insert into name01 values (1, 378292);
 insert into name01 values (2, 3289.111111);
 alter table name01 change column col1 `数据库管理系统数据库操作系统数据库系统数据库` int;
@@ -838,7 +838,7 @@ Table    Create Table
 name01    CREATE TABLE `name01` (\n  `数据库管理系统数据库操作系统数据库系统数据库` int DEFAULT NULL,\n  `col2` decimal(38,0) DEFAULT NULL\n)
 drop table name01;
 drop table if exists name02;
-create table name02 (col1 int, col2 decimal);
+create table name02 (col1 int, col2 decimal(38,0));
 insert into name02 values (1, 378292);
 insert into name02 values (2, 3289.111111);
 alter table name02 change column col1  `cwhueh   3u2j4kfker` int;
@@ -847,7 +847,7 @@ Table    Create Table
 name02    CREATE TABLE `name02` (\n  `cwhueh   3u2j4kfker` int DEFAULT NULL,\n  `col2` decimal(38,0) DEFAULT NULL\n)
 drop table name02;
 drop table if exists name03;
-create table name03 (col1 int, col2 decimal);
+create table name03 (col1 int, col2 decimal(38,0));
 insert into name03 values (1, 378292);
 insert into name03 values (2, 3289.111111);
 alter table name03 change column col1 `RAVHJBWUIHNJCDW****&&*((()(*&^&^%^^&^*&` int;
@@ -867,7 +867,7 @@ Table    Create Table
 name04    CREATE TABLE `name04` (\n  `col1New` varchar(10) DEFAULT NULL,\n  `col2New` char(20) DEFAULT NULL\n)
 drop table name04;
 drop table if exists name05;
-create table name05 (col1 int, col2 decimal);
+create table name05 (col1 int, col2 decimal(38,0));
 insert into name05 values (1, 37829734);
 insert into name05 values (2, 3289.111111);
 select * from name05;
@@ -1060,14 +1060,14 @@ table_name    COLUMN_NAME    data_type    is_nullable
 drop table text01;
 no such table db2.text01
 drop table if exists alter03;
-create table alter03 (col1 int, col2 binary, col3 decimal);
+create table alter03 (col1 int, col2 binary, col3 decimal(38,0));
 insert into alter03 values (1, 'e', 324214.2134123);
 insert into alter03 values (2, '4', -242134.3231432);
 select * from alter03;
 col1    col2    col3
 1    e    324214
 2    4    -242134
-alter table alter03 change col1 col1New decimal after col3, change col2 col2New varbinary(20);
+alter table alter03 change col1 col1New decimal(38,0) after col3, change col2 col2New varbinary(20);
 show create table alter03;
 Table    Create Table
 alter03    CREATE TABLE `alter03` (\n  `col2New` varbinary(20) DEFAULT NULL,\n  `col3` decimal(38,0) DEFAULT NULL,\n  `col1New` decimal(38,0) DEFAULT NULL\n)
@@ -1286,7 +1286,7 @@ primary06    col1    int    NO
 primary06    col2    varbinary    YES
 drop table primary06;
 drop table if exists primary07;
-create table primary07(col1 int ,col2 float, col3 decimal, primary key (col1, col2));
+create table primary07(col1 int ,col2 float, col3 decimal(38,0), primary key (col1, col2));
 insert into primary07 values (1, 213412.32143, 3214312.34243214242);
 insert into primary07 values (2, -324.2342432423, -1243.42334234242);
 alter table primary07 change col1 col1New double default null;
@@ -1303,7 +1303,7 @@ primary07    col2    float    NO
 primary07    col3    decimal    YES
 drop table primary07;
 drop table if exists primary08;
-create table primary08(col1 int ,col2 float, col3 decimal, primary key (col1, col2));
+create table primary08(col1 int ,col2 float, col3 decimal(38,0), primary key (col1, col2));
 insert into primary08 values (1, 213412.32143, 3214312.34243214242);
 insert into primary08 values (2, -324.2342432423, -1243.42334234242);
 alter table primary08 change col1 col1New double not null;
@@ -1324,7 +1324,7 @@ col1new    col2new    col3
 1.0    32432.3242424242    3214312
 drop table primary08;
 drop table if exists primary09;
-create table primary09 (col1 int primary key, col2 decimal);
+create table primary09 (col1 int primary key, col2 decimal(38,0));
 show create table primary09;
 Table    Create Table
 primary09    CREATE TABLE `primary09` (\n  `col1` int NOT NULL,\n  `col2` decimal(38,0) DEFAULT NULL,\n  PRIMARY KEY (`col1`)\n)
@@ -1471,7 +1471,7 @@ select * from foreign02;
 col1    col2    col3
 1    1    1
 2    2    2
-alter table foreign01 change col1 col1New decimal;
+alter table foreign01 change col1 col1New decimal(38,0);
 Columns participating in a foreign key are renamed
 alter table foreign02 change col1 col1New float after col3;
 Cannot change column 'col1': used in a foreign key constraint 'c1'
@@ -1520,7 +1520,7 @@ foreign02    col3    int    NO
 drop table foreign02;
 drop table foreign01;
 drop table if exists decimal01;
-create table decimal01 (col1 decimal,col2 decimal(38,10));
+create table decimal01 (col1 decimal(38,0),col2 decimal(38,10));
 insert into decimal01 values (23746723468723.242334243, 38208439024234.43242342423423423422342);
 insert into decimal01 values (32487329847923424, -4324324324.3297932749028949373324242423424);
 alter table decimal01 change column col1 col1New decimal(38,6);
@@ -1722,7 +1722,7 @@ cast02    col3vhejwh4i3uh4r    bigint    YES
 cast02    col4cdhewjruekhwjf    smallint    YES
 drop table cast02;
 drop table if exists cast03;
-create table cast03 (col1 smallint unsigned, col2 float, col3 double, col4 decimal);
+create table cast03 (col1 smallint unsigned, col2 float, col3 double, col4 decimal(38,0));
 insert into cast03 values (1, 323242.34242, 23432.3242, 8329498352.32534242323432);
 insert into cast03 values (200, -213443.321412, 32424.342424242, 0.382943424324234);
 insert into cast03 (col1, col2, col3, col4) values (null, null, null, null);
@@ -1821,7 +1821,7 @@ abnormal02    col1    int    NO
 abnormal02    ehwuh3YUUUHHHB    smallint    YES
 drop table abnormal02;
 drop table if exists abnormal01;
-create table abnormal01 (col1 int, col2 bigint, col3 decimal);
+create table abnormal01 (col1 int, col2 bigint, col3 decimal(38,0));
 insert into abnormal01 values (2147483647, 9223372036854775807, 3291843920.32783);
 insert into abnormal01 values (-21843243, 832942343241999999, -2787343243.2343);
 insert into abnormal01 values (null, null, null);
@@ -1966,7 +1966,7 @@ drop table view01;
 drop table view02;
 drop view v0;
 drop table if exists cluster01;
-create table cluster01(col1 int, col2 decimal) cluster by col1;
+create table cluster01(col1 int, col2 decimal(38,0)) cluster by col1;
 insert into cluster01 values (1, 389234924);
 insert into cluster01 values (2, -2893428);
 alter table cluster01 change col2 col2worejnfenrororiri float;
@@ -2020,8 +2020,8 @@ col2    col3    col4
 2000-10-10 12:12:12    2020-01-01 12:23:59    01:01:29
 null    2020-01-01 23:23:59    23:23:59
 2031-09-09 01:01:01    2013-12-12 10:10:10    10:12:12
-alter table time02 change col2 decimal(20,10) first, change col3 decimal after col2, change col4 decimal(38,0);
-SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 1 column 39 near "(20,10) first, change col3 decimal after col2, change col4 decimal(38,0);";
+alter table time02 change col2 decimal(20,10) first, change col3 decimal(38,0) after col2, change col4 decimal(38,0);
+SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 1 column 39 near "(20,10) first, change col3 decimal(38,0) after col2, change col4 decimal(38,0);";
 show create table time02;
 Table    Create Table
 time02    CREATE TABLE `time02` (\n  `col2` datetime DEFAULT NULL,\n  `col3` timestamp NULL DEFAULT NULL,\n  `col4` time DEFAULT NULL\n)
@@ -2039,7 +2039,7 @@ drop table time02;
 drop table if exists prepare01;
 create table prepare01(col1 int, col2 char);
 insert into prepare01 values (1,'a'),(2,'b'),(3,'c');
-prepare s1 from 'alter table prepare01 change col1 col1dheuwhvcer decimal primary key';
+prepare s1 from 'alter table prepare01 change col1 col1dheuwhvcer decimal(38,0) primary key';
 execute s1;
 show create table prepare01;
 Table    Create Table
@@ -2079,7 +2079,7 @@ drop table test01;
 drop role role_r1;
 drop user role_u1;
 drop table if exists mix01;
-create table mix01 (col1 int not null , col2 decimal, col3 date, col4 varchar(100));
+create table mix01 (col1 int not null , col2 decimal(38,0), col3 date, col4 varchar(100));
 insert into mix01 values (1, 23849234.324, '2100-01-01', 'qy83uhfbh234y78y&*%^&%$$$E%^&Y*UIJNHBGVFTY^&Y*UJHBGVTF^&*U(OK');
 insert into mix01 values (2, 773892.32748000000000, '1997-01-13', '38782yhbf3uhy4iendb32gefdc7y834uh2neujdr2h4f3v43');
 insert into mix01 values (3, -82913942.3434, null, null);
@@ -2126,7 +2126,7 @@ mix01    col5    int    YES
 drop table mix01;
 drop table if exists table01;
 begin;
-create table table01(col1 int, col2 decimal);
+create table table01(col1 int, col2 decimal(38,0));
 insert into table01 values(100,200);
 alter table table01 change column col1 NewCol1 float;
 commit;
