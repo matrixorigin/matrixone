@@ -5767,6 +5767,19 @@ func replaceParamValsWithSelection(
 			}
 		}
 	}
+	// LIMIT/OFFSET and LAG/LEAD offset markers have fixed unsigned-integer
+	// contracts. Their assignment-time SQL SourceType must not participate in
+	// result-domain specialization (for example SET @k = 2 may carry DECIMAL
+	// metadata while LIMIT still requires UINT64).
+	fixedIntegerPositions := PreparedPaginationParamPositions(plan0)
+	fixedIntegerPositions = append(fixedIntegerPositions, PreparedLagLeadParamPositions(plan0)...)
+	for _, position := range fixedIntegerPositions {
+		if position >= 0 && int(position) < len(sqlExecuteNumericParams) {
+			sqlExecuteNumericParams[position] = nil
+			sqlExecuteStringBackedParams[position] = false
+		}
+	}
+
 	paramRule := NewResetParamRefRule(ctx, params)
 	paramRule.sqlExecuteNumericParams = sqlExecuteNumericParams
 	paramRule.sqlExecuteStringBackedParams = sqlExecuteStringBackedParams
