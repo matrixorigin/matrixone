@@ -2731,6 +2731,13 @@ func (c *Compile) compileExternScanWithPlanNodeID(node *plan.Node, planNodeID in
 	if param.ExternType == int32(plan.ExternType_LOAD) &&
 		param.Format == tree.PARQUET &&
 		param.Parallel {
+		// A file is already the smallest independently executable unit when
+		// the matched files fill every available load scope.  Do not pay one
+		// serial footer round trip per file merely to discover that row-group
+		// fanout cannot add useful execution parallelism.
+		if c.parquetLoadFileFanoutSaturates(param, len(fileList)) {
+			return c.compileExternScanParquetLoadFileFanout(node, param, fileList, fileSize, strictSqlMode)
+		}
 		rowGroups, footerStats, err := c.readLoadParquetRowGroupMetadata(node, param, fileList, fileSize)
 		if err != nil {
 			return nil, err
@@ -3668,6 +3675,36 @@ func parquetRowGroupFileCount(rowGroups []parquetRowGroupMeta) int {
 		files[meta.fileIndex] = struct{}{}
 	}
 	return len(files)
+}
+
+// parquetLoadFileFanoutSaturates reports whether whole-file fanout can fill
+// every bounded execution scope.  It deliberately uses the uncapped execution
+// DOP rather than getHiveFileFanoutNodes(fileCount): the latter is capped by
+// fileCount and therefore cannot tell whether additional row-group scopes
+// would be useful.
+func (c *Compile) parquetLoadFileFanoutSaturates(param *tree.ExternParam, fileCount int) bool {
+	return fileCount > 1 && fileCount >= c.parquetLoadFileFanoutDOP(param)
+}
+
+func (c *Compile) parquetLoadFileFanoutDOP(param *tree.ExternParam) int {
+	stageNodes := c.queryWorkerStageNodes()
+	if param != nil && param.ScanType == tree.S3 && len(stageNodes) > 0 {
+		dop := 0
+		for _, node := range stageNodes {
+			mcpu := node.Mcpu
+			if mcpu <= 0 {
+				mcpu = 1
+			}
+			dop += min(mcpu, external.S3ParallelMaxnum)
+		}
+		if dop > 0 {
+			return dop
+		}
+	}
+	if c.ncpu > 0 {
+		return c.ncpu
+	}
+	return 1
 }
 
 func (c *Compile) getHiveFileFanoutNodes(param *tree.ExternParam, fileCount int) []engine.Node {

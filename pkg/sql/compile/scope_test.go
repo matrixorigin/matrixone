@@ -1311,6 +1311,27 @@ func TestCompileExternScanParquetLoadFileFanout(t *testing.T) {
 	require.Equal(t, len(fileList), totalFiles)
 }
 
+func TestParquetLoadFileFanoutSaturatesWithoutFooterPlanning(t *testing.T) {
+	testCompile := NewMockCompile(t)
+	testCompile.cnList = engine.Nodes{{Addr: "cn1:6001", Mcpu: 2}, {Addr: "cn2:6001", Mcpu: 2}}
+	testCompile.addr = "cn1:6001"
+	testCompile.execType = plan2.ExecTypeAP_MULTICN
+
+	param := &tree.ExternParam{ExParamConst: tree.ExParamConst{ScanType: tree.S3, Format: tree.PARQUET}}
+	require.Equal(t, 4, testCompile.parquetLoadFileFanoutDOP(param))
+	require.True(t, testCompile.parquetLoadFileFanoutSaturates(param, 4))
+	require.True(t, testCompile.parquetLoadFileFanoutSaturates(param, 5))
+	require.False(t, testCompile.parquetLoadFileFanoutSaturates(param, 3))
+
+	// The defaulted planner sets Parallel without ParallelSpecified.  Once the
+	// aggregate input crossed LoadParallelMinSize, four one-row-group files can
+	// execute in parallel without probing any footer.
+	param.Parallel = true
+	param.ParallelSpecified = false
+	require.True(t, param.Parallel)
+	require.False(t, param.ParallelSpecified)
+}
+
 func TestSplitIcebergDataFileShardsBalancesFiles(t *testing.T) {
 	tasks := []*pipeline.IcebergDataFileTask{
 		{FilePath: "warehouse/iceberg/part-0.parquet", FileSize: 100, RecordCount: 10},
@@ -1739,8 +1760,9 @@ func TestCompileExternScanParquetLoadUsesRowGroupMetadata(t *testing.T) {
 			Tail:     &tree.TailParameter{},
 		},
 		ExParam: tree.ExParam{
-			ExternType: int32(plan.ExternType_LOAD),
-			Parallel:   true,
+			ExternType:            int32(plan.ExternType_LOAD),
+			Parallel:              true,
+			ParallelLoadRequested: true,
 		},
 	}
 	createSQL, err := json.Marshal(param)

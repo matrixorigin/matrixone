@@ -261,6 +261,26 @@ func TestDefaultParquetLoadParallel(t *testing.T) {
 	}
 }
 
+func TestDefaultParquetLoadParallelAdmission(t *testing.T) {
+	param := &tree.ExternParam{
+		ExParamConst: tree.ExParamConst{
+			Format:   tree.PARQUET,
+			FileSize: int64(LoadParallelMinSize),
+		},
+	}
+	defaultParquetLoadParallel(param)
+	applyLoadParallelAdmission(param, 0)
+	require.True(t, param.Parallel, "an omitted PARALLEL clause at the threshold uses default fanout")
+	require.True(t, param.ParallelLoadRequested)
+
+	param.FileSize = int64(LoadParallelMinSize) - 1
+	param.Parallel = true
+	param.ParallelLoadRequested = false
+	applyLoadParallelAdmission(param, 0)
+	require.False(t, param.Parallel, "the small-file guard remains the nearest control")
+	require.True(t, param.ParallelLoadRequested)
+}
+
 func TestValidateLoadParquetOptionsAllowsStageDefaultCompressionAuto(t *testing.T) {
 	ctx := parquetLoadTestCtx{ctx: context.Background()}
 	param := &tree.ExternParam{

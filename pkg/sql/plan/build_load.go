@@ -538,11 +538,7 @@ func buildLoad(stmt *tree.Load, ctx CompilerContext, isPrepareStmt bool) (*Plan,
 		}
 		stmt.Param.FileStartOff = offset
 	}
-	stmt.Param.ParallelLoadRequested = stmt.Param.ParallelLoadRequested || stmt.Param.Parallel
-
-	if stmt.Param.FileSize-offset < int64(LoadParallelMinSize) {
-		stmt.Param.Parallel = false
-	}
+	applyLoadParallelAdmission(stmt.Param, offset)
 
 	stmt.Param.Tail.ColumnList = nil
 	if stmt.Param.ScanType != tree.INLINE {
@@ -690,6 +686,16 @@ func buildLoad(stmt *tree.Load, ctx CompilerContext, isPrepareStmt bool) (*Plan,
 func defaultParquetLoadParallel(param *tree.ExternParam) {
 	if param != nil && strings.EqualFold(param.Format, tree.PARQUET) && !param.ParallelSpecified {
 		param.Parallel = true
+	}
+}
+
+func applyLoadParallelAdmission(param *tree.ExternParam, offset int64) {
+	if param == nil {
+		return
+	}
+	param.ParallelLoadRequested = param.ParallelLoadRequested || param.Parallel
+	if param.FileSize-offset < int64(LoadParallelMinSize) {
+		param.Parallel = false
 	}
 }
 
