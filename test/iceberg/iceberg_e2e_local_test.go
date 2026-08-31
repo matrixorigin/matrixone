@@ -1049,6 +1049,79 @@ func TestLocalE2EConcurrentCreateMappingAndDropCaseReleasesWorkersAfterCreateWai
 	}
 }
 
+func TestLocalE2EConcurrentCreateMappingAndDropCaseCommitsCreateAndCleansUp(t *testing.T) {
+	db, mock := newLocalE2ESQLMock(t)
+	defer db.Close()
+	mock.MatchExpectationsInOrder(false)
+
+	mock.ExpectExec("CREATE ICEBERG CATALOG").WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectQuery("select catalog_id from mo_catalog\\.mo_iceberg_catalogs").
+		WillReturnRows(sqlmock.NewRows([]string{"catalog_id"}).AddRow(uint64(42)))
+	expectCatalogLifecycleLockIdentity(mock)
+	mock.ExpectExec("select enable_fault_injection").WillReturnResult(sqlmock.NewResult(0, 1))
+	for range []string{
+		icebergCreateAfterCatalogLockFault,
+		icebergDropBeforeCatalogLockFault,
+		icebergDropAfterCatalogLockFault,
+		icebergCreateAfterCatalogLockWaitersFault,
+		icebergDropBeforeCatalogLockWaitersFault,
+		icebergDropAfterCatalogLockWaitersFault,
+		icebergCreateAfterCatalogLockNotifyFault,
+		icebergDropBeforeCatalogLockNotifyFault,
+		icebergDropAfterCatalogLockNotifyFault,
+	} {
+		mock.ExpectExec("select add_fault_point").WillReturnResult(sqlmock.NewResult(0, 1))
+	}
+	mock.ExpectExec("CREATE EXTERNAL TABLE").WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectExec("DROP ICEBERG CATALOG ").WillReturnError(errors.New("still has dependent metadata: table mappings"))
+	for range []string{
+		icebergCreateAfterCatalogLockWaitersFault,
+		icebergDropBeforeCatalogLockWaitersFault,
+		icebergDropAfterCatalogLockWaitersFault,
+	} {
+		mock.ExpectQuery("select trigger_fault_point").
+			WillReturnRows(sqlmock.NewRows([]string{"waiters"}).AddRow(int64(1)))
+	}
+	mock.ExpectExec("select trigger_fault_point").WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectQuery("select count\\(\\*\\) from mo_catalog\\.mo_locks where table_id = 17").
+		WillReturnRows(sqlmock.NewRows([]string{"waiters"}).AddRow(int64(1)))
+	mock.ExpectExec("select trigger_fault_point").WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectExec("select trigger_fault_point").WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectQuery("select \\(select count\\(\\*\\) from mo_catalog\\.mo_iceberg_catalogs").
+		WillReturnRows(sqlmock.NewRows([]string{"catalogs", "tables"}).AddRow(1, 1))
+
+	for range []string{
+		icebergCreateAfterCatalogLockFault,
+		icebergDropBeforeCatalogLockFault,
+		icebergDropAfterCatalogLockFault,
+	} {
+		mock.ExpectExec("select trigger_fault_point").WillReturnResult(sqlmock.NewResult(0, 1))
+	}
+	for range []string{
+		icebergCreateAfterCatalogLockFault,
+		icebergDropBeforeCatalogLockFault,
+		icebergDropAfterCatalogLockFault,
+		icebergCreateAfterCatalogLockWaitersFault,
+		icebergDropBeforeCatalogLockWaitersFault,
+		icebergDropAfterCatalogLockWaitersFault,
+		icebergCreateAfterCatalogLockNotifyFault,
+		icebergDropBeforeCatalogLockNotifyFault,
+		icebergDropAfterCatalogLockNotifyFault,
+	} {
+		mock.ExpectExec("REMOVE_FAULT_POINT").WillReturnResult(sqlmock.NewResult(0, 1))
+	}
+	mock.ExpectExec("select disable_fault_injection").WillReturnResult(sqlmock.NewResult(0, 1))
+	expectAccessLifecycleCleanup(mock)
+
+	result := (&caseRunner{cfg: localE2ETestConfig(), db: db}).concurrentCreateMappingAndDropCase(context.Background())
+	if result.Status != "passed" || result.Details["catalog_id"] != "42" || result.Details["create_error"] != "<nil>" || !strings.Contains(result.Details["drop_error"], "dependent metadata") {
+		t.Fatalf("unexpected concurrent lifecycle result: %+v", result)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("unmet concurrent lifecycle expectations: %v", err)
+	}
+}
+
 func TestLocalE2EAccessLifecycleCaseCleansUpAfterRegisterFailure(t *testing.T) {
 	db, mock := newLocalE2ESQLMock(t)
 	defer db.Close()
