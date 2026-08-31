@@ -223,6 +223,8 @@ func TestTableChangeStream_InitialSnapshotBatchLimiterSharedAcrossTables(t *test
 	permit1, err := stream1.acquireInitialSnapshotPermit(context.Background())
 	require.NoError(t, err)
 	require.NotNil(t, permit1)
+	state, _ := stream1.progressTracker.GetState()
+	assert.Equal(t, "reading", state)
 
 	acquired := make(chan *snapshotPermit, 1)
 	errs := make(chan error, 1)
@@ -243,6 +245,8 @@ func TestTableChangeStream_InitialSnapshotBatchLimiterSharedAcrossTables(t *test
 		require.NoError(t, err)
 	case <-time.After(50 * time.Millisecond):
 	}
+	state, _ = stream2.progressTracker.GetState()
+	assert.Equal(t, "waiting_for_initial_snapshot_batch_slot", state)
 
 	permit1.Release()
 	permit1.Release() // Release must be idempotent across cleanup paths.
