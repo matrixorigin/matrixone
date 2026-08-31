@@ -83,3 +83,10 @@
 2. 有界 TEXT 按 Unicode case mapping 与 invalid UTF-8 重编码的最坏 3x byte bound 扩容；无界 TEXT 保持无界。
 3. 补 TINYTEXT(255)、CHAR(4) metadata 与 254→381 bytes runtime focused UT。
 4. 运行 owning packages、targeted lint、diff check 后 commit/push。
+
+# PR #27841 第十五轮 review 修复
+
+1. 禁止 LOWER/UPPER 生成任意非标准 TEXT width，也禁止将理论 bound 饱和到 LONGTEXT marker。
+2. TINYTEXT/其他 ≤VARCHAR 上限的有界 TEXT 按不变字符数返回 VARCHAR(width)，由 VARCHAR 字符契约容纳 Unicode byte expansion。
+3. MEDIUMTEXT/LONGTEXT 等无法以标准 bounded VARCHAR 表达的输入退化为 TEXT(0)。
+4. 更新 metadata/runtime focused UT，运行 owning packages/lint/diff check 后 commit/push。

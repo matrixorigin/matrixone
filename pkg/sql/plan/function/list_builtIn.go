@@ -16,7 +16,6 @@ package function
 
 import (
 	"fmt"
-	"math"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -116,16 +115,14 @@ func caseConversionReturnType(parameters []types.Type) types.Type {
 	case types.T_char, types.T_varchar:
 		return textStringResultType(declaredTextCharacterBound(source), source.Charset)
 	case types.T_text:
-		if source.Width <= 0 {
-			return types.T_text.ToType()
+		if source.Width > 0 && source.Width <= types.MaxVarcharLen {
+			// Case conversion preserves rune count. Express bounded TINYTEXT as
+			// VARCHAR characters instead of inventing a non-persistable TEXT width.
+			return types.NewWithCharset(types.T_varchar, source.Width, 0, source.Charset)
 		}
+		// Wider TEXT families cannot express the potentially expanded byte bound
+		// with a standard persistent subtype marker. Unknown is safer than a cap.
 		result := types.T_text.ToType()
-		bound := multiplyStringResultBound(stringResultBound{bytes: uint64(source.Width)}, 3)
-		if bound.unknown || bound.bytes > math.MaxInt32 {
-			result.Width = math.MaxInt32
-		} else {
-			result.Width = int32(bound.bytes)
-		}
 		result.Charset = source.Charset
 		return result
 	default:

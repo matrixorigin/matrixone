@@ -1219,8 +1219,7 @@ func TestTextResultCapacityUsesResultDomain(t *testing.T) {
 			}
 			boundedText := types.T_text.ToType()
 			boundedText.Width = 255
-			boundedResult := types.T_text.ToType()
-			boundedResult.Width = 765
+			boundedResult := types.New(types.T_varchar, 255, 0)
 			fcTC = NewFunctionTestCase(proc, []FunctionTestInput{
 				NewFunctionTestConstInput(boundedText, []string{strings.Repeat(inputRune, 127)}, nil),
 			}, NewFunctionTestResult(boundedResult, false, []string{strings.Repeat(expectedRune, 127)}, nil), fEvalFn(fn))
