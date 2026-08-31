@@ -461,8 +461,9 @@ func TestInformationSchemaViewsMetadata(t *testing.T) {
 	// form as other persisted information_schema views for the wrapper-only
 	// suffix adjustment, and preserve the public TEXT metadata type.
 	assert.Contains(t, InformationSchemaViewsDDL, "trim(substr(extracted.view_statement")
+	assert.Contains(t, InformationSchemaViewsDDL, "trim(if(left(tbl.view_statement")
 	assert.NotContains(t, InformationSchemaViewsDDL, "concat('', trim(substr(")
-	assert.Contains(t, InformationSchemaViewsDDL, "cast(tbl.view_definition as text)) AS `VIEW_DEFINITION`")
+	assert.Contains(t, InformationSchemaViewsDDL, "cast(tbl.view_definition as text))) AS `VIEW_DEFINITION`")
 	assert.NotContains(t, InformationSchemaViewsDDL, "case when")
 	assert.NotContains(t, InformationSchemaViewsDDL, "sign(")
 	assert.NotContains(t, InformationSchemaViewsDDL, "least(")
