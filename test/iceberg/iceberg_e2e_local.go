@@ -19,6 +19,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"database/sql"
+	"database/sql/driver"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -574,15 +575,23 @@ func (r *caseRunner) concurrentCreateMappingAndDropCase(ctx context.Context) (re
 	defer func() {
 		cleanupCtx, cancelCleanup := context.WithTimeout(context.Background(), 15*time.Second)
 		defer cancelCleanup()
-		if err := restoreSessionLockWaitTimeout(cleanupCtx, createConn, previousLockWaitTimeout); err != nil {
+		restoreErr, discardErr := restoreOrDiscardSessionLockWaitTimeout(cleanupCtx, createConn, previousLockWaitTimeout)
+		if restoreErr != nil {
 			if result.Details == nil {
 				result.Details = make(map[string]string)
 			}
-			result.Details["lock_wait_timeout_restore_error"] = err.Error()
-			if result.Error == "" {
-				result.Error = "restore CREATE lock wait timeout: " + err.Error()
+			result.Details["lock_wait_timeout_restore_error"] = restoreErr.Error()
+			message := "restore CREATE lock wait timeout: " + restoreErr.Error()
+			if discardErr != nil {
+				result.Details["lock_wait_timeout_discard_error"] = discardErr.Error()
+				message += "; discard CREATE connection: " + discardErr.Error()
 			} else {
-				result.Error += "; restore CREATE lock wait timeout: " + err.Error()
+				result.Details["lock_wait_timeout_connection_discarded"] = "true"
+			}
+			if result.Error == "" {
+				result.Error = message
+			} else {
+				result.Error += "; " + message
 			}
 			result.Status = "failed"
 			return
@@ -758,6 +767,28 @@ func restoreSessionLockWaitTimeout(ctx context.Context, conn *sql.Conn, want uin
 		return fmt.Errorf("lock_wait_timeout after restore = %d, want %d", got, want)
 	}
 	return nil
+}
+
+// restoreOrDiscardSessionLockWaitTimeout prevents a failed restore from leaking
+// the test's one-second timeout through database/sql's reusable connection
+// pool. driver.ErrBadConn is the documented database/sql signal to discard the
+// physical connection rather than returning it to that pool.
+func restoreOrDiscardSessionLockWaitTimeout(ctx context.Context, conn *sql.Conn, want uint64) (restoreErr, discardErr error) {
+	if restoreErr = restoreSessionLockWaitTimeout(ctx, conn, want); restoreErr == nil {
+		return nil, nil
+	}
+	return restoreErr, discardSessionConnection(conn)
+}
+
+func discardSessionConnection(conn *sql.Conn) error {
+	err := conn.Raw(func(any) error { return driver.ErrBadConn })
+	if errors.Is(err, driver.ErrBadConn) {
+		return nil
+	}
+	if err == nil {
+		return errors.New("database/sql retained a connection after discard request")
+	}
+	return fmt.Errorf("discard physical connection: %w", err)
 }
 
 type catalogLifecycleLockIdentity struct {

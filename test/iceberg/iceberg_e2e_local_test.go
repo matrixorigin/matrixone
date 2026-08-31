@@ -1062,6 +1062,104 @@ func TestLocalE2EConcurrentCreateMappingAndDropCaseRejectsCreateWhileDropOwnsLoc
 	}
 }
 
+func TestLocalE2ERestoreSessionLockWaitTimeoutFailureDiscardsConnection(t *testing.T) {
+	driver := &sessionTimeoutTestDriver{}
+	db := sql.OpenDB(driver)
+	defer db.Close()
+	db.SetMaxOpenConns(1)
+
+	conn, err := db.Conn(context.Background())
+	if err != nil {
+		t.Fatalf("reserve test connection: %v", err)
+	}
+	first := driver.connection(0)
+	first.timeout = 1 // Represents the lifecycle case's temporary override.
+	restoreErr, discardErr := restoreOrDiscardSessionLockWaitTimeout(context.Background(), conn, 50)
+	if restoreErr == nil || !strings.Contains(restoreErr.Error(), "restore rejected") {
+		t.Fatalf("expected restore failure, got restore=%v discard=%v", restoreErr, discardErr)
+	}
+	if discardErr != nil {
+		t.Fatalf("discard failed after restore failure: %v", discardErr)
+	}
+	if !first.isClosed() {
+		t.Fatal("restore failure returned the dirty physical connection to the pool")
+	}
+
+	next, err := db.Conn(context.Background())
+	if err != nil {
+		t.Fatalf("reserve replacement connection: %v", err)
+	}
+	defer next.Close()
+	if driver.connectionCount() != 2 {
+		t.Fatalf("expected a replacement physical connection, got %d", driver.connectionCount())
+	}
+	if replacement := driver.connection(1); replacement.timeout == 1 {
+		t.Fatalf("replacement connection retained dirty lock_wait_timeout=%d", replacement.timeout)
+	}
+}
+
+type sessionTimeoutTestDriver struct {
+	mu    sync.Mutex
+	conns []*sessionTimeoutTestConn
+}
+
+func (d *sessionTimeoutTestDriver) Connect(context.Context) (driver.Conn, error) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	conn := &sessionTimeoutTestConn{timeout: 50}
+	d.conns = append(d.conns, conn)
+	return conn, nil
+}
+
+func (d *sessionTimeoutTestDriver) Driver() driver.Driver { return d }
+
+func (d *sessionTimeoutTestDriver) Open(string) (driver.Conn, error) {
+	return d.Connect(context.Background())
+}
+
+func (d *sessionTimeoutTestDriver) connection(index int) *sessionTimeoutTestConn {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return d.conns[index]
+}
+
+func (d *sessionTimeoutTestDriver) connectionCount() int {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return len(d.conns)
+}
+
+type sessionTimeoutTestConn struct {
+	mu      sync.Mutex
+	timeout uint64
+	closed  bool
+}
+
+func (c *sessionTimeoutTestConn) Prepare(string) (driver.Stmt, error) {
+	return nil, errors.New("prepare is not supported by session timeout test driver")
+}
+
+func (c *sessionTimeoutTestConn) Close() error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.closed = true
+	return nil
+}
+
+func (c *sessionTimeoutTestConn) Begin() (driver.Tx, error) {
+	return nil, errors.New("transactions are not supported by session timeout test driver")
+}
+
+func (c *sessionTimeoutTestConn) ExecContext(context.Context, string, []driver.NamedValue) (driver.Result, error) {
+	return nil, errors.New("restore rejected")
+}
+
+func (c *sessionTimeoutTestConn) isClosed() bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.closed
+}
+
 func TestLocalE2EAccessLifecycleCaseCleansUpAfterRegisterFailure(t *testing.T) {
 	db, mock := newLocalE2ESQLMock(t)
 	defer db.Close()
