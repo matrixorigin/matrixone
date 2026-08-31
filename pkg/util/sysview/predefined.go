@@ -37,20 +37,25 @@ const (
 	informationSchemaViewBlockCommentPattern      = "/[*](?:[^*]|[*]+[^*/])*[*]+/"
 	informationSchemaViewOptionalSeparatorPattern = "(?:[[:space:]]|" + informationSchemaViewLineCommentPattern + "|" + informationSchemaViewBlockCommentPattern + ")*"
 	informationSchemaViewRequiredSeparatorPattern = "(?:[[:space:]]|" + informationSchemaViewLineCommentPattern + "|" + informationSchemaViewBlockCommentPattern + ")+"
+	// An executable-comment opener is handled separately from an ordinary block
+	// comment so the structural VIEW token remains visible inside mysqldump's
+	// split executable-comment form.
+	informationSchemaViewExecutableCommentOpenPattern = "/[*]![0-9]*[[:space:]]*"
 	// The character alternatives exclude every ordinary-comment introducer, so
 	// comments cannot be consumed one byte at a time and expose a fake VIEW.
 	informationSchemaViewPrefixSpanPattern = "(?:" +
+		informationSchemaViewExecutableCommentOpenPattern + "|" +
 		informationSchemaViewBlockCommentPattern + "|" +
 		informationSchemaViewLineCommentPattern + "|" +
 		informationSchemaViewSingleQuotedStringPattern + "|" +
 		"`(?:``|[^`])*`|\"(?:\"\"|[^\"])*\"|" +
-		"/(?:[^/\\*]|$)|-(?:[^-]|$)|[^`\"/#-])*?"
+		"[*]/|/(?:[^/\\*]|$)|-(?:[^-]|$)|[^`\"/#-])*?"
 	// The non-greedy span before VIEW covers MatrixOne's supported ALGORITHM,
 	// DEFINER, and SQL SECURITY clauses. mysqldump executable comments carry SQL
 	// themselves, so retain their existing wrapper-aware path separately.
-	informationSchemaViewDefinitionPrefixPattern = "(?is)^(?:" +
-		"[[:space:]]*/[*]![0-9]*[[:space:]]*(?:create(?:" + informationSchemaViewRequiredSeparatorPattern + "or" + informationSchemaViewRequiredSeparatorPattern + "replace)?|alter).*?" + informationSchemaViewRequiredSeparatorPattern + "view" + informationSchemaViewRequiredSeparatorPattern +
-		"|[[:space:]]*(?:create(?:" + informationSchemaViewRequiredSeparatorPattern + "or" + informationSchemaViewRequiredSeparatorPattern + "replace)?|alter)" + informationSchemaViewPrefixSpanPattern + informationSchemaViewRequiredSeparatorPattern + "view" + informationSchemaViewRequiredSeparatorPattern +
+	informationSchemaViewDefinitionPrefixPattern = "(?is)^" + informationSchemaViewOptionalSeparatorPattern + "(?:" +
+		informationSchemaViewExecutableCommentOpenPattern + "(?:create(?:" + informationSchemaViewRequiredSeparatorPattern + "or" + informationSchemaViewRequiredSeparatorPattern + "replace)?|alter)" + informationSchemaViewPrefixSpanPattern + informationSchemaViewRequiredSeparatorPattern + "view" + informationSchemaViewRequiredSeparatorPattern +
+		"|(?:create(?:" + informationSchemaViewRequiredSeparatorPattern + "or" + informationSchemaViewRequiredSeparatorPattern + "replace)?|alter)" + informationSchemaViewPrefixSpanPattern + informationSchemaViewRequiredSeparatorPattern + "view" + informationSchemaViewRequiredSeparatorPattern +
 		")" +
 		"(?:if" + informationSchemaViewRequiredSeparatorPattern + "(?:not" + informationSchemaViewRequiredSeparatorPattern + ")?exists" + informationSchemaViewRequiredSeparatorPattern + ")?" +
 		informationSchemaViewIdentifierPattern +
