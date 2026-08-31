@@ -471,6 +471,28 @@ func startLogService(
 	})
 }
 
+type proxyServerLifecycle interface {
+	Start() error
+	Close() error
+}
+
+func runProxyServerUntilCanceled(ctx context.Context, server proxyServerLifecycle) error {
+	defer func() {
+		if err := server.Close(); err != nil {
+			logutil.GetGlobalLogger().Error("failed to close proxy service", zap.Error(err))
+		}
+	}()
+	if err := server.Start(); err != nil {
+		if ctx.Err() != nil &&
+			(errors.Is(err, ctx.Err()) || errors.Is(err, context.Cause(ctx))) {
+			return nil
+		}
+		return err
+	}
+	<-ctx.Done()
+	return nil
+}
+
 // startProxyService starts the proxy service.
 func startProxyService(cfg *Config, stopper *stopper.Stopper) error {
 	if err := waitClusterCondition(cfg.mustGetServiceUUID(), cfg.HAKeeperClient, waitHAKeeperRunning); err != nil {
@@ -511,12 +533,8 @@ func startProxyService(cfg *Config, stopper *stopper.Stopper) error {
 				if err != nil {
 					panic(err)
 				}
-				if err := s.Start(); err != nil {
+				if err := runProxyServerUntilCanceled(ctx, s); err != nil {
 					panic(err)
-				}
-				<-ctx.Done()
-				if err := s.Close(); err != nil {
-					logutil.GetGlobalLogger().Error("failed to close proxy service", zap.Error(err))
 				}
 				goruntime.KeepAlive(fs)
 			},
