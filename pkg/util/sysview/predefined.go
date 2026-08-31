@@ -31,7 +31,7 @@ const (
 	// The scanner accepts doubled single quotes and backslash escapes in string
 	// literals. Treat them as opaque while locating structural DDL tokens and an
 	// executable-comment terminator, just as identifiers and comments are.
-	informationSchemaViewSingleQuotedStringPattern = "'(?:''|\\\\\\\\.|[^'\\\\\\\\])*'"
+	informationSchemaViewSingleQuotedStringPattern = "'(?:''|\\\\.|[^'\\\\])*'"
 	// The scanner closes at the first */, including when the comment body ends
 	// with a run of stars (for example /***/ or /*****/).
 	informationSchemaViewBlockCommentPattern      = "/[*](?:[^*]|[*]+[^*/])*[*]+/"
