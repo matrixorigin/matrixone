@@ -24,6 +24,7 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/common/sqlquote"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -44,7 +45,7 @@ const (
 	materializedViewDeltaMaxSQL    = 8 << 20
 )
 
-var errMaterializedViewDeltaSQLTooLarge = errors.New("materialized view delta SQL is too large")
+var errMaterializedViewDeltaSQLTooLarge = moerr.NewInternalErrorNoCtx("materialized view delta SQL is too large")
 
 func execMaterializedViewDeltaSQL(
 	ctx context.Context,
@@ -78,25 +79,25 @@ type materializedViewSignedRow struct {
 func decodeIncrementalDescription(encoded string) (*incrementalDescription, error) {
 	b, err := base64.StdEncoding.DecodeString(encoded)
 	if err != nil {
-		return nil, fmt.Errorf("invalid materialized view incremental specification encoding: %w", err)
+		return nil, moerr.NewInternalErrorNoCtxf("invalid materialized view incremental specification encoding: %v", err)
 	}
 	var desc incrementalDescription
 	if err := json.Unmarshal(b, &desc); err != nil {
-		return nil, fmt.Errorf("invalid materialized view incremental specification: %w", err)
+		return nil, moerr.NewInternalErrorNoCtxf("invalid materialized view incremental specification: %v", err)
 	}
 	if desc.Version == 0 {
 		desc.Version = 1
 	}
 	if desc.Version < 1 || desc.Version > 2 {
-		return nil, fmt.Errorf("unsupported materialized view incremental specification version %d", desc.Version)
+		return nil, moerr.NewInternalErrorNoCtxf("unsupported materialized view incremental specification version %d", desc.Version)
 	}
 	if desc.SourceAlias == "" || len(desc.SourceColumns) == 0 || len(desc.Groups) == 0 ||
 		desc.RowCountColumn == "" || len(desc.StateColumns) == 0 {
-		return nil, fmt.Errorf("incomplete materialized view incremental specification")
+		return nil, moerr.NewInternalErrorNoCtx("incomplete materialized view incremental specification")
 	}
 	for _, group := range desc.Groups {
 		if group.Expression == "" || group.OutputColumn == "" {
-			return nil, fmt.Errorf("invalid materialized view incremental group")
+			return nil, moerr.NewInternalErrorNoCtx("invalid materialized view incremental group")
 		}
 	}
 	for _, agg := range desc.Aggregates {
@@ -104,29 +105,29 @@ func decodeIncrementalDescription(encoded string) (*incrementalDescription, erro
 		case "count_star":
 		case "count_column":
 			if agg.InputExpression == "" {
-				return nil, fmt.Errorf("incremental COUNT requires an input")
+				return nil, moerr.NewInternalErrorNoCtx("incremental COUNT requires an input")
 			}
 		case "sum":
 			if agg.InputExpression == "" || agg.StateCountColumn == "" {
-				return nil, fmt.Errorf("incremental SUM requires input and state")
+				return nil, moerr.NewInternalErrorNoCtx("incremental SUM requires input and state")
 			}
 			if desc.GroupKeyColumn != "" && agg.StateSumColumn == "" {
-				return nil, fmt.Errorf("incremental SUM with a group key requires sum state")
+				return nil, moerr.NewInternalErrorNoCtx("incremental SUM with a group key requires sum state")
 			}
 		case "avg":
 			if agg.InputExpression == "" || agg.StateSumColumn == "" || agg.StateCountColumn == "" {
-				return nil, fmt.Errorf("incremental AVG requires input and state")
+				return nil, moerr.NewInternalErrorNoCtx("incremental AVG requires input and state")
 			}
 		case "min", "max":
 			if agg.InputExpression == "" {
-				return nil, fmt.Errorf("incremental %s requires an input", strings.ToUpper(agg.Kind))
+				return nil, moerr.NewInternalErrorNoCtxf("incremental %s requires an input", strings.ToUpper(agg.Kind))
 			}
 		case "count_distinct":
 			if desc.Version < 2 || desc.StateTable == "" || agg.InputExpression == "" || agg.StateIndex <= 0 {
-				return nil, fmt.Errorf("incremental COUNT(DISTINCT) requires versioned auxiliary state")
+				return nil, moerr.NewInternalErrorNoCtx("incremental COUNT(DISTINCT) requires versioned auxiliary state")
 			}
 		default:
-			return nil, fmt.Errorf("incremental aggregate %q is not supported", agg.Kind)
+			return nil, moerr.NewInternalErrorNoCtxf("incremental aggregate %q is not supported", agg.Kind)
 		}
 	}
 	return &desc, nil
@@ -139,7 +140,7 @@ func (c *MaterializedViewConsumer) consumeIncremental(ctx context.Context, r Dat
 	}
 	from, ok := r.(materializedViewFromBoundaryRetriever)
 	if !ok {
-		return false, fmt.Errorf("materialized view retriever does not expose from boundary")
+		return false, moerr.NewInternalErrorNoCtx("materialized view retriever does not expose from boundary")
 	}
 	var insertRows, deleteRows int
 	err = runTxnWithSqlContext(ctx, c.cnEngine, c.cnTxnClient, c.cnUUID,
@@ -157,11 +158,11 @@ func (c *MaterializedViewConsumer) consumeIncremental(ctx context.Context, r Dat
 			}
 			reader, ok := rel.(engine.RowIDReader)
 			if !ok {
-				return fmt.Errorf("source relation does not support rowid lookup")
+				return moerr.NewInternalErrorNoCtx("source relation does not support rowid lookup")
 			}
 			tableDef := rel.GetTableDef(refreshCtx)
 			if tableDef == nil {
-				return fmt.Errorf("source relation has no table definition")
+				return moerr.NewInternalErrorNoCtx("source relation has no table definition")
 			}
 			sourceTypes, err := materializedViewSourceColumnTypes(tableDef, desc.SourceColumns)
 			if err != nil {
@@ -207,7 +208,7 @@ func (c *MaterializedViewConsumer) consumeIncremental(ctx context.Context, r Dat
 					}
 					if len(oldRows) != len(deletes) {
 						data.Done()
-						return fmt.Errorf("rowid lookup returned %d rows for %d deletes", len(oldRows), len(deletes))
+						return moerr.NewInternalErrorNoCtxf("rowid lookup returned %d rows for %d deletes", len(oldRows), len(deletes))
 					}
 					for i := range oldRows {
 						values := make(map[string]any, len(desc.SourceColumns))
@@ -242,7 +243,7 @@ func (c *MaterializedViewConsumer) consumeIncremental(ctx context.Context, r Dat
 			}
 			boundary, ok := r.(iterationBoundaryRetriever)
 			if !ok {
-				return fmt.Errorf("materialized view retriever does not expose iteration boundary")
+				return moerr.NewInternalErrorNoCtx("materialized view retriever does not expose iteration boundary")
 			}
 			if err = recomputeMaterializedViewAffectedGroups(
 				refreshCtx, sqlctx.GetService(), sqlctx.Txn(), c.info, desc, boundary.GetToTS(),
@@ -297,7 +298,7 @@ func readMaterializedViewDeletedRows(
 			return nil, err
 		}
 		if len(rows) != len(group.indices) {
-			return nil, fmt.Errorf("rowid lookup returned %d rows for %d deletes", len(rows), len(group.indices))
+			return nil, moerr.NewInternalErrorNoCtxf("rowid lookup returned %d rows for %d deletes", len(rows), len(group.indices))
 		}
 		for i := range rows {
 			result[group.indices[i]] = rows[i]
@@ -330,7 +331,7 @@ func materializedViewSourceColumnTypes(tableDef *planpb.TableDef, columns []stri
 	for i, column := range columns {
 		result[i] = byName[strings.ToLower(column)]
 		if result[i] == nil {
-			return nil, fmt.Errorf("incremental expression references unknown column %q", column)
+			return nil, moerr.NewInternalErrorNoCtxf("incremental expression references unknown column %q", column)
 		}
 	}
 	return result, nil
@@ -671,7 +672,7 @@ func materializedViewDistinctDeltaCTE(
 		agg.InputExpression,
 	)
 	if len(cte) > materializedViewDeltaMaxSQL {
-		return "", fmt.Errorf("%w: exceeds %d bytes", errMaterializedViewDeltaSQLTooLarge, materializedViewDeltaMaxSQL)
+		return "", errMaterializedViewDeltaSQLTooLarge
 	}
 	return cte, nil
 }
@@ -839,7 +840,7 @@ func materializedViewDeltaCTE(
 	cte := fmt.Sprintf("WITH %s, delta AS (SELECT %s FROM src AS %s%s GROUP BY %s)",
 		sourceCTE, strings.Join(projection, ","), sqlquote.Ident(desc.SourceAlias), where, strings.Join(groupBy, ","))
 	if len(cte) > materializedViewDeltaMaxSQL {
-		return "", fmt.Errorf("%w: exceeds %d bytes", errMaterializedViewDeltaSQLTooLarge, materializedViewDeltaMaxSQL)
+		return "", errMaterializedViewDeltaSQLTooLarge
 	}
 	return cte, nil
 }
@@ -862,7 +863,7 @@ func materializedViewDeltaSourceCTE(
 			}
 			value, exists := row.values[strings.ToLower(column)]
 			if !exists {
-				return "", fmt.Errorf("incremental row is missing column %q", column)
+				return "", moerr.NewInternalErrorNoCtxf("incremental row is missing column %q", column)
 			}
 			// VALUES determines a common column type before the outer SELECT is
 			// evaluated. In particular, mixing an integral-looking float literal
@@ -892,7 +893,7 @@ func materializedViewDeltaSourceCTE(
 
 	cte := fmt.Sprintf("src AS (SELECT %s FROM (VALUES %s) AS __mo_mv_values)", strings.Join(columns, ","), string(values))
 	if len(cte) > materializedViewDeltaMaxSQL {
-		return "", fmt.Errorf("%w: exceeds %d bytes", errMaterializedViewDeltaSQLTooLarge, materializedViewDeltaMaxSQL)
+		return "", errMaterializedViewDeltaSQLTooLarge
 	}
 	return cte, nil
 }

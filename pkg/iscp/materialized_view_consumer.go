@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/sqlquote"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
@@ -99,7 +100,7 @@ func NewMaterializedViewConsumer(
 	info *ConsumerInfo,
 ) (Consumer, error) {
 	if info == nil || info.DBName == "" || info.TableName == "" || info.RefreshSQL == "" || info.SourceSQL == "" {
-		return nil, fmt.Errorf("invalid materialized view consumer specification")
+		return nil, moerr.NewInternalErrorNoCtx("invalid materialized view consumer specification")
 	}
 	return &MaterializedViewConsumer{
 		cnUUID: cnUUID, cnEngine: cnEngine, cnTxnClient: cnTxnClient,
@@ -194,7 +195,7 @@ func (c *MaterializedViewConsumer) consumeFullRefresh(ctx context.Context, r Dat
 			refreshCtx := context.WithValue(sqlproc.GetContext(), defines.MaterializedViewRefreshKey{}, true)
 			boundary, ok := r.(iterationBoundaryRetriever)
 			if !ok {
-				return fmt.Errorf("materialized view retriever does not expose iteration boundary")
+				return moerr.NewInternalErrorNoCtx("materialized view retriever does not expose iteration boundary")
 			}
 			toTS := boundary.GetToTS()
 			if err := RefreshMaterializedView(refreshCtx, sqlctx.GetService(), sqlctx.Txn(), c.info, &toTS); err != nil {
@@ -209,7 +210,7 @@ func (c *MaterializedViewConsumer) consumeFullRefresh(ctx context.Context, r Dat
 // nil reads the caller transaction snapshot for an ON DEMAND refresh.
 func RefreshMaterializedView(ctx context.Context, service string, txn client.TxnOperator, info *ConsumerInfo, boundary *types.TS) error {
 	if info == nil || info.DBName == "" || info.TableName == "" || info.RefreshSQL == "" {
-		return fmt.Errorf("invalid materialized view refresh specification")
+		return moerr.NewInternalErrorNoCtx("invalid materialized view refresh specification")
 	}
 	refreshCtx := context.WithValue(ctx, defines.MaterializedViewRefreshKey{}, true)
 	var incrementalDesc *incrementalDescription
@@ -220,7 +221,7 @@ func RefreshMaterializedView(ctx context.Context, service string, txn client.Txn
 			return err
 		}
 		if boundary == nil {
-			return fmt.Errorf("incremental materialized view state requires an ISCP boundary")
+			return moerr.NewInternalErrorNoCtx("incremental materialized view state requires an ISCP boundary")
 		}
 		if err = ensureMaterializedViewStateTable(refreshCtx, service, txn, info, incrementalDesc); err != nil {
 			return err
@@ -292,7 +293,7 @@ func materializedViewRowsFromBatch(bat *AtomicBatch, insert bool) ([]materialize
 		if !insert {
 			rowid, ok := values[0].(types.Rowid)
 			if !ok {
-				return nil, fmt.Errorf("materialized view delete batch does not retain rowid")
+				return nil, moerr.NewInternalErrorNoCtx("materialized view delete batch does not retain rowid")
 			}
 			row := materializedViewChangeRow{RowID: rowid}
 			for i, attr := range item.Src.Attrs {
@@ -301,7 +302,7 @@ func materializedViewRowsFromBatch(bat *AtomicBatch, insert bool) ([]materialize
 					var commitOK bool
 					row.CommitTS, commitOK = values[i].(types.TS)
 					if !commitOK {
-						return nil, fmt.Errorf("materialized view delete batch has invalid commit timestamp %T", values[i])
+						return nil, moerr.NewInternalErrorNoCtxf("materialized view delete batch has invalid commit timestamp %T", values[i])
 					}
 					break
 				}
@@ -331,7 +332,7 @@ func materializedViewRefreshAt(query, source string, ts types.TS) (string, error
 	replacement := fmt.Sprintf("from %s{MO_TS = '%s'}", source, ts.ToString())
 	refresh := strings.Replace(query, needle, replacement, 1)
 	if refresh == query {
-		return "", fmt.Errorf("materialized view source %q not found in refresh query", source)
+		return "", moerr.NewInternalErrorNoCtxf("materialized view source %q not found in refresh query", source)
 	}
 	return refresh, nil
 }
@@ -342,7 +343,7 @@ func materializedViewRefreshAtInDatabase(query, source, database string, ts type
 	replacement := fmt.Sprintf("from %s{MO_TS = '%s'}", qualified, ts.ToString())
 	refresh := strings.Replace(query, needle, replacement, 1)
 	if refresh == query {
-		return "", fmt.Errorf("materialized view source %q not found in refresh query", source)
+		return "", moerr.NewInternalErrorNoCtxf("materialized view source %q not found in refresh query", source)
 	}
 	return refresh, nil
 }
@@ -362,20 +363,20 @@ func materializedViewRefreshAtCurrentSources(query string, sources []TableInfo) 
 
 func materializedViewRefreshAtSourcesWithBoundary(query string, sources []TableInfo, ts *types.TS) (string, error) {
 	if len(sources) == 0 {
-		return "", fmt.Errorf("materialized view has no source tables")
+		return "", moerr.NewInternalErrorNoCtx("materialized view has no source tables")
 	}
 	stmt, err := mysql.ParseOne(context.Background(), query, 1)
 	if err != nil {
-		return "", fmt.Errorf("parse materialized view refresh query: %w", err)
+		return "", moerr.NewInternalErrorNoCtxf("parse materialized view refresh query: %v", err)
 	}
 	defer stmt.Free()
 	selectStmt, ok := stmt.(*tree.Select)
 	if !ok {
-		return "", fmt.Errorf("materialized view refresh query is %T, expected select", stmt)
+		return "", moerr.NewInternalErrorNoCtxf("materialized view refresh query is %T, expected select", stmt)
 	}
 	clause, ok := selectStmt.Select.(*tree.SelectClause)
 	if !ok || clause.From == nil {
-		return "", fmt.Errorf("materialized view refresh query has no direct source tables")
+		return "", moerr.NewInternalErrorNoCtx("materialized view refresh query has no direct source tables")
 	}
 
 	type sourceKey struct {
@@ -386,7 +387,7 @@ func materializedViewRefreshAtSourcesWithBoundary(query string, sources []TableI
 	found := make(map[sourceKey]bool, len(sources))
 	for _, source := range sources {
 		if source.DBName == "" || source.TableName == "" {
-			return "", fmt.Errorf("materialized view has incomplete source table")
+			return "", moerr.NewInternalErrorNoCtx("materialized view has incomplete source table")
 		}
 		key := sourceKey{database: strings.ToLower(source.DBName), table: strings.ToLower(source.TableName)}
 		sourceByKey[key] = source
@@ -425,10 +426,10 @@ func materializedViewRefreshAtSourcesWithBoundary(query string, sources []TableI
 				matches++
 			}
 			if matches == 0 {
-				return fmt.Errorf("materialized view source %q not found in refresh metadata", node.ObjectName)
+				return moerr.NewInternalErrorNoCtxf("materialized view source %q not found in refresh metadata", node.ObjectName)
 			}
 			if matches > 1 {
-				return fmt.Errorf("materialized view source %q is ambiguous without a database qualifier", node.ObjectName)
+				return moerr.NewInternalErrorNoCtxf("materialized view source %q is ambiguous without a database qualifier", node.ObjectName)
 			}
 			source := sourceByKey[matchKey]
 			node.SchemaName = tree.Identifier(source.DBName)
@@ -442,7 +443,7 @@ func materializedViewRefreshAtSourcesWithBoundary(query string, sources []TableI
 			found[matchKey] = true
 			return nil
 		default:
-			return fmt.Errorf("materialized view source must be a direct base table (table=%T)", expr)
+			return moerr.NewInternalErrorNoCtxf("materialized view source must be a direct base table (table=%T)", expr)
 		}
 	}
 	for _, expr := range clause.From.Tables {
@@ -452,7 +453,7 @@ func materializedViewRefreshAtSourcesWithBoundary(query string, sources []TableI
 	}
 	for key, wasFound := range found {
 		if !wasFound {
-			return "", fmt.Errorf("materialized view source %q not found in refresh query", key.table)
+			return "", moerr.NewInternalErrorNoCtxf("materialized view source %q not found in refresh query", key.table)
 		}
 	}
 	return tree.StringWithOpts(stmt, dialect.MYSQL, tree.WithQuoteIdentifier(), tree.WithSingleQuoteString()), nil

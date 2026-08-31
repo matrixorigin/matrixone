@@ -2,10 +2,10 @@ package disttae
 
 import (
 	"context"
-	"fmt"
 	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -30,7 +30,7 @@ func (tbl *txnTableDelegate) ReadRowsByRowID(
 	mp *mpool.MPool,
 ) ([][]any, error) {
 	if tbl.combined.is {
-		return nil, fmt.Errorf("rowid lookup is not supported for combined relations")
+		return nil, moerr.NewInternalErrorNoCtx("rowid lookup is not supported for combined relations")
 	}
 	if len(rowids) == 0 {
 		return nil, nil
@@ -47,7 +47,7 @@ func (tbl *txnTableDelegate) ReadRowsByRowID(
 			idx, ok = def.Name2ColIndex[strings.ToLower(attr)]
 		}
 		if !ok || idx < 0 || int(idx) >= len(def.Cols) {
-			return nil, fmt.Errorf("rowid lookup column %q not found", attr)
+			return nil, moerr.NewInternalErrorNoCtxf("rowid lookup column %q not found", attr)
 		}
 		colTypes = append(colTypes, plan2.ExprType2Type(&def.Cols[idx].Typ))
 	}
@@ -121,7 +121,7 @@ func (tbl *txnTableDelegate) ReadRowsByRowID(
 	for _, rowid := range rowids {
 		row, ok := found[rowid]
 		if !ok {
-			return nil, fmt.Errorf("rowid %s not found at snapshot %s", rowid.String(), snapshot.String())
+			return nil, moerr.NewInternalErrorNoCtxf("rowid %s not found at snapshot %s", rowid.String(), snapshot.String())
 		}
 		rows = append(rows, row)
 	}
