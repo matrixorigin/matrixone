@@ -83,8 +83,8 @@ test: test_cuvs_worker benchmark_cuvs benchmark_filter test_kmeans test_dynb tes
 
 release: all
 
-debug: NVCC_FLAGS := $(filter-out -O3,$(NVCC_FLAGS)) -O0 -g -lineinfo
-debug: LDFLAGS := $(filter-out -O3,$(LDFLAGS)) -g
+debug: override NVCC_FLAGS := $(filter-out -O%,$(NVCC_FLAGS)) -O0 -g -lineinfo
+debug: override LDFLAGS := $(filter-out -O%,$(LDFLAGS)) -O0 -g
 debug: all
 
 # AddressSanitizer build of the host (CPU) side of every cuvs .cpp/.hpp.
