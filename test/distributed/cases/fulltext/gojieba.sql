@@ -428,3 +428,48 @@ from (values row(1, '我来到北京清华大学'))
 ) as src
 cross apply fulltext_index_tokenize('{"parser":"gojieba"}', 23, id, body) as f;
 
+-- Partitioned fulltext DDL must preserve the parser option for every
+-- physical partition when the CREATE INDEX plan is cloned.
+drop table if exists ft_partitioned_gojieba;
+create table ft_partitioned_gojieba (
+    id bigint not null,
+    body text not null,
+    created_at datetime not null,
+    primary key (id, created_at)
+) partition by range (to_days(created_at)) (
+    partition p202606 values less than (to_days('2026-07-01')),
+    partition p202607 values less than (to_days('2026-08-01')),
+    partition p202608 values less than (to_days('2026-09-01'))
+);
+create fulltext index ft_body on ft_partitioned_gojieba(body) with parser gojieba;
+-- SHOW INDEX currently reads logical-table mo_columns, while these index rows
+-- are attached to physical partition table IDs; keep this DDL fix scoped to
+-- catalog metadata and verify all three physical partitions directly.
+select count(*) as index_rows,
+       count(distinct idx.table_id) as physical_tables,
+       count(distinct idx.index_table_name) as index_tables
+from mo_catalog.mo_indexes idx
+join mo_catalog.mo_tables ptbl
+  on ptbl.rel_id = idx.table_id
+join mo_catalog.mo_partition_tables pt
+  on pt.partition_id = ptbl.rel_id
+ and pt.partition_table_name = ptbl.relname
+ and ptbl.reldatabase = database()
+join mo_catalog.mo_partition_metadata pm
+  on pm.table_id = pt.primary_table_id
+join mo_catalog.mo_tables ltbl
+  on ltbl.rel_id = pm.table_id
+ and ltbl.rel_id = pt.primary_table_id
+ and ltbl.reldatabase = ptbl.reldatabase
+ and ltbl.account_id = ptbl.account_id
+where ltbl.reldatabase = database()
+  and ltbl.relname = 'ft_partitioned_gojieba'
+  and ltbl.account_id = current_account_id()
+  and pm.table_name = ltbl.relname
+  and pm.database_name = ltbl.reldatabase
+  and idx.name = 'ft_body'
+  and idx.type = 'FULLTEXT'
+  and idx.algo_params = '{"parser":"gojieba"}'
+  and idx.options = 'parser=gojieba,ngram_token_size=3'
+  and idx.index_table_name <> '';
+drop table ft_partitioned_gojieba;
