@@ -1350,7 +1350,11 @@ func initExecuteStmtParamWithResolverInSession(
 			return nil, nil, nil, originSQL, false, err
 		}
 		runtimeParamTypes := binaryProtocolRuntimeParamTypes(prepareStmt.ParamTypes, prepareStmt.params)
-		if plan2.PreparedPlanNeedsRuntimeTextComparisonSpecialization(executionPlan, runtimeParamTypes) {
+		// A text-comparison rewrite is impossible when every current packet has a
+		// numeric (or NULL) domain. Guard the plan walk before invoking it: TPCC
+		// binds only numeric parameters and executes this path for every statement.
+		if runtimeParamTypesContainText(runtimeParamTypes) &&
+			plan2.PreparedPlanNeedsRuntimeTextComparisonSpecialization(executionPlan, runtimeParamTypes) {
 			runtimeTextComparisonSpecialization = true
 			needsRuntimeSpecialization = true
 		}
@@ -1433,7 +1437,8 @@ func initExecuteStmtParamWithResolverInSession(
 				runtimeNumericPrefixCandidate = filterBinaryNumericPrefixCandidates(
 					executionPlan, cwft.paramVals, prepareStmt.ParamTypes)
 			}
-			if runtimeDirectResultCandidate && !runtimeNumericPrefixCandidate && !runtimeNumericOverloadCandidate {
+			if runtimeDirectResultCandidate && !runtimeNumericPrefixCandidate &&
+				!runtimeNumericOverloadCandidate && !needsRuntimeSpecialization {
 				restrictPreparedRuntimeTypesToDirectResults(cwft.paramVals, runtimeDirectResultPositions)
 			} else if runtimeDirectResultCandidate {
 				retainPreparedRuntimeParamRefs(cwft.paramVals)
@@ -1479,14 +1484,16 @@ func initExecuteStmtParamWithResolverInSession(
 		runtimeNumericPrefixCandidate = prepareStmt.numericPrefixConsumer &&
 			preparedParamValuesEnableNumericPrefix(cwft.paramVals)
 	}
-	if runtimeNumericOverloadCandidate {
-		// Specialization materializes every ParamRef in the copied plan, not only
-		// the positions that select ABS's runtime overload. Preserve provenance
-		// for every parameter before caching so a same-category cache hit cannot
-		// retain an unrelated value from the first execution.
-		retainPreparedRuntimeParamRefs(cwft.paramVals)
-	}
-	if runtimeNumericPrefixCandidate {
+	// Static binary specialization, numeric-prefix conversion, and deferred
+	// overload binding all materialize every ParamRef in the copied plan. Keep
+	// provenance for every parameter before caching so a same-category hit reads
+	// the current Process vector instead of retaining the first execution's value.
+	// Pagination, window offsets, and EXPLAIN remain value-driven per execution.
+	stableRuntimeSpecializationCandidate := binaryExecute &&
+		prepareStmt.runtimeSpecializationNeeded && !runtimeTextComparisonSpecialization &&
+		!prepareStmt.hasPaginationParams && !prepareStmt.hasLagLeadParams && !preparedExplain
+	if runtimeNumericOverloadCandidate || runtimeNumericPrefixCandidate ||
+		stableRuntimeSpecializationCandidate {
 		retainPreparedRuntimeParamRefs(cwft.paramVals)
 	}
 	if err := plan2.ValidatePreparedLagLeadParams(reqCtx, preparePlan.Plan, cwft.paramVals); err != nil {
@@ -1503,16 +1510,17 @@ func initExecuteStmtParamWithResolverInSession(
 		}
 	}
 
-	// Numeric-prefix consumers and direct numeric result markers enter the same
-	// bounded specialization cache. Direct-result admission was computed at
-	// PREPARE/rebuild time; ordinary COM_STMT executions therefore retain the
-	// cached plan/compile fast path without an execute-time plan walk.
+	// Static binary specialization, numeric-prefix consumers, and direct numeric
+	// result markers enter the same bounded one-category cache. The copied plan
+	// keeps typed ParamRefs, so values in a stable runtime domain reuse its compile
+	// while a domain switch replaces at most one old category.
 	runtimePlan, runtimeSpecialized, runtimePlanApplied := executionPlan, false, false
 	var cachedRuntimeCompile *compile.Compile
 	runtimeCacheKey := ""
-	runtimeCategoryCandidate := runtimeNumericPrefixCandidate || runtimeNumericOverloadCandidate
+	runtimeCategoryCandidate := runtimeNumericPrefixCandidate || runtimeNumericOverloadCandidate ||
+		stableRuntimeSpecializationCandidate
 	runtimeSpecializationCandidate := runtimeCategoryCandidate || runtimeDirectResultCandidate
-	cacheableRuntimeQuery := executionPlan.GetQuery() != nil &&
+	cacheableRuntimeQuery := executionPlan.GetQuery() != nil && !runtimeTextComparisonSpecialization &&
 		(runtimeDirectResultCandidate ||
 			(runtimeCategoryCandidate && preparedRuntimeCacheSupports(cwft.paramVals)))
 	if cacheableRuntimeQuery {
@@ -2123,6 +2131,16 @@ func binaryProtocolRuntimeParamTypes(paramTypes []byte, params *vector.Vector) [
 		}
 	}
 	return runtimeTypes
+}
+
+func runtimeParamTypesContainText(runtimeTypes []types.Type) bool {
+	for _, runtimeType := range runtimeTypes {
+		switch runtimeType.Oid {
+		case types.T_char, types.T_varchar, types.T_text:
+			return true
+		}
+	}
+	return false
 }
 
 // executeUserParamConcreteType returns the assignment-time SQL type carried by
