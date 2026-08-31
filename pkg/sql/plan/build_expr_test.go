@@ -916,6 +916,34 @@ func TestJSONComparisonsCastBothOperandsToCommonType(t *testing.T) {
 	}
 }
 
+func TestCoalesceLargeJSONCharacterFallbackIsLossless(t *testing.T) {
+	value := strings.Repeat("x", types.MaxVarcharLen+1024)
+	jsonText := `{"payload":"` + value + `"}`
+	expected := `{"payload": "` + value + `"}`
+	require.Greater(t, len(expected), int(types.MaxVarcharLen))
+
+	mock := NewMockOptimizer(false)
+	pl, err := runOneExprStmt(mock, t, "select coalesce(cast('"+jsonText+"' as json), '{}', 0)")
+	require.NoError(t, err)
+
+	expr := pl.GetQuery().Nodes[1].ProjectList[0]
+	require.Equal(t, int32(types.T_text), expr.Typ.Id)
+	require.Zero(t, expr.Typ.Width)
+
+	proc := testutil.NewProc(t)
+	defer proc.Free()
+	executor, err := colexec.NewExpressionExecutor(proc, expr)
+	require.NoError(t, err)
+	defer executor.Free()
+
+	result, err := executor.Eval(proc, nil, nil)
+	require.NoError(t, err)
+	require.False(t, result.GetNulls().Contains(0))
+	got := result.GetStringAt(0)
+	require.Len(t, got, len(expected))
+	require.Equal(t, expected, got)
+}
+
 func TestJSONBooleanEqualityPreservesOperandTypes(t *testing.T) {
 	for _, tc := range []struct {
 		name  string
