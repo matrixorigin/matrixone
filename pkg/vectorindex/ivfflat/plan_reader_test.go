@@ -809,6 +809,20 @@ func TestPlanReaderPureHelpersCoverDecodedQueriesAndScanBatches(t *testing.T) {
 	bat.Clean(nil)
 	_, err = makeRelationScanBatch(tableDef, []string{"missing"})
 	require.ErrorContains(t, err, "hidden column \"missing\" not found")
+
+	wideDef := &plan.TableDef{
+		Cols: []*plan.ColDef{
+			{Name: "entry", Typ: plan.Type{Id: int32(types.T_array_float64)}},
+			{Name: "bucket", Typ: plan.Type{Id: int32(types.T_int64)}},
+		},
+		Name2ColIndex: map[string]int32{"entry": 0, "bucket": 1},
+	}
+	require.Equal(t, []int{1}, relationFilterEarlyColumns(
+		wideDef, []string{"entry", "bucket"}, ivfColExpr(1, plan.Type{Id: int32(types.T_int64)})))
+	require.Nil(t, relationFilterEarlyColumns(
+		wideDef, []string{"entry", "bucket"}, ivfColExpr(0, plan.Type{Id: int32(types.T_array_float64)})))
+	require.Nil(t, relationFilterEarlyColumns(wideDef, []string{"entry", "bucket"},
+		&plan.Expr{Expr: &plan.Expr_Corr{Corr: &plan.CorrColRef{ColPos: 1}}}))
 }
 
 type fixedRelationReader struct {
@@ -868,6 +882,94 @@ func (*fillRelationReader) GetOrderBy() []*plan.OrderBySpec { return nil }
 func (*fillRelationReader) SetIndexParam(*plan.IndexReaderParam) {
 }
 func (*fillRelationReader) SetFilterZM(objectio.ZoneMap) {}
+
+type lateFilterRelationReader struct {
+	emitted         bool
+	closed          int
+	eagerReads      int
+	lateReads       int
+	earlyColumns    []int
+	wideWasDeferred bool
+}
+
+var _ engine.Reader = (*lateFilterRelationReader)(nil)
+var _ engine.LateMaterializationReader = (*lateFilterRelationReader)(nil)
+
+func (r *lateFilterRelationReader) Read(
+	context.Context,
+	[]string,
+	*plan.Expr,
+	*mpool.MPool,
+	*batch.Batch,
+) (bool, error) {
+	r.eagerReads++
+	return false, errors.New("IVF filtered scan used eager reader")
+}
+
+func (r *lateFilterRelationReader) ReadWithFilter(
+	_ context.Context,
+	_ []string,
+	earlyColumns []int,
+	filter engine.ReaderFilter,
+	mp *mpool.MPool,
+	out *batch.Batch,
+) (bool, error) {
+	if r.emitted {
+		return true, nil
+	}
+	r.lateReads++
+	r.earlyColumns = append([]int(nil), earlyColumns...)
+
+	rows := []struct {
+		version  int64
+		centroid int64
+		pk       int64
+		entry    []float64
+		bucket   int64
+	}{
+		{7, 2, 11, []float64{4, 0}, 10},
+		{7, 2, 12, []float64{9, 0}, 70},
+		{7, 2, 13, []float64{1, 0}, 10},
+	}
+	for _, row := range rows {
+		if err := vector.AppendFixed(out.Vecs[0], row.version, false, mp); err != nil {
+			return false, err
+		}
+		if err := vector.AppendFixed(out.Vecs[1], row.centroid, false, mp); err != nil {
+			return false, err
+		}
+		if err := vector.AppendFixed(out.Vecs[2], row.pk, false, mp); err != nil {
+			return false, err
+		}
+		if err := vector.AppendFixed(out.Vecs[4], row.bucket, false, mp); err != nil {
+			return false, err
+		}
+	}
+	out.SetRowCount(len(rows))
+	r.wideWasDeferred = out.Vecs[3].Length() == 0
+	filtered, err := filter(out, earlyColumns)
+	if err != nil {
+		return false, err
+	}
+	selected := filtered.Sels
+	if filtered.All {
+		selected = []int64{0, 1, 2}
+	}
+	for _, row := range selected {
+		if err := vector.AppendArray(out.Vecs[3], rows[row].entry, false, mp); err != nil {
+			return false, err
+		}
+	}
+	r.emitted = true
+	return false, nil
+}
+
+func (r *lateFilterRelationReader) Close() error                  { r.closed++; return nil }
+func (*lateFilterRelationReader) SetOrderBy([]*plan.OrderBySpec)  {}
+func (*lateFilterRelationReader) GetOrderBy() []*plan.OrderBySpec { return nil }
+func (*lateFilterRelationReader) SetIndexParam(*plan.IndexReaderParam) {
+}
+func (*lateFilterRelationReader) SetFilterZM(objectio.ZoneMap) {}
 
 func TestRelationScannerExecutesTypedReaderLifecycle(t *testing.T) {
 	ctrl := gomock.NewController(t)
@@ -1129,6 +1231,76 @@ func TestRelationScannerFiltersBeforeApplyingTopLimit(t *testing.T) {
 	require.Len(t, res.Batches, 1)
 	require.Equal(t, 1, res.Batches[0].RowCount())
 	require.Equal(t, int64(2), vector.GetFixedAtNoTypeCheck[int64](res.Batches[0].Vecs[0], 0))
+	require.Equal(t, 1, reader.closed)
+}
+
+func TestRelationScannerDefersWideVectorUntilAfterIncludeFilter(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	proc := testutil.NewProc(t)
+	t.Cleanup(proc.Free)
+	eng := mock_frontend.NewMockEngine(ctrl)
+	db := mock_frontend.NewMockDatabase(ctrl)
+	rel := mock_frontend.NewMockRelation(ctrl)
+	proc.Base.SessionInfo.StorageEngine = eng
+	tableDef := &plan.TableDef{
+		Name: "filtered_entries",
+		Cols: []*plan.ColDef{
+			{Name: "version", Typ: plan.Type{Id: int32(types.T_int64)}},
+			{Name: "centroid", Typ: plan.Type{Id: int32(types.T_int64)}},
+			{Name: "pk", Typ: plan.Type{Id: int32(types.T_int64)}},
+			{Name: "entry", Typ: plan.Type{Id: int32(types.T_array_float64), Width: 2}},
+			{Name: "filter_bucket", Typ: plan.Type{Id: int32(types.T_int64)}},
+		},
+		Name2ColIndex: map[string]int32{
+			"version": 0, "centroid": 1, "pk": 2, "entry": 3, "filter_bucket": 4,
+		},
+	}
+	reader := &lateFilterRelationReader{}
+	eng.EXPECT().Database(gomock.Any(), "db", nil).Return(db, nil)
+	db.EXPECT().Relation(gomock.Any(), "filtered_entries", proc).Return(rel, nil)
+	rel.EXPECT().GetTableDef(gomock.Any()).Return(tableDef)
+	rel.EXPECT().Ranges(gomock.Any(), gomock.Any()).Return(nil, nil)
+	rel.EXPECT().BuildReaders(
+		gomock.Any(), proc, gomock.Any(), gomock.Nil(), 1, 0, false,
+		gomock.Any(), gomock.Any()).Return([]engine.Reader{reader}, nil)
+
+	filter, err := ivfFuncExpr(proc.Ctx, "=",
+		ivfColExpr(4, plan.Type{Id: int32(types.T_int64)}), ivfInt64Expr(10))
+	require.NoError(t, err)
+	res, err := (&relationScanner{proc: proc}).ScanRelation(sqlexec.RelationScanRequest{
+		Schema:  "db",
+		Table:   "filtered_entries",
+		Columns: []string{"version", "centroid", "pk", "entry", "filter_bucket"},
+		Filter:  filter,
+		IndexParam: &plan.IndexReaderParam{
+			Limit:   ivfUint64Expr(1),
+			OrderBy: []*plan.OrderBySpec{{Flag: plan.OrderBySpec_ASC}},
+		},
+		PostFilterTopOnly: true,
+		BatchTransform: func(bat *batch.Batch) error {
+			require.Equal(t, bat.RowCount(), bat.Vecs[3].Length())
+			distances := vector.NewVec(types.T_float64.ToType())
+			for row := 0; row < bat.RowCount(); row++ {
+				entry := types.BytesToArray[float64](bat.Vecs[3].GetBytesAt(row))
+				if err := vector.AppendFixed(distances, entry[0]*entry[0], false, proc.Mp()); err != nil {
+					distances.Free(proc.Mp())
+					return err
+				}
+			}
+			bat.Vecs = append(bat.Vecs, distances)
+			return nil
+		},
+	})
+	require.NoError(t, err)
+	defer res.Close()
+	require.Zero(t, reader.eagerReads)
+	require.Equal(t, 1, reader.lateReads)
+	require.Equal(t, []int{0, 1, 2, 4}, reader.earlyColumns)
+	require.True(t, reader.wideWasDeferred)
+	require.Len(t, res.Batches, 1)
+	require.Equal(t, 1, res.Batches[0].RowCount())
+	require.Equal(t, int64(13), vector.GetFixedAtNoTypeCheck[int64](res.Batches[0].Vecs[2], 0))
+	require.Equal(t, int64(10), vector.GetFixedAtNoTypeCheck[int64](res.Batches[0].Vecs[4], 0))
 	require.Equal(t, 1, reader.closed)
 }
 
