@@ -517,6 +517,289 @@ func TestDetermineBuildSidePreservesDeclaredRuntimeFilterDependency(t *testing.T
 	require.False(t, builder.qry.Nodes[2].IsRightJoin)
 }
 
+func TestDetermineBuildSideCostsUnfilteredIndexByRetainedBytes(t *testing.T) {
+	const (
+		indexNodeID    int32 = 0
+		dataScanNodeID int32 = 1
+		dataNodeID     int32 = 2
+		joinNodeID     int32 = 3
+	)
+
+	newBuilder := func(indexRows, indexRowSize, dataRows, dataRowSize float64, filteredIndex bool) *QueryBuilder {
+		builder := NewQueryBuilder(planpb.Query_UPDATE, NewMockCompilerContext(false), false, true)
+		indexNode := &planpb.Node{
+			NodeId:   indexNodeID,
+			NodeType: planpb.Node_TABLE_SCAN,
+			TableDef: &planpb.TableDef{
+				Name:      catalog.SecondaryIndexTableNamePrefix + "build_cost",
+				TableType: catalog.SystemIndexRel,
+			},
+			Stats: &planpb.Stats{Outcnt: indexRows, Rowsize: indexRowSize},
+		}
+		if filteredIndex {
+			indexNode.FilterList = []*planpb.Expr{{}}
+		}
+		builder.qry.Nodes = []*planpb.Node{
+			indexNode,
+			{
+				NodeId:   dataScanNodeID,
+				NodeType: planpb.Node_TABLE_SCAN,
+				TableDef: &planpb.TableDef{Name: "data", TableType: catalog.SystemOrdinaryRel},
+				Stats:    &planpb.Stats{Outcnt: dataRows, Rowsize: dataRowSize},
+			},
+			{
+				NodeId:   dataNodeID,
+				NodeType: planpb.Node_PROJECT,
+				Children: []int32{dataScanNodeID},
+				Stats:    &planpb.Stats{Outcnt: dataRows, Rowsize: dataRowSize},
+			},
+			{
+				NodeId:   joinNodeID,
+				NodeType: planpb.Node_JOIN,
+				JoinType: planpb.Node_INNER,
+				Children: []int32{indexNodeID, dataNodeID},
+				Stats:    &planpb.Stats{HashmapStats: &planpb.HashMapStats{}},
+			},
+		}
+		return builder
+	}
+
+	t.Run("equal rows build narrow index", func(t *testing.T) {
+		builder := newBuilder(20_000_000, 32, 20_000_000, 2_454, false)
+		builder.determineBuildAndProbeSide(joinNodeID, false)
+		require.Equal(t, []int32{dataNodeID, indexNodeID}, builder.qry.Nodes[joinNodeID].Children)
+	})
+
+	t.Run("secondary index identity follows reserved catalog name", func(t *testing.T) {
+		builder := newBuilder(20_000_000, 32, 20_000_000, 2_454, false)
+		builder.qry.Nodes[indexNodeID].TableDef.TableType = catalog.SystemOrdinaryRel
+		builder.determineBuildAndProbeSide(joinNodeID, false)
+		require.Equal(t, []int32{dataNodeID, indexNodeID}, builder.qry.Nodes[joinNodeID].Children)
+	})
+
+	t.Run("non-dominating full index preserves selective target build", func(t *testing.T) {
+		builder := newBuilder(20_000_000, 32, 1_000_000, 2_454, false)
+		builder.determineBuildAndProbeSide(joinNodeID, false)
+		require.Equal(t, []int32{indexNodeID, dataNodeID}, builder.qry.Nodes[joinNodeID].Children)
+	})
+
+	t.Run("non-dominating right index falls back to selective target build", func(t *testing.T) {
+		builder := newBuilder(20_000_000, 32, 1_000_000, 2_454, false)
+		builder.qry.Nodes[joinNodeID].Children = []int32{dataNodeID, indexNodeID}
+		builder.determineBuildAndProbeSide(joinNodeID, false)
+		require.Equal(t, []int32{indexNodeID, dataNodeID}, builder.qry.Nodes[joinNodeID].Children)
+	})
+
+	t.Run("dominating right index remains build side", func(t *testing.T) {
+		builder := newBuilder(20_000_000, 32, 20_000_000, 2_454, false)
+		builder.qry.Nodes[joinNodeID].Children = []int32{dataNodeID, indexNodeID}
+		builder.determineBuildAndProbeSide(joinNodeID, false)
+		require.Equal(t, []int32{dataNodeID, indexNodeID}, builder.qry.Nodes[joinNodeID].Children)
+	})
+
+	t.Run("selective narrow data remains build side", func(t *testing.T) {
+		builder := newBuilder(20_000_000, 32, 10, 32, false)
+		builder.determineBuildAndProbeSide(joinNodeID, false)
+		require.Equal(t, []int32{indexNodeID, dataNodeID}, builder.qry.Nodes[joinNodeID].Children)
+	})
+
+	t.Run("filtered index keeps existing cardinality policy", func(t *testing.T) {
+		builder := newBuilder(20, 32, 20, 2_454, true)
+		builder.determineBuildAndProbeSide(joinNodeID, false)
+		require.Equal(t, []int32{indexNodeID, dataNodeID}, builder.qry.Nodes[joinNodeID].Children)
+	})
+
+	t.Run("block-filtered index keeps existing cardinality policy", func(t *testing.T) {
+		builder := newBuilder(20, 32, 20, 2_454, false)
+		builder.qry.Nodes[indexNodeID].BlockFilterList = []*planpb.Expr{{}}
+		builder.determineBuildAndProbeSide(joinNodeID, false)
+		require.Equal(t, []int32{indexNodeID, dataNodeID}, builder.qry.Nodes[joinNodeID].Children)
+	})
+
+	t.Run("paginated index keeps existing cardinality policy", func(t *testing.T) {
+		builder := newBuilder(20, 32, 20, 2_454, false)
+		builder.qry.Nodes[indexNodeID].Limit = makePlan2Int64ConstExprWithType(10)
+		builder.determineBuildAndProbeSide(joinNodeID, false)
+		require.Equal(t, []int32{indexNodeID, dataNodeID}, builder.qry.Nodes[joinNodeID].Children)
+	})
+
+	t.Run("offset index keeps existing cardinality policy", func(t *testing.T) {
+		builder := newBuilder(20, 32, 20, 2_454, false)
+		builder.qry.Nodes[indexNodeID].Offset = makePlan2Int64ConstExprWithType(10)
+		builder.determineBuildAndProbeSide(joinNodeID, false)
+		require.Equal(t, []int32{indexNodeID, dataNodeID}, builder.qry.Nodes[joinNodeID].Children)
+	})
+
+	t.Run("filtered target keeps existing cardinality policy", func(t *testing.T) {
+		builder := newBuilder(20, 32, 20, 2_454, false)
+		builder.qry.Nodes[dataScanNodeID].FilterList = []*planpb.Expr{{}}
+		builder.determineBuildAndProbeSide(joinNodeID, false)
+		require.Equal(t, []int32{indexNodeID, dataNodeID}, builder.qry.Nodes[joinNodeID].Children)
+	})
+
+	t.Run("block-filtered target keeps existing cardinality policy", func(t *testing.T) {
+		builder := newBuilder(20, 32, 20, 2_454, false)
+		builder.qry.Nodes[dataScanNodeID].BlockFilterList = []*planpb.Expr{{}}
+		builder.determineBuildAndProbeSide(joinNodeID, false)
+		require.Equal(t, []int32{indexNodeID, dataNodeID}, builder.qry.Nodes[joinNodeID].Children)
+	})
+
+	t.Run("paginated target keeps existing cardinality policy", func(t *testing.T) {
+		builder := newBuilder(20, 32, 20, 2_454, false)
+		builder.qry.Nodes[dataNodeID].Limit = makePlan2Int64ConstExprWithType(10)
+		builder.determineBuildAndProbeSide(joinNodeID, false)
+		require.Equal(t, []int32{indexNodeID, dataNodeID}, builder.qry.Nodes[joinNodeID].Children)
+	})
+
+	t.Run("offset target keeps existing cardinality policy", func(t *testing.T) {
+		builder := newBuilder(20, 32, 20, 2_454, false)
+		builder.qry.Nodes[dataNodeID].Offset = makePlan2Int64ConstExprWithType(10)
+		builder.determineBuildAndProbeSide(joinNodeID, false)
+		require.Equal(t, []int32{indexNodeID, dataNodeID}, builder.qry.Nodes[joinNodeID].Children)
+	})
+
+	t.Run("joined update target keeps existing cardinality policy", func(t *testing.T) {
+		builder := newBuilder(20, 32, 20, 2_454, false)
+		joinedScanID := int32(len(builder.qry.Nodes))
+		builder.qry.Nodes = append(builder.qry.Nodes, &planpb.Node{
+			NodeId: joinedScanID, NodeType: planpb.Node_TABLE_SCAN,
+			TableDef: &planpb.TableDef{Name: "joined", TableType: catalog.SystemOrdinaryRel},
+			Stats:    &planpb.Stats{Outcnt: 20, Rowsize: 32},
+		})
+		joinedInputID := int32(len(builder.qry.Nodes))
+		builder.qry.Nodes = append(builder.qry.Nodes, &planpb.Node{
+			NodeId: joinedInputID, NodeType: planpb.Node_JOIN, JoinType: planpb.Node_INNER,
+			Children: []int32{dataScanNodeID, joinedScanID},
+			Stats:    &planpb.Stats{Outcnt: 20, Rowsize: 2_454, HashmapStats: &planpb.HashMapStats{}},
+		})
+		builder.qry.Nodes[dataNodeID].Children = []int32{joinedInputID}
+		builder.determineBuildAndProbeSide(joinNodeID, false)
+		require.Equal(t, []int32{indexNodeID, dataNodeID}, builder.qry.Nodes[joinNodeID].Children)
+	})
+
+	t.Run("prior secondary maintenance join remains eligible", func(t *testing.T) {
+		builder := newBuilder(20, 32, 20, 2_454, false)
+		priorIndexID := int32(len(builder.qry.Nodes))
+		builder.qry.Nodes = append(builder.qry.Nodes, &planpb.Node{
+			NodeId: priorIndexID, NodeType: planpb.Node_TABLE_SCAN,
+			TableDef: &planpb.TableDef{
+				Name: catalog.SecondaryIndexTableNamePrefix + "prior", TableType: catalog.SystemIndexRel,
+			},
+			Stats: &planpb.Stats{Outcnt: 20, Rowsize: 32},
+		})
+		priorJoinID := int32(len(builder.qry.Nodes))
+		builder.qry.Nodes = append(builder.qry.Nodes, &planpb.Node{
+			NodeId: priorJoinID, NodeType: planpb.Node_JOIN, JoinType: planpb.Node_INNER,
+			Children: []int32{dataNodeID, priorIndexID},
+			Stats:    &planpb.Stats{Outcnt: 20, Rowsize: 2_500, HashmapStats: &planpb.HashMapStats{}},
+		})
+		builder.qry.Nodes[joinNodeID].Children = []int32{indexNodeID, priorJoinID}
+		builder.determineBuildAndProbeSide(joinNodeID, false)
+		require.Equal(t, []int32{priorJoinID, indexNodeID}, builder.qry.Nodes[joinNodeID].Children)
+	})
+
+	t.Run("ordinary join keeps existing cardinality policy", func(t *testing.T) {
+		builder := newBuilder(20, 32, 20, 2_454, false)
+		builder.qry.Nodes[indexNodeID].TableDef.Name = "ordinary_table"
+		builder.determineBuildAndProbeSide(joinNodeID, false)
+		require.Equal(t, []int32{indexNodeID, dataNodeID}, builder.qry.Nodes[joinNodeID].Children)
+	})
+
+	t.Run("internal table cannot stand in for update target", func(t *testing.T) {
+		builder := newBuilder(20, 32, 20, 2_454, false)
+		builder.qry.Nodes[dataScanNodeID].TableDef.Name = catalog.UniqueIndexTableNamePrefix + "not_a_target"
+		builder.determineBuildAndProbeSide(joinNodeID, false)
+		require.Equal(t, []int32{indexNodeID, dataNodeID}, builder.qry.Nodes[joinNodeID].Children)
+	})
+
+	t.Run("nonordinary table cannot stand in for update target", func(t *testing.T) {
+		builder := newBuilder(20, 32, 20, 2_454, false)
+		builder.qry.Nodes[dataScanNodeID].TableDef.TableType = catalog.SystemClusterRel
+		builder.determineBuildAndProbeSide(joinNodeID, false)
+		require.Equal(t, []int32{indexNodeID, dataNodeID}, builder.qry.Nodes[joinNodeID].Children)
+	})
+
+	t.Run("unique hidden index is outside regular secondary maintenance policy", func(t *testing.T) {
+		builder := newBuilder(20, 32, 20, 2_454, false)
+		builder.qry.Nodes[indexNodeID].TableDef.Name = catalog.UniqueIndexTableNamePrefix + "build_cost"
+		builder.determineBuildAndProbeSide(joinNodeID, false)
+		require.Equal(t, []int32{indexNodeID, dataNodeID}, builder.qry.Nodes[joinNodeID].Children)
+	})
+
+	t.Run("fewer index rows but wider index preserves cardinality policy", func(t *testing.T) {
+		builder := newBuilder(10, 2_454, 20, 32, false)
+		builder.determineBuildAndProbeSide(joinNodeID, false)
+		require.Equal(t, []int32{dataNodeID, indexNodeID}, builder.qry.Nodes[joinNodeID].Children)
+	})
+
+	t.Run("equal retained bytes preserve cardinality policy", func(t *testing.T) {
+		builder := newBuilder(20, 32, 20, 32, false)
+		builder.determineBuildAndProbeSide(joinNodeID, false)
+		require.Equal(t, []int32{indexNodeID, dataNodeID}, builder.qry.Nodes[joinNodeID].Children)
+	})
+
+	t.Run("select keeps existing hidden-index policy", func(t *testing.T) {
+		builder := newBuilder(20, 32, 20, 2_454, false)
+		builder.qry.StmtType = planpb.Query_SELECT
+		builder.determineBuildAndProbeSide(joinNodeID, false)
+		require.Equal(t, []int32{indexNodeID, dataNodeID}, builder.qry.Nodes[joinNodeID].Children)
+	})
+
+	t.Run("delete keeps existing hidden-index policy", func(t *testing.T) {
+		builder := newBuilder(20, 32, 20, 2_454, false)
+		builder.qry.StmtType = planpb.Query_DELETE
+		builder.determineBuildAndProbeSide(joinNodeID, false)
+		require.Equal(t, []int32{indexNodeID, dataNodeID}, builder.qry.Nodes[joinNodeID].Children)
+	})
+
+	t.Run("invalid width falls back to cardinality", func(t *testing.T) {
+		builder := newBuilder(10, math.NaN(), 20, 2_454, false)
+		builder.determineBuildAndProbeSide(joinNodeID, false)
+		require.Equal(t, []int32{dataNodeID, indexNodeID}, builder.qry.Nodes[joinNodeID].Children)
+	})
+
+	t.Run("empty index is a valid zero-byte build", func(t *testing.T) {
+		builder := newBuilder(0, 32, 20_000_000, 2_454, false)
+		builder.determineBuildAndProbeSide(joinNodeID, false)
+		require.Equal(t, []int32{dataNodeID, indexNodeID}, builder.qry.Nodes[joinNodeID].Children)
+	})
+
+	t.Run("full outer join remains directional", func(t *testing.T) {
+		builder := newBuilder(20_000_000, 32, 20_000_000, 2_454, false)
+		builder.qry.Nodes[joinNodeID].JoinType = planpb.Node_OUTER
+		builder.determineBuildAndProbeSide(joinNodeID, false)
+		require.Equal(t, []int32{indexNodeID, dataNodeID}, builder.qry.Nodes[joinNodeID].Children)
+		require.True(t, builder.qry.Nodes[joinNodeID].IsRightJoin)
+	})
+}
+
+func TestEstimatedHashBuildRetainedBytesRejectsUnsafeStats(t *testing.T) {
+	for _, test := range []struct {
+		name string
+		node *planpb.Node
+	}{
+		{name: "nil node"},
+		{name: "nil stats", node: &planpb.Node{}},
+		{name: "negative rows", node: &planpb.Node{Stats: &planpb.Stats{Outcnt: -1, Rowsize: 32}}},
+		{name: "nan rows", node: &planpb.Node{Stats: &planpb.Stats{Outcnt: math.NaN(), Rowsize: 32}}},
+		{name: "infinite width", node: &planpb.Node{Stats: &planpb.Stats{Outcnt: 1, Rowsize: math.Inf(1)}}},
+		{name: "zero width", node: &planpb.Node{Stats: &planpb.Stats{Outcnt: 1}}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			_, ok := estimatedHashBuildRetainedBytes(test.node)
+			require.False(t, ok)
+		})
+	}
+
+	t.Run("overflow saturates", func(t *testing.T) {
+		got, ok := estimatedHashBuildRetainedBytes(&planpb.Node{
+			Stats: &planpb.Stats{Outcnt: math.MaxFloat64, Rowsize: 2},
+		})
+		require.True(t, ok)
+		require.Equal(t, math.MaxFloat64, got)
+	})
+}
+
 func TestDeepCopyIndexReaderParamCopiesOrigFuncName(t *testing.T) {
 	oldParam := &planpb.IndexReaderParam{
 		OrigFuncName:   "l2_distance",

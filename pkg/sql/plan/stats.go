@@ -1922,6 +1922,28 @@ func (builder *QueryBuilder) determineBuildAndProbeSide(nodeID int32, recursive 
 
 	switch node.JoinType {
 	case plan.Node_INNER, plan.Node_OUTER:
+		// UPDATE rewrites deliberately put an unfiltered hidden index on the probe
+		// side so a selective target can publish a runtime filter before scanning
+		// the index. Cardinality alone is not sufficient for the opposite,
+		// full-target case: the index and target have the same row count, while
+		// retaining the full target row in HashBuild can be orders of magnitude
+		// larger and force avoidable spill.
+		//
+		// Override the existing cardinality policy only when the secondary index
+		// dominates the other input on both resident rows and retained bytes. If
+		// the estimates trade CPU/runtime-filter work for memory, or either one is
+		// unavailable, preserve the established decision below. Predeclared
+		// runtime-filter dependencies have already returned above and can never be
+		// reversed here.
+		if node.JoinType == plan.Node_INNER && builder.qry.StmtType == plan.Query_UPDATE {
+			if swap, decided := builder.preferDominatingSecondaryIndexBuild(node.Children[0], node.Children[1]); decided {
+				if swap {
+					node.Children[0], node.Children[1] = node.Children[1], node.Children[0]
+				}
+				break
+			}
+		}
+
 		factor1 := 1.0
 		factor2 := 1.0
 		if leftChild.NodeType == plan.Node_TABLE_SCAN && rightChild.NodeType == plan.Node_TABLE_SCAN {
@@ -1976,6 +1998,113 @@ func (builder *QueryBuilder) determineBuildAndProbeSide(nodeID int32, recursive 
 		builder.hasRecursiveScan(builder.qry.Nodes[node.Children[1]]) {
 		node.Children[0], node.Children[1] = node.Children[1], node.Children[0]
 	}
+}
+
+// preferDominatingSecondaryIndexBuild decides whether child 0 should be swapped
+// to the physical build position (child 1). It is intentionally limited to a
+// UPDATE join with exactly one direct, unfiltered regular-secondary-index scan.
+// Those joins have an established probe-side runtime-filter policy, but full
+// UPDATE can otherwise retain a much wider target row in HashBuild.
+//
+// This is a conservative override, not a general join cost model: the index
+// must be no larger by row count and strictly smaller by retained bytes. A
+// selective target therefore keeps the existing cardinality/runtime-filter
+// policy even when its wide rows make the two estimates non-comparable.
+func (builder *QueryBuilder) preferDominatingSecondaryIndexBuild(leftID, rightID int32) (swap, decided bool) {
+	leftIsIndex := builder.isSecondaryIndexTableWithoutFilters(leftID)
+	rightIsIndex := builder.isSecondaryIndexTableWithoutFilters(rightID)
+	if leftIsIndex == rightIsIndex {
+		return false, false
+	}
+	otherID := leftID
+	if leftIsIndex {
+		otherID = rightID
+	}
+	if !builder.isUnrestrictedSecondaryIndexUpdateInput(otherID) {
+		return false, false
+	}
+
+	leftNode := builder.qry.Nodes[leftID]
+	rightNode := builder.qry.Nodes[rightID]
+	leftBytes, leftOK := estimatedHashBuildRetainedBytes(leftNode)
+	rightBytes, rightOK := estimatedHashBuildRetainedBytes(rightNode)
+	if !leftOK || !rightOK {
+		return false, false
+	}
+
+	if leftIsIndex {
+		if leftNode.Stats.Outcnt <= rightNode.Stats.Outcnt && leftBytes < rightBytes {
+			return true, true
+		}
+		return false, false
+	}
+	if rightNode.Stats.Outcnt <= leftNode.Stats.Outcnt && rightBytes < leftBytes {
+		return false, true
+	}
+	return false, false
+}
+
+func (builder *QueryBuilder) isSecondaryIndexTableWithoutFilters(nodeID int32) bool {
+	node := builder.qry.Nodes[nodeID]
+	return node != nil && node.NodeType == plan.Node_TABLE_SCAN && node.TableDef != nil &&
+		node.Limit == nil && node.Offset == nil && len(node.FilterList) == 0 &&
+		len(node.BlockFilterList) == 0 && catalog.IsSecondaryIndexTable(node.TableDef.Name)
+}
+
+// isUnrestrictedSecondaryIndexUpdateInput proves that the non-index side is a
+// full single-table UPDATE stream, optionally extended by earlier regular
+// secondary-index maintenance joins. Anything that can reduce or reshape the
+// target cardinality is deliberately left to the existing optimizer policy.
+func (builder *QueryBuilder) isUnrestrictedSecondaryIndexUpdateInput(nodeID int32) bool {
+	node := builder.qry.Nodes[nodeID]
+	if node == nil || node.Limit != nil || node.Offset != nil ||
+		len(node.FilterList) > 0 || len(node.BlockFilterList) > 0 {
+		return false
+	}
+
+	switch node.NodeType {
+	case plan.Node_TABLE_SCAN:
+		return node.TableDef != nil && node.TableDef.TableType == catalog.SystemOrdinaryRel &&
+			!strings.HasPrefix(node.TableDef.Name, catalog.PrefixIndexTableName) &&
+			!catalog.IsSecondaryIndexTable(node.TableDef.Name) &&
+			!catalog.IsUniqueIndexTable(node.TableDef.Name)
+	case plan.Node_PROJECT:
+		return len(node.Children) == 1 && builder.isUnrestrictedSecondaryIndexUpdateInput(node.Children[0])
+	case plan.Node_JOIN:
+		if node.JoinType != plan.Node_INNER || len(node.Children) != 2 {
+			return false
+		}
+		leftIsIndex := builder.isSecondaryIndexTableWithoutFilters(node.Children[0])
+		rightIsIndex := builder.isSecondaryIndexTableWithoutFilters(node.Children[1])
+		if leftIsIndex == rightIsIndex {
+			return false
+		}
+		if leftIsIndex {
+			return builder.isUnrestrictedSecondaryIndexUpdateInput(node.Children[1])
+		}
+		return builder.isUnrestrictedSecondaryIndexUpdateInput(node.Children[0])
+	default:
+		return false
+	}
+}
+
+func estimatedHashBuildRetainedBytes(node *plan.Node) (float64, bool) {
+	if node == nil || node.Stats == nil {
+		return 0, false
+	}
+	rows := node.Stats.Outcnt
+	rowSize := node.Stats.Rowsize
+	if math.IsNaN(rows) || math.IsInf(rows, 0) || rows < 0 ||
+		math.IsNaN(rowSize) || math.IsInf(rowSize, 0) || rowSize <= 0 {
+		return 0, false
+	}
+	if rows == 0 {
+		return 0, true
+	}
+	if rows > math.MaxFloat64/rowSize {
+		return math.MaxFloat64, true
+	}
+	return rows * rowSize, true
 }
 
 // disableMemoryUnsafeRightDedup keeps RIGHT DEDUP as the small-input fast path.

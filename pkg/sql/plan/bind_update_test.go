@@ -21,7 +21,9 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
+	statspb "github.com/matrixorigin/matrixone/pkg/pb/statsinfo"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/stretchr/testify/require"
 )
@@ -60,6 +62,146 @@ func TestIrregularIndexAffectedByUpdate(t *testing.T) {
 			require.Equal(t, tt.want, affected)
 		})
 	}
+}
+
+type updateIndexBuildTestContext struct {
+	*MockCompilerContext
+	statsCache *StatsCache
+	statsByID  map[uint64]*statspb.StatsInfo
+}
+
+func (ctx *updateIndexBuildTestContext) GetStatsCache() *StatsCache {
+	return ctx.statsCache
+}
+
+func (ctx *updateIndexBuildTestContext) Stats(obj *planpb.ObjectRef, _ *Snapshot) (*statspb.StatsInfo, error) {
+	if obj == nil {
+		return nil, nil
+	}
+	return ctx.statsByID[uint64(obj.Obj)], nil
+}
+
+type updateIndexBuildTestOptimizer struct {
+	ctx *updateIndexBuildTestContext
+}
+
+func (optimizer *updateIndexBuildTestOptimizer) CurrentContext() CompilerContext {
+	return optimizer.ctx
+}
+
+func (optimizer *updateIndexBuildTestOptimizer) Optimize(stmt tree.Statement) (*Query, error) {
+	queryPlan, err := BuildPlan(optimizer.ctx, stmt, false)
+	if err != nil {
+		return nil, err
+	}
+	return queryPlan.GetQuery(), nil
+}
+
+func TestUpdateIndexLookupBuildSideUsesNarrowIndex(t *testing.T) {
+	newOptimizer := func() Optimizer {
+		mock := NewMockOptimizer(true)
+		addIndexHintChoiceTableForTest(mock)
+		indexTableName := catalog.SecondaryIndexTableNamePrefix + "update_build_side"
+		mainTable := mock.ctxt.tables["index_hint_t"]
+		rowIDCol := mainTable.Cols[len(mainTable.Cols)-1]
+		mainTable.Cols = append(mainTable.Cols[:len(mainTable.Cols)-1],
+			&planpb.ColDef{
+				ColId: 4, Name: "payload", OriginName: "payload",
+				Typ:     planpb.Type{Id: int32(types.T_varchar), Width: 2_000},
+				Default: &planpb.Default{NullAbility: true},
+			},
+			rowIDCol,
+		)
+		mainTable.Name2ColIndex["payload"] = 3
+		mainTable.Indexes = []*planpb.IndexDef{{
+			IndexName:      "idx_a",
+			Parts:          []string{"a", catalog.CreateAlias("id")},
+			IndexTableName: indexTableName,
+			TableExist:     true,
+		}}
+		addIndexHintIndexTableForTest(mock, indexTableName, 25367)
+		// The production stats collector reports the observed encoded key size.
+		// Keep the mock equally representative instead of its generic MAX_VARCHAR
+		// capacity, which is not a retained-row estimate.
+		mock.ctxt.tables[indexTableName].Cols[0].Typ.Width = 16
+
+		const tableRows = uint64(20_000_000)
+		mainStats := NewStatsInfo()
+		mainStats.TableCnt = float64(tableRows)
+		mainStats.BlockNumber = 2_500
+		mainStats.SizeMap = map[string]uint64{
+			"id": tableRows * 4, "a": tableRows * 4, "b": tableRows * 4,
+			"payload": tableRows * 2_000,
+		}
+		indexStats := NewStatsInfo()
+		indexStats.TableCnt = float64(tableRows)
+		indexStats.BlockNumber = 2_500
+		indexStats.SizeMap = map[string]uint64{
+			catalog.IndexTableIndexColName:   tableRows * 16,
+			catalog.IndexTablePrimaryColName: tableRows * 4,
+		}
+		statsCache := NewStatsCache()
+		statsCache.Set(mainTable.TblId, mainStats)
+		statsCache.Set(25367, indexStats)
+		return &updateIndexBuildTestOptimizer{ctx: &updateIndexBuildTestContext{
+			MockCompilerContext: &mock.ctxt,
+			statsCache:          statsCache,
+			statsByID: map[uint64]*statspb.StatsInfo{
+				mainTable.TblId: mainStats,
+				25367:           indexStats,
+			},
+		}}
+	}
+
+	findLookupJoin := func(t *testing.T, query *planpb.Query) *planpb.Node {
+		t.Helper()
+		visited := make(map[int32]struct{}, len(query.Nodes))
+		var visit func(int32) *planpb.Node
+		visit = func(nodeID int32) *planpb.Node {
+			if nodeID < 0 || int(nodeID) >= len(query.Nodes) {
+				t.Fatalf("reachable plan references invalid node %d", nodeID)
+			}
+			if _, ok := visited[nodeID]; ok {
+				return nil
+			}
+			visited[nodeID] = struct{}{}
+
+			node := query.Nodes[nodeID]
+			if node.NodeType == planpb.Node_JOIN && node.JoinType == planpb.Node_INNER && len(node.Children) == 2 {
+				for _, childID := range node.Children {
+					child := query.Nodes[childID]
+					if child.NodeType == planpb.Node_TABLE_SCAN && child.TableDef != nil &&
+						catalog.IsSecondaryIndexTable(child.TableDef.Name) {
+						return node
+					}
+				}
+			}
+			for _, childID := range node.Children {
+				if found := visit(childID); found != nil {
+					return found
+				}
+			}
+			return nil
+		}
+
+		for _, rootID := range query.Steps {
+			if found := visit(rootID); found != nil {
+				return found
+			}
+		}
+		t.Fatal("missing reachable UPDATE secondary-index lookup join")
+		return nil
+	}
+
+	logicPlan, err := runOneStmt(newOptimizer(), t, "UPDATE index_hint_t SET a = a + 1")
+	require.NoError(t, err)
+	query := logicPlan.GetQuery()
+	require.NotNil(t, query)
+	join := findLookupJoin(t, query)
+	build := query.Nodes[join.Children[1]]
+	buildsIndex := build.NodeType == planpb.Node_TABLE_SCAN && build.TableDef != nil &&
+		catalog.IsSecondaryIndexTable(build.TableDef.Name)
+	require.True(t, buildsIndex)
 }
 
 func TestSequentialUpdateProjectionLimit(t *testing.T) {
