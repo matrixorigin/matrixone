@@ -4647,9 +4647,9 @@ func TestAssignmentCastRollingUpgradePlanGate(t *testing.T) {
 }
 
 func TestInsertAddsCheckConstraintFilter(t *testing.T) {
-	addDeptCheck := func(mock *MockOptimizer) {
-		tableDef := mock.ctxt.tables["dept"]
-		colPos := tableDef.Name2ColIndex["deptno"]
+	addPositiveCheck := func(mock *MockOptimizer, tableName, columnName string) {
+		tableDef := mock.ctxt.tables[tableName]
+		colPos := tableDef.Name2ColIndex[columnName]
 		colExpr := &plan.Expr{
 			Typ: tableDef.Cols[colPos].Typ,
 			Expr: &plan.Expr_Col{
@@ -4670,7 +4670,7 @@ func TestInsertAddsCheckConstraintFilter(t *testing.T) {
 
 	build := func(sql string) *plan.Query {
 		mock := NewMockOptimizer(true)
-		addDeptCheck(mock)
+		addPositiveCheck(mock, "dept", "deptno")
 
 		stmt, err := mysql.ParseOne(t.Context(), sql, 1)
 		require.NoError(t, err)
@@ -4698,7 +4698,7 @@ func TestInsertAddsCheckConstraintFilter(t *testing.T) {
 
 	t.Run("replace rejects mixed-version cluster", func(t *testing.T) {
 		mock := NewMockOptimizer(true)
-		addDeptCheck(mock)
+		addPositiveCheck(mock, "dept", "deptno")
 		proc := testutil.NewProc(nil)
 		rt := moruntime.ServiceRuntime(proc.GetService())
 		defer rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCLatestVersion)
@@ -4729,6 +4729,44 @@ func TestInsertAddsCheckConstraintFilter(t *testing.T) {
 			}
 		}
 		require.True(t, found)
+	})
+
+	t.Run("insert ignore materializes composite unique lock key before check filter", func(t *testing.T) {
+		mock := NewMockOptimizer(true)
+		addPositiveCheck(mock, "emp", "empno")
+
+		stmt, err := mysql.ParseOne(
+			t.Context(),
+			"insert ignore into emp values (1, 'Alice', 'Engineer', 1, '2024-01-01', 1.00, 1.00, 1)",
+			1,
+		)
+		require.NoError(t, err)
+		query, err := mock.Optimize(stmt)
+		require.NoError(t, err)
+
+		var checkFilter *plan.Node
+		for _, node := range query.Nodes {
+			if node.NodeType != plan.Node_FILTER {
+				continue
+			}
+			for _, expr := range node.FilterList {
+				if exprContainsFuncName(expr, "coalesce") {
+					checkFilter = node
+					break
+				}
+			}
+		}
+		require.NotNil(t, checkFilter)
+		require.Len(t, checkFilter.Children, 1)
+
+		lockKeyProjection := query.Nodes[checkFilter.Children[0]]
+		require.Equal(t, plan.Node_PROJECT, lockKeyProjection.NodeType)
+		hasSerialLockKey := false
+		for _, expr := range lockKeyProjection.ProjectList {
+			hasSerialLockKey = hasSerialLockKey || exprContainsFuncName(expr, "serial")
+		}
+		require.True(t, hasSerialLockKey,
+			"the composite unique lock key must be materialized before the CHECK filter")
 	})
 
 	for _, sql := range []string{
