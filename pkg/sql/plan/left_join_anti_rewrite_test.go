@@ -68,6 +68,23 @@ func TestLeftJoinNullFilterAntiRewriteFailsClosed(t *testing.T) {
 				left join region r on n.n_regionkey = r.r_regionkey
 				where r.r_regionkey is null or n.n_nationkey = 1`,
 		},
+		{
+			name: "computed marker can raise an error",
+			sql: `select n.n_nationkey
+				from nation n
+				left join region r on n.n_regionkey = r.r_regionkey
+				where json_object(r.r_regionkey, 1) is null`,
+		},
+		{
+			name: "materialized computed marker can raise an error",
+			sql: `select n.n_nationkey
+				from nation n
+				left join (
+					select r_regionkey, json_object(r_regionkey, 1) as marker
+					from region
+				) r on n.n_regionkey = r.r_regionkey
+				where r.marker is null`,
+		},
 	}
 
 	for _, test := range tests {
@@ -77,8 +94,8 @@ func TestLeftJoinNullFilterAntiRewriteFailsClosed(t *testing.T) {
 			require.NoError(t, err)
 
 			query := logicalPlan.GetQuery()
-			require.True(t, reachablePlanHasJoinType(query, planpb.Node_LEFT))
-			require.False(t, reachablePlanHasJoinType(query, planpb.Node_ANTI))
+			require.True(t, reachablePlanHasJoinType(query, planpb.Node_LEFT), query.String())
+			require.False(t, reachablePlanHasJoinType(query, planpb.Node_ANTI), query.String())
 		})
 	}
 }

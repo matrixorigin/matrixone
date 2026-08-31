@@ -27,13 +27,17 @@ import (
 // rewriteLeftJoinNullFiltersToAnti recognizes the relational anti-join idiom
 //
 //	left LEFT JOIN right ON match
-//	WHERE right.proven_not_null_expr IS NULL
+//	WHERE right.proven_not_null_column IS NULL
 //
 // when the null-extended side is otherwise unobservable.  A matched right row
 // can never pass the predicate, while an unmatched row always does, so the
-// result is exactly a left ANTI join.  Keep the proof independent of stats and
-// fail closed for nullable expressions, volatile predicates, non-equi joins,
-// or any other consumer of the right-side bindings.
+// result is exactly a left ANTI join.  The marker must trace through pure column
+// projections to a NOT NULL scan column.  A general non-NULL expression is not
+// sufficient: it may reject the NULL-extended row (for example COALESCE), or its
+// evaluation may raise an error that the rewrite would otherwise suppress.
+// Keep the proof independent of stats and fail closed for computed or nullable
+// markers, volatile predicates, non-equi joins, or any other consumer of the
+// right-side bindings.
 //
 // tagCnt contains references from ancestors only.  This lets the rewrite
 // distinguish the anti marker in the current FILTER from a right-side value
@@ -143,7 +147,67 @@ func (builder *QueryBuilder) isLeftJoinAntiNullMarker(
 	if getJoinSide(arg, leftTags, rightTags, 0) != JoinSideRight {
 		return false
 	}
-	return builder.exprEffectivelyNotNullableBeforeRemap(arg, rightChildID)
+	return builder.isLeftJoinAntiMarkerColumn(arg, rightChildID)
+}
+
+func (builder *QueryBuilder) isLeftJoinAntiMarkerColumn(
+	expr *plan.Expr,
+	nodeID int32,
+) bool {
+	if expr == nil || !expr.Typ.NotNullable || expr.GetCol() == nil {
+		return false
+	}
+	return builder.leftJoinAntiMarkerOriginatesFromNotNullScan(
+		expr.GetCol(),
+		nodeID,
+	)
+}
+
+func (builder *QueryBuilder) leftJoinAntiMarkerOriginatesFromNotNullScan(
+	col *plan.ColRef,
+	nodeID int32,
+) bool {
+	if builder == nil || builder.qry == nil || col == nil ||
+		nodeID < 0 || int(nodeID) >= len(builder.qry.Nodes) {
+		return false
+	}
+	node := builder.qry.Nodes[nodeID]
+	if node == nil {
+		return false
+	}
+
+	if sourceExpr, childID, materialized := materializedOutputExprBeforeRemap(node, col); materialized {
+		if sourceExpr == nil || !sourceExpr.Typ.NotNullable || sourceExpr.GetCol() == nil {
+			return false
+		}
+		return builder.leftJoinAntiMarkerOriginatesFromNotNullScan(
+			sourceExpr.GetCol(),
+			childID,
+		)
+	}
+
+	for _, bindingTag := range node.BindingTags {
+		if bindingTag != col.RelPos {
+			continue
+		}
+		if node.NodeType != plan.Node_TABLE_SCAN || node.TableDef == nil ||
+			col.ColPos < 0 || int(col.ColPos) >= len(node.TableDef.Cols) ||
+			node.TableDef.Cols[col.ColPos] == nil {
+			return false
+		}
+		return node.TableDef.Cols[col.ColPos].Typ.NotNullable
+	}
+
+	for childIdx, childID := range node.Children {
+		if !builder.nodeContainsBindingTag(childID, col.RelPos) {
+			continue
+		}
+		if nodeNullExtendsChild(node, childIdx) {
+			return false
+		}
+		return builder.leftJoinAntiMarkerOriginatesFromNotNullScan(col, childID)
+	}
+	return false
 }
 
 func nodeExprListsReferenceTagsExceptFilters(node *plan.Node, tags map[int32]bool) bool {
