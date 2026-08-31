@@ -2,7 +2,7 @@
 
 Status: proposed for design approval
 
-Design version: 5
+Design version: 6
 
 Approval: pending distinct reviewer approval
 
@@ -74,8 +74,12 @@ work and then throw before `run_one_operator` reaches its success-only stream
 synchronization. The task then releases processing handles and its reservation,
 and the executor returns the borrowed stream to the pool, even though queued GPU
 work may still reference those resources or the stream may contain a sticky
-CUDA failure. Version 5 fixes that owner boundary and requires `PARTITION` to be
-reentrant rather than serialized.
+CUDA failure. Version 5 fixed that owner boundary and required `PARTITION` to be
+reentrant rather than serialized. Version 6 closes the remaining failure-domain
+contract: a context/device-fatal CUDA failure seals the whole paired sidecar,
+cancels every ticket, makes Flight readiness fail, and terminates the process
+for supervisor restart. Ordinary errors whose streams quiesce cleanly remain
+query-local.
 
 MatrixOne uses its ordinary synchronous output backpressure. If Sirius stops
 pulling, the sidecar withholds the input acknowledgement, `NativeInput.Send`
@@ -115,12 +119,18 @@ The supporting invariants are:
    preserved, including concurrent tasks in the same partition stage.
 10. Direct `TaeRead` keeps its existing schema, physical-type, lease, and
     fallback contract. It shares the same GPU task-lifetime invariant.
+11. The first context/device-fatal CUDA or synchronization failure atomically
+    seals sidecar admission before cancellation begins. No prepared, running,
+    or subsequent execution can use that process generation; bounded fail-stop
+    termination and supervisor restart create the next healthy generation.
 
 The negation of the contract includes lost or duplicate batches, using a stream
 from another account/query/snapshot, acknowledging a batch before ownership is
 transferred, unbounded buffering under a slow consumer, releasing resources
 before quiescence, eagerly scheduling the next Sirius source batch without
 downstream demand, executing on DuckDB CPU, or accepting a different wire ABI.
+It also includes accepting new work after the process GPU generation is sealed,
+or describing a device-fatal failure as statement-local.
 
 ## 3. Scope
 
@@ -314,6 +324,7 @@ The protocol-v4 capability fixes these values:
 - at most 16 stream inputs and one buffered input slot per read;
 - at most 4 MiB per input batch payload;
 - StreamRead host accounting contract `pre-admitted-execution-v2`;
+- GPU-fatal recovery contract `process-fail-stop-v1`;
 - at most 16 MiB per Substrait plan;
 - the exact operator, expression, function, join, and type allow-lists.
 
@@ -520,8 +531,8 @@ attachment, and borrowed stream through `quiescing`. Success and every exception
 path synchronize the stream before any of those owners unwind. A clean OOM may
 transfer the still-owned input to one bounded retry generation. Any CUDA launch,
 invalid-device, illegal-address, or synchronization failure is terminal; the
-stream is discarded instead of returned to the pool, and the GPU executor is
-marked unavailable until process restart.
+stream is discarded instead of returned to the pool, and Sirius publishes one
+process-fatal GPU notification to the sidecar runtime.
 
 Error precedence is deterministic. If quiescence succeeds, the original
 operator error is reported. If quiescence also fails, the synchronization error
@@ -543,6 +554,47 @@ under the pipeline status mutex. Completion checks use the same mutex and
 notify parent pipelines only after unlocking, so an empty input repository
 cannot be mistaken for completion while a task is being constructed.
 
+### 9.4 Process GPU health and recovery
+
+The paired sidecar process has one generation-scoped GPU health state:
+
+```text
+HEALTHY -> SEALING -> TERMINATING -> process exit
+```
+
+The first `gpu_stream_quiescence_error`, illegal-address, invalid-device, or
+other context/device-fatal CUDA classification performs the `HEALTHY ->
+SEALING` compare-and-swap. That compare-and-swap is the admission-seal
+linearization point. Before publishing cancellation, it makes `GetCapabilities`
+and every new `GetFlightInfo` return Flight `Unavailable` with stable detail
+`GPU_DEVICE_UNAVAILABLE`. An ordinary operator, validation, capacity, or cleanly
+quiesced OOM-exhaustion error does not change process health and remains scoped
+to its execution.
+
+The sealing owner is the sidecar `flight_runtime`. It stores the bounded fatal
+diagnostic, stops ticket admission, gives every prepared/unclaimed and running
+entry terminal status `GPU_DEVICE_UNAVAILABLE`, wakes all input/result waits,
+cancels Sirius/DuckDB work, and prevents `DoGet` or `DoPut` from attaching to an
+old entry. Existing handlers observe that same terminal status. Multiple fatal
+notifications share the first transition and cannot launch multiple shutdowns.
+
+After sealing, a dedicated shutdown owner waits at most
+`MO_SIDECAR_FATAL_SHUTDOWN_GRACE_MS` (default 5 seconds, maximum 60 seconds) for
+workers and handlers to quiesce, shuts down Flight, then exits the process with
+status 70 (the dedicated GPU-fatal process status) even if cleanup did not
+finish. The OS
+and CUDA context teardown are the terminal resource owner when the grace expires.
+In-process device reset or executor reuse is forbidden.
+
+The packaged deployment must use a restart policy with capped exponential
+backoff no greater than 30 seconds. `/ping` is liveness only; the readiness probe
+must call `GetCapabilities`, which becomes ready only after a new process has
+initialized Sirius, its GPU executors, the sidecar capacity owner, and Flight.
+MatrixOne treats disconnect or `GPU_DEVICE_UNAVAILABLE` as a terminal explicit
+stream error, retires local producers, and uses normal reconciliation until the
+old ticket is quiesced or absent after restart. There is no post-visibility
+fallback.
+
 ## 10. Q1-Q3 resource closure
 
 ### Q1: destruction ownership
@@ -558,6 +610,7 @@ cannot be mistaken for completion while a task is being constructed.
 | GPU input processing handles and reservation | GPU pipeline task | release only after success/failure stream quiescence |
 | borrowed CUDA stream | GPU pipeline task | return after clean quiescence; discard on synchronization/CUDA failure |
 | partition temporary/output state | partition task, then destination repositories | task cleanup on failure; synchronized publication transfers outputs |
+| process GPU-health generation | sidecar Flight runtime | first fatal CAS seals admission; one shutdown owner exits the process after bounded grace |
 | GPU pipeline data | Sirius repositories | existing pipeline/memory manager cleanup |
 | result frame slot | sidecar execution entry | `DoGet` read or cancellation |
 | decoded MO result batch | MO result loop | per-frame deferred clean |
@@ -575,6 +628,10 @@ Cancellation does not take an input's data mutex before cancelling its gRPC
 context. Sidecar cancellation wakes input and result condition variables and
 interrupts Sirius/DuckDB. All RPCs are bounded by the minimum of caller,
 request, lease-safe, and sidecar ticket deadlines.
+
+Fatal-GPU shutdown does not wait indefinitely for the data path it controls.
+The independent shutdown owner waits no more than the configured 5-second
+default grace, then process exit makes OS/CUDA teardown the final release edge.
 
 ### Q3: accumulation bounds
 
@@ -674,7 +731,11 @@ or aggregate fits.
 - Stream mode exposes no TAE path, manifest, object credential, or resolver
   endpoint.
 - One sidecar is paired with one local CN. A sidecar is not shared across CNs.
-- Failure is contained to the statement and its query-local sidecar entry.
+- Ordinary protocol, operator, capacity, cancellation, and cleanly quiesced OOM
+  failures are contained to the statement and its query-local sidecar entry.
+- A context/device-fatal CUDA or stream-quiescence failure has process-wide
+  blast radius by design: admission seals first, every ticket receives
+  `GPU_DEVICE_UNAVAILABLE`, readiness fails, and the process exits for restart.
 
 ## 12. Compatibility, rollout, and rollback
 
@@ -688,9 +749,11 @@ Rollout order is:
 1. merge and publish merge-ready Sirius and sidecar revisions;
 2. deploy the paired sidecar and verify capability negotiation while stream mode
    remains unused;
-3. deploy MatrixOne with stream mode disabled by default;
-4. run the acceptance matrix on one local CN/sidecar pair;
-5. permit explicit `SIDECAR STREAM` use only after approval.
+3. configure the GPU-fatal non-zero restart policy, capped backoff, and
+   `GetCapabilities` readiness probe;
+4. deploy MatrixOne with stream mode disabled by default;
+5. run the acceptance matrix on one local CN/sidecar pair;
+6. permit explicit `SIDECAR STREAM` use only after approval.
 
 Mixed CN revisions are allowed only because each CN negotiates with its own
 sidecar and the feature is explicit. A mismatched pair rejects negotiation. A
@@ -700,6 +763,11 @@ Rollback disables explicit stream use and restores the previously pinned
 sidecar image. Direct `TaeRead` and native MatrixOne execution remain available
 and unchanged. Protocol or schema mismatch never triggers post-visibility
 fallback.
+
+A GPU-fatal restart is recovery rather than protocol rollback. The old process
+generation never becomes ready again. Its tickets become terminal or disappear
+with process exit; a newly initialized process has an empty ticket registry and
+must pass capability/readiness checks before accepting work.
 
 ## 13. Observability
 
@@ -711,6 +779,8 @@ secrets:
 - input batches/rows/payload bytes and result batches/rows/payload bytes;
 - GPU backend evidence showing `GPU_MO_SCAN` and `SIRIUS_GPU` actually started;
 - cancellation source and terminal outcome;
+- process GPU-health generation/state, first fatal class, admission-seal time,
+  affected ticket count, shutdown grace outcome, exit status, and restart count;
 - active tickets, active input handlers, retained reconciliation owners;
 - streamed-input admission capacity, current/peak admitted bytes, admitted
   reads, rejected bytes/reads, and terminal zero balance;
@@ -740,6 +810,7 @@ and closes every row below.
 | injected failure | MO producer failure, sidecar input failure, Sirius consumer failure, disconnect, timeout, and retryable cleanup |
 | slow consumer and full barrier | deterministic maximum-concurrency barriers prove native MO readers stop at their bounded pipeline window, one shared Flight/sidecar-prefetch frame is unacknowledged per admitted read, admission rejects the first envelope beyond capacity before ticket publication, and terminal admitted bytes return to zero |
 | GPU task failure lifetime | a deterministic operator enqueues GPU work and then fails; input handles, reservation, and stream remain owned until quiescence, clean OOM alone is retryable, and a failed synchronization discards the stream |
+| GPU-fatal blast radius and recovery | injected fatal notification races concurrent Prepare, prepared tickets, running input/result waits, and duplicate fatal reports; admission seals first, every entry receives `GPU_DEVICE_UNAVAILABLE`, readiness fails, one shutdown owner exits within grace, and a fresh process starts with no old tickets |
 | GPU execution | query-scoped evidence records `SIRIUS_GPU` and `GPU_MO_SCAN`; two and four configured workers execute concurrent tasks in the same `PARTITION` stage with exact serial-equivalent fingerprints |
 | correctness | typed native-MO equality for all 22 TPC-H SF1 queries on one reused process |
 | SF10 correctness and decision data | typed equality for all 22 queries on one reused process; Q9 repeats ten times; record storage bytes, rows/bytes before serialization, transferred bytes, CN CPU/peak memory, sidecar host/GPU peak and utilization, time to first row, and total latency |
@@ -780,6 +851,7 @@ body must link this design at its approved commit and the final evidence record.
 | one frame per Sirius source task | removes multi-frame coalescing and eager self-scheduling; H2D completion releases the claim without scheduling |
 | exception-safe GPU task quiescence | success and failure synchronize before releasing task resources; only clean OOM retries, and a poisoned stream is never pooled |
 | reentrant partition execution | immutable operator metadata plus task-local state preserves configured multi-stream concurrency and removes dependence on coarse scan batching |
+| fail-stop GPU recovery | ordinary cleanly quiesced errors remain query-local; context/device-fatal errors seal the paired sidecar, cancel all tickets, fail readiness, and exit for bounded supervisor restart |
 | bounded TPC-H stabilization on the current fork | delivers the required workload without claiming general unbounded streaming; migration to upstream partial-barrier scheduling is a separate effort |
 | flat-only result vectors | prevents tiny compressed frames from expanding into unbounded MatrixOne result work |
 | exact capability equality | rejects mixed ABI revisions before execution rather than attempting unsafe compatibility |
