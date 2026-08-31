@@ -771,7 +771,7 @@ desc time_format_bounds;
 zero_weeks  ¦  VARCHAR(29)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 full_hour  ¦  VARCHAR(11)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 full_time  ¦  VARCHAR(17)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-signed_minute  ¦  VARCHAR(3)  ¦  YES  ¦    ¦  null  ¦    ¦
+signed_minute  ¦  VARCHAR(3)  ¦  YES  ¦    ¦  null  ¦    ¦  
 select * from time_format_bounds;
 ➤ zero_weeks[12,29,0]  ¦  full_hour[12,11,0]  ¦  full_time[12,17,0]  ¦  signed_minute[12,3,0]  𝄀
 613566757|613566757|613566757  ¦  -2562047787  ¦  -2562047787:59:59  ¦  -59
