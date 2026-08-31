@@ -4216,10 +4216,6 @@ func parquetRemainingBudget(currentBytes int, budget uint64) uint64 {
 	return budget - uint64(currentBytes)
 }
 
-func parquetBatchAtByteBudget(bat *batch.Batch, rows int, budget uint64) bool {
-	return rows > 0 && budget > 0 && uint64(bat.Size()) >= budget
-}
-
 // generatedBatchBytes accounts for columns populated after parquet decoding.
 // They still belong to the returned batch, so admission reserves their logical
 // vector slots before source progress is published. Varlena payloads are
@@ -4306,52 +4302,6 @@ func (h *ParquetHandler) rowsToGeneratedByteBudget(maxRows int, param *ExternalP
 type parquetVarlenaRange struct {
 	offset uint32
 	length uint32
-}
-
-func parquetRowsToByteBudget(
-	bat *batch.Batch,
-	startRow int,
-	maxRows int,
-	baseBytes int,
-	budget uint64,
-) int {
-	if maxRows <= startRow {
-		return startRow
-	}
-	if budget == 0 {
-		return maxRows
-	}
-	size := uint64(max(baseBytes, 0))
-	seenRanges := make([]map[parquetVarlenaRange]struct{}, len(bat.Vecs))
-	for row := startRow; row < maxRows; row++ {
-		for colIdx, vec := range bat.Vecs {
-			if vec == nil || row >= vec.Length() {
-				continue
-			}
-			size = addParquetBytes(size, uint64(vec.GetType().TypeSize()))
-			if vec.GetType().IsVarlen() && !vec.IsNull(uint64(row)) {
-				value := vector.GetFixedAtNoTypeCheck[types.Varlena](vec, row)
-				if !value.IsSmall() {
-					offset, length := value.OffsetLen()
-					key := parquetVarlenaRange{offset: offset, length: length}
-					if seenRanges[colIdx] == nil {
-						seenRanges[colIdx] = make(map[parquetVarlenaRange]struct{})
-					}
-					if _, ok := seenRanges[colIdx][key]; !ok {
-						seenRanges[colIdx][key] = struct{}{}
-						size = addParquetBytes(size, uint64(length))
-					}
-				}
-			}
-		}
-		if size > budget {
-			if startRow == 0 && row == 0 {
-				return 1
-			}
-			return row
-		}
-	}
-	return maxRows
 }
 
 func (h *ParquetHandler) parquetRowsToByteBudget(
