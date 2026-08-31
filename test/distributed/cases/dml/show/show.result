@@ -220,7 +220,7 @@ show variables like 'autocommit';
 ➤ Variable_name[12,0,0]  ¦  Value[12,0,0]  𝄀
 autocommit  ¦  on
 drop table if exists t1;
-create table t1(c1 int primary key auto_increment,c2 tinyint not null default 4,c3 smallint,c4 bigint,c5 tinyint unsigned,c6 smallint unsigned,c7 int unsigned,c8 bigint unsigned,c9 float,c10 double,c11 date,c12 datetime,c13 timestamp on update current_timestamp,c14 char,c15 varchar default 'q',c16 json,c17 decimal,c18 text,c19 blob,c20 uuid);
+create table t1(c1 int primary key auto_increment,c2 tinyint not null default 4,c3 smallint,c4 bigint,c5 tinyint unsigned,c6 smallint unsigned,c7 int unsigned,c8 bigint unsigned,c9 float,c10 double,c11 date,c12 datetime,c13 timestamp on update current_timestamp,c14 char,c15 varchar default 'q',c16 json,c17 decimal(38,0),c18 text,c19 blob,c20 uuid);
 show create table t1;
 ➤ Table[12,-1,0]  ¦  Create Table[12,-1,0]  𝄀
 t1  ¦  CREATE TABLE `t1` (

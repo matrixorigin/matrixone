@@ -408,6 +408,12 @@ type QueryBuilder struct {
 	deleteNode             map[uint64]int32 //delete node in this query. key is tableId, value is the nodeId of sinkScan node in the delete plan
 
 	// spill memory for aggregate function
+	// jsonProbeFtNodes marks the fulltext index-scan nodes built for a json
+	// PROBE — a prefilter the optimizer injected, not a user MATCH. Their score
+	// is a constant, so the passes that rank by relevance must skip them, and
+	// they sit under a GROUP BY that does not re-expose the scan's columns.
+	jsonProbeFtNodes map[int32]bool
+
 	aggSpillMem int64
 
 	// spill memory for join

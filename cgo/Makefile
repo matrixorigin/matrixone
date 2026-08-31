@@ -6,8 +6,11 @@ CC ?= gcc
 # Yeah, fast math.  We want it to be fast, for all xcall, 
 # IEEE compliance should not be an issue.
 OPT_LV := -O3 -ffast-math -ftree-vectorize -funroll-loops
-COMMON_CFLAGS := -g $(OPT_LV) -Wall -Werror -fPIC -I../thirdparties/install/include
-CFLAGS := -std=c11 $(COMMON_CFLAGS)
+# Keep these recursive so the debug target's target-specific OPT_LV reaches
+# prerequisites. Immediate expansion here silently turned `make debug` back
+# into an optimized -O3 build while provenance advertised cpu-debug.
+COMMON_CFLAGS = -g $(OPT_LV) -Wall -Werror -fPIC -I../thirdparties/install/include
+CFLAGS = -std=c11 $(COMMON_CFLAGS)
 OBJS := mo.o arith.o compare.o logic.o xcall.o usearchex.o bloom.o croaring.o cbitmap.o sorted64.o
 CUDA_OBJS :=
 LDFLAGS := -L../thirdparties/install/lib -lusearch_c -lroaring
@@ -60,9 +63,9 @@ ifeq ($(MO_CL_CUDA),1)
 # (The wildcard normal-prereqs add no "no rule" errors on a clean build — they
 # match only already-built objects; the order-only sub-makes create them.)
 cuda_objs:
-	$(MAKE) -C cuda
+	$(MAKE) -C cuda $(if $(filter debug,$(DEBUG_OPT)),dbg=1)
 cuvs_objs:
-	$(MAKE) -C cuvs
+	$(MAKE) -C cuvs $(if $(filter debug,$(DEBUG_OPT)),debug)
 LIB_PREREQS := $(OBJS) $(wildcard cuda/*.o cuvs/*.o) | cuda_objs cuvs_objs
 else
 LIB_PREREQS := $(OBJS)
@@ -91,12 +94,17 @@ test: $(TARGET_LIB)
 	$(MAKE) -C test
 
 debug: override OPT_LV := -O0
+debug: override CFLAGS := $(filter-out -O% -ffast-math -ftree-vectorize -funroll-loops,$(CFLAGS)) -O0
 debug: override DEBUG_OPT := debug
 debug: all
 
 clean:
 	rm -f *.o *.a *.so *.dylib
-ifeq ($(MO_CL_CUDA),1)
+# Accelerator transitions must clean the generation being left, not only the
+# mode requested by the next build. Select by the supported GPU host platform,
+# not MO_CL_CUDA: the CUDA Makefile rejects unsupported macOS/arm64 targets even
+# for clean, while a Linux/x86_64 CPU invocation may be leaving a GPU generation.
+ifeq ($(UNAME_S)_$(UNAME_M),Linux_x86_64)
 	$(MAKE) -C cuda clean
 	$(MAKE) -C cuvs clean
 endif

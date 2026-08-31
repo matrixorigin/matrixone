@@ -833,6 +833,13 @@ func (builder *QueryBuilder) applyIndicesForProject(nodeID int32, projNode *plan
 		// Rewrites either a direct projection path or the aggregate input/scan
 		// boundary found through its single-input ancestors.
 		path := builder.resolveFullTextIndexPath(projNode)
+		// Turn json_extract comparisons on this scan into index probes BEFORE the
+		// MATCH filters are collected below, so a probe is picked up by the very
+		// same rewrite. Runs after scan-level index application, so adding a
+		// fulltext filter here cannot suppress a master/regular index.
+		if path != nil {
+			builder.addJSONFulltextProbes(path.scanNode)
+		}
 		if path != nil && path.aggNode != nil {
 			// agg node and scan node present
 			// get the list of filter that is fulltext_match func

@@ -61,6 +61,13 @@ const (
 	DefaultSyncTaskInterval       = time.Second * 10
 	DefaultFlushWatermarkInterval = time.Hour
 	DefaultFlushWatermarkTTL      = time.Hour
+	// Index jobs persist their watermark far more eagerly than the general job
+	// population. The hour above is right for a consumer that only needs the
+	// watermark to bound work after a restart; an index job's watermark is also
+	// READ — the optimizer consults it to decide whether the index is current
+	// enough to back a mandatory filter (pkg/indexplugin/coverage) — and an
+	// hour-old value makes a perfectly current index look stale.
+	DefaultIndexFlushWatermarkInterval = time.Second * 5
 
 	DefaultRetryTimes    = 5
 	DefaultRetryInterval = time.Second
@@ -73,7 +80,10 @@ type ISCPExecutorOption struct {
 	SyncTaskInterval       time.Duration
 	FlushWatermarkInterval time.Duration
 	FlushWatermarkTTL      time.Duration
-	RetryTimes             int
+	// IndexFlushWatermarkInterval is the flush threshold for ConsumerType_IndexSync
+	// jobs only; see DefaultIndexFlushWatermarkInterval.
+	IndexFlushWatermarkInterval time.Duration
+	RetryTimes                  int
 }
 
 func newISCPTableTree() *btree.BTreeG[*TableEntry] {
@@ -147,6 +157,9 @@ func fillDefaultOption(option *ISCPExecutorOption) *ISCPExecutorOption {
 	if option.FlushWatermarkTTL == 0 {
 		option.FlushWatermarkTTL = DefaultFlushWatermarkTTL
 	}
+	if option.IndexFlushWatermarkInterval == 0 {
+		option.IndexFlushWatermarkInterval = DefaultIndexFlushWatermarkInterval
+	}
 	if option.RetryTimes == 0 {
 		option.RetryTimes = DefaultRetryTimes
 	}
@@ -174,6 +187,7 @@ func NewISCPTaskExecutor(
 			zap.Any("gcttl", option.GCTTL),
 			zap.Any("syncTaskInterval", option.SyncTaskInterval),
 			zap.Any("flushWatermarkInterval", option.FlushWatermarkInterval),
+			zap.Any("indexFlushWatermarkInterval", option.IndexFlushWatermarkInterval),
 			zap.Any("retryTimes", option.RetryTimes),
 			zap.Error(err),
 		)
@@ -444,7 +458,10 @@ func (exec *ISCPTaskExecutor) run(ctx context.Context, worker Worker) {
 	defer exec.wg.Done()
 	syncTaskTrigger := time.NewTicker(exec.option.SyncTaskInterval)
 	defer syncTaskTrigger.Stop()
-	flushWatermarkTrigger := time.NewTicker(exec.option.FlushWatermarkInterval)
+	// The ticker serves every job class, so it must run at the SHORTEST threshold
+	// any class uses; a slower tick silently caps that class's freshness.
+	flushWatermarkTrigger := time.NewTicker(min(
+		exec.option.FlushWatermarkInterval, exec.option.IndexFlushWatermarkInterval))
 	defer flushWatermarkTrigger.Stop()
 	gcTrigger := time.NewTicker(exec.option.GCInterval)
 	defer gcTrigger.Stop()

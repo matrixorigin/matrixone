@@ -1122,6 +1122,7 @@ func TestRoutineManagerHandlerRejectsLifecycleConflictBeforeSessionRead(t *testi
 		routinesByConnID: map[uint32]*Routine{1010: routine},
 	}
 
+	require.ErrorContains(t, rm.Handler(conn, nil), "empty MySQL command packet")
 	require.ErrorContains(
 		t,
 		rm.Handler(conn, []byte{byte(COM_PING)}),
