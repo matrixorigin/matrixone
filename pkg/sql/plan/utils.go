@@ -4070,8 +4070,15 @@ func preparedExprContainsParam(expr *plan.Expr) bool {
 	return false
 }
 
+func canonicalPreparedResultFunctionName(name string) string {
+	if name == "iff" {
+		return "if"
+	}
+	return name
+}
+
 func preparedNumericResultPolymorphicFunction(name string) bool {
-	switch name {
+	switch canonicalPreparedResultFunctionName(name) {
 	case "case", "if", "coalesce", "ifnull", "nullif", "greatest", "least",
 		"sum", "avg", "min", "max", "any_value",
 		"first_value", "last_value", "lag", "lead", "nth_value", "max_by", "max_by_non_null":

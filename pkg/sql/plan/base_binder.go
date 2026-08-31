@@ -3615,7 +3615,7 @@ func markPreparedResultCastsProvisional(
 				}
 			}
 		}
-		if i >= len(astArgs) || !numericFunctionArgKeepsContext(name, i, len(args)) {
+		if i >= len(astArgs) || !preparedSQLExecuteNumericResultValueArg(name, i, len(args)) {
 			continue
 		}
 		if _, explicit := astArgs[i].(*tree.CastExpr); explicit {

@@ -1750,7 +1750,7 @@ func (rule *ResetParamRefRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 			}
 			if rule.isNumericPrefixDependent(rewrittenArg) {
 				if !preparedSQLExecuteNumericResultConsumer(functionName) ||
-					numericFunctionArgKeepsContext(functionName, i, len(exprImpl.F.Args)) {
+					preparedSQLExecuteNumericResultValueArg(functionName, i, len(exprImpl.F.Args)) {
 					numericPrefixDependent = true
 				}
 				if unwrapped, changed := unwrapNumericPrefixDependentImplicitCast(rewrittenArg); changed {
@@ -2915,6 +2915,7 @@ func preparedSQLExecuteNumericResultValueArg(name string, argIndex, argCount int
 	if !preparedSQLExecuteNumericResultConsumer(name) {
 		return false
 	}
+	name = canonicalPreparedResultFunctionName(name)
 	switch name {
 	case "case", "if", "coalesce", "ifnull", "nullif":
 		return numericFunctionArgKeepsContext(name, argIndex, argCount)

@@ -1445,6 +1445,7 @@ func TestFillValuesOfParamsInPlanUsesSQLExecuteSourceTypeInPreparedResultConsume
 	}{
 		{name: "case", sql: "select case when 1 = 1 then ? else 1 end", function: "case"},
 		{name: "if", sql: "select if(1 = 1, ?, 1)", function: "if"},
+		{name: "iff alias", sql: "select iff(1 = 1, ?, 1)", function: "iff"},
 		{name: "coalesce", sql: "select coalesce(?, 1)", function: "coalesce"},
 		{name: "ifnull", sql: "select ifnull(?, 1)", function: "case"},
 		{name: "nullif", sql: "select nullif(?, 1)", function: "case"},

@@ -421,6 +421,7 @@ func TestIssue27088PreparedDecimalCommonType(t *testing.T) {
 			}{
 				{expression: "case when 1 = 1 then ? else 1 end", expectedType: "DECIMAL"},
 				{expression: "if(1 = 1, ?, 1)", expectedType: "DECIMAL"},
+				{expression: "iff(1 = 1, ?, 1)", expectedType: "DECIMAL"},
 				{expression: "coalesce(?, 1)", expectedType: "DECIMAL"},
 				{expression: "ifnull(?, 1)", expectedType: "DECIMAL"},
 				{expression: "nullif(?, 1)", expectedType: "DECIMAL"},
