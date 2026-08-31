@@ -460,6 +460,13 @@ jstfu-test:
 	@test -s xtool/jstfu/target/jstfu.jar
 	@echo "tested and built xtool/jstfu/target/jstfu.jar"
 
+# The S0 Connector/J pool regression deliberately builds its Java fixture and
+# fails when MatrixOne is unavailable; it must never report green by skipping
+# either prerequisite.
+.PHONY: test-connectorj-pool-reset-e2e-local
+test-connectorj-pool-reset-e2e-local:
+	@bash ./optools/connectorj_pool_reset_ci.bash
+
 # build mo-service binary for debugging with go's race detector enabled
 # produced executable is 10x slower and consumes much more memory
 .PHONY: debug

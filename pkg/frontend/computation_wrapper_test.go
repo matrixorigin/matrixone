@@ -284,6 +284,16 @@ func newPreparedExecuteEnv(t testing.TB, stmtID uint32) (*Session, *PrepareStmt,
 }
 
 func newPreparedExecuteEnvForSQL(t testing.TB, stmtID uint32, sql string) (*Session, *PrepareStmt, *TxnComputationWrapper, *ExecCtx) {
+	return newPreparedExecuteEnvForSQLWithCompilerContext(
+		t, stmtID, sql, plan2.NewEmptyCompilerContext())
+}
+
+func newPreparedExecuteEnvForSQLWithCompilerContext(
+	t testing.TB,
+	stmtID uint32,
+	sql string,
+	compilerContext plan2.CompilerContext,
+) (*Session, *PrepareStmt, *TxnComputationWrapper, *ExecCtx) {
 	ctx := statistic.ContextWithStatsInfo(context.Background(), statistic.NewStatsInfo())
 	ctx = defines.AttachAccount(ctx, sysAccountID, rootID, moAdminRoleID)
 	setPu("", config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil))
@@ -297,7 +307,7 @@ func newPreparedExecuteEnvForSQL(t testing.TB, stmtID uint32, sql string) (*Sess
 	prepareString := tree.NewPrepareString(tree.Identifier(stmtName), sql)
 	stmts, err := mysql.Parse(ctx, prepareString.Sql, 1)
 	require.NoError(t, err)
-	preparePlan, err := buildPlan(ctx, nil, plan2.NewEmptyCompilerContext(), prepareString)
+	preparePlan, err := buildPlan(ctx, nil, compilerContext, prepareString)
 	require.NoError(t, err)
 
 	prepareStmt := &PrepareStmt{
@@ -856,6 +866,18 @@ func TestBinaryProtocolRuntimeParamTypesDoesNotScanDecimalPayload(t *testing.T) 
 	require.LessOrEqual(t, allocs, float64(1),
 		"OID-only text-comparison admission must not allocate an input-sized DECIMAL string")
 	require.Equal(t, payload, params.GetRawBytesAt(0), "category admission must not mutate packet provenance")
+}
+
+func TestRuntimeParamTypesContainText(t *testing.T) {
+	require.False(t, runtimeParamTypesContainText(nil))
+	require.False(t, runtimeParamTypesContainText([]types.Type{
+		types.T_int64.ToType(), types.T_decimal128.ToType(), {},
+	}))
+	for _, oid := range []types.T{types.T_char, types.T_varchar, types.T_text} {
+		require.True(t, runtimeParamTypesContainText([]types.Type{
+			types.T_int64.ToType(), oid.ToType(),
+		}), oid.String())
+	}
 }
 
 func BenchmarkBinaryProtocolRuntimeParamTypesLargeDecimal(b *testing.B) {
@@ -1526,6 +1548,201 @@ func TestPreparedExplicitDoubleAbsReusesOriginalCachedCompile(t *testing.T) {
 	floatParams.Free(cw.proc.Mp())
 }
 
+func TestPreparedArithmeticDMLReusesStableRuntimeCategory(t *testing.T) {
+	optimizer := plan2.NewMockOptimizer(false)
+	ses, prepareStmt, cw, execCtx := newPreparedExecuteEnvForSQLWithCompilerContext(
+		t,
+		216,
+		"update nation set n_regionkey = n_regionkey + ? where n_nationkey = ?",
+		optimizer.CurrentContext(),
+	)
+	defer func() {
+		cw.proc.SetPrepareParams(nil)
+		prepareStmt.Close()
+	}()
+	preparePlan := prepareStmt.PreparePlan.GetDcl().GetPrepare().Plan
+	require.True(t, plan2.PreparedPlanNeedsRuntimeSpecialization(preparePlan),
+		"the arithmetic UPDATE must exercise the TPCC runtime-specialization path")
+
+	install := func(values []string, nulls []bool, mysqlTypes []defines.MysqlType) {
+		require.Len(t, values, len(mysqlTypes))
+		require.Len(t, nulls, len(values))
+		oldParams := prepareStmt.params
+		if oldParams != nil {
+			if cw.proc.GetPrepareParams() == oldParams {
+				cw.proc.SetPrepareParams(nil)
+			}
+			oldParams.Free(cw.proc.Mp())
+		}
+		params := vector.NewVec(types.T_text.ToType())
+		paramTypes := make([]byte, 0, len(mysqlTypes)*2)
+		for i, value := range values {
+			require.NoError(t, vector.AppendBytes(params, []byte(value), nulls[i], cw.proc.Mp()))
+			paramTypes = append(paramTypes, byte(mysqlTypes[i]), 0)
+		}
+		prepareStmt.params = params
+		prepareStmt.ParamTypes = paramTypes
+	}
+	freeStmt := func(stmt tree.Statement, owned bool) {
+		if owned && stmt != nil {
+			stmt.Free()
+		}
+	}
+
+	install(
+		[]string{"1", "7"},
+		[]bool{false, false},
+		[]defines.MysqlType{defines.MYSQL_TYPE_LONGLONG, defines.MYSQL_TYPE_LONGLONG},
+	)
+	retComp, runtimePlan, stmt, _, owned, err := initExecuteStmtParam(
+		execCtx, ses, cw, nil, prepareStmt.Name)
+	freeStmt(stmt, owned)
+	require.NoError(t, err)
+	require.Nil(t, retComp)
+	require.NotSame(t, preparePlan, runtimePlan)
+	require.Same(t, runtimePlan, cw.runtimeCachePlan,
+		"the first stable runtime category must stage one reusable plan")
+
+	runtimeCompile := compile.NewCompile(
+		"", "", prepareStmt.Sql, "", "", nil,
+		cw.proc, prepareStmt.PrepareStmt, false, nil, time.Now())
+	require.True(t, cw.installRuntimeCacheCandidate(runtimeCompile))
+	positions := make(map[int32]struct{})
+	require.NoError(t, plan.VisitExpressionsInOwner(runtimePlan, func(expr *plan.Expr) error {
+		return plan.VisitExprTree(expr, func(candidate *plan.Expr) error {
+			if param := candidate.GetP(); param != nil {
+				positions[param.Pos] = struct{}{}
+			}
+			return nil
+		})
+	}))
+	require.Contains(t, positions, int32(0))
+	require.Contains(t, positions, int32(1))
+
+	install(
+		[]string{"2", "8"},
+		[]bool{false, false},
+		[]defines.MysqlType{defines.MYSQL_TYPE_LONGLONG, defines.MYSQL_TYPE_LONGLONG},
+	)
+	retComp, secondPlan, stmt, _, owned, err := initExecuteStmtParam(
+		execCtx, ses, cw, nil, prepareStmt.Name)
+	freeStmt(stmt, owned)
+	require.NoError(t, err)
+	require.Same(t, runtimeCompile, retComp,
+		"same-domain values must reuse the specialized compile")
+	require.Same(t, runtimePlan, secondPlan,
+		"same-domain values must not deep-copy the plan again")
+	require.Equal(t, "2", cw.proc.GetPrepareParams().GetStringAt(0))
+	require.Equal(t, "8", cw.proc.GetPrepareParams().GetStringAt(1))
+
+	install(
+		[]string{"1.5", "8"},
+		[]bool{false, false},
+		[]defines.MysqlType{defines.MYSQL_TYPE_DOUBLE, defines.MYSQL_TYPE_LONGLONG},
+	)
+	retComp, floatPlan, stmt, _, owned, err := initExecuteStmtParam(
+		execCtx, ses, cw, nil, prepareStmt.Name)
+	freeStmt(stmt, owned)
+	require.NoError(t, err)
+	require.Nil(t, retComp)
+	require.NotSame(t, runtimePlan, floatPlan,
+		"a runtime-domain switch must not reuse the integer plan")
+	require.Same(t, floatPlan, cw.runtimeCachePlan)
+	require.Same(t, runtimeCompile, prepareStmt.runtimeCompile,
+		"the old category remains live until the replacement compile succeeds")
+	floatCompile := compile.NewCompile(
+		"", "", prepareStmt.Sql, "", "", nil,
+		cw.proc, prepareStmt.PrepareStmt, false, nil, time.Now())
+	require.True(t, cw.installRuntimeCacheCandidate(floatCompile))
+
+	install(
+		[]string{"4", "8"},
+		[]bool{false, false},
+		[]defines.MysqlType{defines.MYSQL_TYPE_LONGLONG, defines.MYSQL_TYPE_LONGLONG},
+	)
+	retComp, integerPlan, stmt, _, owned, err := initExecuteStmtParam(
+		execCtx, ses, cw, nil, prepareStmt.Name)
+	freeStmt(stmt, owned)
+	require.NoError(t, err)
+	require.Nil(t, retComp)
+	require.NotSame(t, floatPlan, integerPlan,
+		"the bounded cache must miss when execution returns to the integer domain")
+	require.Same(t, integerPlan, cw.runtimeCachePlan)
+	require.Same(t, floatCompile, prepareStmt.runtimeCompile)
+	integerCompile := compile.NewCompile(
+		"", "", prepareStmt.Sql, "", "", nil,
+		cw.proc, prepareStmt.PrepareStmt, false, nil, time.Now())
+	require.True(t, cw.installRuntimeCacheCandidate(integerCompile))
+
+	install(
+		[]string{"", "8"},
+		[]bool{true, false},
+		[]defines.MysqlType{defines.MYSQL_TYPE_LONGLONG, defines.MYSQL_TYPE_LONGLONG},
+	)
+	retComp, _, stmt, _, owned, err = initExecuteStmtParam(
+		execCtx, ses, cw, nil, prepareStmt.Name)
+	freeStmt(stmt, owned)
+	require.NoError(t, err)
+	require.NotSame(t, integerCompile, retComp,
+		"NULL has no stable runtime category and must not reuse the integer compile")
+	require.Same(t, integerCompile, prepareStmt.runtimeCompile,
+		"a non-cacheable execution must not evict the last valid category")
+	require.Nil(t, cw.runtimeCachePlan)
+}
+
+func BenchmarkInitExecuteStmtParamRepeatedTPCCArithmeticUpdate(b *testing.B) {
+	optimizer := plan2.NewMockOptimizer(false)
+	ses, prepareStmt, cw, execCtx := newPreparedExecuteEnvForSQLWithCompilerContext(
+		b,
+		217,
+		"update nation set n_regionkey = n_regionkey + ? where n_nationkey = ?",
+		optimizer.CurrentContext(),
+	)
+	defer func() {
+		cw.proc.SetPrepareParams(nil)
+		prepareStmt.Close()
+	}()
+	prepareStmt.params = vector.NewVec(types.T_text.ToType())
+	for _, value := range []string{"1", "7"} {
+		require.NoError(b, vector.AppendBytes(
+			prepareStmt.params, []byte(value), false, cw.proc.Mp()))
+	}
+	prepareStmt.ParamTypes = []byte{
+		byte(defines.MYSQL_TYPE_LONGLONG), 0,
+		byte(defines.MYSQL_TYPE_LONGLONG), 0,
+	}
+	_, runtimePlan, stmt, _, owned, err := initExecuteStmtParam(
+		execCtx, ses, cw, nil, prepareStmt.Name)
+	require.NoError(b, err)
+	if owned && stmt != nil {
+		stmt.Free()
+	}
+	cacheCandidate := cw.runtimeCachePlan != nil
+	var runtimeCompile *compile.Compile
+	if cacheCandidate {
+		runtimeCompile = compile.NewCompile(
+			"", "", prepareStmt.Sql, "", "", nil,
+			cw.proc, prepareStmt.PrepareStmt, false, nil, time.Now())
+		require.True(b, cw.installRuntimeCacheCandidate(runtimeCompile))
+	}
+
+	b.ReportAllocs()
+	b.ResetTimer()
+	for b.Loop() {
+		retComp, currentPlan, currentStmt, _, currentOwned, runErr := initExecuteStmtParam(
+			execCtx, ses, cw, nil, prepareStmt.Name)
+		if runErr != nil {
+			b.Fatal(runErr)
+		}
+		if cacheCandidate && (retComp != runtimeCompile || currentPlan != runtimePlan) {
+			b.Fatalf("runtime cache miss: comp=%p plan=%p", retComp, currentPlan)
+		}
+		if currentOwned && currentStmt != nil {
+			currentStmt.Free()
+		}
+	}
+}
+
 func TestPreparedRuntimeCacheSupportsMixedAndStringCategories(t *testing.T) {
 	decimal := func(value string) plan2.ParamValue {
 		return plan2.ParamValue{Value: value, PrepareParamKind: vector.PrepareParamDecimal,
@@ -1605,6 +1822,8 @@ func TestRuntimeSpecializationReplacementCommitsOnlyAfterCompileSuccess(t *testi
 		"", "", prepareStmt.Sql, "", "", nil,
 		cw.proc, prepareStmt.PrepareStmt, false, nil, time.Now())
 	prepareStmt.installRuntimeSpecializationCache("old", oldPlan, oldCompile)
+	require.Nil(t, prepareStmt.installRuntimeSpecializationCache("old", oldPlan, oldCompile),
+		"reinstalling the live compile must not retire it")
 
 	failedPlan := &plan.Plan{Plan: &plan.Plan_Query{Query: &plan.Query{StmtType: plan.Query_SELECT}}}
 	cw.runtimeCacheTarget = prepareStmt
@@ -1621,6 +1840,8 @@ func TestRuntimeSpecializationReplacementCommitsOnlyAfterCompileSuccess(t *testi
 	newCompile := compile.NewCompile(
 		"", "", prepareStmt.Sql, "", "", nil,
 		cw.proc, prepareStmt.PrepareStmt, false, nil, time.Now())
+	newMessageBoard := cw.proc.GetMessageBoard()
+	require.NotNil(t, newMessageBoard)
 	cw.runtimeCacheTarget = prepareStmt
 	cw.runtimeCacheKey = "new"
 	cw.runtimeCachePlan = newPlan
@@ -1630,6 +1851,15 @@ func TestRuntimeSpecializationReplacementCommitsOnlyAfterCompileSuccess(t *testi
 	require.Same(t, newCompile, prepareStmt.runtimeCompile)
 	require.Nil(t, cw.runtimeCacheTarget)
 	require.Nil(t, cw.runtimeCachePlan)
+	require.Same(t, newMessageBoard, cw.proc.GetMessageBoard(),
+		"publishing the replacement must not release the old compile into the shared Process")
+	require.Len(t, cw.runtimeCacheRetiredCompiles, 1)
+	require.Same(t, oldCompile, cw.runtimeCacheRetiredCompiles[0].compile)
+
+	cw.releaseRuntimeCacheRetiredCompiles()
+	require.Empty(t, cw.runtimeCacheRetiredCompiles)
+	require.Nil(t, cw.proc.GetMessageBoard(),
+		"the displaced compile is released only after the candidate statement finishes")
 
 	prepareStmt.clearRuntimeSpecializationCache()
 	require.Empty(t, prepareStmt.runtimeSpecializationKey)
