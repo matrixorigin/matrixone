@@ -36,6 +36,29 @@ type UT_ForceTransCheck struct{}
 
 type TransferOption func(*TransferFlow)
 
+const (
+	// RowID transfer has a material fixed cost: every batch constructs an IN
+	// filter, prunes replacement objects, and builds a reader.  One object block
+	// (8192 rows) made large updates pay that setup cost thousands of times.
+	// Aggregate up to eight blocks, with an 8 MiB soft limit that flushes wide
+	// primary keys at the next source-batch boundary.
+	transferBatchRowLimit  = objectio.BlockMaxRows * 8
+	transferBatchSizeLimit = mpool.MB * 8
+)
+
+func transferBatchLimitReached(rowCount, byteSize int, sourceBatchDone bool) bool {
+	if rowCount == 0 {
+		return false
+	}
+	if rowCount >= transferBatchRowLimit {
+		return true
+	}
+	// Computing Batch.Size for every row would add work to the hot path.  The
+	// source reader already bounds its batches, so enforce the byte limit once
+	// per source batch and bound any overshoot by that source batch.
+	return sourceBatchDone && byteSize >= transferBatchSizeLimit
+}
+
 func newDeletedObjectFilter(
 	deletedObjects []objectio.ObjectStats,
 ) func(*objectio.ObjectId) bool {
@@ -280,12 +303,15 @@ func (flow *TransferFlow) processOneBatch(ctx context.Context, buffer *batch.Bat
 		flow.transferred.rowCnt++
 		flow.transferred.objDetails[objectid.ShortStringEx()]++
 
-		if staged.Vecs[0].Length() >= objectio.BlockMaxRows {
+		if transferBatchLimitReached(staged.RowCount(), 0, false) {
 			if err := flow.transferStaged(ctx); err != nil {
 				return err
 			}
 			staged = flow.getStaged()
 		}
+	}
+	if transferBatchLimitReached(staged.RowCount(), staged.Size(), true) {
+		return flow.transferStaged(ctx)
 	}
 	return nil
 }
