@@ -378,6 +378,7 @@ func (h *ParquetHandler) prepare(param *ExternalParam) error {
 	if h.rowGroup != nil {
 		rowGroupChunks = h.rowGroup.ColumnChunks()
 	}
+	projectedColumns := make([]*parquet.Column, 0, len(param.Attrs))
 	for _, attr := range param.Attrs {
 		colIdx := int(attr.ColIndex)
 		if colIdx < 0 || colIdx >= len(param.Cols) {
@@ -425,6 +426,7 @@ func (h *ParquetHandler) prepare(param *ExternalParam) error {
 			continue
 		}
 		h.hasPhysicalCol = true
+		projectedColumns = append(projectedColumns, col)
 
 		physicalCol := col
 		var fn *columnMapper
@@ -470,7 +472,6 @@ func (h *ParquetHandler) prepare(param *ExternalParam) error {
 				return moerr.NewInvalidInputf(param.Ctx,
 					"invalid parquet leaf column index %d for column %s", leafIdx, attr.ColName)
 			}
-			h.pages[colIdx] = rowGroupChunks[leafIdx].Pages()
 		}
 	}
 
@@ -478,9 +479,18 @@ func (h *ParquetHandler) prepare(param *ExternalParam) error {
 		h.rowCountOnly = true
 	}
 
-	// init row reader if has nested columns
 	if h.hasNestedCols {
-		h.rowReader = h.rowGroup.Rows()
+		projectedRowGroup, err := projectParquetRowGroup(param.Ctx, h.rowGroup, projectedColumns)
+		if err != nil {
+			return err
+		}
+		h.rowReader = projectedRowGroup.Rows()
+	} else {
+		for colIdx, col := range h.cols {
+			if col != nil && col.Leaf() {
+				h.pages[colIdx] = rowGroupChunks[col.Index()].Pages()
+			}
+		}
 	}
 
 	return nil
