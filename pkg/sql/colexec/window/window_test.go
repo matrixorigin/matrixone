@@ -862,7 +862,7 @@ func newTypedSumAggExpr(t *testing.T, pos int32, typ types.Type) aggexec.AggFunc
 		e.GetEncodedOverloadID(), false, []*plan.Expr{newColExprWithType(pos, typ)}, nil)
 }
 
-func newTypedMaxAggExpr(t *testing.T, pos int32, typ types.Type) aggexec.AggFuncExecExpression {
+func newTypedMaxAggExpr(t testing.TB, pos int32, typ types.Type) aggexec.AggFuncExecExpression {
 	e, err := function.GetFunctionByName(context.Background(), "max", []types.Type{typ})
 	require.NoError(t, err)
 	return aggexec.MakeAggFunctionExpression(
@@ -1626,7 +1626,13 @@ func TestCumulativeAggregateResetsAtPartitionBoundary(t *testing.T) {
 
 func TestCumulativeMaxUsesRunningAggregateAcrossChunks(t *testing.T) {
 	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
-	bat := makeInt32Batch(proc.Mp(), []int32{3, 1, 5, 2})
+	values := make([]int32, 512)
+	want := make([]int32, len(values))
+	for i := range values {
+		values[i] = int32(256 - i%256)
+		want[i] = 256
+	}
+	bat := makeInt32Batch(proc.Mp(), values)
 	spec := makeWindowSpec()
 	spec.GetW().Frame = makeCumulativeFrame()
 	arg := &Window{
@@ -1635,24 +1641,51 @@ func TestCumulativeMaxUsesRunningAggregateAcrossChunks(t *testing.T) {
 	}
 	ctr := &container{
 		bat:     bat,
+		ps:      []int64{0, 256},
 		aggVecs: []colexec.ExprEvalVector{{Vec: []*vector.Vector{bat.Vecs[0]}}},
 	}
 
-	first, err := ctr.processAggregateFuncRange(0, arg, proc, 0, 2)
+	first, err := ctr.processAggregateFuncRange(0, arg, proc, 0, 200)
 	require.NoError(t, err)
-	require.Equal(t, []int32{3, 3}, vector.MustFixedColWithTypeCheck[int32](first))
+	require.Equal(t, want[:200], vector.MustFixedColWithTypeCheck[int32](first))
 	require.NotNil(t, ctr.runningAgg, "cumulative MIN/MAX must retain one running state")
 	first.Free(proc.Mp())
 
-	second, err := ctr.processAggregateFuncRange(0, arg, proc, 2, 4)
+	second, err := ctr.processAggregateFuncRange(0, arg, proc, 200, 300)
 	require.NoError(t, err)
-	require.Equal(t, []int32{5, 5}, vector.MustFixedColWithTypeCheck[int32](second))
-	require.Nil(t, ctr.runningAgg)
+	require.Equal(t, want[200:300], vector.MustFixedColWithTypeCheck[int32](second))
+	require.NotNil(t, ctr.runningAgg)
 	second.Free(proc.Mp())
+
+	third, err := ctr.processAggregateFuncRange(0, arg, proc, 300, len(values))
+	require.NoError(t, err)
+	require.Equal(t, want[300:], vector.MustFixedColWithTypeCheck[int32](third))
+	require.Nil(t, ctr.runningAgg)
+	third.Free(proc.Mp())
 
 	bat.Clean(proc.Mp())
 	proc.Free()
 	require.Zero(t, proc.Mp().CurrNB())
+}
+
+func TestCumulativePartitionUsesRunning(t *testing.T) {
+	for _, test := range []struct {
+		name       string
+		start, end int
+		want       bool
+	}{
+		{name: "empty", start: 4, end: 4},
+		{name: "singleton", start: 3, end: 4},
+		{name: "below state chunk cost", end: 128},
+		{name: "above state chunk cost", end: 129, want: true},
+		{name: "large", end: 256, want: true},
+		{name: "large nonzero start", start: 17, end: 273, want: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			require.Equal(t, test.want,
+				cumulativePartitionUsesRunning(test.start, test.end))
+		})
+	}
 }
 
 func TestBoundedSlidingSumAcrossOutputChunks(t *testing.T) {
