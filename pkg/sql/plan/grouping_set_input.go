@@ -61,7 +61,7 @@ func (builder *QueryBuilder) sharePendingGroupingSetInputs(rootID int32) int32 {
 	if proc == nil {
 		return rootID
 	}
-	version, ok := runtime.ServiceRuntime(proc.GetService()).GetGlobalVariables(runtime.MOProtocolVersion)
+	version, _ := runtime.ServiceRuntime(proc.GetService()).GetGlobalVariables(runtime.MOProtocolVersion)
 	protocolVersion, ok := version.(int64)
 	if !ok || protocolVersion < defines.MORPCVersion43 {
 		return rootID
@@ -485,7 +485,7 @@ func rewriteGroupingSetExpr(expr *planpb.Expr, agg *planpb.Node, scanTag int32, 
 	if fn := expr.GetF(); fn != nil {
 		if fn.Func != nil && fn.Func.ObjName == "grouping" {
 			value := int64(0)
-			for i := len(fn.Args) - 1; i >= 0; i-- {
+			for i := 0; i < len(fn.Args); i++ {
 				value <<= 1
 				col := fn.Args[i].GetCol()
 				if col != nil && !agg.GroupingFlag[col.ColPos] {
