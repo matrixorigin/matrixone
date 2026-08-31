@@ -2592,34 +2592,34 @@ var (
 			output: "select userID as user, MAX(score) as max from t1 group by userID order by user",
 		}, {
 			input:  "load data infile 'test/loadfile5' ignore INTO TABLE T.A FIELDS TERMINATED BY  ',' (@,@,c,d,e,f)",
-			output: "load data infile test/loadfile5 ignore into table t.a fields terminated by , (, , c, d, e, f)",
+			output: "load data infile 'test/loadfile5' ignore into table t.a fields terminated by , (, , c, d, e, f)",
 		}, {
 			input:  "load data infile '/root/lineorder_flat_10.tbl' into table lineorder_flat FIELDS TERMINATED BY '' OPTIONALLY ENCLOSED BY '' LINES TERMINATED BY '';",
-			output: "load data infile /root/lineorder_flat_10.tbl into table lineorder_flat fields terminated by '' optionally enclosed by '' lines terminated by ''",
+			output: "load data infile '/root/lineorder_flat_10.tbl' into table lineorder_flat fields terminated by '' optionally enclosed by '' lines terminated by ''",
 		}, {
 			input:  "load data local infile 'data' replace into table db.a (a, b, @vc, @vd) set a = @vc != 0, d = @vd != 1",
-			output: "load data local infile data replace into table db.a (a, b, @vc, @vd) set a = @vc != 0, d = @vd != 1",
+			output: "load data local infile 'data' replace into table db.a (a, b, @vc, @vd) set a = @vc != 0, d = @vd != 1",
 		}, {
 			input:  "load data local infile 'data' replace into table db.a lines starting by '#' terminated by '\t' ignore 2 lines",
-			output: "load data local infile data replace into table db.a lines starting by # terminated by \t ignore 2 lines",
+			output: "load data local infile 'data' replace into table db.a lines starting by # terminated by \t ignore 2 lines",
 		}, {
 			input:  "load data local infile 'data' replace into table db.a lines starting by '#' terminated by '\t' ignore 2 rows",
-			output: "load data local infile data replace into table db.a lines starting by # terminated by \t ignore 2 lines",
+			output: "load data local infile 'data' replace into table db.a lines starting by # terminated by \t ignore 2 lines",
 		}, {
 			input:  "load data local infile 'data' replace into table db.a lines terminated by '\t' starting by '#' ignore 2 lines",
-			output: "load data local infile data replace into table db.a lines starting by # terminated by \t ignore 2 lines",
+			output: "load data local infile 'data' replace into table db.a lines starting by # terminated by \t ignore 2 lines",
 		}, {
 			input:  "load data local infile 'data' replace into table db.a lines terminated by '\t' starting by '#' ignore 2 rows",
-			output: "load data local infile data replace into table db.a lines starting by # terminated by \t ignore 2 lines",
+			output: "load data local infile 'data' replace into table db.a lines starting by # terminated by \t ignore 2 lines",
 		}, {
 			input:  "load data infile 'data.txt' into table db.a fields terminated by '\t' escaped by '\t'",
-			output: "load data infile data.txt into table db.a fields terminated by \t escaped by \t",
+			output: "load data infile 'data.txt' into table db.a fields terminated by \t escaped by \t",
 		}, {
 			input:  "load data infile 'data.txt' into table db.a fields terminated by '\t' enclosed by '\t' escaped by '\t'",
-			output: "load data infile data.txt into table db.a fields terminated by \t enclosed by \t escaped by \t",
+			output: "load data infile 'data.txt' into table db.a fields terminated by \t enclosed by \t escaped by \t",
 		}, {
 			input:  "load data infile 'data.txt' into table db.a",
-			output: "load data infile data.txt into table db.a",
+			output: "load data infile 'data.txt' into table db.a",
 		}, {
 			input: "load data infile {'filepath'='data.txt', 'compression'='auto'} into table db.a",
 		}, {
@@ -2641,10 +2641,10 @@ var (
 			output: "create external table t (a int) url s3option {'endpoint'='s3.us-west-2.amazonaws.com', 'access_key_id'='******', 'secret_access_key'='******', 'bucket'='test', 'filepath'='*.txt', 'region'='us-west-2'}",
 		}, {
 			input:  "load data infile 'test/loadfile5' ignore INTO TABLE T.A FIELDS TERMINATED BY  ',' (@,@,c,d,e,f)",
-			output: "load data infile test/loadfile5 ignore into table t.a fields terminated by , (, , c, d, e, f)",
+			output: "load data infile 'test/loadfile5' ignore into table t.a fields terminated by , (, , c, d, e, f)",
 		}, {
 			input:  "load data infile '/root/lineorder_flat_10.tbl' into table lineorder_flat FIELDS TERMINATED BY '' OPTIONALLY ENCLOSED BY '' LINES TERMINATED BY '';",
-			output: "load data infile /root/lineorder_flat_10.tbl into table lineorder_flat fields terminated by '' optionally enclosed by '' lines terminated by ''",
+			output: "load data infile '/root/lineorder_flat_10.tbl' into table lineorder_flat fields terminated by '' optionally enclosed by '' lines terminated by ''",
 		}, {
 			input:  "load data infile '/root/lineorder_flat_10.tbl' into table lineorder_flat FIELDS TERMINATED BY '' OPTIONALLY ENCLOSED BY '' LINES TERMINATED BY '' parallel 'true';",
 			output: "load data infile '/root/lineorder_flat_10.tbl' into table lineorder_flat fields terminated by '' optionally enclosed by '' lines terminated by '' parallel 'true' strict 'true' ",
@@ -3889,11 +3889,11 @@ var (
 		},
 		{
 			input:  "load data infile 'test/loadfile5' ignore INTO TABLE T.A FIELDS TERMINATED BY  ',' (@,@,c,d,e,f)",
-			output: "load data infile test/loadfile5 ignore into table t.a fields terminated by , (, , c, d, e, f)",
+			output: "load data infile 'test/loadfile5' ignore into table t.a fields terminated by , (, , c, d, e, f)",
 		},
 		{
 			input:  "load data infile 'data.txt' into table db.a fields terminated by '\t' escaped by '\t'",
-			output: "load data infile data.txt into table db.a fields terminated by \t escaped by \t",
+			output: "load data infile 'data.txt' into table db.a fields terminated by \t escaped by \t",
 		},
 		{
 			input:  `create function helloworld () returns int language sql as 'select id from test_table limit 1'`,
