@@ -39,6 +39,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex"
+	"github.com/matrixorigin/matrixone/pkg/vectorindex/cache"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/metric"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/sqlexec"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
@@ -1376,6 +1377,10 @@ func TestSearchPlanReaderValidatesRoundLimitsBeforeScanning(t *testing.T) {
 }
 
 func TestSearchPlanReaderUsesBoundedMembershipStorageTopK(t *testing.T) {
+	const cacheKey = "tenant=42:centroids_plan_reader:77:1/2"
+	cache.Cache.Remove(cacheKey)
+	t.Cleanup(func() { cache.Cache.Remove(cacheKey) })
+
 	mp := mpool.MustNewZero()
 	proc := testutil.NewProcessWithMPool(t, "", mp)
 	scanner := &scriptedRelationScanner{t: t}

@@ -17,6 +17,7 @@ package readutil
 import (
 	"context"
 	"errors"
+	"math"
 	"sync/atomic"
 	"testing"
 
@@ -367,9 +368,91 @@ func TestReaderSetIndexParamDoesNotPreallocateDistHeap(t *testing.T) {
 	require.Equal(t, limit, r.orderByLimit.Limit)
 	require.Equal(t, plan.BoundType_UNBOUNDED, r.orderByLimit.LowerBoundType)
 	require.Equal(t, plan.BoundType_INCLUSIVE, r.orderByLimit.UpperBoundType)
-	require.Equal(t, float64(4), r.orderByLimit.UpperBound)
+	require.Equal(t, math.Nextafter(float64(4), math.Inf(1)), r.orderByLimit.UpperBound)
 	require.Zero(t, len(r.orderByLimit.DistHeap))
 	require.Zero(t, cap(r.orderByLimit.DistHeap))
+}
+
+func TestReaderSetIndexParamConservativelyConvertsL2Bounds(t *testing.T) {
+	vectorCol := &plan.Expr{
+		Typ: plan.Type{Id: int32(types.T_array_float32), Width: 3},
+		Expr: &plan.Expr_Col{
+			Col: &plan.ColRef{ColPos: 3},
+		},
+	}
+	vectorLit := &plan.Expr{
+		Typ: plan.Type{Id: int32(types.T_array_float32), Width: 3, NotNullable: true},
+		Expr: &plan.Expr_Lit{
+			Lit: &plan.Literal{Value: &plan.Literal_VecVal{
+				VecVal: string(types.ArrayToBytes[float32]([]float32{0, 0, 0})),
+			}},
+		},
+	}
+	orderExpr := &plan.Expr{
+		Typ: plan.Type{Id: int32(types.T_float64), NotNullable: true},
+		Expr: &plan.Expr_F{F: &plan.Function{
+			Func: &plan.ObjectRef{ObjName: metric.DistFn_L2sqDistance},
+			Args: []*plan.Expr{vectorCol, vectorLit},
+		}},
+	}
+	floatLiteral := func(value float64) *plan.Expr {
+		return &plan.Expr{
+			Typ: plan.Type{Id: int32(types.T_float64)},
+			Expr: &plan.Expr_Lit{Lit: &plan.Literal{
+				Value: &plan.Literal_Dval{Dval: value},
+			}},
+		}
+	}
+
+	tests := []struct {
+		name      string
+		boundType plan.BoundType
+		lower     bool
+		bound     float64
+		entry     []float32
+		distance  float64
+	}{
+		{name: "inclusive lower raw two", boundType: plan.BoundType_INCLUSIVE, lower: true, bound: math.Sqrt(2), entry: []float32{1, 1, 0}, distance: 2},
+		{name: "exclusive lower widens gate", boundType: plan.BoundType_EXCLUSIVE, lower: true, bound: 1, entry: []float32{1, 0, 0}, distance: 1},
+		{name: "inclusive upper raw three", boundType: plan.BoundType_INCLUSIVE, bound: math.Sqrt(3), entry: []float32{1, 1, 1}, distance: 3},
+		{name: "exclusive upper widens gate", boundType: plan.BoundType_EXCLUSIVE, bound: 2, entry: []float32{2, 0, 0}, distance: 4},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			distRange := &plan.DistRange{}
+			if test.lower {
+				distRange.LowerBoundType = test.boundType
+				distRange.LowerBound = floatLiteral(test.bound)
+			} else {
+				distRange.UpperBoundType = test.boundType
+				distRange.UpperBound = floatLiteral(test.bound)
+			}
+			r := &reader{}
+			r.SetIndexParam(&plan.IndexReaderParam{
+				OrderBy:      []*plan.OrderBySpec{{Expr: orderExpr}},
+				Limit:        plan2.MakePlan2Uint64ConstExprWithType(1),
+				OrigFuncName: metric.DistFn_L2Distance,
+				DistRange:    distRange,
+			})
+			require.NotNil(t, r.orderByLimit)
+			squared := test.bound * test.bound
+			if test.lower {
+				require.Less(t, r.orderByLimit.LowerBound, squared)
+			} else {
+				require.Greater(t, r.orderByLimit.UpperBound, squared)
+			}
+
+			mp := mpool.MustNewZero()
+			defer mpool.DeleteMPool(mp)
+			entries := vector.NewVec(types.New(types.T_array_float32, 3, 0))
+			defer entries.Free(mp)
+			require.NoError(t, vector.AppendArray(entries, test.entry, false, mp))
+			rows, distances, err := objectio.TopNVector(context.Background(), nil, entries, r.orderByLimit)
+			require.NoError(t, err)
+			require.Equal(t, []int64{0}, rows)
+			require.Equal(t, []float64{test.distance}, distances)
+		})
+	}
 }
 
 func TestReaderSetIndexParamSupportsOrderedLimit(t *testing.T) {
