@@ -4,8 +4,7 @@ Status: draft
 
 Owner issue: https://github.com/matrixorigin/matrixone/issues/24553
 
-Implementation series: `jiangxinmeng1:feat/materialized-view-24553` (PR link to
-be added before implementation review)
+Implementation PR: https://github.com/matrixorigin/matrixone/pull/27615
 
 ## 1. Problem and user contract
 
