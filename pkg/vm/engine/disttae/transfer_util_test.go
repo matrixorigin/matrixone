@@ -51,6 +51,93 @@ func TestDeletedObjectFilterUsesExactTransferWindow(t *testing.T) {
 	require.False(t, filter(previouslyDeletedName.ObjectId()))
 }
 
+func TestTransferBatchLimit(t *testing.T) {
+	tests := []struct {
+		name            string
+		rowCount        int
+		byteSize        int
+		sourceBatchDone bool
+		want            bool
+	}{
+		{name: "empty", byteSize: transferBatchSizeLimit, sourceBatchDone: true},
+		{
+			name:     "below both limits",
+			rowCount: transferBatchRowLimit - 1,
+			byteSize: transferBatchSizeLimit - 1,
+		},
+		{
+			name:     "row limit",
+			rowCount: transferBatchRowLimit,
+			want:     true,
+		},
+		{
+			name:            "size limit after source batch",
+			rowCount:        1,
+			byteSize:        transferBatchSizeLimit,
+			sourceBatchDone: true,
+			want:            true,
+		},
+		{
+			name:     "size is not measured per row",
+			rowCount: 1,
+			byteSize: transferBatchSizeLimit,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			require.Equal(t, test.want, transferBatchLimitReached(
+				test.rowCount, test.byteSize, test.sourceBatchDone))
+		})
+	}
+}
+
+func TestTransferFlowBatchesAcrossObjectBlocks(t *testing.T) {
+	mp := mpool.MustNewZero()
+	ctx := context.Background()
+	objectID := objectio.NewObjectid()
+	rowID := types.NewRowIDWithObjectIDBlkNumAndRowID(objectID, 0, 0)
+	rowCount := int(objectio.BlockMaxRows)
+
+	input := batch.NewWithSize(2)
+	input.Vecs[0] = vector.NewVec(types.T_Rowid.ToType())
+	input.Vecs[1] = vector.NewVec(types.T_int64.ToType())
+	require.NoError(t, vector.AppendFixedList(
+		input.Vecs[0], makeRepeated(rowID, rowCount), nil, mp))
+	require.NoError(t, vector.AppendFixedList(
+		input.Vecs[1], makeRepeated(int64(1), rowCount), nil, mp))
+	input.SetRowCount(rowCount)
+	defer input.Clean(mp)
+
+	staged := batch.NewWithSize(2)
+	staged.Vecs[0] = vector.NewVec(types.T_Rowid.ToType())
+	staged.Vecs[1] = vector.NewVec(types.T_int64.ToType())
+	flow := &TransferFlow{
+		isObjectDeletedFn: func(*objectio.ObjectId) bool { return true },
+		staged:            staged,
+		mp:                mp,
+	}
+	flow.transferred.objDetails = make(map[string]int)
+	defer flow.staged.Clean(mp)
+
+	// The former one-block policy invoked RowID lookup after the first call.
+	// Keeping both blocks staged proves the expensive lookup setup is amortized
+	// without changing which rows are selected for transfer.
+	require.NoError(t, flow.processOneBatch(ctx, input))
+	require.Equal(t, rowCount, flow.staged.RowCount())
+	require.NoError(t, flow.processOneBatch(ctx, input))
+	require.Equal(t, rowCount*2, flow.staged.RowCount())
+	require.Equal(t, rowCount*2, flow.transferred.rowCnt)
+}
+
+func makeRepeated[T any](value T, count int) []T {
+	values := make([]T, count)
+	for i := range values {
+		values[i] = value
+	}
+	return values
+}
+
 func TestTransferFlowStagesOnlyObjectsDeletedInWindow(t *testing.T) {
 	mp := mpool.MustNewZero()
 	ctx := context.Background()
