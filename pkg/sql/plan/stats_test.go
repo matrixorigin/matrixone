@@ -23,6 +23,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/statsinfo"
+	"github.com/matrixorigin/matrixone/pkg/sql/internal/materialized"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	index2 "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 	"github.com/stretchr/testify/require"
@@ -1475,6 +1476,49 @@ func TestHasRecursiveScanHandlesGeneralPlanGraphs(t *testing.T) {
 	require.False(t, builder.hasRecursiveScan(builder.qry.Nodes[5]))
 	require.True(t, builder.hasRecursiveScan(builder.qry.Nodes[3]))
 	require.True(t, builder.hasRecursiveScan(builder.qry.Nodes[6]))
+}
+
+func TestDetermineBuildSidePreservesCTEHashBuildDrainProof(t *testing.T) {
+	ctx := NewMockCompilerContext(false)
+	intType := planpb.Type{Id: int32(types.T_int64)}
+	joinCond, err := BindFuncExprImplByPlanExpr(ctx.GetContext(), "=", []*planpb.Expr{
+		GetColExpr(intType, 10, 0),
+		GetColExpr(intType, 20, 0),
+	})
+	require.NoError(t, err)
+
+	makeBuilder := func(scanOption string) *QueryBuilder {
+		builder := NewQueryBuilder(planpb.Query_SELECT, ctx, false, true)
+		builder.qry.Nodes = []*planpb.Node{
+			{
+				NodeId: 0, NodeType: planpb.Node_TABLE_SCAN,
+				BindingTags: []int32{10}, Stats: &planpb.Stats{Outcnt: 10},
+			},
+			{
+				NodeId: 1, NodeType: planpb.Node_SINK_SCAN,
+				BindingTags: []int32{20}, Stats: &planpb.Stats{Outcnt: 1000},
+				ExtraOptions: scanOption,
+			},
+			{
+				NodeId: 2, NodeType: planpb.Node_JOIN, JoinType: planpb.Node_SEMI,
+				Children: []int32{0, 1}, OnList: []*planpb.Expr{joinCond},
+				Stats: &planpb.Stats{HashmapStats: &planpb.HashMapStats{}},
+			},
+		}
+		return builder
+	}
+
+	t.Run("marked build remains logical right", func(t *testing.T) {
+		builder := makeBuilder(materialized.CTEHashBuildScanOption)
+		builder.determineBuildAndProbeSide(2, false)
+		require.False(t, builder.qry.Nodes[2].IsRightJoin)
+	})
+
+	t.Run("unmarked build retains cost choice", func(t *testing.T) {
+		builder := makeBuilder("")
+		builder.determineBuildAndProbeSide(2, false)
+		require.True(t, builder.qry.Nodes[2].IsRightJoin)
+	})
 }
 
 func TestDeepCopyIndexReaderParamCopiesOrigFuncName(t *testing.T) {

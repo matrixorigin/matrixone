@@ -105,6 +105,11 @@ type SpillConfig struct {
 // CTESinkOption marks a planner-approved bounded multi-consumer CTE source.
 const CTESinkOption = "cte_reuse_materialized_sink"
 
+// CTEHashBuildScanOption marks a CTE reader whose full-drain proof depends on
+// remaining the build input of an equality hash join. The planner uses this
+// marker to keep a later build/probe-side decision from invalidating the proof.
+const CTEHashBuildScanOption = "cte_reuse_hash_build_scan"
+
 func NewSource(readerCount int) *Source {
 	return newSource(readerCount, sharedMaterializedSourceMaxBytes)
 }

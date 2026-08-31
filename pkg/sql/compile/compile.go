@@ -4941,6 +4941,13 @@ func (c *Compile) compileProjection(node *plan.Node, ss []*Scope) []*Scope {
 	}
 
 	ss = c.ensureCoordinatorOnlyFunctions(node, ss)
+	if _, groupingSetExpand := plan2.DecodeGroupingSetExpandOption(node.ExtraOptions); groupingSetExpand {
+		for i := range ss {
+			c.setProjection(node, ss[i])
+		}
+		c.anal.isFirst = false
+		return ss
+	}
 	for i := range ss {
 		rootOp := ss[i].RootOp
 		if rootOp == nil {
@@ -6685,7 +6692,7 @@ func (c *Compile) compileTPGroup(node *plan.Node, ss []*Scope, ns []*plan.Node) 
 		op := constructGroup(c.proc.Ctx, node, ns[node.Children[0]], false, 0, c.proc)
 		op.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
 		ss[0].setRootOperator(op)
-		arg := constructMergeGroup(node, op.Aggs)
+		arg := constructMergeGroup(node, op.Aggs, op.UsesGroupingAwareHash())
 		arg.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
 		ss[0].setRootOperator(arg)
 	} else {
@@ -6826,7 +6833,7 @@ func (c *Compile) compileMergeGroup(
 		rs := c.newMergeScope([]*Scope{mergeToGroup})
 
 		currentFirstFlag = c.anal.isFirst
-		arg := constructMergeGroup(node, op.Aggs)
+		arg := constructMergeGroup(node, op.Aggs, op.UsesGroupingAwareHash())
 		arg.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
 		rs.setRootOperator(arg)
 		c.anal.isFirst = false
@@ -6834,6 +6841,7 @@ func (c *Compile) compileMergeGroup(
 		return []*Scope{rs}
 	} else {
 		var aggs []aggexec.AggFuncExecExpression
+		groupingAware := false
 
 		currentFirstFlag := c.anal.isFirst
 		for i := range ss {
@@ -6843,6 +6851,7 @@ func (c *Compile) compileMergeGroup(
 
 			if i == 0 {
 				aggs = op.Aggs
+				groupingAware = op.UsesGroupingAwareHash()
 			}
 		}
 		c.anal.isFirst = false
@@ -6851,7 +6860,7 @@ func (c *Compile) compileMergeGroup(
 		rs := c.newMergeScope(ss)
 
 		currentFirstFlag = c.anal.isFirst
-		arg := constructMergeGroup(node, aggs)
+		arg := constructMergeGroup(node, aggs, groupingAware)
 		arg.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
 		rs.setRootOperator(arg)
 		c.anal.isFirst = false

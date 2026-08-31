@@ -21,6 +21,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/internal/materialized"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 )
 
 const (
@@ -41,7 +42,7 @@ func (builder *QueryBuilder) reuseMultiReferenceCTEs(rootID int32) int32 {
 	}
 
 	for _, cteRef := range builder.cteRefs {
-		producerRootID, ok := builder.reusableCTEProducer(cteRef, rootID)
+		producerRootID, hashBuildOccurrences, ok := builder.reusableCTEProducer(cteRef, rootID)
 		if !ok {
 			continue
 		}
@@ -53,16 +54,20 @@ func (builder *QueryBuilder) reuseMultiReferenceCTEs(rootID int32) int32 {
 
 		replacements := make(map[int32]int32, len(cteRef.occurrences))
 		for _, occurrence := range cteRef.occurrences {
-			replacements[occurrence.rootID] = builder.appendSharedCTEScan(cteRef, occurrence, sourceStep)
+			replacements[occurrence.rootID] = builder.appendSharedCTEScan(
+				cteRef, occurrence, sourceStep, hashBuildOccurrences[occurrence.rootID])
 		}
 		rootID = builder.replaceCTEOccurrences(rootID, replacements, make(map[int32]bool))
 	}
 	return rootID
 }
 
-func (builder *QueryBuilder) reusableCTEProducer(cteRef *CTERef, rootID int32) (int32, bool) {
+func (builder *QueryBuilder) reusableCTEProducer(
+	cteRef *CTERef,
+	rootID int32,
+) (int32, map[int32]bool, bool) {
 	if cteRef == nil || cteRef.isRecursive || len(cteRef.occurrences) < 2 {
-		return 0, false
+		return 0, nil, false
 	}
 
 	first := cteRef.occurrences[0]
@@ -70,14 +75,14 @@ func (builder *QueryBuilder) reusableCTEProducer(cteRef *CTERef, rootID int32) (
 	for _, occurrence := range cteRef.occurrences {
 		if occurrence.isCorrelated || !sameCTEOutput(first, occurrence) ||
 			!builder.cteSubtreeIsDeterministic(occurrence.rootID, make(map[int32]bool)) {
-			return 0, false
+			return 0, nil, false
 		}
 		allOccurrencesAreCurrentRoleClosures = allOccurrencesAreCurrentRoleClosures &&
 			builder.cteSubtreeIsCurrentRoleClosure(occurrence.rootID, make(map[int32]bool))
 	}
 
 	if cteRef.hasNestedUse && !allOccurrencesAreCurrentRoleClosures {
-		return 0, false
+		return 0, nil, false
 	}
 	if allOccurrencesAreCurrentRoleClosures {
 		// This exemption is deliberately limited to the one-column closure
@@ -86,10 +91,11 @@ func (builder *QueryBuilder) reusableCTEProducer(cteRef *CTERef, rootID int32) (
 		// save its internal SQL work. A scan, join, filter, aggregate, variable-
 		// width projection, or any other surrounding operation must use the
 		// ordinary full-drain, memory, and profitability guards below.
-		return first.rootID, builder.cteOccurrencesReachable(rootID, cteRef.occurrences)
+		return first.rootID, nil, builder.cteOccurrencesReachable(rootID, cteRef.occurrences)
 	}
-	if !builder.cteConsumersFullyDrain(rootID, cteRef.occurrences) {
-		return 0, false
+	hashBuildOccurrences, fullyDrained := builder.cteConsumerDrainRequirements(rootID, cteRef.occurrences)
+	if !fullyDrained {
+		return 0, nil, false
 	}
 
 	producerRootID := first.rootID
@@ -112,22 +118,137 @@ func (builder *QueryBuilder) reusableCTEProducer(cteRef *CTERef, rootID int32) (
 	ReCalcNodeStats(producerRootID, builder, true, false, true)
 	stats := builder.qry.Nodes[producerRootID].Stats
 	producerCost := builder.cteProducerCost(producerRootID, make(map[int32]bool))
+	storageStats := stats
+	storageTypes := first.types
+	if requiredTypes, narrowed := builder.cteStorageOutputTypes(rootID, cteRef.occurrences); narrowed {
+		storageTypes = requiredTypes
+		if rowSize, fixed := fixedOutputRowSize(requiredTypes); fixed && stats != nil {
+			storageStats = &planpb.Stats{Outcnt: stats.Outcnt, Rowsize: rowSize}
+		}
+	}
 	if stats == nil || stats.Cost <= 0 || producerCost <= 0 ||
 		!finitePositive(stats.Cost) || !finitePositive(producerCost) ||
-		!cteReuseFitsStorage(stats, first.types, predicateAware) {
+		!cteReuseFitsStorage(storageStats, storageTypes, predicateAware || len(hashBuildOccurrences) > 0) {
 		discardProducerFilter()
-		return 0, false
+		return 0, nil, false
 	}
 
 	refCount := float64(len(cteRef.occurrences))
 	if !cteReuseIsProfitable(producerCost, stats.Outcnt, refCount) {
 		discardProducerFilter()
-		return 0, false
+		return 0, nil, false
 	}
-	return producerRootID, true
+	return producerRootID, hashBuildOccurrences, true
 }
 
-func cteReuseFitsStorage(stats *planpb.Stats, outputTypes []planpb.Type, predicateAware bool) bool {
+// cteStorageOutputTypes mirrors the final SINK/SINK_SCAN column pruning when
+// estimating a shared source. Walking upward from each occurrence excludes the
+// producer subtree even when an aggregate's output tag is also referenced by
+// its own HAVING expression. The union across consumers is therefore the
+// materialized schema that final column pruning will retain.
+func (builder *QueryBuilder) cteStorageOutputTypes(
+	rootID int32,
+	occurrences []cteOccurrence,
+) ([]planpb.Type, bool) {
+	if len(occurrences) == 0 || len(occurrences[0].types) == 0 {
+		return nil, false
+	}
+	parents := make(map[int32][]int32)
+	reachable := make(map[int32]bool)
+	builder.collectCTEParents(rootID, parents, reachable)
+	required := make([]bool, len(occurrences[0].types))
+	requiredCount := 0
+	for _, occurrence := range occurrences {
+		if !reachable[occurrence.rootID] {
+			return occurrences[0].types, false
+		}
+		colRefCnt := make(map[[2]int32]int)
+		queue := append([]int32(nil), parents[occurrence.rootID]...)
+		seen := make(map[int32]bool)
+		for len(queue) > 0 {
+			nodeID := queue[0]
+			queue = queue[1:]
+			if seen[nodeID] {
+				continue
+			}
+			seen[nodeID] = true
+			countCTEConsumerNodeColRefs(builder.qry.Nodes[nodeID], colRefCnt)
+			queue = append(queue, parents[nodeID]...)
+		}
+		for colPos := range required {
+			if !required[colPos] && colRefCnt[[2]int32{occurrence.rootTag, int32(colPos)}] > 0 {
+				required[colPos] = true
+				requiredCount++
+			}
+		}
+	}
+	if requiredCount == 0 || requiredCount == len(required) {
+		return occurrences[0].types, false
+	}
+	outputTypes := make([]planpb.Type, 0, requiredCount)
+	for colPos, keep := range required {
+		if keep {
+			outputTypes = append(outputTypes, occurrences[0].types[colPos])
+		}
+	}
+	return outputTypes, true
+}
+
+func countCTEConsumerNodeColRefs(node *planpb.Node, colRefCnt map[[2]int32]int) {
+	for _, exprList := range [][]*planpb.Expr{
+		node.ProjectList,
+		node.OnList,
+		node.FilterList,
+		node.GroupBy,
+		node.AggList,
+		node.WinSpecList,
+		node.TimeWindowPartitionBy,
+		node.TblFuncExprList,
+		node.BlockFilterList,
+		node.FillVal,
+		node.OnUpdateExprs,
+	} {
+		increaseRefCntForExprList(exprList, 1, colRefCnt)
+	}
+	for _, orderBy := range node.OrderBy {
+		if orderBy != nil {
+			increaseRefCnt(orderBy.Expr, 1, colRefCnt)
+		}
+	}
+	for _, expr := range []*planpb.Expr{
+		node.Limit,
+		node.Offset,
+		node.Interval,
+		node.Sliding,
+		node.Timestamp,
+		node.WEnd,
+	} {
+		if expr != nil {
+			increaseRefCnt(expr, 1, colRefCnt)
+		}
+	}
+}
+
+func fixedOutputRowSize(outputTypes []planpb.Type) (float64, bool) {
+	rowSize := 0
+	for i := range outputTypes {
+		if outputTypes[i].Id < 0 || outputTypes[i].Id > int32(^uint8(0)) {
+			return 0, false
+		}
+		oid := types.T(outputTypes[i].Id)
+		if !oid.IsFixedLen() || oid.TypeLen() <= 0 {
+			return 0, false
+		}
+		rowSize += oid.TypeLen()
+		if !outputTypes[i].NotNullable {
+			// Conservatively cover the per-row share of a null bitmap.
+			rowSize++
+		}
+	}
+	return float64(rowSize), rowSize > 0
+}
+
+func cteReuseFitsStorage(stats *planpb.Stats, outputTypes []planpb.Type, spillEligible bool) bool {
 	if stats == nil || !finitePositive(stats.Outcnt) || !finitePositive(stats.Rowsize) {
 		return false
 	}
@@ -146,7 +267,7 @@ func cteReuseFitsStorage(stats *planpb.Stats, outputTypes []planpb.Type, predica
 	if fixedWidth && estimatedBytes <= cteReuseEstimatedMaterializedBytesLimit {
 		return true
 	}
-	return predicateAware && estimatedBytes <= cteReuseEstimatedSpillBytesLimit
+	return spillEligible && estimatedBytes <= cteReuseEstimatedSpillBytesLimit
 }
 
 func finitePositive(value float64) bool {
@@ -244,11 +365,28 @@ func (builder *QueryBuilder) cteSubtreeIsCurrentRoleClosure(
 }
 
 func (builder *QueryBuilder) cteSubtreeIsDeterministic(nodeID int32, seen map[int32]bool) bool {
+	return builder.subtreeIsDeterministic(nodeID, seen, false)
+}
+
+func (builder *QueryBuilder) subtreeIsDeterministic(nodeID int32, seen map[int32]bool, allowMaterializedSink bool) bool {
 	if seen[nodeID] {
 		return true
 	}
 	seen[nodeID] = true
 	node := builder.qry.Nodes[nodeID]
+	if node.NodeType == planpb.Node_SINK_SCAN && allowMaterializedSink {
+		if len(node.SourceStep) != 1 || node.SourceStep[0] < 0 || int(node.SourceStep[0]) >= len(builder.qry.Steps) {
+			return false
+		}
+		sinkID := builder.qry.Steps[node.SourceStep[0]]
+		if sinkID < 0 || int(sinkID) >= len(builder.qry.Nodes) {
+			return false
+		}
+		sink := builder.qry.Nodes[sinkID]
+		return sink.NodeType == planpb.Node_SINK && len(sink.Children) == 1 &&
+			sink.ExtraOptions == materialized.CTESinkOption &&
+			builder.subtreeIsDeterministic(sink.Children[0], seen, true)
+	}
 	switch node.NodeType {
 	case planpb.Node_FUNCTION_SCAN:
 		if !statementStableFunctionScan(node) {
@@ -326,7 +464,7 @@ func (builder *QueryBuilder) cteSubtreeIsDeterministic(nodeID int32, seen map[in
 		}
 	}
 	for _, childID := range node.Children {
-		if !builder.cteSubtreeIsDeterministic(childID, seen) {
+		if !builder.subtreeIsDeterministic(childID, seen, allowMaterializedSink) {
 			return false
 		}
 	}
@@ -345,9 +483,23 @@ func (builder *QueryBuilder) cteOccurrencesReachable(rootID int32, occurrences [
 }
 
 func (builder *QueryBuilder) cteConsumersFullyDrain(rootID int32, occurrences []cteOccurrence) bool {
+	_, ok := builder.cteConsumerDrainRequirements(rootID, occurrences)
+	return ok
+}
+
+// cteConsumerDrainRequirements proves that every reader consumes the complete
+// materialized stream. A logical right input of an equality SEMI join is a
+// full-drain boundary because hash build must consume the complete membership
+// set. The returned occurrences must retain that physical build-side contract
+// through later join costing.
+func (builder *QueryBuilder) cteConsumerDrainRequirements(
+	rootID int32,
+	occurrences []cteOccurrence,
+) (map[int32]bool, bool) {
 	parents := make(map[int32][]int32)
 	reachable := make(map[int32]bool)
 	builder.collectCTEParents(rootID, parents, reachable)
+	hashBuildOccurrences := make(map[int32]bool)
 
 	for _, occurrence := range occurrences {
 		// replaceCTEOccurrences rewrites only the tree below rootID. An
@@ -356,15 +508,16 @@ func (builder *QueryBuilder) cteConsumersFullyDrain(rootID int32, occurrences []
 		// consumer in place and make later mutating planner passes visit the
 		// shared subtree twice.
 		if !reachable[occurrence.rootID] {
-			return false
+			return nil, false
 		}
 		type consumerPath struct {
 			nodeID  int32
+			childID int32
 			drained bool
 		}
 		queue := make([]consumerPath, 0, len(parents[occurrence.rootID]))
 		for _, nodeID := range parents[occurrence.rootID] {
-			queue = append(queue, consumerPath{nodeID: nodeID})
+			queue = append(queue, consumerPath{nodeID: nodeID, childID: occurrence.rootID})
 		}
 		seen := make(map[consumerPath]bool)
 		for len(queue) > 0 {
@@ -383,20 +536,118 @@ func (builder *QueryBuilder) cteConsumersFullyDrain(rootID int32, occurrences []
 			// must read its complete input. A Top-N SORT or an aggregate still
 			// drains its CTE input even when its own output is limited.
 			if !path.drained && (node.Limit != nil || node.Offset != nil) {
-				return false
+				return nil, false
 			}
-			if !path.drained && (node.NodeType == planpb.Node_APPLY ||
-				node.NodeType == planpb.Node_JOIN && (node.JoinType == planpb.Node_SEMI ||
-					node.JoinType == planpb.Node_ANTI || node.JoinType == planpb.Node_SINGLE ||
-					node.JoinType == planpb.Node_MARK)) {
-				return false
+			if !path.drained && node.NodeType == planpb.Node_APPLY {
+				return nil, false
+			}
+			if !path.drained && node.NodeType == planpb.Node_JOIN {
+				switch node.JoinType {
+				case planpb.Node_SEMI:
+					if node.IsRightJoin || len(node.Children) != 2 ||
+						path.childID != node.Children[1] || !builder.IsEquiJoin(node) {
+						return nil, false
+					}
+					path.drained = true
+					hashBuildOccurrences[occurrence.rootID] = true
+				case planpb.Node_MARK:
+					if node.IsRightJoin || len(node.Children) != 2 ||
+						path.childID != node.Children[1] ||
+						!builder.cteMarkJoinBecomesHashSemi(path.nodeID, parents) {
+						return nil, false
+					}
+					path.drained = true
+					hashBuildOccurrences[occurrence.rootID] = true
+				case planpb.Node_ANTI, planpb.Node_SINGLE:
+					return nil, false
+				}
 			}
 			for _, parentID := range parents[path.nodeID] {
-				queue = append(queue, consumerPath{nodeID: parentID, drained: path.drained})
+				queue = append(queue, consumerPath{
+					nodeID: parentID, childID: path.nodeID, drained: path.drained,
+				})
 			}
 		}
 	}
-	return true
+	return hashBuildOccurrences, true
+}
+
+// cteMarkJoinBecomesHashSemi recognizes the binder shape for a positive
+// uncorrelated IN/EXISTS membership predicate. Multiple WHERE membership
+// predicates bind as a left-deep MARK chain below one FILTER, so the positive
+// marker may be above other MARK joins. optimizeFilters deterministically
+// pushes each marker predicate to its owner and turns the equality MARK into
+// SEMI before build/probe costing. All other intervening shapes fail closed.
+func (builder *QueryBuilder) cteMarkJoinBecomesHashSemi(
+	nodeID int32,
+	parents map[int32][]int32,
+) bool {
+	node := builder.qry.Nodes[nodeID]
+	if node.NodeType != planpb.Node_JOIN || node.JoinType != planpb.Node_MARK ||
+		len(node.Children) != 2 || len(node.BindingTags) != 1 {
+		return false
+	}
+
+	markTag := node.BindingTags[0]
+	childID := nodeID
+
+markerSearch:
+	for {
+		if len(parents[childID]) != 1 {
+			return false
+		}
+		parentID := parents[childID][0]
+		parent := builder.qry.Nodes[parentID]
+		if parent.Limit != nil || parent.Offset != nil {
+			return false
+		}
+		switch parent.NodeType {
+		case planpb.Node_FILTER:
+			if parent.FilterIsBarrier {
+				return false
+			}
+			positiveMarker := false
+			for _, filter := range parent.FilterList {
+				if isMarkColumn(filter, markTag) || isTrueMarkColumn(filter, markTag) {
+					positiveMarker = true
+					break
+				}
+			}
+			if !positiveMarker {
+				return false
+			}
+			break markerSearch
+		case planpb.Node_JOIN:
+			if parent.JoinType != planpb.Node_MARK || len(parent.Children) != 2 ||
+				parent.Children[0] != childID {
+				return false
+			}
+			childID = parentID
+		default:
+			return false
+		}
+	}
+
+	leftTags := make(map[int32]bool)
+	for _, tag := range builder.enumerateTags(node.Children[0]) {
+		leftTags[tag] = true
+	}
+	rightTags := make(map[int32]bool)
+	for _, tag := range builder.enumerateTags(node.Children[1]) {
+		rightTags[tag] = true
+	}
+	for _, condition := range node.OnList {
+		if fn := condition.GetF(); fn != nil && fn.Func != nil && len(fn.Args) == 1 {
+			funcID, _ := function.DecodeOverloadID(fn.Func.GetObj())
+			if funcID == function.ISTRUE {
+				condition = fn.Args[0]
+			}
+		}
+		if isEquiCond(condition, leftTags, rightTags) {
+			return true
+		}
+	}
+	return false
 }
 
 // cteSharedConsumerPredicate returns a safe superset predicate for one shared
@@ -593,7 +844,12 @@ func (builder *QueryBuilder) collectCTEParents(nodeID int32, parents map[int32][
 	}
 }
 
-func (builder *QueryBuilder) appendSharedCTEScan(cteRef *CTERef, occurrence cteOccurrence, sourceStep int32) int32 {
+func (builder *QueryBuilder) appendSharedCTEScan(
+	cteRef *CTERef,
+	occurrence cteOccurrence,
+	sourceStep int32,
+	requiresHashBuild bool,
+) int32 {
 	projectList := make([]*planpb.Expr, len(occurrence.types))
 	cols := make([]*planpb.ColDef, len(occurrence.types))
 	for i := range occurrence.types {
@@ -615,6 +871,9 @@ func (builder *QueryBuilder) appendSharedCTEScan(cteRef *CTERef, occurrence cteO
 			Name: string(cteRef.ast.Name.Alias),
 			Cols: cols,
 		},
+	}
+	if requiresHashBuild {
+		node.ExtraOptions = materialized.CTEHashBuildScanOption
 	}
 	return builder.appendNode(node, occurrence.ctx)
 }

@@ -1674,7 +1674,10 @@ func (expr *ColumnExpressionExecutor) Eval(_ *process.Process, batches []*batch.
 	}
 
 	vec := batches[relIndex].Vecs[expr.colIndex]
-	if vec.IsConstNull() {
+	// A grouping-set sentinel has no value payload and therefore also satisfies
+	// IsConstNull, but its grouping bitmap is semantically distinct from SQL
+	// NULL. Preserve it instead of normalizing it into the ordinary NULL cache.
+	if vec.IsConstNull() && !vec.IsGrouping() {
 		var err error
 		vec, err = expr.getConstNullVec(expr.typ, vec.Length(), vec.GetStringSourceAt(0))
 		if err != nil {

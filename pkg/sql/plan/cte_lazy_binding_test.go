@@ -179,6 +179,7 @@ func TestCTELazyBindingDeclarationScope(t *testing.T) {
 
 func TestCTELazyBindingRollupSingleExpansion(t *testing.T) {
 	mock := NewMockOptimizer(false)
+	useLegacyGroupingSetPlan(t, mock)
 	logicPlan, err := runOneStmt(mock, t, `
 		with totals as (
 			select n_regionkey, count(*) as n
@@ -195,6 +196,7 @@ func TestCTELazyBindingRollupSingleExpansion(t *testing.T) {
 
 func TestCTELazyBindingRepeatedGroupingSets(t *testing.T) {
 	mock := NewMockOptimizer(false)
+	useLegacyGroupingSetPlan(t, mock)
 
 	t.Run("rollup keeps both variants for each reference", func(t *testing.T) {
 		logicPlan, err := runOneStmt(mock, t, `
@@ -558,6 +560,116 @@ func TestCTEMultiReferenceMergesLocalConsumerPredicates(t *testing.T) {
 	require.Equal(t, 1, countReachableNodeType(query, planpb.Node_SINK))
 }
 
+func TestCTEMultiReferenceReusesHashSemiBuildConsumers(t *testing.T) {
+	mock := NewMockOptimizer(false)
+	logicPlan, err := runOneStmt(mock, t, `
+		with expensive_keys as (
+			select l_suppkey, sum(l_extendedprice) as total
+			from lineitem group by l_suppkey
+		)
+		select o_orderkey from orders
+		where o_custkey in (select l_suppkey from expensive_keys)
+		  and o_orderkey in (select o_orderkey from orders)
+		union all
+		select c_custkey from customer
+		where c_custkey in (select l_suppkey from expensive_keys)
+		  and c_custkey in (select c_custkey from customer)`)
+	require.NoError(t, err)
+
+	query := logicPlan.GetQuery()
+	require.NotNil(t, query)
+	require.Equal(t, 2, countReachableNodeType(query, planpb.Node_SINK_SCAN))
+	require.Equal(t, 1, countReachableNodeType(query, planpb.Node_SINK))
+
+	lineitemScans := 0
+	markedScans := 0
+	markedSemis := 0
+	for nodeID := range cteReachablePlanNodes(query) {
+		node := query.Nodes[nodeID]
+		if node.NodeType == planpb.Node_TABLE_SCAN && node.TableDef != nil &&
+			node.TableDef.Name == "lineitem" {
+			lineitemScans++
+		}
+		if node.NodeType == planpb.Node_SINK_SCAN {
+			require.Equal(t, materialized.CTEHashBuildScanOption, node.ExtraOptions)
+			require.Len(t, node.ProjectList, 1,
+				"the shared membership source should retain only its consumed key")
+			markedScans++
+		}
+		if node.NodeType == planpb.Node_JOIN && node.JoinType == planpb.Node_SEMI &&
+			subtreeHasNodeOption(query, node.Children[1], materialized.CTEHashBuildScanOption) {
+			require.False(t, node.IsRightJoin)
+			markedSemis++
+		}
+	}
+	require.Equal(t, 1, lineitemScans)
+	require.Equal(t, 2, markedScans)
+	require.Equal(t, 2, markedSemis,
+		"each marked CTE reader must remain the physical hash-build input")
+}
+
+func TestCTEMultiReferencePrunesUnusedVariableWidthPayload(t *testing.T) {
+	mock := NewMockOptimizer(false)
+	logicPlan, err := runOneStmt(mock, t, `
+		with c as (
+			select l_suppkey, max(l_comment) as comment
+			from lineitem group by l_suppkey
+		)
+		select a.l_suppkey from c a join c b
+			on a.l_suppkey = b.l_suppkey
+		where a.l_suppkey < 10`)
+	require.NoError(t, err)
+
+	query := logicPlan.GetQuery()
+	require.Equal(t, 2, countReachableNodeType(query, planpb.Node_SINK_SCAN))
+	for nodeID := range cteReachablePlanNodes(query) {
+		if node := query.Nodes[nodeID]; node.NodeType == planpb.Node_SINK_SCAN {
+			require.Len(t, node.ProjectList, 1,
+				"an unused variable-width payload must not inflate the shared source")
+		}
+	}
+}
+
+func TestCTEMultiReferenceRejectsNonHashBuildConsumers(t *testing.T) {
+	mock := NewMockOptimizer(false)
+	for _, test := range []struct {
+		name      string
+		predicate string
+	}{
+		{name: "non equality any", predicate: "> any"},
+		{name: "null aware not in", predicate: "not in"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			logicPlan, err := runOneStmt(mock, t, `
+				with expensive_keys as (
+					select l_suppkey, sum(l_extendedprice) as total
+					from lineitem group by l_suppkey
+				)
+				select o_orderkey from orders
+				where o_custkey `+test.predicate+` (select l_suppkey from expensive_keys)
+				union all
+				select c_custkey from customer
+				where c_custkey `+test.predicate+` (select l_suppkey from expensive_keys)`)
+			require.NoError(t, err)
+			require.Equal(t, 0,
+				countReachableNodeType(logicPlan.GetQuery(), planpb.Node_SINK_SCAN))
+		})
+	}
+}
+
+func subtreeHasNodeOption(query *planpb.Query, nodeID int32, option string) bool {
+	node := query.Nodes[nodeID]
+	if node.ExtraOptions == option {
+		return true
+	}
+	for _, childID := range node.Children {
+		if subtreeHasNodeOption(query, childID, option) {
+			return true
+		}
+	}
+	return false
+}
+
 func TestCTEReuseKeepsConsumersBoundInsideCTEInline(t *testing.T) {
 	mock := NewMockOptimizer(false)
 	logicPlan, err := runOneStmt(mock, t, `
@@ -715,7 +827,7 @@ func TestCTEMultiReferenceReuseGuards(t *testing.T) {
 			sql: `with c as (
 				select l_suppkey, max(l_comment) as comment
 				from lineitem group by l_suppkey
-			) select a.l_suppkey from c a join c b
+			) select a.l_suppkey, a.comment from c a join c b
 				on a.l_suppkey = b.l_suppkey
 				where a.l_suppkey < 10`,
 		},
@@ -724,7 +836,7 @@ func TestCTEMultiReferenceReuseGuards(t *testing.T) {
 			sql: `with c as (
 				select l_suppkey, max(l_comment) as comment
 				from lineitem group by l_suppkey
-			) select a.l_suppkey from c a join c b
+			) select a.l_suppkey, a.comment from c a join c b
 				on a.l_suppkey = b.l_suppkey
 				where a.l_suppkey < rand() and b.l_suppkey < rand()`,
 		},
@@ -829,6 +941,45 @@ func TestCTEReuseMemoryGuard(t *testing.T) {
 			require.Equal(t, test.want, cteReuseFitsStorage(test.stats, test.typs, test.predicateAware))
 		})
 	}
+}
+
+func TestCTEReuseStorageEstimateUsesConsumerProjection(t *testing.T) {
+	keyType := planpb.Type{Id: int32(types.T_int64), NotNullable: true}
+	payloadType := planpb.Type{Id: int32(types.T_varchar), Width: 1024}
+	builder := &QueryBuilder{qry: &planpb.Query{Nodes: []*planpb.Node{
+		{
+			NodeType: planpb.Node_PROJECT, BindingTags: []int32{10},
+			ProjectList: []*planpb.Expr{
+				GetColExpr(keyType, 1, 0), GetColExpr(payloadType, 1, 1),
+			},
+			FilterList: []*planpb.Expr{GetColExpr(payloadType, 10, 1)},
+		},
+		{
+			NodeType: planpb.Node_PROJECT, Children: []int32{0},
+			ProjectList: []*planpb.Expr{GetColExpr(keyType, 10, 0)},
+		},
+		{
+			NodeType: planpb.Node_PROJECT, BindingTags: []int32{20},
+			ProjectList: []*planpb.Expr{
+				GetColExpr(keyType, 2, 0), GetColExpr(payloadType, 2, 1),
+			},
+		},
+		{
+			NodeType: planpb.Node_PROJECT, Children: []int32{2},
+			ProjectList: []*planpb.Expr{GetColExpr(keyType, 20, 0)},
+		},
+		{NodeType: planpb.Node_UNION_ALL, Children: []int32{1, 3}},
+	}}}
+
+	outputTypes, narrowed := builder.cteStorageOutputTypes(4, []cteOccurrence{
+		{rootID: 0, rootTag: 10, types: []planpb.Type{keyType, payloadType}},
+		{rootID: 2, rootTag: 20, types: []planpb.Type{keyType, payloadType}},
+	})
+	require.True(t, narrowed)
+	require.Equal(t, []planpb.Type{keyType}, outputTypes)
+	rowSize, fixed := fixedOutputRowSize(outputTypes)
+	require.True(t, fixed)
+	require.Equal(t, float64(types.T_int64.TypeLen()), rowSize)
 }
 
 func TestCTEReuseRejectsExternalAndSideEffectingNodes(t *testing.T) {

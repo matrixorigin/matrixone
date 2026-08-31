@@ -38,6 +38,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/aggexec"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/projection"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm"
@@ -1762,11 +1763,13 @@ func TestGroupRejectsInvalidReducedHashKey(t *testing.T) {
 		name          string
 		hashKey       []int32
 		groupingFlags []bool
+		dynamic       bool
 	}{
 		{name: "not a strict subset", hashKey: []int32{0, 1, 2}},
 		{name: "not ordered", hashKey: []int32{1, 0}},
 		{name: "out of range", hashKey: []int32{3}},
 		{name: "grouping set", hashKey: []int32{0}, groupingFlags: []bool{true, false, true}},
+		{name: "dynamic grouping set", hashKey: []int32{0}, dynamic: true},
 	}
 
 	for _, test := range tests {
@@ -1778,12 +1781,142 @@ func TestGroupRejectsInvalidReducedHashKey(t *testing.T) {
 				}, nil)
 			g.GroupByHashKey = test.hashKey
 			g.GroupingFlag = test.groupingFlags
+			g.DynamicGrouping = test.dynamic
 			require.Error(t, g.Prepare(proc))
 			g.Free(proc, true, nil)
 			proc.Free()
 			require.Zero(t, proc.Mp().CurrNB())
 		})
 	}
+}
+
+func TestGroupDynamicGroupingUsesGroupingAwareHash(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	g := newGroupOp(proc, []*plan.Expr{
+		colExpr(0, types.T_varchar), colExpr(1, types.T_varchar), colExpr(2, types.T_int64),
+	}, nil)
+	g.DynamicGrouping = true
+	require.NoError(t, g.Prepare(proc))
+	require.Equal(t, int32(HStr), g.ctr.mtyp)
+	require.True(t, g.ctr.groupingAware)
+
+	g.Free(proc, false, nil)
+	proc.Free()
+	require.Zero(t, proc.Mp().CurrNB())
+}
+
+func TestGroupConsumesReusableGroupingSetProjectionBatches(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	input := batch.NewWithSize(3)
+	input.Vecs[0] = testutil.MakeVarcharVector([]string{"a", "b"}, nil, proc.Mp())
+	input.Vecs[1] = testutil.MakeVarcharVector([]string{"x", "y"}, nil, proc.Mp())
+	input.Vecs[2] = testutil.MakeInt32Vector([]int32{1, 2}, nil, proc.Mp())
+	input.SetRowCount(2)
+
+	expand := projection.NewArgument()
+	expand.ProjectList = []*plan.Expr{
+		colExpr(0, types.T_varchar), colExpr(1, types.T_varchar),
+		colExpr(2, types.T_int32), {
+			Typ:  plan.Type{Id: int32(types.T_int64), NotNullable: true},
+			Expr: &plan.Expr_Lit{Lit: &plan.Literal{Value: &plan.Literal_I64Val{I64Val: 0}}},
+		},
+	}
+	expand.GroupingSetCount = 3
+	expand.GroupingFlags = []bool{true, true, true, false, false, false}
+	child := colexec.NewMockOperator().WithBatchs([]*batch.Batch{input})
+	expand.AppendChild(child)
+	require.NoError(t, expand.Prepare(proc))
+
+	g := newGroupOp(proc, []*plan.Expr{
+		colExpr(0, types.T_varchar), colExpr(1, types.T_varchar), colExpr(3, types.T_int64),
+	}, []aggexec.AggFuncExecExpression{sumAgg(2)})
+	g.NeedEval = false
+	g.DynamicGrouping = true
+	g.AppendChild(expand)
+	require.NoError(t, g.Prepare(proc))
+	partialOutputs := collectBatches(t, g, proc)
+	partials := make([]*batch.Batch, len(partialOutputs))
+	for i := range partialOutputs {
+		partials[i] = cloneBatch(t, proc, partialOutputs[i])
+	}
+
+	g.Free(proc, false, nil)
+	expand.Free(proc, false, nil)
+	child.Free(proc, false, nil)
+
+	mergeChild := colexec.NewMockOperator().WithBatchs(partials)
+	merge := newMergeGroupOp([]aggexec.AggFuncExecExpression{sumAgg(2)})
+	merge.GroupingAware = true
+	merge.AppendChild(mergeChild)
+	require.NoError(t, merge.Prepare(proc))
+	outputs := collectBatches(t, merge, proc)
+	rows := 0
+	setCounts := map[int64]int{}
+	for _, output := range outputs {
+		rows += output.RowCount()
+		for _, setID := range vector.MustFixedColNoTypeCheck[int64](output.Vecs[2]) {
+			setCounts[setID]++
+		}
+	}
+	require.Equal(t, 5, rows)
+	require.Equal(t, map[int64]int{0: 2, 1: 2, 2: 1}, setCounts)
+
+	merge.Free(proc, false, nil)
+	mergeChild.Free(proc, false, nil)
+	proc.Free()
+	require.Zero(t, proc.Mp().CurrNB())
+}
+
+func TestMergeGroupUsesDeclaredGroupingDomainAcrossPartialBatches(t *testing.T) {
+	proc := testutil.NewProcess(t)
+
+	makePartial := func(key *vector.Vector, setID int64, value int32) *batch.Batch {
+		input := batch.NewWithSize(3)
+		input.Vecs[0] = key
+		input.Vecs[1] = testutil.MakeInt64Vector([]int64{setID}, nil, proc.Mp())
+		input.Vecs[2] = testutil.MakeInt32Vector([]int32{value}, nil, proc.Mp())
+		input.SetRowCount(1)
+
+		child := colexec.NewMockOperator().WithBatchs([]*batch.Batch{input})
+		partialGroup := newGroupOp(proc, []*plan.Expr{
+			colExpr(0, types.T_varchar), colExpr(1, types.T_int64),
+		}, []aggexec.AggFuncExecExpression{sumAgg(2)})
+		partialGroup.NeedEval = false
+		partialGroup.DynamicGrouping = true
+		partialGroup.AppendChild(child)
+		require.NoError(t, partialGroup.Prepare(proc))
+		outputs := collectBatches(t, partialGroup, proc)
+		require.Len(t, outputs, 1)
+		partial := cloneBatch(t, proc, outputs[0])
+		partialGroup.Free(proc, false, nil)
+		child.Free(proc, false, nil)
+		return partial
+	}
+
+	active := makePartial(
+		testutil.MakeVarcharVector([]string{"active"}, nil, proc.Mp()), 0, 2)
+	rolled := makePartial(
+		vector.NewRollupConst(types.T_varchar.ToType(), 1, proc.Mp()), 1, 3)
+	require.False(t, mergeGroupHashKeyHasGrouping(active.Vecs))
+	require.True(t, mergeGroupHashKeyHasGrouping(rolled.Vecs))
+
+	mergeChild := colexec.NewMockOperator().WithBatchs(
+		[]*batch.Batch{active, rolled})
+	merge := newMergeGroupOp([]aggexec.AggFuncExecExpression{sumAgg(2)})
+	merge.GroupingAware = true
+	merge.AppendChild(mergeChild)
+	require.NoError(t, merge.Prepare(proc))
+	outputs := collectBatches(t, merge, proc)
+	rows := 0
+	for _, output := range outputs {
+		rows += output.RowCount()
+	}
+	require.Equal(t, 2, rows)
+
+	merge.Free(proc, false, nil)
+	mergeChild.Free(proc, false, nil)
+	proc.Free()
+	require.Zero(t, proc.Mp().CurrNB())
 }
 
 func TestMergeGroupUsesReducedHashKey(t *testing.T) {

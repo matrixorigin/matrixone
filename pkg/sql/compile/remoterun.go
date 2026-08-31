@@ -688,12 +688,13 @@ func convertToPipelineInstruction(op vm.Operator, proc *process.Process, ctx *sc
 			return ctxId, nil, err
 		}
 		in.Agg = &pipeline.Group{
-			NeedEval:       t.NeedEval,
-			SpillMem:       t.SpillMem,
-			GroupingFlag:   t.GroupingFlag,
-			Exprs:          t.GroupBy,
-			Aggs:           convertToPipelineAggregates(t.Aggs),
-			GroupByHashKey: t.GroupByHashKey,
+			NeedEval:        t.NeedEval,
+			SpillMem:        t.SpillMem,
+			GroupingFlag:    t.GroupingFlag,
+			DynamicGrouping: t.DynamicGrouping,
+			Exprs:           t.GroupBy,
+			Aggs:            convertToPipelineAggregates(t.Aggs),
+			GroupByHashKey:  t.GroupByHashKey,
 		}
 		in.ProjectList = t.ProjectList
 	case *sample.Sample:
@@ -768,6 +769,8 @@ func convertToPipelineInstruction(op vm.Operator, proc *process.Process, ctx *sc
 		}
 	case *projection.Projection:
 		in.ProjectList = t.ProjectList
+		in.ProjectionGroupingFlags = t.GroupingFlags
+		in.ProjectionGroupingSetCount = int32(t.GroupingSetCount)
 	case *filter.Filter:
 		in.Filters = t.FilterExprs
 		in.RuntimeFilters = t.RuntimeFilterExprs
@@ -800,9 +803,10 @@ func convertToPipelineInstruction(op vm.Operator, proc *process.Process, ctx *sc
 			return ctxId, nil, err
 		}
 		in.Agg = &pipeline.Group{
-			SpillMem:       t.SpillMem,
-			Aggs:           convertToPipelineAggregates(t.Aggs),
-			GroupByHashKey: t.GroupByHashKey,
+			SpillMem:        t.SpillMem,
+			Aggs:            convertToPipelineAggregates(t.Aggs),
+			GroupByHashKey:  t.GroupByHashKey,
+			DynamicGrouping: t.GroupingAware,
 		}
 		in.ProjectList = t.ProjectList
 		EncodeMergeGroup(t, in.Agg)
@@ -1274,6 +1278,7 @@ func convertToVmOperator(opr *pipeline.Instruction, ctx *scopeContext, eng engin
 		arg.NeedEval = t.NeedEval
 		arg.SpillMem = t.SpillMem
 		arg.GroupingFlag = t.GroupingFlag
+		arg.DynamicGrouping = t.DynamicGrouping
 		arg.GroupBy = t.Exprs
 		arg.GroupByHashKey = t.GroupByHashKey
 		arg.Aggs = convertToAggregates(t.Aggs)
@@ -1354,6 +1359,8 @@ func convertToVmOperator(opr *pipeline.Instruction, ctx *scopeContext, eng engin
 	case vm.Projection:
 		arg := projection.NewArgument()
 		arg.ProjectList = opr.ProjectList
+		arg.GroupingFlags = opr.ProjectionGroupingFlags
+		arg.GroupingSetCount = int(opr.ProjectionGroupingSetCount)
 		op = arg
 	case vm.Filter:
 		arg := filter.NewArgument()
@@ -1406,6 +1413,7 @@ func convertToVmOperator(opr *pipeline.Instruction, ctx *scopeContext, eng engin
 		arg.SpillMem = t.SpillMem
 		arg.Aggs = convertToAggregates(t.Aggs)
 		arg.GroupByHashKey = t.GroupByHashKey
+		arg.GroupingAware = t.DynamicGrouping
 		arg.ProjectList = opr.ProjectList
 		op = arg
 		DecodeMergeGroup(op.(*group.MergeGroup), opr.Agg)

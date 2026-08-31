@@ -3616,6 +3616,9 @@ func (builder *QueryBuilder) removeUnnecessaryProjections(nodeID int32) int32 {
 	if node.NodeType != plan.Node_PROJECT {
 		return nodeID
 	}
+	if _, groupingSetExpand := DecodeGroupingSetExpandOption(node.ExtraOptions); groupingSetExpand {
+		return nodeID
+	}
 	childNodeID := node.Children[0]
 	childNode := builder.qry.Nodes[childNodeID]
 	if len(childNode.ProjectList) != 0 {
@@ -3841,7 +3844,7 @@ func (builder *QueryBuilder) createQuery() (*Query, error) {
 }
 
 func (builder *QueryBuilder) buildUnion(stmt *tree.UnionClause, astOrderBy tree.OrderBy, astLimit *tree.Limit, astRankOption *tree.RankOption, ctx *BindContext, isRoot bool) (int32, error) {
-	return builder.buildUnionWithResultLen(stmt, astOrderBy, astLimit, astRankOption, ctx, isRoot, 0, nil, false)
+	return builder.buildUnionWithResultLen(stmt, astOrderBy, astLimit, astRankOption, ctx, isRoot, 0, nil, false, stmt.GeneratedByGroupingSet)
 }
 
 func (builder *QueryBuilder) buildUnionWithResultLen(
@@ -3863,6 +3866,10 @@ func (builder *QueryBuilder) buildUnionWithResultLen(
 	// chain, applied by a DISTINCT node after PROJECT and before SORT. Used by the
 	// grouping-set SELECT DISTINCT path; ordinary UNION passes false.
 	distinct bool,
+	// shareGroupingInput is true only for the internal UNION ALL used to lower
+	// one grouping-set SELECT. It allows the branches to share one typed,
+	// deterministic input without changing ordinary UNION semantics.
+	shareGroupingInput bool,
 ) (int32, error) {
 	if builder.isForUpdate {
 		return 0, moerr.NewInternalError(builder.GetContext(), "not support select union for update")
@@ -3971,6 +3978,9 @@ func (builder *QueryBuilder) buildUnionWithResultLen(
 		}
 		subCtxList[idx] = subCtx
 		nodes[idx] = nodeID
+	}
+	if shareGroupingInput {
+		builder.registerGroupingSetInput(nodes, subCtxList)
 	}
 	// Type coercion below mutates branch project expressions in place, including
 	// the ENUM display expression and the type attached to a literal NULL.
@@ -5429,6 +5439,7 @@ func (builder *QueryBuilder) bindSelect(stmt *tree.Select, ctx *BindContext, isR
 					}
 					leftClause = &tree.UnionClause{Type: tree.UNION, Left: leftClause, Right: stmt, All: true}
 				}
+				leftClause.GeneratedByGroupingSet = true
 				if nodeID, err = builder.buildUnionWithResultLen(
 					leftClause,
 					unionOrderBy,
@@ -5439,6 +5450,7 @@ func (builder *QueryBuilder) bindSelect(stmt *tree.Select, ctx *BindContext, isR
 					hiddenResultLen,
 					groupingOrderResolve,
 					selectClause.Distinct,
+					true,
 				); err != nil {
 					return
 				}
@@ -6874,6 +6886,7 @@ func rewriteRollupWindowSelect(
 		}
 		leftClause = &tree.UnionClause{Type: tree.UNION, Left: leftClause, Right: stmt, All: true}
 	}
+	leftClause.GeneratedByGroupingSet = true
 
 	derived := &tree.Select{Select: leftClause}
 	return &tree.Select{

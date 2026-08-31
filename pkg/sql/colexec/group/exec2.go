@@ -72,6 +72,16 @@ func hasInactiveGroupingColumn(flags []bool) bool {
 	return false
 }
 
+// UsesGroupingAwareHash reports whether partial group keys use the extended
+// hash grammar that distinguishes a rolled-up grouping sentinel from SQL NULL.
+// MergeGroup must know this from the plan: an individual partial can contain
+// only the fully active grouping set and therefore carry no sentinel bits even
+// though later partials in the same stream do.
+func (group *Group) UsesGroupingAwareHash() bool {
+	return group != nil &&
+		(group.DynamicGrouping || hasInactiveGroupingColumn(group.GroupingFlag))
+}
+
 func (group *Group) Prepare(proc *process.Process) (err error) {
 	group.diagnosticsLogged = false
 	group.ctr.state = vm.Build
@@ -113,7 +123,8 @@ func (group *Group) Prepare(proc *process.Process) (err error) {
 	// same as a reused prepared operator.
 	group.ctr.setSpillMem(group.SpillMem)
 	group.ctr.setGroupByHashKey(group.GroupByHashKey)
-	if len(group.GroupByHashKey) > 0 && hasInactiveGroupingColumn(group.GroupingFlag) {
+	if len(group.GroupByHashKey) > 0 &&
+		(group.DynamicGrouping || hasInactiveGroupingColumn(group.GroupingFlag)) {
 		return moerr.NewInternalErrorNoCtx("group-by hash key cannot be used with grouping sets")
 	}
 	if err = group.ctr.validateGroupByHashKey(len(group.GroupBy)); err != nil {
@@ -172,6 +183,10 @@ func (group *Group) prepareGroupAndAggArg(proc *process.Process) (err error) {
 		}
 
 		group.ctr.groupingAware = false
+		if group.DynamicGrouping {
+			group.ctr.mtyp = HStr
+			group.ctr.groupingAware = true
+		}
 		for _, flag := range group.GroupingFlag {
 			if !flag {
 				group.ctr.mtyp = HStr
