@@ -825,6 +825,51 @@ func TestPlanReaderPureHelpersCoverDecodedQueriesAndScanBatches(t *testing.T) {
 		&plan.Expr{Expr: &plan.Expr_Corr{Corr: &plan.CorrColRef{ColPos: 1}}}))
 }
 
+func TestCollectRelationFilterColumnsAcceptsOnlySafeExpressionShapes(t *testing.T) {
+	column := ivfColExpr(1, plan.Type{Id: int32(types.T_int64)})
+	valid := []*plan.Expr{
+		nil,
+		{Expr: &plan.Expr_Col{Col: &plan.ColRef{ColPos: 1}}},
+		{Expr: &plan.Expr_F{F: &plan.Function{Args: []*plan.Expr{column}}}},
+		{Expr: &plan.Expr_List{List: &plan.ExprList{List: []*plan.Expr{column}}}},
+		{Expr: &plan.Expr_Lit{Lit: &plan.Literal{Src: column}}},
+		{Expr: &plan.Expr_P{P: &plan.ParamRef{}}},
+		{Expr: &plan.Expr_V{V: &plan.VarRef{}}},
+		{Expr: &plan.Expr_T{T: &plan.TargetType{}}},
+		{Expr: &plan.Expr_Max{Max: &plan.MaxValue{}}},
+		{Expr: &plan.Expr_Vec{Vec: &plan.LiteralVec{}}},
+		{Expr: &plan.Expr_Fold{Fold: &plan.FoldVal{}}},
+	}
+	for _, expr := range valid {
+		columns := make(map[int32]struct{})
+		require.True(t, collectRelationFilterColumns(expr, 2, columns))
+	}
+
+	invalid := []*plan.Expr{
+		{Expr: &plan.Expr_Col{}},
+		{Expr: &plan.Expr_Col{Col: &plan.ColRef{ColPos: -1}}},
+		{Expr: &plan.Expr_F{}},
+		{Expr: &plan.Expr_F{F: &plan.Function{Args: []*plan.Expr{{Expr: &plan.Expr_Col{Col: &plan.ColRef{ColPos: 2}}}}}}},
+		{Expr: &plan.Expr_List{}},
+		{Expr: &plan.Expr_List{List: &plan.ExprList{List: []*plan.Expr{{Expr: &plan.Expr_Col{Col: &plan.ColRef{ColPos: 2}}}}}}},
+		{Expr: &plan.Expr_Lit{}},
+		{Expr: &plan.Expr_P{}},
+		{Expr: &plan.Expr_V{}},
+		{Expr: &plan.Expr_T{}},
+		{Expr: &plan.Expr_Max{}},
+		{Expr: &plan.Expr_Vec{}},
+		{Expr: &plan.Expr_Fold{}},
+		{Expr: &plan.Expr_Raw{Raw: &plan.RawColRef{}}},
+		{Expr: &plan.Expr_W{W: &plan.WindowSpec{}}},
+		{Expr: &plan.Expr_Sub{Sub: &plan.SubqueryRef{}}},
+		{Expr: &plan.Expr_Corr{Corr: &plan.CorrColRef{}}},
+		{},
+	}
+	for _, expr := range invalid {
+		require.False(t, collectRelationFilterColumns(expr, 2, make(map[int32]struct{})))
+	}
+}
+
 type fixedRelationReader struct {
 	emitted bool
 	closed  int
