@@ -177,7 +177,8 @@ where table_schema = 'idx_meta_sub_b' and table_name = 'second_t';
 0
 alter publication idx_meta_pub_b account idx_meta_other;
 execute subscription_membership_stmt using @membership_schema, @membership_table;
-internal error: the account idx_meta_sub is not allowed to subscribe the publication idx_meta_pub_b
+➤ prepared_subscription_rows[-5,64,0]  𝄀
+0
 alter publication idx_meta_pub_b account idx_meta_sub;
 execute subscription_membership_stmt using @membership_schema, @membership_table;
 ➤ prepared_subscription_rows[-5,64,0]  𝄀
