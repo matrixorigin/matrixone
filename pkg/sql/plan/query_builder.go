@@ -12593,6 +12593,8 @@ func (builder *QueryBuilder) buildTableFunction(tbl *tree.TableFunction, ctx *Bi
 			nodeId, err = builder.buildMoCache(tbl, ctx, exprs, nil)
 		case "mo_check_constraints":
 			nodeId, err = builder.buildCheckConstraints(tbl, ctx, exprs, nil)
+		case "mo_current_roles":
+			nodeId, err = builder.buildCurrentRoles(tbl, ctx, exprs, nil)
 		case "fulltext_index_scan":
 			nodeId, err = builder.buildFullTextIndexScan(tbl, ctx, exprs, nil)
 		case "fulltext_index_tokenize":
