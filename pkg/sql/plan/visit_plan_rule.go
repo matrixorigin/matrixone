@@ -659,7 +659,19 @@ func preparedExprHasRuntimeDecimalParam(
 	expr *plan.Expr,
 	positions map[int]types.StringConversionKind,
 ) bool {
-	if pos, ok := preparedParamPosition(expr); ok && positions[pos] == types.StringConversionDecimal {
+	if isImplicitPreparedParamCast(expr) {
+		pos, ok := implicitPreparedParamPosition(expr)
+		if !ok || positions[pos] != types.StringConversionDecimal {
+			return false
+		}
+		// A serialized prefix filter may also contain parameters whose temporal
+		// target type was fixed by the binder.  Such a cast is a semantic boundary,
+		// not evidence that a string packet's leading digits should select the
+		// execute-time DECIMAL domain.
+		return preparedParamCastAllowsNumericPrefix(expr)
+	}
+	if param := expr.GetP(); param != nil && param.Pos >= 0 &&
+		positions[int(param.Pos)] == types.StringConversionDecimal {
 		return true
 	}
 	fn := expr.GetF()
@@ -706,7 +718,7 @@ func preparedNumericPrefixPositionContext(
 		}
 		pos, directEligible := preparedParamPosition(arg)
 		kind, eligiblePosition := positions[pos]
-		directEligible = directEligible && eligiblePosition
+		directEligible = directEligible && eligiblePosition && preparedParamCastAllowsNumericPrefix(arg)
 		source := unwrapPreparedImplicitCast(arg, directEligible)
 		if directEligible {
 			hasEligibleParam = true
@@ -720,7 +732,7 @@ func preparedNumericPrefixPositionContext(
 			for _, item := range list.List {
 				itemPos, itemEligible := preparedParamPosition(item)
 				kind, eligiblePosition := positions[itemPos]
-				itemEligible = itemEligible && eligiblePosition
+				itemEligible = itemEligible && eligiblePosition && preparedParamCastAllowsNumericPrefix(item)
 				item = unwrapPreparedImplicitCast(item, itemEligible)
 				if itemEligible {
 					hasEligibleParam = true
@@ -744,6 +756,14 @@ func preparedNumericPrefixPositionContext(
 		}
 	}
 	return hasEligibleParam && (hasDecimalPeer || hasRuntimeDecimal) && !hasFloatPeer && !hasCommonValueBoundary
+}
+
+func preparedParamCastAllowsNumericPrefix(expr *plan.Expr) bool {
+	if !isImplicitPreparedParamCast(expr) {
+		return true
+	}
+	target := types.T(expr.Typ.Id)
+	return !target.ToType().IsTemporal() || target == types.T_year
 }
 
 func preparedStaticFloatOperand(expr *plan.Expr) bool {
