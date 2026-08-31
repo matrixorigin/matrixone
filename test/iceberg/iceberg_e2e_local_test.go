@@ -616,19 +616,6 @@ func TestLocalE2EWaitForLifecycleFaultWaiters(t *testing.T) {
 	}
 }
 
-func TestLocalE2EWaitForCatalogLockWaiter(t *testing.T) {
-	db, mock := newLocalE2ESQLMock(t)
-	defer db.Close()
-	mock.ExpectQuery("select count\\(\\*\\) from mo_catalog\\.mo_locks where table_id = 17 and lock_key = 'point' and lock_content = 'aabb'").
-		WillReturnRows(sqlmock.NewRows([]string{"waiters"}).AddRow(int64(1)))
-	if err := waitForCatalogLockWaiter(context.Background(), db, catalogLifecycleLockIdentity{tableID: "17", content: "aabb"}); err != nil {
-		t.Fatalf("wait for catalog lock waiter: %v", err)
-	}
-	if err := mock.ExpectationsWereMet(); err != nil {
-		t.Fatalf("unmet catalog lock waiter expectations: %v", err)
-	}
-}
-
 func TestLocalE2ECatalogLifecycleLockIdentity(t *testing.T) {
 	db, mock := newLocalE2ESQLMock(t)
 	defer db.Close()
@@ -662,53 +649,6 @@ func expectCatalogLifecycleLockIdentity(mock sqlmock.Sqlmock) {
 	mock.ExpectQuery("select lock_content from mo_catalog\\.mo_locks where table_id = 17").
 		WillReturnRows(sqlmock.NewRows([]string{"lock_content"}).AddRow("aabb"))
 	mock.ExpectCommit()
-}
-
-func TestLocalE2EWaitForCatalogLockWaiterRejectsInvalidResponses(t *testing.T) {
-	tests := []struct {
-		name string
-		rows *sqlmock.Rows
-		err  error
-		want string
-	}{
-		{name: "query failure", err: errors.New("lock view unavailable"), want: "lock view unavailable"},
-		{name: "empty response", rows: sqlmock.NewRows([]string{"waiters"}), want: "returned 0 rows"},
-		{name: "invalid count", rows: sqlmock.NewRows([]string{"waiters"}).AddRow("not-a-count"), want: "parse catalog lock waiter count"},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			db, mock := newLocalE2ESQLMock(t)
-			defer db.Close()
-			expectation := mock.ExpectQuery("select count\\(\\*\\) from mo_catalog\\.mo_locks where table_id = 17")
-			if tt.err != nil {
-				expectation.WillReturnError(tt.err)
-			} else {
-				expectation.WillReturnRows(tt.rows)
-			}
-			err := waitForCatalogLockWaiter(context.Background(), db, catalogLifecycleLockIdentity{tableID: "17", content: "aabb"})
-			if err == nil || !strings.Contains(err.Error(), tt.want) {
-				t.Fatalf("expected %q, got %v", tt.want, err)
-			}
-			if err := mock.ExpectationsWereMet(); err != nil {
-				t.Fatalf("catalog-lock waiter failure expectation: %v", err)
-			}
-		})
-	}
-}
-
-func TestLocalE2EWaitForCatalogLockWaiterHonorsDeadline(t *testing.T) {
-	db, mock := newLocalE2ESQLMock(t)
-	defer db.Close()
-	mock.ExpectQuery("select count\\(\\*\\) from mo_catalog\\.mo_locks where table_id = 17").
-		WillReturnRows(sqlmock.NewRows([]string{"waiters"}).AddRow(int64(0)))
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Millisecond)
-	defer cancel()
-	if err := waitForCatalogLockWaiter(ctx, db, catalogLifecycleLockIdentity{tableID: "17", content: "aabb"}); !errors.Is(err, context.DeadlineExceeded) {
-		t.Fatalf("catalog-lock waiter ignored deadline: %v", err)
-	}
-	if err := mock.ExpectationsWereMet(); err != nil {
-		t.Fatalf("catalog-lock waiter deadline expectation: %v", err)
-	}
 }
 
 func TestLocalE2ECleanupLifecycleFaultsReportsEveryFailure(t *testing.T) {
@@ -1038,7 +978,6 @@ func TestLocalE2EConcurrentCreateMappingAndDropCaseReleasesWorkersAfterCreateWai
 		mock.ExpectExec("REMOVE_FAULT_POINT").WillReturnResult(sqlmock.NewResult(0, 1))
 	}
 	mock.ExpectExec("select disable_fault_injection").WillReturnResult(sqlmock.NewResult(0, 1))
-	expectAccessLifecycleCleanup(mock)
 
 	result := (&caseRunner{cfg: localE2ETestConfig(), db: db}).concurrentCreateMappingAndDropCase(context.Background())
 	if result.Status != "failed" || !strings.Contains(result.Error, "create waiter unavailable") {
@@ -1049,7 +988,7 @@ func TestLocalE2EConcurrentCreateMappingAndDropCaseReleasesWorkersAfterCreateWai
 	}
 }
 
-func TestLocalE2EConcurrentCreateMappingAndDropCaseCommitsCreateAndCleansUp(t *testing.T) {
+func TestLocalE2EConcurrentCreateMappingAndDropCaseRejectsCreateWhileDropOwnsLock(t *testing.T) {
 	db, mock := newLocalE2ESQLMock(t)
 	defer db.Close()
 	mock.MatchExpectationsInOrder(false)
@@ -1072,10 +1011,8 @@ func TestLocalE2EConcurrentCreateMappingAndDropCaseCommitsCreateAndCleansUp(t *t
 	} {
 		mock.ExpectExec("select add_fault_point").WillReturnResult(sqlmock.NewResult(0, 1))
 	}
-	mock.ExpectExec("CREATE EXTERNAL TABLE").WillReturnResult(sqlmock.NewResult(0, 1))
-	mock.ExpectExec("DROP ICEBERG CATALOG ").WillReturnError(errors.New("still has dependent metadata: table mappings"))
+	mock.ExpectExec("DROP ICEBERG CATALOG ").WillReturnResult(sqlmock.NewResult(0, 1))
 	for range []string{
-		icebergCreateAfterCatalogLockWaitersFault,
 		icebergDropBeforeCatalogLockWaitersFault,
 		icebergDropAfterCatalogLockWaitersFault,
 	} {
@@ -1083,12 +1020,11 @@ func TestLocalE2EConcurrentCreateMappingAndDropCaseCommitsCreateAndCleansUp(t *t
 			WillReturnRows(sqlmock.NewRows([]string{"waiters"}).AddRow(int64(1)))
 	}
 	mock.ExpectExec("select trigger_fault_point").WillReturnResult(sqlmock.NewResult(0, 1))
-	mock.ExpectQuery("select count\\(\\*\\) from mo_catalog\\.mo_locks where table_id = 17").
-		WillReturnRows(sqlmock.NewRows([]string{"waiters"}).AddRow(int64(1)))
-	mock.ExpectExec("select trigger_fault_point").WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectExec("set lock_wait_timeout = 1").WillReturnResult(sqlmock.NewResult(0, 0))
+	mock.ExpectExec("CREATE EXTERNAL TABLE").WillReturnError(errors.New("lock wait timeout"))
 	mock.ExpectExec("select trigger_fault_point").WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectQuery("select \\(select count\\(\\*\\) from mo_catalog\\.mo_iceberg_catalogs").
-		WillReturnRows(sqlmock.NewRows([]string{"catalogs", "tables"}).AddRow(1, 1))
+		WillReturnRows(sqlmock.NewRows([]string{"catalogs", "tables"}).AddRow(0, 0))
 
 	for range []string{
 		icebergCreateAfterCatalogLockFault,
@@ -1111,10 +1047,9 @@ func TestLocalE2EConcurrentCreateMappingAndDropCaseCommitsCreateAndCleansUp(t *t
 		mock.ExpectExec("REMOVE_FAULT_POINT").WillReturnResult(sqlmock.NewResult(0, 1))
 	}
 	mock.ExpectExec("select disable_fault_injection").WillReturnResult(sqlmock.NewResult(0, 1))
-	expectAccessLifecycleCleanup(mock)
 
 	result := (&caseRunner{cfg: localE2ETestConfig(), db: db}).concurrentCreateMappingAndDropCase(context.Background())
-	if result.Status != "passed" || result.Details["catalog_id"] != "42" || result.Details["create_error"] != "<nil>" || !strings.Contains(result.Details["drop_error"], "dependent metadata") {
+	if result.Status != "passed" || result.Details["catalog_id"] != "42" || !strings.Contains(result.Details["create_error"], "lock wait timeout") || result.Details["drop_error"] != "<nil>" {
 		t.Fatalf("unexpected concurrent lifecycle result: %+v", result)
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {

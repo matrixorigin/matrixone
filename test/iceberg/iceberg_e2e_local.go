@@ -548,38 +548,43 @@ func (r *caseRunner) concurrentCreateMappingAndDropCase(ctx context.Context) (re
 	workers.Add(1)
 	go func() {
 		defer workers.Done()
-		_, err := r.db.ExecContext(caseCtx, createSQL)
-		results <- ddlResult{name: "create", err: err}
-	}()
-	barrierCtx, cancelBarrier := context.WithTimeout(ctx, 30*time.Second)
-	defer cancelBarrier()
-	if err := waitForLifecycleFaultWaiters(barrierCtx, r.db, icebergCreateAfterCatalogLockWaitersFault, 1); err != nil {
-		return stopAndFail(nil, nil, fmt.Sprintf("CREATE did not pause after catalog lifecycle lock: %v", err))
-	}
-	workers.Add(1)
-	go func() {
-		defer workers.Done()
 		_, err := r.db.ExecContext(caseCtx, dropSQL)
 		results <- ddlResult{name: "drop", err: err}
 	}()
+	barrierCtx, cancelBarrier := context.WithTimeout(ctx, 30*time.Second)
+	defer cancelBarrier()
 	if err := waitForLifecycleFaultWaiters(barrierCtx, r.db, icebergDropBeforeCatalogLockWaitersFault, 1); err != nil {
 		return stopAndFail(nil, nil, fmt.Sprintf("DROP did not reach the pre-lock phase: %v", err))
 	}
 	if err := releaseLifecycleFault(barrierCtx, r.db, icebergDropBeforeCatalogLockFault); err != nil {
 		return stopAndFail(nil, nil, fmt.Sprintf("release DROP pre-lock phase: %v", err))
 	}
-	// The lock identity is captured by a dedicated transaction that takes the
-	// same target row lock before either worker starts.  This proves that the
-	// waiter is this DROP on this catalog row, rather than an unrelated lock
-	// wait elsewhere in the instance.
-	if err := waitForCatalogLockWaiter(barrierCtx, r.db, lockIdentity); err != nil {
-		return stopAndFail(nil, nil, fmt.Sprintf("DROP did not enter the catalog lifecycle lock wait: %v", err))
-	}
-	if err := releaseLifecycleFault(barrierCtx, r.db, icebergCreateAfterCatalogLockFault); err != nil {
-		return stopAndFail(nil, nil, fmt.Sprintf("release CREATE post-lock phase: %v", err))
-	}
 	if err := waitForLifecycleFaultWaiters(barrierCtx, r.db, icebergDropAfterCatalogLockWaitersFault, 1); err != nil {
-		return stopAndFail(nil, nil, fmt.Sprintf("DROP did not acquire the catalog lock after CREATE publication: %v", err))
+		return stopAndFail(nil, nil, fmt.Sprintf("DROP did not acquire the target catalog lifecycle lock: %v", err))
+	}
+	createConn, err := r.db.Conn(ctx)
+	if err != nil {
+		return stopAndFail(nil, nil, fmt.Sprintf("reserve CREATE connection: %v", err))
+	}
+	defer createConn.Close()
+	if _, err := createConn.ExecContext(barrierCtx, "set lock_wait_timeout = 1"); err != nil {
+		return stopAndFail(nil, nil, fmt.Sprintf("set CREATE lock wait timeout: %v", err))
+	}
+	createDone := make(chan error, 1)
+	workers.Add(1)
+	go func() {
+		defer workers.Done()
+		_, err := createConn.ExecContext(caseCtx, createSQL)
+		results <- ddlResult{name: "create", err: err}
+		createDone <- err
+	}()
+	select {
+	case createErr := <-createDone:
+		if createErr == nil {
+			return stopAndFail([]string{"CREATE lock wait failure while DROP holds the catalog row"}, []string{"CREATE committed"}, "CREATE bypassed the catalog lifecycle lock")
+		}
+	case <-barrierCtx.Done():
+		return stopAndFail(nil, nil, fmt.Sprintf("CREATE did not terminate at the catalog lifecycle lock: %v", barrierCtx.Err()))
 	}
 	if err := releaseLifecycleFault(barrierCtx, r.db, icebergDropAfterCatalogLockFault); err != nil {
 		return stopAndFail(nil, nil, fmt.Sprintf("release DROP post-lock phase: %v", err))
@@ -589,8 +594,8 @@ func (r *caseRunner) concurrentCreateMappingAndDropCase(ctx context.Context) (re
 		return fail(nil, nil, fmt.Sprintf("wait for lifecycle workers: %v", err))
 	}
 	createErr, dropErr := resultByName["create"], resultByName["drop"]
-	if (createErr == nil) == (dropErr == nil) {
-		return fail([]string{"exactly one DDL commits"}, []string{fmt.Sprintf("create=%v", createErr), fmt.Sprintf("drop=%v", dropErr)}, "catalog lock did not choose exactly one winner")
+	if createErr == nil || dropErr != nil {
+		return fail([]string{"CREATE lock failure and DROP commit"}, []string{fmt.Sprintf("create=%v", createErr), fmt.Sprintf("drop=%v", dropErr)}, "catalog lifecycle lock did not reject CREATE while DROP owned the target row")
 	}
 
 	sqls = append(sqls, stateSQL)
@@ -598,23 +603,17 @@ func (r *caseRunner) concurrentCreateMappingAndDropCase(ctx context.Context) (re
 	if err != nil {
 		return fail(nil, state, err.Error())
 	}
-	if createErr == nil && !sameLines([]string{"1\t1"}, state) {
-		return fail([]string{"1\t1"}, state, "CREATE won but catalog/mapping state was not committed together")
-	}
-	if dropErr == nil && !sameLines([]string{"0\t0"}, state) {
-		return fail([]string{"0\t0"}, state, "DROP won but catalog-owned mapping remained")
+	if !sameLines([]string{"0\t0"}, state) {
+		return fail([]string{"0\t0"}, state, "DROP committed but catalog-owned mapping remained")
 	}
 	cleanupNeeded = false
-	if createErr == nil {
-		cleanupNeeded = true
-	}
 	return passedCase(
 		"ICE-CI-E2E-016",
 		"concurrent-create-mapping-and-drop",
 		sqls,
-		[]string{"exactly one DDL commits", "1\t1 or 0\t0"},
+		[]string{"CREATE lock failure", "DROP commit", "0\t0"},
 		state,
-		map[string]string{"catalog_id": strconv.FormatUint(catalogID, 10), "catalog_lock_table_id": lockIdentity.tableID, "catalog_lock_content": lockIdentity.content, "create_error": fmt.Sprint(createErr), "drop_error": fmt.Sprint(dropErr), "phase_barrier": "fault injection: CREATE after catalog lock; DROP waits on the captured target catalog lock, then runs after lifecycle lock"},
+		map[string]string{"catalog_id": strconv.FormatUint(catalogID, 10), "catalog_lock_table_id": lockIdentity.tableID, "catalog_lock_content": lockIdentity.content, "create_error": fmt.Sprint(createErr), "drop_error": fmt.Sprint(dropErr), "phase_barrier": "fault injection: DROP acquires the captured target catalog lock; CREATE uses a bounded lock wait and must be rejected before DROP commits"},
 	)
 }
 
@@ -770,32 +769,6 @@ func captureCatalogLifecycleLockIdentity(ctx context.Context, db *sql.DB, catalo
 	}
 	committed = true
 	return catalogLifecycleLockIdentity{tableID: tableIDs[0], content: contents[0]}, nil
-}
-
-func waitForCatalogLockWaiter(ctx context.Context, db *sql.DB, identity catalogLifecycleLockIdentity) error {
-	ticker := time.NewTicker(10 * time.Millisecond)
-	defer ticker.Stop()
-	for {
-		rows, err := queryLines(ctx, db, fmt.Sprintf("select count(*) from mo_catalog.mo_locks where table_id = %s and lock_key = 'point' and lock_content = %s and lock_wait is not null and lock_wait <> ''", identity.tableID, sqlString(identity.content)))
-		if err != nil {
-			return err
-		}
-		if len(rows) != 1 {
-			return fmt.Errorf("catalog lock view returned %d rows", len(rows))
-		}
-		waiters, err := strconv.ParseUint(rows[0], 10, 64)
-		if err != nil {
-			return fmt.Errorf("parse catalog lock waiter count: %w", err)
-		}
-		if waiters > 0 {
-			return nil
-		}
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		case <-ticker.C:
-		}
-	}
 }
 
 func waitForLifecycleFaultWaiters(ctx context.Context, db *sql.DB, waitersPoint string, want uint64) error {
