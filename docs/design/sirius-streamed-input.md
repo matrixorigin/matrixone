@@ -2,7 +2,7 @@
 
 Status: proposed for design approval
 
-Design version: 4
+Design version: 5
 
 Approval: pending distinct reviewer approval
 
@@ -26,9 +26,9 @@ This is an explicit, single-CN compatibility path selected by
 does not silently fall back to MatrixOne execution after the explicit stream
 mode has been selected.
 
-The protocol is version 4. Versions 4 and 5 existed only on the unmerged
-StreamRead feature branches; version 4 is the single delivery revision after
-the merged direct-`TaeRead` version 3 baseline. It requires an exact
+The wire protocol is version 4. Wire protocol numbers 4 and 5 existed only on
+the unmerged StreamRead feature branches; protocol 4 is the single delivery
+revision after the merged direct-`TaeRead` protocol-3 baseline. It requires an exact
 capability-document match across MatrixOne, the sidecar, and Sirius. Mixed
 protocol revisions fail before result rows are exposed.
 
@@ -60,13 +60,22 @@ through `part`, `lineitem`, `partsupp`, and `orders`, isolating the failure to
 the large concurrent partition phase rather than Flight or the native codec.
 
 Version 3 kept ordinary GPU task parallelism but admitted only one `PARTITION`
-execution per GPU until that operator's CUDA stream is synchronized. It also
+execution per GPU until that operator's CUDA stream was synchronized. It also
 replaced the false one-published-batch memory claim with a process-global input
-budget. Review of the implementation found a more direct contract: version 4
-removes multi-frame `GPU_MO_SCAN` staging instead of budgeting it. One Sirius
-source task consumes one wire frame and produces one host representation. A
-second frame may occupy the sidecar's one-slot prefetch window, but no third
-frame can be sent until the prefetched frame is acknowledged.
+budget. Version 4 removed multi-frame `GPU_MO_SCAN` staging: one Sirius source
+task consumes one wire frame and produces one host representation, while one
+subsequent frame may occupy the sidecar's one-slot prefetch window.
+
+Further review disproved the premise that concurrent partition execution is
+itself unsupported. The normal Sirius path runs with multiple GPU streams; its
+large scan tasks merely make the failing fine-grained schedule less likely.
+The actual violated lifetime is exception quiescence. A GPU operator can enqueue
+work and then throw before `run_one_operator` reaches its success-only stream
+synchronization. The task then releases processing handles and its reservation,
+and the executor returns the borrowed stream to the pool, even though queued GPU
+work may still reference those resources or the stream may contain a sticky
+CUDA failure. Version 5 fixes that owner boundary and requires `PARTITION` to be
+reentrant rather than serialized.
 
 MatrixOne uses its ordinary synchronous output backpressure. If Sirius stops
 pulling, the sidecar withholds the input acknowledgement, `NativeInput.Send`
@@ -98,11 +107,14 @@ The supporting invariants are:
    receive, and Sirius worker independently of the data path.
 7. MatrixOne does not release snapshot/query resources until local producers,
    the sidecar execution, and all sidecar input handlers are quiescent.
-8. At most one GPU `PARTITION` operator executes per physical GPU. The permit is
-   held through stream synchronization and is released on every terminal path;
-   non-partition GPU operators retain their configured concurrency.
-9. Direct `TaeRead` keeps its existing schema, physical-type, lease, and
-   fallback contract. It shares the core per-GPU partition safety invariant.
+8. Every GPU task retains its input processing handles, reservation, allocator
+   attachment, and borrowed stream until that stream is quiescent on success or
+   failure. Only a successfully quiesced stream returns to the pool.
+9. `PARTITION` is reentrant: tasks on independent streams use immutable operator
+   metadata and task-local temporary/output state. Configured GPU concurrency is
+   preserved, including concurrent tasks in the same partition stage.
+10. Direct `TaeRead` keeps its existing schema, physical-type, lease, and
+    fallback contract. It shares the same GPU task-lifetime invariant.
 
 The negation of the contract includes lost or duplicate batches, using a stream
 from another account/query/snapshot, acknowledging a batch before ownership is
@@ -170,27 +182,39 @@ canonical decoding, and coordinated rollout contain that cost.
 ### 4.4 One GPU worker for the whole query
 
 Setting `executor.pipeline.num_threads` to one made SF10 Q9 deterministic, but
-it serializes joins, aggregates, projections, and scans that did not violate the
-contract. It also changes deployment behavior for direct `TaeRead`. Version 3
-therefore models only `PARTITION` as an exclusive per-GPU resource and preserves
-ordinary task concurrency.
+it serializes joins, aggregates, projections, and scans and hides ownership
+bugs that remain reachable with smaller task sizes. It also changes deployment
+behavior for direct `TaeRead`. Version 5 therefore requires correctness with at
+least two GPU workers and does not accept global serialization.
 
-### 4.5 CUDA retry after partition failure
+### 4.5 Selective partition serialization
 
-Retrying launch-resource errors can be appropriate before any kernel mutates
-output, but the observed failures included invalid-device and illegal-address
-errors and successful concurrent runs produced nondeterministic values. Those
-states are not safe to replay. Version 3 prevents the unsupported overlap and
-treats every CUDA execution error as terminal.
+A per-GPU partition permit would preserve concurrency for other operators, but
+it still makes correctness depend on suppressing a schedule that normal Sirius
+supports. It does not repair resource release before stream quiescence or
+prevent a poisoned stream from being reused after another operator fails.
+Version 5 instead makes the task lifetime exception-safe and the partition
+execution state reentrant. If an isolated test proves the pinned libcudf
+primitive cannot run on independent streams after those fixes, delivery stops
+and the design must be reconsidered; serialization is not added silently.
 
-### 4.6 Immediate migration to current upstream Sirius
+### 4.6 CUDA retry after partition failure
+
+An OOM may be retried only after the task stream has successfully synchronized
+while all input owners and reservations remain live. Invalid launch,
+invalid-device, illegal-address, or synchronization failure may have partially
+executed work or poisoned the stream and is terminal. Clearing CUDA error state,
+sleeping, or replaying the task is not recovery.
+
+### 4.7 Immediate migration to current upstream Sirius
 
 Current upstream Sirius has newer partial-barrier, adaptive-join, and task
 admission machinery, but the MatrixOne TAE/Substrait stack is based on a fork
 hundreds of upstream commits behind it. Porting that stack is the preferred
 long-term route to general streaming, but it is a separate migration with a
-larger compatibility and validation surface. Version 3 deliberately stabilizes
-bounded TPC-H on the current fork and records unbounded execution as a non-goal.
+larger compatibility and validation surface. Version 5 fixes the common task
+ownership boundary on the current fork and records unbounded execution as a
+non-goal.
 
 ## 5. Architecture and ownership
 
@@ -220,8 +244,7 @@ Ownership transfer for one input frame is:
 
 ```text
 MO scan batch
-  -> MO marshalled payload
-  -> Flight DoPut frame
+  -> one mpool-charged MO Flight frame (header plus direct marshal)
   -> sidecar one-slot native_batch_view
   -> Sirius staged host representation
   -> consumed acknowledgement
@@ -247,6 +270,9 @@ Stream mode is admitted only when all of these conditions hold:
 - all scan scopes remain on the current CN;
 - every `StreamRead` schema is the deterministic post-scan native schema;
 - the Substrait plan and result schema pass the exact capability contract.
+- the process-global execution-capacity owner atomically admits the request's
+  input slots, plan/schema overlap, result slot, and configured active Sirius
+  representation capacity before ticket publication.
 
 MatrixOne retains semantic operators above the scan in Substrait. It clears
 native scan aggregation because the semantic aggregate remains in Sirius. It
@@ -278,7 +304,7 @@ document must be byte-for-byte equal to MatrixOne's document. Its SHA-256 hash
 is repeated in `ExecuteSubstraitRequest`, every `StreamRead`, and
 `FlightInfo.app_metadata`.
 
-The version-6 capability fixes these values:
+The protocol-v4 capability fixes these values:
 
 - Substrait 0.78.0;
 - `StreamRead` version 1 with feature bits 0;
@@ -287,7 +313,7 @@ The version-6 capability fixes these values:
 - little endian, 16-byte MatrixOne type records, and 24-byte varlena records;
 - at most 16 stream inputs and one buffered input slot per read;
 - at most 4 MiB per input batch payload;
-- StreamRead host accounting contract `global-fail-closed-v1`;
+- StreamRead host accounting contract `pre-admitted-execution-v2`;
 - at most 16 MiB per Substrait plan;
 - the exact operator, expression, function, join, and type allow-lists.
 
@@ -300,7 +326,7 @@ MatrixOne sends `ExecuteSubstraitRequest` through `GetFlightInfo`:
 
 | Field | Contract |
 | --- | --- |
-| `protocol_version` | exactly 6 |
+| `protocol_version` | exactly 4 |
 | `substrait_version` | exactly `0.78.0` |
 | `capability_hash` | exact negotiated SHA-256 |
 | `max_batch_bytes` | non-zero and no more than the sidecar result limit |
@@ -366,6 +392,12 @@ MatrixOne splits a larger scan batch at row boundaries; a single row larger
 than the limit is rejected. The sidecar validates vector count, physical types,
 row lengths, attributes, null maps, areas, metadata, sequence, and trailing
 bytes before publishing the frame.
+
+MatrixOne computes `MarshalBinarySize`, allocates the final header-plus-payload
+frame from the query mpool, and calls `MarshalBinaryTo` directly into its payload
+region. It does not create a separate marshalled payload and then copy it into a
+frame. The frame remains charged until the acknowledgement or terminal send
+error; the gRPC transport may retain at most one additional bounded send copy.
 
 The server has one input slot per read. One Sirius source task calls
 `next_batch` once and copies that frame directly into one final host
@@ -452,10 +484,10 @@ delay. Snapshot resources are not released before quiescence.
 
 | State | Accepted events | Terminal transition |
 | --- | --- | --- |
-| preparing | same-idempotency replay or cancellation identity | publish one ticket or cancel preparation |
+| preparing | capacity admission, same-idempotency replay, or cancellation identity | publish one ticket with one capacity lease, or roll the lease back |
 | prepared/unclaimed | attach inputs, `DoGet` claim, cancel, deadline | cancellation releases resolutions without starting work |
 | claimed/running | input frames/EOF, result reads, cancel, deadline | worker records success/failure/cancel and becomes quiescent |
-| quiescent | input-handler detach | remove ticket/idempotency record after handler count reaches zero |
+| quiescent | input-handler detach | remove ticket/idempotency record and release its capacity lease after handler count reaches zero |
 
 `CancelExecution` first publishes cancellation to every input, then interrupts
 Sirius and the DuckDB connection, then waits for both worker quiescence and zero
@@ -480,14 +512,31 @@ host reservation and source claim without scheduling a continuation. Only
 downstream task demand may claim the next generation. EOF marks `exhausted`;
 failure and cancellation admit no new generation.
 
-Each physical GPU owns one partition permit. A task whose remaining operator
-chain contains `PARTITION` must acquire that permit before reserving GPU memory
-or launching work. The permit remains owned until the partition operator's CUDA
-stream is synchronized. Waiting tasks are FIFO and hold no GPU reservation;
-query cancellation removes them from the wait queue. Release admits exactly
-one waiter and occurs through one RAII owner on success, exception,
-cancellation, drain, and executor shutdown. Other GPU task classes do not use
-this permit.
+Each GPU pipeline task permits
+`acquired -> reservation-attached -> processing -> quiescing -> completed` and
+`reservation-attached|processing -> quiescing -> retryable-oom|failed`. The task
+owns its input processing handles, output under construction, reservation
+attachment, and borrowed stream through `quiescing`. Success and every exception
+path synchronize the stream before any of those owners unwind. A clean OOM may
+transfer the still-owned input to one bounded retry generation. Any CUDA launch,
+invalid-device, illegal-address, or synchronization failure is terminal; the
+stream is discarded instead of returned to the pool, and the GPU executor is
+marked unavailable until process restart.
+
+Error precedence is deterministic. If quiescence succeeds, the original
+operator error is reported. If quiescence also fails, the synchronization error
+is the terminal class and the original error is retained as bounded diagnostic
+context. Only an original `rmm::out_of_memory` with successful quiescence enters
+the existing ten-attempt retry budget; every other original or quiescence error
+has zero retries.
+
+Partition metadata (keys, casts, partition count, and routing) is frozen before
+task publication. Each partition task owns its cast columns, libcudf result,
+offsets, output batches, and reservation-tracked allocator state. Every libcudf
+allocation receives the task's explicit stream and memory resource. Two tasks
+may enter one physical `PARTITION` stage concurrently; neither observes or
+mutates the other's state, and output publication happens only after its stream
+has synchronized.
 
 Pipeline input claim and `tasks_created` publication are one atomic transition
 under the pipeline status mutex. Completion checks use the same mutex and
@@ -502,10 +551,13 @@ cannot be mistaken for completion while a task is being constructed.
 | --- | --- | --- |
 | MO stream identity and scan scope | MO compile | compile release after producer join |
 | Flight prepare/ticket/idempotency | sidecar registry | terminal callback after worker and handlers quiesce |
+| process input-capacity lease | sidecar ticket registry | terminal callback after worker and handlers quiesce |
 | input frame slot | sidecar `stream_input` | consume/not-needed/cancel path |
 | Sirius input reservation | Sirius scan task | transferred to its single host representation and released after H2D or terminal destruction |
 | Sirius single-frame host data | GPU scan task | representation destruction after conversion or cancellation |
-| per-GPU partition permit | GPU executor | one task-scoped RAII permit; release or query drain admits next generation |
+| GPU input processing handles and reservation | GPU pipeline task | release only after success/failure stream quiescence |
+| borrowed CUDA stream | GPU pipeline task | return after clean quiescence; discard on synchronization/CUDA failure |
+| partition temporary/output state | partition task, then destination repositories | task cleanup on failure; synchronized publication transfers outputs |
 | GPU pipeline data | Sirius repositories | existing pipeline/memory manager cleanup |
 | result frame slot | sidecar execution entry | `DoGet` read or cancellation |
 | decoded MO result batch | MO result loop | per-frame deferred clean |
@@ -513,11 +565,12 @@ cannot be mistaken for completion while a task is being constructed.
 
 ### Q2: wait-for closure
 
-The possible waits are partition-permit admission, input-slot publication,
-input consumption, producer EOF, result-frame publication, result receive,
-worker join, handler join, and cleanup reconciliation. Every data wait observes
-cancellation/not-needed/deadline. A partition waiter owns no GPU reservation and
-is removed by query cancellation or executor drain.
+The possible waits are input-slot publication, input consumption, producer EOF,
+result-frame publication, result receive, GPU stream quiescence, worker join,
+handler join, and cleanup reconciliation. Every data wait observes
+cancellation/not-needed/deadline. GPU stream quiescence is the existing Sirius
+device-execution boundary: it ends in successful completion or a CUDA error;
+the latter fails the query and removes the stream from reuse.
 Cancellation does not take an input's data mutex before cancelling its gRPC
 context. Sidecar cancellation wakes input and result condition variables and
 interrupts Sirius/DuckDB. All RPCs are bounded by the minimum of caller,
@@ -530,30 +583,74 @@ request, lease-safe, and sidecar ticket deadlines.
 | plan | 16 MiB |
 | stream inputs per execution | 16 |
 | MatrixOne reader read-ahead | existing native pipeline-edge/spool bound, proportional to scan DOP rather than table size |
+| MatrixOne marshal plus gRPC-send overlap | at most two negotiated frames per globally admitted read; released after acknowledgement or terminal cancellation |
 | unacknowledged Flight input / sidecar prefetch slot | one shared frame per read, at most 4 MiB payload |
 | Sirius source task | one frame and one final host representation |
 | Sirius expanded input representation | 64 MiB, with its host reservation retained through H2D |
-| concurrent partition execution | one task per physical GPU; FIFO waiters retain no GPU reservation |
+| process-global streamed-input admission | fixed configured host envelope, default 2 GiB; active-representation capacity is reserved at startup and one worst-case transport slot per read before ticket publication |
+| concurrent partition execution | configured GPU executor concurrency; every task has independent stream, reservation, and temporary state |
 | result slot | one frame, at most negotiated result limit (default 64 MiB) |
 | result schema | 1 MiB and 4096 columns |
 | active tickets | configured limit, default 128 |
 | reconciliation retry | one worker per retained execution, delay capped at 5 seconds, stopped by runtime close |
 
-The 4 MiB wire limit is not a memory-reservation estimate because constant
-vectors can expand. Sirius reserves the 64 MiB worst case before reading a
-frame, moves that reservation into the published representation, and releases
-it only after synchronized H2D conversion or terminal destruction. There is no
-multi-frame staging vector and no StreamRead-specific table-sized host budget.
-The ordinary Sirius memory manager continues to own downstream GPU/operator
-state.
+The sidecar runtime owns one process-global streamed-input host envelope,
+configured by `MO_SIDECAR_STREAM_INPUT_CAPACITY_BYTES` and defaulting to 2 GiB.
+At startup it reserves the maximum active Sirius representation capacity:
+
+```text
+active_representation_capacity =
+    sum(configured GPU pipeline threads across all GPUs) * 64 MiB
+
+per_read_slot_charge =
+    2 * align64KiB(max_input_batch_bytes + 24-byte MOB1 header + 64 KiB transport overhead)
+
+per_execution_charge =
+    read_count * per_read_slot_charge
+  + 2 * align64KiB(max_batch_bytes + 64 KiB result-transport overhead)
+  + 2 * align64KiB(actual plan bytes + actual result-schema bytes + 64 KiB request overhead)
+```
+
+The GPU executor's bounded worker pools are the admission owner for active
+source tasks, so no additional representation can exist beyond that startup
+reservation. The factor of two in the read charge conservatively covers the
+gRPC receive/decode allocation and the Arrow buffer retained as the sidecar slot
+even when an implementation can share them. With the default 4 MiB frame limit
+one read costs 8.25 MiB. The other terms conservatively cover simultaneous
+encoder/Flight result buffers and request parse/retention overlap. A
+one-GPU/four-thread deployment reserves 256 MiB for active representations and
+uses the remaining 1.75 GiB for complete execution charges. Startup rejects a
+configuration that cannot reserve one maximum 16-read execution using the
+configured result limit and the maximum plan/schema limits.
+
+Before publishing a ticket, the registry atomically reserves
+`per_execution_charge`. Admission is non-blocking and returns
+`RESOURCE_EXHAUSTED` from Prepare before a ticket is visible or a MatrixOne
+producer starts. The charge therefore makes the configured active-ticket limit
+a secondary bound rather than multiplying plan, result, or input capacity.
+Idempotent concurrent Prepare shares one reservation.
+Constructor failure rolls it back, and terminal removal releases it only after
+the Sirius worker and all input handlers are quiescent. Current, peak, rejected,
+and terminal-balance counters are required.
+
+The MatrixOne process has at most one marshalled payload and one gRPC send copy
+per admitted read; the same global read count bounds those copies, while native
+reader batches remain charged to MatrixOne's existing allocation account and
+bounded DOP pipeline. Sirius reserves the actual 64 MiB worst case before
+reading a frame, moves that reservation into the published representation, and
+releases it after synchronized H2D conversion or terminal destruction. The
+fixed admission envelope is deliberately conservative and may reserve capacity
+that is not simultaneously used; it is capacity admission, not a table buffer.
+There is no multi-frame staging vector or table-sized wire queue. The ordinary
+Sirius memory manager continues to own downstream GPU/operator state.
 
 Measured SF10 Q9 input is 2,708,678,611 bytes, which is cumulative traffic and
 must not be simultaneously resident in the input path. SF10 Q1 transfers
 5,046,665,324 bytes cumulatively but continuously releases batches, proving why
 the bound applies to retained live memory rather than total traffic. Acceptance
-records the native-reader window, unacknowledged frames, prefetched frames,
-active source generations, retained host reservations, and terminal zero
-balances.
+records the native-reader window, admitted read envelopes, unacknowledged
+frames, prefetched frames, active source generations, retained host
+reservations, rejected admissions, and terminal zero balances.
 
 This is the stream-specific host envelope, not the complete Sirius GPU budget.
 GPU operators remain subject to Sirius's independent reservation and usage
@@ -581,7 +678,7 @@ or aggregate fits.
 
 ## 12. Compatibility, rollout, and rollback
 
-The MatrixOne native batch representation is an internal ABI. Protocol v6 is
+The MatrixOne native batch representation is an internal ABI. Protocol v4 is
 therefore supported only for the exact capability document and pinned
 MatrixOne/Sirius/sidecar revisions validated together. It is not a promise that
 an arbitrary older or newer MatrixOne batch codec is compatible.
@@ -615,10 +712,12 @@ secrets:
 - GPU backend evidence showing `GPU_MO_SCAN` and `SIRIUS_GPU` actually started;
 - cancellation source and terminal outcome;
 - active tickets, active input handlers, retained reconciliation owners;
+- streamed-input admission capacity, current/peak admitted bytes, admitted
+  reads, rejected bytes/reads, and terminal zero balance;
 - per-read received, acknowledged, H2D-completed, and active-source counts,
   including the observed maximum deltas;
-- per-GPU active and queued partition tasks, including the observed maximum
-  concurrent partition count;
+- per-GPU and per-stage active partition tasks, including the observed maximum
+  concurrent partition count and discarded CUDA streams;
 - MatrixOne allocation-account terminal snapshot;
 - sidecar host peak, GPU peak/utilization, and storage/network byte counters.
 
@@ -639,11 +738,12 @@ and closes every row below.
 | early/pruned input | result EOF before first batch and `not_needed` after current/previous acknowledgement |
 | cancellation | cancel while input ack is blocked and while result receive/write is blocked; bounded termination |
 | injected failure | MO producer failure, sidecar input failure, Sirius consumer failure, disconnect, timeout, and retryable cleanup |
-| slow consumer and full barrier | deterministic barriers prove native MO readers stop at their bounded pipeline window, one shared Flight/sidecar-prefetch frame is unacknowledged, and one Sirius source representation awaits H2D |
-| GPU execution | query-scoped evidence records `SIRIUS_GPU` and `GPU_MO_SCAN`; two configured workers never exceed one active `PARTITION` per GPU while non-partition tasks remain concurrent |
+| slow consumer and full barrier | deterministic maximum-concurrency barriers prove native MO readers stop at their bounded pipeline window, one shared Flight/sidecar-prefetch frame is unacknowledged per admitted read, admission rejects the first envelope beyond capacity before ticket publication, and terminal admitted bytes return to zero |
+| GPU task failure lifetime | a deterministic operator enqueues GPU work and then fails; input handles, reservation, and stream remain owned until quiescence, clean OOM alone is retryable, and a failed synchronization discards the stream |
+| GPU execution | query-scoped evidence records `SIRIUS_GPU` and `GPU_MO_SCAN`; two and four configured workers execute concurrent tasks in the same `PARTITION` stage with exact serial-equivalent fingerprints |
 | correctness | typed native-MO equality for all 22 TPC-H SF1 queries on one reused process |
 | SF10 correctness and decision data | typed equality for all 22 queries on one reused process; Q9 repeats ten times; record storage bytes, rows/bytes before serialization, transferred bytes, CN CPU/peak memory, sidecar host/GPU peak and utilization, time to first row, and total latency |
-| partition safety control | repeated direct-TAE Q9 plus deterministic concurrent partition-content fingerprints prove the core gate is not StreamRead-specific |
+| partition safety control | repeated direct-TAE Q9 plus deterministic TAE- and MO-derived concurrent partition-content fingerprints prove correctness is independent of source representation and batch size |
 | snapshot advantage | unflushed committed tail and visible tombstone cases equal native MatrixOne while direct `TaeRead` rejects them |
 | static/build quality | MatrixOne SCA/UT/BVT/coverage; Sirius build matrix and tests; sidecar CUDA build/tests and review |
 
@@ -675,9 +775,11 @@ body must link this design at its approved commit and the final evidence record.
 | one local CN per sidecar | keeps snapshot and cancellation ownership local; multi-CN fan-in is a separate design |
 | attach all inputs before `DoGet` | prevents a pruned plan from retiring a ticket before its handler can attach |
 | native MO output backpressure | synchronous `Send` reuses native output, pipeline-edge, connector, and reader flow control instead of adding a StreamRead-only controller |
+| process-global pre-admitted execution envelope | bounds request, result, transport-slot, and active source-representation capacity across all tickets before producers start, without retaining cumulative table data |
 | one unacknowledged sidecar prefetch slot | permits bounded transport overlap without a table-sized wire queue |
 | one frame per Sirius source task | removes multi-frame coalescing and eager self-scheduling; H2D completion releases the claim without scheduling |
-| one partition task per physical GPU | the old executor produced nondeterministic Q9 values and fatal CUDA errors when two partition launches overlapped; other GPU operators retain configured parallelism |
+| exception-safe GPU task quiescence | success and failure synchronize before releasing task resources; only clean OOM retries, and a poisoned stream is never pooled |
+| reentrant partition execution | immutable operator metadata plus task-local state preserves configured multi-stream concurrency and removes dependence on coarse scan batching |
 | bounded TPC-H stabilization on the current fork | delivers the required workload without claiming general unbounded streaming; migration to upstream partial-barrier scheduling is a separate effort |
 | flat-only result vectors | prevents tiny compressed frames from expanding into unbounded MatrixOne result work |
 | exact capability equality | rejects mixed ABI revisions before execution rather than attempting unsafe compatibility |
