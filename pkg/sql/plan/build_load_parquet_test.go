@@ -232,6 +232,35 @@ func TestValidateLoadParquetOptionsAllowsPlainParquet(t *testing.T) {
 	require.NoError(t, validateLoadParquetOptions(param, ctx))
 }
 
+func TestDefaultParquetLoadParallel(t *testing.T) {
+	tests := []struct {
+		name      string
+		format    string
+		parallel  bool
+		specified bool
+		want      bool
+	}{
+		{name: "parquet omitted", format: tree.PARQUET, want: true},
+		{name: "parquet uppercase omitted", format: "PARQUET", want: true},
+		{name: "parquet explicit true", format: tree.PARQUET, parallel: true, specified: true, want: true},
+		{name: "parquet explicit false", format: tree.PARQUET, specified: true, want: false},
+		{name: "csv omitted", format: tree.CSV, want: false},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			param := &tree.ExternParam{
+				ExParamConst: tree.ExParamConst{Format: test.format},
+				ExParam: tree.ExParam{
+					Parallel:          test.parallel,
+					ParallelSpecified: test.specified,
+				},
+			}
+			defaultParquetLoadParallel(param)
+			require.Equal(t, test.want, param.Parallel)
+		})
+	}
+}
+
 func TestValidateLoadParquetOptionsAllowsStageDefaultCompressionAuto(t *testing.T) {
 	ctx := parquetLoadTestCtx{ctx: context.Background()}
 	param := &tree.ExternParam{

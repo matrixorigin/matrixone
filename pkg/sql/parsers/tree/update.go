@@ -276,6 +276,7 @@ type ExParam struct {
 	Ctx                   context.Context
 	Local                 bool
 	Parallel              bool
+	ParallelSpecified     bool
 	ParallelLoadRequested bool
 	Strict                bool
 }
@@ -404,8 +405,10 @@ func (node *Load) Format(ctx *FmtCtx) {
 		ctx.WriteString(" set ")
 		node.Param.Tail.Assignments.Format(ctx)
 	}
-	if node.Param.Parallel {
-		ctx.WriteString(" parallel true ")
+	if node.Param.Parallel || node.Param.ParallelSpecified {
+		ctx.WriteString(" parallel ")
+		ctx.WriteString(strconv.FormatBool(node.Param.Parallel))
+		ctx.WriteByte(' ')
 		if node.Param.Strict {
 			ctx.WriteString("strict true ")
 		}

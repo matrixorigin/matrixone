@@ -502,6 +502,7 @@ func buildLoad(stmt *tree.Load, ctx CompilerContext, isPrepareStmt bool) (*Plan,
 	if err := validateLoadParquetOptions(stmt.Param, ctx); err != nil {
 		return nil, err
 	}
+	defaultParquetLoadParallel(stmt.Param)
 	tableDef := tblInfo.tableDefs[0]
 	objRef := tblInfo.objRef[0]
 	originTableDef := tableDef
@@ -681,6 +682,15 @@ func buildLoad(stmt *tree.Load, ctx CompilerContext, isPrepareStmt bool) (*Plan,
 		},
 	}
 	return pn, nil
+}
+
+// defaultParquetLoadParallel enables the row-group fanout path only when the
+// LOAD statement omitted PARALLEL. An explicit PARALLEL 'false' remains a
+// serial opt-out, and external-table scans never call this LOAD-only helper.
+func defaultParquetLoadParallel(param *tree.ExternParam) {
+	if param != nil && strings.EqualFold(param.Format, tree.PARQUET) && !param.ParallelSpecified {
+		param.Parallel = true
+	}
 }
 
 func checkFileExist(param *tree.ExternParam, ctx CompilerContext) (string, error) {

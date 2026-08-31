@@ -19,6 +19,12 @@ select count(*) from pq_parallel_guard;
 ➤ count(*)[-5,64,0]  𝄀
 8
 drop table pq_parallel_guard;
+create table pq_parallel_opt_out(id bigint, name varchar);
+load data infile {'filepath'='$resources/load_data/simple.parq', 'format'='parquet'} into table pq_parallel_opt_out parallel 'false';
+select count(*) from pq_parallel_opt_out;
+➤ count(*)[-5,64,0]  𝄀
+8
+drop table pq_parallel_opt_out;
 create table pq_option_reject(id bigint, name varchar);
 load data infile {'filepath'='$resources/load_data/simple.parq', 'format'='parquet', 'compression'='gzip'} into table pq_option_reject;
 invalid configuration: LOAD DATA with format='parquet' does not support compression option

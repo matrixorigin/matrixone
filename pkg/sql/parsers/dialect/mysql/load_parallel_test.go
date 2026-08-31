@@ -1,0 +1,60 @@
+// Copyright 2026 Matrix Origin
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+package mysql
+
+import (
+	"context"
+	"encoding/json"
+	"testing"
+
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+	"github.com/stretchr/testify/require"
+)
+
+func TestLoadParallelOptionPreservesExplicitFalse(t *testing.T) {
+	for _, test := range []struct {
+		name      string
+		clause    string
+		parallel  bool
+		specified bool
+	}{
+		{name: "omitted", clause: "", parallel: false, specified: false},
+		{name: "true", clause: " parallel 'true'", parallel: true, specified: true},
+		{name: "false", clause: " parallel 'false'", parallel: false, specified: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			stmt, err := ParseOne(context.Background(),
+				"load data infile 'input.parquet' into table t"+test.clause, 1)
+			require.NoError(t, err)
+			load, ok := stmt.(*tree.Load)
+			require.True(t, ok)
+			require.Equal(t, test.parallel, load.Param.Parallel)
+			require.Equal(t, test.specified, load.Param.ParallelSpecified)
+
+			formatted := tree.String(load, dialect.MYSQL)
+			if test.specified {
+				require.Contains(t, formatted, "parallel "+test.name)
+			}
+
+			encoded, err := json.Marshal(load.Param)
+			require.NoError(t, err)
+			var decoded tree.ExternParam
+			require.NoError(t, json.Unmarshal(encoded, &decoded))
+			require.Equal(t, test.parallel, decoded.Parallel)
+			require.Equal(t, test.specified, decoded.ParallelSpecified)
+		})
+	}
+}

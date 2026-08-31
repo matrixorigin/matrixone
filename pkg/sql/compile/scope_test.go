@@ -16,12 +16,14 @@ package compile
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"encoding/json"
 	"fmt"
 	"os"
 	"path"
 	"path/filepath"
+	"slices"
 	"testing"
 	"time"
 
@@ -1570,6 +1572,39 @@ func TestSplitParquetRowGroupShardsBalancesAndReindexesFiles(t *testing.T) {
 	}, seen)
 	require.Equal(t, int64(110), loads["cn1:6001"])
 	require.Equal(t, int64(110), loads["cn2:6001"])
+}
+
+func TestSplitParquetRowGroupShardsKeepsEachFileContiguous(t *testing.T) {
+	fileList := []string{"warehouse/load/many-groups.parquet"}
+	fileSize := []int64{800}
+	rowGroups := make([]parquetRowGroupMeta, 8)
+	for i := range rowGroups {
+		rowGroups[i] = parquetRowGroupMeta{
+			fileIndex:     0,
+			rowGroupIndex: int32(i),
+			numRows:       10,
+			bytes:         100,
+		}
+	}
+	nodes := engine.Nodes{{Addr: "cn1:6001", Mcpu: 1}, {Addr: "cn2:6001", Mcpu: 1}}
+
+	shards, err := splitParquetRowGroupShards(fileList, fileSize, rowGroups, nodes)
+	require.NoError(t, err)
+	require.Len(t, shards, 2)
+
+	ranges := make([][2]int32, 0, 2)
+	for _, shard := range shards {
+		require.Equal(t, fileList, shard.fileList)
+		require.Len(t, shard.rowGroupShards, 1)
+		ranges = append(ranges, [2]int32{
+			shard.rowGroupShards[0].RowGroupStart,
+			shard.rowGroupShards[0].RowGroupEnd,
+		})
+	}
+	slices.SortFunc(ranges, func(left, right [2]int32) int {
+		return cmp.Compare(left[0], right[0])
+	})
+	require.Equal(t, [][2]int32{{0, 4}, {4, 8}}, ranges)
 }
 
 func TestCompileExternScanParquetRowGroupFanout(t *testing.T) {

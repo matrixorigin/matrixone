@@ -13,6 +13,11 @@ load data infile {'filepath'='$resources/load_data/simple.parq', 'format'='parqu
 select count(*) from pq_parallel_guard;
 drop table pq_parallel_guard;
 
+create table pq_parallel_opt_out(id bigint, name varchar);
+load data infile {'filepath'='$resources/load_data/simple.parq', 'format'='parquet'} into table pq_parallel_opt_out parallel 'false';
+select count(*) from pq_parallel_opt_out;
+drop table pq_parallel_opt_out;
+
 create table pq_option_reject(id bigint, name varchar);
 load data infile {'filepath'='$resources/load_data/simple.parq', 'format'='parquet', 'compression'='gzip'} into table pq_option_reject;
 load data infile {'filepath'='$resources/load_data/simple.parq', 'jsondata'='object', 'format'='parquet'} into table pq_option_reject;
