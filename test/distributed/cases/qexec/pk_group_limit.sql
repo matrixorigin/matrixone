@@ -25,6 +25,52 @@ group by id
 order by id
 limit 4;
 
+-- COUNT(*) is 1 for every complete-PK singleton group. Its all-tie ordering is
+-- removable, including OFFSET, while public cardinality remains unchanged.
+select count(*) from (
+    select id, count(*) c
+    from t
+    group by id
+    order by c desc
+    limit 2 offset 1
+) q;
+
+-- HAVING is evaluated before bounded demand. Constant true admits every
+-- singleton group; constant false admits none.
+select count(*) from (
+    select id, count(*) c
+    from t
+    group by id
+    having count(*) = 1
+    order by c
+    limit 10
+) q;
+
+select count(*) from (
+    select id, count(*) c
+    from t
+    group by id
+    having count(*) <> 1
+    order by c
+    limit 10
+) q;
+
+-- A row-dependent tie breaker and nullable COUNT are counterexamples: their
+-- Sort cannot be removed by the constant-key proof.
+select id, count(*) c
+from t
+group by id
+order by c desc, id desc
+limit 2;
+
+select count(*) from (
+    select id, count(nullable_v) c
+    from t
+    group by id
+    order by c
+    limit 2
+) q;
+
 -- Bounded demand remains above WHERE and HAVING semantics.
 select count(*) from (
     select id, count(*) as c
