@@ -502,7 +502,7 @@ func buildLoad(stmt *tree.Load, ctx CompilerContext, isPrepareStmt bool) (*Plan,
 	if err := validateLoadParquetOptions(stmt.Param, ctx); err != nil {
 		return nil, err
 	}
-	defaultParquetLoadParallel(stmt.Param)
+	defaultParquetLoadParallel(stmt.Param, ctx)
 	tableDef := tblInfo.tableDefs[0]
 	objRef := tblInfo.objRef[0]
 	originTableDef := tableDef
@@ -680,12 +680,58 @@ func buildLoad(stmt *tree.Load, ctx CompilerContext, isPrepareStmt bool) (*Plan,
 	return pn, nil
 }
 
+const (
+	experimentalParquetLoadParallel        = "experimental_parquet_load_parallel"
+	experimentalParquetLoadParallelMinSize = "experimental_parquet_load_parallel_min_size"
+)
+
 // defaultParquetLoadParallel enables the row-group fanout path only when the
-// LOAD statement omitted PARALLEL. An explicit PARALLEL 'false' remains a
-// serial opt-out, and external-table scans never call this LOAD-only helper.
-func defaultParquetLoadParallel(param *tree.ExternParam) {
-	if param != nil && strings.EqualFold(param.Format, tree.PARQUET) && !param.ParallelSpecified {
-		param.Parallel = true
+// LOAD statement omitted PARALLEL and the session explicitly joins the
+// experimental rollout. An explicit PARALLEL 'false' remains a serial opt-out,
+// and external-table scans never call this LOAD-only helper.
+func defaultParquetLoadParallel(param *tree.ExternParam, ctx CompilerContext) {
+	if param == nil || !strings.EqualFold(param.Format, tree.PARQUET) || param.ParallelSpecified {
+		return
+	}
+	enabled, err := ctx.ResolveVariable(experimentalParquetLoadParallel, true, false)
+	if err != nil || !systemVariableEnabled(enabled) {
+		return
+	}
+
+	param.Parallel = true
+	param.ParallelLoadMinSize = int64(LoadParallelMinSize)
+	if minSize, err := ctx.ResolveVariable(experimentalParquetLoadParallelMinSize, true, false); err == nil {
+		if minSize, ok := systemVariableInt64(minSize); ok && minSize > 0 {
+			param.ParallelLoadMinSize = minSize
+		}
+	}
+}
+
+func systemVariableEnabled(value any) bool {
+	switch value := value.(type) {
+	case bool:
+		return value
+	case int8:
+		return value != 0
+	case int64:
+		return value != 0
+	default:
+		return false
+	}
+}
+
+func systemVariableInt64(value any) (int64, bool) {
+	switch value := value.(type) {
+	case int:
+		return int64(value), true
+	case int8:
+		return int64(value), true
+	case int32:
+		return int64(value), true
+	case int64:
+		return value, true
+	default:
+		return 0, false
 	}
 }
 
@@ -694,7 +740,11 @@ func applyLoadParallelAdmission(param *tree.ExternParam, offset int64) {
 		return
 	}
 	param.ParallelLoadRequested = param.ParallelLoadRequested || param.Parallel
-	if param.FileSize-offset < int64(LoadParallelMinSize) {
+	minSize := int64(LoadParallelMinSize)
+	if param.ParallelLoadMinSize > 0 {
+		minSize = param.ParallelLoadMinSize
+	}
+	if param.FileSize-offset < minSize {
 		param.Parallel = false
 	}
 }

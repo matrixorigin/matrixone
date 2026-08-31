@@ -1,5 +1,5 @@
 - Status: draft — independent design approval pending
-- Revision: 1
+- Revision: 2
 - Start Date: 2026-08-31
 - Authors: iamlinjunhong
 - Implementation PR: [#27903](https://github.com/matrixorigin/matrixone/pull/27903)
@@ -9,11 +9,13 @@
 
 ## Summary
 
-For Parquet `LOAD DATA`, an omitted `PARALLEL` clause selects bounded parallel
-execution when the resolved input is at least `LoadParallelMinSize` (128 MiB).
-`PARALLEL 'false'` remains a serial opt-out.  The planner first uses whole-file
-fanout when the number of files already fills the bounded execution DOP; it
-opens Parquet footers only when row-group fanout can add useful concurrency.
+For Parquet `LOAD DATA`, an omitted `PARALLEL` clause remains serial by default.
+A session can opt into the bounded experimental rollout with
+`experimental_parquet_load_parallel = 1`; its default admission threshold is
+`LoadParallelMinSize` (128 MiB). `PARALLEL 'false'` remains a serial opt-out.
+The planner first uses whole-file fanout when the number of files already fills
+the bounded execution DOP; it opens Parquet footers only when row-group fanout
+can add useful concurrency.
 
 ## Problem and invariant
 
@@ -31,8 +33,12 @@ pipeline.
 ## Design
 
 The parser records whether `PARALLEL` was specified, preserving the distinction
-between omitted and explicitly false.  LOAD binding defaults only omitted
-Parquet clauses to parallel, then applies the existing 128 MiB admission guard.
+between omitted and explicitly false. LOAD binding enables only omitted Parquet
+clauses after the session opts into `experimental_parquet_load_parallel`; the
+default remains disabled until independent design approval and endpoint evidence
+are available. `experimental_parquet_load_parallel_min_size` is session-only,
+defaults to 128 MiB, and permits a bounded canary/test threshold between 1 byte
+and 128 MiB. The resolved threshold is captured in the plan before admission.
 
 The compiler has two bounded fanout choices:
 
@@ -109,20 +115,19 @@ labels.
 
 | Invariant | Deterministic witness | Oracle |
 |---|---|---|
-| Omitted clause admits at the threshold; explicit false remains serial | `TestDefaultParquetLoadParallelAdmission` | bound parameter flags |
+| Disabled-by-default gate leaves omitted clauses serial; enabled session gate admits at its captured threshold; explicit false remains serial | `TestDefaultParquetLoadParallel`, `TestDefaultParquetLoadParallelExperimentalRollout`, `TestDefaultParquetLoadParallelAdmission` | bound parameter flags |
 | A threshold-admitted omitted default reaches whole-file fanout before metadata I/O when files fill DOP | `TestCompileExternScanParquetLoadDefaultAtThresholdUsesFileFanoutWithoutFooterReads` | deliberately invalid `.parquet` files compile into one-file scopes, proving no footer open occurred |
 | Row-group selection preserves rows and nullable values | `TestParquet_RowGroupSelection_SerialVsShards_Nulls` | serial/sharded result equality |
 | A selected shard reports a NOT NULL failure | `TestParquet_RowGroupSelection_NotNullViolation` | constraint error class |
-| Public LOAD failure keeps the seed row only | distributed `load_data_parquet` rollback cases | post-failure row count and aggregates |
+| Threshold-admitted omitted default cancels sibling file scopes on a shard failure and keeps the seed row only | distributed `load_data_parquet` rollback case with the session gate and test threshold | post-failure row count and aggregates |
 
 The threshold fanout test uses the post-bind parameter as the test seam, so it
 does not need a 128 MiB fixture or a timing assertion. The distributed rollback
-fixtures remain below the admission threshold and are intentionally a serial
-control; they do not claim to prove a threshold-admitted fanout transaction.
-An exact default-fanout shard-failure/cancellation test requires a supported
-test-owned multi-CN fault-injection seam at the transaction boundary. That
-acceptance proof, plus endpoint rollout measurements, remains required before
-this RFC can move from draft to in-progress.
+case uses the session-only experimental gate and a one-byte test threshold to
+exercise the omitted-clause file-fanout transaction path with the existing tiny
+multi-file fixture; a schema failure asserts that no partial row is visible.
+The release-default acceptance proof still requires endpoint rollout
+measurements before this RFC can move from draft to in-progress.
 
 `BenchmarkParquetRangeReadAheadSequential` reports range calls per operation,
 fetched bytes per operation, peak cache bytes, and simulated range latency for
@@ -139,6 +144,6 @@ object-store observations are problem evidence, not before/after rollout proof.
 
 ## Open questions
 
-No implementation decision is deferred. Independent design approval, an exact
-default-fanout transaction fault/cancellation witness, and endpoint benchmark
-evidence are required before this RFC can move to `in-progress`.
+No implementation decision is deferred. Independent design approval and
+endpoint benchmark evidence are required before the disabled rollout gate can
+be enabled by default.

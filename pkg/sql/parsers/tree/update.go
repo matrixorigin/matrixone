@@ -278,6 +278,7 @@ type ExParam struct {
 	Parallel              bool
 	ParallelSpecified     bool
 	ParallelLoadRequested bool
+	ParallelLoadMinSize   int64
 	Strict                bool
 }
 
@@ -342,7 +343,9 @@ func (node *Load) Format(ctx *FmtCtx) {
 		} else {
 			if len(node.Param.Option) == 0 {
 				ctx.WriteString(" infile ")
-				ctx.WriteString(node.Param.Filepath)
+				ctx.WriteString("'")
+				ctx.WriteString(strings.ReplaceAll(node.Param.Filepath, "'", "''"))
+				ctx.WriteString("'")
 			} else {
 				if node.Param.ScanType == S3 {
 					ctx.WriteString(" url s3option ")
@@ -407,10 +410,12 @@ func (node *Load) Format(ctx *FmtCtx) {
 	}
 	if node.Param.Parallel || node.Param.ParallelSpecified {
 		ctx.WriteString(" parallel ")
+		ctx.WriteByte('\'')
 		ctx.WriteString(strconv.FormatBool(node.Param.Parallel))
+		ctx.WriteByte('\'')
 		ctx.WriteByte(' ')
 		if node.Param.Strict {
-			ctx.WriteString("strict true ")
+			ctx.WriteString("strict 'true' ")
 		}
 	}
 }

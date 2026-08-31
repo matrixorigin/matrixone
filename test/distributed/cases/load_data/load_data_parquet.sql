@@ -374,15 +374,20 @@ create table pq_date32_datetime(date_col datetime, value int);
 load data infile {'filepath'='$resources/load_data/date32_datetime.parq', 'format'='parquet'} into table pq_date32_datetime;
 select * from pq_date32_datetime;
 
--- rollback: multi-file pattern with one bad schema file must not leave partial rows.
--- The fixture is below LoadParallelMinSize, so CI validates rollback semantics;
--- compile fanout branches are covered by Go tests and perf probes.
+-- Default-parallel rollback: the session-only experimental rollout gate and
+-- its test threshold make this small multi-file fixture exercise omitted
+-- PARALLEL through actual file-fanout execution. One shard fails schema
+-- mapping after its siblings start; the seed row is the atomicity oracle.
+set experimental_parquet_load_parallel = 1;
+set experimental_parquet_load_parallel_min_size = 1;
 drop table if exists pq_file_fanout_rollback;
 create table pq_file_fanout_rollback(id bigint, name varchar(100), value double, status bool);
 insert into pq_file_fanout_rollback values(-1, 'seed', 0.0, false);
-load data infile {'filepath'='$resources/parquet/test_*.parquet', 'format'='parquet'} into table pq_file_fanout_rollback parallel 'true';
+load data infile {'filepath'='$resources/parquet/test_*.parquet', 'format'='parquet'} into table pq_file_fanout_rollback;
 select count(*), min(id), max(id), cast(round(sum(value), 2) as decimal(10,2)) from pq_file_fanout_rollback;
 drop table pq_file_fanout_rollback;
+set experimental_parquet_load_parallel = 0;
+set experimental_parquet_load_parallel_min_size = default;
 
 -- rollback: NOT NULL violation must not leave partial rows
 drop table if exists pq_not_null_rollback;

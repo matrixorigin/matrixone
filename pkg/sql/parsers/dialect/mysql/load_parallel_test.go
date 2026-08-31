@@ -37,7 +37,7 @@ func TestLoadParallelOptionPreservesExplicitFalse(t *testing.T) {
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			stmt, err := ParseOne(context.Background(),
-				"load data infile 'input.parquet' into table t"+test.clause, 1)
+				"load data infile {'filepath'='input.parquet', 'compression'='auto'} into table t"+test.clause, 1)
 			require.NoError(t, err)
 			load, ok := stmt.(*tree.Load)
 			require.True(t, ok)
@@ -46,7 +46,13 @@ func TestLoadParallelOptionPreservesExplicitFalse(t *testing.T) {
 
 			formatted := tree.String(load, dialect.MYSQL)
 			if test.specified {
-				require.Contains(t, formatted, "parallel "+test.name)
+				require.Contains(t, formatted, "parallel '"+test.name+"'")
+				roundTrip, err := ParseOne(context.Background(), formatted, 1)
+				require.NoError(t, err)
+				roundTripLoad, ok := roundTrip.(*tree.Load)
+				require.True(t, ok)
+				require.Equal(t, test.parallel, roundTripLoad.Param.Parallel)
+				require.Equal(t, test.specified, roundTripLoad.Param.ParallelSpecified)
 			}
 
 			encoded, err := json.Marshal(load.Param)

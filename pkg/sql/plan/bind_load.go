@@ -73,7 +73,7 @@ func (builder *QueryBuilder) bindExternalScan(
 	if err := validateLoadParquetOptions(stmt.Param, ctx); err != nil {
 		return -1, nil, err
 	}
-	defaultParquetLoadParallel(stmt.Param)
+	defaultParquetLoadParallel(stmt.Param, ctx)
 
 	tableDef := DeepCopyTableDef(dmlCtx.tableDefs[0], true)
 	objRef := dmlCtx.objRefs[0]
