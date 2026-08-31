@@ -133,7 +133,7 @@ drop table drop02;
 
 -- alter table after truncate table
 drop table if exists truncate01;
-create table truncate01(col1 int,col2 decimal);
+create table truncate01(col1 int,col2 decimal(38,0));
 insert into truncate01 values(1,8934245);
 insert into truncate01 values(2,-1924);
 insert into truncate01 values(3,18294234);
