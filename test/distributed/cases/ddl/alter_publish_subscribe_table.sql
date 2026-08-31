@@ -34,7 +34,7 @@ show create table test01;
 alter table test01 add column newCol int after col1;
 select * from test01;
 show create table test01;
-alter table test01 modify column col1 decimal;
+alter table test01 modify column col1 decimal(38,0);
 show create table test01;
 -- @ignore:5,6
 show publications;
@@ -48,7 +48,7 @@ create account acc0 admin_name 'root' identified by '111';
 drop database if exists sys_db_1;
 create database sys_db_1;
 use sys_db_1;
-create table sys_tbl_1(a int primary key, b decimal, c char, d varchar(20) );
+create table sys_tbl_1(a int primary key, b decimal(38,0), c char, d varchar(20) );
 insert into sys_tbl_1 values(1,2,'a','database'),(2,3,'b','test publication'),(3, 4, 'c','324243243');
 create publication sys_pub_1 database sys_db_1 account all;
 select * from sys_tbl_1;

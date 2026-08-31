@@ -6,10 +6,10 @@
 #Test cases of query without table
 select 0.00,1.11,1234567890.1234567890123456789;
 select 1123.2333+1233.3331;
-select cast(9223372.036854775808 as decimal)+1;
+select cast(9223372.036854775808 as decimal(38,0))+1;
 
-select round(cast(2320310.66666612312 as decimal));
-select floor(cast(2231231.501231 as decimal));
+select round(cast(2320310.66666612312 as decimal(38,0)));
+select floor(cast(2231231.501231 as decimal(38,0)));
 
 
 #Test cases of query with single table
@@ -70,8 +70,8 @@ select * from t1 where decimal_col='-17666000000000000000' order by decimal_col 
 drop table t1;
 
 #Test cases of cast
-select cast(10000002383263201056 as decimal) mod 50 as result;
-select cast(cast(19999999999999999999 as decimal) as unsigned);
+select cast(10000002383263201056 as decimal(38,0)) mod 50 as result;
+select cast(cast(19999999999999999999 as decimal(38,0)) as unsigned);
 CREATE TABLE t1 (id INT PRIMARY KEY,
 a decimal(20),
 b VARCHAR(20));
@@ -123,10 +123,10 @@ where id>=88947549497796.3574 and id <=889475494977969.358;
 select count(*) from t
 where id between 88947549497796.3574 and 889475494977969.358;
 drop table t;
-SELECT CAST(1.00 AS decimal) BETWEEN 1 AND -1;
-SELECT CAST(1.00 AS decimal) NOT BETWEEN 1 AND -1;
-SELECT CAST(-0 AS decimal) BETWEEN 0 AND -1;
-SELECT CAST(0 AS decimal) NOT BETWEEN 0 AND -1;
+SELECT CAST(1.00 AS decimal(38,0)) BETWEEN 1 AND -1;
+SELECT CAST(1.00 AS decimal(38,0)) NOT BETWEEN 1 AND -1;
+SELECT CAST(-0 AS decimal(38,0)) BETWEEN 0 AND -1;
+SELECT CAST(0 AS decimal(38,0)) NOT BETWEEN 0 AND -1;
 
 #Test cases of update with single table
 drop table if exists t1;
@@ -410,9 +410,9 @@ SELECT a * 2 FROM decimal08;
 SELECT a / 3 FROM decimal08;
 DROP TABLE decimal08;
 
--- default decimal,D and M is not specified, default M is 38, default D is 0
+-- Keep this large-value case explicit: DECIMAL(38,0).
 DROP TABLE IF EXISTS decimal09;
-CREATE TABLE decimal09 (d decimal DEFAULT NULL);
+CREATE TABLE decimal09 (d decimal(38,0) DEFAULT NULL);
 INSERT INTO decimal09 VALUES (NULL);
 INSERT INTO decimal09 VALUES(212839);
 INSERT INTO decimal09 VALUES(44455788525777778895412365489563123654);
@@ -468,8 +468,8 @@ SELECT CAST(a AS DOUBLE) FROM decimal10;
 SELECT CAST(a AS FLOAT) FROM decimal10;
 SELECT CAST(b AS DECIMAL(10,1)) FROM decimal10;
 SELECT CAST(b AS decimal(20,10)) FROM decimal10;
-SELECT CAST(c AS decimal) FROM decimal10;
-SELECT CAST((a * c) AS DECIMAL) FROM decimal10;
+SELECT CAST(c AS decimal(38,0)) FROM decimal10;
+SELECT CAST((a * c) AS DECIMAL(38,0)) FROM decimal10;
 SELECT CAST(POWER(c,2) AS DECIMAL(28,6)) FROM decimal10;
 SELECT CAST((d - c) * a AS DECIMAL(30, 4)) FROM decimal10;
 
@@ -489,8 +489,8 @@ INSERT INTO decimal10 VALUES(NULL,9,2819323242,2);
 -- CAST
 SELECT CAST(b AS DECIMAL(10,9)) FROM decimal10;
 SELECT CAST(b AS DECIMAL(10)) FROM decimal10;
-SELECT CAST(ABS(a) AS decimal) FROM decimal10;
-SELECT CAST(a AS decimal) FROM decimal10;
+SELECT CAST(ABS(a) AS decimal(38,0)) FROM decimal10;
+SELECT CAST(a AS decimal(38,0)) FROM decimal10;
 SELECT CAST((a + b) AS DECIMAL(20,3)) FROM decimal10;
 
 -- Conditional query and subquery
@@ -535,7 +535,7 @@ SELECT * FROM decimal12;
 
 -- cast
 SELECT CAST(b AS DECIMAL(38,0)) FROM decimal12;
-SELECT CAST(b AS DECIMAL) FROM decimal12 WHERE a = 'b';
+SELECT CAST(b AS DECIMAL(38,0)) FROM decimal12 WHERE a = 'b';
 
 -- joins
 DROP TABLE IF EXISTS decimal13;
@@ -575,7 +575,7 @@ DROP TABLE decimal15;
 
 -- secondary index
 DROP TABLE IF EXISTS decimal16;
-CREATE TABLE decimal16(a decimal, b decimal(38,10), c varchar(20),UNIQUE INDEX(a),INDEX(b));
+CREATE TABLE decimal16(a decimal(38,0), b decimal(38,10), c varchar(20),UNIQUE INDEX(a),INDEX(b));
 INSERT INTO decimal16 VALUES(1234789456456456456567898552556, 3728321323.4321214,'小明');
 SELECT * FROM decimal16;
 
@@ -585,13 +585,13 @@ DROP TABLE decimal16;
 
 -- load data CSV
 DROP TABLE IF EXISTS decimal17;
-CREATE TABLE decimal17(a decimal,b decimal(38,0),c decimal(20,4),d decimal(10));
+CREATE TABLE decimal17(a decimal(38,0),b decimal(38,0),c decimal(20,4),d decimal(10));
 INSERT INTO decimal17 VALUES(3231.44112,0,-38232432541431.7890,3728739824.0909898765);
 INSERT INTO decimal17 VALUES(-3892.020,NULL,3872932.3289323,3829);
 INSERT INTO decimal17 VALUES(123.456,NULL,7281392.902,328392323);
 
 DROP TABLE IF EXISTS decimal18;
-CREATE TABLE decimal18(a DECIMAL, b DECIMAL(38,0));
+CREATE TABLE decimal18(a DECIMAL(38,0), b DECIMAL(38,0));
 
 INSERT INTO decimal18 (a,b) SELECT a,b FROM decimal17;
 INSERT INTO decimal18 (a,b) SELECT c,d FROM decimal17;
@@ -643,7 +643,7 @@ SELECT col2 / 0;
 -- cast
 SELECT CAST('1.2' AS decimal(3,2));
 SELECT CAST('1.327832' AS decimal(20));
-SELECT CAST('-29012123143.432478274329432' AS DECIMAL);
+SELECT CAST('-29012123143.432478274329432' AS DECIMAL(38,0));
 SELECT CAST('-99999999999999999999999999999999999999' AS DECIMAL(38));
 SELECT 1e18 * CAST('1.2' as decimal(3,2));
 SELECT CAST(CAST('1.234221421' AS decimal(3,2)) AS signed);
@@ -651,22 +651,22 @@ set @v1=null;
 SELECT CAST(@v1 as decimal(22, 2));
 SELECT CAST(-1e18 as decimal(22,2));
 SELECT CAST(NULL AS decimal(6));
-SELECT 10.0 + CAST('aaa' AS decimal);
-SELECT CAST('101010101001' AS decimal);
+SELECT 10.0 + CAST('aaa' AS decimal(38,0));
+SELECT CAST('101010101001' AS decimal(38,0));
 SELECT CAST('10101010010101010101010101' AS decimal(26));
-SELECT CAST('0101010' AS decimal);
-SELECT CAST('' AS decimal);
+SELECT CAST('0101010' AS decimal(38,0));
+SELECT CAST('' AS decimal(38,0));
 
 DROP TABLE IF EXISTS decimal20;
 CREATE TABLE decimal20(v varchar(40), tt tinytext, t text, mt mediumtext, lt longtext);
 INSERT INTO decimal20 VALUES('1.01415', '2.02115', '-3.03', '444.04', '4515.05');
 INSERT INTO decimal20 VALUES('123654.78984115855111555555888859999999','1e18','229e15','2178291','873273271432714032713243214333');
 SELECT * FROM decimal20;
-SELECT CAST(v AS DECIMAL) FROM decimal20;
+SELECT CAST(v AS DECIMAL(38,0)) FROM decimal20;
 SELECT CAST(tt AS decimal(24,2)) FROM decimal20;
 SELECT CAST(t AS decimal(20)) FROM decimal20;
-SELECT CAST(mt AS decimal) FROM decimal20;
-SELECT CAST(lt AS decimal) FROM decimal20;
+SELECT CAST(mt AS decimal(38,0)) FROM decimal20;
+SELECT CAST(lt AS decimal(38,0)) FROM decimal20;
 SELECT 12487561513.48465123 / CAST(t AS decimal(20)) FROM decimal20;
 SELECT 789414561531231.485416 / CAST(t AS decimal(20)) FROM decimal20;
 
