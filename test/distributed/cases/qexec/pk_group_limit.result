@@ -1,0 +1,93 @@
+drop database if exists pk_group_limit_bvt;
+create database pk_group_limit_bvt;
+use pk_group_limit_bvt;
+create table t (
+id int primary key,
+v int,
+u bigint unsigned,
+d decimal(10, 2),
+nullable_v int,
+s varchar(16)
+);
+insert into t values
+(1, 10, 100, 1.25, null, 'a'),
+(2, 20, 200, 2.50, 7, 'b'),
+(3, null, null, null, 9, null),
+(4, 40, 400, 4.75, 11, 'd');
+select id, count(*), count(v), count(nullable_v),
+sum(v), avg(v), sum(u), avg(u), sum(d), avg(d),
+min(s), max(s), any_value(s)
+from t
+group by id
+order by id
+limit 4;
+➤ id[4,32,0]  ¦  count(*)[-5,64,0]  ¦  count(v)[-5,64,0]  ¦  count(nullable_v)[-5,64,0]  ¦  sum(v)[-5,64,0]  ¦  avg(v)[8,53,31]  ¦  sum(u)[3,38,0]  ¦  avg(u)[3,38,4]  ¦  sum(d)[3,38,2]  ¦  avg(d)[3,38,8]  ¦  min(s)[12,16,0]  ¦  max(s)[12,16,0]  ¦  any_value(s)[12,16,0]  𝄀
+1  ¦  1  ¦  1  ¦  0  ¦  10  ¦  10.0  ¦  100  ¦  100.0000  ¦  1.25  ¦  1.25000000  ¦  a  ¦  a  ¦  a  𝄀
+2  ¦  1  ¦  1  ¦  1  ¦  20  ¦  20.0  ¦  200  ¦  200.0000  ¦  2.50  ¦  2.50000000  ¦  b  ¦  b  ¦  b  𝄀
+3  ¦  1  ¦  0  ¦  1  ¦  null  ¦  null  ¦  null  ¦  null  ¦  null  ¦  null  ¦  null  ¦  null  ¦  null  𝄀
+4  ¦  1  ¦  1  ¦  1  ¦  40  ¦  40.0  ¦  400  ¦  400.0000  ¦  4.75  ¦  4.75000000  ¦  d  ¦  d  ¦  d
+select count(*) from (
+select id, count(*) as c
+from t
+where v >= 20
+group by id
+limit 1 offset 1
+) q;
+➤ count(*)[-5,64,0]  𝄀
+1
+select id, sum(v)
+from t
+group by id
+having sum(v) >= 20
+order by id
+limit 2;
+➤ id[4,32,0]  ¦  sum(v)[-5,64,0]  𝄀
+2  ¦  20  𝄀
+4  ¦  40
+select id, group_concat(s order by s separator '|')
+from t
+group by id
+order by id
+limit 4;
+➤ id[4,32,0]  ¦  group_concat(s order by s separator |)[-1,16383,0]  𝄀
+1  ¦  a  𝄀
+2  ¦  b  𝄀
+3  ¦  null  𝄀
+4  ¦  d
+create table edge_values (
+id int primary key,
+wide decimal(38, 10),
+f float,
+dbl double
+);
+insert into edge_values values
+(1, 9999999999999999999999999999.9999999999, -0.0, -0.0),
+(2, 0, 0.0, 0.0),
+(3, null, null, null);
+select count(*) from (
+select id, avg(wide) a
+from edge_values
+group by id
+limit 10
+) q
+where a is not null;
+invalid input: Decimal128 Div overflow: 9999999999999999999999999999.9999999999/1
+select id
+from edge_values
+group by id
+having cast(sum(f) as varchar) = '0'
+order by id
+limit 10;
+➤ id[4,32,0]  𝄀
+1  𝄀
+2
+select id
+from edge_values
+group by id
+having cast(avg(dbl) as varchar) = '0'
+order by id
+limit 10;
+➤ id[4,32,0]  𝄀
+1  𝄀
+2
+drop database pk_group_limit_bvt;
