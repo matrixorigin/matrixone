@@ -567,7 +567,32 @@ func (r *caseRunner) concurrentCreateMappingAndDropCase(ctx context.Context) (re
 		return stopAndFail(nil, nil, fmt.Sprintf("reserve CREATE connection: %v", err))
 	}
 	defer createConn.Close()
-	if _, err := createConn.ExecContext(barrierCtx, "set lock_wait_timeout = 1"); err != nil {
+	previousLockWaitTimeout, err := sessionLockWaitTimeout(barrierCtx, createConn)
+	if err != nil {
+		return stopAndFail(nil, nil, fmt.Sprintf("capture CREATE lock wait timeout: %v", err))
+	}
+	defer func() {
+		cleanupCtx, cancelCleanup := context.WithTimeout(context.Background(), 15*time.Second)
+		defer cancelCleanup()
+		if err := restoreSessionLockWaitTimeout(cleanupCtx, createConn, previousLockWaitTimeout); err != nil {
+			if result.Details == nil {
+				result.Details = make(map[string]string)
+			}
+			result.Details["lock_wait_timeout_restore_error"] = err.Error()
+			if result.Error == "" {
+				result.Error = "restore CREATE lock wait timeout: " + err.Error()
+			} else {
+				result.Error += "; restore CREATE lock wait timeout: " + err.Error()
+			}
+			result.Status = "failed"
+			return
+		}
+		if result.Details == nil {
+			result.Details = make(map[string]string)
+		}
+		result.Details["lock_wait_timeout_restored"] = strconv.FormatUint(previousLockWaitTimeout, 10)
+	}()
+	if _, err := createConn.ExecContext(barrierCtx, "set session lock_wait_timeout = 1"); err != nil {
 		return stopAndFail(nil, nil, fmt.Sprintf("set CREATE lock wait timeout: %v", err))
 	}
 	createDone := make(chan error, 1)
@@ -701,6 +726,38 @@ func waitForLifecycleWorkers(ctx context.Context, workers *sync.WaitGroup) error
 	case <-ctx.Done():
 		return ctx.Err()
 	}
+}
+
+// sessionLockWaitTimeout reads the value from the physical connection that is
+// used for the bounded CREATE probe.  database/sql may return this connection
+// to its pool, so the caller must restore the value before Conn.Close.
+func sessionLockWaitTimeout(ctx context.Context, conn *sql.Conn) (uint64, error) {
+	var value string
+	if err := conn.QueryRowContext(ctx, "select @@session.lock_wait_timeout").Scan(&value); err != nil {
+		return 0, err
+	}
+	timeout, err := strconv.ParseUint(value, 10, 64)
+	if err != nil || timeout == 0 {
+		return 0, fmt.Errorf("invalid session lock_wait_timeout %q", value)
+	}
+	return timeout, nil
+}
+
+// restoreSessionLockWaitTimeout restores and then reads the same physical
+// connection, proving that the session returned to the pool has its original
+// timeout rather than the one-second lifecycle-test override.
+func restoreSessionLockWaitTimeout(ctx context.Context, conn *sql.Conn, want uint64) error {
+	if _, err := conn.ExecContext(ctx, fmt.Sprintf("set session lock_wait_timeout = %d", want)); err != nil {
+		return err
+	}
+	got, err := sessionLockWaitTimeout(ctx, conn)
+	if err != nil {
+		return err
+	}
+	if got != want {
+		return fmt.Errorf("lock_wait_timeout after restore = %d, want %d", got, want)
+	}
+	return nil
 }
 
 type catalogLifecycleLockIdentity struct {

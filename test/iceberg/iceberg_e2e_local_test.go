@@ -1020,11 +1020,16 @@ func TestLocalE2EConcurrentCreateMappingAndDropCaseRejectsCreateWhileDropOwnsLoc
 			WillReturnRows(sqlmock.NewRows([]string{"waiters"}).AddRow(int64(1)))
 	}
 	mock.ExpectExec("select trigger_fault_point").WillReturnResult(sqlmock.NewResult(0, 1))
-	mock.ExpectExec("set lock_wait_timeout = 1").WillReturnResult(sqlmock.NewResult(0, 0))
+	mock.ExpectQuery("select @@session\\.lock_wait_timeout").
+		WillReturnRows(sqlmock.NewRows([]string{"lock_wait_timeout"}).AddRow("50"))
+	mock.ExpectExec("set session lock_wait_timeout = 1").WillReturnResult(sqlmock.NewResult(0, 0))
 	mock.ExpectExec("CREATE EXTERNAL TABLE").WillReturnError(errors.New("lock wait timeout"))
 	mock.ExpectExec("select trigger_fault_point").WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectQuery("select \\(select count\\(\\*\\) from mo_catalog\\.mo_iceberg_catalogs").
 		WillReturnRows(sqlmock.NewRows([]string{"catalogs", "tables"}).AddRow(0, 0))
+	mock.ExpectExec("set session lock_wait_timeout = 50").WillReturnResult(sqlmock.NewResult(0, 0))
+	mock.ExpectQuery("select @@session\\.lock_wait_timeout").
+		WillReturnRows(sqlmock.NewRows([]string{"lock_wait_timeout"}).AddRow("50"))
 
 	for range []string{
 		icebergCreateAfterCatalogLockFault,
@@ -1049,7 +1054,7 @@ func TestLocalE2EConcurrentCreateMappingAndDropCaseRejectsCreateWhileDropOwnsLoc
 	mock.ExpectExec("select disable_fault_injection").WillReturnResult(sqlmock.NewResult(0, 1))
 
 	result := (&caseRunner{cfg: localE2ETestConfig(), db: db}).concurrentCreateMappingAndDropCase(context.Background())
-	if result.Status != "passed" || result.Details["catalog_id"] != "42" || !strings.Contains(result.Details["create_error"], "lock wait timeout") || result.Details["drop_error"] != "<nil>" {
+	if result.Status != "passed" || result.Details["catalog_id"] != "42" || !strings.Contains(result.Details["create_error"], "lock wait timeout") || result.Details["drop_error"] != "<nil>" || result.Details["lock_wait_timeout_restored"] != "50" {
 		t.Fatalf("unexpected concurrent lifecycle result: %+v", result)
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
