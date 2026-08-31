@@ -46,8 +46,8 @@ func TestBindFuncExprImplRejectsNestedStandaloneInterval(t *testing.T) {
 		MakeIntervalExpr(2, "day"),
 	})
 	require.Error(t, err)
-	require.True(t, moerr.IsMoErrCode(err, moerr.ErrNotSupported), err)
-	require.ErrorContains(t, err, "standalone INTERVAL expression in + argument")
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidArg), err)
+	require.ErrorContains(t, err, "invalid argument operator +, bad value [INTERVAL INTERVAL]")
 }
 
 func TestBuildPlanRejectsStandaloneIntervalAtScalarBoundaries(t *testing.T) {
@@ -152,6 +152,8 @@ func TestBuildPlanAllowsConsumedIntervalExpressions(t *testing.T) {
 		"select date_add('2026-01-01', interval 1 day)",
 		"select date_add('2026-01-01', interval 1 day) is null",
 		"select '2026-01-01' + interval 1 day",
+		"select cast(20260515 as int) + interval 1 day",
+		"select interval 1 day + cast(20260515 as int)",
 		"select count(date_add('2026-01-01', interval 1 day)) from select_test.bind_select",
 		"select interval(23, 1, 15, 17)",
 		"select a from select_test.bind_select where date_add('2026-01-01', interval 1 day) in (select '2026-01-02' from select_test.bind_select)",
@@ -168,6 +170,43 @@ func TestBuildPlanAllowsConsumedIntervalExpressions(t *testing.T) {
 			require.NoError(t, err)
 			_, err = BuildPlan(ctx, stmt, false)
 			require.NoError(t, err)
+		})
+	}
+}
+
+func TestBuildPlanPreservesInvalidIntervalOperatorDiagnostics(t *testing.T) {
+	tests := []struct {
+		name string
+		sql  string
+		want string
+	}{
+		{
+			name: "integer plus sub-day interval",
+			sql:  "select cast(20260515 as int) + interval 1 hour",
+			want: "invalid argument operator +, bad value [INT INTERVAL]",
+		},
+		{
+			name: "integer minus sub-day interval",
+			sql:  "select cast(20260515 as int) - interval 30 minute",
+			want: "invalid argument operator -, bad value [INT INTERVAL]",
+		},
+		{
+			name: "reversed sub-day interval",
+			sql:  "select interval 1 second + cast(20260515 as int)",
+			want: "invalid argument operator +, bad value [INTERVAL INT]",
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			ctx := NewMockCompilerContext(true)
+			stmt, err := parsers.ParseOne(ctx.GetContext(), dialect.MYSQL, test.sql, 1)
+			require.NoError(t, err)
+
+			_, err = BuildPlan(ctx, stmt, false)
+			require.Error(t, err)
+			require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidArg), err)
+			require.ErrorContains(t, err, test.want)
 		})
 	}
 }

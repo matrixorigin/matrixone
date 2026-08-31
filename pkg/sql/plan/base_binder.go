@@ -4816,13 +4816,6 @@ func bindFuncExprImplByPlanExpr(
 	case "pow":
 		name = "power"
 	}
-	// Explicit interval consumers above must remove the pseudo-type. This
-	// postcondition also fails closed when a newly added input shape reaches an
-	// allowlisted consumer but is not actually rewritten by it.
-	if err := rejectIntervalArgs(ctx, name, args); err != nil {
-		return nil, err
-	}
-
 	if name == "convert" {
 		if err := bindConvertUsingCharset(ctx, args); err != nil {
 			return nil, err
@@ -4866,6 +4859,16 @@ func bindFuncExprImplByPlanExpr(
 			return BindFuncExprImplByPlanExpr(ctx, "and", []*plan.Expr{leftFn, rightFn})
 		}
 
+		return nil, err
+	}
+	// Explicit interval consumers above must remove the pseudo-type before a
+	// successful function can be published. Check this only after overload
+	// resolution: a recognized consumer may deliberately leave an unsupported
+	// input shape (for example INT + sub-day INTERVAL) to the resolver, whose
+	// established invalid-argument diagnostic is part of the public contract.
+	// Either resolution fails normally or this postcondition prevents a raw
+	// interval list from escaping in a successfully bound expression.
+	if err := rejectIntervalArgs(ctx, name, args); err != nil {
 		return nil, err
 	}
 

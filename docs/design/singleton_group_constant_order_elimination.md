@@ -78,7 +78,10 @@ publishing its result. Window-frame binding likewise consumes and normalizes the
 internal value. This separates two contracts that the initial implementation
 conflated: generic constant folding must be total, while a public executable plan
 must not contain an unconsumed interval pseudo-type at an ordinary expression
-boundary.
+boundary. A recognized consumer whose input shape is invalid is allowed to reach
+normal overload resolution, so established diagnostics such as `INT +` a sub-day
+`INTERVAL` remain `ErrInvalidArg`; the no-escape postcondition applies after a
+successful overload resolution and before publishing the expression.
 
 ## 3. Alternatives and scope decisions
 
@@ -208,7 +211,9 @@ and subquery-comparison boundaries; and SELECT, GROUP BY, ORDER BY and window ke
 boundaries with a normal not-supported error. Controls must prove that
 `date_add(..., INTERVAL ...)`, date arithmetic, the scalar `INTERVAL(...)`
 function, aggregates and subquery comparisons over already-consumed temporal
-results, and interval window-frame bounds remain valid. Direct tests of both
+results, day-or-larger integer date arithmetic, legacy invalid-argument behavior
+for unsupported integer/sub-day arithmetic, and interval window-frame bounds
+remain valid. Direct tests of both
 constant-folding entry points and a synthetic internal Sort prove total,
 fail-closed behavior independently of public binding.
 
