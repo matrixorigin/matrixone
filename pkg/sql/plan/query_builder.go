@@ -3642,6 +3642,10 @@ func (builder *QueryBuilder) createQuery() (*Query, error) {
 		builder.rewriteDistinctToAGG(rootID)
 		builder.rewriteEffectlessAggToProject(rootID)
 		rootID = builder.optimizeFilters(rootID)
+		// WHERE predicates are initially represented by a Filter between AGG
+		// and TABLE_SCAN.  Revisit the proof after filter pushdown so a unique
+		// grouped scan can be eliminated without moving LIMIT below HAVING.
+		builder.rewriteEffectlessAggToProject(rootID)
 		if err = builder.checkPlanningCanceled(); err != nil {
 			return nil, err
 		}
@@ -3652,6 +3656,10 @@ func (builder *QueryBuilder) createQuery() (*Query, error) {
 		colRefCnt := make(map[[2]int32]int)
 		builder.countColRefs(rootID, colRefCnt)
 		builder.removeSimpleProjections(rootID, plan.Node_UNKNOWN, false, colRefCnt)
+		// Removing a proof-eliminated aggregate can expose a direct Project ->
+		// TableScan edge only after the first limit-pushdown pass. Re-run the
+		// idempotent rule so the newly streaming path can honor source demand.
+		builder.pushdownLimitToTableScan(rootID)
 		// Seed base-relation statistics so the early vector access-path builder
 		// can cost the hidden entries work before replacing the source scan.
 		ReCalcNodeStats(rootID, builder, true, false, true)

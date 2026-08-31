@@ -16,6 +16,7 @@ package plan
 
 import (
 	"math"
+	"slices"
 	"sort"
 	"testing"
 
@@ -114,4 +115,77 @@ func TestApproximatePrefilterCannotBoundCandidateTopK(t *testing.T) {
 	require.Equal(t, "true-result", filterAllowed(candidates)[0].id)
 	require.False(t, shouldPushFulltextCandidateLimit(1, 1, true, false))
 	require.True(t, shouldPushFulltextCandidateLimit(1, 1, true, true))
+}
+
+func TestComposePaginationMatchesSequentialWindows(t *testing.T) {
+	type window struct {
+		limit  *uint64
+		offset *uint64
+	}
+	value := func(v uint64) *uint64 { return &v }
+	limitValues := []*uint64{nil, value(0), value(1), value(3), value(8)}
+	offsetValues := []*uint64{nil, value(0), value(1), value(2), value(9)}
+	windows := make([]window, 0, len(limitValues)*len(offsetValues))
+	for _, limit := range limitValues {
+		for _, offset := range offsetValues {
+			windows = append(windows, window{limit: limit, offset: offset})
+		}
+	}
+	input := []int{0, 1, 2, 3, 4, 5, 6, 7}
+	apply := func(rows []int, pagination window) []int {
+		start := uint64(0)
+		if pagination.offset != nil {
+			start = *pagination.offset
+		}
+		if start >= uint64(len(rows)) {
+			return nil
+		}
+		end := uint64(len(rows))
+		if pagination.limit != nil && *pagination.limit < end-start {
+			end = start + *pagination.limit
+		}
+		if end == start {
+			return nil
+		}
+		return slices.Clone(rows[start:end])
+	}
+	expr := func(v *uint64) *planpb.Expr {
+		if v == nil {
+			return nil
+		}
+		return makePlan2Uint64ConstExprWithType(*v)
+	}
+
+	for innerIndex, inner := range windows {
+		for outerIndex, outer := range windows {
+			limitExpr, offsetExpr, ok := composePagination(
+				expr(inner.limit), expr(inner.offset), expr(outer.limit), expr(outer.offset),
+			)
+			if !ok {
+				outerExhaustsInner := inner.limit != nil && *inner.limit > 0 &&
+					outer.offset != nil && *outer.offset >= *inner.limit &&
+					(outer.limit == nil || *outer.limit > 0)
+				require.Truef(t, outerExhaustsInner,
+					"literal windows %d then %d unexpectedly refused composition", innerIndex, outerIndex)
+				continue
+			}
+
+			composed := window{}
+			if limitExpr != nil {
+				limit, literal := getLiteralUint64(limitExpr)
+				require.True(t, literal)
+				composed.limit = value(limit)
+			}
+			if offsetExpr != nil {
+				offset, literal := getLiteralUint64(offsetExpr)
+				require.True(t, literal)
+				composed.offset = value(offset)
+			}
+
+			sequential := apply(apply(input, inner), outer)
+			combined := apply(input, composed)
+			require.Equalf(t, sequential, combined,
+				"literal windows %d then %d changed the selected rows", innerIndex, outerIndex)
+		}
+	}
 }
