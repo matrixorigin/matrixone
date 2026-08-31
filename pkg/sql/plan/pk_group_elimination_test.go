@@ -20,8 +20,10 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 )
 
@@ -728,6 +730,21 @@ func TestPrimaryKeyGroupEliminationRemovesProvenConstantOrder(t *testing.T) {
 			wantLimit: 6,
 		},
 		{
+			name:      "deterministic cast",
+			sql:       "select empno, count(*) c from constraint_test.emp group by empno order by cast(c as signed) limit 3",
+			wantLimit: 3,
+		},
+		{
+			name:      "interval consumed by temporal function",
+			sql:       "select empno, count(*) c from constraint_test.emp group by empno order by date_add('2026-01-01', interval c day) limit 3",
+			wantLimit: 3,
+		},
+		{
+			name:      "null companion key",
+			sql:       "select empno, count(*) c from constraint_test.emp group by empno order by c, null limit 2",
+			wantLimit: 2,
+		},
+		{
 			name:       "offset",
 			sql:        "select empno, count(*) c from constraint_test.emp group by empno order by c limit 5 offset 3",
 			wantLimit:  5,
@@ -737,6 +754,11 @@ func TestPrimaryKeyGroupEliminationRemovesProvenConstantOrder(t *testing.T) {
 			name:      "always true having",
 			sql:       "select empno, count(*) c from constraint_test.emp group by empno having count(*) = 1 order by c limit 4",
 			wantLimit: 4,
+		},
+		{
+			name:      "zero limit",
+			sql:       "select empno, count(*) c from constraint_test.emp group by empno order by c limit 0",
+			wantLimit: 0,
 		},
 	}
 
@@ -780,6 +802,10 @@ func TestPrimaryKeyGroupEliminationKeepsNonConstantOrObservableOrder(t *testing.
 			sql:  "select empno, min(empno) c from constraint_test.emp group by empno order by c limit 10",
 		},
 		{
+			name: "varying sum",
+			sql:  "select empno, sum(sal) c from constraint_test.emp group by empno order by c limit 10",
+		},
+		{
 			name: "volatile expression",
 			sql:  "select empno, count(*) c from constraint_test.emp group by empno order by c + rand() limit 10",
 		},
@@ -818,6 +844,48 @@ func TestPrimaryKeyGroupEliminationKeepsPreparedOrderParameter(t *testing.T) {
 	scan := firstReachableNode(query, planpb.Node_TABLE_SCAN)
 	require.NotNil(t, scan)
 	require.Nil(t, scan.Limit)
+}
+
+func TestPrimaryKeyGroupEliminationSupportsPreparedConstantOrderPagination(t *testing.T) {
+	prepared, err := runOneStmt(
+		NewMockOptimizer(false),
+		t,
+		"prepare pk_group_order_page from 'select empno, count(*) c from constraint_test.emp group by empno order by c limit ? offset ?'",
+	)
+	require.NoError(t, err)
+
+	query := prepared.GetDcl().GetPrepare().GetPlan().GetQuery()
+	require.NotNil(t, query)
+	require.False(t, reachableNodeType(query, planpb.Node_AGG))
+	require.False(t, reachableNodeType(query, planpb.Node_SORT))
+	scan := firstReachableNode(query, planpb.Node_TABLE_SCAN)
+	require.NotNil(t, scan)
+	require.Equal(t, "cast", scan.Limit.GetF().Func.ObjName)
+	require.Equal(t, int32(0), scan.Limit.GetF().Args[0].GetP().Pos)
+	require.Equal(t, "cast", scan.Offset.GetF().Func.ObjName)
+	require.Equal(t, int32(1), scan.Offset.GetF().Args[0].GetP().Pos)
+}
+
+func TestPrimaryKeyGroupEliminationRejectsStandaloneIntervalOrder(t *testing.T) {
+	tests := []string{
+		"select empno, count(*) c from constraint_test.emp group by empno order by interval c day limit 10",
+		"select empno, count(*) c from constraint_test.emp group by empno order by interval (c + 1) day limit 10",
+		"select empno, count(*) c from constraint_test.emp group by empno order by c, interval 1 day limit 10",
+		"select empno from constraint_test.emp order by interval 1 day",
+	}
+	for _, sql := range tests {
+		t.Run(sql, func(t *testing.T) {
+			ctx := NewMockCompilerContext(false)
+			stmt, err := mysql.ParseOne(ctx.GetContext(), sql, 1)
+			require.NoError(t, err)
+			defer stmt.Free()
+
+			_, err = NewBaseOptimizer(ctx).Optimize(stmt, false)
+			require.Error(t, err)
+			require.True(t, moerr.IsMoErrCode(err, moerr.ErrNotSupported), err)
+			require.ErrorContains(t, err, "standalone INTERVAL expression in ORDER BY")
+		})
+	}
 }
 
 func TestConstantSingletonGroupSortRemovalPreservesRootAndBarriers(t *testing.T) {
@@ -863,6 +931,20 @@ func TestConstantSingletonGroupSortRemovalPreservesRootAndBarriers(t *testing.T)
 		builder.qry.Nodes[3].OrderBy[0].Expr = makePlan2Int64ConstExprWithType(1)
 		require.Equal(t, int32(3), builder.removeConstantSortAfterSingletonGroup(3, rewritten),
 			"the singleton-group pass must not become a global constant-order rewrite")
+		require.Nil(t, builder.qry.Nodes[2].Limit)
+	})
+
+	t.Run("unsupported constant type retains sort without panic", func(t *testing.T) {
+		builder, rewritten := newBuilder()
+		builder.compCtx = NewMockCompilerContext(false)
+		builder.qry.Nodes[3].OrderBy[0].Expr = &planpb.Expr{
+			Typ: planpb.Type{Id: int32(types.T_interval)},
+			Expr: &planpb.Expr_List{List: &planpb.ExprList{List: []*planpb.Expr{
+				GetColExpr(planpb.Type{Id: int32(types.T_int64), NotNullable: true}, 12, 0),
+				makePlan2StringConstExprWithType("day"),
+			}}},
+		}
+		require.Equal(t, int32(3), builder.removeConstantSortAfterSingletonGroup(3, rewritten))
 		require.Nil(t, builder.qry.Nodes[2].Limit)
 	})
 

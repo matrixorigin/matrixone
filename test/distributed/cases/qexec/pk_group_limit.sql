@@ -63,13 +63,28 @@ group by id
 order by c desc, id desc
 limit 2;
 
-select count(*) from (
-    select id, count(nullable_v) c
-    from t
-    group by id
-    order by c
-    limit 2
-) q;
+select id, count(nullable_v) c
+from t
+group by id
+order by c
+limit 1;
+
+select id, sum(v) c
+from t
+group by id
+order by c desc
+limit 1;
+
+-- INTERVAL is an internal (value, unit) representation, not a standalone
+-- scalar. Public scalar/key boundaries reject it normally instead of allowing
+-- planner or executor panics; a temporal consumer remains valid.
+select interval 1 day;
+select id from t group by interval 1 day;
+select id from t order by interval 1 day;
+select row_number() over (partition by interval 1 day) from t limit 1;
+select row_number() over (order by interval 1 day) from t limit 1;
+select id, count(*) c from t group by id order by interval c day limit 10;
+select date_add('2026-01-01', interval 1 day);
 
 -- Bounded demand remains above WHERE and HAVING semantics.
 select count(*) from (

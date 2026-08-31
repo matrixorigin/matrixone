@@ -4430,6 +4430,9 @@ func (builder *QueryBuilder) buildUnionWithResultLen(
 			if err != nil {
 				return 0, err
 			}
+			if err = rejectStandaloneIntervalOrderExpr(builder.GetContext(), expr); err != nil {
+				return 0, err
+			}
 
 			orderBy := &plan.OrderBySpec{
 				Expr: expr,
@@ -8290,6 +8293,9 @@ func (builder *QueryBuilder) bindProjection(
 	resultLen = len(ctx.projects)
 	ctx.projectSemanticKeys = ctx.projectSemanticKeys[:0]
 	for i, proj := range ctx.projects {
+		if err = rejectStandaloneIntervalExpr(builder.GetContext(), proj, "SELECT list"); err != nil {
+			return
+		}
 		exprKey, keyErr := projectExprKey(proj)
 		if keyErr != nil {
 			err = keyErr
@@ -9484,6 +9490,9 @@ func (builder *QueryBuilder) bindOrderBy(
 		if err != nil {
 			return nil, err
 		}
+		if err = rejectStandaloneIntervalOrderExpr(builder.GetContext(), expr); err != nil {
+			return nil, err
+		}
 
 		orderBy := &plan.OrderBySpec{
 			Expr: expr,
@@ -9508,6 +9517,21 @@ func (builder *QueryBuilder) bindOrderBy(
 	}
 
 	return
+}
+
+// rejectStandaloneIntervalOrderExpr keeps the binder's interval pseudo-type
+// from escaping as an executable sort scalar. INTERVAL expressions are encoded
+// as an internal (value, unit) list and are valid only when a temporal operator
+// or a window-frame binder consumes that representation.
+func rejectStandaloneIntervalOrderExpr(ctx context.Context, expr *plan.Expr) error {
+	return rejectStandaloneIntervalExpr(ctx, expr, "ORDER BY")
+}
+
+func rejectStandaloneIntervalExpr(ctx context.Context, expr *plan.Expr, clause string) error {
+	if expr != nil && expr.Typ.Id == int32(types.T_interval) {
+		return moerr.NewNotSupportedf(ctx, "standalone INTERVAL expression in %s", clause)
+	}
+	return nil
 }
 
 // rewriteMySQLSpecialOrderByExpr materializes a numeric ENUM/SET ordering key

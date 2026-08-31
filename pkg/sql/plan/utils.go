@@ -1619,7 +1619,11 @@ func constantFoldWithPreparedExactSource(
 	preservePreparedExactSource bool,
 ) (*plan.Expr, error) {
 	if expr.Typ.Id == int32(types.T_interval) {
-		panic(moerr.NewInternalError(proc.Ctx, "not supported type INTERVAL"))
+		// INTERVAL is an executable argument type but has no standalone scalar
+		// constant-fold representation. Keep it unchanged so callers can fold an
+		// enclosing temporal expression or let a public scalar boundary reject it
+		// without turning a bound expression into a planner panic.
+		return expr, nil
 	}
 
 	// If it is Expr_List, perform constant folding on its elements

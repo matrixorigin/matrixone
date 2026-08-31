@@ -15,7 +15,6 @@
 package rule
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -129,7 +128,12 @@ func (r *ConstantFold) constantFold(expr *plan.Expr, proc *process.Process) *pla
 	}
 
 	if expr.Typ.Id == int32(types.T_interval) {
-		panic(moerr.NewInternalError(proc.Ctx, "not supported type INTERVAL"))
+		// INTERVAL is meaningful as an argument to temporal functions, but the
+		// expression executor cannot materialize it as a standalone scalar
+		// literal. Retaining the expression is the constant-fold rule's normal
+		// fail-closed result; a public scalar boundary rejects it if no enclosing
+		// temporal operation consumes it.
+		return expr
 	}
 
 	fn := expr.GetF()
