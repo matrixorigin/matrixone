@@ -1276,6 +1276,7 @@ func TestTunnelRequestBoundaryTracker(t *testing.T) {
 		tun.trackClientRequest(quit)
 		require.False(t, tun.hasUntransferableClientState())
 		require.False(t, tun.hasUnsafeClientState())
+		require.False(t, nilTunnel.hasUncacheableClientState())
 	})
 
 	t.Run("orphan continuation stays conservative", func(t *testing.T) {
@@ -1375,6 +1376,7 @@ func TestTunnelRequestBoundaryTracker(t *testing.T) {
 		tun.commitClientRequest(commit)
 		require.False(t, tun.hasUntransferableClientState())
 		require.True(t, tun.hasUnsafeClientState())
+		require.False(t, tun.hasUncacheableClientState())
 	})
 
 	t.Run("fragmented long data closes after its final packet", func(t *testing.T) {

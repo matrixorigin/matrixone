@@ -539,6 +539,25 @@ func (t *tunnel) hasUnsafeClientState() bool {
 		len(t.requestBoundary.closedStatements) > 0
 }
 
+// hasUncacheableClientState reports state that can still leave a response in
+// the backend socket, or staged binary statement data that has not been
+// consumed. A completed no-response statement close is intentionally not
+// included: connCache.Push resets and discards the old CN session before the
+// backend can be reused.
+func (t *tunnel) hasUncacheableClientState() bool {
+	if t == nil {
+		return false
+	}
+	t.requestBoundary.Lock()
+	defer t.requestBoundary.Unlock()
+	return t.requestBoundary.inFlight ||
+		t.requestBoundary.requestContinuation ||
+		t.requestBoundary.localInfileUpload ||
+		t.requestBoundary.ambiguous ||
+		t.requestBoundary.pendingLongDataOverflow ||
+		len(t.requestBoundary.pendingLongData) > 0
+}
+
 func (t *tunnel) hasUntransferableClientState() bool {
 	if t == nil {
 		return false

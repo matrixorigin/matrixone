@@ -480,6 +480,7 @@ func TestClientConn_HandleQuitEventRequiresCleanResponseBoundary(t *testing.T) {
 	for _, tc := range []struct {
 		name       string
 		makeUnsafe func(*tunnel)
+		wantCached bool
 	}{
 		{name: "outstanding response", makeUnsafe: func(tun *tunnel) {
 			tun.trackClientRequest(makeSimplePacket("select 1"))
@@ -492,7 +493,7 @@ func TestClientConn_HandleQuitEventRequiresCleanResponseBoundary(t *testing.T) {
 			commit := tun.trackClientRequest(
 				makeStmtCommandPacket(frontend.COM_STMT_CLOSE, 1))
 			tun.commitClientRequest(commit)
-		}},
+		}, wantCached: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			tun := &tunnel{}
@@ -526,10 +527,15 @@ func TestClientConn_HandleQuitEventRequiresCleanResponseBoundary(t *testing.T) {
 			}
 
 			require.NoError(t, c.handleQuitCommand(context.Background()))
-			require.Zero(t, pushed, "unsafe protocol state must keep the backend out of the cache")
-			require.Equal(t, 1, closed)
+			if tc.wantCached {
+				require.Equal(t, 1, pushed)
+				require.Zero(t, closed)
+			} else {
+				require.Zero(t, pushed, "unsafe protocol state must keep the backend out of the cache")
+				require.Equal(t, 1, closed)
+			}
 			require.Zero(t, quit, "discard cleanup must not wait for a protocol-level QUIT response")
-			require.False(t, c.isConnCached())
+			require.Equal(t, tc.wantCached, c.isConnCached())
 		})
 	}
 }

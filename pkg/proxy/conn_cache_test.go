@@ -676,6 +676,11 @@ func TestPreparedShortConnectionQuitPublishesReusableBackend(t *testing.T) {
 		tun.trackClientRequest(prepare)
 		tun.trackServerResponse(makePrepareOKPacket(0, 0))
 		require.False(t, tun.hasInFlightClientRequest())
+		closeCommit := tun.trackClientRequest(
+			makeStmtCommandPacket(frontend.COM_STMT_CLOSE, 1))
+		tun.commitClientRequest(closeCommit)
+		require.True(t, tun.hasUnsafeClientState(),
+			"forwarded COM_STMT_CLOSE must remain migration-safe until its tombstone is reconciled")
 
 		clientSide, backendSide := net.Pipe()
 		defer clientSide.Close()

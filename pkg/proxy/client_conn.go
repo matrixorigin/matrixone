@@ -853,12 +853,13 @@ func (c *clientConn) handleQuitEventInternal(ctx context.Context, waitClientPipe
 				return
 			}
 		}
-		// COM_QUIT is cacheable only at a clean request/response boundary. A
-		// client can pipeline QUIT behind an outstanding query; pausing s2c then
-		// publishing that backend would leave the old response in the socket for
-		// the next generation's SET CONNECTION ID to consume. With c2s sealed and
-		// s2c stopped this state can no longer change, so discard conservatively.
-		if c.tun.hasUnsafeClientState() {
+		// COM_QUIT is cacheable only when no response can remain in the backend
+		// socket. A client can pipeline QUIT behind an outstanding query; pausing
+		// s2c then publishing that backend would leave the old response for the
+		// next generation's SET CONNECTION ID to consume. A completed forwarded
+		// COM_STMT_CLOSE tombstone is safe here because Push resets the old CN
+		// session before reuse.
+		if c.tun.hasUncacheableClientState() {
 			discardBackend()
 			return
 		}
