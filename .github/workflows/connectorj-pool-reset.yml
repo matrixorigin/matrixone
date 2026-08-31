@@ -1,0 +1,40 @@
+name: Connector/J Pool Reset E2E
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+    paths:
+      - '.github/workflows/connectorj-pool-reset.yml'
+      - 'Makefile'
+      - 'optools/connectorj_pool_reset_ci.bash'
+      - 'cmd/mo-service/**'
+      - 'pkg/frontend/**'
+      - 'pkg/config/**'
+      - 'pkg/bootstrap/**'
+      - 'test/datastream/**'
+      - 'xtool/jstfu/**'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  connectorj-pool-reset-e2e:
+    name: Connector/J Pool Reset E2E
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Build prerequisites and run real Connector/J pool regression
+        run: make test-connectorj-pool-reset-e2e-local

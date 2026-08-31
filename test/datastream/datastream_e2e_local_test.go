@@ -411,6 +411,10 @@ func TestJstfuErrors(t *testing.T) {
 // moConnect returns a DB handle to the MO under test, skipping when MO is
 // not reachable.
 func moConnect(t *testing.T) (*sql.DB, string) {
+	return moConnectWithRequirement(t, false)
+}
+
+func moConnectWithRequirement(t *testing.T, required bool) (*sql.DB, string) {
 	t.Helper()
 	dsn := os.Getenv("MO_DATASTREAM_E2E_DSN")
 	if dsn == "" {
@@ -421,6 +425,9 @@ func moConnect(t *testing.T) (*sql.DB, string) {
 	db.SetConnMaxLifetime(time.Minute)
 	if err := db.Ping(); err != nil {
 		db.Close()
+		if required {
+			t.Fatalf("required MatrixOne is not reachable at %s: %v", dsn, err)
+		}
 		t.Skipf("MatrixOne not reachable at %s: %v", dsn, err)
 	}
 	return db, dsn
@@ -554,15 +561,22 @@ func TestDatastreamThroughMatrixOne(t *testing.T) {
 // the Connector/J 8.0.15 COM_CHANGE_USER fallback and 8.4/9.7
 // COM_RESET_CONNECTION paths on repeated logical borrows.
 func TestConnectorJConnectionPoolReset(t *testing.T) {
+	required := os.Getenv("MO_CONNECTORJ_POOL_RESET_REQUIRED") == "1"
 	if _, err := exec.LookPath("java"); err != nil {
-		t.Skip("java not found; skip Connector/J pool E2E")
+		if required {
+			t.Fatal("java not found; Connector/J pool E2E requires the Java fixture")
+		}
+		t.Skip("java not found; skip optional Connector/J pool E2E")
 	}
 	jar := filepath.Join(repoRoot(t), "xtool/jstfu/target/jstfu.jar")
 	if _, err := os.Stat(jar); err != nil {
-		t.Skip("xtool/jstfu/target/jstfu.jar not built; run `make jstfu` first")
+		if required {
+			t.Fatal("xtool/jstfu/target/jstfu.jar not built; run `make jstfu` first")
+		}
+		t.Skip("xtool/jstfu/target/jstfu.jar not built; skip optional Connector/J pool E2E")
 	}
 
-	db, dsn := moConnect(t)
+	db, dsn := moConnectWithRequirement(t, required)
 	defer db.Close()
 	const database = "connectorj_pool_reset"
 	const table = "pool_reset_rows"
@@ -588,7 +602,7 @@ func TestConnectorJConnectionPoolReset(t *testing.T) {
 			_, err := os.Stat(version.jar)
 			require.NoErrorf(t, err, "Connector/J %s artifact is missing after `make jstfu`", version.name)
 			cmd := exec.Command("java", "-cp", version.jar+string(os.PathListSeparator)+jar,
-				"io.matrixone.jstfu.ConnectorJPoolResetProbe", jdbcURL, "dump", "111", database, table)
+				"io.matrixone.jstfu.ConnectorJPoolResetProbe", jdbcURL, "dump", "111", database, table, version.name)
 			cmd.Env = os.Environ()
 			output, err := cmd.CombinedOutput()
 			require.NoErrorf(t, err, "Connector/J %s pool probe failed:\n%s", version.name, output)

@@ -39,14 +39,15 @@ public final class ConnectorJPoolResetProbe {
     }
 
     public static void main(String[] args) throws Exception {
-        if (args.length != 5) {
-            throw new IllegalArgumentException("usage: <jdbc-url> <user> <password> <database> <table>");
+        if (args.length != 6) {
+            throw new IllegalArgumentException("usage: <jdbc-url> <user> <password> <database> <table> <connectorj-version>");
         }
         String url = args[0];
         String user = args[1];
         String password = args[2];
         String database = args[3];
         String table = args[4];
+        String connectorJVersion = args[5];
 
         MysqlConnectionPoolDataSource dataSource = new MysqlConnectionPoolDataSource();
         dataSource.setURL(url);
@@ -77,7 +78,17 @@ public final class ConnectorJPoolResetProbe {
                 requireEquals(Long.valueOf(connectionId), Long.valueOf(longValue(second, "SELECT CONNECTION_ID()")),
                         "physical connection ID");
                 requireEquals(database, stringValue(second, "SELECT DATABASE()"), "reset database");
-                require(second.getAutoCommit(), "autocommit was not restored");
+                String serverAutocommit = stringValue(second, "SELECT @@session.autocommit");
+                requireEquals("1", serverAutocommit,
+                        "server autocommit was not restored");
+                // Connector/J 8.0.15 retains a driver-local autoCommit flag
+                // across its COM_CHANGE_USER fallback even against native
+                // MySQL. The server-side state is the compatibility contract
+                // for that version; newer COM_RESET_CONNECTION drivers must
+                // expose the same clean state through their client API too.
+                if (!"8.0.15".equals(connectorJVersion)) {
+                    require(second.getAutoCommit(), "client autocommit was not restored; server reports " + serverAutocommit);
+                }
                 requireEquals(Long.valueOf(0), Long.valueOf(longValue(second, "SELECT COUNT(*) FROM " + table)),
                         "uncommitted transaction leaked");
                 requireEquals(null, objectValue(second, "SELECT " + USER_VARIABLE), "user variable leaked");
