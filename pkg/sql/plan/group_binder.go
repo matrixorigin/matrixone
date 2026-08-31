@@ -170,6 +170,11 @@ func (b *GroupBinder) BindExpr(astExpr tree.Expr, depth int32, isRoot bool) (*pl
 	if err != nil {
 		return nil, err
 	}
+	if isRoot {
+		if err = rejectStandaloneIntervalExpr(b.GetContext(), expr, "GROUP BY"); err != nil {
+			return nil, err
+		}
+	}
 
 	if isRoot && !b.ctx.isGroupingSet {
 		astStr := semanticAstKey(astExpr)
