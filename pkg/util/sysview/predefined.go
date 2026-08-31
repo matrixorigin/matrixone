@@ -90,10 +90,10 @@ var (
 	// multibyte view identifiers.
 	// The extraction helpers return VARCHAR, but VIEWS has historically exposed
 	// VIEW_DEFINITION as TEXT. Keep that public metadata type stable.
-	informationSchemaViewDefinitionSQL = "trim(if(left(" + informationSchemaViewStatementWithoutTerminatorSQL +
+	informationSchemaViewDefinitionSQL = "cast(trim(if(left(" + informationSchemaViewStatementWithoutTerminatorSQL +
 		", 3) = '/*!' and tbl.view_definition_wrapper_prefix_length > 0, concat(substr(tbl.view_definition, 1, " +
 		"tbl.view_definition_wrapper_prefix_length - 2), substr(tbl.view_definition, tbl.view_definition_wrapper_prefix_length + 1, " +
-		"char_length(tbl.view_definition) - tbl.view_definition_wrapper_prefix_length)), cast(tbl.view_definition as text)))"
+		"char_length(tbl.view_definition) - tbl.view_definition_wrapper_prefix_length)), cast(tbl.view_definition as text))) as text)"
 	informationSchemaViewsSourceSQL = "FROM (SELECT definitions.*, char_length(coalesce(regexp_substr(definitions.view_definition, '" +
 		informationSchemaViewRegexSQLLiteral(informationSchemaViewExecutableCommentPrefixPattern) + "'), '')) AS view_definition_wrapper_prefix_length FROM (SELECT extracted.*, trim(substr(extracted.view_statement, " +
 		"extracted.view_definition_prefix_length + 1, char_length(extracted.view_statement) - " +
