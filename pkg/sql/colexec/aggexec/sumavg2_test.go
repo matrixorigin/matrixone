@@ -122,6 +122,36 @@ func TestAvgExactIntegerExecution(t *testing.T) {
 	}
 }
 
+func TestDecimal128AvgFinalizationRejectsNarrowResult(t *testing.T) {
+	argType := types.New(types.T_decimal128, 38, 10)
+	resultType := types.New(types.T_decimal128, 38, 12)
+	testCases := []struct {
+		name    string
+		value   string
+		wantErr string
+	}{
+		{
+			name:    "physical overflow",
+			value:   "9999999999999999999999999999.1234567890",
+			wantErr: "Decimal128 Div overflow",
+		},
+		{
+			name:    "declared precision overflow",
+			value:   "100000000000000000000000000.0000000000",
+			wantErr: "Decimal128(38,12)",
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			value, err := types.ParseDecimal128(tc.value, argType.Width, argType.Scale)
+			require.NoError(t, err)
+			_, err = decAvg[types.Decimal128](value, 1, argType.Scale, resultType)
+			require.ErrorContains(t, err, tc.wantErr)
+		})
+	}
+}
+
 func buildNumericTestDataVecs(t *testing.T, mp *mpool.MPool) ([]types.Type, []*vector.Vector, []*vector.Vector) {
 	nulls := []bool{false, false, false, false, true, false, false, false, false, true}
 	int8s := []int8{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12}
@@ -522,7 +552,7 @@ func TestAvgDecimal256FinalizationPrecisionOverflow(t *testing.T) {
 				}
 			}()
 			require.Nil(t, results)
-			require.ErrorContains(t, err, "Decimal256(65,12)")
+			require.ErrorContains(t, err, "Decimal256(65,14)")
 		})
 	}
 }
