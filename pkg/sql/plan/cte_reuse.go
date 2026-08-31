@@ -1093,6 +1093,9 @@ func (builder *QueryBuilder) cteOccurrenceLocalPredicates(
 
 		for _, predicate := range candidates {
 			if predicate == nil || !containsTag(predicate, occurrence.rootTag) {
+				// A constant, parameter, or volatile predicate can reduce every
+				// occurrence row even though it has no CTE column reference.
+				domainComplete = false
 				continue
 			}
 			if !containsOnlyTags(predicate, tagSet) {
@@ -1102,6 +1105,7 @@ func (builder *QueryBuilder) cteOccurrenceLocalPredicates(
 				continue
 			}
 			if !exprCanRemoveProject(predicate) {
+				domainComplete = false
 				continue
 			}
 			if !isTruncationSafePredicateExpr(predicate) {
