@@ -90,3 +90,9 @@
 2. TINYTEXT/其他 ≤VARCHAR 上限的有界 TEXT 按不变字符数返回 VARCHAR(width)，由 VARCHAR 字符契约容纳 Unicode byte expansion。
 3. MEDIUMTEXT/LONGTEXT 等无法以标准 bounded VARCHAR 表达的输入退化为 TEXT(0)。
 4. 更新 metadata/runtime focused UT，运行 owning packages/lint/diff check 后 commit/push。
+
+# PR #27841 第十六轮 review 修复
+
+1. LOWER/UPPER 仅将真实 `MaxTinyTextLen` marker 映射为 VARCHAR(255)。
+2. 任意 legacy TEXT positive width 与 width 0、MEDIUMTEXT、LONGTEXT 一样退化为 TEXT(0)。
+3. 添加 TEXT(32) regression UT，运行 owning packages/lint/diff check 后 commit/push。

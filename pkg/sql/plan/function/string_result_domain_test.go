@@ -256,7 +256,7 @@ func TestStringConsumersPreserveTextAndBoundedWidths(t *testing.T) {
 		require.Equal(t, types.T_varchar, resolved.GetReturnType().Oid)
 		require.Equal(t, int32(255), resolved.GetReturnType().Width)
 
-		for _, width := range []int32{16777215, 2147483647} {
+		for _, width := range []int32{32, types.MaxMediumTextLen, types.MaxLongTextLen} {
 			wideText := types.T_text.ToType()
 			wideText.Width = width
 			resolved, err = GetFunctionByName(proc.Ctx, name, []types.Type{wideText})

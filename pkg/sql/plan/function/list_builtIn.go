@@ -115,7 +115,7 @@ func caseConversionReturnType(parameters []types.Type) types.Type {
 	case types.T_char, types.T_varchar:
 		return textStringResultType(declaredTextCharacterBound(source), source.Charset)
 	case types.T_text:
-		if source.Width > 0 && source.Width <= types.MaxVarcharLen {
+		if source.Width == types.MaxTinyTextLen {
 			// Case conversion preserves rune count. Express bounded TINYTEXT as
 			// VARCHAR characters instead of inventing a non-persistable TEXT width.
 			return types.NewWithCharset(types.T_varchar, source.Width, 0, source.Charset)
