@@ -84,7 +84,8 @@ const (
 	MORPCVersion46     int64 = 46 // subscription-aware information-schema metadata table functions
 	MORPCVersion47     int64 = 47 // ordinary window hash partition pipeline algorithm
 	MORPCVersion48     int64 = 48 // generation-aware CDC watermark catalog
-	MORPCLatestVersion       = MORPCVersion48
+	MORPCVersion49     int64 = 49 // vector-level grouping-set projection expansion
+	MORPCLatestVersion       = MORPCVersion49
 )
 
 // DefaultLockWaitTimeoutSeconds is shared by the frontend default and by

@@ -56,7 +56,7 @@ func (mergeGroup *MergeGroup) Prepare(proc *process.Process) error {
 	mergeGroup.ctr.legacyVarianceState = useLegacyVarianceStateForRemote(proc)
 	mergeGroup.ctr.groupByTypes = nil
 	mergeGroup.ctr.keyNullable = false
-	mergeGroup.ctr.groupingAware = false
+	mergeGroup.ctr.groupingAware = mergeGroup.GroupingAware
 	mergeGroup.ctr.keyWidth = 0
 	mergeGroup.ctr.mtyp = 0
 	mergeGroup.ctr.setGroupByHashKey(mergeGroup.GroupByHashKey)
@@ -400,7 +400,7 @@ func (mergeGroup *MergeGroup) prepareBuildBatch(
 			mergeGroupHashKeyHasGrouping(incomingHashVectors)
 		if ctr.mergePartialMetadataSet &&
 			(ctr.mtyp != incomingType || ctr.keyNullable != incomingNullable ||
-				ctr.groupingAware != incomingGroupingAware) {
+				(!ctr.groupingAware && incomingGroupingAware)) {
 			return moerr.NewInvalidInputNoCtx(
 				"inconsistent merge-group partial metadata")
 		}
@@ -413,11 +413,11 @@ func (mergeGroup *MergeGroup) prepareBuildBatch(
 		}
 		ctr.mtyp = incomingType
 		ctr.keyNullable = incomingNullable
-		// Grouping metadata travels with each partial vector. A grouping-set
-		// branch has a fixed GroupingFlag, so every non-empty partial from that
-		// branch selects the same key domain without changing the partial wire or
-		// penalizing ordinary HStr aggregation.
-		ctr.groupingAware = incomingGroupingAware
+		// The plan-level declaration stays true even when this particular partial
+		// contains only the fully active grouping set and no sentinel bits. For
+		// compatibility with an undeclared single grouping partial, the first
+		// partial may still promote the hash grammar before the table is built.
+		ctr.groupingAware = ctr.groupingAware || incomingGroupingAware
 		ctr.mergePartialMetadataSet = true
 
 		if ctr.mtyp == H0 && len(ctr.groupByBatches) == 0 {

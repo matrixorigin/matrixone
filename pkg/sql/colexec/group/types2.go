@@ -94,9 +94,14 @@ type Group struct {
 	SpillMem int64
 
 	// group-by column.
-	GroupBy        []*plan.Expr
-	GroupingFlag   []bool
-	GroupByHashKey []int32
+	GroupBy      []*plan.Expr
+	GroupingFlag []bool
+	// DynamicGrouping means grouping metadata is carried by the input vectors
+	// instead of being described by one static GroupingFlag. This is used by a
+	// shared grouping-set aggregate whose input switches grouping sets between
+	// batches.
+	DynamicGrouping bool
+	GroupByHashKey  []int32
 
 	Aggs []aggexec.AggFuncExecExpression
 
@@ -908,6 +913,10 @@ type MergeGroup struct {
 	Aggs []aggexec.AggFuncExecExpression
 
 	GroupByHashKey []int32
+	// GroupingAware is fixed by the producer plan, not inferred from one
+	// partial's data. Dynamic grouping streams can legally alternate partials
+	// with and without an actual rollup sentinel.
+	GroupingAware bool
 
 	PartialResults     []any
 	PartialResultTypes []types.T

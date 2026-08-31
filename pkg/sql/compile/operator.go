@@ -204,6 +204,7 @@ func dupOperatorWithContext(sourceOp vm.Operator, index int, maxParallel int, du
 		op.NeedEval = t.NeedEval
 		op.SpillMem = t.SpillMem
 		op.GroupingFlag = t.GroupingFlag
+		op.DynamicGrouping = t.DynamicGrouping
 		op.GroupBy = t.GroupBy
 		op.GroupByHashKey = t.GroupByHashKey
 		op.Aggs = t.Aggs
@@ -314,6 +315,8 @@ func dupOperatorWithContext(sourceOp vm.Operator, index int, maxParallel int, du
 		t := sourceOp.(*projection.Projection)
 		op := projection.NewArgument()
 		op.ProjectList = t.ProjectList
+		op.GroupingSetCount = t.GroupingSetCount
+		op.GroupingFlags = t.GroupingFlags
 		op.SetInfo(&info)
 		return op
 	case vm.Filter:
@@ -1352,6 +1355,10 @@ func buildExternalInsertArg(
 func constructProjection(node *plan.Node) *projection.Projection {
 	arg := projection.NewArgument()
 	arg.ProjectList = node.ProjectList
+	if count, ok := plan2.DecodeGroupingSetExpandOption(node.ExtraOptions); ok {
+		arg.GroupingSetCount = count
+		arg.GroupingFlags = node.GroupingFlag
+	}
 	return arg
 }
 
@@ -1812,6 +1819,7 @@ func constructGroup(_ context.Context, node, childNode *plan.Node, needEval bool
 	arg.NeedEval = needEval
 	arg.SpillMem = node.SpillMem
 	arg.GroupingFlag = node.GroupingFlag
+	_, arg.DynamicGrouping = plan2.DecodeGroupingSetExpandOption(childNode.ExtraOptions)
 	arg.GroupBy = node.GroupBy
 	arg.GroupByHashKey = node.GroupByHashKey
 	return arg
@@ -2107,13 +2115,18 @@ func constructDispatch(idx int, target []*Scope, source *Scope, node *plan.Node,
 	return arg
 }
 
-func constructMergeGroup(node *plan.Node, aggs []aggexec.AggFuncExecExpression) *group.MergeGroup {
+func constructMergeGroup(
+	node *plan.Node,
+	aggs []aggexec.AggFuncExecExpression,
+	groupingAware bool,
+) *group.MergeGroup {
 	arg := group.NewArgumentMergeGroup()
 	// here the node is a Group node, merge group is "generated" by the
 	// group node and then merge them
 	arg.SpillMem = node.SpillMem
 	arg.Aggs = aggs
 	arg.GroupByHashKey = node.GroupByHashKey
+	arg.GroupingAware = groupingAware
 	return arg
 }
 

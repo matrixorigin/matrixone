@@ -7935,6 +7935,7 @@ func hasAggAboveUnionAll(p *Plan) bool {
 // The non-distinct form has no such de-dup step.
 func TestGroupingSetDistinctGlobalDedup(t *testing.T) {
 	mock := NewMockOptimizer(false)
+	useLegacyGroupingSetPlan(t, mock)
 
 	distinctPlan, err := runOneStmt(mock, t,
 		"select distinct a, grouping(a) as ga from select_test.bind_select group by a, b with rollup")

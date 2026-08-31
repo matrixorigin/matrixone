@@ -81,6 +81,7 @@ func bindAndOptimizeSelectQueryWithValidatorAndCapture(
 	}
 	builder.skipStats = skipStats
 	rootId = builder.reuseMultiReferenceCTEs(rootId)
+	rootId = builder.sharePendingGroupingSetInputs(rootId)
 	ctx.SetViews(bindCtx.views)
 	if capture != nil {
 		capture(bindCtx)

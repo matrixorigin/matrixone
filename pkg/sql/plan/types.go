@@ -460,6 +460,11 @@ type QueryBuilder struct {
 	// Only records when optimizations actually change the plan structure
 	optimizationHistory []string
 
+	// groupingSetCandidates are internally generated UNION ALL branches whose
+	// common input can be shared after CTE reuse has established any nested
+	// producer boundaries.
+	groupingSetCandidates []groupingSetCandidate
+
 	// Irregular index (IVF/fulltext) synchronous maintenance for the modern DML
 	// path. The modern dedup+MULTI_UPDATE handles the base table and regular
 	// indexes (1:1 row mapping); irregular indexes need computed 1:N maintenance

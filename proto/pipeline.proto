@@ -145,6 +145,9 @@ message Group {
   int64 spill_mem = 11;
   // Positions in exprs used for physical hash/equality. Empty means all exprs.
   repeated int32 group_by_hash_key = 12;
+  // Grouping sentinels are supplied by input vectors and may change between
+  // batches, rather than being described by one static grouping_flag.
+  bool dynamic_grouping = 13;
 }
 
 message Insert {
@@ -623,6 +626,11 @@ message Instruction {
   bool partition_top_n_pre_reduce = 58;
   // PARTITION only: planner-selected ordinary window partition algorithm.
   plan.Node.PartitionAlgorithm partition_algorithm = 59;
+  // PROJECTION only: vector-level expansion metadata for planner-generated
+  // ROLLUP/CUBE grouping sets. Older CNs ignore these fields, so planning is
+  // gated by MORPCVersion48 until every participant understands them.
+  repeated bool projection_grouping_flags = 60;
+  int32 projection_grouping_set_count = 61;
 }
 
 message AnalysisList {
