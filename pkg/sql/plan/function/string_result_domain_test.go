@@ -226,6 +226,10 @@ func TestExpandingReplacementAndInsertBounds(t *testing.T) {
 	require.Equal(t, types.T_varbinary, inserted.Oid)
 	require.Equal(t, int32(4), inserted.Width)
 
+	binaryReplacement := replacementStringReturnType([]types.Type{varchar(2), varchar(1), varbinary(1)}, false)
+	require.Equal(t, types.T_varbinary, binaryReplacement.Oid)
+	binaryInsertion := insertStringReturnType([]types.Type{varchar(1), types.T_int64.ToType(), types.T_int64.ToType(), varbinary(1)})
+	require.Equal(t, types.T_varbinary, binaryInsertion.Oid)
 }
 
 func TestStringConsumersPreserveTextAndBoundedWidths(t *testing.T) {
@@ -254,6 +258,8 @@ func TestStringConsumersPreserveTextAndBoundedWidths(t *testing.T) {
 		{name: "left", inputs: []types.Type{types.T_text.ToType(), types.T_int64.ToType()}, wantOID: types.T_text},
 		{name: "ltrim", inputs: []types.Type{types.New(types.T_varchar, 40, 0)}, wantOID: types.T_varchar, wantWidth: 40},
 		{name: "rtrim", inputs: []types.Type{types.New(types.T_varchar, 40, 0)}, wantOID: types.T_varchar, wantWidth: 40},
+		{name: "lower", inputs: []types.Type{types.T_text.ToType()}, wantOID: types.T_text},
+		{name: "upper", inputs: []types.Type{types.T_text.ToType()}, wantOID: types.T_text},
 		{name: "regexp_replace", inputs: []types.Type{types.New(types.T_varchar, 2, 0), types.New(types.T_varchar, 1, 0), types.New(types.T_varchar, 2, 0)}, wantOID: types.T_varchar, wantWidth: 8},
 	} {
 		t.Run(test.name, func(t *testing.T) {

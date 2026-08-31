@@ -1197,6 +1197,23 @@ func TestTextResultCapacityUsesResultDomain(t *testing.T) {
 		fEvalFn(builtInRepeat))
 	ok, info = multibyteRepeat.Run()
 	require.True(t, ok, info)
+
+	for name, fn := range map[string]func([]*vector.Vector, vector.FunctionResultWrapper, *process.Process, int, *FunctionSelectList) error{
+		"lower": builtInToLower,
+		"upper": builtInToUpper,
+	} {
+		t.Run(name, func(t *testing.T) {
+			input, expected := strings.Repeat("A", 70000), strings.Repeat("a", 70000)
+			if name == "upper" {
+				input, expected = expected, input
+			}
+			fcTC := NewFunctionTestCase(proc, []FunctionTestInput{
+				NewFunctionTestConstInput(types.T_text.ToType(), []string{input}, nil),
+			}, NewFunctionTestResult(types.T_text.ToType(), false, []string{expected}, nil), fEvalFn(fn))
+			ok, info := fcTC.Run()
+			require.True(t, ok, info)
+		})
+	}
 }
 
 func TestExpandingFunctionsRejectMPoolBeforeBuildingResult(t *testing.T) {

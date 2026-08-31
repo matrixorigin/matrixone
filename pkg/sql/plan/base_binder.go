@@ -5170,8 +5170,12 @@ func binaryExprMaxRuntimeRuneBytes(expr *plan.Expr) (uint64, bool) {
 		// unbounded, so a constant target still gives a finite payload bound.
 		return uint64(utf8.UTFMax), true
 	}
-	// Invalid UTF-8 bytes become the three-byte RuneError on partial-rune
-	// paths; valid UTF-8 can consume up to four declared bytes per rune.
+	if oid := types.T(expr.Typ.Id); oid == types.T_char || oid == types.T_varchar {
+		// Binary-charset CHAR/VARCHAR width remains a character count.
+		return uint64(utf8.UTFMax), true
+	}
+	// Native binary widths count bytes. Invalid UTF-8 bytes become the
+	// three-byte RuneError; valid UTF-8 can consume up to four source bytes.
 	return min(max(uint64(expr.Typ.Width), uint64(utf8.RuneLen(utf8.RuneError))), uint64(utf8.UTFMax)), true
 }
 
@@ -5198,6 +5202,12 @@ func binaryExprByteBound(expr *plan.Expr) (uint64, bool) {
 	}
 	width := expr.Typ.Width
 	if width > 0 && types.T(expr.Typ.Id) != types.T_blob {
+		if oid := types.T(expr.Typ.Id); oid == types.T_char || oid == types.T_varchar {
+			if uint64(width) > math.MaxUint64/uint64(utf8.UTFMax) {
+				return 0, false
+			}
+			return uint64(width) * uint64(utf8.UTFMax), true
+		}
 		return uint64(width), true
 	}
 	return 0, false

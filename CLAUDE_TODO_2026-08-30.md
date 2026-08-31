@@ -69,3 +69,10 @@
 2. binary INSERT 静态 bound 纳入 invalid UTF-8 最坏三倍 source 重编码膨胀，但不改变 rune-position runtime。
 3. 补齐 DESC 最后空 Comment payload；按 exact-head 结果修正 REPEAT length 的五行 golden。
 4. 添加精确 BLOB overload 与 INSERT bound focused UT，运行 owning packages/lint 后 commit/push。
+
+# PR #27841 第十三轮 review 修复
+
+1. LOWER/UPPER 使用 collated-text matcher，保留大型 TEXT 输入及返回域。
+2. binary-charset CHAR/VARCHAR 的非 literal byte/rune bound 按 UTF-8 每字符最多 4 bytes 推导；原生 binary 类型仍按 byte width。
+3. REPLACE/INSERT/LPAD/RPAD 的结果 domain 合并所有实际写入 payload 的 source/replacement/pad 参数。
+4. 补 focused expression/CTAS/runtime 类型测试，运行 owning packages/lint 后 commit/push。
