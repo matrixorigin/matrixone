@@ -1063,6 +1063,12 @@ func (builder *QueryBuilder) cteOccurrenceLocalPredicates(
 		}
 		seen[nodeID] = true
 		node := builder.qry.Nodes[nodeID]
+		if node.Limit != nil || node.Offset != nil {
+			// A full-drain operator such as Top-N SORT can read every input row
+			// while still delaying unneeded output expressions until after the
+			// bound. Materializing before that bound expands their row domain.
+			domainComplete = false
+		}
 
 		var candidates []*planpb.Expr
 		switch node.NodeType {

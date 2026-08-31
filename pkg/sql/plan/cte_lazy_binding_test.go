@@ -718,6 +718,32 @@ func TestCTEMultiReferenceRejectsFallibleOutputBeforeConsumerJoin(t *testing.T) 
 		"consumer joins must not expand evaluation of a fallible shared output")
 }
 
+func TestCTEMultiReferenceRejectsFallibleOutputBeforeConsumerTopN(t *testing.T) {
+	mock := NewMockOptimizer(false)
+	logicPlan, err := runOneStmt(mock, t, `
+		with c as (
+			select l_shipmode as region, l_suppkey as k,
+			       cast(max(l_comment) as bigint) as risky,
+			       max(l_comment) as payload
+			from lineitem group by l_shipmode, l_suppkey
+		)
+		select sum(risky), max(length(payload)) from (
+			select risky, payload from c
+			where region = 'AIR' order by k limit 1
+		) a
+		union all
+		select sum(risky), max(length(payload)) from (
+			select risky, payload from c
+			where region = 'SHIP' order by k limit 1
+		) b`)
+	require.NoError(t, err)
+
+	query := logicPlan.GetQuery()
+	require.NotNil(t, query)
+	require.Equal(t, 0, countReachableNodeType(query, planpb.Node_SINK_SCAN),
+		"consumer Top-N must not expand evaluation of a fallible shared output")
+}
+
 func TestCTEMultiReferenceReusesRobustPredicateFreeSpillProducer(t *testing.T) {
 	mock := NewMockOptimizer(false)
 	logicPlan, err := runOneStmt(mock, t, `
