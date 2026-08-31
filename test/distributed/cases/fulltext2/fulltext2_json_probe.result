@@ -1,0 +1,240 @@
+drop database if exists ft2_json_probe;
+create database ft2_json_probe;
+use ft2_json_probe;
+set experimental_fulltext2_index = 1;
+create table t (id int primary key, j json);
+create table t_plain (id int primary key, j json);
+insert into t values
+(1, '{"a":{"foo":"bar"},"n":10}'),
+(2, '{"a":{"foo":"baz"},"n":20}'),
+(3, '{"foo":"bar","n":30}'),
+(4, '{"other":"bar","n":40}'),
+(5, '{"foo":"qux","n":25.5}'),
+(6, '{"foo":"3.14","n":-7}'),
+(7, '{"foo":3.14,"n":0}'),
+(8, '{"tags":["bar","zed"],"n":100}'),
+(9, '{"foo":null,"n":null}'),
+(10, '{"deep":{"deeper":{"foo":"bar"}},"n":5}');
+insert into t_plain select * from t;
+create fulltext2 index ftj on t(j) with parser json;
+show create table t;
+➤ Table[12,1,0]  ¦  Create Table[12,127,0]  𝄀
+t  ¦  CREATE TABLE `t` (
+  `id` int NOT NULL,
+  `j` json DEFAULT NULL,
+  PRIMARY KEY (`id`),
+ FULLTEXT2 `ftj`(`j`) WITH PARSER json
+)
+select id from t where json_extract_string(j,'$.foo') = 'bar' order by id;
+➤ id[4,32,0]  𝄀
+3
+select id from t_plain where json_extract_string(j,'$.foo') = 'bar' order by id;
+➤ id[4,32,0]  𝄀
+3
+select id from t where json_extract_string(j,'$.deep.deeper.foo') = 'bar' order by id;
+➤ id[4,32,0]  𝄀
+10
+select id from t_plain where json_extract_string(j,'$.deep.deeper.foo') = 'bar' order by id;
+➤ id[4,32,0]  𝄀
+10
+select id from t where json_extract_string(j,'$.foo') = '3.14' order by id;
+➤ id[4,32,0]  𝄀
+6
+select id from t_plain where json_extract_string(j,'$.foo') = '3.14' order by id;
+➤ id[4,32,0]  𝄀
+6
+select id from t where json_extract_float64(j,'$.n') = 10 order by id;
+➤ id[4,32,0]  𝄀
+1
+select id from t_plain where json_extract_float64(j,'$.n') = 10 order by id;
+➤ id[4,32,0]  𝄀
+1
+select id from t where json_extract_string(j,'$.tags[0]') = 'bar' order by id;
+➤ id[4,32,0]  𝄀
+8
+select id from t_plain where json_extract_string(j,'$.tags[0]') = 'bar' order by id;
+➤ id[4,32,0]  𝄀
+8
+select id from t where json_extract_string(j,'$.foo') = 'nothing' order by id;
+➤ id[4,32,0]
+select id from t_plain where json_extract_string(j,'$.foo') = 'nothing' order by id;
+➤ id[4,32,0]
+select id from t where json_extract_float64(j,'$.n') > 15 order by id;
+➤ id[4,32,0]  𝄀
+2  𝄀
+3  𝄀
+4  𝄀
+5  𝄀
+8
+select id from t_plain where json_extract_float64(j,'$.n') > 15 order by id;
+➤ id[4,32,0]  𝄀
+2  𝄀
+3  𝄀
+4  𝄀
+5  𝄀
+8
+select id from t where json_extract_float64(j,'$.n') >= 25.5 order by id;
+➤ id[4,32,0]  𝄀
+3  𝄀
+4  𝄀
+5  𝄀
+8
+select id from t_plain where json_extract_float64(j,'$.n') >= 25.5 order by id;
+➤ id[4,32,0]  𝄀
+3  𝄀
+4  𝄀
+5  𝄀
+8
+select id from t where json_extract_float64(j,'$.n') < 10 order by id;
+➤ id[4,32,0]  𝄀
+6  𝄀
+7  𝄀
+10
+select id from t_plain where json_extract_float64(j,'$.n') < 10 order by id;
+➤ id[4,32,0]  𝄀
+6  𝄀
+7  𝄀
+10
+select id from t where json_extract_float64(j,'$.n') <= 20 order by id;
+➤ id[4,32,0]  𝄀
+1  𝄀
+2  𝄀
+6  𝄀
+7  𝄀
+10
+select id from t_plain where json_extract_float64(j,'$.n') <= 20 order by id;
+➤ id[4,32,0]  𝄀
+1  𝄀
+2  𝄀
+6  𝄀
+7  𝄀
+10
+select id from t where json_extract_float64(j,'$.n') > -7 order by id;
+➤ id[4,32,0]  𝄀
+1  𝄀
+2  𝄀
+3  𝄀
+4  𝄀
+5  𝄀
+7  𝄀
+8  𝄀
+10
+select id from t_plain where json_extract_float64(j,'$.n') > -7 order by id;
+➤ id[4,32,0]  𝄀
+1  𝄀
+2  𝄀
+3  𝄀
+4  𝄀
+5  𝄀
+7  𝄀
+8  𝄀
+10
+select id from t where 15 < json_extract_float64(j,'$.n') order by id;
+➤ id[4,32,0]  𝄀
+2  𝄀
+3  𝄀
+4  𝄀
+5  𝄀
+8
+select id from t_plain where 15 < json_extract_float64(j,'$.n') order by id;
+➤ id[4,32,0]  𝄀
+2  𝄀
+3  𝄀
+4  𝄀
+5  𝄀
+8
+select id from t where json_extract_string(j,'$.foo') > 'a' order by id;
+➤ id[4,32,0]  𝄀
+3  𝄀
+5
+select id from t_plain where json_extract_string(j,'$.foo') > 'a' order by id;
+➤ id[4,32,0]  𝄀
+3  𝄀
+5
+select id from t where json_extract_string(j,'$.foo') >= 'bar' and json_extract_string(j,'$.foo') <= 'baz' order by id;
+➤ id[4,32,0]  𝄀
+3
+select id from t_plain where json_extract_string(j,'$.foo') >= 'bar' and json_extract_string(j,'$.foo') <= 'baz' order by id;
+➤ id[4,32,0]  𝄀
+3
+select id from t where json_extract_float64(j,'$.n') > 20 order by id;
+➤ id[4,32,0]  𝄀
+3  𝄀
+4  𝄀
+5  𝄀
+8
+select id from t_plain where json_extract_float64(j,'$.n') > 20 order by id;
+➤ id[4,32,0]  𝄀
+3  𝄀
+4  𝄀
+5  𝄀
+8
+create table w (id int primary key, j json);
+create table w_plain (id int primary key, j json);
+insert into w values
+(1, '{"v":[1,2,3,4,5,6,7,8,9,10]}'),
+(2, '{"v":[11,12,13,14,15,16,17,18,19,20]}'),
+(3, '{"v":[100,200,300]}'),
+(4, '{"v":["a","b","c","d"]}'),
+(5, '{"v":[-1,-2,-3]}');
+insert into w_plain select * from w;
+create fulltext2 index wtj on w(j) with parser json;
+select id from w where json_extract_float64(j,'$.v[0]') > -1000 order by id;
+➤ id[4,32,0]  𝄀
+1  𝄀
+2  𝄀
+3  𝄀
+5
+select id from w_plain where json_extract_float64(j,'$.v[0]') > -1000 order by id;
+➤ id[4,32,0]  𝄀
+1  𝄀
+2  𝄀
+3  𝄀
+5
+select count(*) from w where json_extract_float64(j,'$.v[0]') > -1000;
+➤ count(*)[-5,64,0]  𝄀
+4
+select count(*) from w_plain where json_extract_float64(j,'$.v[0]') > -1000;
+➤ count(*)[-5,64,0]  𝄀
+4
+select id from w where json_extract_float64(j,'$.v[0]') < 5 order by id;
+➤ id[4,32,0]  𝄀
+1  𝄀
+5
+select id from w_plain where json_extract_float64(j,'$.v[0]') < 5 order by id;
+➤ id[4,32,0]  𝄀
+1  𝄀
+5
+select id from w where json_extract_string(j,'$.v[0]') >= 'a' order by id;
+➤ id[4,32,0]  𝄀
+4
+select id from w_plain where json_extract_string(j,'$.v[0]') >= 'a' order by id;
+➤ id[4,32,0]  𝄀
+4
+select id from w where json_extract_string(j,'$.v[0]') < 'a' order by id;
+➤ id[4,32,0]
+select id from w_plain where json_extract_string(j,'$.v[0]') < 'a' order by id;
+➤ id[4,32,0]
+select id from t where json_extract_string(j,'$.foo') = 'bar' and id > 1 order by id;
+➤ id[4,32,0]  𝄀
+3
+select id from t_plain where json_extract_string(j,'$.foo') = 'bar' and id > 1 order by id;
+➤ id[4,32,0]  𝄀
+3
+select id from t where json_extract_string(j,'$.foo') = 'bar' or id = 2 order by id;
+➤ id[4,32,0]  𝄀
+2  𝄀
+3
+select id from t_plain where json_extract_string(j,'$.foo') = 'bar' or id = 2 order by id;
+➤ id[4,32,0]  𝄀
+2  𝄀
+3
+select id from t where not (json_extract_string(j,'$.foo') = 'bar') order by id;
+➤ id[4,32,0]  𝄀
+5  𝄀
+6
+select id from t_plain where not (json_extract_string(j,'$.foo') = 'bar') order by id;
+➤ id[4,32,0]  𝄀
+5  𝄀
+6
+drop database if exists ft2_json_probe;

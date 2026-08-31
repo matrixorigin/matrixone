@@ -508,6 +508,35 @@ func (s *Segment) evalClause(c clause, algo ScoreAlgo, avgDocLen float64, gs *gl
 	return raw, nil
 }
 
+// forEachTermInRange visits the terms of an inclusive [lo,hi] range one at a
+// time, over the loaded FST when present and the build-side sorted key list
+// otherwise — the same dual representation prefixTerms handles. A loaded segment
+// has NO sortedTerms (build-side only), so a range that consulted just that
+// slice would silently return nothing for every persisted segment.
+//
+// It streams rather than returning a []string because a range over a
+// high-cardinality key IS most of that key's vocabulary; the probe that uses it
+// keeps peak memory at one term and one posting cursor.
+// fn reports whether to CONTINUE; returning false stops the walk without
+// inventing an error to unwind with.
+func (s *Segment) forEachTermInRange(lo, hi string, fn func(term string) (bool, error)) error {
+	if s.dict != nil {
+		return s.dict.forEachTermInRange(lo, hi, fn)
+	}
+	// Build-side: TermRange returns a sub-slice of the in-memory sortedTerms
+	// (no copy), so walking it allocates nothing.
+	for _, t := range s.TermRange(lo, hi) {
+		goOn, err := fn(t)
+		if err != nil {
+			return err
+		}
+		if !goOn {
+			return nil
+		}
+	}
+	return nil
+}
+
 // prefixTerms expands a word* prefix to its matching terms, over the loaded FST
 // or the build-side sorted key list.
 func (s *Segment) prefixTerms(prefix string) ([]string, error) {
