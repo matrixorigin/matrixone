@@ -7,7 +7,11 @@ create table t(a int, b int);
 insert into t values (1, 10), (1, 20), (2, 30);
 create view direct_v as select a, b from t;
 create view agg_v as select a, count(*) cnt from t group by a;
+/* migration */ create view leading_block_comment_v as select a from t;
 /*!50001 CREATE DEFINER = `root`@`%` VIEW dump_v AS select a from t */;
+/*!50001 CREATE ALGORITHM=UNDEFINED */
+/*!50013 DEFINER=`user view fake as select 0`@`%` SQL SECURITY DEFINER */
+/*!50001 VIEW split_dump_v AS select a from t */;
 create view line_comment_v -- migration-generated view
 as select a from t;
 create view hash_comment_v # migration-generated view
