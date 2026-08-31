@@ -149,7 +149,12 @@ func (c *Compile) prepareLoadUniqueIndexPromotion(pn *plan.Plan) {
 	if _, ok := loadLogtailReadBarrier(c.e); !ok {
 		return
 	}
-	targets, ok := analyzeLoadUniqueIndexPromotionPlan(pn)
+	lockService := c.proc.GetLockService()
+	if lockService == nil {
+		return
+	}
+	maxRowLocks := float64(lockService.GetConfig().MaxLockRowCount)
+	targets, ok := analyzeLoadUniqueIndexPromotionPlan(pn, maxRowLocks)
 	if !ok {
 		return
 	}
@@ -163,7 +168,11 @@ func (c *Compile) prepareLoadUniqueIndexPromotion(pn *plan.Plan) {
 
 func loadUniqueIndexPromotionTopLevelCandidate(pn *plan.Plan) bool {
 	qry := pn.GetQuery()
-	return qry != nil && qry.StmtType == plan.Query_INSERT && qry.LoadTag && qry.LoadWriteS3 &&
+	// LoadWriteS3 selects an insert implementation and is not a lock-safety
+	// property. In particular, the modern LOAD binder intentionally leaves it
+	// unset. Promotion is instead admitted from the source, plan, transaction,
+	// and lock-budget proofs below.
+	return qry != nil && qry.StmtType == plan.Query_INSERT && qry.LoadTag &&
 		!qry.HasForeignKeyAction && len(qry.DetectSqls) == 0
 }
 
@@ -207,7 +216,10 @@ func loadLogtailReadBarrier(eng engine.Engine) (engine.LogtailReadBarrier, bool)
 	return nil, false
 }
 
-func analyzeLoadUniqueIndexPromotionPlan(pn *plan.Plan) ([]loadUniqueIndexPromotionTarget, bool) {
+func analyzeLoadUniqueIndexPromotionPlan(
+	pn *plan.Plan,
+	maxRowLocks float64,
+) ([]loadUniqueIndexPromotionTarget, bool) {
 	qry := pn.GetQuery()
 	if !loadUniqueIndexPromotionTopLevelCandidate(pn) {
 		return nil, false
@@ -234,7 +246,8 @@ func analyzeLoadUniqueIndexPromotionPlan(pn *plan.Plan) ([]loadUniqueIndexPromot
 			}
 			updateNode, updateNodeID = node, nodeID
 		case plan.Node_EXTERNAL_SCAN:
-			if !loadEstimateEligible(node.Stats) || !loadExternalSourceEligible(node) {
+			if !loadEstimateEligible(node.Stats, maxRowLocks) ||
+				!loadExternalSourceEligible(node) {
 				return nil, false
 			}
 			externalScans++
@@ -416,15 +429,23 @@ func planNodeDescendsFrom(nodes []*plan.Node, root, target int32) bool {
 	return visit(root)
 }
 
-func loadEstimateEligible(stats *plan.Stats) bool {
-	if stats == nil || stats.Cost <= 0 || stats.Rowsize <= 0 ||
-		math.IsNaN(stats.Cost) || math.IsNaN(stats.Rowsize) ||
-		math.IsInf(stats.Cost, 0) || math.IsInf(stats.Rowsize, 0) {
+func loadEstimateEligible(stats *plan.Stats, maxRowLocks float64) bool {
+	// Above the configured row budget, the ordinary path is expected to enter
+	// owner-side cumulative coarsening, while every later batch still pays to
+	// encode, sort, submit, and merge row keys. This estimate is only a cost
+	// admission signal: correctness is established independently by the exact
+	// source, plan, transaction, lock-target, and snapshot-barrier proofs.
+	// Keep the large-input floor as a second gate so the one physical retry is
+	// amortized and medium LOAD latency remains on the canonical path.
+	if stats == nil || maxRowLocks <= 0 || math.IsNaN(maxRowLocks) || math.IsInf(maxRowLocks, 0) ||
+		stats.Outcnt <= maxRowLocks || math.IsNaN(stats.Outcnt) || math.IsInf(stats.Outcnt, 0) ||
+		stats.Cost <= 0 || stats.Rowsize <= 0 || math.IsNaN(stats.Cost) ||
+		math.IsNaN(stats.Rowsize) || math.IsInf(stats.Cost, 0) || math.IsInf(stats.Rowsize, 0) {
 		return false
 	}
-	estimate := stats.Cost * stats.Rowsize
-	return !math.IsNaN(estimate) && !math.IsInf(estimate, 0) &&
-		estimate >= loadUniqueIndexPromotionMinBytes
+	estimatedBytes := stats.Cost * stats.Rowsize
+	return !math.IsNaN(estimatedBytes) && !math.IsInf(estimatedBytes, 0) &&
+		estimatedBytes >= loadUniqueIndexPromotionMinBytes
 }
 
 type loadExternalSourceMetadata struct {

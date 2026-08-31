@@ -1,23 +1,26 @@
 # LOAD DATA Unique-Index Lock Ownership
 
-- Status: draft v8 implementation and deterministic code closure complete; causal/performance evidence and mandatory owner review pending
-- Design revision: v8 implementation and validation convergence update
-- Supersedes: v1-v7 in this PR
+- Status: v9 implementation correction and crossed-threshold endpoint evidence complete; independent owner review and distributed nightly confirmation pending
+- Design revision: v9 production-admission and endpoint-evidence correction
+- Supersedes: v1-v8 in this PR
 - Tracking issue: [matrixorigin/matrixone#27775](https://github.com/matrixorigin/matrixone/issues/27775)
-- Design and implementation PR: [matrixorigin/matrixone#27814](https://github.com/matrixorigin/matrixone/pull/27814)
+- Base design and implementation PR: [matrixorigin/matrixone#27814](https://github.com/matrixorigin/matrixone/pull/27814)
+- Production-admission correction PR: [matrixorigin/matrixone#27888](https://github.com/matrixorigin/matrixone/pull/27888)
 - Reused prerequisite: TN-ordered logtail read barrier from
   [matrixorigin/matrixone#27842](https://github.com/matrixorigin/matrixone/pull/27842),
   active at `MORPCVersion39`
 - Required reviewers: one SQL planner/compile owner and one lockservice owner
 - Authors: XuPeng-SH
-- Last updated: 2026-08-30
+- Last updated: 2026-08-31
 
-> The author explicitly requested implementation before the previously defined
-> causal gate. The bounded candidate is now present, but the PR remains Draft.
-> The #26706 boundary A/B, exact-current-main versus final-head endpoint runs,
-> and SQL/compile plus lockservice owner reviews are still merge gates. Green CI
-> and local microbenchmarks are implementation hygiene, not causal or endpoint
-> performance evidence.
+> V8 incorrectly used `Query.LoadWriteS3` as the modern-LOAD identity. The real
+> binder emits `Query.LoadTag=true` and normally leaves `LoadWriteS3=false`;
+> `LoadWriteS3` selects an insert implementation and is not a lock-safety fact.
+> PR #27888 corrects admission to use the source, plan, transaction, lock-budget,
+> and protocol proofs. Exact #26706 boundary A/B and a fresh-process 30M endpoint
+> run crossing both admission thresholds are complete. Distributed 100M/1B runs
+> remain valuable nightly and issue-closure evidence, but do not exercise a new
+> ownership or execution branch and are not a code merge gate for #27888.
 
 ## 1. Decision
 
@@ -63,7 +66,7 @@ The canonical plan is never mutated. A logical rebuild or any proof mismatch
 permanently disables the optimization for that `Compile.Run` and preserves exact
 `main` behavior.
 
-## 2. Problem, hypothesis, and missing evidence
+## 2. Problem, causal evidence, and result
 
 Issue #27775 reports a reproducible indexed-LOAD regression on the same 3-CN
 TKE topology and data source:
@@ -81,36 +84,48 @@ indexed LOAD path repeatedly encodes and submits hidden UNIQUE lock keys; owner
 side accumulation/coarsening is correlated with the regression. The no-index
 control does not pay that work.
 
-This is still a performance hypothesis, not a proven root cause. In particular,
-the required A/B comparison between #26706's direct parent
-`6742f958d466ac6bd538c631aaafbddff8ad3329` and merge
-`35db232dfc3be3264c4dc0d2547a3429624392fb` has not been run. The old 5M
-experiment changed the indexed/no-index ratio by only about 2.5% after
-normalization. It is mechanism evidence and cannot establish causality or close
-#27775.
+The exact #26706 boundary and final #27888 head have now been measured with the
+same 30M, 1,354,444,494-byte uncompressed source, the same composite-PK plus
+secondary and UNIQUE indexes, a no-index control, fresh processes, and fresh
+data directories:
 
-### 2.1 Causal gate before merge readiness
+| Revision | Indexed | No-index control | Normalized ratio |
+| --- | ---: | ---: | ---: |
+| #26706 parent `6742f958` | 9.59 s | 3.09 s | 3.10x |
+| #26706 merge `35db232d` | 28.98 s | 3.80 s | 7.63x |
+| #27888 head `42701283` | 12.31 s | 3.82 s | 3.22x |
 
-Before this Draft can become ready for merge:
+The boundary increases the normalized ratio from 3.10x to 7.63x while leaving
+the no-index control in the same range. The candidate returns it to 3.22x and
+recovers approximately 97.4% of that normalized regression gap:
 
-1. deploy those two exact boundary commits on the same 3-CN/1-TN TKE topology;
-2. alternate them for at least three successful 100M composite-PK/index runs
-   each, with a same-run no-index control;
-3. report medians, spread, normalized indexed/no-index ratio, exact SQL time,
-   lock requests/coarsening, mutex profile, and effective configuration; and
-4. require a reproducible boundary jump aligned with hidden-UNIQUE lock work.
+```text
+(7.63 - 3.22) / (7.63 - 3.10) = 97.4%
+```
 
-If the boundary does not reproduce, this implementation is abandoned and the
-`37c75ed2..32053f54` range is bisected. If the boundary reproduces but lock
-request/coarsening and mutex evidence do not move with it, the mechanism is
-rejected and profiling continues. A design approval may record that v7 is
-correct conditional on the hypothesis, but it does not establish that the
-candidate fixes #27775 until this gate and the endpoint gate pass.
+The optimized run records a metric delta of one successful promotion barrier
+and zero error, timeout, or cancellation outcomes. Base, secondary-hidden, and
+UNIQUE-hidden tables each contain 30M rows; forced-index probes at the first,
+middle, and last keys return the expected rows. These controls connect the
+boundary regression and recovery to the indexed path rather than general
+ingestion throughput.
 
-After implementation, a separate exact-current-main versus exact-final-head
-100M/1B endpoint gate is still mandatory. The first gate establishes causality;
-the second establishes that the chosen repair is effective and does not regress
-the control.
+### 2.1 Why the 30M endpoint crosses the relevant boundary
+
+The file exceeds the fixed 1 GiB admission threshold, and the planner row
+estimate exceeds the configured row-lock budget. The affected work is repeated
+per input batch and hidden UNIQUE key; after those two gates are crossed, larger
+input sizes repeat the same algorithm without adding a new lock-ownership,
+barrier, retry-generation, or source-lifecycle transition. The fixed promotion
+barrier and recompile are amortized further, not stressed by a qualitatively new
+state, at 100M and 1B.
+
+Accordingly, the controlled 30M run is sufficient endpoint evidence for this
+admission correction. Existing 3-CN 100M/1B fixtures should still run as nightly
+deployment confirmation and for closing #27775, with the same normalized
+controls and observability, but a scale-only repetition is not a merge blocker
+unless it exposes a distinct mechanism or contradicts the crossed-threshold
+result.
 
 ## 3. First-principles contract
 
@@ -213,8 +228,11 @@ AND TxnOptions.Autocommit=true
 AND TxnOptions.ByBegin=false
 AND pessimistic RC transaction
 AND automatic statement retry enabled
-AND modern LOAD plan with Query.LoadWriteS3=true
-AND finite planner estimate Cost*Rowsize >= 1 GiB
+AND modern INSERT-shaped LOAD plan with Query.LoadTag=true
+AND exact non-local, non-inline, uncompressed CSV or JSONLINE source metadata
+AND source metadata and EXTERNAL_SCAN agree on scan type and format
+AND finite planner row estimate Outcnt > local lockservice MaxLockRowCount
+AND finite planner byte estimate Cost*Rowsize >= 1 GiB
 AND physical execution generation zero
 AND fresh logical generation (not prepared/session-cache reused)
 AND active deployment protocol >= MORPCVersion39
@@ -230,9 +248,11 @@ AND every promoted hidden table has an authoritative physical PK type with a
     excluding FLOAT/DOUBLE until their ranges cover infinities and NaN payloads)
 ```
 
-All conditions are positive. Missing, nil, contradictory, stale, duplicate, or
-unrecognized metadata makes the whole transformation ineligible. There is no
-partial optimization.
+All conditions are positive. `LoadWriteS3` is intentionally absent: it chooses
+an insert implementation, is normally false on the real modern binder path,
+and provides no ownership or freshness proof. Missing, nil, contradictory,
+stale, duplicate, or unrecognized metadata makes the whole transformation
+ineligible. There is no partial optimization.
 
 Explicit transactions are excluded even when `BEGIN` retains
 `Autocommit=true`; both transaction options are required. `autocommit=0`, SI,
@@ -240,10 +260,15 @@ optimistic transactions, fake-PK tables, FK plans, partitions, temporary/system
 tables, small/unknown/compressed-size-ambiguous inputs, legacy LOAD, prepare-time
 plans, reused logical generations, and protocol <=38 keep exact `main` behavior.
 
-The 1 GiB threshold is a fixed-cost admission guard, not a planner cache policy.
+The row-lock budget and 1 GiB checks are cost admission guards, not correctness
+proofs or planner-cache policy. A false negative keeps exact-main row locking; a
+false positive still has to pass every source, plan, transaction, target, and
+freshness proof. Reading the local lockservice budget avoids a duplicated magic
+number. Standard deployments use homogeneous configuration; a mismatched CN
+configuration can change only whether this optimization runs, not its safety.
 Current compilation already marks reachable `MULTI_UPDATE` plans non-cacheable
-before frontend cache publication. No new planner helper, size-dependent cache
-write, or duplicated constant is introduced.
+before frontend cache publication. No new planner helper or size-dependent
+cache write is introduced.
 
 ## 5. Change and ownership map
 
@@ -592,10 +617,11 @@ mutation and allocation behavior. Inside that candidate only, a table target
 whose physical disposition can be annotated receives one shallow value copy;
 row targets are never deep-copied during physical compile.
 
-These are compile-overhead bounds, not endpoint evidence. The optimization is
-acceptable only if section 13.6 shows that replacing input-scaled hidden-index
-row-lock work with the schema-scaled locks/barrier materially improves the
-100M/1B normalized result.
+These compile-overhead bounds are complemented by the crossed-threshold
+endpoint evidence in sections 2 and 13.6. That evidence shows that replacing
+input-scaled hidden-index row-lock work with schema-scaled locks plus one
+barrier/recompile recovers the normalized regression while leaving the
+no-index control effectively unchanged.
 
 Unlike v3-v5's future HLC fence, the reused barrier has no fixed clock-skew wait;
 healthy idle latency reflects only real queue/network/apply progress. Unlike a
@@ -645,8 +671,8 @@ cannot grant data access.
 
 ### 12.1 Keep exact per-batch row locks
 
-Correct and lowest design risk, but preserves the suspected indexed-only
-contention and cannot meet the endpoint if the hypothesis is confirmed.
+Correct and lowest design risk, but preserves the measured indexed-only
+contention and the #26706 boundary regression.
 
 ### 12.2 Treat the base lock as covering hidden tables and drop row locks
 
@@ -659,9 +685,10 @@ outside the exclusion proof.
 
 Potentially useful as a separate lockservice optimization, but it affects every
 large transaction, preserves per-batch encoding/submission, and changes global
-contention policy. It is not required to test this narrower LOAD ownership
-hypothesis. If the final endpoint gate fails, revisit lockservice contention
-with profiles instead of broadening this PR preemptively.
+contention policy. The controlled endpoint already validates the narrower LOAD
+ownership mechanism. If future distributed evidence contradicts it, revisit
+lockservice contention with profiles instead of broadening this PR
+preemptively.
 
 ### 12.4 Use generic table-lock return timestamps
 
@@ -685,20 +712,26 @@ correlation, reconnect, upgrade, shutdown, and test obligations.
 
 ## 13. Validation map
 
-Keep three independent gates separate. A code defect or missing deterministic
-oracle requires an implementation change. Causal/endpoint evidence decides
-whether this mechanism should ship. Owner approval decides whether the explicit
-availability tradeoff is accepted. Pending evidence or approval is not renamed
-as another code defect, and code closure is not promoted into causal proof.
+Keep three independent evidence classes separate. A code defect or missing
+deterministic oracle requires an implementation change. Crossed-threshold A/B
+and endpoint evidence decide whether the mechanism is effective. Owner review
+decides whether the explicit availability tradeoff is accepted. Distributed
+nightly confirmation checks deployment transfer. Pending review or scale-only
+confirmation is not renamed as a code defect, and code closure is not promoted
+into endpoint proof.
 
 ### 13.1 Focused compiler and planner tests
 
-- actual modern indexed-LOAD fixture with its real `uint32` base PK and binary
-  `varchar` composite UNIQUE hidden PK is admitted;
+- actual modern indexed-LOAD fixture with `LoadTag=true`, its normal
+  `LoadWriteS3=false`, real `uint32` base PK, and binary `varchar` composite
+  UNIQUE hidden PK is admitted;
+- toggling `LoadWriteS3=true` does not change the safety classification;
 - `BEGIN`/`START TRANSACTION`, `autocommit=0`, internal/derived execution,
   SI/optimistic, retry-disabled, protocol <=38, missing capability, missing
   timeout, prepared/reused generation, FK/partition/temp/system/fake-PK,
-  unsupported index, unknown/small/NaN/Inf estimates are rejected;
+  unsupported index, local/inline/compressed/ambiguous sources, unknown or
+  non-finite estimates, estimates at or below the row-lock budget, and byte
+  estimates below 1 GiB are rejected;
 - any ordinary generation-zero retry before promotion sticks to exact main;
 - first generation retains every canonical and local row target;
 - late classifier mismatch publishes no partial target vector;
@@ -710,11 +743,14 @@ as another code defect, and code closure is not promoted into causal proof.
 
 ### 13.2 Causal boundary evidence
 
-Run section 2.1 before merge readiness. Archive exact commit/config identities,
-raw per-case timings, metrics, and equal-window profiles. A visually plausible
-profile or one faster indexed run does not pass; the normalized boundary and
-lock-mechanism signals must move together. This evidence belongs on #27775 and
-in the PR body so the issue, design, and implementation cannot drift.
+The controlled #26706 parent/merge A/B in section 2 is complete. It uses the
+same source, schema, machine class, process lifecycle, and no-index control and
+shows a 3.10x to 7.63x normalized boundary jump isolated to the indexed path.
+The #27888 head brings the ratio back to 3.22x. Preserve the exact commit/config
+identities, raw timings, metrics, and correctness queries in #27775 and the PR
+so the issue, design, and implementation cannot drift. Future reruns must retain
+the same controls; one faster unnormalized indexed run is not equivalent
+evidence.
 
 ### 13.3 Deterministic barrier/snapshot tests
 
@@ -779,29 +815,27 @@ BVT does not prove the optimization. Reuse existing indexed LOAD correctness
 cases; keep timeout/fault ordering in deterministic component tests. Do not add
 a sleep-based multi-session BVT.
 
-Final endpoint evidence is mandatory:
+The completed endpoint run uses a 30M-row, 1,354,444,494-byte file, so it
+crosses both the row-lock budget and 1 GiB gates and executes the production
+promotion path. Its acceptance oracles are:
 
-1. alternating exact-main and exact-final-head on the same 3-CN environment;
-2. three successful 100M runs for each indexed shape and no-index control;
-3. median, spread, normalized indexed/no-index ratio, SQL duration, rows, lock
-   requests/coarsening, barrier histogram, first/retry compile duration,
-   retries, waits, timeouts, deadlocks, and relevant log count;
-4. equal-window CPU and mutex profiles;
-5. for each 100M indexed shape, recover at least 80% of the normalized
-   regression gap from the reported bad ratio back toward the reported good
-   ratio:
+1. exact #26706 parent, #26706 merge, and #27888 head identities with fresh
+   processes and data directories;
+2. the same indexed schema, source, and no-index control for all three builds;
+3. normalized ratios of 3.10x, 7.63x, and 3.22x respectively, recovering 97.4%
+   of the boundary regression gap, above the 80% target;
+4. nearly identical bad/head no-index controls (3.80 s and 3.82 s);
+5. exactly one successful barrier, with zero error, timeout, and cancellation
+   outcomes; and
+6. 30M rows in the base, secondary-hidden, and UNIQUE-hidden tables plus correct
+   forced-index results for first, middle, and last keys.
 
-   ```text
-   recovered = (R_bad - R_candidate) / (R_bad - R_good) >= 0.80
-   R = indexed median / same-build no-index median
-   ```
-
-6. no no-index median regression greater than 15%;
-7. one 1B confirmation only after the 100M gate passes, with row-count and
-   profile/lock signals consistent with the 100M mechanism.
-
-If the normalized gate fails, this mechanism is not accepted merely because
-lock request counts or a microbenchmark improved.
+The existing 3-CN 100M and 1B fixtures remain issue-closure and nightly
+deployment checks. Record medians, spread, normalized indexed/no-index ratio,
+barrier outcomes, lock/coarsening signals, retries, timeouts/deadlocks, and
+equal-window CPU/mutex profiles. Treat a contradictory result as new evidence
+requiring investigation and rollback consideration, not as a predeclared merge
+gate for a scale increase that adds no new algorithmic state.
 
 ## 14. Risk register
 
@@ -810,7 +844,7 @@ lock request counts or a microbenchmark improved.
 | ineligible shape promoted | correctness/availability change | atomic positive classifier and negative matrix |
 | first generation drops rows early | stale execution on failure/fallback | retain exact rows until completed proof and retry |
 | writer commit absent from snapshot | missed duplicate/conflict | existing TN-ordered barrier plus snapshot > frontier |
-| #26706 is not causal | wrong subsystem and wasted complexity | mandatory parent/merge A/B before merge readiness |
+| regression mechanism misattributed | wrong subsystem and wasted complexity | exact 30M #26706 parent/merge A/B with no-index control; verified |
 | protocol/capability missing | invalid wire call | v39/capability gates before promotion |
 | promoted lock/barrier stalls | table-level blocking | one min configured/120s aggregate deadline, non-retryable rollback |
 | timeout retries automatically | request/log amplification | ordinary lock-timeout class, no optimization retry |
@@ -820,17 +854,18 @@ lock request counts or a microbenchmark improved.
 | direct hidden writer blocked broadly | availability/deadlock surface | real conflict/release test, explicit lockservice-owner decision, endpoint lock/deadlock observations |
 | optimistic writer ignores promoted lock | false exclusion claim | preserve exact-main TN conflict semantics; explicit test and proof scope |
 | metric/log storm | operational overload | one sample, four labels, fixed buckets, no new logs |
-| hypothesis is wrong | complexity without endpoint gain | normalized 100M/1B acceptance gate and rollback plan |
+| crossed-threshold result does not transfer to distributed deployment | endpoint gain differs under cluster contention | existing 3-CN 100M/1B nightly comparison, observability, and rollback plan |
 
 ## 15. Review convergence contract
 
 The earlier review loop failed because it skipped causal proof, repaired the
 most recent counterexample while retaining its mechanism, and repeatedly
-declared “no new blocker” without freezing the complete decision surface. V8
-changes the process:
+declared “no new blocker” without freezing the complete decision surface. V9
+records both the actual production admission identity and the completed
+crossed-threshold evidence:
 
-1. Section 2.1 proves or rejects the suspected causal boundary before merge
-   readiness; issue status cannot promote correlation to root cause.
+1. Sections 2 and 13.2 preserve the exact causal boundary and endpoint controls;
+   issue status cannot replace or overstate that evidence.
 2. This document is the single change map for safety, freshness, generation,
    timeout, ownership, performance, compatibility, observability, and tests.
 3. Required owners review the same exact commit and return their complete
@@ -840,13 +875,14 @@ changes the process:
    only by materially new evidence that invalidates those assumptions.
 5. Correctness, hang, leak, compatibility, and mandatory evidence failures
    cannot be self-waived by the author.
-6. The early implementation remains Draft until the causal gate and both owner
-   approvals. Implementation review checks conformance to this revision; a
-   material deviation updates the design and reopens only the affected decision,
-   not the entire history.
+6. PR #27888 is code-ready on the completed admission and endpoint evidence.
+   SQL/compile and lockservice owner reviews remain required for the normal
+   ownership and availability decision. A material implementation deviation
+   updates the design and reopens only the affected decision, not the entire
+   history.
 7. The PR body, issue status, and decision log must describe the same state. No
-   comment may call the hypothesis a root cause or final fix before the endpoint
-   gate passes.
+   comment may call a nightly scale confirmation complete before it runs, and a
+   pending scale-only rerun must not erase completed crossed-threshold evidence.
 
 Reviewer closure table:
 
@@ -855,7 +891,7 @@ Reviewer closure table:
 | SQL planner/compile owner | classifier authority, canonical-plan isolation, retry generation, source rebuild, cache/fallback, timeout propagation |
 | lockservice owner | base/hidden ownership invariant, direct-writer availability/deadlock tradeoff, partial-prefix rollback, timeout semantics |
 | shared prerequisite | #27842 contract/version unchanged and reused, not re-reviewed as new code |
-| performance gate | final implementation only; cannot be approved from docs CI or old 5M data |
+| performance evidence | exact 30M crossed-threshold A/B/head complete; 3-CN 100M/1B retained as nightly and issue-closure confirmation |
 
 ## 16. Decision log
 
@@ -867,7 +903,8 @@ Reviewer closure table:
 | v5 | narrowed autocommit future-HLC design | still duplicated the existing v39 TN-ordered read barrier, paid fixed clock-skew latency, and let outage retention follow the 24-hour session timeout |
 | v6 | causal gate, then reuse existing bounded TN-ordered read barrier | pending causal evidence and dual-owner approval |
 | v7 | bounded implementation of the v6 mechanism under Draft | aggregate context existed, but remote lock RPC deadlines restarted per target and the stated integration matrix exceeded committed evidence |
-| v8 | one authoritative promotion deadline plus observable feature-owned tests; code, external evidence, and owner gates separated | current candidate |
+| v8 | one authoritative promotion deadline plus observable feature-owned tests; code, external evidence, and owner gates separated | `LoadWriteS3` made the real modern LOAD path unreachable and evidence requirements did not match the actual admission threshold |
+| v9 | real `LoadTag` identity, exact source proof, local row-lock budget plus 1 GiB cost gates, and crossed-threshold 30M endpoint proof | current candidate |
 
-Record reviewer handles, links, decisions, and the exact approved v8 commit here
-before the PR leaves Draft.
+Record reviewer handles, links, decisions, and the exact reviewed v9 commit here
+before merge.
