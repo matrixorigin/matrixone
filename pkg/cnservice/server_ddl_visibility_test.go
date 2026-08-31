@@ -697,6 +697,8 @@ func TestCommittedPersistenceFailureRestartsFromProvisionalFailClosed(t *testing
 	}
 	txnClient := mock_frontend.NewMockTxnClient(gomock.NewController(t))
 	txnClient.EXPECT().GetLatestCommitTS().Return(targetTS)
+	txnClient.EXPECT().WaitLogTailAppliedAt(gomock.Any(), targetTS).Return(targetTS.Next(), nil)
+	txnClient.EXPECT().SyncLatestCommitTS(targetTS)
 	baseFS := newDDLVisibilityMetadataFS(t)
 	metadataFS := &failReplaceMetadataFS{ReplaceableFileService: baseFS, failAt: 2}
 	cfg := &Config{UUID: serviceID}
