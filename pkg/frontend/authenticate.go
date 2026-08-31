@@ -6382,6 +6382,14 @@ func determinePrivilegeSetOfStatement(stmt tree.Statement) *privilege {
 		if st.Name != nil {
 			dbName = string(st.Name.SchemaName)
 		}
+	case *tree.RefreshMaterializedView:
+		objType = objectTypeDatabase
+		typs = append(typs, PrivilegeTypeAlterView, PrivilegeTypeDatabaseAll, PrivilegeTypeDatabaseOwnership)
+		writeDatabaseAndTableDirectly = true
+		appendWriteTableNameDatabaseName(st.Name)
+		if st.Name != nil {
+			dbName = string(st.Name.SchemaName)
+		}
 	case *tree.AlterDataBaseConfig:
 		objType = objectTypeNone
 		kind = privilegeKindNone

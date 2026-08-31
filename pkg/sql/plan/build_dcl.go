@@ -258,6 +258,8 @@ func collectPrepareDdlSchemas(ctx CompilerContext, stmt tree.Statement, prepareP
 		if err := addQuerySchemas(ddl.AsSource); err != nil {
 			return nil, err
 		}
+	case *tree.RefreshMaterializedView:
+		tableNames = append(tableNames, ddl.Name)
 	case *tree.CreateTable:
 		tableNames = append(tableNames, &ddl.Table)
 		if ddl.IsAsLike {

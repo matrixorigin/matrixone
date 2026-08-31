@@ -15,9 +15,13 @@
 package iscp
 
 import (
+	"context"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/txn/client"
+	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/stretchr/testify/require"
 	"github.com/tidwall/btree"
 )
@@ -31,6 +35,28 @@ func TestNewMaterializedViewConsumerValidatesSpec(t *testing.T) {
 	})
 	require.NoError(t, err)
 	require.IsType(t, &MaterializedViewConsumer{}, consumer)
+}
+
+func TestRefreshMaterializedViewOnDemandUsesCallerTransaction(t *testing.T) {
+	oldExec := ExecWithResult
+	defer func() { ExecWithResult = oldExec }()
+	var sqls []string
+	ExecWithResult = func(ctx context.Context, sql, _ string, txn client.TxnOperator) (executor.Result, error) {
+		require.NotNil(t, ctx.Value(defines.MaterializedViewRefreshKey{}))
+		require.Nil(t, txn)
+		sqls = append(sqls, sql)
+		return executor.Result{}, nil
+	}
+	err := RefreshMaterializedView(context.Background(), "cn", nil, &ConsumerInfo{
+		DBName: "db", TableName: "mv", Columns: []string{"service", "requests"},
+		RefreshSQL: "select service, count(*) requests from events group by service",
+		SrcTables:  []TableInfo{{DBName: "db", TableName: "events"}},
+	}, nil)
+	require.NoError(t, err)
+	require.Equal(t, []string{
+		"delete from `db`.`mv` where `__mo_fake_pk_col` is not null",
+		"insert into `db`.`mv` (`service`,`requests`,`__mo_fake_pk_col`) select `service`,`requests`, row_number() over () from (select `service`, count(*) as `requests` from `db`.`events` group by `service`) as `__mo_mv_refresh`",
+	}, sqls)
 }
 
 func TestMaterializedViewRefreshAtIterationBoundary(t *testing.T) {
@@ -114,4 +140,15 @@ func TestMaterializedViewDrainSkipsRowsForFullRefresh(t *testing.T) {
 			require.NoError(t, consumer.drainChanges(r))
 		})
 	}
+}
+
+func TestMaterializedViewFastRefreshDoesNotFallback(t *testing.T) {
+	consumer := &MaterializedViewConsumer{info: &ConsumerInfo{
+		DBName:          "db",
+		TableName:       "mv",
+		IncrementalSpec: "not-base64",
+		RefreshMethod:   "fast",
+	}}
+	err := consumer.Consume(context.Background(), &MockRetriever{dtype: ISCPDataType_Tail})
+	require.ErrorContains(t, err, "invalid materialized view incremental specification encoding")
 }

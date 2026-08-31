@@ -268,6 +268,10 @@ type ConsumerInfo struct {
 	// IncrementalSpec is a planner-produced JSON description for the
 	// supported direct-column aggregate subset. Empty means full refresh.
 	IncrementalSpec string
+	// RefreshMethod is force, fast, or complete. Empty is the legacy force
+	// behavior, which attempts an incremental tail and falls back to a full
+	// refresh when necessary.
+	RefreshMethod string
 }
 
 type TableInfo struct {

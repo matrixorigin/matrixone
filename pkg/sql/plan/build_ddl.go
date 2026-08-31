@@ -1522,6 +1522,9 @@ func buildCreateView(stmt *tree.CreateView, ctx CompilerContext) (*Plan, error) 
 	createView.TableDef.ViewSql = tableDef.ViewSql
 	createView.TableDef.Defs = tableDef.Defs
 	if stmt.Materialized {
+		if stmt.RefreshTiming == tree.MaterializedViewRefreshOnDemand && stmt.RefreshMethod != tree.MaterializedViewRefreshComplete {
+			return nil, moerr.NewNotSupported(ctx.GetContext(), "materialized view ON DEMAND currently requires COMPLETE or FULL refresh")
+		}
 		clause, ok := stmt.AsSource.Select.(*tree.SelectClause)
 		if !ok || clause.From == nil || len(clause.From.Tables) == 0 {
 			return nil, moerr.NewNotSupported(ctx.GetContext(), "materialized view requires at least one base table")
@@ -1560,7 +1563,7 @@ func buildCreateView(stmt *tree.CreateView, ctx CompilerContext) (*Plan, error) 
 		createView.TableDef.TableType = catalog.SystemOrdinaryRel
 		refreshSQL := materializedViewRefreshSQL(stmt.AsSource)
 		incrementalSpec := ""
-		if len(sources) == 1 {
+		if stmt.RefreshTiming == tree.MaterializedViewRefreshOnChange && stmt.RefreshMethod != tree.MaterializedViewRefreshComplete && len(sources) == 1 {
 			var stateCols []*ColDef
 			var stateRefreshSQL string
 			incrementalSpec, stateCols, stateRefreshSQL = buildMaterializedViewIncrementalPlan(
@@ -1575,6 +1578,9 @@ func buildCreateView(stmt *tree.CreateView, ctx CompilerContext) (*Plan, error) 
 				}
 				refreshSQL = stateRefreshSQL
 			}
+		}
+		if stmt.RefreshMethod == tree.MaterializedViewRefreshFast && incrementalSpec == "" {
+			return nil, moerr.NewNotSupported(ctx.GetContext(), "materialized view FAST or INCREMENTAL refresh requires a supported single-table incremental aggregate query")
 		}
 		if primaryKeys := materializedViewIncrementalPrimaryKey(incrementalSpec); len(primaryKeys) > 0 {
 			for _, col := range createView.TableDef.Cols {
@@ -1607,7 +1613,9 @@ func buildCreateView(stmt *tree.CreateView, ctx CompilerContext) (*Plan, error) 
 		// to survive planner rebinding of user DML, while table properties are
 		// part of the persisted relation definition.
 		createView.TableDef.Props = append(createView.TableDef.Props,
-			&plan.PropertyDef{Key: "mv_materialized", Value: "true"})
+			&plan.PropertyDef{Key: "mv_materialized", Value: "true"},
+			&plan.PropertyDef{Key: "mv_refresh_method", Value: materializedViewRefreshMethodName(stmt.RefreshMethod)},
+			&plan.PropertyDef{Key: "mv_refresh_timing", Value: materializedViewRefreshTimingName(stmt.RefreshTiming)})
 		for _, def := range createView.TableDef.Defs {
 			props := def.GetProperties()
 			if props == nil {
@@ -1625,6 +1633,8 @@ func buildCreateView(stmt *tree.CreateView, ctx CompilerContext) (*Plan, error) 
 				&plan.Property{Key: "mv_source_table", Value: string(source.ObjectName)},
 				&plan.Property{Key: "mv_source_sql", Value: tree.String(source, dialect.MYSQL)},
 				&plan.Property{Key: "mv_refresh_sql", Value: refreshSQL},
+				&plan.Property{Key: "mv_refresh_method", Value: materializedViewRefreshMethodName(stmt.RefreshMethod)},
+				&plan.Property{Key: "mv_refresh_timing", Value: materializedViewRefreshTimingName(stmt.RefreshTiming)},
 			)
 			if len(sources) > 1 {
 				type sourceName struct{ Database, Table string }
@@ -1658,6 +1668,68 @@ func buildCreateView(stmt *tree.CreateView, ctx CompilerContext) (*Plan, error) 
 			},
 		},
 	}, nil
+}
+
+func buildRefreshMaterializedView(stmt *tree.RefreshMaterializedView, ctx CompilerContext) (*Plan, error) {
+	dbName := string(stmt.Name.SchemaName)
+	if dbName == "" {
+		dbName = ctx.DefaultDatabase()
+	}
+	viewName := string(stmt.Name.ObjectName)
+	if dbName == "" {
+		return nil, moerr.NewNoDB(ctx.GetContext())
+	}
+	_, def, err := ctx.Resolve(dbName, viewName, nil)
+	if err != nil {
+		return nil, err
+	}
+	if def == nil {
+		return nil, moerr.NewNoSuchTablef(ctx.GetContext(), "%s.%s", dbName, viewName)
+	}
+	if !IsMaterializedViewTableDef(def) {
+		return nil, moerr.NewNotSupportedf(ctx.GetContext(), "%s.%s is not a materialized view", dbName, viewName)
+	}
+	if err = ValidateMaterializedViewSources(ctx, def); err != nil {
+		return nil, err
+	}
+	refreshTiming := "change"
+	for _, item := range def.GetDefs() {
+		if props := item.GetProperties(); props != nil {
+			for _, prop := range props.GetProperties() {
+				if prop.GetKey() == "mv_refresh_timing" {
+					refreshTiming = prop.GetValue()
+				}
+			}
+		}
+	}
+	if refreshTiming != "demand" {
+		return nil, moerr.NewNotSupported(ctx.GetContext(), "manual REFRESH is only supported for materialized views created ON DEMAND")
+	}
+	return &Plan{Plan: &plan.Plan_Ddl{Ddl: &plan.DataDefinition{
+		DdlType: plan.DataDefinition_REFRESH_MATERIALIZED_VIEW,
+		Definition: &plan.DataDefinition_RefreshMaterializedView{RefreshMaterializedView: &plan.RefreshMaterializedView{
+			Database: dbName,
+			Name:     viewName,
+		}},
+	}}}, nil
+}
+
+func materializedViewRefreshMethodName(method tree.MaterializedViewRefreshMethod) string {
+	switch method {
+	case tree.MaterializedViewRefreshFast:
+		return "fast"
+	case tree.MaterializedViewRefreshComplete:
+		return "complete"
+	default:
+		return "force"
+	}
+}
+
+func materializedViewRefreshTimingName(timing tree.MaterializedViewRefreshTiming) string {
+	if timing == tree.MaterializedViewRefreshOnDemand {
+		return "demand"
+	}
+	return "change"
 }
 
 // validateMaterializedViewSourceTable keeps MV registration limited to

@@ -253,6 +253,8 @@ func sqlTaskInt64(v any) int64 {
     ifNotExists bool
     defaultOptional bool
     sourceOptional bool
+	materializedViewRefreshMethod tree.MaterializedViewRefreshMethod
+	materializedViewRefreshTiming tree.MaterializedViewRefreshTiming
 
     fullOpt bool
     boolVal bool
@@ -358,7 +360,7 @@ func sqlTaskInt64(v any) int64 {
 %nonassoc LOWER_THAN_COMMA
 %nonassoc LOWER_THAN_WITH
 %nonassoc WITH
-%token <str> SELECT INSERT UPDATE DELETE FROM WHERE GROUP HAVING BY LIMIT
+%token <str> SELECT INSERT UPDATE DELETE FROM WHERE GROUP HAVING BY LIMIT REFRESH FAST COMPLETE DEMAND INCREMENTAL AUTO
 %nonassoc <str> OFFSET
 %token <str> FOR OF CONNECT MANAGE GRANTS OWNERSHIP REFERENCE
 %nonassoc LOWER_THAN_SET
@@ -621,6 +623,7 @@ func sqlTaskInt64(v any) int64 {
 %type <statement> stmt block_stmt block_type_stmt normal_stmt
 %type <statements> stmt_list stmt_list_return
 %type <statement> create_stmt insert_stmt insert_no_with_stmt delete_stmt merge_stmt drop_stmt alter_stmt truncate_table_stmt alter_sequence_stmt upgrade_stmt
+%type <statement> refresh_materialized_view_stmt
 %type <statement> delete_without_using_stmt delete_with_using_stmt
 %type <statement> drop_ddl_stmt drop_database_stmt drop_table_stmt drop_index_stmt drop_prepare_stmt drop_view_stmt drop_function_stmt drop_procedure_stmt drop_sequence_stmt drop_iceberg_catalog_stmt drop_mongodb_connection_stmt
 %type <statement> drop_account_stmt drop_role_stmt drop_user_stmt
@@ -927,6 +930,9 @@ func sqlTaskInt64(v any) int64 {
 %type <exprs> data_values data_opt row_value
 
 %type <boolVal> local_opt
+%type <materializedViewRefreshMethod> materialized_view_refresh_method
+%type <materializedViewRefreshTiming> materialized_view_refresh_timing materialized_view_refresh_timing_opt
+%type <item> materialized_view_refresh_opt
 %type <duplicateKey> duplicate_opt
 %type <fields> load_fields field_item export_fields
 %type <fieldsList> field_item_list
@@ -1149,6 +1155,7 @@ normal_stmt:
 |   resume_ccpr_subscription_stmt
 |   pause_ccpr_subscription_stmt
 |   branch_stmt
+|   refresh_materialized_view_stmt
 
 backup_stmt:
     BACKUP STRING FILESYSTEM STRING PARALLELISM STRING backup_type_opt backup_timestamp_opt
@@ -8530,9 +8537,10 @@ func_handler:
     }
 
 create_view_stmt:
-	CREATE MATERIALIZED VIEW not_exists_opt table_name column_list_opt AS select_stmt view_tail
+	CREATE MATERIALIZED VIEW not_exists_opt table_name column_list_opt materialized_view_refresh_opt AS select_stmt view_tail
 	{
-		$$ = tree.NewCreateMaterializedView($5, $6, $8, $4)
+		refresh := $7.([2]int8)
+		$$ = tree.NewCreateMaterializedViewWithRefresh($5, $6, $9, $4, tree.MaterializedViewRefreshMethod(refresh[0]), tree.MaterializedViewRefreshTiming(refresh[1]))
 	}
 |
     CREATE view_list_opt VIEW not_exists_opt table_name column_list_opt AS select_stmt view_tail
@@ -8573,6 +8581,37 @@ create_view_stmt:
             IfNotExists,
         )
     }
+
+materialized_view_refresh_opt:
+	{
+		$$ = [2]int8{int8(tree.MaterializedViewRefreshForce), int8(tree.MaterializedViewRefreshOnChange)}
+	}
+|   REFRESH materialized_view_refresh_method materialized_view_refresh_timing_opt
+	{
+		$$ = [2]int8{int8($2), int8($3)}
+	}
+
+materialized_view_refresh_method:
+	FORCE       { $$ = tree.MaterializedViewRefreshForce }
+|   AUTO        { $$ = tree.MaterializedViewRefreshForce }
+|   FAST        { $$ = tree.MaterializedViewRefreshFast }
+|   INCREMENTAL { $$ = tree.MaterializedViewRefreshFast }
+|   COMPLETE    { $$ = tree.MaterializedViewRefreshComplete }
+|   FULL        { $$ = tree.MaterializedViewRefreshComplete }
+
+materialized_view_refresh_timing_opt:
+	{ $$ = tree.MaterializedViewRefreshOnChange }
+|   ON materialized_view_refresh_timing { $$ = $2 }
+
+materialized_view_refresh_timing:
+	CHANGE { $$ = tree.MaterializedViewRefreshOnChange }
+|   DEMAND { $$ = tree.MaterializedViewRefreshOnDemand }
+
+refresh_materialized_view_stmt:
+	REFRESH MATERIALIZED VIEW table_name
+	{
+		$$ = tree.NewRefreshMaterializedView($4)
+	}
 
 create_account_stmt:
     CREATE ACCOUNT not_exists_opt account_name_or_param account_auth_option account_status_option account_comment_opt
@@ -15801,6 +15840,7 @@ non_reserved_keyword:
 |   COMMENT_KEYWORD
 |   COMMIT
 |   COMMITTED
+|   COMPLETE
 |   CHARSET
 |   COLUMNS
 |   CONNECTION
@@ -15822,6 +15862,7 @@ non_reserved_keyword:
 |   DIFF
 |	DAY
 |   DATETIME
+|   DEMAND
 |   DECIMAL
 |   DYNAMIC
 |   DISK
@@ -15848,6 +15889,7 @@ non_reserved_keyword:
 |   FLOAT_TYPE
 |   FIXED
 |   FIELDS
+|   FAST
 |   GENERATED
 |   GEOMETRY
 |   GEOMETRYCOLLECTION
@@ -15870,6 +15912,7 @@ non_reserved_keyword:
 |   PERSIST
 |   GRANT
 |   INCLUDE
+|   INCREMENTAL
 |   INT
 |   INTEGER
 |   INDEXES
@@ -15971,6 +16014,7 @@ non_reserved_keyword:
 |   REPEATABLE
 |   REPLICAS
 |   REF
+|   REFRESH
 |   RELEASE
 |   RESUME
 |   REVOKE
@@ -16025,6 +16069,7 @@ non_reserved_keyword:
 |   X509
 |   ZEROFILL
 |   YEAR
+|   AUTO
 |   TYPE
 |   HEADER
 |   MAX_FILE_SIZE

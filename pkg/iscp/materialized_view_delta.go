@@ -40,7 +40,7 @@ const (
 	// Keep enough rows in one delta statement to amortize parsing, planning and
 	// target-table joins. The SQL-size guard below remains the hard safety bound
 	// for wide rows.
-	materializedViewDeltaBatchRows = 8192
+	materializedViewDeltaBatchRows = 32768
 	materializedViewDeltaMaxSQL    = 8 << 20
 )
 

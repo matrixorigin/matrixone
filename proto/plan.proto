@@ -1660,6 +1660,7 @@ message DataDefinition {
     CREATE_TABLE_WITH_CLONE = 38;
     CREATE_CDC = 39;
     DROP_CDC = 40;
+    REFRESH_MATERIALIZED_VIEW = 41;
   }
 
   // DataDefinition type
@@ -1696,6 +1697,7 @@ message DataDefinition {
     CreateCDC create_cdc = 102;
     DropCDC drop_cdc = 103;
     CloneTable clone_table = 104;
+    RefreshMaterializedView refresh_materialized_view = 105;
   }
 }
 
@@ -1963,6 +1965,11 @@ message CreateView {
   string database = 2;
   bool replace = 3;
   TableDef table_def = 4;
+}
+
+message RefreshMaterializedView {
+  string database = 1;
+  string name = 2;
 }
 
 message AlterView {

@@ -73,6 +73,37 @@ func TestCreateMaterializedView(t *testing.T) {
 		tree.String(view, dialect.MYSQL))
 }
 
+func TestMaterializedViewRefreshSyntax(t *testing.T) {
+	tests := []struct {
+		sql    string
+		method tree.MaterializedViewRefreshMethod
+		timing tree.MaterializedViewRefreshTiming
+		format string
+	}{
+		{"create materialized view mv refresh fast on change as select k, count(*) from src group by k", tree.MaterializedViewRefreshFast, tree.MaterializedViewRefreshOnChange, "create materialized view mv refresh fast on change as select k, count(*) from src group by k"},
+		{"create materialized view mv refresh incremental as select k, count(*) from src group by k", tree.MaterializedViewRefreshFast, tree.MaterializedViewRefreshOnChange, "create materialized view mv refresh fast on change as select k, count(*) from src group by k"},
+		{"create materialized view mv refresh full on demand as select count(*) from src", tree.MaterializedViewRefreshComplete, tree.MaterializedViewRefreshOnDemand, "create materialized view mv refresh complete on demand as select count(*) from src"},
+		{"create materialized view mv refresh auto as select count(*) from src", tree.MaterializedViewRefreshForce, tree.MaterializedViewRefreshOnChange, "create materialized view mv as select count(*) from src"},
+	}
+	for _, test := range tests {
+		stmt, err := ParseOne(context.Background(), test.sql, 1)
+		require.NoError(t, err, test.sql)
+		view := stmt.(*tree.CreateView)
+		require.Equal(t, test.method, view.RefreshMethod)
+		require.Equal(t, test.timing, view.RefreshTiming)
+		require.Equal(t, test.format, tree.String(view, dialect.MYSQL))
+	}
+
+	stmt, err := ParseOne(context.Background(), "refresh materialized view db.mv", 1)
+	require.NoError(t, err)
+	refresh := stmt.(*tree.RefreshMaterializedView)
+	require.Equal(t, "refresh materialized view db.mv", tree.String(refresh, dialect.MYSQL))
+	require.Equal(t, (&tree.CreateView{}).StmtKind(), refresh.StmtKind())
+
+	_, err = ParseOne(context.Background(), "create materialized view mv refresh fast on commit as select count(*) from src", 1)
+	require.Error(t, err)
+}
+
 func TestDropMaterializedView(t *testing.T) {
 	stmt, err := ParseOne(context.Background(), "drop materialized view if exists mv", 1)
 	require.NoError(t, err)

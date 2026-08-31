@@ -119,6 +119,9 @@ func (c *MaterializedViewConsumer) Consume(ctx context.Context, r DataRetriever)
 			return nil
 		} else {
 			metricv2.ISCPMaterializedViewRefreshDuration.WithLabelValues("incremental", "error").Observe(time.Since(started).Seconds())
+			if strings.EqualFold(c.info.RefreshMethod, "fast") {
+				return incrementalErr
+			}
 			metricv2.ISCPMaterializedViewFallback.Inc()
 			logutil.Warnf("materialized view incremental refresh fallback: mv=%s.%s err=%v", c.info.DBName, c.info.TableName, incrementalErr)
 		}
@@ -189,74 +192,88 @@ func (c *MaterializedViewConsumer) consumeFullRefresh(ctx context.Context, r Dat
 		func(sqlproc *sqlexec.SqlProcess, _ any) error {
 			sqlctx := sqlproc.SqlCtx
 			refreshCtx := context.WithValue(sqlproc.GetContext(), defines.MaterializedViewRefreshKey{}, true)
-			var incrementalDesc *incrementalDescription
-			if c.info.IncrementalSpec != "" {
-				var decodeErr error
-				incrementalDesc, decodeErr = decodeIncrementalDescription(c.info.IncrementalSpec)
-				if decodeErr != nil {
-					return decodeErr
-				}
-			}
 			boundary, ok := r.(iterationBoundaryRetriever)
 			if !ok {
 				return fmt.Errorf("materialized view retriever does not expose iteration boundary")
 			}
-			if incrementalDesc != nil {
-				if err := ensureMaterializedViewStateTable(
-					refreshCtx, sqlctx.GetService(), sqlctx.Txn(), c.info, incrementalDesc,
-				); err != nil {
-					return err
-				}
-				if err := rebuildMaterializedViewDistinctState(
-					refreshCtx, sqlctx.GetService(), sqlctx.Txn(), c.info, incrementalDesc, boundary.GetToTS(),
-				); err != nil {
-					return err
-				}
-			}
-			// Keep this as a row DELETE. A predicate is required because a
-			// predicate-free DELETE is optimized to TRUNCATE, which replaces the
-			// physical relation and unregisters the source ISCP job as a side effect.
-			deleteColumn := catalog.FakePrimaryKeyColName
-			if materializedViewDeltaCanUpsert(incrementalDesc) {
-				deleteColumn = incrementalDesc.GroupKeyColumn
-			}
-			deleteSQL := fmt.Sprintf("delete from `%s`.`%s` where %s is not null", c.info.DBName, c.info.TableName, sqlquote.Ident(deleteColumn))
-			res, err := ExecWithResult(refreshCtx, deleteSQL, sqlctx.GetService(), sqlctx.Txn())
-			if err != nil {
+			toTS := boundary.GetToTS()
+			if err := RefreshMaterializedView(refreshCtx, sqlctx.GetService(), sqlctx.Txn(), c.info, &toTS); err != nil {
 				return err
 			}
-			res.Close()
-			refreshSQL, err := materializedViewRefreshAtSources(c.info.RefreshSQL, c.info.SourceTableInfos(), boundary.GetToTS())
-			if err != nil {
-				return err
-			}
-			insertSQL := fmt.Sprintf("insert into `%s`.`%s` %s", c.info.DBName, c.info.TableName, refreshSQL)
-			if len(c.info.Columns) > 0 {
-				targetColumns := append([]string(nil), c.info.Columns...)
-				if incrementalDesc != nil {
-					targetColumns = append(targetColumns, incrementalDesc.StateColumns...)
-				}
-				columns := make([]string, 0, len(targetColumns)+1)
-				selectColumns := make([]string, 0, len(targetColumns))
-				for _, column := range targetColumns {
-					quoted := "`" + strings.ReplaceAll(column, "`", "``") + "`"
-					columns = append(columns, quoted)
-					selectColumns = append(selectColumns, quoted)
-				}
-				if materializedViewDeltaCanUpsert(incrementalDesc) {
-					insertSQL = fmt.Sprintf("insert into `%s`.`%s` (%s) select %s from (%s) as `__mo_mv_refresh`", c.info.DBName, c.info.TableName, strings.Join(columns, ","), strings.Join(selectColumns, ","), refreshSQL)
-				} else {
-					columns = append(columns, sqlquote.Ident(catalog.FakePrimaryKeyColName))
-					insertSQL = fmt.Sprintf("insert into `%s`.`%s` (%s) select %s, row_number() over () from (%s) as `__mo_mv_refresh`", c.info.DBName, c.info.TableName, strings.Join(columns, ","), strings.Join(selectColumns, ","), refreshSQL)
-				}
-			}
-			res, err = ExecWithResult(refreshCtx, insertSQL, sqlctx.GetService(), sqlctx.Txn())
-			if err != nil {
-				return err
-			}
-			res.Close()
 			return r.UpdateWatermark(refreshCtx, sqlctx.GetService(), sqlctx.Txn())
 		})
+}
+
+// RefreshMaterializedView atomically replaces a materialized view in txn. A
+// non-nil boundary is used by ISCP to read every source at the same watermark;
+// nil reads the caller transaction snapshot for an ON DEMAND refresh.
+func RefreshMaterializedView(ctx context.Context, service string, txn client.TxnOperator, info *ConsumerInfo, boundary *types.TS) error {
+	if info == nil || info.DBName == "" || info.TableName == "" || info.RefreshSQL == "" {
+		return fmt.Errorf("invalid materialized view refresh specification")
+	}
+	refreshCtx := context.WithValue(ctx, defines.MaterializedViewRefreshKey{}, true)
+	var incrementalDesc *incrementalDescription
+	if info.IncrementalSpec != "" {
+		var err error
+		incrementalDesc, err = decodeIncrementalDescription(info.IncrementalSpec)
+		if err != nil {
+			return err
+		}
+		if boundary == nil {
+			return fmt.Errorf("incremental materialized view state requires an ISCP boundary")
+		}
+		if err = ensureMaterializedViewStateTable(refreshCtx, service, txn, info, incrementalDesc); err != nil {
+			return err
+		}
+		if err = rebuildMaterializedViewDistinctState(refreshCtx, service, txn, info, incrementalDesc, *boundary); err != nil {
+			return err
+		}
+	}
+	deleteColumn := catalog.FakePrimaryKeyColName
+	if materializedViewDeltaCanUpsert(incrementalDesc) {
+		deleteColumn = incrementalDesc.GroupKeyColumn
+	}
+	deleteSQL := fmt.Sprintf("delete from `%s`.`%s` where %s is not null", info.DBName, info.TableName, sqlquote.Ident(deleteColumn))
+	res, err := ExecWithResult(refreshCtx, deleteSQL, service, txn)
+	if err != nil {
+		return err
+	}
+	res.Close()
+	refreshSQL := info.RefreshSQL
+	if boundary != nil {
+		refreshSQL, err = materializedViewRefreshAtSources(info.RefreshSQL, info.SourceTableInfos(), *boundary)
+	} else {
+		refreshSQL, err = materializedViewRefreshAtCurrentSources(info.RefreshSQL, info.SourceTableInfos())
+	}
+	if err != nil {
+		return err
+	}
+	insertSQL := fmt.Sprintf("insert into `%s`.`%s` %s", info.DBName, info.TableName, refreshSQL)
+	if len(info.Columns) > 0 {
+		targetColumns := append([]string(nil), info.Columns...)
+		if incrementalDesc != nil {
+			targetColumns = append(targetColumns, incrementalDesc.StateColumns...)
+		}
+		columns := make([]string, 0, len(targetColumns)+1)
+		selectColumns := make([]string, 0, len(targetColumns))
+		for _, column := range targetColumns {
+			quoted := sqlquote.Ident(column)
+			columns = append(columns, quoted)
+			selectColumns = append(selectColumns, quoted)
+		}
+		if materializedViewDeltaCanUpsert(incrementalDesc) {
+			insertSQL = fmt.Sprintf("insert into `%s`.`%s` (%s) select %s from (%s) as `__mo_mv_refresh`", info.DBName, info.TableName, strings.Join(columns, ","), strings.Join(selectColumns, ","), refreshSQL)
+		} else {
+			columns = append(columns, sqlquote.Ident(catalog.FakePrimaryKeyColName))
+			insertSQL = fmt.Sprintf("insert into `%s`.`%s` (%s) select %s, row_number() over () from (%s) as `__mo_mv_refresh`", info.DBName, info.TableName, strings.Join(columns, ","), strings.Join(selectColumns, ","), refreshSQL)
+		}
+	}
+	res, err = ExecWithResult(refreshCtx, insertSQL, service, txn)
+	if err != nil {
+		return err
+	}
+	res.Close()
+	return nil
 }
 
 func materializedViewRowsFromBatch(bat *AtomicBatch, insert bool) ([]materializedViewChangeRow, error) {
@@ -336,6 +353,14 @@ func materializedViewRefreshAtInDatabase(query, source, database string, ts type
 // parsed FROM tree is the authoritative place to rewrite JOIN and comma-join
 // forms without mistaking qualified column references for table references.
 func materializedViewRefreshAtSources(query string, sources []TableInfo, ts types.TS) (string, error) {
+	return materializedViewRefreshAtSourcesWithBoundary(query, sources, &ts)
+}
+
+func materializedViewRefreshAtCurrentSources(query string, sources []TableInfo) (string, error) {
+	return materializedViewRefreshAtSourcesWithBoundary(query, sources, nil)
+}
+
+func materializedViewRefreshAtSourcesWithBoundary(query string, sources []TableInfo, ts *types.TS) (string, error) {
 	if len(sources) == 0 {
 		return "", fmt.Errorf("materialized view has no source tables")
 	}
@@ -408,9 +433,11 @@ func materializedViewRefreshAtSources(query string, sources []TableInfo, ts type
 			source := sourceByKey[matchKey]
 			node.SchemaName = tree.Identifier(source.DBName)
 			node.ExplicitSchema = true
-			node.AtTsExpr = &tree.AtTimeStamp{
-				Type: tree.ATMOTIMESTAMP,
-				Expr: tree.NewStrVal("'" + ts.ToString() + "'"),
+			if ts != nil {
+				node.AtTsExpr = &tree.AtTimeStamp{
+					Type: tree.ATMOTIMESTAMP,
+					Expr: tree.NewStrVal("'" + ts.ToString() + "'"),
+				}
 			}
 			found[matchKey] = true
 			return nil

@@ -1465,6 +1465,69 @@ func TestMaterializedViewRefreshSQLIsReparseable(t *testing.T) {
 	reparsed.Free()
 }
 
+func TestBuildMaterializedViewRefreshModes(t *testing.T) {
+	property := func(def *plan.TableDef, key string) string {
+		for _, item := range def.GetDefs() {
+			if props := item.GetProperties(); props != nil {
+				for _, prop := range props.GetProperties() {
+					if prop.GetKey() == key {
+						return prop.GetValue()
+					}
+				}
+			}
+		}
+		return ""
+	}
+
+	mock := NewMockOptimizer(true)
+	forcePlan, err := runOneStmt(mock, t, "create materialized view mv_force as select n_regionkey, count(*) c from nation group by n_regionkey")
+	require.NoError(t, err)
+	forceDef := forcePlan.GetDdl().GetCreateView().GetTableDef()
+	require.Equal(t, "force", property(forceDef, "mv_refresh_method"))
+	require.Equal(t, "change", property(forceDef, "mv_refresh_timing"))
+	require.NotEmpty(t, property(forceDef, "mv_incremental_spec"))
+
+	fastPlan, err := runOneStmt(mock, t, "create materialized view mv_fast refresh incremental on change as select n_regionkey, sum(n_nationkey) s from nation group by n_regionkey")
+	require.NoError(t, err)
+	fastDef := fastPlan.GetDdl().GetCreateView().GetTableDef()
+	require.Equal(t, "fast", property(fastDef, "mv_refresh_method"))
+	require.NotEmpty(t, property(fastDef, "mv_incremental_spec"))
+
+	_, err = runOneStmt(mock, t, "create materialized view mv_bad refresh fast as select n_regionkey, count(*) c from nation group by n_regionkey having count(*) > 1")
+	require.ErrorContains(t, err, "requires a supported single-table incremental aggregate")
+
+	completePlan, err := runOneStmt(mock, t, "create materialized view mv_complete refresh complete on change as select n_regionkey, count(*) c from nation group by n_regionkey")
+	require.NoError(t, err)
+	completeDef := completePlan.GetDdl().GetCreateView().GetTableDef()
+	require.Equal(t, "complete", property(completeDef, "mv_refresh_method"))
+	require.Equal(t, "change", property(completeDef, "mv_refresh_timing"))
+	require.Empty(t, property(completeDef, "mv_incremental_spec"))
+
+	_, err = runOneStmt(mock, t, "create materialized view mv_bad_demand refresh force on demand as select n_regionkey, count(*) c from nation group by n_regionkey")
+	require.ErrorContains(t, err, "ON DEMAND currently requires COMPLETE or FULL")
+
+	demandPlan, err := runOneStmt(mock, t, "create materialized view mv_demand refresh full on demand as select n_regionkey, count(*) c from nation group by n_regionkey")
+	require.NoError(t, err)
+	demandDef := demandPlan.GetDdl().GetCreateView().GetTableDef()
+	require.Equal(t, "complete", property(demandDef, "mv_refresh_method"))
+	require.Equal(t, "demand", property(demandDef, "mv_refresh_timing"))
+	require.Empty(t, property(demandDef, "mv_incremental_spec"))
+	demandDef.Createsql = "create materialized view mv_demand refresh complete on demand as select n_regionkey, count(*) c from nation group by n_regionkey"
+
+	mock.ctxt.tables["mv_demand"] = demandDef
+	mock.ctxt.objects["mv_demand"] = &plan.ObjectRef{SchemaName: "tpch", ObjName: "mv_demand"}
+	refreshPlan, err := runOneStmt(mock, t, "refresh materialized view mv_demand")
+	require.NoError(t, err)
+	require.Equal(t, plan.DataDefinition_REFRESH_MATERIALIZED_VIEW, refreshPlan.GetDdl().GetDdlType())
+	require.Equal(t, "mv_demand", refreshPlan.GetDdl().GetRefreshMaterializedView().GetName())
+
+	mock.ctxt.tables["mv_force"] = forceDef
+	forceDef.Createsql = "create materialized view mv_force as select n_regionkey, count(*) c from nation group by n_regionkey"
+	mock.ctxt.objects["mv_force"] = &plan.ObjectRef{SchemaName: "tpch", ObjName: "mv_force"}
+	_, err = runOneStmt(mock, t, "refresh materialized view mv_force")
+	require.ErrorContains(t, err, "only supported")
+}
+
 func TestMaterializedViewIncrementalSpecRequiresCompleteSemantics(t *testing.T) {
 	for _, tc := range []struct {
 		name     string
