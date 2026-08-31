@@ -1534,7 +1534,20 @@ func antiJoinLeftKeysArePrimaryKey(node *plan.Node, builder *QueryBuilder) bool 
 			leftKeyCols = append(leftKeyCols, second.ColPos)
 		}
 	}
-	return containsAllPKs(leftKeyCols, left.TableDef)
+	for _, name := range left.TableDef.Pkey.Names {
+		pkCol := left.TableDef.Name2ColIndex[name]
+		matched := false
+		for _, keyCol := range leftKeyCols {
+			if keyCol == pkCol {
+				matched = true
+				break
+			}
+		}
+		if !matched {
+			return false
+		}
+	}
+	return true
 }
 
 func applyLimitToStats(stats *Stats, limit *plan.Expr, builder *QueryBuilder) {
