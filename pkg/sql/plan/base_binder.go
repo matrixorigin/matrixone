@@ -2456,6 +2456,13 @@ func (b *baseBinder) bindComparisonExpr(astExpr *tree.ComparisonExpr, depth int3
 			}
 
 			if subquery := rightArg.GetSub(); subquery != nil {
+				// IN-subquery construction publishes the left operand directly as
+				// SubqueryRef.Child instead of going through the generic function
+				// binder. Enforce the scalar-boundary contract before treating an
+				// INTERVAL's internal Expr_List as a multi-column tuple.
+				if err = rejectBoundIntervalFunctionArgs(b.GetContext(), "in", []*plan.Expr{leftArg}); err != nil {
+					return nil, err
+				}
 				leftArg = b.useStoredMySQLSpecialTypesForNumericSubquery(leftArg, rightArg)
 				if list := leftArg.GetList(); list != nil {
 					if len(list.List) != int(subquery.RowSize) {
@@ -2503,6 +2510,9 @@ func (b *baseBinder) bindComparisonExpr(astExpr *tree.ComparisonExpr, depth int3
 			}
 
 			if subquery := rightArg.GetSub(); subquery != nil {
+				if err = rejectBoundIntervalFunctionArgs(b.GetContext(), "not_in", []*plan.Expr{leftArg}); err != nil {
+					return nil, err
+				}
 				leftArg = b.useStoredMySQLSpecialTypesForNumericSubquery(leftArg, rightArg)
 				if list := leftArg.GetList(); list != nil {
 					if len(list.List) != int(subquery.RowSize) {
@@ -2552,6 +2562,9 @@ func (b *baseBinder) bindComparisonExpr(astExpr *tree.ComparisonExpr, depth int3
 		}
 
 		if subquery := expr.GetSub(); subquery != nil {
+			if err = rejectBoundIntervalFunctionArgs(b.GetContext(), op, []*plan.Expr{child}); err != nil {
+				return nil, err
+			}
 			child = b.useStoredMySQLSpecialTypesForNumericSubquery(child, expr)
 			if list := child.GetList(); list != nil {
 				if len(list.List) != int(subquery.RowSize) {
@@ -3217,7 +3230,7 @@ func (b *baseBinder) bindPreparedNumericFuncExpr(
 	if strings.EqualFold(name, "abs") && !hasExplicitFloatCast {
 		b.markPreparedNumericFallback(arg)
 	}
-	return bindFuncExprAndConstFold(
+	return bindBoundFuncExprAndConstFold(
 		b.GetContext(), b.builder.compCtx.GetProcess(), name, []*plan.Expr{arg},
 	)
 }
@@ -3504,6 +3517,14 @@ func (b *baseBinder) bindFuncExprImplByAstExpr(name string, astArgs []tree.Expr,
 			}
 		}
 	}
+	if !consumesIntervalPseudoType(name) {
+		// Reject before builtin lookup because "not supported" is also the
+		// signal used below to continue with UDF resolution. An INTERVAL
+		// boundary violation must not be swallowed as a failed builtin probe.
+		if err := rejectBoundIntervalFunctionArgs(b.GetContext(), name, args); err != nil {
+			return nil, err
+		}
+	}
 	if name == "name_const" {
 		if !validNameConstNameAst(astArgs) ||
 			!validNameConstValueAst(astArgs, b.allowCanonicalNameConstValueCast) {
@@ -3519,7 +3540,7 @@ func (b *baseBinder) bindFuncExprImplByAstExpr(name string, astArgs []tree.Expr,
 	}
 
 	if b.builder != nil {
-		e, err := bindFuncExprAndConstFold(b.GetContext(), b.builder.compCtx.GetProcess(), name, args)
+		e, err := bindBoundFuncExprAndConstFold(b.GetContext(), b.builder.compCtx.GetProcess(), name, args)
 		if err == nil {
 			if fn := e.GetF(); fn != nil {
 				for i, source := range preparedPeerSources {
@@ -3558,7 +3579,7 @@ func (b *baseBinder) bindFuncExprImplByAstExpr(name string, astArgs []tree.Expr,
 	} else {
 		// return bindFuncExprImplByPlanExpr(b.GetContext(), name, args)
 		// first look for builtin func
-		builtinExpr, err := BindFuncExprImplByPlanExpr(b.GetContext(), name, args)
+		builtinExpr, err := bindFuncExprImplByPlanExpr(b.GetContext(), name, args, false)
 		if err == nil {
 			if isIfNull {
 				builtinExpr.Typ.NotNullable = args[1].Typ.NotNullable || args[2].Typ.NotNullable
@@ -3954,10 +3975,24 @@ func (b *baseBinder) bindPythonUdf(udf *function.Udf, astArgs []tree.Expr, depth
 }
 
 func bindFuncExprAndConstFold(ctx context.Context, proc *process.Process, name string, args []*Expr) (*plan.Expr, error) {
+	return bindFuncExprAndConstFoldInternal(ctx, proc, name, args, true)
+}
+
+func bindBoundFuncExprAndConstFold(ctx context.Context, proc *process.Process, name string, args []*Expr) (*plan.Expr, error) {
+	return bindFuncExprAndConstFoldInternal(ctx, proc, name, args, false)
+}
+
+func bindFuncExprAndConstFoldInternal(
+	ctx context.Context,
+	proc *process.Process,
+	name string,
+	args []*Expr,
+	descendFunctions bool,
+) (*plan.Expr, error) {
 	if err := foldDecimalStringComparisonConstants(ctx, proc, name, args); err != nil {
 		return nil, err
 	}
-	retExpr, err := BindFuncExprImplByPlanExpr(ctx, name, args)
+	retExpr, err := bindFuncExprImplByPlanExpr(ctx, name, args, descendFunctions)
 	if err != nil {
 		return nil, err
 	}
@@ -4266,7 +4301,27 @@ func bindMixedInListComparison(
 }
 
 func BindFuncExprImplByPlanExpr(ctx context.Context, name string, args []*Expr) (*plan.Expr, error) {
+	return bindFuncExprImplByPlanExpr(ctx, name, args, true)
+}
+
+func bindFuncExprImplByPlanExpr(
+	ctx context.Context,
+	name string,
+	args []*Expr,
+	descendFunctions bool,
+) (*plan.Expr, error) {
 	var err error
+	rejectIntervalArgs := rejectBoundIntervalFunctionArgs
+	if descendFunctions {
+		rejectIntervalArgs = rejectStandaloneIntervalFunctionArgs
+	}
+	if !consumesIntervalPseudoType(name) {
+		// Direct plan-expression callers need the deep variant because they
+		// cannot rely on the AST binder's child-boundary checks.
+		if err = rejectIntervalArgs(ctx, name, args); err != nil {
+			return nil, err
+		}
+	}
 	if name == NameApproxPercentile {
 		if err = validateApproxPercentileArgs(ctx, args); err != nil {
 			return nil, err
@@ -4760,6 +4815,12 @@ func BindFuncExprImplByPlanExpr(ctx context.Context, name string, args []*Expr) 
 		}
 	case "pow":
 		name = "power"
+	}
+	// Explicit interval consumers above must remove the pseudo-type. This
+	// postcondition also fails closed when a newly added input shape reaches an
+	// allowlisted consumer but is not actually rewritten by it.
+	if err := rejectIntervalArgs(ctx, name, args); err != nil {
+		return nil, err
 	}
 
 	if name == "convert" {

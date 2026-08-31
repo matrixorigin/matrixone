@@ -412,6 +412,13 @@ func splitAndBindCondition(astExpr tree.Expr, expandAlias ExpandAliasMode, ctx *
 		if err != nil {
 			return nil, err
 		}
+		// WHERE, HAVING and JOIN ON are executable scalar boundaries. Check
+		// before boolean coercion so an interval pseudo-value reports the real
+		// contract violation instead of an incidental INTERVAL-to-BOOL cast
+		// overload error.
+		if err = rejectStandaloneIntervalExpr(ctx.binder.GetContext(), expr, "predicate"); err != nil {
+			return nil, err
+		}
 		needCast := true
 		fn := expr.GetF()
 		if fn != nil {

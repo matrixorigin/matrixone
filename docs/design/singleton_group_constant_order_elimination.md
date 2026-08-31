@@ -67,13 +67,18 @@ scalar, they return the original expression rather than panic. The order proof
 then observes a non-literal result and retains Sort for an internal plan.
 
 `INTERVAL` is represented by an internal `(value, unit)` expression list rather
-than by a materializable scalar vector. A public query therefore rejects a bare
-`INTERVAL` at every scalar escape boundary: SELECT output, GROUP BY, top-level
-or grouping-set ORDER BY, and window PARTITION BY / ORDER BY. Enclosing temporal
-operators and window-frame binding consume the internal value first and remain
-valid. This separates two contracts that the initial implementation conflated:
-generic constant folding must be total, while a public executable plan must not
-contain an unconsumed interval pseudo-type.
+than by a materializable scalar vector. A public query therefore rejects an
+unconsumed `INTERVAL` recursively at every generic scalar or aggregate function
+boundary, predicate boundary (WHERE, HAVING and JOIN ON), as well as at SELECT
+output, GROUP BY, top-level or grouping-set ORDER BY, and window PARTITION BY /
+ORDER BY. Subquery comparisons enforce the same rule before interpreting their
+left input as a scalar or row tuple. The binder has one explicit set of temporal
+consumers; each must rewrite the pseudo-type to ordinary scalar arguments before
+publishing its result. Window-frame binding likewise consumes and normalizes the
+internal value. This separates two contracts that the initial implementation
+conflated: generic constant folding must be total, while a public executable plan
+must not contain an unconsumed interval pseudo-type at an ordinary expression
+boundary.
 
 ## 3. Alternatives and scope decisions
 
@@ -197,11 +202,15 @@ Planner unit tests must prove both activation and non-activation:
 - direct plan-shape tests cover root replacement and pagination-composition
   failure independently of SQL binding.
 
-The public optimizer path must reject a bare `INTERVAL` at SELECT, GROUP BY,
-ORDER BY and window key boundaries with a normal not-supported error. Controls
-must prove that `date_add(..., INTERVAL ...)` and interval window-frame bounds
-remain valid. Direct tests of both constant-folding entry points and a synthetic
-internal Sort prove total, fail-closed behavior independently of public binding.
+The public optimizer path must reject an unconsumed `INTERVAL` at generic scalar
+and aggregate arguments, including recursively nested tuple arguments; predicate
+and subquery-comparison boundaries; and SELECT, GROUP BY, ORDER BY and window key
+boundaries with a normal not-supported error. Controls must prove that
+`date_add(..., INTERVAL ...)`, date arithmetic, the scalar `INTERVAL(...)`
+function, aggregates and subquery comparisons over already-consumed temporal
+results, and interval window-frame bounds remain valid. Direct tests of both
+constant-folding entry points and a synthetic internal Sort prove total,
+fail-closed behavior independently of public binding.
 
 Distributed SQL tests verify public results for activation, OFFSET, all-tie
 ordering, true/false HAVING, mixed keys, and nullable aggregate values. Focused
@@ -215,10 +224,11 @@ Implementation evidence on 2026-08-31:
   `pkg/sql/plan/rule` packages pass;
 - `go vet ./pkg/sql/plan ./pkg/sql/plan/rule` and `make build` pass after the
   final main rebase;
-- the 28-statement distributed SQL case passes with metadata comparison. It
+- the 31-statement distributed SQL case passes twice on one isolated instance
+  with metadata comparison and leaves its test database absent. It
   covers singleton aggregate, OFFSET, true/false HAVING, mixed and nullable
-  keys, varying SUM, all five public interval escape boundaries, the original
-  interval counterexample, and a valid temporal consumer;
+  keys, varying SUM, all five original public interval escape boundaries, the
+  nested scalar and aggregate counterexamples, and valid temporal consumers;
 - on the 55 validation host, the exact base commit `09c9a0ba9e` plans the 10M-row
   target as full TableScan plus Sort, while the current binary plans TableScan
   with `Limit: 10` and no Sort;
@@ -240,9 +250,12 @@ Implementation evidence on 2026-08-31:
   versus 52.523 ms current. The live counterexample matrix also retains Sort for
   varying SUM, RAND, division by zero and SQL_CALC_FOUND_ROWS; a 1,000,000-row
   OFFSET is transferred exactly and returns 10 rows;
-- live public interval probes return error 20105 instead of an internal error or
-  panic at SELECT, GROUP BY, ORDER BY and window PARTITION/ORDER boundaries.
-  `date_add(..., INTERVAL ...)` and a temporal RANGE frame both execute normally.
+- live public interval probes return error 20105 instead of an internal error,
+  panic or silently materialized list at SELECT, GROUP BY, ORDER BY, window
+  PARTITION/ORDER, generic scalar and aggregate boundaries. Unit counterexamples
+  also cover predicates and IN/NOT IN/quantified subqueries. `date_add(...,
+  INTERVAL ...)`, its use under an aggregate and subquery comparison, and a
+  temporal RANGE frame all bind normally.
 
 ## 8. Rollback boundary
 

@@ -9519,21 +9519,6 @@ func (builder *QueryBuilder) bindOrderBy(
 	return
 }
 
-// rejectStandaloneIntervalOrderExpr keeps the binder's interval pseudo-type
-// from escaping as an executable sort scalar. INTERVAL expressions are encoded
-// as an internal (value, unit) list and are valid only when a temporal operator
-// or a window-frame binder consumes that representation.
-func rejectStandaloneIntervalOrderExpr(ctx context.Context, expr *plan.Expr) error {
-	return rejectStandaloneIntervalExpr(ctx, expr, "ORDER BY")
-}
-
-func rejectStandaloneIntervalExpr(ctx context.Context, expr *plan.Expr, clause string) error {
-	if expr != nil && expr.Typ.Id == int32(types.T_interval) {
-		return moerr.NewNotSupportedf(ctx, "standalone INTERVAL expression in %s", clause)
-	}
-	return nil
-}
-
 // rewriteMySQLSpecialOrderByExpr materializes a numeric ENUM/SET ordering key
 // as a hidden projection. In the originating query block the raw storage value
 // is still available. Across a CTE/derived/set-operation boundary only a pure
