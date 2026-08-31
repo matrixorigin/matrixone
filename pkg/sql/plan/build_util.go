@@ -599,10 +599,11 @@ func buildDefaultExpr(col *tree.ColumnTableDef, typ plan.Type, proc *process.Pro
 
 	originExpr := expr
 	semanticExpr := unwrapParenExpr(expr)
+	_, isExpressionDefault := originExpr.(*tree.ParenExpr)
 
 	colNameOrigin := col.Name.ColNameOrigin()
 	if typ.Id == int32(types.T_json) {
-		if semanticExpr != nil && !isNullAstExpr(semanticExpr) {
+		if semanticExpr != nil && !isNullAstExpr(semanticExpr) && !isExpressionDefault {
 			return nil, moerr.NewNotSupported(proc.Ctx, fmt.Sprintf("JSON column '%s' cannot have default value", colNameOrigin))
 		}
 	}
@@ -622,8 +623,6 @@ func buildDefaultExpr(col *tree.ColumnTableDef, typ plan.Type, proc *process.Pro
 			OriginString: "",
 		}, nil
 	}
-	_, isExpressionDefault := originExpr.(*tree.ParenExpr)
-
 	binder := NewDefaultBinder(proc.Ctx, nil, nil, typ, nil)
 	planExpr, err := binder.BindExpr(semanticExpr, 0, false)
 	if err != nil {

@@ -30,6 +30,16 @@ const (
 	// (9223372036854775807(max int64)/1000000(msec) - 1)/3600(sec per hour) - 1 = 2562047787
 	MinHourInTime, MaxHourInTime     = 0, 2562047787
 	MinInputIntTime, MaxInputIntTime = -25620477875959, 25620477875959
+
+	// MySQLTimeMax is the largest value accepted by a MySQL TIME column.
+	// MatrixOne's Time representation deliberately has a wider internal range
+	// because intermediate duration expressions can exceed 838 hours.
+	MySQLTimeMax = Time((838*SecsPerHour + 59*SecsPerMinute + 59) * MicroSecsPerSec)
+
+	// MySQLTimeFunctionMax is the largest value returned by MySQL duration
+	// functions such as SEC_TO_TIME. Unlike a TIME-column assignment, that
+	// result may retain microseconds at the 838:59:59 endpoint.
+	MySQLTimeFunctionMax = MySQLTimeMax + MicroSecsPerSec - 1
 )
 
 // no msec part
@@ -123,6 +133,13 @@ func (t Time) NumericString(scale int32) string {
 //	"-11:11:11.1235"		"-11:11:11.124"
 //	"-11:11:11.9995"      		"-11:11:12.000"
 func ParseTime(s string, scale int32) (Time, error) {
+	return parseTime(s, scale, nil, nil)
+}
+
+// parseTime optionally reports whether syntactically valid TIME input exceeds
+// MatrixOne's internal representation. The public ParseTime error remains a
+// *moerr.Error so existing callers retain its classification contract.
+func parseTime(s string, scale int32, outOfRangeNegative, outOfRange *bool) (Time, error) {
 	s = strings.TrimSpace(s)
 
 	// separate into date&time and msec parts without allocating a []string
@@ -159,7 +176,7 @@ func ParseTime(s string, scale int32) (Time, error) {
 		if spIdx := strings.IndexByte(timeString, ' '); spIdx >= 0 {
 			var err error
 			day, err = strconv.ParseUint(timeString[:spIdx], 10, 64)
-			if err != nil || day > MaxHourInTime/maxHourInDay {
+			if err != nil {
 				return -1, moerr.NewInvalidInputNoCtxf("invalid time value %s", s)
 			}
 			timeString = timeString[spIdx+1:]
@@ -231,7 +248,7 @@ func ParseTime(s string, scale int32) (Time, error) {
 		}
 	}
 
-	if !ValidTime(hour, minute, sec) {
+	if minute > maxMinuteInHour || sec > maxSecondInMinute {
 		return -1, moerr.NewInvalidInputNoCtxf("invalid time value %s", s)
 	}
 
@@ -242,12 +259,29 @@ func ParseTime(s string, scale int32) (Time, error) {
 			return -1, moerr.NewInvalidInputNoCtxf("invalid time value %s", s)
 		}
 	}
+	if carry != 0 {
+		sec++
+		if sec == SecsPerMinute {
+			sec = 0
+			minute++
+			if minute == SecsPerMinute {
+				minute = 0
+				hour++
+			}
+		}
+	}
 
-	if day > MaxHourInTime/maxHourInDay-hour {
+	if hour > MaxHourInTime || day > MaxHourInTime/maxHourInDay || day*maxHourInDay > MaxHourInTime-hour {
+		if outOfRangeNegative != nil {
+			*outOfRangeNegative = isNegative
+		}
+		if outOfRange != nil {
+			*outOfRange = true
+		}
 		return -1, moerr.NewInvalidInputNoCtxf("invalid time value %s", s)
 	}
 
-	return TimeFromClock(isNegative, hour+day*24, uint8(minute), uint8(sec+uint64(carry)), msec), nil
+	return TimeFromClock(isNegative, hour+day*24, uint8(minute), uint8(sec), msec), nil
 }
 
 // Numeric 112233/112233.4444 should be treate like string and then
@@ -476,6 +510,66 @@ func ValidTime(h, m, s uint64) bool {
 		return false
 	}
 	return true
+}
+
+func IsMySQLTime(value Time) bool {
+	return value >= -MySQLTimeMax && value <= MySQLTimeMax
+}
+
+func MySQLTimeMaxForScale(scale int32) Time {
+	return MySQLTimeMax
+}
+
+func IsMySQLTimeFunctionResult(value Time) bool {
+	return value >= -MySQLTimeFunctionMax && value <= MySQLTimeFunctionMax
+}
+
+func MySQLTimeFunctionMaxForScale(scale int32) Time {
+	if scale >= 6 {
+		return MySQLTimeFunctionMax
+	}
+	if scale < 0 {
+		scale = 0
+	}
+	factor := Time(1)
+	for i := scale; i < 6; i++ {
+		factor *= 10
+	}
+	return MySQLTimeFunctionMax / factor * factor
+}
+
+func ClampMySQLTime(value Time) Time {
+	return ClampMySQLTimeForScale(value, 6)
+}
+
+func ClampMySQLTimeForScale(value Time, scale int32) Time {
+	maxValue := MySQLTimeMaxForScale(scale)
+	if value > maxValue {
+		return maxValue
+	}
+	if value < -maxValue {
+		return -maxValue
+	}
+	return value
+}
+
+func ClampMySQLTimeFunctionForScale(value Time, scale int32) Time {
+	maxValue := MySQLTimeFunctionMaxForScale(scale)
+	if value > maxValue {
+		return maxValue
+	}
+	if value < -maxValue {
+		return -maxValue
+	}
+	return value
+}
+
+// IsTimeStringOutOfInternalRange classifies every TIME spelling accepted by
+// ParseTime. Assignment callers can then apply range policy without maintaining
+// a second, incomplete TIME grammar.
+func IsTimeStringOutOfInternalRange(value string, scale int32) (negative bool, outOfRange bool) {
+	_, _ = parseTime(value, scale, &negative, &outOfRange)
+	return negative, outOfRange
 }
 
 func isDateType(s string) bool {

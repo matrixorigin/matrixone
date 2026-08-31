@@ -15,9 +15,8 @@
 package vectorindex
 
 import (
-	"runtime"
-
 	"github.com/bytedance/sonic"
+	"github.com/matrixorigin/matrixone/pkg/common/system"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	usearch "github.com/unum-cloud/usearch/golang"
@@ -447,21 +446,26 @@ type HnswCdcParam struct {
 	VecType   int32     `json:"type"`
 }
 
-// nthread == 0, result will return NumCPU - 1
+// nthread == 0 uses the effective Go scheduler parallelism. runtime.NumCPU
+// reports the host CPU count in quota-limited containers and can therefore
+// oversubscribe every concurrent vector query by a large factor.
 func GetConcurrency(nthread int64) int64 {
-	if nthread > 0 {
-		return nthread
-	}
-	ncpu := runtime.NumCPU()
-	return int64(ncpu)
+	return resolveConcurrency(nthread, system.GoMaxProcs())
 }
 
-// nthread == 0, result will return NumCPU
+// nthread == 0 uses the effective Go scheduler parallelism.
 func GetConcurrencyForBuild(nthread int64) int64 {
+	return resolveConcurrency(nthread, system.GoMaxProcs())
+}
+
+func resolveConcurrency(nthread int64, maxProcs int) int64 {
 	if nthread > 0 {
 		return nthread
 	}
-	return int64(runtime.NumCPU())
+	if maxProcs < 1 {
+		return 1
+	}
+	return int64(maxProcs)
 }
 
 // SimulateDevices is a test-only seam for exercising SHARDED / REPLICATED

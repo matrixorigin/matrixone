@@ -25,7 +25,7 @@ Johnson  ¦  David  ¦  M  ¦  Engineering  ¦  66  𝄀
 Sharma  ¦  Bradley  ¦  M  ¦  Production  ¦  27  𝄀
 Rapier  ¦  Abigail  ¦  F  ¦  Human Resources  ¦  38
 create fulltext index ftidx on fulltext01 (LastName, FirstName);
-alter table fulltext01 add column newcolumn decimal after LastName;
+alter table fulltext01 add column newcolumn decimal(38,0) after LastName;
 show create table fulltext01;
 ➤ Table[12,-1,0]  ¦  Create Table[12,-1,0]  𝄀
 fulltext01  ¦  CREATE TABLE `fulltext01` (
@@ -425,7 +425,7 @@ col3 varchar(100),
 col4 date,
 col5 datetime,
 col6 timestamp,
-col7 decimal,
+col7 decimal(38,0),
 col8 float,
 col9 json,
 col10 text,
