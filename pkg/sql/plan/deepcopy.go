@@ -404,6 +404,8 @@ func DeepCopyIndexOption(indexOption *plan.IndexOption) *plan.IndexOption {
 	}
 	newIndexOption := &plan.IndexOption{
 		CreateExtraTable: indexOption.CreateExtraTable,
+		ParserName:       indexOption.ParserName,
+		NgramTokenSize:   indexOption.NgramTokenSize,
 	}
 
 	return newIndexOption

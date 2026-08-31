@@ -317,10 +317,8 @@ func genInsertMOIndexesSql(eg engine.Engine, proc *process.Process, databaseId s
 					fmt.Fprintf(buffer, "%d, ", i+1)
 
 					// 14. index vec_options
-					if indexDef.Option != nil {
-						if indexDef.Option.ParserName != "" {
-							fmt.Fprintf(buffer, "'parser=%s,ngram_token_size=%d', ", indexDef.Option.ParserName, indexDef.Option.NgramTokenSize)
-						}
+					if indexDef.Option != nil && indexDef.Option.ParserName != "" {
+						fmt.Fprintf(buffer, "'parser=%s,ngram_token_size=%d', ", indexDef.Option.ParserName, indexDef.Option.NgramTokenSize)
 					} else {
 						fmt.Fprintf(buffer, "%s, ", NULL_VALUE)
 					}

@@ -428,3 +428,25 @@ from (values row(1, '我来到北京清华大学'))
 ) as src
 cross apply fulltext_index_tokenize('{"parser":"gojieba"}', 23, id, body) as f;
 
+-- Partitioned fulltext DDL must preserve the parser option for every
+-- physical partition when the CREATE INDEX plan is cloned.
+drop table if exists ft_partitioned_gojieba;
+create table ft_partitioned_gojieba (
+    id bigint not null,
+    body text not null,
+    created_at datetime not null,
+    primary key (id, created_at)
+) partition by range (to_days(created_at)) (
+    partition p202606 values less than (to_days('2026-07-01')),
+    partition p202607 values less than (to_days('2026-08-01')),
+    partition p202608 values less than (to_days('2026-09-01'))
+);
+create fulltext index ft_body on ft_partitioned_gojieba(body) with parser gojieba;
+show index from ft_partitioned_gojieba;
+select count(*) from mo_catalog.mo_indexes
+where name = 'ft_body'
+  and type = 'FULLTEXT'
+  and algo_params = '{"parser":"gojieba"}'
+  and options = 'parser=gojieba,ngram_token_size=3'
+  and index_table_name <> '';
+drop table ft_partitioned_gojieba;

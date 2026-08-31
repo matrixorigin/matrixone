@@ -498,3 +498,29 @@ from (values row(1, '我来到北京清华大学'))
 cross apply fulltext_index_tokenize('{"parser":"gojieba"}', 23, id, body) as f;
 count(*)
 5
+drop table if exists ft_partitioned_gojieba;
+create table ft_partitioned_gojieba (
+id bigint not null,
+body text not null,
+created_at datetime not null,
+primary key (id, created_at)
+) partition by range (to_days(created_at)) (
+partition p202606 values less than (to_days('2026-07-01')),
+partition p202607 values less than (to_days('2026-08-01')),
+partition p202608 values less than (to_days('2026-09-01'))
+);
+create fulltext index ft_body on ft_partitioned_gojieba(body) with parser gojieba;
+show index from ft_partitioned_gojieba;
+➤ Table[12,-1,0]  ¦  Non_unique[-5,64,0]  ¦  Key_name[12,-1,0]  ¦  Seq_in_index[4,32,0]  ¦  Column_name[12,-1,0]  ¦  Collation[12,-1,0]  ¦  Cardinality[-5,64,0]  ¦  Sub_part[12,-1,0]  ¦  Packed[12,-1,0]  ¦  Null[12,-1,0]  ¦  Index_type[12,-1,0]  ¦  Comment[1,0,0]  ¦  Index_comment[12,-1,0]  ¦  Index_params[12,-1,0]  ¦  Visible[12,-1,0]  ¦  Expression[12,-1,0]  𝄀
+ft_partitioned_gojieba  ¦  0  ¦  PRIMARY  ¦  1  ¦  id  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦    ¦    ¦    ¦    ¦    ¦  YES  ¦  id  𝄀
+ft_partitioned_gojieba  ¦  0  ¦  PRIMARY  ¦  2  ¦  created_at  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦    ¦    ¦    ¦    ¦    ¦  YES  ¦  created_at  𝄀
+ft_partitioned_gojieba  ¦  1  ¦  ft_body  ¦  1  ¦  body  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦  YES  ¦  fulltext  ¦    ¦    ¦    ¦  YES  ¦  body
+select count(*) from mo_catalog.mo_indexes
+where name = 'ft_body'
+and type = 'FULLTEXT'
+and algo_params = '{"parser":"gojieba"}'
+and options = 'parser=gojieba,ngram_token_size=3'
+and index_table_name <> '';
+count(*)
+3
+drop table ft_partitioned_gojieba;
