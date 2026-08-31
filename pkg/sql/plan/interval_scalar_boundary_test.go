@@ -67,6 +67,11 @@ func TestBuildPlanRejectsStandaloneIntervalAtScalarBoundaries(t *testing.T) {
 			clause: "ISNULL argument",
 		},
 		{
+			name:   "unknown function cannot reach udf resolution",
+			sql:    "select missing_interval_udf(interval 1 day)",
+			clause: "MISSING_INTERVAL_UDF argument",
+		},
+		{
 			name:   "aggregate argument",
 			sql:    "select count(interval 1 day) from select_test.bind_select",
 			clause: "COUNT argument",
@@ -174,7 +179,7 @@ func TestBuildPlanAllowsConsumedIntervalExpressions(t *testing.T) {
 	}
 }
 
-func TestBuildPlanPreservesInvalidIntervalOperatorDiagnostics(t *testing.T) {
+func TestBuildPlanPreservesInvalidIntervalFunctionDiagnostics(t *testing.T) {
 	tests := []struct {
 		name string
 		sql  string
@@ -194,6 +199,26 @@ func TestBuildPlanPreservesInvalidIntervalOperatorDiagnostics(t *testing.T) {
 			name: "reversed sub-day interval",
 			sql:  "select interval 1 second + cast(20260515 as int)",
 			want: "invalid argument operator +, bad value [INTERVAL INT]",
+		},
+		{
+			name: "uuid v4 interval",
+			sql:  "select uuid_v4(interval 1 minute)",
+			want: "invalid argument function uuid_v4, bad value [INTERVAL]",
+		},
+		{
+			name: "greatest mixed json date interval",
+			sql:  `select greatest(json_extract('"2020-01-02"', '$'), cast('2020-01-01' as date), interval 1 day)`,
+			want: "invalid argument function greatest, bad value [JSON DATE INTERVAL]",
+		},
+		{
+			name: "greatest intervals",
+			sql:  "select greatest(interval 1 day, interval 2 day)",
+			want: "invalid argument function greatest, bad value [INTERVAL INTERVAL]",
+		},
+		{
+			name: "greatest interval and date",
+			sql:  "select greatest(interval 1 day, cast('2020-01-01' as date))",
+			want: "invalid argument function greatest, bad value [INTERVAL DATE]",
 		},
 	}
 

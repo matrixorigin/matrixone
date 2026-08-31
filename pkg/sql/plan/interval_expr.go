@@ -23,22 +23,6 @@ import (
 	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
 )
 
-// INTERVAL is an internal (value, unit) expression list rather than a scalar
-// value that an executor may materialize. These functions are the complete set
-// of generic binder entries that consume that representation and rewrite it to
-// ordinary scalar arguments before publishing a plan expression.
-func consumesIntervalPseudoType(name string) bool {
-	switch strings.ToLower(name) {
-	case "date_add", "date_sub", "adddate", "subdate",
-		"+", "-",
-		"mo_win_truncate", "mo_win_divisor",
-		"uuid", "uuid_v1", "uuid_v6", "uuid_v7":
-		return true
-	default:
-		return false
-	}
-}
-
 func rejectStandaloneIntervalFunctionArgs(
 	ctx context.Context,
 	name string,

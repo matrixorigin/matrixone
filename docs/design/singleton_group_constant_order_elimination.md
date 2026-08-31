@@ -72,16 +72,17 @@ unconsumed `INTERVAL` recursively at every generic scalar or aggregate function
 boundary, predicate boundary (WHERE, HAVING and JOIN ON), as well as at SELECT
 output, GROUP BY, top-level or grouping-set ORDER BY, and window PARTITION BY /
 ORDER BY. Subquery comparisons enforce the same rule before interpreting their
-left input as a scalar or row tuple. The binder has one explicit set of temporal
-consumers; each must rewrite the pseudo-type to ordinary scalar arguments before
-publishing its result. Window-frame binding likewise consumes and normalizes the
-internal value. This separates two contracts that the initial implementation
+left input as a scalar or row tuple. The binder's temporal rewrite paths must
+rewrite the pseudo-type to ordinary scalar arguments before publishing a result.
+Window-frame binding likewise consumes and normalizes the internal value. This
+separates two contracts that the initial implementation
 conflated: generic constant folding must be total, while a public executable plan
 must not contain an unconsumed interval pseudo-type at an ordinary expression
-boundary. A recognized consumer whose input shape is invalid is allowed to reach
-normal overload resolution, so established diagnostics such as `INT +` a sub-day
-`INTERVAL` remain `ErrInvalidArg`; the no-escape postcondition applies after a
-successful overload resolution and before publishing the expression.
+boundary. Every known builtin is allowed to reach normal overload resolution,
+so established diagnostics such as `GREATEST(INTERVAL, DATE)` and `INT +` a
+sub-day `INTERVAL` remain `ErrInvalidArg`. The no-escape guard then rejects a
+successful binding that still contains the pseudo-type, or a not-supported
+builtin probe before it can fall through to UDF resolution.
 
 ## 3. Alternatives and scope decisions
 
@@ -212,8 +213,9 @@ boundaries with a normal not-supported error. Controls must prove that
 `date_add(..., INTERVAL ...)`, date arithmetic, the scalar `INTERVAL(...)`
 function, aggregates and subquery comparisons over already-consumed temporal
 results, day-or-larger integer date arithmetic, legacy invalid-argument behavior
-for unsupported integer/sub-day arithmetic, and interval window-frame bounds
-remain valid. Direct tests of both
+for known builtins with unsupported interval arguments (including integer /
+sub-day arithmetic, UUID and GREATEST), unknown-function/UDF fallback, and
+interval window-frame bounds remain valid. Direct tests of both
 constant-folding entry points and a synthetic internal Sort prove total,
 fail-closed behavior independently of public binding.
 

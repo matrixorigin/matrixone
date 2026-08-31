@@ -3517,14 +3517,6 @@ func (b *baseBinder) bindFuncExprImplByAstExpr(name string, astArgs []tree.Expr,
 			}
 		}
 	}
-	if !consumesIntervalPseudoType(name) {
-		// Reject before builtin lookup because "not supported" is also the
-		// signal used below to continue with UDF resolution. An INTERVAL
-		// boundary violation must not be swallowed as a failed builtin probe.
-		if err := rejectBoundIntervalFunctionArgs(b.GetContext(), name, args); err != nil {
-			return nil, err
-		}
-	}
 	if name == "name_const" {
 		if !validNameConstNameAst(astArgs) ||
 			!validNameConstValueAst(astArgs, b.allowCanonicalNameConstValueCast) {
@@ -3576,6 +3568,13 @@ func (b *baseBinder) bindFuncExprImplByAstExpr(name string, astArgs []tree.Expr,
 		if !strings.Contains(err.Error(), "not supported") {
 			return nil, err
 		}
+		// The builtin binder also uses ErrNotSupported for its interval
+		// no-escape postcondition. Preserve that boundary error instead of
+		// misinterpreting it as an unknown builtin and falling through to UDF
+		// resolution.
+		if intervalErr := rejectBoundIntervalFunctionArgs(b.GetContext(), name, args); intervalErr != nil {
+			return nil, intervalErr
+		}
 	} else {
 		// return bindFuncExprImplByPlanExpr(b.GetContext(), name, args)
 		// first look for builtin func
@@ -3588,6 +3587,9 @@ func (b *baseBinder) bindFuncExprImplByAstExpr(name string, astArgs []tree.Expr,
 		}
 		if !strings.Contains(err.Error(), "not supported") {
 			return nil, err
+		}
+		if intervalErr := rejectBoundIntervalFunctionArgs(b.GetContext(), name, args); intervalErr != nil {
+			return nil, intervalErr
 		}
 	}
 
@@ -4315,13 +4317,6 @@ func bindFuncExprImplByPlanExpr(
 	if descendFunctions {
 		rejectIntervalArgs = rejectStandaloneIntervalFunctionArgs
 	}
-	if !consumesIntervalPseudoType(name) {
-		// Direct plan-expression callers need the deep variant because they
-		// cannot rely on the AST binder's child-boundary checks.
-		if err = rejectIntervalArgs(ctx, name, args); err != nil {
-			return nil, err
-		}
-	}
 	if name == NameApproxPercentile {
 		if err = validateApproxPercentileArgs(ctx, args); err != nil {
 			return nil, err
@@ -4859,15 +4854,25 @@ func bindFuncExprImplByPlanExpr(
 			return BindFuncExprImplByPlanExpr(ctx, "and", []*plan.Expr{leftFn, rightFn})
 		}
 
+		// A not-supported result is also the AST binder's signal to try UDF
+		// resolution. Do not let a raw INTERVAL pseudo-value cross that
+		// boundary. Other resolver failures, especially ErrInvalidArg from a
+		// known builtin, are the established public diagnostic and must pass
+		// through unchanged.
+		if moerr.IsMoErrCode(err, moerr.ErrNotSupported) {
+			if intervalErr := rejectIntervalArgs(ctx, name, args); intervalErr != nil {
+				return nil, intervalErr
+			}
+		}
+
 		return nil, err
 	}
-	// Explicit interval consumers above must remove the pseudo-type before a
-	// successful function can be published. Check this only after overload
-	// resolution: a recognized consumer may deliberately leave an unsupported
-	// input shape (for example INT + sub-day INTERVAL) to the resolver, whose
-	// established invalid-argument diagnostic is part of the public contract.
-	// Either resolution fails normally or this postcondition prevents a raw
-	// interval list from escaping in a successfully bound expression.
+	// Every successful function binding must consume the pseudo-type before it
+	// can be published. Check this only after overload resolution so a known
+	// builtin can preserve its established invalid-argument diagnostic (for
+	// example GREATEST(INTERVAL, DATE) or INT + sub-day INTERVAL). Either
+	// resolution fails normally or this postcondition prevents a raw interval
+	// list from escaping in a successfully bound expression.
 	if err := rejectIntervalArgs(ctx, name, args); err != nil {
 		return nil, err
 	}
