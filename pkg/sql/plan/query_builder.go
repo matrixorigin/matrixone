@@ -3646,6 +3646,8 @@ func (builder *QueryBuilder) createQuery() (*Query, error) {
 		// and TABLE_SCAN.  Revisit the proof after filter pushdown so a unique
 		// grouped scan can be eliminated without moving LIMIT below HAVING.
 		rootID = builder.rewriteEffectlessAggToProject(rootID)
+		rootID = builder.pushdownUncorrelatedSingleJoinFilters(rootID)
+		ReCalcNodeStats(rootID, builder, true, true, true)
 		if err = builder.checkPlanningCanceled(); err != nil {
 			return nil, err
 		}
