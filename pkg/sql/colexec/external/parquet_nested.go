@@ -138,23 +138,39 @@ func (h *ParquetHandler) getDataByRow(bat *batch.Batch, param *ExternalParam, pr
 		}
 	}
 
-	rowBuf := make([]parquet.Row, int(h.batchCnt))
-	n, err := h.rowReader.ReadRows(rowBuf)
-	if err != nil && !errors.Is(err, io.EOF) {
-		return moerr.ConvertGoError(param.Ctx, err)
-	}
-	rowBuf = rowBuf[:n]
-
-	for _, row := range rowBuf {
-		if err := h.processRow(row, bat, param, proc); err != nil {
-			return err
+	// Bound decoder lookahead before the actual materialized batch size can be
+	// checked. Any unread rows are revisited from h.offset on the next call.
+	const maxReadRows = 1024
+	rowBuf := make([]parquet.Row, min(int(h.batchCnt), maxReadRows))
+	rowsRead := 0
+	eof := false
+	for rowsRead < int(h.batchCnt) && !parquetBatchAtByteBudget(bat, rowsRead, param.maxBatchSize) {
+		toRead := nextParquetBatchRows(rowsRead, min(len(rowBuf), int(h.batchCnt)-rowsRead), bat.Size(), param.maxBatchSize)
+		n, err := h.rowReader.ReadRows(rowBuf[:toRead])
+		if err != nil && !errors.Is(err, io.EOF) {
+			return moerr.ConvertGoError(param.Ctx, err)
+		}
+		if errors.Is(err, io.EOF) {
+			eof = true
+		}
+		for _, row := range rowBuf[:n] {
+			if err := h.processRow(row, bat, param, proc); err != nil {
+				return err
+			}
+			rowsRead++
+			if parquetBatchAtByteBudget(bat, rowsRead, param.maxBatchSize) {
+				break
+			}
+		}
+		if n == 0 || eof || parquetBatchAtByteBudget(bat, rowsRead, param.maxBatchSize) {
+			break
 		}
 	}
 
-	bat.SetRowCount(n)
-	h.offset += int64(n)
+	bat.SetRowCount(rowsRead)
+	h.offset += int64(rowsRead)
 
-	finish := n == 0 || h.isFinished()
+	finish := (eof && rowsRead == 0) || h.isFinished()
 	if finish {
 		h.cleanup()
 		// File completion (FileFin/End) is now handled by Call's finishCurrentFile
