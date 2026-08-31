@@ -76,3 +76,10 @@
 2. binary-charset CHAR/VARCHAR 的非 literal byte/rune bound 按 UTF-8 每字符最多 4 bytes 推导；原生 binary 类型仍按 byte width。
 3. REPLACE/INSERT/LPAD/RPAD 的结果 domain 合并所有实际写入 payload 的 source/replacement/pad 参数。
 4. 补 focused expression/CTAS/runtime 类型测试，运行 owning packages/lint 后 commit/push。
+
+# PR #27841 第十四轮 review 修复
+
+1. 为 LOWER/UPPER 增加独立返回类型推导：CHAR/VARCHAR 转为同字符宽度 VARCHAR，TEXT 不再原样返回。
+2. 有界 TEXT 按 Unicode case mapping 与 invalid UTF-8 重编码的最坏 3x byte bound 扩容；无界 TEXT 保持无界。
+3. 补 TINYTEXT(255)、CHAR(4) metadata 与 254→381 bytes runtime focused UT。
+4. 运行 owning packages、targeted lint、diff check 后 commit/push。

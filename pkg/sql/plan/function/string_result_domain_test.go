@@ -248,6 +248,20 @@ func TestStringConsumersPreserveTextAndBoundedWidths(t *testing.T) {
 	require.Empty(t, casts)
 	require.Equal(t, types.T_blob, blobReverse.GetReturnType().Oid)
 
+	for _, name := range []string{"lower", "upper"} {
+		boundedText := types.T_text.ToType()
+		boundedText.Width = 255
+		resolved, err := GetFunctionByName(proc.Ctx, name, []types.Type{boundedText})
+		require.NoError(t, err)
+		require.Equal(t, types.T_text, resolved.GetReturnType().Oid)
+		require.Equal(t, int32(765), resolved.GetReturnType().Width)
+
+		resolved, err = GetFunctionByName(proc.Ctx, name, []types.Type{types.New(types.T_char, 4, 0)})
+		require.NoError(t, err)
+		require.Equal(t, types.T_varchar, resolved.GetReturnType().Oid)
+		require.Equal(t, int32(4), resolved.GetReturnType().Width)
+	}
+
 	for _, test := range []struct {
 		name      string
 		inputs    []types.Type

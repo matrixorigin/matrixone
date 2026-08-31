@@ -1212,6 +1212,20 @@ func TestTextResultCapacityUsesResultDomain(t *testing.T) {
 			}, NewFunctionTestResult(types.T_text.ToType(), false, []string{expected}, nil), fEvalFn(fn))
 			ok, info := fcTC.Run()
 			require.True(t, ok, info)
+
+			inputRune, expectedRune := "Ⱥ", "ⱥ"
+			if name == "upper" {
+				inputRune, expectedRune = "ȿ", "Ȿ"
+			}
+			boundedText := types.T_text.ToType()
+			boundedText.Width = 255
+			boundedResult := types.T_text.ToType()
+			boundedResult.Width = 765
+			fcTC = NewFunctionTestCase(proc, []FunctionTestInput{
+				NewFunctionTestConstInput(boundedText, []string{strings.Repeat(inputRune, 127)}, nil),
+			}, NewFunctionTestResult(boundedResult, false, []string{strings.Repeat(expectedRune, 127)}, nil), fEvalFn(fn))
+			ok, info = fcTC.Run()
+			require.True(t, ok, info)
 		})
 	}
 }

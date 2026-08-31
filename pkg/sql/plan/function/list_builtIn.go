@@ -16,6 +16,7 @@ package function
 
 import (
 	"fmt"
+	"math"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -104,6 +105,32 @@ func stringResultTypeForDomain(parameters []types.Type, sourceIndex int, bound s
 
 func expandingStringReturnType(parameters []types.Type, sourceIndex int) types.Type {
 	return stringResultTypeForDomain(parameters, sourceIndex, unknownStringResultBound())
+}
+
+func caseConversionReturnType(parameters []types.Type) types.Type {
+	if len(parameters) == 0 {
+		return types.T_varchar.ToType()
+	}
+	source := parameters[0]
+	switch source.Oid {
+	case types.T_char, types.T_varchar:
+		return textStringResultType(declaredTextCharacterBound(source), source.Charset)
+	case types.T_text:
+		if source.Width <= 0 {
+			return types.T_text.ToType()
+		}
+		result := types.T_text.ToType()
+		bound := multiplyStringResultBound(stringResultBound{bytes: uint64(source.Width)}, 3)
+		if bound.unknown || bound.bytes > math.MaxInt32 {
+			result.Width = math.MaxInt32
+		} else {
+			result.Width = int32(bound.bytes)
+		}
+		result.Charset = source.Charset
+		return result
+	default:
+		return types.T_varchar.ToType()
+	}
 }
 
 func replacementStringReturnType(parameters []types.Type, regexp bool) types.Type {
@@ -4364,7 +4391,7 @@ var supportedStringBuiltIns = []FuncNew{
 				overloadId: 0,
 				args:       []types.T{types.T_varchar},
 				retType: func(parameters []types.Type) types.Type {
-					return parameters[0]
+					return caseConversionReturnType(parameters)
 				},
 				newOp: func() executeLogicOfOverload {
 					return builtInToLower
@@ -4385,7 +4412,7 @@ var supportedStringBuiltIns = []FuncNew{
 				overloadId: 0,
 				args:       []types.T{types.T_varchar},
 				retType: func(parameters []types.Type) types.Type {
-					return parameters[0]
+					return caseConversionReturnType(parameters)
 				},
 				newOp: func() executeLogicOfOverload {
 					return builtInToUpper
