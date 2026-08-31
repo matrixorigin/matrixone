@@ -517,9 +517,19 @@ b  ¦  11
 drop table if exists bit02;
 create table bit02 as select bit_and(col2), bit_or(col2), bit_xor(col2), stddev_pop(col2) from bit01;
 desc bit02;
-[unknown result because it is related to issue#24436]
+➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
+bit_and(col2)  ¦  BIGINT UNSIGNED(64)  ¦  NO  ¦    ¦  0  ¦    ¦    𝄀
+bit_or(col2)  ¦  BIGINT UNSIGNED(64)  ¦  NO  ¦    ¦  0  ¦    ¦    𝄀
+bit_xor(col2)  ¦  BIGINT UNSIGNED(64)  ¦  NO  ¦    ¦  0  ¦    ¦    𝄀
+stddev_pop(col2)  ¦  DOUBLE(0)  ¦  YES  ¦    ¦  null  ¦    ¦
 show create table bit02;
-[unknown result because it is related to issue#24436]
+➤ Table[12,-1,0]  ¦  Create Table[12,-1,0]  𝄀
+bit02  ¦  CREATE TABLE `bit02` (
+  `bit_and(col2)` bigint unsigned NOT NULL DEFAULT 0,
+  `bit_or(col2)` bigint unsigned NOT NULL DEFAULT 0,
+  `bit_xor(col2)` bigint unsigned NOT NULL DEFAULT 0,
+  `stddev_pop(col2)` double DEFAULT NULL
+)
 select count(*) from bit02;
 ➤ count(*)[-5,64,0]  𝄀
 1
@@ -2057,7 +2067,7 @@ show create table agg01;
 agg01  ¦  CREATE TABLE `agg01` (
   `avgcol` double DEFAULT NULL,
   `sumcol` decimal(38,0) DEFAULT NULL,
-  `countcol` bigint NOT NULL,
+  `countcol` bigint NOT NULL DEFAULT 0,
   `maxcol` double DEFAULT NULL,
   `mincol` double DEFAULT NULL
 )
@@ -2194,3 +2204,17 @@ select id, payload from target_explicit where payload = 'explicit-default';
 ➤ id[4,32,0]  ¦  payload[12,20,0]  𝄀
 42  ¦  explicit-default
 drop database ctas_auto_increment_24436;
+drop database if exists ctas_union_decimal_24436;
+create database ctas_union_decimal_24436;
+use ctas_union_decimal_24436;
+create table literal_union as select 1 as x union all select 2.5 as x;
+show create table literal_union;
+➤ Table[12,-1,0]  ¦  Create Table[12,-1,0]  𝄀
+literal_union  ¦  CREATE TABLE `literal_union` (
+  `x` decimal(2,1) NOT NULL
+)
+select * from literal_union order by x;
+➤ x[3,2,1]  𝄀
+1.0  𝄀
+2.5
+drop database ctas_union_decimal_24436;
