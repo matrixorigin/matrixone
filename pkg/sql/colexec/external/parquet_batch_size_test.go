@@ -24,6 +24,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
@@ -83,7 +84,7 @@ func TestParquetReaderBatchByteBudget(t *testing.T) {
 		}
 
 		require.Equal(t, values, got)
-		require.Equal(t, []int{3, 3, 3, 1}, rowsPerBatch)
+		require.Equal(t, []int{2, 2, 2, 2, 2}, rowsPerBatch)
 	})
 
 	t.Run("nested row mode observes the same boundary", func(t *testing.T) {
@@ -110,6 +111,28 @@ func TestParquetReaderBatchByteBudget(t *testing.T) {
 			}
 		}
 		require.Equal(t, len(values), total)
+	})
+
+	t.Run("nested row mode does not publish a second budget-crossing row", func(t *testing.T) {
+		values := []string{"a", "b", "c"}
+		data := writeBatchBudgetNestedParquet(t, values)
+		reader, param, proc := newBatchBudgetParquetReader(t, data, types.T_text, 47)
+		defer reader.Close()
+
+		var rowsPerBatch []int
+		for {
+			bat := batchBudgetVectorBatch(types.T_text)
+			finished, err := reader.ReadBatch(context.Background(), bat, proc, nil)
+			require.NoError(t, err)
+			rowsPerBatch = append(rowsPerBatch, bat.RowCount())
+			require.Equal(t, 1, bat.RowCount())
+			require.LessOrEqual(t, uint64(bat.Size()), param.maxBatchSize)
+			bat.Clean(proc.Mp())
+			if finished {
+				break
+			}
+		}
+		require.Equal(t, []int{1, 1, 1}, rowsPerBatch)
 	})
 
 	t.Run("nested row mode seeks back after byte-boundary prefetch", func(t *testing.T) {
@@ -158,9 +181,7 @@ func TestParquetReaderBatchByteBudget(t *testing.T) {
 			finished, err := reader.ReadBatch(context.Background(), bat, proc, nil)
 			require.NoError(t, err)
 			require.Positive(t, bat.RowCount())
-			if !finished {
-				require.GreaterOrEqual(t, uint64(bat.Size()), param.maxBatchSize)
-			}
+			require.LessOrEqual(t, uint64(bat.Size()), param.maxBatchSize)
 			total += bat.RowCount()
 			bat.Clean(proc.Mp())
 			if finished {
@@ -253,7 +274,7 @@ func TestParquetReaderBatchByteBudget(t *testing.T) {
 			}
 		}
 		require.Equal(t, []int32{1, 2, 3}, values)
-		require.Equal(t, []int{2, 1}, rowsPerBatch)
+		require.Equal(t, []int{1, 1, 1}, rowsPerBatch)
 	})
 
 	t.Run("Iceberg generated metadata reserves bytes and advances", func(t *testing.T) {
@@ -290,6 +311,32 @@ func TestParquetReaderBatchByteBudget(t *testing.T) {
 			}
 		}
 		require.Equal(t, []int64{0, 1, 2}, ordinals)
+	})
+
+	t.Run("Iceberg missing optional column reserves null vector bytes", func(t *testing.T) {
+		data := writeBatchBudgetFieldIDInt32Parquet(t, []int32{1, 2, 3})
+		reader, proc := newBatchBudgetIcebergSchemaEvolutionReader(t, data, 35)
+		defer reader.Close()
+
+		var values []int32
+		var rowsPerBatch []int
+		for {
+			bat := batch.NewWithSchema(false, []string{"c", "added"},
+				[]types.Type{types.T_int32.ToType(), types.T_text.ToType()})
+			finished, err := reader.ReadBatch(context.Background(), bat, proc, nil)
+			require.NoError(t, err)
+			rowsPerBatch = append(rowsPerBatch, bat.RowCount())
+			require.Equal(t, 1, bat.RowCount())
+			require.Less(t, uint64(bat.Size()), uint64(35))
+			require.True(t, bat.Vecs[1].GetNulls().Contains(0))
+			values = append(values, vector.MustFixedColWithTypeCheck[int32](bat.Vecs[0])[:bat.RowCount()]...)
+			bat.Clean(proc.Mp())
+			if finished {
+				break
+			}
+		}
+		require.Equal(t, []int32{1, 2, 3}, values)
+		require.Equal(t, []int{1, 1, 1}, rowsPerBatch)
 	})
 }
 
@@ -388,6 +435,45 @@ func newBatchBudgetProjectedParquetReader(
 	return reader, param, proc
 }
 
+func newBatchBudgetIcebergSchemaEvolutionReader(
+	t testing.TB,
+	data []byte,
+	budget uint64,
+) (*ParquetReader, *process.Process) {
+	t.Helper()
+	param := &ExternalParam{
+		ExParamConst: ExParamConst{
+			Ctx:          context.Background(),
+			maxBatchSize: budget,
+			Attrs: []plan.ExternAttr{
+				{ColName: "c", ColIndex: 0},
+				{ColName: "added", ColIndex: 1},
+			},
+			Cols: []*plan.ColDef{
+				{Typ: plan.Type{Id: int32(types.T_int32), NotNullable: true}, NotNull: true},
+				{Typ: plan.Type{Id: int32(types.T_text)}},
+			},
+			IcebergColumns: []*pipeline.IcebergColumnMapping{
+				{MoColIndex: 0, IcebergFieldId: 1, SnapshotFieldName: "c", CurrentFieldName: "c"},
+				{MoColIndex: 1, IcebergFieldId: 2, SnapshotFieldName: "added", CurrentFieldName: "added", DefaultNullFill: true},
+			},
+			Extern: &tree.ExternParam{ExParamConst: tree.ExParamConst{
+				ScanType: tree.INLINE,
+				Format:   tree.PARQUET,
+				Data:     string(data),
+			}},
+			FileSize: []int64{int64(len(data))},
+		},
+		ExParam: ExParam{Fileparam: &ExFileparam{FileIndex: 1, FileCnt: 1}},
+	}
+	proc := testutil.NewProc(t)
+	reader := NewParquetReader(param, proc)
+	empty, err := reader.Open(param, proc)
+	require.NoError(t, err)
+	require.False(t, empty)
+	return reader, proc
+}
+
 func batchBudgetVectorBatch(targetType types.T) *batch.Batch {
 	bat := batch.NewWithSize(1)
 	bat.Vecs[0] = vector.NewVec(types.New(targetType, 0, 0))
@@ -425,6 +511,15 @@ func writeBatchBudgetInt32Parquet(t testing.TB, values []int32) []byte {
 	t.Helper()
 	return writeBatchBudgetParquet(t, parquet.NewSchema("x", parquet.Group{
 		"c": parquet.Leaf(parquet.Int32Type),
+	}), values, func(value int32) parquet.Row {
+		return parquet.Row{parquet.Int32Value(value).Level(0, 0, 0)}
+	})
+}
+
+func writeBatchBudgetFieldIDInt32Parquet(t testing.TB, values []int32) []byte {
+	t.Helper()
+	return writeBatchBudgetParquet(t, parquet.NewSchema("x", parquet.Group{
+		"c": parquet.FieldID(parquet.Leaf(parquet.Int32Type), 1),
 	}), values, func(value int32) parquet.Row {
 		return parquet.Row{parquet.Int32Value(value).Level(0, 0, 0)}
 	})

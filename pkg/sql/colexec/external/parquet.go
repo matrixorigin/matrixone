@@ -3999,6 +3999,9 @@ func (h *ParquetHandler) getDataByPage(bat *batch.Batch, param *ExternalParam, p
 			accepted = int64(acceptedRows - length)
 			if accepted < toRead {
 				h.rollbackPageAppend(bat, checkpoints, int(toRead))
+				if accepted == 0 {
+					break
+				}
 				if _, err = h.mapCurrentPageRows(bat, param, proc, accepted); err != nil {
 					return h.closePagesOnError(param.Ctx, err)
 				}
@@ -4260,6 +4263,11 @@ func (h *ParquetHandler) generatedBatchBytes(rows int, param *ExternalParam) uin
 	if h.icebergDMLRowOrdinalColIndex >= 0 {
 		addColumn(h.icebergDMLRowOrdinalColIndex, 0, false)
 	}
+	for colIdx, fillNull := range h.icebergNullFill {
+		if fillNull {
+			addColumn(colIdx, 0, false)
+		}
+	}
 	return size
 }
 
@@ -4284,9 +4292,12 @@ func (h *ParquetHandler) rowsToGeneratedByteBudget(maxRows int, param *ExternalP
 	if maxRows <= 0 || param.maxBatchSize == 0 {
 		return maxRows
 	}
-	for rows := 1; rows < maxRows; rows++ {
-		if h.generatedBatchBytes(rows, param) >= param.maxBatchSize {
-			return rows
+	if h.generatedBatchBytes(1, param) > param.maxBatchSize {
+		return 1
+	}
+	for rows := 2; rows <= maxRows; rows++ {
+		if h.generatedBatchBytes(rows, param) > param.maxBatchSize {
+			return rows - 1
 		}
 	}
 	return maxRows
@@ -4333,8 +4344,11 @@ func parquetRowsToByteBudget(
 				}
 			}
 		}
-		if size >= budget {
-			return row + 1
+		if size > budget {
+			if startRow == 0 && row == 0 {
+				return 1
+			}
+			return row
 		}
 	}
 	return maxRows
@@ -4375,8 +4389,11 @@ func (h *ParquetHandler) parquetRowsToByteBudget(
 		}
 		size = addParquetBytes(size,
 			h.generatedBatchBytes(row+1, param)-h.generatedBatchBytes(row, param))
-		if size >= param.maxBatchSize {
-			return row + 1
+		if size > param.maxBatchSize {
+			if startRow == 0 && row == 0 {
+				return 1
+			}
+			return row
 		}
 	}
 	return maxRows

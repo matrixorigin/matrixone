@@ -144,6 +144,7 @@ func (h *ParquetHandler) getDataByRow(bat *batch.Batch, param *ExternalParam, pr
 	rowBuf := make([]parquet.Row, min(int(h.batchCnt), maxReadRows))
 	rowsRead := 0
 	eof := false
+	batchBoundary := false
 	for rowsRead < int(h.batchCnt) && !h.parquetBatchAtByteBudget(bat, rowsRead, param) {
 		toRead := nextParquetBatchRows(rowsRead, min(len(rowBuf), int(h.batchCnt)-rowsRead), h.estimatedBatchSize(bat, rowsRead, param), param.maxBatchSize)
 		n, err := h.rowReader.ReadRows(rowBuf[:toRead])
@@ -154,15 +155,32 @@ func (h *ParquetHandler) getDataByRow(bat *batch.Batch, param *ExternalParam, pr
 			eof = true
 		}
 		for _, row := range rowBuf[:n] {
+			checkpoints := make([]vector.AppendCheckpoint, len(bat.Vecs))
+			for colIdx, vec := range bat.Vecs {
+				if vec != nil {
+					checkpoints[colIdx] = vec.MakeAppendCheckpoint()
+				}
+			}
 			if err := h.processRow(row, bat, param, proc); err != nil {
 				return err
 			}
-			rowsRead++
-			if h.parquetBatchAtByteBudget(bat, rowsRead, param) {
+			if h.parquetBatchAtByteBudget(bat, rowsRead+1, param) {
+				if rowsRead > 0 {
+					for colIdx, vec := range bat.Vecs {
+						if vec != nil {
+							vec.RollbackAppend(checkpoints[colIdx], 1)
+						}
+					}
+					batchBoundary = true
+					break
+				}
+				rowsRead++
+				batchBoundary = true
 				break
 			}
+			rowsRead++
 		}
-		if n == 0 || eof || h.parquetBatchAtByteBudget(bat, rowsRead, param) {
+		if n == 0 || eof || batchBoundary || h.parquetBatchAtByteBudget(bat, rowsRead, param) {
 			break
 		}
 	}
