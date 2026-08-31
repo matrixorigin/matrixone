@@ -3,8 +3,8 @@
 - Status: Proposed — awaiting design approval
 - Owning issue: [#27656](https://github.com/matrixorigin/matrixone/issues/27656)
 - Implementation PR: [#27695](https://github.com/matrixorigin/matrixone/pull/27695)
-- Version: 1
-- Last updated: 2026-08-30
+- Version: 2
+- Last updated: 2026-08-31
 
 ## 1. Problem and evidence
 
@@ -73,9 +73,13 @@ Frontier SQL is split into batches of at most 256 role IDs. The `grantee_id` cat
 
 Resource complexity is proportional to the reachable closure and reachable edges, not the tenant's disconnected role graph. Memory ownership is statement-local and released with the table-function operator. There is no background goroutine, global cache, retry loop, or cross-statement mutable state.
 
+The closure has an explicit fail-closed admission limit of 4,096 distinct roles, including the active role. The limit is checked before a newly discovered role is published to `visited` or a frontier. A statement that would admit role 4,097 returns an error and emits no partial authorization batch. This caps retained Go workspace for `visited`, frontier/next slices, and final role slices. Admission conservatively budgets 128 bytes per role, so closure workspace is bounded to 512 KiB per metadata statement before the output vector. The fixed-width output vector adds at most 32 KiB (`4,096 * 8` bytes) and is charged through the query's existing process mpool. The conservative 128-byte workspace estimate covers an `int64` map key, map bucket/load overhead, and simultaneous frontier/final slice storage without relying on runtime-specific minimum object sizes.
+
+The role count and byte budget describe one query-owned closure generation. Concurrent metadata queries each have their own generation and cannot share or retain another statement's workspace; aggregate closure workspace is therefore bounded by 512 KiB times already-admitted query concurrency, rather than tenant graph size times concurrency. This design does not add a second global concurrency controller.
+
 ### 4.3 Errors and cancellation
 
-Every internal executor result is closed by the function. Internal SQL errors and cancellation propagate to the caller; partial closure results are not published as a successful authorization set. Cancellation terminates further frontier expansion. Empty or malformed internal results fail rather than widening visibility.
+Every internal executor result is closed by the function. Internal SQL errors and cancellation propagate to the caller; partial closure results are not published as a successful authorization set. Cancellation is checked before each frontier query and while admitting returned roles, and terminates further expansion. Empty or malformed internal results fail rather than widening visibility. Capacity rejection follows the same terminal path: the current internal result is closed, temporary workspace becomes unreachable on return, and the table-function batch remains empty.
 
 No retry is performed because replaying nested catalog work inside the same statement cannot repair an authorization or transaction error and would increase resource use. A failed metadata query may be retried by the normal statement owner.
 
@@ -132,7 +136,7 @@ The design is fail-closed: protocol uncertainty, internal executor failure, malf
 
 The closure cannot cross tenant boundaries because catalog access uses the current account context. Stable numeric role identity prevents rename-based visibility drift. Cycle detection prevents malicious or accidental cyclic grants from hanging traversal.
 
-Disconnected catalog grants do not contribute to query work. Reachable closure size is still proportional to legally reachable roles; batching limits SQL statement size but does not impose a semantic role-depth limit. Existing tenant role/grant governance is the capacity control for a deliberately enormous reachable closure. The operator owns all temporary memory, and cancellation remains available throughout frontier expansion.
+Disconnected catalog grants do not contribute to query work. Reachable closure size is proportional to legally reachable roles only until the 4,096-role / 512-KiB admission boundary. A larger closure fails closed before publishing any role set. Batching independently limits SQL statement size and does not weaken the total closure bound. The operator owns all temporary memory, and cancellation remains available throughout frontier expansion. Concurrent queries cannot multiply work by the tenant's full disconnected graph; each query is independently capped at the same closure budget.
 
 ## 8. Alternatives
 
@@ -162,7 +166,10 @@ Rejected. An arbitrary surrounding join/scan can be unbounded and may have early
 |---|---|
 | Active plus complete inherited closure, cycles, duplicates | table-function unit tests |
 | Work proportional to reachable graph, disconnected 100k-edge case | focused benchmark/stress test |
-| Internal results close on success/error; cancellation propagates | table-function executor tests and ownership review |
+| Role 4,096 succeeds; role 4,097 fails before publication | deterministic table-function boundary tests |
+| Cancellation before/between frontier queries publishes no partial batch | injected cancellation tests |
+| Concurrent closures have independent 512-KiB admission generations and all reject over-limit graphs | barrier-controlled concurrency test |
+| Internal results close on success/error/capacity rejection; cancellation propagates | table-function executor tests and ownership review |
 | Runtime active role under prepared and ordinary cache reuse | public SQL BVT and planner/compile tests |
 | One closure producer per protected metadata query | reachable plan-shape tests for all protected views |
 | Amplifying JOIN plus LIMIT/SEMI remains inlined | negative real-planner tests |
@@ -176,7 +183,7 @@ Acceptance requires all focused owning-package tests, affected BVT, race tests o
 
 ## 10. Risks, rollout, and observability
 
-Primary risks are privilege overexposure, hidden authorized objects, stale active-role capture, protocol misallocation, repeated nested SQL, and unbounded closure work. The gates and validation above address each risk independently.
+Primary risks are privilege overexposure, hidden authorized objects, stale active-role capture, protocol misallocation, repeated nested SQL, and excessive closure work. The 4,096-role / 512-KiB query-owned admission boundary makes closure memory finite and fails closed; the remaining gates and validation above address each risk independently.
 
 No new metric or background health signal is introduced. Failures surface as normal query/bootstrap errors with the required protocol version. Operators can diagnose rollout state through existing common-protocol reporting and tenant-upgrade logs.
 
@@ -185,7 +192,8 @@ Rollout is contained by the common-protocol gate: compatibility definitions rema
 ## 11. Decision log
 
 - Numeric active role ID is the authorization root; role names are display metadata.
-- Complete transitive inheritance is required; limiting traversal depth is not acceptable.
+- Complete transitive inheritance is required within the admitted 4,096-role closure; an oversized closure fails the entire metadata query rather than truncating authorization.
+- Closure workspace admission is capped at 4,096 roles and a conservative 512 KiB per statement; output-vector memory remains process-mpool-accounted.
 - Indexed frontier expansion is preferred over global scans or a mutable cache.
 - Closure evaluation is shared once per statement only for the exact bounded function/projection shape.
 - Canonical view installation and planner admission use the same cumulative protocol capability.
@@ -202,7 +210,7 @@ To be completed by an authorized reviewer:
 ```text
 Change scope: information_schema metadata authorization and active-role closure
 Trigger: authorization boundary; protocol/upgrade contract; cross-package lifecycle and hot-path change
-Design: docs/design/CLAUDE_INFORMATION_SCHEMA_METADATA_VISIBILITY.md, version 1, <reviewed commit>
+Design: docs/design/CLAUDE_INFORMATION_SCHEMA_METADATA_VISIBILITY.md, version 2, <reviewed commit>
 Blocking findings: <none or findings>
 Decision log: <accepted tradeoffs and resolved questions>
 Decision: PASS | REQUEST_CHANGES
