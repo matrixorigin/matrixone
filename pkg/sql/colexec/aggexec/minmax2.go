@@ -38,6 +38,12 @@ type minMaxExecBytes struct {
 	extra    []byte
 }
 
+// Merge copies or compares the source state without transferring ownership or
+// mutating it. Window execution can therefore snapshot one running MIN/MAX
+// state into successive cumulative result groups.
+func (*minMaxExecFixed[T]) sourcePreservingMerge() {}
+func (*minMaxExecBytes) sourcePreservingMerge()    {}
+
 func mergeMinMaxPrepareParamKind(
 	vec *vector.Vector,
 	row int,
