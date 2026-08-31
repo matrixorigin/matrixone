@@ -2103,6 +2103,10 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 				PrimaryColIdxInBat: colName2Idx[tableDef.Name+"."+col.Name],
 				PrimaryColRelPos:   selectTag,
 				PrimaryColTyp:      col.Typ,
+				// LOAD owns the target table for the whole statement. Mark only
+				// the base-table target so compile can acquire it once before the
+				// pipeline; unique-index targets keep their row-level checks.
+				LockTable: builder.qry.LoadTag,
 			}
 			lockTargets = append(lockTargets, lockTarget)
 			break

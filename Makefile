@@ -39,11 +39,9 @@
 # make proto-vendor
 #
 # To compile mo-service with GPU support,
-# 1. install CUDA toolkit (version 12.0, 13.0, or above)
+# 1. install CUDA toolkit (version 13.3 or above)
 # 2. install cuVS Go bindings with conda
-#  % git clone git@github.com:rapidsai/cuvs.git
-#  % cd cuvs
-#  % conda env create --name go -f conda/environments/go_cuda-130_arch-$(uname -m).yaml
+#  % conda env create --name go -f optools/images/gpu/go_cuda-133_arch-$(uname -m).yaml
 #  % conda activate go
 # 3. compile matrixone
 #  % cd matrixone
@@ -292,11 +290,11 @@ endif
 
 .PHONY: cgo
 cgo: thirdparties
-	@(cd cgo; ${MAKE} ${CGO_DEBUG_OPT})
+	@(cd cgo; ${MAKE} $(if $(NATIVE_BUILD_JOBS),-j$(NATIVE_BUILD_JOBS)) ${CGO_DEBUG_OPT})
 
 .PHONY: thirdparties
 thirdparties:
-	@(cd thirdparties; ${MAKE})
+	@(cd thirdparties; ${MAKE} $(if $(NATIVE_BUILD_JOBS),-j$(NATIVE_BUILD_JOBS)))
 	cp -r $(THIRDPARTIES_INSTALL_DIR)/lib $(ROOT_DIR)/
 
 # Stage the jieba dictionary next to the binary, the same way thirdparties/lib
@@ -369,11 +367,19 @@ mo-tool: config cgo thirdparties
 # the build.  Override with MVN=/path/to/mvn to use a preinstalled Maven.  The
 # jar targets Java 8 bytecode so it runs on the BVT tester image's JDK 8.
 MVN ?= ./mvnw
+JSTFU_MVN_FLAGS ?= -B --no-transfer-progress -Dmaven.wagon.http.retryHandler.count=3
 .PHONY: jstfu
 jstfu:
 	$(info [Build jstfu datastream server])
-	@cd xtool/jstfu && $(MVN) -q -B -DskipTests package
+	@cd xtool/jstfu && $(MVN) $(JSTFU_MVN_FLAGS) -DskipTests package
 	@echo "built xtool/jstfu/target/jstfu.jar"
+
+.PHONY: jstfu-test
+jstfu-test:
+	$(info [Test and build jstfu datastream server])
+	@cd xtool/jstfu && $(MVN) $(JSTFU_MVN_FLAGS) verify
+	@test -s xtool/jstfu/target/jstfu.jar
+	@echo "tested and built xtool/jstfu/target/jstfu.jar"
 
 # build mo-service binary for debugging with go's race detector enabled
 # produced executable is 10x slower and consumes much more memory
@@ -396,14 +402,22 @@ build-typecheck: build
 # Excluding frontend test cases temporarily
 # Argument SKIP_TEST to skip a specific go test
 .PHONY: ut
-ut: config cgo thirdparties
+UT_PREREQUISITES := cgo thirdparties
+# CI times config separately to monitor module-proxy health. Let that caller
+# attest that the exact checkout already passed config instead of verifying the
+# same package graph twice; direct developer invocations retain the prerequisite.
+ifneq ($(UT_CONFIGURED),1)
+UT_PREREQUISITES += config
+endif
+ut: $(UT_PREREQUISITES)
 	$(info [Unit testing])
 ifeq ($(UNAME_S),darwin)
 	@cd optools && ./run_ut.sh UT $(SKIP_TEST)
 else
-	# The race suite is split into light, exclusive, heavy, and plan shards.
-	# Keep the outer budget above the per-package timeout so an expanded main
-	# branch cannot be killed while later shards are still making progress.
+	# The race suite is internally partitioned into light/HNSW, exclusive issues,
+	# embedded-cluster, heavy/engine, and plan stages. Keep the outer budget above
+	# the per-package timeout so an expanded main branch cannot be killed while a
+	# selected stage is still making progress.
 	@cd optools && timeout 90m ./run_ut.sh UT $(SKIP_TEST)
 endif
 
@@ -411,6 +425,16 @@ endif
 # bvt and unit test
 ###############################################################################
 UT_PARALLEL ?= 1
+UT_SHARD ?= all
+export UT_SHARD
+# Native compilation runs before Go tests, so it can use an explicit UT CPU
+# budget without increasing peak race-test memory. With the default UT value,
+# omit -j and preserve recursive make's jobserver contract: a plain make stays
+# serial while a developer's `make -jN` remains parallel.
+NATIVE_BUILD_JOBS ?= $(if $(filter-out 1,$(UT_PARALLEL)),$(UT_PARALLEL))
+ifeq ($(strip $(NATIVE_BUILD_JOBS)),0)
+$(error NATIVE_BUILD_JOBS and UT_PARALLEL must be positive)
+endif
 ENABLE_UT ?= "false"
 # These are public mirrors, not policy gatekeepers. Fall through on transient
 # errors as well as 404/410 responses so one unhealthy mirror cannot block CI.
@@ -1302,11 +1326,13 @@ install-static-check-tools:
 	@go install github.com/apache/skywalking-eyes/cmd/license-eye@v0.4.0
 
 .PHONY: static-check
+GOLANGCI_LINT_CONCURRENCY ?=
+GOLANGCI_LINT_CONCURRENCY_FLAG := $(if $(strip $(GOLANGCI_LINT_CONCURRENCY)),--concurrency $(strip $(GOLANGCI_LINT_CONCURRENCY)))
 static-check: config err-check
 	$(CGO_OPTS) go vet $(GO_MODULE_MODE) -vettool=`which molint` ./...
 	$(CGO_OPTS) license-eye -c .licenserc.yml header check
 	$(CGO_OPTS) license-eye -c .licenserc.yml dep check
-	$(CGO_OPTS) golangci-lint run -v -c .golangci.yml ./...
+	$(CGO_OPTS) golangci-lint run -v $(GOLANGCI_LINT_CONCURRENCY_FLAG) -c .golangci.yml ./...
 
 fmtErrs := $(shell grep -onr 'fmt.Errorf' pkg/ --exclude-dir=.git --exclude-dir=vendor \
 				--exclude=*.pb.go --exclude=*_test.go --exclude=system_vars.go --exclude=Makefile)

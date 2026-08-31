@@ -367,15 +367,21 @@ func dupOperatorWithContext(sourceOp vm.Operator, index int, maxParallel int, du
 		op.SetInfo(&info)
 		return op
 	case vm.Intersect:
+		t := sourceOp.(*intersect.Intersect)
 		op := intersect.NewArgument()
+		op.KeyExprs = t.KeyExprs
 		op.SetInfo(&info)
 		return op
 	case vm.Minus: // 2
+		t := sourceOp.(*minus.Minus)
 		op := minus.NewArgument()
+		op.KeyExprs = t.KeyExprs
 		op.SetInfo(&info)
 		return op
 	case vm.IntersectAll:
+		t := sourceOp.(*intersectall.IntersectAll)
 		op := intersectall.NewArgument()
+		op.KeyExprs = t.KeyExprs
 		op.SetInfo(&info)
 		return op
 	case vm.Merge:
@@ -484,6 +490,7 @@ func dupOperatorWithContext(sourceOp vm.Operator, index int, maxParallel int, du
 		op.RuntimeFilterSpec = plan2.DeepCopyRuntimeFilterSpec(sourceArg.RuntimeFilterSpec)
 		op.CurrentShuffleIdx = int32(index)
 		op.DrainAllBuckets = sourceArg.DrainAllBuckets
+		op.StringHashKey = sourceArg.StringHashKey
 		op.SetInfo(&info)
 		return op
 	case vm.Dispatch:
@@ -1852,6 +1859,16 @@ func constructAggregateConfig(f *plan.Function, proc *process.Process) ([]*plan.
 			if err != nil {
 				panic(err)
 			}
+			// The existing approximate-percentile executor always ranks values in
+			// ascending order. An ordered-set DESC call has the same result as the
+			// ascending complementary percentile, so preserve the executor and its
+			// wire-compatible text configuration by translating p to 1-p here.
+			if len(f.AggConfig) > 0 && f.AggConfig[0] != 0 {
+				config, err = complementPercentileConfig(config)
+				if err != nil {
+					panic(err)
+				}
+			}
 			return args[:len(args)-1], config
 		}
 
@@ -2019,6 +2036,7 @@ func constructShuffleOperatorForJoin(bucketNum int32, node *plan.Node, left bool
 	arg.ShuffleColMin = node.Stats.HashmapStats.ShuffleColMin
 	arg.ShuffleColMax = node.Stats.HashmapStats.ShuffleColMax
 	arg.BucketNum = bucketNum
+	arg.StringHashKey = isStringShuffleKeyType(typ)
 	switch types.T(typ) {
 	case types.T_int64, types.T_int32, types.T_int16:
 		arg.ShuffleRangeInt64 = plan2.ShuffleRangeReEvalSigned(node.Stats.HashmapStats.Ranges, int(arg.BucketNum), node.Stats.HashmapStats.Nullcnt, int64(node.Stats.TableCnt))
@@ -2044,6 +2062,7 @@ func constructShuffleArgForGroup(bucketNum int32, node *plan.Node) *shuffle.Shuf
 	arg.ShuffleColMin = node.Stats.HashmapStats.ShuffleColMin
 	arg.ShuffleColMax = node.Stats.HashmapStats.ShuffleColMax
 	arg.BucketNum = bucketNum
+	arg.StringHashKey = isStringShuffleKeyType(typ)
 	switch types.T(typ) {
 	case types.T_int64, types.T_int32, types.T_int16:
 		arg.ShuffleRangeInt64 = plan2.ShuffleRangeReEvalSigned(node.Stats.HashmapStats.Ranges, int(arg.BucketNum), node.Stats.HashmapStats.Nullcnt, int64(node.Stats.TableCnt))
@@ -2051,6 +2070,15 @@ func constructShuffleArgForGroup(bucketNum int32, node *plan.Node) *shuffle.Shuf
 		arg.ShuffleRangeUint64 = plan2.ShuffleRangeReEvalUnsigned(node.Stats.HashmapStats.Ranges, int(arg.BucketNum), node.Stats.HashmapStats.Nullcnt, int64(node.Stats.TableCnt))
 	}
 	return arg
+}
+
+func isStringShuffleKeyType(typ int32) bool {
+	switch types.T(typ) {
+	case types.T_char, types.T_varchar, types.T_text:
+		return true
+	default:
+		return false
+	}
 }
 
 // cross-cn dispath  will send same batch to all register
@@ -2591,7 +2619,13 @@ func constructTableClone(
 			dstCreateTable = createTable
 			dstTblDef = createTable.TableDef
 			sameColumnIDSpace = false
-			metaCopy.Ctx.RequestedAutoIncrOffset = createTable.TableDef.AutoIncrOffset
+			// The source carries an explicit schema lower bound (for example,
+			// ALTER TABLE ... AUTO_INCREMENT), while the destination can carry
+			// a session-requested lower bound. A fresh clone must honor both.
+			metaCopy.Ctx.RequestedAutoIncrOffset = max(
+				clonePlan.SrcTableDef.AutoIncrOffset,
+				createTable.TableDef.AutoIncrOffset,
+			)
 		}
 	}
 	dstAutoIncrNames := mapCloneAutoIncrColumns(clonePlan.SrcTableDef, dstTblDef, sameColumnIDSpace)
@@ -2664,7 +2698,12 @@ func constructTableClone(
 				colIdxes := vector.MustFixedColWithTypeCheck[int32](cols[0])
 				offsets := vector.MustFixedColWithTypeCheck[uint64](cols[1])
 				for i := 0; i < rows; i++ {
-					if dstName, ok := dstAutoIncrNames[colIdxes[i]]; ok {
+					colIdx := colIdxes[i]
+					// A fresh clone has a new allocator. Its visible columns are
+					// reconstructed from copied rows and schema lower bounds instead
+					// of inheriting the source allocator's reserved batch upper bound.
+					if dstName, ok := dstAutoIncrNames[colIdx]; ok &&
+						(sameColumnIDSpace || clonePlan.SrcTableDef.Cols[colIdx].Hidden) {
 						autoIncrOffsets[dstName] = offsets[i]
 					}
 				}
@@ -2772,6 +2811,21 @@ func validateOrderedPercentileExpr(expr *plan.Expr, name string) error {
 // helper gives ordered-set aggregates accurate diagnostics.
 func getPercentileConfig(vec *vector.Vector) ([]byte, error) {
 	return getPercentileConfigNamed(vec, "approx_percentile")
+}
+
+func complementPercentileConfig(config []byte) ([]byte, error) {
+	text := string(config)
+	percentile, ok := new(big.Rat).SetString(text)
+	if !ok || percentile.Sign() < 0 || percentile.Cmp(big.NewRat(1, 1)) > 0 {
+		return nil, moerr.NewInvalidInputNoCtxf(
+			"invalid percentile configuration %q", text)
+	}
+	scale := 0
+	if point := strings.IndexByte(text, '.'); point >= 0 {
+		scale = len(text) - point - 1
+	}
+	complement := new(big.Rat).Sub(big.NewRat(1, 1), percentile)
+	return []byte(complement.FloatString(scale)), nil
 }
 
 func getPercentileConfigNamed(vec *vector.Vector, functionName string) ([]byte, error) {

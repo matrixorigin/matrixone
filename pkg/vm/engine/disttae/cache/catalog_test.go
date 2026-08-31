@@ -454,6 +454,49 @@ func TestTableInsert(t *testing.T) {
 	require.Equal(t, int64(0), mp.CurrNB())
 }
 
+func TestParseColumnsBatchPreservesUnsignedFlag(t *testing.T) {
+	mp := mpool.MustNewZero()
+	packer := types.NewPacker()
+	defer packer.Close()
+	typ := types.T_uint64.ToType()
+	typBytes, err := types.Encode(&typ)
+	require.NoError(t, err)
+
+	columnBatch, err := catalog.GenCreateColumnTuples([]catalog.Column{{
+		AccountId:    7,
+		DatabaseId:   8,
+		TableId:      9,
+		DatabaseName: "issue_27661",
+		TableName:    "unsigned_flags",
+		Name:         "unsigned_bigint",
+		Typ:          typBytes,
+		TypLen:       int32(len(typBytes)),
+		Num:          1,
+		IsUnsigned:   1,
+	}}, mp, packer)
+	require.NoError(t, err)
+
+	logtailBatch := batch.NewWithSize(len(columnBatch.Vecs) + MO_OFF)
+	logtailBatch.Vecs[MO_ROWID_IDX] = vector.NewVec(types.T_Rowid.ToType())
+	require.NoError(t, vector.AppendFixed(logtailBatch.Vecs[MO_ROWID_IDX], types.Rowid{}, false, mp))
+	logtailBatch.Vecs[MO_TIMESTAMP_IDX] = vector.NewVec(types.T_TS.ToType())
+	require.NoError(t, vector.AppendFixed(logtailBatch.Vecs[MO_TIMESTAMP_IDX], types.BuildTS(1, 0), false, mp))
+	copy(logtailBatch.Vecs[MO_OFF:], columnBatch.Vecs)
+	logtailBatch.SetRowCount(1)
+	defer logtailBatch.Clean(mp)
+
+	ParseColumnsBatchAnd(logtailBatch, func(columnsByTable map[TableItemKey]Columns) {
+		require.Len(t, columnsByTable, 1)
+		for _, columns := range columnsByTable {
+			require.Len(t, columns, 1)
+			require.Equal(t, int8(1), columns[0].IsUnsigned)
+			var decoded types.Type
+			require.NoError(t, types.Decode(columns[0].Typ, &decoded))
+			require.Equal(t, types.T_uint64, decoded.Oid)
+		}
+	})
+}
+
 func newTestTableBatch(mp *mpool.MPool) *batch.Batch {
 	var typs []types.Type
 

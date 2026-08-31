@@ -1253,7 +1253,7 @@ var ForceAssignmentCastExpr = forceAssignmentCastExpr
 
 func useAssignmentStrictCast(targetType Type) bool {
 	switch targetType.Id {
-	case int32(types.T_char), int32(types.T_varchar), int32(types.T_date), int32(types.T_datetime), int32(types.T_timestamp), int32(types.T_year):
+	case int32(types.T_char), int32(types.T_varchar), int32(types.T_date), int32(types.T_time), int32(types.T_datetime), int32(types.T_timestamp), int32(types.T_year):
 		return true
 	case int32(types.T_text):
 		return targetType.Width == types.MaxTinyTextLen
@@ -1270,17 +1270,17 @@ func useSqlModeStringAssignmentCast(targetType Type) bool {
 
 func useSqlModeAssignmentCast(targetType Type) bool {
 	return useSqlModeStringAssignmentCast(targetType) ||
-		targetType.Id == int32(types.T_year)
+		targetType.Id == int32(types.T_year) ||
+		targetType.Id == int32(types.T_time)
 }
 
 // needsSameTypeAssignmentCast reports whether values with the same planner
-// type still need to cross an assignment cast. Legacy TINYTEXT columns are
-// recovered as T_text/Width=255 without rewriting their stored data, so they
-// can expose rows that predate the width constraint. A same-type assignment
-// into a constrained TINYTEXT column must validate those rows instead of
-// treating planner-type equality as proof that the values are already valid.
+// type still need to cross an assignment cast. Legacy TINYTEXT columns and
+// MatrixOne's extended internal TIME representation can both carry values that
+// are invalid at a MySQL-compatible column boundary.
 func needsSameTypeAssignmentCast(targetType Type) bool {
-	return targetType.Id == int32(types.T_text) && targetType.Width == types.MaxTinyTextLen
+	return (targetType.Id == int32(types.T_text) && targetType.Width == types.MaxTinyTextLen) ||
+		targetType.Id == int32(types.T_time)
 }
 
 func forceCastExpr2(ctx context.Context, expr *Expr, t2 types.Type, targetType *plan.Expr) (*Expr, error) {
@@ -1289,8 +1289,8 @@ func forceCastExpr2(ctx context.Context, expr *Expr, t2 types.Type, targetType *
 
 // forceCastExpr2WithIgnore builds the assignment cast for a DML write when the
 // target plan.Expr is already known. SQL-mode-sensitive targets normally use
-// cast_assign so width-constrained strings and YEAR values can apply strict,
-// non-strict, and IGNORE semantics at runtime.
+// cast_assign so width-constrained strings, YEAR values, and TIME range checks
+// can apply strict, non-strict, and IGNORE semantics at runtime.
 func forceCastExpr2WithIgnore(ctx context.Context, expr *Expr, t2 types.Type, targetType *plan.Expr, isIgnore bool) (*Expr, error) {
 	return forceCastExpr2WithProcess(ctx, expr, t2, targetType, isIgnore, nil)
 }
@@ -1324,9 +1324,9 @@ func forceCastExpr2WithProcess(
 	}
 
 	targetType.Typ.NotNullable = expr.Typ.NotNullable
-	// SQL-mode-sensitive assignments use the protocol-gated runtime assignment cast.
-	// Temporal assignments retain main's cast_strict behavior, while other
-	// conversions continue to use the generic cast.
+	// SQL-mode-sensitive assignments use the protocol-gated runtime assignment
+	// cast. Other temporal assignments retain cast_strict behavior, while the
+	// remaining conversions continue to use the generic cast.
 	funcName := assignmentCastFunctionName(targetType.Typ, isIgnore, proc)
 	fGet, err := function.GetFunctionByName(ctx, funcName, []types.Type{t1, t2})
 	if err != nil {
@@ -1788,6 +1788,18 @@ func MakeInsertValueConstExpr(proc *process.Process, numVal *tree.NumVal, colTyp
 		/* 	case types.T_uuid:
 		canInsert, num, err := setInsertValueUuid(proc, numVal) */
 	case types.T_time:
+		// Keep syntactically valid TIME literals outside MatrixOne's internal
+		// representation as text until the assignment cast executes. Parsing
+		// them here would turn a column-range violation into an unrelated
+		// invalid-input error before the statement's strict/IGNORE policy and
+		// warning sink are available.
+		if numVal.ValType == tree.P_char {
+			value := numVal.String()
+			if _, outOfRange := types.IsTimeStringOutOfInternalRange(value, colType.Scale); outOfRange {
+				expr := MakePlan2StringConstExprWithType(value)
+				return forceAssignmentCastExprWithProcess(proc.Ctx, expr, makePlan2Type(colType), isIgnore, proc)
+			}
+		}
 		canInsert, isnull, num, err := util.SetInsertValueTime(proc, numVal, colType)
 		if err != nil || !canInsert {
 			return nil, err

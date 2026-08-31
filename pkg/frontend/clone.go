@@ -562,7 +562,7 @@ func forEachCloneDatabaseSourceTable(
 
 func cloneSnapshotTxnOperator(ses *Session, bh BackgroundExec) TxnOperator {
 	back := bh.(*backExec)
-	if back.backSes.forcePessimisticRC {
+	if back.backSes.cloneSnapshotUsesBackgroundTxn {
 		return back.backSes.GetTxnHandler().GetTxn()
 	}
 	return ses.proc.GetTxnOperator()
@@ -573,6 +573,25 @@ func getBackExecutor(
 	ses *Session,
 	opts ...*BackgroundExecOption,
 ) (BackgroundExec, func(error) error, error) {
+	return getBackExecutorInternal(ctx, ses, false, opts...)
+}
+
+// getBackExecutorWithTxnHandler is used by database clone, which can run
+// immediately after BEGIN before the process transaction operator is refreshed.
+func getBackExecutorWithTxnHandler(
+	ctx context.Context,
+	ses *Session,
+	opts ...*BackgroundExecOption,
+) (BackgroundExec, func(error) error, error) {
+	return getBackExecutorInternal(ctx, ses, true, opts...)
+}
+
+func getBackExecutorInternal(
+	ctx context.Context,
+	ses *Session,
+	useTxnHandler bool,
+	opts ...*BackgroundExecOption,
+) (BackgroundExec, func(error) error, error) {
 
 	var (
 		err      error
@@ -580,7 +599,15 @@ func getBackExecutor(
 		deferred func(error) error
 	)
 
-	if ses.proc.GetTxnOperator().TxnOptions().ByBegin {
+	var explicitTxn bool
+	if useTxnHandler {
+		// TxnHandler is authoritative for an explicit transaction. The process
+		// operator is not refreshed by the BEGIN statement itself.
+		explicitTxn = ses.GetTxnHandler().OptionBitsIsSet(OPTION_BEGIN)
+	} else {
+		explicitTxn = ses.proc.GetTxnOperator().TxnOptions().ByBegin
+	}
+	if explicitTxn {
 		bh = ses.GetShareTxnBackgroundExec(ctx, false)
 		bh.ClearExecResultSet()
 		return bh, func(err error) error {
@@ -784,7 +811,9 @@ func handleCloneTable(
 	if bh == nil {
 		// do not open another transaction,
 		// if the clone already executed within a transaction.
-		if bh, deferred, err = getBackExecutor(reqCtx, ses); err != nil {
+		if bh, deferred, err = getBackExecutor(
+			reqCtx, ses, &BackgroundExecOption{forcePessimisticRC: true},
+		); err != nil {
 			return
 		}
 
@@ -1032,15 +1061,15 @@ func handleCloneDatabaseWithSource(
 	}
 
 	if bh == nil {
-		var options []*BackgroundExecOption
+		options := []*BackgroundExecOption{{forcePessimisticRC: true}}
 		if stmt.IfNotExists {
 			// The target lock must observe the holder's committed CREATE before
 			// deciding whether this statement is a no-op. A private pessimistic
 			// RC transaction refreshes after a lock wait; the retry below then
 			// re-checks the target with that fresh snapshot.
-			options = append(options, &BackgroundExecOption{forcePessimisticRC: true})
+			options[0].cloneSnapshotUsesBackgroundTxn = true
 		}
-		if bh, deferred, err = getBackExecutor(reqCtx, ses, options...); err != nil {
+		if bh, deferred, err = getBackExecutorWithTxnHandler(reqCtx, ses, options...); err != nil {
 			return
 		}
 

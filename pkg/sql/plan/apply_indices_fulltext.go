@@ -20,6 +20,7 @@ import (
 	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/docfilter"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/sqlquote"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -125,6 +126,14 @@ func (builder *QueryBuilder) applyIndicesForProjectionUsingFullTextIndex(nodeID 
 
 		var orderByScore []*OrderBySpec
 		for _, id := range filter_node_ids {
+			// A json probe is a PREFILTER the optimizer injected; its score is a
+			// constant and nothing selects it, so ordering by it would sort the
+			// whole result on noise. It is also unreachable from here: the probe
+			// is consumed through the GROUP BY above it, which does not re-expose
+			// the scan's score column.
+			if builder.jsonProbeFtNodes[id] {
+				continue
+			}
 			ftnode := builder.qry.Nodes[id]
 			orderByScore = append(orderByScore, &OrderBySpec{
 				Expr: &Expr{
@@ -176,7 +185,7 @@ func (builder *QueryBuilder) applyIndicesForProjectionUsingFullTextIndex(nodeID 
 			}
 		}
 		for _, s := range served {
-			if s.nodeID < 0 || ordered[s.nodeID] {
+			if s.nodeID < 0 || ordered[s.nodeID] || builder.jsonProbeFtNodes[s.nodeID] {
 				continue
 			}
 			scoreExpr := builder.fullTextScoreColRef(s.nodeID)
@@ -190,20 +199,28 @@ func (builder *QueryBuilder) applyIndicesForProjectionUsingFullTextIndex(nodeID 
 			})
 		}
 
-		sortLimit, sortOffset := paginationLimit, paginationOffset
-		if builder.sqlCalcFoundRows {
-			sortLimit, sortOffset = nil, nil
-		}
-		sortByID := builder.appendNode(&plan.Node{
-			NodeType: plan.Node_SORT,
-			Children: []int32{idxID},
-			OrderBy:  orderByScore,
-			Limit:    DeepCopyExpr(sortLimit),
-			Offset:   DeepCopyExpr(sortOffset),
-			SpillMem: builder.sortSpillMem,
-		}, ctx)
+		if len(orderByScore) == 0 {
+			// Every stream was a json probe: an injected PREFILTER has no
+			// relevance to rank on, and a SORT with no keys is pure buffering —
+			// the same trap the wrapped-only MATCH note above describes. Keep the
+			// pagination on the projection, where it was.
+			projNode.Children[0] = idxID
+		} else {
+			sortLimit, sortOffset := paginationLimit, paginationOffset
+			if builder.sqlCalcFoundRows {
+				sortLimit, sortOffset = nil, nil
+			}
+			sortByID := builder.appendNode(&plan.Node{
+				NodeType: plan.Node_SORT,
+				Children: []int32{idxID},
+				OrderBy:  orderByScore,
+				Limit:    DeepCopyExpr(sortLimit),
+				Offset:   DeepCopyExpr(sortOffset),
+				SpillMem: builder.sortSpillMem,
+			}, ctx)
 
-		projNode.Children[0] = sortByID
+			projNode.Children[0] = sortByID
+		}
 	}
 
 	// replace the project with ColRef
@@ -410,20 +427,41 @@ func (builder *QueryBuilder) applyJoinFullTextIndices(nodeID int32, projNode *pl
 		}
 	}
 
-	// A single fulltext stream can safely keep LIMIT+OFFSET candidates. With
-	// multiple streams, limiting each input before their intersection can drop
-	// documents that belong to the final top page, so leave those inputs
-	// unbounded until a joint top-k implementation exists.
-	//
-	// A lifted wrapped-MATCH predicate counts here exactly like a filter left on the scan, and
-	// this must be tested AFTER the lift emptied scanNode.FilterList -- otherwise removing the
-	// predicate from the scan is what makes the cap look safe. The predicate now runs in the
-	// FILTER node ABOVE the join, so capping the stream below it hands that filter only the
-	// top-relevance candidates: `where sc < 0.05 limit 1` would cap the stream to its single
-	// highest-scoring document and then reject it, returning nothing while qualifying rows sit
-	// just below the cap.
+	// Resolve the residual-WHERE prefilter before deciding whether the internal
+	// fulltext stream may keep only LIMIT+OFFSET candidates. The early LIMIT is
+	// correctness-safe only when that prefilter is exact.
+	pushdownEnabled := len(scanNode.FilterList) > 0
+	if pushdownEnabled && types.T(pkType.Id).IsInteger() &&
+		!localProtocolEnablesSortedMembershipFilter(builder.compCtx.GetProcess().GetService()) {
+		pushdownEnabled = false
+	}
+	if pushdownEnabled {
+		if val, err := builder.compCtx.ResolveVariable("fulltext_bloom_filter_pushdown", true, false); err == nil {
+			if v, ok := val.(int8); ok && v == 0 {
+				pushdownEnabled = false
+			}
+		}
+	}
+	if pushdownEnabled {
+		for _, filter := range scanNode.FilterList {
+			if containsVolatileFunction(filter) {
+				// The prefilter topology evaluates residual filters in both the
+				// candidate scan and the final scan. A volatile predicate can
+				// produce different results in those evaluations, so it cannot
+				// safely participate in candidate-limit pushdown.
+				pushdownEnabled = false
+				break
+			}
+		}
+	}
+
+	exactPrefilter := docfilter.SupportsBitset(types.T(pkType.Id).ToType())
+
+	// A lifted wrapped-MATCH predicate counts here exactly like a filter left on the scan. It
+	// runs above the join, so limiting the stream below it can under-fill the final result.
 	limitExpr := builder.buildFullTextCandidateLimit(
-		scanNode, wrappedMatchFilters, ft_filters, paginationLimit, paginationOffset)
+		scanNode, wrappedMatchFilters, ft_filters, indexDefs, pushdownEnabled, exactPrefilter,
+		paginationLimit, paginationOffset)
 
 	// buildFullTextIndexScan
 	var last_node_id int32
@@ -499,6 +537,19 @@ func (builder *QueryBuilder) applyJoinFullTextIndices(nodeID int32, projNode *pl
 			if scoreRangeJSON != "" {
 				exprs = append(exprs, makePlan2StringConstExprWithType(scoreRangeJSON))
 			}
+			// Optional 6th argument: the zero-relevance guard for a threshold only known
+			// at EXECUTE. Arguments are positional, so the two optional JSON slots are
+			// padded when only the guard is needed.
+			guard, gerr := builder.fulltextRuntimeScoreGuard(wrappedMatchFilters, fn)
+			if gerr != nil {
+				return -1, nil, nil, nil, gerr
+			}
+			if guard != nil {
+				for len(exprs) < 5 {
+					exprs = append(exprs, makePlan2StringConstExprWithType(""))
+				}
+				exprs = append(exprs, guard)
+			}
 			curr_ftnode_id, err = builder.buildFulltext2SearchNode(ctx, exprs, nil)
 			if err != nil {
 				return -1, nil, nil, nil, err
@@ -520,6 +571,15 @@ func (builder *QueryBuilder) applyJoinFullTextIndices(nodeID int32, projNode *pl
 				makePlan2StringConstExprWithType(idxtblname),
 				DeepCopyExpr(fn.Args[0]),
 				DeepCopyExpr(fn.Args[1]),
+			}
+			// Optional 5th argument: the zero-relevance guard for a threshold only known
+			// at EXECUTE. See fulltextRuntimeScoreGuard.
+			guard, gerr := builder.fulltextRuntimeScoreGuard(wrappedMatchFilters, fn)
+			if gerr != nil {
+				return -1, nil, nil, nil, gerr
+			}
+			if guard != nil {
+				exprs = append(exprs, guard)
 			}
 			curr_ftnode_id, err = builder.buildFullTextIndexScanNode(ctx, exprs, nil, params, sql)
 			if err != nil {
@@ -582,6 +642,16 @@ func (builder *QueryBuilder) applyJoinFullTextIndices(nodeID int32, projNode *pl
 		curr_ftnode.TableDef.Cols[0].Typ.Scale = pkType.Scale
 		curr_ftnode.TableDef.Cols[0].Typ.Charset = pkType.Charset
 
+		// A json probe walks its terms one at a time rather than merging them
+		// (fulltext2/jsonprobe.go explains why: a range covers most of a key's
+		// vocabulary, and merging would hold a cursor per term). So it emits a
+		// doc once per matching term, and the pk below feeds an INNER JOIN,
+		// where a repeated pk multiplies base-table rows. Group by the doc id to
+		// collapse them — the aggregate already spills and is already tested.
+		if mode == fulltext2.JSONProbeMode {
+			curr_ftnode_id, curr_ftnode_pkcol = builder.dedupFulltextDocIDs(ctx, curr_ftnode_id, curr_ftnode_pkcol)
+		}
+
 		if i > 0 {
 			// JOIN last_node_id and curr_ftnode_id
 			// JOIN INNER with children (curr_ftnode_id, last_node_id)
@@ -608,20 +678,6 @@ func (builder *QueryBuilder) applyJoinFullTextIndices(nodeID int32, projNode *pl
 	// Determine join structure based on whether scanNode still has non-fulltext filters.
 	// When filters remain, use pre-filter pushdown (nested JOIN + runtime filter)
 	// to reduce the number of doc_ids that fulltext_index_scan must process.
-	pushdownEnabled := len(scanNode.FilterList) > 0
-	if pushdownEnabled && types.T(pkType.Id).IsInteger() &&
-		!localProtocolEnablesSortedMembershipFilter(
-			builder.compCtx.GetProcess().GetService()) {
-		pushdownEnabled = false
-	}
-	if pushdownEnabled {
-		if val, err := builder.compCtx.ResolveVariable("fulltext_bloom_filter_pushdown", true, false); err == nil {
-			if v, ok := val.(int8); ok && v == 0 {
-				pushdownEnabled = false
-			}
-		}
-	}
-
 	var joinnodeID int32
 
 	if pushdownEnabled {
@@ -914,11 +970,40 @@ func (builder *QueryBuilder) buildFullTextCandidateLimit(
 	scanNode *plan.Node,
 	wrappedMatchFilters []*plan.Expr,
 	fullTextFilters []*plan.Expr,
+	indexDefs []*plan.IndexDef,
+	prefilterPushdown bool,
+	exactPrefilter bool,
 	paginationLimit *plan.Expr,
 	paginationOffset *plan.Expr,
 ) *plan.Expr {
-	if builder.sqlCalcFoundRows || scanNode == nil || len(scanNode.FilterList) != 0 ||
+	if builder.sqlCalcFoundRows || scanNode == nil ||
 		len(wrappedMatchFilters) != 0 || len(fullTextFilters) != 1 {
+		return nil
+	}
+	// A json probe must NEVER take a pushed LIMIT. It is a PREFILTER the
+	// optimizer injected, returning a superset that the retained predicate then
+	// narrows, so truncating it to k candidates yields fewer than k final rows
+	// and silently loses qualifying ones. Its own predicate always leaves a
+	// residual filter, and its mode is not FULLTEXT_BOOLEAN, so both paths below
+	// already decline — but only incidentally, and this rule's correctness is
+	// too important to rest on that.
+	if isJSONProbeMatch(fullTextFilters[0]) {
+		return nil
+	}
+	if len(scanNode.FilterList) == 0 {
+		limit, _ := buildCandidateLimit(paginationLimit, paginationOffset)
+		return limit
+	}
+	if !shouldPushFulltextCandidateLimit(
+		len(fullTextFilters), len(scanNode.FilterList), prefilterPushdown, exactPrefilter,
+	) || len(indexDefs) != 1 ||
+		!fulltext2ConjunctiveCandidateLimitEligible(fullTextFilters[0], indexDefs[0]) {
+		return nil
+	}
+	// The residual-filter path is admitted at plan time, so prepared or dynamic
+	// LIMIT values remain unbounded. The no-residual path above preserves main's
+	// existing dynamic-LIMIT behavior.
+	if _, literal := getLiteralUint64(paginationLimit); !literal {
 		return nil
 	}
 	limit, _ := buildCandidateLimit(paginationLimit, paginationOffset)
@@ -1699,6 +1784,134 @@ func monotoneWrappedFullTextMatch(expr *plan.Expr) *plan.Expr {
 }
 
 // nonNegativeConstValue returns the numeric value of a non-negative literal.
+// fulltextRuntimeScoreGuard rebuilds the score comparisons on matchFn that the planner
+// could not test, as a boolean the engine can.
+//
+// A threshold only known at EXECUTE -- a prepared '?' -- leaves the plan-time check in
+// collectDrivingFullTextMatches with nothing to read. Rather than invent a rule, this
+// takes the ACTUAL operator and the ACTUAL threshold off each predicate and asks the
+// same question about a relevance of 0: `0 <op> threshold`. True means a document this
+// index never returns would satisfy the predicate, so answering from the index would
+// drop exactly those rows -- the condition the planner rejects for a literal.
+//
+// This decides the VALUE only. The OPERATOR is decided at plan time by
+// collectDrivingFullTextMatches, which harvests `>` and `>=` alone, so the two paths
+// admit the same SHAPES and differ only in when the value is known.
+//
+// The conjuncts are ANDed, not ORed. `MATCH > ? AND MATCH < ?` is satisfied at
+// relevance 0 only when BOTH halves are, so ORing refuses a query the same literals
+// are accepted for (`> 0 AND < 5` returns rows). And a LITERAL conjunct counts:
+// one that already excludes relevance 0 makes the rewrite safe whatever the runtime
+// thresholds are, so no guard is emitted at all.
+//
+// Returns nil when the rewrite is safe by plan-time reasoning alone -- which includes
+// every all-literal query, so those carry no extra argument and no runtime cost.
+func (builder *QueryBuilder) fulltextRuntimeScoreGuard(
+	filters []*plan.Expr, matchFn *plan.Function) (*plan.Expr, error) {
+	var runtimeConds []*plan.Expr
+	literalExcludesZero := false
+	var walkErr error
+
+	var walk func(expr *plan.Expr)
+	walk = func(expr *plan.Expr) {
+		if expr == nil || walkErr != nil {
+			return
+		}
+		fn := expr.GetF()
+		if fn == nil || fn.Func == nil {
+			return
+		}
+		if fn.Func.ObjName == "and" {
+			for _, arg := range fn.Args {
+				walk(arg)
+			}
+			return
+		}
+		op := fn.Func.ObjName
+		switch op {
+		case ">", ">=", "<", "<=":
+		default:
+			return
+		}
+		if len(fn.Args) != 2 {
+			return
+		}
+		matchSide, constSide := fn.Args[0], fn.Args[1]
+		if monotoneWrappedFullTextMatch(matchSide) == nil {
+			matchSide, constSide = fn.Args[1], fn.Args[0]
+			switch op { // mirror the operator when the threshold is on the left
+			case ">":
+				op = "<"
+			case ">=":
+				op = "<="
+			case "<":
+				op = ">"
+			case "<=":
+				op = ">="
+			}
+		}
+		inner := monotoneWrappedFullTextMatch(matchSide)
+		if inner == nil || !builder.equalsFullTextMatchFuncSameTable(inner.GetF(), matchFn) {
+			return
+		}
+		if v, ok := constValueAsFloat(constSide); ok {
+			// Decidable now: this is the test collectDrivingFullTextMatches ran.
+			if !zeroRelevanceSatisfies(op, v) {
+				literalExcludesZero = true
+			}
+			return
+		}
+		if !isExecutionConstantExpr(constSide) {
+			return // a per-row expression decides nothing about relevance 0
+		}
+		cond, err := BindFuncExprImplByPlanExpr(builder.GetContext(), op, []*plan.Expr{
+			makePlan2Float64ConstExprWithType(0), DeepCopyExpr(constSide),
+		})
+		if err != nil {
+			walkErr = err
+			return
+		}
+		runtimeConds = append(runtimeConds, cond)
+	}
+
+	for _, f := range filters {
+		walk(f)
+	}
+	if walkErr != nil {
+		return nil, walkErr
+	}
+	if literalExcludesZero || len(runtimeConds) == 0 {
+		return nil, nil
+	}
+	guard := runtimeConds[0]
+	for _, c := range runtimeConds[1:] {
+		var err error
+		guard, err = BindFuncExprImplByPlanExpr(builder.GetContext(), "and", []*plan.Expr{guard, c})
+		if err != nil {
+			return nil, err
+		}
+	}
+	return guard, nil
+}
+
+// zeroRelevanceSatisfies reports whether a document with relevance 0 -- one the index
+// never returns -- satisfies `score <op> bound`. When it does, the index cannot answer
+// the predicate; this is the plan-time form of the guard above, and it must agree with
+// collectDrivingFullTextMatches, which harvests exactly the comparisons where it is false.
+func zeroRelevanceSatisfies(op string, bound float64) bool {
+	switch op {
+	case ">":
+		return 0 > bound
+	case ">=":
+		return 0 >= bound
+	case "<":
+		return 0 < bound
+	case "<=":
+		return 0 <= bound
+	}
+	return true
+}
+
 func nonNegativeConstValue(expr *plan.Expr) (float64, bool) {
 	lit := expr.GetLit()
 	if lit == nil {
@@ -1779,6 +1992,21 @@ func collectDrivingFullTextMatches(expr *plan.Expr, out []*plan.Expr) []*plan.Ex
 		matchExpr := monotoneWrappedFullTextMatch(matchSide)
 		if matchExpr == nil {
 			return out
+		}
+		// `>` and `>=` only, matching the operators the literal test below can accept.
+		// The VALUE is what a runtime threshold hides, and the engine guard re-checks
+		// it; the OPERATOR is known here on both paths. Harvesting `<` or `<=` -- which
+		// no literal value makes membership-implying -- would give the parameter form
+		// an evaluation path the literal form does not have: `MATCH < 0` raises 20105
+		// while `MATCH < ?` at 0 would execute and return rows.
+		if (op == ">" || op == ">=") && isExecutionConstantExpr(constSide) {
+			// The bound arrives at EXECUTE, so the plan-time test below cannot run.
+			// Refusing to harvest is not the safe choice it looks like: with no driving
+			// stream the MATCH has no evaluation path at all, and EXECUTE fails with
+			// 20105 even for an ordinary `> 0`. Harvest it; the same test is carried to
+			// the engine by fulltextRuntimeScoreGuard, which rebuilds this comparison
+			// against a relevance of 0 for the table function to check.
+			return append(out, matchExpr)
 		}
 		c, ok := nonNegativeConstValue(constSide)
 		if !ok {

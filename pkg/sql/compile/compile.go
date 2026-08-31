@@ -82,6 +82,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/vectorscan"
 	"github.com/matrixorigin/matrixone/pkg/sql/crt"
 	sqldatastream "github.com/matrixorigin/matrixone/pkg/sql/datastream"
+	"github.com/matrixorigin/matrixone/pkg/sql/foreignext"
 	"github.com/matrixorigin/matrixone/pkg/sql/internal/materialized"
 	sqlmongodb "github.com/matrixorigin/matrixone/pkg/sql/mongodb"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
@@ -188,6 +189,10 @@ func (c *Compile) Release() {
 	if c.proc != nil {
 		c.proc.ResetQueryContext()
 		c.proc.ResetCloneTxnOperator()
+		// Compile owns the immutable binding. Process only carries it while this
+		// execution is active; leaving it behind can contaminate a later lock
+		// caller that has no compiled plan.
+		c.proc.ClearPlanSnapshotTS()
 	}
 	doCompileRelease(c)
 }
@@ -219,6 +224,49 @@ func (c *Compile) GetPlan() *plan.Plan {
 	return c.pn
 }
 
+// PlanGenerationRebuilt reports whether a retry rebuilt this Compile's logical
+// plan. A frontend prepared statement must then discard both the old logical
+// plan and any physical topology derived from it.
+func (c *Compile) PlanGenerationRebuilt() bool {
+	return c != nil && c.planGenerationRebuilt
+}
+
+// PlanSnapshotTS returns the snapshot bound to the current logical-plan
+// generation. The binding is immutable until a definition-change retry
+// publishes a replacement plan generation.
+func (c *Compile) PlanSnapshotTS() (timestamp.Timestamp, bool) {
+	if c == nil || !c.hasPlanSnapshotTS {
+		return timestamp.Timestamp{}, false
+	}
+	return c.planSnapshotTS, true
+}
+
+// SetPlanSnapshotTS binds Compile to the snapshot of an already-built logical
+// plan. It must be called before Compile when planning and physical compilation
+// are separated, as they are for prepared statements without a cached pipeline.
+func (c *Compile) SetPlanSnapshotTS(ts timestamp.Timestamp) {
+	c.planSnapshotTS = ts
+	c.hasPlanSnapshotTS = true
+	c.planGenerationReused = false
+	c.applyPlanSnapshot()
+}
+
+// SetPlanGenerationReused marks whether the current execution admitted this
+// logical-plan generation from a session or prepared cache.
+func (c *Compile) SetPlanGenerationReused(reused bool) {
+	c.planGenerationReused = reused
+	c.applyPlanSnapshot()
+}
+
+// FreezeResultMetadata prevents a definition retry from executing a rebuilt
+// plan whose result schema differs from metadata already materialized by the
+// frontend or another streaming consumer.
+func (c *Compile) FreezeResultMetadata() {
+	if c != nil {
+		c.resultMetadataFrozen = true
+	}
+}
+
 func (c *Compile) Reset(proc *process.Process, startAt time.Time, fill func(*batch.Batch, *perfcounter.CounterSet) error, sql string) error {
 	if c.siriusRead != nil {
 		if err := c.siriusRead.finish(context.Background(), false); err != nil {
@@ -231,13 +279,17 @@ func (c *Compile) Reset(proc *process.Process, startAt time.Time, fill func(*bat
 	proc.ResetCloneTxnOperator()
 	c.proc = proc
 	c.proc.BeginFoundRowsStatement(statementHasSQLCalcFoundRows(c.stmt))
-	c.reusePlanSnapshot = false
-	c.capturePlanSnapshot()
+	c.applyPlanSnapshot()
+	c.captureStringShuffleHashAlgorithm()
 
 	c.fill = fill
 	c.sql = sql
 	c.affectRows.Store(0)
+	// Reset reuses an existing logical/physical generation. Reused generations
+	// are deliberately ineligible for LOAD unique-index promotion.
+	c.clearLoadUniqueIndexPromotion()
 	c.executionGeneration = 0
+	c.resultMetadataFrozen = false
 	c.anal.Reset(c.isPrepare, c.IsTpQuery())
 
 	if c.lockMeta != nil {
@@ -290,22 +342,86 @@ func (c *Compile) Reset(proc *process.Process, startAt time.Time, fill func(*bat
 	return nil
 }
 
-// capturePlanSnapshot starts a new plan-execution generation. Definition
-// fences must be compared with this immutable timestamp, not with a mutable RC
-// transaction snapshot that an earlier lock may have advanced.
+// capturePlanSnapshot starts a new compiled-plan generation. Compile owns the
+// binding; Process only transports it to local and remote pipeline operators.
 func (c *Compile) capturePlanSnapshot() {
+	c.planGenerationReused = false
 	txnOp := c.proc.GetTxnOperator()
 	if txnOp == nil {
+		c.hasPlanSnapshotTS = false
+		c.planSnapshotTS = timestamp.Timestamp{}
+		c.applyPlanSnapshot()
+		return
+	}
+	c.planSnapshotTS = txnOp.Txn().SnapshotTS
+	c.hasPlanSnapshotTS = true
+	c.applyPlanSnapshot()
+}
+
+// applyPlanSnapshot binds the Process transport to this Compile's immutable
+// plan generation. In particular, Reset must apply rather than recapture it.
+func (c *Compile) applyPlanSnapshot() {
+	if !c.hasPlanSnapshotTS {
 		c.proc.ClearPlanSnapshotTS()
 		return
 	}
-	c.proc.SetPlanSnapshotTS(txnOp.Txn().SnapshotTS)
+	c.proc.SetPlanSnapshotTS(c.planSnapshotTS)
+	c.proc.SetPlanGenerationReused(c.planGenerationReused)
+}
+
+func (c *Compile) inheritPlanSnapshot(from *Compile) {
+	c.planSnapshotTS = from.planSnapshotTS
+	c.hasPlanSnapshotTS = from.hasPlanSnapshotTS
+	c.planGenerationReused = from.planGenerationReused
+	c.applyPlanSnapshot()
 }
 
 func (c *Compile) bindPlanSnapshotForCompile() {
-	if !c.reusePlanSnapshot {
+	if !c.hasPlanSnapshotTS {
 		c.capturePlanSnapshot()
+		return
 	}
+	c.applyPlanSnapshot()
+}
+
+// captureStringShuffleHashAlgorithm starts a new execution owner-mapping
+// generation. MOProtocolVersion is consulted exactly once; operators consume
+// only the frozen Process value afterwards.
+func (c *Compile) captureStringShuffleHashAlgorithm() {
+	c.stringShuffleHashAlgorithm = process.StringShuffleHashLegacy
+	if supportsStableStringShuffleHash(c.proc.GetService()) {
+		c.stringShuffleHashAlgorithm = process.StringShuffleHashComplete
+	}
+	c.stringShuffleHashAlgorithmFrozen = true
+	c.applyStringShuffleHashAlgorithm()
+}
+
+func (c *Compile) applyStringShuffleHashAlgorithm() {
+	c.proc.SetStringShuffleHashAlgorithm(c.stringShuffleHashAlgorithm)
+}
+
+func (c *Compile) inheritStringShuffleHashAlgorithm(from *Compile) {
+	c.stringShuffleHashAlgorithm = from.stringShuffleHashAlgorithm
+	c.stringShuffleHashAlgorithmFrozen = from.stringShuffleHashAlgorithmFrozen
+	c.applyStringShuffleHashAlgorithm()
+}
+
+func (c *Compile) bindStringShuffleHashAlgorithmForCompile() {
+	if !c.stringShuffleHashAlgorithmFrozen {
+		c.captureStringShuffleHashAlgorithm()
+		return
+	}
+	c.applyStringShuffleHashAlgorithm()
+}
+
+func supportsStableStringShuffleHash(service string) bool {
+	rt := moruntime.ServiceRuntime(service)
+	if rt == nil {
+		return false
+	}
+	version, ok := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
+	protocolVersion, valid := version.(int64)
+	return ok && valid && protocolVersion >= defines.MORPCVersion33
 }
 
 func UpdateScopeTxnOffset(scope *Scope, txnOffset int) {
@@ -354,6 +470,7 @@ func (c *Compile) clear() {
 	c.originSQL = ""
 	c.anal = nil
 	c.e = nil
+	c.clearLoadUniqueIndexPromotion()
 
 	if c.lockMeta != nil {
 		c.lockMeta.clear(c.proc)
@@ -362,7 +479,13 @@ func (c *Compile) clear() {
 
 	c.proc.Free()
 	c.proc = nil
-	c.reusePlanSnapshot = false
+	c.planSnapshotTS = timestamp.Timestamp{}
+	c.hasPlanSnapshotTS = false
+	c.planGenerationReused = false
+	c.stringShuffleHashAlgorithm = process.StringShuffleHashLegacy
+	c.stringShuffleHashAlgorithmFrozen = false
+	c.resultMetadataFrozen = false
+	c.planGenerationRebuilt = false
 
 	c.cnList = c.cnList[:0]
 	c.queryPlacement = schedule.QueryDecision{}
@@ -484,12 +607,7 @@ func (c *Compile) run(s *Scope) error {
 		c.addAffectedRows(s.affectedRows())
 		return err
 	case CreateDatabase:
-		err := s.CreateDatabase(c)
-		if err != nil {
-			return err
-		}
-		c.setAffectedRows(1)
-		return nil
+		return s.CreateDatabase(c)
 	case DropDatabase:
 		err := s.DropDatabase(c)
 		if err != nil {
@@ -773,6 +891,9 @@ func (c *Compile) prePipelineInitializer() (err error) {
 		return err
 	}
 	if err = c.lockTable(); err != nil {
+		return err
+	}
+	if err = c.maybePromoteLoadUniqueIndexes(); err != nil {
 		return err
 	}
 
@@ -1701,35 +1822,30 @@ func (c *Compile) compilePlanScopeWithUnionAllDemand(
 		ss = c.compileSort(node, ss)
 		return ss, nil
 	case plan.Node_AGG:
-		ss, err = c.compilePlanScope(step, node.Children[0], nodes)
+		childNodeID := node.Children[0]
+		childNode := nodes[childNodeID]
+		if isLocalPreAggregationGroup(node, childNode) {
+			ss, err = c.compileLocalPreAggregationScope(step, childNodeID, nodes)
+		} else {
+			ss, err = c.compilePlanScope(step, childNodeID, nodes)
+		}
 		if err != nil {
 			return nil, err
 		}
-		groupInfo := constructGroup(c.proc.Ctx, node, nodes[node.Children[0]], false, 0, c.proc)
+		groupInfo := constructGroup(c.proc.Ctx, node, childNode, false, 0, c.proc)
 		defer groupInfo.Release()
 		distinctRequiresSingleStage := plan2.RequiresSingleStageDistinctAgg(node)
 
 		c.setAnalyzeCurrent(ss, int(curNodeIdx))
 		ss = c.ensureCoordinatorOnlyFunctions(node, ss)
-		orderedGroupConcat := hasOrderedGroupConcat(node)
-		orderedSetPercentile := hasOrderedSetPercentile(node)
 		if c.canCompileShuffleGroup(node) {
 			ss = c.compileSort(node, c.compileProjection(node, c.compileRestrict(node, c.compileShuffleGroup(node, ss, nodes))))
 			return ss, nil
 		}
-		if orderedGroupConcat || orderedSetPercentile {
-			ss = c.compileOrderedAggregateSingleStage(node, ss, nodes)
-			ss = c.compileSort(node, c.compileProjection(node, c.compileRestrict(node, ss)))
-			return ss, nil
-		}
-		if c.IsSingleScope(ss) {
-			ss = c.compileSort(node, c.compileProjection(node, c.compileRestrict(node, c.compileTPGroup(node, ss, nodes))))
-			return ss, nil
-		} else {
-			ss = c.compileSort(node, c.compileProjection(node, c.compileRestrict(node,
-				c.compileMergeGroup(node, ss, nodes, distinctRequiresSingleStage))))
-			return ss, nil
-		}
+		ss = c.compileGroupWithoutShuffle(
+			node, ss, nodes, distinctRequiresSingleStage)
+		ss = c.compileSort(node, c.compileProjection(node, c.compileRestrict(node, ss)))
+		return ss, nil
 	case plan.Node_SAMPLE:
 		ss, err = c.compilePlanScope(step, node.Children[0], nodes)
 		if err != nil {
@@ -2718,6 +2834,34 @@ func (c *Compile) compileForeignScan(node *plan.Node, strictSqlMode bool) ([]*Sc
 	if err != nil {
 		return nil, err
 	}
+	// Predicate pushdown, SQL only and opt-in ('pushdown' = 'true'): wrap each
+	// query text as a derived table carrying the conjuncts MO can render, and
+	// stop evaluating those locally -- the source has them now.
+	//
+	// Opting in is a statement about the source: that its result columns are
+	// the DECLARED ones, by name, because a WHERE clause has to name what it
+	// filters and MO writes the names it knows. The reader checks that claim
+	// against the columns the source actually answers with, and errors when it
+	// does not hold. Predicates MO cannot render stay local, since there is
+	// nothing to send.
+	if fs.Pushdown && fs.Kind == foreignext.KindSQL && len(residual) > 0 {
+		// Bare identifiers: the quoting character is dialect-specific, and
+		// sql_tvf speaks to PostgreSQL as well as MySQL.
+		filter, pushed := sqldatastream.DeparseFiltersBareIdents(
+			residual, pushdownCols(node.TableDef.Cols), c.proc.GetSessionInfo().TimeZone)
+		if filter != "" {
+			for i := range queryList {
+				queryList[i] = foreignext.WrapPushdownQuery(queryList[i], filter)
+			}
+			kept := make([]*plan.Expr, 0, len(residual))
+			for i, expr := range residual {
+				if !pushed[i] {
+					kept = append(kept, expr)
+				}
+			}
+			residual = kept
+		}
+	}
 	node.FilterList = residual
 
 	param := external.ForeignExternParam(fs.Kind)
@@ -2730,6 +2874,27 @@ func (c *Compile) compileForeignScan(node *plan.Node, strictSqlMode bool) ([]*Sc
 	scope.setRootOperator(op)
 	c.anal.isFirst = false
 	return []*Scope{scope}, nil
+}
+
+// pushdownCols masks the synthetic external-scan columns out of a scan's
+// column list.  They exist only inside MO -- __mo_query selects which query
+// runs, the error-mode columns are synthesized by the reader -- so a conjunct
+// mentioning one must never be rendered into the source's WHERE clause.  The
+// deparser resolves column refs by position and already refuses a nil entry,
+// so blanking the slot is enough.
+//
+// The mask is by name, which is blunter than the (name, ColId) scoping used
+// elsewhere: a pre-existing schema may hold a REAL column called __mo_query,
+// and masking it merely costs that one conjunct its pushdown.
+func pushdownCols(cols []*plan.ColDef) []*plan.ColDef {
+	masked := make([]*plan.ColDef, len(cols))
+	for i, col := range cols {
+		if col == nil || catalog.IsReservedExternalColName(col.Name) {
+			continue
+		}
+		masked[i] = col
+	}
+	return masked
 }
 
 // compileKafkaScan compiles a scan of a Kafka external table. The read
@@ -4779,14 +4944,32 @@ func (c *Compile) mergeDistinctSetScopes(node *plan.Node, scopes []*Scope, isFir
 		gn.GroupBy[i] = plan2.DeepCopyExpr(node.ProjectList[i])
 		gn.GroupBy[i].Typ.NotNullable = false
 	}
+	if len(node.PhysicalEqualityKeyList) > 0 {
+		visibleCount := len(gn.GroupBy)
+		for i, expr := range node.PhysicalEqualityKeyList {
+			key := plan2.DeepCopyExpr(expr)
+			key.Typ.NotNullable = false
+			gn.GroupBy = append(gn.GroupBy, key)
+			gn.GroupByHashKey = append(gn.GroupByHashKey, int32(visibleCount+i))
+		}
+	}
 	op := constructGroup(c.proc.Ctx, gn, node, true, 0, c.proc)
+	if len(node.PhysicalEqualityKeyList) > 0 {
+		op.ProjectList = make([]*plan.Expr, len(node.ProjectList))
+		for i, expr := range node.ProjectList {
+			op.ProjectList[i] = &plan.Expr{
+				Typ:  expr.Typ,
+				Expr: &plan.Expr_Col{Col: &plan.ColRef{ColPos: int32(i)}},
+			}
+		}
+	}
 	op.SetAnalyzeControl(c.anal.curNodeIdx, isFirst)
 	rs.setRootOperator(op)
 	c.anal.isFirst = false
 	return []*Scope{rs}
 }
 
-func (c *Compile) compileTpMinusAndIntersect(left []*Scope, right []*Scope, nodeType plan.Node_NodeType) []*Scope {
+func (c *Compile) compileTpMinusAndIntersect(node *plan.Node, left []*Scope, right []*Scope, nodeType plan.Node_NodeType) []*Scope {
 	rs := c.newScopeListOnSingleWorkerStage(2, 1)
 	rs[0].PreScopes = append(rs[0].PreScopes, left[0], right[0])
 
@@ -4807,16 +4990,19 @@ func (c *Compile) compileTpMinusAndIntersect(left []*Scope, right []*Scope, node
 	switch nodeType {
 	case plan.Node_MINUS:
 		arg := minus.NewArgument()
+		arg.KeyExprs = node.PhysicalEqualityKeyList
 		arg.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
 		rs[0].setRootOperator(arg)
 		arg.AppendChild(merge1)
 	case plan.Node_INTERSECT:
 		arg := intersect.NewArgument()
+		arg.KeyExprs = node.PhysicalEqualityKeyList
 		arg.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
 		rs[0].setRootOperator(arg)
 		arg.AppendChild(merge1)
 	case plan.Node_INTERSECT_ALL:
 		arg := intersectall.NewArgument()
+		arg.KeyExprs = node.PhysicalEqualityKeyList
 		arg.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
 		rs[0].setRootOperator(arg)
 		arg.AppendChild(merge1)
@@ -4827,7 +5013,7 @@ func (c *Compile) compileTpMinusAndIntersect(left []*Scope, right []*Scope, node
 
 func (c *Compile) compileMinusAndIntersect(node *plan.Node, left []*Scope, right []*Scope, nodeType plan.Node_NodeType) []*Scope {
 	if c.IsSingleScope(left) && c.IsSingleScope(right) {
-		return c.compileTpMinusAndIntersect(left, right, nodeType)
+		return c.compileTpMinusAndIntersect(node, left, right, nodeType)
 	}
 	rs := c.newScopeListOnSingleWorkerStage(2, int(node.Stats.Dop))
 	rs = c.newScopeListForMinusAndIntersect(rs, left, right, node)
@@ -4841,6 +5027,7 @@ func (c *Compile) compileMinusAndIntersect(node *plan.Node, left []*Scope, right
 			merge0.WithPartial(0, 1)
 			merge1 := merge.NewArgument().WithPartial(1, 2)
 			arg := minus.NewArgument()
+			arg.KeyExprs = node.PhysicalEqualityKeyList
 			arg.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
 			rs[i].setRootOperator(arg)
 			arg.AppendChild(merge1)
@@ -4851,6 +5038,7 @@ func (c *Compile) compileMinusAndIntersect(node *plan.Node, left []*Scope, right
 			merge0.WithPartial(0, 1)
 			merge1 := merge.NewArgument().WithPartial(1, 2)
 			arg := intersect.NewArgument()
+			arg.KeyExprs = node.PhysicalEqualityKeyList
 			arg.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
 			rs[i].setRootOperator(arg)
 			arg.AppendChild(merge1)
@@ -4861,6 +5049,7 @@ func (c *Compile) compileMinusAndIntersect(node *plan.Node, left []*Scope, right
 			merge0.WithPartial(0, 1)
 			merge1 := merge.NewArgument().WithPartial(1, 2)
 			arg := intersectall.NewArgument()
+			arg.KeyExprs = node.PhysicalEqualityKeyList
 			arg.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
 			rs[i].setRootOperator(arg)
 			arg.AppendChild(merge1)
@@ -6180,6 +6369,112 @@ func (c *Compile) compileTPGroup(node *plan.Node, ss []*Scope, ns []*plan.Node) 
 	return ss
 }
 
+func (c *Compile) compileGroupWithoutShuffle(
+	node *plan.Node,
+	ss []*Scope,
+	ns []*plan.Node,
+	distinctRequiresSingleStage bool,
+) []*Scope {
+	if hasOrderedGroupConcat(node) || hasOrderedSetPercentile(node) ||
+		(hasVarianceAggregate(node) && !c.supportsRemoteVarianceAggregates()) {
+		return c.compileOrderedAggregateSingleStage(node, ss, ns)
+	}
+	if c.IsSingleScope(ss) {
+		return c.compileTPGroup(node, ss, ns)
+	}
+	return c.compileMergeGroup(
+		node, ss, ns, distinctRequiresSingleStage)
+}
+
+func isLocalPreAggregationGroup(parent, child *plan.Node) bool {
+	if parent == nil || child == nil ||
+		parent.NodeType != plan.Node_AGG || child.NodeType != plan.Node_AGG ||
+		parent.Stats == nil || parent.Stats.HashmapStats == nil ||
+		!parent.Stats.HashmapStats.Shuffle ||
+		len(parent.AggList) != 0 || len(child.AggList) != 0 ||
+		len(parent.GroupBy) == 0 || len(parent.GroupBy) != len(child.GroupBy) ||
+		len(parent.GroupingFlag) != 0 || len(child.GroupingFlag) != 0 ||
+		len(child.Children) != 1 ||
+		child.Limit != nil || child.Offset != nil ||
+		len(child.FilterList) != 0 || !isIdentityGroupByProjection(child) {
+		return false
+	}
+	for i, expr := range parent.GroupBy {
+		col := expr.GetCol()
+		if col == nil {
+			return false
+		}
+		if len(child.BindingTags) > 0 &&
+			col.RelPos == child.BindingTags[0] && col.ColPos == int32(i) {
+			continue
+		}
+		if col.RelPos != 0 || col.ColPos < 0 || int(col.ColPos) >= len(child.ProjectList) {
+			return false
+		}
+		projectCol := child.ProjectList[col.ColPos].GetCol()
+		if projectCol == nil || projectCol.RelPos != -1 || projectCol.ColPos != int32(i) {
+			return false
+		}
+	}
+	return true
+}
+
+func isIdentityGroupByProjection(node *plan.Node) bool {
+	if len(node.ProjectList) == 0 {
+		return true
+	}
+	if len(node.ProjectList) != len(node.GroupBy) {
+		return false
+	}
+	for i, expr := range node.ProjectList {
+		col := expr.GetCol()
+		if col == nil || col.RelPos != -1 || col.ColPos != int32(i) {
+			return false
+		}
+	}
+	return true
+}
+
+func (c *Compile) compileLocalPreAggregationScope(
+	step int32,
+	nodeID int32,
+	nodes []*plan.Node,
+) ([]*Scope, error) {
+	node := nodes[nodeID]
+	ss, err := c.compilePlanScope(step, node.Children[0], nodes)
+	if err != nil {
+		return nil, err
+	}
+	groupInfo := constructGroup(c.proc.Ctx, node, nodes[node.Children[0]], false, 0, c.proc)
+	defer groupInfo.Release()
+
+	c.setAnalyzeCurrent(ss, int(nodeID))
+	ss = c.ensureCoordinatorOnlyFunctions(node, ss)
+	ss = c.compileLocalGroupBy(node, ss, nodes)
+	ss = c.compileSort(node, c.compileProjection(node, c.compileRestrict(node, ss)))
+	return ss, nil
+}
+
+// compileLocalGroupBy performs only the duplicate-reduction half of a logical
+// GROUP BY. The planner emits this contract only when a downstream GROUP BY
+// completes the same key after exchange, so merging here would defeat the
+// pre-exchange reduction without adding correctness.
+func (c *Compile) compileLocalGroupBy(
+	node *plan.Node,
+	ss []*Scope,
+	ns []*plan.Node,
+) []*Scope {
+	currentFirstFlag := c.anal.isFirst
+	for i := range ss {
+		op := constructGroup(c.proc.Ctx, node, ns[node.Children[0]], false, 0, c.proc)
+		op.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
+		ss[i].setRootOperator(op)
+		ss[i].HasPartialResults = false
+	}
+	c.anal.isFirst = false
+	return ss
+}
+
 func (c *Compile) compileMergeGroup(
 	node *plan.Node,
 	ss []*Scope,
@@ -6274,6 +6569,19 @@ func hasOrderedSetPercentile(node *plan.Node) bool {
 	return false
 }
 
+func hasVarianceAggregate(node *plan.Node) bool {
+	for _, agg := range node.AggList {
+		if fn := agg.GetF(); fn != nil {
+			switch int64(uint64(fn.Func.Obj) & function.DistinctMask) {
+			case aggexec.AggIdOfVarPop, aggexec.AggIdOfVarSample,
+				aggexec.AggIdOfStdDevPop, aggexec.AggIdOfStdDevSample:
+				return true
+			}
+		}
+	}
+	return false
+}
+
 func (c *Compile) supportsRemoteOrderedAggregates() bool {
 	return supportsRemoteOrderedAggregates(c.proc.GetService())
 }
@@ -6305,6 +6613,16 @@ func supportsRemoteOrderedSetAggregates(service string) bool {
 	return ok && protocolVersion >= defines.MORPCVersion17
 }
 
+func (c *Compile) supportsRemoteVarianceAggregates() bool {
+	version, ok := moruntime.ServiceRuntime(c.proc.GetService()).
+		GetGlobalVariables(moruntime.MOProtocolVersion)
+	if !ok {
+		return false
+	}
+	protocolVersion, ok := version.(int64)
+	return ok && protocolVersion >= defines.MORPCVersion35
+}
+
 func (c *Compile) supportsRemotePartitionTopN() bool {
 	version, ok := moruntime.ServiceRuntime(c.proc.GetService()).
 		GetGlobalVariables(moruntime.MOProtocolVersion)
@@ -6322,7 +6640,7 @@ func supportsMultiSourceISCP(service string) bool {
 		return false
 	}
 	protocolVersion, ok := version.(int64)
-	return ok && protocolVersion >= defines.MORPCVersion30
+	return ok && protocolVersion >= defines.MORPCVersion41
 }
 
 func supportsRemoteTextCollationAggregates(service string) bool {
@@ -6397,6 +6715,19 @@ func supportsRemoteCrossDomainStringLiterals(service string) bool {
 	return ok && protocolVersion >= defines.MORPCVersion23
 }
 
+func remoteMORPCProtocolVersion(service string) (int64, bool) {
+	rt := moruntime.ServiceRuntime(service)
+	if rt == nil {
+		return 0, false
+	}
+	version, ok := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
+	if !ok {
+		return 0, false
+	}
+	protocolVersion, ok := version.(int64)
+	return protocolVersion, ok
+}
+
 func supportsRemoteStatementLastInsertID(service string) bool {
 	rt := moruntime.ServiceRuntime(service)
 	if rt == nil {
@@ -6423,11 +6754,25 @@ func supportsRemoteUpdateChangedRows(service string) bool {
 	return ok && protocolVersion >= defines.MORPCVersion25
 }
 
+func supportsRemotePadSpaceSemantics(service string) bool {
+	rt := moruntime.ServiceRuntime(service)
+	if rt == nil {
+		return false
+	}
+	version, ok := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
+	if !ok {
+		return false
+	}
+	protocolVersion, ok := version.(int64)
+	return ok && protocolVersion >= defines.MORPCVersion40
+}
+
 func (c *Compile) canCompileShuffleGroup(node *plan.Node) bool {
 	return node.Stats.HashmapStats != nil &&
 		node.Stats.HashmapStats.Shuffle &&
 		(!hasOrderedGroupConcat(node) || c.supportsRemoteOrderedAggregates()) &&
-		(!hasOrderedSetPercentile(node) || c.supportsRemoteOrderedSetAggregates())
+		(!hasOrderedSetPercentile(node) || c.supportsRemoteOrderedSetAggregates()) &&
+		(!hasVarianceAggregate(node) || c.supportsRemoteVarianceAggregates())
 }
 
 func (c *Compile) compileLocalShuffleGroup(node *plan.Node, inputSS []*Scope, nodes []*plan.Node) []*Scope {
@@ -6456,6 +6801,18 @@ func (c *Compile) compileShuffleGroup(node *plan.Node, inputSS []*Scope, nodes [
 		}
 		c.anal.isFirst = false
 		return inputSS
+	}
+	// A normal shuffle is useful only when it creates more than one physical
+	// aggregate owner. In particular, max_dop=1 on one CN would otherwise hash
+	// every row into one bucket and add a dispatch/receiver pipeline with no
+	// reduction in retained aggregate state.
+	if node.Stats.Dop <= 1 && len(stageNodes) <= 1 {
+		return c.compileGroupWithoutShuffle(
+			node,
+			inputSS,
+			nodes,
+			plan2.RequiresSingleStageDistinctAgg(node),
+		)
 	}
 	if len(stageNodes) == 1 && len(inputSS) == 1 && inputSS[0].NodeInfo.Mcpu > 1 && inputSS[0].NodeInfo.Mcpu == int(node.Stats.Dop) {
 		return c.compileLocalShuffleGroup(node, inputSS, nodes)
@@ -6914,7 +7271,27 @@ func (c *Compile) compileDelete(node *plan.Node, ss []*Scope) ([]*Scope, error) 
 
 func (c *Compile) compileLock(node *plan.Node, ss []*Scope) ([]*Scope, error) {
 	lockRows := make([]*plan.LockTarget, 0, len(node.LockTargets))
-	for _, tbl := range node.LockTargets {
+	localizeLoadPlan := c.loadUniqueIndexPromotion != nil
+	filterPromotedRows := false
+	if state := c.loadUniqueIndexPromotion; state != nil &&
+		state.phase == loadUniqueIndexPromotionFenced {
+		if err := state.validateRetryProof(c); err != nil {
+			return nil, err
+		}
+		filterPromotedRows = true
+	}
+	for _, canonicalTarget := range node.LockTargets {
+		if filterPromotedRows && c.loadUniqueIndexPromotion.coversRowTarget(canonicalTarget) {
+			continue
+		}
+		tbl := canonicalTarget
+		if localizeLoadPlan && (canonicalTarget.LockTable || canonicalTarget.LockTableAtTheEnd) {
+			// Only table-lock disposition is annotated during physical compile. A
+			// shallow value copy keeps the canonical generation immutable without
+			// changing allocation or mutation behavior for non-candidate statements.
+			localTarget := *canonicalTarget
+			tbl = &localTarget
+		}
 		if c.shouldPrePipelineLockTable(tbl) {
 			c.lockTables[tbl.TableId] = tbl
 		} else {
@@ -6923,15 +7300,19 @@ func (c *Compile) compileLock(node *plan.Node, ss []*Scope) ([]*Scope, error) {
 			}
 		}
 	}
-	node.LockTargets = lockRows
-	if len(node.LockTargets) == 0 {
+	if !localizeLoadPlan {
+		// Preserve exact-main compile behavior outside the positively admitted
+		// LOAD path, including its existing canonical-node reuse contract.
+		node.LockTargets = lockRows
+	}
+	if len(lockRows) == 0 {
 		return ss, nil
 	}
 
 	block := false
 	// only pessimistic txn needs to block downstream operators.
 	if c.proc.GetTxnOperator().Txn().IsPessimistic() {
-		block = node.LockTargets[0].Block
+		block = lockRows[0].Block
 		if block {
 			c.needBlock = true
 		}
@@ -6944,7 +7325,13 @@ func (c *Compile) compileLock(node *plan.Node, ss []*Scope) ([]*Scope, error) {
 	}
 	var err error
 	var lockOpArg *lockop.LockOp
-	lockOpArg, err = constructLockOp(node, c.e)
+	lockNode := node
+	if localizeLoadPlan {
+		localNode := *node
+		localNode.LockTargets = lockRows
+		lockNode = &localNode
+	}
+	lockOpArg, err = constructLockOp(lockNode, c.e)
 	if err != nil {
 		return nil, err
 	}
@@ -7939,7 +8326,11 @@ func checkAggOptimize(node *plan.Node) ([]any, []types.T, map[int]int) {
 			}
 			col, ok := args.Expr.(*plan.Expr_Col)
 			if !ok {
-				if _, ok := args.Expr.(*plan.Expr_Lit); ok {
+				if lit, ok := args.Expr.(*plan.Expr_Lit); ok {
+					// COUNT(NULL) must count zero values, not all input rows.
+					if lit.Lit == nil || lit.Lit.Isnull {
+						return nil, nil, nil
+					}
 					// COUNT(lit) e.g. count(1) from count(*): set ObjName+Obj so runtime uses countStarExec
 					agg.F.Func.ObjName = "starcount"
 					agg.F.Func.Obj = function.EncodeOverloadID(int32(function.STARCOUNT), 0)
@@ -8368,9 +8759,11 @@ func (c *Compile) runSqlWithResultAndOptions(
 
 	lower := c.getLower()
 
-	if qry, ok := c.pn.Plan.(*plan.Plan_Ddl); ok {
-		if qry.Ddl.DdlType == plan.DataDefinition_DROP_DATABASE {
-			options = options.WithIgnoreForeignKey()
+	if c.pn != nil {
+		if qry, ok := c.pn.Plan.(*plan.Plan_Ddl); ok {
+			if qry.Ddl.DdlType == plan.DataDefinition_DROP_DATABASE {
+				options = options.WithIgnoreForeignKey()
+			}
 		}
 	}
 

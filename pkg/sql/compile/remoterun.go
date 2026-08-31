@@ -25,6 +25,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
@@ -90,6 +91,9 @@ func encodeScope(s *Scope) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
+	if err = validateRemotePadSpacePipelineProtocol(s.Proc, p); err != nil {
+		return nil, err
+	}
 	return p.Marshal()
 }
 
@@ -99,6 +103,12 @@ func encodeRemoteScope(s *Scope, proc *process.Process) ([]byte, error) {
 		return nil, err
 	}
 	if err = validateRemoteStringProvenancePipelineProtocol(proc, p); err != nil {
+		return nil, err
+	}
+	if err = validateRemoteExpressionPipelineProtocol(proc, p); err != nil {
+		return nil, err
+	}
+	if err = validateRemotePadSpacePipelineProtocol(proc, p); err != nil {
 		return nil, err
 	}
 	return p.Marshal()
@@ -165,6 +175,9 @@ func decodeScope(data []byte, proc *process.Process, isRemote bool, eng engine.E
 		if err = validateRemoteStringProvenancePipelineProtocol(proc, p); err != nil {
 			return nil, err
 		}
+		if err = validateRemoteExpressionPipelineProtocol(proc, p); err != nil {
+			return nil, err
+		}
 		if err = validateRemoteStatementLastInsertIDPipelineProtocol(proc, p); err != nil {
 			return nil, err
 		}
@@ -175,6 +188,9 @@ func decodeScope(data []byte, proc *process.Process, isRemote bool, eng engine.E
 			return nil, err
 		}
 		if err = validateRemoteRightDedupInputKeysUniquePipelineProtocol(proc, p); err != nil {
+			return nil, err
+		}
+		if err = validateRemotePadSpacePipelineProtocol(proc, p); err != nil {
 			return nil, err
 		}
 	} else if err = plan.ValidateStringLiteralFormsInOwner(p); err != nil {
@@ -466,6 +482,7 @@ func generateScope(proc *process.Process, p *pipeline.Pipeline, ctx *scopeContex
 		s.NodeInfo.Data = relData
 	}
 	s.Proc = proc.NewNoContextChildProcWithChannel(int(p.ChildrenCount), p.ChannelBufferSize, p.NilBatchCnt)
+	ctx.scope = s
 	{
 		for i := range s.Proc.Reg.MergeReceivers {
 			ctx.regs[s.Proc.Reg.MergeReceivers[i]] = int32(i)
@@ -606,6 +623,13 @@ func convertToPipelineInstruction(op vm.Operator, proc *process.Process, ctx *sc
 			PreInsertSkCtx: t.PreInsertCtx,
 		}
 	case *shuffle.Shuffle:
+		if proc != nil && proc.UsesCompleteStringShuffleHash() &&
+			t.ShuffleType == int32(plan.ShuffleType_Hash) && t.StringHashKey {
+			// This appended wire opcode is deliberately unknown to pre-v33
+			// receivers, which then fail before execution instead of silently
+			// rebuilding a legacy-hash Shuffle.
+			in.Op = int32(vm.ShuffleStable)
+		}
 		in.Shuffle = &pipeline.Shuffle{}
 		in.Shuffle.ShuffleColIdx = t.ShuffleColIdx
 		in.Shuffle.ShuffleType = t.ShuffleType
@@ -617,6 +641,7 @@ func convertToPipelineInstruction(op vm.Operator, proc *process.Process, ctx *sc
 		in.Shuffle.RuntimeFilterSpec = t.RuntimeFilterSpec
 		in.Shuffle.ShuffleExpr = t.ShuffleExpr
 		in.Shuffle.DrainAllBuckets = t.DrainAllBuckets
+		in.Shuffle.StringHashKey = t.StringHashKey
 	case *dispatch.Dispatch:
 		in.Dispatch = &pipeline.Dispatch{IsSink: t.IsSink, ShuffleType: t.ShuffleType, RecSink: t.RecSink, RecCte: t.RecCTE, FuncId: int32(t.FuncId)}
 		in.Dispatch.ShuffleRegIdxLocal = make([]int32, len(t.ShuffleRegIdxLocal))
@@ -742,9 +767,12 @@ func convertToPipelineInstruction(op vm.Operator, proc *process.Process, ctx *sc
 	case *top.Top:
 		in.Limit = t.Limit
 		in.OrderBy = t.Fs
-	// we reused ANTI to store the information here because of the lack of related structure.
-	case *intersect.Intersect, *minus.Minus, *intersectall.IntersectAll:
-		in.SetOp = &pipeline.SetOp{}
+	case *intersect.Intersect:
+		in.SetOp = &pipeline.SetOp{KeyExprs: t.KeyExprs}
+	case *minus.Minus:
+		in.SetOp = &pipeline.SetOp{KeyExprs: t.KeyExprs}
+	case *intersectall.IntersectAll:
+		in.SetOp = &pipeline.SetOp{KeyExprs: t.KeyExprs}
 	case *merge.Merge:
 		in.Merge = &pipeline.Merge{
 			SinkScan: t.SinkScan,
@@ -1146,8 +1174,32 @@ func convertToVmOperator(opr *pipeline.Instruction, ctx *scopeContext, eng engin
 		arg.IfInsertFromUnique = t.IfInsertFromUnique
 		arg.RuntimeFilterSpec = t.RuntimeFilterSpec
 		op = arg
-	case vm.Shuffle:
+	case vm.Shuffle, vm.ShuffleStable:
 		t := opr.GetShuffle()
+		wireAlgorithm := process.StringShuffleHashLegacy
+		if vm.OpType(opr.Op) == vm.ShuffleStable {
+			wireAlgorithm = process.StringShuffleHashComplete
+		}
+		if wireAlgorithm == process.StringShuffleHashComplete &&
+			(t.ShuffleType != int32(plan.ShuffleType_Hash) || !t.StringHashKey) {
+			return nil, moerr.NewInvalidStateNoCtx(
+				"complete string shuffle hash marker requires a string-key hash shuffle")
+		}
+		processAlgorithm := process.StringShuffleHashLegacy
+		var proc *process.Process
+		if ctx != nil && ctx.scope != nil {
+			proc = ctx.scope.Proc
+		}
+		if proc != nil {
+			processAlgorithm = proc.StringShuffleHashAlgorithm()
+		}
+		if proc != nil && t.ShuffleType == int32(plan.ShuffleType_Hash) &&
+			t.StringHashKey &&
+			processAlgorithm != wireAlgorithm {
+			return nil, moerr.NewInvalidStateNoCtxf(
+				"string shuffle hash algorithm mismatch: pipeline=%d process=%d",
+				wireAlgorithm, processAlgorithm)
+		}
 		arg := shuffle.NewArgument()
 		arg.ShuffleColIdx = t.ShuffleColIdx
 		arg.ShuffleType = t.ShuffleType
@@ -1159,6 +1211,7 @@ func convertToVmOperator(opr *pipeline.Instruction, ctx *scopeContext, eng engin
 		arg.RuntimeFilterSpec = t.RuntimeFilterSpec
 		arg.ShuffleExpr = t.ShuffleExpr
 		arg.DrainAllBuckets = t.DrainAllBuckets
+		arg.StringHashKey = t.StringHashKey
 		op = arg
 	case vm.Dispatch:
 		t := opr.GetDispatch()
@@ -1297,11 +1350,23 @@ func convertToVmOperator(opr *pipeline.Instruction, ctx *scopeContext, eng engin
 			WithFs(opr.OrderBy)
 	// should change next day?
 	case vm.Intersect:
-		op = intersect.NewArgument()
+		arg := intersect.NewArgument()
+		if setOp := opr.GetSetOp(); setOp != nil {
+			arg.KeyExprs = setOp.GetKeyExprs()
+		}
+		op = arg
 	case vm.IntersectAll:
-		op = intersectall.NewArgument()
+		arg := intersectall.NewArgument()
+		if setOp := opr.GetSetOp(); setOp != nil {
+			arg.KeyExprs = setOp.GetKeyExprs()
+		}
+		op = arg
 	case vm.Minus:
-		op = minus.NewArgument()
+		arg := minus.NewArgument()
+		if setOp := opr.GetSetOp(); setOp != nil {
+			arg.KeyExprs = setOp.GetKeyExprs()
+		}
+		op = arg
 	case vm.Connector:
 		t := opr.GetConnect()
 		op = connector.NewArgument().
@@ -1624,6 +1689,12 @@ func validateRemoteAggregateProtocol(
 	aggs []aggexec.AggFuncExecExpression,
 ) error {
 	for _, agg := range aggs {
+		if isVarianceAggregate(agg) &&
+			(proc == nil || !procSupportsRemoteVarianceAggregates(proc)) {
+			return moerr.NewNotSupportedNoCtx(
+				"variance remote execution requires MORPC protocol version 35",
+			)
+		}
 		if agg.GetAggID() == aggexec.AggIdOfPercentileCont ||
 			agg.GetAggID() == aggexec.AggIdOfPercentileDisc {
 			if proc == nil || !supportsRemoteOrderedSetAggregates(proc.GetService()) {
@@ -1647,6 +1718,25 @@ func validateRemoteAggregateProtocol(
 		}
 	}
 	return nil
+}
+
+func isVarianceAggregate(agg aggexec.AggFuncExecExpression) bool {
+	switch agg.GetAggID() {
+	case aggexec.AggIdOfVarPop, aggexec.AggIdOfVarSample,
+		aggexec.AggIdOfStdDevPop, aggexec.AggIdOfStdDevSample:
+		return true
+	}
+	return false
+}
+
+func procSupportsRemoteVarianceAggregates(proc *process.Process) bool {
+	value, ok := moruntime.ServiceRuntime(proc.GetService()).
+		GetGlobalVariables(moruntime.MOProtocolVersion)
+	if !ok {
+		return false
+	}
+	version, ok := value.(int64)
+	return ok && version >= defines.MORPCVersion35
 }
 
 func validateRemoteJoinProtocol(proc *process.Process, joinType plan.Node_JoinType) error {
@@ -1723,6 +1813,42 @@ func validateRemoteStringProvenancePipelineProtocol(
 	if proc == nil || !supportsRemoteCrossDomainStringLiterals(proc.GetService()) {
 		return moerr.NewNotSupportedNoCtx(
 			"cross-domain string provenance requires MORPC protocol version 23",
+		)
+	}
+	return nil
+}
+
+func validateRemoteExpressionPipelineProtocol(
+	proc *process.Process,
+	p *pipeline.Pipeline,
+) error {
+	features, err := plan.RequiredRemoteExpressionFeatures(p)
+	if err != nil {
+		return err
+	}
+	if !features.Any() {
+		return nil
+	}
+	protocolVersion, hasProtocolVersion := int64(0), false
+	if proc != nil {
+		protocolVersion, hasProtocolVersion = remoteMORPCProtocolVersion(proc.GetService())
+	}
+	if features.NumericPrefix &&
+		(!hasProtocolVersion || protocolVersion < defines.MORPCVersion30) {
+		return moerr.NewNotSupportedNoCtx(
+			"prepared numeric-prefix casts require MORPC protocol version 30",
+		)
+	}
+	if features.JSONComparisonParam &&
+		(!hasProtocolVersion || protocolVersion < defines.MORPCVersion36) {
+		return moerr.NewNotSupportedNoCtx(
+			"prepared JSON comparison parameters require MORPC protocol version 36",
+		)
+	}
+	if features.MixedJSONBooleanEquality &&
+		(!hasProtocolVersion || protocolVersion < defines.MORPCVersion36) {
+		return moerr.NewNotSupportedNoCtx(
+			"mixed JSON/BOOL equality requires MORPC protocol version 36",
 		)
 	}
 	return nil
@@ -1844,6 +1970,32 @@ func validateRemoteUpdateChangedRowsPipelineProtocol(
 		}
 	}
 	return nil
+}
+
+func validateRemotePadSpacePipelineProtocol(
+	proc *process.Process,
+	p *pipeline.Pipeline,
+) error {
+	// A current peer cannot reject this feature. Check its negotiated capability
+	// before inspecting the protobuf tree: this validator runs on both remote
+	// sender and receiver paths, and reflective feature discovery is needed only
+	// for a mixed-version peer.
+	if proc != nil && supportsRemotePadSpaceSemantics(proc.GetService()) {
+		return nil
+	}
+	if p == nil {
+		return nil
+	}
+	modeEnabled, err := process.ResolvePadCharToFullLength(proc)
+	if err != nil {
+		return err
+	}
+	if !modeEnabled && !pipelineContainsPadSpaceCast(p) {
+		return nil
+	}
+	return moerr.NewNotSupportedNoCtx(
+		"PAD SPACE remote execution requires MORPC protocol version 40",
+	)
 }
 
 func aggregateUsesCollationAwareTextMinMax(agg aggexec.AggFuncExecExpression) bool {

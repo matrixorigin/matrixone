@@ -17,12 +17,12 @@ package plan
 import (
 	"context"
 	"encoding/json"
+	"sort"
 	"strings"
 	"sync"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/statsinfo"
@@ -37,13 +37,17 @@ import (
 var _ CompilerContext = &MockCompilerContext{}
 
 type MockCompilerContext struct {
-	dbs             map[string]bool
-	objects         map[string]*ObjectRef
-	tables          map[string]*TableDef
-	pks             map[string][]int
-	id2name         map[uint64]string
-	isDml           bool
-	mysqlCompatible bool
+	dbs                    map[string]bool
+	objects                map[string]*ObjectRef
+	tables                 map[string]*TableDef
+	objectsByQualifiedName map[string]*ObjectRef
+	tablesByQualifiedName  map[string]*TableDef
+	legacyTableOwners      map[string]string
+	legacyObjectOwners     map[string]string
+	pks                    map[string][]int
+	id2name                map[uint64]string
+	isDml                  bool
+	mysqlCompatible        bool
 	// sqlModeOverride, when non-nil, is returned for ResolveVariable("sql_mode")
 	// so tests can exercise mode-dependent paths (e.g. NO_BACKSLASH_ESCAPES).
 	sqlModeOverride *string
@@ -65,8 +69,9 @@ type MockCompilerContext struct {
 }
 
 type mockProcessHolder struct {
-	once sync.Once
-	proc *process.Process
+	once                sync.Once
+	proc                *process.Process
+	internalSQLExecutor executor.SQLExecutor
 }
 
 var mockProcessHolderMu sync.RWMutex
@@ -221,11 +226,26 @@ type index struct {
 // NewEmptyCompilerContext for test create/drop statement
 func NewEmptyCompilerContext() *MockCompilerContext {
 	return &MockCompilerContext{
-		objects:       make(map[string]*ObjectRef),
-		tables:        make(map[string]*TableDef),
-		ctx:           context.Background(),
-		processHolder: &mockProcessHolder{},
+		objects:                make(map[string]*ObjectRef),
+		tables:                 make(map[string]*TableDef),
+		objectsByQualifiedName: make(map[string]*ObjectRef),
+		tablesByQualifiedName:  make(map[string]*TableDef),
+		legacyTableOwners:      make(map[string]string),
+		legacyObjectOwners:     make(map[string]string),
+		ctx:                    context.Background(),
+		processHolder:          &mockProcessHolder{},
 	}
+}
+
+func mockQualifiedTableName(dbName, tableName string) string {
+	return strings.ToLower(dbName) + "\x00" + strings.ToLower(tableName)
+}
+
+func mockUnqualifiedTableName(name string) string {
+	if separator := strings.IndexByte(name, 0); separator >= 0 {
+		return name[separator+1:]
+	}
+	return name
 }
 
 type Schema struct {
@@ -1757,16 +1777,54 @@ func NewMockCompilerContext(isDml bool) *MockCompilerContext {
 
 	objects := make(map[string]*ObjectRef)
 	tables := make(map[string]*TableDef)
+	objectsByQualifiedName := make(map[string]*ObjectRef)
+	tablesByQualifiedName := make(map[string]*TableDef)
+	legacyTableOwners := make(map[string]string)
+	legacyObjectOwners := make(map[string]string)
 	stats := make(map[string]*Stats)
 	pks := make(map[string][]int)
 	id2name := make(map[uint64]string)
-	// build tpch/mo context data(schema)
-	for db, schema := range schemas {
-		tableIdx := 0
-		for tableName, table := range schema {
-			tblId := table.tblId
-			if tblId == 0 {
-				tblId = int64(tableIdx)
+	usedTableIDs := make(map[uint64]struct{})
+	for _, schema := range schemas {
+		for _, table := range schema {
+			if table.tblId != 0 {
+				usedTableIDs[uint64(table.tblId)] = struct{}{}
+			}
+		}
+	}
+	nextTableID := uint64(catalog.MO_RESERVED_MAX + 1)
+	allocateTableID := func() uint64 {
+		for {
+			if _, used := usedTableIDs[nextTableID]; !used {
+				id := nextTableID
+				usedTableIDs[id] = struct{}{}
+				nextTableID++
+				return id
+			}
+			nextTableID++
+		}
+	}
+
+	// Build the mock catalog in stable order. Table ID 0 is reserved as the
+	// self-reference sentinel in foreign-key metadata, so automatic IDs must be
+	// non-zero and globally unique across schemas.
+	dbNames := make([]string, 0, len(schemas))
+	for db := range schemas {
+		dbNames = append(dbNames, db)
+	}
+	sort.Strings(dbNames)
+	for _, db := range dbNames {
+		schema := schemas[db]
+		tableNames := make([]string, 0, len(schema))
+		for tableName := range schema {
+			tableNames = append(tableNames, tableName)
+		}
+		sort.Strings(tableNames)
+		for _, tableName := range tableNames {
+			table := schema[tableName]
+			tblID := uint64(table.tblId)
+			if tblID == 0 {
+				tblID = allocateTableID()
 			}
 			colDefs := make([]*ColDef, 0, len(table.cols))
 
@@ -1829,16 +1887,20 @@ func NewMockCompilerContext(isDml bool) *MockCompilerContext {
 				colDefs = append(colDefs, colDef)
 			}
 
-			objects[tableName] = &ObjectRef{
+			objRef := &ObjectRef{
 				Server:     0,
 				Db:         0,
 				Schema:     0,
-				Obj:        int64(tableIdx),
+				Obj:        int64(tblID),
 				ServerName: "",
 				DbName:     "",
 				SchemaName: db,
 				ObjName:    tableName,
 			}
+			qualifiedName := mockQualifiedTableName(db, tableName)
+			objects[tableName] = objRef
+			objectsByQualifiedName[qualifiedName] = objRef
+			legacyObjectOwners[tableName] = qualifiedName
 
 			tableType := catalog.SystemOrdinaryRel
 			if table.tableType != "" {
@@ -1846,7 +1908,7 @@ func NewMockCompilerContext(isDml bool) *MockCompilerContext {
 			}
 			tableDef := &TableDef{
 				TableType: tableType,
-				TblId:     uint64(tblId),
+				TblId:     tblID,
 				Name:      tableName,
 				Cols:      colDefs,
 				Indexes:   make([]*IndexDef, len(table.idxs)),
@@ -1963,8 +2025,9 @@ func NewMockCompilerContext(isDml bool) *MockCompilerContext {
 			}
 
 			tables[tableName] = tableDef
-			id2name[tableDef.TblId] = tableName
-			tableIdx++
+			tablesByQualifiedName[qualifiedName] = tableDef
+			legacyTableOwners[tableName] = qualifiedName
+			id2name[tableDef.TblId] = qualifiedName
 
 			if table.outcnt == 0 {
 				table.outcnt = 1
@@ -1978,14 +2041,18 @@ func NewMockCompilerContext(isDml bool) *MockCompilerContext {
 	}
 
 	return &MockCompilerContext{
-		dbs:           dbs,
-		isDml:         isDml,
-		objects:       objects,
-		tables:        tables,
-		id2name:       id2name,
-		pks:           pks,
-		ctx:           context.TODO(),
-		processHolder: &mockProcessHolder{},
+		dbs:                    dbs,
+		isDml:                  isDml,
+		objects:                objects,
+		tables:                 tables,
+		objectsByQualifiedName: objectsByQualifiedName,
+		tablesByQualifiedName:  tablesByQualifiedName,
+		legacyTableOwners:      legacyTableOwners,
+		legacyObjectOwners:     legacyObjectOwners,
+		id2name:                id2name,
+		pks:                    pks,
+		ctx:                    context.TODO(),
+		processHolder:          &mockProcessHolder{},
 	}
 }
 
@@ -2020,7 +2087,18 @@ func (m *MockCompilerContext) GetUserName() string {
 
 func (m *MockCompilerContext) Resolve(dbName string, tableName string, snapshot *Snapshot) (*ObjectRef, *TableDef, error) {
 	name := strings.ToLower(tableName)
-	tableDef := DeepCopyTableDef(m.tables[name], true)
+	qualifiedName := mockQualifiedTableName(dbName, name)
+	table := m.tablesByQualifiedName[qualifiedName]
+	objRef := m.objectsByQualifiedName[qualifiedName]
+	compatibilityTable := m.tables[name]
+	compatibilityObjRef := m.objects[name]
+	if m.legacyTableOwners[name] == qualifiedName || table == nil {
+		table = compatibilityTable
+	}
+	if m.legacyObjectOwners[name] == qualifiedName || objRef == nil {
+		objRef = compatibilityObjRef
+	}
+	tableDef := DeepCopyTableDef(table, true)
 	if tableDef != nil && !m.isDml {
 		for i, col := range tableDef.Cols {
 			if col.Typ.Id == int32(types.T_Rowid) {
@@ -2040,12 +2118,23 @@ func (m *MockCompilerContext) Resolve(dbName string, tableName string, snapshot 
 	if tableDef != nil {
 		tableDef.DbName = dbName
 	}
-	return m.objects[name], tableDef, nil
+	return objRef, tableDef, nil
 }
 
 func (m *MockCompilerContext) ResolveById(tableId uint64, snapshot *Snapshot) (*ObjectRef, *TableDef, error) {
 	name := m.id2name[tableId]
-	tableDef := DeepCopyTableDef(m.tables[name], true)
+	table := m.tablesByQualifiedName[name]
+	objRef := m.objectsByQualifiedName[name]
+	unqualifiedName := mockUnqualifiedTableName(name)
+	compatibilityTable := m.tables[unqualifiedName]
+	compatibilityObjRef := m.objects[unqualifiedName]
+	if m.legacyTableOwners[unqualifiedName] == name || table == nil {
+		table = compatibilityTable
+	}
+	if m.legacyObjectOwners[unqualifiedName] == name || objRef == nil {
+		objRef = compatibilityObjRef
+	}
+	tableDef := DeepCopyTableDef(table, true)
 	if tableDef != nil && !m.isDml {
 		for i, col := range tableDef.Cols {
 			if col.Typ.Id == int32(types.T_Rowid) {
@@ -2054,7 +2143,7 @@ func (m *MockCompilerContext) ResolveById(tableId uint64, snapshot *Snapshot) (*
 			}
 		}
 	}
-	return m.objects[name], tableDef, nil
+	return objRef, tableDef, nil
 }
 
 func (m *MockCompilerContext) Stats(obj *ObjectRef, snapshot *Snapshot) (*pb.StatsInfo, error) {
@@ -2110,14 +2199,28 @@ func (m *MockCompilerContext) GetProcess() *process.Process {
 	}
 	holder.once.Do(func() {
 		holder.proc = testutil.NewProc(nil)
-		moruntime.ServiceRuntime(holder.proc.GetService()).SetGlobalVariables(
-			moruntime.InternalSQLExecutor,
-			executor.NewMemExecutor(func(sql string) (executor.Result, error) {
-				return executor.Result{}, nil
-			}),
-		)
+		holder.internalSQLExecutor = executor.NewMemExecutor(func(sql string) (executor.Result, error) {
+			return executor.Result{}, nil
+		})
 	})
 	return holder.proc
+}
+
+func (m *MockCompilerContext) getInternalSQLExecutor(proc *process.Process) (executor.SQLExecutor, bool) {
+	if m.GetProcessFunc != nil {
+		return nil, false
+	}
+	if m.GetProcess() != proc {
+		return nil, false
+	}
+
+	mockProcessHolderMu.RLock()
+	holder := m.processHolder
+	mockProcessHolderMu.RUnlock()
+	if holder == nil || holder.internalSQLExecutor == nil {
+		return nil, false
+	}
+	return holder.internalSQLExecutor, true
 }
 
 func (m *MockCompilerContext) GetQueryResultMeta(uuid string) ([]*ColDef, string, error) {

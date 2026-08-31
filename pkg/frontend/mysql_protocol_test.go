@@ -56,6 +56,7 @@ import (
 	planPb "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
@@ -2630,6 +2631,36 @@ func TestPreparedNumericFunctionBinaryProtocolMetadata(t *testing.T) {
 	}
 }
 
+func TestPreparedRankingWindowBinaryProtocolMetadata(t *testing.T) {
+	ctx := context.TODO()
+	conn := &prepareResponseCaptureConn{}
+	proto, _, prepareStmt := newBinaryPrepareProtocolTestCaseWithConn(t,
+		"select row_number() over () as row_num, rank() over () as rank_num, "+
+			"dense_rank() over () as dense_rank_num, percent_rank() over () as percent_rank_num",
+		conn)
+	proto.capability &^= CLIENT_DEPRECATE_EOF
+
+	require.NoError(t, proto.SendPrepareResponse(ctx, prepareStmt))
+
+	packets := splitProtocolPackets(t, conn.writes)
+	require.Len(t, packets, 6)
+	require.Equal(t, uint16(4), binary.LittleEndian.Uint16(packets[0][5:]))
+	require.Equal(t, uint16(0), binary.LittleEndian.Uint16(packets[0][7:]))
+
+	for i, name := range []string{"row_num", "rank_num", "dense_rank_num"} {
+		column := parsePrepareColumnDefinition(t, packets[i+1])
+		require.Equal(t, name, column.name)
+		require.Equal(t, defines.MYSQL_TYPE_LONGLONG, column.typ)
+		require.Equal(t, uint16(defines.UNSIGNED_FLAG), column.flags&uint16(defines.UNSIGNED_FLAG))
+	}
+
+	percentRank := parsePrepareColumnDefinition(t, packets[4])
+	require.Equal(t, "percent_rank_num", percentRank.name)
+	require.Equal(t, defines.MYSQL_TYPE_DOUBLE, percentRank.typ)
+	require.Zero(t, percentRank.flags&uint16(defines.UNSIGNED_FLAG))
+	require.Equal(t, byte(defines.EOFHeader), packets[5][0])
+}
+
 func TestPreparedFloatingPointBinaryProtocolMetadata(t *testing.T) {
 	ctx := context.TODO()
 	tests := []struct {
@@ -2954,6 +2985,101 @@ func TestParseExecuteDataPreservesExactJsonOrderingParams(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestParseExecuteDataPreparedJSONDecimalComparisonIsExact(t *testing.T) {
+	const query = `select json_extract(
+		json_array(cast(9007199254740992.1 as decimal(20,1))), '$[0]') = ?`
+	ctx := context.Background()
+	proto, proc, prepareStmt := newBinaryPrepareProtocolTestCase(t, query)
+	defer prepareStmt.clearBinaryParamState(proc)
+
+	require.NoError(t, proto.ParseExecuteData(ctx, proc, prepareStmt,
+		buildStringExecutePacket(
+			proto, defines.MYSQL_TYPE_NEWDECIMAL, "9007199254740993.1"), 0))
+	proc.SetPrepareParamsWithMeta(
+		prepareStmt.params,
+		nil,
+		[]vector.PrepareParamKind{vector.PrepareParamDecimal},
+	)
+
+	preparedPlan := prepareStmt.PreparePlan.GetDcl().GetPrepare().Plan.GetQuery()
+	require.NotEmpty(t, preparedPlan.Steps)
+	projectNode := preparedPlan.Nodes[preparedPlan.Steps[len(preparedPlan.Steps)-1]]
+	require.Len(t, projectNode.ProjectList, 1)
+	executor, err := colexec.NewExpressionExecutor(proc, projectNode.ProjectList[0])
+	require.NoError(t, err)
+	defer executor.Free()
+
+	result, err := executor.Eval(proc, []*batch.Batch{batch.EmptyForConstFoldBatch}, nil)
+	require.NoError(t, err)
+	require.Equal(t, types.T_bool, result.GetType().Oid)
+	require.False(t, vector.GetFixedAtNoTypeCheck[bool](result, 0),
+		"COM_STMT_EXECUTE DECIMAL must not round adjacent exact values through FLOAT64")
+}
+
+func TestParseExecuteDataDecimalRebindsPreparedAbsExactly(t *testing.T) {
+	const value = "12345678901234567890123456789012345.6789"
+	ctx := context.TODO()
+	proto, proc, prepareStmt := newBinaryPrepareProtocolTestCase(t, "select abs(?)")
+	defer prepareStmt.clearBinaryParamState(proc)
+
+	// Drive the same COM_STMT_EXECUTE decoder used by clients.  DECIMAL values
+	// are length-encoded text on the wire, but their declared type must survive
+	// into execute-time ABS rebinding instead of being coerced through DOUBLE.
+	require.NoError(t, proto.ParseExecuteData(ctx, proc, prepareStmt,
+		buildStringExecutePacket(proto, defines.MYSQL_TYPE_NEWDECIMAL, value), 0))
+	require.Equal(t, []byte{byte(defines.MYSQL_TYPE_NEWDECIMAL), 0}, prepareStmt.ParamTypes)
+	proc.SetPrepareParamsWithMeta(
+		prepareStmt.params,
+		[]bool{false},
+		[]vector.PrepareParamKind{vector.PrepareParamDecimal},
+	)
+	values, err := preparedParamValues(proc, prepareStmt.ParamTypes)
+	require.NoError(t, err)
+	require.Len(t, values, 1)
+	param := values[0].(plan.ParamValue)
+	require.Equal(t, value, param.Value)
+	require.True(t, param.HasRuntimeType)
+	require.Equal(t, types.T_decimal256, param.RuntimeType.Oid)
+
+	runtimePlan, specialized, err := plan.FillValuesOfParamsInPlanWithPreparedNumericOverload(
+		ctx, prepareStmt.PreparePlan.GetDcl().GetPrepare().Plan, values)
+	require.NoError(t, err)
+	require.True(t, specialized)
+	var findAbs func(*planPb.Expr) *planPb.Expr
+	findAbs = func(expr *planPb.Expr) *planPb.Expr {
+		if expr == nil {
+			return nil
+		}
+		if fn := expr.GetF(); fn != nil {
+			if fn.Func.GetObjName() == "abs" {
+				return expr
+			}
+			for _, arg := range fn.Args {
+				if found := findAbs(arg); found != nil {
+					return found
+				}
+			}
+		}
+		return nil
+	}
+	var abs *planPb.Expr
+	for _, node := range runtimePlan.GetQuery().Nodes {
+		if node != nil {
+			for _, projection := range node.ProjectList {
+				if abs = findAbs(projection); abs != nil {
+					break
+				}
+			}
+		}
+		if abs != nil {
+			break
+		}
+	}
+	require.NotNil(t, abs)
+	require.Equal(t, int32(types.T_decimal256), abs.Typ.Id)
+	require.Equal(t, int32(types.T_decimal256), abs.GetF().Args[0].Typ.Id)
 }
 
 func TestParseExecuteDataPreservesYearWireType(t *testing.T) {

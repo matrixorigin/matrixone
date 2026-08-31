@@ -37,13 +37,13 @@ null
 drop table if exists t1;
 create table t1(t time(3));
 insert into t1 values("2020112211");
+Data truncation: data out of range: data type time, value '202011:22:11.000'
 insert into t1 values("2020112211.1234");
+Data truncation: data out of range: data type time, value '202011:22:11.123'
 insert into t1 values("2020112211.1235");
+Data truncation: data out of range: data type time, value '202011:22:11.124'
 select * from t1;
 t
-202011:22:11
-202011:22:11.123000000
-202011:22:11.124000000
 drop table if exists t1;
 create table t1(t time);
 insert into t1 values(1), (11), (112), (1122), (11223),(112233),(-1), (-11), (-112), (-1122), (-11223),(-112233);
@@ -64,10 +64,10 @@ t
 drop table if exists t1;
 create table t1(t time);
 insert into t1 values(20770101112233);
+Data truncation: data out of range: data type time, value '2077010111:22:33'
 insert into t1 values(112233.4445);
 select * from t1;
 t
-2077010111:22:33
 11:22:33
 drop table if exists t1;
 create table t1(t time);
@@ -179,29 +179,26 @@ t
 -99:00:00
 drop table if exists t1;
 create table t1(t time(3));
-insert into t1 values(0.001),(34.5),("99990000.999");
+insert into t1 values(0.001),(34.5);
+insert into t1 values("99990000.999");
+Data truncation: data out of range: data type time, value '9999:00:00.999'
 select t + 1 from t1;
 t + 1
 1.001
 35.500
-99990001.999
 select t - 1 from t1;
 t - 1
 -0.999
 33.500
-99989999.999
 select t * 10 from t1;
 t * 10
 0.010
 345.000
-999900009.990
 select t / 10 from t1;
 t / 10
 0.000100000
 3.450000000
-9999000.099900000
 select t % 5 from t1;
 t % 5
 0.001
 4.500
-0.999

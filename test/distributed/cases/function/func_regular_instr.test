@@ -1,10 +1,16 @@
+SELECT REGEXP_LIKE('', '^$') AS like_control;
+SELECT REGEXP_INSTR('', '^$') AS default_pos_match;
+SELECT REGEXP_INSTR('', 'x') AS default_pos_no_match;
+SELECT REGEXP_INSTR('', '^$', 1) AS explicit_pos_match;
+SELECT REGEXP_INSTR('', 'x', 1) AS explicit_pos_no_match;
+
 SELECT REGEXP_INSTR('Cat', 'at') Result;
 SELECT REGEXP_INSTR('Cat', '^at') Result;
 SELECT REGEXP_INSTR('at', '^at') Result;
 SELECT REGEXP_INSTR('Cat Cat', 'Cat', 2) Result;
 
 SELECT REGEXP_INSTR('Cat Cat', 'Cat', 2) AS 'Pos2';
-SELECT REGEXP_INSTR('Cat Cat', 'Cat', 3) AS 'Pos3'; 
+SELECT REGEXP_INSTR('Cat Cat', 'Cat', 3) AS 'Pos3';
 SELECT REGEXP_INSTR('Cat Cat', 'Cat', 5) AS 'Pos5';
 
 SELECT REGEXP_INSTR('Cat City is SO Cute!', 'C.t', 1) 'Pos1';

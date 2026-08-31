@@ -189,6 +189,13 @@ func TestApplyRemapDb(t *testing.T) {
 		require.NotContains(t, out, "dbxxx")
 	})
 
+	t.Run("named window subquery", func(t *testing.T) {
+		out := applyRemapDbToSQL(t, "select 1 from dbxxx.a window w as (partition by (select id from dbxxx.b))", remap)
+		require.Contains(t, out, "dbyyy.a")
+		require.Contains(t, out, "dbyyy.b")
+		require.NotContains(t, out, "dbxxx")
+	})
+
 	t.Run("projection scalar subquery", func(t *testing.T) {
 		out := applyRemapDbToSQL(t, "select (select max(id) from dbxxx.b) from dbxxx.a", remap)
 		require.Contains(t, out, "dbyyy.a")

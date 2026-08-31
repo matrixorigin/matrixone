@@ -15,6 +15,7 @@
 package frontend
 
 import (
+	"context"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -23,6 +24,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
+	"github.com/matrixorigin/matrixone/pkg/util"
 
 	"go.uber.org/zap"
 	"golang.org/x/sync/errgroup"
@@ -31,6 +33,22 @@ import (
 func isPerformStatement(stmt tree.Statement) bool {
 	selectStmt, ok := stmt.(*tree.Select)
 	return ok && selectStmt.IsPerform
+}
+
+func databaseWasCreated(runResult *util.RunResult) bool {
+	return runResult != nil && runResult.AffectRows != 0
+}
+
+func grantDatabaseOwnershipAfterCreate(
+	ctx context.Context,
+	ses *Session,
+	stmt tree.Statement,
+	runResult *util.RunResult,
+) error {
+	if !databaseWasCreated(runResult) {
+		return nil
+	}
+	return doGrantPrivilegeImplicitly(ctx, ses, stmt)
 }
 
 // executeStatusStmt run the statement that responses status t
@@ -56,6 +74,7 @@ func executeStatusStmt(ses *Session, execCtx *ExecCtx) (err error) {
 			ses.rs = &plan.ResultColDef{
 				ResultCols: plan2.GetResultColumnsFromPlan(execCtx.cw.Plan()),
 			}
+			freezeResultMetadata(execCtx.runner)
 			runBegin := time.Now()
 			if execCtx.runResult, err = execCtx.runner.Run(0); err != nil {
 				return
@@ -105,6 +124,7 @@ func executeStatusStmt(ses *Session, execCtx *ExecCtx) (err error) {
 				mysqlc := c.(Column)
 				mrs.AddColumn(mysqlc)
 			}
+			freezeResultMetadata(execCtx.runner)
 
 			// open new file
 			ep.DefaultBufSize = getPu(ses.GetService()).SV.ExportDataDefaultFlushSize
@@ -170,17 +190,22 @@ func executeStatusStmt(ses *Session, execCtx *ExecCtx) (err error) {
 		//change privilege
 		switch st := execCtx.stmt.(type) {
 		case *tree.DropTable:
-			execCtx.persistentDropTableTargets = capturePersistentDropTableTargets(ses, st)
+			execCtx.persistentDropTableTargets = capturePersistentDropTableTargets(
+				ses, st, execCtx.effectiveTxnDefaultDatabase,
+			)
 			ses.InvalidatePrivilegeCache()
 			// must execute before run to get database id or table id
-			if err = doRevokePrivilegeImplicitly(execCtx.reqCtx, ses, st, execCtx.persistentDropTableTargets); err != nil {
+			if err = doRevokePrivilegeImplicitly(
+				execCtx.reqCtx, ses, st, execCtx.persistentDropTableTargets,
+				execCtx.effectiveTxnDefaultDatabase,
+			); err != nil {
 				return
 			}
 
 		case *tree.DropDatabase:
 			ses.InvalidatePrivilegeCache()
 			// must execute before run to get database id or table id
-			if err = doRevokePrivilegeImplicitly(execCtx.reqCtx, ses, st, nil); err != nil {
+			if err = doRevokePrivilegeImplicitly(execCtx.reqCtx, ses, st, nil, ""); err != nil {
 				return
 			}
 
@@ -232,7 +257,7 @@ func executeStatusStmt(ses *Session, execCtx *ExecCtx) (err error) {
 		switch execCtx.stmt.(type) {
 		case *tree.CreateDatabase:
 			// must execute after run to get database id
-			err = doGrantPrivilegeImplicitly(execCtx.reqCtx, ses, st)
+			err = grantDatabaseOwnershipAfterCreate(execCtx.reqCtx, ses, st, execCtx.runResult)
 			if err != nil {
 				return
 			}
@@ -246,9 +271,16 @@ func executeStatusStmt(ses *Session, execCtx *ExecCtx) (err error) {
 // the session's temporary aliases still exist. Both the pre-execution
 // ownership revoke and the post-execution dynamic-table cleanup must consume
 // this same snapshot: dropTableSingle removes temporary aliases as it runs.
-func capturePersistentDropTableTargets(ses *Session, st *tree.DropTable) tree.TableNames {
+func capturePersistentDropTableTargets(
+	ses FeSession,
+	st *tree.DropTable,
+	defaultDatabase string,
+) tree.TableNames {
 	if st == nil || st.Temporary {
 		return nil
+	}
+	if ses == nil {
+		return st.Names
 	}
 
 	targets := make(tree.TableNames, 0, len(st.Names))
@@ -258,7 +290,10 @@ func capturePersistentDropTableTargets(ses *Session, st *tree.DropTable) tree.Ta
 		}
 		dbName := string(name.SchemaName)
 		if dbName == "" {
-			dbName = ses.GetDatabaseName()
+			dbName = defaultDatabase
+			if dbName == "" {
+				dbName = ses.GetDatabaseName()
+			}
 		}
 		if _, isTemporary := ses.GetTempTable(dbName, string(name.ObjectName)); isTemporary {
 			continue
@@ -384,7 +419,11 @@ func (resper *MysqlResp) respStatus(ses *Session,
 				execCtx.proc.SetLastInsertID(ses.GetLastInsertID())
 			}
 		case *tree.CreateDatabase:
-			_ = insertRecordToMoMysqlCompatibilityMode(execCtx.reqCtx, ses, execCtx.stmt)
+			// CREATE DATABASE publishes one affected row only after the engine
+			// creates the database; IF NOT EXISTS no-ops stay at zero.
+			if databaseWasCreated(execCtx.runResult) {
+				_ = insertRecordToMoMysqlCompatibilityMode(execCtx.reqCtx, ses, execCtx.stmt)
+			}
 		case *tree.DropDatabase:
 			_ = deleteRecordToMoMysqlCompatbilityMode(execCtx.reqCtx, ses, execCtx.stmt)
 			err = doDropFunctionWithDB(execCtx.reqCtx, ses, execCtx.stmt, func(path string) error {

@@ -274,6 +274,10 @@ func (l *store) hakeeperCheck() {
 		err = moerr.AttachCause(ctx, err)
 		l.runtime.Logger().Debug("command delivery activation deferred", zap.Error(err))
 	}
+	if _, err := l.tryEnableViewMetadataAdmission(ctx, state); err != nil {
+		err = moerr.AttachCause(ctx, err)
+		l.runtime.Logger().Debug("view metadata admission activation deferred", zap.Error(err))
+	}
 	cancel()
 
 	switch state.State {

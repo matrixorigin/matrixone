@@ -31,9 +31,12 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
+	mock_lock "github.com/matrixorigin/matrixone/pkg/frontend/test/mock_lock"
 	"github.com/matrixorigin/matrixone/pkg/lockservice"
 	lockpb "github.com/matrixorigin/matrixone/pkg/pb/lock"
+	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	statspb "github.com/matrixorigin/matrixone/pkg/pb/statsinfo"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/lockop"
@@ -60,6 +63,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/shuffle"
 	windowop "github.com/matrixorigin/matrixone/pkg/sql/colexec/window"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
@@ -888,6 +892,52 @@ func TestShouldPrePipelineLockTable(t *testing.T) {
 	require.False(t, target.LockTableAtTheEnd)
 }
 
+func TestCompileLockCandidateLoadKeepsCanonicalTableTarget(t *testing.T) {
+	c := NewMockCompile(t)
+	c.pn = &plan.Plan{
+		Plan: &plan.Plan_Query{
+			Query: &plan.Query{StmtType: plan.Query_INSERT, LoadTag: true},
+		},
+	}
+	c.lockTables = make(map[uint64]*plan.LockTarget)
+	c.loadUniqueIndexPromotion = &loadUniqueIndexPromotionState{
+		phase: loadUniqueIndexPromotionEligible,
+	}
+	target := &plan.LockTarget{
+		TableId:   42,
+		LockTable: true,
+	}
+	node := &plan.Node{LockTargets: []*plan.LockTarget{target}}
+	scopes := []*Scope{{}}
+
+	got, err := c.compileLock(node, scopes)
+	require.NoError(t, err)
+	require.Equal(t, scopes, got)
+	require.Equal(t, []*plan.LockTarget{target}, node.LockTargets,
+		"physical compilation must not mutate the canonical plan")
+	require.NotSame(t, target, c.lockTables[target.TableId])
+	require.False(t, c.lockTables[target.TableId].LockTableAtTheEnd)
+	require.False(t, target.LockTableAtTheEnd,
+		"physical annotations must stay on the compiler-local copy")
+}
+
+func TestCompileLockNonCandidatePreservesExactMainMutation(t *testing.T) {
+	c := NewMockCompile(t)
+	c.pn = &plan.Plan{Plan: &plan.Plan_Query{Query: &plan.Query{
+		StmtType: plan.Query_INSERT,
+		LoadTag:  true,
+	}}}
+	c.lockTables = make(map[uint64]*plan.LockTarget)
+	target := &plan.LockTarget{TableId: 42, LockTable: true}
+	node := &plan.Node{LockTargets: []*plan.LockTarget{target}}
+
+	got, err := c.compileLock(node, []*Scope{{}})
+	require.NoError(t, err)
+	require.Len(t, got, 1)
+	require.Empty(t, node.LockTargets)
+	require.Same(t, target, c.lockTables[target.TableId])
+}
+
 func TestConstructLockOpPreservesSharedTableMode(t *testing.T) {
 	for _, lockTable := range []bool{false, true} {
 		t.Run(fmt.Sprintf("table=%t", lockTable), func(t *testing.T) {
@@ -1034,43 +1084,304 @@ func TestPlanSnapshotGenerationCaptureAndScopeReuse(t *testing.T) {
 	txnOperator.EXPECT().Txn().DoAndReturn(func() txn.TxnMeta {
 		return txn.TxnMeta{SnapshotTS: currentSnapshot}
 	}).AnyTimes()
+	txnOperator.EXPECT().GetWorkspace().Return(&Ws{}).AnyTimes()
 
 	proc := testutil.NewProcess(t)
+	serviceRuntime := runtime.ServiceRuntime(proc.GetService())
+	originalProtocolVersion, hadProtocolVersion := serviceRuntime.GetGlobalVariables(runtime.MOProtocolVersion)
+	t.Cleanup(func() {
+		if hadProtocolVersion {
+			serviceRuntime.SetGlobalVariables(runtime.MOProtocolVersion, originalProtocolVersion)
+		} else {
+			serviceRuntime.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCLatestVersion)
+		}
+	})
+	serviceRuntime.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion33)
+	c := NewCompile("", "", "", "", "", nil, proc, nil, false, nil, time.Now())
+	defer func() {
+		c.SetIsPrepare(false)
+		c.Release()
+	}()
 	proc.Base.TxnOperator = txnOperator
-	c := &Compile{proc: proc}
 	c.capturePlanSnapshot()
+	c.captureStringShuffleHashAlgorithm()
+	require.Equal(t, process.StringShuffleHashComplete, proc.StringShuffleHashAlgorithm())
 
 	child := proc.NewNoContextChildProc(0)
 	got, ok := child.GetPlanSnapshotTS()
 	require.True(t, ok)
 	require.Equal(t, currentSnapshot, got)
+	require.Equal(t, process.StringShuffleHashComplete, child.StringShuffleHashAlgorithm())
 
-	// Prepared scope reuse is a new execution generation. Refresh both the top
-	// process and every retained pipeline process before locks can run.
+	// Prepared execution reuses the same compiled-plan generation. Applying the
+	// binding to a newer transaction process must not recapture its snapshot.
+	c.SetPlanGenerationReused(true)
 	currentSnapshot = timestamp.Timestamp{PhysicalTime: 20}
-	c.capturePlanSnapshot()
+	serviceRuntime.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion32)
+	require.NoError(t, c.Reset(proc, time.Now(), nil, "execute prepared_stmt"))
+	got, ok = proc.GetPlanSnapshotTS()
+	require.True(t, ok)
+	require.Equal(t, timestamp.Timestamp{PhysicalTime: 10}, got)
+	require.True(t, proc.PlanGenerationReused())
+	require.Equal(t, process.StringShuffleHashLegacy, proc.StringShuffleHashAlgorithm())
+	// The prior execution's already-created child remains immutable until the
+	// prepared scope is explicitly reset for the next execution.
+	require.Equal(t, process.StringShuffleHashComplete, child.StringShuffleHashAlgorithm())
 	scope := &Scope{Proc: child}
 	require.NoError(t, scope.resetForReuse(c))
 	got, ok = child.GetPlanSnapshotTS()
 	require.True(t, ok)
-	require.Equal(t, currentSnapshot, got)
+	require.Equal(t, timestamp.Timestamp{PhysicalTime: 10}, got)
+	require.True(t, child.PlanGenerationReused())
+	require.Equal(t, process.StringShuffleHashLegacy, child.StringShuffleHashAlgorithm())
 
 	// A data-only retry recompiles pipelines from the same logical plan. It
 	// retains the original binding even after the transaction snapshot moves.
-	currentSnapshot = timestamp.Timestamp{PhysicalTime: 30}
-	c.reusePlanSnapshot = true
-	c.bindPlanSnapshotForCompile()
+	retry := &Compile{proc: proc}
+	c.bindRetryPlanGeneration(retry, false)
+	retry.bindPlanSnapshotForCompile()
+	retry.bindStringShuffleHashAlgorithmForCompile()
 	got, ok = proc.GetPlanSnapshotTS()
 	require.True(t, ok)
-	require.Equal(t, timestamp.Timestamp{PhysicalTime: 20}, got)
+	require.Equal(t, timestamp.Timestamp{PhysicalTime: 10}, got)
+	require.True(t, proc.PlanGenerationReused())
+	require.Equal(t, process.StringShuffleHashLegacy, proc.StringShuffleHashAlgorithm())
 
 	// A definition-change retry rebuilds the logical plan and starts a new plan
-	// generation at the transaction's refreshed snapshot.
-	c.reusePlanSnapshot = false
-	c.bindPlanSnapshotForCompile()
+	// generation at the transaction's refreshed snapshot. The old prepared
+	// physical topology becomes ineligible for another execution.
+	c.SetIsPrepare(true)
+	rebuilt := &Compile{proc: proc}
+	c.bindRetryPlanGeneration(rebuilt, true)
+	require.True(t, c.PlanGenerationRebuilt())
+	rebuilt.bindPlanSnapshotForCompile()
 	got, ok = proc.GetPlanSnapshotTS()
 	require.True(t, ok)
 	require.Equal(t, currentSnapshot, got)
+	require.False(t, proc.PlanGenerationReused())
+	c.inheritPlanSnapshot(rebuilt)
+
+	// A later data-only retry of that rebuilt plan inherits the new generation,
+	// not the stale generation that originally encountered the DDL fence.
+	currentSnapshot = timestamp.Timestamp{PhysicalTime: 30}
+	postRebuildRetry := &Compile{proc: proc}
+	c.bindRetryPlanGeneration(postRebuildRetry, false)
+	postRebuildRetry.bindPlanSnapshotForCompile()
+	got, ok = proc.GetPlanSnapshotTS()
+	require.True(t, ok)
+	require.Equal(t, timestamp.Timestamp{PhysicalTime: 20}, got)
+	require.False(t, proc.PlanGenerationReused())
+
+	// The same signal is required when EXECUTE compiles an old prepared logical
+	// plan without a cached physical topology.
+	uncachedPrepared := &Compile{proc: proc}
+	uncachedPrepared.bindRetryPlanGeneration(&Compile{proc: proc}, true)
+	require.True(t, uncachedPrepared.PlanGenerationRebuilt())
+
+	// A prepared logical plan without a cached physical pipeline must also keep
+	// its original generation when it is compiled inside a newer transaction.
+	preparedWithoutCache := &Compile{proc: proc}
+	preparedWithoutCache.SetPlanSnapshotTS(timestamp.Timestamp{PhysicalTime: 5})
+	preparedWithoutCache.bindPlanSnapshotForCompile()
+	got, ok = proc.GetPlanSnapshotTS()
+	require.True(t, ok)
+	require.Equal(t, timestamp.Timestamp{PhysicalTime: 5}, got)
+}
+
+func TestStringShuffleHashCaptureIgnoresParticipantRuntimeAfterAdmission(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	const (
+		coordinatorID = "string-shuffle-v33-coordinator"
+		participantID = "string-shuffle-v32-participant"
+	)
+	coordinatorRuntime := runtime.NewRuntime(
+		metadata.ServiceType_CN, coordinatorID, zap.NewNop())
+	participantRuntime := runtime.NewRuntime(
+		metadata.ServiceType_CN, participantID, zap.NewNop())
+	runtime.SetupServiceBasedRuntime(coordinatorID, coordinatorRuntime)
+	runtime.SetupServiceBasedRuntime(participantID, participantRuntime)
+	coordinatorRuntime.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion33)
+	participantRuntime.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion32)
+
+	coordinatorProc := testutil.NewProcess(t)
+	participantProc := testutil.NewProcess(t)
+	defer coordinatorProc.Free()
+	defer participantProc.Free()
+	coordinatorLock := mock_lock.NewMockLockService(ctrl)
+	participantLock := mock_lock.NewMockLockService(ctrl)
+	coordinatorLock.EXPECT().GetConfig().Return(
+		lockservice.Config{ServiceID: coordinatorID}).AnyTimes()
+	participantLock.EXPECT().GetConfig().Return(
+		lockservice.Config{ServiceID: participantID}).AnyTimes()
+	coordinatorProc.Base.LockService = coordinatorLock
+	participantProc.Base.LockService = participantLock
+
+	compile := &Compile{proc: coordinatorProc}
+	compile.captureStringShuffleHashAlgorithm()
+	require.Equal(t, process.StringShuffleHashComplete,
+		coordinatorProc.StringShuffleHashAlgorithm())
+	require.False(t, supportsStableStringShuffleHash(participantProc.GetService()))
+
+	// Model the ProcessInfo decoder's copy of the coordinator's exact selection
+	// (its codec round trip is covered separately). A new participant must
+	// consume that value instead of consulting its v32 local gate during Prepare
+	// or remote-pipeline reconstruction.
+	participantProc.CopyStringShuffleHashAlgorithmFrom(coordinatorProc)
+	require.Equal(t, process.StringShuffleHashComplete,
+		participantProc.StringShuffleHashAlgorithm())
+	arg := shuffle.NewArgument()
+	defer arg.Release()
+	arg.ShuffleType = int32(plan.ShuffleType_Hash)
+	arg.StringHashKey = true
+	_, instruction, err := convertToPipelineInstruction(
+		arg, participantProc, &scopeContext{}, 1)
+	require.NoError(t, err)
+	require.Equal(t, int32(vm.ShuffleStable), instruction.Op)
+
+	// A rollout gate change applies only to the next execution. It cannot alter
+	// either process already admitted into this one.
+	coordinatorRuntime.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion32)
+	require.Equal(t, process.StringShuffleHashComplete,
+		coordinatorProc.StringShuffleHashAlgorithm())
+	require.Equal(t, process.StringShuffleHashComplete,
+		participantProc.StringShuffleHashAlgorithm())
+	next := &Compile{proc: coordinatorProc}
+	next.captureStringShuffleHashAlgorithm()
+	require.Equal(t, process.StringShuffleHashLegacy,
+		coordinatorProc.StringShuffleHashAlgorithm())
+	require.Equal(t, process.StringShuffleHashComplete,
+		participantProc.StringShuffleHashAlgorithm())
+}
+
+func TestShuffleConstructionMarksOnlyStringHashKeys(t *testing.T) {
+	for _, test := range []struct {
+		name       string
+		typ        types.T
+		stringHash bool
+	}{
+		{name: "varchar", typ: types.T_varchar, stringHash: true},
+		{name: "text", typ: types.T_text, stringHash: true},
+		{name: "char", typ: types.T_char, stringHash: true},
+		{name: "int64", typ: types.T_int64},
+		{name: "binary", typ: types.T_binary},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			left := &plan.Expr{Typ: plan.Type{Id: int32(test.typ)},
+				Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: 1, ColPos: 0}}}
+			right := &plan.Expr{Typ: plan.Type{Id: int32(test.typ)},
+				Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: 2, ColPos: 0}}}
+			stats := &plan.Stats{HashmapStats: &plan.HashMapStats{
+				ShuffleColIdx: 0,
+				ShuffleType:   plan.ShuffleType_Hash,
+			}}
+
+			groupArg := constructShuffleArgForGroup(8, &plan.Node{
+				Stats: stats, GroupBy: []*plan.Expr{left},
+			})
+			require.Equal(t, test.stringHash, groupArg.StringHashKey)
+			groupArg.Release()
+
+			joinArg := constructShuffleOperatorForJoin(8, &plan.Node{
+				Stats: stats,
+				OnList: []*plan.Expr{{Expr: &plan.Expr_F{F: &plan.Function{
+					Args: []*plan.Expr{left, right},
+				}}}},
+			}, true)
+			require.Equal(t, test.stringHash, joinArg.StringHashKey)
+			joinArg.Release()
+		})
+	}
+}
+
+func TestFrozenResultMetadataRejectsIncompatibleDefinitionRetry(t *testing.T) {
+	makeResultPlan := func(name string, typ types.T) *plan.Plan {
+		return &plan.Plan{Plan: &plan.Plan_Query{Query: &plan.Query{
+			StmtType: plan.Query_SELECT,
+			Steps:    []int32{0},
+			Headings: []string{name},
+			Nodes: []*plan.Node{{
+				ProjectList: []*plan.Expr{{Typ: plan.Type{Id: int32(typ)}}},
+			}},
+		}}}
+	}
+
+	original := makeResultPlan("v", types.T_int64)
+	c := &Compile{pn: original}
+	// Before a consumer materializes metadata, a definition retry may change
+	// the output schema and the caller can derive metadata from the new plan.
+	require.NoError(t, c.validateRetryResultMetadata(
+		context.Background(), makeResultPlan("renamed", types.T_varchar)))
+
+	c.FreezeResultMetadata()
+	require.NoError(t, c.validateRetryResultMetadata(
+		context.Background(), makeResultPlan("v", types.T_int64)))
+	for _, rebuilt := range []*plan.Plan{
+		makeResultPlan("renamed", types.T_int64),
+		makeResultPlan("v", types.T_varchar),
+	} {
+		err := c.validateRetryResultMetadata(context.Background(), rebuilt)
+		require.True(t, moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetryWithDefChanged), err)
+	}
+}
+
+func TestSelectIntoRetryRevalidatesResultArity(t *testing.T) {
+	makeResultPlan := func(columnTypes ...types.T) *plan.Plan {
+		projectList := make([]*plan.Expr, len(columnTypes))
+		headings := make([]string, len(columnTypes))
+		for i, typ := range columnTypes {
+			projectList[i] = &plan.Expr{Typ: plan.Type{Id: int32(typ)}}
+			headings[i] = fmt.Sprintf("c%d", i)
+		}
+		return &plan.Plan{Plan: &plan.Plan_Query{Query: &plan.Query{
+			StmtType: plan.Query_SELECT,
+			Steps:    []int32{0},
+			Headings: headings,
+			Nodes: []*plan.Node{{
+				ProjectList: projectList,
+			}},
+		}}}
+	}
+
+	c := &Compile{
+		pn: makeResultPlan(types.T_int64, types.T_int64),
+		stmt: &tree.Select{IntoVars: []*tree.VarExpr{
+			{Name: "a"},
+			{Name: "b"},
+		}},
+	}
+
+	// SELECT INTO consumes values rather than client result metadata, so a
+	// same-arity retry may adopt compatible type changes.
+	require.NoError(t, c.validateRetryResultMetadata(
+		context.Background(), makeResultPlan(types.T_varchar, types.T_int64)))
+
+	// Arity is checked before the first attempt. A definition retry must repeat
+	// that check because an empty rebuilt result never invokes the row callback.
+	err := c.validateRetryResultMetadata(
+		context.Background(), makeResultPlan(types.T_int64, types.T_int64, types.T_int64))
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrWrongNumberOfColumnsInSelect), err)
+}
+
+func TestCompileReleaseClearsPlanSnapshotTransport(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	c := NewCompile("", "", "", "", "", nil, proc, nil, false, nil, time.Now())
+	c.SetIsPrepare(true)
+	planSnapshot := timestamp.Timestamp{PhysicalTime: 10}
+	c.SetPlanSnapshotTS(planSnapshot)
+
+	c.Release()
+	_, ok := proc.GetPlanSnapshotTS()
+	require.False(t, ok)
+
+	// A cached Compile retains ownership and can bind the same generation to a
+	// later execution even though the Process transport was cleared.
+	c.applyPlanSnapshot()
+	got, ok := proc.GetPlanSnapshotTS()
+	require.True(t, ok)
+	require.Equal(t, planSnapshot, got)
+
+	c.SetIsPrepare(false)
+	c.Release()
 }
 
 var (
@@ -1178,6 +1489,8 @@ func TestPreferPrimaryScopeResult(t *testing.T) {
 	joinedDeadlineErr := errors.Join(context.DeadlineExceeded, context.Canceled)
 	queryInterrupted := moerr.NewQueryInterrupted(context.Background())
 	joinedCancellationErr := errors.Join(context.Canceled, queryInterrupted)
+	joinMapCancellationErr := message.NewJoinMapBuildError(context.Canceled).AsError()
+	joinMapDeadlineErr := message.NewJoinMapBuildError(context.DeadlineExceeded).AsError()
 	internalCancelCtx, cancelInternal := context.WithCancelCause(context.Background())
 	cancelInternal(executionErr)
 	internalNormalCancelCtx, cancelInternalNormal := context.WithCancelCause(context.Background())
@@ -1218,13 +1531,16 @@ func TestPreferPrimaryScopeResult(t *testing.T) {
 		{name: "unresolved interrupted sibling is secondary", current: scopeRunResult{err: cleanupErr}, candidate: scopeRunResult{err: queryInterrupted}, want: cleanupErr},
 		{name: "unresolved joined cancellation is secondary", current: scopeRunResult{err: cleanupErr}, candidate: scopeRunResult{err: joinedCancellationErr}, want: cleanupErr},
 		{name: "internally canceled sibling resolves to execution error", current: scopeRunResult{err: context.Canceled, ctx: internalCancelCtx}, candidate: scopeRunResult{err: executionErr}, want: executionErr},
+		{name: "join map cancellation resolves to execution error", current: scopeRunResult{err: joinMapCancellationErr, ctx: internalCancelCtx}, candidate: scopeRunResult{err: executionErr}, want: executionErr},
 		{name: "normal internal cancellation is secondary", current: scopeRunResult{err: context.Canceled, ctx: internalNormalCancelCtx, queryCtx: activeQueryCtx}, candidate: scopeRunResult{err: executionErr}, want: executionErr},
 		{name: "internally interrupted sibling resolves to execution error", current: scopeRunResult{err: queryInterrupted, ctx: internalCancelCtx}, candidate: scopeRunResult{err: executionErr}, want: executionErr},
 		{name: "remote query cancellation remains primary", current: scopeRunResult{err: queryInterrupted, ctx: remotePipelineCtx, queryCtx: remoteQueryCtx}, want: context.Canceled},
 		{name: "plain external cancellation remains primary", current: scopeRunResult{err: context.Canceled, ctx: externalCancelCtx, queryCtx: externalCancelCtx}, candidate: scopeRunResult{err: executionErr}, want: context.Canceled},
 		{name: "external deadline remains primary", current: scopeRunResult{err: context.DeadlineExceeded, ctx: externalDeadlineCtx, queryCtx: externalDeadlineCtx}, candidate: scopeRunResult{err: executionErr}, want: context.DeadlineExceeded},
+		{name: "join map deadline remains primary", current: scopeRunResult{err: joinMapDeadlineErr, ctx: externalDeadlineCtx, queryCtx: externalDeadlineCtx}, candidate: scopeRunResult{err: executionErr}, want: context.DeadlineExceeded},
 		{name: "query deadline classification survives custom timeout cause", current: scopeRunResult{err: context.DeadlineExceeded, ctx: pipelineDeadlineCauseCtx, queryCtx: queryDeadlineCauseCtx}, candidate: scopeRunResult{err: executionErr}, want: context.DeadlineExceeded},
 		{name: "external cancellation cause remains primary", current: scopeRunResult{err: context.Canceled, ctx: externalCauseCtx, queryCtx: externalCauseCtx}, candidate: scopeRunResult{err: executionErr}, want: externalCause},
+		{name: "join map external cancellation cause remains primary", current: scopeRunResult{err: joinMapCancellationErr, ctx: externalCauseCtx, queryCtx: externalCauseCtx}, candidate: scopeRunResult{err: executionErr}, want: externalCause},
 		{name: "first substantive error remains", current: scopeRunResult{err: executionErr}, candidate: scopeRunResult{err: moerr.NewInternalErrorNoCtx("later")}, want: executionErr},
 	}
 
@@ -1465,6 +1781,93 @@ func TestCompileShuffleGroupUsesDistributedPathWhenScopeMcpuDiffersFromDop(t *te
 	require.IsType(t, &shuffle.Shuffle{}, result[0].PreScopes[0].RootOp.GetOperatorBase().GetChildren(0))
 }
 
+func TestCompileShuffleGroupSkipsNormalShuffleWithSingleOwner(t *testing.T) {
+	c := newCompileForShuffleGroupTest(t)
+	aggNode, nodes := newShuffleGroupTestNodes(1)
+	scope := newShuffleGroupInputScope(t, 1)
+	input := scope.RootOp
+
+	result := c.compileShuffleGroup(aggNode, []*Scope{scope}, nodes)
+
+	require.Len(t, result, 1)
+	require.Same(t, scope, result[0])
+	groupOp, ok := result[0].RootOp.(*group.Group)
+	require.True(t, ok)
+	require.Same(t, input, groupOp.GetOperatorBase().GetChildren(0),
+		"one physical owner must not pay for a one-bucket shuffle and dispatch")
+}
+
+func TestCompileShuffleGroupSkipsSingleOwnerWithoutDroppingInputs(t *testing.T) {
+	c := newCompileForShuffleGroupTest(t)
+	aggNode, nodes := newShuffleGroupTestNodes(1)
+	inputs := []*Scope{
+		newShuffleGroupInputScope(t, 1),
+		newShuffleGroupInputScope(t, 1),
+	}
+
+	result := c.compileShuffleGroup(aggNode, inputs, nodes)
+
+	require.Len(t, result, 1)
+	require.IsType(t, &group.MergeGroup{}, result[0].RootOp)
+	require.Len(t, result[0].PreScopes, len(inputs))
+	for _, input := range result[0].PreScopes {
+		require.IsType(t, &group.Group{},
+			input.RootOp.GetOperatorBase().GetChildren(0))
+	}
+}
+
+func TestCompileShuffleGroupKeepsOrderedSingleOwnerSingleStage(t *testing.T) {
+	c := newCompileForShuffleGroupTest(t)
+	c.proc.SetResolveVariableFunc(func(name string, system, global bool) (interface{}, error) {
+		require.Equal(t, "group_concat_max_len", name)
+		require.True(t, system)
+		require.False(t, global)
+		return int64(1024), nil
+	})
+	aggNode, nodes := newShuffleGroupTestNodes(1)
+	aggNode.AggList = []*plan.Expr{{
+		Expr: &plan.Expr_F{F: &plan.Function{
+			Func: &plan.ObjectRef{
+				ObjName: plan2.NameGroupConcat,
+			},
+			AggConfigType: plan.AggregateConfigType_AGG_CONFIG_GROUP_CONCAT_ORDER,
+		}},
+	}}
+	scope := newShuffleGroupInputScope(t, 1)
+
+	result := c.compileShuffleGroup(aggNode, []*Scope{scope}, nodes)
+
+	require.Len(t, result, 1)
+	groupOp, ok := result[0].RootOp.(*group.Group)
+	require.True(t, ok)
+	require.True(t, groupOp.NeedEval)
+	require.Len(t, result[0].PreScopes, 1)
+	require.Same(t, scope, result[0].PreScopes[0])
+}
+
+func TestCompileShuffleGroupKeepsNormalShuffleAcrossCNsAtDopOne(t *testing.T) {
+	c := newCompileForShuffleGroupTest(t)
+	c.addr = "cn-1:6001"
+	c.cnList = engine.Nodes{
+		{Id: "cn-1", Addr: "cn-1:6001", Mcpu: 1},
+		{Id: "cn-2", Addr: "cn-2:6001", Mcpu: 1},
+	}
+	aggNode, nodes := newShuffleGroupTestNodes(1)
+	scope := newShuffleGroupInputScope(t, 1)
+	scope.NodeInfo = c.cnList[0]
+
+	result := c.compileShuffleGroup(aggNode, []*Scope{scope}, nodes)
+
+	require.Len(t, result, 2,
+		"DOP one on each CN still exposes two physical aggregate owners")
+	for _, resultScope := range result {
+		require.IsType(t, &group.Group{}, resultScope.RootOp)
+	}
+	require.Len(t, result[0].PreScopes, 1)
+	require.IsType(t, &shuffle.Shuffle{},
+		result[0].PreScopes[0].RootOp.GetOperatorBase().GetChildren(0))
+}
+
 func TestCompileShuffleGroupSupportsOrderedGroupConcat(t *testing.T) {
 	c := newCompileForShuffleGroupTest(t)
 	c.proc.SetResolveVariableFunc(func(name string, system, global bool) (interface{}, error) {
@@ -1528,6 +1931,27 @@ func TestCompileShuffleGroupGatesOrderedAggregateByProtocolVersion(t *testing.T)
 		"legacy shuffle aggregates remain safe on protocol v5")
 }
 
+func TestCompileShuffleGroupGatesVarianceByProtocolVersion(t *testing.T) {
+	c := newCompileForShuffleGroupTest(t)
+	aggNode, _ := newShuffleGroupTestNodes(16)
+	aggNode.AggList = []*plan.Expr{{
+		Expr: &plan.Expr_F{F: &plan.Function{
+			Func: &plan.ObjectRef{Obj: int64(function.VAR_POP) << 32},
+		}},
+	}}
+	rt := runtime.ServiceRuntime(c.proc.GetService())
+	defer rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCLatestVersion)
+
+	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion34)
+	require.False(t, c.supportsRemoteVarianceAggregates())
+	require.False(t, c.canCompileShuffleGroup(aggNode),
+		"mixed-version clusters must keep exponent-scaled variance state local")
+
+	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion35)
+	require.True(t, c.supportsRemoteVarianceAggregates())
+	require.True(t, c.canCompileShuffleGroup(aggNode))
+}
+
 func TestCompileShuffleGroupGatesOrderedSetPercentileByProtocolVersion(t *testing.T) {
 	c := newCompileForShuffleGroupTest(t)
 	aggNode, _ := newShuffleGroupTestNodes(16)
@@ -1579,7 +2003,7 @@ func TestMultiSourceISCPGatedByProtocolVersion(t *testing.T) {
 	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion29)
 	require.False(t, supportsMultiSourceISCP(service))
 
-	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion30)
+	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion41)
 	require.True(t, supportsMultiSourceISCP(service))
 
 	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion29)
@@ -2061,6 +2485,130 @@ func TestCompileMergeGroupDistinctTopology(t *testing.T) {
 		require.True(t, containsGroup(result[0].PreScopes[0].RootOp),
 			"non-mergeable DISTINCT states must share one Group operator")
 	})
+}
+
+func TestCompileLocalPreAggregationKeepsEveryInputScope(t *testing.T) {
+	c := newCompileForShuffleGroupTest(t)
+	local, nodes := newShuffleGroupTestNodes(4)
+	local.Stats.HashmapStats.Shuffle = false
+	local.ProjectList = []*plan.Expr{{
+		Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: -1, ColPos: 0}},
+	}}
+	final := &plan.Node{
+		NodeType: plan.Node_AGG,
+		Stats: &plan.Stats{Dop: 4, HashmapStats: &plan.HashMapStats{
+			Shuffle:       true,
+			ShuffleColIdx: 0,
+			ShuffleType:   plan.ShuffleType_Hash,
+		}},
+		Children: []int32{1},
+		GroupBy: []*plan.Expr{{
+			Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: 0, ColPos: 0}},
+		}},
+	}
+	require.True(t, isLocalPreAggregationGroup(final, local))
+	final.Stats.HashmapStats.Shuffle = false
+	require.False(t, isLocalPreAggregationGroup(final, local),
+		"a downstream complete Group is required before localizing its child")
+	final.Stats.HashmapStats.Shuffle = true
+	final.GroupBy[0].GetCol().ColPos = 1
+	require.False(t, isLocalPreAggregationGroup(final, local),
+		"the downstream Group must reproduce every child key position exactly")
+	final.GroupBy[0].GetCol().ColPos = 0
+	inputs := []*Scope{
+		newShuffleGroupInputScope(t, 1),
+		newShuffleGroupInputScope(t, 1),
+		newShuffleGroupInputScope(t, 1),
+		newShuffleGroupInputScope(t, 1),
+	}
+	inputRoots := make([]vm.Operator, len(inputs))
+	for i := range inputs {
+		inputRoots[i] = inputs[i].RootOp
+	}
+
+	result := c.compileLocalGroupBy(local, inputs, nodes)
+
+	require.Len(t, result, 4,
+		"local pre-dedup output must remain parallel for the parent exchange")
+	for i := range result {
+		require.Same(t, inputs[i], result[i])
+		groupOp, ok := result[i].RootOp.(*group.Group)
+		require.True(t, ok)
+		require.False(t, groupOp.NeedEval)
+		require.Same(t, inputRoots[i], groupOp.GetOperatorBase().GetChildren(0))
+		require.Empty(t, result[i].PreScopes,
+			"a local-only Group must not introduce a MergeGroup scope")
+	}
+
+	nodes = append(nodes, local)
+	owners := c.compileShuffleGroup(final, result, nodes)
+	require.Len(t, owners, 4)
+	for _, owner := range owners {
+		require.IsType(t, &group.Group{}, owner.RootOp,
+			"the parent exchange must retain four final pair owners")
+	}
+}
+
+type distinctPreAggregationCompilerContext struct {
+	*plan2.MockCompilerContext
+	stats *statspb.StatsInfo
+	cache *plan2.StatsCache
+}
+
+func (c *distinctPreAggregationCompilerContext) Stats(
+	_ *plan.ObjectRef,
+	_ *plan.Snapshot,
+) (*statspb.StatsInfo, error) {
+	return c.stats, nil
+}
+
+func (c *distinctPreAggregationCompilerContext) GetStatsCache() *plan2.StatsCache {
+	return c.cache
+}
+
+func TestLocalPreAggregationCompileShapeIsReachableFromSQL(t *testing.T) {
+	base := plan2.NewMockCompilerContext(false)
+	base.SetContext(context.Background())
+	_, tableDef, err := base.Resolve("tpch", "lineitem", nil)
+	require.NoError(t, err)
+	require.NotNil(t, tableDef)
+
+	stats := plan2.NewStatsInfo()
+	stats.TableCnt = 6_000_000
+	stats.BlockNumber = 1_000
+	stats.NdvMap["l_returnflag"] = 3
+	stats.NdvMap["l_orderkey"] = 1_500_000
+	cache := plan2.NewStatsCache()
+	cache.Set(tableDef.TblId, stats)
+	compilerCtx := &distinctPreAggregationCompilerContext{
+		MockCompilerContext: base,
+		stats:               stats,
+		cache:               cache,
+	}
+
+	const sql = "select l_returnflag, count(distinct l_orderkey) " +
+		"from lineitem group by l_returnflag"
+	statements, err := mysql.Parse(context.Background(), sql, 1)
+	require.NoError(t, err)
+	query, err := plan2.NewPrepareOptimizer(compilerCtx).Optimize(statements[0], false)
+	require.NoError(t, err)
+
+	found := false
+	for _, parent := range query.Nodes {
+		if parent == nil || len(parent.Children) != 1 {
+			continue
+		}
+		childID := parent.Children[0]
+		if childID < 0 || int(childID) >= len(query.Nodes) {
+			continue
+		}
+		if isLocalPreAggregationGroup(parent, query.Nodes[childID]) {
+			found = true
+			break
+		}
+	}
+	require.True(t, found,
+		"the finalized and column-remapped SQL plan must retain the local-pair compile contract")
 }
 
 func newCompileForShuffleGroupTest(t *testing.T) *Compile {

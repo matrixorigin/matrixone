@@ -43,6 +43,7 @@ func TestParseTNConfig(t *testing.T) {
 	max-size = 512
 
 	[hakeeper-client]
+	backend-read-timeout = "20s"
 	service-addresses = [
 		"1",
 		"2"
@@ -75,6 +76,7 @@ func TestParseTNConfig(t *testing.T) {
 	assert.NoError(t, err)
 	assert.Equal(t, tnservice.StorageMEMKV, cfg.getTNServiceConfig().Txn.Storage.Backend)
 	assert.Equal(t, 2, len(cfg.FileServices))
+	assert.Equal(t, 20*time.Second, cfg.HAKeeperClient.BackendReadTimeout.Duration)
 	assert.Equal(t, "local", cfg.FileServices[0].Name)
 	assert.Equal(t, defines.SharedFileServiceName, cfg.FileServices[1].Name)
 	assert.Equal(t, 2, len(cfg.getTNServiceConfig().HAKeeper.ClientConfig.ServiceAddresses))
@@ -308,6 +310,53 @@ func TestMongoDBProgrammaticOptOutSurvivesCNDefaulting(t *testing.T) {
 	cfg.SetDefaultValue()
 	cfg.Frontend.SetDefaultValues()
 	require.False(t, cfg.Frontend.MongoDB.Enable)
+}
+
+func TestClockOffsetBoundRetainedWhenMonitoringDisabled(t *testing.T) {
+	validators := []struct {
+		name string
+		call func(*ServiceConfig) error
+	}{
+		{name: "validate loaded config", call: (*ServiceConfig).validate},
+		{name: "apply programmatic defaults", call: (*ServiceConfig).setDefaultValue},
+	}
+	for _, validator := range validators {
+		t.Run(validator.name, func(t *testing.T) {
+			cfg := newServiceConfig()
+			cfg.ServiceType = metadata.ServiceType_CN.String()
+			require.False(t, cfg.Clock.EnableCheckMaxClockOffset)
+			require.NoError(t, validator.call(&cfg))
+			require.Equal(t, defaultMaxClockOffset, cfg.Clock.MaxClockOffset.Duration)
+
+			cfg = newServiceConfig()
+			cfg.ServiceType = metadata.ServiceType_CN.String()
+			cfg.Clock.MaxClockOffset.Duration = -time.Nanosecond
+			require.ErrorContains(t, validator.call(&cfg), "max-clock-offset must be positive")
+
+			cfg = newServiceConfig()
+			cfg.ServiceType = metadata.ServiceType_CN.String()
+			cfg.Clock.MaxClockOffset.Duration = time.Second
+			cfg.CN.Frontend.ConnectTimeout.Duration = 2*time.Second + time.Nanosecond
+			require.ErrorContains(t, validator.call(&cfg), "authentication freshness clock budget 2.000000001s")
+
+			cfg.CN.Frontend.ConnectTimeout.Duration = 2*time.Second + 2*time.Nanosecond
+			cfg.CN.Frontend.CreateTxnOpTimeout.Duration = time.Nanosecond
+			require.NoError(t, validator.call(&cfg))
+
+			// Catalog authentication is unreachable when user checks are skipped,
+			// so its connection-timeout budget must not reject startup.
+			cfg = newServiceConfig()
+			cfg.ServiceType = metadata.ServiceType_CN.String()
+			cfg.Clock.MaxClockOffset.Duration = time.Second
+			cfg.CN.Frontend.ConnectTimeout.Duration = time.Nanosecond
+			cfg.CN.Frontend.SkipCheckUser = true
+			require.NoError(t, validator.call(&cfg))
+
+			// Skipping authentication does not bypass the general clock contract.
+			cfg.Clock.MaxClockOffset.Duration = -time.Nanosecond
+			require.ErrorContains(t, validator.call(&cfg), "max-clock-offset must be positive")
+		})
+	}
 }
 
 func TestStartupRetryIntervalsDefaultAndConfigurable(t *testing.T) {

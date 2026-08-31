@@ -2835,6 +2835,66 @@ func TestInsert(t *testing.T) {
 	runTestShouldError(mock, t, sqls)
 }
 
+func TestLoadPlanUsesSingleTableLockTarget(t *testing.T) {
+	mock := NewMockOptimizer(true)
+	logicPlan, err := runOneStmt(
+		mock,
+		t,
+		"LOAD DATA INLINE FORMAT='csv', DATA='1,n,1,c' INTO TABLE nation FIELDS TERMINATED BY ','",
+	)
+	require.NoError(t, err)
+
+	query := logicPlan.GetQuery()
+	require.NotNil(t, query)
+	require.Equal(t, plan.Query_INSERT, query.StmtType)
+	require.True(t, query.LoadTag)
+
+	var lockTargets []*plan.LockTarget
+	for _, node := range query.Nodes {
+		if node.NodeType == plan.Node_LOCK_OP {
+			lockTargets = append(lockTargets, node.LockTargets...)
+		}
+	}
+	require.Len(t, lockTargets, 1)
+	require.True(t, lockTargets[0].LockTable)
+	require.Equal(t, mock.ctxt.tables["nation"].TblId, lockTargets[0].TableId)
+}
+
+func TestLoadPlanKeepsUniqueIndexRowLockTarget(t *testing.T) {
+	mock := NewMockOptimizer(true)
+	logicPlan, err := runOneStmt(
+		mock,
+		t,
+		"LOAD DATA INLINE FORMAT='csv', DATA='1,d,l' INTO TABLE dept FIELDS TERMINATED BY ','",
+	)
+	require.NoError(t, err)
+
+	query := logicPlan.GetQuery()
+	require.NotNil(t, query)
+	require.True(t, query.LoadTag)
+
+	var lockTargets []*plan.LockTarget
+	for _, node := range query.Nodes {
+		if node.NodeType == plan.Node_LOCK_OP {
+			lockTargets = append(lockTargets, node.LockTargets...)
+		}
+	}
+	require.Len(t, lockTargets, 2)
+	baseTableTargets := 0
+	indexRowTargets := 0
+	for _, target := range lockTargets {
+		if target.TableId == mock.ctxt.tables["dept"].TblId {
+			require.True(t, target.LockTable)
+			baseTableTargets++
+			continue
+		}
+		require.False(t, target.LockTable)
+		indexRowTargets++
+	}
+	require.Equal(t, 1, baseTableTargets)
+	require.Equal(t, 1, indexRowTargets)
+}
+
 func TestLargeDMLKeepsRowScopedLockTarget(t *testing.T) {
 	sqls := []string{
 		"INSERT INTO NATION SELECT * FROM NATION2",
@@ -3306,6 +3366,9 @@ func TestUpdatePgStyleFromDedupsDuplicateSourceMatchesOnNewPath(t *testing.T) {
 	}
 	if !hasUpdateFromDedupWindow(query, 1) {
 		t.Fatalf("UPDATE FROM should dedup duplicate source matches with row_number window partitioned by row_id")
+	}
+	if !hasUpdateFromDedupInt64Selector(query) {
+		t.Fatalf("UPDATE FROM dedup selector should explicitly cast row_number to int64")
 	}
 }
 
@@ -3937,6 +4000,39 @@ func TestPreparedForeignKeyActionsMarkQueryUncacheable(t *testing.T) {
 	})
 }
 
+func TestDeleteSetNullMaintainsCompositeSecondaryIndexEntry(t *testing.T) {
+	mock := NewMockOptimizer(true)
+	setMockEmpDeptForeignKeyAction(t, mock, plan.ForeignKeyDef_SET_NULL, plan.ForeignKeyDef_RESTRICT)
+
+	emp := mock.ctxt.tables["emp"]
+	require.Len(t, emp.Indexes, 2)
+	emp.Indexes = emp.Indexes[1:]
+	require.False(t, emp.Indexes[0].Unique)
+	emp.Indexes[0].Parts = []string{"deptno", "ename", catalog.AliasPrefix + "empno"}
+
+	logicPlan, err := runOneStmt(mock, t, "delete from dept where deptno = 10")
+	require.NoError(t, err)
+	query := logicPlan.GetQuery()
+	require.Equal(t, 1, countUpdateFkPlanNodes(query, plan.Node_PRE_INSERT_SK),
+		"a composite secondary index retains a row whose key has a NULL component")
+}
+
+func TestDeleteSetNullDropsSingleColumnSecondaryIndexEntry(t *testing.T) {
+	mock := NewMockOptimizer(true)
+	setMockEmpDeptForeignKeyAction(t, mock, plan.ForeignKeyDef_SET_NULL, plan.ForeignKeyDef_RESTRICT)
+
+	emp := mock.ctxt.tables["emp"]
+	require.Len(t, emp.Indexes, 2)
+	emp.Indexes = emp.Indexes[1:]
+	require.False(t, emp.Indexes[0].Unique)
+	emp.Indexes[0].Parts = []string{"deptno", catalog.AliasPrefix + "empno"}
+
+	logicPlan, err := runOneStmt(mock, t, "delete from dept where deptno = 10")
+	require.NoError(t, err)
+	require.Zero(t, countUpdateFkPlanNodes(logicPlan.GetQuery(), plan.Node_PRE_INSERT_SK),
+		"a single-column secondary index compacts the NULL replacement key")
+}
+
 func TestPreparedInsertForeignKeyPlansRemainSensitiveAcrossChecks(t *testing.T) {
 	statements := []struct {
 		name string
@@ -4223,6 +4319,32 @@ func hasUpdateFromDedupWindow(query *Query, partitionByLen int) bool {
 				}
 			}
 			if allRowID {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// hasUpdateFromDedupInt64Selector verifies that the internal UPDATE ... FROM
+// dedup consumer converts ROW_NUMBER's public unsigned result to its signed
+// selector contract at the projection boundary.
+func hasUpdateFromDedupInt64Selector(query *Query) bool {
+	for _, node := range query.Nodes {
+		if node.NodeType != plan.Node_PROJECT {
+			continue
+		}
+		for _, expr := range node.ProjectList {
+			if expr.Typ.Id != int32(types.T_int64) {
+				continue
+			}
+			fn := expr.GetF()
+			if fn == nil || fn.Func == nil || fn.Func.ObjName != "cast" || len(fn.Args) != 2 {
+				continue
+			}
+			col := fn.Args[0].GetCol()
+			if col != nil && col.Name == "__mo_update_from_dedup_row_number" &&
+				fn.Args[0].Typ.Id == int32(types.T_uint64) {
 				return true
 			}
 		}
@@ -7602,6 +7724,10 @@ func TestOnlyFullGroupByCompositePrimaryKeyDependency(t *testing.T) {
 			Nodes: []*plan.Node{
 				{
 					TableDef: &plan.TableDef{
+						Cols: []*plan.ColDef{
+							{Name: "tenant_id", Typ: plan.Type{Id: int32(types.T_int64)}},
+							{Name: "id", Typ: plan.Type{Id: int32(types.T_int64)}},
+						},
 						Pkey: &plan.PrimaryKeyDef{
 							// MatrixOne stores a composite key in a hidden column while
 							// Names retains the user-visible key columns.
@@ -7632,10 +7758,16 @@ func TestOnlyFullGroupByCompositePrimaryKeyDependency(t *testing.T) {
 func TestOnlyFullGroupByUsesStructuredBoundColumns(t *testing.T) {
 	builder := &QueryBuilder{
 		qry: &plan.Query{Nodes: []*plan.Node{
-			{TableDef: &plan.TableDef{Pkey: &plan.PrimaryKeyDef{
-				PkeyColName: "customer.account",
-				Names:       []string{"customer.account"},
-			}}},
+			{TableDef: &plan.TableDef{
+				Cols: []*plan.ColDef{
+					{Name: "customer.account", Typ: plan.Type{Id: int32(types.T_varchar)}},
+					{Name: "unsafe", Typ: plan.Type{Id: int32(types.T_varchar)}},
+				},
+				Pkey: &plan.PrimaryKeyDef{
+					PkeyColName: "customer.account",
+					Names:       []string{"customer.account"},
+				},
+			}},
 			{TableDef: &plan.TableDef{}},
 		}},
 	}

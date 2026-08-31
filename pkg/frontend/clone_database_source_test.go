@@ -719,9 +719,17 @@ func TestCloneSnapshotTxnOperator(t *testing.T) {
 		require.Same(t, outerTxn, cloneSnapshotTxnOperator(ses, bh))
 	})
 
-	t.Run("data branch uses owning background transaction", func(t *testing.T) {
+	t.Run("clone owner mode alone keeps frontend snapshot transaction", func(t *testing.T) {
 		bh := ses.InitBackExec(branchTxn, "", fakeDataSetFetcher2, &BackgroundExecOption{
 			forcePessimisticRC: true,
+		})
+		require.Same(t, outerTxn, cloneSnapshotTxnOperator(ses, bh))
+	})
+
+	t.Run("data branch uses owning background transaction", func(t *testing.T) {
+		bh := ses.InitBackExec(branchTxn, "", fakeDataSetFetcher2, &BackgroundExecOption{
+			forcePessimisticRC:             true,
+			cloneSnapshotUsesBackgroundTxn: true,
 		})
 		require.Same(t, branchTxn, cloneSnapshotTxnOperator(ses, bh))
 	})
@@ -734,7 +742,8 @@ func TestDataBranchCloneLockProcessUsesOwningBackgroundTxn(t *testing.T) {
 	ses := newFeatureLimitTestSession(t)
 	ses.proc.Base.TxnOperator = outerTxn
 	bh := ses.InitBackExec(branchTxn, "", fakeDataSetFetcher2, &BackgroundExecOption{
-		forcePessimisticRC: true,
+		forcePessimisticRC:             true,
+		cloneSnapshotUsesBackgroundTxn: true,
 	})
 
 	lockProc := newDataBranchCloneLockProcess(context.Background(), ses, bh)

@@ -367,10 +367,11 @@ func testStartClient(t *testing.T, tp *testProxyHandler, ci clientInfo, cn *CNSe
 
 func TestClientConn_KillCurrentBackendConn(t *testing.T) {
 	currentCN := &CNServer{
-		connID: 10,
-		uuid:   "cn1",
-		addr:   "127.0.0.1:6001",
-		salt:   testSlat,
+		connID:              10,
+		uuid:                "cn1",
+		addr:                "127.0.0.1:6001",
+		salt:                testSlat,
+		admissionGeneration: 23,
 	}
 	execSC := &killExecServerConn{}
 	activeTunnel := &tunnel{}
@@ -379,6 +380,7 @@ func TestClientConn_KillCurrentBackendConn(t *testing.T) {
 			require.Equal(t, currentCN.uuid, c.uuid)
 			require.Equal(t, currentCN.addr, c.addr)
 			require.Equal(t, currentCN.salt, c.salt)
+			require.Equal(t, currentCN.admissionGeneration, c.admissionGeneration)
 			require.NotZero(t, c.connID)
 			require.Nil(t, tun, "temporary admin connections must not borrow the active session tunnel")
 			return execSC, makeOKPacket(8), nil
@@ -2081,6 +2083,22 @@ type shortHandshakeServerConn struct {
 	rebound              *tunnel
 }
 
+type recordingShortHandshakeServerConn struct {
+	*shortHandshakeServerConn
+	statements []internalStmt
+	execFn     func(internalStmt) (bool, error)
+}
+
+func (s *recordingShortHandshakeServerConn) ExecStmt(
+	stmt internalStmt, _ chan<- []byte,
+) (bool, error) {
+	s.statements = append(s.statements, stmt)
+	if s.execFn != nil {
+		return s.execFn(stmt)
+	}
+	return true, nil
+}
+
 func (s *shortHandshakeServerConn) waitCacheReuseReady(context.Context) error {
 	return nil
 }
@@ -2416,6 +2434,154 @@ func Test_connectToBackend_BindsOnlyAuthenticatedTenant(t *testing.T) {
 		require.Nil(t, got)
 		require.Equal(t, 1, serverConn.closeCount)
 		require.Zero(t, writer.writeCount)
+	})
+
+	t.Run("cached backend restores requested database", func(t *testing.T) {
+		limiter := newConnectionLimiter(2, 1)
+		client, _, writer, cleanup := newClient(t, limiter)
+		defer cleanup()
+		client.mysqlProto.SetDatabaseName("issue_20022")
+		serverConn := &recordingShortHandshakeServerConn{
+			shortHandshakeServerConn: &shortHandshakeServerConn{
+				mockServerConn: newMockServerConn(nil),
+				connResponse:   makeOKPacket(8)[4:],
+			},
+		}
+		client.router = &testRouter{}
+		client.connCache = &mockConnCache{popFn: func(cacheKey, uint32, []byte, []byte) ServerConn {
+			return serverConn
+		}}
+
+		got, err := client.connectToBackend("")
+		require.NoError(t, err)
+		require.Same(t, serverConn, got)
+		require.Equal(t, []internalStmt{{cmdType: cmdQuery, s: "use `issue_20022`"}}, serverConn.statements)
+		require.Equal(t, 1, writer.writeCount)
+	})
+
+	t.Run("failed database restore closes cache and falls back", func(t *testing.T) {
+		limiter := newConnectionLimiter(2, 1)
+		client, _, writer, cleanup := newClient(t, limiter)
+		defer cleanup()
+		client.mysqlProto.SetDatabaseName("issue_20022")
+		cached := &recordingShortHandshakeServerConn{
+			shortHandshakeServerConn: &shortHandshakeServerConn{
+				mockServerConn: newMockServerConn(nil),
+			},
+			execFn: func(internalStmt) (bool, error) {
+				return false, nil
+			},
+		}
+		fresh := &shortHandshakeServerConn{
+			mockServerConn: newMockServerConn(nil),
+		}
+		client.router = &shortHandshakeRouter{response: makeOKPacket(8), sc: fresh}
+		client.connCache = &mockConnCache{popFn: func(cacheKey, uint32, []byte, []byte) ServerConn {
+			return cached
+		}}
+
+		got, err := client.connectToBackend("")
+		require.NoError(t, err)
+		require.Same(t, fresh, got)
+		require.Equal(t, 1, cached.closeCount)
+		require.Equal(t, []internalStmt{{cmdType: cmdQuery, s: "use `issue_20022`"}}, cached.statements)
+		require.Equal(t, 1, writer.writeCount)
+	})
+
+	t.Run("canceled database restore closes cache and returns cause", func(t *testing.T) {
+		limiter := newConnectionLimiter(2, 1)
+		client, _, writer, cleanup := newClient(t, limiter)
+		defer cleanup()
+		client.mysqlProto.SetDatabaseName("issue_20022")
+		cached := &recordingShortHandshakeServerConn{
+			shortHandshakeServerConn: &shortHandshakeServerConn{
+				mockServerConn: newMockServerConn(nil),
+			},
+		}
+		client.router = &testRouter{}
+		client.connCache = &mockConnCache{popFn: func(cacheKey, uint32, []byte, []byte) ServerConn {
+			return cached
+		}}
+		ctx, cancel := context.WithCancel(context.Background())
+		client.ctx = ctx
+		cancel()
+
+		got, err := client.connectToBackend("")
+		require.ErrorIs(t, err, context.Canceled)
+		require.Nil(t, got)
+		require.Equal(t, 1, cached.closeCount)
+		require.Empty(t, cached.statements)
+		require.Zero(t, writer.writeCount)
+	})
+
+	t.Run("cached database restore clears read deadline", func(t *testing.T) {
+		limiter := newConnectionLimiter(2, 1)
+		client, _, writer, cleanup := newClient(t, limiter)
+		defer cleanup()
+		client.mysqlProto.SetDatabaseName("issue_20022")
+
+		local, remote := net.Pipe()
+		defer remote.Close()
+		raw := &phaseDeadlineConn{Conn: local}
+		statements := make([]string, 0, 1)
+		base := &recordingShortHandshakeServerConn{
+			shortHandshakeServerConn: &shortHandshakeServerConn{
+				mockServerConn: newMockServerConn(raw),
+				connResponse:   makeOKPacket(8)[4:],
+			},
+		}
+		serverConn := &deadlineRearmingServerConn{
+			ServerConn: base,
+			raw:        raw,
+			statements: &statements,
+		}
+		defer serverConn.Close()
+		client.router = &testRouter{}
+		client.connCache = &mockConnCache{popFn: func(cacheKey, uint32, []byte, []byte) ServerConn {
+			return serverConn
+		}}
+
+		got, err := client.connectToBackend("")
+		require.NoError(t, err)
+		require.Same(t, serverConn, got)
+		require.Equal(t, []string{"use `issue_20022`"}, statements)
+		require.True(t, raw.readDeadline().IsZero(),
+			"cached database restore must clear the deadline armed by USE")
+		require.Equal(t, 1, writer.writeCount)
+	})
+
+	t.Run("database restore deadline clear failure discards cache and falls back", func(t *testing.T) {
+		limiter := newConnectionLimiter(2, 1)
+		client, _, writer, cleanup := newClient(t, limiter)
+		defer cleanup()
+		client.mysqlProto.SetDatabaseName("issue_20022")
+
+		local, remote := net.Pipe()
+		defer remote.Close()
+		raw := &phaseDeadlineConn{Conn: local, failClear: true}
+		base := &recordingShortHandshakeServerConn{
+			shortHandshakeServerConn: &shortHandshakeServerConn{
+				mockServerConn: newMockServerConn(raw),
+			},
+		}
+		cached := &deadlineRearmingServerConn{
+			ServerConn: base,
+			raw:        raw,
+		}
+		fresh := &shortHandshakeServerConn{
+			mockServerConn: newMockServerConn(nil),
+		}
+		client.router = &shortHandshakeRouter{response: makeOKPacket(8), sc: fresh}
+		client.connCache = &mockConnCache{popFn: func(cacheKey, uint32, []byte, []byte) ServerConn {
+			return cached
+		}}
+
+		got, err := client.connectToBackend("")
+		require.NoError(t, err)
+		require.Same(t, fresh, got)
+		require.Equal(t, 1, base.closeCount)
+		require.False(t, raw.readDeadline().IsZero())
+		require.Equal(t, 1, writer.writeCount)
 	})
 }
 

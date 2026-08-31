@@ -1,7 +1,9 @@
 -- fulltext2 parsers (synchronous build): ngram (default — CJK sliding 3-gram,
--- Latin whole-word), gojieba (dictionary word segmentation), json (values
--- flattened + indexed as ngram). NL is an EXACT ordered phrase for every parser
--- (no bag-of-words); gojieba segments into words first.
+-- Latin whole-word), gojieba (dictionary word segmentation), json (each leaf
+-- indexed as an order-preserving (key, value) TUPLE). NL is an EXACT ordered
+-- phrase for ngram/gojieba (no bag-of-words); gojieba segments into words first.
+-- The json parser is not a text parser at all: it answers json_extract
+-- comparisons, not free-text MATCH — see the json section below.
 
 drop database if exists fulltext2_parser;
 create database fulltext2_parser;
@@ -45,16 +47,44 @@ select id from zj where match(body) against('+苹果 +香蕉' in boolean mode) o
 select id from zj where match(body) against('+北京 -苹果' in boolean mode) order by id;
 
 -- ================= json parser (JSON-typed column) =================
+-- The json parser indexes each leaf as a (key, value) tuple, so it distinguishes
+-- {"b":"red"} from {"c":"red"} — which the old value-only flattening could not.
+-- The tuples are consumed by the optimizer, which rewrites a json_extract
+-- comparison into an index probe ANDed with the original predicate; the original
+-- is always re-evaluated, so results equal an unindexed scan.
 drop table if exists js;
 create table js(id bigint primary key, doc json);
+-- js_plain holds identical rows with NO index: the oracle for every query below.
+drop table if exists js_plain;
+create table js_plain(id bigint primary key, doc json);
 insert into js values
  (0,'{"a":1,"b":"red apple"}'),
  (1,'{"a":2,"b":"中文學習教材"}'),
  (2,'{"a":3,"b":"red blue"}');
+insert into js_plain select * from js;
 create fulltext2 index ft on js(doc) with parser json;
 
-select id from js where match(doc) against('red' in boolean mode) order by id;
-select id from js where match(doc) against('+red +apple' in boolean mode) order by id;
-select id from js where match(doc) against('中文學習') order by id;
+-- string equality on a leaf, including CJK (the value is one whole term, not ngrams)
+select id from js where json_extract_string(doc,'$.b') = 'red apple' order by id;
+select id from js_plain where json_extract_string(doc,'$.b') = 'red apple' order by id;
+select id from js where json_extract_string(doc,'$.b') = '中文學習教材' order by id;
+select id from js_plain where json_extract_string(doc,'$.b') = '中文學習教材' order by id;
+
+-- a SUBSTRING of a value is not a match: the tuple holds the whole value, so
+-- 'red' alone finds nothing (the old flattened-ngram index would have hit here)
+select id from js where json_extract_string(doc,'$.b') = 'red' order by id;
+select id from js_plain where json_extract_string(doc,'$.b') = 'red' order by id;
+
+-- the key is part of the term: the same value under a different key is distinct
+select id from js where json_extract_string(doc,'$.a') = 'red apple' order by id;
+select id from js_plain where json_extract_string(doc,'$.a') = 'red apple' order by id;
+
+-- numeric equality and ranges over the numeric leaf
+select id from js where json_extract_float64(doc,'$.a') = 2 order by id;
+select id from js_plain where json_extract_float64(doc,'$.a') = 2 order by id;
+select id from js where json_extract_float64(doc,'$.a') >= 2 order by id;
+select id from js_plain where json_extract_float64(doc,'$.a') >= 2 order by id;
+select id from js where json_extract_float64(doc,'$.a') < 3 order by id;
+select id from js_plain where json_extract_float64(doc,'$.a') < 3 order by id;
 
 drop database fulltext2_parser;

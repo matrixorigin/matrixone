@@ -293,6 +293,10 @@ func DeduceNotNullable(overloadID int64, args []*plan.Expr) bool {
 			}
 		}
 		return true
+	case TIMESTAMP:
+		if len(args) == 2 {
+			return false
+		}
 	case COALESCE:
 		for _, arg := range args {
 			if arg.Typ.NotNullable {
@@ -302,6 +306,15 @@ func DeduceNotNullable(overloadID int64, args []*plan.Expr) bool {
 		return false
 	case GREATEST, LEAST:
 		return false
+	case EQUAL, NOT_EQUAL:
+		// Direct JSON/BOOL equality preserves the JSON scalar category. A
+		// physically non-NULL JSON value can still contain JSON null, which the
+		// comparison maps to SQL UNKNOWN. Do not infer a non-NULL result merely
+		// from the two vector-level argument declarations.
+		if len(args) == 2 && isJSONBooleanComparison(
+			types.T(args[0].Typ.Id).ToType(), types.T(args[1].Typ.Id).ToType()) {
+			return false
+		}
 	// Value window functions can synthesize NULLs even when every input is
 	// NOT NULL. LAG/LEAD do so outside the partition unless an explicit,
 	// non-NULL default is present. FIRST_VALUE/LAST_VALUE can observe an empty
@@ -377,6 +390,19 @@ func ProducesNoNull(overloadID int64) bool {
 		allSupportedFunctions[fid].testFlag(plan.Function_PRODUCE_NO_NULL)
 }
 
+// HasExecutableCTASTypeDefault reports whether the SQL type default is a valid
+// value for a materialized function result when an INSERT omits that column.
+// This contract is deliberately independent of ProducesNoNull: domain types
+// such as HLL sketches never return NULL, but their zero-value byte string is
+// not a valid encoded sketch.
+func HasExecutableCTASTypeDefault(overloadID int64) bool {
+	fid, _ := DecodeOverloadID(overloadID)
+	return fid >= 0 &&
+		int(fid) < len(allSupportedFunctions) &&
+		int(fid) == allSupportedFunctions[fid].functionId &&
+		allSupportedFunctions[fid].hasExecutableCTASTypeDefault
+}
+
 type FuncGetResult struct {
 	fid        int32
 	overloadId int32
@@ -448,6 +474,10 @@ type FuncNew struct {
 
 	// function type.
 	class plan.Function_FuncFlag
+
+	// Whether the SQL type default is a valid executable default after CTAS
+	// materializes this function's result as a table column.
+	hasExecutableCTASTypeDefault bool
 
 	// All overloads of the function.
 	Overloads []overload

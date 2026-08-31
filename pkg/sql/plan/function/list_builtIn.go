@@ -1013,6 +1013,27 @@ var supportedStringBuiltIns = []FuncNew{
 		},
 	},
 
+	// internal normalization for prepared JSON equality parameters
+	{
+		functionId: INTERNAL_JSON_COMPARISON_PARAM,
+		class:      plan.Function_STRICT,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    fixedTypeMatch,
+
+		Overloads: []overload{
+			{
+				overloadId: 0,
+				args:       []types.T{types.T_text},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_json.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return normalizeJsonComparisonParam
+				},
+			},
+		},
+	},
+
 	// function `json_quote`
 	{
 		functionId: JSON_QUOTE,
@@ -8881,7 +8902,8 @@ var supportedDateAndTimeBuiltIns = []FuncNew{
 			if len(inputs) == 1 && inputs[0].Oid == types.T_TS {
 				return newCheckResultWithSuccess(0)
 			}
-			if len(inputs) == 2 && inputs[0].Oid == types.T_TS && inputs[1].Oid == types.T_int64 {
+			if len(inputs) == 2 && inputs[0].Oid == types.T_TS &&
+				(inputs[1].Oid == types.T_int64 || inputs[1].Oid == types.T_any) {
 				return newCheckResultWithSuccess(0)
 			}
 			return newCheckResultWithFailure(failedFunctionParametersWrong)
@@ -10718,7 +10740,7 @@ var supportedDateAndTimeBuiltIns = []FuncNew{
 		functionId: TIMESTAMP,
 		class:      plan.Function_STRICT,
 		layout:     STANDARD_FUNCTION,
-		checkFn:    fixedTypeMatch,
+		checkFn:    timestampPairTypeCheck,
 
 		Overloads: []overload{
 			{
@@ -10769,6 +10791,14 @@ var supportedDateAndTimeBuiltIns = []FuncNew{
 				},
 				newOp: func() executeLogicOfOverload {
 					return DateStringToTimestamp
+				},
+			},
+			{
+				overloadId: 5,
+				args:       []types.T{types.T_any, types.T_any},
+				retType:    timestampPairReturnType,
+				newOp: func() executeLogicOfOverload {
+					return timestampWithTime
 				},
 			},
 		},
@@ -11588,6 +11618,48 @@ func makeTimeCheck(overloads []overload, inputs []types.Type) checkResult {
 			}
 		}
 		return newCheckResultWithCast(i, targets)
+	}
+	return newCheckResultWithFailure(failedFunctionParametersWrong)
+}
+
+func secToTimeReturnType(parameters []types.Type) types.Type {
+	scale := parameters[0].Scale
+	switch parameters[0].Oid {
+	case types.T_int64, types.T_uint64:
+		scale = 0
+	default:
+		if scale < 0 {
+			scale = 6
+		} else if scale > 6 {
+			scale = 6
+		}
+	}
+	return types.T_time.ToTypeWithScale(scale)
+}
+
+func secToTimeCheck(overloads []overload, inputs []types.Type) checkResult {
+	if len(inputs) != 1 {
+		return newCheckResultWithFailure(failedFunctionParametersWrong)
+	}
+	if !isMakeTimeTextType(inputs[0].Oid) && !inputs[0].Oid.IsDecimal() {
+		return fixedTypeMatch(overloads, inputs)
+	}
+
+	status, _ := tryToMatch(inputs, []types.T{types.T_varchar})
+	if status == matchFailed {
+		return fixedTypeMatch(overloads, inputs)
+	}
+	for i, ov := range overloads {
+		if len(ov.args) != 1 || ov.args[0] != types.T_varchar {
+			continue
+		}
+		target := types.T_varchar.ToType()
+		if inputs[0].Oid.IsDecimal() {
+			target.Scale = inputs[0].Scale
+		} else {
+			target.Scale = -1
+		}
+		return newCheckResultWithCast(i, []types.Type{target})
 	}
 	return newCheckResultWithFailure(failedFunctionParametersWrong)
 }
@@ -12472,14 +12544,12 @@ var supportedControlBuiltIns = []FuncNew{
 		functionId: SEC_TO_TIME,
 		class:      plan.Function_STRICT,
 		layout:     STANDARD_FUNCTION,
-		checkFn:    fixedTypeMatch,
+		checkFn:    secToTimeCheck,
 		Overloads: []overload{
 			{
 				overloadId: 0,
 				args:       []types.T{types.T_int64},
-				retType: func(parameters []types.Type) types.Type {
-					return types.T_time.ToType()
-				},
+				retType:    secToTimeReturnType,
 				newOp: func() executeLogicOfOverload {
 					return SecToTime
 				},
@@ -12487,9 +12557,7 @@ var supportedControlBuiltIns = []FuncNew{
 			{
 				overloadId: 1,
 				args:       []types.T{types.T_uint64},
-				retType: func(parameters []types.Type) types.Type {
-					return types.T_time.ToType()
-				},
+				retType:    secToTimeReturnType,
 				newOp: func() executeLogicOfOverload {
 					return SecToTime
 				},
@@ -12497,9 +12565,15 @@ var supportedControlBuiltIns = []FuncNew{
 			{
 				overloadId: 2,
 				args:       []types.T{types.T_float64},
-				retType: func(parameters []types.Type) types.Type {
-					return types.T_time.ToType()
+				retType:    secToTimeReturnType,
+				newOp: func() executeLogicOfOverload {
+					return SecToTime
 				},
+			},
+			{
+				overloadId: 3,
+				args:       []types.T{types.T_varchar},
+				retType:    secToTimeReturnType,
 				newOp: func() executeLogicOfOverload {
 					return SecToTime
 				},

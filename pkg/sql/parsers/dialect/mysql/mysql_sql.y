@@ -69,6 +69,26 @@ func sqlTaskInt64(v any) int64 {
         panic(fmt.Sprintf("unexpected integral type %T", v))
     }
 }
+
+func makeWindowSpec(refName *tree.CStr, partitionBy tree.Exprs, orderBy tree.OrderBy, frame *tree.FrameClause) *tree.WindowSpec {
+    hasFrame := frame != nil
+    if frame == nil {
+        frame = &tree.FrameClause{Type: tree.Range}
+        frame.Start = &tree.FrameBound{Type: tree.Preceding, UnBounded: true}
+        if orderBy == nil {
+            frame.End = &tree.FrameBound{Type: tree.Following, UnBounded: true}
+        } else {
+            frame.End = &tree.FrameBound{Type: tree.CurrentRow}
+        }
+    }
+    return &tree.WindowSpec{
+        RefName: refName,
+        PartitionBy: partitionBy,
+        OrderBy: orderBy,
+        Frame: frame,
+        HasFrame: hasFrame,
+    }
+}
 %}
 
 %struct {
@@ -221,6 +241,8 @@ func sqlTaskInt64(v any) int64 {
     clusterByOption *tree.ClusterByOption
     partitionBy *tree.PartitionBy
     windowSpec *tree.WindowSpec
+    windowDefinition *tree.WindowDefinition
+    windowDefinitions tree.WindowDefinitions
     frameClause *tree.FrameClause
     frameBound *tree.FrameBound
     frameType tree.FrameType
@@ -451,7 +473,8 @@ func sqlTaskInt64(v any) int64 {
 %token <str> MAX_ROWS MIN_ROWS PACK_KEYS ROW_FORMAT STATS_AUTO_RECALC STATS_PERSISTENT STATS_SAMPLE_PAGES
 %token <str> DYNAMIC COMPRESSED REDUNDANT COMPACT FIXED COLUMN_FORMAT AUTO_RANDOM ENGINE_ATTRIBUTE SECONDARY_ENGINE_ATTRIBUTE INSERT_METHOD
 %token <str> RESTRICT CASCADE ACTION PARTIAL SIMPLE CHECK ENFORCED
-%token <str> RANGE LIST ALGORITHM LINEAR PARTITIONS SUBPARTITION SUBPARTITIONS CLUSTER
+%nonassoc <str> RANGE
+%token <str> LIST ALGORITHM LINEAR PARTITIONS SUBPARTITION SUBPARTITIONS CLUSTER
 %token <str> TYPE ANY SOME EXTERNAL LOCALFILE URL
 %token <str> PREPARE DEALLOCATE RESET
 %token <str> EXTENSION
@@ -888,7 +911,10 @@ func sqlTaskInt64(v any) int64 {
 %type <partitionOption> partition_by_opt
 %type <clusterByOption> cluster_by_opt
 %type <partitionBy> partition_method sub_partition_method sub_partition_opt
-%type <windowSpec> window_spec_opt window_spec
+%type <windowSpec> window_spec_opt window_spec window_spec_body
+%type <windowDefinition> window_definition
+%type <windowDefinitions> window_clause_opt window_definition_list
+%type <cstr> window_name_opt
 %type <frameClause> window_frame_clause window_frame_clause_opt
 %type <frameBound> frame_bound frame_bound_start
 %type <frameType> frame_type
@@ -1009,6 +1035,10 @@ func sqlTaskInt64(v any) int64 {
 // Once an alias or table-factor suffix is complete, ASOF can only be reduced
 // as the native join modifier.
 %left ASOF
+// Named window clause. Keep new tokens at the end of the token declarations
+// so regenerating the parser does not renumber every existing token.
+%token <str> WINDOW
+%nonassoc WINDOW_NAME_EMPTY
 %type<tableLock> table_lock_elem
 %type<tableLocks> table_lock_list
 %type<tableLockType> table_lock_type
@@ -7461,7 +7491,7 @@ union_op:
     }
 
 simple_select_clause:
-    SELECT select_options_opt select_expression_list select_into_param_opt from_opt where_expression_opt group_by_opt having_opt
+    SELECT select_options_opt select_expression_list select_into_param_opt from_opt where_expression_opt group_by_opt having_opt window_clause_opt
     {
         $$ = &tree.SelectClause{
             Distinct: tree.QuerySpecOptionDistinct & $2 != 0,
@@ -7472,6 +7502,7 @@ simple_select_clause:
             Where: $6,
             GroupBy: $7,
             Having: $8,
+            Windows: $9,
             Option: $2,
         }
     }
@@ -13339,29 +13370,58 @@ window_spec_opt:
 |	window_spec
 
 window_spec:
-    OVER '(' window_partition_by_opt order_by_opt window_frame_clause_opt ')'
+    OVER ident
     {
-    	hasFrame := true
-    	var f *tree.FrameClause
-    	if $5 != nil {
-    		f = $5
-    	} else {
-    		hasFrame = false
-    		f = &tree.FrameClause{Type: tree.Range}
-    		if $4 == nil {
-				f.Start = &tree.FrameBound{Type: tree.Preceding, UnBounded: true}
-                f.End = &tree.FrameBound{Type: tree.Following, UnBounded: true}
-    		} else {
-    			f.Start = &tree.FrameBound{Type: tree.Preceding, UnBounded: true}
-            	f.End = &tree.FrameBound{Type: tree.CurrentRow}
-    		}
-    	}
-        $$ = &tree.WindowSpec{
-            PartitionBy: $3,
-            OrderBy: $4,
-            Frame: f,
-            HasFrame: hasFrame,
-        }
+		$$ = makeWindowSpec($2, nil, nil, nil)
+		$$.ReferencedOnly = true
+    }
+|   OVER '(' window_spec_body ')'
+    {
+        $$ = $3
+    }
+
+window_spec_body:
+    window_name_opt window_partition_by_opt order_by_opt window_frame_clause_opt
+    {
+        $$ = makeWindowSpec($1, $2, $3, $4)
+    }
+
+window_name_opt:
+    // RANGE remains a non-reserved identifier outside a window specification.
+    // Here it must start a frame instead of being consumed as a base-window
+    // name; a named window called `range` can still be quoted.
+    %prec WINDOW_NAME_EMPTY
+    {
+        $$ = nil
+    }
+|   ident
+    {
+        $$ = $1
+    }
+
+window_clause_opt:
+    {
+        $$ = nil
+    }
+|   WINDOW window_definition_list
+    {
+        $$ = $2
+    }
+
+window_definition_list:
+    window_definition
+    {
+        $$ = tree.WindowDefinitions{$1}
+    }
+|   window_definition_list ',' window_definition
+    {
+        $$ = append($1, $3)
+    }
+
+window_definition:
+    ident AS '(' window_spec_body ')'
+    {
+        $$ = &tree.WindowDefinition{Name: $1, Spec: $4}
     }
 
 function_call_aggregate:
@@ -13465,14 +13525,16 @@ function_call_aggregate:
             WindowSpec: $5,
         }
     }
-|   APPROX_PERCENTILE '(' expression_list ')' window_spec_opt
+|   APPROX_PERCENTILE '(' expression_list ')' within_group_opt window_spec_opt
     {
         name := tree.NewUnresolvedColName($1)
         $$ = &tree.FuncExpr{
             Func: tree.FuncName2ResolvableFunctionReference(name),
             FuncName: tree.NewCStr($1, 1),
             Exprs: $3,
-            WindowSpec: $5,
+            WindowSpec: $6,
+            OrderBy: $5,
+            WithinGroup: $5 != nil,
         }
     }
 |   BIT_AND '(' func_type_opt expression ')' window_spec_opt
@@ -13616,7 +13678,18 @@ function_call_aggregate:
 	    Exprs: tree.Exprs{$4},
 	    Type: $3,
 	    WindowSpec: $6,
-	    }
+	}
+    }
+|   MEDIAN '(' ')' WITHIN GROUP '(' order_by_clause ')' window_spec_opt
+    {
+	name := tree.NewUnresolvedColName($1)
+	$$ = &tree.FuncExpr{
+	    Func: tree.FuncName2ResolvableFunctionReference(name),
+        FuncName: tree.NewCStr($1, 1),
+	    OrderBy: $7,
+	    WithinGroup: true,
+	    WindowSpec: $9,
+	}
     }
 |   BITMAP_CONSTRUCT_AGG '(' func_type_opt expression ')' window_spec_opt
     {

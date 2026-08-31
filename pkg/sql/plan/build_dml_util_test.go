@@ -328,6 +328,29 @@ func TestMakeInsertValueConstExprGeometry(t *testing.T) {
 	require.Equal(t, int32(types.T_geometry), fn.Args[1].Typ.Id)
 }
 
+func TestMakeInsertValueConstExprDefersInternalTimeOverflow(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	colType := types.T_time.ToTypeWithScale(6)
+
+	for _, value := range []string{
+		"2562047788:00:00", "-2562047788:00:00",
+		"25620477880000", "-25620477880000",
+	} {
+		t.Run(value, func(t *testing.T) {
+			numVal := tree.NewNumVal(value, value, false, tree.P_char)
+			expr, err := MakeInsertValueConstExpr(proc, numVal, &colType, false)
+			require.NoError(t, err)
+			require.Equal(t, int32(types.T_time), expr.Typ.Id)
+
+			fn := expr.GetF()
+			require.NotNil(t, fn)
+			require.Contains(t, []string{"cast_strict", "cast_assign"}, fn.Func.ObjName)
+			require.Equal(t, int32(types.T_varchar), fn.Args[0].Typ.Id)
+			require.Equal(t, value, fn.Args[0].GetLit().GetSval())
+		})
+	}
+}
+
 func TestMakeInsertValueConstExprBinaryHexPadding(t *testing.T) {
 	proc := testutil.NewProcess(t)
 
@@ -660,7 +683,7 @@ func TestAppendDeleteIndexTablePlanUsesPrefixLookupKey(t *testing.T) {
 			typMap,
 			posMap,
 			lastNodeID,
-			true, true, false,
+			true, true, false, false,
 		)
 
 		require.NoError(t, err)
@@ -689,7 +712,7 @@ func TestAppendDeleteIndexTablePlanUsesPrefixLookupKey(t *testing.T) {
 			typMap,
 			posMap,
 			lastNodeID,
-			false, true, true,
+			false, true, true, false,
 		)
 
 		require.NoError(t, err)
@@ -698,6 +721,30 @@ func TestAppendDeleteIndexTablePlanUsesPrefixLookupKey(t *testing.T) {
 		require.False(t, joinNode.IsRightJoin)
 		require.Equal(t, plan.Node_PROJECT, builder.qry.Nodes[joinNode.Children[0]].NodeType)
 		require.Equal(t, plan.Node_TABLE_SCAN, builder.qry.Nodes[joinNode.Children[1]].NodeType)
+	})
+
+	t.Run("composite set null delete keeps matched hidden rows only", func(t *testing.T) {
+		builder, bindCtx, lastNodeID := newBuilder(t)
+
+		gotNodeID, err := appendDeleteIndexTablePlan(
+			builder,
+			bindCtx,
+			&plan.ObjectRef{ObjName: "idx_body_tenant"},
+			indexTableDef,
+			&plan.IndexDef{Parts: []string{"body", "tenant"}},
+			typMap,
+			posMap,
+			lastNodeID,
+			false, false, false, true,
+		)
+
+		require.NoError(t, err)
+		joinNode := builder.qry.Nodes[gotNodeID]
+		require.Equal(t, plan.Node_JOIN, joinNode.NodeType)
+		require.Equal(t, plan.Node_INNER, joinNode.JoinType)
+		require.False(t, joinNode.IsRightJoin)
+		require.NotEmpty(t, joinNode.ProjectList)
+		require.Equal(t, plan.Node_TABLE_SCAN, builder.qry.Nodes[joinNode.Children[0]].NodeType)
 	})
 
 	t.Run("composite prefix part", func(t *testing.T) {
@@ -715,7 +762,7 @@ func TestAppendDeleteIndexTablePlanUsesPrefixLookupKey(t *testing.T) {
 			typMap,
 			posMap,
 			lastNodeID,
-			false, true, false,
+			false, true, false, false,
 		)
 
 		require.NoError(t, err)
@@ -745,7 +792,7 @@ func TestAppendDeleteIndexTablePlanUsesPrefixLookupKey(t *testing.T) {
 			typMap,
 			posMap,
 			lastNodeID,
-			true, true, false,
+			true, true, false, false,
 		)
 
 		require.NoError(t, err)

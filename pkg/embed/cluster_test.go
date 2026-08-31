@@ -78,6 +78,7 @@ func TestOperatorOwnsConstructedServiceBeforeStart(t *testing.T) {
 func TestOperatorRejectsUnverifiedSiriusBenchmarkBeforeStartup(t *testing.T) {
 	op := new(operator)
 	op.serviceType = metadata.ServiceType_CN
+	op.cfg.ServiceType = metadata.ServiceType_CN.String()
 	op.cfg.CN.Sirius.Enabled = true
 	op.cfg.CN.Sirius.BenchmarkNoGC = true
 	op.cfg.TN_please_use_getTNServiceConfig = &tnservice.Config{}
@@ -517,32 +518,65 @@ func TestClusterAdmissionCoversFullLifecycle(t *testing.T) {
 	require.Nil(t, c.testAdmission)
 }
 
-func TestWithTestingExtendsStoreLivenessWithoutExtendingHeartbeatDeadline(t *testing.T) {
+func TestWithTestingBoundsHeartbeatRecoveryInsideStoreLiveness(t *testing.T) {
 	clusterValue, err := NewCluster(WithTesting())
 	if clusterValue != nil {
 		t.Cleanup(func() { require.NoError(t, clusterValue.Close()) })
 	}
 	require.NoError(t, err)
 	c := clusterValue.(*cluster)
-	// The heartbeat loop performs RPCs serially. A test mode must allow
-	// temporarily missing stores without turning a failed heartbeat into a
-	// long-lived blocked request that prevents the next scheduling command from
-	// being observed.
-	require.Zero(t, c.options.heartbeatTimeout)
+	require.Equal(t, testHAKeeperHeartbeatTimeout, c.options.heartbeatTimeout)
+	require.Less(t, c.options.heartbeatTimeout, c.options.storeTimeout)
 
 	for _, svc := range c.services {
 		cfg := svc.GetServiceConfig()
+		require.Equal(t, testHAKeeperBackendReadTimeout,
+			cfg.HAKeeperClient.BackendReadTimeout.Duration)
 		switch svc.ServiceType() {
 		case metadata.ServiceType_CN:
-			require.Zero(t, cfg.CN.HAKeeper.HeatbeatTimeout.Duration)
+			require.Equal(t, testHAKeeperHeartbeatTimeout,
+				cfg.CN.HAKeeper.HeatbeatTimeout.Duration)
+			require.Less(t, cfg.CN.HAKeeper.HeatbeatTimeout.Duration,
+				cfg.HAKeeperClient.BackendReadTimeout.Duration)
 		case metadata.ServiceType_TN:
-			require.Zero(t, cfg.getTNServiceConfig().HAKeeper.HeatbeatTimeout.Duration)
+			require.Equal(t, testHAKeeperHeartbeatTimeout,
+				cfg.getTNServiceConfig().HAKeeper.HeatbeatTimeout.Duration)
+			require.Less(t, cfg.getTNServiceConfig().HAKeeper.HeatbeatTimeout.Duration,
+				cfg.HAKeeperClient.BackendReadTimeout.Duration)
 		case metadata.ServiceType_LOG:
 			require.Equal(t, testHAKeeperStoreTimeout,
 				cfg.LogService.HAKeeperConfig.TNStoreTimeout.Duration)
 			require.Equal(t, testHAKeeperStoreTimeout,
 				cfg.LogService.HAKeeperConfig.CNStoreTimeout.Duration)
+			require.Less(t, cfg.HAKeeperClient.BackendReadTimeout.Duration,
+				cfg.LogService.HAKeeperConfig.TNStoreTimeout.Duration)
 		}
+	}
+}
+
+func TestTestingHAKeeperBackendReadTimeoutPreservesExplicitValue(t *testing.T) {
+	const explicit = 7 * time.Second
+	cfg := newServiceConfig()
+	cfg.HAKeeperClient.BackendReadTimeout.Duration = explicit
+
+	applyTestingHAKeeperBackendReadTimeout(&cfg)
+	require.Equal(t, explicit, cfg.HAKeeperClient.BackendReadTimeout.Duration)
+}
+
+func TestWithTestingPreservesExplicitHeartbeatTimeout(t *testing.T) {
+	const explicit = 7 * time.Second
+	for name, options := range map[string][]Option{
+		"before testing mode": {WithHAKeeperHeartbeatTimeout(explicit), WithTesting()},
+		"after testing mode":  {WithTesting(), WithHAKeeperHeartbeatTimeout(explicit)},
+	} {
+		t.Run(name, func(t *testing.T) {
+			c := new(cluster)
+			for _, option := range options {
+				option(c)
+			}
+			require.Equal(t, explicit, c.options.heartbeatTimeout)
+			require.Equal(t, testHAKeeperStoreTimeout, c.options.storeTimeout)
+		})
 	}
 }
 

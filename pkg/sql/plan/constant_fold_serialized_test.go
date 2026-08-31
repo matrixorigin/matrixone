@@ -23,6 +23,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
@@ -114,6 +115,53 @@ func TestConstantFoldPreservesSerializedLiteralProvenance(t *testing.T) {
 			require.Equal(t, test.wantSerialized, decoded.GetLit().GetIsSerialized())
 		})
 	}
+}
+
+func TestOptimizerConstantFoldsNegativeSecToTime(t *testing.T) {
+	stmt, err := mysql.ParseOne(t.Context(), "select sec_to_time(-2378)", 1)
+	require.NoError(t, err)
+
+	query, err := NewBaseOptimizer(NewMockCompilerContext(true)).Optimize(stmt, false)
+	require.NoError(t, err)
+	require.NotEmpty(t, query.Steps)
+	root := query.Nodes[query.Steps[len(query.Steps)-1]]
+	require.NotEmpty(t, root.ProjectList)
+
+	literal := root.ProjectList[0].GetLit()
+	require.NotNil(t, literal)
+	require.Equal(t, int64(-2378*types.MicroSecsPerSec), literal.GetTimeval())
+}
+
+func TestConstantFoldDefersLegacyTimeAssignmentCast(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	inputType := types.T_varchar.ToType()
+	timeType := types.T_time.ToTypeWithScale(6)
+	registered, err := function.GetFunctionByName(
+		context.Background(), "cast_strict", []types.Type{inputType, timeType},
+	)
+	require.NoError(t, err)
+
+	expr := &planpb.Expr{
+		Typ: planpb.Type{Id: int32(types.T_time), Scale: 6},
+		Expr: &planpb.Expr_F{F: &planpb.Function{
+			Func: &planpb.ObjectRef{Obj: registered.GetEncodedOverloadID(), ObjName: "cast_strict"},
+			Args: []*planpb.Expr{
+				{
+					Typ:  planpb.Type{Id: int32(types.T_varchar)},
+					Expr: &planpb.Expr_Lit{Lit: &planpb.Literal{Value: &planpb.Literal_Sval{Sval: "2562047788:00:00"}}},
+				},
+				{
+					Typ:  planpb.Type{Id: int32(types.T_time), Scale: 6},
+					Expr: &planpb.Expr_T{T: &planpb.TargetType{}},
+				},
+			},
+		}},
+	}
+
+	folded, err := ConstantFold(batch.EmptyForConstFoldBatch, expr, proc, false, true)
+	require.NoError(t, err)
+	require.NotNil(t, folded.GetF())
+	require.Equal(t, "cast_strict", folded.GetF().GetFunc().GetObjName())
 }
 
 func TestConstantFoldPreservesSerialCastSemantics(t *testing.T) {
@@ -378,21 +426,117 @@ func TestConstantListFoldPreservesPerItemStringProvenance(t *testing.T) {
 	}
 
 	textType := planpb.Type{Id: int32(types.T_varchar)}
+	ordinaryLiteral := &planpb.Expr{
+		Typ: textType,
+		Expr: &planpb.Expr_Lit{Lit: &planpb.Literal{
+			Value:       &planpb.Literal_Sval{Sval: "ordinary"},
+			LiteralForm: planpb.StringLiteralForm_STRING_LITERAL_TEXT,
+		}},
+	}
 	ordinaryList := &planpb.Expr{
 		Typ: textType,
-		Expr: &planpb.Expr_List{List: &planpb.ExprList{List: []*planpb.Expr{{
-			Typ: textType,
-			Expr: &planpb.Expr_Lit{Lit: &planpb.Literal{
-				Value:       &planpb.Literal_Sval{Sval: "ordinary"},
-				LiteralForm: planpb.StringLiteralForm_STRING_LITERAL_TEXT,
-			}},
-		}}}},
+		Expr: &planpb.Expr_List{List: &planpb.ExprList{List: []*planpb.Expr{
+			ordinaryLiteral, DeepCopyExpr(ordinaryLiteral),
+		}}},
 	}
 	foldedControl, err := ConstantFold(
 		batch.EmptyForConstFoldBatch, ordinaryList, proc, false, true,
 	)
 	require.NoError(t, err)
 	require.NotNil(t, foldedControl.GetVec(), "same-domain list keeps the existing fold fast path")
+	require.Equal(t, int32(1), foldedControl.GetVec().GetLen(), "duplicate literals compact to one row")
+	require.Equal(t, uint32(types.StringSourceLiteral), foldedControl.GetVec().GetStringSource())
+	require.Equal(t, foldedControl.GetVec().GetStringSource(),
+		DeepCopyExpr(foldedControl).GetVec().GetStringSource())
+	payload, err := proto.Marshal(foldedControl)
+	require.NoError(t, err)
+	decodedControl := new(planpb.Expr)
+	require.NoError(t, proto.Unmarshal(payload, decodedControl))
+	require.Equal(t, foldedControl.GetVec().GetStringSource(),
+		decodedControl.GetVec().GetStringSource())
+	result, free, evalErr := colexec.GetReadonlyResultFromExpression(
+		proc, foldedControl, []*batch.Batch{batch.EmptyForConstFoldBatch},
+	)
+	require.NoError(t, evalErr)
+	defer free()
+	require.Equal(t, types.StringSourceLiteral, result.GetStringSourceAt(0))
+}
+
+func TestConstantFoldPreservesExplicitCastSource(t *testing.T) {
+	ctx := NewMockCompilerContext(true)
+	stmt, err := mysql.ParseOne(t.Context(), "select cast('x' as char)", 1)
+	require.NoError(t, err)
+	pl, err := BuildPlan(ctx, stmt, false)
+	require.NoError(t, err)
+	query := pl.GetQuery()
+	root := query.Nodes[query.Steps[len(query.Steps)-1]]
+	require.Len(t, root.ProjectList, 1)
+	unfolded := root.ProjectList[0]
+	require.NotNil(t, unfolded.GetF())
+
+	node := &planpb.Node{ProjectList: []*planpb.Expr{DeepCopyExpr(unfolded)}}
+	rule.NewConstantFold(false).Apply(node, nil, ctx.GetProcess())
+	folded := node.ProjectList[0]
+	require.NotNil(t, folded.GetLit())
+	require.Equal(t, uint32(types.StringSourceExpression)+1, folded.GetLit().GetStringSource())
+
+	copied := DeepCopyExpr(folded)
+	require.Equal(t, folded.GetLit().GetStringSource(), copied.GetLit().GetStringSource())
+	require.Equal(t, exprStructuralHash(folded), exprStructuralHash(copied))
+	require.True(t, exprStructuralEqual(folded, copied))
+	payload, err := proto.Marshal(folded)
+	require.NoError(t, err)
+	decoded := new(planpb.Expr)
+	require.NoError(t, proto.Unmarshal(payload, decoded))
+	require.Equal(t, folded.GetLit().GetStringSource(), decoded.GetLit().GetStringSource())
+	require.Equal(t, exprStructuralHash(folded), exprStructuralHash(decoded))
+	require.True(t, exprStructuralEqual(folded, decoded))
+
+	result, free, err := colexec.GetReadonlyResultFromExpression(
+		ctx.GetProcess(), decoded, []*batch.Batch{batch.EmptyForConstFoldBatch})
+	require.NoError(t, err)
+	defer free()
+	require.Equal(t, types.StringSourceExpression, result.GetStringSourceAt(0))
+
+	plain := &planpb.Expr{
+		Typ: planpb.Type{Id: int32(types.T_varchar)},
+		Expr: &planpb.Expr_Lit{Lit: &planpb.Literal{
+			Value: &planpb.Literal_Sval{Sval: "x"},
+		}},
+	}
+	plainResult, plainFree, err := colexec.GetReadonlyResultFromExpression(
+		ctx.GetProcess(), plain, []*batch.Batch{batch.EmptyForConstFoldBatch})
+	require.NoError(t, err)
+	defer plainFree()
+	require.Equal(t, types.StringSourceLiteral, plainResult.GetStringSourceAt(0))
+}
+
+func TestMakeInExprRuntimePayloadKeepsExpressionSource(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	scanKeys := vector.NewVec(types.T_varchar.ToType())
+	require.NoError(t, vector.AppendBytes(scanKeys, []byte("runtime-key"), false, proc.Mp()))
+	require.Equal(t, types.StringSourceExpression, scanKeys.GetStringSourceAt(0))
+	data, err := scanKeys.MarshalBinary()
+	require.NoError(t, err)
+	scanKeys.Free(proc.Mp())
+
+	typ := planpb.Type{Id: int32(types.T_varchar)}
+	inExpr := MakeInExpr(t.Context(), &planpb.Expr{
+		Typ: typ,
+		Expr: &planpb.Expr_Col{Col: &planpb.ColRef{
+			RelPos: 0,
+			ColPos: 0,
+		}},
+	}, 1, data, false)
+	runtimePayload := inExpr.GetF().Args[1]
+	require.Zero(t, runtimePayload.GetVec().GetStringSource())
+
+	result, free, evalErr := colexec.GetReadonlyResultFromExpression(
+		proc, runtimePayload, []*batch.Batch{batch.EmptyForConstFoldBatch},
+	)
+	require.NoError(t, evalErr)
+	defer free()
+	require.Equal(t, types.StringSourceExpression, result.GetStringSourceAt(0))
 }
 
 func TestConstantFoldPreservesSelectedStringDomain(t *testing.T) {

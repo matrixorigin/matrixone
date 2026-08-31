@@ -17,7 +17,14 @@ package embed
 import "time"
 
 const (
-	testHAKeeperStoreTimeout = 60 * time.Second
+	// Test clusters run under the race detector and may lose several seconds to
+	// scheduler instrumentation while a catalog-heavy transaction is active.
+	// Keep the heartbeat request alive through a transient scheduler stall, and
+	// keep the shared transport alive longer than that request. Both remain
+	// bounded well inside the store-liveness window so real failures are retried.
+	testHAKeeperHeartbeatTimeout   = 15 * time.Second
+	testHAKeeperBackendReadTimeout = 20 * time.Second
+	testHAKeeperStoreTimeout       = 60 * time.Second
 )
 
 func WithConfigs(
@@ -47,6 +54,9 @@ func WithCNCount(
 func WithTesting() Option {
 	return func(c *cluster) {
 		c.options.testing = true
+		if c.options.heartbeatTimeout == 0 {
+			c.options.heartbeatTimeout = testHAKeeperHeartbeatTimeout
+		}
 		if c.options.storeTimeout == 0 {
 			c.options.storeTimeout = testHAKeeperStoreTimeout
 		}
@@ -63,9 +73,9 @@ func WithConcurrentTestClusters() Option {
 }
 
 // WithHAKeeperHeartbeatTimeout overrides the CN and TN HAKeeper heartbeat RPC
-// deadline for this embedded cluster. Heartbeats are issued serially, so a
-// larger deadline also delays retries and command delivery after a failed RPC.
-// Use it only when the RPC response itself requires a longer deadline.
+// deadline for this embedded cluster. Heartbeat retries remain serial, but
+// schedule-command polling uses an independent transport and progress budget.
+// Use this only when a test needs a deadline different from its mode default.
 func WithHAKeeperHeartbeatTimeout(timeout time.Duration) Option {
 	return func(c *cluster) {
 		c.options.heartbeatTimeout = timeout

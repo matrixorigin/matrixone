@@ -107,7 +107,11 @@ func (s *Scope) CreateDatabase(c *Compile) error {
 	}
 
 	ctx = context.WithValue(ctx, defines.DatTypKey{}, datType)
-	return c.e.Create(ctx, dbName, c.proc.GetTxnOperator())
+	if err := c.e.Create(ctx, dbName, c.proc.GetTxnOperator()); err != nil {
+		return err
+	}
+	c.setAffectedRows(1)
+	return nil
 }
 
 func (s *Scope) DropDatabase(c *Compile) error {
@@ -117,6 +121,12 @@ func (s *Scope) DropDatabase(c *Compile) error {
 	}
 	s.ScopeAnalyzer.Start()
 	defer s.ScopeAnalyzer.Stop()
+	// DROP DATABASE changes PITR ownership and can reclaim branch metadata
+	// through its nested table drops. Enter the shared lifecycle before any
+	// account, database, or relation lookup/lock.
+	if err := c.lockDataBranchLineageOwnerLifecycle(); err != nil {
+		return err
+	}
 
 	accountId, err := defines.GetAccountId(c.proc.Ctx)
 	if err != nil {
@@ -203,11 +213,14 @@ func (s *Scope) DropDatabase(c *Compile) error {
 	if err != nil {
 		return err
 	}
-	if c.proc.Base.IsFrontend && !needSkipDbs[dbName] {
-		droppedDatabaseID, parseErr := strconv.ParseUint(database.GetDatabaseId(c.proc.Ctx), 10, 64)
-		if parseErr != nil {
-			return parseErr
+	var droppedDatabaseID uint64
+	if !needSkipDbs[dbName] {
+		droppedDatabaseID, err = strconv.ParseUint(database.GetDatabaseId(c.proc.Ctx), 10, 64)
+		if err != nil {
+			return err
 		}
+	}
+	if c.proc.Base.IsFrontend && !needSkipDbs[dbName] {
 		generation := uint64(c.proc.GetTxnOperator().SnapshotTS().PhysicalTime)
 		if err = c.enqueueViewsAfterDatabaseRemoval(accountId, droppedDatabaseID, generation); err != nil {
 			return err
@@ -260,6 +273,12 @@ func (s *Scope) DropDatabase(c *Compile) error {
 		}
 		if !isIndexTable {
 			deleteTables = append(deleteTables, r)
+		}
+	}
+
+	if !needSkipDbs[dbName] {
+		if err = c.deleteRolePrivilegesForDroppedDatabase(accountId, droppedDatabaseID); err != nil {
+			return err
 		}
 	}
 
@@ -330,6 +349,14 @@ func (s *Scope) DropDatabase(c *Compile) error {
 	err = idxcron.UnregisterUpdateByDbName(c.proc.Ctx, c.proc.GetService(), c.proc.GetTxnOperator(), dbName)
 	if err != nil {
 		return err
+	}
+	if session, ok := c.proc.GetSession().(interface {
+		RemoveTempTablesByDatabase(string)
+	}); ok {
+		// The catalog removal has completed, so these aliases now refer to
+		// relations that cannot be cloned during connection migration. The
+		// session implementation journals this cleanup with the DDL statement.
+		session.RemoveTempTablesByDatabase(dbName)
 	}
 
 	c.setAffectedRows(uint64(len(deleteTables)))
@@ -493,7 +520,11 @@ func (s *Scope) AlterView(c *Compile) error {
 		return err
 	}
 
-	if err = dbSource.Create(context.WithValue(c.proc.Ctx, defines.SqlKey{}, c.sql), tblName, append(exeCols, exeDefs...)); err != nil {
+	createCtx := context.WithValue(c.proc.Ctx, defines.SqlKey{}, c.sql)
+	// ALTER VIEW replaces the physical catalog row but preserves the logical
+	// object identity, so exact-view grants remain attached to the view.
+	createCtx = context.WithValue(createCtx, defines.LogicalIdKey{}, oldLogicalID)
+	if err = dbSource.Create(createCtx, tblName, append(exeCols, exeDefs...)); err != nil {
 		return err
 	}
 	if err = c.persistViewDependencies(dbSource, dbName, qry.GetTableDef()); err != nil {
@@ -705,7 +736,16 @@ func (s *Scope) alterTableInplace(c *Compile, cleanup *alterAutoIncrementResetCl
 		if qry.TableDef.Indexes != nil {
 			for _, indexdef := range qry.TableDef.Indexes {
 				if indexdef.TableExist {
-					if err = lockIndexTable(c.proc.Ctx, dbSource, c.e, c.proc, indexdef.IndexTableName, true); err != nil {
+					if err = lockIndexTableForAlter(
+						c.proc.Ctx,
+						dbSource,
+						c.e,
+						c.proc,
+						tblName,
+						qry.TableDef.TblId,
+						indexdef,
+						retryErr != nil,
+					); err != nil {
 						if !moerr.IsMoErrCode(err, moerr.ErrParseError) &&
 							!moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetry) &&
 							!moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetryWithDefChanged) {
@@ -824,7 +864,8 @@ func (s *Scope) alterTableInplace(c *Compile, cleanup *alterAutoIncrementResetCl
 						//1. drop index table
 						if indexdef.TableExist {
 							if err := c.runSqlWithOptions(
-								"DROP TABLE `"+indexdef.IndexTableName+"`", executor.StatementOption{}.WithDisableLog(),
+								"DROP TABLE "+sqlquote.QualifiedIdent(dbName, indexdef.IndexTableName),
+								executor.StatementOption{}.WithDisableLog(),
 							); err != nil {
 								return err
 							}
@@ -2123,6 +2164,31 @@ func (s *Scope) createTable(c *Compile, tableCreated func()) error {
 		// so internal SQL stays on one CN and can see uncommitted table metadata.
 		c.setHaveDDL(true)
 		statementOption := executor.StatementOption{}.WithDisableLog()
+		numericPrefixPlan := false
+		numericPrefixPositions := make(map[int]bool)
+		if c.pn.GetDdl().GetQuery() != nil {
+			scanErr := plan.VisitExpressionsInOwner(c.pn.GetDdl().GetQuery(), func(expr *plan.Expr) error {
+				return plan.VisitExprTree(expr, func(candidate *plan.Expr) error {
+					fn := candidate.GetF()
+					if fn == nil || fn.Func.GetObjName() != "cast" || candidate.Typ.Charset != 255 {
+						return nil
+					}
+					numericPrefixPlan = true
+					return plan.VisitExprTree(candidate, func(source *plan.Expr) error {
+						if param := source.GetP(); param != nil && param.Pos >= 0 {
+							numericPrefixPositions[int(param.Pos)] = true
+						}
+						return nil
+					})
+				})
+			})
+			if scanErr != nil {
+				return scanErr
+			}
+		}
+		if !numericPrefixPlan {
+			clear(numericPrefixPositions)
+		}
 		if params := c.proc.GetPrepareParams(); c.pn.IsPrepare && params != nil && params.Length() > 0 {
 			values := make([]string, params.Length())
 			nulls := make([]bool, params.Length())
@@ -2130,6 +2196,11 @@ func (s *Scope) createTable(c *Compile, tableCreated func()) error {
 				nulls[i] = params.IsNull(uint64(i))
 				if !nulls[i] {
 					values[i] = string(params.GetRawBytesAt(i))
+					if numericPrefixPositions[i] {
+						if prefix, ok := function.GetNumericStringPrefix(values[i]); ok {
+							values[i] = prefix
+						}
+					}
 				}
 			}
 			statementOption = statementOption.WithParamsAndNulls(values, nulls)
@@ -2559,7 +2630,8 @@ func (s *Scope) CreateView(c *Compile) error {
 
 		if qry.GetReplace() {
 			if err = c.runSqlWithOptions(
-				fmt.Sprintf("DROP VIEW IF EXISTS %s", viewName), executor.StatementOption{}.WithDisableLog(),
+				fmt.Sprintf("DROP VIEW IF EXISTS %s", quoteAlterCopyTableName(dbName, viewName)),
+				executor.StatementOption{}.WithDisableLog(),
 			); err != nil {
 				getLogger(s.Proc.GetService()).Error("drop existing view failed",
 					zap.String("databaseName", c.db),
@@ -2817,7 +2889,13 @@ func (s *Scope) CreateIndex(c *Compile) error {
 		for alias, realName := range tempIndexNameMap {
 			// Register temp index aliases after DDL succeeds, so failed
 			// CREATE INDEX does not leave stale session mappings.
-			tempTableSession.AddTempTable(qry.Database, alias, realName)
+			if indexSession, ok := tempTableSession.(interface {
+				AddTempIndexTable(dbName, alias, realName string)
+			}); ok {
+				indexSession.AddTempIndexTable(qry.Database, alias, realName)
+			} else {
+				tempTableSession.AddTempTable(qry.Database, alias, realName)
+			}
 		}
 	}
 	{
@@ -3116,22 +3194,10 @@ func (s *Scope) DropIndex(c *Compile) error {
 
 	//2. drop index table
 	for _, indexTableName := range dropIndexTableNames {
-		if _, err = d.Relation(c.proc.Ctx, indexTableName, nil); err != nil {
+		if err = c.dropIndexChildRelation(
+			d, indexTableName, oldTableDef.GetIsTemporary(),
+		); err != nil {
 			return err
-		}
-
-		if err = maybeDeleteAutoIncrement(c.proc.Ctx, c.proc.GetService(), d, indexTableName, c.proc.GetTxnOperator()); err != nil {
-			return err
-		}
-
-		if err = d.Delete(c.proc.Ctx, indexTableName); err != nil {
-			return err
-		}
-
-		if oldTableDef.GetIsTemporary() {
-			if session := c.proc.GetSession(); session != nil {
-				session.RemoveTempTableByRealName(indexTableName)
-			}
 		}
 	}
 
@@ -3709,6 +3775,9 @@ func (s *Scope) DropSequence(c *Compile) error {
 	var err error
 
 	tblName := qry.GetTable()
+	if err = lockMoDatabase(c, dbName, lock.LockMode_Shared); err != nil {
+		return err
+	}
 	dbSource, err = c.e.Database(c.proc.Ctx, dbName, c.proc.GetTxnOperator())
 	if err != nil {
 		if qry.GetIfExists() {
@@ -3729,10 +3798,117 @@ func (s *Scope) DropSequence(c *Compile) error {
 		return err
 	}
 
+	// Sequence grants resolve through mo_tables and therefore use the same
+	// logical object identity as table/view grants.
+	droppedObjectID := plan2.SnapshotTableID(rel.GetTableDef(c.proc.Ctx))
+
 	// Delete the stored session value.
 	c.proc.GetSessionInfo().SeqDeleteKeys = append(c.proc.GetSessionInfo().SeqDeleteKeys, rel.GetTableID(c.proc.Ctx))
 
-	return dbSource.Delete(c.proc.Ctx, tblName)
+	if err = dbSource.Delete(c.proc.Ctx, tblName); err != nil {
+		return err
+	}
+	return c.deleteRolePrivilegesForDroppedRelation(droppedObjectID)
+}
+
+func (c *Compile) deleteRolePrivilegesForDroppedDatabase(accountID uint32, databaseID uint64) error {
+	ignoreForeignKey, _ := c.proc.Ctx.Value(defines.IgnoreForeignKey{}).(bool)
+	// DROP ACCOUNT sets this flag and removes the tenant's privilege catalog
+	// before dropping its databases, so the outer lifecycle already owns cleanup.
+	if ignoreForeignKey {
+		return nil
+	}
+	if databaseID == 0 {
+		return moerr.NewInternalError(c.proc.Ctx, "cannot clean role privileges for database ID 0")
+	}
+	return c.runSqlWithOptions(
+		fmt.Sprintf(deleteMoRolePrivsWithDatabaseIdFormat, databaseID, accountID, databaseID),
+		executor.StatementOption{}.WithDisableLog(),
+	)
+}
+
+func (c *Compile) deleteRolePrivilegesForDroppedRelation(objectID uint64) error {
+	ignoreForeignKey, _ := c.proc.Ctx.Value(defines.IgnoreForeignKey{}).(bool)
+	// Database recursion and ALTER/TRUNCATE replacement set this flag. The
+	// former is cleaned once by DropDatabase; the latter preserves logical ID.
+	if ignoreForeignKey {
+		return nil
+	}
+	if objectID == 0 {
+		return moerr.NewInternalError(c.proc.Ctx, "cannot clean role privileges for relation ID 0")
+	}
+	return c.runSqlWithOptions(
+		fmt.Sprintf(deleteMoRolePrivsWithObjectIdFormat, objectID),
+		executor.StatementOption{}.WithDisableLog(),
+	)
+}
+
+func (c *Compile) dropIndexChildRelation(
+	database engine.Database,
+	relationName string,
+	isTemporary bool,
+) error {
+	var logicalID uint64
+	// Hidden relations are owned by the parent table lifecycle and cannot be a
+	// GRANT target. Do not add a second child metadata lock here: DML acquires
+	// shared locks for all index write targets, and upgrading one child while
+	// retaining another creates a cross-index wait cycle. We only need the child
+	// identity to remove legacy privilege rows after its parent-owned deletion.
+	relation, err := database.Relation(c.proc.Ctx, relationName, nil)
+	if err != nil {
+		return err
+	}
+	if !isTemporary {
+		logicalID = plan2.SnapshotTableID(relation.GetTableDef(c.proc.Ctx))
+	}
+	if err = maybeDeleteAutoIncrement(
+		c.proc.Ctx, c.proc.GetService(), database, relationName, c.proc.GetTxnOperator(),
+	); err != nil {
+		return err
+	}
+	if err = database.Delete(c.proc.Ctx, relationName); err != nil {
+		return err
+	}
+	if logicalID != 0 {
+		if err = c.deleteRolePrivilegesForDroppedRelation(logicalID); err != nil {
+			return err
+		}
+	}
+	if isTemporary {
+		if session := c.proc.GetSession(); session != nil {
+			session.RemoveTempTableByRealName(relationName)
+		}
+	}
+	return nil
+}
+
+func lockDroppedRelation(
+	c *Compile,
+	dbName string,
+	relationName string,
+	relation engine.Relation,
+	lockStorage bool,
+) error {
+	var retryErr error
+	if err := lockMoTable(c, dbName, relationName, lock.LockMode_Exclusive); err != nil {
+		if !moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetry) &&
+			!moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetryWithDefChanged) {
+			return err
+		}
+		retryErr = err
+	}
+	// Every persistent relation, including a source, owns a mo_tables lifecycle
+	// row. Only ordinary stored tables also have user-table storage to lock.
+	if lockStorage {
+		if err := lockTable(c.proc.Ctx, c.e, c.proc, relation, dbName, true); err != nil {
+			if !moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetry) &&
+				!moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetryWithDefChanged) {
+				return err
+			}
+			retryErr = err
+		}
+	}
+	return retryErr
 }
 
 func (s *Scope) DropTable(c *Compile) error {
@@ -3798,6 +3974,13 @@ func (s *Scope) dropTableSingle(c *Compile, qry *plan.DropTable) error {
 			return nil
 		}
 	}
+	if !isTemp {
+		// A plain DROP TABLE updates PITR state and may reclaim branch-owner
+		// rows. The gate must precede mo_database/mo_tables locks.
+		if err = c.lockDataBranchLineageOwnerLifecycle(); err != nil {
+			return err
+		}
+	}
 
 	if !c.disableLock {
 		if err := lockMoDatabase(c, dbName, lock.LockMode_Shared); err != nil {
@@ -3823,6 +4006,7 @@ func (s *Scope) dropTableSingle(c *Compile, qry *plan.DropTable) error {
 	droppedRelationID := rel.GetTableID(c.proc.Ctx)
 	droppedTableDef := rel.GetTableDef(c.proc.Ctx)
 	droppedLogicalID := droppedTableDef.GetLogicalId()
+	droppedObjectID := plan2.SnapshotTableID(droppedTableDef)
 	droppedDatabaseID := droppedTableDef.GetDbId()
 	if c.proc.Base.IsFrontend && !isTemp && !c.ignorePublish && !needSkipDbs[dbName] &&
 		(!c.proc.GetSessionInfo().IsRestore || restoreInvalidatesViewMetadata(c.proc.Ctx)) {
@@ -3858,26 +4042,8 @@ func (s *Scope) dropTableSingle(c *Compile, qry *plan.DropTable) error {
 
 	if !c.disableLock &&
 		!isTemp &&
-		!isView &&
-		!isSource &&
 		c.proc.GetTxnOperator().Txn().IsPessimistic() {
-		var err error
-		if e := lockMoTable(c, dbName, tblName, lock.LockMode_Exclusive); e != nil {
-			if !moerr.IsMoErrCode(e, moerr.ErrTxnNeedRetry) &&
-				!moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetryWithDefChanged) {
-				return e
-			}
-			err = e
-		}
-		// before dropping table, lock it.
-		if e := lockTable(c.proc.Ctx, c.e, c.proc, rel, dbName, true); e != nil {
-			if !moerr.IsMoErrCode(e, moerr.ErrTxnNeedRetry) &&
-				!moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetryWithDefChanged) {
-				return e
-			}
-			err = e
-		}
-		if err != nil {
+		if err = lockDroppedRelation(c, dbName, tblName, rel, !isView && !isSource); err != nil {
 			return err
 		}
 	}
@@ -4033,6 +4199,11 @@ func (s *Scope) dropTableSingle(c *Compile, qry *plan.DropTable) error {
 	if err := dbSource.Delete(c.proc.Ctx, tblName); err != nil {
 		return err
 	}
+	if !isTemp && !needSkipDbs[dbName] {
+		if err = c.deleteRolePrivilegesForDroppedRelation(droppedObjectID); err != nil {
+			return err
+		}
+	}
 	if !isTemp && !c.ignorePublish && c.proc.Base.IsFrontend {
 		if err = c.enqueueViewsAfterRelationRemoval(
 			dbName, tblName, droppedDatabaseID, droppedRelationID, droppedLogicalID); err != nil {
@@ -4056,20 +4227,9 @@ func (s *Scope) dropTableSingle(c *Compile, qry *plan.DropTable) error {
 	}
 
 	for _, name := range qry.IndexTableNames {
-		if err = maybeDeleteAutoIncrement(c.proc.Ctx, c.proc.GetService(), dbSource, name, c.proc.GetTxnOperator()); err != nil {
+		if err = c.dropIndexChildRelation(dbSource, name, isTemp); err != nil {
 			return err
 		}
-
-		if err := dbSource.Delete(c.proc.Ctx, name); err != nil {
-			return err
-		}
-
-		if isTemp {
-			if sess := c.proc.GetSession(); sess != nil {
-				sess.RemoveTempTableByRealName(name)
-			}
-		}
-
 	}
 
 	if dbName != catalog.MO_CATALOG && tblName != catalog.MO_INDEXES {
@@ -4298,6 +4458,7 @@ func (s *Scope) AlterSequence(c *Compile) error {
 
 	var values []interface{}
 	var curval string
+	var oldLogicalID uint64
 	qry := s.Plan.GetDdl().GetAlterSequence()
 	// convert the plan's cols to the execution's cols
 	planCols := qry.GetTableDef().GetCols()
@@ -4323,6 +4484,9 @@ func (s *Scope) AlterSequence(c *Compile) error {
 	}
 
 	if rel, err := dbSource.Relation(c.proc.Ctx, tblName, nil); err == nil {
+		// ALTER SEQUENCE replaces the physical relation but preserves the logical
+		// privilege identity, like ALTER VIEW/TABLE replacement.
+		oldLogicalID = plan2.SnapshotTableID(rel.GetTableDef(c.proc.Ctx))
 		// sequence table exists
 		// get pre sequence table row values
 		_values, err := c.proc.GetSessionInfo().SqlHelper.ExecSql(fmt.Sprintf("select * from `%s`.`%s`", dbName, tblName))
@@ -4339,7 +4503,8 @@ func (s *Scope) AlterSequence(c *Compile) error {
 		curval = c.proc.GetSessionInfo().SeqCurValues[rel.GetTableID(c.proc.Ctx)]
 		// dorp the pre sequence
 		if err = c.runSqlWithOptions(
-			fmt.Sprintf("DROP SEQUENCE %s", tblName), executor.StatementOption{}.WithDisableLog(),
+			fmt.Sprintf("DROP SEQUENCE %s", quoteAlterCopyTableName(dbName, tblName)),
+			executor.StatementOption{}.WithDisableLog().WithIgnoreForeignKey(),
 		); err != nil {
 			return err
 		}
@@ -4355,7 +4520,9 @@ func (s *Scope) AlterSequence(c *Compile) error {
 		return err
 	}
 
-	if err := dbSource.Create(context.WithValue(c.proc.Ctx, defines.SqlKey{}, c.sql), tblName, append(exeCols, exeDefs...)); err != nil {
+	createCtx := context.WithValue(c.proc.Ctx, defines.SqlKey{}, c.sql)
+	createCtx = context.WithValue(createCtx, defines.LogicalIdKey{}, oldLogicalID)
+	if err := dbSource.Create(createCtx, tblName, append(exeCols, exeDefs...)); err != nil {
 		return err
 	}
 
@@ -5113,6 +5280,75 @@ var lockIndexTable = func(ctx context.Context, dbSource engine.Database, eng eng
 	return doLockTable(eng, proc, rel, defChanged)
 }
 
+func lockIndexTableForAlter(
+	ctx context.Context,
+	dbSource engine.Database,
+	eng engine.Engine,
+	proc *process.Process,
+	parentTableName string,
+	plannedParentTableID uint64,
+	plannedIndex *plan.IndexDef,
+	parentDefinitionChanged bool,
+) error {
+	if plannedIndex == nil {
+		return moerr.NewInternalError(ctx, "nil index definition while locking ALTER TABLE index")
+	}
+	err := lockIndexTable(ctx, dbSource, eng, proc, plannedIndex.IndexTableName, true)
+	if err == nil || !moerr.IsMoErrCode(err, moerr.ErrNoSuchTable) {
+		return err
+	}
+
+	// A definition-change result from the parent lock already proves that the
+	// planned hidden-table generation is stale. Otherwise, distinguish that
+	// race from persistent catalog corruption before asking the RC loop to
+	// replan: retrying an unchanged missing generation would never converge.
+	if parentDefinitionChanged {
+		return moerr.NewTxnNeedRetryWithDefChanged(ctx)
+	}
+	changed, checkErr := alterIndexGenerationChanged(
+		ctx, dbSource, parentTableName, plannedParentTableID, plannedIndex,
+	)
+	if checkErr != nil {
+		return checkErr
+	}
+	if changed {
+		return moerr.NewTxnNeedRetryWithDefChanged(ctx)
+	}
+	return err
+}
+
+func alterIndexGenerationChanged(
+	ctx context.Context,
+	dbSource engine.Database,
+	parentTableName string,
+	plannedParentTableID uint64,
+	plannedIndex *plan.IndexDef,
+) (bool, error) {
+	currentParent, err := dbSource.Relation(ctx, parentTableName, nil)
+	if err != nil {
+		if moerr.IsMoErrCode(err, moerr.ErrNoSuchTable) {
+			return true, nil
+		}
+		return false, err
+	}
+	if currentParent.GetTableID(ctx) != plannedParentTableID {
+		return true, nil
+	}
+	currentTableDef := currentParent.CopyTableDef(ctx)
+	if currentTableDef == nil {
+		return false, moerr.NewInternalErrorf(ctx,
+			"missing table definition for ALTER TABLE parent %s", parentTableName)
+	}
+	for _, currentIndex := range currentTableDef.Indexes {
+		if currentIndex == nil || !strings.EqualFold(currentIndex.IndexName, plannedIndex.IndexName) {
+			continue
+		}
+		return currentIndex.TableExist != plannedIndex.TableExist ||
+			currentIndex.IndexTableName != plannedIndex.IndexTableName, nil
+	}
+	return true, nil
+}
+
 func lockRows(
 	eng engine.Engine,
 	proc *process.Process,
@@ -5499,7 +5735,7 @@ func (s *Scope) CreatePitr(c *Compile) error {
 	// This prevents COPY ALTER from swapping the table generation between
 	// planning and publication.
 	pitrObjectID, err := preparePitrPublication(
-		c.lockDataBranchLineageOwnerPublication,
+		c.lockDataBranchLineageOwnerLifecycle,
 		func() error {
 			txnMeta := c.proc.GetTxnOperator().Txn()
 			if shouldAdvanceAlterDataBranchLineageSnapshot(
@@ -5603,16 +5839,23 @@ func (s *Scope) CreatePitr(c *Compile) error {
 
 	var needInsertSysPitr = true
 	var needUpdateSysPitr = false
+	var mergedSysPitrLength = uint64(createPitr.GetPitrValue())
+	var mergedSysPitrUnit = createPitr.GetPitrUnit()
 	if len(sysRes.Batches) > 0 && sysRes.Batches[0].RowCount() > 0 {
 		// sys_mo_catalog_pitr exists
-		needInsertSysPitr, needUpdateSysPitr, err = CheckSysMoCatalogPitrResult(c.proc.Ctx, sysRes.Batches[0].Vecs, uint64(createPitr.GetPitrValue()), createPitr.GetPitrUnit())
+		needInsertSysPitr, needUpdateSysPitr, mergedSysPitrLength, mergedSysPitrUnit, err = CheckSysMoCatalogPitrResult(
+			c.proc.Ctx,
+			sysRes.Batches[0].Vecs,
+			uint64(createPitr.GetPitrValue()),
+			createPitr.GetPitrUnit(),
+		)
 		if err != nil {
 			return err
 		}
 	}
 
 	if needUpdateSysPitr {
-		updateSql := fmt.Sprintf("UPDATE mo_catalog.mo_pitr SET pitr_length = %d, pitr_unit = '%s' WHERE pitr_name = '%s'", createPitr.GetPitrValue(), createPitr.GetPitrUnit(), sysMoCatalogPitr)
+		updateSql := fmt.Sprintf("UPDATE mo_catalog.mo_pitr SET pitr_length = %d, pitr_unit = '%s' WHERE pitr_name = '%s'", mergedSysPitrLength, mergedSysPitrUnit, sysMoCatalogPitr)
 		err = c.runSqlWithAccountIdAndOptions(updateSql, sysAccountId, executor.StatementOption{}.WithDisableLog())
 		if err != nil {
 			return err
@@ -5724,29 +5967,15 @@ func (c *Compile) resolveCurrentPitrObjectID(createPitr *plan.CreatePitr) (uint6
 	}
 }
 
-// addTimeSpan returns the UTC time that is 'length' units before now, where unit is one of "h", "d", "mo", "y"
-func addTimeSpan(length int, unit string) (time.Time, error) {
-	now := time.Now().UTC()
-	switch unit {
-	case "h":
-		return now.Add(time.Duration(-length) * time.Hour), nil
-	case "d":
-		return now.AddDate(0, 0, -length), nil
-	case "mo":
-		return now.AddDate(0, -length, 0), nil
-	case "y":
-		return now.AddDate(-length, 0, 0), nil
-	default:
-		return time.Time{}, moerr.NewInternalErrorNoCtxf("unknown unit '%s'", unit)
-	}
-}
-
 func (s *Scope) DropPitr(c *Compile) error {
 	if s.ScopeAnalyzer == nil {
 		s.ScopeAnalyzer = NewScopeAnalyzer()
 	}
 	s.ScopeAnalyzer.Start()
 	defer s.ScopeAnalyzer.Stop()
+	if err := c.lockDataBranchLineageOwnerLifecycle(); err != nil {
+		return err
+	}
 
 	dropPitr := s.Plan.GetDdl().GetDropPitr()
 	pitrName := dropPitr.GetName()
@@ -5853,15 +6082,22 @@ func getSqlForCheckDupPitrFormat(accountId uint32, objId uint64) string {
 //
 //	needInsert: true if sys_mo_catalog_pitr does not exist
 //	needUpdate: true if it exists and needs update
-//	oldLength, oldUnit: the old values if exist (for debug)
+//	mergedLength, mergedUnit: a future-stable range covering old and new values
 //	err: error if any
-func CheckSysMoCatalogPitrResult(ctx context.Context, vecs []*vector.Vector, newLength uint64, newUnit string) (needInsert, needUpdate bool, err error) {
+func CheckSysMoCatalogPitrResult(
+	ctx context.Context,
+	vecs []*vector.Vector,
+	newLength uint64,
+	newUnit string,
+) (needInsert, needUpdate bool, mergedLength uint64, mergedUnit string, err error) {
 	needInsert = true
 	needUpdate = false
+	mergedLength = newLength
+	mergedUnit = newUnit
 	var oldLength uint64
 	oldUnit := ""
 	if len(vecs) < 2 {
-		return false, false, moerr.NewInternalErrorf(ctx, "unexpected sys_mo_catalog_pitr result columns")
+		return false, false, 0, "", moerr.NewInternalErrorf(ctx, "unexpected sys_mo_catalog_pitr result columns")
 	}
 	if vecs[0].Length() > 0 {
 		col := vector.MustFixedColNoTypeCheck[uint64](vecs[0])
@@ -5873,20 +6109,28 @@ func CheckSysMoCatalogPitrResult(ctx context.Context, vecs []*vector.Vector, new
 	}
 	if vecs[0].Length() > 0 && vecs[1].Length() > 0 {
 		needInsert = false
-		// Compare time ranges
-		oldMinTs, err1 := addTimeSpan(int(oldLength), oldUnit)
-		if err1 != nil {
-			return false, false, err1
+		if oldLength > 100 || newLength > 100 {
+			return false, false, 0, "", moerr.NewInvalidInputf(
+				ctx,
+				"invalid PITR lengths %d and %d",
+				oldLength,
+				newLength,
+			)
 		}
-		newMinTs, err2 := addTimeSpan(int(newLength), newUnit)
-		if err2 != nil {
-			return false, false, err2
+		merged, unit, mergeErr := databranchutils.MergePitrRetentionRanges(
+			int(oldLength),
+			oldUnit,
+			int(newLength),
+			newUnit,
+		)
+		if mergeErr != nil {
+			return false, false, 0, "", mergeErr
 		}
-		if newMinTs.UnixNano() < oldMinTs.UnixNano() {
-			needUpdate = true
-		}
+		mergedLength = uint64(merged)
+		mergedUnit = unit
+		needUpdate = mergedLength != oldLength || mergedUnit != oldUnit
 	}
-	return needInsert, needUpdate, nil
+	return needInsert, needUpdate, mergedLength, mergedUnit, nil
 }
 
 func getSqlForCheckPitrExists(pitrName string, accountId uint32) string {

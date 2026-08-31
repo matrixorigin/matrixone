@@ -17,9 +17,11 @@ package table_scan
 import (
 	"bytes"
 	"time"
+	"unicode/utf8"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
@@ -49,6 +51,9 @@ func (tableScan *TableScan) Prepare(proc *process.Process) (err error) {
 		tableScan.OpAnalyzer = process.NewAnalyzer(tableScan.GetIdx(), tableScan.IsFirst, tableScan.IsLast, "table_scan")
 	} else {
 		tableScan.OpAnalyzer.Reset()
+	}
+	if tableScan.ctr.padCharToFullLength, err = process.ResolvePadCharToFullLength(proc); err != nil {
+		return err
 	}
 
 	if tableScan.TopValueMsgTag > 0 {
@@ -214,12 +219,61 @@ func (tableScan *TableScan) Call(proc *process.Process) (vm.CallResult, error) {
 			}
 		}
 
+		if tableScan.ctr.padCharToFullLength {
+			if err = padCharColumnsToFullLength(tableScan.ctr.buf, proc); err != nil {
+				e = err
+				return vm.CancelResult, err
+			}
+		}
+
 		break
 	}
 
 	retBatch := tableScan.ctr.buf
 
 	return vm.CallResult{Batch: retBatch, Status: vm.ExecNext}, nil
+}
+
+func padCharColumnsToFullLength(bat *batch.Batch, proc *process.Process) error {
+	for _, vec := range bat.Vecs {
+		if vec == nil || vec.GetType().Oid != types.T_char || vec.IsConstNull() {
+			continue
+		}
+		// A late-materialized filter sees the full schema but only its early
+		// columns have values. Leave unloaded CHAR vectors for the post-read
+		// padding pass, after the reader has materialized them.
+		if bat.RowCount() != 0 && vec.Length() == 0 {
+			continue
+		}
+
+		width := int(vec.GetType().Width)
+		if width <= 0 {
+			continue
+		}
+		rowCount := bat.RowCount()
+		if vec.IsConst() {
+			rowCount = 1
+		}
+		for row := 0; row < rowCount; row++ {
+			if vec.GetNulls().Contains(uint64(row)) {
+				continue
+			}
+			value := vec.GetBytesAt(row)
+			missing := width - utf8.RuneCount(value)
+			if missing <= 0 {
+				continue
+			}
+			padded := make([]byte, len(value)+missing)
+			copy(padded, value)
+			for i := len(value); i < len(padded); i++ {
+				padded[i] = ' '
+			}
+			if err := vector.SetBytesAt(vec, row, padded, proc.Mp()); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
 }
 
 func (tableScan *TableScan) traceRead(proc *process.Process, bat *batch.Batch) {
@@ -273,6 +327,12 @@ func (tableScan *TableScan) evalFilter(
 	bat *batch.Batch,
 	loadedColumns []int,
 ) (engine.ReaderFilterResult, error) {
+	if tableScan.ctr.padCharToFullLength {
+		if err := padCharColumnsToFullLength(bat, proc); err != nil {
+			return engine.ReaderFilterResult{}, err
+		}
+	}
+
 	analyzer := tableScan.OpAnalyzer
 	var sels []int64
 	defer func() {

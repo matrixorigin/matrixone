@@ -77,6 +77,7 @@ const (
 	ErrTooBigPrecision             uint16 = 20205
 	ErrRegexpIllegalArgument       uint16 = 20206
 	ErrPreparedParamOutOfRange     uint16 = 20207
+	ErrTruncatedWrongValue         uint16 = 20208
 
 	// Group 3: invalid input
 	ErrBadConfig            uint16 = 20300
@@ -342,6 +343,13 @@ const (
 	ErrTooManyPartitionFuncFields          uint16 = 20823
 	ErrTooManyParameter                    uint16 = 20824
 	ErrCteMemoryQuotaExceeded              uint16 = 20825
+	ErrTooManyWindows                      uint16 = 20826
+	ErrWindowNoSuchWindow                  uint16 = 20827
+	ErrWindowCircularityInWindowGraph      uint16 = 20828
+	ErrWindowNoChildPartitioning           uint16 = 20829
+	ErrWindowNoInheritFrame                uint16 = 20830
+	ErrWindowNoRedefineOrderBy             uint16 = 20831
+	ErrWindowDuplicateName                 uint16 = 20832
 
 	// Group 9: streaming
 	ErrUnsupportedOption   uint16 = 20901
@@ -409,33 +417,34 @@ var errorMsgRefer = map[uint16]moErrorMsgItem{
 	ErrInternal:                    {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "internal error: %s"},
 	ErrNYI:                         {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "%s is not yet implemented"},
 	ErrOOM:                         {ER_ENGINE_OUT_OF_MEMORY, []string{MySQLDefaultSqlState}, "error: out of memory"},
-	ErrQueryInterrupted:            {ER_QUERY_INTERRUPTED, []string{MySQLDefaultSqlState}, "query interrupted"},
+	ErrQueryInterrupted:            {ER_QUERY_INTERRUPTED, []string{"70100"}, "query interrupted"},
 	ErrNotSupported:                {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "not supported: %s"},
 	ErrRemoteDispatchNotRegistered: {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "remote dispatch receiver %s is not registered yet"},
 	ErrMPoolCapacity:               {ER_ENGINE_OUT_OF_MEMORY, []string{MySQLDefaultSqlState}, "mpool physical capacity exceeded: %s"},
 	ErrQueryTimeout:                {ER_QUERY_TIMEOUT, []string{MySQLDefaultSqlState}, "Query execution was interrupted, maximum statement execution time exceeded"},
 
 	// Group 2: numeric
-	ErrDivByZero:                   {ER_DIVISION_BY_ZERO, []string{MySQLDefaultSqlState}, "division by zero"},
-	ErrOutOfRange:                  {ER_DATA_OUT_OF_RANGE, []string{MySQLDefaultSqlState}, "data out of range: data type %s, %s"},
-	ErrDataTruncated:               {ER_DATA_TOO_LONG, []string{MySQLDefaultSqlState}, "data truncated: data type %s, %s"},
+	ErrDivByZero:                   {ER_DIVISION_BY_ZERO, []string{"22012"}, "division by zero"},
+	ErrOutOfRange:                  {ER_DATA_OUT_OF_RANGE, []string{"22003"}, "data out of range: data type %s, %s"},
+	ErrDataTruncated:               {ER_DATA_TOO_LONG, []string{"22001"}, "data truncated: data type %s, %s"},
 	ErrCastWidthExceeded:           {ER_DATA_TOO_LONG, []string{"22001"}, "%s"},
 	ErrInvalidArg:                  {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "invalid argument %s, bad value %s"},
 	ErrTruncatedWrongValueForField: {ER_TRUNCATED_WRONG_VALUE_FOR_FIELD, []string{MySQLDefaultSqlState}, "truncated type %s value %s for column %s, %d"},
 	ErrTooBigPrecision:             {ER_TOO_BIG_PRECISION, []string{"42000", "S1009"}, "Too-big precision %d specified for '%-.192s'. Maximum is %d."},
 	ErrRegexpIllegalArgument:       {ER_REGEXP_ILLEGAL_ARGUMENT, []string{MySQLDefaultSqlState}, "Illegal argument to a regular expression."},
 	ErrPreparedParamOutOfRange:     {ER_DATA_OUT_OF_RANGE, []string{"22003"}, "%s value is out of range in '%s'"},
+	ErrTruncatedWrongValue:         {ER_TRUNCATED_WRONG_VALUE, []string{"22007"}, "Truncated incorrect %-.64s value: '%-.128s'"},
 
 	// Group 3: invalid input
 	ErrBadConfig:            {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "invalid configuration: %s"},
 	ErrInvalidInput:         {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "invalid input: %s"},
-	ErrSyntaxError:          {ER_SYNTAX_ERROR, []string{MySQLDefaultSqlState}, "SQL syntax error: %s"},
-	ErrParseError:           {ER_PARSE_ERROR, []string{MySQLDefaultSqlState}, "SQL parser error: %s"},
+	ErrSyntaxError:          {ER_SYNTAX_ERROR, []string{"42000"}, "SQL syntax error: %s"},
+	ErrParseError:           {ER_PARSE_ERROR, []string{"42000"}, "SQL parser error: %s"},
 	ErrConstraintViolation:  {ER_CHECK_CONSTRAINT_VIOLATED, []string{MySQLDefaultSqlState}, "constraint violation: %s"},
 	ErrDuplicate:            {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "tae data: duplicate"},
 	ErrRoleGrantedToSelf:    {ER_ROLE_GRANTED_TO_ITSELF, []string{MySQLDefaultSqlState}, "cannot grant role %s to %s"},
-	ErrDuplicateEntry:       {ER_DUP_ENTRY, []string{MySQLDefaultSqlState}, "Duplicate entry '%s' for key '%s'"},
-	ErrWrongValueCountOnRow: {ER_WRONG_VALUE_COUNT_ON_ROW, []string{MySQLDefaultSqlState}, "Column count doesn't match value count at row %d"},
+	ErrDuplicateEntry:       {ER_DUP_ENTRY, []string{"23000"}, "Duplicate entry '%s' for key '%s'"},
+	ErrWrongValueCountOnRow: {ER_WRONG_VALUE_COUNT_ON_ROW, []string{"21S01"}, "Column count doesn't match value count at row %d"},
 	ErrBadFieldError:        {ER_BAD_FIELD_ERROR, []string{"42S22"}, "Unknown column '%s' in '%s'"},
 	ErrWrongDatetimeSpec:    {ER_WRONG_DATETIME_SPEC, []string{MySQLDefaultSqlState}, "wrong date/time format specifier: %s"},
 	ErrUpgrateError:         {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "CN upgrade table or view '%s.%s' under tenant '%s:%d' reports error: %s"},
@@ -462,9 +471,9 @@ var errorMsgRefer = map[uint16]moErrorMsgItem{
 	// Group 4: unexpected state or file io error
 	ErrInvalidState:                             {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "invalid state %s"},
 	ErrLogServiceNotReady:                       {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "log service not ready"},
-	ErrBadDB:                                    {ER_BAD_DB_ERROR, []string{MySQLDefaultSqlState}, "Unknown database %s"},
-	ErrNoSuchTable:                              {ER_NO_SUCH_TABLE, []string{MySQLDefaultSqlState}, "no such table %s.%s"},
-	ErrNoSuchSequence:                           {ER_NO_SUCH_TABLE, []string{MySQLDefaultSqlState}, "no such sequence %s.%s"},
+	ErrBadDB:                                    {ER_BAD_DB_ERROR, []string{"42000"}, "Unknown database %s"},
+	ErrNoSuchTable:                              {ER_NO_SUCH_TABLE, []string{"42S02"}, "no such table %s.%s"},
+	ErrNoSuchSequence:                           {ER_NO_SUCH_TABLE, []string{"42S02"}, "no such sequence %s.%s"},
 	ErrEmptyVector:                              {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "empty vector"},
 	ErrFileNotFound:                             {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "file %s is not found"},
 	ErrFileAlreadyExists:                        {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "file %s already exists"},
@@ -476,13 +485,13 @@ var errorMsgRefer = map[uint16]moErrorMsgItem{
 	ErrShortWrite:                               {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "file %s io short write"},
 	ErrInvalidWrite:                             {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "file %s io invalid write"},
 	ErrShortBuffer:                              {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "file %s io short buffer"},
-	ErrNoDB:                                     {ER_NO_DB_ERROR, []string{MySQLDefaultSqlState}, "No database selected"},
+	ErrNoDB:                                     {ER_NO_DB_ERROR, []string{"3D000"}, "No database selected"},
 	ErrNoWorkingStore:                           {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "no working store"},
 	ErrNoHAKeeper:                               {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "cannot locate ha keeper"},
 	ErrInvalidTruncateLsn:                       {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "invalid truncate lsn, shard %d already truncated to %d"},
 	ErrNotLeaseHolder:                           {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "not lease holder, current lease holder ID %d"},
 	ErrDBAlreadyExists:                          {ER_DB_CREATE_EXISTS, []string{MySQLDefaultSqlState}, "database %s already exists"},
-	ErrTableAlreadyExists:                       {ER_TABLE_EXISTS_ERROR, []string{MySQLDefaultSqlState}, "table %s already exists"},
+	ErrTableAlreadyExists:                       {ER_TABLE_EXISTS_ERROR, []string{"42S01"}, "table %s already exists"},
 	ErrFunctionAlreadyExists:                    {ER_UDF_ALREADY_EXISTS, []string{MySQLDefaultSqlState}, "function %s already exists"},
 	ErrProcedureAlreadyExists:                   {ER_UDF_ALREADY_EXISTS, []string{MySQLDefaultSqlState}, "procedure %s already exists"},
 	ErrDropNonExistsFunction:                    {ER_CANT_FIND_UDF, []string{MySQLDefaultSqlState}, "function %s doesn't exist"},
@@ -507,33 +516,33 @@ var errorMsgRefer = map[uint16]moErrorMsgItem{
 	ErrResultFileNotFound:                       {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "query id %s not found"},
 	ErrNoConfig:                                 {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "no configure: %s"},
 	ErrTooManyFields:                            {ER_TOO_MANY_FIELDS, []string{MySQLDefaultSqlState}, "Too many columns"},
-	ErrDupFieldName:                             {ER_DUP_FIELDNAME, []string{MySQLDefaultSqlState}, "Duplicate column name '%-.192s'"},
-	ErrMultiplePriKey:                           {ER_MULTIPLE_PRI_KEY, []string{MySQLDefaultSqlState}, "Multiple primary key defined"},
-	ErrTooManyKeys:                              {ER_TOO_MANY_KEYS, []string{MySQLDefaultSqlState}, "Too many keys specified; max %d keys allowed"},
-	ErrTooManyKeyParts:                          {ER_TOO_MANY_KEY_PARTS, []string{MySQLDefaultSqlState}, "Too many key parts specified; max %d parts allowed"},
-	ErrWrongColumnName:                          {ER_WRONG_COLUMN_NAME, []string{MySQLDefaultSqlState}, "Incorrect column name '%-.100s'"},
-	ErrWrongNameForIndex:                        {ER_WRONG_NAME_FOR_INDEX, []string{MySQLDefaultSqlState}, "Incorrect index name '%-.100s'"},
-	ErrInvalidDefault:                           {ER_INVALID_DEFAULT, []string{MySQLDefaultSqlState}, "Invalid default value for '%-.192s'"},
+	ErrDupFieldName:                             {ER_DUP_FIELDNAME, []string{"42S21"}, "Duplicate column name '%-.192s'"},
+	ErrMultiplePriKey:                           {ER_MULTIPLE_PRI_KEY, []string{"42000"}, "Multiple primary key defined"},
+	ErrTooManyKeys:                              {ER_TOO_MANY_KEYS, []string{"42000"}, "Too many keys specified; max %d keys allowed"},
+	ErrTooManyKeyParts:                          {ER_TOO_MANY_KEY_PARTS, []string{"42000"}, "Too many key parts specified; max %d parts allowed"},
+	ErrWrongColumnName:                          {ER_WRONG_COLUMN_NAME, []string{"42000"}, "Incorrect column name '%-.100s'"},
+	ErrWrongNameForIndex:                        {ER_WRONG_NAME_FOR_INDEX, []string{"42000"}, "Incorrect index name '%-.100s'"},
+	ErrInvalidDefault:                           {ER_INVALID_DEFAULT, []string{"42000"}, "Invalid default value for '%-.192s'"},
 	ErrDropIndexNeededInForeignKey:              {ER_DROP_INDEX_FK, []string{MySQLDefaultSqlState}, "Cannot drop index '%-.192s': needed in a foreign key constraint"},
 	ErrFKIncompatibleColumns:                    {ER_FK_INCOMPATIBLE_COLUMNS, []string{MySQLDefaultSqlState}, "Referencing column '%s' and referenced column '%s' in foreign key constraint '%s' are incompatible."},
 	ErrForeignKeyColumnCannotChangeChild:        {ER_FK_COLUMN_CANNOT_CHANGE_CHILD, []string{MySQLDefaultSqlState}, "Cannot change column '%-.192s': used in a foreign key constraint '%-.192s' of table '%-.192s'"},
 	ErrForeignKeyColumnCannotChange:             {ER_FK_COLUMN_CANNOT_CHANGE, []string{MySQLDefaultSqlState}, "Cannot change column '%-.192s': used in a foreign key constraint '%-.192s'"},
 	ErrForeignKeyOnPartitioned:                  {ER_FOREIGN_KEY_ON_PARTITIONED, []string{MySQLDefaultSqlState}, "Foreign keys are not yet supported in conjunction with partitioning"},
-	ErrKeyColumnDoesNotExist:                    {ER_KEY_COLUMN_DOES_NOT_EXIST, []string{MySQLDefaultSqlState}, "Key column '%-.192s' doesn't exist in table"},
+	ErrKeyColumnDoesNotExist:                    {ER_KEY_COLUMN_DOES_NOT_EXIST, []string{"42000"}, "Key column '%-.192s' doesn't exist in table"},
 	ErrKeyDoesNotExist:                          {ER_KEY_DOES_NOT_EXIST, []string{"42000"}, "Key '%-.192s' doesn't exist in table '%-.192s'"},
-	ErrCantDropFieldOrKey:                       {ER_CANT_DROP_FIELD_OR_KEY, []string{MySQLDefaultSqlState}, "Can't DROP '%-.192s'; check that column/key exists"},
-	ErrTableMustHaveColumns:                     {ER_TABLE_MUST_HAVE_COLUMNS, []string{MySQLDefaultSqlState}, "A table must have at least 1 column"},
-	ErrCantRemoveAllFields:                      {ER_CANT_REMOVE_ALL_FIELDS, []string{MySQLDefaultSqlState}, "You can't delete all columns with ALTER TABLE; use DROP TABLE instead"},
+	ErrCantDropFieldOrKey:                       {ER_CANT_DROP_FIELD_OR_KEY, []string{"42000"}, "Can't DROP '%-.192s'; check that column/key exists"},
+	ErrTableMustHaveColumns:                     {ER_TABLE_MUST_HAVE_COLUMNS, []string{"42000"}, "A table must have at least 1 column"},
+	ErrCantRemoveAllFields:                      {ER_CANT_REMOVE_ALL_FIELDS, []string{"42000"}, "You can't delete all columns with ALTER TABLE; use DROP TABLE instead"},
 	ErrFkColumnCannotDrop:                       {ER_FK_COLUMN_CANNOT_DROP, []string{MySQLDefaultSqlState}, "Cannot drop column '%-.192s': needed in a foreign key constraint '%-.192s'"},
 	ErrFkColumnCannotDropChild:                  {ER_FK_COLUMN_CANNOT_DROP_CHILD, []string{MySQLDefaultSqlState}, "Cannot drop column '%-.192s': needed in a foreign key constraint '%-.192s' of table '%-.192s'"},
 	ErrDependentByPartitionFunction:             {ER_DEPENDENT_BY_PARTITION_FUNC, []string{MySQLDefaultSqlState}, "Column '%s' has a partitioning function dependency and cannot be dropped or renamed"},
 	ErrAlterOperationNotSupportedReasonFkRename: {ER_ALTER_OPERATION_NOT_SUPPORTED_REASON_FK_RENAME, []string{MySQLDefaultSqlState}, "Columns participating in a foreign key are renamed"},
-	ErrPrimaryCantHaveNull:                      {ER_PRIMARY_CANT_HAVE_NULL, []string{MySQLDefaultSqlState}, "All parts of a PRIMARY KEY must be NOT NULL; if you need NULL in a key, use UNIQUE instead"},
+	ErrPrimaryCantHaveNull:                      {ER_PRIMARY_CANT_HAVE_NULL, []string{"42000"}, "All parts of a PRIMARY KEY must be NOT NULL; if you need NULL in a key, use UNIQUE instead"},
 	ErrPartitionMgmtOnNonpartitioned:            {ER_PARTITION_MGMT_ON_NONPARTITIONED, []string{MySQLDefaultSqlState}, "Partition management on a not partitioned table is not possible"},
-	ErrFKRowIsReferenced:                        {ER_ROW_IS_REFERENCED, []string{MySQLDefaultSqlState}, "Cannot delete or update a parent row: a foreign key constraint fails"},
-	ErrDuplicateKeyName:                         {ER_DUP_KEYNAME, []string{MySQLDefaultSqlState}, "Duplicate foreign key constraint name '%-.192s'"},
+	ErrFKRowIsReferenced:                        {ER_ROW_IS_REFERENCED, []string{"23000"}, "Cannot delete or update a parent row: a foreign key constraint fails"},
+	ErrDuplicateKeyName:                         {ER_DUP_KEYNAME, []string{"42000"}, "Duplicate foreign key constraint name '%-.192s'"},
 	ErrFKNoReferencedRow2:                       {ER_NO_REFERENCED_ROW_2, []string{"23000"}, "Cannot add or update a child row: a foreign key constraint fails"},
-	ErrBlobCantHaveDefault:                      {ER_BLOB_CANT_HAVE_DEFAULT, []string{MySQLDefaultSqlState}, "BLOB, TEXT, GEOMETRY or JSON column '%-.192s' can't have a default value"},
+	ErrBlobCantHaveDefault:                      {ER_BLOB_CANT_HAVE_DEFAULT, []string{"42000"}, "BLOB, TEXT, GEOMETRY or JSON column '%-.192s' can't have a default value"},
 	ErrTableMustHaveAVisibleColumn:              {ER_TABLE_MUST_HAVE_A_VISIBLE_COLUMN, []string{MySQLDefaultSqlState}, "A table must have at least one visible column."},
 	ErrMaxPreparedStmtCountReached:              {ER_MAX_PREPARED_STMT_COUNT_REACHED, []string{"42000"}, "Can't create more than max_prepared_stmt_count statements (current value: %d)"},
 	ErrFieldSpecifiedTwice:                      {ER_FIELD_SPECIFIED_TWICE, []string{"42000"}, "Column '%-.192s' specified twice"},
@@ -579,7 +588,7 @@ var errorMsgRefer = map[uint16]moErrorMsgItem{
 	ErrPrimaryKeyDuplicated:       {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "duplicated primary key %v"},
 	ErrAppendableObjectNotFound:   {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "appendable Object not found"},
 	ErrAppendableBlockNotFound:    {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "appendable block not found"},
-	ErrDuplicateKey:               {ER_DUP_KEYNAME, []string{MySQLDefaultSqlState}, "duplicate key name '%s'"},
+	ErrDuplicateKey:               {ER_DUP_KEYNAME, []string{"42000"}, "duplicate key name '%s'"},
 	ErrTxnNeedRetry:               {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "txn need retry in rc mode"},
 	ErrTAENeedRetry:               {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "tae need retry"},
 	ErrTxnCannotRetry:             {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "txn s3 writes can not retry in rc mode"},
@@ -642,6 +651,13 @@ var errorMsgRefer = map[uint16]moErrorMsgItem{
 	ErrTooManyPartitionFuncFields:          {ER_TOO_MANY_PARTITION_FUNC_FIELDS_ERROR, []string{MySQLDefaultSqlState}, "Too many fields in '%-.192s'"},
 	ErrTooManyParameter:                    {ER_PS_MANY_PARAM, []string{MySQLDefaultSqlState}, "Prepared statement contains too many placeholders"},
 	ErrCteMemoryQuotaExceeded:              {ErrCteMemoryQuotaExceeded, []string{MySQLDefaultSqlState}, "recursive CTE memory quota exceeded on this CN: projected %d bytes, query limit %d bytes; increase @@cte_max_memory_bytes or rewrite the query to converge"},
+	ErrTooManyWindows:                      {ER_TOO_MANY_WINDOWS, []string{MySQLDefaultSqlState}, "Too many windows in SELECT: %d. Maximum allowed is %d. Use named windows to share windows between window functions."},
+	ErrWindowNoSuchWindow:                  {ER_WINDOW_NO_SUCH_WINDOW, []string{MySQLDefaultSqlState}, "Window name '%s' is not defined."},
+	ErrWindowCircularityInWindowGraph:      {ER_WINDOW_CIRCULARITY_IN_WINDOW_GRAPH, []string{MySQLDefaultSqlState}, "There is a circularity in the window dependency graph."},
+	ErrWindowNoChildPartitioning:           {ER_WINDOW_NO_CHILD_PARTITIONING, []string{MySQLDefaultSqlState}, "A window which depends on another cannot define partitioning."},
+	ErrWindowNoInheritFrame:                {ER_WINDOW_NO_INHERIT_FRAME, []string{MySQLDefaultSqlState}, "Window '%s' has a frame definition, so cannot be referenced by another window."},
+	ErrWindowNoRedefineOrderBy:             {ER_WINDOW_NO_REDEFINE_ORDER_BY, []string{MySQLDefaultSqlState}, "Window '%s' cannot inherit '%s' since both contain an ORDER BY clause."},
+	ErrWindowDuplicateName:                 {ER_WINDOW_DUPLICATE_NAME, []string{MySQLDefaultSqlState}, "Window '%s' is defined twice."},
 
 	// Group 9: streaming
 	ErrUnsupportedOption:   {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "unsupported option %s"},
@@ -870,6 +886,18 @@ func (e *Error) Succeeded() bool {
 	return e.code < OkMax
 }
 
+// IsRealError reports whether this code denotes a failure. moerr also carries
+// codes that are not failures: the Ok signals below OkMax, the Info codes
+// (ErrInfo, ErrLoadInfo) and the Warning codes (ErrWarn,
+// ErrWarnDataTruncated). Real errors all sit at or above ErrStart.
+//
+// The distinction matters wherever a failure has consequences a warning must
+// not have -- aborting a transaction, for one: truncating a value is reported
+// through this type but is not a reason to discard a user's work.
+func (e *Error) IsRealError() bool {
+	return e.code >= ErrStart
+}
+
 // Special handling of OK code.   This code are not errors, but used to
 // signal different success conditions.  One user is StopCurrRecur.
 // TAE use it to loop over memory data structures.  They are tight,
@@ -1044,6 +1072,10 @@ func NewInvalidArg(ctx context.Context, arg string, val any) *Error {
 
 func NewTruncatedValueForField(ctx context.Context, t, v, c string, idx int) *Error {
 	return newError(ctx, ErrTruncatedWrongValueForField, t, v, c, idx)
+}
+
+func NewTruncatedWrongValue(ctx context.Context, typ, value string) *Error {
+	return newError(ctx, ErrTruncatedWrongValue, typ, value)
 }
 
 func NewBadConfigf(ctx context.Context, format string, args ...any) *Error {
@@ -1925,6 +1957,34 @@ func NewErrTaskNotFound(ctx context.Context, taskID uint64) *Error {
 
 func NewErrTooManyParameter(ctx context.Context) *Error {
 	return newError(ctx, ErrTooManyParameter)
+}
+
+func NewErrTooManyWindows(ctx context.Context, count, maximum int) *Error {
+	return newError(ctx, ErrTooManyWindows, count, maximum)
+}
+
+func NewWindowNoSuchWindow(ctx context.Context, name string) *Error {
+	return newError(ctx, ErrWindowNoSuchWindow, name)
+}
+
+func NewWindowCircularityInWindowGraph(ctx context.Context) *Error {
+	return newError(ctx, ErrWindowCircularityInWindowGraph)
+}
+
+func NewWindowNoChildPartitioning(ctx context.Context) *Error {
+	return newError(ctx, ErrWindowNoChildPartitioning)
+}
+
+func NewWindowNoInheritFrame(ctx context.Context, name string) *Error {
+	return newError(ctx, ErrWindowNoInheritFrame, name)
+}
+
+func NewWindowNoRedefineOrderBy(ctx context.Context, childName, baseName string) *Error {
+	return newError(ctx, ErrWindowNoRedefineOrderBy, childName, baseName)
+}
+
+func NewWindowDuplicateName(ctx context.Context, name string) *Error {
+	return newError(ctx, ErrWindowDuplicateName, name)
 }
 
 func NewErrFKRowIsReferenced(ctx context.Context) *Error {

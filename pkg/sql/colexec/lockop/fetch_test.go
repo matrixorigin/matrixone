@@ -1489,6 +1489,16 @@ func TestFetchRowsSkipsConstNull(t *testing.T) {
 	require.Equal(t, lock.Granularity_Range, granularity)
 }
 
+func TestSupportsTotalLockTableRange(t *testing.T) {
+	require.True(t, SupportsTotalLockTableRange(types.T_uint32.ToType()))
+	require.True(t, SupportsTotalLockTableRange(types.T_varchar.ToType()))
+	require.False(t, SupportsTotalLockTableRange(types.T_float32.ToType()))
+	require.False(t, SupportsTotalLockTableRange(types.T_float64.ToType()))
+	require.False(t, SupportsTotalLockTableRange(types.T_blob.ToType()))
+	require.NotPanics(t, func() { GetFetchRowsFunc(types.T_uint32.ToType()) })
+	require.Panics(t, func() { GetFetchRowsFunc(types.T_blob.ToType()) })
+}
+
 func TestFetchRowsSkipsPartialNull(t *testing.T) {
 	mp := mpool.MustNew("test")
 

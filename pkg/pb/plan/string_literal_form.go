@@ -146,6 +146,98 @@ func RequiresMORPCVersion23StringLiterals(owner any) (bool, error) {
 	return RequiresMORPCVersion23StringProvenance(owner)
 }
 
+// RequiresMORPCVersion30NumericPrefix reports whether an owner contains a
+// planner-injected CAST that uses the numeric-prefix sentinel.
+func RequiresMORPCVersion30NumericPrefix(owner any) (bool, error) {
+	features, err := RequiredRemoteExpressionFeatures(owner)
+	return features.NumericPrefix, err
+}
+
+// RequiresMORPCVersion36JSONComparisonParam reports whether an owner contains
+// the internal prepared-JSON comparison function.  The function is deliberately
+// identified by its numeric ID: unlike ordinary SQL functions, its name is an
+// implementation detail and the receiver dispatches it by ID after decoding.
+func RequiresMORPCVersion36JSONComparisonParam(owner any) (bool, error) {
+	features, err := RequiredRemoteExpressionFeatures(owner)
+	return features.JSONComparisonParam, err
+}
+
+// RequiresMORPCVersion36MixedJSONBooleanEquality reports whether an owner
+// contains an equality operation whose physical operands are JSON and BOOL.
+// Pre-v36 workers dispatch such plans through varlena comparison overloads and
+// cannot safely execute the BOOL vector.
+func RequiresMORPCVersion36MixedJSONBooleanEquality(owner any) (bool, error) {
+	features, err := RequiredRemoteExpressionFeatures(owner)
+	return features.MixedJSONBooleanEquality, err
+}
+
+const (
+	equalFunctionID                  int32 = 0
+	notEqualFunctionID               int32 = 1
+	nullSafeEqualFunctionID          int32 = 406
+	internalJSONComparisonFunctionID int32 = 577
+	planBooleanTypeID                int32 = 10
+	planJSONTypeID                   int32 = 62
+)
+
+// RemoteExpressionFeatures is the complete set of versioned expression
+// capabilities that can make a pipeline unsafe on an older remote worker.
+// NumericPrefix requires MORPC v30. JSONComparisonParam and
+// MixedJSONBooleanEquality require MORPC v36. A struct makes compatibility
+// call sites name every capability instead of relying on positional booleans.
+type RemoteExpressionFeatures struct {
+	NumericPrefix            bool
+	JSONComparisonParam      bool
+	MixedJSONBooleanEquality bool
+}
+
+func (features RemoteExpressionFeatures) Any() bool {
+	return features.NumericPrefix ||
+		features.JSONComparisonParam ||
+		features.MixedJSONBooleanEquality
+}
+
+// RequiredRemoteExpressionFeatures reports the independent versioned
+// expression features present in owner. Keep the features separate so callers
+// can retain precise diagnostics, while sharing one owner walk so adding one
+// feature cannot accidentally replace another feature's compatibility gate.
+func RequiredRemoteExpressionFeatures(owner any) (features RemoteExpressionFeatures, err error) {
+	err = walkExpressionsInOwner(owner, func(expr *Expr) error {
+		return VisitExprTree(expr, func(current *Expr) error {
+			fn := current.GetF()
+			if !features.NumericPrefix && current.Typ.Charset == 255 && fn != nil && fn.Func != nil &&
+				strings.EqualFold(fn.Func.GetObjName(), "cast") {
+				features.NumericPrefix = true
+			}
+			if !features.JSONComparisonParam && fn != nil && fn.Func != nil &&
+				int32(fn.Func.Obj>>32) == internalJSONComparisonFunctionID {
+				features.JSONComparisonParam = true
+			}
+			if !features.MixedJSONBooleanEquality && isMixedJSONBooleanEquality(fn) {
+				features.MixedJSONBooleanEquality = true
+			}
+			return nil
+		})
+	})
+	return
+}
+
+func isMixedJSONBooleanEquality(function *Function) bool {
+	if function == nil || function.Func == nil || len(function.Args) != 2 {
+		return false
+	}
+	functionID := int32(function.Func.Obj >> 32)
+	switch functionID {
+	case equalFunctionID, notEqualFunctionID, nullSafeEqualFunctionID:
+	default:
+		return false
+	}
+	leftType := function.Args[0].Typ.Id
+	rightType := function.Args[1].Typ.Id
+	return leftType == planJSONTypeID && rightType == planBooleanTypeID ||
+		leftType == planBooleanTypeID && rightType == planJSONTypeID
+}
+
 func (m *Expr) possibleRuntimeStringDomains() (uint8, bool, error) {
 	if m == nil {
 		return 0, false, nil
@@ -337,6 +429,75 @@ func (p *Plan) ValidateStringLiteralForms() error {
 
 func ValidateStringLiteralFormsInOwner(owner any) error {
 	return validateStringLiteralFormsInOwner(owner)
+}
+
+// VisitExprTree visits expr and every nested expression in deterministic order.
+func VisitExprTree(expr *Expr, visitor func(*Expr) error) error {
+	if expr == nil {
+		return nil
+	}
+	if err := visitor(expr); err != nil {
+		return err
+	}
+	if lit := expr.GetLit(); lit != nil {
+		if err := VisitExprTree(lit.Src, visitor); err != nil {
+			return err
+		}
+	}
+	if fn := expr.GetF(); fn != nil {
+		for _, arg := range fn.Args {
+			if err := VisitExprTree(arg, visitor); err != nil {
+				return err
+			}
+		}
+	}
+	if list := expr.GetList(); list != nil {
+		for _, item := range list.List {
+			if err := VisitExprTree(item, visitor); err != nil {
+				return err
+			}
+		}
+	}
+	if sub := expr.GetSub(); sub != nil {
+		if err := VisitExprTree(sub.Child, visitor); err != nil {
+			return err
+		}
+	}
+	if window := expr.GetW(); window != nil {
+		if err := VisitExprTree(window.WindowFunc, visitor); err != nil {
+			return err
+		}
+		for _, item := range window.PartitionBy {
+			if err := VisitExprTree(item, visitor); err != nil {
+				return err
+			}
+		}
+		for _, order := range window.OrderBy {
+			if order != nil {
+				if err := VisitExprTree(order.Expr, visitor); err != nil {
+					return err
+				}
+			}
+		}
+		if window.Frame != nil {
+			if window.Frame.Start != nil {
+				if err := VisitExprTree(window.Frame.Start.Val, visitor); err != nil {
+					return err
+				}
+			}
+			if window.Frame.End != nil {
+				if err := VisitExprTree(window.Frame.End.Val, visitor); err != nil {
+					return err
+				}
+			}
+		}
+	}
+	return nil
+}
+
+// VisitExpressionsInOwner visits each expression root contained in an owner.
+func VisitExpressionsInOwner(owner any, visitor func(*Expr) error) error {
+	return walkExpressionsInOwner(owner, visitor)
 }
 
 // validateStringLiteralFormsInOwner validates every expression nested in a

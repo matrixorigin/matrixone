@@ -555,6 +555,11 @@ func remapDbInSelectStatement(s tree.SelectStatement, remap remapDbContext) {
 			}
 			remapDbInExprs(c.GroupBy.GroupingSet, remap)
 		}
+		for _, definition := range c.Windows {
+			if definition != nil {
+				remapDbInWindowSpec(definition.Spec, remap)
+			}
+		}
 	case *tree.UnionClause:
 		remapDbInSelectStatement(c.Left, remap)
 		remapDbInSelectStatement(c.Right, remap)

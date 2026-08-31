@@ -22,14 +22,14 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestLineageOwnerPublicationLockSQLUsesStableCatalogWrite(t *testing.T) {
+func TestLineageOwnerLifecycleLockSQLUsesStableCatalogWrite(t *testing.T) {
 	require.Equal(t,
 		"update mo_catalog.mo_feature_registry set scope_spec = scope_spec, updated_at = updated_at where feature_code = 'SNAPSHOT'",
-		LineageOwnerPublicationLockSQL(),
+		LineageOwnerLifecycleLockSQL(),
 	)
 }
 
-func TestLineageOwnerPublicationLockSerializesEmptyProbe(t *testing.T) {
+func TestLineageOwnerLifecycleLockSerializesEmptyProbe(t *testing.T) {
 	var (
 		stableRow sync.Mutex
 		ownerMu   sync.Mutex
@@ -45,7 +45,7 @@ func TestLineageOwnerPublicationLockSerializesEmptyProbe(t *testing.T) {
 	ownerDone := make(chan error, 1)
 	go func() {
 		locked := false
-		err := LockLineageOwnerPublication(func(string) error {
+		err := LockLineageOwnerLifecycle(func(string) error {
 			stableRow.Lock()
 			locked = true
 			close(ownerLocked)
@@ -78,7 +78,7 @@ func TestLineageOwnerPublicationLockSerializesEmptyProbe(t *testing.T) {
 	}
 	alterDone := make(chan alterResult, 1)
 	go func() {
-		err := LockLineageOwnerPublication(func(string) error {
+		err := LockLineageOwnerLifecycle(func(string) error {
 			stableRow.Lock()
 			return nil
 		})

@@ -40,13 +40,16 @@ func TestBuildOrderedSetAggregates(t *testing.T) {
 	ctx := NewMockCompilerContext(true)
 	for _, tc := range []struct {
 		name      string
+		function  string
 		sql       string
 		desc      byte
 		wantOrder bool
 	}{
-		{name: "continuous", sql: "select percentile_cont(0.5) within group (order by a) from select_test.bind_select"},
-		{name: "discrete descending", sql: "select percentile_disc(0.5) within group (order by a desc) from select_test.bind_select", desc: 1},
-		{name: "group concat within group", sql: "select group_concat(a) within group (order by b desc) from select_test.bind_select", wantOrder: true},
+		{name: "continuous", function: NamePercentileCont, sql: "select percentile_cont(0.5) within group (order by a) from select_test.bind_select"},
+		{name: "discrete descending", function: NamePercentileDisc, sql: "select percentile_disc(0.5) within group (order by a desc) from select_test.bind_select", desc: 1},
+		{name: "approximate", function: NameApproxPercentile, sql: "select approx_percentile(0.5) within group (order by a) from select_test.bind_select"},
+		{name: "approximate descending", function: NameApproxPercentile, sql: "select approx_percentile(0.5) within group (order by a desc) from select_test.bind_select", desc: 1},
+		{name: "group concat within group", function: NameGroupConcat, sql: "select group_concat(a) within group (order by b desc) from select_test.bind_select", wantOrder: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			stmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL, tc.sql, 1)
@@ -54,13 +57,7 @@ func TestBuildOrderedSetAggregates(t *testing.T) {
 			queryPlan, err := BuildPlan(ctx, stmt, false)
 			require.NoError(t, err)
 
-			name := "percentile_cont"
-			if strings.Contains(tc.sql, "percentile_disc") {
-				name = "percentile_disc"
-			} else if strings.Contains(tc.sql, "group_concat") {
-				name = "group_concat"
-			}
-			fn := findAggregateByName(queryPlan.GetQuery(), name)
+			fn := findAggregateByName(queryPlan.GetQuery(), tc.function)
 			require.NotNil(t, fn)
 			if tc.wantOrder {
 				require.NotEqual(t, planpb.AggregateConfigType_AGG_CONFIG_NONE, fn.AggConfigType)
@@ -73,12 +70,220 @@ func TestBuildOrderedSetAggregates(t *testing.T) {
 	}
 }
 
+func TestBuildApproxPercentileWithinGroupPreservesOrdinaryForm(t *testing.T) {
+	ctx := NewMockCompilerContext(true)
+	for _, tc := range []struct {
+		name          string
+		sql           string
+		wantDirection []byte
+	}{
+		{
+			name: "ordinary",
+			sql:  "select approx_percentile(a, 0.25) from select_test.bind_select",
+		},
+		{
+			name:          "ordered ascending",
+			sql:           "select approx_percentile(0.25) within group (order by a) from select_test.bind_select",
+			wantDirection: []byte{0},
+		},
+		{
+			name:          "ordered descending",
+			sql:           "select approx_percentile(0.25) within group (order by a desc) from select_test.bind_select",
+			wantDirection: []byte{1},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, tc.sql, 1)
+			require.NoError(t, err)
+			t.Cleanup(stmt.Free)
+			queryPlan, err := BuildPlan(ctx, stmt, false)
+			require.NoError(t, err)
+			fn := findAggregateByName(queryPlan.GetQuery(), NameApproxPercentile)
+			require.NotNil(t, fn)
+			require.Len(t, fn.Args, 2)
+			require.Equal(t, tc.wantDirection, fn.AggConfig)
+		})
+	}
+}
+
+func TestBuildMedianWithinGroup(t *testing.T) {
+	ctx := NewMockCompilerContext(true)
+	for _, sql := range []string{
+		"select median() within group (order by a) from select_test.bind_select",
+		"select median() within group (order by a desc) from select_test.bind_select",
+		"select median() within group (order by 1) from select_test.bind_select",
+		"select median() within group (order by (select 1)) from select_test.bind_select",
+	} {
+		t.Run(sql, func(t *testing.T) {
+			stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, sql, 1)
+			require.NoError(t, err)
+			t.Cleanup(stmt.Free)
+
+			queryPlan, err := BuildPlan(ctx, stmt, false)
+			require.NoError(t, err)
+			fn := findAggregateByName(queryPlan.GetQuery(), "median")
+			require.NotNil(t, fn)
+			require.Len(t, fn.Args, 1)
+		})
+	}
+}
+
+func TestBuildPreparedMedianWithinGroup(t *testing.T) {
+	stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL,
+		"select median() within group (order by cast(? as signed)) from select_test.bind_select", 1)
+	require.NoError(t, err)
+	t.Cleanup(stmt.Free)
+	_, err = BuildPlan(NewMockCompilerContext(true), stmt, true)
+	require.NoError(t, err)
+}
+
+func TestMedianWithinGroupDoesNotDuplicateScalarSubqueryPlan(t *testing.T) {
+	build := func(sql string) *planpb.Query {
+		stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, sql, 1)
+		require.NoError(t, err)
+		defer stmt.Free()
+		queryPlan, err := BuildPlan(NewMockCompilerContext(true), stmt, false)
+		require.NoError(t, err)
+		return queryPlan.GetQuery()
+	}
+
+	ordinary := build("select median((select 1)) from select_test.bind_select")
+	ordered := build("select median() within group (order by (select 1)) from select_test.bind_select")
+	countNodeTypes := func(query *planpb.Query) map[int32]int {
+		counts := make(map[int32]int)
+		for _, node := range query.Nodes {
+			counts[int32(node.NodeType)]++
+		}
+		return counts
+	}
+	require.Equal(t, countNodeTypes(ordinary), countNodeTypes(ordered))
+}
+
+func TestBuildMedianWithinGroupRejectsInvalidShape(t *testing.T) {
+	ctx := NewMockCompilerContext(true)
+	for _, tc := range []struct {
+		name       string
+		sql        string
+		parseErr   bool
+		buildError string
+	}{
+		{
+			name:     "direct argument is not part of ordered set form",
+			sql:      "select median(a) within group (order by a) from select_test.bind_select",
+			parseErr: true,
+		},
+		{
+			name:     "missing within group",
+			sql:      "select median() from select_test.bind_select",
+			parseErr: true,
+		},
+		{
+			name:     "explicit null ordering is not in mysql dialect",
+			sql:      "select median() within group (order by a nulls first) from select_test.bind_select",
+			parseErr: true,
+		},
+		{
+			name:       "multiple order expressions",
+			sql:        "select median() within group (order by a, b) from select_test.bind_select",
+			buildError: "median requires exactly one WITHIN GROUP ORDER BY expression",
+		},
+		{
+			name:       "invalid order expression",
+			sql:        "select median() within group (order by missing_column) from select_test.bind_select",
+			buildError: "missing_column",
+		},
+		{
+			name:       "window form",
+			sql:        "select median() within group (order by a) over () from select_test.bind_select",
+			buildError: "function-local ORDER BY in window function",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, tc.sql, 1)
+			if tc.parseErr {
+				require.Error(t, err)
+				return
+			}
+			require.NoError(t, err)
+			t.Cleanup(stmt.Free)
+			_, err = BuildPlan(ctx, stmt, false)
+			require.ErrorContains(t, err, tc.buildError)
+		})
+	}
+}
+
+func BenchmarkBuildMedianForms(b *testing.B) {
+	for _, tc := range []struct {
+		name string
+		sql  string
+	}{
+		{name: "ordinary", sql: "select median(a) from select_test.bind_select"},
+		{name: "within_group", sql: "select median() within group (order by a) from select_test.bind_select"},
+		{name: "ordinary_scalar_subquery", sql: "select median((select 1)) from select_test.bind_select"},
+		{name: "within_group_scalar_subquery", sql: "select median() within group (order by (select 1)) from select_test.bind_select"},
+	} {
+		b.Run(tc.name, func(b *testing.B) {
+			ctx := NewMockCompilerContext(true)
+			b.ReportAllocs()
+			for b.Loop() {
+				stmt, err := parsers.ParseOne(b.Context(), dialect.MYSQL, tc.sql, 1)
+				if err != nil {
+					b.Fatal(err)
+				}
+				_, err = BuildPlan(ctx, stmt, false)
+				stmt.Free()
+				if err != nil {
+					b.Fatal(err)
+				}
+			}
+		})
+	}
+}
+
 func TestBuildOrderedSetPercentileRejectsNonConstant(t *testing.T) {
 	stmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL,
 		"select percentile_cont(b) within group (order by a) from select_test.bind_select", 1)
 	require.NoError(t, err)
 	_, err = BuildPlan(NewMockCompilerContext(true), stmt, false)
 	require.ErrorContains(t, err, "percentile argument of percentile_cont must be a non-null constant")
+}
+
+func TestBuildApproxPercentileWithinGroupRejectsInvalidShape(t *testing.T) {
+	ctx := NewMockCompilerContext(true)
+	for _, tc := range []struct {
+		name string
+		sql  string
+		want string
+	}{
+		{
+			name: "ordinary arguments combined with within group",
+			sql:  "select approx_percentile(a, 0.5) within group (order by b) from select_test.bind_select",
+			want: "approx_percentile requires exactly one percentile argument",
+		},
+		{
+			name: "multiple order expressions",
+			sql:  "select approx_percentile(0.5) within group (order by a, b) from select_test.bind_select",
+			want: "approx_percentile requires exactly one WITHIN GROUP ORDER BY expression",
+		},
+		{
+			name: "nonconstant percentile",
+			sql:  "select approx_percentile(b) within group (order by a) from select_test.bind_select",
+			want: "percentile argument of approx_percentile must be a non-null constant",
+		},
+		{
+			name: "window form",
+			sql:  "select approx_percentile(0.5) within group (order by a) over () from select_test.bind_select",
+			want: "function-local ORDER BY in window function",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, tc.sql, 1)
+			require.NoError(t, err)
+			t.Cleanup(stmt.Free)
+			_, err = BuildPlan(ctx, stmt, false)
+			require.ErrorContains(t, err, tc.want)
+		})
+	}
 }
 
 func TestBuildOrderedSetPercentileRejectsInvalidWithinGroupShape(t *testing.T) {
