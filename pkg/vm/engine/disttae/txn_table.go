@@ -40,10 +40,12 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
+	"github.com/matrixorigin/matrixone/pkg/pb/partition"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/statsinfo"
 	"github.com/matrixorigin/matrixone/pkg/shardservice"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
+	"github.com/matrixorigin/matrixone/pkg/sql/features"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
@@ -179,27 +181,33 @@ func newTxnTable(
 				if err != nil {
 					return nil, err
 				}
-				combined = newCombinedTxnTable(
-					tbl.origin,
-					getPartitionTableFunc(proc, metadata, db),
-					getPruneTablesFunc(proc, metadata, db),
-					getPartitionPrunePKFunc(proc, metadata, db),
-				)
+				combined, err = tbl.configurePartitionTable(ctx, metadata, proc, db)
+				if err != nil {
+					return nil, err
+				}
 			} else {
 				relations, err := tbl.getPartitionIndexesTables(process)
 				if err != nil {
 					return nil, err
 				}
-				combined = newCombinedTxnTable(
-					tbl.origin,
-					getArrayTableFunc(relations),
-					getArrayPruneTablesFunc(relations),
-					getArrayPrunePKFunc(relations),
-				)
+				if len(relations) > 0 {
+					combined = newCombinedTxnTable(
+						tbl.origin,
+						getArrayTableFunc(relations),
+						getArrayPruneTablesFunc(relations),
+						getArrayPrunePKFunc(relations),
+					)
+				}
 			}
 
-			tbl.combined.tbl = combined
-			tbl.combined.is = true
+			// Tables created before partition metadata was introduced have no
+			// physical relations known to the partition service. Keep the
+			// partition definition as compatibility-only metadata and use the
+			// logical table through the ordinary relation path.
+			if combined != nil {
+				tbl.combined.tbl = combined
+				tbl.combined.is = true
+			}
 		}
 
 		tbl.shard.service = shardservice.GetService(process.GetService())
@@ -218,6 +226,55 @@ func newTxnTable(
 	}
 
 	return tbl, nil
+}
+
+func (tbl *txnTableDelegate) configurePartitionTable(
+	ctx context.Context,
+	metadata partition.PartitionMetadata,
+	proc *process.Process,
+	db *txnDatabase,
+) (*combinedTxnTable, error) {
+	if metadata.IsEmpty() {
+		tbl.useOrdinaryTableForLegacyPartition()
+		return nil, nil
+	}
+	if len(metadata.Partitions) == 0 {
+		return nil, moerr.NewInternalErrorf(
+			ctx,
+			"partition metadata for table %d has no partitions",
+			metadata.TableID,
+		)
+	}
+
+	return newCombinedTxnTable(
+		tbl.origin,
+		getPartitionTableFunc(proc, metadata, db),
+		getPruneTablesFunc(proc, metadata, db),
+		getPartitionPrunePKFunc(proc, metadata, db),
+	), nil
+}
+
+// useOrdinaryTableForLegacyPartition preserves the behavior of tables created
+// while partition syntax was metadata-only. Those tables have the legacy
+// partition marker but no partition-service metadata, and all their data lives
+// in the logical table. Normalize the relation-local schema so every planner,
+// DML, DDL, and SHOW path treats it as an ordinary table.
+func (tbl *txnTableDelegate) useOrdinaryTableForLegacyPartition() {
+	origin := tbl.origin
+	origin.partitioned = 0
+	origin.partition = ""
+
+	// TableItem schema objects belong to the shared catalog cache. Clone before
+	// clearing the compatibility-only marker on this relation.
+	origin.tableDef = plan2.DeepCopyTableDef(origin.tableDef, true)
+	origin.tableDef.FeatureFlag &^= features.Partitioned
+	origin.tableDef.Partition = nil
+
+	if origin.extraInfo != nil {
+		extra := *origin.extraInfo
+		extra.FeatureFlag &^= features.Partitioned
+		origin.extraInfo = &extra
+	}
 }
 
 func (tbl *txnTable) getEngine() engine.Engine {

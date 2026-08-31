@@ -21,6 +21,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/pb/partition"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
@@ -156,6 +157,47 @@ func Test_buildTestShowCreateTable(t *testing.T) {
 			if tt.want != got {
 				t.Errorf("buildShow failed. \nExpected/Got:\n%s\n%s", tt.want, got)
 			}
+		})
+	}
+}
+
+func TestConstructPartitionSQL(t *testing.T) {
+	tests := []struct {
+		name string
+		meta partition.PartitionMetadata
+		want string
+	}{
+		{
+			name: "legacy metadata-only partition",
+		},
+		{
+			name: "hash partition",
+			meta: partition.PartitionMetadata{
+				TableID:     1,
+				Method:      partition.PartitionMethod_Hash,
+				Description: "hash(id)",
+				Partitions:  []partition.Partition{{}, {}, {}},
+			},
+			want: " partition by hash(id) partitions 3",
+		},
+		{
+			name: "range partition",
+			meta: partition.PartitionMetadata{
+				TableID:     1,
+				Method:      partition.PartitionMethod_Range,
+				Description: "range(id)",
+				Partitions: []partition.Partition{
+					{Name: "p0", ExprStr: "values less than (10)"},
+					{Name: "p1", ExprStr: "values less than (20)"},
+				},
+			},
+			want: " partition by range(id) (partition p0 values less than (10), partition p1 values less than (20))",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			require.Equal(t, tt.want, constructPartitionSQL(tt.meta))
 		})
 	}
 }

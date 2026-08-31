@@ -1211,8 +1211,14 @@ func (tbl *txnTableDelegate) getPartitionIndexesTables(
 }
 
 func (tbl *txnTableDelegate) IsPartitionIndexTable() bool {
-	return tbl.parent != nil &&
-		features.IsPartitioned(tbl.parent.GetExtraInfo().FeatureFlag)
+	if tbl.parent == nil || tbl.origin == nil {
+		return false
+	}
+	if catalog.IsFullTextIndexTableType(tbl.origin.relKind, tbl.origin.tableName) {
+		return false
+	}
+	extra := tbl.parent.GetExtraInfo()
+	return extra != nil && features.IsPartitioned(extra.FeatureFlag)
 }
 
 // Just for UT.

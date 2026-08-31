@@ -495,8 +495,6 @@ func ConstructCreateTableSQL(
 	if tableDef.Partition != nil {
 		ps := ctx.GetProcess().GetPartitionService()
 		if ps.Enabled() {
-			partitionBy := " partition by "
-
 			txn := ctx.GetProcess().GetTxnOperator()
 			newCtx := ctx.GetContext()
 			if snapshot != nil && snapshot.TS != nil {
@@ -512,26 +510,7 @@ func ConstructCreateTableSQL(
 				return "", nil, err
 			}
 
-			partitionBy += meta.Description
-
-			switch meta.Method {
-			case partition.PartitionMethod_Hash,
-				partition.PartitionMethod_LinearHash,
-				partition.PartitionMethod_Key,
-				partition.PartitionMethod_LinearKey:
-				partitionBy += fmt.Sprintf(" partitions %d", len(meta.Partitions))
-			default:
-				partitionBy += " ("
-				for i, p := range meta.Partitions {
-					if i > 0 {
-						partitionBy += ", "
-					}
-					partitionBy += "partition" + " " + p.Name + " " + p.ExprStr
-				}
-				partitionBy += ")"
-			}
-
-			createStr += partitionBy
+			createStr += constructPartitionSQL(meta)
 		}
 	}
 
@@ -659,6 +638,31 @@ func ConstructCreateTableSQL(
 		stmt, err = getRewriteSQLStmt(ctx, rewriteStr)
 	}
 	return createStr, stmt, err
+}
+
+func constructPartitionSQL(meta partition.PartitionMetadata) string {
+	if meta.IsEmpty() {
+		return ""
+	}
+
+	partitionBy := " partition by " + meta.Description
+	switch meta.Method {
+	case partition.PartitionMethod_Hash,
+		partition.PartitionMethod_LinearHash,
+		partition.PartitionMethod_Key,
+		partition.PartitionMethod_LinearKey:
+		partitionBy += fmt.Sprintf(" partitions %d", len(meta.Partitions))
+	default:
+		partitionBy += " ("
+		for i, p := range meta.Partitions {
+			if i > 0 {
+				partitionBy += ", "
+			}
+			partitionBy += "partition" + " " + p.Name + " " + p.ExprStr
+		}
+		partitionBy += ")"
+	}
+	return partitionBy
 }
 
 func extractTopLevelCheckDefs(tableDef *plan.TableDef) []string {
