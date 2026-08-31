@@ -156,6 +156,13 @@ func MarkJobsErrorBySourceTable(
 	query := fmt.Sprintf("SELECT table_id, job_name, job_id, job_spec FROM mo_catalog.mo_iscp_log WHERE account_id = %d AND drop_at IS NULL", accountID)
 	result, err := ExecWithResult(ctx, query, cnUUID, txn)
 	if err != nil {
+		// Generic table DROP/RENAME paths run in deployments and tests where
+		// the optional ISCP catalog has not been bootstrapped. No MV job can
+		// exist without mo_iscp_log, so dependency invalidation is a no-op in
+		// that state. Other catalog and executor failures must still abort DDL.
+		if moerr.IsMoErrCode(err, moerr.ErrNoSuchTable) {
+			return nil
+		}
 		return err
 	}
 	defer result.Close()

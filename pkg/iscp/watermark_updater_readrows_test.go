@@ -16,10 +16,14 @@ package iscp
 
 import (
 	"context"
+	"errors"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/stretchr/testify/require"
@@ -93,6 +97,23 @@ func TestMaterializedViewJobMatchesTargetAvoidsJobNameCollisions(t *testing.T) {
 	require.False(t, materializedViewJobMatchesTarget(spec, "a", "b_c"))
 	spec.ConsumerType = int8(ConsumerType_IndexSync)
 	require.False(t, materializedViewJobMatchesTarget(spec, "a_b", "c"))
+}
+
+func TestMarkJobsErrorBySourceTableAllowsMissingISCPLog(t *testing.T) {
+	oldExecWithResult := ExecWithResult
+	defer func() { ExecWithResult = oldExecWithResult }()
+
+	ctx := context.WithValue(context.Background(), defines.TenantIDKey{}, uint32(42))
+	ExecWithResult = func(context.Context, string, string, client.TxnOperator) (executor.Result, error) {
+		return executor.Result{}, moerr.NewNoSuchTableNoCtx("mo_catalog", catalog.MO_ISCP_LOG)
+	}
+	require.NoError(t, MarkJobsErrorBySourceTable(ctx, "", nil, 10, "source table was dropped"))
+
+	expected := errors.New("executor unavailable")
+	ExecWithResult = func(context.Context, string, string, client.TxnOperator) (executor.Result, error) {
+		return executor.Result{}, expected
+	}
+	require.ErrorIs(t, MarkJobsErrorBySourceTable(ctx, "", nil, 10, "source table was dropped"), expected)
 }
 
 func newTableIDResult(t *testing.T, tableIDBatches, dbIDBatches [][]uint64) (executor.Result, *mpool.MPool) {
