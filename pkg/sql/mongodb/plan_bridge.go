@@ -161,6 +161,13 @@ func PredicateFromPlan(ctx context.Context, input *plan.MongoPredicate) (*Predic
 		return nil, nil
 	}
 	result := &Predicate{Op: PredicateOp(input.Op), Path: input.Path}
+	switch result.Op {
+	case PredicateEqual, PredicateNotEqual, PredicateLess, PredicateLessEqual,
+		PredicateGreater, PredicateGreaterEqual:
+		if len(input.ValueBson) == 0 {
+			return nil, moerr.NewInvalidInput(ctx, "MongoDB comparison predicate requires a value")
+		}
+	}
 	var err error
 	if len(input.ValueBson) > 0 {
 		result.Value, err = predicateValue(ctx, input.ValueBson)

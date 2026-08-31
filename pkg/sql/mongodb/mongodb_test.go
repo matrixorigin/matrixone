@@ -271,6 +271,22 @@ func TestPredicatePlanRejectsNilAndChild(t *testing.T) {
 	require.ErrorContains(t, err, "non-nil children")
 }
 
+func TestPredicatePlanRejectsMissingComparisonValue(t *testing.T) {
+	for name, op := range map[string]planpb.MongoPredicateOp{
+		"equal":         planpb.MongoPredicateOp_MONGO_PREDICATE_EQUAL,
+		"not equal":     planpb.MongoPredicateOp_MONGO_PREDICATE_NOT_EQUAL,
+		"less":          planpb.MongoPredicateOp_MONGO_PREDICATE_LESS,
+		"less equal":    planpb.MongoPredicateOp_MONGO_PREDICATE_LESS_EQUAL,
+		"greater":       planpb.MongoPredicateOp_MONGO_PREDICATE_GREATER,
+		"greater equal": planpb.MongoPredicateOp_MONGO_PREDICATE_GREATER_EQUAL,
+	} {
+		t.Run(name, func(t *testing.T) {
+			_, err := PredicateFromPlan(t.Context(), &planpb.MongoPredicate{Op: op, Path: "value"})
+			require.ErrorContains(t, err, "requires a value")
+		})
+	}
+}
+
 func TestParseTableMappingSpecRejectsInvalidOptionsAndColumnContracts(t *testing.T) {
 	ctx := t.Context()
 	validOptions := func(extra ...*tree.MongoDBOption) *tree.MongoDBTableParam {

@@ -311,9 +311,10 @@ func TestMongoScanExplicitPipelineUsesAggregateAndMappedOutput(t *testing.T) {
 	applyTestUserQueryPlan(t, spec, source, false)
 	// A pipeline operates first. Any SQL predicate remains an MO residual and
 	// must not be injected into this opaque pipeline.
-	spec.PushedPredicate = &plan.MongoPredicate{
-		Op: plan.MongoPredicateOp_MONGO_PREDICATE_EQUAL, Path: "value",
-	}
+	spec.PushedPredicate, err = mongodb.PredicateToPlan(t.Context(), &mongodb.Predicate{
+		Op: mongodb.PredicateEqual, Path: "value", Value: int64(10),
+	})
+	require.NoError(t, err)
 	scan := NewArgument().WithScan(spec)
 	scan.Dependencies = deps
 	require.NoError(t, scan.Prepare(proc))
