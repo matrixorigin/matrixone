@@ -785,15 +785,19 @@ func (prepareStmt *PrepareStmt) installRuntimeSpecializationCache(
 	key string,
 	runtimePlan *plan.Plan,
 	runtimeCompile *compile.Compile,
-) {
+) *compile.Compile {
 	oldRuntimeCompile := prepareStmt.runtimeCompile
 	runtimeCompile.SetIsPrepare(true)
 	prepareStmt.runtimeSpecializationKey = key
 	prepareStmt.runtimePlan = runtimePlan
 	prepareStmt.runtimeCompile = runtimeCompile
-	if oldRuntimeCompile != runtimeCompile {
-		prepareStmt.releaseRuntimeCompile(oldRuntimeCompile)
+	if oldRuntimeCompile == runtimeCompile {
+		return nil
 	}
+	// The caller must release the displaced compile only after the statement
+	// using runtimeCompile has finished. Both compiles share the session Process,
+	// and releasing the old one synchronously would clear the new one's state.
+	return oldRuntimeCompile
 }
 
 func (prepareStmt *PrepareStmt) clearRuntimeSpecializationCache() {
