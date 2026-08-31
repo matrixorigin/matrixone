@@ -265,6 +265,9 @@ func stringDomainFixedTypeMatchIf(overloads []overload, inputs []types.Type, pre
 			if status == matchByCast {
 				needsCast = true
 				targets[i] = expected.ToType()
+				if expected == types.T_varchar && !inputs[i].Oid.IsMySQLString() {
+					targets[i] = formattedScalarStringType(inputs[i])
+				}
 				SetTargetScaleFromSource(&inputs[i], &targets[i])
 			} else {
 				targets[i] = inputs[i]

@@ -103,3 +103,9 @@
 2. 隐式 cast 固定 scalar 到 VARCHAR 时使用 formatted scalar 精确宽度，不再丢失为默认 VARCHAR(65535)。
 3. 将精确 cast width 应用于 fixed matcher 及 CONCAT/CONCAT_WS/ELT/MAKE_SET/EXPORT_SET variadic checker。
 4. 补 DECIMAL runtime/CTAS 与 fixed-scalar binder/CTAS 回归测试，运行 owning packages/lint/diff check 后 commit/push。
+
+# PR #27841 第十八轮 review 修复
+
+1. stringDomainFixedTypeMatchIf 对 fixed scalar→VARCHAR cast 同样使用 formattedScalarStringType。
+2. 补 QUOTE(SIGNED) resolver 与 CTAS metadata 回归，期望 VARCHAR(42)。
+3. 运行 owning packages/lint/diff check 后 commit/push。

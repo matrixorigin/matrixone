@@ -3037,7 +3037,8 @@ func TestBuildCTASNarrowsKnownExpandingStringResults(t *testing.T) {
 func TestBuildCTASPreservesFormattedScalarBounds(t *testing.T) {
 	const sql = `create table formatted_bounds as select
 		convert(cast(-0.99 as decimal(2,2)) using binary) decimal_binary,
-		concat(cast(1 as signed), cast(2 as signed)) concatenated`
+		concat(cast(1 as signed), cast(2 as signed)) concatenated,
+		quote(cast(1 as signed)) quoted`
 	stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, sql, 1)
 	require.NoError(t, err)
 	defer stmt.Free()
@@ -3045,11 +3046,13 @@ func TestBuildCTASPreservesFormattedScalarBounds(t *testing.T) {
 	p, err := BuildPlan(NewMockCompilerContext(false), stmt, false)
 	require.NoError(t, err)
 	cols := p.GetDdl().GetCreateTable().GetTableDef().GetCols()
-	require.GreaterOrEqual(t, len(cols), 2)
+	require.GreaterOrEqual(t, len(cols), 3)
 	require.Equal(t, int32(types.T_varbinary), cols[0].Typ.Id)
 	require.Equal(t, int32(5), cols[0].Typ.Width)
 	require.Equal(t, int32(types.T_varchar), cols[1].Typ.Id)
 	require.Equal(t, int32(40), cols[1].Typ.Width)
+	require.Equal(t, int32(types.T_varchar), cols[2].Typ.Id)
+	require.Equal(t, int32(42), cols[2].Typ.Width)
 }
 
 func TestViewRebindPreservesMySQLSpecialColumnSemantics(t *testing.T) {

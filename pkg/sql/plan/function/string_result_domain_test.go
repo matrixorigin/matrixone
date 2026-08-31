@@ -338,6 +338,14 @@ func TestConcatPreservesFormattedScalarBoundsAfterCast(t *testing.T) {
 	require.Equal(t, int32(20), casts[1].Width)
 	require.Equal(t, types.T_varchar, resolved.GetReturnType().Oid)
 	require.Equal(t, int32(40), resolved.GetReturnType().Width)
+
+	resolved, err = GetFunctionByName(proc.Ctx, "quote", []types.Type{types.T_int64.ToType()})
+	require.NoError(t, err)
+	casts, needCast = resolved.ShouldDoImplicitTypeCast()
+	require.True(t, needCast)
+	require.Equal(t, int32(20), casts[0].Width)
+	require.Equal(t, types.T_varchar, resolved.GetReturnType().Oid)
+	require.Equal(t, int32(42), resolved.GetReturnType().Width)
 }
 
 func TestStringDomainFunctionsPreserveBinaryInputsBeforeExecution(t *testing.T) {
