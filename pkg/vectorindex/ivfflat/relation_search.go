@@ -93,7 +93,16 @@ func (idx *IvfflatSearchIndex[T]) scanEntries(
 	}
 	columns := entryScanColumns(tblcfg.IncludeColumns)
 	orderFlag := ivfOrderFlag(sqlproc.IndexReaderParam)
-	storageTopK := canUseStorageTopK(sqlproc, centroidIDs, filters, limit)
+	metricType := metric.MetricType(idxcfg.Ivfflat.Metric)
+	storageRange, rangeEmpty, rangeSupported, err := idx.storageDistanceRange(
+		sqlproc.IndexReaderParam.GetDistRange(), tblcfg.OrigFuncName, metricType)
+	if err != nil {
+		return executor.Result{}, err
+	}
+	if rangeEmpty {
+		return executor.Result{Mp: sqlproc.Proc.Mp()}, nil
+	}
+	storageTopK := canUseStorageTopK(sqlproc, centroidIDs, filters, limit, rangeSupported)
 	var filter *plan.Expr
 	indexParam := &plan.IndexReaderParam{
 		Limit:   ivfUint64Expr(uint64(limit)),
@@ -127,6 +136,7 @@ func (idx *IvfflatSearchIndex[T]) scanEntries(
 			return executor.Result{}, err
 		}
 		indexParam.OrigFuncName = tblcfg.OrigFuncName
+		indexParam.DistRange = storageRange
 	} else {
 		versionFilter, filterErr := ivfFuncExpr(sqlproc.GetContext(), "=",
 			ivfColExpr(0, plan.Type{Id: int32(types.T_int64)}), ivfInt64Expr(version))
@@ -187,12 +197,12 @@ func (idx *IvfflatSearchIndex[T]) scanEntries(
 				}
 			} else {
 				if transformErr := appendEntryDistances(sqlproc, &batchResult, queryBytes, queryType,
-					metric.MetricTypeToDistFuncName[metric.MetricType(idxcfg.Ivfflat.Metric)]); transformErr != nil {
+					metric.MetricTypeToDistFuncName[metricType]); transformErr != nil {
 					return transformErr
 				}
 			}
 			if transformErr := idx.filterEntryDistanceRange(&batchResult, sqlproc.IndexReaderParam.GetDistRange(),
-				tblcfg.OrigFuncName, metric.MetricType(idxcfg.Ivfflat.Metric)); transformErr != nil {
+				tblcfg.OrigFuncName, metricType); transformErr != nil {
 				return transformErr
 			}
 			// Distance and exact filters have consumed the high-width entry vector.
@@ -258,21 +268,82 @@ func canUseStorageTopK(
 	centroidIDs []int64,
 	filters []*plan.Expr,
 	limit uint,
+	rangeSupported bool,
 ) bool {
 	// Storage vector Top-N currently ranks only ascending distances. Membership
 	// alone may be applied after the bounded Top-K as the documented approximate
-	// PRE policy. User predicates and bounded ranges remain filter-first.
-	if sqlproc == nil || len(centroidIDs) == 0 || len(filters) != 0 || limit == 0 ||
+	// PRE policy. Ordinary user predicates remain filter-first. Distance ranges
+	// are safe only after storageDistanceRange has translated them into the
+	// stored metric domain; objectio applies those bounds before heap admission.
+	if sqlproc == nil || !rangeSupported || len(centroidIDs) == 0 || len(filters) != 0 || limit == 0 ||
 		ivfOrderFlag(sqlproc.IndexReaderParam)&plan.OrderBySpec_DESC != 0 {
 		return false
 	}
 	if sqlproc.IvfHasMembershipFilter && len(sqlproc.IvfMembershipFilter) == 0 {
 		return false
 	}
-	distRange := sqlproc.IndexReaderParam.GetDistRange()
-	return distRange == nil ||
-		distRange.LowerBoundType == plan.BoundType_UNBOUNDED &&
-			distRange.UpperBoundType == plan.BoundType_UNBOUNDED
+	return true
+}
+
+// storageDistanceRange copies a source-domain SQL range into the value domain
+// used by storage Top-K. readutil owns the final L2 -> squared-L2 conversion,
+// so an affine quantizer only scales the value supplied to that conversion.
+// The returned range never aliases the prepared plan.
+func (idx *IvfflatSearchIndex[T]) storageDistanceRange(
+	distRange *plan.DistRange,
+	origFuncName string,
+	metricType metric.MetricType,
+) (converted *plan.DistRange, empty bool, supported bool, err error) {
+	if distRange == nil {
+		return nil, false, true, nil
+	}
+
+	lower, hasLower, lowerNull, err := vectorDistanceBound(
+		distRange.LowerBoundType, distRange.LowerBound)
+	if err != nil {
+		return nil, false, false, err
+	}
+	upper, hasUpper, upperNull, err := vectorDistanceBound(
+		distRange.UpperBoundType, distRange.UpperBound)
+	if err != nil {
+		return nil, false, false, err
+	}
+	if lowerNull || upperNull || hasLower && math.IsNaN(lower) || hasUpper && math.IsNaN(upper) {
+		return nil, true, true, nil
+	}
+
+	scale := 1.0
+	if idx.QuantMul != 0 && idx.QuantMul != 1 {
+		switch origFuncName {
+		case metric.DistFn_L2Distance:
+			if metricType != metric.Metric_L2sqDistance {
+				return nil, false, false, nil
+			}
+			scale = math.Abs(idx.QuantMul)
+		case metric.DistFn_L2sqDistance:
+			if metricType != metric.Metric_L2sqDistance {
+				return nil, false, false, nil
+			}
+			scale = idx.QuantMul * idx.QuantMul
+		default:
+			return nil, false, false, nil
+		}
+	}
+	if math.IsNaN(scale) || math.IsInf(scale, 0) {
+		return nil, false, false, nil
+	}
+
+	converted = &plan.DistRange{
+		LowerBoundType: distRange.LowerBoundType,
+		UpperBoundType: distRange.UpperBoundType,
+	}
+	if hasLower {
+		converted.LowerBound = ivfFloat64Expr(lower * scale)
+	}
+	if hasUpper {
+		converted.UpperBound = ivfFloat64Expr(upper * scale)
+	}
+	return converted, false, true, nil
 }
 
 func ivfOrderFlag(param *plan.IndexReaderParam) plan.OrderBySpec_OrderByFlag {

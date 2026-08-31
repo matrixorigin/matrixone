@@ -253,31 +253,95 @@ func TestStorageTopKEligibility(t *testing.T) {
 	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
 	sqlproc := sqlexec.NewSqlProcess(proc)
 	centroids := []int64{1}
-	require.True(t, canUseStorageTopK(sqlproc, centroids, nil, 1))
-	require.False(t, canUseStorageTopK(nil, centroids, nil, 1))
-	require.False(t, canUseStorageTopK(sqlproc, nil, nil, 1))
-	require.False(t, canUseStorageTopK(sqlproc, centroids, []*plan.Expr{ivfInt64Expr(1)}, 1))
-	require.False(t, canUseStorageTopK(sqlproc, centroids, nil, 0))
+	require.True(t, canUseStorageTopK(sqlproc, centroids, nil, 1, true))
+	require.False(t, canUseStorageTopK(nil, centroids, nil, 1, true))
+	require.False(t, canUseStorageTopK(sqlproc, nil, nil, 1, true))
+	require.False(t, canUseStorageTopK(sqlproc, centroids, []*plan.Expr{ivfInt64Expr(1)}, 1, true))
+	require.False(t, canUseStorageTopK(sqlproc, centroids, nil, 0, true))
+	require.False(t, canUseStorageTopK(sqlproc, centroids, nil, 1, false))
 
 	sqlproc.IvfHasMembershipFilter = true
-	require.False(t, canUseStorageTopK(sqlproc, centroids, nil, 1))
+	require.False(t, canUseStorageTopK(sqlproc, centroids, nil, 1, true))
 	sqlproc.IvfMembershipFilter = []byte{1}
-	require.True(t, canUseStorageTopK(sqlproc, centroids, nil, 1))
+	require.True(t, canUseStorageTopK(sqlproc, centroids, nil, 1, true))
 	sqlproc.IvfHasMembershipFilter = false
 	sqlproc.IndexReaderParam = &plan.IndexReaderParam{DistRange: &plan.DistRange{
 		LowerBoundType: plan.BoundType_INCLUSIVE,
+		LowerBound:     ivfFloat64Expr(1),
 	}}
-	require.False(t, canUseStorageTopK(sqlproc, centroids, nil, 1))
+	require.True(t, canUseStorageTopK(sqlproc, centroids, nil, 1, true))
 	sqlproc.IndexReaderParam.DistRange = &plan.DistRange{
 		LowerBoundType: plan.BoundType_UNBOUNDED,
 		UpperBoundType: plan.BoundType_UNBOUNDED,
 	}
-	require.True(t, canUseStorageTopK(sqlproc, centroids, nil, 1))
+	require.True(t, canUseStorageTopK(sqlproc, centroids, nil, 1, true))
 
 	require.Equal(t, plan.OrderBySpec_ASC, ivfOrderFlag(nil))
 	sqlproc.IndexReaderParam.OrderBy = []*plan.OrderBySpec{{Flag: plan.OrderBySpec_DESC}}
 	require.Equal(t, plan.OrderBySpec_DESC, ivfOrderFlag(sqlproc.IndexReaderParam))
-	require.False(t, canUseStorageTopK(sqlproc, centroids, nil, 1))
+	require.False(t, canUseStorageTopK(sqlproc, centroids, nil, 1, true))
+}
+
+func TestStorageDistanceRangeConversion(t *testing.T) {
+	source := &plan.DistRange{
+		LowerBoundType: plan.BoundType_EXCLUSIVE,
+		LowerBound:     ivfFloat64Expr(1),
+		UpperBoundType: plan.BoundType_INCLUSIVE,
+		UpperBound:     ivfFloat64Expr(2),
+	}
+
+	identity := &IvfflatSearchIndex[float32]{QuantMul: 1}
+	converted, empty, supported, err := identity.storageDistanceRange(
+		source, metric.DistFn_L2Distance, metric.Metric_L2sqDistance)
+	require.NoError(t, err)
+	require.False(t, empty)
+	require.True(t, supported)
+	require.NotSame(t, source, converted)
+	require.Equal(t, float64(1), converted.LowerBound.GetLit().GetDval())
+	require.Equal(t, float64(2), converted.UpperBound.GetLit().GetDval())
+
+	quantized := &IvfflatSearchIndex[float32]{QuantMul: 3}
+	converted, empty, supported, err = quantized.storageDistanceRange(
+		source, metric.DistFn_L2Distance, metric.Metric_L2sqDistance)
+	require.NoError(t, err)
+	require.False(t, empty)
+	require.True(t, supported)
+	require.Equal(t, float64(3), converted.LowerBound.GetLit().GetDval())
+	require.Equal(t, float64(6), converted.UpperBound.GetLit().GetDval())
+
+	converted, empty, supported, err = quantized.storageDistanceRange(
+		source, metric.DistFn_L2sqDistance, metric.Metric_L2sqDistance)
+	require.NoError(t, err)
+	require.False(t, empty)
+	require.True(t, supported)
+	require.Equal(t, float64(9), converted.LowerBound.GetLit().GetDval())
+	require.Equal(t, float64(18), converted.UpperBound.GetLit().GetDval())
+
+	_, empty, supported, err = quantized.storageDistanceRange(
+		source, metric.DistFn_InnerProduct, metric.Metric_InnerProduct)
+	require.NoError(t, err)
+	require.False(t, empty)
+	require.False(t, supported)
+
+	nullBound := ivfFloat64Expr(0)
+	nullBound.GetLit().Isnull = true
+	_, empty, supported, err = identity.storageDistanceRange(&plan.DistRange{
+		LowerBoundType: plan.BoundType_UNBOUNDED,
+		UpperBoundType: plan.BoundType_INCLUSIVE,
+		UpperBound:     nullBound,
+	}, metric.DistFn_L2Distance, metric.Metric_L2sqDistance)
+	require.NoError(t, err)
+	require.True(t, empty)
+	require.True(t, supported)
+
+	_, empty, supported, err = identity.storageDistanceRange(&plan.DistRange{
+		LowerBoundType: plan.BoundType_UNBOUNDED,
+		UpperBoundType: plan.BoundType_INCLUSIVE,
+		UpperBound:     ivfFloat64Expr(math.NaN()),
+	}, metric.DistFn_L2Distance, metric.Metric_L2sqDistance)
+	require.NoError(t, err)
+	require.True(t, empty)
+	require.True(t, supported)
 }
 
 func TestStorageTopKEligibilityMatchesVectorTopNDirection(t *testing.T) {
@@ -306,8 +370,60 @@ func TestStorageTopKEligibilityMatchesVectorTopNDirection(t *testing.T) {
 	sqlproc.IndexReaderParam = &plan.IndexReaderParam{
 		OrderBy: []*plan.OrderBySpec{{Flag: plan.OrderBySpec_DESC}},
 	}
-	require.False(t, canUseStorageTopK(sqlproc, []int64{1}, nil, 1),
+	require.False(t, canUseStorageTopK(sqlproc, []int64{1}, nil, 1, true),
 		"descending requests must use local Top-K until storage implements descending vector selection")
+}
+
+func TestScanEntriesPushesDistanceRangeToStorageTopK(t *testing.T) {
+	mp := mpool.MustNewZero()
+	proc := testutil.NewProcessWithMPool(t, "", mp)
+	scanner := &scriptedRelationScanner{t: t}
+	scanner.run = func(req sqlexec.RelationScanRequest) executor.Result {
+		require.False(t, req.PostFilterTopOnly)
+		require.Equal(t, metric.DistFn_L2Distance, req.IndexParam.OrigFuncName)
+		require.NotNil(t, req.IndexParam.DistRange)
+		require.Equal(t, float64(2), req.IndexParam.DistRange.UpperBound.GetLit().GetDval())
+		require.Equal(t, []byte{1}, req.FilterHint.MembershipFilterBytes)
+
+		bat := batch.NewWithSize(len(req.Columns) + 1)
+		bat.Vecs[0] = vector.NewVec(types.T_int64.ToType())
+		bat.Vecs[1] = vector.NewVec(types.T_int64.ToType())
+		bat.Vecs[2] = vector.NewVec(types.T_int64.ToType())
+		bat.Vecs[3] = vector.NewVec(types.New(types.T_array_float32, 1, 0))
+		bat.Vecs[4] = vector.NewVec(types.T_varchar.ToType())
+		bat.Vecs[5] = vector.NewVec(types.T_float64.ToType())
+		require.NoError(t, vector.AppendFixed(bat.Vecs[0], int64(1), false, mp))
+		require.NoError(t, vector.AppendFixed(bat.Vecs[1], int64(2), false, mp))
+		require.NoError(t, vector.AppendFixed(bat.Vecs[2], int64(7), false, mp))
+		require.NoError(t, vector.AppendArray(bat.Vecs[3], []float32{2}, false, mp))
+		require.NoError(t, vector.AppendBytes(bat.Vecs[4], []byte("cpkey"), false, mp))
+		require.NoError(t, vector.AppendFixed(bat.Vecs[5], float64(4), false, mp))
+		bat.SetRowCount(1)
+		return executor.Result{Batches: []*batch.Batch{bat}, Mp: mp}
+	}
+
+	sqlproc := sqlexec.NewSqlProcess(proc)
+	sqlproc.RelationScanner = scanner
+	sqlproc.IvfHasMembershipFilter = true
+	sqlproc.IvfMembershipFilter = []byte{1}
+	sqlproc.IndexReaderParam = &plan.IndexReaderParam{DistRange: &plan.DistRange{
+		LowerBoundType: plan.BoundType_UNBOUNDED,
+		UpperBoundType: plan.BoundType_INCLUSIVE,
+		UpperBound:     ivfFloat64Expr(2),
+	}}
+	idxcfg := vectorindex.IndexConfig{}
+	idxcfg.Ivfflat.Metric = uint16(metric.Metric_L2sqDistance)
+	idxcfg.Ivfflat.VectorType = int32(types.T_array_float32)
+	idx := &IvfflatSearchIndex[float32]{QuantMul: 1}
+	res, err := idx.scanEntries(sqlproc, idxcfg, vectorindex.IndexTableConfig{
+		DbName: "db", EntriesTable: "entries", PKeyType: int32(types.T_int64),
+		OrigFuncName: metric.DistFn_L2Distance,
+	}, []float32{0}, 1, []int64{2}, nil, nil, 1)
+	require.NoError(t, err)
+	defer res.Close()
+	require.Len(t, res.Batches, 1)
+	require.Equal(t, []int64{7}, vector.MustFixedColWithTypeCheck[int64](res.Batches[0].Vecs[0]))
+	require.Equal(t, []float64{4}, vector.MustFixedColWithTypeCheck[float64](res.Batches[0].Vecs[1]))
 }
 
 func TestScanEntriesFailsClosedAtTopKBoundaries(t *testing.T) {
@@ -1282,6 +1398,8 @@ func TestSearchPlanReaderUsesBoundedMembershipStorageTopK(t *testing.T) {
 			require.NotNil(t, req.IndexParam)
 			require.Equal(t, uint64(12), req.IndexParam.GetLimit().GetLit().GetU64Val())
 			require.False(t, req.PostFilterTopOnly)
+			require.NotNil(t, req.IndexParam.DistRange)
+			require.Equal(t, float64(3), req.IndexParam.DistRange.UpperBound.GetLit().GetDval())
 			require.NotEmpty(t, req.FilterHint.MembershipFilterBytes)
 			filterFn := req.Filter.GetF()
 			require.NotNil(t, filterFn)
@@ -1326,6 +1444,11 @@ func TestSearchPlanReaderUsesBoundedMembershipStorageTopK(t *testing.T) {
 	sqlproc.IndexReaderParam = &plan.IndexReaderParam{
 		Limit:        ivfUint64Expr(2),
 		OrigFuncName: metric.DistFn_L2Distance,
+		DistRange: &plan.DistRange{
+			LowerBoundType: plan.BoundType_UNBOUNDED,
+			UpperBoundType: plan.BoundType_INCLUSIVE,
+			UpperBound:     ivfFloat64Expr(3),
+		},
 	}
 	idxcfg := vectorindex.IndexConfig{}
 	idxcfg.Ivfflat.Lists = 2
@@ -1363,6 +1486,11 @@ func TestSearchPlanReaderUsesBoundedMembershipStorageTopK(t *testing.T) {
 			CandidateBudget:     12,
 			MembershipFilter:    membership,
 			HasMembershipFilter: true,
+			DistanceRange: &plan.DistRange{
+				LowerBoundType: plan.BoundType_UNBOUNDED,
+				UpperBoundType: plan.BoundType_INCLUSIVE,
+				UpperBound:     ivfFloat64Expr(3),
+			},
 			Identity: searchplugin.ScanIdentity{
 				PartitionCount: 2,
 				PartitionIndex: 1,
@@ -1371,9 +1499,9 @@ func TestSearchPlanReaderUsesBoundedMembershipStorageTopK(t *testing.T) {
 	}
 
 	require.NoError(t, searchPlanReader(r, sqlproc, idxcfg, tblcfg, []float32{0, 0}))
-	require.Equal(t, []any{int64(1), int64(2), int64(3), int64(4), int64(5)}, r.keys)
-	require.Equal(t, []float64{0, 1, 2, 3, 4}, r.distances)
-	require.Equal(t, []any{int32(10), int32(20), int32(30), int32(40), int32(50)}, r.includeData["payload"])
+	require.Equal(t, []any{int64(1), int64(2), int64(3), int64(4)}, r.keys)
+	require.Equal(t, []float64{0, 1, 2, 3}, r.distances)
+	require.Equal(t, []any{int32(10), int32(20), int32(30), int32(40)}, r.includeData["payload"])
 	require.Len(t, scanner.requests, 2)
 }
 
