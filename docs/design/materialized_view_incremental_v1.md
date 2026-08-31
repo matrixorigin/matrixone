@@ -4,8 +4,7 @@ Status: draft
 
 Owner issue: https://github.com/matrixorigin/matrixone/issues/24553
 
-Implementation series: `jiangxinmeng1:feat/materialized-view-24553` (PR link to
-be added before implementation review)
+Implementation PR: https://github.com/matrixorigin/matrixone/pull/27615
 
 ## 1. Problem and user contract
 
@@ -41,6 +40,78 @@ the same transaction, a maximum wall-clock staleness, automatic optimizer query
 rewrite, scheduled refresh, partition refresh, windows, Top-K, or nested MVs.
 
 ## 2. Scope
+
+### 2.0 Current baseline and remaining classic capabilities
+
+The implementation PR already establishes the physical MV lifecycle, dedicated
+ISCP consumer, consistent snapshot initialization, asynchronous tail refresh,
+atomic target/watermark publication, one-to-sixteen-source tracking, general
+snapshot-consistent full refresh, and single-table incremental maintenance for
+row-local WHERE, computed GROUP BY, COUNT, SUM, AVG, MIN/MAX affected-group
+recomputation, SELECT DISTINCT, and exact COUNT(DISTINCT). Insert, delete, and
+update tails are represented as signed row deltas.
+
+This design revision adds the next V1 increment:
+
+- single-table HAVING while retaining state for currently invisible groups;
+- exact SUM(DISTINCT) and AVG(DISTINCT);
+- branch-local incremental UNION ALL over two to sixteen direct sources;
+- insert, delete, and update for those shapes;
+- explicit FAST rejection reasons, with full-refresh fallback reserved for
+  FORCE.
+
+The following classic MV capabilities remain outside this implementation
+increment and require separately reviewed designs:
+
+#### Incremental SQL breadth
+
+- incremental equi-join, outer join, and fact-to-dimension maintenance;
+- UNION DISTINCT, INTERSECT, and EXCEPT;
+- CTEs, subqueries, recursive queries, and correlated expressions;
+- ROLLUP, CUBE, GROUPING SETS, and GROUPING functions;
+- ORDER BY/LIMIT Top-K, window functions, and event-time/session windows;
+- approximate or mergeable states such as HLL, bitmap, percentile/quantile,
+  median, histogram, and user-defined aggregates;
+- nested and cascading MVs, including an MV as another MV's source;
+- time-window expiration, TTL-driven state reclamation, and late-event policy.
+
+#### Refresh modes and consistency
+
+- synchronous ON COMMIT maintenance in the source DML transaction;
+- scheduled or interval refresh and cron/calendar policy;
+- CREATE WITH DATA / WITH NO DATA and deferred initial build;
+- concurrent/non-blocking manual refresh and explicit refresh cancellation;
+- bounded-staleness or freshness-SLA reads that wait, fail, or serve stale data
+  according to a user-selected policy;
+- pause, resume, rebuild, retry, and administrative job reassignment controls.
+
+#### Optimizer and storage integration
+
+- automatic query rewrite to use an eligible MV;
+- partition-level refresh, partition change tracking, and partition exchange;
+- user-selected indexes, clustering, distribution, retention, and storage
+  placement for MV targets and state;
+- automatic MV recommendation/selection under storage and maintenance budgets;
+- statistics and cost models that include freshness and maintenance cost.
+
+#### DDL, dependency, and operability
+
+- ALTER MATERIALIZED VIEW and online definition replacement;
+- complete source ALTER/RENAME compatibility and explicit CASCADE/RESTRICT
+  dependency policy;
+- mixed-version migration and automatic downgrade beyond the V1 refusal rule;
+- dedicated SHOW/EXPLAIN status for definition, refresh method, watermark,
+  wall-clock lag, last success/error, retries, state size, and fallback reason;
+- per-MV admission, disk/memory quotas, state compaction, backpressure policy,
+  and overload isolation;
+- backup/restore/PITR validation for target, state, source identities, and
+  watermarks as one logical object;
+- finer-grained CREATE/REFRESH/ALTER privileges and tenant-level operational
+  controls.
+
+These are roadmap gaps, not implicit promises of V1. Adding one requires
+updating this document or approving a follow-up design with its own ownership,
+compatibility, resource, and validation contract.
 
 ### 2.1 Incremental definitions
 
