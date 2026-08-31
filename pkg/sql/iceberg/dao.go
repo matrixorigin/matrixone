@@ -580,8 +580,11 @@ func normalizeRefCacheRefresh(ctx context.Context, refs []model.RefCache) ([]mod
 }
 
 func ValidatePublishJob(ctx context.Context, job model.PublishJob) error {
-	if job.AccountID == 0 || trimNonEmpty(job.JobID) == "" || job.TargetCatalogID == 0 {
-		return moerr.NewInvalidInput(ctx, "iceberg publish job requires account_id, job_id, and target_catalog_id")
+	// AccountID zero is the system tenant and is valid for catalog-owned audit
+	// rows. The catalog lifecycle lock below remains account-scoped, including
+	// for that tenant.
+	if trimNonEmpty(job.JobID) == "" || job.TargetCatalogID == 0 {
+		return moerr.NewInvalidInput(ctx, "iceberg publish job requires job_id and target_catalog_id")
 	}
 	if trimNonEmpty(job.TargetNamespace) == "" || trimNonEmpty(job.TargetTable) == "" {
 		return moerr.NewInvalidInput(ctx, "iceberg publish job requires target namespace and table")

@@ -1043,6 +1043,29 @@ func TestWriteWorkflowDAOAdapters(t *testing.T) {
 	}
 }
 
+func TestInsertPublishJobAllowsSystemAccount(t *testing.T) {
+	exec := &fakeExec{}
+	job := model.PublishJob{
+		AccountID:       0,
+		JobID:           "system-append-1",
+		TargetCatalogID: 7,
+		TargetNamespace: "gold",
+		TargetTable:     "orders",
+		Status:          "committed",
+	}
+	if err := NewDAO(exec).InsertPublishJob(context.Background(), job); err != nil {
+		t.Fatalf("insert system-account publish job: %v", err)
+	}
+	if len(exec.sqls) != 2 {
+		t.Fatalf("expected lifecycle lock and publish insert, got %#v", exec.sqls)
+	}
+	for _, want := range []string{"account_id = 0", "catalog_id = 7", "'system-append-1'"} {
+		if !strings.Contains(strings.Join(exec.sqls, "\n"), want) {
+			t.Fatalf("system-account publish SQL missing %q: %#v", want, exec.sqls)
+		}
+	}
+}
+
 func TestNewDMLCommitWorkflowWiresSQLAdapters(t *testing.T) {
 	now := time.Date(2026, 2, 3, 4, 5, 6, 0, time.UTC)
 	store := &fakeDMLWorkflowStore{}
