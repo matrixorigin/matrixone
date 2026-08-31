@@ -854,10 +854,28 @@ func (c *clientConn) handleQuitEventInternal(ctx context.Context, waitClientPipe
 			}
 		}
 		// COM_QUIT is cacheable only at a clean request/response boundary. A
-		// client can pipeline QUIT behind an outstanding query; pausing s2c then
-		// publishing that backend would leave the old response in the socket for
-		// the next generation's SET CONNECTION ID to consume. With c2s sealed and
-		// s2c stopped this state can no longer change, so discard conservatively.
+		// completed COM_STMT_CLOSE has no backend response, so fence it with a
+		// same-socket PING before resetting and publishing this generation.
+		if c.tun.hasFenceableClosedStatementState() {
+			if c.sc == nil {
+				discardBackend()
+				return
+			}
+			ok, err := execStmtWithContext(pauseCtx, c.sc, internalStmt{cmdType: cmdPing}, nil)
+			if err != nil || !ok {
+				if c.counterSet != nil {
+					c.counterSet.connCacheQuitFenceFailure.Add(1)
+				}
+				discardBackend()
+				return
+			}
+			c.tun.completeClosedStatementFence()
+			if c.counterSet != nil {
+				c.counterSet.connCacheQuitFenceSuccess.Add(1)
+			}
+		}
+		// PING only fences completed CLOSE commands. Recheck all state before
+		// handing the backend to ResetSession and the next tunnel generation.
 		if c.tun.hasUnsafeClientState() {
 			discardBackend()
 			return
@@ -867,6 +885,9 @@ func (c *clientConn) handleQuitEventInternal(ctx context.Context, waitClientPipe
 		if !c.connCache.Push(c.clientInfo.hash, c.sc) {
 			discardBackend()
 		} else {
+			if c.counterSet != nil {
+				c.counterSet.connCacheQuitPublished.Add(1)
+			}
 			c.quit.cached = true
 		}
 	})

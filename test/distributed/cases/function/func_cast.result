@@ -393,7 +393,7 @@ select cast('a10' as unsigned integer);
 invalid argument cast to uint64, bad value a10
 select 10+'a';
 invalid argument cast to int, bad value a
-select 10.0+cast('a' as decimal);
+select 10.0+cast('a' as decimal(38,0));
 invalid input: a beyond the range, can't be converted to Decimal128(38,0).
 select 10E+0+'a';
 ➤ 10e+0 + a[8,54,0]  𝄀
@@ -508,7 +508,7 @@ drop table ts_cast_time;
 set time_zone='SYSTEM';
 CREATE TABLE t1 (v varchar(10), tt char(255), t char(255),mt char(255), lt char(255));
 INSERT INTO t1 VALUES ('1.01', '2.02', '3.03', '4.04', '5.05');
-SELECT CAST(v AS DECIMAL), CAST(tt AS DECIMAL), CAST(t AS DECIMAL), CAST(mt AS DECIMAL), CAST(lt AS DECIMAL) from t1;
+SELECT CAST(v AS DECIMAL(38,0)), CAST(tt AS DECIMAL(38,0)), CAST(t AS DECIMAL(38,0)), CAST(mt AS DECIMAL(38,0)), CAST(lt AS DECIMAL(38,0)) from t1;
 ➤ cast(v as decimal(38))[3,38,0]  ¦  cast(tt as decimal(38))[3,38,0]  ¦  cast(t as decimal(38))[3,38,0]  ¦  cast(mt as decimal(38))[3,38,0]  ¦  cast(lt as decimal(38))[3,38,0]  𝄀
 1  ¦  2  ¦  3  ¦  4  ¦  5
 DROP TABLE t1;

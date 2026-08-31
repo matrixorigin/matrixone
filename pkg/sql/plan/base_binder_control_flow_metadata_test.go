@@ -330,11 +330,6 @@ func TestBindControlFlowMetadata(t *testing.T) {
 			width: types.MaxVarcharLen,
 		},
 		{
-			name:  "json keeps conservative varchar capacity",
-			typ:   types.T_json.ToType(),
-			width: types.MaxVarcharLen,
-		},
-		{
 			name:  "datalink keeps conservative varchar capacity",
 			typ:   types.T_datalink.ToType(),
 			width: types.MaxVarcharLen,
@@ -355,6 +350,21 @@ func TestBindControlFlowMetadata(t *testing.T) {
 			require.Equal(t, test.width, expr.Typ.Width)
 		})
 	}
+
+	t.Run("json uses unbounded text", func(t *testing.T) {
+		value := &planpb.Expr{
+			Typ:  planpb.Type{Id: int32(types.T_json)},
+			Expr: &planpb.Expr_Col{Col: &planpb.ColRef{RelPos: 0, ColPos: 0}},
+		}
+		expr, err := BindFuncExprImplByPlanExpr(ctx, "coalesce", []*planpb.Expr{
+			makePlan2StringConstExprWithType("x"),
+			makePlan2Int64ConstExprWithType(1),
+			value,
+		})
+		require.NoError(t, err)
+		require.Equal(t, int32(types.T_text), expr.Typ.Id)
+		require.Zero(t, expr.Typ.Width)
+	})
 
 	t.Run("greatest remains nullable in metadata", func(t *testing.T) {
 		expr, err := BindFuncExprImplByPlanExpr(ctx, "greatest", []*planpb.Expr{

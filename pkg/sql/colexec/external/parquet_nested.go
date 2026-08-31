@@ -52,6 +52,74 @@ func (h *ParquetHandler) getNestedMapper(col *parquet.Column, dt plan.Type) *col
 	}
 }
 
+// projectedParquetRowGroup exposes only the selected physical leaf chunks to
+// parquet-go's row reader. The chunks retain their source column indexes so the
+// existing nested reconstruction logic can consume the returned rows directly.
+type projectedParquetRowGroup struct {
+	rowGroup parquet.RowGroup
+	schema   *parquet.Schema
+	chunks   []parquet.ColumnChunk
+}
+
+func (g *projectedParquetRowGroup) NumRows() int64 {
+	return g.rowGroup.NumRows()
+}
+
+func (g *projectedParquetRowGroup) ColumnChunks() []parquet.ColumnChunk {
+	return g.chunks
+}
+
+func (g *projectedParquetRowGroup) Schema() *parquet.Schema {
+	return g.schema
+}
+
+func (*projectedParquetRowGroup) SortingColumns() []parquet.SortingColumn {
+	return nil
+}
+
+func (g *projectedParquetRowGroup) Rows() parquet.Rows {
+	return parquet.NewRowGroupRowReader(g)
+}
+
+func projectParquetRowGroup(
+	ctx context.Context,
+	rowGroup parquet.RowGroup,
+	columns []*parquet.Column,
+) (parquet.RowGroup, error) {
+	if rowGroup == nil || rowGroup.Schema() == nil {
+		return nil, moerr.NewInternalError(ctx, "cannot project a nil parquet row group")
+	}
+
+	root := make(parquet.Group, len(columns))
+	for _, col := range columns {
+		if col != nil {
+			root[col.Name()] = col
+		}
+	}
+	if len(root) == 0 {
+		return nil, moerr.NewInternalError(ctx, "parquet row projection has no physical columns")
+	}
+
+	sourceSchema := rowGroup.Schema()
+	projectedSchema := parquet.NewSchema(sourceSchema.Name(), root)
+	sourceChunks := rowGroup.ColumnChunks()
+	projectedChunks := make([]parquet.ColumnChunk, 0, len(projectedSchema.Columns()))
+	for _, path := range projectedSchema.Columns() {
+		leaf, ok := sourceSchema.Lookup(path...)
+		if !ok || leaf.ColumnIndex < 0 || leaf.ColumnIndex >= len(sourceChunks) {
+			return nil, moerr.NewInternalErrorf(ctx,
+				"parquet projected column %v does not map to a physical leaf chunk", path)
+		}
+		projectedChunks = append(projectedChunks, sourceChunks[leaf.ColumnIndex])
+	}
+
+	return &projectedParquetRowGroup{
+		rowGroup: rowGroup,
+		schema:   projectedSchema,
+		chunks:   projectedChunks,
+	}, nil
+}
+
 // getDataByRow reads data row by row (used when has nested columns)
 func (h *ParquetHandler) getDataByRow(bat *batch.Batch, param *ExternalParam, proc *process.Process) error {
 	_, span := trace.Start(proc.Ctx, "ParquetHandler.getDataByRow")

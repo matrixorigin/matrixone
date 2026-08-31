@@ -15,7 +15,7 @@ newColumn    INT(32)    YES        null
 col2    CHAR(1)    YES        null        
 drop table samecolumn01;
 drop table if exists rename01;
-create table rename01 (col1 int, col2 decimal);
+create table rename01 (col1 int, col2 decimal(38,0));
 alter table rename01 rename column col1 to col1New;
 show create table rename01;
 Table    Create Table
@@ -168,7 +168,7 @@ internal error: do not have privilege to execute the statement
 alter table mysql.procs_priv rename column grantor to newGrantor;
 internal error: do not have privilege to execute the statement
 drop table if exists primary01;
-create table primary01 (col1 int primary key , col2 decimal);
+create table primary01 (col1 int primary key , col2 decimal(38,0));
 insert into primary01 values (2389324, 32784329.4309403);
 insert into primary01 values (3287, 89384038);
 alter table primary01 rename column col1 to col1New;
@@ -413,7 +413,7 @@ cluster01    c    int    YES
 cluster01    d    bigint    NO
 drop table cluster01;
 drop table if exists temporary01;
-create table temporary01 (col1 int, col2 decimal);
+create table temporary01 (col1 int, col2 decimal(38,0));
 insert into temporary01 (col1, col2) values (3728937, 37283.3232);
 alter table temporary01 rename column col1 to `UUUYGGBBJBJ`;
 insert into temporary01 (col1, col2) values (-32893, -89232);

@@ -67,6 +67,13 @@ func TestPushdownLimitToCheckConstraintsFunctionScan(t *testing.T) {
 	require.Same(t, limit, functionScan.Limit)
 	require.Nil(t, project.Limit)
 
+	// A second enclosing LIMIT must compose with the producer's existing
+	// window instead of overwriting it during the repeated pushdown pass.
+	project.Limit = MakePlan2Uint64ConstExprWithType(10)
+	builder.pushdownLimitToTableScan(1)
+	require.Equal(t, uint64(1), functionScan.Limit.GetLit().GetU64Val())
+	require.Nil(t, project.Limit)
+
 	// OFFSET cannot be evaluated by the metadata producer without changing
 	// which rows the outer query observes, so it must stay on the project.
 	offset := MakePlan2Uint64ConstExprWithType(2)

@@ -20,6 +20,15 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 )
 
+// shouldPushFulltextCandidateLimit reports whether one fulltext stream sees the
+// complete candidate domain for LIMIT+OFFSET. A residual source predicate is
+// safe only when prefilter pushdown applies an exact membership filter inside
+// search. A Bloom false positive can otherwise displace a true top-k row before
+// the final join removes it.
+func shouldPushFulltextCandidateLimit(fulltextStreams, residualFilters int, prefilterPushdown, exactPrefilter bool) bool {
+	return fulltextStreams == 1 && (residualFilters == 0 || prefilterPushdown && exactPrefilter)
+}
+
 // getLiteralUint64 returns a LIMIT/OFFSET value only when it is already a
 // uint64 literal. Optimizer rules must not treat a non-literal expression as
 // zero: prepared parameters and variables are evaluated at execution time.
@@ -67,4 +76,89 @@ func buildCandidateLimit(limit, offset *plan.Expr) (*plan.Expr, bool) {
 		return nil, false
 	}
 	return makePlan2Uint64ConstExprWithType(sum), true
+}
+
+// composePagination collapses two consecutive LIMIT/OFFSET windows. The inner
+// window is evaluated first, followed by the outer window. Once a scan already
+// owns pagination, overwriting it with a newly exposed Project window changes
+// both cardinality and row position; callers must either compose the windows or
+// keep both operators.
+//
+// A previously unbounded scan can accept arbitrary runtime expressions without
+// composition. Dynamic expressions also remain movable when the two windows do
+// not interact (an inner OFFSET followed by an outer LIMIT). When composition
+// needs arithmetic or a minimum, every participating expression must be a
+// uint64 literal. This deliberately fails closed rather than manufacturing
+// runtime arithmetic whose overflow and error behavior would become part of the
+// optimizer contract. It also retains both operators when a nonzero outer
+// OFFSET exhausts a nonempty inner LIMIT: collapsing that case to LIMIT 0 would
+// let the compiler skip row filters that the inner window previously had to
+// evaluate.
+func composePagination(
+	innerLimit, innerOffset, outerLimit, outerOffset *plan.Expr,
+) (limit, offset *plan.Expr, ok bool) {
+	if outerLimit == nil && outerOffset == nil {
+		return innerLimit, innerOffset, true
+	}
+	if innerLimit == nil && innerOffset == nil {
+		return outerLimit, outerOffset, true
+	}
+	if innerLimit == nil && outerOffset == nil {
+		return outerLimit, innerOffset, true
+	}
+
+	innerLimitValue, innerLimitSet, ok := literalPaginationValue(innerLimit)
+	if !ok {
+		return nil, nil, false
+	}
+	innerOffsetValue, _, ok := literalPaginationValue(innerOffset)
+	if !ok {
+		return nil, nil, false
+	}
+	outerLimitValue, outerLimitSet, ok := literalPaginationValue(outerLimit)
+	if !ok {
+		return nil, nil, false
+	}
+	outerOffsetValue, _, ok := literalPaginationValue(outerOffset)
+	if !ok {
+		return nil, nil, false
+	}
+	if innerLimitSet && innerLimitValue > 0 && outerOffsetValue >= innerLimitValue &&
+		(!outerLimitSet || outerLimitValue > 0) {
+		return nil, nil, false
+	}
+
+	consumedInnerRows := outerOffsetValue
+	resultLimitValue := outerLimitValue
+	resultLimitSet := outerLimitSet
+	if innerLimitSet {
+		if consumedInnerRows > innerLimitValue {
+			consumedInnerRows = innerLimitValue
+		}
+		remainingInnerRows := innerLimitValue - consumedInnerRows
+		if !resultLimitSet || remainingInnerRows < resultLimitValue {
+			resultLimitValue = remainingInnerRows
+		}
+		resultLimitSet = true
+	}
+
+	resultOffsetValue, carry := bits.Add64(innerOffsetValue, consumedInnerRows, 0)
+	if carry != 0 {
+		return nil, nil, false
+	}
+	if resultLimitSet {
+		limit = makePlan2Uint64ConstExprWithType(resultLimitValue)
+	}
+	if resultOffsetValue != 0 {
+		offset = makePlan2Uint64ConstExprWithType(resultOffsetValue)
+	}
+	return limit, offset, true
+}
+
+func literalPaginationValue(expr *plan.Expr) (value uint64, present, ok bool) {
+	if expr == nil {
+		return 0, false, true
+	}
+	value, ok = getLiteralUint64(expr)
+	return value, true, ok
 }
