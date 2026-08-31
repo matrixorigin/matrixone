@@ -183,7 +183,7 @@ func TestConfigureMongoUserQueryMarksPrunedCandidateAsEmpty(t *testing.T) {
 		mongoQueryTestFunction("=", function.EQUAL, queryColumn, mongoQueryTestString(source)),
 		mongoQueryTestFunction("like", function.LIKE, queryColumn, mongoQueryTestString("does-not-match")),
 	}
-	compiler := &Compile{proc: testutil.NewProcess(t)}
+	compiler := newMongoUserQueryTestCompiler(t)
 
 	require.NoError(t, compiler.configureMongoUserQuery(node))
 	require.True(t, node.ExternScan.MongodbScan.EmptyResult)
