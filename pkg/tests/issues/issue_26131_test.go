@@ -100,12 +100,14 @@ func TestIssue26131Q15SharedCTEExecutesBothConsumers(t *testing.T) {
 		execSQLRequire(t, ctx, db, "use "+database)
 		execSQLRequire(t, ctx, db, "create table supplier (s_suppkey int primary key, s_name varchar(32))")
 		execSQLRequire(t, ctx, db, "create table lineitem (l_suppkey int, l_extendedprice decimal(15,2), l_discount decimal(15,2), l_shipdate date, l_comment varchar(32))")
+		execSQLRequire(t, ctx, db, "create table cte_error_rows (k int, raw varchar(32), payload varchar(32))")
 		execSQLRequire(t, ctx, db, "insert into supplier values (1, 'supplier-1'), (42, 'supplier-42')")
 		// Two rows per group preserve real SUM accumulation. The shared-CTE
 		// topology is asserted from EXPLAIN below and does not depend on volume.
 		execSQLRequire(t, ctx, db, `insert into lineitem values
 			(1, -1, 0, '1995-12-15', 'supplier-1-a'), (1, -1, 0, '1995-12-15', 'supplier-1-b'),
 			(42, 2, 0, '1995-12-15', 'supplier-42-a'), (42, 2, 0, '1995-12-15', 'supplier-42-b')`)
+		execSQLRequire(t, ctx, db, "insert into cte_error_rows values (1, '10', 'a'), (2, 'not-an-integer', 'bb')")
 		execSQLRequire(t, ctx, db, "analyze table supplier, lineitem")
 
 		planText := explainSQL(t, ctx, db, "explain "+issue26131Q15)
@@ -168,6 +170,27 @@ func TestIssue26131Q15SharedCTEExecutesBothConsumers(t *testing.T) {
 		require.False(t, predicateRows.Next())
 		require.NoError(t, predicateRows.Err())
 		require.NoError(t, predicateRows.Close())
+
+		const fallibleOutputQuery = `with c as (
+			select k, cast(raw as bigint) as risky, payload from cte_error_rows
+		)
+		select sum(risky) from c where k = 1
+		union all
+		select sum(length(payload)) from c where k = 2`
+		falliblePlan := explainSQL(t, ctx, db, "explain "+fallibleOutputQuery)
+		require.NotContains(t, falliblePlan, "Sink Scan",
+			"sharing must not expand evaluation of a consumer-only fallible cast")
+		fallibleRows, err := db.QueryContext(ctx, fallibleOutputQuery)
+		require.NoError(t, err)
+		defer fallibleRows.Close()
+		var fallibleResults []int64
+		for fallibleRows.Next() {
+			var value int64
+			require.NoError(t, fallibleRows.Scan(&value))
+			fallibleResults = append(fallibleResults, value)
+		}
+		require.NoError(t, fallibleRows.Err())
+		require.ElementsMatch(t, []int64{10, 2}, fallibleResults)
 	})
 }
 
