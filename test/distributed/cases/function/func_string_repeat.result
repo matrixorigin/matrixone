@@ -208,10 +208,9 @@ select length(repeat(rpad(col2,300,'1234567890***'),col1)) from repeat04;
 length(repeat(rpad(col2, 300, 1234567890***), col1))
 369600
 0
-null
+0
 null
 0
-
 select repeat(reverse(col2),10) from repeat04;
 repeat(reverse(col2), 10)
 2342342f3r4ewrev2i384hjwfhu8wyieuJIHUGTYFJHIUYTDFHJH ( U ( *HJIJU*Y&^TY2342342f3r4ewrev2i384hjwfhu8wyieuJIHUGTYFJHIUYTDFHJH ( U ( *HJIJU*Y&^TY2342342f3r4ewrev2i384hjwfhu8wyieuJIHUGTYFJHIUYTDFHJH ( U ( *HJIJU*Y&^TY2342342f3r4ewrev2i384hjwfhu8wyieuJIHUGTYFJHIUYTDFHJH ( U ( *HJIJU*Y&^TY2342342f3r4ewrev2i384hjwfhu8wyieuJIHUGTYFJHIUYTDFHJH ( U ( *HJIJU*Y&^TY2342342f3r4ewrev2i384hjwfhu8wyieuJIHUGTYFJHIUYTDFHJH ( U ( *HJIJU*Y&^TY2342342f3r4ewrev2i384hjwfhu8wyieuJIHUGTYFJHIUYTDFHJH ( U ( *HJIJU*Y&^TY2342342f3r4ewrev2i384hjwfhu8wyieuJIHUGTYFJHIUYTDFHJH ( U ( *HJIJU*Y&^TY2342342f3r4ewrev2i384hjwfhu8wyieuJIHUGTYFJHIUYTDFHJH ( U ( *HJIJU*Y&^TY2342342f3r4ewrev2i384hjwfhu8wyieuJIHUGTYFJHIUYTDFHJH ( U ( *HJIJU*Y&^TY

@@ -135,6 +135,10 @@ func insertStringReturnType(parameters []types.Type) types.Type {
 	boundFor := declaredTextCharacterBound
 	if binary {
 		boundFor = declaredStringByteBound
+		// The current rune-position kernel re-encodes every invalid source byte
+		// as the three-byte UTF-8 RuneError. Replacement bytes are copied raw.
+		return stringResultTypeForDomain(parameters, 0, addStringResultBounds(
+			multiplyStringResultBound(boundFor(parameters[0]), 3), boundFor(parameters[3])))
 	}
 	return stringResultTypeForDomain(parameters, 0,
 		addStringResultBounds(boundFor(parameters[0]), boundFor(parameters[3])))

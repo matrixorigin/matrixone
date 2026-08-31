@@ -62,3 +62,10 @@
 2. 为 REGEXP_REPLACE 恢复零宽匹配专用 checked bound：`source + (source + 1) * replacement`。
 3. 回退 binary INSERT byte-position 改动及对应测试，保持 #27216 ownership 与当前设计范围。
 4. 按 review 修正两处 DESC 空 Comment 分隔符，运行 focused/owning tests、lint 后 commit/push。
+
+# PR #27841 第十二轮 review 修复
+
+1. string-domain matcher 先选择精确 overload，再按普通 matcher 的 minimum cast cost 选择候选。
+2. binary INSERT 静态 bound 纳入 invalid UTF-8 最坏三倍 source 重编码膨胀，但不改变 rune-position runtime。
+3. 补齐 DESC 最后空 Comment payload；按 exact-head 结果修正 REPEAT length 的五行 golden。
+4. 添加精确 BLOB overload 与 INSERT bound focused UT，运行 owning packages/lint 后 commit/push。

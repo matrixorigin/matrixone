@@ -224,7 +224,7 @@ func TestExpandingReplacementAndInsertBounds(t *testing.T) {
 
 	inserted := insertStringReturnType([]types.Type{varbinary(1), types.T_int64.ToType(), types.T_int64.ToType(), varbinary(1)})
 	require.Equal(t, types.T_varbinary, inserted.Oid)
-	require.Equal(t, int32(2), inserted.Width)
+	require.Equal(t, int32(4), inserted.Width)
 
 }
 
@@ -234,8 +234,15 @@ func TestStringConsumersPreserveTextAndBoundedWidths(t *testing.T) {
 	require.NoError(t, err)
 	casts, needCast := binaryReverse.ShouldDoImplicitTypeCast()
 	require.True(t, needCast)
-	require.Equal(t, types.T_char, casts[0].Oid)
-	require.NotEqual(t, types.T_varbinary, binaryReverse.GetReturnType().Oid)
+	require.Equal(t, types.T_blob, casts[0].Oid)
+	require.Equal(t, types.T_blob, binaryReverse.GetReturnType().Oid)
+
+	blobReverse, err := GetFunctionByName(proc.Ctx, "reverse", []types.Type{types.T_blob.ToType()})
+	require.NoError(t, err)
+	casts, needCast = blobReverse.ShouldDoImplicitTypeCast()
+	require.False(t, needCast)
+	require.Empty(t, casts)
+	require.Equal(t, types.T_blob, blobReverse.GetReturnType().Oid)
 
 	for _, test := range []struct {
 		name      string

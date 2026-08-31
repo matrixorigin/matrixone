@@ -229,23 +229,36 @@ func collatedTextFixedTypeMatch(overloads []overload, inputs []types.Type) check
 }
 
 func stringDomainFixedTypeMatchIf(overloads []overload, inputs []types.Type, preserve func(types.T) bool) checkResult {
+	// Never let an earlier castable overload shadow an exact overload.
+	for overloadIndex, ov := range overloads {
+		if len(ov.args) != len(inputs) {
+			continue
+		}
+		if status, _ := tryToMatch(inputs, ov.args); status == matchDirectly {
+			return newCheckResultWithSuccess(overloadIndex)
+		}
+	}
+
+	minIndex, minCost := -1, math.MaxInt
+	var minTargets []types.Type
+	minNeedsCast := false
 	for overloadIndex, ov := range overloads {
 		if len(ov.args) != len(inputs) {
 			continue
 		}
 		targets := make([]types.Type, len(inputs))
-		needsCast := false
-		matched := true
+		needsCast, matched, cost := false, true, 0
 		for i, expected := range ov.args {
 			if expected.IsMySQLString() && preserve(inputs[i].Oid) {
 				targets[i] = inputs[i]
 				continue
 			}
-			status, _ := tryToMatch([]types.Type{inputs[i]}, []types.T{expected})
+			status, castCost := tryToMatch([]types.Type{inputs[i]}, []types.T{expected})
 			if status == matchFailed {
 				matched = false
 				break
 			}
+			cost += castCost
 			if status == matchByCast {
 				needsCast = true
 				targets[i] = expected.ToType()
@@ -254,15 +267,18 @@ func stringDomainFixedTypeMatchIf(overloads []overload, inputs []types.Type, pre
 				targets[i] = inputs[i]
 			}
 		}
-		if !matched {
-			continue
+		if matched && cost < minCost {
+			minIndex, minCost = overloadIndex, cost
+			minTargets, minNeedsCast = targets, needsCast
 		}
-		if needsCast {
-			return newCheckResultWithCast(overloadIndex, targets)
-		}
-		return newCheckResultWithSuccess(overloadIndex)
 	}
-	return newCheckResultWithFailure(failedFunctionParametersWrong)
+	if minIndex == -1 {
+		return newCheckResultWithFailure(failedFunctionParametersWrong)
+	}
+	if minNeedsCast {
+		return newCheckResultWithCast(minIndex, minTargets)
+	}
+	return newCheckResultWithSuccess(minIndex)
 }
 
 func isCollatedTextType(oid types.T) bool {
