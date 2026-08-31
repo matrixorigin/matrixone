@@ -117,6 +117,53 @@ func TestConstantFoldPreservesSerializedLiteralProvenance(t *testing.T) {
 	}
 }
 
+func TestOptimizerConstantFoldsNegativeSecToTime(t *testing.T) {
+	stmt, err := mysql.ParseOne(t.Context(), "select sec_to_time(-2378)", 1)
+	require.NoError(t, err)
+
+	query, err := NewBaseOptimizer(NewMockCompilerContext(true)).Optimize(stmt, false)
+	require.NoError(t, err)
+	require.NotEmpty(t, query.Steps)
+	root := query.Nodes[query.Steps[len(query.Steps)-1]]
+	require.NotEmpty(t, root.ProjectList)
+
+	literal := root.ProjectList[0].GetLit()
+	require.NotNil(t, literal)
+	require.Equal(t, int64(-2378*types.MicroSecsPerSec), literal.GetTimeval())
+}
+
+func TestConstantFoldDefersLegacyTimeAssignmentCast(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	inputType := types.T_varchar.ToType()
+	timeType := types.T_time.ToTypeWithScale(6)
+	registered, err := function.GetFunctionByName(
+		context.Background(), "cast_strict", []types.Type{inputType, timeType},
+	)
+	require.NoError(t, err)
+
+	expr := &planpb.Expr{
+		Typ: planpb.Type{Id: int32(types.T_time), Scale: 6},
+		Expr: &planpb.Expr_F{F: &planpb.Function{
+			Func: &planpb.ObjectRef{Obj: registered.GetEncodedOverloadID(), ObjName: "cast_strict"},
+			Args: []*planpb.Expr{
+				{
+					Typ:  planpb.Type{Id: int32(types.T_varchar)},
+					Expr: &planpb.Expr_Lit{Lit: &planpb.Literal{Value: &planpb.Literal_Sval{Sval: "2562047788:00:00"}}},
+				},
+				{
+					Typ:  planpb.Type{Id: int32(types.T_time), Scale: 6},
+					Expr: &planpb.Expr_T{T: &planpb.TargetType{}},
+				},
+			},
+		}},
+	}
+
+	folded, err := ConstantFold(batch.EmptyForConstFoldBatch, expr, proc, false, true)
+	require.NoError(t, err)
+	require.NotNil(t, folded.GetF())
+	require.Equal(t, "cast_strict", folded.GetF().GetFunc().GetObjName())
+}
+
 func TestConstantFoldPreservesSerialCastSemantics(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	registered, err := function.GetFunctionByName(

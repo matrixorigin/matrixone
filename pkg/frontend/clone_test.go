@@ -690,6 +690,29 @@ func TestGetBackExecutorClosesWhenBeginFails(t *testing.T) {
 	require.Equal(t, 2, backExec.closeCalls)
 }
 
+func TestGetBackExecutorWithTxnHandlerUsesTxnHandlerBeginState(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	ses := newTestSession(t, ctrl)
+	t.Cleanup(ses.Close)
+
+	staleTxn := mock_frontend.NewMockTxnOperator(ctrl)
+	sharedTxn := mock_frontend.NewMockTxnOperator(ctrl)
+	sharedTxn.EXPECT().SetFootPrints(gomock.Any(), gomock.Any()).AnyTimes()
+	ses.proc.Base.TxnOperator = staleTxn
+	ses.GetTxnHandler().txnOp = sharedTxn
+	ses.GetTxnHandler().SetOptionBits(OPTION_BEGIN)
+
+	bh, cleanup, err := getBackExecutorWithTxnHandler(context.Background(), ses)
+	require.NoError(t, err)
+	require.NotNil(t, bh)
+	require.NotNil(t, cleanup)
+	back := bh.(*backExec)
+	require.Same(t, sharedTxn, back.backSes.GetTxnHandler().GetTxn())
+	require.True(t, back.backSes.GetTxnHandler().IsShareTxn())
+	require.Same(t, staleTxn, ses.proc.GetTxnOperator())
+	require.NoError(t, cleanup(nil))
+}
+
 func TestHandleCloneDatabaseWithSourceIfNotExistsSkipsExistingTarget(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	ses := newTestSession(t, ctrl)

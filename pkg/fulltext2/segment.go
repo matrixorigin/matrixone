@@ -788,6 +788,30 @@ func (s *Segment) PrefixRange(prefix string) []string {
 	return s.sortedTerms[lo:hi]
 }
 
+// TermRange returns this segment's terms in [lo, hi], both ends INCLUSIVE, in
+// ascending order. The tuple term encoding is byte-order preserving, so a
+// lexicographic term range IS a value range — which is what turns
+// `json_extract_float64(j,'$.a.b') > 3.14` into a scan of this slice.
+//
+// Both ends inclusive matches the probe contract: a strict > or < simply
+// includes the boundary term, and the caller's retained predicate removes those
+// rows. Nothing here needs to know which comparison produced the bounds.
+func (s *Segment) TermRange(lo, hi string) []string {
+	if lo > hi {
+		return nil
+	}
+	i := sort.SearchStrings(s.sortedTerms, lo)
+	// first index whose term > hi
+	j := sort.SearchStrings(s.sortedTerms, hi)
+	for j < len(s.sortedTerms) && s.sortedTerms[j] == hi {
+		j++
+	}
+	if i >= j {
+		return nil
+	}
+	return s.sortedTerms[i:j]
+}
+
 // hasPrefix reports whether s begins with prefix. (Local rather than
 // strings.HasPrefix to keep the hot prefix-scan allocation-free and explicit.)
 func hasPrefix(s, prefix string) bool {

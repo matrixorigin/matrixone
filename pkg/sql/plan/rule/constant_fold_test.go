@@ -151,6 +151,24 @@ func TestConstantFoldStillFoldsUnaffectedCasts(t *testing.T) {
 
 	preparedStrictTemporal := makeConstantCastExpr(t, "cast_strict", stringType, types.T_date.ToType(), "2024-01-02")
 	require.NotNil(t, NewConstantFold(true).constantFold(preparedStrictTemporal, proc).GetLit())
+
+	ordinaryStrictTime := makeConstantCastExpr(t, "cast_strict", stringType, types.T_time.ToTypeWithScale(6), "12:34:56")
+	require.NotNil(t, NewConstantFold(false).constantFold(ordinaryStrictTime, proc).GetLit())
+}
+
+func TestConstantFoldDefersLegacyTimeAssignmentCast(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	expr := makeConstantCastExpr(
+		t,
+		"cast_strict",
+		types.T_varchar.ToType(),
+		types.T_time.ToTypeWithScale(6),
+		"2562047788:00:00",
+	)
+
+	folded := NewConstantFold(false).constantFold(expr, proc)
+	require.NotNil(t, folded.GetF())
+	require.Equal(t, "cast_strict", folded.GetF().GetFunc().GetObjName())
 }
 
 func TestPreparedConstantFoldKeepsExactDecimalBelowImplicitFloatCast(t *testing.T) {

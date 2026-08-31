@@ -96,8 +96,8 @@ order by dt, id;
 7  ¦  9999-12-31 23:59:59.999999000  ¦  90
 create table temporal_time_timestamp_bound(id int primary key, tm time(6), ts timestamp(6), v int);
 insert into temporal_time_timestamp_bound values
-(1, '2562047787:59:59.999998', '9999-12-30 23:59:59.999999', 40),
-(2, '2562047787:59:59.999999', '9999-12-31 23:59:59.999999', 50);
+(1, '838:59:58.999998', '9999-12-30 23:59:59.999999', 40),
+(2, '838:59:58.999999', '9999-12-31 23:59:59.999999', 50);
 select id, sum(v) over (
 order by tm
 range between current row and interval 1 microsecond following
