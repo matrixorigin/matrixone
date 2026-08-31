@@ -79,6 +79,28 @@ func NewBindContext(builder *QueryBuilder, parent *BindContext) *BindContext {
 	return bc
 }
 
+func (bc *BindContext) appendHeading(heading string, preserveStringLiterals bool) {
+	bc.headings = append(bc.headings, heading)
+	bc.headingPreserveStringLiterals = append(
+		bc.headingPreserveStringLiterals, preserveStringLiterals)
+}
+
+func (bc *BindContext) setHeading(index int, heading string, preserveStringLiterals bool) {
+	bc.headings[index] = heading
+	if index >= len(bc.headingPreserveStringLiterals) {
+		bc.headingPreserveStringLiterals = append(
+			bc.headingPreserveStringLiterals,
+			make([]bool, index+1-len(bc.headingPreserveStringLiterals))...,
+		)
+	}
+	bc.headingPreserveStringLiterals[index] = preserveStringLiterals
+}
+
+func (bc *BindContext) headingPreservesStringLiterals(index int) bool {
+	return index >= 0 && index < len(bc.headingPreserveStringLiterals) &&
+		bc.headingPreserveStringLiterals[index]
+}
+
 // newCTEDeclarationContext records the name-resolution scope at a WITH
 // declaration without retaining bindings that the declaring query block adds
 // later while binding its FROM clause. The normal child-context constructor

@@ -1436,7 +1436,8 @@ func genAsSelectCols(ctx CompilerContext, stmt *tree.Select, isPrepareStmt bool)
 		}
 
 		cols[i] = &plan.ColDef{
-			Name:    normalizeCTASColumnName(bindCtx.headings[i]),
+			Name: normalizeCTASColumnName(
+				bindCtx.headings[i], bindCtx.headingPreservesStringLiterals(i)),
 			Alg:     plan.CompressType_Lz4,
 			Typ:     typ,
 			Default: defaultDef,
@@ -1445,11 +1446,15 @@ func genAsSelectCols(ctx CompilerContext, stmt *tree.Select, isPrepareStmt bool)
 	return cols, query, nil
 }
 
-// normalizeCTASColumnName keeps MatrixOne's lowercase identifier convention
-// without changing case-sensitive string literals embedded in an expression
-// heading. Single quotes inside a literal are emitted as doubled quotes by the
-// AST formatter and therefore do not end the literal.
-func normalizeCTASColumnName(heading string) string {
+// normalizeCTASColumnName keeps MatrixOne's lowercase identifier convention.
+// Only headings known to have been rendered with SQL string-literal quoting
+// receive quote-aware normalization; an apostrophe in an explicit identifier
+// is otherwise just identifier data and must be lowercased as a whole.
+func normalizeCTASColumnName(heading string, preserveStringLiterals bool) string {
+	if !preserveStringLiterals {
+		return strings.ToLower(heading)
+	}
+
 	var result strings.Builder
 	result.Grow(len(heading))
 	inString := false

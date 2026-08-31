@@ -647,6 +647,12 @@ type BindContext struct {
 	//cte in binding or bound already
 	boundCtes map[string]*CTERef
 	headings  []string
+	// headingPreserveStringLiterals is aligned with headings. It is true only
+	// when the heading was rendered from an expression containing a
+	// DATE_FORMAT/TIME_FORMAT call with SQL string-literal formatting enabled.
+	// CTAS uses this provenance to distinguish literal quotes from apostrophes
+	// that are part of an explicit identifier.
+	headingPreserveStringLiterals []bool
 
 	// captureViewStarExpansion is enabled only while binding a CREATE/ALTER
 	// VIEW definition. Ordinary SELECT planning must not clone its select list

@@ -178,3 +178,23 @@ func TestBuildCTASPreservesNestedDateFormatHeading(t *testing.T) {
 	require.Equal(t, "concat(date_format(col2, '%M'), 'X')", visible[0].Name)
 	require.Equal(t, "concat(date_format(col2, '%m'), 'X')", visible[1].Name)
 }
+
+func TestBuildCTASLowercasesApostropheInQuotedAlias(t *testing.T) {
+	ctx := NewMockCompilerContext(false)
+	stmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL,
+		"create table t as select 1 as `A'B`", 1)
+	require.NoError(t, err)
+	defer stmt.Free()
+
+	logicPlan, err := BuildPlan(ctx, stmt, false)
+	require.NoError(t, err)
+
+	var visible []*planpb.ColDef
+	for _, col := range logicPlan.GetDdl().GetCreateTable().GetTableDef().GetCols() {
+		if !col.Hidden {
+			visible = append(visible, col)
+		}
+	}
+	require.Len(t, visible, 1)
+	require.Equal(t, "a'b", visible[0].Name)
+}

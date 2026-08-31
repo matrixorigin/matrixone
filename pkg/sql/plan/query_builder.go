@@ -4076,6 +4076,10 @@ func (builder *QueryBuilder) buildUnionWithResultLen(
 
 	// set ctx's headings  projects  results
 	ctx.headings = append(ctx.headings, subCtxList[0].headings...)
+	ctx.headingPreserveStringLiterals = append(
+		ctx.headingPreserveStringLiterals,
+		subCtxList[0].headingPreserveStringLiterals...,
+	)
 
 	getProjectList := func(
 		nodeType plan.Node_NodeType,
@@ -4519,6 +4523,8 @@ func (builder *QueryBuilder) buildUnionWithResultLen(
 	}
 
 	ctx.headings = ctx.headings[:resultLen]
+	ctx.headingPreserveStringLiterals = ctx.headingPreserveStringLiterals[:min(
+		resultLen, len(ctx.headingPreserveStringLiterals))]
 
 	// set heading
 	if isRoot {
@@ -4633,7 +4639,7 @@ func (builder *QueryBuilder) bindNoRecursiveCte(
 	}
 
 	for i, col := range cols {
-		subCtx.headings[i] = string(col)
+		subCtx.setHeading(i, string(col), false)
 	}
 
 	if len(cteRef.occurrences) == 0 {
@@ -4910,7 +4916,7 @@ func (builder *QueryBuilder) bindRecursiveCte(
 		}
 
 		for i, col := range cols {
-			subCtx.headings[i] = string(col)
+			subCtx.setHeading(i, string(col), false)
 		}
 	}
 	// Record every column explicitly, including incompatible columns as nil.
@@ -7018,7 +7024,8 @@ func rollupWindowOutputAlias(selectExpr tree.SelectExpr) *tree.CStr {
 	if heading, ok := nameConstHeading(expr); ok {
 		return tree.NewCStr(heading, 1)
 	}
-	return tree.NewCStr(formatSelectExpressionHeading(expr), 1)
+	heading, _ := formatSelectExpressionHeading(expr)
+	return tree.NewCStr(heading, 1)
 }
 
 func rollupWindowBareColumnName(expr tree.Expr) (string, bool) {
@@ -9565,7 +9572,7 @@ func (builder *QueryBuilder) bindValues(
 			Expr: tree.NewUnresolvedColName(colName),
 			As:   tree.NewCStr(colName, ctx.lower),
 		})
-		ctx.headings = append(ctx.headings, colName)
+		ctx.appendHeading(colName, false)
 		tableDef.Cols[i] = &plan.ColDef{
 			ColId: 0,
 			Name:  colName,
@@ -10355,7 +10362,7 @@ func appendSelectListWithGroupingOrder(
 			}
 			for i, name := range names {
 				selectList = append(selectList, cols[i])
-				ctx.headings = append(ctx.headings, name)
+				ctx.appendHeading(name, false)
 			}
 
 		case *tree.SampleExpr:
@@ -10384,7 +10391,7 @@ func appendSelectListWithGroupingOrder(
 				if sampleCount != 1 {
 					return nil, moerr.NewSyntaxError(builder.GetContext(), "sample multi columns cannot have alias")
 				}
-				ctx.headings[len(ctx.headings)-1] = selectExpr.As.Origin()
+				ctx.setHeading(len(ctx.headings)-1, selectExpr.As.Origin(), false)
 				selectList[len(selectList)-1].As = selectExpr.As
 			}
 
@@ -10397,12 +10404,14 @@ func appendSelectListWithGroupingOrder(
 					return nil, err
 				}
 				selectList = append(selectList, cols...)
-				ctx.headings = append(ctx.headings, names...)
+				for _, name := range names {
+					ctx.appendHeading(name, false)
+				}
 			} else {
 				if selectExpr.As != nil && !selectExpr.As.Empty() {
-					ctx.headings = append(ctx.headings, selectExpr.As.Origin())
+					ctx.appendHeading(selectExpr.As.Origin(), false)
 				} else {
-					ctx.headings = append(ctx.headings, expr.ColNameOrigin())
+					ctx.appendHeading(expr.ColNameOrigin(), false)
 				}
 
 				newExpr, err := qualifyExpr(expr)
@@ -10421,9 +10430,9 @@ func appendSelectListWithGroupingOrder(
 			}
 
 			if selectExpr.As != nil && !selectExpr.As.Empty() {
-				ctx.headings = append(ctx.headings, selectExpr.As.Origin())
+				ctx.appendHeading(selectExpr.As.Origin(), false)
 			} else {
-				ctx.headings = append(ctx.headings, tree.String(expr, dialect.MYSQL))
+				ctx.appendHeading(tree.String(expr, dialect.MYSQL), false)
 			}
 
 			selectList = append(selectList, tree.SelectExpr{
@@ -10432,7 +10441,7 @@ func appendSelectListWithGroupingOrder(
 			})
 		default:
 			if selectExpr.As != nil && !selectExpr.As.Empty() {
-				ctx.headings = append(ctx.headings, selectExpr.As.Origin())
+				ctx.appendHeading(selectExpr.As.Origin(), false)
 			} else {
 				for {
 					if parenExpr, ok := expr.(*tree.ParenExpr); ok {
@@ -10442,9 +10451,10 @@ func appendSelectListWithGroupingOrder(
 					}
 				}
 				if heading, ok := nameConstHeading(expr); ok {
-					ctx.headings = append(ctx.headings, heading)
+					ctx.appendHeading(heading, false)
 				} else {
-					ctx.headings = append(ctx.headings, formatSelectExpressionHeading(expr))
+					heading, preserveStringLiterals := formatSelectExpressionHeading(expr)
+					ctx.appendHeading(heading, preserveStringLiterals)
 				}
 			}
 
@@ -10596,7 +10606,7 @@ func nameConstHeading(expr tree.Expr) (string, bool) {
 // different %m after CTAS identifier normalization. The format function can
 // be nested inside another expression, so inspect the complete expression tree
 // instead of only the outermost node.
-func formatSelectExpressionHeading(expr tree.Expr) string {
+func formatSelectExpressionHeading(expr tree.Expr) (string, bool) {
 	for {
 		paren, ok := expr.(*tree.ParenExpr)
 		if !ok {
@@ -10604,10 +10614,11 @@ func formatSelectExpressionHeading(expr tree.Expr) string {
 		}
 		expr = paren.Expr
 	}
-	if containsDateTimeFormatFunction(expr) {
-		return tree.StringWithOpts(expr, dialect.MYSQL, tree.WithSingleQuoteString())
+	preserveStringLiterals := containsDateTimeFormatFunction(expr)
+	if preserveStringLiterals {
+		return tree.StringWithOpts(expr, dialect.MYSQL, tree.WithSingleQuoteString()), true
 	}
-	return tree.String(expr, dialect.MYSQL)
+	return tree.String(expr, dialect.MYSQL), false
 }
 
 func containsDateTimeFormatFunction(expr tree.Expr) bool {
@@ -11021,7 +11032,7 @@ func (builder *QueryBuilder) bindView(
 			return 0, moerr.NewViewWrongList(builder.GetContext())
 		}
 		for i, colName := range viewStmt.ColNames {
-			viewCtx.headings[i] = string(colName)
+			viewCtx.setHeading(i, string(colName), false)
 		}
 	}
 	// Expanding a view removes the view catalog object from the executable
