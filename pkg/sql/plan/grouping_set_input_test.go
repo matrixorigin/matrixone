@@ -37,7 +37,7 @@ func useLegacyGroupingSetPlan(t *testing.T, mock *MockOptimizer) {
 			rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCLatestVersion)
 		}
 	})
-	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion29)
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion37)
 }
 
 func TestGroupingSetInputSharingProtocolGate(t *testing.T) {
