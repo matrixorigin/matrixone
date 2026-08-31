@@ -1731,6 +1731,27 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 	//     the surviving rows — MySQL's row-skip semantics.
 	// ON DUPLICATE KEY UPDATE runs its own in-plan assert over the final merged
 	// image (handled earlier, with appendOnDupIrregularMaintSource).
+	// INSERT IGNORE applies CHECK constraints as a FILTER. Materialize unique-key
+	// lock columns before that filter so its pass-through projection preserves the
+	// physical vectors consumed by LockOp.
+	lockKeysMaterializedBeforeChecks := false
+	if onDupAction == plan.Node_IGNORE && len(tableDef.Checks) > 0 {
+		needsLockKeyProjection, err := hasMaterializedInsertUniqueLockKey(tableDef, skipUniqueIdx)
+		if err != nil {
+			return 0, err
+		}
+		if needsLockKeyProjection {
+			lastNodeID, selectTag, selectNode = builder.appendInsertLockKeyProjection(
+				bindCtx,
+				lastNodeID,
+			)
+			if err = builder.materializeInsertUniqueLockKeys(tableDef, skipUniqueIdx, colName2Idx, selectNode); err != nil {
+				return 0, err
+			}
+			lockKeysMaterializedBeforeChecks = true
+		}
+	}
+
 	if onDupAction == plan.Node_FAIL {
 		fkEnabled, err := builder.modernInsertFkCheckEnabled(tableDef)
 		if err != nil {
@@ -1799,47 +1820,10 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 
 	// Materialize lock keys for composite and prefix unique indexes in advance.
 	// This guarantees the lock target can find __mo_index_idx_col in colName2Idx.
-	for i, idxDef := range tableDef.Indexes {
-		prefixLengths, err := catalog.IndexPrefixLengthsFromParamsWithError(idxDef.IndexAlgoParams)
-		if err != nil {
+	if !lockKeysMaterializedBeforeChecks {
+		if err = builder.materializeInsertUniqueLockKeys(tableDef, skipUniqueIdx, colName2Idx, selectNode); err != nil {
 			return 0, err
 		}
-		if !idxDef.Unique || skipUniqueIdx[i] || (len(idxDef.Parts) <= 1 && len(prefixLengths) == 0) {
-			continue
-		}
-		lockColName := idxDef.IndexTableName + "." + catalog.IndexTableIndexColName
-		if _, ok := colName2Idx[lockColName]; ok {
-			continue
-		}
-
-		var lockExpr *plan.Expr
-		if len(idxDef.Parts) == 1 {
-			partName := catalog.ResolveAlias(idxDef.Parts[0])
-			partPos, ok := colName2Idx[tableDef.Name+"."+partName]
-			if !ok {
-				return 0, moerr.NewInternalErrorf(builder.GetContext(), "bind insert err, can not find colName = %s", partName)
-			}
-			lockExpr, err = builder.makeIndexPartExprFromInputExpr(selectNode.ProjectList[partPos], partName, prefixLengths)
-			if err != nil {
-				return 0, err
-			}
-		} else {
-			args := make([]*plan.Expr, len(idxDef.Parts))
-			for k := range idxDef.Parts {
-				partName := catalog.ResolveAlias(idxDef.Parts[k])
-				partPos, ok := colName2Idx[tableDef.Name+"."+partName]
-				if !ok {
-					return 0, moerr.NewInternalErrorf(builder.GetContext(), "bind insert err, can not find colName = %s", partName)
-				}
-				args[k], err = builder.makeIndexPartExprFromInputExpr(selectNode.ProjectList[partPos], partName, prefixLengths)
-				if err != nil {
-					return 0, err
-				}
-			}
-			lockExpr, _ = BindFuncExprImplByPlanExpr(builder.GetContext(), "serial", args)
-		}
-		colName2Idx[lockColName] = int32(len(selectNode.ProjectList))
-		selectNode.ProjectList = append(selectNode.ProjectList, lockExpr)
 	}
 
 	// real-PK ON DUPLICATE KEY UPDATE: resolve a single UPDATE target up front so a
@@ -2884,6 +2868,101 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 	lastNodeID = builder.appendNode(dmlNode, bindCtx)
 
 	return lastNodeID, nil
+}
+
+// appendInsertLockKeyProjection creates an executable row image for computed
+// unique-index lock keys. The new PROJECT reads from the preceding PROJECT's
+// binding tag, so lock-key expressions never self-reference their own output.
+func (builder *QueryBuilder) appendInsertLockKeyProjection(
+	bindCtx *BindContext,
+	lastNodeID int32,
+) (int32, int32, *plan.Node) {
+	selectTag := builder.genNewBindTag()
+	lastNodeID = builder.appendNode(&plan.Node{
+		NodeType:    plan.Node_PROJECT,
+		Children:    []int32{lastNodeID},
+		ProjectList: getProjectionByLastNodeWithTag(builder, lastNodeID, selectTag),
+		BindingTags: []int32{selectTag},
+	}, bindCtx)
+	return lastNodeID, selectTag, builder.qry.Nodes[lastNodeID]
+}
+
+// materializeInsertUniqueLockKeys appends the computed lock key for each
+// composite or prefix unique index to the insert row image. It must run while
+// selectNode is an executable PROJECT, because LockOp consumes the resulting
+// physical vectors rather than expressions in a pass-through FILTER.
+func (builder *QueryBuilder) materializeInsertUniqueLockKeys(
+	tableDef *TableDef,
+	skipUniqueIdx []bool,
+	colName2Idx map[string]int32,
+	selectNode *plan.Node,
+) error {
+	for i, idxDef := range tableDef.Indexes {
+		prefixLengths, materialize, err := insertUniqueLockKeyPrefixLengths(idxDef, skipUniqueIdx[i])
+		if err != nil {
+			return err
+		}
+		if !materialize {
+			continue
+		}
+		lockColName := idxDef.IndexTableName + "." + catalog.IndexTableIndexColName
+		if _, ok := colName2Idx[lockColName]; ok {
+			continue
+		}
+
+		var lockExpr *plan.Expr
+		if len(idxDef.Parts) == 1 {
+			partName := catalog.ResolveAlias(idxDef.Parts[0])
+			partPos, ok := colName2Idx[tableDef.Name+"."+partName]
+			if !ok {
+				return moerr.NewInternalErrorf(builder.GetContext(), "bind insert err, can not find colName = %s", partName)
+			}
+			lockExpr, err = builder.makeIndexPartExprFromInputExpr(selectNode.ProjectList[partPos], partName, prefixLengths)
+			if err != nil {
+				return err
+			}
+		} else {
+			args := make([]*plan.Expr, len(idxDef.Parts))
+			for k := range idxDef.Parts {
+				partName := catalog.ResolveAlias(idxDef.Parts[k])
+				partPos, ok := colName2Idx[tableDef.Name+"."+partName]
+				if !ok {
+					return moerr.NewInternalErrorf(builder.GetContext(), "bind insert err, can not find colName = %s", partName)
+				}
+				args[k], err = builder.makeIndexPartExprFromInputExpr(selectNode.ProjectList[partPos], partName, prefixLengths)
+				if err != nil {
+					return err
+				}
+			}
+			lockExpr, _ = BindFuncExprImplByPlanExpr(builder.GetContext(), "serial", args)
+		}
+
+		colName2Idx[lockColName] = int32(len(selectNode.ProjectList))
+		selectNode.ProjectList = append(selectNode.ProjectList, lockExpr)
+	}
+	return nil
+}
+
+func hasMaterializedInsertUniqueLockKey(tableDef *TableDef, skipUniqueIdx []bool) (bool, error) {
+	for i, idxDef := range tableDef.Indexes {
+		_, materialize, err := insertUniqueLockKeyPrefixLengths(idxDef, skipUniqueIdx[i])
+		if err != nil {
+			return false, err
+		}
+		if materialize {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+func insertUniqueLockKeyPrefixLengths(idxDef *IndexDef, skip bool) (map[string]int, bool, error) {
+	prefixLengths, err := catalog.IndexPrefixLengthsFromParamsWithError(idxDef.IndexAlgoParams)
+	if err != nil {
+		return nil, false, err
+	}
+	return prefixLengths, idxDef.Unique && !skip &&
+		(len(idxDef.Parts) > 1 || len(prefixLengths) > 0), nil
 }
 
 // getInsertColsFromStmt retrieves the list of column names to be inserted into a table
