@@ -619,14 +619,49 @@ func TestLocalE2EWaitForLifecycleFaultWaiters(t *testing.T) {
 func TestLocalE2EWaitForCatalogLockWaiter(t *testing.T) {
 	db, mock := newLocalE2ESQLMock(t)
 	defer db.Close()
-	mock.ExpectQuery("select count\\(\\*\\) from mo_catalog\\.mo_locks").
+	mock.ExpectQuery("select count\\(\\*\\) from mo_catalog\\.mo_locks where table_id = 17 and lock_key = 'point' and lock_content = 'aabb'").
 		WillReturnRows(sqlmock.NewRows([]string{"waiters"}).AddRow(int64(1)))
-	if err := waitForCatalogLockWaiter(context.Background(), db); err != nil {
+	if err := waitForCatalogLockWaiter(context.Background(), db, catalogLifecycleLockIdentity{tableID: "17", content: "aabb"}); err != nil {
 		t.Fatalf("wait for catalog lock waiter: %v", err)
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatalf("unmet catalog lock waiter expectations: %v", err)
 	}
+}
+
+func TestLocalE2ECatalogLifecycleLockIdentity(t *testing.T) {
+	db, mock := newLocalE2ESQLMock(t)
+	defer db.Close()
+	mock.ExpectQuery("select rel_id from mo_catalog\\.mo_tables").
+		WillReturnRows(sqlmock.NewRows([]string{"rel_id"}).AddRow(uint64(17)))
+	mock.ExpectBegin()
+	mock.ExpectQuery("select catalog_id from mo_catalog\\.mo_iceberg_catalogs.*for update").
+		WillReturnRows(sqlmock.NewRows([]string{"catalog_id"}).AddRow(uint64(42)))
+	mock.ExpectQuery("select lock_content from mo_catalog\\.mo_locks where table_id = 17").
+		WillReturnRows(sqlmock.NewRows([]string{"lock_content"}).AddRow("aabb"))
+	mock.ExpectCommit()
+
+	identity, err := captureCatalogLifecycleLockIdentity(context.Background(), db, "catalog_lifecycle")
+	if err != nil {
+		t.Fatalf("resolve catalog lifecycle lock identity: %v", err)
+	}
+	if want := (catalogLifecycleLockIdentity{tableID: "17", content: "aabb"}); identity != want {
+		t.Fatalf("unexpected catalog lifecycle lock identity: got %+v want %+v", identity, want)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("unmet catalog lifecycle lock identity expectations: %v", err)
+	}
+}
+
+func expectCatalogLifecycleLockIdentity(mock sqlmock.Sqlmock) {
+	mock.ExpectQuery("select rel_id from mo_catalog\\.mo_tables").
+		WillReturnRows(sqlmock.NewRows([]string{"rel_id"}).AddRow(uint64(17)))
+	mock.ExpectBegin()
+	mock.ExpectQuery("select catalog_id from mo_catalog\\.mo_iceberg_catalogs.*for update").
+		WillReturnRows(sqlmock.NewRows([]string{"catalog_id"}).AddRow(uint64(42)))
+	mock.ExpectQuery("select lock_content from mo_catalog\\.mo_locks where table_id = 17").
+		WillReturnRows(sqlmock.NewRows([]string{"lock_content"}).AddRow("aabb"))
+	mock.ExpectCommit()
 }
 
 func TestLocalE2EWaitForCatalogLockWaiterRejectsInvalidResponses(t *testing.T) {
@@ -644,13 +679,13 @@ func TestLocalE2EWaitForCatalogLockWaiterRejectsInvalidResponses(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			db, mock := newLocalE2ESQLMock(t)
 			defer db.Close()
-			expectation := mock.ExpectQuery("select count\\(\\*\\) from mo_catalog\\.mo_locks")
+			expectation := mock.ExpectQuery("select count\\(\\*\\) from mo_catalog\\.mo_locks where table_id = 17")
 			if tt.err != nil {
 				expectation.WillReturnError(tt.err)
 			} else {
 				expectation.WillReturnRows(tt.rows)
 			}
-			err := waitForCatalogLockWaiter(context.Background(), db)
+			err := waitForCatalogLockWaiter(context.Background(), db, catalogLifecycleLockIdentity{tableID: "17", content: "aabb"})
 			if err == nil || !strings.Contains(err.Error(), tt.want) {
 				t.Fatalf("expected %q, got %v", tt.want, err)
 			}
@@ -664,11 +699,11 @@ func TestLocalE2EWaitForCatalogLockWaiterRejectsInvalidResponses(t *testing.T) {
 func TestLocalE2EWaitForCatalogLockWaiterHonorsDeadline(t *testing.T) {
 	db, mock := newLocalE2ESQLMock(t)
 	defer db.Close()
-	mock.ExpectQuery("select count\\(\\*\\) from mo_catalog\\.mo_locks").
+	mock.ExpectQuery("select count\\(\\*\\) from mo_catalog\\.mo_locks where table_id = 17").
 		WillReturnRows(sqlmock.NewRows([]string{"waiters"}).AddRow(int64(0)))
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Millisecond)
 	defer cancel()
-	if err := waitForCatalogLockWaiter(ctx, db); !errors.Is(err, context.DeadlineExceeded) {
+	if err := waitForCatalogLockWaiter(ctx, db, catalogLifecycleLockIdentity{tableID: "17", content: "aabb"}); !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatalf("catalog-lock waiter ignored deadline: %v", err)
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
@@ -928,6 +963,7 @@ func TestLocalE2EConcurrentCreateMappingAndDropCaseEarlyFailurePaths(t *testing.
 				mock.ExpectExec("CREATE ICEBERG CATALOG").WillReturnResult(sqlmock.NewResult(0, 1))
 				mock.ExpectQuery("select catalog_id from mo_catalog\\.mo_iceberg_catalogs").
 					WillReturnRows(sqlmock.NewRows([]string{"catalog_id"}).AddRow(uint64(42)))
+				expectCatalogLifecycleLockIdentity(mock)
 				mock.ExpectExec("select enable_fault_injection").WillReturnError(errors.New("fault injection unavailable"))
 			},
 			want: "install lifecycle synchronization points: fault injection unavailable",
@@ -962,6 +998,7 @@ func TestLocalE2EConcurrentCreateMappingAndDropCaseReleasesWorkersAfterCreateWai
 	mock.ExpectExec("CREATE ICEBERG CATALOG").WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectQuery("select catalog_id from mo_catalog\\.mo_iceberg_catalogs").
 		WillReturnRows(sqlmock.NewRows([]string{"catalog_id"}).AddRow(uint64(42)))
+	expectCatalogLifecycleLockIdentity(mock)
 	mock.ExpectExec("select enable_fault_injection").WillReturnResult(sqlmock.NewResult(0, 1))
 	for range []string{
 		icebergCreateAfterCatalogLockFault,
