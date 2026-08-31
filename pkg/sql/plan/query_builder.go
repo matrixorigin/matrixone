@@ -3640,12 +3640,12 @@ func (builder *QueryBuilder) createQuery() (*Query, error) {
 		}
 		builder.skipStats = builder.canSkipStats()
 		builder.rewriteDistinctToAGG(rootID)
-		builder.rewriteEffectlessAggToProject(rootID)
+		rootID = builder.rewriteEffectlessAggToProject(rootID)
 		rootID = builder.optimizeFilters(rootID)
 		// WHERE predicates are initially represented by a Filter between AGG
 		// and TABLE_SCAN.  Revisit the proof after filter pushdown so a unique
 		// grouped scan can be eliminated without moving LIMIT below HAVING.
-		builder.rewriteEffectlessAggToProject(rootID)
+		rootID = builder.rewriteEffectlessAggToProject(rootID)
 		if err = builder.checkPlanningCanceled(); err != nil {
 			return nil, err
 		}
@@ -4428,6 +4428,9 @@ func (builder *QueryBuilder) buildUnionWithResultLen(
 
 			expr, err = builder.rewriteMySQLSpecialOrderByExpr(ctx, expr)
 			if err != nil {
+				return 0, err
+			}
+			if err = rejectStandaloneIntervalOrderExpr(builder.GetContext(), expr); err != nil {
 				return 0, err
 			}
 
@@ -8290,6 +8293,9 @@ func (builder *QueryBuilder) bindProjection(
 	resultLen = len(ctx.projects)
 	ctx.projectSemanticKeys = ctx.projectSemanticKeys[:0]
 	for i, proj := range ctx.projects {
+		if err = rejectStandaloneIntervalExpr(builder.GetContext(), proj, "SELECT list"); err != nil {
+			return
+		}
 		exprKey, keyErr := projectExprKey(proj)
 		if keyErr != nil {
 			err = keyErr
@@ -9482,6 +9488,9 @@ func (builder *QueryBuilder) bindOrderBy(
 
 		expr, err = builder.rewriteMySQLSpecialOrderByExpr(ctx, expr)
 		if err != nil {
+			return nil, err
+		}
+		if err = rejectStandaloneIntervalOrderExpr(builder.GetContext(), expr); err != nil {
 			return nil, err
 		}
 
