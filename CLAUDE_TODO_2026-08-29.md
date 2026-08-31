@@ -57,3 +57,9 @@
 - 已将 DDL frontier 提升为 HAKeeper RSM 中独立于 CN store 生命周期的单调集群最大值；activation/restart 先从 txn client 重建 durable high-water mark，再发布并同步该全局值。
 - 已增加 producer replacement/store removal 不得清空 frontier 的 RSM 回归，以及 replacement 后 activation 仍等待旧 frontier 的 CN 回归。
 - 按用户决定不再等待其他并发 PR：本 PR 固定使用当前无人占用的 MORPC v43，并为两个已在 review 的并发 owner 预留 v41/v42；同步更新实现、测试、设计与生产路径回归。
+
+## 2026-08-31：解决最新主干冲突
+
+1. fetch 并 merge 最新 `mo/main`，逐文件确认双方语义，保留主干新增能力与本 PR v43 DDL fence。
+2. 重新生成必要生成文件，运行冲突相关 owning package、embedded 双 CN、race/vet 与 diff 检查。
+3. commit/push merge 结果，确认 PR mergeability 与 unresolved thread 状态。
