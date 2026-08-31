@@ -3034,6 +3034,24 @@ func TestBuildCTASNarrowsKnownExpandingStringResults(t *testing.T) {
 	}
 }
 
+func TestBuildCTASPreservesFormattedScalarBounds(t *testing.T) {
+	const sql = `create table formatted_bounds as select
+		convert(cast(-0.99 as decimal(2,2)) using binary) decimal_binary,
+		concat(cast(1 as signed), cast(2 as signed)) concatenated`
+	stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, sql, 1)
+	require.NoError(t, err)
+	defer stmt.Free()
+
+	p, err := BuildPlan(NewMockCompilerContext(false), stmt, false)
+	require.NoError(t, err)
+	cols := p.GetDdl().GetCreateTable().GetTableDef().GetCols()
+	require.GreaterOrEqual(t, len(cols), 2)
+	require.Equal(t, int32(types.T_varbinary), cols[0].Typ.Id)
+	require.Equal(t, int32(5), cols[0].Typ.Width)
+	require.Equal(t, int32(types.T_varchar), cols[1].Typ.Id)
+	require.Equal(t, int32(40), cols[1].Typ.Width)
+}
+
 func TestViewRebindPreservesMySQLSpecialColumnSemantics(t *testing.T) {
 	const createViewSQL = "create view v_enum_set as select priority, flags, n_name from nation"
 	ctx := NewMockCompilerContext(false)

@@ -200,6 +200,9 @@ func fixedTypeMatch(overloads []overload, inputs []types.Type) checkResult {
 			castType[i] = inputs[i]
 		} else {
 			castType[i] = ov.args[i].ToType()
+			if ov.args[i] == types.T_varchar && !inputs[i].Oid.IsMySQLString() {
+				castType[i] = formattedScalarStringType(inputs[i])
+			}
 			SetTargetScaleFromSource(&inputs[i], &castType[i])
 			if isCollatedTextType(inputs[i].Oid) && isCollatedTextType(castType[i].Oid) {
 				// CHAR/VARCHAR/TEXT conversions change the storage shape, not the

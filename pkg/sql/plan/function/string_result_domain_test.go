@@ -89,6 +89,9 @@ func TestStringTypeBoundClassification(t *testing.T) {
 
 func TestFormattedStringByteBounds(t *testing.T) {
 	decimal := types.New(types.T_decimal128, 38, 6)
+	decimalEqualScale64 := types.New(types.T_decimal64, 2, 2)
+	decimalEqualScale128 := types.New(types.T_decimal128, 2, 2)
+	decimalEqualScale256 := types.New(types.T_decimal256, 2, 2)
 	for _, test := range []struct {
 		typ     types.Type
 		want    uint64
@@ -106,6 +109,9 @@ func TestFormattedStringByteBounds(t *testing.T) {
 		{typ: types.T_float32.ToType(), want: 15},
 		{typ: types.T_float64.ToType(), want: 24},
 		{typ: decimal, want: 40},
+		{typ: decimalEqualScale64, want: 5},
+		{typ: decimalEqualScale128, want: 5},
+		{typ: decimalEqualScale256, want: 5},
 		{typ: types.T_date.ToType(), want: 10},
 		{typ: types.T_time.ToType(), want: 17},
 		{typ: types.T_datetime.ToType(), want: 26},
@@ -320,6 +326,18 @@ func TestConcatReturnTypePromotesWithoutCapping(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestConcatPreservesFormattedScalarBoundsAfterCast(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	resolved, err := GetFunctionByName(proc.Ctx, "concat", []types.Type{types.T_int64.ToType(), types.T_int64.ToType()})
+	require.NoError(t, err)
+	casts, needCast := resolved.ShouldDoImplicitTypeCast()
+	require.True(t, needCast)
+	require.Equal(t, int32(20), casts[0].Width)
+	require.Equal(t, int32(20), casts[1].Width)
+	require.Equal(t, types.T_varchar, resolved.GetReturnType().Oid)
+	require.Equal(t, int32(40), resolved.GetReturnType().Width)
 }
 
 func TestStringDomainFunctionsPreserveBinaryInputsBeforeExecution(t *testing.T) {

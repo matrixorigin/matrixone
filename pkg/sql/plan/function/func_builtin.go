@@ -856,7 +856,7 @@ func builtInConcatCheck(_ []overload, inputs []types.Type) checkResult {
 				}
 				if c == matchByCast {
 					shouldCast = true
-					ret[i] = types.T_varchar.ToType()
+					ret[i] = formattedScalarStringType(source)
 				}
 			} else {
 				ret[i] = source

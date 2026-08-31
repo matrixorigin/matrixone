@@ -121,6 +121,9 @@ func formattedStringByteBound(typ types.Type) stringResultBound {
 			return unknownStringResultBound()
 		}
 		width = uint64(typ.Width) + 2 // optional sign and decimal point
+		if typ.Scale == typ.Width {
+			width++ // leading zero before the decimal point
+		}
 	case types.T_date:
 		width = 10
 	case types.T_time:
@@ -137,6 +140,15 @@ func formattedStringByteBound(typ types.Type) stringResultBound {
 		return unknownStringResultBound()
 	}
 	return stringResultBound{bytes: width}
+}
+
+func formattedScalarStringType(typ types.Type) types.Type {
+	result := types.T_varchar.ToType()
+	bound := formattedStringByteBound(typ)
+	if !bound.unknown && bound.bytes <= uint64(types.MaxVarcharLen) {
+		result.Width = int32(bound.bytes)
+	}
+	return result
 }
 
 func binaryStringResultType(bound stringResultBound) types.Type {

@@ -96,3 +96,10 @@
 1. LOWER/UPPER 仅将真实 `MaxTinyTextLen` marker 映射为 VARCHAR(255)。
 2. 任意 legacy TEXT positive width 与 width 0、MEDIUMTEXT、LONGTEXT 一样退化为 TEXT(0)。
 3. 添加 TEXT(32) regression UT，运行 owning packages/lint/diff check 后 commit/push。
+
+# PR #27841 第十七轮 review 修复
+
+1. 修正 DECIMAL(M,M) formatted byte bound，计入负号、前导零、小数点和 M 位小数。
+2. 隐式 cast 固定 scalar 到 VARCHAR 时使用 formatted scalar 精确宽度，不再丢失为默认 VARCHAR(65535)。
+3. 将精确 cast width 应用于 fixed matcher 及 CONCAT/CONCAT_WS/ELT/MAKE_SET/EXPORT_SET variadic checker。
+4. 补 DECIMAL runtime/CTAS 与 fixed-scalar binder/CTAS 回归测试，运行 owning packages/lint/diff check 后 commit/push。

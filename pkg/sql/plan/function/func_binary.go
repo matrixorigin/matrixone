@@ -1162,7 +1162,7 @@ func concatWsCheck(overloads []overload, inputs []types.Type) checkResult {
 			}
 			if can, _ := fixedImplicitTypeCast(t, types.T_varchar); can {
 				shouldConvert = true
-				ret[i] = types.T_varchar.ToType()
+				ret[i] = formattedScalarStringType(t)
 			} else {
 				return newCheckResultWithFailure(failedFunctionParametersWrong)
 			}
@@ -5462,7 +5462,7 @@ func eltCheck(overloads []overload, inputs []types.Type) checkResult {
 			}
 			if c == matchByCast {
 				shouldCast = true
-				castTypes[i] = types.T_varchar.ToType()
+				castTypes[i] = formattedScalarStringType(inputs[i])
 			} else {
 				castTypes[i] = inputs[i]
 			}
@@ -5585,7 +5585,7 @@ func makeSetCheck(overloads []overload, inputs []types.Type) checkResult {
 			}
 			if c == matchByCast {
 				shouldCast = true
-				castTypes[i] = types.T_varchar.ToType()
+				castTypes[i] = formattedScalarStringType(inputs[i])
 			} else {
 				castTypes[i] = inputs[i]
 			}
@@ -5793,7 +5793,7 @@ func exportSetCheck(overloads []overload, inputs []types.Type) checkResult {
 			}
 			if c == matchByCast {
 				shouldCast = true
-				castTypes[i] = types.T_varchar.ToType()
+				castTypes[i] = formattedScalarStringType(inputs[i])
 			} else {
 				castTypes[i] = inputs[i]
 			}
@@ -5811,7 +5811,7 @@ func exportSetCheck(overloads []overload, inputs []types.Type) checkResult {
 			}
 			if c == matchByCast {
 				shouldCast = true
-				castTypes[3] = types.T_varchar.ToType()
+				castTypes[3] = formattedScalarStringType(inputs[3])
 			} else {
 				castTypes[3] = inputs[3]
 			}
