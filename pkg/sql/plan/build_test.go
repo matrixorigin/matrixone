@@ -7724,6 +7724,10 @@ func TestOnlyFullGroupByCompositePrimaryKeyDependency(t *testing.T) {
 			Nodes: []*plan.Node{
 				{
 					TableDef: &plan.TableDef{
+						Cols: []*plan.ColDef{
+							{Name: "tenant_id", Typ: plan.Type{Id: int32(types.T_int64)}},
+							{Name: "id", Typ: plan.Type{Id: int32(types.T_int64)}},
+						},
 						Pkey: &plan.PrimaryKeyDef{
 							// MatrixOne stores a composite key in a hidden column while
 							// Names retains the user-visible key columns.
@@ -7754,10 +7758,16 @@ func TestOnlyFullGroupByCompositePrimaryKeyDependency(t *testing.T) {
 func TestOnlyFullGroupByUsesStructuredBoundColumns(t *testing.T) {
 	builder := &QueryBuilder{
 		qry: &plan.Query{Nodes: []*plan.Node{
-			{TableDef: &plan.TableDef{Pkey: &plan.PrimaryKeyDef{
-				PkeyColName: "customer.account",
-				Names:       []string{"customer.account"},
-			}}},
+			{TableDef: &plan.TableDef{
+				Cols: []*plan.ColDef{
+					{Name: "customer.account", Typ: plan.Type{Id: int32(types.T_varchar)}},
+					{Name: "unsafe", Typ: plan.Type{Id: int32(types.T_varchar)}},
+				},
+				Pkey: &plan.PrimaryKeyDef{
+					PkeyColName: "customer.account",
+					Names:       []string{"customer.account"},
+				},
+			}},
 			{TableDef: &plan.TableDef{}},
 		}},
 	}
