@@ -10593,7 +10593,9 @@ func nameConstHeading(expr tree.Expr) (string, bool) {
 // DATE_FORMAT and TIME_FORMAT patterns are case-sensitive SQL string
 // literals. Preserve their quotes and spelling in the default result heading;
 // otherwise a pattern such as %M would be displayed as the semantically
-// different %m after CTAS identifier normalization.
+// different %m after CTAS identifier normalization. The format function can
+// be nested inside another expression, so inspect the complete expression tree
+// instead of only the outermost node.
 func formatSelectExpressionHeading(expr tree.Expr) string {
 	for {
 		paren, ok := expr.(*tree.ParenExpr)
@@ -10602,13 +10604,28 @@ func formatSelectExpressionHeading(expr tree.Expr) string {
 		}
 		expr = paren.Expr
 	}
-	if fn, ok := expr.(*tree.FuncExpr); ok && fn.FuncName != nil {
-		switch strings.ToLower(fn.FuncName.Origin()) {
-		case "date_format", "time_format":
-			return tree.StringWithOpts(expr, dialect.MYSQL, tree.WithSingleQuoteString())
-		}
+	if containsDateTimeFormatFunction(expr) {
+		return tree.StringWithOpts(expr, dialect.MYSQL, tree.WithSingleQuoteString())
 	}
 	return tree.String(expr, dialect.MYSQL)
+}
+
+func containsDateTimeFormatFunction(expr tree.Expr) bool {
+	found := false
+	walkGroupingSetOrderByExpr(expr, func(candidate tree.Expr) bool {
+		fn, ok := candidate.(*tree.FuncExpr)
+		if !ok || fn.FuncName == nil {
+			return true
+		}
+		switch strings.ToLower(fn.FuncName.Origin()) {
+		case "date_format", "time_format":
+			found = true
+			return false
+		default:
+			return true
+		}
+	})
+	return found
 }
 
 func validNameConstNameLiteral(name *tree.NumVal) bool {

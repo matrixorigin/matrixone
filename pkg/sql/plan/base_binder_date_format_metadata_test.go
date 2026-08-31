@@ -141,3 +141,40 @@ func TestBuildCTASDateFormatMetadataAndHeading(t *testing.T) {
 	require.NotNil(t, visible[0].Default)
 	require.True(t, visible[0].Default.NullAbility)
 }
+
+func TestBuildCTASPreservesNestedDateFormatHeading(t *testing.T) {
+	ctx := NewMockCompilerContext(false)
+	ctx.tables["time01"] = &planpb.TableDef{
+		TblId:     1001,
+		Name:      "time01",
+		DbName:    "tpch",
+		TableType: catalog.SystemOrdinaryRel,
+		Cols: []*planpb.ColDef{
+			{
+				Name:       "col2",
+				OriginName: "col2",
+				Typ:        planpb.Type{Id: int32(types.T_datetime)},
+				Default:    &planpb.Default{NullAbility: true},
+			},
+		},
+	}
+	ctx.objects["time01"] = &planpb.ObjectRef{ObjName: "time01", SchemaName: "tpch"}
+
+	stmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL,
+		"create table time02 as select concat(date_format(col2, '%M'), 'X'), concat(date_format(col2, '%m'), 'X') from time01", 1)
+	require.NoError(t, err)
+	defer stmt.Free()
+
+	logicPlan, err := BuildPlan(ctx, stmt, false)
+	require.NoError(t, err)
+
+	var visible []*planpb.ColDef
+	for _, col := range logicPlan.GetDdl().GetCreateTable().GetTableDef().GetCols() {
+		if !col.Hidden {
+			visible = append(visible, col)
+		}
+	}
+	require.Len(t, visible, 2)
+	require.Equal(t, "concat(date_format(col2, '%M'), 'X')", visible[0].Name)
+	require.Equal(t, "concat(date_format(col2, '%m'), 'X')", visible[1].Name)
+}
