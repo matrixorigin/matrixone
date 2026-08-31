@@ -38,11 +38,13 @@ executable_trailing_comment_v  ¦  select a from t  /* application */  ¦  NO  �
 executable_string_terminator_v  ¦  select 'x*/y' as s  ¦  NO  𝄀
 executable_without_version_v  ¦  select a from t  ¦  NO  𝄀
 hash_comment_v  ¦  select a from t  ¦  NO  𝄀
+leading_block_comment_v  ¦  select a from t  ¦  NO  𝄀
 line_comment_v  ¦  select a from t  ¦  NO  𝄀
 long_repeated_star_comment_v  ¦  select a from t  ¦  NO  𝄀
 quoted_definer_v  ¦  select a from t  ¦  NO  𝄀
 repeated_star_comment_v  ¦  select a from t  ¦  NO  𝄀
 slash_comment_v  ¦  select a from t  ¦  NO
+split_dump_v  ¦  select a from t  ¦  NO
 update agg_v set cnt = 1;
 invalid input: cannot insert/update/delete from view
 update direct_v set b = 1;
