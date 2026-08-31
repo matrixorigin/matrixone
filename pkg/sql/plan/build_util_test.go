@@ -479,6 +479,74 @@ func TestBuildDefaultExprGeometryAllowsNullDefault(t *testing.T) {
 	require.NotNil(t, def)
 }
 
+func TestBuildDefaultExprJSONExpressionDefaults(t *testing.T) {
+	proc := testutil.NewProcess(t)
+
+	tests := []struct {
+		name       string
+		sql        string
+		wantOrigin string
+		wantErr    string
+	}{
+		{
+			name:       "json array expression",
+			sql:        "create table t (j json default (json_array()))",
+			wantOrigin: "(json_array())",
+		},
+		{
+			name:       "parenthesized object literal",
+			sql:        `create table t (j json default ('{"source":"default"}'))`,
+			wantOrigin: `('{"source":"default"}')`,
+		},
+		{
+			name:       "null literal",
+			sql:        "create table t (j json default null)",
+			wantOrigin: "null",
+		},
+		{
+			name:       "parenthesized null",
+			sql:        "create table t (j json default (null))",
+			wantOrigin: "(null)",
+		},
+		{
+			name:    "bare non-null literal",
+			sql:     `create table t (j json default '{"source":"default"}')`,
+			wantErr: "JSON column 'j' cannot have default value",
+		},
+		{
+			name:    "malformed json expression",
+			sql:     `create table t (j json default ('{"source":'))`,
+			wantErr: "invalid input",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			stmt, err := mysql.ParseOne(context.Background(), tt.sql, 1)
+			require.NoError(t, err)
+
+			createTable, ok := stmt.(*tree.CreateTable)
+			require.True(t, ok)
+			colDef, ok := createTable.Defs[0].(*tree.ColumnTableDef)
+			require.True(t, ok)
+
+			typ, err := getTypeFromAst(context.Background(), colDef.Type)
+			require.NoError(t, err)
+
+			def, err := buildDefaultExpr(colDef, typ, proc)
+			if tt.wantErr != "" {
+				require.ErrorContains(t, err, tt.wantErr)
+				return
+			}
+			require.NoError(t, err)
+			require.NotNil(t, def)
+			require.NotNil(t, def.Expr)
+			require.Equal(t, int32(types.T_json), def.Expr.Typ.Id)
+			require.Equal(t, tt.wantOrigin, def.OriginString)
+		})
+	}
+}
+
 func TestBuildDefaultExprParenthesizedNullMatchesNullDefault(t *testing.T) {
 	proc := testutil.NewProcess(t)
 

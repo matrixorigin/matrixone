@@ -8438,6 +8438,26 @@ var supportedMathBuiltIns = []FuncNew{
 					return Md5
 				},
 			},
+			{
+				overloadId: 1,
+				args:       []types.T{types.T_text},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_varchar.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return Md5
+				},
+			},
+			{
+				overloadId: 2,
+				args:       []types.T{types.T_blob},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_varchar.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return Md5
+				},
+			},
 		},
 	},
 

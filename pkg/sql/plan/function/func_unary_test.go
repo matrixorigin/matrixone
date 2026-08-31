@@ -5439,6 +5439,36 @@ func TestMd5(t *testing.T) {
 	}
 }
 
+func TestMd5LargeStringUsesFullValue(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	payload := []byte(strings.Repeat("a", 65536))
+	tests := []struct {
+		name string
+		typ  types.Type
+	}{
+		{name: "text", typ: types.T_text.ToType()},
+		{name: "blob", typ: types.T_blob.ToType()},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			input := vector.NewVec(test.typ)
+			defer input.Free(proc.Mp())
+			require.NoError(t, vector.AppendBytes(input, payload, false, proc.Mp()))
+
+			fn, err := GetFunctionByName(proc.Ctx, "md5", []types.Type{test.typ})
+			require.NoError(t, err)
+			_, shouldCast := fn.ShouldDoImplicitTypeCast()
+			require.False(t, shouldCast)
+
+			result, err := RunFunctionDirectly(proc, fn.GetEncodedOverloadID(), []*vector.Vector{input}, 1)
+			require.NoError(t, err)
+			defer result.Free(proc.Mp())
+			require.Equal(t, "2d61aa54b58c2e94403fb092c3dbc027", string(result.GetBytesAt(0)))
+		})
+	}
+}
+
 func initUnhexTestCase() []tcTemp {
 	return []tcTemp{
 		{

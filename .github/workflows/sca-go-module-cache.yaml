@@ -105,10 +105,12 @@ jobs:
         if: steps.native-cache.outputs.cache-hit != 'true'
         run: |
           set -euo pipefail
-          make thirdparties
+          # Top-level cgo is the single complete-generation owner and already
+          # builds/stages thirdparties. A standalone pre-build has no complete
+          # provenance stamp and would be conservatively deleted and repeated.
+          make cgo
           test -f thirdparties/install/include/xxhash.h
           test -f thirdparties/install/include/usearch.h
-          make cgo
           test -f cgo/libmo.so
       - name: Verify native SCA prerequisites
         run: |
