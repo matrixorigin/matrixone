@@ -273,11 +273,13 @@ func TestPartitionState_TransferObjectWindowBoundaries(t *testing.T) {
 		// Already invisible at start: not a transfer source.
 		{name: "deleted-at-start", createTime: types.BuildTS(5, 0), deleteTime: start},
 		// Visible at start, including the equality boundary: transfer sources.
+		{name: "deleted-at-successor", createTime: types.BuildTS(5, 0), deleteTime: start.Next()},
 		{name: "created-before-start", createTime: types.BuildTS(5, 0), deleteTime: types.BuildTS(15, 0)},
 		{name: "created-at-start", createTime: start, deleteTime: types.BuildTS(15, 0)},
 		// Created after the snapshot and gone before end: neither source nor target.
 		{name: "transient-in-window", createTime: types.BuildTS(11, 0), deleteTime: types.BuildTS(15, 0)},
 		// New objects that survive through end: transfer targets.
+		{name: "created-at-successor", createTime: start.Next()},
 		{name: "created-after-start", createTime: types.BuildTS(11, 0)},
 		{name: "deleted-after-end", createTime: types.BuildTS(12, 0), deleteTime: types.BuildTS(21, 0)},
 		{name: "created-at-end", createTime: end},
@@ -333,13 +335,15 @@ func TestPartitionState_TransferObjectWindowBoundaries(t *testing.T) {
 	require.False(t, state.IsDataObjectVisible(objectID("transient-in-window"), start))
 
 	wantDeleted := map[objectio.ObjectNameShort]struct{}{
+		shortName("deleted-at-successor"): {},
 		shortName("created-before-start"): {},
 		shortName("created-at-start"):     {},
 	}
 	wantInserted := map[objectio.ObjectNameShort]struct{}{
-		shortName("created-after-start"): {},
-		shortName("deleted-after-end"):   {},
-		shortName("created-at-end"):      {},
+		shortName("created-at-successor"): {},
+		shortName("created-after-start"):  {},
+		shortName("deleted-after-end"):    {},
+		shortName("created-at-end"):       {},
 	}
 
 	insertedStats, deletedStats := state.CollectObjectsBetween(start, end)
