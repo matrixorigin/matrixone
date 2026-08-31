@@ -102,6 +102,9 @@ func (builder *QueryBuilder) reusableCTEProducer(
 	if !fullyDrained {
 		return 0, nil, false
 	}
+	if !builder.cteOutputDemandPreservesEvaluation(rootID, cteRef.occurrences) {
+		return 0, nil, false
+	}
 
 	producerRootID := first.rootID
 	sharedPredicate, predicateAware := builder.cteSharedConsumerPredicate(rootID, cteRef.occurrences)
@@ -164,30 +167,16 @@ func (builder *QueryBuilder) cteStorageOutputTypes(
 	if len(occurrences) == 0 || len(occurrences[0].types) == 0 {
 		return nil, false
 	}
-	parents := make(map[int32][]int32)
-	reachable := make(map[int32]bool)
-	builder.collectCTEParents(rootID, parents, reachable)
+	requiredByOccurrence, ok := builder.cteRequiredOutputColumns(rootID, occurrences)
+	if !ok {
+		return occurrences[0].types, false
+	}
+
 	required := make([]bool, len(occurrences[0].types))
 	requiredCount := 0
-	for _, occurrence := range occurrences {
-		if !reachable[occurrence.rootID] {
-			return occurrences[0].types, false
-		}
-		colRefCnt := make(map[[2]int32]int)
-		queue := append([]int32(nil), parents[occurrence.rootID]...)
-		seen := make(map[int32]bool)
-		for len(queue) > 0 {
-			nodeID := queue[0]
-			queue = queue[1:]
-			if seen[nodeID] {
-				continue
-			}
-			seen[nodeID] = true
-			countCTEConsumerNodeColRefs(builder.qry.Nodes[nodeID], colRefCnt)
-			queue = append(queue, parents[nodeID]...)
-		}
-		for colPos := range required {
-			if !required[colPos] && colRefCnt[[2]int32{occurrence.rootTag, int32(colPos)}] > 0 {
+	for _, consumerRequired := range requiredByOccurrence {
+		for colPos, keep := range consumerRequired {
+			if keep && !required[colPos] {
 				required[colPos] = true
 				requiredCount++
 			}
@@ -203,6 +192,203 @@ func (builder *QueryBuilder) cteStorageOutputTypes(
 		}
 	}
 	return outputTypes, true
+}
+
+func (builder *QueryBuilder) cteRequiredOutputColumns(
+	rootID int32,
+	occurrences []cteOccurrence,
+) ([][]bool, bool) {
+	if len(occurrences) == 0 || len(occurrences[0].types) == 0 {
+		return nil, false
+	}
+	parents := make(map[int32][]int32)
+	reachable := make(map[int32]bool)
+	builder.collectCTEParents(rootID, parents, reachable)
+	requiredByOccurrence := make([][]bool, 0, len(occurrences))
+	for _, occurrence := range occurrences {
+		if !reachable[occurrence.rootID] {
+			return nil, false
+		}
+		colRefCnt := make(map[[2]int32]int)
+		queue := append([]int32(nil), parents[occurrence.rootID]...)
+		seen := make(map[int32]bool)
+		for len(queue) > 0 {
+			nodeID := queue[0]
+			queue = queue[1:]
+			if seen[nodeID] {
+				continue
+			}
+			seen[nodeID] = true
+			countCTEConsumerNodeColRefs(builder.qry.Nodes[nodeID], colRefCnt)
+			queue = append(queue, parents[nodeID]...)
+		}
+		required := make([]bool, len(occurrence.types))
+		for colPos := range required {
+			required[colPos] = colRefCnt[[2]int32{occurrence.rootTag, int32(colPos)}] > 0
+		}
+		requiredByOccurrence = append(requiredByOccurrence, required)
+	}
+	return requiredByOccurrence, true
+}
+
+// cteOutputDemandPreservesEvaluation rejects sharing when the materialized
+// producer would evaluate an output for consumers that did not need it and
+// that output is not structurally proven total. Determinism is insufficient:
+// a cast can be deterministic and still fail on rows selected only by another
+// consumer.
+func (builder *QueryBuilder) cteOutputDemandPreservesEvaluation(
+	rootID int32,
+	occurrences []cteOccurrence,
+) bool {
+	requiredByOccurrence, ok := builder.cteRequiredOutputColumns(rootID, occurrences)
+	if !ok {
+		return false
+	}
+	for colPos := range occurrences[0].types {
+		requiredCount := 0
+		for _, consumerRequired := range requiredByOccurrence {
+			if consumerRequired[colPos] {
+				requiredCount++
+			}
+		}
+		if requiredCount > 0 && requiredCount < len(occurrences) &&
+			!builder.cteOutputColumnIsTotal(
+				occurrences[0],
+				int32(colPos),
+			) {
+			return false
+		}
+	}
+	return true
+}
+
+func (builder *QueryBuilder) cteOutputColumnIsTotal(occurrence cteOccurrence, colPos int32) bool {
+	return builder.cteColumnIsTotal(
+		occurrence.rootID,
+		occurrence.rootTag,
+		colPos,
+		occurrence.ctx,
+		make(map[[2]int32]bool),
+	)
+}
+
+func (builder *QueryBuilder) cteColumnIsTotal(
+	rootID, tag, colPos int32,
+	ctx *BindContext,
+	visiting map[[2]int32]bool,
+) bool {
+	ref := [2]int32{tag, colPos}
+	if visiting[ref] {
+		return false
+	}
+	visiting[ref] = true
+	defer delete(visiting, ref)
+
+	nodeID, tagPos, ok := builder.findCTEBindingOwner(rootID, tag, make(map[int32]bool))
+	if !ok {
+		// Aggregate binding tags are owned by the query-block context rather
+		// than retained on every intermediate node. Resolve them back to the
+		// bound expressions; an unrecognized tag is not a proof of totality.
+		if ctx != nil && tag == ctx.groupTag && colPos >= 0 && int(colPos) < len(ctx.groups) {
+			return builder.cteExprIsTotal(rootID, ctx.groups[colPos], ctx, visiting)
+		}
+		if ctx != nil && tag == ctx.aggregateTag && colPos >= 0 && int(colPos) < len(ctx.aggregates) {
+			return builder.cteAggregateIsTotal(rootID, ctx.aggregates[colPos], ctx, visiting)
+		}
+		return false
+	}
+	node := builder.qry.Nodes[nodeID]
+	if node.NodeType == planpb.Node_TABLE_SCAN {
+		return node.TableDef != nil && colPos >= 0 && int(colPos) < len(node.TableDef.Cols)
+	}
+	if node.NodeType == planpb.Node_AGG && len(node.BindingTags) >= 2 {
+		if tagPos == 0 && colPos >= 0 && int(colPos) < len(node.GroupBy) {
+			return builder.cteExprIsTotal(rootID, node.GroupBy[colPos], ctx, visiting)
+		}
+		if tagPos == 1 && colPos >= 0 && int(colPos) < len(node.AggList) {
+			return builder.cteAggregateIsTotal(rootID, node.AggList[colPos], ctx, visiting)
+		}
+		return false
+	}
+	if colPos < 0 || int(colPos) >= len(node.ProjectList) {
+		return false
+	}
+	return builder.cteExprIsTotal(rootID, node.ProjectList[colPos], ctx, visiting)
+}
+
+func (builder *QueryBuilder) findCTEBindingOwner(
+	nodeID, tag int32,
+	seen map[int32]bool,
+) (int32, int, bool) {
+	if seen[nodeID] {
+		return 0, 0, false
+	}
+	seen[nodeID] = true
+	node := builder.qry.Nodes[nodeID]
+	for tagPos, bindingTag := range node.BindingTags {
+		if bindingTag == tag {
+			return nodeID, tagPos, true
+		}
+	}
+	for _, childID := range node.Children {
+		if ownerID, tagPos, ok := builder.findCTEBindingOwner(childID, tag, seen); ok {
+			return ownerID, tagPos, true
+		}
+	}
+	return 0, 0, false
+}
+
+func (builder *QueryBuilder) cteExprIsTotal(
+	rootID int32,
+	expr *planpb.Expr,
+	ctx *BindContext,
+	visiting map[[2]int32]bool,
+) bool {
+	if expr == nil {
+		return false
+	}
+	if col := expr.GetCol(); col != nil {
+		return builder.cteColumnIsTotal(rootID, col.RelPos, col.ColPos, ctx, visiting)
+	}
+	if expr.GetLit() != nil || expr.GetP() != nil {
+		return true
+	}
+	fn := expr.GetF()
+	if fn == nil || fn.Func == nil || fn.Func.ObjName != "cast" || len(fn.Args) != 2 ||
+		fn.Args[1].GetT() == nil || !singleRowCastIsTotal(fn.Args[0].Typ, expr.Typ) {
+		return false
+	}
+	overload, ok := function.GetFunctionByIdWithoutError(fn.Func.Obj)
+	return ok && !overload.CannotFold() && !overload.IsRealTimeRelated() &&
+		builder.cteExprIsTotal(rootID, fn.Args[0], ctx, visiting)
+}
+
+func (builder *QueryBuilder) cteAggregateIsTotal(
+	rootID int32,
+	expr *planpb.Expr,
+	ctx *BindContext,
+	visiting map[[2]int32]bool,
+) bool {
+	fn := expr.GetF()
+	if fn == nil || fn.Func == nil {
+		return false
+	}
+	functionID, _ := function.DecodeOverloadID(fn.Func.Obj)
+	switch functionID {
+	case function.STARCOUNT, function.COUNT, function.ANY_VALUE:
+		for _, arg := range fn.Args {
+			if !builder.cteExprIsTotal(rootID, arg, ctx, visiting) {
+				return false
+			}
+		}
+		return true
+	case function.MIN, function.MAX:
+		return len(fn.Args) == 1 &&
+			builder.cteExprIsTotal(rootID, fn.Args[0], ctx, visiting) &&
+			comparisonEvaluationIsTotal(function.LESS_THAN, fn.Args[0].Typ, fn.Args[0].Typ)
+	default:
+		return false
+	}
 }
 
 func countCTEConsumerNodeColRefs(node *planpb.Node, colRefCnt map[[2]int32]int) {

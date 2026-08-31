@@ -630,6 +630,26 @@ func TestCTEMultiReferencePrunesUnusedVariableWidthPayload(t *testing.T) {
 	}
 }
 
+func TestCTEMultiReferenceRejectsExpandedUnsafeOutputEvaluation(t *testing.T) {
+	mock := NewMockOptimizer(false)
+	logicPlan, err := runOneStmt(mock, t, `
+		with c as (
+			select l_suppkey as k,
+			       cast(max(l_comment) as bigint) as risky,
+			       max(l_comment) as payload
+			from lineitem group by l_suppkey
+		)
+		select sum(risky) from c where k = 1
+		union all
+		select sum(length(payload)) from c where k = 2`)
+	require.NoError(t, err)
+
+	query := logicPlan.GetQuery()
+	require.NotNil(t, query)
+	require.Equal(t, 0, countReachableNodeType(query, planpb.Node_SINK_SCAN),
+		"sharing must not evaluate a fallible output for a consumer that did not request it")
+}
+
 func TestCTEMultiReferenceReusesRobustPredicateFreeSpillProducer(t *testing.T) {
 	mock := NewMockOptimizer(false)
 	logicPlan, err := runOneStmt(mock, t, `
@@ -1025,6 +1045,68 @@ func TestCTEReuseStorageEstimateUsesConsumerProjection(t *testing.T) {
 	rowSize, fixed := fixedOutputRowSize(outputTypes)
 	require.True(t, fixed)
 	require.Equal(t, float64(types.T_int64.TypeLen()), rowSize)
+}
+
+func TestCTEOutputDemandRequiresTotalExtraColumns(t *testing.T) {
+	intType := planpb.Type{Id: int32(types.T_int64), NotNullable: true}
+	stringType := planpb.Type{Id: int32(types.T_varchar)}
+	targetType := types.T_int64.ToType()
+	ctx := NewMockCompilerContext(true)
+	castExpr, err := makePlan2CastExpr(
+		ctx.GetContext(),
+		GetColExpr(stringType, 1, 1),
+		makePlan2Type(&targetType),
+	)
+	require.NoError(t, err)
+	secondCastExpr, err := makePlan2CastExpr(
+		ctx.GetContext(),
+		GetColExpr(stringType, 2, 1),
+		makePlan2Type(&targetType),
+	)
+	require.NoError(t, err)
+
+	builder := &QueryBuilder{
+		compCtx: ctx,
+		qry: &planpb.Query{Nodes: []*planpb.Node{
+			{
+				NodeId: 0, NodeType: planpb.Node_TABLE_SCAN, BindingTags: []int32{1},
+				TableDef: &planpb.TableDef{Cols: []*planpb.ColDef{
+					{Name: "k", Typ: intType}, {Name: "raw", Typ: stringType},
+				}},
+			},
+			{
+				NodeId: 1, NodeType: planpb.Node_PROJECT, Children: []int32{0}, BindingTags: []int32{10},
+				ProjectList: []*planpb.Expr{GetColExpr(intType, 1, 0), castExpr},
+			},
+			{
+				NodeId: 2, NodeType: planpb.Node_PROJECT, Children: []int32{1},
+				ProjectList: []*planpb.Expr{GetColExpr(intType, 10, 0), GetColExpr(castExpr.Typ, 10, 1)},
+			},
+			{
+				NodeId: 3, NodeType: planpb.Node_TABLE_SCAN, BindingTags: []int32{2},
+				TableDef: &planpb.TableDef{Cols: []*planpb.ColDef{
+					{Name: "k", Typ: intType}, {Name: "raw", Typ: stringType},
+				}},
+			},
+			{
+				NodeId: 4, NodeType: planpb.Node_PROJECT, Children: []int32{3}, BindingTags: []int32{20},
+				ProjectList: []*planpb.Expr{
+					GetColExpr(intType, 2, 0),
+					secondCastExpr,
+				},
+			},
+			{
+				NodeId: 5, NodeType: planpb.Node_PROJECT, Children: []int32{4},
+				ProjectList: []*planpb.Expr{GetColExpr(intType, 20, 0)},
+			},
+			{NodeId: 6, NodeType: planpb.Node_UNION_ALL, Children: []int32{2, 5}},
+		}},
+	}
+
+	require.False(t, builder.cteOutputDemandPreservesEvaluation(6, []cteOccurrence{
+		{rootID: 1, rootTag: 10, types: []planpb.Type{intType, castExpr.Typ}},
+		{rootID: 4, rootTag: 20, types: []planpb.Type{intType, castExpr.Typ}},
+	}), "a consumer-only fallible cast must keep the CTE inline")
 }
 
 func TestCTEReuseRejectsExternalAndSideEffectingNodes(t *testing.T) {
