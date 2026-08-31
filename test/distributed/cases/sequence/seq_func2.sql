@@ -38,10 +38,10 @@ select @f64_var1,@f64_var2;
 set @ch_var='abc',@varch_var=cast('def' as varchar),@bin_var=cast('1001' as binary),@varbin_var=cast('1001' as varbinary(6)),@text_var=cast('ghi' as text),@blob_var=cast('1010' as blob);
 select @ch_var,@varch_var,@bin_var,@varbin_var,@text_var,@blob_var;
 --decimal64
-set @d64_var1 = cast(9223372036854775807 as decimal),@d64_var2 = cast(-9223372036854775808 as decimal);
+set @d64_var1 = cast(9223372036854775807 as decimal(38,0)),@d64_var2 = cast(-9223372036854775808 as decimal(38,0));
 select @d64_var1,@d64_var2;
 --decimal128
-set @d128_var1 = cast(99999999999999999999999999999999999999 as decimal),@d128_var2 = cast(-99999999999999999999999999999999999999 as decimal);
+set @d128_var1 = cast(99999999999999999999999999999999999999 as decimal(38,0)),@d128_var2 = cast(-99999999999999999999999999999999999999 as decimal(38,0));
 select @d128_var1,@d128_var2;
 --json
 set @json_var1 = cast('{"a":1,"b":2}' as json),@json_var2 = cast('[1,2,3]' as json);
