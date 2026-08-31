@@ -144,8 +144,8 @@ func (h *ParquetHandler) getDataByRow(bat *batch.Batch, param *ExternalParam, pr
 	rowBuf := make([]parquet.Row, min(int(h.batchCnt), maxReadRows))
 	rowsRead := 0
 	eof := false
-	for rowsRead < int(h.batchCnt) && !parquetBatchAtByteBudget(bat, rowsRead, param.maxBatchSize) {
-		toRead := nextParquetBatchRows(rowsRead, min(len(rowBuf), int(h.batchCnt)-rowsRead), bat.Size(), param.maxBatchSize)
+	for rowsRead < int(h.batchCnt) && !h.parquetBatchAtByteBudget(bat, rowsRead, param) {
+		toRead := nextParquetBatchRows(rowsRead, min(len(rowBuf), int(h.batchCnt)-rowsRead), h.estimatedBatchSize(bat, rowsRead, param), param.maxBatchSize)
 		n, err := h.rowReader.ReadRows(rowBuf[:toRead])
 		if err != nil && !errors.Is(err, io.EOF) {
 			return moerr.ConvertGoError(param.Ctx, err)
@@ -158,11 +158,11 @@ func (h *ParquetHandler) getDataByRow(bat *batch.Batch, param *ExternalParam, pr
 				return err
 			}
 			rowsRead++
-			if parquetBatchAtByteBudget(bat, rowsRead, param.maxBatchSize) {
+			if h.parquetBatchAtByteBudget(bat, rowsRead, param) {
 				break
 			}
 		}
-		if n == 0 || eof || parquetBatchAtByteBudget(bat, rowsRead, param.maxBatchSize) {
+		if n == 0 || eof || h.parquetBatchAtByteBudget(bat, rowsRead, param) {
 			break
 		}
 	}
