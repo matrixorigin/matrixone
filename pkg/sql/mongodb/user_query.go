@@ -101,11 +101,6 @@ type UserQuery struct {
 	Digest   string
 }
 
-type userQueryEnvelope struct {
-	Filter   json.RawMessage `json:"filter"`
-	Pipeline json.RawMessage `json:"pipeline"`
-}
-
 // ParseUserQuery parses strict JSON syntax with MongoDB Extended JSON values.
 // Exactly one of filter or pipeline is accepted. Unknown JSON envelope fields,
 // duplicate keys, write/cross-collection stages, server-side JavaScript, and
@@ -123,24 +118,30 @@ func ParseUserQuery(ctx context.Context, source string) (*UserQuery, error) {
 	}
 
 	decoder := json.NewDecoder(bytes.NewReader(raw))
-	decoder.DisallowUnknownFields()
-	var envelope userQueryEnvelope
+	var envelope map[string]json.RawMessage
 	if err := decoder.Decode(&envelope); err != nil {
 		return nil, moerr.NewInvalidInput(ctx, "MongoDB __mo_query must contain only a filter or pipeline field")
+	}
+	for field := range envelope {
+		if field != "filter" && field != "pipeline" {
+			return nil, moerr.NewInvalidInput(ctx, "MongoDB __mo_query must contain only a filter or pipeline field")
+		}
 	}
 	var trailing any
 	if err := decoder.Decode(&trailing); err != io.EOF {
 		return nil, moerr.NewInvalidInput(ctx, "MongoDB __mo_query must contain exactly one JSON object")
 	}
-	hasFilter := len(envelope.Filter) > 0
-	hasPipeline := len(envelope.Pipeline) > 0
+	filterSource := envelope["filter"]
+	pipelineSource := envelope["pipeline"]
+	hasFilter := len(filterSource) > 0
+	hasPipeline := len(pipelineSource) > 0
 	if hasFilter == hasPipeline {
 		return nil, moerr.NewInvalidInput(ctx, "MongoDB __mo_query requires exactly one of filter or pipeline")
 	}
 
 	query := new(UserQuery)
 	if hasFilter {
-		filter, err := decodeExtendedJSONDocument(ctx, envelope.Filter, "filter")
+		filter, err := decodeExtendedJSONDocument(ctx, filterSource, "filter")
 		if err != nil {
 			return nil, err
 		}
@@ -153,7 +154,7 @@ func ParseUserQuery(ctx context.Context, source string) (*UserQuery, error) {
 	}
 
 	var stages []json.RawMessage
-	if err := json.Unmarshal(envelope.Pipeline, &stages); err != nil {
+	if err := json.Unmarshal(pipelineSource, &stages); err != nil {
 		return nil, moerr.NewInvalidInput(ctx, "MongoDB __mo_query pipeline must be a JSON array")
 	}
 	if len(stages) == 0 {

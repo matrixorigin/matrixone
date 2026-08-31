@@ -272,6 +272,11 @@ func runWithDSNAndTransferMonitor(ctx context.Context, db *sql.DB, dsn, host str
 		}
 	}
 	if err := expectQueryFailure(ctx, db,
+		`select count(*) from mongodb_ci.events where __mo_query = '{"FILTER":{"site_id":"site-west"}}'`,
+		"must contain only a filter or pipeline field"); err != nil {
+		return err
+	}
+	if err := expectQueryFailure(ctx, db,
 		`select count(*) from mongodb_ci.events where __mo_query = '{"filter":{"site_id":"east","site_id":"west"}}'`,
 		"strict Extended JSON"); err != nil {
 		return err
