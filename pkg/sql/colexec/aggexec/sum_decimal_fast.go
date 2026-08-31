@@ -344,7 +344,10 @@ func (exec *sumDecimal64FastExec) Flush() (_ []*vector.Vector, retErr error) {
 					}
 				} else {
 					cnt := int64(exec.state[i].argCnt[j])
-					avg := decAvg[types.Decimal128](sum, cnt, exec.aggInfo.argTypes[0].Scale, resultType.Scale)
+					avg, err := decAvg[types.Decimal128](sum, cnt, exec.aggInfo.argTypes[0].Scale, resultType)
+					if err != nil {
+						return nil, err
+					}
 					if err := vector.AppendFixed(vecs[i], avg, false, exec.mp); err != nil {
 						return nil, err
 					}
@@ -374,7 +377,10 @@ func (exec *sumDecimal64FastExec) Flush() (_ []*vector.Vector, retErr error) {
 					if cnt == 0 {
 						sumVec.SetNull(uint64(j))
 					} else {
-						avg := decAvg[types.Decimal128](sums[j], cnt, exec.aggInfo.argTypes[0].Scale, resultType.Scale)
+						avg, err := decAvg[types.Decimal128](sums[j], cnt, exec.aggInfo.argTypes[0].Scale, resultType)
+						if err != nil {
+							return nil, err
+						}
 						vector.SetFixedAtNoTypeCheck(sumVec, j, avg)
 					}
 				}
@@ -705,7 +711,10 @@ func (exec *sumDecimal128FastExec) Flush() (_ []*vector.Vector, retErr error) {
 					}
 				} else {
 					cnt := int64(exec.state[i].argCnt[j])
-					avg := decAvg[types.Decimal128](sum, cnt, exec.aggInfo.argTypes[0].Scale, resultType.Scale)
+					avg, err := decAvg[types.Decimal128](sum, cnt, exec.aggInfo.argTypes[0].Scale, resultType)
+					if err != nil {
+						return nil, err
+					}
 					if err := vector.AppendFixed(vecs[i], avg, false, exec.mp); err != nil {
 						return nil, err
 					}
@@ -735,7 +744,10 @@ func (exec *sumDecimal128FastExec) Flush() (_ []*vector.Vector, retErr error) {
 					if cnt == 0 {
 						sumVec.SetNull(uint64(j))
 					} else {
-						avg := decAvg[types.Decimal128](sums[j], cnt, exec.aggInfo.argTypes[0].Scale, resultType.Scale)
+						avg, err := decAvg[types.Decimal128](sums[j], cnt, exec.aggInfo.argTypes[0].Scale, resultType)
+						if err != nil {
+							return nil, err
+						}
 						vector.SetFixedAtNoTypeCheck(sumVec, j, avg)
 					}
 				}

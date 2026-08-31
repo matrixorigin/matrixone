@@ -840,6 +840,9 @@ func (s *TableChangeStream) acquireInitialSnapshotPermit(ctx context.Context) (*
 	if err := s.initialSnapshotLimiter.Acquire(ctx, 1); err != nil {
 		return nil, err
 	}
+	if s.progressTracker != nil {
+		s.progressTracker.SetState("reading")
+	}
 
 	return &snapshotPermit{
 		release: func() { s.initialSnapshotLimiter.Release(1) },
@@ -1371,6 +1374,7 @@ func (s *TableChangeStream) processWithTxn(
 		} else {
 			permit.Release()
 		}
+		s.progressTracker.SetState("processing")
 
 		// FIX: Check pause before processing NoMoreData
 		// NoMoreData triggers commit which updates watermark

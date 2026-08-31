@@ -443,7 +443,7 @@ func isHighNdvCols(cols []int32, tableDef *TableDef, builder *QueryBuilder) bool
 		return false
 	}
 	// first to check if it is primary key.
-	if containsAllPKs(cols, tableDef) {
+	if containsAllSQLEqualityCompatiblePKs(cols, tableDef) {
 		return true
 	}
 
@@ -464,7 +464,7 @@ func (builder *QueryBuilder) getColNDVRatio(cols []int32, tableDef *TableDef) fl
 		return 0
 	}
 	// first to check if it is primary key.
-	if containsAllPKs(cols, tableDef) {
+	if containsAllSQLEqualityCompatiblePKs(cols, tableDef) {
 		return 1
 	}
 

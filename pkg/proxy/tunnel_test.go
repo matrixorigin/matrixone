@@ -1377,6 +1377,40 @@ func TestTunnelRequestBoundaryTracker(t *testing.T) {
 		require.True(t, tun.hasUnsafeClientState())
 	})
 
+	t.Run("close fence clears only completed close state", func(t *testing.T) {
+		tun := &tunnel{}
+		commit := tun.trackClientRequest(
+			makeStmtCommandPacket(frontend.COM_STMT_CLOSE, 41))
+		tun.commitClientRequest(commit)
+		require.True(t, tun.hasFenceableClosedStatementState())
+		tun.completeClosedStatementFence()
+		require.False(t, tun.hasUnsafeClientState())
+
+		tun = &tunnel{}
+		tun.trackClientRequest(makeStmtCommandPacket(
+			frontend.COM_STMT_SEND_LONG_DATA, 41, 0, 0, 'x'))
+		commit = tun.trackClientRequest(
+			makeStmtCommandPacket(frontend.COM_STMT_CLOSE, 42))
+		tun.commitClientRequest(commit)
+		require.True(t, tun.hasUnsafeClientState())
+		require.False(t, tun.hasFenceableClosedStatementState(),
+			"staged long data must not be hidden by a close fence")
+		tun.completeClosedStatementFence()
+		require.True(t, tun.hasUnsafeClientState(),
+			"completing the close fence must preserve staged long data")
+
+		tun = &tunnel{}
+		for i := range maxTrackedStatementIDs + 1 {
+			commit = tun.trackClientRequest(makeStmtCommandPacket(
+				frontend.COM_STMT_CLOSE, uint32(i)))
+			tun.commitClientRequest(commit)
+		}
+		require.True(t, tun.hasFenceableClosedStatementState(),
+			"an overflowed completed-close set is still fenceable")
+		tun.completeClosedStatementFence()
+		require.False(t, tun.hasUnsafeClientState())
+	})
+
 	t.Run("fragmented long data closes after its final packet", func(t *testing.T) {
 		tun := &tunnel{}
 		first := makeStmtCommandPacket(

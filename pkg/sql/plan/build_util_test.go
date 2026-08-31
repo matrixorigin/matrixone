@@ -479,6 +479,74 @@ func TestBuildDefaultExprGeometryAllowsNullDefault(t *testing.T) {
 	require.NotNil(t, def)
 }
 
+func TestBuildDefaultExprJSONExpressionDefaults(t *testing.T) {
+	proc := testutil.NewProcess(t)
+
+	tests := []struct {
+		name       string
+		sql        string
+		wantOrigin string
+		wantErr    string
+	}{
+		{
+			name:       "json array expression",
+			sql:        "create table t (j json default (json_array()))",
+			wantOrigin: "(json_array())",
+		},
+		{
+			name:       "parenthesized object literal",
+			sql:        `create table t (j json default ('{"source":"default"}'))`,
+			wantOrigin: `('{"source":"default"}')`,
+		},
+		{
+			name:       "null literal",
+			sql:        "create table t (j json default null)",
+			wantOrigin: "null",
+		},
+		{
+			name:       "parenthesized null",
+			sql:        "create table t (j json default (null))",
+			wantOrigin: "(null)",
+		},
+		{
+			name:    "bare non-null literal",
+			sql:     `create table t (j json default '{"source":"default"}')`,
+			wantErr: "JSON column 'j' cannot have default value",
+		},
+		{
+			name:    "malformed json expression",
+			sql:     `create table t (j json default ('{"source":'))`,
+			wantErr: "invalid input",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			stmt, err := mysql.ParseOne(context.Background(), tt.sql, 1)
+			require.NoError(t, err)
+
+			createTable, ok := stmt.(*tree.CreateTable)
+			require.True(t, ok)
+			colDef, ok := createTable.Defs[0].(*tree.ColumnTableDef)
+			require.True(t, ok)
+
+			typ, err := getTypeFromAst(context.Background(), colDef.Type)
+			require.NoError(t, err)
+
+			def, err := buildDefaultExpr(colDef, typ, proc)
+			if tt.wantErr != "" {
+				require.ErrorContains(t, err, tt.wantErr)
+				return
+			}
+			require.NoError(t, err)
+			require.NotNil(t, def)
+			require.NotNil(t, def.Expr)
+			require.Equal(t, int32(types.T_json), def.Expr.Typ.Id)
+			require.Equal(t, tt.wantOrigin, def.OriginString)
+		})
+	}
+}
+
 func TestBuildDefaultExprParenthesizedNullMatchesNullDefault(t *testing.T) {
 	proc := testutil.NewProcess(t)
 
@@ -663,6 +731,7 @@ func TestMakePlan2AssignmentCastExprUsesStrictForAssignmentTargets(t *testing.T)
 		{Id: int32(types.T_char), Width: 3},
 		{Id: int32(types.T_text), Width: types.MaxTinyTextLen},
 		{Id: int32(types.T_date), Width: 3},
+		{Id: int32(types.T_time), Scale: 6},
 		{Id: int32(types.T_datetime), Width: 3},
 		{Id: int32(types.T_timestamp), Width: 3},
 		{Id: int32(types.T_year), Width: 4},
@@ -691,6 +760,7 @@ func TestExportedAssignmentCastUsesRuntimeSQLModeSemantics(t *testing.T) {
 	for _, target := range []plan.Type{
 		{Id: int32(types.T_varchar), Width: 3},
 		{Id: int32(types.T_year), Width: 4},
+		{Id: int32(types.T_time), Scale: 6},
 	} {
 		expr, err := MakePlan2AssignmentCastExpr(ctx, DeepCopyExpr(srcText), target)
 		require.NoError(t, err)
@@ -715,6 +785,7 @@ func TestForceAssignmentCastExprUsesAssignmentSemantics(t *testing.T) {
 		{Id: int32(types.T_char), Width: 3},
 		{Id: int32(types.T_text), Width: types.MaxTinyTextLen},
 		{Id: int32(types.T_date), Width: 3},
+		{Id: int32(types.T_time), Scale: 6},
 		{Id: int32(types.T_datetime), Width: 3},
 		{Id: int32(types.T_timestamp), Width: 3},
 		{Id: int32(types.T_year), Width: 4},
@@ -732,6 +803,20 @@ func TestForceAssignmentCastExprUsesAssignmentSemantics(t *testing.T) {
 		require.NoError(t, err)
 		require.Equal(t, "cast", genericExpr.GetF().GetFunc().GetObjName())
 	}
+}
+
+func TestForceAssignmentCastExprPreservesSameTypeTimeBoundary(t *testing.T) {
+	ctx := context.Background()
+	timeType := plan.Type{Id: int32(types.T_time), Scale: 6}
+	source := &Expr{Typ: timeType}
+
+	assignment, err := forceAssignmentCastExpr(ctx, source, timeType)
+	require.NoError(t, err)
+	require.Equal(t, "cast_assign", assignment.GetF().GetFunc().GetObjName())
+
+	expression, err := forceCastExpr(ctx, source, timeType)
+	require.NoError(t, err)
+	require.Same(t, source, expression)
 }
 
 func TestTinyTextSameTypeAssignmentStillValidates(t *testing.T) {

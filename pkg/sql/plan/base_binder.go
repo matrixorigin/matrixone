@@ -3414,11 +3414,70 @@ func (b *baseBinder) bindFuncExprImplByAstExpr(name string, astArgs []tree.Expr,
 			args[idx] = expr
 		}
 	}
-	if b.numericParamType != nil {
+	preparedNumericPeer := false
+	preparedNumericProvenance := false
+	if b.builder != nil && b.builder.isPrepareStatement &&
+		(isNumericContextFunction(name) || supportsGenericNumericFunctionContext(name) ||
+			preparedSQLExecuteNumericResultConsumer(name) || name == "iff") {
+		var err error
+		preparedNumericProvenance, err = b.hasPreparedNumericParamExprs(astArgs, depth)
+		if err != nil {
+			return nil, err
+		}
+		if !preparedNumericProvenance && (preparedSQLExecuteNumericResultConsumer(name) || name == "iff") {
+			for _, arg := range args {
+				if preparedExprContainsParam(arg) {
+					preparedNumericProvenance = true
+					break
+				}
+			}
+		}
+		preparedNumericPeer = preparedNumericProvenance && name == "/"
+	}
+	if b.numericParamType != nil || preparedNumericPeer {
 		var err error
 		args, err = b.resolvePreparedNumericArgs(name, args)
 		if err != nil {
 			return nil, err
+		}
+	}
+	preparedPeerSources := make([]*plan.Expr, len(args))
+	if preparedNumericProvenance {
+		for i, arg := range args {
+			if arg == nil || preparedExprContainsParam(arg) {
+				continue
+			}
+			source := arg
+			fn := arg.GetF()
+			explicitCast, explicitPeerCast := astArgs[i].(*tree.CastExpr)
+			if explicitPeerCast {
+				target, targetErr := getTypeFromAst(b.GetContext(), explicitCast.Type)
+				if targetErr != nil {
+					return nil, targetErr
+				}
+				if types.T(target.Id).IsDecimal() {
+					inner, innerErr := b.impl.BindExpr(explicitCast.Expr, depth, false)
+					if innerErr != nil {
+						return nil, innerErr
+					}
+					source, innerErr = appendCastBeforeExpr(b.GetContext(), inner, target)
+					if innerErr != nil {
+						return nil, innerErr
+					}
+				}
+			}
+			if fn != nil && fn.Func != nil && strings.EqualFold(fn.Func.GetObjName(), "cast") && len(fn.Args) > 0 &&
+				(!explicitPeerCast || makeTypeByPlan2Expr(arg).Oid.IsMySQLString()) &&
+				!preparedExprContainsParam(fn.Args[0]) &&
+				preparedNumericCommonOperandType(makeTypeByPlan2Expr(fn.Args[0]).Oid) {
+				source = fn.Args[0]
+			}
+			sourceType := makeTypeByPlan2Expr(source)
+			if preparedNumericCommonOperandType(sourceType.Oid) && !sourceType.Oid.IsFloat() {
+				// Preserve only a proven exact peer. Scientific FLOAT literals and
+				// explicit FLOAT casts remain source-less semantic FLOAT boundaries.
+				preparedPeerSources[i] = DeepCopyExpr(source)
+			}
 		}
 	}
 	args = useStoredMySQLSpecialTypesForNumericContract(b.GetContext(), name, args)
@@ -3462,9 +3521,35 @@ func (b *baseBinder) bindFuncExprImplByAstExpr(name string, astArgs []tree.Expr,
 	if b.builder != nil {
 		e, err := bindFuncExprAndConstFold(b.GetContext(), b.builder.compCtx.GetProcess(), name, args)
 		if err == nil {
+			if fn := e.GetF(); fn != nil {
+				for i, source := range preparedPeerSources {
+					if source == nil || i >= len(fn.Args) {
+						continue
+					}
+					boundType := makeTypeByPlan2Expr(fn.Args[i]).Oid
+					if !boundType.IsFloat() && !boundType.IsMySQLString() {
+						continue
+					}
+					if literal := fn.Args[i].GetLit(); literal != nil && literal.Src == nil {
+						literal.Src = source
+						continue
+					}
+					castFn := fn.Args[i].GetF()
+					if castFn != nil && castFn.Func != nil && castFn.Func.GetObjName() == "cast" && len(castFn.Args) > 0 {
+						_, overload := function.DecodeOverloadID(castFn.Func.GetObj())
+						if literal := castFn.Args[0].GetLit(); overload == 0 && literal != nil && literal.Src == nil {
+							// A later constant-fold pass reconstructs this implicit cast in
+							// Literal.Src, preserving proof that its FLOAT result was provisional.
+							literal.Src = source
+						}
+					}
+				}
+			}
 			if isIfNull {
 				e.Typ.NotNullable = args[1].Typ.NotNullable || args[2].Typ.NotNullable
 			}
+			markPreparedResultCastsProvisional(
+				b.GetContext(), name, astArgs, preparedPeerSources, e, preparedNumericProvenance)
 			return e, nil
 		}
 		if !strings.Contains(err.Error(), "not supported") {
@@ -3502,6 +3587,53 @@ func (b *baseBinder) bindFuncExprImplByAstExpr(name string, astArgs []tree.Expr,
 	return bindFuncExprImplUdf(b, name, udf, astArgs, args, depth)
 }
 
+func markPreparedResultCastsProvisional(
+	ctx context.Context,
+	name string,
+	astArgs []tree.Expr,
+	peerSources []*plan.Expr,
+	expr *plan.Expr,
+	preparedNumericProvenance bool,
+) {
+	if !preparedNumericProvenance || expr == nil || expr.GetF() == nil {
+		return
+	}
+	args := expr.GetF().Args
+	for i, arg := range args {
+		if i < len(peerSources) && peerSources[i] != nil {
+			attachPreparedRuntimeParamSource(arg, DeepCopyExpr(peerSources[i]))
+			ensurePreparedNumericMetadata(arg).ProvisionalResultPeer = true
+		}
+		if i < len(astArgs) {
+			if explicitCast, ok := astArgs[i].(*tree.CastExpr); ok {
+				if target, err := getTypeFromAst(ctx, explicitCast.Type); err == nil && types.T(target.Id).IsDecimal() {
+					metadata := ensurePreparedNumericMetadata(arg)
+					metadata.ProvisionalResultPeer = true
+					metadata.ProvisionalResultPeerTypeId = target.Id
+					metadata.ProvisionalResultPeerWidth = target.Width
+					metadata.ProvisionalResultPeerScale = target.Scale
+				}
+			}
+		}
+		if i >= len(astArgs) || !preparedSQLExecuteNumericResultValueArg(name, i, len(args)) {
+			continue
+		}
+		if _, explicit := astArgs[i].(*tree.CastExpr); explicit {
+			continue
+		}
+		fn := arg.GetF()
+		if fn == nil || fn.Func == nil || !strings.EqualFold(fn.Func.GetObjName(), "cast") ||
+			len(fn.Args) == 0 || !preparedExprContainsParam(fn.Args[0]) {
+			continue
+		}
+		// This cast was introduced while the marker still had its prepare-time
+		// TEXT domain. Record occurrence provenance because its function overload
+		// can be identical to a user-authored CAST, which remains authoritative.
+		fn.SyntaxExplicitCast = false
+		ensurePreparedNumericMetadata(arg).ProvisionalResultCast = true
+	}
+}
+
 func (b *baseBinder) markVolatileInLeft(left *plan.Expr) {
 	if list := left.GetList(); list != nil {
 		for _, elem := range list.List {
@@ -3536,9 +3668,18 @@ func (b *baseBinder) resolvePreparedNumericArgs(name string, args []*Expr) ([]*E
 		if makeTypeByPlan2Expr(args[i]).Eq(targets[i]) {
 			continue
 		}
+		original := DeepCopyExpr(args[i])
 		cast, err := appendCastBeforeExpr(b.GetContext(), args[i], makePlan2Type(&targets[i]))
 		if err != nil {
 			return nil, err
+		}
+		if literal := cast.GetLit(); literal != nil && literal.Src == nil &&
+			targets[i].Oid.IsFloat() && preparedNumericCommonOperandType(makeTypeByPlan2Expr(original).Oid) &&
+			!makeTypeByPlan2Expr(original).Oid.IsFloat() {
+			// Constant folding can erase why an exact peer became FLOAT while a
+			// prepared marker was still TEXT. Preserve the bounded source expression
+			// so execute-time specialization does not guess from a Dval's value.
+			literal.Src = original
 		}
 		args[i] = cast
 	}

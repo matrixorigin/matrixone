@@ -37,6 +37,88 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+type testProxyServerLifecycle struct {
+	startErr   error
+	closeErr   error
+	started    chan struct{}
+	closeCalls int
+}
+
+func (s *testProxyServerLifecycle) Start() error {
+	if s.started != nil {
+		close(s.started)
+	}
+	return s.startErr
+}
+
+func (s *testProxyServerLifecycle) Close() error {
+	s.closeCalls++
+	return s.closeErr
+}
+
+func TestRunProxyServerUntilCanceled(t *testing.T) {
+	t.Run("running server closes after cancellation", func(t *testing.T) {
+		ctx, cancel := context.WithCancel(context.Background())
+		server := &testProxyServerLifecycle{started: make(chan struct{})}
+		done := make(chan error, 1)
+		go func() { done <- runProxyServerUntilCanceled(ctx, server) }()
+		select {
+		case <-server.started:
+		case <-time.After(time.Second):
+			t.Fatal("Proxy server did not enter Start")
+		}
+		cancel()
+		select {
+		case err := <-done:
+			require.NoError(t, err)
+		case <-time.After(time.Second):
+			t.Fatal("Proxy server did not close after cancellation")
+		}
+		require.Equal(t, 1, server.closeCalls)
+	})
+
+	t.Run("startup cancellation closes without error", func(t *testing.T) {
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+		server := &testProxyServerLifecycle{startErr: context.Canceled}
+		require.NoError(t, runProxyServerUntilCanceled(ctx, server))
+		require.Equal(t, 1, server.closeCalls)
+	})
+
+	t.Run("custom cancellation cause closes without error", func(t *testing.T) {
+		cause := errors.New("stopper shutdown")
+		ctx, cancel := context.WithCancelCause(context.Background())
+		cancel(cause)
+		server := &testProxyServerLifecycle{startErr: cause}
+		require.NoError(t, runProxyServerUntilCanceled(ctx, server))
+		require.Equal(t, 1, server.closeCalls)
+	})
+
+	t.Run("permanent startup error is preserved after close", func(t *testing.T) {
+		startErr := errors.New("listener failed")
+		server := &testProxyServerLifecycle{startErr: startErr}
+		require.ErrorIs(t, runProxyServerUntilCanceled(context.Background(), server), startErr)
+		require.Equal(t, 1, server.closeCalls)
+	})
+
+	t.Run("cancellation does not hide unrelated startup error", func(t *testing.T) {
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+		startErr := errors.New("listener failed")
+		server := &testProxyServerLifecycle{startErr: startErr}
+		require.ErrorIs(t, runProxyServerUntilCanceled(ctx, server), startErr)
+		require.Equal(t, 1, server.closeCalls)
+	})
+
+	t.Run("close error does not replace startup error", func(t *testing.T) {
+		startErr := errors.New("listener failed")
+		closeErr := errors.New("close failed")
+		server := &testProxyServerLifecycle{startErr: startErr, closeErr: closeErr}
+		require.ErrorIs(t, runProxyServerUntilCanceled(context.Background(), server), startErr)
+		require.Equal(t, 1, server.closeCalls)
+	})
+}
+
 func TestRunProxyAfterFileServiceInitialization(t *testing.T) {
 	permanent := errors.New("storage unavailable")
 	started := false
