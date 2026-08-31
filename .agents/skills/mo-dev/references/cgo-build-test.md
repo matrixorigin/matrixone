@@ -82,14 +82,62 @@ Prefer the repository wrapper for arbitrary packages and test flags:
 .agents/skills/mo-dev/scripts/mo-cgo-test -race -count=1 -timeout=240s ./pkg/target/...
 ```
 
+Linked worktrees do not contain ignored build artifacts. When the current
+worktree lacks `cgo/libmo.dylib` on macOS or `cgo/libmo.so` on Linux (or lacks
+`thirdparties/install`), the wrapper automatically considers the primary
+worktree's platform-matched artifacts. It reuses them only when `Makefile`,
+`cgo/`, and `thirdparties/` are clean and identical at both revisions and the
+primary artifact carries a matching source/platform/build-key provenance
+stamp written by the top-level `make cgo` target. The target owns a
+`prepare -> clean when required -> begin -> build -> record` protocol: CGo
+source/header and CPU/GPU or release/debug changes clean all CGo outputs;
+SIMSIMD, Makefile, thirdparty, platform, missing-stamp, or corrupt-stamp changes
+clean both thirdparties and CGo. An interrupted generation stays non-reusable
+and is cleaned again on the next build. This prevents an incremental no-op from
+simply relabeling an old library as current. Missing, stale, CPU/GPU/SIMSIMD-
+mismatched, or post-stamp-modified artifacts are rejected with a local rebuild
+request. The first top-level build after this guard is introduced intentionally
+performs one full native rebuild before reuse is possible.
+
+Cross-worktree reuse is best-effort, never required for correctness. Git
+layouts that do not expose a real primary checkout (for example, a linked
+worktree created from an unconfigured `--separate-git-dir` repository) are
+rejected instead of guessing a filesystem path; build the native artifacts in
+the current worktree in that environment.
+
+An exported/non-Git source tree keeps the historical incremental `make cgo`
+behavior and never publishes a reusable stamp. `make -n`, `make -t`, and
+`make -q` also remain non-mutating; they do not create generation markers or
+clean native outputs.
+
+Do not invoke the provenance helper's `record` operation directly or manually
+create symlinks before trying the wrapper. The former is rejected without the
+build-generation marker, and the latter bypasses the guard and leaves untracked
+setup residue in the review worktree. Validate changes to this protocol with:
+
+Top-level `make cgo` already builds and stages thirdparties as the single
+complete-generation owner. Do not precede it with standalone `make
+thirdparties`: a partial generation has no complete stamp and is intentionally
+discarded by `make cgo`. Direct `make -C thirdparties` followed by `make -C
+cgo` remains the separate ordered contract used by Docker native stages.
+
+```bash
+.agents/skills/mo-dev/scripts/mo-native-provenance-test
+.agents/skills/mo-dev/scripts/mo-native-build-contract-test
+.agents/skills/mo-dev/scripts/mo-cgo-test-worktree-artifacts-test
+```
+
 It verifies host/target and CGo prerequisites, enforces the repository's
 `GOWORK=off` and `-mod=readonly` contract, removes ambient CGo flag drift,
 chooses the supported OS library/loader form, and gives temporary test
 executables absolute rpaths. It is a local CPU-test entry point; GPU and static
 cross-builds have different toolchain contracts and remain explicit workflows.
-`GOFLAGS`, `GOEXPERIMENT`, `CC`, and `CXX` remain caller-owned inputs; record
-them when attribution or reproducibility depends on them, and ensure native
-artifacts were built from the same source generation.
+`GOFLAGS` and `GOEXPERIMENT` remain caller-owned Go inputs. Native provenance
+also hashes supported compiler/SDK/flag override values (including `CC`,
+`CXX`, and GPU environment selectors), so a custom profile cannot alias the
+default profile. It does not fingerprint compiler or SDK installation bytes;
+record exact tool versions separately when attribution or reproducibility
+depends on them.
 
 ### Why test rpaths differ from packaged binaries
 
@@ -317,6 +365,7 @@ What `MO_CL_CUDA=1` flips:
 | Go build tag | none | `-tags gpu` -- registers CAGRA + IVF-PQ, compiles `*_gpu.go` |
 | `cgo/` compiler | `gcc`/`clang` | `/usr/local/cuda/bin/nvcc` |
 | `libmo` objects | C objects only | + `cuda/*.o` + `cuvs/*.o` |
+| Runtime sidecar | none | `mocl_kernel64.fatbin` beside `mo-service` |
 | Link flags | `-lusearch_c -lroaring` | + `-lcuvs -lcuvs_c -lcudart -lcuda -lrmm -lstdc++` |
 | Header/lib roots | thirdparties only | + `$CONDA_PREFIX/{include,lib}`, `/usr/local/cuda/...` |
 
@@ -324,6 +373,9 @@ Guardrails:
 
 - `CONDA_PREFIX env variable not found`: conda env not activated. Run `conda activate <env>` first. This is not a code bug.
 - `libmo` is re-linked on every GPU build deliberately because `mo-service` loads `libmo.so` dynamically. A stale `.so` silently runs old C++.
+- Use the top-level build owner. It content-binds and atomically stages
+  `mocl_kernel64.fatbin` beside `mo-service`; direct `make -C cgo` does not
+  produce a complete distributable GPU generation.
 - Always pass `-j8`. The cuVS/CUDA objects dominate a GPU build and a single-threaded `make` stalls the edit-build-test loop for minutes at a time.
 
 The `gpu` tag gates index-plugin registration. CAGRA and IVF-PQ register only under `//go:build gpu` (`pkg/indexplugin/all/all_gpu.go`). On a CPU binary their plugins are absent from the registry, so `CREATE INDEX ... USING ivfpq|cagra` fails cleanly at plan-build with `unsupported index type: <algo>` before hidden table creation. Do not move those imports into `all.go`.
@@ -341,6 +393,7 @@ gpu_package=./pkg/vectorindex/ivfpq/... # set to the affected GPU algorithm pack
 CGO_CFLAGS="-I$(pwd)/cgo -I$(pwd)/thirdparties/install/include -I$CONDA_PREFIX/include -I/usr/local/cuda/include" \
 CGO_LDFLAGS="-L$(pwd)/thirdparties/install/lib -lusearch_c -L$CONDA_PREFIX/lib -lcuvs -lcuvs_c" \
 LD_LIBRARY_PATH="$(pwd)/cgo:$(pwd)/thirdparties/install/lib:$CONDA_PREFIX/lib:/usr/local/cuda/lib64" \
+MO_CUDA_FATBIN_PATH="$(pwd)/mocl_kernel64.fatbin" \
 GOWORK=off go test -mod=readonly -tags gpu \
   -ldflags="-extldflags '-L$(pwd)/cgo -lmo -L$(pwd)/thirdparties/install/lib -Wl,-rpath,$(pwd)/cgo -Wl,-rpath,$(pwd)/thirdparties/install/lib -Wl,-rpath,$CONDA_PREFIX/lib -Wl,-rpath,/usr/local/cuda/lib64 -fopenmp'" \
   -v -count=1 -timeout 300s "$gpu_package"
@@ -394,6 +447,12 @@ and appending would discard the caller's. The effect was a false green:
 package's 2 GPU test files while reporting a pass. `mo-cgo-test-tags-test` pins every form
 and needs no GPU, CUDA toolkit or built libmo.
 
+Go test executables run from temporary directories, so they cannot find the
+production sidecar beside the repository's `mo-service`. The wrapper verifies
+the selected generation and exports `MO_CUDA_FATBIN_PATH` to its stamped
+executable-side copy before starting `go test`; do not copy an arbitrary fatbin
+into Go's temporary build directories.
+
 Stubbing `go` is not enough to earn that, and the first version of the test wrongly
 claimed it: the wrapper resolves its repository from its own location and rejects the run
 unless `cgo/libmo.so` and `thirdparties/install/include` exist there, before it would ever
@@ -410,4 +469,3 @@ predates it ignores `MO_CL_CUDA` entirely and fails to link a GPU-built `libmo` 
 `grep -c MO_CL_CUDA .agents/skills/mo-dev/scripts/mo-cgo-test` before concluding the tree is
 broken; borrow a newer copy into the repo root if needed (it derives the repo from its own
 location, so it must sit inside the worktree).
-
