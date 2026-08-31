@@ -101,7 +101,7 @@ func TestIssue26131Q15SharedCTEExecutesBothConsumers(t *testing.T) {
 		execSQLRequire(t, ctx, db, "create table supplier (s_suppkey int primary key, s_name varchar(32))")
 		execSQLRequire(t, ctx, db, "create table lineitem (l_suppkey int, l_extendedprice decimal(15,2), l_discount decimal(15,2), l_shipdate date, l_comment varchar(32))")
 		execSQLRequire(t, ctx, db, "create table cte_error_rows (k int, raw varchar(32), payload varchar(32))")
-		execSQLRequire(t, ctx, db, "create table cte_domain_rows (k int, x int, raw varchar(32), payload varchar(32))")
+		execSQLRequire(t, ctx, db, "create table cte_domain_rows (k int, x varchar(32), raw varchar(32), payload varchar(32))")
 		execSQLRequire(t, ctx, db, "insert into supplier values (1, 'supplier-1'), (42, 'supplier-42')")
 		// Two rows per group preserve real SUM accumulation. The shared-CTE
 		// topology is asserted from EXPLAIN below and does not depend on volume.
@@ -109,7 +109,7 @@ func TestIssue26131Q15SharedCTEExecutesBothConsumers(t *testing.T) {
 			(1, -1, 0, '1995-12-15', 'supplier-1-a'), (1, -1, 0, '1995-12-15', 'supplier-1-b'),
 			(42, 2, 0, '1995-12-15', 'supplier-42-a'), (42, 2, 0, '1995-12-15', 'supplier-42-b')`)
 		execSQLRequire(t, ctx, db, "insert into cte_error_rows values (1, '10', 'a'), (2, 'not-an-integer', 'bb')")
-		execSQLRequire(t, ctx, db, "insert into cte_domain_rows values (1, 1, '10', 'a'), (1, 0, 'bad', 'hidden'), (2, 0, '20', 'bb')")
+		execSQLRequire(t, ctx, db, "insert into cte_domain_rows values (1, '1', '10', 'a'), (1, '0', 'bad', 'hidden'), (2, '1', '20', 'bb')")
 		execSQLRequire(t, ctx, db, "analyze table supplier, lineitem")
 
 		planText := explainSQL(t, ctx, db, "explain "+issue26131Q15)
@@ -198,7 +198,7 @@ func TestIssue26131Q15SharedCTEExecutesBothConsumers(t *testing.T) {
 			select k, x, cast(max(raw) as bigint) as risky, max(payload) as payload
 			from cte_domain_rows group by k, x
 		)
-		select sum(risky), max(length(payload)) from c where k = 1 and x = 1
+		select sum(risky), max(length(payload)) from c where k = 1 and x = '1'
 		union all
 		select sum(risky), max(length(payload)) from c where k = 2`
 		fallibleDomainPlan := explainSQL(t, ctx, db, "explain "+fallibleRowDomainQuery)
@@ -220,6 +220,30 @@ func TestIssue26131Q15SharedCTEExecutesBothConsumers(t *testing.T) {
 		require.NoError(t, fallibleDomainRows.Err())
 		require.ElementsMatch(t, []domainResult{{sum: 10, length: 1}, {sum: 20, length: 2}},
 			fallibleDomainResults)
+
+		const omittedFalliblePredicateQuery = `with c as (
+			select k, x, cast(max(raw) as bigint) as risky, max(payload) as payload
+			from cte_domain_rows group by k, x
+		)
+		select sum(risky), max(length(payload)) from c
+		where k = 1 and cast(x as bigint) > 0
+		union all
+		select sum(risky), max(length(payload)) from c where k = 2`
+		omittedPredicatePlan := explainSQL(t, ctx, db, "explain "+omittedFalliblePredicateQuery)
+		require.NotContains(t, omittedPredicatePlan, "Sink Scan",
+			"an omitted fallible consumer predicate must keep the CTE inline")
+		omittedPredicateRows, err := db.QueryContext(ctx, omittedFalliblePredicateQuery)
+		require.NoError(t, err)
+		defer omittedPredicateRows.Close()
+		var omittedPredicateResults []domainResult
+		for omittedPredicateRows.Next() {
+			var result domainResult
+			require.NoError(t, omittedPredicateRows.Scan(&result.sum, &result.length))
+			omittedPredicateResults = append(omittedPredicateResults, result)
+		}
+		require.NoError(t, omittedPredicateRows.Err())
+		require.ElementsMatch(t, []domainResult{{sum: 10, length: 1}, {sum: 20, length: 2}},
+			omittedPredicateResults)
 	})
 }
 

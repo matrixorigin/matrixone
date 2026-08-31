@@ -672,6 +672,28 @@ func TestCTEMultiReferenceRejectsExpandedUnsafeOutputRowDomain(t *testing.T) {
 		"sharing must not evaluate a fallible output on rows admitted only by a weakened shared predicate")
 }
 
+func TestCTEMultiReferenceRejectsOmittedFallibleConsumerPredicate(t *testing.T) {
+	mock := NewMockOptimizer(false)
+	logicPlan, err := runOneStmt(mock, t, `
+		with c as (
+			select l_suppkey as k, l_shipmode as x,
+			       cast(max(l_comment) as bigint) as risky,
+			       max(l_comment) as payload
+			from lineitem group by l_suppkey, l_shipmode
+		)
+		select sum(risky), max(length(payload))
+		from c where k = 1 and cast(x as bigint) > 0
+		union all
+		select sum(risky), max(length(payload))
+		from c where k = 2`)
+	require.NoError(t, err)
+
+	query := logicPlan.GetQuery()
+	require.NotNil(t, query)
+	require.Equal(t, 0, countReachableNodeType(query, planpb.Node_SINK_SCAN),
+		"an omitted fallible consumer predicate must make the shared row domain inexact")
+}
+
 func TestCTEMultiReferenceReusesRobustPredicateFreeSpillProducer(t *testing.T) {
 	mock := NewMockOptimizer(false)
 	logicPlan, err := runOneStmt(mock, t, `
