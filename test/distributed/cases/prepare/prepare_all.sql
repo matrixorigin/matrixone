@@ -627,5 +627,89 @@ deallocate prepare prepared_set_reserved_error;
 deallocate prepare prepared_set_system_error;
 drop table prepared_set_values;
 
+-- @case
+-- @desc:SQL PREPARE rebinds the current user-variable numeric type on every execution
+-- @label:bvt
+prepare issue25408_runtime_reexecute from 'select ? + 1 as plus_one';
+set @issue25408_runtime_value = '2';
+execute issue25408_runtime_reexecute using @issue25408_runtime_value;
+set @issue25408_runtime_value = 2.5;
+execute issue25408_runtime_reexecute using @issue25408_runtime_value;
+set @issue25408_runtime_value = 3.5;
+execute issue25408_runtime_reexecute using @issue25408_runtime_value;
+set @issue25408_runtime_value = -2;
+execute issue25408_runtime_reexecute using @issue25408_runtime_value;
+deallocate prepare issue25408_runtime_reexecute;
+
+prepare issue25408_runtime_divide from 'select ? / 2 as quotient';
+set @issue25408_runtime_value = 2.5;
+execute issue25408_runtime_divide using @issue25408_runtime_value;
+set @issue25408_runtime_value = 9007199254740993.5;
+execute issue25408_runtime_divide using @issue25408_runtime_value;
+set @issue25408_runtime_value = 3.5;
+execute issue25408_runtime_divide using @issue25408_runtime_value;
+deallocate prepare issue25408_runtime_divide;
+
+set @issue25408_runtime_value = 9007199254740993.5;
+select (@issue25408_runtime_value / 2) + 1 as result;
+prepare issue25408_nested_add from 'select (? / 2) + 1 as result';
+execute issue25408_nested_add using @issue25408_runtime_value;
+deallocate prepare issue25408_nested_add;
+select (@issue25408_runtime_value / 2) + 1e0 as result;
+prepare issue25408_nested_scientific from 'select (? / 2) + 1e0 as result';
+execute issue25408_nested_scientific using @issue25408_runtime_value;
+deallocate prepare issue25408_nested_scientific;
+select (@issue25408_runtime_value / 2) + 1e-1 as result;
+prepare issue25408_nested_fractional from 'select (? / 2) + 1e-1 as result';
+execute issue25408_nested_fractional using @issue25408_runtime_value;
+deallocate prepare issue25408_nested_fractional;
+select (@issue25408_runtime_value / 2) + cast(1 as double) as result;
+prepare issue25408_nested_explicit_double from 'select (? / 2) + cast(1 as double) as result';
+execute issue25408_nested_explicit_double using @issue25408_runtime_value;
+deallocate prepare issue25408_nested_explicit_double;
+prepare issue25408_nested_abs from 'select abs(? / 2) as result';
+execute issue25408_nested_abs using @issue25408_runtime_value;
+deallocate prepare issue25408_nested_abs;
+prepare issue25408_nested_multiply from 'select (? / 2) * 3 as result';
+execute issue25408_nested_multiply using @issue25408_runtime_value;
+deallocate prepare issue25408_nested_multiply;
+select abs(@issue25408_runtime_value + 1) as result;
+prepare issue25408_abs_exact from 'select abs(? + 1) as result';
+execute issue25408_abs_exact using @issue25408_runtime_value;
+deallocate prepare issue25408_abs_exact;
+select abs(@issue25408_runtime_value + 1e0) as result;
+prepare issue25408_abs_scientific from 'select abs(? + 1e0) as result';
+execute issue25408_abs_scientific using @issue25408_runtime_value;
+deallocate prepare issue25408_abs_scientific;
+select abs(@issue25408_runtime_value + 1e-1) as result;
+prepare issue25408_abs_fractional from 'select abs(? + 1e-1) as result';
+execute issue25408_abs_fractional using @issue25408_runtime_value;
+deallocate prepare issue25408_abs_fractional;
+select abs(@issue25408_runtime_value + cast(1 as double)) as result;
+prepare issue25408_abs_explicit_double from 'select abs(? + cast(1 as double)) as result';
+execute issue25408_abs_explicit_double using @issue25408_runtime_value;
+deallocate prepare issue25408_abs_explicit_double;
+
+-- @case
+-- @desc:Prepared exact integer comparisons do not pass BIGINT/BIT text through DOUBLE
+-- @label:bvt
+drop table if exists issue27492_exact_cmp;
+create table issue27492_exact_cmp(id int primary key, u bigint unsigned, b bit(64));
+insert into issue27492_exact_cmp values (1, 9007199254740992, 9007199254740992), (2, 9007199254740993, 9007199254740993), (3, 9007199254740994, 9007199254740994);
+prepare issue27492_bigint from 'select id from issue27492_exact_cmp where u = ? order by id';
+prepare issue27492_bit from 'select id from issue27492_exact_cmp where b = ? order by id';
+set @issue27492_value = '9007199254740993';
+execute issue27492_bigint using @issue27492_value;
+execute issue27492_bit using @issue27492_value;
+set @issue27492_value = null;
+execute issue27492_bigint using @issue27492_value;
+execute issue27492_bit using @issue27492_value;
+set @issue27492_value = '9007199254740993';
+execute issue27492_bigint using @issue27492_value;
+execute issue27492_bit using @issue27492_value;
+deallocate prepare issue27492_bigint;
+deallocate prepare issue27492_bit;
+drop table issue27492_exact_cmp;
+
 # reset
 SET TIME_ZONE = "SYSTEM";
