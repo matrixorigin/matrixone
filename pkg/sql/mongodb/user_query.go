@@ -545,7 +545,13 @@ func ApplyUserQueryToPlan(ctx context.Context, query *UserQuery, target *plan.Mo
 // compile-time parser is not treated as a trust boundary because plans can be
 // cached and shipped over the pipeline protocol.
 func UserQueryFromPlan(ctx context.Context, input *plan.MongoScan) (*UserQuery, error) {
-	if input == nil || input.UserQueryKind == int32(UserQueryInvalid) {
+	if input == nil {
+		return nil, nil
+	}
+	if input.UserQueryKind == int32(UserQueryInvalid) {
+		if len(input.UserFilterBson) != 0 || len(input.UserPipelineStageBson) != 0 || input.UserQueryDigest != "" {
+			return nil, moerr.NewInvalidInput(ctx, "MongoDB user query plan has an invalid zero kind shape")
+		}
 		return nil, nil
 	}
 	if !validUserQueryDigest(input.UserQueryDigest) || userQueryPlanBytes(input) > MaxUserQueryBytes {

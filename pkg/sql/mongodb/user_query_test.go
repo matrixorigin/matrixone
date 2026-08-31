@@ -164,6 +164,20 @@ func TestParseUserQueryRejectsUnsafeStagesAndOperators(t *testing.T) {
 
 func TestUserQueryPlanRevalidationFailsClosed(t *testing.T) {
 	ctx := context.Background()
+	legacy, err := UserQueryFromPlan(ctx, &plan.MongoScan{})
+	require.NoError(t, err)
+	require.Nil(t, legacy)
+	for name, candidate := range map[string]*plan.MongoScan{
+		"filter payload":   {UserFilterBson: []byte{3, 0, 0, 0}},
+		"pipeline payload": {UserPipelineStageBson: [][]byte{{3, 0, 0, 0}}},
+		"digest payload":   {UserQueryDigest: strings.Repeat("a", 64)},
+	} {
+		t.Run("zero kind with "+name, func(t *testing.T) {
+			_, err := UserQueryFromPlan(ctx, candidate)
+			require.ErrorContains(t, err, "zero kind")
+		})
+	}
+
 	query, err := ParseUserQuery(ctx, `{"filter":{"device_id":"pump-1"}}`)
 	require.NoError(t, err)
 	valid := new(plan.MongoScan)
