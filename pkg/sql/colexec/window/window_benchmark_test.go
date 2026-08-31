@@ -148,3 +148,100 @@ func BenchmarkWindowBoundedRowsSum(b *testing.B) {
 		})
 	}
 }
+
+// BenchmarkCumulativeMaxPartitionShapes keeps the allocation cost of the
+// cumulative running path visible for the three materially different partition
+// shapes: high-cardinality singleton partitions, mixed small/large partitions,
+// and large partitions whose saved prefix work dominates reset overhead.
+func BenchmarkCumulativeMaxPartitionShapes(b *testing.B) {
+	const rows = 2048
+	tests := []struct {
+		name       string
+		partitions func() []int64
+	}{
+		{
+			name: "singleton",
+			partitions: func() []int64 {
+				starts := make([]int64, rows)
+				for i := range starts {
+					starts[i] = int64(i)
+				}
+				return starts
+			},
+		},
+		{
+			name: "mixed",
+			partitions: func() []int64 {
+				starts := make([]int64, 0, rows/128)
+				for start := 0; start < rows; {
+					starts = append(starts, int64(start))
+					start++
+					if start < rows {
+						starts = append(starts, int64(start))
+						start += min(255, rows-start)
+					}
+				}
+				return starts
+			},
+		},
+		{
+			name: "large",
+			partitions: func() []int64 {
+				starts := make([]int64, 0, rows/256)
+				for start := 0; start < rows; start += 256 {
+					starts = append(starts, int64(start))
+				}
+				return starts
+			},
+		},
+	}
+
+	for _, test := range tests {
+		b.Run(test.name, func(b *testing.B) {
+			b.ReportAllocs()
+			var mpoolAllocBytes, mpoolAllocs int64
+			for i := 0; i < b.N; i++ {
+				proc := testutil.NewProcessWithMPool(b, "", mpool.MustNewZero())
+				values := make([]int32, rows)
+				for row := range values {
+					values[row] = int32(rows - row)
+				}
+				input := makeInt32Batch(proc.Mp(), values)
+				spec := makeWindowSpec()
+				spec.GetW().Frame = makeCumulativeFrame()
+				arg := &Window{
+					WinSpecList: []*plan.Expr{spec},
+					Aggs: []aggexec.AggFuncExecExpression{
+						newTypedMaxAggExpr(b, 0, *input.Vecs[0].GetType()),
+					},
+				}
+				ctr := &container{
+					bat: input,
+					ps:  test.partitions(),
+					aggVecs: []colexec.ExprEvalVector{{
+						Vec: []*vector.Vector{input.Vecs[0]},
+					}},
+				}
+
+				for start := 0; start < rows; start += colexec.DefaultBatchSize {
+					end := min(start+colexec.DefaultBatchSize, rows)
+					result, err := ctr.processAggregateFuncRange(0, arg, proc, start, end)
+					if err != nil {
+						b.Fatal(err)
+					}
+					result.Free(proc.Mp())
+				}
+
+				input.Clean(proc.Mp())
+				proc.Free()
+				mpoolAllocBytes += proc.Mp().Stats().NumAllocBytes.Load()
+				mpoolAllocs += proc.Mp().Stats().NumAlloc.Load()
+				if got := proc.Mp().CurrNB(); got != 0 {
+					b.Fatalf("mpool leak: %d bytes", got)
+				}
+			}
+			b.ReportMetric(float64(mpoolAllocBytes)/float64(b.N), "mpool-bytes/op")
+			b.ReportMetric(float64(mpoolAllocs)/float64(b.N), "mpool-allocs/op")
+		})
+	}
+}

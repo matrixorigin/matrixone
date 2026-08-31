@@ -76,8 +76,9 @@ const (
 	MORPCVersion38  int64 = 38 // session temporary-table connection migration
 	MORPCVersion39  int64 = 39 // linearizable TN-ordered logtail read barrier
 	MORPCVersion40  int64 = 40 // PAD SPACE comparison casts and set-operation equality keys
-	// Versions 41 and 42 are reserved for the two concurrent MORPC owners that
-	// were already under review when this capability was allocated.
+	MORPCVersion41  int64 = 41 // cycle-safe bounded current-role closure table function
+	// Version 42 is reserved for the remaining concurrent MORPC owner that was
+	// already under review when the DDL visibility capability was allocated.
 	MORPCVersion43     int64 = 43 // cancellable cross-CN DDL visibility fence
 	MORPCLatestVersion       = MORPCVersion43
 )
