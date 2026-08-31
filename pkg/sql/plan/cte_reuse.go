@@ -53,19 +53,33 @@ func (builder *QueryBuilder) reuseMultiReferenceCTEs(rootID int32) int32 {
 }
 
 func (builder *QueryBuilder) canReuseCTE(cteRef *CTERef, rootID int32) bool {
-	if cteRef == nil || cteRef.isRecursive || len(cteRef.occurrences) < 2 ||
-		cteRef.hasNestedRef || cteRef.hasNestedUse {
+	if cteRef == nil || cteRef.isRecursive || len(cteRef.occurrences) < 2 || cteRef.hasNestedRef {
 		return false
 	}
 
 	first := cteRef.occurrences[0]
+	allOccurrencesAreCurrentRoleClosures := currentRoleClosureOutput(first.types)
 	for _, occurrence := range cteRef.occurrences {
 		if occurrence.isCorrelated || !sameCTEOutput(first, occurrence) ||
 			!builder.cteSubtreeIsDeterministic(occurrence.rootID, make(map[int32]bool)) {
 			return false
 		}
+		allOccurrencesAreCurrentRoleClosures = allOccurrencesAreCurrentRoleClosures &&
+			builder.cteSubtreeIsCurrentRoleClosure(occurrence.rootID, make(map[int32]bool))
 	}
 
+	if cteRef.hasNestedUse && !allOccurrencesAreCurrentRoleClosures {
+		return false
+	}
+	if allOccurrencesAreCurrentRoleClosures {
+		// This exemption is deliberately limited to the one-column closure
+		// primitive itself. mo_current_roles computes its complete fixed-width
+		// batch before producing any row, so LIMIT and SEMI/ANTI consumers cannot
+		// save its internal SQL work. A scan, join, filter, aggregate, variable-
+		// width projection, or any other surrounding operation must use the
+		// ordinary full-drain, memory, and profitability guards below.
+		return builder.cteOccurrencesReachable(rootID, cteRef.occurrences)
+	}
 	if !builder.cteConsumersFullyDrain(rootID, cteRef.occurrences) {
 		return false
 	}
@@ -154,6 +168,39 @@ func samePlanType(left, right planpb.Type) bool {
 		left.Enumvalues == right.Enumvalues && left.Charset == right.Charset
 }
 
+func statementStableFunctionScan(node *planpb.Node) bool {
+	return node != nil && node.NodeType == planpb.Node_FUNCTION_SCAN &&
+		node.TableDef != nil && node.TableDef.TblFunc != nil &&
+		node.TableDef.TblFunc.Name == "mo_current_roles" &&
+		len(node.TblFuncExprList) == 0 && len(node.Children) == 0
+}
+
+func currentRoleClosureOutput(outputTypes []planpb.Type) bool {
+	return len(outputTypes) == 1 && outputTypes[0].Id == int32(types.T_int64)
+}
+
+func (builder *QueryBuilder) cteSubtreeIsCurrentRoleClosure(
+	nodeID int32,
+	seen map[int32]bool,
+) bool {
+	if seen[nodeID] {
+		return false
+	}
+	seen[nodeID] = true
+	node := builder.qry.Nodes[nodeID]
+	if statementStableFunctionScan(node) {
+		return len(node.FilterList) == 0 && node.Limit == nil && node.Offset == nil &&
+			len(node.OrderBy) == 0 && len(node.RuntimeFilterProbeList) == 0 &&
+			len(node.RuntimeFilterBuildList) == 0
+	}
+	return node.NodeType == planpb.Node_PROJECT && len(node.Children) == 1 &&
+		len(node.ProjectList) == 1 && node.ProjectList[0].Typ.Id == int32(types.T_int64) &&
+		len(node.FilterList) == 0 && node.Limit == nil && node.Offset == nil &&
+		len(node.OrderBy) == 0 && len(node.RuntimeFilterProbeList) == 0 &&
+		len(node.RuntimeFilterBuildList) == 0 &&
+		builder.cteSubtreeIsCurrentRoleClosure(node.Children[0], seen)
+}
+
 func (builder *QueryBuilder) cteSubtreeIsDeterministic(nodeID int32, seen map[int32]bool) bool {
 	if seen[nodeID] {
 		return true
@@ -161,7 +208,11 @@ func (builder *QueryBuilder) cteSubtreeIsDeterministic(nodeID int32, seen map[in
 	seen[nodeID] = true
 	node := builder.qry.Nodes[nodeID]
 	switch node.NodeType {
-	case planpb.Node_FUNCTION_SCAN, planpb.Node_EXTERNAL_SCAN,
+	case planpb.Node_FUNCTION_SCAN:
+		if !statementStableFunctionScan(node) {
+			return false
+		}
+	case planpb.Node_EXTERNAL_SCAN,
 		planpb.Node_EXTERNAL_FUNCTION, planpb.Node_LOCK_OP, planpb.Node_INSERT,
 		planpb.Node_DELETE, planpb.Node_MULTI_UPDATE, planpb.Node_POSTDML,
 		planpb.Node_RECURSIVE_CTE, planpb.Node_RECURSIVE_SCAN, planpb.Node_SINK,
@@ -234,6 +285,17 @@ func (builder *QueryBuilder) cteSubtreeIsDeterministic(nodeID int32, seen map[in
 	}
 	for _, childID := range node.Children {
 		if !builder.cteSubtreeIsDeterministic(childID, seen) {
+			return false
+		}
+	}
+	return true
+}
+
+func (builder *QueryBuilder) cteOccurrencesReachable(rootID int32, occurrences []cteOccurrence) bool {
+	reachable := make(map[int32]bool)
+	builder.collectCTEParents(rootID, make(map[int32][]int32), reachable)
+	for _, occurrence := range occurrences {
+		if !reachable[occurrence.rootID] {
 			return false
 		}
 	}
