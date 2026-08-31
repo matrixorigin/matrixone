@@ -624,10 +624,25 @@ func partitionEnd(partitions []int64, partition int, rowCount int) int {
 	return int(partitions[partition+1])
 }
 
-// processCumulativeAggregateFuncRange advances one aggregate state per input
-// row and snapshots it into the corresponding output group. This changes
-// fixed-size cumulative aggregates such as SUM from O(partitionRows^2) Fill
-// calls to O(partitionRows), while retaining state across output chunks.
+// cumulativePartitionUsesRunning compares the prefix Fill calls saved by a
+// running aggregate with the AggBatchSize physical state chunk initialized for
+// that partition. Small partitions stay on the direct evaluator; large
+// partitions use one running state. Evaluating this per partition avoids both
+// allocation churn on high-cardinality inputs and quadratic work in mixed
+// inputs that contain a few large partitions.
+func cumulativePartitionUsesRunning(start, end int) bool {
+	rows := end - start
+	if rows <= 1 {
+		return false
+	}
+	savedFills := uint64(rows) * uint64(rows-1) / 2
+	return savedFills > uint64(aggexec.AggBatchSize)
+}
+
+// processCumulativeAggregateFuncRange evaluates small partitions directly and
+// advances one retained aggregate state for each large partition. The running
+// state changes large cumulative aggregates from O(partitionRows^2) Fill calls
+// to O(partitionRows), while remaining valid across output chunks.
 func (ctr *container) processCumulativeAggregateFuncRange(
 	idx int,
 	ap *Window,
@@ -645,33 +660,49 @@ func (ctr *container) processCumulativeAggregateFuncRange(
 		}
 	}()
 
-	if ctr.runningAgg == nil {
-		ctr.runningAgg, retErr = ctr.newAggregateExecutor(idx, ap, proc, 1)
-		if retErr != nil {
-			return nil, retErr
-		}
-	}
-
 	n := ctr.bat.RowCount()
+	currentPartitionStart := 0
+	if len(ctr.ps) > 0 {
+		currentPartitionStart = int(ctr.ps[ctr.runningPartition])
+	}
 	currentPartitionEnd := partitionEnd(ctr.ps, ctr.runningPartition, n)
 	for j := outputStart; j < outputEnd; j++ {
 		if err := checkCanceled(proc, j-outputStart); err != nil {
 			return nil, err
 		}
 		if j == currentPartitionEnd {
-			ctr.runningAgg.Free()
-			ctr.runningAgg, retErr = ctr.newAggregateExecutor(idx, ap, proc, 1)
-			if retErr != nil {
-				return nil, retErr
+			if ctr.runningAgg != nil {
+				ctr.runningAgg.Free()
+				ctr.runningAgg = nil
 			}
 			ctr.runningPartition++
+			currentPartitionStart = j
 			currentPartitionEnd = partitionEnd(ctr.ps, ctr.runningPartition, n)
 		}
-		if err := ctr.runningAgg.Fill(0, j, ctr.aggVecs[idx].Vec); err != nil {
-			return nil, err
-		}
-		if err := ctr.batAggs[idx].Merge(ctr.runningAgg, j-outputStart, 0); err != nil {
-			return nil, err
+
+		group := j - outputStart
+		if cumulativePartitionUsesRunning(currentPartitionStart, currentPartitionEnd) {
+			if ctr.runningAgg == nil {
+				ctr.runningAgg, retErr = ctr.newAggregateExecutor(idx, ap, proc, 1)
+				if retErr != nil {
+					return nil, retErr
+				}
+			}
+			if err := ctr.runningAgg.Fill(0, j, ctr.aggVecs[idx].Vec); err != nil {
+				return nil, err
+			}
+			if err := ctr.batAggs[idx].Merge(ctr.runningAgg, group, 0); err != nil {
+				return nil, err
+			}
+		} else {
+			for k := currentPartitionStart; k <= j; k++ {
+				if err := checkCanceled(proc, k-currentPartitionStart); err != nil {
+					return nil, err
+				}
+				if err := ctr.batAggs[idx].Fill(group, k, ctr.aggVecs[idx].Vec); err != nil {
+					return nil, err
+				}
+			}
 		}
 		ctr.runningNextRow = j + 1
 	}
