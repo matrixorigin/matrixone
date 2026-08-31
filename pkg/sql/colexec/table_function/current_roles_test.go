@@ -15,8 +15,10 @@
 package table_function
 
 import (
+	"context"
 	"errors"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -34,13 +36,15 @@ import (
 )
 
 func roleGraphExpander(graph map[int64][]int64, expanded *[]int64) currentRoleFrontierExpander {
-	return func(_ *process.Process, frontier []int64, visit func(int64)) error {
+	return func(_ *process.Process, frontier []int64, visit func(int64) error) error {
 		for _, roleID := range frontier {
 			if expanded != nil {
 				*expanded = append(*expanded, roleID)
 			}
 			for _, grantedID := range graph[roleID] {
-				visit(grantedID)
+				if err := visit(grantedID); err != nil {
+					return err
+				}
 			}
 		}
 		return nil
@@ -69,6 +73,131 @@ func TestCurrentRoleClosure(t *testing.T) {
 	require.Equal(t, []int64{77}, roles)
 }
 
+func TestCurrentRoleClosureAdmissionBoundary(t *testing.T) {
+	chainExpander := func(limit int64) currentRoleFrontierExpander {
+		return func(_ *process.Process, frontier []int64, visit func(int64) error) error {
+			for _, roleID := range frontier {
+				if roleID+1 < limit {
+					if err := visit(roleID + 1); err != nil {
+						return err
+					}
+				}
+			}
+			return nil
+		}
+	}
+
+	roles, err := currentRoleClosure(nil, 0, chainExpander(currentRoleClosureMaxRoles))
+	require.NoError(t, err)
+	require.Len(t, roles, currentRoleClosureMaxRoles)
+
+	roles, err = currentRoleClosure(nil, 0, chainExpander(currentRoleClosureMaxRoles+1))
+	require.ErrorContains(t, err, "current role closure exceeds the 4096-role query limit")
+	require.Nil(t, roles, "an over-limit closure must not publish a partial role set")
+}
+
+func TestCurrentRoleClosureCancellation(t *testing.T) {
+	proc := testutil.NewProc(t)
+	ctx, cancel := context.WithCancel(proc.Ctx)
+	proc.Ctx = ctx
+	cancel()
+	queries := 0
+	expand := func(proc *process.Process, frontier []int64, visit func(int64) error) error {
+		queries++
+		return expandCurrentRoleFrontierWithRunner(proc, frontier, visit,
+			func(*process.Process, string) (executor.Result, error) {
+				t.Fatal("cancellation must be checked before internal SQL")
+				return executor.Result{}, nil
+			})
+	}
+	roles, err := currentRoleClosure(proc, 10, expand)
+	require.ErrorIs(t, err, context.Canceled)
+	require.Nil(t, roles)
+	require.Zero(t, queries)
+
+	proc = testutil.NewProc(t)
+	ctx, cancel = context.WithCancel(proc.Ctx)
+	proc.Ctx = ctx
+	calls := 0
+	expand = func(proc *process.Process, _ []int64, visit func(int64) error) error {
+		calls++
+		if calls == 1 {
+			require.NoError(t, visit(20))
+			cancel()
+			return nil
+		}
+		t.Fatal("cancellation between frontiers must prevent another expansion")
+		return nil
+	}
+	roles, err = currentRoleClosure(proc, 10, expand)
+	require.ErrorIs(t, err, context.Canceled)
+	require.Nil(t, roles)
+	require.Equal(t, 1, calls)
+}
+
+func TestCurrentRoleClosureCapacityRejectionClosesResult(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+	run := func(_ *process.Process, _ string) (executor.Result, error) {
+		bat := batch.NewWithSize(1)
+		bat.Vecs[0] = vector.NewVec(types.T_int64.ToType())
+		for roleID := int64(1); roleID <= currentRoleClosureMaxRoles; roleID++ {
+			require.NoError(t, vector.AppendFixed(bat.Vecs[0], roleID, false, mp))
+		}
+		bat.SetRowCount(currentRoleClosureMaxRoles)
+		return executor.Result{Mp: mp, Batches: []*batch.Batch{bat}}, nil
+	}
+	expand := func(proc *process.Process, frontier []int64, visit func(int64) error) error {
+		return expandCurrentRoleFrontierWithRunner(proc, frontier, visit, run)
+	}
+
+	roles, err := currentRoleClosure(nil, 0, expand)
+	require.ErrorContains(t, err, "4096-role query limit")
+	require.Nil(t, roles)
+	require.Zero(t, mp.CurrNB(), "capacity rejection must close the current internal executor result")
+}
+
+func TestCurrentRoleClosureConcurrentAdmissionGenerations(t *testing.T) {
+	const workers = 8
+	start := make(chan struct{})
+	var ready sync.WaitGroup
+	ready.Add(workers)
+	var done sync.WaitGroup
+	done.Add(workers)
+	errs := make(chan error, workers)
+
+	for worker := 0; worker < workers; worker++ {
+		go func() {
+			defer done.Done()
+			ready.Done()
+			<-start
+			expand := func(_ *process.Process, frontier []int64, visit func(int64) error) error {
+				for _, roleID := range frontier {
+					if roleID < currentRoleClosureMaxRoles {
+						if err := visit(roleID + 1); err != nil {
+							return err
+						}
+					}
+				}
+				return nil
+			}
+			roles, err := currentRoleClosure(nil, 0, expand)
+			if roles != nil && err != nil {
+				errs <- errors.New("over-limit closure published partial roles")
+				return
+			}
+			errs <- err
+		}()
+	}
+	ready.Wait()
+	close(start)
+	done.Wait()
+	close(errs)
+	for err := range errs {
+		require.ErrorContains(t, err, "4096-role query limit")
+	}
+}
+
 func TestCurrentRoleClosureDoesNotVisitLargeDisconnectedGraph(t *testing.T) {
 	graph := make(map[int64]int64, 100_002)
 	graph[10] = 20
@@ -78,11 +207,13 @@ func TestCurrentRoleClosureDoesNotVisitLargeDisconnectedGraph(t *testing.T) {
 	}
 
 	lookups := 0
-	expand := func(_ *process.Process, frontier []int64, visit func(int64)) error {
+	expand := func(_ *process.Process, frontier []int64, visit func(int64) error) error {
 		for _, roleID := range frontier {
 			lookups++
 			if grantedID, ok := graph[roleID]; ok {
-				visit(grantedID)
+				if err := visit(grantedID); err != nil {
+					return err
+				}
 			}
 		}
 		return nil
@@ -108,10 +239,12 @@ func BenchmarkCurrentRoleClosureLargeDisconnectedGraph(b *testing.B) {
 	for i := int64(0); i < 100_000; i++ {
 		graph[1_000_000+i] = 2_000_000 + i
 	}
-	expand := func(_ *process.Process, frontier []int64, visit func(int64)) error {
+	expand := func(_ *process.Process, frontier []int64, visit func(int64) error) error {
 		for _, roleID := range frontier {
 			if grantedID, ok := graph[roleID]; ok {
-				visit(grantedID)
+				if err := visit(grantedID); err != nil {
+					return err
+				}
 			}
 		}
 		return nil
@@ -150,7 +283,7 @@ func BenchmarkCurrentRoleClosureInternalSQLBoundary(b *testing.B) {
 		}
 		return executor.Result{Mp: mp, Batches: []*batch.Batch{bat}}, nil
 	}
-	expand := func(proc *process.Process, frontier []int64, visit func(int64)) error {
+	expand := func(proc *process.Process, frontier []int64, visit func(int64) error) error {
 		return expandCurrentRoleFrontierWithRunner(proc, frontier, visit, run)
 	}
 
@@ -186,7 +319,10 @@ func TestVisitCurrentRoleGrants(t *testing.T) {
 	defer result.Close()
 
 	var roles []int64
-	visitCurrentRoleGrants(result, func(roleID int64) { roles = append(roles, roleID) })
+	require.NoError(t, visitCurrentRoleGrants(result, func(roleID int64) error {
+		roles = append(roles, roleID)
+		return nil
+	}))
 	require.Equal(t, []int64{20, 30}, roles)
 }
 
@@ -201,7 +337,7 @@ func TestExpandCurrentRoleFrontierChunksQueries(t *testing.T) {
 		return executor.Result{}, nil
 	}
 
-	require.NoError(t, expandCurrentRoleFrontierWithRunner(nil, frontier, func(int64) {}, run))
+	require.NoError(t, expandCurrentRoleFrontierWithRunner(nil, frontier, func(int64) error { return nil }, run))
 	require.Len(t, queries, 2)
 	require.True(t, strings.HasSuffix(queries[0], ",255,256)"))
 	require.Equal(t, currentRoleGrantQueryPrefix+"257,258)", queries[1])
@@ -244,8 +380,9 @@ func TestCurrentRolesState(t *testing.T) {
 		require.Zero(t, state.batch.RowCount())
 
 		expected := errors.New("role grant read failed")
-		state.expandFrontier = func(*process.Process, []int64, func(int64)) error { return expected }
+		state.expandFrontier = func(*process.Process, []int64, func(int64) error) error { return expected }
 		require.ErrorIs(t, state.start(tf, proc, 0, nil), expected)
+		require.Zero(t, state.batch.RowCount(), "a failed closure must not publish a partial batch")
 		tf.Free(proc, false, nil)
 	})
 }

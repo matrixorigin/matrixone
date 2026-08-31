@@ -19,6 +19,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
@@ -29,11 +30,12 @@ import (
 const (
 	currentRoleGrantQueryPrefix       = "SELECT cast(granted_id AS bigint) FROM mo_catalog.mo_role_grant WHERE grantee_id IN ("
 	currentRoleGrantFrontierBatchSize = 256
+	currentRoleClosureMaxRoles        = 4096
 )
 
 type currentRoleSQLRunner func(*process.Process, string) (executor.Result, error)
 
-type currentRoleFrontierExpander func(*process.Process, []int64, func(int64)) error
+type currentRoleFrontierExpander func(*process.Process, []int64, func(int64) error) error
 
 type currentRolesState struct {
 	simpleOneBatchState
@@ -62,35 +64,55 @@ func runCurrentRolesSQL(proc *process.Process, sql string) (executor.Result, err
 	return sqlexec.RunSql(sqlexec.NewSqlProcess(proc), sql)
 }
 
-func visitCurrentRoleGrants(result executor.Result, visit func(int64)) {
+func visitCurrentRoleGrants(result executor.Result, visit func(int64) error) error {
+	var visitErr error
 	result.ReadRows(func(rows int, cols []*vector.Vector) bool {
 		grantedIDs := vector.MustFixedColWithTypeCheck[int64](cols[0])
 		for i := 0; i < rows; i++ {
-			visit(grantedIDs[i])
+			if visitErr = visit(grantedIDs[i]); visitErr != nil {
+				return false
+			}
 		}
 		return true
 	})
+	return visitErr
+}
+
+func checkCurrentRoleClosureCanceled(proc *process.Process) error {
+	if proc == nil || proc.Ctx == nil {
+		return nil
+	}
+	return proc.Ctx.Err()
 }
 
 func expandCurrentRoleFrontierWithRunner(
 	proc *process.Process,
 	frontier []int64,
-	visit func(int64),
+	visit func(int64) error,
 	run currentRoleSQLRunner,
 ) error {
 	for start := 0; start < len(frontier); start += currentRoleGrantFrontierBatchSize {
+		if err := checkCurrentRoleClosureCanceled(proc); err != nil {
+			return err
+		}
 		end := min(start+currentRoleGrantFrontierBatchSize, len(frontier))
 		result, err := run(proc, buildCurrentRoleGrantQuery(frontier[start:end]))
 		if err != nil {
+			result.Close()
 			return err
 		}
-		visitCurrentRoleGrants(result, visit)
-		result.Close()
+		visitErr := func() error {
+			defer result.Close()
+			return visitCurrentRoleGrants(result, visit)
+		}()
+		if visitErr != nil {
+			return visitErr
+		}
 	}
 	return nil
 }
 
-func expandCurrentRoleFrontier(proc *process.Process, frontier []int64, visit func(int64)) error {
+func expandCurrentRoleFrontier(proc *process.Process, frontier []int64, visit func(int64) error) error {
 	return expandCurrentRoleFrontierWithRunner(proc, frontier, visit, runCurrentRolesSQL)
 }
 
@@ -102,13 +124,25 @@ func currentRoleClosure(
 	visited := map[int64]struct{}{root: {}}
 	frontier := []int64{root}
 	for len(frontier) > 0 {
+		if err := checkCurrentRoleClosureCanceled(proc); err != nil {
+			return nil, err
+		}
 		next := make([]int64, 0)
-		if err := expand(proc, frontier, func(grantedID int64) {
+		if err := expand(proc, frontier, func(grantedID int64) error {
+			if err := checkCurrentRoleClosureCanceled(proc); err != nil {
+				return err
+			}
 			if _, ok := visited[grantedID]; ok {
-				return
+				return nil
+			}
+			if len(visited) >= currentRoleClosureMaxRoles {
+				return moerr.NewInvalidInputNoCtxf(
+					"current role closure exceeds the %d-role query limit",
+					currentRoleClosureMaxRoles)
 			}
 			visited[grantedID] = struct{}{}
 			next = append(next, grantedID)
+			return nil
 		}); err != nil {
 			return nil, err
 		}
