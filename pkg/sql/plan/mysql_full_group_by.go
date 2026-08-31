@@ -15,9 +15,6 @@
 package plan
 
 import (
-	"strings"
-
-	"github.com/matrixorigin/matrixone/pkg/catalog"
 	pbplan "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 )
@@ -87,29 +84,17 @@ func (builder *QueryBuilder) groupByIncludesPrimaryKey(ctx *BindContext, binding
 		return false
 	}
 	tableDef := builder.qry.Nodes[binding.nodeId].TableDef
-	if tableDef == nil || tableDef.Pkey == nil || tableDef.Pkey.PkeyColName == catalog.FakePrimaryKeyColName {
+	primaryKeyPositions, ok := sqlEqualityCompatiblePrimaryKeyColumnPositions(tableDef)
+	if !ok {
 		return false
 	}
-
-	primaryKeyNames := tableDef.Pkey.Names
-	if len(primaryKeyNames) > 0 {
-		for _, name := range primaryKeyNames {
-			colPos := binding.FindColumn(strings.ToLower(name))
-			if colPos == NotFound || colPos == AmbiguousName || !groupByContainsColumn(ctx, binding.tag, colPos) {
-				return false
-			}
+	for _, colPos := range primaryKeyPositions {
+		if colPos < 0 || int(colPos) >= len(binding.cols) ||
+			!groupByContainsColumn(ctx, binding.tag, colPos) {
+			return false
 		}
-		return len(primaryKeyNames) > 0
 	}
-
-	// Names is the planner's current source of the user-visible components of a
-	// composite primary key. PkeyColName is sufficient only for a single key;
-	// a composite key without Names cannot be proven safe from its hidden column.
-	if tableDef.Pkey.PkeyColName != "" && tableDef.Pkey.PkeyColName != catalog.CPrimaryKeyColName {
-		colPos := binding.FindColumn(strings.ToLower(tableDef.Pkey.PkeyColName))
-		return colPos != NotFound && colPos != AmbiguousName && groupByContainsColumn(ctx, binding.tag, colPos)
-	}
-	return false
+	return true
 }
 
 func filterListHasSingleValueEqualityOnCol(filters []*Expr, tag, columnPos int32) bool {
