@@ -73,7 +73,7 @@ func TestTemporaryTableSkipsPersistentOwnershipChanges(t *testing.T) {
 		context.Background(), nil, &tree.CreateTable{Temporary: true},
 	))
 	require.NoError(t, doRevokePrivilegeImplicitly(
-		context.Background(), nil, &tree.DropTable{}, nil,
+		context.Background(), nil, &tree.DropTable{}, nil, "",
 	))
 }
 
@@ -667,6 +667,28 @@ func Test_initFunction(t *testing.T) {
 			"select dat_id from mo_catalog.mo_database where datname = 'db' and account_id = 0 for update;")
 		convey.So(executed, convey.ShouldContain, "rollback;")
 	})
+}
+
+func TestHandleGrantPrivilegeForcesPessimisticRC(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	bh := &backgroundExecTest{}
+	bh.init()
+	oldNewBackgroundExec := NewBackgroundExec
+	defer func() { NewBackgroundExec = oldNewBackgroundExec }()
+	forcedPessimisticRC := false
+	NewBackgroundExec = func(_ context.Context, _ FeSession, opts ...*BackgroundExecOption) BackgroundExec {
+		forcedPessimisticRC = len(opts) == 1 && opts[0] != nil && opts[0].forcePessimisticRC
+		return bh
+	}
+	ses := newSes(nil, ctrl)
+	stmt := &tree.GrantPrivilege{
+		ObjType: tree.OBJECT_TYPE_ACCOUNT,
+		Level:   &tree.PrivilegeLevel{Level: tree.PRIVILEGE_LEVEL_TYPE_STAR},
+	}
+
+	require.NoError(t, handleGrantPrivilege(ses, &ExecCtx{reqCtx: context.Background()}, stmt))
+	require.True(t, forcedPessimisticRC)
+	require.Equal(t, []string{"begin;", "commit;"}, bh.executedSQLs)
 }
 
 func Test_initUser(t *testing.T) {
@@ -8608,6 +8630,15 @@ func Test_doRevokeRole(t *testing.T) {
 }
 
 func Test_doGrantPrivilege(t *testing.T) {
+	registerLockedSQL := func(bh *backgroundExecTest, sql string, result ExecResult) {
+		bh.sql2result[strings.TrimSuffix(sql, ";")+" for share;"] = result
+	}
+	registerLockedDatabase := func(ctx context.Context, bh *backgroundExecTest, dbName string, result ExecResult) {
+		sql, err := getSqlForCheckDatabaseByAccount(ctx, dbName)
+		require.NoError(t, err)
+		registerLockedSQL(bh, sql, result)
+	}
+
 	convey.Convey("grant account, role succ", t, func() {
 		ctrl := gomock.NewController(t)
 		defer ctrl.Finish()
@@ -8748,12 +8779,14 @@ func Test_doGrantPrivilege(t *testing.T) {
 					{0},
 				})
 				bh.sql2result[sql] = mrs
+				registerLockedDatabase(ses.GetTxnHandler().GetTxnCtx(), bh, stmt.Level.DbName, mrs)
 			} else if stmt.Level.Level == tree.PRIVILEGE_LEVEL_TYPE_TABLE {
 				sql, _ := getSqlForCheckDatabase(context.TODO(), stmt.Level.TabName)
 				mrs := newMrsForCheckDatabase([][]interface{}{
 					{0},
 				})
 				bh.sql2result[sql] = mrs
+				registerLockedDatabase(ses.GetTxnHandler().GetTxnCtx(), bh, stmt.Level.TabName, mrs)
 			}
 
 			_, objId, err := checkPrivilegeObjectTypeAndPrivilegeLevel(context.TODO(), ses, bh, stmt.ObjType, *stmt.Level)
@@ -8883,20 +8916,25 @@ func Test_doGrantPrivilege(t *testing.T) {
 					{0},
 				})
 				bh.sql2result[sql] = mrs
+				registerLockedDatabase(ses.GetTxnHandler().GetTxnCtx(), bh, dbName, mrs)
 			} else if stmt.Level.Level == tree.PRIVILEGE_LEVEL_TYPE_TABLE ||
 				stmt.Level.Level == tree.PRIVILEGE_LEVEL_TYPE_DATABASE_TABLE {
+				registerLockedDatabase(ses.GetTxnHandler().GetTxnCtx(), bh, dbName,
+					newMrsForCheckDatabase([][]interface{}{{1}}))
 				if stmt.ObjType == tree.OBJECT_TYPE_VIEW {
 					sql, _ := getSqlForCheckDatabaseView(ctx, dbName, tableName)
 					mrs := newMrsForCheckDatabaseTable([][]interface{}{
 						{0},
 					})
 					bh.sql2result[sql] = mrs
+					registerLockedSQL(bh, sql, mrs)
 				} else {
 					sql, _ := getSqlForCheckDatabaseTable(ctx, dbName, tableName)
 					mrs := newMrsForCheckDatabaseTable([][]interface{}{
 						{0},
 					})
 					bh.sql2result[sql] = mrs
+					registerLockedSQL(bh, sql, mrs)
 				}
 			}
 
@@ -9027,20 +9065,25 @@ func Test_doGrantPrivilege(t *testing.T) {
 					{0},
 				})
 				bh.sql2result[sql] = mrs
+				registerLockedDatabase(ses.GetTxnHandler().GetTxnCtx(), bh, dbName, mrs)
 			} else if stmt.Level.Level == tree.PRIVILEGE_LEVEL_TYPE_TABLE ||
 				stmt.Level.Level == tree.PRIVILEGE_LEVEL_TYPE_DATABASE_TABLE {
+				registerLockedDatabase(ses.GetTxnHandler().GetTxnCtx(), bh, dbName,
+					newMrsForCheckDatabase([][]interface{}{{1}}))
 				if stmt.ObjType == tree.OBJECT_TYPE_VIEW {
 					sql, _ := getSqlForCheckDatabaseView(ctx, dbName, tableName)
 					mrs := newMrsForCheckDatabaseTable([][]interface{}{
 						{0},
 					})
 					bh.sql2result[sql] = mrs
+					registerLockedSQL(bh, sql, mrs)
 				} else {
 					sql, _ := getSqlForCheckDatabaseTable(ctx, dbName, tableName)
 					mrs := newMrsForCheckDatabaseTable([][]interface{}{
 						{0},
 					})
 					bh.sql2result[sql] = mrs
+					registerLockedSQL(bh, sql, mrs)
 				}
 			}
 
@@ -9059,6 +9102,140 @@ func Test_doGrantPrivilege(t *testing.T) {
 
 			err = doGrantPrivilege(ses.GetTxnHandler().GetTxnCtx(), ses, stmt, bh)
 			convey.So(err, convey.ShouldBeNil)
+		}
+	})
+}
+
+func TestGrantPrivilegeLocksObjectLifecycle(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	ses := newSes(nil, ctrl)
+	ses.SetDatabaseName("d")
+	ctx := context.WithValue(context.Background(), defines.TenantIDKey{}, uint32(sysAccountID))
+
+	lockedDatabaseSQL := func(dbName string) string {
+		sql, err := getSqlForCheckDatabaseByAccount(ctx, dbName)
+		require.NoError(t, err)
+		return strings.TrimSuffix(sql, ";") + " for share;"
+	}
+	lockedTableSQL := func(tableName string) string {
+		sql, err := getSqlForCheckDatabaseTable(ctx, "d", tableName)
+		require.NoError(t, err)
+		return strings.TrimSuffix(sql, ";") + " for share;"
+	}
+	lockedViewSQL := func(viewName string) string {
+		sql, err := getSqlForCheckDatabaseView(ctx, "d", viewName)
+		require.NoError(t, err)
+		return strings.TrimSuffix(sql, ";") + " for share;"
+	}
+
+	testCases := []struct {
+		name         string
+		objectType   tree.ObjectType
+		level        tree.PrivilegeLevel
+		objectID     int64
+		expectedSQLs []string
+	}{
+		{
+			name:       "global scope needs no object lock",
+			objectType: tree.OBJECT_TYPE_TABLE,
+			level:      tree.PrivilegeLevel{Level: tree.PRIVILEGE_LEVEL_TYPE_STAR_STAR},
+			objectID:   objectIDAll,
+		},
+		{
+			name:         "database scope locks database",
+			objectType:   tree.OBJECT_TYPE_DATABASE,
+			level:        tree.PrivilegeLevel{Level: tree.PRIVILEGE_LEVEL_TYPE_DATABASE, DbName: "d"},
+			objectID:     11,
+			expectedSQLs: []string{lockedDatabaseSQL("d")},
+		},
+		{
+			name:         "database wildcard locks database",
+			objectType:   tree.OBJECT_TYPE_TABLE,
+			level:        tree.PrivilegeLevel{Level: tree.PRIVILEGE_LEVEL_TYPE_DATABASE_STAR, DbName: "d"},
+			objectID:     11,
+			expectedSQLs: []string{lockedDatabaseSQL("d")},
+		},
+		{
+			name:       "exact table locks database before relation",
+			objectType: tree.OBJECT_TYPE_TABLE,
+			level: tree.PrivilegeLevel{
+				Level: tree.PRIVILEGE_LEVEL_TYPE_DATABASE_TABLE, DbName: "d", TabName: "t",
+			},
+			objectID:     42,
+			expectedSQLs: []string{lockedDatabaseSQL("d"), lockedTableSQL("t")},
+		},
+		{
+			name:       "exact view locks database before relation",
+			objectType: tree.OBJECT_TYPE_VIEW,
+			level: tree.PrivilegeLevel{
+				Level: tree.PRIVILEGE_LEVEL_TYPE_DATABASE_TABLE, DbName: "d", TabName: "v",
+			},
+			objectID:     43,
+			expectedSQLs: []string{lockedDatabaseSQL("d"), lockedViewSQL("v")},
+		},
+	}
+
+	for _, testCase := range testCases {
+		t.Run(testCase.name, func(t *testing.T) {
+			bh := &backgroundExecTest{}
+			bh.init()
+			for _, sql := range testCase.expectedSQLs {
+				objectID := testCase.objectID
+				if sql == lockedDatabaseSQL("d") && len(testCase.expectedSQLs) > 1 {
+					objectID = 11
+				}
+				bh.sql2result[sql] = newMrsForCheckDatabase([][]interface{}{{objectID}})
+			}
+
+			_, objectID, err := checkPrivilegeObjectTypeAndPrivilegeLevelForGrant(
+				ctx, ses, bh, testCase.objectType, testCase.level)
+			require.NoError(t, err)
+			require.Equal(t, testCase.objectID, objectID)
+			require.Equal(t, testCase.expectedSQLs, bh.executedSQLs)
+		})
+	}
+
+	t.Run("hidden index relation cannot become an authorization object", func(t *testing.T) {
+		bh := &backgroundExecTest{}
+		bh.init()
+		_, _, err := checkPrivilegeObjectTypeAndPrivilegeLevelForGrant(
+			ctx,
+			ses,
+			bh,
+			tree.OBJECT_TYPE_TABLE,
+			tree.PrivilegeLevel{
+				Level:   tree.PRIVILEGE_LEVEL_TYPE_DATABASE_TABLE,
+				DbName:  "d",
+				TabName: catalog.IndexTableNamePrefix + "legacy",
+			},
+		)
+		require.ErrorContains(t, err, "cannot grant privileges on internal relation")
+		require.Empty(t, bh.executedSQLs)
+	})
+
+	t.Run("lock failure prevents privilege mutation", func(t *testing.T) {
+		bh := &backgroundExecTest{}
+		bh.init()
+		roleSQL, err := getSqlForRoleIdOfRole(ctx, "r1")
+		require.NoError(t, err)
+		bh.sql2result[roleSQL] = newMrsForRoleIdOfRole([][]interface{}{{int64(7)}})
+		lockErr := errors.New("database lifecycle lock failed")
+		bh.sql2err[lockedDatabaseSQL("d")] = lockErr
+		stmt := &tree.GrantPrivilege{
+			Privileges: []*tree.Privilege{{Type: tree.PRIVILEGE_TYPE_STATIC_SELECT}},
+			ObjType:    tree.OBJECT_TYPE_TABLE,
+			Level: &tree.PrivilegeLevel{
+				Level: tree.PRIVILEGE_LEVEL_TYPE_DATABASE_TABLE, DbName: "d", TabName: "t",
+			},
+			Roles: []*tree.Role{{UserName: "r1"}},
+		}
+
+		err = doGrantPrivilege(ctx, ses, stmt, bh)
+		require.ErrorIs(t, err, lockErr)
+		require.NotContains(t, bh.executedSQLs, lockedTableSQL("t"))
+		for _, sql := range bh.executedSQLs {
+			require.NotContains(t, sql, "insert into mo_catalog.mo_role_privs")
+			require.NotContains(t, sql, "update mo_catalog.mo_role_privs")
 		}
 	})
 }

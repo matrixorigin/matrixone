@@ -658,19 +658,59 @@ func TestGetBackExecutorClosesWhenBeginFails(t *testing.T) {
 	t.Cleanup(ses.Close)
 
 	txnOp := mock_frontend.NewMockTxnOperator(ctrl)
-	txnOp.EXPECT().TxnOptions().Return(txn.TxnOptions{})
+	txnOp.EXPECT().TxnOptions().Return(txn.TxnOptions{}).Times(2)
 	ses.proc.Base.TxnOperator = txnOp
 
 	beginErr := errors.New("begin failed")
 	backExec := &failingBeginBackgroundExec{err: beginErr}
-	stub := gostub.StubFunc(&NewBackgroundExec, backExec)
-	t.Cleanup(stub.Reset)
+	oldNewBackgroundExec := NewBackgroundExec
+	t.Cleanup(func() { NewBackgroundExec = oldNewBackgroundExec })
+	forcedPessimisticRC := false
+	NewBackgroundExec = func(_ context.Context, _ FeSession, opts ...*BackgroundExecOption) BackgroundExec {
+		for _, opt := range opts {
+			forcedPessimisticRC = forcedPessimisticRC || opt != nil && opt.forcePessimisticRC
+		}
+		return backExec
+	}
 
 	returned, cleanup, err := getBackExecutor(context.Background(), ses)
 	require.ErrorIs(t, err, beginErr)
 	require.Nil(t, returned)
 	require.Nil(t, cleanup)
+	require.False(t, forcedPessimisticRC)
 	require.Equal(t, 1, backExec.closeCalls)
+
+	returned, cleanup, err = getBackExecutor(
+		context.Background(), ses, &BackgroundExecOption{forcePessimisticRC: true},
+	)
+	require.ErrorIs(t, err, beginErr)
+	require.Nil(t, returned)
+	require.Nil(t, cleanup)
+	require.True(t, forcedPessimisticRC)
+	require.Equal(t, 2, backExec.closeCalls)
+}
+
+func TestGetBackExecutorWithTxnHandlerUsesTxnHandlerBeginState(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	ses := newTestSession(t, ctrl)
+	t.Cleanup(ses.Close)
+
+	staleTxn := mock_frontend.NewMockTxnOperator(ctrl)
+	sharedTxn := mock_frontend.NewMockTxnOperator(ctrl)
+	sharedTxn.EXPECT().SetFootPrints(gomock.Any(), gomock.Any()).AnyTimes()
+	ses.proc.Base.TxnOperator = staleTxn
+	ses.GetTxnHandler().txnOp = sharedTxn
+	ses.GetTxnHandler().SetOptionBits(OPTION_BEGIN)
+
+	bh, cleanup, err := getBackExecutorWithTxnHandler(context.Background(), ses)
+	require.NoError(t, err)
+	require.NotNil(t, bh)
+	require.NotNil(t, cleanup)
+	back := bh.(*backExec)
+	require.Same(t, sharedTxn, back.backSes.GetTxnHandler().GetTxn())
+	require.True(t, back.backSes.GetTxnHandler().IsShareTxn())
+	require.Same(t, staleTxn, ses.proc.GetTxnOperator())
+	require.NoError(t, cleanup(nil))
 }
 
 func TestHandleCloneDatabaseWithSourceIfNotExistsSkipsExistingTarget(t *testing.T) {

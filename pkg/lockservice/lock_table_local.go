@@ -1209,6 +1209,7 @@ func (l *localLockTable) handleLockConflictLocked(
 	// Set waiter to blocking before adding to events.mu.blockedWaiters so
 	// waiter_events.check() won't remove it (check removes only non-blocking).
 	c.txn.setBlocked(c.w, l.logger)
+	notifyWaiterEnqueuedForTest(l.bind.Table, c.w.txn.TxnID, c.w.waitFor)
 	l.addOwnerLocalWaitEdgeLocked(c, conflictWith)
 	l.events.add(c)
 

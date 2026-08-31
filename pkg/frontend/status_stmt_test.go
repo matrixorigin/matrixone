@@ -35,17 +35,23 @@ func TestCapturePersistentDropTableTargets(t *testing.T) {
 
 	t.Run("ordinary drop resolves shadowed target as temporary", func(t *testing.T) {
 		st := &tree.DropTable{Names: tree.TableNames{shadowed}}
-		require.Empty(t, capturePersistentDropTableTargets(ses, st))
+		require.Empty(t, capturePersistentDropTableTargets(ses, st, ""))
 	})
 
 	t.Run("explicit temporary drop has no persistent targets", func(t *testing.T) {
 		st := &tree.DropTable{Temporary: true, Names: tree.TableNames{shadowed}}
-		require.Empty(t, capturePersistentDropTableTargets(ses, st))
+		require.Empty(t, capturePersistentDropTableTargets(ses, st, ""))
+	})
+
+	t.Run("prepared default database overrides execute-time temporary alias", func(t *testing.T) {
+		unqualified := tree.NewTableName(tree.Identifier("shadowed"), tree.ObjectNamePrefix{}, nil)
+		st := &tree.DropTable{Names: tree.TableNames{unqualified}}
+		require.Equal(t, tree.TableNames{unqualified}, capturePersistentDropTableTargets(ses, st, "db2"))
 	})
 
 	t.Run("mixed drop keeps only permanent targets", func(t *testing.T) {
 		st := &tree.DropTable{Names: tree.TableNames{shadowed, persistent}}
-		targets := capturePersistentDropTableTargets(ses, st)
+		targets := capturePersistentDropTableTargets(ses, st, "")
 		require.Equal(t, tree.TableNames{persistent}, targets)
 
 		// The classification is captured before execution and remains valid after
@@ -57,10 +63,12 @@ func TestCapturePersistentDropTableTargets(t *testing.T) {
 
 func TestExecCtxCloseClearsPersistentDropTableTargets(t *testing.T) {
 	execCtx := &ExecCtx{
+		effectiveTxnDefaultDatabase: "prepare_db",
 		persistentDropTableTargets: tree.TableNames{
 			tree.NewTableName(tree.Identifier("t"), tree.ObjectNamePrefix{}, nil),
 		},
 	}
 	execCtx.Close()
+	require.Empty(t, execCtx.effectiveTxnDefaultDatabase)
 	require.Nil(t, execCtx.persistentDropTableTargets)
 }

@@ -534,7 +534,10 @@ func dataBranchCreateTable(
 	)
 
 	if bh, deferred, err = getDataBranchMutationExecutor(
-		execCtx.reqCtx, ses, true, &BackgroundExecOption{forcePessimisticRC: true},
+		execCtx.reqCtx, ses, true, &BackgroundExecOption{
+			forcePessimisticRC:             true,
+			cloneSnapshotUsesBackgroundTxn: true,
+		},
 	); err != nil {
 		return
 	}
@@ -612,7 +615,10 @@ func dataBranchCreateDatabase(
 	)
 	stats.Reset()
 	if bh, deferred, err = getDataBranchMutationExecutor(
-		execCtx.reqCtx, ses, true, &BackgroundExecOption{forcePessimisticRC: true},
+		execCtx.reqCtx, ses, true, &BackgroundExecOption{
+			forcePessimisticRC:             true,
+			cloneSnapshotUsesBackgroundTxn: true,
+		},
 	); err != nil {
 		return
 	}
@@ -753,7 +759,9 @@ func dataBranchDeleteTable(
 		deferred func(error) error
 	)
 
-	if bh, deferred, err = getDataBranchMutationExecutor(execCtx.reqCtx, ses, false); err != nil {
+	if bh, deferred, err = getDataBranchMutationExecutor(
+		execCtx.reqCtx, ses, false, &BackgroundExecOption{forcePessimisticRC: true},
+	); err != nil {
 		return
 	}
 
@@ -818,7 +826,9 @@ func dataBranchDeleteDatabase(
 		deferred func(error) error
 	)
 
-	if bh, deferred, err = getDataBranchMutationExecutor(execCtx.reqCtx, ses, false); err != nil {
+	if bh, deferred, err = getDataBranchMutationExecutor(
+		execCtx.reqCtx, ses, false, &BackgroundExecOption{forcePessimisticRC: true},
+	); err != nil {
 		return
 	}
 

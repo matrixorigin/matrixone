@@ -75,6 +75,70 @@ func TestTime_StringAndString2(t *testing.T) {
 	}
 }
 
+func TestMySQLTimeRange(t *testing.T) {
+	columnMax := TimeFromClock(false, 838, 59, 59, 0)
+	functionMax := TimeFromClock(false, 838, 59, 59, 999999)
+	require.Equal(t, columnMax, MySQLTimeMax)
+	require.Equal(t, functionMax, MySQLTimeFunctionMax)
+	require.True(t, IsMySQLTime(columnMax))
+	require.True(t, IsMySQLTime(-columnMax))
+	require.False(t, IsMySQLTime(columnMax+1))
+	require.False(t, IsMySQLTime(-columnMax-1))
+	require.Equal(t, columnMax, ClampMySQLTime(functionMax))
+	require.Equal(t, -columnMax, ClampMySQLTime(-functionMax))
+	require.Equal(t, columnMax, MySQLTimeMaxForScale(0))
+	require.Equal(t, columnMax, MySQLTimeMaxForScale(3))
+	require.Equal(t, columnMax, MySQLTimeMaxForScale(6))
+	require.Equal(t, columnMax, ClampMySQLTimeForScale(functionMax, 6))
+
+	require.True(t, IsMySQLTimeFunctionResult(functionMax))
+	require.True(t, IsMySQLTimeFunctionResult(-functionMax))
+	require.False(t, IsMySQLTimeFunctionResult(functionMax+1))
+	require.False(t, IsMySQLTimeFunctionResult(-functionMax-1))
+	require.Equal(t, functionMax, ClampMySQLTimeFunctionForScale(functionMax+1, 6))
+	require.Equal(t, -functionMax, ClampMySQLTimeFunctionForScale(-functionMax-1, 6))
+	require.Equal(t, columnMax, MySQLTimeFunctionMaxForScale(0))
+	require.Equal(t, TimeFromClock(false, 838, 59, 59, 900000), MySQLTimeFunctionMaxForScale(1))
+	require.Equal(t, TimeFromClock(false, 838, 59, 59, 999000), MySQLTimeFunctionMaxForScale(3))
+	require.Equal(t, functionMax, MySQLTimeFunctionMaxForScale(6))
+}
+
+func TestIsTimeStringOutOfInternalRange(t *testing.T) {
+	for _, test := range []struct {
+		value    string
+		negative bool
+		outside  bool
+	}{
+		{value: "2562047788:00:00", outside: true},
+		{value: "-2562047788:00:00.000001", negative: true, outside: true},
+		{value: "25620477880000", outside: true},
+		{value: "-25620477880000.000001", negative: true, outside: true},
+		{value: "2562047787:59:59", outside: false},
+		{value: "25620477875959", outside: false},
+		{value: "2562047788:60:00", outside: false},
+		{value: "25620477886000", outside: false},
+		{value: "not-a-time", outside: false},
+	} {
+		t.Run(test.value, func(t *testing.T) {
+			negative, outside := IsTimeStringOutOfInternalRange(test.value, 6)
+			require.Equal(t, test.negative, negative)
+			require.Equal(t, test.outside, outside)
+		})
+	}
+
+	// A target TIME(0) rounds this otherwise internal endpoint into the next
+	// hour, so range classification must use the destination scale as well.
+	negative, outside := IsTimeStringOutOfInternalRange("25620477875959.999999", 0)
+	require.False(t, negative)
+	require.True(t, outside)
+}
+
+func TestParseTimePreservesInvalidInputError(t *testing.T) {
+	_, err := ParseTime("2562047788:00:00", 6)
+	require.Error(t, err)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidInput), err)
+}
+
 func TestTime_ParseTimeFromString(t *testing.T) {
 	testCases := []struct {
 		name     string
