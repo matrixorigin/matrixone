@@ -2674,7 +2674,10 @@ func (tbl *txnTable) PKPersistedBetween(
 
 	// Only check data objects. A matching object/block can still be an older
 	// version, so later row-level commit-ts checks narrow the final answer.
-	delObjs, cObjs = p.GetChangedObjsBetween(from.Next(), types.MaxTs())
+	// GetChangedObjsBetween already selects (from, end]. Advancing from here
+	// would skip an object transition committed at the valid HLC timestamp
+	// from.Next(), weakening the PK-conflict check at that exact boundary.
+	delObjs, cObjs = p.GetChangedObjsBetween(from, types.MaxTs())
 
 	if pkCheckBailoutOnChangedObjects(len(cObjs)) {
 		reason = "changed_objects_bailout"
