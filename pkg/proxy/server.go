@@ -16,6 +16,7 @@ package proxy
 
 import (
 	"context"
+	"errors"
 	"net"
 	"sync"
 	"sync/atomic"
@@ -287,8 +288,28 @@ func runBootstrapTask(ctx context.Context, st *stopper.Stopper, h *handler) erro
 
 // Start starts the proxy server.
 func (s *Server) Start() error {
-	if err := s.waitForViewMetadataAdmission(s.viewMetadataAdmissionContext); err != nil {
-		return err
+	admissionCtx := s.viewMetadataAdmissionContext
+	if admissionCtx == nil {
+		admissionCtx = context.Background()
+	}
+	admissionTimeoutReported := false
+	for {
+		err := s.waitForViewMetadataAdmission(admissionCtx)
+		if err == nil {
+			break
+		}
+		if admissionCtx.Err() != nil {
+			return context.Cause(admissionCtx)
+		}
+		if !errors.Is(err, context.DeadlineExceeded) {
+			return err
+		}
+		if !admissionTimeoutReported {
+			s.runtime.Logger().Warn("proxy view metadata admission did not converge before startup deadline; continuing to wait",
+				zap.Uint64("generation", s.viewMetadataAdmissionGeneration),
+				zap.Duration("deadline", s.viewMetadataAdmissionTimeout()))
+			admissionTimeoutReported = true
+		}
 	}
 	s.lifecycleMu.Lock()
 	defer s.lifecycleMu.Unlock()
