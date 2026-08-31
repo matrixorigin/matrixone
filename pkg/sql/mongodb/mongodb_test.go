@@ -256,6 +256,21 @@ func TestPredicateOperatorsValidationAndProjectionParents(t *testing.T) {
 	require.Equal(t, bson.D{{Key: "payload", Value: 1}, {Key: "_id.hex", Value: 1}}, projection)
 }
 
+func TestPredicatePlanRejectsNilAndChild(t *testing.T) {
+	input := &planpb.MongoPredicate{
+		Op:       planpb.MongoPredicateOp_MONGO_PREDICATE_AND,
+		Children: []*planpb.MongoPredicate{nil},
+	}
+	_, err := PredicateFromPlan(t.Context(), input)
+	require.ErrorContains(t, err, "non-nil children")
+
+	_, err = PredicateToPlan(t.Context(), &Predicate{
+		Op:       PredicateAnd,
+		Children: []*Predicate{nil},
+	})
+	require.ErrorContains(t, err, "non-nil children")
+}
+
 func TestParseTableMappingSpecRejectsInvalidOptionsAndColumnContracts(t *testing.T) {
 	ctx := t.Context()
 	validOptions := func(extra ...*tree.MongoDBOption) *tree.MongoDBTableParam {

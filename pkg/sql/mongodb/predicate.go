@@ -58,6 +58,9 @@ func (p *Predicate) Validate(ctx context.Context) error {
 			return moerr.NewInvalidInput(ctx, "MongoDB AND predicate requires children")
 		}
 		for _, child := range p.Children {
+			if child == nil {
+				return moerr.NewInvalidInput(ctx, "MongoDB AND predicate requires non-nil children")
+			}
 			if err := child.Validate(ctx); err != nil {
 				return err
 			}
