@@ -53,7 +53,9 @@ func RunFulltext2(c *IndexConsumer, ctx context.Context, errch chan error, r Dat
 	}
 
 	// Parser-aware tokenize (ngram/gojieba/json) so build and query tokens match.
-	tokenize, err := fulltext2.CdcTokenizer(w.cfg.Parser)
+	// The json term shape travels with the config so this path and the CREATE
+	// build agree on the terms they emit.
+	tokenize, err := fulltext2.CdcTokenizerWithJSONOptions(w.cfg.Parser, w.cfg.JSONTermOptions())
 	if err != nil {
 		errch <- err
 		return

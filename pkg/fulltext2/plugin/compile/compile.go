@@ -47,6 +47,22 @@ func parserFromParams(params string) string {
 	return p.Parser
 }
 
+// jsonTermShapeFromParams reads the json word breaker's persisted option. The
+// ISCP writer reads the SAME param, so the CREATE build and the incremental
+// build emit identical terms; absent means the default (keys on).
+func jsonTermShapeFromParams(params string) (noKeys bool) {
+	if len(params) == 0 {
+		return false
+	}
+	var p struct {
+		IncludeKeys string `json:"include_keys"`
+	}
+	if err := json.Unmarshal([]byte(params), &p); err != nil {
+		return false
+	}
+	return p.IncludeKeys == "false"
+}
+
 var _ compileplugin.Hooks = Hooks{}
 
 type Hooks struct{}
@@ -246,6 +262,7 @@ func genFulltext2BuildFromSourceSQL(origTable *plan.TableDef, storeDef, metaDef 
 	if err != nil {
 		return "", err
 	}
+	jsonNoKeys := jsonTermShapeFromParams(storeDef.IndexAlgoParams)
 	cfg := fulltext2.TableConfig{
 		DbName:          db,
 		SrcTable:        origTable.Name,
@@ -256,6 +273,7 @@ func genFulltext2BuildFromSourceSQL(origTable *plan.TableDef, storeDef, metaDef 
 		Capacity:        capacity,
 		PostingCapacity: postingCap,
 		PositionFree:    positionFree,
+		JSONNoKeys:      jsonNoKeys,
 		FromSource:      true,
 	}
 	cols := make([]string, 0, len(storeDef.Parts))
