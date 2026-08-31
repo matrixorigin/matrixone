@@ -1962,7 +1962,6 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 			lastNodeID, selectTag, selectNode = builder.appendInsertLockKeyProjection(
 				bindCtx,
 				lastNodeID,
-				selectTag,
 			)
 			if err = builder.materializeInsertUniqueLockKeys(tableDef, skipUniqueIdx, colName2Idx, selectNode); err != nil {
 				return 0, err
@@ -3141,9 +3140,8 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 func (builder *QueryBuilder) appendInsertLockKeyProjection(
 	bindCtx *BindContext,
 	lastNodeID int32,
-	selectTag int32,
 ) (int32, int32, *plan.Node) {
-	selectTag = builder.genNewBindTag()
+	selectTag := builder.genNewBindTag()
 	lastNodeID = builder.appendNode(&plan.Node{
 		NodeType:    plan.Node_PROJECT,
 		Children:    []int32{lastNodeID},

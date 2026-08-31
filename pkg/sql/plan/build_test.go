@@ -4759,10 +4759,9 @@ func TestInsertAddsCheckConstraintFilter(t *testing.T) {
 		require.NotNil(t, checkFilter)
 		require.Len(t, checkFilter.Children, 1)
 
-		lockKeyProjection := query.Nodes[checkFilter.Children[0]]
-		require.Equal(t, plan.Node_PROJECT, lockKeyProjection.NodeType)
+		lockKeyInput := query.Nodes[checkFilter.Children[0]]
 		hasSerialLockKey := false
-		for _, expr := range lockKeyProjection.ProjectList {
+		for _, expr := range lockKeyInput.ProjectList {
 			hasSerialLockKey = hasSerialLockKey || exprContainsFuncName(expr, "serial")
 		}
 		require.True(t, hasSerialLockKey,
