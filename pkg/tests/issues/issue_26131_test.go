@@ -275,6 +275,33 @@ func TestIssue26131Q15SharedCTEExecutesBothConsumers(t *testing.T) {
 		require.NoError(t, consumerJoinRows.Err())
 		require.ElementsMatch(t, []domainResult{{sum: 10, length: 1}, {sum: 20, length: 2}},
 			consumerJoinResults)
+
+		const consumerTopNDomainQuery = `with c as (
+			select region, k, cast(max(raw) as bigint) as risky, max(payload) as payload
+			from cte_join_fact group by region, k
+		)
+		select sum(risky), max(length(payload)) from (
+			select risky, payload from c where region = 1 order by k limit 1
+		) a
+		union all
+		select sum(risky), max(length(payload)) from (
+			select risky, payload from c where region = 2 order by k limit 1
+		) b`
+		consumerTopNPlan := explainSQL(t, ctx, db, "explain "+consumerTopNDomainQuery)
+		require.NotContains(t, consumerTopNPlan, "Sink Scan",
+			"consumer Top-N must keep a fallible CTE output inline")
+		consumerTopNRows, err := db.QueryContext(ctx, consumerTopNDomainQuery)
+		require.NoError(t, err)
+		defer consumerTopNRows.Close()
+		var consumerTopNResults []domainResult
+		for consumerTopNRows.Next() {
+			var result domainResult
+			require.NoError(t, consumerTopNRows.Scan(&result.sum, &result.length))
+			consumerTopNResults = append(consumerTopNResults, result)
+		}
+		require.NoError(t, consumerTopNRows.Err())
+		require.ElementsMatch(t, []domainResult{{sum: 10, length: 1}, {sum: 20, length: 2}},
+			consumerTopNResults)
 	})
 }
 
