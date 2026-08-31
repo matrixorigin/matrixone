@@ -541,6 +541,20 @@ func TestRemoteRunOperatorCodecRoundTrip(t *testing.T) {
 		require.True(t, restored.(*group.Group).DynamicGrouping)
 	})
 
+	t.Run("GroupingSetProjectionMetadata", func(t *testing.T) {
+		original := projection.NewArgument()
+		original.ProjectList = []*planpb.Expr{plan.MakePlan2Int64ConstExprWithType(1)}
+		original.GroupingFlags = []bool{true, true, true, false, false, false}
+		original.GroupingSetCount = 3
+		restored := roundTrip(t, original)
+		defer restored.Release()
+		restoredProjection, ok := restored.(*projection.Projection)
+		require.True(t, ok)
+		require.Equal(t, original.ProjectList, restoredProjection.ProjectList)
+		require.Equal(t, original.GroupingFlags, restoredProjection.GroupingFlags)
+		require.Equal(t, original.GroupingSetCount, restoredProjection.GroupingSetCount)
+	})
+
 	t.Run("MergeGroupByHashKey", func(t *testing.T) {
 		original := group.NewArgumentMergeGroup()
 		original.GroupByHashKey = []int32{1}
