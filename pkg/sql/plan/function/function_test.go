@@ -178,6 +178,21 @@ func TestComparisonTypeCastRulePreservesTextCharset(t *testing.T) {
 	}
 }
 
+func TestComparisonTypeCastRuleNormalizesCharToVarchar(t *testing.T) {
+	leftIn := types.NewWithCharset(types.T_char, 8, 0, types.CharsetLegacy)
+	rightIn := types.NewWithCharset(types.T_char, 4, 0, types.CharsetLegacy)
+
+	hasCast, leftOut, rightOut := comparisonTypeCastRule(leftIn, rightIn)
+
+	require.True(t, hasCast)
+	require.Equal(t, types.T_varchar, leftOut.Oid)
+	require.Equal(t, types.T_varchar, rightOut.Oid)
+	require.Equal(t, leftIn.Width, leftOut.Width)
+	require.Equal(t, rightIn.Width, rightOut.Width)
+	require.Equal(t, types.CharsetLegacy, leftOut.Charset)
+	require.Equal(t, types.CharsetLegacy, rightOut.Charset)
+}
+
 func Test_fixedTypeCastRule2(t *testing.T) {
 	inputs := []struct {
 		shouldCast bool
@@ -475,6 +490,39 @@ func TestMakeTimeReturnScale(t *testing.T) {
 	})
 	require.NoError(t, err)
 	require.Equal(t, types.T_time.ToTypeWithScale(6), defaultFloatResult.retType)
+}
+
+func TestSecToTimeReturnScale(t *testing.T) {
+	proc := testutil.NewProcess(t)
+
+	integerResult, err := GetFunctionByName(proc.Ctx, "sec_to_time", []types.Type{
+		types.T_int64.ToType(),
+	})
+	require.NoError(t, err)
+	require.Equal(t, types.T_time.ToType(), integerResult.retType)
+
+	decimalResult, err := GetFunctionByName(proc.Ctx, "sec_to_time", []types.Type{
+		types.New(types.T_decimal128, 20, 3),
+	})
+	require.NoError(t, err)
+	require.True(t, decimalResult.needCast)
+	require.Equal(t, types.T_varchar, decimalResult.targetTypes[0].Oid)
+	require.Equal(t, int32(3), decimalResult.targetTypes[0].Scale)
+	require.Equal(t, types.T_time.ToTypeWithScale(3), decimalResult.retType)
+
+	stringResult, err := GetFunctionByName(proc.Ctx, "sec_to_time", []types.Type{
+		types.T_varchar.ToType(),
+	})
+	require.NoError(t, err)
+	require.True(t, stringResult.needCast)
+	require.Equal(t, int32(-1), stringResult.targetTypes[0].Scale)
+	require.Equal(t, types.T_time.ToTypeWithScale(6), stringResult.retType)
+
+	floatResult, err := GetFunctionByName(proc.Ctx, "sec_to_time", []types.Type{
+		{Oid: types.T_float64, Size: 8, Scale: -1},
+	})
+	require.NoError(t, err)
+	require.Equal(t, types.T_time.ToTypeWithScale(6), floatResult.retType)
 }
 
 func TestUnixTimestampTemporalReturnScale(t *testing.T) {
@@ -1073,11 +1121,24 @@ func TestGetFunctionIsVolatileOrRealTimeRelatedByName(t *testing.T) {
 
 func TestProducesNoNullUsesFunctionContract(t *testing.T) {
 	require.True(t, ProducesNoNull(EncodeOverloadID(ISNULL, 0)))
+	for _, fid := range []int32{COUNT, STARCOUNT, BIT_AND, BIT_OR, BIT_XOR} {
+		require.True(t, ProducesNoNull(EncodeOverloadID(fid, 0)),
+			"aggregate %d has a non-NULL neutral result", fid)
+		require.True(t, HasExecutableCTASTypeDefault(EncodeOverloadID(fid, 0)),
+			"aggregate %d can use its SQL type default after CTAS", fid)
+	}
+	for _, fid := range []int32{HLL_ADD_AGG, HLL_MERGE_AGG} {
+		require.True(t, ProducesNoNull(EncodeOverloadID(fid, 0)),
+			"aggregate %d always produces an encoded HLL sketch", fid)
+		require.False(t, HasExecutableCTASTypeDefault(EncodeOverloadID(fid, 0)),
+			"aggregate %d cannot use an empty byte string as an HLL sketch", fid)
+	}
 	for _, fid := range []int32{JSON_EXTRACT, JSON_EXTRACT_STRING, JSON_EXTRACT_FLOAT64} {
 		require.False(t, ProducesNoNull(EncodeOverloadID(fid, 0)),
 			"STRICT only describes NULL-input propagation; JSON extractors can still return SQL NULL")
 	}
 	require.False(t, ProducesNoNull(-1))
+	require.False(t, HasExecutableCTASTypeDefault(-1))
 }
 
 func TestDeduceNotNullableKeepsNullSynthesizingFunctionsNullable(t *testing.T) {

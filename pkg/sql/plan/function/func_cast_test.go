@@ -432,6 +432,200 @@ func TestYearAssignmentCastHonorsSQLMode(t *testing.T) {
 	}
 }
 
+func TestTimeAssignmentCastHonorsMySQLRange(t *testing.T) {
+	timeType := types.T_time.ToTypeWithScale(6)
+	max := types.MySQLTimeMax
+
+	run := func(t *testing.T, input FunctionTestInput, sqlMode string, cast fEvalFn, sessions ...*numericWarningSession) (*vector.Vector, error) {
+		t.Helper()
+		proc := testutil.NewProcess(t)
+		if len(sessions) > 0 {
+			proc.Session = sessions[0]
+		}
+		proc.SetResolveVariableFunc(func(name string, _, _ bool) (interface{}, error) {
+			require.Equal(t, "sql_mode", name)
+			return sqlMode, nil
+		})
+		tc := NewFunctionTestCase(proc,
+			[]FunctionTestInput{input, NewFunctionTestInput(timeType, []types.Time{}, nil)},
+			NewFunctionTestResult(timeType, false, nil, nil), cast)
+		require.NoError(t, tc.result.PreExtendAndReset(tc.fnLength))
+		return tc.DebugRun()
+	}
+
+	stringInput := NewFunctionTestInput(types.T_varchar.ToType(),
+		[]string{"838:59:59.000001", "839:00:00", "-838:59:59.000001", "-839:00:00"}, nil)
+
+	t.Run("strict string assignment accepts whole-second endpoints", func(t *testing.T) {
+		input := NewFunctionTestInput(types.T_varchar.ToType(),
+			[]string{"838:59:59.000000", "-838:59:59.000000"}, nil)
+		result, err := run(t, input, "STRICT_TRANS_TABLES", NewAssignCast)
+		require.NoError(t, err)
+		values := vector.MustFixedColWithTypeCheck[types.Time](result)
+		require.Equal(t, []types.Time{max, -max}, values)
+	})
+
+	t.Run("strict string assignment rejects fractional endpoint excess", func(t *testing.T) {
+		for _, input := range []string{"838:59:59.000001", "-838:59:59.000001"} {
+			_, err := run(t, NewFunctionTestInput(types.T_varchar.ToType(), []string{input}, nil), "STRICT_TRANS_TABLES", NewAssignCast)
+			require.Error(t, err)
+			require.True(t, moerr.IsMoErrCode(err, moerr.ErrOutOfRange), err)
+		}
+	})
+
+	t.Run("nonstrict string assignment clamps", func(t *testing.T) {
+		session := &numericWarningSession{}
+		result, err := run(t, stringInput, "", NewAssignCast, session)
+		require.NoError(t, err)
+		values := vector.MustFixedColWithTypeCheck[types.Time](result)
+		require.Equal(t, []types.Time{max, max, -max, -max}, values)
+		require.Len(t, session.warnings, 4)
+		for i, warning := range session.warnings {
+			require.Equal(t, moerr.ER_WARN_DATA_OUT_OF_RANGE, warning.code)
+			require.Contains(t, warning.msg, fmt.Sprintf("row %d", i+1))
+		}
+	})
+
+	t.Run("nonstrict and ignore clamp colon-delimited internal-range overflow", func(t *testing.T) {
+		for _, tc := range []struct {
+			name  string
+			mode  string
+			cast  fEvalFn
+			want  []types.Time
+			input []string
+		}{
+			{"nonstrict", "", NewAssignCast, []types.Time{max, -max}, []string{"2562047788:00:00", "-2562047788:00:00"}},
+			{"ignore", "STRICT_TRANS_TABLES", NewAssignIgnoreCast, []types.Time{max, -max}, []string{"2562047788:00:00", "-2562047788:00:00"}},
+		} {
+			t.Run(tc.name, func(t *testing.T) {
+				session := &numericWarningSession{}
+				result, err := run(t, NewFunctionTestInput(types.T_varchar.ToType(), tc.input, nil), tc.mode, tc.cast, session)
+				require.NoError(t, err)
+				require.Equal(t, tc.want, vector.MustFixedColWithTypeCheck[types.Time](result))
+				require.Len(t, session.warnings, 2)
+				for i, warning := range session.warnings {
+					require.Equal(t, moerr.ER_WARN_DATA_OUT_OF_RANGE, warning.code)
+					require.Contains(t, warning.msg, fmt.Sprintf("row %d", i+1))
+				}
+			})
+		}
+	})
+
+	t.Run("quoted compact internal overflow truncates instead of range-clamping", func(t *testing.T) {
+		compact := NewFunctionTestInput(types.T_varchar.ToType(), []string{"25620477880000", "-25620477880000"}, nil)
+		for _, tc := range []struct {
+			name string
+			mode string
+			cast fEvalFn
+		}{
+			{"nonstrict", "", NewAssignCast},
+			{"ignore", "STRICT_TRANS_TABLES", NewAssignIgnoreCast},
+		} {
+			t.Run(tc.name, func(t *testing.T) {
+				session := &numericWarningSession{}
+				result, err := run(t, compact, tc.mode, tc.cast, session)
+				require.NoError(t, err)
+				require.Equal(t, []types.Time{0, 0}, vector.MustFixedColWithTypeCheck[types.Time](result))
+				require.Len(t, session.warnings, 2)
+				for i, warning := range session.warnings {
+					require.Equal(t, moerr.WARN_DATA_TRUNCATED, warning.code)
+					require.Contains(t, warning.msg, fmt.Sprintf("row %d", i+1))
+				}
+			})
+		}
+		_, err := run(t, compact, "STRICT_TRANS_TABLES", NewAssignCast)
+		require.Error(t, err)
+		require.True(t, moerr.IsMoErrCode(err, moerr.ErrTruncatedWrongValue), err)
+		require.Equal(t, moerr.ER_TRUNCATED_WRONG_VALUE, moerr.DowncastError(err).MySQLCode())
+	})
+
+	t.Run("strict string assignment rejects internal-range overflow", func(t *testing.T) {
+		for _, input := range []string{"2562047788:00:00", "-2562047788:00:00"} {
+			_, err := run(t, NewFunctionTestInput(types.T_varchar.ToType(), []string{input}, nil), "STRICT_TRANS_TABLES", NewAssignCast)
+			require.Error(t, err)
+			require.True(t, moerr.IsMoErrCode(err, moerr.ErrOutOfRange), err)
+		}
+	})
+
+	t.Run("insert ignore string assignment clamps", func(t *testing.T) {
+		session := &numericWarningSession{}
+		result, err := run(t, stringInput, "STRICT_TRANS_TABLES", NewAssignIgnoreCast, session)
+		require.NoError(t, err)
+		values := vector.MustFixedColWithTypeCheck[types.Time](result)
+		require.Equal(t, []types.Time{max, max, -max, -max}, values)
+		require.Len(t, session.warnings, 4)
+		for i, warning := range session.warnings {
+			require.Equal(t, moerr.ER_WARN_DATA_OUT_OF_RANGE, warning.code)
+			require.Contains(t, warning.msg, fmt.Sprintf("row %d", i+1))
+		}
+	})
+
+	for _, input := range []FunctionTestInput{
+		NewFunctionTestInput(types.T_int64.ToType(), []int64{math.MaxInt64}, nil),
+		NewFunctionTestInput(types.T_uint64.ToType(), []uint64{math.MaxUint64}, nil),
+	} {
+		t.Run(input.typ.String()+"/strict assignment rejects out of range integer", func(t *testing.T) {
+			_, err := run(t, input, "STRICT_TRANS_TABLES", NewAssignCast)
+			require.Error(t, err)
+			require.True(t, moerr.IsMoErrCode(err, moerr.ErrOutOfRange), err)
+		})
+
+		t.Run(input.typ.String()+"/nonstrict assignment clamps and warns", func(t *testing.T) {
+			session := &numericWarningSession{}
+			result, err := run(t, input, "", NewAssignCast, session)
+			require.NoError(t, err)
+			require.Equal(t, []types.Time{max}, vector.MustFixedColWithTypeCheck[types.Time](result))
+			require.Equal(t, []numericWarning{{code: moerr.ER_WARN_DATA_OUT_OF_RANGE, msg: "Out of range value for column 'time' at row 1"}}, session.warnings)
+		})
+
+		t.Run(input.typ.String()+"/insert ignore clamps and warns", func(t *testing.T) {
+			session := &numericWarningSession{}
+			result, err := run(t, input, "STRICT_TRANS_TABLES", NewAssignIgnoreCast, session)
+			require.NoError(t, err)
+			require.Equal(t, []types.Time{max}, vector.MustFixedColWithTypeCheck[types.Time](result))
+			require.Equal(t, []numericWarning{{code: moerr.ER_WARN_DATA_OUT_OF_RANGE, msg: "Out of range value for column 'time' at row 1"}}, session.warnings)
+		})
+	}
+
+	timeInput := NewFunctionTestInput(timeType,
+		[]types.Time{types.TimeFromClock(false, 838, 59, 59, 1)}, nil)
+	t.Run("strict time expression assignment rejects extended time", func(t *testing.T) {
+		_, err := run(t, timeInput, "STRICT_TRANS_TABLES", NewAssignCast)
+		require.Error(t, err)
+		require.True(t, moerr.IsMoErrCode(err, moerr.ErrOutOfRange), err)
+	})
+
+	t.Run("ordinary expression cast preserves MatrixOne extended time", func(t *testing.T) {
+		result, err := run(t, stringInput, "STRICT_TRANS_TABLES", NewCast)
+		require.NoError(t, err)
+		values := vector.MustFixedColWithTypeCheck[types.Time](result)
+		require.Equal(t, []types.Time{
+			types.TimeFromClock(false, 838, 59, 59, 1),
+			types.TimeFromClock(false, 839, 0, 0, 0),
+			types.TimeFromClock(true, 838, 59, 59, 1),
+			types.TimeFromClock(true, 839, 0, 0, 0),
+		}, values)
+	})
+
+	t.Run("scale zero rejects values that round over the endpoint", func(t *testing.T) {
+		target := types.T_time.ToType()
+		proc := testutil.NewProcess(t)
+		proc.SetResolveVariableFunc(func(name string, _, _ bool) (interface{}, error) {
+			require.Equal(t, "sql_mode", name)
+			return "STRICT_TRANS_TABLES", nil
+		})
+		input := NewFunctionTestInput(types.T_varchar.ToType(),
+			[]string{"838:59:59.500000"}, nil)
+		tc := NewFunctionTestCase(proc,
+			[]FunctionTestInput{input, NewFunctionTestInput(target, []types.Time{}, nil)},
+			NewFunctionTestResult(target, false, nil, nil), NewAssignCast)
+		require.NoError(t, tc.result.PreExtendAndReset(tc.fnLength))
+		_, err := tc.DebugRun()
+		require.Error(t, err)
+		require.True(t, moerr.IsMoErrCode(err, moerr.ErrOutOfRange), err)
+	})
+}
+
 func TestStringToFixedFloat32PreservesSourcePrecision(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	targetType := types.New(types.T_float32, 5, 2)
@@ -3178,7 +3372,7 @@ func Test_strToStr_TextToCharVarchar(t *testing.T) {
 			err := to.PreExtendAndReset(len(tt.inputs))
 			require.NoError(t, err)
 
-			err = strToStr(ctx, nil, from, to, len(tt.inputs), tt.toType, false, false, false)
+			err = strToStr(ctx, nil, from, to, len(tt.inputs), tt.toType, false, false, false, castModeNormal)
 
 			if tt.wantErr {
 				require.Error(t, err)
@@ -3259,7 +3453,7 @@ func Test_strToStr_StrictStringWidth(t *testing.T) {
 			defer to.Free()
 			require.NoError(t, to.PreExtendAndReset(1))
 
-			err := strToStr(ctx, nil, from, to, 1, tt.toType, tt.strict, false, false)
+			err := strToStr(ctx, nil, from, to, 1, tt.toType, tt.strict, false, false, castModeNormal)
 			if tt.wantErr {
 				require.Error(t, err)
 				require.True(t, moerr.IsMoErrCode(err, moerr.ErrInternal))
@@ -3269,6 +3463,81 @@ func Test_strToStr_StrictStringWidth(t *testing.T) {
 			get, null := vector.GenerateFunctionStrParameter(to.GetResultVector()).GetStrValue(0)
 			require.False(t, null)
 			require.Equal(t, tt.want, string(get))
+		})
+	}
+}
+
+func TestStrToStrNormalizesOnlyPhysicalEqualityCasts(t *testing.T) {
+	mp := mpool.MustNewZero()
+
+	for _, test := range []struct {
+		name     string
+		fromType types.Type
+		toType   types.Type
+		mode     castMode
+		want     string
+	}{
+		{name: "ordinary varchar cast preserves padding", fromType: types.New(types.T_char, 8, 0), toType: types.New(types.T_varchar, 8, 0), mode: castModeNormal, want: "MO      "},
+		{name: "comparison varchar cast drops padding", fromType: types.New(types.T_char, 8, 0), toType: types.New(types.T_varchar, 8, 0), mode: castModeComparison, want: "MO"},
+		{name: "comparison promoted varchar key drops padding", fromType: types.New(types.T_varchar, 8, 0), toType: types.New(types.T_varchar, 8, 0), mode: castModeComparison, want: "MO"},
+		{name: "set-operation varchar key drops padding", fromType: types.New(types.T_char, 8, 0), toType: types.New(types.T_varchar, 8, 0), mode: castModeSetOperation, want: "MO"},
+		{name: "comparison char cast preserves padding", fromType: types.New(types.T_char, 8, 0), toType: types.New(types.T_char, 8, 0), mode: castModeComparison, want: "MO      "},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			input := testutil.MakeVarcharVector([]string{"MO      "}, nil, mp)
+			input.SetType(test.fromType)
+			defer input.Free(mp)
+			from := vector.GenerateFunctionStrParameter(input)
+			result := vector.NewFunctionResultWrapper(test.toType, mp).(*vector.FunctionResult[types.Varlena])
+			defer result.Free()
+			require.NoError(t, result.PreExtendAndReset(1))
+			require.NoError(t, strToStr(context.Background(), nil, from, result, 1, test.toType, false, false, false, test.mode))
+
+			got, null := vector.GenerateFunctionStrParameter(result.GetResultVector()).GetStrValue(0)
+			require.False(t, null)
+			require.Equal(t, test.want, string(got))
+		})
+	}
+}
+
+func TestSetOperationCharCastPadsToCommonWidthOnlyWhenEnabled(t *testing.T) {
+	char4 := types.New(types.T_char, 4, 0)
+	char8 := types.New(types.T_char, 8, 0)
+
+	for _, tc := range []struct {
+		name    string
+		sqlMode string
+		want    []string
+	}{
+		{
+			name:    "pad char to full length",
+			sqlMode: "PAD_CHAR_TO_FULL_LENGTH",
+			want:    []string{"MO      ", "你好      "},
+		},
+		{
+			name:    "default mode preserves physical width",
+			sqlMode: "",
+			want:    []string{"MO  ", "你好  "},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			proc := testutil.NewProcess(t)
+			proc.SetResolveVariableFunc(func(name string, _, _ bool) (interface{}, error) {
+				require.Equal(t, "sql_mode", name)
+				return tc.sqlMode, nil
+			})
+
+			testCase := NewFunctionTestCase(
+				proc,
+				[]FunctionTestInput{
+					NewFunctionTestInput(char4, []string{"MO  ", "你好  "}, nil),
+					NewFunctionTestInput(char8, []string{}, nil),
+				},
+				NewFunctionTestResult(char8, false, tc.want, nil),
+				NewSetOperationCast,
+			)
+			succeed, info := testCase.Run()
+			require.True(t, succeed, info)
 		})
 	}
 }
@@ -3358,7 +3627,7 @@ func Test_CastVarcharToGeometryRejectTooManyPoints(t *testing.T) {
 	err := to.PreExtendAndReset(1)
 	require.NoError(t, err)
 
-	err = strToStr(context.Background(), proc, from, to, 1, types.T_geometry.ToType(), false, false, false)
+	err = strToStr(context.Background(), proc, from, to, 1, types.T_geometry.ToType(), false, false, false, castModeNormal)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "max_points_in_geometry=3")
 }

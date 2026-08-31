@@ -22,9 +22,10 @@ import (
 
 var supportedAggInNewFramework = []FuncNew{
 	{
-		functionId: COUNT,
-		class:      plan.Function_AGG | plan.Function_PRODUCE_NO_NULL,
-		layout:     STANDARD_FUNCTION,
+		functionId:                   COUNT,
+		class:                        plan.Function_AGG | plan.Function_PRODUCE_NO_NULL,
+		hasExecutableCTASTypeDefault: true,
+		layout:                       STANDARD_FUNCTION,
 		checkFn: func(overloads []overload, inputs []types.Type) checkResult {
 			if len(inputs) >= 1 {
 				// Build a cast list matching the number of arguments; a T_any
@@ -62,9 +63,10 @@ var supportedAggInNewFramework = []FuncNew{
 	},
 
 	{
-		functionId: STARCOUNT,
-		class:      plan.Function_AGG | plan.Function_PRODUCE_NO_NULL,
-		layout:     STANDARD_FUNCTION,
+		functionId:                   STARCOUNT,
+		class:                        plan.Function_AGG | plan.Function_PRODUCE_NO_NULL,
+		hasExecutableCTASTypeDefault: true,
+		layout:                       STANDARD_FUNCTION,
 		checkFn: func(overloads []overload, inputs []types.Type) checkResult {
 			if len(inputs) == 1 {
 				if inputs[0].Oid == types.T_any {
@@ -368,9 +370,10 @@ var supportedAggInNewFramework = []FuncNew{
 	},
 
 	{
-		functionId: BIT_AND,
-		class:      plan.Function_AGG,
-		layout:     STANDARD_FUNCTION,
+		functionId:                   BIT_AND,
+		class:                        plan.Function_AGG | plan.Function_PRODUCE_NO_NULL,
+		hasExecutableCTASTypeDefault: true,
+		layout:                       STANDARD_FUNCTION,
 		checkFn: func(overloads []overload, inputs []types.Type) checkResult {
 			return fixedUnaryAggTypeCheck(inputs, BitOpsSupportedTypes)
 		},
@@ -386,9 +389,10 @@ var supportedAggInNewFramework = []FuncNew{
 	},
 
 	{
-		functionId: BIT_OR,
-		class:      plan.Function_AGG,
-		layout:     STANDARD_FUNCTION,
+		functionId:                   BIT_OR,
+		class:                        plan.Function_AGG | plan.Function_PRODUCE_NO_NULL,
+		hasExecutableCTASTypeDefault: true,
+		layout:                       STANDARD_FUNCTION,
 		checkFn: func(overloads []overload, inputs []types.Type) checkResult {
 			return fixedUnaryAggTypeCheck(inputs, BitOpsSupportedTypes)
 		},
@@ -404,9 +408,10 @@ var supportedAggInNewFramework = []FuncNew{
 	},
 
 	{
-		functionId: BIT_XOR,
-		class:      plan.Function_AGG,
-		layout:     STANDARD_FUNCTION,
+		functionId:                   BIT_XOR,
+		class:                        plan.Function_AGG | plan.Function_PRODUCE_NO_NULL,
+		hasExecutableCTASTypeDefault: true,
+		layout:                       STANDARD_FUNCTION,
 		checkFn: func(overloads []overload, inputs []types.Type) checkResult {
 			return fixedUnaryAggTypeCheck(inputs, BitOpsSupportedTypes)
 		},

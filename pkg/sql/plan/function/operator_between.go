@@ -80,7 +80,11 @@ func betweenImpl(parameters []*vector.Vector, result vector.FunctionResultWrappe
 			return lhs.Compare(&rhs)
 		})
 
-	case types.T_char, types.T_varchar, types.T_blob, types.T_text, types.T_binary, types.T_varbinary, types.T_datalink:
+	case types.T_char:
+		return opBetweenBytesWithFunc(parameters, rs, proc, length, selectList, func(a, b []byte) int {
+			return bytes.Compare(bytes.TrimRight(a, " "), bytes.TrimRight(b, " "))
+		})
+	case types.T_varchar, types.T_blob, types.T_text, types.T_binary, types.T_varbinary, types.T_datalink:
 		return opBetweenBytesWithFunc(parameters, rs, proc, length, selectList, bytes.Compare)
 	}
 

@@ -1692,6 +1692,9 @@ func constantFoldWithPreparedExactSource(
 	if f.CannotFold() {
 		return expr, nil
 	}
+	if rule.IsLegacyTimeAssignmentOutsideInternalRange(fn) {
+		return expr, nil
+	}
 	if f.IsRealTimeRelated() && !varAndParamIsConst {
 		return expr, nil
 	}
@@ -2977,6 +2980,13 @@ func NormalizePrepareParamRefs(ctx context.Context, preparePlan *Plan) error {
 	if err := visit.Visit(ctx); err != nil {
 		return err
 	}
+	for i := range preparePlan.GetQuery().Params {
+		var err error
+		preparePlan.GetQuery().Params[i], err = rule.ApplyExpr(preparePlan.GetQuery().Params[i])
+		if err != nil {
+			return err
+		}
+	}
 	return visitMissingNodeExprs(
 		preparePlan.GetQuery(), preparePlan.GetQuery().Steps, []VisitPlanRule{rule})
 }
@@ -3011,6 +3021,13 @@ func resetPreparePlan(
 		if err := visitQuery.Visit(ctx.GetContext()); err != nil {
 			return nil, nil, err
 		}
+		for i := range query.Params {
+			var err error
+			query.Params[i], err = getParamRule.ApplyExpr(query.Params[i])
+			if err != nil {
+				return nil, nil, err
+			}
+		}
 
 		getParamRule.SetParamOrder()
 		args := getParamRule.params
@@ -3024,6 +3041,13 @@ func resetPreparePlan(
 		visitQuery = NewVisitPlan(queryPlan, []VisitPlanRule{resetParamRule})
 		if err := visitQuery.Visit(ctx.GetContext()); err != nil {
 			return nil, nil, err
+		}
+		for i := range query.Params {
+			var err error
+			query.Params[i], err = resetParamRule.ApplyExpr(query.Params[i])
+			if err != nil {
+				return nil, nil, err
+			}
 		}
 		return querySchemas, getParamRule.paramTypes, nil
 	}
@@ -3482,9 +3506,10 @@ func PreparedPlanNeedsRuntimeSpecialization(preparePlan *Plan) bool {
 		// PreparedPlanDirectResultParamPositions; treating every root marker as
 		// runtime-specialized here would put ordinary COM_STMT queries on the
 		// per-execute deep-copy path.
-		directResult: false,
-		skipExprs:    preparedDMLWriteExpressions(query),
-		seen:         make(map[*plan.Expr]struct{}),
+		directResult:    false,
+		skipComparisons: query.StmtType == plan.Query_SELECT,
+		skipExprs:       preparedDMLWriteExpressions(query),
+		seen:            make(map[*plan.Expr]struct{}),
 	}
 	if err := NewVisitPlan(scanPlan, []VisitPlanRule{rule}).Visit(context.Background()); err != nil {
 		// The scan is an optimization only. Preserve correctness if a newly
@@ -3873,10 +3898,11 @@ func preparedDMLWriteExpressions(query *plan.Query) map[*plan.Expr]struct{} {
 }
 
 type preparedRuntimeSpecializationScanRule struct {
-	directResult bool
-	needs        bool
-	skipExprs    map[*plan.Expr]struct{}
-	seen         map[*plan.Expr]struct{}
+	directResult    bool
+	skipComparisons bool
+	needs           bool
+	skipExprs       map[*plan.Expr]struct{}
+	seen            map[*plan.Expr]struct{}
 }
 
 type preparedRuntimeTextComparisonScanRule struct {
@@ -4114,7 +4140,9 @@ func (rule *preparedRuntimeSpecializationScanRule) scanExpr(expr *plan.Expr, roo
 			}
 			return
 		}
-		if preparedRuntimeSpecializationFunction(name) || preparedFunctionResultDependsOnRuntimeParam(expr) {
+		comparisonContext := isPreparedNumericComparisonContext(name)
+		if (!rule.skipComparisons || !comparisonContext) &&
+			(preparedRuntimeSpecializationFunction(name) || preparedFunctionResultDependsOnRuntimeParam(expr)) {
 			for argIndex, arg := range exprImpl.F.Args {
 				if preparedExprRequiresRuntimeSpecializationAt(name, argIndex, arg) {
 					rule.needs = true

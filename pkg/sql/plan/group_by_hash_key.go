@@ -14,12 +14,7 @@
 
 package plan
 
-import (
-	"strings"
-
-	"github.com/matrixorigin/matrixone/pkg/catalog"
-	pbplan "github.com/matrixorigin/matrixone/pkg/pb/plan"
-)
+import pbplan "github.com/matrixorigin/matrixone/pkg/pb/plan"
 
 // determineGroupByHashKeys records a minimal physical equality key for each
 // ordinary aggregate. GroupBy remains unchanged because it defines the logical
@@ -36,6 +31,11 @@ func (builder *QueryBuilder) determineGroupByHashKeys(nodeID int32) {
 // Keep this separate from the tree walk because optimizer rewrites can create a
 // new aggregate after the initial annotation pass.
 func (builder *QueryBuilder) determineGroupByHashKey(node *pbplan.Node) {
+	// Some semantic rewrites provide an explicit physical key that differs from
+	// the user-visible grouping value. Preserve that stronger proof.
+	if len(node.GroupByHashKey) > 0 {
+		return
+	}
 	node.GroupByHashKey = nil
 	if node.NodeType != pbplan.Node_AGG || len(node.GroupBy) < 2 || hasInactiveGroupingColumn(node.GroupingFlag) {
 		return
@@ -46,6 +46,15 @@ func (builder *QueryBuilder) determineGroupByHashKey(node *pbplan.Node) {
 	groupedColumns := make(map[int32]map[int32]struct{})
 	for _, expr := range node.GroupBy {
 		if col := expr.GetCol(); col != nil {
+			tableDef := builder.tag2Table[col.RelPos]
+			if tableDef == nil || col.ColPos < 0 || int(col.ColPos) >= len(tableDef.Cols) ||
+				tableDef.Cols[col.ColPos] == nil ||
+				!sqlEqualityJoinUsesOneIdentityDomain(expr.Typ, tableDef.Cols[col.ColPos].Typ) {
+				// A direct column reference is a uniqueness proof only while its
+				// recorded type remains in the concrete table column's identity
+				// domain. Stale expression metadata must retain every hash key.
+				continue
+			}
 			columns := groupedColumns[col.RelPos]
 			if columns == nil {
 				columns = make(map[int32]struct{})
@@ -58,7 +67,7 @@ func (builder *QueryBuilder) determineGroupByHashKey(node *pbplan.Node) {
 	determinedTables := make(map[int32]map[int32]struct{})
 	for tag, grouped := range groupedColumns {
 		tableDef := builder.tag2Table[tag]
-		pkColumns, ok := primaryKeyColumnPositions(tableDef)
+		pkColumns, ok := sqlEqualityCompatiblePrimaryKeyColumnPositions(tableDef)
 		if !ok {
 			continue
 		}
@@ -111,43 +120,6 @@ func hasInactiveGroupingColumn(flags []bool) bool {
 		}
 	}
 	return false
-}
-
-func primaryKeyColumnPositions(tableDef *pbplan.TableDef) ([]int32, bool) {
-	if tableDef == nil || tableDef.Pkey == nil || tableDef.Pkey.PkeyColName == catalog.FakePrimaryKeyColName {
-		return nil, false
-	}
-
-	pkNames := tableDef.Pkey.Names
-	if len(pkNames) == 0 {
-		// A hidden composite key does not reveal its user-visible components.
-		if tableDef.Pkey.PkeyColName == "" || tableDef.Pkey.PkeyColName == catalog.CPrimaryKeyColName {
-			return nil, false
-		}
-		pkNames = []string{tableDef.Pkey.PkeyColName}
-	}
-
-	positions := make([]int32, 0, len(pkNames))
-	for _, name := range pkNames {
-		pos, ok := tableColumnPosition(tableDef, name)
-		if !ok {
-			return nil, false
-		}
-		positions = append(positions, pos)
-	}
-	return positions, len(positions) > 0
-}
-
-func tableColumnPosition(tableDef *pbplan.TableDef, name string) (int32, bool) {
-	if pos, ok := tableDef.Name2ColIndex[name]; ok && pos >= 0 && int(pos) < len(tableDef.Cols) {
-		return pos, true
-	}
-	for pos, col := range tableDef.Cols {
-		if strings.EqualFold(col.Name, name) {
-			return int32(pos), true
-		}
-	}
-	return 0, false
 }
 
 func isPhysicalGroupByKey(node *pbplan.Node, groupByPos int) bool {

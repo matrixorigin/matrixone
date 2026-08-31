@@ -67,6 +67,7 @@ git -C "$fake" init --quiet
 # non-ELF stand-in also keeps `readelf -d` from reporting a CUDA dependency, which is what
 # lets the MO_CL_CUDA-unset case below assert rather than skip.
 : > "$fake/cgo/libmo.so"
+: > "$fake/mocl_kernel64.fatbin"
 fake_wrapper="$fake/.agents/skills/mo-dev/scripts/mo-cgo-test"
 cp "$wrapper" "$fake_wrapper"
 chmod +x "$fake_wrapper"

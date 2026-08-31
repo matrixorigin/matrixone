@@ -168,7 +168,7 @@ func NewBranchReclaimDag(rows []DataBranchMetadata) BranchReclaimDag {
 // the supplied statement time. It never reads the wall clock itself, keeping
 // frontend and compile-layer decisions on the same boundary.
 func PitrRetentionLowerBound(now time.Time, length int, unit string) (int64, error) {
-	if length < 0 {
+	if length <= 0 || length > 100 {
 		return 0, moerr.NewInvalidInputNoCtxf("invalid PITR length %d", length)
 	}
 	now = now.UTC()
@@ -179,13 +179,150 @@ func PitrRetentionLowerBound(now time.Time, length int, unit string) (int64, err
 	case "d":
 		lower = now.AddDate(0, 0, -length)
 	case "mo":
-		lower = now.AddDate(0, -length, 0)
+		lower = addDateClamped(now, 0, -length)
 	case "y":
-		lower = now.AddDate(-length, 0, 0)
+		lower = addDateClamped(now, -length, 0)
 	default:
 		return 0, moerr.NewInvalidInputNoCtxf("unknown PITR unit %q", unit)
 	}
 	return lower.UnixNano(), nil
+}
+
+// PitrRetentionRangeDoesNotExpand reports whether replacing one PITR range
+// with another can never ask GC to retain older history. A point-in-time
+// comparison is insufficient for mixed fixed and calendar units: for example,
+// one month can be shorter than 30 days in February and longer in March.
+func PitrRetentionRangeDoesNotExpand(
+	currentLength int,
+	currentUnit string,
+	nextLength int,
+	nextUnit string,
+) (bool, error) {
+	current, err := newPitrDuration(currentLength, currentUnit)
+	if err != nil {
+		return false, err
+	}
+	next, err := newPitrDuration(nextLength, nextUnit)
+	if err != nil {
+		return false, err
+	}
+	return pitrRetentionRangeDoesNotExpand(current, next), nil
+}
+
+// MergePitrRetentionRanges returns one persistable PITR range that covers both
+// inputs for every statement time. This is used by sys_mo_catalog_pitr, whose
+// range must remain an upper bound for all user PITRs as month lengths change.
+//
+// If neither input permanently covers the other (for example, one month and
+// thirty days), the result is their fixed-day upper envelope. With PITR lengths
+// limited to 100, an incomparable calendar range is at most three months, so
+// the envelope is always representable as at most 100 days.
+func MergePitrRetentionRanges(
+	currentLength int,
+	currentUnit string,
+	nextLength int,
+	nextUnit string,
+) (int, string, error) {
+	current, err := newPitrDuration(currentLength, currentUnit)
+	if err != nil {
+		return 0, "", err
+	}
+	next, err := newPitrDuration(nextLength, nextUnit)
+	if err != nil {
+		return 0, "", err
+	}
+
+	if pitrRetentionRangeDoesNotExpand(current, next) {
+		return currentLength, currentUnit, nil
+	}
+	if pitrRetentionRangeDoesNotExpand(next, current) {
+		return nextLength, nextUnit, nil
+	}
+
+	maxHours := current.maxHours
+	if next.maxHours > maxHours {
+		maxHours = next.maxHours
+	}
+	days := (maxHours + 24 - 1) / 24
+	if days > 100 {
+		return 0, "", moerr.NewInternalErrorNoCtxf(
+			"cannot represent merged PITR retention range %dh", maxHours,
+		)
+	}
+	return days, "d", nil
+}
+
+func pitrRetentionRangeDoesNotExpand(current, next pitrDuration) bool {
+	// Hours and days are fixed durations in UTC. Months and years share the
+	// same clamped calendar semantics, so twelve months exactly equal one year.
+	if current.kind == next.kind {
+		return next.normalized <= current.normalized
+	}
+
+	// Across fixed and calendar units, require the longest possible next
+	// duration to fit inside the shortest possible current duration. The
+	// conservative bound makes the decision independent of month ends, leap
+	// years, and an unbounded delay before every GC consumer observes ALTER.
+	return next.maxHours <= current.minHours
+}
+
+type pitrDuration struct {
+	kind       byte
+	normalized int
+	minHours   int
+	maxHours   int
+}
+
+func newPitrDuration(length int, unit string) (pitrDuration, error) {
+	if length <= 0 || length > 100 {
+		return pitrDuration{}, moerr.NewInvalidInputNoCtxf("invalid PITR length %d", length)
+	}
+
+	switch unit {
+	case "h":
+		return pitrDuration{kind: 'f', normalized: length, minHours: length, maxHours: length}, nil
+	case "d":
+		hours := length * 24
+		return pitrDuration{kind: 'f', normalized: hours, minHours: hours, maxHours: hours}, nil
+	case "mo":
+		return pitrDuration{
+			kind:       'c',
+			normalized: length,
+			minHours:   length * 28 * 24,
+			maxHours:   length * 31 * 24,
+		}, nil
+	case "y":
+		return pitrDuration{
+			kind:       'c',
+			normalized: length * 12,
+			minHours:   length * 365 * 24,
+			maxHours:   length * 366 * 24,
+		}, nil
+	default:
+		return pitrDuration{}, moerr.NewInvalidInputNoCtxf("unknown PITR unit %q", unit)
+	}
+}
+
+// addDateClamped applies a calendar offset while clamping the day to the last
+// valid day in the target month. time.Time.AddDate normalizes February 31 into
+// March, which can move a rolling retention boundary backwards at month end.
+func addDateClamped(t time.Time, years int, months int) time.Time {
+	targetMonth := time.Date(
+		t.Year()+years,
+		t.Month()+time.Month(months),
+		1,
+		t.Hour(),
+		t.Minute(),
+		t.Second(),
+		t.Nanosecond(),
+		t.Location(),
+	)
+	lastDay := targetMonth.AddDate(0, 1, -1).Day()
+	day := t.Day()
+	if day > lastDay {
+		day = lastDay
+	}
+	return targetMonth.AddDate(0, 0, day-1)
 }
 
 func historicalSourceOwnsComponent(

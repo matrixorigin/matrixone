@@ -506,10 +506,13 @@ func TestRemoteRunOperatorCodecRoundTrip(t *testing.T) {
 	})
 
 	t.Run("IntersectAll", func(t *testing.T) {
-		restored := roundTrip(t, &intersectall.IntersectAll{})
+		keyExpr := plan.MakePlan2Int64ConstExprWithType(7)
+		original := &intersectall.IntersectAll{KeyExprs: []*planpb.Expr{keyExpr}}
+		restored := roundTrip(t, original)
 		defer restored.Release()
 		require.IsType(t, &intersectall.IntersectAll{}, restored)
 		require.Equal(t, vm.IntersectAll, restored.OpType())
+		require.Equal(t, original.KeyExprs, restored.(*intersectall.IntersectAll).KeyExprs)
 	})
 
 	t.Run("Order", func(t *testing.T) {
@@ -964,6 +967,76 @@ func TestCrossDomainStringLiteralRemoteProtocolValidation(t *testing.T) {
 	require.ErrorContains(t, err, "requires MORPC protocol version 23")
 	_, err = decodeScope(dynamicData, proc, true, nil)
 	require.ErrorContains(t, err, "requires MORPC protocol version 23")
+}
+
+func TestPrepareRemoteRunSendingDataRejectsPrePadSpaceProtocol(t *testing.T) {
+	newProc := func(sqlMode string) *process.Process {
+		proc := newResolveVariableProcess(t, sqlMode)
+		proc.Ctx = context.WithValue(proc.Ctx, defines.TenantIDKey{}, uint32(0))
+		proc.Base.TxnOperator = fakeTxnOperator{}
+		proc.Base.SessionInfo.TimeZone = time.UTC
+		return proc
+	}
+	makeScope := func(proc *process.Process, expression *planpb.Expr) *Scope {
+		return &Scope{
+			Magic:  Remote,
+			Proc:   proc,
+			RootOp: value_scan.NewArgument(),
+			Plan: &planpb.Plan{Plan: &planpb.Plan_Query{Query: &planpb.Query{
+				Steps: []int32{0}, Nodes: []*planpb.Node{{NodeId: 0, ProjectList: []*planpb.Expr{expression}}},
+			}}},
+		}
+	}
+	padSpaceCast := &planpb.Expr{
+		Typ: planpb.Type{Id: int32(types.T_varchar)},
+		Expr: &planpb.Expr_F{F: &planpb.Function{
+			Func: &planpb.ObjectRef{
+				Obj:     planfunction.EncodeOverloadID(planfunction.CAST, 3),
+				ObjName: "cast",
+			},
+			Args: []*planpb.Expr{plan.MakePlan2StringConstExprWithType("MO", false)},
+		}},
+	}
+	ordinaryValue := plan.MakePlan2StringConstExprWithType("MO", false)
+
+	for _, tc := range []struct {
+		name       string
+		sqlMode    string
+		expression *planpb.Expr
+	}{
+		{
+			name:       "PAD SPACE cast",
+			expression: padSpaceCast,
+		},
+		{
+			name:       "enabled mode",
+			sqlMode:    "PAD_CHAR_TO_FULL_LENGTH",
+			expression: ordinaryValue,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			proc := newProc(tc.sqlMode)
+			scope := makeScope(proc, tc.expression)
+			rt := moruntime.ServiceRuntime(proc.GetService())
+			oldVersion, hadVersion := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
+			t.Cleanup(func() {
+				if hadVersion {
+					rt.SetGlobalVariables(moruntime.MOProtocolVersion, oldVersion)
+				} else {
+					rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCLatestVersion)
+				}
+			})
+
+			rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion39)
+			_, _, _, _, err := prepareRemoteRunSendingData("", scope, proc, nil, uuid.Nil)
+			require.ErrorContains(t, err, "PAD SPACE remote execution requires MORPC protocol version 40")
+			require.True(t, moerr.IsMoErrCode(err, moerr.ErrNotSupported))
+
+			rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion40)
+			_, _, _, _, err = prepareRemoteRunSendingData("", scope, proc, nil, uuid.Nil)
+			require.NoError(t, err)
+		})
+	}
 }
 
 func TestRemoteExpressionProtocolValidation(t *testing.T) {

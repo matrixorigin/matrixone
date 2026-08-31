@@ -630,50 +630,86 @@ func TestTableScopedDDLDatabaseEOBMapsToNoSuchTable(t *testing.T) {
 }
 func Test_lockIndexTable(t *testing.T) {
 	ctrl := gomock.NewController(t)
-	defer ctrl.Finish()
+	db := mock_frontend.NewMockDatabase(ctrl)
+	db.EXPECT().Relation(gomock.Any(), "index_table", gomock.Any()).Return(
+		nil, moerr.NewNoSuchTableNoCtx("db1", "index_table"),
+	)
 
-	txnOperator := mock_frontend.NewMockTxnOperator(ctrl)
-	proc := testutil.NewProc(t)
-	proc.Base.TxnOperator = txnOperator
+	err := lockIndexTable(context.Background(), db, nil, nil, "index_table", false)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrNoSuchTable), "unexpected error: %v", err)
+}
 
-	mockEngine := mock_frontend.NewMockEngine(ctrl)
-	mockEngine.EXPECT().New(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
-	mockEngine.EXPECT().AllocateIDByKey(gomock.Any(), gomock.Any()).Return(uint64(272510), nil).AnyTimes()
-
-	mock_db1_database := mock_frontend.NewMockDatabase(ctrl)
-	mock_db1_database.EXPECT().Relation(gomock.Any(), gomock.Any(), gomock.Any()).Return(nil, moerr.NewLockTableNotFound(context.Background())).AnyTimes()
-
-	type args struct {
-		ctx        context.Context
-		dbSource   engine.Database
-		eng        engine.Engine
-		proc       *process.Process
-		tableName  string
-		defChanged bool
+func TestLockIndexTableForAlterMissingGeneration(t *testing.T) {
+	plannedIndex := &plan2.IndexDef{
+		IndexName:      "idx_v",
+		IndexTableName: "__mo_index_idx_v_old",
+		TableExist:     true,
 	}
 	tests := []struct {
-		name    string
-		args    args
-		wantErr bool
+		name                    string
+		parentDefinitionChanged bool
+		currentParentID         uint64
+		currentIndexes          []*plan2.IndexDef
+		currentParentErr        error
+		wantCode                uint16
 	}{
 		{
-			name: "test",
-			args: args{
-				ctx:        context.Background(),
-				dbSource:   mock_db1_database,
-				eng:        mockEngine,
-				proc:       proc,
-				tableName:  "__mo_index_unique_0192aea0-8e78-76a7-b3ea-10862b69c51c",
-				defChanged: true,
-			},
-			wantErr: true,
+			name:                    "parent lock already proved stale generation",
+			parentDefinitionChanged: true,
+			wantCode:                moerr.ErrTxnNeedRetryWithDefChanged,
+		},
+		{
+			name:            "replacement parent generation retries",
+			currentParentID: 11,
+			wantCode:        moerr.ErrTxnNeedRetryWithDefChanged,
+		},
+		{
+			name:            "replacement hidden index generation retries",
+			currentParentID: 10,
+			currentIndexes: []*plan2.IndexDef{{
+				IndexName:      "idx_v",
+				IndexTableName: "__mo_index_idx_v_new",
+				TableExist:     true,
+			}},
+			wantCode: moerr.ErrTxnNeedRetryWithDefChanged,
+		},
+		{
+			name:             "dropped parent retries",
+			currentParentErr: moerr.NewNoSuchTableNoCtx("db1", "parent"),
+			wantCode:         moerr.ErrTxnNeedRetryWithDefChanged,
+		},
+		{
+			name:            "persistent missing hidden relation returns no such table",
+			currentParentID: 10,
+			currentIndexes:  []*plan2.IndexDef{plannedIndex},
+			wantCode:        moerr.ErrNoSuchTable,
 		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if err := lockIndexTable(tt.args.ctx, tt.args.dbSource, tt.args.eng, tt.args.proc, tt.args.tableName, tt.args.defChanged); (err != nil) != tt.wantErr {
-				t.Errorf("lockIndexTable() error = %v, wantErr %v", err, tt.wantErr)
+			ctrl := gomock.NewController(t)
+			db := mock_frontend.NewMockDatabase(ctrl)
+			db.EXPECT().Relation(gomock.Any(), plannedIndex.IndexTableName, gomock.Any()).Return(
+				nil, moerr.NewNoSuchTableNoCtx("db1", plannedIndex.IndexTableName),
+			)
+			if !tt.parentDefinitionChanged {
+				if tt.currentParentErr != nil {
+					db.EXPECT().Relation(gomock.Any(), "parent", gomock.Any()).Return(nil, tt.currentParentErr)
+				} else {
+					parent := mock_frontend.NewMockRelation(ctrl)
+					db.EXPECT().Relation(gomock.Any(), "parent", gomock.Any()).Return(parent, nil)
+					parent.EXPECT().GetTableID(gomock.Any()).Return(tt.currentParentID)
+					if tt.currentParentID == 10 {
+						parent.EXPECT().CopyTableDef(gomock.Any()).Return(&plan2.TableDef{Indexes: tt.currentIndexes})
+					}
+				}
 			}
+
+			err := lockIndexTableForAlter(
+				context.Background(), db, nil, nil, "parent", 10, plannedIndex,
+				tt.parentDefinitionChanged,
+			)
+			require.True(t, moerr.IsMoErrCode(err, tt.wantCode), "unexpected error: %v", err)
 		})
 	}
 }
@@ -1309,6 +1345,240 @@ func TestScope_CreateTableIfNotExistsAsSelectWhenTableExists(t *testing.T) {
 	assert.Equal(t, uint64(0), c.getAffectedRows())
 }
 
+func TestDeleteRolePrivilegesForDroppedObjects(t *testing.T) {
+	newCompile := func(
+		t *testing.T,
+		ctx context.Context,
+		mocker func(string) (executor.Result, error),
+	) *Compile {
+		t.Helper()
+		proc := testutil.NewProcess(t)
+		proc.Ctx = ctx
+		proc.ReplaceTopCtx(ctx)
+		moruntime.ServiceRuntime(proc.GetService()).SetGlobalVariables(
+			moruntime.InternalSQLExecutor,
+			executor.NewMemExecutor(mocker),
+		)
+		return &Compile{proc: proc, pn: &plan2.Plan{}}
+	}
+
+	t.Run("table uses logical object id", func(t *testing.T) {
+		var sqls []string
+		c := newCompile(t, context.Background(), func(sql string) (executor.Result, error) {
+			sqls = append(sqls, sql)
+			return executor.Result{}, nil
+		})
+
+		require.NoError(t, c.deleteRolePrivilegesForDroppedRelation(42))
+		require.Equal(t, []string{
+			"delete from mo_catalog.mo_role_privs where obj_id = 42;",
+		}, sqls)
+	})
+
+	t.Run("database removes database and child object scopes once", func(t *testing.T) {
+		var sqls []string
+		c := newCompile(t, context.Background(), func(sql string) (executor.Result, error) {
+			sqls = append(sqls, sql)
+			return executor.Result{}, nil
+		})
+
+		require.NoError(t, c.deleteRolePrivilegesForDroppedDatabase(7, 11))
+		require.Equal(t, []string{
+			"delete from mo_catalog.mo_role_privs where obj_id = 11 or obj_id in " +
+				"(select rel_logical_id from mo_catalog.mo_tables where account_id = 7 and reldatabase_id = 11);",
+		}, sqls)
+	})
+
+	t.Run("internal bulk lifecycle skips redundant cleanup", func(t *testing.T) {
+		ctx := context.WithValue(context.Background(), defines.IgnoreForeignKey{}, true)
+		var sqls []string
+		c := newCompile(t, ctx, func(sql string) (executor.Result, error) {
+			sqls = append(sqls, sql)
+			return executor.Result{}, nil
+		})
+
+		require.NoError(t, c.deleteRolePrivilegesForDroppedRelation(42))
+		require.NoError(t, c.deleteRolePrivilegesForDroppedDatabase(7, 11))
+		require.Empty(t, sqls)
+	})
+
+	t.Run("zero ids cannot target global grants", func(t *testing.T) {
+		c := newCompile(t, context.Background(), func(string) (executor.Result, error) {
+			t.Fatal("zero object id must not execute cleanup SQL")
+			return executor.Result{}, nil
+		})
+
+		require.ErrorContains(t, c.deleteRolePrivilegesForDroppedRelation(0), "relation ID 0")
+		require.ErrorContains(t, c.deleteRolePrivilegesForDroppedDatabase(7, 0), "database ID 0")
+	})
+
+	t.Run("cleanup errors abort the drop transaction", func(t *testing.T) {
+		cleanupErr := errors.New("cleanup failed")
+		c := newCompile(t, context.Background(), func(string) (executor.Result, error) {
+			return executor.Result{}, cleanupErr
+		})
+
+		require.ErrorIs(t, c.deleteRolePrivilegesForDroppedRelation(42), cleanupErr)
+		require.ErrorIs(t, c.deleteRolePrivilegesForDroppedDatabase(7, 11), cleanupErr)
+	})
+}
+
+func TestDropIndexChildRelationCleansLegacyPrivileges(t *testing.T) {
+	ctx := context.Background()
+	proc := testutil.NewProcess(t)
+	proc.Ctx = ctx
+	proc.ReplaceTopCtx(ctx)
+	var sqls []string
+	moruntime.ServiceRuntime(proc.GetService()).SetGlobalVariables(
+		moruntime.InternalSQLExecutor,
+		executor.NewMemExecutor(func(sql string) (executor.Result, error) {
+			sqls = append(sqls, sql)
+			return executor.Result{}, nil
+		}),
+	)
+	db := newStubDatabase("db")
+	db.rels["__mo_index_legacy"] = &stubRelation{
+		name: "__mo_index_legacy", tableDef: &plan2.TableDef{LogicalId: 88},
+	}
+	c := &Compile{proc: proc, pn: &plan2.Plan{}}
+
+	require.NoError(t, c.dropIndexChildRelation(db, "__mo_index_legacy", false))
+	require.NotContains(t, db.rels, "__mo_index_legacy")
+	require.Equal(t, []string{
+		"delete from mo_catalog.mo_role_privs where obj_id = 88;",
+	}, sqls)
+}
+
+func TestDropSequenceCleansLogicalObjectPrivileges(t *testing.T) {
+	ctx := defines.AttachAccountId(context.Background(), sysAccountId)
+	proc := testutil.NewProcess(t)
+	proc.Ctx = ctx
+	proc.ReplaceTopCtx(ctx)
+	proc.Base.SessionInfo.Buf = buffer.New()
+	var sqls []string
+	moruntime.ServiceRuntime(proc.GetService()).SetGlobalVariables(
+		moruntime.InternalSQLExecutor,
+		executor.NewMemExecutor(func(sql string) (executor.Result, error) {
+			sqls = append(sqls, sql)
+			return executor.Result{}, nil
+		}),
+	)
+	eng := newStubEngine()
+	db := newStubDatabase("db")
+	db.rels["s"] = &stubRelation{
+		name: "s", tableID: 101, tableDef: &plan2.TableDef{LogicalId: 77},
+	}
+	eng.dbs["db"] = db
+	stubs := gostub.New()
+	defer stubs.Reset()
+	stubs.Stub(&lockMoDatabase, func(*Compile, string, lock.LockMode) error { return nil })
+	stubs.Stub(&lockMoTable, func(*Compile, string, string, lock.LockMode) error { return nil })
+	s := &Scope{Plan: &plan2.Plan{Plan: &plan2.Plan_Ddl{Ddl: &plan2.DataDefinition{
+		Definition: &plan2.DataDefinition_DropSequence{DropSequence: &plan2.DropSequence{
+			Database: "db", Table: "s",
+		}},
+	}}}}
+	c := NewCompile("test", "db", "drop sequence s", "", "", eng, proc, nil, false, nil, time.Now())
+	c.pn = s.Plan
+
+	require.NoError(t, s.DropSequence(c))
+	require.Equal(t, []string{"delete from mo_catalog.mo_role_privs where obj_id = 77;"}, sqls)
+	require.Equal(t, []uint64{101}, proc.GetSessionInfo().SeqDeleteKeys)
+	_, exists := db.rels["s"]
+	require.False(t, exists)
+}
+
+func TestAlterViewPreservesLogicalID(t *testing.T) {
+	eng := newStubEngine()
+	db := newStubDatabase("db")
+	createErr := errors.New("stop after create context is captured")
+	db.createErr = createErr
+	db.rels["v"] = &stubRelation{
+		name: "v", tableID: 101, tableDef: &plan2.TableDef{LogicalId: 77},
+	}
+	eng.dbs["db"] = db
+	stubs := gostub.New()
+	defer stubs.Reset()
+	stubs.Stub(&lockMoDatabase, func(*Compile, string, lock.LockMode) error { return nil })
+	stubs.Stub(&lockMoTable, func(*Compile, string, string, lock.LockMode) error { return nil })
+	s := &Scope{Plan: &plan2.Plan{Plan: &plan2.Plan_Ddl{Ddl: &plan2.DataDefinition{
+		Definition: &plan2.DataDefinition_AlterView{AlterView: &plan2.AlterView{
+			Database: "db", TableDef: &plan2.TableDef{Name: "v"},
+		}},
+	}}}}
+
+	proc := testutil.NewProcess(t)
+	proc.Base.SessionInfo.Buf = buffer.New()
+	proc.Ctx = defines.AttachAccountId(context.Background(), sysAccountId)
+	c := NewCompile("test", "db", "alter view v as select 1", "", "", eng, proc, nil, false, nil, time.Now())
+	err := s.AlterView(c)
+	require.ErrorIs(t, err, createErr)
+	require.NotNil(t, db.createCtx)
+	require.Equal(t, uint64(77), db.createCtx.Value(defines.LogicalIdKey{}))
+}
+
+func TestLockDroppedRelation(t *testing.T) {
+	retryErr := moerr.NewTxnNeedRetryNoCtx()
+	catalogErr := errors.New("catalog lock failed")
+	storageErr := errors.New("storage lock failed")
+	for _, testCase := range []struct {
+		name                 string
+		lockStorage          bool
+		catalogErr           error
+		storageErr           error
+		expectedErr          error
+		expectedStorageLocks int
+	}{
+		{name: "table locks catalog and storage", lockStorage: true, expectedStorageLocks: 1},
+		{name: "view or source locks catalog only"},
+		{name: "catalog failure stops before storage", lockStorage: true, catalogErr: catalogErr, expectedErr: catalogErr},
+		{
+			name: "catalog retry is returned after storage lock", lockStorage: true, catalogErr: retryErr,
+			expectedErr: retryErr, expectedStorageLocks: 1,
+		},
+		{
+			name: "storage failure is returned", lockStorage: true, storageErr: storageErr,
+			expectedErr: storageErr, expectedStorageLocks: 1,
+		},
+		{
+			name: "storage retry is returned", lockStorage: true, storageErr: retryErr,
+			expectedErr: retryErr, expectedStorageLocks: 1,
+		},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			proc := testutil.NewProcess(t)
+			c := &Compile{proc: proc}
+			catalogLocks := 0
+			storageLocks := 0
+			catalogStub := gostub.Stub(&lockMoTable,
+				func(got *Compile, dbName, relationName string, mode lock.LockMode) error {
+					require.Same(t, c, got)
+					require.Equal(t, "db", dbName)
+					require.Equal(t, "rel", relationName)
+					require.Equal(t, lock.LockMode_Exclusive, mode)
+					catalogLocks++
+					return testCase.catalogErr
+				})
+			defer catalogStub.Reset()
+			storageStub := gostub.Stub(&lockTable,
+				func(context.Context, engine.Engine, *process.Process, engine.Relation, string, bool) error {
+					storageLocks++
+					return testCase.storageErr
+				})
+			defer storageStub.Reset()
+
+			err := lockDroppedRelation(c, "db", "rel", nil, testCase.lockStorage)
+			if testCase.expectedErr == nil {
+				require.NoError(t, err)
+			} else {
+				require.ErrorIs(t, err, testCase.expectedErr)
+			}
+			require.Equal(t, 1, catalogLocks)
+			require.Equal(t, testCase.expectedStorageLocks, storageLocks)
+		})
+	}
+}
+
 func TestScope_Database(t *testing.T) {
 	dropDbDef := &plan2.DropDatabase{
 		IfExists: false,
@@ -1352,33 +1622,6 @@ func TestScope_Database(t *testing.T) {
 		c := NewCompile("test", "test", sql, "", "", eng, proc, nil, false, nil, time.Now())
 		assert.Error(t, s.DropDatabase(c))
 	})
-}
-
-func Test_addTimeSpan(t *testing.T) {
-	cases := []struct {
-		name    string
-		len     int
-		unit    string
-		wantOk  bool
-		wantMsg string
-	}{
-		{"hour", 1, "h", true, ""},
-		{"day", 2, "d", true, ""},
-		{"month", 3, "mo", true, ""},
-		{"year", 4, "y", true, ""},
-		{"invalid", 5, "xx", false, "unknown unit"},
-	}
-	for _, c := range cases {
-		t.Run(c.name, func(t *testing.T) {
-			_, err := addTimeSpan(c.len, c.unit)
-			if c.wantOk {
-				assert.NoError(t, err)
-			} else {
-				assert.Error(t, err)
-				assert.Contains(t, err.Error(), c.wantMsg)
-			}
-		})
-	}
 }
 
 func Test_getSqlForCheckPitrDup(t *testing.T) {
@@ -1496,20 +1739,24 @@ func TestCheckSysMoCatalogPitrResult(t *testing.T) {
 	ctx := context.Background()
 
 	t.Run("empty vecs", func(t *testing.T) {
-		needInsert, needUpdate, err := CheckSysMoCatalogPitrResult(ctx, []*vector.Vector{}, 10, "d")
+		needInsert, needUpdate, length, unit, err := CheckSysMoCatalogPitrResult(ctx, []*vector.Vector{}, 10, "d")
 		assert.Error(t, err)
 		assert.False(t, needInsert)
 		assert.False(t, needUpdate)
+		assert.Zero(t, length)
+		assert.Empty(t, unit)
 	})
 
 	t.Run("insert needed", func(t *testing.T) {
 		v1 := vector.NewVec(types.T_uint64.ToType())
 		v2 := vector.NewVec(types.T_varchar.ToType())
 		// no data in vectors
-		needInsert, needUpdate, err := CheckSysMoCatalogPitrResult(ctx, []*vector.Vector{v1, v2}, 10, "d")
+		needInsert, needUpdate, length, unit, err := CheckSysMoCatalogPitrResult(ctx, []*vector.Vector{v1, v2}, 10, "d")
 		assert.NoError(t, err)
 		assert.True(t, needInsert)
 		assert.False(t, needUpdate)
+		assert.Equal(t, uint64(10), length)
+		assert.Equal(t, "d", unit)
 	})
 
 	t.Run("update needed", func(t *testing.T) {
@@ -1517,10 +1764,12 @@ func TestCheckSysMoCatalogPitrResult(t *testing.T) {
 		_ = vector.AppendFixed(v1, uint64(5), false, mp)
 		v2 := vector.NewVec(types.T_varchar.ToType())
 		_ = vector.AppendBytes(v2, []byte("d"), false, mp)
-		needInsert, needUpdate, err := CheckSysMoCatalogPitrResult(ctx, []*vector.Vector{v1, v2}, 10, "d")
+		needInsert, needUpdate, length, unit, err := CheckSysMoCatalogPitrResult(ctx, []*vector.Vector{v1, v2}, 10, "d")
 		assert.NoError(t, err)
 		assert.False(t, needInsert)
 		assert.True(t, needUpdate)
+		assert.Equal(t, uint64(10), length)
+		assert.Equal(t, "d", unit)
 	})
 
 	t.Run("no update needed", func(t *testing.T) {
@@ -1528,10 +1777,25 @@ func TestCheckSysMoCatalogPitrResult(t *testing.T) {
 		_ = vector.AppendFixed(v1, uint64(20), false, mp)
 		v2 := vector.NewVec(types.T_varchar.ToType())
 		_ = vector.AppendBytes(v2, []byte("d"), false, mp)
-		needInsert, needUpdate, err := CheckSysMoCatalogPitrResult(ctx, []*vector.Vector{v1, v2}, 10, "d")
+		needInsert, needUpdate, length, unit, err := CheckSysMoCatalogPitrResult(ctx, []*vector.Vector{v1, v2}, 10, "d")
 		assert.NoError(t, err)
 		assert.False(t, needInsert)
 		assert.False(t, needUpdate)
+		assert.Equal(t, uint64(20), length)
+		assert.Equal(t, "d", unit)
+	})
+
+	t.Run("mixed month and days use stable envelope", func(t *testing.T) {
+		v1 := vector.NewVec(types.T_uint64.ToType())
+		_ = vector.AppendFixed(v1, uint64(1), false, mp)
+		v2 := vector.NewVec(types.T_varchar.ToType())
+		_ = vector.AppendBytes(v2, []byte("mo"), false, mp)
+		needInsert, needUpdate, length, unit, err := CheckSysMoCatalogPitrResult(ctx, []*vector.Vector{v1, v2}, 30, "d")
+		assert.NoError(t, err)
+		assert.False(t, needInsert)
+		assert.True(t, needUpdate)
+		assert.Equal(t, uint64(31), length)
+		assert.Equal(t, "d", unit)
 	})
 }
 
@@ -1886,7 +2150,10 @@ func TestDropDatabaseSkipsDeletedRelationsWhenCollectingTables(t *testing.T) {
 
 	mockDb := mock_frontend.NewMockDatabase(ctrl)
 	mockDb.EXPECT().IsSubscription(gomock.Any()).Return(false).AnyTimes()
-	mockDb.EXPECT().GetDatabaseId(gomock.Any()).Return("invalid").AnyTimes()
+	gomock.InOrder(
+		mockDb.EXPECT().GetDatabaseId(gomock.Any()).Return("invalid"),
+		mockDb.EXPECT().GetDatabaseId(gomock.Any()).Return("12"),
+	)
 	mockDb.EXPECT().Relations(gomock.Any()).Return([]string{"aff01", "pri01"}, nil).Times(1)
 	mockDb.EXPECT().Relation(gomock.Any(), "aff01", gomock.Any()).Return(nil, deletedRelErr).Times(1)
 	mockDb.EXPECT().Relation(gomock.Any(), "pri01", gomock.Any()).Return(parentRel, nil).Times(1)
@@ -1930,8 +2197,22 @@ func TestDropDatabaseSkipsDeletedRelationsWhenCollectingTables(t *testing.T) {
 		Plan:  cplan,
 	}
 
+	var cleanupSQLs []string
+	moruntime.ServiceRuntime(proc.GetService()).SetGlobalVariables(
+		moruntime.InternalSQLExecutor,
+		executor.NewMemExecutor(func(sql string) (executor.Result, error) {
+			cleanupSQLs = append(cleanupSQLs, sql)
+			return executor.Result{}, nil
+		}),
+	)
+
 	c := NewCompile("test", "test", "drop database acc_test02", "", "", eng, proc, nil, false, nil, time.Now())
+	c.pn = cplan
 	require.ErrorIs(t, s.DropDatabase(c), deleteStopErr)
+	require.Contains(t, cleanupSQLs,
+		"delete from mo_catalog.mo_role_privs where obj_id = 12 or obj_id in "+
+			"(select rel_logical_id from mo_catalog.mo_tables where account_id = 0 and reldatabase_id = 12);",
+	)
 }
 
 func TestDropDatabaseSkipsForeignKeyCleanupWhenIgnored(t *testing.T) {
@@ -2012,7 +2293,10 @@ func TestDropDatabaseReturnsInternalRelationErrorWhenCollectingTables(t *testing
 
 	mockDb := mock_frontend.NewMockDatabase(ctrl)
 	mockDb.EXPECT().IsSubscription(gomock.Any()).Return(false).AnyTimes()
-	mockDb.EXPECT().GetDatabaseId(gomock.Any()).Return("invalid").AnyTimes()
+	gomock.InOrder(
+		mockDb.EXPECT().GetDatabaseId(gomock.Any()).Return("invalid"),
+		mockDb.EXPECT().GetDatabaseId(gomock.Any()).Return("12"),
+	)
 	mockDb.EXPECT().Relations(gomock.Any()).Return([]string{"pri01"}, nil).Times(1)
 	mockDb.EXPECT().Relation(gomock.Any(), "pri01", gomock.Any()).Return(parentRel, nil).Times(1)
 	mockDb.EXPECT().Relations(gomock.Any()).Return([]string{"aff01"}, nil).Times(1)

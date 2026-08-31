@@ -31,6 +31,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/fulltext2"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	statspb "github.com/matrixorigin/matrixone/pkg/pb/statsinfo"
@@ -5246,6 +5247,25 @@ func TestFullTextCandidateLimitIncludesOffset(t *testing.T) {
 	require.Nil(t, scan.Offset)
 }
 
+func TestFullTextCandidateLimitWithoutResidualFilterKeepsDynamicLimit(t *testing.T) {
+	builder, joinID, leftScanID, _ := buildFullTextJoinRewriteTestPlan(t, true, false, false)
+	scan := builder.qry.Nodes[leftScanID]
+	scan.Limit = &planpb.Expr{Expr: &planpb.Expr_P{P: &planpb.ParamRef{Pos: 0}}}
+
+	newID, changed, err := builder.applyFullTextFiltersForScanInJoin(
+		joinID,
+		scan,
+		map[[2]int32]int{},
+		map[[2]int32]*planpb.Expr{},
+	)
+	require.NoError(t, err)
+	require.True(t, changed)
+	functions := collectFullTextFunctionScans(builder, newID)
+	require.Len(t, functions, 1)
+	require.NotNil(t, functions[0].Limit.GetP())
+	require.Equal(t, int32(0), functions[0].Limit.GetP().Pos)
+}
+
 func TestFullTextCandidateLimitSQLCalcFoundRowsKeepsCompleteStream(t *testing.T) {
 	builder, joinID, leftScanID, _ := buildFullTextJoinRewriteTestPlan(t, true, false, false)
 	builder.sqlCalcFoundRows = true
@@ -5269,6 +5289,169 @@ func TestFullTextCandidateLimitSQLCalcFoundRowsKeepsCompleteStream(t *testing.T)
 	require.Equal(t, uint64(5), builder.qry.Nodes[newID].Offset.GetLit().GetU64Val())
 	require.Nil(t, scan.Limit)
 	require.Nil(t, scan.Offset)
+}
+
+func TestFullTextCandidateLimitWithResidualFilterRequiresExactPrefilter(t *testing.T) {
+	tests := []struct {
+		name            string
+		pkType          types.T
+		pushdown        int8
+		dynamicLimit    bool
+		preparedPattern bool
+		mode            tree.FullTextSearchType
+		classicIndex    bool
+		parser          string
+		pattern         string
+		wantCandidateK  bool
+	}{
+		{name: "exact int8 prefilter", pkType: types.T_int8, pushdown: 1, pattern: "+hello +world", wantCandidateK: true},
+		{name: "exact int16 prefilter", pkType: types.T_int16, pushdown: 1, pattern: "+hello +world", wantCandidateK: true},
+		{name: "exact int32 prefilter", pkType: types.T_int32, pushdown: 1, pattern: "+hello +world", wantCandidateK: true},
+		{name: "exact int64 prefilter", pkType: types.T_int64, pushdown: 1, pattern: "+hello +world", wantCandidateK: true},
+		{name: "exact uint8 prefilter", pkType: types.T_uint8, pushdown: 1, pattern: "+hello +world", wantCandidateK: true},
+		{name: "exact uint16 prefilter", pkType: types.T_uint16, pushdown: 1, pattern: "+hello +world", wantCandidateK: true},
+		{name: "exact uint32 prefilter", pkType: types.T_uint32, pushdown: 1, pattern: "+hello +world", wantCandidateK: true},
+		{name: "exact uint64 prefilter", pkType: types.T_uint64, pushdown: 1, pattern: "+hello +world", wantCandidateK: true},
+		{name: "bit is not an exact membership type", pkType: types.T_bit, pushdown: 1, pattern: "+hello +world"},
+		{name: "approximate varchar prefilter", pkType: types.T_varchar, pushdown: 1, pattern: "+hello +world"},
+		{name: "uuid prefilter", pkType: types.T_uuid, pushdown: 1, pattern: "+hello +world"},
+		{name: "pushdown disabled", pkType: types.T_int64, pattern: "+hello +world"},
+		{name: "prepared limit", pkType: types.T_int64, pushdown: 1, dynamicLimit: true, pattern: "+hello +world"},
+		{name: "prepared pattern", pkType: types.T_int64, pushdown: 1, preparedPattern: true},
+		{name: "natural mode", pkType: types.T_int64, pushdown: 1, mode: tree.FULLTEXT_NL, pattern: "hello world"},
+		{name: "should clause", pkType: types.T_int64, pushdown: 1, pattern: "+hello world"},
+		{name: "explicit phrase", pkType: types.T_int64, pushdown: 1, pattern: `+"hello world"`},
+		{name: "prefix", pkType: types.T_int64, pushdown: 1, pattern: "+hello*"},
+		{name: "group", pkType: types.T_int64, pushdown: 1, pattern: "+(hello world)"},
+		{name: "must not", pkType: types.T_int64, pushdown: 1, pattern: "+hello -world"},
+		{name: "adjust", pkType: types.T_int64, pushdown: 1, pattern: "+hello ~world"},
+		{name: "default cjk becomes phrase", pkType: types.T_int64, pushdown: 1, pattern: "+中"},
+		{name: "ngram cjk becomes phrase", pkType: types.T_int64, pushdown: 1, parser: fulltext2.ParserNgram, pattern: "+中文"},
+		{name: "json value atomic term", pkType: types.T_int64, pushdown: 1, parser: fulltext2.ParserJSONValue, pattern: "+json.value", wantCandidateK: true},
+		{name: "classic index", pkType: types.T_int64, pushdown: 1, classicIndex: true, pattern: "+hello +world"},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			builder, joinID, leftScanID, _ := buildFullTextJoinRewriteTestPlan(t, true, false, true)
+			mockCtx := builder.compCtx.(*fullTextJoinMockCompilerContext)
+			mockCtx.fulltextBloomFilterPushdown = tc.pushdown
+			scan := builder.qry.Nodes[leftScanID]
+			if !tc.classicIndex {
+				convertFullTextJoinTestToFulltext2(builder, scan)
+				if tc.parser != "" {
+					scan.TableDef.Indexes[0].IndexAlgoParams = fmt.Sprintf(`{"parser":%q}`, tc.parser)
+				}
+			}
+			matchFn := scan.FilterList[0].GetF()
+			if tc.preparedPattern {
+				matchFn.Args[0] = &planpb.Expr{Expr: &planpb.Expr_P{P: &planpb.ParamRef{Pos: 0}}}
+			} else {
+				matchFn.Args[0] = makePlan2StringConstExprWithType(tc.pattern, false)
+			}
+			mode := tc.mode
+			if mode == 0 {
+				mode = tree.FULLTEXT_BOOLEAN
+			}
+			matchFn.Args[1] = makePlan2Int64ConstExprWithType(int64(mode))
+			pkType := planpb.Type{Id: int32(tc.pkType)}
+			scan.TableDef.Cols[0].Typ = pkType
+			indexTable := mockCtx.tables[strings.ToLower(scan.TableDef.Indexes[0].IndexTableName)]
+			indexTable.Cols[1].Typ = pkType
+			if tc.dynamicLimit {
+				scan.Limit = &planpb.Expr{Expr: &planpb.Expr_P{P: &planpb.ParamRef{Pos: 0}}}
+			} else {
+				scan.Limit = makePlan2Uint64ConstExprWithType(10)
+			}
+			scan.Offset = makePlan2Uint64ConstExprWithType(5)
+
+			newID, changed, err := builder.applyFullTextFiltersForScanInJoin(
+				joinID,
+				scan,
+				map[[2]int32]int{},
+				map[[2]int32]*planpb.Expr{},
+			)
+			require.NoError(t, err)
+			require.True(t, changed)
+			functions := collectFullTextFunctionScans(builder, newID)
+			require.Len(t, functions, 1)
+			if tc.wantCandidateK {
+				require.Equal(t, uint64(15), functions[0].Limit.GetLit().GetU64Val())
+			} else {
+				require.Nil(t, functions[0].Limit)
+			}
+		})
+	}
+}
+
+func TestFullTextCandidateLimitRejectsVolatileResidualFilter(t *testing.T) {
+	builder, joinID, leftScanID, _ := buildFullTextJoinRewriteTestPlan(t, true, false, true)
+	mockCtx := builder.compCtx.(*fullTextJoinMockCompilerContext)
+	mockCtx.fulltextBloomFilterPushdown = 1
+	scan := builder.qry.Nodes[leftScanID]
+	convertFullTextJoinTestToFulltext2(builder, scan)
+
+	pkType := planpb.Type{Id: int32(types.T_int64)}
+	scan.TableDef.Cols[0].Typ = pkType
+	indexTable := mockCtx.tables[strings.ToLower(scan.TableDef.Indexes[0].IndexTableName)]
+	indexTable.Cols[1].Typ = pkType
+	matchFn := scan.FilterList[0].GetF()
+	matchFn.Args[0] = makePlan2StringConstExprWithType("+needle +world", false)
+	matchFn.Args[1] = makePlan2Int64ConstExprWithType(int64(tree.FULLTEXT_BOOLEAN))
+	scan.FilterList = append(scan.FilterList,
+		makeVolatileJoinFilter(t, mockCtx.MockCompilerContext, nil))
+	scan.Limit = makePlan2Uint64ConstExprWithType(2)
+	scan.Offset = makePlan2Uint64ConstExprWithType(1)
+
+	newID, changed, err := builder.applyFullTextFiltersForScanInJoin(
+		joinID,
+		scan,
+		map[[2]int32]int{},
+		map[[2]int32]*planpb.Expr{},
+	)
+	require.NoError(t, err)
+	require.True(t, changed)
+	functions := collectFullTextFunctionScans(builder, newID)
+	require.Len(t, functions, 1)
+	require.Nil(t, functions[0].Limit,
+		"a volatile residual must not receive a filter-dependent candidate bound")
+
+	var volatileScanNodes int
+	var visit func(int32)
+	visit = func(nodeID int32) {
+		node := builder.qry.Nodes[nodeID]
+		if node == nil {
+			return
+		}
+		if node.NodeType == planpb.Node_TABLE_SCAN {
+			for _, filter := range node.FilterList {
+				if containsVolatileFunction(filter) {
+					volatileScanNodes++
+					break
+				}
+			}
+		}
+		for _, childID := range node.Children {
+			visit(childID)
+		}
+	}
+	visit(newID)
+	require.Equal(t, 1, volatileScanNodes,
+		"the volatile residual must be evaluated only by the final scan")
+}
+
+func convertFullTextJoinTestToFulltext2(builder *QueryBuilder, scan *planpb.Node) {
+	logical := scan.TableDef.Indexes[0]
+	store := *logical
+	store.IndexAlgo = tree.INDEX_TYPE_FULLTEXT2.ToString()
+	store.IndexAlgoParams = `{"parser":"default"}`
+	store.IndexAlgoTableType = catalog.FullText2Index_TblType_Storage
+	store.IndexTableName = logical.IndexTableName + "_store"
+	meta := store
+	meta.IndexAlgoTableType = catalog.FullText2Index_TblType_Metadata
+	meta.IndexTableName = logical.IndexTableName + "_meta"
+	scan.TableDef.Indexes = []*planpb.IndexDef{&store, &meta}
+	registerFullTextJoinRegularIndexTable(builder, store.IndexTableName)
 }
 
 func TestFullTextDoesNotLimitIndependentIntersectionInputs(t *testing.T) {
@@ -5526,6 +5709,7 @@ func buildFullTextJoinRewriteTestPlan(t *testing.T, leftFullText, rightFullText,
 
 type fullTextJoinMockCompilerContext struct {
 	*MockCompilerContext
+	fulltextBloomFilterPushdown int8
 }
 
 func newFullTextJoinMockCompilerContext() *fullTextJoinMockCompilerContext {
@@ -5535,6 +5719,9 @@ func newFullTextJoinMockCompilerContext() *fullTextJoinMockCompilerContext {
 func (m *fullTextJoinMockCompilerContext) ResolveVariable(varName string, isSystemVar, isGlobalVar bool) (interface{}, error) {
 	if varName == "ft_relevancy_algorithm" {
 		return "", nil
+	}
+	if varName == "fulltext_bloom_filter_pushdown" {
+		return m.fulltextBloomFilterPushdown, nil
 	}
 	return m.MockCompilerContext.ResolveVariable(varName, isSystemVar, isGlobalVar)
 }
@@ -5676,10 +5863,11 @@ func collectFullTextFunctionScans(builder *QueryBuilder, nodeID int32) []*planpb
 
 	var nodes []*planpb.Node
 	if node.NodeType == planpb.Node_FUNCTION_SCAN &&
-		node.TableDef != nil &&
-		node.TableDef.TblFunc != nil &&
-		node.TableDef.TblFunc.Name == fulltext_index_scan_func_name {
-		nodes = append(nodes, node)
+		node.TableDef != nil && node.TableDef.TblFunc != nil {
+		name := node.TableDef.TblFunc.Name
+		if name == fulltext_index_scan_func_name || name == fulltext2_search_func_name {
+			nodes = append(nodes, node)
+		}
 	}
 	for _, childID := range node.Children {
 		nodes = append(nodes, collectFullTextFunctionScans(builder, childID)...)

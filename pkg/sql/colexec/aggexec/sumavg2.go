@@ -1200,18 +1200,98 @@ func (exec *sumAvgDecExec[A, S]) SetExtraInformation(partialResult any, _ int) e
 	return nil
 }
 
-func decAvg[S sumAvgDecimalState](sum S, count int64, argScale, resultScale int32) S {
+var (
+	decimal128PrecisionLimits = buildDecimal128PrecisionLimits()
+	decimal256PrecisionLimits = buildDecimal256PrecisionLimits()
+)
+
+func buildDecimal128PrecisionLimits() (limits [39]types.Decimal128) {
+	limits[0] = types.Decimal128FromInt64(1)
+	ten := types.Decimal128FromInt64(10)
+	for i := 1; i < len(limits); i++ {
+		var err error
+		limits[i], err = limits[i-1].Mul128(ten)
+		if err != nil {
+			panic(err)
+		}
+	}
+	return limits
+}
+
+func buildDecimal256PrecisionLimits() (limits [77]types.Decimal256) {
+	limits[0] = types.Decimal256FromInt64(1)
+	ten := types.Decimal256FromInt64(10)
+	for i := 1; i < len(limits); i++ {
+		var err error
+		limits[i], err = limits[i-1].Mul256(ten)
+		if err != nil {
+			panic(err)
+		}
+	}
+	return limits
+}
+
+func decimal128FitsPrecision(value types.Decimal128, width int32) bool {
+	limit := decimal128PrecisionLimits[width]
+	if value.Sign() {
+		return limit.Minus().Less(value)
+	}
+	return value.Less(limit)
+}
+
+func decimal256FitsPrecision(value types.Decimal256, width int32) bool {
+	limit := decimal256PrecisionLimits[width]
+	if value.Sign() {
+		return limit.Minus().Less(value)
+	}
+	return value.Less(limit)
+}
+
+func decAvg[S sumAvgDecimalState](sum S, count int64, argScale int32, resultType types.Type) (S, error) {
+	var zero S
 	switch value := any(sum).(type) {
 	case types.Decimal128:
+		if resultType.Oid != types.T_decimal128 || resultType.Width <= 0 ||
+			resultType.Width >= int32(len(decimal128PrecisionLimits)) ||
+			resultType.Scale < 0 || resultType.Scale > resultType.Width {
+			return zero, moerr.NewInternalErrorNoCtxf("invalid decimal avg result type %s", resultType.String())
+		}
 		cnt128 := types.Decimal128FromInt64(count)
-		avg, scale, _ := value.Div(cnt128, argScale, 0)
-		avg, _ = avg.Scale(resultScale - scale)
-		return any(avg).(S)
+		avg, scale, err := value.Div(cnt128, argScale, 0)
+		if err != nil {
+			return zero, err
+		}
+		avg, err = avg.Scale(resultType.Scale - scale)
+		if err != nil {
+			return zero, err
+		}
+		if !decimal128FitsPrecision(avg, resultType.Width) {
+			return zero, moerr.NewInvalidInputNoCtxf(
+				"%s beyond the range, can't be converted to Decimal128(%d,%d).",
+				avg.Format(resultType.Scale), resultType.Width, resultType.Scale)
+		}
+		return any(avg).(S), nil
 	case types.Decimal256:
+		if resultType.Oid != types.T_decimal256 || resultType.Width <= 0 ||
+			resultType.Width >= int32(len(decimal256PrecisionLimits)) ||
+			resultType.Scale < 0 || resultType.Scale > resultType.Width {
+			return zero, moerr.NewInternalErrorNoCtxf("invalid decimal avg result type %s", resultType.String())
+		}
 		cnt256 := types.Decimal256FromInt64(count)
-		avg, scale, _ := value.Div(cnt256, argScale, 0)
-		avg, _ = avg.Scale(resultScale - scale)
-		return any(avg).(S)
+		avg, scale, err := value.Div(cnt256, argScale, 0)
+		if err != nil {
+			return zero, err
+		}
+		avg, err = avg.Scale(resultType.Scale - scale)
+		if err != nil {
+			return zero, err
+		}
+		if !decimal256FitsPrecision(avg, resultType.Width) {
+			return zero, moerr.NewInvalidInputNoCtxf(
+				"%s beyond the range, can't be converted to Decimal256(%d,%d).",
+				avg.Format(resultType.Scale), resultType.Width, resultType.Scale)
+		}
+		return any(avg).(S), nil
 	}
 	panic(moerr.NewInternalErrorNoCtxf("unsupported decimal avg state type %T", sum))
 }
@@ -1298,7 +1378,10 @@ func (exec *sumAvgDecExec[A, S]) Flush() (_ []*vector.Vector, retErr error) {
 							return nil, err
 						}
 					} else {
-						avg := decAvg(sum, int64(exec.state[i].argCnt[j]), sumAvgDecimalArgScale(exec.aggInfo.argTypes[0]), resultType.Scale)
+						avg, err := decAvg(sum, int64(exec.state[i].argCnt[j]), sumAvgDecimalArgScale(exec.aggInfo.argTypes[0]), resultType)
+						if err != nil {
+							return nil, err
+						}
 						if err := vector.AppendFixed(vecs[i], avg, false, exec.mp); err != nil {
 							return nil, err
 						}
@@ -1321,7 +1404,10 @@ func (exec *sumAvgDecExec[A, S]) Flush() (_ []*vector.Vector, retErr error) {
 					if cnt == 0 {
 						sumVec.SetNull(uint64(j))
 					} else {
-						avg := decAvg(sums[j], cnt, sumAvgDecimalArgScale(exec.aggInfo.argTypes[0]), resultType.Scale)
+						avg, err := decAvg(sums[j], cnt, sumAvgDecimalArgScale(exec.aggInfo.argTypes[0]), resultType)
+						if err != nil {
+							return nil, err
+						}
 						vector.SetFixedAtNoTypeCheck(sumVec, j, avg)
 					}
 				}

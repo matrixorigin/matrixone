@@ -42,7 +42,11 @@ type Fulltext2Query struct {
 	// term, no positional phrase), so it works on a POSITION_FREE index. Takes
 	// precedence over Boolean.
 	BagOfWords bool
-	Algo       ScoreAlgo
+	// JSONProbe is the json index probe: Pattern is a binary probe payload
+	// (exact terms + inclusive term ranges), NOT text. Takes precedence over
+	// BagOfWords and Boolean — the payload must never reach a pattern parser.
+	JSONProbe bool
+	Algo      ScoreAlgo
 	// FilterBytes is the optional serialized docfilter membership — the WHERE-clause
 	// prefilter pushed down as a runtime filter (built in C from the eligible pks),
 	// applied INSIDE the search so a pushed LIMIT bounds the filtered set. nil = none.
@@ -347,7 +351,9 @@ func (s *Fulltext2Search) runTopK(q Fulltext2Query, k int, pf *prefilter) ([]Res
 		res []Result
 		err error
 	)
-	if q.BagOfWords {
+	if q.JSONProbe {
+		res, err = s.idx.SearchJSONProbe(q.Pattern, q.Algo, k, pf)
+	} else if q.BagOfWords {
 		res, err = s.idx.SearchBagOfWords(q.Pattern, s.cfg.Parser, q.Algo, k, pf)
 	} else {
 		res, err = s.idx.SearchQuery(q.Pattern, q.Boolean, s.cfg.Parser, q.Algo, k, pf)
@@ -391,7 +397,9 @@ func (s *Fulltext2Search) Search(proc *sqlexec.SqlProcess, query any, rt vectori
 	if rt.Emit != nil {
 		wantInclude := len(rt.RequestedIncludeColumns) > 0
 		var serr error
-		if q.BagOfWords {
+		if q.JSONProbe {
+			serr = s.idx.StreamJSONProbe(q.Pattern, q.Algo, pf, wantInclude, rt.Emit)
+		} else if q.BagOfWords {
 			serr = s.idx.StreamBagOfWords(q.Pattern, s.cfg.Parser, q.Algo, pf, wantInclude, rt.Emit)
 		} else {
 			serr = s.idx.StreamQuery(q.Pattern, q.Boolean, s.cfg.Parser, q.Algo, pf, wantInclude, rt.Emit)

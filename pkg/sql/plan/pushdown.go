@@ -871,11 +871,16 @@ func (builder *QueryBuilder) pushdownLimitToTableScan(nodeID int32) {
 	for _, childID := range node.Children {
 		builder.pushdownLimitToTableScan(childID)
 	}
-	if node.NodeType == plan.Node_PROJECT && len(node.Children) > 0 {
+	if node.NodeType == plan.Node_PROJECT && len(node.Children) > 0 &&
+		(node.Limit != nil || node.Offset != nil) {
 		child := builder.qry.Nodes[node.Children[0]]
 		if child.NodeType == plan.Node_TABLE_SCAN {
-			child.Limit, child.Offset = node.Limit, node.Offset
-			node.Limit, node.Offset = nil, nil
+			if limit, offset, ok := composePagination(
+				child.Limit, child.Offset, node.Limit, node.Offset,
+			); ok {
+				child.Limit, child.Offset = limit, offset
+				node.Limit, node.Offset = nil, nil
+			}
 		} else if node.Offset == nil &&
 			child.NodeType == plan.Node_FUNCTION_SCAN &&
 			child.TableDef != nil && child.TableDef.TblFunc != nil &&
@@ -884,8 +889,12 @@ func (builder *QueryBuilder) pushdownLimitToTableScan(nodeID int32) {
 			// ordering contract.  A plain LIMIT can therefore be evaluated
 			// by the producer, but OFFSET (or a sort above it) must remain
 			// outside so that the result semantics are unchanged.
-			child.Limit = node.Limit
-			node.Limit = nil
+			if limit, offset, ok := composePagination(
+				child.Limit, child.Offset, node.Limit, nil,
+			); ok {
+				child.Limit, child.Offset = limit, offset
+				node.Limit = nil
+			}
 		}
 	}
 }

@@ -92,7 +92,7 @@ show pitr;
 -- @session
 
 -- alter pitr success
-alter pitr pitr01 range 1 'd';
+alter pitr pitr01 range 1 'h';
 -- alter pitr failed
 alter pitr pitr100 range 1 'd';
 alter pitr if exists pitr100 range 1 'd';
@@ -113,7 +113,7 @@ show pitr;
 
 -- @session:id=1&user=acc01:test_account&password=111
 -- alter pitr success
-alter pitr pitr16 range 1 'd';
+alter pitr pitr16 range 1 'h';
 -- alter pitr failed
 alter pitr pitr100 range 1 'd';
 alter pitr if exists pitr100 range 1 'd';
@@ -163,7 +163,7 @@ create account acc02 admin_name = 'test_account' identified by '111';
 create pitr pitr01 for account range 1 'h';
 -- @ignore:1,2
 show pitr;
-alter pitr pitr01 range 1 'd';
+alter pitr pitr01 range 1 'h';
 -- @ignore:1,2
 show pitr;
 -- @session

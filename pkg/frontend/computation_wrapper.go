@@ -62,6 +62,11 @@ type Compile interface {
 	SetOriginSQL(string)
 }
 
+type retiredRuntimeCompile struct {
+	owner   *PrepareStmt
+	compile *compile.Compile
+}
+
 type TxnComputationWrapper struct {
 	stmt      tree.Statement
 	plan      *plan2.Plan
@@ -95,9 +100,10 @@ type TxnComputationWrapper struct {
 	// specialization outside the live PrepareStmt cache. The candidate is
 	// installed only after its Compile succeeds, so a failed replacement leaves
 	// the preceding category and Compile intact.
-	runtimeCacheTarget *PrepareStmt
-	runtimeCacheKey    string
-	runtimeCachePlan   *plan.Plan
+	runtimeCacheTarget          *PrepareStmt
+	runtimeCacheKey             string
+	runtimeCachePlan            *plan.Plan
+	runtimeCacheRetiredCompiles []retiredRuntimeCompile
 
 	explainBuffer *bytes.Buffer
 	binaryPrepare bool
@@ -241,6 +247,7 @@ func (cwft *TxnComputationWrapper) freeStmt() {
 }
 
 func (cwft *TxnComputationWrapper) Clear() {
+	cwft.releaseRuntimeCacheRetiredCompiles()
 	cwft.plan = nil
 	cwft.proc = nil
 	cwft.ses = nil
@@ -464,7 +471,9 @@ func (cwft *TxnComputationWrapper) Compile(any any, fill func(*batch.Batch, *per
 				// Prepared plans are cached across privilege-cache refreshes. Recheck
 				// the resolved statement and plan at execution time so a revoke cannot
 				// leave an existing PREPARE/EXECUTE handle authorized.
-				authStats, err := authenticateUserCanExecutePrepareOrExecute(execCtx.reqCtx, owner, stmt, plan)
+				authStats, err := authenticateUserCanExecutePrepareOrExecute(
+					execCtx.reqCtx, owner, stmt, plan, execCtx.effectiveTxnDefaultDatabase,
+				)
 				if err != nil {
 					return nil, err
 				}
@@ -501,7 +510,8 @@ func (cwft *TxnComputationWrapper) Compile(any any, fill func(*batch.Batch, *per
 				// check as text EXECUTE. Do not rely on authorization captured while
 				// the statement was prepared.
 				authStats, err := authenticateUserCanExecutePrepareOrExecute(
-					execCtx.reqCtx, owner, stmt, cwft.plan)
+					execCtx.reqCtx, owner, stmt, cwft.plan, execCtx.effectiveTxnDefaultDatabase,
+				)
 				if err != nil {
 					return nil, err
 				}
@@ -1126,6 +1136,9 @@ func initExecuteStmtParamWithResolverInSession(
 		return nil, nil, nil, "", false, err
 	}
 	cwft.preparedStmt = prepareStmt
+	// Carry the binding database through execute-time authorization, lifecycle
+	// admission, and ownership cleanup. All three must address the same object.
+	execCtx.effectiveTxnDefaultDatabase = prepareStmt.defaultDatabase
 	originSQL := prepareStmt.Sql
 	preparePlan := prepareStmt.PreparePlan.GetDcl().GetPrepare()
 	executionPlan := preparePlan.Plan
@@ -1321,6 +1334,16 @@ func initExecuteStmtParamWithResolverInSession(
 			prepareStmt.compileNeedsRebuild = false
 		}
 	}
+	// Decide from the plan shape once per prepared-plan generation. This keeps
+	// ordinary write-only statements on their cached compile while allowing
+	// domain-sensitive predicates/expressions to be rebound for each binary
+	// execution.
+	if prepareStmt.runtimeSpecializationPlan != prepareStmt.PreparePlan {
+		prepareStmt.runtimeSpecializationNeeded = plan2.PreparedPlanNeedsRuntimeSpecialization(preparePlan.Plan)
+		prepareStmt.runtimeSpecializationPlan = prepareStmt.PreparePlan
+	}
+	needsRuntimeSpecialization := prepareStmt.runtimeSpecializationNeeded ||
+		(executionPlan != nil && executionPlan.GetDdl() != nil)
 	numParams := len(preparePlan.ParamTypes)
 	binaryExecute := execCtx.input != nil && execCtx.input.isBinaryProtExecute
 	binaryLiteralPlan := binaryExecute &&
@@ -1427,6 +1450,9 @@ func initExecuteStmtParamWithResolverInSession(
 		runtimeTextComparisonSpecialization = preparedBinaryRuntimeTextComparisonSpecializationNeeded(
 			executionPlan, runtimeTextComparisonPacketCandidate,
 			prepareStmt.ParamTypes, prepareStmt.params)
+		if runtimeTextComparisonSpecialization {
+			needsRuntimeSpecialization = true
+		}
 		if hasNumericPrefixPacket && !runtimeNumericPrefixCandidate {
 			// Older/rebuilt plan shapes can hide the candidate behind generated
 			// index expressions. This fallback scans only DECIMAL/text/NULL packets;
@@ -1444,7 +1470,7 @@ func initExecuteStmtParamWithResolverInSession(
 		} else {
 			cwft.proc.SetPrepareParams(prepareStmt.params)
 		}
-		needsRuntimeParamVals = needsRuntimeParamVals ||
+		needsRuntimeParamVals = needsRuntimeParamVals || needsRuntimeSpecialization ||
 			runtimeNumericPrefixCandidate || runtimeNumericOverloadCandidate ||
 			runtimeDirectResultCandidate || runtimeResultDomainSpecialization ||
 			runtimeTextComparisonSpecialization
@@ -1472,7 +1498,7 @@ func initExecuteStmtParamWithResolverInSession(
 			}
 			if runtimeDirectResultCandidate && !runtimeNumericPrefixCandidate &&
 				!runtimeNumericOverloadCandidate && !runtimeResultDomainSpecialization &&
-				!runtimeTextComparisonSpecialization {
+				!runtimeTextComparisonSpecialization && !needsRuntimeSpecialization {
 				restrictPreparedRuntimeTypesToDirectResults(cwft.paramVals, runtimeDirectResultPositions)
 			} else if runtimeDirectResultCandidate {
 				retainPreparedRuntimeParamRefs(cwft.paramVals)
@@ -1513,15 +1539,17 @@ func initExecuteStmtParamWithResolverInSession(
 		runtimeNumericPrefixCandidate = prepareStmt.numericPrefixConsumer &&
 			preparedParamValuesEnableNumericPrefix(cwft.paramVals)
 	}
-	if runtimeNumericOverloadCandidate {
-		// Specialization materializes every ParamRef in the copied plan, not only
-		// the positions that select ABS's runtime overload. Preserve provenance
-		// for every parameter before caching so a same-category cache hit cannot
-		// retain an unrelated value from the first execution.
-		retainPreparedRuntimeParamRefs(cwft.paramVals)
-	}
-	if runtimeNumericPrefixCandidate || runtimeResultDomainSpecialization ||
-		runtimeTextComparisonSpecialization {
+	// Static binary specialization, numeric-prefix conversion, and deferred
+	// overload binding all materialize every ParamRef in the copied plan. Keep
+	// provenance for every parameter before caching so a same-category hit reads
+	// the current Process vector instead of retaining the first execution's value.
+	// Pagination, window offsets, and EXPLAIN remain value-driven per execution.
+	stableRuntimeSpecializationCandidate := binaryExecute &&
+		prepareStmt.runtimeSpecializationNeeded && !runtimeTextComparisonSpecialization &&
+		!prepareStmt.hasPaginationParams && !prepareStmt.hasLagLeadParams && !preparedExplain
+	if runtimeNumericOverloadCandidate || runtimeNumericPrefixCandidate ||
+		runtimeResultDomainSpecialization || runtimeTextComparisonSpecialization ||
+		stableRuntimeSpecializationCandidate {
 		retainPreparedRuntimeParamRefs(cwft.paramVals)
 	}
 	if err := plan2.ValidatePreparedLagLeadParams(reqCtx, preparePlan.Plan, cwft.paramVals); err != nil {
@@ -1538,17 +1566,16 @@ func initExecuteStmtParamWithResolverInSession(
 		}
 	}
 
-	// Only cached numeric-prefix consumers and binary literal plans enter
-	// execute-time specialization. Ordinary COM_STMT Query executions retain
-	// main's cached plan/compile fast path.
-	// SQL EXECUTE first proves that a parameter reaches a decimal-aware
-	// common-type consumer; ordinary FLOAT, NULL, aggregate, and string paths
-	// keep the cached prepare-time plan without allocating a complete copy.
+	// Static binary specialization, numeric-prefix consumers, and direct numeric
+	// result markers enter the same bounded one-category cache. The copied plan
+	// keeps typed ParamRefs, so values in a stable runtime domain reuse its compile
+	// while a domain switch replaces at most one old category.
 	runtimePlan, runtimeSpecialized, runtimePlanApplied := executionPlan, false, false
 	var cachedRuntimeCompile *compile.Compile
 	runtimeCacheKey := ""
 	runtimeCategoryCandidate := runtimeNumericPrefixCandidate || runtimeNumericOverloadCandidate ||
-		runtimeResultDomainSpecialization
+		stableRuntimeSpecializationCandidate
+	runtimeCategoryCandidate = runtimeCategoryCandidate || runtimeResultDomainSpecialization
 	runtimeSpecializationCandidate := runtimeCategoryCandidate || runtimeDirectResultCandidate ||
 		runtimeTextComparisonSpecialization
 	// The exact text-to-numeric comparison shape can depend on the value, not
@@ -1580,7 +1607,8 @@ func initExecuteStmtParamWithResolverInSession(
 			runtimeResultDomainSpecialization,
 			runtimeTextComparisonSpecialization,
 			runtimeDirectResultPositions,
-			prepareStmt.runtimeResultParamPositions)
+			prepareStmt.runtimeResultParamPositions,
+			needsRuntimeSpecialization)
 		if err == nil && cacheableRuntimeQuery && runtimeSpecialized && runtimePlanApplied {
 			err = plan2.RestorePreparedRuntimeParamRefs(reqCtx, runtimePlan)
 			if err == nil {
@@ -1668,10 +1696,26 @@ func (cwft *TxnComputationWrapper) installRuntimeCacheCandidate(runtimeCompile *
 		cwft.runtimeCachePlan == nil || runtimeCompile == nil {
 		return false
 	}
-	cwft.runtimeCacheTarget.installRuntimeSpecializationCache(
+	retiredCompile := cwft.runtimeCacheTarget.installRuntimeSpecializationCache(
 		cwft.runtimeCacheKey, cwft.runtimeCachePlan, runtimeCompile)
+	if retiredCompile != nil {
+		// NewCompile has already installed runtimeCompile's execution state on the
+		// shared session Process. Releasing the displaced compile here would call
+		// Process.Free and erase that state before runtimeCompile can run. Keep the
+		// old topology alive until this statement wrapper has fully finished.
+		cwft.runtimeCacheRetiredCompiles = append(cwft.runtimeCacheRetiredCompiles, retiredRuntimeCompile{
+			owner: cwft.runtimeCacheTarget, compile: retiredCompile,
+		})
+	}
 	cwft.discardRuntimeCacheCandidate()
 	return true
+}
+
+func (cwft *TxnComputationWrapper) releaseRuntimeCacheRetiredCompiles() {
+	for _, retired := range cwft.runtimeCacheRetiredCompiles {
+		retired.owner.releaseRuntimeCompile(retired.compile)
+	}
+	cwft.runtimeCacheRetiredCompiles = nil
 }
 
 func retainPreparedRuntimeParamRefs(paramVals []any) {
@@ -1873,6 +1917,7 @@ func specializePreparedExecutionPlan(
 	forceTextComparisonSpecialization bool,
 	directResultPositions []int32,
 	resultDomainPositions []int32,
+	forceRuntimeSpecialization ...bool,
 ) (*plan2.Plan, bool, bool, error) {
 	if len(paramVals) == 0 || executionPlan == nil ||
 		(executionPlan.GetQuery() == nil && executionPlan.GetDdl() == nil &&
@@ -1883,9 +1928,13 @@ func specializePreparedExecutionPlan(
 		(executionPlan.GetDdl() != nil || executionPlan.GetDcl().GetSetVariables() != nil)
 	needsNumericPrefix := !forceNumericOverload &&
 		plan2.PreparedPlanNeedsNumericPrefixSpecialization(executionPlan, paramVals)
+	needsRuntimeSpecialization := len(forceRuntimeSpecialization) > 0 && forceRuntimeSpecialization[0]
+	if !needsRuntimeSpecialization {
+		needsRuntimeSpecialization = plan2.PreparedPlanNeedsRuntimeSpecialization(executionPlan)
+	}
 	if !forceNumericOverload && !needsNumericPrefix && !directResultSpecialization &&
 		!resultDomainSpecialization && !forceTextComparisonSpecialization && !binaryLiteralPlan &&
-		!plan2.PreparedPlanHasPaginationParams(executionPlan) {
+		!plan2.PreparedPlanHasPaginationParams(executionPlan) && !needsRuntimeSpecialization {
 		return executionPlan, false, false, nil
 	}
 
@@ -1899,6 +1948,10 @@ func specializePreparedExecutionPlan(
 	} else if forceNumericOverload {
 		runtimePlan, specialized, err = plan2.FillValuesOfParamsInPlanWithPreparedNumericOverload(
 			ctx, executionPlan, paramVals)
+	} else if needsRuntimeSpecialization {
+		runtimePlan, specialized, err =
+			plan2.FillValuesOfParamsInPlanWithSpecializationPreservingDMLWrites(
+				ctx, executionPlan, paramVals)
 	} else if (directResultSpecialization || resultDomainSpecialization) && !needsNumericPrefix {
 		var positions []int32
 		if directResultSpecialization {
@@ -2227,6 +2280,16 @@ func preparedBinaryRuntimeResultDomainSpecializationNeeded(
 			continue
 		}
 		return true
+	}
+	return false
+}
+
+func runtimeParamTypesContainText(runtimeTypes []types.Type) bool {
+	for _, runtimeType := range runtimeTypes {
+		switch runtimeType.Oid {
+		case types.T_char, types.T_varchar, types.T_text:
+			return true
+		}
 	}
 	return false
 }
