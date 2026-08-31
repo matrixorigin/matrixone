@@ -633,7 +633,7 @@ markerSearch:
 			}
 			positiveMarker := false
 			for _, filter := range parent.FilterList {
-				if isMarkColumn(filter, markTag) || isTrueMarkColumn(filter, markTag) {
+				if isCTEPositiveMarkFilter(filter, markTag) {
 					positiveMarker = true
 					break
 				}
@@ -673,6 +673,23 @@ markerSearch:
 		}
 	}
 	return false
+}
+
+func isCTEPositiveMarkFilter(expr *planpb.Expr, markTag int32) bool {
+	col := expr.GetCol()
+	if col != nil && col.RelPos == markTag {
+		return true
+	}
+	fn := expr.GetF()
+	if fn == nil || fn.Func == nil || len(fn.Args) != 1 {
+		return false
+	}
+	funcID, _ := function.DecodeOverloadID(fn.Func.GetObj())
+	if funcID != function.ISTRUE {
+		return false
+	}
+	col = fn.Args[0].GetCol()
+	return col != nil && col.RelPos == markTag
 }
 
 // cteSharedConsumerPredicate returns a safe superset predicate for one shared
