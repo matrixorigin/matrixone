@@ -302,6 +302,31 @@ func TestIssue26131Q15SharedCTEExecutesBothConsumers(t *testing.T) {
 		require.NoError(t, consumerTopNRows.Err())
 		require.ElementsMatch(t, []domainResult{{sum: 10, length: 1}, {sum: 20, length: 2}},
 			consumerTopNResults)
+
+		const tagFreePredicateQuery = `with c as (
+			select k as region, cast(max(raw) as bigint) as risky, max(payload) as payload
+			from cte_domain_rows group by k, x
+		)
+		select coalesce(sum(risky), 0), coalesce(max(length(payload)), 0)
+		from c where region = 1 and rand() < 0
+		union all
+		select coalesce(sum(risky), 0), coalesce(max(length(payload)), 0)
+		from c where region = 2 and rand() < 0`
+		tagFreePredicatePlan := explainSQL(t, ctx, db, "explain "+tagFreePredicateQuery)
+		require.NotContains(t, tagFreePredicatePlan, "Sink Scan",
+			"an omitted tag-free consumer predicate must keep the CTE inline")
+		tagFreePredicateRows, err := db.QueryContext(ctx, tagFreePredicateQuery)
+		require.NoError(t, err)
+		defer tagFreePredicateRows.Close()
+		var tagFreePredicateResults []domainResult
+		for tagFreePredicateRows.Next() {
+			var result domainResult
+			require.NoError(t, tagFreePredicateRows.Scan(&result.sum, &result.length))
+			tagFreePredicateResults = append(tagFreePredicateResults, result)
+		}
+		require.NoError(t, tagFreePredicateRows.Err())
+		require.ElementsMatch(t, []domainResult{{sum: 0, length: 0}, {sum: 0, length: 0}},
+			tagFreePredicateResults)
 	})
 }
 

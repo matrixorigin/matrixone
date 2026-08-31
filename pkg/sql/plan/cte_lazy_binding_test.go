@@ -744,6 +744,28 @@ func TestCTEMultiReferenceRejectsFallibleOutputBeforeConsumerTopN(t *testing.T) 
 		"consumer Top-N must not expand evaluation of a fallible shared output")
 }
 
+func TestCTEMultiReferenceRejectsOmittedTagFreeConsumerPredicate(t *testing.T) {
+	mock := NewMockOptimizer(false)
+	logicPlan, err := runOneStmt(mock, t, `
+		with c as (
+			select l_suppkey as region,
+			       cast(max(l_comment) as bigint) as risky,
+			       max(l_comment) as payload
+			from lineitem group by l_suppkey
+		)
+		select coalesce(sum(risky), 0), coalesce(max(length(payload)), 0)
+		from c where region = 1 and rand() < 0
+		union all
+		select coalesce(sum(risky), 0), coalesce(max(length(payload)), 0)
+		from c where region = 2 and rand() < 0`)
+	require.NoError(t, err)
+
+	query := logicPlan.GetQuery()
+	require.NotNil(t, query)
+	require.Equal(t, 0, countReachableNodeType(query, planpb.Node_SINK_SCAN),
+		"an omitted tag-free predicate must make the shared row domain inexact")
+}
+
 func TestCTEMultiReferenceReusesRobustPredicateFreeSpillProducer(t *testing.T) {
 	mock := NewMockOptimizer(false)
 	logicPlan, err := runOneStmt(mock, t, `
