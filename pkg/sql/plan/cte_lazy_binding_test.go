@@ -650,6 +650,28 @@ func TestCTEMultiReferenceRejectsExpandedUnsafeOutputEvaluation(t *testing.T) {
 		"sharing must not evaluate a fallible output for a consumer that did not request it")
 }
 
+func TestCTEMultiReferenceRejectsExpandedUnsafeOutputRowDomain(t *testing.T) {
+	mock := NewMockOptimizer(false)
+	logicPlan, err := runOneStmt(mock, t, `
+		with c as (
+			select l_suppkey as k, l_orderkey as x,
+			       cast(max(l_comment) as bigint) as risky,
+			       max(l_comment) as payload
+			from lineitem group by l_suppkey, l_orderkey
+		)
+		select sum(risky), max(length(payload))
+		from c where k = 1 and x = 1
+		union all
+		select sum(risky), max(length(payload))
+		from c where k = 2`)
+	require.NoError(t, err)
+
+	query := logicPlan.GetQuery()
+	require.NotNil(t, query)
+	require.Equal(t, 0, countReachableNodeType(query, planpb.Node_SINK_SCAN),
+		"sharing must not evaluate a fallible output on rows admitted only by a weakened shared predicate")
+}
+
 func TestCTEMultiReferenceReusesRobustPredicateFreeSpillProducer(t *testing.T) {
 	mock := NewMockOptimizer(false)
 	logicPlan, err := runOneStmt(mock, t, `
@@ -1106,7 +1128,7 @@ func TestCTEOutputDemandRequiresTotalExtraColumns(t *testing.T) {
 	require.False(t, builder.cteOutputDemandPreservesEvaluation(6, []cteOccurrence{
 		{rootID: 1, rootTag: 10, types: []planpb.Type{intType, castExpr.Typ}},
 		{rootID: 4, rootTag: 20, types: []planpb.Type{intType, castExpr.Typ}},
-	}), "a consumer-only fallible cast must keep the CTE inline")
+	}, true), "a consumer-only fallible cast must keep the CTE inline")
 }
 
 func TestCTEReuseRejectsExternalAndSideEffectingNodes(t *testing.T) {

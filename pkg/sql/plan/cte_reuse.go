@@ -102,12 +102,14 @@ func (builder *QueryBuilder) reusableCTEProducer(
 	if !fullyDrained {
 		return 0, nil, false
 	}
-	if !builder.cteOutputDemandPreservesEvaluation(rootID, cteRef.occurrences) {
+	producerRootID := first.rootID
+	sharedPredicate, predicateAware, rowDomainExact := builder.cteSharedConsumerPredicate(
+		rootID, cteRef.occurrences)
+	if !builder.cteOutputDemandPreservesEvaluation(
+		rootID, cteRef.occurrences, rowDomainExact,
+	) {
 		return 0, nil, false
 	}
-
-	producerRootID := first.rootID
-	sharedPredicate, predicateAware := builder.cteSharedConsumerPredicate(rootID, cteRef.occurrences)
 	discardProducerFilter := func() {
 		if !predicateAware || producerRootID != int32(len(builder.qry.Nodes)-1) {
 			return
@@ -232,13 +234,13 @@ func (builder *QueryBuilder) cteRequiredOutputColumns(
 }
 
 // cteOutputDemandPreservesEvaluation rejects sharing when the materialized
-// producer would evaluate an output for consumers that did not need it and
-// that output is not structurally proven total. Determinism is insufficient:
-// a cast can be deterministic and still fail on rows selected only by another
-// consumer.
+// producer expands either the consumer set or the row domain on which a
+// fallible output is evaluated. Determinism is insufficient: a cast can be
+// deterministic and still fail on rows excluded by one consumer's predicate.
 func (builder *QueryBuilder) cteOutputDemandPreservesEvaluation(
 	rootID int32,
 	occurrences []cteOccurrence,
+	rowDomainExact bool,
 ) bool {
 	requiredByOccurrence, ok := builder.cteRequiredOutputColumns(rootID, occurrences)
 	if !ok {
@@ -251,7 +253,8 @@ func (builder *QueryBuilder) cteOutputDemandPreservesEvaluation(
 				requiredCount++
 			}
 		}
-		if requiredCount > 0 && requiredCount < len(occurrences) &&
+		if requiredCount > 0 &&
+			(requiredCount < len(occurrences) || !rowDomainExact) &&
 			!builder.cteOutputColumnIsTotal(
 				occurrences[0],
 				int32(colPos),
@@ -386,6 +389,22 @@ func (builder *QueryBuilder) cteAggregateIsTotal(
 		return len(fn.Args) == 1 &&
 			builder.cteExprIsTotal(rootID, fn.Args[0], ctx, visiting) &&
 			comparisonEvaluationIsTotal(function.LESS_THAN, fn.Args[0].Typ, fn.Args[0].Typ)
+	case function.SUM:
+		if len(fn.Args) != 1 ||
+			!builder.cteExprIsTotal(rootID, fn.Args[0], ctx, visiting) {
+			return false
+		}
+		// Match the executor's data-error contract. Floating SUM permits
+		// infinity, Decimal64 accumulates unchecked into Decimal128, and the
+		// Decimal128 fast path checks overflow only above precision 28.
+		switch types.T(fn.Args[0].Typ.Id) {
+		case types.T_float32, types.T_float64, types.T_decimal64:
+			return true
+		case types.T_decimal128:
+			return validDecimalPlanType(fn.Args[0].Typ) && fn.Args[0].Typ.Width <= 28
+		default:
+			return false
+		}
 	default:
 		return false
 	}
@@ -879,25 +898,34 @@ func isCTEPositiveMarkFilter(expr *planpb.Expr, markTag int32) bool {
 }
 
 // cteSharedConsumerPredicate returns a safe superset predicate for one shared
-// producer. Every occurrence must have a deterministic predicate that depends
-// only on that occurrence's output. The original consumer predicates remain in
-// place, so SQL three-valued logic is preserved: if a row can pass consumer i,
-// it necessarily passes P1 OR ... OR Pn at the producer.
+// producer. The original consumer predicates remain in place, so SQL
+// three-valued logic is preserved: if a row can pass consumer i, it necessarily
+// passes P1 OR ... OR Pn at the producer. rowDomainExact additionally proves
+// that no truncation-safe local predicate was omitted from that union.
 func (builder *QueryBuilder) cteSharedConsumerPredicate(
 	rootID int32,
 	occurrences []cteOccurrence,
-) (*planpb.Expr, bool) {
+) (*planpb.Expr, bool, bool) {
 	parents := make(map[int32][]int32)
 	reachable := make(map[int32]bool)
 	builder.collectCTEParents(rootID, parents, reachable)
 
 	localPredicates := make([][]*planpb.Expr, len(occurrences))
 	commonColumns := make(map[int32]bool)
+	hasUnfilteredConsumer := false
 	for i, occurrence := range occurrences {
 		if !reachable[occurrence.rootID] {
-			return nil, false
+			return nil, false, false
 		}
-		localPredicates[i] = builder.cteOccurrenceLocalPredicates(occurrence, parents)
+		var ok bool
+		localPredicates[i], ok = builder.cteOccurrenceLocalPredicates(occurrence, parents)
+		if !ok {
+			return nil, false, false
+		}
+		if len(localPredicates[i]) == 0 {
+			hasUnfilteredConsumer = true
+			continue
+		}
 		constrainedColumns := make(map[int32]bool)
 		for _, predicate := range localPredicates[i] {
 			if colPos, ok := ctePredicateSingleOutputColumn(predicate, occurrence.rootTag); ok {
@@ -905,7 +933,7 @@ func (builder *QueryBuilder) cteSharedConsumerPredicate(
 			}
 		}
 		if len(constrainedColumns) == 0 {
-			return nil, false
+			return nil, false, false
 		}
 		if i == 0 {
 			for colPos := range constrainedColumns {
@@ -919,17 +947,24 @@ func (builder *QueryBuilder) cteSharedConsumerPredicate(
 			}
 		}
 	}
+	if hasUnfilteredConsumer {
+		// One unfiltered consumer already requires the complete producer
+		// domain; the union is therefore exactly the full domain.
+		return nil, false, true
+	}
 	if len(commonColumns) == 0 {
-		return nil, false
+		return nil, false, false
 	}
 
 	disjuncts := make([]*planpb.Expr, 0, len(occurrences))
 	producerTag := occurrences[0].rootTag
+	rowDomainExact := true
 	for i, occurrence := range occurrences {
 		predicates := make([]*planpb.Expr, 0, len(localPredicates[i]))
 		for _, predicate := range localPredicates[i] {
 			colPos, ok := ctePredicateSingleOutputColumn(predicate, occurrence.rootTag)
 			if !ok || !commonColumns[colPos] {
+				rowDomainExact = false
 				continue
 			}
 			predicate = DeepCopyExpr(predicate)
@@ -938,12 +973,13 @@ func (builder *QueryBuilder) cteSharedConsumerPredicate(
 		}
 		conjunct, ok := builder.combineCTEPredicates("and", predicates)
 		if !ok {
-			return nil, false
+			return nil, false, false
 		}
 		disjuncts = append(disjuncts, conjunct)
 	}
 
-	return builder.combineCTEPredicates("or", disjuncts)
+	sharedPredicate, ok := builder.combineCTEPredicates("or", disjuncts)
+	return sharedPredicate, ok, ok && rowDomainExact
 }
 
 // ctePredicateSingleOutputColumn identifies routing predicates such as
@@ -998,7 +1034,7 @@ func ctePredicateSingleOutputColumn(expr *planpb.Expr, tag int32) (int32, bool) 
 func (builder *QueryBuilder) cteOccurrenceLocalPredicates(
 	occurrence cteOccurrence,
 	parents map[int32][]int32,
-) []*planpb.Expr {
+) ([]*planpb.Expr, bool) {
 	tagSet := map[int32]bool{occurrence.rootTag: true}
 	predicates := make([]*planpb.Expr, 0, 2)
 	queue := append([]int32(nil), parents[occurrence.rootID]...)
@@ -1007,7 +1043,7 @@ func (builder *QueryBuilder) cteOccurrenceLocalPredicates(
 		nodeID := queue[0]
 		queue = queue[1:]
 		if seen[nodeID] {
-			return nil
+			return nil, false
 		}
 		seen[nodeID] = true
 		node := builder.qry.Nodes[nodeID]
@@ -1031,14 +1067,15 @@ func (builder *QueryBuilder) cteOccurrenceLocalPredicates(
 
 		for _, predicate := range candidates {
 			if predicate == nil || !containsTag(predicate, occurrence.rootTag) ||
-				!containsOnlyTags(predicate, tagSet) || !exprCanRemoveProject(predicate) {
+				!containsOnlyTags(predicate, tagSet) ||
+				!isTruncationSafePredicateExpr(predicate) {
 				continue
 			}
 			predicates = append(predicates, predicate)
 		}
 		queue = append(queue, parents[nodeID]...)
 	}
-	return predicates
+	return predicates, true
 }
 
 func (builder *QueryBuilder) combineCTEPredicates(
