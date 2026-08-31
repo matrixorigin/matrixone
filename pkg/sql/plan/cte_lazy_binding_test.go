@@ -694,6 +694,30 @@ func TestCTEMultiReferenceRejectsOmittedFallibleConsumerPredicate(t *testing.T) 
 		"an omitted fallible consumer predicate must make the shared row domain inexact")
 }
 
+func TestCTEMultiReferenceRejectsFallibleOutputBeforeConsumerJoin(t *testing.T) {
+	mock := NewMockOptimizer(false)
+	logicPlan, err := runOneStmt(mock, t, `
+		with c as (
+			select l_shipmode as region, l_suppkey as k,
+			       cast(max(l_comment) as bigint) as risky,
+			       max(l_comment) as payload
+			from lineitem group by l_shipmode, l_suppkey
+		)
+		select sum(c.risky), max(length(c.payload))
+		from c join supplier d1 on c.k = d1.s_suppkey
+		where c.region = 'AIR'
+		union all
+		select sum(c.risky), max(length(c.payload))
+		from c join supplier d2 on c.k = d2.s_suppkey
+		where c.region = 'SHIP'`)
+	require.NoError(t, err)
+
+	query := logicPlan.GetQuery()
+	require.NotNil(t, query)
+	require.Equal(t, 0, countReachableNodeType(query, planpb.Node_SINK_SCAN),
+		"consumer joins must not expand evaluation of a fallible shared output")
+}
+
 func TestCTEMultiReferenceReusesRobustPredicateFreeSpillProducer(t *testing.T) {
 	mock := NewMockOptimizer(false)
 	logicPlan, err := runOneStmt(mock, t, `

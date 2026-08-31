@@ -102,6 +102,9 @@ func TestIssue26131Q15SharedCTEExecutesBothConsumers(t *testing.T) {
 		execSQLRequire(t, ctx, db, "create table lineitem (l_suppkey int, l_extendedprice decimal(15,2), l_discount decimal(15,2), l_shipdate date, l_comment varchar(32))")
 		execSQLRequire(t, ctx, db, "create table cte_error_rows (k int, raw varchar(32), payload varchar(32))")
 		execSQLRequire(t, ctx, db, "create table cte_domain_rows (k int, x varchar(32), raw varchar(32), payload varchar(32))")
+		execSQLRequire(t, ctx, db, "create table cte_join_fact (region int, k int, raw varchar(32), payload varchar(32))")
+		execSQLRequire(t, ctx, db, "create table cte_join_d1 (k int primary key)")
+		execSQLRequire(t, ctx, db, "create table cte_join_d2 (k int primary key)")
 		execSQLRequire(t, ctx, db, "insert into supplier values (1, 'supplier-1'), (42, 'supplier-42')")
 		// Two rows per group preserve real SUM accumulation. The shared-CTE
 		// topology is asserted from EXPLAIN below and does not depend on volume.
@@ -110,6 +113,9 @@ func TestIssue26131Q15SharedCTEExecutesBothConsumers(t *testing.T) {
 			(42, 2, 0, '1995-12-15', 'supplier-42-a'), (42, 2, 0, '1995-12-15', 'supplier-42-b')`)
 		execSQLRequire(t, ctx, db, "insert into cte_error_rows values (1, '10', 'a'), (2, 'not-an-integer', 'bb')")
 		execSQLRequire(t, ctx, db, "insert into cte_domain_rows values (1, '1', '10', 'a'), (1, '0', 'bad', 'hidden'), (2, '1', '20', 'bb')")
+		execSQLRequire(t, ctx, db, "insert into cte_join_fact values (1, 1, '10', 'a'), (1, 9, 'bad', 'hidden'), (2, 2, '20', 'bb')")
+		execSQLRequire(t, ctx, db, "insert into cte_join_d1 values (1)")
+		execSQLRequire(t, ctx, db, "insert into cte_join_d2 values (2)")
 		execSQLRequire(t, ctx, db, "analyze table supplier, lineitem")
 
 		planText := explainSQL(t, ctx, db, "explain "+issue26131Q15)
@@ -244,6 +250,31 @@ func TestIssue26131Q15SharedCTEExecutesBothConsumers(t *testing.T) {
 		require.NoError(t, omittedPredicateRows.Err())
 		require.ElementsMatch(t, []domainResult{{sum: 10, length: 1}, {sum: 20, length: 2}},
 			omittedPredicateResults)
+
+		const consumerJoinDomainQuery = `with c as (
+			select region, k, cast(max(raw) as bigint) as risky, max(payload) as payload
+			from cte_join_fact group by region, k
+		)
+		select sum(c.risky), max(length(c.payload))
+		from c join cte_join_d1 d1 on c.k = d1.k where c.region = 1
+		union all
+		select sum(c.risky), max(length(c.payload))
+		from c join cte_join_d2 d2 on c.k = d2.k where c.region = 2`
+		consumerJoinPlan := explainSQL(t, ctx, db, "explain "+consumerJoinDomainQuery)
+		require.NotContains(t, consumerJoinPlan, "Sink Scan",
+			"consumer joins must keep a fallible CTE output inline")
+		consumerJoinRows, err := db.QueryContext(ctx, consumerJoinDomainQuery)
+		require.NoError(t, err)
+		defer consumerJoinRows.Close()
+		var consumerJoinResults []domainResult
+		for consumerJoinRows.Next() {
+			var result domainResult
+			require.NoError(t, consumerJoinRows.Scan(&result.sum, &result.length))
+			consumerJoinResults = append(consumerJoinResults, result)
+		}
+		require.NoError(t, consumerJoinRows.Err())
+		require.ElementsMatch(t, []domainResult{{sum: 10, length: 1}, {sum: 20, length: 2}},
+			consumerJoinResults)
 	})
 }
 

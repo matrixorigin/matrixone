@@ -1072,6 +1072,10 @@ func (builder *QueryBuilder) cteOccurrenceLocalPredicates(
 			}
 			candidates = node.FilterList
 		case planpb.Node_JOIN:
+			// A join can remove rows from at least one input. Treat every join
+			// shape as an inexact output-evaluation boundary; the INNER case
+			// below is traversed only to collect safe producer bounds.
+			domainComplete = false
 			if node.JoinType != planpb.Node_INNER || node.Limit != nil || node.Offset != nil {
 				continue
 			}
@@ -1082,8 +1086,16 @@ func (builder *QueryBuilder) cteOccurrenceLocalPredicates(
 		}
 
 		for _, predicate := range candidates {
-			if predicate == nil || !containsTag(predicate, occurrence.rootTag) ||
-				!containsOnlyTags(predicate, tagSet) || !exprCanRemoveProject(predicate) {
+			if predicate == nil || !containsTag(predicate, occurrence.rootTag) {
+				continue
+			}
+			if !containsOnlyTags(predicate, tagSet) {
+				// A cross-relation predicate cannot be copied into the producer,
+				// but it can still shrink the inline occurrence's evaluation domain.
+				domainComplete = false
+				continue
+			}
+			if !exprCanRemoveProject(predicate) {
 				continue
 			}
 			if !isTruncationSafePredicateExpr(predicate) {
