@@ -33,7 +33,7 @@ special_chars
 Hello@#$%^&*()
 SELECT UNCOMPRESS(COMPRESS('MatrixOne数据库')) AS unicode_chars;
 unicode_chars
-MatrixOne数据库
+MatrixOneæ°æ®åº
 SELECT COMPRESS(NULL) AS null_input;
 null_input
 null
