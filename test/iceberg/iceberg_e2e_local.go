@@ -19,8 +19,10 @@ import (
 	"context"
 	"crypto/sha256"
 	"database/sql"
+	"database/sql/driver"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -31,6 +33,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	_ "github.com/go-sql-driver/mysql"
@@ -145,6 +148,8 @@ func main() {
 
 	cases := []func(context.Context) caseResult{
 		runner.catalogAndMappingCase,
+		runner.accessLifecycleCase,
+		runner.concurrentCreateMappingAndDropCase,
 		runner.appendReadAndTimeTravelCase,
 		runner.partitionFilterCase,
 		runner.yearPartitionDateCase,
@@ -259,6 +264,623 @@ func (r *caseRunner) catalogAndMappingCase(ctx context.Context) caseResult {
 	actual := append(append([]string{}, namespaces...), tables...)
 	actual = append(actual, showCreate...)
 	return passedCase("ICE-CI-E2E-010", "catalog-ddl-and-discovery", sqls, []string{"namespace and tables visible; inline secret rejected"}, actual, details)
+}
+
+func (r *caseRunner) accessLifecycleCase(ctx context.Context) (result caseResult) {
+	catalogName := r.cfg.Catalog + "_lifecycle"
+	mappingName := "access_lifecycle_mapping"
+	mapping := fmt.Sprintf("%s.%s", ident(r.cfg.Database), ident(mappingName))
+	cleanupNeeded := true
+	defer func() {
+		if !cleanupNeeded {
+			return
+		}
+		if cleanupErr := r.cleanupAccessLifecycle(ctx, mapping, catalogName); cleanupErr != nil {
+			if result.Details == nil {
+				result.Details = make(map[string]string)
+			}
+			result.Details["cleanup_error"] = cleanupErr.Error()
+			if result.Error == "" {
+				result.Error = "cleanup: " + cleanupErr.Error()
+			} else {
+				result.Error += "; cleanup: " + cleanupErr.Error()
+			}
+			result.Status = "failed"
+		}
+	}()
+	sqls := make([]string, 0, 10)
+	fail := func(expected, actual []string, msg string) caseResult {
+		return failedCase("ICE-CI-E2E-015", "access-register-unregister-lifecycle", sqls, expected, actual, msg)
+	}
+	exec := func(stmt string) error {
+		sqls = append(sqls, stmt)
+		_, err := r.db.ExecContext(ctx, stmt)
+		return err
+	}
+
+	if err := exec(fmt.Sprintf(
+		"CREATE ICEBERG CATALOG %s WITH ('type'='rest','uri'=%s,'warehouse'=%s,'auth_mode'='none')",
+		ident(catalogName), sqlString(r.cfg.CatalogURI), sqlString(r.cfg.Warehouse),
+	)); err != nil {
+		return fail(nil, nil, err.Error())
+	}
+	if err := exec(fmt.Sprintf(
+		"CALL iceberg_register_access(%s, %s)",
+		sqlString(catalogName),
+		sqlString("scope=cluster,account_id=0,external_principal=ci-local,endpoint=localhost,region=us-east-1,bucket=mo-iceberg"),
+	)); err != nil {
+		return fail(nil, nil, err.Error())
+	}
+	catalogIDSQL := fmt.Sprintf(
+		"select catalog_id from mo_catalog.mo_iceberg_catalogs where account_id = 0 and name = %s",
+		sqlString(catalogName),
+	)
+	sqls = append(sqls, catalogIDSQL)
+	catalogIDRows, err := queryLines(ctx, r.db, catalogIDSQL)
+	if err != nil {
+		return fail(nil, catalogIDRows, err.Error())
+	}
+	if len(catalogIDRows) != 1 {
+		return fail([]string{"one catalog id"}, catalogIDRows, "lifecycle catalog id was not uniquely resolved")
+	}
+	catalogID, err := strconv.ParseUint(catalogIDRows[0], 10, 64)
+	if err != nil || catalogID == 0 {
+		return fail([]string{"non-zero catalog id"}, catalogIDRows, "lifecycle catalog id was invalid")
+	}
+
+	if err := exec(fmt.Sprintf(`CREATE EXTERNAL TABLE %s (
+  order_id BIGINT,
+  bucket INT,
+  amount BIGINT,
+  region TEXT
+) ENGINE = ICEBERG WITH ('catalog'=%s,'namespace'=%s,'table'='append_orders','ref'='main','read_mode'='append_only','write_mode'='append_only')`,
+		mapping, sqlString(catalogName), sqlString(r.cfg.Namespace),
+	)); err != nil {
+		return fail(nil, nil, err.Error())
+	}
+	dropCatalogSQL := fmt.Sprintf("DROP ICEBERG CATALOG %s", ident(catalogName))
+	sqls = append(sqls, dropCatalogSQL)
+	dropErr := func() error {
+		_, err := r.db.ExecContext(ctx, dropCatalogSQL)
+		return err
+	}()
+	if dropErr == nil {
+		return fail([]string{"ordinary DROP rejected while table mapping exists"}, nil, "ordinary DROP removed a catalog with a live table mapping")
+	}
+	if !strings.Contains(strings.ToLower(dropErr.Error()), "table mappings") {
+		return fail([]string{"table mappings dependency error"}, []string{dropErr.Error()}, "ordinary DROP failed for an unexpected reason")
+	}
+
+	beforeSQL := fmt.Sprintf(
+		"select (select count(*) from mo_catalog.mo_iceberg_catalogs where account_id = 0 and catalog_id = %d), (select count(*) from mo_catalog.mo_iceberg_tables where account_id = 0 and catalog_id = %d), (select count(*) from mo_catalog.mo_iceberg_principal_map where account_id = 0 and catalog_id = %d), (select count(*) from mo_catalog.mo_iceberg_residency_policy where catalog_id = %d and (scope_type = 'cluster' or account_id = 0))",
+		catalogID, catalogID, catalogID, catalogID,
+	)
+	sqls = append(sqls, beforeSQL)
+	before, err := queryLines(ctx, r.db, beforeSQL)
+	if err != nil {
+		return fail([]string{"1\t1\t1\t1"}, before, err.Error())
+	}
+	if !sameLines([]string{"1\t1\t1\t1"}, before) {
+		return fail([]string{"1\t1\t1\t1"}, before, "rejected DROP was not atomic")
+	}
+
+	if err := exec("DROP TABLE " + mapping); err != nil {
+		return fail(nil, before, err.Error())
+	}
+	if err := exec(fmt.Sprintf("CALL iceberg_unregister_access(%s)", sqlString(catalogName))); err != nil {
+		return fail(nil, before, err.Error())
+	}
+	if err := exec(dropCatalogSQL); err != nil {
+		return fail(nil, before, err.Error())
+	}
+
+	afterSQL := fmt.Sprintf(
+		"select (select count(*) from mo_catalog.mo_iceberg_catalogs where account_id = 0 and catalog_id = %d), (select count(*) from mo_catalog.mo_iceberg_tables where account_id = 0 and catalog_id = %d), (select count(*) from mo_catalog.mo_iceberg_principal_map where account_id = 0 and catalog_id = %d), (select count(*) from mo_catalog.mo_iceberg_residency_policy where catalog_id = %d and (scope_type = 'cluster' or account_id = 0)), (select count(*) from mo_catalog.mo_iceberg_refs where account_id = 0 and catalog_id = %d), (select count(*) from mo_catalog.mo_iceberg_publish_jobs where account_id = 0 and target_catalog_id = %d), (select count(*) from mo_catalog.mo_iceberg_orphan_files where account_id = 0 and catalog_id = %d), (select count(*) from mo_catalog.mo_iceberg_maintenance_jobs where account_id = 0 and catalog_id = %d)",
+		catalogID, catalogID, catalogID, catalogID, catalogID, catalogID, catalogID, catalogID,
+	)
+	sqls = append(sqls, afterSQL)
+	after, err := queryLines(ctx, r.db, afterSQL)
+	wantAfter := []string{"0\t0\t0\t0\t0\t0\t0\t0"}
+	if err != nil {
+		return fail(wantAfter, after, err.Error())
+	}
+	if !sameLines(wantAfter, after) {
+		return fail(wantAfter, after, "catalog-owned metadata remained after unregister and drop")
+	}
+	cleanupNeeded = false
+	return passedCase(
+		"ICE-CI-E2E-015",
+		"access-register-unregister-lifecycle",
+		sqls,
+		[]string{"1\t1\t1\t1", wantAfter[0]},
+		append(before, after...),
+		map[string]string{"catalog_id": strconv.FormatUint(catalogID, 10), "blocked_drop": "atomic"},
+	)
+}
+
+// cleanupAccessLifecycle deliberately does not reuse the case context.  The
+// runner's five-minute context may be canceled precisely when teardown is most
+// important; cleanup gets its own bounded control path and returns every
+// failure to the caller for inclusion in the case report.
+func (r *caseRunner) cleanupAccessLifecycle(_ context.Context, mapping, catalogName string) error {
+	cleanupCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	statements := []string{
+		"DROP TABLE IF EXISTS " + mapping,
+		fmt.Sprintf("CALL iceberg_unregister_access(%s)", sqlString(catalogName)),
+		fmt.Sprintf("DROP ICEBERG CATALOG IF EXISTS %s", ident(catalogName)),
+	}
+	failures := make([]string, 0, len(statements))
+	for _, stmt := range statements {
+		if _, err := r.db.ExecContext(cleanupCtx, stmt); err != nil {
+			failures = append(failures, fmt.Sprintf("%s: %v", redactText(stmt), err))
+		}
+	}
+	if len(failures) == 0 {
+		return nil
+	}
+	return fmt.Errorf("%s", strings.Join(failures, "; "))
+}
+
+// concurrentCreateMappingAndDropCase pauses CREATE after its FOR UPDATE catalog
+// lookup and before mapping publication.  DROP must stay behind that row lock;
+// after CREATE is released, exactly one DDL commits and the durable catalog and
+// mapping counts prove that no orphan mapping was published.
+func (r *caseRunner) concurrentCreateMappingAndDropCase(ctx context.Context) (result caseResult) {
+	catalogName := r.cfg.Catalog + "_concurrent"
+	mappingName := "concurrent_mapping"
+	mapping := fmt.Sprintf("%s.%s", ident(r.cfg.Database), ident(mappingName))
+	cleanupNeeded := true
+	defer func() {
+		if !cleanupNeeded {
+			return
+		}
+		if cleanupErr := r.cleanupAccessLifecycle(ctx, mapping, catalogName); cleanupErr != nil {
+			if result.Details == nil {
+				result.Details = make(map[string]string)
+			}
+			result.Details["cleanup_error"] = cleanupErr.Error()
+			if result.Error == "" {
+				result.Error = "cleanup: " + cleanupErr.Error()
+			} else {
+				result.Error += "; cleanup: " + cleanupErr.Error()
+			}
+			result.Status = "failed"
+		}
+	}()
+	sqls := make([]string, 0, 8)
+	fail := func(expected, actual []string, msg string) caseResult {
+		return failedCase("ICE-CI-E2E-016", "concurrent-create-mapping-and-drop", sqls, expected, actual, msg)
+	}
+	createCatalogSQL := fmt.Sprintf(
+		"CREATE ICEBERG CATALOG %s WITH ('type'='rest','uri'=%s,'warehouse'=%s,'auth_mode'='none')",
+		ident(catalogName), sqlString(r.cfg.CatalogURI), sqlString(r.cfg.Warehouse),
+	)
+	sqls = append(sqls, createCatalogSQL)
+	if _, err := r.db.ExecContext(ctx, createCatalogSQL); err != nil {
+		return fail(nil, nil, err.Error())
+	}
+	catalogIDSQL := fmt.Sprintf("select catalog_id from mo_catalog.mo_iceberg_catalogs where account_id = 0 and name = %s", sqlString(catalogName))
+	sqls = append(sqls, catalogIDSQL)
+	catalogIDs, err := queryLines(ctx, r.db, catalogIDSQL)
+	if err != nil || len(catalogIDs) != 1 {
+		return fail([]string{"one catalog id"}, catalogIDs, fmt.Sprintf("resolve concurrent catalog id: %v", err))
+	}
+	catalogID, err := strconv.ParseUint(catalogIDs[0], 10, 64)
+	if err != nil || catalogID == 0 {
+		return fail([]string{"non-zero catalog id"}, catalogIDs, "concurrent catalog id was invalid")
+	}
+	lockIdentity, err := captureCatalogLifecycleLockIdentity(ctx, r.db, catalogName)
+	if err != nil {
+		return fail(nil, nil, fmt.Sprintf("resolve target catalog lifecycle lock: %v", err))
+	}
+	if err := installLifecycleFaults(ctx, r.db); err != nil {
+		return fail(nil, nil, fmt.Sprintf("install lifecycle synchronization points: %v", err))
+	}
+	defer func() {
+		if cleanupErr := cleanupLifecycleFaults(r.db); cleanupErr != nil {
+			if result.Details == nil {
+				result.Details = make(map[string]string)
+			}
+			result.Details["fault_cleanup_error"] = cleanupErr.Error()
+			if result.Error == "" {
+				result.Error = "fault cleanup: " + cleanupErr.Error()
+			} else {
+				result.Error += "; fault cleanup: " + cleanupErr.Error()
+			}
+			result.Status = "failed"
+		}
+	}()
+
+	createSQL := fmt.Sprintf(`CREATE EXTERNAL TABLE %s (
+  order_id BIGINT,
+  bucket INT,
+  amount BIGINT,
+  region TEXT
+) ENGINE = ICEBERG WITH ('catalog'=%s,'namespace'=%s,'table'='append_orders','ref'='main','read_mode'='append_only','write_mode'='append_only')`,
+		mapping, sqlString(catalogName), sqlString(r.cfg.Namespace))
+	dropSQL := fmt.Sprintf("DROP ICEBERG CATALOG %s", ident(catalogName))
+	sqls = append(sqls, createSQL, dropSQL)
+	type ddlResult struct {
+		name string
+		err  error
+	}
+	results := make(chan ddlResult, 2)
+	var workers sync.WaitGroup
+	caseCtx, cancelCase := context.WithCancel(ctx)
+	defer cancelCase()
+	stopWorkers := func() error {
+		cancelCase()
+		releaseCtx, cancelRelease := context.WithTimeout(context.Background(), 15*time.Second)
+		defer cancelRelease()
+		var errs []error
+		for _, point := range []string{
+			icebergCreateAfterCatalogLockFault,
+			icebergDropBeforeCatalogLockFault,
+			icebergDropAfterCatalogLockFault,
+		} {
+			if err := releaseLifecycleFault(releaseCtx, r.db, point); err != nil {
+				errs = append(errs, err)
+			}
+		}
+		if err := waitForLifecycleWorkers(releaseCtx, &workers); err != nil {
+			errs = append(errs, fmt.Errorf("wait for lifecycle workers: %w", err))
+		}
+		return errors.Join(errs...)
+	}
+	stopAndFail := func(expected, actual []string, msg string) caseResult {
+		if stopErr := stopWorkers(); stopErr != nil {
+			msg += "; release lifecycle workers: " + stopErr.Error()
+		}
+		return fail(expected, actual, msg)
+	}
+	collectWorkers := func(waitCtx context.Context) (map[string]error, error) {
+		if err := waitForLifecycleWorkers(waitCtx, &workers); err != nil {
+			return nil, err
+		}
+		close(results)
+		resultByName := make(map[string]error, 2)
+		for ddlResult := range results {
+			resultByName[ddlResult.name] = ddlResult.err
+		}
+		return resultByName, nil
+	}
+	stateSQL := fmt.Sprintf("select (select count(*) from mo_catalog.mo_iceberg_catalogs where account_id = 0 and catalog_id = %d), (select count(*) from mo_catalog.mo_iceberg_tables where account_id = 0 and catalog_id = %d)", catalogID, catalogID)
+	workers.Add(1)
+	go func() {
+		defer workers.Done()
+		_, err := r.db.ExecContext(caseCtx, dropSQL)
+		results <- ddlResult{name: "drop", err: err}
+	}()
+	barrierCtx, cancelBarrier := context.WithTimeout(ctx, 30*time.Second)
+	defer cancelBarrier()
+	if err := waitForLifecycleFaultWaiters(barrierCtx, r.db, icebergDropBeforeCatalogLockWaitersFault, 1); err != nil {
+		return stopAndFail(nil, nil, fmt.Sprintf("DROP did not reach the pre-lock phase: %v", err))
+	}
+	if err := releaseLifecycleFault(barrierCtx, r.db, icebergDropBeforeCatalogLockFault); err != nil {
+		return stopAndFail(nil, nil, fmt.Sprintf("release DROP pre-lock phase: %v", err))
+	}
+	if err := waitForLifecycleFaultWaiters(barrierCtx, r.db, icebergDropAfterCatalogLockWaitersFault, 1); err != nil {
+		return stopAndFail(nil, nil, fmt.Sprintf("DROP did not acquire the target catalog lifecycle lock: %v", err))
+	}
+	createConn, err := r.db.Conn(ctx)
+	if err != nil {
+		return stopAndFail(nil, nil, fmt.Sprintf("reserve CREATE connection: %v", err))
+	}
+	defer createConn.Close()
+	previousLockWaitTimeout, err := sessionLockWaitTimeout(barrierCtx, createConn)
+	if err != nil {
+		return stopAndFail(nil, nil, fmt.Sprintf("capture CREATE lock wait timeout: %v", err))
+	}
+	defer func() {
+		cleanupCtx, cancelCleanup := context.WithTimeout(context.Background(), 15*time.Second)
+		defer cancelCleanup()
+		restoreErr, discardErr := restoreOrDiscardSessionLockWaitTimeout(cleanupCtx, createConn, previousLockWaitTimeout)
+		if restoreErr != nil {
+			if result.Details == nil {
+				result.Details = make(map[string]string)
+			}
+			result.Details["lock_wait_timeout_restore_error"] = restoreErr.Error()
+			message := "restore CREATE lock wait timeout: " + restoreErr.Error()
+			if discardErr != nil {
+				result.Details["lock_wait_timeout_discard_error"] = discardErr.Error()
+				message += "; discard CREATE connection: " + discardErr.Error()
+			} else {
+				result.Details["lock_wait_timeout_connection_discarded"] = "true"
+			}
+			if result.Error == "" {
+				result.Error = message
+			} else {
+				result.Error += "; " + message
+			}
+			result.Status = "failed"
+			return
+		}
+		if result.Details == nil {
+			result.Details = make(map[string]string)
+		}
+		result.Details["lock_wait_timeout_restored"] = strconv.FormatUint(previousLockWaitTimeout, 10)
+	}()
+	if _, err := createConn.ExecContext(barrierCtx, "set session lock_wait_timeout = 1"); err != nil {
+		return stopAndFail(nil, nil, fmt.Sprintf("set CREATE lock wait timeout: %v", err))
+	}
+	createDone := make(chan error, 1)
+	workers.Add(1)
+	go func() {
+		defer workers.Done()
+		_, err := createConn.ExecContext(caseCtx, createSQL)
+		results <- ddlResult{name: "create", err: err}
+		createDone <- err
+	}()
+	select {
+	case createErr := <-createDone:
+		if createErr == nil {
+			return stopAndFail([]string{"CREATE lock wait failure while DROP holds the catalog row"}, []string{"CREATE committed"}, "CREATE bypassed the catalog lifecycle lock")
+		}
+	case <-barrierCtx.Done():
+		return stopAndFail(nil, nil, fmt.Sprintf("CREATE did not terminate at the catalog lifecycle lock: %v", barrierCtx.Err()))
+	}
+	if err := releaseLifecycleFault(barrierCtx, r.db, icebergDropAfterCatalogLockFault); err != nil {
+		return stopAndFail(nil, nil, fmt.Sprintf("release DROP post-lock phase: %v", err))
+	}
+	resultByName, err := collectWorkers(barrierCtx)
+	if err != nil {
+		return fail(nil, nil, fmt.Sprintf("wait for lifecycle workers: %v", err))
+	}
+	createErr, dropErr := resultByName["create"], resultByName["drop"]
+	if createErr == nil || dropErr != nil {
+		return fail([]string{"CREATE lock failure and DROP commit"}, []string{fmt.Sprintf("create=%v", createErr), fmt.Sprintf("drop=%v", dropErr)}, "catalog lifecycle lock did not reject CREATE while DROP owned the target row")
+	}
+
+	sqls = append(sqls, stateSQL)
+	state, err := queryLines(ctx, r.db, stateSQL)
+	if err != nil {
+		return fail(nil, state, err.Error())
+	}
+	if !sameLines([]string{"0\t0"}, state) {
+		return fail([]string{"0\t0"}, state, "DROP committed but catalog-owned mapping remained")
+	}
+	cleanupNeeded = false
+	return passedCase(
+		"ICE-CI-E2E-016",
+		"concurrent-create-mapping-and-drop",
+		sqls,
+		[]string{"CREATE lock failure", "DROP commit", "0\t0"},
+		state,
+		map[string]string{"catalog_id": strconv.FormatUint(catalogID, 10), "catalog_lock_table_id": lockIdentity.tableID, "catalog_lock_content": lockIdentity.content, "create_error": fmt.Sprint(createErr), "drop_error": fmt.Sprint(dropErr), "phase_barrier": "fault injection: DROP acquires the captured target catalog lock; CREATE uses a bounded lock wait and must be rejected before DROP commits"},
+	)
+}
+
+const (
+	icebergCreateAfterCatalogLockFault        = "iceberg-create-mapping-after-catalog-lock"
+	icebergDropBeforeCatalogLockFault         = "iceberg-drop-catalog-before-lifecycle-lock"
+	icebergDropAfterCatalogLockFault          = "iceberg-drop-catalog-after-lifecycle-lock"
+	icebergCreateAfterCatalogLockWaitersFault = "iceberg-create-mapping-after-catalog-lock-waiters"
+	icebergDropBeforeCatalogLockWaitersFault  = "iceberg-drop-catalog-before-lifecycle-lock-waiters"
+	icebergDropAfterCatalogLockWaitersFault   = "iceberg-drop-catalog-after-lifecycle-lock-waiters"
+	icebergCreateAfterCatalogLockNotifyFault  = "iceberg-create-mapping-after-catalog-lock-notify"
+	icebergDropBeforeCatalogLockNotifyFault   = "iceberg-drop-catalog-before-lifecycle-lock-notify"
+	icebergDropAfterCatalogLockNotifyFault    = "iceberg-drop-catalog-after-lifecycle-lock-notify"
+)
+
+func installLifecycleFaults(ctx context.Context, db *sql.DB) error {
+	if _, err := db.ExecContext(ctx, "select enable_fault_injection()"); err != nil {
+		return err
+	}
+	points := []struct{ name, action, target string }{
+		{icebergCreateAfterCatalogLockFault, "wait", ""},
+		{icebergDropBeforeCatalogLockFault, "wait", ""},
+		{icebergDropAfterCatalogLockFault, "wait", ""},
+		{icebergCreateAfterCatalogLockWaitersFault, "getwaiters", icebergCreateAfterCatalogLockFault},
+		{icebergDropBeforeCatalogLockWaitersFault, "getwaiters", icebergDropBeforeCatalogLockFault},
+		{icebergDropAfterCatalogLockWaitersFault, "getwaiters", icebergDropAfterCatalogLockFault},
+		{icebergCreateAfterCatalogLockNotifyFault, "notifyall", icebergCreateAfterCatalogLockFault},
+		{icebergDropBeforeCatalogLockNotifyFault, "notifyall", icebergDropBeforeCatalogLockFault},
+		{icebergDropAfterCatalogLockNotifyFault, "notifyall", icebergDropAfterCatalogLockFault},
+	}
+	for _, point := range points {
+		if _, err := db.ExecContext(ctx, fmt.Sprintf("select add_fault_point(%s, ':::', %s, 0, %s)", sqlString(point.name), sqlString(point.action), sqlString(point.target))); err != nil {
+			if cleanupErr := cleanupLifecycleFaults(db); cleanupErr != nil {
+				return fmt.Errorf("add lifecycle fault %s: %w; cleanup: %v", point.name, err, cleanupErr)
+			}
+			return err
+		}
+	}
+	return nil
+}
+
+func cleanupLifecycleFaults(db *sql.DB) error {
+	cleanupCtx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	var errs []error
+	for _, name := range []string{icebergCreateAfterCatalogLockFault, icebergDropBeforeCatalogLockFault, icebergDropAfterCatalogLockFault} {
+		if err := releaseLifecycleFault(cleanupCtx, db, name); err != nil {
+			errs = append(errs, fmt.Errorf("release %s: %w", name, err))
+		}
+	}
+	for _, name := range []string{
+		icebergCreateAfterCatalogLockFault, icebergDropBeforeCatalogLockFault, icebergDropAfterCatalogLockFault,
+		icebergCreateAfterCatalogLockWaitersFault, icebergDropBeforeCatalogLockWaitersFault, icebergDropAfterCatalogLockWaitersFault,
+		icebergCreateAfterCatalogLockNotifyFault, icebergDropBeforeCatalogLockNotifyFault, icebergDropAfterCatalogLockNotifyFault,
+	} {
+		if _, err := db.ExecContext(cleanupCtx, fmt.Sprintf("select fault_inject('all.', 'REMOVE_FAULT_POINT', %s)", sqlString(name))); err != nil {
+			errs = append(errs, fmt.Errorf("remove %s: %w", name, err))
+		}
+	}
+	if _, err := db.ExecContext(cleanupCtx, "select disable_fault_injection()"); err != nil {
+		errs = append(errs, fmt.Errorf("disable fault injection: %w", err))
+	}
+	return errors.Join(errs...)
+}
+
+func releaseLifecycleFault(ctx context.Context, db *sql.DB, waitPoint string) error {
+	notifyPoint := map[string]string{
+		icebergCreateAfterCatalogLockFault: icebergCreateAfterCatalogLockNotifyFault,
+		icebergDropBeforeCatalogLockFault:  icebergDropBeforeCatalogLockNotifyFault,
+		icebergDropAfterCatalogLockFault:   icebergDropAfterCatalogLockNotifyFault,
+	}[waitPoint]
+	_, err := db.ExecContext(ctx, fmt.Sprintf("select trigger_fault_point(%s)", sqlString(notifyPoint)))
+	return err
+}
+
+func waitForLifecycleWorkers(ctx context.Context, workers *sync.WaitGroup) error {
+	done := make(chan struct{})
+	go func() {
+		workers.Wait()
+		close(done)
+	}()
+	select {
+	case <-done:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+// sessionLockWaitTimeout reads the value from the physical connection that is
+// used for the bounded CREATE probe.  database/sql may return this connection
+// to its pool, so the caller must restore the value before Conn.Close.
+func sessionLockWaitTimeout(ctx context.Context, conn *sql.Conn) (uint64, error) {
+	var value string
+	if err := conn.QueryRowContext(ctx, "select @@session.lock_wait_timeout").Scan(&value); err != nil {
+		return 0, err
+	}
+	timeout, err := strconv.ParseUint(value, 10, 64)
+	if err != nil || timeout == 0 {
+		return 0, fmt.Errorf("invalid session lock_wait_timeout %q", value)
+	}
+	return timeout, nil
+}
+
+// restoreSessionLockWaitTimeout restores and then reads the same physical
+// connection, proving that the session returned to the pool has its original
+// timeout rather than the one-second lifecycle-test override.
+func restoreSessionLockWaitTimeout(ctx context.Context, conn *sql.Conn, want uint64) error {
+	if _, err := conn.ExecContext(ctx, fmt.Sprintf("set session lock_wait_timeout = %d", want)); err != nil {
+		return err
+	}
+	got, err := sessionLockWaitTimeout(ctx, conn)
+	if err != nil {
+		return err
+	}
+	if got != want {
+		return fmt.Errorf("lock_wait_timeout after restore = %d, want %d", got, want)
+	}
+	return nil
+}
+
+// restoreOrDiscardSessionLockWaitTimeout prevents a failed restore from leaking
+// the test's one-second timeout through database/sql's reusable connection
+// pool. driver.ErrBadConn is the documented database/sql signal to discard the
+// physical connection rather than returning it to that pool.
+func restoreOrDiscardSessionLockWaitTimeout(ctx context.Context, conn *sql.Conn, want uint64) (restoreErr, discardErr error) {
+	if restoreErr = restoreSessionLockWaitTimeout(ctx, conn, want); restoreErr == nil {
+		return nil, nil
+	}
+	return restoreErr, discardSessionConnection(conn)
+}
+
+func discardSessionConnection(conn *sql.Conn) error {
+	err := conn.Raw(func(any) error { return driver.ErrBadConn })
+	if errors.Is(err, driver.ErrBadConn) {
+		return nil
+	}
+	if err == nil {
+		return errors.New("database/sql retained a connection after discard request")
+	}
+	return fmt.Errorf("discard physical connection: %w", err)
+}
+
+type catalogLifecycleLockIdentity struct {
+	tableID string
+	content string
+}
+
+func captureCatalogLifecycleLockIdentity(ctx context.Context, db *sql.DB, catalogName string) (catalogLifecycleLockIdentity, error) {
+	const tableIDSQL = "select rel_id from mo_catalog.mo_tables where account_id = 0 and reldatabase = 'mo_catalog' and relname = 'mo_iceberg_catalogs'"
+	tableIDs, err := queryLines(ctx, db, tableIDSQL)
+	if err != nil {
+		return catalogLifecycleLockIdentity{}, err
+	}
+	if len(tableIDs) != 1 {
+		return catalogLifecycleLockIdentity{}, fmt.Errorf("catalog table lookup returned %d rows", len(tableIDs))
+	}
+	if _, err := strconv.ParseUint(tableIDs[0], 10, 64); err != nil {
+		return catalogLifecycleLockIdentity{}, fmt.Errorf("parse catalog table id: %w", err)
+	}
+
+	tx, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		return catalogLifecycleLockIdentity{}, err
+	}
+	committed := false
+	defer func() {
+		if !committed {
+			_ = tx.Rollback()
+		}
+	}()
+	lockSQL := fmt.Sprintf("select catalog_id from mo_catalog.mo_iceberg_catalogs where account_id = 0 and name = %s for update", sqlString(catalogName))
+	rows, err := tx.QueryContext(ctx, lockSQL)
+	if err != nil {
+		return catalogLifecycleLockIdentity{}, err
+	}
+	defer func() { _ = rows.Close() }()
+	if !rows.Next() {
+		if err := rows.Err(); err != nil {
+			return catalogLifecycleLockIdentity{}, err
+		}
+		return catalogLifecycleLockIdentity{}, errors.New("catalog lifecycle lock probe selected no row")
+	}
+	var catalogID uint64
+	if err := rows.Scan(&catalogID); err != nil {
+		return catalogLifecycleLockIdentity{}, err
+	}
+	if err := rows.Close(); err != nil {
+		return catalogLifecycleLockIdentity{}, err
+	}
+	if catalogID == 0 {
+		return catalogLifecycleLockIdentity{}, errors.New("catalog lifecycle lock probe selected zero catalog id")
+	}
+
+	identitySQL := fmt.Sprintf("select lock_content from mo_catalog.mo_locks where table_id = %s and lock_key = 'point' and (lock_wait is null or lock_wait = '')", tableIDs[0])
+	contents, err := queryLines(ctx, db, identitySQL)
+	if err != nil {
+		return catalogLifecycleLockIdentity{}, err
+	}
+	if len(contents) != 1 || contents[0] == "" {
+		return catalogLifecycleLockIdentity{}, fmt.Errorf("catalog lifecycle lock probe returned %d identities", len(contents))
+	}
+	if err := tx.Commit(); err != nil {
+		return catalogLifecycleLockIdentity{}, err
+	}
+	committed = true
+	return catalogLifecycleLockIdentity{tableID: tableIDs[0], content: contents[0]}, nil
+}
+
+func waitForLifecycleFaultWaiters(ctx context.Context, db *sql.DB, waitersPoint string, want uint64) error {
+	ticker := time.NewTicker(10 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		rows, err := queryLines(ctx, db, fmt.Sprintf("select trigger_fault_point(%s)", sqlString(waitersPoint)))
+		if err != nil {
+			return err
+		}
+		if len(rows) != 1 {
+			return fmt.Errorf("fault point %s returned %d rows", waitersPoint, len(rows))
+		}
+		waiters, err := strconv.ParseUint(rows[0], 10, 64)
+		if err != nil {
+			return fmt.Errorf("parse waiter count for %s: %w", waitersPoint, err)
+		}
+		if waiters >= want {
+			return nil
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-ticker.C:
+		}
+	}
 }
 
 func (r *caseRunner) appendReadAndTimeTravelCase(ctx context.Context) caseResult {
