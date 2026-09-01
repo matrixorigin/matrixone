@@ -145,14 +145,16 @@ iceberg_e2e_prepare_launch_config() {
 
 iceberg_e2e_collect_logs() {
   [[ -n "$ICEBERG_E2E_TMP_DIR" ]] || return
-  mkdir -p "$REPORT_DIR"
-  sanitize_artifact_file "${ICEBERG_E2E_TMP_DIR}/mo-service.log" "${REPORT_DIR}/mo-service.log"
+  local collect_status=0
+  mkdir -p "$REPORT_DIR" || return
+  sanitize_artifact_file "${ICEBERG_E2E_TMP_DIR}/mo-service.log" "${REPORT_DIR}/mo-service.log" || collect_status=$?
   if command -v docker >/dev/null 2>&1; then
     (cd "${ROOT_DIR}/etc/launch-minio-local" && docker compose logs --no-color nessie >"${ICEBERG_E2E_TMP_DIR}/nessie.log" 2>&1) || true
     (cd "${ROOT_DIR}/etc/launch-minio-local" && docker compose logs --no-color minio >"${ICEBERG_E2E_TMP_DIR}/minio.log" 2>&1) || true
-    sanitize_artifact_file "${ICEBERG_E2E_TMP_DIR}/nessie.log" "${REPORT_DIR}/nessie.log"
-    sanitize_artifact_file "${ICEBERG_E2E_TMP_DIR}/minio.log" "${REPORT_DIR}/minio.log"
+    sanitize_artifact_file "${ICEBERG_E2E_TMP_DIR}/nessie.log" "${REPORT_DIR}/nessie.log" || collect_status=$?
+    sanitize_artifact_file "${ICEBERG_E2E_TMP_DIR}/minio.log" "${REPORT_DIR}/minio.log" || collect_status=$?
   fi
+  return "$collect_status"
 }
 
 iceberg_e2e_remove_tmpdir() {
@@ -161,7 +163,7 @@ iceberg_e2e_remove_tmpdir() {
     log "refusing to remove unexpected Iceberg E2E temporary directory: ${ICEBERG_E2E_TMP_DIR}"
     return 1
   }
-  rm -rf -- "$ICEBERG_E2E_TMP_DIR"
+  rm -rf -- "$ICEBERG_E2E_TMP_DIR" || return
   ICEBERG_E2E_TMP_DIR=""
 }
 
@@ -175,10 +177,13 @@ iceberg_e2e_cleanup() {
   iceberg_e2e_collect_logs || cleanup_status=$?
   (cd "$ROOT_DIR" && make dev-down-iceberg-tier-a >/dev/null 2>&1) || cleanup_status=$?
   iceberg_e2e_remove_tmpdir || cleanup_status=$?
-  if [[ "$status" -ne 0 ]]; then
-    return "$status"
+  local final_status="$status"
+  if [[ "$final_status" -eq 0 && "$cleanup_status" -ne 0 ]]; then
+    final_status="$cleanup_status"
+    log "Iceberg E2E cleanup failed (status ${cleanup_status}); promoting successful body exit"
   fi
-  return "$cleanup_status"
+  trap - EXIT
+  exit "$final_status"
 }
 
 iceberg_e2e_preflight_ports() {
