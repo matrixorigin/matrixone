@@ -38,7 +38,8 @@ func TestCloseWithoutFreeWithContextLogsBeforeSliceRelease(t *testing.T) {
 			"close-debug",
 		)
 		id := []byte("close-debug")
-		txn := newActiveTxn(id, string(id), newFixedSlicePool(2), "")
+		fsp := newFixedSlicePool(2)
+		txn := newActiveTxn(id, string(id), fsp, "")
 		defer reuse.Free(txn, nil)
 
 		bind := pb.LockTable{Group: 0, Table: 1}
@@ -71,5 +72,7 @@ func TestCloseWithoutFreeWithContextLogsBeforeSliceRelease(t *testing.T) {
 			t.Fatal("transaction close blocked while logging a released cowSlice")
 		}
 		require.Equal(t, 1, logs.FilterMessage("txn unlock table completed").Len())
+		require.Empty(t, txn.lockHolders)
+		require.Equal(t, uint64(1), fsp.releaseV.Load())
 	})
 }
