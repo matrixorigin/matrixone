@@ -1588,6 +1588,45 @@ func TestWaitForDDLVisibilityBarrierWithdrawalHonorsCancellation(t *testing.T) {
 	require.Equal(t, 1, cluster.refreshCalls)
 }
 
+func TestAcknowledgedDDLFrontierSurvivesCrashBeforePeriodicHeartbeat(t *testing.T) {
+	const producerID = "ddl-producer"
+	frontier := timestamp.Timestamp{PhysicalTime: 300}
+	cluster := &ddlVisibilityTestCluster{cnServices: []metadata.CNService{{
+		ServiceID: producerID, QueryAddress: "old:6001",
+		ViewMetadataAdmissionGeneration: 1, DDLVisibilityBarrierReady: true,
+	}}}
+	client := &ddlVisibilityWithdrawalHAKeeperClient{cluster: cluster}
+	producer := &service{
+		cfg: &Config{UUID: producerID}, _hakeeperClient: client,
+		ddlCommitGate: frontend.NewDDLCommitGate(), config: util.NewConfigData(nil),
+	}
+
+	// This is the synchronous publication in the successful DDL commit path;
+	// deliberately do not run a periodic heartbeat before replacing the CN.
+	producer.ddlCommitGate.RecordDDLFrontier(frontier)
+	require.NoError(t, producer.publishDDLCommitFrontier(context.Background(), frontier))
+	require.Equal(t, frontier, cluster.globalFrontier)
+
+	// A fresh same-UUID incarnation starts with an empty process-local gate.
+	replacement := &service{
+		cfg: &Config{UUID: producerID}, _hakeeperClient: client,
+		ddlCommitGate: frontend.NewDDLCommitGate(), config: util.NewConfigData(nil),
+	}
+	require.NoError(t, replacement.publishDDLCommitFrontier(context.Background(), timestamp.Timestamp{}))
+	require.Equal(t, frontier, cluster.globalFrontier,
+		"replacement must not erase the synchronously published commit frontier")
+
+	ctrl := gomock.NewController(t)
+	laggingTxnClient := mock_frontend.NewMockTxnClient(ctrl)
+	laggingTxnClient.EXPECT().WaitLogTailAppliedAt(gomock.Any(), frontier).Return(frontier, nil)
+	laggingTxnClient.EXPECT().SyncLatestCommitTS(frontier)
+	target := &service{
+		cfg: &Config{UUID: "lagging-peer"}, _txnClient: laggingTxnClient,
+		_hakeeperClient: client,
+	}
+	require.NoError(t, target.syncStartupDDLVisibilityFrontier(context.Background()))
+}
+
 func TestSyncStartupDDLVisibilityFrontierSurvivesProducerReplacement(t *testing.T) {
 	const serviceID = "ddl-visibility-durable-frontier-test"
 	oldFrontier := timestamp.Timestamp{PhysicalTime: 300}

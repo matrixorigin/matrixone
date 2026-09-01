@@ -32,13 +32,14 @@ const DDLCommitGateRuntimeKey = "frontend.ddl-commit-gate"
 // the gate blocked across RPC attempts; Close wakes blocked sessions during CN
 // shutdown.
 type DDLCommitGate struct {
-	mu          sync.Mutex
-	changed     chan struct{}
-	blocked     bool
-	closed      bool
-	publicDDL   bool
-	active      int
-	ddlFrontier atomic.Pointer[timestamp.Timestamp]
+	mu                sync.Mutex
+	changed           chan struct{}
+	blocked           bool
+	closed            bool
+	publicDDL         bool
+	active            int
+	ddlFrontier       atomic.Pointer[timestamp.Timestamp]
+	frontierPublisher func(context.Context, timestamp.Timestamp) error
 	// enterBlockedHook is a deterministic test hook invoked after Enter observes
 	// a blocked gate and before it waits. Production leaves it nil.
 	enterBlockedHook func()
@@ -64,6 +65,20 @@ func (g *DDLCommitGate) RecordDDLFrontier(ts timestamp.Timestamp) {
 	}
 }
 
+// SetFrontierPublisher installs the CN-owned durable publisher before public
+// sessions start. Production sets it exactly once during service construction.
+func (g *DDLCommitGate) SetFrontierPublisher(publisher func(context.Context, timestamp.Timestamp) error) {
+	g.frontierPublisher = publisher
+}
+
+func (g *DDLCommitGate) PublishDDLFrontier(ctx context.Context, ts timestamp.Timestamp) error {
+	g.RecordDDLFrontier(ts)
+	if g.frontierPublisher == nil || ts.IsEmpty() {
+		return nil
+	}
+	return g.frontierPublisher(ctx, ts)
+}
+
 func (g *DDLCommitGate) LatestDDLFrontier() timestamp.Timestamp {
 	if current := g.ddlFrontier.Load(); current != nil {
 		return *current
@@ -78,6 +93,17 @@ func publicBackgroundDDLBarrierEnabled(serviceID string) bool {
 	}
 	gate, ok := value.(*DDLCommitGate)
 	return ok && gate.PublicDDLEnabled()
+}
+
+func publishDDLCommitFrontier(ctx context.Context, serviceID string, ts timestamp.Timestamp) error {
+	value, ok := moruntime.ServiceRuntime(serviceID).GetGlobalVariables(DDLCommitGateRuntimeKey)
+	if !ok || value == nil {
+		return nil
+	}
+	if gate, ok := value.(*DDLCommitGate); ok {
+		return gate.PublishDDLFrontier(ctx, ts)
+	}
+	return moerr.NewInternalError(ctx, "invalid DDL commit gate")
 }
 
 func recordDDLCommitFrontier(serviceID string, ts timestamp.Timestamp) {

@@ -80,7 +80,7 @@ The cluster epoch commit is the linearization point. Prepared, Fenced, and the l
 
 ### Steady-state DDL
 
-A public real-user DDL, and background DDL after public listeners are enabled, enters `DDLCommitGate`. After commit, protocol v43 triggers `SyncCommitV2` to all barrier-ready CNs. The operation succeeds only after required receivers have applied/synchronized the commit frontier. Bootstrap background work before ingress remains exempt to avoid depending on an unavailable QueryService.
+A public real-user DDL, and background DDL after public listeners are enabled, enters `DDLCommitGate`. After commit, the producer synchronously advances the monotonic HAKeeper cluster frontier before acknowledging success; publication failure fails the statement closed. This removes the commit-success-to-periodic-heartbeat crash window. Protocol v43 then triggers `SyncCommitV2` to all barrier-ready CNs. The operation succeeds only after durable frontier publication and required receivers have applied/synchronized the commit frontier. Bootstrap background work before ingress remains exempt to avoid depending on an unavailable HAKeeper/QueryService.
 
 ### Scale-out and replacement
 

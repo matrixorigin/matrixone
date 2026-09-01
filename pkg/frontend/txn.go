@@ -1039,6 +1039,18 @@ func (th *TxnHandler) commitUnsafe(execCtx *ExecCtx) error {
 		}
 		if haveDDL && !commitTs.IsEmpty() && (err == nil || commitResultUnknown) {
 			recordDDLCommitFrontier(execCtx.ses.GetService(), commitTs)
+			if execCtx.ses.GetFromRealUser() ||
+				publicBackgroundDDLBarrierEnabled(execCtx.ses.GetService()) {
+				// A periodic heartbeat is insufficient here: acknowledging the DDL
+				// first leaves a crash window in which replacement loses T forever.
+				// Publish T through the HAKeeper RSM before returning success. For an
+				// unknown commit outcome, make the same best-effort durable advance.
+				if publishErr := publishDDLCommitFrontier(
+					ctx2, execCtx.ses.GetService(), commitTs,
+				); publishErr != nil {
+					err = errors.Join(err, publishErr)
+				}
+			}
 		}
 		if commitResultUnknown {
 			// ErrTxnUnknown is terminal for this frontend handle. The operator

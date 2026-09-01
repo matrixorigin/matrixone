@@ -165,6 +165,7 @@ func NewService(
 		gossipNode:    gossipNode,
 		ddlCommitGate: frontend.NewDDLCommitGate(),
 	}
+	srv.ddlCommitGate.SetFrontierPublisher(srv.publishDDLCommitFrontier)
 	runtime.ServiceRuntime(cfg.UUID).SetGlobalVariables(
 		frontend.DDLCommitGateRuntimeKey, srv.ddlCommitGate)
 	srv.colexecServer = colexec.NewServer(cfg.UUID)

@@ -871,6 +871,7 @@ type ddlSyncQueryClient struct {
 	nilResponse map[string]bool
 	requests    []ddlSyncRequest
 	releases    int
+	beforeSend  func()
 }
 
 func (c *ddlSyncQueryClient) ServiceID() string {
@@ -885,6 +886,9 @@ func (c *ddlSyncQueryClient) SendMessage(
 	request := ddlSyncRequest{address: address, method: req.CmdMethod}
 	if req.SycnCommit != nil {
 		request.commitTS = req.SycnCommit.LatestCommitTS
+	}
+	if c.beforeSend != nil {
+		c.beforeSend()
 	}
 	c.requests = append(c.requests, request)
 	if err := c.sendError[address]; err != nil {
@@ -982,6 +986,58 @@ func TestCommitSyncsDDLCommitToBarrierReadyCNs(t *testing.T) {
 		require.Equal(t, txn.TxnStatus_Committed, op.meta.Status)
 		require.Zero(t, op.rollbackCalls)
 		require.Nil(t, ses.GetTxnHandler().GetTxn())
+	})
+
+	t.Run("publishes frontier durably before acknowledgement and fan-out", func(t *testing.T) {
+		ses, _, qc, execCtx := newState(t)
+		defer ses.Close()
+		defer execCtx.Close()
+		gate := NewDDLCommitGate()
+		published := false
+		gate.SetFrontierPublisher(func(_ context.Context, ts timestamp.Timestamp) error {
+			require.Equal(t, commitTS, ts)
+			published = true
+			return nil
+		})
+		qc.beforeSend = func() {
+			require.True(t, published, "HAKeeper frontier publication must precede fan-out")
+		}
+		rt := moruntime.ServiceRuntime(ses.GetService())
+		previousGate, hadPreviousGate := rt.GetGlobalVariables(DDLCommitGateRuntimeKey)
+		rt.SetGlobalVariables(DDLCommitGateRuntimeKey, gate)
+		t.Cleanup(func() {
+			if hadPreviousGate {
+				rt.SetGlobalVariables(DDLCommitGateRuntimeKey, previousGate)
+			} else {
+				rt.SetGlobalVariables(DDLCommitGateRuntimeKey, nil)
+			}
+		})
+
+		require.NoError(t, ses.GetTxnHandler().Commit(execCtx))
+		require.True(t, published)
+		require.Equal(t, commitTS, gate.LatestDDLFrontier())
+	})
+
+	t.Run("publication failure prevents successful acknowledgement", func(t *testing.T) {
+		ses, _, qc, execCtx := newState(t)
+		defer ses.Close()
+		defer execCtx.Close()
+		publishErr := errors.New("injected durable frontier publication failure")
+		gate := NewDDLCommitGate()
+		gate.SetFrontierPublisher(func(context.Context, timestamp.Timestamp) error { return publishErr })
+		rt := moruntime.ServiceRuntime(ses.GetService())
+		previousGate, hadPreviousGate := rt.GetGlobalVariables(DDLCommitGateRuntimeKey)
+		rt.SetGlobalVariables(DDLCommitGateRuntimeKey, gate)
+		t.Cleanup(func() {
+			if hadPreviousGate {
+				rt.SetGlobalVariables(DDLCommitGateRuntimeKey, previousGate)
+			} else {
+				rt.SetGlobalVariables(DDLCommitGateRuntimeKey, nil)
+			}
+		})
+
+		require.ErrorIs(t, ses.GetTxnHandler().Commit(execCtx), publishErr)
+		require.Empty(t, qc.requests, "fan-out and success must not follow failed durable publication")
 	})
 
 	t.Run("activation gate drains and blocks concurrent DDL commit", func(t *testing.T) {

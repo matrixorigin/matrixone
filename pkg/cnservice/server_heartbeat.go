@@ -26,6 +26,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	logservicepb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
+	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/version"
 )
@@ -184,6 +185,22 @@ func (s *service) notifyCommandPoll() {
 	case s.commandPollWakeup <- struct{}{}:
 	default:
 	}
+}
+
+// publishDDLCommitFrontier durably advances HAKeeper's cluster frontier before
+// frontend acknowledges a public pre-cut DDL. It is serialized with periodic
+// heartbeat snapshots so an older captured heartbeat cannot follow this one.
+func (s *service) publishDDLCommitFrontier(ctx context.Context, _ timestamp.Timestamp) error {
+	if s._hakeeperClient == nil {
+		return moerr.NewInternalError(ctx, "HAKeeper client is unavailable while publishing DDL frontier")
+	}
+	s.ddlVisibilityHeartbeatMu.Lock()
+	defer s.ddlVisibilityHeartbeatMu.Unlock()
+	_, err := s._hakeeperClient.SendCNHeartbeat(ctx, s.newCNStoreHeartbeat())
+	if err != nil {
+		return moerr.AttachCause(ctx, err)
+	}
+	return nil
 }
 
 func (s *service) newCNStoreHeartbeat() logservicepb.CNStoreHeartbeat {
