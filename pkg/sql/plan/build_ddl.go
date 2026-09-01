@@ -242,6 +242,7 @@ func inferViewColumns(
 	colNames tree.IdentifierList,
 	viewDatabase string,
 	viewName string,
+	checkOption string,
 	forAuthoring bool,
 ) (*viewColumnInference, error) {
 	dependencyCapture := newViewDependencyCaptureContext(ctx)
@@ -400,6 +401,7 @@ func genViewTableDef(
 	colNames tree.IdentifierList,
 	viewDatabase string,
 	viewName string,
+	checkOption string,
 	forAuthoring bool,
 ) (*plan.TableDef, error) {
 	inferred, err := inferViewColumns(ctx, stmt, colNames, viewDatabase, viewName, forAuthoring)
@@ -434,6 +436,8 @@ func genViewTableDef(
 	}
 	viewData, err := json.Marshal(ViewData{
 		Stmt:                    viewSql,
+		Definition:              tree.StringWithOpts(stmt, dialect.MYSQL, tree.WithQuoteString(true), tree.WithQuoteIdentifier(), tree.WithModeIndependentStringLiterals()),
+		CheckOption:             strings.ToUpper(checkOption),
 		DefaultDatabase:         ctx.DefaultDatabase(),
 		SQLMode:                 parserSQLModeFromContext(ctx),
 		SecurityType:            getViewSecurityTypeFromContext(ctx),
@@ -2069,7 +2073,7 @@ func buildCreateView(stmt *tree.CreateView, ctx CompilerContext) (*Plan, error) 
 	}
 
 	tableDef, err := genViewTableDef(
-		ctx, stmt.AsSource, stmt.ColNames, createView.Database, string(viewName), true)
+		ctx, stmt.AsSource, stmt.ColNames, createView.Database, string(viewName), stmt.CheckOption, true)
 	if err != nil {
 		return nil, err
 	}
@@ -6646,7 +6650,7 @@ func buildAlterView(stmt *tree.AlterView, ctx CompilerContext) (*Plan, error) {
 	defer func() {
 		ctx.SetBuildingAlterView(false, "", "")
 	}()
-	tableDef, err := genViewTableDef(ctx, stmt.AsSource, stmt.ColNames, alterView.Database, viewName, true)
+	tableDef, err := genViewTableDef(ctx, stmt.AsSource, stmt.ColNames, alterView.Database, viewName, "NONE", true)
 	if err != nil {
 		return nil, err
 	}

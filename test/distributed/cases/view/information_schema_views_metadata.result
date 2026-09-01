@@ -26,33 +26,48 @@ create view long_repeated_star_comment_v /*****/ as select a from t;
 /*!50001 CREATE VIEW executable_string_terminator_v AS select 'x*/y' as s */;
 CREATE DEFINER=' view fake as select 0'@'%' VIEW quoted_definer_v AS select a from t;
 CREATE DEFINER=' view fake \' VIEW fake AS select 0'@'%' VIEW escaped_quoted_definer_v AS select a from t;
+CREATE DEFINER=$q$ view fake as select 0$q$ VIEW dollar_quoted_definer_v AS select a from t;
+/*!50001 CREATE VIEW executable_dollar_terminator_v AS select $q$x*/y$q$ as s */;
+/*!50001 CREATE VIEW executable_double_quote_terminator_v AS select "x\"*/y" as s */;
+/*!50001 CREATE VIEW executable_double_minus_v AS select 1--2 as x */;
+CREATE VIEW check_option_v AS select a from t WITH CASCADED CHECK OPTION;
 select table_name, view_definition, is_updatable
 from information_schema.views
 where table_schema = 'information_schema_views_metadata'
 order by table_name;
 ➤ table_name[12,5000,0]  ¦  view_definition[-1,16383,0]  ¦  is_updatable[12,3,0]  𝄀
-adjacent_block_comment_v  ¦  select a from t  ¦  NO  𝄀
-agg_v  ¦  select a, count(*) cnt from t group by a  ¦  NO  𝄀
-block_before_view_v  ¦  select a from t  ¦  NO  𝄀
-block_comment_v  ¦  select a from t  ¦  NO  𝄀
-direct_v  ¦  select a, b from t  ¦  NO  𝄀
-dump_v  ¦  select a from t  ¦  NO  𝄀
-escaped_quoted_definer_v  ¦  select a from t  ¦  NO  𝄀
-executable_string_terminator_v  ¦  select 'x*/y' as s  ¦  NO  𝄀
-executable_trailing_comment_v  ¦  select a from t  /* application */  ¦  NO  𝄀
-executable_without_version_v  ¦  select a from t  ¦  NO  𝄀
-hash_comment_v  ¦  select a from t  ¦  NO  𝄀
-leading_block_comment_v  ¦  select a from t  ¦  NO  𝄀
-line_comment_v  ¦  select a from t  ¦  NO  𝄀
-long_repeated_star_comment_v  ¦  select a from t  ¦  NO  𝄀
-quoted_definer_v  ¦  select a from t  ¦  NO  𝄀
-repeated_star_comment_v  ¦  select a from t  ¦  NO  𝄀
-slash_comment_v  ¦  select a from t  ¦  NO  𝄀
-split_dump_v  ¦  select a from t  ¦  NO
+adjacent_block_comment_v  ¦  select `t`.`a` from `t`  ¦  NO  𝄀
+agg_v  ¦  select `t`.`a`, count(*) as `cnt` from `t` group by `t`.`a`  ¦  NO  𝄀
+block_before_view_v  ¦  select `t`.`a` from `t`  ¦  NO  𝄀
+block_comment_v  ¦  select `t`.`a` from `t`  ¦  NO  𝄀
+check_option_v  ¦  select `t`.`a` from `t`  ¦  NO  𝄀
+direct_v  ¦  select `t`.`a`, `t`.`b` from `t`  ¦  NO  𝄀
+dollar_quoted_definer_v  ¦  select `t`.`a` from `t`  ¦  NO  𝄀
+dump_v  ¦  select `t`.`a` from `t`  ¦  NO  𝄀
+escaped_quoted_definer_v  ¦  select `t`.`a` from `t`  ¦  NO  𝄀
+executable_dollar_terminator_v  ¦  select "x*/y" as `s`  ¦  NO  𝄀
+executable_double_minus_v  ¦  select 1 - -2 as `x`  ¦  NO  𝄀
+executable_double_quote_terminator_v  ¦  select "x\"*/y" as `s`  ¦  NO  𝄀
+executable_string_terminator_v  ¦  select 'x*/y' as `s`  ¦  NO  𝄀
+executable_trailing_comment_v  ¦  select `t`.`a` from `t`  ¦  NO  𝄀
+executable_without_version_v  ¦  select `t`.`a` from `t`  ¦  NO  𝄀
+hash_comment_v  ¦  select `t`.`a` from `t`  ¦  NO  𝄀
+leading_block_comment_v  ¦  select `t`.`a` from `t`  ¦  NO  𝄀
+line_comment_v  ¦  select `t`.`a` from `t`  ¦  NO  𝄀
+long_repeated_star_comment_v  ¦  select `t`.`a` from `t`  ¦  NO  𝄀
+quoted_definer_v  ¦  select `t`.`a` from `t`  ¦  NO  𝄀
+repeated_star_comment_v  ¦  select `t`.`a` from `t`  ¦  NO  𝄀
+slash_comment_v  ¦  select `t`.`a` from `t`  ¦  NO  𝄀
+split_dump_v  ¦  select `t`.`a` from `t`  ¦  NO
 update agg_v set cnt = 1;
 invalid input: cannot insert/update/delete from view
 update direct_v set b = 1;
 invalid input: cannot insert/update/delete from view
+select table_name, view_definition, check_option
+from information_schema.views
+where table_schema = 'information_schema_views_metadata' and table_name = 'check_option_v';
+➤ table_name[12,5000,0]  ¦  view_definition[-1,16383,0]  ¦  check_option[12,9,0]  𝄀
+check_option_v  ¦  select `t`.`a` from `t`  ¦  CASCADED  𝄀
 drop database information_schema_views_metadata;
 drop database if exists information_schema_views_clone;
 create database information_schema_views_clone clone information_schema;
