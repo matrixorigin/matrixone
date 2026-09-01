@@ -816,7 +816,7 @@ and closes every row below.
 | SF10 correctness and decision data | typed equality for all 22 queries on one reused process; Q9 repeats ten times; record storage bytes, rows/bytes before serialization, transferred bytes, CN CPU/peak memory, sidecar host/GPU peak and utilization, time to first row, and total latency |
 | partition safety control | repeated direct-TAE Q9 plus deterministic TAE- and MO-derived concurrent partition-content fingerprints prove correctness is independent of source representation and batch size |
 | snapshot advantage | unflushed committed tail and visible tombstone cases equal native MatrixOne while direct `TaeRead` rejects them |
-| static/build quality | MatrixOne SCA/UT/BVT/coverage; Sirius build matrix and tests; sidecar CUDA build/tests and review |
+| static/build quality | MatrixOne exact-head CI (including SCA/UT/BVT/coverage) is the merge gate; Sirius and sidecar CI status is informational and non-blocking |
 
 Functional lifecycle tests use deterministic barriers rather than sleeps.
 Performance and capacity measurements run in the performance harness, not as
@@ -825,15 +825,16 @@ wall-clock assertions in ordinary unit tests.
 ## 15. Delivery pins
 
 The delivered candidate is pinned to these immutable revisions. Final
-implementation approval remains dependent on exact-head CI and the acceptance
-evidence in section 14; updating any production revision invalidates only the
-evidence whose semantic inputs changed.
+implementation approval remains dependent on MatrixOne exact-head CI and the
+acceptance evidence in section 14. Sirius and sidecar CI status is not a merge
+gate for the MatrixOne PR. Updating any production revision invalidates only
+the evidence whose semantic inputs changed.
 
-| Component | PR | Candidate delivery commit | CI/evidence |
+| Component | PR | Candidate delivery commit | Evidence |
 | --- | --- | --- | --- |
 | MatrixOne | [#27599](https://github.com/matrixorigin/matrixone/pull/27599) | `b659afafa0c86a707b79f9a6c4b68fd3beadc6aa` | full Go 1.26.4 pre-push SCA passed; affected packages and 20x race regressions passed; [SF10 five-mode record](https://github.com/matrixorigin/matrixone/pull/27599#issuecomment-5495966844) |
-| Sirius | [#6](https://github.com/matrixorigin/sirius/pull/6) | `b458357185ebeae90ab44908e4159c3d3fb85a11` | pinned CUDA build and all pre-commit hooks passed; 16 Substrait/MO-scan contract cases, 4 scheduler concurrency cases, and 2 task-counting lifecycle cases passed; stable/nightly cuDF datasource interfaces are version-gated; exact-head CI pending |
-| sidecar | [#14](https://github.com/matrixorigin/mo-sirius-sidecar/pull/14) | `7227adfb78308b752a86c030b44dbd8a3311f7d6` | pins the Sirius revision above; pinned CUDA build passed; 10 protocol/config and 7 native stream/result cases passed; exact-head CI pending |
+| Sirius | [#6](https://github.com/matrixorigin/sirius/pull/6) | `b06f3657eeeb2f2b64a6254df887ae631d0c23ca` | source tree matches the scoped v6 implementation at `fd347eb996c74d9910c3aaa94596feba14d5d035`, including merged multi-stream fix [#8](https://github.com/matrixorigin/sirius/pull/8); targeted Substrait/MO-scan, scheduler-concurrency, and task-lifecycle cases passed |
+| sidecar | [#14](https://github.com/matrixorigin/mo-sirius-sidecar/pull/14) | `55c8676d7d4463040d914e0f8c07210bf9559ab4` | pins the scoped Sirius revision above; targeted protocol/config and native stream/result cases passed |
 
 The sidecar submodule must point to the approved Sirius commit. The MatrixOne PR
 body must link this design at its approved commit and the final evidence record.
@@ -860,5 +861,5 @@ body must link this design at its approved commit and the final evidence record.
 
 There are no deferred correctness or lifecycle decisions. The distinct design
 approval gate is closed. Production enablement remains blocked on final
-implementation review, exact-head dependency CI, and every still-unlinked
+implementation review, MatrixOne exact-head CI, and every still-unlinked
 acceptance row in sections 14 and 15.
