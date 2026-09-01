@@ -187,16 +187,31 @@ func (s *service) notifyCommandPoll() {
 	}
 }
 
+// sendCNHeartbeat transfers schedule-command ownership to the existing dedupe
+// owner before returning. Direct publication heartbeats must not discard a
+// destructively delivered legacy CommandBatch.
+func (s *service) sendCNHeartbeat(
+	ctx context.Context,
+	hb logservicepb.CNStoreHeartbeat,
+) (logservicepb.CommandBatch, error) {
+	batch, err := s._hakeeperClient.SendCNHeartbeat(ctx, hb)
+	if err != nil {
+		return batch, err
+	}
+	s.handleHeartbeatResponse(hb.AckedCommandBatchID, batch)
+	return batch, nil
+}
+
 // publishDDLCommitFrontier durably advances HAKeeper's cluster frontier before
 // frontend acknowledges a public pre-cut DDL. It is serialized with periodic
 // heartbeat snapshots so an older captured heartbeat cannot follow this one.
-func (s *service) publishDDLCommitFrontier(ctx context.Context, _ timestamp.Timestamp) error {
+func (s *service) publishDDLCommitFrontier(ctx context.Context, ts timestamp.Timestamp) error {
 	if s._hakeeperClient == nil {
 		return moerr.NewInternalError(ctx, "HAKeeper client is unavailable while publishing DDL frontier")
 	}
 	s.ddlVisibilityHeartbeatMu.Lock()
 	defer s.ddlVisibilityHeartbeatMu.Unlock()
-	batch, err := s._hakeeperClient.SendCNHeartbeat(ctx, s.newCNStoreHeartbeat())
+	batch, err := s.sendCNHeartbeat(ctx, s.newCNStoreHeartbeat())
 	if err != nil {
 		return moerr.AttachCause(ctx, err)
 	}
@@ -212,6 +227,15 @@ func (s *service) publishDDLCommitFrontier(ctx context.Context, _ timestamp.Time
 		return moerr.NewInvalidStateNoCtxf(
 			"DDL frontier publication generation %d rejected by authoritative generation %d",
 			s.viewMetadataAdmissionGeneration, admission.Generation)
+	}
+	if batch.DDLVisibilityFrontier == nil || batch.DDLVisibilityFrontier.Less(ts) {
+		authoritative := "missing"
+		if batch.DDLVisibilityFrontier != nil {
+			authoritative = batch.DDLVisibilityFrontier.DebugString()
+		}
+		return moerr.NewInvalidStateNoCtxf(
+			"DDL frontier publication %s was not durably acknowledged (authoritative frontier %s)",
+			ts.DebugString(), authoritative)
 	}
 	return nil
 }
@@ -248,7 +272,7 @@ func (s *service) newCNStoreHeartbeat() logservicepb.CNStoreHeartbeat {
 	if s.ddlCommitGate != nil {
 		hb.DDLVisibilityFrontier = s.ddlCommitGate.LatestDDLFrontier()
 	}
-	if deployed := s.loadDDLVisibilityDeployedProtocol(); deployed >= defines.MORPCVersion43 {
+	if deployed := s.loadDDLVisibilityDeployedProtocol(); deployed >= defines.MORPCVersion44 {
 		hb.DDLVisibilityDeployedProtocol = deployed
 	}
 	if s.viewMetadataEpochFence != nil {
@@ -277,7 +301,7 @@ func (s *service) withdrawViewMetadataAdmission() error {
 		context.Background(), timeout, moerr.CauseHeartbeat)
 	defer cancel()
 	hb := s.newCNStoreHeartbeat()
-	_, err := s._hakeeperClient.SendCNHeartbeat(ctx, hb)
+	_, err := s.sendCNHeartbeat(ctx, hb)
 	if err != nil {
 		return moerr.AttachCause(ctx, err)
 	}

@@ -33,7 +33,7 @@ import (
 func ddlVisibilityBarrierSupported(serviceID string) bool {
 	value, ok := moruntime.ServiceRuntime(serviceID).GetGlobalVariables(moruntime.MOProtocolVersion)
 	version, valid := value.(int64)
-	return ok && valid && version >= defines.MORPCVersion43
+	return ok && valid && version >= defines.MORPCVersion44
 }
 
 // prepareDDLVisibilityBarrier publishes this CN only after QueryService is
@@ -56,7 +56,7 @@ func (s *service) prepareDDLVisibilityBarrier() error {
 			return err
 		}
 		cancel()
-		if details.DDLVisibilityDeployedProtocol >= defines.MORPCVersion43 {
+		if details.DDLVisibilityDeployedProtocol >= defines.MORPCVersion44 {
 			// Markerless scale-out/replacement after the cluster cut joins v43 as
 			// provisional. It can synchronize and receive activation RPCs, but it
 			// cannot publish ingress or produce DDL before joining the exact cut.
@@ -64,16 +64,16 @@ func (s *service) prepareDDLVisibilityBarrier() error {
 		}
 	}
 	rt := moruntime.ServiceRuntime(s.cfg.UUID)
-	if deployedVersion >= defines.MORPCVersion43 {
+	if deployedVersion >= defines.MORPCVersion44 {
 		s.ddlVisibilityActivationComplete.Store(true)
 		rt.SetGlobalVariables(moruntime.MOProtocolVersion, deployedVersion)
-	} else if deployedVersion <= -defines.MORPCVersion43 {
+	} else if deployedVersion <= -defines.MORPCVersion44 {
 		// A provisional marker proves this CN durably fenced its local producers,
 		// but not that every target committed the same cut. Keep v43 capability so
 		// retries can converge while startup/public ingress remains fail-closed.
 		rt.SetGlobalVariables(moruntime.MOProtocolVersion, -deployedVersion)
 	} else if value, ok := rt.GetGlobalVariables(moruntime.MOProtocolVersion); ok {
-		if version, valid := value.(int64); valid && version >= defines.MORPCVersion43 {
+		if version, valid := value.(int64); valid && version >= defines.MORPCVersion44 {
 			rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion42)
 		}
 	}
@@ -122,7 +122,7 @@ func (s *service) prepareDDLVisibilityBarrierLocked() error {
 	// the same mutex to order readiness snapshots) would deadlock publication.
 	// Publish the startup barrier directly before waiting for its authoritative
 	// observation; periodic heartbeats remain serialized behind startup.
-	if _, err := s._hakeeperClient.SendCNHeartbeat(ctx, s.newCNStoreHeartbeat()); err != nil {
+	if _, err := s.sendCNHeartbeat(ctx, s.newCNStoreHeartbeat()); err != nil {
 		return moerr.AttachCause(ctx, err)
 	}
 
@@ -141,7 +141,7 @@ func (s *service) prepareDDLVisibilityBarrierLocked() error {
 		// proof bound to this restart/replacement incarnation so future scale-out
 		// activation does not wait on stale proof from its predecessor.
 		s.ddlVisibilityActivationFenced.Store(true)
-		if _, err := s._hakeeperClient.SendCNHeartbeat(ctx, s.newCNStoreHeartbeat()); err != nil {
+		if _, err := s.sendCNHeartbeat(ctx, s.newCNStoreHeartbeat()); err != nil {
 			return moerr.AttachCause(ctx, err)
 		}
 	}
@@ -178,14 +178,14 @@ func (s *service) publishDDLVisibilityIngressAfterStart() error {
 		hb := s.newCNStoreHeartbeat()
 		hb.ViewMetadataIngressReady = true
 		ctx, cancel := s.newDDLVisibilityBarrierContext(context.Background())
-		batch, err := s._hakeeperClient.SendCNHeartbeat(ctx, hb)
+		batch, err := s.sendCNHeartbeat(ctx, hb)
 		if err != nil {
 			err = moerr.AttachCause(ctx, err)
 			cancel()
 			return err
 		}
 		cancel()
-		if batch.DDLVisibilityDeployedProtocol >= defines.MORPCVersion43 {
+		if batch.DDLVisibilityDeployedProtocol >= defines.MORPCVersion44 {
 			moruntime.ServiceRuntime(s.cfg.UUID).SetGlobalVariables(
 				moruntime.MOProtocolVersion, batch.DDLVisibilityDeployedProtocol)
 			s.viewMetadataIngressReady.Store(false)
@@ -223,7 +223,7 @@ func (s *service) withdrawDDLVisibilityBarrierLocked(ctx context.Context) error 
 		return moerr.NewInternalErrorNoCtx("DDL visibility barrier withdrawal dependencies are unavailable")
 	}
 
-	if _, err := s._hakeeperClient.SendCNHeartbeat(ctx, s.newCNStoreHeartbeat()); err != nil {
+	if _, err := s.sendCNHeartbeat(ctx, s.newCNStoreHeartbeat()); err != nil {
 		return moerr.AttachCause(ctx, err)
 	}
 	return s.waitForDDLVisibilityBarrierWithdrawal(ctx, s.ddlVisibilityBarrierRetryInterval())
@@ -271,13 +271,13 @@ func (s *service) setProtocolVersion(ctx context.Context, version int64, targets
 		return moerr.NewInternalError(ctx, "invalid protocol version")
 	}
 	pending := s.ddlVisibilityActivationPending.Load()
-	if version < defines.MORPCVersion43 {
+	if version < defines.MORPCVersion44 {
 		if pending {
 			return moerr.NewInvalidStateNoCtx("cannot downgrade during DDL visibility activation")
 		}
 		deployed := s.loadDDLVisibilityDeployedProtocol()
 		clusterCommitted := s.ddlVisibilityActivationComplete.Load() ||
-			deployed >= defines.MORPCVersion43 || deployed <= -defines.MORPCVersion43
+			deployed >= defines.MORPCVersion44 || deployed <= -defines.MORPCVersion44
 		if !clusterCommitted && s._hakeeperClient != nil {
 			queryCtx, cancel := s.newDDLVisibilityBarrierContext(ctx)
 			details, err := s._hakeeperClient.GetClusterDetails(queryCtx)
@@ -287,7 +287,7 @@ func (s *service) setProtocolVersion(ctx context.Context, version int64, targets
 				return err
 			}
 			cancel()
-			clusterCommitted = details.DDLVisibilityDeployedProtocol >= defines.MORPCVersion43
+			clusterCommitted = details.DDLVisibilityDeployedProtocol >= defines.MORPCVersion44
 		}
 		if clusterCommitted {
 			return moerr.NewInvalidStateNoCtx(
@@ -306,7 +306,7 @@ func (s *service) setProtocolVersion(ctx context.Context, version int64, targets
 		rt.SetGlobalVariables(moruntime.MOProtocolVersion, version)
 		return nil
 	}
-	if current >= defines.MORPCVersion43 && !pending &&
+	if current >= defines.MORPCVersion44 && !pending &&
 		s.ddlVisibilityActivationComplete.Load() {
 		rt.SetGlobalVariables(moruntime.MOProtocolVersion, version)
 		return nil
@@ -483,7 +483,7 @@ func (s *service) commitDDLVisibilityClusterEpoch(
 	hb.DDLVisibilityDeployedProtocol = version
 	hb.DDLVisibilityEpochCommitTargets = append(
 		[]logservicepb.DDLVisibilityActivationTarget(nil), targets...)
-	batch, err := s._hakeeperClient.SendCNHeartbeat(ctx, hb)
+	batch, err := s.sendCNHeartbeat(ctx, hb)
 	if err != nil {
 		return moerr.AttachCause(ctx, err)
 	}
@@ -536,7 +536,7 @@ func (s *service) setDDLVisibilityIngressLocked(ctx context.Context, ready bool)
 	s.ddlVisibilityHeartbeatMu.Lock()
 	s.ddlVisibilityBarrierReady.Store(true)
 	s.viewMetadataIngressReady.Store(ready)
-	_, err := s._hakeeperClient.SendCNHeartbeat(ctx, s.newCNStoreHeartbeat())
+	_, err := s.sendCNHeartbeat(ctx, s.newCNStoreHeartbeat())
 	s.ddlVisibilityHeartbeatMu.Unlock()
 	if err != nil {
 		return moerr.AttachCause(ctx, err)
@@ -588,7 +588,7 @@ func (s *service) waitForDDLVisibilityIngress(
 func (s *service) publishDDLVisibilityActivationPhaseLocked(ctx context.Context) error {
 	s.ddlVisibilityHeartbeatMu.Lock()
 	defer s.ddlVisibilityHeartbeatMu.Unlock()
-	_, err := s._hakeeperClient.SendCNHeartbeat(ctx, s.newCNStoreHeartbeat())
+	_, err := s.sendCNHeartbeat(ctx, s.newCNStoreHeartbeat())
 	if err != nil {
 		return moerr.AttachCause(ctx, err)
 	}

@@ -207,6 +207,26 @@ func (c *blockingCNHeartbeatCommandClient) GetScheduleCommands(
 	return c.commandBatch, nil
 }
 
+func TestDirectCNHeartbeatProcessesLegacyScheduleCommand(t *testing.T) {
+	holder := &observingTaskHolder{createErr: errors.New("stop after observing command"), created: make(chan struct{}, 1)}
+	client := &admissionFailureCNHeartbeatClient{
+		testHAKClient: &testHAKClient{},
+		batch: pb.CommandBatch{Commands: []pb.ScheduleCommand{{
+			ServiceType:       pb.CNService,
+			CreateTaskService: &pb.CreateTaskService{},
+		}}},
+	}
+	s := &service{
+		cfg: &Config{UUID: "direct-heartbeat-command-owner"}, config: util.NewConfigData(nil),
+		logger: zap.NewNop(), _hakeeperClient: client,
+	}
+	s.task.holder = holder
+
+	_, err := s.sendCNHeartbeat(context.Background(), s.newCNStoreHeartbeat())
+	require.NoError(t, err)
+	require.Equal(t, int32(1), holder.createCount.Load())
+}
+
 func Test_heartbeat(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()

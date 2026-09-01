@@ -675,6 +675,9 @@ message CommandBatch {
   // DDLVisibilityDeployedProtocol is returned from the same replicated
   // heartbeat transition that conditionally publishes CN ingress.
   int64 DDLVisibilityDeployedProtocol = 6;
+  // DDLVisibilityFrontier is the durable cluster maximum after applying this
+  // heartbeat transition. New CNs require it as publication acknowledgement.
+  timestamp.Timestamp DDLVisibilityFrontier = 7;
 }
 
 // ViewMetadataAdmission is the durable cluster admission snapshot. Generation

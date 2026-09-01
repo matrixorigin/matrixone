@@ -49,17 +49,17 @@ func TestIssue277xxDDLConsistency(t *testing.T) {
 			targets := cn0.ServiceID() + "," + cn1.ServiceID()
 			var activation string
 			require.NoError(t, db0.QueryRowContext(ctx,
-				"select mo_ctl('cn', 'SetProtocolVersion', ?)", targets+":43").Scan(&activation))
-			require.Contains(t, activation, cn0.ServiceID()+":43")
-			require.Contains(t, activation, cn1.ServiceID()+":43")
+				"select mo_ctl('cn', 'SetProtocolVersion', ?)", targets+":44").Scan(&activation))
+			require.Contains(t, activation, cn0.ServiceID()+":44")
+			require.Contains(t, activation, cn1.ServiceID()+":44")
 			// SetProtocolVersion returns success only after both target RPCs report
-			// v43 and HAKeeper acknowledges the atomically committed v43 epoch.
+			// v44 and HAKeeper acknowledges the atomically committed v44 epoch.
 
 			resetIssue277xxDatabase(t, ctx, db0, database)
 			defer execSQLMaybe(t, ctx, db0, "drop database if exists `"+database+"`")
 
 			// Prove this public path actually executes SyncCommitV2: an injected
-			// receiver failure must make CREATE fail after v43 activation.
+			// receiver failure must make CREATE fail after v44 activation.
 			require.True(t, fault.Enable())
 			defer fault.Disable()
 			faultPointRemoved := false
@@ -77,7 +77,7 @@ func TestIssue277xxDDLConsistency(t *testing.T) {
 			require.NoError(t, removeErr)
 			faultPointRemoved = true
 
-			// Do not issue SYNCCOMMIT or retry the read. The v43 DDL commit contract
+			// Do not issue SYNCCOMMIT or retry the read. The v44 DDL commit contract
 			// must make the first fresh CN1 snapshot observe CN0's CREATE TABLE.
 			execSQLRequire(t, ctx, db0,
 				"create table `"+database+"`.`t` (id int primary key, payload varchar(32))")

@@ -87,3 +87,10 @@
 1. 在 `s.task` 下建立 detached revoked-runner 的共享 ownership/completion；异步 revocation drain 是唯一 Stop owner。
 2. 正常 `stopTask` 在锁内转移普通 runner ownership，锁外执行 holder.Close/runner.Stop；若 runner 已由 revocation 摘除，则等待共享 completion 后才允许关闭下游依赖。
 3. 分别覆盖 stopTask 先取得 runner 与 revocation 先摘除 runner 两种顺序，证明无持锁等待、无 double Stop、无依赖提前关闭。
+
+## 2026-09-01：新增 review blockers（frontier ack / heartbeat response / v44）
+
+1. 将 DDL capability 从与 #27553 冲突的 v43 移至下一未占用 v44，并迁移全部 gate、method map、测试、`mo_ctl` 路径及设计文档。
+2. 在同一 HAKeeper RSM heartbeat 响应中返回应用后的 authoritative frontier；CN 仅在 generation 精确匹配且 frontier >= T 时承认同步发布，旧 RSM 静默丢字段时 fail closed。
+3. 所有 direct CN heartbeat 将 CommandBatch 交给现有 command mutex/dedupe owner，避免 command-delivery-disabled 阶段的 destructive schedule command 丢失。
+4. 增加旧 HAKeeper 丢 frontier 与 legacy command delivery 的确定性回归，运行 affected package、race、vet 和 protobuf 测试。

@@ -78,8 +78,9 @@ const (
 	MORPCVersion40     int64 = 40 // PAD SPACE comparison casts and set-operation equality keys
 	MORPCVersion41     int64 = 41 // cycle-safe bounded current-role closure table function
 	MORPCVersion42     int64 = 42 // transactional SQL-task child cleanup
-	MORPCVersion43     int64 = 43 // cancellable cross-CN DDL visibility fence
-	MORPCLatestVersion       = MORPCVersion43
+	MORPCVersion43     int64 = 43 // validated MongoDB explicit-query payload (reserved by #27553)
+	MORPCVersion44     int64 = 44 // cancellable cross-CN DDL visibility fence
+	MORPCLatestVersion       = MORPCVersion44
 )
 
 // DefaultLockWaitTimeoutSeconds is shared by the frontend default and by
