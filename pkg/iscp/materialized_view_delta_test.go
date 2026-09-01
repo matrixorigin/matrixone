@@ -42,6 +42,17 @@ type recordingMVRowIDReader struct {
 	snapshots [][]types.TS
 }
 
+type controlledMVRowIDReader struct {
+	rows [][]any
+	err  error
+}
+
+func (r *controlledMVRowIDReader) ReadRowsByRowID(
+	context.Context, []types.Rowid, types.TS, []string, *mpool.MPool,
+) ([][]any, error) {
+	return r.rows, r.err
+}
+
 func (r *recordingMVRowIDReader) ReadRowsByRowID(
 	_ context.Context,
 	rowids []types.Rowid,
@@ -87,6 +98,17 @@ func TestReadMaterializedViewDeletedRowsUsesPreCommitSnapshot(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, [][]any{{int64(1)}, {int64(2)}, {int64(3)}}, rows)
 	require.Equal(t, [][]types.TS{{commitA.Prev(), commitA.Prev()}, {commitB.Prev()}}, reader.snapshots)
+}
+
+func TestReadMaterializedViewDeletedRowsFailureBoundaries(t *testing.T) {
+	var block types.Blockid
+	deletes := []materializedViewChangeRow{{RowID: types.NewRowid(&block, 1)}}
+	sourceErr := errors.New("row lookup failed")
+
+	_, err := readMaterializedViewDeletedRows(t.Context(), &controlledMVRowIDReader{err: sourceErr}, deletes, types.BuildTS(10, 0), []string{"id"})
+	require.ErrorIs(t, err, sourceErr)
+	_, err = readMaterializedViewDeletedRows(t.Context(), &controlledMVRowIDReader{}, deletes, types.BuildTS(10, 0), []string{"id"})
+	require.ErrorContains(t, err, "returned 0 rows for 1 deletes")
 }
 
 func TestMaterializedViewDeltaSQLIsBatchedAndReparseable(t *testing.T) {
@@ -167,6 +189,14 @@ func TestMaterializedViewDeltaExecOptionsAdvanceStatementBoundary(t *testing.T) 
 		"successive delta DML must finalize preceding workspace writes as separate statements")
 }
 
+func TestMaterializedViewDeltaRequiresInternalSQLExecutor(t *testing.T) {
+	service := "materialized-view-delta-missing-executor"
+	moruntime.SetupServiceBasedRuntime(service, moruntime.NewRuntime(metadata.ServiceType_CN, service, zap.NewNop()))
+	require.PanicsWithValue(t, "missing internal SQL executor", func() {
+		_, _ = execMaterializedViewDeltaSQL(t.Context(), "select 1", service, nil)
+	})
+}
+
 func TestDecodeIncrementalDescriptionVersionAndDistinctState(t *testing.T) {
 	base := incrementalDescription{
 		Version: 2, SourceAlias: "e", SourceColumns: []string{"service", "trace_id"},
@@ -194,6 +224,105 @@ func TestDecodeIncrementalDescriptionVersionAndDistinctState(t *testing.T) {
 	_, err = decodeIncrementalDescription(encode(future))
 	require.ErrorContains(t, err, "unsupported materialized view incremental specification version")
 }
+
+func TestDecodeIncrementalDescriptionRejectsIncompleteOperators(t *testing.T) {
+	base := incrementalDescription{
+		Version: 2, SourceAlias: "e", SourceColumns: []string{"service", "value"},
+		Groups:         []incrementalGroup{{Expression: "e.service", OutputColumn: "service"}},
+		RowCountColumn: "__rows", StateColumns: []string{"__rows"},
+	}
+	encode := func(desc incrementalDescription) string {
+		b, err := json.Marshal(desc)
+		require.NoError(t, err)
+		return base64.StdEncoding.EncodeToString(b)
+	}
+	tests := []struct {
+		name    string
+		mutate  func(*incrementalDescription)
+		wantErr string
+	}{
+		{name: "invalid json", mutate: nil, wantErr: "invalid materialized view incremental specification"},
+		{name: "incomplete description", mutate: func(d *incrementalDescription) { d.SourceAlias = "" }, wantErr: "incomplete materialized view incremental specification"},
+		{name: "incomplete group", mutate: func(d *incrementalDescription) { d.Groups[0].Expression = "" }, wantErr: "invalid materialized view incremental group"},
+		{name: "count column input", mutate: func(d *incrementalDescription) { d.Aggregates = []incrementalAggregate{{Kind: "count_column"}} }, wantErr: "incremental COUNT requires an input"},
+		{name: "sum state", mutate: func(d *incrementalDescription) {
+			d.Aggregates = []incrementalAggregate{{Kind: "sum", InputExpression: "e.value"}}
+		}, wantErr: "incremental SUM requires input and state"},
+		{name: "sum group key state", mutate: func(d *incrementalDescription) {
+			d.GroupKeyColumn = "__key"
+			d.Aggregates = []incrementalAggregate{{Kind: "sum", InputExpression: "e.value", StateCountColumn: "__count"}}
+		}, wantErr: "requires sum state"},
+		{name: "avg state", mutate: func(d *incrementalDescription) {
+			d.Aggregates = []incrementalAggregate{{Kind: "avg", InputExpression: "e.value"}}
+		}, wantErr: "incremental AVG requires input and state"},
+		{name: "min input", mutate: func(d *incrementalDescription) { d.Aggregates = []incrementalAggregate{{Kind: "min"}} }, wantErr: "incremental MIN requires an input"},
+		{name: "max input", mutate: func(d *incrementalDescription) { d.Aggregates = []incrementalAggregate{{Kind: "max"}} }, wantErr: "incremental MAX requires an input"},
+		{name: "distinct state", mutate: func(d *incrementalDescription) {
+			d.Aggregates = []incrementalAggregate{{Kind: "count_distinct", InputExpression: "e.value", StateIndex: 1}}
+		}, wantErr: "requires versioned auxiliary state"},
+		{name: "unknown aggregate", mutate: func(d *incrementalDescription) { d.Aggregates = []incrementalAggregate{{Kind: "median"}} }, wantErr: "is not supported"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			encoded := base64.StdEncoding.EncodeToString([]byte("{"))
+			if tc.mutate != nil {
+				desc := base
+				desc.Groups = append([]incrementalGroup(nil), base.Groups...)
+				tc.mutate(&desc)
+				encoded = encode(desc)
+			}
+			_, err := decodeIncrementalDescription(encoded)
+			require.ErrorContains(t, err, tc.wantErr)
+		})
+	}
+}
+
+func TestMaterializedViewDeltaDescriptionPredicates(t *testing.T) {
+	require.False(t, materializedViewDeltaCanUpsert(nil))
+	require.False(t, materializedViewHasDistinctState(nil))
+	require.False(t, materializedViewNeedsAffectedGroups(nil))
+	require.False(t, materializedViewHasAuxiliaryState(nil))
+
+	desc := &incrementalDescription{StateTable: "state", Groups: []incrementalGroup{{OutputColumn: "g"}}}
+	require.False(t, materializedViewDeltaCanUpsert(desc))
+	require.False(t, materializedViewHasDistinctState(desc))
+	require.False(t, materializedViewNeedsAffectedGroups(desc))
+
+	desc.GroupKeyColumn = "__key"
+	desc.Aggregates = []incrementalAggregate{{Kind: "min"}}
+	require.True(t, materializedViewDeltaCanUpsert(desc))
+	require.True(t, materializedViewNeedsAffectedGroups(desc))
+	require.True(t, materializedViewHasAuxiliaryState(desc))
+
+	desc.Aggregates = []incrementalAggregate{{Kind: "count_distinct"}}
+	require.True(t, materializedViewHasDistinctState(desc))
+	require.True(t, materializedViewHasAuxiliaryState(desc))
+}
+
+func TestMaterializedViewDeltaSourceCTEValidation(t *testing.T) {
+	desc := &incrementalDescription{
+		SourceAlias: "e", SourceColumns: []string{"service"},
+		Groups:         []incrementalGroup{{Expression: "e.service", OutputColumn: "service"}},
+		Aggregates:     []incrementalAggregate{{Kind: "count_star", OutputColumn: "rows"}},
+		RowCountColumn: "__rows",
+	}
+	varcharType := types.T_varchar.ToType()
+	_, err := materializedViewDeltaSourceCTE(t.Context(), desc, []*types.Type{&varcharType}, []materializedViewSignedRow{{
+		values: map[string]any{}, sign: 1,
+	}})
+	require.ErrorContains(t, err, "missing column")
+
+	for _, typ := range []*types.Type{
+		ptrType(types.T_time.ToTypeWithScale(3)),
+		ptrType(types.T_datetime.ToTypeWithScale(4)),
+		ptrType(types.T_timestamp.ToTypeWithScale(5)),
+		ptrType(types.T_decimal64.ToType()),
+	} {
+		require.NotEmpty(t, materializedViewDeltaSQLType(typ))
+	}
+}
+
+func ptrType(typ types.Type) *types.Type { return &typ }
 
 func TestMaterializedViewDeltaJoinUsesEqualityForNonNullableGroups(t *testing.T) {
 	desc := &incrementalDescription{Groups: []incrementalGroup{
@@ -328,4 +457,53 @@ func TestMaterializedViewDeltaExecutionPaths(t *testing.T) {
 	require.NoError(t, applyMaterializedViewDistinctDeltas(t.Context(), service, nil, info, &legacy, sourceTypes, rows))
 	require.NoError(t, rebuildMaterializedViewDistinctState(t.Context(), service, nil, info, &legacy, types.BuildTS(100, 7)))
 	require.GreaterOrEqual(t, len(sqls), 20)
+}
+
+func TestMaterializedViewDeltaExecutionFailureBoundaries(t *testing.T) {
+	desc := &incrementalDescription{
+		Version: 2, SourceAlias: "e", SourceColumns: []string{"service"},
+		Groups:         []incrementalGroup{{Expression: "e.service", OutputColumn: "service", NotNullable: true}},
+		Aggregates:     []incrementalAggregate{{Kind: "count_star", OutputColumn: "requests"}},
+		GroupKeyColumn: "__group_key", RowCountColumn: "__row_count",
+		StateColumns: []string{"__row_count", "__group_key"},
+	}
+	legacy := *desc
+	legacy.GroupKeyColumn = ""
+	legacy.StateColumns = []string{"__row_count"}
+	info := &ConsumerInfo{DBName: "db", TableName: "mv"}
+	varcharType := types.T_varchar.ToType()
+	rows := []materializedViewSignedRow{
+		{values: map[string]any{"service": []byte("api")}, sign: -1},
+		{values: map[string]any{"service": []byte("api")}, sign: 1},
+	}
+	sourceErr := errors.New("delta statement failed")
+
+	for _, tc := range []struct {
+		name   string
+		desc   *incrementalDescription
+		failAt int
+	}{
+		{name: "legacy update", desc: &legacy, failAt: 1},
+		{name: "legacy insert", desc: &legacy, failAt: 2},
+		{name: "legacy delete cleanup", desc: &legacy, failAt: 3},
+		{name: "upsert negative delta", desc: desc, failAt: 1},
+		{name: "upsert delete cleanup", desc: desc, failAt: 2},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			service := "materialized-view-delta-failure-" + strings.ReplaceAll(tc.name, " ", "-")
+			rt := moruntime.NewRuntime(metadata.ServiceType_CN, service, zap.NewNop())
+			moruntime.SetupServiceBasedRuntime(service, rt)
+			calls := 0
+			rt.SetGlobalVariables(moruntime.InternalSQLExecutor, executor.NewMemExecutor(func(string) (executor.Result, error) {
+				calls++
+				if calls == tc.failAt {
+					return executor.Result{}, sourceErr
+				}
+				return executor.Result{}, nil
+			}))
+			err := applyMaterializedViewDeltaRows(t.Context(), service, nil, info, tc.desc, []*types.Type{&varcharType}, rows)
+			require.ErrorIs(t, err, sourceErr)
+			require.Equal(t, tc.failAt, calls)
+		})
+	}
 }

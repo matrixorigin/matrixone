@@ -17,6 +17,7 @@ package iscp
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -114,6 +115,110 @@ func TestMarkJobsErrorBySourceTableAllowsMissingISCPLog(t *testing.T) {
 		return executor.Result{}, expected
 	}
 	require.ErrorIs(t, MarkJobsErrorBySourceTable(ctx, "", nil, 10, "source table was dropped"), expected)
+}
+
+func TestMarkJobsErrorBySourceTableUpdatesEveryMatchingGeneration(t *testing.T) {
+	oldExecWithResult := ExecWithResult
+	t.Cleanup(func() { ExecWithResult = oldExecWithResult })
+
+	matching := encodeMaterializedViewJobSpec(t, &JobSpec{ConsumerInfo: ConsumerInfo{
+		ConsumerType: int8(ConsumerType_MaterializedView),
+		SrcTables:    []TableInfo{{TableID: 10}, {TableID: 11}},
+	}})
+	nonMatching := encodeMaterializedViewJobSpec(t, &JobSpec{ConsumerInfo: ConsumerInfo{
+		ConsumerType: int8(ConsumerType_MaterializedView), SrcTable: TableInfo{TableID: 12},
+	}})
+	result, mp := newMaterializedViewJobsResult(t,
+		[]uint64{100, 101, 102}, []string{"mv'job", "other", "invalid"}, []uint64{1, 2, 3},
+		[]string{matching, nonMatching, "not-json"})
+	t.Cleanup(func() {
+		require.Zero(t, mp.CurrNB())
+		mpool.DeleteMPool(mp)
+	})
+	var updates []string
+	calls := 0
+	ExecWithResult = func(_ context.Context, sql, _ string, _ client.TxnOperator) (executor.Result, error) {
+		calls++
+		if calls == 1 {
+			return result, nil
+		}
+		updates = append(updates, sql)
+		return executor.Result{}, nil
+	}
+	ctx := context.WithValue(context.Background(), defines.TenantIDKey{}, uint32(42))
+	require.NoError(t, MarkJobsErrorBySourceTable(ctx, "cn", nil, 11, "source's table was dropped"))
+	require.Len(t, updates, 1)
+	require.Contains(t, updates[0], "table_id = 100")
+	require.Contains(t, updates[0], "job_name = 'mv''job'")
+	require.Contains(t, updates[0], "source''s table was dropped")
+}
+
+func TestUnregisterMaterializedViewUsesTargetIdentity(t *testing.T) {
+	oldExecWithResult := ExecWithResult
+	t.Cleanup(func() { ExecWithResult = oldExecWithResult })
+
+	matching := encodeMaterializedViewJobSpec(t, &JobSpec{ConsumerInfo: ConsumerInfo{
+		ConsumerType: int8(ConsumerType_MaterializedView), DBName: "db", TableName: "mv",
+	}})
+	collision := encodeMaterializedViewJobSpec(t, &JobSpec{ConsumerInfo: ConsumerInfo{
+		ConsumerType: int8(ConsumerType_MaterializedView), DBName: "d", TableName: "b_mv",
+	}})
+	result, mp := newMaterializedViewJobsResult(t,
+		[]uint64{100, 101, 102}, []string{"materialized_view_db_mv", "materialized_view_db_mv", "invalid"}, []uint64{1, 2, 3},
+		[]string{matching, collision, "not-json"})
+	t.Cleanup(func() {
+		require.Zero(t, mp.CurrNB())
+		mpool.DeleteMPool(mp)
+	})
+	var updates []string
+	calls := 0
+	ExecWithResult = func(_ context.Context, sql, _ string, _ client.TxnOperator) (executor.Result, error) {
+		calls++
+		if calls == 1 {
+			return result, nil
+		}
+		updates = append(updates, sql)
+		return executor.Result{}, nil
+	}
+	ctx := context.WithValue(context.Background(), defines.TenantIDKey{}, uint32(42))
+	require.NoError(t, unregisterMaterializedView(ctx, "cn", nil, "DB", "MV"))
+	require.Len(t, updates, 1)
+	require.True(t, strings.Contains(strings.ToLower(updates[0]), "update mo_catalog.mo_iscp_log"))
+	require.Contains(t, updates[0], "table_id = 100")
+}
+
+func encodeMaterializedViewJobSpec(t *testing.T, spec *JobSpec) string {
+	t.Helper()
+	raw, err := MarshalJobSpec(spec)
+	require.NoError(t, err)
+	byteJSON, err := types.ParseStringToByteJson(raw)
+	require.NoError(t, err)
+	encoded, err := types.EncodeJson(byteJSON)
+	require.NoError(t, err)
+	return string(encoded)
+}
+
+func newMaterializedViewJobsResult(
+	t *testing.T,
+	tableIDs []uint64,
+	names []string,
+	jobIDs []uint64,
+	specs []string,
+) (executor.Result, *mpool.MPool) {
+	t.Helper()
+	require.Len(t, tableIDs, len(names))
+	require.Len(t, tableIDs, len(jobIDs))
+	require.Len(t, tableIDs, len(specs))
+	mp := mpool.MustNewZero()
+	memRes := executor.NewMemResult([]types.Type{
+		types.T_uint64.ToType(), types.T_varchar.ToType(), types.T_uint64.ToType(), types.T_varchar.ToType(),
+	}, mp)
+	memRes.NewBatchWithRowCount(len(tableIDs))
+	require.NoError(t, executor.AppendFixedRows(memRes, 0, tableIDs))
+	require.NoError(t, executor.AppendStringRows(memRes, 1, names))
+	require.NoError(t, executor.AppendFixedRows(memRes, 2, jobIDs))
+	require.NoError(t, executor.AppendStringRows(memRes, 3, specs))
+	return memRes.GetResult(), mp
 }
 
 func newTableIDResult(t *testing.T, tableIDBatches, dbIDBatches [][]uint64) (executor.Result, *mpool.MPool) {
