@@ -124,6 +124,7 @@ PY
 }
 
 ICEBERG_E2E_TMP_DIR=""
+ICEBERG_E2E_TMP_PREFIX=""
 ICEBERG_E2E_MO_PID=""
 ICEBERG_E2E_LAUNCH_CONFIG=""
 ICEBERG_E2E_BINARY=""
@@ -154,15 +155,67 @@ iceberg_e2e_collect_logs() {
   fi
 }
 
+iceberg_e2e_remove_tmpdir() {
+  [[ -n "$ICEBERG_E2E_TMP_DIR" ]] || return
+  [[ -n "$ICEBERG_E2E_TMP_PREFIX" && "$ICEBERG_E2E_TMP_DIR" == "${ICEBERG_E2E_TMP_PREFIX}"* ]] || {
+    log "refusing to remove unexpected Iceberg E2E temporary directory: ${ICEBERG_E2E_TMP_DIR}"
+    return 1
+  }
+  rm -rf -- "$ICEBERG_E2E_TMP_DIR"
+  ICEBERG_E2E_TMP_DIR=""
+}
+
 iceberg_e2e_cleanup() {
   local status=$?
+  local cleanup_status=0
   if [[ -n "$ICEBERG_E2E_MO_PID" ]] && kill -0 "$ICEBERG_E2E_MO_PID" >/dev/null 2>&1; then
     kill "$ICEBERG_E2E_MO_PID" >/dev/null 2>&1 || true
     wait "$ICEBERG_E2E_MO_PID" >/dev/null 2>&1 || true
   fi
-  iceberg_e2e_collect_logs
-  (cd "$ROOT_DIR" && make dev-down-iceberg-tier-a >/dev/null 2>&1) || true
-  return "$status"
+  iceberg_e2e_collect_logs || cleanup_status=$?
+  (cd "$ROOT_DIR" && make dev-down-iceberg-tier-a >/dev/null 2>&1) || cleanup_status=$?
+  iceberg_e2e_remove_tmpdir || cleanup_status=$?
+  if [[ "$status" -ne 0 ]]; then
+    return "$status"
+  fi
+  return "$cleanup_status"
+}
+
+iceberg_e2e_preflight_ports() {
+  python3 - <<'PY'
+import socket
+
+ports = [6001, 7001, 32001, *range(18000, 18020), *range(19000, 19020)]
+sockets = []
+try:
+    for port in ports:
+        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 0)
+        sock.bind(("127.0.0.1", port))
+        sockets.append(sock)
+except OSError as err:
+    raise SystemExit(f"MatrixOne Iceberg E2E port {port} is unavailable: {err}")
+finally:
+    for sock in sockets:
+        sock.close()
+PY
+}
+
+iceberg_e2e_wait_for_mo() {
+  local deadline=$((SECONDS + ${MO_ICEBERG_E2E_START_TIMEOUT:-90}))
+  local status_url="http://127.0.0.1:7001/metrics"
+  while (( SECONDS < deadline )); do
+    if ! kill -0 "$ICEBERG_E2E_MO_PID" >/dev/null 2>&1; then
+      wait "$ICEBERG_E2E_MO_PID" || true
+      die "mo-service exited before becoming ready; see ${ICEBERG_E2E_TMP_DIR}/mo-service.log"
+    fi
+    if curl --fail --silent --show-error --max-time 1 "$status_url" >/dev/null; then
+      log "mo-service pid ${ICEBERG_E2E_MO_PID} is ready on the preflighted status port"
+      return
+    fi
+    sleep 1
+  done
+  die "timed out waiting for mo-service pid ${ICEBERG_E2E_MO_PID} on the preflighted status port; see ${ICEBERG_E2E_TMP_DIR}/mo-service.log"
 }
 
 iceberg_e2e_local() {
@@ -179,7 +232,8 @@ iceberg_e2e_local() {
   mkdir -p "$REPORT_DIR"
   local tmp_root="${TMPDIR:-/tmp}"
   [[ -d "$tmp_root" && -w "$tmp_root" ]] || die "temporary directory is not writable: $tmp_root"
-  ICEBERG_E2E_TMP_DIR="$(mktemp -d "${tmp_root%/}/mo-iceberg-e2e-local.XXXXXX")"
+  ICEBERG_E2E_TMP_PREFIX="${tmp_root%/}/mo-iceberg-e2e-local."
+  ICEBERG_E2E_TMP_DIR="$(mktemp -d "${ICEBERG_E2E_TMP_PREFIX}XXXXXX")"
   ICEBERG_E2E_BINARY="${ICEBERG_E2E_TMP_DIR}/mo-service"
   trap iceberg_e2e_cleanup EXIT
   iceberg_e2e_prepare_launch_config
@@ -188,11 +242,13 @@ iceberg_e2e_local() {
   go_test_adapter
   go_test_golden
 
+  iceberg_e2e_preflight_ports
   run make dev-up-iceberg-tier-a
   log "starting mo-service for Iceberg E2E local"
   MO_ICEBERG_ALLOW_PLAIN_HTTP=1 "$ICEBERG_E2E_BINARY" -launch "$ICEBERG_E2E_LAUNCH_CONFIG" \
     >"${ICEBERG_E2E_TMP_DIR}/mo-service.log" 2>&1 &
   ICEBERG_E2E_MO_PID="$!"
+  iceberg_e2e_wait_for_mo
 
   run go run ./test/iceberg/iceberg_e2e_local.go \
     --catalog-uri "${MO_ICEBERG_E2E_CATALOG_URI:-http://127.0.0.1:19120/iceberg}" \

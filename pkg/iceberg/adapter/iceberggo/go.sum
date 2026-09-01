@@ -444,6 +444,8 @@ github.com/matrixorigin/dragonboat/v4 v4.0.0-20260706084232-ea0aa61b062b h1:Ilem
 github.com/matrixorigin/dragonboat/v4 v4.0.0-20260706084232-ea0aa61b062b/go.mod h1:B1VfuDzGm7Uk0xoRkRJynA6n4i31m/1ZJIPfIyJfYQg=
 github.com/matrixorigin/goetty/v2 v2.0.0-20260811155919-8edc32ac370a h1:D8kXjySDJHA8nyZzzi/4cx3KB6qrSPQeugUCLkgoEho=
 github.com/matrixorigin/goetty/v2 v2.0.0-20260811155919-8edc32ac370a/go.mod h1:OwIBpVwRW1HjF/Jhc2Av3UvG2NygMg+bdqGxZaqwhU0=
+github.com/matrixorigin/gosigar v0.14.3-0.20241204071856-40aab500bfac h1:KRPOwOcSZRfWT7w8mr7BmFLoFB75ljgqjkg47xkN/Pc=
+github.com/matrixorigin/gosigar v0.14.3-0.20241204071856-40aab500bfac/go.mod h1:iXRIGg2tLnu7LBdpqzyQfGDEidKCfWcCMS0WKyPWoMs=
 github.com/matrixorigin/goutils v1.3.1-0.20220604063047-388d67b4dbc4 h1:+SmZP2bG+YcO/ntzjCleCu6hFTJiue7Oj2tftpJKTlU=
 github.com/matrixorigin/goutils v1.3.1-0.20220604063047-388d67b4dbc4/go.mod h1:LIHvF0fflR+zyXUQFQOiHPpKANf3UIr7DFIv5CBPOoU=
 github.com/matrixorigin/memberlist v0.5.1-0.20230322082342-95015c95ee76 h1:MpmqMPooJ0Ea7W4ldIGbQV4D3z+sEiCu6C6aTibiwiQ=
@@ -789,6 +791,7 @@ golang.org/x/sync v0.0.0-20220722155255-886fb9371eb4/go.mod h1:RxMgew5VJxzue5/jJ
 golang.org/x/sync v0.1.0/go.mod h1:RxMgew5VJxzue5/jJTE5uejpjVlOe/izrB70Jof72aM=
 golang.org/x/sync v0.20.0 h1:e0PTpb7pjO8GAtTs2dQ6jYa5BWYlMuX047Dco/pItO4=
 golang.org/x/sync v0.20.0/go.mod h1:9xrNwdLfx4jkKbNva9FpL6vEN7evnE43NNNJQ2LF3+0=
+golang.org/x/sys v0.0.0-20180810173357-98c5dad5d1a0/go.mod h1:STP8DvDyc/dI5b8T5hshtkjS+E42TnysNCUPdjciGhY=
 golang.org/x/sys v0.0.0-20180830151530-49385e6e1522/go.mod h1:STP8DvDyc/dI5b8T5hshtkjS+E42TnysNCUPdjciGhY=
 golang.org/x/sys v0.0.0-20180909124046-d0be0721c37e/go.mod h1:STP8DvDyc/dI5b8T5hshtkjS+E42TnysNCUPdjciGhY=
 golang.org/x/sys v0.0.0-20181205085412-a5c9d58dba9a/go.mod h1:STP8DvDyc/dI5b8T5hshtkjS+E42TnysNCUPdjciGhY=

@@ -63,6 +63,7 @@ require (
 	github.com/docker/go-units v0.5.0 // indirect
 	github.com/dolthub/maphash v0.1.0 // indirect
 	github.com/dustin/go-humanize v1.0.1 // indirect
+	github.com/elastic/gosigar v0.14.2 // indirect
 	github.com/fagongzi/goetty/v2 v2.0.3-0.20230628075727-26c9a2fd5fb8 // indirect
 	github.com/fagongzi/util v0.0.0-20210923134909-bccc37b5040d // indirect
 	github.com/getsentry/sentry-go v0.12.0 // indirect
