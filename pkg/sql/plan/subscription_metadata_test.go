@@ -377,15 +377,7 @@ func TestSubscriptionStatisticsZeroSubscriptionsRetainsMetadataDependency(t *tes
 
 func TestSubscriptionStatisticsSupportsManyVisibleSubscriptions(t *testing.T) {
 	optimizer, ctx := newSubscriptionMetadataTestOptimizer()
-	ctx.metadata = make([]*SubscriptionMeta, 0, 67)
-	for i := 63; i >= 0; i-- {
-		ctx.metadata = append(ctx.metadata, &SubscriptionMeta{
-			AccountId: 0,
-			DbName:    "tpch",
-			SubName:   fmt.Sprintf("sub_%02d", i),
-			Tables:    "nation",
-		})
-	}
+	ctx.metadata = subscriptionMetadataTestSet(64)
 	ctx.metadata = append(ctx.metadata, nil, ctx.metadata[10])
 
 	queryPlan, err := runOneStmt(optimizer, t,
@@ -398,6 +390,89 @@ func TestSubscriptionStatisticsSupportsManyVisibleSubscriptions(t *testing.T) {
 	}
 	require.True(t, hasLocalStatisticsCatalogScan(queryPlan.GetQuery()))
 	require.Nil(t, ctx.GetQueryingSubscription())
+}
+
+func TestSubscriptionStatisticsPlanningBudget(t *testing.T) {
+	optimizer, ctx := newSubscriptionMetadataTestOptimizer()
+	ctx.metadata = subscriptionMetadataTestSet(64)
+
+	queryPlan, err := runOneStmt(optimizer, t,
+		"select count(*) from information_schema.statistics a "+
+			"join information_schema.statistics b on a.table_name = b.table_name "+
+			"join information_schema.statistics c on b.table_name = c.table_name "+
+			"join information_schema.statistics d on c.table_name = d.table_name "+
+			"where a.table_name = 'nation'")
+	require.NoError(t, err)
+
+	counts := statisticsPublisherScanCounts(queryPlan.GetQuery())
+	require.Len(t, counts, 64)
+	for i := 0; i < 64; i++ {
+		require.Equal(t, 4, counts[fmt.Sprintf("sub_%02d", i)])
+	}
+	require.Nil(t, ctx.GetQueryingSubscription())
+}
+
+func BenchmarkSubscriptionStatisticsPlanning(b *testing.B) {
+	queries := []struct {
+		name string
+		sql  string
+	}{
+		{
+			name: "one-occurrence",
+			sql: "select count(*) from information_schema.statistics " +
+				"where table_name = 'nation'",
+		},
+		{
+			name: "four-occurrences",
+			sql: "select count(*) from information_schema.statistics a " +
+				"join information_schema.statistics b on a.table_name = b.table_name " +
+				"join information_schema.statistics c on b.table_name = c.table_name " +
+				"join information_schema.statistics d on c.table_name = d.table_name " +
+				"where a.table_name = 'nation'",
+		},
+	}
+
+	for _, subscriptionCount := range []int{0, 16, 64} {
+		for _, query := range queries {
+			b.Run(fmt.Sprintf("subscriptions-%d/%s", subscriptionCount, query.name), func(b *testing.B) {
+				_, ctx := newSubscriptionMetadataTestOptimizer()
+				ctx.metadata = subscriptionMetadataTestSet(subscriptionCount)
+				b.ReportMetric(float64(subscriptionCount), "subscriptions")
+				b.ResetTimer()
+
+				for i := 0; i < b.N; i++ {
+					statements, err := mysql.Parse(ctx.GetContext(), query.sql, 1)
+					if err != nil {
+						b.Fatal(err)
+					}
+					if len(statements) != 1 {
+						b.Fatalf("expected one statement, got %d", len(statements))
+					}
+					_, err = BuildPlan(ctx, statements[0], false)
+					statements[0].Free()
+					if err != nil {
+						b.Fatal(err)
+					}
+					if ctx.GetQueryingSubscription() != nil {
+						b.Fatal("planning leaked the querying-subscription context")
+					}
+				}
+			})
+		}
+	}
+}
+
+func subscriptionMetadataTestSet(count int) []*SubscriptionMeta {
+	metas := make([]*SubscriptionMeta, 0, count)
+	for i := count - 1; i >= 0; i-- {
+		metas = append(metas, &SubscriptionMeta{
+			AccountId: 0,
+			DbName:    "tpch",
+			SubName:   fmt.Sprintf("sub_%02d", i),
+			Tables:    "nation",
+		})
+	}
+	return metas
 }
 
 func TestSubscriptionStatisticsHonorsSubscriptionNameCaseMode(t *testing.T) {
@@ -498,6 +573,40 @@ func TestRewriteSubscriptionStatisticsAccountScopesVisibilityCTE(t *testing.T) {
 	require.Equal(t, "tbl.account_id = 42", visibilityFilter)
 	require.NotContains(t, visibilityFilter, "mo_current_roles")
 	require.NotContains(t, visibilityFilter, "mo_role_privs")
+}
+
+func TestRewriteSubscriptionStatisticsAccountSupportsLegacyView(t *testing.T) {
+	statements, err := mysql.Parse(context.Background(),
+		"select tbl.relname from mo_catalog.mo_tables tbl "+
+			"where tbl.account_id = current_account_id()", 1)
+	require.NoError(t, err)
+	require.Len(t, statements, 1)
+	defer statements[0].Free()
+
+	stmt, ok := statements[0].(*tree.Select)
+	require.True(t, ok)
+	require.True(t, rewriteSubscriptionStatisticsAccount(stmt, 42))
+	clause := selectClauseOf(stmt)
+	require.NotNil(t, clause)
+	require.NotNil(t, clause.Where)
+	filter := tree.String(clause.Where.Expr, dialect.MYSQL)
+	require.Contains(t, filter, "tbl.account_id = 42")
+	require.NotContains(t, filter, "current_account_id")
+}
+
+func TestRewriteSubscriptionStatisticsAccountRejectsUnsupportedVisibilityCTE(t *testing.T) {
+	statements, err := mysql.Parse(context.Background(),
+		"with __mo_visible_tables as (select 1 union all select 2) "+
+			"select tbl.relname from mo_catalog.mo_tables tbl "+
+			"where tbl.account_id = current_account_id()", 1)
+	require.NoError(t, err)
+	require.Len(t, statements, 1)
+	defer statements[0].Free()
+
+	stmt, ok := statements[0].(*tree.Select)
+	require.True(t, ok)
+	require.False(t, rewriteSubscriptionStatisticsAccount(stmt, 42),
+		"an unrecognized visibility CTE must fail closed")
 }
 
 func TestSubscriptionMetadataNameKeyUsesIdentifierCanonicalization(t *testing.T) {
