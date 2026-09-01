@@ -313,21 +313,27 @@ Deferred. It needs observation, topology-switch, ownership, and rollback
 protocols. The current proposal uses existing bounded spill and deterministic
 fallbacks.
 
-### Keep each rule in one monolithic implementation change
+### Split every rule into a separate PR
 
-Rejected for approval. The implementation series must preserve independent
-rule commits and validation closures so a reviewer can accept or revert one
-semantic mechanism without accepting the others. PRs #27914 and #27915 are the
-integration views; review evidence and rollback remain per rule.
+Deferred for this series. It would produce many cross-dependent PRs and force
+reviewers to reconstruct ordering and interaction across them. The selected
+alternative is one approved versioned design plus two integration PRs:
+#27914 for shared-computation execution/planning and #27915 for logical
+join/subquery robustness. Within each PR, mechanisms remain isolated in named
+helpers and typed positive/negative test closures, so review and targeted
+rollback do not depend on query-specific switches. If the integration review
+cannot establish one mechanism independently, that mechanism must be split
+before approval.
 
 ## Rollback
 
-Every rule retains the old plan as its fail-closed path and is isolated by
-semantic commit. A correctness or plan-quality regression is handled by
-reverting the affected rule, not by adding query/table exceptions. Grouping-set
-execution has an additional deterministic runtime fallback: protocol versions
-below 42 always receive the legacy plan. Reverting one rule must not require
-reverting unrelated stats or executor memory-bound work.
+Every rule retains the old plan as its fail-closed path and is isolated in a
+named implementation/test closure. A correctness or plan-quality regression is
+handled by a targeted revert of that closure, not by adding query/table
+exceptions. Grouping-set execution has an additional deterministic runtime
+fallback: protocol versions below 42 always receive the legacy plan. Reverting
+one rule must not require reverting unrelated stats or executor memory-bound
+work.
 
 ## Approval record
 
