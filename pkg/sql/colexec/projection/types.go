@@ -32,7 +32,8 @@ type Projection struct {
 
 	// GroupingSetCount and GroupingFlags turn this projection into a
 	// vector-level grouping-set expander. The first len(flags)/count columns are
-	// grouping keys and the last column is the generated set id.
+	// grouping keys, the penultimate column marks runtime-empty synthetic rows,
+	// and the last column is the generated set id.
 	GroupingSetCount int
 	GroupingFlags    []bool
 	vm.OperatorBase
@@ -78,12 +79,16 @@ type container struct {
 	expandOwned   []*vector.Vector
 	nextSet       int
 	hasInput      bool
+	inputSeen     bool
+	childDone     bool
 }
 
 func (projection *Projection) Reset(proc *process.Process, pipelineFailed bool, err error) {
 	projection.freeExpandOwned(proc)
 	projection.ctr.nextSet = 0
 	projection.ctr.hasInput = false
+	projection.ctr.inputSeen = false
+	projection.ctr.childDone = false
 	for i := range projection.ctr.projExecutors {
 		if projection.ctr.projExecutors[i] != nil {
 			projection.ctr.projExecutors[i].ResetForNextQuery()

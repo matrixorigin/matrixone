@@ -124,6 +124,10 @@ func TestGroupingSetProjectionExpandsOneInputBatch(t *testing.T) {
 		makeProjectionCol(1, types.T_int32),
 		makeProjectionCol(2, types.T_int32),
 		{
+			Typ:  plan.Type{Id: int32(types.T_bool), NotNullable: true},
+			Expr: &plan.Expr_Lit{Lit: &plan.Literal{Value: &plan.Literal_Bval{Bval: false}}},
+		},
+		{
 			Typ:  plan.Type{Id: int32(types.T_int64), NotNullable: true},
 			Expr: &plan.Expr_Lit{Lit: &plan.Literal{Value: &plan.Literal_I64Val{I64Val: 0}}},
 		},
@@ -157,13 +161,66 @@ func TestGroupingSetProjectionExpandsOneInputBatch(t *testing.T) {
 		}
 		require.Equal(t, []int32{100, 200},
 			vector.MustFixedColWithTypeCheck[int32](result.Batch.Vecs[2]))
-		require.Equal(t, int64(set), vector.GetFixedAtNoTypeCheck[int64](result.Batch.Vecs[3], 0))
+		require.False(t, vector.GetFixedAtNoTypeCheck[bool](result.Batch.Vecs[3], 0))
+		require.Equal(t, int64(set), vector.GetFixedAtNoTypeCheck[int64](result.Batch.Vecs[4], 0))
 	}
 
 	result, err := arg.Call(proc)
 	require.NoError(t, err)
 	require.Equal(t, vm.ExecStop, result.Status)
 	require.Equal(t, 1, childCalls)
+
+	arg.Free(proc, false, nil)
+	child.Free(proc, false, nil)
+	proc.Free()
+	require.Zero(t, proc.Mp().CurrNB())
+}
+
+func TestGroupingSetProjectionEmitsEmptySetOnRuntimeEmptyInput(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	childCalls := 0
+	child := colexec.NewMockOperator().
+		WithBatchCallback(func(int) { childCalls++ })
+	arg := NewArgument()
+	arg.ProjectList = []*plan.Expr{
+		makeProjectionCol(0, types.T_int32),
+		makeProjectionCol(1, types.T_int32),
+		{
+			Typ:  plan.Type{Id: int32(types.T_bool), NotNullable: true},
+			Expr: &plan.Expr_Lit{Lit: &plan.Literal{Value: &plan.Literal_Bval{Bval: false}}},
+		},
+		{
+			Typ:  plan.Type{Id: int32(types.T_int64), NotNullable: true},
+			Expr: &plan.Expr_Lit{Lit: &plan.Literal{Value: &plan.Literal_I64Val{I64Val: 0}}},
+		},
+	}
+	arg.GroupingSetCount = 3
+	arg.GroupingFlags = []bool{true, true, false}
+	arg.AppendChild(child)
+	require.NoError(t, arg.Prepare(proc))
+
+	result, err := arg.Call(proc)
+	require.NoError(t, err)
+	require.Equal(t, vm.ExecNext, result.Status)
+	require.Equal(t, 1, result.Batch.RowCount())
+	require.True(t, result.Batch.Vecs[0].GetGrouping().Contains(0))
+	require.True(t, result.Batch.Vecs[1].IsNull(0))
+	require.True(t, vector.GetFixedAtNoTypeCheck[bool](result.Batch.Vecs[2], 0))
+	require.Equal(t, int64(2), vector.GetFixedAtNoTypeCheck[int64](result.Batch.Vecs[3], 0))
+	require.Zero(t, childCalls)
+
+	result, err = arg.Call(proc)
+	require.NoError(t, err)
+	require.Equal(t, vm.ExecStop, result.Status)
+	require.Nil(t, result.Batch)
+
+	arg.Reset(proc, false, nil)
+	child.Reset(proc, false, nil)
+	result, err = arg.Call(proc)
+	require.NoError(t, err)
+	require.Equal(t, vm.ExecNext, result.Status)
+	require.Equal(t, 1, result.Batch.RowCount())
+	require.True(t, vector.GetFixedAtNoTypeCheck[bool](result.Batch.Vecs[2], 0))
 
 	arg.Free(proc, false, nil)
 	child.Free(proc, false, nil)

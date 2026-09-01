@@ -516,6 +516,7 @@ func (group *Group) buildOneBatch(proc *process.Process, bat *batch.Batch) (bool
 		for i := 0; i < count; i += hashmap.UnitLimit {
 			n := min(count-i, hashmap.UnitLimit)
 			var preview groupInsertPreview
+			var aggregateGroupScratch [hashmap.UnitLimit]uint64
 			for {
 				err = nil
 				if !evaluated {
@@ -567,11 +568,18 @@ func (group *Group) buildOneBatch(proc *process.Process, bat *batch.Batch) (bool
 							preview.inserted, preview.newGroups)
 					}
 					if err == nil {
-						for j, agg := range group.ctr.aggList {
-							if err = agg.PreflightBatchFill(
-								i, preview.values,
-								group.ctr.aggArgEvaluate[j].Vec); err != nil {
-								break
+						aggregateGroups := preview.values[:n]
+						if group.DynamicGrouping {
+							aggregateGroups, err = dynamicGroupingAggregateGroups(
+								bat, i, aggregateGroups, aggregateGroupScratch[:n])
+						}
+						if err == nil {
+							for j, agg := range group.ctr.aggList {
+								if err = agg.PreflightBatchFill(
+									i, aggregateGroups,
+									group.ctr.aggArgEvaluate[j].Vec); err != nil {
+									break
+								}
 							}
 						}
 					}
@@ -596,9 +604,17 @@ func (group *Group) buildOneBatch(proc *process.Process, bat *batch.Batch) (bool
 								}
 							}
 						}
+						aggregateGroups := vals[:n]
+						if group.DynamicGrouping {
+							aggregateGroups, err = dynamicGroupingAggregateGroups(
+								bat, i, aggregateGroups, aggregateGroupScratch[:n])
+							if err != nil {
+								return false, err
+							}
+						}
 						for j, agg := range group.ctr.aggList {
 							if err = agg.BatchFill(
-								i, vals[:n], group.ctr.aggArgEvaluate[j].Vec); err != nil {
+								i, aggregateGroups, group.ctr.aggArgEvaluate[j].Vec); err != nil {
 								return false, err
 							}
 						}
@@ -646,6 +662,43 @@ func (group *Group) buildOneBatch(proc *process.Process, bat *batch.Batch) (bool
 		}
 		return needSpill, nil
 	}
+}
+
+func dynamicGroupingAggregateGroups(
+	bat *batch.Batch,
+	offset int,
+	groups []uint64,
+	scratch []uint64,
+) ([]uint64, error) {
+	markerPos := len(bat.Vecs) - 2
+	if markerPos < 0 || len(scratch) < len(groups) {
+		return nil, moerr.NewInvalidInputNoCtx("dynamic grouping input is missing its aggregate marker")
+	}
+	marker := bat.Vecs[markerPos]
+	if marker == nil || marker.GetType().Oid != types.T_bool || offset < 0 || offset+len(groups) > marker.Length() {
+		return nil, moerr.NewInvalidInputNoCtx("invalid dynamic grouping aggregate marker")
+	}
+
+	hasSynthetic := false
+	for i := range groups {
+		row := offset + i
+		if marker.IsNull(uint64(row)) {
+			return nil, moerr.NewInvalidInputNoCtx("dynamic grouping aggregate marker cannot be NULL")
+		}
+		if vector.GetFixedAtNoTypeCheck[bool](marker, row) {
+			hasSynthetic = true
+		}
+	}
+	if !hasSynthetic {
+		return groups, nil
+	}
+	copy(scratch, groups)
+	for i := range groups {
+		if vector.GetFixedAtNoTypeCheck[bool](marker, offset+i) {
+			scratch[i] = aggexec.GroupNotMatched
+		}
+	}
+	return scratch[:len(groups)], nil
 }
 
 func (group *Group) evaluateBuildInput(
