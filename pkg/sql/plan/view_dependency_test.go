@@ -226,6 +226,7 @@ func TestRegenerateViewDefinitionPersistsExpandedStar(t *testing.T) {
 			var firstData ViewData
 			require.NoError(t, json.Unmarshal([]byte(first.TableDef.ViewSql.View), &firstData))
 			require.NotContains(t, firstData.Stmt, "*")
+			require.NotContains(t, firstData.Definition, "*")
 
 			ctx.tables["nation"].Cols = append(ctx.tables["nation"].Cols, &planpb.ColDef{
 				Name:       "n_extra",
@@ -239,6 +240,9 @@ func TestRegenerateViewDefinitionPersistsExpandedStar(t *testing.T) {
 			var fields map[string]json.RawMessage
 			require.NoError(t, json.Unmarshal([]byte(second.TableDef.ViewSql.View), &fields))
 			require.JSONEq(t, `{"keep":true}`, string(fields["future_field"]))
+			var secondData ViewData
+			require.NoError(t, json.Unmarshal([]byte(second.TableDef.ViewSql.View), &secondData))
+			require.Equal(t, firstData.Definition, secondData.Definition)
 		})
 	}
 }
