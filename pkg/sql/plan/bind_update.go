@@ -2381,6 +2381,8 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext)
 			rowNumberPos,
 			activePos,
 			indexes,
+			nil,
+			-1,
 			tableDef,
 			dmlCtx.objRefs[i],
 		)
@@ -2390,13 +2392,15 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext)
 		builder.irregularUpdateMaints = append(
 			builder.irregularUpdateMaints,
 			irregularUpdateMaintenance{
-				sourceStep:  builder.irregularMaintSourceStep,
-				deleteStep:  builder.irregularMaintDeleteStep,
-				deletePkPos: builder.irregularMaintDeletePkPos,
-				deletePkTyp: builder.irregularMaintDeletePkTyp,
-				indexes:     builder.irregularMaintIndexes,
-				tableDef:    builder.irregularMaintTableDef,
-				objRef:      builder.irregularMaintObjRef,
+				sourceStep:           builder.irregularMaintSourceStep,
+				deleteStep:           builder.irregularMaintDeleteStep,
+				deletePkPos:          builder.irregularMaintDeletePkPos,
+				deletePkTyp:          builder.irregularMaintDeletePkTyp,
+				indexes:              builder.irregularMaintIndexes,
+				insertOnlySourceStep: builder.irregularMaintInsertOnlySourceStep,
+				insertOnlyIndexes:    builder.irregularMaintInsertOnlyIndexes,
+				tableDef:             builder.irregularMaintTableDef,
+				objRef:               builder.irregularMaintObjRef,
 			},
 		)
 	}
