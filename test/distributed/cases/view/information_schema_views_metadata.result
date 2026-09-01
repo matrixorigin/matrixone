@@ -47,7 +47,7 @@ line_comment_v  ¦  select a from t  ¦  NO  𝄀
 long_repeated_star_comment_v  ¦  select a from t  ¦  NO  𝄀
 quoted_definer_v  ¦  select a from t  ¦  NO  𝄀
 repeated_star_comment_v  ¦  select a from t  ¦  NO  𝄀
-slash_comment_v  ¦  select a from t  ¦  NO
+slash_comment_v  ¦  select a from t  ¦  NO  𝄀
 split_dump_v  ¦  select a from t  ¦  NO
 update agg_v set cnt = 1;
 invalid input: cannot insert/update/delete from view
