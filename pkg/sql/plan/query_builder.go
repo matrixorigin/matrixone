@@ -3755,7 +3755,7 @@ func (builder *QueryBuilder) createQuery() (*Query, error) {
 			}
 		}
 	}
-	applySharedLockTableFallback(builder)
+	applyLockTableFallback(builder)
 
 	for i := range builder.qry.Steps {
 		rootID := builder.qry.Steps[i]
@@ -8251,6 +8251,18 @@ func (builder *QueryBuilder) bindGroupBy(
 				},
 			},
 		}
+	}
+	if clause != nil && astTimeWindow == nil && !clause.Apart &&
+		!clause.Cube && !clause.GroupingSets && !clause.Rollup {
+		var logicalGroupByAst map[string]int32
+		if ctx.sampleFunc.hasSampleFunc {
+			logicalGroupByAst = make(map[string]int32, len(ctx.groupByAst))
+			for key, pos := range ctx.groupByAst {
+				logicalGroupByAst[key] = pos
+			}
+		}
+		elideStableLiteralGroupBy(ctx)
+		preserveElidedGroupByForSample(ctx, logicalGroupByAst)
 	}
 	return
 }

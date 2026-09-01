@@ -54,6 +54,10 @@ func getPreparePlan(ctx CompilerContext, stmt tree.Statement) (*Plan, *Query, er
 		}, nil, nil
 	case *tree.SetVar:
 		return buildSetVariablesWithQuery(stmt, ctx, true)
+	case *tree.AnalyzeStmt:
+		// ANALYZE is executed entirely by the frontend. Keep an inner plan as the
+		// prepared-statement carrier, but do not make the engine compile it.
+		return &Plan{}, nil, nil
 	default:
 		p, err := BuildPlan(ctx, stmt, true)
 		return p, nil, err
@@ -129,6 +133,11 @@ func buildPrepare(stmt tree.Prepare, ctx CompilerContext) (*Plan, error) {
 		return nil, err
 	}
 	schemas = appendPrepareSchemas(schemas, ddlSchemas...)
+	analyzeSchemas, err := collectPrepareAnalyzeSchemas(ctx, preparedStmt)
+	if err != nil {
+		return nil, err
+	}
+	schemas = appendPrepareSchemas(schemas, analyzeSchemas...)
 	if len(paramTypes) > math.MaxUint16 {
 		return nil, moerr.NewErrTooManyParameter(ctx.GetContext())
 	}
@@ -150,6 +159,74 @@ func buildPrepare(stmt tree.Prepare, ctx CompilerContext) (*Plan, error) {
 			},
 		},
 	}, nil
+}
+
+func collectPrepareAnalyzeSchemas(ctx CompilerContext, stmt tree.Statement) ([]*plan.ObjectRef, error) {
+	analyze, ok := stmt.(*tree.AnalyzeStmt)
+	if !ok {
+		return nil, nil
+	}
+	if len(analyze.Entries) == 0 {
+		return nil, moerr.NewInternalError(ctx.GetContext(), "ANALYZE TABLE requires at least one table")
+	}
+
+	var schemas []*plan.ObjectRef
+	for _, entry := range analyze.Entries {
+		if entry == nil || entry.Table == nil {
+			return nil, moerr.NewInternalError(ctx.GetContext(), "ANALYZE TABLE requires a table")
+		}
+		databaseName := string(entry.Table.Schema())
+		if databaseName == "" {
+			databaseName = ctx.DefaultDatabase()
+		}
+		if databaseName == "" {
+			return nil, moerr.NewNoDB(ctx.GetContext())
+		}
+		tableName := string(entry.Table.Name())
+
+		var snapshot *Snapshot
+		var err error
+		if entry.Table.AtTsExpr != nil {
+			snapshot, err = getTimeStampByTsHint(ctx, entry.Table.AtTsExpr)
+			if err != nil {
+				return nil, err
+			}
+		}
+		objRef, tableDef, err := ctx.Resolve(databaseName, tableName, snapshot)
+		if err != nil {
+			return nil, err
+		}
+		if objRef == nil || tableDef == nil {
+			return nil, moerr.NewNoSuchTable(ctx.GetContext(), databaseName, tableName)
+		}
+
+		if len(entry.Cols) == 0 {
+			hasVisibleColumn := false
+			for _, col := range tableDef.Cols {
+				if !col.Hidden {
+					hasVisibleColumn = true
+					break
+				}
+			}
+			if !hasVisibleColumn {
+				return nil, moerr.NewInternalErrorf(ctx.GetContext(),
+					"ANALYZE TABLE: no visible columns found for table %s", tableName)
+			}
+		} else {
+			for _, column := range entry.Cols {
+				columnName := string(column)
+				colDef := FindColumn(tableDef.Cols, columnName)
+				if colDef == nil || colDef.Hidden {
+					return nil, moerr.NewBadFieldErrorf(ctx.GetContext(),
+						"invalid input: column %s does not exist", columnName)
+				}
+			}
+		}
+
+		schemas = appendPrepareSchemas(schemas,
+			prepareSchemaRefWithSnapshot(objRef, tableDef, snapshot))
+	}
+	return schemas, nil
 }
 
 func collectPrepareDdlSchemas(ctx CompilerContext, stmt tree.Statement, preparePlan *Plan) ([]*plan.ObjectRef, error) {
