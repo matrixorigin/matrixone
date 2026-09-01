@@ -1530,6 +1530,42 @@ func NewMockCompilerContext(isDml bool) *MockCompilerContext {
 		pks:       []int{3},
 		tableType: catalog.SystemIndexRel,
 	}
+	// A CDC-only fulltext index is kept separate from docs_ft so the ODKU plan
+	// shape test can prove that no inline insert-only branch is emitted when the
+	// index leaf intentionally skips async maintenance.
+	constraintTestSchema["docs_ft_async"] = &Schema{
+		tblId: 88957,
+		cols: []col{
+			{"id", types.T_int32, false, 32, 0},
+			{"body", types.T_varchar, true, 200, 0},
+			{"payload", types.T_int32, true, 32, 0},
+			{catalog.Row_ID, types.T_Rowid, false, 16, 0},
+		},
+		pks: []int{0},
+		idxs: []index{
+			{
+				indexName:       "ft_body_async",
+				tableName:       catalog.FullTextIndexTableNamePrefix + "docs_ft_async_body",
+				parts:           []string{"body"},
+				tableExist:      true,
+				indexAlgo:       catalog.MOIndexFullTextAlgo.ToString(),
+				indexAlgoParams: `{"async":"true"}`,
+			},
+		},
+		outcnt: 4,
+	}
+	constraintTestSchema[catalog.FullTextIndexTableNamePrefix+"docs_ft_async_body"] = &Schema{
+		tblId: 88958,
+		cols: []col{
+			{catalog.FullTextIndex_TabCol_Id, types.T_int32, false, 32, 0},
+			{catalog.FullTextIndex_TabCol_Position, types.T_int32, false, 32, 0},
+			{catalog.FullTextIndex_TabCol_Word, types.T_varchar, false, 255, 0},
+			{catalog.FakePrimaryKeyColName, types.T_uint64, false, 64, 0},
+			{catalog.Row_ID, types.T_Rowid, false, 16, 0},
+		},
+		pks:       []int{3},
+		tableType: catalog.SystemIndexRel,
+	}
 	constraintTestSchema["docs_ft_dual"] = &Schema{
 		tblId: 88952,
 		cols: []col{

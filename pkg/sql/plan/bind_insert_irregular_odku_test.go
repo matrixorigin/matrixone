@@ -24,6 +24,37 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func reachableODKUPlanNodes(query *planpb.Query) map[int32]struct{} {
+	reachable := make(map[int32]struct{}, len(query.Nodes))
+	var visit func(int32)
+	visit = func(nodeID int32) {
+		if nodeID < 0 || int(nodeID) >= len(query.Nodes) {
+			return
+		}
+		if _, ok := reachable[nodeID]; ok {
+			return
+		}
+		reachable[nodeID] = struct{}{}
+		node := query.Nodes[nodeID]
+		if node == nil {
+			return
+		}
+		for _, childID := range node.Children {
+			visit(childID)
+		}
+		for _, sourceStep := range node.SourceStep {
+			if sourceStep < 0 || int(sourceStep) >= len(query.Steps) {
+				continue
+			}
+			visit(query.Steps[sourceStep])
+		}
+	}
+	for _, stepRoot := range query.Steps {
+		visit(stepRoot)
+	}
+	return reachable
+}
+
 func fulltextODKUPlanShape(t *testing.T, sql string) (hiddenScans map[string]int, tokenizers, newRowsOnlyFilters int) {
 	t.Helper()
 	logicPlan, err := runOneStmt(NewMockOptimizer(true), t, sql)
@@ -32,7 +63,11 @@ func fulltextODKUPlanShape(t *testing.T, sql string) (hiddenScans map[string]int
 	require.NotNil(t, query)
 
 	hiddenScans = make(map[string]int)
-	for _, node := range query.Nodes {
+	reachable := reachableODKUPlanNodes(query)
+	for nodeID, node := range query.Nodes {
+		if _, ok := reachable[int32(nodeID)]; !ok || node == nil {
+			continue
+		}
 		switch node.NodeType {
 		case planpb.Node_TABLE_SCAN:
 			if node.ObjRef != nil && strings.HasPrefix(node.ObjRef.ObjName, catalog.FullTextIndexTableNamePrefix) {
@@ -43,7 +78,9 @@ func fulltextODKUPlanShape(t *testing.T, sql string) (hiddenScans map[string]int
 				tokenizers++
 			}
 		case planpb.Node_FILTER:
-			if len(node.FilterList) != 1 || len(node.Children) != 1 || query.Nodes[node.Children[0]].NodeType != planpb.Node_SINK_SCAN {
+			if len(node.FilterList) != 1 || len(node.Children) != 1 ||
+				node.Children[0] < 0 || int(node.Children[0]) >= len(query.Nodes) ||
+				query.Nodes[node.Children[0]] == nil || query.Nodes[node.Children[0]].NodeType != planpb.Node_SINK_SCAN {
 				continue
 			}
 			fn := node.FilterList[0].GetF()
@@ -101,6 +138,14 @@ func TestOnDuplicateIrregularMaintenanceUsesOnlyEligibleRows(t *testing.T) {
 			}
 		}
 	})
+
+	t.Run("async fulltext has no orphan insert-only branch", func(t *testing.T) {
+		hiddenScans, tokenizers, newRowsOnlyFilters := fulltextODKUPlanShape(t,
+			"insert into constraint_test.docs_ft_async(id, body, payload) values (1, 'incoming', 1), (2, 'new', 2) on duplicate key update payload = values(payload)")
+		require.Empty(t, hiddenScans)
+		require.Zero(t, tokenizers)
+		require.Zero(t, newRowsOnlyFilters, "CDC-only fulltext must not get a filtered source with no inline consumer")
+	})
 }
 
 func TestSplitIrregularIndexesKeepsLogicalIndexGroupsTogether(t *testing.T) {
@@ -110,13 +155,15 @@ func TestSplitIrregularIndexesKeepsLogicalIndexGroupsTogether(t *testing.T) {
 	ivfEntries := &planpb.IndexDef{IndexName: "vec_idx", IndexTableName: "vec_entries", Parts: []string{catalog.CreateAlias("embedding")}}
 	ivfMetadata := &planpb.IndexDef{IndexName: "vec_idx", IndexTableName: "vec_meta"}
 
-	affected, insertOnly := splitIrregularIndexesByUpdatedColumns(
+	affected, insertOnly, err := splitIrregularIndexesByUpdatedColumns(
+		nil,
 		[]*planpb.IndexDef{ftBody, ftTitle, ftOther, ivfEntries, ivfMetadata},
 		map[string]*planpb.Expr{
 			"title":     {},
 			"embedding": {},
 		},
 	)
+	require.NoError(t, err)
 
 	require.Equal(t, []*planpb.IndexDef{ftBody, ftTitle, ivfEntries, ivfMetadata}, affected)
 	require.Equal(t, []*planpb.IndexDef{ftOther}, insertOnly)
@@ -124,11 +171,59 @@ func TestSplitIrregularIndexesKeepsLogicalIndexGroupsTogether(t *testing.T) {
 	t.Run("final implicit update and generated columns are affected", func(t *testing.T) {
 		onUpdate := &planpb.IndexDef{IndexName: "ft_updated", Parts: []string{"updated_text"}}
 		generated := &planpb.IndexDef{IndexName: "ft_generated", Parts: []string{"search_text"}}
-		affected, insertOnly := splitIrregularIndexesByUpdatedColumns(
+		affected, insertOnly, err := splitIrregularIndexesByUpdatedColumns(
+			nil,
 			[]*planpb.IndexDef{onUpdate, generated},
 			map[string]*planpb.Expr{"updated_text": {}, "search_text": {}},
 		)
+		require.NoError(t, err)
 		require.Equal(t, []*planpb.IndexDef{onUpdate, generated}, affected)
+		require.Empty(t, insertOnly)
+	})
+
+	t.Run("included column affects the whole vector index group", func(t *testing.T) {
+		entries := &planpb.IndexDef{
+			IndexName:       "vec_include",
+			IndexAlgo:       catalog.MoIndexIvfFlatAlgo.ToString(),
+			IndexTableName:  "vec_entries",
+			Parts:           []string{"embedding"},
+			IncludedColumns: []string{"title"},
+		}
+		metadata := &planpb.IndexDef{
+			IndexName:      "vec_include",
+			IndexAlgo:      catalog.MoIndexIvfFlatAlgo.ToString(),
+			IndexTableName: "vec_metadata",
+		}
+		affected, insertOnly, err := splitIrregularIndexesByUpdatedColumns(
+			nil,
+			[]*planpb.IndexDef{entries, metadata},
+			map[string]*planpb.Expr{"title": {}},
+		)
+		require.NoError(t, err)
+		require.Equal(t, []*planpb.IndexDef{entries, metadata}, affected)
+		require.Empty(t, insertOnly)
+	})
+
+	t.Run("async indexes do not create inline maintenance", func(t *testing.T) {
+		async := &planpb.IndexDef{
+			IndexName:       "vec_async",
+			IndexAlgo:       catalog.MoIndexIvfFlatAlgo.ToString(),
+			IndexAlgoParams: `{"async":"true"}`,
+			IndexTableName:  "vec_async_entries",
+			Parts:           []string{"embedding"},
+		}
+		asyncMetadata := &planpb.IndexDef{
+			IndexName:      "vec_async",
+			IndexAlgo:      catalog.MoIndexIvfFlatAlgo.ToString(),
+			IndexTableName: "vec_async_metadata",
+		}
+		affected, insertOnly, err := splitIrregularIndexesByUpdatedColumns(
+			nil,
+			[]*planpb.IndexDef{async, asyncMetadata},
+			map[string]*planpb.Expr{"payload": {}},
+		)
+		require.NoError(t, err)
+		require.Empty(t, affected)
 		require.Empty(t, insertOnly)
 	})
 }

@@ -245,12 +245,12 @@ func getValidIndexes(tableDef *plan.TableDef) (indexes []*plan.IndexDef, hasIrre
 	return
 }
 
-// isModernMaintainedIrregularAlgo reports whether an irregular index algo has full
-// synchronous modern maintenance (both insert and delete sub-plans). IVF, fulltext,
-// and MASTER qualify (the master index table has an independent __mo_index_pri_col
-// origin-pk column, so delete joins on origin pk — same pattern as fulltext joins on
-// doc_id). HNSW/CAGRA/IVF-PQ are maintained asynchronously by cron (idxcron, off the
-// base-table CDC) and need no inline sub-plan.
+// isModernMaintainedIrregularAlgo reports whether an irregular index algorithm has
+// the modern maintenance plumbing (both insert and delete sub-plans). IVF,
+// fulltext, and MASTER qualify (the master index table has an independent
+// __mo_index_pri_col origin-pk column, so delete joins on origin pk — same pattern
+// as fulltext joins on doc_id). Per-index async parameters are filtered later by
+// splitIrregularIndexesByUpdatedColumns before an ODKU-only inline branch is built.
 func isModernMaintainedIrregularAlgo(algo string) bool {
 	return catalog.IsIvfIndexAlgo(algo) || catalog.IsFullTextIndexAlgo(algo) ||
 		catalog.IsMasterIndexAlgo(algo)
@@ -279,12 +279,15 @@ func getIrregularIndexes(tableDef *plan.TableDef) []*plan.IndexDef {
 // multi-table vector index are represented by several definitions with one
 // IndexName; if any definition references a possibly updated column, every
 // definition in that logical index must follow the delete-and-rebuild path.
+// Logical indexes maintained asynchronously by CDC are omitted from both
+// results; their leaf builders deliberately emit no inline maintenance plan.
 func splitIrregularIndexesByUpdatedColumns(
+	tableDef *plan.TableDef,
 	indexes []*plan.IndexDef,
 	updateExprs map[string]*plan.Expr,
-) (affected, insertOnly []*plan.IndexDef) {
+) (affected, insertOnly []*plan.IndexDef, err error) {
 	if len(indexes) == 0 {
-		return nil, nil
+		return nil, nil, nil
 	}
 
 	groupKey := func(indexdef *plan.IndexDef) string {
@@ -297,24 +300,44 @@ func splitIrregularIndexesByUpdatedColumns(
 	}
 
 	affectedGroups := make(map[string]bool, len(indexes))
+	updatedCols := make(map[string]struct{}, len(updateExprs))
+	for colName := range updateExprs {
+		updatedCols[colName] = struct{}{}
+	}
+	asyncGroups := make(map[string]bool, len(indexes))
 	for _, indexdef := range indexes {
+		async, asyncErr := indexplugin.IsAsync(indexdef.IndexAlgo, indexdef.IndexAlgoParams)
+		if asyncErr != nil {
+			return nil, nil, asyncErr
+		}
+		if async {
+			asyncGroups[groupKey(indexdef)] = true
+		}
+	}
+	syncIndexes := make([]*plan.IndexDef, 0, len(indexes))
+	for _, indexdef := range indexes {
+		if asyncGroups[groupKey(indexdef)] {
+			continue
+		}
+		syncIndexes = append(syncIndexes, indexdef)
 		key := groupKey(indexdef)
-		for _, part := range indexdef.Parts {
-			if _, updated := updateExprs[catalog.ResolveAlias(part)]; updated {
-				affectedGroups[key] = true
-				break
-			}
+		affected, affectedErr := irregularIndexAffectedByUpdatedColumnNames(tableDef, indexdef, updatedCols)
+		if affectedErr != nil {
+			return nil, nil, affectedErr
+		}
+		if affected {
+			affectedGroups[key] = true
 		}
 	}
 
-	for _, indexdef := range indexes {
+	for _, indexdef := range syncIndexes {
 		if affectedGroups[groupKey(indexdef)] {
 			affected = append(affected, indexdef)
 		} else {
 			insertOnly = append(insertOnly, indexdef)
 		}
 	}
-	return affected, insertOnly
+	return affected, insertOnly, nil
 }
 
 // appendIrregularMaintSource materializes the modern new-row image (the projList2
@@ -3091,8 +3114,11 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 			// ODKU cannot change the PK, so the stale entries are keyed by the same
 			// PK the final image carries at its natural position.
 			odkuPkPos, odkuPkTyp := getPkPos(tableDef, false)
-			affectedIrregularIndexes, insertOnlyIrregularIndexes :=
-				splitIrregularIndexesByUpdatedColumns(irregularIndexes, updateExprs)
+			affectedIrregularIndexes, insertOnlyIrregularIndexes, err :=
+				splitIrregularIndexesByUpdatedColumns(tableDef, irregularIndexes, updateExprs)
+			if err != nil {
+				return 0, err
+			}
 			oldRowIDRef, ok := delColName2Idx[tableDef.Name+"."+catalog.Row_ID]
 			if !ok {
 				return 0, moerr.NewInternalError(builder.GetContext(),

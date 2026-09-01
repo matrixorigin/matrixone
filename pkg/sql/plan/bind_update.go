@@ -4477,6 +4477,23 @@ func irregularIndexAffectedByUpdate(
 	idxDef *plan.IndexDef,
 	updateCols map[string]tree.Expr,
 ) (bool, error) {
+	updatedCols := make(map[string]struct{}, len(updateCols))
+	for colName := range updateCols {
+		updatedCols[colName] = struct{}{}
+	}
+	return irregularIndexAffectedByUpdatedColumnNames(tableDef, idxDef, updatedCols)
+}
+
+// irregularIndexAffectedByUpdatedColumnNames is the shared dependency check for
+// UPDATE and ON DUPLICATE KEY UPDATE. The latter has already bound its values to
+// plan expressions, so it cannot reuse the tree.Expr map accepted by the former.
+// Keeping the plugin hook here makes both paths honor algorithm-owned metadata
+// dependencies such as IVFFLAT INCLUDE columns.
+func irregularIndexAffectedByUpdatedColumnNames(
+	tableDef *plan.TableDef,
+	idxDef *plan.IndexDef,
+	updateCols map[string]struct{},
+) (bool, error) {
 	columnUpdated := func(colName string) bool {
 		colName = catalog.ResolveAlias(colName)
 		if _, ok := updateCols[colName]; ok {
