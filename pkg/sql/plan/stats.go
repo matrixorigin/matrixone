@@ -1922,6 +1922,28 @@ func (builder *QueryBuilder) determineBuildAndProbeSide(nodeID int32, recursive 
 
 	switch node.JoinType {
 	case plan.Node_INNER, plan.Node_OUTER:
+		// UPDATE rewrites deliberately put an unfiltered hidden index on the probe
+		// side so a selective target can publish a runtime filter before scanning
+		// the index. Cardinality alone is not sufficient for the opposite,
+		// full-target case: the index and target have the same row count, while
+		// retaining the full target row in HashBuild can be orders of magnitude
+		// larger and force avoidable spill.
+		//
+		// Override the existing cardinality policy only for a proven full regular-
+		// secondary-index maintenance join whose index row is strictly narrower
+		// than a conservative lower estimate of the retained target row. If the
+		// shape or either width estimate is unavailable, preserve the established
+		// decision below. Predeclared runtime-filter dependencies have already
+		// returned above and can never be reversed here.
+		if node.JoinType == plan.Node_INNER && builder.qry.StmtType == plan.Query_UPDATE {
+			if swap, decided := builder.preferDominatingSecondaryIndexBuild(node.Children[0], node.Children[1]); decided {
+				if swap {
+					node.Children[0], node.Children[1] = node.Children[1], node.Children[0]
+				}
+				break
+			}
+		}
+
 		factor1 := 1.0
 		factor2 := 1.0
 		if leftChild.NodeType == plan.Node_TABLE_SCAN && rightChild.NodeType == plan.Node_TABLE_SCAN {
@@ -1976,6 +1998,344 @@ func (builder *QueryBuilder) determineBuildAndProbeSide(nodeID int32, recursive 
 		builder.hasRecursiveScan(builder.qry.Nodes[node.Children[1]]) {
 		node.Children[0], node.Children[1] = node.Children[1], node.Children[0]
 	}
+}
+
+// preferDominatingSecondaryIndexBuild decides whether child 0 should be swapped
+// to the physical build position (child 1). It is intentionally limited to a
+// UPDATE join with exactly one direct, unfiltered regular-secondary-index scan.
+// Those joins have an established probe-side runtime-filter policy, but full
+// UPDATE can otherwise retain a much wider target row in HashBuild.
+//
+// This is a conservative override, not a general join cost model. A proven
+// full maintenance join has one regular-index row per target row, so the
+// comparison uses retained row width rather than two independently collected
+// Outcnt values. The latter can temporarily diverge after UPDATE while old
+// objects and tombstones are still visible to statistics. A selective target
+// never reaches this path and keeps the existing runtime-filter policy.
+func (builder *QueryBuilder) preferDominatingSecondaryIndexBuild(leftID, rightID int32) (swap, decided bool) {
+	leftIsIndex := builder.isSecondaryIndexTableWithoutFilters(leftID)
+	rightIsIndex := builder.isSecondaryIndexTableWithoutFilters(rightID)
+	if leftIsIndex == rightIsIndex {
+		return false, false
+	}
+	otherID := leftID
+	if leftIsIndex {
+		otherID = rightID
+	}
+	targetRowSize, targetOK := builder.unrestrictedSecondaryIndexUpdateInputRowSizeLowerBound(otherID)
+	if !targetOK {
+		return false, false
+	}
+
+	leftNode := builder.qry.Nodes[leftID]
+	rightNode := builder.qry.Nodes[rightID]
+	if _, ok := estimatedHashBuildRetainedBytes(leftNode); !ok {
+		return false, false
+	}
+	if _, ok := estimatedHashBuildRetainedBytes(rightNode); !ok {
+		return false, false
+	}
+
+	var indexRowSize float64
+	var indexOK bool
+	if leftIsIndex {
+		indexRowSize, indexOK = builder.secondaryIndexRowSizeUpperBound(leftNode)
+	} else {
+		indexRowSize, indexOK = builder.secondaryIndexRowSizeUpperBound(rightNode)
+	}
+	if !indexOK || !(indexRowSize < targetRowSize) {
+		return false, false
+	}
+
+	if leftIsIndex {
+		return true, true
+	}
+	return false, true
+}
+
+func (builder *QueryBuilder) isSecondaryIndexTableWithoutFilters(nodeID int32) bool {
+	if nodeID < 0 || int(nodeID) >= len(builder.qry.Nodes) {
+		return false
+	}
+	node := builder.qry.Nodes[nodeID]
+	return node != nil && node.NodeType == plan.Node_TABLE_SCAN && node.TableDef != nil &&
+		node.Limit == nil && node.Offset == nil && !hasRestrictingFilters(node.FilterList) &&
+		!hasRestrictingFilters(node.BlockFilterList) && catalog.IsSecondaryIndexTable(node.TableDef.Name)
+}
+
+func hasRestrictingFilters(filters []*plan.Expr) bool {
+	for _, filter := range filters {
+		if filter == nil {
+			return true
+		}
+		literal := filter.GetLit()
+		if filter.Typ.Id != int32(types.T_bool) || literal == nil || literal.Isnull || !literal.GetBval() {
+			return true
+		}
+	}
+	return false
+}
+
+// unrestrictedSecondaryIndexUpdateInputRowSizeLowerBound proves that the
+// non-index side is a full single-table UPDATE stream, optionally extended by
+// earlier regular secondary-index maintenance joins, and returns a
+// conservative retained-row estimate for that stream.
+//
+// PROJECT and JOIN currently keep their generic 100-byte Rowsize estimate, so
+// using the root Stats here can invert the comparison with a wide target. For
+// an UPDATE assignment PROJECT, direct-column lineage plus the scan SizeMap
+// gives a conservative lower bound: unchanged columns and retained old index
+// values are counted, while computed new values and earlier index-join columns
+// are deliberately omitted. Anything that can reduce or reshape the target
+// row is rejected and left to the existing optimizer policy.
+//
+// Lower/upper bounds here are structural bounds within the planner's current
+// per-column SizeMap model; like all cost decisions, they remain estimates when
+// persisted statistics lag the latest data distribution.
+func (builder *QueryBuilder) unrestrictedSecondaryIndexUpdateInputRowSizeLowerBound(nodeID int32) (float64, bool) {
+	rowSize, _, ok := builder.unrestrictedSecondaryIndexUpdateScan(nodeID)
+	return rowSize, ok
+}
+
+// unrestrictedSecondaryIndexUpdateScan is the recursive form used at a
+// PROJECT boundary, where both the scan estimate and schema are needed to
+// prove that the projection still carries the complete target row.
+func (builder *QueryBuilder) unrestrictedSecondaryIndexUpdateScan(nodeID int32) (float64, *plan.TableDef, bool) {
+	return builder.unrestrictedSecondaryIndexUpdateScanPath(nodeID, nil)
+}
+
+func (builder *QueryBuilder) unrestrictedSecondaryIndexUpdateScanPath(
+	nodeID int32,
+	visited map[int32]struct{},
+) (float64, *plan.TableDef, bool) {
+	if nodeID < 0 || int(nodeID) >= len(builder.qry.Nodes) {
+		return 0, nil, false
+	}
+	if visited == nil {
+		visited = make(map[int32]struct{})
+	}
+	if _, ok := visited[nodeID]; ok {
+		return 0, nil, false
+	}
+	visited[nodeID] = struct{}{}
+	defer delete(visited, nodeID)
+
+	node := builder.qry.Nodes[nodeID]
+	if node == nil || node.Limit != nil || node.Offset != nil ||
+		hasRestrictingFilters(node.FilterList) || hasRestrictingFilters(node.BlockFilterList) {
+		return 0, nil, false
+	}
+
+	switch node.NodeType {
+	case plan.Node_TABLE_SCAN:
+		if node.TableDef == nil || node.TableDef.TableType != catalog.SystemOrdinaryRel ||
+			strings.HasPrefix(node.TableDef.Name, catalog.PrefixIndexTableName) ||
+			catalog.IsSecondaryIndexTable(node.TableDef.Name) ||
+			catalog.IsUniqueIndexTable(node.TableDef.Name) || node.Stats == nil || IsDefaultStats(node.Stats) {
+			return 0, nil, false
+		}
+		_, ok := estimatedRetainedBytes(node.Stats.Outcnt, node.Stats.Rowsize)
+		return node.Stats.Rowsize, node.TableDef, ok
+	case plan.Node_PROJECT:
+		if len(node.Children) != 1 {
+			return 0, nil, false
+		}
+		_, tableDef, ok := builder.unrestrictedSecondaryIndexUpdateScanPath(node.Children[0], visited)
+		if !ok || !projectMatchesFullTargetRowLayout(node, tableDef) {
+			return 0, nil, false
+		}
+		rowSize, ok := builder.targetProjectionRowSizeLowerBound(node)
+		if !ok {
+			return 0, nil, false
+		}
+		return rowSize, tableDef, true
+	case plan.Node_JOIN:
+		if node.JoinType != plan.Node_INNER || len(node.Children) != 2 {
+			return 0, nil, false
+		}
+		leftIsIndex := builder.isSecondaryIndexTableWithoutFilters(node.Children[0])
+		rightIsIndex := builder.isSecondaryIndexTableWithoutFilters(node.Children[1])
+		if leftIsIndex == rightIsIndex {
+			return 0, nil, false
+		}
+		if leftIsIndex {
+			return builder.unrestrictedSecondaryIndexUpdateScanPath(node.Children[1], visited)
+		}
+		return builder.unrestrictedSecondaryIndexUpdateScanPath(node.Children[0], visited)
+	default:
+		return 0, nil, false
+	}
+}
+
+func projectMatchesFullTargetRowLayout(node *plan.Node, tableDef *plan.TableDef) bool {
+	if node == nil || tableDef == nil || len(node.ProjectList) < len(tableDef.Cols) {
+		return false
+	}
+	for i, col := range tableDef.Cols {
+		expr := node.ProjectList[i]
+		if col == nil || expr == nil || expr.Typ.Id != col.Typ.Id ||
+			expr.Typ.Width != col.Typ.Width || expr.Typ.Scale != col.Typ.Scale {
+			return false
+		}
+	}
+	return true
+}
+
+func (builder *QueryBuilder) targetProjectionRowSizeLowerBound(node *plan.Node) (float64, bool) {
+	if node == nil || node.NodeType != plan.Node_PROJECT {
+		return 0, false
+	}
+	rowSize := float64(0)
+	// Count every direct output slot, including duplicate references. Projection
+	// can share their input vector, but HashBuild copies every retained batch
+	// slot into its own vector, so duplicates consume memory independently.
+	for _, expr := range node.ProjectList {
+		width, ok := builder.estimatedDirectExprRetainedBytes(expr, nil)
+		if !ok {
+			continue
+		}
+		if rowSize > math.MaxFloat64-width {
+			return math.MaxFloat64, true
+		}
+		rowSize += width
+	}
+	return rowSize, rowSize > 0 && !math.IsNaN(rowSize) && !math.IsInf(rowSize, 0)
+}
+
+func (builder *QueryBuilder) estimatedDirectExprRetainedBytes(expr *plan.Expr, visited map[[2]int32]struct{}) (float64, bool) {
+	if expr == nil || expr.GetCol() == nil {
+		return 0, false
+	}
+	col := expr.GetCol()
+	nodeID, ok := builder.tag2NodeID[col.RelPos]
+	if !ok {
+		return 0, false
+	}
+	return builder.estimatedDirectOutputRetainedBytes(nodeID, col.ColPos, visited)
+}
+
+func (builder *QueryBuilder) estimatedDirectOutputRetainedBytes(
+	nodeID, colPos int32,
+	visited map[[2]int32]struct{},
+) (float64, bool) {
+	if nodeID < 0 || int(nodeID) >= len(builder.qry.Nodes) {
+		return 0, false
+	}
+	key := [2]int32{nodeID, colPos}
+	if visited == nil {
+		visited = make(map[[2]int32]struct{})
+	}
+	if _, ok := visited[key]; ok {
+		return 0, false
+	}
+	visited[key] = struct{}{}
+	defer delete(visited, key)
+
+	node := builder.qry.Nodes[nodeID]
+	if node == nil {
+		return 0, false
+	}
+	switch node.NodeType {
+	case plan.Node_TABLE_SCAN:
+		return builder.estimatedTableScanColumnRetainedBytes(node, colPos)
+	case plan.Node_PROJECT:
+		if colPos < 0 || int(colPos) >= len(node.ProjectList) {
+			return 0, false
+		}
+		return builder.estimatedDirectExprRetainedBytes(node.ProjectList[colPos], visited)
+	default:
+		return 0, false
+	}
+}
+
+func (builder *QueryBuilder) estimatedTableScanColumnRetainedBytes(node *plan.Node, colPos int32) (float64, bool) {
+	if node == nil || node.NodeType != plan.Node_TABLE_SCAN || node.TableDef == nil ||
+		colPos < 0 || int(colPos) >= len(node.TableDef.Cols) {
+		return 0, false
+	}
+	col := node.TableDef.Cols[colPos]
+	if col == nil {
+		return 0, false
+	}
+	if wrapper := builder.getStatsInfoByTableID(node.TableDef.TblId); wrapper != nil {
+		stats := wrapper.GetStats()
+		if stats != nil && finitePositive(stats.TableCnt) {
+			if totalBytes, exists := stats.SizeMap[col.Name]; exists {
+				width := float64(totalBytes) / stats.TableCnt
+				return width, width >= 0 && !math.IsNaN(width) && !math.IsInf(width, 0)
+			}
+		}
+	}
+	return fixedTypeRetainedBytes(types.T(col.Typ.Id))
+}
+
+// fixedTypeRetainedBytes is deliberately total over the protobuf type ID
+// domain. types.T.FixedLength and TypeLen panic for expression-only, reserved,
+// or future type IDs; an optional optimizer estimate must instead decline and
+// leave the established build-side policy unchanged.
+func fixedTypeRetainedBytes(oid types.T) (float64, bool) {
+	switch oid {
+	case types.T_bit,
+		types.T_bool,
+		types.T_int8, types.T_int16, types.T_int32, types.T_int64,
+		types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64,
+		types.T_float32, types.T_float64,
+		types.T_decimal64, types.T_decimal128, types.T_decimal256,
+		types.T_date, types.T_time, types.T_datetime, types.T_timestamp, types.T_year,
+		types.T_uuid, types.T_enum,
+		types.T_TS, types.T_Rowid, types.T_Blockid:
+		return float64(oid.TypeLen()), true
+	case types.T_Objectid:
+		return float64(types.ObjectidSize), true
+	default:
+		return 0, false
+	}
+}
+
+func (builder *QueryBuilder) secondaryIndexRowSizeUpperBound(node *plan.Node) (float64, bool) {
+	if node == nil || node.NodeType != plan.Node_TABLE_SCAN || node.TableDef == nil || len(node.TableDef.Cols) == 0 {
+		return 0, false
+	}
+	rowSize := float64(0)
+	// Build-side selection runs before global column pruning. Counting every
+	// current TableDef column may include a column later pruned from the scan,
+	// which is intentional: the index side needs an upper bound, while the
+	// target projection above supplies a lower bound.
+	for i := range node.TableDef.Cols {
+		width, ok := builder.estimatedTableScanColumnRetainedBytes(node, int32(i))
+		// The index side needs a complete estimate, not a lower bound. A zero
+		// persisted size for a non-empty output can represent missing/all-NULL
+		// storage data while the retained vector still has physical buffers.
+		if !ok || width <= 0 {
+			return 0, false
+		}
+		if rowSize > math.MaxFloat64-width {
+			return math.MaxFloat64, true
+		}
+		rowSize += width
+	}
+	return rowSize, rowSize > 0 && !math.IsNaN(rowSize) && !math.IsInf(rowSize, 0)
+}
+
+func estimatedHashBuildRetainedBytes(node *plan.Node) (float64, bool) {
+	if node == nil || node.Stats == nil || IsDefaultStats(node.Stats) {
+		return 0, false
+	}
+	return estimatedRetainedBytes(node.Stats.Outcnt, node.Stats.Rowsize)
+}
+
+func estimatedRetainedBytes(rows, rowSize float64) (float64, bool) {
+	if math.IsNaN(rows) || math.IsInf(rows, 0) || rows < 0 ||
+		math.IsNaN(rowSize) || math.IsInf(rowSize, 0) || rowSize <= 0 {
+		return 0, false
+	}
+	if rows == 0 {
+		return 0, true
+	}
+	if rows > math.MaxFloat64/rowSize {
+		return math.MaxFloat64, true
+	}
+	return rows * rowSize, true
 }
 
 // disableMemoryUnsafeRightDedup keeps RIGHT DEDUP as the small-input fast path.
@@ -2218,11 +2578,30 @@ func rightDedupKeyWidth(expr *plan.Expr) int {
 }
 
 func (builder *QueryBuilder) hasRecursiveScan(node *plan.Node) bool {
+	return builder.hasRecursiveScanPath(node, nil)
+}
+
+func (builder *QueryBuilder) hasRecursiveScanPath(node *plan.Node, visited map[*plan.Node]struct{}) bool {
+	if node == nil {
+		return false
+	}
 	if node.NodeType == plan.Node_RECURSIVE_SCAN {
 		return true
 	}
+	if visited == nil {
+		visited = make(map[*plan.Node]struct{})
+	}
+	if _, ok := visited[node]; ok {
+		return false
+	}
+	visited[node] = struct{}{}
+	defer delete(visited, node)
+
 	for _, nodeID := range node.Children {
-		if builder.hasRecursiveScan(builder.qry.Nodes[nodeID]) {
+		if nodeID < 0 || int(nodeID) >= len(builder.qry.Nodes) {
+			continue
+		}
+		if builder.hasRecursiveScanPath(builder.qry.Nodes[nodeID], visited) {
 			return true
 		}
 	}

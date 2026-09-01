@@ -77,7 +77,8 @@ const (
 	MORPCVersion39     int64 = 39 // linearizable TN-ordered logtail read barrier
 	MORPCVersion40     int64 = 40 // PAD SPACE comparison casts and set-operation equality keys
 	MORPCVersion41     int64 = 41 // cycle-safe bounded current-role closure table function
-	MORPCLatestVersion       = MORPCVersion41
+	MORPCVersion42     int64 = 42 // transactional SQL-task child cleanup
+	MORPCLatestVersion       = MORPCVersion42
 )
 
 // DefaultLockWaitTimeoutSeconds is shared by the frontend default and by
