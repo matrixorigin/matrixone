@@ -1861,6 +1861,19 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 				}
 			}
 
+			// Flink's MySQL JDBC dialect includes every column in the update
+			// clause. When PRIMARY is the only conflict arbiter, pk = VALUES(pk)
+			// is necessarily a no-op because the incoming and existing primary
+			// keys are equal. Do not turn that dialect-generated assignment into
+			// a physical primary-key update. If a secondary UNIQUE key can select
+			// the conflicting row, the incoming primary key may differ, so retain
+			// the existing rejection for that ambiguous case.
+			if firstUniqueIdxPos < 0 &&
+				slices.Contains(tableDef.Pkey.Names, colDef.Name) &&
+				isOnDupIncomingColumn(updateExpr, selectTag, int32(colIdx)) {
+				continue
+			}
+
 			updateExpr, err = builder.forceAssignmentCastExpr(updateExpr, colDef.Typ, false)
 			if err != nil {
 				return 0, err
@@ -3227,6 +3240,15 @@ func insertUniqueLockKeyPrefixLengths(idxDef *IndexDef, skip bool) (map[string]i
 	}
 	return prefixLengths, idxDef.Unique && !skip &&
 		(len(idxDef.Parts) > 1 || len(prefixLengths) > 0), nil
+}
+
+// isOnDupIncomingColumn reports whether an ON DUPLICATE KEY UPDATE expression
+// is the unmodified incoming value of the target column (VALUES(col)). The
+// expression is checked after binding so normal identifier validation has
+// already taken place.
+func isOnDupIncomingColumn(expr *plan.Expr, selectTag, colPos int32) bool {
+	col := expr.GetCol()
+	return col != nil && col.RelPos == selectTag && col.ColPos == colPos
 }
 
 // getInsertColsFromStmt retrieves the list of column names to be inserted into a table

@@ -9,6 +9,22 @@ insert into t1 values (1,2), (2,2) on duplicate key update b=values(b)+10;
 select * from t1;
 delete from t1;
 insert into t1 values (1,1);
+-- Flink's MySQL JDBC dialect repeats the primary key in the update list.
+-- VALUES(a) is necessarily equal to the existing a when PRIMARY is the only
+-- conflict arbiter, so this must update b without attempting to rewrite a.
+insert into t1 values (1,20), (2,30) on duplicate key update a=values(a), b=values(b);
+select * from t1 order by a;
+-- Replaying the same Flink upsert is idempotent.
+insert into t1 values (1,20), (2,30) on duplicate key update a=values(a), b=values(b);
+select * from t1 order by a;
+-- A primary-key-only no-op keeps the existing non-key value.
+insert into t1 values (1,99) on duplicate key update a=values(a);
+select * from t1 order by a;
+-- A different incoming column is not a primary-key no-op.
+insert into t1 values (1,99) on duplicate key update a=values(b);
+select * from t1 order by a;
+delete from t1;
+insert into t1 values (1,1);
 -- @bvt:issue#4423
 insert into t1 values (1,11), (2,22), (3,33) on duplicate key update a=a+1,b=100;
 select * from t1;
@@ -25,6 +41,14 @@ insert into t1 values (1,1),(3,3);
 insert into t1 values (1,2),(2,22),(3,33) on duplicate key update a=a+1;
 drop table t1;
 create table t1(a int, b int, c int, primary key(a, b));
+delete from t1;
+insert into t1 values (1,1,10);
+insert into t1 values (1,1,20), (2,2,30) on duplicate key update a=values(a), b=values(b), c=values(c);
+select * from t1 order by a, b;
+insert into t1 values (1,1,20), (2,2,30) on duplicate key update a=values(a), b=values(b), c=values(c);
+select * from t1 order by a, b;
+insert into t1 values (1,1,99) on duplicate key update a=values(a), b=values(b);
+select * from t1 order by a, b;
 delete from t1;
 insert into t1 values (1,1,1);
 insert into t1 values (1,1,2), (2,2,2) on duplicate key update c=c+10;
@@ -121,6 +145,11 @@ select * from t1 order by a;
 drop table if exists t1;
 create table t1(a int primary key, b int unique key);
 insert into t1 values (1,1),(2,2),(3,3);
+-- With a secondary UNIQUE arbiter, VALUES(primary_key) is ambiguous: a
+-- secondary-key conflict can select a row with a different existing PK.
+insert into t1 values (1,20) on duplicate key update a = values(a), b = values(b);
+insert into t1 values (20,1) on duplicate key update a = values(a), b = values(b);
+select * from t1 order by a;
 insert into t1 values (1,20) on duplicate key update b = b + 1;
 insert into t1 values (20,1) on duplicate key update a = a + 1;
 delete from t1;
