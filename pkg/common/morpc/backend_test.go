@@ -561,6 +561,74 @@ func TestReadTimeout(t *testing.T) {
 	)
 }
 
+func TestReadTimeoutDoesNotChargeIdleTimeToNewRequest(t *testing.T) {
+	rb := &remoteBackend{livenessEpoch: time.Now().Add(-2 * time.Second)}
+	rb.options.bufferSize = 1
+	rb.options.readTimeout = time.Second
+
+	// Preserve ordinary backends' existing idle-timeout behavior. The special
+	// case below applies only once a unary request has actually been flushed.
+	require.False(t, rb.keepDataConnectionAfterReadTimeout(
+		context.Background(), context.DeadlineExceeded))
+	rb.mu.activeStreams = map[uint64]*stream{1: {}}
+	require.False(t, rb.keepDataConnectionAfterReadTimeout(
+		context.Background(), context.DeadlineExceeded),
+		"an active stream must retain the ordinary backend's timeout semantics")
+	clear(rb.mu.activeStreams)
+	internal := &Future{send: RPCMessage{internal: true}}
+	internal.writtenAt.Store(rb.livenessTick())
+	rb.mu.futures = map[uint64]*Future{1: internal}
+	require.False(t, rb.keepDataConnectionAfterReadTimeout(
+		context.Background(), context.DeadlineExceeded),
+		"internal traffic must not extend the user-request read window")
+
+	// If a request arrived during that old read window, it owns a fresh window
+	// measured from its write, rather than the remainder of the idle window.
+	pending := &Future{}
+	pending.writtenAt.Store(rb.livenessTick())
+	rb.mu.futures = map[uint64]*Future{1: pending}
+	require.True(t, rb.keepDataConnectionAfterReadTimeout(
+		context.Background(), context.DeadlineExceeded))
+
+	// A backend without an independent liveness probe still closes once a full
+	// request-owned window has elapsed without progress.
+	pending.writtenAt.Store(rb.livenessTick() - rb.options.readTimeout.Nanoseconds())
+	require.False(t, rb.keepDataConnectionAfterReadTimeout(
+		context.Background(), context.DeadlineExceeded))
+	require.False(t, rb.keepDataConnectionAfterReadTimeout(
+		context.Background(), errors.New("connection reset")))
+}
+
+func TestReadTimeoutTracksRequestsWithoutLivenessProbe(t *testing.T) {
+	requestReceived := make(chan struct{})
+	var received sync.Once
+	testBackendSend(t,
+		func(_ goetty.IOSession, message interface{}, _ uint64) error {
+			if !message.(RPCMessage).internal {
+				received.Do(func() { close(requestReceived) })
+			}
+			return nil
+		},
+		func(b *remoteBackend) {
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+			defer cancel()
+			f, err := b.Send(ctx, newTestMessage(1))
+			require.NoError(t, err)
+			defer f.Close()
+			require.NoError(t, f.waitSendCompleted())
+
+			select {
+			case <-requestReceived:
+			case <-ctx.Done():
+				t.Fatal("request did not reach server")
+			}
+			require.NotZero(t, b.oldestPendingRequestAt(),
+				"read-timeout accounting must not depend on a liveness probe")
+		},
+		WithBackendReadTimeout(200*time.Millisecond),
+	)
+}
+
 func TestHealthyLivenessProbePreservesSlowRequest(t *testing.T) {
 	requestReceived := make(chan struct{})
 	releaseResponse := make(chan struct{})
@@ -1133,7 +1201,7 @@ func TestIndependentControlBackendPreservesSlowDataRequest(t *testing.T) {
 
 	dataFactory := NewGoettyBasedBackendFactory(
 		newTestCodec(),
-		// keepDataConnectionAfterProbe gives the probe one fifth of this timeout.
+		// keepDataConnectionAfterReadTimeout gives the probe one fifth of this timeout.
 		// The probe gets a full second without making the test wait for a timeout.
 		WithBackendReadTimeout(dataReadTimeout),
 		WithBackendLivenessProbe(func(ctx context.Context, _ string) error {
@@ -1182,7 +1250,7 @@ func TestIndependentControlBackendPreservesSlowDataRequest(t *testing.T) {
 	dataBackend.livenessMu.Unlock()
 	// Drive the read-timeout branch directly. Waiting for a real socket deadline
 	// only tests the clock and was the source of this test's CI flakiness.
-	require.True(t, dataBackend.keepDataConnectionAfterProbe(ctx, context.DeadlineExceeded))
+	require.True(t, dataBackend.keepDataConnectionAfterReadTimeout(ctx, context.DeadlineExceeded))
 	require.False(t, dataBackend.admissionAvailable(),
 		"a successful control probe must drain the stalled data backend")
 	require.Zero(t, client.closeIdleBackends(),

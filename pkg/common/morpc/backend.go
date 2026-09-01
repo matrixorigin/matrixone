@@ -645,6 +645,13 @@ func (rb *remoteBackend) writeLoop(ctx context.Context) {
 					}
 				} else {
 					for _, f := range written {
+						if !f.send.internal && !f.send.stream &&
+							rb.options.readTimeout > 0 && rb.options.livenessProbe == nil {
+							// Record only transport-complete writes. A request that merely
+							// reached the userspace buffer must not extend the read window
+							// when Flush ultimately fails.
+							f.writtenAt.Store(rb.livenessTick())
+						}
 						f.messageSent(nil)
 					}
 				}
@@ -743,7 +750,7 @@ func (rb *remoteBackend) readLoop(ctx context.Context) {
 			msg, err := rb.conn.Read(goetty.ReadOptions{Timeout: rb.options.readTimeout})
 			n++
 			if err != nil || rb.options.disconnectAfterRead == n {
-				if err != nil && rb.keepDataConnectionAfterProbe(ctx, err) {
+				if err != nil && rb.keepDataConnectionAfterReadTimeout(ctx, err) {
 					continue
 				}
 				if err == nil {
@@ -1332,11 +1339,11 @@ func (rb *remoteBackend) getPingTimeout() time.Duration {
 	return time.Duration(math.MaxInt64)
 }
 
-func (rb *remoteBackend) keepDataConnectionAfterProbe(
+func (rb *remoteBackend) keepDataConnectionAfterReadTimeout(
 	ctx context.Context,
 	readErr error,
 ) bool {
-	if rb.options.livenessProbe == nil || !isTimeoutError(readErr) {
+	if !isTimeoutError(readErr) {
 		return false
 	}
 	select {
@@ -1345,17 +1352,29 @@ func (rb *remoteBackend) keepDataConnectionAfterProbe(
 	default:
 	}
 
-	// A read deadline on an otherwise idle data connection is not evidence of
-	// a stalled data path. In particular, do not make healthy data depend on a
-	// control transport that may be temporarily unavailable when there is no
-	// outstanding or unacknowledged user traffic to diagnose.
+	// A socket read can begin while the connection is idle and inherit a
+	// deadline that is already mostly consumed when the next request arrives.
+	// Idle time is not request latency: give newly written data one complete
+	// read window before declaring its transport stalled.
 	oldestWritten := rb.dataPendingSince()
+	if rb.options.livenessProbe == nil {
+		oldestWritten = rb.oldestPendingRequestAt()
+		// Preserve the ordinary backend's existing idle and stream timeout
+		// behavior. Only a successfully flushed unary request owns a fresh read
+		// window; no pending request still closes this connection.
+		if oldestWritten == 0 {
+			return false
+		}
+	}
 	if oldestWritten == 0 {
 		return true
 	}
 	if elapsed := rb.livenessTick() - oldestWritten; elapsed >= 0 &&
 		elapsed < rb.options.readTimeout.Nanoseconds() {
 		return true
+	}
+	if rb.options.livenessProbe == nil {
+		return false
 	}
 
 	rb.stateMu.Lock()
@@ -1461,6 +1480,22 @@ func (rb *remoteBackend) dataPendingSince() int64 {
 	rb.livenessMu.Lock()
 	defer rb.livenessMu.Unlock()
 	return rb.livenessMu.pendingSince
+}
+
+func (rb *remoteBackend) oldestPendingRequestAt() int64 {
+	rb.mu.RLock()
+	defer rb.mu.RUnlock()
+	oldest := int64(0)
+	for _, f := range rb.mu.futures {
+		if f.send.internal || f.send.stream {
+			continue
+		}
+		writtenAt := f.writtenAt.Load()
+		if writtenAt > 0 && (oldest == 0 || writtenAt < oldest) {
+			oldest = writtenAt
+		}
+	}
+	return oldest
 }
 
 func (rb *remoteBackend) resetDataProgress() {

@@ -44,6 +44,18 @@ func (e *dummyExecutor) ExecuteFor(table catalog.MergeTable, task mergeTask) boo
 	return true
 }
 
+type recordingExecutor struct {
+	executed chan uint64
+}
+
+func (e *recordingExecutor) ExecuteFor(table catalog.MergeTable, task mergeTask) bool {
+	if task.doneCB != nil {
+		task.doneCB.OnExecDone(nil)
+	}
+	e.executed <- table.ID()
+	return true
+}
+
 type delayedCompletionExecutor struct {
 	tasks chan mergeTask
 }
@@ -186,17 +198,20 @@ func TestScheduler(t *testing.T) {
 		initTables: tables,
 	}
 
+	executor := &recordingExecutor{executed: make(chan uint64, 16)}
 	sched := NewMergeScheduler(
 		1*time.Millisecond,
 		dummySource,
-		&dummyExecutor{},
+		executor,
 		NewStdClock(),
 	)
+	// Admission is part of scheduler behavior, but host memory pressure is not
+	// an input to this unit test. A deterministic controller keeps the test from
+	// silently changing meaning with the CI runner's cgroup state.
+	sched.PatchTestRscController(newSimRscController(16 * common.Const1GBytes))
 
 	sched.Start()
 	defer sched.Stop()
-
-	time.Sleep(3 * time.Millisecond)
 
 	{
 		// switch on/off
@@ -329,40 +344,47 @@ func TestScheduler(t *testing.T) {
 	}
 
 	{
-
-		var answer *QueryAnswer
-
-		for i := 0; i < 100; i++ {
-			answer = requireQuery(t, sched, t1004)
-			if answer.DataMergeCnt == 1 {
-				break
-			}
-			time.Sleep(5 * time.Millisecond)
+		// Wait on the executor boundary, not elapsed time. Receiving these events
+		// proves that both scheduler loops, resource admission, and completion
+		// accounting have handled every trigger under test.
+		expected := map[uint64]int{
+			t1004.ID():     1,
+			tables[1].ID(): t1002TaskCnt,
+			tables[0].ID(): 1,
 		}
+		remaining := 0
+		for _, count := range expected {
+			remaining += count
+		}
+		for remaining > 0 {
+			select {
+			case tableID := <-executor.executed:
+				require.Positive(t, expected[tableID], "unexpected merge for table %d", tableID)
+				expected[tableID]--
+				remaining--
+			case <-time.After(10 * time.Second):
+				t.Fatalf("merge scheduler did not execute all tasks: remaining=%v", expected)
+			}
+		}
+
+		answer := requireQuery(t, sched, t1004)
 		require.Equal(t, answer.DataMergeCnt, 1)
 
-		for i := 0; i < 100; i++ {
-			answer = requireQuery(t, sched, tables[1])
-			if answer.DataMergeCnt == t1002TaskCnt {
-				break
-			}
-			time.Sleep(5 * time.Millisecond)
-		}
+		answer = requireQuery(t, sched, tables[1])
 		require.Equal(t, answer.DataMergeCnt, t1002TaskCnt)
 		require.Equal(t, answer.VaccumTrigCount, 1)
 
-		for i := 0; i < 100; i++ {
-			answer = requireQuery(t, sched, tables[0])
-			if answer.DataMergeCnt == 1 {
-				break
-			}
-			time.Sleep(5 * time.Millisecond)
-		}
+		answer = requireQuery(t, sched, tables[0])
 		require.Equal(t, answer.DataMergeCnt, 1)
 	}
 
 	{
 		// dropped table will be removed from scheduler
+		require.NoError(t, sched.SendTrigger(NewMMsgTaskTrigger(tables[2])))
+		// The first query fences trigger dispatch. The scheduler processes the
+		// now-due table at the top of its next cycle; the second query observes
+		// that completed cycle.
+		requireQuery(t, sched, tables[2])
 		answer := requireQuery(t, sched, tables[2])
 		require.Equal(t, answer.NotExists, true)
 	}

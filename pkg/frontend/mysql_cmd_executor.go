@@ -2523,9 +2523,27 @@ func previewQuerySchedulingWithSQLMode(
 	}
 	previewCtx, cancel := context.WithTimeout(ctx, schedulingPreviewTimeout)
 	defer cancel()
+	return previewQuerySchedulingInContext(previewCtx, ses, query, txnHaveDDL, rawSQL, sqlMode)
+}
+
+// previewQuerySchedulingInContext computes a preview under the caller-owned
+// context. The frontend wrapper above owns the best-effort latency policy;
+// callers that need to observe the scheduling decision itself can provide a
+// lifecycle context without racing that decision against an unrelated clock.
+func previewQuerySchedulingInContext(
+	ctx context.Context,
+	ses *Session,
+	query *plan.Query,
+	txnHaveDDL bool,
+	rawSQL string,
+	sqlMode *string,
+) schedule.Trace {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	if ses == nil {
 		return compile.PreviewQueryScheduling(compile.SchedulingPreviewRequest{
-			Context: previewCtx,
+			Context: ctx,
 			Query:   query,
 		})
 	}
@@ -2538,7 +2556,7 @@ func previewQuerySchedulingWithSQLMode(
 		intent = querySchedulingIntentForStatementWithSQLMode(ses, rawSQL, *sqlMode)
 	}
 	return compile.PreviewQueryScheduling(compile.SchedulingPreviewRequest{
-		Context:    previewCtx,
+		Context:    ctx,
 		Query:      query,
 		Engine:     ses.GetTxnHandler().GetStorage(),
 		Process:    ses.GetProc(),

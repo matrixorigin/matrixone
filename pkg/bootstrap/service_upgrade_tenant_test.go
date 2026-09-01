@@ -73,10 +73,8 @@ func Test_asyncUpgradeTenantTask(t *testing.T) {
 			txnOperator := mock_frontend.NewMockTxnOperator(gomock.NewController(t))
 			txnOperator.EXPECT().TxnOptions().Return(txn.TxnOptions{CN: sid}).AnyTimes()
 
-			ctx, cancel := context.WithTimeout(context.Background(), time.Millisecond*3)
-			defer cancel()
-
-			b.asyncUpgradeTenantTask(ctx)
+			_, err := b.newTenantUpgradePass(t.Context())()
+			require.Error(t, err)
 		},
 	)
 }
@@ -165,7 +163,7 @@ func Test_asyncUpgradeTenantTask_SkipsTenantAtTargetVersion(t *testing.T) {
 			var taskReady atomic.Bool
 			var finalized atomic.Bool
 			var tenantVersionUpdated atomic.Bool
-			ctx, cancel := context.WithTimeout(context.Background(), time.Millisecond*50)
+			ctx, cancel := context.WithCancel(t.Context())
 			defer cancel()
 
 			sqlExecutor := executor.NewMemExecutor(func(sql string) (executor.Result, error) {
@@ -215,7 +213,7 @@ func Test_asyncUpgradeTenantTask_SkipsTenantAtTargetVersion(t *testing.T) {
 				func(s *service) {
 					s.handles = append(s.handles, h)
 				},
-				WithCheckUpgradeTenantDuration(time.Millisecond),
+				WithCheckUpgradeTenantDuration(0),
 			)
 
 			txnOperator := mock_frontend.NewMockTxnOperator(gomock.NewController(t))
@@ -273,7 +271,7 @@ func Test_asyncUpgradeTenantTask_RunsSameVersionOffsetUpgrade(t *testing.T) {
 			var taskReady atomic.Bool
 			var finalized atomic.Bool
 			var tenantVersionUpdated atomic.Bool
-			ctx, cancel := context.WithTimeout(context.Background(), time.Millisecond*50)
+			ctx, cancel := context.WithCancel(t.Context())
 			defer cancel()
 
 			sqlExecutor := executor.NewMemExecutor(func(sql string) (executor.Result, error) {
@@ -337,7 +335,7 @@ func Test_asyncUpgradeTenantTask_RunsSameVersionOffsetUpgrade(t *testing.T) {
 				return sqlExecutor.Exec(context.Background(), sql, executor.Options{})
 			}, txnOperator)
 
-			s.asyncUpgradeTenantTask(ctx)
+			drainUpgradeTenants(ctx, s.newTenantUpgradePass(ctx))
 			require.True(t, taskReady.Load())
 			require.True(t, finalized.Load())
 			require.True(t, tenantVersionUpdated.Load())
@@ -353,7 +351,7 @@ func Test_asyncUpgradeTenantTask_AutoCompletesDeletedTenantTasks(t *testing.T) {
 		func(rt runtime.Runtime) {
 			var finalized atomic.Bool
 			var deletedTasksReconciled atomic.Bool
-			ctx, cancel := context.WithTimeout(context.Background(), time.Millisecond*20)
+			ctx, cancel := context.WithCancel(t.Context())
 			defer cancel()
 
 			sqlExecutor := executor.NewMemExecutor(func(sql string) (executor.Result, error) {
@@ -411,7 +409,7 @@ func Test_asyncUpgradeTenantTask_AutoCompletesDeletedTenantTasks(t *testing.T) {
 				return sqlExecutor.Exec(context.Background(), sql, executor.Options{})
 			}, txnOperator)
 
-			s.asyncUpgradeTenantTask(ctx)
+			drainUpgradeTenants(ctx, s.newTenantUpgradePass(ctx))
 			require.True(t, finalized.Load())
 			require.Zero(t, h.callHandleTenantUpgrade.Load())
 		},
@@ -424,7 +422,7 @@ func Test_asyncUpgradeTenantTask_ReconcilesReadyCountWhenTasksAlreadyFinished(t 
 		sid,
 		func(rt runtime.Runtime) {
 			var finalized atomic.Bool
-			ctx, cancel := context.WithTimeout(context.Background(), time.Millisecond*20)
+			ctx, cancel := context.WithCancel(t.Context())
 			defer cancel()
 
 			sqlExecutor := executor.NewMemExecutor(func(sql string) (executor.Result, error) {
@@ -470,7 +468,7 @@ func Test_asyncUpgradeTenantTask_ReconcilesReadyCountWhenTasksAlreadyFinished(t 
 				return sqlExecutor.Exec(context.Background(), sql, executor.Options{})
 			}, txnOperator)
 
-			s.asyncUpgradeTenantTask(ctx)
+			drainUpgradeTenants(ctx, s.newTenantUpgradePass(ctx))
 			require.True(t, finalized.Load())
 			require.Zero(t, h.callHandleTenantUpgrade.Load())
 		},
@@ -484,7 +482,7 @@ func Test_asyncUpgradeTenantTask_SkipsReconcileWhenConflictTasksRemain(t *testin
 		func(rt runtime.Runtime) {
 			var reconciled atomic.Bool
 			var upgraded atomic.Bool
-			ctx, cancel := context.WithTimeout(context.Background(), time.Millisecond*20)
+			ctx, cancel := context.WithCancel(t.Context())
 			defer cancel()
 
 			sqlExecutor := executor.NewMemExecutor(func(sql string) (executor.Result, error) {
@@ -532,7 +530,7 @@ func Test_asyncUpgradeTenantTask_SkipsReconcileWhenConflictTasksRemain(t *testin
 				return sqlExecutor.Exec(context.Background(), sql, executor.Options{})
 			}, txnOperator)
 
-			s.asyncUpgradeTenantTask(ctx)
+			drainUpgradeTenants(ctx, s.newTenantUpgradePass(ctx))
 			require.False(t, reconciled.Load())
 			require.False(t, upgraded.Load())
 			require.Zero(t, h.callHandleTenantUpgrade.Load())
@@ -546,7 +544,7 @@ func Test_asyncUpgradeTenantTask_SkipsAlreadyReconciledUpgradeCounts(t *testing.
 		sid,
 		func(rt runtime.Runtime) {
 			var upgraded atomic.Bool
-			ctx, cancel := context.WithTimeout(context.Background(), time.Millisecond*20)
+			ctx, cancel := context.WithCancel(t.Context())
 			defer cancel()
 
 			sqlExecutor := executor.NewMemExecutor(func(sql string) (executor.Result, error) {
@@ -590,7 +588,7 @@ func Test_asyncUpgradeTenantTask_SkipsAlreadyReconciledUpgradeCounts(t *testing.
 				return sqlExecutor.Exec(context.Background(), sql, executor.Options{})
 			}, txnOperator)
 
-			s.asyncUpgradeTenantTask(ctx)
+			drainUpgradeTenants(ctx, s.newTenantUpgradePass(ctx))
 			require.False(t, upgraded.Load())
 			require.Zero(t, h.callHandleTenantUpgrade.Load())
 		},

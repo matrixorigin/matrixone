@@ -39,8 +39,9 @@ type Future struct {
 	c    chan Message
 	errC chan error
 	// used to check error for sending message
-	writtenC chan error
-	waiting  atomic.Bool
+	writtenC  chan error
+	waiting   atomic.Bool
+	writtenAt atomic.Int64
 	// requestMetricObserved makes terminal request accounting exactly once even
 	// when timeout, transport failure, response delivery, and Close race.
 	requestMetricObserved atomic.Bool
@@ -67,6 +68,7 @@ func (f *Future) init(send RPCMessage) {
 		panic("context deadline not set")
 	}
 	f.waiting.Store(false)
+	f.writtenAt.Store(0)
 	f.requestMetricObserved.Store(false)
 	f.requestMetrics = nil
 	f.send = send
@@ -314,6 +316,7 @@ func (f *Future) reset() {
 	default:
 	}
 	f.send = RPCMessage{}
+	f.writtenAt.Store(0)
 	f.sendRelease = nil
 	f.responseRelease = nil
 	f.requestMetrics = nil
