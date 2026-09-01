@@ -344,6 +344,10 @@ type PrepareStmt struct {
 	// ordinary COM_STMT executions never scan or copy the cached plan. Direct
 	// result positions identify parameters whose binary runtime type is also the
 	// visible result-column type.
+	// numericPrefixConsumer belongs to numericPrefixConsumerPlan. Prepared plans
+	// are immutable within one generation; replacing the plan invalidates this
+	// cached capability and refreshes it once before execution.
+	numericPrefixConsumerPlan     *plan.Plan
 	numericPrefixConsumer         bool
 	directResultParamPositions    []int32
 	directResultParamPositionsSet bool
