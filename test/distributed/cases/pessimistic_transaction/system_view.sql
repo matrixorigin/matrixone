@@ -1,24 +1,67 @@
---test mo_locks, mo_transactions
+-- test tenant visibility of mo_locks and mo_transactions
 
-drop database if exists sv_db1;
-create database sv_db1;
-use sv_db1;
+drop account if exists sv_tenant;
+drop database if exists sv_sys_db;
+create account sv_tenant admin_name = 'admin' identified by '111';
 
--- @session:id=1{
-use sv_db1;
-create table t1(a int);
+create database sv_sys_db;
+create table sv_sys_db.t1(a int primary key, b int);
+insert into sv_sys_db.t1 values (1, 10);
+
+-- @session:id=1&user=sv_tenant:admin&password=111{
+create database sv_tenant_db;
+create table sv_tenant_db.t1(a int primary key, b int);
+insert into sv_tenant_db.t1 values (1, 20);
+-- @session}
+
+use sv_sys_db;
 begin;
-insert into t1 values (1);
+update t1 set b = b + 1 where a = 1;
+
+-- @session:id=1&user=sv_tenant:admin&password=111{
+use sv_tenant_db;
+begin;
+update t1 set b = b + 1 where a = 1;
 -- @session}
 
--- The insert keeps its pessimistic lock until session 1 commits. Poll the
--- actual lock state instead of keeping the async statement busy for 10 seconds.
--- @wait_expect(1, 10)
-select count(*) > 0 from mo_locks() l;
-select count(*) > 0 from mo_transactions() t join mo_locks() l where t.txn_id = l.txn_id;
+-- The sys account sees both active user transactions and their locks.
+select count(distinct txn_id) = 2 from mo_transactions() t where t.user_txn = 'true';
+select count(*) = 2 from (
+    select txn_id from mo_locks() l where l.txn_id <> ''
+    union
+    select lock_wait from mo_locks() l where l.lock_wait <> ''
+) as visible_txns;
 
--- @session:id=1{
-commit;
+-- A regular tenant sees only its own transaction through both table functions
+-- and catalog views.
+-- @session:id=1&user=sv_tenant:admin&password=111{
+select count(distinct txn_id) = 1 from mo_transactions() t where t.user_txn = 'true';
+select count(*) = 1 from (
+    select txn_id from mo_locks() l where l.txn_id <> ''
+    union
+    select lock_wait from mo_locks() l where l.lock_wait <> ''
+) as visible_txns;
+-- Prove that the single visible transaction/lock is this tenant's, rather than
+-- merely proving that some transaction was returned.
+select count(distinct t.txn_id) = 1
+from mo_transactions() t
+join mo_locks() l on t.txn_id = l.txn_id
+where l.table_id = (
+    select rel_id from mo_catalog.mo_tables
+    where reldatabase = 'sv_tenant_db' and relname = 't1'
+);
+select count(distinct txn_id) = 1 from mo_catalog.mo_transactions where user_txn = 'true';
+select count(*) = 1 from (
+    select txn_id from mo_catalog.mo_locks where txn_id <> ''
+    union
+    select lock_wait from mo_catalog.mo_locks where lock_wait <> ''
+) as visible_txns;
+rollback;
+select b from sv_tenant_db.t1 where a = 1;
+drop database sv_tenant_db;
 -- @session}
 
-drop database if exists sv_db1;
+rollback;
+select b from sv_sys_db.t1 where a = 1;
+drop database sv_sys_db;
+drop account sv_tenant;

@@ -23,6 +23,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/lock"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"golang.org/x/exp/constraints"
 )
 
@@ -106,8 +107,7 @@ func getFetchRowsFunc(t types.Type) FetchLockRowsFunc {
 // fetcher, but their current finite min/max endpoints do not cover infinities or
 // every NaN payload and therefore cannot prove full-domain exclusion.
 func SupportsTotalLockTableRange(t types.Type) bool {
-	return t.Oid != types.T_float32 && t.Oid != types.T_float64 &&
-		getFetchRowsFunc(t) != nil
+	return colexec.SupportsTotalLockTableRange(t)
 }
 
 // GetFetchRowsFunc get FetchLockRowsFunc based on primary key type
