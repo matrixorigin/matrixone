@@ -16,6 +16,7 @@ package frontend
 
 import (
 	"context"
+	"fmt"
 	"testing"
 	"time"
 
@@ -25,6 +26,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/frontend/constant"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	querypb "github.com/matrixorigin/matrixone/pkg/pb/query"
+	taskpb "github.com/matrixorigin/matrixone/pkg/pb/task"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
@@ -94,11 +96,38 @@ func TestHandleSQLTaskCreateAlterDrop(t *testing.T) {
 	require.Equal(t, "UTC", sqlTask.Timezone)
 	require.Equal(t, uint64(0), sqlTask.TriggerCount)
 
+	// Model the async-only window deterministically: the scheduled child has
+	// committed, but no executor has acquired it and therefore no run row can
+	// preserve its account mapping. DROP TASK must remove the child together
+	// with the last definition mapping.
+	sqlTask.TriggerCount++
+	parentTaskID := fmt.Sprintf("sql-task:%d", sqlTask.TaskID)
+	queued := taskpb.AsyncTask{
+		Metadata:     taskpb.TaskMetadata{ID: parentTaskID + ":1"},
+		ParentTaskID: parentTaskID,
+		Status:       taskpb.TaskStatus_Created,
+	}
+	affected, err := store.TriggerSQLTask(context.Background(), sqlTask, queued)
+	require.NoError(t, err)
+	require.Equal(t, 2, affected)
+	children, err := store.QueryAsyncTask(context.Background(),
+		taskservice.WithTaskParentTaskIDCond(taskservice.EQ, parentTaskID))
+	require.NoError(t, err)
+	require.Len(t, children, 1)
+	runs, err := store.QuerySQLTaskRun(context.Background(),
+		taskservice.WithTaskIDCond(taskservice.EQ, sqlTask.TaskID))
+	require.NoError(t, err)
+	require.Empty(t, runs)
+
 	require.NoError(t, handleDropSQLTask(context.Background(), ses, &tree.DropSQLTask{
 		Name: tree.Identifier("task_a"),
 	}))
 	_, err = getSQLTaskByName(context.Background(), store, "task_a", ses.GetAccountId())
 	require.Error(t, err)
+	children, err = store.QueryAsyncTask(context.Background(),
+		taskservice.WithTaskParentTaskIDCond(taskservice.EQ, parentTaskID))
+	require.NoError(t, err)
+	require.Empty(t, children)
 
 	require.NoError(t, ts.Close())
 }
