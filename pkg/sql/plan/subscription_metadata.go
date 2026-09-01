@@ -126,8 +126,8 @@ func (builder *QueryBuilder) visibleSubscriptionMetadata(
 	seen := make(map[string]struct{}, len(subscriptions))
 	visible := subscriptions[:0]
 	for _, subscription := range subscriptions {
-		if subscription == nil || subscription.Meta == nil ||
-			subscription.Meta.SubName == "" ||
+		if subscription == nil ||
+			!validSubscriptionPublicationScope(subscription.Meta) ||
 			(!subscription.AllTablesVisible && len(subscription.VisibleTableIDs) == 0) {
 			continue
 		}
@@ -314,8 +314,11 @@ func rewriteSubscriptionStatisticsOutput(
 }
 
 func subscriptionMoTablesFilter(subscription *SubscriptionMetadata) tree.Expr {
-	if subscription == nil || subscription.Meta == nil || subscription.Meta.DbName == "" {
+	if subscription == nil {
 		return nil
+	}
+	if !validSubscriptionPublicationScope(subscription.Meta) {
+		return falseSubscriptionMetadataFilter()
 	}
 	meta := subscription.Meta
 	var filter tree.Expr = tree.NewComparisonExpr(
@@ -323,7 +326,7 @@ func subscriptionMoTablesFilter(subscription *SubscriptionMetadata) tree.Expr {
 		tree.NewUnresolvedColName("reldatabase"),
 		tree.NewNumVal(meta.DbName, meta.DbName, false, tree.P_char),
 	)
-	if meta.Tables != "" && meta.Tables != "*" {
+	if meta.Tables != "*" {
 		tableNames := strings.Split(meta.Tables, ",")
 		values := make(tree.Exprs, 0, len(tableNames))
 		for _, tableName := range tableNames {
@@ -332,13 +335,14 @@ func subscriptionMoTablesFilter(subscription *SubscriptionMetadata) tree.Expr {
 				values = append(values, tree.NewNumVal(tableName, tableName, false, tree.P_char))
 			}
 		}
-		if len(values) > 0 {
-			filter = tree.NewAndExpr(filter, tree.NewComparisonExpr(
-				tree.IN,
-				tree.NewUnresolvedColName("relname"),
-				tree.NewTuple(values),
-			))
+		if len(values) == 0 {
+			return falseSubscriptionMetadataFilter()
 		}
+		filter = tree.NewAndExpr(filter, tree.NewComparisonExpr(
+			tree.IN,
+			tree.NewUnresolvedColName("relname"),
+			tree.NewTuple(values),
+		))
 	}
 
 	if subscription.AllTablesVisible {
@@ -358,17 +362,45 @@ func subscriptionMoTablesFilter(subscription *SubscriptionMetadata) tree.Expr {
 		))
 	}
 	if len(values) == 0 {
-		return tree.NewComparisonExpr(
-			tree.EQUAL,
-			tree.NewNumVal(uint64(1), "1", false, tree.P_uint64),
-			tree.NewNumVal(uint64(0), "0", false, tree.P_uint64),
-		)
+		return falseSubscriptionMetadataFilter()
 	}
 	return tree.NewAndExpr(filter, tree.NewComparisonExpr(
 		tree.IN,
 		tree.NewUnresolvedColName("rel_logical_id"),
 		tree.NewTuple(values),
 	))
+}
+
+// validSubscriptionPublicationScope validates the catalog fields that become
+// publisher-side authorization predicates. Empty database/table scope must
+// never degrade into an unfiltered cross-account catalog scan.
+func validSubscriptionPublicationScope(meta *SubscriptionMeta) bool {
+	if meta == nil || meta.SubName == "" || meta.DbName == "" || meta.Tables == "" {
+		return false
+	}
+	if meta.Tables == "*" {
+		return true
+	}
+	for _, tableName := range strings.Split(meta.Tables, ",") {
+		if strings.TrimSpace(tableName) != "" {
+			return true
+		}
+	}
+	return false
+}
+
+func falseSubscriptionMetadataFilter() tree.Expr {
+	const impossibleScope = "__mo_invalid_subscription_scope__"
+	left := tree.NewUnresolvedColName("reldatabase")
+	right := tree.NewNumVal(impossibleScope, impossibleScope, false, tree.P_char)
+	return tree.NewAndExpr(
+		tree.NewComparisonExpr(tree.EQUAL, left, right),
+		tree.NewComparisonExpr(
+			tree.NOT_EQUAL,
+			tree.NewUnresolvedColName("reldatabase"),
+			tree.NewNumVal(impossibleScope, impossibleScope, false, tree.P_char),
+		),
+	)
 }
 
 // currentSubscriptionMoTablesFilter keeps direct subscription-table binding

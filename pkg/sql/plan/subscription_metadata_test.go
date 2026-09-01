@@ -561,6 +561,47 @@ func TestSubscriptionStatisticsOmitsSubscriberInvisibleBranches(t *testing.T) {
 	require.Nil(t, ctx.GetQueryingSubscription())
 }
 
+func TestSubscriptionStatisticsOmitsInvalidPublicationScopes(t *testing.T) {
+	optimizer, ctx := newSubscriptionMetadataTestOptimizer()
+	ctx.metadata = []*SubscriptionMetadata{
+		{Meta: &SubscriptionMeta{AccountId: 7, SubName: "missing_db", Tables: "*"}, AllTablesVisible: true},
+		{Meta: &SubscriptionMeta{AccountId: 7, DbName: "publisher_db", SubName: "missing_tables"}, AllTablesVisible: true},
+		{Meta: &SubscriptionMeta{AccountId: 7, DbName: "publisher_db", SubName: "blank_tables", Tables: " , "}, AllTablesVisible: true},
+		{Meta: ctx.subscriptions["sub_b"], AllTablesVisible: true},
+	}
+
+	queryPlan, err := runOneStmt(optimizer, t,
+		"select index_name from information_schema.statistics where table_name = 'nation'")
+	require.NoError(t, err)
+	require.Equal(t, map[string]int{"sub_b": 1},
+		statisticsPublisherScanCounts(queryPlan.GetQuery()))
+	require.True(t, hasLocalStatisticsCatalogScan(queryPlan.GetQuery()))
+}
+
+func TestInvalidDirectSubscriptionScopeFailsClosed(t *testing.T) {
+	optimizer, ctx := newSubscriptionMetadataTestOptimizer()
+	ctx.SetQueryingSubscription(&SubscriptionMeta{
+		AccountId: 7,
+		SubName:   "invalid_subscription",
+		Tables:    "*",
+	})
+
+	queryPlan, err := runOneStmt(optimizer, t,
+		"select relname from mo_catalog.mo_tables")
+	require.NoError(t, err)
+
+	found := false
+	for _, node := range queryPlan.GetQuery().GetNodes() {
+		if node.GetObjRef().GetObjName() != catalog.MO_TABLES {
+			continue
+		}
+		found = true
+		require.Contains(t, FormatExprs(node.GetFilterList(), FormatOption{}),
+			"bval:false")
+	}
+	require.True(t, found)
+}
+
 func TestSubscriptionMoTablesFilterIntersectsPublicationAndSubscriberRBAC(t *testing.T) {
 	meta := &SubscriptionMeta{
 		AccountId: 7,
@@ -583,7 +624,20 @@ func TestSubscriptionMoTablesFilterIntersectsPublicationAndSubscriberRBAC(t *tes
 	require.Contains(t, all, "relname in (published_t, other_t)")
 
 	none := tree.String(subscriptionMoTablesFilter(&SubscriptionMetadata{Meta: meta}), dialect.MYSQL)
-	require.Equal(t, "1 = 0", none)
+	require.Contains(t, none, "reldatabase = __mo_invalid_subscription_scope__")
+	require.Contains(t, none, "reldatabase != __mo_invalid_subscription_scope__")
+
+	for _, invalid := range []*SubscriptionMetadata{
+		{},
+		{Meta: &SubscriptionMeta{SubName: "sub", Tables: "*"}},
+		{Meta: &SubscriptionMeta{SubName: "sub", DbName: "publisher_db"}},
+		{Meta: &SubscriptionMeta{SubName: "sub", DbName: "publisher_db", Tables: " , "}},
+	} {
+		filter := tree.String(subscriptionMoTablesFilter(invalid), dialect.MYSQL)
+		require.Contains(t, filter, "reldatabase = __mo_invalid_subscription_scope__")
+		require.Contains(t, filter, "reldatabase != __mo_invalid_subscription_scope__")
+	}
+	require.Nil(t, subscriptionMoTablesFilter(nil))
 
 	_, ctx := newSubscriptionMetadataTestOptimizer()
 	ctx.SetQueryingSubscription(meta)

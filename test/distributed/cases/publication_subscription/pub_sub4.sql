@@ -51,9 +51,10 @@ create database idx_meta_sub_b from sys publication idx_meta_pub_b;
 
 -- A publication authorizes the cross-account catalog scan but does not bypass
 -- the subscriber user's RBAC. A connect-only role must not discover published
--- table/index names through an account-wide metadata query. Granting the
--- subscription database scope makes only publication members visible.
-create role idx_meta_connect_only_role;
+-- table/index names through an account-wide metadata query. An inherited
+-- database-wide grant makes only publication members visible and verifies
+-- that the complete active-role closure is used.
+create role idx_meta_connect_only_role, idx_meta_visible_parent_role;
 create user idx_meta_connect_only identified by '111' default role idx_meta_connect_only_role;
 grant connect on account * to idx_meta_connect_only_role;
 -- @session
@@ -64,7 +65,8 @@ select count(*) as connect_only_secret_index_rows
 from information_schema.statistics where table_name = 'secret_t';
 -- @session
 -- @session:id=2&user=idx_meta_sub:admin&password=111
-grant select on table idx_meta_sub_db.* to idx_meta_connect_only_role;
+grant select on table idx_meta_sub_db.* to idx_meta_visible_parent_role;
+grant idx_meta_visible_parent_role to idx_meta_connect_only_role;
 -- @session
 -- @session:id=5&user=idx_meta_sub:idx_meta_connect_only:idx_meta_connect_only_role&password=111
 select count(*) as granted_visible_index_rows
@@ -218,7 +220,7 @@ deallocate prepare subscription_membership_stmt;
 drop snapshot idx_meta_with_sub_b;
 drop snapshot idx_meta_without_sub_b;
 drop user idx_meta_connect_only;
-drop role idx_meta_connect_only_role;
+drop role idx_meta_connect_only_role, idx_meta_visible_parent_role;
 drop database idx_meta_sub_db;
 drop database idx_meta_local;
 -- @session

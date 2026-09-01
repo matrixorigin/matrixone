@@ -40,7 +40,7 @@ from information_schema.statistics where table_name = 'visible_t';
 ➤ ordinary_cache_first_subscription_rows[-5,64,0]  𝄀
 3
 create database idx_meta_sub_b from sys publication idx_meta_pub_b;
-create role idx_meta_connect_only_role;
+create role idx_meta_connect_only_role, idx_meta_visible_parent_role;
 create user idx_meta_connect_only identified by '111' default role idx_meta_connect_only_role;
 grant connect on account * to idx_meta_connect_only_role;
 select count(*) as connect_only_visible_index_rows
@@ -51,7 +51,8 @@ select count(*) as connect_only_secret_index_rows
 from information_schema.statistics where table_name = 'secret_t';
 ➤ connect_only_secret_index_rows[-5,64,0]  𝄀
 0
-grant select on table idx_meta_sub_db.* to idx_meta_connect_only_role;
+grant select on table idx_meta_sub_db.* to idx_meta_visible_parent_role;
+grant idx_meta_visible_parent_role to idx_meta_connect_only_role;
 select count(*) as granted_visible_index_rows
 from information_schema.statistics where table_name = 'visible_t';
 ➤ granted_visible_index_rows[-5,64,0]  𝄀
@@ -243,7 +244,7 @@ deallocate prepare subscription_membership_stmt;
 drop snapshot idx_meta_with_sub_b;
 drop snapshot idx_meta_without_sub_b;
 drop user idx_meta_connect_only;
-drop role idx_meta_connect_only_role;
+drop role idx_meta_connect_only_role, idx_meta_visible_parent_role;
 drop database idx_meta_sub_db;
 drop database idx_meta_local;
 drop publication idx_meta_pub;

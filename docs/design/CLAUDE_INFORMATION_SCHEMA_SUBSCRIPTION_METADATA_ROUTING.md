@@ -106,8 +106,10 @@ it is not a replacement for subscriber RBAC. Before entering a publisher
 catalog, the compiler evaluates the subscription database against the current
 subscriber session's active-role closure. Database ownership, database-wide or
 global table grants, and database metadata grants admit all publication-member
-tables. Exact table/view grants admit only their recorded logical table IDs. A
-connect-only user therefore gets no subscription metadata branch.
+tables. Subscription tables are virtual and do not exist as grantable objects
+in the subscriber catalog, so exact table/view grants cannot be resolved for
+this account-wide metadata path. A connect-only user therefore gets no
+subscription metadata branch.
 
 After that subscriber-local decision, the publisher branch must not evaluate
 subscriber role IDs against publisher `mo_role_privs`: role IDs are
@@ -133,14 +135,12 @@ object references. Planning enforces all four scopes independently:
 3. publication-database scope on the publisher `mo_tables` scan;
 4. publication-table scope on that same `mo_tables` scan.
 
-Logical table IDs are globally unique catalog identities. For an exact grant,
-the subscriber-side privilege row supplies only those IDs; publisher table
-names are not disclosed while RBAC is evaluated. The publisher `mo_tables`
-scan then requires both `rel_logical_id IN V` and membership in publication set
-`T`. When exact grants exist, the compact globally unique ID set may be
-attached to each candidate subscription branch; unrelated publishers match no
-ID and return no row. If there is neither broad visibility nor any exact grant,
-the subscription branches are omitted entirely.
+The publisher `mo_tables` scan always requires membership in publication set
+`T`. If subscriber RBAC does not establish broad database/global visibility,
+the subscription branch is omitted entirely. Incomplete publication metadata
+(for example an empty publisher database or an empty table set) is also omitted
+and, at the final filter boundary, converted to a contradictory row predicate so
+that malformed state can never degrade into an unfiltered cross-account scan.
 
 The joins in the canonical `STATISTICS` view then restrict index and column
 rows to the admitted table IDs. Output schema expressions are rewritten from
@@ -151,8 +151,8 @@ The canonical view's `__mo_visible_tables` CTE normally evaluates the current
 tenant's role closure. The account-wide provider evaluates that same role
 closure locally first. In a publisher branch the planner then replaces the
 CTE's subscriber-role predicate with the publisher-account predicate and adds
-the captured subscriber-visible logical IDs when visibility is table-specific.
-Publication database/table filters remain on `mo_tables`; replacing the CTE is
+the captured subscriber authorization decision. Publication database/table
+filters remain on `mo_tables`; replacing the CTE is
 not a standalone authorization grant.
 
 An unsupported `__mo_visible_tables` shape fails planning. The planner never
@@ -269,13 +269,16 @@ Compatibility rules are:
 - local branches continue to use the persisted definition unchanged.
 
 This change needs no new MORPC capability because it introduces no persisted
-wire or catalog format that an older CN cannot parse. During a rolling binary
-upgrade, an older CN may still show the original empty subscription metadata,
-while an upgraded CN returns the corrected rows. This is a temporary
-availability/compatibility difference, not an authorization widening: the old
-behavior exposes fewer rows. Operators requiring consistent JDBC metadata must
-wait until all query-serving CNs are upgraded before relying on the new
-contract.
+wire or catalog format. The subscriber visibility query does, however, honor
+the existing v41 `mo_current_roles()` capability: at v41 or later it uses the
+complete cycle-safe active-role closure; below v41 it uses the same
+compatibility expression as persisted information-schema views (the current
+role plus directly inherited roles). During a rolling binary upgrade, an older
+CN may still show the original empty subscription metadata, while an upgraded
+CN returns the corrected rows. This is a temporary availability/compatibility
+difference, not an authorization widening: the old behavior exposes fewer
+rows. Operators requiring consistent JDBC metadata must wait until all
+query-serving CNs are upgraded before relying on the new contract.
 
 Downgrading restores the old incomplete behavior but requires no catalog
 rollback. Backup and restore carry the existing publication, subscription, and
@@ -369,8 +372,8 @@ meaning the publisher never granted.
 
 Subscriber RBAC is still mandatory, but it is evaluated against the
 subscriber-local subscription database and privilege rows before publisher
-routing. Only the resulting broad-visibility flag or globally unique logical
-table IDs cross that boundary.
+routing. Only the resulting database/global visibility decision crosses that
+boundary; subscriber role IDs never do.
 
 ### C. Execute under a publisher user or role
 
@@ -412,7 +415,9 @@ freshness rule explicit.
 | WHERE, JOIN ON, derived, nested, sibling, OR, and prepared shapes agree | planner unit tests and public BVT |
 | Publisher account/database/table isolation; unpublished table absent | plan-shape tests and public BVT |
 | Connect-only subscriber cannot discover published table/index names | restricted-user public BVT and omitted-branch planner test |
-| Database-wide subscriber grants intersect publication scope | public BVT plus visibility-provider and publication-filter unit tests |
+| Inherited database-wide subscriber grants intersect publication scope | public BVT plus active-role visibility-provider tests |
+| Invalid/empty publication scope cannot produce an unfiltered publisher scan | omitted-branch and contradictory-filter unit tests |
+| Rolling upgrade does not call a v41-only role function on older CNs | protocol-specific visibility SQL test |
 | Subscriber role IDs do not authorize publisher catalogs | canonical CTE rewrite and publisher-RBAC negative tests |
 | Canonical and legacy persisted-view shapes remain safe | real canonical-DDL rewrite test and fail-closed shape tests |
 | Current and historical membership use one snapshot | compiler-context ownership review and public snapshot BVT |

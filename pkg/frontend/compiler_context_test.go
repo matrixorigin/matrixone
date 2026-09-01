@@ -23,6 +23,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/pubsub"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
 	pbplan "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
@@ -84,9 +85,10 @@ func TestGetVisibleSubscriptionMetadata(t *testing.T) {
 		{SubName: "hidden", AccountId: 3, DbName: "pub_c", Tables: "*"},
 	}
 	query := subscriptionMetadataVisibilitySQL(
-		escapeSQLString("all_visible") + "," +
-			escapeSQLString("hidden") + "," +
+		escapeSQLString("all_visible")+","+
+			escapeSQLString("hidden")+","+
 			escapeSQLString("table_visible"),
+		defines.MORPCVersion41,
 	)
 	result := &MysqlResultSet{}
 	for _, name := range []string{"datname", "all_tables", "table_id"} {
@@ -95,26 +97,33 @@ func TestGetVisibleSubscriptionMetadata(t *testing.T) {
 		result.AddColumn(column)
 	}
 	result.AddRow([]interface{}{"all_visible", int64(1), uint64(0)})
-	result.AddRow([]interface{}{"", int64(0), uint64(42)})
-	result.AddRow([]interface{}{"", int64(0), uint64(7)})
-	result.AddRow([]interface{}{"", int64(0), uint64(42)})
+	result.AddRow([]interface{}{"table_visible", int64(1), uint64(0)})
 	result.AddRow([]interface{}{"unknown", int64(1), uint64(0)})
 
 	bh := &backgroundExecTest{}
 	bh.init()
 	bh.sql2result[query] = result
-	got, err := getVisibleSubscriptionMetadata(context.Background(), bh, metas)
+	got, err := getVisibleSubscriptionMetadata(
+		context.Background(), bh, metas, defines.MORPCVersion41,
+	)
 	require.NoError(t, err)
 	require.Equal(t, []*plan2.SubscriptionMetadata{
 		{Meta: metas[0], AllTablesVisible: true},
-		{Meta: metas[1], VisibleTableIDs: []uint64{7, 42}},
-		{Meta: metas[2], VisibleTableIDs: []uint64{7, 42}},
+		{Meta: metas[1], AllTablesVisible: true},
 	}, got)
 	require.Equal(t, []string{query}, bh.executedSQLs)
 	require.Contains(t, query, "SELECT role_id FROM mo_current_roles() role_closure")
 	require.Contains(t, query, "db.owner IN")
-	require.Contains(t, query, "rp.privilege_level IN ('d.t','t')")
+	require.NotContains(t, query, "rp.privilege_level IN ('d.t','t')")
 	require.NotContains(t, query, "tbl.account_id")
+}
+
+func TestSubscriptionMetadataVisibilitySQLUsesRollingUpgradeFallback(t *testing.T) {
+	query := subscriptionMetadataVisibilitySQL("'sub_db'", defines.MORPCVersion35)
+	require.NotContains(t, query, "mo_current_roles()")
+	require.Contains(t, query, "SELECT current_role_id() UNION")
+	require.Contains(t, query, "FROM mo_catalog.mo_role_grant rg")
+	require.Contains(t, query, "rg.grantee_id = current_role_id()")
 }
 
 func TestExecCtxWithRootSQLRestoresScopedValues(t *testing.T) {
