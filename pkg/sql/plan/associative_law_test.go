@@ -15,13 +15,86 @@
 package plan
 
 import (
+	"sort"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/stretchr/testify/require"
 )
+
+func TestOuterJoinAssociativityIsReachableFromSQL(t *testing.T) {
+	t.Run("preserved side", func(t *testing.T) {
+		logicalPlan, err := runOneStmt(NewMockOptimizer(false), t, `
+			select n.n_nationkey, o.o_orderkey
+			from nation n
+			left join orders o on n.n_nationkey = o.o_custkey
+			join region r on n.n_regionkey = r.r_regionkey`)
+		require.NoError(t, err)
+
+		query := logicalPlan.GetQuery()
+		require.True(t, reachableJoinHasChildTableSets(
+			query,
+			planpb.Node_LEFT,
+			[]string{"nation", "region"},
+			[]string{"orders"},
+		), query.String())
+	})
+
+	t.Run("nullable side", func(t *testing.T) {
+		logicalPlan, err := runOneStmt(NewMockOptimizer(false), t, `
+			select n.n_nationkey, c.c_custkey, o.o_orderkey
+			from nation n
+			left join customer c on n.n_nationkey = c.c_nationkey
+			join orders o on c.c_custkey = o.o_custkey`)
+		require.NoError(t, err)
+
+		query := logicalPlan.GetQuery()
+		require.False(t, reachablePlanHasJoinType(query, planpb.Node_LEFT), query.String())
+		require.True(t, reachableJoinHasChildTableSets(
+			query,
+			planpb.Node_INNER,
+			[]string{"nation"},
+			[]string{"customer", "orders"},
+		), query.String())
+	})
+
+	t.Run("rollback hint preserves legacy outer shapes", func(t *testing.T) {
+		rt := runtime.ServiceRuntime("")
+		rt.SetGlobalVariables("optimizer_hints", "outerAntiPlanning=1")
+		defer rt.SetGlobalVariables("optimizer_hints", "")
+
+		preservedPlan, err := runOneStmt(NewMockOptimizer(false), t, `
+			select n.n_nationkey, o.o_orderkey
+			from nation n
+			left join orders o on n.n_nationkey = o.o_custkey
+			join region r on n.n_regionkey = r.r_regionkey`)
+		require.NoError(t, err)
+		require.True(t, reachableJoinHasChildTableSets(
+			preservedPlan.GetQuery(),
+			planpb.Node_INNER,
+			[]string{"nation", "orders"},
+			[]string{"region"},
+		), preservedPlan.GetQuery().String())
+
+		nullablePlan, err := runOneStmt(NewMockOptimizer(false), t, `
+			select n.n_nationkey, c.c_custkey, o.o_orderkey
+			from nation n
+			left join customer c on n.n_nationkey = c.c_nationkey
+			join orders o on c.c_custkey = o.o_custkey`)
+		require.NoError(t, err)
+		require.True(t, reachablePlanHasJoinType(nullablePlan.GetQuery(), planpb.Node_LEFT),
+			nullablePlan.GetQuery().String())
+		require.True(t, reachableJoinHasChildTableSets(
+			nullablePlan.GetQuery(),
+			planpb.Node_INNER,
+			[]string{"nation", "customer"},
+			[]string{"orders"},
+		), nullablePlan.GetQuery().String())
+	})
+}
 
 func TestOuterJoinPreservedSideAssociativity(t *testing.T) {
 	t.Run("moves unique inner join below left join", func(t *testing.T) {
@@ -298,4 +371,93 @@ func associativityStats(outcnt, selectivity float64) *planpb.Stats {
 			HashmapSize: 1,
 		},
 	}
+}
+
+func reachablePlanHasJoinType(query *planpb.Query, joinType planpb.Node_JoinType) bool {
+	for nodeID := range reachablePlanNodeIDs(query) {
+		node := query.Nodes[nodeID]
+		if node != nil && node.NodeType == planpb.Node_JOIN && node.JoinType == joinType {
+			return true
+		}
+	}
+	return false
+}
+
+func reachableJoinHasChildTableSets(
+	query *planpb.Query,
+	joinType planpb.Node_JoinType,
+	leftWant, rightWant []string,
+) bool {
+	for nodeID := range reachablePlanNodeIDs(query) {
+		node := query.Nodes[nodeID]
+		if node == nil || node.NodeType != planpb.Node_JOIN || node.JoinType != joinType ||
+			len(node.Children) != 2 {
+			continue
+		}
+		left := tableNamesBelow(query, node.Children[0], make(map[int32]bool))
+		right := tableNamesBelow(query, node.Children[1], make(map[int32]bool))
+		if (sameStrings(left, leftWant) && sameStrings(right, rightWant)) ||
+			(sameStrings(left, rightWant) && sameStrings(right, leftWant)) {
+			return true
+		}
+	}
+	return false
+}
+
+func reachablePlanNodeIDs(query *planpb.Query) map[int32]bool {
+	visited := make(map[int32]bool)
+	var visit func(int32)
+	visit = func(nodeID int32) {
+		if nodeID < 0 || int(nodeID) >= len(query.Nodes) || visited[nodeID] {
+			return
+		}
+		visited[nodeID] = true
+		node := query.Nodes[nodeID]
+		if node == nil {
+			return
+		}
+		for _, childID := range node.Children {
+			visit(childID)
+		}
+	}
+	for _, rootID := range query.Steps {
+		visit(rootID)
+	}
+	return visited
+}
+
+func tableNamesBelow(query *planpb.Query, nodeID int32, visited map[int32]bool) []string {
+	if nodeID < 0 || int(nodeID) >= len(query.Nodes) || visited[nodeID] {
+		return nil
+	}
+	visited[nodeID] = true
+	node := query.Nodes[nodeID]
+	if node == nil {
+		return nil
+	}
+	if node.NodeType == planpb.Node_TABLE_SCAN && node.TableDef != nil {
+		return []string{node.TableDef.Name}
+	}
+	result := make([]string, 0)
+	for _, childID := range node.Children {
+		result = append(result, tableNamesBelow(query, childID, visited)...)
+	}
+	sort.Strings(result)
+	return result
+}
+
+func sameStrings(got, want []string) bool {
+	got = append([]string(nil), got...)
+	want = append([]string(nil), want...)
+	sort.Strings(got)
+	sort.Strings(want)
+	if len(got) != len(want) {
+		return false
+	}
+	for i := range got {
+		if got[i] != want[i] {
+			return false
+		}
+	}
+	return true
 }
