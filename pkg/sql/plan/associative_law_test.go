@@ -76,6 +76,18 @@ func TestOuterJoinPreservedSideAssociativity(t *testing.T) {
 		require.Equal(t, int32(4), root)
 		require.Equal(t, []int32{3, 2}, builder.qry.Nodes[4].Children)
 	})
+
+	t.Run("keeps deterministic condition that can fail", func(t *testing.T) {
+		builder := newOuterJoinAssociativityBuilder(true, false)
+		builder.qry.Nodes[3].OnList = append(builder.qry.Nodes[3].OnList,
+			associativityUnsafeCastEqExpr(t, builder, 1, 2))
+
+		root := builder.applyOuterJoinPreservedSideRule(4)
+
+		require.Equal(t, int32(4), root)
+		require.Equal(t, []int32{3, 2}, builder.qry.Nodes[4].Children)
+		require.Equal(t, []int32{0, 1}, builder.qry.Nodes[3].Children)
+	})
 }
 
 func TestOuterJoinNullableSideAssociativity(t *testing.T) {
@@ -149,6 +161,20 @@ func TestOuterJoinNullableSideAssociativity(t *testing.T) {
 		require.Equal(t, int32(4), root)
 		require.Equal(t, planpb.Node_LEFT, builder.qry.Nodes[3].JoinType)
 	})
+
+	t.Run("keeps deterministic condition that can fail", func(t *testing.T) {
+		builder := newOuterJoinAssociativityBuilder(false, false)
+		builder.qry.Nodes[4].OnList = []*planpb.Expr{
+			associativityEqExpr(2, 3),
+			associativityUnsafeCastEqExpr(t, builder, 2, 3),
+		}
+
+		root := builder.applyOuterJoinNullableSideRule(4)
+
+		require.Equal(t, int32(4), root)
+		require.Equal(t, planpb.Node_LEFT, builder.qry.Nodes[3].JoinType)
+		require.Equal(t, []int32{3, 2}, builder.qry.Nodes[4].Children)
+	})
 }
 
 func newOuterJoinAssociativityBuilder(uniqueInner, commuteUpper bool) *QueryBuilder {
@@ -195,7 +221,10 @@ func newOuterJoinAssociativityBuilder(uniqueInner, commuteUpper bool) *QueryBuil
 		nodes[4].Children[0], nodes[4].Children[1] = nodes[4].Children[1], nodes[4].Children[0]
 	}
 
-	return &QueryBuilder{qry: &planpb.Query{Nodes: nodes}}
+	return &QueryBuilder{
+		qry:     &planpb.Query{Nodes: nodes},
+		compCtx: NewMockCompilerContext(true),
+	}
 }
 
 func associativityEqExpr(leftTag, rightTag int32) *planpb.Expr {
@@ -208,6 +237,28 @@ func associativityEqExpr(leftTag, rightTag int32) *planpb.Expr {
 			Args: []*planpb.Expr{GetColExpr(typ, leftTag, 0), GetColExpr(typ, rightTag, 0)},
 		}},
 	}
+}
+
+func associativityUnsafeCastEqExpr(
+	t *testing.T,
+	builder *QueryBuilder,
+	leftTag, rightTag int32,
+) *planpb.Expr {
+	t.Helper()
+	sourceType := planpb.Type{Id: int32(types.T_varchar)}
+	targetType := types.T_int64.ToType()
+	castExpr, err := makePlan2CastExpr(
+		builder.GetContext(),
+		GetColExpr(sourceType, leftTag, 0),
+		makePlan2Type(&targetType),
+	)
+	require.NoError(t, err)
+	equality, err := BindFuncExprImplByPlanExpr(builder.GetContext(), "=", []*planpb.Expr{
+		castExpr,
+		GetColExpr(planpb.Type{Id: int32(types.T_int64)}, rightTag, 0),
+	})
+	require.NoError(t, err)
+	return equality
 }
 
 func associativityStats(outcnt, selectivity float64) *planpb.Stats {

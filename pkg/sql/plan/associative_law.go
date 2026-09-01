@@ -121,13 +121,12 @@ func (builder *QueryBuilder) applyOuterJoinPreservedSideRule(nodeID int32) int32
 	for _, tag := range builder.enumerateTags(otherID) {
 		allowedTags[tag] = true
 	}
-	for _, cond := range node.OnList {
-		if !containsOnlyTags(cond, allowedTags) || ContainsVolatileFunction(cond) {
-			return nodeID
-		}
+	if !areTruncationSafePredicates(node.OnList) ||
+		!areTruncationSafePredicates(outer.OnList) {
+		return nodeID
 	}
-	for _, cond := range outer.OnList {
-		if ContainsVolatileFunction(cond) {
+	for _, cond := range node.OnList {
+		if !containsOnlyTags(cond, allowedTags) {
 			return nodeID
 		}
 	}
@@ -206,10 +205,14 @@ func (builder *QueryBuilder) applyOuterJoinNullableSideRule(nodeID int32) int32 
 	for _, tag := range builder.enumerateTags(otherID) {
 		allowedTags[tag] = true
 	}
+	if !areTruncationSafePredicates(node.OnList) ||
+		!areTruncationSafePredicates(outer.OnList) {
+		return nodeID
+	}
 
 	nullExtendedRowRejected := false
 	for _, cond := range node.OnList {
-		if !containsOnlyTags(cond, allowedTags) || ContainsVolatileFunction(cond) {
+		if !containsOnlyTags(cond, allowedTags) {
 			return nodeID
 		}
 		if equalityHasBareColumnFromTags(cond, nullableTags) {
@@ -219,12 +222,6 @@ func (builder *QueryBuilder) applyOuterJoinNullableSideRule(nodeID int32) int32 
 	if !nullExtendedRowRejected {
 		return nodeID
 	}
-	for _, cond := range outer.OnList {
-		if ContainsVolatileFunction(cond) {
-			return nodeID
-		}
-	}
-
 	node.Children[0] = nullableID
 	node.Children[1] = otherID
 	node.IsRightJoin = false
