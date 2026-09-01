@@ -1486,15 +1486,7 @@ func (c *Compile) compileSteps(qry *plan.Query, ss []*Scope, step int32) ([]*Sco
 	default:
 		var rs *Scope
 		if c.IsSingleScope(ss) {
-			// Output owns a callback created by this Compile and cannot be
-			// serialized for execution on another CN. Keep the result sink on
-			// its owner and return the remote child through the existing
-			// connector/merge path.
-			if ss[0].Magic == Remote && !ss[0].ipAddrMatch(c.addr) {
-				rs = c.newMergeScope(ss)
-			} else {
-				rs = ss[0]
-			}
+			rs = c.outputScope(ss)
 		} else {
 			ss = c.mergeShuffleScopesIfNeeded(ss, false)
 			rs = c.newMergeScope(ss)
@@ -1543,6 +1535,19 @@ func (c *Compile) compileSteps(qry *plan.Query, ss []*Scope, step int32) ([]*Sco
 		)
 		return []*Scope{rs}, nil
 	}
+}
+
+// outputScope selects the owner of a synchronous output callback. The callback
+// cannot be serialized to another CN, so a remote child is returned through the
+// ordinary connector/merge path. StreamRead uses this same boundary so a
+// blocked Flight acknowledgement propagates through native pipeline-edge
+// backpressure to the storage readers.
+func (c *Compile) outputScope(scopes []*Scope) *Scope {
+	if c.IsSingleScope(scopes) &&
+		(scopes[0].Magic != Remote || scopes[0].ipAddrMatch(c.addr)) {
+		return scopes[0]
+	}
+	return c.newMergeScope(scopes)
 }
 
 type sqlSelectLimitMaterialization struct {

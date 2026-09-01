@@ -32,7 +32,9 @@ import (
 var putStream = &grpc.StreamDesc{ServerStreams: true, ClientStreams: true}
 
 // NativeInput is one single-use, acknowledged MO-batch stream for a StreamRead.
-// Send returns only after the sidecar scan has fully consumed that batch.
+// Send returns only after Sirius owns a complete copy of that frame. Keeping the
+// callback synchronous propagates a withheld acknowledgement through the native
+// output pipeline to its storage readers.
 type NativeInput struct {
 	execution *Execution
 	streamRef []byte

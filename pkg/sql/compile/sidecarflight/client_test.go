@@ -314,7 +314,7 @@ func TestExecutionStreamsOneOwnedBatchAndCancelsOnWriterFailure(t *testing.T) {
 	require.NoError(t, runtime.Close(cleanupCtx))
 }
 
-func TestNativeInputStreamsOneConsumedBatchAtATime(t *testing.T) {
+func TestNativeInputStreamsOneAcknowledgedBatchAtATime(t *testing.T) {
 	server := &testFlightServer{
 		schema: mustHex(t, fixtureSchemaHex), ticket: make([]byte, ticketBytes), hash: make([]byte, sha256.Size),
 	}
@@ -438,7 +438,7 @@ func TestCloneNativeWindowHandlesConstAndRejectsImpossibleRows(t *testing.T) {
 	require.Equal(t, int64(0), mp.CurrNB())
 }
 
-func TestNativeInputAbortCancelsBlockedAcknowledgement(t *testing.T) {
+func TestNativeInputBackpressureSerializesFramesAndAbortReleasesWaiters(t *testing.T) {
 	server := &testFlightServer{
 		schema: mustHex(t, fixtureSchemaHex), ticket: make([]byte, ticketBytes), hash: make([]byte, sha256.Size),
 		doPutBatch: make(chan struct{}), blockDoPutAck: make(chan struct{}),
@@ -464,20 +464,34 @@ func TestNativeInputAbortCancelsBlockedAcknowledgement(t *testing.T) {
 	}
 	bat.SetRowCount(20)
 	defer bat.Clean(mp)
-	sendDone := make(chan error, 1)
-	go func() { sendDone <- input.Send(context.Background(), bat, mp) }()
+	firstDone := make(chan error, 1)
+	go func() { firstDone <- input.Send(context.Background(), bat, mp) }()
 	select {
 	case <-server.doPutBatch:
 	case <-time.After(time.Second):
 		t.Fatal("native input batch did not reach the server")
 	}
+	secondStarted := make(chan struct{})
+	secondDone := make(chan error, 1)
+	go func() {
+		close(secondStarted)
+		secondDone <- input.Send(context.Background(), bat, mp)
+	}()
+	<-secondStarted
 	input.Abort(errors.New("injected cancellation"))
-	select {
-	case sendErr := <-sendDone:
-		require.Error(t, sendErr)
-	case <-time.After(time.Second):
-		t.Fatal("Abort did not release the blocked acknowledgement")
+	for name, done := range map[string]<-chan error{
+		"first frame":  firstDone,
+		"second frame": secondDone,
+	} {
+		select {
+		case sendErr := <-done:
+			require.Error(t, sendErr, name)
+		case <-time.After(time.Second):
+			t.Fatalf("Abort did not release %s", name)
+		}
 	}
+	require.Equal(t, int32(1), server.doPutBatches.Load(),
+		"the second Send must remain behind the first frame's acknowledgement")
 }
 
 func TestNativeInputRetireCancelsBlockedAcknowledgementWithoutError(t *testing.T) {

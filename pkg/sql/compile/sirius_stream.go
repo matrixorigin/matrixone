@@ -224,18 +224,27 @@ func (c *Compile) compileSiriusStreamScopes(
 		if node.Limit != nil {
 			scans = c.compileLimit(node, scans)
 		}
-		root := c.newMergeScope(scans)
+		root := c.outputScope(scans)
 		roots = append(roots, root)
 		nativeInput, err := execution.NewNativeInput(spec.StreamRef)
 		if err != nil {
 			return nil, nil, err
 		}
-		root.setRootOperator(output.NewArgument().WithFunc(func(bat *batch.Batch, _ *perfcounter.CounterSet) error {
-			if bat == nil {
-				return nativeInput.Finish(c.proc.Ctx)
-			}
-			return nativeInput.Send(c.proc.Ctx, bat, c.proc.Mp())
-		}).WithShouldStop(nativeInput.NotNeeded))
+		root.setRootOperator(
+			output.NewArgument().
+				WithFunc(func(bat *batch.Batch, _ *perfcounter.CounterSet) error {
+					if bat == nil {
+						return nativeInput.Finish(c.proc.Ctx)
+					}
+					// Send is intentionally synchronous. A withheld sidecar
+					// acknowledgement blocks Output.Call, which fills the same
+					// bounded pipeline edge used by native query output and stops
+					// connectors before they call the storage reader again.
+					return nativeInput.Send(c.proc.Ctx, bat, c.proc.Mp())
+				}).
+				WithBlock(false).
+				WithShouldStop(nativeInput.NotNeeded),
+		)
 		inputs = append(inputs, nativeInput)
 	}
 	succeeded = true

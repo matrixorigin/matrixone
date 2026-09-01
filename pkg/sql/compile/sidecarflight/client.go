@@ -42,7 +42,7 @@ const (
 	doActionMethod           = flightService + "DoAction"
 	commandDescriptor        = int32(2)
 	ticketBytes              = 32
-	protocolVersion          = uint32(5)
+	protocolVersion          = uint32(4)
 	substraitVersion         = "0.78.0"
 	maxNativeInputBatchBytes = uint64(4 << 20)
 	maxNativeInputs          = 16
