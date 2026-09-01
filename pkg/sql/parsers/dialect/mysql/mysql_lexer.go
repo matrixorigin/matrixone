@@ -316,7 +316,7 @@ func (l *Lexer) Lex(lval *yySymType) int {
 	// CONFIG is a MatrixOne contextual keyword used by SHOW CONFIG and ALTER
 	// ACCOUNT CONFIG. MySQL otherwise treats it as a non-reserved identifier.
 	if typ == CONFIG && l.lastToken != SHOW &&
-		!(l.previousToken == ALTER && l.lastToken == ACCOUNT) {
+		!(l.previousToken == ALTER && l.lastToken == ACCOUNT && l.alterAccountConfigPhraseAhead()) {
 		typ = ID
 	}
 	// ASOF stays contextual. The grammar resolves whether the phrase starts a
@@ -332,6 +332,25 @@ func (l *Lexer) Lex(lval *yySymType) int {
 	lval.str = str
 	l.recordSyntaxToken(typ)
 	return typ
+}
+
+func (l *Lexer) alterAccountConfigPhraseAhead() bool {
+	lookahead := *l.scanner
+
+	// ALTER ACCOUNT CONFIG SET MYSQL_COMPATIBILITY_MODE ...
+	next, _ := lookahead.Scan()
+	if next == SET {
+		next, _ = lookahead.Scan()
+		return next == MYSQL_COMPATIBILITY_MODE
+	}
+
+	// ALTER ACCOUNT CONFIG account_name SET MYSQL_COMPATIBILITY_MODE ...
+	next, _ = lookahead.Scan()
+	if next != SET {
+		return false
+	}
+	next, _ = lookahead.Scan()
+	return next == MYSQL_COMPATIBILITY_MODE
 }
 
 func (l *Lexer) asofJoinPhraseAhead() bool {

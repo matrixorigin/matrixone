@@ -96,6 +96,12 @@ func TestConfigIsNonReservedIdentifier(t *testing.T) {
 	require.NoError(t, err)
 	_, err = ParseOne(context.Background(), "alter account config set MYSQL_COMPATIBILITY_MODE a = 1", 1)
 	require.NoError(t, err)
+	_, err = ParseOne(context.Background(), "alter account config tenant1 set MYSQL_COMPATIBILITY_MODE = '1'", 1)
+	require.NoError(t, err)
+	_, err = ParseOne(context.Background(), "create account config admin_name = admin identified by 'Passw0rd'", 1)
+	require.NoError(t, err)
+	_, err = ParseOne(context.Background(), "alter account config suspend", 1)
+	require.NoError(t, err)
 	_, err = ParseOne(context.Background(), "select account config from t", 1)
 	require.NoError(t, err)
 }
