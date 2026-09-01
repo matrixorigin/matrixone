@@ -238,7 +238,6 @@ func viewMetadataCatalogUpgradeEntries() []versions.UpgradeEntry {
 		{name: catalog.MO_VIEW_DEPENDENCIES, ddl: catalog.MoViewDependenciesDDL},
 		{name: catalog.MO_VIEW_REFRESH, ddl: catalog.MoViewRefreshDDL},
 	} {
-		table := table
 		entries = append(entries, versions.UpgradeEntry{
 			Schema:    catalog.MO_CATALOG,
 			TableName: table.name,
