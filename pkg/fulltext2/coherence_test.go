@@ -121,7 +121,7 @@ func TestFenceRegistryMonotonicClaimAndOutOfOrder(t *testing.T) {
 	require.True(t, r.required(id).AtLeast(g2))
 }
 
-func TestFenceRegistryReclaimsClaimedFenceOnlyIntoTransientIdentity(t *testing.T) {
+func TestFenceRegistryReclaimsClaimingFenceIntoTransientIdentity(t *testing.T) {
 	r := newFenceRegistry(1)
 	a := CacheIdentity{AccountID: 1, Database: "db", StorageTable: "a", MetadataTable: "ma"}
 	b := CacheIdentity{AccountID: 1, Database: "db", StorageTable: "b", MetadataTable: "mb"}
@@ -131,21 +131,16 @@ func TestFenceRegistryReclaimsClaimedFenceOnlyIntoTransientIdentity(t *testing.T
 	require.True(t, claim)
 	require.False(t, overflow)
 	claim, _, overflow = r.install(b, g)
-	require.False(t, claim)
-	require.True(t, overflow)
-	require.Equal(t, g, r.required(a))
-	require.Zero(t, r.required(b))
-
-	require.True(t, r.finishClaim(a, g))
-	claim, _, overflow = r.install(b, g)
 	require.True(t, claim)
 	require.False(t, overflow)
 	require.Zero(t, r.required(a))
 	require.Equal(t, g, r.required(b))
 	require.True(t, r.retiredIdentity(a))
+	require.False(t, r.finishClaim(a, g), "a reclaimed generation must not complete after b reuses the slot")
+	require.True(t, r.finishClaim(b, g))
 }
 
-func TestInstallGenerationFenceOverflowRecoversWithoutGlobalPublication(t *testing.T) {
+func TestInstallGenerationFenceCapacityReclaimsInFlightIdentity(t *testing.T) {
 	oldRegistry := localFences
 	oldCache := veccache.Cache
 	oldEpoch := coherenceEpoch.Load()
@@ -164,19 +159,14 @@ func TestInstallGenerationFenceOverflowRecoversWithoutGlobalPublication(t *testi
 	require.True(t, claim)
 	require.False(t, overflow)
 
-	before := coherenceEpoch.Load()
-	_, claimed, overflow := InstallGenerationFence(b, g)
-	require.False(t, claimed)
-	require.True(t, overflow)
-	require.Equal(t, before+1, coherenceEpoch.Load())
-
-	require.True(t, localFences.finishClaim(a, g))
 	current, claimed, overflow := InstallGenerationFence(b, g)
 	require.Equal(t, g, current)
 	require.True(t, claimed)
 	require.False(t, overflow)
+	require.Equal(t, oldEpoch, coherenceEpoch.Load())
 	require.Zero(t, localFences.required(a))
 	require.True(t, requiresTransientLoad(a))
+	require.False(t, localFences.finishClaim(a, g))
 
 	search := NewFulltext2SearchForAccount(a.TableConfig(), a.AccountID)
 	transient, err := search.UseTransientLoad(nil)

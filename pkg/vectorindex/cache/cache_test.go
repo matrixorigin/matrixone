@@ -25,12 +25,16 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
+	metricv2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/sqlexec"
+	promtestutil "github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/stretchr/testify/require"
 
 	usearch "github.com/unum-cloud/usearch/golang"
 )
+
+const fastStaleRegistryTestSize = 1024
 
 type MockSearch struct {
 	Idxcfg vectorindex.IndexConfig
@@ -186,6 +190,21 @@ type fastStaleSearch struct {
 	tracker *staleSweepTracker
 }
 
+type scriptedFastStaleSearch struct {
+	MockSearch
+	stale bool
+	err   error
+}
+
+type controlledFastStaleSearch struct {
+	MockSearch
+	entered chan struct{}
+	release chan struct{}
+	once    sync.Once
+	stale   bool
+	err     error
+}
+
 type historicalStaleSearch struct {
 	MockSearch
 	checks atomic.Int32
@@ -263,6 +282,28 @@ func (m *fastStaleSearch) IsStaleWithContext(ctx context.Context) (bool, error) 
 		return true, ctx.Err()
 	case <-m.tracker.release:
 		return true, nil
+	}
+}
+
+func (m *scriptedFastStaleSearch) IsStale() (bool, error) {
+	return m.stale, m.err
+}
+
+func (m *scriptedFastStaleSearch) IsStaleWithContext(context.Context) (bool, error) {
+	return m.stale, m.err
+}
+
+func (m *controlledFastStaleSearch) IsStale() (bool, error) {
+	return m.IsStaleWithContext(context.Background())
+}
+
+func (m *controlledFastStaleSearch) IsStaleWithContext(ctx context.Context) (bool, error) {
+	m.once.Do(func() { close(m.entered) })
+	select {
+	case <-ctx.Done():
+		return false, ctx.Err()
+	case <-m.release:
+		return m.stale, m.err
 	}
 }
 
@@ -349,7 +390,9 @@ func TestClaimRemoveDefersInFlightLoadDestructionWithoutBlocking(t *testing.T) {
 func TestFastStaleSweepIsSingleFlightBoundedAndEvictsImmediately(t *testing.T) {
 	proc := sqlexec.NewSqlProcess(testutil.NewProcessWithMPool(t, "", mpool.MustNewZero()))
 	c := NewVectorIndexCache()
+	c.fastStaleTimeout = 50 * time.Millisecond
 	tracker := &staleSweepTracker{release: make(chan struct{})}
+	t.Cleanup(func() { close(tracker.release) })
 	for i := 0; i < 17; i++ {
 		key := fmt.Sprintf("fulltext2:%d", i)
 		_, _, err := c.Search(proc, key, &fastStaleSearch{tracker: tracker}, nil, vectorindex.RuntimeConfig{})
@@ -362,12 +405,148 @@ func TestFastStaleSweepIsSingleFlightBoundedAndEvictsImmediately(t *testing.T) {
 	require.False(t, c.startStaleCheck(ctx, true))
 	require.Eventually(t, func() bool { return tracker.started.Load() == 16 }, time.Second, time.Millisecond)
 	require.Equal(t, int32(16), tracker.maximum.Load())
-	close(tracker.release)
 	require.Eventually(t, func() bool { return !c.fastStaleChecking.Load() }, time.Second, time.Millisecond)
-	require.Equal(t, int32(17), tracker.started.Load())
+	require.Equal(t, int32(16), tracker.started.Load())
 	for i := 0; i < 17; i++ {
 		_, ok := c.IndexMap.Load(fmt.Sprintf("fulltext2:%d", i))
 		require.False(t, ok)
+	}
+}
+
+func TestFastStaleSweepBoundsWholeRegistry(t *testing.T) {
+	proc := sqlexec.NewSqlProcess(testutil.NewProcessWithMPool(t, "", mpool.MustNewZero()))
+	c := NewVectorIndexCache()
+	c.fastStaleTimeout = 50 * time.Millisecond
+	tracker := &staleSweepTracker{release: make(chan struct{})}
+	t.Cleanup(func() { close(tracker.release) })
+	beforeDeadline := promtestutil.ToFloat64(metricv2.VectorIndexCacheFreshnessSweepEntriesCounter.WithLabelValues(freshnessOutcomeDeadline))
+	for i := 0; i < fastStaleRegistryTestSize; i++ {
+		key := fmt.Sprintf("fulltext2:blocked:%d", i)
+		_, _, err := c.Search(proc, key, &fastStaleSearch{tracker: tracker}, nil, vectorindex.RuntimeConfig{})
+		require.NoError(t, err)
+	}
+
+	started := time.Now()
+	stats := c.checkStale(context.Background(), true)
+	require.Less(t, time.Since(started), time.Second)
+	require.Equal(t, fastStaleCheckConcurrency, int(tracker.started.Load()))
+	require.Equal(t, int32(fastStaleCheckConcurrency), tracker.maximum.Load())
+	require.Equal(t, fastStaleRegistryTestSize, stats.deadline)
+	require.Equal(t, fastStaleRegistryTestSize, stats.fresh+stats.stale+stats.queryError+stats.deadline)
+	require.Equal(t, beforeDeadline+fastStaleRegistryTestSize,
+		promtestutil.ToFloat64(metricv2.VectorIndexCacheFreshnessSweepEntriesCounter.WithLabelValues(freshnessOutcomeDeadline)))
+	require.Zero(t, stats.fresh)
+	require.Zero(t, stats.stale)
+	require.Zero(t, stats.queryError)
+	for i := 0; i < fastStaleRegistryTestSize; i++ {
+		_, ok := c.IndexMap.Load(fmt.Sprintf("fulltext2:blocked:%d", i))
+		require.False(t, ok)
+	}
+}
+
+func TestFastStaleSweepChecksWholeFreshRegistry(t *testing.T) {
+	proc := sqlexec.NewSqlProcess(testutil.NewProcessWithMPool(t, "", mpool.MustNewZero()))
+	c := NewVectorIndexCache()
+	for i := 0; i < fastStaleRegistryTestSize; i++ {
+		key := fmt.Sprintf("fulltext2:fresh:%d", i)
+		_, _, err := c.Search(proc, key, &scriptedFastStaleSearch{}, nil, vectorindex.RuntimeConfig{})
+		require.NoError(t, err)
+	}
+
+	stats := c.checkStale(context.Background(), true)
+	require.Equal(t, fastStaleRegistryTestSize, stats.fresh)
+	require.Zero(t, stats.stale)
+	require.Zero(t, stats.queryError)
+	require.Zero(t, stats.deadline)
+	for i := 0; i < fastStaleRegistryTestSize; i++ {
+		_, ok := c.IndexMap.Load(fmt.Sprintf("fulltext2:fresh:%d", i))
+		require.True(t, ok)
+	}
+}
+
+func TestFastStaleSweepRecordsTerminalOutcomes(t *testing.T) {
+	proc := sqlexec.NewSqlProcess(testutil.NewProcessWithMPool(t, "", mpool.MustNewZero()))
+	c := NewVectorIndexCache()
+	beforeFresh := promtestutil.ToFloat64(metricv2.VectorIndexCacheFreshnessSweepEntriesCounter.WithLabelValues(freshnessOutcomeFresh))
+	beforeStale := promtestutil.ToFloat64(metricv2.VectorIndexCacheFreshnessSweepEntriesCounter.WithLabelValues(freshnessOutcomeStale))
+	beforeError := promtestutil.ToFloat64(metricv2.VectorIndexCacheFreshnessSweepEntriesCounter.WithLabelValues(freshnessOutcomeQueryError))
+
+	for key, algo := range map[string]*scriptedFastStaleSearch{
+		"fulltext2:outcome:fresh": {},
+		"fulltext2:outcome:stale": {stale: true},
+		"fulltext2:outcome:error": {err: moerr.NewInternalErrorNoCtx("freshness query failed")},
+	} {
+		_, _, err := c.Search(proc, key, algo, nil, vectorindex.RuntimeConfig{})
+		require.NoError(t, err)
+	}
+
+	stats := c.checkStale(context.Background(), true)
+	require.Equal(t, freshnessSweepStats{fresh: 1, stale: 1, queryError: 1}, stats)
+	require.Equal(t, beforeFresh+1, promtestutil.ToFloat64(metricv2.VectorIndexCacheFreshnessSweepEntriesCounter.WithLabelValues(freshnessOutcomeFresh)))
+	require.Equal(t, beforeStale+1, promtestutil.ToFloat64(metricv2.VectorIndexCacheFreshnessSweepEntriesCounter.WithLabelValues(freshnessOutcomeStale)))
+	require.Equal(t, beforeError+1, promtestutil.ToFloat64(metricv2.VectorIndexCacheFreshnessSweepEntriesCounter.WithLabelValues(freshnessOutcomeQueryError)))
+	metricCount, err := promtestutil.GatherAndCount(metricv2.GetPrometheusGatherer(), "mo_vector_index_cache_freshness_sweep_duration_seconds")
+	require.NoError(t, err)
+	require.Equal(t, 1, metricCount)
+}
+
+func TestFastStaleSweepDoesNotEvictReplacement(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		stale   bool
+		err     error
+		release bool
+		outcome string
+		timeout time.Duration
+	}{
+		{name: "stale", stale: true, release: true, outcome: freshnessOutcomeStale},
+		{name: "query-error", err: moerr.NewInternalErrorNoCtx("freshness query failed"), release: true, outcome: freshnessOutcomeQueryError},
+		{name: "deadline", outcome: freshnessOutcomeDeadline, timeout: 50 * time.Millisecond},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			proc := sqlexec.NewSqlProcess(testutil.NewProcessWithMPool(t, "", mpool.MustNewZero()))
+			c := NewVectorIndexCache()
+			if tc.timeout > 0 {
+				c.fastStaleTimeout = tc.timeout
+			}
+			old := &controlledFastStaleSearch{
+				entered: make(chan struct{}), release: make(chan struct{}), stale: tc.stale, err: tc.err,
+			}
+			key := "fulltext2:replacement:" + tc.name
+			_, _, err := c.Search(proc, key, old, nil, vectorindex.RuntimeConfig{})
+			require.NoError(t, err)
+
+			done := make(chan freshnessSweepStats, 1)
+			go func() { done <- c.checkStale(context.Background(), true) }()
+			select {
+			case <-old.entered:
+			case <-time.After(time.Second):
+				t.Fatal("freshness check did not reach the old entry")
+			}
+			c.ClaimRemoveWithReason(key, "generation_changed")
+			_, _, err = c.Search(proc, key, &scriptedFastStaleSearch{}, nil, vectorindex.RuntimeConfig{})
+			require.NoError(t, err)
+			replacement, ok := c.IndexMap.Load(key)
+			require.True(t, ok)
+			if tc.release {
+				close(old.release)
+			}
+			stats := <-done
+			if !tc.release {
+				close(old.release)
+			}
+			switch tc.outcome {
+			case freshnessOutcomeStale:
+				require.Equal(t, 1, stats.stale)
+			case freshnessOutcomeQueryError:
+				require.Equal(t, 1, stats.queryError)
+			case freshnessOutcomeDeadline:
+				require.Equal(t, 1, stats.deadline)
+			}
+			current, ok := c.IndexMap.Load(key)
+			require.True(t, ok)
+			require.Same(t, replacement, current)
+		})
 	}
 }
 

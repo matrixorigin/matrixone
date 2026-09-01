@@ -124,15 +124,14 @@ func (r *fenceRegistry) retiredIdentity(id CacheIdentity) bool {
 	return true
 }
 
-// reclaimClaimedLocked retires one claimed lower bound before removing it.
-// Retired identities remain queryable but are never published globally again.
-func (r *fenceRegistry) reclaimClaimedLocked() bool {
+// reclaimOldestLocked retires the least-recently-used lower bound before
+// removing it. The entry may still have an eviction claim in flight; retiring
+// the identity makes that late claim fail closed and prevents its generation
+// from ever being published globally again.
+func (r *fenceRegistry) reclaimOldestLocked() bool {
 	var oldestKey string
 	var oldest uint64
 	for key, entry := range r.entries {
-		if !entry.claimed || entry.claiming {
-			continue
-		}
 		if oldestKey == "" || entry.lastUsed < oldest {
 			oldestKey, oldest = key, entry.lastUsed
 		}
@@ -169,7 +168,7 @@ func (r *fenceRegistry) install(id CacheIdentity, generation Generation) (bool, 
 		entry.claiming = true
 		return true, entry.required, false
 	}
-	if len(r.entries) >= r.max && !r.reclaimClaimedLocked() {
+	if len(r.entries) >= r.max && !r.reclaimOldestLocked() {
 		return false, Generation{}, true
 	}
 	r.entries[key] = &fenceEntry{required: generation, claiming: true, lastUsed: r.clock}

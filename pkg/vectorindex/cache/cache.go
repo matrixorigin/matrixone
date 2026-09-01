@@ -27,13 +27,24 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	metricv2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/sqlexec"
 )
 
 const (
 	defaultStalenessCheckInterval = 30 * time.Second
+	defaultFastStaleCheckTimeout  = 30 * time.Second
+	defaultStaleEntryTimeout      = 5 * time.Second
+	fastStaleCheckConcurrency     = 16
 	stalenessCheckEveryNTicks     = 4
+)
+
+const (
+	freshnessOutcomeFresh      = "fresh"
+	freshnessOutcomeStale      = "stale"
+	freshnessOutcomeQueryError = "query_error"
+	freshnessOutcomeDeadline   = "deadline"
 )
 
 /*
@@ -502,12 +513,14 @@ type VectorIndexCache struct {
 	staleChecking      atomic.Bool // single-flight guard for the historical vector-index sweep
 	fastStaleChecking  atomic.Bool // independent FULLTEXT2 30-second sweep
 	staleCancel        context.CancelFunc
+	fastStaleTimeout   time.Duration
 }
 
 func NewVectorIndexCache() *VectorIndexCache {
 	c := &VectorIndexCache{}
 	c.TickerInterval = VectorIndexCacheTTL / 2
 	c.StaleCheckInterval = defaultStalenessCheckInterval
+	c.fastStaleTimeout = defaultFastStaleCheckTimeout
 	return c
 }
 
@@ -644,13 +657,42 @@ func (c *VectorIndexCache) startStaleCheck(ctx context.Context, fast bool) bool 
 	return true
 }
 
-func (c *VectorIndexCache) checkStale(ctx context.Context, fast bool) {
-	type staleEntry struct {
-		s   *VectorIndexSearch
-		sc  StaleChecker
-		key any
+type staleCheckEntry struct {
+	s   *VectorIndexSearch
+	sc  StaleChecker
+	key string
+}
+
+type freshnessSweepStats struct {
+	fresh      int
+	stale      int
+	queryError int
+	deadline   int
+}
+
+func (s *freshnessSweepStats) record(outcome string) {
+	switch outcome {
+	case freshnessOutcomeFresh:
+		s.fresh++
+	case freshnessOutcomeStale:
+		s.stale++
+	case freshnessOutcomeQueryError:
+		s.queryError++
+	case freshnessOutcomeDeadline:
+		s.deadline++
 	}
-	entries := make([]staleEntry, 0, 16)
+	metricv2.VectorIndexCacheFreshnessSweepEntriesCounter.WithLabelValues(outcome).Inc()
+}
+
+func (s *freshnessSweepStats) add(other freshnessSweepStats) {
+	s.fresh += other.fresh
+	s.stale += other.stale
+	s.queryError += other.queryError
+	s.deadline += other.deadline
+}
+
+func (c *VectorIndexCache) checkStale(ctx context.Context, fast bool) freshnessSweepStats {
+	entries := make([]staleCheckEntry, 0, 16)
 	c.IndexMap.Range(func(key, value any) bool {
 		algo := value.(*VectorIndexSearch)
 		if algo.Status.Load() != STATUS_LOADED {
@@ -662,14 +704,14 @@ func (c *VectorIndexCache) checkStale(ctx context.Context, fast bool) {
 		}
 		_, contextAware := sc.(contextStaleChecker)
 		if contextAware == fast {
-			entries = append(entries, staleEntry{algo, sc, key})
+			entries = append(entries, staleCheckEntry{algo, sc, key.(string)})
 		}
 		return true
 	})
 	if !fast {
 		for _, e := range entries {
 			if c.exited.Load() || ctx.Err() != nil {
-				return
+				return freshnessSweepStats{}
 			}
 			stale, err := e.sc.IsStale()
 			if err != nil {
@@ -679,42 +721,81 @@ func (c *VectorIndexCache) checkStale(ctx context.Context, fast bool) {
 				e.s.markStale()
 			}
 		}
-		return
+		return freshnessSweepStats{}
 	}
-	sem := make(chan struct{}, 16)
+	return c.checkFastStale(ctx, entries)
+}
+
+func (c *VectorIndexCache) checkFastStale(ctx context.Context, entries []staleCheckEntry) freshnessSweepStats {
+	started := time.Now()
+	timeout := c.fastStaleTimeout
+	if timeout <= 0 {
+		timeout = defaultFastStaleCheckTimeout
+	}
+	sweepCtx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+
+	workerCount := min(fastStaleCheckConcurrency, len(entries))
+	workerStats := make(chan freshnessSweepStats, workerCount)
+	var next atomic.Uint64
 	var wg sync.WaitGroup
-	for _, e := range entries {
-		select {
-		case <-ctx.Done():
-			wg.Wait()
-			return
-		case sem <- struct{}{}:
-		}
+	for i := 0; i < workerCount; i++ {
 		wg.Add(1)
-		go func(e staleEntry) {
+		go func() {
 			defer wg.Done()
-			defer func() { <-sem }()
-			checkCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
-			defer cancel()
-			var stale bool
-			var err error
-			if checker, ok := e.sc.(contextStaleChecker); ok {
-				stale, err = checker.IsStaleWithContext(checkCtx)
-			} else {
-				stale, err = e.sc.IsStale()
+			var stats freshnessSweepStats
+			defer func() { workerStats <- stats }()
+			for {
+				i := int(next.Add(1) - 1)
+				if i >= len(entries) {
+					return
+				}
+				e := entries[i]
+				if sweepCtx.Err() != nil {
+					c.claimRemoveEntryWithReason(e.key, e.s, "generation_changed")
+					stats.record(freshnessOutcomeDeadline)
+					continue
+				}
+				stats.record(c.checkFastStaleEntry(sweepCtx, e))
 			}
-			if err != nil {
-				// A query error usually means the index was dropped/rebuilt out from under us —
-				// IsStale returns stale=true so the dead entry is reclaimed; log the cause.
-				logutil.Warnf("[veccache] IsStale for index %v errored (treating as stale): %v", e.key, err)
-			}
-			if stale {
-				logutil.Infof("[veccache] index %v is stale — claiming eviction in freshness sweep", e.key)
-				c.ClaimRemoveWithReason(e.key.(string), "generation_changed")
-			}
-		}(e)
+		}()
 	}
 	wg.Wait()
+	close(workerStats)
+
+	var stats freshnessSweepStats
+	for worker := range workerStats {
+		stats.add(worker)
+	}
+	duration := time.Since(started)
+	metricv2.VectorIndexCacheFreshnessSweepDurationHistogram.Observe(duration.Seconds())
+	if stats.queryError > 0 || stats.deadline > 0 {
+		logutil.Warnf("[veccache] freshness sweep completed: entries=%d fresh=%d stale=%d query_error=%d deadline=%d duration=%s",
+			len(entries), stats.fresh, stats.stale, stats.queryError, stats.deadline, duration)
+	} else {
+		logutil.Debugf("[veccache] freshness sweep completed: entries=%d fresh=%d stale=%d duration=%s",
+			len(entries), stats.fresh, stats.stale, duration)
+	}
+	return stats
+}
+
+func (c *VectorIndexCache) checkFastStaleEntry(ctx context.Context, e staleCheckEntry) string {
+	checkCtx, cancel := context.WithTimeout(ctx, defaultStaleEntryTimeout)
+	defer cancel()
+	checker := e.sc.(contextStaleChecker)
+	stale, err := checker.IsStaleWithContext(checkCtx)
+	if err != nil {
+		c.claimRemoveEntryWithReason(e.key, e.s, "generation_changed")
+		if checkCtx.Err() != nil {
+			return freshnessOutcomeDeadline
+		}
+		return freshnessOutcomeQueryError
+	}
+	if stale {
+		c.claimRemoveEntryWithReason(e.key, e.s, "generation_changed")
+		return freshnessOutcomeStale
+	}
+	return freshnessOutcomeFresh
 }
 
 // destroy the cache
@@ -936,12 +1017,19 @@ func (c *VectorIndexCache) RemoveWithReason(key, reason string) {
 // unique cleanup owner. FULLTEXT2 generation fences use this path so an RPC ACK means the
 // admission barrier is installed, not that pre-claim queries were canceled.
 func (c *VectorIndexCache) ClaimRemoveWithReason(key, reason string) {
+	c.claimRemoveEntryWithReason(key, nil, reason)
+}
+
+// claimRemoveEntryWithReason is the snapshot-safe form used by freshness
+// sweeps. A result obtained from an old entry must not evict a replacement that
+// was published under the same key while the check was in flight.
+func (c *VectorIndexCache) claimRemoveEntryWithReason(key string, expected *VectorIndexSearch, reason string) {
 	value, loaded := c.IndexMap.Load(key)
 	if !loaded {
 		return
 	}
 	algo, ok := value.(*VectorIndexSearch)
-	if !ok || !algo.beginEviction(false) {
+	if !ok || (expected != nil && algo != expected) || !algo.beginEviction(false) {
 		return
 	}
 	value, loaded = c.IndexMap.Load(key)

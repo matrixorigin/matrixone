@@ -9,7 +9,7 @@ append currently removes only the writer CN's entry, so another CN can continue
 to serve the old `(base timestamp, tail chunk)` generation until the periodic
 pull notices it.
 
-After the tail transaction commits generation `G`, every live v41 CN must install
+After the tail transaction commits generation `G`, every live v43 CN must install
 `required(identity) >= G` before acknowledging the notification.  After a CN
 claims eviction for `G`, no new MATCH load or search may publish or acquire an
 object whose durable generation is lower than `required(identity)`.  Searches
@@ -49,19 +49,20 @@ combine values from two statements.
 Each process owns a bounded registry keyed by `CacheIdentity.Key()`:
 
 ```
-absent -> required=G, pending -> claiming -> claimed
-claimed(G) -- newer H--> pending(H)
-pending/claimed(G) -- older/equal--> unchanged
+absent -> required=G, claiming -> claimed
+claimed(G) -- newer H--> claiming(H)
+claiming/claimed(G) -- older/equal--> unchanged
 ```
 
-Only one caller may claim a pending generation.  It first advances the reusable
+Only one caller may claim a generation.  It first advances the reusable
 load-generation epoch, then removes the exact cache key, then marks the current
 required generation claimed.  Equal, duplicate, old, and no-cache deliveries
 are idempotent.  If a newer generation arrives during a claim, the old claim
 does not mark the newer generation complete.
 
-The registry keeps at most 1024 exact entries.  A claimed lower bound is not
-simply forgotten: before reclaim, its identity is added to a fixed 16-Kbit,
+The registry keeps at most 1024 exact entries.  A lower bound is not simply
+forgotten: before reclaiming the least-recently-used entry, including one whose
+eviction claim is still in flight, its identity is added to a fixed 16-Kbit,
 process-randomized retired Bloom filter.  A transaction may have fixed an older
 snapshot before the claim and start its first MATCH only later, so every retired
 identity bypasses the process-global cache permanently for that process.  It is
@@ -71,12 +72,13 @@ that a later transaction could acquire.  Bloom false positives only disable
 caching for an additional FULLTEXT2 identity; they do not change results or
 availability.  DROP/recreate remains isolated by new hidden-table identities.
 
-If every exact slot is still pending, installation remains fail-closed: it
-bumps a process-wide FULLTEXT2 epoch, non-blockingly claims every visible
-`fulltext2:` cache entry, and returns no ACK.  Existing pending fences stay in
-their slots.  A load begun before the bump fails its pre-publish epoch check;
-after a claim completes, the sender retry can retire that lower bound and
-install the omitted identity without a process restart.
+When the registry is full, it retires and reclaims the least-recently-used
+identity before inserting the incoming identity.  The incoming lower bound is
+therefore always recorded.  A late `finishClaim` for the reclaimed identity
+fails because its exact entry no longer exists, so that RPC is not ACKed; the
+retired filter keeps subsequent loads for that identity transient and
+fail-closed.  This avoids both an unbounded pending map and an overflow window
+in which a new identity has no required generation.
 
 A load reads its durable generation before data and checks the registry both
 after the generation read and immediately before publishing its `Index`.  A
@@ -87,12 +89,12 @@ retry contract.
 
 ## Push protocol and ownership
 
-MORPC v41 adds method 40 and request/response fields 42/43.  The request carries
+MORPC v43 adds method 40 and request/response fields 42/43.  The request carries
 the four identity components and two generation components.  A receiver first
 installs the monotonic requirement, then claims eviction.  It responds with its
 current required generation and `EvictionClaimed`.  The sender records ACK only
 when the returned generation is not lower than the request and the claim flag is
-true.  MORPC v40 receivers and unknown methods are failures, never ACKs.
+true.  MORPC v42 receivers and unknown methods are failures, never ACKs.
 
 Each CN service owns one publisher and injects it into the ISCP executor
 factory.  The publisher has a 1024-identity coalescing queue, four broadcast
@@ -128,8 +130,15 @@ workers to exit, and closes the query client last.
 
 ## Pull recovery and lifecycle
 
-The cache runs a 30-second single-flight freshness sweep, with at most sixteen
-checks and a five-second context per entry.  A higher durable generation is
+The cache runs a single-flight freshness sweep with a 30-second whole-sweep
+deadline, sixteen fixed workers, and a five-second per-entry context clipped by
+the remaining sweep deadline.  Fresh entries are retained.  Stale entries,
+query errors, and snapshot entries that cannot start before the deadline are
+claimed fail-closed using the exact snapshotted cache object, so a late result
+cannot evict a replacement published under the same key.  Each entry has one
+terminal outcome (`fresh`, `stale`, `query_error`, or `deadline`).  Those four
+fixed labels feed a counter, sweep duration feeds a histogram, and the cache
+emits only one aggregate summary log per sweep.  A higher durable generation is
 installed and evicted in the same sweep.  MATCH performs no catalog SQL on a
 warm hit.  Pull repairs sender crash, lost RPC, and new-CN join; it is not a
 successful ACK substitute.
@@ -140,10 +149,10 @@ transaction-local invalidation and are repaired remotely by pull; adding a
 cross-transaction DDL notification is outside this issue unless a safe
 post-commit hook already exists.
 
-During a rolling upgrade, v41 senders treat v40 as unsupported.  New CNs retain
+During a rolling upgrade, v43 senders treat v42 as unsupported.  New CNs retain
 the pull fallback, but old serving CN binaries cannot provide the new guarantee.
 Strict multi-CN QA and issue closure therefore require every serving CN to run
-v41.
+v43.
 
 ## Alternatives and non-goals
 
