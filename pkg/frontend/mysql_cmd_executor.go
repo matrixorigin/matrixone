@@ -2538,9 +2538,6 @@ func previewQuerySchedulingInContext(
 	rawSQL string,
 	sqlMode *string,
 ) schedule.Trace {
-	if ctx == nil {
-		ctx = context.Background()
-	}
 	if ses == nil {
 		return compile.PreviewQueryScheduling(compile.SchedulingPreviewRequest{
 			Context: ctx,

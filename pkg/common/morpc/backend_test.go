@@ -86,7 +86,7 @@ func TestBackendRequestLifecycleMetricsEndToEnd(t *testing.T) {
 				b.metrics.requestCompletedCounters[requestOutcomeSuccess])
 			durationBefore, _ := observerHistogram(t, b.metrics.requestDurationHistogram)
 
-			ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+			ctx, cancel := context.WithTimeout(t.Context(), time.Second)
 			defer cancel()
 			f, err := b.Send(ctx, newTestMessage(1))
 			require.NoError(t, err)
@@ -563,7 +563,7 @@ func TestReadTimeout(t *testing.T) {
 
 func TestReadTimeoutDoesNotChargeIdleTimeToNewRequest(t *testing.T) {
 	rb := &remoteBackend{livenessEpoch: time.Now().Add(-2 * time.Second)}
-	rb.options.bufferSize = 1
+	rb.options.bufferSize = 2
 	rb.options.readTimeout = time.Second
 
 	// Preserve ordinary backends' existing idle-timeout behavior. The special
@@ -581,20 +581,43 @@ func TestReadTimeoutDoesNotChargeIdleTimeToNewRequest(t *testing.T) {
 	require.False(t, rb.keepDataConnectionAfterReadTimeout(
 		context.Background(), context.DeadlineExceeded),
 		"internal traffic must not extend the user-request read window")
+	rb.mu.futures = map[uint64]*Future{1: {oneWay: true}}
+	require.False(t, rb.keepDataConnectionAfterReadTimeout(
+		context.Background(), context.DeadlineExceeded),
+		"one-way traffic must not create a response read window")
+	inFlight := &Future{}
+	rb.mu.futures = map[uint64]*Future{1: inFlight}
+	require.True(t, rb.keepDataConnectionAfterReadTimeout(
+		context.Background(), context.DeadlineExceeded),
+		"an admitted request must not inherit the remainder of an idle read window")
+	inFlight.waiting.Store(true)
+	require.False(t, rb.keepDataConnectionAfterReadTimeout(
+		context.Background(), context.DeadlineExceeded),
+		"a terminal send failure must not extend the read window")
 
 	// If a request arrived during that old read window, it owns a fresh window
 	// measured from its write, rather than the remainder of the idle window.
 	pending := &Future{}
 	pending.writtenAt.Store(rb.livenessTick())
+	pending.waiting.Store(true)
 	rb.mu.futures = map[uint64]*Future{1: pending}
 	require.True(t, rb.keepDataConnectionAfterReadTimeout(
 		context.Background(), context.DeadlineExceeded))
+	canceledCtx, cancel := context.WithCancel(context.Background())
+	cancel()
+	require.False(t, rb.keepDataConnectionAfterReadTimeout(
+		canceledCtx, context.DeadlineExceeded),
+		"backend cancellation must win over a fresh request window")
 
 	// A backend without an independent liveness probe still closes once a full
 	// request-owned window has elapsed without progress.
 	pending.writtenAt.Store(rb.livenessTick() - rb.options.readTimeout.Nanoseconds())
 	require.False(t, rb.keepDataConnectionAfterReadTimeout(
 		context.Background(), context.DeadlineExceeded))
+	rb.mu.futures[2] = &Future{}
+	require.False(t, rb.keepDataConnectionAfterReadTimeout(
+		context.Background(), context.DeadlineExceeded),
+		"new admissions must not keep an already-stalled request generation alive")
 	require.False(t, rb.keepDataConnectionAfterReadTimeout(
 		context.Background(), errors.New("connection reset")))
 }
@@ -622,8 +645,10 @@ func TestReadTimeoutTracksRequestsWithoutLivenessProbe(t *testing.T) {
 			case <-ctx.Done():
 				t.Fatal("request did not reach server")
 			}
-			require.NotZero(t, b.oldestPendingRequestAt(),
+			writtenAt, writePending := b.pendingRequestReadWindow()
+			require.NotZero(t, writtenAt,
 				"read-timeout accounting must not depend on a liveness probe")
+			require.False(t, writePending)
 		},
 		WithBackendReadTimeout(200*time.Millisecond),
 	)

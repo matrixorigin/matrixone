@@ -645,7 +645,7 @@ func (rb *remoteBackend) writeLoop(ctx context.Context) {
 					}
 				} else {
 					for _, f := range written {
-						if !f.send.internal && !f.send.stream &&
+						if !f.send.internal && !f.send.stream && !f.oneWay &&
 							rb.options.readTimeout > 0 && rb.options.livenessProbe == nil {
 							// Record only transport-complete writes. A request that merely
 							// reached the userspace buffer must not extend the read window
@@ -1356,15 +1356,19 @@ func (rb *remoteBackend) keepDataConnectionAfterReadTimeout(
 	// deadline that is already mostly consumed when the next request arrives.
 	// Idle time is not request latency: give newly written data one complete
 	// read window before declaring its transport stalled.
-	oldestWritten := rb.dataPendingSince()
+	var oldestWritten int64
 	if rb.options.livenessProbe == nil {
-		oldestWritten = rb.oldestPendingRequestAt()
+		var writePending bool
+		oldestWritten, writePending = rb.pendingRequestReadWindow()
 		// Preserve the ordinary backend's existing idle and stream timeout
-		// behavior. Only a successfully flushed unary request owns a fresh read
-		// window; no pending request still closes this connection.
+		// behavior. An admitted unary request keeps the old idle deadline from
+		// closing its transport while it is queued or being flushed. Once flushed,
+		// it owns one complete read window; a terminal send failure owns neither.
 		if oldestWritten == 0 {
-			return false
+			return writePending
 		}
+	} else {
+		oldestWritten = rb.dataPendingSince()
 	}
 	if oldestWritten == 0 {
 		return true
@@ -1482,20 +1486,30 @@ func (rb *remoteBackend) dataPendingSince() int64 {
 	return rb.livenessMu.pendingSince
 }
 
-func (rb *remoteBackend) oldestPendingRequestAt() int64 {
+func (rb *remoteBackend) pendingRequestReadWindow() (int64, bool) {
 	rb.mu.RLock()
 	defer rb.mu.RUnlock()
 	oldest := int64(0)
+	writePending := false
 	for _, f := range rb.mu.futures {
-		if f.send.internal || f.send.stream {
+		if f.send.internal || f.send.stream || f.oneWay {
 			continue
 		}
+		// Read the publication flag before the timestamp. The success path stores
+		// writtenAt and then publishes waiting=true; this order prevents observing
+		// the old zero timestamp together with the new success flag.
+		waiting := f.waiting.Load()
 		writtenAt := f.writtenAt.Load()
 		if writtenAt > 0 && (oldest == 0 || writtenAt < oldest) {
 			oldest = writtenAt
+		} else if writtenAt == 0 && !waiting {
+			// messageSent publishes waiting=true for both success and failure.
+			// Success publishes writtenAt first; therefore zero plus !waiting is
+			// exactly the admitted/queued/write-in-progress state.
+			writePending = true
 		}
 	}
-	return oldest
+	return oldest, writePending
 }
 
 func (rb *remoteBackend) resetDataProgress() {

@@ -7007,9 +7007,11 @@ func TestDirectSessionStrictPoolWithoutLabelSelectorFailsClosed(t *testing.T) {
 	}
 	require.Empty(t, ses.getCNLabels())
 	require.NoError(t, ses.SetSessionSysVar(context.Background(), queryPoolStrict, int64(1)))
+	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+	defer cancel()
 
 	trace := previewQuerySchedulingInContext(
-		t.Context(),
+		ctx,
 		ses,
 		&plan0.Query{Nodes: []*plan0.Node{{NodeType: plan0.Node_TABLE_SCAN}}},
 		false,

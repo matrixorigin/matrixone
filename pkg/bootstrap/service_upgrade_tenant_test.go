@@ -36,6 +36,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 )
 
+const tenantUpgradeTestHangTimeout = 10 * time.Second
+
 func Test_asyncUpgradeTenantTask(t *testing.T) {
 	sid := ""
 	runtime.RunTest(
@@ -163,7 +165,7 @@ func Test_asyncUpgradeTenantTask_SkipsTenantAtTargetVersion(t *testing.T) {
 			var taskReady atomic.Bool
 			var finalized atomic.Bool
 			var tenantVersionUpdated atomic.Bool
-			ctx, cancel := context.WithCancel(t.Context())
+			ctx, cancel := context.WithTimeout(t.Context(), tenantUpgradeTestHangTimeout)
 			defer cancel()
 
 			sqlExecutor := executor.NewMemExecutor(func(sql string) (executor.Result, error) {
@@ -271,7 +273,7 @@ func Test_asyncUpgradeTenantTask_RunsSameVersionOffsetUpgrade(t *testing.T) {
 			var taskReady atomic.Bool
 			var finalized atomic.Bool
 			var tenantVersionUpdated atomic.Bool
-			ctx, cancel := context.WithCancel(t.Context())
+			ctx, cancel := context.WithTimeout(t.Context(), tenantUpgradeTestHangTimeout)
 			defer cancel()
 
 			sqlExecutor := executor.NewMemExecutor(func(sql string) (executor.Result, error) {
@@ -336,6 +338,8 @@ func Test_asyncUpgradeTenantTask_RunsSameVersionOffsetUpgrade(t *testing.T) {
 			}, txnOperator)
 
 			drainUpgradeTenants(ctx, s.newTenantUpgradePass(ctx))
+			require.ErrorIs(t, ctx.Err(), context.Canceled,
+				"tenant upgrade did not reach its completion barrier")
 			require.True(t, taskReady.Load())
 			require.True(t, finalized.Load())
 			require.True(t, tenantVersionUpdated.Load())
@@ -351,7 +355,7 @@ func Test_asyncUpgradeTenantTask_AutoCompletesDeletedTenantTasks(t *testing.T) {
 		func(rt runtime.Runtime) {
 			var finalized atomic.Bool
 			var deletedTasksReconciled atomic.Bool
-			ctx, cancel := context.WithCancel(t.Context())
+			ctx, cancel := context.WithTimeout(t.Context(), tenantUpgradeTestHangTimeout)
 			defer cancel()
 
 			sqlExecutor := executor.NewMemExecutor(func(sql string) (executor.Result, error) {
@@ -410,6 +414,8 @@ func Test_asyncUpgradeTenantTask_AutoCompletesDeletedTenantTasks(t *testing.T) {
 			}, txnOperator)
 
 			drainUpgradeTenants(ctx, s.newTenantUpgradePass(ctx))
+			require.ErrorIs(t, ctx.Err(), context.Canceled,
+				"tenant upgrade did not reach its completion barrier")
 			require.True(t, finalized.Load())
 			require.Zero(t, h.callHandleTenantUpgrade.Load())
 		},
@@ -422,7 +428,7 @@ func Test_asyncUpgradeTenantTask_ReconcilesReadyCountWhenTasksAlreadyFinished(t 
 		sid,
 		func(rt runtime.Runtime) {
 			var finalized atomic.Bool
-			ctx, cancel := context.WithCancel(t.Context())
+			ctx, cancel := context.WithTimeout(t.Context(), tenantUpgradeTestHangTimeout)
 			defer cancel()
 
 			sqlExecutor := executor.NewMemExecutor(func(sql string) (executor.Result, error) {
@@ -469,6 +475,8 @@ func Test_asyncUpgradeTenantTask_ReconcilesReadyCountWhenTasksAlreadyFinished(t 
 			}, txnOperator)
 
 			drainUpgradeTenants(ctx, s.newTenantUpgradePass(ctx))
+			require.ErrorIs(t, ctx.Err(), context.Canceled,
+				"tenant upgrade did not reach its completion barrier")
 			require.True(t, finalized.Load())
 			require.Zero(t, h.callHandleTenantUpgrade.Load())
 		},
@@ -482,7 +490,7 @@ func Test_asyncUpgradeTenantTask_SkipsReconcileWhenConflictTasksRemain(t *testin
 		func(rt runtime.Runtime) {
 			var reconciled atomic.Bool
 			var upgraded atomic.Bool
-			ctx, cancel := context.WithCancel(t.Context())
+			ctx, cancel := context.WithTimeout(t.Context(), tenantUpgradeTestHangTimeout)
 			defer cancel()
 
 			sqlExecutor := executor.NewMemExecutor(func(sql string) (executor.Result, error) {
@@ -531,6 +539,7 @@ func Test_asyncUpgradeTenantTask_SkipsReconcileWhenConflictTasksRemain(t *testin
 			}, txnOperator)
 
 			drainUpgradeTenants(ctx, s.newTenantUpgradePass(ctx))
+			require.NoError(t, ctx.Err(), "tenant upgrade hit the test hang guard")
 			require.False(t, reconciled.Load())
 			require.False(t, upgraded.Load())
 			require.Zero(t, h.callHandleTenantUpgrade.Load())
@@ -544,7 +553,7 @@ func Test_asyncUpgradeTenantTask_SkipsAlreadyReconciledUpgradeCounts(t *testing.
 		sid,
 		func(rt runtime.Runtime) {
 			var upgraded atomic.Bool
-			ctx, cancel := context.WithCancel(t.Context())
+			ctx, cancel := context.WithTimeout(t.Context(), tenantUpgradeTestHangTimeout)
 			defer cancel()
 
 			sqlExecutor := executor.NewMemExecutor(func(sql string) (executor.Result, error) {
@@ -589,6 +598,7 @@ func Test_asyncUpgradeTenantTask_SkipsAlreadyReconciledUpgradeCounts(t *testing.
 			}, txnOperator)
 
 			drainUpgradeTenants(ctx, s.newTenantUpgradePass(ctx))
+			require.NoError(t, ctx.Err(), "tenant upgrade hit the test hang guard")
 			require.False(t, upgraded.Load())
 			require.Zero(t, h.callHandleTenantUpgrade.Load())
 		},

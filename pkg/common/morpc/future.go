@@ -39,8 +39,11 @@ type Future struct {
 	c    chan Message
 	errC chan error
 	// used to check error for sending message
-	writtenC  chan error
-	waiting   atomic.Bool
+	writtenC chan error
+	waiting  atomic.Bool
+	// writtenAt is the backend-relative tick of a successfully flushed ordinary
+	// unary request. Zero plus waiting=false means write admission/in progress;
+	// zero plus waiting=true means terminal send failure.
 	writtenAt atomic.Int64
 	// requestMetricObserved makes terminal request accounting exactly once even
 	// when timeout, transport failure, response delivery, and Close race.

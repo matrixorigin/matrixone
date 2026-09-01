@@ -46,13 +46,18 @@ func (e *dummyExecutor) ExecuteFor(table catalog.MergeTable, task mergeTask) boo
 
 type recordingExecutor struct {
 	executed chan uint64
+	overflow atomic.Bool
 }
 
 func (e *recordingExecutor) ExecuteFor(table catalog.MergeTable, task mergeTask) bool {
 	if task.doneCB != nil {
 		task.doneCB.OnExecDone(nil)
 	}
-	e.executed <- table.ID()
+	select {
+	case e.executed <- table.ID():
+	default:
+		e.overflow.Store(true)
+	}
 	return true
 }
 
@@ -117,16 +122,23 @@ func requireQuery(
 	table catalog.MergeTable,
 ) *QueryAnswer {
 	t.Helper()
-	answer, err := sched.Query(context.Background(), table)
+	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+	defer cancel()
+	answer, err := sched.Query(ctx, table)
 	require.NoError(t, err)
 	return answer
 }
 
 type droppedMergeTable struct {
 	catalog.MergeTable
+	checked chan struct{}
+	once    sync.Once
 }
 
 func (t *droppedMergeTable) HasDropCommitted() bool {
+	if t.checked != nil {
+		t.once.Do(func() { close(t.checked) })
+	}
 	return true
 }
 
@@ -187,10 +199,14 @@ func TestScheduler(t *testing.T) {
 		return catalog.ToMergeTable(table)
 	}
 
+	dropped := &droppedMergeTable{
+		MergeTable: newTestTable(1, 1003),
+		checked:    make(chan struct{}),
+	}
 	tables := []catalog.MergeTable{
 		newTestTable(1, 1001),
 		newTestTable(1, 1002),
-		&droppedMergeTable{MergeTable: newTestTable(1, 1003)},
+		dropped,
 	}
 
 	dummySource := &dummyCatalogSource{
@@ -198,7 +214,8 @@ func TestScheduler(t *testing.T) {
 		initTables: tables,
 	}
 
-	executor := &recordingExecutor{executed: make(chan uint64, 16)}
+	t1002TaskCnt := bigDataTaskCntThreshold + 1
+	executor := &recordingExecutor{executed: make(chan uint64, t1002TaskCnt+2)}
 	sched := NewMergeScheduler(
 		1*time.Millisecond,
 		dummySource,
@@ -266,7 +283,6 @@ func TestScheduler(t *testing.T) {
 
 	}
 
-	t1002TaskCnt := bigDataTaskCntThreshold + 1
 	{
 		// make merge task
 		trigger := NewMMsgTaskTrigger(tables[1])
@@ -356,16 +372,19 @@ func TestScheduler(t *testing.T) {
 		for _, count := range expected {
 			remaining += count
 		}
+		timer := time.NewTimer(10 * time.Second)
+		defer timer.Stop()
 		for remaining > 0 {
 			select {
 			case tableID := <-executor.executed:
 				require.Positive(t, expected[tableID], "unexpected merge for table %d", tableID)
 				expected[tableID]--
 				remaining--
-			case <-time.After(10 * time.Second):
+			case <-timer.C:
 				t.Fatalf("merge scheduler did not execute all tasks: remaining=%v", expected)
 			}
 		}
+		require.False(t, executor.overflow.Load(), "merge executor observation buffer overflowed")
 
 		answer := requireQuery(t, sched, t1004)
 		require.Equal(t, answer.DataMergeCnt, 1)
@@ -380,11 +399,13 @@ func TestScheduler(t *testing.T) {
 
 	{
 		// dropped table will be removed from scheduler
-		require.NoError(t, sched.SendTrigger(NewMMsgTaskTrigger(tables[2])))
-		// The first query fences trigger dispatch. The scheduler processes the
-		// now-due table at the top of its next cycle; the second query observes
-		// that completed cycle.
-		requireQuery(t, sched, tables[2])
+		timer := time.NewTimer(10 * time.Second)
+		defer timer.Stop()
+		select {
+		case <-dropped.checked:
+		case <-timer.C:
+			t.Fatal("merge scheduler did not inspect the dropped table")
+		}
 		answer := requireQuery(t, sched, tables[2])
 		require.Equal(t, answer.NotExists, true)
 	}
