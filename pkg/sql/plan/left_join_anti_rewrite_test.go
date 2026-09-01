@@ -31,8 +31,8 @@ func TestLeftJoinNullFilterRewritesToAnti(t *testing.T) {
 	require.NoError(t, err)
 
 	query := logicalPlan.GetQuery()
-	require.True(t, reachablePlanHasJoinType(query, planpb.Node_ANTI))
-	require.False(t, reachablePlanHasJoinType(query, planpb.Node_LEFT))
+	require.True(t, reachableLeftAntiPlanHasJoinType(query, planpb.Node_ANTI))
+	require.False(t, reachableLeftAntiPlanHasJoinType(query, planpb.Node_LEFT))
 }
 
 func TestLeftJoinNullFilterAntiRewriteFailsClosed(t *testing.T) {
@@ -94,8 +94,35 @@ func TestLeftJoinNullFilterAntiRewriteFailsClosed(t *testing.T) {
 			require.NoError(t, err)
 
 			query := logicalPlan.GetQuery()
-			require.True(t, reachablePlanHasJoinType(query, planpb.Node_LEFT), query.String())
-			require.False(t, reachablePlanHasJoinType(query, planpb.Node_ANTI), query.String())
+			require.True(t, reachableLeftAntiPlanHasJoinType(query, planpb.Node_LEFT), query.String())
+			require.False(t, reachableLeftAntiPlanHasJoinType(query, planpb.Node_ANTI), query.String())
 		})
 	}
+}
+
+func reachableLeftAntiPlanHasJoinType(query *planpb.Query, joinType planpb.Node_JoinType) bool {
+	visited := make(map[int32]bool)
+	var visit func(int32) bool
+	visit = func(nodeID int32) bool {
+		if nodeID < 0 || int(nodeID) >= len(query.Nodes) || visited[nodeID] {
+			return false
+		}
+		visited[nodeID] = true
+		node := query.Nodes[nodeID]
+		if node.NodeType == planpb.Node_JOIN && node.JoinType == joinType {
+			return true
+		}
+		for _, childID := range node.Children {
+			if visit(childID) {
+				return true
+			}
+		}
+		return false
+	}
+	for _, rootID := range query.Steps {
+		if visit(rootID) {
+			return true
+		}
+	}
+	return false
 }
