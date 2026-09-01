@@ -98,6 +98,25 @@ func TestStatementHasSQLCalcFoundRowsPagination(t *testing.T) {
 	}
 }
 
+func TestLiteralLimitZeroSkipsUnconsumedProducerSteps(t *testing.T) {
+	c := newLazyUnionAllTestCompile(t)
+	producer := &plan.Node{NodeType: plan.Node_SINK}
+	final := &plan.Node{
+		NodeType: plan.Node_PROJECT,
+		Limit:    plan2.MakePlan2Uint64ConstExprWithType(0),
+	}
+	qry := &plan.Query{Nodes: []*plan.Node{producer, final}, Steps: []int32{0, 1}}
+	require.Equal(t, 1, c.firstStepToCompile(qry))
+
+	final.Limit = plan2.MakePlan2Uint64ConstExprWithType(1)
+	require.Zero(t, c.firstStepToCompile(qry))
+
+	c.stmt = sqlCalcFoundRowsTestStatement()
+	c.foundRowsOwnerNode = final
+	final.Limit = plan2.MakePlan2Uint64ConstExprWithType(0)
+	require.Zero(t, c.firstStepToCompile(qry))
+}
+
 func TestSQLCalcFoundRowsDisablesLiteralLimitZeroFastPath(t *testing.T) {
 	c := newLazyUnionAllTestCompile(t)
 	node := &plan.Node{Limit: plan2.MakePlan2Uint64ConstExprWithType(0)}
