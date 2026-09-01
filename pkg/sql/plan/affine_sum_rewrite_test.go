@@ -101,9 +101,13 @@ func TestRewriteAffineSumFamilies(t *testing.T) {
 		}
 		having := []*planpb.Expr{DeepCopyExpr(ctx.projects[3])}
 		orderBy := &planpb.OrderBySpec{Expr: DeepCopyExpr(ctx.projects[2])}
+		emptyOrderBy := &planpb.OrderBySpec{}
 
 		builder.rewriteAffineSumFamilies(
-			ctx, [][]*planpb.Expr{ctx.projects, having}, []*planpb.OrderBySpec{orderBy})
+			ctx,
+			[][]*planpb.Expr{ctx.projects, having},
+			[]*planpb.OrderBySpec{nil, emptyOrderBy, orderBy},
+		)
 
 		require.Len(t, ctx.aggregates, 2)
 		require.Equal(t, map[string]int32{"anchor": 0}, ctx.aggregateByAst)
@@ -470,6 +474,140 @@ func TestCheckedAffineInt64Arithmetic(t *testing.T) {
 	}
 }
 
+func TestExactAffineIntegerRangeProof(t *testing.T) {
+	builder := NewQueryBuilder(
+		planpb.Query_SELECT, NewMockCompilerContext(false), false, true)
+
+	literalTests := []struct {
+		name string
+		expr *planpb.Expr
+		want affineIntegerRange
+		ok   bool
+	}{
+		{name: "int8", expr: makePlan2Int8ConstExprWithType(-8), want: affineIntegerRange{min: -8, max: -8}, ok: true},
+		{name: "int16", expr: makePlan2Int16ConstExprWithType(-16), want: affineIntegerRange{min: -16, max: -16}, ok: true},
+		{name: "int32", expr: makePlan2Int32ConstExprWithType(-32), want: affineIntegerRange{min: -32, max: -32}, ok: true},
+		{name: "int64", expr: makePlan2Int64ConstExprWithType(-64), want: affineIntegerRange{min: -64, max: -64}, ok: true},
+		{name: "uint8", expr: makePlan2Uint8ConstExprWithType(8), want: affineIntegerRange{min: 8, max: 8}, ok: true},
+		{name: "uint16", expr: makePlan2Uint16ConstExprWithType(16), want: affineIntegerRange{min: 16, max: 16}, ok: true},
+		{name: "uint32", expr: makePlan2Uint32ConstExprWithType(32), want: affineIntegerRange{min: 32, max: 32}, ok: true},
+		{name: "uint64 within signed domain", expr: makePlan2Uint64ConstExprWithType(math.MaxInt64), want: affineIntegerRange{min: math.MaxInt64, max: math.MaxInt64}, ok: true},
+		{
+			name: "int8 payload outside declared type",
+			expr: &planpb.Expr{
+				Typ:  planpb.Type{Id: int32(types.T_int8)},
+				Expr: &planpb.Expr_Lit{Lit: &planpb.Literal{Value: &planpb.Literal_I8Val{I8Val: math.MaxInt8 + 1}}},
+			},
+		},
+		{
+			name: "uint16 payload outside declared type",
+			expr: &planpb.Expr{
+				Typ:  planpb.Type{Id: int32(types.T_uint16)},
+				Expr: &planpb.Expr_Lit{Lit: &planpb.Literal{Value: &planpb.Literal_U16Val{U16Val: math.MaxUint16 + 1}}},
+			},
+		},
+		{name: "uint64 outside signed domain", expr: makePlan2Uint64ConstExprWithType(math.MaxUint64)},
+		{
+			name: "literal payload does not match declared type",
+			expr: &planpb.Expr{
+				Typ:  planpb.Type{Id: int32(types.T_int32)},
+				Expr: &planpb.Expr_Lit{Lit: &planpb.Literal{Value: &planpb.Literal_I64Val{I64Val: 1}}},
+			},
+		},
+	}
+	for _, test := range literalTests {
+		t.Run(test.name, func(t *testing.T) {
+			got, ok := exactAffineIntegerRange(builder.GetContext(), test.expr)
+			require.Equal(t, test.ok, ok)
+			if ok {
+				require.Equal(t, test.want, got)
+			}
+		})
+	}
+
+	t.Run("unary operators preserve a proven widened domain", func(t *testing.T) {
+		source := GetColExpr(planpb.Type{Id: int32(types.T_int16)}, 7, 0)
+		widened, err := appendCastBeforeExpr(
+			builder.GetContext(), source, planpb.Type{Id: int32(types.T_int64)})
+		require.NoError(t, err)
+
+		for _, test := range []struct {
+			name string
+			want affineIntegerRange
+		}{
+			{name: "unary_plus", want: affineIntegerRange{min: math.MinInt16, max: math.MaxInt16}},
+			{name: "unary_minus", want: affineIntegerRange{min: -math.MaxInt16, max: -math.MinInt16}},
+		} {
+			t.Run(test.name, func(t *testing.T) {
+				expr, err := BindFuncExprImplByPlanExpr(
+					builder.GetContext(), test.name, []*planpb.Expr{DeepCopyExpr(widened)})
+				require.NoError(t, err)
+				got, ok := exactAffineIntegerRange(builder.GetContext(), expr)
+				require.True(t, ok)
+				require.Equal(t, test.want, got)
+			})
+		}
+	})
+
+	t.Run("unary minus rejects the full int64 domain", func(t *testing.T) {
+		expr, err := BindFuncExprImplByPlanExpr(
+			builder.GetContext(), "unary_minus", []*planpb.Expr{
+				GetColExpr(planpb.Type{Id: int32(types.T_int64)}, 7, 0),
+			})
+		require.NoError(t, err)
+		_, ok := exactAffineIntegerRange(builder.GetContext(), expr)
+		require.False(t, ok)
+	})
+}
+
+func TestCombineAffineIntegerRanges(t *testing.T) {
+	tests := []struct {
+		name        string
+		op          string
+		left, right affineIntegerRange
+		want        affineIntegerRange
+		ok          bool
+	}{
+		{
+			name: "addition", op: "+",
+			left: affineIntegerRange{min: -2, max: 3}, right: affineIntegerRange{min: -4, max: 5},
+			want: affineIntegerRange{min: -6, max: 8}, ok: true,
+		},
+		{
+			name: "subtraction", op: "-",
+			left: affineIntegerRange{min: -2, max: 3}, right: affineIntegerRange{min: -4, max: 5},
+			want: affineIntegerRange{min: -7, max: 7}, ok: true,
+		},
+		{
+			name: "multiplication crosses zero", op: "*",
+			left: affineIntegerRange{min: -2, max: 3}, right: affineIntegerRange{min: -4, max: 5},
+			want: affineIntegerRange{min: -12, max: 15}, ok: true,
+		},
+		{
+			name: "addition overflows", op: "+",
+			left: affineIntegerRange{min: math.MaxInt64, max: math.MaxInt64}, right: affineIntegerRange{min: 1, max: 1},
+		},
+		{
+			name: "subtraction overflows", op: "-",
+			left: affineIntegerRange{min: math.MinInt64, max: math.MinInt64}, right: affineIntegerRange{min: 1, max: 1},
+		},
+		{
+			name: "multiplication overflows", op: "*",
+			left: affineIntegerRange{min: math.MaxInt64, max: math.MaxInt64}, right: affineIntegerRange{min: 2, max: 2},
+		},
+		{name: "unsupported operator", op: "/"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			got, ok := combineAffineIntegerRanges(test.op, test.left, test.right)
+			require.Equal(t, test.ok, ok)
+			if ok {
+				require.Equal(t, test.want, got)
+			}
+		})
+	}
+}
+
 func TestRewriteAffineSumFamiliesMaximumSafeDomain(t *testing.T) {
 	builder := NewQueryBuilder(
 		planpb.Query_SELECT, NewMockCompilerContext(false), false, true)
@@ -548,8 +686,18 @@ func TestRewriteAffineSumFamiliesIsAtomic(t *testing.T) {
 			Args: []*planpb.Expr{GetColExpr(aggregates[0].Typ, ctx.aggregateTag, 0)},
 		}}},
 		{Typ: aggregates[0].Typ, Expr: &planpb.Expr_List{}},
+		{Typ: aggregates[0].Typ, Expr: &planpb.Expr_List{List: &planpb.ExprList{
+			List: []*planpb.Expr{{Typ: aggregates[0].Typ}},
+		}}},
 		{Typ: aggregates[0].Typ, Expr: &planpb.Expr_Sub{}},
 		{Typ: aggregates[0].Typ, Expr: &planpb.Expr_W{}},
+		{Typ: aggregates[0].Typ, Expr: &planpb.Expr_W{W: &planpb.WindowSpec{
+			WindowFunc: GetColExpr(aggregates[0].Typ, ctx.aggregateTag, 0),
+		}}},
+		{Typ: aggregates[0].Typ, Expr: &planpb.Expr_W{W: &planpb.WindowSpec{
+			WindowFunc: GetColExpr(aggregates[0].Typ, ctx.aggregateTag, 0),
+			Frame:      &planpb.FrameClause{End: &planpb.FrameBound{}},
+		}}},
 	} {
 		ctx = affineTestContext(aggregates)
 		originalProjects = append([]*planpb.Expr(nil), ctx.projects...)
@@ -607,6 +755,22 @@ func TestRewriteAffineSumFamiliesNestedConsumers(t *testing.T) {
 					OrderBy:     []*planpb.OrderBySpec{{Expr: DeepCopyExpr(ref)}},
 					Frame: &planpb.FrameClause{
 						Start: &planpb.FrameBound{Val: DeepCopyExpr(ref)},
+						End:   &planpb.FrameBound{Val: DeepCopyExpr(ref)},
+					},
+				}}}
+			},
+		},
+		{
+			name: "sparse window spec",
+			wrap: func(ref *planpb.Expr) *planpb.Expr {
+				return &planpb.Expr{Typ: ref.Typ, Expr: &planpb.Expr_W{W: &planpb.WindowSpec{
+					WindowFunc: DeepCopyExpr(ref),
+					OrderBy: []*planpb.OrderBySpec{
+						nil,
+						{Expr: DeepCopyExpr(ref)},
+					},
+					Frame: &planpb.FrameClause{
+						Start: &planpb.FrameBound{},
 						End:   &planpb.FrameBound{Val: DeepCopyExpr(ref)},
 					},
 				}}}

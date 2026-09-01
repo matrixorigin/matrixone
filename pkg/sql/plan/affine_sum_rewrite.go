@@ -730,16 +730,18 @@ func affineExprHasAggregateRef(
 				return hasRef, false
 			}
 		}
-		if impl.W.Frame != nil {
-			for _, bound := range []*planpb.FrameBound{impl.W.Frame.Start, impl.W.Frame.End} {
-				if bound == nil {
-					continue
-				}
-				itemHasRef, itemSafe := affineExprHasAggregateRef(bound.Val, aggregateTag, replacements)
-				hasRef = hasRef || itemHasRef
-				if !itemSafe {
-					return hasRef, false
-				}
+		// DeepCopyExpr requires a complete frame for window expressions. Keep the
+		// preflight traversal at least as strict as the clone it guards, otherwise
+		// a malformed consumer could pass validation and panic before the atomic
+		// rewrite is installed.
+		if impl.W.Frame == nil || impl.W.Frame.Start == nil || impl.W.Frame.End == nil {
+			return hasRef, false
+		}
+		for _, bound := range []*planpb.FrameBound{impl.W.Frame.Start, impl.W.Frame.End} {
+			itemHasRef, itemSafe := affineExprHasAggregateRef(bound.Val, aggregateTag, replacements)
+			hasRef = hasRef || itemHasRef
+			if !itemSafe {
+				return hasRef, false
 			}
 		}
 		return hasRef, true
