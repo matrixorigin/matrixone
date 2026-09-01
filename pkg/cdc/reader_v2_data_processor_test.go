@@ -108,10 +108,31 @@ func (s *transactionalSnapshotSinker) SendBegin() {
 func (s *transactionalSnapshotSinker) Sink(_ context.Context, data *DecoderOutput) {
 	s.mu.Lock()
 	s.ops = append(s.ops, "sink")
-	if data.outputTyp == OutputTypeSnapshot && data.checkpointBat != nil {
+	switch data.outputTyp {
+	case OutputTypeSnapshot:
+		if data.checkpointBat == nil {
+			break
+		}
 		for row := 0; row < data.checkpointBat.RowCount(); row++ {
 			key := vector.GetFixedAtNoTypeCheck[int32](data.checkpointBat.Vecs[0], row)
 			s.staged[key] = struct{}{}
+		}
+	case OutputTypeTail:
+		if data.deleteAtmBatch != nil {
+			for _, bat := range data.deleteAtmBatch.Batches {
+				for row := 0; row < bat.RowCount(); row++ {
+					key := vector.GetFixedAtNoTypeCheck[int32](bat.Vecs[0], row)
+					delete(s.staged, key)
+				}
+			}
+		}
+		if data.insertAtmBatch != nil {
+			for _, bat := range data.insertAtmBatch.Batches {
+				for row := 0; row < bat.RowCount(); row++ {
+					key := vector.GetFixedAtNoTypeCheck[int32](bat.Vecs[0], row)
+					s.staged[key] = struct{}{}
+				}
+			}
 		}
 	}
 	s.mu.Unlock()
@@ -502,6 +523,23 @@ func TestDataProcessor_PartialSnapshotRetryReplaysStableEpoch(t *testing.T) {
 	}
 	assert.Equal(t, expected, sinker.durableKeys())
 	assert.True(t, updater.updateCalled)
+
+	// Apply the source DELETE(1), DELETE(2), INSERT(20) from the interval after
+	// the stable epoch. The target must converge to the current source image,
+	// not merely to the replayed snapshot.
+	tailTo := types.BuildTS(3, 0)
+	dp.SetTransactionRange(firstTo, tailTo)
+	require.NoError(t, dp.ProcessChange(ctx, &ChangeData{
+		Type:        ChangeTypeTailDone,
+		InsertBatch: buildBatch(t, mp, []int32{20}, tailTo),
+		DeleteBatch: buildBatch(t, mp, []int32{1, 2}, tailTo),
+	}))
+	require.NoError(t, dp.ProcessChange(ctx, &ChangeData{Type: ChangeTypeNoMoreData}))
+
+	delete(expected, 1)
+	delete(expected, 2)
+	expected[20] = struct{}{}
+	assert.Equal(t, expected, sinker.durableKeys())
 }
 
 func TestDataProcessor_SnapshotGroupBoundaries(t *testing.T) {
