@@ -827,6 +827,8 @@ type service struct {
 		sync.RWMutex
 		holder            taskservice.TaskServiceHolder
 		runner            taskservice.TaskRunner
+		revokedRunner     taskservice.TaskRunner
+		revokedRunnerDone chan struct{}
 		runnerReady       atomic.Bool
 		generationRevoked bool
 		storageFactory    taskservice.TaskStorageFactory

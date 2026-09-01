@@ -213,22 +213,32 @@ func (s *service) publishTaskRunner() error {
 	return nil
 }
 
-func (s *service) detachRevokedTaskRunner() taskservice.TaskRunner {
+func (s *service) detachRevokedTaskRunner() (taskservice.TaskRunner, chan struct{}) {
 	s.task.Lock()
 	defer s.task.Unlock()
 	s.task.generationRevoked = true
 	s.task.runnerReady.Store(false)
-	runner := s.task.runner
-	s.task.runner = nil
-	return runner
+	if s.task.runner != nil {
+		s.task.revokedRunner = s.task.runner
+		s.task.revokedRunnerDone = make(chan struct{})
+		s.task.runner = nil
+	}
+	return s.task.revokedRunner, s.task.revokedRunnerDone
 }
 
-func (s *service) stopRevokedTaskRunner(runner taskservice.TaskRunner) {
-	if runner != nil {
-		if err := runner.Stop(); err != nil {
-			s.logger.Error("stop revoked generation task runner failed", zap.Error(err))
-		}
+func (s *service) stopRevokedTaskRunner(runner taskservice.TaskRunner, done chan struct{}) {
+	if runner == nil {
+		return
 	}
+	if err := runner.Stop(); err != nil && s.logger != nil {
+		s.logger.Error("stop revoked generation task runner failed", zap.Error(err))
+	}
+	s.task.Lock()
+	if s.task.revokedRunner == runner {
+		s.task.revokedRunner = nil
+		close(done)
+	}
+	s.task.Unlock()
 }
 
 func (s *service) startTaskRunnerLocked() {
@@ -304,15 +314,25 @@ func (s *service) GetTaskService() (taskservice.TaskService, bool) {
 func (s *service) stopTask() error {
 	defer logutil.LogClose(s.logger, "cnservice/task")()
 
+	// Transfer normal runner ownership while holding task.Lock, then release it
+	// before any Stop/wait. A SQL task may synchronously trigger generation
+	// revocation and must be able to acquire this lock in order to exit.
 	s.task.Lock()
-	defer s.task.Unlock()
-	if s.task.holder == nil {
-		return nil
-	}
+	holder := s.task.holder
+	runner := s.task.runner
+	s.task.runner = nil
+	revokedDone := s.task.revokedRunnerDone
+	s.task.Unlock()
 
-	err := s.task.holder.Close()
-	if s.task.runner != nil {
-		err = errors.Join(err, s.task.runner.Stop())
+	var err error
+	if holder != nil {
+		err = holder.Close()
+	}
+	if runner != nil {
+		err = errors.Join(err, runner.Stop())
+	}
+	if revokedDone != nil {
+		<-revokedDone
 	}
 	return err
 }

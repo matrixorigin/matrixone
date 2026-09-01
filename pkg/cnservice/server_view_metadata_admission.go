@@ -126,15 +126,16 @@ func (s *service) revokeViewMetadataGeneration(authoritative uint64) {
 		s.ddlVisibilityBarrierReady.Store(false)
 		_ = s.closePipelineAdmission()
 		s.queryWork.beginClose()
-		runner := s.detachRevokedTaskRunner()
+		runner, runnerDone := s.detachRevokedTaskRunner()
 
-		go s.drainRevokedViewMetadataGeneration(authoritative, runner)
+		go s.drainRevokedViewMetadataGeneration(authoritative, runner, runnerDone)
 	})
 }
 
 func (s *service) drainRevokedViewMetadataGeneration(
 	authoritative uint64,
 	runner taskservice.TaskRunner,
+	runnerDone chan struct{},
 ) {
 	// Serialize physical frontend shutdown with MOServer.Start before waiting
 	// for task executors. The goroutine is independent of the rejected SQL task,
@@ -147,7 +148,7 @@ func (s *service) drainRevokedViewMetadataGeneration(
 				zap.Error(err))
 		}
 	}
-	s.stopRevokedTaskRunner(runner)
+	s.stopRevokedTaskRunner(runner, runnerDone)
 	if s.stopper == nil && s.viewMetadataCloseFn == nil {
 		return
 	}

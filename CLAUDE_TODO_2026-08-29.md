@@ -81,3 +81,9 @@
 1. 将 revocation 拆为同步不可逆 admission seal 与异步 frontend/TaskRunner/full-service drain。
 2. 同步 frontier rejection 只等待 seal，不得等待可能包含当前 SQL DDL 调用栈的 TaskRunner.Stop。
 3. 增加 TaskRunner SQL DDL 自身发现 stale generation、rejection 先返回、task 退出后异步 Stop 才完成的确定性 Q2 回归，并运行 race/vet。
+
+## 2026-09-01：revoked TaskRunner 与正常 Close 协调
+
+1. 在 `s.task` 下建立 detached revoked-runner 的共享 ownership/completion；异步 revocation drain 是唯一 Stop owner。
+2. 正常 `stopTask` 在锁内转移普通 runner ownership，锁外执行 holder.Close/runner.Stop；若 runner 已由 revocation 摘除，则等待共享 completion 后才允许关闭下游依赖。
+3. 分别覆盖 stopTask 先取得 runner 与 revocation 先摘除 runner 两种顺序，证明无持锁等待、无 double Stop、无依赖提前关闭。

@@ -272,6 +272,13 @@ func TestCNGenerationRevocationStopsFrontendBeforeTaskRunnerDrain(t *testing.T) 
 	case <-time.After(time.Second):
 		t.Fatal("generation revocation seal waited for the task runner")
 	}
+	closeDone := make(chan error, 1)
+	go func() { closeDone <- s.stopTask() }()
+	select {
+	case <-closeDone:
+		t.Fatal("normal Close passed the detached runner before its drain completed")
+	case <-time.After(20 * time.Millisecond):
+	}
 	close(runner.releaseStop)
 	select {
 	case <-runner.stopDone:
@@ -279,7 +286,52 @@ func TestCNGenerationRevocationStopsFrontendBeforeTaskRunnerDrain(t *testing.T) 
 		t.Fatal("asynchronous task runner drain did not finish")
 	}
 	require.Equal(t, 1, runner.stopped)
+	require.NoError(t, <-closeDone)
 	require.Nil(t, s.GetTaskRunner())
+}
+
+func TestCNGenerationRevocationDoesNotWaitForCloseOwnedTaskRunner(t *testing.T) {
+	runner := &blockedStopTaskRunner{
+		testRunner: &testRunner{}, stopEntered: make(chan struct{}),
+		releaseStop: make(chan struct{}), stopDone: make(chan struct{}),
+	}
+	s := &service{
+		cfg: &Config{UUID: "close-owned-task-runner"}, logger: zap.NewNop(),
+		viewMetadataAdmissionGeneration: 8,
+	}
+	s.task.runner = runner
+	s.task.runnerReady.Store(true)
+
+	closeDone := make(chan error, 1)
+	go func() { closeDone <- s.stopTask() }()
+	select {
+	case <-runner.stopEntered:
+	case <-time.After(time.Second):
+		t.Fatal("normal Close did not take runner drain ownership")
+	}
+
+	revokeDone := make(chan struct{})
+	go func() {
+		s.revokeViewMetadataGeneration(9)
+		close(revokeDone)
+	}()
+	select {
+	case <-revokeDone:
+		// stopTask must not hold task.Lock across runner.Stop.
+	case <-time.After(time.Second):
+		t.Fatal("revocation waited on task.Lock held across normal runner.Stop")
+	}
+	require.True(t, s.viewMetadataGenerationRevoked.Load())
+	require.False(t, s.task.runnerReady.Load())
+
+	close(runner.releaseStop)
+	select {
+	case <-runner.stopDone:
+	case <-time.After(time.Second):
+		t.Fatal("normal Close runner drain did not finish")
+	}
+	require.NoError(t, <-closeDone)
+	require.Equal(t, 1, runner.stopped)
 }
 
 func TestCNGenerationRevocationStopsTaskRunnerStartInFlight(t *testing.T) {
