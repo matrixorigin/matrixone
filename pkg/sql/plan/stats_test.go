@@ -679,6 +679,77 @@ func TestDetermineBuildSideCostsUnfilteredIndexByRetainedBytes(t *testing.T) {
 		require.Equal(t, []int32{indexNodeID, dataNodeID}, builder.qry.Nodes[joinNodeID].Children)
 	})
 
+	t.Run("cyclic and malformed projection lineage is bounded", func(t *testing.T) {
+		for _, test := range []struct {
+			name   string
+			mutate func(*QueryBuilder)
+			want   []int32
+		}{
+			{name: "cyclic project", mutate: func(builder *QueryBuilder) {
+				builder.qry.Nodes[dataNodeID].Children[0] = dataNodeID
+			}, want: []int32{indexNodeID, dataNodeID}},
+			{name: "invalid binding", mutate: func(builder *QueryBuilder) {
+				builder.tag2NodeID[10] = int32(len(builder.qry.Nodes) + 1)
+			}, want: []int32{indexNodeID, dataNodeID}},
+			{name: "one invalid slot leaves a valid lower bound", mutate: func(builder *QueryBuilder) {
+				builder.qry.Nodes[dataNodeID].ProjectList[0].GetCol().ColPos = 1_000
+			}, want: []int32{dataNodeID, indexNodeID}},
+		} {
+			t.Run(test.name, func(t *testing.T) {
+				builder := newBuilder(100_000, 32, 100_000, 2_312, false)
+				test.mutate(builder)
+				builder.determineBuildAndProbeSide(joinNodeID, false)
+				require.Equal(t, test.want, builder.qry.Nodes[joinNodeID].Children)
+			})
+		}
+	})
+
+	t.Run("many narrow target columns accumulate retained width", func(t *testing.T) {
+		builder := newBuilder(1_000, 64, 1_000, 32, false)
+		scan := builder.qry.Nodes[dataScanNodeID]
+		project := builder.qry.Nodes[dataNodeID]
+		rowIDCol := scan.TableDef.Cols[len(scan.TableDef.Cols)-1]
+		scan.TableDef.Cols = scan.TableDef.Cols[:len(scan.TableDef.Cols)-1]
+		for i := 0; i < 64; i++ {
+			scan.TableDef.Cols = append(scan.TableDef.Cols, &planpb.ColDef{
+				Name: "fixed", Typ: planpb.Type{Id: int32(types.T_int64)},
+			})
+		}
+		scan.TableDef.Cols = append(scan.TableDef.Cols, rowIDCol)
+		project.ProjectList = make([]*planpb.Expr, len(scan.TableDef.Cols))
+		for i, col := range scan.TableDef.Cols {
+			project.ProjectList[i] = &planpb.Expr{
+				Typ: col.Typ,
+				Expr: &planpb.Expr_Col{Col: &planpb.ColRef{
+					RelPos: 10, ColPos: int32(i),
+				}},
+			}
+		}
+		builder.determineBuildAndProbeSide(joinNodeID, false)
+		require.Equal(t, []int32{dataNodeID, indexNodeID}, builder.qry.Nodes[joinNodeID].Children)
+	})
+
+	t.Run("complete index schema is an upper bound", func(t *testing.T) {
+		for _, test := range []struct {
+			name     string
+			extraCol *planpb.ColDef
+		}{
+			{name: "observed wide extra column", extraCol: &planpb.ColDef{Name: "extra", Typ: planpb.Type{Id: int32(types.T_varchar)}}},
+			{name: "nil column", extraCol: nil},
+			{name: "unknown future column", extraCol: &planpb.ColDef{Name: "future", Typ: planpb.Type{Id: 255}}},
+		} {
+			t.Run(test.name, func(t *testing.T) {
+				builder := newBuilder(1_000, 64, 1_000, 128, false)
+				builder.qry.Nodes[indexNodeID].TableDef.Cols = append(builder.qry.Nodes[indexNodeID].TableDef.Cols, test.extraCol)
+				if test.extraCol != nil && test.extraCol.Name == "extra" {
+					builder.getStatsInfoByTableID(2).GetStats().SizeMap[test.extraCol.Name] = 1_000 * 256
+				}
+				builder.determineBuildAndProbeSide(joinNodeID, false)
+				require.Equal(t, []int32{indexNodeID, dataNodeID}, builder.qry.Nodes[joinNodeID].Children)
+			})
+		}
+	})
+
 	t.Run("missing variable-width index stats keep existing policy", func(t *testing.T) {
 		builder := newBuilder(100_000, 32, 100_000, 2_312, false)
 		delete(builder.getStatsInfoByTableID(2).GetStats().SizeMap, catalog.IndexTableIndexColName)
@@ -796,6 +867,45 @@ func TestDetermineBuildSideCostsUnfilteredIndexByRetainedBytes(t *testing.T) {
 		require.Equal(t, []int32{indexNodeID, dataNodeID}, builder.qry.Nodes[joinNodeID].Children)
 	})
 
+	t.Run("literal true filters remain unrestricted", func(t *testing.T) {
+		for _, test := range []struct {
+			name        string
+			filterIndex bool
+		}{
+			{name: "target", filterIndex: false},
+			{name: "index", filterIndex: true},
+		} {
+			t.Run(test.name, func(t *testing.T) {
+				builder := newBuilder(20, 32, 20, 2_454, false)
+				if test.filterIndex {
+					builder.qry.Nodes[indexNodeID].FilterList = []*planpb.Expr{MakePlan2BoolConstExprWithType(true)}
+				} else {
+					builder.qry.Nodes[dataScanNodeID].FilterList = []*planpb.Expr{MakePlan2BoolConstExprWithType(true)}
+				}
+				builder.determineBuildAndProbeSide(joinNodeID, false)
+				require.Equal(t, []int32{dataNodeID, indexNodeID}, builder.qry.Nodes[joinNodeID].Children)
+			})
+		}
+	})
+
+	t.Run("literal false and mixed filters remain selective", func(t *testing.T) {
+		for _, test := range []struct {
+			name    string
+			filters []*planpb.Expr
+		}{
+			{name: "false", filters: []*planpb.Expr{MakePlan2BoolConstExprWithType(false)}},
+			{name: "true and false", filters: []*planpb.Expr{MakePlan2BoolConstExprWithType(true), MakePlan2BoolConstExprWithType(false)}},
+			{name: "nil", filters: []*planpb.Expr{nil}},
+		} {
+			t.Run(test.name, func(t *testing.T) {
+				builder := newBuilder(20, 32, 20, 2_454, false)
+				builder.qry.Nodes[dataScanNodeID].FilterList = test.filters
+				builder.determineBuildAndProbeSide(joinNodeID, false)
+				require.Equal(t, []int32{indexNodeID, dataNodeID}, builder.qry.Nodes[joinNodeID].Children)
+			})
+		}
+	})
+
 	t.Run("block-filtered target keeps existing cardinality policy", func(t *testing.T) {
 		builder := newBuilder(20, 32, 20, 2_454, false)
 		builder.qry.Nodes[dataScanNodeID].BlockFilterList = []*planpb.Expr{{}}
@@ -897,18 +1007,117 @@ func TestDetermineBuildSideCostsUnfilteredIndexByRetainedBytes(t *testing.T) {
 		require.Equal(t, []int32{indexNodeID, dataNodeID}, builder.qry.Nodes[joinNodeID].Children)
 	})
 
-	t.Run("select keeps existing hidden-index policy", func(t *testing.T) {
-		builder := newBuilder(20, 32, 20, 2_454, false)
-		builder.qry.StmtType = planpb.Query_SELECT
-		builder.determineBuildAndProbeSide(joinNodeID, false)
-		require.Equal(t, []int32{indexNodeID, dataNodeID}, builder.qry.Nodes[joinNodeID].Children)
+	t.Run("statement join orientation and eligibility cross product", func(t *testing.T) {
+		stmtTypes := []planpb.Query_StatementType{
+			planpb.Query_UNKNOWN,
+			planpb.Query_SELECT,
+			planpb.Query_INSERT,
+			planpb.Query_DELETE,
+			planpb.Query_UPDATE,
+			planpb.Query_MERGE,
+		}
+		joinTypes := []planpb.Node_JoinType{
+			planpb.Node_INNER,
+			planpb.Node_LEFT,
+			planpb.Node_RIGHT,
+			planpb.Node_OUTER,
+			planpb.Node_SEMI,
+			planpb.Node_ANTI,
+			planpb.Node_SINGLE,
+			planpb.Node_MARK,
+			planpb.Node_INDEX,
+			planpb.Node_L2,
+			planpb.Node_DEDUP,
+			planpb.Node_ASOF,
+			planpb.Node_ASOF_LEFT,
+		}
+		type shape struct {
+			name                                string
+			indexWidth, targetWidth             float64
+			filterIndex, filterTarget, eligible bool
+		}
+		shapes := []shape{
+			{name: "eligible wide target", indexWidth: 32, targetWidth: 2_454, eligible: true},
+			{name: "filtered index", indexWidth: 32, targetWidth: 2_454, filterIndex: true},
+			{name: "filtered target", indexWidth: 32, targetWidth: 2_454, filterTarget: true},
+			{name: "index not narrower", indexWidth: 64, targetWidth: 64},
+		}
+
+		for _, stmtType := range stmtTypes {
+			for _, joinType := range joinTypes {
+				for _, indexOnLeft := range []bool{false, true} {
+					for _, shape := range shapes {
+						builder := newBuilder(20, shape.indexWidth, 20, shape.targetWidth, shape.filterIndex)
+						builder.qry.StmtType = stmtType
+						builder.qry.Nodes[joinNodeID].JoinType = joinType
+						if !indexOnLeft {
+							builder.qry.Nodes[joinNodeID].Children = []int32{dataNodeID, indexNodeID}
+						}
+						if shape.filterTarget {
+							builder.qry.Nodes[dataScanNodeID].FilterList = []*planpb.Expr{{}}
+						}
+
+						reference := newBuilder(20, shape.indexWidth, 20, shape.targetWidth, shape.filterIndex)
+						reference.qry.StmtType = planpb.Query_SELECT
+						reference.qry.Nodes[joinNodeID].JoinType = joinType
+						if !indexOnLeft {
+							reference.qry.Nodes[joinNodeID].Children = []int32{dataNodeID, indexNodeID}
+						}
+						if shape.filterTarget {
+							reference.qry.Nodes[dataScanNodeID].FilterList = []*planpb.Expr{{}}
+						}
+
+						builder.determineBuildAndProbeSide(joinNodeID, false)
+						reference.determineBuildAndProbeSide(joinNodeID, false)
+						context := "stmt=%s join=%s indexOnLeft=%t shape=%s"
+						args := []any{stmtType, joinType, indexOnLeft, shape.name}
+						if stmtType == planpb.Query_UPDATE && joinType == planpb.Node_INNER && shape.eligible {
+							require.Equalf(t, []int32{dataNodeID, indexNodeID}, builder.qry.Nodes[joinNodeID].Children, context, args...)
+						} else {
+							require.Equalf(t, reference.qry.Nodes[joinNodeID].Children, builder.qry.Nodes[joinNodeID].Children, context, args...)
+							require.Equalf(t, reference.qry.Nodes[joinNodeID].IsRightJoin, builder.qry.Nodes[joinNodeID].IsRightJoin, context, args...)
+						}
+					}
+				}
+			}
+		}
 	})
 
-	t.Run("delete keeps existing hidden-index policy", func(t *testing.T) {
-		builder := newBuilder(20, 32, 20, 2_454, false)
-		builder.qry.StmtType = planpb.Query_DELETE
-		builder.determineBuildAndProbeSide(joinNodeID, false)
-		require.Equal(t, []int32{indexNodeID, dataNodeID}, builder.qry.Nodes[joinNodeID].Children)
+	t.Run("eligible decision is invariant across data scale and stats drift", func(t *testing.T) {
+		for _, test := range []struct {
+			name                  string
+			indexRows, targetRows float64
+		}{
+			{name: "one row", indexRows: 1, targetRows: 1},
+			{name: "one thousand rows", indexRows: 1_000, targetRows: 1_000},
+			{name: "one million rows", indexRows: 1_000_000, targetRows: 1_000_000},
+			{name: "index stats much larger", indexRows: 1_000_000_000, targetRows: 1_000},
+			{name: "target stats much larger", indexRows: 1_000, targetRows: 1_000_000_000},
+		} {
+			t.Run(test.name, func(t *testing.T) {
+				builder := newBuilder(test.indexRows, 64, test.targetRows, 2_454, false)
+				builder.determineBuildAndProbeSide(joinNodeID, false)
+				require.Equal(t, []int32{dataNodeID, indexNodeID}, builder.qry.Nodes[joinNodeID].Children)
+			})
+		}
+	})
+
+	t.Run("retained width boundary is strict", func(t *testing.T) {
+		for _, test := range []struct {
+			name         string
+			indexRowSize float64
+			want         []int32
+		}{
+			{name: "just narrower", indexRowSize: 63.999, want: []int32{dataNodeID, indexNodeID}},
+			{name: "equal", indexRowSize: 64, want: []int32{indexNodeID, dataNodeID}},
+			{name: "just wider", indexRowSize: 64.001, want: []int32{indexNodeID, dataNodeID}},
+		} {
+			t.Run(test.name, func(t *testing.T) {
+				builder := newBuilder(1_000, test.indexRowSize, 1_000, 64, false)
+				builder.determineBuildAndProbeSide(joinNodeID, false)
+				require.Equal(t, test.want, builder.qry.Nodes[joinNodeID].Children)
+			})
+		}
 	})
 
 	t.Run("invalid width falls back to cardinality", func(t *testing.T) {
@@ -966,6 +1175,114 @@ func TestEstimatedHashBuildRetainedBytesRejectsUnsafeStats(t *testing.T) {
 		require.Equal(t, math.MaxFloat64, got)
 	})
 
+}
+
+func TestFixedTypeRetainedBytesSchemaMatrix(t *testing.T) {
+	for _, test := range []struct {
+		name string
+		oid  types.T
+		want float64
+	}{
+		{name: "bit", oid: types.T_bit, want: 8},
+		{name: "bool", oid: types.T_bool, want: 1},
+		{name: "int8", oid: types.T_int8, want: 1},
+		{name: "int16", oid: types.T_int16, want: 2},
+		{name: "int32", oid: types.T_int32, want: 4},
+		{name: "int64", oid: types.T_int64, want: 8},
+		{name: "uint8", oid: types.T_uint8, want: 1},
+		{name: "uint16", oid: types.T_uint16, want: 2},
+		{name: "uint32", oid: types.T_uint32, want: 4},
+		{name: "uint64", oid: types.T_uint64, want: 8},
+		{name: "float32", oid: types.T_float32, want: 4},
+		{name: "float64", oid: types.T_float64, want: 8},
+		{name: "decimal64", oid: types.T_decimal64, want: 8},
+		{name: "decimal128", oid: types.T_decimal128, want: 16},
+		{name: "decimal256", oid: types.T_decimal256, want: 32},
+		{name: "date", oid: types.T_date, want: 4},
+		{name: "time", oid: types.T_time, want: 8},
+		{name: "datetime", oid: types.T_datetime, want: 8},
+		{name: "timestamp", oid: types.T_timestamp, want: 8},
+		{name: "year", oid: types.T_year, want: 2},
+		{name: "uuid", oid: types.T_uuid, want: 16},
+		{name: "enum", oid: types.T_enum, want: 2},
+		{name: "transaction timestamp", oid: types.T_TS, want: 12},
+		{name: "row id", oid: types.T_Rowid, want: 24},
+		{name: "block id", oid: types.T_Blockid, want: 20},
+		{name: "object id", oid: types.T_Objectid, want: 18},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			got, ok := fixedTypeRetainedBytes(test.oid)
+			require.True(t, ok)
+			require.Equal(t, test.want, got)
+		})
+	}
+
+	for _, test := range []struct {
+		name string
+		oid  types.T
+	}{
+		{name: "any", oid: types.T_any},
+		{name: "star", oid: types.T_star},
+		{name: "reserved int128", oid: types.T_int128},
+		{name: "reserved uint128", oid: types.T_uint128},
+		{name: "interval expression", oid: types.T_interval},
+		{name: "tuple", oid: types.T_tuple},
+		{name: "unknown future type", oid: types.T(255)},
+		{name: "char needs observed stats", oid: types.T_char},
+		{name: "varchar needs observed stats", oid: types.T_varchar},
+		{name: "json needs observed stats", oid: types.T_json},
+		{name: "binary needs observed stats", oid: types.T_binary},
+		{name: "varbinary needs observed stats", oid: types.T_varbinary},
+		{name: "geometry needs observed stats", oid: types.T_geometry},
+		{name: "geometry32 needs observed stats", oid: types.T_geometry32},
+		{name: "blob needs observed stats", oid: types.T_blob},
+		{name: "text needs observed stats", oid: types.T_text},
+		{name: "datalink needs observed stats", oid: types.T_datalink},
+		{name: "float32 vector needs observed stats", oid: types.T_array_float32},
+		{name: "float64 vector needs observed stats", oid: types.T_array_float64},
+		{name: "bf16 vector needs observed stats", oid: types.T_array_bf16},
+		{name: "float16 vector needs observed stats", oid: types.T_array_float16},
+		{name: "int8 vector needs observed stats", oid: types.T_array_int8},
+		{name: "uint8 vector needs observed stats", oid: types.T_array_uint8},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			got, ok := fixedTypeRetainedBytes(test.oid)
+			require.False(t, ok)
+			require.Zero(t, got)
+		})
+	}
+
+	for id := 0; id <= int(^uint8(0)); id++ {
+		got, ok := fixedTypeRetainedBytes(types.T(id))
+		if ok {
+			require.Greater(t, got, float64(0), "type id %d", id)
+			require.False(t, math.IsNaN(got), "type id %d", id)
+			require.False(t, math.IsInf(got, 0), "type id %d", id)
+		} else {
+			require.Zero(t, got, "type id %d", id)
+		}
+	}
+}
+
+func TestHasRecursiveScanHandlesGeneralPlanGraphs(t *testing.T) {
+	builder := NewQueryBuilder(planpb.Query_SELECT, NewMockCompilerContext(false), false, true)
+	builder.qry.Nodes = []*planpb.Node{
+		{NodeId: 0, NodeType: planpb.Node_TABLE_SCAN},
+		{NodeId: 1, NodeType: planpb.Node_PROJECT, Children: []int32{0}},
+		{NodeId: 2, NodeType: planpb.Node_JOIN, Children: []int32{1, 1}},
+		{NodeId: 3, NodeType: planpb.Node_RECURSIVE_SCAN},
+		{NodeId: 4, NodeType: planpb.Node_PROJECT, Children: []int32{4}},
+		{NodeId: 5, NodeType: planpb.Node_PROJECT, Children: []int32{-1, 999}},
+		{NodeId: 6, NodeType: planpb.Node_PROJECT, Children: []int32{2, 3}},
+	}
+
+	require.False(t, builder.hasRecursiveScan(nil))
+	require.False(t, builder.hasRecursiveScan(builder.qry.Nodes[0]))
+	require.False(t, builder.hasRecursiveScan(builder.qry.Nodes[2]))
+	require.False(t, builder.hasRecursiveScan(builder.qry.Nodes[4]))
+	require.False(t, builder.hasRecursiveScan(builder.qry.Nodes[5]))
+	require.True(t, builder.hasRecursiveScan(builder.qry.Nodes[3]))
+	require.True(t, builder.hasRecursiveScan(builder.qry.Nodes[6]))
 }
 
 func TestDeepCopyIndexReaderParamCopiesOrigFuncName(t *testing.T) {

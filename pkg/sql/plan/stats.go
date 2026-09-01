@@ -2054,10 +2054,26 @@ func (builder *QueryBuilder) preferDominatingSecondaryIndexBuild(leftID, rightID
 }
 
 func (builder *QueryBuilder) isSecondaryIndexTableWithoutFilters(nodeID int32) bool {
+	if nodeID < 0 || int(nodeID) >= len(builder.qry.Nodes) {
+		return false
+	}
 	node := builder.qry.Nodes[nodeID]
 	return node != nil && node.NodeType == plan.Node_TABLE_SCAN && node.TableDef != nil &&
-		node.Limit == nil && node.Offset == nil && len(node.FilterList) == 0 &&
-		len(node.BlockFilterList) == 0 && catalog.IsSecondaryIndexTable(node.TableDef.Name)
+		node.Limit == nil && node.Offset == nil && !hasRestrictingFilters(node.FilterList) &&
+		!hasRestrictingFilters(node.BlockFilterList) && catalog.IsSecondaryIndexTable(node.TableDef.Name)
+}
+
+func hasRestrictingFilters(filters []*plan.Expr) bool {
+	for _, filter := range filters {
+		if filter == nil {
+			return true
+		}
+		literal := filter.GetLit()
+		if filter.Typ.Id != int32(types.T_bool) || literal == nil || literal.Isnull || !literal.GetBval() {
+			return true
+		}
+	}
+	return false
 }
 
 // unrestrictedSecondaryIndexUpdateInputRowSizeLowerBound proves that the
@@ -2085,9 +2101,28 @@ func (builder *QueryBuilder) unrestrictedSecondaryIndexUpdateInputRowSizeLowerBo
 // PROJECT boundary, where both the scan estimate and schema are needed to
 // prove that the projection still carries the complete target row.
 func (builder *QueryBuilder) unrestrictedSecondaryIndexUpdateScan(nodeID int32) (float64, *plan.TableDef, bool) {
+	return builder.unrestrictedSecondaryIndexUpdateScanPath(nodeID, nil)
+}
+
+func (builder *QueryBuilder) unrestrictedSecondaryIndexUpdateScanPath(
+	nodeID int32,
+	visited map[int32]struct{},
+) (float64, *plan.TableDef, bool) {
+	if nodeID < 0 || int(nodeID) >= len(builder.qry.Nodes) {
+		return 0, nil, false
+	}
+	if visited == nil {
+		visited = make(map[int32]struct{})
+	}
+	if _, ok := visited[nodeID]; ok {
+		return 0, nil, false
+	}
+	visited[nodeID] = struct{}{}
+	defer delete(visited, nodeID)
+
 	node := builder.qry.Nodes[nodeID]
 	if node == nil || node.Limit != nil || node.Offset != nil ||
-		len(node.FilterList) > 0 || len(node.BlockFilterList) > 0 {
+		hasRestrictingFilters(node.FilterList) || hasRestrictingFilters(node.BlockFilterList) {
 		return 0, nil, false
 	}
 
@@ -2105,7 +2140,7 @@ func (builder *QueryBuilder) unrestrictedSecondaryIndexUpdateScan(nodeID int32) 
 		if len(node.Children) != 1 {
 			return 0, nil, false
 		}
-		_, tableDef, ok := builder.unrestrictedSecondaryIndexUpdateScan(node.Children[0])
+		_, tableDef, ok := builder.unrestrictedSecondaryIndexUpdateScanPath(node.Children[0], visited)
 		if !ok || !projectMatchesFullTargetRowLayout(node, tableDef) {
 			return 0, nil, false
 		}
@@ -2124,9 +2159,9 @@ func (builder *QueryBuilder) unrestrictedSecondaryIndexUpdateScan(nodeID int32) 
 			return 0, nil, false
 		}
 		if leftIsIndex {
-			return builder.unrestrictedSecondaryIndexUpdateScan(node.Children[1])
+			return builder.unrestrictedSecondaryIndexUpdateScanPath(node.Children[1], visited)
 		}
-		return builder.unrestrictedSecondaryIndexUpdateScan(node.Children[0])
+		return builder.unrestrictedSecondaryIndexUpdateScanPath(node.Children[0], visited)
 	default:
 		return 0, nil, false
 	}
@@ -2231,11 +2266,30 @@ func (builder *QueryBuilder) estimatedTableScanColumnRetainedBytes(node *plan.No
 			}
 		}
 	}
-	oid := types.T(col.Typ.Id)
-	if oid.FixedLength() >= 0 && oid.TypeLen() > 0 {
+	return fixedTypeRetainedBytes(types.T(col.Typ.Id))
+}
+
+// fixedTypeRetainedBytes is deliberately total over the protobuf type ID
+// domain. types.T.FixedLength and TypeLen panic for expression-only, reserved,
+// or future type IDs; an optional optimizer estimate must instead decline and
+// leave the established build-side policy unchanged.
+func fixedTypeRetainedBytes(oid types.T) (float64, bool) {
+	switch oid {
+	case types.T_bit,
+		types.T_bool,
+		types.T_int8, types.T_int16, types.T_int32, types.T_int64,
+		types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64,
+		types.T_float32, types.T_float64,
+		types.T_decimal64, types.T_decimal128, types.T_decimal256,
+		types.T_date, types.T_time, types.T_datetime, types.T_timestamp, types.T_year,
+		types.T_uuid, types.T_enum,
+		types.T_TS, types.T_Rowid, types.T_Blockid:
 		return float64(oid.TypeLen()), true
+	case types.T_Objectid:
+		return float64(types.ObjectidSize), true
+	default:
+		return 0, false
 	}
-	return 0, false
 }
 
 func (builder *QueryBuilder) secondaryIndexRowSizeUpperBound(node *plan.Node) (float64, bool) {
@@ -2524,11 +2578,30 @@ func rightDedupKeyWidth(expr *plan.Expr) int {
 }
 
 func (builder *QueryBuilder) hasRecursiveScan(node *plan.Node) bool {
+	return builder.hasRecursiveScanPath(node, nil)
+}
+
+func (builder *QueryBuilder) hasRecursiveScanPath(node *plan.Node, visited map[*plan.Node]struct{}) bool {
+	if node == nil {
+		return false
+	}
 	if node.NodeType == plan.Node_RECURSIVE_SCAN {
 		return true
 	}
+	if visited == nil {
+		visited = make(map[*plan.Node]struct{})
+	}
+	if _, ok := visited[node]; ok {
+		return false
+	}
+	visited[node] = struct{}{}
+	defer delete(visited, node)
+
 	for _, nodeID := range node.Children {
-		if builder.hasRecursiveScan(builder.qry.Nodes[nodeID]) {
+		if nodeID < 0 || int(nodeID) >= len(builder.qry.Nodes) {
+			continue
+		}
+		if builder.hasRecursiveScanPath(builder.qry.Nodes[nodeID], visited) {
 			return true
 		}
 	}

@@ -202,23 +202,46 @@ func TestUpdateIndexLookupBuildSideUsesScanWidthBehindProject(t *testing.T) {
 		}}
 	}
 
-	logicPlan, err := runOneStmt(newOptimizer(), t, "UPDATE index_hint_t SET k = concat(k, 'x')")
-	require.NoError(t, err)
-	query := logicPlan.GetQuery()
-	require.NotNil(t, query)
-	join := findUpdateSecondaryIndexLookupJoin(t, query)
-	build := query.Nodes[join.Children[1]]
-	buildsIndex := build.NodeType == planpb.Node_TABLE_SCAN && build.TableDef != nil &&
-		catalog.IsSecondaryIndexTable(build.TableDef.Name)
-	require.True(t, buildsIndex)
-	require.Greater(t, build.Stats.Rowsize, float64(100))
-	targetProject := query.Nodes[join.Children[0]]
-	require.Equal(t, planpb.Node_PROJECT, targetProject.NodeType)
-	require.Equal(t, float64(100), targetProject.Stats.Rowsize)
-	require.Len(t, targetProject.Children, 1)
-	targetScan := query.Nodes[targetProject.Children[0]]
-	require.Equal(t, planpb.Node_TABLE_SCAN, targetScan.NodeType)
-	require.Greater(t, targetScan.Stats.Rowsize, build.Stats.Rowsize)
+	for _, test := range []struct {
+		name           string
+		sql            string
+		wantIndexBuild bool
+	}{
+		{name: "expression assignment", sql: "UPDATE index_hint_t SET k = concat(k, 'x')", wantIndexBuild: true},
+		{name: "constant assignment", sql: "UPDATE index_hint_t SET k = 'fixed'", wantIndexBuild: true},
+		{name: "conditional assignment", sql: "UPDATE index_hint_t SET k = if(id > 0, k, 'fallback')", wantIndexBuild: true},
+		{name: "multiple assignments", sql: "UPDATE index_hint_t SET k = concat(k, 'x'), payload = substring(payload, 1, 1000)", wantIndexBuild: true},
+		{name: "constant true predicate", sql: "UPDATE index_hint_t SET k = concat(k, 'x') WHERE true", wantIndexBuild: true},
+		{name: "selective predicate", sql: "UPDATE index_hint_t SET k = concat(k, 'x') WHERE id > 0"},
+		{name: "ordered limit", sql: "UPDATE index_hint_t SET k = concat(k, 'x') ORDER BY id LIMIT 10"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			logicPlan, err := runOneStmt(newOptimizer(), t, test.sql)
+			require.NoError(t, err)
+			query := logicPlan.GetQuery()
+			require.NotNil(t, query)
+			join := findUpdateSecondaryIndexLookupJoin(t, query)
+			build := query.Nodes[join.Children[1]]
+			buildsIndex := build.NodeType == planpb.Node_TABLE_SCAN && build.TableDef != nil &&
+				catalog.IsSecondaryIndexTable(build.TableDef.Name)
+			require.Equal(t, test.wantIndexBuild, buildsIndex)
+			if !test.wantIndexBuild {
+				return
+			}
+			require.Greater(t, build.Stats.Rowsize, float64(100))
+			targetProject := query.Nodes[join.Children[0]]
+			require.Equal(t, planpb.Node_PROJECT, targetProject.NodeType)
+			require.Equal(t, float64(100), targetProject.Stats.Rowsize)
+			require.Len(t, targetProject.Children, 1)
+			targetScan := query.Nodes[targetProject.Children[0]]
+			for targetScan.NodeType == planpb.Node_PROJECT {
+				require.Len(t, targetScan.Children, 1)
+				targetScan = query.Nodes[targetScan.Children[0]]
+			}
+			require.Equal(t, planpb.Node_TABLE_SCAN, targetScan.NodeType)
+			require.Greater(t, targetScan.Stats.Rowsize, build.Stats.Rowsize)
+		})
+	}
 }
 
 func TestUpdateIndexLookupBuildSidePreservesNarrowTarget(t *testing.T) {
