@@ -6097,6 +6097,15 @@ func checkNodeCanCache(p *plan2.Plan) bool {
 	if p == nil {
 		return true
 	}
+	// INFORMATION_SCHEMA.STATISTICS expands the account's currently visible
+	// subscriptions while the plan is built. In particular, a plan built with
+	// zero subscriptions has no publisher scan whose node-level flags would
+	// otherwise reject it. Do not admit any plan with this dependency to the
+	// ordinary COM_QUERY cache: creating the first subscription does not change
+	// a table schema version and therefore cannot invalidate such a cached plan.
+	if plan2.PreparedPlanDependsOnSubscriptionMetadata(p) {
+		return false
+	}
 	if q, ok := p.Plan.(*plan2.Plan_Query); ok {
 		if q.Query.GetHasForeignKeyAction() {
 			return false

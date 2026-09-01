@@ -39,7 +39,13 @@ create table idx_meta_src_b.second_t(id int primary key);
 create publication idx_meta_pub_b database idx_meta_src_b table second_t account idx_meta_sub;
 
 -- @session:id=2&user=idx_meta_sub:admin&password=111
+-- Repeating this exact ordinary COM_QUERY before and after the first
+-- subscription is created must not reuse the zero-subscription branch set.
+select count(*) as ordinary_cache_first_subscription_rows
+from information_schema.statistics where table_name = 'visible_t';
 create database idx_meta_sub_db from sys publication idx_meta_pub;
+select count(*) as ordinary_cache_first_subscription_rows
+from information_schema.statistics where table_name = 'visible_t';
 create database idx_meta_sub_b from sys publication idx_meta_pub_b;
 create database idx_meta_local;
 create table idx_meta_local.local_t(id int primary key, v int, key idx_local(v));

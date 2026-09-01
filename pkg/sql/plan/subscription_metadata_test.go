@@ -347,6 +347,26 @@ func TestPreparedSubscriptionMetadataPreservesAllSources(t *testing.T) {
 	require.True(t, hasLocalStatisticsCatalogScan(queryPlan.GetQuery()))
 }
 
+func TestSubscriptionStatisticsZeroSubscriptionsRetainsMetadataDependency(t *testing.T) {
+	optimizer, ctx := newSubscriptionMetadataTestOptimizer()
+	ctx.metadata = []*SubscriptionMeta{}
+
+	queryPlan, err := runOneStmt(optimizer, t,
+		"select count(*) from information_schema.statistics where table_name = 'nation'")
+	require.NoError(t, err)
+	require.True(t, PreparedPlanDependsOnSubscriptionMetadata(queryPlan))
+	require.Empty(t, statisticsPublisherScanCounts(queryPlan.GetQuery()))
+	require.True(t, hasLocalStatisticsCatalogScan(queryPlan.GetQuery()))
+
+	// There is deliberately no publisher node to carry the existing node-level
+	// cache markers. Ordinary cache admission must therefore use the preserved
+	// STATISTICS origin-view dependency instead.
+	for _, node := range queryPlan.GetQuery().GetNodes() {
+		require.False(t, node.GetNotCacheable())
+		require.Empty(t, node.GetObjRef().GetSubscriptionName())
+	}
+}
+
 func TestSubscriptionStatisticsSupportsManyVisibleSubscriptions(t *testing.T) {
 	optimizer, ctx := newSubscriptionMetadataTestOptimizer()
 	ctx.metadata = make([]*SubscriptionMeta, 0, 67)

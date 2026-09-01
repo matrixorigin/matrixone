@@ -29,7 +29,15 @@ create publication idx_meta_pub database idx_meta_src table visible_t account id
 create database idx_meta_src_b;
 create table idx_meta_src_b.second_t(id int primary key);
 create publication idx_meta_pub_b database idx_meta_src_b table second_t account idx_meta_sub;
+select count(*) as ordinary_cache_first_subscription_rows
+from information_schema.statistics where table_name = 'visible_t';
+➤ ordinary_cache_first_subscription_rows[-5,64,0]  𝄀
+0
 create database idx_meta_sub_db from sys publication idx_meta_pub;
+select count(*) as ordinary_cache_first_subscription_rows
+from information_schema.statistics where table_name = 'visible_t';
+➤ ordinary_cache_first_subscription_rows[-5,64,0]  𝄀
+3
 create database idx_meta_sub_b from sys publication idx_meta_pub_b;
 create database idx_meta_local;
 create table idx_meta_local.local_t(id int primary key, v int, key idx_local(v));

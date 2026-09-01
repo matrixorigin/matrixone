@@ -55,6 +55,7 @@ func TestShouldCachePrepareCompileForeignKeyActions(t *testing.T) {
 		OriginViews: []string{"information_schema#statistics"},
 	}}
 	require.True(t, shouldRebuildPreparePlan(false, subscriptionMetadataPlan))
+	require.False(t, checkNodeCanCache(subscriptionMetadataPlan))
 }
 
 func TestInitExecuteStmtParamRebuildsAcrossForeignKeyChecksTransitions(t *testing.T) {
