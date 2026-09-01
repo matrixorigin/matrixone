@@ -2351,6 +2351,57 @@ func TestBoundedSlidingRangeAvgOrderShapes(t *testing.T) {
 	}
 }
 
+func TestBoundedSlidingRangeSumUint8MaximumBoundary(t *testing.T) {
+	frame := &plan.FrameClause{
+		Type: plan.FrameClause_RANGE,
+		Start: &plan.FrameBound{Type: plan.FrameBound_PRECEDING, Val: &plan.Expr{Expr: &plan.Expr_Lit{Lit: &plan.Literal{
+			Value: &plan.Literal_U8Val{U8Val: 2},
+		}}}},
+		End: &plan.FrameBound{Type: plan.FrameBound_FOLLOWING, Val: &plan.Expr{Expr: &plan.Expr_Lit{Lit: &plan.Literal{
+			Value: &plan.Literal_U8Val{U8Val: 2},
+		}}}},
+	}
+	for _, test := range []struct {
+		name   string
+		values []uint8
+		desc   bool
+		want   []uint64
+	}{
+		{name: "ascending", values: []uint8{252, 253, 254, 255}, want: []uint64{759, 1014, 1014, 762}},
+		{name: "descending", values: []uint8{255, 254, 253, 252}, desc: true, want: []uint64{762, 1014, 1014, 759}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+			bat := batch.NewWithSize(1)
+			bat.Vecs[0] = testutil.MakeUint8Vector(test.values, nil, proc.Mp())
+			bat.SetRowCount(len(test.values))
+			arg := &Window{
+				WinSpecList: []*plan.Expr{{Expr: &plan.Expr_W{W: &plan.WindowSpec{Frame: frame}}}},
+				Aggs: []aggexec.AggFuncExecExpression{
+					newTypedSumAggExpr(t, 0, types.T_uint8.ToType()),
+				},
+			}
+			ctr := &container{
+				bat:       bat,
+				os:        []int64{0, 1, 2, 3},
+				desc:      []bool{test.desc},
+				orderVecs: []colexec.ExprEvalVector{{Vec: []*vector.Vector{bat.Vecs[0]}}},
+				aggVecs:   []colexec.ExprEvalVector{{Vec: []*vector.Vector{bat.Vecs[0]}}},
+			}
+
+			result, err := ctr.processAggregateFuncRange(0, arg, proc, 0, bat.RowCount())
+			require.NoError(t, err)
+			require.Equal(t, test.want, vector.MustFixedColWithTypeCheck[uint64](result))
+			require.Nil(t, ctr.runningAgg)
+
+			result.Free(proc.Mp())
+			bat.Clean(proc.Mp())
+			proc.Free()
+			require.Zero(t, proc.Mp().CurrNB())
+		})
+	}
+}
+
 func TestCumulativeAggregatePreservesNullSemantics(t *testing.T) {
 	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
 	bat := batch.NewWithSize(1)
@@ -3386,14 +3437,13 @@ func TestBuildRangeIntervalUint64Boundaries(t *testing.T) {
 	})
 }
 
-func testBuildRangeIntervalUnsignedBoundaries[T types.OrderedT](
+func testBuildRangeIntervalUnsignedBoundaries[T unsignedRangeInteger](
 	t *testing.T,
 	mp *mpool.MPool,
 	oid types.T,
 	maxValue T,
 ) {
 	t.Helper()
-
 	currentToFollowing := &plan.FrameClause{
 		Type:  plan.FrameClause_RANGE,
 		Start: &plan.FrameBound{Type: plan.FrameBound_CURRENT_ROW},
@@ -3463,6 +3513,9 @@ func TestBuildRangeIntervalUnsignedBoundaries(t *testing.T) {
 	})
 	t.Run("uint32", func(t *testing.T) {
 		testBuildRangeIntervalUnsignedBoundaries(t, mp, types.T_uint32, uint32(math.MaxUint32))
+	})
+	t.Run("uint64", func(t *testing.T) {
+		testBuildRangeIntervalUnsignedBoundaries(t, mp, types.T_uint64, uint64(math.MaxUint64))
 	})
 }
 

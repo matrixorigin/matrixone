@@ -854,6 +854,7 @@ func (ctr *container) processSlidingAggregateFuncRange(
 		partitionStart = int(ctr.ps[ctr.runningPartition])
 	}
 	currentPartitionEnd := partitionEnd(ctr.ps, ctr.runningPartition, n)
+	edgeWork := 0
 	for j := outputStart; j < outputEnd; j++ {
 		if err := checkCanceled(proc, j-outputStart); err != nil {
 			return nil, err
@@ -884,17 +885,19 @@ func (ctr *container) processSlidingAggregateFuncRange(
 			}
 
 			for row := ctr.runningLeft; row < left; row++ {
-				if err = checkCanceled(proc, row-ctr.runningLeft); err != nil {
+				if err = checkCanceled(proc, edgeWork); err != nil {
 					return nil, err
 				}
+				edgeWork++
 				if err = aggexec.RemoveWindowRow(ctr.runningAgg, row, ctr.aggVecs[idx].Vec); err != nil {
 					return nil, err
 				}
 			}
 			for row := ctr.runningRight; row < right; row++ {
-				if err = checkCanceled(proc, row-ctr.runningRight); err != nil {
+				if err = checkCanceled(proc, edgeWork); err != nil {
 					return nil, err
 				}
+				edgeWork++
 				if err = aggexec.AddWindowRow(ctr.runningAgg, row, ctr.aggVecs[idx].Vec); err != nil {
 					return nil, err
 				}
