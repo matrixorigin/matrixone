@@ -73,6 +73,73 @@ func (s *dataProcessorRecordingSinker) sinkCallsSnapshot() []*DecoderOutput {
 	return cp
 }
 
+// transactionalSnapshotSinker models target transaction visibility so retry
+// tests can distinguish staged snapshot rows from durably committed rows.
+type transactionalSnapshotSinker struct {
+	*recordingSinker
+	staged  map[int32]struct{}
+	durable map[int32]struct{}
+}
+
+func newTransactionalSnapshotSinker() *transactionalSnapshotSinker {
+	return &transactionalSnapshotSinker{
+		recordingSinker: newRecordingSinker(),
+		durable:         make(map[int32]struct{}),
+	}
+}
+
+func cloneSnapshotKeys(src map[int32]struct{}) map[int32]struct{} {
+	dst := make(map[int32]struct{}, len(src))
+	for key := range src {
+		dst[key] = struct{}{}
+	}
+	return dst
+}
+
+func (s *transactionalSnapshotSinker) SendBegin() {
+	s.recordingSinker.SendBegin()
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.err == nil {
+		s.staged = cloneSnapshotKeys(s.durable)
+	}
+}
+
+func (s *transactionalSnapshotSinker) Sink(_ context.Context, data *DecoderOutput) {
+	s.mu.Lock()
+	s.ops = append(s.ops, "sink")
+	if data.outputTyp == OutputTypeSnapshot && data.checkpointBat != nil {
+		for row := 0; row < data.checkpointBat.RowCount(); row++ {
+			key := vector.GetFixedAtNoTypeCheck[int32](data.checkpointBat.Vecs[0], row)
+			s.staged[key] = struct{}{}
+		}
+	}
+	s.mu.Unlock()
+	data.Close()
+}
+
+func (s *transactionalSnapshotSinker) SendCommit() {
+	s.recordingSinker.SendCommit()
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.err == nil {
+		s.durable = cloneSnapshotKeys(s.staged)
+	}
+}
+
+func (s *transactionalSnapshotSinker) SendRollback() {
+	s.recordingSinker.SendRollback()
+	s.mu.Lock()
+	s.staged = cloneSnapshotKeys(s.durable)
+	s.mu.Unlock()
+}
+
+func (s *transactionalSnapshotSinker) durableKeys() map[int32]struct{} {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return cloneSnapshotKeys(s.durable)
+}
+
 type slowDataProcessorSinker struct {
 	*dataProcessorRecordingSinker
 	delay time.Duration
@@ -337,85 +404,93 @@ func TestDataProcessor_ProcessChange_Snapshot_WithSplitTxn(t *testing.T) {
 	err = dp.ProcessChange(ctx, data)
 
 	assert.NoError(t, err)
-	assert.True(t, sinker.beginCalled) // Split snapshots use bounded explicit transactions
+	assert.True(t, sinker.beginCalled) // Legacy split mode remains atomic for retry safety.
 	assert.Equal(t, 1, len(sinker.sinkCalls))
 }
 
-func TestDataProcessor_SplitSnapshotCommitsBoundedGroupsWithoutWatermark(t *testing.T) {
+func TestDataProcessor_SplitSnapshotStaysAtomicUntilWatermark(t *testing.T) {
 	ctx := context.Background()
 	h := newDataProcessorHarness(t, true)
-
 	from := types.BuildTS(1, 0)
 	to := types.BuildTS(2, 0)
 	h.dp.SetTransactionRange(from, to)
 
-	for i := 0; i < initialSnapshotTxnBatchCount; i++ {
+	for i := 0; i < 9; i++ {
 		require.NoError(t, h.dp.ProcessChange(ctx, &ChangeData{
 			Type:        ChangeTypeSnapshot,
 			InsertBatch: buildBatch(t, h.mp, []int32{int32(i + 1)}, to),
 		}))
 	}
-
-	assert.Nil(t, h.txnMgr.GetTracker())
-	assert.False(t, h.update.updateCalled, "a partial snapshot commit must not advance watermark")
-	assert.Equal(t, 0, h.dp.snapshotBatchesInTxn)
+	assert.NotNil(t, h.txnMgr.GetTracker())
+	assert.False(t, h.update.updateCalled)
 	expectedOps := []string{"begin"}
-	for i := 0; i < initialSnapshotTxnBatchCount; i++ {
+	for i := 0; i < 9; i++ {
 		expectedOps = append(expectedOps, "sink")
 	}
-	expectedOps = append(expectedOps, "commit", "dummy")
 	assert.Equal(t, expectedOps, h.sinker.opsSnapshot())
-}
-
-func TestDataProcessor_SplitSnapshotGroupCommitFailureRollsBackAndResets(t *testing.T) {
-	ctx := context.Background()
-	h := newDataProcessorHarness(t, true)
-
-	from := types.BuildTS(1, 0)
-	to := types.BuildTS(2, 0)
-	h.dp.SetTransactionRange(from, to)
-	for i := 0; i < initialSnapshotTxnBatchCount-1; i++ {
-		require.NoError(t, h.dp.ProcessChange(ctx, &ChangeData{
-			Type:        ChangeTypeSnapshot,
-			InsertBatch: buildBatch(t, h.mp, []int32{int32(i + 1)}, to),
-		}))
-	}
-
-	commitErr := moerr.NewInternalError(ctx, "snapshot group commit failure")
-	h.sinker.setCommitError(commitErr)
-	err := h.dp.ProcessChange(ctx, &ChangeData{
-		Type:        ChangeTypeSnapshot,
-		InsertBatch: buildBatch(t, h.mp, []int32{initialSnapshotTxnBatchCount}, to),
-	})
-	require.ErrorIs(t, err, commitErr)
-	require.NotNil(t, h.txnMgr.GetTracker())
-	assert.True(t, h.txnMgr.GetTracker().NeedsRollback())
-	assert.False(t, h.update.updateCalled)
-
-	h.sinker.setCommitError(nil)
-	require.NoError(t, h.txnMgr.EnsureCleanup(ctx))
-	h.dp.Cleanup()
-	assert.Equal(t, 0, h.dp.snapshotBatchesInTxn)
-	assert.Contains(t, h.sinker.opsSnapshot(), "rollback")
-}
-
-func TestDataProcessor_SplitSnapshotFinalCommitAdvancesWatermark(t *testing.T) {
-	ctx := context.Background()
-	h := newDataProcessorHarness(t, true)
-
-	from := types.BuildTS(1, 0)
-	to := types.BuildTS(2, 0)
-	h.dp.SetTransactionRange(from, to)
-	require.NoError(t, h.dp.ProcessChange(ctx, &ChangeData{
-		Type:        ChangeTypeSnapshot,
-		InsertBatch: buildBatch(t, h.mp, []int32{1}, to),
-	}))
-	require.False(t, h.update.updateCalled)
 
 	require.NoError(t, h.dp.ProcessChange(ctx, &ChangeData{Type: ChangeTypeNoMoreData}))
 	assert.True(t, h.update.updateCalled)
 	assert.Nil(t, h.txnMgr.GetTracker())
-	assert.Equal(t, 0, h.dp.snapshotBatchesInTxn)
+	expectedOps = append(expectedOps, "sink", "dummy", "commit", "dummy")
+	assert.Equal(t, expectedOps, h.sinker.opsSnapshot())
+}
+
+func TestDataProcessor_SnapshotRetryAfterDeleteAndPKChangeIsExact(t *testing.T) {
+	ctx := context.Background()
+	mp, err := mpool.NewMPool("snapshot_retry_atomicity", 0, mpool.NoFixed)
+	require.NoError(t, err)
+	t.Cleanup(func() { mpool.DeleteMPool(mp) })
+	packerPool := fileservice.NewPool(
+		128,
+		func() *types.Packer { return types.NewPacker() },
+		func(packer *types.Packer) { packer.Reset() },
+		func(*types.Packer) {},
+	)
+	sinker := newTransactionalSnapshotSinker()
+	updater := newMockWatermarkUpdater()
+	txnMgr := NewTransactionManager(sinker, updater, 1, "task1", "db1", "table1")
+	dp := NewDataProcessor(
+		sinker, txnMgr, mp, packerPool,
+		1, 0, 1, 0, true,
+		1, "task1", "db1", "table1",
+	)
+
+	from := types.TS{}
+	firstTo := types.BuildTS(2, 0)
+	dp.SetTransactionRange(from, firstTo)
+	for key := int32(1); key <= 9; key++ {
+		require.NoError(t, dp.ProcessChange(ctx, &ChangeData{
+			Type:        ChangeTypeSnapshot,
+			InsertBatch: buildBatch(t, mp, []int32{key}, firstTo),
+		}))
+	}
+	assert.Empty(t, sinker.durableKeys(), "partial snapshot rows became visible before the watermark")
+
+	readErr := moerr.NewInternalError(ctx, "snapshot read failed")
+	sinker.setError(readErr)
+	require.ErrorIs(t, dp.ProcessChange(ctx, &ChangeData{Type: ChangeTypeSnapshot}), readErr)
+	require.NoError(t, txnMgr.EnsureCleanup(ctx))
+	assert.Empty(t, sinker.durableKeys(), "rollback retained rows from the failed snapshot")
+
+	// Between attempts the source deletes key 1 and changes key 2 to key 20.
+	// The retry snapshot contains neither old key, so exactness depends on the
+	// first attempt remaining uncommitted and being rolled back in full.
+	retryTo := types.BuildTS(3, 0)
+	dp.SetTransactionRange(from, retryTo)
+	retryKeys := []int32{3, 4, 5, 6, 7, 8, 9, 20}
+	require.NoError(t, dp.ProcessChange(ctx, &ChangeData{
+		Type:        ChangeTypeSnapshot,
+		InsertBatch: buildBatch(t, mp, retryKeys, retryTo),
+	}))
+	require.NoError(t, dp.ProcessChange(ctx, &ChangeData{Type: ChangeTypeNoMoreData}))
+
+	expected := make(map[int32]struct{}, len(retryKeys))
+	for _, key := range retryKeys {
+		expected[key] = struct{}{}
+	}
+	assert.Equal(t, expected, sinker.durableKeys())
+	assert.True(t, updater.updateCalled)
 }
 
 func TestDataProcessor_ProcessChange_TailWip(t *testing.T) {
