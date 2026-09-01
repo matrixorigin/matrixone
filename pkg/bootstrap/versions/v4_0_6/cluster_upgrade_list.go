@@ -18,6 +18,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/bootstrap/versions"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/task"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 )
@@ -31,6 +32,80 @@ var clusterUpgEntries = []versions.UpgradeEntry{
 	retireKafkaSinkDaemonTasks,
 	createMoViewDependencies,
 	createMoViewRefresh,
+	addSQLTaskAccountIndex,
+	addSQLTaskRunAccountIndex,
+	addAsyncTaskParentIndex,
+	cleanupLegacyOrphanSQLTaskChildren,
+}
+
+var addSQLTaskAccountIndex = newTaskMetadataIndex(
+	catalog.MOSQLTask, "idx_account_id", "account_id")
+
+var addSQLTaskRunAccountIndex = newTaskMetadataIndex(
+	catalog.MOSQLTaskRun, "idx_account_id", "account_id")
+
+var addAsyncTaskParentIndex = newTaskMetadataIndex(
+	catalog.MOSysAsyncTask, "idx_task_parent_id", "task_parent_id")
+
+const legacyOrphanSQLTaskChildPredicate = "task_parent_id like 'sql-task:%' and task_parent_id not in (" +
+	"select concat('sql-task:', task_id) from mo_task.sql_task " +
+	"union select concat('sql-task:', task_id) from mo_task.sql_task_run)"
+
+// cleanupLegacyOrphanSQLTaskChildren removes children left by pre-v4.0.6
+// DROP TASK, which deleted the definition before an async child acquired a run
+// row. No account mapping survives in that state, so a later DROP ACCOUNT
+// cannot target the child. Wait for every CN to advertise the transactional
+// child-cleanup protocol before running this one-time repair; otherwise an old
+// CN could create another orphan after the repair commits.
+var cleanupLegacyOrphanSQLTaskChildren = versions.UpgradeEntry{
+	Schema:    catalog.MOTaskDB,
+	TableName: catalog.MOSysAsyncTask,
+	UpgType:   versions.MODIFY_METADATA,
+	UpgSql: fmt.Sprintf(
+		"delete from %s.%s where %s",
+		catalog.MOTaskDB,
+		catalog.MOSysAsyncTask,
+		legacyOrphanSQLTaskChildPredicate,
+	),
+	CheckFunc: func(txn executor.TxnExecutor, accountID uint32) (bool, error) {
+		exists, err := versions.CheckTableDataExist(
+			txn,
+			accountID,
+			fmt.Sprintf(
+				"select 1 from %s.%s where %s limit 1",
+				catalog.MOTaskDB,
+				catalog.MOSysAsyncTask,
+				legacyOrphanSQLTaskChildPredicate,
+			),
+		)
+		if err != nil || exists {
+			return false, err
+		}
+		// Absence is stable only after every old DROP TASK writer has left the
+		// deployment. RequiredProtocolVersion handles the same barrier when a
+		// row exists; check it here too so an empty snapshot cannot skip it.
+		if err := versions.CheckCommonProtocolVersion(txn, defines.MORPCVersion42); err != nil {
+			return false, err
+		}
+		return true, nil
+	},
+	RequiredProtocolVersion: defines.MORPCVersion42,
+}
+
+func newTaskMetadataIndex(tableName, indexName, columnName string) versions.UpgradeEntry {
+	return versions.UpgradeEntry{
+		Schema:    catalog.MOTaskDB,
+		TableName: tableName,
+		UpgType:   versions.ADD_INDEX,
+		UpgSql: fmt.Sprintf(
+			"create index %s on %s.%s(%s)",
+			indexName, catalog.MOTaskDB, tableName, columnName,
+		),
+		CheckFunc: func(txn executor.TxnExecutor, accountID uint32) (bool, error) {
+			return versions.CheckIndexDefinition(
+				txn, accountID, catalog.MOTaskDB, tableName, indexName)
+		},
+	}
 }
 
 var createMoViewDependencies = newViewMetadataCatalogTable(
