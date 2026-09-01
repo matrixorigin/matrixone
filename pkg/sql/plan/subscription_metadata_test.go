@@ -34,19 +34,26 @@ import (
 
 type subscriptionMetadataTestContext struct {
 	*MockCompilerContext
-	subscription  *SubscriptionMeta
-	subscriptions map[string]*SubscriptionMeta
-	querying      *SubscriptionMeta
-	defaultDB     string
-	metadata      []*SubscriptionMeta
+	subscription        *SubscriptionMeta
+	subscriptions       map[string]*SubscriptionMeta
+	querying            *SubscriptionMeta
+	defaultDB           string
+	metadata            []*SubscriptionMeta
+	lowerCaseTableNames int64
+}
+
+func (c *subscriptionMetadataTestContext) GetLowerCaseTableNames() int64 {
+	return c.lowerCaseTableNames
 }
 
 func (c *subscriptionMetadataTestContext) subscriptionFor(databaseName string) *SubscriptionMeta {
-	if strings.EqualFold(databaseName, c.subscription.SubName) {
+	if subscriptionMetadataNameKey(databaseName, c.lowerCaseTableNames) ==
+		subscriptionMetadataNameKey(c.subscription.SubName, c.lowerCaseTableNames) {
 		return c.subscription
 	}
 	for name, subscription := range c.subscriptions {
-		if strings.EqualFold(databaseName, name) {
+		if subscriptionMetadataNameKey(databaseName, c.lowerCaseTableNames) ==
+			subscriptionMetadataNameKey(name, c.lowerCaseTableNames) {
 			return subscription
 		}
 	}
@@ -175,6 +182,7 @@ func (o subscriptionMetadataTestOptimizer) CurrentContext() CompilerContext {
 func newSubscriptionMetadataTestOptimizer() (Optimizer, *subscriptionMetadataTestContext) {
 	ctx := &subscriptionMetadataTestContext{
 		MockCompilerContext: NewMockCompilerContext(true),
+		lowerCaseTableNames: 1,
 		subscription: &SubscriptionMeta{
 			AccountId: 0,
 			DbName:    "tpch",
@@ -390,6 +398,44 @@ func TestSubscriptionStatisticsSupportsManyVisibleSubscriptions(t *testing.T) {
 	}
 	require.True(t, hasLocalStatisticsCatalogScan(queryPlan.GetQuery()))
 	require.Nil(t, ctx.GetQueryingSubscription())
+}
+
+func TestSubscriptionStatisticsHonorsSubscriptionNameCaseMode(t *testing.T) {
+	optimizer, ctx := newSubscriptionMetadataTestOptimizer()
+	ctx.metadata = []*SubscriptionMeta{
+		{AccountId: 0, DbName: "tpch", SubName: "SubCase", Tables: "nation"},
+		{AccountId: 0, DbName: "tpch", SubName: "subcase", Tables: "nation"},
+	}
+
+	t.Run("case sensitive", func(t *testing.T) {
+		ctx.lowerCaseTableNames = 0
+		queryPlan, err := runOneStmt(optimizer, t,
+			"select count(*) from information_schema.statistics where table_name = 'nation'")
+		require.NoError(t, err)
+		require.Equal(t, map[string]int{"SubCase": 1, "subcase": 1},
+			statisticsPublisherScanCounts(queryPlan.GetQuery()))
+		require.Nil(t, ctx.GetQueryingSubscription())
+	})
+
+	t.Run("case insensitive", func(t *testing.T) {
+		ctx.lowerCaseTableNames = 1
+		queryPlan, err := runOneStmt(optimizer, t,
+			"select count(*) from information_schema.statistics where table_name = 'nation'")
+		require.NoError(t, err)
+		require.Equal(t, map[string]int{"SubCase": 1},
+			statisticsPublisherScanCounts(queryPlan.GetQuery()))
+		require.Nil(t, ctx.GetQueryingSubscription())
+	})
+
+	t.Run("case insensitive preserve spelling", func(t *testing.T) {
+		ctx.lowerCaseTableNames = 2
+		queryPlan, err := runOneStmt(optimizer, t,
+			"select count(*) from information_schema.statistics where table_name = 'nation'")
+		require.NoError(t, err)
+		require.Equal(t, map[string]int{"SubCase": 1},
+			statisticsPublisherScanCounts(queryPlan.GetQuery()))
+		require.Nil(t, ctx.GetQueryingSubscription())
+	})
 }
 
 func hasLocalStatisticsCatalogScan(query *Query) bool {

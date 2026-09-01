@@ -103,6 +103,7 @@ func (builder *QueryBuilder) visibleSubscriptionMetadata(
 		return nil, err
 	}
 	subscriptions = append([]*SubscriptionMeta(nil), subscriptions...)
+	lowerCaseTableNames := builder.compCtx.GetLowerCaseTableNames()
 
 	sort.SliceStable(subscriptions, func(i, j int) bool {
 		if subscriptions[i] == nil {
@@ -111,8 +112,16 @@ func (builder *QueryBuilder) visibleSubscriptionMetadata(
 		if subscriptions[j] == nil {
 			return true
 		}
-		return strings.ToLower(subscriptions[i].SubName) <
-			strings.ToLower(subscriptions[j].SubName)
+		leftName := subscriptions[i].SubName
+		rightName := subscriptions[j].SubName
+		leftKey := subscriptionMetadataNameKey(leftName, lowerCaseTableNames)
+		rightKey := subscriptionMetadataNameKey(rightName, lowerCaseTableNames)
+		if leftKey != rightKey {
+			return leftKey < rightKey
+		}
+		// Make the selected representative deterministic when names compare equal
+		// under a case-insensitive mode.
+		return leftName < rightName
 	})
 	seen := make(map[string]struct{}, len(subscriptions))
 	visible := subscriptions[:0]
@@ -120,14 +129,24 @@ func (builder *QueryBuilder) visibleSubscriptionMetadata(
 		if subscription == nil || subscription.SubName == "" {
 			continue
 		}
-		name := strings.ToLower(subscription.SubName)
-		if _, duplicate := seen[name]; duplicate {
+		nameKey := subscriptionMetadataNameKey(subscription.SubName, lowerCaseTableNames)
+		if _, duplicate := seen[nameKey]; duplicate {
 			continue
 		}
-		seen[name] = struct{}{}
+		seen[nameKey] = struct{}{}
 		visible = append(visible, subscription)
 	}
 	return visible, nil
+}
+
+// subscriptionMetadataNameKey follows the server's database-identifier
+// comparison rules. In mode 0 differently-cased subscription schema names are
+// distinct databases; modes 1 and 2 resolve them case-insensitively.
+func subscriptionMetadataNameKey(name string, lowerCaseTableNames int64) string {
+	if lowerCaseTableNames == 0 {
+		return name
+	}
+	return strings.ToLower(name)
 }
 
 func (builder *QueryBuilder) unionSubscriptionStatistics(nodes []int32) (int32, error) {

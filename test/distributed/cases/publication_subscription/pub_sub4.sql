@@ -47,6 +47,23 @@ create database idx_meta_sub_db from sys publication idx_meta_pub;
 select count(*) as ordinary_cache_first_subscription_rows
 from information_schema.statistics where table_name = 'visible_t';
 create database idx_meta_sub_b from sys publication idx_meta_pub_b;
+
+-- In case-sensitive identifier mode these are two distinct subscription
+-- schemas. STATISTICS must retain both publisher branches instead of folding
+-- their names together during metadata enumeration.
+set lower_case_table_names = 0;
+create database IdxMetaCase from sys publication idx_meta_pub;
+create database idxmetacase from sys publication idx_meta_pub_b;
+select count(*) as upper_case_subscription_index_rows
+from information_schema.statistics
+where table_schema = 'IdxMetaCase' and table_name = 'visible_t';
+select count(*) as lower_case_subscription_index_rows
+from information_schema.statistics
+where table_schema = 'idxmetacase' and table_name = 'second_t';
+drop database IdxMetaCase;
+drop database idxmetacase;
+set lower_case_table_names = 1;
+
 create database idx_meta_local;
 create table idx_meta_local.local_t(id int primary key, v int, key idx_local(v));
 show index from idx_meta_sub_db.visible_t;
