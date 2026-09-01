@@ -33,10 +33,10 @@ create table idx_meta_src.visible_t(
     key idx_v(v)
 );
 create table idx_meta_src.unpublished_t(id int primary key);
-create publication idx_meta_pub database idx_meta_src table visible_t account idx_meta_sub;
+create publication idx_meta_pub database idx_meta_src table visible_t account idx_meta_sub, idx_meta_other;
 create database idx_meta_src_b;
 create table idx_meta_src_b.second_t(id int primary key);
-create publication idx_meta_pub_b database idx_meta_src_b table second_t account idx_meta_sub;
+create publication idx_meta_pub_b database idx_meta_src_b table second_t account idx_meta_sub, idx_meta_other;
 
 -- @session:id=2&user=idx_meta_sub:admin&password=111
 -- Repeating this exact ordinary COM_QUERY before and after the first
@@ -48,10 +48,18 @@ select count(*) as ordinary_cache_first_subscription_rows
 from information_schema.statistics where table_name = 'visible_t';
 create database idx_meta_sub_b from sys publication idx_meta_pub_b;
 
+-- lower_case_table_names is global and only applies to new sessions. Use the
+-- otherwise independent subscriber so this case does not subscribe to either
+-- publication twice.
+-- @session:id=3&user=idx_meta_other:admin&password=111
+set global lower_case_table_names = 0;
+-- @session
+-- @session:id=4&user=idx_meta_other:admin&password=111
+select @@lower_case_table_names;
+
 -- In case-sensitive identifier mode these are two distinct subscription
 -- schemas. STATISTICS must retain both publisher branches instead of folding
 -- their names together during metadata enumeration.
-set lower_case_table_names = 0;
 create database IdxMetaCase from sys publication idx_meta_pub;
 create database idxmetacase from sys publication idx_meta_pub_b;
 select count(*) as upper_case_subscription_index_rows
@@ -62,7 +70,9 @@ from information_schema.statistics
 where table_schema = 'idxmetacase' and table_name = 'second_t';
 drop database IdxMetaCase;
 drop database idxmetacase;
-set lower_case_table_names = 1;
+set global lower_case_table_names = 1;
+-- @session
+-- @session:id=2&user=idx_meta_sub:admin&password=111
 
 create database idx_meta_local;
 create table idx_meta_local.local_t(id int primary key, v int, key idx_local(v));
