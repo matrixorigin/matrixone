@@ -2005,6 +2005,7 @@ func (n *noopTxnOperator) Delete(key string) {}
 // so individual test cases can focus on behavior rather than boilerplate setup.
 type tableStreamHarnessConfig struct {
 	initSnapshotSplitTxn bool
+	initialSnapshotEpoch types.TS
 	noFull               bool
 	startTs              types.TS
 	endTs                types.TS
@@ -2047,6 +2048,12 @@ func defaultTableStreamHarnessConfig() tableStreamHarnessConfig {
 
 type tableStreamHarnessOption func(*tableStreamHarnessConfig)
 
+func withHarnessInitSnapshotSplitTxn(split bool) tableStreamHarnessOption {
+	return func(cfg *tableStreamHarnessConfig) {
+		cfg.initSnapshotSplitTxn = split
+	}
+}
+
 func withHarnessNoFull(noFull bool) tableStreamHarnessOption {
 	return func(cfg *tableStreamHarnessConfig) {
 		cfg.noFull = noFull
@@ -2068,6 +2075,12 @@ func withHarnessEndTs(ts types.TS) tableStreamHarnessOption {
 func withHarnessFrequency(freq time.Duration) tableStreamHarnessOption {
 	return func(cfg *tableStreamHarnessConfig) {
 		cfg.frequency = freq
+	}
+}
+
+func withHarnessInitialSnapshotEpoch(ts types.TS) tableStreamHarnessOption {
+	return func(cfg *tableStreamHarnessConfig) {
+		cfg.initialSnapshotEpoch = ts
 	}
 }
 
@@ -2167,6 +2180,9 @@ func newTableStreamHarness(t *testing.T, opts ...tableStreamHarnessOption) *tabl
 			WithMaxRetryCount(3),
 			WithRetryBackoff(5*time.Millisecond, 20*time.Millisecond, 2.0),
 		}
+	}
+	if !cfg.initialSnapshotEpoch.IsEmpty() {
+		retryOptions = append(retryOptions, WithInitialSnapshotEpoch(cfg.initialSnapshotEpoch))
 	}
 
 	stream := NewTableChangeStream(
@@ -2377,6 +2393,136 @@ func (h *tableStreamHarness) SetGetSnapshotTS(fn func(client.TxnOperator) timest
 		}
 		return ts
 	}
+}
+
+func TestTableChangeStream_StableInitialSnapshotEpochAndTailBoundary(t *testing.T) {
+	updater := newWatermarkUpdaterStub()
+	epoch := types.BuildTS(80, 0)
+	h := newTableStreamHarness(
+		t,
+		withHarnessInitSnapshotSplitTxn(true),
+		withHarnessInitialSnapshotEpoch(epoch),
+		withHarnessWatermarkUpdater(updater, nil),
+	)
+	h.Stream().start.Done() // The test invokes processOneRound directly, not Run.
+
+	var current atomic.Int64
+	current.Store(100)
+	h.SetGetSnapshotTS(func(client.TxnOperator) timestamp.Timestamp {
+		return timestamp.Timestamp{PhysicalTime: current.Load()}
+	})
+
+	require.NoError(t, h.Stream().processOneRound(h.Context(), h.NewActiveRoutine()))
+	current.Store(120)
+	require.NoError(t, h.Stream().processOneRound(h.Context(), h.NewActiveRoutine()))
+
+	calls := h.CollectCallsSnapshot()
+	require.Len(t, calls, 2)
+	assert.True(t, calls[0].from.IsEmpty())
+	assert.Equal(t, epoch, calls[0].to)
+	assert.Equal(t, epoch, calls[1].from)
+	assert.Equal(t, types.BuildTS(120, 0), calls[1].to)
+}
+
+func TestTableChangeStream_StableInitialSnapshotEpochHonorsEndTs(t *testing.T) {
+	updater := newWatermarkUpdaterStub()
+	end := types.BuildTS(70, 0)
+	h := newTableStreamHarness(
+		t,
+		withHarnessInitSnapshotSplitTxn(true),
+		withHarnessInitialSnapshotEpoch(types.BuildTS(80, 0)),
+		withHarnessEndTs(end),
+		withHarnessWatermarkUpdater(updater, nil),
+	)
+	h.Stream().start.Done() // The test invokes processOneRound directly, not Run.
+
+	require.NoError(t, h.Stream().processOneRound(h.Context(), h.NewActiveRoutine()))
+	calls := h.CollectCallsSnapshot()
+	require.Len(t, calls, 1)
+	assert.Equal(t, end, calls[0].to)
+}
+
+func TestTableChangeStream_LegacySplitTaskFallsBackToAtomicCurrentSnapshot(t *testing.T) {
+	updater := newWatermarkUpdaterStub()
+	h := newTableStreamHarness(
+		t,
+		withHarnessInitSnapshotSplitTxn(true),
+		withHarnessWatermarkUpdater(updater, nil),
+	)
+	h.Stream().start.Done() // The test invokes processOneRound directly, not Run.
+
+	assert.False(t, h.Stream().initSnapshotSplitTxn)
+	assert.False(t, h.Stream().dataProcessor.initSnapshotSplitTxn)
+	require.NoError(t, h.Stream().processOneRound(h.Context(), h.NewActiveRoutine()))
+	calls := h.CollectCallsSnapshot()
+	require.Len(t, calls, 1)
+	assert.Equal(t, types.BuildTS(100, 0), calls[0].to)
+}
+
+func TestTableChangeStream_StableEpochRequiresAnInitialSnapshot(t *testing.T) {
+	epoch := types.BuildTS(80, 0)
+	for _, tc := range []struct {
+		name    string
+		options []tableStreamHarnessOption
+	}{
+		{
+			name: "no full",
+			options: []tableStreamHarnessOption{
+				withHarnessNoFull(true),
+			},
+		},
+		{
+			name: "explicit start timestamp",
+			options: []tableStreamHarnessOption{
+				withHarnessStartTs(types.BuildTS(10, 0)),
+			},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			opts := []tableStreamHarnessOption{
+				withHarnessInitSnapshotSplitTxn(true),
+				withHarnessInitialSnapshotEpoch(epoch),
+			}
+			opts = append(opts, tc.options...)
+			h := newTableStreamHarness(t, opts...)
+			h.Stream().start.Done() // The test does not invoke Run.
+			assert.False(t, h.Stream().initSnapshotSplitTxn)
+			assert.False(t, h.Stream().dataProcessor.initSnapshotSplitTxn)
+		})
+	}
+}
+
+func TestTableChangeStream_WaitsForStableEpochVisibility(t *testing.T) {
+	updater := newWatermarkUpdaterStub()
+	h := newTableStreamHarness(
+		t,
+		withHarnessInitSnapshotSplitTxn(true),
+		withHarnessInitialSnapshotEpoch(types.BuildTS(120, 0)),
+		withHarnessWatermarkUpdater(updater, nil),
+	)
+	h.Stream().start.Done() // The test invokes processOneRound directly, not Run.
+	h.SetGetSnapshotTS(func(client.TxnOperator) timestamp.Timestamp {
+		return timestamp.Timestamp{PhysicalTime: 100}
+	})
+
+	require.NoError(t, h.Stream().processOneRound(h.Context(), h.NewActiveRoutine()))
+	assert.Empty(t, h.CollectCallsSnapshot())
+	assert.Zero(t, updater.updateCalls.Load())
+}
+
+func TestTableChangeStream_StableSnapshotStaleReadFailsClosed(t *testing.T) {
+	epoch := types.BuildTS(80, 0)
+	h := newTableStreamHarness(
+		t,
+		withHarnessInitSnapshotSplitTxn(true),
+		withHarnessInitialSnapshotEpoch(epoch),
+	)
+	h.Stream().start.Done() // The test invokes handleStaleRead directly, not Run.
+
+	err := h.Stream().handleStaleRead(h.Context(), newNoopTxnOperator())
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "stable initial snapshot")
+	assert.Zero(t, h.Sinker().ResetCountSnapshot())
 }
 
 func (h *tableStreamHarness) SetTryEnterRunSql(fn func(context.Context, client.TxnOperator, string) (func(), error)) {

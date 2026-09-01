@@ -85,6 +85,9 @@ type TableChangeStream struct {
 	startTs, endTs         types.TS
 	noFull                 bool
 	initialSnapshotLimiter *InitialSnapshotLimiter
+	// initialSnapshotEpoch is non-zero only for tasks whose persisted protocol
+	// guarantees that every partial-snapshot retry uses the same source image.
+	initialSnapshotEpoch types.TS
 
 	// Column indices (for AtomicBatch)
 	insTsColIdx           int
@@ -172,6 +175,7 @@ type tableChangeStreamOptions struct {
 	retryBackoffMax           time.Duration // Max delay for exponential backoff
 	retryBackoffFactor        float64       // Factor for exponential backoff
 	initialSnapshotLimiter    *InitialSnapshotLimiter
+	initialSnapshotEpoch      types.TS
 }
 
 const (
@@ -248,6 +252,15 @@ func WithInitialSnapshotLimiter(limiter *InitialSnapshotLimiter) TableChangeStre
 	}
 }
 
+// WithInitialSnapshotEpoch enables retry-safe bounded initial-snapshot target
+// transactions. The epoch must come from durable task metadata, never from an
+// individual execution attempt.
+func WithInitialSnapshotEpoch(epoch types.TS) TableChangeStreamOption {
+	return func(opts *tableChangeStreamOptions) {
+		opts.initialSnapshotEpoch = epoch
+	}
+}
+
 // NewTableChangeStream creates a new table change stream
 var NewTableChangeStream = func(
 	cnTxnClient client.TxnClient,
@@ -312,6 +325,11 @@ var NewTableChangeStream = func(
 		insCompositedPkColIdx = int(tableDef.Name2ColIndex[tableDef.Pkey.Names[0]])
 	}
 
+	// Splitting is safe only when all retries have a durable, stable source
+	// epoch. Legacy tasks lack the protocol marker and stay atomic.
+	retrySafeSnapshotSplit := initSnapshotSplitTxn &&
+		!noFull && startTs.IsEmpty() && !opts.initialSnapshotEpoch.IsEmpty()
+
 	// Create data processor
 	dataProcessor := NewDataProcessor(
 		sinker,
@@ -322,7 +340,7 @@ var NewTableChangeStream = func(
 		insCompositedPkColIdx,
 		delTsColIdx,
 		delCompositedPkColIdx,
-		initSnapshotSplitTxn,
+		retrySafeSnapshotSplit,
 		accountId,
 		taskId,
 		tableInfo.SourceDbName,
@@ -359,11 +377,12 @@ var NewTableChangeStream = func(
 		frequency:                 frequency,
 		runningReaders:            runningReaders,
 		runningReaderKey:          GenDbTblKey(tableInfo.SourceDbName, tableInfo.SourceTblName),
-		initSnapshotSplitTxn:      initSnapshotSplitTxn,
+		initSnapshotSplitTxn:      retrySafeSnapshotSplit,
 		startTs:                   startTs,
 		endTs:                     endTs,
 		noFull:                    noFull,
 		initialSnapshotLimiter:    opts.initialSnapshotLimiter,
+		initialSnapshotEpoch:      opts.initialSnapshotEpoch,
 		registered:                make(chan struct{}),
 		insTsColIdx:               insTsColIdx,
 		insCompositedPkColIdx:     insCompositedPkColIdx,
@@ -1248,8 +1267,29 @@ func (s *TableChangeStream) processWithTxn(
 		return nil // Graceful end
 	}
 
-	toTs := types.TimestampToTS(GetSnapshotTS(txnOp))
+	currentSnapshotTs := types.TimestampToTS(GetSnapshotTS(txnOp))
+	toTs := currentSnapshotTs
 	tsCapped := false
+	if fromTs.IsEmpty() && s.initSnapshotSplitTxn {
+		toTs = s.initialSnapshotEpoch
+		if !s.endTs.IsEmpty() && toTs.GT(&s.endTs) {
+			toTs = s.endTs
+			tsCapped = true
+		}
+		if currentSnapshotTs.LT(&toTs) {
+			// task_create_time is generated before the catalog transaction commits,
+			// so this is normally only possible under clock skew. Wait without
+			// selecting a different epoch: changing it would invalidate a partial
+			// target snapshot after retry.
+			logutil.Info(
+				"cdc.table_stream.initial_snapshot_epoch_not_visible",
+				zap.String("table", s.tableInfo.String()),
+				zap.String("current-snapshot-ts", currentSnapshotTs.ToString()),
+				zap.String("initial-snapshot-epoch", toTs.ToString()),
+			)
+			return s.handleSnapshotNoProgress(ctx, currentSnapshotTs, toTs)
+		}
+	}
 	if !s.endTs.IsEmpty() && toTs.GT(&s.endTs) {
 		toTs = s.endTs
 		tsCapped = true
@@ -1588,6 +1628,20 @@ func (s *TableChangeStream) onWatermarkAdvanced() {
 // handleStaleRead handles StaleRead error by resetting watermark
 // Returns error with retryable flag determined by recoverability
 func (s *TableChangeStream) handleStaleRead(ctx context.Context, txnOp client.TxnOperator) error {
+	if s.initSnapshotSplitTxn {
+		// A partially committed snapshot is correct only for its persisted epoch.
+		// Resetting either an initial or already caught-up stream to a newer
+		// timestamp would leave deleted or changed source primary keys stranded
+		// in the target. Resetting to the older stable epoch cannot repair a stale
+		// read after source retention has removed its data.
+		return moerr.NewInternalErrorf(
+			ctx,
+			"CDC tableChangeStream %s cannot safely recover stale data for stable initial snapshot %s; recreate the task after verifying target state",
+			s.tableInfo.String(),
+			s.initialSnapshotEpoch.ToString(),
+		)
+	}
+
 	// If startTs is set and noFull is false, StaleRead is fatal (non-retryable)
 	if !s.noFull && !s.startTs.IsEmpty() {
 		return moerr.NewInternalErrorf(

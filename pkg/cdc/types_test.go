@@ -778,6 +778,24 @@ func TestDecoderOutput_Close(t *testing.T) {
 	})
 }
 
+func TestFinalizeInitialSnapshotOptions(t *testing.T) {
+	t.Run("split is fenced for old executors", func(t *testing.T) {
+		opts := map[string]any{CDCTaskExtraOptions_InitSnapshotSplitTxn: true}
+		FinalizeInitialSnapshotOptions(opts)
+		assert.Equal(t, false, opts[CDCTaskExtraOptions_InitSnapshotSplitTxn])
+		assert.Equal(t, CDCInitialSnapshotProtocolStableEpoch,
+			opts[CDCTaskExtraOptions_InitialSnapshotProtocol])
+	})
+
+	t.Run("atomic mode has no protocol marker", func(t *testing.T) {
+		opts := map[string]any{CDCTaskExtraOptions_InitSnapshotSplitTxn: false}
+		FinalizeInitialSnapshotOptions(opts)
+		assert.Equal(t, false, opts[CDCTaskExtraOptions_InitSnapshotSplitTxn])
+		_, ok := opts[CDCTaskExtraOptions_InitialSnapshotProtocol]
+		assert.False(t, ok)
+	})
+}
+
 func TestActiveRoutine_ClosePause(t *testing.T) {
 	ar := NewCdcActiveRoutine()
 	ar.ClosePause()

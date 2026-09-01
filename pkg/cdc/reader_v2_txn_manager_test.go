@@ -367,6 +367,25 @@ func TestTransactionManager_CommitTransaction(t *testing.T) {
 	assert.Equal(t, toTs, wm)
 }
 
+func TestTransactionManager_CommitTransactionWithoutWatermark(t *testing.T) {
+	ctx := context.Background()
+	sinker := &mockSinker{}
+	updater := newMockWatermarkUpdater()
+	tm := NewTransactionManager(sinker, updater, 1, "task1", "db1", "table1")
+
+	fromTs := types.TS{}
+	toTs := types.BuildTS(2, 0)
+	require.NoError(t, tm.BeginTransaction(ctx, fromTs, toTs))
+	require.NoError(t, tm.CommitTransactionWithoutWatermark(ctx))
+
+	assert.True(t, sinker.commitCalled)
+	assert.True(t, sinker.dummyCalled)
+	assert.False(t, updater.updateCalled)
+	assert.Nil(t, tm.GetTracker())
+	_, err := updater.GetFromCache(ctx, tm.watermarkKey)
+	require.Error(t, err)
+}
+
 func TestTransactionManager_CommitTransaction_WithoutBegin(t *testing.T) {
 	ctx := context.Background()
 	sinker := &mockSinker{}

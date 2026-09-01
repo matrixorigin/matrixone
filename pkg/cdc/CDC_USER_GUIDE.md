@@ -2975,9 +2975,20 @@ Split large initial snapshots into multiple transactions.
 
 **Default**: `true`
 
-**Impact**: 
-- `true`: Better memory usage, longer initial sync
-- `false`: Faster initial sync, higher memory usage
+**Impact**:
+- `true`: Uses retry-safe bounded target transactions (up to eight engine
+  batches or 512 MiB of measured batch allocations per transaction). All
+  retries read the task's stable initial snapshot timestamp, and the watermark
+  advances only after the complete snapshot succeeds.
+- `false`: Uses one atomic target transaction for the complete initial
+  snapshot. This avoids partial target visibility but may consume substantially
+  more target transaction memory, locks, and commit time for large tables.
+
+Source changes that happen while the initial snapshot is running are applied by
+the incremental phase after the stable snapshot watermark. If that historical
+snapshot has expired from source retention, CDC fails closed instead of silently
+switching to a newer snapshot; recreate the task or use atomic mode after
+verifying the target state.
 
 ---
 

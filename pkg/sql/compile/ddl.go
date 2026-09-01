@@ -6622,6 +6622,11 @@ func (opts *CDCCreateTaskOptions) ValidateAndFill(
 	if _, ok := extraOpts[cdc.CDCTaskExtraOptions_MaxSqlLength]; !ok {
 		extraOpts[cdc.CDCTaskExtraOptions_MaxSqlLength] = cdc.CDCDefaultTaskExtra_MaxSQLLen
 	}
+	// Fence mixed-version execution: an old CN understands only the public
+	// boolean, so persist false there and let a new CN recover the requested
+	// split behavior from the stable-epoch marker. Old CNs then fall back to one
+	// safe (though less bounded) atomic transaction during rolling upgrades.
+	cdc.FinalizeInitialSnapshotOptions(extraOpts)
 
 	var extraOptsBytes []byte
 	if extraOptsBytes, err = json.Marshal(extraOpts); err != nil {

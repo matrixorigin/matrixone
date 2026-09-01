@@ -109,8 +109,8 @@ func (l *InitialSnapshotLimiter) acquire(ctx context.Context) (*snapshotPermit, 
 	l.waiters++
 	l.mu.Unlock()
 
-	timer := time.NewTimer(initialSnapshotMemoryPoll)
-	defer timer.Stop()
+	ticker := time.NewTicker(initialSnapshotMemoryPoll)
+	defer ticker.Stop()
 
 	for {
 		if err := ctx.Err(); err != nil {
@@ -135,6 +135,11 @@ func (l *InitialSnapshotLimiter) acquire(ctx context.Context) (*snapshotPermit, 
 		// performs this measurement, avoiding one procfs poll per waiting table.
 		available, measured := l.memoryAvailable()
 		l.mu.Lock()
+		if err := ctx.Err(); err != nil {
+			l.mu.Unlock()
+			l.cancelTicket(ticket)
+			return nil, err
+		}
 		if ticket == l.servingTicket &&
 			l.unobserved == 0 &&
 			l.inFlight < l.concurrencyLocked(available, measured) {
@@ -156,9 +161,8 @@ func (l *InitialSnapshotLimiter) acquire(ctx context.Context) (*snapshotPermit, 
 		select {
 		case <-ctx.Done():
 		case <-notify:
-		case <-timer.C:
+		case <-ticker.C:
 		}
-		timer.Reset(initialSnapshotMemoryPoll)
 	}
 }
 

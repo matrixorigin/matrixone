@@ -307,3 +307,34 @@ func TestInitialSnapshotLimiterCancellationAdvancesQueue(t *testing.T) {
 	}
 	second.Release()
 }
+
+func TestInitialSnapshotLimiterCancellationDuringMemoryDiscovery(t *testing.T) {
+	entered := make(chan struct{})
+	unblock := make(chan struct{})
+	limiter := newInitialSnapshotLimiter(1, 1, 1, 100, func() (uint64, bool) {
+		close(entered)
+		<-unblock
+		return 1024, true
+	})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	result := make(chan error, 1)
+	go func() {
+		permit, err := limiter.acquire(ctx)
+		if permit != nil {
+			permit.Release()
+		}
+		result <- err
+	}()
+
+	<-entered
+	cancel()
+	close(unblock)
+	require.ErrorIs(t, <-result, context.Canceled)
+
+	limiter.mu.Lock()
+	defer limiter.mu.Unlock()
+	assert.Zero(t, limiter.inFlight)
+	assert.Zero(t, limiter.unobserved)
+	assert.Zero(t, limiter.waiters)
+}

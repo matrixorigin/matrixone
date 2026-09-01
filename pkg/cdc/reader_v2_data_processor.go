@@ -26,6 +26,11 @@ import (
 	"go.uber.org/zap"
 )
 
+const (
+	initialSnapshotTxnBatchLimit = 8
+	initialSnapshotTxnByteLimit  = 512 * mpool.MB
+)
+
 // DataProcessor processes change data and sends to sinker
 // Key responsibilities:
 // 1. Process different types of changes (Snapshot/TailWip/TailDone/NoMoreData)
@@ -59,10 +64,12 @@ type DataProcessor struct {
 	// Mutex for cleanup operations
 	cleanupMu sync.Mutex
 
-	// Kept for configuration compatibility. Initial snapshots are committed
-	// atomically even when the legacy split option is enabled; otherwise a retry
-	// cannot remove source rows deleted after a partially committed attempt.
+	// Enabled only when TableChangeStream has a persisted stable source epoch.
+	// Intermediate groups may then be replayed safely without advancing the
+	// watermark.
 	initSnapshotSplitTxn bool
+	snapshotTxnBatches   int
+	snapshotTxnBytes     uint64
 
 	// Logging context
 	accountId uint64
@@ -181,9 +188,23 @@ func (dp *DataProcessor) processSnapshot(ctx context.Context, data *ChangeData) 
 		return nil
 	}
 
-	// Keep the complete initial snapshot in one target transaction. The sinker
-	// closes each command and releases its batch permit immediately after its SQL
-	// executes, so CN batch memory remains bounded without exposing partial rows.
+	batchBytes := uint64(data.InsertBatch.Allocated())
+	if dp.shouldRotateSnapshotTxn(batchBytes) {
+		if err := dp.txnManager.CommitTransactionWithoutWatermark(ctx); err != nil {
+			logutil.Error(
+				"cdc.data_processor.commit_snapshot_group_failed",
+				zap.String("task-id", dp.taskId),
+				zap.String("db", dp.dbName),
+				zap.String("table", dp.tableName),
+				zap.Int("group-batches", dp.snapshotTxnBatches),
+				zap.Uint64("group-bytes", dp.snapshotTxnBytes),
+				zap.Error(err),
+			)
+			return err
+		}
+		dp.resetSnapshotTxnGroup()
+	}
+
 	tracker := dp.txnManager.GetTracker()
 	if tracker == nil || !tracker.hasBegin {
 		if err := dp.txnManager.BeginTransaction(ctx, dp.fromTs, dp.toTs); err != nil {
@@ -208,6 +229,8 @@ func (dp *DataProcessor) processSnapshot(ctx context.Context, data *ChangeData) 
 		snapshotPermit: data.snapshotPermit,
 	})
 	data.snapshotPermit = nil
+	dp.snapshotTxnBatches++
+	dp.snapshotTxnBytes += batchBytes
 
 	// Note: We don't clean data.InsertBatch here because Sink() takes ownership
 
@@ -226,6 +249,22 @@ func (dp *DataProcessor) processSnapshot(ctx context.Context, data *ChangeData) 
 	)
 
 	return nil
+}
+
+func (dp *DataProcessor) shouldRotateSnapshotTxn(nextBatchBytes uint64) bool {
+	if !dp.initSnapshotSplitTxn || dp.snapshotTxnBatches == 0 {
+		return false
+	}
+	if dp.snapshotTxnBatches >= initialSnapshotTxnBatchLimit {
+		return true
+	}
+	limit := uint64(initialSnapshotTxnByteLimit)
+	return dp.snapshotTxnBytes >= limit || nextBatchBytes > limit-dp.snapshotTxnBytes
+}
+
+func (dp *DataProcessor) resetSnapshotTxnGroup() {
+	dp.snapshotTxnBatches = 0
+	dp.snapshotTxnBytes = 0
 }
 
 // processTailWip processes tail work-in-progress data (accumulate)
@@ -401,6 +440,7 @@ func (dp *DataProcessor) processNoMoreData(ctx context.Context) error {
 			)
 			return err
 		}
+		dp.resetSnapshotTxnGroup()
 		logutil.Debug(
 			"cdc.data_processor.no_more_data_commit_success",
 			zap.String("task-id", dp.taskId),
@@ -471,6 +511,7 @@ func (dp *DataProcessor) Cleanup() {
 		dp.deleteAtmBatch.Close()
 		dp.deleteAtmBatch = nil
 	}
+	dp.resetSnapshotTxnGroup()
 
 	logutil.Debug(
 		"cdc.data_processor.cleanup",

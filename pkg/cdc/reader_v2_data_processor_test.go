@@ -404,11 +404,11 @@ func TestDataProcessor_ProcessChange_Snapshot_WithSplitTxn(t *testing.T) {
 	err = dp.ProcessChange(ctx, data)
 
 	assert.NoError(t, err)
-	assert.True(t, sinker.beginCalled) // Legacy split mode remains atomic for retry safety.
+	assert.True(t, sinker.beginCalled)
 	assert.Equal(t, 1, len(sinker.sinkCalls))
 }
 
-func TestDataProcessor_SplitSnapshotStaysAtomicUntilWatermark(t *testing.T) {
+func TestDataProcessor_SplitSnapshotCommitsBoundedGroupsWithoutWatermark(t *testing.T) {
 	ctx := context.Background()
 	h := newDataProcessorHarness(t, true)
 	t.Cleanup(func() {
@@ -429,9 +429,10 @@ func TestDataProcessor_SplitSnapshotStaysAtomicUntilWatermark(t *testing.T) {
 	assert.NotNil(t, h.txnMgr.GetTracker())
 	assert.False(t, h.update.updateCalled)
 	expectedOps := []string{"begin"}
-	for i := 0; i < 9; i++ {
+	for i := 0; i < initialSnapshotTxnBatchLimit; i++ {
 		expectedOps = append(expectedOps, "sink")
 	}
+	expectedOps = append(expectedOps, "commit", "dummy", "begin", "sink")
 	assert.Equal(t, expectedOps, h.sinker.opsSnapshot())
 
 	require.NoError(t, h.dp.ProcessChange(ctx, &ChangeData{Type: ChangeTypeNoMoreData}))
@@ -441,7 +442,7 @@ func TestDataProcessor_SplitSnapshotStaysAtomicUntilWatermark(t *testing.T) {
 	assert.Equal(t, expectedOps, h.sinker.opsSnapshot())
 }
 
-func TestDataProcessor_SnapshotRetryAfterDeleteAndPKChangeIsExact(t *testing.T) {
+func TestDataProcessor_PartialSnapshotRetryReplaysStableEpoch(t *testing.T) {
 	ctx := context.Background()
 	mp, err := mpool.NewMPool("snapshot_retry_atomicity", 0, mpool.NoFixed)
 	require.NoError(t, err)
@@ -470,23 +471,28 @@ func TestDataProcessor_SnapshotRetryAfterDeleteAndPKChangeIsExact(t *testing.T) 
 			InsertBatch: buildBatch(t, mp, []int32{key}, firstTo),
 		}))
 	}
-	assert.Empty(t, sinker.durableKeys(), "partial snapshot rows became visible before the watermark")
+	expectedCommittedGroup := make(map[int32]struct{}, initialSnapshotTxnBatchLimit)
+	for key := int32(1); key <= initialSnapshotTxnBatchLimit; key++ {
+		expectedCommittedGroup[key] = struct{}{}
+	}
+	assert.Equal(t, expectedCommittedGroup, sinker.durableKeys())
+	assert.False(t, updater.updateCalled, "intermediate group advanced the watermark")
 
 	readErr := moerr.NewInternalError(ctx, "snapshot read failed")
 	sinker.setError(readErr)
 	require.ErrorIs(t, dp.ProcessChange(ctx, &ChangeData{Type: ChangeTypeSnapshot}), readErr)
 	require.NoError(t, txnMgr.EnsureCleanup(ctx))
-	assert.Empty(t, sinker.durableKeys(), "rollback retained rows from the failed snapshot")
+	dp.Cleanup()
+	assert.Equal(t, expectedCommittedGroup, sinker.durableKeys(), "rollback changed a committed group")
 
-	// Between attempts the source deletes key 1 and changes key 2 to key 20.
-	// The retry snapshot contains neither old key, so exactness depends on the
-	// first attempt remaining uncommitted and being rolled back in full.
-	retryTo := types.BuildTS(3, 0)
-	dp.SetTransactionRange(from, retryTo)
-	retryKeys := []int32{3, 4, 5, 6, 7, 8, 9, 20}
+	// A retry must use the same durable source epoch, so it contains keys 1 and
+	// 2 even if they were deleted or changed after that epoch. Those later
+	// mutations belong to the incremental interval after the final watermark.
+	dp.SetTransactionRange(from, firstTo)
+	retryKeys := []int32{1, 2, 3, 4, 5, 6, 7, 8, 9}
 	require.NoError(t, dp.ProcessChange(ctx, &ChangeData{
 		Type:        ChangeTypeSnapshot,
-		InsertBatch: buildBatch(t, mp, retryKeys, retryTo),
+		InsertBatch: buildBatch(t, mp, retryKeys, firstTo),
 	}))
 	require.NoError(t, dp.ProcessChange(ctx, &ChangeData{Type: ChangeTypeNoMoreData}))
 
@@ -496,6 +502,60 @@ func TestDataProcessor_SnapshotRetryAfterDeleteAndPKChangeIsExact(t *testing.T) 
 	}
 	assert.Equal(t, expected, sinker.durableKeys())
 	assert.True(t, updater.updateCalled)
+}
+
+func TestDataProcessor_SnapshotGroupBoundaries(t *testing.T) {
+	dp := &DataProcessor{initSnapshotSplitTxn: true}
+
+	dp.snapshotTxnBatches = initialSnapshotTxnBatchLimit - 1
+	assert.False(t, dp.shouldRotateSnapshotTxn(1))
+	dp.snapshotTxnBatches++
+	assert.True(t, dp.shouldRotateSnapshotTxn(1))
+
+	dp.snapshotTxnBatches = 1
+	dp.snapshotTxnBytes = uint64(initialSnapshotTxnByteLimit - 1)
+	assert.False(t, dp.shouldRotateSnapshotTxn(1))
+	assert.True(t, dp.shouldRotateSnapshotTxn(2))
+
+	// One wide engine batch is the indivisible minimum and must not trigger an
+	// empty commit before its transaction begins.
+	dp.snapshotTxnBatches = 0
+	dp.snapshotTxnBytes = 0
+	assert.False(t, dp.shouldRotateSnapshotTxn(uint64(initialSnapshotTxnByteLimit+1)))
+
+	dp.initSnapshotSplitTxn = false
+	dp.snapshotTxnBatches = initialSnapshotTxnBatchLimit
+	assert.False(t, dp.shouldRotateSnapshotTxn(uint64(initialSnapshotTxnByteLimit)))
+}
+
+func TestDataProcessor_IntermediateSnapshotCommitFailureDoesNotAdvanceWatermark(t *testing.T) {
+	ctx := context.Background()
+	h := newDataProcessorHarness(t, true)
+	t.Cleanup(func() {
+		for _, output := range h.sinker.sinkCallsSnapshot() {
+			output.Close()
+		}
+	})
+	h.dp.SetTransactionRange(types.TS{}, types.BuildTS(2, 0))
+
+	for i := 0; i < initialSnapshotTxnBatchLimit; i++ {
+		require.NoError(t, h.dp.ProcessChange(ctx, &ChangeData{
+			Type:        ChangeTypeSnapshot,
+			InsertBatch: buildBatch(t, h.mp, []int32{int32(i + 1)}, types.BuildTS(2, 0)),
+		}))
+	}
+
+	commitErr := moerr.NewInternalError(ctx, "commit connection failure")
+	h.sinker.setCommitError(commitErr)
+	next := &ChangeData{
+		Type:        ChangeTypeSnapshot,
+		InsertBatch: buildBatch(t, h.mp, []int32{9}, types.BuildTS(2, 0)),
+	}
+	require.ErrorIs(t, h.dp.ProcessChange(ctx, next), commitErr)
+	next.Clean(h.mp)
+	assert.False(t, h.update.updateCalled)
+	require.NotNil(t, h.txnMgr.GetTracker())
+	assert.True(t, h.txnMgr.GetTracker().NeedsRollback())
 }
 
 func TestDataProcessor_ProcessChange_TailWip(t *testing.T) {

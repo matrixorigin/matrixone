@@ -134,7 +134,7 @@ func Test_newCdcSqlFormat(t *testing.T) {
 	assert.Equal(t, wantSql, sql)
 
 	sql2 := cdc.CDCSQLBuilder.GetTaskSQL(3, id.String())
-	wantSql2 := "SELECT sink_uri, sink_type, sink_password, tables, filters, start_ts, end_ts, no_full, additional_config FROM mo_catalog.mo_cdc_task WHERE account_id = 3 AND task_id = \"019111fd-aed1-70c0-8760-9abadd8f0f4a\""
+	wantSql2 := "SELECT sink_uri, sink_type, sink_password, tables, filters, start_ts, end_ts, no_full, additional_config, task_create_time FROM mo_catalog.mo_cdc_task WHERE account_id = 3 AND task_id = \"019111fd-aed1-70c0-8760-9abadd8f0f4a\""
 	assert.Equal(t, wantSql2, sql2)
 
 	sql3 := cdc.CDCSQLBuilder.DeleteWatermarkSQL(13, "task1")
@@ -747,7 +747,8 @@ func (tie *testIE) Query(ctx context.Context, s string, options ie.SessionOverri
 			startTs := ""
 			endTs := ""
 			noFull := ""
-			splitTxn := ""
+			additionalConfig := ""
+			taskCreateTime := ""
 			err = rows.Scan(
 				&sinkUri,
 				&sinkType,
@@ -757,7 +758,8 @@ func (tie *testIE) Query(ctx context.Context, s string, options ie.SessionOverri
 				&startTs,
 				&endTs,
 				&noFull,
-				&splitTxn)
+				&additionalConfig,
+				&taskCreateTime)
 			if err != nil {
 				panic(err)
 			}
@@ -769,7 +771,8 @@ func (tie *testIE) Query(ctx context.Context, s string, options ie.SessionOverri
 			rowValues = append(rowValues, startTs)
 			rowValues = append(rowValues, endTs)
 			rowValues = append(rowValues, noFull)
-			rowValues = append(rowValues, splitTxn)
+			rowValues = append(rowValues, additionalConfig)
+			rowValues = append(rowValues, taskCreateTime)
 		} else if idx == mSqlIdx2 {
 			dbId := uint64(0)
 			tableId := uint64(0)
@@ -1113,7 +1116,7 @@ func TestRegisterCdcExecutor(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	assert.NoError(t, err)
 	/////////mock sql result
-	sql1 := `SELECT sink_uri, sink_type, sink_password, tables, filters, start_ts, end_ts, no_full, additional_config FROM mo_catalog.mo_cdc_task WHERE account_id = 0 AND task_id = "00000000-0000-0000-0000-000000000000"`
+	sql1 := `SELECT sink_uri, sink_type, sink_password, tables, filters, start_ts, end_ts, no_full, additional_config, task_create_time FROM mo_catalog.mo_cdc_task WHERE account_id = 0 AND task_id = "00000000-0000-0000-0000-000000000000"`
 	mock.ExpectQuery(sql1).WillReturnRows(sqlmock.NewRows(
 		[]string{
 			"sink_uri",
@@ -1125,6 +1128,7 @@ func TestRegisterCdcExecutor(t *testing.T) {
 			"end_ts",
 			"no_full",
 			"additional_config",
+			"task_create_time",
 		},
 	).AddRow(
 		sinkUri,
@@ -1140,6 +1144,7 @@ func TestRegisterCdcExecutor(t *testing.T) {
 			cdc.CDCTaskExtraOptions_SendSqlTimeout, cdc.CDCDefaultSendSqlTimeout,
 			cdc.CDCTaskExtraOptions_MaxSqlLength, cdc.CDCDefaultTaskExtra_MaxSQLLen,
 		),
+		"",
 	))
 
 	sql7 := "UPDATE `mo_catalog`.`mo_cdc_task` SET state = 'running', err_msg = '' WHERE 1=1 AND account_id = 0 AND task_id = '00000000-0000-0000-0000-000000000000' AND state = 'running'"
@@ -3591,7 +3596,7 @@ func TestCdcTask_retrieveCdcTask(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	assert.NoError(t, err)
 
-	sqlx := "SELECT sink_uri, sink_type, sink_password, tables, filters, start_ts, end_ts, no_full, additional_config FROM mo_catalog.mo_cdc_task WHERE account_id = .* AND task_id =.*"
+	sqlx := "SELECT sink_uri, sink_type, sink_password, tables, filters, start_ts, end_ts, no_full, additional_config, task_create_time FROM mo_catalog.mo_cdc_task WHERE account_id = .* AND task_id =.*"
 	sinkUri, err := cdc.JsonEncode(&cdc.UriInfo{
 		User: "root",
 		Ip:   "127.0.0.1",
@@ -3626,6 +3631,7 @@ func TestCdcTask_retrieveCdcTask(t *testing.T) {
 			"end_ts",
 			"no_full",
 			"additional_config",
+			"task_create_time",
 		},
 	).AddRow(
 		sinkUri,
@@ -3636,7 +3642,12 @@ func TestCdcTask_retrieveCdcTask(t *testing.T) {
 		"2006-01-02T15:04:05-07:00",
 		"2006-01-02T15:04:05-07:00",
 		true,
-		"{\"InitSnapshotSplitTxn\": false}",
+		fmt.Sprintf(
+			"{\"InitSnapshotSplitTxn\": false,\"%s\":\"%s\"}",
+			cdc.CDCTaskExtraOptions_InitialSnapshotProtocol,
+			cdc.CDCInitialSnapshotProtocolStableEpoch,
+		),
+		"2026-09-02 12:34:56",
 	),
 	)
 
@@ -3702,6 +3713,7 @@ func TestCdcTask_retrieveCdcTask(t *testing.T) {
 			}
 			err := cdc.retrieveCdcTask(tt.args.ctx)
 			assert.NoError(t, err, fmt.Sprintf("retrieveCdcTask(%v)", tt.args.ctx))
+			assert.Equal(t, types.BuildTS(time.Date(2026, 9, 2, 12, 34, 56, 0, time.UTC).UnixNano(), 0), cdc.initialSnapshotEpoch)
 		})
 	}
 }

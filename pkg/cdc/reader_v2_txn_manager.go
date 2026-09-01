@@ -157,6 +157,19 @@ func (tm *TransactionManager) BeginTransaction(ctx context.Context, fromTs, toTs
 func (tm *TransactionManager) CommitTransaction(ctx context.Context) error {
 	tm.mu.Lock()
 	defer tm.mu.Unlock()
+	return tm.commitLocked(ctx, true)
+}
+
+// CommitTransactionWithoutWatermark commits an intermediate, retry-safe
+// initial-snapshot group. The caller must guarantee that a retry reads the same
+// immutable source epoch. Only the final group may publish the watermark.
+func (tm *TransactionManager) CommitTransactionWithoutWatermark(ctx context.Context) error {
+	tm.mu.Lock()
+	defer tm.mu.Unlock()
+	return tm.commitLocked(ctx, false)
+}
+
+func (tm *TransactionManager) commitLocked(ctx context.Context, updateWatermark bool) error {
 	if tm.tracker == nil {
 		logutil.Warn(
 			"cdc.txn_manager.commit_without_tracker",
@@ -209,29 +222,34 @@ func (tm *TransactionManager) CommitTransaction(ctx context.Context) error {
 		return err
 	}
 
-	// Step 2: Update watermark (persistent proof of success)
-	// This MUST happen BEFORE marking tracker as committed
-	if err := tm.watermarkUpdater.UpdateWatermarkOnly(
-		ctx,
-		tm.watermarkKey,
-		&toTs,
-	); err != nil {
-		logutil.Error(
-			"cdc.txn_manager.update_watermark_failed",
-			zap.String("task-id", tm.taskId),
-			zap.Uint64("account-id", tm.accountId),
-			zap.String("db", tm.dbName),
-			zap.String("table", tm.tableName),
-			zap.String("to-ts", toTs.ToString()),
-			zap.Error(err),
-		)
-		// Note: UpdateWatermarkOnly always returns nil (eventual consistency)
-		// But we log it anyway for monitoring
+	if updateWatermark {
+		// Step 2: Update watermark (persistent proof of success). This MUST
+		// happen before marking the tracker as committed. Intermediate snapshot
+		// groups deliberately skip this step.
+		if err := tm.watermarkUpdater.UpdateWatermarkOnly(
+			ctx,
+			tm.watermarkKey,
+			&toTs,
+		); err != nil {
+			logutil.Error(
+				"cdc.txn_manager.update_watermark_failed",
+				zap.String("task-id", tm.taskId),
+				zap.Uint64("account-id", tm.accountId),
+				zap.String("db", tm.dbName),
+				zap.String("table", tm.tableName),
+				zap.String("to-ts", toTs.ToString()),
+				zap.Error(err),
+			)
+			// UpdateWatermarkOnly is currently eventual and always returns nil,
+			// but retain the branch for interface implementations and monitoring.
+		}
 	}
 
 	// Step 3: Mark tracker as committed (memory state sync)
 	tm.tracker.MarkCommit()
-	tm.tracker.MarkWatermarkUpdated()
+	if updateWatermark {
+		tm.tracker.MarkWatermarkUpdated()
+	}
 
 	logutil.Debug(
 		"cdc.txn_manager.commit_success",
@@ -240,6 +258,7 @@ func (tm *TransactionManager) CommitTransaction(ctx context.Context) error {
 		zap.String("db", tm.dbName),
 		zap.String("table", tm.tableName),
 		zap.String("to-ts", toTs.ToString()),
+		zap.Bool("watermark-updated", updateWatermark),
 	)
 
 	// Step 4: Clean up tracker to allow next transaction to begin

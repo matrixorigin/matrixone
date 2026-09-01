@@ -80,7 +80,8 @@ const (
 		`start_ts, ` +
 		`end_ts, ` +
 		`no_full, ` +
-		`additional_config ` +
+		`additional_config, ` +
+		`task_create_time ` +
 		`FROM ` +
 		`mo_catalog.mo_cdc_task ` +
 		`WHERE ` +

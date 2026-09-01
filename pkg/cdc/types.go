@@ -108,6 +108,11 @@ const (
 	CDCTaskExtraOptions_SendSqlTimeout       = CDCRequestOptions_SendSqlTimeout
 	CDCTaskExtraOptions_InitSnapshotSplitTxn = CDCRequestOptions_InitSnapshotSplitTxn
 	CDCTaskExtraOptions_Frequency            = CDCRequestOptions_Frequency
+
+	// CDCTaskExtraOptions_InitialSnapshotProtocol is an internal, persisted
+	// compatibility marker. It must not be exposed as a CREATE CDC user option.
+	CDCTaskExtraOptions_InitialSnapshotProtocol = "_InitialSnapshotProtocol"
+	CDCInitialSnapshotProtocolStableEpoch       = "stable-epoch-v1"
 )
 
 var CDCRequestOptions = []string{
@@ -133,6 +138,17 @@ var CDCTaskExtraOptions = []string{
 var (
 	EnableConsoleSink = false
 )
+
+// FinalizeInitialSnapshotOptions encodes split mode so mixed-version clusters
+// remain correct. Old executors see false and use one atomic transaction; new
+// executors recognize the internal marker and use stable-epoch bounded groups.
+func FinalizeInitialSnapshotOptions(extraOpts map[string]any) {
+	if split, _ := extraOpts[CDCTaskExtraOptions_InitSnapshotSplitTxn].(bool); split {
+		extraOpts[CDCTaskExtraOptions_InitSnapshotSplitTxn] = false
+		extraOpts[CDCTaskExtraOptions_InitialSnapshotProtocol] =
+			CDCInitialSnapshotProtocolStableEpoch
+	}
+}
 
 type TaskId = uuid.UUID
 
