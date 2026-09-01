@@ -28,6 +28,11 @@ create view long_repeated_star_comment_v /*****/ as select a from t;
 /*!50001 CREATE VIEW executable_string_terminator_v AS select 'x*/y' as s */;
 CREATE DEFINER=' view fake as select 0'@'%' VIEW quoted_definer_v AS select a from t;
 CREATE DEFINER=' view fake \' VIEW fake AS select 0'@'%' VIEW escaped_quoted_definer_v AS select a from t;
+CREATE DEFINER=$q$ view fake as select 0$q$ VIEW dollar_quoted_definer_v AS select a from t;
+/*!50001 CREATE VIEW executable_dollar_terminator_v AS select $q$x*/y$q$ as s */;
+/*!50001 CREATE VIEW executable_double_quote_terminator_v AS select "x\"*/y" as s */;
+/*!50001 CREATE VIEW executable_double_minus_v AS select 1--2 as x */;
+CREATE VIEW check_option_v AS select a from t WITH CASCADED CHECK OPTION;
 
 select table_name, view_definition, is_updatable
 from information_schema.views
@@ -36,6 +41,10 @@ order by table_name;
 
 update agg_v set cnt = 1;
 update direct_v set b = 1;
+
+select table_name, view_definition, check_option
+from information_schema.views
+where table_schema = 'information_schema_views_metadata' and table_name = 'check_option_v';
 
 drop database information_schema_views_metadata;
 

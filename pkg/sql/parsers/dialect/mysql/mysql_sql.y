@@ -8747,7 +8747,7 @@ create_view_stmt:
         var Name = $5
         var ColNames = $6
         var AsSource = $8
-        var IfNotExists = $4
+        var IfNotExists = $4; var CheckOption = $9
         if intoErr := tree.ValidateSelectIntoNotAllowed(AsSource); intoErr != "" {
             yylex.Error(intoErr)
             goto ret1
@@ -8757,7 +8757,7 @@ create_view_stmt:
             Name,
             ColNames,
             AsSource,
-            IfNotExists,
+            IfNotExists, CheckOption,
         )
     }
 |   CREATE replace_opt VIEW not_exists_opt table_name column_list_opt AS ctas_select_stmt view_tail
@@ -8766,7 +8766,7 @@ create_view_stmt:
         var Name = $5
         var ColNames = $6
         var AsSource = $8
-        var IfNotExists = $4
+        var IfNotExists = $4; var CheckOption = $9
         if intoErr := tree.ValidateSelectIntoNotAllowed(AsSource); intoErr != "" {
             yylex.Error(intoErr)
             goto ret1
@@ -8776,7 +8776,7 @@ create_view_stmt:
             Name,
             ColNames,
             AsSource,
-            IfNotExists,
+            IfNotExists, CheckOption,
         )
     }
 
@@ -8840,11 +8840,11 @@ view_opt:
 
 view_tail:
     {
-        $$ = ""
+        $$ = "NONE"
     }
 |   WITH check_type CHECK OPTION
     {
-        $$ = "WITH " + $2 + " CHECK OPTION"
+        $$ = $2; if $$ == "" { $$ = "CASCADED" }
     }
 
 algorithm_type_2:
