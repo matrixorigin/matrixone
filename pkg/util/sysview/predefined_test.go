@@ -67,6 +67,7 @@ func TestInformationSchemaMetadataViewsEnforceObjectPrivileges(t *testing.T) {
 		{name: "views", ddl: InformationSchemaViewsDDL},
 		{name: "partitions", ddl: InformationSchemaPartitionsDDL},
 		{name: "schemata", ddl: InformationSchemaSchemataDDL},
+		{name: "table privileges", ddl: InformationSchemaTablePrivilegesDDL},
 	}
 
 	for _, test := range tests {
@@ -124,6 +125,33 @@ func TestInformationSchemaMetadataViewsEnforceObjectPrivileges(t *testing.T) {
 		"rp.obj_type = 'account' AND rp.privilege_name IN ('show databases','account all')")
 	assert.Contains(t, InformationSchemaSchemataDDL,
 		"rp.privilege_level = '*' AND rp.obj_id = 0")
+}
+
+func TestInformationSchemaTablePrivilegesDDL(t *testing.T) {
+	for _, expected := range []string{
+		"CREATE VIEW information_schema.`TABLE_PRIVILEGES` AS",
+		"CAST(granted_role.role_name AS varchar(292)) AS `GRANTEE`",
+		"CAST('def' AS varchar(512)) AS `TABLE_CATALOG`",
+		"CAST(tbl.reldatabase AS varchar(64)) AS `TABLE_SCHEMA`",
+		"CAST(tbl.relname AS varchar(64)) AS `TABLE_NAME`",
+		"CAST(upper(grant_priv.privilege_name) AS varchar(64)) AS `PRIVILEGE_TYPE`",
+		"case when grant_priv.with_grant_option then 'YES' else 'NO' end",
+		"JOIN mo_catalog.mo_role granted_role ON grant_priv.role_id = granted_role.role_id",
+		"JOIN __mo_visible_tables tbl ON grant_priv.obj_id = tbl.rel_logical_id",
+		"tbl.account_id = current_account_id()",
+		"grant_priv.obj_type IN ('table','view')",
+		"grant_priv.privilege_level IN ('d.t','t')",
+	} {
+		assert.Contains(t, InformationSchemaTablePrivilegesDDL, expected)
+	}
+	assert.NotContains(t, InformationSchemaTablePrivilegesDDL, "grant_priv.privilege_level IN ('d.*','*')")
+	assert.NotContains(t, InformationSchemaTablePrivilegesDDL, "grant_priv.privilege_level = '*.*'")
+
+	statements, err := mysql.Parse(context.Background(), InformationSchemaTablePrivilegesDDL, 1)
+	assert.NoError(t, err)
+	for _, statement := range statements {
+		statement.Free()
+	}
 }
 
 func TestInformationSchemaStatisticsDDL_ContainsIdxAlgo(t *testing.T) {
