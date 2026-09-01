@@ -33,6 +33,24 @@ func singleJoinPushdownEquality(t *testing.T, builder *QueryBuilder, leftTag, ri
 	return expr
 }
 
+func singleJoinUnsafeCastEquality(t *testing.T, builder *QueryBuilder, leftTag, rightTag int32) *plan.Expr {
+	t.Helper()
+	sourceType := plan.Type{Id: int32(types.T_varchar)}
+	targetType := types.T_int64.ToType()
+	castExpr, err := makePlan2CastExpr(
+		builder.GetContext(),
+		GetColExpr(sourceType, leftTag, 0),
+		makePlan2Type(&targetType),
+	)
+	require.NoError(t, err)
+	equality, err := BindFuncExprImplByPlanExpr(builder.GetContext(), "=", []*plan.Expr{
+		castExpr,
+		GetColExpr(plan.Type{Id: int32(types.T_int64)}, rightTag, 0),
+	})
+	require.NoError(t, err)
+	return equality
+}
+
 func newSingleJoinPushdownBuilder(t *testing.T, filterTagIndexes ...int) (*QueryBuilder, int32, []int32) {
 	t.Helper()
 	builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true), false, true)
@@ -115,6 +133,14 @@ func TestPushdownUncorrelatedSingleJoinFilterKeepsSemanticBarriers(t *testing.T)
 			mutate: func(builder *QueryBuilder, tags []int32) {
 				builder.qry.Nodes[7].FilterList = append(builder.qry.Nodes[7].FilterList,
 					makeVolatileJoinFilter(t, builder.compCtx.(*MockCompilerContext), &tags[0]))
+			},
+		},
+		{
+			name: "deterministic filter that can fail",
+			mutate: func(builder *QueryBuilder, tags []int32) {
+				builder.qry.Nodes[7].FilterList = []*plan.Expr{
+					singleJoinUnsafeCastEquality(t, builder, tags[0], tags[3]),
+				}
 			},
 		},
 		{

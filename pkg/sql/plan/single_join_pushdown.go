@@ -48,7 +48,8 @@ func (builder *QueryBuilder) canPushdownSingleJoinFilterPair(filterID int32) boo
 	filter := builder.qry.Nodes[filterID]
 	if filter.NodeType != plan.Node_FILTER || filter.IsEnd || filter.FilterIsBarrier ||
 		filter.RollupFilter || filter.Limit != nil || filter.Offset != nil ||
-		len(filter.Children) != 1 || len(filter.FilterList) == 0 {
+		len(filter.Children) != 1 || len(filter.FilterList) == 0 ||
+		!areTruncationSafePredicates(filter.FilterList) {
 		return false
 	}
 	for _, expr := range filter.FilterList {
