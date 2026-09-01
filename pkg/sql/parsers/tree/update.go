@@ -344,7 +344,11 @@ func (node *Load) Format(ctx *FmtCtx) {
 			if len(node.Param.Option) == 0 {
 				ctx.WriteString(" infile ")
 				ctx.WriteString("'")
-				ctx.WriteString(strings.ReplaceAll(node.Param.Filepath, "'", "''"))
+				if ctx.NoBackslashEscape() {
+					ctx.WriteString(strings.ReplaceAll(node.Param.Filepath, "'", "''"))
+				} else {
+					ctx.WriteString(strings.ReplaceAll(FormatString(node.Param.Filepath), "'", "''"))
+				}
 				ctx.WriteString("'")
 			} else {
 				if node.Param.ScanType == S3 {

@@ -64,3 +64,32 @@ func TestLoadParallelOptionPreservesExplicitFalse(t *testing.T) {
 		})
 	}
 }
+
+func TestLoadFormatRoundTripsEscapedFilepath(t *testing.T) {
+	const filepath = "C:\\tmp\\it's.parquet"
+	stmt, err := ParseOne(context.Background(),
+		"load data infile 'C:\\\\tmp\\\\it''s.parquet' into table t parallel 'false'", 1)
+	require.NoError(t, err)
+	load, ok := stmt.(*tree.Load)
+	require.True(t, ok)
+	require.Equal(t, filepath, load.Param.Filepath)
+
+	formatted := tree.String(load, dialect.MYSQL)
+	require.Contains(t, formatted, "infile 'C:\\\\tmp\\\\it''s.parquet'")
+	roundTrip, err := ParseOne(context.Background(), formatted, 1)
+	require.NoError(t, err)
+	roundTripLoad, ok := roundTrip.(*tree.Load)
+	require.True(t, ok)
+	require.Equal(t, filepath, roundTripLoad.Param.Filepath)
+}
+
+func TestLoadFormatFilepathNoBackslashEscape(t *testing.T) {
+	stmt, err := ParseOne(context.Background(), "load data infile 'input.parquet' into table t", 1)
+	require.NoError(t, err)
+	load, ok := stmt.(*tree.Load)
+	require.True(t, ok)
+	load.Param.Filepath = "C:\\tmp\\it's.parquet"
+	ctx := tree.NewFmtCtx(dialect.MYSQL, tree.WithNoBackslashEscape())
+	load.Format(ctx)
+	require.Contains(t, ctx.String(), "infile 'C:\\tmp\\it''s.parquet'")
+}
