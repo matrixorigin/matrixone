@@ -588,6 +588,81 @@ func TestMaybeUpgradeTenantIgnoresStaleOlderCallbackForCurrentTenant(t *testing.
 	require.Zero(t, h.callHandleTenantUpgrade.Load())
 }
 
+func TestMaybeUpgradeTenantTreatsDeletedAccountAsComplete(t *testing.T) {
+	const tenantID = int32(10)
+	h := newTestVersionHandler("2.0.0", "1.0.0", versions.Yes, versions.Yes, 1)
+	var sqls []string
+	s := newServiceForTest(
+		"",
+		&memLocker{},
+		clock.NewHLCClock(func() int64 { return 0 }, 0),
+		nil,
+		executor.NewMemExecutor(func(sql string) (executor.Result, error) {
+			sqls = append(sqls, sql)
+			if sql == "select create_version from mo_account where account_id = 10" {
+				return executor.Result{}, nil
+			}
+			return executor.Result{}, fmt.Errorf("unexpected sql after account deletion: %s", sql)
+		}),
+		func(s *service) { s.handles = append(s.handles, h) },
+	)
+
+	upgraded, err := s.MaybeUpgradeTenant(
+		context.Background(),
+		func() (int32, string, error) { return tenantID, "1.0.0", nil },
+		nil,
+	)
+	require.NoError(t, err)
+	require.False(t, upgraded)
+	require.Equal(t, []string{"select create_version from mo_account where account_id = 10"}, sqls)
+	require.Zero(t, h.callHandleTenantUpgrade.Load())
+}
+
+func TestUpgradeTenantDirectlyStopsWhenTenantDeletedBetweenPages(t *testing.T) {
+	const tenantID = int32(10)
+	deleted := false
+	h := &testIncrementalVersionHandle{
+		testVersionHandle: newTestVersionHandler("2.0.0", "1.0.0", versions.Yes, versions.Yes, 1),
+		completeAfter:     10,
+		onStep: func(call int32) {
+			if call == 1 {
+				deleted = true
+			}
+		},
+	}
+	var lockedReads int
+	var versionUpdates int
+	s := newServiceForTest(
+		"",
+		&memLocker{},
+		clock.NewHLCClock(func() int64 { return 0 }, 0),
+		nil,
+		executor.NewMemExecutor(func(sql string) (executor.Result, error) {
+			switch {
+			case sql == "select create_version from mo_account where account_id = 10 for update":
+				lockedReads++
+				if deleted {
+					return executor.Result{}, nil
+				}
+				return buildTenantVersionResult("1.0.0"), nil
+			case strings.HasPrefix(sql, "update mo_account"):
+				versionUpdates++
+				return executor.Result{AffectedRows: 1}, nil
+			default:
+				return executor.Result{}, fmt.Errorf("unexpected sql: %s", sql)
+			}
+		}),
+		func(s *service) { s.handles = append(s.handles, h) },
+	)
+
+	exists, err := s.upgradeTenantDirectly(context.Background(), tenantID, false)
+	require.NoError(t, err)
+	require.False(t, exists)
+	require.Equal(t, int32(1), h.stepCalls.Load())
+	require.Equal(t, 2, lockedReads)
+	require.Zero(t, versionUpdates)
+}
+
 func TestUpgradeTenantDirectlyRebuildsRouteAfterConcurrentAdvance(t *testing.T) {
 	const tenantID = int32(10)
 	persisted := "1.0.0"
@@ -620,7 +695,9 @@ func TestUpgradeTenantDirectlyRebuildsRouteAfterConcurrentAdvance(t *testing.T) 
 		func(s *service) { s.handles = append(s.handles, h1, h2) },
 	)
 
-	require.NoError(t, s.upgradeTenantDirectly(context.Background(), tenantID, false))
+	exists, err := s.upgradeTenantDirectly(context.Background(), tenantID, false)
+	require.NoError(t, err)
+	require.True(t, exists)
 	require.Equal(t, int32(1), h1.stepCalls.Load())
 	require.Zero(t, h2.callHandleTenantUpgrade.Load())
 	require.Zero(t, versionUpdates, "concurrent progress must never be overwritten with an older version")
@@ -657,7 +734,9 @@ func TestUpgradeTenantDirectlyCommitsIncrementalPages(t *testing.T) {
 		func(s *service) { s.handles = append(s.handles, h) },
 	)
 
-	require.NoError(t, s.upgradeTenantDirectly(context.Background(), tenantID, true))
+	exists, err := s.upgradeTenantDirectly(context.Background(), tenantID, true)
+	require.NoError(t, err)
+	require.True(t, exists)
 	require.Equal(t, int32(3), lockedReads.Load(),
 		"two page transactions plus one locked completion check are required")
 	require.Equal(t, int32(1), versionUpdates.Load(), "version is published only with the completed page")

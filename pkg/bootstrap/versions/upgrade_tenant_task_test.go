@@ -76,6 +76,43 @@ func TestGetTenantVersion(t *testing.T) {
 	)
 }
 
+func TestGetTenantVersionIfExists(t *testing.T) {
+	for _, test := range []struct {
+		name      string
+		forUpdate bool
+		rows      []string
+		want      string
+		wantExist bool
+	}{
+		{name: "missing tenant"},
+		{name: "existing tenant", rows: []string{"4.0.6"}, want: "4.0.6", wantExist: true},
+		{name: "missing tenant for update", forUpdate: true},
+		{name: "existing tenant for update", forUpdate: true, rows: []string{"4.0.6"}, want: "4.0.6", wantExist: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			exec := executor.NewMemTxnExecutor(func(sql string) (executor.Result, error) {
+				require.Equal(t, test.forUpdate, strings.HasSuffix(sql, " for update"))
+				if len(test.rows) == 0 {
+					return executor.Result{}, nil
+				}
+				return buildTenantVersionRows(test.rows), nil
+			}, nil)
+
+			var version string
+			var exists bool
+			var err error
+			if test.forUpdate {
+				version, exists, err = GetTenantCreateVersionForUpdateIfExists(10, exec)
+			} else {
+				version, exists, err = GetTenantVersionIfExists(10, exec)
+			}
+			require.NoError(t, err)
+			require.Equal(t, test.want, version)
+			require.Equal(t, test.wantExist, exists)
+		})
+	}
+}
+
 func TestAdvanceUpgradeTenantTask(t *testing.T) {
 	t.Run("advances persistent range cursor", func(t *testing.T) {
 		var sqls []string

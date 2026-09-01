@@ -84,6 +84,34 @@ func Test_UpgradeOneTenant(t *testing.T) {
 	)
 }
 
+func Test_UpgradeOneTenant_DeletedAccountCompletes(t *testing.T) {
+	sid := ""
+	runtime.RunTest(sid, func(rt runtime.Runtime) {
+		const tenantID = int32(2)
+		var sqls []string
+		b := newServiceForTest(
+			sid,
+			&memLocker{},
+			clock.NewHLCClock(func() int64 { return 0 }, 0),
+			nil,
+			executor.NewMemExecutor(func(sql string) (executor.Result, error) {
+				sqls = append(sqls, sql)
+				if sql == "select create_version from mo_account where account_id = 2" {
+					return executor.Result{}, nil
+				}
+				return executor.Result{}, fmt.Errorf("unexpected sql: %s", sql)
+			}),
+			func(s *service) {
+				s.handles = append(s.handles,
+					newTestVersionHandler("2.0.0", "1.0.0", versions.Yes, versions.Yes, 1))
+			},
+		)
+
+		require.NoError(t, b.UpgradeOneTenant(context.Background(), tenantID))
+		require.Equal(t, []string{"select create_version from mo_account where account_id = 2"}, sqls)
+	})
+}
+
 func Test_UpgradeOneTenant_SameVersionWithCurrentOffsetRunsTenantHandler(t *testing.T) {
 	sid := ""
 	runtime.RunTest(

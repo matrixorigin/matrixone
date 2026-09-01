@@ -249,23 +249,22 @@ func nextUpgradeTenantTaskAfter(accountID int32) (int32, bool) {
 	return accountID + 1, true
 }
 
+func GetTenantCreateVersionForUpdateIfExists(
+	tenantID int32,
+	txn executor.TxnExecutor,
+) (string, bool, error) {
+	return getTenantVersionIfExists(tenantID, true, txn)
+}
+
 func GetTenantCreateVersionForUpdate(
 	tenantID int32,
-	txn executor.TxnExecutor) (string, error) {
-	sql := fmt.Sprintf("select create_version from mo_account where account_id = %d for update", tenantID)
-	res, err := txn.Exec(sql, executor.StatementOption{})
+	txn executor.TxnExecutor,
+) (string, error) {
+	version, exists, err := GetTenantCreateVersionForUpdateIfExists(tenantID, txn)
 	if err != nil {
 		return "", err
 	}
-	defer res.Close()
-	version := ""
-	_, rows := readSingleRow(res, func(cols []*vector.Vector) {
-		version = cols[0].GetStringAt(0)
-	})
-	if rows > 1 {
-		return "", moerr.NewInternalErrorNoCtx(fmt.Sprintf("unexpected rows count: %d", rows))
-	}
-	if version == "" {
+	if !exists {
 		getLogger(txn.Txn().TxnOptions().CN).Fatal(fmt.Sprintf("BUG: missing tenant: %d", tenantID))
 	}
 	return version, nil
@@ -294,13 +293,39 @@ func isConflictError(err error) bool {
 	return moerr.IsMoErrCode(err, moerr.ErrLockConflict)
 }
 
+func GetTenantVersionIfExists(
+	tenantID int32,
+	txn executor.TxnExecutor,
+) (string, bool, error) {
+	return getTenantVersionIfExists(tenantID, false, txn)
+}
+
 func GetTenantVersion(
 	tenantID int32,
-	txn executor.TxnExecutor) (string, error) {
-	sql := fmt.Sprintf("select create_version from mo_account where account_id = %d", tenantID)
-	res, err := txn.Exec(sql, executor.StatementOption{})
+	txn executor.TxnExecutor,
+) (string, error) {
+	version, exists, err := GetTenantVersionIfExists(tenantID, txn)
 	if err != nil {
 		return "", err
+	}
+	if !exists {
+		getLogger(txn.Txn().TxnOptions().CN).Fatal(fmt.Sprintf("BUG: missing tenant: %d", tenantID))
+	}
+	return version, nil
+}
+
+func getTenantVersionIfExists(
+	tenantID int32,
+	forUpdate bool,
+	txn executor.TxnExecutor,
+) (string, bool, error) {
+	sql := fmt.Sprintf("select create_version from mo_account where account_id = %d", tenantID)
+	if forUpdate {
+		sql += " for update"
+	}
+	res, err := txn.Exec(sql, executor.StatementOption{})
+	if err != nil {
+		return "", false, err
 	}
 	defer res.Close()
 	version := ""
@@ -308,10 +333,10 @@ func GetTenantVersion(
 		version = cols[0].GetStringAt(0)
 	})
 	if rows > 1 {
-		return "", moerr.NewInternalErrorNoCtx(fmt.Sprintf("unexpected rows count: %d", rows))
+		return "", false, moerr.NewInternalErrorNoCtx(fmt.Sprintf("unexpected rows count: %d", rows))
 	}
-	if version == "" {
-		getLogger(txn.Txn().TxnOptions().CN).Fatal(fmt.Sprintf("BUG: missing tenant: %d", tenantID))
+	if rows == 1 && version == "" {
+		return "", true, moerr.NewInvalidStateNoCtxf("tenant %d has empty create version", tenantID)
 	}
-	return version, nil
+	return version, rows == 1, nil
 }

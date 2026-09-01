@@ -89,6 +89,7 @@ func (s *service) UpgradeOneTenant(ctx context.Context, tenantID int32) error {
 	defer cancel()
 
 	var version string
+	tenantExists := true
 	shouldUpgrade := true
 	includeEqual := false
 	opts := executor.Options{}.
@@ -99,8 +100,8 @@ func (s *service) UpgradeOneTenant(ctx context.Context, tenantID int32) error {
 	err := s.exec.ExecTxn(ctx, func(txn executor.TxnExecutor) error {
 		txn.Use(catalog.MO_CATALOG)
 		var err error
-		version, err = versions.GetTenantVersion(tenantID, txn)
-		if err != nil {
+		version, tenantExists, err = versions.GetTenantVersionIfExists(tenantID, txn)
+		if err != nil || !tenantExists {
 			return err
 		}
 
@@ -146,12 +147,19 @@ func (s *service) UpgradeOneTenant(ctx context.Context, tenantID int32) error {
 	if err != nil {
 		return moerr.AttachCause(ctx, err)
 	}
+	if !tenantExists {
+		return nil
+	}
 	if shouldUpgrade {
 		if err := s.waitTenantUpgradeReady(ctx); err != nil {
 			return moerr.AttachCause(ctx, err)
 		}
-		if err := s.upgradeTenantDirectly(ctx, tenantID, includeEqual); err != nil {
+		tenantExists, err = s.upgradeTenantDirectly(ctx, tenantID, includeEqual)
+		if err != nil {
 			return moerr.AttachCause(ctx, err)
+		}
+		if !tenantExists {
+			return nil
 		}
 	}
 	s.markTenantUpgradeChecked(tenantID)

@@ -50,11 +50,12 @@ func (s *service) MaybeUpgradeTenant(
 
 	currentCN := s.getFinalVersionHandle().Metadata()
 	persistedVersion := ""
+	tenantExists := true
 	shouldUpgrade := false
 	err = s.exec.ExecTxn(ctx, func(txn executor.TxnExecutor) error {
 		txn.Use(catalog.MO_CATALOG)
-		persistedVersion, err = versions.GetTenantVersion(tenantID, txn)
-		if err != nil {
+		persistedVersion, tenantExists, err = versions.GetTenantVersionIfExists(tenantID, txn)
+		if err != nil || !tenantExists {
 			return err
 		}
 		if versions.Compare(currentCN.Version, persistedVersion) < 0 {
@@ -93,6 +94,9 @@ func (s *service) MaybeUpgradeTenant(
 	if err != nil {
 		return false, err
 	}
+	if !tenantExists {
+		return false, nil
+	}
 	if !shouldUpgrade {
 		// A caller-owned transaction may still roll back the state observed above.
 		// Cache only committed, independently observed readiness.
@@ -108,9 +112,10 @@ func (s *service) MaybeUpgradeTenant(
 	if err := s.waitTenantUpgradeReady(ctx); err != nil {
 		return false, err
 	}
-	if err := s.upgradeTenantDirectly(
+	tenantExists, err = s.upgradeTenantDirectly(
 		ctx, tenantID, persistedVersion == currentCN.Version,
-	); err != nil {
+	)
+	if err != nil || !tenantExists {
 		return false, err
 	}
 	s.markTenantUpgradeChecked(tenantID)
@@ -190,10 +195,11 @@ func (s *service) upgradeTenantDirectly(
 	ctx context.Context,
 	tenantID int32,
 	includeEqual bool,
-) error {
+) (bool, error) {
 	for {
 		completed := true
 		done := false
+		tenantExists := true
 		selectedEqual := false
 		opts := executor.Options{}.
 			WithDatabase(catalog.MO_CATALOG).
@@ -202,9 +208,14 @@ func (s *service) upgradeTenantDirectly(
 			WithTimeZone(time.Local)
 		err := s.exec.ExecTxn(ctx, func(txn executor.TxnExecutor) error {
 			txn.Use(catalog.MO_CATALOG)
-			current, err := versions.GetTenantCreateVersionForUpdate(tenantID, txn)
+			current, exists, err := versions.GetTenantCreateVersionForUpdateIfExists(tenantID, txn)
 			if err != nil {
 				return err
+			}
+			if !exists {
+				tenantExists = false
+				done = true
+				return nil
 			}
 
 			var selected VersionHandle
@@ -237,8 +248,11 @@ func (s *service) upgradeTenantDirectly(
 			}
 			return versions.UpgradeTenantVersion(tenantID, selected.Metadata().Version, txn)
 		}, opts)
-		if err != nil || done {
-			return err
+		if err != nil {
+			return false, err
+		}
+		if done {
+			return tenantExists, nil
 		}
 		if completed && selectedEqual {
 			includeEqual = false
