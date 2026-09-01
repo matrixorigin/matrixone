@@ -1,16 +1,16 @@
 # Sirius streamed MatrixOne input protocol
 
-Status: proposed for design approval
+Status: approved for implementation
 
 Design version: 6
 
-Approval: pending distinct reviewer approval
+Approval: [PASS by XuPeng-SH](https://github.com/matrixorigin/matrixone/pull/27599#pullrequestreview-5072324636) for exact design revision `0ec46e52658b86bfd9ceedd2c13db008558397ca`
 
 Owner: MatrixOne query execution
 
 Owning issue: [#27586](https://github.com/matrixorigin/matrixone/issues/27586)
 
-Implementation: MatrixOne [#27599](https://github.com/matrixorigin/matrixone/pull/27599), Sirius [#6](https://github.com/matrixorigin/sirius/pull/6), sidecar [#14](https://github.com/matrixorigin/mo-sirius-sidecar/pull/14)
+Implementation: MatrixOne [#27599](https://github.com/matrixorigin/matrixone/pull/27599), Sirius [#6](https://github.com/matrixorigin/sirius/pull/6) plus merged multi-stream fix [#8](https://github.com/matrixorigin/sirius/pull/8), sidecar [#14](https://github.com/matrixorigin/mo-sirius-sidecar/pull/14)
 
 ## 1. Decision
 
@@ -824,14 +824,16 @@ wall-clock assertions in ordinary unit tests.
 
 ## 15. Delivery pins
 
-The final evidence record must replace `pending` with immutable merge-ready
-commits:
+The delivered candidate is pinned to these immutable revisions. Final
+implementation approval remains dependent on exact-head CI and the acceptance
+evidence in section 14; updating any production revision invalidates only the
+evidence whose semantic inputs changed.
 
-| Component | PR | Approved commit | CI/evidence |
+| Component | PR | Candidate delivery commit | CI/evidence |
 | --- | --- | --- | --- |
-| MatrixOne | #27599 | pending | pending |
-| Sirius | #6 | pending | pending |
-| sidecar | #14 | pending | pending |
+| MatrixOne | [#27599](https://github.com/matrixorigin/matrixone/pull/27599) | `b659afafa0c86a707b79f9a6c4b68fd3beadc6aa` | full Go 1.26.4 pre-push SCA passed; affected packages and 20x race regressions passed; [SF10 five-mode record](https://github.com/matrixorigin/matrixone/pull/27599#issuecomment-5495966844) |
+| Sirius | [#6](https://github.com/matrixorigin/sirius/pull/6) | `fd347eb996c74d9910c3aaa94596feba14d5d035` | pinned CUDA build passed; 16 Substrait/MO-scan contract cases, 4 scheduler concurrency cases, and 2 task-counting lifecycle cases passed; exact-head CI pending |
+| sidecar | [#14](https://github.com/matrixorigin/mo-sirius-sidecar/pull/14) | `11a7e28dc5c3909d6130ebbfc04d5744384d4ec7` | pins the Sirius revision above; pinned CUDA build passed; 10 protocol/config and 7 native stream/result cases passed; exact-head CI pending |
 
 The sidecar submodule must point to the approved Sirius commit. The MatrixOne PR
 body must link this design at its approved commit and the final evidence record.
@@ -856,6 +858,7 @@ body must link this design at its approved commit and the final evidence record.
 | flat-only result vectors | prevents tiny compressed frames from expanding into unbounded MatrixOne result work |
 | exact capability equality | rejects mixed ABI revisions before execution rather than attempting unsafe compatibility |
 
-There are no deferred correctness or lifecycle decisions. Production enablement
-remains blocked on design approval and the acceptance evidence in sections 14
-and 15.
+There are no deferred correctness or lifecycle decisions. The distinct design
+approval gate is closed. Production enablement remains blocked on final
+implementation review, exact-head dependency CI, and every still-unlinked
+acceptance row in sections 14 and 15.
