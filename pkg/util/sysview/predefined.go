@@ -105,9 +105,9 @@ var (
 		"extracted.view_definition_prefix_length)) AS view_definition FROM (SELECT normalized.*, " +
 		"char_length(coalesce(regexp_substr(normalized.view_statement, '" +
 		informationSchemaViewRegexSQLLiteral(informationSchemaViewDefinitionPrefixPattern) +
-		"'), '')) AS view_definition_prefix_length FROM (SELECT tbl.*, trim(regexp_replace(trim(" +
+		"'), '')) AS view_definition_prefix_length FROM (SELECT tbl.rel_createsql, tbl.viewdef, tbl.account_id, " +
+		"tbl.relkind, tbl.reldatabase, tbl.rel_id, tbl.creator, tbl.relname, trim(regexp_replace(trim(" +
 		"coalesce(tbl.rel_createsql, json_extract_string(tbl.viewdef, '$.Stmt'))), '[;][[:space:]]*$', '', 1, 1)) " +
-<<<<<<< HEAD
 		"AS view_statement FROM mo_catalog.mo_tables tbl JOIN __mo_visible_tables visible_tbl ON " +
 		"tbl.account_id = visible_tbl.account_id AND tbl.rel_id = visible_tbl.rel_id WHERE tbl.account_id = current_account_id() " +
 		"and tbl.relkind = 'v' and tbl.reldatabase != 'information_schema') normalized) extracted) definitions) tbl " +
@@ -274,7 +274,7 @@ func informationSchemaMetadataVisibilityCTEWithActiveRoles(activeRolesSQL string
 		"__mo_visible_tables AS (" +
 		"SELECT tbl.account_id, tbl.rel_id, tbl.relname, tbl.reldatabase, tbl.reldatabase_id, tbl.relkind, " +
 		"tbl.rel_createsql, tbl.created_time, tbl.partitioned, tbl.rel_comment, tbl.extra_info, tbl.rel_logical_id, " +
-		"tbl.owner, tbl.`constraint` FROM mo_catalog.mo_tables tbl " +
+		"tbl.owner FROM mo_catalog.mo_tables tbl " +
 		"WHERE tbl.account_id = current_account_id() AND (" +
 		"tbl.reldatabase IN ('mo_catalog','information_schema','mysql','system','system_metrics','mo_task','mo_debug') " +
 		"OR tbl.owner IN (SELECT role_id FROM __mo_active_roles) " +
