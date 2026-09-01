@@ -38,7 +38,7 @@ import (
 )
 
 func TestUpgradeEntries(t *testing.T) {
-	require.Len(t, tenantUpgEntries, 33)
+	require.Len(t, tenantUpgEntries, 34)
 	require.Len(t, clusterUpgEntries, 7)
 	require.Equal(t, retireKafkaSinkDaemonTasks.UpgSql, clusterUpgEntries[0].UpgSql)
 	require.Equal(t, catalog.MO_VIEW_DEPENDENCIES, clusterUpgEntries[1].TableName)
@@ -271,7 +271,7 @@ func TestInformationSchemaMetadataVisibilityUpgradeChecks(t *testing.T) {
 			})
 		}
 	}
-	allocatorIndex := tenantUpgEntries[32]
+	allocatorIndex := tenantUpgEntries[33]
 	require.Equal(t, versions.ADD_INDEX, allocatorIndex.UpgType)
 	require.Equal(t, catalog.MO_CATALOG, allocatorIndex.Schema)
 	require.Equal(t, "mo_iceberg_catalogs", allocatorIndex.TableName)
@@ -384,7 +384,7 @@ func TestUserDefinedFunctionArgumentTypesBackfillRejectsOversizedSignature(t *te
 }
 
 func TestForeignKeyMetadataTenantUpgradeEntries(t *testing.T) {
-	require.Len(t, tenantUpgEntries, 33)
+	require.Len(t, tenantUpgEntries, 34)
 
 	for i, column := range []string{"referenced_index_name", "on_delete_origin", "on_update_origin"} {
 		entry := tenantUpgEntries[2+i]
