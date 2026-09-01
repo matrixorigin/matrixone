@@ -1802,6 +1802,7 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 	scanTag := builder.genNewBindTag()
 	updateExprs := make(map[string]*plan.Expr)
 	autoUpdateCols := make(map[string]bool)
+	allExplicitAssignmentsSkipped := false
 
 	if len(astUpdateExprs) == 0 {
 		onDupAction = plan.Node_FAIL
@@ -1880,6 +1881,7 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 			}
 			updateExprs[colDef.Name] = updateExpr
 		}
+		allExplicitAssignmentsSkipped = len(updateExprs) == 0
 
 		for _, col := range tableDef.Cols {
 			if col.OnUpdate != nil && col.OnUpdate.Expr != nil && updateExprs[col.Name] == nil {
@@ -2677,14 +2679,13 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 				allColsEqual, _ = BindFuncExprImplByPlanExpr(builder.GetContext(), "and", []*plan.Expr{allColsEqual, eqExpr})
 			}
 		}
-		if allColsEqual != nil {
+		if allColsEqual != nil || allExplicitAssignmentsSkipped {
 			// The dedup-join output also carries non-conflicting rows, whose old
-			// image is all-NULL. Such a row must always be inserted, yet every
-			// NULL <=> NULL comparison above yields true (e.g. an all-NULL row
-			// into a nullable UNIQUE key never conflicts but would match the
-			// equality chain). Gate the no-op check on the old row actually
-			// existing: keep the row when old __mo_rowid IS NULL (fresh insert)
-			// or when any compared column differs (real update).
+			// image is all-NULL. Such a row must always be inserted. Conversely, if
+			// every explicit assignment was removed as a semantic no-op, an existing
+			// row must be dropped without evaluating implicit ON UPDATE expressions.
+			// The old rowid distinguishes those two cases without comparing incoming
+			// values that are not physically updated.
 			rowIDIdx := tableDef.Name2ColIndex[catalog.Row_ID]
 			oldRowIDExpr := &plan.Expr{
 				Typ: tableDef.Cols[rowIDIdx].Typ,
@@ -2696,8 +2697,14 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 				},
 			}
 			noOldRowExpr, _ := BindFuncExprImplByPlanExpr(builder.GetContext(), "isnull", []*plan.Expr{oldRowIDExpr})
-			notEqualExpr, _ := BindFuncExprImplByPlanExpr(builder.GetContext(), "not", []*plan.Expr{allColsEqual})
-			keepExpr, _ := BindFuncExprImplByPlanExpr(builder.GetContext(), "or", []*plan.Expr{noOldRowExpr, notEqualExpr})
+			keepExpr := noOldRowExpr
+			if allColsEqual != nil {
+				// NULL-safe equality is true for an all-NULL new-row image too, so
+				// retain the rowid branch while keeping genuine updates whose compared
+				// columns differ.
+				notEqualExpr, _ := BindFuncExprImplByPlanExpr(builder.GetContext(), "not", []*plan.Expr{allColsEqual})
+				keepExpr, _ = BindFuncExprImplByPlanExpr(builder.GetContext(), "or", []*plan.Expr{noOldRowExpr, notEqualExpr})
+			}
 			lastNodeID = builder.appendNode(&plan.Node{
 				NodeType:   plan.Node_FILTER,
 				Children:   []int32{lastNodeID},

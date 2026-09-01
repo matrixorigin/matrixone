@@ -187,6 +187,23 @@ select sleep(1);
 insert into users (id, counter) values ('112',2) on duplicate key update counter=counter+values(counter), create_at=current_timestamp();
 select id, counter, create_at = update_at from users;
 
+-- A primary-key-only no-op must not count or trigger implicit ON UPDATE, while
+-- the same statement shape must still insert a non-conflicting key.
+drop table if exists t_pk_only_noop;
+create table t_pk_only_noop (
+    id int primary key,
+    val int,
+    updated_at timestamp default '2026-01-01 00:00:00' on update current_timestamp
+);
+insert into t_pk_only_noop (id, val) values (1, 10);
+insert into t_pk_only_noop (id, val) values (1, 99) on duplicate key update id = values(id);
+select row_count();
+select id, val, updated_at = '2026-01-01 00:00:00' as unchanged from t_pk_only_noop order by id;
+insert into t_pk_only_noop (id, val) values (1, 88), (2, 20) on duplicate key update id = values(id);
+select row_count();
+select id, val, updated_at = '2026-01-01 00:00:00' as unchanged from t_pk_only_noop order by id;
+drop table t_pk_only_noop;
+
 -- test for on duplicate key update with NULL values in multi-row insert
 drop table if exists t_null_dup;
 create table t_null_dup (id int primary key, a int, b int);
