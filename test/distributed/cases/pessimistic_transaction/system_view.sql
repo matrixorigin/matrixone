@@ -27,13 +27,22 @@ update t1 set b = b + 1 where a = 1;
 -- The sys account sees both active user transactions and their locks.
 select count(distinct txn_id) = 2 from mo_transactions() t where t.user_txn = 'true';
 -- The tenant session is asynchronous. Poll the public lock view until both
--- transactions have acquired and published their locks across the CNs.
+-- intended table locks have been acquired and published across the CNs.
 -- @wait_expect(1, 10)
-select count(*) = 2 from (
-    select txn_id from mo_locks() l where l.txn_id <> ''
+with target_table_ids as (
+    select rel_id from mo_catalog.mo_tables
+    where reldatabase in ('sv_sys_db', 'sv_tenant_db') and relname = 't1'
+), visible_txns as (
+    select txn_id from mo_locks() l join target_table_ids t on l.table_id = t.rel_id
+    where l.txn_id <> ''
     union
-    select lock_wait from mo_locks() l where l.lock_wait <> ''
-) as visible_txns;
+    select lock_wait from mo_locks() l join target_table_ids t on l.table_id = t.rel_id
+    where l.lock_wait <> ''
+)
+select count(distinct t.txn_id) = 2
+from mo_transactions() t
+join visible_txns v on t.txn_id = v.txn_id
+where t.user_txn = 'true';
 
 -- A regular tenant sees only its own transaction through both table functions
 -- and catalog views.
