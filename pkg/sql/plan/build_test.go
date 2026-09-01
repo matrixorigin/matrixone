@@ -8157,6 +8157,8 @@ func TestDdl(t *testing.T) {
 		"create unique index idx_name on nation(n_regionkey)",
 		"create view v_nation as select n_nationkey,n_name,n_regionkey,n_comment from nation",
 		"CREATE TABLE t1(id INT PRIMARY KEY,name VARCHAR(25),deptId INT,CONSTRAINT fk_t1 FOREIGN KEY(deptId) REFERENCES nation(n_nationkey)) COMMENT='xxxxx'",
+		"create table enum_pk_inline (source enum('ACW', 'BT', 'XS3') primary key, last timestamp not null)",
+		"create table enum_pk_table (source enum('ACW', 'BT', 'XS3'), primary key (source))",
 		"create table t2(empno int unsigned,ename varchar(15),job varchar(10)) cluster by(empno,ename)",
 		"lock tables nation read",
 		"lock tables nation write, supplier read",
@@ -8182,7 +8184,6 @@ func TestDdl(t *testing.T) {
 		"alter table nation drop foreign key fk1", //key not exists
 		"alter table nation add FOREIGN KEY fk_t1(col_not_exist) REFERENCES nation2(n_nationkey)",
 		"alter table nation add FOREIGN KEY fk_t1(n_nationkey) REFERENCES nation2(col_not_exist)",
-		"create table agg01 (col1 int, col2 enum('egwjqebwq', 'qwewqewqeqewq', 'weueiwqeowqehwgqjhenw') primary key)",
 	}
 	runTestShouldError(mock, t, sqls)
 }
