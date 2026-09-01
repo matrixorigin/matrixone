@@ -326,7 +326,14 @@ func (builder *QueryBuilder) appendSharedCTEScan(cteRef *CTERef, occurrence cteO
 			Cols: cols,
 		},
 	}
-	return builder.appendNode(node, occurrence.ctx)
+	nodeID := builder.appendNode(node, occurrence.ctx)
+	if len(occurrence.headingProvenance) > 0 {
+		if builder.headingProvenanceByNode == nil {
+			builder.headingProvenanceByNode = make(map[int32][]headingProvenance)
+		}
+		builder.headingProvenanceByNode[nodeID] = cloneHeadingProvenances(occurrence.headingProvenance)
+	}
+	return nodeID
 }
 
 func (builder *QueryBuilder) replaceCTEOccurrences(nodeID int32, replacements map[int32]int32, seen map[int32]bool) int32 {

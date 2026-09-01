@@ -101,22 +101,7 @@ func TestBindDateFormatMetadata(t *testing.T) {
 }
 
 func TestBuildCTASDateFormatMetadataAndHeading(t *testing.T) {
-	ctx := NewMockCompilerContext(false)
-	ctx.tables["time01"] = &planpb.TableDef{
-		TblId:     1001,
-		Name:      "time01",
-		DbName:    "tpch",
-		TableType: catalog.SystemOrdinaryRel,
-		Cols: []*planpb.ColDef{
-			{
-				Name:       "col2",
-				OriginName: "col2",
-				Typ:        planpb.Type{Id: int32(types.T_datetime)},
-				Default:    &planpb.Default{NullAbility: true},
-			},
-		},
-	}
-	ctx.objects["time01"] = &planpb.ObjectRef{ObjName: "time01", SchemaName: "tpch"}
+	ctx := newDateFormatCompilerContext()
 
 	stmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL,
 		"create table time02 as select date_format(col2, '%W %M %Y') from time01", 1)
@@ -143,22 +128,7 @@ func TestBuildCTASDateFormatMetadataAndHeading(t *testing.T) {
 }
 
 func TestBuildCTASPreservesNestedDateFormatHeading(t *testing.T) {
-	ctx := NewMockCompilerContext(false)
-	ctx.tables["time01"] = &planpb.TableDef{
-		TblId:     1001,
-		Name:      "time01",
-		DbName:    "tpch",
-		TableType: catalog.SystemOrdinaryRel,
-		Cols: []*planpb.ColDef{
-			{
-				Name:       "col2",
-				OriginName: "col2",
-				Typ:        planpb.Type{Id: int32(types.T_datetime)},
-				Default:    &planpb.Default{NullAbility: true},
-			},
-		},
-	}
-	ctx.objects["time01"] = &planpb.ObjectRef{ObjName: "time01", SchemaName: "tpch"}
+	ctx := newDateFormatCompilerContext()
 
 	stmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL,
 		"create table time02 as select concat(date_format(col2, '%M'), 'X'), concat(date_format(col2, '%m'), 'X') from time01", 1)
@@ -197,4 +167,86 @@ func TestBuildCTASLowercasesApostropheInQuotedAlias(t *testing.T) {
 	}
 	require.Len(t, visible, 1)
 	require.Equal(t, "a'b", visible[0].Name)
+}
+
+func newDateFormatCompilerContext() *MockCompilerContext {
+	ctx := NewMockCompilerContext(false)
+	datetime := planpb.Type{Id: int32(types.T_datetime)}
+	ctx.tables["time01"] = &planpb.TableDef{
+		TblId:     1001,
+		Name:      "time01",
+		DbName:    "tpch",
+		TableType: catalog.SystemOrdinaryRel,
+		Cols: []*planpb.ColDef{
+			{
+				Name:       "col2",
+				OriginName: "col2",
+				Typ:        datetime,
+				Default:    &planpb.Default{NullAbility: true},
+			},
+			{
+				Name:       "D'X",
+				OriginName: "D'X",
+				Typ:        datetime,
+				Default:    &planpb.Default{NullAbility: true},
+			},
+		},
+	}
+	ctx.objects["time01"] = &planpb.ObjectRef{ObjName: "time01", SchemaName: "tpch"}
+	return ctx
+}
+
+func requireCTASColumnName(t *testing.T, ctx *MockCompilerContext, sql, want string) {
+	t.Helper()
+	stmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL, sql, 1)
+	require.NoError(t, err)
+	defer stmt.Free()
+
+	logicPlan, err := BuildPlan(ctx, stmt, false)
+	require.NoError(t, err)
+	var visible []*planpb.ColDef
+	for _, col := range logicPlan.GetDdl().GetCreateTable().GetTableDef().GetCols() {
+		if !col.Hidden {
+			visible = append(visible, col)
+		}
+	}
+	require.Len(t, visible, 1)
+	require.Equal(t, want, visible[0].Name)
+}
+
+func TestBuildCTASPreservesDateFormatHeadingThroughDerivedStars(t *testing.T) {
+	for _, sql := range []string{
+		"create table time02 as with c as (select date_format(col2, '%M') from time01) select * from c",
+		"create table time02 as select * from (select date_format(col2, '%M') from time01) c",
+	} {
+		t.Run(sql, func(t *testing.T) {
+			requireCTASColumnName(t, newDateFormatCompilerContext(), sql,
+				"date_format(col2, '%M')")
+		})
+	}
+}
+
+func TestBuildCTASPreservesDateFormatHeadingThroughRollupWindowRewrite(t *testing.T) {
+	ctx := newDateFormatCompilerContext()
+	sql := "create table time02 as select date_format(col2, '%M'), row_number() over () from time01 group by col2 with rollup"
+	stmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL, sql, 1)
+	require.NoError(t, err)
+	defer stmt.Free()
+
+	logicPlan, err := BuildPlan(ctx, stmt, false)
+	require.NoError(t, err)
+	var visible []*planpb.ColDef
+	for _, col := range logicPlan.GetDdl().GetCreateTable().GetTableDef().GetCols() {
+		if !col.Hidden {
+			visible = append(visible, col)
+		}
+	}
+	require.Len(t, visible, 2)
+	require.Equal(t, "date_format(col2, '%M')", visible[0].Name)
+}
+
+func TestBuildCTASLowercasesApostropheInSourceIdentifier(t *testing.T) {
+	requireCTASColumnName(t, newDateFormatCompilerContext(),
+		"create table time02 as select date_format(`D'X`, '%M') from time01",
+		"date_format(d'x, '%M')")
 }

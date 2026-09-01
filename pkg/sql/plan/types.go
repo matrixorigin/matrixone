@@ -340,12 +340,13 @@ type QueryBuilder struct {
 	qry     *plan.Query
 	compCtx CompilerContext
 
-	ctxByNode             []*BindContext
-	windowValidationScans []*plan.Node
-	nameByColRef          map[[2]int32]string
-	protectedScans        map[int32]int
-	updateTargetScans     map[int32]struct{}
-	projectSpecialGuards  map[int32]*specialIndexGuard
+	ctxByNode               []*BindContext
+	headingProvenanceByNode map[int32][]headingProvenance
+	windowValidationScans   []*plan.Node
+	nameByColRef            map[[2]int32]string
+	protectedScans          map[int32]int
+	updateTargetScans       map[int32]struct{}
+	projectSpecialGuards    map[int32]*specialIndexGuard
 	// projectAnchoredSorts holds Top-K SORT node ids that a PROJECT directly above them
 	// will anchor the vector rewrite on. applyIndices walks children first, so without
 	// this the SORT-anchored entry point would claim the classic
@@ -540,12 +541,13 @@ type CTERef struct {
 }
 
 type cteOccurrence struct {
-	rootID       int32
-	rootTag      int32
-	ctx          *BindContext
-	headings     []string
-	types        []plan.Type
-	isCorrelated bool
+	rootID            int32
+	rootTag           int32
+	ctx               *BindContext
+	headings          []string
+	headingProvenance []headingProvenance
+	types             []plan.Type
+	isCorrelated      bool
 }
 
 type CteBindState struct {
@@ -578,6 +580,38 @@ const (
 type aliasItem struct {
 	idx     int32
 	astExpr tree.Expr
+}
+
+// headingPart keeps the syntax provenance needed when a CTAS heading is
+// normalized. Identifier text is lower-cased, while SQL string literals keep
+// their spelling because format strings are case-sensitive. Keeping the
+// segments separate avoids trying to infer syntax from apostrophes in the
+// rendered heading (an apostrophe is valid identifier data too).
+type headingPart struct {
+	text    string
+	literal bool
+}
+
+type headingProvenance struct {
+	parts []headingPart
+}
+
+func cloneHeadingProvenance(provenance headingProvenance) headingProvenance {
+	if len(provenance.parts) == 0 {
+		return headingProvenance{}
+	}
+	return headingProvenance{parts: append([]headingPart(nil), provenance.parts...)}
+}
+
+func cloneHeadingProvenances(provenances []headingProvenance) []headingProvenance {
+	if len(provenances) == 0 {
+		return nil
+	}
+	cloned := make([]headingProvenance, len(provenances))
+	for i, provenance := range provenances {
+		cloned[i] = cloneHeadingProvenance(provenance)
+	}
+	return cloned
 }
 
 type orderResolutionMetadata struct {
@@ -647,12 +681,14 @@ type BindContext struct {
 	//cte in binding or bound already
 	boundCtes map[string]*CTERef
 	headings  []string
-	// headingPreserveStringLiterals is aligned with headings. It is true only
-	// when the heading was rendered from an expression containing a
-	// DATE_FORMAT/TIME_FORMAT call with SQL string-literal formatting enabled.
-	// CTAS uses this provenance to distinguish literal quotes from apostrophes
-	// that are part of an explicit identifier.
-	headingPreserveStringLiterals []bool
+	// headingProvenance is aligned with headings. A non-empty value records the
+	// structural SQL literal segments in a heading produced by an expression.
+	// CTAS uses it to preserve case-sensitive format strings without confusing
+	// apostrophes that are part of identifier text with string delimiters.
+	headingProvenance []headingProvenance
+	// generatedHeadingProvenance is used by the ROLLUP/window rewrite when a
+	// rendered expression heading is turned into an explicit generated alias.
+	generatedHeadingProvenance map[string]headingProvenance
 
 	// captureViewStarExpansion is enabled only while binding a CREATE/ALTER
 	// VIEW definition. Ordinary SELECT planning must not clone its select list
@@ -967,9 +1003,12 @@ type Binding struct {
 	// lower case: used for binding/lookup
 	cols []string
 	// original case: only for SELECT * display, must be same length as cols (or empty)
-	originCols  []string
-	colIsHidden []bool
-	types       []*plan.Type
+	originCols []string
+	// headingProvenance carries expression-heading syntax through a derived
+	// table/CTE so SELECT * can retain the original literal spelling.
+	headingProvenance []headingProvenance
+	colIsHidden       []bool
+	types             []*plan.Type
 	// mysqlSpecialOrderTypes is aligned with cols. A non-nil entry means that
 	// the string column is a pure display of the recorded ENUM/SET storage
 	// type, and may therefore use definition-order semantics when ordered.

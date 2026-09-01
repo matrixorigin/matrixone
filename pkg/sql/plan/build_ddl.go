@@ -1437,7 +1437,7 @@ func genAsSelectCols(ctx CompilerContext, stmt *tree.Select, isPrepareStmt bool)
 
 		cols[i] = &plan.ColDef{
 			Name: normalizeCTASColumnName(
-				bindCtx.headings[i], bindCtx.headingPreservesStringLiterals(i)),
+				bindCtx.headings[i], bindCtx.headingProvenanceFor(i)),
 			Alg:     plan.CompressType_Lz4,
 			Typ:     typ,
 			Default: defaultDef,
@@ -1447,41 +1447,21 @@ func genAsSelectCols(ctx CompilerContext, stmt *tree.Select, isPrepareStmt bool)
 }
 
 // normalizeCTASColumnName keeps MatrixOne's lowercase identifier convention.
-// Only headings known to have been rendered with SQL string-literal quoting
-// receive quote-aware normalization; an apostrophe in an explicit identifier
-// is otherwise just identifier data and must be lowercased as a whole.
-func normalizeCTASColumnName(heading string, preserveStringLiterals bool) string {
-	if !preserveStringLiterals {
+// Literal segments are supplied by the AST formatter; an apostrophe in an
+// identifier is therefore never mistaken for a string delimiter.
+func normalizeCTASColumnName(heading string, provenance headingProvenance) string {
+	if len(provenance.parts) == 0 {
 		return strings.ToLower(heading)
 	}
 
 	var result strings.Builder
 	result.Grow(len(heading))
-	inString := false
-	for start := 0; start < len(heading); {
-		quote := strings.IndexByte(heading[start:], '\'')
-		if quote < 0 {
-			segment := heading[start:]
-			if !inString {
-				segment = strings.ToLower(segment)
-			}
-			result.WriteString(segment)
-			break
+	for _, part := range provenance.parts {
+		if part.literal {
+			result.WriteString(part.text)
+		} else {
+			result.WriteString(strings.ToLower(part.text))
 		}
-		quote += start
-		segment := heading[start:quote]
-		if !inString {
-			segment = strings.ToLower(segment)
-		}
-		result.WriteString(segment)
-		result.WriteByte('\'')
-		if inString && quote+1 < len(heading) && heading[quote+1] == '\'' {
-			result.WriteByte('\'')
-			start = quote + 2
-			continue
-		}
-		inString = !inString
-		start = quote + 1
 	}
 	return result.String()
 }
