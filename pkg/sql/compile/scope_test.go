@@ -24,6 +24,7 @@ import (
 	"path"
 	"path/filepath"
 	"slices"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -1367,6 +1368,122 @@ func TestCompileExternScanParquetLoadDefaultAtThresholdUsesFileFanoutWithoutFoot
 		require.True(t, ext.Es.Extern.ParallelLoadRequested)
 		require.Empty(t, ext.Es.ParquetRowGroupShards)
 		require.Len(t, ext.Es.FileList, 1)
+	}
+}
+
+// parquetFanoutCancellationProbe models an admitted file shard that has begun
+// execution and will only finish when the statement context is canceled.  The
+// test uses it after compileExternScan has constructed the real bounded
+// whole-file fanout shape; it deliberately has no timing dependency.
+type parquetFanoutCancellationProbe struct {
+	*colexec.MockOperator
+	started    chan<- struct{}
+	terminated *atomic.Int32
+}
+
+func (op *parquetFanoutCancellationProbe) Call(proc *process.Process) (vm.CallResult, error) {
+	op.started <- struct{}{}
+	<-proc.Ctx.Done()
+	op.terminated.Add(1)
+	return vm.CancelResult, proc.Ctx.Err()
+}
+
+func TestCompileExternScanParquetLoadDefaultFanoutContextCancellationTerminatesAllShards(t *testing.T) {
+	testCompile := NewMockCompile(t)
+	testCompile.addr = "cn1:6001"
+	testCompile.ncpu = 2
+	testCompile.anal = &AnalyzeModule{qry: &plan.Query{}}
+	testCompile.proc.SetResolveVariableFunc(func(varName string, isSystemVar, isGlobalVar bool) (interface{}, error) {
+		if varName == "sql_mode" {
+			return "", nil
+		}
+		return nil, nil
+	})
+
+	// This is the admitted post-bind form of an omitted PARALLEL clause. The
+	// plan package owns the parser/binder/default transition; its focused tests
+	// prove that transition. Here two files fill DOP, so compilation must create
+	// two independently executable whole-file scopes without footer reads.
+	dir := t.TempDir()
+	for _, name := range []string{"part-0.parquet", "part-1.parquet"} {
+		require.NoError(t, os.WriteFile(filepath.Join(dir, name), []byte("not a parquet file"), 0o600))
+	}
+	param := &tree.ExternParam{
+		ExParamConst: tree.ExParamConst{
+			ScanType: tree.INFILE,
+			Filepath: filepath.Join(dir, "part-*.parquet"),
+			Format:   tree.PARQUET,
+			FileSize: int64(plan2.LoadParallelMinSize),
+			Tail:     &tree.TailParameter{},
+		},
+		ExParam: tree.ExParam{
+			ExternType:            int32(plan.ExternType_LOAD),
+			Parallel:              true,
+			ParallelLoadRequested: true,
+		},
+	}
+	createSQL, err := json.Marshal(param)
+	require.NoError(t, err)
+	n := &plan.Node{
+		Stats:    &plan.Stats{Cost: float64(plan2.LoadParallelMinSize), Rowsize: 1},
+		TableDef: &plan.TableDef{Createsql: string(createSQL)},
+		ExternScan: &plan.ExternScan{
+			Type:           int32(plan.ExternType_LOAD),
+			TbColToDataCol: map[string]int32{},
+		},
+	}
+
+	scopes, err := testCompile.compileExternScan(n)
+	require.NoError(t, err)
+	require.Len(t, scopes, 2)
+
+	queryCtx, cancelQuery := context.WithCancel(context.Background())
+	t.Cleanup(cancelQuery)
+	testCompile.proc.BuildPipelineContext(queryCtx)
+	started := make(chan struct{}, len(scopes))
+	var terminated atomic.Int32
+	for _, scope := range scopes {
+		ext, ok := scope.RootOp.(*external.External)
+		require.True(t, ok)
+		require.Len(t, ext.Es.FileList, 1)
+		scope.Proc = testCompile.proc.NewContextChildProc(0)
+		scope.RootOp = &parquetFanoutCancellationProbe{
+			MockOperator: colexec.NewMockOperator(),
+			started:      started,
+			terminated:   &terminated,
+		}
+	}
+	testCompile.scopes = scopes
+	testCompile.pn = &plan.Plan{}
+	testCompile.execType = plan2.ExecTypeAP_ONECN
+	testCompile.affectRows = &atomic.Uint64{}
+
+	runDone := make(chan error, 1)
+	go func() { runDone <- testCompile.runOnce() }()
+	for range scopes {
+		select {
+		case <-started:
+		case <-time.After(time.Second):
+			t.Fatal("admitted parquet fanout shard did not begin execution")
+		}
+	}
+
+	// The client/query context is canceled only after every shard is in flight.
+	// runOnce must return, and each independently admitted scope must observe
+	// that cancellation. Transactional zero-partial-row visibility remains
+	// asserted through the real LOAD rollback BVT.
+	cancelQuery()
+	select {
+	case err := <-runDone:
+		// Scope cancellation is normalized at this execution boundary; the
+		// frontend request context reports the client-visible cancellation.
+		require.NoError(t, err)
+	case <-time.After(time.Second):
+		t.Fatal("client cancellation did not terminate admitted parquet fanout")
+	}
+	require.Equal(t, int32(len(scopes)), terminated.Load())
+	for _, scope := range scopes {
+		require.ErrorIs(t, scope.Proc.Ctx.Err(), context.Canceled)
 	}
 }
 
