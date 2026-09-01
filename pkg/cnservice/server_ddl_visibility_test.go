@@ -180,15 +180,16 @@ func activationTestPeerProtocols() map[string]query.GetProtocolVersionResponse {
 
 type ddlVisibilityWithdrawalHAKeeperClient struct {
 	logservice.CNHAKeeperClient
-	cluster                 *ddlVisibilityTestCluster
-	queryClosed             <-chan struct{}
-	sendErr                 error
-	sendErrors              map[int]error
-	heartbeats              []logservicepb.CNStoreHeartbeat
-	queryClosedBeforeSend   bool
-	closeCalls              int
-	clusterDeployedProtocol int64
-	oldHAKeeperReplica      bool
+	cluster                  *ddlVisibilityTestCluster
+	queryClosed              <-chan struct{}
+	sendErr                  error
+	sendErrors               map[int]error
+	heartbeats               []logservicepb.CNStoreHeartbeat
+	queryClosedBeforeSend    bool
+	closeCalls               int
+	clusterDeployedProtocol  int64
+	oldHAKeeperReplica       bool
+	authoritativeGenerations map[string]uint64
 }
 
 func (c *ddlVisibilityWithdrawalHAKeeperClient) GetClusterDetails(
@@ -248,6 +249,15 @@ func (c *ddlVisibilityWithdrawalHAKeeperClient) SendCNHeartbeat(
 	if c.sendErr != nil {
 		return logservicepb.CommandBatch{}, c.sendErr
 	}
+	authoritativeGeneration := hb.ViewMetadataAdmissionGeneration
+	if generation := c.authoritativeGenerations[hb.UUID]; generation > authoritativeGeneration {
+		return logservicepb.CommandBatch{
+			DDLVisibilityDeployedProtocol: c.clusterDeployedProtocol,
+			ViewMetadataAdmission: &logservicepb.ViewMetadataAdmission{
+				Generation: generation,
+			},
+		}, nil
+	}
 	if c.cluster != nil {
 		c.cluster.phaseMu.Lock()
 		if c.cluster.phases == nil {
@@ -302,6 +312,9 @@ func (c *ddlVisibilityWithdrawalHAKeeperClient) SendCNHeartbeat(
 	}
 	return logservicepb.CommandBatch{
 		DDLVisibilityDeployedProtocol: c.clusterDeployedProtocol,
+		ViewMetadataAdmission: &logservicepb.ViewMetadataAdmission{
+			Generation: authoritativeGeneration,
+		},
 	}, nil
 }
 
@@ -1599,6 +1612,7 @@ func TestAcknowledgedDDLFrontierSurvivesCrashBeforePeriodicHeartbeat(t *testing.
 	producer := &service{
 		cfg: &Config{UUID: producerID}, _hakeeperClient: client,
 		ddlCommitGate: frontend.NewDDLCommitGate(), config: util.NewConfigData(nil),
+		viewMetadataAdmissionGeneration: 1,
 	}
 
 	// This is the synchronous publication in the successful DDL commit path;
@@ -1611,6 +1625,7 @@ func TestAcknowledgedDDLFrontierSurvivesCrashBeforePeriodicHeartbeat(t *testing.
 	replacement := &service{
 		cfg: &Config{UUID: producerID}, _hakeeperClient: client,
 		ddlCommitGate: frontend.NewDDLCommitGate(), config: util.NewConfigData(nil),
+		viewMetadataAdmissionGeneration: 2,
 	}
 	require.NoError(t, replacement.publishDDLCommitFrontier(context.Background(), timestamp.Timestamp{}))
 	require.Equal(t, frontier, cluster.globalFrontier,
@@ -1625,6 +1640,48 @@ func TestAcknowledgedDDLFrontierSurvivesCrashBeforePeriodicHeartbeat(t *testing.
 		_hakeeperClient: client,
 	}
 	require.NoError(t, target.syncStartupDDLVisibilityFrontier(context.Background()))
+}
+
+func TestStaleGenerationCannotAcknowledgeDDLFrontierPublication(t *testing.T) {
+	const producerID = "generation-fenced-ddl-producer"
+	oldFrontier := timestamp.Timestamp{PhysicalTime: 200}
+	commitFrontier := timestamp.Timestamp{PhysicalTime: 300}
+	cluster := &ddlVisibilityTestCluster{
+		cnServices: []metadata.CNService{{
+			ServiceID: producerID, QueryAddress: "new:6001",
+			ViewMetadataAdmissionGeneration: 2, DDLVisibilityBarrierReady: true,
+		}},
+		globalFrontier: oldFrontier,
+	}
+	client := &ddlVisibilityWithdrawalHAKeeperClient{
+		cluster:                  cluster,
+		authoritativeGenerations: map[string]uint64{producerID: 2},
+	}
+	oldIncarnation := &service{
+		cfg: &Config{UUID: producerID}, _hakeeperClient: client,
+		ddlCommitGate: frontend.NewDDLCommitGate(), config: util.NewConfigData(nil),
+		viewMetadataAdmissionGeneration: 1,
+	}
+	oldIncarnation.ddlCommitGate.SetFrontierPublisher(oldIncarnation.publishDDLCommitFrontier)
+
+	err := oldIncarnation.ddlCommitGate.PublishDDLFrontier(context.Background(), commitFrontier)
+	require.ErrorContains(t, err, "generation 1 rejected by authoritative generation 2")
+	require.True(t, oldIncarnation.viewMetadataGenerationRevoked.Load())
+	require.Equal(t, oldFrontier, cluster.globalFrontier,
+		"stale generation heartbeat must not advance the durable frontier")
+
+	// After the stale process crashes, a future incarnation can only observe the
+	// old durable value. The failed publication therefore must not have been
+	// acknowledged by frontend (covered by the publisher-failure commit test).
+	ctrl := gomock.NewController(t)
+	restartedTxnClient := mock_frontend.NewMockTxnClient(ctrl)
+	restartedTxnClient.EXPECT().WaitLogTailAppliedAt(gomock.Any(), oldFrontier).Return(oldFrontier, nil)
+	restartedTxnClient.EXPECT().SyncLatestCommitTS(oldFrontier)
+	restarted := &service{
+		cfg: &Config{UUID: producerID}, _txnClient: restartedTxnClient,
+		_hakeeperClient: client,
+	}
+	require.NoError(t, restarted.syncStartupDDLVisibilityFrontier(context.Background()))
 }
 
 func TestSyncStartupDDLVisibilityFrontierSurvivesProducerReplacement(t *testing.T) {

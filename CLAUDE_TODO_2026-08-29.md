@@ -69,3 +69,9 @@
 1. 获取 PR exact head 的失败 check/job 原始日志，区分代码回归与基础设施问题并定位最小根因。
 2. 对代码问题补充确定性回归并修复；不使用重试或弱化断言掩盖失败。
 3. 运行 owning package、相关 race/vet/embedded 验证，commit/push 后确认新 CI 状态。
+
+## 2026-09-01：frontier publication generation fence
+
+1. 同步 frontier heartbeat 必须验证 `CommandBatch.ViewMetadataAdmission.Generation` 与本地 incarnation generation 完全一致。
+2. HAKeeper 返回更高 authoritative generation 时立即 revoke 旧 incarnation 并向 frontend 返回错误，禁止继续 fan-out/成功确认。
+3. 增加 generation N commit → N+1 takeover → N publication rejected → N crash → restart 仅同步旧 durable frontier 的确定性回归，并运行 owning package/race/vet。

@@ -196,9 +196,22 @@ func (s *service) publishDDLCommitFrontier(ctx context.Context, _ timestamp.Time
 	}
 	s.ddlVisibilityHeartbeatMu.Lock()
 	defer s.ddlVisibilityHeartbeatMu.Unlock()
-	_, err := s._hakeeperClient.SendCNHeartbeat(ctx, s.newCNStoreHeartbeat())
+	batch, err := s._hakeeperClient.SendCNHeartbeat(ctx, s.newCNStoreHeartbeat())
 	if err != nil {
 		return moerr.AttachCause(ctx, err)
+	}
+	admission := batch.ViewMetadataAdmission
+	if s.viewMetadataAdmissionGeneration == 0 || admission == nil {
+		return moerr.NewInvalidStateNoCtx(
+			"DDL frontier publication lacks an authoritative CN generation")
+	}
+	if admission.Generation != s.viewMetadataAdmissionGeneration {
+		if admission.Generation > s.viewMetadataAdmissionGeneration {
+			s.revokeViewMetadataGeneration(admission.Generation)
+		}
+		return moerr.NewInvalidStateNoCtxf(
+			"DDL frontier publication generation %d rejected by authoritative generation %d",
+			s.viewMetadataAdmissionGeneration, admission.Generation)
 	}
 	return nil
 }

@@ -80,7 +80,7 @@ The cluster epoch commit is the linearization point. Prepared, Fenced, and the l
 
 ### Steady-state DDL
 
-A public real-user DDL, and background DDL after public listeners are enabled, enters `DDLCommitGate`. After commit, the producer synchronously advances the monotonic HAKeeper cluster frontier before acknowledging success; publication failure fails the statement closed. This removes the commit-success-to-periodic-heartbeat crash window. Protocol v43 then triggers `SyncCommitV2` to all barrier-ready CNs. The operation succeeds only after durable frontier publication and required receivers have applied/synchronized the commit frontier. Bootstrap background work before ingress remains exempt to avoid depending on an unavailable HAKeeper/QueryService.
+A public real-user DDL, and background DDL after public listeners are enabled, enters `DDLCommitGate`. After commit, the producer synchronously advances the monotonic HAKeeper cluster frontier before acknowledging success; publication failure fails the statement closed. The returned `CommandBatch.ViewMetadataAdmission.Generation` must exactly equal the sender generation. A stale sender rejected by HAKeeper therefore revokes itself and cannot mistake RPC delivery for durable frontier acceptance. This removes both the commit-success-to-periodic-heartbeat crash window and the old-incarnation-after-takeover window. Protocol v43 then triggers `SyncCommitV2` to all barrier-ready CNs. The operation succeeds only after generation-bound durable frontier publication and required receivers have applied/synchronized the commit frontier. Bootstrap background work before ingress remains exempt to avoid depending on an unavailable HAKeeper/QueryService.
 
 ### Scale-out and replacement
 
