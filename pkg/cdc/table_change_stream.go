@@ -128,23 +128,40 @@ type TableChangeStream struct {
 type TableChangeStreamOption func(*tableChangeStreamOptions)
 
 // snapshotPermit follows one initial-snapshot batch from the reader to the
-// sinker. Release is idempotent because cleanup paths can race with shutdown.
+// sinker. Its state transition is pending -> observed -> released. Release is
+// idempotent because cleanup paths can race with shutdown.
 type snapshotPermit struct {
-	once    sync.Once
-	release func()
-	observe func(uint64)
+	mu       sync.Mutex
+	released bool
+	observed bool
+	release  func(bool)
+	observe  func(uint64)
 }
 
 func (p *snapshotPermit) Release() {
-	if p != nil {
-		p.once.Do(p.release)
+	if p == nil {
+		return
 	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.released {
+		return
+	}
+	p.released = true
+	p.release(p.observed)
 }
 
 func (p *snapshotPermit) ObserveBatchBytes(bytes uint64) {
-	if p != nil && p.observe != nil {
-		p.observe(bytes)
+	if p == nil {
+		return
 	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.released || p.observed || p.observe == nil {
+		return
+	}
+	p.observed = true
+	p.observe(bytes)
 }
 
 type tableChangeStreamOptions struct {
@@ -858,17 +875,15 @@ func (s *TableChangeStream) acquireInitialSnapshotPermit(ctx context.Context) (*
 	if s.progressTracker != nil {
 		s.progressTracker.SetState("waiting_for_initial_snapshot_batch_slot")
 	}
-	if err := s.initialSnapshotLimiter.Acquire(ctx); err != nil {
+	permit, err := s.initialSnapshotLimiter.acquire(ctx)
+	if err != nil {
 		return nil, err
 	}
 	if s.progressTracker != nil {
 		s.progressTracker.SetState("reading")
 	}
 
-	return &snapshotPermit{
-		release: func() { s.initialSnapshotLimiter.Release() },
-		observe: s.initialSnapshotLimiter.ObserveBatchBytes,
-	}, nil
+	return permit, nil
 }
 
 // updateErrorState updates lastError and retryable atomically

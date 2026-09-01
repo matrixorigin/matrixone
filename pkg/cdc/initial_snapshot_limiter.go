@@ -39,7 +39,11 @@ type memoryAvailableFunc func() (uint64, bool)
 type InitialSnapshotLimiter struct {
 	mu sync.Mutex
 
-	inFlight            int
+	inFlight int
+	// unobserved is either zero or one. A newly admitted collector must report
+	// its real allocation (or release on failure) before another collector may
+	// allocate, so a stale estimate can never grant a burst of unknown batches.
+	unobserved          int
 	waiters             int
 	nextTicket          uint64
 	servingTicket       uint64
@@ -98,7 +102,7 @@ func (l *InitialSnapshotLimiter) concurrencyLocked(available uint64, measured bo
 	return int(concurrency)
 }
 
-func (l *InitialSnapshotLimiter) Acquire(ctx context.Context) error {
+func (l *InitialSnapshotLimiter) acquire(ctx context.Context) (*snapshotPermit, error) {
 	l.mu.Lock()
 	ticket := l.nextTicket
 	l.nextTicket++
@@ -111,7 +115,7 @@ func (l *InitialSnapshotLimiter) Acquire(ctx context.Context) error {
 	for {
 		if err := ctx.Err(); err != nil {
 			l.cancelTicket(ticket)
-			return err
+			return nil, err
 		}
 
 		l.mu.Lock()
@@ -131,14 +135,20 @@ func (l *InitialSnapshotLimiter) Acquire(ctx context.Context) error {
 		// performs this measurement, avoiding one procfs poll per waiting table.
 		available, measured := l.memoryAvailable()
 		l.mu.Lock()
-		if ticket == l.servingTicket && l.inFlight < l.concurrencyLocked(available, measured) {
+		if ticket == l.servingTicket &&
+			l.unobserved == 0 &&
+			l.inFlight < l.concurrencyLocked(available, measured) {
 			l.inFlight++
+			l.unobserved++
 			l.waiters--
 			l.servingTicket++
 			l.advanceCanceledTicketsLocked()
 			l.signalLocked()
 			l.mu.Unlock()
-			return nil
+			return &snapshotPermit{
+				release: l.release,
+				observe: l.observeBatchBytes,
+			}, nil
 		}
 		notify := l.notify
 		l.mu.Unlock()
@@ -171,23 +181,35 @@ func (l *InitialSnapshotLimiter) advanceCanceledTicketsLocked() {
 	}
 }
 
-func (l *InitialSnapshotLimiter) Release() {
+func (l *InitialSnapshotLimiter) release(observed bool) {
 	l.mu.Lock()
 	if l.inFlight == 0 {
 		l.mu.Unlock()
 		panic("cdc: initial snapshot limiter released without acquisition")
+	}
+	if !observed {
+		if l.unobserved == 0 {
+			l.mu.Unlock()
+			panic("cdc: initial snapshot limiter released an unknown observed permit")
+		}
+		l.unobserved--
 	}
 	l.inFlight--
 	l.signalLocked()
 	l.mu.Unlock()
 }
 
-func (l *InitialSnapshotLimiter) ObserveBatchBytes(bytes uint64) {
-	if bytes == 0 {
-		return
-	}
+func (l *InitialSnapshotLimiter) observeBatchBytes(bytes uint64) {
 	l.mu.Lock()
-	if bytes > l.batchBytesEstimate {
+	if l.unobserved == 0 {
+		l.mu.Unlock()
+		panic("cdc: initial snapshot limiter observed without acquisition")
+	}
+	l.unobserved--
+	if bytes == 0 {
+		// The engine returned a data batch without an mpool allocation. Complete
+		// the probe so the next batch can make progress, but retain the estimate.
+	} else if bytes > l.batchBytesEstimate {
 		// React to unexpectedly wide batches immediately.
 		l.batchBytesEstimate = bytes
 	} else {

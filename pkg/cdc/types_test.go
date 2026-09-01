@@ -726,7 +726,7 @@ func TestDecoderOutput_Close(t *testing.T) {
 	t.Run("ReleasesSnapshotPermitOnce", func(t *testing.T) {
 		releases := 0
 		d := &DecoderOutput{snapshotPermit: &snapshotPermit{
-			release: func() { releases++ },
+			release: func(bool) { releases++ },
 		}}
 		d.Close()
 		d.Close()

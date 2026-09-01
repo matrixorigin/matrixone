@@ -16,6 +16,7 @@ package cdc
 
 import (
 	"context"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -33,13 +34,17 @@ func TestInitialSnapshotLimiterAdaptsToMemoryAndBatchSize(t *testing.T) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	require.NoError(t, limiter.Acquire(ctx))
-	require.NoError(t, limiter.Acquire(ctx))
+	first, err := limiter.acquire(ctx)
+	require.NoError(t, err)
+	first.ObserveBatchBytes(100)
+	second, err := limiter.acquire(ctx)
+	require.NoError(t, err)
+	second.ObserveBatchBytes(100)
 
-	acquired := make(chan struct{})
+	acquired := make(chan *snapshotPermit)
 	go func() {
-		if limiter.Acquire(ctx) == nil {
-			close(acquired)
+		if permit, acquireErr := limiter.acquire(ctx); acquireErr == nil {
+			acquired <- permit
 		}
 	}()
 
@@ -50,51 +55,143 @@ func TestInitialSnapshotLimiterAdaptsToMemoryAndBatchSize(t *testing.T) {
 	}, time.Second, time.Millisecond, "third batch did not reach the admission wait")
 
 	available.Store(1200)
+	var third *snapshotPermit
 	select {
-	case <-acquired:
+	case third = <-acquired:
 	case <-ctx.Done():
 		t.Fatal("limiter did not expand after memory headroom increased")
 	}
 
-	limiter.ObserveBatchBytes(400)
+	third.ObserveBatchBytes(400)
 	limiter.mu.Lock()
 	concurrency := limiter.concurrencyLocked(available.Load(), true)
 	limiter.mu.Unlock()
 	assert.Equal(t, 1, concurrency, "a wider observed batch must reduce admission")
 
-	limiter.Release()
-	limiter.Release()
-	limiter.Release()
+	first.Release()
+	second.Release()
+	third.Release()
+}
+
+func TestInitialSnapshotLimiterSerializesUnobservedBatches(t *testing.T) {
+	limiter := newInitialSnapshotLimiter(1, 8, 2, 256, func() (uint64, bool) {
+		return 8192, true
+	})
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	first, err := limiter.acquire(ctx)
+	require.NoError(t, err)
+
+	acquired := make(chan *snapshotPermit, 7)
+	for range 7 {
+		go func() {
+			permit, acquireErr := limiter.acquire(ctx)
+			if acquireErr == nil {
+				acquired <- permit
+			}
+		}()
+	}
+	require.Eventually(t, func() bool {
+		limiter.mu.Lock()
+		defer limiter.mu.Unlock()
+		return limiter.waiters == 7
+	}, time.Second, time.Millisecond)
+
+	limiter.mu.Lock()
+	assert.Equal(t, 1, limiter.inFlight)
+	assert.Equal(t, 1, limiter.unobserved)
+	limiter.mu.Unlock()
+	assert.Empty(t, acquired, "all estimated slots were granted before a real batch size was known")
+
+	first.ObserveBatchBytes(1024)
+	nextPermit := func() *snapshotPermit {
+		select {
+		case permit := <-acquired:
+			return permit
+		case <-ctx.Done():
+			t.Fatal("waiting batch was not admitted")
+			return nil
+		}
+	}
+	second := nextPermit()
+	limiter.mu.Lock()
+	assert.Equal(t, 2, limiter.inFlight)
+	assert.Equal(t, 1, limiter.unobserved)
+	assert.Equal(t, 6, limiter.waiters)
+	limiter.mu.Unlock()
+	assert.Empty(t, acquired, "admission expanded again before the newly granted batch was observed")
+
+	first.Release()
+	second.ObserveBatchBytes(1024)
+	second.Release()
+	for range 6 {
+		permit := nextPermit()
+		permit.ObserveBatchBytes(1024)
+		permit.Release()
+	}
+}
+
+func TestInitialSnapshotPermitObserveAndReleaseRace(t *testing.T) {
+	for range 100 {
+		limiter := newInitialSnapshotLimiter(1, 1, 1, 100, func() (uint64, bool) {
+			return 0, false
+		})
+		permit, err := limiter.acquire(context.Background())
+		require.NoError(t, err)
+
+		var wg sync.WaitGroup
+		wg.Add(2)
+		go func() {
+			defer wg.Done()
+			permit.ObserveBatchBytes(100)
+		}()
+		go func() {
+			defer wg.Done()
+			permit.Release()
+		}()
+		wg.Wait()
+
+		limiter.mu.Lock()
+		assert.Zero(t, limiter.inFlight)
+		assert.Zero(t, limiter.unobserved)
+		limiter.mu.Unlock()
+	}
 }
 
 func TestInitialSnapshotLimiterFallbackAndCancellation(t *testing.T) {
 	limiter := newInitialSnapshotLimiter(1, 4, 2, 100, func() (uint64, bool) {
 		return 0, false
 	})
-	require.NoError(t, limiter.Acquire(context.Background()))
-	require.NoError(t, limiter.Acquire(context.Background()))
+	first, err := limiter.acquire(context.Background())
+	require.NoError(t, err)
+	first.ObserveBatchBytes(100)
+	second, err := limiter.acquire(context.Background())
+	require.NoError(t, err)
+	second.ObserveBatchBytes(100)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	err := limiter.Acquire(ctx)
+	_, err = limiter.acquire(ctx)
 	require.ErrorIs(t, err, context.Canceled)
 
-	limiter.Release()
-	limiter.Release()
+	first.Release()
+	second.Release()
 }
 
 func TestInitialSnapshotLimiterReleaseWakesWaiter(t *testing.T) {
 	limiter := newInitialSnapshotLimiter(1, 1, 1, 100, func() (uint64, bool) {
 		return 0, false
 	})
-	require.NoError(t, limiter.Acquire(context.Background()))
+	first, err := limiter.acquire(context.Background())
+	require.NoError(t, err)
 
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
-	acquired := make(chan struct{})
+	acquired := make(chan *snapshotPermit)
 	go func() {
-		if limiter.Acquire(ctx) == nil {
-			close(acquired)
+		if permit, acquireErr := limiter.acquire(ctx); acquireErr == nil {
+			acquired <- permit
 		}
 	}()
 
@@ -103,27 +200,29 @@ func TestInitialSnapshotLimiterReleaseWakesWaiter(t *testing.T) {
 		defer limiter.mu.Unlock()
 		return limiter.waiters == 1
 	}, time.Second, time.Millisecond, "waiter did not reach the admission wait")
-	limiter.Release()
+	first.Release()
+	var second *snapshotPermit
 	select {
-	case <-acquired:
+	case second = <-acquired:
 	case <-ctx.Done():
 		t.Fatal("release did not wake a blocked waiter")
 	}
-	limiter.Release()
+	second.Release()
 }
 
 func TestInitialSnapshotLimiterRejectsOverRelease(t *testing.T) {
 	limiter := newInitialSnapshotLimiter(1, 1, 1, 100, func() (uint64, bool) {
 		return 0, false
 	})
-	require.Panics(t, limiter.Release)
+	require.Panics(t, func() { limiter.release(false) })
 }
 
 func TestInitialSnapshotLimiterPreservesWaiterOrder(t *testing.T) {
 	limiter := newInitialSnapshotLimiter(1, 1, 1, 100, func() (uint64, bool) {
 		return 0, false
 	})
-	require.NoError(t, limiter.Acquire(context.Background()))
+	first, err := limiter.acquire(context.Background())
+	require.NoError(t, err)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
@@ -131,12 +230,13 @@ func TestInitialSnapshotLimiterPreservesWaiterOrder(t *testing.T) {
 	releases := []chan struct{}{make(chan struct{}), make(chan struct{}), make(chan struct{})}
 	for i := range 3 {
 		go func(id int) {
-			if limiter.Acquire(ctx) != nil {
+			permit, acquireErr := limiter.acquire(ctx)
+			if acquireErr != nil {
 				return
 			}
 			acquired <- id
 			<-releases[id]
-			limiter.Release()
+			permit.Release()
 		}(i)
 		require.Eventually(t, func() bool {
 			limiter.mu.Lock()
@@ -145,7 +245,7 @@ func TestInitialSnapshotLimiterPreservesWaiterOrder(t *testing.T) {
 		}, time.Second, time.Millisecond)
 	}
 
-	limiter.Release()
+	first.Release()
 	for want := range 3 {
 		select {
 		case got := <-acquired:
@@ -161,11 +261,15 @@ func TestInitialSnapshotLimiterCancellationAdvancesQueue(t *testing.T) {
 	limiter := newInitialSnapshotLimiter(1, 1, 1, 100, func() (uint64, bool) {
 		return 0, false
 	})
-	require.NoError(t, limiter.Acquire(context.Background()))
+	initial, err := limiter.acquire(context.Background())
+	require.NoError(t, err)
 
 	firstCtx, cancelFirst := context.WithCancel(context.Background())
 	firstResult := make(chan error, 1)
-	go func() { firstResult <- limiter.Acquire(firstCtx) }()
+	go func() {
+		_, acquireErr := limiter.acquire(firstCtx)
+		firstResult <- acquireErr
+	}()
 	require.Eventually(t, func() bool {
 		limiter.mu.Lock()
 		defer limiter.mu.Unlock()
@@ -174,10 +278,10 @@ func TestInitialSnapshotLimiterCancellationAdvancesQueue(t *testing.T) {
 
 	secondCtx, cancelSecond := context.WithTimeout(context.Background(), time.Second)
 	defer cancelSecond()
-	secondAcquired := make(chan struct{})
+	secondAcquired := make(chan *snapshotPermit)
 	go func() {
-		if limiter.Acquire(secondCtx) == nil {
-			close(secondAcquired)
+		if permit, acquireErr := limiter.acquire(secondCtx); acquireErr == nil {
+			secondAcquired <- permit
 		}
 	}()
 	require.Eventually(t, func() bool {
@@ -188,11 +292,12 @@ func TestInitialSnapshotLimiterCancellationAdvancesQueue(t *testing.T) {
 
 	cancelFirst()
 	require.ErrorIs(t, <-firstResult, context.Canceled)
-	limiter.Release()
+	initial.Release()
+	var second *snapshotPermit
 	select {
-	case <-secondAcquired:
+	case second = <-secondAcquired:
 	case <-secondCtx.Done():
 		t.Fatal("canceled FIFO head prevented the next waiter from acquiring")
 	}
-	limiter.Release()
+	second.Release()
 }

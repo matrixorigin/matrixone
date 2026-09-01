@@ -269,8 +269,9 @@ func TestTableChangeStream_InitialSnapshotBatchLimiterSkippedAfterFirstSync(t *t
 	limiter := newInitialSnapshotLimiter(1, 1, 1, 1, func() (uint64, bool) {
 		return 0, false
 	})
-	require.NoError(t, limiter.Acquire(context.Background()))
-	defer limiter.Release()
+	limiterPermit, err := limiter.acquire(context.Background())
+	require.NoError(t, err)
+	defer limiterPermit.Release()
 
 	stream := createTestStream(
 		mp,
