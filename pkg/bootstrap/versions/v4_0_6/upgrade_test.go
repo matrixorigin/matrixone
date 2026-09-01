@@ -626,8 +626,12 @@ func TestTenantViewDefinitionChecks(t *testing.T) {
 			if entry.PostSql != "" {
 				targetDefinition = entry.PostSql
 			}
+			expectedViewName := entry.TableName
+			if entry.TableName == "TABLE_PRIVILEGES" {
+				expectedViewName = "table_privileges"
+			}
 			stub := gostub.Stub(&versions.CheckViewDefinition, func(_ executor.TxnExecutor, accountID uint32, schema, viewName string) (bool, string, error) {
-				if accountID != 42 || schema != sysview.InformationDBConst || viewName != entry.TableName {
+				if accountID != 42 || schema != sysview.InformationDBConst || viewName != expectedViewName {
 					t.Fatalf("unexpected view check arguments: account=%d schema=%s view=%s", accountID, schema, viewName)
 				}
 				return true, targetDefinition, nil
@@ -761,7 +765,7 @@ func TestTablePrivilegesViewUpgradeConvergesAndIsIdempotent(t *testing.T) {
 			) (bool, string, error) {
 				require.Equal(t, uint32(42), accountID)
 				require.Equal(t, sysview.InformationDBConst, schema)
-				require.Equal(t, "TABLE_PRIVILEGES", viewName)
+				require.Equal(t, "table_privileges", viewName)
 				if upgraded {
 					return true, sysview.InformationSchemaTablePrivilegesDDL, nil
 				}
@@ -827,7 +831,7 @@ func TestVersionHandleLifecycleWithNoLegacyDefinitions(t *testing.T) {
 				return true, sysview.InformationSchemaPartitionsDDL, nil
 			case "SCHEMATA":
 				return true, sysview.InformationSchemaSchemataDDL, nil
-			case "TABLE_PRIVILEGES":
+			case "table_privileges":
 				return true, sysview.InformationSchemaTablePrivilegesDDL, nil
 			default:
 				return false, "", errors.New("unexpected view")

@@ -611,12 +611,12 @@ var (
 
 	InformationSchemaTablePrivilegesDDL = "CREATE VIEW information_schema.`TABLE_PRIVILEGES` AS " +
 		informationSchemaMetadataVisibilityCTE() + "SELECT " +
-		"CAST(granted_role.role_name AS varchar(292)) AS `GRANTEE`," +
+		"CAST(coalesce(granted_role.role_name, '') AS varchar(292)) AS `GRANTEE`," +
 		"CAST('def' AS varchar(512)) AS `TABLE_CATALOG`," +
-		"CAST(tbl.reldatabase AS varchar(64)) AS `TABLE_SCHEMA`," +
-		"CAST(tbl.relname AS varchar(64)) AS `TABLE_NAME`," +
-		"CAST(upper(grant_priv.privilege_name) AS varchar(64)) AS `PRIVILEGE_TYPE`," +
-		"CAST(case when grant_priv.with_grant_option then 'YES' else 'NO' end AS varchar(3)) AS `IS_GRANTABLE` " +
+		"CAST(coalesce(tbl.reldatabase, '') AS varchar(64)) AS `TABLE_SCHEMA`," +
+		"CAST(coalesce(tbl.relname, '') AS varchar(64)) AS `TABLE_NAME`," +
+		"CAST(coalesce(upper(grant_priv.privilege_name), '') AS varchar(64)) AS `PRIVILEGE_TYPE`," +
+		"CAST(coalesce(case when grant_priv.with_grant_option then 'YES' else 'NO' end, '') AS varchar(3)) AS `IS_GRANTABLE` " +
 		"FROM mo_catalog.mo_role_privs grant_priv " +
 		"JOIN mo_catalog.mo_role granted_role ON grant_priv.role_id = granted_role.role_id " +
 		"JOIN __mo_visible_tables tbl ON grant_priv.obj_id = tbl.rel_logical_id " +

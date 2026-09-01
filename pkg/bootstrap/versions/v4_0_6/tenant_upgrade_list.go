@@ -88,13 +88,16 @@ func upgradeInformationSchemaMetadataVisibilityCheckConstraints() versions.Upgra
 // upgradeInformationSchemaTablePrivileges converges the legacy empty base
 // table, a stale view, or an absent object to the canonical derived view.
 func upgradeInformationSchemaTablePrivileges() versions.UpgradeEntry {
-	const viewName = "TABLE_PRIVILEGES"
+	const (
+		viewName        = "TABLE_PRIVILEGES"
+		catalogViewName = "table_privileges"
+	)
 	return versions.UpgradeEntry{
 		Schema:                  sysview.InformationDBConst,
 		TableName:               viewName,
 		UpgType:                 versions.MODIFY_VIEW,
 		UpgSql:                  fmt.Sprintf("DROP VIEW IF EXISTS %s.%s;", sysview.InformationDBConst, viewName),
-		CheckFunc:               checkViewDefinition(viewName, sysview.InformationSchemaTablePrivilegesDDL),
+		CheckFunc:               checkViewDefinition(catalogViewName, sysview.InformationSchemaTablePrivilegesDDL),
 		RequiredProtocolVersion: defines.MORPCVersion41,
 		PreSql:                  fmt.Sprintf("DROP TABLE IF EXISTS %s.%s;", sysview.InformationDBConst, viewName),
 		PostSql:                 sysview.InformationSchemaTablePrivilegesDDL,

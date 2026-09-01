@@ -3,6 +3,28 @@ drop database if exists table_privileges_db;
 drop user if exists table_privileges_user;
 drop role if exists table_privileges_reader, table_privileges_reader_renamed,
 table_privileges_wildcard, table_privileges_hidden;
+select count(*) = 1 as canonical_view_uses_catalog_name
+from mo_catalog.mo_tables
+where account_id = current_account_id()
+and reldatabase = 'information_schema'
+and relname = 'table_privileges'
+and relkind = 'v';
+➤ canonical_view_uses_catalog_name[-7,1,0]  𝄀
+1
+select upper(column_name) as column_name, is_nullable
+from information_schema.columns
+where table_schema = 'information_schema'
+and table_name = 'table_privileges'
+and lower(column_name) in ('grantee', 'table_catalog', 'table_schema', 'table_name',
+'privilege_type', 'is_grantable')
+order by ordinal_position;
+➤ column_name[12,256,0]  ¦  is_nullable[12,3,0]  𝄀
+GRANTEE  ¦  NO  𝄀
+TABLE_CATALOG  ¦  NO  𝄀
+TABLE_SCHEMA  ¦  NO  𝄀
+TABLE_NAME  ¦  NO  𝄀
+PRIVILEGE_TYPE  ¦  NO  𝄀
+IS_GRANTABLE  ¦  NO
 create database table_privileges_db;
 create table table_privileges_db.t(id int);
 create table table_privileges_db.hidden_t(id int);
