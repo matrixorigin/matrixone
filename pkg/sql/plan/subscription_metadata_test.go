@@ -38,7 +38,7 @@ type subscriptionMetadataTestContext struct {
 	subscriptions       map[string]*SubscriptionMeta
 	querying            *SubscriptionMeta
 	defaultDB           string
-	metadata            []*SubscriptionMeta
+	metadata            []*SubscriptionMetadata
 	lowerCaseTableNames int64
 }
 
@@ -67,15 +67,15 @@ func (c *subscriptionMetadataTestContext) GetSubscriptionMeta(
 	return c.subscriptionFor(databaseName), nil
 }
 
-func (c *subscriptionMetadataTestContext) GetSubscriptionMetas(
+func (c *subscriptionMetadataTestContext) GetSubscriptionMetadata(
 	_ *Snapshot,
-) ([]*SubscriptionMeta, error) {
+) ([]*SubscriptionMetadata, error) {
 	if c.metadata != nil {
 		return c.metadata, nil
 	}
-	metas := []*SubscriptionMeta{c.subscription}
+	metas := []*SubscriptionMetadata{{Meta: c.subscription, AllTablesVisible: true}}
 	for _, subscription := range c.subscriptions {
-		metas = append(metas, subscription)
+		metas = append(metas, &SubscriptionMetadata{Meta: subscription, AllTablesVisible: true})
 	}
 	return metas, nil
 }
@@ -309,7 +309,9 @@ func TestSubscriptionStatisticsPreservesSourcesAcrossQueryShapes(t *testing.T) {
 		})
 	}
 
-	filter := tree.String(subscriptionMoTablesFilter(ctx.subscription), dialect.MYSQL)
+	filter := tree.String(subscriptionMoTablesFilter(&SubscriptionMetadata{
+		Meta: ctx.subscription, AllTablesVisible: true,
+	}), dialect.MYSQL)
 	require.Contains(t, filter, "reldatabase = tpch")
 	require.Contains(t, filter, "relname in (nation)")
 	require.NotContains(t, filter, "region")
@@ -357,7 +359,7 @@ func TestPreparedSubscriptionMetadataPreservesAllSources(t *testing.T) {
 
 func TestSubscriptionStatisticsZeroSubscriptionsRetainsMetadataDependency(t *testing.T) {
 	optimizer, ctx := newSubscriptionMetadataTestOptimizer()
-	ctx.metadata = []*SubscriptionMeta{}
+	ctx.metadata = []*SubscriptionMetadata{}
 
 	queryPlan, err := runOneStmt(optimizer, t,
 		"select count(*) from information_schema.statistics where table_name = 'nation'")
@@ -462,14 +464,17 @@ func BenchmarkSubscriptionStatisticsPlanning(b *testing.B) {
 	}
 }
 
-func subscriptionMetadataTestSet(count int) []*SubscriptionMeta {
-	metas := make([]*SubscriptionMeta, 0, count)
+func subscriptionMetadataTestSet(count int) []*SubscriptionMetadata {
+	metas := make([]*SubscriptionMetadata, 0, count)
 	for i := count - 1; i >= 0; i-- {
-		metas = append(metas, &SubscriptionMeta{
-			AccountId: 0,
-			DbName:    "tpch",
-			SubName:   fmt.Sprintf("sub_%02d", i),
-			Tables:    "nation",
+		metas = append(metas, &SubscriptionMetadata{
+			Meta: &SubscriptionMeta{
+				AccountId: 0,
+				DbName:    "tpch",
+				SubName:   fmt.Sprintf("sub_%02d", i),
+				Tables:    "nation",
+			},
+			AllTablesVisible: true,
 		})
 	}
 	return metas
@@ -477,9 +482,9 @@ func subscriptionMetadataTestSet(count int) []*SubscriptionMeta {
 
 func TestSubscriptionStatisticsHonorsSubscriptionNameCaseMode(t *testing.T) {
 	optimizer, ctx := newSubscriptionMetadataTestOptimizer()
-	ctx.metadata = []*SubscriptionMeta{
-		{AccountId: 0, DbName: "tpch", SubName: "SubCase", Tables: "nation"},
-		{AccountId: 0, DbName: "tpch", SubName: "subcase", Tables: "nation"},
+	ctx.metadata = []*SubscriptionMetadata{
+		{Meta: &SubscriptionMeta{AccountId: 0, DbName: "tpch", SubName: "SubCase", Tables: "nation"}, AllTablesVisible: true},
+		{Meta: &SubscriptionMeta{AccountId: 0, DbName: "tpch", SubName: "subcase", Tables: "nation"}, AllTablesVisible: true},
 	}
 
 	t.Run("case sensitive", func(t *testing.T) {
@@ -513,7 +518,7 @@ func TestSubscriptionStatisticsHonorsSubscriptionNameCaseMode(t *testing.T) {
 	})
 }
 
-func TestSubscriptionStatisticsBypassesPublisherRBACVisibility(t *testing.T) {
+func TestSubscriptionStatisticsAppliesSubscriberRBACBeforePublisherScan(t *testing.T) {
 	optimizer, ctx := newSubscriptionMetadataTestOptimizer()
 
 	queryPlan, err := runOneStmt(optimizer, t,
@@ -525,10 +530,10 @@ func TestSubscriptionStatisticsBypassesPublisherRBACVisibility(t *testing.T) {
 		"sub_b":  0,
 	})
 
-	// A subscription is authorized by its publication table list, not by the
-	// subscriber session's role IDs in the publisher account. Binding the
-	// built-in visibility CTE unchanged would retain mo_role_privs/mo_database
-	// scans and could hide every published table for a cross-tenant subscriber.
+	// Subscriber visibility was computed in the subscriber account before these
+	// branches were built. Publisher catalog scans must therefore contain only
+	// publication and logical-table filters, never publisher-side comparisons
+	// against subscriber role IDs.
 	for _, node := range queryPlan.GetQuery().GetNodes() {
 		obj := node.GetObjRef()
 		if obj.GetPubInfo() == nil {
@@ -538,6 +543,55 @@ func TestSubscriptionStatisticsBypassesPublisherRBACVisibility(t *testing.T) {
 		require.NotEqual(t, catalog.MO_DATABASE, obj.GetObjName())
 	}
 	require.Nil(t, ctx.GetQueryingSubscription())
+}
+
+func TestSubscriptionStatisticsOmitsSubscriberInvisibleBranches(t *testing.T) {
+	optimizer, ctx := newSubscriptionMetadataTestOptimizer()
+	ctx.metadata = []*SubscriptionMetadata{
+		{Meta: ctx.subscription},
+		{Meta: ctx.subscriptions["sub_b"], AllTablesVisible: true},
+	}
+
+	queryPlan, err := runOneStmt(optimizer, t,
+		"select index_name from information_schema.statistics where table_name = 'nation'")
+	require.NoError(t, err)
+	require.Equal(t, map[string]int{"sub_b": 1},
+		statisticsPublisherScanCounts(queryPlan.GetQuery()))
+	require.True(t, hasLocalStatisticsCatalogScan(queryPlan.GetQuery()))
+	require.Nil(t, ctx.GetQueryingSubscription())
+}
+
+func TestSubscriptionMoTablesFilterIntersectsPublicationAndSubscriberRBAC(t *testing.T) {
+	meta := &SubscriptionMeta{
+		AccountId: 7,
+		DbName:    "publisher_db",
+		SubName:   "subscriber_db",
+		Tables:    "published_t,other_t",
+	}
+
+	partial := tree.String(subscriptionMoTablesFilter(&SubscriptionMetadata{
+		Meta: meta, VisibleTableIDs: []uint64{42, 7, 42, 0},
+	}), dialect.MYSQL)
+	require.Contains(t, partial, "reldatabase = publisher_db")
+	require.Contains(t, partial, "relname in (published_t, other_t)")
+	require.Contains(t, partial, "rel_logical_id in (7, 42)")
+
+	all := tree.String(subscriptionMoTablesFilter(&SubscriptionMetadata{
+		Meta: meta, AllTablesVisible: true,
+	}), dialect.MYSQL)
+	require.NotContains(t, all, "rel_logical_id")
+	require.Contains(t, all, "relname in (published_t, other_t)")
+
+	none := tree.String(subscriptionMoTablesFilter(&SubscriptionMetadata{Meta: meta}), dialect.MYSQL)
+	require.Equal(t, "1 = 0", none)
+
+	_, ctx := newSubscriptionMetadataTestOptimizer()
+	ctx.SetQueryingSubscription(meta)
+	builder := NewQueryBuilder(plan.Query_SELECT, ctx, false, true)
+	direct := tree.String(builder.currentSubscriptionMoTablesFilter(), dialect.MYSQL)
+	require.Contains(t, direct, "reldatabase = publisher_db")
+	require.Contains(t, direct, "relname in (published_t, other_t)")
+	require.NotContains(t, direct, "rel_logical_id")
 }
 
 func TestRewriteSubscriptionStatisticsAccountScopesVisibilityCTE(t *testing.T) {

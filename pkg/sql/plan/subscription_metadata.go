@@ -93,27 +93,27 @@ func (builder *QueryBuilder) bindSubscriptionStatisticsView(
 
 func (builder *QueryBuilder) visibleSubscriptionMetadata(
 	snapshot *Snapshot,
-) ([]*SubscriptionMeta, error) {
+) ([]*SubscriptionMetadata, error) {
 	provider, ok := builder.compCtx.(SubscriptionMetadataProvider)
 	if !ok {
 		return nil, nil
 	}
-	subscriptions, err := provider.GetSubscriptionMetas(snapshot)
+	subscriptions, err := provider.GetSubscriptionMetadata(snapshot)
 	if err != nil {
 		return nil, err
 	}
-	subscriptions = append([]*SubscriptionMeta(nil), subscriptions...)
+	subscriptions = append([]*SubscriptionMetadata(nil), subscriptions...)
 	lowerCaseTableNames := builder.compCtx.GetLowerCaseTableNames()
 
 	sort.SliceStable(subscriptions, func(i, j int) bool {
-		if subscriptions[i] == nil {
+		if subscriptions[i] == nil || subscriptions[i].Meta == nil {
 			return false
 		}
-		if subscriptions[j] == nil {
+		if subscriptions[j] == nil || subscriptions[j].Meta == nil {
 			return true
 		}
-		leftName := subscriptions[i].SubName
-		rightName := subscriptions[j].SubName
+		leftName := subscriptions[i].Meta.SubName
+		rightName := subscriptions[j].Meta.SubName
 		leftKey := subscriptionMetadataNameKey(leftName, lowerCaseTableNames)
 		rightKey := subscriptionMetadataNameKey(rightName, lowerCaseTableNames)
 		if leftKey != rightKey {
@@ -126,10 +126,12 @@ func (builder *QueryBuilder) visibleSubscriptionMetadata(
 	seen := make(map[string]struct{}, len(subscriptions))
 	visible := subscriptions[:0]
 	for _, subscription := range subscriptions {
-		if subscription == nil || subscription.SubName == "" {
+		if subscription == nil || subscription.Meta == nil ||
+			subscription.Meta.SubName == "" ||
+			(!subscription.AllTablesVisible && len(subscription.VisibleTableIDs) == 0) {
 			continue
 		}
-		nameKey := subscriptionMetadataNameKey(subscription.SubName, lowerCaseTableNames)
+		nameKey := subscriptionMetadataNameKey(subscription.Meta.SubName, lowerCaseTableNames)
 		if _, duplicate := seen[nameKey]; duplicate {
 			continue
 		}
@@ -214,22 +216,23 @@ func selectClauseOf(stmt *tree.Select) *tree.SelectClause {
 	}
 }
 
-func isSubscriptionStatisticsView(schema, table string, subscription *SubscriptionMeta) bool {
-	return subscription != nil &&
+func isSubscriptionStatisticsView(schema, table string, subscription *SubscriptionMetadata) bool {
+	return subscription != nil && subscription.Meta != nil &&
 		strings.EqualFold(schema, INFORMATION_SCHEMA) &&
 		strings.EqualFold(table, informationSchemaStatistics)
 }
 
 // rewriteSubscriptionStatisticsAccount makes the persisted view agree with
-// the publisher identity and publication authorization attached to its catalog
-// scans. The rewrite is limited to the built-in STATISTICS view.
+// the publisher identity attached to its catalog scans. The rewrite is limited
+// to the built-in STATISTICS view.
 //
 // The canonical information_schema views use __mo_visible_tables to enforce
 // the current session's RBAC permissions. A subscription branch must not reuse
 // that predicate: subscriber role IDs are local to the subscriber account and
-// have no meaning in the publisher account. Publication database/table filters
-// are added to the publisher mo_tables scan by buildTable, so the CTE only
-// needs the publisher account guard here.
+// have no meaning in the publisher account. Subscriber RBAC is computed before
+// this branch is bound; buildTable then intersects that scope with publication
+// database/table filters on the publisher mo_tables scan. The CTE therefore
+// needs only the publisher account guard here.
 func rewriteSubscriptionStatisticsAccount(stmt *tree.Select, accountID uint32) bool {
 	clause := selectClauseOf(stmt)
 	if clause != nil && clause.Where != nil && clause.Where.Expr != nil {
@@ -310,33 +313,78 @@ func rewriteSubscriptionStatisticsOutput(
 	}
 }
 
-func subscriptionMoTablesFilter(subscription *SubscriptionMeta) tree.Expr {
-	if subscription == nil || subscription.DbName == "" {
+func subscriptionMoTablesFilter(subscription *SubscriptionMetadata) tree.Expr {
+	if subscription == nil || subscription.Meta == nil || subscription.Meta.DbName == "" {
 		return nil
 	}
-	filter := tree.NewComparisonExpr(
+	meta := subscription.Meta
+	var filter tree.Expr = tree.NewComparisonExpr(
 		tree.EQUAL,
 		tree.NewUnresolvedColName("reldatabase"),
-		tree.NewNumVal(subscription.DbName, subscription.DbName, false, tree.P_char),
+		tree.NewNumVal(meta.DbName, meta.DbName, false, tree.P_char),
 	)
-	if subscription.Tables == "" || subscription.Tables == "*" {
-		return filter
-	}
-
-	tableNames := strings.Split(subscription.Tables, ",")
-	values := make(tree.Exprs, 0, len(tableNames))
-	for _, tableName := range tableNames {
-		tableName = strings.TrimSpace(tableName)
-		if tableName != "" {
-			values = append(values, tree.NewNumVal(tableName, tableName, false, tree.P_char))
+	if meta.Tables != "" && meta.Tables != "*" {
+		tableNames := strings.Split(meta.Tables, ",")
+		values := make(tree.Exprs, 0, len(tableNames))
+		for _, tableName := range tableNames {
+			tableName = strings.TrimSpace(tableName)
+			if tableName != "" {
+				values = append(values, tree.NewNumVal(tableName, tableName, false, tree.P_char))
+			}
+		}
+		if len(values) > 0 {
+			filter = tree.NewAndExpr(filter, tree.NewComparisonExpr(
+				tree.IN,
+				tree.NewUnresolvedColName("relname"),
+				tree.NewTuple(values),
+			))
 		}
 	}
-	if len(values) == 0 {
+
+	if subscription.AllTablesVisible {
 		return filter
+	}
+	visibleIDs := append([]uint64(nil), subscription.VisibleTableIDs...)
+	sort.Slice(visibleIDs, func(i, j int) bool { return visibleIDs[i] < visibleIDs[j] })
+	values := make(tree.Exprs, 0, len(visibleIDs))
+	var previous uint64
+	for i, tableID := range visibleIDs {
+		if tableID == 0 || (i > 0 && tableID == previous) {
+			continue
+		}
+		previous = tableID
+		values = append(values, tree.NewNumVal(
+			tableID, strconv.FormatUint(tableID, 10), false, tree.P_uint64,
+		))
+	}
+	if len(values) == 0 {
+		return tree.NewComparisonExpr(
+			tree.EQUAL,
+			tree.NewNumVal(uint64(1), "1", false, tree.P_uint64),
+			tree.NewNumVal(uint64(0), "0", false, tree.P_uint64),
+		)
 	}
 	return tree.NewAndExpr(filter, tree.NewComparisonExpr(
 		tree.IN,
-		tree.NewUnresolvedColName("relname"),
+		tree.NewUnresolvedColName("rel_logical_id"),
 		tree.NewTuple(values),
 	))
+}
+
+// currentSubscriptionMoTablesFilter keeps direct subscription-table binding
+// and account-wide metadata binding separate. Direct statements have already
+// passed normal frontend privilege checks and need only publication scope;
+// STATISTICS branches additionally carry subscriber-local table visibility.
+func (builder *QueryBuilder) currentSubscriptionMoTablesFilter() tree.Expr {
+	if builder.queryingSubscriptionMetadata != nil {
+		return subscriptionMoTablesFilter(builder.queryingSubscriptionMetadata)
+	}
+	meta := builder.compCtx.GetQueryingSubscription()
+	if meta == nil {
+		return nil
+	}
+	return subscriptionMoTablesFilter(&SubscriptionMetadata{
+		Meta:             meta,
+		AllTablesVisible: true,
+	})
 }

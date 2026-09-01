@@ -300,12 +300,23 @@ type CompilerContext interface {
 	GetLowerCaseTableNames() int64
 }
 
-// SubscriptionMetadataProvider enumerates the subscriptions that are visible
-// to the current account. CompilerContext implementations may provide it so
-// account-wide metadata views can expose local and subscribed schemas without
-// choosing a catalog from the syntactic shape of an outer predicate.
+// SubscriptionMetadata carries both publication membership and the
+// subscriber-local RBAC scope that was established before the planner crosses
+// into the publisher catalog. AllTablesVisible and VisibleTableIDs are
+// mutually exclusive representations of that subscriber-side scope.
+type SubscriptionMetadata struct {
+	Meta             *SubscriptionMeta
+	AllTablesVisible bool
+	VisibleTableIDs  []uint64
+}
+
+// SubscriptionMetadataProvider enumerates the active subscriptions whose
+// metadata is visible to the current account and active role closure.
+// CompilerContext implementations may provide it so account-wide metadata
+// views can expose local and subscribed schemas without choosing a catalog
+// from the syntactic shape of an outer predicate.
 type SubscriptionMetadataProvider interface {
-	GetSubscriptionMetas(snapshot *Snapshot) ([]*SubscriptionMeta, error)
+	GetSubscriptionMetadata(snapshot *Snapshot) ([]*SubscriptionMetadata, error)
 }
 
 // UserVariableTypeResolver is an optional extension implemented by session
@@ -347,6 +358,10 @@ type ViewData struct {
 type QueryBuilder struct {
 	qry     *plan.Query
 	compCtx CompilerContext
+	// queryingSubscriptionMetadata is scoped to binding one account-wide
+	// subscription metadata branch. It complements CompilerContext's publisher
+	// routing state with subscriber-local table visibility.
+	queryingSubscriptionMetadata *SubscriptionMetadata
 
 	ctxByNode             []*BindContext
 	windowValidationScans []*plan.Node

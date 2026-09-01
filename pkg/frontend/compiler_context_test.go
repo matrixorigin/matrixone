@@ -77,6 +77,46 @@ func TestSubscriptionMetasFromSubInfos(t *testing.T) {
 	}, metas)
 }
 
+func TestGetVisibleSubscriptionMetadata(t *testing.T) {
+	metas := []*pbplan.SubscriptionMeta{
+		{SubName: "all_visible", AccountId: 1, DbName: "pub_a", Tables: "*"},
+		{SubName: "table_visible", AccountId: 2, DbName: "pub_b", Tables: "t1,t2"},
+		{SubName: "hidden", AccountId: 3, DbName: "pub_c", Tables: "*"},
+	}
+	query := subscriptionMetadataVisibilitySQL(
+		escapeSQLString("all_visible") + "," +
+			escapeSQLString("hidden") + "," +
+			escapeSQLString("table_visible"),
+	)
+	result := &MysqlResultSet{}
+	for _, name := range []string{"datname", "all_tables", "table_id"} {
+		column := &MysqlColumn{}
+		column.SetName(name)
+		result.AddColumn(column)
+	}
+	result.AddRow([]interface{}{"all_visible", int64(1), uint64(0)})
+	result.AddRow([]interface{}{"", int64(0), uint64(42)})
+	result.AddRow([]interface{}{"", int64(0), uint64(7)})
+	result.AddRow([]interface{}{"", int64(0), uint64(42)})
+	result.AddRow([]interface{}{"unknown", int64(1), uint64(0)})
+
+	bh := &backgroundExecTest{}
+	bh.init()
+	bh.sql2result[query] = result
+	got, err := getVisibleSubscriptionMetadata(context.Background(), bh, metas)
+	require.NoError(t, err)
+	require.Equal(t, []*plan2.SubscriptionMetadata{
+		{Meta: metas[0], AllTablesVisible: true},
+		{Meta: metas[1], VisibleTableIDs: []uint64{7, 42}},
+		{Meta: metas[2], VisibleTableIDs: []uint64{7, 42}},
+	}, got)
+	require.Equal(t, []string{query}, bh.executedSQLs)
+	require.Contains(t, query, "SELECT role_id FROM mo_current_roles()")
+	require.Contains(t, query, "db.owner IN")
+	require.Contains(t, query, "rp.privilege_level IN ('d.t','t')")
+	require.NotContains(t, query, "tbl.account_id")
+}
+
 func TestExecCtxWithRootSQLRestoresScopedValues(t *testing.T) {
 	ses := &Session{}
 	ses.SetSql("session SQL")
