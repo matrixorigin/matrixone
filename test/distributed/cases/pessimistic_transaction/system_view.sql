@@ -24,7 +24,9 @@ begin;
 update t1 set b = b + 1 where a = 1;
 -- @session}
 
--- The sys account sees both active user transactions and their locks.
+-- The tenant session is asynchronous. Wait until both transactions are active
+-- before checking their identities and the locks they hold.
+-- @wait_expect(1, 10)
 select count(distinct txn_id) = 2 from mo_transactions() t where t.user_txn = 'true';
 -- The tenant session is asynchronous. Poll the public lock view until both
 -- intended table locks have been acquired and published across the CNs.
