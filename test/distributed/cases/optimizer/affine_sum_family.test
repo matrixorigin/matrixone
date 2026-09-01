@@ -86,6 +86,20 @@ group by g
 having sum(u16 + 3) > 0
 order by sum(u16 + 3);
 
+-- a deep-correlated scalar consumer must retain its NULL-on-empty proof after
+-- an omitted SUM is replaced by strict affine arithmetic
+select distinct outer_t.g,
+       (select max(middle_t.s)
+          from t middle_t
+         where (middle_t.s > 0) = (
+               select sum(inner_t.u16 + 3) =
+                      coalesce(sum(inner_t.u16 + 1), sum(inner_t.u16 + 2), 0)
+                 from t inner_t
+                where inner_t.g = outer_t.g
+         )) affine_result
+from t outer_t
+order by outer_t.g;
+
 -- dynamic constants are a semantic barrier
 set @a = 1;
 set @b = 2;

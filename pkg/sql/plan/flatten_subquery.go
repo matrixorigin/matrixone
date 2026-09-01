@@ -1367,7 +1367,13 @@ func nullPropagatesThroughDeepScalarConsumer(fn *plan.ObjectRef) bool {
 	case function.EQUAL, function.NOT_EQUAL,
 		function.GREAT_THAN, function.GREAT_EQUAL,
 		function.LESS_THAN, function.LESS_EQUAL,
-		function.NOT, function.CAST, function.CAST_STRICT:
+		function.NOT, function.CAST, function.CAST_STRICT,
+		// The affine SUM-family rewrite materializes omitted aggregate
+		// results with these registered STRICT operators.  Preserve the
+		// NULL-on-empty proof through that derived expression; accepting a
+		// broader function class here would also widen deep decorrelation to
+		// consumers whose evaluation contract has not been audited.
+		function.PLUS, function.MINUS, function.MULTI:
 		return true
 	default:
 		return false

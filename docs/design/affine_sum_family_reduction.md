@@ -3,7 +3,7 @@
 - Status: design reviewed; implementation validated
 - Tracking issue: [matrixorigin/matrixone#27682](https://github.com/matrixorigin/matrixone/issues/27682)
 - Implementation PR: [matrixorigin/matrixone#27977](https://github.com/matrixorigin/matrixone/pull/27977)
-- Last updated: 2026-09-01
+- Last updated: 2026-09-02
 
 ## 1. Decision
 
@@ -128,7 +128,13 @@ cross that boundary.
 
 The rewrite runs after HAVING, SELECT, window/time-window, ORDER BY, and LIMIT
 binding, but before aggregate-argument subquery flattening and AGG construction.
-At that point every consumer of the query block's aggregate tag is known.
+At that point every expression container holding the query block's aggregate
+tag is known. Shape-sensitive planner consumers still run afterward and are
+part of the transformation contract: in particular, deep scalar-correlation
+flattening proves NULL-on-empty behavior from the rewritten projection tree.
+The registered STRICT `+`, `-`, and `*` operators introduced by this rule retain
+that proof; NULL-observing consumers such as `COALESCE` and `CASE`, plus every
+unaudited function, remain conservative barriers.
 
 The phase first builds the complete candidate result without mutating the bind
 context. It then atomically installs a compact aggregate list and rewrites all
@@ -226,6 +232,9 @@ Deterministic planner tests prove:
   remain barriers across repeated executions with different parameter values;
 - ROLLUP branches, window consumers, and time-window/sliding/FILL consumers
   preserve exact values and physical aggregate references.
+- deep-correlated scalar consumers remain decorrelatable after a removed SUM is
+  represented by strict affine arithmetic, while NULL-observing and unaudited
+  consumers remain barriers.
 
 Distributed SQL compares fixed expected results and metadata across empty,
 NULL, grouped, reordered, and boundary-valued inputs. Real-server A/B evidence

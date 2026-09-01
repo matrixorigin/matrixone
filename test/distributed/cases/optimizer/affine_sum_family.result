@@ -96,6 +96,20 @@ having sum(u16 + 3) > 0
 order by sum(u16 + 3);
 ➤ g[4,32,0]  ¦  s1[3,38,0]  ¦  s2[3,38,0]  ¦  s3[3,38,0]  𝄀
 1  ¦  131074  ¦  131078  ¦  131082
+select distinct outer_t.g,
+(select max(middle_t.s)
+from t middle_t
+where (middle_t.s > 0) = (
+select sum(inner_t.u16 + 3) =
+coalesce(sum(inner_t.u16 + 1), sum(inner_t.u16 + 2), 0)
+from t inner_t
+where inner_t.g = outer_t.g
+)) affine_result
+from t outer_t
+order by outer_t.g;
+➤ g[4,32,0]  ¦  affine_result[5,16,0]  𝄀
+1  ¦  0  𝄀
+2  ¦  null
 set @a = 1;
 set @b = 2;
 set @c = 3;
