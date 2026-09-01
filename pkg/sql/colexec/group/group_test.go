@@ -1817,6 +1817,9 @@ func TestGroupConsumesReusableGroupingSetProjectionBatches(t *testing.T) {
 	expand.ProjectList = []*plan.Expr{
 		colExpr(0, types.T_varchar), colExpr(1, types.T_varchar),
 		colExpr(2, types.T_int32), {
+			Typ:  plan.Type{Id: int32(types.T_bool), NotNullable: true},
+			Expr: &plan.Expr_Lit{Lit: &plan.Literal{Value: &plan.Literal_Bval{Bval: false}}},
+		}, {
 			Typ:  plan.Type{Id: int32(types.T_int64), NotNullable: true},
 			Expr: &plan.Expr_Lit{Lit: &plan.Literal{Value: &plan.Literal_I64Val{I64Val: 0}}},
 		},
@@ -1828,7 +1831,7 @@ func TestGroupConsumesReusableGroupingSetProjectionBatches(t *testing.T) {
 	require.NoError(t, expand.Prepare(proc))
 
 	g := newGroupOp(proc, []*plan.Expr{
-		colExpr(0, types.T_varchar), colExpr(1, types.T_varchar), colExpr(3, types.T_int64),
+		colExpr(0, types.T_varchar), colExpr(1, types.T_varchar), colExpr(4, types.T_int64),
 	}, []aggexec.AggFuncExecExpression{sumAgg(2)})
 	g.NeedEval = false
 	g.DynamicGrouping = true
@@ -1867,20 +1870,78 @@ func TestGroupConsumesReusableGroupingSetProjectionBatches(t *testing.T) {
 	require.Zero(t, proc.Mp().CurrNB())
 }
 
+func TestGroupPreservesEmptyGroupingSetAcrossPartialMerge(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	child := colexec.NewMockOperator()
+	expand := projection.NewArgument()
+	expand.ProjectList = []*plan.Expr{
+		colExpr(0, types.T_varchar), colExpr(1, types.T_int32), {
+			Typ:  plan.Type{Id: int32(types.T_bool), NotNullable: true},
+			Expr: &plan.Expr_Lit{Lit: &plan.Literal{Value: &plan.Literal_Bval{Bval: false}}},
+		}, {
+			Typ:  plan.Type{Id: int32(types.T_int64), NotNullable: true},
+			Expr: &plan.Expr_Lit{Lit: &plan.Literal{Value: &plan.Literal_I64Val{I64Val: 0}}},
+		},
+	}
+	expand.GroupingSetCount = 2
+	expand.GroupingFlags = []bool{true, false}
+	expand.AppendChild(child)
+	require.NoError(t, expand.Prepare(proc))
+
+	aggs := []aggexec.AggFuncExecExpression{countStarAgg(), sumAgg(1)}
+	partialGroup := newGroupOp(proc, []*plan.Expr{
+		colExpr(0, types.T_varchar), colExpr(3, types.T_int64),
+	}, aggs)
+	partialGroup.NeedEval = false
+	partialGroup.DynamicGrouping = true
+	partialGroup.AppendChild(expand)
+	require.NoError(t, partialGroup.Prepare(proc))
+	partialOutputs := collectBatches(t, partialGroup, proc)
+	require.Len(t, partialOutputs, 1)
+	// Multiple empty CN partitions must merge to one empty aggregate state.
+	partials := []*batch.Batch{
+		cloneBatch(t, proc, partialOutputs[0]),
+		cloneBatch(t, proc, partialOutputs[0]),
+	}
+
+	partialGroup.Free(proc, false, nil)
+	expand.Free(proc, false, nil)
+	child.Free(proc, false, nil)
+
+	mergeChild := colexec.NewMockOperator().WithBatchs(partials)
+	merge := newMergeGroupOp(aggs)
+	merge.GroupingAware = true
+	merge.AppendChild(mergeChild)
+	require.NoError(t, merge.Prepare(proc))
+	outputs := collectBatches(t, merge, proc)
+	require.Len(t, outputs, 1)
+	require.Equal(t, 1, outputs[0].RowCount())
+	require.True(t, outputs[0].Vecs[0].GetGrouping().Contains(0))
+	require.Equal(t, int64(1), vector.GetFixedAtNoTypeCheck[int64](outputs[0].Vecs[1], 0))
+	require.Equal(t, int64(0), vector.GetFixedAtNoTypeCheck[int64](outputs[0].Vecs[2], 0))
+	require.True(t, outputs[0].Vecs[3].IsNull(0))
+
+	merge.Free(proc, false, nil)
+	mergeChild.Free(proc, false, nil)
+	proc.Free()
+	require.Zero(t, proc.Mp().CurrNB())
+}
+
 func TestMergeGroupUsesDeclaredGroupingDomainAcrossPartialBatches(t *testing.T) {
 	proc := testutil.NewProcess(t)
 
 	makePartial := func(key *vector.Vector, setID int64, value int32) *batch.Batch {
-		input := batch.NewWithSize(3)
+		input := batch.NewWithSize(4)
 		input.Vecs[0] = key
-		input.Vecs[1] = testutil.MakeInt64Vector([]int64{setID}, nil, proc.Mp())
-		input.Vecs[2] = testutil.MakeInt32Vector([]int32{value}, nil, proc.Mp())
+		input.Vecs[1] = testutil.MakeInt32Vector([]int32{value}, nil, proc.Mp())
+		input.Vecs[2] = testutil.MakeBoolVector([]bool{false}, nil, proc.Mp())
+		input.Vecs[3] = testutil.MakeInt64Vector([]int64{setID}, nil, proc.Mp())
 		input.SetRowCount(1)
 
 		child := colexec.NewMockOperator().WithBatchs([]*batch.Batch{input})
 		partialGroup := newGroupOp(proc, []*plan.Expr{
-			colExpr(0, types.T_varchar), colExpr(1, types.T_int64),
-		}, []aggexec.AggFuncExecExpression{sumAgg(2)})
+			colExpr(0, types.T_varchar), colExpr(3, types.T_int64),
+		}, []aggexec.AggFuncExecExpression{sumAgg(1)})
 		partialGroup.NeedEval = false
 		partialGroup.DynamicGrouping = true
 		partialGroup.AppendChild(child)

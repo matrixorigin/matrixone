@@ -196,6 +196,11 @@ func (builder *QueryBuilder) shareGroupingSetInput(nodes []int32, contexts []*Bi
 			inputProject = append(inputProject, DeepCopyExpr(arg))
 		}
 	}
+	// The penultimate column is an execution-only marker. Normal expanded rows
+	// carry false; on runtime-empty input the projection emits one true row for
+	// each empty grouping set. Group inserts that row's key but skips aggregate
+	// filling, preserving COUNT(*) = 0 and NULL aggregate states.
+	inputProject = append(inputProject, MakePlan2BoolConstExprWithType(false))
 	setIDPos := int32(len(inputProject))
 	inputProject = append(inputProject, MakePlan2Int64ConstExprWithType(0))
 	flattenedFlags := make([]bool, 0, len(branches)*groupCount)
