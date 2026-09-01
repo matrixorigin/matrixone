@@ -1660,12 +1660,42 @@ func TestStaleGenerationCannotAcknowledgeDDLFrontierPublication(t *testing.T) {
 	oldIncarnation := &service{
 		cfg: &Config{UUID: producerID}, _hakeeperClient: client,
 		ddlCommitGate: frontend.NewDDLCommitGate(), config: util.NewConfigData(nil),
-		viewMetadataAdmissionGeneration: 1,
+		viewMetadataAdmissionGeneration: 1, logger: zap.NewNop(),
 	}
+	runner := &blockedStopTaskRunner{
+		testRunner: &testRunner{}, stopEntered: make(chan struct{}),
+		releaseStop: make(chan struct{}), stopDone: make(chan struct{}),
+	}
+	oldIncarnation.task.runner = runner
+	oldIncarnation.task.runnerReady.Store(true)
 	oldIncarnation.ddlCommitGate.SetFrontierPublisher(oldIncarnation.publishDDLCommitFrontier)
 
-	err := oldIncarnation.ddlCommitGate.PublishDDLFrontier(context.Background(), commitFrontier)
+	// Model the stale publication running inside the TaskRunner SQL task. The
+	// rejection must return before asynchronous runner.Stop can observe this task
+	// exit; otherwise each side waits permanently for the other.
+	publishDone := make(chan error, 1)
+	go func() {
+		publishDone <- oldIncarnation.ddlCommitGate.PublishDDLFrontier(
+			context.Background(), commitFrontier)
+	}()
+	var err error
+	select {
+	case err = <-publishDone:
+	case <-time.After(time.Second):
+		t.Fatal("generation rejection self-waited on its own TaskRunner SQL task")
+	}
 	require.ErrorContains(t, err, "generation 1 rejected by authoritative generation 2")
+	select {
+	case <-runner.stopEntered:
+	case <-time.After(time.Second):
+		t.Fatal("asynchronous revocation did not begin TaskRunner drain")
+	}
+	close(runner.releaseStop)
+	select {
+	case <-runner.stopDone:
+	case <-time.After(time.Second):
+		t.Fatal("TaskRunner drain did not finish after the rejected SQL task exited")
+	}
 	require.True(t, oldIncarnation.viewMetadataGenerationRevoked.Load())
 	require.Equal(t, oldFrontier, cluster.globalFrontier,
 		"stale generation heartbeat must not advance the durable frontier")

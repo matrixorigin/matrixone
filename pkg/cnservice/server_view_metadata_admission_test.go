@@ -66,12 +66,15 @@ type blockedStopTaskRunner struct {
 	*testRunner
 	stopEntered chan struct{}
 	releaseStop chan struct{}
+	stopDone    chan struct{}
 }
 
 func (r *blockedStopTaskRunner) Stop() error {
 	close(r.stopEntered)
 	<-r.releaseStop
-	return r.testRunner.Stop()
+	err := r.testRunner.Stop()
+	close(r.stopDone)
+	return err
 }
 
 type admissionCNHAKeeperClient struct {
@@ -203,9 +206,7 @@ func TestCNViewMetadataAdmissionRevokesIngressForHigherGeneration(t *testing.T) 
 	require.False(t, s.viewMetadataIngressReady.Load())
 	require.False(t, s.task.runnerReady.Load(),
 		"generation revocation must synchronously withdraw task-runner eligibility")
-	require.Equal(t, 1, runner.stopped,
-		"generation revocation must synchronously stop the running task runner")
-	require.Nil(t, s.GetTaskRunner(), "the stopped task runner must be detached")
+	require.Nil(t, s.GetTaskRunner(), "the revoked task runner must be synchronously detached")
 	select {
 	case <-pipelineCtx.Done():
 	default:
@@ -216,6 +217,8 @@ func TestCNViewMetadataAdmissionRevokesIngressForHigherGeneration(t *testing.T) 
 	case <-time.After(time.Second):
 		t.Fatal("superseded CN did not request full service closure")
 	}
+	require.Equal(t, 1, runner.stopped,
+		"asynchronous generation drain must stop the detached task runner")
 	select {
 	case <-mo.stopped:
 	default:
@@ -236,6 +239,7 @@ func TestCNGenerationRevocationStopsFrontendBeforeTaskRunnerDrain(t *testing.T) 
 		testRunner:  &testRunner{},
 		stopEntered: make(chan struct{}),
 		releaseStop: make(chan struct{}),
+		stopDone:    make(chan struct{}),
 	}
 	s := &service{
 		cfg:                             &Config{UUID: "task-runner-blocked-stop"},
@@ -264,14 +268,15 @@ func TestCNGenerationRevocationStopsFrontendBeforeTaskRunnerDrain(t *testing.T) 
 	}
 	select {
 	case <-revokeDone:
-		t.Fatal("generation revocation returned before the task runner stopped")
-	default:
+		// The synchronous seal must not inherit TaskRunner.Stop's wait graph.
+	case <-time.After(time.Second):
+		t.Fatal("generation revocation seal waited for the task runner")
 	}
 	close(runner.releaseStop)
 	select {
-	case <-revokeDone:
+	case <-runner.stopDone:
 	case <-time.After(time.Second):
-		t.Fatal("generation revocation did not finish after the task runner stopped")
+		t.Fatal("asynchronous task runner drain did not finish")
 	}
 	require.Equal(t, 1, runner.stopped)
 	require.Nil(t, s.GetTaskRunner())
@@ -303,9 +308,8 @@ func TestCNGenerationRevocationStopsTaskRunnerStartInFlight(t *testing.T) {
 	select {
 	case <-revokeDone:
 	case <-time.After(time.Second):
-		t.Fatal("generation revocation did not finish stopping the in-flight task runner")
+		t.Fatal("generation revocation did not finish sealing the in-flight task runner")
 	}
-	require.Equal(t, 1, runner.stopped)
 	require.False(t, s.task.runnerReady.Load())
 	require.Nil(t, s.GetTaskRunner())
 }
@@ -352,7 +356,7 @@ func TestCNGenerationRevocationCancelsIngressStart(t *testing.T) {
 	require.False(t, s.task.runnerReady.Load())
 	select {
 	case <-mo.stopped:
-	default:
+	case <-time.After(time.Second):
 		t.Fatal("revocation did not stop frontend after the in-flight Start completed")
 	}
 	select {

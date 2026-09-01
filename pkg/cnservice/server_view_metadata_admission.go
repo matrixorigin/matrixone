@@ -24,6 +24,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	logservicepb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 	"github.com/matrixorigin/matrixone/pkg/sql/compile"
+	"github.com/matrixorigin/matrixone/pkg/taskservice"
 )
 
 const viewMetadataAdmissionGenerationKey = "view-metadata-admission-generation"
@@ -114,9 +115,10 @@ func (s *service) applyViewMetadataAdmission(
 }
 
 // revokeViewMetadataGeneration fences a process that no longer owns its UUID.
-// The gates are closed synchronously so scheduling an asynchronous full Close
-// cannot leave a window for new SQL, QueryService, or pipeline work. Full Close
-// runs outside the heartbeat stopper task to avoid waiting for itself.
+// The admission seal is synchronous, but every potentially waiting drain runs
+// asynchronously. In particular, a SQL task can discover its own stale
+// generation while publishing a DDL frontier; waiting for TaskRunner.Stop on
+// that stack would make the runner wait for the task that is doing the stop.
 func (s *service) revokeViewMetadataGeneration(authoritative uint64) {
 	s.viewMetadataRevocationOnce.Do(func() {
 		s.viewMetadataGenerationRevoked.Store(true)
@@ -125,33 +127,40 @@ func (s *service) revokeViewMetadataGeneration(authoritative uint64) {
 		_ = s.closePipelineAdmission()
 		s.queryWork.beginClose()
 		runner := s.detachRevokedTaskRunner()
-		// Serialize physical frontend shutdown with MOServer.Start before waiting
-		// for task executors, whose Stop may block indefinitely. Do not wait for
-		// the broader lifecycleMu held by the complete Start sequence.
-		if s.mo != nil {
-			if err := s.stopFrontendSerialized(); err != nil && s.logger != nil {
-				s.logger.Error("failed to stop superseded CN frontend",
-					zap.Uint64("local-generation", s.viewMetadataAdmissionGeneration),
-					zap.Uint64("authoritative-generation", authoritative),
-					zap.Error(err))
-			}
-		}
-		s.stopRevokedTaskRunner(runner)
-		if s.stopper != nil || s.viewMetadataCloseFn != nil {
-			closeFn := s.Close
-			if s.viewMetadataCloseFn != nil {
-				closeFn = s.viewMetadataCloseFn
-			}
-			go func() {
-				if err := closeFn(); err != nil && s.logger != nil {
-					s.logger.Error("failed to close superseded CN",
-						zap.Uint64("local-generation", s.viewMetadataAdmissionGeneration),
-						zap.Uint64("authoritative-generation", authoritative),
-						zap.Error(err))
-				}
-			}()
-		}
+
+		go s.drainRevokedViewMetadataGeneration(authoritative, runner)
 	})
+}
+
+func (s *service) drainRevokedViewMetadataGeneration(
+	authoritative uint64,
+	runner taskservice.TaskRunner,
+) {
+	// Serialize physical frontend shutdown with MOServer.Start before waiting
+	// for task executors. The goroutine is independent of the rejected SQL task,
+	// allowing that task to return and satisfy TaskRunner.Stop's wait.
+	if s.mo != nil {
+		if err := s.stopFrontendSerialized(); err != nil && s.logger != nil {
+			s.logger.Error("failed to stop superseded CN frontend",
+				zap.Uint64("local-generation", s.viewMetadataAdmissionGeneration),
+				zap.Uint64("authoritative-generation", authoritative),
+				zap.Error(err))
+		}
+	}
+	s.stopRevokedTaskRunner(runner)
+	if s.stopper == nil && s.viewMetadataCloseFn == nil {
+		return
+	}
+	closeFn := s.Close
+	if s.viewMetadataCloseFn != nil {
+		closeFn = s.viewMetadataCloseFn
+	}
+	if err := closeFn(); err != nil && s.logger != nil {
+		s.logger.Error("failed to close superseded CN",
+			zap.Uint64("local-generation", s.viewMetadataAdmissionGeneration),
+			zap.Uint64("authoritative-generation", authoritative),
+			zap.Error(err))
+	}
 }
 
 func (s *service) fenceViewMetadataCatalog(

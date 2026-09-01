@@ -75,3 +75,9 @@
 1. 同步 frontier heartbeat 必须验证 `CommandBatch.ViewMetadataAdmission.Generation` 与本地 incarnation generation 完全一致。
 2. HAKeeper 返回更高 authoritative generation 时立即 revoke 旧 incarnation 并向 frontend 返回错误，禁止继续 fan-out/成功确认。
 3. 增加 generation N commit → N+1 takeover → N publication rejected → N crash → restart 仅同步旧 durable frontier 的确定性回归，并运行 owning package/race/vet。
+
+## 2026-09-01：generation revocation TaskRunner self-wait
+
+1. 将 revocation 拆为同步不可逆 admission seal 与异步 frontend/TaskRunner/full-service drain。
+2. 同步 frontier rejection 只等待 seal，不得等待可能包含当前 SQL DDL 调用栈的 TaskRunner.Stop。
+3. 增加 TaskRunner SQL DDL 自身发现 stale generation、rejection 先返回、task 退出后异步 Stop 才完成的确定性 Q2 回归，并运行 race/vet。
