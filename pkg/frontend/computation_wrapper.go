@@ -522,7 +522,7 @@ func (cwft *TxnComputationWrapper) Compile(any any, fill func(*batch.Batch, *per
 			cwft.ses.SetShowStmtType(ShowTableStatus)
 			cwft.ses.SetData(nil)
 		case *tree.SetVar, *tree.ShowVariables, *tree.ShowErrors, *tree.ShowWarnings,
-			*tree.CreateAccount, *tree.AlterAccount, *tree.DropAccount:
+			*tree.CreateAccount, *tree.AlterAccount, *tree.DropAccount, *tree.AnalyzeStmt:
 			return nil, nil
 		}
 

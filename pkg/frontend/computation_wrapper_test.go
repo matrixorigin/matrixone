@@ -2003,6 +2003,22 @@ func TestPreparedSetExpressionParamsAfterInit(t *testing.T) {
 	require.ErrorContains(t, err, "exceeds DECIMAL(76)")
 }
 
+func TestPreparedAnalyzeSkipsEngineCompile(t *testing.T) {
+	_, prepareStmt, cw, execCtx := newPreparedExecuteEnvForSQL(t, 109, "select 1")
+	defer prepareStmt.Close()
+
+	prepareStmt.PrepareStmt.Free()
+	prepareStmt.PrepareStmt = tree.NewAnalyzeStmt(nil)
+	innerPlan := &plan.Plan{IsPrepare: true}
+	prepareStmt.PreparePlan.GetDcl().GetPrepare().Plan = innerPlan
+	cw.plan = innerPlan
+
+	compiled, err := cw.Compile(execCtx, nil)
+	require.NoError(t, err)
+	require.Nil(t, compiled)
+	require.Nil(t, cw.compile)
+}
+
 func TestInitExecuteStmtParamFreesParamsOnResolveError(t *testing.T) {
 	ses, prepareStmt, cw, _ := newPreparedExecuteEnvForSQL(t, 103, "select ?, ?")
 	defer prepareStmt.Close()
