@@ -20,6 +20,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 
@@ -214,7 +215,7 @@ var (
 		"created_at=?," +
 		"updated_at=? where task_id=?"
 
-	deleteSQLTask = "delete from sql_task where 1=1"
+	selectSQLTaskIDForUpdate = "select task_id from sql_task where 1=1"
 
 	sqlTaskRunSelectColumns = "" +
 		"run_id," +
@@ -718,9 +719,43 @@ func (m *mysqlTaskStorage) AddSQLTask(ctx context.Context, tasks ...SQLTask) (in
 	if taskFrameworkDisabled() {
 		return 0, nil
 	}
+	if len(tasks) == 0 {
+		return 0, nil
+	}
+
+	tx, err := m.db.BeginTx(ctx, nil)
+	if err != nil {
+		return 0, err
+	}
+	defer func() {
+		_ = tx.Rollback()
+	}()
+
+	accountSet := make(map[uint32]struct{})
+	for _, sqlTask := range tasks {
+		accountSet[sqlTask.AccountID] = struct{}{}
+	}
+	accountIDs := make([]uint32, 0, len(accountSet))
+	for accountID := range accountSet {
+		accountIDs = append(accountIDs, accountID)
+	}
+	slices.Sort(accountIDs)
+	for _, accountID := range accountIDs {
+		var persistedAccountID uint32
+		if err := tx.QueryRowContext(ctx,
+			"select account_id from mo_catalog.mo_account where account_id=? for update",
+			accountID,
+		).Scan(&persistedAccountID); err != nil {
+			if errors.Is(err, sql.ErrNoRows) {
+				return 0, ErrSQLTaskAccountMissing
+			}
+			return 0, err
+		}
+	}
+
 	n := 0
 	for _, t := range tasks {
-		exec, err := m.db.ExecContext(ctx, insertSQLTask,
+		exec, err := tx.ExecContext(ctx, insertSQLTask,
 			t.TaskName,
 			t.AccountID,
 			t.DatabaseName,
@@ -744,13 +779,16 @@ func (m *mysqlTaskStorage) AddSQLTask(ctx context.Context, tasks ...SQLTask) (in
 			if errors.As(err, &me) && me.Number == moerr.ER_DUP_ENTRY {
 				continue
 			}
-			return n, err
+			return 0, err
 		}
 		affected, err := exec.RowsAffected()
 		if err != nil {
-			return n, err
+			return 0, err
 		}
 		n += int(affected)
+	}
+	if err := tx.Commit(); err != nil {
+		return 0, err
 	}
 	return n, nil
 }
@@ -798,15 +836,73 @@ func (m *mysqlTaskStorage) DeleteSQLTask(ctx context.Context, conds ...Condition
 	if taskFrameworkDisabled() {
 		return 0, nil
 	}
-	exec, err := m.db.ExecContext(ctx, deleteSQLTask+buildSQLTaskWhereClause(newConditions(conds...)))
+
+	tx, err := m.db.BeginTx(ctx, nil)
 	if err != nil {
 		return 0, err
 	}
-	affected, err := exec.RowsAffected()
+	defer func() {
+		_ = tx.Rollback()
+	}()
+
+	where := buildSQLTaskWhereClause(newConditions(conds...))
+	rows, err := tx.QueryContext(ctx, selectSQLTaskIDForUpdate+where+" order by task_id for update")
 	if err != nil {
 		return 0, err
 	}
-	return int(affected), nil
+	defer func() {
+		_ = rows.Close()
+	}()
+	taskIDs := make([]uint64, 0)
+	for rows.Next() {
+		var taskID uint64
+		if err := rows.Scan(&taskID); err != nil {
+			return 0, err
+		}
+		taskIDs = append(taskIDs, taskID)
+	}
+	if err := rows.Err(); err != nil {
+		return 0, err
+	}
+	if err := rows.Close(); err != nil {
+		return 0, err
+	}
+
+	if len(taskIDs) > 0 {
+		placeholders := strings.TrimSuffix(strings.Repeat("?,", len(taskIDs)), ",")
+		parentArgs := make([]any, len(taskIDs))
+		taskArgs := make([]any, len(taskIDs))
+		for i, taskID := range taskIDs {
+			parentArgs[i] = fmt.Sprintf("sql-task:%d", taskID)
+			taskArgs[i] = taskID
+		}
+		if _, err := tx.ExecContext(ctx,
+			"delete from sys_async_task where task_parent_id in ("+placeholders+")",
+			parentArgs...,
+		); err != nil {
+			return 0, err
+		}
+		exec, err := tx.ExecContext(ctx,
+			"delete from sql_task where task_id in ("+placeholders+")",
+			taskArgs...,
+		)
+		if err != nil {
+			return 0, err
+		}
+		deleted, err := exec.RowsAffected()
+		if err != nil {
+			return 0, err
+		}
+		if err := tx.Commit(); err != nil {
+			return 0, err
+		}
+		return int(deleted), nil
+	}
+
+	if err := tx.Commit(); err != nil {
+		return 0, err
+	}
+	return 0, nil
 }
 
 func (m *mysqlTaskStorage) QuerySQLTask(ctx context.Context, conds ...Condition) ([]SQLTask, error) {
