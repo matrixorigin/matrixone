@@ -18,6 +18,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -68,6 +69,7 @@ func TestIssue27088PreparedDecimalCommonType(t *testing.T) {
 		assertIDs := func(t *testing.T, rows *sql.Rows, queryErr error, want ...int) {
 			t.Helper()
 			require.NoError(t, queryErr)
+			defer rows.Close()
 			var got []int
 			for rows.Next() {
 				var id int
@@ -77,6 +79,66 @@ func TestIssue27088PreparedDecimalCommonType(t *testing.T) {
 			require.NoError(t, rows.Err())
 			require.Equal(t, want, got)
 		}
+
+		mustExec(t, ctx, conn, `create table prepared_exact_integer_cmp (
+			id int primary key,
+			u bigint unsigned,
+			b bit(64)
+		)`)
+		mustExec(t, ctx, conn, `insert into prepared_exact_integer_cmp values
+			(1, 9007199254740992, 9007199254740992),
+			(2, 9007199254740993, 9007199254740993),
+			(3, 9007199254740994, 9007199254740994)`)
+
+		t.Run("issue 27492 COM_STMT exact integer comparison", func(t *testing.T) {
+			for _, column := range []string{"u", "b"} {
+				t.Run(column, func(t *testing.T) {
+					stmt, prepareErr := conn.PrepareContext(ctx, fmt.Sprintf(
+						"select id from prepared_exact_integer_cmp where %s = ? order by id", column))
+					require.NoError(t, prepareErr)
+					defer stmt.Close()
+
+					queryAndAssert := func(value any, want ...int) {
+						rows, queryErr := stmt.QueryContext(ctx, value)
+						require.NoError(t, queryErr)
+						defer rows.Close()
+						assertIDs(t, rows, nil, want...)
+						require.NoError(t, rows.Err())
+					}
+					queryAndAssert("9007199254740993", 2)
+					queryAndAssert(uint64(9007199254740993), 2)
+					queryAndAssert(nil)
+					queryAndAssert("9007199254740993", 2)
+				})
+			}
+		})
+
+		t.Run("issue 27492 SQL PREPARE exact integer comparison", func(t *testing.T) {
+			for _, column := range []string{"u", "b"} {
+				statementName := "issue27492_sql_" + column
+				mustExec(t, ctx, conn, fmt.Sprintf(
+					"prepare %s from 'select id from prepared_exact_integer_cmp where %s = ? order by id'",
+					statementName, column))
+				defer func() {
+					_, _ = conn.ExecContext(context.Background(), "deallocate prepare "+statementName)
+				}()
+				querySQLAndAssert := func(want ...int) {
+					rows, queryErr := conn.QueryContext(ctx,
+						"execute "+statementName+" using @issue27492_value")
+					require.NoError(t, queryErr)
+					defer rows.Close()
+					assertIDs(t, rows, nil, want...)
+					require.NoError(t, rows.Err())
+				}
+
+				mustExec(t, ctx, conn, "set @issue27492_value = '9007199254740993'")
+				querySQLAndAssert(2)
+				mustExec(t, ctx, conn, "set @issue27492_value = null")
+				querySQLAndAssert()
+				mustExec(t, ctx, conn, "set @issue27492_value = '9007199254740993'")
+				querySQLAndAssert(2)
+			}
+		})
 
 		t.Run("COM_STMT exact comparison and list", func(t *testing.T) {
 			equality, prepareErr := conn.PrepareContext(ctx,
@@ -337,6 +399,93 @@ func TestIssue27088PreparedDecimalCommonType(t *testing.T) {
 				ctx, "select @issue27088_direct_date, @issue27088_subquery_date").Scan(&direct, &subquery))
 			require.Equal(t, "2024-01-03", direct)
 			require.Equal(t, direct, subquery)
+		})
+
+		t.Run("SQL EXECUTE preserves numeric result consumer domains across reuse", func(t *testing.T) {
+			readResult := func(query string) (string, string) {
+				rows, queryErr := conn.QueryContext(ctx, query)
+				require.NoError(t, queryErr)
+				defer rows.Close()
+				columnTypes, typeErr := rows.ColumnTypes()
+				require.NoError(t, typeErr)
+				require.Len(t, columnTypes, 1)
+				require.True(t, rows.Next())
+				var value string
+				require.NoError(t, rows.Scan(&value))
+				require.NoError(t, rows.Err())
+				return value, columnTypes[0].DatabaseTypeName()
+			}
+			for i, test := range []struct {
+				expression   string
+				expectedType string
+			}{
+				{expression: "case when 1 = 1 then ? else 1 end", expectedType: "DECIMAL"},
+				{expression: "if(1 = 1, ?, 1)", expectedType: "DECIMAL"},
+				{expression: "iff(1 = 1, ?, 1)", expectedType: "DECIMAL"},
+				{expression: "coalesce(?, 1)", expectedType: "DECIMAL"},
+				{expression: "ifnull(?, 1)", expectedType: "DECIMAL"},
+				{expression: "nullif(?, 1)", expectedType: "DECIMAL"},
+				{expression: "sum(?)", expectedType: "DECIMAL"},
+				{expression: "avg(?)", expectedType: "DECIMAL"},
+				{expression: "greatest(?, 1)", expectedType: "DECIMAL"},
+				{expression: "least(?, 1)", expectedType: "DECIMAL"},
+				{expression: "min(?)", expectedType: "DECIMAL"},
+				{expression: "max(?)", expectedType: "DECIMAL"},
+				{expression: "any_value(?)", expectedType: "DECIMAL"},
+				{expression: "first_value(?) over ()", expectedType: "DECIMAL"},
+				{expression: "last_value(?) over ()", expectedType: "DECIMAL"},
+				{expression: "lag(?, 0) over ()", expectedType: "DECIMAL"},
+				{expression: "lead(?, 0) over ()", expectedType: "DECIMAL"},
+				{expression: "nth_value(?, 1) over ()", expectedType: "DECIMAL"},
+				{expression: "case when 1 = 1 then ? else cast(1 as decimal(38,10)) end", expectedType: "DECIMAL"},
+				{expression: "if(1 = 1, ?, cast(1 as decimal(38,10)))", expectedType: "DECIMAL"},
+				{expression: "coalesce(?, cast(1 as decimal(38,10)))", expectedType: "DECIMAL"},
+				{expression: "ifnull(?, cast(1 as decimal(38,10)))", expectedType: "DECIMAL"},
+				{expression: "case when 1 = 1 then cast(? as double) else 1 end", expectedType: "DOUBLE"},
+				{expression: "if(1 = 1, cast(? as double), 1)", expectedType: "DOUBLE"},
+				{expression: "ifnull(cast(? as double), 1)", expectedType: "DOUBLE"},
+				{expression: "nullif(cast(? as double), 1)", expectedType: "DOUBLE"},
+			} {
+				statement := fmt.Sprintf("issue27088_numeric_result_%d", i)
+				directExpression := strings.Replace(test.expression, "?", "@issue27088_numeric_result", 1)
+				mustExec(t, ctx, conn, fmt.Sprintf("prepare %s from 'select %s'", statement, test.expression))
+				for _, value := range []string{"9007199254740993.5", "9007199254740994.5"} {
+					mustExec(t, ctx, conn, fmt.Sprintf(
+						"set @issue27088_numeric_result = cast(%s as decimal(17,1))", value))
+					directValue, directType := readResult("select " + directExpression)
+					preparedValue, preparedType := readResult("execute " + statement + " using @issue27088_numeric_result")
+					require.Equal(t, directValue, preparedValue, test.expression)
+					require.Equal(t, directType, preparedType, test.expression)
+					require.Equal(t, test.expectedType, preparedType, test.expression)
+				}
+				mustExec(t, ctx, conn, "deallocate prepare "+statement)
+			}
+
+			mustExec(t, ctx, conn, `prepare issue27088_nullif_string_result from
+				'select nullif(?, cast(1 as decimal(38,10)))'`)
+			mustExec(t, ctx, conn, "set @issue27088_numeric_result = '12.5tail'")
+			directValue, directType := readResult(
+				"select nullif(@issue27088_numeric_result, cast(1 as decimal(38,10)))")
+			preparedValue, preparedType := readResult(
+				"execute issue27088_nullif_string_result using @issue27088_numeric_result")
+			require.Equal(t, "12.5tail", directValue)
+			require.Equal(t, directValue, preparedValue)
+			require.Equal(t, "VARCHAR", directType)
+			require.Equal(t, directType, preparedType)
+			mustExec(t, ctx, conn, "deallocate prepare issue27088_nullif_string_result")
+
+			mustExec(t, ctx, conn, `prepare issue27088_nullif_binary_result from
+				'select nullif(?, cast(1 as decimal(38,10)))'`)
+			mustExec(t, ctx, conn, "set @issue27088_numeric_result = x'31322e357461696c'")
+			directValue, directType = readResult(
+				"select nullif(@issue27088_numeric_result, cast(1 as decimal(38,10)))")
+			preparedValue, preparedType = readResult(
+				"execute issue27088_nullif_binary_result using @issue27088_numeric_result")
+			require.Equal(t, "12.5tail", directValue)
+			require.Equal(t, directValue, preparedValue)
+			require.Equal(t, "VARBINARY", directType)
+			require.Equal(t, directType, preparedType)
+			mustExec(t, ctx, conn, "deallocate prepare issue27088_nullif_binary_result")
 		})
 
 		t.Run("SQL EXECUTE SET specializes consumer inside subquery", func(t *testing.T) {

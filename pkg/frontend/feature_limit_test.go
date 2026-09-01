@@ -21,19 +21,37 @@ import (
 	"testing"
 	"time"
 
+	"github.com/golang/mock/gomock"
 	"github.com/stretchr/testify/require"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/defines"
+	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
+	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
+	pbtxn "github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/txn/clock"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 )
+
+type featureLimitBarrierEngine struct {
+	engine.Engine
+	acquire func(context.Context) (timestamp.Timestamp, error)
+}
+
+func (e *featureLimitBarrierEngine) AcquireLogtailReadBarrier(
+	ctx context.Context,
+) (timestamp.Timestamp, error) {
+	return e.acquire(ctx)
+}
 
 func newFeatureLimitTestSession(t *testing.T) *Session {
 	t.Helper()
@@ -50,6 +68,185 @@ func newFeatureLimitTestSession(t *testing.T) *Session {
 		feSessionImpl: feSessionImpl{service: service},
 		proc:          proc,
 	}
+}
+
+func TestAdvanceFeatureLimitTxnSnapshotUsesTNOrderedBarrier(t *testing.T) {
+	ses := newFeatureLimitTestSession(t)
+	rt := moruntime.NewRuntime(metadata.ServiceType_CN, ses.GetService(), nil)
+	moruntime.SetupServiceBasedRuntime(ses.GetService(), rt)
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion39)
+
+	frontier := timestamp.Timestamp{PhysicalTime: 80, LogicalTime: 9}
+	setPu(ses.GetService(), &config.ParameterUnit{
+		StorageEngine: &featureLimitBarrierEngine{acquire: func(context.Context) (
+			timestamp.Timestamp, error,
+		) {
+			return frontier, nil
+		}},
+	})
+
+	ctrl := gomock.NewController(t)
+	workspace := mock_frontend.NewMockWorkspace(ctrl)
+	workspace.EXPECT().AdvanceSnapshot(gomock.Any(), frontier).Return(nil)
+	txnOp := mock_frontend.NewMockTxnOperator(ctrl)
+	txnOp.EXPECT().GetWorkspace().Return(workspace)
+
+	require.NoError(t, advanceFeatureLimitTxnSnapshot(t.Context(), ses, txnOp))
+}
+
+func TestFeatureLimitTxnUsesIndependentSnapshotForSI(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	txnOp := mock_frontend.NewMockTxnOperator(ctrl)
+	txnHandler := &TxnHandler{}
+	txnHandler.SetShareTxn(txnOp)
+	bh := &backExec{backSes: &backSession{
+		feSessionImpl: feSessionImpl{txnHandler: txnHandler},
+	}}
+
+	txnOp.EXPECT().Txn().Return(pbtxn.TxnMeta{Isolation: pbtxn.TxnIsolation_SI})
+	require.True(t, featureLimitTxnUsesFixedSnapshot(bh))
+	txnOp.EXPECT().Txn().Return(pbtxn.TxnMeta{Isolation: pbtxn.TxnIsolation_RC})
+	require.False(t, featureLimitTxnUsesFixedSnapshot(bh))
+	require.False(t, featureLimitTxnUsesFixedSnapshot(&backgroundExecTest{}))
+	require.False(t, featureLimitTxnUsesFixedSnapshot((*backExec)(nil)))
+}
+
+func TestAdvanceFeatureLimitTxnSnapshotUsesRollingUpgradeFence(t *testing.T) {
+	ses := newFeatureLimitTestSession(t)
+	rt := moruntime.NewRuntime(
+		metadata.ServiceType_CN,
+		ses.GetService(),
+		nil,
+		moruntime.WithClock(clock.NewHLCClock(func() int64 { return 100 }, 20*time.Nanosecond)),
+	)
+	moruntime.SetupServiceBasedRuntime(ses.GetService(), rt)
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion38)
+
+	minimum := timestamp.Timestamp{PhysicalTime: 121}
+	applied := timestamp.Timestamp{PhysicalTime: 125, LogicalTime: 3}
+	ctrl := gomock.NewController(t)
+	txnClient := mock_frontend.NewMockTxnClient(ctrl)
+	txnClient.EXPECT().WaitLogTailAppliedAt(gomock.Any(), minimum).Return(applied, nil)
+	setPu(ses.GetService(), &config.ParameterUnit{TxnClient: txnClient})
+	workspace := mock_frontend.NewMockWorkspace(ctrl)
+	workspace.EXPECT().AdvanceSnapshot(gomock.Any(), applied).Return(nil)
+	txnOp := mock_frontend.NewMockTxnOperator(ctrl)
+	txnOp.EXPECT().GetWorkspace().Return(workspace)
+
+	require.NoError(t, advanceFeatureLimitTxnSnapshot(t.Context(), ses, txnOp))
+}
+
+func TestAdvanceFeatureLimitTxnSnapshotFailsClosed(t *testing.T) {
+	t.Run("missing transaction handler", func(t *testing.T) {
+		ses := newFeatureLimitTestSession(t)
+		require.ErrorContains(t,
+			advanceFeatureLimitSnapshot(t.Context(), ses, (*backExec)(nil)),
+			"missing transaction handler",
+		)
+	})
+
+	t.Run("missing transaction", func(t *testing.T) {
+		ses := newFeatureLimitTestSession(t)
+		require.ErrorContains(t,
+			advanceFeatureLimitTxnSnapshot(t.Context(), ses, nil),
+			"missing transaction",
+		)
+	})
+
+	t.Run("missing workspace", func(t *testing.T) {
+		ses := newFeatureLimitTestSession(t)
+		rt := moruntime.NewRuntime(metadata.ServiceType_CN, ses.GetService(), nil)
+		moruntime.SetupServiceBasedRuntime(ses.GetService(), rt)
+		rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion39)
+		frontier := timestamp.Timestamp{PhysicalTime: 80}
+		setPu(ses.GetService(), &config.ParameterUnit{
+			StorageEngine: &featureLimitBarrierEngine{acquire: func(context.Context) (
+				timestamp.Timestamp, error,
+			) {
+				return frontier, nil
+			}},
+		})
+		ctrl := gomock.NewController(t)
+		txnOp := mock_frontend.NewMockTxnOperator(ctrl)
+		txnOp.EXPECT().GetWorkspace().Return(nil)
+
+		require.ErrorContains(t,
+			advanceFeatureLimitTxnSnapshot(t.Context(), ses, txnOp),
+			"missing workspace",
+		)
+	})
+
+	t.Run("barrier failure", func(t *testing.T) {
+		ses := newFeatureLimitTestSession(t)
+		rt := moruntime.NewRuntime(metadata.ServiceType_CN, ses.GetService(), nil)
+		moruntime.SetupServiceBasedRuntime(ses.GetService(), rt)
+		rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion39)
+		wantErr := moerr.NewInternalErrorNoCtx("barrier unavailable")
+		setPu(ses.GetService(), &config.ParameterUnit{
+			StorageEngine: &featureLimitBarrierEngine{acquire: func(context.Context) (
+				timestamp.Timestamp, error,
+			) {
+				return timestamp.Timestamp{}, wantErr
+			}},
+		})
+		ctrl := gomock.NewController(t)
+		txnOp := mock_frontend.NewMockTxnOperator(ctrl)
+
+		require.ErrorIs(t,
+			advanceFeatureLimitTxnSnapshot(t.Context(), ses, txnOp),
+			wantErr,
+		)
+	})
+
+	t.Run("legacy waiter below fence", func(t *testing.T) {
+		ses := newFeatureLimitTestSession(t)
+		rt := moruntime.NewRuntime(
+			metadata.ServiceType_CN,
+			ses.GetService(),
+			nil,
+			moruntime.WithClock(clock.NewHLCClock(func() int64 { return 100 }, 20*time.Nanosecond)),
+		)
+		moruntime.SetupServiceBasedRuntime(ses.GetService(), rt)
+		rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion38)
+		ctrl := gomock.NewController(t)
+		txnClient := mock_frontend.NewMockTxnClient(ctrl)
+		txnClient.EXPECT().WaitLogTailAppliedAt(
+			gomock.Any(), timestamp.Timestamp{PhysicalTime: 121},
+		).Return(timestamp.Timestamp{PhysicalTime: 120}, nil)
+		setPu(ses.GetService(), &config.ParameterUnit{TxnClient: txnClient})
+		txnOp := mock_frontend.NewMockTxnOperator(ctrl)
+
+		require.ErrorContains(t,
+			advanceFeatureLimitTxnSnapshot(t.Context(), ses, txnOp),
+			"did not reach the required timestamp",
+		)
+	})
+
+	t.Run("workspace failure", func(t *testing.T) {
+		ses := newFeatureLimitTestSession(t)
+		rt := moruntime.NewRuntime(metadata.ServiceType_CN, ses.GetService(), nil)
+		moruntime.SetupServiceBasedRuntime(ses.GetService(), rt)
+		rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion39)
+		frontier := timestamp.Timestamp{PhysicalTime: 80}
+		setPu(ses.GetService(), &config.ParameterUnit{
+			StorageEngine: &featureLimitBarrierEngine{acquire: func(context.Context) (
+				timestamp.Timestamp, error,
+			) {
+				return frontier, nil
+			}},
+		})
+		ctrl := gomock.NewController(t)
+		wantErr := moerr.NewInternalErrorNoCtx("advance failed")
+		workspace := mock_frontend.NewMockWorkspace(ctrl)
+		workspace.EXPECT().AdvanceSnapshot(gomock.Any(), frontier).Return(wantErr)
+		txnOp := mock_frontend.NewMockTxnOperator(ctrl)
+		txnOp.EXPECT().GetWorkspace().Return(workspace)
+
+		require.ErrorIs(t,
+			advanceFeatureLimitTxnSnapshot(t.Context(), ses, txnOp),
+			wantErr,
+		)
+	})
 }
 
 func TestCheckBranchQuotaLocksFiniteQuota(t *testing.T) {

@@ -23,12 +23,14 @@ import (
 )
 
 type cachedPlan struct {
-	sql             string
-	stmts           []tree.Statement
-	plans           []*plan.Plan
-	planSnapshotTS  []timestamp.Timestamp
-	protocolVersion int64
-	invalid         bool
+	sql               string
+	stmts             []tree.Statement
+	plans             []*plan.Plan
+	planSnapshotTS    []timestamp.Timestamp
+	protocolVersion   int64
+	statsVersions     map[optimizerStatsTableKey]uint64
+	planStatsVersions []map[optimizerStatsTableKey]uint64
+	invalid           bool
 }
 
 // planCache uses LRU to cache plan for the same sql
@@ -57,15 +59,17 @@ func freeStmts(stmts []tree.Statement) {
 func (pc *planCache) cache(sql string, stmts []tree.Statement, plans []*plan.Plan, versions ...int64) {
 	// Legacy internal callers get a conservative oldest-possible binding. The
 	// production cache path always supplies the actual generation snapshot.
-	pc.cacheWithPlanSnapshots(
-		sql, stmts, plans, make([]timestamp.Timestamp, len(plans)), versions...)
+	pc.cacheWithPlanSnapshotsAndStatsVersions(
+		sql, stmts, plans, make([]timestamp.Timestamp, len(plans)),
+		make([]map[optimizerStatsTableKey]uint64, len(plans)), versions...)
 }
 
-func (pc *planCache) cacheWithPlanSnapshots(
+func (pc *planCache) cacheWithPlanSnapshotsAndStatsVersions(
 	sql string,
 	stmts []tree.Statement,
 	plans []*plan.Plan,
 	planSnapshotTS []timestamp.Timestamp,
+	planStatsVersions []map[optimizerStatsTableKey]uint64,
 	versions ...int64,
 ) {
 	protocolVersion := currentProtocolVersion(nil)
@@ -76,7 +80,13 @@ func (pc *planCache) cacheWithPlanSnapshots(
 		pc.cachePool = make(map[string]*list.Element)
 		pc.lruList = list.New()
 	}
-	if len(stmts) != len(plans) || len(planSnapshotTS) != len(plans) {
+	if len(stmts) != len(plans) || len(planSnapshotTS) != len(plans) ||
+		len(planStatsVersions) != len(plans) {
+		freeStmts(stmts)
+		return
+	}
+	statsVersions, versionsConsistent := aggregatePlanStatsVersions(planStatsVersions)
+	if !versionsConsistent {
 		freeStmts(stmts)
 		return
 	}
@@ -90,21 +100,25 @@ func (pc *planCache) cacheWithPlanSnapshots(
 	if element, ok := pc.cachePool[sql]; ok {
 		freeStmts(element.Value.(*cachedPlan).stmts)
 		element.Value = &cachedPlan{
-			sql:             sql,
-			stmts:           stmts,
-			plans:           plans,
-			planSnapshotTS:  planSnapshotTS,
-			protocolVersion: protocolVersion,
+			sql:               sql,
+			stmts:             stmts,
+			plans:             plans,
+			planSnapshotTS:    planSnapshotTS,
+			protocolVersion:   protocolVersion,
+			statsVersions:     statsVersions,
+			planStatsVersions: clonePlanStatsVersions(planStatsVersions),
 		}
 		pc.lruList.MoveToFront(element)
 		return
 	}
 	element := pc.lruList.PushFront(&cachedPlan{
-		sql:             sql,
-		stmts:           stmts,
-		plans:           plans,
-		planSnapshotTS:  planSnapshotTS,
-		protocolVersion: protocolVersion,
+		sql:               sql,
+		stmts:             stmts,
+		plans:             plans,
+		planSnapshotTS:    planSnapshotTS,
+		protocolVersion:   protocolVersion,
+		statsVersions:     statsVersions,
+		planStatsVersions: clonePlanStatsVersions(planStatsVersions),
 	})
 	pc.cachePool[sql] = element
 	if pc.lruList.Len() > pc.capacity {
@@ -113,6 +127,66 @@ func (pc *planCache) cacheWithPlanSnapshots(
 		delete(pc.cachePool, toRemove.Value.(*cachedPlan).sql)
 		freeStmts(toRemove.Value.(*cachedPlan).stmts)
 	}
+}
+
+func cloneStatsVersions(versions map[optimizerStatsTableKey]uint64) map[optimizerStatsTableKey]uint64 {
+	if len(versions) == 0 {
+		return nil
+	}
+	cloned := make(map[optimizerStatsTableKey]uint64, len(versions))
+	for key, version := range versions {
+		cloned[key] = version
+	}
+	return cloned
+}
+
+func planStatsVersionsFromAggregate(
+	planCount int,
+	versions map[optimizerStatsTableKey]uint64,
+) []map[optimizerStatsTableKey]uint64 {
+	perPlan := make([]map[optimizerStatsTableKey]uint64, planCount)
+	if planCount > 0 {
+		perPlan[0] = versions
+	}
+	return perPlan
+}
+
+func clonePlanStatsVersions(
+	versions []map[optimizerStatsTableKey]uint64,
+) []map[optimizerStatsTableKey]uint64 {
+	cloned := make([]map[optimizerStatsTableKey]uint64, len(versions))
+	for i := range versions {
+		cloned[i] = cloneStatsVersions(versions[i])
+	}
+	return cloned
+}
+
+func aggregatePlanStatsVersions(
+	versions []map[optimizerStatsTableKey]uint64,
+) (map[optimizerStatsTableKey]uint64, bool) {
+	var aggregated map[optimizerStatsTableKey]uint64
+	for _, planVersions := range versions {
+		if len(planVersions) == 0 {
+			continue
+		}
+		if aggregated == nil {
+			aggregated = make(map[optimizerStatsTableKey]uint64)
+		}
+		if !mergeOptimizerStatsVersions(aggregated, planVersions) {
+			return nil, false
+		}
+	}
+	return aggregated, true
+}
+
+func mergeOptimizerStatsVersions(dst, src map[optimizerStatsTableKey]uint64) bool {
+	for key, version := range src {
+		if prior, exists := dst[key]; exists && prior != version {
+			return false
+		}
+		dst[key] = version
+	}
+	return true
 }
 
 func (pc *planCache) remove(sql string) {
@@ -135,7 +209,8 @@ func (pc *planCache) get(sql string) *cachedPlan {
 	}
 	if element, ok := pc.cachePool[sql]; ok {
 		cp := element.Value.(*cachedPlan)
-		if cp.invalid || len(cp.planSnapshotTS) != len(cp.plans) {
+		if cp.invalid || len(cp.planSnapshotTS) != len(cp.plans) ||
+			len(cp.planStatsVersions) != len(cp.plans) {
 			pc.remove(sql)
 			return nil
 		}
@@ -154,7 +229,8 @@ func (pc *planCache) isCached(sql string) bool {
 		return false
 	}
 	cached := element.Value.(*cachedPlan)
-	return !cached.invalid && len(cached.planSnapshotTS) == len(cached.plans)
+	return !cached.invalid && len(cached.planSnapshotTS) == len(cached.plans) &&
+		len(cached.planStatsVersions) == len(cached.plans)
 }
 
 func (pc *planCache) updatePlanGeneration(
@@ -163,6 +239,7 @@ func (pc *planCache) updatePlanGeneration(
 	expectedPlan *plan.Plan,
 	newPlan *plan.Plan,
 	planSnapshotTS timestamp.Timestamp,
+	statsVersions map[optimizerStatsTableKey]uint64,
 ) bool {
 	if pc.cachePool == nil || newPlan == nil {
 		return false
@@ -174,11 +251,20 @@ func (pc *planCache) updatePlanGeneration(
 	cached := element.Value.(*cachedPlan)
 	if cached.invalid || index < 0 || index >= len(cached.plans) ||
 		len(cached.planSnapshotTS) != len(cached.plans) ||
+		len(cached.planStatsVersions) != len(cached.plans) ||
 		cached.plans[index] != expectedPlan {
+		return false
+	}
+	updatedPlanStatsVersions := clonePlanStatsVersions(cached.planStatsVersions)
+	updatedPlanStatsVersions[index] = cloneStatsVersions(statsVersions)
+	aggregated, versionsConsistent := aggregatePlanStatsVersions(updatedPlanStatsVersions)
+	if !versionsConsistent {
 		return false
 	}
 	cached.plans[index] = newPlan
 	cached.planSnapshotTS[index] = planSnapshotTS
+	cached.statsVersions = aggregated
+	cached.planStatsVersions = updatedPlanStatsVersions
 	pc.lruList.MoveToFront(element)
 	return true
 }

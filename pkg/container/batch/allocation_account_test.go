@@ -31,6 +31,30 @@ type testBatchAllocationAccount struct {
 	selection *vector.AllocationAccountSelection
 }
 
+type rejectNextBatchAllocation struct {
+	calls    int
+	failAt   int
+	rejected bool
+	used     uint64
+}
+
+func (c *rejectNextBatchAllocation) AcquireAllocationCapacity(size uint64) error {
+	c.calls++
+	if c.failAt != 0 && c.calls == c.failAt {
+		c.rejected = true
+		return mpool.ErrAllocationAccountCapacity
+	}
+	c.used += size
+	return nil
+}
+
+func (c *rejectNextBatchAllocation) ReleaseAllocationCapacity(size uint64) {
+	if c.used < size {
+		panic("batch allocation controller release underflow")
+	}
+	c.used -= size
+}
+
 func newTestBatchAllocationAccount(
 	t *testing.T,
 	allocationSlots uint64,
@@ -858,6 +882,87 @@ func TestBatchAllocationAccountCloneRollback(t *testing.T) {
 
 	source.Clean(mp)
 	finalizeTestBatchAllocationAccount(t, state)
+}
+
+func TestBatchUnionOneRetainsAllStringSourcePreflightsUntilPublication(t *testing.T) {
+	mp := mpool.MustNewZero()
+	registry, err := mpool.NewAllocationAccountRegistry(1, 16)
+	require.NoError(t, err)
+	controller := &rejectNextBatchAllocation{}
+	account, err := registry.OpenWithController(1<<20, controller)
+	require.NoError(t, err)
+	selection, err := vector.NewAllocationAccountSelection(account, 1, 1, 2, 3, 4)
+	require.NoError(t, err)
+	destination := NewWithSize(2)
+	source := NewWithSize(2)
+	for i := range destination.Vecs {
+		destination.Vecs[i] = vector.NewOffHeapVecWithType(types.T_int64.ToType())
+		require.NoError(t, destination.Vecs[i].SetAllocationAccount(selection))
+		require.NoError(t, destination.Vecs[i].PreExtend(2, mp))
+		require.NoError(t, vector.AppendFixed(destination.Vecs[i], int64(1), false, mp))
+		source.Vecs[i] = vector.NewVec(types.T_int64.ToType())
+		require.NoError(t, vector.AppendFixed(source.Vecs[i], int64(2), false, mp))
+		require.NoError(t, source.Vecs[i].SetStringSource(types.StringSourceLiteral))
+	}
+	destination.SetRowCount(1)
+	source.SetRowCount(1)
+	// Two preflight allocations reserve the two mixed sidecars. Reject the next
+	// allocation to prove neither column reallocates after any length is visible.
+	controller.failAt = controller.calls + 3
+	require.NoError(t, destination.UnionOne(source, 0, mp))
+	require.False(t, controller.rejected)
+	require.Equal(t, 2, destination.RowCount())
+	for _, vec := range destination.Vecs {
+		require.Equal(t, 2, vec.Length())
+		require.Equal(t, types.StringSourceLiteral, vec.GetStringSourceAt(1))
+	}
+	destination.Clean(mp)
+	source.Clean(mp)
+	snapshot := account.Seal()
+	require.Zero(t, snapshot.Used)
+	require.Zero(t, registry.LiveAllocationMetadata())
+	_, err = registry.Finalize(account)
+	require.NoError(t, err)
+	require.Zero(t, mp.CurrNB())
+}
+
+func TestBufferedMetadataDecodeFailureClearsEarlierStringSources(t *testing.T) {
+	sourceMP := mpool.MustNewZero()
+	source := NewWithSize(2)
+	for i := range source.Vecs {
+		source.Vecs[i] = vector.NewVec(types.T_varchar.ToType())
+		require.NoError(t, vector.AppendBytes(source.Vecs[i], []byte("a"), false, sourceMP))
+		require.NoError(t, vector.AppendBytes(source.Vecs[i], []byte("b"), false, sourceMP))
+	}
+	require.NoError(t, source.Vecs[0].SetStringSource(types.StringSourceLiteral))
+	require.NoError(t, source.Vecs[1].SetBinaryStringRowsWithMP([]bool{true, false}, sourceMP))
+	source.SetRowCount(2)
+	var wire bytes.Buffer
+	encoded, err := source.MarshalBinaryWithPrepareParamKinds(&wire, true)
+	require.NoError(t, err)
+	source.Clean(sourceMP)
+	require.Zero(t, sourceMP.CurrNB())
+
+	// Stable vector payloads alias encoded bytes and consume no MPool capacity.
+	// Leaving one byte free rejects column 2's mixed runtime-domain bitmap after
+	// column 1's uniform Literal source has already been applied.
+	const decodeCap = 1 << 20
+	decodeMP, err := mpool.NewMPool("batch-metadata-cleanup", decodeCap, mpool.NoFixed)
+	require.NoError(t, err)
+	held, err := decodeMP.Alloc(decodeCap-1, true)
+	require.NoError(t, err)
+	decoded := NewOffHeapEmpty()
+	err = decoded.UnmarshalBinaryWithPrepareParamKinds(encoded, decodeMP)
+	require.Error(t, err)
+	require.Len(t, decoded.Vecs, 2)
+	for _, vec := range decoded.Vecs {
+		require.Equal(t, types.StringSourceExpression, vec.GetStringSourceAt(0))
+		require.Equal(t, vector.PrepareParamNone, vec.GetPrepareParamKindAt(0))
+		require.False(t, vec.HasBinaryStringMetadata())
+	}
+	decoded.Clean(decodeMP)
+	decodeMP.Free(held)
+	require.Zero(t, decodeMP.CurrNB())
 }
 
 func TestBatchUnionPrepareParamKindAllocationFailureDoesNotPublishRows(t *testing.T) {

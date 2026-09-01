@@ -86,7 +86,11 @@ func execInFrontend(ses *Session, execCtx *ExecCtx) (stats statistic.StatsArray,
 		if err != nil {
 			return
 		}
-		_, err = authenticateUserCanExecutePrepareOrExecute(execCtx.reqCtx, ses, execCtx.prepareStmt.PrepareStmt, execCtx.prepareStmt.PreparePlan.GetDcl().GetPrepare().GetPlan())
+		_, err = authenticateUserCanExecutePrepareOrExecute(
+			execCtx.reqCtx, ses, execCtx.prepareStmt.PrepareStmt,
+			execCtx.prepareStmt.PreparePlan.GetDcl().GetPrepare().GetPlan(),
+			execCtx.prepareStmt.defaultDatabase,
+		)
 		if err != nil {
 			ses.RemovePrepareStmt(execCtx.prepareStmt.Name)
 			return
@@ -103,7 +107,11 @@ func execInFrontend(ses *Session, execCtx *ExecCtx) (stats statistic.StatsArray,
 		if err != nil {
 			return
 		}
-		_, err = authenticateUserCanExecutePrepareOrExecute(execCtx.reqCtx, ses, execCtx.prepareStmt.PrepareStmt, execCtx.prepareStmt.PreparePlan.GetDcl().GetPrepare().GetPlan())
+		_, err = authenticateUserCanExecutePrepareOrExecute(
+			execCtx.reqCtx, ses, execCtx.prepareStmt.PrepareStmt,
+			execCtx.prepareStmt.PreparePlan.GetDcl().GetPrepare().GetPlan(),
+			execCtx.prepareStmt.defaultDatabase,
+		)
 		if err != nil {
 			ses.RemovePrepareStmt(execCtx.prepareStmt.Name)
 			return

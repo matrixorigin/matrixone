@@ -363,36 +363,118 @@ func (tbl *txnTable) Size(ctx context.Context, columnName string) (uint64, error
 }
 
 func ForeachVisibleObjects(
+	ctx context.Context,
 	state *logtailreplay.PartitionState,
 	ts types.TS,
-	fn func(obj objectio.ObjectEntry) error,
+	fn func(context.Context, objectio.ObjectEntry) error,
 	executor ConcurrentExecutor,
 	visitTombstone bool,
 ) (err error) {
+	if cause := context.Cause(ctx); cause != nil {
+		return cause
+	}
+	var executorLifecycle context.Context
+	if executor != nil {
+		executorLifecycle = executor.LifecycleContext()
+		if executorLifecycle != nil {
+			if cause := context.Cause(executorLifecycle); cause != nil {
+				return cause
+			}
+		}
+	}
 	iter, err := state.NewObjectsIter(ts, true, visitTombstone)
 	if err != nil {
 		return err
 	}
 	defer iter.Close()
-	var wg sync.WaitGroup
+
+	taskCtx, cancelTasks := context.WithCancelCause(ctx)
+	defer cancelTasks(nil)
+	if executorLifecycle != nil {
+		stopLifecycleWatch := context.AfterFunc(executorLifecycle, func() {
+			cause := context.Cause(executorLifecycle)
+			if cause == nil {
+				cause = context.Canceled
+			}
+			cancelTasks(cause)
+		})
+		defer stopLifecycleWatch()
+		// Close the check/register race. AfterFunc is only a cancellation
+		// delivery mechanism; its callback runs asynchronously and is not the
+		// authoritative lifecycle predicate.
+		if cause := context.Cause(executorLifecycle); cause != nil {
+			cancelTasks(cause)
+			return cause
+		}
+	}
+	var (
+		wg           sync.WaitGroup
+		firstErrOnce sync.Once
+		firstErr     error
+	)
+	completeTask := func(taskErr error) {
+		if taskErr != nil {
+			firstErrOnce.Do(func() {
+				firstErr = taskErr
+				// Stop sibling object I/O and prevent further admission. Already
+				// admitted work is still joined below before its accumulator dies.
+				cancelTasks(taskErr)
+			})
+		}
+		wg.Done()
+	}
+
 	for iter.Next() {
+		if cause := context.Cause(taskCtx); cause != nil {
+			err = cause
+			break
+		}
 		entry := iter.Entry()
 		if executor != nil {
 			wg.Add(1)
-			executor.AppendTask(func() error {
-				defer wg.Done()
-				return fn(entry)
-			})
+			appendErr := executor.AppendTask(
+				taskCtx,
+				func() error { return fn(taskCtx, entry) },
+				completeTask,
+			)
+			if appendErr != nil {
+				// Ownership was not transferred to the executor.
+				completeTask(appendErr)
+				err = appendErr
+				break
+			}
 		} else {
-			if err = fn(entry); err != nil {
+			if err = fn(taskCtx, entry); err != nil {
+				cancelTasks(err)
 				break
 			}
 		}
 	}
 	if executor != nil {
 		wg.Wait()
+		if firstErr != nil {
+			return firstErr
+		}
+		// Executor shutdown is a failed traversal even when a running callback
+		// ignores taskCtx and happens to return nil. Without this check, the
+		// caller can publish a partial accumulator after the executor lifecycle
+		// has already canceled the work group.
+		if cause := context.Cause(taskCtx); cause != nil {
+			return cause
+		}
+		// The lifecycle callback can be scheduled but not yet run. Read the
+		// executor-owned predicate directly before declaring the joined group a
+		// success.
+		if executorLifecycle != nil {
+			if cause := context.Cause(executorLifecycle); cause != nil {
+				return cause
+			}
+		}
 	}
-	return
+	if err != nil {
+		return err
+	}
+	return context.Cause(ctx)
 }
 
 // not accurate!  only used by stats
@@ -430,10 +512,10 @@ func (tbl *txnTable) MaxAndMinValues(ctx context.Context) ([][2]any, []uint8, er
 		return nil, nil, err
 	}
 	var updateMu sync.Mutex
-	onObjFn := func(obj objectio.ObjectEntry) error {
+	onObjFn := func(objCtx context.Context, obj objectio.ObjectEntry) error {
 		var err error
 		location := obj.Location()
-		if objMeta, err = objectio.FastLoadObjectMeta(ctx, &location, false, fs); err != nil {
+		if objMeta, err = objectio.FastLoadObjectMeta(objCtx, &location, false, fs); err != nil {
 			return err
 		}
 		updateMu.Lock()
@@ -460,6 +542,7 @@ func (tbl *txnTable) MaxAndMinValues(ctx context.Context) ([][2]any, []uint8, er
 	}
 
 	if err = ForeachVisibleObjects(
+		ctx,
 		part,
 		types.TimestampToTS(tbl.db.op.SnapshotTS()),
 		onObjFn,
@@ -516,7 +599,7 @@ func (tbl *txnTable) GetColumMetadataScanInfo(ctx context.Context, name string, 
 	}
 	infoList := make([]*plan.MetadataScanInfo, 0, state.ApproxDataObjectsNum())
 	var updateMu sync.Mutex
-	onObjFn := func(obj objectio.ObjectEntry) error {
+	onObjFn := func(objCtx context.Context, obj objectio.ObjectEntry) error {
 		createTs, err := obj.CreateTime.Marshal()
 		if err != nil {
 			return err
@@ -548,7 +631,7 @@ func (tbl *txnTable) GetColumMetadataScanInfo(ctx context.Context, name string, 
 			return nil
 		}
 
-		objMeta, err := objectio.FastLoadObjectMeta(ctx, &location, false, fs)
+		objMeta, err := objectio.FastLoadObjectMeta(objCtx, &location, false, fs)
 		if err != nil {
 			return err
 		}
@@ -578,6 +661,7 @@ func (tbl *txnTable) GetColumMetadataScanInfo(ctx context.Context, name string, 
 	}
 
 	if err = ForeachVisibleObjects(
+		ctx,
 		state,
 		types.TimestampToTS(tbl.db.op.SnapshotTS()),
 		onObjFn,
@@ -2732,7 +2816,10 @@ func (tbl *txnTable) PKPersistedBetween(
 
 	// Only check data objects. A matching object/block can still be an older
 	// version, so later row-level commit-ts checks narrow the final answer.
-	delObjs, cObjs = p.GetChangedObjsBetween(from.Next(), types.MaxTs())
+	// GetChangedObjsBetween already selects (from, end]. Advancing from here
+	// would skip an object transition committed at the valid HLC timestamp
+	// from.Next(), weakening the PK-conflict check at that exact boundary.
+	delObjs, cObjs = p.GetChangedObjsBetween(from, types.MaxTs())
 
 	if pkCheckBailoutOnChangedObjects(len(cObjs)) {
 		reason = "changed_objects_bailout"
@@ -3351,7 +3438,7 @@ func (tbl *txnTable) GetNonAppendableObjectStats(ctx context.Context) ([]objecti
 	sortKeyPos, _ := tbl.getSortKeyPosAndSortKeyIsPK()
 	objStats := make([]objectio.ObjectStats, 0, tbl.ApproxObjectsNum(ctx))
 
-	err = ForeachVisibleObjects(state, snapshot, func(obj objectio.ObjectEntry) error {
+	err = ForeachVisibleObjects(ctx, state, snapshot, func(_ context.Context, obj objectio.ObjectEntry) error {
 		if obj.GetAppendable() {
 			return nil
 		}

@@ -345,6 +345,60 @@ func newStatsTestBuilderWithNDV(colName string, ndv float64) *QueryBuilder {
 	return builder
 }
 
+func TestPrimaryKeyStatsShortcutsRequireSQLEqualityCompatibleKey(t *testing.T) {
+	tests := []struct {
+		name         string
+		typ          planpb.Type
+		wantHighNDV  bool
+		wantNDVRatio float64
+	}{
+		{
+			name:         "integer primary key control",
+			typ:          planpb.Type{Id: int32(types.T_int64), NotNullable: true},
+			wantHighNDV:  true,
+			wantNDVRatio: 1,
+		},
+		{
+			name:         "float signed zero uses measured NDV",
+			typ:          planpb.Type{Id: int32(types.T_float64), NotNullable: true},
+			wantNDVRatio: 0.1,
+		},
+		{
+			name:         "char pad space uses measured NDV",
+			typ:          planpb.Type{Id: int32(types.T_char), Width: 8, NotNullable: true},
+			wantNDVRatio: 0.1,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			builder := newStatsTestBuilderWithNDV("id", 100)
+			table := builder.tag2Table[0]
+			table.Cols[0].Typ = test.typ
+			table.Pkey = &planpb.PrimaryKeyDef{
+				PkeyColName: "id",
+				Names:       []string{"id"},
+			}
+
+			require.Equal(t, test.wantHighNDV, isHighNdvCols([]int32{0}, table, builder))
+			require.Equal(t, test.wantNDVRatio, builder.getColNDVRatio([]int32{0}, table))
+		})
+	}
+}
+
+func TestStatsCacheReportsWholeCacheReset(t *testing.T) {
+	statsCache := NewStatsCache()
+	stats := NewStatsInfo()
+	for tableID := uint64(0); tableID <= statsCacheMaxSize; tableID++ {
+		require.False(t, statsCache.SetAndReportReset(tableID, stats))
+	}
+	require.True(t, statsCache.SetAndReportReset(statsCacheMaxSize+1, stats))
+	removed := statsCache.Get(0)
+	retained := statsCache.Get(statsCacheMaxSize + 1)
+	require.False(t, removed.Exists())
+	require.True(t, retained.Exists())
+}
+
 type statsCacheCompilerContext struct {
 	*MockCompilerContext
 	statsCache *StatsCache

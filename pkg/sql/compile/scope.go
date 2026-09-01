@@ -759,6 +759,72 @@ func validateRemoteRunAddress(scopeAddr, localAddr string) error {
 	return nil
 }
 
+const (
+	parallelScopeBuildInternalCancel     = "parallel_scope_build_internal_cancel"
+	parallelScopeBuildQueryCancel        = "parallel_scope_build_query_cancel"
+	parallelScopeBuildCancelWithCause    = "parallel_scope_build_cancel_with_cause"
+	parallelScopeBuildUnattributedCancel = "parallel_scope_build_unattributed_cancel"
+)
+
+func scopeCancellationContextState(ctx context.Context) (error, error) {
+	if ctx == nil {
+		return nil, nil
+	}
+	return ctx.Err(), context.Cause(ctx)
+}
+
+func reportParallelScopeBuildCancellation(
+	s *Scope,
+	rawErr error,
+	normalizedErr error,
+	normalized bool,
+	queryCtx context.Context,
+) {
+	pipelineErr, pipelineCause := scopeCancellationContextState(s.Proc.Ctx)
+	queryErr, queryCause := scopeCancellationContextState(queryCtx)
+
+	key := parallelScopeBuildUnattributedCancel
+	switch {
+	case queryErr != nil:
+		key = parallelScopeBuildQueryCancel
+	case normalized && normalizedErr == nil:
+		key = parallelScopeBuildInternalCancel
+	case normalized:
+		key = parallelScopeBuildCancelWithCause
+	}
+
+	terminalEvent := process.EventError.String()
+	if normalizedErr == nil {
+		terminalEvent = process.EventEnd.String()
+	}
+	queryID := ""
+	if s.Proc.Base != nil {
+		queryID = s.Proc.QueryId()
+	}
+	rootOp := ""
+	if s.RootOp != nil {
+		rootOp = s.RootOp.OpType().String()
+	}
+	process.WarnPipelineCleanupf(
+		s.Proc,
+		key,
+		"parallel scope build cleanup classified cancellation: classification=%s phase=build_parallel_scope query_id=%s node_id=%s node_addr=%s mcpu=%d root_op=%s normalized=%t terminal=%s raw_err=%v normalized_err=%v pipeline_err=%v pipeline_cause=%v query_err=%v query_cause=%v",
+		key,
+		queryID,
+		s.NodeInfo.Id,
+		s.NodeInfo.Addr,
+		s.NodeInfo.Mcpu,
+		rootOp,
+		normalized,
+		terminalEvent,
+		rawErr,
+		normalizedErr,
+		pipelineErr,
+		pipelineCause,
+		queryErr,
+		queryCause)
+}
+
 // ParallelRun run a pipeline in parallel.
 func (s *Scope) ParallelRun(c *Compile) (err error) {
 	var parallelScope *Scope
@@ -777,7 +843,22 @@ func (s *Scope) ParallelRun(c *Compile) (err error) {
 		// if codes run here, it means some error happens during build the parallel scope.
 		// we should do clean work for source-scope to avoid receiver hung.
 		if parallelScope == nil {
-			pipeline.NewMerge(s.RootOp).Cleanup(s.Proc, true, c.isPrepare, err)
+			// ParallelRun owns the source operator until construction publishes a
+			// parallel scope. StopSending can cancel the pipeline while reader
+			// construction is still in flight, so classify that cancellation at
+			// this boundary before cleanup chooses EventEnd versus EventError.
+			rawErr := err
+			queryCtx := scopeRunQueryContext(s.Proc)
+			var normalized bool
+			err, normalized = normalizeScopeRunError(
+				err,
+				s.Proc.Ctx,
+				queryCtx,
+			)
+			if isScopeCancellationError(rawErr) {
+				reportParallelScopeBuildCancellation(s, rawErr, err, normalized, queryCtx)
+			}
+			pipeline.NewMerge(s.RootOp).Cleanup(s.Proc, err != nil, c.isPrepare, err)
 		}
 	}()
 
@@ -925,6 +1006,13 @@ func (s *Scope) getRelData(c *Compile, blockExprList []*plan.Expr) error {
 			if err != nil {
 				return err
 			}
+		}
+		// Remote scope decoding intentionally does not carry relation handles.
+		// When this scope owns the complete scan, retain the relation opened on
+		// the executing CN so buildReaders can consume the in-memory sentinel
+		// returned by Policy_CollectAllData instead of stripping it.
+		if s.IsRemote {
+			s.DataSource.Rel = engine.NewRelationHandle(rel)
 		}
 		return nil
 	}
@@ -1598,8 +1686,12 @@ func (s *Scope) buildReaders(c *Compile) (readers []engine.Reader, err error) {
 	}
 
 	switch {
-	// If this was a remote-run pipeline. Reader should be generated from Engine.
-	case s.IsRemote:
+	// A distributed remote scope only owns its assigned persisted blocks. Keep
+	// using the engine reader, which deliberately excludes the memory-block
+	// sentinel owned by the local scope. A single remote scope is different: it
+	// owns the complete scan, including committed rows in this CN's partition
+	// state, so it must use the relation reader below.
+	case s.IsRemote && (s.NodeInfo.CNCNT != 1 || s.DataSource.Rel == nil):
 		// this cannot use c.proc.Ctx directly, please refer to `default case`.
 		ctx := c.proc.Ctx
 		if util.TableIsClusterTable(s.DataSource.TableDef.GetTableType()) {
@@ -1632,9 +1724,21 @@ func (s *Scope) buildReaders(c *Compile) (readers []engine.Reader, err error) {
 		if err != nil {
 			return
 		}
-	// Reader can be generated from local relation.
+	// Reader can be generated from the relation on the executing CN.
 	case s.DataSource.Rel != nil:
 		ctx := c.proc.Ctx
+		if s.IsRemote {
+			if util.TableIsClusterTable(s.DataSource.TableDef.GetTableType()) {
+				ctx = defines.AttachAccountId(ctx, catalog.System_Account)
+			}
+			account := s.DataSource.AccountId
+			if account == nil && s.DataSource.node != nil && s.DataSource.node.ObjRef != nil {
+				account = s.DataSource.node.ObjRef.PubInfo
+			}
+			if account != nil {
+				ctx = defines.AttachAccountId(ctx, uint32(account.GetTenantId()))
+			}
+		}
 		stats := statistic.StatsInfoFromContext(ctx)
 		crs := new(perfcounter.CounterSet)
 		newCtx := perfcounter.AttachS3RequestKey(ctx, crs)
@@ -1643,8 +1747,11 @@ func (s *Scope) buildReaders(c *Compile) (readers []engine.Reader, err error) {
 		// Pass runtime membership filter bytes to reader via FilterHint (for fulltext index table).
 		if n := s.DataSource.node; n != nil && n.TableDef != nil &&
 			catalog.IsFullTextIndexTableType(n.TableDef.TableType, n.TableDef.Name) {
-			if bfVal := c.proc.Ctx.Value(defines.FulltextMembershipFilter{}); bfVal != nil {
-				if bf, ok := bfVal.([]byte); ok && len(bf) > 0 {
+			if s.IsRemote {
+				hint.MembershipFilterBytes = s.DataSource.MembershipFilterBytes
+			}
+			if len(hint.MembershipFilterBytes) == 0 {
+				if bf, ok := c.proc.Ctx.Value(defines.FulltextMembershipFilter{}).([]byte); ok {
 					hint.MembershipFilterBytes = bf
 				}
 			}

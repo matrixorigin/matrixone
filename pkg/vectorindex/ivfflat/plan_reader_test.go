@@ -15,6 +15,7 @@
 package ivfflat
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"math"
@@ -615,12 +616,12 @@ func TestRelationSearchBoundaryBranches(t *testing.T) {
 		ivfColExpr(0, plan.Type{Id: int32(types.T_int64)}))
 	require.ErrorContains(t, err, "runtime membership key set is empty")
 
-	_, hasBound, err := vectorDistanceBound(plan.BoundType_UNBOUNDED, nil)
+	_, hasBound, _, err := vectorDistanceBound(plan.BoundType_UNBOUNDED, nil)
 	require.NoError(t, err)
 	require.False(t, hasBound)
-	_, _, err = vectorDistanceBound(plan.BoundType_INCLUSIVE, nil)
+	_, _, _, err = vectorDistanceBound(plan.BoundType_INCLUSIVE, nil)
 	require.ErrorContains(t, err, "did not fold to a numeric literal")
-	_, _, err = vectorDistanceBound(plan.BoundType(99), nil)
+	_, _, _, err = vectorDistanceBound(plan.BoundType(99), nil)
 	require.ErrorContains(t, err, "invalid IVF distance bound type")
 
 	rangeExclusive := &plan.DistRange{
@@ -808,6 +809,65 @@ func TestPlanReaderPureHelpersCoverDecodedQueriesAndScanBatches(t *testing.T) {
 	bat.Clean(nil)
 	_, err = makeRelationScanBatch(tableDef, []string{"missing"})
 	require.ErrorContains(t, err, "hidden column \"missing\" not found")
+
+	wideDef := &plan.TableDef{
+		Cols: []*plan.ColDef{
+			{Name: "entry", Typ: plan.Type{Id: int32(types.T_array_float64)}},
+			{Name: "bucket", Typ: plan.Type{Id: int32(types.T_int64)}},
+		},
+		Name2ColIndex: map[string]int32{"entry": 0, "bucket": 1},
+	}
+	require.Equal(t, []int{1}, relationFilterEarlyColumns(
+		wideDef, []string{"entry", "bucket"}, ivfColExpr(1, plan.Type{Id: int32(types.T_int64)})))
+	require.Nil(t, relationFilterEarlyColumns(
+		wideDef, []string{"entry", "bucket"}, ivfColExpr(0, plan.Type{Id: int32(types.T_array_float64)})))
+	require.Nil(t, relationFilterEarlyColumns(wideDef, []string{"entry", "bucket"},
+		&plan.Expr{Expr: &plan.Expr_Corr{Corr: &plan.CorrColRef{ColPos: 1}}}))
+}
+
+func TestCollectRelationFilterColumnsAcceptsOnlySafeExpressionShapes(t *testing.T) {
+	column := ivfColExpr(1, plan.Type{Id: int32(types.T_int64)})
+	valid := []*plan.Expr{
+		nil,
+		{Expr: &plan.Expr_Col{Col: &plan.ColRef{ColPos: 1}}},
+		{Expr: &plan.Expr_F{F: &plan.Function{Args: []*plan.Expr{column}}}},
+		{Expr: &plan.Expr_List{List: &plan.ExprList{List: []*plan.Expr{column}}}},
+		{Expr: &plan.Expr_Lit{Lit: &plan.Literal{Src: column}}},
+		{Expr: &plan.Expr_P{P: &plan.ParamRef{}}},
+		{Expr: &plan.Expr_V{V: &plan.VarRef{}}},
+		{Expr: &plan.Expr_T{T: &plan.TargetType{}}},
+		{Expr: &plan.Expr_Max{Max: &plan.MaxValue{}}},
+		{Expr: &plan.Expr_Vec{Vec: &plan.LiteralVec{}}},
+		{Expr: &plan.Expr_Fold{Fold: &plan.FoldVal{}}},
+	}
+	for _, expr := range valid {
+		columns := make(map[int32]struct{})
+		require.True(t, collectRelationFilterColumns(expr, 2, columns))
+	}
+
+	invalid := []*plan.Expr{
+		{Expr: &plan.Expr_Col{}},
+		{Expr: &plan.Expr_Col{Col: &plan.ColRef{ColPos: -1}}},
+		{Expr: &plan.Expr_F{}},
+		{Expr: &plan.Expr_F{F: &plan.Function{Args: []*plan.Expr{{Expr: &plan.Expr_Col{Col: &plan.ColRef{ColPos: 2}}}}}}},
+		{Expr: &plan.Expr_List{}},
+		{Expr: &plan.Expr_List{List: &plan.ExprList{List: []*plan.Expr{{Expr: &plan.Expr_Col{Col: &plan.ColRef{ColPos: 2}}}}}}},
+		{Expr: &plan.Expr_Lit{}},
+		{Expr: &plan.Expr_P{}},
+		{Expr: &plan.Expr_V{}},
+		{Expr: &plan.Expr_T{}},
+		{Expr: &plan.Expr_Max{}},
+		{Expr: &plan.Expr_Vec{}},
+		{Expr: &plan.Expr_Fold{}},
+		{Expr: &plan.Expr_Raw{Raw: &plan.RawColRef{}}},
+		{Expr: &plan.Expr_W{W: &plan.WindowSpec{}}},
+		{Expr: &plan.Expr_Sub{Sub: &plan.SubqueryRef{}}},
+		{Expr: &plan.Expr_Corr{Corr: &plan.CorrColRef{}}},
+		{},
+	}
+	for _, expr := range invalid {
+		require.False(t, collectRelationFilterColumns(expr, 2, make(map[int32]struct{})))
+	}
 }
 
 type fixedRelationReader struct {
@@ -867,6 +927,94 @@ func (*fillRelationReader) GetOrderBy() []*plan.OrderBySpec { return nil }
 func (*fillRelationReader) SetIndexParam(*plan.IndexReaderParam) {
 }
 func (*fillRelationReader) SetFilterZM(objectio.ZoneMap) {}
+
+type lateFilterRelationReader struct {
+	emitted         bool
+	closed          int
+	eagerReads      int
+	lateReads       int
+	earlyColumns    []int
+	wideWasDeferred bool
+}
+
+var _ engine.Reader = (*lateFilterRelationReader)(nil)
+var _ engine.LateMaterializationReader = (*lateFilterRelationReader)(nil)
+
+func (r *lateFilterRelationReader) Read(
+	context.Context,
+	[]string,
+	*plan.Expr,
+	*mpool.MPool,
+	*batch.Batch,
+) (bool, error) {
+	r.eagerReads++
+	return false, errors.New("IVF filtered scan used eager reader")
+}
+
+func (r *lateFilterRelationReader) ReadWithFilter(
+	_ context.Context,
+	_ []string,
+	earlyColumns []int,
+	filter engine.ReaderFilter,
+	mp *mpool.MPool,
+	out *batch.Batch,
+) (bool, error) {
+	if r.emitted {
+		return true, nil
+	}
+	r.lateReads++
+	r.earlyColumns = append([]int(nil), earlyColumns...)
+
+	rows := []struct {
+		version  int64
+		centroid int64
+		pk       int64
+		entry    []float64
+		bucket   int64
+	}{
+		{7, 2, 11, []float64{4, 0}, 10},
+		{7, 2, 12, []float64{9, 0}, 70},
+		{7, 2, 13, []float64{1, 0}, 10},
+	}
+	for _, row := range rows {
+		if err := vector.AppendFixed(out.Vecs[0], row.version, false, mp); err != nil {
+			return false, err
+		}
+		if err := vector.AppendFixed(out.Vecs[1], row.centroid, false, mp); err != nil {
+			return false, err
+		}
+		if err := vector.AppendFixed(out.Vecs[2], row.pk, false, mp); err != nil {
+			return false, err
+		}
+		if err := vector.AppendFixed(out.Vecs[4], row.bucket, false, mp); err != nil {
+			return false, err
+		}
+	}
+	out.SetRowCount(len(rows))
+	r.wideWasDeferred = out.Vecs[3].Length() == 0
+	filtered, err := filter(out, earlyColumns)
+	if err != nil {
+		return false, err
+	}
+	selected := filtered.Sels
+	if filtered.All {
+		selected = []int64{0, 1, 2}
+	}
+	for _, row := range selected {
+		if err := vector.AppendArray(out.Vecs[3], rows[row].entry, false, mp); err != nil {
+			return false, err
+		}
+	}
+	r.emitted = true
+	return false, nil
+}
+
+func (r *lateFilterRelationReader) Close() error                  { r.closed++; return nil }
+func (*lateFilterRelationReader) SetOrderBy([]*plan.OrderBySpec)  {}
+func (*lateFilterRelationReader) GetOrderBy() []*plan.OrderBySpec { return nil }
+func (*lateFilterRelationReader) SetIndexParam(*plan.IndexReaderParam) {
+}
+func (*lateFilterRelationReader) SetFilterZM(objectio.ZoneMap) {}
 
 func TestRelationScannerExecutesTypedReaderLifecycle(t *testing.T) {
 	ctrl := gomock.NewController(t)
@@ -1128,6 +1276,137 @@ func TestRelationScannerFiltersBeforeApplyingTopLimit(t *testing.T) {
 	require.Len(t, res.Batches, 1)
 	require.Equal(t, 1, res.Batches[0].RowCount())
 	require.Equal(t, int64(2), vector.GetFixedAtNoTypeCheck[int64](res.Batches[0].Vecs[0], 0))
+	require.Equal(t, 1, reader.closed)
+}
+
+func TestRelationScannerDefersWideVectorUntilAfterIncludeFilter(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	proc := testutil.NewProc(t)
+	t.Cleanup(proc.Free)
+	eng := mock_frontend.NewMockEngine(ctrl)
+	db := mock_frontend.NewMockDatabase(ctrl)
+	rel := mock_frontend.NewMockRelation(ctrl)
+	proc.Base.SessionInfo.StorageEngine = eng
+	tableDef := &plan.TableDef{
+		Name: "filtered_entries",
+		Cols: []*plan.ColDef{
+			{Name: "version", Typ: plan.Type{Id: int32(types.T_int64)}},
+			{Name: "centroid", Typ: plan.Type{Id: int32(types.T_int64)}},
+			{Name: "pk", Typ: plan.Type{Id: int32(types.T_int64)}},
+			{Name: "entry", Typ: plan.Type{Id: int32(types.T_array_float64), Width: 2}},
+			{Name: "filter_bucket", Typ: plan.Type{Id: int32(types.T_int64)}},
+		},
+		Name2ColIndex: map[string]int32{
+			"version": 0, "centroid": 1, "pk": 2, "entry": 3, "filter_bucket": 4,
+		},
+	}
+	reader := &lateFilterRelationReader{}
+	eng.EXPECT().Database(gomock.Any(), "db", nil).Return(db, nil)
+	db.EXPECT().Relation(gomock.Any(), "filtered_entries", proc).Return(rel, nil)
+	rel.EXPECT().GetTableDef(gomock.Any()).Return(tableDef)
+	rel.EXPECT().Ranges(gomock.Any(), gomock.Any()).Return(nil, nil)
+	rel.EXPECT().BuildReaders(
+		gomock.Any(), proc, gomock.Any(), gomock.Nil(), 1, 0, false,
+		gomock.Any(), gomock.Any()).Return([]engine.Reader{reader}, nil)
+
+	filter, err := ivfFuncExpr(proc.Ctx, "=",
+		ivfColExpr(4, plan.Type{Id: int32(types.T_int64)}), ivfInt64Expr(10))
+	require.NoError(t, err)
+	res, err := (&relationScanner{proc: proc}).ScanRelation(sqlexec.RelationScanRequest{
+		Schema:  "db",
+		Table:   "filtered_entries",
+		Columns: []string{"version", "centroid", "pk", "entry", "filter_bucket"},
+		Filter:  filter,
+		IndexParam: &plan.IndexReaderParam{
+			Limit:   ivfUint64Expr(1),
+			OrderBy: []*plan.OrderBySpec{{Flag: plan.OrderBySpec_ASC}},
+		},
+		PostFilterTopOnly: true,
+		BatchTransform: func(bat *batch.Batch) error {
+			require.Equal(t, bat.RowCount(), bat.Vecs[3].Length())
+			distances := vector.NewVec(types.T_float64.ToType())
+			for row := 0; row < bat.RowCount(); row++ {
+				entry := types.BytesToArray[float64](bat.Vecs[3].GetBytesAt(row))
+				if err := vector.AppendFixed(distances, entry[0]*entry[0], false, proc.Mp()); err != nil {
+					distances.Free(proc.Mp())
+					return err
+				}
+			}
+			bat.Vecs = append(bat.Vecs, distances)
+			return nil
+		},
+	})
+	require.NoError(t, err)
+	defer res.Close()
+	require.Zero(t, reader.eagerReads)
+	require.Equal(t, 1, reader.lateReads)
+	require.Equal(t, []int{0, 1, 2, 4}, reader.earlyColumns)
+	require.True(t, reader.wideWasDeferred)
+	require.Len(t, res.Batches, 1)
+	require.Equal(t, 1, res.Batches[0].RowCount())
+	require.Equal(t, int64(13), vector.GetFixedAtNoTypeCheck[int64](res.Batches[0].Vecs[2], 0))
+	require.Equal(t, int64(10), vector.GetFixedAtNoTypeCheck[int64](res.Batches[0].Vecs[4], 0))
+	require.Equal(t, 1, reader.closed)
+}
+
+func TestRelationScannerFallsBackWhenReaderCannotDelayVectorLoading(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	proc := testutil.NewProc(t)
+	t.Cleanup(proc.Free)
+	eng := mock_frontend.NewMockEngine(ctrl)
+	db := mock_frontend.NewMockDatabase(ctrl)
+	rel := mock_frontend.NewMockRelation(ctrl)
+	proc.Base.SessionInfo.StorageEngine = eng
+	tableDef := &plan.TableDef{
+		Name: "fallback_entries",
+		Cols: []*plan.ColDef{
+			{Name: "entry", Typ: plan.Type{Id: int32(types.T_array_float64), Width: 2}},
+			{Name: "filter_bucket", Typ: plan.Type{Id: int32(types.T_int64)}},
+		},
+		Name2ColIndex: map[string]int32{"entry": 0, "filter_bucket": 1},
+	}
+	reader := &fillRelationReader{fill: func(out *batch.Batch, mp *mpool.MPool) error {
+		for _, row := range []struct {
+			entry  []float64
+			bucket int64
+		}{
+			{entry: []float64{1, 0}, bucket: 10},
+			{entry: []float64{2, 0}, bucket: 70},
+		} {
+			if err := vector.AppendArray(out.Vecs[0], row.entry, false, mp); err != nil {
+				return err
+			}
+			if err := vector.AppendFixed(out.Vecs[1], row.bucket, false, mp); err != nil {
+				return err
+			}
+		}
+		out.SetRowCount(2)
+		return nil
+	}}
+	eng.EXPECT().Database(gomock.Any(), "db", nil).Return(db, nil)
+	db.EXPECT().Relation(gomock.Any(), "fallback_entries", proc).Return(rel, nil)
+	rel.EXPECT().GetTableDef(gomock.Any()).Return(tableDef)
+	rel.EXPECT().Ranges(gomock.Any(), gomock.Any()).Return(nil, nil)
+	rel.EXPECT().BuildReaders(
+		gomock.Any(), proc, gomock.Any(), gomock.Nil(), 1, 0, false,
+		gomock.Any(), gomock.Any()).Return([]engine.Reader{reader}, nil)
+
+	filter, err := ivfFuncExpr(proc.Ctx, "=",
+		ivfColExpr(1, plan.Type{Id: int32(types.T_int64)}), ivfInt64Expr(10))
+	require.NoError(t, err)
+	res, err := (&relationScanner{proc: proc}).ScanRelation(sqlexec.RelationScanRequest{
+		Schema:            "db",
+		Table:             "fallback_entries",
+		Columns:           []string{"entry", "filter_bucket"},
+		Filter:            filter,
+		PostFilterTopOnly: true,
+	})
+	require.NoError(t, err)
+	defer res.Close()
+	require.Len(t, res.Batches, 1)
+	require.Equal(t, 1, res.Batches[0].RowCount())
+	require.Equal(t, []float64{1, 0}, types.BytesToArray[float64](res.Batches[0].Vecs[0].GetBytesAt(0)))
+	require.Equal(t, int64(10), vector.GetFixedAtNoTypeCheck[int64](res.Batches[0].Vecs[1], 0))
 	require.Equal(t, 1, reader.closed)
 }
 
@@ -1635,4 +1914,113 @@ func TestNewPlanReaderOwnsItsExecutionState(t *testing.T) {
 	snapshotPlanReader := snapshotReader.(*planReader)
 	require.Equal(t, uint32(3), *snapshotPlanReader.scanner.accountID)
 	require.Equal(t, int64(8), snapshotPlanReader.scanner.snapshot.TS.PhysicalTime)
+}
+
+// Centroid IDs reach ivfCentroidPrefixFilter ranked by distance to the query, not
+// by value. Block pruning reads the prefix list's first and last element as the
+// scan's lower and upper key bound (readutil/expr_filter.go), so publishing them
+// in probe order makes the reader seek past centroids sorting below the nearest
+// one and stop the scan at the last-listed one.
+func TestIvfCentroidPrefixFilterPublishesSortedPrefixes(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+
+	// Descending, so probe order is the exact reverse of value order.
+	centroidIDs := []int64{900, 512, 77, 4, 1}
+	filter, err := ivfCentroidPrefixFilter(context.Background(), mp, 3, centroidIDs, 4)
+	require.NoError(t, err)
+
+	fn := filter.GetF()
+	require.NotNil(t, fn)
+	require.Equal(t, function.PrefixInFunctionName, fn.Func.ObjName)
+	require.Len(t, fn.Args, 2)
+
+	literal := fn.Args[1].GetVec()
+	require.NotNil(t, literal)
+
+	published := vector.NewVec(types.T_any.ToType())
+	defer published.Free(mp)
+	require.NoError(t, published.UnmarshalBinary(literal.Data))
+
+	// Every centroid must survive: the prefix set is the whole candidate set.
+	require.Equal(t, len(centroidIDs), published.Length())
+	require.Equal(t, int32(published.Length()), literal.Len)
+
+	col, area := vector.MustVarlenaRawData(published)
+	for i := 1; i < len(col); i++ {
+		prev, cur := col[i-1].GetByteSlice(area), col[i].GetByteSlice(area)
+		require.Negative(t, bytes.Compare(prev, cur),
+			"prefix %d is not strictly greater than prefix %d", i, i-1)
+	}
+
+	// The pruning path never sorts, so the flag must state what is true.
+	require.True(t, published.GetSorted())
+}
+
+// Sorting the prefixes also compacts them, so the published Len must describe the
+// vector that was actually marshalled rather than the input slice. A Len that
+// over-claims rows disagrees with the payload it labels.
+func TestIvfCentroidPrefixFilterLenMatchesCompactedPayload(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+
+	centroidIDs := []int64{7, 2, 7, 2, 5}
+	filter, err := ivfCentroidPrefixFilter(context.Background(), mp, 1, centroidIDs, 4)
+	require.NoError(t, err)
+
+	literal := filter.GetF().Args[1].GetVec()
+	require.NotNil(t, literal)
+
+	published := vector.NewVec(types.T_any.ToType())
+	defer published.Free(mp)
+	require.NoError(t, published.UnmarshalBinary(literal.Data))
+
+	// {7,2,7,2,5} carries three distinct centroids.
+	require.Equal(t, 3, published.Length())
+	require.Equal(t, int32(3), literal.Len)
+	require.True(t, published.GetSorted())
+
+	col, area := vector.MustVarlenaRawData(published)
+	for i := 1; i < len(col); i++ {
+		require.Negative(t, bytes.Compare(
+			col[i-1].GetByteSlice(area), col[i].GetByteSlice(area)))
+	}
+}
+
+// Storage Top-K is only chosen when a centroid restriction exists, so an empty
+// set is a caller error rather than an unrestricted scan.
+func TestIvfCentroidPrefixFilterRejectsEmptyCentroidSet(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+
+	filter, err := ivfCentroidPrefixFilter(context.Background(), mp, 1, nil, 4)
+	require.Error(t, err)
+	require.Nil(t, filter)
+}
+
+// The IN centroid filter is the sibling of ivfCentroidPrefixFilter and takes the
+// same distance-ranked input, so it must publish the same canonical membership
+// set: sorted, compacted, and with Len describing the payload.
+func TestIvfInInt64ExprPublishesSortedMembershipSet(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+
+	left := ivfColExpr(1, plan.Type{Id: int32(types.T_int64)})
+	expr, err := ivfInInt64Expr(context.Background(), mp, left, []int64{900, 7, 900, 42, 7})
+	require.NoError(t, err)
+
+	literal := expr.GetF().Args[1].GetVec()
+	require.NotNil(t, literal)
+
+	published := vector.NewVec(types.T_any.ToType())
+	defer published.Free(mp)
+	require.NoError(t, published.UnmarshalBinary(literal.Data))
+
+	// {900,7,900,42,7} holds three distinct centroids.
+	require.Equal(t, 3, published.Length())
+	require.Equal(t, int32(3), literal.Len)
+	require.True(t, published.GetSorted())
+
+	col := vector.MustFixedColWithTypeCheck[int64](published)
+	require.Equal(t, []int64{7, 42, 900}, col)
 }

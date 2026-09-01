@@ -15,6 +15,8 @@
 package fulltext2
 
 import (
+	"bytes"
+	"encoding/binary"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/docfilter"
@@ -24,6 +26,40 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/stretchr/testify/require"
 )
+
+// recordingMembershipFilter makes the loaded zero-copy probe observable without
+// relying on a probabilistic Bloom-filter hit as a byte-equivalence oracle.
+type recordingMembershipFilter struct {
+	probes     [][]byte
+	probeViews [][]byte
+}
+
+func (f *recordingMembershipFilter) Test(data []byte) bool {
+	f.probeViews = append(f.probeViews, data)
+	probe := make([]byte, len(data))
+	copy(probe, data)
+	f.probes = append(f.probes, probe)
+	return true
+}
+
+func (f *recordingMembershipFilter) TestVector(*vector.Vector, func(bool, bool, int)) []uint8 {
+	return nil
+}
+
+func (f *recordingMembershipFilter) Valid() bool { return true }
+
+func (f *recordingMembershipFilter) Exact() bool { return true }
+
+func (f *recordingMembershipFilter) Free() {}
+
+func (f *recordingMembershipFilter) Share() docfilter.MembershipFilter { return f }
+
+func sourcePkBytes(v *vector.Vector, typ types.Type) []byte {
+	if typ.IsFixedLen() {
+		return v.GetData()[:typ.TypeSize()]
+	}
+	return v.GetBytesAt(0)
+}
 
 // TestContainsPkTypes exercises the fast per-PK-type encode branches of docFilterMembership.Contains
 // (int64 is covered elsewhere): the uint64 / int32 / uint32 arms must encode byte-identically to the
@@ -149,6 +185,150 @@ func TestContainsPkTypes(t *testing.T) {
 			require.Equalf(t, i%2 == 0, dfm.Contains(i), "ord %d", i)
 		}
 	})
+}
+
+// TestLoadedContainsPkTypes proves the loaded-docmap fast path probes bytes
+// identical to docfilter.Build's source-vector representation. UUID deliberately
+// uses the typed fallback because its docmap stores the canonical string.
+func TestLoadedContainsPkTypes(t *testing.T) {
+	mp := mpool.MustNewZero()
+	u, err := types.ParseUuid("12345678-1234-1234-1234-1234567890ab")
+	require.NoError(t, err)
+	cases := []struct {
+		name string
+		typ  types.T
+		val  any
+	}{
+		{"int8", types.T_int8, int8(-8)},
+		{"int16", types.T_int16, int16(-1600)},
+		{"int32", types.T_int32, int32(-320000)},
+		{"int64", types.T_int64, int64(-64000000)},
+		{"uint8", types.T_uint8, uint8(8)},
+		{"uint16", types.T_uint16, uint16(1600)},
+		{"uint32", types.T_uint32, uint32(320000)},
+		{"uint64", types.T_uint64, uint64(64000000)},
+		{"bit", types.T_bit, uint64(7)},
+		{"date", types.T_date, types.Date(20260)},
+		{"datetime", types.T_datetime, types.Datetime(1234567)},
+		{"time", types.T_time, types.Time(7654321)},
+		{"timestamp", types.T_timestamp, types.Timestamp(9876543)},
+		{"decimal64", types.T_decimal64, types.Decimal64(12345)},
+		{"decimal128", types.T_decimal128, types.Decimal128{B0_63: 12, B64_127: 34}},
+		{"char", types.T_char, []byte("char-key")},
+		{"varchar", types.T_varchar, []byte("varchar-key")},
+		{"text", types.T_text, []byte("text-key")},
+		{"binary", types.T_binary, []byte{0, 1, 2}},
+		{"varbinary", types.T_varbinary, []byte{3, 4, 5}},
+		{"blob", types.T_blob, []byte{6, 7, 8}},
+		{"json", types.T_json, []byte(`{"k":1}`)},
+		{"datalink", types.T_datalink, []byte("file://pk")},
+		{"uuid", types.T_uuid, u},
+		{"varchar-empty", types.T_varchar, []byte{}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			b := NewBuilder("loaded-membership", int32(tc.typ))
+			feed(t, b, tc.val, "x")
+			seg, err := b.Finish()
+			require.NoError(t, err)
+			require.NotNil(t, seg.pks)
+			blob, err := seg.Serialize()
+			require.NoError(t, err)
+			loaded, err := Deserialize("loaded-membership", bytes.NewReader(blob))
+			require.NoError(t, err)
+			require.Nil(t, loaded.pks)
+			t.Cleanup(func() { _ = loaded.dict.Close() })
+
+			vec := vector.NewVec(tc.typ.ToType())
+			require.NoError(t, vector.AppendAny(vec, tc.val, false, mp))
+			t.Cleanup(func() { vec.Free(mp) })
+			payload, err := docfilter.Build(vec)
+			require.NoError(t, err)
+			f, err := docfilter.New(payload)
+			require.NoError(t, err)
+			t.Cleanup(f.Free)
+
+			allow := &docFilterMembership{seg: loaded, f: f}
+			require.True(t, allow.Contains(0))
+			require.False(t, allow.Contains(-1))
+			require.False(t, allow.Contains(1))
+
+			// The real docfilter remains the end-to-end membership check above. For
+			// non-integer PKs it is a Bloom filter, so a successful probe alone cannot
+			// prove that the zero-copy path passed the exact source bytes. Capture the
+			// production probe and compare it byte-for-byte with the source vector;
+			// UUID must receive raw 16-byte vector data, not canonical docmap text.
+			capture := &recordingMembershipFilter{}
+			captured := &docFilterMembership{seg: loaded, f: capture}
+			require.True(t, captured.Contains(0))
+			require.Len(t, capture.probes, 1)
+			require.Len(t, capture.probeViews, 1)
+			expected := sourcePkBytes(vec, tc.typ.ToType())
+			require.Len(t, capture.probes[0], len(expected))
+			require.True(t, bytes.Equal(expected, capture.probes[0]))
+
+			// Byte equality alone would still pass if loaded keys fell back to
+			// decode-plus-reencode. Prove the non-UUID probe is the exact borrowed
+			// docmap view. UUID is the intentional control: its stored 36-byte
+			// canonical text must be converted to an independent raw 16-byte probe.
+			stored, err := loaded.pkContent(0)
+			require.NoError(t, err)
+			view := capture.probeViews[0]
+			if tc.typ == types.T_uuid {
+				require.Len(t, stored, 36)
+				require.Len(t, view, 16)
+				require.False(t, &stored[0] == &view[0])
+			} else {
+				require.Len(t, view, len(stored))
+				if len(stored) > 0 {
+					require.True(t, &stored[0] == &view[0])
+				}
+			}
+		})
+	}
+}
+
+func TestPkContentRejectsInvalidAccess(t *testing.T) {
+	b := NewBuilder("loaded-membership-errors", int32(types.T_int64))
+	feed(t, b, int64(1), "x")
+	seg, err := b.Finish()
+	require.NoError(t, err)
+
+	_, err = seg.pkContent(0)
+	require.Error(t, err)
+
+	blob, err := seg.Serialize()
+	require.NoError(t, err)
+	loaded, err := Deserialize("loaded-membership-errors", bytes.NewReader(blob))
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = loaded.dict.Close() })
+	_, err = loaded.pkContent(0)
+	require.NoError(t, err)
+
+	_, err = loaded.pkContent(-1)
+	require.Error(t, err)
+	_, err = loaded.pkContent(loaded.N)
+	require.Error(t, err)
+
+	missingOffset := *loaded
+	missingOffset.pkOffsets = nil
+	_, err = missingOffset.pkContent(0)
+	require.Error(t, err)
+
+	truncated := *loaded
+	truncated.pkRaw = truncated.pkRaw[:2]
+	_, err = truncated.pkContent(0)
+	require.Error(t, err)
+	capture := &recordingMembershipFilter{}
+	require.False(t, (&docFilterMembership{seg: &truncated, f: capture}).Contains(0))
+	require.Empty(t, capture.probes)
+
+	badLength := *loaded
+	badLength.pkRaw = append([]byte(nil), loaded.pkRaw...)
+	off := int(badLength.pkOffsets[0])
+	binary.LittleEndian.PutUint32(badLength.pkRaw[off:], uint32(len(badLength.pkRaw)))
+	_, err = badLength.pkContent(0)
+	require.Error(t, err)
 }
 
 // TestIsJSONParser pins the json-family predicate.

@@ -56,6 +56,7 @@ import (
 	planPb "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
@@ -2986,6 +2987,101 @@ func TestParseExecuteDataPreservesExactJsonOrderingParams(t *testing.T) {
 	}
 }
 
+func TestParseExecuteDataPreparedJSONDecimalComparisonIsExact(t *testing.T) {
+	const query = `select json_extract(
+		json_array(cast(9007199254740992.1 as decimal(20,1))), '$[0]') = ?`
+	ctx := context.Background()
+	proto, proc, prepareStmt := newBinaryPrepareProtocolTestCase(t, query)
+	defer prepareStmt.clearBinaryParamState(proc)
+
+	require.NoError(t, proto.ParseExecuteData(ctx, proc, prepareStmt,
+		buildStringExecutePacket(
+			proto, defines.MYSQL_TYPE_NEWDECIMAL, "9007199254740993.1"), 0))
+	proc.SetPrepareParamsWithMeta(
+		prepareStmt.params,
+		nil,
+		[]vector.PrepareParamKind{vector.PrepareParamDecimal},
+	)
+
+	preparedPlan := prepareStmt.PreparePlan.GetDcl().GetPrepare().Plan.GetQuery()
+	require.NotEmpty(t, preparedPlan.Steps)
+	projectNode := preparedPlan.Nodes[preparedPlan.Steps[len(preparedPlan.Steps)-1]]
+	require.Len(t, projectNode.ProjectList, 1)
+	executor, err := colexec.NewExpressionExecutor(proc, projectNode.ProjectList[0])
+	require.NoError(t, err)
+	defer executor.Free()
+
+	result, err := executor.Eval(proc, []*batch.Batch{batch.EmptyForConstFoldBatch}, nil)
+	require.NoError(t, err)
+	require.Equal(t, types.T_bool, result.GetType().Oid)
+	require.False(t, vector.GetFixedAtNoTypeCheck[bool](result, 0),
+		"COM_STMT_EXECUTE DECIMAL must not round adjacent exact values through FLOAT64")
+}
+
+func TestParseExecuteDataDecimalRebindsPreparedAbsExactly(t *testing.T) {
+	const value = "12345678901234567890123456789012345.6789"
+	ctx := context.TODO()
+	proto, proc, prepareStmt := newBinaryPrepareProtocolTestCase(t, "select abs(?)")
+	defer prepareStmt.clearBinaryParamState(proc)
+
+	// Drive the same COM_STMT_EXECUTE decoder used by clients.  DECIMAL values
+	// are length-encoded text on the wire, but their declared type must survive
+	// into execute-time ABS rebinding instead of being coerced through DOUBLE.
+	require.NoError(t, proto.ParseExecuteData(ctx, proc, prepareStmt,
+		buildStringExecutePacket(proto, defines.MYSQL_TYPE_NEWDECIMAL, value), 0))
+	require.Equal(t, []byte{byte(defines.MYSQL_TYPE_NEWDECIMAL), 0}, prepareStmt.ParamTypes)
+	proc.SetPrepareParamsWithMeta(
+		prepareStmt.params,
+		[]bool{false},
+		[]vector.PrepareParamKind{vector.PrepareParamDecimal},
+	)
+	values, err := preparedParamValues(proc, prepareStmt.ParamTypes)
+	require.NoError(t, err)
+	require.Len(t, values, 1)
+	param := values[0].(plan.ParamValue)
+	require.Equal(t, value, param.Value)
+	require.True(t, param.HasRuntimeType)
+	require.Equal(t, types.T_decimal256, param.RuntimeType.Oid)
+
+	runtimePlan, specialized, err := plan.FillValuesOfParamsInPlanWithPreparedNumericOverload(
+		ctx, prepareStmt.PreparePlan.GetDcl().GetPrepare().Plan, values)
+	require.NoError(t, err)
+	require.True(t, specialized)
+	var findAbs func(*planPb.Expr) *planPb.Expr
+	findAbs = func(expr *planPb.Expr) *planPb.Expr {
+		if expr == nil {
+			return nil
+		}
+		if fn := expr.GetF(); fn != nil {
+			if fn.Func.GetObjName() == "abs" {
+				return expr
+			}
+			for _, arg := range fn.Args {
+				if found := findAbs(arg); found != nil {
+					return found
+				}
+			}
+		}
+		return nil
+	}
+	var abs *planPb.Expr
+	for _, node := range runtimePlan.GetQuery().Nodes {
+		if node != nil {
+			for _, projection := range node.ProjectList {
+				if abs = findAbs(projection); abs != nil {
+					break
+				}
+			}
+		}
+		if abs != nil {
+			break
+		}
+	}
+	require.NotNil(t, abs)
+	require.Equal(t, int32(types.T_decimal256), abs.Typ.Id)
+	require.Equal(t, int32(types.T_decimal256), abs.GetF().Args[0].Typ.Id)
+}
+
 func TestParseExecuteDataPreservesYearWireType(t *testing.T) {
 	data := make([]byte, 11)
 	copy(data, []byte{0, 0, 0, 0, 0, 0, 1, byte(defines.MYSQL_TYPE_YEAR), 0})
@@ -3431,6 +3527,68 @@ func Test_send_packet(t *testing.T) {
 
 		err = proto.sendEOFOrOkPacket(1, 0)
 		convey.So(err, convey.ShouldBeNil)
+	})
+}
+
+func TestParseChangeUserRequest(t *testing.T) {
+	t.Run("protocol 41 secure auth plugin and attributes", func(t *testing.T) {
+		proto := &MysqlProtocolImpl{
+			io: gIO,
+			capability: CLIENT_PROTOCOL_41 | CLIENT_SECURE_CONNECTION |
+				CLIENT_PLUGIN_AUTH | CLIENT_CONNECT_ATTRS,
+		}
+		payload := append([]byte("tenant:user\x00"), byte(4))
+		payload = append(payload, 1, 2, 3, 4)
+		payload = append(payload, []byte("db1\x00")...)
+		payload = append(payload, byte(Utf8mb4CollationID), 0)
+		payload = append(payload, []byte(AuthNativePassword+"\x00")...)
+		// length-encoded block: "k" => "value"
+		payload = append(payload, 8, 1, 'k', 5, 'v', 'a', 'l', 'u', 'e')
+
+		req, err := proto.parseChangeUserRequest(context.Background(), payload)
+		require.NoError(t, err)
+		require.Equal(t, "tenant:user", req.username)
+		require.Equal(t, []byte{1, 2, 3, 4}, req.authResponse)
+		require.Equal(t, "db1", req.database)
+		require.True(t, req.hasCollation)
+		require.Equal(t, int(Utf8mb4CollationID), req.collationID)
+		require.Equal(t, AuthNativePassword, req.clientPluginName)
+		require.Equal(t, map[string]string{"k": "value"}, req.connectAttrs)
+	})
+
+	t.Run("legacy nul terminated auth", func(t *testing.T) {
+		proto := &MysqlProtocolImpl{io: gIO}
+		req, err := proto.parseChangeUserRequest(
+			context.Background(), []byte("user\x00password-token\x00db2\x00"),
+		)
+		require.NoError(t, err)
+		require.Equal(t, "user", req.username)
+		require.Equal(t, []byte("password-token"), req.authResponse)
+		require.Equal(t, "db2", req.database)
+		require.False(t, req.hasCollation)
+	})
+
+	t.Run("reject malformed fields", func(t *testing.T) {
+		tests := []struct {
+			name       string
+			capability uint32
+			payload    []byte
+		}{
+			{name: "username", payload: []byte("user")},
+			{name: "secure auth length", capability: CLIENT_SECURE_CONNECTION, payload: []byte("user\x00")},
+			{name: "secure auth body", capability: CLIENT_SECURE_CONNECTION, payload: []byte{'u', 0, 2, 1}},
+			{name: "database", capability: CLIENT_SECURE_CONNECTION, payload: []byte{'u', 0, 0, 'd'}},
+			{name: "collation", capability: CLIENT_SECURE_CONNECTION | CLIENT_PROTOCOL_41, payload: []byte{'u', 0, 0, 0, 0xff, 0xff}},
+			{name: "attributes", capability: CLIENT_SECURE_CONNECTION | CLIENT_CONNECT_ATTRS, payload: []byte{'u', 0, 0, 0, 4, 1, 'k'}},
+			{name: "trailing", capability: CLIENT_SECURE_CONNECTION, payload: []byte{'u', 0, 0, 0, 1}},
+		}
+		for _, test := range tests {
+			t.Run(test.name, func(t *testing.T) {
+				proto := &MysqlProtocolImpl{io: gIO, capability: test.capability}
+				_, err := proto.parseChangeUserRequest(context.Background(), test.payload)
+				require.Error(t, err)
+			})
+		}
 	})
 }
 

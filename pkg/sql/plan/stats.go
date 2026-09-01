@@ -149,17 +149,38 @@ func (sc *StatsCache) Get(tableID uint64) StatsInfoWrapper {
 
 // Set caches the stats result for the table.
 func (sc *StatsCache) Set(tableID uint64, stats *pb.StatsInfo) {
+	sc.set(tableID, stats)
+}
+
+// SetAndReportReset caches stats and reports whether the bounded cache evicted
+// all prior entries. Callers that keep side metadata can reset it in lockstep.
+func (sc *StatsCache) SetAndReportReset(tableID uint64, stats *pb.StatsInfo) bool {
+	return sc.set(tableID, stats)
+}
+
+func (sc *StatsCache) set(tableID uint64, stats *pb.StatsInfo) bool {
 	if sc == nil {
-		return
+		return false
 	}
+	reset := false
 	if len(sc.cache) > statsCacheMaxSize {
 		sc.cache = make(map[uint64]StatsInfoWrapper, statsCacheInitSize)
 		logutil.Infof("statscache entries more than %v in long session, release memory", statsCacheMaxSize)
+		reset = true
 	}
 	sc.cache[tableID] = StatsInfoWrapper{
 		stats:     stats,
 		lastVisit: time.Now().Unix(),
 	}
+	return reset
+}
+
+// Delete removes one table without disturbing unrelated session statistics.
+func (sc *StatsCache) Delete(tableID uint64) {
+	if sc == nil {
+		return
+	}
+	delete(sc.cache, tableID)
 }
 
 func NewStatsInfo() *pb.StatsInfo {
@@ -422,7 +443,7 @@ func isHighNdvCols(cols []int32, tableDef *TableDef, builder *QueryBuilder) bool
 		return false
 	}
 	// first to check if it is primary key.
-	if containsAllPKs(cols, tableDef) {
+	if containsAllSQLEqualityCompatiblePKs(cols, tableDef) {
 		return true
 	}
 
@@ -443,7 +464,7 @@ func (builder *QueryBuilder) getColNDVRatio(cols []int32, tableDef *TableDef) fl
 		return 0
 	}
 	// first to check if it is primary key.
-	if containsAllPKs(cols, tableDef) {
+	if containsAllSQLEqualityCompatiblePKs(cols, tableDef) {
 		return 1
 	}
 

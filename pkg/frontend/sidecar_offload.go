@@ -335,6 +335,11 @@ func rewriteSelectStmt(stmt tree.SelectStatement, defaultDB string, manifestBase
 		for _, se := range s.Exprs {
 			walkExprForSubqueries(se.Expr, defaultDB, manifestBaseURL, cteNames)
 		}
+		for _, definition := range s.Windows {
+			if definition != nil {
+				walkWindowSpecForSubqueries(definition.Spec, defaultDB, manifestBaseURL, cteNames)
+			}
+		}
 	case *tree.UnionClause:
 		rewriteSelectStmt(s.Left, defaultDB, manifestBaseURL, cteNames)
 		rewriteSelectStmt(s.Right, defaultDB, manifestBaseURL, cteNames)
@@ -378,6 +383,12 @@ func walkExprForSubqueries(expr tree.Expr, defaultDB string, manifestBaseURL str
 		for _, arg := range e.Exprs {
 			walkExprForSubqueries(arg, defaultDB, manifestBaseURL, cteNames)
 		}
+		for _, order := range e.OrderBy {
+			if order != nil {
+				walkExprForSubqueries(order.Expr, defaultDB, manifestBaseURL, cteNames)
+			}
+		}
+		walkWindowSpecForSubqueries(e.WindowSpec, defaultDB, manifestBaseURL, cteNames)
 	case *tree.CaseExpr:
 		walkExprForSubqueries(e.Expr, defaultDB, manifestBaseURL, cteNames)
 		for _, w := range e.Whens {
@@ -399,6 +410,27 @@ func walkExprForSubqueries(expr tree.Expr, defaultDB string, manifestBaseURL str
 	case *tree.Tuple:
 		for _, item := range e.Exprs {
 			walkExprForSubqueries(item, defaultDB, manifestBaseURL, cteNames)
+		}
+	}
+}
+
+func walkWindowSpecForSubqueries(spec *tree.WindowSpec, defaultDB string, manifestBaseURL string, cteNames map[string]bool) {
+	if spec == nil {
+		return
+	}
+	for _, expr := range spec.PartitionBy {
+		walkExprForSubqueries(expr, defaultDB, manifestBaseURL, cteNames)
+	}
+	for _, order := range spec.OrderBy {
+		if order != nil {
+			walkExprForSubqueries(order.Expr, defaultDB, manifestBaseURL, cteNames)
+		}
+	}
+	if spec.Frame != nil {
+		for _, bound := range []*tree.FrameBound{spec.Frame.Start, spec.Frame.End} {
+			if bound != nil {
+				walkExprForSubqueries(bound.Expr, defaultDB, manifestBaseURL, cteNames)
+			}
 		}
 	}
 }

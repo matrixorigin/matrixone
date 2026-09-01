@@ -181,6 +181,13 @@ func (vq *VisitPlan) exploreNode(ctx context.Context, rule VisitPlanRule, node *
 		}
 	}
 
+	for i := range node.PhysicalEqualityKeyList {
+		node.PhysicalEqualityKeyList[i], err = rule.ApplyExpr(node.PhysicalEqualityKeyList[i])
+		if err != nil {
+			return err
+		}
+	}
+
 	for i := range node.OrderBy {
 		node.OrderBy[i].Expr, err = rule.ApplyExpr(node.OrderBy[i].Expr)
 		if err != nil {
@@ -221,19 +228,29 @@ func (vq *VisitPlan) exploreNode(ctx context.Context, rule VisitPlanRule, node *
 	// expression here; it must receive the same execute-time coercion as the
 	// scan filter or the lock path can still run the stale strict cast.
 	for _, target := range node.LockTargets {
-		if target == nil || target.LockRows == nil {
+		if target == nil {
 			continue
 		}
-		originalLockRows := target.LockRows
-		target.LockRows, err = rule.ApplyExpr(originalLockRows)
-		if err != nil {
-			return err
-		}
 		if normalizer, ok := rule.(interface {
-			NormalizePreparedLockRows(*Expr, plan.Type) *Expr
+			NormalizePreparedLockRows(*Expr, plan.Type) (*Expr, error)
 		}); ok {
-			target.LockRows = normalizer.NormalizePreparedLockRows(
-				target.LockRows, target.PrimaryColTyp)
+			if target.LockRows != nil {
+				target.LockRows, err = rule.ApplyExpr(target.LockRows)
+				if err != nil {
+					return err
+				}
+				rewrittenLockRows := target.LockRows
+				target.LockRows, err = normalizer.NormalizePreparedLockRows(
+					rewrittenLockRows, target.PrimaryColTyp)
+				if err != nil {
+					return err
+				}
+			}
+		} else if target.LockRows != nil {
+			target.LockRows, err = rule.ApplyExpr(target.LockRows)
+			if err != nil {
+				return err
+			}
 		}
 	}
 
@@ -389,6 +406,13 @@ func visitMissingNodeExprs(
 			for i := range node.GroupBy {
 				var err error
 				node.GroupBy[i], err = rule.ApplyExpr(node.GroupBy[i])
+				if err != nil {
+					return err
+				}
+			}
+			for i := range node.PhysicalEqualityKeyList {
+				var err error
+				node.PhysicalEqualityKeyList[i], err = rule.ApplyExpr(node.PhysicalEqualityKeyList[i])
 				if err != nil {
 					return err
 				}

@@ -2205,12 +2205,13 @@ func TestRenderCreateTableDDLFromSchema_EnumSetValues(t *testing.T) {
 		TableName: "t_enum_set",
 		Columns: []TableColumn{
 			{Name: "c_enum", SQLType: "ENUM", EnumValues: "red,green,blue", Position: 1},
-			{Name: "c_set", SQLType: "BIGINT UNSIGNED", EnumValues: "a,b,c", Position: 2},
+			{Name: "c_set", SQLType: "BIGINT UNSIGNED", EnumValues: "a,b,c", Position: 2, Unsigned: true, HasDefault: true},
 		},
 	})
 
 	assert.Contains(t, ddl, "`c_enum` ENUM('red','green','blue')")
-	assert.Contains(t, ddl, "`c_set` SET('a','b','c')")
+	assert.Contains(t, ddl, "`c_set` SET('a','b','c') DEFAULT NULL")
+	assert.NotContains(t, ddl, "SET('a','b','c') UNSIGNED")
 }
 
 func TestRenderCreateTableDDLFromSchema_AutoIncrementSkipsDefaultNull(t *testing.T) {

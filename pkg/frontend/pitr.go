@@ -28,6 +28,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/sqlquote"
 	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/frontend/databranchutils"
 	pbplan "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
@@ -91,6 +92,8 @@ type pitrRecord struct {
 	objId         uint64
 	pitrValue     uint64
 	pitrUnit      string
+	pitrStatus    uint8
+	hasStatus     bool
 }
 
 const (
@@ -310,7 +313,7 @@ func doCreatePitr(ctx context.Context, ses *Session, stmt *tree.CreatePitr) (err
 	// Hold the stable owner-publication write barrier through PITR creation.
 	// COPY ALTER crosses the same barrier before probing historical owners, so
 	// an empty probe cannot race a PITR whose create time was already chosen.
-	if err = lockDataBranchLineageOwnerPublication(ctx, bh); err != nil {
+	if err = lockDataBranchLineageOwnerLifecycle(ctx, bh); err != nil {
 		return err
 	}
 
@@ -656,9 +659,8 @@ func doCreatePitr(ctx context.Context, ses *Session, stmt *tree.CreatePitr) (err
 
 	if execResultArrayHasData(erArray) {
 		var (
-			sysPitrValue       uint64
-			sysPitrUnit        string
-			oldMinTs, newMinTs time.Time
+			sysPitrValue uint64
+			sysPitrUnit  string
 		)
 		for i := uint64(0); i < erArray[0].GetRowCount(); i++ {
 			sysPitrValue, err = erArray[0].GetUint64(ctx, i, 11)
@@ -671,19 +673,19 @@ func doCreatePitr(ctx context.Context, ses *Session, stmt *tree.CreatePitr) (err
 			}
 		}
 
-		oldMinTs, err = addTimeSpan(time.Time{}, int(sysPitrValue), sysPitrUnit)
+		mergedValue, mergedUnit, err := databranchutils.MergePitrRetentionRanges(
+			int(sysPitrValue),
+			sysPitrUnit,
+			int(pitrVal),
+			pitrUnit,
+		)
 		if err != nil {
 			return err
 		}
 
-		newMinTs, err = addTimeSpan(time.Time{}, int(pitrVal), pitrUnit)
-		if err != nil {
-			return err
-		}
-
-		if newMinTs.UnixNano() < oldMinTs.UnixNano() {
+		if mergedValue != int(sysPitrValue) || mergedUnit != sysPitrUnit {
 			// update sysMoCatalogPitr
-			sql = fmt.Sprintf("update mo_catalog.mo_pitr set pitr_length = %d, pitr_unit = '%s' where pitr_name = '%s';", pitrVal, pitrUnit, SYSMOCATALOGPITR)
+			sql = fmt.Sprintf("update mo_catalog.mo_pitr set pitr_length = %d, pitr_unit = '%s' where pitr_name = '%s';", mergedValue, mergedUnit, SYSMOCATALOGPITR)
 			getLogger(ses.GetService()).Info("update sys mo_catalog pitr", zap.String("sql", sql))
 			err = bh.Exec(ctx, sql)
 			if err != nil {
@@ -787,6 +789,9 @@ func doDropPitr(ctx context.Context, ses *Session, stmt *tree.DropPitr) (err err
 	if err != nil {
 		return err
 	}
+	if err = lockDataBranchLineageOwnerLifecycle(ctx, bh); err != nil {
+		return err
+	}
 
 	// check pitr exists or not
 	tenantInfo := ses.GetTenantInfo()
@@ -862,7 +867,7 @@ func doAlterPitr(ctx context.Context, ses *Session, stmt *tree.AlterPitr) (err e
 	}
 
 	// check pitr value
-	if stmt.PitrValue < 0 || stmt.PitrValue > 100 {
+	if stmt.PitrValue <= 0 || stmt.PitrValue > 100 {
 		return moerr.NewInternalErrorf(ctx, "invalid pitr value %d", stmt.PitrValue)
 	}
 
@@ -878,6 +883,9 @@ func doAlterPitr(ctx context.Context, ses *Session, stmt *tree.AlterPitr) (err e
 	}()
 
 	if err != nil {
+		return err
+	}
+	if err = lockDataBranchLineageOwnerLifecycle(ctx, bh); err != nil {
 		return err
 	}
 
@@ -896,8 +904,42 @@ func doAlterPitr(ctx context.Context, ses *Session, stmt *tree.AlterPitr) (err e
 			return err
 		}
 	} else {
+		currentPitr, getErr := getPitrByName(
+			ctx,
+			bh,
+			string(stmt.Name),
+			uint64(tenantInfo.GetTenantID()),
+		)
+		if getErr != nil {
+			return getErr
+		}
+		if currentPitr.hasStatus && currentPitr.pitrStatus != 1 {
+			return moerr.NewNotSupportedf(ctx, "cannot alter inactive pitr %s", stmt.Name)
+		}
+		doesNotExpand, rangeErr := databranchutils.PitrRetentionRangeDoesNotExpand(
+			int(currentPitr.pitrValue),
+			currentPitr.pitrUnit,
+			int(stmt.PitrValue),
+			pitrUnit,
+		)
+		if rangeErr != nil {
+			return rangeErr
+		}
+		if !doesNotExpand {
+			return moerr.NewNotSupportedf(
+				ctx,
+				"cannot expand PITR %s recovery range from %d %s to %d %s; create a new PITR instead",
+				string(stmt.Name),
+				currentPitr.pitrValue,
+				currentPitr.pitrUnit,
+				stmt.PitrValue,
+				pitrUnit,
+			)
+		}
+
+		alterTime := time.Now().UTC()
 		sql = getSqlForAlterPitr(
-			time.Now().UTC().UnixNano(),
+			alterTime.UnixNano(),
 			uint8(stmt.PitrValue),
 			pitrUnit,
 			string(stmt.Name),
@@ -914,7 +956,7 @@ func doAlterPitr(ctx context.Context, ses *Session, stmt *tree.AlterPitr) (err e
 		if err != nil {
 			return err
 		}
-		if err = compactHistoricalAlterLineageWithBH(ctx, bh, time.Now().UTC()); err != nil {
+		if err = compactHistoricalAlterLineageWithBH(ctx, bh, alterTime); err != nil {
 			return err
 		}
 	}
@@ -922,7 +964,7 @@ func doAlterPitr(ctx context.Context, ses *Session, stmt *tree.AlterPitr) (err e
 }
 
 func doRestorePitr(ctx context.Context, ses *Session, stmt *tree.RestorePitr) (stats statistic.StatsArray, err error) {
-	bh := ses.GetBackgroundExec(ctx)
+	bh := ses.GetBackgroundExec(ctx, &BackgroundExecOption{forcePessimisticRC: true})
 	bh.SetRestore(true)
 	defer func() {
 		stats = bh.GetExecStatsArray()
@@ -961,6 +1003,9 @@ func doRestorePitr(ctx context.Context, ses *Session, stmt *tree.RestorePitr) (s
 	defer func() {
 		err = finishTxnAndRetireMongoDBAccounts(ctx, bh, ses.GetService(), retiredMongoDBAccountIDs, err)
 	}()
+	if err = lockRestoreLineageOwnerLifecycle(ctx, bh, stmt.Level); err != nil {
+		return stats, err
+	}
 	if err = bh.Exec(ctx, catalog.ViewMetadataLifecycleGateSQL); err != nil {
 		return stats, err
 	}
@@ -2026,6 +2071,22 @@ func getPitrRecords(ctx context.Context, bh BackgroundExec, sql string) ([]*pitr
 				if record.pitrUnit, err = er.GetString(ctx, row, 12); err != nil {
 					return nil, err
 				}
+				// pitr_status was appended to the legacy 13-column schema before
+				// pitr_status_changed_time. Parse it as soon as it is present so a
+				// partially upgraded catalog cannot make an inactive PITR look
+				// active. The changed-time column is not needed by ALTER and has
+				// had different types across catalog versions, so do not read it.
+				if er.GetColumnCount() > 13 {
+					status, statusErr := er.GetUint64(ctx, row, 13)
+					if statusErr != nil {
+						return nil, statusErr
+					}
+					if status > math.MaxUint8 {
+						return nil, moerr.NewInvalidInputf(ctx, "invalid PITR status %d", status)
+					}
+					record.pitrStatus = uint8(status)
+					record.hasStatus = true
+				}
 			}
 			records = append(records, &record)
 		}
@@ -2125,18 +2186,11 @@ func addTimeSpan(pivot time.Time, length int, unit string) (time.Time, error) {
 		now = time.Now().UTC()
 	}
 
-	switch unit {
-	case "h":
-		return now.Add(time.Duration(-length) * time.Hour), nil
-	case "d":
-		return now.AddDate(0, 0, -length), nil
-	case "mo":
-		return now.AddDate(0, -length, 0), nil
-	case "y":
-		return now.AddDate(-length, 0, 0), nil
-	default:
-		return time.Time{}, moerr.NewInternalErrorNoCtxf("unknown unit '%s'", unit)
+	lower, err := databranchutils.PitrRetentionLowerBound(now, length, unit)
+	if err != nil {
+		return time.Time{}, err
 	}
+	return time.Unix(0, lower).UTC(), nil
 }
 
 func checkPitrValidOrNot(pitrRecord *pitrRecord, stmt *tree.RestorePitr, tenantInfo *TenantInfo) (err error) {

@@ -98,6 +98,25 @@ func TestStatementHasSQLCalcFoundRowsPagination(t *testing.T) {
 	}
 }
 
+func TestLiteralLimitZeroSkipsUnconsumedProducerSteps(t *testing.T) {
+	c := newLazyUnionAllTestCompile(t)
+	producer := &plan.Node{NodeType: plan.Node_SINK}
+	final := &plan.Node{
+		NodeType: plan.Node_PROJECT,
+		Limit:    plan2.MakePlan2Uint64ConstExprWithType(0),
+	}
+	qry := &plan.Query{Nodes: []*plan.Node{producer, final}, Steps: []int32{0, 1}}
+	require.Equal(t, 1, c.firstStepToCompile(qry))
+
+	final.Limit = plan2.MakePlan2Uint64ConstExprWithType(1)
+	require.Zero(t, c.firstStepToCompile(qry))
+
+	c.stmt = sqlCalcFoundRowsTestStatement()
+	c.foundRowsOwnerNode = final
+	final.Limit = plan2.MakePlan2Uint64ConstExprWithType(0)
+	require.Zero(t, c.firstStepToCompile(qry))
+}
+
 func TestSQLCalcFoundRowsDisablesLiteralLimitZeroFastPath(t *testing.T) {
 	c := newLazyUnionAllTestCompile(t)
 	node := &plan.Node{Limit: plan2.MakePlan2Uint64ConstExprWithType(0)}
@@ -289,6 +308,41 @@ func TestCompileResetBeginsSQLCalcFoundRowsExecution(t *testing.T) {
 	require.False(t, proc.FoundRowsRecorded())
 	require.Zero(t, proc.GetResultRows())
 	require.Equal(t, uint64(9), proc.GetFoundRows())
+}
+
+func TestMarkInsertTableScansNotLockMetaDoesNotMutateWriteTarget(t *testing.T) {
+	targetRef := &plan.ObjectRef{SchemaName: "db", ObjName: "target"}
+	sourceRef := &plan.ObjectRef{SchemaName: "db", ObjName: "source"}
+	targetScan := &plan.Node{NodeType: plan.Node_TABLE_SCAN, ObjRef: targetRef}
+	sourceScan := &plan.Node{NodeType: plan.Node_TABLE_SCAN, ObjRef: sourceRef}
+	write := &plan.Node{
+		NodeType: plan.Node_MULTI_UPDATE,
+		UpdateCtxList: []*plan.UpdateCtx{{
+			ObjRef: targetRef,
+		}},
+	}
+	query := &plan.Query{Nodes: []*plan.Node{
+		targetScan,
+		sourceScan,
+		{NodeType: plan.Node_TABLE_SCAN},
+		write,
+	}}
+
+	markInsertTableScansNotLockMeta(query)
+
+	require.NotSame(t, targetRef, targetScan.ObjRef)
+	require.NotSame(t, sourceRef, sourceScan.ObjRef)
+	require.True(t, targetScan.ObjRef.NotLockMeta)
+	require.True(t, sourceScan.ObjRef.NotLockMeta)
+	require.False(t, targetRef.NotLockMeta)
+	require.False(t, sourceRef.NotLockMeta)
+	require.Same(t, targetRef, write.UpdateCtxList[0].ObjRef)
+
+	c := &Compile{needLockMeta: true, lockMeta: NewLockMeta()}
+	c.appendMetaTables(targetScan.ObjRef)
+	c.appendMetaTables(sourceScan.ObjRef)
+	c.appendMetaTables(write.UpdateCtxList[0].ObjRef)
+	require.Equal(t, map[string]struct{}{"db target": {}}, c.lockMeta.metaTables)
 }
 
 // ============================================================================

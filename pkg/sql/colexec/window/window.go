@@ -624,10 +624,25 @@ func partitionEnd(partitions []int64, partition int, rowCount int) int {
 	return int(partitions[partition+1])
 }
 
-// processCumulativeAggregateFuncRange advances one aggregate state per input
-// row and snapshots it into the corresponding output group. This changes
-// fixed-size cumulative aggregates such as SUM from O(partitionRows^2) Fill
-// calls to O(partitionRows), while retaining state across output chunks.
+// cumulativePartitionUsesRunning compares the prefix Fill calls saved by a
+// running aggregate with the AggBatchSize physical state chunk initialized for
+// that partition. Small partitions stay on the direct evaluator; large
+// partitions use one running state. Evaluating this per partition avoids both
+// allocation churn on high-cardinality inputs and quadratic work in mixed
+// inputs that contain a few large partitions.
+func cumulativePartitionUsesRunning(start, end int) bool {
+	rows := end - start
+	if rows <= 1 {
+		return false
+	}
+	savedFills := uint64(rows) * uint64(rows-1) / 2
+	return savedFills > uint64(aggexec.AggBatchSize)
+}
+
+// processCumulativeAggregateFuncRange evaluates small partitions directly and
+// advances one retained aggregate state for each large partition. The running
+// state changes large cumulative aggregates from O(partitionRows^2) Fill calls
+// to O(partitionRows), while remaining valid across output chunks.
 func (ctr *container) processCumulativeAggregateFuncRange(
 	idx int,
 	ap *Window,
@@ -645,33 +660,49 @@ func (ctr *container) processCumulativeAggregateFuncRange(
 		}
 	}()
 
-	if ctr.runningAgg == nil {
-		ctr.runningAgg, retErr = ctr.newAggregateExecutor(idx, ap, proc, 1)
-		if retErr != nil {
-			return nil, retErr
-		}
-	}
-
 	n := ctr.bat.RowCount()
+	currentPartitionStart := 0
+	if len(ctr.ps) > 0 {
+		currentPartitionStart = int(ctr.ps[ctr.runningPartition])
+	}
 	currentPartitionEnd := partitionEnd(ctr.ps, ctr.runningPartition, n)
 	for j := outputStart; j < outputEnd; j++ {
 		if err := checkCanceled(proc, j-outputStart); err != nil {
 			return nil, err
 		}
 		if j == currentPartitionEnd {
-			ctr.runningAgg.Free()
-			ctr.runningAgg, retErr = ctr.newAggregateExecutor(idx, ap, proc, 1)
-			if retErr != nil {
-				return nil, retErr
+			if ctr.runningAgg != nil {
+				ctr.runningAgg.Free()
+				ctr.runningAgg = nil
 			}
 			ctr.runningPartition++
+			currentPartitionStart = j
 			currentPartitionEnd = partitionEnd(ctr.ps, ctr.runningPartition, n)
 		}
-		if err := ctr.runningAgg.Fill(0, j, ctr.aggVecs[idx].Vec); err != nil {
-			return nil, err
-		}
-		if err := ctr.batAggs[idx].Merge(ctr.runningAgg, j-outputStart, 0); err != nil {
-			return nil, err
+
+		group := j - outputStart
+		if cumulativePartitionUsesRunning(currentPartitionStart, currentPartitionEnd) {
+			if ctr.runningAgg == nil {
+				ctr.runningAgg, retErr = ctr.newAggregateExecutor(idx, ap, proc, 1)
+				if retErr != nil {
+					return nil, retErr
+				}
+			}
+			if err := ctr.runningAgg.Fill(0, j, ctr.aggVecs[idx].Vec); err != nil {
+				return nil, err
+			}
+			if err := ctr.batAggs[idx].Merge(ctr.runningAgg, group, 0); err != nil {
+				return nil, err
+			}
+		} else {
+			for k := currentPartitionStart; k <= j; k++ {
+				if err := checkCanceled(proc, k-currentPartitionStart); err != nil {
+					return nil, err
+				}
+				if err := ctr.batAggs[idx].Fill(group, k, ctr.aggVecs[idx].Vec); err != nil {
+					return nil, err
+				}
+			}
 		}
 		ctr.runningNextRow = j + 1
 	}
@@ -1324,9 +1355,6 @@ func appendDefaultOrNull(result *vector.Vector, defaultVec *vector.Vector, rowId
 	srcRow := int64(0)
 	if !defaultVec.IsConst() {
 		srcRow = int64(rowIdx)
-	}
-	if defaultVec.IsNull(uint64(srcRow)) {
-		return vector.AppendAny(result, nil, true, mp)
 	}
 	return result.UnionOne(defaultVec, srcRow, mp)
 }
@@ -2404,12 +2432,18 @@ func searchLeftWithLocation(loc *time.Location, start, end, rowIdx int, vec *vec
 			if plus {
 				fol, err := doDateAdd(col[rowIdx], diff, unit)
 				if err != nil {
+					if moerr.IsMoErrCode(err, moerr.ErrOutOfRange) {
+						return temporalRangeIntervalOverflowBoundary(start, end, true, diff, desc), nil
+					}
 					return left, err
 				}
 				left = genericSearchLeft(start, end-1, col, fol, genericEqual[types.Date], cmpl)
 			} else {
 				fol, err := doDateSub(col[rowIdx], diff, unit)
 				if err != nil {
+					if moerr.IsMoErrCode(err, moerr.ErrOutOfRange) {
+						return temporalRangeIntervalOverflowBoundary(start, end, false, diff, desc), nil
+					}
 					return left, err
 				}
 				left = genericSearchLeft(start, end-1, col, fol, genericEqual[types.Date], cmpl)
@@ -2429,12 +2463,18 @@ func searchLeftWithLocation(loc *time.Location, start, end, rowIdx int, vec *vec
 			if plus {
 				fol, err := doDatetimeAdd(col[rowIdx], diff, unit)
 				if err != nil {
+					if moerr.IsMoErrCode(err, moerr.ErrOutOfRange) {
+						return temporalRangeIntervalOverflowBoundary(start, end, true, diff, desc), nil
+					}
 					return left, err
 				}
 				left = genericSearchLeft(start, end-1, col, fol, genericEqual[types.Datetime], cmpl)
 			} else {
 				fol, err := doDatetimeSub(col[rowIdx], diff, unit)
 				if err != nil {
+					if moerr.IsMoErrCode(err, moerr.ErrOutOfRange) {
+						return temporalRangeIntervalOverflowBoundary(start, end, false, diff, desc), nil
+					}
 					return left, err
 				}
 				left = genericSearchLeft(start, end-1, col, fol, genericEqual[types.Datetime], cmpl)
@@ -2454,12 +2494,18 @@ func searchLeftWithLocation(loc *time.Location, start, end, rowIdx int, vec *vec
 			if plus {
 				fol, err := doTimeAdd(col[rowIdx], diff, unit)
 				if err != nil {
+					if moerr.IsMoErrCode(err, moerr.ErrOutOfRange) {
+						return temporalRangeIntervalOverflowBoundary(start, end, true, diff, desc), nil
+					}
 					return left, err
 				}
 				left = genericSearchLeft(start, end-1, col, fol, genericEqual[types.Time], cmpl)
 			} else {
 				fol, err := doTimeSub(col[rowIdx], diff, unit)
 				if err != nil {
+					if moerr.IsMoErrCode(err, moerr.ErrOutOfRange) {
+						return temporalRangeIntervalOverflowBoundary(start, end, false, diff, desc), nil
+					}
 					return left, err
 				}
 				left = genericSearchLeft(start, end-1, col, fol, genericEqual[types.Time], cmpl)
@@ -2479,12 +2525,18 @@ func searchLeftWithLocation(loc *time.Location, start, end, rowIdx int, vec *vec
 			if plus {
 				fol, err := doTimestampAdd(loc, col[rowIdx], diff, unit)
 				if err != nil {
+					if moerr.IsMoErrCode(err, moerr.ErrOutOfRange) {
+						return temporalRangeIntervalOverflowBoundary(start, end, true, diff, desc), nil
+					}
 					return left, err
 				}
 				left = genericSearchLeft(start, end-1, col, fol, genericEqual[types.Timestamp], cmpl)
 			} else {
 				fol, err := doTimestampSub(loc, col[rowIdx], diff, unit)
 				if err != nil {
+					if moerr.IsMoErrCode(err, moerr.ErrOutOfRange) {
+						return temporalRangeIntervalOverflowBoundary(start, end, false, diff, desc), nil
+					}
 					return left, err
 				}
 				left = genericSearchLeft(start, end-1, col, fol, genericEqual[types.Timestamp], cmpl)
@@ -2501,6 +2553,19 @@ func doDateSub(start types.Date, diff int64, unit int64) (types.Date, error) {
 	if err != nil {
 		return 0, err
 	}
+	if !temporalRangeIntervalConversionOK(diff, types.IntervalType(unit)) {
+		return 0, moerr.NewOutOfRangeNoCtx("date", "")
+	}
+	if !temporalRangeCalendarIntervalInDomain(start.ToDatetime(), diff, types.IntervalType(unit), true) {
+		return 0, moerr.NewOutOfRangeNoCtx("date", "")
+	}
+	if types.IntervalType(unit) == types.MicroSecond {
+		dt, ok := checkedDatetimeMicrosecondInterval(start.ToDatetime(), diff, true, types.DateType)
+		if !ok {
+			return 0, moerr.NewOutOfRangeNoCtx("date", "")
+		}
+		return dt.ToDate(), nil
+	}
 	dt, success := start.ToDatetime().AddInterval(-diff, types.IntervalType(unit), types.DateType)
 	if success {
 		return dt.ToDate(), nil
@@ -2513,6 +2578,16 @@ func doTimeSub(start types.Time, diff int64, unit int64) (types.Time, error) {
 	err := types.JudgeIntervalNumOverflow(diff, types.IntervalType(unit))
 	if err != nil {
 		return 0, err
+	}
+	if !temporalRangeIntervalConversionOK(diff, types.IntervalType(unit)) {
+		return 0, moerr.NewOutOfRangeNoCtx("time", "")
+	}
+	if types.IntervalType(unit) == types.MicroSecond {
+		t, ok := checkedTimeMicrosecondInterval(start, diff, true)
+		if !ok {
+			return 0, moerr.NewOutOfRangeNoCtx("time", "")
+		}
+		return t, nil
 	}
 	t, success := start.AddInterval(-diff, types.IntervalType(unit))
 	if success {
@@ -2527,6 +2602,19 @@ func doDatetimeSub(start types.Datetime, diff int64, unit int64) (types.Datetime
 	if err != nil {
 		return 0, err
 	}
+	if !temporalRangeIntervalConversionOK(diff, types.IntervalType(unit)) {
+		return 0, moerr.NewOutOfRangeNoCtx("datetime", "")
+	}
+	if !temporalRangeCalendarIntervalInDomain(start, diff, types.IntervalType(unit), true) {
+		return 0, moerr.NewOutOfRangeNoCtx("datetime", "")
+	}
+	if types.IntervalType(unit) == types.MicroSecond {
+		dt, ok := checkedDatetimeMicrosecondInterval(start, diff, true, types.DateTimeType)
+		if !ok {
+			return 0, moerr.NewOutOfRangeNoCtx("datetime", "")
+		}
+		return dt, nil
+	}
 	dt, success := start.AddInterval(-diff, types.IntervalType(unit), types.DateTimeType)
 	if success {
 		return dt, nil
@@ -2539,6 +2627,19 @@ func doTimestampSub(loc *time.Location, start types.Timestamp, diff int64, unit 
 	err := types.JudgeIntervalNumOverflow(diff, types.IntervalType(unit))
 	if err != nil {
 		return 0, err
+	}
+	if !temporalRangeIntervalConversionOK(diff, types.IntervalType(unit)) {
+		return 0, moerr.NewOutOfRangeNoCtx("timestamp", "")
+	}
+	if !temporalRangeCalendarIntervalInDomain(start.ToDatetime(loc), diff, types.IntervalType(unit), true) {
+		return 0, moerr.NewOutOfRangeNoCtx("timestamp", "")
+	}
+	if types.IntervalType(unit) == types.MicroSecond {
+		dt, ok := checkedDatetimeMicrosecondInterval(start.ToDatetime(loc), diff, true, types.DateTimeType)
+		if !ok {
+			return 0, moerr.NewOutOfRangeNoCtx("timestamp", "")
+		}
+		return timestampRangeBoundary(dt, loc), nil
 	}
 	dt, success := start.ToDatetime(loc).AddInterval(-diff, types.IntervalType(unit), types.DateTimeType)
 	if success {
@@ -2858,12 +2959,18 @@ func searchRightWithLocation(loc *time.Location, start, end, rowIdx int, vec *ve
 			if sub {
 				fol, err := doDateSub(col[rowIdx], diff, unit)
 				if err != nil {
+					if moerr.IsMoErrCode(err, moerr.ErrOutOfRange) {
+						return temporalRangeIntervalOverflowBoundary(start, end, false, diff, desc), nil
+					}
 					return right, err
 				}
 				right = genericSearchRight(start, end-1, col, fol, genericEqual[types.Date], cmpl)
 			} else {
 				fol, err := doDateAdd(col[rowIdx], diff, unit)
 				if err != nil {
+					if moerr.IsMoErrCode(err, moerr.ErrOutOfRange) {
+						return temporalRangeIntervalOverflowBoundary(start, end, true, diff, desc), nil
+					}
 					return right, err
 				}
 				right = genericSearchRight(start, end-1, col, fol, genericEqual[types.Date], cmpl)
@@ -2892,12 +2999,18 @@ func searchRightWithLocation(loc *time.Location, start, end, rowIdx int, vec *ve
 			if sub {
 				fol, err := doDatetimeSub(col[rowIdx], diff, unit)
 				if err != nil {
+					if moerr.IsMoErrCode(err, moerr.ErrOutOfRange) {
+						return temporalRangeIntervalOverflowBoundary(start, end, false, diff, desc), nil
+					}
 					return right, err
 				}
 				right = genericSearchRight(start, end-1, col, fol, genericEqual[types.Datetime], cmpl)
 			} else {
 				fol, err := doDatetimeAdd(col[rowIdx], diff, unit)
 				if err != nil {
+					if moerr.IsMoErrCode(err, moerr.ErrOutOfRange) {
+						return temporalRangeIntervalOverflowBoundary(start, end, true, diff, desc), nil
+					}
 					return right, err
 				}
 				right = genericSearchRight(start, end-1, col, fol, genericEqual[types.Datetime], cmpl)
@@ -2917,12 +3030,18 @@ func searchRightWithLocation(loc *time.Location, start, end, rowIdx int, vec *ve
 			if sub {
 				fol, err := doTimeSub(col[rowIdx], diff, unit)
 				if err != nil {
+					if moerr.IsMoErrCode(err, moerr.ErrOutOfRange) {
+						return temporalRangeIntervalOverflowBoundary(start, end, false, diff, desc), nil
+					}
 					return right, err
 				}
 				right = genericSearchRight(start, end-1, col, fol, genericEqual[types.Time], cmpl)
 			} else {
 				fol, err := doTimeAdd(col[rowIdx], diff, unit)
 				if err != nil {
+					if moerr.IsMoErrCode(err, moerr.ErrOutOfRange) {
+						return temporalRangeIntervalOverflowBoundary(start, end, true, diff, desc), nil
+					}
 					return right, err
 				}
 				right = genericSearchRight(start, end-1, col, fol, genericEqual[types.Time], cmpl)
@@ -2942,12 +3061,18 @@ func searchRightWithLocation(loc *time.Location, start, end, rowIdx int, vec *ve
 			if sub {
 				fol, err := doTimestampSub(loc, col[rowIdx], diff, unit)
 				if err != nil {
+					if moerr.IsMoErrCode(err, moerr.ErrOutOfRange) {
+						return temporalRangeIntervalOverflowBoundary(start, end, false, diff, desc), nil
+					}
 					return right, err
 				}
 				right = genericSearchRight(start, end-1, col, fol, genericEqual[types.Timestamp], cmpl)
 			} else {
 				fol, err := doTimestampAdd(loc, col[rowIdx], diff, unit)
 				if err != nil {
+					if moerr.IsMoErrCode(err, moerr.ErrOutOfRange) {
+						return temporalRangeIntervalOverflowBoundary(start, end, true, diff, desc), nil
+					}
 					return right, err
 				}
 				right = genericSearchRight(start, end-1, col, fol, genericEqual[types.Timestamp], cmpl)
@@ -3009,10 +3134,156 @@ func outOfDomainRangeBoundary(start, end int, aboveDomain, desc bool) int {
 	return start
 }
 
+// temporalRangeOverflowBoundary maps a temporal search key outside the type
+// domain to the insertion point it would have if that key were representable.
+// A key above the domain sorts after every ASC value and before every DESC
+// value; a key below the domain does the opposite.
+func temporalRangeOverflowBoundary(start, end int, aboveDomain, desc bool) int {
+	if aboveDomain != desc {
+		return end
+	}
+	return start
+}
+
+// temporalRangeIntervalOverflowBoundary derives the side of a temporal-domain
+// overflow from the effective signed arithmetic. A negative interval reverses
+// the operation, so add/sub alone cannot identify the insertion point.
+func temporalRangeIntervalOverflowBoundary(start, end int, add bool, diff int64, desc bool) int {
+	aboveDomain := add
+	if diff < 0 {
+		aboveDomain = !aboveDomain
+	}
+	return temporalRangeOverflowBoundary(start, end, aboveDomain, desc)
+}
+
+// checkedMicrosecondArithmetic performs signed microsecond arithmetic without
+// allowing an int64 wrap to masquerade as an in-domain temporal value.
+func checkedMicrosecondArithmetic(start, diff int64, subtract bool) (int64, bool) {
+	if subtract {
+		if (diff > 0 && start < math.MinInt64+diff) || (diff < 0 && start > math.MaxInt64+diff) {
+			return 0, false
+		}
+		return start - diff, true
+	}
+	if (diff > 0 && start > math.MaxInt64-diff) || (diff < 0 && start < math.MinInt64-diff) {
+		return 0, false
+	}
+	return start + diff, true
+}
+
+// temporalRangeIntervalConversionOK prevents fixed-duration units from
+// wrapping while AddInterval converts them to microseconds. The magnitude
+// check accepts values that fit in an int64, but their later conversion can
+// still overflow before AddInterval validates the temporal domain.
+func temporalRangeIntervalConversionOK(diff int64, unit types.IntervalType) bool {
+	var multiplier int64
+	switch unit {
+	case types.Second:
+		multiplier = types.MicroSecsPerSec
+	case types.Minute:
+		multiplier = types.MicroSecsPerSec * types.SecsPerMinute
+	case types.Hour:
+		multiplier = types.MicroSecsPerSec * types.SecsPerHour
+	case types.Day:
+		multiplier = types.MicroSecsPerSec * types.SecsPerDay
+	case types.Week:
+		multiplier = types.MicroSecsPerSec * types.SecsPerWeek
+	default:
+		return true
+	}
+	return diff <= math.MaxInt64/multiplier && diff >= math.MinInt64/multiplier
+}
+
+// temporalRangeCalendarIntervalInDomain evaluates calendar arithmetic in the
+// wide representation used by AddDateTime before that function narrows the
+// result year to int32. A wrapped year is a valid-looking but incorrect RANGE
+// search key, so calendar bounds outside the temporal domain must follow the
+// same out-of-domain path as fixed-duration bounds.
+func temporalRangeCalendarIntervalInDomain(start types.Datetime, diff int64, unit types.IntervalType, subtract bool) bool {
+	if subtract {
+		if diff == math.MinInt64 {
+			return false
+		}
+		diff = -diff
+	}
+
+	year, month, _, _ := start.ToDate().Calendar(true)
+	boundaryYear := int64(year)
+	boundaryMonth := int64(month)
+	var yearDelta, monthDelta int64
+	switch unit {
+	case types.Month, types.Year_Month:
+		yearDelta = diff / 12
+		monthDelta = diff % 12
+	case types.Quarter:
+		if diff > math.MaxInt64/3 || diff < math.MinInt64/3 {
+			return false
+		}
+		months := diff * 3
+		yearDelta = months / 12
+		monthDelta = months % 12
+	case types.Year:
+		yearDelta = diff
+	default:
+		return true
+	}
+	if (yearDelta > 0 && boundaryYear > math.MaxInt64-yearDelta) ||
+		(yearDelta < 0 && boundaryYear < math.MinInt64-yearDelta) {
+		return false
+	}
+	boundaryYear += yearDelta
+	boundaryMonth += monthDelta
+
+	if boundaryMonth <= 0 {
+		boundaryYear--
+	} else if boundaryMonth > 12 {
+		boundaryYear++
+	}
+	return boundaryYear >= int64(types.MinDatetimeYear) && boundaryYear <= int64(types.MaxDatetimeYear)
+}
+
+// checkedDatetimeMicrosecondInterval validates both the signed arithmetic and
+// the resulting DATE/DATETIME domain. Datetime.AddInterval intentionally
+// fast-paths MICROSECOND without a calendar validation, so RANGE bounds must
+// validate it before using the result as a binary-search key.
+func checkedDatetimeMicrosecondInterval(start types.Datetime, diff int64, subtract bool, timeType types.TimeType) (types.Datetime, bool) {
+	result, ok := checkedMicrosecondArithmetic(int64(start), diff, subtract)
+	if !ok {
+		return 0, false
+	}
+	dt := types.Datetime(result)
+	year, month, day, _ := dt.ToDate().Calendar(true)
+	if timeType == types.DateType {
+		return dt, types.ValidDate(year, month, day)
+	}
+	return dt, types.ValidDatetime(year, month, day)
+}
+
+func checkedTimeMicrosecondInterval(start types.Time, diff int64, subtract bool) (types.Time, bool) {
+	result, ok := checkedMicrosecondArithmetic(int64(start), diff, subtract)
+	if !ok {
+		return 0, false
+	}
+	return types.Time(result).AddInterval(0, types.MicroSecond)
+}
+
 func doDateAdd(start types.Date, diff int64, unit int64) (types.Date, error) {
 	err := types.JudgeIntervalNumOverflow(diff, types.IntervalType(unit))
 	if err != nil {
 		return 0, err
+	}
+	if !temporalRangeIntervalConversionOK(diff, types.IntervalType(unit)) {
+		return 0, moerr.NewOutOfRangeNoCtx("date", "")
+	}
+	if !temporalRangeCalendarIntervalInDomain(start.ToDatetime(), diff, types.IntervalType(unit), false) {
+		return 0, moerr.NewOutOfRangeNoCtx("date", "")
+	}
+	if types.IntervalType(unit) == types.MicroSecond {
+		dt, ok := checkedDatetimeMicrosecondInterval(start.ToDatetime(), diff, false, types.DateType)
+		if !ok {
+			return 0, moerr.NewOutOfRangeNoCtx("date", "")
+		}
+		return dt.ToDate(), nil
 	}
 	dt, success := start.ToDatetime().AddInterval(diff, types.IntervalType(unit), types.DateType)
 	if success {
@@ -3027,6 +3298,16 @@ func doTimeAdd(start types.Time, diff int64, unit int64) (types.Time, error) {
 	if err != nil {
 		return 0, err
 	}
+	if !temporalRangeIntervalConversionOK(diff, types.IntervalType(unit)) {
+		return 0, moerr.NewOutOfRangeNoCtx("time", "")
+	}
+	if types.IntervalType(unit) == types.MicroSecond {
+		t, ok := checkedTimeMicrosecondInterval(start, diff, false)
+		if !ok {
+			return 0, moerr.NewOutOfRangeNoCtx("time", "")
+		}
+		return t, nil
+	}
 	t, success := start.AddInterval(diff, types.IntervalType(unit))
 	if success {
 		return t, nil
@@ -3040,6 +3321,19 @@ func doDatetimeAdd(start types.Datetime, diff int64, unit int64) (types.Datetime
 	if err != nil {
 		return 0, err
 	}
+	if !temporalRangeIntervalConversionOK(diff, types.IntervalType(unit)) {
+		return 0, moerr.NewOutOfRangeNoCtx("datetime", "")
+	}
+	if !temporalRangeCalendarIntervalInDomain(start, diff, types.IntervalType(unit), false) {
+		return 0, moerr.NewOutOfRangeNoCtx("datetime", "")
+	}
+	if types.IntervalType(unit) == types.MicroSecond {
+		dt, ok := checkedDatetimeMicrosecondInterval(start, diff, false, types.DateTimeType)
+		if !ok {
+			return 0, moerr.NewOutOfRangeNoCtx("datetime", "")
+		}
+		return dt, nil
+	}
 	dt, success := start.AddInterval(diff, types.IntervalType(unit), types.DateTimeType)
 	if success {
 		return dt, nil
@@ -3052,6 +3346,19 @@ func doTimestampAdd(loc *time.Location, start types.Timestamp, diff int64, unit 
 	err := types.JudgeIntervalNumOverflow(diff, types.IntervalType(unit))
 	if err != nil {
 		return 0, err
+	}
+	if !temporalRangeIntervalConversionOK(diff, types.IntervalType(unit)) {
+		return 0, moerr.NewOutOfRangeNoCtx("timestamp", "")
+	}
+	if !temporalRangeCalendarIntervalInDomain(start.ToDatetime(loc), diff, types.IntervalType(unit), false) {
+		return 0, moerr.NewOutOfRangeNoCtx("timestamp", "")
+	}
+	if types.IntervalType(unit) == types.MicroSecond {
+		dt, ok := checkedDatetimeMicrosecondInterval(start.ToDatetime(loc), diff, false, types.DateTimeType)
+		if !ok {
+			return 0, moerr.NewOutOfRangeNoCtx("timestamp", "")
+		}
+		return timestampRangeBoundary(dt, loc), nil
 	}
 	dt, success := start.ToDatetime(loc).AddInterval(diff, types.IntervalType(unit), types.DateTimeType)
 	if success {

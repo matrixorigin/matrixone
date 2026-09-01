@@ -51,6 +51,191 @@ func TestIssue25408PreparedPaginationParameters(t *testing.T) {
 		execSQLRequire(t, ctx, db, "create table "+dbName+".page(id int)")
 		execSQLRequire(t, ctx, db, "insert into "+dbName+".page values (1),(2),(3)")
 
+		type scalarObservation struct {
+			value        string
+			databaseType string
+		}
+		observeScalar := func(t *testing.T, rows *sql.Rows) scalarObservation {
+			t.Helper()
+
+			columnTypes, typeErr := rows.ColumnTypes()
+			require.NoError(t, typeErr)
+			require.Len(t, columnTypes, 1)
+			require.True(t, rows.Next())
+			var value string
+			require.NoError(t, rows.Scan(&value))
+			require.False(t, rows.Next())
+			require.NoError(t, rows.Err())
+			return scalarObservation{
+				value:        value,
+				databaseType: columnTypes[0].DatabaseTypeName(),
+			}
+		}
+
+		t.Run("SQL PREPARE runtime numeric type reuse", func(t *testing.T) {
+			execSQLRequire(t, ctx, db,
+				"prepare issue25408_runtime from 'select ? + 1 as plus_one'")
+			defer execSQLMaybe(t, context.Background(), db, "deallocate prepare issue25408_runtime")
+
+			for _, execution := range []struct {
+				assignment       string
+				wantValue        string
+				wantDatabaseType string
+			}{
+				{
+					assignment: "set @issue25408_runtime = '2'", wantValue: "3", wantDatabaseType: "DOUBLE",
+				},
+				{
+					assignment: "set @issue25408_runtime = 2.5", wantValue: "3.5", wantDatabaseType: "DECIMAL",
+				},
+				{
+					assignment: "set @issue25408_runtime = 3.5", wantValue: "4.5", wantDatabaseType: "DECIMAL",
+				},
+				{
+					assignment: "set @issue25408_runtime = -2", wantValue: "-1", wantDatabaseType: "BIGINT",
+				},
+			} {
+				execSQLRequire(t, ctx, db, execution.assignment)
+				preparedRows, preparedErr := db.QueryContext(
+					ctx, "execute issue25408_runtime using @issue25408_runtime")
+				require.NoError(t, preparedErr)
+				defer preparedRows.Close()
+				prepared := observeScalar(t, preparedRows)
+				require.NoError(t, preparedRows.Err())
+				require.Equal(t, execution.wantValue, prepared.value)
+				require.Equal(t, execution.wantDatabaseType, prepared.databaseType,
+					"prepared execution must use the current variable's numeric category")
+			}
+		})
+
+		t.Run("SQL PREPARE division binds source before provisional cast", func(t *testing.T) {
+			execSQLRequire(t, ctx, db,
+				"prepare issue25408_divide from 'select ? / 2 as quotient'")
+			defer execSQLMaybe(t, context.Background(), db, "deallocate prepare issue25408_divide")
+
+			for _, execution := range []struct {
+				assignment       string
+				wantValue        string
+				wantDatabaseType string
+			}{
+				{assignment: "set @issue25408_divide = 2.5", wantValue: "1.2500000", wantDatabaseType: "DECIMAL"},
+				{assignment: "set @issue25408_divide = 9007199254740993.5", wantValue: "4503599627370496.7500000",
+					wantDatabaseType: "DECIMAL"},
+				{assignment: "set @issue25408_divide = 3.5", wantValue: "1.7500000", wantDatabaseType: "DECIMAL"},
+			} {
+				execSQLRequire(t, ctx, db, execution.assignment)
+				preparedRows, preparedErr := db.QueryContext(
+					ctx, "execute issue25408_divide using @issue25408_divide")
+				require.NoError(t, preparedErr)
+				defer preparedRows.Close()
+				prepared := observeScalar(t, preparedRows)
+				require.NoError(t, preparedRows.Err())
+				require.Equal(t, execution.wantValue, prepared.value,
+					"prepared division must use the current value before evaluating its provisional cast")
+				require.Equal(t, execution.wantDatabaseType, prepared.databaseType)
+			}
+		})
+
+		t.Run("SQL PREPARE nested numeric consumers retain decimal domain", func(t *testing.T) {
+			for _, test := range []struct {
+				name             string
+				expression       string
+				directExpression string
+				wantValue        string
+				wantDatabaseType string
+			}{
+				{name: "exact integer peer", expression: "(? / 2) + 1", directExpression: "(@issue25408_nested / 2) + 1", wantValue: "4503599627370497.7500000", wantDatabaseType: "DECIMAL"},
+				{name: "scientific integral float peer", expression: "(? / 2) + 1e0", directExpression: "(@issue25408_nested / 2) + 1e0", wantValue: "4.503599627370498e+15", wantDatabaseType: "DOUBLE"},
+				{name: "scientific fractional float peer", expression: "(? / 2) + 1e-1", directExpression: "(@issue25408_nested / 2) + 1e-1", wantValue: "4.503599627370497e+15", wantDatabaseType: "DOUBLE"},
+				{name: "explicit double peer", expression: "(? / 2) + cast(1 as double)", directExpression: "(@issue25408_nested / 2) + cast(1 as double)", wantValue: "4.503599627370498e+15", wantDatabaseType: "DOUBLE"},
+				{name: "abs", expression: "abs(? / 2)", directExpression: "abs(@issue25408_nested / 2)", wantValue: "4503599627370496.7500000", wantDatabaseType: "DECIMAL"},
+				{name: "multiplication", expression: "(? / 2) * 3", directExpression: "(@issue25408_nested / 2) * 3", wantValue: "13510798882111490.2500000", wantDatabaseType: "DECIMAL"},
+			} {
+				t.Run(test.name, func(t *testing.T) {
+					execSQLRequire(t, ctx, db, "set @issue25408_nested = 9007199254740993.5")
+					directRows, directErr := db.QueryContext(ctx, "select "+test.directExpression+" as result")
+					require.NoError(t, directErr)
+					defer directRows.Close()
+					direct := observeScalar(t, directRows)
+					require.NoError(t, directRows.Err())
+					require.Equal(t, test.wantValue, direct.value)
+					require.Equal(t, test.wantDatabaseType, direct.databaseType)
+
+					execSQLRequire(t, ctx, db, "prepare issue25408_nested from 'select "+test.expression+" as result'")
+					defer execSQLMaybe(t, context.Background(), db, "deallocate prepare issue25408_nested")
+					rows, queryErr := db.QueryContext(ctx, "execute issue25408_nested using @issue25408_nested")
+					require.NoError(t, queryErr)
+					defer rows.Close()
+					observed := observeScalar(t, rows)
+					require.NoError(t, rows.Err())
+					require.Equal(t, direct, observed)
+				})
+			}
+		})
+
+		t.Run("SQL PREPARE ABS preserves numeric peer provenance", func(t *testing.T) {
+			for _, expression := range []struct {
+				name          string
+				prepared      string
+				direct        string
+				floatBoundary bool
+			}{
+				{name: "exact integer peer", prepared: "abs(? + 1)", direct: "abs(@issue25408_abs + 1)"},
+				{name: "scientific integral float peer", prepared: "abs(? + 1e0)", direct: "abs(@issue25408_abs + 1e0)", floatBoundary: true},
+				{name: "scientific fractional float peer", prepared: "abs(? + 1e-1)", direct: "abs(@issue25408_abs + 1e-1)", floatBoundary: true},
+				{name: "explicit double peer", prepared: "abs(? + cast(1 as double))", direct: "abs(@issue25408_abs + cast(1 as double))", floatBoundary: true},
+			} {
+				t.Run(expression.name, func(t *testing.T) {
+					execSQLRequire(t, ctx, db, "prepare issue25408_abs from 'select "+expression.prepared+" as result'")
+					defer execSQLMaybe(t, context.Background(), db, "deallocate prepare issue25408_abs")
+					assignments := []string{"9007199254740993.5"}
+					if expression.floatBoundary {
+						assignments = append(assignments, "2", "'2'")
+					}
+					for _, assignment := range assignments {
+						execSQLRequire(t, ctx, db, "set @issue25408_abs = "+assignment)
+						directRows, directErr := db.QueryContext(ctx, "select "+expression.direct+" as result")
+						require.NoError(t, directErr)
+						defer directRows.Close()
+						direct := observeScalar(t, directRows)
+						require.NoError(t, directRows.Err())
+
+						preparedRows, preparedErr := db.QueryContext(ctx, "execute issue25408_abs using @issue25408_abs")
+						require.NoError(t, preparedErr)
+						defer preparedRows.Close()
+						prepared := observeScalar(t, preparedRows)
+						require.NoError(t, preparedRows.Err())
+						require.Equal(t, direct, prepared, "runtime assignment %s", assignment)
+					}
+				})
+			}
+		})
+
+		t.Run("COM_STMT runtime numeric type reuse", func(t *testing.T) {
+			stmt, prepareErr := db.PrepareContext(ctx, "select ? + 1 as plus_one")
+			require.NoError(t, prepareErr)
+			defer stmt.Close()
+
+			for _, execution := range []struct {
+				value            any
+				wantValue        string
+				wantDatabaseType string
+			}{
+				{value: int64(2), wantValue: "3", wantDatabaseType: "BIGINT"},
+				{value: float64(2.5), wantValue: "3.5", wantDatabaseType: "DOUBLE"},
+				{value: int64(-2), wantValue: "-1", wantDatabaseType: "BIGINT"},
+			} {
+				preparedRows, preparedErr := stmt.QueryContext(ctx, execution.value)
+				require.NoError(t, preparedErr)
+				defer preparedRows.Close()
+				prepared := observeScalar(t, preparedRows)
+				require.NoError(t, preparedRows.Err())
+				require.Equal(t, execution.wantValue, prepared.value)
+				require.Equal(t, execution.wantDatabaseType, prepared.databaseType,
+					"binary prepared execution must use the current parameter's numeric category")
+			}
+		})
+
 		assertRows := func(t *testing.T, query string, want ...int) {
 			t.Helper()
 			rows, queryErr := db.QueryContext(ctx, query)
