@@ -63,6 +63,10 @@ var tenantUpgEntries = []versions.UpgradeEntry{
 }
 
 func upgradeInformationSchemaMetadataVisibilityView(viewName, viewDDL string) versions.UpgradeEntry {
+	requiredProtocol := defines.MORPCVersion41
+	if viewName == "TABLES" || viewName == "COLUMNS" {
+		requiredProtocol = defines.MORPCVersion43
+	}
 	return versions.UpgradeEntry{
 		Schema:                  sysview.InformationDBConst,
 		TableName:               viewName,
@@ -70,7 +74,7 @@ func upgradeInformationSchemaMetadataVisibilityView(viewName, viewDDL string) ve
 		UpgSql:                  viewDDL,
 		CheckFunc:               checkViewDefinition(viewName, viewDDL),
 		PreSql:                  fmt.Sprintf("DROP VIEW IF EXISTS %s.%s;", sysview.InformationDBConst, viewName),
-		RequiredProtocolVersion: defines.MORPCVersion41,
+		RequiredProtocolVersion: requiredProtocol,
 	}
 }
 
@@ -112,7 +116,7 @@ func upgradeInformationSchemaColumns() versions.UpgradeEntry {
 		TableName:               "COLUMNS",
 		UpgType:                 versions.MODIFY_VIEW,
 		UpgSql:                  sysview.InformationSchemaColumnsDDL,
-		RequiredProtocolVersion: defines.MORPCVersion41,
+		RequiredProtocolVersion: defines.MORPCVersion43,
 		CheckFunc: func(txn executor.TxnExecutor, accountID uint32) (bool, error) {
 			exists, viewDef, err := versions.CheckViewDefinition(txn, accountID, sysview.InformationDBConst, "COLUMNS")
 			if err != nil {
