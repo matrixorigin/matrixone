@@ -121,6 +121,88 @@ func TestHashPartitionCompositeNullableKey(t *testing.T) {
 	require.Zero(t, proc.Mp().CurrNB())
 }
 
+func TestHashPartitionTreatsGroupingSentinelAsNull(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	input := makeHashPartitionBatch(t, proc,
+		[]int32{0, 0, 1}, []bool{true, false, false}, []int64{0, 1, 2})
+	input.Vecs[0].GetGrouping().Add(1)
+	child := colexec.NewMockOperator().WithBatchs([]*batch.Batch{input})
+	arg := newHashPartitionArgument(1 << 30)
+	arg.AppendChild(child)
+
+	require.NoError(t, arg.Prepare(proc))
+	groups := collectHashPartitionRows(t, arg, proc)
+	require.Equal(t, [][]int64{{0, 1}, {2}}, groups)
+	require.True(t, input.Vecs[0].GetNulls().Contains(0))
+	require.False(t, input.Vecs[0].GetNulls().Contains(1))
+	require.True(t, input.Vecs[0].GetGrouping().Contains(1),
+		"hash-key normalization must not mutate borrowed input vectors")
+
+	arg.Free(proc, false, nil)
+	child.Free(proc, false, nil)
+	proc.Free()
+	require.Zero(t, proc.Mp().CurrNB())
+}
+
+func TestHashPartitionTreatsGroupingSentinelAsNullStringHash(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	input := batch.New([]string{"k", "v"})
+	input.Vecs = []*vector.Vector{
+		vector.NewVec(types.T_varchar.ToType()),
+		vector.NewVec(types.T_int64.ToType()),
+	}
+	require.NoError(t, vector.AppendBytesList(
+		input.Vecs[0], [][]byte{[]byte(""), []byte(""), []byte("x")},
+		[]bool{true, false, false}, proc.Mp(),
+	))
+	require.NoError(t, vector.AppendFixedList(
+		input.Vecs[1], []int64{0, 1, 2}, nil, proc.Mp(),
+	))
+	input.Vecs[0].GetGrouping().Add(1)
+	input.SetRowCount(3)
+	child := colexec.NewMockOperator().WithBatchs([]*batch.Batch{input})
+	arg := &Partition{
+		Algorithm: plan.Node_PARTITION_ALGORITHM_HASH,
+		SpillMem:  1 << 30,
+		OrderBySpecs: []*plan.OrderBySpec{{
+			Expr: newExpression(0, types.T_varchar),
+		}},
+	}
+	arg.AppendChild(child)
+
+	require.NoError(t, arg.Prepare(proc))
+	groups := collectHashPartitionRows(t, arg, proc)
+	require.Equal(t, [][]int64{{0, 1}, {2}}, groups)
+	require.False(t, input.Vecs[0].GetNulls().Contains(1))
+	require.True(t, input.Vecs[0].GetGrouping().Contains(1))
+
+	arg.Free(proc, false, nil)
+	child.Free(proc, false, nil)
+	proc.Free()
+	require.Zero(t, proc.Mp().CurrNB())
+}
+
+func TestHashPartitionGroupingOnNonNullableKeyFallsBackToSort(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	input := makeHashPartitionBatch(t, proc,
+		[]int32{0, 99, 0, 1}, nil, []int64{0, 1, 2, 3})
+	input.Vecs[0].GetGrouping().Add(0, 1)
+	child := colexec.NewMockOperator().WithBatchs([]*batch.Batch{input})
+	arg := newHashPartitionArgument(1 << 30)
+	arg.OrderBySpecs[0].Expr.Typ.NotNullable = true
+	arg.AppendChild(child)
+
+	require.NoError(t, arg.Prepare(proc))
+	groups := collectHashPartitionRows(t, arg, proc)
+	require.True(t, arg.hash.fallbackToSort)
+	require.Equal(t, [][]int64{{0, 1}, {2}, {3}}, groups)
+
+	arg.Free(proc, false, nil)
+	child.Free(proc, false, nil)
+	proc.Free()
+	require.Zero(t, proc.Mp().CurrNB())
+}
+
 func TestHashPartitionRejectsIncompatibleKey(t *testing.T) {
 	for _, typ := range []types.T{types.T_float64, types.T_char} {
 		t.Run(typ.String(), func(t *testing.T) {

@@ -25,6 +25,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/compare"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/group"
@@ -167,12 +168,28 @@ func (ctr *hashContainer) consume(proc *process.Process, analyzer process.Analyz
 		}
 		ctr.partitionEval.Vec[i] = vec
 	}
+	if !ctr.keyNullable && hashPartitionKeysHaveGrouping(ctr.partitionEval.Vec) {
+		// GROUPING sentinels compare as NULL even when the declared key type is
+		// non-nullable. A non-nullable hash table cannot encode that extra value
+		// domain, so preserve the legacy comparator semantics via Sort.
+		ctr.fallbackToSort = true
+		ctr.hash.Free0()
+		ctr.freeGroupIDs(proc.Mp())
+		return nil
+	}
+	hashKeys, normalizedKeys, err := normalizeHashPartitionKeys(
+		ctr.partitionEval.Vec, input.RowCount(), proc.Mp(),
+	)
+	if err != nil {
+		return err
+	}
+	defer freeNormalizedHashPartitionKeys(normalizedKeys, proc.Mp())
 	for start := 0; start < input.RowCount(); start += hashmap.UnitLimit {
 		if err, canceled := vm.CancelCheck(proc); canceled {
 			return err
 		}
 		count := min(hashmap.UnitLimit, input.RowCount()-start)
-		groupIDs, _, err := ctr.hash.TxnItr.Insert(start, count, ctr.partitionEval.Vec)
+		groupIDs, _, err := ctr.hash.TxnItr.Insert(start, count, hashKeys)
 		if err != nil {
 			return err
 		}
@@ -195,6 +212,51 @@ func (ctr *hashContainer) consume(proc *process.Process, analyzer process.Analyz
 		}
 	}
 	return nil
+}
+
+func hashPartitionKeysHaveGrouping(keys []*vector.Vector) bool {
+	for _, key := range keys {
+		if key != nil && key.HasGrouping() {
+			return true
+		}
+	}
+	return false
+}
+
+func normalizeHashPartitionKeys(
+	keys []*vector.Vector,
+	rows int,
+	mp *mpool.MPool,
+) ([]*vector.Vector, []*vector.Vector, error) {
+	var normalized []*vector.Vector
+	var owned []*vector.Vector
+	for i, key := range keys {
+		if key == nil || !key.HasGrouping() {
+			continue
+		}
+		if normalized == nil {
+			normalized = append([]*vector.Vector(nil), keys...)
+		}
+		view, err := key.WindowByLogicalRows(0, rows)
+		if err != nil {
+			freeNormalizedHashPartitionKeys(owned, mp)
+			return nil, nil, err
+		}
+		view.GetNulls().Or(view.GetGrouping())
+		view.SetGrouping(nil)
+		normalized[i] = view
+		owned = append(owned, view)
+	}
+	if normalized == nil {
+		return keys, nil, nil
+	}
+	return normalized, owned, nil
+}
+
+func freeNormalizedHashPartitionKeys(keys []*vector.Vector, mp *mpool.MPool) {
+	for _, key := range keys {
+		key.Free(mp)
+	}
 }
 
 func (ctr *hashContainer) finalize(proc *process.Process, specs []*plan.OrderBySpec) error {
