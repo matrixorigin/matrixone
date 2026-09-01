@@ -610,19 +610,46 @@ var (
 		")"
 
 	InformationSchemaTablePrivilegesDDL = "CREATE VIEW information_schema.`TABLE_PRIVILEGES` AS " +
-		informationSchemaMetadataVisibilityCTE() + "SELECT " +
+		informationSchemaMetadataVisibilityCTE() +
+		", __mo_can_inspect_all_table_grants AS (" +
+		"SELECT 1 FROM mo_catalog.mo_role_privs inspect_priv " +
+		"JOIN __mo_active_roles inspect_role ON inspect_priv.role_id = inspect_role.role_id " +
+		"WHERE inspect_priv.obj_type = 'account' AND inspect_priv.obj_id = 0 " +
+		"AND inspect_priv.privilege_level = '*' " +
+		"AND inspect_priv.privilege_name IN ('manage grants','account all','account ownership') LIMIT 1" +
+		"), __mo_authorized_table_grants AS (" +
+		"SELECT grant_priv.role_id, grant_priv.obj_id, grant_priv.privilege_name, grant_priv.with_grant_option " +
+		"FROM mo_catalog.mo_role_privs grant_priv " +
+		"JOIN __mo_active_roles grant_role ON grant_priv.role_id = grant_role.role_id " +
+		"WHERE grant_priv.obj_type IN ('table','view') AND grant_priv.privilege_level IN ('d.t','t') " +
+		"UNION ALL " +
+		"SELECT grant_priv.role_id, grant_priv.obj_id, grant_priv.privilege_name, grant_priv.with_grant_option " +
+		"FROM mo_catalog.mo_role_privs grant_priv " +
+		"WHERE EXISTS (SELECT 1 FROM __mo_can_inspect_all_table_grants) " +
+		"AND grant_priv.role_id NOT IN (SELECT role_id FROM __mo_active_roles) " +
+		"AND grant_priv.obj_type IN ('table','view') AND grant_priv.privilege_level IN ('d.t','t')" +
+		"), __mo_concrete_table_privileges(privilege_type) AS (" +
+		"SELECT 'SELECT' UNION ALL SELECT 'INSERT' UNION ALL SELECT 'UPDATE' UNION ALL SELECT 'TRUNCATE' " +
+		"UNION ALL SELECT 'DELETE' UNION ALL SELECT 'REFERENCE' UNION ALL SELECT 'INDEX' UNION ALL SELECT 'VALUES'" +
+		"), __mo_expanded_table_grants AS (" +
+		"SELECT grant_priv.role_id, grant_priv.obj_id, upper(grant_priv.privilege_name) AS privilege_type, " +
+		"grant_priv.with_grant_option FROM __mo_authorized_table_grants grant_priv " +
+		"WHERE grant_priv.privilege_name <> 'table all' " +
+		"UNION ALL " +
+		"SELECT grant_priv.role_id, grant_priv.obj_id, concrete_priv.privilege_type, grant_priv.with_grant_option " +
+		"FROM __mo_authorized_table_grants grant_priv CROSS JOIN __mo_concrete_table_privileges concrete_priv " +
+		"WHERE grant_priv.privilege_name = 'table all'" +
+		") SELECT " +
 		"CAST(coalesce(granted_role.role_name, '') AS varchar(292)) AS `GRANTEE`," +
 		"CAST('def' AS varchar(512)) AS `TABLE_CATALOG`," +
 		"CAST(coalesce(tbl.reldatabase, '') AS varchar(64)) AS `TABLE_SCHEMA`," +
 		"CAST(coalesce(tbl.relname, '') AS varchar(64)) AS `TABLE_NAME`," +
-		"CAST(coalesce(upper(grant_priv.privilege_name), '') AS varchar(64)) AS `PRIVILEGE_TYPE`," +
+		"CAST(coalesce(grant_priv.privilege_type, '') AS varchar(64)) AS `PRIVILEGE_TYPE`," +
 		"CAST(coalesce(case when grant_priv.with_grant_option then 'YES' else 'NO' end, '') AS varchar(3)) AS `IS_GRANTABLE` " +
-		"FROM mo_catalog.mo_role_privs grant_priv " +
+		"FROM __mo_expanded_table_grants grant_priv " +
 		"JOIN mo_catalog.mo_role granted_role ON grant_priv.role_id = granted_role.role_id " +
 		"JOIN __mo_visible_tables tbl ON grant_priv.obj_id = tbl.rel_logical_id " +
-		"WHERE tbl.account_id = current_account_id() " +
-		"AND grant_priv.obj_type IN ('table','view') " +
-		"AND grant_priv.privilege_level IN ('d.t','t')"
+		"WHERE tbl.account_id = current_account_id()"
 
 	InformationSchemaColumnPrivilegesDDL = "CREATE TABLE information_schema.`COLUMN_PRIVILEGES` (" +
 		"`GRANTEE` varchar(292) NOT NULL DEFAULT ''," +
