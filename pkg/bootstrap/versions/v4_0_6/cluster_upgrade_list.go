@@ -84,12 +84,12 @@ var cleanupLegacyOrphanSQLTaskChildren = versions.UpgradeEntry{
 		// Absence is stable only after every old DROP TASK writer has left the
 		// deployment. RequiredProtocolVersion handles the same barrier when a
 		// row exists; check it here too so an empty snapshot cannot skip it.
-		if err := versions.CheckCommonProtocolVersion(txn, defines.MORPCVersion41); err != nil {
+		if err := versions.CheckCommonProtocolVersion(txn, defines.MORPCVersion42); err != nil {
 			return false, err
 		}
 		return true, nil
 	},
-	RequiredProtocolVersion: defines.MORPCVersion41,
+	RequiredProtocolVersion: defines.MORPCVersion42,
 }
 
 func newTaskMetadataIndex(tableName, indexName, columnName string) versions.UpgradeEntry {

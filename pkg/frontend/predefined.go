@@ -79,7 +79,8 @@ var (
 				operation_user_id int signed,
 				granted_time timestamp,
 				with_grant_option bool,
-				primary key(granted_id, grantee_id)
+				primary key(granted_id, grantee_id),
+				key idx_mo_role_grant_grantee_id(grantee_id)
 			)`
 
 	MoCatalogMoRolePrivsDDL = `create table mo_catalog.mo_role_privs (
