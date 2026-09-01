@@ -1139,6 +1139,16 @@ func TestDetermineShuffleForJoinReusesLeftKeyThroughJoinChain(t *testing.T) {
 		require.False(t, parent.Stats.HashmapStats.Shuffle)
 		require.Equal(t, plan.ShuffleMethod_Normal, parent.Stats.HashmapStats.ShuffleMethod)
 	})
+
+	t.Run("rollback hint disables join lineage reuse", func(t *testing.T) {
+		builder, parent := makeChildJoin(plan.Node_LEFT)
+		builder.optimizerHints = &OptimizerHints{outerAntiPlanning: 1}
+
+		determineShuffleForJoin(parent, builder)
+
+		require.False(t, parent.Stats.HashmapStats.Shuffle)
+		require.Equal(t, plan.ShuffleMethod_Normal, parent.Stats.HashmapStats.ShuffleMethod)
+	})
 }
 
 func TestReusableJoinShuffleChildAfterRemap(t *testing.T) {

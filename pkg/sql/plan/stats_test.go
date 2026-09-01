@@ -376,6 +376,25 @@ func TestAntiJoinCardinalityUsesPrimaryKeyLowerBound(t *testing.T) {
 
 		require.Equal(t, 500.0, join.Stats.Outcnt)
 	})
+
+	t.Run("right primary key does not prove a left-side lower bound", func(t *testing.T) {
+		builder, join := makeBuilder([]*planpb.Expr{makeEquality(0, 0), makeEquality(1, 1)})
+		builder.qry.Nodes[0].TableDef.Pkey = nil
+		builder.qry.Nodes[1].TableDef.Pkey = &planpb.PrimaryKeyDef{Names: []string{"k1", "k2"}}
+
+		ReCalcNodeStats(2, builder, false, false, false)
+
+		require.Equal(t, 500.0, join.Stats.Outcnt)
+	})
+
+	t.Run("rollback hint restores the legacy estimate", func(t *testing.T) {
+		builder, join := makeBuilder([]*planpb.Expr{makeEquality(0, 0), makeEquality(1, 1)})
+		builder.optimizerHints = &OptimizerHints{outerAntiPlanning: 1}
+
+		ReCalcNodeStats(2, builder, false, false, false)
+
+		require.Equal(t, 0.0, join.Stats.Outcnt)
+	})
 }
 
 func newStatsTestBuilderWithNDV(colName string, ndv float64) *QueryBuilder {

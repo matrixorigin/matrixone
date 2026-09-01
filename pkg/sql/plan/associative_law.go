@@ -433,14 +433,16 @@ func (builder *QueryBuilder) applyAssociativeLaw(nodeID int32) int32 {
 	if builder.optimizerHints != nil && builder.optimizerHints.joinOrdering != 0 {
 		return nodeID
 	}
-	var changed bool
-	nodeID, changed = builder.applyOuterJoinPreservedSideRule(nodeID)
-	if changed {
-		builder.determineBuildAndProbeSide(nodeID, true)
-	}
-	nodeID, changed = builder.applyOuterJoinNullableSideRule(nodeID)
-	if changed {
-		builder.determineBuildAndProbeSide(nodeID, true)
+	if !builder.outerAntiPlanningDisabled() {
+		var changed bool
+		nodeID, changed = builder.applyOuterJoinPreservedSideRule(nodeID)
+		if changed {
+			builder.determineBuildAndProbeSide(nodeID, true)
+		}
+		nodeID, changed = builder.applyOuterJoinNullableSideRule(nodeID)
+		if changed {
+			builder.determineBuildAndProbeSide(nodeID, true)
+		}
 	}
 	nodeID = builder.applyAssociativeLawRule1(nodeID)
 	builder.determineBuildAndProbeSide(nodeID, true)

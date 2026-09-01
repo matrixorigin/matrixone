@@ -469,6 +469,7 @@ func reusableJoinShuffleChild(
 	afterRemap bool,
 ) bool {
 	if col == nil || child == nil || builder == nil || builder.qry == nil ||
+		builder.outerAntiPlanningDisabled() ||
 		child.NodeType != plan.Node_JOIN || child.IsRightJoin ||
 		child.Stats == nil || child.Stats.HashmapStats == nil ||
 		!child.Stats.HashmapStats.Shuffle {
@@ -771,6 +772,7 @@ func selectShuffleJoinCondition(
 	afterRemap bool,
 	previousHashmapStats *plan.HashMapStats,
 ) (int, plan.HashMapStats) {
+	preferReuse := !builder.outerAntiPlanningDisabled()
 	firstSupportedIdx := -1
 	var firstSupportedStats plan.HashMapStats
 	firstEligibleIdx := -1
@@ -807,7 +809,7 @@ func selectShuffleJoinCondition(
 			firstSupportedStats = candidateStats
 		}
 		if eligible {
-			if candidateStats.ShuffleMethod == plan.ShuffleMethod_Reuse {
+			if !preferReuse || candidateStats.ShuffleMethod == plan.ShuffleMethod_Reuse {
 				return i, candidateStats
 			}
 			if firstEligibleIdx == -1 {

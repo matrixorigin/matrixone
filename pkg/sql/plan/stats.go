@@ -1224,7 +1224,11 @@ func ReCalcNodeStats(nodeID int32, builder *QueryBuilder, recursive bool, leafNo
 			node.Stats.BlockNum = leftStats.BlockNum
 
 		case plan.Node_ANTI:
-			node.Stats.Outcnt = estimateAntiJoinOutcnt(node, builder, leftStats, rightStats)
+			if builder.outerAntiPlanningDisabled() {
+				node.Stats.Outcnt = leftStats.Outcnt * (1 - rightSelectivity) * 0.5
+			} else {
+				node.Stats.Outcnt = estimateAntiJoinOutcnt(node, builder, leftStats, rightStats)
+			}
 			node.Stats.Cost = leftStats.Cost + rightStats.Cost
 			node.Stats.HashmapStats.HashmapSize = rightStats.Outcnt
 			node.Stats.Selectivity = selectivity_out

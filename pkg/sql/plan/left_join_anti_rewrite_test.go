@@ -17,6 +17,7 @@ package plan
 import (
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/stretchr/testify/require"
 )
@@ -33,6 +34,23 @@ func TestLeftJoinNullFilterRewritesToAnti(t *testing.T) {
 	query := logicalPlan.GetQuery()
 	require.True(t, reachableLeftAntiPlanHasJoinType(query, planpb.Node_ANTI))
 	require.False(t, reachableLeftAntiPlanHasJoinType(query, planpb.Node_LEFT))
+}
+
+func TestLeftJoinNullFilterRollbackHintKeepsLeftJoin(t *testing.T) {
+	rt := runtime.ServiceRuntime("")
+	rt.SetGlobalVariables("optimizer_hints", "outerAntiPlanning=1")
+	defer rt.SetGlobalVariables("optimizer_hints", "")
+
+	logicalPlan, err := runOneStmt(NewMockOptimizer(false), t, `
+		select n.n_nationkey
+		from nation n
+		left join region r on n.n_regionkey = r.r_regionkey
+		where r.r_regionkey is null`)
+	require.NoError(t, err)
+
+	query := logicalPlan.GetQuery()
+	require.True(t, reachableLeftAntiPlanHasJoinType(query, planpb.Node_LEFT), query.String())
+	require.False(t, reachableLeftAntiPlanHasJoinType(query, planpb.Node_ANTI), query.String())
 }
 
 func TestLeftJoinNullFilterAntiRewriteFailsClosed(t *testing.T) {

@@ -45,26 +45,33 @@ import (
 func (builder *QueryBuilder) rewriteLeftJoinNullFiltersToAnti(
 	nodeID int32,
 	tagCnt map[int32]int,
-) int32 {
+) (int32, bool) {
 	if builder == nil || builder.qry == nil || nodeID < 0 || int(nodeID) >= len(builder.qry.Nodes) {
-		return nodeID
+		return nodeID, false
+	}
+	if builder.outerAntiPlanningDisabled() {
+		return nodeID, false
 	}
 	node := builder.qry.Nodes[nodeID]
 	if node == nil {
-		return nodeID
+		return nodeID, false
 	}
 
+	changed := false
 	if rewrittenID, ok := builder.tryRewriteLeftJoinNullFilter(nodeID, tagCnt); ok {
 		nodeID = rewrittenID
 		node = builder.qry.Nodes[nodeID]
+		changed = true
 	}
 
 	increaseNodeTagCnt(node, 1, tagCnt)
 	for i, childID := range node.Children {
-		node.Children[i] = builder.rewriteLeftJoinNullFiltersToAnti(childID, tagCnt)
+		var childChanged bool
+		node.Children[i], childChanged = builder.rewriteLeftJoinNullFiltersToAnti(childID, tagCnt)
+		changed = changed || childChanged
 	}
 	increaseNodeTagCnt(node, -1, tagCnt)
-	return nodeID
+	return nodeID, changed
 }
 
 func (builder *QueryBuilder) tryRewriteLeftJoinNullFilter(
@@ -123,11 +130,21 @@ func (builder *QueryBuilder) tryRewriteLeftJoinNullFilter(
 
 	join.JoinType = plan.Node_ANTI
 	node.FilterList = kept
+	builder.optimizationHistory = append(builder.optimizationHistory,
+		fmt.Sprintf("left-null-to-anti: filter=%d join=%d", node.NodeId, join.NodeId))
 	if len(kept) == 0 && len(node.ProjectList) == 0 && len(node.OrderBy) == 0 &&
 		node.Limit == nil && node.Offset == nil {
 		return joinID, true
 	}
 	return nodeID, true
+}
+
+// outerAntiPlanningDisabled is the operational rollback boundary for the
+// outer/anti planning rules.  The default keeps the rules enabled; setting
+// optimizer_hints to outerAntiPlanning=1 restores the legacy behavior.
+func (builder *QueryBuilder) outerAntiPlanningDisabled() bool {
+	return builder != nil && builder.optimizerHints != nil &&
+		builder.optimizerHints.outerAntiPlanning != 0
 }
 
 func (builder *QueryBuilder) isLeftJoinAntiNullMarker(
