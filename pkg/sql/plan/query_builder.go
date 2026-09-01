@@ -3755,7 +3755,7 @@ func (builder *QueryBuilder) createQuery() (*Query, error) {
 			}
 		}
 	}
-	applySharedLockTableFallback(builder)
+	applyLockTableFallback(builder)
 
 	for i := range builder.qry.Steps {
 		rootID := builder.qry.Steps[i]

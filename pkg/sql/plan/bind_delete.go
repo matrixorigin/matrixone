@@ -453,7 +453,7 @@ func (builder *QueryBuilder) bindDelete(ctx CompilerContext, stmt *tree.Delete, 
 			LockTargets: lockTargets,
 		}, bindCtx)
 
-		applySharedLockTableFallback(builder)
+		applyLockTableFallback(builder)
 	}
 
 	dmlNode.Children = append(dmlNode.Children, lastNodeID)

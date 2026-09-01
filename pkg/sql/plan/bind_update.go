@@ -27,7 +27,9 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	indexplugin "github.com/matrixorigin/matrixone/pkg/indexplugin"
 	planplugin "github.com/matrixorigin/matrixone/pkg/indexplugin/plan"
+	lockpb "github.com/matrixorigin/matrixone/pkg/pb/lock"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/internal/materialized"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	planutil "github.com/matrixorigin/matrixone/pkg/sql/util"
@@ -2297,6 +2299,18 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext)
 		}
 		return lockTargets[i].PrimaryColIdxInBat < lockTargets[j].PrimaryColIdxInBat
 	})
+	if !builder.hasExistingLockTargets() &&
+		isUnrestrictedSingleTargetUpdate(stmt, dmlCtx, updatedTargetCount) &&
+		lockTargetsCoverCompleteKeyspaces(lockTargets) {
+		if builder.fullTableUpdateLockTargets == nil {
+			builder.fullTableUpdateLockTargets = make(map[*plan.LockTarget]struct{}, len(lockTargets))
+		}
+		for _, target := range lockTargets {
+			if target.Mode == lockpb.LockMode_Exclusive {
+				builder.fullTableUpdateLockTargets[target] = struct{}{}
+			}
+		}
+	}
 
 	// Synchronous irregular indexes share the exact final row image with the
 	// base-table MULTI_UPDATE. Their stale entries are deleted by the immutable
@@ -2408,7 +2422,7 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext)
 			LockTargets: lockTargets,
 		}, bindCtx)
 	}
-	applySharedLockTableFallback(builder)
+	applyLockTableFallback(builder)
 
 	dmlNode.Children = append(dmlNode.Children, lastNodeID)
 	lastNodeID = builder.appendNode(dmlNode, bindCtx)
@@ -4603,6 +4617,53 @@ func updateHasMultipleSourceTables(stmt *tree.Update) bool {
 		return true
 	}
 	return len(stmt.Tables) == 1 && tableExprContainsJoin(stmt.Tables[0])
+}
+
+// isUnrestrictedSingleTargetUpdate proves the semantic precondition for the
+// large-UPDATE table-lock fast path. The proof deliberately stays narrower
+// than cardinality estimation: a predicate that happens to estimate to every
+// current row is still bounded and must preserve #26706's range-lock behavior.
+func isUnrestrictedSingleTargetUpdate(stmt *tree.Update, dmlCtx *DMLContext, updatedTargetCount int) bool {
+	if stmt == nil || dmlCtx == nil || updatedTargetCount != 1 || len(dmlCtx.tableDefs) != 1 ||
+		updateHasMultipleSourceTables(stmt) || len(stmt.OrderBy) != 0 || stmt.Limit != nil {
+		return false
+	}
+	if stmt.Where == nil {
+		return true
+	}
+	literal, ok := stmt.Where.Expr.(*tree.NumVal)
+	return ok && literal.ValType == tree.P_bool && literal.Bool()
+}
+
+// hasExistingLockTargets rejects plans that must lock another namespace before
+// the UPDATE's final base/index lock gate. Pulling only the final targets into
+// the compile-time table-lock phase would reverse that established order for
+// foreign-key checks/actions or an explicitly locking scalar subquery.
+func (builder *QueryBuilder) hasExistingLockTargets() bool {
+	for _, node := range builder.qry.Nodes {
+		if node.NodeType == plan.Node_LOCK_OP && len(node.LockTargets) > 0 {
+			return true
+		}
+	}
+	return false
+}
+
+// lockTargetsCoverCompleteKeyspaces keeps table-lock admission atomic across
+// every namespace written by the UPDATE. A partial admission can invert lock
+// order against a bounded UPDATE, and FLOAT/DOUBLE table ranges do not cover
+// infinities or every NaN payload even though their ordinary row locks work.
+func lockTargetsCoverCompleteKeyspaces(lockTargets []*plan.LockTarget) bool {
+	foundExclusive := false
+	for _, target := range lockTargets {
+		if target == nil || target.Mode != lockpb.LockMode_Exclusive {
+			continue
+		}
+		foundExclusive = true
+		if !colexec.SupportsTotalLockTableRange(makeTypeByPlan2Type(target.PrimaryColTyp)) {
+			return false
+		}
+	}
+	return foundExclusive
 }
 
 func primaryKeyUpdated(tableDef *plan.TableDef, updateCols map[string]tree.Expr) bool {
