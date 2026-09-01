@@ -91,9 +91,15 @@ type Object interface {
 	// only check with the created ts
 	CoarseCheckAllRowsCommittedBefore(ts types.TS) bool
 	// WaitAppendCommittingBefore waits for append transactions whose prepare
-	// timestamp precedes ts. Callers use it before evaluating row visibility at
-	// ts; it does not wait for appends prepared outside that snapshot.
-	WaitAppendCommittingBefore(ts types.TS, reader txnif.TxnReader) bool
+	// timestamp precedes ts and whose tombstone key occurs in the non-null keys.
+	// Callers use it before evaluating row visibility at ts; it does not wait for
+	// unrelated appends or appends prepared outside that snapshot.
+	WaitAppendCommittingBefore(
+		ts types.TS,
+		reader txnif.TxnReader,
+		keys containers.Vector,
+		keysZM index.ZM,
+	) bool
 	GetDuplicatedRows(
 		ctx context.Context,
 		txn txnif.TxnReader,

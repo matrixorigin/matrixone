@@ -43,6 +43,31 @@ func TestMutIndexDeleteAtPreservesOtherPositions(t *testing.T) {
 	require.Equal(t, []uint32{1}, rows)
 }
 
+func TestForeachRowsByKeysSkipsNullAndMissingKeys(t *testing.T) {
+	idx := NewMutIndex(types.T_int32.ToType())
+	indexed := containers.MakeVector(types.T_int32.ToType(), common.DefaultAllocator)
+	defer indexed.Close()
+	indexed.Append(int32(7), false)
+	indexed.Append(int32(8), false)
+	indexed.Append(int32(7), false)
+	require.NoError(t, idx.BatchUpsert(indexed.GetDownstreamVector(), 0))
+
+	query := containers.MakeVector(types.T_int32.ToType(), common.DefaultAllocator)
+	defer query.Close()
+	query.Append(int32(7), false)
+	query.Append(nil, true)
+	query.Append(int32(9), false)
+	queryZM := index.NewZM(types.T_int32, 0)
+	require.NoError(t, index.BatchUpdateZM(queryZM, query.GetDownstreamVector()))
+
+	var rows []uint32
+	require.NoError(t, idx.ForeachRowsByKeys(
+		query.GetDownstreamVector(), queryZM,
+		func(row uint32) { rows = append(rows, row) },
+	))
+	require.Equal(t, []uint32{0, 2}, rows)
+}
+
 func TestGetDuplicatedRowsSkipsIneligibleCandidates(t *testing.T) {
 	idx := NewMutIndex(types.T_int32.ToType())
 	indexedKeys := containers.MakeVector(types.T_int32.ToType(), common.DefaultAllocator)
