@@ -924,7 +924,7 @@ func (builder *QueryBuilder) finishIrregularIndexMaintenance(query *plan.Query, 
 	reduceSinkSinkScanNodes(query)
 	builder.tempOptimizeForDML()
 	builder.determineShuffleForDMLSteps()
-	applySharedLockTableFallback(builder)
+	applyLockTableFallback(builder)
 	return nil
 }
 
@@ -2137,7 +2137,7 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 			BindingTags: []int32{builder.genNewBindTag()},
 			LockTargets: lockTargets,
 		}, bindCtx)
-		applySharedLockTableFallback(builder)
+		applyLockTableFallback(builder)
 	}
 
 	/*
