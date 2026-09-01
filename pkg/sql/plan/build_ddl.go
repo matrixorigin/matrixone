@@ -228,6 +228,7 @@ func genViewTableDef(
 	colNames tree.IdentifierList,
 	viewDatabase string,
 	viewName string,
+	checkOption string,
 ) (*plan.TableDef, error) {
 	var tableDef plan.TableDef
 	dependencyCapture := newViewDependencyCaptureContext(ctx)
@@ -345,6 +346,8 @@ func genViewTableDef(
 	lowerCaseTableNames := ctx.GetLowerCaseTableNames()
 	viewData, err := json.Marshal(ViewData{
 		Stmt:                viewSql,
+		Definition:          tree.StringWithOpts(stmt, dialect.MYSQL, tree.WithQuoteString(true), tree.WithQuoteIdentifier(), tree.WithModeIndependentStringLiterals()),
+		CheckOption:         strings.ToUpper(checkOption),
 		DefaultDatabase:     ctx.DefaultDatabase(),
 		SQLMode:             parserSQLModeFromContext(ctx),
 		SecurityType:        getViewSecurityTypeFromContext(ctx),
@@ -1593,7 +1596,7 @@ func buildCreateView(stmt *tree.CreateView, ctx CompilerContext) (*Plan, error) 
 	}
 
 	tableDef, err := genViewTableDef(
-		ctx, stmt.AsSource, stmt.ColNames, createView.Database, string(viewName))
+		ctx, stmt.AsSource, stmt.ColNames, createView.Database, string(viewName), stmt.CheckOption)
 	if err != nil {
 		return nil, err
 	}
@@ -5524,7 +5527,7 @@ func buildAlterView(stmt *tree.AlterView, ctx CompilerContext) (*Plan, error) {
 	defer func() {
 		ctx.SetBuildingAlterView(false, "", "")
 	}()
-	tableDef, err := genViewTableDef(ctx, stmt.AsSource, stmt.ColNames, alterView.Database, viewName)
+	tableDef, err := genViewTableDef(ctx, stmt.AsSource, stmt.ColNames, alterView.Database, viewName, "NONE")
 	if err != nil {
 		return nil, err
 	}

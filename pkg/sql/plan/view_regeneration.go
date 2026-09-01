@@ -52,7 +52,7 @@ func ReplaceRegeneratedViewDependencies(
 		lowerCaseTableNames = *data.LowerCaseTableNames
 	}
 	updated, err := patchPersistedViewMetadata(
-		regenerated.TableDef.ViewSql.View, nil, dependencies, lowerCaseTableNames)
+		regenerated.TableDef.ViewSql.View, nil, nil, nil, dependencies, lowerCaseTableNames)
 	if err != nil {
 		return err
 	}
@@ -130,10 +130,12 @@ func RegenerateViewDefinition(
 	var selectStmt *tree.Select
 	var columnNames tree.IdentifierList
 	var viewDatabase, viewName string
+	checkOption := "NONE"
 	switch statement := statements[0].(type) {
 	case *tree.CreateView:
 		selectStmt, columnNames = statement.AsSource, statement.ColNames
 		viewDatabase, viewName = string(statement.Name.SchemaName), string(statement.Name.ObjectName)
+		checkOption = statement.CheckOption
 	case *tree.AlterView:
 		selectStmt, columnNames = statement.AsSource, statement.ColNames
 		viewDatabase, viewName = string(statement.Name.SchemaName), string(statement.Name.ObjectName)
@@ -151,7 +153,7 @@ func RegenerateViewDefinition(
 		lowerCaseTableNames: lowerCaseTableNames,
 	}
 	tableDef, err := genViewTableDef(
-		regenerationCtx, selectStmt, columnNames, viewDatabase, viewName)
+		regenerationCtx, selectStmt, columnNames, viewDatabase, viewName, checkOption)
 	if err != nil {
 		return nil, err
 	}
@@ -161,7 +163,8 @@ func RegenerateViewDefinition(
 	}
 
 	updatedViewData, err := patchPersistedViewMetadata(
-		persistedViewData, &generatedData.Stmt, generatedData.Dependencies, lowerCaseTableNames)
+		persistedViewData, &generatedData.Stmt, &generatedData.Definition, &generatedData.CheckOption,
+		generatedData.Dependencies, lowerCaseTableNames)
 	if err != nil {
 		return nil, err
 	}
@@ -175,6 +178,8 @@ func RegenerateViewDefinition(
 func patchPersistedViewMetadata(
 	persistedViewData string,
 	stableStatement *string,
+	definition *string,
+	checkOption *string,
 	dependencies []ViewDependency,
 	lowerCaseTableNames int64,
 ) (string, error) {
@@ -192,6 +197,20 @@ func patchPersistedViewMetadata(
 			return "", marshalErr
 		}
 		fields["Stmt"] = encodedStatement
+	}
+	if definition != nil {
+		encodedDefinition, marshalErr := json.Marshal(*definition)
+		if marshalErr != nil {
+			return "", marshalErr
+		}
+		fields["definition"] = encodedDefinition
+	}
+	if checkOption != nil {
+		encodedCheckOption, marshalErr := json.Marshal(*checkOption)
+		if marshalErr != nil {
+			return "", marshalErr
+		}
+		fields["check_option"] = encodedCheckOption
 	}
 	fields["dependencies"] = encodedDependencies
 	if _, ok := fields["lower_case_table_names"]; !ok {

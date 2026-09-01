@@ -437,14 +437,14 @@ func TestInformationSchemaCharacterSetsData(t *testing.T) {
 
 func TestInformationSchemaViewsMetadata(t *testing.T) {
 	assert.Contains(t, InformationSchemaViewsDDL,
-		"char_length(coalesce(regexp_substr(normalized.view_statement")
+		"char_length(coalesce(regexp_substr(if(nullif(json_extract_string(normalized.viewdef")
 	// rel_createsql preserves adjacent block comments while ViewData.Stmt is
 	// normalized by cleanHint. Its precedence keeps `v/* comment */as` from
 	// becoming the ambiguous identifier `vas` before structural AS extraction.
 	assert.Contains(t, InformationSchemaViewsDDL,
 		"coalesce(tbl.rel_createsql, json_extract_string(tbl.viewdef, '$.Stmt'))")
 	assert.Equal(t, 1, strings.Count(InformationSchemaViewsDDL, "regexp_replace(trim(coalesce(tbl.rel_createsql"))
-	assert.Equal(t, 1, strings.Count(InformationSchemaViewsDDL, "regexp_substr(normalized.view_statement"))
+	assert.Equal(t, 1, strings.Count(InformationSchemaViewsDDL, "regexp_substr(if(nullif(json_extract_string(normalized.viewdef"))
 	// The regular expression is embedded in a SQL string literal. Keep its
 	// line-break escapes doubled so SQL passes them through to regexp_substr
 	// instead of turning them into physical newlines.
@@ -455,15 +455,18 @@ func TestInformationSchemaViewsMetadata(t *testing.T) {
 	assert.Contains(t, InformationSchemaViewsDDL, `[^/\\*]`)
 	assert.NotContains(t, informationSchemaViewPrefixSpanPattern, `[^/*]`)
 	assert.Contains(t, InformationSchemaViewsDDL, "view_definition_wrapper_prefix_length")
-	assert.Contains(t, InformationSchemaViewsDDL, "regexp_substr(definitions.view_definition")
+	assert.Contains(t, InformationSchemaViewsDDL, "regexp_substr(if(left(definitions.view_statement")
 	assert.NotContains(t, InformationSchemaViewsDDL, "regexp_replace(tbl.view_definition, '[*]/', '', 1, 1)")
-	// System-view definitions are replayed by database clone. Use the same IF
-	// form as other persisted information_schema views for the wrapper-only
-	// suffix adjustment, and preserve the public TEXT metadata type.
+	// New views use parser-derived metadata. The regexp path remains a guarded
+	// compatibility fallback for catalog rows created before that metadata was
+	// persisted, and the public VIEW_DEFINITION type remains TEXT.
 	assert.Contains(t, InformationSchemaViewsDDL, "trim(substr(extracted.view_statement")
-	assert.Contains(t, InformationSchemaViewsDDL, "cast(trim(if(left(tbl.view_statement")
+	assert.Contains(t, InformationSchemaViewsDDL, "json_extract_string(tbl.viewdef, '$.definition')")
+	assert.Contains(t, InformationSchemaViewsDDL, "nullif(json_extract_string(normalized.viewdef, '$.definition'), '') is null")
+	assert.Contains(t, InformationSchemaViewsDDL, "left(definitions.view_statement, 3) = '/*!'")
 	assert.NotContains(t, InformationSchemaViewsDDL, "concat('', trim(substr(")
-	assert.Contains(t, InformationSchemaViewsDDL, "cast(tbl.view_definition as text))) as text) AS `VIEW_DEFINITION`")
+	assert.Contains(t, InformationSchemaViewsDDL, "cast(coalesce(nullif(json_extract_string(tbl.viewdef, '$.definition'), '')")
+	assert.Contains(t, InformationSchemaViewsDDL, "json_extract_string(tbl.viewdef, '$.check_option')")
 	assert.NotContains(t, InformationSchemaViewsDDL, "case when")
 	assert.NotContains(t, InformationSchemaViewsDDL, "sign(")
 	assert.NotContains(t, InformationSchemaViewsDDL, "least(")

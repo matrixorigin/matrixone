@@ -95,20 +95,20 @@ var (
 	// multibyte view identifiers.
 	// The extraction helpers return VARCHAR, but VIEWS has historically exposed
 	// VIEW_DEFINITION as TEXT. Keep that public metadata type stable.
-	informationSchemaViewDefinitionSQL = "cast(trim(if(left(" + informationSchemaViewStatementWithoutTerminatorSQL +
+	informationSchemaViewDefinitionSQL = "cast(coalesce(nullif(json_extract_string(tbl.viewdef, '$.definition'), ''), trim(if(left(" + informationSchemaViewStatementWithoutTerminatorSQL +
 		", 3) = '/*!' and tbl.view_definition_wrapper_prefix_length > 0, concat(substr(tbl.view_definition, 1, " +
 		"tbl.view_definition_wrapper_prefix_length - 2), substr(tbl.view_definition, tbl.view_definition_wrapper_prefix_length + 1, " +
-		"char_length(tbl.view_definition) - tbl.view_definition_wrapper_prefix_length)), cast(tbl.view_definition as text))) as text)"
-	informationSchemaViewsSourceSQL = "FROM (SELECT definitions.*, char_length(coalesce(regexp_substr(definitions.view_definition, '" +
+		"char_length(tbl.view_definition) - tbl.view_definition_wrapper_prefix_length)), cast(tbl.view_definition as text)))) as text)"
+	informationSchemaViewsSourceSQL = "FROM (SELECT definitions.*, char_length(coalesce(regexp_substr(if(left(definitions.view_statement, 3) = '/*!' and nullif(json_extract_string(definitions.viewdef, '$.definition'), '') is null, definitions.view_definition, ''), '" +
 		informationSchemaViewRegexSQLLiteral(informationSchemaViewExecutableCommentPrefixPattern) + "'), '')) AS view_definition_wrapper_prefix_length FROM (SELECT extracted.*, trim(substr(extracted.view_statement, " +
 		"extracted.view_definition_prefix_length + 1, char_length(extracted.view_statement) - " +
 		"extracted.view_definition_prefix_length)) AS view_definition FROM (SELECT normalized.*, " +
-		"char_length(coalesce(regexp_substr(normalized.view_statement, '" +
+		"char_length(coalesce(regexp_substr(if(nullif(json_extract_string(normalized.viewdef, '$.definition'), '') is null, normalized.view_statement, ''), '" +
 		informationSchemaViewRegexSQLLiteral(informationSchemaViewDefinitionPrefixPattern) +
 		"'), '')) AS view_definition_prefix_length FROM (SELECT tbl.rel_createsql, tbl.viewdef, tbl.account_id, " +
-		"tbl.relkind, tbl.reldatabase, tbl.rel_id, tbl.creator, tbl.relname, trim(regexp_replace(trim(" +
+		"tbl.relkind, tbl.reldatabase, tbl.rel_id, tbl.creator, tbl.relname, if(nullif(json_extract_string(tbl.viewdef, '$.definition'), '') is null, trim(regexp_replace(trim(" +
 		"coalesce(tbl.rel_createsql, json_extract_string(tbl.viewdef, '$.Stmt'))), '[;][[:space:]]*$', '', 1, 1)) " +
-		"AS view_statement FROM mo_catalog.mo_tables tbl JOIN __mo_visible_tables visible_tbl ON " +
+		", '') AS view_statement FROM mo_catalog.mo_tables tbl JOIN __mo_visible_tables visible_tbl ON " +
 		"tbl.account_id = visible_tbl.account_id AND tbl.rel_id = visible_tbl.rel_id WHERE tbl.account_id = current_account_id() " +
 		"and tbl.relkind = 'v' and tbl.reldatabase != 'information_schema') normalized) extracted) definitions) tbl " +
 		"LEFT JOIN mo_catalog.mo_user usr ON tbl.creator = usr.user_id"
@@ -659,7 +659,7 @@ var (
 		"tbl.reldatabase AS `TABLE_SCHEMA`," +
 		"tbl.relname AS `TABLE_NAME`," +
 		informationSchemaViewDefinitionSQL + " AS `VIEW_DEFINITION`," +
-		"'NONE' AS `CHECK_OPTION`," +
+		"cast(coalesce(nullif(json_extract_string(tbl.viewdef, '$.check_option'), ''), 'NONE') as varchar(9)) AS `CHECK_OPTION`," +
 		"cast('NO' as varchar(3)) AS `IS_UPDATABLE`," +
 		"usr.user_name + '@' + usr.user_host AS `DEFINER`," +
 		"'DEFINER' AS `SECURITY_TYPE`," +

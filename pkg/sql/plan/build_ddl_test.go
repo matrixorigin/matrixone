@@ -1012,6 +1012,80 @@ func (c *rootSQLCompilerContext) GetRootSql() string {
 	return c.rootSQL
 }
 
+func TestBuildCreateViewPersistsParserDerivedInformationSchemaMetadata(t *testing.T) {
+	tests := []struct {
+		name        string
+		sql         string
+		contains    string
+		checkOption string
+	}{
+		{
+			name:     "dollar quoted definer cannot supply structural view tokens",
+			sql:      "CREATE DEFINER=$q$ view fake as select 0$q$ VIEW v AS SELECT 1;",
+			contains: "select 1",
+		},
+		{
+			name:     "executable comment preserves dollar quoted terminator text",
+			sql:      "/*!50001 CREATE VIEW v AS SELECT $q$x*/y$q$ AS s */;",
+			contains: "*/y",
+		},
+		{
+			name:     "executable comment preserves escaped double quoted terminator text",
+			sql:      "/*!50001 CREATE VIEW v AS SELECT \"x\\\"*/y\" AS s */;",
+			contains: "*/y",
+		},
+		{
+			name:     "double minus remains an arithmetic operator",
+			sql:      "/*!50001 CREATE VIEW v AS SELECT 1--2 AS x */;",
+			contains: "select",
+		},
+		{
+			name:        "check option is separate from the select definition",
+			sql:         "CREATE VIEW v AS SELECT 1 WITH CASCADED CHECK OPTION;",
+			contains:    "select 1",
+			checkOption: "CASCADED",
+		},
+		{
+			name:     "bound column references are normalized with the definition",
+			sql:      "CREATE VIEW v AS SELECT n_name FROM nation;",
+			contains: "select `nation`.`n_name` from `nation`",
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, test.sql, 1)
+			require.NoError(t, err)
+			defer stmt.Free()
+
+			ctx := &rootSQLCompilerContext{
+				MockCompilerContext: NewMockCompilerContext(false),
+				rootSQL:             test.sql,
+			}
+			built, err := BuildPlan(ctx, stmt, false)
+			require.NoError(t, err)
+			var data ViewData
+			require.NoError(t, json.Unmarshal([]byte(built.GetDdl().GetCreateView().GetTableDef().GetViewSql().GetView()), &data))
+			require.NotEmpty(t, data.Definition)
+			assert.Contains(t, strings.ToLower(data.Definition), test.contains)
+			assert.NotContains(t, strings.ToLower(data.Definition), "create")
+			assert.NotContains(t, strings.ToLower(data.Definition), "check option")
+			expectedCheckOption := test.checkOption
+			if expectedCheckOption == "" {
+				expectedCheckOption = "NONE"
+			}
+			assert.Equal(t, expectedCheckOption, data.CheckOption)
+
+			definitions, err := parsers.Parse(t.Context(), dialect.MYSQL, data.Definition, 1)
+			require.NoError(t, err)
+			require.Len(t, definitions, 1)
+			_, ok := definitions[0].(*tree.Select)
+			assert.True(t, ok)
+			definitions[0].Free()
+		})
+	}
+}
+
 func TestBuildCreateOrReplaceViewRejectsRecursiveDefinition(t *testing.T) {
 	recentTimestamp := time.Now().UTC().Add(-time.Minute).Format("2006-01-02 15:04:05.999999999")
 	aheadOfWallClock := time.Now().Add(time.Minute)
