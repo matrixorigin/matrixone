@@ -25,13 +25,17 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/common/sqlquote"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
+	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/stretchr/testify/require"
+	"go.uber.org/zap"
 )
 
 type recordingMVRowIDReader struct {
@@ -258,4 +262,70 @@ func TestMaterializedViewAdvancedDeltaSQLIsReparseable(t *testing.T) {
 		require.NoError(t, parseErr, sql)
 		stmt.Free()
 	}
+}
+
+func TestMaterializedViewDeltaExecutionPaths(t *testing.T) {
+	service := "materialized-view-delta-execution-test"
+	rt := moruntime.NewRuntime(metadata.ServiceType_CN, service, zap.NewNop())
+	moruntime.SetupServiceBasedRuntime(service, rt)
+	var sqls []string
+	rt.SetGlobalVariables(moruntime.InternalSQLExecutor, executor.NewMemExecutor(func(sql string) (executor.Result, error) {
+		sqls = append(sqls, sql)
+		return executor.Result{}, nil
+	}))
+
+	desc := &incrementalDescription{
+		Version: 2, Strategy: "hybrid-state", SourceAlias: "e",
+		SourceColumns: []string{"duration", "service", "trace_id"},
+		Filter:        "e.duration >= 0",
+		Groups:        []incrementalGroup{{Expression: "e.service", OutputColumn: "service", NotNullable: true}},
+		Aggregates: []incrementalAggregate{
+			{Kind: "count_star", OutputColumn: "requests"},
+			{Kind: "min", InputExpression: "e.duration", OutputColumn: "min_duration"},
+			{Kind: "max", InputExpression: "e.duration", OutputColumn: "max_duration"},
+			{Kind: "count_distinct", InputExpression: "e.trace_id", OutputColumn: "traces", StateIndex: 4},
+		},
+		GroupKeyColumn: "__group_key", RowCountColumn: "__row_count",
+		StateColumns: []string{"__row_count", "__group_key"}, StateTable: "__state",
+	}
+	info := &ConsumerInfo{
+		DBName: "db", TableName: "mv",
+		Columns:   []string{"service", "requests", "min_duration", "max_duration", "traces"},
+		SourceSQL: "events",
+		RefreshSQL: "SELECT e.service AS service, count(*) AS requests, min(e.duration) AS min_duration, " +
+			"max(e.duration) AS max_duration, count(distinct e.trace_id) AS traces, " +
+			"count(*) AS __row_count, serial_full(e.service) AS __group_key FROM events AS e " +
+			"WHERE e.duration >= 0 GROUP BY e.service",
+		SrcTables: []TableInfo{{DBName: "db", TableName: "events"}},
+	}
+	intType, varcharType := types.T_int64.ToType(), types.T_varchar.ToType()
+	sourceTypes := []*types.Type{&intType, &varcharType, &varcharType}
+	rows := []materializedViewSignedRow{
+		{values: map[string]any{"duration": int64(10), "service": []byte("api"), "trace_id": []byte("t1")}, sign: -1},
+		{values: map[string]any{"duration": int64(20), "service": []byte("api"), "trace_id": []byte("t2")}, sign: 1},
+	}
+
+	require.NoError(t, applyMaterializedViewDeltaRows(t.Context(), service, nil, info, desc, sourceTypes, rows))
+	require.NoError(t, ensureMaterializedViewStateTable(t.Context(), service, nil, info, desc))
+	require.NoError(t, resetMaterializedViewAffectedGroups(t.Context(), service, nil, info, desc))
+	require.NoError(t, recordMaterializedViewAffectedGroups(t.Context(), service, nil, info, desc, sourceTypes, rows))
+	require.NoError(t, recomputeMaterializedViewAffectedGroups(t.Context(), service, nil, info, desc, types.BuildTS(100, 7)))
+	require.NoError(t, applyMaterializedViewDistinctDeltas(t.Context(), service, nil, info, desc, sourceTypes, rows))
+	require.NoError(t, rebuildMaterializedViewDistinctState(t.Context(), service, nil, info, desc, types.BuildTS(100, 7)))
+
+	legacy := *desc
+	legacy.GroupKeyColumn = ""
+	legacy.StateTable = ""
+	legacy.Aggregates = []incrementalAggregate{{Kind: "count_star", OutputColumn: "requests"}}
+	legacy.StateColumns = []string{"__row_count"}
+	require.NoError(t, applyMaterializedViewDeltaRows(t.Context(), service, nil, info, &legacy, sourceTypes, rows))
+	require.NoError(t, applyMaterializedViewDeltaRows(t.Context(), service, nil, info, &legacy, sourceTypes, rows[1:]))
+	require.NoError(t, applyMaterializedViewDeltaRows(t.Context(), service, nil, info, &legacy, sourceTypes, nil))
+	require.NoError(t, ensureMaterializedViewStateTable(t.Context(), service, nil, info, &legacy))
+	require.NoError(t, resetMaterializedViewAffectedGroups(t.Context(), service, nil, info, &legacy))
+	require.NoError(t, recordMaterializedViewAffectedGroups(t.Context(), service, nil, info, &legacy, sourceTypes, rows))
+	require.NoError(t, recomputeMaterializedViewAffectedGroups(t.Context(), service, nil, info, &legacy, types.BuildTS(100, 7)))
+	require.NoError(t, applyMaterializedViewDistinctDeltas(t.Context(), service, nil, info, &legacy, sourceTypes, rows))
+	require.NoError(t, rebuildMaterializedViewDistinctState(t.Context(), service, nil, info, &legacy, types.BuildTS(100, 7)))
+	require.GreaterOrEqual(t, len(sqls), 20)
 }

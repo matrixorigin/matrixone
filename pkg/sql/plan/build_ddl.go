@@ -1998,11 +1998,6 @@ func materializedViewRefreshSQL(stmt *tree.Select) string {
 	return tree.StringWithOpts(stmt, dialect.MYSQL, tree.WithSingleQuoteString())
 }
 
-func materializedViewIncrementalSpec(stmt *tree.Select, outputCols []*ColDef) string {
-	spec, _, _ := buildMaterializedViewIncrementalPlan(stmt, outputCols)
-	return spec
-}
-
 func materializedViewIncrementalPrimaryKey(encoded string) []string {
 	if encoded == "" {
 		return nil
@@ -2016,14 +2011,6 @@ func materializedViewIncrementalPrimaryKey(encoded string) []string {
 		return nil
 	}
 	return []string{desc.GroupKeyColumn}
-}
-
-func materializedViewDirectColumn(expr tree.Expr) (string, bool) {
-	name, ok := expr.(*tree.UnresolvedName)
-	if !ok || name.Star || name.NumParts < 1 {
-		return "", false
-	}
-	return name.ColName(), true
 }
 
 func isMaterializedViewStar(expr tree.Expr) bool {

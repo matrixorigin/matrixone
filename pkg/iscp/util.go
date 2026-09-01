@@ -361,17 +361,41 @@ func convertColIntoSql(
 		sqlBuff = appendString(sqlBuff, value)
 		sqlBuff = appendByte(sqlBuff, '\'')
 	case types.T_decimal64:
-		value := data.(string)
+		var value string
+		switch v := data.(type) {
+		case string:
+			value = v
+		case types.Decimal64:
+			value = v.Format(typ.Scale)
+		default:
+			return nil, moerr.NewInternalErrorf(ctx, "convert decimal64 value of type %T into SQL", data)
+		}
 		sqlBuff = appendByte(sqlBuff, '\'')
 		sqlBuff = appendString(sqlBuff, value)
 		sqlBuff = appendByte(sqlBuff, '\'')
 	case types.T_decimal128:
-		value := data.(string)
+		var value string
+		switch v := data.(type) {
+		case string:
+			value = v
+		case types.Decimal128:
+			value = v.Format(typ.Scale)
+		default:
+			return nil, moerr.NewInternalErrorf(ctx, "convert decimal128 value of type %T into SQL", data)
+		}
 		sqlBuff = appendByte(sqlBuff, '\'')
 		sqlBuff = appendString(sqlBuff, value)
 		sqlBuff = appendByte(sqlBuff, '\'')
 	case types.T_uuid:
-		value := data.(string)
+		var value string
+		switch v := data.(type) {
+		case string:
+			value = v
+		case types.Uuid:
+			value = v.String()
+		default:
+			return nil, moerr.NewInternalErrorf(ctx, "convert uuid value of type %T into SQL", data)
+		}
 		sqlBuff = appendByte(sqlBuff, '\'')
 		sqlBuff = appendString(sqlBuff, value)
 		sqlBuff = appendByte(sqlBuff, '\'')

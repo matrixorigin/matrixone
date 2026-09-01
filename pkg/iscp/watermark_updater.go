@@ -446,7 +446,7 @@ func registerJob(
 	}
 	jobSpec.SrcTables = resolved
 	jobSpec.SrcTable = resolved[0]
-	tableID, dbID = jobSpec.SrcTable.TableID, jobSpec.SrcTable.DBID
+	tableID = jobSpec.SrcTable.TableID
 	exist, dropped, prevID, err := queryIndexLog(
 		ctxWithSysAccount,
 		cnUUID,

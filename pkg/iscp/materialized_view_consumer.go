@@ -240,7 +240,7 @@ func RefreshMaterializedView(ctx context.Context, service string, txn client.Txn
 		return err
 	}
 	res.Close()
-	refreshSQL := info.RefreshSQL
+	var refreshSQL string
 	if boundary != nil {
 		refreshSQL, err = materializedViewRefreshAtSources(info.RefreshSQL, info.SourceTableInfos(), *boundary)
 	} else {
@@ -330,17 +330,6 @@ func materializedViewRowsFromBatch(bat *AtomicBatch, insert bool) ([]materialize
 func materializedViewRefreshAt(query, source string, ts types.TS) (string, error) {
 	needle := "from " + source
 	replacement := fmt.Sprintf("from %s{MO_TS = '%s'}", source, ts.ToString())
-	refresh := strings.Replace(query, needle, replacement, 1)
-	if refresh == query {
-		return "", moerr.NewInternalErrorNoCtxf("materialized view source %q not found in refresh query", source)
-	}
-	return refresh, nil
-}
-
-func materializedViewRefreshAtInDatabase(query, source, database string, ts types.TS) (string, error) {
-	needle := "from " + source
-	qualified := fmt.Sprintf("`%s`.`%s`", database, source)
-	replacement := fmt.Sprintf("from %s{MO_TS = '%s'}", qualified, ts.ToString())
 	refresh := strings.Replace(query, needle, replacement, 1)
 	if refresh == query {
 		return "", moerr.NewInternalErrorNoCtxf("materialized view source %q not found in refresh query", source)
