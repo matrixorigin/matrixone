@@ -125,7 +125,7 @@ Returned rows are rewritten to the subscriber account, local subscription alias,
 
 ### 5.3 View composition and authorization
 
-`TABLES` uses a private `__mo_all_tables` CTE containing current-account local rows plus `mo_subscription_tables()` rows, followed by the existing `__mo_visible_tables` active-role predicate. `COLUMNS` retains the existing local visible-table CTE and local `mo_columns` branch, then combines it with a `mo_subscription_columns()` branch using `UNION ALL`. The subscription function colocates each column with rewritten table authorization fields, so that branch applies the same active-role ownership/grant predicate and temporary-object predicate directly without concurrently running `mo_subscription_tables()` in the same transaction. The local branch retains its existing key-index join, while the subscription branch consumes the publisher-computed key priority. Hidden/internal/temporary object filters, type decoding, generated/default expressions, and `COLUMN_KEY` mapping remain equivalent across both branches.
+`TABLES` uses a private `__mo_all_tables` CTE containing current-account local rows plus `mo_subscription_tables()` rows and an internal source marker, followed by the existing `__mo_visible_tables` active-role predicate. Its final projection is split into local and subscription branches: only the local branch evaluates `internal_auto_increment` against a local physical relation, while the subscription branch returns zero, matching the existing subscription `SHOW TABLE STATUS` behavior. This split does not depend on conditional-expression lazy evaluation and prevents a rewritten subscriber alias from being used for physical relation lookup. `COLUMNS` retains the existing local visible-table CTE and local `mo_columns` branch, then combines it with a `mo_subscription_columns()` branch using `UNION ALL`. The subscription function colocates each column with rewritten table authorization fields, so that branch applies the same active-role ownership/grant predicate and temporary-object predicate directly without concurrently running `mo_subscription_tables()` in the same transaction. The local branch retains its existing key-index join, while the subscription branch consumes the publisher-computed key priority. Hidden/internal/temporary object filters, type decoding, generated/default expressions, and `COLUMN_KEY` mapping remain equivalent across both branches.
 
 The subscription-aware CTEs are used only by `TABLES` and `COLUMNS`. The shared version 2 CTEs for other protected views remain local-only, preventing unrelated scans and accidental name-based joins to publisher metadata.
 
@@ -255,6 +255,7 @@ Rejected. An arbitrary surrounding join/scan can be unbounded and may have early
 | Canonical upgrades wait for common v41 and are idempotent | v4.0.6 upgrade tests |
 | Unique cumulative allocation after latest main | merge-time `MORPCVersion` audit and exact-head CI |
 | Live subscription/publication/account/table-scope filtering | table-function query-builder/decoder UT and public SQL BVT |
+| Subscription `TABLES.AUTO_INCREMENT` and unpruned `SELECT *` avoid local-alias physical lookup | sysview/planner structural tests and public SQL BVT |
 | Subscriber alias/local DB identity; no publisher owner collision | table-function typed-output UT and role-isolation BVT |
 | Existing local active/inherited/database/table privilege behavior applies | public SQL BVT matrix with no-grant and granted controls |
 | Raw function direct/user-view calls rejected; trusted system lineage admitted | planner unit tests and public SQL negative BVT |
@@ -288,6 +289,7 @@ Rollout is contained by the common-protocol gate: v41-v42 local definitions rema
 - Cross-account execution is private to exact system-view lineage and has no user-supplied identity inputs.
 - Candidate discovery is keyset-paged at 64; each function owns one producer, eight result envelopes, one current result, and an 8,192-row output batch.
 - `TABLES` / `COLUMNS` use v43 while other version 2 protected views remain at v41.
+- `TABLES` evaluates `internal_auto_increment` only in its local-row projection; subscription rows return zero without resolving the rewritten alias as a local relation.
 - All persisted writers of the mutable latest TABLES/COLUMNS DDL share the v43 barrier.
 
 ## 13. Open decisions

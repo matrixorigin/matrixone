@@ -57,6 +57,11 @@ use resub01;
 show tables;
 select table_schema, table_name from information_schema.tables
 where table_schema = 'resub01' order by table_name;
+select auto_increment from information_schema.tables
+where table_schema = 'resub01' and table_name = 'repub01';
+-- @ignore:14,15,16,19,20
+select * from information_schema.tables
+where table_schema = 'resub01' and table_name = 'repub01';
 select table_schema, table_name, column_name, ordinal_position from information_schema.columns
 where table_schema = 'resub01' order by table_name, ordinal_position;
 select * from mo_subscription_tables();

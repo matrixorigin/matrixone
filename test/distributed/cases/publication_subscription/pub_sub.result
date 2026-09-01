@@ -66,6 +66,14 @@ select table_schema, table_name from information_schema.tables
 where table_schema = 'resub01' order by table_name;
 table_schema    table_name
 resub01    repub01
+select auto_increment from information_schema.tables
+where table_schema = 'resub01' and table_name = 'repub01';
+auto_increment
+0
+select * from information_schema.tables
+where table_schema = 'resub01' and table_name = 'repub01';
+TABLE_CATALOG    TABLE_SCHEMA    TABLE_NAME    TABLE_TYPE    ENGINE    VERSION    ROW_FORMAT    TABLE_ROWS    AVG_ROW_LENGTH    DATA_LENGTH    MAX_DATA_LENGTH    INDEX_LENGTH    DATA_FREE    AUTO_INCREMENT    CREATE_TIME    UPDATE_TIME    CHECK_TIME    TABLE_COLLATION    CHECKSUM    CREATE_OPTIONS    TABLE_COMMENT
+def    resub01    repub01    BASE TABLE    Tae    10    Compressed    0    0    0    0    0    0    0    2024-07-23 21:40:27    2024-07-23 21:40:27    2024-07-23 21:40:27    utf8mb4_general_ci    0    ignored    ignored
 select table_schema, table_name, column_name, ordinal_position from information_schema.columns
 where table_schema = 'resub01' order by table_name, ordinal_position;
 table_schema    table_name    column_name    ordinal_position

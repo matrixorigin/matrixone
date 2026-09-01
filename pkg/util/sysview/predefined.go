@@ -221,20 +221,20 @@ func informationSchemaSubscriptionMetadataVisibilityCTE() string {
 	return "WITH __mo_active_roles(role_id) AS (" +
 		"SELECT role_id FROM mo_current_roles() role_closure), " +
 		"__mo_all_tables(account_id, rel_id, relname, reldatabase, reldatabase_id, relkind, rel_createsql, " +
-		"created_time, partitioned, rel_comment, extra_info, rel_logical_id, owner) AS (" +
+		"created_time, partitioned, rel_comment, extra_info, rel_logical_id, owner, is_subscription) AS (" +
 		"SELECT tbl.account_id, tbl.rel_id, tbl.relname, tbl.reldatabase, tbl.reldatabase_id, tbl.relkind, " +
 		"tbl.rel_createsql, tbl.created_time, tbl.partitioned, tbl.rel_comment, tbl.extra_info, " +
-		"tbl.rel_logical_id, tbl.owner FROM mo_catalog.mo_tables tbl " +
+		"tbl.rel_logical_id, tbl.owner, false FROM mo_catalog.mo_tables tbl " +
 		"WHERE tbl.account_id = current_account_id() UNION ALL " +
 		"SELECT subscription_tables.account_id, subscription_tables.rel_id, subscription_tables.relname, " +
 		"subscription_tables.reldatabase, subscription_tables.reldatabase_id, subscription_tables.relkind, " +
 		"subscription_tables.rel_createsql, subscription_tables.created_time, subscription_tables.partitioned, " +
 		"subscription_tables.rel_comment, subscription_tables.extra_info, subscription_tables.rel_logical_id, " +
-		"subscription_tables.owner FROM mo_subscription_tables() subscription_tables), " +
+		"subscription_tables.owner, true FROM mo_subscription_tables() subscription_tables), " +
 		"__mo_visible_tables AS (" +
 		"SELECT tbl.account_id, tbl.rel_id, tbl.relname, tbl.reldatabase, tbl.reldatabase_id, tbl.relkind, " +
 		"tbl.rel_createsql, tbl.created_time, tbl.partitioned, tbl.rel_comment, tbl.extra_info, " +
-		"tbl.rel_logical_id, tbl.owner FROM __mo_all_tables tbl " +
+		"tbl.rel_logical_id, tbl.owner, tbl.is_subscription FROM __mo_all_tables tbl " +
 		"WHERE tbl.account_id = current_account_id() AND (" +
 		"tbl.reldatabase IN ('mo_catalog','information_schema','mysql','system','system_metrics','mo_task','mo_debug') " +
 		"OR tbl.owner IN (SELECT role_id FROM __mo_active_roles) " +
@@ -265,12 +265,28 @@ func informationSchemaSubscriptionMetadataVisibilityCTE() string {
 }
 
 func informationSchemaSubscriptionTablesDDL() string {
-	return strings.Replace(
-		InformationSchemaTablesV41DDL,
-		informationSchemaMetadataVisibilityCTE(),
-		informationSchemaSubscriptionMetadataVisibilityCTE(),
+	prefix := "CREATE VIEW information_schema.TABLES AS " + informationSchemaMetadataVisibilityCTE()
+	localSelect := strings.TrimPrefix(InformationSchemaTablesV41DDL, prefix)
+	localSelect = strings.Replace(
+		localSelect,
+		"WHERE tbl.account_id = current_account_id() and",
+		"WHERE NOT tbl.is_subscription AND tbl.account_id = current_account_id() and",
 		1,
 	)
+	subscriptionSelect := strings.Replace(
+		localSelect,
+		"if(relkind = 'v', NULL, internal_auto_increment(reldatabase, relname)) AS `AUTO_INCREMENT`,",
+		"if(relkind = 'v', NULL, 0) AS `AUTO_INCREMENT`,",
+		1,
+	)
+	subscriptionSelect = strings.Replace(
+		subscriptionSelect,
+		"WHERE NOT tbl.is_subscription AND",
+		"WHERE tbl.is_subscription AND",
+		1,
+	)
+	return "CREATE VIEW information_schema.TABLES AS " +
+		informationSchemaSubscriptionMetadataVisibilityCTE() + localSelect + " UNION ALL " + subscriptionSelect
 }
 
 func informationSchemaColumnsLocalFromSQL() string {
