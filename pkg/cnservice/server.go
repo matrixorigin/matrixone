@@ -513,16 +513,14 @@ func (s *service) closeService() error {
 		defer logutil.LogClose(s.logger, "cnservice")()
 
 		s.closeViewMetadataAdmission()
-		// Prevent an already-admitted protocol command from republishing the
-		// barrier after shutdown begins. Other QueryService methods remain live
-		// until authoritative withdrawal, preserving the stale-target retry path.
+		// Seal DDL admission before stopping periodic heartbeats. DDL barrier
+		// withdrawal happens while QueryService remains available for stale-target
+		// retries; view-admission ownership is withdrawn later, after all local
+		// ingress and TaskRunner work have drained.
 		s.ddlVisibilityBarrierClosing.Store(true)
 		if s.ddlCommitGate != nil {
 			s.ddlCommitGate.Close()
 		}
-		// Stop periodic heartbeats before publishing the final false readiness.
-		// QueryService remains available until the authoritative inventory has
-		// observed the withdrawal, so healthy CNs cannot target a closed barrier.
 		s.stopper.Stop()
 
 		s.closeErr = closeCNServiceSteps(
@@ -547,6 +545,7 @@ func (s *service) closeService() error {
 			// dependencies, while keeping the trace consumer alive for final events.
 			s.waitPipelineHandlers,
 			s.closeIncrService,
+			s.withdrawViewMetadataAdmission,
 			s.stopRPCs,
 			s.closeTxnTraceService,
 			func() error {

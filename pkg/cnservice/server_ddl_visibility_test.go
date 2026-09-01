@@ -1530,11 +1530,15 @@ func TestServiceCloseWithdrawsDDLVisibilityBeforeQueryService(t *testing.T) {
 	state := newDDLVisibilityCloseTestService(t, nil)
 
 	require.NoError(t, state.service.Close())
-	require.False(t, state.hakeeperClient.queryClosedBeforeSend)
+	require.True(t, state.hakeeperClient.queryClosedBeforeSend,
+		"view-admission withdrawal intentionally follows QueryService drain")
 	require.False(t, state.queryClosedBeforeRefresh)
-	require.Len(t, state.hakeeperClient.heartbeats, 1)
+	require.Len(t, state.hakeeperClient.heartbeats, 2)
 	require.False(t, state.hakeeperClient.heartbeats[0].DDLVisibilityBarrierReady)
-	require.False(t, state.hakeeperClient.heartbeats[0].ViewMetadataIngressReady)
+	require.False(t, state.hakeeperClient.heartbeats[0].ViewMetadataIngressReady,
+		"shutdown seals local view ingress before either authoritative withdrawal")
+	require.False(t, state.hakeeperClient.heartbeats[1].DDLVisibilityBarrierReady)
+	require.False(t, state.hakeeperClient.heartbeats[1].ViewMetadataIngressReady)
 	require.Equal(t, 1, state.cluster.refreshCalls)
 	require.False(t, state.cluster.cnServices[0].DDLVisibilityBarrierReady)
 	require.Equal(t, 1, state.hakeeperClient.closeCalls)
@@ -1554,8 +1558,9 @@ func TestServiceCloseContinuesAfterDDLVisibilityWithdrawalFailure(t *testing.T) 
 
 	err := state.service.Close()
 	require.ErrorIs(t, err, withdrawErr)
-	require.False(t, state.hakeeperClient.queryClosedBeforeSend)
-	require.Len(t, state.hakeeperClient.heartbeats, 1)
+	require.True(t, state.hakeeperClient.queryClosedBeforeSend,
+		"clean view-admission withdrawal is still attempted after the DDL withdrawal failure")
+	require.Len(t, state.hakeeperClient.heartbeats, 2)
 	require.Zero(t, state.cluster.refreshCalls)
 	require.Equal(t, 1, state.hakeeperClient.closeCalls)
 	require.Equal(t, 2, state.lockService.closeCalls)

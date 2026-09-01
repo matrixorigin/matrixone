@@ -94,6 +94,9 @@ message LogStore {
   string UUID = 1;
   // Shards is for Log shards metadata.
   repeated LogShard Shards = 2 [(gogoproto.nullable) = false];
+  // Incarnation identifies the persistent storage generation used by this
+  // Log store. It changes when the store starts from a new data directory.
+  string Incarnation = 3;
 }
 
 // CNRole cn node role

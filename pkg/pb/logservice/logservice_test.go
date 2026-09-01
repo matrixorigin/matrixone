@@ -254,6 +254,81 @@ func TestLogStateUpdateStores(t *testing.T) {
 	state.Update(hb3, tick3)
 }
 
+func TestLogStateTracksReplicaStoreIncarnation(t *testing.T) {
+	state := NewLogState()
+	oldHeartbeat := LogStoreHeartbeat{
+		UUID:             "log-a",
+		StoreIncarnation: "disk-a",
+		Replicas: []LogReplicaInfo{{
+			LogShardInfo: LogShardInfo{
+				ShardID:           1,
+				Replicas:          map[uint64]string{1: "log-a", 2: "log-b"},
+				NonVotingReplicas: map[uint64]string{3: "log-c"},
+				Epoch:             1,
+			},
+			ReplicaID: 1,
+		}},
+	}
+	state.Update(oldHeartbeat, 1)
+	state.Update(LogStoreHeartbeat{
+		UUID:             "log-c",
+		StoreIncarnation: "disk-non-voting",
+		Replicas: []LogReplicaInfo{{
+			LogShardInfo: oldHeartbeat.Replicas[0].LogShardInfo,
+			ReplicaID:    3,
+		}},
+	}, 1)
+
+	assert.Equal(t, "disk-a", state.Stores["log-a"].StoreIncarnation)
+	assert.Equal(t, "disk-a", state.Shards[1].ReplicaStoreIncarnations[1])
+	assert.Equal(t, "disk-non-voting", state.Shards[1].ReplicaStoreIncarnations[3])
+
+	// A fresh data directory uses the same service UUID but reports no local
+	// replicas. Keep the old replica binding so the checker can fence it.
+	state.Update(LogStoreHeartbeat{
+		UUID:             "log-a",
+		StoreIncarnation: "disk-b",
+	}, 2)
+	assert.Equal(t, "disk-b", state.Stores["log-a"].StoreIncarnation)
+	assert.Equal(t, "disk-a", state.Shards[1].ReplicaStoreIncarnations[1])
+
+	// Legacy heartbeats must not erase a known incarnation during rolling
+	// upgrades.
+	state.Update(LogStoreHeartbeat{UUID: "log-a"}, 3)
+	assert.Equal(t, "disk-b", state.Stores["log-a"].StoreIncarnation)
+
+	// Once membership removes the old replica, its incarnation binding is
+	// pruned. A newly added replica records the replacement store generation.
+	state.Update(LogStoreHeartbeat{
+		UUID:             "log-b",
+		StoreIncarnation: "disk-c",
+		Replicas: []LogReplicaInfo{{
+			LogShardInfo: LogShardInfo{
+				ShardID:           1,
+				Replicas:          map[uint64]string{2: "log-b"},
+				NonVotingReplicas: map[uint64]string{3: "log-c"},
+				Epoch:             2,
+			},
+			ReplicaID: 2,
+		}},
+	}, 4)
+	assert.NotContains(t, state.Shards[1].ReplicaStoreIncarnations, uint64(1))
+	assert.Equal(t, "disk-c", state.Shards[1].ReplicaStoreIncarnations[2])
+	assert.Equal(t, "disk-non-voting", state.Shards[1].ReplicaStoreIncarnations[3])
+
+	// A delayed heartbeat from the removed replica must not recreate its
+	// incarnation binding after the membership epoch has advanced.
+	state.Update(oldHeartbeat, 5)
+	assert.NotContains(t, state.Shards[1].ReplicaStoreIncarnations, uint64(1))
+	assert.Equal(t, "disk-c", state.Shards[1].ReplicaStoreIncarnations[2])
+
+	data, err := state.Marshal()
+	assert.NoError(t, err)
+	var restored LogState
+	assert.NoError(t, restored.Unmarshal(data))
+	assert.Equal(t, state, restored)
+}
+
 func TestLogString(t *testing.T) {
 	cases := []struct {
 		desc string

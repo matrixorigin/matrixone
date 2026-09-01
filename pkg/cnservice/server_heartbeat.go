@@ -261,6 +261,32 @@ func (s *service) newCNStoreHeartbeat() logservicepb.CNStoreHeartbeat {
 	return hb
 }
 
+// withdrawViewMetadataAdmission publishes a final non-routable heartbeat after
+// every local ingress path and TaskRunner have stopped. A clean replacement can
+// then take the UUID without waiting for the store timeout.
+func (s *service) withdrawViewMetadataAdmission() error {
+	if s.viewMetadataAdmissionGeneration == 0 || s._hakeeperClient == nil {
+		return nil
+	}
+	s.viewMetadataIngressReady.Store(false)
+	timeout := s.cfg.HAKeeper.HeatbeatTimeout.Duration
+	if timeout <= 0 {
+		timeout = 3 * time.Second
+	}
+	ctx, cancel := context.WithTimeoutCause(
+		context.Background(), timeout, moerr.CauseHeartbeat)
+	defer cancel()
+	hb := s.newCNStoreHeartbeat()
+	_, err := s._hakeeperClient.SendCNHeartbeat(ctx, hb)
+	if err != nil {
+		return moerr.AttachCause(ctx, err)
+	}
+	if ctx.Err() != nil {
+		return moerr.AttachCause(ctx, ctx.Err())
+	}
+	return nil
+}
+
 func (s *service) heartbeat(ctx context.Context) {
 	start := time.Now()
 	defer func() {
