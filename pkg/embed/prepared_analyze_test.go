@@ -72,6 +72,27 @@ func TestPreparedAnalyzeOverMySQLProtocol(t *testing.T) {
 			require.False(t, rows.NextResultSet())
 			require.NoError(t, rows.Err())
 		}
+		queryText := func(name string, expectedResultSets ...struct {
+			columns []string
+			values  []int64
+		}) {
+			rows, queryErr := conn.QueryContext(ctx, "execute "+name)
+			require.NoError(t, queryErr)
+			for i, expected := range expectedResultSets {
+				if i > 0 {
+					require.True(t, rows.NextResultSet())
+				}
+				assertResultSet(rows, expected.columns, expected.values)
+			}
+			require.False(t, rows.NextResultSet())
+			require.NoError(t, rows.Err())
+			require.NoError(t, rows.Close())
+		}
+		assertCurrentDatabase := func(expected string) {
+			var currentDatabase string
+			require.NoError(t, conn.QueryRowContext(ctx, "select database()").Scan(&currentDatabase))
+			require.Equal(t, expected, currentDatabase)
+		}
 
 		exec("drop database if exists prepared_analyze_test")
 		exec("drop database if exists prepared_analyze_other")
@@ -110,15 +131,54 @@ func TestPreparedAnalyzeOverMySQLProtocol(t *testing.T) {
 		require.NoError(t, rows.Err())
 		require.NoError(t, rows.Close())
 
+		exec("prepare analyze_stmt_form from analyze table t(a), t(b, a)")
+		defer exec("deallocate prepare analyze_stmt_form")
+		exec("prepare analyze_string_form from 'analyze table t(a), t(b, a)'")
+		defer exec("deallocate prepare analyze_string_form")
+
 		exec("use prepared_analyze_other")
 		exec("create table t (a int, b varchar(20))")
 		exec("insert into t values (9, 'other'), (9, 'other')")
+		expectedTextResultSets := []struct {
+			columns []string
+			values  []int64
+		}{
+			{columns: []string{"approx_count_distinct(a)"}, values: []int64{2}},
+			{
+				columns: []string{"approx_count_distinct(b)", "approx_count_distinct(a)"},
+				values:  []int64{2, 2},
+			},
+		}
+		queryText("analyze_stmt_form", expectedTextResultSets...)
+		assertCurrentDatabase("prepared_analyze_other")
+		queryText("analyze_string_form", expectedTextResultSets...)
+		assertCurrentDatabase("prepared_analyze_other")
 		querySingle(explicit,
 			[]string{"approx_count_distinct(a)", "approx_count_distinct(b)"},
 			[]int64{2, 2})
-		var currentDatabase string
-		require.NoError(t, conn.QueryRowContext(ctx, "select database()").Scan(&currentDatabase))
-		require.Equal(t, "prepared_analyze_other", currentDatabase)
+		assertCurrentDatabase("prepared_analyze_other")
+		exec("use prepared_analyze_test")
+
+		exec("create table snapshot_text (old_col int)")
+		exec("insert into snapshot_text values (1), (2)")
+		exec("create snapshot prepared_analyze_snapshot for account")
+		defer exec("drop snapshot prepared_analyze_snapshot")
+		exec("prepare analyze_snapshot_stmt from analyze table snapshot_text {snapshot = 'prepared_analyze_snapshot'}")
+		defer exec("deallocate prepare analyze_snapshot_stmt")
+		exec("prepare analyze_snapshot_string from 'analyze table snapshot_text {snapshot = ''prepared_analyze_snapshot''}'")
+		defer exec("deallocate prepare analyze_snapshot_string")
+		exec("alter table snapshot_text add column current_only int")
+		exec("use prepared_analyze_other")
+		expectedSnapshotResult := []struct {
+			columns []string
+			values  []int64
+		}{
+			{columns: []string{"approx_count_distinct(old_col)"}, values: []int64{2}},
+		}
+		queryText("analyze_snapshot_stmt", expectedSnapshotResult...)
+		assertCurrentDatabase("prepared_analyze_other")
+		queryText("analyze_snapshot_string", expectedSnapshotResult...)
+		assertCurrentDatabase("prepared_analyze_other")
 		exec("use prepared_analyze_test")
 
 		exec("create table drift (x int)")
