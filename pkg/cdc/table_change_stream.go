@@ -152,7 +152,7 @@ func (p *snapshotPermit) Release() {
 }
 
 func (p *snapshotPermit) ObserveBatchBytes(bytes uint64) {
-	if p == nil {
+	if p == nil || bytes == 0 {
 		return
 	}
 	p.mu.Lock()

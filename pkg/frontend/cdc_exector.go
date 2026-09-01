@@ -46,6 +46,10 @@ import (
 
 var CDCExectorError_QueryDaemonTaskTimeout = moerr.NewInternalErrorNoCtx("query daemon task timeout")
 
+// All CDC tasks in one CN share the same admission controller because they
+// allocate from the same cgroup/host memory budget.
+var cnInitialSnapshotLimiter = cdc.NewInitialSnapshotLimiter()
+
 var CDCExeutorAllocator *mpool.MPool
 
 var (
@@ -153,8 +157,8 @@ type CDCTaskExecutor struct {
 	startTs, endTs   types.TS
 	noFull           bool
 	additionalConfig map[string]interface{}
-	// initialSnapshotLimiter bounds retained initial-snapshot batches while
-	// allowing tables to make progress independently.
+	// initialSnapshotLimiter bounds retained initial-snapshot batches across all
+	// CDC tasks in this CN while allowing tables to make progress independently.
 	initialSnapshotLimiter *cdc.InitialSnapshotLimiter
 
 	activeRoutineMu sync.RWMutex
@@ -601,7 +605,7 @@ func NewCDCTaskExecutor(
 		),
 		stateMachine:           NewExecutorStateMachine(), // Initialize state machine
 		holdCh:                 make(chan int, 1),         // Initialize holdCh to prevent race condition
-		initialSnapshotLimiter: cdc.NewInitialSnapshotLimiter(),
+		initialSnapshotLimiter: cnInitialSnapshotLimiter,
 	}
 	task.startFunc = task.Start
 	return task

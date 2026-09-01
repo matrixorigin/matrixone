@@ -206,10 +206,7 @@ func (l *InitialSnapshotLimiter) observeBatchBytes(bytes uint64) {
 		panic("cdc: initial snapshot limiter observed without acquisition")
 	}
 	l.unobserved--
-	if bytes == 0 {
-		// The engine returned a data batch without an mpool allocation. Complete
-		// the probe so the next batch can make progress, but retain the estimate.
-	} else if bytes > l.batchBytesEstimate {
+	if bytes > l.batchBytesEstimate {
 		// React to unexpectedly wide batches immediately.
 		l.batchBytesEstimate = bytes
 	} else {

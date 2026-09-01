@@ -104,6 +104,12 @@ func TestInitialSnapshotLimiterSerializesUnobservedBatches(t *testing.T) {
 	limiter.mu.Unlock()
 	assert.Empty(t, acquired, "all estimated slots were granted before a real batch size was known")
 
+	first.ObserveBatchBytes(0)
+	limiter.mu.Lock()
+	assert.Equal(t, 1, limiter.unobserved)
+	limiter.mu.Unlock()
+	assert.Empty(t, acquired, "a zero-byte observation expanded admission without a real batch size")
+
 	first.ObserveBatchBytes(1024)
 	nextPermit := func() *snapshotPermit {
 		select {
