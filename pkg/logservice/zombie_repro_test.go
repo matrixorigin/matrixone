@@ -267,6 +267,14 @@ func restartService3(t *testing.T, cfg3 Config, zlog *zap.Logger) *Service {
 	return s
 }
 
+func publishHAKeeperMembership(t *testing.T, s *store) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	_, err := s.addLogStoreHeartbeat(ctx, s.getHeartbeatMessage())
+	require.NoError(t, err)
+}
+
 // TestZombieRepro_WithFix exercises the full scenario using the real
 // GetShardInfo RPC. Expectation: on restart service3 detects via the
 // self-check that its replicaID is not in cluster membership, skips
@@ -343,6 +351,59 @@ func TestZombieRepro_WithFix(t *testing.T) {
 	_, _, ok2, _ := svc3b.store.nh.GetLeaderID(hakeeper.DefaultHAKeeperShardID)
 	assert.False(t, ok2,
 		"svc3b has no running replica for shard 0 so GetLeaderID must be ok=false")
+}
+
+// TestZombieRepro_DiscoveryOnly exercises the production configuration from
+// #27803: the restarting store has only a discovery address, while the two
+// surviving HAKeeper voters have already removed its persisted replica ID.
+// The self-check must resolve the HAKeeper leader through discovery and use
+// its replicated CheckerState, never a random proxy-selected gossip answer.
+func TestZombieRepro_DiscoveryOnly(t *testing.T) {
+	obsLogger, _ := captureLogger()
+
+	defer leaktest.AfterTest(t)()
+	svc1, svc2, svc3, cfg1, _, cfg3 := buildZombieCluster(t, obsLogger)
+
+	waitLeader(t, []*store{svc1.store, svc2.store, svc3.store}, 10*time.Second)
+	transferLeaderTo(t, svc1.store, 1)
+	require.NoError(t, svc3.Close())
+	commitRemoveReplica(t, svc1.store, 3)
+	waitMembershipExcludesReplica(t, cfg1.LogServiceServiceAddr(), 3)
+
+	// Workers are disabled in this deterministic fixture, so publish one
+	// heartbeat explicitly. HAKeeper's replicated LogState now contains the
+	// exact post-REMOVE membership its scheduler uses in production.
+	publishHAKeeperMembership(t, svc1.store)
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	state, err := svc1.store.getCheckerStateWithContext(ctx)
+	cancel()
+	require.NoError(t, err)
+	shard, ok := state.LogState.Shards[hakeeper.DefaultHAKeeperShardID]
+	require.True(t, ok)
+	require.NotZero(t, shard.Epoch)
+	_, stalePresent := shard.Replicas[3]
+	require.False(t, stalePresent)
+
+	// A live LogService endpoint stands in for the discovery reverse proxy: the
+	// wire protocol is identical, and connectByReverseProxy first asks it for
+	// the current HAKeeper leader before issuing GET_CLUSTER_STATE.
+	cfg3.HAKeeperClientConfig.ServiceAddresses = nil
+	cfg3.HAKeeperClientConfig.DiscoveryAddress = cfg1.LogServiceServiceAddr()
+	svc3b := restartService3(t, cfg3, obsLogger)
+	defer func() {
+		assert.NoError(t, svc3b.Close())
+		assert.NoError(t, svc1.Close())
+		assert.NoError(t, svc2.Close())
+	}()
+
+	assert.True(t, svc3b.store.isSkippedZombie(hakeeper.DefaultHAKeeperShardID, 3))
+	assert.Zero(t, atomic.LoadUint64(&svc3b.store.haKeeperReplicaID))
+	info := svc3b.store.nh.GetNodeHostInfo(dragonboat.NodeHostInfoOption{SkipLogInfo: true})
+	for _, si := range info.ShardInfoList {
+		if si.ShardID == hakeeper.DefaultHAKeeperShardID && si.ReplicaID == 3 {
+			t.Fatalf("discovery-only restart resurrected removed replica (shard=0, replica=3)")
+		}
+	}
 }
 
 // TestZombieRepro_WithoutFix disables the self-check via getShardMembershipFn

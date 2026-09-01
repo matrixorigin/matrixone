@@ -160,10 +160,19 @@ func getReplicasToRemove(shardID uint64, current, left map[uint64]string) []repl
 }
 
 func getReplicasToStart(
-	shardID uint64, replicas map[uint64]string, stores map[string]pb.LogStoreInfo,
+	shardID uint64,
+	replicas map[uint64]string,
+	replicaStoreIncarnations map[uint64]string,
+	stores map[string]pb.LogStoreInfo,
 ) []replica {
 	toStart := make([]replica, 0)
 	for id, uuid := range replicas {
+		if replicaStoreIncarnationChanged(id, uuid, replicaStoreIncarnations, stores) {
+			// This replica belongs to an older persistent storage generation.
+			// Starting it with the same replica ID would make Raft peers reuse
+			// progress acknowledged by the lost generation.
+			continue
+		}
 		store := stores[uuid]
 		if !replicaStarted(shardID, store.Replicas) {
 			rep := replica{
@@ -177,6 +186,36 @@ func getReplicasToStart(
 	return toStart
 }
 
+func replicaStoreIncarnationChanged(
+	replicaID uint64,
+	storeID string,
+	replicaStoreIncarnations map[uint64]string,
+	stores map[string]pb.LogStoreInfo,
+) bool {
+	replicaIncarnation := replicaStoreIncarnations[replicaID]
+	storeIncarnation := stores[storeID].StoreIncarnation
+	return replicaIncarnation != "" &&
+		storeIncarnation != "" &&
+		replicaIncarnation != storeIncarnation
+}
+
+func removeReplicasOnChangedStoreIncarnation(
+	fixed *fixingShard,
+	shardInfo pb.LogShardInfo,
+	stores map[string]pb.LogStoreInfo,
+) {
+	for replicaID, storeID := range fixed.replicas {
+		if replicaStoreIncarnationChanged(
+			replicaID,
+			storeID,
+			shardInfo.ReplicaStoreIncarnations,
+			stores,
+		) {
+			delete(fixed.replicas, replicaID)
+		}
+	}
+}
+
 // parseLogShards collects stats for further use.
 // It returns two stats, the first is the stats for normal replicas
 // and the second one is for the non-voting replicas.
@@ -188,14 +227,26 @@ func parseLogShards(
 		shardID := shardInfo.ShardID
 		record := getRecord(shardID, cluster.LogShards)
 		fixingNormal, fixingNonVoting := fixedLogShardInfo(record, nonVotingReplicaNum, shardInfo, expired)
+		removeReplicasOnChangedStoreIncarnation(fixingNormal, shardInfo, infos.Stores)
+		removeReplicasOnChangedStoreIncarnation(fixingNonVoting, shardInfo, infos.Stores)
 
 		// cal the toRemove field.
 		toRemoveNormal := getReplicasToRemove(shardID, shardInfo.Replicas, fixingNormal.replicas)
 		toRemoveNonVoting := getReplicasToRemove(shardID, shardInfo.NonVotingReplicas, fixingNonVoting.replicas)
 
 		// cal the toStart field.
-		toStartNormal := getReplicasToStart(shardID, shardInfo.Replicas, infos.Stores)
-		toStartNonVoting := getReplicasToStart(shardID, shardInfo.NonVotingReplicas, infos.Stores)
+		toStartNormal := getReplicasToStart(
+			shardID,
+			shardInfo.Replicas,
+			shardInfo.ReplicaStoreIncarnations,
+			infos.Stores,
+		)
+		toStartNonVoting := getReplicasToStart(
+			shardID,
+			shardInfo.NonVotingReplicas,
+			shardInfo.ReplicaStoreIncarnations,
+			infos.Stores,
+		)
 
 		if fixingNormal.toAdd > 0 {
 			normalStats.toAdd[shardID] = fixingNormal.toAdd

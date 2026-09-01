@@ -17,6 +17,7 @@ package taskservice
 import (
 	"context"
 	"fmt"
+	"sync"
 	"testing"
 	"time"
 
@@ -126,13 +127,13 @@ func TestLoadSQLTasksAddsReplacesAndRemoves(t *testing.T) {
 
 	ts.loadSQLTasks(context.Background())
 	require.Len(t, ts.sqlCrons.jobs, 1)
-	require.Equal(t, sqlTask.CronExpr, ts.sqlCrons.jobs[sqlTask.TaskID].task.CronExpr)
+	require.Equal(t, sqlTask.CronExpr, ts.sqlCrons.jobs[sqlTask.TaskID].taskSnapshot().CronExpr)
 
 	sqlTask.CronExpr = "0 */2 * * * *"
 	mustUpdateTestSQLTask(t, store, 1, []SQLTask{sqlTask}, WithTaskIDCond(EQ, sqlTask.TaskID))
 	ts.loadSQLTasks(context.Background())
 	require.Len(t, ts.sqlCrons.jobs, 1)
-	require.Equal(t, "0 */2 * * * *", ts.sqlCrons.jobs[sqlTask.TaskID].task.CronExpr)
+	require.Equal(t, "0 */2 * * * *", ts.sqlCrons.jobs[sqlTask.TaskID].taskSnapshot().CronExpr)
 
 	sqlTask.Enabled = false
 	mustUpdateTestSQLTask(t, store, 1, []SQLTask{sqlTask}, WithTaskIDCond(EQ, sqlTask.TaskID))
@@ -164,7 +165,7 @@ func TestSQLTaskCronJobEdges(t *testing.T) {
 	sqlTask.CronExpr = "0 * * * * *"
 	mustAddTestSQLTask(t, store, 1, sqlTask)
 	sqlTask = mustGetTestSQLTask(t, store, 1, WithTaskName(EQ, "task-disabled"))[0]
-	job.task = sqlTask
+	job.setTask(sqlTask)
 	job.Run()
 	tasks, err := store.QueryAsyncTask(context.Background())
 	require.NoError(t, err)
@@ -173,9 +174,42 @@ func TestSQLTaskCronJobEdges(t *testing.T) {
 	sqlTask.Enabled = true
 	sqlTask.CronExpr = "bad cron"
 	mustUpdateTestSQLTask(t, store, 1, []SQLTask{sqlTask}, WithTaskIDCond(EQ, sqlTask.TaskID))
-	job.task = sqlTask
+	job.setTask(sqlTask)
 	job.Run()
 	tasks, err = store.QueryAsyncTask(context.Background())
 	require.NoError(t, err)
 	require.Empty(t, tasks)
+}
+
+func TestSQLTaskCronJobTaskSnapshotConcurrent(t *testing.T) {
+	job := &sqlTaskCronJob{task: SQLTask{TaskID: 1}}
+	const iterations = 1000
+
+	var wg sync.WaitGroup
+	badTaskID := make(chan uint64, 1)
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		for i := 0; i < iterations; i++ {
+			job.setTask(SQLTask{TaskID: 1, TriggerCount: uint64(i)})
+		}
+	}()
+	go func() {
+		defer wg.Done()
+		for i := 0; i < iterations; i++ {
+			task := job.taskSnapshot()
+			if task.TaskID != 1 {
+				select {
+				case badTaskID <- task.TaskID:
+				default:
+				}
+			}
+		}
+	}()
+	wg.Wait()
+	select {
+	case taskID := <-badTaskID:
+		require.Equal(t, uint64(1), taskID)
+	default:
+	}
 }

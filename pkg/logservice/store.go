@@ -254,7 +254,52 @@ type zombieKey struct {
 // HAKeeper has no elected leader.
 var getShardMembershipFn = getShardMembership
 
+// getHAKeeperStateForZombieCheckFn is overridable in tests. Production uses a
+// HAKeeper leader read, which is authoritative for the membership decisions
+// made by the LogService checker.
+var getHAKeeperStateForZombieCheckFn = getHAKeeperStateForZombieCheck
+
 var zombieSelfCheckTimeout = 2 * time.Second
+
+func getHAKeeperStateForZombieCheck(
+	ctx context.Context,
+	sid string,
+	cfg HAKeeperClientConfig,
+) (pb.CheckerState, error) {
+	client, err := NewClusterHAKeeperClient(ctx, sid, cfg)
+	if err != nil {
+		return pb.CheckerState{}, err
+	}
+	defer func() {
+		if closeErr := client.Close(); closeErr != nil {
+			logutil.Warn("failed to close HAKeeper client after zombie self-check",
+				zap.Error(closeErr))
+		}
+	}()
+	return client.GetClusterState(ctx)
+}
+
+func classifyZombiesFromHAKeeperState(
+	shards []metadata.LogShard,
+	state pb.CheckerState,
+) map[zombieKey]struct{} {
+	zombies := make(map[zombieKey]struct{})
+	for _, rec := range shards {
+		if rec.NonVoting {
+			continue
+		}
+		shard, ok := state.LogState.Shards[rec.ShardID]
+		if !ok || shard.Epoch == 0 {
+			// A missing/uninitialized shard is not an authoritative absence.
+			// This is the normal state before the first cluster bootstrap.
+			continue
+		}
+		if _, present := shard.Replicas[rec.ReplicaID]; !present {
+			zombies[zombieKey{shardID: rec.ShardID, replicaID: rec.ReplicaID}] = struct{}{}
+		}
+	}
+	return zombies
+}
 
 // checkZombieReplicas queries live shard membership for each locally-known
 // voting (shardID, replicaID) pair and returns the set of pairs whose
@@ -271,11 +316,17 @@ var zombieSelfCheckTimeout = 2 * time.Second
 // motivated this fix is specific to voting members. Non-voting zombies
 // remain subject to HAKeeper's existing checkZombie cleanup path.
 //
-// For each voting record the probe iterates every configured concrete service
-// address, skipping addresses that resolve to this store's own logservice
-// listener — probing self is useless because startReplicas runs before the RPC
-// server has started. DiscoveryAddress-only deployments skip this check because
-// a reverse proxy address cannot establish unanimity across concrete peers.
+// For each voting record the probe normally iterates every configured concrete
+// service address, skipping addresses that resolve to this store's own
+// logservice listener — probing self is useless because startReplicas runs
+// before the RPC server has started.
+//
+// Discovery-only deployments cannot establish the concrete-peer unanimity
+// rule through a reverse proxy. In that mode the check instead uses discovery
+// to locate the current HAKeeper leader and performs a linearizable
+// GET_CLUSTER_STATE read. The returned LogState is the same membership state
+// used by HAKeeper's LogService checker, so it is authoritative rather than a
+// randomly selected peer's eventually-consistent gossip view.
 //
 // Every peer's gossip-backed membership view is eventually consistent, so a
 // single authoritative reply is not enough: a stale peer could either hide a
@@ -289,12 +340,12 @@ var zombieSelfCheckTimeout = 2 * time.Second
 // existing L/Kill path is still free to clean it up later via the normal
 // recovery flow.
 //
-// The check is best-effort: if no peer answers authoritatively (RPC
-// failure, address is self, or every peer reports "shard unknown"), the
-// shard is treated as "not a zombie" so legitimate cold-start scenarios
-// are not blocked. The whole sweep is bounded by zombieSelfCheckTimeout;
-// if the budget expires, any replicas not already classified are treated as
-// not-a-zombie and normal startup continues.
+// The check is best-effort: if no peer or HAKeeper leader answers
+// authoritatively, the shard is treated as "not a zombie" so legitimate
+// whole-cluster cold starts are not blocked. An absent HAKeeper shard or an
+// epoch-zero shard is likewise considered uninitialized, not evidence of
+// removal. The whole sweep is bounded by zombieSelfCheckTimeout; if the budget
+// expires, normal startup continues.
 func (l *store) checkZombieReplicas(ctx context.Context, shards []metadata.LogShard) map[zombieKey]struct{} {
 	zombies := make(map[zombieKey]struct{})
 	if len(shards) == 0 {
@@ -303,7 +354,27 @@ func (l *store) checkZombieReplicas(ctx context.Context, shards []metadata.LogSh
 
 	addresses := l.zombieCheckAddresses()
 	if len(addresses) == 0 {
-		return zombies
+		if l.cfg.HAKeeperClientConfig.DiscoveryAddress == "" {
+			return zombies
+		}
+		ctx, cancel := context.WithTimeoutCause(
+			ctx,
+			zombieSelfCheckTimeout,
+			moerr.CauseGetCheckerState,
+		)
+		defer cancel()
+		state, err := getHAKeeperStateForZombieCheckFn(
+			ctx,
+			l.cfg.UUID,
+			l.cfg.GetHAKeeperClientConfig(),
+		)
+		if err != nil {
+			err = moerr.AttachCause(ctx, err)
+			l.runtime.Logger().Warn("zombie self-check: get HAKeeper state failed",
+				zap.Error(err))
+			return zombies
+		}
+		return classifyZombiesFromHAKeeperState(shards, state)
 	}
 
 	logger := l.runtime.Logger()
@@ -1527,6 +1598,7 @@ func (l *store) getHeartbeatMessage() pb.LogStoreHeartbeat {
 		RaftAddress:                    l.cfg.RaftServiceAddr(),
 		ServiceAddress:                 l.cfg.LogServiceServiceAddr(),
 		GossipAddress:                  l.cfg.GossipServiceAddr(),
+		StoreIncarnation:               l.getStoreIncarnation(),
 		Replicas:                       make([]pb.LogReplicaInfo, 0),
 		Locality:                       l.cfg.getLocality(),
 		CommandDeliverySupported:       true,

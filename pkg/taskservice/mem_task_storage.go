@@ -272,6 +272,13 @@ func (s *memTaskStorage) DeleteSQLTask(ctx context.Context, conds ...Condition) 
 	}
 
 	for _, t := range removeTasks {
+		parentTaskID := fmt.Sprintf("sql-task:%d", t.TaskID)
+		for asyncTaskID, asyncTask := range s.asyncTasks {
+			if asyncTask.ParentTaskID == parentTaskID {
+				delete(s.asyncTasks, asyncTaskID)
+				delete(s.asyncTaskIndexes, asyncTask.Metadata.ID)
+			}
+		}
 		delete(s.sqlTasks, t.TaskID)
 		delete(s.sqlTaskIndexes, sqlTaskIndexKey(t.AccountID, t.TaskName))
 	}
