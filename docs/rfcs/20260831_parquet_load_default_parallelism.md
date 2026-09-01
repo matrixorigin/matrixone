@@ -1,5 +1,5 @@
 - Status: draft — independent design approval pending
-- Revision: 3
+- Revision: 4
 - Start Date: 2026-08-31
 - Authors: iamlinjunhong
 - Implementation PR: [#27903](https://github.com/matrixorigin/matrixone/pull/27903)
@@ -121,6 +121,7 @@ labels.
 | A selected shard reports a NOT NULL failure | `TestParquet_RowGroupSelection_NotNullViolation` | constraint error class |
 | Threshold-admitted omitted default cancels sibling file scopes on a shard failure and keeps the seed row only | distributed `load_data_parquet` rollback case with the session gate and test threshold | post-failure row count and aggregates |
 | Client cancellation after every admitted file shard has begun terminates every shard | `TestCompileExternScanParquetLoadDefaultFanoutContextCancellationTerminatesAllShards` | synchronization barrier proves both scopes are in flight before cancellation; every scope process observes `context.Canceled` |
+| Canceled `LOAD DATA` cannot publish its statement transaction | `TestFinishTxnRollsBackWhenRequestIsCancelled/load_data` | the frontend's statement-terminal owner observes the canceled request, performs zero commits, and invokes exactly one rollback |
 
 The threshold fanout test uses the post-bind parameter as the test seam, so it
 does not need a 128 MiB fixture or a timing assertion. The distributed rollback
@@ -130,8 +131,10 @@ multi-file fixture; a schema failure asserts that no partial row is visible.
 The cancellation witness uses the same admitted whole-file scope construction,
 then blocks each test shard until the client/query context is canceled after
 both have started. It proves the cancellation graph terminates every admitted
-scope; the distributed rollback case remains the SQL-visible zero-partial-row
-oracle for the statement transaction.
+scope. `TestFinishTxnRollsBackWhenRequestIsCancelled/load_data` independently
+exercises the shared frontend terminal path and proves that a canceled LOAD
+cannot commit and is rolled back exactly once. The distributed rollback case
+remains the SQL-visible zero-partial-row oracle after real fanout write work.
 The release-default acceptance proof still requires endpoint rollout
 measurements before this RFC can move from draft to in-progress.
 
