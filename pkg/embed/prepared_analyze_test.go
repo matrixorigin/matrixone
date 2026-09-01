@@ -67,7 +67,9 @@ func TestPreparedAnalyzeOverMySQLProtocol(t *testing.T) {
 		querySingle := func(stmt *sql.Stmt, expectedColumns []string, expectedValues []int64) {
 			rows, queryErr := stmt.QueryContext(ctx)
 			require.NoError(t, queryErr)
-			defer rows.Close()
+			defer func() {
+				require.NoError(t, rows.Close())
+			}()
 			assertResultSet(rows, expectedColumns, expectedValues)
 			require.False(t, rows.NextResultSet())
 			require.NoError(t, rows.Err())
@@ -78,6 +80,9 @@ func TestPreparedAnalyzeOverMySQLProtocol(t *testing.T) {
 		}) {
 			rows, queryErr := conn.QueryContext(ctx, "execute "+name)
 			require.NoError(t, queryErr)
+			defer func() {
+				require.NoError(t, rows.Close())
+			}()
 			for i, expected := range expectedResultSets {
 				if i > 0 {
 					require.True(t, rows.NextResultSet())
@@ -86,7 +91,6 @@ func TestPreparedAnalyzeOverMySQLProtocol(t *testing.T) {
 			}
 			require.False(t, rows.NextResultSet())
 			require.NoError(t, rows.Err())
-			require.NoError(t, rows.Close())
 		}
 		assertCurrentDatabase := func(expected string) {
 			var currentDatabase string
@@ -120,16 +124,20 @@ func TestPreparedAnalyzeOverMySQLProtocol(t *testing.T) {
 
 		multi := prepare("analyze table t(a), t(b, a)")
 		defer multi.Close()
-		rows, err := multi.QueryContext(ctx)
-		require.NoError(t, err)
-		assertResultSet(rows, []string{"approx_count_distinct(a)"}, []int64{2})
-		require.True(t, rows.NextResultSet())
-		assertResultSet(rows,
-			[]string{"approx_count_distinct(b)", "approx_count_distinct(a)"},
-			[]int64{2, 2})
-		require.False(t, rows.NextResultSet())
-		require.NoError(t, rows.Err())
-		require.NoError(t, rows.Close())
+		func() {
+			rows, queryErr := multi.QueryContext(ctx)
+			require.NoError(t, queryErr)
+			defer func() {
+				require.NoError(t, rows.Close())
+			}()
+			assertResultSet(rows, []string{"approx_count_distinct(a)"}, []int64{2})
+			require.True(t, rows.NextResultSet())
+			assertResultSet(rows,
+				[]string{"approx_count_distinct(b)", "approx_count_distinct(a)"},
+				[]int64{2, 2})
+			require.False(t, rows.NextResultSet())
+			require.NoError(t, rows.Err())
+		}()
 
 		exec("prepare analyze_stmt_form from analyze table t(a), t(b, a)")
 		defer exec("deallocate prepare analyze_stmt_form")
@@ -207,11 +215,16 @@ func TestPreparedAnalyzeOverMySQLProtocol(t *testing.T) {
 		failsAfterPrepare := prepare("analyze table t(a), later_missing(v)")
 		defer failsAfterPrepare.Close()
 		exec("drop table later_missing")
-		failedRows, queryErr := failsAfterPrepare.QueryContext(ctx)
-		if failedRows != nil {
-			failedRows.Close()
-		}
-		require.ErrorContains(t, queryErr, "no such table prepared_analyze_test.later_missing")
+		func() {
+			failedRows, queryErr := failsAfterPrepare.QueryContext(ctx)
+			if failedRows != nil {
+				defer func() {
+					require.NoError(t, failedRows.Close())
+				}()
+				require.NoError(t, failedRows.Err())
+			}
+			require.ErrorContains(t, queryErr, "no such table prepared_analyze_test.later_missing")
+		}()
 		var stillUsable int
 		require.NoError(t, conn.QueryRowContext(ctx, "select 7").Scan(&stillUsable))
 		require.Equal(t, 7, stillUsable)
@@ -237,10 +250,15 @@ func TestPreparedAnalyzeOverMySQLProtocol(t *testing.T) {
 		require.NoError(t, err)
 		defer userStmt.Close()
 		exec("revoke select on table prepared_analyze_test.t from prepared_analyze_role")
-		unauthorizedRows, queryErr := userStmt.QueryContext(ctx)
-		if unauthorizedRows != nil {
-			unauthorizedRows.Close()
-		}
-		require.Error(t, queryErr)
+		func() {
+			unauthorizedRows, queryErr := userStmt.QueryContext(ctx)
+			if unauthorizedRows != nil {
+				defer func() {
+					require.NoError(t, unauthorizedRows.Close())
+				}()
+				require.NoError(t, unauthorizedRows.Err())
+			}
+			require.Error(t, queryErr)
+		}()
 	})
 }
