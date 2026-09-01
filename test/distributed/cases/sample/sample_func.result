@@ -26,6 +26,8 @@ select sample(*, 1 rows) from s_t1 group by c1;
 internal error: cannot sample the group by column.
 select c1, sample('x', 1 rows) from s_t1 group by c1, 2;
 internal error: cannot sample the group by column.
+select c1, sample('x', 1 rows) as sampled from s_t1 group by c1, sampled;
+internal error: cannot sample the group by column.
 select count(*) from (select sample(c1, 2 rows) from s_t1) as sampled;
 count(*)  𝄀
 2

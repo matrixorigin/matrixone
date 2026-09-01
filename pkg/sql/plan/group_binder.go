@@ -164,6 +164,25 @@ func elideStableLiteralGroupBy(ctx *BindContext) {
 	remapElidedGroupByPositions(ctx.groupByParamAst, oldToNew)
 }
 
+// preserveElidedGroupByForSample remembers only logical GROUP BY identities
+// removed from the physical key. The ordinary bind registries must stay
+// reduced so projection, HAVING, and ORDER BY bind stable literals directly;
+// SAMPLE has the stricter rule that it cannot consume any logical group key.
+func preserveElidedGroupByForSample(ctx *BindContext, logicalGroupByAst map[string]int32) {
+	if ctx == nil {
+		return
+	}
+	for key := range logicalGroupByAst {
+		if _, retained := ctx.groupByAst[key]; retained {
+			continue
+		}
+		if ctx.sampleGroupByAst == nil {
+			ctx.sampleGroupByAst = make(map[string]struct{})
+		}
+		ctx.sampleGroupByAst[key] = struct{}{}
+	}
+}
+
 func validGroupByPositions(positions map[string]int32, groupCount int) bool {
 	for _, position := range positions {
 		if position < 0 || int(position) >= groupCount {
@@ -209,7 +228,10 @@ func (b *GroupBinder) BindExpr(astExpr tree.Expr, depth int32, isRoot bool) (*pl
 			}
 		}
 	}
-	if isRoot {
+	// An alias has already selected and substituted its projection expression.
+	// Do not interpret a numeric literal inside that expression as an ordinal a
+	// second time.
+	if isRoot && !reusesProjection {
 		if numVal, ok := astExpr.(*tree.NumVal); ok {
 			switch numVal.Kind() {
 			case tree.Int:

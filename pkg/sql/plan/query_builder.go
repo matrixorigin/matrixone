@@ -8252,12 +8252,17 @@ func (builder *QueryBuilder) bindGroupBy(
 			},
 		}
 	}
-	// SAMPLE validates its arguments against the logical GROUP BY registry while
-	// binding the projection. Keep that registry intact so physical key reduction
-	// cannot change which SAMPLE queries are accepted.
-	if clause != nil && astTimeWindow == nil && !ctx.sampleFunc.hasSampleFunc && !clause.Apart &&
+	if clause != nil && astTimeWindow == nil && !clause.Apart &&
 		!clause.Cube && !clause.GroupingSets && !clause.Rollup {
+		var logicalGroupByAst map[string]int32
+		if ctx.sampleFunc.hasSampleFunc {
+			logicalGroupByAst = make(map[string]int32, len(ctx.groupByAst))
+			for key, pos := range ctx.groupByAst {
+				logicalGroupByAst[key] = pos
+			}
+		}
 		elideStableLiteralGroupBy(ctx)
+		preserveElidedGroupByForSample(ctx, logicalGroupByAst)
 	}
 	return
 }

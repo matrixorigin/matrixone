@@ -195,6 +195,12 @@ func TestBuildPlanElidesStableLiteralGroupKeys(t *testing.T) {
 			literalOutputs:   []int{0},
 		},
 		{
+			name:             "non-ordinal literal alias",
+			sql:              "select ename, 'x' as constant_key, count(*) from constraint_test.emp group by constant_key, ename",
+			wantGroupByCount: 1,
+			literalOutputs:   []int{1},
+		},
+		{
 			name:             "all literals remain grouping keys",
 			sql:              "select 1, 2, count(*) from constraint_test.emp group by 1, 2",
 			wantGroupByCount: 2,
@@ -252,28 +258,101 @@ func TestBuildPlanPreservesLiteralGroupKeysForGroupingExtensions(t *testing.T) {
 }
 
 func TestBuildPlanPreservesLogicalConstantGroupKeysForSample(t *testing.T) {
-	t.Run("sampling the constant group remains rejected", func(t *testing.T) {
-		_, err := runOneStmt(NewMockOptimizer(false), t,
-			"select ename, sample('x', 1 rows) from constraint_test.emp group by ename, 2")
-		require.ErrorContains(t, err, "cannot sample the group by column")
-	})
+	rejected := []struct {
+		name string
+		sql  string
+	}{
+		{
+			name: "ordinal after real key",
+			sql:  "select ename, sample('x', 1 rows) from constraint_test.emp group by ename, 2",
+		},
+		{
+			name: "ordinal before real key",
+			sql:  "select sample('x', 1 rows), ename from constraint_test.emp group by 1, ename",
+		},
+		{
+			name: "sample alias",
+			sql:  "select ename, sample('x', 1 rows) as sampled from constraint_test.emp group by ename, sampled",
+		},
+		{
+			name: "direct literal",
+			sql:  "select ename, sample(null, 1 rows) from constraint_test.emp group by ename, null",
+		},
+		{
+			name: "one of multiple sampled expressions",
+			sql:  "select ename, sample(deptno, 'x', 1 rows) from constraint_test.emp group by ename, 3",
+		},
+		{
+			name: "percentage sample",
+			sql:  "select ename, sample('x', 10 percent) from constraint_test.emp group by ename, 2",
+		},
+	}
+	for _, test := range rejected {
+		t.Run(test.name, func(t *testing.T) {
+			_, err := runOneStmt(NewMockOptimizer(false), t, test.sql)
+			require.ErrorContains(t, err, "cannot sample the group by column")
+		})
+	}
 
-	t.Run("different sample expression keeps the complete logical group", func(t *testing.T) {
-		logicPlan, err := runOneStmt(NewMockOptimizer(false), t,
-			"select ename, sample(deptno, 1 rows), 'x' from constraint_test.emp group by ename, 3")
-		require.NoError(t, err)
+	accepted := []struct {
+		name             string
+		sql              string
+		wantGroupByCount int
+		wantLiteralCount int
+	}{
+		{
+			name:             "literal after real key",
+			sql:              "select ename, sample(deptno, 1 rows), 'x' from constraint_test.emp group by ename, 3",
+			wantGroupByCount: 1,
+		},
+		{
+			name:             "literal before real key",
+			sql:              "select 'x', ename, sample(deptno, 1 rows) from constraint_test.emp group by 1, ename",
+			wantGroupByCount: 1,
+		},
+		{
+			name:             "multiple literals",
+			sql:              "select 1, 'x', ename, sample(deptno, 1 rows) from constraint_test.emp group by 1, 2, ename",
+			wantGroupByCount: 1,
+		},
+		{
+			name:             "null literal",
+			sql:              "select null, ename, sample(deptno, 1 rows) from constraint_test.emp group by null, ename",
+			wantGroupByCount: 1,
+		},
+		{
+			name:             "all literals retain empty input semantics",
+			sql:              "select 1, 2, sample(deptno, 1 rows) from constraint_test.emp group by 1, 2",
+			wantGroupByCount: 2,
+			wantLiteralCount: 2,
+		},
+		{
+			name:             "non-direct constant fails closed",
+			sql:              "select 1.25, ename, sample(deptno, 1 rows) from constraint_test.emp group by 1, ename",
+			wantGroupByCount: 2,
+		},
+	}
+	for _, test := range accepted {
+		t.Run(test.name, func(t *testing.T) {
+			logicPlan, err := runOneStmt(NewMockOptimizer(false), t, test.sql)
+			require.NoError(t, err)
 
-		var sample *pbplan.Node
-		for _, node := range logicPlan.GetQuery().Nodes {
-			if node.NodeType == pbplan.Node_SAMPLE {
-				sample = node
-				break
+			var sample *pbplan.Node
+			for _, node := range logicPlan.GetQuery().Nodes {
+				if node.NodeType == pbplan.Node_SAMPLE {
+					sample = node
+					break
+				}
 			}
-		}
-		require.NotNil(t, sample)
-		require.Len(t, sample.GroupBy, 2)
-		require.Condition(t, func() bool {
-			return sample.GroupBy[0].GetLit() != nil || sample.GroupBy[1].GetLit() != nil
-		}, "SAMPLE must retain the stable literal as a logical group key")
-	})
+			require.NotNil(t, sample)
+			require.Len(t, sample.GroupBy, test.wantGroupByCount)
+			literalCount := 0
+			for _, group := range sample.GroupBy {
+				if group.GetLit() != nil {
+					literalCount++
+				}
+			}
+			require.Equal(t, test.wantLiteralCount, literalCount)
+		})
+	}
 }
