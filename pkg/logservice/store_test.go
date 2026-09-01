@@ -1623,14 +1623,93 @@ func TestCheckZombieReplicas_NoAddresses(t *testing.T) {
 	assert.False(t, called, "should not call getShardMembership when no address is configured")
 }
 
-func TestCheckZombieReplicas_DiscoveryOnlyIsNotChecked(t *testing.T) {
+func TestCheckZombieReplicas_DiscoveryOnlyUsesHAKeeperState(t *testing.T) {
 	defer leaktest.AfterTest(t)()
-	called := false
-	orig := getShardMembershipFn
-	defer func() { getShardMembershipFn = orig }()
+	gossipCalled := false
+	origMembership := getShardMembershipFn
+	defer func() { getShardMembershipFn = origMembership }()
 	getShardMembershipFn = func(ctx context.Context, sid, address string, shardID uint64) (map[uint64]string, bool, error) {
-		called = true
-		return map[uint64]string{8: "10.0.0.8:1"}, true, nil
+		gossipCalled = true
+		return nil, false, nil
+	}
+	origState := getHAKeeperStateForZombieCheckFn
+	defer func() { getHAKeeperStateForZombieCheckFn = origState }()
+	getHAKeeperStateForZombieCheckFn = func(
+		ctx context.Context,
+		sid string,
+		cfg HAKeeperClientConfig,
+	) (pb.CheckerState, error) {
+		assert.Equal(t, "uuid-1", sid)
+		assert.Equal(t, "10.0.0.100:32001", cfg.DiscoveryAddress)
+		return pb.CheckerState{LogState: pb.LogState{Shards: map[uint64]pb.LogShardInfo{
+			hakeeper.DefaultHAKeeperShardID: {
+				ShardID:  hakeeper.DefaultHAKeeperShardID,
+				Epoch:    12,
+				Replicas: map[uint64]string{8: "store-2"},
+			},
+			3: {
+				ShardID:  3,
+				Epoch:    21,
+				Replicas: map[uint64]string{18: "store-2"},
+			},
+			4: {
+				ShardID:  4,
+				Epoch:    9,
+				Replicas: map[uint64]string{27: "uuid-1"},
+			},
+		}}}, nil
+	}
+
+	l := &store{cfg: Config{
+		UUID: "uuid-1",
+		HAKeeperClientConfig: HAKeeperClientConfig{
+			DiscoveryAddress: "10.0.0.100:32001",
+		},
+	}}
+	l.runtime = runtime.DefaultRuntime()
+
+	shards := []metadata.LogShard{
+		{
+			LogShardRecord: metadata.LogShardRecord{ShardID: hakeeper.DefaultHAKeeperShardID},
+			ReplicaID:      7,
+		},
+		{
+			LogShardRecord: metadata.LogShardRecord{ShardID: 3},
+			ReplicaID:      17,
+		},
+		{
+			LogShardRecord: metadata.LogShardRecord{ShardID: 4},
+			ReplicaID:      27,
+		},
+		{
+			LogShardRecord: metadata.LogShardRecord{ShardID: 3},
+			ReplicaID:      19,
+			NonVoting:      true,
+		},
+	}
+	zombies := l.checkZombieReplicas(context.Background(), shards)
+	assert.Equal(t, map[zombieKey]struct{}{
+		{shardID: hakeeper.DefaultHAKeeperShardID, replicaID: 7}: {},
+		{shardID: 3, replicaID: 17}:                              {},
+	}, zombies)
+	assert.False(t, gossipCalled,
+		"discovery-only mode must use HAKeeper state, not one proxy-selected gossip view")
+}
+
+func TestCheckZombieReplicas_DiscoveryFailurePreservesColdStart(t *testing.T) {
+	defer leaktest.AfterTest(t)()
+	origTimeout := zombieSelfCheckTimeout
+	defer func() { zombieSelfCheckTimeout = origTimeout }()
+	zombieSelfCheckTimeout = 10 * time.Millisecond
+	origState := getHAKeeperStateForZombieCheckFn
+	defer func() { getHAKeeperStateForZombieCheckFn = origState }()
+	getHAKeeperStateForZombieCheckFn = func(
+		ctx context.Context,
+		_ string,
+		_ HAKeeperClientConfig,
+	) (pb.CheckerState, error) {
+		<-ctx.Done()
+		return pb.CheckerState{}, ctx.Err()
 	}
 
 	l := &store{cfg: Config{
@@ -1642,13 +1721,32 @@ func TestCheckZombieReplicas_DiscoveryOnlyIsNotChecked(t *testing.T) {
 	l.runtime = runtime.DefaultRuntime()
 
 	shards := []metadata.LogShard{{
-		LogShardRecord: metadata.LogShardRecord{ShardID: 3},
+		LogShardRecord: metadata.LogShardRecord{ShardID: hakeeper.DefaultHAKeeperShardID},
 		ReplicaID:      7,
 	}}
-	zombies := l.checkZombieReplicas(context.Background(), shards)
-	assert.Empty(t, zombies)
-	assert.False(t, called,
-		"discovery-address-only mode routes through a proxy, not concrete peers")
+	started := time.Now()
+	assert.Empty(t, l.checkZombieReplicas(context.Background(), shards),
+		"no HAKeeper leader is expected during a whole-cluster cold start")
+	assert.Less(t, time.Since(started), time.Second,
+		"an unavailable discovery/HAKeeper path must not block local recovery")
+}
+
+func TestClassifyZombiesFromHAKeeperStateRequiresInitializedShard(t *testing.T) {
+	shards := []metadata.LogShard{
+		{
+			LogShardRecord: metadata.LogShardRecord{ShardID: 3},
+			ReplicaID:      7,
+		},
+		{
+			LogShardRecord: metadata.LogShardRecord{ShardID: 4},
+			ReplicaID:      8,
+		},
+	}
+	state := pb.CheckerState{LogState: pb.LogState{Shards: map[uint64]pb.LogShardInfo{
+		3: {ShardID: 3, Epoch: 0},
+	}}}
+	assert.Empty(t, classifyZombiesFromHAKeeperState(shards, state),
+		"missing and epoch-zero shards are cold-start state, not authoritative absence")
 }
 
 // TestCheckZombieReplicas_SkipsSelfAddress guards against the first pitfall
