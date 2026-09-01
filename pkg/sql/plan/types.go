@@ -362,6 +362,11 @@ type QueryBuilder struct {
 	preserveInsertProjection    map[int32]struct{}
 	preserveScanProjection      map[int32]struct{}
 	positionalSinkScans         map[int32]struct{}
+	// fullTableUpdateLockTargets contains only the exclusive targets admitted for
+	// an unrestricted, single-target UPDATE after complete-keyspace and lock-order
+	// checks. Planner-local metadata lets the final cardinality pass choose table
+	// locks without weakening bounded UPDATE predicates into table-wide locks.
+	fullTableUpdateLockTargets map[*plan.LockTarget]struct{}
 	// userWindowNodes contains only WINDOW nodes produced from user
 	// SELECT window expressions. Internal ROW_NUMBER windows used by correlated
 	// LIMIT and DML deduplication must stay on their dedicated paths.
@@ -690,9 +695,13 @@ type BindContext struct {
 	// boundary column references.
 	timeBoundaryType *plan.Type
 
-	groupByAst             map[string]int32
-	groupByCanonicalAst    map[string]int32
-	groupByParamAst        map[string]int32
+	groupByAst          map[string]int32
+	groupByCanonicalAst map[string]int32
+	groupByParamAst     map[string]int32
+	// sampleGroupByAst retains the logical identity of stable GROUP BY
+	// literals removed from the physical key. SAMPLE must still reject those
+	// expressions even though ordinary projection binding should see literals.
+	sampleGroupByAst       map[string]struct{}
 	aggregateByAst         map[string]int32
 	sampleByAst            map[string]int32
 	windowByAst            map[string]int32

@@ -457,7 +457,7 @@ func (rt *Routine) handleSessionCommand(ctx context.Context, req *Request) error
 		if data, ok := req.GetData().([]byte); !ok || len(data) != 0 {
 			commandErr = moerr.NewInvalidInput(commandCtx, "COM_RESET_CONNECTION must not contain a payload")
 		} else {
-			commandErr = rt.resetSessionWithContext(commandCtx, oldSession.GetService(), &query.ResetSessionResponse{})
+			commandErr = rt.resetConnectionWithContext(commandCtx, oldSession.GetService(), &query.ResetSessionResponse{})
 		}
 	case COM_CHANGE_USER:
 		data, ok := req.GetData().([]byte)
@@ -890,9 +890,17 @@ func (rt *Routine) resetSessionWithContext(
 	baseServiceID string,
 	resp *query.ResetSessionResponse,
 ) error {
-	// COM_RESET_CONNECTION resets session-scoped state but retains the selected
-	// database. Proxy reset has a distinct handoff contract and intentionally
-	// starts its replacement generation without one.
+	return rt.resetSessionWithAdmission(ctx, baseServiceID, resp, true, false)
+}
+
+func (rt *Routine) resetConnectionWithContext(
+	ctx context.Context,
+	baseServiceID string,
+	resp *query.ResetSessionResponse,
+) error {
+	// COM_RESET_CONNECTION retains the selected database. QueryService
+	// ResetSession has a distinct Proxy handoff contract and starts its
+	// replacement generation without one.
 	return rt.resetSessionWithAdmission(ctx, baseServiceID, resp, true, true)
 }
 
