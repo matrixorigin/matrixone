@@ -38,8 +38,8 @@ block_comment_v  ¦  select a from t  ¦  NO  𝄀
 direct_v  ¦  select a, b from t  ¦  NO  𝄀
 dump_v  ¦  select a from t  ¦  NO  𝄀
 escaped_quoted_definer_v  ¦  select a from t  ¦  NO  𝄀
-executable_trailing_comment_v  ¦  select a from t  /* application */  ¦  NO  𝄀
 executable_string_terminator_v  ¦  select 'x*/y' as s  ¦  NO  𝄀
+executable_trailing_comment_v  ¦  select a from t  /* application */  ¦  NO  𝄀
 executable_without_version_v  ¦  select a from t  ¦  NO  𝄀
 hash_comment_v  ¦  select a from t  ¦  NO  𝄀
 leading_block_comment_v  ¦  select a from t  ¦  NO  𝄀
