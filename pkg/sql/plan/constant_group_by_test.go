@@ -250,3 +250,30 @@ func TestBuildPlanPreservesLiteralGroupKeysForGroupingExtensions(t *testing.T) {
 		})
 	}
 }
+
+func TestBuildPlanPreservesLogicalConstantGroupKeysForSample(t *testing.T) {
+	t.Run("sampling the constant group remains rejected", func(t *testing.T) {
+		_, err := runOneStmt(NewMockOptimizer(false), t,
+			"select ename, sample('x', 1 rows) from constraint_test.emp group by ename, 2")
+		require.ErrorContains(t, err, "cannot sample the group by column")
+	})
+
+	t.Run("different sample expression keeps the complete logical group", func(t *testing.T) {
+		logicPlan, err := runOneStmt(NewMockOptimizer(false), t,
+			"select ename, sample(deptno, 1 rows), 'x' from constraint_test.emp group by ename, 3")
+		require.NoError(t, err)
+
+		var sample *pbplan.Node
+		for _, node := range logicPlan.GetQuery().Nodes {
+			if node.NodeType == pbplan.Node_SAMPLE {
+				sample = node
+				break
+			}
+		}
+		require.NotNil(t, sample)
+		require.Len(t, sample.GroupBy, 2)
+		require.Condition(t, func() bool {
+			return sample.GroupBy[0].GetLit() != nil || sample.GroupBy[1].GetLit() != nil
+		}, "SAMPLE must retain the stable literal as a logical group key")
+	})
+}

@@ -8252,7 +8252,10 @@ func (builder *QueryBuilder) bindGroupBy(
 			},
 		}
 	}
-	if clause != nil && astTimeWindow == nil && !clause.Apart &&
+	// SAMPLE validates its arguments against the logical GROUP BY registry while
+	// binding the projection. Keep that registry intact so physical key reduction
+	// cannot change which SAMPLE queries are accepted.
+	if clause != nil && astTimeWindow == nil && !ctx.sampleFunc.hasSampleFunc && !clause.Apart &&
 		!clause.Cube && !clause.GroupingSets && !clause.Rollup {
 		elideStableLiteralGroupBy(ctx)
 	}
