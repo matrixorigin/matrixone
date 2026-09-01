@@ -65,6 +65,36 @@ func TestLoadParallelOptionPreservesExplicitFalse(t *testing.T) {
 	}
 }
 
+func TestLoadFormatRoundTripsParallelAndStrictOptions(t *testing.T) {
+	for _, test := range []struct {
+		name     string
+		parallel string
+		strict   string
+	}{
+		{name: "parallel_true_strict_true", parallel: "true", strict: "true"},
+		{name: "parallel_true_strict_false", parallel: "true", strict: "false"},
+		{name: "parallel_false_strict_true", parallel: "false", strict: "true"},
+		{name: "parallel_false_strict_false", parallel: "false", strict: "false"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			stmt, err := ParseOne(context.Background(),
+				"load data infile 'input.parquet' into table t parallel '"+test.parallel+"' strict '"+test.strict+"'", 1)
+			require.NoError(t, err)
+			load, ok := stmt.(*tree.Load)
+			require.True(t, ok)
+
+			formatted := tree.String(load, dialect.MYSQL)
+			roundTrip, err := ParseOne(context.Background(), formatted, 1)
+			require.NoError(t, err)
+			roundTripLoad, ok := roundTrip.(*tree.Load)
+			require.True(t, ok)
+			require.Equal(t, load.Param.Parallel, roundTripLoad.Param.Parallel)
+			require.Equal(t, load.Param.ParallelSpecified, roundTripLoad.Param.ParallelSpecified)
+			require.Equal(t, load.Param.Strict, roundTripLoad.Param.Strict)
+		})
+	}
+}
+
 func TestLoadFormatRoundTripsEscapedFilepath(t *testing.T) {
 	const filepath = "C:\\tmp\\it's.parquet"
 	stmt, err := ParseOne(context.Background(),

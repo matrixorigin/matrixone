@@ -2848,12 +2848,16 @@ func TestParquet_openFile_localNYI(t *testing.T) {
 }
 
 func TestParquetShouldPrefetchS3Parquet(t *testing.T) {
-	require.True(t, shouldPrefetchS3Parquet(tree.S3, true, maxParquetS3PrefetchSize, false))
-	require.False(t, shouldPrefetchS3Parquet(tree.S3, true, maxParquetS3PrefetchSize+1, false))
-	require.False(t, shouldPrefetchS3Parquet(tree.S3, false, maxParquetS3PrefetchSize, false))
-	require.False(t, shouldPrefetchS3Parquet(tree.INFILE, true, maxParquetS3PrefetchSize, false))
-	require.False(t, shouldPrefetchS3Parquet(tree.S3, true, -1, false))
-	require.False(t, shouldPrefetchS3Parquet(tree.S3, true, 80*1024*1024, true))
+	require.True(t, shouldPrefetchS3Parquet(tree.S3, true, maxParquetS3PrefetchSize, false, false))
+	require.False(t, shouldPrefetchS3Parquet(tree.S3, true, maxParquetS3PrefetchSize+1, false, false))
+	require.False(t, shouldPrefetchS3Parquet(tree.S3, false, maxParquetS3PrefetchSize, false, false))
+	require.False(t, shouldPrefetchS3Parquet(tree.INFILE, true, maxParquetS3PrefetchSize, false, false))
+	require.False(t, shouldPrefetchS3Parquet(tree.S3, true, -1, false, false))
+	require.False(t, shouldPrefetchS3Parquet(tree.S3, true, 80*1024*1024, true, false))
+	// A whole-file fanout can run up to the bounded execution DOP concurrently.
+	// It must use direct ReaderAt reads rather than retain one complete object
+	// per active scope.
+	require.False(t, shouldPrefetchS3Parquet(tree.S3, true, maxParquetS3PrefetchSize, false, true))
 }
 
 func TestParquet_prepare_missingColumn(t *testing.T) {

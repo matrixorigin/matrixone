@@ -420,7 +420,13 @@ func (node *Load) Format(ctx *FmtCtx) {
 		ctx.WriteByte(' ')
 		if node.Param.Strict {
 			ctx.WriteString("strict 'true' ")
+			return
 		}
+	}
+	// STRICT defaults to true when omitted. Only false needs spelling out to
+	// preserve the parsed statement when formatting it back into SQL.
+	if !node.Param.Strict {
+		ctx.WriteString(" strict 'false'")
 	}
 }
 

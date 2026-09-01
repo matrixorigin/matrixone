@@ -1,5 +1,5 @@
 - Status: draft — independent design approval pending
-- Revision: 4
+- Revision: 5
 - Start Date: 2026-08-31
 - Authors: iamlinjunhong
 - Implementation PR: [#27903](https://github.com/matrixorigin/matrixone/pull/27903)
@@ -54,9 +54,11 @@ is therefore bounded by the existing scheduler capacity rather than by file or
 row-group count.
 
 For S3 row-group shards, one ReaderAt retains at most 1 MiB and fetches no more
-than four times a small request (requests above 256 KiB bypass it).  The cache
-is owned by one active external operator and is released with that operator;
-there is no query-global cache, background worker, or cross-query state.
+than four times a small request (requests above 256 KiB bypass it). Whole-file
+fanout never uses the full-file prefetch path: every fanout scope uses direct
+ReaderAt reads, so it cannot retain an object-sized buffer. The cache is owned
+by one active external operator and is released with that operator; there is no
+query-global cache, background worker, or cross-query state.
 
 ### State and ownership
 
@@ -80,6 +82,7 @@ commit; it rolls back on any scope error or statement cancellation.
 | Load scopes | existing scheduler | bounded DOP | normal scope completion, statement error, or context cancellation |
 | Footer planning | compiler | at most one sequential open per file, only below file-fanout saturation | compile return |
 | ReaderAt cache | one active Parquet external operator | 1 MiB retained; at most 4x a small request; requests above 256 KiB bypass | operator close / scope cleanup |
+| Whole-file S3 fanout | one active external operator | no full-file prefetch or object-sized retained buffer | direct ReaderAt reads / scope cleanup |
 | Transaction visibility | existing LOAD transaction | one statement transaction | commit publishes all rows; any error/cancel rolls back all rows |
 
 There is no added goroutine, retry loop, query-global cache, or persistent
@@ -122,6 +125,7 @@ labels.
 | Threshold-admitted omitted default cancels sibling file scopes on a shard failure and keeps the seed row only | distributed `load_data_parquet` rollback case with the session gate and test threshold | post-failure row count and aggregates |
 | Client cancellation after every admitted file shard has begun terminates every shard | `TestCompileExternScanParquetLoadDefaultFanoutContextCancellationTerminatesAllShards` | synchronization barrier proves both scopes are in flight before cancellation; every scope process observes `context.Canceled` |
 | Canceled `LOAD DATA` cannot publish its statement transaction | `TestFinishTxnRollsBackWhenRequestIsCancelled/load_data` | the frontend's statement-terminal owner observes the canceled request, performs zero commits, and invokes exactly one rollback |
+| S3 whole-file fanout cannot retain one object per admitted scope | `TestParquetShouldPrefetchS3Parquet` | fanout selector rejects the full-file prefetch path even at its previous 128 MiB limit |
 
 The threshold fanout test uses the post-bind parameter as the test seam, so it
 does not need a 128 MiB fixture or a timing assertion. The distributed rollback

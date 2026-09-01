@@ -208,7 +208,9 @@ func (h *ParquetHandler) openFile(param *ExternalParam, prefetchS3 bool) error {
 		}
 		fileSize = param.FileSize[param.Fileparam.FileIndex-1]
 
-		if shouldPrefetchS3Parquet(param.Extern.ScanType, prefetchS3, fileSize, len(param.ParquetRowGroupShards) > 0) {
+		parallelLoadFileFanout := param.Extern.ExternType == int32(plan.ExternType_LOAD) &&
+			param.Extern.ParallelLoadRequested && len(param.ParquetRowGroupShards) == 0
+		if shouldPrefetchS3Parquet(param.Extern.ScanType, prefetchS3, fileSize, len(param.ParquetRowGroupShards) > 0, parallelLoadFileFanout) {
 			data := make([]byte, int(fileSize))
 			vec := fileservice.IOVector{
 				FilePath: readPath,
@@ -256,10 +258,11 @@ func parquetFileServiceForCurrentFile(param *ExternalParam) (fileservice.ETLFile
 	return plan2.GetForETLWithType(param.Extern, param.Fileparam.Filepath)
 }
 
-func shouldPrefetchS3Parquet(scanType int, prefetchS3 bool, fileSize int64, hasRowGroupShards bool) bool {
+func shouldPrefetchS3Parquet(scanType int, prefetchS3 bool, fileSize int64, hasRowGroupShards, parallelLoadFileFanout bool) bool {
 	return scanType == tree.S3 &&
 		prefetchS3 &&
 		!hasRowGroupShards &&
+		!parallelLoadFileFanout &&
 		fileSize >= 0 &&
 		fileSize <= maxParquetS3PrefetchSize
 }
