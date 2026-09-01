@@ -260,6 +260,15 @@ message PreparedNumericMetadata {
   bool fallback_source = 3;
   int32 fallback_source_node_id = 4;
   int32 fallback_source_col_pos = 5;
+  // Marks a result-arm cast introduced only because a prepared marker is TEXT
+  // before SQL EXECUTE supplies its source domain. User-authored CAST never
+  // carries this bit and remains an authoritative boundary.
+  bool provisional_result_cast = 6;
+  // Marks a result peer coerced into the marker's prepare-time TEXT envelope.
+  bool provisional_result_peer = 7;
+  int32 provisional_result_peer_type_id = 8;
+  int32 provisional_result_peer_width = 9;
+  int32 provisional_result_peer_scale = 10;
 }
 
 message Expr {

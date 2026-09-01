@@ -137,7 +137,7 @@ func TestAuditIntersectFreeReleasesBuildState(t *testing.T) {
 	_, err := vm.Exec(c.arg, proc)
 	require.NoError(t, err)
 	require.NotNil(t, c.arg.ctr.hashTable)
-	require.NotEmpty(t, c.arg.ctr.cnts)
+	require.Len(t, c.arg.ctr.unmatched, 2)
 
 	for _, child := range c.arg.Children {
 		child.Free(proc, true, nil)
@@ -149,7 +149,7 @@ func TestAuditIntersectFreeReleasesBuildState(t *testing.T) {
 	cleaned = true
 
 	require.Nil(t, c.arg.ctr.hashTable)
-	require.Nil(t, c.arg.ctr.cnts)
+	require.Nil(t, c.arg.ctr.unmatched)
 	require.Nil(t, c.arg.ctr.buf)
 	require.Equal(t, int64(0), proc.Mp().CurrNB())
 }

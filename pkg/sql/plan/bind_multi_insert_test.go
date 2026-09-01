@@ -15,16 +15,71 @@
 package plan
 
 import (
+	"context"
+	"fmt"
 	"strconv"
 	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/require"
 
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 )
+
+func TestPreparedMultiInsertLockRowsMatchPrimaryKeyType(t *testing.T) {
+	sql := "insert first when n_name = ? then into region (r_regionkey, r_name, r_comment) " +
+		"values (n_nationkey + ?, n_name, n_comment) else into test_idx (n_nationkey, n_name) " +
+		"values (n_nationkey + ?, n_name) select n_nationkey, n_name, n_comment from nation " +
+		"where n_nationkey >= ?"
+	logicPlan, err := runOneStmt(NewMockOptimizer(true), t, fmt.Sprintf("prepare stmt1 from '%s'", sql))
+	require.NoError(t, err)
+	prepare := logicPlan.GetDcl().GetPrepare()
+	require.NotNil(t, prepare)
+	preservedWrites := preparedDMLWriteExpressions(prepare.Plan.GetQuery())
+	preparedLockTargets := 0
+	for _, node := range prepare.Plan.GetQuery().Nodes {
+		if node.NodeType != plan.Node_LOCK_OP || len(node.Children) != 1 {
+			continue
+		}
+		input := prepare.Plan.GetQuery().Nodes[node.Children[0]]
+		for _, target := range node.LockTargets {
+			preparedLockTargets++
+			expr := input.ProjectList[target.PrimaryColIdxInBat]
+			require.Contains(t, preservedWrites, expr, "lock input expression: %s", expr.String())
+		}
+	}
+	require.NotZero(t, preparedLockTargets)
+	params := []any{
+		ParamValue{Value: "hot", SourceType: types.T_varchar.ToType(), HasSourceType: true},
+		ParamValue{Value: "10", SourceType: types.T_int64.ToType(), HasSourceType: true},
+		ParamValue{Value: "1000", SourceType: types.T_int64.ToType(), HasSourceType: true},
+		ParamValue{Value: "2", SourceType: types.T_int64.ToType(), HasSourceType: true},
+	}
+	filled, _, err := FillValuesOfParamsInPlanWithSpecializationPreservingDMLWrites(
+		context.Background(), prepare.Plan, params)
+	require.NoError(t, err)
+	query := filled.GetQuery()
+	require.NotNil(t, query)
+	lockTargetCount := 0
+	for _, node := range query.Nodes {
+		if node.NodeType != plan.Node_LOCK_OP {
+			continue
+		}
+		require.Len(t, node.Children, 1)
+		input := query.Nodes[node.Children[0]]
+		for _, target := range node.LockTargets {
+			lockTargetCount++
+			require.Less(t, int(target.PrimaryColIdxInBat), len(input.ProjectList))
+			require.Equal(t, target.PrimaryColTyp.Id,
+				input.ProjectList[target.PrimaryColIdxInBat].Typ.Id,
+				"lock input expression: %s", input.ProjectList[target.PrimaryColIdxInBat].String())
+		}
+	}
+	require.NotZero(t, lockTargetCount)
+}
 
 func countNodeTypes(qry *plan.Query) map[plan.Node_NodeType]int {
 	counts := make(map[plan.Node_NodeType]int)

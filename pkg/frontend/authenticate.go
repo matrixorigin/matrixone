@@ -2248,6 +2248,26 @@ func getSqlForDropAccount() []string {
 	return dropSqls
 }
 
+// getSqlForDropAccountSQLTasks returns the task-metadata cleanup statements
+// that must run in the same transaction as deleting mo_account. The account
+// row is locked first so CREATE TASK cannot commit after this cleanup has
+// passed, and task definitions are disabled before deleting dependent rows so
+// concurrent schedulers and run acquisition serialize with the cleanup.
+func getSqlForDropAccountSQLTasks(accountID int64) []string {
+	return []string{
+		fmt.Sprintf("select account_id from mo_catalog.mo_account where account_id = %d for update;", accountID),
+		fmt.Sprintf("update mo_task.sql_task set enabled = 0, updated_at = current_timestamp where account_id = %d;", accountID),
+		fmt.Sprintf(
+			"delete from mo_task.sys_async_task where task_parent_id in ("+
+				"select concat('sql-task:', task_id) from mo_task.sql_task where account_id = %d "+
+				"union select concat('sql-task:', task_id) from mo_task.sql_task_run where account_id = %d);",
+			accountID, accountID,
+		),
+		fmt.Sprintf("delete from mo_task.sql_task_run where account_id = %d;", accountID),
+		fmt.Sprintf("delete from mo_task.sql_task where account_id = %d;", accountID),
+	}
+}
+
 func getSqlForDeleteUser(userId int64) []string {
 	return []string{
 		fmt.Sprintf(deleteUserFromMoUserFormat, userId),
@@ -4201,6 +4221,18 @@ func doDropAccount(ctx context.Context, bh BackgroundExec, ses *Session, da *dro
 				rtnErr = moerr.NewInternalErrorf(ctx, "there is no account %s", da.Name)
 			}
 			return
+		}
+
+		// Retire SQL tasks before dropping tenant-owned catalog objects. This is
+		// part of the account-drop transaction, so a later failure restores the
+		// task metadata together with the account. The lock/disable/delete order
+		// also closes races with CREATE TASK, scheduled triggering, and run
+		// acquisition on other CNs.
+		for _, sql = range getSqlForDropAccountSQLTasks(accountId) {
+			ses.Infof(ctx, "dropAccount %s sql: %s", da.Name, sql)
+			if rtnErr = bh.Exec(ctx, sql); rtnErr != nil {
+				return rtnErr
+			}
 		}
 
 		// drop tables of the tenant

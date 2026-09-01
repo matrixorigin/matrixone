@@ -79,7 +79,8 @@ var (
 				operation_user_id int signed,
 				granted_time timestamp,
 				with_grant_option bool,
-				primary key(granted_id, grantee_id)
+				primary key(granted_id, grantee_id),
+				key idx_mo_role_grant_grantee_id(grantee_id)
 			)`
 
 	MoCatalogMoRolePrivsDDL = `create table mo_catalog.mo_role_privs (
@@ -581,7 +582,8 @@ var (
 			result_code                 int null,
 			error_msg                   varchar(1000) null,
 			create_at                   bigint,
-			end_at                      bigint)`,
+			end_at                      bigint,
+			index idx_task_parent_id (task_parent_id))`,
 		catalog.MOTaskDB)
 
 	MoTaskSysCronTaskDDL = fmt.Sprintf(`create table %s.sys_cron_task (
@@ -635,7 +637,8 @@ var (
 				creator_role_id             int unsigned not null default 0,
 				created_at                  timestamp not null default current_timestamp,
 				updated_at                  timestamp not null default current_timestamp,
-				unique key uk_task_name_account (task_name, account_id))`,
+				unique key uk_task_name_account (task_name, account_id),
+				index idx_account_id (account_id))`,
 		catalog.MOTaskDB, catalog.MOSQLTask)
 
 	MoTaskSQLTaskRunDDL = fmt.Sprintf(`create table %s.%s (
@@ -656,6 +659,7 @@ var (
 				gate_result                 tinyint not null default 1,
 				runner_cn                   varchar(128) not null default '',
 				index idx_task_id (task_id),
+				index idx_account_id (account_id),
 				index idx_status (status),
 				index idx_started_at (started_at))`,
 		catalog.MOTaskDB, catalog.MOSQLTaskRun)
