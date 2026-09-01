@@ -61,6 +61,23 @@ var tenantUpgEntries = []versions.UpgradeEntry{
 	upgradeInformationSchemaMetadataVisibilityView("PARTITIONS", sysview.InformationSchemaPartitionsDDL),
 	upgradeInformationSchemaMetadataVisibilityView("SCHEMATA", sysview.InformationSchemaSchemataDDL),
 	upgradeInformationSchemaTablePrivileges(),
+	addIcebergCatalogIDAllocatorIndex(),
+}
+
+// The catalog ID allocator is storage-owned.  MatrixOne only materializes an
+// auto-increment allocator when the column is a leading index part; the
+// account-first primary key is retained for account-local lookups, while this
+// narrow secondary index supplies that allocator contract.
+func addIcebergCatalogIDAllocatorIndex() versions.UpgradeEntry {
+	return versions.UpgradeEntry{
+		Schema:    catalog.MO_CATALOG,
+		TableName: "mo_iceberg_catalogs",
+		UpgType:   versions.ADD_INDEX,
+		UpgSql:    "create index catalog_id_allocator on mo_catalog.mo_iceberg_catalogs(catalog_id)",
+		CheckFunc: func(txn executor.TxnExecutor, accountID uint32) (bool, error) {
+			return versions.CheckIndexDefinition(txn, accountID, catalog.MO_CATALOG, "mo_iceberg_catalogs", "catalog_id_allocator")
+		},
+	}
 }
 
 func upgradeInformationSchemaMetadataVisibilityView(viewName, viewDDL string) versions.UpgradeEntry {

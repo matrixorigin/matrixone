@@ -324,6 +324,10 @@ func newPreparedExecuteEnvForSQLWithCompilerContext(
 		hasPaginationParams:        plan2.PreparedPlanHasPaginationParams(preparePlan.GetDcl().GetPrepare().Plan),
 		hasLagLeadParams:           len(plan2.PreparedLagLeadParamPositions(preparePlan.GetDcl().GetPrepare().Plan)) > 0,
 	}
+	prepareStmt.refreshNumericPrefixConsumer(
+		preparePlan.GetDcl().GetPrepare().Plan,
+		len(preparePlan.GetDcl().GetPrepare().ParamTypes),
+	)
 	require.NoError(t, ses.SetPrepareStmt(ctx, stmtName, prepareStmt))
 
 	cw := InitTxnComputationWrapper(ses, stmts[0], proc)
@@ -1174,7 +1178,7 @@ func TestInitExecuteStmtParamSpecializesSQLExecuteCommonTypePlan(t *testing.T) {
 	prepareStmt.PreparePlan.GetDcl().GetPrepare().Plan = manualPlan
 	prepareStmt.directResultParamPositions = plan2.PreparedPlanDirectResultParamPositions(manualPlan)
 	cw.plan = manualPlan
-	prepareStmt.numericPrefixConsumer = preparedPlanHasNumericPrefixConsumer(manualPlan, 1)
+	prepareStmt.refreshNumericPrefixConsumer(manualPlan, 1)
 	require.True(t, prepareStmt.numericPrefixConsumer)
 
 	require.NoError(t, ses.SetUserDefinedVar("numeric_text", "12.5tail", ""))
@@ -1351,12 +1355,36 @@ func TestPreparedPlanHasNumericPrefixConsumerCachesOnlyStaticDecimalContexts(t *
 		}}, IsPrepare: true}
 	}
 
-	require.True(t, preparedPlanHasNumericPrefixConsumer(makePlan(types.T_int64), 1),
+	integerPlan := makePlan(types.T_int64)
+	floatPlan := makePlan(types.T_float64)
+	require.True(t, preparedPlanHasNumericPrefixConsumer(integerPlan, 1),
 		"an exact-integer peer must admit a potential runtime DECIMAL packet")
 	require.True(t, preparedPlanHasNumericPrefixConsumer(makePlan(types.T_decimal128), 1),
 		"a static DECIMAL peer is a cached numeric-prefix consumer")
-	require.False(t, preparedPlanHasNumericPrefixConsumer(makePlan(types.T_float64), 1),
+	require.False(t, preparedPlanHasNumericPrefixConsumer(floatPlan, 1),
 		"an approximate FLOAT peer must remain outside numeric-prefix specialization")
+
+	prepareStmt := &PrepareStmt{}
+	prepareStmt.refreshNumericPrefixConsumer(integerPlan, 1)
+	require.Same(t, integerPlan, prepareStmt.numericPrefixConsumerPlan)
+	require.True(t, prepareStmt.numericPrefixConsumer)
+
+	// Parameter count is part of the immutable prepared-plan generation. A
+	// repeated execution must trust the cached decision instead of walking the
+	// plan again.
+	prepareStmt.refreshNumericPrefixConsumer(integerPlan, 0)
+	require.True(t, prepareStmt.numericPrefixConsumer)
+
+	prepareStmt.refreshNumericPrefixConsumer(floatPlan, 1)
+	require.Same(t, floatPlan, prepareStmt.numericPrefixConsumerPlan)
+	require.False(t, prepareStmt.numericPrefixConsumer,
+		"a replacement plan must not inherit the previous generation's capability")
+
+	prepareStmt.numericPrefixConsumer = true
+	prepareStmt.refreshNumericPrefixConsumer(nil, 0)
+	require.Nil(t, prepareStmt.numericPrefixConsumerPlan)
+	require.False(t, prepareStmt.numericPrefixConsumer,
+		"an absent plan must clear stale specialization capability")
 }
 
 func TestBinaryDecimalIntegerConsumerSpecializesAndReusesSemanticCategory(t *testing.T) {
@@ -1378,7 +1406,7 @@ func TestBinaryDecimalIntegerConsumerSpecializesAndReusesSemanticCategory(t *tes
 	}}, IsPrepare: true}
 	prepareStmt.PreparePlan.GetDcl().GetPrepare().Plan = manualPlan
 	prepareStmt.directResultParamPositions = plan2.PreparedPlanDirectResultParamPositions(manualPlan)
-	prepareStmt.numericPrefixConsumer = preparedPlanHasNumericPrefixConsumer(manualPlan, 1)
+	prepareStmt.refreshNumericPrefixConsumer(manualPlan, 1)
 	require.True(t, prepareStmt.numericPrefixConsumer)
 
 	install := func(value string) *vector.Vector {
@@ -1391,6 +1419,8 @@ func TestBinaryDecimalIntegerConsumerSpecializesAndReusesSemanticCategory(t *tes
 	firstParams := install("9.0")
 	retComp, firstPlan, _, _, _, err := initExecuteStmtParam(execCtx, ses, cw, nil, prepareStmt.Name)
 	require.NoError(t, err)
+	require.Same(t, manualPlan, prepareStmt.numericPrefixConsumerPlan)
+	require.True(t, prepareStmt.numericPrefixConsumer)
 	require.Nil(t, retComp)
 	require.NotSame(t, manualPlan, firstPlan)
 	require.Empty(t, prepareStmt.runtimeSpecializationKey)
@@ -1743,6 +1773,36 @@ func BenchmarkInitExecuteStmtParamRepeatedTPCCArithmeticUpdate(b *testing.B) {
 	}
 }
 
+func BenchmarkInitExecuteStmtParamRepeatedNonConsumerDecimal(b *testing.B) {
+	optimizer := plan2.NewMockOptimizer(false)
+	ses, prepareStmt, cw, execCtx := newPreparedExecuteEnvForSQLWithCompilerContext(
+		b, 220, "update nation set n_name = ? where n_nationkey = 1", optimizer.CurrentContext())
+	defer func() {
+		cw.proc.SetPrepareParams(nil)
+		prepareStmt.Close()
+	}()
+	prepareStmt.params = vector.NewVec(types.T_text.ToType())
+	require.NoError(b, vector.AppendBytes(
+		prepareStmt.params, []byte("9.0"), false, cw.proc.Mp()))
+	prepareStmt.ParamTypes = []byte{byte(defines.MYSQL_TYPE_NEWDECIMAL), 0}
+	preparePlan := prepareStmt.PreparePlan.GetDcl().GetPrepare().Plan
+	require.False(b, preparedPlanHasNumericPrefixConsumer(preparePlan, 1))
+
+	b.ReportAllocs()
+	b.ResetTimer()
+	for b.Loop() {
+		_, currentPlan, currentStmt, _, owned, err := initExecuteStmtParam(
+			execCtx, ses, cw, nil, prepareStmt.Name)
+		if err != nil || currentPlan != preparePlan {
+			b.Fatalf("unexpected execution result: plan=%p want=%p err=%v",
+				currentPlan, preparePlan, err)
+		}
+		if owned && currentStmt != nil {
+			currentStmt.Free()
+		}
+	}
+}
+
 func TestPreparedRuntimeCacheSupportsMixedAndStringCategories(t *testing.T) {
 	decimal := func(value string) plan2.ParamValue {
 		return plan2.ParamValue{Value: value, PrepareParamKind: vector.PrepareParamDecimal,
@@ -1885,7 +1945,8 @@ func BenchmarkInitExecuteStmtParamRepeatedDecimalSemanticCategory(b *testing.B) 
 	}}, IsPrepare: true}
 	prepareStmt.PreparePlan.GetDcl().GetPrepare().Plan = manualPlan
 	prepareStmt.directResultParamPositions = plan2.PreparedPlanDirectResultParamPositions(manualPlan)
-	prepareStmt.numericPrefixConsumer = true
+	prepareStmt.refreshNumericPrefixConsumer(manualPlan, 1)
+	require.True(b, prepareStmt.numericPrefixConsumer)
 	prepareStmt.params = vector.NewVec(types.T_text.ToType())
 	require.NoError(b, vector.AppendBytes(prepareStmt.params, []byte("9.0"), false, cw.proc.Mp()))
 	prepareStmt.ParamTypes = []byte{byte(defines.MYSQL_TYPE_NEWDECIMAL), 0}
@@ -2739,6 +2800,7 @@ func TestInitExecuteStmtParamRebuildsWhenTempTableMappingChanges(t *testing.T) {
 	}
 
 	oldPlan := prepareStmt.PreparePlan
+	oldNumericPrefixConsumerPlan := prepareStmt.numericPrefixConsumerPlan
 	ses.AddTempTable("db1", "unrelated", "temp-unrelated")
 
 	retComp, retPlan, retStmt, _, _, err := initExecuteStmtParam(
@@ -2747,6 +2809,8 @@ func TestInitExecuteStmtParamRebuildsWhenTempTableMappingChanges(t *testing.T) {
 	require.Nil(t, retComp)
 	require.NotSame(t, oldPlan, prepareStmt.PreparePlan)
 	require.Same(t, prepareStmt.PreparePlan.GetDcl().GetPrepare().Plan, retPlan)
+	require.NotSame(t, oldNumericPrefixConsumerPlan, prepareStmt.numericPrefixConsumerPlan)
+	require.Same(t, retPlan, prepareStmt.numericPrefixConsumerPlan)
 	require.NotNil(t, retStmt)
 	require.Equal(t, ses.GetTempTableVersion(), prepareStmt.tempTableVersion)
 	require.Equal(t, newColDefData, prepareStmt.ColDefData)
@@ -2833,6 +2897,7 @@ func TestInitExecuteStmtParamKeepsOldStateWhenColumnMetadataRefreshFails(t *test
 	defer prepareStmt.Close()
 
 	oldPlan := prepareStmt.PreparePlan
+	oldNumericPrefixConsumerPlan := prepareStmt.numericPrefixConsumerPlan
 	oldColDefData := [][]byte{[]byte("old-int-column")}
 	prepareStmt.ColDefData = oldColDefData
 	execCtx.prepareColDef = oldColDefData
@@ -2845,6 +2910,7 @@ func TestInitExecuteStmtParamKeepsOldStateWhenColumnMetadataRefreshFails(t *test
 	_, _, _, _, _, err := initExecuteStmtParam(execCtx, ses, cw, nil, prepareStmt.Name)
 	require.EqualError(t, err, "column metadata refresh failed")
 	require.Same(t, oldPlan, prepareStmt.PreparePlan)
+	require.Same(t, oldNumericPrefixConsumerPlan, prepareStmt.numericPrefixConsumerPlan)
 	require.Equal(t, oldColDefData, prepareStmt.ColDefData)
 	require.Equal(t, oldColDefData, execCtx.prepareColDef)
 	require.NotEqual(t, ses.GetTempTableVersion(), prepareStmt.tempTableVersion)
