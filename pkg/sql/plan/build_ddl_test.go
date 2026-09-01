@@ -1548,7 +1548,9 @@ func TestGenViewTableDefPersistsExpandedStarSelectList(t *testing.T) {
 	var viewData ViewData
 	require.NoError(t, json.Unmarshal([]byte(tableDef.GetViewSql().GetView()), &viewData))
 	require.NotContains(t, viewData.Stmt, "*")
+	require.NotContains(t, viewData.Definition, "*")
 	require.Contains(t, viewData.Stmt, "`nation`.`n_nationkey`")
+	require.Contains(t, viewData.Definition, "`nation`.`n_nationkey`")
 	require.Contains(t, viewData.Stmt, "`nation`.`n_name`")
 	require.Contains(t, viewData.Stmt, "`nation`.`n_regionkey`")
 	require.Contains(t, viewData.Stmt, "`nation`.`n_comment`")
