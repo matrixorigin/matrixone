@@ -631,7 +631,7 @@ var (
 		"), __mo_concrete_table_privileges(privilege_type) AS (" +
 		"SELECT 'SELECT' UNION ALL SELECT 'INSERT' UNION ALL SELECT 'UPDATE' UNION ALL SELECT 'TRUNCATE' " +
 		"UNION ALL SELECT 'DELETE' UNION ALL SELECT 'REFERENCE' UNION ALL SELECT 'INDEX' UNION ALL SELECT 'VALUES'" +
-		"), __mo_expanded_table_grants AS (" +
+		"), __mo_expanded_table_grant_rows AS (" +
 		"SELECT grant_priv.role_id, grant_priv.obj_id, upper(grant_priv.privilege_name) AS privilege_type, " +
 		"grant_priv.with_grant_option FROM __mo_authorized_table_grants grant_priv " +
 		"WHERE grant_priv.privilege_name <> 'table all' " +
@@ -639,6 +639,10 @@ var (
 		"SELECT grant_priv.role_id, grant_priv.obj_id, concrete_priv.privilege_type, grant_priv.with_grant_option " +
 		"FROM __mo_authorized_table_grants grant_priv CROSS JOIN __mo_concrete_table_privileges concrete_priv " +
 		"WHERE grant_priv.privilege_name = 'table all'" +
+		"), __mo_expanded_table_grants AS (" +
+		"SELECT role_id, obj_id, privilege_type, " +
+		"max(cast(with_grant_option AS int)) = 1 AS with_grant_option " +
+		"FROM __mo_expanded_table_grant_rows GROUP BY role_id, obj_id, privilege_type" +
 		") SELECT " +
 		"CAST(coalesce(granted_role.role_name, '') AS varchar(292)) AS `GRANTEE`," +
 		"CAST('def' AS varchar(512)) AS `TABLE_CATALOG`," +

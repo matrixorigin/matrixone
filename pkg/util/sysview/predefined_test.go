@@ -144,6 +144,8 @@ func TestInformationSchemaTablePrivilegesDDL(t *testing.T) {
 		"WHERE grant_priv.privilege_name <> 'table all'",
 		"WHERE grant_priv.privilege_name = 'table all'",
 		"FROM __mo_authorized_table_grants grant_priv CROSS JOIN __mo_concrete_table_privileges concrete_priv",
+		"max(cast(with_grant_option AS int)) = 1 AS with_grant_option",
+		"FROM __mo_expanded_table_grant_rows GROUP BY role_id, obj_id, privilege_type",
 		"FROM __mo_expanded_table_grants grant_priv",
 		"JOIN mo_catalog.mo_role granted_role ON grant_priv.role_id = granted_role.role_id",
 		"JOIN __mo_visible_tables tbl ON grant_priv.obj_id = tbl.rel_logical_id",

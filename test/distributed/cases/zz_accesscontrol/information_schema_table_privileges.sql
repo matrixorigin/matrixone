@@ -36,6 +36,7 @@ grant insert on table table_privileges_db.* to table_privileges_wildcard;
 grant select on table table_privileges_db.hidden_t to table_privileges_hidden;
 grant delete on table table_privileges_db.t to table_privileges_hidden with grant option;
 grant all on table table_privileges_db.t to table_privileges_all with grant option;
+grant select on table table_privileges_db.t to table_privileges_all;
 grant all on view table_privileges_db.v to table_privileges_all;
 grant table_privileges_reader to table_privileges_user;
 
@@ -59,6 +60,14 @@ select count(*) = 0 as table_all_sentinel_not_reported
 from information_schema.table_privileges
 where table_schema = 'table_privileges_db'
   and privilege_type = 'TABLE ALL';
+
+select count(*) = 1 as overlapping_grants_merged,
+       min(is_grantable) = 'YES' as effective_grantability_preserved
+from information_schema.table_privileges
+where table_schema = 'table_privileges_db'
+  and table_name = 't'
+  and grantee = 'table_privileges_all'
+  and privilege_type = 'SELECT';
 
 -- @session:id=2&user=sys:table_privileges_user:table_privileges_reader&password=123456
 set session enable_privilege_cache = off;
