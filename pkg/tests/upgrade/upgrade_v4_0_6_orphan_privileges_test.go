@@ -301,7 +301,25 @@ func TestMaybeUpgradeTenantRepairsRestoredSameVersionTenantAcrossTransactions(t 
 		require.NoError(t, err)
 		require.Equal(t, orphanCount, seeded)
 
-		upgraded, err := cn.RawService().(cnservice.Service).GetBootstrapService().MaybeUpgradeTenant(
+		bootstrapService := cn.RawService().(cnservice.Service).GetBootstrapService()
+		err = sqlExecutor.ExecTxn(ctx, func(callerTxn executor.TxnExecutor) error {
+			if _, err := versions.GetTenantCreateVersionForUpdate(accountID, callerTxn); err != nil {
+				return err
+			}
+			upgraded, err := bootstrapService.MaybeUpgradeTenant(
+				ctx,
+				func() (int32, string, error) { return accountID, "4.0.6", nil },
+				callerTxn.Txn(),
+			)
+			require.False(t, upgraded)
+			require.ErrorContains(t, err, "without a caller-owned transaction")
+			return nil
+		}, executor.Options{}.
+			WithDatabase(catalog.MO_CATALOG).
+			WithWaitCommittedLogApplied())
+		require.NoError(t, err)
+
+		upgraded, err := bootstrapService.MaybeUpgradeTenant(
 			ctx,
 			func() (int32, string, error) { return accountID, "4.0.6", nil },
 			nil,

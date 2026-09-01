@@ -238,6 +238,7 @@ type testIncrementalVersionHandle struct {
 	*testVersionHandle
 	stepCalls     atomic.Int32
 	completeAfter int32
+	onStep        func(call int32)
 }
 
 func (h *testIncrementalVersionHandle) HandleTenantUpgradeStep(
@@ -245,7 +246,11 @@ func (h *testIncrementalVersionHandle) HandleTenantUpgradeStep(
 	int32,
 	executor.TxnExecutor,
 ) (bool, error) {
-	return h.stepCalls.Add(1) >= h.completeAfter, nil
+	call := h.stepCalls.Add(1)
+	if h.onStep != nil {
+		h.onStep(call)
+	}
+	return call >= h.completeAfter, nil
 }
 
 func TestShouldRunTenantUpgrade(t *testing.T) {
@@ -454,6 +459,173 @@ func Test_asyncUpgradeTenantTask_CommitsIncrementalPagesBeforeAdvancingTask(t *t
 		})
 }
 
+func TestMaybeUpgradeTenantRejectsCallerOwnedTransactionBeforePages(t *testing.T) {
+	const tenantID = int32(10)
+	h := newTestVersionHandler("2.0.0", "1.0.0", versions.Yes, versions.Yes, 1)
+	var sqls []string
+	s := newServiceForTest(
+		"",
+		&memLocker{},
+		clock.NewHLCClock(func() int64 { return 0 }, 0),
+		nil,
+		executor.NewMemExecutor2(func(sql string) (executor.Result, error) {
+			sqls = append(sqls, sql)
+			switch {
+			case sql == "select create_version from mo_account where account_id = 10":
+				return buildTenantVersionResult("1.0.0"), nil
+			case strings.Contains(sql, "from mo_version"):
+				return buildLatestVersionResult("2.0.0", 1, versions.StateReady), nil
+			default:
+				return executor.Result{}, fmt.Errorf("independent page must not start: %s", sql)
+			}
+		}, &testTxnOperator{}),
+		func(s *service) {
+			s.handles = append(s.handles, h)
+			s.upgrade.finalVersionCompleted.Store(true)
+		},
+	)
+
+	upgraded, err := s.MaybeUpgradeTenant(
+		context.Background(),
+		func() (int32, string, error) { return tenantID, "2.0.0", nil },
+		&testTxnOperator{},
+	)
+	require.False(t, upgraded)
+	require.ErrorContains(t, err, "without a caller-owned transaction")
+	require.Len(t, sqls, 2)
+	require.Zero(t, h.callHandleTenantUpgrade.Load())
+}
+
+func TestMaybeUpgradeTenantRoutesFromPersistedVersion(t *testing.T) {
+	const tenantID = int32(10)
+	h1 := newTestVersionHandler("2.0.0", "1.0.0", versions.Yes, versions.Yes, 1)
+	h2 := newTestVersionHandler("3.0.0", "2.0.0", versions.Yes, versions.Yes, 1)
+	persisted := "1.0.0"
+	var lockedReads int
+	s := newServiceForTest(
+		"",
+		&memLocker{},
+		clock.NewHLCClock(func() int64 { return 0 }, 0),
+		nil,
+		executor.NewMemExecutor(func(sql string) (executor.Result, error) {
+			switch {
+			case sql == "select create_version from mo_account where account_id = 10":
+				return buildTenantVersionResult(persisted), nil
+			case sql == "select create_version from mo_account where account_id = 10 for update":
+				lockedReads++
+				return buildTenantVersionResult(persisted), nil
+			case strings.Contains(sql, "from mo_version"):
+				return buildLatestVersionResult("3.0.0", 1, versions.StateReady), nil
+			case sql == "update mo_account set create_version = '2.0.0' where account_id = 10":
+				persisted = "2.0.0"
+				return executor.Result{AffectedRows: 1}, nil
+			case sql == "update mo_account set create_version = '3.0.0' where account_id = 10":
+				persisted = "3.0.0"
+				return executor.Result{AffectedRows: 1}, nil
+			default:
+				return executor.Result{}, fmt.Errorf("unexpected sql: %s", sql)
+			}
+		}),
+		func(s *service) {
+			s.handles = append(s.handles, h1, h2)
+			s.upgrade.finalVersionCompleted.Store(true)
+		},
+	)
+
+	upgraded, err := s.MaybeUpgradeTenant(
+		context.Background(),
+		// The production CN wrapper supplies finalVersion here. Routing must still
+		// start from persisted 1.0.0 and cannot skip the 2.0.0 handler.
+		func() (int32, string, error) { return tenantID, "3.0.0", nil },
+		nil,
+	)
+	require.NoError(t, err)
+	require.True(t, upgraded)
+	require.Equal(t, uint64(1), h1.callHandleTenantUpgrade.Load())
+	require.Equal(t, uint64(1), h2.callHandleTenantUpgrade.Load())
+	require.Equal(t, 3, lockedReads)
+	require.Equal(t, "3.0.0", persisted)
+}
+
+func TestMaybeUpgradeTenantIgnoresStaleOlderCallbackForCurrentTenant(t *testing.T) {
+	const tenantID = int32(10)
+	h := newTestVersionHandler("2.0.0", "1.0.0", versions.Yes, versions.Yes, 1)
+	var lockedReads int
+	s := newServiceForTest(
+		"",
+		&memLocker{},
+		clock.NewHLCClock(func() int64 { return 0 }, 0),
+		nil,
+		executor.NewMemExecutor(func(sql string) (executor.Result, error) {
+			switch {
+			case sql == "select create_version from mo_account where account_id = 10":
+				return buildTenantVersionResult("2.0.0"), nil
+			case strings.Contains(sql, "from mo_version"):
+				return buildLatestVersionResult("2.0.0", 1, versions.StateReady), nil
+			case strings.Contains(sql, "from mo_upgrade"):
+				return executor.Result{}, nil
+			case strings.Contains(sql, "for update"):
+				lockedReads++
+				return executor.Result{}, fmt.Errorf("unexpected page transaction")
+			default:
+				return executor.Result{}, fmt.Errorf("unexpected sql: %s", sql)
+			}
+		}),
+		func(s *service) {
+			s.handles = append(s.handles, h)
+			s.upgrade.finalVersionCompleted.Store(true)
+		},
+	)
+
+	upgraded, err := s.MaybeUpgradeTenant(
+		context.Background(),
+		func() (int32, string, error) { return tenantID, "1.0.0", nil },
+		nil,
+	)
+	require.NoError(t, err)
+	require.False(t, upgraded)
+	require.Zero(t, lockedReads)
+	require.Zero(t, h.callHandleTenantUpgrade.Load())
+}
+
+func TestUpgradeTenantDirectlyRebuildsRouteAfterConcurrentAdvance(t *testing.T) {
+	const tenantID = int32(10)
+	persisted := "1.0.0"
+	h1 := &testIncrementalVersionHandle{
+		testVersionHandle: newTestVersionHandler("2.0.0", "1.0.0", versions.Yes, versions.Yes, 1),
+		completeAfter:     10,
+		onStep: func(call int32) {
+			if call == 1 {
+				persisted = "3.0.0"
+			}
+		},
+	}
+	h2 := newTestVersionHandler("3.0.0", "2.0.0", versions.Yes, versions.Yes, 1)
+	var versionUpdates int
+	s := newServiceForTest(
+		"",
+		&memLocker{},
+		clock.NewHLCClock(func() int64 { return 0 }, 0),
+		nil,
+		executor.NewMemExecutor(func(sql string) (executor.Result, error) {
+			if sql == "select create_version from mo_account where account_id = 10 for update" {
+				return buildTenantVersionResult(persisted), nil
+			}
+			if strings.HasPrefix(sql, "update mo_account") {
+				versionUpdates++
+				return executor.Result{AffectedRows: 1}, nil
+			}
+			return executor.Result{}, fmt.Errorf("unexpected sql: %s", sql)
+		}),
+		func(s *service) { s.handles = append(s.handles, h1, h2) },
+	)
+
+	require.NoError(t, s.upgradeTenantDirectly(context.Background(), tenantID, false))
+	require.Equal(t, int32(1), h1.stepCalls.Load())
+	require.Zero(t, h2.callHandleTenantUpgrade.Load())
+	require.Zero(t, versionUpdates, "concurrent progress must never be overwritten with an older version")
+}
+
 func TestUpgradeTenantDirectlyCommitsIncrementalPages(t *testing.T) {
 	const (
 		tenantID = int32(10)
@@ -485,8 +657,9 @@ func TestUpgradeTenantDirectlyCommitsIncrementalPages(t *testing.T) {
 		func(s *service) { s.handles = append(s.handles, h) },
 	)
 
-	require.NoError(t, s.upgradeTenantDirectly(context.Background(), tenantID, version, true))
-	require.Equal(t, int32(2), lockedReads.Load(), "each page must use a fresh transaction")
+	require.NoError(t, s.upgradeTenantDirectly(context.Background(), tenantID, true))
+	require.Equal(t, int32(3), lockedReads.Load(),
+		"two page transactions plus one locked completion check are required")
 	require.Equal(t, int32(1), versionUpdates.Load(), "version is published only with the completed page")
 	require.Equal(t, int32(2), h.stepCalls.Load())
 }

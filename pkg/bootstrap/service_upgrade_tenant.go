@@ -29,14 +29,14 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 )
 
-// MaybeUpgradeTenant checks and upgrades tenant metadata on demand. The caller
-// transaction is used only for the readiness check; migration pages use fresh
-// transactions so incremental handlers can commit bounded progress.
+// MaybeUpgradeTenant checks and upgrades tenant metadata on demand. A required
+// upgrade is rejected while a caller-owned transaction is active; the caller
+// must end that transaction and retry so migration pages can commit safely.
 func (s *service) MaybeUpgradeTenant(
 	ctx context.Context,
 	tenantFetchFunc func() (int32, string, error),
 	txnOp client.TxnOperator) (bool, error) {
-	tenantID, version, err := tenantFetchFunc()
+	tenantID, _, err := tenantFetchFunc()
 	if err != nil {
 		return false, err
 	}
@@ -49,14 +49,20 @@ func (s *service) MaybeUpgradeTenant(
 	}
 
 	currentCN := s.getFinalVersionHandle().Metadata()
-	if versions.Compare(currentCN.Version, version) < 0 {
-		return false, moerr.NewInvalidInputNoCtxf(
-			"tenant version %s is greater than current cn version %s", version, currentCN.Version)
-	}
-
-	shouldUpgrade := versions.Compare(version, currentCN.Version) < 0
+	persistedVersion := ""
+	shouldUpgrade := false
 	err = s.exec.ExecTxn(ctx, func(txn executor.TxnExecutor) error {
 		txn.Use(catalog.MO_CATALOG)
+		persistedVersion, err = versions.GetTenantVersion(tenantID, txn)
+		if err != nil {
+			return err
+		}
+		if versions.Compare(currentCN.Version, persistedVersion) < 0 {
+			return moerr.NewInvalidInputNoCtxf(
+				"tenant version %s is greater than current cn version %s",
+				persistedVersion, currentCN.Version)
+		}
+		shouldUpgrade = versions.Compare(persistedVersion, currentCN.Version) < 0
 		latestVersion, err := versions.GetLatestVersion(txn)
 		if err != nil {
 			return err
@@ -65,7 +71,7 @@ func (s *service) MaybeUpgradeTenant(
 			s.logger.Fatal("BUG: current cn's version(" + currentCN.Version +
 				") must equal cluster latest version(" + latestVersion.Version + ")")
 		}
-		if version == currentCN.Version {
+		if persistedVersion == currentCN.Version {
 			if conditional, ok := s.getFinalVersionHandle().(conditionalTenantUpgrade); ok {
 				shouldUpgrade, err = conditional.TenantUpgradeRequired(tenantID, txn)
 				if err != nil {
@@ -88,13 +94,23 @@ func (s *service) MaybeUpgradeTenant(
 		return false, err
 	}
 	if !shouldUpgrade {
-		s.markTenantUpgradeChecked(tenantID)
+		// A caller-owned transaction may still roll back the state observed above.
+		// Cache only committed, independently observed readiness.
+		if txnOp == nil {
+			s.markTenantUpgradeChecked(tenantID)
+		}
 		return false, nil
+	}
+	if txnOp != nil {
+		return false, moerr.NewInvalidStateNoCtx(
+			"tenant upgrade requires retry without a caller-owned transaction")
 	}
 	if err := s.waitTenantUpgradeReady(ctx); err != nil {
 		return false, err
 	}
-	if err := s.upgradeTenantDirectly(ctx, tenantID, version, version == currentCN.Version); err != nil {
+	if err := s.upgradeTenantDirectly(
+		ctx, tenantID, persistedVersion == currentCN.Version,
+	); err != nil {
 		return false, err
 	}
 	s.markTenantUpgradeChecked(tenantID)
@@ -173,55 +189,61 @@ func (s *service) waitTenantUpgradeReady(ctx context.Context) error {
 func (s *service) upgradeTenantDirectly(
 	ctx context.Context,
 	tenantID int32,
-	from string,
 	includeEqual bool,
 ) error {
-	for _, h := range s.handles {
-		compare := versions.Compare(h.Metadata().Version, from)
-		if (compare < 0 || (compare == 0 && !includeEqual)) || !h.Metadata().CanDirectUpgrade(from) {
-			continue
-		}
-
-		for {
-			completed := true
-			skipped := false
-			opts := executor.Options{}.
-				WithDatabase(catalog.MO_CATALOG).
-				WithMinCommittedTS(s.now()).
-				WithWaitCommittedLogApplied().
-				WithTimeZone(time.Local)
-			err := s.exec.ExecTxn(ctx, func(txn executor.TxnExecutor) error {
-				txn.Use(catalog.MO_CATALOG)
-				current, err := versions.GetTenantCreateVersionForUpdate(tenantID, txn)
-				if err != nil {
-					return err
-				}
-				if versions.Compare(current, h.Metadata().Version) > 0 {
-					skipped = true
-					return nil
-				}
-				if incremental, ok := h.(incrementalTenantUpgrade); ok {
-					var err error
-					completed, err = incremental.HandleTenantUpgradeStep(ctx, tenantID, txn)
-					if err != nil || !completed {
-						return err
-					}
-				} else if err := h.HandleTenantUpgrade(ctx, tenantID, txn); err != nil {
-					return err
-				}
-				return versions.UpgradeTenantVersion(tenantID, h.Metadata().Version, txn)
-			}, opts)
+	for {
+		completed := true
+		done := false
+		selectedEqual := false
+		opts := executor.Options{}.
+			WithDatabase(catalog.MO_CATALOG).
+			WithMinCommittedTS(s.now()).
+			WithWaitCommittedLogApplied().
+			WithTimeZone(time.Local)
+		err := s.exec.ExecTxn(ctx, func(txn executor.TxnExecutor) error {
+			txn.Use(catalog.MO_CATALOG)
+			current, err := versions.GetTenantCreateVersionForUpdate(tenantID, txn)
 			if err != nil {
 				return err
 			}
-			if completed || skipped {
+
+			var selected VersionHandle
+			for _, h := range s.handles {
+				compare := versions.Compare(h.Metadata().Version, current)
+				if compare < 0 || (compare == 0 && !includeEqual) ||
+					!h.Metadata().CanDirectUpgrade(current) {
+					continue
+				}
+				selected = h
+				selectedEqual = compare == 0
 				break
 			}
+			if selected == nil {
+				if versions.Compare(current, s.getFinalVersionHandle().Metadata().Version) < 0 {
+					return moerr.NewInvalidStateNoCtxf(
+						"no direct tenant upgrade path from %s", current)
+				}
+				done = true
+				return nil
+			}
+
+			if incremental, ok := selected.(incrementalTenantUpgrade); ok {
+				completed, err = incremental.HandleTenantUpgradeStep(ctx, tenantID, txn)
+				if err != nil || !completed {
+					return err
+				}
+			} else if err := selected.HandleTenantUpgrade(ctx, tenantID, txn); err != nil {
+				return err
+			}
+			return versions.UpgradeTenantVersion(tenantID, selected.Metadata().Version, txn)
+		}, opts)
+		if err != nil || done {
+			return err
 		}
-		from = h.Metadata().Version
-		includeEqual = false
+		if completed && selectedEqual {
+			includeEqual = false
+		}
 	}
-	return nil
 }
 
 // shouldRunTenantUpgrade keeps the normal version-transition behavior (a tenant

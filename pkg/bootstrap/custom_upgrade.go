@@ -90,6 +90,7 @@ func (s *service) UpgradeOneTenant(ctx context.Context, tenantID int32) error {
 
 	var version string
 	shouldUpgrade := true
+	includeEqual := false
 	opts := executor.Options{}.
 		WithDatabase(catalog.MO_CATALOG).
 		WithMinCommittedTS(s.now()).
@@ -104,6 +105,7 @@ func (s *service) UpgradeOneTenant(ctx context.Context, tenantID int32) error {
 		}
 
 		currentCN := s.getFinalVersionHandle().Metadata()
+		includeEqual = currentCN.Version == version
 		if versions.Compare(currentCN.Version, version) < 0 {
 			return moerr.NewInvalidInputNoCtxf(
 				"tenant version %s is greater than current cn version %s", version, currentCN.Version)
@@ -148,7 +150,7 @@ func (s *service) UpgradeOneTenant(ctx context.Context, tenantID int32) error {
 		if err := s.waitTenantUpgradeReady(ctx); err != nil {
 			return moerr.AttachCause(ctx, err)
 		}
-		if err := s.upgradeTenantDirectly(ctx, tenantID, version, true); err != nil {
+		if err := s.upgradeTenantDirectly(ctx, tenantID, includeEqual); err != nil {
 			return moerr.AttachCause(ctx, err)
 		}
 	}

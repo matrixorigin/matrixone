@@ -45,7 +45,8 @@ type Service interface {
 	BootstrapUpgrade(ctx context.Context) error
 	// MaybeUpgradeTenant used to upgrade tenant metadata if the tenant is old version.
 	// Return true, nil means tenant upgraded, the call need to load tenant again to get
-	// latest tenant info.
+	// latest tenant info. If an upgrade is required while txnOp is caller-owned,
+	// the call returns an error; the caller must end that transaction and retry.
 	MaybeUpgradeTenant(
 		ctx context.Context,
 		tenantFetchFunc func() (int32, string, error),
