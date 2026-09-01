@@ -18,6 +18,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -26,6 +27,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/stretchr/testify/require"
 )
 
@@ -205,6 +207,73 @@ func TestRegenerateViewDefinitionUsesAuthoritativeGeneratorAndPreservesJSON(t *t
 	require.JSONEq(t, `"CASCADED"`, string(fields["check_option"]))
 	require.Contains(t, fields, "dependencies")
 	require.Contains(t, fields, "lower_case_table_names")
+}
+
+func TestRegenerateLegacyViewDefinitionUsesParserDerivedMetadata(t *testing.T) {
+	// Legacy catalog rows have only Stmt. Recovery must parse that statement and
+	// persist the SELECT AST rendering rather than attempting to tokenize the
+	// SQL in information_schema.
+	tests := []struct {
+		name        string
+		stmt        string
+		contains    string
+		checkOption string
+	}{
+		{
+			name:     "dollar quoted definer cannot supply view boundary",
+			stmt:     "CREATE DEFINER=$q$ view fake as select 0$q$ VIEW v AS SELECT 1",
+			contains: "select 1",
+		},
+		{
+			name:     "executable comment keeps quoted terminator text",
+			stmt:     "/*!50001 CREATE VIEW v AS SELECT 'x*/y' AS s */;",
+			contains: "x*/y",
+		},
+		{
+			name:     "double quoted executable comment keeps escaped terminator text",
+			stmt:     "/*!50001 CREATE VIEW v AS SELECT \"x\\\"*/y\" AS s */;",
+			contains: "*/y",
+		},
+		{
+			name:     "arithmetic double dash is not a line comment",
+			stmt:     "/*!50001 CREATE VIEW v AS SELECT 1--2 AS s */;",
+			contains: "- -2",
+		},
+		{
+			name:        "check option is outside select definition",
+			stmt:        "CREATE VIEW v AS SELECT 1 WITH CASCADED CHECK OPTION",
+			contains:    "select 1",
+			checkOption: "CASCADED",
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			persisted, err := json.Marshal(ViewData{Stmt: test.stmt, DefaultDatabase: "tpch"})
+			require.NoError(t, err)
+
+			regenerated, err := RegenerateViewDefinition(NewMockCompilerContext(false), string(persisted))
+			require.NoError(t, err)
+			var data ViewData
+			require.NoError(t, json.Unmarshal([]byte(regenerated.TableDef.ViewSql.View), &data))
+			require.NotEmpty(t, data.Definition)
+			require.Contains(t, strings.ToLower(data.Definition), test.contains)
+			require.NotContains(t, strings.ToLower(data.Definition), "create view")
+			require.NotContains(t, strings.ToLower(data.Definition), "check option")
+			if test.checkOption == "" {
+				require.Equal(t, "NONE", data.CheckOption)
+			} else {
+				require.Equal(t, test.checkOption, data.CheckOption)
+			}
+
+			statements, err := parsers.Parse(t.Context(), dialect.MYSQL, data.Definition, 1)
+			require.NoError(t, err)
+			require.Len(t, statements, 1)
+			_, ok := statements[0].(*tree.Select)
+			require.True(t, ok)
+			statements[0].Free()
+		})
+	}
 }
 
 func TestRegenerateViewDefinitionPersistsExpandedStar(t *testing.T) {
