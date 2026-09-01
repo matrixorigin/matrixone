@@ -57,6 +57,7 @@ func TestAvgExactNumericReturnType(t *testing.T) {
 		{name: "int unsigned", input: types.T_uint32.ToType(), want: types.New(types.T_decimal128, 14, 4)},
 		{name: "bigint", input: types.T_int64.ToType(), want: types.New(types.T_decimal128, 23, 4)},
 		{name: "bigint unsigned", input: types.T_uint64.ToType(), want: types.New(types.T_decimal128, 24, 4)},
+		{name: "literal precision", input: types.New(types.T_int64, 1, 0), want: types.New(types.T_decimal128, 5, 4)},
 		{name: "year", input: types.T_year.ToType(), want: types.New(types.T_decimal128, 8, 4)},
 		{name: "decimal64", input: types.New(types.T_decimal64, 8, 2), want: types.New(types.T_decimal128, 12, 6)},
 		{name: "decimal128", input: types.New(types.T_decimal128, 20, 6), want: types.New(types.T_decimal128, 24, 10)},
@@ -67,6 +68,119 @@ func TestAvgExactNumericReturnType(t *testing.T) {
 			require.Equal(t, test.want, AvgReturnType([]types.Type{test.input}))
 		})
 	}
+}
+
+func TestAvgRoundsDirectlyAtDeclaredScale(t *testing.T) {
+	for _, test := range []struct {
+		name       string
+		sum        types.Decimal128
+		count      int64
+		argScale   int32
+		resultType types.Type
+		want       string
+	}{
+		{
+			name:       "integer average",
+			sum:        types.Decimal128FromInt64(1),
+			count:      113,
+			resultType: types.New(types.T_decimal128, 5, 4),
+			want:       "0.0088",
+		},
+		{
+			name:       "fractional average",
+			sum:        types.Decimal128FromInt64(1),
+			count:      113,
+			argScale:   2,
+			resultType: types.New(types.T_decimal128, 7, 6),
+			want:       "0.000088",
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			avg, err := decAvg[types.Decimal128](
+				test.sum, test.count, test.argScale, test.resultType)
+			require.NoError(t, err)
+			require.Equal(t, test.want, avg.Format(test.resultType.Scale))
+		})
+	}
+}
+
+func TestAvgIntegerExpressionPrecisionExecution(t *testing.T) {
+	argType := types.New(types.T_int64, 1, 0)
+	values := make([]int64, 113)
+	values[0] = 1
+
+	for _, test := range []struct {
+		name     string
+		distinct bool
+		window   bool
+		values   []int64
+	}{
+		{name: "ordinary", values: values},
+		{
+			name:     "distinct",
+			distinct: true,
+			values: func() []int64 {
+				result := make([]int64, 113)
+				for i := 0; i < 112; i++ {
+					result[i] = int64(i) - 56 // -56 through 55
+				}
+				result[112] = 57 // the distinct values sum to one
+				return result
+			}(),
+		},
+		{name: "window", window: true, values: values},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			mp := mpool.MustNewZero()
+			defer mpool.DeleteMPool(mp)
+			input := buildAvgFixedVector(t, mp, argType, test.values)
+			defer input.Free(mp)
+
+			exec := makeSumAvgExec(mp, false, AggIdOfAvg, test.distinct, argType)
+			defer exec.Free()
+			require.NoError(t, exec.GroupGrow(1))
+			if test.window {
+				for row := range test.values {
+					require.NoError(t, exec.Fill(0, row, []*vector.Vector{input}))
+				}
+			} else if test.distinct {
+				groups := make([]uint64, len(test.values))
+				for i := range groups {
+					groups[i] = 1
+				}
+				require.NoError(t, exec.BatchFill(0, groups, []*vector.Vector{input}))
+			} else {
+				require.NoError(t, exec.BulkFill(0, []*vector.Vector{input}))
+			}
+
+			results, err := exec.Flush()
+			require.NoError(t, err)
+			defer results[0].Free(mp)
+			require.Equal(t, types.New(types.T_decimal128, 5, 4), *results[0].GetType())
+			value := vector.GetFixedAtNoTypeCheck[types.Decimal128](results[0], 0)
+			require.Equal(t, "0.0088", value.Format(results[0].GetType().Scale))
+		})
+	}
+}
+
+func TestAvgDecimal256PreservesMaximumInputScale(t *testing.T) {
+	argType := types.New(types.T_decimal128, 38, 38)
+	resultType := AvgReturnType([]types.Type{argType})
+	require.Equal(t, types.New(types.T_decimal256, 42, 38), resultType)
+
+	value, err := types.ParseDecimal128(
+		"0.12345678901234567890123456789012345678",
+		argType.Width,
+		argType.Scale,
+	)
+	require.NoError(t, err)
+	avg, err := decAvg[types.Decimal256](
+		types.Decimal256FromDecimal128(value), 1, argType.Scale, resultType)
+	require.NoError(t, err)
+	// Compare the encoded value rather than Decimal256.Format here. Format rounds
+	// while repeatedly dividing by ten, which is not a lossless way to inspect a
+	// 38-digit value.
+	require.Equal(t, types.Decimal256FromDecimal128(value), avg)
 }
 
 func TestAvgExactIntegerExecution(t *testing.T) {

@@ -72,3 +72,29 @@ from nation`,
 		})
 	}
 }
+
+func TestCTASAvgUsesIntegerExpressionPrecision(t *testing.T) {
+	stmt, err := parsers.ParseOne(
+		context.Background(), dialect.MYSQL,
+		"create table t_avg_literal as select avg(2) as avg_i from nation",
+		1,
+	)
+	require.NoError(t, err)
+	defer stmt.Free()
+
+	logicPlan, err := BuildPlan(NewMockCompilerContext(true), stmt, false)
+	require.NoError(t, err)
+
+	var visible []*planpb.ColDef
+	for _, col := range logicPlan.GetDdl().GetCreateTable().GetTableDef().GetCols() {
+		if !col.Hidden {
+			visible = append(visible, col)
+		}
+	}
+	require.Len(t, visible, 1)
+	require.Equal(t, int32(types.T_decimal128), visible[0].Typ.Id)
+	// MySQL uses the literal's DECIMAL(1,0) precision, then adds four
+	// fractional digits for AVG: DECIMAL(5,4), not BIGINT's DECIMAL(23,4).
+	require.Equal(t, int32(5), visible[0].Typ.Width)
+	require.Equal(t, int32(4), visible[0].Typ.Scale)
+}
