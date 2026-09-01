@@ -373,7 +373,7 @@ func TestReaderSetIndexParamDoesNotPreallocateDistHeap(t *testing.T) {
 	require.Zero(t, cap(r.orderByLimit.DistHeap))
 }
 
-func TestReaderSetIndexParamConservativelyConvertsL2Bounds(t *testing.T) {
+func TestReaderSetIndexParamConservativelyConvertsL2UpperBounds(t *testing.T) {
 	vectorCol := &plan.Expr{
 		Typ: plan.Type{Id: int32(types.T_array_float32), Width: 3},
 		Expr: &plan.Expr_Col{
@@ -407,25 +407,18 @@ func TestReaderSetIndexParamConservativelyConvertsL2Bounds(t *testing.T) {
 	tests := []struct {
 		name      string
 		boundType plan.BoundType
-		lower     bool
 		bound     float64
 		entry     []float32
 		distance  float64
 	}{
-		{name: "inclusive lower raw two", boundType: plan.BoundType_INCLUSIVE, lower: true, bound: math.Sqrt(2), entry: []float32{1, 1, 0}, distance: 2},
-		{name: "exclusive lower widens gate", boundType: plan.BoundType_EXCLUSIVE, lower: true, bound: 1, entry: []float32{1, 0, 0}, distance: 1},
 		{name: "inclusive upper raw three", boundType: plan.BoundType_INCLUSIVE, bound: math.Sqrt(3), entry: []float32{1, 1, 1}, distance: 3},
 		{name: "exclusive upper widens gate", boundType: plan.BoundType_EXCLUSIVE, bound: 2, entry: []float32{2, 0, 0}, distance: 4},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			distRange := &plan.DistRange{}
-			if test.lower {
-				distRange.LowerBoundType = test.boundType
-				distRange.LowerBound = floatLiteral(test.bound)
-			} else {
-				distRange.UpperBoundType = test.boundType
-				distRange.UpperBound = floatLiteral(test.bound)
+			distRange := &plan.DistRange{
+				UpperBoundType: test.boundType,
+				UpperBound:     floatLiteral(test.bound),
 			}
 			r := &reader{}
 			r.SetIndexParam(&plan.IndexReaderParam{
@@ -436,11 +429,7 @@ func TestReaderSetIndexParamConservativelyConvertsL2Bounds(t *testing.T) {
 			})
 			require.NotNil(t, r.orderByLimit)
 			squared := test.bound * test.bound
-			if test.lower {
-				require.Less(t, r.orderByLimit.LowerBound, squared)
-			} else {
-				require.Greater(t, r.orderByLimit.UpperBound, squared)
-			}
+			require.Greater(t, r.orderByLimit.UpperBound, squared)
 
 			mp := mpool.MustNewZero()
 			defer mpool.DeleteMPool(mp)

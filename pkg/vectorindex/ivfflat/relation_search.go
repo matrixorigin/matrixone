@@ -95,7 +95,7 @@ func (idx *IvfflatSearchIndex[T]) scanEntries(
 	orderFlag := ivfOrderFlag(sqlproc.IndexReaderParam)
 	metricType := metric.MetricType(idxcfg.Ivfflat.Metric)
 	storageRange, rangeEmpty, rangeSupported, err := idx.storageDistanceRange(
-		sqlproc.IndexReaderParam.GetDistRange(), tblcfg.OrigFuncName, metricType)
+		sqlproc.IndexReaderParam.GetDistRange())
 	if err != nil {
 		return executor.Result{}, err
 	}
@@ -285,14 +285,15 @@ func canUseStorageTopK(
 	return true
 }
 
-// storageDistanceRange copies a source-domain SQL range into the value domain
-// used by storage Top-K. readutil owns the final L2 -> squared-L2 conversion,
-// so an affine quantizer only scales the value supplied to that conversion.
+// storageDistanceRange admits only ranges that cannot change the ascending
+// Top-K result before the exact source-domain post-filter runs. An upper-only
+// identity-scaled gate may add farther false positives through outward rounding,
+// but they cannot displace a nearer matching row. A lower gate can add nearer
+// false positives that fill the heap, and affine quantization adds another
+// rounding step, so both cases retain the local filter-before-Top-K path.
 // The returned range never aliases the prepared plan.
 func (idx *IvfflatSearchIndex[T]) storageDistanceRange(
 	distRange *plan.DistRange,
-	origFuncName string,
-	metricType metric.MetricType,
 ) (converted *plan.DistRange, empty bool, supported bool, err error) {
 	if distRange == nil {
 		return nil, false, true, nil
@@ -312,24 +313,7 @@ func (idx *IvfflatSearchIndex[T]) storageDistanceRange(
 		return nil, true, true, nil
 	}
 
-	scale := 1.0
-	if idx.QuantMul != 0 && idx.QuantMul != 1 {
-		switch origFuncName {
-		case metric.DistFn_L2Distance:
-			if metricType != metric.Metric_L2sqDistance {
-				return nil, false, false, nil
-			}
-			scale = math.Abs(idx.QuantMul)
-		case metric.DistFn_L2sqDistance:
-			if metricType != metric.Metric_L2sqDistance {
-				return nil, false, false, nil
-			}
-			scale = idx.QuantMul * idx.QuantMul
-		default:
-			return nil, false, false, nil
-		}
-	}
-	if math.IsNaN(scale) || math.IsInf(scale, 0) {
+	if hasLower || (hasUpper && idx.QuantMul != 0 && idx.QuantMul != 1) {
 		return nil, false, false, nil
 	}
 
@@ -337,11 +321,8 @@ func (idx *IvfflatSearchIndex[T]) storageDistanceRange(
 		LowerBoundType: distRange.LowerBoundType,
 		UpperBoundType: distRange.UpperBoundType,
 	}
-	if hasLower {
-		converted.LowerBound = ivfFloat64Expr(lower * scale)
-	}
 	if hasUpper {
-		converted.UpperBound = ivfFloat64Expr(upper * scale)
+		converted.UpperBound = ivfFloat64Expr(upper)
 	}
 	return converted, false, true, nil
 }

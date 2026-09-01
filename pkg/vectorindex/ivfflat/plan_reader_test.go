@@ -270,7 +270,11 @@ func TestStorageTopKEligibility(t *testing.T) {
 		LowerBoundType: plan.BoundType_INCLUSIVE,
 		LowerBound:     ivfFloat64Expr(1),
 	}}
-	require.True(t, canUseStorageTopK(sqlproc, centroids, nil, 1, true))
+	_, _, rangeSupported, err := (&IvfflatSearchIndex[float32]{QuantMul: 1}).storageDistanceRange(
+		sqlproc.IndexReaderParam.DistRange)
+	require.NoError(t, err)
+	require.False(t, rangeSupported)
+	require.False(t, canUseStorageTopK(sqlproc, centroids, nil, 1, rangeSupported))
 	sqlproc.IndexReaderParam.DistRange = &plan.DistRange{
 		LowerBoundType: plan.BoundType_UNBOUNDED,
 		UpperBoundType: plan.BoundType_UNBOUNDED,
@@ -283,46 +287,44 @@ func TestStorageTopKEligibility(t *testing.T) {
 	require.False(t, canUseStorageTopK(sqlproc, centroids, nil, 1, true))
 }
 
-func TestStorageDistanceRangeConversion(t *testing.T) {
-	source := &plan.DistRange{
-		LowerBoundType: plan.BoundType_EXCLUSIVE,
-		LowerBound:     ivfFloat64Expr(1),
+func TestStorageDistanceRangeAdmission(t *testing.T) {
+	upperOnly := &plan.DistRange{
+		LowerBoundType: plan.BoundType_UNBOUNDED,
 		UpperBoundType: plan.BoundType_INCLUSIVE,
 		UpperBound:     ivfFloat64Expr(2),
 	}
 
 	identity := &IvfflatSearchIndex[float32]{QuantMul: 1}
-	converted, empty, supported, err := identity.storageDistanceRange(
-		source, metric.DistFn_L2Distance, metric.Metric_L2sqDistance)
+	converted, empty, supported, err := identity.storageDistanceRange(upperOnly)
 	require.NoError(t, err)
 	require.False(t, empty)
 	require.True(t, supported)
-	require.NotSame(t, source, converted)
-	require.Equal(t, float64(1), converted.LowerBound.GetLit().GetDval())
+	require.NotSame(t, upperOnly, converted)
 	require.Equal(t, float64(2), converted.UpperBound.GetLit().GetDval())
 
-	quantized := &IvfflatSearchIndex[float32]{QuantMul: 3}
-	converted, empty, supported, err = quantized.storageDistanceRange(
-		source, metric.DistFn_L2Distance, metric.Metric_L2sqDistance)
-	require.NoError(t, err)
-	require.False(t, empty)
-	require.True(t, supported)
-	require.Equal(t, float64(3), converted.LowerBound.GetLit().GetDval())
-	require.Equal(t, float64(6), converted.UpperBound.GetLit().GetDval())
-
-	converted, empty, supported, err = quantized.storageDistanceRange(
-		source, metric.DistFn_L2sqDistance, metric.Metric_L2sqDistance)
-	require.NoError(t, err)
-	require.False(t, empty)
-	require.True(t, supported)
-	require.Equal(t, float64(9), converted.LowerBound.GetLit().GetDval())
-	require.Equal(t, float64(18), converted.UpperBound.GetLit().GetDval())
-
-	_, empty, supported, err = quantized.storageDistanceRange(
-		source, metric.DistFn_InnerProduct, metric.Metric_InnerProduct)
+	lowerBounded := &plan.DistRange{
+		LowerBoundType: plan.BoundType_EXCLUSIVE,
+		LowerBound:     ivfFloat64Expr(1),
+		UpperBoundType: plan.BoundType_UNBOUNDED,
+	}
+	converted, empty, supported, err = identity.storageDistanceRange(lowerBounded)
 	require.NoError(t, err)
 	require.False(t, empty)
 	require.False(t, supported)
+	require.Nil(t, converted)
+
+	quantized := &IvfflatSearchIndex[float32]{QuantMul: 3}
+	converted, empty, supported, err = quantized.storageDistanceRange(upperOnly)
+	require.NoError(t, err)
+	require.False(t, empty)
+	require.False(t, supported)
+	require.Nil(t, converted)
+
+	converted, empty, supported, err = quantized.storageDistanceRange(&plan.DistRange{})
+	require.NoError(t, err)
+	require.False(t, empty)
+	require.True(t, supported)
+	require.NotNil(t, converted)
 
 	nullBound := ivfFloat64Expr(0)
 	nullBound.GetLit().Isnull = true
@@ -330,7 +332,7 @@ func TestStorageDistanceRangeConversion(t *testing.T) {
 		LowerBoundType: plan.BoundType_UNBOUNDED,
 		UpperBoundType: plan.BoundType_INCLUSIVE,
 		UpperBound:     nullBound,
-	}, metric.DistFn_L2Distance, metric.Metric_L2sqDistance)
+	})
 	require.NoError(t, err)
 	require.True(t, empty)
 	require.True(t, supported)
@@ -339,7 +341,7 @@ func TestStorageDistanceRangeConversion(t *testing.T) {
 		LowerBoundType: plan.BoundType_UNBOUNDED,
 		UpperBoundType: plan.BoundType_INCLUSIVE,
 		UpperBound:     ivfFloat64Expr(math.NaN()),
-	}, metric.DistFn_L2Distance, metric.Metric_L2sqDistance)
+	})
 	require.NoError(t, err)
 	require.True(t, empty)
 	require.True(t, supported)
@@ -424,6 +426,127 @@ func TestScanEntriesPushesDistanceRangeToStorageTopK(t *testing.T) {
 	defer res.Close()
 	require.Len(t, res.Batches, 1)
 	require.Equal(t, []int64{7}, vector.MustFixedColWithTypeCheck[int64](res.Batches[0].Vecs[0]))
+	require.Equal(t, []float64{4}, vector.MustFixedColWithTypeCheck[float64](res.Batches[0].Vecs[1]))
+}
+
+func TestScanEntriesFallsBackForUnsafeDistanceRanges(t *testing.T) {
+	makeRange := func(lower bool, bound float64) *plan.DistRange {
+		r := &plan.DistRange{}
+		if lower {
+			r.LowerBoundType = plan.BoundType_INCLUSIVE
+			r.LowerBound = ivfFloat64Expr(bound)
+		} else {
+			r.UpperBoundType = plan.BoundType_INCLUSIVE
+			r.UpperBound = ivfFloat64Expr(bound)
+		}
+		return r
+	}
+
+	for _, test := range []struct {
+		name     string
+		lower    bool
+		raw      int
+		entry    []int8
+		bound    float64
+		wantDist float64
+	}{
+		{
+			name: "quantized upper rounding boundary", entry: []int8{7, 2, 2}, raw: 57,
+			bound: math.Sqrt(57.0 / (255.0 * 255.0)), wantDist: 57,
+		},
+		{
+			name: "quantized lower rounding boundary", lower: true, entry: []int8{3, 1, 1}, raw: 11,
+			bound: math.Sqrt(11.0 / (255.0 * 255.0)), wantDist: 11,
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			mp := mpool.MustNewZero()
+			proc := testutil.NewProcessWithMPool(t, "", mp)
+			scanner := &scriptedRelationScanner{t: t}
+			scanner.run = func(req sqlexec.RelationScanRequest) executor.Result {
+				require.True(t, req.PostFilterTopOnly)
+				require.Nil(t, req.IndexParam.DistRange)
+				require.Empty(t, req.BlockFilters)
+
+				bat := batch.NewWithSize(4)
+				bat.Vecs[0] = vector.NewVec(types.T_int64.ToType())
+				bat.Vecs[1] = vector.NewVec(types.T_int64.ToType())
+				bat.Vecs[2] = vector.NewVec(types.T_int64.ToType())
+				bat.Vecs[3] = vector.NewVec(types.New(types.T_array_int8, 3, 0))
+				require.NoError(t, vector.AppendFixed(bat.Vecs[0], int64(1), false, mp))
+				require.NoError(t, vector.AppendFixed(bat.Vecs[1], int64(2), false, mp))
+				require.NoError(t, vector.AppendFixed(bat.Vecs[2], int64(test.raw), false, mp))
+				require.NoError(t, vector.AppendArray(bat.Vecs[3], test.entry, false, mp))
+				bat.SetRowCount(1)
+				return executor.Result{Batches: []*batch.Batch{bat}, Mp: mp}
+			}
+
+			sqlproc := sqlexec.NewSqlProcess(proc)
+			sqlproc.RelationScanner = scanner
+			sqlproc.IndexReaderParam = &plan.IndexReaderParam{
+				DistRange: makeRange(test.lower, test.bound),
+			}
+			idxcfg := vectorindex.IndexConfig{}
+			idxcfg.Ivfflat.Metric = uint16(metric.Metric_L2sqDistance)
+			idxcfg.Ivfflat.VectorType = int32(types.T_array_int8)
+			idx := &IvfflatSearchIndex[float32]{QuantMul: 255}
+			res, err := idx.scanEntries(sqlproc, idxcfg, vectorindex.IndexTableConfig{
+				DbName: "db", EntriesTable: "entries", PKeyType: int32(types.T_int64),
+				OrigFuncName: metric.DistFn_L2Distance,
+			}, []float32{0, 0, 0}, 1, []int64{2}, nil, nil, 1)
+			require.NoError(t, err)
+			defer res.Close()
+			require.Len(t, res.Batches, 1)
+			require.Equal(t, []int64{int64(test.raw)},
+				vector.MustFixedColWithTypeCheck[int64](res.Batches[0].Vecs[0]))
+			require.Equal(t, []float64{test.wantDist},
+				vector.MustFixedColWithTypeCheck[float64](res.Batches[0].Vecs[1]))
+		})
+	}
+}
+
+func TestScanEntriesFallsBackBeforeL2LowerBoundTopK(t *testing.T) {
+	mp := mpool.MustNewZero()
+	proc := testutil.NewProcessWithMPool(t, "", mp)
+	scanner := &scriptedRelationScanner{t: t}
+	scanner.run = func(req sqlexec.RelationScanRequest) executor.Result {
+		require.True(t, req.PostFilterTopOnly)
+		require.Nil(t, req.IndexParam.DistRange)
+
+		bat := batch.NewWithSize(4)
+		bat.Vecs[0] = vector.NewVec(types.T_int64.ToType())
+		bat.Vecs[1] = vector.NewVec(types.T_int64.ToType())
+		bat.Vecs[2] = vector.NewVec(types.T_int64.ToType())
+		bat.Vecs[3] = vector.NewVec(types.New(types.T_array_float32, 1, 0))
+		for row, value := range []float32{1, 2} {
+			require.NoError(t, vector.AppendFixed(bat.Vecs[0], int64(1), false, mp))
+			require.NoError(t, vector.AppendFixed(bat.Vecs[1], int64(2), false, mp))
+			require.NoError(t, vector.AppendFixed(bat.Vecs[2], int64(row+1), false, mp))
+			require.NoError(t, vector.AppendArray(bat.Vecs[3], []float32{value}, false, mp))
+		}
+		bat.SetRowCount(2)
+		return executor.Result{Batches: []*batch.Batch{bat}, Mp: mp}
+	}
+
+	sqlproc := sqlexec.NewSqlProcess(proc)
+	sqlproc.RelationScanner = scanner
+	sqlproc.IndexReaderParam = &plan.IndexReaderParam{DistRange: &plan.DistRange{
+		LowerBoundType: plan.BoundType_EXCLUSIVE,
+		LowerBound:     ivfFloat64Expr(1),
+		UpperBoundType: plan.BoundType_UNBOUNDED,
+	}}
+	idxcfg := vectorindex.IndexConfig{}
+	idxcfg.Ivfflat.Metric = uint16(metric.Metric_L2sqDistance)
+	idxcfg.Ivfflat.VectorType = int32(types.T_array_float32)
+	res, err := (&IvfflatSearchIndex[float32]{QuantMul: 1}).scanEntries(
+		sqlproc, idxcfg, vectorindex.IndexTableConfig{
+			DbName: "db", EntriesTable: "entries", PKeyType: int32(types.T_int64),
+			OrigFuncName: metric.DistFn_L2Distance,
+		}, []float32{0}, 1, []int64{2}, nil, nil, 1)
+	require.NoError(t, err)
+	defer res.Close()
+	require.Len(t, res.Batches, 1)
+	require.Equal(t, []int64{2}, vector.MustFixedColWithTypeCheck[int64](res.Batches[0].Vecs[0]))
 	require.Equal(t, []float64{4}, vector.MustFixedColWithTypeCheck[float64](res.Batches[0].Vecs[1]))
 }
 
