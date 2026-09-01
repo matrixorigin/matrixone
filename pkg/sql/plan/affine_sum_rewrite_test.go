@@ -185,6 +185,24 @@ func TestRewriteAffineSumFamilies(t *testing.T) {
 		require.Equal(t, "+", ctx.projects[0].GetF().Func.ObjName)
 	})
 
+	t.Run("central adjacent pair covers the complete safe coefficient radius", func(t *testing.T) {
+		zero := makePlan2Int64ConstExprWithType(0)
+		ctx := affineTestContext([]*planpb.Expr{
+			makeAffineSumFromBaseForTest(t, builder, zero, -maxExactAffineSumInput),
+			makeAffineSumFromBaseForTest(t, builder, zero, -maxExactAffineSumInput+1),
+			makeAffineSumFromBaseForTest(t, builder, zero, 0),
+			makeAffineSumFromBaseForTest(t, builder, zero, 1),
+			makeAffineSumFromBaseForTest(t, builder, zero, maxExactAffineSumInput),
+		})
+
+		builder.rewriteAffineSumFamilies(ctx, [][]*planpb.Expr{ctx.projects}, nil)
+
+		require.Len(t, ctx.aggregates, 2)
+		for i := range ctx.projects {
+			require.True(t, sameAffineResultType(ctx.projects[i], ctx.aggregates[0]))
+		}
+	})
+
 	t.Run("subtraction and unshifted forms share one base", func(t *testing.T) {
 		source := GetColExpr(planpb.Type{Id: int32(types.T_int16)}, 7, 0)
 		base, err := appendCastBeforeExpr(
@@ -329,6 +347,82 @@ func TestRewriteAffineSumFamilies(t *testing.T) {
 				}
 			},
 		},
+		{
+			name: "runtime-sourced shift literal",
+			aggregates: func() []*planpb.Expr {
+				return []*planpb.Expr{
+					makeAffineSumForTest(t, builder, types.T_uint16, 0, 1),
+					makeAffineSumForTest(t, builder, types.T_uint16, 0, 2),
+					makeAffineSumForTest(t, builder, types.T_uint16, 0, 3),
+				}
+			},
+			mutate: func(aggregates []*planpb.Expr) {
+				for pos, aggregate := range aggregates {
+					shift := aggregate.GetF().Args[0].GetF().Args[1].GetLit()
+					require.NotNil(t, shift)
+					shift.Src = &planpb.Expr{
+						Typ:  planpb.Type{Id: int32(types.T_text)},
+						Expr: &planpb.Expr_P{P: &planpb.ParamRef{Pos: int32(pos)}},
+					}
+				}
+			},
+		},
+		{
+			name: "prepared-metadata shift literal",
+			aggregates: func() []*planpb.Expr {
+				return []*planpb.Expr{
+					makeAffineSumForTest(t, builder, types.T_uint16, 0, 1),
+					makeAffineSumForTest(t, builder, types.T_uint16, 0, 2),
+					makeAffineSumForTest(t, builder, types.T_uint16, 0, 3),
+				}
+			},
+			mutate: func(aggregates []*planpb.Expr) {
+				for pos, aggregate := range aggregates {
+					shift := aggregate.GetF().Args[0].GetF().Args[1]
+					shift.PreparedNumeric = &planpb.PreparedNumericMetadata{
+						Fallback: true,
+						ParamPos: int32(pos),
+					}
+				}
+			},
+		},
+		{
+			name: "prepared-metadata aggregate",
+			aggregates: func() []*planpb.Expr {
+				return []*planpb.Expr{
+					makeAffineSumForTest(t, builder, types.T_uint16, 0, 1),
+					makeAffineSumForTest(t, builder, types.T_uint16, 0, 2),
+					makeAffineSumForTest(t, builder, types.T_uint16, 0, 3),
+				}
+			},
+			mutate: func(aggregates []*planpb.Expr) {
+				for pos, aggregate := range aggregates {
+					aggregate.PreparedNumeric = &planpb.PreparedNumericMetadata{
+						Fallback: true,
+						ParamPos: int32(pos),
+					}
+				}
+			},
+		},
+		{
+			name: "prepared-metadata nested base",
+			aggregates: func() []*planpb.Expr {
+				return []*planpb.Expr{
+					makeAffineSumForTest(t, builder, types.T_uint16, 0, 1),
+					makeAffineSumForTest(t, builder, types.T_uint16, 0, 2),
+					makeAffineSumForTest(t, builder, types.T_uint16, 0, 3),
+				}
+			},
+			mutate: func(aggregates []*planpb.Expr) {
+				for pos, aggregate := range aggregates {
+					base := aggregate.GetF().Args[0].GetF().Args[0]
+					base.PreparedNumeric = &planpb.PreparedNumericMetadata{
+						Fallback: true,
+						ParamPos: int32(pos),
+					}
+				}
+			},
+		},
 	}
 
 	for _, test := range tests {
@@ -389,6 +483,32 @@ func TestRewriteAffineSumFamiliesMaximumSafeDomain(t *testing.T) {
 	builder.rewriteAffineSumFamilies(ctx, [][]*planpb.Expr{ctx.projects}, nil)
 
 	require.Len(t, ctx.aggregates, 2)
+
+	minShift := -maxExactAffineSumInput - int64(math.MinInt32)
+	ctx = affineTestContext([]*planpb.Expr{
+		makeAffineSumForTest(t, builder, types.T_int32, 0, minShift),
+		makeAffineSumForTest(t, builder, types.T_int32, 0, minShift+1),
+		makeAffineSumForTest(t, builder, types.T_int32, 0, minShift+2),
+	})
+	builder.rewriteAffineSumFamilies(ctx, [][]*planpb.Expr{ctx.projects}, nil)
+	require.Len(t, ctx.aggregates, 2, "negative exact boundary should be symmetric")
+
+	ctx = affineTestContext([]*planpb.Expr{
+		makeAffineSumForTest(t, builder, types.T_int32, 0, minShift-1),
+		makeAffineSumForTest(t, builder, types.T_int32, 0, minShift),
+		makeAffineSumForTest(t, builder, types.T_int32, 0, minShift+1),
+	})
+	builder.rewriteAffineSumFamilies(ctx, [][]*planpb.Expr{ctx.projects}, nil)
+	require.Len(t, ctx.aggregates, 3, "one endpoint below the negative bound must fall back")
+
+	zero := makePlan2Int64ConstExprWithType(0)
+	ctx = affineTestContext([]*planpb.Expr{
+		makeAffineSumFromBaseForTest(t, builder, zero, -maxExactAffineSumInput),
+		makeAffineSumFromBaseForTest(t, builder, zero, -maxExactAffineSumInput+1),
+		makeAffineSumFromBaseForTest(t, builder, zero, maxExactAffineSumInput),
+	})
+	builder.rewriteAffineSumFamilies(ctx, [][]*planpb.Expr{ctx.projects}, nil)
+	require.Len(t, ctx.aggregates, 3, "an unrepresentable signed anchor delta must fall back atomically")
 }
 
 func TestRewriteAffineSumFamiliesIsAtomic(t *testing.T) {
@@ -418,6 +538,118 @@ func TestRewriteAffineSumFamiliesIsAtomic(t *testing.T) {
 	for i := range ctx.projects {
 		require.Same(t, originalProjects[i], ctx.projects[i])
 	}
+
+	for _, invalid := range []*planpb.Expr{
+		GetColExpr(aggregates[0].Typ, ctx.aggregateTag, int32(len(aggregates))),
+		{Typ: aggregates[0].Typ},
+		{Typ: aggregates[0].Typ, Expr: &planpb.Expr_Col{}},
+		{Typ: aggregates[0].Typ, Expr: &planpb.Expr_F{}},
+		{Typ: aggregates[0].Typ, Expr: &planpb.Expr_F{F: &planpb.Function{
+			Args: []*planpb.Expr{GetColExpr(aggregates[0].Typ, ctx.aggregateTag, 0)},
+		}}},
+		{Typ: aggregates[0].Typ, Expr: &planpb.Expr_List{}},
+		{Typ: aggregates[0].Typ, Expr: &planpb.Expr_Sub{}},
+		{Typ: aggregates[0].Typ, Expr: &planpb.Expr_W{}},
+	} {
+		ctx = affineTestContext(aggregates)
+		originalProjects = append([]*planpb.Expr(nil), ctx.projects...)
+		consumer := []*planpb.Expr{invalid}
+		builder.rewriteAffineSumFamilies(
+			ctx, [][]*planpb.Expr{ctx.projects, consumer}, nil)
+		require.Len(t, ctx.aggregates, 3)
+		require.Same(t, invalid, consumer[0])
+		for i := range ctx.projects {
+			require.Same(t, originalProjects[i], ctx.projects[i])
+		}
+	}
+}
+
+func TestRewriteAffineSumFamiliesNestedConsumers(t *testing.T) {
+	builder := NewQueryBuilder(
+		planpb.Query_SELECT, NewMockCompilerContext(false), false, true)
+	aggregates := []*planpb.Expr{
+		makeAffineSumForTest(t, builder, types.T_uint16, 0, 1),
+		makeAffineSumForTest(t, builder, types.T_uint16, 0, 2),
+		makeAffineSumForTest(t, builder, types.T_uint16, 0, 3),
+	}
+
+	tests := []struct {
+		name string
+		wrap func(*planpb.Expr) *planpb.Expr
+	}{
+		{
+			name: "function",
+			wrap: func(ref *planpb.Expr) *planpb.Expr {
+				wrapped, err := BindFuncExprImplByPlanExpr(
+					builder.GetContext(), "+", []*planpb.Expr{ref, makePlan2Int64ConstExprWithType(0)})
+				require.NoError(t, err)
+				return wrapped
+			},
+		},
+		{
+			name: "list",
+			wrap: func(ref *planpb.Expr) *planpb.Expr {
+				return &planpb.Expr{Typ: ref.Typ, Expr: &planpb.Expr_List{List: &planpb.ExprList{List: []*planpb.Expr{ref}}}}
+			},
+		},
+		{
+			name: "subquery child",
+			wrap: func(ref *planpb.Expr) *planpb.Expr {
+				return &planpb.Expr{Typ: ref.Typ, Expr: &planpb.Expr_Sub{Sub: &planpb.SubqueryRef{Child: ref}}}
+			},
+		},
+		{
+			name: "complete window spec",
+			wrap: func(ref *planpb.Expr) *planpb.Expr {
+				return &planpb.Expr{Typ: ref.Typ, Expr: &planpb.Expr_W{W: &planpb.WindowSpec{
+					WindowFunc:  DeepCopyExpr(ref),
+					PartitionBy: []*planpb.Expr{DeepCopyExpr(ref)},
+					OrderBy:     []*planpb.OrderBySpec{{Expr: DeepCopyExpr(ref)}},
+					Frame: &planpb.FrameClause{
+						Start: &planpb.FrameBound{Val: DeepCopyExpr(ref)},
+						End:   &planpb.FrameBound{Val: DeepCopyExpr(ref)},
+					},
+				}}}
+			},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			ctx := affineTestContext(aggregates)
+			consumer := []*planpb.Expr{test.wrap(DeepCopyExpr(ctx.projects[2]))}
+
+			builder.rewriteAffineSumFamilies(
+				ctx, [][]*planpb.Expr{ctx.projects, consumer}, nil)
+
+			require.Len(t, ctx.aggregates, 2)
+			derivedCount := 0
+			require.NoError(t, planpb.VisitExprTree(consumer[0], func(expr *planpb.Expr) error {
+				if col := expr.GetCol(); col != nil && col.RelPos == ctx.aggregateTag {
+					require.Less(t, col.ColPos, int32(len(ctx.aggregates)))
+				}
+				if fn := expr.GetF(); fn != nil && fn.Func != nil && fn.Func.ObjName == "+" {
+					derivedCount++
+				}
+				return nil
+			}))
+			require.Positive(t, derivedCount)
+		})
+	}
+
+	ctx := affineTestContext(aggregates)
+	nonMatchingCorrelation := []*planpb.Expr{{
+		Typ: aggregates[2].Typ,
+		Expr: &planpb.Expr_Corr{Corr: &planpb.CorrColRef{
+			RelPos: ctx.aggregateTag + 1,
+			ColPos: 2,
+			Depth:  1,
+		}},
+	}}
+	builder.rewriteAffineSumFamilies(
+		ctx, [][]*planpb.Expr{ctx.projects, nonMatchingCorrelation}, nil)
+	require.Len(t, ctx.aggregates, 2)
+	require.NotNil(t, nonMatchingCorrelation[0].GetCorr())
 }
 
 func TestAffineSumFamilyPlanShape(t *testing.T) {
@@ -479,4 +711,53 @@ func TestAffineSumFamilyPlanShape(t *testing.T) {
 			require.Equal(t, 2, physicalAggregateCount(t, test.sql))
 		})
 	}
+
+	t.Run("aggregate results consumed by windows", func(t *testing.T) {
+		require.Equal(t, 2, physicalAggregateCount(t,
+			"select sum(sum(attr_seqnum + 1)) over (), "+
+				"sum(sum(attr_seqnum + 2)) over (), "+
+				"sum(sum(attr_seqnum + 3)) over () "+
+				"from mo_catalog.mo_columns"))
+	})
+
+	t.Run("prepared shifts remain physical", func(t *testing.T) {
+		prepare := buildPreparedAggregatePlan(t,
+			"select sum(attr_seqnum + ?), sum(attr_seqnum + ?), "+
+				"sum(attr_seqnum + ?) from mo_catalog.mo_columns")
+		physical := -1
+		for _, node := range prepare.Plan.GetQuery().Nodes {
+			if node.NodeType == planpb.Node_AGG {
+				physical = len(node.AggList)
+				break
+			}
+		}
+		require.Equal(t, 3, physical)
+	})
+
+	t.Run("time-window and fill consumers", func(t *testing.T) {
+		mock := NewMockOptimizer(false)
+		mockTimeWindowScaleTable(t, mock, types.T_datetime.ToType())
+		logicPlan, err := runOneStmt(mock, t,
+			"select _wstart, sum(v + 1), sum(v + 2), sum(v + 3) "+
+				"from tw_scale interval(ts, 10, minute) sliding(5, minute) fill(linear)")
+		require.NoError(t, err)
+
+		var aggregateNode, timeWindowNode, fillNode *planpb.Node
+		for _, node := range logicPlan.GetQuery().Nodes {
+			switch node.NodeType {
+			case planpb.Node_AGG:
+				aggregateNode = node
+			case planpb.Node_TIME_WINDOW:
+				timeWindowNode = node
+			case planpb.Node_FILL:
+				fillNode = node
+			}
+		}
+		require.NotNil(t, aggregateNode)
+		require.Len(t, aggregateNode.AggList, 2)
+		require.NotNil(t, timeWindowNode)
+		require.Len(t, timeWindowNode.AggList, 4, "boundary carrier plus three result aggregates")
+		require.NotNil(t, fillNode)
+		require.Len(t, fillNode.AggList, 3)
+	})
 }

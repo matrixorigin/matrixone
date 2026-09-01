@@ -27,6 +27,17 @@ select g, sum(u16 + 1) s1, sum(u16 + 2) s2,
        sum(u16 + 3) s3, sum(u16 + 89) s89
 from t group by g order by g;
 
+-- rollup expands one query block into multiple aggregate branches
+select g, sum(u16 + 1) s1, sum(u16 + 2) s2, sum(u16 + 3) s3
+from t group by g with rollup order by grouping(g), g;
+
+-- aggregate outputs consumed by window functions
+select g,
+       sum(sum(u16 + 1)) over (order by g rows unbounded preceding) w1,
+       sum(sum(u16 + 2)) over (order by g rows unbounded preceding) w2,
+       sum(sum(u16 + 3)) over (order by g rows unbounded preceding) w3
+from t group by g order by g;
+
 -- empty input and all-NULL input retain SUM's NULL result
 select sum(u16 + 1) s1, sum(u16 + 2) s2, sum(u16 + 3) s3
 from t where false;
@@ -82,6 +93,10 @@ set @c = 3;
 prepare affine_sum_stmt from
     'select sum(u16 + ?) s1, sum(u16 + ?) s2, sum(u16 + ?) s3 from affine_sum_family.t';
 execute affine_sum_stmt using @a, @b, @c;
+set @a = 10;
+set @b = -2;
+set @c = 100;
+execute affine_sum_stmt using @a, @b, @c;
 deallocate prepare affine_sum_stmt;
 
 -- direct signed arithmetic is eligible without SQL-shape special casing
@@ -93,5 +108,18 @@ select sum(distinct u16 + 1) s1,
        sum(distinct u16 + 2) s2,
        sum(distinct u16 + 3) s3
 from t;
+
+-- time-window and downstream FILL consumers
+create table tw(ts datetime, v smallint);
+insert into tw values
+    ('2026-01-01 00:00:00', 1),
+    ('2026-01-01 00:00:20', 2),
+    ('2026-01-01 00:01:00', null),
+    ('2026-01-01 00:02:00', 1),
+    ('2026-01-01 00:02:20', 2);
+select _wstart, sum(v + 1) s1, sum(v + 2) s2, sum(v + 3) s3
+from tw
+interval(ts, 1, minute) fill(linear)
+order by _wstart;
 
 drop database affine_sum_family;

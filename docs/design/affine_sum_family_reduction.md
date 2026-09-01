@@ -2,7 +2,7 @@
 
 - Status: design reviewed; implementation validated
 - Tracking issue: [matrixorigin/matrixone#27682](https://github.com/matrixorigin/matrixone/issues/27682)
-- Implementation PR: pending
+- Implementation PR: [matrixorigin/matrixone#27977](https://github.com/matrixorigin/matrixone/pull/27977)
 - Last updated: 2026-09-01
 
 ## 1. Decision
@@ -21,6 +21,12 @@ aggregates as physical anchors and replace every other family result with
 ```text
 S(c) = S(c0) + (c - c0) * (S(c0 + 1) - S(c0))
 ```
+
+If several adjacent pairs exist, choose the lowest pair whose largest absolute
+derived coefficient remains inside the proven DECIMAL(38,0) product bound.
+This preserves the stable choice for ordinary families while admitting the
+complete safe family when a lower pair is too far from an extreme shift but a
+more central pair works.
 
 The initial range prover covers signed and unsigned 8/16/32-bit columns,
 widening casts to BIGINT, integer literals, unary sign, and checked integer
@@ -56,7 +62,8 @@ therefore requires:
 - canonical registered overloads for every matched aggregate, shift, cast, and
   exact-integer arithmetic expression;
 - a deterministic exact-integer base accepted by the recursive interval prover;
-- literal, non-parameter signed-64 constants, including negative shifts;
+- immutable source-free, non-prepared literal signed-64 constants, including
+  negative shifts;
 - every base-plus-constant endpoint fits signed 64-bit;
 - the absolute value of every shifted-input endpoint is at most
   `floor((10^38 - 1) / (2^64 - 1))`, proving that a DECIMAL(38,0) SUM cannot
@@ -96,12 +103,26 @@ The following retain the baseline plan:
 - malformed/unregistered function IDs, unexpected overloads, or a derived
   type different in ID, width, scale, charset, or nullability.
 
+Prepared specialization may temporarily represent a runtime parameter as a
+literal whose `Literal.Src` retains the parameter provenance for later plan
+reuse. Prepared-numeric metadata can likewise mark a literal, an aggregate, or
+any nested base node whose value, type, or overload will be rebound. Every such
+node remains a barrier: the rewrite never bakes one execution's runtime value
+or overload into the reusable expression layout.
+
 Implicit and user-explicit integer casts use different registered overload IDs.
 Both are eligible only for a statically proven exact widening to BIGINT; syntax
 provenance does not change the values or error behavior in that case. Comparison
 and set-operation cast overloads remain barriers. Compound bases such as
 `smallint_col * 2` are eligible only when all four interval products fit signed
 64-bit over the column's complete declared domain.
+
+A direct `SUM(narrow_column)` is not normalized into the shifted family. Its
+aggregate overload and public result may be `INT64` or `UINT64`, while
+`SUM(narrow_column + c)` is widened to `DECIMAL128(38,0)`. Retaining it as the
+separate third Q30 aggregate preserves its distinct overflow domain, partial
+state, and result metadata; numerical equivalence alone is insufficient to
+cross that boundary.
 
 ## 4. Plan transformation and ownership
 
@@ -112,8 +133,11 @@ At that point every consumer of the query block's aggregate tag is known.
 The phase first builds the complete candidate result without mutating the bind
 context. It then atomically installs a compact aggregate list and rewrites all
 aggregate-tag references in projections, HAVING, ORDER BY, window/time-window,
-and fill expressions. A correlated or invalid aggregate reference aborts the
-entire rewrite and leaves the original context untouched.
+and fill expressions. A correlated, invalid, malformed, or not-yet-understood
+expression container that could hide an aggregate reference aborts the entire
+rewrite and leaves the original context untouched. Known scalar leaves remain
+accepted explicitly, so a future protobuf expression variant cannot silently
+bypass this boundary.
 The normal final column-remapping pass remains the authority for physical slot
 pruning and local positions.
 
@@ -196,7 +220,12 @@ Deterministic planner tests prove:
 - every excluded type, dynamic/fractional shift, family without adjacent
   constants, DISTINCT, configured/malformed aggregate, unsafe constant,
   different base, and width-two family retains the original aggregate list;
-- expression traversal is fail-closed and the context is not partially mutated.
+- expression traversal is fail-closed for unknown and malformed containers and
+  the context is not partially mutated;
+- prepared literals and prepared-numeric metadata at every aggregate/base level
+  remain barriers across repeated executions with different parameter values;
+- ROLLUP branches, window consumers, and time-window/sliding/FILL consumers
+  preserve exact values and physical aggregate references.
 
 Distributed SQL compares fixed expected results and metadata across empty,
 NULL, grouped, reordered, and boundary-valued inputs. Real-server A/B evidence
@@ -220,8 +249,8 @@ unsupported shape always falls back before mutation.
 Change scope: query-local exact affine SUM-family logical-plan reduction
 Trigger: materially affects the aggregate hot path
 Design: this document, revision on codex/issue-27682-affine-sum
-Blocking findings: none after replacing SUM+COUNT with adjacent SUM anchors and preserving retained aggregate-name mappings
-Decision log: recursive exact-integer interval proof; any consecutive anchors; signed delta bound; >=3 members; fail closed; no executor changes
+Blocking findings: closed prepared-plan value capture and future/malformed expression traversal gaps; preserved direct narrow-SUM overflow domain
+Decision log: recursive exact-integer interval proof; lowest safe consecutive anchors; signed delta bound; >=3 members; fail closed; no executor changes
 Decision: PASS
 Implementation deviations: none
 ```

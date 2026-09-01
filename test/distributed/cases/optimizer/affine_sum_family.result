@@ -26,6 +26,20 @@ from t group by g order by g;
 ➤ g[4,32,0]  ¦  s1[3,38,0]  ¦  s2[3,38,0]  ¦  s3[3,38,0]  ¦  s89[3,38,0]  𝄀
 1  ¦  131074  ¦  131078  ¦  131082  ¦  131426  𝄀
 2  ¦  null  ¦  null  ¦  null  ¦  null
+select g, sum(u16 + 1) s1, sum(u16 + 2) s2, sum(u16 + 3) s3
+from t group by g with rollup order by grouping(g), g;
+➤ g[4,32,0]  ¦  s1[3,38,0]  ¦  s2[3,38,0]  ¦  s3[3,38,0]  𝄀
+1  ¦  131074  ¦  131078  ¦  131082  𝄀
+2  ¦  null  ¦  null  ¦  null  𝄀
+null  ¦  131074  ¦  131078  ¦  131082
+select g,
+sum(sum(u16 + 1)) over (order by g rows unbounded preceding) w1,
+sum(sum(u16 + 2)) over (order by g rows unbounded preceding) w2,
+sum(sum(u16 + 3)) over (order by g rows unbounded preceding) w3
+from t group by g order by g;
+➤ g[4,32,0]  ¦  w1[3,38,0]  ¦  w2[3,38,0]  ¦  w3[3,38,0]  𝄀
+1  ¦  131074  ¦  131078  ¦  131082  𝄀
+2  ¦  131074  ¦  131078  ¦  131082
 select sum(u16 + 1) s1, sum(u16 + 2) s2, sum(u16 + 3) s3
 from t where false;
 ➤ s1[3,38,0]  ¦  s2[3,38,0]  ¦  s3[3,38,0]  𝄀
@@ -90,6 +104,12 @@ prepare affine_sum_stmt from
 execute affine_sum_stmt using @a, @b, @c;
 ➤ s1[3,38,0]  ¦  s2[3,38,0]  ¦  s3[3,38,0]  𝄀
 131074  ¦  131078  ¦  131082
+set @a = 10;
+set @b = -2;
+set @c = 100;
+execute affine_sum_stmt using @a, @b, @c;
+➤ s1[3,38,0]  ¦  s2[3,38,0]  ¦  s3[3,38,0]  𝄀
+131110  ¦  131062  ¦  131470
 deallocate prepare affine_sum_stmt;
 select sum(s + 1) s1, sum(s + 2) s2, sum(s + 3) s3 from t;
 ➤ s1[3,38,0]  ¦  s2[3,38,0]  ¦  s3[3,38,0]  𝄀
@@ -103,4 +123,19 @@ sum(distinct u16 + 3) s3
 from t;
 ➤ s1[3,38,0]  ¦  s2[3,38,0]  ¦  s3[3,38,0]  𝄀
 131074  ¦  131078  ¦  131082
+create table tw(ts datetime, v smallint);
+insert into tw values
+('2026-01-01 00:00:00', 1),
+('2026-01-01 00:00:20', 2),
+('2026-01-01 00:01:00', null),
+('2026-01-01 00:02:00', 1),
+('2026-01-01 00:02:20', 2);
+select _wstart, sum(v + 1) s1, sum(v + 2) s2, sum(v + 3) s3
+from tw
+interval(ts, 1, minute) fill(linear)
+order by _wstart;
+➤ _wstart[93,19,0]  ¦  s1[3,38,0]  ¦  s2[3,38,0]  ¦  s3[3,38,0]  𝄀
+2026-01-01 00:00:00  ¦  5  ¦  7  ¦  9  𝄀
+2026-01-01 00:01:00  ¦  5  ¦  7  ¦  9  𝄀
+2026-01-01 00:02:00  ¦  5  ¦  7  ¦  9
 drop database affine_sum_family;

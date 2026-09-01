@@ -213,7 +213,7 @@ func (builder *QueryBuilder) extractExactAffineSum(
 	aggregate *planpb.Expr,
 ) (base *planpb.Expr, shift int64, ok bool) {
 	if aggregate == nil || types.T(aggregate.Typ.Id) != types.T_decimal128 ||
-		aggregate.Typ.Scale != 0 {
+		aggregate.Typ.Scale != 0 || aggregate.PreparedNumeric != nil {
 		return nil, 0, false
 	}
 	fn := aggregate.GetF()
@@ -225,6 +225,9 @@ func (builder *QueryBuilder) extractExactAffineSum(
 	}
 
 	argument := fn.Args[0]
+	if argument == nil || argument.PreparedNumeric != nil {
+		return nil, 0, false
+	}
 	base, shift = argument, 0
 	if arithmetic := argument.GetF(); arithmetic != nil && arithmetic.Func != nil &&
 		len(arithmetic.Args) == 2 && types.T(argument.Typ.Id) == types.T_int64 {
@@ -284,7 +287,10 @@ func exactAffineIntegerRange(
 	ctx context.Context,
 	expr *planpb.Expr,
 ) (affineIntegerRange, bool) {
-	if expr == nil {
+	// PreparedNumeric marks expressions whose value or overload may be rebound
+	// from runtime parameters.  The proof is reusable only when every node in
+	// the base expression is immutable across executions.
+	if expr == nil || expr.PreparedNumeric != nil {
 		return affineIntegerRange{}, false
 	}
 	if col := expr.GetCol(); col != nil {
@@ -383,6 +389,13 @@ func affineIntegerTypeRange(typ types.T) (affineIntegerRange, bool) {
 
 func affineIntegerLiteralRange(expr *planpb.Expr) (affineIntegerRange, bool) {
 	lit := expr.GetLit()
+	// Literal.Src is execution-time provenance. In particular, prepared
+	// parameters can be specialized to a literal and later restored from Src.
+	// Treat only source-free literals as immutable proof inputs so a reusable
+	// plan cannot bake one execution's value into the affine rewrite.
+	if lit == nil || lit.Isnull || lit.Src != nil || expr.PreparedNumeric != nil {
+		return affineIntegerRange{}, false
+	}
 	var value int64
 	switch types.T(expr.Typ.Id) {
 	case types.T_int8:
@@ -513,7 +526,7 @@ func affineBaseAndShift(base, literal *planpb.Expr) (*planpb.Expr, int64, bool) 
 		return nil, 0, false
 	}
 	lit := literal.GetLit()
-	if lit == nil || lit.Isnull {
+	if lit == nil || lit.Isnull || lit.Src != nil || literal.PreparedNumeric != nil {
 		return nil, 0, false
 	}
 	value, ok := lit.Value.(*planpb.Literal_I64Val)
@@ -537,9 +550,16 @@ func selectAffineSumAnchors(family *affineSumFamily) bool {
 		return false
 	}
 	byShift := make(map[int64]affineSumCandidate, len(family.candidates))
+	minShift, maxShift := family.candidates[0].shift, family.candidates[0].shift
 	for _, candidate := range family.candidates {
 		if _, exists := byShift[candidate.shift]; !exists {
 			byShift[candidate.shift] = candidate
+		}
+		if candidate.shift < minShift {
+			minShift = candidate.shift
+		}
+		if candidate.shift > maxShift {
+			maxShift = candidate.shift
 		}
 	}
 	anchorFound := false
@@ -551,22 +571,19 @@ func selectAffineSumAnchors(family *affineSumFamily) bool {
 		if !exists {
 			continue
 		}
+		leftRadius, leftFits := checkedAffineSub(shift, minShift)
+		rightRadius, rightFits := checkedAffineSub(maxShift, shift)
+		if !leftFits || !rightFits ||
+			leftRadius > maxExactAffineSumInput || rightRadius > maxExactAffineSumInput {
+			continue
+		}
 		if !anchorFound || shift < family.anchor0.shift {
 			family.anchor0 = candidate
 			family.anchor1 = next
 			anchorFound = true
 		}
 	}
-	if !anchorFound {
-		return false
-	}
-	for _, candidate := range family.candidates {
-		delta, ok := checkedAffineSub(candidate.shift, family.anchor0.shift)
-		if !ok || affineAbsExceedsExactSumInput(delta) {
-			return false
-		}
-	}
-	return true
+	return anchorFound
 }
 
 func (builder *QueryBuilder) buildAffineSumResult(
@@ -638,35 +655,59 @@ func affineExprHasAggregateRef(
 		return false, true
 	}
 	switch impl := expr.Expr.(type) {
+	case *planpb.Expr_Lit:
+		// These are executable leaves. Literal.Src is provenance rather than
+		// an evaluated child and must not be remapped.
+		return false, impl.Lit != nil
+	case *planpb.Expr_P:
+		return false, impl.P != nil
+	case *planpb.Expr_V:
+		return false, impl.V != nil
+	case *planpb.Expr_Raw:
+		return false, impl.Raw != nil
+	case *planpb.Expr_T:
+		return false, impl.T != nil
+	case *planpb.Expr_Max:
+		return false, impl.Max != nil
+	case *planpb.Expr_Vec:
+		return false, impl.Vec != nil
+	case *planpb.Expr_Fold:
+		return false, impl.Fold != nil
 	case *planpb.Expr_Col:
-		if impl.Col == nil || impl.Col.RelPos != aggregateTag {
+		if impl.Col == nil {
+			return false, false
+		}
+		if impl.Col.RelPos != aggregateTag {
 			return false, true
 		}
 		_, ok := replacements[impl.Col.ColPos]
 		return true, ok
 	case *planpb.Expr_Corr:
-		if impl.Corr != nil && impl.Corr.RelPos == aggregateTag {
+		if impl.Corr == nil {
+			return false, false
+		}
+		if impl.Corr.RelPos == aggregateTag {
 			return true, false
 		}
 		return false, true
 	case *planpb.Expr_F:
-		if impl.F == nil {
-			return false, true
+		if impl.F == nil || impl.F.Func == nil {
+			return false, false
 		}
 		return affineExprListHasAggregateRef(impl.F.Args, aggregateTag, replacements)
 	case *planpb.Expr_List:
 		if impl.List == nil {
-			return false, true
+			return false, false
 		}
 		return affineExprListHasAggregateRef(impl.List.List, aggregateTag, replacements)
 	case *planpb.Expr_Sub:
 		if impl.Sub == nil {
-			return false, true
+			return false, false
 		}
 		return affineExprHasAggregateRef(impl.Sub.Child, aggregateTag, replacements)
 	case *planpb.Expr_W:
 		if impl.W == nil {
-			return false, true
+			return false, false
 		}
 		hasRef, safe = affineExprHasAggregateRef(impl.W.WindowFunc, aggregateTag, replacements)
 		if !safe {
@@ -703,7 +744,10 @@ func affineExprHasAggregateRef(
 		}
 		return hasRef, true
 	default:
-		return false, true
+		// A newly added expression variant may own executable children. Until
+		// this traversal explicitly understands it, abort the whole rewrite
+		// rather than leaving a stale aggregate slot hidden inside it.
+		return false, false
 	}
 }
 
@@ -731,6 +775,10 @@ func rewriteAffineAggregateRef(
 		return nil, true
 	}
 	switch impl := expr.Expr.(type) {
+	case *planpb.Expr_Lit, *planpb.Expr_P, *planpb.Expr_V,
+		*planpb.Expr_Raw, *planpb.Expr_T, *planpb.Expr_Max,
+		*planpb.Expr_Vec, *planpb.Expr_Fold, *planpb.Expr_Corr:
+		return expr, true
 	case *planpb.Expr_Col:
 		if impl.Col != nil && impl.Col.RelPos == aggregateTag {
 			replacement, ok := replacements[impl.Col.ColPos]
@@ -740,8 +788,8 @@ func rewriteAffineAggregateRef(
 			return DeepCopyExpr(replacement), true
 		}
 	case *planpb.Expr_F:
-		if impl.F == nil {
-			return expr, true
+		if impl.F == nil || impl.F.Func == nil {
+			return nil, false
 		}
 		for i := range impl.F.Args {
 			var ok bool
@@ -804,6 +852,8 @@ func rewriteAffineAggregateRef(
 				}
 			}
 		}
+	default:
+		return nil, false
 	}
 	return expr, true
 }
