@@ -97,14 +97,60 @@ func (optimizer *updateIndexBuildTestOptimizer) Optimize(stmt tree.Statement) (*
 	return queryPlan.GetQuery(), nil
 }
 
-func TestUpdateIndexLookupBuildSideUsesNarrowIndex(t *testing.T) {
+func findUpdateSecondaryIndexLookupJoin(t *testing.T, query *planpb.Query) *planpb.Node {
+	t.Helper()
+	visited := make(map[int32]struct{}, len(query.Nodes))
+	var visit func(int32) *planpb.Node
+	visit = func(nodeID int32) *planpb.Node {
+		if nodeID < 0 || int(nodeID) >= len(query.Nodes) {
+			t.Fatalf("reachable plan references invalid node %d", nodeID)
+		}
+		if _, ok := visited[nodeID]; ok {
+			return nil
+		}
+		visited[nodeID] = struct{}{}
+
+		node := query.Nodes[nodeID]
+		if node.NodeType == planpb.Node_JOIN && node.JoinType == planpb.Node_INNER && len(node.Children) == 2 {
+			for _, childID := range node.Children {
+				child := query.Nodes[childID]
+				if child.NodeType == planpb.Node_TABLE_SCAN && child.TableDef != nil &&
+					catalog.IsSecondaryIndexTable(child.TableDef.Name) {
+					return node
+				}
+			}
+		}
+		for _, childID := range node.Children {
+			if found := visit(childID); found != nil {
+				return found
+			}
+		}
+		return nil
+	}
+
+	for _, rootID := range query.Steps {
+		if found := visit(rootID); found != nil {
+			return found
+		}
+	}
+	t.Fatal("missing reachable UPDATE secondary-index lookup join")
+	return nil
+}
+
+func TestUpdateIndexLookupBuildSideUsesScanWidthBehindProject(t *testing.T) {
 	newOptimizer := func() Optimizer {
 		mock := NewMockOptimizer(true)
 		addIndexHintChoiceTableForTest(mock)
 		indexTableName := catalog.SecondaryIndexTableNamePrefix + "update_build_side"
 		mainTable := mock.ctxt.tables["index_hint_t"]
 		rowIDCol := mainTable.Cols[len(mainTable.Cols)-1]
+		rowIDCol.ColId = 5
 		mainTable.Cols = append(mainTable.Cols[:len(mainTable.Cols)-1],
+			&planpb.ColDef{
+				ColId: 3, Name: "k", OriginName: "k",
+				Typ:     planpb.Type{Id: int32(types.T_varchar), Width: 512},
+				Default: &planpb.Default{NullAbility: true},
+			},
 			&planpb.ColDef{
 				ColId: 4, Name: "payload", OriginName: "payload",
 				Typ:     planpb.Type{Id: int32(types.T_varchar), Width: 2_000},
@@ -112,33 +158,36 @@ func TestUpdateIndexLookupBuildSideUsesNarrowIndex(t *testing.T) {
 			},
 			rowIDCol,
 		)
-		mainTable.Name2ColIndex["payload"] = 3
+		mainTable.Name2ColIndex["k"] = 3
+		mainTable.Name2ColIndex["payload"] = 4
 		mainTable.Indexes = []*planpb.IndexDef{{
-			IndexName:      "idx_a",
-			Parts:          []string{"a", catalog.CreateAlias("id")},
+			IndexName:      "idx_k",
+			Parts:          []string{"k", catalog.CreateAlias("id")},
 			IndexTableName: indexTableName,
 			TableExist:     true,
 		}}
 		addIndexHintIndexTableForTest(mock, indexTableName, 25367)
-		// The production stats collector reports the observed encoded key size.
-		// Keep the mock equally representative instead of its generic MAX_VARCHAR
-		// capacity, which is not a retained-row estimate.
-		mock.ctxt.tables[indexTableName].Cols[0].Typ.Width = 16
 
-		const tableRows = uint64(20_000_000)
+		const (
+			tableRows = uint64(20_000_000)
+			indexRows = uint64(30_000_000)
+		)
 		mainStats := NewStatsInfo()
 		mainStats.TableCnt = float64(tableRows)
 		mainStats.BlockNumber = 2_500
 		mainStats.SizeMap = map[string]uint64{
 			"id": tableRows * 4, "a": tableRows * 4, "b": tableRows * 4,
-			"payload": tableRows * 2_000,
+			"k": tableRows * 256, "payload": tableRows * 2_000,
 		}
 		indexStats := NewStatsInfo()
-		indexStats.TableCnt = float64(tableRows)
+		// UPDATE leaves old objects and tombstones in independently collected
+		// table statistics. Model that transient drift: the logical full target
+		// and its regular index still have one current row per base row.
+		indexStats.TableCnt = float64(indexRows)
 		indexStats.BlockNumber = 2_500
 		indexStats.SizeMap = map[string]uint64{
-			catalog.IndexTableIndexColName:   tableRows * 16,
-			catalog.IndexTablePrimaryColName: tableRows * 4,
+			catalog.IndexTableIndexColName:   indexRows * 280,
+			catalog.IndexTablePrimaryColName: indexRows * 16,
 		}
 		statsCache := NewStatsCache()
 		statsCache.Set(mainTable.TblId, mainStats)
@@ -153,55 +202,81 @@ func TestUpdateIndexLookupBuildSideUsesNarrowIndex(t *testing.T) {
 		}}
 	}
 
-	findLookupJoin := func(t *testing.T, query *planpb.Query) *planpb.Node {
-		t.Helper()
-		visited := make(map[int32]struct{}, len(query.Nodes))
-		var visit func(int32) *planpb.Node
-		visit = func(nodeID int32) *planpb.Node {
-			if nodeID < 0 || int(nodeID) >= len(query.Nodes) {
-				t.Fatalf("reachable plan references invalid node %d", nodeID)
-			}
-			if _, ok := visited[nodeID]; ok {
-				return nil
-			}
-			visited[nodeID] = struct{}{}
+	logicPlan, err := runOneStmt(newOptimizer(), t, "UPDATE index_hint_t SET k = concat(k, 'x')")
+	require.NoError(t, err)
+	query := logicPlan.GetQuery()
+	require.NotNil(t, query)
+	join := findUpdateSecondaryIndexLookupJoin(t, query)
+	build := query.Nodes[join.Children[1]]
+	buildsIndex := build.NodeType == planpb.Node_TABLE_SCAN && build.TableDef != nil &&
+		catalog.IsSecondaryIndexTable(build.TableDef.Name)
+	require.True(t, buildsIndex)
+	require.Greater(t, build.Stats.Rowsize, float64(100))
+	targetProject := query.Nodes[join.Children[0]]
+	require.Equal(t, planpb.Node_PROJECT, targetProject.NodeType)
+	require.Equal(t, float64(100), targetProject.Stats.Rowsize)
+	require.Len(t, targetProject.Children, 1)
+	targetScan := query.Nodes[targetProject.Children[0]]
+	require.Equal(t, planpb.Node_TABLE_SCAN, targetScan.NodeType)
+	require.Greater(t, targetScan.Stats.Rowsize, build.Stats.Rowsize)
+}
 
-			node := query.Nodes[nodeID]
-			if node.NodeType == planpb.Node_JOIN && node.JoinType == planpb.Node_INNER && len(node.Children) == 2 {
-				for _, childID := range node.Children {
-					child := query.Nodes[childID]
-					if child.NodeType == planpb.Node_TABLE_SCAN && child.TableDef != nil &&
-						catalog.IsSecondaryIndexTable(child.TableDef.Name) {
-						return node
-					}
-				}
-			}
-			for _, childID := range node.Children {
-				if found := visit(childID); found != nil {
-					return found
-				}
-			}
-			return nil
-		}
+func TestUpdateIndexLookupBuildSidePreservesNarrowTarget(t *testing.T) {
+	newOptimizer := func() Optimizer {
+		mock := NewMockOptimizer(true)
+		addIndexHintChoiceTableForTest(mock)
+		mainTable := mock.ctxt.tables["index_hint_t"]
+		mainTable.Indexes = mainTable.Indexes[:1]
+		indexTableName := catalog.SecondaryIndexTableNamePrefix + "narrow_build_side"
+		mainTable.Indexes[0].IndexTableName = indexTableName
+		addIndexHintIndexTableForTest(mock, indexTableName, 25367)
+		mock.ctxt.tables[indexTableName].Name2ColIndex[catalog.Row_ID] = 2
 
-		for _, rootID := range query.Steps {
-			if found := visit(rootID); found != nil {
-				return found
-			}
+		const tableRows = uint64(20_000_000)
+		mainStats := NewStatsInfo()
+		mainStats.TableCnt = float64(tableRows)
+		mainStats.BlockNumber = 2_500
+		mainStats.SizeMap = map[string]uint64{
+			"id": tableRows * 4, "a": tableRows * 4, "b": tableRows * 4,
 		}
-		t.Fatal("missing reachable UPDATE secondary-index lookup join")
-		return nil
+		indexStats := NewStatsInfo()
+		indexStats.TableCnt = float64(tableRows)
+		indexStats.BlockNumber = 2_500
+		indexStats.SizeMap = map[string]uint64{
+			catalog.IndexTableIndexColName: tableRows * 32,
+		}
+		statsCache := NewStatsCache()
+		statsCache.Set(mainTable.TblId, mainStats)
+		statsCache.Set(25367, indexStats)
+		return &updateIndexBuildTestOptimizer{ctx: &updateIndexBuildTestContext{
+			MockCompilerContext: &mock.ctxt,
+			statsCache:          statsCache,
+			statsByID: map[uint64]*statspb.StatsInfo{
+				mainTable.TblId: mainStats,
+				25367:           indexStats,
+			},
+		}}
 	}
 
 	logicPlan, err := runOneStmt(newOptimizer(), t, "UPDATE index_hint_t SET a = a + 1")
 	require.NoError(t, err)
 	query := logicPlan.GetQuery()
 	require.NotNil(t, query)
-	join := findLookupJoin(t, query)
+	join := findUpdateSecondaryIndexLookupJoin(t, query)
+
+	probe := query.Nodes[join.Children[0]]
+	require.Equal(t, planpb.Node_TABLE_SCAN, probe.NodeType)
+	require.NotNil(t, probe.TableDef)
+	require.True(t, catalog.IsSecondaryIndexTable(probe.TableDef.Name))
+	require.Less(t, probe.Stats.Rowsize, float64(100))
+
 	build := query.Nodes[join.Children[1]]
-	buildsIndex := build.NodeType == planpb.Node_TABLE_SCAN && build.TableDef != nil &&
-		catalog.IsSecondaryIndexTable(build.TableDef.Name)
-	require.True(t, buildsIndex)
+	require.Equal(t, planpb.Node_PROJECT, build.NodeType)
+	require.Equal(t, float64(100), build.Stats.Rowsize)
+	require.Len(t, build.Children, 1)
+	targetScan := query.Nodes[build.Children[0]]
+	require.Equal(t, planpb.Node_TABLE_SCAN, targetScan.NodeType)
+	require.Less(t, targetScan.Stats.Rowsize, probe.Stats.Rowsize)
 }
 
 func TestSequentialUpdateProjectionLimit(t *testing.T) {
