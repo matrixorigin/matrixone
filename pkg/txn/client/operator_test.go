@@ -847,6 +847,13 @@ func TestContextWithoutDeadlineReturnsError(t *testing.T) {
 	})
 }
 
+func TestTxnOverviewIncludesAccountID(t *testing.T) {
+	const accountID uint32 = 42
+	runOperatorTests(t, func(_ context.Context, tc *txnOperator, _ *testTxnSender) {
+		require.Equal(t, accountID, tc.GetOverview().AccountID)
+	}, WithTxnCreateBy(accountID, "user", "session", 1))
+}
+
 func TestMissingSenderWillPanic(t *testing.T) {
 	defer func() {
 		if err := recover(); err != nil {

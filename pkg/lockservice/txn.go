@@ -1228,6 +1228,14 @@ func (txn *activeTxn) closeWithContextInternal(
 					} else {
 						l.unlock(txn, cs, commitTS, mutations...)
 					}
+					// The completion log reads cs through slice(). Keep that read
+					// before a successful detach releases the cowSlice owner.
+					logTxnUnlockTableCompleted(
+						logger,
+						txn,
+						table,
+						cs,
+					)
 					if err != nil {
 						errMu.Lock()
 						if firstErr == nil {
@@ -1237,12 +1245,6 @@ func (txn *activeTxn) closeWithContextInternal(
 					} else if detachSuccessful || (directLocalUnlock && !local) {
 						txn.removeClosedLockTable(group, table, cs)
 					}
-					logTxnUnlockTableCompleted(
-						logger,
-						txn,
-						table,
-						cs,
-					)
 					if parallelUnlock {
 						wg.Done()
 					}

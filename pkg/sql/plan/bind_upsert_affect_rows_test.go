@@ -147,6 +147,20 @@ func TestUpsertAffectRowsPlan(t *testing.T) {
 			"no-op FILTER must not reference auto-update column updated_at")
 	})
 
+	t.Run("ODKU primary-key-only no-op filters conflicting rows", func(t *testing.T) {
+		// Flink emits id = VALUES(id) even when id is the only assignment. The
+		// planner removes that semantic no-op from the physical update set, so the
+		// resulting guard must keep only rows without an existing-row match. This
+		// also prevents implicit ON UPDATE expressions from firing on conflicts.
+		p, err := runOneStmt(mock, t,
+			"insert into constraint_test.t_on_update(id, val) values (1, 10) on duplicate key update id = values(id)")
+		require.NoError(t, err)
+		require.True(t, mainUpdateCtxCountDelete(t, p),
+			"ODKU main UpdateCtx should set CountDeleteAffectRows")
+		require.True(t, hasRowIDOnlyNoopFilter(p),
+			"PK-only no-op must filter matched rows using the old rowid")
+	})
+
 	t.Run("ODKU no-op filter keeps non-conflicting rows via rowid guard", func(t *testing.T) {
 		// An all-NULL insert row into a nullable unique key never conflicts, so
 		// its old image is all-NULL and every <=> in the no-op chain evaluates
@@ -276,6 +290,29 @@ func countNoopEqComparisons(p *Plan) int {
 		}
 	}
 	return -1
+}
+
+// hasRowIDOnlyNoopFilter reports whether a FILTER keeps only rows for which the
+// dedup join found no existing row. This is the no-op guard used when no
+// explicit assignment remains to compare after semantic no-ops are removed.
+func hasRowIDOnlyNoopFilter(p *Plan) bool {
+	q := p.GetQuery()
+	if q == nil {
+		return false
+	}
+	for _, n := range q.Nodes {
+		if n.NodeType != planpb.Node_FILTER {
+			continue
+		}
+		for _, cond := range n.FilterList {
+			f := cond.GetF()
+			if f != nil && f.Func != nil && f.Func.ObjName == "isnull" &&
+				len(f.Args) == 1 && f.Args[0].GetCol() != nil {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // countNullSafeEq counts <=> nodes in an AND/<=> predicate tree.
