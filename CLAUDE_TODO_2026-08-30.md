@@ -115,3 +115,9 @@
 1. 合并最新 `mo/main@b23beeea89`，按本 PR 的 result-domain invariants 解决冲突。
 2. 检查完整 conflict resolution diff，运行受影响 owning packages、lint 与 diff check。
 3. 创建 merge commit 并 push 到 `origin/issue-27218-main`。
+
+# PR #27841 第十九轮 review 修复
+
+1. 按 #27218/#27217 ownership，撤回 REGEXP_REPLACE 的 expanding result-domain。
+2. REGEXP_REPLACE 恢复 source-derived VARCHAR metadata，避免在 #27218 放宽 runtime 可达结果。
+3. 更新 focused result-domain UT；REGEXP runtime admission/Q3 由 #27217 完整处理。

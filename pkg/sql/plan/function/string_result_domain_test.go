@@ -289,7 +289,7 @@ func TestStringConsumersPreserveTextAndBoundedWidths(t *testing.T) {
 		{name: "rtrim", inputs: []types.Type{types.New(types.T_varchar, 40, 0)}, wantOID: types.T_varchar, wantWidth: 40},
 		{name: "lower", inputs: []types.Type{types.T_text.ToType()}, wantOID: types.T_text},
 		{name: "upper", inputs: []types.Type{types.T_text.ToType()}, wantOID: types.T_text},
-		{name: "regexp_replace", inputs: []types.Type{types.New(types.T_varchar, 2, 0), types.New(types.T_varchar, 1, 0), types.New(types.T_varchar, 2, 0)}, wantOID: types.T_varchar, wantWidth: 8},
+		{name: "regexp_replace", inputs: []types.Type{types.New(types.T_varchar, 2, 0), types.New(types.T_varchar, 1, 0), types.New(types.T_varchar, 2, 0)}, wantOID: types.T_varchar, wantWidth: 2},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			resolved, err := GetFunctionByName(proc.Ctx, test.name, test.inputs)
