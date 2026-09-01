@@ -2978,10 +2978,10 @@ func (c *Compile) configureMongoUserQuery(node *plan.Node) error {
 			return moerr.NewNotSupported(c.proc.Ctx, "MongoDB MVP requires __mo_query = <constant>")
 		}
 		scan.IncludeQueryColumn = mongoQueryColumnUsed(node, node.ProjectList)
-		if mongoScanUsesV42Payload(scan) && !supportsRemoteMongoUserQuery(c.proc.GetService()) {
+		if mongoScanUsesV43Payload(scan) && !supportsRemoteMongoUserQuery(c.proc.GetService()) {
 			return moerr.NewNotSupported(
 				c.proc.Ctx,
-				"MongoDB query semantics require MORPC protocol version 42",
+				"MongoDB query semantics require MORPC protocol version 43",
 			)
 		}
 		return nil
@@ -3000,7 +3000,7 @@ func (c *Compile) configureMongoUserQuery(node *plan.Node) error {
 		if !supportsRemoteMongoUserQuery(c.proc.GetService()) {
 			return moerr.NewNotSupported(
 				c.proc.Ctx,
-				"MongoDB query semantics require MORPC protocol version 42",
+				"MongoDB query semantics require MORPC protocol version 43",
 			)
 		}
 		return nil
@@ -3015,7 +3015,7 @@ func (c *Compile) configureMongoUserQuery(node *plan.Node) error {
 	if !supportsRemoteMongoUserQuery(c.proc.GetService()) {
 		return moerr.NewNotSupported(
 			c.proc.Ctx,
-			"MongoDB explicit queries require MORPC protocol version 42",
+			"MongoDB explicit queries require MORPC protocol version 43",
 		)
 	}
 	// The planner retains the selector as a local filter around an opaque
@@ -6813,13 +6813,13 @@ func supportsRemoteMongoUserQuery(service string) bool {
 		return false
 	}
 	protocolVersion, ok := version.(int64)
-	return ok && protocolVersion >= defines.MORPCVersion42
+	return ok && protocolVersion >= defines.MORPCVersion43
 }
 
-// mongoScanUsesV42Payload reports whether a scan uses any field introduced by
+// mongoScanUsesV43Payload reports whether a scan uses any field introduced by
 // the MongoDB query protocol. Older receivers ignore all three fields, so each
 // one must be rejected during a mixed-version rollout.
-func mongoScanUsesV42Payload(scan *plan.MongoScan) bool {
+func mongoScanUsesV43Payload(scan *plan.MongoScan) bool {
 	return scan != nil && (scan.UserQueryKind != 0 || scan.IncludeQueryColumn || scan.EmptyResult)
 }
 
