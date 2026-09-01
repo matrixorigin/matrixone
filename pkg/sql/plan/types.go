@@ -695,9 +695,13 @@ type BindContext struct {
 	// boundary column references.
 	timeBoundaryType *plan.Type
 
-	groupByAst             map[string]int32
-	groupByCanonicalAst    map[string]int32
-	groupByParamAst        map[string]int32
+	groupByAst          map[string]int32
+	groupByCanonicalAst map[string]int32
+	groupByParamAst     map[string]int32
+	// sampleGroupByAst retains the logical identity of stable GROUP BY
+	// literals removed from the physical key. SAMPLE must still reject those
+	// expressions even though ordinary projection binding should see literals.
+	sampleGroupByAst       map[string]struct{}
 	aggregateByAst         map[string]int32
 	sampleByAst            map[string]int32
 	windowByAst            map[string]int32

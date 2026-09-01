@@ -271,9 +271,6 @@ func checkPrimaryKeyPartType(ctx context.Context, colType plan.Type, columnName 
 	if types.T(colType.GetId()).IsArrayRelate() {
 		return moerr.NewNotSupported(ctx, fmt.Sprintf("VECTOR column '%s' cannot be in primary key", columnName))
 	}
-	if isEnumPlanType(&colType) {
-		return moerr.NewNotSupported(ctx, fmt.Sprintf("ENUM column '%s' cannot be in primary key", columnName))
-	}
 	if isSetPlanType(&colType) {
 		return moerr.NewNotSupported(ctx, fmt.Sprintf("SET column '%s' cannot be in primary key", columnName))
 	}
