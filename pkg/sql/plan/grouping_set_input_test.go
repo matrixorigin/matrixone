@@ -38,7 +38,7 @@ func useLegacyGroupingSetPlan(t *testing.T, mock *MockOptimizer) {
 			rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCLatestVersion)
 		}
 	})
-	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion40)
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion41)
 }
 
 func TestGroupingSetInputSharingProtocolGate(t *testing.T) {
@@ -69,7 +69,7 @@ func TestGroupingSetInputSharingProtocolGate(t *testing.T) {
 		return built.GetQuery()
 	}
 
-	legacy := reachableGroupingSetShape(build(defines.MORPCVersion40))
+	legacy := reachableGroupingSetShape(build(defines.MORPCVersion41))
 	require.Equal(t, 3, legacy.tableScans)
 	require.Zero(t, legacy.expandProjects)
 
