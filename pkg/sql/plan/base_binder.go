@@ -3264,11 +3264,6 @@ func (b *baseBinder) bindFullTextMatchExpr(astExpr *tree.FullTextMatchExpr, dept
 	return BindFuncExprImplByPlanExpr(b.GetContext(), "fulltext_match", args)
 }
 
-// MysqlCompatibleVarName gates MySQL readings of expressions MO's stricter
-// typing rejects, where MO is correct but incompatible. It is off by default;
-// see its definition in pkg/frontend/variables.go.
-const MysqlCompatibleVarName = "mysql_compatible"
-
 // boolNumericAggregate reports whether an aggregate takes a numeric argument in
 // MO but accepts a predicate directly in MySQL. MySQL has no BOOL type, so a
 // predicate there is already an integer 0/1 and SUM/AVG over one is ordinary
@@ -3279,13 +3274,14 @@ func boolNumericAggregate(name string) bool {
 }
 
 // coerceBoolNumericAggregateArg gives SUM/AVG over a BOOL argument the MySQL
-// reading when mysql_compatible is on, by binding that argument as TINYINT.
-// That is exactly the sum(cast(pred as tinyint)) a user writes today: it reuses
-// the existing integer aggregate, so it adds no aggregate state, no executor
-// path, and no per-row cost, and it keeps sum(bool) -> BIGINT consistent with
-// MO's own sum(tinyint) -> BIGINT rather than introducing a third convention.
+// reading under the ENABLE_BOOL_SUMAVG sql_mode, by binding that argument as
+// TINYINT. That is exactly the sum(cast(pred as tinyint)) a user writes today:
+// it reuses the existing integer aggregate, so it adds no aggregate state, no
+// executor path, and no per-row cost, and it keeps sum(bool) -> BIGINT
+// consistent with MO's own sum(tinyint) -> BIGINT rather than introducing a
+// third convention.
 //
-// The variable is resolved only for a single-argument SUM/AVG whose argument
+// sql_mode is resolved only for a single-argument SUM/AVG whose argument
 // actually bound to BOOL, so every other function binding is untouched.
 func (b *baseBinder) coerceBoolNumericAggregateArg(
 	name string, args []*plan.Expr,
@@ -3294,7 +3290,7 @@ func (b *baseBinder) coerceBoolNumericAggregateArg(
 		args[0].Typ.Id != int32(types.T_bool) || !boolNumericAggregate(name) {
 		return args, nil
 	}
-	if b.builder == nil || b.builder.compCtx == nil || !b.mysqlCompatibleEnabled() {
+	if b.builder == nil || b.builder.compCtx == nil || !b.boolSumAvgSQLModeEnabled() {
 		return args, nil
 	}
 
@@ -3306,24 +3302,20 @@ func (b *baseBinder) coerceBoolNumericAggregateArg(
 	return []*plan.Expr{casted}, nil
 }
 
-// mysqlCompatibleEnabled reports whether the session opted in to MySQL
-// readings. An unreadable or unset variable means the strict default, never an
+// boolSumAvgSQLModeEnabled reports whether the session opted in through
+// sql_mode. An unreadable or unset sql_mode means the strict default, never an
 // error: this only ever relaxes a restriction, so failing to read it must not
 // fail a query that the strict path would have rejected anyway.
-func (b *baseBinder) mysqlCompatibleEnabled() bool {
-	val, err := b.builder.compCtx.ResolveVariable(MysqlCompatibleVarName, true, false)
+func (b *baseBinder) boolSumAvgSQLModeEnabled() bool {
+	val, err := b.builder.compCtx.ResolveVariable("sql_mode", true, false)
 	if err != nil || val == nil {
 		return false
 	}
-	// Bool system variables normalize to int8, but a variable left at its
-	// declared default can still surface as the literal default's type.
-	switch v := val.(type) {
-	case int8:
-		return v == 1
-	case int64:
-		return v == 1
+	mode, ok := val.(string)
+	if !ok {
+		return false
 	}
-	return false
+	return mysqlparser.HasEnableBoolSumAvgSQLMode(mode)
 }
 
 func (b *baseBinder) bindFuncExprImplByAstExpr(name string, astArgs []tree.Expr, depth int32) (*plan.Expr, error) {

@@ -424,8 +424,8 @@ func TestCompilerContextResolveVariableDelegatesToAttachedSession(t *testing.T) 
 	delegate := plan.NewMockCompilerContext(false)
 	delegate.ResolveVariableFunc = func(name string, isSystemVar, isGlobalVar bool) (interface{}, error) {
 		seen = append(seen, resolved{name, isSystemVar, isGlobalVar})
-		if name == "mysql_compatible" {
-			return int8(1), nil
+		if name == "sql_mode" {
+			return "ONLY_FULL_GROUP_BY,ENABLE_BOOL_SUMAVG", nil
 		}
 		return nil, moerr.NewInternalErrorNoCtx("unexpected variable")
 	}
@@ -434,10 +434,10 @@ func TestCompilerContextResolveVariableDelegatesToAttachedSession(t *testing.T) 
 		ctx:  attachInternalExecutorCompilerContext(context.Background(), delegate),
 		proc: testutil.NewProcess(t),
 	}
-	value, err := attached.ResolveVariable("mysql_compatible", true, false)
+	value, err := attached.ResolveVariable("sql_mode", true, false)
 	require.NoError(t, err)
-	require.Equal(t, int8(1), value)
-	require.Equal(t, []resolved{{"mysql_compatible", true, false}}, seen)
+	require.Equal(t, "ONLY_FULL_GROUP_BY,ENABLE_BOOL_SUMAVG", value)
+	require.Equal(t, []resolved{{"sql_mode", true, false}}, seen)
 
 	// An error from the session must reach the caller rather than being
 	// flattened into the nil default, which would silently compile the replay
@@ -446,14 +446,14 @@ func TestCompilerContextResolveVariableDelegatesToAttachedSession(t *testing.T) 
 	require.Error(t, err)
 
 	detached := &compilerContext{ctx: context.Background(), proc: testutil.NewProcess(t)}
-	value, err = detached.ResolveVariable("mysql_compatible", true, false)
+	value, err = detached.ResolveVariable("sql_mode", true, false)
 	require.NoError(t, err)
 	require.Nil(t, value)
 
 	// A context attaching the same compilerContext must not recurse.
 	selfAttached := &compilerContext{proc: testutil.NewProcess(t)}
 	selfAttached.ctx = attachInternalExecutorCompilerContext(context.Background(), selfAttached)
-	value, err = selfAttached.ResolveVariable("mysql_compatible", true, false)
+	value, err = selfAttached.ResolveVariable("sql_mode", true, false)
 	require.NoError(t, err)
 	require.Nil(t, value)
 }

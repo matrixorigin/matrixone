@@ -1,20 +1,21 @@
--- issue #27981: sum/avg over a BOOL argument under the mysql_compatible flag.
--- MySQL has no BOOL type, so a predicate there is an integer 0/1 and SUM/AVG
--- over one is ordinary numeric aggregation. MO types the predicate as BOOL and
--- rejects it. mysql_compatible opts in to the MySQL reading.
-drop database if exists mysql_compatible_bool_agg;
-create database mysql_compatible_bool_agg;
-use mysql_compatible_bool_agg;
+-- issue #27981: sum/avg over a BOOL argument under the ENABLE_BOOL_SUMAVG
+-- sql_mode. MySQL has no BOOL type, so a predicate there is an integer 0/1 and
+-- SUM/AVG over one is ordinary numeric aggregation. MO types the predicate as
+-- BOOL and rejects it. ENABLE_BOOL_SUMAVG opts in to the MySQL reading.
+drop database if exists bool_sumavg_sqlmode;
+create database bool_sumavg_sqlmode;
+use bool_sumavg_sqlmode;
 create table t (i int, j int);
 insert into t values (0, 0), (1, 1), (2, 2);
 
--- the flag is off by default and the strict typing is unchanged
-select @@mysql_compatible;
+-- the mode is off by default and the strict typing is unchanged
+select @@sql_mode;
 select sum(i<>0) from t;
 select avg(i<>0) from t;
 
-set mysql_compatible = 1;
-select @@mysql_compatible;
+-- the mode composes with the modes the session already carries
+set session sql_mode = 'ONLY_FULL_GROUP_BY,STRICT_TRANS_TABLES,ENABLE_BOOL_SUMAVG';
+select @@sql_mode;
 
 -- the MySQL reading: identical to the explicit cast a user writes today
 select sum(i<>0) from t;
@@ -25,7 +26,7 @@ select avg(cast(i<>0 as tinyint)) from t;
 -- sum(bool) -> bigint and avg(bool) -> double, matching MO's own sum(tinyint)
 drop table if exists ctas_types;
 create table ctas_types as select sum(i<>0) as s, avg(i<>0) as a from t;
-select column_name, data_type from information_schema.columns where table_schema = 'mysql_compatible_bool_agg' and table_name = 'ctas_types' order by column_name;
+select column_name, data_type from information_schema.columns where table_schema = 'bool_sumavg_sqlmode' and table_name = 'ctas_types' order by column_name;
 select * from ctas_types;
 
 -- NULL predicates are skipped, exactly as MySQL skips NULL SUM/AVG inputs
@@ -55,7 +56,7 @@ create table dst (s bigint);
 insert into dst select sum(i<>0) from t;
 select * from dst;
 
--- the flag relaxes SUM and AVG only. Aggregates that already accepted BOOL are
+-- the mode relaxes SUM and AVG only. Aggregates that already accepted BOOL are
 -- unchanged, and those outside its scope still reject it.
 select min(i<>0), max(i<>0), count(i<>0) from t;
 select bit_and(i<>0) from t;
@@ -65,11 +66,11 @@ select bit_or(i<>0) from t;
 select sum(i) from t;
 select sum(cast(i as char)) from t;
 
--- turning the flag back off restores the strict typing in the same session
-set mysql_compatible = 0;
+-- dropping the mode restores the strict typing in the same session
+set session sql_mode = 'ONLY_FULL_GROUP_BY,STRICT_TRANS_TABLES';
 select sum(i<>0) from t;
 select avg(i<>0) from t;
 create table ctas_off as select sum(i<>0) as s from t;
 select min(i<>0), max(i<>0) from t;
 
-drop database mysql_compatible_bool_agg;
+drop database bool_sumavg_sqlmode;
