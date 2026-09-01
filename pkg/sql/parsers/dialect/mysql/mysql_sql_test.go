@@ -4725,10 +4725,10 @@ var (
 			output: "create view t2 as select * from t1",
 		}, {
 			input:  "create VIEW t2 as select * from t1 WITH CASCADED CHECK OPTION",
-			output: "create view t2 as select * from t1",
+			output: "create view t2 as select * from t1 with CASCADED check option",
 		}, {
 			input:  "create VIEW t2 as select * from t1 WITH LOCAL CHECK OPTION",
-			output: "create view t2 as select * from t1",
+			output: "create view t2 as select * from t1 with LOCAL check option",
 		}, {
 			input:  "insert into t1 values(_binary 0x123)",
 			output: "insert into t1 values (0x123)",
