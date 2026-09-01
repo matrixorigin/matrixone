@@ -26,6 +26,10 @@ import (
 	"go.uber.org/zap"
 )
 
+// Keep split initial-snapshot transactions large enough to amortize commit
+// overhead, but bounded so wide tables cannot create an unbounded sink txn.
+const initialSnapshotTxnBatchCount = 8
+
 // DataProcessor processes change data and sends to sinker
 // Key responsibilities:
 // 1. Process different types of changes (Snapshot/TailWip/TailDone/NoMoreData)
@@ -61,6 +65,7 @@ type DataProcessor struct {
 
 	// Configuration
 	initSnapshotSplitTxn bool // Whether to split snapshot into separate transactions
+	snapshotBatchesInTxn int
 
 	// Logging context
 	accountId uint64
@@ -179,20 +184,19 @@ func (dp *DataProcessor) processSnapshot(ctx context.Context, data *ChangeData) 
 		return nil
 	}
 
-	// Begin transaction if needed (unless initSnapshotSplitTxn is set)
+	// Both modes use explicit transactions. Split mode commits bounded groups of
+	// snapshot batches; non-split mode commits the complete snapshot at once.
 	tracker := dp.txnManager.GetTracker()
 	if tracker == nil || !tracker.hasBegin {
-		if !dp.initSnapshotSplitTxn {
-			if err := dp.txnManager.BeginTransaction(ctx, dp.fromTs, dp.toTs); err != nil {
-				logutil.Error(
-					"cdc.data_processor.begin_transaction_failed",
-					zap.String("task-id", dp.taskId),
-					zap.String("db", dp.dbName),
-					zap.String("table", dp.tableName),
-					zap.Error(err),
-				)
-				return err
-			}
+		if err := dp.txnManager.BeginTransaction(ctx, dp.fromTs, dp.toTs); err != nil {
+			logutil.Error(
+				"cdc.data_processor.begin_transaction_failed",
+				zap.String("task-id", dp.taskId),
+				zap.String("db", dp.dbName),
+				zap.String("table", dp.tableName),
+				zap.Error(err),
+			)
+			return err
 		}
 	}
 
@@ -206,6 +210,16 @@ func (dp *DataProcessor) processSnapshot(ctx context.Context, data *ChangeData) 
 		snapshotPermit: data.snapshotPermit,
 	})
 	data.snapshotPermit = nil
+
+	if dp.initSnapshotSplitTxn {
+		dp.snapshotBatchesInTxn++
+		if dp.snapshotBatchesInTxn >= initialSnapshotTxnBatchCount {
+			if err := dp.txnManager.CommitTransactionWithoutWatermark(ctx); err != nil {
+				return err
+			}
+			dp.snapshotBatchesInTxn = 0
+		}
+	}
 
 	// Note: We don't clean data.InsertBatch here because Sink() takes ownership
 
@@ -399,6 +413,7 @@ func (dp *DataProcessor) processNoMoreData(ctx context.Context) error {
 			)
 			return err
 		}
+		dp.snapshotBatchesInTxn = 0
 		logutil.Debug(
 			"cdc.data_processor.no_more_data_commit_success",
 			zap.String("task-id", dp.taskId),
@@ -460,6 +475,7 @@ func (dp *DataProcessor) processNoMoreData(ctx context.Context) error {
 func (dp *DataProcessor) Cleanup() {
 	dp.cleanupMu.Lock()
 	defer dp.cleanupMu.Unlock()
+	dp.snapshotBatchesInTxn = 0
 
 	if dp.insertAtmBatch != nil {
 		dp.insertAtmBatch.Close()

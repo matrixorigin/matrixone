@@ -337,8 +337,85 @@ func TestDataProcessor_ProcessChange_Snapshot_WithSplitTxn(t *testing.T) {
 	err = dp.ProcessChange(ctx, data)
 
 	assert.NoError(t, err)
-	assert.False(t, sinker.beginCalled) // Should NOT begin for split snapshot
+	assert.True(t, sinker.beginCalled) // Split snapshots use bounded explicit transactions
 	assert.Equal(t, 1, len(sinker.sinkCalls))
+}
+
+func TestDataProcessor_SplitSnapshotCommitsBoundedGroupsWithoutWatermark(t *testing.T) {
+	ctx := context.Background()
+	h := newDataProcessorHarness(t, true)
+
+	from := types.BuildTS(1, 0)
+	to := types.BuildTS(2, 0)
+	h.dp.SetTransactionRange(from, to)
+
+	for i := 0; i < initialSnapshotTxnBatchCount; i++ {
+		require.NoError(t, h.dp.ProcessChange(ctx, &ChangeData{
+			Type:        ChangeTypeSnapshot,
+			InsertBatch: buildBatch(t, h.mp, []int32{int32(i + 1)}, to),
+		}))
+	}
+
+	assert.Nil(t, h.txnMgr.GetTracker())
+	assert.False(t, h.update.updateCalled, "a partial snapshot commit must not advance watermark")
+	assert.Equal(t, 0, h.dp.snapshotBatchesInTxn)
+	expectedOps := []string{"begin"}
+	for i := 0; i < initialSnapshotTxnBatchCount; i++ {
+		expectedOps = append(expectedOps, "sink")
+	}
+	expectedOps = append(expectedOps, "commit", "dummy")
+	assert.Equal(t, expectedOps, h.sinker.opsSnapshot())
+}
+
+func TestDataProcessor_SplitSnapshotGroupCommitFailureRollsBackAndResets(t *testing.T) {
+	ctx := context.Background()
+	h := newDataProcessorHarness(t, true)
+
+	from := types.BuildTS(1, 0)
+	to := types.BuildTS(2, 0)
+	h.dp.SetTransactionRange(from, to)
+	for i := 0; i < initialSnapshotTxnBatchCount-1; i++ {
+		require.NoError(t, h.dp.ProcessChange(ctx, &ChangeData{
+			Type:        ChangeTypeSnapshot,
+			InsertBatch: buildBatch(t, h.mp, []int32{int32(i + 1)}, to),
+		}))
+	}
+
+	commitErr := moerr.NewInternalError(ctx, "snapshot group commit failure")
+	h.sinker.setCommitError(commitErr)
+	err := h.dp.ProcessChange(ctx, &ChangeData{
+		Type:        ChangeTypeSnapshot,
+		InsertBatch: buildBatch(t, h.mp, []int32{initialSnapshotTxnBatchCount}, to),
+	})
+	require.ErrorIs(t, err, commitErr)
+	require.NotNil(t, h.txnMgr.GetTracker())
+	assert.True(t, h.txnMgr.GetTracker().NeedsRollback())
+	assert.False(t, h.update.updateCalled)
+
+	h.sinker.setCommitError(nil)
+	require.NoError(t, h.txnMgr.EnsureCleanup(ctx))
+	h.dp.Cleanup()
+	assert.Equal(t, 0, h.dp.snapshotBatchesInTxn)
+	assert.Contains(t, h.sinker.opsSnapshot(), "rollback")
+}
+
+func TestDataProcessor_SplitSnapshotFinalCommitAdvancesWatermark(t *testing.T) {
+	ctx := context.Background()
+	h := newDataProcessorHarness(t, true)
+
+	from := types.BuildTS(1, 0)
+	to := types.BuildTS(2, 0)
+	h.dp.SetTransactionRange(from, to)
+	require.NoError(t, h.dp.ProcessChange(ctx, &ChangeData{
+		Type:        ChangeTypeSnapshot,
+		InsertBatch: buildBatch(t, h.mp, []int32{1}, to),
+	}))
+	require.False(t, h.update.updateCalled)
+
+	require.NoError(t, h.dp.ProcessChange(ctx, &ChangeData{Type: ChangeTypeNoMoreData}))
+	assert.True(t, h.update.updateCalled)
+	assert.Nil(t, h.txnMgr.GetTracker())
+	assert.Equal(t, 0, h.dp.snapshotBatchesInTxn)
 }
 
 func TestDataProcessor_ProcessChange_TailWip(t *testing.T) {

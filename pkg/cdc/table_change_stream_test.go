@@ -42,7 +42,6 @@ import (
 	dto "github.com/prometheus/client_model/go"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"golang.org/x/sync/semaphore"
 )
 
 // Helper function to create a test stream with minimal setup
@@ -208,7 +207,9 @@ func TestTableChangeStream_InitialSnapshotBatchLimiterSharedAcrossTables(t *test
 	mp := mpool.MustNewZero()
 	defer mpool.DeleteMPool(mp)
 
-	limiter := semaphore.NewWeighted(1)
+	limiter := newInitialSnapshotLimiter(1, 1, 1, 1, func() (uint64, bool) {
+		return 0, false
+	})
 	stream1 := createTestStream(
 		mp,
 		&DbTableInfo{SourceDbName: "db", SourceTblName: "t1"},
@@ -265,9 +266,11 @@ func TestTableChangeStream_InitialSnapshotBatchLimiterSkippedAfterFirstSync(t *t
 	mp := mpool.MustNewZero()
 	defer mpool.DeleteMPool(mp)
 
-	limiter := semaphore.NewWeighted(1)
-	require.NoError(t, limiter.Acquire(context.Background(), 1))
-	defer limiter.Release(1)
+	limiter := newInitialSnapshotLimiter(1, 1, 1, 1, func() (uint64, bool) {
+		return 0, false
+	})
+	require.NoError(t, limiter.Acquire(context.Background()))
+	defer limiter.Release()
 
 	stream := createTestStream(
 		mp,

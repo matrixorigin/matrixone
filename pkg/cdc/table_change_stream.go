@@ -34,7 +34,6 @@ import (
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"go.uber.org/zap"
-	"golang.org/x/sync/semaphore"
 )
 
 var _ ChangeReader = new(TableChangeStream)
@@ -85,7 +84,7 @@ type TableChangeStream struct {
 	initSnapshotSplitTxn   bool
 	startTs, endTs         types.TS
 	noFull                 bool
-	initialSnapshotLimiter *semaphore.Weighted
+	initialSnapshotLimiter *InitialSnapshotLimiter
 
 	// Column indices (for AtomicBatch)
 	insTsColIdx           int
@@ -133,11 +132,18 @@ type TableChangeStreamOption func(*tableChangeStreamOptions)
 type snapshotPermit struct {
 	once    sync.Once
 	release func()
+	observe func(uint64)
 }
 
 func (p *snapshotPermit) Release() {
 	if p != nil {
 		p.once.Do(p.release)
+	}
+}
+
+func (p *snapshotPermit) ObserveBatchBytes(bytes uint64) {
+	if p != nil && p.observe != nil {
+		p.observe(bytes)
 	}
 }
 
@@ -148,7 +154,7 @@ type tableChangeStreamOptions struct {
 	retryBackoffBase          time.Duration // Base delay for exponential backoff
 	retryBackoffMax           time.Duration // Max delay for exponential backoff
 	retryBackoffFactor        float64       // Factor for exponential backoff
-	initialSnapshotLimiter    *semaphore.Weighted
+	initialSnapshotLimiter    *InitialSnapshotLimiter
 }
 
 const (
@@ -219,7 +225,7 @@ func WithRetryBackoff(base, max time.Duration, factor float64) TableChangeStream
 
 // WithInitialSnapshotLimiter shares a task-level in-flight batch limit across
 // table streams. It applies only to the first successful full-sync round.
-func WithInitialSnapshotLimiter(limiter *semaphore.Weighted) TableChangeStreamOption {
+func WithInitialSnapshotLimiter(limiter *InitialSnapshotLimiter) TableChangeStreamOption {
 	return func(opts *tableChangeStreamOptions) {
 		opts.initialSnapshotLimiter = limiter
 	}
@@ -852,7 +858,7 @@ func (s *TableChangeStream) acquireInitialSnapshotPermit(ctx context.Context) (*
 	if s.progressTracker != nil {
 		s.progressTracker.SetState("waiting_for_initial_snapshot_batch_slot")
 	}
-	if err := s.initialSnapshotLimiter.Acquire(ctx, 1); err != nil {
+	if err := s.initialSnapshotLimiter.Acquire(ctx); err != nil {
 		return nil, err
 	}
 	if s.progressTracker != nil {
@@ -860,7 +866,8 @@ func (s *TableChangeStream) acquireInitialSnapshotPermit(ctx context.Context) (*
 	}
 
 	return &snapshotPermit{
-		release: func() { s.initialSnapshotLimiter.Release(1) },
+		release: func() { s.initialSnapshotLimiter.Release() },
+		observe: s.initialSnapshotLimiter.ObserveBatchBytes,
 	}, nil
 }
 
@@ -1385,6 +1392,14 @@ func (s *TableChangeStream) processWithTxn(
 			return err
 		}
 		if changeData.Type == ChangeTypeSnapshot && changeData.HasData() {
+			var allocated uint64
+			if changeData.InsertBatch != nil {
+				allocated += uint64(changeData.InsertBatch.Allocated())
+			}
+			if changeData.DeleteBatch != nil {
+				allocated += uint64(changeData.DeleteBatch.Allocated())
+			}
+			permit.ObserveBatchBytes(allocated)
 			changeData.snapshotPermit = permit
 		} else {
 			permit.Release()

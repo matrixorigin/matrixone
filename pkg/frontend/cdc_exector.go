@@ -42,7 +42,6 @@ import (
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"go.uber.org/zap"
-	"golang.org/x/sync/semaphore"
 )
 
 var CDCExectorError_QueryDaemonTaskTimeout = moerr.NewInternalErrorNoCtx("query daemon task timeout")
@@ -156,7 +155,7 @@ type CDCTaskExecutor struct {
 	additionalConfig map[string]interface{}
 	// initialSnapshotLimiter bounds retained initial-snapshot batches while
 	// allowing tables to make progress independently.
-	initialSnapshotLimiter *semaphore.Weighted
+	initialSnapshotLimiter *cdc.InitialSnapshotLimiter
 
 	activeRoutineMu sync.RWMutex
 	activeRoutine   *cdc.ActiveRoutine
@@ -600,11 +599,9 @@ func NewCDCTaskExecutor(
 				packer.Close()
 			},
 		),
-		stateMachine: NewExecutorStateMachine(), // Initialize state machine
-		holdCh:       make(chan int, 1),         // Initialize holdCh to prevent race condition
-		initialSnapshotLimiter: semaphore.NewWeighted(
-			cdc.CDCDefaultInitialSnapshotConcurrency,
-		),
+		stateMachine:           NewExecutorStateMachine(), // Initialize state machine
+		holdCh:                 make(chan int, 1),         // Initialize holdCh to prevent race condition
+		initialSnapshotLimiter: cdc.NewInitialSnapshotLimiter(),
 	}
 	task.startFunc = task.Start
 	return task
