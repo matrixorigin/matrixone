@@ -280,9 +280,9 @@ select id, counter, create_at = update_at from users;
 112  ¦  3  ¦  1
 drop table if exists t_pk_only_noop;
 create table t_pk_only_noop (
-    id int primary key,
-    val int,
-    updated_at timestamp default '2026-01-01 00:00:00' on update current_timestamp
+id int primary key,
+val int,
+updated_at timestamp default '2026-01-01 00:00:00' on update current_timestamp
 );
 insert into t_pk_only_noop (id, val) values (1, 10);
 insert into t_pk_only_noop (id, val) values (1, 99) on duplicate key update id = values(id);

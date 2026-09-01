@@ -84,6 +84,23 @@ func TestInsertOnDupPrimaryKeyFromDifferentIncomingColumnStillRejected(t *testin
 	require.ErrorContains(t, err, "unsupported DML: update primary key on duplicate")
 }
 
+func TestInsertOnDupCompositePrimaryKeyFromDifferentIncomingColumnStillRejected(t *testing.T) {
+	mock := NewMockOptimizer(true)
+	_, err := runOneStmt(mock, t,
+		"insert into tpch.partsupp values (1, 2, 3, 4.50, 'x') "+
+			"on duplicate key update ps_partkey = values(ps_suppkey), "+
+			"ps_suppkey = values(ps_suppkey)")
+	require.ErrorContains(t, err, "unsupported DML: update primary key on duplicate")
+}
+
+func TestInsertOnDupWrappedIncomingPrimaryKeyStillRejected(t *testing.T) {
+	mock := NewMockOptimizer(true)
+	_, err := runOneStmt(mock, t,
+		"insert into constraint_test.t1(a, b) values (1, 'x') "+
+			"on duplicate key update a = cast(values(a) as signed)")
+	require.ErrorContains(t, err, "unsupported DML: update primary key on duplicate")
+}
+
 func TestInsertOnDupIncomingPrimaryKeyWithSecondaryUniqueStillRejected(t *testing.T) {
 	mock := NewMockOptimizer(true)
 	_, err := runOneStmt(mock, t,
