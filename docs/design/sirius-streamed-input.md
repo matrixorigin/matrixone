@@ -832,8 +832,8 @@ evidence whose semantic inputs changed.
 | Component | PR | Candidate delivery commit | CI/evidence |
 | --- | --- | --- | --- |
 | MatrixOne | [#27599](https://github.com/matrixorigin/matrixone/pull/27599) | `b659afafa0c86a707b79f9a6c4b68fd3beadc6aa` | full Go 1.26.4 pre-push SCA passed; affected packages and 20x race regressions passed; [SF10 five-mode record](https://github.com/matrixorigin/matrixone/pull/27599#issuecomment-5495966844) |
-| Sirius | [#6](https://github.com/matrixorigin/sirius/pull/6) | `fd347eb996c74d9910c3aaa94596feba14d5d035` | pinned CUDA build passed; 16 Substrait/MO-scan contract cases, 4 scheduler concurrency cases, and 2 task-counting lifecycle cases passed; exact-head CI pending |
-| sidecar | [#14](https://github.com/matrixorigin/mo-sirius-sidecar/pull/14) | `11a7e28dc5c3909d6130ebbfc04d5744384d4ec7` | pins the Sirius revision above; pinned CUDA build passed; 10 protocol/config and 7 native stream/result cases passed; exact-head CI pending |
+| Sirius | [#6](https://github.com/matrixorigin/sirius/pull/6) | `b458357185ebeae90ab44908e4159c3d3fb85a11` | pinned CUDA build and all pre-commit hooks passed; 16 Substrait/MO-scan contract cases, 4 scheduler concurrency cases, and 2 task-counting lifecycle cases passed; stable/nightly cuDF datasource interfaces are version-gated; exact-head CI pending |
+| sidecar | [#14](https://github.com/matrixorigin/mo-sirius-sidecar/pull/14) | `7227adfb78308b752a86c030b44dbd8a3311f7d6` | pins the Sirius revision above; pinned CUDA build passed; 10 protocol/config and 7 native stream/result cases passed; exact-head CI pending |
 
 The sidecar submodule must point to the approved Sirius commit. The MatrixOne PR
 body must link this design at its approved commit and the final evidence record.
