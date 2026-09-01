@@ -813,7 +813,8 @@ type TaskStorage interface {
 	AddSQLTask(ctx context.Context, tasks ...SQLTask) (int, error)
 	// UpdateSQLTask updates sql tasks and returns number of successful updated.
 	UpdateSQLTask(ctx context.Context, tasks []SQLTask, conds ...Condition) (int, error)
-	// DeleteSQLTask deletes sql tasks and returns number of successful deleted.
+	// DeleteSQLTask atomically deletes SQL tasks and their child async tasks,
+	// and returns the number of SQL task definitions deleted.
 	DeleteSQLTask(ctx context.Context, conds ...Condition) (int, error)
 	// QuerySQLTask queries sql tasks by conditions.
 	QuerySQLTask(ctx context.Context, conds ...Condition) ([]SQLTask, error)

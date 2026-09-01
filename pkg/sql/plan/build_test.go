@@ -48,6 +48,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
+	"github.com/matrixorigin/matrixone/pkg/util/toml"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -2898,7 +2899,6 @@ func TestLoadPlanKeepsUniqueIndexRowLockTarget(t *testing.T) {
 func TestLargeDMLKeepsRowScopedLockTarget(t *testing.T) {
 	sqls := []string{
 		"INSERT INTO NATION SELECT * FROM NATION2",
-		"UPDATE NATION SET N_NAME = 'updated'",
 		"DELETE FROM NATION",
 		"REPLACE INTO NATION SELECT * FROM NATION2",
 		"SELECT N_NATIONKEY FROM NATION FOR UPDATE",
@@ -2937,6 +2937,214 @@ func TestLargeDMLKeepsRowScopedLockTarget(t *testing.T) {
 				}
 			}
 			require.NotZero(t, lockNodeCount, "expected a lock operator: %s", sql)
+		})
+	}
+}
+
+func TestLargeUpdateTableLockRequiresUnrestrictedSingleTarget(t *testing.T) {
+	tests := []struct {
+		name          string
+		sql           string
+		maxRows       uint64
+		wantTableLock bool
+		prepare       func(*MockOptimizer)
+	}{
+		{
+			name:          "unfiltered single target",
+			sql:           "UPDATE NATION SET N_NAME = 'updated'",
+			maxRows:       1,
+			wantTableLock: true,
+		},
+		{
+			name:          "unfiltered primary key update",
+			sql:           "UPDATE NATION SET N_NATIONKEY = N_NATIONKEY + 100",
+			maxRows:       1,
+			wantTableLock: true,
+		},
+		{
+			name:          "literal true is statically unrestricted",
+			sql:           "UPDATE NATION SET N_NAME = 'updated' WHERE TRUE",
+			maxRows:       1,
+			wantTableLock: true,
+		},
+		{
+			name:          "partitioned full update",
+			sql:           "UPDATE NATION SET N_NAME = 'updated'",
+			maxRows:       1,
+			wantTableLock: true,
+			prepare: func(mock *MockOptimizer) {
+				mock.ctxt.tables["nation"].FeatureFlag |= features.Partitioned
+				mock.ctxt.tables["nation"].Partition = &plan.Partition{
+					PartitionDefs: []*plan.PartitionDef{{
+						Def: &plan.Expr{Expr: &plan.Expr_F{F: &plan.Function{Args: []*plan.Expr{
+							{Expr: &plan.Expr_Col{Col: &plan.ColRef{Name: "n_nationkey"}}},
+						}}}},
+					}},
+				}
+			},
+		},
+		{
+			name:    "bounded predicate stays row scoped",
+			sql:     "UPDATE NATION SET N_NAME = 'updated' WHERE N_NATIONKEY >= 0",
+			maxRows: 1,
+		},
+		{
+			name:    "constant false stays row scoped",
+			sql:     "UPDATE NATION SET N_NAME = 'updated' WHERE FALSE",
+			maxRows: 1,
+		},
+		{
+			name:    "nonliteral tautology is conservatively row scoped",
+			sql:     "UPDATE NATION SET N_NAME = 'updated' WHERE 1 = 1",
+			maxRows: 1,
+		},
+		{
+			name:    "ordered limit stays row scoped",
+			sql:     "UPDATE NATION SET N_NAME = 'updated' ORDER BY N_NATIONKEY LIMIT 10",
+			maxRows: 1,
+		},
+		{
+			name: "joined source stays row scoped",
+			sql: "UPDATE NATION n JOIN NATION2 n2 ON n.N_NATIONKEY = n2.N_NATIONKEY " +
+				"SET n.N_NAME = 'updated'",
+			maxRows: 1,
+		},
+		{
+			name:    "update from stays row scoped",
+			sql:     "UPDATE NATION n SET n.N_NAME = 'updated' FROM NATION2 n2 WHERE n.N_NATIONKEY = n2.N_NATIONKEY",
+			maxRows: 1,
+		},
+		{
+			name:          "small full update stays row scoped",
+			sql:           "UPDATE NATION SET N_NAME = 'updated'",
+			maxRows:       1 << 30,
+			wantTableLock: false,
+		},
+		{
+			name:    "incomplete float keyspace stays row scoped",
+			sql:     "UPDATE NATION SET N_NAME = 'updated'",
+			maxRows: 1,
+			prepare: func(mock *MockOptimizer) {
+				tableDef := mock.ctxt.tables["nation"]
+				pkPos := tableDef.Name2ColIndex[tableDef.Pkey.PkeyColName]
+				tableDef.Cols[pkPos].Typ = plan.Type{Id: int32(types.T_float64)}
+			},
+		},
+		{
+			name:    "affected foreign key preserves lock order",
+			sql:     "UPDATE replace_fk_c SET pid = pid",
+			maxRows: 1,
+		},
+		{
+			name:          "unrelated column on foreign key table",
+			sql:           "UPDATE replace_fk_c SET id = id + 100",
+			maxRows:       1,
+			wantTableLock: true,
+		},
+		{
+			name:    "locking scalar subquery preserves lock order",
+			sql:     "UPDATE NATION SET N_NAME = (SELECT N_NAME FROM NATION2 LIMIT 1 FOR UPDATE)",
+			maxRows: 1,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			mock := NewMockOptimizer(true)
+			if test.prepare != nil {
+				test.prepare(mock)
+			}
+			proc := testutil.NewProc(t)
+			lockService := mock_lock.NewMockLockService(gomock.NewController(t))
+			lockService.EXPECT().GetConfig().Return(lockservice.Config{
+				ServiceID:       "plan-test",
+				MaxLockRowCount: toml.ByteSize(test.maxRows),
+			}).AnyTimes()
+			proc.Base.LockService = lockService
+			rt := moruntime.ServiceRuntime(proc.GetService())
+			if rt == nil {
+				rt = moruntime.DefaultRuntime()
+				moruntime.SetupServiceBasedRuntime(proc.GetService(), rt)
+			}
+			rt.SetGlobalVariables("optimizer_hints", "")
+			mock.ctxt.GetProcessFunc = func() *process.Process { return proc }
+
+			logicPlan, err := runOneStmt(mock, t, test.sql)
+			require.NoError(t, err)
+
+			exclusiveTargets := 0
+			for _, node := range logicPlan.GetQuery().Nodes {
+				if node.NodeType != plan.Node_LOCK_OP {
+					continue
+				}
+				for _, target := range node.LockTargets {
+					if target.Mode != lockpb.LockMode_Exclusive {
+						continue
+					}
+					exclusiveTargets++
+					require.Equal(t, test.wantTableLock, target.LockTable)
+				}
+			}
+			require.NotZero(t, exclusiveTargets)
+		})
+	}
+}
+
+func TestLargeUnrestrictedIndexedUpdateLocksEveryWrittenNamespace(t *testing.T) {
+	for _, test := range []struct {
+		name          string
+		sql           string
+		wantTableLock bool
+	}{
+		{
+			name:          "full update",
+			sql:           "UPDATE index_hint_t SET a = a + 1",
+			wantTableLock: true,
+		},
+		{
+			name: "bounded update",
+			sql:  "UPDATE index_hint_t SET a = a + 1 WHERE id >= 0",
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			mock := NewMockOptimizer(true)
+			addIndexHintChoiceTableForTest(mock)
+			proc := testutil.NewProc(t)
+			lockService := mock_lock.NewMockLockService(gomock.NewController(t))
+			lockService.EXPECT().GetConfig().Return(lockservice.Config{
+				ServiceID:       "plan-test",
+				MaxLockRowCount: 1,
+			}).AnyTimes()
+			proc.Base.LockService = lockService
+			rt := moruntime.ServiceRuntime(proc.GetService())
+			if rt == nil {
+				rt = moruntime.DefaultRuntime()
+				moruntime.SetupServiceBasedRuntime(proc.GetService(), rt)
+			}
+			rt.SetGlobalVariables("optimizer_hints", "")
+			mock.ctxt.GetProcessFunc = func() *process.Process { return proc }
+
+			logicPlan, err := runOneStmt(mock, t, test.sql)
+			require.NoError(t, err)
+
+			targetTables := make(map[uint64]struct{})
+			exclusiveTargets := 0
+			for _, node := range logicPlan.GetQuery().Nodes {
+				if node.NodeType != plan.Node_LOCK_OP {
+					continue
+				}
+				for _, target := range node.LockTargets {
+					if target.Mode != lockpb.LockMode_Exclusive {
+						continue
+					}
+					exclusiveTargets++
+					targetTables[target.TableId] = struct{}{}
+					require.Equal(t, test.wantTableLock, target.LockTable)
+				}
+			}
+			require.GreaterOrEqual(t, exclusiveTargets, 2,
+				"base and affected unique-index namespaces must both be locked")
+			require.GreaterOrEqual(t, len(targetTables), 2)
 		})
 	}
 }
@@ -3000,10 +3208,16 @@ func TestLargeSharedLockTargetsKeepBoundedFallback(t *testing.T) {
 	}
 }
 
-func TestApplySharedLockTableFallbackGuardsAndModes(t *testing.T) {
+func TestApplyLockTableFallbackGuardsAndModes(t *testing.T) {
 	mock := NewMockOptimizer(true)
+	markedAtBoundary := &plan.LockTarget{Mode: lockpb.LockMode_Exclusive}
+	markedAboveBoundary := &plan.LockTarget{Mode: lockpb.LockMode_Exclusive}
 	builder := &QueryBuilder{
 		compCtx: &mock.ctxt,
+		fullTableUpdateLockTargets: map[*plan.LockTarget]struct{}{
+			markedAtBoundary:    {},
+			markedAboveBoundary: {},
+		},
 		qry: &plan.Query{Nodes: []*plan.Node{
 			{NodeType: plan.Node_TABLE_SCAN, Stats: &plan.Stats{Outcnt: 100}},
 			{NodeType: plan.Node_LOCK_OP},
@@ -3011,15 +3225,16 @@ func TestApplySharedLockTableFallbackGuardsAndModes(t *testing.T) {
 				NodeType: plan.Node_LOCK_OP,
 				Stats:    &plan.Stats{Outcnt: 3},
 				LockTargets: []*plan.LockTarget{
-					{Mode: lockpb.LockMode_Shared},
+					markedAtBoundary,
 				},
 			},
 			{
 				NodeType: plan.Node_LOCK_OP,
 				Stats:    &plan.Stats{Outcnt: 4},
 				LockTargets: []*plan.LockTarget{
-					{Mode: lockpb.LockMode_Exclusive},
+					markedAboveBoundary,
 					{Mode: lockpb.LockMode_Shared},
+					{Mode: lockpb.LockMode_Exclusive},
 				},
 			},
 		}},
@@ -3028,10 +3243,10 @@ func TestApplySharedLockTableFallbackGuardsAndModes(t *testing.T) {
 	// Planning without a process or without a real lock service is valid for
 	// internal and mock compiler contexts.
 	mock.ctxt.GetProcessFunc = func() *process.Process { return nil }
-	applySharedLockTableFallback(builder)
+	applyLockTableFallback(builder)
 	proc := testutil.NewProc(t)
 	mock.ctxt.GetProcessFunc = func() *process.Process { return proc }
-	applySharedLockTableFallback(builder)
+	applyLockTableFallback(builder)
 
 	lockService := mock_lock.NewMockLockService(gomock.NewController(t))
 	gomock.InOrder(
@@ -3039,15 +3254,17 @@ func TestApplySharedLockTableFallbackGuardsAndModes(t *testing.T) {
 		lockService.EXPECT().GetConfig().Return(lockservice.Config{MaxLockRowCount: 3}),
 	)
 	proc.Base.LockService = lockService
-	applySharedLockTableFallback(builder)
-	applySharedLockTableFallback(builder)
+	applyLockTableFallback(builder)
+	applyLockTableFallback(builder)
 
 	require.False(t, builder.qry.Nodes[2].LockTargets[0].LockTable,
 		"the configured budget is inclusive")
-	require.False(t, builder.qry.Nodes[3].LockTargets[0].LockTable,
-		"exclusive targets are bounded by owner-side range escalation")
+	require.True(t, builder.qry.Nodes[3].LockTargets[0].LockTable,
+		"a proven full-table update upgrades above the configured budget")
 	require.True(t, builder.qry.Nodes[3].LockTargets[1].LockTable,
 		"cardinality-known shared targets must upgrade before acquisition")
+	require.False(t, builder.qry.Nodes[3].LockTargets[2].LockTable,
+		"unmarked exclusive targets retain owner-side range escalation")
 }
 
 func TestInsertIntoMarkedTemporaryTableUsesModernPath(t *testing.T) {
@@ -4646,31 +4863,27 @@ func TestAssignmentCastRollingUpgradePlanGate(t *testing.T) {
 	require.Contains(t, upgradedPlan, `"obj_name":"cast_assign"`)
 }
 
+func addPositiveCheck(t *testing.T, mock *MockOptimizer, tableName, columnName string) {
+	t.Helper()
+	tableDef := mock.ctxt.tables[tableName]
+	colPos := tableDef.Name2ColIndex[columnName]
+	checkExpr, err := BindFuncExprImplByPlanExpr(
+		t.Context(),
+		">",
+		[]*plan.Expr{
+			{Typ: tableDef.Cols[colPos].Typ, Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: 0, ColPos: colPos}}},
+			MakePlan2Int64ConstExprWithType(0),
+		},
+	)
+	require.NoError(t, err)
+	tableDef.Checks = []*plan.CheckDef{{Name: "positive_check", Check: checkExpr}}
+}
+
 func TestInsertAddsCheckConstraintFilter(t *testing.T) {
-	addDeptCheck := func(mock *MockOptimizer) {
-		tableDef := mock.ctxt.tables["dept"]
-		colPos := tableDef.Name2ColIndex["deptno"]
-		colExpr := &plan.Expr{
-			Typ: tableDef.Cols[colPos].Typ,
-			Expr: &plan.Expr_Col{
-				Col: &plan.ColRef{RelPos: 0, ColPos: colPos},
-			},
-		}
-		checkExpr, err := BindFuncExprImplByPlanExpr(
-			t.Context(),
-			">",
-			[]*plan.Expr{colExpr, MakePlan2Int64ConstExprWithType(0)},
-		)
-		require.NoError(t, err)
-		tableDef.Checks = []*plan.CheckDef{{
-			Name:  "dept_chk_1",
-			Check: checkExpr,
-		}}
-	}
 
 	build := func(sql string) *plan.Query {
 		mock := NewMockOptimizer(true)
-		addDeptCheck(mock)
+		addPositiveCheck(t, mock, "dept", "deptno")
 
 		stmt, err := mysql.ParseOne(t.Context(), sql, 1)
 		require.NoError(t, err)
@@ -4698,7 +4911,7 @@ func TestInsertAddsCheckConstraintFilter(t *testing.T) {
 
 	t.Run("replace rejects mixed-version cluster", func(t *testing.T) {
 		mock := NewMockOptimizer(true)
-		addDeptCheck(mock)
+		addPositiveCheck(t, mock, "dept", "deptno")
 		proc := testutil.NewProc(nil)
 		rt := moruntime.ServiceRuntime(proc.GetService())
 		defer rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCLatestVersion)
@@ -4798,6 +5011,54 @@ func TestInsertAddsCheckConstraintFilter(t *testing.T) {
 		}
 		require.True(t, found)
 	})
+}
+
+func TestInsertIgnoreCheckCompositeUniqueNeedsLockKeyProjection(t *testing.T) {
+	tableDef := &plan.TableDef{Indexes: []*plan.IndexDef{
+		{Unique: true, Parts: []string{"a"}},
+		{Unique: true, Parts: []string{"a", "b"}},
+	}}
+
+	needsProjection, err := hasMaterializedInsertUniqueLockKey(tableDef, []bool{false, false})
+	require.NoError(t, err)
+	require.True(t, needsProjection)
+
+	needsProjection, err = hasMaterializedInsertUniqueLockKey(tableDef, []bool{false, true})
+	require.NoError(t, err)
+	require.False(t, needsProjection)
+
+	_, err = hasMaterializedInsertUniqueLockKey(&plan.TableDef{Indexes: []*plan.IndexDef{{
+		Unique:          true,
+		Parts:           []string{"a", "b"},
+		IndexAlgoParams: "not-json",
+	}}}, []bool{false})
+	require.Error(t, err)
+}
+
+func TestInsertIgnoreCheckCompositeUniqueBuildsPlan(t *testing.T) {
+	mock := NewMockOptimizer(true)
+	tableDef := mock.ctxt.tables["dept_composite_uk"]
+	addPositiveCheck(t, mock, tableDef.Name, "deptno")
+
+	stmt, err := mysql.ParseOne(
+		t.Context(),
+		"insert ignore into dept_composite_uk values (1, 'Sales', 'NY')",
+		1,
+	)
+	require.NoError(t, err)
+	query, err := mock.Optimize(stmt)
+	require.NoError(t, err)
+
+	foundCheckFilter := false
+	for _, node := range query.Nodes {
+		if node.NodeType != plan.Node_FILTER {
+			continue
+		}
+		for _, expr := range node.FilterList {
+			foundCheckFilter = foundCheckFilter || exprContainsFuncName(expr, "coalesce")
+		}
+	}
+	require.True(t, foundCheckFilter)
 }
 
 func TestReplaceSetColRefAsDefault(t *testing.T) {
@@ -7724,6 +7985,10 @@ func TestOnlyFullGroupByCompositePrimaryKeyDependency(t *testing.T) {
 			Nodes: []*plan.Node{
 				{
 					TableDef: &plan.TableDef{
+						Cols: []*plan.ColDef{
+							{Name: "tenant_id", Typ: plan.Type{Id: int32(types.T_int64)}},
+							{Name: "id", Typ: plan.Type{Id: int32(types.T_int64)}},
+						},
 						Pkey: &plan.PrimaryKeyDef{
 							// MatrixOne stores a composite key in a hidden column while
 							// Names retains the user-visible key columns.
@@ -7754,10 +8019,16 @@ func TestOnlyFullGroupByCompositePrimaryKeyDependency(t *testing.T) {
 func TestOnlyFullGroupByUsesStructuredBoundColumns(t *testing.T) {
 	builder := &QueryBuilder{
 		qry: &plan.Query{Nodes: []*plan.Node{
-			{TableDef: &plan.TableDef{Pkey: &plan.PrimaryKeyDef{
-				PkeyColName: "customer.account",
-				Names:       []string{"customer.account"},
-			}}},
+			{TableDef: &plan.TableDef{
+				Cols: []*plan.ColDef{
+					{Name: "customer.account", Typ: plan.Type{Id: int32(types.T_varchar)}},
+					{Name: "unsafe", Typ: plan.Type{Id: int32(types.T_varchar)}},
+				},
+				Pkey: &plan.PrimaryKeyDef{
+					PkeyColName: "customer.account",
+					Names:       []string{"customer.account"},
+				},
+			}},
 			{TableDef: &plan.TableDef{}},
 		}},
 	}

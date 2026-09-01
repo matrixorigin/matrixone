@@ -46,6 +46,17 @@ func TestGetConstantValue2AppendsEnumLiteralWithEnumWidth(t *testing.T) {
 	require.Equal(t, []types.Enum{0, 1, 3}, vector.MustFixedColNoTypeCheck[types.Enum](vec))
 }
 
+func TestConstantFoldRuleRetainsStandaloneInterval(t *testing.T) {
+	expr := &plan.Expr{
+		Typ: plan.Type{Id: int32(types.T_interval)},
+		Expr: &plan.Expr_List{List: &plan.ExprList{List: []*plan.Expr{
+			{Typ: plan.Type{Id: int32(types.T_int64)}},
+			{Typ: plan.Type{Id: int32(types.T_varchar)}},
+		}}},
+	}
+	require.Same(t, expr, NewConstantFold(false).constantFold(expr, testutil.NewProcess(t)))
+}
+
 func TestGetConstantValue2PreservesAndValidatesLiteralStringSource(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	vec := vector.NewVec(types.T_varchar.ToType())

@@ -34,16 +34,16 @@ func testCreateQueryClient(t *testing.T) QueryClient {
 
 func TestMethodProtocolVersions(t *testing.T) {
 	assert.Equal(t, defines.MORPCVersion5, methodVersions[query.CmdMethod_MongoDBClientRetire])
-	assert.Equal(t, defines.MORPCVersion41, methodVersions[query.CmdMethod_Fulltext2CacheFence])
+	assert.Equal(t, defines.MORPCVersion43, methodVersions[query.CmdMethod_Fulltext2CacheFence])
 }
 
-func TestFulltext2CacheFenceRejectsV40AndAcceptsV41(t *testing.T) {
+func TestFulltext2CacheFenceRejectsV42AndAcceptsV43(t *testing.T) {
 	const service = "fulltext2-fence-version-test"
 	moruntime.RunTest(service, func(rt moruntime.Runtime) {
 		req := &query.Request{CmdMethod: query.CmdMethod_Fulltext2CacheFence}
-		rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion40)
-		assert.ErrorContains(t, checkMethodVersion(context.Background(), service, req), "unsupported protocol version 41")
-		rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion41)
+		rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion42)
+		assert.ErrorContains(t, checkMethodVersion(context.Background(), service, req), "unsupported protocol version 43")
+		rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion43)
 		assert.NoError(t, checkMethodVersion(context.Background(), service, req))
 	})
 }

@@ -447,6 +447,9 @@ message TxnInfo{
   bool UserTxn = 3;
   // WaitLocks denotes the locks that the txn is waiting on
   repeated TxnLockInfo WaitLocks = 4;
+  // AccountID is the account that created the txn. It is used internally to
+  // enforce tenant isolation and is not exposed by the SQL system view.
+  uint32 AccountID = 5;
 }
 
 message GetTxnInfoResponse{

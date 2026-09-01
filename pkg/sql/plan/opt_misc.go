@@ -21,6 +21,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/rule"
@@ -401,24 +402,58 @@ func replaceColumnsForExpr(expr *plan.Expr, projMap map[[2]int32]*plan.Expr) *pl
 	}
 
 	switch ne := expr.Expr.(type) {
+	case *plan.Expr_Lit:
+		if ne.Lit != nil {
+			ne.Lit.Src = replaceColumnsForExpr(ne.Lit.Src, projMap)
+		}
+
 	case *plan.Expr_Col:
+		if ne.Col == nil {
+			return expr
+		}
 		mapID := [2]int32{ne.Col.RelPos, ne.Col.ColPos}
 		if projExpr, ok := projMap[mapID]; ok {
 			return DeepCopyExpr(projExpr)
 		}
 
 	case *plan.Expr_F:
+		if ne.F == nil {
+			return expr
+		}
 		for i, arg := range ne.F.Args {
 			ne.F.Args[i] = replaceColumnsForExpr(arg, projMap)
 		}
 
 	case *plan.Expr_W:
+		if ne.W == nil {
+			return expr
+		}
 		ne.W.WindowFunc = replaceColumnsForExpr(ne.W.WindowFunc, projMap)
 		for i, arg := range ne.W.PartitionBy {
 			ne.W.PartitionBy[i] = replaceColumnsForExpr(arg, projMap)
 		}
 		for i, order := range ne.W.OrderBy {
-			ne.W.OrderBy[i].Expr = replaceColumnsForExpr(order.Expr, projMap)
+			if order != nil {
+				ne.W.OrderBy[i].Expr = replaceColumnsForExpr(order.Expr, projMap)
+			}
+		}
+		if ne.W.Frame != nil {
+			if ne.W.Frame.Start != nil {
+				ne.W.Frame.Start.Val = replaceColumnsForExpr(ne.W.Frame.Start.Val, projMap)
+			}
+			if ne.W.Frame.End != nil {
+				ne.W.Frame.End.Val = replaceColumnsForExpr(ne.W.Frame.End.Val, projMap)
+			}
+		}
+
+	case *plan.Expr_List:
+		if ne.List != nil {
+			replaceColumnsForExprList(ne.List.List, projMap)
+		}
+
+	case *plan.Expr_Sub:
+		if ne.Sub != nil {
+			ne.Sub.Child = replaceColumnsForExpr(ne.Sub.Child, projMap)
 		}
 	}
 	return expr
@@ -747,13 +782,14 @@ func determineHashOnPK(nodeID int32, builder *QueryBuilder) map[uint64][]uint64 
 	node := builder.qry.Nodes[nodeID]
 
 	if node.NodeType == plan.Node_TABLE_SCAN {
-		if node.TableDef.Pkey == nil || len(node.BindingTags) == 0 {
+		pkPositions, ok := sqlEqualityCompatiblePrimaryKeyColumnPositions(node.TableDef)
+		if !ok || len(node.BindingTags) == 0 {
 			return nil
 		}
 		tag := uint64(node.BindingTags[0]) << 32
 		colMap := make(map[uint64][]uint64)
-		for _, name := range node.TableDef.Pkey.Names {
-			k := tag | uint64(node.TableDef.Name2ColIndex[name])
+		for _, pos := range pkPositions {
+			k := tag | uint64(pos)
 			colMap[k] = []uint64{k}
 		}
 		return colMap
@@ -792,25 +828,37 @@ func determineHashOnPK(nodeID int32, builder *QueryBuilder) map[uint64][]uint64 
 	exprLeftCols := make([]uint64, len(exprs))
 	exprRightCols := make([]uint64, len(exprs))
 	for i, cond := range exprs {
-		switch condImpl := cond.Expr.(type) {
-		case *plan.Expr_F:
-			expr := condImpl.F.Args[0]
-			switch exprImpl := expr.Expr.(type) {
-			case *plan.Expr_Col:
-				exprLeftCols[i] = (uint64(exprImpl.Col.RelPos) << 32) | uint64(exprImpl.Col.ColPos)
-			}
-			expr = condImpl.F.Args[1]
-			switch exprImpl := expr.Expr.(type) {
-			case *plan.Expr_Col:
-				//the nullable column ref is not primary key.
-				//can not use the hashOnPk.
-				//it assume build hashamp on right side.
-				if !expr.Typ.NotNullable {
-					return nil
-				}
-				exprRightCols[i] = (uint64(exprImpl.Col.RelPos) << 32) | uint64(exprImpl.Col.ColPos)
-			}
+		fn := cond.GetF()
+		if fn == nil || len(fn.Args) != 2 {
+			return nil
 		}
+		leftCol := fn.Args[0].GetCol()
+		rightCol := fn.Args[1].GetCol()
+		if leftCol == nil || rightCol == nil {
+			// HashOnPK is an exact direct-column proof. A cast or other wrapper
+			// may collapse storage-distinct primary keys under join equality.
+			return nil
+		}
+		if !sqlEqualityJoinUsesOneIdentityDomain(fn.Args[0].Typ, fn.Args[1].Typ) {
+			return nil
+		}
+		leftTableType, leftTypeOK := referencedTableColumnType(
+			node.Children[0], leftCol, builder)
+		rightTableType, rightTypeOK := referencedTableColumnType(
+			node.Children[1], rightCol, builder)
+		if !leftTypeOK || !rightTypeOK ||
+			!sqlEqualityJoinUsesOneIdentityDomain(fn.Args[0].Typ, leftTableType) ||
+			!sqlEqualityJoinUsesOneIdentityDomain(fn.Args[1].Typ, rightTableType) {
+			// Mutually consistent join-expression metadata cannot substitute for
+			// the concrete columns that the direct references identify.
+			return nil
+		}
+		exprLeftCols[i] = (uint64(leftCol.RelPos) << 32) | uint64(leftCol.ColPos)
+		// The build/right primary-key expression must remain non-nullable.
+		if !fn.Args[1].Typ.NotNullable {
+			return nil
+		}
+		exprRightCols[i] = (uint64(rightCol.RelPos) << 32) | uint64(rightCol.ColPos)
 	}
 
 	rightColKey := make([]uint64, len(exprs))
@@ -862,6 +910,53 @@ func determineHashOnPK(nodeID int32, builder *QueryBuilder) map[uint64][]uint64 
 	}
 
 	return leftColMap
+}
+
+func referencedTableColumnType(
+	nodeID int32,
+	col *plan.ColRef,
+	builder *QueryBuilder,
+) (plan.Type, bool) {
+	if builder == nil || builder.qry == nil || col == nil {
+		return plan.Type{}, false
+	}
+	visited := make(map[int32]struct{})
+	var found plan.Type
+	matches := 0
+	var visit func(int32)
+	visit = func(currentID int32) {
+		if currentID < 0 || int(currentID) >= len(builder.qry.Nodes) {
+			return
+		}
+		if _, seen := visited[currentID]; seen {
+			return
+		}
+		visited[currentID] = struct{}{}
+		current := builder.qry.Nodes[currentID]
+		if current == nil {
+			return
+		}
+		if current.NodeType == plan.Node_TABLE_SCAN {
+			for _, tag := range current.BindingTags {
+				if tag != col.RelPos {
+					continue
+				}
+				if current.TableDef == nil || col.ColPos < 0 ||
+					int(col.ColPos) >= len(current.TableDef.Cols) ||
+					current.TableDef.Cols[col.ColPos] == nil {
+					matches = 2
+					return
+				}
+				found = current.TableDef.Cols[col.ColPos].Typ
+				matches++
+			}
+		}
+		for _, childID := range current.Children {
+			visit(childID)
+		}
+	}
+	visit(nodeID)
+	return found, matches == 1
 }
 
 func getHashColsNDVRatio(nodeID int32, builder *QueryBuilder) (float64, bool) {
@@ -976,36 +1071,897 @@ func (builder *QueryBuilder) rewriteDistinctToAGG(nodeID int32) {
 }
 
 // reuse removeSimpleProjections to delete this plan node
-func (builder *QueryBuilder) rewriteEffectlessAggToProject(nodeID int32) {
+func (builder *QueryBuilder) rewriteEffectlessAggToProject(nodeID int32) int32 {
+	remap := make(map[[2]int32]*plan.Expr)
+	rewritten := make(map[int32]struct{})
+	builder.rewriteEffectlessAggToProjectImpl(nodeID, false, remap, rewritten)
+	if len(rewritten) == 0 {
+		return nodeID
+	}
+	if len(remap) > 0 {
+		builder.applyEffectlessAggRemap(nodeID, remap)
+	}
+	return builder.removeConstantSortAfterSingletonGroup(nodeID, rewritten)
+}
+
+func (builder *QueryBuilder) rewriteEffectlessAggToProjectImpl(
+	nodeID int32,
+	limitDemand bool,
+	remap map[[2]int32]*plan.Expr,
+	rewritten map[int32]struct{},
+) {
 	node := builder.qry.Nodes[nodeID]
+	childLimitDemand := false
+	if len(node.Children) == 1 {
+		boundedDemand := limitDemand || node.Limit != nil
+		switch node.NodeType {
+		case plan.Node_PROJECT, plan.Node_SORT:
+			// Only unary operators that preserve a single input relation may
+			// carry a bounded row demand to an aggregate below them.  In
+			// particular, never let an outer LIMIT cross a join or a shared CTE
+			// boundary and accidentally rewrite an unrelated aggregate.
+			childLimitDemand = boundedDemand
+		case plan.Node_FILTER:
+			// A HAVING Filter is above Aggregate on the first rewrite pass. If
+			// Aggregate is removed, filter pushdown can move that predicate onto
+			// the scan before the second pass. Carry demand through only when the
+			// predicate is total and side-effect free; otherwise the rewrite can
+			// change which errors or volatile evaluations are reached.
+			childLimitDemand = boundedDemand && !node.IsEnd &&
+				!node.FilterIsBarrier && !node.RollupFilter &&
+				areTruncationSafePredicates(node.FilterList)
+		}
+	}
 	if len(node.Children) > 0 {
 		for _, child := range node.Children {
-			builder.rewriteEffectlessAggToProject(child)
+			builder.rewriteEffectlessAggToProjectImpl(child, childLimitDemand, remap, rewritten)
 		}
 	}
 	if node.NodeType != plan.Node_AGG {
 		return
 	}
-	if node.AggList != nil || node.ProjectList != nil || node.FilterList != nil {
+	if node.ProjectList != nil ||
+		len(node.Children) != 1 ||
+		len(node.BindingTags) == 0 {
+		return
+	}
+	if len(node.FilterList) > 0 &&
+		(!limitDemand || !areTruncationSafePredicates(node.FilterList)) {
+		// optimizeFilters can attach HAVING directly to Aggregate. It may move to
+		// the input only when bounded demand exists and the complete predicate is
+		// total; otherwise retain the established blocking evaluation boundary.
+		return
+	}
+	if hasInactiveGroupingColumn(node.GroupingFlag) {
+		// An inactive key emits NULL for this grouping-set branch.  A Project
+		// cannot reproduce that row even when the branch has no aggregate
+		// functions, so this is an unconditional semantic barrier.
+		return
+	}
+	if len(node.GroupingFlag) > 0 && len(node.GroupingFlag) != len(node.GroupBy) {
+		// GroupingFlag is positional. A truncated or extended vector cannot prove
+		// that every logical key is active in this grouping-set branch.
+		return
+	}
+	if len(node.AggList) > 0 && !limitDemand {
+		// Aggregate-bearing rewrites are a limit-aware optimization, not a
+		// general plan-shape canonicalization.  Requiring a bounded demand
+		// keeps unlimited queries on their established physical path.
 		return
 	}
 	scan := builder.qry.Nodes[node.Children[0]]
 	if scan.NodeType != plan.Node_TABLE_SCAN || scan.TableDef == nil || scan.TableDef.Pkey == nil {
 		return
 	}
+	pkPositions, ok := sqlEqualityCompatiblePrimaryKeyColumnPositions(scan.TableDef)
+	if !ok || len(scan.BindingTags) != 1 {
+		return
+	}
+	seenBindingTags := map[int32]struct{}{scan.BindingTags[0]: {}}
+	for _, tag := range node.BindingTags {
+		if _, duplicate := seenBindingTags[tag]; duplicate {
+			// Output bindings must not alias the input or one another; otherwise a
+			// remap cannot distinguish an Aggregate result from a scan column.
+			return
+		}
+		seenBindingTags[tag] = struct{}{}
+	}
 	groupCol := make([]int32, 0)
 	for _, expr := range node.GroupBy {
-		if col := expr.GetCol(); col != nil {
+		if col := expr.GetCol(); col != nil && col.RelPos == scan.BindingTags[0] {
+			if col.ColPos < 0 || int(col.ColPos) >= len(scan.TableDef.Cols) ||
+				scan.TableDef.Cols[col.ColPos] == nil ||
+				!sqlEqualityJoinUsesOneIdentityDomain(
+					expr.Typ, scan.TableDef.Cols[col.ColPos].Typ) {
+				return
+			}
 			groupCol = append(groupCol, col.ColPos)
 		}
 	}
-	if !containsAllPKs(groupCol, scan.TableDef) {
-		return
+	for _, pk := range pkPositions {
+		found := false
+		for _, group := range groupCol {
+			if group == pk {
+				found = true
+				break
+			}
+		}
+		if !found {
+			return
+		}
 	}
+	if limitDemand {
+		for _, expr := range node.GroupBy {
+			if !isTruncationSafeRowExpr(expr) {
+				return
+			}
+		}
+		if !areTruncationSafePredicates(scan.FilterList) {
+			return
+		}
+	}
+
+	projectList := make([]*plan.Expr, 0, len(node.GroupBy)+len(node.AggList))
+	projectList = append(projectList, node.GroupBy...)
+	rowAggExprs := make([]*plan.Expr, 0, len(node.AggList))
+	if len(node.AggList) > 0 {
+		if len(node.BindingTags) < 2 {
+			return
+		}
+		for _, agg := range node.AggList {
+			rowExpr, ok := builder.singleRowAggregateExpr(agg)
+			if !ok {
+				return
+			}
+			projectList = append(projectList, rowExpr)
+			rowAggExprs = append(rowAggExprs, rowExpr)
+		}
+
+	}
+
+	if len(node.FilterList) > 0 {
+		inputRemap := make(map[[2]int32]*plan.Expr, len(projectList))
+		groupTag := node.BindingTags[0]
+		for i, groupExpr := range node.GroupBy {
+			inputRemap[[2]int32{groupTag, int32(i)}] = groupExpr
+		}
+		if len(rowAggExprs) > 0 {
+			aggTag := node.BindingTags[1]
+			for i, rowExpr := range rowAggExprs {
+				inputRemap[[2]int32{aggTag, int32(i)}] = rowExpr
+			}
+		}
+		pushedHaving := make([]*plan.Expr, len(node.FilterList))
+		for i, predicate := range node.FilterList {
+			pushedHaving[i] = replaceColumnsForExpr(DeepCopyExpr(predicate), inputRemap)
+			if containsTag(pushedHaving[i], groupTag) ||
+				len(rowAggExprs) > 0 && containsTag(pushedHaving[i], node.BindingTags[1]) {
+				return
+			}
+		}
+		if !areTruncationSafePredicates(pushedHaving) {
+			return
+		}
+		// Project filters execute before projection, but LIMIT pushdown can move
+		// bounded demand to the direct scan. Put the row-equivalent HAVING beside
+		// WHERE on that scan so both predicates remain before the new stop point.
+		scan.FilterList = append(scan.FilterList, pushedHaving...)
+	}
+	if len(node.AggList) > 0 {
+		// Publish ancestor remaps only after every proof and predicate rewrite has
+		// succeeded. A failed node must leave both itself and its consumers intact.
+		groupTag := node.BindingTags[0]
+		aggTag := node.BindingTags[1]
+		for i, agg := range node.AggList {
+			remap[[2]int32{aggTag, int32(i)}] = GetColExpr(
+				agg.Typ,
+				groupTag,
+				int32(len(node.GroupBy)+i),
+			)
+		}
+	}
+
 	node.NodeType = plan.Node_PROJECT
 	node.BindingTags = node.BindingTags[:1]
-	node.ProjectList = node.GroupBy
+	node.ProjectList = projectList
+	node.FilterList = nil
 	node.GroupBy = nil
+	node.AggList = nil
+	node.GroupingFlag = nil
+	node.GroupByHashKey = nil
+	node.SpillMem = 0
+	rewritten[nodeID] = struct{}{}
+}
+
+// removeConstantSortAfterSingletonGroup removes only Sorts whose complete key
+// tuple is proven constant by a Project produced in the same singleton-group
+// rewrite pass. Keeping the provenance set local to this pass prevents the rule
+// from becoming an unrelated global constant-ORDER-BY canonicalization.
+func (builder *QueryBuilder) removeConstantSortAfterSingletonGroup(
+	nodeID int32,
+	rewritten map[int32]struct{},
+) int32 {
+	node := builder.qry.Nodes[nodeID]
+	for i, childID := range node.Children {
+		node.Children[i] = builder.removeConstantSortAfterSingletonGroup(childID, rewritten)
+	}
+
+	if node.NodeType != plan.Node_SORT || len(node.Children) != 1 ||
+		node.Limit == nil || node.RankOption != nil || len(node.OrderBy) == 0 ||
+		builder.sqlCalcFoundRows {
+		return nodeID
+	}
+
+	childID := node.Children[0]
+	child := builder.qry.Nodes[childID]
+	if child.RankOption != nil {
+		return nodeID
+	}
+	usesSingletonGroup := false
+	for _, order := range node.OrderBy {
+		if order == nil || order.Expr == nil {
+			return nodeID
+		}
+		constant, usesSingleton := builder.isConstantSingletonGroupOrderExpr(
+			order.Expr, childID, rewritten,
+		)
+		if !constant {
+			return nodeID
+		}
+		usesSingletonGroup = usesSingletonGroup || usesSingleton
+	}
+	if !usesSingletonGroup {
+		return nodeID
+	}
+
+	limit, offset, ok := composePagination(
+		child.Limit, child.Offset, node.Limit, node.Offset,
+	)
+	if !ok {
+		return nodeID
+	}
+	child.Limit, child.Offset = limit, offset
+	return childID
+}
+
+func (builder *QueryBuilder) isConstantSingletonGroupOrderExpr(
+	expr *plan.Expr,
+	nodeID int32,
+	rewritten map[int32]struct{},
+) (constant, usesSingletonGroup bool) {
+	resolved := DeepCopyExpr(expr)
+	for {
+		node := builder.qry.Nodes[nodeID]
+		if node.NodeType == plan.Node_FILTER {
+			if len(node.Children) != 1 {
+				return false, false
+			}
+			// Filter changes row membership but forwards the input bindings. The
+			// pagination window remains above it when Sort is bypassed, so tracing
+			// a key through this node neither reorders nor suppresses its predicate.
+			nodeID = node.Children[0]
+			continue
+		}
+		if node.NodeType != plan.Node_PROJECT || len(node.BindingTags) != 1 ||
+			len(node.Children) != 1 {
+			break
+		}
+		if !containsTag(resolved, node.BindingTags[0]) {
+			// A key may contain an independent safe constant alongside a key
+			// derived from COUNT(*). The Sort as a whole still has to establish
+			// singleton-group provenance before it can be removed.
+			break
+		}
+
+		projectMap := make(map[[2]int32]*plan.Expr, len(node.ProjectList))
+		for i, project := range node.ProjectList {
+			if project == nil {
+				return false, false
+			}
+			projectMap[[2]int32{node.BindingTags[0], int32(i)}] = project
+		}
+		resolved = replaceColumnsForExpr(resolved, projectMap)
+
+		if _, ok := rewritten[nodeID]; ok {
+			usesSingletonGroup = true
+			break
+		}
+		nodeID = node.Children[0]
+	}
+
+	if !rule.IsConstant(resolved, false) {
+		return false, usesSingletonGroup
+	}
+	if resolved.GetLit() != nil {
+		return true, usesSingletonGroup
+	}
+	folded, err := ConstantFold(
+		batch.EmptyForConstFoldBatch,
+		DeepCopyExpr(resolved),
+		builder.compCtx.GetProcess(),
+		false,
+		true,
+	)
+	return err == nil && folded != nil && folded.GetLit() != nil, usesSingletonGroup
+}
+
+func (builder *QueryBuilder) singleRowAggregateExpr(
+	agg *plan.Expr,
+) (*plan.Expr, bool) {
+	if agg == nil {
+		return nil, false
+	}
+	fn := agg.GetF()
+	if fn == nil || fn.Func == nil || fn.AggConfigType != plan.AggregateConfigType_AGG_CONFIG_NONE ||
+		len(fn.AggConfig) != 0 || uint64(fn.Func.Obj)&function.Distinct != 0 {
+		return nil, false
+	}
+	expectedFunctionID, knownAggregate := singleRowAggregateFunctionID(fn.Func.ObjName)
+	actualFunctionID, overloadIndex := function.DecodeOverloadID(fn.Func.Obj)
+	if !knownAggregate || actualFunctionID != expectedFunctionID || overloadIndex != 0 {
+		return nil, false
+	}
+	overload, registered := function.GetFunctionByIdWithoutError(fn.Func.Obj)
+	if !registered || !overload.IsAgg() {
+		return nil, false
+	}
+	rebound, err := BindFuncExprImplByPlanExpr(
+		builder.GetContext(), fn.Func.ObjName, DeepCopyExprList(fn.Args))
+	if err != nil || rebound == nil || rebound.GetF() == nil ||
+		rebound.GetF().Func == nil || rebound.GetF().Func.Obj != fn.Func.Obj ||
+		!isSameColumnType(rebound.Typ, agg.Typ) ||
+		rebound.Typ.NotNullable != agg.Typ.NotNullable {
+		// Validate the complete registered aggregate contract, not only the
+		// function family. Otherwise a malformed overload index or a result type
+		// that happens to admit a total cast could turn an invalid Aggregate into
+		// a valid-looking Project and suppress the original failure.
+		return nil, false
+	}
+
+	switch fn.Func.ObjName {
+	case "starcount":
+		// The binder represents COUNT(*) as starcount(1), and the plan-level
+		// COUNT(non-null-column) rewrite preserves that column argument. Keep
+		// the real one-argument IR contract and reject an argument whose
+		// evaluation behavior could otherwise be hidden by a scan LIMIT.
+		if len(fn.Args) != 1 || types.T(agg.Typ.Id) != types.T_int64 || !agg.Typ.NotNullable ||
+			!fn.Args[0].Typ.NotNullable ||
+			!isTruncationSafeRowExpr(fn.Args[0]) {
+			return nil, false
+		}
+		return makePlan2Int64ConstExprWithType(1), true
+
+	case "count":
+		if len(fn.Args) != 1 || types.T(agg.Typ.Id) != types.T_int64 || !agg.Typ.NotNullable ||
+			!isTruncationSafeRowExpr(fn.Args[0]) {
+			return nil, false
+		}
+		// A direct non-null scan column has no evaluation behavior to retain.
+		// Do not use type nullability alone for an arbitrary expression: turning
+		// COUNT(expr) into a constant could suppress expression evaluation.
+		if fn.Args[0].GetCol() != nil && fn.Args[0].Typ.NotNullable {
+			return makePlan2Int64ConstExprWithType(1), true
+		}
+		isNull, err := BindFuncExprImplByPlanExpr(
+			builder.GetContext(), "isnull", []*plan.Expr{DeepCopyExpr(fn.Args[0])})
+		if err != nil {
+			return nil, false
+		}
+		rowCount, err := BindFuncExprImplByPlanExpr(
+			builder.GetContext(), "if", []*plan.Expr{
+				isNull,
+				makePlan2Int64ConstExprWithType(0),
+				makePlan2Int64ConstExprWithType(1),
+			})
+		if err != nil {
+			return nil, false
+		}
+		return rowCount, true
+
+	case "sum", "avg":
+		if len(fn.Args) != 1 || !isTruncationSafeRowExpr(fn.Args[0]) {
+			return nil, false
+		}
+		if !singleRowSumOrAvgCastIsExact(fn.Func.ObjName, fn.Args[0].Typ, agg.Typ) {
+			return nil, false
+		}
+		fallthrough
+
+	case "min", "max", "any_value":
+		if len(fn.Args) != 1 || !isTruncationSafeRowExpr(fn.Args[0]) {
+			return nil, false
+		}
+		if !singleRowCastIsTotal(fn.Args[0].Typ, agg.Typ) {
+			// The blocking Aggregate used to reach this conversion for every
+			// singleton group. A scan LIMIT must not hide a later cast failure.
+			return nil, false
+		}
+		target := makeTypeByPlan2Type(agg.Typ)
+		rowValue, err := makePlan2CastExpr(
+			builder.GetContext(),
+			DeepCopyExpr(fn.Args[0]),
+			makePlan2Type(&target),
+		)
+		if err != nil {
+			return nil, false
+		}
+		return rowValue, true
+	}
+	return nil, false
+}
+
+func singleRowAggregateFunctionID(name string) (int32, bool) {
+	switch name {
+	case "starcount":
+		return function.STARCOUNT, true
+	case "count":
+		return function.COUNT, true
+	case "sum":
+		return function.SUM, true
+	case "avg":
+		return function.AVG, true
+	case "min":
+		return function.MIN, true
+	case "max":
+		return function.MAX, true
+	case "any_value":
+		return function.ANY_VALUE, true
+	default:
+		return 0, false
+	}
+}
+
+// isTruncationSafeRowExpr proves that moving an expression from below a
+// blocking Aggregate to a streaming Project cannot suppress an error or an
+// externally visible evaluation. Keep this proof deliberately structural: an
+// arbitrary deterministic function may still fail for part of its input
+// domain, so volatility metadata alone is not sufficient.
+func isTruncationSafeRowExpr(expr *plan.Expr) bool {
+	if expr == nil {
+		return false
+	}
+	if expr.GetCol() != nil || expr.GetLit() != nil {
+		return true
+	}
+
+	fn := expr.GetF()
+	if fn == nil || fn.Func == nil || fn.Func.ObjName != "cast" || len(fn.Args) != 2 ||
+		fn.Args[1].GetT() == nil {
+		return false
+	}
+	overload, ok := function.GetFunctionByIdWithoutError(fn.Func.Obj)
+	if !ok || overload.CannotFold() || overload.IsRealTimeRelated() {
+		return false
+	}
+	return isTruncationSafeRowExpr(fn.Args[0]) &&
+		singleRowCastIsTotal(fn.Args[0].Typ, expr.Typ)
+}
+
+// isTruncationSafePredicateExpr proves that a row predicate below a blocking
+// Aggregate is total and side-effect free. Removing the Aggregate allows a scan
+// LIMIT to stop predicate evaluation early, so ordinary determinism metadata is
+// insufficient: a deterministic scalar can still fail on a later row.
+//
+// FilterList is the semantic row-filter owner. BlockFilterList contains derived
+// pruning copies and does not replace that evaluation, so proving every entry in
+// FilterList closes both the row path and any derived block-filter path.
+func isTruncationSafePredicateExpr(expr *plan.Expr) bool {
+	if expr == nil || types.T(expr.Typ.Id) != types.T_bool {
+		// Filter predicates are boolean in valid planner IR. Do not let malformed
+		// result metadata turn an arbitrary value expression into a total predicate
+		// and thereby move bounded demand across Aggregate.
+		return false
+	}
+	if isTruncationSafePredicateValue(expr) {
+		return true
+	}
+	fn := expr.GetF()
+	if fn == nil || fn.Func == nil {
+		return false
+	}
+	overload, ok := function.GetFunctionByIdWithoutError(fn.Func.Obj)
+	if !ok || overload.CannotFold() || overload.IsRealTimeRelated() {
+		return false
+	}
+	functionID, _ := function.DecodeOverloadID(fn.Func.Obj)
+
+	switch functionID {
+	case function.AND, function.OR, function.XOR:
+		return len(fn.Args) == 2 &&
+			isTruncationSafePredicateExpr(fn.Args[0]) &&
+			isTruncationSafePredicateExpr(fn.Args[1])
+	case function.NOT:
+		return len(fn.Args) == 1 && isTruncationSafePredicateExpr(fn.Args[0])
+	case function.EQUAL, function.NOT_EQUAL,
+		function.GREAT_THAN, function.GREAT_EQUAL,
+		function.LESS_THAN, function.LESS_EQUAL:
+		return isTruncationSafeComparison(functionID, fn.Args)
+	case function.BETWEEN:
+		return isTruncationSafeBetween(fn.Args)
+	case function.IN, function.NOT_IN:
+		return isTruncationSafeIn(fn.Args)
+	case function.IS, function.ISNOT:
+		return isTruncationSafeComparison(functionID, fn.Args)
+	case function.ISNULL, function.ISNOTNULL,
+		function.ISTRUE, function.ISNOTTRUE,
+		function.ISFALSE, function.ISNOTFALSE:
+		return len(fn.Args) == 1 && isTruncationSafePredicateValue(fn.Args[0])
+	default:
+		return false
+	}
+}
+
+func isTruncationSafeComparison(functionID int32, args []*plan.Expr) bool {
+	return len(args) == 2 &&
+		isTruncationSafePredicateValue(args[0]) &&
+		isTruncationSafePredicateValue(args[1]) &&
+		comparisonEvaluationIsTotal(functionID, args[0].Typ, args[1].Typ)
+}
+
+// comparisonEvaluationIsTotal proves the resolved comparison implementation,
+// not merely the shape of its operands. Keep the supported type domains
+// explicit so a newly added comparison overload is rejected until its failure
+// behavior has been reviewed.
+func comparisonEvaluationIsTotal(functionID int32, left, right plan.Type) bool {
+	leftID := types.T(left.Id)
+	rightID := types.T(right.Id)
+
+	if functionID == function.IS || functionID == function.ISNOT {
+		return leftID == types.T_bool && rightID == types.T_bool
+	}
+	if !isTruncationSafeEquality(functionID) && !isTruncationSafeOrdering(functionID) {
+		return false
+	}
+	if isDatetimeTimestampTypePair(leftID, rightID) {
+		return true
+	}
+	if leftID != rightID {
+		// Equality has a direct JSON/BOOL overload.  Valid JSON containers can
+		// fail its scalar coercion, so that mixed domain is intentionally not
+		// included here.
+		return false
+	}
+
+	if leftID.IsDecimal() {
+		if !validDecimalPlanType(left) || !validDecimalPlanType(right) {
+			return false
+		}
+		if leftID != types.T_decimal256 || left.Scale == right.Scale {
+			return true
+		}
+		// Decimal256 comparisons align scales at execution time.  Scaling the
+		// lower-scale coefficient is total only when every value in its declared
+		// precision still fits the 76-digit Decimal256 domain.
+		lowerScale := left
+		if right.Scale < left.Scale {
+			lowerScale = right
+		}
+		delta := left.Scale - right.Scale
+		if delta < 0 {
+			delta = -delta
+		}
+		return lowerScale.Width+delta <= types.T_decimal256.ToType().Width
+	}
+
+	switch leftID {
+	case types.T_bool,
+		types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64,
+		types.T_int8, types.T_int16, types.T_int32, types.T_int64,
+		types.T_float32, types.T_float64,
+		types.T_char, types.T_varchar,
+		types.T_date, types.T_datetime, types.T_timestamp, types.T_time,
+		types.T_blob, types.T_text, types.T_datalink,
+		types.T_binary, types.T_varbinary,
+		types.T_json, types.T_uuid, types.T_Rowid,
+		types.T_array_float32, types.T_array_float64,
+		types.T_array_bf16, types.T_array_float16,
+		types.T_array_int8, types.T_array_uint8,
+		types.T_year:
+		return true
+	case types.T_bit:
+		// notEqualFn currently routes BIT through the varlena executor even
+		// though BIT is fixed-width.  Keep that resolved overload behind the
+		// blocking Aggregate; equality and ordering use fixed-width executors.
+		return functionID != function.NOT_EQUAL
+	case types.T_geometry, types.T_geometry32:
+		return isTruncationSafeEquality(functionID)
+	case types.T_enum:
+		// EQUAL has a concrete ENUM executor, while NOT_EQUAL is accepted by
+		// the registry but has no execution case.
+		return functionID == function.EQUAL
+	default:
+		return false
+	}
+}
+
+func isTruncationSafeEquality(functionID int32) bool {
+	return functionID == function.EQUAL || functionID == function.NOT_EQUAL
+}
+
+func isTruncationSafeOrdering(functionID int32) bool {
+	switch functionID {
+	case function.GREAT_THAN, function.GREAT_EQUAL,
+		function.LESS_THAN, function.LESS_EQUAL:
+		return true
+	default:
+		return false
+	}
+}
+
+func isDatetimeTimestampTypePair(left, right types.T) bool {
+	return left == types.T_datetime && right == types.T_timestamp ||
+		left == types.T_timestamp && right == types.T_datetime
+}
+
+func isTruncationSafeBetween(args []*plan.Expr) bool {
+	if len(args) != 3 {
+		return false
+	}
+	for _, arg := range args {
+		if !isTruncationSafePredicateValue(arg) {
+			return false
+		}
+	}
+
+	ids := [3]types.T{
+		types.T(args[0].Typ.Id),
+		types.T(args[1].Typ.Id),
+		types.T(args[2].Typ.Id),
+	}
+	if ids[0] == types.T_datetime || ids[0] == types.T_timestamp {
+		for _, id := range ids[1:] {
+			if id != types.T_datetime && id != types.T_timestamp {
+				return false
+			}
+		}
+		return true
+	}
+	if ids[0] != ids[1] || ids[0] != ids[2] {
+		return false
+	}
+	if ids[0].IsDecimal() {
+		return validDecimalPlanType(args[0].Typ) &&
+			validDecimalPlanType(args[1].Typ) &&
+			validDecimalPlanType(args[2].Typ) &&
+			comparisonEvaluationIsTotal(function.GREAT_EQUAL, args[0].Typ, args[1].Typ) &&
+			comparisonEvaluationIsTotal(function.LESS_EQUAL, args[0].Typ, args[2].Typ)
+	}
+
+	// This is the exact total domain implemented by betweenImpl.  The
+	// function registry accepts some additional comparison-capable types whose
+	// BETWEEN executor currently has no case, so do not infer safety from the
+	// registry's generic comparison check.
+	switch ids[0] {
+	case types.T_bool, types.T_bit,
+		types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64,
+		types.T_int8, types.T_int16, types.T_int32, types.T_int64,
+		types.T_float32, types.T_float64,
+		types.T_date, types.T_datetime, types.T_timestamp, types.T_time,
+		types.T_uuid, types.T_Rowid,
+		types.T_char, types.T_varchar,
+		types.T_blob, types.T_text, types.T_datalink,
+		types.T_binary, types.T_varbinary:
+		return true
+	default:
+		return false
+	}
+}
+
+func isTruncationSafeIn(args []*plan.Expr) bool {
+	if len(args) != 2 ||
+		!isTruncationSafePredicateValue(args[0]) {
+		return false
+	}
+
+	left := args[0].Typ
+	rightValues, ok := inRHSValues(args[1], left)
+	if !ok || len(rightValues) == 0 {
+		// A folded LiteralVec is executable payload, not just an opaque constant.
+		// Decode it and prove its concrete vector type; otherwise a malformed or
+		// cross-domain RHS error could be hidden by scan truncation.
+		return false
+	}
+	for _, right := range rightValues {
+		if !isTruncationSafePredicateValue(right) ||
+			!sqlEqualityJoinUsesOneIdentityDomain(left, right.Typ) {
+			return false
+		}
+	}
+	leftID := types.T(left.Id)
+	if leftID.IsDecimal() {
+		return validDecimalPlanType(left)
+	}
+	// IN is implemented as a typed hash lookup.  This list mirrors its concrete
+	// overloads; unknown future overloads remain behind the Aggregate barrier.
+	switch leftID {
+	case types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64,
+		types.T_int8, types.T_int16, types.T_int32, types.T_int64,
+		types.T_float32, types.T_float64,
+		types.T_varchar, types.T_char,
+		types.T_date, types.T_datetime, types.T_bool, types.T_timestamp,
+		types.T_blob, types.T_uuid, types.T_text, types.T_time,
+		types.T_binary, types.T_varbinary, types.T_year,
+		types.T_array_float32, types.T_array_float64, types.T_enum:
+		return true
+	default:
+		return false
+	}
+}
+
+func areTruncationSafePredicates(exprs []*plan.Expr) bool {
+	for _, expr := range exprs {
+		if !isTruncationSafePredicateExpr(expr) {
+			return false
+		}
+	}
+	return true
+}
+
+func isTruncationSafePredicateValue(expr *plan.Expr) bool {
+	if expr == nil {
+		return false
+	}
+	switch value := expr.Expr.(type) {
+	case *plan.Expr_Col:
+		return value.Col != nil
+	case *plan.Expr_Lit:
+		return value.Lit != nil
+	case *plan.Expr_P:
+		return value.P != nil
+	case *plan.Expr_V:
+		// Variables are resolved again for every input batch and resolution or
+		// typed reconstruction can fail. A scan LIMIT would reduce those
+		// externally observable resolver calls, unlike a prepared parameter
+		// whose executor caches its first successful value.
+		return false
+	case *plan.Expr_Vec:
+		// LiteralVec is executable encoded data and needs operator-specific type
+		// validation. IN/NOT IN performs that validation in isTruncationSafeIn;
+		// no other accepted predicate operator has a vector-valued scalar operand.
+		return false
+	case *plan.Expr_List:
+		// Expr_List likewise belongs to the IN/NOT IN RHS contract. Treating it as
+		// an arbitrary scalar would accept malformed comparison or Filter IR.
+		return false
+	default:
+		return isTruncationSafeRowExpr(expr)
+	}
+}
+
+func singleRowCastIsTotal(source, target plan.Type) bool {
+	sourceID := types.T(source.Id)
+	targetID := types.T(target.Id)
+	if isSameColumnType(source, target) {
+		return !sourceID.IsDecimal() || validDecimalPlanType(source)
+	}
+	if sourceID.IsDecimal() {
+		if !validDecimalPlanType(source) {
+			return false
+		}
+		if targetID == types.T_float64 {
+			// MatrixOne decimals have at most 76 integral digits, which is within
+			// the finite float64 exponent range. Precision loss is allowed here:
+			// the same cast is evaluated before the singleton aggregate.
+			return true
+		}
+		return decimalDomainContains(source, target)
+	}
+
+	if sourceID == types.T_float32 {
+		return targetID == types.T_float64
+	}
+	if !sourceID.IsInteger() {
+		return false
+	}
+	if targetID == types.T_float32 || targetID == types.T_float64 {
+		// Every supported integer domain is inside both floating-point exponent
+		// ranges. Rounding is part of the original cast and is unchanged.
+		return true
+	}
+	if targetID.IsDecimal() {
+		digits := integerDecimalDigits(sourceID)
+		return digits > 0 && validDecimalPlanType(target) &&
+			digits <= target.Width-target.Scale
+	}
+	if !targetID.IsInteger() {
+		return false
+	}
+
+	sourceBits, sourceSigned := integerTypeDomain(sourceID)
+	targetBits, targetSigned := integerTypeDomain(targetID)
+	if sourceBits == 0 || targetBits == 0 {
+		return false
+	}
+	if sourceSigned == targetSigned {
+		return targetBits >= sourceBits
+	}
+	return !sourceSigned && targetSigned && targetBits > sourceBits
+}
+
+func decimalDomainContains(source, target plan.Type) bool {
+	sourceID := types.T(source.Id)
+	targetID := types.T(target.Id)
+	if !sourceID.IsDecimal() || !targetID.IsDecimal() ||
+		!validDecimalPlanType(source) || !validDecimalPlanType(target) ||
+		target.Scale < source.Scale {
+		return false
+	}
+	return source.Width-source.Scale <= target.Width-target.Scale
+}
+
+func validDecimalPlanType(typ plan.Type) bool {
+	oid := types.T(typ.Id)
+	if !oid.IsDecimal() {
+		return false
+	}
+	return typ.Width > 0 && typ.Width <= oid.ToType().Width &&
+		typ.Scale >= 0 && typ.Scale <= typ.Width
+}
+
+func integerTypeDomain(oid types.T) (bits int, signed bool) {
+	switch oid {
+	case types.T_int8:
+		return 8, true
+	case types.T_int16:
+		return 16, true
+	case types.T_int32:
+		return 32, true
+	case types.T_int64:
+		return 64, true
+	case types.T_uint8:
+		return 8, false
+	case types.T_uint16:
+		return 16, false
+	case types.T_uint32:
+		return 32, false
+	case types.T_uint64:
+		return 64, false
+	default:
+		return 0, false
+	}
+}
+
+func integerDecimalDigits(oid types.T) int32 {
+	switch oid {
+	case types.T_int8, types.T_uint8:
+		return 3
+	case types.T_int16, types.T_uint16:
+		return 5
+	case types.T_int32, types.T_uint32:
+		return 10
+	case types.T_int64:
+		return 19
+	case types.T_uint64:
+		return 20
+	default:
+		return 0
+	}
+}
+
+func singleRowSumOrAvgCastIsExact(name string, source, target plan.Type) bool {
+	sourceID := types.T(source.Id)
+	if sourceID == types.T_float32 || sourceID == types.T_float64 {
+		// SUM/AVG initialize an arithmetic state, which canonicalizes -0 to +0.
+		// A direct cast preserves -0 and can therefore change later predicates.
+		return false
+	}
+
+	if name != "avg" || !sourceID.IsDecimal() {
+		return true
+	}
+
+	return decimalDomainContains(source, target)
+}
+
+func (builder *QueryBuilder) applyEffectlessAggRemap(
+	nodeID int32,
+	remap map[[2]int32]*plan.Expr,
+) {
+	node := builder.qry.Nodes[nodeID]
+	replaceColumnsForNode(node, remap)
+	for _, child := range node.Children {
+		builder.applyEffectlessAggRemap(child, remap)
+	}
 }
 
 func makeBetweenExprFromDateFormat(equalFunc *plan.Function, dateformatFunc *plan.Function, intervalStr string, builder *QueryBuilder) *plan.Expr {

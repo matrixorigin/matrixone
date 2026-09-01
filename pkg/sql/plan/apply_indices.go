@@ -4574,6 +4574,10 @@ func (builder *QueryBuilder) applyIndicesForJoins(nodeID int32, node *plan.Node,
 		hashSlot++
 	}
 
+	if leftChild.TableDef == nil || leftChild.TableDef.Pkey == nil {
+		return nodeID, nil
+	}
+
 	joinOnPK := true
 	for _, part := range leftChild.TableDef.Pkey.Names {
 		colIdx := leftChild.TableDef.Name2ColIndex[part]

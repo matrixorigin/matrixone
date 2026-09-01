@@ -217,13 +217,21 @@ install/lib/libroaring.a: | init
 #   macOS arm64  -> onnxruntime_arm64.dylib
 ifeq ($(ONNX_SUPPORTED),1)
 onnxruntime: | init
-	@if test -r "$(ONNX_PREBUILT_DIR)/$(ONNX_LIB)"; then \
+	@installed="install/lib/$(ONNX_LIB)"; \
+	if test -r "$$installed"; then \
+		actual_sha256="$$(shasum -a 256 "$$installed" | awk '{print $$1}')"; \
+		if test "$$actual_sha256" = "$(ONNX_SHA256)"; then \
+			echo "using verified installed ONNX Runtime $(ONNX_VERSION) from $$installed"; \
+			exit 0; \
+		fi; \
+	fi; \
+	if test -r "$(ONNX_PREBUILT_DIR)/$(ONNX_LIB)"; then \
 		echo "using prebuilt ONNX Runtime $(ONNX_VERSION) from $(ONNX_PREBUILT_DIR)"; \
-		install -m 0644 "$(ONNX_PREBUILT_DIR)/$(ONNX_LIB)" "install/lib/$(ONNX_LIB)"; \
-		actual_sha256="$$(sha256sum "install/lib/$(ONNX_LIB)" | awk '{print $$1}')"; \
-		test "$$actual_sha256" = "$(ONNX_SHA256)" || { echo "ONNX Runtime checksum mismatch: got $$actual_sha256, expected $(ONNX_SHA256)" >&2; rm -f "install/lib/$(ONNX_LIB)"; exit 1; }; \
+		install -m 0644 "$(ONNX_PREBUILT_DIR)/$(ONNX_LIB)" "$$installed"; \
+		actual_sha256="$$(shasum -a 256 "$$installed" | awk '{print $$1}')"; \
+		test "$$actual_sha256" = "$(ONNX_SHA256)" || { echo "ONNX Runtime checksum mismatch: got $$actual_sha256, expected $(ONNX_SHA256)" >&2; rm -f "$$installed"; exit 1; }; \
 	else \
-		$(DOWNLOAD) "$(ONNX_BASE_URL)/$(ONNX_SRC)" "$(ONNX_SHA256)" "install/lib/$(ONNX_LIB)"; \
+		$(DOWNLOAD) "$(ONNX_BASE_URL)/$(ONNX_SRC)" "$(ONNX_SHA256)" "$$installed"; \
 	fi
 else
 onnxruntime:

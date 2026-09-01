@@ -83,7 +83,7 @@ select `pitr_id`, `pitr_name`, `create_account`, `create_time`, `modified_time`,
 
 
 use test01;
-create table t1 (col1 int, col2 decimal);
+create table t1 (col1 int, col2 decimal(38,0));
 insert into t1 values (1,2);
 insert into t1 values (2,3);
 drop pitr if exists `$%^#`;
@@ -189,7 +189,7 @@ drop database test;
 drop database if exists test;
 create database test;
 use test;
-create table t1(col int, col2 decimal);
+create table t1(col int, col2 decimal(38,0));
 insert into t1 values(1,1);
 drop pitr if exists p10;
 create pitr p10 for table test  t1 range 10 'y';
@@ -226,7 +226,7 @@ drop database test;
 drop database if exists test;
 create database test;
 use test;
-create table t1(col int, col2 decimal);
+create table t1(col int, col2 decimal(38,0));
 insert into t1 values(1,1);
 drop pitr if exists p10;
 create pitr p10 for table test t1 range 10 'y';
