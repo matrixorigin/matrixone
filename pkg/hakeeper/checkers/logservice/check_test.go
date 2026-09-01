@@ -41,6 +41,102 @@ func TestMain(m *testing.M) {
 
 var expiredTick = uint64(hakeeper.DefaultLogStoreTimeout / time.Second * hakeeper.DefaultTickPerSecond)
 
+func TestCheckerReplacesReplicaAfterStoreIncarnationChange(t *testing.T) {
+	cluster := pb.ClusterInfo{LogShards: []metadata.LogShardRecord{{
+		ShardID:          1,
+		NumberOfReplicas: 3,
+	}}}
+	shard := pb.LogShardInfo{
+		ShardID:                  1,
+		Replicas:                 map[uint64]string{1: "a", 2: "b", 3: "c"},
+		ReplicaStoreIncarnations: map[uint64]string{1: "old-a", 2: "disk-b", 3: "disk-c"},
+		Epoch:                    1,
+		LeaderID:                 2,
+		Term:                     1,
+	}
+	state := pb.LogState{
+		Shards: map[uint64]pb.LogShardInfo{1: shard},
+		Stores: map[string]pb.LogStoreInfo{
+			"a": {StoreIncarnation: "new-a"},
+			"b": {
+				StoreIncarnation: "disk-b",
+				Replicas:         []pb.LogReplicaInfo{{LogShardInfo: shard, ReplicaID: 2}},
+			},
+			"c": {
+				StoreIncarnation: "disk-c",
+				Replicas:         []pb.LogReplicaInfo{{LogShardInfo: shard, ReplicaID: 3}},
+			},
+		},
+	}
+	cfg := hakeeper.Config{}
+	cfg.Fill()
+	newChecker := func(state pb.LogState, alloc util.IDAllocator) hakeeper.ModuleChecker {
+		return NewLogServiceChecker(
+			hakeeper.NewCheckerCommonFields(
+				"",
+				cfg,
+				alloc,
+				cluster,
+				pb.TaskTableUser{},
+				0,
+			),
+			state,
+			pb.TNState{},
+			operator.ExecutingReplicas{},
+			operator.ExecutingReplicas{},
+			0,
+			pb.Locality{},
+			false,
+		)
+	}
+
+	ops := newChecker(state, util.NewTestIDAllocator(10)).Check()
+	if assert.Len(t, ops, 1) && assert.Len(t, ops[0].OpSteps(), 1) {
+		assert.Equal(t, operator.RemoveLogService{
+			Target: "b",
+			Replica: operator.Replica{
+				UUID:      "a",
+				ShardID:   1,
+				ReplicaID: 1,
+				Epoch:     1,
+			},
+		}, ops[0].OpSteps()[0])
+	}
+
+	// After the old membership is removed, the ordinary deficit repair path
+	// allocates a new replica ID on the same live store.
+	shard.Epoch = 2
+	shard.Replicas = map[uint64]string{2: "b", 3: "c"}
+	delete(shard.ReplicaStoreIncarnations, 1)
+	state.Shards[1] = shard
+	ops = newChecker(state, util.NewTestIDAllocator(10)).Check()
+	if assert.Len(t, ops, 1) && assert.Len(t, ops[0].OpSteps(), 1) {
+		assert.Equal(t, operator.AddLogService{
+			Target: "b",
+			Replica: operator.Replica{
+				UUID:      "a",
+				ShardID:   1,
+				ReplicaID: 11,
+				Epoch:     2,
+			},
+		}, ops[0].OpSteps()[0])
+	}
+
+	// A newly allocated ID has no old incarnation binding and is therefore
+	// allowed to start on the replacement storage.
+	shard.Epoch = 3
+	shard.Replicas[11] = "a"
+	state.Shards[1] = shard
+	ops = newChecker(state, util.NewTestIDAllocator(20)).Check()
+	if assert.Len(t, ops, 1) && assert.Len(t, ops[0].OpSteps(), 1) {
+		assert.Equal(t, operator.StartLogService{Replica: operator.Replica{
+			UUID:      "a",
+			ShardID:   1,
+			ReplicaID: 11,
+		}}, ops[0].OpSteps()[0])
+	}
+}
+
 func TestCheck(t *testing.T) {
 	cases := []struct {
 		desc                string
