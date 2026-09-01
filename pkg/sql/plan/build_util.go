@@ -43,14 +43,14 @@ import (
 // 	return nodeID
 // }
 
-// applySharedLockTableFallback upgrades cardinality-known shared lock targets
-// before their first row lock is acquired. An exclusive owner can safely
-// coarsen its own rows later, but a shared row may already have other holders;
-// converting that ownership in the middle of a transaction is not always
-// possible without changing Shared compatibility. Estimates that are low and
-// transactions with many statements retain exact Shared rows up to the fixed
-// bookkeeping-pool ceiling rather than changing lock semantics at this budget.
-func applySharedLockTableFallback(builder *QueryBuilder) {
+// applyLockTableFallback upgrades cardinality-known lock targets before their
+// first row lock is acquired. Shared targets need this planner fallback because
+// converting already-shared rows is not always possible without changing
+// Shared compatibility. Exclusive targets normally coarsen on the owner side;
+// the only planner exception is a statically unrestricted single-target UPDATE,
+// whose target universe is exactly the whole table. Bounded predicates must
+// retain row/range locks even when their estimated cardinality is large.
+func applyLockTableFallback(builder *QueryBuilder) {
 	proc := builder.compCtx.GetProcess()
 	if proc == nil || proc.Base.LockService == nil {
 		return
@@ -68,6 +68,10 @@ func applySharedLockTableFallback(builder *QueryBuilder) {
 		}
 		for _, target := range node.LockTargets {
 			if target.Mode == lockpb.LockMode_Shared {
+				target.LockTable = true
+				continue
+			}
+			if _, ok := builder.fullTableUpdateLockTargets[target]; ok {
 				target.LockTable = true
 			}
 		}

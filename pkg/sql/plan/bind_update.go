@@ -26,6 +26,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	indexplugin "github.com/matrixorigin/matrixone/pkg/indexplugin"
 	planplugin "github.com/matrixorigin/matrixone/pkg/indexplugin/plan"
+	lockpb "github.com/matrixorigin/matrixone/pkg/pb/lock"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/internal/materialized"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
@@ -2291,6 +2292,16 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext)
 		}
 		return lockTargets[i].PrimaryColIdxInBat < lockTargets[j].PrimaryColIdxInBat
 	})
+	if isUnrestrictedSingleTargetUpdate(stmt, dmlCtx, updatedTargetCount) {
+		if builder.fullTableUpdateLockTargets == nil {
+			builder.fullTableUpdateLockTargets = make(map[*plan.LockTarget]struct{}, len(lockTargets))
+		}
+		for _, target := range lockTargets {
+			if target.Mode == lockpb.LockMode_Exclusive {
+				builder.fullTableUpdateLockTargets[target] = struct{}{}
+			}
+		}
+	}
 
 	// Synchronous irregular indexes share the exact final row image with the
 	// base-table MULTI_UPDATE. Their stale entries are deleted by the immutable
@@ -2402,7 +2413,7 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext)
 			LockTargets: lockTargets,
 		}, bindCtx)
 	}
-	applySharedLockTableFallback(builder)
+	applyLockTableFallback(builder)
 
 	dmlNode.Children = append(dmlNode.Children, lastNodeID)
 	lastNodeID = builder.appendNode(dmlNode, bindCtx)
@@ -4597,6 +4608,22 @@ func updateHasMultipleSourceTables(stmt *tree.Update) bool {
 		return true
 	}
 	return len(stmt.Tables) == 1 && tableExprContainsJoin(stmt.Tables[0])
+}
+
+// isUnrestrictedSingleTargetUpdate proves the semantic precondition for the
+// large-UPDATE table-lock fast path. The proof deliberately stays narrower
+// than cardinality estimation: a predicate that happens to estimate to every
+// current row is still bounded and must preserve #26706's range-lock behavior.
+func isUnrestrictedSingleTargetUpdate(stmt *tree.Update, dmlCtx *DMLContext, updatedTargetCount int) bool {
+	if stmt == nil || dmlCtx == nil || updatedTargetCount != 1 || len(dmlCtx.tableDefs) != 1 ||
+		updateHasMultipleSourceTables(stmt) || len(stmt.OrderBy) != 0 || stmt.Limit != nil {
+		return false
+	}
+	if stmt.Where == nil {
+		return true
+	}
+	literal, ok := stmt.Where.Expr.(*tree.NumVal)
+	return ok && literal.ValType == tree.P_bool && literal.Bool()
 }
 
 func primaryKeyUpdated(tableDef *plan.TableDef, updateCols map[string]tree.Expr) bool {
