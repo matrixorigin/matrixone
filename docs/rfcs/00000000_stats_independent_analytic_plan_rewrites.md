@@ -1,6 +1,6 @@
 - Status: draft
 - Start Date: 2026-09-01
-- Design revision: v3 (2026-09-01)
+- Design revision: v4 (2026-09-01)
 - Authors: MatrixOne optimizer team
 - Implementation PRs: [#27914](https://github.com/matrixorigin/matrixone/pull/27914), [#27915](https://github.com/matrixorigin/matrixone/pull/27915), [#27934](https://github.com/matrixorigin/matrixone/pull/27934)
 - Issue for this RFC: [#26768](https://github.com/matrixorigin/matrixone/issues/26768)
@@ -26,11 +26,11 @@ The implementation may use statistics to choose among plans already proved
 equivalent. Statistics, benchmark query identity, table names, scale factors,
 and constants are never correctness evidence.
 
-This revision is intentionally `draft`.  Review of all three PRs is design-only
-until an exact revision of this RFC receives an explicit, scoped
-design-acceptance review.  The accepted revision is then renamed with its
-approval date and advanced to `in-progress`; implementation review and approval
-remain blocked until that transition.
+This revision remains `draft` while the implementations and acceptance evidence
+are aligned.  Design and implementation are reviewed together: before the
+decisive review, the RFC advances to `in-progress` in the same final candidate
+head.  A GitHub `APPROVE` on that exact head accepts the RFC, implementation,
+and evidence together.  No separate design-only approval or PR is required.
 
 ## Motivation
 
@@ -455,18 +455,17 @@ cohort does not require reverting unrelated stats or executor memory work.
 
 ## Approval record
 
-Design acceptance is an explicit review record naming the exact commit and this
-RFC as accepted.  It may be a scoped `COMMENTED` review while the PR remains
-`CHANGES_REQUESTED`; a GitHub-wide `APPROVE` is not required and must not be
-interpreted as approval of prototype code in the same PR.  This is unambiguous
-because any semantic RFC amendment changes the exact revision and requires a
-new design-acceptance record.  Implementation approval is a later review of the
-aligned exact head and its evidence.  All three PR bodies link the accepted
-design revision before requesting that implementation review.
+The RFC and its owning implementation are one review unit.  Review comments may
+iterate on design or code in any order, but the decisive GitHub `APPROVE` applies
+to the complete exact head: RFC, production code, tests, and attached evidence.
+Any later semantic or implementation commit changes that head and requires
+re-review under normal GitHub rules.  All three implementation PR bodies link
+the same RFC revision so reviewers can assess the global order while approving
+each PR's final implementation diff.
 
 ## Decision log
 
-- v3 supersedes the closed v1 design and the two PR-local draft RFCs; reviewers
+- v4 supersedes the closed v1 design and the two PR-local draft RFCs; reviewers
   need one global order and counterexample matrix for all three PRs.
 - Allocate grouping-set expansion at final rebase to the next contiguous
   unowned MORPC version and test its real predecessor; open-branch numbering is
@@ -484,10 +483,9 @@ design revision before requesting that implementation review.
 
 ## Ready gate
 
-This RFC may advance to `in-progress` only when reviewers accept the global
-non-fixpoint order, all semantic guards (including totality and physical
-probe-side scalar lineage), unique final MORPC allocation and scalar
-optional-wire compatibility,
-resource ownership, the three rollback cohorts, implementation budgets, and
-the positive/counterexample/cross-rule matrix.  No blocking semantic question
-is intentionally deferred to implementation.
+Before requesting decisive approval, the final candidate advances this RFC to
+`in-progress` and closes the global non-fixpoint order, all semantic guards
+(including totality and physical probe-side scalar lineage), unique final MORPC
+allocation, scalar optional-wire compatibility, resource ownership, the three
+rollback cohorts, implementation budgets, and the positive/counterexample/
+cross-rule matrix.  No blocking semantic question is intentionally deferred.
