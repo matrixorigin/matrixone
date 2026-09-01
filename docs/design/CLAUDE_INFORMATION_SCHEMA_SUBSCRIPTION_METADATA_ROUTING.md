@@ -4,7 +4,7 @@
 - Owning issue: [#27759](https://github.com/matrixorigin/matrixone/issues/27759)
 - Implementation PR: [#27778](https://github.com/matrixorigin/matrixone/pull/27778)
 - Related local-visibility design: [Information Schema Metadata Visibility and Active-Role Closure](CLAUDE_INFORMATION_SCHEMA_METADATA_VISIBILITY.md)
-- Version: 1
+- Version: 2
 - Last updated: 2026-09-01
 
 ## 1. Problem and evidence
@@ -38,13 +38,15 @@ This design covers:
 - current and account-snapshot subscription enumeration;
 - ordinary plan-cache and prepared-statement lifecycle behavior;
 - persisted `STATISTICS` view definitions during upgrade and downgrade;
-- publisher-account, publication-database, and publication-table isolation.
+- subscriber active-role visibility plus publisher-account,
+  publication-database, and publication-table isolation.
 
 This design does not:
 
 - expose arbitrary publisher `information_schema` or `mo_catalog` rows;
 - make subscriber role IDs meaningful in the publisher account;
-- grant data access beyond the existing publication contract;
+- grant data or metadata access beyond the intersection of subscriber RBAC and
+  the existing publication contract;
 - copy publisher index rows into the subscriber catalog;
 - change publication creation, subscription creation, or withdrawal semantics;
 - add SQL syntax, a catalog schema migration, or a protocol capability bit;
@@ -60,6 +62,8 @@ Let:
 - `N` be a subscription database name visible in `S`;
 - `D` be the publisher database named by the publication;
 - `T` be the publication's table set, including the existing all-tables form;
+- `V` be the set of tables visible to the subscriber session's active-role
+  closure through the subscription schema;
 - `X` be the current statement snapshot or an explicitly requested historical
   account snapshot.
 
@@ -69,9 +73,10 @@ following hold at `X`:
 1. `S` has a normal, active subscription record for `N`;
 2. that record identifies publisher `P` and publication database `D`;
 3. the indexed table is a member of publication table set `T`;
-4. the `mo_indexes`, `mo_tables`, and `mo_columns` rows belong to `P` and join
+4. the indexed table is visible in subscriber RBAC set `V`;
+5. the `mo_indexes`, `mo_tables`, and `mo_columns` rows belong to `P` and join
    to that published table;
-5. the persisted built-in view has a statement shape the planner can rewrite
+6. the persisted built-in view has a statement shape the planner can rewrite
    without weakening these predicates.
 
 The returned `TABLE_SCHEMA` and `INDEX_SCHEMA` are `N`, not `D`. The table,
@@ -86,7 +91,7 @@ the local branch.
 
 ## 4. Authorization and tenant-isolation boundary
 
-### 4.1 Why publication membership is the publisher boundary
+### 4.1 Two independent authorization boundaries
 
 The publication database/table set is the existing publisher-controlled grant
 that makes a subscribed table definition and its read-only data available to a
@@ -96,13 +101,21 @@ grant would make a valid subscription unreadable to standard clients and would
 create an authorization rule that publication owners cannot express through
 the publication contract.
 
-For a subscription branch, the active subscription plus publication table
-membership is therefore the sole publisher-metadata authorization boundary.
-The publisher branch must not evaluate subscriber role IDs against publisher
-`mo_role_privs`: role IDs are account-local identities and collisions across
-accounts have no authorization meaning. It also must not use an implicit
-publisher session role because no publisher login participates in the
-subscriber statement.
+Publication membership is the sole **publisher-side** authorization boundary;
+it is not a replacement for subscriber RBAC. Before entering a publisher
+catalog, the compiler evaluates the subscription database against the current
+subscriber session's active-role closure. Database ownership, database-wide or
+global table grants, and database metadata grants admit all publication-member
+tables. Exact table/view grants admit only their recorded logical table IDs. A
+connect-only user therefore gets no subscription metadata branch.
+
+After that subscriber-local decision, the publisher branch must not evaluate
+subscriber role IDs against publisher `mo_role_privs`: role IDs are
+account-local identities and collisions across accounts have no authorization
+meaning. It also must not use an implicit publisher session role because no
+publisher login participates in the subscriber statement. Instead the planner
+intersects the subscriber-visible table IDs with the publisher account,
+database, and publication table set.
 
 This exception is narrow. It authorizes only the catalog rows needed to
 describe tables already admitted by the publication. It does not expose
@@ -112,11 +125,22 @@ arbitrary catalog queries.
 ### 4.2 Enforced predicates
 
 Each publisher branch carries the full subscription identity on its catalog
-object references. Planning enforces all three scopes independently:
+object references. Planning enforces all four scopes independently:
 
-1. publisher-account scope on `mo_indexes`, `mo_tables`, and `mo_columns`;
-2. publication-database scope on the publisher `mo_tables` scan;
-3. publication-table scope on that same `mo_tables` scan.
+1. subscriber active-role visibility, computed only from subscriber-local
+   `mo_database`, `mo_role_privs`, and `mo_current_roles()`;
+2. publisher-account scope on `mo_indexes`, `mo_tables`, and `mo_columns`;
+3. publication-database scope on the publisher `mo_tables` scan;
+4. publication-table scope on that same `mo_tables` scan.
+
+Logical table IDs are globally unique catalog identities. For an exact grant,
+the subscriber-side privilege row supplies only those IDs; publisher table
+names are not disclosed while RBAC is evaluated. The publisher `mo_tables`
+scan then requires both `rel_logical_id IN V` and membership in publication set
+`T`. When exact grants exist, the compact globally unique ID set may be
+attached to each candidate subscription branch; unrelated publishers match no
+ID and return no row. If there is neither broad visibility nor any exact grant,
+the subscription branches are omitted entirely.
 
 The joins in the canonical `STATISTICS` view then restrict index and column
 rows to the admitted table IDs. Output schema expressions are rewritten from
@@ -124,10 +148,12 @@ publisher database `D` to subscription name `N` only after source scoping is
 attached.
 
 The canonical view's `__mo_visible_tables` CTE normally evaluates the current
-tenant's role closure. In a publisher branch the planner replaces that CTE's
-subscriber-role predicate with the publisher-account predicate. Publication
-database/table filters remain on `mo_tables`; replacing the CTE is not a
-standalone authorization grant.
+tenant's role closure. The account-wide provider evaluates that same role
+closure locally first. In a publisher branch the planner then replaces the
+CTE's subscriber-role predicate with the publisher-account predicate and adds
+the captured subscriber-visible logical IDs when visibility is table-specific.
+Publication database/table filters remain on `mo_tables`; replacing the CTE is
+not a standalone authorization grant.
 
 An unsupported `__mo_visible_tables` shape fails planning. The planner never
 falls back to an unscoped publisher scan. Compiler-context subscription state
@@ -141,8 +167,8 @@ relational source:
 
 ```text
 subscriber-local STATISTICS
-UNION ALL publisher branch for active subscription N1
-UNION ALL publisher branch for active subscription N2
+UNION ALL publisher branch for active, subscriber-visible subscription N1
+UNION ALL publisher branch for active, subscriber-visible subscription N2
 ...
 ```
 
@@ -164,7 +190,8 @@ Subscription names are sorted for deterministic plans and deduplicated using
 the server's database-identifier comparison rules. Under
 `lower_case_table_names=0`, differently cased names are distinct. Modes 1 and
 2 compare them case-insensitively while preserving the selected subscription's
-display spelling. Empty, nil, withdrawn, and deleted entries are omitted.
+display spelling. Empty, nil, withdrawn, deleted, and subscriber-invisible
+entries are omitted.
 
 `SHOW INDEX` already identifies one database and follows that subscription's
 publisher identity directly. It shares the same publisher-account and
@@ -178,8 +205,8 @@ the session transaction:
 
 1. the compiler clones the transaction operator at snapshot timestamp `X`;
 2. it applies the snapshot tenant identity to the background context;
-3. it enumerates `mo_subs` through a short-lived background executor bound to
-   that cloned transaction;
+3. it enumerates `mo_subs` and subscriber-local RBAC visibility through a
+   short-lived background executor bound to that cloned transaction;
 4. all local and publisher catalog branches retain the same plan snapshot;
 5. the background result and executor are closed on every return path.
 
@@ -258,12 +285,15 @@ versus compatibility view definitions.
 
 ## 9. Cardinality, complexity, and explicit planning budget
 
-Let `A` be the number of active subscription schemas and `R` the number of
-logical `STATISTICS` occurrences. Each source view contains a fixed planner
-shape `V`. Plan construction and the number of catalog branches are
+Let `A` be the number of active, subscriber-visible subscription schemas and
+`R` the number of logical `STATISTICS` occurrences. Each source view contains
+a fixed planner shape `V`. Plan construction and the number of catalog branches are
 `O((A + 1) * R * V)`. Execution work is also proportional to those branches,
 but every publisher `mo_tables` scan is constrained by publisher account,
 publication database, and table set before index rows are returned.
+
+Enumeration adds one batched subscriber-local visibility query per logical
+`STATISTICS` source; it does not issue one RBAC query per subscription.
 
 The subscription feature currently has no catalog-enforced per-account hard
 maximum. This design therefore does not truncate subscriptions or silently
@@ -331,11 +361,16 @@ envelope for the current representation, not permission to bypass those limits.
 Rejected. It is syntax-dependent and fails account-wide, JOIN, derived,
 nested, and future connector query shapes.
 
-### B. Apply subscriber RBAC inside the publisher account
+### B. Evaluate subscriber role IDs inside the publisher account
 
 Rejected. Numeric role identities are tenant-local. Reusing them can both hide
 legitimate published tables and, on an ID collision, express an authorization
 meaning the publisher never granted.
+
+Subscriber RBAC is still mandatory, but it is evaluated against the
+subscriber-local subscription database and privilege rows before publisher
+routing. Only the resulting broad-visibility flag or globally unique logical
+table IDs cross that boundary.
 
 ### C. Execute under a publisher user or role
 
@@ -376,6 +411,8 @@ freshness rule explicit.
 | Account-wide source retains local plus every active subscription | planner unit tests and public BVT |
 | WHERE, JOIN ON, derived, nested, sibling, OR, and prepared shapes agree | planner unit tests and public BVT |
 | Publisher account/database/table isolation; unpublished table absent | plan-shape tests and public BVT |
+| Connect-only subscriber cannot discover published table/index names | restricted-user public BVT and omitted-branch planner test |
+| Database-wide and exact-table subscriber grants intersect publication scope | database-wide public BVT plus visibility-provider and exact-filter unit tests |
 | Subscriber role IDs do not authorize publisher catalogs | canonical CTE rewrite and publisher-RBAC negative tests |
 | Canonical and legacy persisted-view shapes remain safe | real canonical-DDL rewrite test and fail-closed shape tests |
 | Current and historical membership use one snapshot | compiler-context ownership review and public snapshot BVT |
@@ -412,8 +449,9 @@ branch/cardinality observability before raising the budget.
 
 ## 14. Decision log and open decisions
 
-- Publication membership and table scope, not publisher RBAC, authorize the
-  narrow publisher metadata branch.
+- Subscriber active-role visibility and publication membership are both
+  required. Publication scope, not publisher RBAC, authorizes the narrow
+  cross-account catalog scan after subscriber RBAC succeeds.
 - `STATISTICS` is account-wide and syntax-independent.
 - Local and publisher rows are combined with `UNION ALL`; existing catalog
   uniqueness prevents semantic duplicate index rows within one branch.
@@ -439,7 +477,7 @@ To be completed by an authorized reviewer:
 ```text
 Change scope: cross-account subscription index metadata routing
 Trigger: authorization/tenant boundary; account-wide semantics; snapshot and cache lifecycle; planner amplification
-Design: docs/design/CLAUDE_INFORMATION_SCHEMA_SUBSCRIPTION_METADATA_ROUTING.md, version 1, <reviewed commit>
+Design: docs/design/CLAUDE_INFORMATION_SCHEMA_SUBSCRIPTION_METADATA_ROUTING.md, version 2, <reviewed commit>
 Blocking findings: <none or findings>
 Decision log: <accepted tradeoffs and resolved questions>
 Decision: PASS | REQUEST_CHANGES

@@ -1319,11 +1319,11 @@ func (tcc *TxnCompilerContext) GetSubscriptionMeta(dbName string, snapshot *plan
 	return getSubscriptionMeta(tempCtx, dbName, tcc.GetSession(), txn, bh)
 }
 
-// GetSubscriptionMetas returns every active subscription schema visible to the
-// current account. mo_subs is the account-level catalog abstraction used by
-// SHOW SUBSCRIPTIONS; filtering its status here also keeps withdrawn and
-// deleted publications out of account-wide information_schema metadata.
-func (tcc *TxnCompilerContext) GetSubscriptionMetas(snapshot *plan2.Snapshot) ([]*plan.SubscriptionMeta, error) {
+// GetSubscriptionMetadata returns every active subscription schema visible to
+// the current active-role closure. Publication membership establishes which
+// publisher objects may be scanned, while this method establishes the
+// subscriber-local RBAC boundary before any publisher catalog is accessed.
+func (tcc *TxnCompilerContext) GetSubscriptionMetadata(snapshot *plan2.Snapshot) ([]*plan2.SubscriptionMetadata, error) {
 	tempCtx := tcc.execCtx.reqCtx
 	txn := tcc.GetTxnHandler().GetTxn()
 	var bh BackgroundExec
@@ -1352,7 +1352,8 @@ func (tcc *TxnCompilerContext) GetSubscriptionMetas(snapshot *plan2.Snapshot) ([
 		return nil, err
 	}
 
-	return subscriptionMetasFromSubInfos(subInfos), nil
+	metas := subscriptionMetasFromSubInfos(subInfos)
+	return getVisibleSubscriptionMetadata(tempCtx, bh, metas)
 }
 
 func subscriptionMetasFromSubInfos(subInfos []*pubsub.SubInfo) []*plan.SubscriptionMeta {
@@ -1374,6 +1375,140 @@ func subscriptionMetasFromSubInfos(subInfos []*pubsub.SubInfo) []*plan.Subscript
 		return cmp.Compare(strings.ToLower(left.SubName), strings.ToLower(right.SubName))
 	})
 	return metas
+}
+
+func getVisibleSubscriptionMetadata(
+	ctx context.Context,
+	bh BackgroundExec,
+	metas []*plan.SubscriptionMeta,
+) ([]*plan2.SubscriptionMetadata, error) {
+	if len(metas) == 0 {
+		return nil, nil
+	}
+
+	metadataByName := make(map[string]*plan2.SubscriptionMetadata, len(metas))
+	names := make([]string, 0, len(metas))
+	for _, meta := range metas {
+		if meta == nil || meta.SubName == "" {
+			continue
+		}
+		metadataByName[meta.SubName] = &plan2.SubscriptionMetadata{Meta: meta}
+		names = append(names, escapeSQLString(meta.SubName))
+	}
+	if len(names) == 0 {
+		return nil, nil
+	}
+
+	slices.Sort(names)
+	visibilitySQL := subscriptionMetadataVisibilitySQL(strings.Join(names, ","))
+	bh.ClearExecResultSet()
+	if err := bh.Exec(ctx, visibilitySQL); err != nil {
+		return nil, err
+	}
+	results, err := getResultSet(ctx, bh)
+	if err != nil {
+		return nil, err
+	}
+	var exactTableIDs []uint64
+	for _, result := range results {
+		for row := uint64(0); row < result.GetRowCount(); row++ {
+			subscriptionName, getErr := result.GetString(ctx, row, 0)
+			if getErr != nil {
+				return nil, getErr
+			}
+			if subscriptionName == "" {
+				tableID, tableIDErr := result.GetUint64(ctx, row, 2)
+				if tableIDErr != nil {
+					return nil, tableIDErr
+				}
+				if tableID != 0 {
+					exactTableIDs = append(exactTableIDs, tableID)
+				}
+				continue
+			}
+			metadata := metadataByName[subscriptionName]
+			if metadata == nil {
+				continue
+			}
+			allTables, getErr := result.GetInt64(ctx, row, 1)
+			if getErr != nil {
+				return nil, getErr
+			}
+			if allTables != 0 {
+				metadata.AllTablesVisible = true
+				metadata.VisibleTableIDs = nil
+				continue
+			}
+		}
+	}
+	slices.Sort(exactTableIDs)
+	exactTableIDs = slices.Compact(exactTableIDs)
+
+	visible := make([]*plan2.SubscriptionMetadata, 0, len(metas))
+	for _, meta := range metas {
+		if meta == nil {
+			continue
+		}
+		metadata := metadataByName[meta.SubName]
+		if metadata != nil && !metadata.AllTablesVisible {
+			metadata.VisibleTableIDs = append([]uint64(nil), exactTableIDs...)
+		}
+		if metadata == nil ||
+			(!metadata.AllTablesVisible && len(metadata.VisibleTableIDs) == 0) {
+			continue
+		}
+		slices.Sort(metadata.VisibleTableIDs)
+		metadata.VisibleTableIDs = slices.Compact(metadata.VisibleTableIDs)
+		visible = append(visible, metadata)
+	}
+	return visible, nil
+}
+
+// subscriptionMetadataVisibilitySQL mirrors the canonical
+// information_schema table visibility rules using only subscriber-local
+// objects. Exact table grants retain globally unique publisher rel_logical_id
+// values recorded in mo_role_privs, but subscriber role IDs are never
+// evaluated in the publisher account. The planner later intersects the compact
+// ID set with each publisher and publication scope; unrelated branches match
+// no table ID.
+func subscriptionMetadataVisibilitySQL(subscriptionNames string) string {
+	return fmt.Sprintf(`WITH __subscription_active_roles(role_id) AS (
+    SELECT role_id FROM mo_current_roles()
+), __subscription_databases AS (
+    SELECT dat_id, datname, owner
+    FROM mo_catalog.mo_database
+    WHERE account_id = current_account_id() AND datname IN (%s)
+), __subscription_broad_visibility AS (
+    SELECT db.dat_id, db.datname
+    FROM __subscription_databases db
+    WHERE db.owner IN (SELECT role_id FROM __subscription_active_roles)
+       OR EXISTS (
+            SELECT 1
+            FROM mo_catalog.mo_role_privs rp
+            JOIN __subscription_active_roles ar ON rp.role_id = ar.role_id
+            WHERE rp.obj_type IN ('table','view') AND (
+                (rp.privilege_level = '*.*' AND rp.obj_id = 0)
+                OR (rp.privilege_level IN ('d.*','*') AND rp.obj_id = db.dat_id)
+            )
+       )
+       OR EXISTS (
+            SELECT 1
+            FROM mo_catalog.mo_role_privs rp
+            JOIN __subscription_active_roles ar ON rp.role_id = ar.role_id
+            WHERE rp.obj_type = 'database'
+              AND rp.privilege_name IN ('show tables','database all','database ownership')
+              AND ((rp.privilege_level IN ('*','*.*') AND rp.obj_id = 0)
+                   OR (rp.privilege_level = 'd' AND rp.obj_id = db.dat_id))
+       )
+)
+SELECT datname, 1 AS all_tables, 0 AS table_id
+FROM __subscription_broad_visibility
+UNION ALL
+SELECT '', 0 AS all_tables, rp.obj_id AS table_id
+FROM mo_catalog.mo_role_privs rp
+JOIN __subscription_active_roles ar ON rp.role_id = ar.role_id
+WHERE rp.obj_type IN ('table','view')
+  AND rp.privilege_level IN ('d.t','t')`, subscriptionNames)
 }
 
 func (tcc *TxnCompilerContext) CheckSubscriptionValid(subName, accName, pubName string) error {

@@ -33,7 +33,8 @@ create table idx_meta_src.visible_t(
     key idx_v(v)
 );
 create table idx_meta_src.unpublished_t(id int primary key);
-create publication idx_meta_pub database idx_meta_src table visible_t account idx_meta_sub, idx_meta_other;
+create table idx_meta_src.secret_t(id int primary key, v int, key idx_secret_v(v));
+create publication idx_meta_pub database idx_meta_src table visible_t,secret_t account idx_meta_sub, idx_meta_other;
 create database idx_meta_src_b;
 create table idx_meta_src_b.second_t(id int primary key);
 create publication idx_meta_pub_b database idx_meta_src_b table second_t account idx_meta_sub, idx_meta_other;
@@ -47,6 +48,33 @@ create database idx_meta_sub_db from sys publication idx_meta_pub;
 select count(*) as ordinary_cache_first_subscription_rows
 from information_schema.statistics where table_name = 'visible_t';
 create database idx_meta_sub_b from sys publication idx_meta_pub_b;
+
+-- A publication authorizes the cross-account catalog scan but does not bypass
+-- the subscriber user's RBAC. A connect-only role must not discover published
+-- table/index names through an account-wide metadata query. Granting the
+-- subscription database scope makes only publication members visible.
+create role idx_meta_connect_only_role;
+create user idx_meta_connect_only identified by '111' default role idx_meta_connect_only_role;
+grant connect on account * to idx_meta_connect_only_role;
+-- @session
+-- @session:id=5&user=idx_meta_sub:idx_meta_connect_only:idx_meta_connect_only_role&password=111
+select count(*) as connect_only_visible_index_rows
+from information_schema.statistics where table_name = 'visible_t';
+select count(*) as connect_only_secret_index_rows
+from information_schema.statistics where table_name = 'secret_t';
+-- @session
+-- @session:id=2&user=idx_meta_sub:admin&password=111
+grant select on table idx_meta_sub_db.* to idx_meta_connect_only_role;
+-- @session
+-- @session:id=5&user=idx_meta_sub:idx_meta_connect_only:idx_meta_connect_only_role&password=111
+select count(*) as granted_visible_index_rows
+from information_schema.statistics where table_name = 'visible_t';
+select count(*) as granted_secret_index_rows
+from information_schema.statistics where table_name = 'secret_t';
+select count(*) as granted_unpublished_index_rows
+from information_schema.statistics where table_name = 'unpublished_t';
+-- @session
+-- @session:id=2&user=idx_meta_sub:admin&password=111
 
 -- lower_case_table_names is global and only applies to new sessions. Use the
 -- otherwise independent subscriber so this case does not subscribe to either
@@ -189,6 +217,8 @@ execute subscription_membership_stmt using @membership_schema, @membership_table
 deallocate prepare subscription_membership_stmt;
 drop snapshot idx_meta_with_sub_b;
 drop snapshot idx_meta_without_sub_b;
+drop user idx_meta_connect_only;
+drop role idx_meta_connect_only_role;
 drop database idx_meta_sub_db;
 drop database idx_meta_local;
 -- @session
