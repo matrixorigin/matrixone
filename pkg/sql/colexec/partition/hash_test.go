@@ -17,6 +17,7 @@ package partition
 import (
 	"context"
 	"fmt"
+	"strings"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -72,6 +73,49 @@ func TestHashPartitionMemoryFallbackIsExact(t *testing.T) {
 	require.True(t, arg.hash.fallbackToSort)
 	require.Zero(t, cap(arg.hash.groupIDs), "hash-only row ids must be released before fallback output")
 	require.Equal(t, [][]int64{{1, 3}, {0, 2}, {4}}, groups)
+
+	arg.Free(proc, false, nil)
+	child.Free(proc, false, nil)
+	proc.Free()
+	require.Zero(t, proc.Mp().CurrNB())
+}
+
+func TestHashPartitionMemoryFallbackIncludesRetainedBatch(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	input := batch.New([]string{"k", "payload", "id"})
+	input.Vecs = []*vector.Vector{
+		vector.NewVec(types.T_int32.ToType()),
+		vector.NewVec(types.T_varchar.ToType()),
+		vector.NewVec(types.T_int64.ToType()),
+	}
+	keys := []int32{2, 1, 2, 1, 3, 2, 3, 1}
+	ids := []int64{0, 1, 2, 3, 4, 5, 6, 7}
+	payloads := make([][]byte, len(keys))
+	for i := range payloads {
+		payloads[i] = []byte(strings.Repeat(string(rune('a'+i)), 32<<10))
+	}
+	require.NoError(t, vector.AppendFixedList(input.Vecs[0], keys, nil, proc.Mp()))
+	require.NoError(t, vector.AppendBytesList(input.Vecs[1], payloads, nil, proc.Mp()))
+	require.NoError(t, vector.AppendFixedList(input.Vecs[2], ids, nil, proc.Mp()))
+	input.SetRowCount(len(keys))
+	child := colexec.NewMockOperator().WithBatchs([]*batch.Batch{input})
+	arg := newHashPartitionArgument(128 << 10)
+	arg.AppendChild(child)
+
+	require.NoError(t, arg.Prepare(proc))
+	var groups [][]int64
+	for {
+		result, err := arg.Call(proc)
+		require.NoError(t, err)
+		if result.Status == vm.ExecStop {
+			break
+		}
+		groups = append(groups, append([]int64(nil),
+			vector.MustFixedColWithTypeCheck[int64](result.Batch.Vecs[2])...))
+	}
+	require.True(t, arg.hash.fallbackToSort)
+	require.Greater(t, int64(arg.hash.retained.Size()), int64(128<<10))
+	require.Equal(t, [][]int64{{1, 3, 7}, {0, 2, 5}, {4, 6}}, groups)
 
 	arg.Free(proc, false, nil)
 	child.Free(proc, false, nil)

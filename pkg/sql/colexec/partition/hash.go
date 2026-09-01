@@ -200,7 +200,7 @@ func (ctr *hashContainer) consume(proc *process.Process, analyzer process.Analyz
 		}
 		ctr.groupIDs = nextGroupIDs
 		copy(ctr.groupIDs[oldLength:], groupIDs[:count])
-		memory := ctr.hash.Hash.Size() +
+		memory := int64(ctr.retained.Size()) + ctr.hash.Hash.Size() +
 			int64(cap(ctr.groupIDs))*int64(unsafe.Sizeof(uint64(0))) +
 			int64(ctr.retained.RowCount())*int64(unsafe.Sizeof(int64(0))) +
 			int64(ctr.hash.Hash.GroupCount())*2*int64(unsafe.Sizeof(int64(0)))
