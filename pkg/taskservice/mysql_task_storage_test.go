@@ -279,6 +279,10 @@ func TestSQLTaskInSqlMock(t *testing.T) {
 	sqlTask.CreatedAt = now
 	sqlTask.UpdatedAt = now
 
+	mock.ExpectBegin()
+	mock.ExpectQuery("select account_id from mo_catalog.mo_account where account_id=? for update").
+		WithArgs(sqlTask.AccountID).
+		WillReturnRows(sqlmock.NewRows([]string{"account_id"}).AddRow(sqlTask.AccountID))
 	mock.ExpectExec(insertSQLTask).
 		WithArgs(
 			sqlTask.TaskName,
@@ -300,6 +304,7 @@ func TestSQLTaskInSqlMock(t *testing.T) {
 			sqlTask.UpdatedAt,
 		).
 		WillReturnResult(sqlmock.NewResult(1, 1))
+	mock.ExpectCommit()
 	affected, err := storage.AddSQLTask(context.Background(), sqlTask)
 	require.NoError(t, err)
 	require.Equal(t, 1, affected)
@@ -339,8 +344,16 @@ func TestSQLTaskInSqlMock(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, 1, affected)
 
-	mock.ExpectExec(deleteSQLTask + " AND task_id=1").
+	mock.ExpectBegin()
+	mock.ExpectQuery(selectSQLTaskIDForUpdate + " AND task_id=1 order by task_id for update").
+		WillReturnRows(sqlmock.NewRows([]string{"task_id"}).AddRow(uint64(1)))
+	mock.ExpectExec("delete from sys_async_task where task_parent_id in (?)").
+		WithArgs("sql-task:1").
 		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectExec("delete from sql_task where task_id in (?)").
+		WithArgs(uint64(1)).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectCommit()
 	affected, err = storage.DeleteSQLTask(context.Background(), WithTaskIDCond(EQ, 1))
 	require.NoError(t, err)
 	require.Equal(t, 1, affected)
@@ -1108,21 +1121,114 @@ func TestSQLTaskMySQLStorageErrorBranches(t *testing.T) {
 		require.Equal(t, 0, affected)
 
 		sqlTask := newTestSQLTask("task_dup", 1)
+		mock.ExpectBegin().WillReturnError(assert.AnError)
+		affected, err = storage.AddSQLTask(context.Background(), sqlTask)
+		require.ErrorIs(t, err, assert.AnError)
+		require.Equal(t, 0, affected)
+
+		mock.ExpectBegin()
+		mock.ExpectQuery("select account_id from mo_catalog.mo_account where account_id=? for update").
+			WithArgs(sqlTask.AccountID).
+			WillReturnError(assert.AnError)
+		mock.ExpectRollback()
+		affected, err = storage.AddSQLTask(context.Background(), sqlTask)
+		require.ErrorIs(t, err, assert.AnError)
+		require.Equal(t, 0, affected)
+
+		mock.ExpectBegin()
+		mock.ExpectQuery("select account_id from mo_catalog.mo_account where account_id=? for update").
+			WithArgs(sqlTask.AccountID).
+			WillReturnRows(sqlmock.NewRows([]string{"account_id"}).AddRow(sqlTask.AccountID))
 		mock.ExpectExec(insertSQLTask).
 			WillReturnError(&mysqlDriver.MySQLError{Number: moerr.ER_DUP_ENTRY, Message: "Duplicate entry"})
+		mock.ExpectCommit()
 		affected, err = storage.AddSQLTask(context.Background(), sqlTask)
 		require.NoError(t, err)
 		require.Equal(t, 0, affected)
 
+		mock.ExpectBegin()
+		mock.ExpectQuery("select account_id from mo_catalog.mo_account where account_id=? for update").
+			WithArgs(sqlTask.AccountID).
+			WillReturnRows(sqlmock.NewRows([]string{"account_id"}).AddRow(sqlTask.AccountID))
 		mock.ExpectExec(insertSQLTask).WillReturnError(assert.AnError)
+		mock.ExpectRollback()
 		affected, err = storage.AddSQLTask(context.Background(), sqlTask)
 		require.ErrorIs(t, err, assert.AnError)
 		require.Equal(t, 0, affected)
 
+		mock.ExpectBegin()
+		mock.ExpectQuery("select account_id from mo_catalog.mo_account where account_id=? for update").
+			WithArgs(sqlTask.AccountID).
+			WillReturnRows(sqlmock.NewRows([]string{"account_id"}).AddRow(sqlTask.AccountID))
 		mock.ExpectExec(insertSQLTask).WillReturnResult(mockRowsAffectedResult{err: assert.AnError})
+		mock.ExpectRollback()
 		affected, err = storage.AddSQLTask(context.Background(), sqlTask)
 		require.ErrorIs(t, err, assert.AnError)
 		require.Equal(t, 0, affected)
+
+		// A later statement error rolls the whole batch back. Do not report the
+		// first insert as affected because none of the rows committed.
+		secondSQLTask := newTestSQLTask("task_second", sqlTask.AccountID)
+		mock.ExpectBegin()
+		mock.ExpectQuery("select account_id from mo_catalog.mo_account where account_id=? for update").
+			WithArgs(sqlTask.AccountID).
+			WillReturnRows(sqlmock.NewRows([]string{"account_id"}).AddRow(sqlTask.AccountID))
+		mock.ExpectExec(insertSQLTask).WillReturnResult(sqlmock.NewResult(1, 1))
+		mock.ExpectExec(insertSQLTask).WillReturnError(assert.AnError)
+		mock.ExpectRollback()
+		affected, err = storage.AddSQLTask(context.Background(), sqlTask, secondSQLTask)
+		require.ErrorIs(t, err, assert.AnError)
+		require.Equal(t, 0, affected)
+
+		// RowsAffected can also fail after a previous statement succeeded; the
+		// observable result is still a fully rolled-back batch.
+		mock.ExpectBegin()
+		mock.ExpectQuery("select account_id from mo_catalog.mo_account where account_id=? for update").
+			WithArgs(sqlTask.AccountID).
+			WillReturnRows(sqlmock.NewRows([]string{"account_id"}).AddRow(sqlTask.AccountID))
+		mock.ExpectExec(insertSQLTask).WillReturnResult(sqlmock.NewResult(1, 1))
+		mock.ExpectExec(insertSQLTask).WillReturnResult(mockRowsAffectedResult{err: assert.AnError})
+		mock.ExpectRollback()
+		affected, err = storage.AddSQLTask(context.Background(), sqlTask, secondSQLTask)
+		require.ErrorIs(t, err, assert.AnError)
+		require.Equal(t, 0, affected)
+
+		mock.ExpectBegin()
+		mock.ExpectQuery("select account_id from mo_catalog.mo_account where account_id=? for update").
+			WithArgs(sqlTask.AccountID).
+			WillReturnRows(sqlmock.NewRows([]string{"account_id"}))
+		mock.ExpectRollback()
+		affected, err = storage.AddSQLTask(context.Background(), sqlTask)
+		require.ErrorIs(t, err, ErrSQLTaskAccountMissing)
+		require.Equal(t, 0, affected)
+
+		mock.ExpectBegin()
+		mock.ExpectQuery("select account_id from mo_catalog.mo_account where account_id=? for update").
+			WithArgs(sqlTask.AccountID).
+			WillReturnRows(sqlmock.NewRows([]string{"account_id"}).AddRow(sqlTask.AccountID))
+		mock.ExpectExec(insertSQLTask).WillReturnResult(sqlmock.NewResult(1, 1))
+		mock.ExpectCommit().WillReturnError(assert.AnError)
+		affected, err = storage.AddSQLTask(context.Background(), sqlTask)
+		require.ErrorIs(t, err, assert.AnError)
+		require.Equal(t, 0, affected)
+
+		// Account locks are taken in a stable order even when the input tasks are
+		// reversed, preventing batch creators from forming a lock-order cycle.
+		taskAccount2 := newTestSQLTask("task_account_2", 2)
+		taskAccount1 := newTestSQLTask("task_account_1", 1)
+		mock.ExpectBegin()
+		mock.ExpectQuery("select account_id from mo_catalog.mo_account where account_id=? for update").
+			WithArgs(uint32(1)).
+			WillReturnRows(sqlmock.NewRows([]string{"account_id"}).AddRow(uint32(1)))
+		mock.ExpectQuery("select account_id from mo_catalog.mo_account where account_id=? for update").
+			WithArgs(uint32(2)).
+			WillReturnRows(sqlmock.NewRows([]string{"account_id"}).AddRow(uint32(2)))
+		mock.ExpectExec(insertSQLTask).WillReturnResult(sqlmock.NewResult(1, 1))
+		mock.ExpectExec(insertSQLTask).WillReturnResult(sqlmock.NewResult(2, 1))
+		mock.ExpectCommit()
+		affected, err = storage.AddSQLTask(context.Background(), taskAccount2, taskAccount1)
+		require.NoError(t, err)
+		require.Equal(t, 2, affected)
 
 		mock.ExpectClose()
 		require.NoError(t, storage.Close())
@@ -1130,7 +1236,16 @@ func TestSQLTaskMySQLStorageErrorBranches(t *testing.T) {
 
 	t.Run("delete and complete rows affected", func(t *testing.T) {
 		storage, mock := newMockStorage(t)
-		mock.ExpectExec(deleteSQLTask).WillReturnResult(mockRowsAffectedResult{err: assert.AnError})
+		mock.ExpectBegin()
+		mock.ExpectQuery(selectSQLTaskIDForUpdate + " order by task_id for update").
+			WillReturnRows(sqlmock.NewRows([]string{"task_id"}).AddRow(uint64(10)))
+		mock.ExpectExec("delete from sys_async_task where task_parent_id in (?)").
+			WithArgs("sql-task:10").
+			WillReturnResult(sqlmock.NewResult(0, 1))
+		mock.ExpectExec("delete from sql_task where task_id in (?)").
+			WithArgs(uint64(10)).
+			WillReturnResult(mockRowsAffectedResult{err: assert.AnError})
+		mock.ExpectRollback()
 		affected, err := storage.DeleteSQLTask(context.Background())
 		require.ErrorIs(t, err, assert.AnError)
 		require.Equal(t, 0, affected)
@@ -1138,6 +1253,68 @@ func TestSQLTaskMySQLStorageErrorBranches(t *testing.T) {
 		run := newTestSQLTaskRun(10, "task_a", SQLTaskStatusSuccess)
 		mock.ExpectExec(completeSQLTaskRun).WillReturnResult(mockRowsAffectedResult{err: assert.AnError})
 		affected, err = storage.CompleteSQLTaskRun(context.Background(), run)
+		require.ErrorIs(t, err, assert.AnError)
+		require.Equal(t, 0, affected)
+
+		mock.ExpectClose()
+		require.NoError(t, storage.Close())
+	})
+
+	t.Run("delete sql task transaction failures", func(t *testing.T) {
+		storage, mock := newMockStorage(t)
+
+		mock.ExpectBegin()
+		mock.ExpectQuery(selectSQLTaskIDForUpdate + " AND task_id=1 order by task_id for update").
+			WillReturnRows(sqlmock.NewRows([]string{"task_id"}))
+		mock.ExpectCommit()
+		affected, err := storage.DeleteSQLTask(context.Background(), WithTaskIDCond(EQ, 1))
+		require.NoError(t, err)
+		require.Equal(t, 0, affected)
+
+		mock.ExpectBegin()
+		mock.ExpectQuery(selectSQLTaskIDForUpdate + " AND task_id=1 order by task_id for update").
+			WillReturnError(assert.AnError)
+		mock.ExpectRollback()
+		affected, err = storage.DeleteSQLTask(context.Background(), WithTaskIDCond(EQ, 1))
+		require.ErrorIs(t, err, assert.AnError)
+		require.Equal(t, 0, affected)
+
+		mock.ExpectBegin()
+		mock.ExpectQuery(selectSQLTaskIDForUpdate + " AND task_id=1 order by task_id for update").
+			WillReturnRows(sqlmock.NewRows([]string{"task_id"}).AddRow(uint64(1)))
+		mock.ExpectExec("delete from sys_async_task where task_parent_id in (?)").
+			WithArgs("sql-task:1").
+			WillReturnError(assert.AnError)
+		mock.ExpectRollback()
+		affected, err = storage.DeleteSQLTask(context.Background(), WithTaskIDCond(EQ, 1))
+		require.ErrorIs(t, err, assert.AnError)
+		require.Equal(t, 0, affected)
+
+		mock.ExpectBegin()
+		mock.ExpectQuery(selectSQLTaskIDForUpdate + " AND task_id=1 order by task_id for update").
+			WillReturnRows(sqlmock.NewRows([]string{"task_id"}).AddRow(uint64(1)))
+		mock.ExpectExec("delete from sys_async_task where task_parent_id in (?)").
+			WithArgs("sql-task:1").
+			WillReturnResult(sqlmock.NewResult(0, 1))
+		mock.ExpectExec("delete from sql_task where task_id in (?)").
+			WithArgs(uint64(1)).
+			WillReturnError(assert.AnError)
+		mock.ExpectRollback()
+		affected, err = storage.DeleteSQLTask(context.Background(), WithTaskIDCond(EQ, 1))
+		require.ErrorIs(t, err, assert.AnError)
+		require.Equal(t, 0, affected)
+
+		mock.ExpectBegin()
+		mock.ExpectQuery(selectSQLTaskIDForUpdate + " AND account_id=1 order by task_id for update").
+			WillReturnRows(sqlmock.NewRows([]string{"task_id"}).AddRow(uint64(3)).AddRow(uint64(7)))
+		mock.ExpectExec("delete from sys_async_task where task_parent_id in (?,?)").
+			WithArgs("sql-task:3", "sql-task:7").
+			WillReturnResult(sqlmock.NewResult(0, 2))
+		mock.ExpectExec("delete from sql_task where task_id in (?,?)").
+			WithArgs(uint64(3), uint64(7)).
+			WillReturnResult(sqlmock.NewResult(0, 2))
+		mock.ExpectCommit().WillReturnError(assert.AnError)
+		affected, err = storage.DeleteSQLTask(context.Background(), WithAccountID(EQ, 1))
 		require.ErrorIs(t, err, assert.AnError)
 		require.Equal(t, 0, affected)
 

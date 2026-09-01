@@ -508,6 +508,9 @@ func (s *service) closeService() error {
 		defer logutil.LogClose(s.logger, "cnservice")()
 
 		s.closeViewMetadataAdmission()
+		// Stop waits for any in-flight periodic heartbeat before teardown. Keep
+		// ingress published until all local entry points and work have drained;
+		// withdrawal below is the ownership handoff linearization point.
 		s.stopper.Stop()
 
 		s.closeErr = closeCNServiceSteps(
@@ -531,6 +534,7 @@ func (s *service) closeService() error {
 			// dependencies, while keeping the trace consumer alive for final events.
 			s.waitPipelineHandlers,
 			s.closeIncrService,
+			s.withdrawViewMetadataAdmission,
 			s.stopRPCs,
 			s.closeTxnTraceService,
 			func() error {
