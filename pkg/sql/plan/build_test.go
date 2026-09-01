@@ -3020,6 +3020,32 @@ func TestLargeUpdateTableLockRequiresUnrestrictedSingleTarget(t *testing.T) {
 			maxRows:       1 << 30,
 			wantTableLock: false,
 		},
+		{
+			name:    "incomplete float keyspace stays row scoped",
+			sql:     "UPDATE NATION SET N_NAME = 'updated'",
+			maxRows: 1,
+			prepare: func(mock *MockOptimizer) {
+				tableDef := mock.ctxt.tables["nation"]
+				pkPos := tableDef.Name2ColIndex[tableDef.Pkey.PkeyColName]
+				tableDef.Cols[pkPos].Typ = plan.Type{Id: int32(types.T_float64)}
+			},
+		},
+		{
+			name:    "affected foreign key preserves lock order",
+			sql:     "UPDATE replace_fk_c SET pid = pid",
+			maxRows: 1,
+		},
+		{
+			name:          "unrelated column on foreign key table",
+			sql:           "UPDATE replace_fk_c SET id = id + 100",
+			maxRows:       1,
+			wantTableLock: true,
+		},
+		{
+			name:    "locking scalar subquery preserves lock order",
+			sql:     "UPDATE NATION SET N_NAME = (SELECT N_NAME FROM NATION2 LIMIT 1 FOR UPDATE)",
+			maxRows: 1,
+		},
 	}
 
 	for _, test := range tests {

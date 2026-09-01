@@ -362,10 +362,10 @@ type QueryBuilder struct {
 	preserveInsertProjection    map[int32]struct{}
 	preserveScanProjection      map[int32]struct{}
 	positionalSinkScans         map[int32]struct{}
-	// fullTableUpdateLockTargets contains only the exclusive targets produced by
-	// a statically unrestricted, single-target UPDATE. Keeping the proof as
-	// planner-local metadata lets the final cardinality pass choose table locks
-	// without weakening bounded UPDATE predicates into table-wide locks.
+	// fullTableUpdateLockTargets contains only the exclusive targets admitted for
+	// an unrestricted, single-target UPDATE after complete-keyspace and lock-order
+	// checks. Planner-local metadata lets the final cardinality pass choose table
+	// locks without weakening bounded UPDATE predicates into table-wide locks.
 	fullTableUpdateLockTargets map[*plan.LockTarget]struct{}
 	// userWindowNodes contains only WINDOW nodes produced from user
 	// SELECT window expressions. Internal ROW_NUMBER windows used by correlated

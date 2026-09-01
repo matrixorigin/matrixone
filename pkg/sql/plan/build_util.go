@@ -47,9 +47,10 @@ import (
 // first row lock is acquired. Shared targets need this planner fallback because
 // converting already-shared rows is not always possible without changing
 // Shared compatibility. Exclusive targets normally coarsen on the owner side;
-// the only planner exception is a statically unrestricted single-target UPDATE,
-// whose target universe is exactly the whole table. Bounded predicates must
-// retain row/range locks even when their estimated cardinality is large.
+// the only planner exception is an admitted unrestricted single-target UPDATE:
+// its target universe is the whole table, every written keyspace has a total
+// range, and no earlier lock target would have its order reversed. Bounded
+// predicates retain row/range locks even when their estimate is large.
 func applyLockTableFallback(builder *QueryBuilder) {
 	proc := builder.compCtx.GetProcess()
 	if proc == nil || proc.Base.LockService == nil {
