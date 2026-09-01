@@ -222,7 +222,7 @@ func (s *Scope) DropDatabase(c *Compile) error {
 	}
 	if c.proc.Base.IsFrontend && !needSkipDbs[dbName] {
 		generation := uint64(c.proc.GetTxnOperator().SnapshotTS().PhysicalTime)
-		if err = c.enqueueViewsAfterDatabaseRemoval(accountId, droppedDatabaseID, generation); err != nil {
+		if err = c.enqueueViewsAfterDatabaseRemoval(dbName, accountId, droppedDatabaseID, generation); err != nil {
 			return err
 		}
 		if err = c.deleteDroppedDatabaseViewMetadata(accountId, droppedDatabaseID, dbName); err != nil {
@@ -4014,7 +4014,7 @@ func (s *Scope) dropTableSingle(c *Compile, qry *plan.DropTable) error {
 			return err
 		}
 		if isView {
-			if err = c.deleteDroppedViewMetadata(droppedRelationID); err != nil {
+			if err = c.deleteDroppedViewMetadata(dbName, droppedRelationID); err != nil {
 				return err
 			}
 		}
