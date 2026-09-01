@@ -122,15 +122,19 @@ func TestHashPartitionCompositeNullableKey(t *testing.T) {
 }
 
 func TestHashPartitionRejectsIncompatibleKey(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
-	arg := &Partition{
-		Algorithm:    plan.Node_PARTITION_ALGORITHM_HASH,
-		OrderBySpecs: []*plan.OrderBySpec{{Expr: newExpression(0, types.T_float64)}},
+	for _, typ := range []types.T{types.T_float64, types.T_char} {
+		t.Run(typ.String(), func(t *testing.T) {
+			proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+			arg := &Partition{
+				Algorithm:    plan.Node_PARTITION_ALGORITHM_HASH,
+				OrderBySpecs: []*plan.OrderBySpec{{Expr: newExpression(0, typ)}},
+			}
+			require.Error(t, arg.Prepare(proc))
+			arg.Free(proc, true, nil)
+			proc.Free()
+			require.Zero(t, proc.Mp().CurrNB())
+		})
 	}
-	require.Error(t, arg.Prepare(proc))
-	arg.Free(proc, true, nil)
-	proc.Free()
-	require.Zero(t, proc.Mp().CurrNB())
 }
 
 func TestHashPartitionHonorsCancellationBeforeFinalize(t *testing.T) {

@@ -29,7 +29,7 @@ func TestCompatibleUsesConservativeAllowlist(t *testing.T) {
 		require.True(t, Compatible(typ), typ.String())
 	}
 	for _, typ := range []types.T{
-		types.T_any, types.T_float64, types.T_json,
+		types.T_any, types.T_char, types.T_float64, types.T_json,
 		types.T_array_float32, types.T_array_int8, types.T_tuple,
 	} {
 		require.False(t, Compatible(typ), typ.String())

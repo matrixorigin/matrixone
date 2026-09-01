@@ -29,7 +29,7 @@ func Compatible(typ types.T) bool {
 		types.T_decimal64, types.T_decimal128, types.T_decimal256,
 		types.T_TS, types.T_Rowid, types.T_Blockid, types.T_uuid,
 		types.T_enum, types.T_year,
-		types.T_char, types.T_varchar, types.T_blob, types.T_binary,
+		types.T_varchar, types.T_blob, types.T_binary,
 		types.T_varbinary, types.T_text, types.T_datalink, types.T_geometry:
 		return true
 	default:
