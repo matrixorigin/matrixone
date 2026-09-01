@@ -177,7 +177,7 @@ select * from pri02;
 1  ¦  数据库  𝄀
 2  ¦  数据库
 alter table pri02 add primary key (col2);
-not supported: ENUM column 'col2' cannot be in primary key
+Duplicate entry '数据库' for key 'col2'
 show create table pri02;
 ➤ Table[12,-1,0]  ¦  Create Table[12,-1,0]  𝄀
 pri02  ¦  CREATE TABLE `pri02` (
@@ -202,21 +202,21 @@ select * from pri03;
 1  ¦  数据库  𝄀
 2  ¦  数据库系统
 alter table pri03 add primary key (col2);
-not supported: ENUM column 'col2' cannot be in primary key
 show create table pri03;
 ➤ Table[12,-1,0]  ¦  Create Table[12,-1,0]  𝄀
 pri03  ¦  CREATE TABLE `pri03` (
   `col1` int DEFAULT NULL,
-  `col2` enum('数据库','数据库系统','数据库管理系统') DEFAULT NULL
+  `col2` enum('数据库','数据库系统','数据库管理系统') NOT NULL,
+  PRIMARY KEY (`col2`)
 )
 show columns from pri03;
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
 col1  ¦  INT(32)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-col2  ¦  ENUM('数据库','数据库系统','数据库管理系统')  ¦  YES  ¦    ¦  null  ¦    ¦  
+col2  ¦  ENUM('数据库','数据库系统','数据库管理系统')  ¦  NO  ¦  PRI  ¦  null  ¦    ¦
 select table_name, COLUMN_NAME, data_type, is_nullable from information_schema.columns where table_name like 'pri03' and COLUMN_NAME not like '__mo%';
 ➤ table_name[12,-1,0]  ¦  COLUMN_NAME[12,-1,0]  ¦  data_type[12,-1,0]  ¦  is_nullable[12,-1,0]  𝄀
 pri03  ¦  col1  ¦  int  ¦  YES  𝄀
-pri03  ¦  col2  ¦  enum  ¦  YES
+pri03  ¦  col2  ¦  enum  ¦  NO
 drop table pri03;
 drop table if exists pri04;
 create table pri04 (col1 int, col2 enum('database', 'database management', 'database management system'));
@@ -662,10 +662,8 @@ with cte_2 as(select col1,col2 from cte01 where col1 = 3) select col2 from cte_2
 drop table cte01;
 drop table if exists agg01;
 create table agg01 (col1 int, col2 enum('egwjqebwq', 'qwewqewqeqewq', 'weueiwqeowqehwgqjhenw') primary key);
-not supported: ENUM column 'col2' cannot be in primary key
 drop table if exists agg01;
 create table agg01 (col1 int, col2 enum('egwjqebwq', 'qwewqewqeqewq', 'weueiwqeowqehwgqjhenw'), primary key (col2));
-not supported: ENUM column 'col2' cannot be in primary key
 drop table if exists agg01;
 create table agg01 (col1 int, col2 enum('egwjqebwq', 'qwewqewqeqewq', 'weueiwqeowqehwgqjhenw') unique);
 drop table if exists agg01;

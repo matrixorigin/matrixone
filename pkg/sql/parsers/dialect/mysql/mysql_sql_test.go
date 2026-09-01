@@ -81,6 +81,25 @@ func TestCreateTablePreservesIndexIdentifierCase(t *testing.T) {
 	require.Equal(t, []string{"MixedCaseIdx", "UniQue_Mix"}, names)
 }
 
+func TestConfigIsNonReservedIdentifier(t *testing.T) {
+	_, err := ParseOne(context.Background(), "CREATE TABLE config ("+
+		"`key` VARCHAR(255) PRIMARY KEY,"+
+		"value TEXT NOT NULL DEFAULT (''),"+
+		"ctime TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,"+
+		"mtime TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP"+
+		")", 1)
+	require.NoError(t, err)
+
+	_, err = ParseOne(context.Background(), "create table t (config int)", 1)
+	require.NoError(t, err)
+	_, err = ParseOne(context.Background(), "show config", 1)
+	require.NoError(t, err)
+	_, err = ParseOne(context.Background(), "alter account config set MYSQL_COMPATIBILITY_MODE a = 1", 1)
+	require.NoError(t, err)
+	_, err = ParseOne(context.Background(), "select account config from t", 1)
+	require.NoError(t, err)
+}
+
 func TestCreateTablePreservesIndexIdentifierCaseWithTypeOption(t *testing.T) {
 	stmt, err := ParseOne(context.Background(),
 		"create table t (v varchar(20), key TypeOptionIdx type btree(v))", 1)
