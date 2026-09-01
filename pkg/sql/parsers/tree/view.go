@@ -31,15 +31,17 @@ type CreateView struct {
 	ColNames    IdentifierList
 	AsSource    *Select
 	IfNotExists bool
+	CheckOption string
 }
 
-func NewCreateView(replace bool, name *TableName, colNames IdentifierList, asSource *Select, ifNotExists bool) *CreateView {
+func NewCreateView(replace bool, name *TableName, colNames IdentifierList, asSource *Select, ifNotExists bool, checkOption string) *CreateView {
 	c := reuse.Alloc[CreateView](nil)
 	c.Replace = replace
 	c.Name = name
 	c.ColNames = colNames
 	c.AsSource = asSource
 	c.IfNotExists = ifNotExists
+	c.CheckOption = checkOption
 	return c
 }
 
@@ -68,6 +70,11 @@ func (node *CreateView) Format(ctx *FmtCtx) {
 	}
 	ctx.WriteString(" as ")
 	node.AsSource.Format(ctx)
+	if node.CheckOption != "" && node.CheckOption != "NONE" {
+		ctx.WriteString(" with ")
+		ctx.WriteString(node.CheckOption)
+		ctx.WriteString(" check option")
+	}
 }
 
 func (node *CreateView) reset() {

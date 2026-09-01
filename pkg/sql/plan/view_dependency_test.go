@@ -187,7 +187,7 @@ func TestRegenerateViewDefinitionUsesAuthoritativeGeneratorAndPreservesJSON(t *t
 	ctx.tables["nation"].TblId = 11
 	ctx.tables["nation"].LogicalId = 13
 	ctx.tables["nation"].Cols[1].Typ.Width = 60
-	persisted := `{"Stmt":"create view v as select n_name from nation",` +
+	persisted := `{"Stmt":"create view v as select n_name from nation with cascaded check option",` +
 		`"DefaultDatabase":"tpch","security_type":"DEFINER",` +
 		`"future_field":{"keep":true}}`
 
@@ -200,7 +200,9 @@ func TestRegenerateViewDefinitionUsesAuthoritativeGeneratorAndPreservesJSON(t *t
 	var fields map[string]json.RawMessage
 	require.NoError(t, json.Unmarshal([]byte(regenerated.TableDef.ViewSql.View), &fields))
 	require.JSONEq(t, `{"keep":true}`, string(fields["future_field"]))
-	require.JSONEq(t, `"create view v as select n_name from nation"`, string(fields["Stmt"]))
+	require.JSONEq(t, `"create view v as select n_name from nation with cascaded check option"`, string(fields["Stmt"]))
+	require.JSONEq(t, "\"select `nation`.`n_name` from `nation`\"", string(fields["definition"]))
+	require.JSONEq(t, `"CASCADED"`, string(fields["check_option"]))
 	require.Contains(t, fields, "dependencies")
 	require.Contains(t, fields, "lower_case_table_names")
 }
