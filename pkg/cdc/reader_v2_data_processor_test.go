@@ -411,6 +411,11 @@ func TestDataProcessor_ProcessChange_Snapshot_WithSplitTxn(t *testing.T) {
 func TestDataProcessor_SplitSnapshotStaysAtomicUntilWatermark(t *testing.T) {
 	ctx := context.Background()
 	h := newDataProcessorHarness(t, true)
+	t.Cleanup(func() {
+		for _, output := range h.sinker.sinkCallsSnapshot() {
+			output.Close()
+		}
+	})
 	from := types.BuildTS(1, 0)
 	to := types.BuildTS(2, 0)
 	h.dp.SetTransactionRange(from, to)
