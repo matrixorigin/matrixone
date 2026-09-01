@@ -412,7 +412,7 @@ freshness rule explicit.
 | WHERE, JOIN ON, derived, nested, sibling, OR, and prepared shapes agree | planner unit tests and public BVT |
 | Publisher account/database/table isolation; unpublished table absent | plan-shape tests and public BVT |
 | Connect-only subscriber cannot discover published table/index names | restricted-user public BVT and omitted-branch planner test |
-| Database-wide and exact-table subscriber grants intersect publication scope | public BVT for database-wide and inherited exact-table grants plus visibility-provider and exact-filter unit tests |
+| Database-wide subscriber grants intersect publication scope | public BVT plus visibility-provider and publication-filter unit tests |
 | Subscriber role IDs do not authorize publisher catalogs | canonical CTE rewrite and publisher-RBAC negative tests |
 | Canonical and legacy persisted-view shapes remain safe | real canonical-DDL rewrite test and fail-closed shape tests |
 | Current and historical membership use one snapshot | compiler-context ownership review and public snapshot BVT |

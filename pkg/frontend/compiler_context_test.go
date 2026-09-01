@@ -111,7 +111,7 @@ func TestGetVisibleSubscriptionMetadata(t *testing.T) {
 		{Meta: metas[2], VisibleTableIDs: []uint64{7, 42}},
 	}, got)
 	require.Equal(t, []string{query}, bh.executedSQLs)
-	require.Contains(t, query, "SELECT role_id FROM mo_current_roles()")
+	require.Contains(t, query, "SELECT role_id FROM mo_current_roles() role_closure")
 	require.Contains(t, query, "db.owner IN")
 	require.Contains(t, query, "rp.privilege_level IN ('d.t','t')")
 	require.NotContains(t, query, "tbl.account_id")

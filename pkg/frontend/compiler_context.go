@@ -1473,7 +1473,7 @@ func getVisibleSubscriptionMetadata(
 // no table ID.
 func subscriptionMetadataVisibilitySQL(subscriptionNames string) string {
 	return fmt.Sprintf(`WITH __subscription_active_roles(role_id) AS (
-    SELECT role_id FROM mo_current_roles()
+    SELECT role_id FROM mo_current_roles() role_closure
 ), __subscription_databases AS (
     SELECT dat_id, datname, owner
     FROM mo_catalog.mo_database
