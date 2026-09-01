@@ -180,16 +180,27 @@ func (s *service) fenceViewMetadataCatalog(
 	return nil
 }
 
+func viewMetadataAdmissionWaitTimeout(discoveryTimeout time.Duration) time.Duration {
+	if discoveryTimeout <= 0 {
+		discoveryTimeout = 30 * time.Second
+	}
+	// HAKeeper deliberately retains the old generation for one CN store timeout
+	// before admitting a same-UUID replacement. The default store timeout and
+	// discovery timeout are both 30 seconds, so one discovery window races the
+	// replicated expiry/reconciliation entry after a whole-cluster restart.
+	// Keep generation allocation bounded by the configured discovery timeout,
+	// but give admission one additional window to observe safe owner expiry.
+	return 2 * discoveryTimeout
+}
+
 func (s *service) waitForViewMetadataAdmission() error {
 	if s.viewMetadataAdmissionGeneration == 0 {
 		// Focused unit tests can construct a partial service. Production
 		// NewService always allocates a non-zero generation.
 		return nil
 	}
-	timeout := s.cfg.HAKeeper.DiscoveryTimeout.Duration
-	if timeout <= 0 {
-		timeout = 30 * time.Second
-	}
+	timeout := viewMetadataAdmissionWaitTimeout(
+		s.cfg.HAKeeper.DiscoveryTimeout.Duration)
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 

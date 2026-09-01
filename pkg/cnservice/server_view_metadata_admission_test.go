@@ -88,6 +88,12 @@ func (c *admissionCNHAKeeperClient) AllocateIDByKey(ctx context.Context, key str
 	return c.id, nil
 }
 
+func TestViewMetadataAdmissionWaitTimeoutCoversReplacementExpiry(t *testing.T) {
+	require.Equal(t, time.Minute, viewMetadataAdmissionWaitTimeout(0))
+	require.Equal(t, 10*time.Second,
+		viewMetadataAdmissionWaitTimeout(5*time.Second))
+}
+
 func TestCNViewMetadataAdmissionGenerationLifecycle(t *testing.T) {
 	serviceID := "cn-admission-generation-lifecycle"
 	runtime.SetupServiceBasedRuntime(serviceID, runtime.DefaultRuntime())
