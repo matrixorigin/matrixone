@@ -3681,11 +3681,18 @@ func (c *Compile) dropIndexChildRelation(
 	relationName string,
 	isTemporary bool,
 ) error {
-	// Hidden index relations are owned by the parent table lifecycle and cannot
-	// be GRANT targets. In particular, catalog restore may delete the parent
-	// mo_role_privs table before deleting its hidden index relations; issuing
-	// privilege cleanup for a hidden child would then access an already-deleted
-	// parent catalog table.
+	var logicalID uint64
+	// Hidden index relations cannot be current GRANT targets, but old releases
+	// could leave grants keyed by their logical IDs. Preserve ordinary DROP
+	// cleanup while skipping restore: restore may delete mo_role_privs itself
+	// before visiting its hidden children.
+	if !isTemporary && !c.proc.Base.SessionInfo.IsRestore {
+		relation, err := database.Relation(c.proc.Ctx, relationName, nil)
+		if err != nil {
+			return err
+		}
+		logicalID = plan2.SnapshotTableID(relation.GetTableDef(c.proc.Ctx))
+	}
 	if err := maybeDeleteAutoIncrement(
 		c.proc.Ctx, c.proc.GetService(), database, relationName, c.proc.GetTxnOperator(),
 	); err != nil {
@@ -3693,6 +3700,11 @@ func (c *Compile) dropIndexChildRelation(
 	}
 	if err := database.Delete(c.proc.Ctx, relationName); err != nil {
 		return err
+	}
+	if logicalID != 0 {
+		if err := c.deleteRolePrivilegesForDroppedRelation(logicalID); err != nil {
+			return err
+		}
 	}
 	if isTemporary {
 		if session := c.proc.GetSession(); session != nil {

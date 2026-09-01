@@ -454,6 +454,43 @@ func Test_asyncUpgradeTenantTask_CommitsIncrementalPagesBeforeAdvancingTask(t *t
 		})
 }
 
+func TestUpgradeTenantDirectlyCommitsIncrementalPages(t *testing.T) {
+	const (
+		tenantID = int32(10)
+		version  = "4.0.6"
+	)
+	var lockedReads atomic.Int32
+	var versionUpdates atomic.Int32
+	h := &testIncrementalVersionHandle{
+		testVersionHandle: newTestVersionHandler(version, version, versions.Yes, versions.Yes, 5),
+		completeAfter:     2,
+	}
+	s := newServiceForTest(
+		"",
+		&memLocker{},
+		clock.NewHLCClock(func() int64 { return 0 }, 0),
+		nil,
+		executor.NewMemExecutor(func(sql string) (executor.Result, error) {
+			switch {
+			case sql == "select create_version from mo_account where account_id = 10 for update":
+				lockedReads.Add(1)
+				return buildTenantVersionResult(version), nil
+			case sql == "update mo_account set create_version = '4.0.6' where account_id = 10":
+				versionUpdates.Add(1)
+				return executor.Result{AffectedRows: 1}, nil
+			default:
+				return executor.Result{}, fmt.Errorf("unexpected sql: %s", sql)
+			}
+		}),
+		func(s *service) { s.handles = append(s.handles, h) },
+	)
+
+	require.NoError(t, s.upgradeTenantDirectly(context.Background(), tenantID, version, true))
+	require.Equal(t, int32(2), lockedReads.Load(), "each page must use a fresh transaction")
+	require.Equal(t, int32(1), versionUpdates.Load(), "version is published only with the completed page")
+	require.Equal(t, int32(2), h.stepCalls.Load())
+}
+
 func TestUpgradeTenantIncrementallyAdvancesRangeCursor(t *testing.T) {
 	const (
 		tenantID  = int32(10)

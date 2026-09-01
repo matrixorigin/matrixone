@@ -27,7 +27,9 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/cnservice"
 	"github.com/matrixorigin/matrixone/pkg/common/sqlquote"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/embed"
+	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/stretchr/testify/require"
 )
@@ -82,6 +84,8 @@ func TestV406UpgradeCleansHistoricalOrphanObjectPrivileges(t *testing.T) {
 		mustExecOrphanPrivilegeUpgradeSQL(t, ctx, conn,
 			"create table "+databaseName+".live_table(id int)")
 		mustExecOrphanPrivilegeUpgradeSQL(t, ctx, conn,
+			"create index legacy_hidden_idx on "+databaseName+".live_table(id)")
+		mustExecOrphanPrivilegeUpgradeSQL(t, ctx, conn,
 			"create view "+databaseName+".live_view as select 1 as id")
 		mustExecOrphanPrivilegeUpgradeSQL(t, ctx, conn,
 			"create sequence "+databaseName+".live_sequence")
@@ -104,6 +108,11 @@ func TestV406UpgradeCleansHistoricalOrphanObjectPrivileges(t *testing.T) {
 			"select rel_logical_id from mo_catalog.mo_tables where reldatabase = '"+databaseName+"' and relname = 'live_view'")
 		sequenceID := queryOrphanPrivilegeUpgradeID(t, ctx, conn,
 			"select rel_logical_id from mo_catalog.mo_tables where reldatabase = '"+databaseName+"' and relname = 'live_sequence'")
+		hiddenIndexID := queryOrphanPrivilegeUpgradeID(t, ctx, conn,
+			"select rel_logical_id from mo_catalog.mo_tables where reldatabase = '"+databaseName+"' "+
+				"and relname = (select distinct index_table_name from mo_catalog.mo_indexes where name = 'legacy_hidden_idx' "+
+				"and table_id = (select rel_id from mo_catalog.mo_tables where reldatabase = '"+databaseName+"' "+
+				"and relname = 'live_table') limit 1)")
 
 		var maxObjectID uint64
 		require.NoError(t, conn.QueryRowContext(ctx,
@@ -142,6 +151,9 @@ func TestV406UpgradeCleansHistoricalOrphanObjectPrivileges(t *testing.T) {
 		)
 		copyRolePrivilegeForUpgradeTest(
 			t, ctx, conn, roleName, tableID, malformedControlID, "table", "d.t", "legacy.unknown",
+		)
+		copyRolePrivilegeForUpgradeTest(
+			t, ctx, conn, roleName, tableID, hiddenIndexID, "table", "d.t", "d.t",
 		)
 
 		require.Equal(t, 5, countRolePrivilegesByObjectIDs(
@@ -224,6 +236,14 @@ func TestV406UpgradeCleansHistoricalOrphanObjectPrivileges(t *testing.T) {
 		require.Equal(t, 1, countRolePrivilegesByObjectIDs(
 			t, ctx, conn, roleName, []uint64{malformedControlID},
 		))
+		require.Equal(t, 1, countRolePrivilegesByObjectIDs(
+			t, ctx, conn, roleName, []uint64{hiddenIndexID},
+		), "upgrade cleanup must preserve a legacy grant while its hidden relation exists")
+		mustExecOrphanPrivilegeUpgradeSQL(t, ctx, conn,
+			"drop index legacy_hidden_idx on "+databaseName+".live_table")
+		require.Zero(t, countRolePrivilegesByObjectIDs(
+			t, ctx, conn, roleName, []uint64{hiddenIndexID},
+		), "ordinary DROP INDEX must clean the preserved hidden-child legacy grant")
 
 		// A completed cleanup remains idempotent when the upgrade generation is
 		// retried after restart or offset reconciliation.
@@ -232,6 +252,155 @@ func TestV406UpgradeCleansHistoricalOrphanObjectPrivileges(t *testing.T) {
 		require.True(t, completed)
 		require.Zero(t, countOrphans())
 		require.Equal(t, 1, countMoRolePrivsObjectIDIndexes(t, ctx, conn))
+	})
+}
+
+func TestMaybeUpgradeTenantRepairsRestoredSameVersionTenantAcrossTransactions(t *testing.T) {
+	embed.RunSingleCNBaseClusterTests(t, func(cluster embed.Cluster) {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+		defer cancel()
+
+		cn, err := cluster.GetCNService(0)
+		require.NoError(t, err)
+		port := cn.GetServiceConfig().CN.Frontend.Port
+		sysDB, err := sql.Open("mysql", fmt.Sprintf("dump:111@tcp(127.0.0.1:%d)/", port))
+		require.NoError(t, err)
+		defer sysDB.Close()
+		sysConn, err := sysDB.Conn(ctx)
+		require.NoError(t, err)
+		defer sysConn.Close()
+
+		const accountName = "direct_upgrade_27836"
+		_, _ = sysConn.ExecContext(ctx, "drop account if exists "+accountName)
+		defer func() {
+			cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 30*time.Second)
+			defer cleanupCancel()
+			_, _ = sysConn.ExecContext(cleanupCtx, "drop account if exists "+accountName)
+		}()
+		mustExecOrphanPrivilegeUpgradeSQL(t, ctx, sysConn,
+			"create account "+accountName+" ADMIN_NAME 'root' IDENTIFIED BY '111'")
+		accountID := int32(queryOrphanPrivilegeUpgradeID(t, ctx, sysConn,
+			"select account_id from mo_catalog.mo_account where account_name = '"+accountName+"'"))
+		sqlExecutor := cn.RawService().(cnservice.Service).GetSQLExecutor()
+
+		require.NoError(t, execOrphanPrivilegeUpgradeInternalSQLForAccount(
+			ctx, sqlExecutor, uint32(accountID),
+			"drop index idx_mo_role_privs_obj_id on mo_catalog.mo_role_privs",
+		))
+		const orphanStart = uint64(8000000000)
+		const orphanCount = uint64(1001)
+		seedSQL := fmt.Sprintf(`insert into mo_catalog.mo_role_privs
+			select p.role_id, p.role_name, 'database', %d + g.result,
+				p.privilege_id, p.privilege_name, 'd', p.operation_user_id,
+				p.granted_time, p.with_grant_option
+			from (select * from mo_catalog.mo_role_privs limit 1) p
+			cross join generate_series(0, %d) g`, orphanStart, orphanCount-1)
+		seeded, err := execOrphanPrivilegeUpgradeInternalSQLForAccountAffected(
+			ctx, sqlExecutor, uint32(accountID), seedSQL,
+		)
+		require.NoError(t, err)
+		require.Equal(t, orphanCount, seeded)
+
+		upgraded, err := cn.RawService().(cnservice.Service).GetBootstrapService().MaybeUpgradeTenant(
+			ctx,
+			func() (int32, string, error) { return accountID, "4.0.6", nil },
+			nil,
+		)
+		require.NoError(t, err)
+		require.True(t, upgraded)
+
+		tenantDB, err := sql.Open("mysql", fmt.Sprintf(
+			"%s#root#accountadmin:111@tcp(127.0.0.1:%d)/", accountName, port,
+		))
+		require.NoError(t, err)
+		defer tenantDB.Close()
+		tenantConn, err := tenantDB.Conn(ctx)
+		require.NoError(t, err)
+		defer tenantConn.Close()
+		require.Zero(t, countAllRolePrivilegesByObjectIDRange(
+			t, ctx, tenantConn, orphanStart, orphanStart+orphanCount-1,
+		))
+		require.Equal(t, 1, countMoRolePrivsObjectIDIndexes(t, ctx, tenantConn))
+	})
+}
+
+func TestUpgradeProtocolBarrierUsesTransactionBeforeSITenantSnapshot(t *testing.T) {
+	embed.RunSingleCNBaseClusterTests(t, func(cluster embed.Cluster) {
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+		defer cancel()
+
+		cn, err := cluster.GetCNService(0)
+		require.NoError(t, err)
+		port := cn.GetServiceConfig().CN.Frontend.Port
+		db, err := sql.Open("mysql", fmt.Sprintf("dump:111@tcp(127.0.0.1:%d)/", port))
+		require.NoError(t, err)
+		defer db.Close()
+		conn, err := db.Conn(ctx)
+		require.NoError(t, err)
+		defer conn.Close()
+		sqlExecutor := cn.RawService().(cnservice.Service).GetSQLExecutor()
+
+		const accountName = "si_barrier_upgrade_27836"
+		_, _ = conn.ExecContext(ctx, "drop account if exists "+accountName)
+		defer func() {
+			cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 30*time.Second)
+			defer cleanupCancel()
+			_, _ = conn.ExecContext(cleanupCtx, "drop account if exists "+accountName)
+		}()
+
+		query := "select account_id from mo_catalog.mo_account where account_name = " + sqlquote.String(accountName)
+		barrierSnapshotSawTenant := false
+		err = sqlExecutor.ExecTxn(ctx, func(txnExecutor executor.TxnExecutor) error {
+			// Establish snapshot S before the old writer commits its tenant.
+			res, err := txnExecutor.Exec(query, executor.StatementOption{})
+			if err != nil {
+				return err
+			}
+			res.Close()
+			if _, err := conn.ExecContext(ctx,
+				"create account "+accountName+" ADMIN_NAME 'root' IDENTIFIED BY '111'"); err != nil {
+				return err
+			}
+			if err := versions.CheckCommonProtocolVersion(txnExecutor, v4_0_6.Handler.Metadata().RequiredProtocolVersion); err != nil {
+				return err
+			}
+			res, err = txnExecutor.Exec(query, executor.StatementOption{})
+			if err != nil {
+				return err
+			}
+			res.ReadRows(func(rows int, _ []*vector.Vector) bool {
+				barrierSnapshotSawTenant = rows > 0
+				return false
+			})
+			res.Close()
+			return nil
+		}, executor.Options{}.
+			WithDatabase(catalog.MO_CATALOG).
+			WithTxnIsolation(txn.TxnIsolation_SI).
+			WithWaitCommittedLogApplied())
+		require.NoError(t, err)
+		require.False(t, barrierSnapshotSawTenant,
+			"the barrier transaction snapshot must model the old SI omission")
+
+		newSnapshotSawTenant := false
+		err = sqlExecutor.ExecTxn(ctx, func(txnExecutor executor.TxnExecutor) error {
+			res, err := txnExecutor.Exec(query, executor.StatementOption{})
+			if err != nil {
+				return err
+			}
+			defer res.Close()
+			res.ReadRows(func(rows int, _ []*vector.Vector) bool {
+				newSnapshotSawTenant = rows > 0
+				return false
+			})
+			return nil
+		}, executor.Options{}.
+			WithDatabase(catalog.MO_CATALOG).
+			WithTxnIsolation(txn.TxnIsolation_SI).
+			WithWaitCommittedLogApplied())
+		require.NoError(t, err)
+		require.True(t, newSnapshotSawTenant,
+			"the tenant snapshot transaction must start after the protocol barrier")
 	})
 }
 
@@ -322,18 +491,44 @@ func execOrphanPrivilegeUpgradeInternalSQL(
 	sqlExecutor executor.SQLExecutor,
 	statement string,
 ) error {
-	return sqlExecutor.ExecTxn(ctx, func(txn executor.TxnExecutor) error {
+	return execOrphanPrivilegeUpgradeInternalSQLForAccount(
+		ctx, sqlExecutor, catalog.System_Account, statement,
+	)
+}
+
+func execOrphanPrivilegeUpgradeInternalSQLForAccount(
+	ctx context.Context,
+	sqlExecutor executor.SQLExecutor,
+	accountID uint32,
+	statement string,
+) error {
+	_, err := execOrphanPrivilegeUpgradeInternalSQLForAccountAffected(
+		ctx, sqlExecutor, accountID, statement,
+	)
+	return err
+}
+
+func execOrphanPrivilegeUpgradeInternalSQLForAccountAffected(
+	ctx context.Context,
+	sqlExecutor executor.SQLExecutor,
+	accountID uint32,
+	statement string,
+) (uint64, error) {
+	var affectedRows uint64
+	err := sqlExecutor.ExecTxn(ctx, func(txn executor.TxnExecutor) error {
 		txn.Use(catalog.MO_CATALOG)
 		res, err := txn.Exec(
 			statement,
-			versions.UpgradeStatementOption(catalog.System_Account),
+			versions.UpgradeStatementOption(accountID),
 		)
 		if err != nil {
 			return err
 		}
+		affectedRows = res.AffectedRows
 		res.Close()
 		return nil
 	}, executor.Options{}.WithDatabase(catalog.MO_CATALOG).WithWaitCommittedLogApplied())
+	return affectedRows, err
 }
 
 func ensureMoRolePrivsObjectIDIndex(
@@ -373,12 +568,28 @@ func countMoRolePrivsObjectIDIndexes(
 	query := fmt.Sprintf(
 		"select count(distinct idx.name) from mo_catalog.mo_indexes idx "+
 			"join mo_catalog.mo_tables tbl on idx.table_id = tbl.rel_id "+
-			"where tbl.account_id = %d and tbl.reldatabase = %s and tbl.relname = %s "+
-			"and idx.name = %s",
-		catalog.System_Account,
+			"where tbl.reldatabase = %s and tbl.relname = %s and idx.name = %s",
 		sqlquote.String(catalog.MO_CATALOG),
 		sqlquote.String("mo_role_privs"),
 		sqlquote.String("idx_mo_role_privs_obj_id"),
+	)
+	var count int
+	require.NoError(t, conn.QueryRowContext(ctx, query).Scan(&count), query)
+	return count
+}
+
+func countAllRolePrivilegesByObjectIDRange(
+	t *testing.T,
+	ctx context.Context,
+	conn *sql.Conn,
+	fromObjectID uint64,
+	toObjectID uint64,
+) int {
+	t.Helper()
+	query := fmt.Sprintf(
+		"select count(*) from mo_catalog.mo_role_privs where obj_id between %d and %d",
+		fromObjectID,
+		toObjectID,
 	)
 	var count int
 	require.NoError(t, conn.QueryRowContext(ctx, query).Scan(&count), query)

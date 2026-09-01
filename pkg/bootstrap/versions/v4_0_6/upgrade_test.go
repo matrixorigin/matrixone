@@ -757,6 +757,50 @@ func TestHistoricalOrphanObjectPrivilegeCleanup(t *testing.T) {
 	})
 }
 
+func TestTenantUpgradeRequired(t *testing.T) {
+	const tenantID int32 = 9
+	for _, test := range []struct {
+		name         string
+		indexExists  bool
+		databaseRows bool
+		relationRows bool
+		want         bool
+	}{
+		{name: "missing index", want: true},
+		{name: "current tenant", indexExists: true},
+		{name: "database orphan", indexExists: true, databaseRows: true, want: true},
+		{name: "relation orphan", indexExists: true, relationRows: true, want: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			txnExecutor := newVersionTxnExecutor(t, func(sql string) (executor.Result, error) {
+				switch {
+				case strings.Contains(sql, "mo_indexes"):
+					if test.indexExists {
+						return newProtocolVersionResultValue(t, "idx_mo_role_privs_obj_id"), nil
+					}
+					return executor.Result{}, nil
+				case strings.Contains(sql, "mo_database"):
+					if test.databaseRows {
+						return newProtocolVersionResultValue(t, "1"), nil
+					}
+					return executor.Result{}, nil
+				case strings.Contains(sql, "mo_tables"):
+					if test.relationRows {
+						return newProtocolVersionResultValue(t, "1"), nil
+					}
+					return executor.Result{}, nil
+				default:
+					return executor.Result{}, fmt.Errorf("unexpected SQL: %s", sql)
+				}
+			})
+
+			required, err := Handler.TenantUpgradeRequired(tenantID, txnExecutor)
+			require.NoError(t, err)
+			require.Equal(t, test.want, required)
+		})
+	}
+}
+
 func TestTenantViewDefinitionChecks(t *testing.T) {
 	entries := []versions.UpgradeEntry{
 		upgradeInformationSchemaKeyColumnUsage(),

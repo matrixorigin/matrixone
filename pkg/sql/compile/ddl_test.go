@@ -1423,7 +1423,7 @@ func TestDeleteRolePrivilegesForDroppedObjects(t *testing.T) {
 	})
 }
 
-func TestDropIndexChildRelationSkipsPrivilegeCleanup(t *testing.T) {
+func TestDropIndexChildRelationCleansLegacyPrivileges(t *testing.T) {
 	ctx := context.Background()
 	proc := testutil.NewProcess(t)
 	proc.Ctx = ctx
@@ -1444,6 +1444,33 @@ func TestDropIndexChildRelationSkipsPrivilegeCleanup(t *testing.T) {
 
 	require.NoError(t, c.dropIndexChildRelation(db, "__mo_index_legacy", false))
 	require.NotContains(t, db.rels, "__mo_index_legacy")
+	require.Equal(t, []string{
+		"delete from mo_catalog.mo_role_privs where obj_id = 88;",
+	}, sqls)
+}
+
+func TestRestoreDropIndexChildRelationSkipsPrivilegeCleanup(t *testing.T) {
+	ctx := context.Background()
+	proc := testutil.NewProcess(t)
+	proc.Ctx = ctx
+	proc.ReplaceTopCtx(ctx)
+	proc.Base.SessionInfo.IsRestore = true
+	var sqls []string
+	moruntime.ServiceRuntime(proc.GetService()).SetGlobalVariables(
+		moruntime.InternalSQLExecutor,
+		executor.NewMemExecutor(func(sql string) (executor.Result, error) {
+			sqls = append(sqls, sql)
+			return executor.Result{}, nil
+		}),
+	)
+	db := newStubDatabase("db")
+	db.rels["__mo_index_restore"] = &stubRelation{
+		name: "__mo_index_restore", tableDef: &plan2.TableDef{LogicalId: 99},
+	}
+	c := &Compile{proc: proc, pn: &plan2.Plan{}}
+
+	require.NoError(t, c.dropIndexChildRelation(db, "__mo_index_restore", false))
+	require.NotContains(t, db.rels, "__mo_index_restore")
 	require.Empty(t, sqls)
 }
 

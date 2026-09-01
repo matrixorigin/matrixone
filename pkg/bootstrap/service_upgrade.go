@@ -288,6 +288,9 @@ func (s *service) asyncUpgradeTask(ctx context.Context) {
 
 		var err error
 		var completed bool
+		if err := s.checkPendingUpgradeProtocolBarrier(ctx); err != nil {
+			return false, moerr.AttachCause(ctx, err)
+		}
 		opts := executor.Options{}.
 			WithDatabase(catalog.MO_CATALOG).
 			WithMinCommittedTS(s.now()).
@@ -328,6 +331,42 @@ func (s *service) asyncUpgradeTask(ctx context.Context) {
 			timer.Reset(s.upgrade.checkUpgradeDuration)
 		}
 	}
+}
+
+// checkPendingUpgradeProtocolBarrier runs before the transaction that snapshots
+// tenant IDs. A new SI transaction therefore observes every tenant committed by
+// an older writer before that writer left the protocol membership.
+func (s *service) checkPendingUpgradeProtocolBarrier(ctx context.Context) error {
+	opts := executor.Options{}.
+		WithDatabase(catalog.MO_CATALOG).
+		WithMinCommittedTS(s.now()).
+		WithWaitCommittedLogApplied().
+		WithTimeZone(time.Local)
+	return s.exec.ExecTxn(ctx, func(txn executor.TxnExecutor) error {
+		final := s.getFinalVersionHandle().Metadata()
+		state, ok, err := versions.GetVersionState(
+			final.Version, final.VersionOffset, txn, false,
+		)
+		if err != nil || (ok && state == versions.StateReady) {
+			return err
+		}
+		upgrades, err := versions.GetUpgradeVersions(
+			final.Version, final.VersionOffset, txn, false, true,
+		)
+		if err != nil {
+			return err
+		}
+		var required int64
+		for _, upgrade := range upgrades {
+			if v := s.getVersionHandle(upgrade.ToVersion).Metadata().RequiredProtocolVersion; v > required {
+				required = v
+			}
+		}
+		if required == 0 {
+			return nil
+		}
+		return versions.CheckCommonProtocolVersion(txn, required)
+	}, opts)
 }
 
 func (s *service) performUpgrade(

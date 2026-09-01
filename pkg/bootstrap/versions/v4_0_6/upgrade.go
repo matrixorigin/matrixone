@@ -59,6 +59,38 @@ func (v *versionHandle) Prepare(_ context.Context, txn executor.TxnExecutor, _ b
 	return nil
 }
 
+func (v *versionHandle) TenantUpgradeRequired(
+	tenantID int32,
+	txn executor.TxnExecutor,
+) (bool, error) {
+	exists, err := moRolePrivsObjectIDIndexUpgradeEntry.CheckFunc(txn, uint32(tenantID))
+	if err != nil || !exists {
+		return !exists, err
+	}
+	for _, predicate := range []string{
+		databaseScopedOrphanObjectPrivilegePredicate,
+		relationScopedOrphanObjectPrivilegePredicate,
+	} {
+		res, err := txn.Exec(
+			fmt.Sprintf("SELECT 1 FROM mo_catalog.mo_role_privs WHERE %s LIMIT 1", fmt.Sprintf(predicate, tenantID)),
+			versions.UpgradeStatementOption(uint32(tenantID)),
+		)
+		if err != nil {
+			return false, err
+		}
+		required := false
+		res.ReadRows(func(rows int, _ []*vector.Vector) bool {
+			required = rows > 0
+			return false
+		})
+		res.Close()
+		if required {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
 func (v *versionHandle) HandleTenantUpgrade(ctx context.Context, tenantID int32, txn executor.TxnExecutor) error {
 	completed, err := v.HandleTenantUpgradeStep(ctx, tenantID, txn)
 	if err != nil {

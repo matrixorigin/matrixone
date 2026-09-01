@@ -75,7 +75,8 @@ func (s *service) CheckAndUpgradeCluster(ctx context.Context) error {
 	return nil
 }
 
-// UpgradeOneTenant Perform metadata upgrade for individual tenants
+// UpgradeOneTenant performs metadata upgrade for one tenant. Readiness is
+// checked in one transaction; each migration page is committed independently.
 func (s *service) UpgradeOneTenant(ctx context.Context, tenantID int32) error {
 	s.mu.RLock()
 	checked := s.mu.tenants[tenantID]
@@ -87,98 +88,71 @@ func (s *service) UpgradeOneTenant(ctx context.Context, tenantID int32) error {
 	ctx, cancel := context.WithTimeoutCause(ctx, time.Hour*12, moerr.CauseUpgradeOneTenant)
 	defer cancel()
 
+	var version string
+	shouldUpgrade := true
 	opts := executor.Options{}.
+		WithDatabase(catalog.MO_CATALOG).
 		WithMinCommittedTS(s.now()).
 		WithWaitCommittedLogApplied().
 		WithTimeZone(time.Local)
-	err := s.exec.ExecTxn(
-		ctx,
-		func(txn executor.TxnExecutor) error {
-			txn.Use(catalog.MO_CATALOG)
+	err := s.exec.ExecTxn(ctx, func(txn executor.TxnExecutor) error {
+		txn.Use(catalog.MO_CATALOG)
+		var err error
+		version, err = versions.GetTenantVersion(tenantID, txn)
+		if err != nil {
+			return err
+		}
 
-			version, err := versions.GetTenantVersion(tenantID, txn)
-			if err != nil {
-				return err
+		currentCN := s.getFinalVersionHandle().Metadata()
+		if versions.Compare(currentCN.Version, version) < 0 {
+			return moerr.NewInvalidInputNoCtxf(
+				"tenant version %s is greater than current cn version %s", version, currentCN.Version)
+		}
+		latestVersion, err := versions.GetLatestVersion(txn)
+		if err != nil {
+			return err
+		}
+		if latestVersion.Version != currentCN.Version {
+			s.logger.Fatal("BUG: current cn's version(" + currentCN.Version +
+				") must equal cluster latest version(" + latestVersion.Version + ")")
+		}
+		if currentCN.Version == version {
+			if latestVersion.VersionOffset != currentCN.VersionOffset {
+				shouldUpgrade = false
+				return nil
 			}
-
-			// tenant create at current cn, can work correctly
-			currentCN := s.getFinalVersionHandle().Metadata()
-			if versions.Compare(currentCN.Version, version) < 0 {
-				// tenant create at 1.4.0, current tenant version 1.5.0, it must be cannot work
-				return moerr.NewInvalidInputNoCtxf("tenant version %s is greater than current cn version %s",
-					version, currentCN.Version)
-			}
-
-			latestVersion, err := versions.GetLatestVersion(txn)
-			if err != nil {
-				return err
-			}
-			if latestVersion.Version != currentCN.Version {
-				s.logger.Fatal("BUG: current cn's version(" +
-					currentCN.Version +
-					") must equal cluster latest version(" +
-					latestVersion.Version +
-					")")
-			}
-			if currentCN.Version == version {
-				if latestVersion.VersionOffset != currentCN.VersionOffset {
-					return nil
-				}
-				upgrades, err := versions.GetUpgradeVersions(latestVersion.Version, latestVersion.VersionOffset, txn, false, false)
+			if conditional, ok := s.getFinalVersionHandle().(conditionalTenantUpgrade); ok {
+				shouldUpgrade, err = conditional.TenantUpgradeRequired(tenantID, txn)
 				if err != nil {
 					return err
 				}
-				if len(upgrades) == 0 {
-					return nil
-				}
+			} else {
+				shouldUpgrade = false
 			}
-
-			for {
-				// upgrade completed
-				if s.upgrade.finalVersionCompleted.Load() {
-					break
-				}
-
-				upgrades, err := versions.GetUpgradeVersions(latestVersion.Version, latestVersion.VersionOffset, txn, false, true)
+			if !shouldUpgrade {
+				upgrades, err := versions.GetUpgradeVersions(
+					latestVersion.Version, latestVersion.VersionOffset, txn, false, false,
+				)
 				if err != nil {
 					return err
 				}
-				// latest cluster is already upgrade completed
-				if upgrades[len(upgrades)-1].State == versions.StateUpgradingTenant ||
-					upgrades[len(upgrades)-1].State == versions.StateReady {
-					break
-				}
-
-				time.Sleep(time.Second)
+				shouldUpgrade = len(upgrades) > 0
 			}
-
-			// upgrade in current goroutine immediately
-			version, err = versions.GetTenantCreateVersionForUpdate(tenantID, txn)
-			if err != nil {
-				return err
-			}
-			from := version
-			for _, v := range s.handles {
-				if versions.Compare(v.Metadata().Version, from) >= 0 &&
-					v.Metadata().CanDirectUpgrade(from) {
-					if err := v.HandleTenantUpgrade(ctx, tenantID, txn); err != nil {
-						return err
-					}
-					if err := versions.UpgradeTenantVersion(tenantID, v.Metadata().Version, txn); err != nil {
-						return err
-					}
-					from = v.Metadata().Version
-				}
-			}
-			return nil
-		},
-		opts)
+		}
+		return nil
+	}, opts)
 	if err != nil {
 		return moerr.AttachCause(ctx, err)
 	}
-	s.mu.Lock()
-	s.mu.tenants[tenantID] = true
-	s.mu.Unlock()
+	if shouldUpgrade {
+		if err := s.waitTenantUpgradeReady(ctx); err != nil {
+			return moerr.AttachCause(ctx, err)
+		}
+		if err := s.upgradeTenantDirectly(ctx, tenantID, version, true); err != nil {
+			return moerr.AttachCause(ctx, err)
+		}
+	}
+	s.markTenantUpgradeChecked(tenantID)
 	return nil
 }
 

@@ -95,7 +95,12 @@ func Test_UpgradeOneTenant_SameVersionWithCurrentOffsetRunsTenantHandler(t *test
 				currentOffset = uint32(3)
 			)
 
-			h := newTestVersionHandler(currentVer, currentVer, versions.Yes, versions.Yes, currentOffset)
+			h := &testIncrementalVersionHandle{
+				testVersionHandle: newTestVersionHandler(
+					currentVer, currentVer, versions.Yes, versions.Yes, currentOffset,
+				),
+				completeAfter: 2,
+			}
 			txnOp := &testTxnOperator{}
 			sqlExecutor := executor.NewMemExecutor2(func(sql string) (executor.Result, error) {
 				switch {
@@ -128,7 +133,8 @@ func Test_UpgradeOneTenant_SameVersionWithCurrentOffsetRunsTenantHandler(t *test
 			)
 
 			require.NoError(t, b.UpgradeOneTenant(context.Background(), tenantID))
-			require.Equal(t, uint64(1), h.callHandleTenantUpgrade.Load())
+			require.Equal(t, int32(2), h.stepCalls.Load())
+			require.Zero(t, h.callHandleTenantUpgrade.Load())
 		},
 	)
 }

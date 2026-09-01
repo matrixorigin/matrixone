@@ -1091,6 +1091,75 @@ func TestDoUpgradeWaitsForTenantSnapshotProtocol(t *testing.T) {
 	}
 }
 
+func TestPendingProtocolBarrierCommitsBeforeTenantSnapshotTransaction(t *testing.T) {
+	sid := ""
+	runtime.RunTest(sid, func(rt runtime.Runtime) {
+		var protocolTxn int32
+		var snapshotTxn int32
+		oldTenantCommitted := false
+		var tracked *txnBoundaryTrackingExecutor
+		base := executor.NewMemExecutor(func(sql string) (executor.Result, error) {
+			generation := tracked.generation.Load()
+			switch {
+			case strings.Contains(sql, "from mo_version"):
+				return executor.Result{}, nil
+			case strings.Contains(sql, "from mo_upgrade"):
+				return buildUpgradeVersionResult(
+					1, versions.StateCreated, "4.0.6", "4.0.6", 40, 0,
+					versions.Yes, versions.Yes, 0, 0,
+				), nil
+			case sql == "SELECT mo_ctl('cn', 'GetProtocolVersion', '')":
+				protocolTxn = generation
+				// Model an old writer committing immediately before it leaves the
+				// membership observed by this RPC.
+				oldTenantCommitted = true
+				return newBootstrapStringResult(
+					`{"method":"GETPROTOCOLVERSION","result":"new-cn:43"}`), nil
+			case strings.HasPrefix(sql, "select account_id from mo_account"):
+				snapshotTxn = generation
+				require.True(t, oldTenantCommitted)
+				return executor.Result{}, nil
+			default:
+				return executor.Result{}, fmt.Errorf("unexpected sql: %s", sql)
+			}
+		})
+		tracked = &txnBoundaryTrackingExecutor{SQLExecutor: base}
+		b := newServiceForTest(
+			sid,
+			&memLocker{},
+			clock.NewHLCClock(func() int64 { return 0 }, 0),
+			nil,
+			tracked,
+			func(s *service) { s.handles = []VersionHandle{v4_0_6.Handler} },
+		)
+
+		require.NoError(t, b.checkPendingUpgradeProtocolBarrier(context.Background()))
+		require.NoError(t, b.exec.ExecTxn(context.Background(), func(txn executor.TxnExecutor) error {
+			_, err := txn.Exec(
+				"select account_id from mo_account where account_id > -1 order by account_id limit 16",
+				executor.StatementOption{},
+			)
+			return err
+		}, executor.Options{}.WithTxnIsolation(txn.TxnIsolation_SI)))
+		require.Equal(t, int32(1), protocolTxn)
+		require.Equal(t, int32(2), snapshotTxn)
+	})
+}
+
+type txnBoundaryTrackingExecutor struct {
+	executor.SQLExecutor
+	generation atomic.Int32
+}
+
+func (e *txnBoundaryTrackingExecutor) ExecTxn(
+	ctx context.Context,
+	fn func(executor.TxnExecutor) error,
+	opts executor.Options,
+) error {
+	e.generation.Add(1)
+	return e.SQLExecutor.ExecTxn(ctx, fn, opts)
+}
+
 func TestV406ProtocolBarrierPrecedesTenantSnapshot(t *testing.T) {
 	// Model the old-CN race deterministically: old-cn:42 remains able to create
 	// a tenant after any task snapshot, so no tenant snapshot SQL may execute
