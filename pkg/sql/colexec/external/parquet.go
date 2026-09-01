@@ -4291,12 +4291,23 @@ func (h *ParquetHandler) rowsToGeneratedByteBudget(maxRows int, param *ExternalP
 	if h.generatedBatchBytes(1, param) > param.maxBatchSize {
 		return 1
 	}
-	for rows := 2; rows <= maxRows; rows++ {
-		if h.generatedBatchBytes(rows, param) > param.maxBatchSize {
-			return rows - 1
+	if h.generatedBatchBytes(maxRows, param) <= param.maxBatchSize {
+		return maxRows
+	}
+
+	// generatedBatchBytes is monotonic in rows. Keep the count-only path
+	// constant time when no generated column is projected, and logarithmic when
+	// generated output must be admitted against the byte budget.
+	low, high := 1, maxRows
+	for low+1 < high {
+		mid := low + (high-low)/2
+		if h.generatedBatchBytes(mid, param) > param.maxBatchSize {
+			high = mid
+		} else {
+			low = mid
 		}
 	}
-	return maxRows
+	return low
 }
 
 type parquetVarlenaRange struct {
