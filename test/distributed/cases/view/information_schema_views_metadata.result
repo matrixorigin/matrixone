@@ -30,7 +30,7 @@ select table_name, view_definition, is_updatable
 from information_schema.views
 where table_schema = 'information_schema_views_metadata'
 order by table_name;
-➤ table_name[12,5000,0]  ¦  view_definition[-1,16383,0]  ¦  is_updatable[12,2,0]  𝄀
+➤ table_name[12,5000,0]  ¦  view_definition[-1,16383,0]  ¦  is_updatable[12,3,0]  𝄀
 adjacent_block_comment_v  ¦  select a from t  ¦  NO  𝄀
 agg_v  ¦  select a, count(*) cnt from t group by a  ¦  NO  𝄀
 block_before_view_v  ¦  select a from t  ¦  NO  𝄀
