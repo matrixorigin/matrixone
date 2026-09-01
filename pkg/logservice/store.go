@@ -1598,6 +1598,7 @@ func (l *store) getHeartbeatMessage() pb.LogStoreHeartbeat {
 		RaftAddress:                    l.cfg.RaftServiceAddr(),
 		ServiceAddress:                 l.cfg.LogServiceServiceAddr(),
 		GossipAddress:                  l.cfg.GossipServiceAddr(),
+		StoreIncarnation:               l.getStoreIncarnation(),
 		Replicas:                       make([]pb.LogReplicaInfo, 0),
 		Locality:                       l.cfg.getLocality(),
 		CommandDeliverySupported:       true,
