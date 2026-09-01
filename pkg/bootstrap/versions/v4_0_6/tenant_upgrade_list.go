@@ -60,6 +60,7 @@ var tenantUpgEntries = []versions.UpgradeEntry{
 	upgradeInformationSchemaMetadataVisibilityView("VIEWS", sysview.InformationSchemaViewsDDL),
 	upgradeInformationSchemaMetadataVisibilityView("PARTITIONS", sysview.InformationSchemaPartitionsDDL),
 	upgradeInformationSchemaMetadataVisibilityView("SCHEMATA", sysview.InformationSchemaSchemataDDL),
+	addMoRolePrivsObjectIDIndex(),
 }
 
 func upgradeInformationSchemaMetadataVisibilityView(viewName, viewDDL string) versions.UpgradeEntry {
@@ -310,6 +311,20 @@ func addMoRoleGrantGranteeIndex() versions.UpgradeEntry {
 		CheckFunc: func(txn executor.TxnExecutor, accountID uint32) (bool, error) {
 			return versions.CheckIndexDefinition(
 				txn, accountID, catalog.MO_CATALOG, "mo_role_grant", "idx_mo_role_grant_grantee_id",
+			)
+		},
+	}
+}
+
+func addMoRolePrivsObjectIDIndex() versions.UpgradeEntry {
+	return versions.UpgradeEntry{
+		Schema:    catalog.MO_CATALOG,
+		TableName: "mo_role_privs",
+		UpgType:   versions.ADD_INDEX,
+		UpgSql:    "create index idx_mo_role_privs_obj_id on mo_catalog.mo_role_privs(obj_id)",
+		CheckFunc: func(txn executor.TxnExecutor, accountID uint32) (bool, error) {
+			return versions.CheckIndexDefinition(
+				txn, accountID, catalog.MO_CATALOG, "mo_role_privs", "idx_mo_role_privs_obj_id",
 			)
 		},
 	}

@@ -129,6 +129,11 @@ func TestUserDefinedFunctionCatalogSignatureWidth(t *testing.T) {
 		fmt.Sprintf("arg_types varchar(%d)", types.MaxStringSize))
 }
 
+func TestMoRolePrivsCatalogObjectIndex(t *testing.T) {
+	require.Contains(t, MoCatalogMoRolePrivsDDL,
+		"key idx_mo_role_privs_obj_id(obj_id)")
+}
+
 func TestGetTenantInfo(t *testing.T) {
 	convey.Convey("tenant", t, func() {
 		type input struct {

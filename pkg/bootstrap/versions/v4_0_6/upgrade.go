@@ -73,8 +73,78 @@ func (v *versionHandle) HandleTenantUpgrade(ctx context.Context, tenantID int32,
 	if err := upgradeLegacyForeignKeyMetadata(ctx, tenantID, txn); err != nil {
 		return err
 	}
+	if err := cleanupHistoricalOrphanObjectPrivileges(ctx, tenantID, txn); err != nil {
+		return err
+	}
 	getLogger(txn.Txn().TxnOptions().CN).Info("tenant upgrade success", zap.Int32("tenantId", tenantID), zap.String("toVersion", v.metadata.Version))
 	return nil
+}
+
+const orphanObjectPrivilegeCleanupBatchSize uint64 = 1000
+
+const databaseScopedOrphanObjectPrivilegePredicate = `obj_id != 0
+AND (
+    (obj_type = 'database' AND privilege_level = 'd')
+    OR (obj_type IN ('table', 'view') AND privilege_level IN ('d.*', '*'))
+)
+AND NOT EXISTS (
+    SELECT 1 FROM mo_catalog.mo_database db
+    WHERE db.account_id = %d AND db.dat_id = mo_role_privs.obj_id
+)`
+
+const relationScopedOrphanObjectPrivilegePredicate = `obj_id != 0
+AND obj_type IN ('table', 'view')
+AND privilege_level IN ('d.t', 't')
+AND NOT EXISTS (
+    SELECT 1 FROM mo_catalog.mo_tables tbl
+    WHERE tbl.account_id = %d AND tbl.rel_logical_id = mo_role_privs.obj_id
+)`
+
+// cleanupHistoricalOrphanObjectPrivileges removes object grants left by CNs
+// predating the DROP lifecycle protocol. Each statement is bounded; the
+// surrounding tenant-upgrade transaction supplies atomic rollback, and the
+// predicates make a retry idempotent after interruption.
+func cleanupHistoricalOrphanObjectPrivileges(
+	ctx context.Context,
+	tenantID int32,
+	txn executor.TxnExecutor,
+) error {
+	// Take the rollout barrier before deriving either orphan snapshot. Without
+	// it, an old CN could commit a DROP without privilege cleanup after this
+	// migration has already passed the corresponding object ID.
+	if err := versions.CheckCommonProtocolVersion(txn, defines.MORPCVersion43); err != nil {
+		return err
+	}
+
+	for _, predicate := range []string{
+		databaseScopedOrphanObjectPrivilegePredicate,
+		relationScopedOrphanObjectPrivilegePredicate,
+	} {
+		deleteSQL := orphanObjectPrivilegeDeleteSQL(predicate, tenantID)
+		for {
+			if err := ctx.Err(); err != nil {
+				return err
+			}
+			res, err := txn.Exec(deleteSQL, versions.UpgradeStatementOption(uint32(tenantID)))
+			if err != nil {
+				return err
+			}
+			affectedRows := res.AffectedRows
+			res.Close()
+			if affectedRows < orphanObjectPrivilegeCleanupBatchSize {
+				break
+			}
+		}
+	}
+	return nil
+}
+
+func orphanObjectPrivilegeDeleteSQL(predicate string, tenantID int32) string {
+	return fmt.Sprintf(
+		"DELETE FROM mo_catalog.mo_role_privs WHERE %s LIMIT %d",
+		fmt.Sprintf(predicate, tenantID),
+		orphanObjectPrivilegeCleanupBatchSize,
+	)
 }
 
 const legacyForeignKeyTableDefinitionsSQL = "SELECT fk.db_name, fk.table_name, " +
