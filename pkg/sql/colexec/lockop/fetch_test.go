@@ -1495,6 +1495,12 @@ func TestSupportsTotalLockTableRange(t *testing.T) {
 	require.False(t, SupportsTotalLockTableRange(types.T_float32.ToType()))
 	require.False(t, SupportsTotalLockTableRange(types.T_float64.ToType()))
 	require.False(t, SupportsTotalLockTableRange(types.T_blob.ToType()))
+	for oid := 0; oid <= math.MaxUint8; oid++ {
+		typ := types.Type{Oid: types.T(oid)}
+		want := getFetchRowsFunc(typ) != nil && typ.Oid != types.T_float32 && typ.Oid != types.T_float64
+		require.Equalf(t, want, SupportsTotalLockTableRange(typ),
+			"logical-plan admission drifted from lockop support for oid %d", oid)
+	}
 	require.NotPanics(t, func() { GetFetchRowsFunc(types.T_uint32.ToType()) })
 	require.Panics(t, func() { GetFetchRowsFunc(types.T_blob.ToType()) })
 }
