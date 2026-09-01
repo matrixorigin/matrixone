@@ -420,9 +420,11 @@ func genViewTableDef(
 		}
 	}
 	persistedCreateSQL := rootSQL
-	if stableViewSQL, rewritten := stableViewSQLWithExpandedStars(ctx, stmt, viewSql, inferred.expandedSelectLists); rewritten {
+	definitionStmt := stmt
+	if stableViewSQL, stableSelect, rewritten := stableViewSQLWithExpandedStarsAndSelect(ctx, stmt, viewSql, inferred.expandedSelectLists); rewritten {
 		viewSql = stableViewSQL
 		persistedCreateSQL = stableViewSQL
+		definitionStmt = stableSelect
 	}
 
 	lowerCaseTableNames := ctx.GetLowerCaseTableNames()
@@ -431,8 +433,11 @@ func genViewTableDef(
 		persistedRequiredProtocol = &inferred.requiredProtocol
 	}
 	viewData, err := json.Marshal(ViewData{
-		Stmt:                    viewSql,
-		Definition:              tree.StringWithOpts(stmt, dialect.MYSQL, tree.WithQuoteString(true), tree.WithQuoteIdentifier(), tree.WithModeIndependentStringLiterals()),
+		Stmt: viewSql,
+		// Definition must be generated from the same star-expanded SELECT that is
+		// persisted in Stmt. Formatting the original AST would let metadata replay
+		// a later schema's columns even though the View itself remains frozen.
+		Definition:              tree.StringWithOpts(definitionStmt, dialect.MYSQL, tree.WithQuoteString(true), tree.WithQuoteIdentifier(), tree.WithModeIndependentStringLiterals()),
 		CheckOption:             strings.ToUpper(checkOption),
 		DefaultDatabase:         ctx.DefaultDatabase(),
 		SQLMode:                 parserSQLModeFromContext(ctx),
@@ -474,16 +479,26 @@ func stableViewSQLWithExpandedStars(
 	viewSql string,
 	expandedSelectLists map[*tree.SelectClause]tree.SelectExprs,
 ) (string, bool) {
+	stableSQL, _, rewritten := stableViewSQLWithExpandedStarsAndSelect(ctx, stmt, viewSql, inferred.expandedSelectLists)
+	return stableSQL, rewritten
+}
+
+func stableViewSQLWithExpandedStarsAndSelect(
+	ctx CompilerContext,
+	stmt *tree.Select,
+	viewSql string,
+	expandedSelectLists map[*tree.SelectClause]tree.SelectExprs,
+) (string, *tree.Select, bool) {
 	// SAMPLE(*) expands to a sampling operator during binding. The rewriter
 	// leaves that query block intact while still stabilizing ordinary stars in
 	// unrelated query blocks.
 	if viewSql == "" || len(expandedSelectLists) == 0 || !viewSelectHasStar(stmt) {
-		return viewSql, false
+		return viewSql, nil, false
 	}
 
 	stableSelect, ok := viewSelectWithExpandedStars(stmt, expandedSelectLists)
 	if !ok {
-		return viewSql, false
+		return viewSql, nil, false
 	}
 
 	parserSQLMode := ""
@@ -492,7 +507,7 @@ func stableViewSQLWithExpandedStars(
 	}
 	stmts, err := mysql.ParseWithSQLMode(ctx.GetContext(), viewSql, ctx.GetLowerCaseTableNames(), parserSQLMode)
 	if err != nil {
-		return viewSql, false
+		return viewSql, nil, false
 	}
 	defer func() {
 		for _, statement := range stmts {
@@ -500,23 +515,23 @@ func stableViewSQLWithExpandedStars(
 		}
 	}()
 	if len(stmts) != 1 {
-		return viewSql, false
+		return viewSql, nil, false
 	}
 
 	switch viewStmt := stmts[0].(type) {
 	case *tree.CreateView:
 		stableStmt := *viewStmt
 		stableStmt.AsSource = stableSelect
-		return formatStableViewSQL(&stableStmt), true
+		return formatStableViewSQL(&stableStmt), stableSelect, true
 	case *tree.AlterView:
 		stableStmt := &tree.CreateView{
 			Name:     viewStmt.Name,
 			ColNames: viewStmt.ColNames,
 			AsSource: stableSelect,
 		}
-		return formatStableViewSQL(stableStmt), true
+		return formatStableViewSQL(stableStmt), stableSelect, true
 	default:
-		return viewSql, false
+		return viewSql, nil, false
 	}
 }
 
