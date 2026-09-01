@@ -29,13 +29,16 @@ import (
 
 	"github.com/lni/goutils/leaktest"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/config"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/frontend"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	query "github.com/matrixorigin/matrixone/pkg/pb/query"
 	qclient "github.com/matrixorigin/matrixone/pkg/queryservice/client"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -775,27 +778,88 @@ func newPipeServerConnForCacheTest(t *testing.T) (*serverConn, net.Conn, func())
 	}
 }
 
-func makeLegalStmtExecutePacket(statementID uint32) []byte {
-	// A binary COM_STMT_EXECUTE packet contains the statement id, cursor flag,
-	// and a four-byte iteration count.  This is the zero-parameter form from
-	// the MySQL protocol; the parser still validates all five bytes after the
-	// statement id.
-	return makeStmtCommandPacket(
-		frontend.COM_STMT_EXECUTE,
-		statementID,
-		0, // CURSOR_TYPE_NO_CURSOR
-		0, 0, 0, 0,
-	)
+type preparedCacheTestRouter struct {
+	sc           ServerConn
+	onConnect    func()
+	connectCount int
 }
 
-func makeUseDatabasePacket(database string) []byte {
-	packet := makeSimplePacket("use " + database)
+type preparedCacheTestAuthenticator struct {
+	checks *int
+}
+
+func (a *preparedCacheTestAuthenticator) Authenticate(_, _ []byte) bool {
+	(*a.checks)++
+	return true
+}
+
+func (r *preparedCacheTestRouter) Route(
+	context.Context, string, clientInfo, func(string) bool,
+) (*CNServer, error) {
+	return r.sc.GetCNServer(), nil
+}
+
+func (r *preparedCacheTestRouter) SelectByConnID(uint32) (*CNServer, error) {
+	return nil, nil
+}
+
+func (r *preparedCacheTestRouter) AllServers(string) ([]*CNServer, error) {
+	return nil, nil
+}
+
+func (r *preparedCacheTestRouter) Connect(
+	_ *CNServer, _ *frontend.Packet, tun *tunnel,
+) (ServerConn, []byte, error) {
+	r.connectCount++
+	if r.connectCount != 1 {
+		return nil, nil, fmt.Errorf("cache miss created backend generation %d", r.connectCount)
+	}
+	if r.onConnect != nil {
+		r.onConnect()
+	}
+	if !rebindServerConnTunnel(r.sc, tun) {
+		return nil, nil, errPipeClosed
+	}
+	return r.sc, makeOKPacket(8), nil
+}
+
+func makeLegalStmtExecutePacket(statementID, value uint32) []byte {
+	// This matches go-sql-driver/mysql's first execution of a single LONG
+	// parameter: no cursor, iteration-count 1, non-NULL, new type binding, then
+	// the little-endian value.
+	tail := []byte{
+		0,          // CURSOR_TYPE_NO_CURSOR
+		1, 0, 0, 0, // iteration-count
+		0, // NULL bitmap
+		1, // new-params-bound flag
+		byte(defines.MYSQL_TYPE_LONG), 0,
+		0, 0, 0, 0,
+	}
+	binary.LittleEndian.PutUint32(tail[len(tail)-4:], value)
+	return makeStmtCommandPacket(frontend.COM_STMT_EXECUTE, statementID, tail...)
+}
+
+func makePayloadPacket(sequence byte, payload ...byte) []byte {
+	packet := make([]byte, mysqlHeadLen+len(payload))
+	packet[0] = byte(len(payload))
+	packet[1] = byte(len(payload) >> 8)
+	packet[2] = byte(len(payload) >> 16)
+	packet[3] = sequence
+	copy(packet[mysqlHeadLen:], payload)
 	return packet
 }
 
 func TestPreparedShortConnectionQuitProductionPath(t *testing.T) {
 	cn := metadata.CNService{ServiceID: "s1", SQLAddress: "pipe"}
-	resetEvents := make(chan struct{}, 128)
+	type resetSnapshot struct {
+		database string
+		prepared bool
+	}
+	resetEvents := make(chan resetSnapshot, 128)
+	var backendStateMu sync.Mutex
+	var backendDatabase string
+	var backendPrepared *frontend.PrepareStmt
+	var backendPrepareSQL string
 	runTestWithQueryServiceResetHandler(t, cn, func(ctx context.Context, req *query.Request, resp *query.Response, _ *morpc.Buffer) error {
 		if req.ResetSessionRequest == nil {
 			return fmt.Errorf("missing ResetSession request")
@@ -803,12 +867,22 @@ func TestPreparedShortConnectionQuitProductionPath(t *testing.T) {
 		if _, ok := ctx.Deadline(); !ok {
 			return fmt.Errorf("ResetSession request is missing its production deadline")
 		}
-		resetEvents <- struct{}{}
+		backendStateMu.Lock()
+		if backendPrepared != nil {
+			backendPrepared.Close()
+			backendPrepared = nil
+		}
+		backendPrepareSQL = ""
+		backendDatabase = ""
+		snapshot := resetSnapshot{database: backendDatabase, prepared: backendPrepared != nil}
+		backendStateMu.Unlock()
+		resetEvents <- snapshot
 		resp.ResetSessionResponse = &query.ResetSessionResponse{Success: true}
 		return nil
 	}, func(cc *clientConn, _ string) {
 		ctx, cancel := context.WithCancel(context.Background())
 		defer cancel()
+		authChecks := 0
 
 		cache := newConnCache(
 			ctx,
@@ -816,7 +890,9 @@ func TestPreparedShortConnectionQuitProductionPath(t *testing.T) {
 			runtime.DefaultRuntime().Logger(),
 			withMOCluster(cc.moCluster),
 			withQueryClient(cc.queryClient),
-			withAuthConstructor(nil),
+			withAuthConstructor(func([]byte) Authenticator {
+				return &preparedCacheTestAuthenticator{checks: &authChecks}
+			}),
 		)
 		defer cache.Close()
 
@@ -824,22 +900,39 @@ func TestPreparedShortConnectionQuitProductionPath(t *testing.T) {
 		defer backendCleanup()
 
 		type backendEvent struct {
-			command byte
-			query   string
+			command   byte
+			query     string
+			database  string
+			parameter uint32
 		}
 		backendEvents := make(chan backendEvent, 1024)
 		backendDone := make(chan error, 1)
 		preparePlan := &planpb.Plan{
 			Plan: &planpb.Plan_Dcl{Dcl: &planpb.DataControl{
 				DclType: planpb.DataControl_PREPARE,
-				Control: &planpb.DataControl_Prepare{Prepare: &planpb.Prepare{}},
+				Control: &planpb.DataControl_Prepare{Prepare: &planpb.Prepare{
+					ParamTypes: []int32{0},
+				}},
 			}},
 		}
-		prepareStmt := &frontend.PrepareStmt{PreparePlan: preparePlan}
+		proc := process.NewTopProcess(
+			context.Background(), mpool.MustNewZeroNoFixed(),
+			nil, nil, nil, nil, nil, nil, nil, nil, nil,
+		)
+		defer proc.Free()
+		newPrepareStmt := func() *frontend.PrepareStmt {
+			return &frontend.PrepareStmt{PreparePlan: preparePlan}
+		}
+		defer func() {
+			backendStateMu.Lock()
+			defer backendStateMu.Unlock()
+			if backendPrepared != nil {
+				backendPrepared.Close()
+				backendPrepared = nil
+			}
+		}()
 		go func() {
 			receiver := newMySQLConn("cache-test-backend", backend, 0, nil, nil, false, 0)
-			prepared := false
-			database := ""
 			for {
 				packet, err := receiver.receive()
 				if err != nil {
@@ -852,59 +945,119 @@ func TestPreparedShortConnectionQuitProductionPath(t *testing.T) {
 				}
 				cmd := packet[4]
 				event := backendEvent{command: cmd}
-				if cmd == byte(cmdQuery) && len(packet) > mysqlHeadLen+1 {
+				if (cmd == byte(cmdQuery) || cmd == byte(frontend.COM_STMT_PREPARE)) &&
+					len(packet) > mysqlHeadLen+1 {
 					event.query = string(packet[5:])
 				}
-				backendEvents <- event
 				switch frontend.CommandType(cmd) {
 				case frontend.COM_STMT_PREPARE:
-					prepared = true
-					if err := writeAll(backend, makePrepareOKPacket(0, 0)); err != nil {
+					backendStateMu.Lock()
+					if backendPrepared != nil {
+						backendStateMu.Unlock()
+						backendDone <- fmt.Errorf("prepare reached backend before the prior statement was cleared")
+						return
+					}
+					backendPrepared = newPrepareStmt()
+					backendPrepareSQL = strings.ToLower(event.query)
+					event.database = backendDatabase
+					backendStateMu.Unlock()
+					backendEvents <- event
+					if err := writeAll(backend, makePrepareOKPacket(0, 1)); err != nil {
+						backendDone <- err
+						return
+					}
+					parameter := makePayloadPacket(2, 'p')
+					if err := writeAll(backend, parameter); err != nil {
 						backendDone <- err
 						return
 					}
 				case frontend.COM_STMT_EXECUTE:
-					if !prepared {
-						backendDone <- fmt.Errorf("execute reached backend without a prepare")
-						return
-					}
-					if len(packet) != mysqlHeadLen+1+4+5 || binary.LittleEndian.Uint32(packet[5:9]) != 1 {
+					const executePacketLength = mysqlHeadLen + 1 + 4 + 13
+					if len(packet) != executePacketLength ||
+						binary.LittleEndian.Uint32(packet[5:9]) != 1 ||
+						packet[9] != 0 ||
+						binary.LittleEndian.Uint32(packet[10:14]) != 1 ||
+						packet[14] != 0 || packet[15] != 1 ||
+						packet[16] != byte(defines.MYSQL_TYPE_LONG) || packet[17] != 0 {
 						backendDone <- fmt.Errorf("malformed binary COM_STMT_EXECUTE packet")
 						return
 					}
+					event.parameter = binary.LittleEndian.Uint32(packet[18:22])
+					backendStateMu.Lock()
+					if backendPrepared == nil {
+						backendStateMu.Unlock()
+						backendDone <- fmt.Errorf("execute reached backend without a prepare")
+						return
+					}
+					event.query = backendPrepareSQL
 					if err := sc.mysqlProto.ParseExecuteData(
-						context.Background(), nil, prepareStmt, packet[5:], 4); err != nil {
+						context.Background(), proc, backendPrepared, packet[5:], 4); err != nil {
+						backendStateMu.Unlock()
 						backendDone <- fmt.Errorf("CN execute parser rejected packet: %w", err)
 						return
 					}
-					if database == "" {
+					event.database = backendDatabase
+					backendStateMu.Unlock()
+					if event.database == "" && !strings.EqualFold(event.query, "select ?") {
 						backendDone <- fmt.Errorf("execute reached backend without a selected database")
 						return
 					}
+					backendEvents <- event
 					if err := writeAll(backend, makeOKPacket(8)); err != nil {
 						backendDone <- err
 						return
 					}
 				case frontend.COM_STMT_CLOSE:
-					prepared = false
+					backendStateMu.Lock()
+					if backendPrepared != nil {
+						backendPrepared.Close()
+						backendPrepared = nil
+					}
+					backendPrepareSQL = ""
+					event.database = backendDatabase
+					backendStateMu.Unlock()
+					backendEvents <- event
 				case frontend.CommandType(cmdPing):
+					backendStateMu.Lock()
+					event.database = backendDatabase
+					backendStateMu.Unlock()
+					backendEvents <- event
 					if err := writeAll(backend, makeOKPacket(8)); err != nil {
 						backendDone <- err
 						return
 					}
 				case frontend.CommandType(cmdQuery):
 					queryText := strings.ToLower(event.query)
+					backendStateMu.Lock()
 					if strings.Contains(queryText, "set connection id") {
-						prepared = false
-						database = ""
+						// Production SET CONNECTION ID changes only the connection id.
 					} else if strings.HasPrefix(queryText, "use ") {
-						database = strings.TrimSpace(event.query[4:])
+						backendDatabase = strings.Trim(strings.TrimSpace(event.query[4:]), "`")
 					}
-					if err := writeAll(backend, makeOKPacket(8)); err != nil {
+					event.database = backendDatabase
+					backendStateMu.Unlock()
+					backendEvents <- event
+					if queryText == "select database()" {
+						terminal := makeDeprecatedEOFPacket(0)
+						terminal[3] = 4
+						packets := [][]byte{
+							makePayloadPacket(1, 1),
+							makePayloadPacket(2, 'd'),
+							makePayloadPacket(3, 0xfb),
+							terminal,
+						}
+						for _, response := range packets {
+							if err := writeAll(backend, response); err != nil {
+								backendDone <- err
+								return
+							}
+						}
+					} else if err := writeAll(backend, makeOKPacket(8)); err != nil {
 						backendDone <- err
 						return
 					}
 				default:
+					backendEvents <- event
 					if err := writeAll(backend, makeOKPacket(8)); err != nil {
 						backendDone <- err
 						return
@@ -913,13 +1066,11 @@ func TestPreparedShortConnectionQuitProductionPath(t *testing.T) {
 			}
 		}()
 
-		var backendSequence []byte
 		waitBackendCommand := func(expected byte) backendEvent {
 			t.Helper()
 			select {
 			case event := <-backendEvents:
 				require.Equal(t, expected, event.command)
-				backendSequence = append(backendSequence, event.command)
 				return event
 			case err := <-backendDone:
 				require.NoError(t, err)
@@ -929,7 +1080,15 @@ func TestPreparedShortConnectionQuitProductionPath(t *testing.T) {
 			return backendEvent{}
 		}
 
-		var backendConn ServerConn = sc
+		var initialDatabase string
+		router := &preparedCacheTestRouter{
+			sc: sc,
+			onConnect: func() {
+				backendStateMu.Lock()
+				backendDatabase = initialDatabase
+				backendStateMu.Unlock()
+			},
+		}
 		const generations = 100
 		for generation := 0; generation < generations; generation++ {
 			clientConnValue, clientCleanup := createNewClientConn(t)
@@ -937,6 +1096,7 @@ func TestPreparedShortConnectionQuitProductionPath(t *testing.T) {
 			client.queryClient = cc.queryClient
 			client.moCluster = cc.moCluster
 			client.connCache = cache
+			client.router = router
 			client.clientInfo.hash = LabelHash("tenant-a")
 
 			clientProxy, clientRemote := net.Pipe()
@@ -954,6 +1114,21 @@ func TestPreparedShortConnectionQuitProductionPath(t *testing.T) {
 					responses <- packet
 				}
 			}()
+			writeClient := func(packet []byte) {
+				t.Helper()
+				_, err := clientRemote.Write(packet)
+				require.NoError(t, err)
+			}
+			waitResponse := func() []byte {
+				t.Helper()
+				select {
+				case packet := <-responses:
+					return packet
+				case <-time.After(time.Second):
+					t.Fatal("timed out waiting for backend response")
+					return nil
+				}
+			}
 
 			tun := newTunnel(
 				ctx,
@@ -974,9 +1149,37 @@ func TestPreparedShortConnectionQuitProductionPath(t *testing.T) {
 			}
 			defer closeGenerationResources()
 			client.tun = tun
-			client.sc = backendConn
 			require.True(t, tun.connCacheEnabled)
-			require.True(t, rebindServerConnTunnel(backendConn, tun))
+
+			database := "db_a"
+			if generation&1 == 1 {
+				database = "db_b"
+			}
+			if generation == generations-1 {
+				database = ""
+			}
+			initialDatabase = database
+			client.mysqlProto.SetDatabaseName(database)
+			backendConn, err := client.connectToBackendContext(ctx, "")
+			require.NoError(t, err)
+			require.Same(t, sc, backendConn)
+			client.sc = backendConn
+			require.True(t, isOKPacket(waitResponse()))
+			if generation > 0 {
+				setConnID := waitBackendCommand(byte(cmdQuery))
+				require.Contains(t, strings.ToLower(setConnID.query), "set connection id")
+				require.Empty(t, setConnID.database,
+					"ResetSession must clear the prior database before SET CONNECTION ID")
+				if database != "" {
+					useEvent := waitBackendCommand(byte(cmdQuery))
+					require.Equal(t, "use `"+database+"`", strings.ToLower(useEvent.query))
+					require.Equal(t, database, useEvent.database)
+				}
+			}
+			backendStateMu.Lock()
+			require.Equal(t, database, backendDatabase)
+			require.Nil(t, backendPrepared)
+			backendStateMu.Unlock()
 			require.NoError(t, tun.run(client, backendConn))
 
 			eventDone := make(chan error, 1)
@@ -1027,45 +1230,52 @@ func TestPreparedShortConnectionQuitProductionPath(t *testing.T) {
 			}
 			defer cleanupGeneration()
 
-			writeClient := func(packet []byte) {
-				t.Helper()
-				_, err := clientRemote.Write(packet)
-				require.NoError(t, err)
-			}
-			waitResponse := func() []byte {
-				t.Helper()
-				select {
-				case packet := <-responses:
-					return packet
-				case <-time.After(time.Second):
-					t.Fatal("timed out waiting for backend response")
-					return nil
-				}
+			if database == "" {
+				writeClient(makeSimplePacket("select database()"))
+				databaseEvent := waitBackendCommand(byte(cmdQuery))
+				require.Equal(t, "select database()", strings.ToLower(databaseEvent.query))
+				require.Empty(t, databaseEvent.database)
+				require.Equal(t, byte(1), waitResponse()[4])
+				_ = waitResponse() // column definition
+				row := waitResponse()
+				require.Equal(t, []byte{0xfb}, row[mysqlHeadLen:], "DATABASE() must return NULL")
+				_ = waitResponse() // result terminator
 			}
 
-			prepare := makeSimplePacket("select 1")
+			queryText := "select v from t where id=?"
+			if database == "" {
+				queryText = "select ?"
+			}
+			prepare := makeSimplePacket(queryText)
 			prepare[4] = byte(frontend.COM_STMT_PREPARE)
 			writeClient(prepare)
-			waitBackendCommand(byte(frontend.COM_STMT_PREPARE))
+			prepareEvent := waitBackendCommand(byte(frontend.COM_STMT_PREPARE))
+			require.Equal(t, database, prepareEvent.database)
 			require.Equal(t, byte(1), waitResponse()[3])
+			_ = waitResponse() // parameter definition
+			require.False(t, tun.hasUnsafeClientState(), "prepare response must close its tracked request")
 
-			database := fmt.Sprintf("db_%03d", generation)
-			writeClient(makeUseDatabasePacket(database))
-			useEvent := waitBackendCommand(byte(cmdQuery))
-			require.Equal(t, "use "+database, strings.ToLower(useEvent.query))
+			parameter := uint32(generation + 1)
+			writeClient(makeLegalStmtExecutePacket(1, parameter))
+			executeEvent := waitBackendCommand(byte(frontend.COM_STMT_EXECUTE))
+			require.Equal(t, parameter, executeEvent.parameter)
+			require.Equal(t, database, executeEvent.database)
 			require.True(t, isOKPacket(waitResponse()))
-
-			writeClient(makeLegalStmtExecutePacket(1))
-			waitBackendCommand(byte(frontend.COM_STMT_EXECUTE))
-			require.True(t, isOKPacket(waitResponse()))
+			require.False(t, tun.hasUnsafeClientState(), "execute response must close its tracked request")
 
 			writeClient(makeStmtCommandPacket(frontend.COM_STMT_CLOSE, 1))
 			waitBackendCommand(byte(frontend.COM_STMT_CLOSE))
+			require.Eventually(t, tun.hasFenceableClosedStatementState,
+				time.Second, time.Millisecond,
+				"COM_STMT_CLOSE must commit its tombstone before QUIT is published")
+			require.False(t, tun.hasInFlightClientRequest())
 
-			writeClient(makeQuitPacket())
+			writeClient(makePayloadPacket(0, byte(cmdQuit)))
 			waitBackendCommand(byte(cmdPing))
 			select {
-			case <-resetEvents:
+			case snapshot := <-resetEvents:
+				require.Empty(t, snapshot.database)
+				require.False(t, snapshot.prepared)
 			case <-time.After(time.Second):
 				t.Fatal("cache publication did not call ResetSession")
 			}
@@ -1078,30 +1288,12 @@ func TestPreparedShortConnectionQuitProductionPath(t *testing.T) {
 			require.Equal(t, 1, cache.Count())
 
 			cleanupGeneration()
-			if generation+1 < generations {
-				backendConn = cache.Pop("tenant-a", uint32(99+generation), nil, nil, clientInfo{})
-				popEvent := waitBackendCommand(byte(cmdQuery))
-				require.Contains(t, strings.ToLower(popEvent.query), "set connection id")
-				require.Same(t, sc, backendConn)
-				require.Equal(t, 0, cache.Count())
-			}
 		}
-
-		require.Equal(t, generations*5+generations-1, len(backendSequence))
-		sequenceOffset := 0
-		for generation := 0; generation < generations; generation++ {
-			base := sequenceOffset
-			require.Equal(t, byte(frontend.COM_STMT_PREPARE), backendSequence[base])
-			require.Equal(t, byte(cmdQuery), backendSequence[base+1])
-			require.Equal(t, byte(frontend.COM_STMT_EXECUTE), backendSequence[base+2])
-			require.Equal(t, byte(frontend.COM_STMT_CLOSE), backendSequence[base+3])
-			require.Equal(t, byte(cmdPing), backendSequence[base+4])
-			sequenceOffset += 5
-			if generation+1 < generations {
-				require.Equal(t, byte(cmdQuery), backendSequence[sequenceOffset])
-				sequenceOffset++
-			}
-		}
+		require.Equal(t, 1, router.connectCount,
+			"all later client generations must reuse the single backend connection")
+		require.Equal(t, generations-1, authChecks,
+			"every cached login must pass the cache authentication gate")
+		require.Empty(t, resetEvents, "all reset events must be consumed by their originating generation")
 
 		require.NoError(t, cache.Close())
 		select {
