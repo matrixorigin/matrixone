@@ -4228,6 +4228,20 @@ var gSysVarsDefs = map[string]SystemVariable{
 		Type:              InitSystemVariableStringType("sidecar_url"),
 		Default:           "",
 	},
+	"mysql_compatible": {
+		// Opt in to MySQL readings of expressions MO otherwise rejects,
+		// where MO's stricter typing is correct but incompatible. MySQL has
+		// no BOOL type, so a predicate is an integer 0/1 there and
+		// SUM/AVG over one is ordinary numeric aggregation; MO types the
+		// predicate as BOOL and rejects it. Off by default: the strict
+		// behavior is the correct one, this only relaxes it on request.
+		Name:              "mysql_compatible",
+		Scope:             ScopeBoth,
+		Dynamic:           true,
+		SetVarHintApplies: false,
+		Type:              InitSystemVariableBoolType("mysql_compatible"),
+		Default:           int8(0),
+	},
 }
 
 func updateTimeZone(ctx context.Context, sess *Session, sv *SystemVariables, name string, val interface{}) error {
