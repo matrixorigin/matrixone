@@ -208,9 +208,7 @@ func (h *ParquetHandler) openFile(param *ExternalParam, prefetchS3 bool) error {
 		}
 		fileSize = param.FileSize[param.Fileparam.FileIndex-1]
 
-		parallelLoadFileFanout := param.Extern.ExternType == int32(plan.ExternType_LOAD) &&
-			param.Extern.ParallelLoadRequested && len(param.ParquetRowGroupShards) == 0
-		if shouldPrefetchS3Parquet(param.Extern.ScanType, prefetchS3, fileSize, len(param.ParquetRowGroupShards) > 0, parallelLoadFileFanout) {
+		if shouldPrefetchS3Parquet(param.Extern.ScanType, prefetchS3, fileSize, len(param.ParquetRowGroupShards) > 0, param.ParquetWholeFileFanout) {
 			data := make([]byte, int(fileSize))
 			vec := fileservice.IOVector{
 				FilePath: readPath,
@@ -272,7 +270,7 @@ func shouldReadAheadParquetRanges(param *ExternalParam) bool {
 		param.Extern != nil &&
 		param.Extern.ScanType == tree.S3 &&
 		param.Extern.ExternType == int32(plan.ExternType_LOAD) &&
-		len(param.ParquetRowGroupShards) > 0
+		(len(param.ParquetRowGroupShards) > 0 || param.ParquetWholeFileFanout)
 }
 
 type parquetColumnLookup struct {

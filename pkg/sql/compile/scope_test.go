@@ -1366,6 +1366,7 @@ func TestCompileExternScanParquetLoadDefaultAtThresholdUsesFileFanoutWithoutFoot
 		require.True(t, ok)
 		require.False(t, ext.Es.Extern.Parallel)
 		require.True(t, ext.Es.Extern.ParallelLoadRequested)
+		require.True(t, ext.Es.ParquetWholeFileFanout)
 		require.Empty(t, ext.Es.ParquetRowGroupShards)
 		require.Len(t, ext.Es.FileList, 1)
 	}
@@ -2134,6 +2135,7 @@ func TestCompileExternScanParquetLoadUsesFileFanoutMainPath(t *testing.T) {
 		require.NoError(t, checkScopeWithExpectedList(scope, []vm.OpType{vm.External}))
 		ext := scope.RootOp.(*external.External)
 		require.False(t, ext.Es.Extern.Parallel)
+		require.True(t, ext.Es.ParquetWholeFileFanout)
 		require.Empty(t, ext.Es.ParquetRowGroupShards)
 		require.Len(t, ext.Es.FileList, 1)
 		require.Len(t, ext.Es.FileOffsetTotal, 1)

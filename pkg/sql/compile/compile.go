@@ -3354,14 +3354,14 @@ type icebergExternalScanRuntime struct {
 }
 
 func (c *Compile) compileExternScanHiveFileFanout(node *plan.Node, param *tree.ExternParam, fileList []string, fileSize []int64, strictSqlMode bool) ([]*Scope, error) {
-	return c.compileExternScanWholeFileFanout(node, param, fileList, fileSize, strictSqlMode)
+	return c.compileExternScanWholeFileFanout(node, param, fileList, fileSize, strictSqlMode, false)
 }
 
 func (c *Compile) compileExternScanParquetLoadFileFanout(node *plan.Node, param *tree.ExternParam, fileList []string, fileSize []int64, strictSqlMode bool) ([]*Scope, error) {
-	return c.compileExternScanWholeFileFanout(node, param, fileList, fileSize, strictSqlMode)
+	return c.compileExternScanWholeFileFanout(node, param, fileList, fileSize, strictSqlMode, true)
 }
 
-func (c *Compile) compileExternScanWholeFileFanout(node *plan.Node, param *tree.ExternParam, fileList []string, fileSize []int64, strictSqlMode bool) ([]*Scope, error) {
+func (c *Compile) compileExternScanWholeFileFanout(node *plan.Node, param *tree.ExternParam, fileList []string, fileSize []int64, strictSqlMode bool, parquetWholeFileFanout bool) ([]*Scope, error) {
 	nodes := c.getHiveFileFanoutNodes(param, len(fileList))
 	shards := splitHiveFileShards(fileList, fileSize, nodes)
 	if len(shards) <= 1 {
@@ -3392,6 +3392,7 @@ func (c *Compile) compileExternScanWholeFileFanout(node *plan.Node, param *tree.
 			makeWholeFileOffsets(len(shard.fileList)),
 			strictSqlMode,
 		)
+		op.Es.ParquetWholeFileFanout = parquetWholeFileFanout
 		op.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
 		scope.setRootOperator(op)
 		ss = append(ss, scope)
@@ -6970,7 +6971,7 @@ func supportsRemoteMongoUserQuery(service string) bool {
 		return false
 	}
 	protocolVersion, ok := version.(int64)
-	return ok && protocolVersion >= defines.MORPCVersion44
+	return ok && protocolVersion >= defines.MORPCVersion45
 }
 
 // mongoScanUsesV44Payload reports whether a scan uses any field introduced by
@@ -7082,6 +7083,19 @@ func supportsRemotePadSpaceSemantics(service string) bool {
 	}
 	protocolVersion, ok := version.(int64)
 	return ok && protocolVersion >= defines.MORPCVersion40
+}
+
+func supportsRemoteParquetWholeFileFanout(service string) bool {
+	rt := moruntime.ServiceRuntime(service)
+	if rt == nil {
+		return false
+	}
+	version, ok := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
+	if !ok {
+		return false
+	}
+	protocolVersion, ok := version.(int64)
+	return ok && protocolVersion >= defines.MORPCVersion44
 }
 
 func (c *Compile) canCompileShuffleGroup(node *plan.Node) bool {

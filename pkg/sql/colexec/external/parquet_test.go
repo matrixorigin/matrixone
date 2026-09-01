@@ -29,9 +29,11 @@ import (
 	"iter"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	icebergio "github.com/matrixorigin/matrixone/pkg/iceberg/io"
 	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
@@ -2860,6 +2862,28 @@ func TestParquetShouldPrefetchS3Parquet(t *testing.T) {
 	require.False(t, shouldPrefetchS3Parquet(tree.S3, true, maxParquetS3PrefetchSize, false, true))
 }
 
+func TestParquetWholeFileFanoutPrepareRequiresCompatibleProtocol(t *testing.T) {
+	proc := testutil.NewProc(t)
+	rt := moruntime.ServiceRuntime(proc.GetService())
+	previous, hadPrevious := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
+	t.Cleanup(func() {
+		if hadPrevious {
+			rt.SetGlobalVariables(moruntime.MOProtocolVersion, previous)
+		} else {
+			rt.CompareAndDeleteGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion44)
+		}
+	})
+
+	external := NewArgument().WithEs(&ExternalParam{ExParamConst: ExParamConst{ParquetWholeFileFanout: true}})
+	proc.Ctx = context.WithValue(proc.Ctx, defines.RemoteRunContext{}, true)
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion44)
+	err := external.Prepare(proc)
+	require.ErrorContains(t, err, "MORPC protocol version 45")
+
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion45)
+	require.NoError(t, validateParquetWholeFileFanoutProtocol(proc, external.Es))
+}
+
 func TestParquet_prepare_missingColumn(t *testing.T) {
 	var buf bytes.Buffer
 	schema := parquet.NewSchema("x", parquet.Group{
@@ -3972,8 +3996,9 @@ func TestParquetRangeReadAheadConcurrentReaderAt(t *testing.T) {
 }
 
 func TestShouldReadAheadParquetRangesIsLoadOnly(t *testing.T) {
-	newParam := func(scanType int, externType plan.ExternType, withShards bool) *ExternalParam {
+	newParam := func(scanType int, externType plan.ExternType, withShards, wholeFileFanout bool) *ExternalParam {
 		param := &ExternalParam{ExParamConst: ExParamConst{
+			ParquetWholeFileFanout: wholeFileFanout,
 			Extern: &tree.ExternParam{
 				ExParamConst: tree.ExParamConst{ScanType: scanType, Format: tree.PARQUET},
 				ExParam:      tree.ExParam{ExternType: int32(externType)},
@@ -3985,10 +4010,11 @@ func TestShouldReadAheadParquetRangesIsLoadOnly(t *testing.T) {
 		return param
 	}
 
-	require.True(t, shouldReadAheadParquetRanges(newParam(tree.S3, plan.ExternType_LOAD, true)))
-	require.False(t, shouldReadAheadParquetRanges(newParam(tree.S3, plan.ExternType_EXTERNAL_TB, true)))
-	require.False(t, shouldReadAheadParquetRanges(newParam(tree.INFILE, plan.ExternType_LOAD, true)))
-	require.False(t, shouldReadAheadParquetRanges(newParam(tree.S3, plan.ExternType_LOAD, false)))
+	require.True(t, shouldReadAheadParquetRanges(newParam(tree.S3, plan.ExternType_LOAD, true, false)))
+	require.True(t, shouldReadAheadParquetRanges(newParam(tree.S3, plan.ExternType_LOAD, false, true)))
+	require.False(t, shouldReadAheadParquetRanges(newParam(tree.S3, plan.ExternType_EXTERNAL_TB, true, false)))
+	require.False(t, shouldReadAheadParquetRanges(newParam(tree.INFILE, plan.ExternType_LOAD, true, false)))
+	require.False(t, shouldReadAheadParquetRanges(newParam(tree.S3, plan.ExternType_LOAD, false, false)))
 }
 
 func TestParquetS3ReadAmplificationRepro(t *testing.T) {

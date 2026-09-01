@@ -53,12 +53,14 @@ Every scope has `Mcpu=1`; S3 DOP is the sum of stage-node CPUs capped by
 is therefore bounded by the existing scheduler capacity rather than by file or
 row-group count.
 
-For S3 row-group shards, one ReaderAt retains at most 1 MiB and fetches no more
+For S3 fanout scopes, one ReaderAt retains at most 1 MiB and fetches no more
 than four times a small request (requests above 256 KiB bypass it). Whole-file
-fanout never uses the full-file prefetch path: every fanout scope uses direct
-ReaderAt reads, so it cannot retain an object-sized buffer. The cache is owned
-by one active external operator and is released with that operator; there is no
-query-global cache, background worker, or cross-query state.
+fanout never uses the full-file prefetch path, but uses the same bounded
+ReaderAt policy as row-group fanout; a separately propagated scope-shape marker
+distinguishes it from a requested-but-serial load, which retains the existing
+small-object prefetch control. The cache is owned by one active external
+operator and is released with that operator; there is no query-global cache,
+background worker, or cross-query state.
 
 ### State and ownership
 
@@ -82,7 +84,7 @@ commit; it rolls back on any scope error or statement cancellation.
 | Load scopes | existing scheduler | bounded DOP | normal scope completion, statement error, or context cancellation |
 | Footer planning | compiler | at most one sequential open per file, only below file-fanout saturation | compile return |
 | ReaderAt cache | one active Parquet external operator | 1 MiB retained; at most 4x a small request; requests above 256 KiB bypass | operator close / scope cleanup |
-| Whole-file S3 fanout | one active external operator | no full-file prefetch or object-sized retained buffer | direct ReaderAt reads / scope cleanup |
+| Whole-file S3 fanout | one active external operator | no full-file prefetch; bounded 1 MiB ReaderAt cache | reader close / scope cleanup |
 | Transaction visibility | existing LOAD transaction | one statement transaction | commit publishes all rows; any error/cancel rolls back all rows |
 
 There is no added goroutine, retry loop, query-global cache, or persistent
@@ -91,18 +93,21 @@ the new code has no separate wait or cleanup protocol.
 
 ## Failure, cancellation, and compatibility
 
-This changes no persisted, catalog, wire, or mixed-version format.  It uses the
-existing distributed LOAD scope and transaction ownership: planning failure
+This changes no persisted or catalog format. It adds a versioned pipeline field
+for the whole-file fanout scope marker and uses the existing distributed LOAD
+scope and transaction ownership: planning failure
 creates no scope, and any running-scope failure/cancellation flows through the
 existing statement cancellation and transaction rollback path.  `PARALLEL
 'false'` is the immediate operational rollback switch; the size guard keeps
 small/local loads serial.
 
-This change has no catalog, storage, wire, or mixed-version surface. It is safe
-to roll back by reverting the code or by using explicit `PARALLEL 'false'` for
-an affected statement. It adds debug-only footer planning counters (file count,
-row groups, calls, bytes, duration) and does not add a metric with unbounded
-labels.
+The whole-file fanout scope marker is a v45 pipeline field. A sender, receiver,
+or external-operator Prepare rejects that scope at v44 or below, before it can
+silently fall back to object-sized S3 prefetch on an older CN. It is safe to roll
+back by lowering the protocol version before deploying an older receiver, by
+reverting the code, or by using explicit `PARALLEL 'false'` for an affected
+statement. It adds debug-only footer planning counters (file count, row groups,
+calls, bytes, duration) and does not add a metric with unbounded labels.
 
 ## Alternatives
 
@@ -125,7 +130,9 @@ labels.
 | Threshold-admitted omitted default cancels sibling file scopes on a shard failure and keeps the seed row only | distributed `load_data_parquet` rollback case with the session gate and test threshold | post-failure row count and aggregates |
 | Client cancellation after every admitted file shard has begun terminates every shard | `TestCompileExternScanParquetLoadDefaultFanoutContextCancellationTerminatesAllShards` | synchronization barrier proves both scopes are in flight before cancellation; every scope process observes `context.Canceled` |
 | Canceled `LOAD DATA` cannot publish its statement transaction | `TestFinishTxnRollsBackWhenRequestIsCancelled/load_data` | the frontend's statement-terminal owner observes the canceled request, performs zero commits, and invokes exactly one rollback |
-| S3 whole-file fanout cannot retain one object per admitted scope | `TestParquetShouldPrefetchS3Parquet` | fanout selector rejects the full-file prefetch path even at its previous 128 MiB limit |
+| S3 serial control keeps small-object prefetch while whole-file fanout cannot retain one object per admitted scope | `TestParquetShouldPrefetchS3Parquet`, compiler fanout-shape tests | actual scope-shape marker rejects full-file prefetch only for admitted fanout |
+| S3 whole-file fanout uses bounded I/O rather than raw ranges | `TestShouldReadAheadParquetRangesIsLoadOnly`, `TestParquetS3ReadAmplificationRepro` | fanout selector enables the bounded ReaderAt; instrumented fake file service shows fewer calls, bounded fetched-byte amplification, and at most 1 MiB retained |
+| Whole-file scope wire compatibility | `TestParquetWholeFileFanoutRemoteProtocolValidationAtSendAndReceiveBoundaries`, `TestParquetWholeFileFanoutPrepareRequiresCompatibleProtocol` | v45 accepts the marker; immediate predecessor v44 rejects it at send, receive, and Prepare |
 
 The threshold fanout test uses the post-bind parameter as the test seam, so it
 does not need a 128 MiB fixture or a timing assertion. The distributed rollback
