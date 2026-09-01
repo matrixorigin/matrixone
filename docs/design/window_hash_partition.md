@@ -1,10 +1,10 @@
 # Cost-based hash partitioning for ordinary window functions
 
-- Status: design approved for implementation
+- Status: pending independent design review
 - Tracking issue: [matrixorigin/matrixone#27943](https://github.com/matrixorigin/matrixone/issues/27943)
 - Owner: iamlinjunhong
 - Base commit: `33af6ae3c0c23e4f277137460577ea64678f7ecf`
-- Implementation PR: TBD
+- Implementation PR: [matrixorigin/matrixone#27972](https://github.com/matrixorigin/matrixone/pull/27972)
 - Last updated: 2026-09-01
 
 ## 1. Decision
@@ -292,16 +292,18 @@ statistics account retained data and hash growth; benchmark evidence records pea
 bytes and fallback activation. No user-visible session switch is introduced in
 the first revision.
 
-## 12. Design review record
+## 12. Design verification and review status
 
-- Semantic invariants: PASS; HASH changes physical grouping only and preserves
+- Proposed semantic invariants: complete; HASH changes physical grouping only and preserves
   complete `N`-row window partitions.
-- Failure and lifecycle closure: PASS with required pre-output one-way sort
+- Proposed failure and lifecycle closure: complete with required pre-output one-way sort
   fallback and explicit Reset/Free tests.
-- Distributed topology: PASS for the coordinator implementation; all streams
+- Proposed distributed topology: complete for the coordinator implementation; all streams
   merge before one partition owner.
-- Compatibility: PASS; zero-value SORT plus the protocol-version compile gate is
+- Proposed compatibility: complete; zero-value SORT plus the protocol-version compile gate is
   safe across persisted and mixed-version protobuf readers.
-- Cost/resource gate: PASS with benchmark calibration, mpool-owned index buffers,
+- Proposed cost/resource gate: complete with benchmark calibration, mpool-owned index buffers,
   and actual-memory fallback tests.
-- Open blockers: none.
+- Independent review decision: pending. This document is versioned with the
+  implementation PR above; an independent reviewer must record approval of its
+  exact revision before implementation approval can proceed.

@@ -229,7 +229,7 @@ func normalizeHashPartitionKeys(
 	mp *mpool.MPool,
 ) ([]*vector.Vector, []*vector.Vector, error) {
 	var normalized []*vector.Vector
-	var owned []*vector.Vector
+	owned := make([]*vector.Vector, 0, len(keys))
 	for i, key := range keys {
 		if key == nil || !key.HasGrouping() {
 			continue
