@@ -1387,13 +1387,22 @@ func (exec *CDCTaskExecutor) Cancel() error {
 	// before cancellation completes so it cannot install a new routine after we
 	// have reached Cancelled.
 	exec.callbackGeneration.Add(1)
+	// A table-detector callback that passed its generation check can still be
+	// initializing a watermark or publishing a reader. Drain that old callback
+	// generation before taking the reader snapshot and performing the terminal
+	// watermark delete. Callbacks queued behind this fence observe the increment
+	// above and return without publishing work.
+	exec.callbackMu.Lock()
+	exec.callbackMu.Unlock()
 	exec.cancelLifecycleContext()
 	exec.recordLeavingFailedMetrics(stateBeforeCancel, StateCancelling)
 
-	// FIX: Unmark task as paused to prevent pausedTasks leakage
-	// If task was paused before cancel, we need to clean up the pause mark
+	// Fence watermark producers before stopping readers. The updater is shared
+	// by every CDC task on this CN, so deleting catalog rows in the frontend is
+	// not enough: an already buffered update can otherwise recreate them.
 	if exec.watermarkUpdater != nil {
-		exec.watermarkUpdater.UnmarkTaskPaused(exec.spec.TaskId)
+		exec.watermarkUpdater.MarkTaskPaused(exec.spec.TaskId)
+		defer exec.watermarkUpdater.UnmarkTaskPaused(exec.spec.TaskId)
 	}
 
 	logutil.Info(
@@ -1443,6 +1452,28 @@ func (exec *CDCTaskExecutor) Cancel() error {
 			// Signal sent successfully
 		default:
 			// Channel full or Start() already exited, ignore
+		}
+	}
+
+	// DROP CDC removes metadata before taskservice asynchronously reaches this
+	// routine. Drain all earlier updater work after readers have stopped, remove
+	// the task from the shared updater caches, then perform the terminal delete.
+	// This also covers paused tasks, whose readers were stopped by Pause.
+	if exec.watermarkUpdater != nil && exec.spec != nil && len(exec.spec.Accounts) > 0 {
+		cleanupCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		if err := exec.watermarkUpdater.DeleteTaskWatermarks(
+			cleanupCtx,
+			uint64(exec.spec.Accounts[0].GetId()),
+			exec.spec.TaskId,
+		); err != nil {
+			logutil.Error(
+				"cdc.frontend.task.cancel_watermark_cleanup_failed",
+				zap.String("task-id", exec.spec.TaskId),
+				zap.String("task-name", exec.spec.TaskName),
+				zap.Error(err),
+			)
+			return err
 		}
 	}
 	return nil

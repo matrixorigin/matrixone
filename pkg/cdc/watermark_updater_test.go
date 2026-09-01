@@ -215,6 +215,83 @@ func TestWatermarkUpdater_CommitRetrySuccess(t *testing.T) {
 	require.False(t, ok)
 }
 
+func TestWatermarkUpdater_DeleteTaskWatermarksDrainsAndFencesCache(t *testing.T) {
+	exec := &retryableMockExecutor{}
+	updater := NewCDCWatermarkUpdater("delete-task", exec)
+	updater.Start()
+	defer updater.Stop()
+
+	ctx := context.Background()
+	taskKey := WatermarkKey{
+		AccountId: 1,
+		TaskId:    "dropped-task",
+		DBName:    "db",
+		TableName: "dropped-table",
+	}
+	otherKey := WatermarkKey{
+		AccountId: 1,
+		TaskId:    "running-task",
+		DBName:    "db",
+		TableName: "running-table",
+	}
+	taskTS := types.BuildTS(10, 1)
+	otherTS := types.BuildTS(20, 1)
+	require.NoError(t, updater.UpdateWatermarkOnly(ctx, &taskKey, &taskTS))
+	require.NoError(t, updater.UpdateWatermarkOnly(ctx, &otherKey, &otherTS))
+
+	require.NoError(t, updater.DeleteTaskWatermarks(ctx, taskKey.AccountId, taskKey.TaskId))
+
+	updater.RLock()
+	_, taskUncommitted := updater.cacheUncommitted[taskKey]
+	_, taskCommitting := updater.cacheCommitting[taskKey]
+	_, taskCommitted := updater.cacheCommitted[taskKey]
+	otherCommitted, otherExists := updater.cacheCommitted[otherKey]
+	updater.RUnlock()
+	require.False(t, taskUncommitted)
+	require.False(t, taskCommitting)
+	require.False(t, taskCommitted)
+	require.True(t, otherExists)
+	require.Equal(t, otherTS, otherCommitted)
+
+	exec.mu.Lock()
+	require.Equal(t, CDCSQLBuilder.DeleteWatermarkSQL(taskKey.AccountId, taskKey.TaskId), exec.lastSQL)
+	require.GreaterOrEqual(t, exec.execCalls, 2)
+	exec.mu.Unlock()
+}
+
+func TestWatermarkUpdater_DeleteTaskWatermarksDeletesAfterFlushFailure(t *testing.T) {
+	exec := &retryableMockExecutor{failRemaining: 1}
+	updater := NewCDCWatermarkUpdater("delete-task-flush-failure", exec)
+	updater.Start()
+	defer updater.Stop()
+
+	ctx := context.Background()
+	key := WatermarkKey{
+		AccountId: 2,
+		TaskId:    "dropped-task",
+		DBName:    "db",
+		TableName: "table",
+	}
+	ts := types.BuildTS(30, 1)
+	require.NoError(t, updater.UpdateWatermarkOnly(ctx, &key, &ts))
+
+	require.NoError(t, updater.DeleteTaskWatermarks(ctx, key.AccountId, key.TaskId))
+
+	updater.RLock()
+	_, uncommitted := updater.cacheUncommitted[key]
+	_, committing := updater.cacheCommitting[key]
+	_, committed := updater.cacheCommitted[key]
+	updater.RUnlock()
+	require.False(t, uncommitted)
+	require.False(t, committing)
+	require.False(t, committed)
+
+	exec.mu.Lock()
+	require.Equal(t, CDCSQLBuilder.DeleteWatermarkSQL(key.AccountId, key.TaskId), exec.lastSQL)
+	require.Equal(t, 2, exec.execCalls)
+	exec.mu.Unlock()
+}
+
 func TestWatermarkUpdater_CommitCircuitBreaker(t *testing.T) {
 	exec := &retryableMockExecutor{failRemaining: watermarkCommitMaxRetries}
 	updater := NewCDCWatermarkUpdater("circuit-breaker", exec)

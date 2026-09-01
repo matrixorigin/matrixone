@@ -3166,6 +3166,100 @@ func TestCdcTask_Cancel(t *testing.T) {
 	assert.NoErrorf(t, err, "Cancel()")
 }
 
+func TestCdcTaskCancelFinalizesWatermarks(t *testing.T) {
+	for _, paused := range []bool{false, true} {
+		name := "running"
+		if paused {
+			name = "paused"
+		}
+		t.Run(name, func(t *testing.T) {
+			capture := &cdcCatalogStateExecutor{}
+			updater := cdc.NewCDCWatermarkUpdater(
+				t.Name(),
+				capture,
+				cdc.WithCronJobInterval(time.Hour),
+			)
+			updater.Start()
+			defer updater.Stop()
+
+			key := cdc.WatermarkKey{
+				AccountId: 1,
+				TaskId:    "task-finalize",
+				DBName:    "db",
+				TableName: "table",
+			}
+			watermark := types.BuildTS(10, 1)
+			require.NoError(t, updater.UpdateWatermarkOnly(context.Background(), &key, &watermark))
+
+			executor := &CDCTaskExecutor{
+				activeRoutine:    cdc.NewCdcActiveRoutine(),
+				watermarkUpdater: updater,
+				cnUUID:           "test-cn",
+				runningReaders:   &sync.Map{},
+				spec: &task.CreateCdcDetails{
+					TaskId:   key.TaskId,
+					TaskName: "task-finalize",
+					Accounts: []*task.Account{{Id: key.AccountId}},
+				},
+				stateMachine: NewExecutorStateMachine(),
+				holdCh:       make(chan int, 1),
+			}
+			require.NoError(t, executor.stateMachine.Transition(TransitionStart))
+			require.NoError(t, executor.stateMachine.Transition(TransitionStartSuccess))
+			if paused {
+				require.NoError(t, executor.stateMachine.Transition(TransitionPause))
+				require.NoError(t, executor.stateMachine.Transition(TransitionPauseComplete))
+			}
+
+			require.NoError(t, executor.Cancel())
+			require.Equal(t, StateCancelled, executor.stateMachine.State())
+			_, err := updater.GetFromCache(context.Background(), &key)
+			require.ErrorIs(t, err, cdc.ErrNoWatermarkFound)
+
+			sqls := capture.capturedExecSQLs()
+			require.NotEmpty(t, sqls)
+			require.Equal(t, cdc.CDCSQLBuilder.DeleteWatermarkSQL(key.AccountId, key.TaskId), sqls[len(sqls)-1])
+		})
+	}
+}
+
+func TestCdcTaskCancelDrainsInFlightTableCallback(t *testing.T) {
+	executor := &CDCTaskExecutor{
+		activeRoutine:  cdc.NewCdcActiveRoutine(),
+		cnUUID:         "test-cn",
+		runningReaders: &sync.Map{},
+		spec: &task.CreateCdcDetails{
+			TaskId:   "task-callback-drain",
+			TaskName: "task-callback-drain",
+			Accounts: []*task.Account{{Id: 1}},
+		},
+		stateMachine: NewExecutorStateMachine(),
+		holdCh:       make(chan int, 1),
+	}
+	require.NoError(t, executor.stateMachine.Transition(TransitionStart))
+	require.NoError(t, executor.stateMachine.Transition(TransitionStartSuccess))
+
+	// Model a callback that already passed its generation check and owns the
+	// callback read lock while it publishes its reader/watermark.
+	executor.callbackMu.RLock()
+	cancelDone := make(chan error, 1)
+	go func() {
+		cancelDone <- executor.Cancel()
+	}()
+	require.Eventually(t, func() bool {
+		return executor.callbackGeneration.Load() == 1
+	}, time.Second, time.Millisecond)
+	select {
+	case err := <-cancelDone:
+		require.Failf(t, "Cancel returned before callback drain", "err: %v", err)
+	default:
+	}
+
+	executor.callbackMu.RUnlock()
+	require.NoError(t, <-cancelDone)
+	require.Equal(t, StateCancelled, executor.stateMachine.State())
+}
+
 func TestCdcTask_retrieveCdcTask(t *testing.T) {
 	fault.EnableDomain(fault.DomainFrontend)
 	type fields struct {

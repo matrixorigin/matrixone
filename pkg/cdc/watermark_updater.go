@@ -1279,6 +1279,94 @@ func (u *CDCWatermarkUpdater) ForceFlush(ctx context.Context) (err error) {
 	return
 }
 
+// DeleteTaskWatermarks drains watermark writes queued before task cancellation,
+// removes the task from every cache tier, and finally deletes its durable rows.
+// The caller must fence new updates and stop all task readers before calling
+// this method. ForceFlush acts as a queue barrier, so the final DELETE cannot be
+// followed by an older buffered write that recreates an orphan watermark.
+func (u *CDCWatermarkUpdater) DeleteTaskWatermarks(
+	ctx context.Context,
+	accountID uint64,
+	taskID string,
+) error {
+	flushErr := u.ForceFlush(ctx)
+	if flushErr != nil {
+		// Persistence is irrelevant for a task being dropped. ForceFlush is
+		// still useful as a queue barrier; remove its retried cache entries and
+		// continue to the authoritative DELETE.
+		logutil.Warn(
+			"cdc.watermark.delete_task.flush_failed",
+			zap.Uint64("account-id", accountID),
+			zap.String("task-id", taskID),
+			zap.Error(flushErr),
+		)
+	}
+
+	keysToClean := make(map[WatermarkKey]struct{})
+	u.Lock()
+	for key := range u.cacheUncommitted {
+		if key.AccountId == accountID && key.TaskId == taskID {
+			keysToClean[key] = struct{}{}
+			delete(u.cacheUncommitted, key)
+		}
+	}
+	for key := range u.cacheCommitting {
+		if key.AccountId == accountID && key.TaskId == taskID {
+			keysToClean[key] = struct{}{}
+			delete(u.cacheCommitting, key)
+		}
+	}
+	for key := range u.cacheCommitted {
+		if key.AccountId == accountID && key.TaskId == taskID {
+			keysToClean[key] = struct{}{}
+			delete(u.cacheCommitted, key)
+		}
+	}
+	for key := range u.errorMetadataCache {
+		if key.AccountId == accountID && key.TaskId == taskID {
+			keysToClean[key] = struct{}{}
+			delete(u.errorMetadataCache, key)
+		}
+	}
+	for key := range u.commitFailureCount {
+		if key.AccountId == accountID && key.TaskId == taskID {
+			keysToClean[key] = struct{}{}
+			delete(u.commitFailureCount, key)
+		}
+	}
+	for key := range u.commitCircuitOpen {
+		if key.AccountId == accountID && key.TaskId == taskID {
+			keysToClean[key] = struct{}{}
+			v2.CdcWatermarkCircuitEventCounter.WithLabelValues("reset").Inc()
+			v2.CdcWatermarkCircuitOpenGauge.Dec()
+			delete(u.commitCircuitOpen, key)
+		}
+	}
+	u.Unlock()
+
+	for key := range keysToClean {
+		tableLabel := key.String()
+		v2.CdcWatermarkLagSeconds.DeleteLabelValues(tableLabel)
+		v2.CdcWatermarkLagRatio.DeleteLabelValues(tableLabel)
+		v2.CdcTableLastActivityTimestamp.DeleteLabelValues(tableLabel)
+		v2.CdcTableStuckGauge.DeleteLabelValues(tableLabel)
+		v2.CdcWatermarkUpdateCounter.DeleteLabelValues(tableLabel, "commit")
+		v2.CdcWatermarkUpdateCounter.DeleteLabelValues(tableLabel, "heartbeat")
+		v2.CdcHeartbeatCounter.DeleteLabelValues(tableLabel)
+		v2.CdcTableNoProgressCounter.DeleteLabelValues(tableLabel)
+		for _, errorType := range []string{"network", "commit", "table_relation", "sinker", "max_retry_exceeded", "unknown"} {
+			v2.CdcTableNonRetryableErrorGauge.DeleteLabelValues(tableLabel, errorType)
+		}
+		u.fallbackLog.Delete(tableLabel)
+	}
+
+	return u.ie.Exec(
+		defines.AttachAccountId(ctx, catalog.System_Account),
+		CDCSQLBuilder.DeleteWatermarkSQL(accountID, taskID),
+		ie.SessionOverrideOptions{},
+	)
+}
+
 // MarkTaskPaused marks a task as paused to block watermark updates
 // This is called when a task is being paused to prevent race conditions
 func (u *CDCWatermarkUpdater) MarkTaskPaused(taskId string) {
