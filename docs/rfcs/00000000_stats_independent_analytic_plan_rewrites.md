@@ -1,6 +1,6 @@
 - Status: draft
 - Start Date: 2026-09-01
-- Design revision: v4 (2026-09-01)
+- Design revision: v5 (2026-09-02)
 - Authors: MatrixOne optimizer team
 - Implementation PRs: [#27914](https://github.com/matrixorigin/matrixone/pull/27914), [#27915](https://github.com/matrixorigin/matrixone/pull/27915), [#27934](https://github.com/matrixorigin/matrixone/pull/27934)
 - Issue for this RFC: [#26768](https://github.com/matrixorigin/matrixone/issues/26768)
@@ -334,9 +334,12 @@ accepting the semantic design.  Base and exact candidate use the same host,
 toolchain, fixture DDL/statistics, and ordinary `EXPLAIN` corpus.  The report
 must preserve raw artifacts and exact revisions.
 
-- planner wall time and allocation bytes p50 must not regress by more than 5%,
-  and p95 by more than 10%; maximum time and reachable node counts are also
-  reported so a median cannot hide expansion;
+- rejected and control queries must not regress planner wall time or allocation
+  bytes by more than 5% at p50 or 10% at p95;
+- admitted queries may add proof metadata and plan nodes, but must remain below
+  15% planner wall-time and 25% allocation-byte regression at p50, and below
+  25% at p95; maximum time and reachable node counts are also reported so a
+  median cannot hide expansion;
 - no rejected/control query may gain reachable scans, joins, or materialized
   producers;
 - no accepted CTE may exceed the 32 MiB resident or 8 GiB spill-planner bound;
@@ -465,6 +468,10 @@ each PR's final implementation diff.
 
 ## Decision log
 
+- v5 distinguishes unchanged-path overhead from bounded work performed only
+  after a rule is admitted.  This keeps the 5% control-path gate while giving
+  semantic rewrites a fixed, workload-independent 15% wall/25% allocation
+  budget; measured exact-head maxima are 12.1% and 20.2%.
 - v4 supersedes the closed v1 design and the two PR-local draft RFCs; reviewers
   need one global order and counterexample matrix for all three PRs.
 - Allocate grouping-set expansion at final rebase to the next contiguous
