@@ -438,6 +438,75 @@ func TestSubscriptionStatisticsHonorsSubscriptionNameCaseMode(t *testing.T) {
 	})
 }
 
+func TestSubscriptionStatisticsBypassesPublisherRBACVisibility(t *testing.T) {
+	optimizer, ctx := newSubscriptionMetadataTestOptimizer()
+
+	queryPlan, err := runOneStmt(optimizer, t,
+		"select index_name from information_schema.statistics "+
+			"where table_schema in ('sub_db', 'sub_b') and table_name = 'nation'")
+	require.NoError(t, err)
+	requireStatisticsPublisherScopes(t, queryPlan.GetQuery(), map[string]int32{
+		"sub_db": 0,
+		"sub_b":  0,
+	})
+
+	// A subscription is authorized by its publication table list, not by the
+	// subscriber session's role IDs in the publisher account. Binding the
+	// built-in visibility CTE unchanged would retain mo_role_privs/mo_database
+	// scans and could hide every published table for a cross-tenant subscriber.
+	for _, node := range queryPlan.GetQuery().GetNodes() {
+		obj := node.GetObjRef()
+		if obj.GetPubInfo() == nil {
+			continue
+		}
+		require.NotEqual(t, "mo_role_privs", obj.GetObjName())
+		require.NotEqual(t, catalog.MO_DATABASE, obj.GetObjName())
+	}
+	require.Nil(t, ctx.GetQueryingSubscription())
+}
+
+func TestRewriteSubscriptionStatisticsAccountScopesVisibilityCTE(t *testing.T) {
+	statements, err := mysql.Parse(context.Background(), sysview.InformationSchemaStatisticsDDL, 1)
+	require.NoError(t, err)
+	require.Len(t, statements, 1)
+	defer statements[0].Free()
+
+	view, ok := statements[0].(*tree.CreateView)
+	require.True(t, ok)
+	require.True(t, rewriteSubscriptionStatisticsAccount(view.AsSource, 42))
+
+	outerClause := selectClauseOf(view.AsSource)
+	require.NotNil(t, outerClause)
+	require.NotNil(t, outerClause.Where)
+	outerFilter := tree.String(outerClause.Where.Expr, dialect.MYSQL)
+	require.Contains(t, outerFilter, "tbl.account_id = 42")
+	require.NotContains(t, outerFilter, "current_account_id")
+
+	var visibleTables *tree.SelectClause
+	for _, cte := range view.AsSource.With.CTEs {
+		if cte != nil && cte.Name != nil &&
+			strings.EqualFold(string(cte.Name.Alias), "__mo_visible_tables") {
+			cteSelect, cteOK := cte.Stmt.(*tree.Select)
+			require.True(t, cteOK)
+			visibleTables = selectClauseOf(cteSelect)
+			break
+		}
+	}
+	require.NotNil(t, visibleTables)
+	require.NotNil(t, visibleTables.Where)
+	visibilityFilter := tree.String(visibleTables.Where.Expr, dialect.MYSQL)
+	require.Equal(t, "tbl.account_id = 42", visibilityFilter)
+	require.NotContains(t, visibilityFilter, "mo_current_roles")
+	require.NotContains(t, visibilityFilter, "mo_role_privs")
+}
+
+func TestSubscriptionMetadataNameKeyUsesIdentifierCanonicalization(t *testing.T) {
+	malformed := "Sub\xe9A"
+	require.Equal(t, malformed, subscriptionMetadataNameKey(malformed, 0))
+	require.Equal(t, "sub\xe9a", subscriptionMetadataNameKey(malformed, 1))
+	require.Equal(t, "sub\xe9a", subscriptionMetadataNameKey(malformed, 2))
+}
+
 func hasLocalStatisticsCatalogScan(query *Query) bool {
 	for _, node := range query.GetNodes() {
 		if node.GetNodeType() == plan.Node_TABLE_SCAN &&

@@ -143,10 +143,7 @@ func (builder *QueryBuilder) visibleSubscriptionMetadata(
 // comparison rules. In mode 0 differently-cased subscription schema names are
 // distinct databases; modes 1 and 2 resolve them case-insensitively.
 func subscriptionMetadataNameKey(name string, lowerCaseTableNames int64) string {
-	if lowerCaseTableNames == 0 {
-		return name
-	}
-	return strings.ToLower(name)
+	return tree.NewCStr(name, lowerCaseTableNames).Compare()
 }
 
 func (builder *QueryBuilder) unionSubscriptionStatistics(nodes []int32) (int32, error) {
@@ -223,16 +220,50 @@ func isSubscriptionStatisticsView(schema, table string, subscription *Subscripti
 		strings.EqualFold(table, informationSchemaStatistics)
 }
 
-// rewriteSubscriptionStatisticsAccount makes the persisted view's explicit
-// account predicate agree with the publisher identity attached to its catalog
+// rewriteSubscriptionStatisticsAccount makes the persisted view agree with
+// the publisher identity and publication authorization attached to its catalog
 // scans. The rewrite is limited to the built-in STATISTICS view.
-func rewriteSubscriptionStatisticsAccount(stmt *tree.Select, accountID uint32) {
+//
+// The canonical information_schema views use __mo_visible_tables to enforce
+// the current session's RBAC permissions. A subscription branch must not reuse
+// that predicate: subscriber role IDs are local to the subscriber account and
+// have no meaning in the publisher account. Publication database/table filters
+// are added to the publisher mo_tables scan by buildTable, so the CTE only
+// needs the publisher account guard here.
+func rewriteSubscriptionStatisticsAccount(stmt *tree.Select, accountID uint32) bool {
 	clause := selectClauseOf(stmt)
-	if clause == nil || clause.Where == nil || clause.Where.Expr == nil {
-		return
+	if clause != nil && clause.Where != nil && clause.Where.Expr != nil {
+		visitor := currentAccountIDVisitor{accountID: accountID}
+		clause.Where.Expr, _ = clause.Where.Expr.Accept(visitor)
 	}
-	visitor := currentAccountIDVisitor{accountID: accountID}
-	clause.Where.Expr, _ = clause.Where.Expr.Accept(visitor)
+
+	if stmt == nil || stmt.With == nil {
+		return true
+	}
+	for _, cte := range stmt.With.CTEs {
+		if cte == nil || cte.Name == nil ||
+			!strings.EqualFold(string(cte.Name.Alias), "__mo_visible_tables") {
+			continue
+		}
+		cteSelect, ok := cte.Stmt.(*tree.Select)
+		if !ok {
+			return false
+		}
+		cteClause := selectClauseOf(cteSelect)
+		if cteClause == nil {
+			return false
+		}
+		publisherAccount := tree.NewComparisonExpr(
+			tree.EQUAL,
+			tree.NewUnresolvedName(tree.NewCStr("tbl", 1), tree.NewCStr("account_id", 1)),
+			tree.NewNumVal(
+				uint64(accountID), strconv.FormatUint(uint64(accountID), 10), false, tree.P_uint64,
+			),
+		)
+		cteClause.Where = &tree.Where{Type: tree.AstWhere, Expr: publisherAccount}
+		return true
+	}
+	return true
 }
 
 type currentAccountIDVisitor struct {

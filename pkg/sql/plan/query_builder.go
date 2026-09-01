@@ -11009,7 +11009,13 @@ func (builder *QueryBuilder) bindView(
 
 	isSubscriptionStatistics := isSubscriptionStatisticsView(schema, table, metadataSubscription)
 	if isSubscriptionStatistics {
-		rewriteSubscriptionStatisticsAccount(viewStmt.AsSource, uint32(metadataSubscription.AccountId))
+		if !rewriteSubscriptionStatisticsAccount(
+			viewStmt.AsSource, uint32(metadataSubscription.AccountId),
+		) {
+			return 0, moerr.NewInternalError(
+				builder.GetContext(), "unsupported STATISTICS metadata visibility CTE",
+			)
+		}
 	}
 
 	defaultDatabase := viewData.DefaultDatabase
