@@ -37,6 +37,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/message"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
 	spb "github.com/substrait-io/substrait-protobuf/go/substraitpb"
 	"google.golang.org/protobuf/proto"
@@ -98,6 +99,31 @@ func TestCompileSiriusStreamReadBindsSnapshotAndNativeInput(t *testing.T) {
 	require.NotNil(t, read)
 	require.Equal(t, substrait.StreamReadTypeURL, read.GetExtensionTable().Detail.TypeUrl)
 	require.NotEmpty(t, read.GetExtensionTable().Detail.Value)
+}
+
+func TestStreamOutputUsesNativeSynchronousOutputScope(t *testing.T) {
+	direct := &Scope{Magic: Remote, NodeInfo: engine.Node{Addr: "local", Mcpu: 1}}
+	c := &Compile{addr: "local", execType: plan2.ExecTypeAP_ONECN}
+	require.Same(t, direct, c.outputScope([]*Scope{direct}),
+		"a local single-reader StreamRead must not add a buffering merge scope")
+
+	c = NewMockCompile(t)
+	t.Cleanup(c.proc.Free)
+	c.addr = "local"
+	c.execType = plan2.ExecTypeAP_ONECN
+	c.anal = new(AnalyzeModule)
+	parallel := &Scope{
+		Magic:    Remote,
+		NodeInfo: engine.Node{Addr: "local", Mcpu: 2},
+		Proc:     c.proc.NewNoContextChildProc(0),
+	}
+	merged := c.outputScope([]*Scope{parallel})
+	require.NotSame(t, parallel, merged)
+	require.Len(t, merged.Proc.Reg.MergeReceivers, 1)
+	_, capacity := process.WaitRegisterChannelState(merged.Proc.Reg.MergeReceivers[0])
+	require.Equal(t, 2, capacity,
+		"StreamRead must retain the same DOP-bounded edge as native query output")
+	ReleaseScopes([]*Scope{merged})
 }
 
 func TestCompileSiriusStreamReadRejectsActualUint32NativeBatchBeforePrepare(t *testing.T) {
