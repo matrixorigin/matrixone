@@ -486,9 +486,10 @@ func (s *service) handleGetTxnInfo(ctx context.Context, req *query.Request, resp
 
 	s._txnClient.IterTxns(func(view client.TxnOverview) bool {
 		info := &query.TxnInfo{
-			CreateAt: view.CreateAt,
-			Meta:     copyTxnMeta(view.Meta),
-			UserTxn:  view.UserTxn,
+			CreateAt:  view.CreateAt,
+			AccountID: view.AccountID,
+			Meta:      copyTxnMeta(view.Meta),
+			UserTxn:   view.UserTxn,
 		}
 
 		for _, lock := range view.WaitLocks {
