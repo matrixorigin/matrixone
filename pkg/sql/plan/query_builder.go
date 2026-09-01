@@ -8252,6 +8252,10 @@ func (builder *QueryBuilder) bindGroupBy(
 			},
 		}
 	}
+	if clause != nil && astTimeWindow == nil && !clause.Apart &&
+		!clause.Cube && !clause.GroupingSets && !clause.Rollup {
+		elideStableLiteralGroupBy(ctx)
+	}
 	return
 }
 
