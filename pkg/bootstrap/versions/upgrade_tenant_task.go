@@ -68,6 +68,64 @@ func UpdateUpgradeTenantTaskState(
 	return nil
 }
 
+// AdvanceUpgradeTenantTask persists completion of one tenant in a ranged task.
+// Keeping the range cursor in the existing task row lets incremental migrations
+// commit bounded work without adding a permanent progress table. It returns
+// true only when this worker atomically claims the tenant's task progress.
+func AdvanceUpgradeTenantTask(
+	taskID uint64,
+	completedTenantID int32,
+	txn executor.TxnExecutor,
+) (advanced bool, err error) {
+	const maxInt32 = int32(^uint32(0) >> 1)
+	if completedTenantID != maxInt32 {
+		sql := fmt.Sprintf(`update %s set from_account_id = %d, update_at = current_timestamp()
+			where id = %d and ready = 0 and from_account_id <= %d and to_account_id > %d`,
+			catalog.MOUpgradeTenantTable,
+			completedTenantID+1,
+			taskID,
+			completedTenantID,
+			completedTenantID)
+		advanced, err = execUniqueUpgradeTenantTaskUpdate(taskID, sql, txn)
+		if err != nil || advanced {
+			return advanced, err
+		}
+	}
+
+	// Either this is the range's final tenant or another worker already moved
+	// the cursor. The predicates make finalization an atomic ownership claim, so
+	// a stale worker cannot increment ready_tenant twice.
+	sql := fmt.Sprintf(`update %s set ready = 1, update_at = current_timestamp()
+		where id = %d and ready = 0 and from_account_id <= %d and to_account_id <= %d`,
+		catalog.MOUpgradeTenantTable,
+		taskID,
+		completedTenantID,
+		completedTenantID)
+	return execUniqueUpgradeTenantTaskUpdate(taskID, sql, txn)
+}
+
+func execUniqueUpgradeTenantTaskUpdate(
+	taskID uint64,
+	sql string,
+	txn executor.TxnExecutor,
+) (bool, error) {
+	res, err := txn.Exec(sql, executor.StatementOption{})
+	if err != nil {
+		return false, err
+	}
+	affectedRows := res.AffectedRows
+	res.Close()
+	switch affectedRows {
+	case 0:
+		return false, nil
+	case 1:
+		return true, nil
+	default:
+		return false, moerr.NewInvalidStateNoCtxf(
+			"advanced incremental tenant task %d with %d rows", taskID, affectedRows)
+	}
+}
+
 func ReconcileDeletedUpgradeTenantTasks(
 	upgradeID uint64,
 	txn executor.TxnExecutor) (int64, error) {

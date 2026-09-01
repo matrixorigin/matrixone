@@ -29,6 +29,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/matrixorigin/matrixone/pkg/bootstrap/versions"
+	"github.com/matrixorigin/matrixone/pkg/bootstrap/versions/v4_0_6"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -1088,6 +1089,49 @@ func TestDoUpgradeWaitsForTenantSnapshotProtocol(t *testing.T) {
 			)
 		})
 	}
+}
+
+func TestV406ProtocolBarrierPrecedesTenantSnapshot(t *testing.T) {
+	// Model the old-CN race deterministically: old-cn:42 remains able to create
+	// a tenant after any task snapshot, so no tenant snapshot SQL may execute
+	// until the common writer generation reaches v43.
+	sid := ""
+	runtime.RunTest(sid, func(rt runtime.Runtime) {
+		var calls []string
+		b := newServiceForTest(
+			sid,
+			&memLocker{},
+			clock.NewHLCClock(func() int64 { return 0 }, 0),
+			nil,
+			executor.NewMemExecutor(func(sql string) (executor.Result, error) {
+				return executor.Result{}, nil
+			}),
+			func(s *service) { s.handles = []VersionHandle{v4_0_6.Handler} },
+		)
+		b.upgrade.upgradeTenantBatch = 16
+
+		txnOperator := mock_frontend.NewMockTxnOperator(gomock.NewController(t))
+		txnOperator.EXPECT().TxnOptions().Return(txn.TxnOptions{CN: sid}).AnyTimes()
+		txnExecutor := executor.NewMemTxnExecutor(func(sql string) (executor.Result, error) {
+			calls = append(calls, sql)
+			if sql == "SELECT mo_ctl('cn', 'GetProtocolVersion', '')" {
+				return newBootstrapStringResult(
+					`{"method":"GETPROTOCOLVERSION","result":"new-cn:43,old-cn:42"}`), nil
+			}
+			return executor.Result{}, fmt.Errorf("tenant snapshot must not run before v43 barrier: %s", sql)
+		}, txnOperator)
+
+		_, err := b.doUpgrade(context.Background(), versions.VersionUpgrade{
+			FromVersion:    "4.0.6",
+			ToVersion:      "4.0.6",
+			FinalVersion:   "4.0.6",
+			State:          versions.StateCreated,
+			UpgradeTenant:  versions.Yes,
+			UpgradeCluster: versions.No,
+		}, txnExecutor)
+		require.ErrorContains(t, err, "old-cn")
+		require.Equal(t, []string{"SELECT mo_ctl('cn', 'GetProtocolVersion', '')"}, calls)
+	})
 }
 
 func TestPerformUpgradeReturnsWhenTenantUpgradeInProgress(t *testing.T) {

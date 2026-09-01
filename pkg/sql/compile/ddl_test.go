@@ -1423,7 +1423,7 @@ func TestDeleteRolePrivilegesForDroppedObjects(t *testing.T) {
 	})
 }
 
-func TestDropIndexChildRelationCleansLegacyPrivileges(t *testing.T) {
+func TestDropIndexChildRelationSkipsPrivilegeCleanup(t *testing.T) {
 	ctx := context.Background()
 	proc := testutil.NewProcess(t)
 	proc.Ctx = ctx
@@ -1444,9 +1444,7 @@ func TestDropIndexChildRelationCleansLegacyPrivileges(t *testing.T) {
 
 	require.NoError(t, c.dropIndexChildRelation(db, "__mo_index_legacy", false))
 	require.NotContains(t, db.rels, "__mo_index_legacy")
-	require.Equal(t, []string{
-		"delete from mo_catalog.mo_role_privs where obj_id = 88;",
-	}, sqls)
+	require.Empty(t, sqls)
 }
 
 func TestDropSequenceCleansLogicalObjectPrivileges(t *testing.T) {

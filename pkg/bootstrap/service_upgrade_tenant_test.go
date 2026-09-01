@@ -234,6 +234,20 @@ func Test_asyncUpgradeTenantTask_SkipsTenantAtTargetVersion(t *testing.T) {
 	)
 }
 
+type testIncrementalVersionHandle struct {
+	*testVersionHandle
+	stepCalls     atomic.Int32
+	completeAfter int32
+}
+
+func (h *testIncrementalVersionHandle) HandleTenantUpgradeStep(
+	context.Context,
+	int32,
+	executor.TxnExecutor,
+) (bool, error) {
+	return h.stepCalls.Add(1) >= h.completeAfter, nil
+}
+
 func TestShouldRunTenantUpgrade(t *testing.T) {
 	for _, test := range []struct {
 		name          string
@@ -344,6 +358,197 @@ func Test_asyncUpgradeTenantTask_RunsSameVersionOffsetUpgrade(t *testing.T) {
 			require.Equal(t, uint64(1), h.callHandleTenantUpgrade.Load())
 		},
 	)
+}
+
+func Test_asyncUpgradeTenantTask_CommitsIncrementalPagesBeforeAdvancingTask(t *testing.T) {
+	sid := ""
+	runtime.RunTest(
+		sid,
+		func(rt runtime.Runtime) {
+			const (
+				tenantID            = int32(10)
+				currentVersion      = "4.0.6"
+				newVersionOffset    = uint32(5)
+				upgradeID           = uint64(100)
+				upgradeTenantTaskID = uint64(200)
+			)
+
+			var taskReady atomic.Bool
+			var finalized atomic.Bool
+			var tenantVersionUpdated atomic.Bool
+			var upgradeTransactions atomic.Int32
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+			defer cancel()
+
+			sqlExecutor := executor.NewMemExecutor(func(sql string) (executor.Result, error) {
+				switch {
+				case strings.Contains(sql, "from mo_upgrade") &&
+					strings.Contains(sql, "where state = 1") &&
+					!strings.Contains(sql, "for update"):
+					upgradeTransactions.Add(1)
+					if finalized.Load() {
+						return executor.Result{}, nil
+					}
+					return buildUpgradeVersionResult(upgradeID, versions.StateUpgradingTenant,
+						currentVersion, currentVersion, newVersionOffset, 0,
+						versions.Yes, versions.Yes, 1, 0), nil
+				case strings.Contains(sql, "from mo_upgrade_tenant where from_account_id >= 0"):
+					if taskReady.Load() {
+						return executor.Result{}, nil
+					}
+					return buildUpgradeTenantTaskRows(
+						[]uint64{upgradeTenantTaskID}, []int32{tenantID}, []int32{tenantID}), nil
+				case strings.Contains(sql, "select account_id, create_version from mo_account"):
+					return buildUpgradeTenantAccountRows([]int32{tenantID}, []string{currentVersion}), nil
+				case sql == fmt.Sprintf("update mo_account set create_version = '%s' where account_id = %d", currentVersion, tenantID):
+					tenantVersionUpdated.Store(true)
+					return executor.Result{AffectedRows: 1}, nil
+				case strings.Contains(sql, "update mo_upgrade_tenant set from_account_id = 11"):
+					return executor.Result{}, nil
+				case strings.Contains(sql, "update mo_upgrade_tenant set ready = 1") &&
+					strings.Contains(sql, fmt.Sprintf("where id = %d", upgradeTenantTaskID)):
+					taskReady.Store(true)
+					return executor.Result{AffectedRows: 1}, nil
+				case strings.Contains(sql, "from mo_upgrade") &&
+					strings.Contains(sql, fmt.Sprintf("where id = %d for update", upgradeID)):
+					return buildUpgradeVersionResult(upgradeID, versions.StateUpgradingTenant,
+						currentVersion, currentVersion, newVersionOffset, 0,
+						versions.Yes, versions.Yes, 1, 0), nil
+				case strings.Contains(sql, "update mo_upgrade set total_tenant = 1, ready_tenant = 1") &&
+					strings.Contains(sql, "state = 2"):
+					finalized.Store(true)
+					cancel()
+					return executor.Result{AffectedRows: 1}, nil
+				default:
+					return executor.Result{}, fmt.Errorf("unexpected sql: %s", sql)
+				}
+			})
+
+			h := &testIncrementalVersionHandle{
+				testVersionHandle: newTestVersionHandler(
+					currentVersion, currentVersion, versions.Yes, versions.Yes, newVersionOffset),
+				completeAfter: 2,
+			}
+			s := newServiceForTest(
+				sid,
+				&memLocker{},
+				clock.NewHLCClock(func() int64 { return 0 }, 0),
+				nil,
+				sqlExecutor,
+				func(s *service) { s.handles = append(s.handles, h) },
+				WithCheckUpgradeTenantDuration(time.Millisecond),
+			)
+
+			txnOperator := mock_frontend.NewMockTxnOperator(gomock.NewController(t))
+			txnOperator.EXPECT().TxnOptions().Return(txn.TxnOptions{CN: sid}).AnyTimes()
+			s.exec = executor.NewMemExecutor2(func(sql string) (executor.Result, error) {
+				return sqlExecutor.Exec(context.Background(), sql, executor.Options{})
+			}, txnOperator)
+
+			s.asyncUpgradeTenantTask(ctx)
+			require.Equal(t, int32(2), h.stepCalls.Load())
+			require.GreaterOrEqual(t, upgradeTransactions.Load(), int32(2))
+			require.True(t, tenantVersionUpdated.Load())
+			require.True(t, taskReady.Load())
+			require.True(t, finalized.Load())
+		})
+}
+
+func TestUpgradeTenantIncrementallyAdvancesRangeCursor(t *testing.T) {
+	const (
+		tenantID  = int32(10)
+		upgradeID = uint64(100)
+		taskID    = uint64(200)
+		version   = "4.0.6"
+	)
+	var sqls []string
+	txnExecutor := executor.NewMemTxnExecutor(func(sql string) (executor.Result, error) {
+		sqls = append(sqls, sql)
+		switch {
+		case sql == "update mo_account set create_version = '4.0.6' where account_id = 10":
+			return executor.Result{AffectedRows: 1}, nil
+		case strings.Contains(sql, "update mo_upgrade_tenant set from_account_id = 11"):
+			return executor.Result{AffectedRows: 1}, nil
+		case strings.Contains(sql, "from mo_upgrade") && strings.Contains(sql, "where id = 100 for update"):
+			return buildUpgradeVersionResult(upgradeID, versions.StateUpgradingTenant,
+				version, version, 5, 0, versions.Yes, versions.Yes, 2, 0), nil
+		case strings.Contains(sql, "update mo_upgrade set total_tenant = 2, ready_tenant = 1"):
+			return executor.Result{AffectedRows: 1}, nil
+		default:
+			return executor.Result{}, fmt.Errorf("unexpected sql: %s", sql)
+		}
+	}, nil)
+	h := &testIncrementalVersionHandle{
+		testVersionHandle: newTestVersionHandler(version, version, versions.Yes, versions.Yes, 5),
+		completeAfter:     1,
+	}
+
+	err := (&service{}).upgradeTenantIncrementally(
+		context.Background(),
+		versions.VersionUpgrade{
+			ID:            upgradeID,
+			FromVersion:   version,
+			ToVersion:     version,
+			TotalTenant:   2,
+			ReadyTenant:   0,
+			UpgradeTenant: versions.Yes,
+		},
+		taskID,
+		tenantID,
+		version,
+		h,
+		txnExecutor,
+	)
+	require.NoError(t, err)
+	require.Equal(t, int32(1), h.stepCalls.Load())
+	require.Len(t, sqls, 4)
+	require.Contains(t, sqls[1], "set from_account_id = 11")
+	for _, sql := range sqls {
+		require.NotContains(t, sql, "set ready = 1")
+	}
+}
+
+func TestUpgradeTenantIncrementallyDoesNotDoubleCountStaleWorker(t *testing.T) {
+	const (
+		tenantID = int32(10)
+		version  = "4.0.6"
+	)
+	var sqls []string
+	txnExecutor := executor.NewMemTxnExecutor(func(sql string) (executor.Result, error) {
+		sqls = append(sqls, sql)
+		if strings.HasPrefix(sql, "update mo_account set create_version") {
+			return executor.Result{AffectedRows: 1}, nil
+		}
+		if strings.HasPrefix(sql, "update mo_upgrade_tenant") {
+			return executor.Result{}, nil
+		}
+		return executor.Result{}, fmt.Errorf("stale worker must not update ready count: %s", sql)
+	}, nil)
+	h := &testIncrementalVersionHandle{
+		testVersionHandle: newTestVersionHandler(version, version, versions.Yes, versions.Yes, 5),
+		completeAfter:     1,
+	}
+
+	err := (&service{}).upgradeTenantIncrementally(
+		context.Background(),
+		versions.VersionUpgrade{
+			ID:            100,
+			FromVersion:   version,
+			ToVersion:     version,
+			TotalTenant:   2,
+			UpgradeTenant: versions.Yes,
+		},
+		200,
+		tenantID,
+		version,
+		h,
+		txnExecutor,
+	)
+	require.NoError(t, err)
+	require.Len(t, sqls, 3)
+	for _, sql := range sqls {
+		require.NotContains(t, sql, "update mo_upgrade set")
+	}
 }
 
 func Test_asyncUpgradeTenantTask_AutoCompletesDeletedTenantTasks(t *testing.T) {

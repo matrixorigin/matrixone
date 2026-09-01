@@ -76,6 +76,75 @@ func TestGetTenantVersion(t *testing.T) {
 	)
 }
 
+func TestAdvanceUpgradeTenantTask(t *testing.T) {
+	t.Run("advances persistent range cursor", func(t *testing.T) {
+		var sqls []string
+		exec := executor.NewMemTxnExecutor(func(sql string) (executor.Result, error) {
+			sqls = append(sqls, sql)
+			return executor.Result{AffectedRows: 1}, nil
+		}, nil)
+
+		advanced, err := AdvanceUpgradeTenantTask(7, 11, exec)
+		require.NoError(t, err)
+		require.True(t, advanced)
+		require.Len(t, sqls, 1)
+		require.Contains(t, sqls[0], "set from_account_id = 12")
+		require.Contains(t, sqls[0], "where id = 7 and ready = 0")
+		require.Contains(t, sqls[0], "from_account_id <= 11 and to_account_id > 11")
+	})
+
+	t.Run("marks final range tenant ready", func(t *testing.T) {
+		var sqls []string
+		exec := executor.NewMemTxnExecutor(func(sql string) (executor.Result, error) {
+			sqls = append(sqls, sql)
+			if len(sqls) == 2 {
+				return executor.Result{AffectedRows: 1}, nil
+			}
+			return executor.Result{}, nil
+		}, nil)
+
+		advanced, err := AdvanceUpgradeTenantTask(7, 11, exec)
+		require.NoError(t, err)
+		require.True(t, advanced)
+		require.Len(t, sqls, 2)
+		require.Contains(t, sqls[1], "set ready = 1")
+		require.Contains(t, sqls[1], "where id = 7 and ready = 0")
+	})
+
+	t.Run("stale worker does not claim completion", func(t *testing.T) {
+		exec := executor.NewMemTxnExecutor(func(string) (executor.Result, error) {
+			return executor.Result{}, nil
+		}, nil)
+
+		advanced, err := AdvanceUpgradeTenantTask(7, 11, exec)
+		require.NoError(t, err)
+		require.False(t, advanced)
+	})
+
+	t.Run("rejects a non-unique task update", func(t *testing.T) {
+		exec := executor.NewMemTxnExecutor(func(string) (executor.Result, error) {
+			return executor.Result{AffectedRows: 2}, nil
+		}, nil)
+
+		_, err := AdvanceUpgradeTenantTask(7, 11, exec)
+		require.ErrorContains(t, err, "with 2 rows")
+	})
+
+	t.Run("max tenant id marks task ready without overflow", func(t *testing.T) {
+		var sqls []string
+		exec := executor.NewMemTxnExecutor(func(sql string) (executor.Result, error) {
+			sqls = append(sqls, sql)
+			return executor.Result{AffectedRows: 1}, nil
+		}, nil)
+
+		advanced, err := AdvanceUpgradeTenantTask(7, int32(^uint32(0)>>1), exec)
+		require.NoError(t, err)
+		require.True(t, advanced)
+		require.Len(t, sqls, 1)
+		require.Contains(t, sqls[0], "set ready = 1")
+	})
+}
+
 func TestGetUpgradeTenantTasksSkipsDeletedRanges(t *testing.T) {
 	sid := ""
 	runtime.RunTest(

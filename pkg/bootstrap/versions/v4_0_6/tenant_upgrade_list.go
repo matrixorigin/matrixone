@@ -27,6 +27,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/util/sysview"
 )
 
+var moRolePrivsObjectIDIndexUpgradeEntry = addMoRolePrivsObjectIDIndex()
+
 var tenantUpgEntries = []versions.UpgradeEntry{
 	newMongoDBCatalogTable(mongodb.TableConnections, mongodb.ConnectionsDDL),
 	newMongoDBCatalogTable(mongodb.TableMappings, mongodb.MappingsDDL),
@@ -60,7 +62,7 @@ var tenantUpgEntries = []versions.UpgradeEntry{
 	upgradeInformationSchemaMetadataVisibilityView("VIEWS", sysview.InformationSchemaViewsDDL),
 	upgradeInformationSchemaMetadataVisibilityView("PARTITIONS", sysview.InformationSchemaPartitionsDDL),
 	upgradeInformationSchemaMetadataVisibilityView("SCHEMATA", sysview.InformationSchemaSchemataDDL),
-	addMoRolePrivsObjectIDIndex(),
+	moRolePrivsObjectIDIndexUpgradeEntry,
 }
 
 func upgradeInformationSchemaMetadataVisibilityView(viewName, viewDDL string) versions.UpgradeEntry {

@@ -118,7 +118,13 @@ func TestV406UpgradeCleansHistoricalOrphanObjectPrivileges(t *testing.T) {
 			maxObjectID + 1000005,
 		}
 		malformedControlID := maxObjectID + 1000006
+		const bulkDatabaseOrphanCount = uint64(1001)
+		bulkDatabaseOrphanStart := maxObjectID + 2000000
 
+		copyRolePrivilegeRangeForUpgradeTest(
+			t, ctx, conn, roleName, databaseID, bulkDatabaseOrphanStart,
+			bulkDatabaseOrphanCount, "database", "d",
+		)
 		copyRolePrivilegeForUpgradeTest(
 			t, ctx, conn, roleName, databaseID, orphanIDs[0], "database", "d", "d",
 		)
@@ -141,6 +147,10 @@ func TestV406UpgradeCleansHistoricalOrphanObjectPrivileges(t *testing.T) {
 		require.Equal(t, 5, countRolePrivilegesByObjectIDs(
 			t, ctx, conn, roleName, orphanIDs,
 		))
+		require.Equal(t, int(bulkDatabaseOrphanCount), countRolePrivilegesByObjectIDRange(
+			t, ctx, conn, roleName, bulkDatabaseOrphanStart,
+			bulkDatabaseOrphanStart+bulkDatabaseOrphanCount-1,
+		))
 		liveObjectIDs := []uint64{databaseID, tableID, viewID, sequenceID}
 		liveGrantCount := countRolePrivilegesByObjectIDs(t, ctx, conn, roleName, liveObjectIDs)
 		globalGrantCount := countRolePrivilegesByObjectIDs(t, ctx, conn, roleName, []uint64{0})
@@ -150,12 +160,22 @@ func TestV406UpgradeCleansHistoricalOrphanObjectPrivileges(t *testing.T) {
 			t, ctx, conn, roleName, []uint64{malformedControlID},
 		))
 
-		runUpgrade := func(rollback bool) error {
-			return sqlExecutor.ExecTxn(ctx, func(txn executor.TxnExecutor) error {
+		countOrphans := func() int {
+			return countRolePrivilegesByObjectIDs(t, ctx, conn, roleName, orphanIDs) +
+				countRolePrivilegesByObjectIDRange(
+					t, ctx, conn, roleName, bulkDatabaseOrphanStart,
+					bulkDatabaseOrphanStart+bulkDatabaseOrphanCount-1,
+				)
+		}
+		runUpgradeStep := func(rollback bool) (bool, error) {
+			completed := false
+			err := sqlExecutor.ExecTxn(ctx, func(txn executor.TxnExecutor) error {
 				txn.Use(catalog.MO_CATALOG)
-				if err := v4_0_6.Handler.HandleTenantUpgrade(
+				var err error
+				completed, err = v4_0_6.Handler.HandleTenantUpgradeStep(
 					ctx, int32(catalog.System_Account), txn,
-				); err != nil {
+				)
+				if err != nil {
 					return err
 				}
 				if rollback {
@@ -163,20 +183,38 @@ func TestV406UpgradeCleansHistoricalOrphanObjectPrivileges(t *testing.T) {
 				}
 				return nil
 			}, executor.Options{}.WithDatabase(catalog.MO_CATALOG).WithWaitCommittedLogApplied())
+			return completed, err
 		}
 
-		require.ErrorIs(t, runUpgrade(true), errRollbackOrphanPrivilegeUpgrade)
-		require.Equal(t, 5, countRolePrivilegesByObjectIDs(
-			t, ctx, conn, roleName, orphanIDs,
-		), "a failed upgrade transaction must not publish a partial cleanup")
+		initialOrphans := countOrphans()
+		completed, err := runUpgradeStep(true)
+		require.False(t, completed)
+		require.ErrorIs(t, err, errRollbackOrphanPrivilegeUpgrade)
+		require.Equal(t, initialOrphans, countOrphans(),
+			"a failed page transaction must not publish partial cleanup")
 		require.Zero(t, countMoRolePrivsObjectIDIndexes(t, ctx, conn),
-			"a failed upgrade transaction must also roll back the catalog index")
+			"a failed page transaction must also roll back the catalog index")
 
-		require.NoError(t, runUpgrade(false))
+		previousOrphans := initialOrphans
+		committedSteps := 0
+		for {
+			completed, err = runUpgradeStep(false)
+			require.NoError(t, err)
+			committedSteps++
+			remainingOrphans := countOrphans()
+			removed := previousOrphans - remainingOrphans
+			require.LessOrEqual(t, removed, int(1000),
+				"one committed transaction must contain at most one cleanup page")
+			if completed {
+				require.Zero(t, removed)
+				break
+			}
+			require.Positive(t, removed)
+			previousOrphans = remainingOrphans
+		}
+		require.Equal(t, 4, committedSteps)
 		require.Equal(t, 1, countMoRolePrivsObjectIDIndexes(t, ctx, conn))
-		require.Zero(t, countRolePrivilegesByObjectIDs(
-			t, ctx, conn, roleName, orphanIDs,
-		))
+		require.Zero(t, countOrphans())
 		require.Equal(t, liveGrantCount, countRolePrivilegesByObjectIDs(
 			t, ctx, conn, roleName, liveObjectIDs,
 		))
@@ -189,10 +227,10 @@ func TestV406UpgradeCleansHistoricalOrphanObjectPrivileges(t *testing.T) {
 
 		// A completed cleanup remains idempotent when the upgrade generation is
 		// retried after restart or offset reconciliation.
-		require.NoError(t, runUpgrade(false))
-		require.Zero(t, countRolePrivilegesByObjectIDs(
-			t, ctx, conn, roleName, orphanIDs,
-		))
+		completed, err = runUpgradeStep(false)
+		require.NoError(t, err)
+		require.True(t, completed)
+		require.Zero(t, countOrphans())
 		require.Equal(t, 1, countMoRolePrivsObjectIDIndexes(t, ctx, conn))
 	})
 }
@@ -246,6 +284,35 @@ func copyRolePrivilegeForUpgradeTest(
 		sourceObjectID,
 		sqlquote.String(objectType),
 		sqlquote.String(sourcePrivilegeLevel),
+	)
+	mustExecOrphanPrivilegeUpgradeSQL(t, ctx, conn, statement)
+}
+
+func copyRolePrivilegeRangeForUpgradeTest(
+	t *testing.T,
+	ctx context.Context,
+	conn *sql.Conn,
+	roleName string,
+	sourceObjectID uint64,
+	targetObjectIDStart uint64,
+	count uint64,
+	objectType string,
+	privilegeLevel string,
+) {
+	t.Helper()
+	require.Positive(t, count)
+	statement := fmt.Sprintf(
+		"insert into mo_catalog.mo_role_privs "+
+			"select role_id, role_name, obj_type, %d + result, privilege_id, privilege_name, privilege_level, "+
+			"operation_user_id, granted_time, with_grant_option "+
+			"from mo_catalog.mo_role_privs cross join generate_series(0, %d) g "+
+			"where role_name = %s and obj_id = %d and obj_type = %s and privilege_level = %s",
+		targetObjectIDStart,
+		count-1,
+		sqlquote.String(roleName),
+		sourceObjectID,
+		sqlquote.String(objectType),
+		sqlquote.String(privilegeLevel),
 	)
 	mustExecOrphanPrivilegeUpgradeSQL(t, ctx, conn, statement)
 }
@@ -312,6 +379,27 @@ func countMoRolePrivsObjectIDIndexes(
 		sqlquote.String(catalog.MO_CATALOG),
 		sqlquote.String("mo_role_privs"),
 		sqlquote.String("idx_mo_role_privs_obj_id"),
+	)
+	var count int
+	require.NoError(t, conn.QueryRowContext(ctx, query).Scan(&count), query)
+	return count
+}
+
+func countRolePrivilegesByObjectIDRange(
+	t *testing.T,
+	ctx context.Context,
+	conn *sql.Conn,
+	roleName string,
+	fromObjectID uint64,
+	toObjectID uint64,
+) int {
+	t.Helper()
+	query := fmt.Sprintf(
+		"select count(*) from mo_catalog.mo_role_privs "+
+			"where role_name = %s and obj_id between %d and %d",
+		sqlquote.String(roleName),
+		fromObjectID,
+		toObjectID,
 	)
 	var count int
 	require.NoError(t, conn.QueryRowContext(ctx, query).Scan(&count), query)

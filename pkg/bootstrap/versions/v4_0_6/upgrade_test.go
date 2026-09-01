@@ -606,7 +606,7 @@ func TestVersionHandleMetadata(t *testing.T) {
 	require.Equal(t, versions.Yes, meta.UpgradeTenant)
 	require.Equal(t, versions.Yes, meta.UpgradeCluster)
 	require.Equal(t, uint32(len(tenantUpgEntries)+len(clusterUpgEntries))+removedIndexVisibilityUpgradeOffset, meta.VersionOffset)
-	require.Equal(t, int64(defines.MORPCVersion34), meta.RequiredProtocolVersion)
+	require.Equal(t, int64(defines.MORPCVersion43), meta.RequiredProtocolVersion)
 }
 
 func TestHistoricalOrphanObjectPrivilegeCleanup(t *testing.T) {
@@ -632,7 +632,7 @@ func TestHistoricalOrphanObjectPrivilegeCleanup(t *testing.T) {
 	require.True(t, strings.HasSuffix(databaseDeleteSQL, "LIMIT 1000"))
 	require.True(t, strings.HasSuffix(relationDeleteSQL, "LIMIT 1000"))
 
-	t.Run("older CN blocks cleanup before any delete", func(t *testing.T) {
+	t.Run("older CN blocks direct step before index or delete", func(t *testing.T) {
 		var executed []string
 		txnExecutor := newVersionTxnExecutor(t, func(sql string) (executor.Result, error) {
 			executed = append(executed, sql)
@@ -640,64 +640,61 @@ func TestHistoricalOrphanObjectPrivilegeCleanup(t *testing.T) {
 				return newProtocolVersionResultValue(t,
 					`{"method":"GETPROTOCOLVERSION","result":"cn-a:43,cn-b:42"}`), nil
 			}
-			return executor.Result{}, nil
+			return executor.Result{}, fmt.Errorf("unexpected SQL: %s", sql)
 		})
 
-		err := cleanupHistoricalOrphanObjectPrivileges(context.Background(), tenantID, txnExecutor)
+		completed, err := Handler.HandleTenantUpgradeStep(context.Background(), tenantID, txnExecutor)
+		require.False(t, completed)
 		require.Error(t, err)
 		require.Equal(t, []string{protocolSQL}, executed)
 	})
 
 	t.Run("cancelled context stops before any delete", func(t *testing.T) {
-		var executed []string
 		txnExecutor := newVersionTxnExecutor(t, func(sql string) (executor.Result, error) {
-			executed = append(executed, sql)
-			if sql == protocolSQL {
-				return newProtocolVersionResultValue(t,
-					`{"method":"GETPROTOCOLVERSION","result":"cn-a:43"}`), nil
-			}
 			return executor.Result{}, fmt.Errorf("unexpected SQL after cancellation: %s", sql)
 		})
 		ctx, cancel := context.WithCancel(context.Background())
 		cancel()
 
-		err := cleanupHistoricalOrphanObjectPrivileges(ctx, tenantID, txnExecutor)
+		completed, err := cleanupHistoricalOrphanObjectPrivilegesStep(ctx, tenantID, txnExecutor)
+		require.False(t, completed)
 		require.ErrorIs(t, err, context.Canceled)
-		require.Equal(t, []string{protocolSQL}, executed)
 	})
 
-	t.Run("bounded pages and idempotent retry use tenant identity", func(t *testing.T) {
-		databaseAffectedRows := []uint64{orphanObjectPrivilegeCleanupBatchSize, 3, 0}
+	t.Run("one non-empty page per transaction and tenant identity", func(t *testing.T) {
+		databaseAffectedRows := []uint64{orphanObjectPrivilegeCleanupBatchSize, 3, 0, 0}
+		relationAffectedRows := []uint64{2, 0}
 		databaseCalls := 0
 		relationCalls := 0
 		base := newVersionTxnExecutor(t, func(sql string) (executor.Result, error) {
 			switch sql {
-			case protocolSQL:
-				return newProtocolVersionResultValue(t,
-					`{"method":"GETPROTOCOLVERSION","result":"cn-a:43,cn-b:43"}`), nil
 			case databaseDeleteSQL:
 				affectedRows := databaseAffectedRows[databaseCalls]
 				databaseCalls++
 				return executor.Result{AffectedRows: affectedRows}, nil
 			case relationDeleteSQL:
+				affectedRows := relationAffectedRows[relationCalls]
 				relationCalls++
-				return executor.Result{}, nil
+				return executor.Result{AffectedRows: affectedRows}, nil
 			default:
 				return executor.Result{}, fmt.Errorf("unexpected SQL: %s", sql)
 			}
 		})
 		capturing := &statementOptionCapturingTxnExecutor{TxnExecutor: base}
 
-		require.NoError(t, cleanupHistoricalOrphanObjectPrivileges(
+		for range 3 {
+			completed, err := cleanupHistoricalOrphanObjectPrivilegesStep(
+				context.Background(), tenantID, capturing,
+			)
+			require.NoError(t, err)
+			require.False(t, completed)
+		}
+		completed, err := cleanupHistoricalOrphanObjectPrivilegesStep(
 			context.Background(), tenantID, capturing,
-		))
-		require.Equal(t, 2, databaseCalls)
-		require.Equal(t, 1, relationCalls)
-
-		require.NoError(t, cleanupHistoricalOrphanObjectPrivileges(
-			context.Background(), tenantID, capturing,
-		))
-		require.Equal(t, 3, databaseCalls)
+		)
+		require.NoError(t, err)
+		require.True(t, completed)
+		require.Equal(t, 4, databaseCalls)
 		require.Equal(t, 2, relationCalls)
 		for _, option := range capturing.deleteOptions {
 			require.True(t, option.HasAccountID())
@@ -707,24 +704,39 @@ func TestHistoricalOrphanObjectPrivilegeCleanup(t *testing.T) {
 		}
 	})
 
-	t.Run("delete error can be retried from a consistent generation", func(t *testing.T) {
-		want := errors.New("delete page failed")
-		run := 0
-		databaseCalls := 0
+	t.Run("non-incremental caller cannot accumulate multiple pages", func(t *testing.T) {
+		deleteCalls := 0
 		txnExecutor := newVersionTxnExecutor(t, func(sql string) (executor.Result, error) {
-			switch sql {
-			case protocolSQL:
+			switch {
+			case sql == protocolSQL:
 				return newProtocolVersionResultValue(t,
 					`{"method":"GETPROTOCOLVERSION","result":"cn-a:43"}`), nil
+			case strings.Contains(sql, "idx_mo_role_privs_obj_id"):
+				return executor.Result{}, nil
+			case sql == databaseDeleteSQL:
+				deleteCalls++
+				return executor.Result{AffectedRows: 1}, nil
+			default:
+				return executor.Result{}, fmt.Errorf("unexpected SQL: %s", sql)
+			}
+		})
+
+		err := Handler.HandleTenantUpgrade(context.Background(), tenantID, txnExecutor)
+		require.ErrorContains(t, err, "incremental transaction commits")
+		require.Equal(t, 1, deleteCalls)
+	})
+
+	t.Run("delete error does not report completion and can retry", func(t *testing.T) {
+		want := errors.New("delete page failed")
+		failed := false
+		txnExecutor := newVersionTxnExecutor(t, func(sql string) (executor.Result, error) {
+			switch sql {
 			case databaseDeleteSQL:
-				databaseCalls++
-				if run == 0 {
-					if databaseCalls == 1 {
-						return executor.Result{AffectedRows: orphanObjectPrivilegeCleanupBatchSize}, nil
-					}
+				if !failed {
+					failed = true
 					return executor.Result{}, want
 				}
-				return executor.Result{AffectedRows: 1}, nil
+				return executor.Result{}, nil
 			case relationDeleteSQL:
 				return executor.Result{}, nil
 			default:
@@ -732,13 +744,16 @@ func TestHistoricalOrphanObjectPrivilegeCleanup(t *testing.T) {
 			}
 		})
 
-		err := cleanupHistoricalOrphanObjectPrivileges(context.Background(), tenantID, txnExecutor)
-		require.ErrorIs(t, err, want)
-		run++
-		require.NoError(t, cleanupHistoricalOrphanObjectPrivileges(
+		completed, err := cleanupHistoricalOrphanObjectPrivilegesStep(
 			context.Background(), tenantID, txnExecutor,
-		))
-		require.Equal(t, 3, databaseCalls)
+		)
+		require.False(t, completed)
+		require.ErrorIs(t, err, want)
+		completed, err = cleanupHistoricalOrphanObjectPrivilegesStep(
+			context.Background(), tenantID, txnExecutor,
+		)
+		require.NoError(t, err)
+		require.True(t, completed)
 	})
 }
 
@@ -922,9 +937,7 @@ func TestVersionHandleLifecycleWithNoLegacyDefinitions(t *testing.T) {
 		if err := Handler.HandleTenantUpgrade(context.Background(), 9, txnExecutor); err != nil {
 			t.Fatalf("tenant upgrade: %v", err)
 		}
-		if len(executed) == 0 || executed[len(executed)-1] != orphanObjectPrivilegeDeleteSQL(
-			relationScopedOrphanObjectPrivilegePredicate, 9,
-		) {
+		if len(executed) == 0 || executed[len(executed)-1] != legacyForeignKeyReferencedIndexDefinitionsSQL {
 			t.Fatalf("unexpected SQL: %v", executed)
 		}
 		if err := Handler.HandleClusterUpgrade(context.Background(), txnExecutor); err != nil {

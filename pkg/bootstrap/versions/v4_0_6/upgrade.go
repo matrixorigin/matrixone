@@ -46,7 +46,7 @@ func init() {
 		UpgradeCluster:          versions.Yes,
 		UpgradeTenant:           versions.Yes,
 		VersionOffset:           uint32(len(tenantUpgEntries)+len(clusterUpgEntries)) + removedIndexVisibilityUpgradeOffset,
-		RequiredProtocolVersion: defines.MORPCVersion34,
+		RequiredProtocolVersion: defines.MORPCVersion43,
 	}}
 }
 
@@ -60,23 +60,91 @@ func (v *versionHandle) Prepare(_ context.Context, txn executor.TxnExecutor, _ b
 }
 
 func (v *versionHandle) HandleTenantUpgrade(ctx context.Context, tenantID int32, txn executor.TxnExecutor) error {
+	completed, err := v.HandleTenantUpgradeStep(ctx, tenantID, txn)
+	if err != nil {
+		return err
+	}
+	if !completed {
+		return moerr.NewInternalError(ctx,
+			"v4.0.6 tenant upgrade requires incremental transaction commits")
+	}
+	return nil
+}
+
+// HandleTenantUpgradeStep executes at most one non-empty orphan cleanup page.
+// The bootstrap worker detects this optional method and commits an incomplete
+// step without advancing the tenant task, bounding DELETE workspace and making
+// retries resume from already committed pages.
+func (v *versionHandle) HandleTenantUpgradeStep(
+	ctx context.Context,
+	tenantID int32,
+	txn executor.TxnExecutor,
+) (bool, error) {
+	if err := ctx.Err(); err != nil {
+		return false, err
+	}
+	// Metadata.RequiredProtocolVersion takes this barrier before tenant IDs are
+	// snapshotted. Rechecking here prevents a direct caller from bypassing the
+	// writer-generation requirement.
+	if err := versions.CheckCommonProtocolVersion(txn, defines.MORPCVersion43); err != nil {
+		return false, err
+	}
+
+	// Install the obj_id index before paging so every committed cleanup
+	// transaction can use it; the entry is idempotent.
+	if err := upgradeTenantEntry(
+		moRolePrivsObjectIDIndexUpgradeEntry, tenantID, txn, v.metadata.Version,
+	); err != nil {
+		return false, err
+	}
+
+	completed, err := cleanupHistoricalOrphanObjectPrivilegesStep(ctx, tenantID, txn)
+	if err != nil || !completed {
+		return completed, err
+	}
+
+	// The index was already checked above. Run the remaining static entries only
+	// after cleanup has reached an empty page, then publish tenant completion in
+	// the same transaction as the upgrade worker's persistent task cursor.
 	for _, entry := range tenantUpgEntries {
-		start := time.Now()
-		if err := entry.Upgrade(txn, uint32(tenantID)); err != nil {
-			getLogger(txn.Txn().TxnOptions().CN).Error("tenant upgrade entry execute error",
-				zap.Error(err), zap.Int32("tenantId", tenantID), zap.String("version", v.metadata.Version), zap.String("upgrade entry", entry.String()))
-			return err
+		if isMoRolePrivsObjectIDIndexUpgradeEntry(entry) {
+			continue
 		}
-		getLogger(txn.Txn().TxnOptions().CN).Info("tenant upgrade entry complete",
-			zap.String("upgrade entry", entry.String()), zap.Int64("time cost(ms)", time.Since(start).Milliseconds()), zap.String("toVersion", v.metadata.Version))
+		if err := upgradeTenantEntry(entry, tenantID, txn, v.metadata.Version); err != nil {
+			return false, err
+		}
 	}
 	if err := upgradeLegacyForeignKeyMetadata(ctx, tenantID, txn); err != nil {
+		return false, err
+	}
+	getLogger(txn.Txn().TxnOptions().CN).Info("tenant upgrade success",
+		zap.Int32("tenantId", tenantID), zap.String("toVersion", v.metadata.Version))
+	return true, nil
+}
+
+func isMoRolePrivsObjectIDIndexUpgradeEntry(entry versions.UpgradeEntry) bool {
+	return entry.Schema == moRolePrivsObjectIDIndexUpgradeEntry.Schema &&
+		entry.TableName == moRolePrivsObjectIDIndexUpgradeEntry.TableName &&
+		entry.UpgType == moRolePrivsObjectIDIndexUpgradeEntry.UpgType &&
+		entry.UpgSql == moRolePrivsObjectIDIndexUpgradeEntry.UpgSql
+}
+
+func upgradeTenantEntry(
+	entry versions.UpgradeEntry,
+	tenantID int32,
+	txn executor.TxnExecutor,
+	toVersion string,
+) error {
+	start := time.Now()
+	if err := entry.Upgrade(txn, uint32(tenantID)); err != nil {
+		getLogger(txn.Txn().TxnOptions().CN).Error("tenant upgrade entry execute error",
+			zap.Error(err), zap.Int32("tenantId", tenantID), zap.String("version", toVersion),
+			zap.String("upgrade entry", entry.String()))
 		return err
 	}
-	if err := cleanupHistoricalOrphanObjectPrivileges(ctx, tenantID, txn); err != nil {
-		return err
-	}
-	getLogger(txn.Txn().TxnOptions().CN).Info("tenant upgrade success", zap.Int32("tenantId", tenantID), zap.String("toVersion", v.metadata.Version))
+	getLogger(txn.Txn().TxnOptions().CN).Info("tenant upgrade entry complete",
+		zap.String("upgrade entry", entry.String()),
+		zap.Int64("time cost(ms)", time.Since(start).Milliseconds()), zap.String("toVersion", toVersion))
 	return nil
 }
 
@@ -100,43 +168,35 @@ AND NOT EXISTS (
     WHERE tbl.account_id = %d AND tbl.rel_logical_id = mo_role_privs.obj_id
 )`
 
-// cleanupHistoricalOrphanObjectPrivileges removes object grants left by CNs
-// predating the DROP lifecycle protocol. Each statement is bounded; the
-// surrounding tenant-upgrade transaction supplies atomic rollback, and the
-// predicates make a retry idempotent after interruption.
-func cleanupHistoricalOrphanObjectPrivileges(
+// cleanupHistoricalOrphanObjectPrivilegesStep commits at most one non-empty
+// page through the surrounding worker transaction. An empty pass over both
+// predicates proves this tenant generation is complete.
+func cleanupHistoricalOrphanObjectPrivilegesStep(
 	ctx context.Context,
 	tenantID int32,
 	txn executor.TxnExecutor,
-) error {
-	// Take the rollout barrier before deriving either orphan snapshot. Without
-	// it, an old CN could commit a DROP without privilege cleanup after this
-	// migration has already passed the corresponding object ID.
-	if err := versions.CheckCommonProtocolVersion(txn, defines.MORPCVersion43); err != nil {
-		return err
-	}
-
+) (bool, error) {
 	for _, predicate := range []string{
 		databaseScopedOrphanObjectPrivilegePredicate,
 		relationScopedOrphanObjectPrivilegePredicate,
 	} {
-		deleteSQL := orphanObjectPrivilegeDeleteSQL(predicate, tenantID)
-		for {
-			if err := ctx.Err(); err != nil {
-				return err
-			}
-			res, err := txn.Exec(deleteSQL, versions.UpgradeStatementOption(uint32(tenantID)))
-			if err != nil {
-				return err
-			}
-			affectedRows := res.AffectedRows
-			res.Close()
-			if affectedRows < orphanObjectPrivilegeCleanupBatchSize {
-				break
-			}
+		if err := ctx.Err(); err != nil {
+			return false, err
+		}
+		res, err := txn.Exec(
+			orphanObjectPrivilegeDeleteSQL(predicate, tenantID),
+			versions.UpgradeStatementOption(uint32(tenantID)),
+		)
+		if err != nil {
+			return false, err
+		}
+		affectedRows := res.AffectedRows
+		res.Close()
+		if affectedRows > 0 {
+			return false, nil
 		}
 	}
-	return nil
+	return true, nil
 }
 
 func orphanObjectPrivilegeDeleteSQL(predicate string, tenantID int32) string {

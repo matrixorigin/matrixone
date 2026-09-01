@@ -128,6 +128,16 @@ func (s *service) MaybeUpgradeTenant(
 	return upgraded, nil
 }
 
+// incrementalTenantUpgrade is implemented by migrations that must commit
+// bounded pages before a tenant task can be marked complete.
+type incrementalTenantUpgrade interface {
+	HandleTenantUpgradeStep(
+		ctx context.Context,
+		tenantID int32,
+		txn executor.TxnExecutor,
+	) (completed bool, err error)
+}
+
 // shouldRunTenantUpgrade keeps the normal version-transition behavior (a tenant
 // already at the target version is skipped), but reruns an offset-only upgrade.
 // mo_account.create_version does not store a version offset, so FromVersion ==
@@ -251,6 +261,11 @@ func (s *service) asyncUpgradeTenantTask(ctx context.Context) {
 
 				hasUpgradeTenants = true
 				h := s.getVersionHandle(upgrade.ToVersion)
+				if incremental, ok := h.(incrementalTenantUpgrade); ok {
+					return s.upgradeTenantIncrementally(
+						ctx, upgrade, taskID, tenants[0], createVersions[0], incremental, txn,
+					)
+				}
 				updated := int32(0)
 				for i, id := range tenants {
 					createVersion := createVersions[i]
@@ -354,6 +369,47 @@ func (s *service) asyncUpgradeTenantTask(ctx context.Context) {
 			timer.Reset(s.upgrade.checkUpgradeTenantDuration)
 		}
 	}
+}
+
+func (s *service) upgradeTenantIncrementally(
+	ctx context.Context,
+	upgrade versions.VersionUpgrade,
+	taskID uint64,
+	tenantID int32,
+	createVersion string,
+	h incrementalTenantUpgrade,
+	txn executor.TxnExecutor,
+) error {
+	if shouldRunTenantUpgrade(createVersion, upgrade) {
+		completed, err := h.HandleTenantUpgradeStep(ctx, tenantID, txn)
+		if err != nil {
+			s.logger.Error("failed to execute incremental tenant upgrade",
+				zap.Int32("tenant", tenantID), zap.String("upgrade", upgrade.String()), zap.Error(err))
+			return err
+		}
+		if !completed {
+			s.logger.Info("incremental tenant upgrade page ready to commit",
+				zap.Int32("tenant", tenantID), zap.String("upgrade", upgrade.String()))
+			return nil
+		}
+		if err := versions.UpgradeTenantVersion(tenantID, upgrade.ToVersion, txn); err != nil {
+			return err
+		}
+	}
+
+	advanced, err := versions.AdvanceUpgradeTenantTask(taskID, tenantID, txn)
+	if err != nil || !advanced {
+		return err
+	}
+	current, err := versions.GetUpgradeVersionForUpdateByID(upgrade.ID, txn)
+	if err != nil {
+		return err
+	}
+	current.ReadyTenant++
+	if current.ReadyTenant > current.TotalTenant {
+		return moerr.NewInvalidStateNoCtx("incremental tenant upgrade ready count exceeds total")
+	}
+	return versions.UpdateVersionUpgradeTasks(current, txn)
 }
 
 func drainUpgradeTenants(ctx context.Context, fn func() (bool, error)) {

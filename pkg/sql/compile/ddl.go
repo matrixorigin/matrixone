@@ -3681,31 +3681,18 @@ func (c *Compile) dropIndexChildRelation(
 	relationName string,
 	isTemporary bool,
 ) error {
-	var logicalID uint64
-	// Hidden relations are owned by the parent table lifecycle and cannot be a
-	// GRANT target. Do not add a second child metadata lock here: DML acquires
-	// shared locks for all index write targets, and upgrading one child while
-	// retaining another creates a cross-index wait cycle. We only need the child
-	// identity to remove legacy privilege rows after its parent-owned deletion.
-	relation, err := database.Relation(c.proc.Ctx, relationName, nil)
-	if err != nil {
-		return err
-	}
-	if !isTemporary {
-		logicalID = plan2.SnapshotTableID(relation.GetTableDef(c.proc.Ctx))
-	}
-	if err = maybeDeleteAutoIncrement(
+	// Hidden index relations are owned by the parent table lifecycle and cannot
+	// be GRANT targets. In particular, catalog restore may delete the parent
+	// mo_role_privs table before deleting its hidden index relations; issuing
+	// privilege cleanup for a hidden child would then access an already-deleted
+	// parent catalog table.
+	if err := maybeDeleteAutoIncrement(
 		c.proc.Ctx, c.proc.GetService(), database, relationName, c.proc.GetTxnOperator(),
 	); err != nil {
 		return err
 	}
-	if err = database.Delete(c.proc.Ctx, relationName); err != nil {
+	if err := database.Delete(c.proc.Ctx, relationName); err != nil {
 		return err
-	}
-	if logicalID != 0 {
-		if err = c.deleteRolePrivilegesForDroppedRelation(logicalID); err != nil {
-			return err
-		}
 	}
 	if isTemporary {
 		if session := c.proc.GetSession(); session != nil {
