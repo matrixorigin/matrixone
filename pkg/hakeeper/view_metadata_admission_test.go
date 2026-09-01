@@ -376,6 +376,73 @@ func TestViewMetadataAdmissionReplacementKeepsOldGenerationUntilTimeout(t *testi
 	require.True(t, rsm.state.ProxyState.Stores["proxy-1"].ViewMetadataAdmissionReady)
 }
 
+func TestViewMetadataAdmissionReplacementPublishesAuthoritativeOwnerExpiry(t *testing.T) {
+	rsm := NewStateMachine(0, 1).(*stateMachine)
+	rsm.state.Tick = 100
+	rsm.state.ViewMetadataAdmissionEnabled = true
+	rsm.state.ViewMetadataAdmissionEpoch = 3
+	rsm.state.ViewMetadataRevalidationRequired = true
+	rsm.state.ViewMetadataCatalogFencedEpoch = 3
+	rsm.state.CNState.Stores["cn-1"] = pb.CNStoreInfo{
+		Tick:                            100,
+		ViewMetadataAdmissionSupported:  true,
+		ViewMetadataAdmissionGeneration: 10,
+		ViewMetadataObservedEpoch:       3,
+		ViewMetadataAdmissionReady:      true,
+		ViewMetadataIngressReady:        true,
+	}
+
+	rsm.state.Tick = 101
+	batch := updateViewMetadataCN(t, rsm, pb.CNStoreHeartbeat{
+		UUID:                            "cn-1",
+		ViewMetadataAdmissionSupported:  true,
+		ViewMetadataAdmissionGeneration: 11,
+		ViewMetadataObservedEpoch:       3,
+		ViewMetadataRefreshSupported:    true,
+	})
+	require.False(t, batch.ViewMetadataAdmission.Admitted)
+
+	cfg := Config{
+		TickPerSecond:     10,
+		CNStoreTimeout:    2 * time.Minute,
+		ProxyStoreTimeout: 30 * time.Second,
+	}
+	result, err := rsm.Update(sm.Entry{
+		Index: rsm.state.Index + 1,
+		Cmd:   GetEnableViewMetadataAdmissionCmdForConfig(cfg),
+	})
+	require.NoError(t, err)
+	require.Zero(t, result.Value)
+
+	batch = updateViewMetadataCN(t, rsm, pb.CNStoreHeartbeat{
+		UUID:                            "cn-1",
+		ViewMetadataAdmissionSupported:  true,
+		ViewMetadataAdmissionGeneration: 11,
+		ViewMetadataObservedEpoch:       3,
+		ViewMetadataRefreshSupported:    true,
+	})
+	require.Equal(t, uint64(1200), batch.ViewMetadataAdmission.OwnerExpiryRemainingTicks)
+	require.Equal(t, uint64(10), batch.ViewMetadataAdmission.TickPerSecond)
+
+	rsm.state.Tick = 1301
+	result, err = rsm.Update(sm.Entry{
+		Index: rsm.state.Index + 1,
+		Cmd:   GetEnableViewMetadataAdmissionCmdForConfig(cfg),
+	})
+	require.NoError(t, err)
+	require.Empty(t, rsm.state.ViewMetadataAdmissionCNTargets)
+
+	batch = updateViewMetadataCN(t, rsm, pb.CNStoreHeartbeat{
+		UUID:                            "cn-1",
+		ViewMetadataAdmissionSupported:  true,
+		ViewMetadataAdmissionGeneration: 11,
+		ViewMetadataObservedEpoch:       3,
+		ViewMetadataRefreshSupported:    true,
+	})
+	require.True(t, batch.ViewMetadataAdmission.Admitted,
+		"the first replacement must be admitted after authoritative owner expiry")
+}
+
 func TestViewMetadataAdmissionPreparingWaitsForReplacedGenerationTimeout(t *testing.T) {
 	rsm := NewStateMachine(0, 1).(*stateMachine)
 	rsm.state.Tick = 5
@@ -644,6 +711,8 @@ func TestViewMetadataAdmissionSnapshotRoundTripAndOldSnapshotFailClosed(t *testi
 	source.state.ViewMetadataAdmissionProxyTargets = map[string]uint64{"proxy-1": 8}
 	source.state.ViewMetadataAdmissionCNTargetTicks = map[string]uint64{"cn-1": 70}
 	source.state.ViewMetadataAdmissionProxyTargetTicks = map[string]uint64{"proxy-1": 80}
+	source.state.ViewMetadataAdmissionCNStoreTimeoutTicks = 300
+	source.state.ViewMetadataAdmissionTickPerSecond = 10
 
 	buf := bytes.NewBuffer(nil)
 	require.NoError(t, source.SaveSnapshot(buf, nil, nil))
@@ -661,6 +730,8 @@ func TestViewMetadataAdmissionSnapshotRoundTripAndOldSnapshotFailClosed(t *testi
 		recovered.state.ViewMetadataAdmissionCNTargetTicks)
 	require.Equal(t, map[string]uint64{"proxy-1": 80},
 		recovered.state.ViewMetadataAdmissionProxyTargetTicks)
+	require.Equal(t, uint64(300), recovered.state.ViewMetadataAdmissionCNStoreTimeoutTicks)
+	require.Equal(t, uint64(10), recovered.state.ViewMetadataAdmissionTickPerSecond)
 
 	legacy := pb.NewRSMState()
 	legacyBytes, err := legacy.Marshal()
@@ -672,6 +743,8 @@ func TestViewMetadataAdmissionSnapshotRoundTripAndOldSnapshotFailClosed(t *testi
 	require.False(t, recovered.state.ViewMetadataAdmissionEnabled)
 	require.Zero(t, recovered.state.ViewMetadataAdmissionEpoch)
 	require.False(t, recovered.state.ViewMetadataAdmissionPending)
+	require.Zero(t, recovered.state.ViewMetadataAdmissionCNStoreTimeoutTicks)
+	require.Zero(t, recovered.state.ViewMetadataAdmissionTickPerSecond)
 }
 
 func TestViewMetadataAdmissionFencesLateHAKeeperMember(t *testing.T) {

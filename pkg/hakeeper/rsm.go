@@ -1950,5 +1950,7 @@ func (s *stateMachine) RecoverFromSnapshot(r io.Reader,
 	s.state.ViewMetadataAdmissionCNTargetTicks = nil
 	s.state.ViewMetadataAdmissionProxyTargetTicks = nil
 	s.state.ViewMetadataAdmissionPending = false
+	s.state.ViewMetadataAdmissionCNStoreTimeoutTicks = 0
+	s.state.ViewMetadataAdmissionTickPerSecond = 0
 	return s.state.Unmarshal(data)
 }

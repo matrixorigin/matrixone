@@ -53,6 +53,7 @@ func GetEnableViewMetadataAdmissionCmdForConfig(cfg Config) []byte {
 		CNStoreTimeoutTicks:    uint64(cfg.CNStoreTimeout/time.Second) * uint64(cfg.TickPerSecond),
 		ProxyStoreTimeoutTicks: uint64(cfg.ProxyStoreTimeout/time.Second) * uint64(cfg.TickPerSecond),
 		EvaluateCurrentStores:  true,
+		TickPerSecond:          uint64(cfg.TickPerSecond),
 	}
 	return getEnableViewMetadataAdmissionCmd(&targets)
 }
@@ -342,6 +343,10 @@ func (s *stateMachine) expireViewMetadataAdmissionTargets(targets pb.ViewMetadat
 
 func (s *stateMachine) handleEnableViewMetadataAdmission(cmd []byte) sm.Result {
 	targets, hasTargets := parseEnableViewMetadataAdmissionCmd(cmd)
+	if hasTargets {
+		s.state.ViewMetadataAdmissionCNStoreTimeoutTicks = targets.CNStoreTimeoutTicks
+		s.state.ViewMetadataAdmissionTickPerSecond = targets.TickPerSecond
+	}
 	if s.state.ViewMetadataAdmissionEnabled {
 		if hasTargets {
 			s.expireViewMetadataAdmissionTargets(targets)
@@ -580,6 +585,15 @@ func (s *stateMachine) viewMetadataAdmissionSnapshot(uuid string, proxy bool) *p
 		snapshot.Generation = store.ViewMetadataAdmissionGeneration
 		snapshot.Ready = store.ViewMetadataAdmissionReady
 		snapshot.Admitted = s.cnViewMetadataAdmitted(uuid, store)
+		if target, exists := s.state.ViewMetadataAdmissionCNTargets[uuid]; exists &&
+			target != store.ViewMetadataAdmissionGeneration {
+			lastTick := s.state.ViewMetadataAdmissionCNTargetTicks[uuid]
+			expiryTick := lastTick + s.state.ViewMetadataAdmissionCNStoreTimeoutTicks + 1
+			if expiryTick > s.state.Tick {
+				snapshot.OwnerExpiryRemainingTicks = expiryTick - s.state.Tick
+				snapshot.TickPerSecond = s.state.ViewMetadataAdmissionTickPerSecond
+			}
+		}
 	}
 	return snapshot
 }

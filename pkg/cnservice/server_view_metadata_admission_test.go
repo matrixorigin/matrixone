@@ -88,10 +88,34 @@ func (c *admissionCNHAKeeperClient) AllocateIDByKey(ctx context.Context, key str
 	return c.id, nil
 }
 
-func TestViewMetadataAdmissionWaitTimeoutCoversReplacementExpiry(t *testing.T) {
-	require.Equal(t, time.Minute, viewMetadataAdmissionWaitTimeout(0))
-	require.Equal(t, 10*time.Second,
-		viewMetadataAdmissionWaitTimeout(5*time.Second))
+func TestViewMetadataAdmissionWaitTimeoutUsesAuthoritativeOwnerExpiry(t *testing.T) {
+	require.Equal(t, 30*time.Second, viewMetadataAdmissionWaitTimeout(0, nil))
+	require.Equal(t, 5*time.Second,
+		viewMetadataAdmissionWaitTimeout(5*time.Second, nil))
+	require.Equal(t, 36*time.Second, viewMetadataAdmissionWaitTimeout(
+		5*time.Second,
+		&logservicepb.ViewMetadataAdmission{
+			OwnerExpiryRemainingTicks: 301,
+			TickPerSecond:             10,
+		}))
+}
+
+func TestViewMetadataAdmissionDeadlineDoesNotSlideWithOwnerCountdown(t *testing.T) {
+	now := time.Unix(100, 0)
+	deadline := newViewMetadataAdmissionDeadline(now, 5*time.Second)
+	require.Equal(t, now.Add(5*time.Second), deadline.deadline)
+
+	deadline.observe(now, 5*time.Second, &logservicepb.ViewMetadataAdmission{
+		OwnerExpiryRemainingTicks: 1200,
+		TickPerSecond:             10,
+	})
+	require.Equal(t, now.Add(125*time.Second), deadline.deadline)
+
+	deadline.observe(now.Add(time.Second), 5*time.Second, &logservicepb.ViewMetadataAdmission{
+		OwnerExpiryRemainingTicks: 1190,
+		TickPerSecond:             10,
+	})
+	require.Equal(t, now.Add(125*time.Second), deadline.deadline)
 }
 
 func TestCNViewMetadataAdmissionGenerationLifecycle(t *testing.T) {

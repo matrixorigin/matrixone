@@ -645,6 +645,11 @@ message ViewMetadataAdmission {
   // Admitted authorizes a CN heartbeat sender to finish local startup. Ready
   // is stronger: it also requires the CN's public ingress to be prepared.
   bool Admitted = 8;
+  // OwnerExpiryRemainingTicks is non-zero when this sender replaced a captured
+  // same-UUID generation that must expire before admission. TickPerSecond
+  // converts the replicated deadline into a local startup wait budget.
+  uint64 OwnerExpiryRemainingTicks = 11;
+  uint64 TickPerSecond = 12;
 }
 
 // ViewMetadataAdmissionTargets makes timeout-based phase-two/reconciliation
@@ -654,6 +659,7 @@ message ViewMetadataAdmissionTargets {
   uint64 CNStoreTimeoutTicks = 2;
   uint64 ProxyStoreTimeoutTicks = 3;
   bool EvaluateCurrentStores = 4;
+  uint64 TickPerSecond = 5;
 }
 
 // CNStoreInfo contains information on a CN store.
@@ -917,6 +923,10 @@ message HAKeeperRSMState {
   // this liveness proof for an older process.
   map<string, uint64> ViewMetadataAdmissionCNTargetTicks = 41;
   map<string, uint64> ViewMetadataAdmissionProxyTargetTicks = 42;
+  // Persist the timeout basis used by the replicated target-expiry decision so
+  // heartbeat snapshots can expose the same authoritative replacement wait.
+  uint64 ViewMetadataAdmissionCNStoreTimeoutTicks = 44;
+  uint64 ViewMetadataAdmissionTickPerSecond = 45;
 }
 
 // ReplicaInfo contains details of a replica

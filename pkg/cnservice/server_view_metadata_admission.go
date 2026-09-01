@@ -180,17 +180,57 @@ func (s *service) fenceViewMetadataCatalog(
 	return nil
 }
 
-func viewMetadataAdmissionWaitTimeout(discoveryTimeout time.Duration) time.Duration {
+func viewMetadataAdmissionWaitTimeout(
+	discoveryTimeout time.Duration,
+	snapshot *logservicepb.ViewMetadataAdmission,
+) time.Duration {
 	if discoveryTimeout <= 0 {
 		discoveryTimeout = 30 * time.Second
 	}
-	// HAKeeper deliberately retains the old generation for one CN store timeout
-	// before admitting a same-UUID replacement. The default store timeout and
-	// discovery timeout are both 30 seconds, so one discovery window races the
-	// replicated expiry/reconciliation entry after a whole-cluster restart.
-	// Keep generation allocation bounded by the configured discovery timeout,
-	// but give admission one additional window to observe safe owner expiry.
-	return 2 * discoveryTimeout
+	if snapshot == nil || snapshot.OwnerExpiryRemainingTicks == 0 || snapshot.TickPerSecond == 0 {
+		return discoveryTimeout
+	}
+	ownerSeconds := (snapshot.OwnerExpiryRemainingTicks-1)/snapshot.TickPerSecond + 1
+	ownerWait := time.Duration(ownerSeconds) * time.Second
+	// One discovery window after authoritative owner expiry covers the next
+	// replicated reconciliation and heartbeat response without coupling the CN
+	// deadline to an unrelated local multiplier.
+	return ownerWait + discoveryTimeout
+}
+
+type viewMetadataAdmissionDeadline struct {
+	deadline                      time.Time
+	lastOwnerExpiryRemainingTicks uint64
+	ownerExpiryObserved           bool
+}
+
+func newViewMetadataAdmissionDeadline(now time.Time, discoveryTimeout time.Duration) viewMetadataAdmissionDeadline {
+	return viewMetadataAdmissionDeadline{
+		deadline: now.Add(viewMetadataAdmissionWaitTimeout(discoveryTimeout, nil)),
+	}
+}
+
+func (d *viewMetadataAdmissionDeadline) observe(
+	now time.Time,
+	discoveryTimeout time.Duration,
+	snapshot *logservicepb.ViewMetadataAdmission,
+) {
+	if snapshot == nil {
+		return
+	}
+	remaining := snapshot.OwnerExpiryRemainingTicks
+	// A decreasing replicated remainder describes the same absolute deadline.
+	// Extend only for the first owner or a newly captured owner whose remainder
+	// jumps, never for duplicate heartbeat snapshots.
+	if remaining > 0 && (!d.ownerExpiryObserved ||
+		remaining > d.lastOwnerExpiryRemainingTicks) {
+		candidate := now.Add(viewMetadataAdmissionWaitTimeout(discoveryTimeout, snapshot))
+		if candidate.After(d.deadline) {
+			d.deadline = candidate
+		}
+		d.ownerExpiryObserved = true
+	}
+	d.lastOwnerExpiryRemainingTicks = remaining
 }
 
 func (s *service) waitForViewMetadataAdmission() error {
@@ -199,19 +239,21 @@ func (s *service) waitForViewMetadataAdmission() error {
 		// NewService always allocates a non-zero generation.
 		return nil
 	}
-	timeout := viewMetadataAdmissionWaitTimeout(
-		s.cfg.HAKeeper.DiscoveryTimeout.Duration)
-	ctx, cancel := context.WithTimeout(context.Background(), timeout)
-	defer cancel()
+	discoveryTimeout := s.cfg.HAKeeper.DiscoveryTimeout.Duration
+	deadline := newViewMetadataAdmissionDeadline(time.Now(), discoveryTimeout)
 
 	for {
 		snapshot := s.viewMetadataAdmission.Load()
+		deadline.observe(time.Now(), discoveryTimeout, snapshot)
+		ctx, cancel := context.WithDeadline(context.Background(), deadline.deadline)
 		if snapshot != nil && !snapshot.Preparing && !snapshot.Enabled {
+			cancel()
 			return nil
 		}
 		if snapshot != nil && snapshot.Generation != s.viewMetadataAdmissionGeneration {
+			cancel()
 			return moerr.NewInternalErrorf(
-				ctx,
+				context.Background(),
 				"CN %s admission generation was superseded: local=%d authoritative=%d",
 				s.cfg.UUID,
 				s.viewMetadataAdmissionGeneration,
@@ -219,24 +261,32 @@ func (s *service) waitForViewMetadataAdmission() error {
 		}
 		if snapshot != nil && snapshot.Epoch > 0 && s.viewMetadataEpochFence.Epoch() < snapshot.Epoch {
 			if err := s.viewMetadataEpochFence.Advance(ctx, snapshot.Epoch); err != nil {
-				return moerr.AttachCause(ctx, err)
+				result := moerr.AttachCause(ctx, err)
+				cancel()
+				return result
 			}
 		}
 		if err := s.fenceViewMetadataCatalog(ctx, snapshot); err != nil {
-			return moerr.AttachCause(ctx, err)
+			result := moerr.AttachCause(ctx, err)
+			cancel()
+			return result
 		}
 		if snapshot != nil && snapshot.Admitted {
+			cancel()
 			return nil
 		}
 
 		select {
 		case <-ctx.Done():
+			deadlineErr := ctx.Err()
+			cancel()
 			return moerr.NewInternalErrorf(
 				context.Background(),
 				"CN %s was not admitted before startup deadline: %v",
 				s.cfg.UUID,
-				ctx.Err())
+				deadlineErr)
 		case <-s.viewMetadataAdmissionUpdated:
+			cancel()
 		}
 	}
 }
