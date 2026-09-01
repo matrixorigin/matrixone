@@ -67,6 +67,7 @@ func TestInformationSchemaMetadataViewsEnforceObjectPrivileges(t *testing.T) {
 		{name: "views", ddl: InformationSchemaViewsDDL},
 		{name: "partitions", ddl: InformationSchemaPartitionsDDL},
 		{name: "schemata", ddl: InformationSchemaSchemataDDL},
+		{name: "table privileges", ddl: InformationSchemaTablePrivilegesDDL},
 	}
 
 	for _, test := range tests {
@@ -124,6 +125,46 @@ func TestInformationSchemaMetadataViewsEnforceObjectPrivileges(t *testing.T) {
 		"rp.obj_type = 'account' AND rp.privilege_name IN ('show databases','account all')")
 	assert.Contains(t, InformationSchemaSchemataDDL,
 		"rp.privilege_level = '*' AND rp.obj_id = 0")
+}
+
+func TestInformationSchemaTablePrivilegesDDL(t *testing.T) {
+	for _, expected := range []string{
+		"CREATE VIEW information_schema.`TABLE_PRIVILEGES` AS",
+		"CAST(coalesce(granted_role.role_name, '') AS varchar(292)) AS `GRANTEE`",
+		"CAST('def' AS varchar(512)) AS `TABLE_CATALOG`",
+		"CAST(coalesce(tbl.reldatabase, '') AS varchar(64)) AS `TABLE_SCHEMA`",
+		"CAST(coalesce(tbl.relname, '') AS varchar(64)) AS `TABLE_NAME`",
+		"CAST(coalesce(grant_priv.privilege_type, '') AS varchar(64)) AS `PRIVILEGE_TYPE`",
+		"coalesce(case when grant_priv.with_grant_option then 'YES' else 'NO' end, '')",
+		"JOIN __mo_active_roles grant_role ON grant_priv.role_id = grant_role.role_id",
+		"inspect_priv.privilege_name IN ('manage grants','account all','account ownership')",
+		"grant_priv.role_id NOT IN (SELECT role_id FROM __mo_active_roles)",
+		"SELECT 'SELECT' UNION ALL SELECT 'INSERT' UNION ALL SELECT 'UPDATE' UNION ALL SELECT 'TRUNCATE'",
+		"SELECT 'DELETE' UNION ALL SELECT 'REFERENCE' UNION ALL SELECT 'INDEX' UNION ALL SELECT 'VALUES'",
+		"WHERE grant_priv.privilege_name <> 'table all'",
+		"WHERE grant_priv.privilege_name = 'table all'",
+		"FROM __mo_authorized_table_grants grant_priv CROSS JOIN __mo_concrete_table_privileges concrete_priv",
+		"max(cast(with_grant_option AS int)) = 1 AS with_grant_option",
+		"FROM __mo_expanded_table_grant_rows GROUP BY role_id, obj_id, privilege_type",
+		"FROM __mo_expanded_table_grants grant_priv",
+		"JOIN mo_catalog.mo_role granted_role ON grant_priv.role_id = granted_role.role_id",
+		"JOIN __mo_visible_tables tbl ON grant_priv.obj_id = tbl.rel_logical_id",
+		"tbl.account_id = current_account_id()",
+		"grant_priv.obj_type IN ('table','view')",
+		"grant_priv.privilege_level IN ('d.t','t')",
+	} {
+		assert.Contains(t, InformationSchemaTablePrivilegesDDL, expected)
+	}
+	assert.NotContains(t, InformationSchemaTablePrivilegesDDL, "grant_priv.privilege_level IN ('d.*','*')")
+	assert.NotContains(t, InformationSchemaTablePrivilegesDDL, "grant_priv.privilege_level = '*.*'")
+	assert.NotContains(t, InformationSchemaTablePrivilegesDDL,
+		"CAST(coalesce(upper(grant_priv.privilege_name), '') AS varchar(64)) AS `PRIVILEGE_TYPE`")
+
+	statements, err := mysql.Parse(context.Background(), InformationSchemaTablePrivilegesDDL, 1)
+	assert.NoError(t, err)
+	for _, statement := range statements {
+		statement.Free()
+	}
 }
 
 func TestInformationSchemaStatisticsDDL_ContainsIdxAlgo(t *testing.T) {

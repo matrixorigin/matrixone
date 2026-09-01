@@ -1244,7 +1244,7 @@ func initExecuteStmtParamWithResolverInSession(
 		prepareStmt.directResultParamPositionsSet = true
 		prepareStmt.jsonComparisonParamPositions =
 			plan2.PreparedJSONComparisonParamPositions(executionPlan)
-		prepareStmt.numericPrefixConsumer = preparedPlanHasNumericPrefixConsumer(
+		prepareStmt.refreshNumericPrefixConsumer(
 			newPreparePlan.Plan, len(newPreparePlan.ParamTypes))
 		prepareStmt.numericOverloadParamPositions = plan2.PreparedPlanNumericFallbackParamPositions(
 			newPreparePlan.Plan)
@@ -1324,6 +1324,7 @@ func initExecuteStmtParamWithResolverInSession(
 	needsRuntimeSpecialization := prepareStmt.runtimeSpecializationNeeded ||
 		(executionPlan != nil && executionPlan.GetDdl() != nil)
 	numParams := len(preparePlan.ParamTypes)
+	prepareStmt.refreshNumericPrefixConsumer(executionPlan, numParams)
 	binaryExecute := execCtx.input != nil && execCtx.input.isBinaryProtExecute
 	binaryLiteralPlan := binaryExecute &&
 		(executionPlan.GetDdl() != nil || executionPlan.GetDcl().GetSetVariables() != nil)
@@ -1342,7 +1343,6 @@ func initExecuteStmtParamWithResolverInSession(
 	runtimeTextComparisonSpecialization := false
 	directResultPositions := prepareStmt.directResultParamPositions
 	runtimeDirectResultPositions := make([]int32, 0, len(directResultPositions))
-	hasNumericPrefixPacket := false
 	needsRuntimeParamVals := !binaryExecute || binaryLiteralPlan ||
 		prepareStmt.hasPaginationParams || prepareStmt.hasLagLeadParams || preparedExplain ||
 		runtimeNumericOverloadCandidate
@@ -1405,17 +1405,9 @@ func initExecuteStmtParamWithResolverInSession(
 				runtimeDirectResultPositions = append(runtimeDirectResultPositions, int32(i))
 			}
 			if binaryProtocolMayNeedNumericPrefix(mysqlType) {
-				hasNumericPrefixPacket = true
 				runtimeNumericPrefixCandidate = runtimeNumericPrefixCandidate || prepareStmt.numericPrefixConsumer
 			}
 			hasParamKind = hasParamKind || kind != vector.PrepareParamNone
-		}
-		if hasNumericPrefixPacket && !runtimeNumericPrefixCandidate {
-			// Older/rebuilt plan shapes can hide the candidate behind generated
-			// index expressions. This fallback scans only DECIMAL/text/NULL packets;
-			// ordinary integer TPCC executions never enter it.
-			runtimeNumericPrefixCandidate = preparedPlanHasStaticExactNumericPeer(executionPlan) &&
-				preparedPlanAdmitsPotentialDecimal(executionPlan, paramCount)
 		}
 		if hasConcreteType {
 			prepareStmt.paramMetadata = cwft.proc.SetPrepareParamsWithReusableTypedMeta(
@@ -1808,6 +1800,22 @@ func preparedPlanHasNumericPrefixConsumer(preparePlan *plan2.Plan, paramCount in
 	return preparePlan != nil && preparePlan.GetQuery() != nil && paramCount > 0 &&
 		preparedPlanHasStaticExactNumericPeer(preparePlan) &&
 		preparedPlanAdmitsPotentialDecimal(preparePlan, paramCount)
+}
+
+func (prepareStmt *PrepareStmt) refreshNumericPrefixConsumer(
+	preparePlan *plan2.Plan,
+	paramCount int,
+) {
+	if preparePlan == nil {
+		prepareStmt.numericPrefixConsumerPlan = nil
+		prepareStmt.numericPrefixConsumer = false
+		return
+	}
+	if prepareStmt.numericPrefixConsumerPlan == preparePlan {
+		return
+	}
+	prepareStmt.numericPrefixConsumer = preparedPlanHasNumericPrefixConsumer(preparePlan, paramCount)
+	prepareStmt.numericPrefixConsumerPlan = preparePlan
 }
 
 func preparedPlanAdmitsPotentialDecimal(preparePlan *plan2.Plan, paramCount int) bool {
