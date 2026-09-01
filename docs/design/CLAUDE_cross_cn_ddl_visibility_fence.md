@@ -31,7 +31,7 @@ It is unsafe for any public or already-connected CN to commit DDL below v43 whil
 ### Measurable criteria
 
 - A create on CN0 followed immediately by a first read/load on CN1 succeeds without explicit `SYNCCOMMIT`.
-- Markerless startup preserves the current-main v40 baseline before the v43 cut.
+- Markerless startup preserves the current-main v41 baseline before the v43 cut.
 - No local downgrade below v43 is accepted after the monotonic v43 epoch is committed.
 - Membership change between final scan and epoch commit rejects the old target set atomically.
 - Restart, timeout, persistence failure, response loss, and leader failover remain fail-closed.
@@ -55,7 +55,7 @@ HAKeeper is the first owner of cluster epoch and membership linearization. CN lo
 
 A CN is in one of these logical states:
 
-1. **Baseline v40**: v43 not deployed; existing v38-v40 contracts remain active. Public ingress may be open.
+1. **Baseline v41**: v43 not deployed; existing v38-v41 contracts remain active. Public ingress may be open.
 2. **Withdrawing**: activation blocks new DDL, withdraws ingress, and drains active DDL.
 3. **Prepared v43**: local old-protocol producers are drained; runtime can receive v43 RPCs.
 4. **Provisionally fenced**: local frontier synchronization completed and `-43` is durable; ingress remains closed.
@@ -70,7 +70,7 @@ The cluster epoch commit is the linearization point. Prepared, Fenced, and the l
 ### First rollout
 
 1. All LogStore/HAKeeper replicas advertise support for the epoch schema.
-2. Every CN runs v43-capable code but markerless CNs keep protocol baseline v40.
+2. Every CN runs v43-capable code but markerless CNs keep protocol baseline v41.
 3. `mo_ctl SetProtocolVersion` refreshes raw authoritative CN membership.
 4. The requested set must exactly match all eligible CN tuples and each target must advertise the v43 receiver/barrier capability.
 5. Targets concurrently withdraw ingress, block and drain DDL, capture their reconstructed latest committed timestamp, then heartbeat Prepared together with that frontier. HAKeeper advances a cluster-lifetime maximum and never lowers it when an incarnation restarts, is replaced, or is removed.
@@ -84,7 +84,7 @@ A public real-user DDL, and background DDL after public listeners are enabled, e
 
 ### Scale-out and replacement
 
-A markerless CN performs an atomic ingress heartbeat handshake. If it linearizes before the cluster commit, it becomes authoritative membership and invalidates any old target proof. If it linearizes after commit, HAKeeper forces ingress false and returns epoch 43. It never becomes a public v40 producer after the cut.
+A markerless CN performs an atomic ingress heartbeat handshake. If it linearizes before the cluster commit, it becomes authoritative membership and invalidates any old target proof. If it linearizes after commit, HAKeeper forces ingress false and returns epoch 43. It never becomes a public v41 producer after the cut.
 
 ## 6. Failure, retry, and lifecycle behavior
 
@@ -105,7 +105,7 @@ Retries are idempotent for the same generation and target set. Replacement gener
 
 ### Mixed-version baseline
 
-Current main already deploys v40 semantics. A fresh v43-capable process without a DDL marker therefore remains at v40, not v37. The v43 DDL state is separate from unrelated v38-v40 capabilities.
+Current main already deploys v41 semantics. A fresh v43-capable process without a DDL marker therefore remains at v41, not v37. The v43 DDL state is separate from unrelated v38-v41 capabilities.
 
 ### Rollout order
 
@@ -116,7 +116,7 @@ Current main already deploys v40 semantics. A fresh v43-capable process without 
 
 ### Downgrade policy
 
-Before epoch 43, ordinary protocol changes at or below v40 remain possible. After epoch 43, local downgrade below v43 is rejected. A safe rollback would require a separately designed atomic cluster rollback that withdraws and drains every DDL producer before lowering the epoch; this revision deliberately does not implement epoch rollback.
+Before epoch 43, ordinary protocol changes at or below v41 remain possible. After epoch 43, local downgrade below v43 is rejected. A safe rollback would require a separately designed atomic cluster rollback that withdraws and drains every DDL producer before lowering the epoch; this revision deliberately does not implement epoch rollback.
 
 Binary rollback after epoch 43 is unsupported until such a rollback protocol exists. Operators must restore forward to a v43-capable binary.
 
@@ -169,7 +169,7 @@ Could provide a stronger generic read contract, but materially changes every tra
 
 | Contract | Deterministic evidence |
 |---|---|
-| v40 baseline preserved | markerless default-v43 startup UT |
+| v41 baseline preserved | markerless default-v43 startup UT |
 | post-cut downgrade rejected | completed-v43 downgrade UT |
 | exact authoritative targets | ctl raw-membership omission/capability UT |
 | join/commit atomicity | CNState RSM ordering UT: final scan, join, stale commit |
@@ -182,7 +182,7 @@ Could provide a stronger generic read contract, but materially changes every tra
 ## 14. Decision log and open items
 
 - Chosen linearization point: HAKeeper replicated heartbeat transition with exact tuple proof.
-- Chosen baseline: preserve current-main v40 before v43 activation.
+- Chosen baseline: preserve current-main v41 before v43 activation.
 - Chosen downgrade behavior: reject after monotonic epoch commit.
 - Chosen direct-ingress protection: local DDL gate in addition to proxy admission.
 - Non-blocking follow-up: add dedicated activation/fan-out metrics and publish N-CN staging latency evidence.

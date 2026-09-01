@@ -44,7 +44,7 @@ func (s *service) prepareDDLVisibilityBarrier() error {
 	// MORPCLatestVersion describes compiled capability, not deployment-wide
 	// activation. Restore the durable per-CN deployed protocol before deciding
 	// whether this restart can produce v43 DDL. A fresh upgraded process has no
-	// marker and preserves the already-deployed v40 baseline until the
+	// marker and preserves the already-deployed v41 baseline until the
 	// complete-target cut persists v43.
 	deployedVersion := s.loadDDLVisibilityDeployedProtocol()
 	if deployedVersion == 0 && s._hakeeperClient != nil {
@@ -74,7 +74,7 @@ func (s *service) prepareDDLVisibilityBarrier() error {
 		rt.SetGlobalVariables(moruntime.MOProtocolVersion, -deployedVersion)
 	} else if value, ok := rt.GetGlobalVariables(moruntime.MOProtocolVersion); ok {
 		if version, valid := value.(int64); valid && version >= defines.MORPCVersion43 {
-			rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion40)
+			rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion41)
 		}
 	}
 

@@ -63,3 +63,9 @@
 1. fetch 并 merge 最新 `mo/main`，逐文件确认双方语义，保留主干新增能力与本 PR v43 DDL fence。
 2. 重新生成必要生成文件，运行冲突相关 owning package、embedded 双 CN、race/vet 与 diff 检查。
 3. commit/push merge 结果，确认 PR mergeability 与 unresolved thread 状态。
+
+## 2026-08-31：修复最新 CI failure
+
+1. 获取 PR exact head 的失败 check/job 原始日志，区分代码回归与基础设施问题并定位最小根因。
+2. 对代码问题补充确定性回归并修复；不使用重试或弱化断言掩盖失败。
+3. 运行 owning package、相关 race/vet/embedded 验证，commit/push 后确认新 CI 状态。
