@@ -1,6 +1,6 @@
 - Status: draft
 - Start Date: 2026-09-01
-- Design revision: v2 (2026-09-01)
+- Design revision: v3 (2026-09-01)
 - Authors: MatrixOne optimizer team
 - Implementation PRs: [#27914](https://github.com/matrixorigin/matrixone/pull/27914), [#27915](https://github.com/matrixorigin/matrixone/pull/27915), [#27934](https://github.com/matrixorigin/matrixone/pull/27934)
 - Issue for this RFC: [#26768](https://github.com/matrixorigin/matrixone/issues/26768)
@@ -27,9 +27,10 @@ equivalent. Statistics, benchmark query identity, table names, scale factors,
 and constants are never correctness evidence.
 
 This revision is intentionally `draft`.  Review of all three PRs is design-only
-until an exact revision of this RFC receives an approving review.  The accepted
-revision is then renamed with its approval date and advanced to `in-progress`;
-implementation review and approval remain blocked until that transition.
+until an exact revision of this RFC receives an explicit, scoped
+design-acceptance review.  The accepted revision is then renamed with its
+approval date and advanced to `in-progress`; implementation review and approval
+remain blocked until that transition.
 
 ## Motivation
 
@@ -193,10 +194,13 @@ and `GROUPING()` bits remain correct.  An empty input with no all-rolled set
 emits no row.  The rollup sentinel is separate from SQL NULL and duplicate
 grouping sets retain their duplicate output rows.
 
-The vector grouping representation is gated by `MORPCVersion43`. Version 42 is
-already assigned to transactional SQL-task child cleanup on `main`; peers below
-43 get the historical branch-per-grouping-set plan.  The protobuf fields are
-append-only and mixed-version tests use the actual v42 predecessor.
+The vector grouping representation is gated by one newly allocated cumulative
+MORPC version `N`.  The numeric value is an integration property, not a semantic
+design constant: at final rebase the later branch takes the next contiguous
+unowned version.  Peers below `N` get the historical branch-per-grouping-set
+plan.  The protobuf fields are append-only and mixed-version tests use the
+actual `N-1` predecessor.  Two live branches must never ship with the same
+numeric version owner.
 
 ### Existential MARK and OR-of-EXISTS
 
@@ -288,8 +292,8 @@ change no catalog, storage, backup, client, authentication, authorization, or
 tenant boundary.
 
 Grouping-set sharing adds append-only pipeline fields and is never planned
-below `MORPCVersion43`; a v42 or older deployment receives the complete legacy
-branch plan.  Scalar filtering adds the optional
+below its final uniquely allocated version `N`; an `N-1` or older deployment
+receives the complete legacy branch plan.  Scalar filtering adds the optional
 `RuntimeFilterSpec.scalar_predicate` plan field.  A new executor receiving an
 old plan sees false.  An old executor ignores the unknown field; non-empty
 unsupported state cannot synthesize the exact one-value payload and therefore
@@ -358,7 +362,7 @@ claimed as a performance pass.
 | Rule | White-box/typed proof | Black-box acceptance | Mandatory unchanged controls |
 |---|---|---|---|
 | CTE reuse | reachability, drain, type, determinism, row-domain, memory/spill and build-role tests | public SQL duplicate/NULL/result checks; spill/reset/error paths | recursive/correlated/volatile/fallible/early-stop/unreachable/incompatible producers |
-| grouping sets | internal-origin marker, typed branch compatibility, MORPC 42/43 plan boundary, codec round trips | distributed ROLLUP/CUBE/GROUPING SETS results with SQL NULL, rollup sentinel, duplicates, runtime-empty input, and spill | user UNION ALL, incompatible state/type, old protocol, partial consumer, no all-rolled set |
+| grouping sets | internal-origin marker, typed branch compatibility, final MORPC `N-1/N` plan boundary, codec round trips | distributed ROLLUP/CUBE/GROUPING SETS results with SQL NULL, rollup sentinel, duplicates, runtime-empty input, and spill | user UNION ALL, incompatible state/type, old protocol, partial consumer, no all-rolled set |
 | MARK/OR EXISTS | positive marker ownership, totality, typed keys, and reachable `UNION ALL + SEMI` tests | independent EXISTS/OR results with duplicates, NULLs, multiple/composite arms | NOT/IN/ANY/projected/mixed/volatile/fallible/non-equality/correlated/different-key markers |
 | scalar filter | retained `SINGLE`, actual-cardinality state machine, final physical probe lineage | scalar 0/1/>1-row results/errors; empty/NULL/one-value sibling error and volatile controls | correlated, build-side and swapped-build lineage, outer/nested-single/project/window/barrier/limit/unsafe predicate |
 | DNF key | exact total common-key, complete relation walk, residual retention | differential DNF results/errors with NULLs and duplicates | single-table range DNF, missing-arm key, computed/fallible/incompatible/volatile/ambiguous key |
@@ -437,8 +441,9 @@ paths, `subqueryPredicatePlanning=1` restores all #27915 legacy paths, and
 `outerAntiPlanning=1` restores all #27934 legacy paths.  Each switch is parsed
 once at planning entry and must be covered by positive and rollback plan tests.
 Grouping-set execution also has a deterministic compatibility fallback:
-protocol versions below 43 always receive the legacy plan.  The optional scalar
-runtime filter fails open with `PASS` independently of the planner switch.
+protocol versions below its final unique version `N` always receive the legacy
+plan.  The optional scalar runtime filter fails open with `PASS` independently
+of the planner switch.
 
 Rollout is deterministic UT/public SQL and wire/error-path tests, frozen
 TPCH/TPC-DS plan corpus, isolated 1 TiB targets, TPCH performance control, then
@@ -450,17 +455,22 @@ cohort does not require reverting unrelated stats or executor memory work.
 
 ## Approval record
 
-Approval is the GitHub approving review on the exact commit carrying this RFC.
-After any semantic design amendment, increment the revision, obtain approval on
-the new exact head, and update all three implementation PR bodies to link that
-revision before requesting implementation re-review.
+Design acceptance is an explicit review record naming the exact commit and this
+RFC as accepted.  It may be a scoped `COMMENTED` review while the PR remains
+`CHANGES_REQUESTED`; a GitHub-wide `APPROVE` is not required and must not be
+interpreted as approval of prototype code in the same PR.  This is unambiguous
+because any semantic RFC amendment changes the exact revision and requires a
+new design-acceptance record.  Implementation approval is a later review of the
+aligned exact head and its evidence.  All three PR bodies link the accepted
+design revision before requesting that implementation review.
 
 ## Decision log
 
-- v2 supersedes the closed v1 design and the two PR-local draft RFCs; reviewers
+- v3 supersedes the closed v1 design and the two PR-local draft RFCs; reviewers
   need one global order and counterexample matrix for all three PRs.
-- Allocate grouping-set expansion to v43 because v42 is already owned by SQL
-  task cleanup.
+- Allocate grouping-set expansion at final rebase to the next contiguous
+  unowned MORPC version and test its real predecessor; open-branch numbering is
+  not a design invariant.
 - Synthesize runtime-empty all-rolled grouping rows explicitly; statistics do
   not prove non-empty execution.
 - Keep `SINGLE + FILTER` in place and allow scalar filtering only through a
@@ -476,7 +486,8 @@ revision before requesting implementation re-review.
 
 This RFC may advance to `in-progress` only when reviewers accept the global
 non-fixpoint order, all semantic guards (including totality and physical
-probe-side scalar lineage), MORPC v43 and scalar optional-wire compatibility,
+probe-side scalar lineage), unique final MORPC allocation and scalar
+optional-wire compatibility,
 resource ownership, the three rollback cohorts, implementation budgets, and
 the positive/counterexample/cross-rule matrix.  No blocking semantic question
 is intentionally deferred to implementation.
