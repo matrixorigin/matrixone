@@ -198,6 +198,7 @@ type Lexer struct {
 	paramIndex            int
 	lower                 int64
 	lastToken             int
+	previousToken         int
 	syntaxLastToken       int
 	syntaxDepth           int
 	syntaxInFrom          []bool
@@ -242,6 +243,7 @@ func (l *Lexer) setScanner(s *Scanner, lower int64, sqlMode SQLModeFlags) {
 	l.paramIndex = 0
 	l.lower = lower
 	l.lastToken = 0
+	l.previousToken = 0
 	l.syntaxLastToken = 0
 	l.syntaxDepth = 0
 	l.syntaxInFrom = l.syntaxInFrom[:0]
@@ -284,6 +286,7 @@ func (l *Lexer) Lex(lval *yySymType) int {
 			afterIceberg := *l.scanner
 			afterTyp, _ := l.scanner.Scan()
 			if afterTyp == SNAPSHOT || afterTyp == TIMESTAMP || afterTyp == REF {
+				l.previousToken = l.lastToken
 				l.lastToken = FOR_ICEBERG
 				lval.str = str + " " + nextStr
 				l.scanner.LastToken = lval.str
@@ -310,6 +313,12 @@ func (l *Lexer) Lex(lval *yySymType) int {
 	if reservedKeywordsAfterAS[typ] && l.lastToken == AS {
 		typ = ID
 	}
+	// CONFIG is a MatrixOne contextual keyword used by SHOW CONFIG and ALTER
+	// ACCOUNT CONFIG. MySQL otherwise treats it as a non-reserved identifier.
+	if typ == CONFIG && l.lastToken != SHOW &&
+		!(l.previousToken == ALTER && l.lastToken == ACCOUNT && l.alterAccountConfigPhraseAhead()) {
+		typ = ID
+	}
 	// ASOF stays contextual. The grammar resolves whether the phrase starts a
 	// native join or whether ASOF still occupies the current table's alias slot.
 	// This preserves legacy `t asof JOIN u`, while an already completed alias or
@@ -318,10 +327,30 @@ func (l *Lexer) Lex(lval *yySymType) int {
 		typ = ASOF
 	}
 
+	l.previousToken = l.lastToken
 	l.lastToken = typ
 	lval.str = str
 	l.recordSyntaxToken(typ)
 	return typ
+}
+
+func (l *Lexer) alterAccountConfigPhraseAhead() bool {
+	lookahead := *l.scanner
+
+	// ALTER ACCOUNT CONFIG SET MYSQL_COMPATIBILITY_MODE ...
+	next, _ := lookahead.Scan()
+	if next == SET {
+		next, _ = lookahead.Scan()
+		return next == MYSQL_COMPATIBILITY_MODE
+	}
+
+	// ALTER ACCOUNT CONFIG account_name SET MYSQL_COMPATIBILITY_MODE ...
+	next, _ = lookahead.Scan()
+	if next != SET {
+		return false
+	}
+	next, _ = lookahead.Scan()
+	return next == MYSQL_COMPATIBILITY_MODE
 }
 
 func (l *Lexer) asofJoinPhraseAhead() bool {

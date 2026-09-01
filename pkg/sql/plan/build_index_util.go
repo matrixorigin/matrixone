@@ -263,9 +263,6 @@ func checkIndexColumnSupportability(ctx context.Context, col *ColDef, keyPart *t
 		return moerr.NewNotSupported(ctx, fmt.Sprintf("VECTOR column '%s' cannot be in index", colName))
 	}
 
-	if isEnumPlanType(&col.Typ) && indexKind == "primary" {
-		return moerr.NewNotSupported(ctx, fmt.Sprintf("ENUM column '%s' cannot be in primary key", colName))
-	}
 	if isSetPlanType(&col.Typ) {
 		switch indexKind {
 		case "primary":
