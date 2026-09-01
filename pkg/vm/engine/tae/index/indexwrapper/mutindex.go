@@ -82,6 +82,39 @@ func (idx *MutIndex) GetActiveRow(key any) (row []uint32, err error) {
 	return
 }
 
+// ForeachRowsByKeys calls fn for every ART row whose key is present and
+// non-null in keys. It does not perform MVCC filtering or mutate keys.
+func (idx *MutIndex) ForeachRowsByKeys(
+	keys *vector.Vector,
+	keysZM index.ZM,
+	fn func(row uint32),
+) error {
+	if keysZM.Valid() {
+		if !idx.zonemap.FastIntersect(keysZM) {
+			return nil
+		}
+	} else if !idx.zonemap.FastContainsAny(keys) {
+		return nil
+	}
+	op := func(v []byte, isNull bool, _ int) error {
+		if isNull {
+			return nil
+		}
+		rows, err := idx.art.Search(v)
+		if err == index.ErrNotFound {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		for _, row := range rows {
+			fn(row)
+		}
+		return nil
+	}
+	return containers.ForeachWindowBytes(keys, 0, keys.Length(), op, nil)
+}
+
 func (idx *MutIndex) String() string {
 	return idx.art.String()
 }

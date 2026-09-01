@@ -150,7 +150,12 @@ func (obj *baseObject) CheckFlushTaskRetry(startts types.TS) bool {
 	return x.GT(&startts)
 }
 
-func (obj *baseObject) WaitAppendCommittingBefore(ts types.TS, reader txnif.TxnReader) bool {
+func (obj *baseObject) WaitAppendCommittingBefore(
+	ts types.TS,
+	reader txnif.TxnReader,
+	keys containers.Vector,
+	keysZM index.ZM,
+) bool {
 	// Pin the memory node before touching append MVCC. Once the object is
 	// upgraded, the persisted node owns visibility and closing the old memory
 	// node releases all in-memory AppendNodes.
@@ -160,22 +165,33 @@ func (obj *baseObject) WaitAppendCommittingBefore(ts types.TS, reader txnif.TxnR
 		return false
 	}
 
-	var txns []txnif.TxnReader
+	var txns map[string]txnif.TxnReader
 	obj.RLock()
-	obj.appendMVCC.CollectUncommittedANodesPreparedBeforeLocked(
-		ts,
-		func(node *updates.AppendNode) {
-			// A transaction must never wait for an AppendNode it created itself.
-			// This also protects callers added after the current PrePrepare path,
-			// where the transaction is still active and NeedWaitCommitting already
-			// excludes it.
-			if node.IsSameTxn(reader) {
+	err := node.MustMNode().pkIndex.ForeachRowsByKeys(
+		keys.GetDownstreamVector(), keysZM,
+		func(row uint32) {
+			appendNode := obj.appendMVCC.GetAppendNodeByRowLocked(row)
+			if appendNode == nil || appendNode.IsAborted() {
 				return
 			}
-			txns = append(txns, node.GetTxn())
+			needWait, txn := appendNode.NeedWaitCommitting(ts)
+			if !needWait || txn == nil {
+				return
+			}
+			// A transaction must never wait for an AppendNode it created itself.
+			if reader != nil && txn.GetID() == reader.GetID() {
+				return
+			}
+			if txns == nil {
+				txns = make(map[string]txnif.TxnReader)
+			}
+			txns[txn.GetID()] = txn
 		},
 	)
 	obj.RUnlock()
+	if err != nil {
+		panic(err)
+	}
 
 	// Applying commit or rollback needs the object lock. Never wait while
 	// holding it, otherwise this reader can block the transaction it waits for.

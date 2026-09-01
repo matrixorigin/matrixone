@@ -16,6 +16,7 @@ package tables
 
 import (
 	"context"
+	"sync/atomic"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -39,6 +40,18 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+type waitCountingTxn struct {
+	txnif.AsyncTxn
+	waits atomic.Int32
+}
+
+func (txn *waitCountingTxn) GetTxnState(wait bool) txnif.TxnState {
+	if wait {
+		txn.waits.Add(1)
+	}
+	return txn.AsyncTxn.GetTxnState(false)
+}
 
 func TestValidatePersistedCommitTSVectors(t *testing.T) {
 	mp := mpool.MustNewZero()
@@ -199,10 +212,77 @@ func TestWaitAppendCommittingBeforeSkipsSameTxn(t *testing.T) {
 	txn.Unlock()
 	appendNode, _ := mvcc.AddAppendNodeLocked(txn, 0, 1)
 	require.NoError(t, appendNode.PrepareCommit())
+	keys := containers.MakeVector(types.T_int32.ToType(), common.DefaultAllocator)
+	defer keys.Close()
+	keys.Append(int32(7), false)
+	require.NoError(t, mnode.pkIndex.BatchUpsert(keys.GetDownstreamVector(), 0))
+	keysZM := index.NewZM(types.T_int32, 0)
+	require.NoError(t, index.BatchUpdateZM(keysZM, keys.GetDownstreamVector()))
 
 	// The transaction is still preparing. Without the same-txn guard this call
 	// waits on its own DoneCond forever.
-	base.WaitAppendCommittingBefore(types.MaxTs(), txn)
+	base.WaitAppendCommittingBefore(types.MaxTs(), txn, keys, keysZM)
+}
+
+func TestWaitAppendCommittingBeforeOnlyWaitsSelectedKeys(t *testing.T) {
+	defer testutils.AfterTest(t)()
+	schema := catalog.MockSchema(1, 0)
+	c := catalog.MockCatalog(nil)
+	defer c.Close()
+	db, err := c.CreateDBEntry("db", "", "", nil)
+	require.NoError(t, err)
+	table, err := db.CreateTableEntry(schema, nil, nil)
+	require.NoError(t, err)
+	noid := objectio.NewObjectid()
+	stats := objectio.NewObjectStatsWithObjectID(&noid, true, false, false)
+	obj, err := table.CreateObject(nil, &objectio.CreateObjOpt{Stats: stats}, nil)
+	require.NoError(t, err)
+
+	mvcc := updates.NewAppendMVCCHandle(obj)
+	base := &baseObject{RWMutex: mvcc.RWMutex, appendMVCC: mvcc}
+	base.meta.Store(obj)
+	mnode := newMemoryNode(base, false)
+	node := NewNode(mnode)
+	node.Ref()
+	base.node.Store(node)
+	defer node.Unref()
+
+	newPreparingTxn := func(start, prepare types.TS) *waitCountingTxn {
+		txn := &txnbase.Txn{
+			TxnCtx: txnbase.NewTxnCtx(
+				common.NewTxnIDAllocator().Alloc(), start, types.TS{},
+			),
+		}
+		txn.Lock()
+		require.NoError(t, txn.ToPreparingLocked(prepare))
+		txn.Unlock()
+		return &waitCountingTxn{AsyncTxn: txn}
+	}
+	txn1 := newPreparingTxn(types.BuildTS(1, 0), types.BuildTS(3, 0))
+	txn2 := newPreparingTxn(types.BuildTS(2, 0), types.BuildTS(4, 0))
+	an1, _ := mvcc.AddAppendNodeLocked(txn1, 0, 1)
+	an2, _ := mvcc.AddAppendNodeLocked(txn2, 1, 2)
+	require.NoError(t, an1.PrepareCommit())
+	require.NoError(t, an2.PrepareCommit())
+
+	indexed := containers.MakeVector(types.T_int32.ToType(), common.DefaultAllocator)
+	defer indexed.Close()
+	indexed.Append(int32(10), false)
+	indexed.Append(int32(20), false)
+	require.NoError(t, mnode.pkIndex.BatchUpsert(indexed.GetDownstreamVector(), 0))
+
+	selected := containers.MakeVector(types.T_int32.ToType(), common.DefaultAllocator)
+	defer selected.Close()
+	selected.Append(int32(10), false)
+	selected.Append(nil, true)
+	selectedZM := index.NewZM(types.T_int32, 0)
+	require.NoError(t, index.BatchUpdateZM(selectedZM, selected.GetDownstreamVector()))
+
+	require.True(t, base.WaitAppendCommittingBefore(
+		types.MaxTs(), nil, selected, selectedZM,
+	))
+	require.Equal(t, int32(1), txn1.waits.Load())
+	require.Equal(t, int32(0), txn2.waits.Load())
 }
 
 func TestApplyAppendLockedPadsMissingColumnsForUpgradedSchema(t *testing.T) {
