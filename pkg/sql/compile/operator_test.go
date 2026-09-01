@@ -137,6 +137,25 @@ func TestJoinHashBuildTopologyPinsSpillToSingleConsumer(t *testing.T) {
 	}
 }
 
+func TestLoopJoinBuildCarriesScalarRuntimeFilter(t *testing.T) {
+	join := loopjoin.NewArgument()
+	defer join.Release()
+	join.JoinMapTag = 1
+	spec := &plan.RuntimeFilterSpec{
+		Tag: 42, UpperLimit: 1, ScalarPredicate: true,
+	}
+
+	op := constructJoinBuildOperator(
+		&Compile{}, join, 1, []*plan.RuntimeFilterSpec{spec})
+	build, ok := op.(*hashbuild.HashBuild)
+	require.True(t, ok)
+	defer build.Release()
+
+	require.False(t, build.NeedHashMap)
+	require.True(t, build.RuntimeFilterSpec.ScalarPredicate)
+	require.Same(t, spec, build.RuntimeFilterSpec)
+}
+
 func TestConstructFuzzyFilterUsesFinalizedBuildSide(t *testing.T) {
 	newNodes := func(side plan.Node_FuzzyBuildSide, tableCost, sinkCost float64) (
 		*plan.Node, *plan.Node, *plan.Node, *plan.RuntimeFilterSpec,

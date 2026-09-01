@@ -103,10 +103,12 @@ func TestSingleJoinPushdownPreservesCardinalityErrorScope(t *testing.T) {
 			t.Run(test.name+" preserves cardinality error", func(t *testing.T) {
 				rows, queryErr := db.QueryContext(ctx, test.query)
 				if queryErr == nil {
+					defer func() {
+						require.NoError(t, rows.Close())
+					}()
 					for rows.Next() {
 					}
 					queryErr = rows.Err()
-					require.NoError(t, rows.Close())
 				}
 				require.ErrorContains(t, queryErr, "Subquery returns more than 1 row")
 			})
