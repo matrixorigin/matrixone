@@ -74,8 +74,9 @@ field on plan `Node`, pipeline `Instruction`, and execution `Partition`.
 
 - old serialized plans read by new CNs retain the established sort behavior;
 - new sort plans read by old CNs are unchanged;
-- an old CN that ignores a new hash field executes the slower sort path, not a
-  semantically different path.
+- compile gates HASH on the cluster protocol version. During a rolling upgrade,
+  it restores both the prerequisite local sorts and coordinator SORT algorithm;
+  HASH is never sent to a CN that can ignore the new field.
 
 The field is copied by plan deep-copy, operator duplication, and remote pipeline
 serialization. Text and JSON EXPLAIN identify `algorithm: hash` only when HASH is
@@ -119,14 +120,16 @@ The planner compares deterministic relative work:
 
 ```text
 sort_work = N * log2(max(N, 2)) * K
-hash_work = N * K + N + G
+hash_work = N * K + N + 16*G
 hash_aux  = 16*N + G*(W + hash-entry-overhead)
 ```
 
-`16*N` accounts for the group-id and stable-selection arrays. Retained input
-batches are common to both blocking paths and are not used to make HASH look
-artificially worse. Overflow, missing statistics, invalid NDV, or an unbounded
-width estimate rejects HASH.
+`16*G` represents the measured per-partition downstream call/wrapper cost;
+without it, near-unique keys look artificially cheap despite emitting `N`
+separate batches. `16*N` accounts for the group-id and stable-selection arrays.
+Retained input batches are common to both blocking paths and are not used to make
+HASH look artificially worse. Overflow, missing statistics, invalid NDV, or an
+unbounded width estimate rejects HASH.
 
 `B` uses the configured aggregate spill threshold when one is present; otherwise
 it uses MatrixOne's existing per-worker default memory threshold. HASH is selected
@@ -175,19 +178,21 @@ receive -> finalize -> emit -> end
 Empty input transitions directly to `end`. A batch or expression error is
 returned immediately. `Reset` clears data and hash contents but retains reusable
 executors; `Free` releases executors and all owned memory. Tests exercise reuse
-after success and failure, cancellation during receive/finalize, empty batches,
-and allocation failure.
+after success, cancellation during receive/finalize, empty batches, and exact
+fallback.
 
 ### 7.2 Resource bound and fallback
 
-Hash allocations are charged through the process mpool and reported through the
-operator analyzer. The planner's estimate is admission control, not a hard
-runtime proof: NDV and variable-width statistics can be wrong. During receive,
-the operator checks actual hash size plus row-index capacity against its
-`SpillMem` threshold. If the threshold is crossed before any output, it destroys
-hash-only state and finishes through the established sort partition algorithm
-using the already retained input and evaluated key vectors. This is an exact,
-one-way fallback; it never mixes hash and sort output.
+Bulk hash allocations, including group ids, prefix offsets, and stable-selection
+indexes, are charged through the process mpool; retained batch growth is also
+reported through the operator analyzer. The planner's estimate is admission
+control, not a hard runtime proof: NDV and variable-width statistics can be
+wrong. During receive, the operator checks actual hash size plus current and
+required row-index capacity against its `SpillMem` threshold. If the threshold
+is crossed before any output, it destroys and immediately frees hash-only state,
+then finishes through an exact stable sort of the retained input. Direct-column
+partition keys are re-evaluated over that retained batch. This is a one-way
+fallback; it never mixes hash and sort output.
 
 A zero configured threshold resolves through the same default-threshold helper
 used by hash aggregation. If fallback cannot allocate its sort state, the
@@ -265,6 +270,19 @@ Report wall time, allocations, bytes, and crossover. Merge requires a material
 win for the activating large-input cases and no material regression for small,
 ordered, or unsupported controls chosen as SORT.
 
+Initial single-scope operator calibration on Apple M4 (`-benchtime=3x`, 65,536
+INT32-key rows) produced:
+
+| NDV | Sort | Hash | Hash effect |
+| ---: | ---: | ---: | ---: |
+| 64 | 9.39 ms | 1.15 ms | 8.2x faster |
+| 1,024 | 10.61 ms | 1.29 ms | 8.2x faster |
+| 16,384 | 13.59 ms | 5.36 ms | 2.5x faster |
+| 65,536 | 17.38 ms | 16.96 ms | only 2.5% faster; rejected by cost model |
+
+The near-unique result motivated the explicit per-group work term rather than an
+`N log N` versus `N` comparison alone.
+
 ## 11. Rollout and observability
 
 The plan enum makes rollout reversible: forcing the optimizer eligibility
@@ -282,9 +300,8 @@ the first revision.
   fallback and explicit Reset/Free tests.
 - Distributed topology: PASS for the coordinator implementation; all streams
   merge before one partition owner.
-- Compatibility: PASS; zero-value SORT is safe across persisted and mixed-version
-  protobuf readers.
-- Cost/resource gate: PASS subject to benchmark calibration and actual-memory
-  fallback tests before implementation is considered complete.
+- Compatibility: PASS; zero-value SORT plus the protocol-version compile gate is
+  safe across persisted and mixed-version protobuf readers.
+- Cost/resource gate: PASS with benchmark calibration, mpool-owned index buffers,
+  and actual-memory fallback tests.
 - Open blockers: none.
-
