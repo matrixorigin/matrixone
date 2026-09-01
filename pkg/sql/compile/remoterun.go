@@ -1874,12 +1874,12 @@ func validateRemoteMongoUserQueryPipelineProtocol(
 	}
 	for _, instruction := range p.InstructionList {
 		scan := instruction.GetMongodbScan()
-		if !mongoScanUsesV41Payload(scan) {
+		if !mongoScanUsesV42Payload(scan) {
 			continue
 		}
 		if proc == nil || !supportsRemoteMongoUserQuery(proc.GetService()) {
 			return moerr.NewNotSupportedNoCtx(
-				"MongoDB explicit-query remote execution requires MORPC protocol version 41",
+				"MongoDB explicit-query remote execution requires MORPC protocol version 42",
 			)
 		}
 	}
