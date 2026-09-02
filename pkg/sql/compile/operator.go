@@ -2193,7 +2193,12 @@ func constructLoopJoin(node *plan.Node, leftTypes, rightTypes []types.Type, proc
 	return arg
 }
 
-func constructJoinBuildOperator(c *Compile, op vm.Operator, mcpu int32) vm.Operator {
+func constructJoinBuildOperator(
+	c *Compile,
+	op vm.Operator,
+	mcpu int32,
+	runtimeFilterBuildList []*plan.RuntimeFilterSpec,
+) vm.Operator {
 	switch op.OpType() {
 	case vm.IndexJoin:
 		indexJoin := op.(*indexjoin.IndexJoin)
@@ -2206,6 +2211,9 @@ func constructJoinBuildOperator(c *Compile, op vm.Operator, mcpu int32) vm.Opera
 		return ret
 	default:
 		res := constructBroadcastHashBuild(op, c.proc, mcpu)
+		if res.RuntimeFilterSpec == nil && len(runtimeFilterBuildList) > 0 {
+			res.RuntimeFilterSpec = runtimeFilterBuildList[0]
+		}
 		res.SetIdx(op.GetOperatorBase().GetIdx())
 		res.SetIsFirst(true)
 		return res
