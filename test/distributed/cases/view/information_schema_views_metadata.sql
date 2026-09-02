@@ -46,6 +46,16 @@ select table_name, view_definition, check_option
 from information_schema.views
 where table_schema = 'information_schema_views_metadata' and table_name = 'check_option_v';
 
+-- The public definition must match the creation-time frozen SELECT list, not
+-- the later source-table shape. Replaying this metadata must recreate the
+-- same two-column view after the source table gains a column.
+create view stable_star_v as select * from t;
+alter table t add column c int;
+select table_name, view_definition
+from information_schema.views
+where table_schema = 'information_schema_views_metadata' and table_name = 'stable_star_v';
+select * from stable_star_v order by a, b;
+
 drop database information_schema_views_metadata;
 
 -- The stored VIEWS definition must remain executable when a system database is cloned.

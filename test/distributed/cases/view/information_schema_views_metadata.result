@@ -68,6 +68,18 @@ from information_schema.views
 where table_schema = 'information_schema_views_metadata' and table_name = 'check_option_v';
 ➤ table_name[12,5000,0]  ¦  view_definition[-1,16383,0]  ¦  check_option[12,9,0]  𝄀
 check_option_v  ¦  select `t`.`a` from `t`  ¦  CASCADED
+create view stable_star_v as select * from t;
+alter table t add column c int;
+select table_name, view_definition
+from information_schema.views
+where table_schema = 'information_schema_views_metadata' and table_name = 'stable_star_v';
+➤ table_name[12,5000,0]  ¦  view_definition[-1,16383,0]  𝄀
+stable_star_v  ¦  select `t`.`a`, `t`.`b` from `t`  𝄀
+select * from stable_star_v order by a, b;
+➤ a[4,32,0]  ¦  b[4,32,0]  𝄀
+1  ¦  10  𝄀
+1  ¦  20  𝄀
+2  ¦  30  𝄀
 drop database information_schema_views_metadata;
 drop database if exists information_schema_views_clone;
 create database information_schema_views_clone clone information_schema;
