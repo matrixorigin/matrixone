@@ -2858,6 +2858,8 @@ func createPrepareStmtInSession(
 	var comp *compile.Compile
 	prepareControl := preparePlan.GetDcl().GetPrepare()
 	runtimeResultParams := plan2.PreparedPlanRuntimeResultParams(prepareControl.Plan)
+	numericPrefixConsumer := preparedPlanHasNumericPrefixConsumer(
+		prepareControl.Plan, len(prepareControl.ParamTypes))
 	_, isQueryPlan := prepareControl.Plan.Plan.(*plan.Plan_Query)
 	if !executionSes.IsBackgroundSession() &&
 		isQueryPlan &&
@@ -2880,22 +2882,24 @@ func createPrepareStmtInSession(
 	}
 
 	prepareStmt := &PrepareStmt{
-		Name:               preparePlan.GetDcl().GetPrepare().GetName(),
-		Sql:                originSQL,
-		compile:            comp,
-		PreparePlan:        preparePlan,
-		PrepareStmt:        saveStmt,
-		NativeMode:         owner.sqlModeHasMatrixOneNative(),
-		OnlyFullGroupBy:    owner.sqlModeHasOnlyFullGroupBy(),
-		onlyFullGroupBySet: true,
-		remapDb:            maps.Clone(execCtx.remapDb),
-		defaultDatabase:    executionSes.GetTxnCompileCtx().GetDatabase(),
-		tempTableVersion:   owner.GetTempTableVersion(),
-		ddlVersion:         owner.getDDLVersion(),
-		cloneSQL:           cloneSQL,
-		protocolVersion:    protocolVersion,
-		numericPrefixConsumer: preparedPlanHasNumericPrefixConsumer(
-			prepareControl.Plan, len(prepareControl.ParamTypes)),
+		Name:                            preparePlan.GetDcl().GetPrepare().GetName(),
+		Sql:                             originSQL,
+		compile:                         comp,
+		PreparePlan:                     preparePlan,
+		PrepareStmt:                     saveStmt,
+		NativeMode:                      owner.sqlModeHasMatrixOneNative(),
+		OnlyFullGroupBy:                 owner.sqlModeHasOnlyFullGroupBy(),
+		onlyFullGroupBySet:              true,
+		remapDb:                         maps.Clone(execCtx.remapDb),
+		defaultDatabase:                 executionSes.GetTxnCompileCtx().GetDatabase(),
+		tempTableVersion:                owner.GetTempTableVersion(),
+		ddlVersion:                      owner.getDDLVersion(),
+		cloneSQL:                        cloneSQL,
+		protocolVersion:                 protocolVersion,
+		numericPrefixConsumer:           numericPrefixConsumer,
+		numericPrefixFallbackPlan:       prepareControl.Plan,
+		numericPrefixFallbackParamCount: len(prepareControl.ParamTypes),
+		numericPrefixFallbackConsumer:   numericPrefixConsumer,
 		numericOverloadParamPositions: plan2.PreparedPlanNumericFallbackParamPositions(
 			prepareControl.Plan),
 		runtimeTextComparisonParamPositions: plan2.PreparedPlanRuntimeTextComparisonParamPositions(

@@ -1258,8 +1258,12 @@ func initExecuteStmtParamWithResolverInSession(
 		prepareStmt.directResultParamPositionsSet = true
 		prepareStmt.jsonComparisonParamPositions =
 			plan2.PreparedJSONComparisonParamPositions(executionPlan)
-		prepareStmt.numericPrefixConsumer = preparedPlanHasNumericPrefixConsumer(
+		numericPrefixConsumer := preparedPlanHasNumericPrefixConsumer(
 			newPreparePlan.Plan, len(newPreparePlan.ParamTypes))
+		prepareStmt.numericPrefixConsumer = numericPrefixConsumer
+		prepareStmt.numericPrefixFallbackPlan = newPreparePlan.Plan
+		prepareStmt.numericPrefixFallbackParamCount = len(newPreparePlan.ParamTypes)
+		prepareStmt.numericPrefixFallbackConsumer = numericPrefixConsumer
 		prepareStmt.numericOverloadParamPositions = plan2.PreparedPlanNumericFallbackParamPositions(
 			newPreparePlan.Plan)
 		prepareStmt.runtimeTextComparisonParamPositions =
@@ -1455,10 +1459,10 @@ func initExecuteStmtParamWithResolverInSession(
 		}
 		if hasNumericPrefixPacket && !runtimeNumericPrefixCandidate {
 			// Older/rebuilt plan shapes can hide the candidate behind generated
-			// index expressions. This fallback scans only DECIMAL/text/NULL packets;
-			// ordinary integer TPCC executions never enter it.
-			runtimeNumericPrefixCandidate = preparedPlanHasStaticExactNumericPeer(executionPlan) &&
-				preparedPlanAdmitsPotentialDecimal(executionPlan, paramCount)
+			// index expressions. Cache this defensive admission per plan generation;
+			// ordinary integer TPCC executions never enter this path.
+			runtimeNumericPrefixCandidate = prepareStmt.numericPrefixFallbackConsumerFor(
+				executionPlan, paramCount)
 		}
 		if hasConcreteType {
 			prepareStmt.paramMetadata = cwft.proc.SetPrepareParamsWithReusableTypedMeta(
@@ -1866,6 +1870,22 @@ func preparedPlanHasNumericPrefixConsumer(preparePlan *plan2.Plan, paramCount in
 	return preparePlan != nil && preparePlan.GetQuery() != nil && paramCount > 0 &&
 		preparedPlanHasStaticExactNumericPeer(preparePlan) &&
 		preparedPlanAdmitsPotentialDecimal(preparePlan, paramCount)
+}
+
+func (prepareStmt *PrepareStmt) numericPrefixFallbackConsumerFor(
+	preparePlan *plan2.Plan, paramCount int,
+) bool {
+	if prepareStmt == nil || preparePlan == nil || paramCount <= 0 {
+		return false
+	}
+	if prepareStmt.numericPrefixFallbackPlan != preparePlan ||
+		prepareStmt.numericPrefixFallbackParamCount != paramCount {
+		prepareStmt.numericPrefixFallbackPlan = preparePlan
+		prepareStmt.numericPrefixFallbackParamCount = paramCount
+		prepareStmt.numericPrefixFallbackConsumer = preparedPlanHasNumericPrefixConsumer(
+			preparePlan, paramCount)
+	}
+	return prepareStmt.numericPrefixFallbackConsumer
 }
 
 func preparedPlanAdmitsPotentialDecimal(preparePlan *plan2.Plan, paramCount int) bool {

@@ -1697,6 +1697,36 @@ func TestPreparedPlanHasNumericPrefixConsumerCachesOnlyStaticDecimalContexts(t *
 		"an approximate FLOAT peer must remain outside numeric-prefix specialization")
 }
 
+func TestPrepareStmtCachesNumericPrefixFallbackPerPlanGeneration(t *testing.T) {
+	ctx := context.Background()
+	makePlan := func(peerType types.T) *plan.Plan {
+		predicate, err := plan2.BindFuncExprImplByPlanExpr(ctx, "=", []*plan.Expr{
+			{Typ: plan.Type{Id: int32(peerType)}, Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: 0, ColPos: 0}}},
+			{Typ: plan.Type{Id: int32(types.T_text)}, Expr: &plan.Expr_P{P: &plan.ParamRef{Pos: 0}}},
+		})
+		require.NoError(t, err)
+		return &plan.Plan{Plan: &plan.Plan_Query{Query: &plan.Query{
+			StmtType: plan.Query_SELECT, Steps: []int32{0}, Nodes: []*plan.Node{{
+				NodeType: plan.Node_VALUE_SCAN, FilterList: []*plan.Expr{predicate},
+			}},
+		}}, IsPrepare: true}
+	}
+
+	prepareStmt := &PrepareStmt{}
+	integerPlan := makePlan(types.T_int64)
+	require.True(t, prepareStmt.numericPrefixFallbackConsumerFor(integerPlan, 1))
+	require.Same(t, integerPlan, prepareStmt.numericPrefixFallbackPlan)
+	require.Equal(t, 1, prepareStmt.numericPrefixFallbackParamCount)
+
+	// The same plan generation reuses the cached admission result.
+	require.True(t, prepareStmt.numericPrefixFallbackConsumerFor(integerPlan, 1))
+
+	floatPlan := makePlan(types.T_float64)
+	require.False(t, prepareStmt.numericPrefixFallbackConsumerFor(floatPlan, 1))
+	require.Same(t, floatPlan, prepareStmt.numericPrefixFallbackPlan)
+	require.Equal(t, 1, prepareStmt.numericPrefixFallbackParamCount)
+}
+
 func TestBinaryDecimalIntegerConsumerSpecializesAndReusesSemanticCategory(t *testing.T) {
 	ses, prepareStmt, cw, execCtx := newPreparedExecuteEnvForSQL(t, 206, "select ?")
 	defer func() {

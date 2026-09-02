@@ -344,13 +344,20 @@ type PrepareStmt struct {
 	// ordinary COM_STMT executions never scan or copy the cached plan. Direct
 	// result positions identify parameters whose binary runtime type is also the
 	// visible result-column type.
-	numericPrefixConsumer         bool
-	directResultParamPositions    []int32
-	directResultParamPositionsSet bool
-	hasPaginationParams           bool
-	hasLagLeadParams              bool
-	paramKinds                    []vector.PrepareParamKind
-	paramMetadata                 []bool
+	numericPrefixConsumer bool
+	// numericPrefixFallbackConsumer caches the defensive numeric-prefix
+	// admission for a plan generation whose static metadata was incomplete.
+	// The fallback is keyed by the inner plan pointer and parameter count so a
+	// rebuilt or test-installed plan is evaluated once, not once per EXECUTE.
+	numericPrefixFallbackPlan       *plan2.Plan
+	numericPrefixFallbackParamCount int
+	numericPrefixFallbackConsumer   bool
+	directResultParamPositions      []int32
+	directResultParamPositionsSet   bool
+	hasPaginationParams             bool
+	hasLagLeadParams                bool
+	paramKinds                      []vector.PrepareParamKind
+	paramMetadata                   []bool
 	// jsonComparisonParamPositions is computed once per prepared-plan
 	// generation. Only these parameters need an exact SQL type in Process
 	// metadata; paramConcreteTypes is a reusable execution buffer.
@@ -849,6 +856,9 @@ func (prepareStmt *PrepareStmt) Close() {
 	prepareStmt.runtimeTextComparisonParamPositions = nil
 	prepareStmt.runtimeResultParams = nil
 	prepareStmt.runtimeResultParamPositions = nil
+	prepareStmt.numericPrefixFallbackPlan = nil
+	prepareStmt.numericPrefixFallbackParamCount = 0
+	prepareStmt.numericPrefixFallbackConsumer = false
 	prepareStmt.remapDb = nil
 }
 
