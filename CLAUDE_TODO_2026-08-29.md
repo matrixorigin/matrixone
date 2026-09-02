@@ -107,3 +107,8 @@
 2. CN 区分“frontier 已持久化但 generation 已失效”与普通发布失败：同步 revoke admission，同时向 frontend 返回可识别状态。
 3. frontend 对该状态仍强制向所有 DDL-capable barrier-ready CN 执行 SyncCommitV2，完成后才返回 generation 错误；普通发布失败仍禁止 fan-out。
 4. 增加 Enter/commit -> takeover -> stale publication -> durable frontier + peer apply 的确定性回归，运行 race/vet。
+
+## 2026-09-02：SCA errors.New 修复
+
+1. 将 generation-takeover sentinel 从标准库 `errors.New` 改为仓库要求的 `moerr`。
+2. 运行 static-check、frontend focused UT 和 diff check，直接推送。
