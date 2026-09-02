@@ -619,17 +619,12 @@ func (v *Vector) growOwned(
 			"vector growth does not have a mpool",
 		)
 	}
+	capacity, ok := mpool.GrowCapacity(int64(cap(old)), int64(size))
+	if !ok {
+		return nil, mpool.ErrAllocationAllocatorLimit
+	}
 	if cap(old) != 0 || v.allocationAccount == nil {
 		return mp.Grow(old, size, v.offHeap)
-	}
-
-	capacity, ok := mpool.GrowCapacity(0, int64(size))
-	if !ok {
-		return nil, moerr.NewInternalErrorNoCtxf(
-			"invalid mpool grow capacity, old %d, required %d",
-			cap(old),
-			size,
-		)
 	}
 	buf, err := v.allocOwned(mp, int(capacity), true, data)
 	if err != nil {
