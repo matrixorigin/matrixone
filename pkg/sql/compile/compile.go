@@ -6968,7 +6968,7 @@ func (c *Compile) supportsRemoteHashPartition() bool {
 		return false
 	}
 	protocolVersion, ok := version.(int64)
-	return ok && protocolVersion >= defines.MORPCVersion43
+	return ok && protocolVersion >= defines.MORPCVersion46
 }
 
 func supportsRemoteTextCollationAggregates(service string) bool {
