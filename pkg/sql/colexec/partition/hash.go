@@ -155,6 +155,15 @@ func (partition *Partition) callHash(proc *process.Process) (vm.CallResult, erro
 
 func (ctr *hashContainer) consume(proc *process.Process, analyzer process.Analyzer, input *batch.Batch) error {
 	var err error
+	// A sort fallback still owns the buffered input and then needs selection and
+	// materialization workspace.  Once the hash path has crossed its admission
+	// threshold, accepting another over-budget batch would turn that one-way
+	// fallback into an unbounded coordinator buffer.  Preserve the input already
+	// accepted for the exact fallback, but fail the query before retaining any
+	// additional batch that exceeds the same resource contract.
+	if ctr.fallbackToSort && ctr.fallbackWouldExceedBudget(input) {
+		return moerr.NewOOM(proc.Ctx)
+	}
 	ctr.retained, err = ctr.retained.AppendWithCopy(proc.Ctx, proc.Mp(), input)
 	if err != nil {
 		return err
@@ -219,6 +228,22 @@ func (ctr *hashContainer) consume(proc *process.Process, analyzer process.Analyz
 		ctr.accountMemory(analyzer)
 	}
 	return nil
+}
+
+func (ctr *hashContainer) fallbackWouldExceedBudget(input *batch.Batch) bool {
+	retainedSize := int64(0)
+	retainedRows := int64(0)
+	if ctr.retained != nil {
+		retainedSize = int64(ctr.retained.Size())
+		retainedRows = int64(ctr.retained.RowCount())
+	}
+	inputSize := int64(input.Size())
+	inputRows := int64(input.RowCount())
+	if inputSize < 0 || retainedSize > math.MaxInt64-inputSize ||
+		inputRows < 0 || retainedRows > math.MaxInt64-inputRows {
+		return true
+	}
+	return colexec.ShouldSpill(retainedSize+inputSize, retainedRows+inputRows, ctr.spillThreshold)
 }
 
 func hashPartitionKeysHaveGrouping(keys []*vector.Vector) bool {

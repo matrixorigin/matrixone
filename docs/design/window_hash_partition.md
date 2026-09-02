@@ -204,7 +204,11 @@ required row-index capacity against its `SpillMem` threshold. If the threshold
 is crossed before any output, it destroys and immediately frees hash-only state,
 then finishes through an exact stable sort of the retained input. Direct-column
 partition keys are re-evaluated over that retained batch. This is a one-way
-fallback; it never mixes hash and sort output.
+fallback; it never mixes hash and sort output. The triggering input batch is the
+only permitted admission overshoot: after fallback starts, the operator rejects
+with the established OOM error before copying any later batch that would exceed
+the same byte or row threshold. Consequently stale estimates cannot turn a
+pre-output fallback into an unbounded coordinator buffer.
 
 A zero configured threshold resolves through the same default-threshold helper
 used by hash aggregation. If fallback cannot allocate its sort state, the
@@ -264,7 +268,9 @@ one owner before it can become a third optimizer candidate.
 - empty input and empty intermediate batches;
 - cancellation and injected expression/allocation failures;
 - Reset/reuse and Free leave the test mpool at zero;
-- actual-memory threshold triggers exact sort fallback before output.
+- actual-memory threshold triggers exact sort fallback before output, and a
+  multi-batch wide-row regression proves that post-trigger input is rejected
+  rather than retained without bound.
 
 ### Compile and distributed shape
 
@@ -336,9 +342,10 @@ first revision.
   merge before one partition owner.
 - Proposed compatibility: complete; zero-value SORT plus the protocol-version compile gate is
   safe across persisted and mixed-version protobuf readers.
-- Proposed cost/resource implementation: draft; benchmark calibration and mpool-owned
-  index buffers are implemented, while real-Window acceptance measurements and a bounded
-  fallback resource contract remain required before automatic selection can be enabled.
+- Proposed cost/resource implementation: draft; benchmark calibration, mpool-owned
+  index buffers, and a bounded post-trigger fallback contract are implemented,
+  while real-Window acceptance measurements remain required before automatic
+  selection can be enabled.
 - Independent review decision: pending. This document is versioned with the
   implementation PR above; an independent reviewer must record approval of its
   exact revision, and the acceptance evidence above must be recorded, before

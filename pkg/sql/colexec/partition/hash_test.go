@@ -22,6 +22,7 @@ import (
 	"testing"
 	"unsafe"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -121,6 +122,28 @@ func TestHashPartitionMemoryFallbackIncludesRetainedBatch(t *testing.T) {
 
 	arg.Free(proc, false, nil)
 	child.Free(proc, false, nil)
+	proc.Free()
+	require.Zero(t, proc.Mp().CurrNB())
+}
+
+func TestHashPartitionFallbackRejectsAdditionalOverBudgetInput(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	inputs := make([]*batch.Batch, 4)
+	for i := range inputs {
+		inputs[i] = makeWideHashPartitionBatch(t, proc, i*8)
+	}
+	child := colexec.NewMockOperator().WithBatchs(inputs)
+	arg := newHashPartitionArgument(128 << 10)
+	arg.AppendChild(child)
+
+	require.NoError(t, arg.Prepare(proc))
+	_, err := arg.Call(proc)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrOOM), err)
+	require.True(t, arg.hash.fallbackToSort)
+	require.Equal(t, 8, arg.hash.retained.RowCount(), "only the triggering batch may be retained")
+
+	arg.Free(proc, true, err)
+	child.Free(proc, true, err)
 	proc.Free()
 	require.Zero(t, proc.Mp().CurrNB())
 }
@@ -591,6 +614,29 @@ func makeHashPartitionBatch(
 	bat.Vecs = []*vector.Vector{vector.NewVec(types.T_int32.ToType()), vector.NewVec(types.T_int64.ToType())}
 	require.NoError(t, vector.AppendFixedList(bat.Vecs[0], keys, nulls, proc.Mp()))
 	require.NoError(t, vector.AppendFixedList(bat.Vecs[1], payload, nil, proc.Mp()))
+	bat.SetRowCount(len(keys))
+	return bat
+}
+
+func makeWideHashPartitionBatch(t testing.TB, proc *process.Process, start int) *batch.Batch {
+	t.Helper()
+	bat := batch.New([]string{"k", "payload", "id"})
+	bat.Vecs = []*vector.Vector{
+		vector.NewVec(types.T_int32.ToType()),
+		vector.NewVec(types.T_varchar.ToType()),
+		vector.NewVec(types.T_int64.ToType()),
+	}
+	keys := make([]int32, 8)
+	ids := make([]int64, 8)
+	payloads := make([][]byte, 8)
+	for i := range keys {
+		keys[i] = int32(i % 3)
+		ids[i] = int64(start + i)
+		payloads[i] = []byte(strings.Repeat(string(rune('a'+i)), 32<<10))
+	}
+	require.NoError(t, vector.AppendFixedList(bat.Vecs[0], keys, nil, proc.Mp()))
+	require.NoError(t, vector.AppendBytesList(bat.Vecs[1], payloads, nil, proc.Mp()))
+	require.NoError(t, vector.AppendFixedList(bat.Vecs[2], ids, nil, proc.Mp()))
 	bat.SetRowCount(len(keys))
 	return bat
 }
