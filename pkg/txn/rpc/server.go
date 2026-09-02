@@ -157,9 +157,13 @@ type server struct {
 	}
 	activeHandlers struct {
 		sync.Mutex
-		active int
+		active   int
+		draining bool
+		zero     chan struct{}
 	}
 }
+
+const txnServerDrainTimeout = 4 * time.Minute
 
 // NewTxnServer create a txn server. One DNStore corresponds to one TxnServer
 func NewTxnServer(
@@ -174,6 +178,7 @@ func NewTxnServer(
 		stopper: stopper.NewStopper("txn rpc server",
 			stopper.WithLogger(rt.Logger().RawLogger())),
 	}
+	s.activeHandlers.zero = make(chan struct{})
 	s.pool.requests = sync.Pool{
 		New: func() any {
 			return &txn.TxnRequest{}
@@ -225,7 +230,12 @@ func (s *server) Start() error {
 func (s *server) Close() error {
 	s.closeOnce.Do(func() {
 		s.closeErr = s.Quiesce()
-		s.closeErr = errors.Join(s.closeErr, s.Drain(context.Background()))
+		drainCtx, cancel := context.WithTimeout(context.Background(), txnServerDrainTimeout)
+		s.closeErr = errors.Join(s.closeErr, s.Drain(drainCtx))
+		cancel()
+		if s.closeErr != nil {
+			return
+		}
 		s.stopper.Stop()
 
 		for {
@@ -262,23 +272,21 @@ func (s *server) Quiesce() error {
 // Drain waits for all requests accepted before Quiesce to reach a terminal
 // state. It deliberately leaves worker goroutines and storage available.
 func (s *server) Drain(ctx context.Context) error {
-	if err := s.Quiesce(); err != nil {
-		return err
+	quiesceErr := s.Quiesce()
+	s.activeHandlers.Lock()
+	if !s.activeHandlers.draining {
+		s.activeHandlers.draining = true
+		if s.activeHandlers.active == 0 {
+			close(s.activeHandlers.zero)
+		}
 	}
-	ticker := time.NewTicker(10 * time.Millisecond)
-	defer ticker.Stop()
-	for {
-		s.activeHandlers.Lock()
-		active := s.activeHandlers.active
-		s.activeHandlers.Unlock()
-		if active == 0 {
-			return nil
-		}
-		select {
-		case <-ctx.Done():
-			return errors.Join(ErrTxnDrainTimeout, ctx.Err())
-		case <-ticker.C:
-		}
+	zero := s.activeHandlers.zero
+	s.activeHandlers.Unlock()
+	select {
+	case <-zero:
+		return quiesceErr
+	case <-ctx.Done():
+		return errors.Join(quiesceErr, ErrTxnDrainTimeout, ctx.Err())
 	}
 }
 
@@ -338,8 +346,6 @@ func (s *server) onMessage(
 	if s.producerAdmitted != nil {
 		s.producerAdmitted()
 	}
-	s.addHandler()
-
 	t := time.Now()
 	req := executor{
 		t:       t,
@@ -378,6 +384,9 @@ func (s *server) beginProducer() bool {
 		return false
 	}
 	s.producers.Add(1)
+	s.activeHandlers.Lock()
+	s.activeHandlers.active++
+	s.activeHandlers.Unlock()
 	return true
 }
 
@@ -413,16 +422,17 @@ func (s *server) isStopping() bool {
 	return stopping
 }
 
-func (s *server) addHandler() {
-	s.activeHandlers.Lock()
-	s.activeHandlers.active++
-	s.activeHandlers.Unlock()
-}
-
 func (s *server) finishHandler() {
 	s.activeHandlers.Lock()
 	if s.activeHandlers.active > 0 {
 		s.activeHandlers.active--
+	}
+	if s.activeHandlers.draining && s.activeHandlers.active == 0 {
+		select {
+		case <-s.activeHandlers.zero:
+		default:
+			close(s.activeHandlers.zero)
+		}
 	}
 	s.activeHandlers.Unlock()
 }
