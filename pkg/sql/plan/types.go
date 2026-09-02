@@ -341,7 +341,7 @@ type QueryBuilder struct {
 	compCtx CompilerContext
 
 	ctxByNode               []*BindContext
-	headingProvenanceByNode map[int32][]headingProvenance
+	headingProvenanceByNode map[int32]headingProvenanceMap
 	windowValidationScans   []*plan.Node
 	nameByColRef            map[[2]int32]string
 	protectedScans          map[int32]int
@@ -545,7 +545,7 @@ type cteOccurrence struct {
 	rootTag           int32
 	ctx               *BindContext
 	headings          []string
-	headingProvenance []headingProvenance
+	headingProvenance headingProvenanceMap
 	types             []plan.Type
 	isCorrelated      bool
 }
@@ -596,6 +596,12 @@ type headingProvenance struct {
 	parts []headingPart
 }
 
+// headingProvenanceMap stores only output columns whose headings contain
+// case-sensitive SQL string literals. Most planner outputs have no such
+// metadata, so keeping this map nil avoids allocating one empty entry per
+// heading (and avoids copying a full-width slice through every boundary).
+type headingProvenanceMap map[int32]headingProvenance
+
 func cloneHeadingProvenance(provenance headingProvenance) headingProvenance {
 	if len(provenance.parts) == 0 {
 		return headingProvenance{}
@@ -603,15 +609,54 @@ func cloneHeadingProvenance(provenance headingProvenance) headingProvenance {
 	return headingProvenance{parts: append([]headingPart(nil), provenance.parts...)}
 }
 
-func cloneHeadingProvenances(provenances []headingProvenance) []headingProvenance {
+func cloneHeadingProvenances(provenances headingProvenanceMap) headingProvenanceMap {
 	if len(provenances) == 0 {
 		return nil
 	}
-	cloned := make([]headingProvenance, len(provenances))
+	cloned := make(headingProvenanceMap, len(provenances))
 	for i, provenance := range provenances {
+		if len(provenance.parts) == 0 {
+			continue
+		}
 		cloned[i] = cloneHeadingProvenance(provenance)
 	}
+	if len(cloned) == 0 {
+		return nil
+	}
 	return cloned
+}
+
+func mergeHeadingProvenances(
+	dst *headingProvenanceMap,
+	src headingProvenanceMap,
+	offset int32,
+) {
+	if len(src) == 0 {
+		return
+	}
+	if *dst == nil {
+		*dst = make(headingProvenanceMap, len(src))
+	}
+	for index, provenance := range src {
+		if len(provenance.parts) == 0 {
+			continue
+		}
+		(*dst)[offset+index] = cloneHeadingProvenance(provenance)
+	}
+}
+
+func truncateHeadingProvenances(provenances *headingProvenanceMap, length int32) {
+	if len(*provenances) == 0 {
+		return
+	}
+	for index := range *provenances {
+		if index >= length {
+			delete(*provenances, index)
+		}
+	}
+	if len(*provenances) == 0 {
+		*provenances = nil
+	}
 }
 
 type orderResolutionMetadata struct {
@@ -681,14 +726,15 @@ type BindContext struct {
 	//cte in binding or bound already
 	boundCtes map[string]*CTERef
 	headings  []string
-	// headingProvenance is aligned with headings. A non-empty value records the
-	// structural SQL literal segments in a heading produced by an expression.
-	// CTAS uses it to preserve case-sensitive format strings without confusing
-	// apostrophes that are part of identifier text with string delimiters.
-	headingProvenance []headingProvenance
-	// generatedHeadingProvenance is used by the ROLLUP/window rewrite when a
-	// rendered expression heading is turned into an explicit generated alias.
-	generatedHeadingProvenance map[string]headingProvenance
+	// headingProvenance records only output positions with structural SQL
+	// literal segments in an expression heading. CTAS uses it to preserve
+	// case-sensitive format strings without confusing apostrophes that are part
+	// of identifier text with string delimiters.
+	headingProvenance headingProvenanceMap
+	// generatedHeadingProvenance is keyed by output ordinal for the
+	// ROLLUP/window rewrite. An ordinal avoids case-folding collisions between
+	// headings such as DATE_FORMAT(..., '%M') and DATE_FORMAT(..., '%m').
+	generatedHeadingProvenance headingProvenanceMap
 
 	// captureViewStarExpansion is enabled only while binding a CREATE/ALTER
 	// VIEW definition. Ordinary SELECT planning must not clone its select list
@@ -1005,8 +1051,9 @@ type Binding struct {
 	// original case: only for SELECT * display, must be same length as cols (or empty)
 	originCols []string
 	// headingProvenance carries expression-heading syntax through a derived
-	// table/CTE so SELECT * can retain the original literal spelling.
-	headingProvenance []headingProvenance
+	// table/CTE so SELECT * can retain the original literal spelling. It is
+	// sparse and keyed by column ordinal.
+	headingProvenance headingProvenanceMap
 	colIsHidden       []bool
 	types             []*plan.Type
 	// mysqlSpecialOrderTypes is aligned with cols. A non-nil entry means that

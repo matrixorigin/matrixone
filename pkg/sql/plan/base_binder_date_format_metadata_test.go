@@ -185,6 +185,12 @@ func newDateFormatCompilerContext() *MockCompilerContext {
 				Default:    &planpb.Default{NullAbility: true},
 			},
 			{
+				Name:       "fmt_col",
+				OriginName: "fmt_col",
+				Typ:        makePlan2Type(&types.Type{Oid: types.T_varchar, Width: 12}),
+				Default:    &planpb.Default{NullAbility: true},
+			},
+			{
 				Name:       "D'X",
 				OriginName: "D'X",
 				Typ:        datetime,
@@ -228,7 +234,7 @@ func TestBuildCTASPreservesDateFormatHeadingThroughDerivedStars(t *testing.T) {
 
 func TestBuildCTASPreservesDateFormatHeadingThroughRollupWindowRewrite(t *testing.T) {
 	ctx := newDateFormatCompilerContext()
-	sql := "create table time02 as select date_format(col2, '%M'), row_number() over () from time01 group by col2 with rollup"
+	sql := "create table time02 as select date_format(col2, '%M'), date_format(col2, '%m'), row_number() over () from time01 group by col2 with rollup"
 	stmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL, sql, 1)
 	require.NoError(t, err)
 	defer stmt.Free()
@@ -241,12 +247,70 @@ func TestBuildCTASPreservesDateFormatHeadingThroughRollupWindowRewrite(t *testin
 			visible = append(visible, col)
 		}
 	}
-	require.Len(t, visible, 2)
+	require.Len(t, visible, 3)
 	require.Equal(t, "date_format(col2, '%M')", visible[0].Name)
+	require.Equal(t, "date_format(col2, '%m')", visible[1].Name)
+}
+
+func TestBuildCTASDynamicDateFormatLowercasesIdentifiers(t *testing.T) {
+	requireCTASColumnName(t, newDateFormatCompilerContext(),
+		"create table time02 as select date_format(`D'X`, fmt_col) from time01",
+		"date_format(d'x, fmt_col)")
 }
 
 func TestBuildCTASLowercasesApostropheInSourceIdentifier(t *testing.T) {
 	requireCTASColumnName(t, newDateFormatCompilerContext(),
 		"create table time02 as select date_format(`D'X`, '%M') from time01",
 		"date_format(d'x, '%M')")
+}
+
+func TestHeadingProvenanceIsLazyAndSparse(t *testing.T) {
+	ctx := NewBindContext(nil, nil)
+	require.Nil(t, ctx.headingProvenance)
+	require.Nil(t, ctx.generatedHeadingProvenance)
+	builder := NewQueryBuilder(planpb.Query_SELECT, NewMockCompilerContext(false), false, false)
+	require.Nil(t, builder.headingProvenanceByNode)
+
+	for i := 0; i < 1000; i++ {
+		ctx.appendHeading("ordinary", headingProvenance{})
+	}
+	require.Nil(t, ctx.headingProvenance)
+
+	ctx.appendHeading("date_format(col2, '%M')", headingProvenance{
+		parts: []headingPart{
+			{text: "date_format(col2, "},
+			{text: "'%M'", literal: true},
+			{text: ")"},
+		},
+	})
+	require.Len(t, ctx.headingProvenance, 1)
+	_, ok := ctx.headingProvenance[1000]
+	require.True(t, ok)
+}
+
+func BenchmarkHeadingProvenanceStorage(b *testing.B) {
+	b.Run("ordinary", func(b *testing.B) {
+		b.ReportAllocs()
+		for i := 0; i < b.N; i++ {
+			ctx := NewBindContext(nil, nil)
+			for j := 0; j < 1000; j++ {
+				ctx.appendHeading("ordinary", headingProvenance{})
+			}
+		}
+	})
+
+	b.Run("date_format", func(b *testing.B) {
+		provenance := headingProvenance{
+			parts: []headingPart{
+				{text: "date_format(col2, "},
+				{text: "'%M'", literal: true},
+				{text: ")"},
+			},
+		}
+		b.ReportAllocs()
+		for i := 0; i < b.N; i++ {
+			ctx := NewBindContext(nil, nil)
+			ctx.appendHeading("date_format(col2, '%M')", provenance)
+		}
+	})
 }

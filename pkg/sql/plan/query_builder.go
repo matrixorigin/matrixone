@@ -141,7 +141,6 @@ func NewQueryBuilder(queryType plan.Query_StatementType, ctx CompilerContext, is
 		},
 		compCtx:                  ctx,
 		ctxByNode:                []*BindContext{},
-		headingProvenanceByNode:  make(map[int32][]headingProvenance),
 		nameByColRef:             make(map[[2]int32]string),
 		protectedScans:           make(map[int32]int),
 		projectSpecialGuards:     make(map[int32]*specialIndexGuard),
@@ -4076,11 +4075,9 @@ func (builder *QueryBuilder) buildUnionWithResultLen(
 	}
 
 	// set ctx's headings  projects  results
+	headingOffset := int32(len(ctx.headings))
 	ctx.headings = append(ctx.headings, subCtxList[0].headings...)
-	ctx.headingProvenance = append(
-		ctx.headingProvenance,
-		cloneHeadingProvenances(subCtxList[0].headingProvenance)...,
-	)
+	mergeHeadingProvenances(&ctx.headingProvenance, subCtxList[0].headingProvenance, headingOffset)
 
 	getProjectList := func(
 		nodeType plan.Node_NodeType,
@@ -4524,8 +4521,7 @@ func (builder *QueryBuilder) buildUnionWithResultLen(
 	}
 
 	ctx.headings = ctx.headings[:resultLen]
-	ctx.headingProvenance = ctx.headingProvenance[:min(
-		resultLen, len(ctx.headingProvenance))]
+	truncateHeadingProvenances(&ctx.headingProvenance, int32(resultLen))
 
 	// set heading
 	if isRoot {
@@ -6788,8 +6784,15 @@ func rewriteRollupWindowSelectWithHeadingProvenance(
 		RankOption: astRankOption,
 	}
 	if ctx != nil {
-		for alias, provenance := range rewriteState.outputHeadingProvenance {
-			ctx.generatedHeadingProvenance[alias] = cloneHeadingProvenance(provenance)
+		// The rewritten projection is bound immediately below this call. Reset
+		// any metadata left by a previous bind of the same context so an ordinal
+		// cannot accidentally describe a later, unrelated select list.
+		ctx.generatedHeadingProvenance = nil
+		if len(rewriteState.outputHeadingProvenance) > 0 {
+			ctx.generatedHeadingProvenance = make(headingProvenanceMap, len(rewriteState.outputHeadingProvenance))
+			for ordinal, provenance := range rewriteState.outputHeadingProvenance {
+				ctx.generatedHeadingProvenance[ordinal] = cloneHeadingProvenance(provenance)
+			}
 		}
 	}
 	return rewritten, true
@@ -6811,23 +6814,22 @@ type rollupWindowRewriteState struct {
 	activeNameAliases       map[string]string
 	activeOrderBy           bool
 	usedAliases             map[string]struct{}
-	outputHeadingProvenance map[string]headingProvenance
+	outputHeadingProvenance headingProvenanceMap
 	nextAlias               int
 }
 
 func newRollupWindowRewriteState(selectExprs tree.SelectExprs) *rollupWindowRewriteState {
 	state := &rollupWindowRewriteState{
-		innerExprs:              make(tree.SelectExprs, 0, len(selectExprs)),
-		exprAliases:             make(map[tree.Expr]string),
-		outputAliases:           make(map[string]string),
-		orderAliases:            make(map[string][]tree.Expr),
-		sourceProbeAliases:      make(map[string]string),
-		sourceProbes:            make(map[string]*tree.GroupingSetOrderSourceProbe),
-		sourceNameAliases:       make(map[string]string),
-		branchSourceNames:       make(map[string]struct{}),
-		ambiguousSources:        make(map[string]struct{}),
-		usedAliases:             make(map[string]struct{}),
-		outputHeadingProvenance: make(map[string]headingProvenance),
+		innerExprs:         make(tree.SelectExprs, 0, len(selectExprs)),
+		exprAliases:        make(map[tree.Expr]string),
+		outputAliases:      make(map[string]string),
+		orderAliases:       make(map[string][]tree.Expr),
+		sourceProbeAliases: make(map[string]string),
+		sourceProbes:       make(map[string]*tree.GroupingSetOrderSourceProbe),
+		sourceNameAliases:  make(map[string]string),
+		branchSourceNames:  make(map[string]struct{}),
+		ambiguousSources:   make(map[string]struct{}),
+		usedAliases:        make(map[string]struct{}),
 	}
 	for _, selectExpr := range selectExprs {
 		if selectExpr.As != nil && !selectExpr.As.Empty() {
@@ -6999,7 +7001,10 @@ func buildRollupWindowSelectExprs(selectExprs tree.SelectExprs, state *rollupWin
 			}
 			outputAlias, provenance := rollupWindowOutputAliasWithProvenance(selectExpr)
 			if len(provenance.parts) > 0 {
-				state.outputHeadingProvenance[outputAlias.Compare()] = provenance
+				if state.outputHeadingProvenance == nil {
+					state.outputHeadingProvenance = make(headingProvenanceMap)
+				}
+				state.outputHeadingProvenance[int32(i)] = provenance
 			}
 			outerExprs = append(outerExprs, tree.SelectExpr{
 				Expr: rewrittenExpr,
@@ -7010,7 +7015,10 @@ func buildRollupWindowSelectExprs(selectExprs tree.SelectExprs, state *rollupWin
 
 		outputAlias, provenance := rollupWindowOutputAliasWithProvenance(selectExpr)
 		if len(provenance.parts) > 0 {
-			state.outputHeadingProvenance[outputAlias.Compare()] = provenance
+			if state.outputHeadingProvenance == nil {
+				state.outputHeadingProvenance = make(headingProvenanceMap)
+			}
+			state.outputHeadingProvenance[int32(i)] = provenance
 		}
 		outerExprs = append(outerExprs, tree.SelectExpr{
 			Expr: tree.NewUnresolvedColName(aliasesByIndex[i]),
@@ -10396,7 +10404,7 @@ func appendSelectListWithGroupingOrder(
 			}
 			for i, name := range names {
 				selectList = append(selectList, cols[i])
-				ctx.appendHeading(name, provenances[i])
+				ctx.appendHeading(name, provenances[int32(i)])
 			}
 
 		case *tree.SampleExpr:
@@ -10439,11 +10447,11 @@ func appendSelectListWithGroupingOrder(
 				}
 				selectList = append(selectList, cols...)
 				for i, name := range names {
-					ctx.appendHeading(name, provenances[i])
+					ctx.appendHeading(name, provenances[int32(i)])
 				}
 			} else {
 				if selectExpr.As != nil && !selectExpr.As.Empty() {
-					provenance := ctx.generatedHeadingProvenance[selectExpr.As.Compare()]
+					provenance := ctx.generatedHeadingProvenance[int32(exprIdx)]
 					ctx.appendHeading(selectExpr.As.Origin(), provenance)
 				} else {
 					ctx.appendHeading(expr.ColNameOrigin(), headingProvenance{})
@@ -10476,7 +10484,7 @@ func appendSelectListWithGroupingOrder(
 			})
 		default:
 			if selectExpr.As != nil && !selectExpr.As.Empty() {
-				provenance := ctx.generatedHeadingProvenance[selectExpr.As.Compare()]
+				provenance := ctx.generatedHeadingProvenance[int32(exprIdx)]
 				ctx.appendHeading(selectExpr.As.Origin(), provenance)
 			} else {
 				for {
@@ -10717,7 +10725,11 @@ func captureHeadingProvenance(expr tree.Expr, formatted string) headingProvenanc
 	cloned := cloneTreeExpr(expr)
 	rewritten, ok := cloned.Accept(capture)
 	if !ok || len(capture.markers) == 0 {
-		return headingProvenance{parts: []headingPart{{text: formatted, literal: true}}}
+		// A dynamic format expression has no SQL string literal to preserve.
+		// Returning no provenance keeps the established identifier normalization
+		// for the complete rendered heading instead of treating identifiers as
+		// literal text merely because the formatter used quoted strings.
+		return headingProvenance{}
 	}
 	withMarkers := tree.StringWithOpts(rewritten, dialect.MYSQL, tree.WithSingleQuoteString())
 	parts := make([]headingPart, 0, len(capture.markers)*2+1)
@@ -10725,7 +10737,7 @@ func captureHeadingProvenance(expr tree.Expr, formatted string) headingProvenanc
 	for i, marker := range capture.markers {
 		markerPos := strings.Index(withMarkers[searchFrom:], marker)
 		if markerPos < 0 {
-			return headingProvenance{parts: []headingPart{{text: formatted, literal: true}}}
+			return headingProvenance{}
 		}
 		markerPos += searchFrom
 		if markerPos > searchFrom {
@@ -10742,7 +10754,7 @@ func captureHeadingProvenance(expr tree.Expr, formatted string) headingProvenanc
 		reconstructed.WriteString(part.text)
 	}
 	if len(parts) == 0 || reconstructed.String() != formatted {
-		return headingProvenance{parts: []headingPart{{text: formatted, literal: true}}}
+		return headingProvenance{}
 	}
 	return headingProvenance{parts: parts}
 }
@@ -12149,7 +12161,7 @@ func (builder *QueryBuilder) addBinding(nodeID int32, alias tree.AliasClause, ct
 	var mysqlSpecialOrderTypes []*plan.Type
 	var mysqlSpecialCanonicalTypes []*plan.Type
 	var outputColumnProvenance []OutputColumnProvenance
-	var headingMetadata []headingProvenance
+	var headingMetadata headingProvenanceMap
 	var defaultVals []string
 	var binding *Binding
 	var bindingToReplace *Binding
@@ -12215,8 +12227,8 @@ func (builder *QueryBuilder) addBinding(nodeID int32, alias tree.AliasClause, ct
 		for i, col := range node.TableDef.Cols {
 			if i < len(alias.Cols) {
 				cols[i] = string(alias.Cols[i])
-				if i < len(headingMetadata) {
-					headingMetadata[i] = headingProvenance{}
+				if headingMetadata != nil {
+					delete(headingMetadata, int32(i))
 				}
 			} else {
 				cols[i] = col.Name
@@ -12284,16 +12296,18 @@ func (builder *QueryBuilder) addBinding(nodeID int32, alias tree.AliasClause, ct
 		colLength := len(headings)
 		cols = make([]string, colLength)
 		originCols := make([]string, colLength)
-		headingMetadata := make([]headingProvenance, colLength)
+		headingMetadata := cloneHeadingProvenances(subCtx.headingProvenance)
 		colIsHidden = make([]bool, colLength)
 		types = make([]*plan.Type, colLength)
 		defaultVals = make([]string, colLength)
 		for i, col := range headings {
 			if i < len(alias.Cols) {
 				cols[i] = string(alias.Cols[i])
+				if headingMetadata != nil {
+					delete(headingMetadata, int32(i))
+				}
 			} else {
 				cols[i] = col
-				headingMetadata[i] = subCtx.headingProvenanceFor(i)
 			}
 			originCols[i] = cols[i]
 			cols[i] = strings.ToLower(cols[i])

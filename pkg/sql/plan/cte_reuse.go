@@ -329,7 +329,7 @@ func (builder *QueryBuilder) appendSharedCTEScan(cteRef *CTERef, occurrence cteO
 	nodeID := builder.appendNode(node, occurrence.ctx)
 	if len(occurrence.headingProvenance) > 0 {
 		if builder.headingProvenanceByNode == nil {
-			builder.headingProvenanceByNode = make(map[int32][]headingProvenance)
+			builder.headingProvenanceByNode = make(map[int32]headingProvenanceMap)
 		}
 		builder.headingProvenanceByNode[nodeID] = cloneHeadingProvenances(occurrence.headingProvenance)
 	}
