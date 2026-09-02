@@ -382,7 +382,12 @@ func (builder *QueryBuilder) indexCoversSnapshot(scanNode *plan.Node, idx *plan.
 	if txn == nil {
 		return false
 	}
-	covered, err := indexplugin.CoversSnapshot(proc.Ctx, algo, coverage.Request{
+	// Run the coverage lookup under the live compile-time top context, NOT proc.Ctx:
+	// during planning proc.Ctx is already canceled, so the nested mo_iscp_log read
+	// failed with "context canceled" and coverage fell closed on every current read
+	// (part of #27926). GetTopContext is the context the compiler itself uses for
+	// catalog access and carries the account id.
+	covered, err := indexplugin.CoversSnapshot(proc.GetTopContext(), algo, coverage.Request{
 		CNUUID:   proc.GetService(),
 		Txn:      txn,
 		TableID:  scanNode.TableDef.TblId,
