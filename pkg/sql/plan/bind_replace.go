@@ -1107,7 +1107,7 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindReplace(
 		lastNodeID, err = builder.appendOnDupIrregularMaintSource(
 			bindCtx, lastNodeID, finalProjTag, replaceOldPkPos, replaceOldPkTyp,
 			-1, -1,
-			irregularIndexes, tableDef, objRef)
+			irregularIndexes, nil, -1, tableDef, objRef)
 		if err != nil {
 			return 0, err
 		}
