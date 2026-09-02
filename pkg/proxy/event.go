@@ -18,6 +18,7 @@ import (
 	"context"
 	"strings"
 
+	"github.com/matrixorigin/matrixone/pkg/frontend"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
@@ -106,6 +107,15 @@ func makeEvent(msg []byte, b *msgBuf) (IEvent, bool) {
 		stmts, err := parsers.Parse(context.Background(), dialect.MYSQL, sql, 0)
 		if err != nil {
 			return nil, false
+		}
+		// A multi-statement packet is forwarded as one request, so inspect every
+		// statement before deciding whether the generation may be cached. Any
+		// administrative statement can change the authenticated principal or its
+		// grants, even when a later statement fails.
+		for _, stmt := range stmts {
+			if frontend.IsAdministrativeStatement(stmt) {
+				return makeIdentityChangeEvent(), false
+			}
 		}
 		if len(stmts) != 1 {
 			return nil, false

@@ -17,6 +17,7 @@ package proxy
 import (
 	"encoding/json"
 	"net"
+	"strconv"
 	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/clusterservice"
@@ -45,12 +46,43 @@ type clientInfo struct {
 	// role is the role supplied in the login identity. An empty role means that
 	// the server resolves the user's implicit default role.
 	role string
+	// userInput is the complete handshake principal passed to CN authentication.
+	// It is kept separate from the cache identity because catalog resolution may
+	// change the effective role between cache generations.
+	userInput string
+	// database is the database requested by the current login. It is not part of
+	// cache identity because ResetSession clears it before reuse.
+	database string
 	// originIP that client used to communicate with server
 	originIP net.IP
 	// originPort is the origin port of client.
 	originPort uint16
 	// hash is the hash value of this client information.
 	hash LabelHash
+}
+
+func (c clientInfo) authUserInput() string {
+	if c.userInput != "" {
+		return c.userInput
+	}
+	user := c.username
+	if c.Tenant != "" {
+		user = string(c.Tenant) + ":" + user
+	}
+	if c.role != "" {
+		user += ":" + c.role
+	}
+	return user
+}
+
+// clientAddress returns the address format expected by CN host admission.
+// Keep the port from the original handshake; an IP-only value would make
+// net.SplitHostPort fail when valid-node checking is enabled.
+func (c clientInfo) clientAddress() string {
+	if c.originIP == nil {
+		return ""
+	}
+	return net.JoinHostPort(c.originIP.String(), strconv.Itoa(int(c.originPort)))
 }
 
 // reservedLabels are the labels not allowed in user labels.

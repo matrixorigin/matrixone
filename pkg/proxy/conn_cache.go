@@ -310,6 +310,9 @@ type connCache struct {
 	// counterSet counts cache identity compatibility outcomes. It is optional
 	// for standalone cache tests.
 	counterSet *counterSet
+	// refreshSessionAuthFunc is a test seam for the production catalog auth
+	// freshness check. A non-nil queryClient always uses the CN RPC path.
+	refreshSessionAuthFunc func(context.Context, ServerConn, clientInfo, []byte, []byte) ([]byte, error)
 }
 
 // connCacheOption is the option for connCache.
@@ -361,6 +364,16 @@ func withMOCluster(mc clusterservice.MOCluster) connCacheOption {
 func withQueryClient(qc client.QueryClient) connCacheOption {
 	return func(c *connCache) {
 		c.queryClient = qc
+	}
+}
+
+// withRefreshSessionAuthFunc exercises the authentication freshness boundary
+// in focused cache tests without requiring a full CN query service.
+func withRefreshSessionAuthFunc(
+	f func(context.Context, ServerConn, clientInfo, []byte, []byte) ([]byte, error),
+) connCacheOption {
+	return func(c *connCache) {
+		c.refreshSessionAuthFunc = f
 	}
 }
 
@@ -431,6 +444,55 @@ func (c *connCache) resetSession(sc ServerConn) ([]byte, error) {
 			"failed to clear session, conn ID: %d", sc.ConnID())
 	}
 	return resp.ResetSessionResponse.AuthString, nil
+}
+
+// refreshSessionAuth revalidates a cached backend against the current CN
+// catalog. ResetSession's password snapshot is intentionally insufficient:
+// password rotation, role grants and implicit default-role resolution can all
+// change while an entry is idle. A failed refresh makes this generation
+// unusable and lets the caller establish a fresh authenticated backend.
+func (c *connCache) refreshSessionAuth(
+	ctx context.Context,
+	sc ServerConn,
+	client clientInfo,
+	salt []byte,
+	authResp []byte,
+) ([]byte, error) {
+	if c.refreshSessionAuthFunc != nil {
+		return c.refreshSessionAuthFunc(ctx, sc, client, salt, authResp)
+	}
+	if c.queryClient == nil {
+		// Standalone cache users and legacy test doubles have no CN query service.
+		// The production handler always wires queryClient when cache reuse is on.
+		return nil, nil
+	}
+	addr := getQueryAddress(c.moCluster, sc.RawConn().RemoteAddr().String())
+	if addr == "" {
+		return nil, moerr.NewInternalErrorf(ctx,
+			"failed to get query service address for cached auth, conn ID: %d", sc.ConnID())
+	}
+	req := c.queryClient.NewRequest(query.CmdMethod_RefreshSessionAuth)
+	req.RefreshSessionAuthRequest = &query.RefreshSessionAuthRequest{
+		ConnID:        sc.ConnID(),
+		UserInput:     client.authUserInput(),
+		Database:      client.database,
+		AuthResponse:  append([]byte(nil), authResp...),
+		Salt:          append([]byte(nil), salt...),
+		ClientAddress: client.clientAddress(),
+	}
+	resp, err := c.queryClient.SendMessage(ctx, addr, req)
+	if err != nil {
+		return nil, moerr.AttachCause(ctx, err)
+	}
+	if resp != nil {
+		defer c.queryClient.Release(resp)
+	}
+	if resp == nil || resp.RefreshSessionAuthResponse == nil ||
+		!resp.RefreshSessionAuthResponse.Success {
+		return nil, moerr.NewInternalErrorf(ctx,
+			"cached session authentication failed, conn ID: %d", sc.ConnID())
+	}
+	return append([]byte(nil), resp.RefreshSessionAuthResponse.AuthString...), nil
 }
 
 // canPushLocked reports whether sc can be added to key. c.mu must be held.
@@ -623,6 +685,23 @@ func (c *connCache) PopContextWithIdentity(
 
 		// Check if the connection is expired.
 		if time.Since(sc.CreateTime()) < c.connTimeout {
+			freshlyAuthenticated := false
+			if c.queryClient != nil || c.refreshSessionAuthFunc != nil {
+				// A cached AuthString is only a local optimization. Reauthenticate
+				// through CN before touching the reusable generation so current
+				// password, role grants and implicit default-role resolution are
+				// observed from the catalog.
+				freshAuthString, err := c.refreshSessionAuth(
+					ctx, sc.ServerConn, client, salt, authResp)
+				if err != nil {
+					c.closeCachedConnection(sc)
+					continue
+				}
+				freshlyAuthenticated = true
+				if len(freshAuthString) > 0 && c.authConstructor != nil {
+					sc.Authenticator = c.authConstructor(freshAuthString)
+				}
+			}
 			ok, err := execStmtWithContext(ctx, sc, internalStmt{
 				cmdType: cmdQuery,
 				s:       fmt.Sprintf(setConnectionIDSQL, connID),
@@ -656,7 +735,7 @@ func (c *connCache) PopContextWithIdentity(
 			}
 
 			// Before use the connection, we have to check the authentication.
-			if sc.Authenticator != nil && !sc.Authenticate(salt, authResp) {
+			if !freshlyAuthenticated && sc.Authenticator != nil && !sc.Authenticate(salt, authResp) {
 				c.logger.Error("authenticate failed",
 					zap.String("hash key", string(key)),
 					zap.Uint32("conn ID", connID),

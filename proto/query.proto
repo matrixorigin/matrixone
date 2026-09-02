@@ -108,6 +108,8 @@ enum CmdMethod {
   IcebergCacheInvalidate = 38;
   // MongoDBClientRetire drains obsolete MongoDB driver clients after catalog DDL.
   MongoDBClientRetire = 39;
+  // RefreshSessionAuth revalidates a cached backend against the current catalog.
+  RefreshSessionAuth = 40;
 }
 
 // QueryRequest is the common query request. It contains the query
@@ -251,6 +253,8 @@ message Request {
   ISCPDrainConsumerRequest ISCPDrainConsumerRequest = 39;
   IcebergCacheInvalidateRequest IcebergCacheInvalidateRequest = 40 [ (gogoproto.nullable) = false ];
   MongoDBClientRetireRequest MongoDBClientRetireRequest = 41 [ (gogoproto.nullable) = false ];
+  // RefreshSessionAuthRequest reauthenticates a cached backend for a new login.
+  RefreshSessionAuthRequest RefreshSessionAuthRequest = 42;
 }
 
 // ShowProcessListResponse is the response of command ShowProcessList.
@@ -319,6 +323,8 @@ message Response {
   ISCPDrainConsumerResponse ISCPDrainConsumerResponse = 40;
   IcebergCacheInvalidateResponse IcebergCacheInvalidateResponse = 41 [ (gogoproto.nullable) = false ];
   MongoDBClientRetireResponse MongoDBClientRetireResponse = 42 [ (gogoproto.nullable) = false ];
+  // RefreshSessionAuthResponse contains the current authentication string.
+  RefreshSessionAuthResponse RefreshSessionAuthResponse = 43;
 }
 
 // AlterAccountRequest is the "alter account restricted" query request.
@@ -808,4 +814,22 @@ message MigrateSystemVariable {
   // separate from the session snapshot so a source SET GLOBAL cannot be
   // overwritten by an inherited session value during migration.
   plan.Expr RuntimeValue = 4;
+}
+
+// RefreshSessionAuthRequest revalidates the client credentials and resolved
+// authorization state against the current catalog before cache reuse.
+message RefreshSessionAuthRequest {
+  uint32 ConnID = 1;
+  string UserInput = 2;
+  string Database = 3;
+  bytes AuthResponse = 4;
+  bytes Salt = 5;
+  string ClientAddress = 6;
+}
+
+// RefreshSessionAuthResponse reports the current credential snapshot used by
+// the cache entry after successful reauthentication.
+message RefreshSessionAuthResponse {
+  bool Success = 1;
+  bytes AuthString = 2;
 }

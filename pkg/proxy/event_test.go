@@ -156,6 +156,18 @@ func TestMakeEvent(t *testing.T) {
 		require.IsType(t, &identityChangeEvent{}, e)
 		require.False(t, r)
 	})
+
+	t.Run("multi statement identity change", func(t *testing.T) {
+		for _, sql := range []string{
+			"set role analyst; select 1",
+			"select 1; set role analyst",
+			"set role analyst; select invalid",
+		} {
+			e, r = makeEvent(makeSimplePacket(sql), nil)
+			require.IsType(t, &identityChangeEvent{}, e, sql)
+			require.False(t, r, sql)
+		}
+	})
 }
 
 func runEventTest(t *testing.T,

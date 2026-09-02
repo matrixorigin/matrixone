@@ -48,6 +48,7 @@ var clientBaseConnID uint32 = 1000
 // parse parses the account information from whole username.
 // The whole username parameter is like: tenant1:user1:role1?key1:value1,key2:value2
 func (c *clientInfo) parse(full string) error {
+	c.userInput = full
 	var labelPart string
 	labelDelPos := strings.IndexByte(full, '?')
 	userPart := full[:]
@@ -1057,6 +1058,11 @@ func (c *clientConn) connectToBackendContext(
 	// migration (prevAdd != ""), we must build a fresh backend connection and
 	// migrate session state from the previous CN.
 	if c.connCache != nil && prevAdd == "" {
+		// Cache authentication is performed by CN against the current catalog;
+		// carry the exact handshake principal and requested database alongside the
+		// immutable cache identity.
+		c.clientInfo.userInput = c.mysqlProto.GetUserName()
+		c.clientInfo.database = c.mysqlProto.GetDatabaseName()
 		// Plugin routing decisions may depend on Username / OriginIP and other
 		// per-login context not captured by the connCache key. Never reuse a
 		// cached backend session in front of a plugin router.
