@@ -171,10 +171,19 @@ func TestSplitIrregularIndexesKeepsLogicalIndexGroupsTogether(t *testing.T) {
 	t.Run("final implicit update and generated columns are affected", func(t *testing.T) {
 		onUpdate := &planpb.IndexDef{IndexName: "ft_updated", Parts: []string{"updated_text"}}
 		generated := &planpb.IndexDef{IndexName: "ft_generated", Parts: []string{"search_text"}}
+		tableDef := &planpb.TableDef{
+			Cols: []*planpb.ColDef{
+				{Name: "updated_text", OnUpdate: &planpb.OnUpdate{}},
+				{Name: "search_text"},
+			},
+			Name2ColIndex: map[string]int32{"updated_text": 0, "search_text": 1},
+		}
 		affected, insertOnly, err := splitIrregularIndexesByUpdatedColumns(
-			nil,
+			tableDef,
 			[]*planpb.IndexDef{onUpdate, generated},
-			map[string]*planpb.Expr{"updated_text": {}, "search_text": {}},
+			// Generated columns are present in the final ODKU update map, while
+			// ON UPDATE columns are discovered from the table definition.
+			map[string]*planpb.Expr{"search_text": {}},
 		)
 		require.NoError(t, err)
 		require.Equal(t, []*planpb.IndexDef{onUpdate, generated}, affected)
