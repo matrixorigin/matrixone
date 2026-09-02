@@ -17,6 +17,7 @@ package group
 import (
 	"bytes"
 	"context"
+	"encoding/binary"
 	"fmt"
 	"io"
 	"math"
@@ -217,10 +218,12 @@ func TestDistinctContributionEnvelopeRejectsCorruption(t *testing.T) {
 	require.Error(t, controller.writeContribution(nil, spillfs, 11, 0, groups, 0, 3))
 	require.Error(t, controller.writeContribution(proc, spillfs, 11, 0, groups, 0, 0))
 	require.NoError(t, controller.writeContribution(proc, spillfs, 11, 0, groups, 0, 3))
-	require.NoError(t, controller.result.flushWriter())
-	_, err = controller.result.file.Seek(0, io.SeekStart)
+	resultBucket := distinctGroupBucket(11, 1)
+	result := controller.result[0][resultBucket]
+	require.NoError(t, result.flushWriter())
+	_, err = result.file.Seek(0, io.SeekStart)
 	require.NoError(t, err)
-	valid, err := io.ReadAll(controller.result.file)
+	valid, err := io.ReadAll(result.file)
 	require.NoError(t, err)
 	body := bytes.Clone(valid[16 : len(valid)-12])
 	countOffset := len(body) - 8
@@ -289,17 +292,16 @@ func TestDistinctContributionEnvelopeRejectsCorruption(t *testing.T) {
 	}
 
 	for failAt := 1; failAt <= 7; failAt++ {
-		controller.result.writer = &distinctFailNthWriter{failAt: failAt}
+		result.writer = &distinctFailNthWriter{failAt: failAt}
 		err = controller.writeContribution(proc, spillfs, 11, 0, groups, 0, 3)
 		require.ErrorIs(t, err, io.ErrClosedPipe)
 	}
-	controller.result.writer = nil
-	result := controller.result
-	controller.result = nil
+	result.writer = nil
+	controller.result[0][resultBucket] = nil
 	require.ErrorContains(t,
 		controller.writeContribution(proc, spillfs, 11, 0, groups, 0, 3),
 		"closed")
-	controller.result = result
+	controller.result[0][resultBucket] = result
 
 	controller.close()
 	g.Free(proc, false, nil)
@@ -636,10 +638,11 @@ func TestDistinctSpillInternalIOFailureBoundaries(t *testing.T) {
 
 	groups.SetRowCount(1)
 	require.NoError(t, controller.writeContribution(proc, spillfs, 11, 0, groups, 0, 3))
-	require.NoError(t, controller.result.flushWriter())
-	_, err = controller.result.file.Seek(0, io.SeekStart)
+	result := controller.result[0][distinctGroupBucket(11, 1)]
+	require.NoError(t, result.flushWriter())
+	_, err = result.file.Seek(0, io.SeekStart)
 	require.NoError(t, err)
-	validContribution, err := io.ReadAll(controller.result.file)
+	validContribution, err := io.ReadAll(result.file)
 	require.NoError(t, err)
 	contributionBodyLength := len(validContribution) - 16 - 12
 	_, _, _, _, err = controller.readContribution(
@@ -893,23 +896,39 @@ func TestDistinctSpillTerminalStateBoundaries(t *testing.T) {
 	g.ctr.distinctFinalized = false
 	applyController, err := newDistinctSpillController(&g.ctr)
 	require.NoError(t, err)
-	applyController.result = nil
+	applyController.result[0][1] = nil
 	g.ctr.distinctSpill = applyController
 	bucket := &spillBucket{pathLen: 1, path: [spillMaxPass]uint8{1}}
 	require.NoError(t, g.ctr.applyDistinctContributions(proc, bucket))
 	require.NoError(t, g.ctr.applyDistinctContributions(proc, bucket))
+	deepEmpty := &spillBucket{
+		pathLen: spillMaxPass,
+		path:    [spillMaxPass]uint8{1, 2, 3},
+	}
+	require.NoError(t, g.ctr.applyDistinctContributions(proc, deepEmpty))
+	require.NoError(t, g.ctr.applyDistinctContributions(proc, deepEmpty))
 	require.ErrorContains(t,
 		g.ctr.applyDistinctContributions(proc, &spillBucket{}), "path")
 	applyController.close()
 	g.ctr.distinctSpill = nil
 
+	activeController, err := newDistinctSpillController(&g.ctr)
+	require.NoError(t, err)
+	activeFile := distinctTestFile(t, nil)
+	activeController.partialActive = &spillBucket{file: activeFile}
+	activeController.close()
+	_, err = activeFile.Stat()
+	require.Error(t, err, "closing a controller must retire its active partial leaf")
+
 	flushController, err := newDistinctSpillController(&g.ctr)
 	require.NoError(t, err)
 	flushResultFile := distinctTestFile(t, nil)
-	flushController.result = &spillBucket{
-		file:   flushResultFile,
-		writer: &distinctFlushErrorWriter{err: fmt.Errorf("flush contributions")},
-		cnt:    1,
+	flushController.result[0][1] = &spillBucket{
+		file:    flushResultFile,
+		writer:  &distinctFlushErrorWriter{err: fmt.Errorf("flush contributions")},
+		cnt:     1,
+		path:    [spillMaxPass]uint8{1},
+		pathLen: 1,
 	}
 	g.ctr.distinctSpill = flushController
 	require.Error(t, g.ctr.applyDistinctContributions(proc, bucket))
@@ -919,15 +938,19 @@ func TestDistinctSpillTerminalStateBoundaries(t *testing.T) {
 	require.NoError(t, err)
 	seekResultFile := distinctTestFile(t, nil)
 	require.NoError(t, seekResultFile.Close())
-	seekController.result = &spillBucket{file: seekResultFile, cnt: 1}
+	seekController.result[0][1] = &spillBucket{
+		file: seekResultFile, cnt: 1,
+		path: [spillMaxPass]uint8{1}, pathLen: 1,
+	}
 	g.ctr.distinctSpill = seekController
 	require.Error(t, g.ctr.applyDistinctContributions(proc, bucket))
 	seekController.close()
 
 	malformedController, err := newDistinctSpillController(&g.ctr)
 	require.NoError(t, err)
-	malformedController.result = &spillBucket{
+	malformedController.result[0][1] = &spillBucket{
 		file: distinctTestFile(t, []byte{1}), cnt: 1,
+		path: [spillMaxPass]uint8{1}, pathLen: 1,
 	}
 	g.ctr.distinctSpill = malformedController
 	require.Error(t, g.ctr.applyDistinctContributions(proc, bucket))
@@ -1503,7 +1526,7 @@ func TestDistinctKeySpillComposesWithRecursiveGroupSpill(t *testing.T) {
 	require.Zero(t, proc.Mp().CurrNB())
 }
 
-func TestDistinctContributionPathIsFilteredAndAppliedOnce(t *testing.T) {
+func TestDistinctContributionPathIsPartitionedAndAppliedOnce(t *testing.T) {
 	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
 	input := batch.NewWithSize(2)
 	input.Vecs[0] = testutil.MakeInt32Vector(
@@ -1525,17 +1548,20 @@ func TestDistinctContributionPathIsFilteredAndAppliedOnce(t *testing.T) {
 	require.True(t, drained)
 	require.Len(t, g.ctr.spillHashCodes, 2)
 	require.NoError(t, g.ctr.prepareGroupedDistinctContributions(proc))
+	contributionRecords := g.ctr.distinctSpill.contributionRecords
+	require.Positive(t, contributionRecords)
 
 	paths := make(map[[spillMaxPass]uint8]struct{})
 	for _, hash := range g.ctr.spillHashCodes {
 		var path [spillMaxPass]uint8
 		path[0] = uint8(distinctGroupBucket(hash, 1))
 		path[1] = uint8(distinctGroupBucket(hash, 2))
+		path[2] = uint8(distinctGroupBucket(hash, 3))
 		paths[path] = struct{}{}
 	}
 	var first *spillBucket
 	for path := range paths {
-		bucket := &spillBucket{path: path, pathLen: 2}
+		bucket := &spillBucket{path: path, pathLen: 3}
 		if first == nil {
 			first = bucket
 		}
@@ -1544,6 +1570,9 @@ func TestDistinctContributionPathIsFilteredAndAppliedOnce(t *testing.T) {
 	require.NotNil(t, first)
 	require.NoError(t, g.ctr.applyDistinctContributions(proc, first),
 		"reapplying one completed leaf path must be idempotent")
+	require.Equal(t, contributionRecords*3,
+		g.ctr.distinctSpill.contributionReads,
+		"a recursive consolidation reads each contribution once per level")
 
 	result, err := g.ctr.aggList[0].Flush()
 	require.NoError(t, err)
@@ -1680,6 +1709,113 @@ func TestIntermediateDistinctSpillRepartitionsOversizedLeaf(t *testing.T) {
 	require.Zero(t, proc.Mp().CurrNB())
 }
 
+func TestIntermediateDistinctSpillTerminalLeafContinuesWithinHardAccount(t *testing.T) {
+	for _, test := range []struct {
+		name      string
+		level     int
+		routeHash func(int) uint64
+	}{
+		{
+			name:  "maximum depth uniform input",
+			level: spillMaxPass,
+			routeHash: func(row int) uint64 {
+				return uint64(row) * 0x9e3779b97f4a7c15
+			},
+		},
+		{
+			name:  "forced no progress",
+			level: 0,
+			routeHash: func(int) uint64 {
+				return 0
+			},
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+			partial := newGroupOp(
+				proc,
+				[]*plan.Expr{colExpr(0, types.T_int32)},
+				[]aggexec.AggFuncExecExpression{countDistinctAgg(1)},
+			)
+			partial.NeedEval = false
+			const accountLimit = uint64(2 << 20)
+			allocation := installGroupTestAllocation(
+				t, partial, proc, accountLimit)
+			require.NoError(t, partial.Prepare(proc))
+			seed := batch.NewWithSize(2)
+			seed.Vecs[0] = testutil.MakeInt32Vector([]int32{0}, nil, proc.Mp())
+			seed.Vecs[1] = testutil.MakeInt32Vector([]int32{0}, nil, proc.Mp())
+			seed.SetRowCount(1)
+			_, err := partial.buildOneBatch(proc, seed)
+			require.NoError(t, err)
+			partial.ctr.resetForDistinctPartialLeaf()
+			seed.Clean(proc.Mp())
+
+			controller, err := newDistinctSpillController(&partial.ctr)
+			require.NoError(t, err)
+			controller.sortArenaBytesForUT = 4 << 10
+			partial.ctr.distinctSpill = controller
+			partition := controller.root[0]
+			partition.lv = test.level
+			spillfs, err := proc.GetSpillFileService()
+			require.NoError(t, err)
+			require.NoError(t,
+				partial.ctr.openSpillBucket(proc, spillfs, partition))
+			groups := batch.NewWithSize(1)
+			groups.Vecs[0] = testutil.MakeInt32Vector(
+				[]int32{0}, nil, proc.Mp())
+			groups.SetRowCount(1)
+			groupValues := vector.MustFixedColNoTypeCheck[int32](groups.Vecs[0])
+			const records = 20_000
+			var payload [8]byte
+			for row := 0; row < records; row++ {
+				groupValues[0] = int32(row % 32)
+				binary.BigEndian.PutUint64(payload[:], uint64(row))
+				_, err := controller.writeRecord(
+					partition.writer,
+					test.routeHash(row),
+					uint64(groupValues[0])+1,
+					0,
+					groups,
+					0,
+					payload[:],
+				)
+				require.NoError(t, err)
+				partition.cnt++
+			}
+
+			total := int64(0)
+			leaves := 0
+			for {
+				loaded, err := partial.ctr.loadNextDistinctPartialLeaf(proc)
+				require.NoError(t, err)
+				if !loaded {
+					break
+				}
+				result, err := partial.ctr.aggList[0].Flush()
+				require.NoError(t, err)
+				for _, count := range vector.MustFixedColNoTypeCheck[int64](result[0]) {
+					total += count
+				}
+				result[0].Free(partial.ctr.mp)
+				leaves++
+			}
+			require.Equal(t, int64(records), total)
+			require.Greater(t, leaves, 1)
+			require.Positive(t, controller.partialContinuations)
+			require.LessOrEqual(t, allocation.account.Snapshot().Peak, accountLimit)
+			require.Nil(t, partial.ctr.distinctSpill)
+
+			partial.Free(proc, false, nil)
+			require.Zero(t, allocation.account.Snapshot().Used)
+			finalizeGroupTestAllocation(t, partial, allocation)
+			groups.Clean(proc.Mp())
+			proc.Free()
+			require.Zero(t, proc.Mp().CurrNB())
+		})
+	}
+}
+
 func TestH0DistinctSpillPreservesMultiArgumentNullSemantics(t *testing.T) {
 	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
 	input := batch.NewWithSize(2)
@@ -1800,4 +1936,104 @@ func TestH0DistinctSpillRespectsHardAccountBelowFullSetSize(t *testing.T) {
 	child.Free(proc, false, nil)
 	proc.Free()
 	require.Zero(t, proc.Mp().CurrNB())
+}
+
+func BenchmarkExactCountDistinctSpill(b *testing.B) {
+	const rows = 4096
+	for _, test := range []struct {
+		name              string
+		groups            int
+		value             func(int) int32
+		spillMem          int64
+		distinctDrainKeys uint64
+		wantSpill         bool
+	}{
+		{
+			name:   "low-ndv-no-spill",
+			groups: 8,
+			value: func(row int) int32 {
+				return int32(row % 16)
+			},
+			spillMem: 64 << 20,
+		},
+		{
+			name:              "combined-distinct-and-group-spill",
+			groups:            128,
+			value:             func(row int) int32 { return int32(row) },
+			spillMem:          16,
+			distinctDrainKeys: 64,
+			wantSpill:         true,
+		},
+	} {
+		b.Run(test.name, func(b *testing.B) {
+			proc := testutil.NewProcessWithMPool(b, "", mpool.MustNewZero())
+			defer proc.Free()
+			keys := make([]int32, rows)
+			values := make([]int32, rows)
+			for row := range rows {
+				keys[row] = int32(row % test.groups)
+				values[row] = test.value(row)
+			}
+			b.ReportAllocs()
+			b.SetBytes(rows * 8)
+			for b.Loop() {
+				b.StopTimer()
+				input := batch.NewWithSize(2)
+				input.Vecs[0] = testutil.MakeInt32Vector(keys, nil, proc.Mp())
+				input.Vecs[1] = testutil.MakeInt32Vector(values, nil, proc.Mp())
+				input.SetRowCount(rows)
+				g := newGroupOp(
+					proc,
+					[]*plan.Expr{colExpr(0, types.T_int32)},
+					[]aggexec.AggFuncExecExpression{countDistinctAgg(1)},
+				)
+				g.SpillMem = test.spillMem
+				g.AppendChild(colexec.NewMockOperator().WithBatchs(
+					[]*batch.Batch{input}))
+				allocation := installGroupTestAllocation(b, g, proc, 64<<20)
+				b.StartTimer()
+
+				if err := g.Prepare(proc); err != nil {
+					b.Fatal(err)
+				}
+				g.ctr.distinctDrainKeysForUT = test.distinctDrainKeys
+				outputRows := 0
+				for {
+					result, err := vm.Exec(g, proc)
+					if err != nil {
+						b.Fatal(err)
+					}
+					if result.Batch == nil || result.Status == vm.ExecStop {
+						break
+					}
+					outputRows += result.Batch.RowCount()
+				}
+				if outputRows != test.groups {
+					b.Fatalf("unexpected group count: got %d, want %d",
+						outputRows, test.groups)
+				}
+				stats := g.OpAnalyzer.GetOpStats().ExtraStats
+				if test.wantSpill {
+					if stats["GroupDistinctSpillActivations"] == 0 ||
+						stats["GroupSpillMaxLevel"] == 0 {
+						b.Fatal("combined spill benchmark did not activate both paths")
+					}
+				} else if stats["GroupDistinctSpillActivations"] != 0 {
+					b.Fatal("no-spill benchmark activated distinct spill")
+				}
+
+				b.StopTimer()
+				g.Free(proc, false, nil)
+				if used := allocation.account.Snapshot().Used; used != 0 {
+					b.Fatalf("group allocation account leaked %d bytes", used)
+				}
+				finalizeGroupTestAllocation(b, g, allocation)
+				input.Clean(proc.Mp())
+				if allocated := proc.Mp().CurrNB(); allocated != 0 {
+					b.Fatalf("group leaked %d bytes", allocated)
+				}
+				b.StartTimer()
+			}
+		})
+	}
 }

@@ -327,6 +327,16 @@ chunks, possibly repeating a group key." MergeGroup already treats equal group
 rows as merge inputs. A partial batch's `ExtraBuf` is bounded by the same work
 budget as the leaf; it never contains the complete hot-group set.
 
+Radix depth is an I/O-routing bound, not permission to admit a complete
+terminal leaf. If a no-progress or maximum-depth leaf exhausts its resident
+work account, Group records the failing envelope's exact byte boundary and
+publishes the already-admitted prefix. Group-key publication is preflighted,
+and exact-argument insertion is mutation-free on a capacity rejection; a newly
+published group row is therefore only a permitted neutral carrier row. After
+normal output ownership returns, Group resumes the same file at the saved
+boundary. A record is never skipped or counted twice, and the active file has
+exactly one owner across calls.
+
 ### 8.3 Final Group or MergeGroup
 
 At finalization:
@@ -374,6 +384,13 @@ Existing recursive group spill then handles a result bucket containing too many
 compact groups. A single hot group has only fixed-width contribution state in
 this phase, so it cannot reproduce the original no-progress condition.
 
+The result spool follows the same group-hash path as generic spill. Initial
+writes are split across the 32 level-one group buckets. If generic reload
+recurses, only that contribution parent is repartitioned into its next-level
+children, the parent is destroyed after durable child publication, and the
+terminal child is consumed and destroyed once. Thus a contribution is read at
+most once per fixed spill level, rather than once for every terminal leaf.
+
 ## 9. Spool ownership and formats
 
 ### 9.1 Owners
@@ -385,7 +402,8 @@ The controller owns:
 - at most one child fanout being written;
 - a depth-first stack of unopened sibling descriptors;
 - external-sort run files and the current merge pass;
-- the group-result spool;
+- the bounded group-result radix parents and current child fanout;
+- at most one resumable intermediate-leaf file and byte cursor;
 - reusable accounted encode/decode/read/write buffers; and
 - every FD and disk reservation token associated with those files.
 
@@ -475,11 +493,13 @@ cursors, one read buffer, at most `M` merge heads, and one group-result record.
 Their capacities are recorded in tests and operator statistics. Replacement
 growth releases discardable scratch before acquiring a larger buffer.
 
-The contribution phase uses one append-only log, filtered by the bounded Group
-spill path during reload. Including the existing 32 Group buckets, exact-key
-fanout, contribution log, and one pairwise merge, the maximum overlapping
-descriptor reservation is 44. Every descriptor is admitted by the execution FD
-budget; the controller never opens an unreserved descriptor.
+The contribution phase uses a fixed-depth 32-way radix spool aligned with the
+Group spill path. Files are opened lazily; splitting one parent creates at most
+one bounded child fanout, and consumed parents/terminal leaves close
+immediately. The exact-key fanout, contribution fanout, generic Group fanout,
+and pairwise merge are all fixed constants. Every descriptor is admitted by
+the execution FD budget, so a tighter deployment limit produces a controlled
+reservation error rather than an unreserved or unbounded descriptor set.
 
 Every write reserves disk bytes before publication. A reservation rejection
 stops the query and cleans all files. Disk consumption is observable but not
@@ -617,7 +637,8 @@ Add fixed-cardinality operator statistics:
 - external-sort runs, passes, bytes, and merge records;
 - duplicate records removed and unique keys finalized;
 - exact-key partial batches/rows/bytes;
-- group-result contribution rows and consolidation spill bytes;
+- intermediate-leaf continuations;
+- group-result contribution rows, reads, and consolidation spill bytes;
 - peak admitted distinct work bytes;
 - FD and disk reservation rejections; and
 - cleanup failures.

@@ -49,7 +49,8 @@ const (
 type distinctSpillController struct {
 	ctr                    *container
 	root                   [spillNumBuckets]*spillBucket
-	result                 *spillBucket
+	result                 [spillMaxPass][]*spillBucket
+	resultSplit            [spillMaxPass - 1][]bool
 	record                 reusableSpillBuffer
 	copy                   reusableSpillBuffer
 	sortKey                reusableSpillBuffer
@@ -70,9 +71,13 @@ type distinctSpillController struct {
 	externalSorts          uint64
 	partialPending         [spillMaxPass * spillNumBuckets]*spillBucket
 	partialPendingCount    int
+	partialActive          *spillBucket
+	partialActiveOffset    int64
 	stats                  *process.OperatorStats
 	uniqueKeys             uint64
 	contributionRecords    uint64
+	contributionReads      uint64
+	partialContinuations   uint64
 	completionRecorded     bool
 }
 
@@ -100,7 +105,22 @@ func newDistinctSpillController(ctr *container) (*distinctSpillController, error
 			name: fmt.Sprintf("%s_%d", controller.rootName, bucket),
 		}
 	}
-	controller.result = &spillBucket{name: controller.resultName}
+	partitions := spillNumBuckets
+	for level := range controller.result {
+		controller.result[level] = make([]*spillBucket, partitions)
+		if level < len(controller.resultSplit) {
+			controller.resultSplit[level] = make([]bool, partitions)
+		}
+		partitions *= spillNumBuckets
+	}
+	for bucket := range controller.result[0] {
+		controller.result[0][bucket] = &spillBucket{
+			lv:      1,
+			name:    fmt.Sprintf("%s_1_%d", controller.resultName, bucket),
+			path:    [spillMaxPass]uint8{uint8(bucket)},
+			pathLen: 1,
+		}
+	}
 	return controller, nil
 }
 
@@ -115,9 +135,14 @@ func (c *distinctSpillController) close() {
 			c.root[bucket] = nil
 		}
 	}
-	if c.result != nil {
-		_ = c.result.free()
-		c.result = nil
+	for level := range c.result {
+		for bucket := range c.result[level] {
+			if c.result[level][bucket] != nil {
+				_ = c.result[level][bucket].free()
+				c.result[level][bucket] = nil
+			}
+		}
+		c.result[level] = nil
 	}
 	for c.partialPendingCount > 0 {
 		c.partialPendingCount--
@@ -126,6 +151,11 @@ func (c *distinctSpillController) close() {
 			c.partialPending[c.partialPendingCount] = nil
 		}
 	}
+	if c.partialActive != nil {
+		_ = c.partialActive.free()
+		c.partialActive = nil
+	}
+	c.partialActiveOffset = 0
 	if c.record != nil {
 		c.record.Free()
 		c.record = nil
@@ -153,6 +183,9 @@ func (c *distinctSpillController) close() {
 	clear(c.appliedLevel1[:])
 	clear(c.appliedLevel2[:])
 	clear(c.appliedLevel3[:])
+	for level := range c.resultSplit {
+		c.resultSplit[level] = nil
+	}
 }
 
 func (c *distinctSpillController) recordCompletion() {
@@ -176,6 +209,14 @@ func (c *distinctSpillController) recordCompletion() {
 	c.stats.AddExtraStat(
 		"GroupDistinctSpillContributionRecords",
 		int64(min(c.contributionRecords, math.MaxInt64)),
+	)
+	c.stats.AddExtraStat(
+		"GroupDistinctSpillContributionReads",
+		int64(min(c.contributionReads, math.MaxInt64)),
+	)
+	c.stats.AddExtraStat(
+		"GroupDistinctSpillPartialContinuations",
+		int64(min(c.partialContinuations, math.MaxInt64)),
 	)
 }
 
@@ -487,10 +528,27 @@ func (c *distinctSpillController) writeContribution(
 		return moerr.NewInvalidInputNoCtx(
 			"distinct contribution exceeds wire format")
 	}
-	target := c.result
+	target := c.result[0][distinctGroupBucket(groupHash, 1)]
 	if target == nil {
 		return moerr.NewInternalErrorNoCtx(
-			"distinct contribution log is closed")
+			"distinct contribution partition is closed")
+	}
+	if err := c.writeContributionEnvelope(proc, spillfs, target); err != nil {
+		return err
+	}
+	c.contributionRecords++
+	return nil
+}
+
+func (c *distinctSpillController) writeContributionEnvelope(
+	proc *process.Process,
+	spillfs fileservice.MutableFileService,
+	target *spillBucket,
+) error {
+	if c == nil || c.closed || proc == nil || spillfs == nil || target == nil ||
+		c.record == nil || c.record.Len() <= 0 || c.record.Len() > math.MaxInt32 {
+		return moerr.NewInvalidInputNoCtx(
+			"invalid distinct contribution envelope")
 	}
 	if target.file == nil {
 		if err := c.ctr.openSpillBucket(proc, spillfs, target); err != nil {
@@ -521,7 +579,6 @@ func (c *distinctSpillController) writeContribution(
 		return err
 	}
 	target.cnt++
-	c.contributionRecords++
 	return nil
 }
 
@@ -629,6 +686,7 @@ func (c *distinctSpillController) readContribution(
 			"invalid distinct contribution payload")
 		return
 	}
+	c.contributionReads++
 	return
 }
 
@@ -2345,6 +2403,232 @@ func (ctr *container) finalizeSingleGroupDistinctPartition(
 	return true, nil
 }
 
+func contributionPathIndex(
+	path [spillMaxPass]uint8,
+	pathLen int,
+) (int, error) {
+	if pathLen <= 0 || pathLen > spillMaxPass {
+		return 0, mpool.ErrAllocationAccountInvalid
+	}
+	index := 0
+	for level := 0; level < pathLen; level++ {
+		if int(path[level]) >= spillNumBuckets {
+			return 0, moerr.NewInvalidInputNoCtx(
+				"distinct contribution path bucket out of range")
+		}
+		index = index*spillNumBuckets + int(path[level])
+	}
+	return index, nil
+}
+
+func (c *distinctSpillController) contributionPartition(
+	path [spillMaxPass]uint8,
+	pathLen int,
+) (*spillBucket, error) {
+	if c == nil {
+		return nil, mpool.ErrAllocationAccountInvalid
+	}
+	index, err := contributionPathIndex(path, pathLen)
+	if err != nil {
+		return nil, err
+	}
+	if pathLen > len(c.result) || index >= len(c.result[pathLen-1]) {
+		return nil, mpool.ErrAllocationAccountInvalid
+	}
+	return c.result[pathLen-1][index], nil
+}
+
+func (c *distinctSpillController) setContributionPartition(
+	path [spillMaxPass]uint8,
+	pathLen int,
+	partition *spillBucket,
+) error {
+	if c == nil {
+		return mpool.ErrAllocationAccountInvalid
+	}
+	index, err := contributionPathIndex(path, pathLen)
+	if err != nil {
+		return err
+	}
+	if pathLen > len(c.result) || index >= len(c.result[pathLen-1]) {
+		return mpool.ErrAllocationAccountInvalid
+	}
+	c.result[pathLen-1][index] = partition
+	return nil
+}
+
+func (c *distinctSpillController) contributionPartitionSplit(
+	path [spillMaxPass]uint8,
+	pathLen int,
+) (bool, error) {
+	if c == nil || pathLen <= 0 || pathLen >= spillMaxPass {
+		return false, mpool.ErrAllocationAccountInvalid
+	}
+	index, err := contributionPathIndex(path, pathLen)
+	if err != nil {
+		return false, err
+	}
+	if pathLen > len(c.resultSplit) || index >= len(c.resultSplit[pathLen-1]) {
+		return false, mpool.ErrAllocationAccountInvalid
+	}
+	return c.resultSplit[pathLen-1][index], nil
+}
+
+func (c *distinctSpillController) markContributionPartitionSplit(
+	path [spillMaxPass]uint8,
+	pathLen int,
+) error {
+	if c == nil || pathLen <= 0 || pathLen >= spillMaxPass {
+		return mpool.ErrAllocationAccountInvalid
+	}
+	index, err := contributionPathIndex(path, pathLen)
+	if err != nil {
+		return err
+	}
+	if pathLen > len(c.resultSplit) || index >= len(c.resultSplit[pathLen-1]) {
+		return mpool.ErrAllocationAccountInvalid
+	}
+	c.resultSplit[pathLen-1][index] = true
+	return nil
+}
+
+func (c *distinctSpillController) repartitionContributions(
+	proc *process.Process,
+	path [spillMaxPass]uint8,
+	pathLen int,
+) (retErr error) {
+	if c == nil || c.closed || proc == nil || pathLen <= 0 ||
+		pathLen >= spillMaxPass {
+		return mpool.ErrAllocationAccountInvalid
+	}
+	parent, err := c.contributionPartition(path, pathLen)
+	if err != nil {
+		return err
+	}
+	if parent == nil || parent.cnt == 0 {
+		if parent != nil {
+			if err := parent.free(); err != nil {
+				return err
+			}
+			if err := c.setContributionPartition(path, pathLen, nil); err != nil {
+				return err
+			}
+		}
+		return c.markContributionPartitionSplit(path, pathLen)
+	}
+	spillfs, err := proc.GetSpillFileService()
+	if err != nil {
+		return err
+	}
+	if err := parent.flushWriter(); err != nil {
+		return err
+	}
+	if _, err := parent.file.Seek(0, io.SeekStart); err != nil {
+		return err
+	}
+	reader, err := newGroupSpillReader(c.ctr, parent.file, proc.Ctx)
+	if err != nil {
+		return err
+	}
+	defer reader.Free()
+	groups, err := c.ctr.createNewGroupByBatchWithAllocation(
+		nil, 1, c.ctr.spillGroupByAllocation)
+	if err != nil {
+		return err
+	}
+	defer groups.Clean(c.ctr.mp)
+
+	var children [spillNumBuckets]*spillBucket
+	defer func() {
+		if retErr != nil {
+			freeDistinctWave(&children)
+		}
+	}()
+	for bucket := range children {
+		childPath := path
+		childPath[pathLen] = uint8(bucket)
+		children[bucket] = &spillBucket{
+			lv:      pathLen + 1,
+			name:    fmt.Sprintf("%s_%d", parent.name, bucket),
+			path:    childPath,
+			pathLen: pathLen + 1,
+		}
+	}
+	for {
+		if err, canceled := vm.CancelCheck(proc); canceled {
+			return err
+		}
+		groupHash, _, _, eof, err := c.readContribution(reader, groups)
+		if err != nil {
+			return err
+		}
+		if eof {
+			break
+		}
+		bucket := distinctGroupBucket(groupHash, pathLen+1)
+		if err := c.writeContributionEnvelope(
+			proc, spillfs, children[bucket]); err != nil {
+			return err
+		}
+	}
+	for bucket := range children {
+		if children[bucket].cnt == 0 {
+			if err := children[bucket].free(); err != nil {
+				return err
+			}
+			children[bucket] = nil
+			continue
+		}
+		if err := children[bucket].flushWriter(); err != nil {
+			return err
+		}
+	}
+	if err := c.setContributionPartition(path, pathLen, nil); err != nil {
+		return err
+	}
+	if err := parent.free(); err != nil {
+		return err
+	}
+	for bucket := range children {
+		if children[bucket] == nil {
+			continue
+		}
+		child := children[bucket]
+		if err := c.setContributionPartition(
+			child.path, child.pathLen, child); err != nil {
+			return err
+		}
+		children[bucket] = nil
+	}
+	return c.markContributionPartitionSplit(path, pathLen)
+}
+
+func (c *distinctSpillController) ensureContributionPartition(
+	proc *process.Process,
+	path [spillMaxPass]uint8,
+	pathLen int,
+) (*spillBucket, error) {
+	if c == nil || proc == nil || pathLen <= 0 || pathLen > spillMaxPass {
+		return nil, mpool.ErrAllocationAccountInvalid
+	}
+	if _, err := contributionPathIndex(path, pathLen); err != nil {
+		return nil, err
+	}
+	for prefixLen := 1; prefixLen < pathLen; prefixLen++ {
+		split, err := c.contributionPartitionSplit(path, prefixLen)
+		if err != nil {
+			return nil, err
+		}
+		if split {
+			continue
+		}
+		if err := c.repartitionContributions(proc, path, prefixLen); err != nil {
+			return nil, err
+		}
+	}
+	return c.contributionPartition(path, pathLen)
+}
+
 func (c *distinctSpillController) contributionPathApplied(
 	path [spillMaxPass]uint8,
 	pathLen int,
@@ -2407,7 +2691,11 @@ func (ctr *container) applyDistinctContributions(
 	if err != nil || applied {
 		return err
 	}
-	partition := controller.result
+	partition, err := controller.ensureContributionPartition(
+		proc, bucket.path, bucket.pathLen)
+	if err != nil {
+		return err
+	}
 	if partition == nil || partition.cnt == 0 {
 		return controller.markContributionPathApplied(bucket.path, bucket.pathLen)
 	}
@@ -2432,23 +2720,13 @@ func (ctr *container) applyDistinctContributions(
 		if err, canceled := vm.CancelCheck(proc); canceled {
 			return err
 		}
-		groupHash, aggregate, count, eof, err := controller.readContribution(
+		_, aggregate, count, eof, err := controller.readContribution(
 			reader, groups)
 		if err != nil {
 			return err
 		}
 		if eof {
 			break
-		}
-		matches := true
-		for level := 1; level <= bucket.pathLen; level++ {
-			if distinctGroupBucket(groupHash, level) != int(bucket.path[level-1]) {
-				matches = false
-				break
-			}
-		}
-		if !matches {
-			continue
 		}
 		if aggregate < 0 || aggregate >= len(ctr.aggList) {
 			return moerr.NewInvalidInputNoCtx(
@@ -2472,7 +2750,15 @@ func (ctr *container) applyDistinctContributions(
 			return err
 		}
 	}
-	return controller.markContributionPathApplied(bucket.path, bucket.pathLen)
+	if err := controller.markContributionPathApplied(
+		bucket.path, bucket.pathLen); err != nil {
+		return err
+	}
+	if err := controller.setContributionPartition(
+		bucket.path, bucket.pathLen, nil); err != nil {
+		return err
+	}
+	return partition.free()
 }
 
 func (ctr *container) finalizeGroupedExactCountDistinct(
@@ -2562,6 +2848,105 @@ func (ctr *container) resetForDistinctPartialLeaf() {
 	ctr.currBatchIdx = 0
 }
 
+func (ctr *container) initializeDistinctPartialLeafState() error {
+	if ctr == nil {
+		return mpool.ErrAllocationAccountInvalid
+	}
+	ctr.resetForDistinctPartialLeaf()
+	var err error
+	ctr.aggList, err = ctr.makeAggList(ctr.aggExprs)
+	if err != nil {
+		return err
+	}
+	if ctr.mtyp != H0 {
+		return nil
+	}
+	groupByBatch, err := ctr.createNewGroupByBatch(nil, 1)
+	if err != nil {
+		return err
+	}
+	groupByBatch.SetRowCount(1)
+	ctr.groupByBatches = append(ctr.groupByBatches, groupByBatch)
+	return nil
+}
+
+func (ctr *container) insertDistinctPartialRecord(
+	proc *process.Process,
+	decodeGroups *batch.Batch,
+	aggregate int,
+	payload []byte,
+) error {
+	if ctr == nil || proc == nil || decodeGroups == nil || aggregate < 0 ||
+		aggregate >= len(ctr.aggList) {
+		return moerr.NewInvalidInputNoCtx(
+			"distinct partial aggregate ordinal out of range")
+	}
+	target, ok := ctr.aggList[aggregate].(aggexec.ExactCountDistinctSpillState)
+	if !ok {
+		return moerr.NewInvalidInputNoCtx(
+			"distinct partial targets unsupported aggregate")
+	}
+	group := 0
+	if ctr.mtyp != H0 {
+		if ctr.hr.IsEmpty() {
+			if err := ctr.buildHashTable(proc.Ctx, 0); err != nil {
+				return err
+			}
+		}
+		hashKeyVecs := ctr.hashKeyVectors(decodeGroups.Vecs)
+		if err := ctr.hr.TxnItr.PreviewInsert(
+			0, 1, hashKeyVecs, ctr.hr.Hash.GroupCount(),
+			&ctr.hr.insertPlan); err != nil {
+			return err
+		}
+		preview := groupInsertPreview{
+			values:    ctr.hr.insertPlan.Values(),
+			inserted:  ctr.hr.insertPlan.Inserted(),
+			newGroups: int(ctr.hr.insertPlan.NewGroups()),
+		}
+		if !ctr.recoveryCapacityCovers(preview.newGroups) {
+			if err := ctr.ensureRecoveryCapacity(preview.newGroups, nil); err != nil {
+				return err
+			}
+		}
+		if err := ctr.hr.Hash.PreAlloc(
+			ctr.hr.insertPlan.NewGroups()); err != nil {
+			return err
+		}
+		if err := ctr.preflightBuildChunk(
+			decodeGroups.Vecs, 0, 1,
+			preview.inserted, preview.newGroups); err != nil {
+			ctr.cancelGroupByPreflights()
+			return err
+		}
+		values, more, err := ctr.commitGroupByChunk(
+			decodeGroups.Vecs, 0, 1, preview)
+		if err != nil {
+			if isGroupPrePublicationError(err) {
+				ctr.cancelGroupByPreflights()
+			}
+			return err
+		}
+		if len(values) != 1 || values[0] == 0 {
+			return moerr.NewInternalErrorNoCtx(
+				"distinct partial group insertion failed")
+		}
+		if more > 0 {
+			if more != preview.newGroups {
+				return moerr.NewInternalErrorNoCtx(
+					"distinct partial group publication mismatch")
+			}
+			for _, aggregateExec := range ctr.aggList {
+				if err := aggregateExec.GroupGrow(more); err != nil {
+					return err
+				}
+			}
+		}
+		group = int(values[0] - 1)
+	}
+	return target.InsertDistinctArgument(group, payload)
+}
+
 func (ctr *container) loadNextDistinctPartialLeaf(
 	proc *process.Process,
 ) (loaded bool, retErr error) {
@@ -2576,13 +2961,21 @@ func (ctr *container) loadNextDistinctPartialLeaf(
 	}
 	defer decodeGroups.Clean(ctr.mp)
 	var partition *spillBucket
+	partitionOffset := int64(0)
 	owned := false
 	defer func() {
 		if retErr != nil && owned && partition != nil {
 			_ = partition.free()
 		}
 	}()
-	for {
+	if controller.partialActive != nil {
+		partition = controller.partialActive
+		partitionOffset = controller.partialActiveOffset
+		controller.partialActive = nil
+		controller.partialActiveOffset = 0
+		owned = true
+	}
+	for partition == nil {
 		partition = controller.takePartialPartition()
 		if partition == nil {
 			controller.close()
@@ -2622,23 +3015,10 @@ func (ctr *container) loadNextDistinctPartialLeaf(
 		}
 	}
 
-	ctr.resetForDistinctPartialLeaf()
-	ctr.aggList, err = ctr.makeAggList(ctr.aggExprs)
-	if err != nil {
+	if err := ctr.initializeDistinctPartialLeafState(); err != nil {
 		return false, err
-	}
-	if ctr.mtyp == H0 {
-		groupByBatch, err := ctr.createNewGroupByBatch(nil, 1)
-		if err != nil {
-			return false, err
-		}
-		groupByBatch.SetRowCount(1)
-		ctr.groupByBatches = append(ctr.groupByBatches, groupByBatch)
 	}
 	if err := partition.flushWriter(); err != nil {
-		return false, err
-	}
-	if _, err := partition.file.Seek(0, io.SeekStart); err != nil {
 		return false, err
 	}
 	reader, err := newGroupSpillReader(ctr, partition.file, proc.Ctx)
@@ -2646,10 +3026,15 @@ func (ctr *container) loadNextDistinctPartialLeaf(
 		return false, err
 	}
 	defer reader.Free()
+	if err := reader.Rewind(partitionOffset); err != nil {
+		return false, err
+	}
+	loadedRecords := 0
 	for {
 		if err, canceled := vm.CancelCheck(proc); canceled {
 			return false, err
 		}
+		recordStart := reader.Position()
 		_, _, aggregate, payload, eof, err := controller.readRecord(
 			reader, decodeGroups)
 		if err != nil {
@@ -2658,53 +3043,37 @@ func (ctr *container) loadNextDistinctPartialLeaf(
 		if eof {
 			break
 		}
-		if aggregate < 0 || aggregate >= len(ctr.aggList) {
-			return false, moerr.NewInvalidInputNoCtx(
-				"distinct partial aggregate ordinal out of range")
-		}
-		target, ok := ctr.aggList[aggregate].(aggexec.ExactCountDistinctSpillState)
-		if !ok {
-			return false, moerr.NewInvalidInputNoCtx(
-				"distinct partial targets unsupported aggregate")
-		}
-		group := 0
-		if ctr.mtyp != H0 {
-			if ctr.hr.IsEmpty() {
-				if err := ctr.buildHashTable(proc.Ctx, 0); err != nil {
-					return false, err
-				}
-			}
-			before := ctr.hr.Hash.GroupCount()
-			values, zValues, err := ctr.hr.TxnItr.Insert(
-				0, 1, decodeGroups.Vecs)
-			if err != nil {
+		if err := ctr.insertDistinctPartialRecord(
+			proc, decodeGroups, aggregate, payload); err != nil {
+			if !mpool.IsRetryableAllocationCapacity(err) {
 				return false, err
 			}
-			if len(values) != 1 || len(zValues) != 1 || values[0] == 0 || zValues[0] == 0 {
-				return false, moerr.NewInternalErrorNoCtx(
-					"distinct partial group insertion failed")
-			}
-			after := ctr.hr.Hash.GroupCount()
-			if after > before {
-				if after != before+1 || values[0] != after {
-					return false, moerr.NewInternalErrorNoCtx(
-						"distinct partial group publication mismatch")
+			if loadedRecords == 0 {
+				dropped, rewindErr := reader.DisableReadAheadAndRewind(recordStart)
+				if rewindErr != nil {
+					return false, rewindErr
 				}
-				if _, err := ctr.appendGroupByBatch(
-					decodeGroups.Vecs, 0, []uint8{1}); err != nil {
+				if !dropped {
 					return false, err
 				}
-				for _, aggregateExec := range ctr.aggList {
-					if err := aggregateExec.GroupGrow(1); err != nil {
-						return false, err
-					}
+				if err := ctr.initializeDistinctPartialLeafState(); err != nil {
+					return false, err
 				}
+				continue
 			}
-			group = int(values[0] - 1)
+			reader.DropReadAhead()
+			controller.partialActive = partition
+			controller.partialActiveOffset = recordStart
+			controller.partialContinuations++
+			owned = false
+			ctr.currBatchIdx = 0
+			return true, nil
 		}
-		if err := target.InsertDistinctArgument(group, payload); err != nil {
-			return false, err
-		}
+		loadedRecords++
+	}
+	if loadedRecords == 0 {
+		return false, moerr.NewInternalErrorNoCtx(
+			"distinct partial continuation produced an empty leaf")
 	}
 	if err := partition.free(); err != nil {
 		return false, err
