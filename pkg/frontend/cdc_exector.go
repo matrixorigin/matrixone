@@ -1383,15 +1383,17 @@ func (exec *CDCTaskExecutor) Pause() error {
 }
 
 // Cancel cdc task
-func (exec *CDCTaskExecutor) Cancel() error {
+func (exec *CDCTaskExecutor) Cancel() (err error) {
 	// Check if running before state transition
 	stateBeforeCancel := exec.stateMachine.State()
 	wasRunning := stateBeforeCancel == StateRunning
 	wasActive := wasRunning || stateBeforeCancel == StateStarting
 
 	// Transition to Cancelling state
-	if err := exec.stateMachine.Transition(TransitionCancel); err != nil {
-		return moerr.NewInternalErrorf(context.Background(), "cannot cancel: %v", err)
+	if stateBeforeCancel != StateCancelling {
+		if err := exec.stateMachine.Transition(TransitionCancel); err != nil {
+			return moerr.NewInternalErrorf(context.Background(), "cannot cancel: %v", err)
+		}
 	}
 	// A Resume goroutine may be waiting for a paused Start to unwind. Fence it
 	// before cancellation completes so it cannot install a new routine after we
@@ -1429,7 +1431,16 @@ func (exec *CDCTaskExecutor) Cancel() error {
 		zap.String("state", exec.stateMachine.State().String()),
 		zap.Bool("was-running", wasRunning),
 	)
+	cancelSucceeded := false
 	defer func() {
+		if !cancelSucceeded {
+			logutil.Warn(
+				"cdc.frontend.task.cancel_incomplete",
+				zap.String("task-id", exec.spec.TaskId),
+				zap.Error(err),
+			)
+			return
+		}
 		// Transition to Cancelled state
 		if err := exec.stateMachine.Transition(TransitionCancelComplete); err != nil {
 			logutil.Warn(
@@ -1493,6 +1504,7 @@ func (exec *CDCTaskExecutor) Cancel() error {
 			return err
 		}
 	}
+	cancelSucceeded = true
 	return nil
 }
 

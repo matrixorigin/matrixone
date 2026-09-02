@@ -16,6 +16,7 @@ package taskservice
 
 import (
 	"context"
+	"errors"
 	"strconv"
 	"strings"
 	"sync/atomic"
@@ -693,7 +694,24 @@ func (t *cancelTask) Handle(ctx context.Context) error {
 		return nil
 	}
 	if activeRoutine != nil {
-		return activeRoutine.Cancel()
+		if err := activeRoutine.Cancel(); err != nil {
+			// The durable status was claimed before invoking the local
+			// lifecycle owner. Put it back into the retryable state when cleanup
+			// fails; otherwise a transient DELETE failure can strand durable CDC
+			// metadata behind a terminal Canceled row.
+			_, restoreErr := t.runner.service.UpdateDaemonTaskStatus(
+				handleCtx,
+				tk.ID,
+				task.TaskStatus_CancelRequested,
+				now,
+				now,
+				WithTaskStatusCond(task.TaskStatus_Canceled),
+			)
+			if restoreErr != nil {
+				return moerr.AttachCause(handleCtx, errors.Join(err, restoreErr))
+			}
+			return err
+		}
 	}
 	return nil
 }

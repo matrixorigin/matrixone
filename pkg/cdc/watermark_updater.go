@@ -1422,7 +1422,7 @@ func (u *CDCWatermarkUpdater) DeleteTaskWatermarks(
 	u.persistMu.Unlock()
 	if err != nil {
 		logutil.Error(
-			"cdc.watermark.delete_task.retry_scheduled",
+			"cdc.watermark.delete_task.failed",
 			zap.Uint64("account-id", accountID),
 			zap.String("task-id", taskID),
 			zap.Error(err),
