@@ -500,30 +500,32 @@ func (c *Compile) isRetryErr(err error) bool {
 }
 
 type scopeRunResult struct {
-	err error
-	ctx context.Context
+	err      error
+	ctx      context.Context
+	queryCtx context.Context
 }
 
 func newScopeRunResult(err error, scope *Scope) scopeRunResult {
-	result := scopeRunResult{err: err}
-	if scope != nil && scope.Proc != nil {
-		result.ctx = scope.Proc.Ctx
+	if scope == nil {
+		return scopeRunResult{err: err}
 	}
+	return newScopeRunResultForProcess(err, scope.Proc)
+}
+
+func newScopeRunResultForProcess(err error, proc *process.Process) scopeRunResult {
+	result := scopeRunResult{err: err}
+	if proc == nil {
+		return result
+	}
+	result.ctx = proc.Ctx
+	result.queryCtx = scopeRunQueryContext(proc)
 	return result
 }
 
 func (r scopeRunResult) resolveCancelCause() (scopeRunResult, bool) {
-	if r.err == nil || r.ctx == nil ||
-		(!errors.Is(r.err, context.Canceled) &&
-			!errors.Is(r.err, context.DeadlineExceeded) &&
-			!moerr.IsMoErrCode(r.err, moerr.ErrQueryInterrupted)) {
-		return r, false
-	}
-	if cause := context.Cause(r.ctx); cause != nil {
-		r.err = cause
-		return r, true
-	}
-	return r, false
+	var normalized bool
+	r.err, normalized = normalizeScopeRunError(r.err, r.ctx, r.queryCtx)
+	return r, normalized
 }
 
 // preferPrimaryScopeResult keeps cleanup fallout from masking the execution
@@ -533,7 +535,7 @@ func (r scopeRunResult) resolveCancelCause() (scopeRunResult, bool) {
 // error, while an externally canceled query keeps its external cause.
 func preferPrimaryScopeResult(current, candidate scopeRunResult) scopeRunResult {
 	current, _ = current.resolveCancelCause()
-	candidate, candidateHasCause := candidate.resolveCancelCause()
+	candidate, candidateNormalized := candidate.resolveCancelCause()
 
 	if current.err == nil {
 		return candidate
@@ -543,13 +545,11 @@ func preferPrimaryScopeResult(current, candidate scopeRunResult) scopeRunResult 
 		errors.Is(candidate.err, process.ErrPipelineEndSignalDeliveryFailed) {
 		return current
 	}
-	// Without a cancellation cause, a canceled sibling does not prove that the
-	// cleanup fallback was secondary. Process-backed production results always
-	// carry their pipeline context, but keep this conservative for synthetic
-	// and start-failure results that do not.
-	if !candidateHasCause &&
-		(errors.Is(candidate.err, context.Canceled) ||
-			moerr.IsMoErrCode(candidate.err, moerr.ErrQueryInterrupted)) {
+	// An unresolved pure cancellation does not prove that the cleanup fallback
+	// was secondary. A mixed error tree is substantive, however, and must not be
+	// rejected merely because one leaf is context.Canceled.
+	if !candidateNormalized &&
+		isScopeCancellationFrom(candidate.err, context.Canceled) {
 		return current
 	}
 	return candidate

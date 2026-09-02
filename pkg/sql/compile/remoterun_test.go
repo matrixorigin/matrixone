@@ -2305,6 +2305,124 @@ func TestSendNotifyMessageReportsSenderFactoryError(t *testing.T) {
 	wg.Wait()
 }
 
+func TestSendNotifyMessageNormalizesPipelineCancellationCause(t *testing.T) {
+	duplicateErr := moerr.NewDuplicateEntryNoCtx("1", "primary")
+	tests := []struct {
+		name               string
+		cancelCause        error
+		cancelQuery        bool
+		keepPipelineActive bool
+		factoryErr         func(context.Context) error
+		wantErr            error
+	}{
+		{
+			name:        "query interruption recovers substantive cancellation cause",
+			cancelCause: duplicateErr,
+			factoryErr: func(ctx context.Context) error {
+				return moerr.NewQueryInterrupted(ctx)
+			},
+			wantErr: duplicateErr,
+		},
+		{
+			name: "normal query interruption remains secondary",
+			factoryErr: func(ctx context.Context) error {
+				return moerr.NewQueryInterrupted(ctx)
+			},
+		},
+		{
+			name:        "raw cancellation recovers substantive cancellation cause",
+			cancelCause: duplicateErr,
+			factoryErr: func(context.Context) error {
+				return context.Canceled
+			},
+			wantErr: duplicateErr,
+		},
+		{
+			name: "raw pipeline cancellation without substantive cause is secondary",
+			factoryErr: func(context.Context) error {
+				return context.Canceled
+			},
+		},
+		{
+			name:        "raw query cancellation remains visible",
+			cancelQuery: true,
+			factoryErr: func(context.Context) error {
+				return context.Canceled
+			},
+			wantErr: context.Canceled,
+		},
+		{
+			name:               "raw cancellation while pipeline is active remains visible",
+			keepPipelineActive: true,
+			factoryErr: func(context.Context) error {
+				return context.Canceled
+			},
+			wantErr: context.Canceled,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			proc := testutil.NewProcess(t)
+			queryCtx := proc.Base.GetContextBase().BuildQueryCtx(proc.GetTopContext())
+			proc.BuildPipelineContext(queryCtx)
+			scopeProc := proc.NewContextChildProc(1)
+			if tt.cancelQuery {
+				_, cancelQuery := process.GetQueryCtxFromProc(proc)
+				require.NotNil(t, cancelQuery)
+				cancelQuery()
+			} else if !tt.keepPipelineActive {
+				scopeProc.Cancel(tt.cancelCause)
+			}
+
+			uid, err := uuid.NewV7()
+			require.NoError(t, err)
+			s := &Scope{
+				Proc: scopeProc,
+				RemoteReceivRegInfos: []RemoteReceivRegInfo{
+					{Idx: 0, Uuid: uid, FromAddr: "remote-cn"},
+				},
+			}
+			factory := func(
+				ctx context.Context,
+				_ string,
+				_ string,
+				_ *mpool.MPool,
+				_ *AnalyzeModule,
+			) (*messageSenderOnClient, error) {
+				return nil, tt.factoryErr(ctx)
+			}
+
+			var wg sync.WaitGroup
+			resultCh := make(chan notifyMessageResult, 1)
+			s.sendNotifyMessageWithFactory(&wg, resultCh, factory)
+
+			select {
+			case result := <-resultCh:
+				if tt.wantErr == nil {
+					require.NoError(t, result.err)
+				} else {
+					require.ErrorIs(t, result.err, tt.wantErr)
+				}
+			case <-time.After(time.Second):
+				t.Fatal("remote notify did not report cancellation")
+			}
+
+			select {
+			case signal := <-scopeProc.Reg.MergeReceivers[0].Ch2:
+				_, terminalErr := signal.Action()
+				if tt.wantErr == nil {
+					require.NoError(t, terminalErr)
+				} else {
+					require.ErrorIs(t, terminalErr, tt.wantErr)
+				}
+			case <-time.After(time.Second):
+				t.Fatal("remote notify cleanup did not terminate its receiver")
+			}
+			wg.Wait()
+		})
+	}
+}
+
 func TestSendNotifyMessageReportsStreamSendError(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	proc.BuildPipelineContext(context.Background())
@@ -2580,7 +2698,8 @@ func TestSendNotifyMessageSuccessfulAttachUsesQueryContext(t *testing.T) {
 
 func TestSendNotifyMessageStopsRetryWhenQueryContextCanceled(t *testing.T) {
 	proc := testutil.NewProcess(t)
-	proc.BuildPipelineContext(context.Background())
+	queryCtx := proc.Base.GetContextBase().BuildQueryCtx(proc.GetTopContext())
+	proc.BuildPipelineContext(queryCtx)
 	scopeProc := proc.NewContextChildProc(1)
 
 	uid, err := uuid.NewV7()
@@ -2630,7 +2749,9 @@ func TestSendNotifyMessageStopsRetryWhenQueryContextCanceled(t *testing.T) {
 	resultCh := make(chan notifyMessageResult, 1)
 	s.sendNotifyMessageWithFactoryAndWait(&wg, resultCh, factory, waitRetry)
 	<-retryEntered
-	scopeProc.Cancel(nil)
+	_, cancelQuery := process.GetQueryCtxFromProc(proc)
+	require.NotNil(t, cancelQuery)
+	cancelQuery()
 
 	select {
 	case result := <-resultCh:
@@ -3577,7 +3698,7 @@ func TestRemoteNotifyCleanupUsesTypedEndForSingleSender(t *testing.T) {
 	}
 }
 
-func TestRemoteNotifyCleanupUsesSharedTerminalSendBudget(t *testing.T) {
+func TestRemoteNotifyCleanupEndDoesNotWaitForChannelCapacity(t *testing.T) {
 	oldSignalSendTimeout := process.PipelineSignalSendTimeout
 	process.PipelineSignalSendTimeout = 200 * time.Millisecond
 	t.Cleanup(func() {
@@ -3585,19 +3706,27 @@ func TestRemoteNotifyCleanupUsesSharedTerminalSendBudget(t *testing.T) {
 	})
 
 	reg := process.NewPipelineEdge(1, 0)
-	reg.Ch2 <- process.NewPipelineSignalToDirectly(nil, nil, nil)
+	reg.Ch2 <- process.NewPipelineSignalToDirectly(batch.EmptyBatch, nil, nil)
 
 	start := time.Now()
-	require.False(t, sendRemoteNotifyCleanupTerminal(nil, reg, nil))
+	require.True(t, sendRemoteNotifyCleanupTerminal(nil, reg, nil))
 	elapsed := time.Since(start)
 
 	require.Less(t, elapsed, 300*time.Millisecond)
 	select {
 	case <-reg.Done():
 	default:
-		t.Fatal("fallback abort should mark the remote notify edge terminal")
+		t.Fatal("durable End should mark the remote notify edge terminal")
 	}
-	require.ErrorIs(t, reg.Err(), process.ErrPipelineEndSignalDeliveryFailed)
+	require.NoError(t, reg.Err())
+
+	receiver := process.InitPipelineSignalReceiver(context.Background(), []*process.WaitRegister{reg})
+	got, err := receiver.GetNextBatch(nil)
+	require.NoError(t, err)
+	require.Same(t, batch.EmptyBatch, got)
+	got, err = receiver.GetNextBatch(nil)
+	require.NoError(t, err)
+	require.Nil(t, got)
 }
 
 func TestReceiveMessageFromCnServerIfDispatch_PreservesCleanupOnOriginalRoot(t *testing.T) {

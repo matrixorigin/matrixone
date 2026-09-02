@@ -165,19 +165,85 @@ func TestWaitPipelineSignalCapacityReturnsOnTerminalEdge(t *testing.T) {
 	}
 }
 
-// TestPipelineEdgeTrySendEndOnFullChannel verifies that TrySendEnd
-// succeeds when the channel has buffer space.
+// TestPipelineEdgeTrySendEndOnFullChannel verifies that End is durably
+// observable even when buffered data occupies the signal channel.
 func TestPipelineEdgeTrySendEndOnFullChannel(t *testing.T) {
 	edge := NewPipelineEdge(1, 1)
+	edge.Ch2 <- NewPipelineSignalToDirectly(batch.EmptyBatch, nil, nil)
 
 	if !edge.TrySendEnd() {
-		t.Fatal("TrySendEnd failed on empty channel")
+		t.Fatal("TrySendEnd failed to record End on a full channel")
 	}
 
 	select {
 	case <-edge.Done():
 	default:
 		t.Fatal("Done was not closed after TrySendEnd")
+	}
+	if edge.Err() != nil {
+		t.Fatalf("durable End recorded an error: %v", edge.Err())
+	}
+
+	receiver := InitPipelineSignalReceiver(context.Background(), []*WaitRegister{edge})
+	got, err := receiver.GetNextBatch(nil)
+	if err != nil || got != batch.EmptyBatch {
+		t.Fatalf("buffered data was not drained before End: batch=%v err=%v", got, err)
+	}
+	got, err = receiver.GetNextBatch(nil)
+	if err != nil || got != nil {
+		t.Fatalf("durable End was not synthesized: batch=%v err=%v", got, err)
+	}
+}
+
+func TestPipelineEdgeSharedEndRecordsUndeliveredSenders(t *testing.T) {
+	edge := NewPipelineEdge(1, 2)
+	edge.Ch2 <- NewPipelineSignalToDirectly(batch.EmptyBatch, nil, nil)
+
+	if !edge.SendEnd() {
+		t.Fatal("first End was not recorded")
+	}
+	select {
+	case <-edge.Done():
+		t.Fatal("Done closed before every sender ended")
+	default:
+	}
+	if !edge.SendEnd() {
+		t.Fatal("second End was not recorded")
+	}
+	select {
+	case <-edge.Done():
+	default:
+		t.Fatal("Done did not close after every sender ended")
+	}
+
+	receiver := InitPipelineSignalReceiver(context.Background(), []*WaitRegister{edge})
+	got, err := receiver.GetNextBatch(nil)
+	if err != nil || got != batch.EmptyBatch {
+		t.Fatalf("buffered data was not drained before shared End: batch=%v err=%v", got, err)
+	}
+	got, err = receiver.GetNextBatch(nil)
+	if err != nil || got != nil {
+		t.Fatalf("shared durable End did not finish the receiver: batch=%v err=%v", got, err)
+	}
+}
+
+func TestPipelineEdgeSharedEndCombinesQueuedAndRecordedSignals(t *testing.T) {
+	edge := NewPipelineEdge(1, 2)
+
+	if !edge.SendEnd() {
+		t.Fatal("first End was not queued")
+	}
+	if !edge.SendEnd() {
+		t.Fatal("second End was not durably recorded")
+	}
+
+	receiver := InitPipelineSignalReceiver(context.Background(), []*WaitRegister{edge})
+	got, err := receiver.GetNextBatch(nil)
+	if err != nil || got != nil {
+		t.Fatalf("queued and recorded Ends did not finish the receiver: batch=%v err=%v", got, err)
+	}
+	if state := receiver.State(); state.Alive != 0 {
+		t.Fatalf("receiver still has %d live edges after both Ends", state.Alive)
 	}
 }
 
@@ -510,16 +576,18 @@ func TestBuildCleanupSignalFailedNilErrorUsesSentinel(t *testing.T) {
 	}
 }
 
-// TestSendPipelineSignalTimeout verifies the timeout behavior.
-func TestSendPipelineSignalTimeout(t *testing.T) {
+func TestSendPipelineSignalEndRecordsOnFullChannel(t *testing.T) {
 	reg := &WaitRegister{Ch2: make(chan PipelineSignal, 1)}
 
-	// Fill the channel.
-	reg.Ch2 <- NewEndSignal()
+	reg.Ch2 <- NewPipelineSignalToDirectly(batch.EmptyBatch, nil, nil)
 
-	// Try to send with timeout - should fail since channel is full.
-	if SendPipelineSignalWithTimeout(reg, NewEndSignal(), 10*time.Millisecond) {
-		t.Fatal("SendPipelineSignalWithTimeout succeeded on full channel")
+	if !SendPipelineSignalWithTimeout(reg, NewEndSignal(), 10*time.Millisecond) {
+		t.Fatal("SendPipelineSignalWithTimeout did not durably record End")
+	}
+	select {
+	case <-reg.Done():
+	default:
+		t.Fatal("durable End did not close Done")
 	}
 
 	// Nil register should return false.
@@ -541,24 +609,22 @@ func TestTrySendPipelineSignal(t *testing.T) {
 	}
 }
 
-// TestSendPipelineSignalWithContextCanceled verifies context cancellation.
-func TestSendPipelineSignalWithContextCanceled(t *testing.T) {
+func TestSendPipelineEndWithCanceledContextStillRecordsTerminal(t *testing.T) {
 	reg := &WaitRegister{Ch2: make(chan PipelineSignal, 1)}
 
-	// Fill the channel.
-	reg.Ch2 <- NewEndSignal()
+	reg.Ch2 <- NewPipelineSignalToDirectly(batch.EmptyBatch, nil, nil)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 
-	if SendPipelineSignalWithContext(ctx, reg, NewEndSignal()) {
-		t.Fatal("SendPipelineSignalWithContext succeeded with cancelled context")
+	if !SendPipelineSignalWithContext(ctx, reg, NewEndSignal()) {
+		t.Fatal("canceled cleanup context prevented durable End")
 	}
 
 	select {
 	case <-reg.Done():
-		t.Fatal("cancelled End send closed Done before receiver observed the terminal")
 	default:
+		t.Fatal("canceled cleanup context left the edge non-terminal")
 	}
 }
 
