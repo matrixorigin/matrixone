@@ -295,6 +295,41 @@ type SpillStateCodec interface {
 	UnmarshalSpillFromReader(reader io.Reader, mp *mpool.MPool) error
 }
 
+// ExactCountDistinctSpillState exposes the narrow ownership transfer required
+// by Group's bounded exact COUNT(DISTINCT ...) spill path. BeginArgumentDrain
+// prepares an empty replacement before the caller writes any key. The caller
+// must Commit only after its private spill wave is durably published; Abort
+// keeps the resident state authoritative.
+//
+// Argument payloads use the aggregate's existing canonical key grammar without
+// the chunk-local group prefix. InsertDistinctArgument accepts only payloads
+// produced by a compatible drain or spill decoder.
+type ExactCountDistinctSpillState interface {
+	GroupAggFuncExec
+	SupportsExactCountDistinctSpill() bool
+	HasDistinctArguments() (bool, error)
+	DistinctArgumentStats() (keys uint64, retainedBytes uint64, err error)
+	BeginArgumentDrain(replacement *AllocationAccount) (DistinctArgumentDrain, error)
+	RehomeDistinctArgumentState(allocation *AllocationAccount) error
+	InsertDistinctArgument(group int, payload []byte) error
+	AddDistinctCountContribution(
+		group int,
+		count uint64,
+		allocation *AllocationAccount,
+	) error
+}
+
+// DistinctArgumentDrain is a single-use prepared ownership transfer. Payload
+// slices passed to ForEach point into the resident arena and are valid only for
+// the duration of the callback.
+type DistinctArgumentDrain interface {
+	ForEach(func(group int, payload []byte) error) error
+	KeyCount() uint64
+	RetainedBytes() uint64
+	Commit() error
+	Abort()
+}
+
 // PrepareParamKindStateAccessor exposes the result vectors whose winner
 // provenance is carried by Group's spill/partial wire extension. Group owns
 // the codec and streams directly between these vectors and the wire; the

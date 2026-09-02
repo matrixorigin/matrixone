@@ -145,6 +145,11 @@ type aggState struct {
 	// argScratch is reusable physical storage for key construction and spill
 	// decode. It avoids data-scaled Go byte slices on row-frequency paths.
 	argScratch []byte
+	// boundedArgumentGrowth is enabled after exact DISTINCT ownership moves to
+	// Group's partition spool. Subsequent resident state is only a work set, so
+	// arena growth follows bounded 64 KiB steps instead of retaining speculative
+	// 512 KiB/global-NDV capacity.
+	boundedArgumentGrowth bool
 }
 
 func (ag *aggState) init(
@@ -950,6 +955,9 @@ func (ag *aggState) insertArgValueWithInserter(
 	// e.g. a multi-column distinct key concatenating several large string args —
 	// grow by enough to fit it, otherwise the retry below would still ErrArenaFull.
 	grow := uint64(kAggArgArenaSize)
+	if ag.boundedArgumentGrowth {
+		grow = 64 * 1024
+	}
 	if ag.allocation != nil {
 		plan := arenaskl.MakeAddPlan(kbuf)
 		consumed, _, ok := plan.ArenaFootprint(
@@ -1206,6 +1214,7 @@ func (ag *aggState) free(mp *mpool.MPool) {
 		mp.Free(ag.argScratch)
 	}
 	ag.argScratch = nil
+	ag.boundedArgumentGrowth = false
 	for _, vec := range ag.vecs {
 		vec.Free(mp)
 	}

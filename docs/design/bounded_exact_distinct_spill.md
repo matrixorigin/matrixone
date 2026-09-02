@@ -1,6 +1,6 @@
 # Bounded exact DISTINCT-key spill
 
-Status: proposed for independent review
+Status: approved for implementation by developer direction
 
 Design version: 1
 
@@ -11,7 +11,7 @@ Owning issue: [#27698](https://github.com/matrixorigin/matrixone/issues/27698)
 Related partition-parallel work:
 [#27720](https://github.com/matrixorigin/matrixone/issues/27720)
 
-Implementation PR: pending design approval
+Implementation PR: pending publication
 
 ## 1. Decision
 
@@ -213,36 +213,33 @@ exclusion remains valid for all other state.
 
 ## 7. Canonical key and equality contract
 
-### 7.1 Shared codec
+### 7.1 Shared equality authorities
 
-The implementation will extract the resident hashmap's canonical row-key
-grammar into `pkg/common/hashmap/keycodec` and use that same implementation for
-resident lookup, distinct partitioning, collision fallback, and spill decode.
-Independent "equivalent" encoders are forbidden.
+The implementation reuses two existing equality authorities rather than
+introducing an independent full-row encoder:
 
-The canonical full key is:
+- the aggregate argument payload is copied directly from the resident
+  `argSkl` key after its chunk-local group prefix; and
+- the reversible typed group row is decoded through Group's existing spill
+  vector codec and compared by the existing Group hashmap.
+
+The logical full key is:
 
 ```text
 version
 group-column-count
-for each active group column:
-    grouping-marker | NULL-marker | type-tag | length | canonical payload
+typed group row under existing Group SQL equality
 aggregate-ordinal
-argument-count
-for each DISTINCT argument:
-    type-tag | length | canonical payload
+existing canonical DISTINCT argument payload
 ```
 
-Length fields make multi-column boundaries unambiguous. The aggregate ordinal
-prevents different DISTINCT aggregates with the same argument bytes from
-sharing state accidentally. Compatible sharing between identical argument
-sets is a future optimization, not implicit version-1 behavior.
-
-The spill record also carries a reversible typed group row using Group's
-existing spill vector codec. The canonical key is the equality/routing
-authority; the typed row is the result representative and preserves string
-source, grouping, and type metadata. When equal rows provide different
-representatives, existing Group merge rules select/merge the representative.
+The saved-argument payload already length-delimits multi-column boundaries. The
+aggregate ordinal prevents different DISTINCT aggregates with equal bytes from
+sharing state accidentally. The spill record carries the typed group row and
+its resident Group hash. Existing Group equality remains authoritative for
+hash collisions and preserves string source, grouping, and type metadata.
+Compatible sharing between identical argument sets is a future optimization,
+not implicit version-1 behavior.
 
 ### 7.2 Type rules
 
@@ -265,13 +262,17 @@ representatives, existing Group merge rules select/merge the representative.
 
 ### 7.3 Hashing and collisions
 
-One stable 64-bit hash is computed over the complete canonical key. Radix
-levels consume disjoint hash-bit ranges; they never rehash a shortened or
-lossy key. Equal keys therefore always follow the same path.
+One stable route hash combines the resident Group hash, xxhash of the canonical
+argument payload, and aggregate ordinal. Radix levels consume disjoint hash-bit
+ranges; equal keys therefore always follow the same path.
 
-Different keys with equal hashes remain in the same leaf and are compared by
-the complete canonical bytes. A deterministic test hash may force every record
-to collide. Correctness must still hold through external-sort fallback.
+Different keys with equal route hashes remain in the same leaf. The leaf uses
+existing Group equality plus exact argument bytes, so a route-hash collision
+cannot merge unequal values. If an oversized no-progress leaf contains one SQL
+group—the global/single-hot-group target—external sort deduplicates by
+aggregate ordinal and exact argument payload. A multi-group leaf continues to
+use exact Group equality and bounded radix depth; an individually unfit
+pathological multi-group collision returns the controlled no-progress error.
 
 ### 7.4 Empty, NULL-only, and count-range behavior
 
@@ -333,7 +334,9 @@ At finalization:
 1. drain final resident eligible keys;
 2. externalize every ordinary/non-eligible group-state contribution exactly
    once into the group-result spool;
-3. process one distinct leaf at a time and deduplicate full canonical keys;
+3. process one distinct leaf at a time and deduplicate the resident `argSkl`
+   argument payloads, scoped by aggregate ordinal and checked with the existing
+   Group equality contract;
 4. count unique keys per group within that leaf;
 5. emit compact `(typed group row, aggregate ordinal, uint64 contribution)`
    records into the group-result spool, partitioned by the existing group hash;
@@ -341,7 +344,7 @@ At finalization:
    aggregate-state merge contracts; and
 7. emit each final group once.
 
-Because each full key belongs to one distinct leaf, adding leaf cardinalities
+Because each exact argument payload belongs to one distinct leaf, adding leaf cardinalities
 is exact. Because all contributions for one SQL-equal group use the same group
 hash and are checked by Group equality, the second phase collapses the group
 without reconstructing its distinct keys.
@@ -419,8 +422,8 @@ released, and files removed by the spill service.
 
 ## 10. Bounded repartition and collision fallback
 
-The radix fanout is 32, matching existing Group spill. Processing is depth
-first, so live metadata is at most 31 siblings per depth plus one active fanout;
+The exact-key radix fanout is 8. Processing is depth first, so live metadata is
+at most 7 siblings per depth plus one active fanout;
 it does not grow with the number of historical partitions.
 
 A leaf is admitted only after exact preflight proves that its records, canonical
@@ -429,18 +432,18 @@ budget plus the active recovery reservation.
 
 If a leaf does not fit:
 
-1. repartition it using the next five hash bits;
+1. repartition it using the next three hash bits;
 2. require measurable progress: at least two non-empty children and a largest
    child smaller than the parent;
 3. stop radix repartition at three levels or immediately on no progress; and
-4. switch that leaf to a bounded multi-pass external sort by the complete
-   canonical key.
+4. for an H0 or proven single-group leaf, switch to bounded external sort by
+   aggregate ordinal and exact argument payload.
 
 External sort creates accounted runs no larger than the leaf work budget,
-sorts each run by full canonical bytes, and uses a fixed fan-in of 16. Multi-pass
-merge removes duplicate adjacent keys and checks cancellation between records.
-Only one merge fan-in and one output buffer are resident. Parent runs are
-deleted only after the replacement run is flushed and published.
+sorts by aggregate ordinal and exact payload, and uses pairwise merges arranged
+as a fixed 64-level binary counter. At most two inputs and one output are open
+per merge. Duplicate adjacent keys are removed, cancellation is checked between
+records, and parent runs are deleted only after replacement publication.
 
 A single record larger than the configured work budget cannot be subdivided.
 It returns a controlled error naming the record size and required minimum; it
@@ -458,8 +461,8 @@ Let:
 - `G` be the configured Group spill threshold;
 - `R` be the Group recovery reservation;
 - `W` be the admitted distinct work-set bytes;
-- `F=32` be radix fanout; and
-- `M=16` be external-sort merge fan-in.
+- `F=8` be exact-key radix fanout; and
+- `M=2` be external-sort merge fan-in.
 
 The implementation must choose `W` by exact allocation preflight such that:
 
@@ -472,10 +475,11 @@ cursors, one read buffer, at most `M` merge heads, and one group-result record.
 Their capacities are recorded in tests and operator statistics. Replacement
 growth releases discardable scratch before acquiring a larger buffer.
 
-At most `F + M + 4` descriptors may be reserved by the controller: one radix
-parent, one child fanout, merge inputs/output, and group-result input/output.
-If the execution FD budget is lower, writers are flushed and reopened by
-bounded batches; the controller never opens an unreserved descriptor.
+The contribution phase uses one append-only log, filtered by the bounded Group
+spill path during reload. Including the existing 32 Group buckets, exact-key
+fanout, contribution log, and one pairwise merge, the maximum overlapping
+descriptor reservation is 44. Every descriptor is admitted by the execution FD
+budget; the controller never opens an unreserved descriptor.
 
 Every write reserves disk bytes before publication. A reservation rejection
 stops the query and cleans all files. Disk consumption is observable but not
@@ -728,7 +732,8 @@ Acceptance requires:
 
 After independent approval of an immutable design revision:
 
-1. extract and test the shared canonical row-key codec;
+1. expose and test ownership-safe access to the resident `argSkl` argument
+   payload and reuse the existing Group equality contract;
 2. add the Group-owned controller, envelopes, budgets, and cleanup skeleton;
 3. add resident count-distinct drain and H0/grouped activation;
 4. add radix repartition and bounded collision sort;
@@ -750,7 +755,7 @@ account, or defer a terminal ownership path not closed by this design.
 | exact keys across intermediate boundaries | local counts cannot remove cross-worker duplicates safely |
 | two-phase finalization | distinct hash partitions subdivide a hot group; group-hash consolidation emits each group once with compact state |
 | count distinct only in v1 | its leaf result is exact and order-independent; other families need explicit reducer/order/error contracts |
-| shared canonical codec | prevents resident/spill equality drift for NULL, grouping, strings, floats, and composite keys |
+| reuse resident argument and Group equality | prevents resident/spill drift without adding a second full-row codec |
 | radix then bounded external sort | ordinary hashes partition cheaply; forced collisions still terminate exactly |
 | depth-first ownership | bounds live metadata and descriptors independently of total partitions |
 | existing partial protocol | bounded repeated group rows already have exact MergeGroup semantics and avoid a new wire generation |

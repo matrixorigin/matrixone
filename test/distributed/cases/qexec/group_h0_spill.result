@@ -7,9 +7,17 @@ set @@agg_spill_mem = 256;
 select count(*) from tiny_scalar;
 ➤ count(*)[-5,64,0]  𝄀
 1
+select count(*), count(distinct result)
+from generate_series(1, 300) g;
+➤ count(*)[-5,64,0]  ¦  count(distinct result)[-5,64,0]  𝄀
+300  ¦  300
 set @@agg_spill_mem = 536870912;
 select count(*) from tiny_scalar;
 ➤ count(*)[-5,64,0]  𝄀
 1
+select count(*), count(distinct result)
+from generate_series(1, 300) g;
+➤ count(*)[-5,64,0]  ¦  count(distinct result)[-5,64,0]  𝄀
+300  ¦  300
 set @@agg_spill_mem = 0;
 drop database group_h0_spill;

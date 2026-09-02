@@ -205,6 +205,14 @@ func (ag *aggState) preflightArgumentCapacity(
 	if err != nil {
 		return err
 	}
+	if ag.boundedArgumentGrowth {
+		capacity, err = nextBoundedArgumentArenaCapacity(
+			uint64(len(ag.argbuf)), required)
+		if err != nil {
+			return err
+		}
+		fallbackCapacity = capacity
+	}
 	// Geometric growth is speculative spare capacity. Clamp both candidates to
 	// the physical single-allocation limit before admission so crossing that
 	// boundary neither logs a failed oversized allocation nor rejects a smaller
@@ -236,6 +244,26 @@ func (ag *aggState) preflightArgumentCapacity(
 	ag.argbuf = next
 	mp.Free(old)
 	return nil
+}
+
+func nextBoundedArgumentArenaCapacity(current, required uint64) (uint64, error) {
+	if required <= current {
+		return current, nil
+	}
+	if current > math.MaxUint32 || required > math.MaxUint32 {
+		return 0, mpool.ErrAllocationAllocatorLimit
+	}
+	const quantum = uint64(64 * 1024)
+	missing := required - current
+	steps := (missing + quantum - 1) / quantum
+	if steps > (math.MaxUint32-current)/quantum {
+		return 0, mpool.ErrAllocationAllocatorLimit
+	}
+	capacity := current + steps*quantum
+	if capacity < required || capacity > uint64(math.MaxInt) {
+		return 0, mpool.ErrAllocationAllocatorLimit
+	}
+	return capacity, nil
 }
 
 func nextArgumentArenaCapacity(current, required uint64) (uint64, error) {
