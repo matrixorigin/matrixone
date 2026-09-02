@@ -351,10 +351,15 @@ type PrepareStmt struct {
 	numericPrefixConsumer         bool
 	directResultParamPositions    []int32
 	directResultParamPositionsSet bool
-	hasPaginationParams           bool
-	hasLagLeadParams              bool
-	paramKinds                    []vector.PrepareParamKind
-	paramMetadata                 []bool
+	// fixedIntegerParamPositions identifies parameters with a fixed unsigned-
+	// integer contract (LIMIT/OFFSET and LAG/LEAD offsets). It is installed
+	// with each prepared-plan generation so binary EXECUTE never walks the plan
+	// merely to classify a runtime parameter.
+	fixedIntegerParamPositions []int32
+	hasPaginationParams        bool
+	hasLagLeadParams           bool
+	paramKinds                 []vector.PrepareParamKind
+	paramMetadata              []bool
 	// jsonComparisonParamPositions is computed once per prepared-plan
 	// generation. Only these parameters need an exact SQL type in Process
 	// metadata; paramConcreteTypes is a reusable execution buffer.
