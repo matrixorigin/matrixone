@@ -112,22 +112,37 @@ func TestIssue25526And27935PreparedUpdateJoinBinaryProtocol(t *testing.T) {
 			mustExec(t, ctx, conn, "create table temporal_src(k int primary key)")
 			mustExec(t, ctx, conn, "insert into temporal_dst values(1, '00:00:01')")
 			mustExec(t, ctx, conn, "insert into temporal_src values(10)")
+			mustExec(t, ctx, conn, "set session sql_mode='STRICT_TRANS_TABLES'")
 
 			temporalStmt, err := conn.PrepareContext(ctx,
 				"update temporal_dst d join temporal_src s on s.k=? set d.tm=? where d.id=?")
 			require.NoError(t, err)
 			defer temporalStmt.Close()
-			for _, value := range []string{"02:03:04.000005", "03:04:05.000006"} {
+
+			executeTemporalUpdate := func(value string) {
+				t.Helper()
 				res, execErr := temporalStmt.ExecContext(ctx, int64(10), value, int64(1))
 				require.NoError(t, execErr)
 				affected, affectedErr := res.RowsAffected()
 				require.NoError(t, affectedErr)
 				require.Equal(t, int64(1), affected)
 			}
-			var updatedTime string
-			require.NoError(t, conn.QueryRowContext(ctx,
-				"select cast(tm as char) from temporal_dst where id=1").Scan(&updatedTime))
-			require.Equal(t, "03:04:05.000006", updatedTime)
+			readTemporalValue := func() string {
+				t.Helper()
+				var value string
+				require.NoError(t, conn.QueryRowContext(ctx,
+					"select cast(tm as char) from temporal_dst where id=1").Scan(&value))
+				return value
+			}
+
+			executeTemporalUpdate("02:03:04.000005")
+			_, err = temporalStmt.ExecContext(ctx, int64(10), "838:59:59.000001", int64(1))
+			require.ErrorContains(t, err, "data out of range")
+			require.Equal(t, "02:03:04.000005", readTemporalValue(), "failed assignment must leave the row unchanged")
+
+			executeTemporalUpdate("03:04:05.000006")
+			require.Equal(t, "03:04:05.000006", readTemporalValue(),
+				"the prepared handle must remain reusable after an assignment error")
 		},
 	)
 }
