@@ -187,6 +187,10 @@ func (builder *QueryBuilder) applyIndicesForSortUsingHnsw(nodeID int32, vecCtx *
 		BindingTags:     []int32{tableFuncTag},
 		Children:        vectorSearchProviderChildren(vecCtx),
 		TblFuncExprList: buildHnswTableFuncArgs(tblCfgStr, hnswCtx.vecLitArg),
+		// Propagate the named-snapshot read TS so hnsw_search reads the historical index
+		// (via the cloned read txn), not the current one, on a {snapshot=...} query
+		// (#27927). DeepCopySnapshot(nil) is nil, so a non-snapshot query is unaffected.
+		ScanSnapshot: DeepCopySnapshot(vecCtx.scanNode.ScanSnapshot),
 	}
 	tableFuncNodeID := builder.appendNode(tableFuncNode, ctx)
 
