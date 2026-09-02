@@ -1410,7 +1410,7 @@ func TestDataBranchOutputExecSQLStatementsWithWriteFile(t *testing.T) {
 	require.Equal(t, "select 1;\ninsert into t values (1);\n", out.String())
 }
 
-func TestDataBranchOutputExactFloatKeyUpdateSQL(t *testing.T) {
+func TestDataBranchOutputDirectUpdateSQL(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
 
@@ -1438,7 +1438,7 @@ func TestDataBranchOutputExactFloatKeyUpdateSQL(t *testing.T) {
 		"updated",
 	}
 	var buf bytes.Buffer
-	statements, err := exactFloatKeyUpdateSQL(
+	statements, err := dataBranchDirectUpdateSQL(
 		context.Background(), nil, tblStuff, row, &buf, true,
 	)
 	require.NoError(t, err)
@@ -1451,7 +1451,7 @@ func TestDataBranchOutputExactFloatKeyUpdateSQL(t *testing.T) {
 		statements,
 	)
 
-	statements, err = exactFloatKeyUpdateSQL(
+	statements, err = dataBranchDirectUpdateSQL(
 		context.Background(), nil, tblStuff, row, &buf, false,
 	)
 	require.NoError(t, err)
@@ -1460,6 +1460,18 @@ func TestDataBranchOutputExactFloatKeyUpdateSQL(t *testing.T) {
 			"serial(`f32`) = serial(bit_cast(unhex('0100c07f') as float)) and " +
 			"serial(`f64`) = serial(bit_cast(unhex('0000000000000080') as double)) and " +
 			"`tag` = 7 limit 1",
+	}, statements)
+
+	tblStuff.def.baseColNames = []string{"id", "note"}
+	tblStuff.def.colTypes = []types.Type{types.T_int64.ToType(), types.T_varchar.ToType()}
+	tblStuff.def.pkColIdxes = []int{0}
+	tblStuff.def.writableIdxes = []int{0, 1}
+	statements, err = dataBranchDirectUpdateSQL(
+		context.Background(), nil, tblStuff, []any{int64(2), "updated"}, &buf, false,
+	)
+	require.NoError(t, err)
+	require.Equal(t, []string{
+		"update `db1`.`t1` set `note` = 'updated' where `id` = 2 limit 1",
 	}, statements)
 }
 
@@ -2306,6 +2318,53 @@ func TestDataBranchOutputAppendBatchRowsAsSQLValues(t *testing.T) {
 		))
 		require.Equal(t, 2, deleteCnt)
 		require.Equal(t, "3,4", deleteBuf.String())
+	})
+
+	t.Run("applies primary-key updates directly", func(t *testing.T) {
+		directUpdate, err := dataBranchDirectUpdateBatch(
+			tblStuff, batchWithKind{kind: diffInsert, fromUpdate: true}, &applyBatchInfo{},
+		)
+		require.NoError(t, err)
+		require.True(t, directUpdate)
+
+		fakePKTable := tblStuff
+		fakePKTable.def.pkKind = fakeKind
+		directUpdate, err = dataBranchDirectUpdateBatch(
+			fakePKTable, batchWithKind{kind: diffInsert, fromUpdate: true}, &applyBatchInfo{},
+		)
+		require.NoError(t, err)
+		require.False(t, directUpdate)
+
+		directUpdateTable := tblStuff
+		directUpdateTable.def.baseColNames = []string{"id", "name", "hidden"}
+		var out bytes.Buffer
+		appender := sqlValuesAppender{
+			ctx:       context.Background(),
+			tblStuff:  directUpdateTable,
+			batchInfo: &applyBatchInfo{},
+			writeFile: func(b []byte) error {
+				_, err := out.Write(b)
+				return err
+			},
+		}
+
+		deleteBat := buildVisibleComparisonBatch(t, ses.proc.Mp(), [][]any{{int64(2), "before"}})
+		defer deleteBat.Clean(ses.proc.Mp())
+		require.NoError(t, appendBatchRowsAsSQLValues(
+			context.Background(), ses, directUpdateTable,
+			batchWithKind{kind: diffDelete, fromUpdate: true, batch: deleteBat},
+			&bytes.Buffer{}, appender,
+		))
+		require.Empty(t, out.String())
+
+		insertBat := buildVisibleComparisonBatch(t, ses.proc.Mp(), [][]any{{int64(2), "after"}})
+		defer insertBat.Clean(ses.proc.Mp())
+		require.NoError(t, appendBatchRowsAsSQLValues(
+			context.Background(), ses, directUpdateTable,
+			batchWithKind{kind: diffInsert, fromUpdate: true, batch: insertBat},
+			&bytes.Buffer{}, appender,
+		))
+		require.Equal(t, "update `db1`.`base` set `name` = 'after' where `id` = 2 limit 1;\n", out.String())
 	})
 
 	t.Run("returns shape mismatch error", func(t *testing.T) {

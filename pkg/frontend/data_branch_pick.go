@@ -197,10 +197,9 @@ func pickMergeDiffs(
 		ctx, ses, bh, tblStuff, dataBranchApplyModeOnlinePKOnly,
 		&deleteCnt, deleteFromVals, &insertCnt, insertIntoVals, nil,
 	)
-	var acceptedExactFloatKeys map[string]struct{}
-	if appender.batchInfo.deleteNeedsExactFloatKeyMatch() &&
-		stmt.ConflictOpt != nil && stmt.ConflictOpt.Opt == tree.CONFLICT_ACCEPT {
-		acceptedExactFloatKeys = make(map[string]struct{})
+	var acceptedDirectUpdateKeys map[string]struct{}
+	if stmt.ConflictOpt != nil && stmt.ConflictOpt.Opt == tree.CONFLICT_ACCEPT {
+		acceptedDirectUpdateKeys = make(map[string]struct{})
 	}
 	if err = initApplyTables(ctx, ses, bh, appender.batchInfo, appender.writeFile); err != nil {
 		return err
@@ -223,7 +222,7 @@ func pickMergeDiffs(
 
 		if err = appendPickedBatchRows(
 			ctx, ses, tblStuff, wrapped, tmpValsBuffer, appender,
-			stmt.ConflictOpt, skipSet, acceptedExactFloatKeys,
+			stmt.ConflictOpt, skipSet, acceptedDirectUpdateKeys,
 		); err != nil {
 			firstErr = err
 			cancel()
@@ -233,7 +232,7 @@ func pickMergeDiffs(
 
 		tblStuff.retPool.releaseRetBatch(wrapped.batch, false)
 	}
-	if firstErr == nil && len(acceptedExactFloatKeys) != 0 {
+	if firstErr == nil && len(acceptedDirectUpdateKeys) != 0 {
 		firstErr = moerr.NewInternalErrorNoCtx("Data Branch PICK accepted conflict is missing its source row")
 	}
 
@@ -275,7 +274,7 @@ func appendPickedBatchRows(
 	appender sqlValuesAppender,
 	userConflictOpt *tree.ConflictOpt,
 	skipSet map[string]struct{},
-	acceptedExactFloatKeys map[string]struct{},
+	acceptedDirectUpdateKeys map[string]struct{},
 ) (err error) {
 	// PICK only cares about two kinds of batches from hashDiff:
 	//   1. target INSERT (side=target, kind=INSERT) — source rows to add/replace
@@ -288,7 +287,7 @@ func appendPickedBatchRows(
 	if wrapped.side == diffSideBase && wrapped.kind != diffDelete {
 		return nil
 	}
-	exactFloatKeyUpdate, err := dataBranchExactFloatKeyUpdateBatch(wrapped, appender.batchInfo)
+	directUpdate, err := dataBranchDirectUpdateBatch(tblStuff, wrapped, appender.batchInfo)
 	if err != nil {
 		return err
 	}
@@ -323,14 +322,14 @@ func appendPickedBatchRows(
 					skipSet[pkKey] = struct{}{}
 					continue // do not apply the DELETE
 				case tree.CONFLICT_ACCEPT:
-					if acceptedExactFloatKeys != nil {
-						// The matching source row is applied by an exact-key upsert.
-						// Deferring the resolution avoids a staged delete that could
-						// run after the upsert and remove the accepted row.
-						acceptedExactFloatKeys[pkKey] = struct{}{}
+					if wrapped.hasReplacement {
+						// The matching source row is applied by a direct key update.
+						// Deferring the resolution avoids deleting a referenced row.
+						acceptedDirectUpdateKeys[pkKey] = struct{}{}
 						continue
 					}
-					// Fall through for non-float keys: DELETE + INSERT is safe.
+					// A source DELETE has no replacement row, so preserve the
+					// destination deletion.
 				}
 			}
 		}
@@ -341,13 +340,13 @@ func appendPickedBatchRows(
 				continue
 			}
 		}
-		if acceptedExactFloatKeys != nil && wrapped.side == diffSideTarget && wrapped.kind == diffInsert {
-			if _, accepted := acceptedExactFloatKeys[pkKey]; accepted {
-				exactFloatKeyUpdate = true
-				delete(acceptedExactFloatKeys, pkKey)
+		if acceptedDirectUpdateKeys != nil && wrapped.side == diffSideTarget && wrapped.kind == diffInsert {
+			if _, accepted := acceptedDirectUpdateKeys[pkKey]; accepted {
+				directUpdate = true
+				delete(acceptedDirectUpdateKeys, pkKey)
 			}
 		}
-		if exactFloatKeyUpdate && wrapped.kind == diffDelete {
+		if directUpdate && wrapped.kind == diffDelete {
 			continue
 		}
 
@@ -359,7 +358,7 @@ func appendPickedBatchRows(
 		}
 		if err = appendOrExecuteDataBranchApplyRow(
 			ctx, ses, tblStuff, wrapped.kind, row, tmpValsBuffer, appender,
-			exactFloatKeyUpdate, wrapped.restoreMissing,
+			directUpdate, wrapped.restoreMissing,
 		); err != nil {
 			return
 		}

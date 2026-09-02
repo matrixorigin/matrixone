@@ -1918,11 +1918,11 @@ func appendBatchRowsAsSQLValues(
 	tmpValsBuffer *bytes.Buffer,
 	appender sqlValuesAppender,
 ) (err error) {
-	exactFloatKeyUpdate, err := dataBranchExactFloatKeyUpdateBatch(wrapped, appender.batchInfo)
+	directUpdate, err := dataBranchDirectUpdateBatch(tblStuff, wrapped, appender.batchInfo)
 	if err != nil {
 		return err
 	}
-	if exactFloatKeyUpdate {
+	if directUpdate {
 		if wrapped.kind == diffDelete {
 			return nil
 		}
@@ -1944,7 +1944,7 @@ func appendBatchRowsAsSQLValues(
 		}
 		if err = appendOrExecuteDataBranchApplyRow(
 			ctx, ses, tblStuff, wrapped.kind, row, tmpValsBuffer, appender,
-			exactFloatKeyUpdate, wrapped.restoreMissing,
+			directUpdate, wrapped.restoreMissing,
 		); err != nil {
 			return
 		}
@@ -1953,11 +1953,12 @@ func appendBatchRowsAsSQLValues(
 	return nil
 }
 
-func dataBranchExactFloatKeyUpdateBatch(
+func dataBranchDirectUpdateBatch(
+	tblStuff tableStuff,
 	wrapped batchWithKind,
 	batchInfo *applyBatchInfo,
 ) (bool, error) {
-	if !wrapped.fromUpdate || batchInfo == nil || !batchInfo.deleteNeedsExactFloatKeyMatch() {
+	if tblStuff.def.pkKind == fakeKind || !wrapped.fromUpdate || batchInfo == nil {
 		return false, nil
 	}
 	if wrapped.kind != diffDelete && wrapped.kind != diffInsert {
@@ -1974,16 +1975,16 @@ func appendOrExecuteDataBranchApplyRow(
 	row []any,
 	tmpValsBuffer *bytes.Buffer,
 	appender sqlValuesAppender,
-	exactFloatKeyUpdate bool,
+	directUpdate bool,
 	restoreMissing bool,
 ) error {
-	if !exactFloatKeyUpdate {
+	if !directUpdate {
 		return appendDataBranchApplyRowAsSQLValues(
 			ctx, ses, tblStuff, kind, row, tmpValsBuffer, appender,
 		)
 	}
 
-	statements, err := exactFloatKeyUpdateSQL(
+	statements, err := dataBranchDirectUpdateSQL(
 		ctx, ses, tblStuff, row, tmpValsBuffer, restoreMissing,
 	)
 	if err != nil {
@@ -1992,12 +1993,12 @@ func appendOrExecuteDataBranchApplyRow(
 	return execSQLStatements(ctx, ses, appender.bh, appender.writeFile, statements)
 }
 
-// exactFloatKeyUpdateSQL applies a source update without passing FLOAT/DOUBLE
-// identity through scalar equality. A row marked restoreMissing is known by the
-// diff to have been independently deleted from the destination and is restored
-// with one direct INSERT ... VALUES. The primary-key constraint plan compares
-// FLOAT/DOUBLE serial encodings, so this path retains bit-distinct peers.
-func exactFloatKeyUpdateSQL(
+// dataBranchDirectUpdateSQL applies a source-side non-key update without
+// deleting its destination row first. The exact key predicate preserves
+// FLOAT/DOUBLE identity as well as ordinary primary-key equality. A row marked
+// restoreMissing is known by the diff to have been independently deleted from
+// the destination and is restored with one direct INSERT ... VALUES.
+func dataBranchDirectUpdateSQL(
 	ctx context.Context,
 	ses *Session,
 	tblStuff tableStuff,

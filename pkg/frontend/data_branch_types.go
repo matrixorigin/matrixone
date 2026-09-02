@@ -283,6 +283,9 @@ type batchWithKind struct {
 	side           int
 	fromUpdate     bool
 	restoreMissing bool
+	// hasReplacement marks a preserved PICK conflict whose source side emitted
+	// a row to replace the destination conflict victim.
+	hasReplacement bool
 	batch          *batch.Batch
 }
 

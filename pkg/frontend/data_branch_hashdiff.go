@@ -1348,10 +1348,11 @@ func hashDiffIfHasLCA(
 
 		if pickConflictBat != nil {
 			if stop, e := emitBatch(emit, batchWithKind{
-				batch: pickConflictBat,
-				kind:  diffDelete,
-				name:  tblStuff.baseRel.GetTableName(),
-				side:  diffSideBase,
+				batch:          pickConflictBat,
+				kind:           diffDelete,
+				name:           tblStuff.baseRel.GetTableName(),
+				side:           diffSideBase,
+				hasReplacement: wrapped.kind == diffInsert || wrapped.fromUpdate,
 			}, false, tblStuff.retPool); e != nil {
 				return e
 			} else if stop {
