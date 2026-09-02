@@ -3755,7 +3755,7 @@ func (builder *QueryBuilder) createQuery() (*Query, error) {
 			}
 		}
 	}
-	applySharedLockTableFallback(builder)
+	applyLockTableFallback(builder)
 
 	for i := range builder.qry.Steps {
 		rootID := builder.qry.Steps[i]
@@ -5636,6 +5636,26 @@ func (builder *QueryBuilder) bindSelect(stmt *tree.Select, ctx *BindContext, isR
 	if len(ctx.groups) == 0 && len(ctx.aggregates) > 0 {
 		ctx.hasSingleRow = true
 	}
+
+	// All aggregate consumers in this query block are bound now. Compact exact
+	// affine SUM families before aggregate arguments are flattened and the AGG
+	// node fixes their physical slot layout.
+	affineOrderBys := slices.Clone(boundOrderBys)
+	if boundTimeWindowOrderBy != nil {
+		affineOrderBys = append(affineOrderBys, boundTimeWindowOrderBy)
+	}
+	builder.rewriteAffineSumFamilies(
+		ctx,
+		[][]*plan.Expr{
+			ctx.projects,
+			ctx.windows,
+			ctx.times,
+			boundHavingList,
+			fillVals,
+			fillCols,
+		},
+		affineOrderBys,
+	)
 
 	// Flatten aggregate argument subqueries before building the AGG node.
 	if !ctx.sampleFunc.hasSampleFunc && !ctx.bindingRecurStmt() {
@@ -8251,6 +8271,18 @@ func (builder *QueryBuilder) bindGroupBy(
 				},
 			},
 		}
+	}
+	if clause != nil && astTimeWindow == nil && !clause.Apart &&
+		!clause.Cube && !clause.GroupingSets && !clause.Rollup {
+		var logicalGroupByAst map[string]int32
+		if ctx.sampleFunc.hasSampleFunc {
+			logicalGroupByAst = make(map[string]int32, len(ctx.groupByAst))
+			for key, pos := range ctx.groupByAst {
+				logicalGroupByAst[key] = pos
+			}
+		}
+		elideStableLiteralGroupBy(ctx)
+		preserveElidedGroupByForSample(ctx, logicalGroupByAst)
 	}
 	return
 }

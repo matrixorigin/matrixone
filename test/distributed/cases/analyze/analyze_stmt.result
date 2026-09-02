@@ -107,6 +107,30 @@ AFTER_SNAPSHOT_ANALYZE
 AFTER_SNAPSHOT_ANALYZE
 drop snapshot analyze_schema_snapshot;
 drop table snapshot_cols;
+prepare analyze_explicit from analyze table t_analyze_01(a, b);
+execute analyze_explicit;
+approx_count_distinct(a)	approx_count_distinct(b)
+2	3
+execute analyze_explicit;
+approx_count_distinct(a)	approx_count_distinct(b)
+2	3
+deallocate prepare analyze_explicit;
+prepare analyze_implicit from analyze table t_analyze_01;
+execute analyze_implicit;
+approx_count_distinct(a)	approx_count_distinct(b)
+2	3
+deallocate prepare analyze_implicit;
+create database analyze_prepare_other;
+create table analyze_prepare_other.t_analyze_01(a int, b int);
+insert into analyze_prepare_other.t_analyze_01 values (9, 9), (9, 9);
+prepare analyze_bound from analyze table t_analyze_01(a);
+use analyze_prepare_other;
+execute analyze_bound;
+approx_count_distinct(a)
+2
+use db_analyze_stmt;
+deallocate prepare analyze_bound;
+drop database analyze_prepare_other;
 check table t_analyze_01;
 not supported: CHECK TABLE is not supported in MatrixOne
 check table t_analyze_01 extended;
