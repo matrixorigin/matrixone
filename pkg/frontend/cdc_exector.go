@@ -1392,8 +1392,7 @@ func (exec *CDCTaskExecutor) Cancel() error {
 	// generation before taking the reader snapshot and performing the terminal
 	// watermark delete. Callbacks queued behind this fence observe the increment
 	// above and return without publishing work.
-	exec.callbackMu.Lock()
-	exec.callbackMu.Unlock()
+	exec.waitForTableDetectorCallback()
 	exec.cancelLifecycleContext()
 	exec.recordLeavingFailedMetrics(stateBeforeCancel, StateCancelling)
 
@@ -1477,6 +1476,17 @@ func (exec *CDCTaskExecutor) Cancel() error {
 		}
 	}
 	return nil
+}
+
+// waitForTableDetectorCallback acquires the callback write lock so callbacks
+// that already passed their generation check finish before cancellation moves
+// on to reader and watermark cleanup.
+func (exec *CDCTaskExecutor) waitForTableDetectorCallback() {
+	exec.callbackMu.Lock()
+	// Reading the generation makes the synchronization point explicit while
+	// holding the lock; callbacks use the same generation fence.
+	exec.callbackGeneration.Load()
+	exec.callbackMu.Unlock()
 }
 
 func (exec *CDCTaskExecutor) recordLeavingFailedMetrics(fromState ExecutorState, toState ExecutorState) {
