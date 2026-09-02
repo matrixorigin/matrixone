@@ -3531,10 +3531,10 @@ func (b *baseBinder) bindFuncExprImplByAstExpr(name string, astArgs []tree.Expr,
 		return nil, coerceErr
 	}
 	if name == "avg" && len(astArgs) == 1 && len(args) == 1 {
-		// MySQL derives AVG's exact result from a direct integer literal's
-		// decimal precision, not from the physical BIGINT container used for
-		// untyped literals. Columns and explicit integer casts deliberately keep
-		// their full declared domains.
+		// MySQL derives AVG's exact result from an integer literal/constant
+		// expression's decimal precision, not from the physical BIGINT container
+		// used for untyped literals. Columns and explicit integer casts deliberately
+		// keep their full declared domains.
 		b.setAvgIntegerLiteralPrecision(astArgs[0], args[0])
 	}
 	if (name == "in" || name == "not_in") && len(args) == 2 &&
@@ -3653,6 +3653,58 @@ func (b *baseBinder) bindFuncExprImplByAstExpr(name string, astArgs []tree.Expr,
 	return bindFuncExprImplUdf(b, name, udf, astArgs, args, depth)
 }
 
+func (b *baseBinder) setAvgIntegerLiteralPrecision(astExpr tree.Expr, arg *plan.Expr) {
+	typ := makeTypeByPlan2Expr(arg)
+	if !typ.Oid.IsInteger() {
+		return
+	}
+	precision, ok := avgIntegerConstantPrecision(astExpr)
+	if !ok || precision <= 0 {
+		return
+	}
+	arg.Typ.Width = precision
+	// Integer casts use Scale == -1 to carry physical bit width. Mark the
+	// literal-derived precision as decimal metadata so AvgReturnType does
+	// not reinterpret it as a cast domain.
+	arg.Typ.Scale = 0
+}
+
+func avgIntegerConstantPrecision(astExpr tree.Expr) (int32, bool) {
+	switch expr := astExpr.(type) {
+	case *tree.ParenExpr:
+		return avgIntegerConstantPrecision(expr.Expr)
+	case *tree.UnaryExpr:
+		if expr.Op != tree.UNARY_PLUS && expr.Op != tree.UNARY_MINUS {
+			return 0, false
+		}
+		return avgIntegerConstantPrecision(expr.Expr)
+	case *tree.NumVal:
+		if expr.ValType != tree.P_int64 && expr.ValType != tree.P_uint64 {
+			return 0, false
+		}
+		literal := strings.TrimLeft(expr.String(), "+-")
+		return int32(len(literal)), true
+	case *tree.BinaryExpr:
+		left, leftOK := avgIntegerConstantPrecision(expr.Left)
+		right, rightOK := avgIntegerConstantPrecision(expr.Right)
+		if !leftOK || !rightOK {
+			return 0, false
+		}
+		switch expr.Op {
+		case tree.MULTI:
+			return left + right, true
+		case tree.PLUS, tree.MINUS:
+			return max(left, right) + 1, true
+		case tree.MOD:
+			return min(left, right), true
+		default:
+			return 0, false
+		}
+	default:
+		return 0, false
+	}
+}
+
 func markPreparedResultCastsProvisional(
 	ctx context.Context,
 	name string,
@@ -3697,45 +3749,6 @@ func markPreparedResultCastsProvisional(
 		// can be identical to a user-authored CAST, which remains authoritative.
 		fn.SyntaxExplicitCast = false
 		ensurePreparedNumericMetadata(arg).ProvisionalResultCast = true
-	}
-}
-
-func (b *baseBinder) setAvgIntegerLiteralPrecision(astExpr tree.Expr, arg *plan.Expr) {
-	for {
-		switch expr := astExpr.(type) {
-		case *tree.ParenExpr:
-			astExpr = expr.Expr
-			continue
-		case *tree.UnaryExpr:
-			if expr.Op == tree.UNARY_PLUS || expr.Op == tree.UNARY_MINUS {
-				astExpr = expr.Expr
-				continue
-			}
-		}
-		break
-	}
-	literal, ok := astExpr.(*tree.NumVal)
-	if !ok || (literal.ValType != tree.P_int64 && literal.ValType != tree.P_uint64) || arg == nil {
-		return
-	}
-	typ := makeTypeByPlan2Expr(arg)
-	if !typ.Oid.IsInteger() {
-		return
-	}
-	precision, isLiteral := decimalIntegerWidth(arg, typ)
-	if !isLiteral {
-		// Unary +/- is represented as a function expression, so the bound plan
-		// no longer carries a literal node. The AST still has the exact text and
-		// lets us retain the same digit-sensitive metadata for AVG(-2).
-		literalText := strings.TrimLeft(literal.String(), "+-")
-		precision = int32(len(literalText))
-	}
-	if precision > 0 {
-		arg.Typ.Width = precision
-		// Integer casts use Scale == -1 to carry physical bit width. Mark the
-		// literal-derived precision as decimal metadata so AvgReturnType does
-		// not reinterpret it as a cast domain.
-		arg.Typ.Scale = 0
 	}
 }
 

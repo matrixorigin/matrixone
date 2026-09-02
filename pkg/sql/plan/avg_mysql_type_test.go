@@ -84,6 +84,10 @@ func TestCTASAvgUsesIntegerExpressionPrecision(t *testing.T) {
 		`create table t_avg_literal as select
 avg(2) as avg_literal,
 avg(-2) as avg_negative_literal,
+avg((2)) as avg_parenthesized_literal,
+avg(2 + 3) as avg_add,
+avg(2 * 3) as avg_mul,
+avg(2 % 3) as avg_mod,
 avg(n_nationkey) as avg_column,
 avg(cast(2 as signed)) as avg_cast
 from nation`,
@@ -101,7 +105,7 @@ from nation`,
 			visible = append(visible, col)
 		}
 	}
-	require.Len(t, visible, 4)
+	require.Len(t, visible, 8)
 	for _, col := range visible {
 		require.Equal(t, int32(types.T_decimal128), col.Typ.Id)
 		require.Equal(t, int32(4), col.Typ.Scale)
@@ -110,7 +114,11 @@ from nation`,
 	// fractional digits for AVG: DECIMAL(5,4), not BIGINT's DECIMAL(23,4).
 	require.Equal(t, int32(5), visible[0].Typ.Width)
 	require.Equal(t, int32(5), visible[1].Typ.Width)
+	require.Equal(t, int32(5), visible[2].Typ.Width)
+	require.Equal(t, int32(6), visible[3].Typ.Width)
+	require.Equal(t, int32(6), visible[4].Typ.Width)
+	require.Equal(t, int32(5), visible[5].Typ.Width)
 	// A column and an explicit integer CAST retain their complete domains.
-	require.Equal(t, int32(14), visible[2].Typ.Width)
-	require.Equal(t, int32(23), visible[3].Typ.Width)
+	require.Equal(t, int32(14), visible[6].Typ.Width)
+	require.Equal(t, int32(23), visible[7].Typ.Width)
 }
