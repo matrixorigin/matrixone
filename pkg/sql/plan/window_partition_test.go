@@ -79,7 +79,8 @@ func TestDetermineWindowPartitionAlgorithms(t *testing.T) {
 	builder.aggSpillMem = 1 << 30
 
 	builder.determineWindowPartitionAlgorithms(2)
-	require.Equal(t, planpb.Node_PARTITION_ALGORITHM_HASH, builder.qry.Nodes[1].PartitionAlgorithm)
+	require.Equal(t, planpb.Node_PARTITION_ALGORITHM_SORT, builder.qry.Nodes[1].PartitionAlgorithm,
+		"the blocking HASH implementation must not be selected before its end-to-end acceptance gate passes")
 
 	stats.NdvMap["k"] = 1 << 16
 	builder.qry.Nodes[1].PartitionAlgorithm = planpb.Node_PARTITION_ALGORITHM_SORT

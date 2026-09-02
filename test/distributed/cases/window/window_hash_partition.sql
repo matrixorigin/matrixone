@@ -1,6 +1,7 @@
--- SQL-to-Window coverage for the cost-selected hash partition path (#27943).
+-- SQL-to-Window coverage for the gated hash partition design (#27943).
 -- The table is deliberately larger than one vector batch and ANALYZE supplies
--- the low-NDV cardinality evidence required for automatic HASH selection.
+-- low-NDV cardinality evidence, but AUTO remains fail-closed to SORT until the
+-- real-Window acceptance gate is complete.
 drop database if exists window_hash_partition;
 create database window_hash_partition;
 use window_hash_partition;
@@ -16,9 +17,9 @@ select result, result % 50, cast(result % 50 as char(3)), result
 from generate_series(1, 10000) g;
 analyze table t(k, ck);
 
--- The compatible INT key and analyzed low NDV select HASH automatically.
--- @regex("Hash Partition",true)
-explain (check '["Hash Partition"]')
+-- The compatible INT key remains on the legacy path while AUTO is disabled.
+-- @regex("Hash Partition",false)
+explain (check '["Partition"]')
 select sum(v) over (partition by k) from t;
 
 -- Aggregate / unordered Window contract.

@@ -13,14 +13,14 @@ from generate_series(1, 10000) g;
 analyze table t(k, ck);
 approx_count_distinct(k)	approx_count_distinct(ck)
 50	50
-explain (check '["Hash Partition"]')
+explain (check '["Partition"]')
 select sum(v) over (partition by k) from t;
--- @regex("Hash Partition", true)
+-- @regex("Hash Partition", false)
 TP QUERY PLAN
 Project
   ->  Window
         Window Function: sum(t.v); Partition By: t.k
-        ->  Hash Partition
+        ->  Partition
               Sort Key: t.k INTERNAL
               ->  Table Scan on window_hash_partition.t
 select sum(part_sum) from (

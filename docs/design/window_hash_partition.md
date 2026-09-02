@@ -1,19 +1,22 @@
 # Cost-based hash partitioning for ordinary window functions
 
-- Status: pending independent design review
+- Status: draft; automatic selection disabled pending independent review and acceptance evidence
 - Tracking issue: [matrixorigin/matrixone#27943](https://github.com/matrixorigin/matrixone/issues/27943)
 - Owner: iamlinjunhong
 - Base commit: `c46d897e9645b80178568ef0783dd8e99e527222`
 - Implementation PR: [matrixorigin/matrixone#27972](https://github.com/matrixorigin/matrixone/pull/27972)
-- Design revision: `window-hash-partition-2026-09-02-r3`
+- Design revision: `window-hash-partition-2026-09-02-r4`
 - Last updated: 2026-09-02
 
 ## 1. Decision
 
-Add a cost-selected `HASH` implementation to the existing `Node_PARTITION`
+This draft defines a cost-selected `HASH` implementation for the existing `Node_PARTITION`
 operator used by ordinary SQL window functions. `SORT` remains the zero-value,
-wire-compatible default and the mandatory fallback. The planner makes one
-explicit choice; compile and execution follow that choice without independently
+wire-compatible default and the mandatory fallback. `HASH` is not automatically
+selected in this revision: the optimizer fail-closes to `SORT` until an
+independent design decision and the complete real-Window performance/resource
+acceptance matrix are recorded. Once enabled, the planner makes one explicit
+choice; compile and execution follow that choice without independently
 replanning it.
 
 The first revision implements coordinator hash partitioning. All upstream CN
@@ -305,11 +308,13 @@ versus 1.216--1.222 s/op and 139.1 MB `peak-mpool-B` at 100%-NDV. The latter
 counterexample remains on SORT through the key-count-scaled per-group cost.
 
 This is deliberately an operator microbenchmark, not a claim about end-to-end
-SQL latency. Before merge, the performance gate still requires repeated
-selected-HASH-versus-SORT measurements through a real Window consumer for the
-ordered/unordered, activating/rejected, fallback, and multi-scope cases. The
-public SQL BVT independently covers selected HASH output through aggregate,
-ranking, value, ROWS, RANGE, ordered, and unordered Window consumers.
+SQL latency. Automatic HASH selection remains disabled until the performance
+gate records repeated selected-HASH-versus-SORT measurements through a real
+Window consumer for the ordered/unordered, activating/rejected, fallback, and
+multi-scope cases, including peak memory. The public SQL BVT now asserts the
+fail-closed SORT default while preserving aggregate, ranking, value, ROWS,
+RANGE, ordered, and unordered Window result oracles. Re-enablement must add an
+exact selected-HASH public-path oracle in addition to those semantic controls.
 
 ## 11. Rollout and observability
 
@@ -331,9 +336,10 @@ first revision.
   merge before one partition owner.
 - Proposed compatibility: complete; zero-value SORT plus the protocol-version compile gate is
   safe across persisted and mixed-version protobuf readers.
-- Proposed cost/resource implementation: complete with benchmark calibration, mpool-owned
-  index buffers, actual-memory fallback tests, and explicit outstanding real-Window acceptance
-  measurements before merge.
+- Proposed cost/resource implementation: draft; benchmark calibration and mpool-owned
+  index buffers are implemented, while real-Window acceptance measurements and a bounded
+  fallback resource contract remain required before automatic selection can be enabled.
 - Independent review decision: pending. This document is versioned with the
   implementation PR above; an independent reviewer must record approval of its
-  exact revision before implementation approval can proceed.
+  exact revision, and the acceptance evidence above must be recorded, before
+  automatic HASH selection can be enabled.

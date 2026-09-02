@@ -24,6 +24,11 @@ import (
 )
 
 const (
+	// windowHashPartitionAutoEnabled is deliberately fail-closed until the
+	// real-Window acceptance matrix has established the resource and latency
+	// contract for the blocking HASH implementation. SORT remains the wire-zero
+	// value and the only planner-selected algorithm meanwhile.
+	windowHashPartitionAutoEnabled = false
 	windowHashEntryOverhead = 32
 	windowVarlenKeyWidth    = 128
 	// Each hash group crosses the Window boundary and maintains one equality
@@ -41,7 +46,7 @@ func (builder *QueryBuilder) determineWindowPartitionAlgorithms(nodeID int32) {
 	for _, childID := range node.Children {
 		builder.determineWindowPartitionAlgorithms(childID)
 	}
-	if node.NodeType != planpb.Node_WINDOW || len(node.Children) != 1 {
+	if !windowHashPartitionAutoEnabled || node.NodeType != planpb.Node_WINDOW || len(node.Children) != 1 {
 		return
 	}
 	partitionNode := builder.qry.Nodes[node.Children[0]]
