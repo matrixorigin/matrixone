@@ -31,6 +31,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+	"github.com/matrixorigin/matrixone/pkg/sql/util"
 	"github.com/matrixorigin/matrixone/pkg/util/sysview"
 )
 
@@ -271,6 +272,63 @@ func TestSubscriptionStatisticsRoutesCatalogScansToPublisher(t *testing.T) {
 		"sub_b":  wantCatalogTables,
 		"sub_db": wantCatalogTables,
 	}, seen)
+}
+
+func TestSubscriptionStatisticsUsesResolvedPublisherAccountIdentity(t *testing.T) {
+	// Production initializes this list while bootstrapping the frontend. The
+	// lightweight planner context does not, but a non-system publisher causes
+	// the normal mo_columns tenant filter to be bound and therefore needs a
+	// non-empty predefined-table set too.
+	util.InitPredefinedTables([]string{catalog.MO_USER})
+	defer util.InitPredefinedTables(nil)
+
+	optimizer, ctx := newSubscriptionMetadataTestOptimizer()
+	ctx.metadata = []*SubscriptionMetadata{{
+		Meta: &SubscriptionMeta{
+			Name:        "publication",
+			AccountId:   42,
+			AccountName: "publisher",
+			DbName:      "tpch",
+			SubName:     "legacy_sub",
+			Tables:      "nation",
+		},
+		AllTablesVisible: true,
+	}}
+
+	queryPlan, err := runOneStmt(optimizer, t,
+		"select table_schema, index_schema, table_name, index_name "+
+			"from information_schema.statistics "+
+			"where table_schema = 'legacy_sub' and table_name = 'nation'")
+	require.NoError(t, err)
+	requireStatisticsPublisherScopes(t, queryPlan.GetQuery(), map[string]int32{
+		"legacy_sub": 42,
+	})
+
+	publisherCatalogScans := 0
+	accountFilteredScans := make(map[string]bool)
+	for _, node := range queryPlan.GetQuery().GetNodes() {
+		if node.GetNodeType() != plan.Node_TABLE_SCAN ||
+			node.GetObjRef().GetSchemaName() != catalog.MO_CATALOG ||
+			node.GetObjRef().GetSubscriptionName() != "legacy_sub" {
+			continue
+		}
+		name := node.GetObjRef().GetObjName()
+		if name != catalog.MO_INDEXES && name != catalog.MO_TABLES && name != catalog.MO_COLUMNS {
+			continue
+		}
+		publisherCatalogScans++
+		require.Equal(t, int32(42), node.GetObjRef().GetPubInfo().GetTenantId(), name)
+		if name == catalog.MO_TABLES || name == catalog.MO_COLUMNS {
+			require.Contains(t, FormatExprs(node.GetFilterList(), FormatOption{}), "u32val:42", name)
+			accountFilteredScans[name] = true
+		}
+	}
+	require.Equal(t, 3, publisherCatalogScans)
+	require.Equal(t, map[string]bool{
+		catalog.MO_TABLES:  true,
+		catalog.MO_COLUMNS: true,
+	}, accountFilteredScans)
+	require.Nil(t, ctx.GetQueryingSubscription())
 }
 
 func TestSubscriptionShowIndexRoutesCatalogScansToPublisher(t *testing.T) {

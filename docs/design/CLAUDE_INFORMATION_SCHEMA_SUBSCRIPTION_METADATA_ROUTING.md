@@ -480,7 +480,7 @@ without introducing cross-statement freshness or invalidation state.
 | Subscriber role IDs do not authorize publisher catalogs | canonical CTE rewrite and publisher-RBAC negative tests |
 | Canonical and legacy persisted-view shapes remain safe | real canonical-DDL rewrite test and fail-closed shape tests |
 | Current and historical membership use one snapshot | compiler-context ownership review and public snapshot BVT |
-| Legacy `mo_subs` publisher names resolve to the real account at the same snapshot | bounded lookup tests plus nonzero `PubInfo.TenantId`/account-rewrite plan tests |
+| Legacy `mo_subs` publisher names resolve to the real account at the same snapshot | bounded lookup tests plus a generated nonzero `PubInfo.TenantId`/publisher-account-filter plan test |
 | Missing, duplicate, unexpected, zero/non-system, and canceled legacy identity lookup fail closed | frontend negative counterexamples |
 | Legacy publisher lookup remains bounded rather than N+1 or unbounded | 65-name fixed-batch counterexample plus overflow-before-lookup test |
 | Ordinary zero-to-one transition cannot reuse stale cache | cache-admission test and repeated COM_QUERY BVT |
