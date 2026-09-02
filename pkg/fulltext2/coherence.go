@@ -298,7 +298,7 @@ type FencePublisher interface {
 // The overflow result is retained for the mixed-version RPC contract and is
 // always false now that the exact registry grows with active identities.
 func InstallGenerationFence(id CacheIdentity, generation Generation) (current Generation, claimed, overflow bool) {
-	claim, current, overflow := localFences.install(id, generation)
+	claim, current, _ := localFences.install(id, generation)
 	if !claim {
 		entry := localFences.required(id)
 		return entry, localFences.claimedAtLeast(id, generation), false
