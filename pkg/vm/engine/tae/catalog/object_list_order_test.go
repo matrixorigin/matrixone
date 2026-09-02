@@ -99,6 +99,74 @@ func TestObjectListOrder(t *testing.T) {
 	require.Equal(t, []byte{8, 2, 7, 1}, collectVisibleObjectMarkers(list))
 }
 
+func TestObjectListCopiesOnlyModifiedGroups(t *testing.T) {
+	list := NewObjectList(false)
+	before := list.loadTrees()
+	entry := makeObjectListOrderTestEntry(1, ObjectListGroupAppendableCreate, 1)
+	list.Set(entry)
+	after := list.loadTrees()
+
+	require.NotSame(t, before, after)
+	require.NotSame(t, before.all, after.all)
+	require.Zero(t, before.all.Len())
+	require.Equal(t, 1, after.all.Len())
+	require.NotSame(t,
+		before.group(ObjectListGroupAppendableCreate),
+		after.group(ObjectListGroupAppendableCreate),
+	)
+	require.Zero(t, before.group(ObjectListGroupAppendableCreate).Len())
+	require.Equal(t, 1, after.group(ObjectListGroupAppendableCreate).Len())
+	for group := ObjectListGroupAppendableCreateWithDrop; group <= ObjectListGroupNonAppendableDrop; group++ {
+		require.Same(t, before.group(group), after.group(group))
+	}
+}
+
+func TestObjectListGroupSnapshotsConcurrentMutation(t *testing.T) {
+	list := NewObjectList(false)
+	const (
+		writes  = 120
+		readers = 8
+	)
+	start := make(chan struct{})
+	errC := make(chan error, readers)
+	var wg sync.WaitGroup
+	for range readers {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-start
+			for range writes {
+				snapshot := ObjectListSnapshot{trees: list.loadTrees()}
+				for group := ObjectListGroupAppendableCreate; group <= ObjectListGroupNonAppendableDrop; group++ {
+					it := snapshot.Group(group)
+					for ok := it.First(); ok; ok = it.Next() {
+						if actual := it.Item().ObjectListGroup(); actual != group {
+							it.Release()
+							errC <- fmt.Errorf("group snapshot returned %d, want %d", actual, group)
+							return
+						}
+					}
+					it.Release()
+				}
+			}
+		}()
+	}
+	close(start)
+	for i := range writes {
+		group := ObjectListGroup(i % int(ObjectListGroupNonAppendableDrop+1))
+		list.Set(makeObjectListOrderTestEntry(byte(i+1), group, int64(i+1)))
+	}
+	wg.Wait()
+	close(errC)
+	for err := range errC {
+		require.NoError(t, err)
+	}
+	require.Equal(t, writes, list.loadTree().Len())
+	for group := ObjectListGroupAppendableCreate; group <= ObjectListGroupNonAppendableDrop; group++ {
+		require.Equal(t, writes/6, list.loadTrees().group(group).Len())
+	}
+}
+
 func TestObjectListGroupSeek(t *testing.T) {
 	list := NewObjectList(false)
 	for marker, ts := range []int64{1, 3, 5} {

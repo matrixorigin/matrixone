@@ -126,8 +126,8 @@ func (node *AppendNode) SetMaxRow(row uint32) {
 }
 
 func (node *AppendNode) PrepareCommit() error {
-	node.mvcc.Lock()
-	defer node.mvcc.Unlock()
+	node.mvcc.LockForCommit()
+	defer node.mvcc.UnlockForCommit()
 	oldPrepare := node.Prepare
 	_, err := node.TxnMVCCNode.PrepareCommit()
 	if err == nil {
@@ -137,8 +137,8 @@ func (node *AppendNode) PrepareCommit() error {
 }
 
 func (node *AppendNode) ApplyCommit(id string) error {
-	node.mvcc.Lock()
-	defer node.mvcc.Unlock()
+	node.mvcc.LockForCommit()
+	defer node.mvcc.UnlockForCommit()
 	if node.IsCommitted() {
 		panic("AppendNode | ApplyCommit | LogicErr")
 	}
@@ -152,8 +152,8 @@ func (node *AppendNode) ApplyCommit(id string) error {
 }
 
 func (node *AppendNode) ApplyRollback() (err error) {
-	node.mvcc.Lock()
-	defer node.mvcc.Unlock()
+	node.mvcc.LockForCommit()
+	defer node.mvcc.UnlockForCommit()
 	_, err = node.TxnMVCCNode.ApplyRollback()
 	return
 }
@@ -243,8 +243,8 @@ func (node *AppendNode) ReadFromVersion(
 }
 
 func (node *AppendNode) PrepareRollback() (err error) {
-	node.mvcc.Lock()
-	defer node.mvcc.Unlock()
+	node.mvcc.LockForCommit()
+	defer node.mvcc.UnlockForCommit()
 	oldPrepare := node.Prepare
 	err = node.TxnMVCCNode.PrepareRollback()
 	if err == nil && node.GetTxn() != nil {

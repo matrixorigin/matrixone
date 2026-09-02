@@ -73,8 +73,8 @@ func (appender *objectAppender) PrepareAppend(
 	isMergeCompact bool,
 	rows uint32,
 	txn txnif.AsyncTxn) (node txnif.AppendNode, created bool, n uint32, err error) {
-	appender.obj.Lock()
-	defer appender.obj.Unlock()
+	appender.obj.appendMVCC.LockForAppend()
+	defer appender.obj.appendMVCC.UnlockForAppend()
 	start := appender.obj.reserved.Load()
 	left := appender.obj.meta.Load().GetSchema().Extra.BlockMaxRows - start
 	if left == 0 {
@@ -100,8 +100,8 @@ func (appender *objectAppender) PrepareAppend(
 func (appender *objectAppender) ReserveAppend(offset, rows uint32) {
 	n := appender.obj.PinNode()
 	defer n.Unref()
-	appender.obj.Lock()
-	defer appender.obj.Unlock()
+	appender.obj.appendMVCC.LockForAppend()
+	defer appender.obj.appendMVCC.UnlockForAppend()
 	n.MustMNode().ReserveRowsLocked(offset + rows)
 }
 func (appender *objectAppender) ReplayAppend(
@@ -120,8 +120,8 @@ func (appender *objectAppender) ApplyAppend(
 	n := appender.obj.PinNode()
 	defer n.Unref()
 	node := n.MustMNode()
-	appender.obj.Lock()
-	defer appender.obj.Unlock()
+	appender.obj.appendMVCC.LockForAppend()
+	defer appender.obj.appendMVCC.UnlockForAppend()
 	from, err = node.ApplyAppendLocked(bat)
 
 	schema := node.writeSchema
@@ -147,8 +147,8 @@ func (appender *objectAppender) ApplyAppendAt(
 	n := appender.obj.PinNode()
 	defer n.Unref()
 	node := n.MustMNode()
-	appender.obj.Lock()
-	defer appender.obj.Unlock()
+	appender.obj.appendMVCC.LockForAppend()
+	defer appender.obj.appendMVCC.UnlockForAppend()
 	schema := node.writeSchema
 	oldRows, _ := node.Rows()
 	for _, colDef := range schema.ColDefs {

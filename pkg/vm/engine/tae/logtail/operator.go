@@ -19,7 +19,6 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
-	"github.com/tidwall/btree"
 )
 
 type BoundTableOperator struct {
@@ -53,13 +52,12 @@ func (c *BoundTableOperator) recordReport(isTombstone bool, appendable bool) {
 
 // iterObject is allowed to yield false positive results, because ForeachMVCCNodeInRange will check the accuracy of the result.
 func (c *BoundTableOperator) iterObject(from, to types.TS, isTombstone bool) error {
-	var it btree.IterG[*catalog.ObjectEntry]
+	var snapshot catalog.ObjectListSnapshot
 	if isTombstone {
-		it = c.tbl.MakeTombstoneObjectIt()
+		snapshot = c.tbl.MakeTombstoneObjectSnapshot()
 	} else {
-		it = c.tbl.MakeDataObjectIt()
+		snapshot = c.tbl.MakeDataObjectSnapshot()
 	}
-	defer it.Release()
 	visit := func(obj *catalog.ObjectEntry) error {
 		c.recordReport(isTombstone, obj.GetAppendable())
 		if next := obj.GetNextVersion(); obj.IsCEntry() && next != nil && next.DeletedAt.LE(&to) {
@@ -69,24 +67,28 @@ func (c *BoundTableOperator) iterObject(from, to types.TS, isTombstone bool) err
 	}
 
 	for group := catalog.ObjectListGroupAppendableCreate; group <= catalog.ObjectListGroupNonAppendableDrop; group++ {
+		groupIt := snapshot.Group(group)
 		if group == catalog.ObjectListGroupAppendableCreate ||
 			group == catalog.ObjectListGroupAppendableCreateWithDrop {
-			if catalog.SeekObjectListGroupBefore(&it, group, from) {
-				if err := visit(it.Item()); err != nil {
+			if catalog.SeekObjectListGroupBefore(&groupIt, group, from) {
+				if err := visit(groupIt.Item()); err != nil {
+					groupIt.Release()
 					return err
 				}
 			}
 		}
-		for ok := catalog.SeekObjectListGroup(&it, group, from); ok; ok = it.Next() {
-			obj := it.Item()
+		for ok := catalog.SeekObjectListGroup(&groupIt, group, from); ok; ok = groupIt.Next() {
+			obj := groupIt.Item()
 			commitTS := obj.ObjectListCommitTS()
-			if obj.ObjectListGroup() != group || commitTS.GT(&to) {
+			if commitTS.GT(&to) {
 				break
 			}
 			if err := visit(obj); err != nil {
+				groupIt.Release()
 				return err
 			}
 		}
+		groupIt.Release()
 	}
 	return nil
 }

@@ -41,7 +41,7 @@ const (
 )
 
 /*
-ObjectList keeps entries in six contiguous groups:
+ObjectList keeps entries in six independent B-trees:
 
  1. appendable serving C entries
  2. appendable C entries with a D counterpart
@@ -50,17 +50,18 @@ ObjectList keeps entries in six contiguous groups:
  5. non-appendable C entries with a D counterpart
  6. non-appendable D entries
 
-Within each group entries are ordered by their entry commit timestamp
+Each tree is ordered by the entry commit timestamp
 (CreatedAt for C entries and DeletedAt for D entries), then by object name.
-Uncommitted entries therefore sit at the end of their own group instead of in
-one global transaction-active zone.
+Uncommitted entries therefore sit at the end of their group.
 
 The C and D entries for a dropped object remain separate tree items. Callers
 that need only the latest version must skip C entries having a D counterpart.
 
-Visible scans use a second copy-on-write B-tree containing only C entries,
-globally ordered by CreatedAt and object name. Both trees are published in one
-atomic snapshot so readers never observe mismatched catalog indexes.
+All-object compatibility scans use a combined tree with the same group order.
+Visible scans use another copy-on-write B-tree containing only C entries,
+globally ordered by CreatedAt and object name. The combined, grouped, and
+visible indexes are published in one atomic snapshot so readers never observe
+mismatched catalog indexes.
 */
 
 type ObjectList struct {
@@ -77,7 +78,14 @@ type objectListIndex struct {
 
 type objectListTrees struct {
 	all     *btree.BTreeG[*ObjectEntry]
+	groups  [ObjectListGroupNonAppendableDrop + 1]*btree.BTreeG[*ObjectEntry]
 	visible *btree.BTreeG[*ObjectEntry]
+}
+
+type mutableObjectListTrees struct {
+	old    *objectListTrees
+	next   *objectListTrees
+	copied [ObjectListGroupNonAppendableDrop + 1]bool
 }
 
 func newObjectEntryTreeWithLess(less func(a, b *ObjectEntry) bool) *btree.BTreeG[*ObjectEntry] {
@@ -92,6 +100,18 @@ func newObjectEntryTree() *btree.BTreeG[*ObjectEntry] {
 	return newObjectEntryTreeWithLess((*ObjectEntry).Less)
 }
 
+func objectEntryGroupLess(a, b *ObjectEntry) bool {
+	t1, t2 := a.ObjectListCommitTS(), b.ObjectListCommitTS()
+	if !t1.EQ(&t2) {
+		return t1.LT(&t2)
+	}
+	return bytes.Compare(a.ObjectShortName()[:], b.ObjectShortName()[:]) < 0
+}
+
+func newObjectEntryGroupTree() *btree.BTreeG[*ObjectEntry] {
+	return newObjectEntryTreeWithLess(objectEntryGroupLess)
+}
+
 func visibleObjectEntryLess(a, b *ObjectEntry) bool {
 	if !a.CreatedAt.EQ(&b.CreatedAt) {
 		return a.CreatedAt.LT(&b.CreatedAt)
@@ -104,10 +124,14 @@ func NewObjectList(isTombstone bool) *ObjectList {
 		objectID_index: make(map[types.Objectid]objectListIndex),
 		isTombstone:    isTombstone,
 	}
-	list.trees.Store(&objectListTrees{
+	trees := &objectListTrees{
 		all:     newObjectEntryTree(),
 		visible: newObjectEntryTreeWithLess(visibleObjectEntryLess),
-	})
+	}
+	for group := ObjectListGroupAppendableCreate; group <= ObjectListGroupNonAppendableDrop; group++ {
+		trees.groups[group] = newObjectEntryGroupTree()
+	}
+	list.trees.Store(trees)
 	return list
 }
 
@@ -117,6 +141,48 @@ func (l *ObjectList) loadTrees() *objectListTrees {
 
 func (l *ObjectList) loadTree() *btree.BTreeG[*ObjectEntry] {
 	return l.loadTrees().all
+}
+
+func (trees *objectListTrees) group(group ObjectListGroup) *btree.BTreeG[*ObjectEntry] {
+	if group > ObjectListGroupNonAppendableDrop {
+		panic("invalid object list group")
+	}
+	return trees.groups[group]
+}
+
+func newMutableObjectListTrees(old *objectListTrees) *mutableObjectListTrees {
+	next := &objectListTrees{
+		all:     old.all.Copy(),
+		groups:  old.groups,
+		visible: old.visible.Copy(),
+	}
+	return &mutableObjectListTrees{old: old, next: next}
+}
+
+func (trees *mutableObjectListTrees) group(group ObjectListGroup) *btree.BTreeG[*ObjectEntry] {
+	if !trees.copied[group] {
+		trees.next.groups[group] = trees.old.groups[group].Copy()
+		trees.copied[group] = true
+	}
+	return trees.next.groups[group]
+}
+
+func (trees *mutableObjectListTrees) delete(entry *ObjectEntry) (*ObjectEntry, bool) {
+	trees.next.all.Delete(entry)
+	return trees.group(entry.ObjectListGroup()).Delete(entry)
+}
+
+func (trees *mutableObjectListTrees) set(entry *ObjectEntry) (*ObjectEntry, bool) {
+	trees.next.all.Set(entry)
+	return trees.group(entry.ObjectListGroup()).Set(entry)
+}
+
+func (trees *mutableObjectListTrees) deleteFromGroup(
+	group ObjectListGroup,
+	entry *ObjectEntry,
+) (*ObjectEntry, bool) {
+	trees.next.all.Delete(entry)
+	return trees.group(group).Delete(entry)
 }
 
 //// read part
@@ -138,22 +204,22 @@ func getObjectEntry(it *btree.IterG[*ObjectEntry], pivot *ObjectEntry) *ObjectEn
 func (l *ObjectList) getNodes(id *objectio.ObjectId, latestOnly bool) []*ObjectEntry {
 	l.RLock()
 	index, ok := l.objectID_index[*id]
-	tree := l.loadTree()
+	trees := l.loadTrees()
 	l.RUnlock()
 	if !ok {
 		return nil
 	}
-	return l.getNodesSnap(tree, index, id, latestOnly)
+	return l.getNodesSnap(trees, index, id, latestOnly)
 }
 
 // getNodes returns the create and delete (if exists) entries of the object with the given objectID
 func (l *ObjectList) getNodesSnap(
-	tree *btree.BTreeG[*ObjectEntry],
+	trees *objectListTrees,
 	index objectListIndex,
 	id *objectio.ObjectId,
 	latestOnly bool,
 ) []*ObjectEntry {
-	it := tree.Iter()
+	it := trees.group(index.group).Iter()
 	defer it.Release()
 
 	var key ObjectEntry
@@ -207,11 +273,11 @@ func (l *ObjectList) UpdateReplayTs(entry *ObjectEntry, ts types.TS) *ObjectEntr
 		panic("replay object index not found")
 	}
 	oldTrees := l.loadTrees()
-	newTree := oldTrees.all.Copy()
-	newVisibleTree := oldTrees.visible.Copy()
+	mutableTrees := newMutableObjectListTrees(oldTrees)
+	newVisibleTree := mutableTrees.next.visible
 	var oldKey ObjectEntry
 	initObjectListKey(&oldKey, oldIndex.group, oldIndex.ts, entry.ID())
-	if _, deleted := newTree.Delete(&oldKey); !deleted {
+	if _, deleted := mutableTrees.deleteFromGroup(oldIndex.group, &oldKey); !deleted {
 		panic("replay object not found")
 	}
 	if !entry.IsDEntry() {
@@ -226,15 +292,15 @@ func (l *ObjectList) UpdateReplayTs(entry *ObjectEntry, ts types.TS) *ObjectEntr
 		panic(err)
 	}
 	if entry.IsDEntry() {
-		if _, deleted := newTree.Delete(entry.prevVersion); !deleted {
+		if _, deleted := mutableTrees.delete(entry.prevVersion); !deleted {
 			panic("replay object create entry not found")
 		}
-		newTree.Set(entry.prevVersion)
+		mutableTrees.set(entry.prevVersion)
 		newVisibleTree.Set(entry.prevVersion)
 	} else {
 		newVisibleTree.Set(updated)
 	}
-	newTree.Set(updated)
+	mutableTrees.set(updated)
 	if updated.objData != nil {
 		updated.objData.UpdateMeta(updated)
 	}
@@ -242,10 +308,7 @@ func (l *ObjectList) UpdateReplayTs(entry *ObjectEntry, ts types.TS) *ObjectEntr
 		ts:    updated.ObjectListCommitTS(),
 		group: updated.ObjectListGroup(),
 	}
-	if !l.trees.CompareAndSwap(oldTrees, &objectListTrees{
-		all:     newTree,
-		visible: newVisibleTree,
-	}) {
+	if !l.trees.CompareAndSwap(oldTrees, mutableTrees.next) {
 		panic("concurrent mutation")
 	}
 	return updated
@@ -265,14 +328,14 @@ func (l *ObjectList) modify(del, ins, updated *ObjectEntry) (deleted, replaced1,
 	}
 
 	oldTrees := l.loadTrees()
-	newTree := oldTrees.all.Copy()
-	newVisibleTree := oldTrees.visible.Copy()
+	mutableTrees := newMutableObjectListTrees(oldTrees)
+	newVisibleTree := mutableTrees.next.visible
 
 	if del != nil {
 		if del.IsTombstone != l.isTombstone {
 			panic("logic error")
 		}
-		_, deleted = newTree.Delete(del)
+		_, deleted = mutableTrees.delete(del)
 		if !del.IsDEntry() {
 			newVisibleTree.Delete(del)
 		}
@@ -286,8 +349,8 @@ func (l *ObjectList) modify(del, ins, updated *ObjectEntry) (deleted, replaced1,
 		ins.IsDEntry() && ins.prevVersion != nil {
 		var oldC ObjectEntry
 		initObjectListKey(&oldC, oldIndex.group, oldIndex.ts, ins.ID())
-		newTree.Delete(&oldC)
-		newTree.Set(ins.prevVersion)
+		mutableTrees.deleteFromGroup(oldIndex.group, &oldC)
+		mutableTrees.set(ins.prevVersion)
 	}
 	// Rolling back a drop performs the inverse transition. Remove the
 	// create-with-drop counterpart before restoring the serving C entry.
@@ -295,15 +358,15 @@ func (l *ObjectList) modify(del, ins, updated *ObjectEntry) (deleted, replaced1,
 		(oldIndex.group == ObjectListGroupAppendableDrop ||
 			oldIndex.group == ObjectListGroupNonAppendableDrop) &&
 		!ins.HasDropIntent() && del != nil && del.prevVersion != nil {
-		newTree.Delete(del.prevVersion)
+		mutableTrees.delete(del.prevVersion)
 	}
 	if updated != nil {
-		_, replaced2 = newTree.Set(updated)
+		_, replaced2 = mutableTrees.set(updated)
 		if !updated.IsDEntry() {
 			newVisibleTree.Set(updated)
 		}
 	}
-	_, replaced1 = newTree.Set(ins)
+	_, replaced1 = mutableTrees.set(ins)
 	if ins.IsDEntry() {
 		if existed && ins.prevVersion != nil {
 			newVisibleTree.Set(ins.prevVersion)
@@ -311,10 +374,7 @@ func (l *ObjectList) modify(del, ins, updated *ObjectEntry) (deleted, replaced1,
 	} else {
 		newVisibleTree.Set(ins)
 	}
-	ok := l.trees.CompareAndSwap(oldTrees, &objectListTrees{
-		all:     newTree,
-		visible: newVisibleTree,
-	})
+	ok := l.trees.CompareAndSwap(oldTrees, mutableTrees.next)
 	if !ok {
 		panic("concurrent mutation")
 	}
@@ -408,20 +468,17 @@ func (l *ObjectList) DeleteAllEntries(id *objectio.ObjectId) error {
 		return nil
 	}
 	oldTrees := l.loadTrees()
-	newTree := oldTrees.all.Copy()
-	newVisibleTree := oldTrees.visible.Copy()
-	objs := l.getNodesSnap(newTree, index, id, false)
+	mutableTrees := newMutableObjectListTrees(oldTrees)
+	newVisibleTree := mutableTrees.next.visible
+	objs := l.getNodesSnap(oldTrees, index, id, false)
 	for _, obj := range objs {
-		newTree.Delete(obj)
+		mutableTrees.delete(obj)
 		if !obj.IsDEntry() {
 			newVisibleTree.Delete(obj)
 		}
 		delete(l.objectID_index, *obj.ID())
 	}
-	ok = l.trees.CompareAndSwap(oldTrees, &objectListTrees{
-		all:     newTree,
-		visible: newVisibleTree,
-	})
+	ok = l.trees.CompareAndSwap(oldTrees, mutableTrees.next)
 	if !ok {
 		panic("concurrent mutation")
 	}
@@ -436,9 +493,9 @@ func (l *ObjectList) UpdateCreateTS(id *objectio.ObjectId, ts types.TS) (*Object
 		return nil, moerr.GetOkExpectedEOB()
 	}
 	oldTrees := l.loadTrees()
-	newTree := oldTrees.all.Copy()
-	newVisibleTree := oldTrees.visible.Copy()
-	nodes := l.getNodesSnap(newTree, oldIndex, id, true)
+	mutableTrees := newMutableObjectListTrees(oldTrees)
+	newVisibleTree := mutableTrees.next.visible
+	nodes := l.getNodesSnap(oldTrees, oldIndex, id, true)
 	if len(nodes) == 0 {
 		return nil, moerr.GetOkExpectedEOB()
 	}
@@ -452,17 +509,17 @@ func (l *ObjectList) UpdateCreateTS(id *objectio.ObjectId, ts types.TS) (*Object
 		newNode.CreatedAt = ts
 		newNode.CreateNode = txnbase.NewTxnMVCCNodeWithTS(ts)
 		newNode.prevVersion = newPrev
-		newTree.Delete(oldNode)
-		newTree.Delete(oldNode.prevVersion)
-		newTree.Set(newNode)
-		newTree.Set(newPrev)
+		mutableTrees.delete(oldNode)
+		mutableTrees.delete(oldNode.prevVersion)
+		mutableTrees.set(newNode)
+		mutableTrees.set(newPrev)
 		newVisibleTree.Delete(oldNode.prevVersion)
 		newVisibleTree.Set(newPrev)
 	} else {
 		newNode.CreatedAt = ts
 		newNode.CreateNode = txnbase.NewTxnMVCCNodeWithTS(ts)
-		newTree.Delete(oldNode)
-		newTree.Set(newNode)
+		mutableTrees.delete(oldNode)
+		mutableTrees.set(newNode)
 		newVisibleTree.Delete(oldNode)
 		newVisibleTree.Set(newNode)
 	}
@@ -470,10 +527,7 @@ func (l *ObjectList) UpdateCreateTS(id *objectio.ObjectId, ts types.TS) (*Object
 		ts:    newNode.ObjectListCommitTS(),
 		group: newNode.ObjectListGroup(),
 	}
-	if !l.trees.CompareAndSwap(oldTrees, &objectListTrees{
-		all:     newTree,
-		visible: newVisibleTree,
-	}) {
+	if !l.trees.CompareAndSwap(oldTrees, mutableTrees.next) {
 		panic("concurrent mutation")
 	}
 	return newNode, nil
@@ -504,6 +558,34 @@ func (l *ObjectList) WaitUntilCommitted(ts types.TS) {
 }
 
 // Iterator part
+
+// ObjectListSnapshot pins the atomically published set of group trees so a
+// multi-group scan cannot mix catalog generations.
+type ObjectListSnapshot struct {
+	trees *objectListTrees
+}
+
+func (snapshot ObjectListSnapshot) Group(group ObjectListGroup) btree.IterG[*ObjectEntry] {
+	return snapshot.trees.group(group).Iter()
+}
+
+func (snapshot ObjectListSnapshot) ScanGroup(
+	group ObjectListGroup,
+	fn func(*ObjectEntry) bool,
+) {
+	snapshot.trees.group(group).Scan(fn)
+}
+
+func (snapshot ObjectListSnapshot) AscendGroup(
+	group ObjectListGroup,
+	ts types.TS,
+	fn func(*ObjectEntry) bool,
+) {
+	var minID objectio.ObjectId
+	var key ObjectEntry
+	initObjectListKey(&key, group, ts, &minID)
+	snapshot.trees.group(group).Ascend(&key, fn)
+}
 
 var _iterPool = sync.Pool{New: func() any {
 	return &VisibleCommittedObjectIt{}
@@ -580,8 +662,7 @@ func (it *VisibleCommittedObjectIt) Release() {
 func (l *ObjectList) Show() string {
 	l.RLock()
 	defer l.RUnlock()
-	tree := l.loadTree()
-	it := tree.Iter()
+	it := l.loadTree().Iter()
 	defer it.Release()
 	ret := ""
 	for it.Next() {
