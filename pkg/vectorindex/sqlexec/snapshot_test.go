@@ -88,3 +88,41 @@ func TestTxnForRunEmptySnapshotUsesCurrent(t *testing.T) {
 	sp := &SqlProcess{Proc: proc, SnapshotTS: &empty}
 	require.Same(t, original, sp.txnForRun(proc), "an empty SnapshotTS must not clone")
 }
+
+// EffectiveSnapshotTS is the SINGLE authority for "is this a historical read" -- txnForRun
+// clones on it, and every TS-suffixed cache key is derived from it. Its guards therefore
+// have to hold for a process that has no txn to compare against, not just for a live one:
+// answering "historical" there would key a cache entry that the read could never honour.
+
+func TestEffectiveSnapshotTSNilTxnOperatorIsNotHistorical(t *testing.T) {
+	proc := testutil.NewProc(t)
+	t.Cleanup(proc.Free)
+	proc.Base.TxnOperator = nil
+
+	snapshotTS := timestamp.Timestamp{PhysicalTime: 8}
+	sp := &SqlProcess{Proc: proc, SnapshotTS: &snapshotTS}
+	require.Nil(t, sp.EffectiveSnapshotTS(), "no txn to compare against => not a historical read")
+	require.Nil(t, sp.txnForRun(proc), "and nothing to clone")
+}
+
+func TestEffectiveSnapshotTSNilProcIsNotHistorical(t *testing.T) {
+	snapshotTS := timestamp.Timestamp{PhysicalTime: 8}
+	sp := &SqlProcess{SnapshotTS: &snapshotTS}
+	require.Nil(t, sp.EffectiveSnapshotTS(), "no process => not a historical read")
+}
+
+// The positive case: a TS earlier than the current txn's is reported as the effective read
+// TS, and it is the SAME pointer the caller passed in -- callers build cache keys from the
+// returned value, so it must be the TS that txnForRun actually clones at.
+func TestEffectiveSnapshotTSHistoricalReturnsTheTS(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	proc := testutil.NewProc(t)
+	t.Cleanup(proc.Free)
+	txnOp := mock_frontend.NewMockTxnOperator(ctrl)
+	txnOp.EXPECT().Txn().Return(txn.TxnMeta{SnapshotTS: timestamp.Timestamp{PhysicalTime: 10}}).AnyTimes()
+	proc.Base.TxnOperator = txnOp
+
+	snapshotTS := timestamp.Timestamp{PhysicalTime: 8, LogicalTime: 3}
+	sp := &SqlProcess{Proc: proc, SnapshotTS: &snapshotTS}
+	require.Same(t, &snapshotTS, sp.EffectiveSnapshotTS())
+}
