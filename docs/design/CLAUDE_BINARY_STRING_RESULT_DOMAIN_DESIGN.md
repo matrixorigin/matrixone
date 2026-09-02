@@ -16,7 +16,7 @@
 
 核心不变量：**声明的静态结果类型必须包含表达式能够合法产生的每个值。expression、runtime value、text/binary protocol metadata 和 CTAS column 必须描述同一个静态结果域。** 若 binary 结果的证明上界超过 `MaxVarBinaryLen`，结果必须晋升 `BLOB`；不得将 width 饱和到 65535 后仍声明 `VARBINARY`，也不得为适配声明类型而截断 runtime value。
 
-非目标：不改变函数的 byte-position/regexp compatibility 语义；不改变 #27214 定义的 runtime domain/source/literal-form；不新增持久化格式或 wire 字段。
+非目标：不改变函数的 byte-position compatibility 语义；不改变 #27214 定义的 runtime domain/source/literal-form；不新增持久化格式或 wire 字段。REGEXP result-domain 与 runtime admission 不在本 PR 的 closure 中，由后续 linked fix 统一处理。
 
 ## 2. 统一宽度模型
 
@@ -67,11 +67,10 @@ BLOB/TEXT 的 `width == 0` 统一表示 unbounded/unknown；不得把默认 `ToT
 
 - `CONCAT`：所有实际 value 参数 bound 之和；任一 Unknown 即 Unknown。任一有效 binary contributor 使静态 domain 为 Binary。
 - `CONCAT_WS`：value 参数之和，加 `separator * max(non-NULL value count-1)`；separator 是 contributor。
-- `REPLACE`、`REGEXP_REPLACE`：若 replacement 次数无静态上界，则只要 replacement 可能扩张就为 Unknown；可证明不扩张时可保留 source bound。
+- `REPLACE`：最坏替换次数不超过 source bound；使用 `source * max(1, replacement)` 作为安全上界。
 - `LPAD/RPAD`：常量非负 target length 给出 bound；动态 target 为 Unknown。binary target 以 bytes，text target 以 characters 并做 charset byte bound。
 - `INSERT`：可证明 source/replacement bounds 时使用 checked `source + replacement` 作为安全上界；否则 Unknown。
 - `REPEAT`：常量非负 count 使用 checked `source * count`；动态 count 为 Unknown。
-- `REGEXP_SUBSTR`：不超过 source bound，继承 source domain；source Unknown 则 Unknown。
 
 控制参数（position、occurrence、match type、length count）不参与 domain 合并，只参与可证明 width 的计算。
 

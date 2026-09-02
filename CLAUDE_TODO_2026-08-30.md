@@ -127,3 +127,9 @@
 1. 合并 `mo/main@c46d897e96`。
 2. 以已自动合并的 `mysql_sql.y` 为 source of truth，重新生成冲突的 `mysql_sql.go`。
 3. 运行 parser、planner/function owning tests、lint 与 diff check，创建 merge commit 并 push。
+
+# PR #27841 最新 REGEXP review 修复
+
+1. 将 REGEXP_REPLACE 从本 PR 的 result-domain closure 中完整移除，不再保留静态 helper 分支或 focused tests。
+2. 更新设计文档和 PR body，明确 REGEXP result-domain/runtime closure 由后续 linked fix 处理。
+3. 运行 function/planner tests、lint 与 diff check，commit/push 后回复 reviewers。

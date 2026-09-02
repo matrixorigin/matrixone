@@ -220,19 +220,15 @@ func TestExpandingReplacementAndInsertBounds(t *testing.T) {
 	varchar := func(width int32) types.Type { return types.New(types.T_varchar, width, 0) }
 	varbinary := func(width int32) types.Type { return types.New(types.T_varbinary, width, 0) }
 
-	replaced := replacementStringReturnType([]types.Type{varchar(2), varchar(1), varchar(2)}, false)
+	replaced := replacementStringReturnType([]types.Type{varchar(2), varchar(1), varchar(2)})
 	require.Equal(t, types.T_varchar, replaced.Oid)
 	require.Equal(t, int32(4), replaced.Width)
-
-	zeroWidthRegexp := replacementStringReturnType([]types.Type{varchar(1), varchar(0), varchar(1)}, true)
-	require.Equal(t, types.T_varchar, zeroWidthRegexp.Oid)
-	require.Equal(t, int32(3), zeroWidthRegexp.Width)
 
 	inserted := insertStringReturnType([]types.Type{varbinary(1), types.T_int64.ToType(), types.T_int64.ToType(), varbinary(1)})
 	require.Equal(t, types.T_varbinary, inserted.Oid)
 	require.Equal(t, int32(4), inserted.Width)
 
-	binaryReplacement := replacementStringReturnType([]types.Type{varchar(2), varchar(1), varbinary(1)}, false)
+	binaryReplacement := replacementStringReturnType([]types.Type{varchar(2), varchar(1), varbinary(1)})
 	require.Equal(t, types.T_varbinary, binaryReplacement.Oid)
 	binaryInsertion := insertStringReturnType([]types.Type{varchar(1), types.T_int64.ToType(), types.T_int64.ToType(), varbinary(1)})
 	require.Equal(t, types.T_varbinary, binaryInsertion.Oid)
@@ -289,7 +285,6 @@ func TestStringConsumersPreserveTextAndBoundedWidths(t *testing.T) {
 		{name: "rtrim", inputs: []types.Type{types.New(types.T_varchar, 40, 0)}, wantOID: types.T_varchar, wantWidth: 40},
 		{name: "lower", inputs: []types.Type{types.T_text.ToType()}, wantOID: types.T_text},
 		{name: "upper", inputs: []types.Type{types.T_text.ToType()}, wantOID: types.T_text},
-		{name: "regexp_replace", inputs: []types.Type{types.New(types.T_varchar, 2, 0), types.New(types.T_varchar, 1, 0), types.New(types.T_varchar, 2, 0)}, wantOID: types.T_varchar, wantWidth: 2},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			resolved, err := GetFunctionByName(proc.Ctx, test.name, test.inputs)

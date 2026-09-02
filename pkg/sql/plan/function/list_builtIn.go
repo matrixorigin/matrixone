@@ -130,7 +130,7 @@ func caseConversionReturnType(parameters []types.Type) types.Type {
 	}
 }
 
-func replacementStringReturnType(parameters []types.Type, regexp bool) types.Type {
+func replacementStringReturnType(parameters []types.Type) types.Type {
 	if len(parameters) < 3 {
 		return types.T_varchar.ToType()
 	}
@@ -142,16 +142,6 @@ func replacementStringReturnType(parameters []types.Type, regexp bool) types.Typ
 	}
 	source := boundFor(parameters[0])
 	replacement := boundFor(parameters[2])
-	if regexp {
-		// A zero-width regexp can match before, between, and after every source
-		// character, while retaining the complete source value.
-		bound := addStringResultBounds(source, multiplyStringResultBound(
-			addStringResultBounds(source, stringResultBound{bytes: 1}), replacement.bytes))
-		if source.unknown || replacement.unknown {
-			bound = unknownStringResultBound()
-		}
-		return stringResultTypeForDomains(parameters, []int{0, 2}, bound)
-	}
 	if replacement.unknown || source.unknown {
 		return stringResultTypeForDomains(parameters, []int{0, 2}, unknownStringResultBound())
 	}
@@ -2920,7 +2910,7 @@ var supportedStringBuiltIns = []FuncNew{
 				overloadId: 0,
 				args:       []types.T{types.T_varchar, types.T_varchar, types.T_varchar},
 				retType: func(parameters []types.Type) types.Type {
-					return replacementStringReturnType(parameters, false)
+					return replacementStringReturnType(parameters)
 				},
 				newOp: func() executeLogicOfOverload {
 					return Replace
