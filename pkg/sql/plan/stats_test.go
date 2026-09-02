@@ -395,6 +395,38 @@ func TestAntiJoinCardinalityUsesPrimaryKeyLowerBound(t *testing.T) {
 
 		require.Equal(t, 0.0, join.Stats.Outcnt)
 	})
+
+	for _, test := range []struct {
+		name       string
+		rollback   bool
+		wantOutcnt float64
+	}{
+		{name: "enabled", wantOutcnt: 5},
+		{name: "rollback", rollback: true, wantOutcnt: 0},
+	} {
+		t.Run("right anti after physical swap "+test.name, func(t *testing.T) {
+			builder, join := makeBuilder([]*planpb.Expr{makeEquality(0, 0), makeEquality(1, 1)})
+			builder.qry.Nodes[0].Stats = &planpb.Stats{
+				Outcnt: 10, Cost: 10, Selectivity: 1, BlockNum: 2,
+			}
+			builder.qry.Nodes[1].Stats = &planpb.Stats{
+				Outcnt: 10_000, Cost: 10_000, Selectivity: 1, BlockNum: 100,
+			}
+			if test.rollback {
+				builder.optimizerHints = &OptimizerHints{outerAntiPlanning: 1}
+			}
+
+			builder.determineBuildAndProbeSide(2, false)
+			require.True(t, join.IsRightJoin)
+			builder.swapJoinChildren(2)
+			require.Equal(t, []int32{1, 0}, join.Children)
+			reCalcNodeStatsAfterSwap(2, builder, false, false, false)
+
+			require.Equal(t, test.wantOutcnt, join.Stats.Outcnt)
+			require.LessOrEqual(t, join.Stats.Outcnt, 10.0)
+			require.Equal(t, int32(2), join.Stats.BlockNum)
+		})
+	}
 }
 
 func newStatsTestBuilderWithNDV(colName string, ndv float64) *QueryBuilder {

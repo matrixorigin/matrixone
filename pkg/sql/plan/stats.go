@@ -1227,7 +1227,8 @@ func ReCalcNodeStats(nodeID int32, builder *QueryBuilder, recursive bool, leafNo
 			if builder.outerAntiPlanningDisabled() {
 				node.Stats.Outcnt = leftStats.Outcnt * (1 - rightSelectivity) * 0.5
 			} else {
-				node.Stats.Outcnt = estimateAntiJoinOutcnt(node, builder, leftStats, rightStats)
+				node.Stats.Outcnt = estimateAntiJoinOutcnt(
+					node, builder, node.Children[0], node.Children[1], leftStats, rightStats)
 			}
 			node.Stats.Cost = leftStats.Cost + rightStats.Cost
 			node.Stats.HashmapStats.HashmapSize = rightStats.Outcnt
@@ -1467,14 +1468,29 @@ func reCalcNodeStatsAfterSwap(nodeID int32, builder *QueryBuilder, recursive boo
 	}
 
 	ReCalcNodeStats(nodeID, builder, false, leafNode, needResetHashMapStats)
-	if node.NodeType != plan.Node_JOIN || node.JoinType != plan.Node_SINGLE || !node.IsRightJoin {
+	if node.NodeType != plan.Node_JOIN || !node.IsRightJoin {
 		return
 	}
 
 	preservedStats := builder.qry.Nodes[node.Children[1]].Stats
-	node.Stats.Outcnt = preservedStats.Outcnt
-	node.Stats.BlockNum = preservedStats.BlockNum
-	node.Stats.Selectivity = preservedStats.Selectivity
+	switch node.JoinType {
+	case plan.Node_SINGLE:
+		node.Stats.Outcnt = preservedStats.Outcnt
+		node.Stats.BlockNum = preservedStats.BlockNum
+		node.Stats.Selectivity = preservedStats.Selectivity
+	case plan.Node_ANTI:
+		matchingStats := builder.qry.Nodes[node.Children[0]].Stats
+		if builder.outerAntiPlanningDisabled() {
+			matchingSelectivity := clampSelectivity(matchingStats.Selectivity, 1)
+			node.Stats.Outcnt = preservedStats.Outcnt * (1 - matchingSelectivity) * 0.5
+		} else {
+			node.Stats.Outcnt = estimateAntiJoinOutcnt(
+				node, builder, node.Children[1], node.Children[0], preservedStats, matchingStats)
+		}
+		node.Stats.BlockNum = preservedStats.BlockNum
+	default:
+		return
+	}
 	if node.Limit != nil {
 		applyLimitToStats(node.Stats, node.Limit, builder)
 	}
@@ -1488,11 +1504,18 @@ func reCalcNodeStatsAfterSwap(nodeID int32, builder *QueryBuilder, recursive boo
 // A primary key on the left gives us a stronger structural bound: each right
 // input row can eliminate at most one left row. Apply that invariant to the
 // estimated input cardinalities without requiring key-overlap statistics.
-func estimateAntiJoinOutcnt(node *plan.Node, builder *QueryBuilder, leftStats, rightStats *Stats) float64 {
+func estimateAntiJoinOutcnt(
+	node *plan.Node,
+	builder *QueryBuilder,
+	leftNodeID int32,
+	rightNodeID int32,
+	leftStats *Stats,
+	rightStats *Stats,
+) float64 {
 	leftRows := math.Max(0, finiteOr(leftStats.Outcnt, 0))
 	rightRows := math.Max(0, finiteOr(rightStats.Outcnt, 0))
 	outcnt := leftRows * 0.5
-	if antiJoinLeftKeysArePrimaryKey(node, builder) {
+	if antiJoinLeftKeysArePrimaryKey(node, builder, leftNodeID, rightNodeID) {
 		outcnt = math.Max(outcnt, leftRows-rightRows)
 	}
 	return math.Min(leftRows, math.Max(0, outcnt))
@@ -1502,11 +1525,16 @@ func estimateAntiJoinOutcnt(node *plan.Node, builder *QueryBuilder, leftStats, r
 // Joins and aggregates can duplicate rows, so primary-key provenance through
 // those operators requires a separate uniqueness property rather than a tag
 // match alone.
-func antiJoinLeftKeysArePrimaryKey(node *plan.Node, builder *QueryBuilder) bool {
+func antiJoinLeftKeysArePrimaryKey(
+	node *plan.Node,
+	builder *QueryBuilder,
+	leftNodeID int32,
+	rightNodeID int32,
+) bool {
 	if node == nil || builder == nil || builder.qry == nil || len(node.Children) != 2 {
 		return false
 	}
-	left := builder.qry.Nodes[node.Children[0]]
+	left := builder.qry.Nodes[leftNodeID]
 	if left == nil || left.NodeType != plan.Node_TABLE_SCAN || left.TableDef == nil ||
 		left.TableDef.Pkey == nil || len(left.TableDef.Pkey.Names) == 0 ||
 		len(left.BindingTags) != 1 {
@@ -1520,7 +1548,7 @@ func antiJoinLeftKeysArePrimaryKey(node *plan.Node, builder *QueryBuilder) bool 
 
 	leftTags := map[int32]bool{left.BindingTags[0]: true}
 	rightTags := make(map[int32]bool)
-	for _, tag := range builder.enumerateTags(node.Children[1]) {
+	for _, tag := range builder.enumerateTags(rightNodeID) {
 		rightTags[tag] = true
 	}
 
