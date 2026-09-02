@@ -251,6 +251,8 @@ func execInFrontend(ses *Session, execCtx *ExecCtx) (stats statistic.StatsArray,
 	case *tree.AnalyzeStmt:
 		ses.EnterFPrint(FPAnalyzeStmt)
 		defer ses.ExitFPrint(FPAnalyzeStmt)
+		restoreDatabase := bindSessionDatabaseForStatement(ses, execCtx.effectiveTxnDefaultDatabase)
+		defer restoreDatabase()
 		if err = handleAnalyzeStmt(ses, execCtx, st); err != nil {
 			return
 		}

@@ -614,10 +614,14 @@ func (resper *MysqlResp) respBySituation(ses *Session,
 		}
 	} else {
 		_, isCall := execCtx.stmt.(*tree.CallStmt)
+		cmd := int(COM_QUERY)
+		if execCtx.input != nil && execCtx.input.isBinaryProtExecute {
+			cmd = int(COM_STMT_EXECUTE)
+		}
 		for i, result := range execCtx.results {
 			mer := NewMysqlExecutionResult(0, 0, 0, 0, result.(*MysqlResultSet))
 			isLastResult := i == len(execCtx.results)-1 && execCtx.isLastStmt && !isCall
-			resp := ses.SetNewResponse(ResultResponse, 0, int(COM_QUERY), mer, isLastResult)
+			resp := ses.SetNewResponse(ResultResponse, 0, cmd, mer, isLastResult)
 			if err = resper.mysqlRrWr.WriteResponse(execCtx.reqCtx, resp); err != nil {
 				return moerr.NewInternalErrorf(execCtx.reqCtx, "routine send response failed. error:%v ", err)
 			}
