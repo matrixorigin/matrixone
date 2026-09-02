@@ -146,15 +146,15 @@ func (u *CDCWatermarkUpdater) readInitialSnapshotEpoch(
 func parseInitialSnapshotEpoch(value string) (types.TS, error) {
 	physicalText, logicalText, ok := strings.Cut(value, "-")
 	if !ok || physicalText == "" || logicalText == "" {
-		return types.TS{}, fmt.Errorf("expected physical-logical timestamp")
+		return types.TS{}, moerr.NewInvalidInputNoCtx("expected physical-logical timestamp")
 	}
 	physical, err := strconv.ParseInt(physicalText, 10, 64)
 	if err != nil || physical <= 0 {
-		return types.TS{}, fmt.Errorf("invalid physical timestamp")
+		return types.TS{}, moerr.NewInvalidInputNoCtx("invalid physical timestamp")
 	}
 	logical, err := strconv.ParseUint(logicalText, 10, 32)
 	if err != nil {
-		return types.TS{}, fmt.Errorf("invalid logical timestamp")
+		return types.TS{}, moerr.NewInvalidInputNoCtx("invalid logical timestamp")
 	}
 	return types.BuildTS(physical, uint32(logical)), nil
 }
