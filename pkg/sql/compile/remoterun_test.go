@@ -1550,6 +1550,7 @@ func Test_DMLOperatorSerializationRoundtrip(t *testing.T) {
 			Tag:                    41,
 			UpperLimit:             128,
 			MatchPrefix:            true,
+			ScalarPredicate:        true,
 			BuildExpr:              buildExpr,
 			KeyEncoding:            planpb.RuntimeFilterKeyEncoding_RUNTIME_FILTER_KEY_SERIAL_FULL_V1,
 			ProbeType:              probeType,
@@ -1583,6 +1584,7 @@ func Test_DMLOperatorSerializationRoundtrip(t *testing.T) {
 		require.Equal(t, []planpb.Type{componentType},
 			restoredOp.RuntimeFilterSpec.GetKeyComponentProbeTypes())
 		require.True(t, restoredOp.RuntimeFilterSpec.GetMatchPrefix())
+		require.True(t, restoredOp.RuntimeFilterSpec.GetScalarPredicate())
 	})
 
 	t.Run("HashBuild_LegacyRuntimeFilterHasNoImplicitContract", func(t *testing.T) {

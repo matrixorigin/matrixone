@@ -104,24 +104,26 @@ v4.0.6 tenant upgrade entry 创建 `idx_mo_role_privs_obj_id(obj_id)`。Entry �
 
 ### 4.2 唯一 cumulative capability allocation
 
-该 migration 不再占用 v43：
+本 migration 不预先占用具体数字，而定义：
 
-- v43 由 #27553 的 MongoDB explicit-query payload 所有；
-- v44 由 #27756 的 authoritative DDL visibility/admission fence 所有；
-- 本 migration 仅在 #27553、#27756 按该顺序进入 `main` 后分配 `MORPCVersion45`。
+```text
+V_migration = MORPCLatestVersion(prerequisites merged into main) + 1
+```
 
-这是 merge-order dependency，不是仅在本分支预先声明三个常量。若任一 prerequisite 的版本或 merge 顺序改变，本设计必须产生新 revision 并重新分配 `max(merged cumulative version)+1`。在 prerequisites 未合并前，本 PR 不得进入 implementation approval/merge。
+截至 Revision 2 更新时，live allocation 已发生 drift：main 的 v43 owner 是 scalar runtime-filter；#27553 最新 head 在该基础上提出 v44；#27756 仍需 rebase 后重新分配自己的 next version。因此文档中的数字示例不能成为 allocation，只有 prerequisite merge 后 main 的实际常量链才是 source of truth。
 
-`MORPCLatestVersion` 表示 binary 的 compiled maximum capability。任何 `SetProtocolVersion(V)` receiver 必须在 `V > MORPCLatestVersion` 时 fail closed；因此仅包含 v44、缺少本 migration semantics 的 binary 不能谎报 v45。
+Prerequisites 是 #27553 的 payload capability 与 #27756 的 authoritative DDL visibility/admission fence均合入 `main`。本 migration 随后分配 `V_migration`。若任一 prerequisite 的版本、API 或 merge 顺序改变，本设计必须产生新 revision，并始终使用 `max(merged cumulative version)+1`。在 prerequisites 未合并前，本 PR 不得进入 implementation approval/merge。
+
+`MORPCLatestVersion` 表示 binary 的 compiled maximum capability。任何 `SetProtocolVersion(V)` receiver 必须在 `V > MORPCLatestVersion` 时 fail closed；因此仅包含 prerequisites、缺少本 migration semantics 的 binary 不能谎报 `V_migration`。
 
 ### 4.3 Authoritative durable admission fence
 
-Point-in-time `GetProtocolVersion` 仅用于诊断，**不再充当 migration activation fence**。v45 复用 #27756 在 HAKeeper RSM 中持久化的 authoritative deployed-protocol/admission generation，并扩展其 cumulative protocol contract：
+Point-in-time `GetProtocolVersion` 仅用于诊断，**不再充当 migration activation fence**。`V_migration` 复用 #27756 在 HAKeeper RSM 中持久化的 authoritative deployed-protocol/admission generation，并扩展其 cumulative protocol contract：
 
 1. Activation owner 从 HAKeeper authoritative CN membership 构造 exact `(ServiceID, generation, QueryAddress)` target set；
-2. 每个 target 在接受 v45 前验证 `MORPCLatestVersion >= 45`，停止新 SQL/task worker admission，drain 已接纳 work，并以 generation-bound heartbeat 发布 Prepared；
-3. HAKeeper 在一个 replicated transition 中确认完整 membership/Prepared set 并持久化 minimum deployed protocol v45；该 transition 是 migration activation linearization point；
-4. 每个 target 观察 committed v45 后发布 Fenced/Admitted，才重新开放 SQL ingress 和 tenant worker；
+2. 每个 target 在接受 `V_migration` 前验证 `MORPCLatestVersion >= V_migration`，停止新 SQL/task worker admission，drain 已接纳 work，并以 generation-bound heartbeat 发布 Prepared；
+3. HAKeeper 在一个 replicated transition 中确认完整 membership/Prepared set 并持久化 minimum deployed protocol `V_migration`；该 transition 是 migration activation linearization point；
+4. 每个 target 观察 committed `V_migration` 后发布 Fenced/Admitted，才重新开放 SQL ingress 和 tenant worker；
 5. 新启动、scale-out、replacement CN 必须先读取 authoritative deployed protocol。若 compiled latest < deployed minimum，startup fail closed：不得开放 SQL ingress、QueryService work、pipeline work或 TaskRunner；若 compiled latest >= minimum，则加入 exact generation admission、完成 fence 后才能 serving/worker；
 6. UUID takeover/restart 由 authoritative generation revocation 同步关闭旧 process 的 ingress 和 TaskRunner，旧 generation 不得继续工作；
 7. Cluster upgrade 只有在读取到 authoritative deployed protocol >=45 后，才可在**新的事务**中创建 SI tenant snapshot 和 tenant tasks。
@@ -137,18 +139,18 @@ Point-in-time `GetProtocolVersion` 仅用于诊断，**不再充当 migration ac
 
 ### 4.4 两个确定性 admission 反例
 
-1. **Activation 前缺席、task 前加入**：v44-only CN 不在 initial target observation 中；v45 commit 后它 heartbeat/start。HAKeeper 返回 minimum v45，CN 因 compiled latest=44 保持 non-serving/non-worker，不能运行 legacy range worker。
-2. **Final page check 后、publication 前加入**：在新 worker完成 final empty-page check 后暂停 transaction；v44-only CN heartbeat。该 CN同样被 authoritative minimum 拒绝，不能执行 old DROP；随后 tenant version/task publication 才允许提交。
+1. **Activation 前缺席、task 前加入**：仅支持 prerequisite latest 的旧 CN 不在 initial target observation 中；`V_migration` commit 后它 heartbeat/start。HAKeeper 返回 minimum `V_migration`，CN 因 compiled latest `< V_migration` 保持 non-serving/non-worker，不能运行 legacy range worker。
+2. **Final page check 后、publication 前加入**：在新 worker 完成 final empty-page check 后暂停 transaction；旧 CN heartbeat。该 CN 同样被 authoritative minimum 拒绝，不能执行 old DROP；随后 tenant version/task publication 才允许提交。
 
 测试必须使用 replicated admission transition/generation hook 构造 happens-before，不使用 sleep，也不能用重复 `GetProtocolVersion` 轮询冒充拒绝证据。
 
 ### 4.5 Mixed-version、downgrade 与 rollback
 
-- v45 activation 前：不执行新 tenant cleanup，v43/v44 CN 可继续运行；
+- `V_migration` activation 前：不执行新 tenant cleanup，仅支持 prerequisite latest 的 CN 可继续运行；
 - activation 失败/超时：minimum deployed protocol 不提交，不创建 tenant SI snapshot，不删除权限；已经本地 Prepared 的 CN保持 fail-closed 或按 v44 activation recovery 重试，不能单方面开放旧 producer；
-- authoritative v45 commit 后：compiled latest <45 的 CN 永久 non-serving/non-worker；
+- authoritative `V_migration` commit 后：compiled latest `< V_migration` 的 CN 永久 non-serving/non-worker；
 - page 事务失败：仅该 page 回滚，之前已提交 page 保持有效并由 cursor/谓词恢复；
-- committed v45 后不支持 binary downgrade 到低于 v45。安全 fallback 是停止 upgrade、保留已完成 orphan 删除和 task cursor，并恢复/升级至 v45-capable binaries 后继续；
+- committed `V_migration` 后不支持 binary downgrade 到低于 `V_migration`。安全 fallback 是停止 upgrade、保留已完成 orphan 删除和 task cursor，并恢复/升级至 `V_migration`-capable binaries 后继续；
 - catalog index 对旧查询透明，但不能把“index 兼容”解释为允许旧 worker 修改新 cursor；
 - 已提交的 orphan 删除不做自动数据反向恢复，因为 preservation predicate 将其定义为无合法 owner 的 metadata。若 predicate 被证明错误，必须停止 rollout 并从 migration 前备份恢复。
 
@@ -162,7 +164,7 @@ Point-in-time `GetProtocolVersion` 仅用于诊断，**不再充当 migration ac
 - `mo_upgrade_tenant.ready`：该 range 已无待处理 tenant；
 - cluster upgrade ready counters：只在 task cursor/final ready 原子 claim 成功时推进。
 
-`from_account_id` 的复用避免新增永久 progress table；代价是所有 worker 必须服从本设计的单调 cursor predicate，且 authoritative v45 admission commit 后禁止旧 worker。
+`from_account_id` 的复用避免新增永久 progress table；代价是所有 worker 必须服从本设计的单调 cursor predicate，且 authoritative `V_migration` admission commit 后禁止旧 worker。
 
 ### 5.2 临时状态
 
@@ -246,7 +248,7 @@ TENANT_COMPLETE
 | tenant version 并发推进 | 下一 page 锁定后重建 route | 不覆盖更高 persisted version |
 | DROP ACCOUNT | lookup 零行为 terminal | 下一 page/final check 零行为 terminal |
 | caller txn rollback | required upgrade 在独立 page 前拒绝 | no-upgrade 观察不缓存 |
-| authoritative v45 activation failure | 不提交 deployed minimum、不创建 tenant SI snapshot、不 cleanup | commit 后持续执行 v45 admission contract |
+| authoritative `V_migration` activation failure | 不提交 deployed minimum、不创建 tenant SI snapshot、不 cleanup | commit 后持续执行 `V_migration` admission contract |
 
 Retry 没有内部无限紧循环：每个 scheduler invocation/direct page 都受上层 context 控制；SQL 错误向上返回。DELETE predicate 幂等，因此已删行不会产生副作用。
 
@@ -278,7 +280,7 @@ Retry 没有内部无限紧循环：每个 scheduler invocation/direct page 都�
 
 ### B. 新建永久 per-tenant progress table（拒绝）
 
-状态表达更直接，但引入 catalog schema、bootstrap/restore/cleanup 生命周期和兼容面。现有 task range cursor 在明确单调 ownership predicate 和 authoritative v45 admission 下足够，新增表总复杂度更高。
+状态表达更直接，但引入 catalog schema、bootstrap/restore/cleanup 生命周期和兼容面。现有 task range cursor 在明确单调 ownership predicate 和 authoritative `V_migration` admission 下足够，新增表总复杂度更高。
 
 ### C. 仅修复未来 DROP，不迁移历史数据（拒绝）
 
@@ -290,7 +292,7 @@ Retry 没有内部无限紧循环：每个 scheduler invocation/direct page 都�
 
 ### E. 选定方案
 
-显式 preservation predicates + obj_id index + authoritative v45 admission + bounded idempotent page + existing task cursor atomic claim。它增加了 protocol 约束，但在不新增永久 migration schema 的前提下同时闭合历史修复、资源上限、restart 和 all-entry-point semantics。
+显式 preservation predicates + obj_id index + authoritative `V_migration` admission + bounded idempotent page + existing task cursor atomic claim。它增加了 protocol 约束，但在不新增永久 migration schema 的前提下同时闭合历史修复、资源上限、restart 和 all-entry-point semantics。
 
 ## 13. Validation matrix
 
@@ -304,9 +306,9 @@ Retry 没有内部无限紧循环：每个 scheduler invocation/direct page 都�
 | cursor monotonic/stale ownership | affected-row predicate UT、duplicate worker UT |
 | undefined row order 不跳 tenant | adversarial reverse account/version rows，断言 paired ascending result 与 ORDER BY SQL |
 | SI snapshot 在 durable activation 后 | deterministic blocked activation/tenant-create interleaving embedded test |
-| v44-only CN 在 task 前加入 | HAKeeper committed-minimum + startup hook，断言 SQL/worker admission 均关闭 |
-| v44-only CN 在 final check 后加入 | transaction publication hook + heartbeat，断言 old DROP/legacy worker 不可达 |
-| unique cumulative allocation | receiver rejects requested > compiled latest；v43/v44 fixture 均不能声明 v45 |
+| prerequisite-only CN 在 task 前加入 | HAKeeper committed-minimum + startup hook，断言 SQL/worker admission 均关闭 |
+| prerequisite-only CN 在 final check 后加入 | transaction publication hook + heartbeat，断言 old DROP/legacy worker 不可达 |
+| unique cumulative allocation | receiver rejects requested > compiled latest；prerequisite-only fixture 不能声明 `V_migration` |
 | callback stale/newer 不改变 route | persisted-version routing UT |
 | concurrent version advance 不 downgrade | page interleaving UT |
 | page 后 DROP ACCOUNT | deterministic next-transaction missing-row UT |
@@ -319,12 +321,12 @@ Retry 没有内部无限紧循环：每个 scheduler invocation/direct page 都�
 
 ## 14. Rollout 与 removal
 
-1. #27553(v43)、#27756(v44) 按顺序进入 main，本 migration 分配 v45；
-2. 部署所有 v45-capable CN并通过 authoritative activation 持久化 minimum deployed protocol v45；
-3. 确认 durable v45 admission 后创建新 tenant snapshot；
+1. #27553、#27756 完成 rebase 并进入 main，本 migration 按 main 实际 latest+1 分配 `V_migration`；
+2. 部署所有 `V_migration`-capable CN并通过 authoritative activation 持久化 minimum deployed protocol `V_migration`；
+3. 确认 durable `V_migration` admission 后创建新 tenant snapshot；
 4. 安装 tenant index，再按 page 执行 cleanup；
 5. 观察 task cursor/version publication；失败 tenant 保持未 ready，可 retry；
-6. migration 完成后保留 index 和 v45 minimum admission，继续服务普通 DROP cleanup；
+6. migration 完成后保留 index 和 `V_migration` minimum admission，继续服务普通 DROP cleanup；
 7. 本迁移 entry 属于版本历史，不在未证明所有升级/restore 来源都不再需要前删除。
 
 Blast radius 以 tenant/page transaction 隔离。若发现 predicate 设计错误，停止 rollout，不继续发布 tenant version；使用 migration 前备份恢复受影响 authorization metadata，并提交新的设计 revision。
@@ -340,12 +342,12 @@ Blast radius 以 tenant/page transaction 隔离。若发现 predicate 设计错�
 - callback version 不参与 routing；
 - caller-owned transaction 中 required migration 明确拒绝；
 - DROP ACCOUNT 是合法 terminal；
-- authoritative v45 commit 后的 binary downgrade 不支持；
-- v45 receiver 必须拒绝 `requested > compiled latest`，旧 binary join 必须保持 non-serving/non-worker。
+- authoritative `V_migration` commit 后的 binary downgrade 不支持；
+- `V_migration` receiver 必须拒绝 `requested > compiled latest`，旧 binary join 必须保持 non-serving/non-worker。
 
 ### Revision 2 implementation status
 
-当前 implementation 仍使用 v43 point-in-time checks，**明确不符合 Revision 2，不能进入 implementation approval**。实现必须等待 #27553、#27756 合并到 main，随后基于 merged authoritative admission API 分配 v45 并完成上述 hardening/tests。若 prerequisite API 或版本链变化，先更新本文并重新评审，不在本 PR复制/抢先合入 #27756 的 8000+ 行 admission implementation。
+当前 implementation 仍使用 v43 point-in-time checks，**明确不符合 Revision 2，不能进入 implementation approval**。实现必须等待 #27553、#27756 合并到 main，随后基于 merged authoritative admission API 分配 `V_migration` 并完成上述 hardening/tests。若 prerequisite API 或版本链变化，先更新本文并重新评审，不在本 PR复制/抢先合入 #27756 的 8000+ 行 admission implementation。
 
 ### Blocking approval
 
