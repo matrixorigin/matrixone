@@ -34,7 +34,7 @@ type snapshotEpochTestExecutor struct {
 var (
 	snapshotEpochSelectID = regexp.MustCompile("source_table_id = ([0-9]+)$")
 	snapshotEpochInsert   = regexp.MustCompile(
-		"VALUES \\([0-9]+, '[^']*', '[^']*', '[^']*', ([0-9]+), '([^']+)'\\)$")
+		"VALUES \\([0-9]+, '[^']*', '[^']*', '[^']*', ([0-9]+), '([^']+)'\\)(?: ON DUPLICATE KEY UPDATE.*)?$")
 )
 
 func (e *snapshotEpochTestExecutor) Exec(
