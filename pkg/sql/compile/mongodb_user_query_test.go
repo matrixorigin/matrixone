@@ -210,10 +210,10 @@ func TestConfigureMongoUserQueryRequiresCompatibleProtocol(t *testing.T) {
 		if hadPrevious {
 			rt.SetGlobalVariables(runtime.MOProtocolVersion, previous)
 		} else {
-			rt.CompareAndDeleteGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion42)
+			rt.CompareAndDeleteGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion43)
 		}
 	})
-	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion42)
+	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion43)
 
 	queryColumn := mongoQueryTestColumn(1, catalog.ExternalQuery, types.T_varchar)
 	for name, node := range map[string]*plan.Node{
