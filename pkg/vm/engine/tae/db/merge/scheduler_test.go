@@ -336,13 +336,17 @@ func TestScheduler(t *testing.T) {
 
 	{
 		// test policy patch
+		// Keep the patch alive beyond the test's hang guard. This block verifies
+		// policy composition, not expiration; expiration has a separate fake-clock
+		// test below.
+		policyPatchExpiry := sched.clock.Now().Add(time.Hour)
 
 		trigger := NewMMsgTaskTrigger(tables[0])
 		trigger.WithL0(DefaultLayerZeroOpts.Clone().WithToleranceDegressionCurve(20, 1, 10*time.Second, [4]float64{0, 0, 0, 0}))
 		trigger.WithLn(-1, 10, DefaultOverlapOpts.Clone().WithMinPointDepthPerCluster(4))
 		trigger.WithTombstone(DefaultTombstoneOpts.Clone().WithL2Count(10))
 		trigger.WithVacuumCheck(DefaultVacuumOpts.Clone().WithHollowTopK(20))
-		trigger.WithExpire(time.Now().Add(50 * time.Millisecond))
+		trigger.WithExpire(policyPatchExpiry)
 		sched.SendTrigger(trigger)
 
 		answer := requireQuery(t, sched, tables[0])
@@ -351,7 +355,7 @@ func TestScheduler(t *testing.T) {
 		// merge existing patch
 		sched.SendTrigger(
 			NewMMsgTaskTrigger(tables[0]).
-				WithExpire(time.Now().Add(25 * time.Millisecond)).
+				WithExpire(policyPatchExpiry).
 				WithTombstone(DefaultTombstoneOpts.Clone().WithL2Count(100)),
 		)
 
@@ -410,6 +414,42 @@ func TestScheduler(t *testing.T) {
 		require.Equal(t, answer.NotExists, true)
 	}
 
+}
+
+func TestSchedulerPolicyPatchExpirationUsesInjectedClock(t *testing.T) {
+	clock := newFakeClock()
+	db := catalog.MockDBEntryWithAccInfo(1, 1001)
+	table := catalog.ToMergeTable(catalog.MockTableEntryWithDB(db, 1001))
+	sched := NewMergeScheduler(
+		time.Hour,
+		&dummyCatalogSource{initTables: []catalog.MergeTable{table}},
+		&dummyExecutor{},
+		clock,
+	)
+	sched.PatchTestRscController(newSimRscController(16 * common.Const1GBytes))
+
+	expiresAt := clock.Now().Add(time.Minute)
+	sched.handleTaskTrigger(nil, NewMMsgTaskTrigger(table).
+		WithExpire(expiresAt).
+		WithTombstone(DefaultTombstoneOpts.Clone().WithL2Count(10)))
+	sched.handleTaskTrigger(nil, NewMMsgTaskTrigger(table).
+		WithExpire(expiresAt).
+		WithTombstone(DefaultTombstoneOpts.Clone().WithL2Count(100)))
+
+	supp := sched.supps[table.ID()]
+	require.NotNil(t, supp)
+	require.Len(t, supp.triggers, 1, "policy updates must merge in place")
+	require.Equal(t, 100, supp.triggers[0].tomb.L2Count)
+
+	// Expiration is strict: a patch remains valid at its deadline and is removed
+	// only after the injected clock moves past it.
+	clock.Advance(time.Minute)
+	sched.doSched(nil, supp.todo)
+	require.Len(t, supp.triggers, 1)
+
+	clock.Advance(time.Nanosecond)
+	sched.doSched(nil, supp.todo)
+	require.Empty(t, supp.triggers)
 }
 
 type blockingMergeTable struct {
