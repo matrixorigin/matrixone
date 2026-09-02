@@ -94,7 +94,10 @@ func TestStatementDigestTextRejectsBinaryCharset(t *testing.T) {
 	require.True(t, nullResult.IsNull(0))
 	nullResult.Free(proc.Mp())
 
-	for _, oid := range []types.T{types.T_binary, types.T_varbinary, types.T_blob} {
+	for _, oid := range []types.T{
+		types.T_binary, types.T_varbinary, types.T_blob,
+		types.T_geometry, types.T_geometry32,
+	} {
 		t.Run(oid.String(), func(t *testing.T) {
 			for _, value := range [][]byte{[]byte("SELECT 1"), []byte{0xff, 0x00, 0xc3, 0x28}} {
 				input, err := vector.NewConstBytes(oid.ToType(), value, 1, proc.Mp())
@@ -204,6 +207,7 @@ func TestStatementDigestTextOverloadsAndCharset(t *testing.T) {
 	for _, oid := range []types.T{
 		types.T_varchar, types.T_char, types.T_text,
 		types.T_binary, types.T_varbinary, types.T_blob,
+		types.T_geometry, types.T_geometry32,
 	} {
 		t.Run(oid.String(), func(t *testing.T) {
 			argType := oid.ToType()

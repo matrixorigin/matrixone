@@ -206,6 +206,10 @@ func statementDigestTextFunction() FuncNew {
 	stringTypes := []types.T{
 		types.T_varchar, types.T_char, types.T_text,
 		types.T_binary, types.T_varbinary, types.T_blob,
+		// Geometry values are byte-backed and carry binary semantics.  Keep
+		// overload resolution deterministic, then reject them at execution with
+		// the same undisclosed error as other non-text inputs.
+		types.T_geometry, types.T_geometry32,
 	}
 	overloads := make([]overload, 0, len(stringTypes))
 	for i, typ := range stringTypes {

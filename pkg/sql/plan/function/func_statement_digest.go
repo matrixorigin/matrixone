@@ -118,6 +118,10 @@ func statementDigestTextHasBinaryInput(
 		if parameter.IsNull(uint64(physicalRow)) {
 			continue
 		}
+		switch parameter.GetType().Oid {
+		case types.T_geometry, types.T_geometry32:
+			return true
+		}
 		if parameter.GetIsBinaryStringAt(physicalRow) {
 			return true
 		}
