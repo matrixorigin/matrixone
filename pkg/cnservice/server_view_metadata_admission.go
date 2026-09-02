@@ -91,8 +91,25 @@ func (s *service) renewViewMetadataAuthorityLease(
 	if snapshot == nil || snapshot.Generation != s.viewMetadataAdmissionGeneration {
 		return
 	}
-	duration := viewMetadataAuthorityLeaseDuration(
-		snapshot.AuthorityLeaseTicks, snapshot.TickPerSecond) - heartbeatElapsed
+	leaseDuration := viewMetadataAuthorityLeaseDuration(
+		snapshot.AuthorityLeaseTicks, snapshot.TickPerSecond)
+	if leaseDuration == 0 {
+		// Before cluster admission is enabled HAKeeper legitimately returns a
+		// generation-scoped snapshot without an authority lease. Do not turn
+		// that capability-disabled state into an expired lease: doing so seals
+		// every metadata-sensitive statement on a fresh or legacy cluster.
+		//
+		// Once authority has been armed, or the authoritative snapshot says the
+		// feature is active, losing its lease parameters must still fail closed.
+		if s.viewMetadataEpochFence != nil {
+			_, authorityRequired, _ := s.viewMetadataEpochFence.AuthorityDeadline()
+			if authorityRequired || snapshot.Enabled || snapshot.RefreshEnabled {
+				s.viewMetadataEpochFence.ExpireAuthority(time.Time{})
+			}
+		}
+		return
+	}
+	duration := leaseDuration - heartbeatElapsed
 	if duration <= 0 {
 		if s.viewMetadataEpochFence != nil {
 			s.viewMetadataEpochFence.ExpireAuthority(time.Time{})

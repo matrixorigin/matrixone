@@ -457,6 +457,107 @@ func TestViewMetadataAuthorityLeaseDurationExpiresBeforeHAKeeper(t *testing.T) {
 		viewMetadataAuthorityLeaseDuration(301, 10))
 }
 
+func TestCNViewMetadataAuthorityDistinguishesDisabledFromExpired(t *testing.T) {
+	t.Run("disabled snapshot does not arm authority", func(t *testing.T) {
+		s := &service{
+			viewMetadataAdmissionGeneration: 7,
+			viewMetadataEpochFence:          compile.NewViewMetadataEpochFence(),
+		}
+
+		s.renewViewMetadataAuthorityLease(&logservicepb.ViewMetadataAdmission{
+			Generation: 7,
+		}, 0)
+
+		deadline, required, err := s.viewMetadataEpochFence.AuthorityDeadline()
+		require.NoError(t, err)
+		require.False(t, required)
+		require.True(t, deadline.IsZero())
+		lease, enabled, err := s.viewMetadataEpochFence.AcquireRefresh(context.Background())
+		require.NoError(t, err)
+		require.False(t, enabled)
+		lease.Release()
+	})
+
+	for _, test := range []struct {
+		name     string
+		snapshot logservicepb.ViewMetadataAdmission
+	}{
+		{
+			name: "enabled snapshot without lease fails closed",
+			snapshot: logservicepb.ViewMetadataAdmission{
+				Generation: 8,
+				Enabled:    true,
+			},
+		},
+		{
+			name: "refresh-enabled snapshot without lease fails closed",
+			snapshot: logservicepb.ViewMetadataAdmission{
+				Generation:     8,
+				RefreshEnabled: true,
+			},
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			s := &service{
+				viewMetadataAdmissionGeneration: 8,
+				viewMetadataEpochFence:          compile.NewViewMetadataEpochFence(),
+			}
+			t.Cleanup(func() {
+				s.viewMetadataAuthorityMu.Lock()
+				defer s.viewMetadataAuthorityMu.Unlock()
+				if s.viewMetadataAuthorityTimer != nil {
+					s.viewMetadataAuthorityTimer.Stop()
+				}
+			})
+
+			s.renewViewMetadataAuthorityLease(&test.snapshot, 0)
+
+			_, required, err := s.viewMetadataEpochFence.AuthorityDeadline()
+			require.ErrorIs(t, err, context.Canceled)
+			require.True(t, required)
+
+			// The next valid generation-scoped heartbeat must recover the same
+			// fence without restarting the CN.
+			s.renewViewMetadataAuthorityLease(&logservicepb.ViewMetadataAdmission{
+				Generation:          8,
+				AuthorityLeaseTicks: 301,
+				TickPerSecond:       10,
+			}, 0)
+			lease, enabled, err := s.viewMetadataEpochFence.AcquireRefresh(context.Background())
+			require.NoError(t, err)
+			require.False(t, enabled)
+			lease.Release()
+		})
+	}
+
+	t.Run("armed authority cannot be downgraded to disabled", func(t *testing.T) {
+		s := &service{
+			viewMetadataAdmissionGeneration: 9,
+			viewMetadataEpochFence:          compile.NewViewMetadataEpochFence(),
+		}
+		t.Cleanup(func() {
+			s.viewMetadataAuthorityMu.Lock()
+			defer s.viewMetadataAuthorityMu.Unlock()
+			if s.viewMetadataAuthorityTimer != nil {
+				s.viewMetadataAuthorityTimer.Stop()
+			}
+		})
+		s.renewViewMetadataAuthorityLease(&logservicepb.ViewMetadataAdmission{
+			Generation:          9,
+			AuthorityLeaseTicks: 301,
+			TickPerSecond:       10,
+		}, 0)
+
+		s.renewViewMetadataAuthorityLease(&logservicepb.ViewMetadataAdmission{
+			Generation: 9,
+		}, 0)
+
+		_, required, err := s.viewMetadataEpochFence.AuthorityDeadline()
+		require.ErrorIs(t, err, context.Canceled)
+		require.True(t, required)
+	})
+}
+
 func TestCNViewMetadataAuthorityExpirySealsOnlyMetadataIngress(t *testing.T) {
 	mo := &admissionRevocationMOServer{stopped: make(chan struct{})}
 	closeRequested := make(chan struct{})
