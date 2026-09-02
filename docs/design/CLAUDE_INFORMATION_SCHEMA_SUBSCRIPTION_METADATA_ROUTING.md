@@ -4,7 +4,7 @@
 - Owning issue: [#27759](https://github.com/matrixorigin/matrixone/issues/27759)
 - Implementation PR: [#27778](https://github.com/matrixorigin/matrixone/pull/27778)
 - Related local-visibility design: [Information Schema Metadata Visibility and Active-Role Closure](CLAUDE_INFORMATION_SCHEMA_METADATA_VISIBILITY.md)
-- Version: 4
+- Version: 5
 - Last updated: 2026-09-02
 
 ## 1. Problem and evidence
@@ -207,8 +207,11 @@ the session transaction:
 2. it applies the snapshot tenant identity to the background context;
 3. it enumerates `mo_subs` and subscriber-local RBAC visibility through a
    short-lived background executor bound to that cloned transaction;
-4. all local and publisher catalog branches retain the same plan snapshot;
-5. the background result and executor are closed on every return path.
+4. when a legacy `mo_subs` row lacks `pub_account_id`, it resolves the stored
+   publisher account name through `mo_account` using that same executor and
+   transaction snapshot before constructing planner metadata;
+5. all local and publisher catalog branches retain the same plan snapshot;
+6. the background result and executor are closed on every return path.
 
 This prevents a plan from combining today's subscription set with historical
 publisher catalogs, or the inverse. A subscription present at `X` and removed
@@ -259,6 +262,14 @@ catalog definition or a parser object shared with another query.
 
 Compatibility rules are:
 
+- the legacy `mo_subs` shape, which predates both `sub_account_name` and
+  `pub_account_id`, is admitted by the same bounded candidate query and then
+  resolves distinct non-system publisher names to account IDs from
+  `mo_account` in fixed batches of 64 through the same snapshot executor;
+- publisher-name resolution is complete-or-error: a missing, duplicate,
+  unexpected, zero/non-system, or out-of-range account identity fails the
+  statement before any publisher branch can be built; the real `sys` account
+  remains the only publisher allowed to use account ID 0;
 - legacy definitions without `__mo_visible_tables` receive the publisher
   account rewrite in the top-level predicate and retain publication filters on
   catalog scans;
@@ -327,6 +338,11 @@ budget for the current UNION implementation:
   active catalog candidates exceed the remaining budget even if subscriber
   RBAC would later hide enough candidates; it never selects an arbitrary
   visible prefix;
+- only after that candidate-count admission succeeds, legacy rows missing
+  publisher IDs perform `mo_account` identity resolution. Distinct publisher
+  names are sorted and queried in batches of at most 64, each with an
+  additional result sentinel. This bounds SQL text and result materialization,
+  avoids one query per subscription, and preserves the requested snapshot;
 - a successful provider result is complete for that effective snapshot and is
   cached only inside the current query builder. Repeated occurrences reuse the
   bounded set, while a different requested historical snapshot receives a separate
@@ -377,10 +393,12 @@ metrics.
 
 ## 10. Failure handling and ownership
 
-Subscription enumeration errors, snapshot executor errors, view parse errors,
-and unsupported visibility-CTE shapes fail the statement. They do not degrade
-to local-only or unscoped publisher results. A publication filter construction
-error likewise aborts the affected plan.
+Subscription enumeration errors, legacy publisher-identity lookup errors,
+snapshot executor errors, view parse errors, and unsupported visibility-CTE
+shapes fail the statement. They do not degrade to local-only, account 0, or
+unscoped publisher results. Legacy identity resolution mutates no candidate
+until every requested account name is resolved and validated. A publication
+filter construction error likewise aborts the affected plan.
 
 All temporary subscription slices are query-owned. Enumeration copies and
 sorts the bounded provider result before deduplication. The complete visible
@@ -462,6 +480,9 @@ without introducing cross-statement freshness or invalidation state.
 | Subscriber role IDs do not authorize publisher catalogs | canonical CTE rewrite and publisher-RBAC negative tests |
 | Canonical and legacy persisted-view shapes remain safe | real canonical-DDL rewrite test and fail-closed shape tests |
 | Current and historical membership use one snapshot | compiler-context ownership review and public snapshot BVT |
+| Legacy `mo_subs` publisher names resolve to the real account at the same snapshot | bounded lookup tests plus nonzero `PubInfo.TenantId`/account-rewrite plan tests |
+| Missing, duplicate, unexpected, zero/non-system, and canceled legacy identity lookup fail closed | frontend negative counterexamples |
+| Legacy publisher lookup remains bounded rather than N+1 or unbounded | 65-name fixed-batch counterexample plus overflow-before-lookup test |
 | Ordinary zero-to-one transition cannot reuse stale cache | cache-admission test and repeated COM_QUERY BVT |
 | Prepared create/withdraw/reauthorize/drop transitions rebuild | frontend lifecycle tests and public prepared BVT |
 | Guaranteed rebuild skips obsolete captured-reference validation | injected resolver test |
@@ -487,8 +508,8 @@ assertions.
 
 Primary risks are cross-tenant metadata leakage, unpublished-table leakage,
 stale membership, historical/current state mixing, identifier-case omission,
-and planner amplification. Sections 4–10 assign a separate invariant and test
-to each risk.
+legacy publisher identity loss, and planner amplification. Sections 4–10
+assign a separate invariant and test to each risk.
 
 The rollout is binary-only. No backfill or destructive rollback exists. The
 feature may be disabled operationally only by routing metadata clients to old
@@ -509,6 +530,9 @@ branch/cardinality observability before raising the budget.
 - Local and publisher rows are combined with `UNION ALL`; existing catalog
   uniqueness prevents semantic duplicate index rows within one branch.
 - Historical enumeration and catalog binding use one snapshot.
+- Legacy subscription rows resolve publisher names to IDs through the same
+  snapshot executor in fixed batches after candidate-count admission; failures
+  never default a non-system publisher to account 0.
 - Ordinary plans are not cached; prepared plans rebuild every execution.
 - Publisher rewrites are query-owned and support legacy plus canonical
   persisted definitions without a catalog migration.
@@ -536,7 +560,7 @@ To be completed by an authorized reviewer:
 ```text
 Change scope: cross-account subscription index metadata routing
 Trigger: authorization/tenant boundary; account-wide semantics; snapshot and cache lifecycle; planner amplification
-Design: docs/design/CLAUDE_INFORMATION_SCHEMA_SUBSCRIPTION_METADATA_ROUTING.md, version 4, <reviewed commit>
+Design: docs/design/CLAUDE_INFORMATION_SCHEMA_SUBSCRIPTION_METADATA_ROUTING.md, version 5, <reviewed commit>
 Blocking findings: <none or findings>
 Decision log: <accepted tradeoffs and resolved questions>
 Decision: PASS | REQUEST_CHANGES

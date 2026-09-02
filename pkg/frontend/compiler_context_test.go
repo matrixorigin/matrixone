@@ -212,6 +212,200 @@ func subscriptionCandidateResult(rowCount int, modernCatalog bool) *MysqlResultS
 	return result
 }
 
+func subscriptionPublisherAccountResult(rows ...[]interface{}) *MysqlResultSet {
+	result := &MysqlResultSet{}
+	for _, name := range []string{"account_id", "account_name"} {
+		column := &MysqlColumn{}
+		column.SetName(name)
+		result.AddColumn(column)
+	}
+	for _, row := range rows {
+		result.AddRow(row)
+	}
+	return result
+}
+
+func TestLegacySubscriptionMetadataResolvesPublisherAccountAtCatalogBoundary(t *testing.T) {
+	columnCheckSQL := "select 1 from mo_catalog.mo_columns where att_database = 'mo_catalog' and att_relname = 'mo_subs' and attname = 'sub_account_name'"
+	candidateSQL := getSubsSqlOld +
+		" and sub_account_id = 7 and status = 0 and sub_name is not null and sub_name <> '' limit 2"
+	lookupSQL := subscriptionPublisherAccountLookupSQL([]string{"publisher"})
+
+	bh := &backgroundExecTest{}
+	bh.init()
+	bh.sql2result[columnCheckSQL] = &MysqlResultSet{}
+	bh.sql2result[candidateSQL] = subscriptionCandidateResult(1, false)
+	bh.sql2result[lookupSQL] = subscriptionPublisherAccountResult(
+		[]interface{}{int64(42), "publisher"},
+	)
+
+	ctx := defines.AttachAccountId(context.Background(), 7)
+	got, err := getActiveSubInfosFromSubBounded(ctx, bh, 1)
+	require.NoError(t, err)
+	require.Len(t, got, 1)
+	require.Equal(t, int32(42), got[0].PubAccountId)
+
+	metas, err := subscriptionMetasFromSubInfos(ctx, got)
+	require.NoError(t, err)
+	require.Len(t, metas, 1)
+	require.Equal(t, int32(42), metas[0].AccountId,
+		"the resolved legacy publisher identity must reach the planner metadata")
+	require.Equal(t, []string{columnCheckSQL, candidateSQL, lookupSQL}, bh.executedSQLs)
+	require.Equal(t, []uint32{
+		catalog.System_Account, catalog.System_Account, catalog.System_Account,
+	}, bh.executionAccountIDs)
+}
+
+func TestLegacySubscriptionMetadataPublisherResolutionFailsClosed(t *testing.T) {
+	ctx := defines.AttachAccountId(context.Background(), 7)
+	for _, test := range []struct {
+		name       string
+		lookupRows [][]interface{}
+		wantError  string
+	}{
+		{
+			name:      "missing account",
+			wantError: "cannot resolve publication account publisher",
+		},
+		{
+			name: "zero id for non-system account",
+			lookupRows: [][]interface{}{
+				{int64(0), "publisher"},
+			},
+			wantError: "invalid publication account id 0",
+		},
+		{
+			name: "duplicate account identity",
+			lookupRows: [][]interface{}{
+				{int64(42), "publisher"},
+				{int64(43), "publisher"},
+			},
+			wantError: "ambiguous publication account publisher",
+		},
+		{
+			name: "unexpected account identity",
+			lookupRows: [][]interface{}{
+				{int64(42), "other"},
+			},
+			wantError: "unexpected publication account other",
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			lookupSQL := subscriptionPublisherAccountLookupSQL([]string{"publisher"})
+			bh := &backgroundExecTest{}
+			bh.init()
+			bh.sql2result[lookupSQL] = subscriptionPublisherAccountResult(test.lookupRows...)
+			subInfos := []*pubsub.SubInfo{{
+				SubName: "sub_db", PubAccountName: "publisher",
+			}}
+
+			err := resolveMissingSubscriptionPublisherAccountIDs(ctx, bh, subInfos)
+			require.ErrorContains(t, err, test.wantError)
+			require.Equal(t, int32(0), subInfos[0].PubAccountId,
+				"failed resolution must not leave a partially usable publisher identity")
+			require.Equal(t, []string{lookupSQL}, bh.executedSQLs)
+			require.Equal(t, []uint32{catalog.System_Account}, bh.executionAccountIDs)
+		})
+	}
+}
+
+func TestLegacySubscriptionMetadataPublisherResolutionIsBatched(t *testing.T) {
+	const publisherCount = subscriptionPublisherAccountLookupBatchSize + 1
+	subInfos := make([]*pubsub.SubInfo, 0, publisherCount+1)
+	accountNames := make([]string, 0, publisherCount)
+	for i := 0; i < publisherCount; i++ {
+		accountName := fmt.Sprintf("publisher_%03d", i)
+		accountNames = append(accountNames, accountName)
+		subInfos = append(subInfos, &pubsub.SubInfo{
+			SubName: fmt.Sprintf("sub_%03d", i), PubAccountName: accountName,
+		})
+	}
+	// The real system publisher legitimately owns account id 0 and needs no
+	// catalog lookup. It also proves that zero is not used as an unresolved
+	// sentinel without considering the publisher name.
+	subInfos = append(subInfos, &pubsub.SubInfo{
+		SubName: "sys_sub", PubAccountName: sysAccountName,
+	})
+
+	firstBatch := accountNames[:subscriptionPublisherAccountLookupBatchSize]
+	secondBatch := accountNames[subscriptionPublisherAccountLookupBatchSize:]
+	firstSQL := subscriptionPublisherAccountLookupSQL(firstBatch)
+	secondSQL := subscriptionPublisherAccountLookupSQL(secondBatch)
+	firstRows := make([][]interface{}, 0, len(firstBatch))
+	for i, accountName := range firstBatch {
+		firstRows = append(firstRows, []interface{}{int64(i + 1), accountName})
+	}
+	secondRows := [][]interface{}{{int64(publisherCount), secondBatch[0]}}
+
+	bh := &backgroundExecTest{}
+	bh.init()
+	bh.sql2result[firstSQL] = subscriptionPublisherAccountResult(firstRows...)
+	bh.sql2result[secondSQL] = subscriptionPublisherAccountResult(secondRows...)
+
+	err := resolveMissingSubscriptionPublisherAccountIDs(
+		defines.AttachAccountId(context.Background(), 7), bh, subInfos,
+	)
+	require.NoError(t, err)
+	require.Equal(t, []string{firstSQL, secondSQL}, bh.executedSQLs)
+	require.Equal(t, []uint32{catalog.System_Account, catalog.System_Account}, bh.executionAccountIDs)
+	require.Contains(t, firstSQL, " limit 65")
+	require.Contains(t, secondSQL, " limit 2")
+	for i := 0; i < publisherCount; i++ {
+		require.Equal(t, int32(i+1), subInfos[i].PubAccountId)
+	}
+	require.Equal(t, int32(sysAccountID), subInfos[publisherCount].PubAccountId)
+}
+
+func TestLegacySubscriptionMetadataPublisherResolutionDoesNotPartiallyMutateAcrossBatches(t *testing.T) {
+	const publisherCount = subscriptionPublisherAccountLookupBatchSize + 1
+	subInfos := make([]*pubsub.SubInfo, 0, publisherCount)
+	accountNames := make([]string, 0, publisherCount)
+	for i := 0; i < publisherCount; i++ {
+		accountName := fmt.Sprintf("publisher_%03d", i)
+		accountNames = append(accountNames, accountName)
+		subInfos = append(subInfos, &pubsub.SubInfo{
+			SubName: fmt.Sprintf("sub_%03d", i), PubAccountName: accountName,
+		})
+	}
+
+	firstBatch := accountNames[:subscriptionPublisherAccountLookupBatchSize]
+	secondBatch := accountNames[subscriptionPublisherAccountLookupBatchSize:]
+	firstSQL := subscriptionPublisherAccountLookupSQL(firstBatch)
+	secondSQL := subscriptionPublisherAccountLookupSQL(secondBatch)
+	firstRows := make([][]interface{}, 0, len(firstBatch))
+	for i, accountName := range firstBatch {
+		firstRows = append(firstRows, []interface{}{int64(i + 1), accountName})
+	}
+
+	bh := &backgroundExecTest{}
+	bh.init()
+	bh.sql2result[firstSQL] = subscriptionPublisherAccountResult(firstRows...)
+	bh.sql2result[secondSQL] = subscriptionPublisherAccountResult()
+
+	err := resolveMissingSubscriptionPublisherAccountIDs(
+		defines.AttachAccountId(context.Background(), 7), bh, subInfos,
+	)
+	require.ErrorContains(t, err, "cannot resolve publication account publisher_064")
+	require.Equal(t, []string{firstSQL, secondSQL}, bh.executedSQLs)
+	for _, subInfo := range subInfos {
+		require.Equal(t, int32(0), subInfo.PubAccountId,
+			"a late batch failure must not publish identities from an earlier successful batch")
+	}
+}
+
+func TestLegacySubscriptionMetadataPublisherResolutionObservesCancellation(t *testing.T) {
+	wantErr := errors.New("stop legacy publisher identity resolution")
+	ctx, cancel := context.WithCancelCause(context.Background())
+	cancel(wantErr)
+	bh := &backgroundExecTest{}
+	bh.init()
+	err := resolveMissingSubscriptionPublisherAccountIDs(ctx, bh, []*pubsub.SubInfo{{
+		SubName: "sub_db", PubAccountName: "publisher",
+	}})
+	require.ErrorIs(t, err, wantErr)
+	require.Empty(t, bh.executedSQLs)
+}
+
 func TestGetVisibleSubscriptionMetadata(t *testing.T) {
 	metas := []*pbplan.SubscriptionMeta{
 		{SubName: "all_visible", AccountId: 1, DbName: "pub_a", Tables: "*"},
