@@ -18,7 +18,6 @@ import (
 	"context"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -184,8 +183,7 @@ func TestLoadAllBasesEmpty(t *testing.T) {
 	swapRunSql(t, func(_ *sqlexec.SqlProcess, _ string) (executor.Result, error) {
 		return executor.Result{Mp: mp, Batches: nil}, nil
 	})
-	trace := &loadTrace{start: time.Now()}
-	bases, err := loadAllBasesUncached(sp, cfg, trace)
+	bases, err := LoadAllBases(sp, cfg)
 	require.NoError(t, err)
 	require.Empty(t, bases)
 }
@@ -202,12 +200,10 @@ func TestLoadTailSegmentsEmpty(t *testing.T) {
 		}
 		return executor.Result{Mp: mp, Batches: nil}, nil
 	})
-	trace := &loadTrace{start: time.Now()}
-	segs, deletes, _, err := loadTailSegmentsAfter(sp, cfg, 7, trace)
+	segs, deletes, err := LoadTailSegments(sp, cfg)
 	require.NoError(t, err)
 	require.Empty(t, segs)
 	require.Empty(t, deletes)
-	require.GreaterOrEqual(t, trace.phase.internalSQL, time.Duration(0))
 }
 
 // TestLoadFromStorageRoundTrip mocks the metadata read + base-chunk stream with a REAL
@@ -236,14 +232,11 @@ func TestLoadFromStorageRoundTrip(t *testing.T) {
 		return executor.Result{}, nil
 	})
 
-	trace := &loadTrace{start: time.Now()}
-	loaded, err := loadFromStorage(sp, cfg, "seg0", trace)
+	loaded, err := LoadFromStorage(sp, cfg, "seg0")
 	require.NoError(t, err)
 	require.Equal(t, "seg0", loaded.Id)
 	require.Equal(t, int64(5), loaded.Recency)
 	require.Equal(t, seg.N, loaded.N)
-	require.Equal(t, filesize, trace.event.BaseBytes)
-	require.Positive(t, trace.phase.tempWrite)
 	loaded.Free()
 
 	// a checksum mismatch (corrupt stream) is detected and rejected.
@@ -315,15 +308,6 @@ func TestCompactSegmentsFoldsTail(t *testing.T) {
 			return executor.Result{Mp: mp}, nil
 		}
 	})
-
-	trace := &loadTrace{start: time.Now()}
-	tracedSegs, tracedDeletes, maxChunk, err := loadTailSegmentsAfter(sp, cfg, -1, trace)
-	require.NoError(t, err)
-	require.Len(t, tracedSegs, 1)
-	require.Empty(t, tracedDeletes)
-	require.Equal(t, chunks[len(chunks)-1].ChunkId, maxChunk)
-	require.Positive(t, trace.event.TailBytes)
-	freeSegs(tracedSegs)
 
 	nlive, err := CompactSegments(sp, cfg, 0, 0)
 	require.NoError(t, err)
@@ -405,8 +389,7 @@ func TestLoadAllBasesFreesOnPartialFailure(t *testing.T) {
 		return executor.Result{}, nil
 	})
 
-	trace := &loadTrace{start: time.Now()}
-	bases, err := loadAllBasesUncached(sp, cfg, trace)
+	bases, err := LoadAllBases(sp, cfg)
 	require.Error(t, err, "s1 fails to load")
 	require.Nil(t, bases, "no partial slice is returned (s0 was freed)")
 }
