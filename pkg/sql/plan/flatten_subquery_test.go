@@ -974,6 +974,56 @@ func TestNestedCorrelatedScalarAggregatePullsUpGroupingKey(t *testing.T) {
 	}
 }
 
+func TestNestedCorrelatedAffineSumAggregatePullsUpGroupingKey(t *testing.T) {
+	logicPlan, err := runOneStmt(NewMockOptimizer(true), t, `
+		SELECT n1.N_NATIONKEY,
+		       (SELECT MAX(n2.N_REGIONKEY)
+		          FROM NATION n2
+		         WHERE (n2.N_REGIONKEY > 0) = (
+		               SELECT SUM(n3.N_REGIONKEY + 3) =
+		                      COALESCE(SUM(n3.N_REGIONKEY + 1), SUM(n3.N_REGIONKEY + 2), 0)
+		                 FROM NATION n3
+		                WHERE n3.N_NATIONKEY = n1.N_NATIONKEY
+		         ))
+		  FROM NATION n1`)
+	require.NoError(t, err)
+	require.Equal(t, 2, countPlanFunctionCalls(logicPlan, "sum"),
+		"the correlated consumer must retain the two-anchor affine plan")
+	assertReachablePlanHasNoCorrelatedExpr(t, logicPlan.GetQuery())
+}
+
+func TestNullPropagatesFromAggregateThroughAffineArithmetic(t *testing.T) {
+	builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true), false, true)
+	aggregateType := plan.Type{Id: int32(types.T_decimal128), Width: 38}
+	anchor0 := GetColExpr(aggregateType, 11, 0)
+	anchor1 := GetColExpr(aggregateType, 11, 1)
+
+	difference, err := BindFuncExprImplByPlanExpr(
+		builder.GetContext(), "-", []*plan.Expr{DeepCopyExpr(anchor1), DeepCopyExpr(anchor0)})
+	require.NoError(t, err)
+	scaled, err := BindFuncExprImplByPlanExpr(
+		builder.GetContext(), "*", []*plan.Expr{difference, makePlan2Int64ConstExprWithType(3)})
+	require.NoError(t, err)
+	derived, err := BindFuncExprImplByPlanExpr(
+		builder.GetContext(), "+", []*plan.Expr{DeepCopyExpr(anchor0), scaled})
+	require.NoError(t, err)
+	require.True(t, nullPropagatesFromAggregate(derived, 11))
+
+	coalesce, err := BindFuncExprImplByPlanExpr(
+		builder.GetContext(), "coalesce", []*plan.Expr{DeepCopyExpr(anchor0), DeepCopyExpr(anchor1)})
+	require.NoError(t, err)
+	require.False(t, nullPropagatesFromAggregate(coalesce, 11),
+		"a NULL-observing consumer must remain a decorrelation barrier")
+
+	division, err := BindFuncExprImplByPlanExpr(
+		builder.GetContext(), "/", []*plan.Expr{DeepCopyExpr(anchor0), makePlan2Int64ConstExprWithType(1)})
+	require.NoError(t, err)
+	require.False(t, nullPropagatesFromAggregate(division, 11),
+		"the proof must not expand to unaudited strict arithmetic")
+	require.False(t, nullPropagatesFromAggregate(
+		GetColExpr(aggregateType, 12, 0), 11))
+}
+
 func TestTransparentCorrelatedDerivedTableChain(t *testing.T) {
 	for _, tt := range []struct {
 		name     string
