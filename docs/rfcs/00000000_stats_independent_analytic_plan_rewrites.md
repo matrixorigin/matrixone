@@ -1,6 +1,6 @@
-- Status: draft
+- Status: in-progress
 - Start Date: 2026-09-01
-- Design revision: v5 (2026-09-02)
+- Design revision: v6 (2026-09-02)
 - Authors: MatrixOne optimizer team
 - Implementation PRs: [#27914](https://github.com/matrixorigin/matrixone/pull/27914), [#27915](https://github.com/matrixorigin/matrixone/pull/27915), [#27934](https://github.com/matrixorigin/matrixone/pull/27934)
 - Issue for this RFC: [#26768](https://github.com/matrixorigin/matrixone/issues/26768)
@@ -26,11 +26,11 @@ The implementation may use statistics to choose among plans already proved
 equivalent. Statistics, benchmark query identity, table names, scale factors,
 and constants are never correctness evidence.
 
-This revision remains `draft` while the implementations and acceptance evidence
-are aligned.  Design and implementation are reviewed together: before the
-decisive review, the RFC advances to `in-progress` in the same final candidate
-head.  A GitHub `APPROVE` on that exact head accepts the RFC, implementation,
-and evidence together.  No separate design-only approval or PR is required.
+The implementations, rollback cohorts, and acceptance evidence are aligned, so
+this revision is `in-progress`.  Design and implementation are reviewed
+together: a GitHub `APPROVE` on the exact candidate head accepts the RFC,
+implementation, and evidence together.  No separate design-only approval or PR
+is required.
 
 ## Motivation
 
@@ -468,6 +468,10 @@ each PR's final implementation diff.
 
 ## Decision log
 
+- v6 advances the aligned series to `in-progress`.  Branch-local numeric
+  placeholders are integration metadata assigned against the merge base; the
+  reviewed compatibility contract is the predecessor fallback and its boundary
+  test.
 - v5 distinguishes unchanged-path overhead from bounded work performed only
   after a rule is admitted.  This keeps the 5% control-path gate while giving
   semantic rewrites a fixed, workload-independent 15% wall/25% allocation
@@ -490,9 +494,9 @@ each PR's final implementation diff.
 
 ## Ready gate
 
-Before requesting decisive approval, the final candidate advances this RFC to
-`in-progress` and closes the global non-fixpoint order, all semantic guards
-(including totality and physical probe-side scalar lineage), unique final MORPC
-allocation, scalar optional-wire compatibility, resource ownership, the three
-rollback cohorts, implementation budgets, and the positive/counterexample/
-cross-rule matrix.  No blocking semantic question is intentionally deferred.
+Before requesting decisive approval, the final candidate closes the global
+non-fixpoint order, all semantic guards (including totality and physical
+probe-side scalar lineage), scalar optional-wire compatibility, resource
+ownership, the three rollback cohorts, implementation budgets, and the
+positive/counterexample/cross-rule matrix.  No blocking semantic question is
+intentionally deferred.
