@@ -306,6 +306,14 @@ Runtime-filter tags and payloads remain inside the existing query-scoped
 message path.  The payload cardinality is at most one, so the design adds no
 tenant-crossing state or denial-of-service multiplier.
 
+Scalar-predicate messages use the existing current-CN address.  Planning must
+therefore reject probe-column lineages that cross a shuffle.  After physical
+scopes are built and before any pipeline starts, the compiler validates that
+the one scalar producer and every blocking scan consumer share an execution
+CN.  If physical placement cannot prove that topology, both physical message
+endpoints are removed and the unchanged FILTER + SINGLE plan runs without the
+optional runtime filter.
+
 ## Resource and failure model
 
 - Planner graph walks keep visited state and are linear in reachable plan nodes
@@ -445,8 +453,9 @@ paths, `subqueryPredicatePlanning=1` restores all #27915 legacy paths, and
 once at planning entry and must be covered by positive and rollback plan tests.
 Grouping-set execution also has a deterministic compatibility fallback:
 protocol versions below its final unique version `N` always receive the legacy
-plan.  The optional scalar runtime filter fails open with `PASS` independently
-of the planner switch.
+plan.  The optional scalar runtime filter keeps its runtime `PASS` fallback for
+non-selective scalar results; an unproved current-CN topology instead removes
+the physical filter before execution, independently of the planner switch.
 
 Rollout is deterministic UT/public SQL and wire/error-path tests, frozen
 TPCH/TPC-DS plan corpus, isolated 1 TiB targets, TPCH performance control, then
