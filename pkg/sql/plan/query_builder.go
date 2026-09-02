@@ -3778,6 +3778,9 @@ func (builder *QueryBuilder) createQuery() (*Query, error) {
 			return nil, err
 		}
 		builder.qry.Steps[i] = builder.removeUnnecessaryProjections(rootID)
+		if !builder.subqueryPredicatePlanningDisabled() {
+			builder.generateScalarPredicateRuntimeFilters(builder.qry.Steps[i])
+		}
 	}
 
 	// Expose the SINK column remap so irregular-index maintenance sub-plans built
