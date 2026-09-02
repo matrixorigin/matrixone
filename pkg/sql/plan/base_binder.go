@@ -3230,8 +3230,12 @@ func (b *baseBinder) bindPreparedNumericFuncExpr(
 	if strings.EqualFold(name, "abs") && !hasExplicitFloatCast {
 		b.markPreparedNumericFallback(arg)
 	}
+	args, err := b.coerceBoolNumericAggregateArg(name, []*plan.Expr{arg})
+	if err != nil {
+		return nil, err
+	}
 	return bindBoundFuncExprAndConstFold(
-		b.GetContext(), b.builder.compCtx.GetProcess(), name, []*plan.Expr{arg},
+		b.GetContext(), b.builder.compCtx.GetProcess(), name, args,
 	)
 }
 
@@ -3262,6 +3266,34 @@ func (b *baseBinder) bindFullTextMatchExpr(astExpr *tree.FullTextMatchExpr, dept
 	}
 
 	return BindFuncExprImplByPlanExpr(b.GetContext(), "fulltext_match", args)
+}
+
+// coerceBoolNumericAggregateArg gives SUM/AVG over a BOOL argument the MySQL
+// reading under the ENABLE_BOOL_SUMAVG sql_mode by binding that argument as
+// TINYINT. MySQL has no BOOL type: a predicate there is an integer 0/1 and
+// SUM/AVG over one is ordinary numeric aggregation, while MO types it as BOOL,
+// which SumSupportedTypes rejects. The cast is exactly the
+// sum(cast(pred as tinyint)) a user writes today, so it reuses the existing
+// integer aggregate (no new aggregate state, no executor path, no per-row
+// cost) and keeps sum(bool) -> BIGINT consistent with sum(tinyint).
+//
+// The mode is read from the builder flag that NewQueryBuilder resolved once
+// from sql_mode, the same way ONLY_FULL_GROUP_BY is, so the direct and the
+// prepared bind paths agree and a binder without a builder stays strict.
+func (b *baseBinder) coerceBoolNumericAggregateArg(
+	name string, args []*plan.Expr,
+) ([]*plan.Expr, error) {
+	if b.builder == nil || !b.builder.boolSumAvgCompat || len(args) != 1 ||
+		args[0].Typ.Id != int32(types.T_bool) ||
+		!(strings.EqualFold(name, "sum") || strings.EqualFold(name, "avg")) {
+		return args, nil
+	}
+	tinyint := types.T_int8.ToType()
+	casted, err := appendCastBeforeExpr(b.GetContext(), args[0], makePlan2Type(&tinyint))
+	if err != nil {
+		return nil, err
+	}
+	return []*plan.Expr{casted}, nil
 }
 
 func (b *baseBinder) bindFuncExprImplByAstExpr(name string, astArgs []tree.Expr, depth int32) (*plan.Expr, error) {
@@ -3494,6 +3526,10 @@ func (b *baseBinder) bindFuncExprImplByAstExpr(name string, astArgs []tree.Expr,
 		}
 	}
 	args = useStoredMySQLSpecialTypesForNumericContract(b.GetContext(), name, args)
+	args, coerceErr := b.coerceBoolNumericAggregateArg(name, args)
+	if coerceErr != nil {
+		return nil, coerceErr
+	}
 	if (name == "in" || name == "not_in") && len(args) == 2 &&
 		containsVolatileFunction(args[0]) && b.ctx != nil {
 		b.markVolatileInLeft(args[0])

@@ -404,13 +404,17 @@ type QueryBuilder struct {
 	isPrepareStatement     bool
 	mysqlCompatible        bool
 	mysqlFullGroupByCompat bool
-	isForUpdate            bool // if it's a query plan for update
-	isRestore              bool
-	isRestoreByTs          bool
-	isSkipResolveTableDef  bool
-	skipStats              bool
-	isInsertIgnore         bool             // INSERT IGNORE: over-length CHAR/VARCHAR writes are truncated instead of rejected
-	deleteNode             map[uint64]int32 //delete node in this query. key is tableId, value is the nodeId of sinkScan node in the delete plan
+	// boolSumAvgCompat is the ENABLE_BOOL_SUMAVG sql_mode, resolved once per
+	// builder like the two flags above so every bind path (direct, HAVING,
+	// window, PREPARE) reads the same decision.
+	boolSumAvgCompat      bool
+	isForUpdate           bool // if it's a query plan for update
+	isRestore             bool
+	isRestoreByTs         bool
+	isSkipResolveTableDef bool
+	skipStats             bool
+	isInsertIgnore        bool             // INSERT IGNORE: over-length CHAR/VARCHAR writes are truncated instead of rejected
+	deleteNode            map[uint64]int32 //delete node in this query. key is tableId, value is the nodeId of sinkScan node in the delete plan
 
 	// spill memory for aggregate function
 	// jsonProbeFtNodes marks the fulltext index-scan nodes built for a json
