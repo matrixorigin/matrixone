@@ -108,14 +108,19 @@ The following are **not incrementally supported by the current PR**:
 
 - `HAVING`;
 - `SUM(DISTINCT)` and `AVG(DISTINCT)`;
-- `UNION ALL` or any other set operation;
+- `UNION ALL` or any other set operation; top-level set operations are currently
+  rejected before source collection and therefore cannot yet fall back to a
+  FORCE complete refresh;
 - JOIN, CTE, subquery, window, `ORDER BY ... LIMIT`, ROLLUP, CUBE, GROUPING
   SETS, Top-K, percentile/quantile, bitmap/HLL, or user-defined aggregate state.
 
-`FAST` rejects these definitions at creation. The current error identifies the
-unsupported incremental-query class, but does not yet report a distinct reason
-for every individual SQL construct. Under `FORCE`, the incremental
-specification remains empty and the MV takes the complete-refresh path.
+A query must first pass the direct ordinary-source admission in section 3.1.
+For an admitted query that cannot produce an incremental specification, `FAST`
+rejects creation while `FORCE` stores no specification and takes the complete
+refresh path. The current FAST error identifies the unsupported single-table
+incremental-aggregate class but not every individual construct. Derived tables,
+ordinary views, special relations, and current top-level set operations fail
+source admission rather than receiving a complete refresh.
 
 ### 3.3 Implemented complete-refresh scope
 
@@ -128,6 +133,24 @@ Multi-source support is complete refresh only. A multi-source job is gated by
 the MORPC protocol version that introduced its serialized ISCP shape. Older
 services reject creation rather than interpreting the job as a legacy
 single-source job.
+
+### 3.4 Current refresh boundary
+
+| Input/policy | Current behavior | Reason |
+| --- | --- | --- |
+| Initial snapshot of every `ON CHANGE` MV | Complete build | No target/operator state exists; hydrate from one consistent snapshot |
+| Tail with a version-2 spec under `FAST/FORCE ON CHANGE` | Incremental | The consumer can turn insert/delete/update into signed group deltas |
+| Admitted `FORCE ON CHANGE` query without a spec | Complete refresh | No retractable operator state represents that query yet |
+| FORCE incremental transaction failure | Roll back, then complete refresh at the same `toTS` | Partial target/state or a watermark beyond a failed boundary cannot publish |
+| FAST incremental transaction failure | Error, no fallback | FAST is the user's incrementality requirement |
+| `COMPLETE/FULL ON CHANGE` | Complete refresh at every change boundary | The user explicitly selected complete replacement |
+| `COMPLETE/FULL ON DEMAND` | Manual complete refresh | This is the only currently valid ON DEMAND combination |
+| Definition failing source admission | Creation error | A common snapshot/change/source-identity contract is missing or dependencies cannot be extracted safely |
+
+Complete refresh means deleting the old target, evaluating the whole definition
+at the common boundary, rebuilding required state, and committing atomically.
+MatrixOne does not support PCT, so a complete refresh cannot be narrowed to only
+changed partitions.
 
 ## 4. Physical representation and durable metadata
 
@@ -343,7 +366,7 @@ supports every row in the table.
 
 | System | Relevant public behavior | MatrixOne implication |
 | --- | --- | --- |
-| [Oracle](https://docs.oracle.com/en/database/oracle/oracle-database/26/dwhsg/basic-materialized-views.html) | FAST/FORCE/COMPLETE, ON COMMIT/ON DEMAND, log-based and partition-change refresh, aggregate/join/UNION ALL rules, nested MVs, query rewrite, refresh diagnostics | Reference for refresh policy, capability explanation, query rewrite, dependency DAG, and possible future partition refresh; MatrixOne does not currently support PCT |
+| [Oracle](https://docs.oracle.com/en/database/oracle/oracle-database/26/dwhsg/basic-materialized-views.html) | FAST/FORCE/COMPLETE, ON COMMIT/ON DEMAND, log-based and partition-change refresh, aggregate/join/UNION ALL rules, nested MVs, query rewrite, refresh diagnostics | Reference for refresh policy, capability explanation, query rewrite, and dependency DAG; PCT is an industry comparison only and is outside this MatrixOne design |
 | [PostgreSQL](https://www.postgresql.org/docs/current/sql-refreshmaterializedview.html) | General defining SQL with complete manual refresh, `CONCURRENTLY`, `WITH [NO] DATA`, table storage/index options | Reference for general fallback, deferred population, nonblocking replacement, and physical design |
 | [ClickHouse](https://clickhouse.com/docs/materialized-view/incremental-materialized-view) | Insert-trigger incremental views for real-time append and separately scheduled refreshable views with atomic replace/append and dependencies | Reference for a low-overhead append fast path and scheduled complete refresh; not a delete/update correctness baseline |
 | [Snowflake](https://docs.snowflake.com/en/user-guide/views-materialized) | Automatic single-table maintenance, query rewrite, clustering, AVG/COUNT/MIN/MAX/SUM, variance/stddev, bitwise aggregates and HLL; no JOIN/HAVING/window/ORDER BY/LIMIT | Reference for single-table aggregate breadth, optimizer integration, clustering, and maintenance-cost visibility |
@@ -358,9 +381,155 @@ The comparison table describes capabilities of the referenced systems and
 future design inputs, not capabilities already present in MatrixOne. In
 particular, this PR implements log-based ISCP/CDC maintenance but does **not**
 implement Oracle-style Partition Change Tracking (PCT) or partition-level MV
-refresh.
+refresh. Neither is a target of this design.
 
 ## 12. Designs for the remaining mainstream capability families
+
+### 12.0 Moving complete-refresh cases to incremental maintenance
+
+The goal is not to teach ISCP every SQL construct. The flat version-2 aggregate
+description evolves into a version-3 incremental operator graph. Planning
+returns one of three typed outcomes:
+
+- `INCREMENTAL(spec, cost)`: insert/delete/update algorithms, durable state
+  schema, and resource bounds are defined;
+- `COMPLETE(reason)`: the query and source contract are valid, but no safe and
+  bounded incremental operator exists yet;
+- `REJECT(reason)`: source, lifecycle, or security contracts are insufficient,
+  so complete refresh cannot guarantee correctness either.
+
+`FAST` accepts only `INCREMENTAL`; `FORCE` prefers `INCREMENTAL` and otherwise
+uses `COMPLETE`; `COMPLETE` does not compile delta operators. Errors use stable
+construct/reason codes such as `MV_FAST_UNSUPPORTED_HAVING` and
+`MV_FAST_UNBOUNDED_JOIN_STATE`, rather than one generic single-table error.
+
+#### Operator graph and intermediate state
+
+Every operator has a stable ID, kind, input edges, typed key/payload schema,
+retraction capability, state-relation ID, estimated rows/bytes, and version.
+Intermediate relations belong to one consumer generation in a reserved
+namespace; ordinary SQL cannot read, mutate, or independently drop them. The
+initial snapshot hydrates target and state through this same graph, so snapshot
+and tail do not become separate implementations.
+
+| Query capability | Durable intermediate state | Incremental action |
+| --- | --- | --- |
+| Global aggregate | One fixed zero-dimensional group key | Consolidate every delta into that group |
+| Aggregate-free GROUP BY/DISTINCT | `(group key)->row multiplicity` | Publish/retract the visible row on 0-to-1/1-to-0 |
+| HAVING | Complete group aggregate state plus visible bit | Re-evaluate the predicate and handle false/true transitions |
+| SUM/AVG DISTINCT | `(operator,group,value)->multiplicity` plus distinct sum/count | Change the aggregate only on 0-to-1/1-to-0 |
+| UNION ALL | Stable branch ID plus branch row/group identity | Route a source delta to matching branches and preserve duplicates |
+| UNION/INTERSECT/EXCEPT | Per-branch multiplicity for each output row | Derive visibility from the set predicate |
+| JOIN | Keyed arrangements, payload, multiplicity, and match count per input | Probe other sides and emit signed join-product deltas |
+| ROLLUP/CUBE/GROUPING SETS | `(grouping-set ID,group key)` | Fan one input delta out to a finite set of groups |
+| Top-K/window | Ordered multiset `(partition,order key,row identity)` | Update one partition and its K/rank boundary |
+| Percentile/quantile/HLL/bitmap/UDAF | Typed state with declared merge/retract/serialize contracts | Permit FAST only when mutable-source retraction is correct |
+
+Target changes, intermediate-state changes, and the ISCP tail watermark commit
+in one SQL transaction. Nothing publishes on partial failure. A fenced old
+generation cannot write target or state. DROP/REBUILD lets the generation owner
+clean all operator state; restart reconstructs ownership from catalog spec,
+state-relation IDs, and watermark rather than an in-memory cache.
+
+#### Generic ISCP extensions
+
+ISCP remains responsible for changes and consistent boundaries, not SQL
+aggregate/JOIN/HAVING semantics. Operator graphs require these generic
+extensions to the existing multi-source path:
+
+1. Every batch retains `SourceTableID`; the job spec maps each source to
+   operator inputs/branches. One physical source is subscribed once and may
+   fan out to several inputs.
+2. A multi-source iteration exposes one common `[fromTS,toTS]`; the graph can
+   run and commit only after every source reaches the boundary.
+3. Delete/update preferably carries before-images for planner-selected columns.
+   Older protocol versions or oversized payloads use the existing `RowIDReader`
+   at the snapshot before each tombstone commit. Both paths produce the same
+   typed row delta.
+4. Snapshot data may feed the same graph in bounded chunks to reduce hydration
+   peaks. Chunks write only to an unpublished shadow generation and may commit
+   independently; after all chunks succeed, one transaction publishes the
+   target generation and snapshot watermark. A crash can resume or discard the
+   shadow generation, but can never expose a partially hydrated target.
+5. Job status persists spec version, generation, per-source progress, and last
+   successful boundary. An old CN must reject a version-3/multi-source operator
+   job rather than interpret it as version 2.
+
+Creating independent CDC jobs per source is rejected because it loses one
+multi-source boundary and atomic watermark ownership. Keeping complete base rows
+in consumer memory is also rejected because state is unbounded and cannot
+recover after restart. Ordinary durable relations with bounded caches/spill are
+the default state store.
+
+#### Complete-refresh cases that can be removed incrementally
+
+Delivery order follows value and state complexity:
+
+1. fixed-key global aggregates and multiplicity GROUP BY;
+2. HAVING, SUM/AVG DISTINCT, and top-level UNION ALL, including fixing UNION ALL
+   source admission for FORCE/COMPLETE;
+3. unique-dimension inner equi-join, followed by non-unique and multi-way joins;
+4. ROLLUP/CUBE/GROUPING SETS and provably finite-fan-out subquery decorrelation;
+5. Top-K, bounded windows, and event-time TUMBLE/HOP;
+6. advanced aggregates with explicit retract/accuracy/memory contracts;
+7. cascading MVs after the dependency DAG is complete.
+
+A CTE alone is not a reason for complete refresh: non-recursive CTEs should be
+inlined into the operator graph. Scalar/correlated subqueries that decorrelate
+to join/aggregate reuse those states; a correlated subquery without a provably
+bounded impact remains COMPLETE. The deterministic scalar allowlist can expand;
+volatile or session-dependent expressions can never be FAST.
+
+#### Boundaries that retain complete refresh or rejection
+
+The following table separates inherent complete work, temporary implementation
+fallback, and definitions that must be rejected:
+
+| Case | Why it is not incremental now | Long-term treatment |
+| --- | --- | --- |
+| First hydration / rebuild from no trusted state | Every source row must contribute once before a tail delta is meaningful | Inherently a complete logical build; bound it with shadow-generation chunks and parallelism |
+| Explicit `COMPLETE/FULL`, including manual ON DEMAND | The user selected replacement semantics | Keep complete; optimize scheduling, coalescing, and atomic shadow replacement |
+| FORCE with an absent delta operator | The persistent graph cannot represent the query yet | Add the operator/state family in the delivery order above, then choose INCREMENTAL automatically |
+| Estimated state/fan-out over budget | A correct algorithm exists, but its admitted resource bound does not | Add indexes, spill, compaction, cardinality hints, or a larger explicit quota; never silently run an unbounded FAST plan |
+| Incremental transaction failure | The target, state, and watermark must not diverge | Retry the same idempotent boundary first; FORCE may rebuild at the same `toTS`, while FAST stops without advancing |
+| Spec/state checksum, version, or generation failure | Existing state is not trustworthy for deriving the next delta | Fence it and rebuild/shadow-migrate; do not incrementally continue from corrupt or incompatible state |
+| Non-equality/cross or explosive many-to-many JOIN | One row may require an unbounded scan or output fan-out | Incremental only after a bounded index/probe plan and state admission exist; otherwise FORCE is complete |
+| Window with an unbounded affected suffix | One change may alter an unbounded number of published ranks/values | Use bounded frames/Top-K or rebuild the affected internal window; otherwise FORCE is complete |
+| Mutable-source UDAF, HLL, percentile, or sketch without retract | The retained state cannot subtract an old value | Supply a retractable/counting state, exact ordered state, or immutable logical-window state; otherwise FORCE is complete |
+| Volatile current-time/random/session expression | Re-evaluating an old row does not reproduce its original contribution | FAST always rejects; FORCE/COMPLETE is admitted only when the ordinary query reproducibility contract permits it |
+| External/temporary/special/state relation or cyclic dependency | Snapshot, change identity, lifetime, security, or acyclic scheduling is not guaranteed | REJECT, not COMPLETE, until the missing source/lifecycle contract exists |
+| PCT/partition-level MV refresh | MatrixOne has no source-partition change contract in this design | Outside scope; do not advertise it as incremental maintenance |
+
+Thus, only hydration/rebuild and an explicitly selected COMPLETE policy are
+inherently complete. Most SQL-shape fallbacks are implementation or boundedness
+gaps and should move to the operator graph. Invalid source/lifecycle contracts
+must not be disguised as complete refreshes.
+
+#### Resource, compatibility, and validation gates
+
+Planning/admission records estimated state rows/bytes, maximum join fan-out,
+hot-group cardinality, spill threshold, and per-iteration work budget. FAST
+rejects an over-budget plan; FORCE selects COMPLETE. Exceeding a hard runtime
+limit rolls back rather than publishing a watermark after OOM/resource failure.
+FORCE complete fallback also has a full-refresh cost budget and change
+coalescing policy. When repeated full scans cannot keep up, the job reports
+backpressure or pauses with an explicit error instead of building an unbounded
+refresh queue.
+
+Version-2 MVs keep their existing consumer and state schema. Version 3 is
+created behind an MORPC feature gate; old nodes cannot schedule new jobs. An
+upgrade does not reinterpret old state in place: version 2 remains active until
+REBUILD or a shadow generation migrates it. Rollback either continues a
+compatible version or performs a complete rebuild.
+
+Every new operator requires signed-delta UTs and a public SQL BVT comparing the
+MV with the complete definition at the same boundary, covering insert/delete/
+update, NULL, duplicates, transaction rollback, consumer restart, duplicate
+delivery, and state cleanup. Multi-source operators also cover interleaved
+commits, one stalled source, and common-boundary recovery. Performance gates
+report source throughput, freshness p50/p95/p99/max, state bytes, write
+amplification, CPU/IO, and backlog drain; eventual correctness alone is not a
+deliverable incremental implementation.
 
 ### 12.1 Aggregate, HAVING, DISTINCT, and set operators
 
@@ -382,7 +551,8 @@ and stable operator IDs.
   reversible. A single accumulated bitmask is insufficient for retractions.
 - **Approximate distinct**: append-only HLL can merge sketches, but ordinary HLL
   cannot delete. Mutable sources require a counting/retractable sketch or
-  immutable time-partition sketches plus affected-partition rebuild. FAST must
+  immutable logical-window sketches plus rebuild of the affected operator-state
+  buckets. These buckets are internal state, not source-table PCT. FAST must
   reject an unsafe append-only state on a mutable table.
 - **Percentile/quantile/histogram**: use mergeable per-partition sketches for
   append and window-close workloads. Arbitrary delete/update uses a retractable
@@ -436,7 +606,8 @@ The first window subset is partitioned `row_number`, `rank`, `dense_rank`,
 `first_value`, `last_value`, and bounded `lead/lag` patterns that can be lowered
 to ordered state. General unbounded frames, arbitrary peer-sensitive updates,
 and functions whose one insertion changes an unbounded suffix require complete
-or affected-partition refresh until a bounded algorithm exists.
+refresh or rebuild of the affected operator-state window until a bounded
+algorithm exists. This is not source-table partition refresh.
 
 ### 12.4 Event-time windows, expiration, and late data
 
@@ -505,10 +676,10 @@ row-level ISCP/CDC deltas for its FAST subset or replaces the complete MV
 result; it does not use source-partition change metadata to limit a refresh.
 
 MV DDL should accept ordinary index, clustering, distribution, partition,
-tablespace/storage, and retention options. Partition change tracking maps each
-source partition to affected MV partitions and refreshes only those partitions
-after exchange/drop/truncate. Global aggregates that cross partition boundaries
-are not falsely labeled partition-refreshable.
+tablespace/storage, and retention options, but ordinary physical partitioning
+does not imply PCT. Exchange/drop/truncate must become row deltas that ISCP can
+represent or make FORCE perform a complete rebuild; source-partition metadata
+alone cannot claim an incremental refresh.
 
 Every stateful operator reports estimated and actual rows/bytes, spill, hot-key
 skew, and write amplification. Admission uses per-MV memory/disk budgets,
@@ -623,7 +794,7 @@ change. Delivery order is:
 3. inner/unique-dimension JOIN plus operator arrangements;
 4. Top-K and event-time tumble/hop windows;
 5. cascading/replacement, scheduled/concurrent refresh, and status controls;
-6. query rewrite, partition refresh, synchronous ON COMMIT, and advanced states.
+6. query rewrite, synchronous ON COMMIT, and advanced states.
 
 Each gate updates the persistent-spec version and compatibility table, has
 failure/restart tests, and passes its relevant benchmark subset before being
