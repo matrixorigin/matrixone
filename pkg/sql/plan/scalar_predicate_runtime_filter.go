@@ -15,6 +15,8 @@
 package plan
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/common/runtime"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 )
 
@@ -35,6 +37,15 @@ func (builder *QueryBuilder) generateScalarPredicateRuntimeFilters(nodeID int32)
 // filter only after observing exactly one scalar row; zero rows publish DROP
 // and multiple rows publish PASS.
 func (builder *QueryBuilder) generateScalarPredicateRuntimeFilter(filter *plan.Node) {
+	proc := builder.compCtx.GetProcess()
+	if proc == nil {
+		return
+	}
+	version, ok := runtime.ServiceRuntime(proc.GetService()).GetGlobalVariables(runtime.MOProtocolVersion)
+	protocolVersion, ok := version.(int64)
+	if !ok || protocolVersion < defines.MORPCVersion43 {
+		return
+	}
 	if filter == nil || filter.IsEnd || filter.FilterIsBarrier ||
 		filter.RollupFilter || filter.Limit != nil || filter.Offset != nil ||
 		len(filter.Children) != 1 || len(filter.FilterList) == 0 ||
@@ -156,7 +167,9 @@ func (builder *QueryBuilder) scalarRuntimeFilterScanColumn(
 	// Match the old logical rewrite's legality boundary, but leave the SINGLE
 	// itself in place.  Crossing an aggregate, window, projection, outer join,
 	// or another SINGLE can change which rows, errors, or volatile expressions
-	// are observed.  INNER accepts either input; SEMI/ANTI expose only input 0.
+	// are observed.  Runtime filters must follow physical probe input 0. If we
+	// filtered build input 1, an empty build could short-circuit the unchecked
+	// probe subtree and suppress an error or volatile evaluation there.
 	if node.NodeType != plan.Node_JOIN || node.Limit != nil || node.Offset != nil ||
 		len(node.Children) != 2 ||
 		!areTruncationSafePredicates(node.OnList) ||
@@ -168,9 +181,13 @@ func (builder *QueryBuilder) scalarRuntimeFilterScanColumn(
 	}
 	switch node.JoinType {
 	case plan.Node_INNER:
-		// Either input is a legal probe source.
-	case plan.Node_SEMI, plan.Node_ANTI:
 		if col.RelPos != 0 {
+			return 0, nil, false
+		}
+	case plan.Node_SEMI, plan.Node_ANTI:
+		// IsRightJoin means physical input 0 is the build input even though the
+		// logical output still comes from the preserved side.
+		if node.IsRightJoin || col.RelPos != 0 {
 			return 0, nil, false
 		}
 	default:

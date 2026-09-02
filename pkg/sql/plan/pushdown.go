@@ -35,7 +35,8 @@ func (builder *QueryBuilder) pushdownFilters(nodeID int32, filters []*plan.Expr,
 	builder.optimizationHistory = append(builder.optimizationHistory,
 		fmt.Sprintf("pushdownFilters:before (nodeID: %d, nodeType: %s, filters: %d)", nodeID, builder.qry.Nodes[nodeID].NodeType, len(filters)))
 	node := builder.qry.Nodes[nodeID]
-	if !separateNonEquiConds && node.NodeType == plan.Node_JOIN && node.JoinType == plan.Node_MARK && len(filters) > 0 {
+	if !builder.subqueryPredicatePlanningDisabled() && !separateNonEquiConds &&
+		node.NodeType == plan.Node_JOIN && node.JoinType == plan.Node_MARK && len(filters) > 0 {
 		rewrittenID, remaining := builder.rewriteFilteringOrOfExists(nodeID, filters)
 		if rewrittenID != nodeID {
 			return builder.pushdownFilters(rewrittenID, remaining, separateNonEquiConds)
@@ -213,7 +214,8 @@ func (builder *QueryBuilder) pushdownFilters(nodeID int32, filters []*plan.Expr,
 		canPushdown = filters
 		if !node.RollupFilter {
 			for _, filter := range node.FilterList {
-				canPushdown = append(canPushdown, splitPlanConjunction(applyDistributivity(builder.GetContext(), filter))...)
+				canPushdown = append(canPushdown, splitPlanConjunction(applyDistributivity(
+					builder.GetContext(), filter, !builder.subqueryPredicatePlanningDisabled()))...)
 			}
 		}
 		if !node.RollupFilter && !separateNonEquiConds {
@@ -302,7 +304,8 @@ func (builder *QueryBuilder) pushdownFilters(nodeID int32, filters []*plan.Expr,
 
 		if node.JoinType == plan.Node_INNER {
 			for _, cond := range node.OnList {
-				filters = append(filters, splitPlanConjunction(applyDistributivity(builder.GetContext(), cond))...)
+				filters = append(filters, splitPlanConjunction(applyDistributivity(
+					builder.GetContext(), cond, !builder.subqueryPredicatePlanningDisabled()))...)
 			}
 
 			node.OnList = nil
@@ -329,7 +332,8 @@ func (builder *QueryBuilder) pushdownFilters(nodeID int32, filters []*plan.Expr,
 
 			if canTurnInner && node.JoinType == plan.Node_LEFT && joinSides[i] == JoinSideRight && rejectsNull(filter, builder.compCtx.GetProcess()) {
 				for _, cond := range node.OnList {
-					filters = append(filters, splitPlanConjunction(applyDistributivity(builder.GetContext(), cond))...)
+					filters = append(filters, splitPlanConjunction(applyDistributivity(
+						builder.GetContext(), cond, !builder.subqueryPredicatePlanningDisabled()))...)
 				}
 
 				node.JoinType = plan.Node_INNER
@@ -351,7 +355,8 @@ func (builder *QueryBuilder) pushdownFilters(nodeID int32, filters []*plan.Expr,
 		} else if node.JoinType == plan.Node_LEFT {
 			var newOnList []*plan.Expr
 			for _, cond := range node.OnList {
-				conj := splitPlanConjunction(applyDistributivity(builder.GetContext(), cond))
+				conj := splitPlanConjunction(applyDistributivity(
+					builder.GetContext(), cond, !builder.subqueryPredicatePlanningDisabled()))
 				for _, conjElem := range conj {
 					if ContainsVolatileFunction(conjElem) {
 						newOnList = append(newOnList, conjElem)
@@ -457,8 +462,15 @@ func (builder *QueryBuilder) pushdownFilters(nodeID int32, filters []*plan.Expr,
 
 			case JoinSideMark:
 				if isMarkColumn(filter, node.BindingTags[0]) {
+					if !builder.subqueryPredicatePlanningDisabled() &&
+						!areTruncationSafePredicates(node.OnList) {
+						cantPushdown = append(cantPushdown, filter)
+						break
+					}
 					node.JoinType = plan.Node_SEMI
-					node.OnList = unwrapIsTrueFromMarkJoinEqualities(node.OnList, leftTags, rightTags, markTag)
+					if !builder.subqueryPredicatePlanningDisabled() {
+						node.OnList = unwrapIsTrueFromMarkJoinEqualities(node.OnList, leftTags, rightTags, markTag)
+					}
 					node.BindingTags = nil
 					break
 				}
@@ -466,15 +478,29 @@ func (builder *QueryBuilder) pushdownFilters(nodeID int32, filters []*plan.Expr,
 					funcID, _ := function.DecodeOverloadID(fExpr.Func.GetObj())
 					if funcID == function.ISTRUE && len(fExpr.Args) == 1 &&
 						isMarkColumn(fExpr.Args[0], node.BindingTags[0]) {
+						if !builder.subqueryPredicatePlanningDisabled() &&
+							!areTruncationSafePredicates(node.OnList) {
+							cantPushdown = append(cantPushdown, filter)
+							break
+						}
 						node.JoinType = plan.Node_SEMI
-						node.OnList = unwrapIsTrueFromMarkJoinEqualities(node.OnList, leftTags, rightTags, markTag)
+						if !builder.subqueryPredicatePlanningDisabled() {
+							node.OnList = unwrapIsTrueFromMarkJoinEqualities(node.OnList, leftTags, rightTags, markTag)
+						}
 						node.BindingTags = nil
 						break
 					}
 					if filter.Typ.NotNullable && fExpr.Func.ObjName == "not" && len(fExpr.Args) == 1 &&
 						isTrueMarkColumn(fExpr.Args[0], node.BindingTags[0]) {
+						if !builder.subqueryPredicatePlanningDisabled() &&
+							!areTruncationSafePredicates(node.OnList) {
+							cantPushdown = append(cantPushdown, filter)
+							break
+						}
 						node.JoinType = plan.Node_ANTI
-						node.OnList = unwrapIsTrueFromMarkJoinEqualities(node.OnList, leftTags, rightTags, markTag)
+						if !builder.subqueryPredicatePlanningDisabled() {
+							node.OnList = unwrapIsTrueFromMarkJoinEqualities(node.OnList, leftTags, rightTags, markTag)
+						}
 						node.BindingTags = nil
 						break
 					}
@@ -775,6 +801,9 @@ func (builder *QueryBuilder) rewriteFilteringOrOfExists(
 	nodeID int32,
 	filters []*plan.Expr,
 ) (int32, []*plan.Expr) {
+	if builder.subqueryPredicatePlanningDisabled() {
+		return nodeID, filters
+	}
 	remaining := append([]*plan.Expr(nil), filters...)
 	for {
 		rewritten := false
@@ -1030,6 +1059,9 @@ func (builder *QueryBuilder) extractExistenceJoinKeys(markNode *plan.Node) ([]ex
 
 	keys := make([]existenceJoinKey, 0, len(markNode.OnList))
 	for _, predicate := range markNode.OnList {
+		if !isTruncationSafePredicateExpr(predicate) {
+			return nil, false
+		}
 		fn := predicate.GetF()
 		if fn == nil || fn.Func == nil || len(fn.Args) != 2 || !IsEqualFunc(fn.Func.GetObj()) {
 			return nil, false
@@ -1046,9 +1078,6 @@ func (builder *QueryBuilder) extractExistenceJoinKeys(markNode *plan.Node) ([]ex
 			outer, inner = fn.Args[1], fn.Args[0]
 			innerArgIdx = 0
 		default:
-			return nil, false
-		}
-		if ContainsVolatileFunction(outer) || ContainsVolatileFunction(inner) {
 			return nil, false
 		}
 		for _, key := range keys {
@@ -1084,6 +1113,9 @@ func unwrapIsTrueFromMarkJoinEqualities(
 		equality := isTrue.Args[0]
 		equalFunc := equality.GetF()
 		if equalFunc == nil || equalFunc.Func == nil || len(equalFunc.Args) != 2 || !IsEqualFunc(equalFunc.Func.GetObj()) {
+			continue
+		}
+		if !isTruncationSafePredicateExpr(equality) {
 			continue
 		}
 

@@ -535,6 +535,7 @@ type OptimizerHints struct {
 	execType                   int
 	disableRightJoin           int
 	disableRightSingleRF       int
+	subqueryPredicatePlanning  int
 	printShuffle               int
 	skipDedup                  int
 }

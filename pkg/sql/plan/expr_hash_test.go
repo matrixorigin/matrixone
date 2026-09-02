@@ -699,3 +699,56 @@ func TestApplyDistributivityKeepsSingleTableDNFForKeyFolding(t *testing.T) {
 	require.Equal(t, "or", result.GetF().Func.ObjName,
 		"single-table DNF must remain available to composite-key folding")
 }
+
+func TestApplyDistributivityDoesNotFactorFallibleCommonPredicate(t *testing.T) {
+	ctx := context.Background()
+	intType := planpb.Type{Id: int32(types.T_int64)}
+	boolType := planpb.Type{Id: int32(types.T_bool)}
+	col := func(rel, pos int32) *planpb.Expr {
+		return &planpb.Expr{Typ: intType, Expr: &planpb.Expr_Col{
+			Col: &planpb.ColRef{RelPos: rel, ColPos: pos},
+		}}
+	}
+	bind := func(name string, args ...*planpb.Expr) *planpb.Expr {
+		expr, err := BindFuncExprImplByPlanExpr(ctx, name, args)
+		require.NoError(t, err)
+		return expr
+	}
+	fallible := &planpb.Expr{Typ: intType, Expr: &planpb.Expr_F{F: &planpb.Function{
+		Func: &planpb.ObjectRef{ObjName: "fallible_test_function"},
+		Args: []*planpb.Expr{col(1, 0)},
+	}}}
+	common := bind("=", fallible, col(0, 0))
+	orExpr := bind("or",
+		bind("and", DeepCopyExpr(common), bind("=", col(0, 1), col(1, 1))),
+		bind("and", DeepCopyExpr(common), bind("=", col(0, 2), col(1, 2))))
+	require.Equal(t, boolType.Id, orExpr.Typ.Id)
+
+	result := applyDistributivity(ctx, orExpr)
+	require.Equal(t, "or", result.GetF().Func.ObjName,
+		"factoring must fail closed when the common predicate is not proven total")
+}
+
+func TestApplyDistributivityRollbackUsesLegacyRelationGate(t *testing.T) {
+	ctx := context.Background()
+	intType := planpb.Type{Id: int32(types.T_int64)}
+	col := func(rel, pos int32) *planpb.Expr {
+		return &planpb.Expr{Typ: intType, Expr: &planpb.Expr_Col{
+			Col: &planpb.ColRef{RelPos: rel, ColPos: pos},
+		}}
+	}
+	bind := func(name string, args ...*planpb.Expr) *planpb.Expr {
+		expr, err := BindFuncExprImplByPlanExpr(ctx, name, args)
+		require.NoError(t, err)
+		return expr
+	}
+	common := bind("=", col(0, 0), col(1, 0))
+	branch := func(value int32) *planpb.Expr {
+		return bind("and", DeepCopyExpr(common), bind("=", col(0, value), col(1, value)))
+	}
+	orExpr := bind("or", branch(1), branch(2))
+
+	result := applyDistributivity(ctx, orExpr, false)
+	require.Equal(t, "or", result.GetF().Func.ObjName,
+		"the rollback path must retain the pre-feature DNF relation heuristic")
+}

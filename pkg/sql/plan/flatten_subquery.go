@@ -915,7 +915,12 @@ func (builder *QueryBuilder) insertMarkJoin(left, right int32, joinPreds []*plan
 	// predicate on the MARK join so an equality remains eligible for HashJoin,
 	// then totalize the marker below.  IN/ANY/ALL still need the join predicate's
 	// three-valued result, so retain the historical per-predicate IS TRUE there.
-	if !existential {
+	// Exposing a raw existential predicate can expand its evaluation domain
+	// during hash-key lowering. Keep the historical IS TRUE wrapper unless the
+	// predicate is proven total and side-effect-free.
+	keepRawExistential := existential && !builder.subqueryPredicatePlanningDisabled() &&
+		areTruncationSafePredicates(joinPreds)
+	if !keepRawExistential {
 		for i, pred := range joinPreds {
 			if !pred.Typ.NotNullable {
 				joinPreds[i], err = BindFuncExprImplByPlanExpr(builder.GetContext(), "istrue", []*plan.Expr{pred})

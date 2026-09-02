@@ -56,10 +56,17 @@ func TestSingleJoinPushdownPreservesCardinalityErrorScope(t *testing.T) {
 		execSQLRequire(t, ctx, db, "create table eliminating_rows (id int)")
 		execSQLRequire(t, ctx, db, "create table matching_rows (id int)")
 		execSQLRequire(t, ctx, db, "create table scalar_rows (id int)")
+		execSQLRequire(t, ctx, db, "create table scalar_empty (id int)")
+		execSQLRequire(t, ctx, db, "create table scalar_null (id int)")
+		execSQLRequire(t, ctx, db, "create table scalar_no_match (id int)")
+		execSQLRequire(t, ctx, db, "create table fallible_rows (id int, payload varchar(20))")
 		execSQLRequire(t, ctx, db, "insert into outer_rows values (1)")
 		execSQLRequire(t, ctx, db, "insert into eliminating_rows values (2)")
 		execSQLRequire(t, ctx, db, "insert into matching_rows values (1)")
 		execSQLRequire(t, ctx, db, "insert into scalar_rows values (1), (2)")
+		execSQLRequire(t, ctx, db, "insert into scalar_null values (null)")
+		execSQLRequire(t, ctx, db, "insert into scalar_no_match values (2)")
+		execSQLRequire(t, ctx, db, "insert into fallible_rows values (1, 'bad')")
 
 		emptyQueries := []struct {
 			name  string
@@ -111,6 +118,28 @@ func TestSingleJoinPushdownPreservesCardinalityErrorScope(t *testing.T) {
 					queryErr = rows.Err()
 				}
 				require.ErrorContains(t, queryErr, "Subquery returns more than 1 row")
+			})
+		}
+
+		// A scalar runtime filter may discard rows only on the finalized physical
+		// probe lineage. If it were attached to a hash-build input, these scalar
+		// states could empty that build and suppress the fallible sibling scan.
+		// The error is observable before the scalar predicate at its original
+		// logical position and therefore must remain observable.
+		for _, scalarTable := range []string{"scalar_empty", "scalar_null", "scalar_no_match"} {
+			t.Run("scalar filter does not suppress sibling error "+scalarTable, func(t *testing.T) {
+				query := `select o.id from outer_rows o join fallible_rows f
+					on o.id = f.id
+					and hll_cardinality(cast(f.payload as varbinary)) >= 0
+					where o.id = (select s.id from ` + scalarTable + ` s)`
+				rows, queryErr := db.QueryContext(ctx, query)
+				if queryErr == nil {
+					for rows.Next() {
+					}
+					queryErr = rows.Err()
+					require.NoError(t, rows.Close())
+				}
+				require.Error(t, queryErr)
 			})
 		}
 	})

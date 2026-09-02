@@ -198,10 +198,10 @@ func TestScalarPredicateRuntimeFilterPreservesSinglePosition(t *testing.T) {
 		select n.n_name
 		from tpch.nation n join tpch.region r
 			on n.n_regionkey = r.r_regionkey
-		where r.r_regionkey = (
-			select r2.r_regionkey
-			from tpch.region r2
-			where r2.r_name = 'EUROPE'
+		where n.n_nationkey = (
+			select n2.n_nationkey
+			from tpch.nation n2
+			where n2.n_name = 'FRANCE'
 		)`)
 	require.NoError(t, err)
 
@@ -235,9 +235,81 @@ func TestScalarPredicateRuntimeFilterPreservesSinglePosition(t *testing.T) {
 	require.Contains(t, outerScans, "nation")
 	require.Contains(t, outerScans, "region",
 		"SINGLE must stay above the row-eliminating outer join")
-	require.Len(t, outerScans["region"].RuntimeFilterProbeList, 1)
+	require.Len(t, outerScans["nation"].RuntimeFilterProbeList, 1)
 	require.Equal(t, single.RuntimeFilterBuildList[0].Tag,
-		outerScans["region"].RuntimeFilterProbeList[0].Tag)
+		outerScans["nation"].RuntimeFilterProbeList[0].Tag)
+}
+
+func TestScalarPredicateRuntimeFilterProtocolGate(t *testing.T) {
+	optimizer := NewMockOptimizer(true)
+	ctx := optimizer.CurrentContext()
+	rt := moruntime.ServiceRuntime(ctx.GetProcess().GetService())
+	oldVersion, hadVersion := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
+	oldHints, hadHints := rt.GetGlobalVariables("optimizer_hints")
+	t.Cleanup(func() {
+		if hadVersion {
+			rt.SetGlobalVariables(moruntime.MOProtocolVersion, oldVersion)
+		} else {
+			rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCLatestVersion)
+		}
+		if hadHints {
+			rt.SetGlobalVariables("optimizer_hints", oldHints)
+		} else {
+			rt.SetGlobalVariables("optimizer_hints", "")
+		}
+	})
+
+	build := func(version int64) *planpb.Query {
+		rt.SetGlobalVariables(moruntime.MOProtocolVersion, version)
+		logicPlan, err := runOneStmt(optimizer, t, `
+			select n.n_name from tpch.nation n
+			where n.n_regionkey = (
+				select r.r_regionkey from tpch.region r where r.r_name = 'EUROPE'
+			)`)
+		require.NoError(t, err)
+		return logicPlan.GetQuery()
+	}
+	hasScalarFilter := func(query *planpb.Query) bool {
+		for _, node := range query.Nodes {
+			for _, spec := range node.RuntimeFilterBuildList {
+				if spec.ScalarPredicate {
+					return true
+				}
+			}
+		}
+		return false
+	}
+
+	require.False(t, hasScalarFilter(build(defines.MORPCVersion42)),
+		"an older participant would decode the optional field as false")
+	require.True(t, hasScalarFilter(build(defines.MORPCVersion43)))
+	rt.SetGlobalVariables("optimizer_hints", "subqueryPredicatePlanning=1")
+	require.False(t, hasScalarFilter(build(defines.MORPCVersion43)),
+		"the cohort rollback must retain the historical plan")
+}
+
+func TestCorrelatedScalarPredicateDoesNotCreateRuntimeFilter(t *testing.T) {
+	logicPlan, err := runOneStmt(NewMockOptimizer(true), t, `
+		select n.n_name from tpch.nation n
+		where n.n_regionkey = (
+			select r.r_regionkey from tpch.region r
+			where r.r_name = n.n_name
+		)`)
+	require.NoError(t, err)
+
+	foundCorrelatedSingle := false
+	for _, node := range logicPlan.GetQuery().Nodes {
+		if node.NodeType != planpb.Node_JOIN || node.JoinType != planpb.Node_SINGLE ||
+			len(node.OnList) == 0 {
+			continue
+		}
+		foundCorrelatedSingle = true
+		for _, spec := range node.RuntimeFilterBuildList {
+			require.False(t, spec.ScalarPredicate,
+				"a correlated SINGLE must not publish an uncorrelated scalar filter")
+		}
+	}
+	require.True(t, foundCorrelatedSingle)
 }
 
 func TestScalarRuntimeFilterScanColumnStopsAtSemanticBarriers(t *testing.T) {
@@ -247,15 +319,18 @@ func TestScalarRuntimeFilterScanColumnStopsAtSemanticBarriers(t *testing.T) {
 		nodeType   planpb.Node_NodeType
 		joinType   planpb.Node_JoinType
 		childPos   int32
+		rightJoin  bool
 		unsafeOn   bool
 		unsafeScan bool
 		wantProbe  bool
 	}{
 		{name: "inner left", nodeType: planpb.Node_JOIN, joinType: planpb.Node_INNER, wantProbe: true},
-		{name: "inner right", nodeType: planpb.Node_JOIN, joinType: planpb.Node_INNER, childPos: 1, wantProbe: true},
+		{name: "inner build side", nodeType: planpb.Node_JOIN, joinType: planpb.Node_INNER, childPos: 1},
 		{name: "semi preserved side", nodeType: planpb.Node_JOIN, joinType: planpb.Node_SEMI, wantProbe: true},
 		{name: "semi build side", nodeType: planpb.Node_JOIN, joinType: planpb.Node_SEMI, childPos: 1},
+		{name: "right semi physical build side", nodeType: planpb.Node_JOIN, joinType: planpb.Node_SEMI, rightJoin: true},
 		{name: "anti preserved side", nodeType: planpb.Node_JOIN, joinType: planpb.Node_ANTI, wantProbe: true},
+		{name: "right anti physical build side", nodeType: planpb.Node_JOIN, joinType: planpb.Node_ANTI, rightJoin: true},
 		{name: "outer join", nodeType: planpb.Node_JOIN, joinType: planpb.Node_LEFT},
 		{name: "nested single", nodeType: planpb.Node_JOIN, joinType: planpb.Node_SINGLE},
 		{name: "unproven join condition", nodeType: planpb.Node_JOIN, joinType: planpb.Node_INNER, unsafeOn: true},
@@ -276,6 +351,7 @@ func TestScalarRuntimeFilterScanColumnStopsAtSemanticBarriers(t *testing.T) {
 				{
 					NodeType:    tc.nodeType,
 					JoinType:    tc.joinType,
+					IsRightJoin: tc.rightJoin,
 					Children:    children,
 					ProjectList: []*planpb.Expr{GetColExpr(typ, tc.childPos, 0)},
 				},
@@ -293,6 +369,15 @@ func TestScalarRuntimeFilterScanColumnStopsAtSemanticBarriers(t *testing.T) {
 			require.Equal(t, tc.wantProbe, ok)
 		})
 	}
+}
+
+func TestSubqueryPredicatePlanningOptimizerHint(t *testing.T) {
+	builder := &QueryBuilder{}
+	require.False(t, builder.subqueryPredicatePlanningDisabled())
+	handleOptimizerHints("subqueryPredicatePlanning=1", builder)
+	require.True(t, builder.subqueryPredicatePlanningDisabled())
+	handleOptimizerHints("subqueryPredicatePlanning=0", builder)
+	require.False(t, builder.subqueryPredicatePlanningDisabled())
 }
 
 func TestFloatRuntimeFilterUsesOnlySoundEncoding(t *testing.T) {

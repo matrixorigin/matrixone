@@ -1688,6 +1688,14 @@ func TestFilteringOrOfExistsRewriteControls(t *testing.T) {
 					r1.r_regionkey = n.n_regionkey and rand() > 0.5) or
 				exists (select 1 from tpch.region r2 where r2.r_regionkey = n.n_regionkey)`,
 		},
+		{
+			name: "fallible projected key",
+			sql: `select n.n_name from tpch.nation n where
+				exists (select 1 from tpch.region r1 where
+					hll_cardinality(cast(r1.r_comment as varbinary)) = n.n_regionkey) or
+				exists (select 1 from tpch.region r2 where
+					hll_cardinality(cast(r2.r_comment as varbinary)) = n.n_regionkey)`,
+		},
 	}
 
 	for _, tt := range tests {
@@ -1699,6 +1707,29 @@ func TestFilteringOrOfExistsRewriteControls(t *testing.T) {
 			require.False(t, reachablePlanHasNodeType(query, plan.Node_UNION_ALL))
 		})
 	}
+}
+
+func TestFallibleExistsPredicateKeepsIsTrueBarrier(t *testing.T) {
+	logicPlan, err := runOneStmt(NewMockOptimizer(true), t, `select exists (
+		select 1 from tpch.region r
+		where hll_cardinality(cast(r.r_comment as varbinary)) = n.n_regionkey
+	) from tpch.nation n`)
+	require.NoError(t, err)
+
+	var mark *plan.Node
+	for _, node := range logicPlan.GetQuery().Nodes {
+		if node.NodeType == plan.Node_JOIN && node.JoinType == plan.Node_MARK {
+			mark = node
+			break
+		}
+	}
+	require.NotNil(t, mark)
+	require.Len(t, mark.OnList, 1)
+	condition := mark.OnList[0].GetF()
+	require.NotNil(t, condition)
+	funcID, _ := function.DecodeOverloadID(condition.Func.GetObj())
+	require.Equal(t, int32(function.ISTRUE), funcID,
+		"a fallible existential predicate must not become a raw hash key")
 }
 
 func TestNullableNotExistsJoinPredicateNormalization(t *testing.T) {

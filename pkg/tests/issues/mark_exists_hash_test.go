@@ -50,9 +50,11 @@ func TestNullableExistsMarkKeepsHashEqualityAndBooleanResults(t *testing.T) {
 		execSQLRequire(t, ctx, db, "create table probe (id int)")
 		execSQLRequire(t, ctx, db, "create table build_a (id int)")
 		execSQLRequire(t, ctx, db, "create table build_b (id int)")
+		execSQLRequire(t, ctx, db, "create table invalid_hll (payload varchar(20))")
 		execSQLRequire(t, ctx, db, "insert into probe values (null), (1), (2), (3)")
 		execSQLRequire(t, ctx, db, "insert into build_a values (null), (2)")
 		execSQLRequire(t, ctx, db, "insert into build_b values (null), (3)")
+		execSQLRequire(t, ctx, db, "insert into invalid_hll values ('bad')")
 
 		const query = `select p.id,
 			exists(select 1 from build_a a where a.id = p.id) as in_a,
@@ -87,5 +89,72 @@ func TestNullableExistsMarkKeepsHashEqualityAndBooleanResults(t *testing.T) {
 			"2:true:false:true:false",
 			"3:false:true:true:true",
 		}, got)
+
+		readIDs := func(query string) []int64 {
+			rows, queryErr := db.QueryContext(ctx, query)
+			require.NoError(t, queryErr)
+			defer rows.Close()
+			var ids []int64
+			for rows.Next() {
+				var id int64
+				require.NoError(t, rows.Scan(&id))
+				ids = append(ids, id)
+			}
+			require.NoError(t, rows.Err())
+			return ids
+		}
+		requireQueryError := func(query string) {
+			rows, queryErr := db.QueryContext(ctx, query)
+			if queryErr == nil {
+				for rows.Next() {
+				}
+				queryErr = rows.Err()
+				require.NoError(t, rows.Close())
+			}
+			require.Error(t, queryErr)
+		}
+
+		const filteringOr = `select p.id from probe p where
+			exists(select 1 from build_a a where a.id = p.id) or
+			exists(select 1 from build_b b where b.id = p.id)
+			order by p.id`
+		orPlan := explainSQL(t, ctx, db, "explain "+filteringOr)
+		require.Contains(t, orPlan, "Union All")
+		require.Contains(t, orPlan, "SEMI")
+		require.Equal(t, []int64{2, 3}, readIDs(filteringOr))
+		require.Equal(t, readIDs(`select p.id from probe p where p.id in (
+			select id from build_a union all select id from build_b) order by p.id`),
+			readIDs(filteringOr))
+
+		const dnfQuery = `select distinct p.id from probe p join build_a a on
+			(a.id = p.id and p.id = 2) or (a.id = p.id and p.id = 3)
+			order by p.id`
+		require.Equal(t, readIDs(`select distinct p.id from probe p join build_a a
+			on a.id = p.id and (p.id = 2 or p.id = 3) order by p.id`), readIDs(dnfQuery))
+
+		// Keep fallible predicates on the legacy plan shapes. These inputs make
+		// the errors observable in the historical plans; the new hash-key and
+		// UNION rewrites must neither suppress nor relocate them.
+		const fallibleExists = `select p.id from probe p where p.id < 0 and exists (
+			select 1 from invalid_hll h
+			where hll_cardinality(cast(h.payload as varbinary)) = p.id)`
+		fallibleExistsPlan := explainSQL(t, ctx, db, "explain "+fallibleExists)
+		require.Contains(t, fallibleExistsPlan, "IS TRUE")
+		requireQueryError(fallibleExists)
+
+		const fallibleOrExists = `select p.id from probe p where p.id < 0 and (
+			exists(select 1 from invalid_hll h1
+				where hll_cardinality(cast(h1.payload as varbinary)) = p.id) or
+			exists(select 1 from invalid_hll h2
+				where hll_cardinality(cast(h2.payload as varbinary)) = p.id))`
+		fallibleOrPlan := explainSQL(t, ctx, db, "explain "+fallibleOrExists)
+		require.NotContains(t, fallibleOrPlan, "Union All")
+		requireQueryError(fallibleOrExists)
+
+		const fallibleDNF = `select p.id from probe p join invalid_hll h on
+			(hll_cardinality(cast(h.payload as varbinary)) = p.id and p.id = 1) or
+			(hll_cardinality(cast(h.payload as varbinary)) = p.id and p.id = 2)
+			where p.id < 0`
+		require.Empty(t, readIDs(fallibleDNF))
 	})
 }

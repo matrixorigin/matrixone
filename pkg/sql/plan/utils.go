@@ -465,11 +465,12 @@ func splitAstConjunction(astExpr tree.Expr) []tree.Expr {
 // IN/OR trees the old Marshal path walked every expression twice (ProtoSize
 // + writeTo) per lookup and dominated CPU; hashing traverses once with no
 // allocation and collisions are rare enough that Equal rarely runs.
-func applyDistributivity(ctx context.Context, expr *plan.Expr) *plan.Expr {
+func applyDistributivity(ctx context.Context, expr *plan.Expr, exposeCrossTableKeys ...bool) *plan.Expr {
+	exposeCrossTable := len(exposeCrossTableKeys) == 0 || exposeCrossTableKeys[0]
 	switch exprImpl := expr.Expr.(type) {
 	case *plan.Expr_F:
 		for i, arg := range exprImpl.F.Args {
-			exprImpl.F.Args[i] = applyDistributivity(ctx, arg)
+			exprImpl.F.Args[i] = applyDistributivity(ctx, arg, exposeCrossTable)
 		}
 
 		if exprImpl.F.Func.ObjName != "or" {
@@ -492,18 +493,32 @@ func applyDistributivity(ctx context.Context, expr *plan.Expr) *plan.Expr {
 
 		rightRelations := make(map[int32]struct{}, 2)
 		rightRelationsKnown := true
+		legacyRelPos := int32(-1)
 		for i, cond := range rightConds {
 			h := exprStructuralHash(cond)
 			entry := &rightEntry{cond: cond, side: JoinSideRight}
 			rightEntries[i] = entry
 			rightBuckets[h] = append(rightBuckets[h], entry)
 			rightRelationsKnown = collectExprRelations(cond, rightRelations) && rightRelationsKnown
+			if !exposeCrossTable {
+				args := cond.GetF().GetArgs()
+				if len(args) == 2 {
+					if col := args[0].GetCol(); col != nil {
+						if legacyRelPos == -1 {
+							legacyRelPos = col.RelPos
+						} else if legacyRelPos != col.RelPos {
+							legacyRelPos = -2
+						}
+					}
+				}
+			}
 		}
 		// Keep single-table DNF intact for composite-key range folding. The old
 		// first-argument heuristic missed columns hidden in BETWEEN/IN and the
 		// second side of equalities, so a cross-table DNF could be mistaken for
 		// a single-table predicate and hide a common hash-join key.
-		if rightRelationsKnown && len(rightRelations) == 1 {
+		if exposeCrossTable && rightRelationsKnown && len(rightRelations) == 1 ||
+			!exposeCrossTable && legacyRelPos >= 0 {
 			return expr
 		}
 
@@ -537,6 +552,13 @@ func applyDistributivity(ctx context.Context, expr *plan.Expr) *plan.Expr {
 		}
 
 		if len(commonConds) == 0 {
+			return expr
+		}
+		// Factoring evaluates a common predicate before the residual OR. That is
+		// only observationally equivalent when the common predicate is total and
+		// side-effect-free; otherwise it can expose an error or volatile call on
+		// rows for which the original expression short-circuited.
+		if exposeCrossTable && !areTruncationSafePredicates(commonConds) {
 			return expr
 		}
 
