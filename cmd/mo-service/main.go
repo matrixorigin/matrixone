@@ -72,6 +72,7 @@ var (
 	globalEtlFS       fileservice.FileService
 	globalServiceType string
 	globalNodeId      string
+	serviceLifecycle  *serviceSupervisor
 )
 
 func init() {
@@ -128,27 +129,33 @@ func main() {
 	shutdownC := make(chan struct{})
 
 	stopper := stopper.NewStopper("main", stopper.WithLogger(logutil.GetGlobalLogger()))
+	serviceLifecycle = newServiceSupervisor()
+	var startErr error
 	if *launchFile != "" {
-		if err := startCluster(ctx, stopper, shutdownC); err != nil {
-			panic(err)
-		}
+		startErr = startCluster(ctx, stopper, shutdownC)
 	} else if *configFile != "" {
 		cfg := NewConfig()
 		if err := parseConfigFromFile(*configFile, cfg); err != nil {
-			panic(fmt.Sprintf("failed to parse config from %s, error: %s", *configFile, err.Error()))
-		}
-		if err := startService(ctx, cfg, stopper, shutdownC); err != nil {
-			panic(err)
+			startErr = fmt.Errorf("failed to parse config from %s, error: %w", *configFile, err)
+		} else {
+			startErr = startService(ctx, cfg, stopper, shutdownC)
 		}
 	} else {
-		panic(errors.New("no configuration specified"))
+		startErr = errors.New("no configuration specified")
+	}
+	if startErr != nil {
+		cleanupErr := serviceLifecycle.shutdown(context.Background())
+		stopper.Stop()
+		panic(errors.Join(startErr, cleanupErr))
 	}
 
-	waitSignalToStop(stopper, shutdownC)
+	if err := waitSignalToStop(stopper, shutdownC); err != nil {
+		panic(err)
+	}
 	logutil.GetGlobalLogger().Info("Shutdown complete")
 }
 
-func waitSignalToStop(stopper *stopper.Stopper, shutdownC chan struct{}) {
+func waitSignalToStop(stopper *stopper.Stopper, shutdownC chan struct{}) error {
 	sigchan := make(chan os.Signal, 1)
 	signal.Notify(sigchan, syscall.SIGTERM, syscall.SIGINT)
 
@@ -181,15 +188,10 @@ func waitSignalToStop(stopper *stopper.Stopper, shutdownC chan struct{}) {
 		detail += "ha keeper issues shutdown command"
 	}
 
-	stopAllDynamicCNServices()
-
 	logutil.GetGlobalLogger().Info(detail)
+	err := serviceLifecycle.shutdown(context.Background())
 	stopper.Stop()
-	if cnProxy != nil {
-		if err := cnProxy.Stop(); err != nil {
-			logutil.GetGlobalLogger().Error("shutdown cn proxy failed", zap.Error(err))
-		}
-	}
+	return err
 }
 
 func startService(
@@ -340,9 +342,20 @@ func startCNService(
 	if err := waitClusterCondition(cfg.mustGetServiceUUID(), cfg.HAKeeperClient, waitAnyShardReady); err != nil {
 		return err
 	}
+	finish := serviceLifecycle.registerTask(serviceRoleCN)
 	serviceWG.Add(1)
-	return stopper.RunNamedTask("cn-service", func(ctx context.Context) {
-		defer serviceWG.Done()
+	var taskDone sync.Once
+	finishTask := func(err error) {
+		taskDone.Do(func() {
+			serviceWG.Done()
+			finish(err)
+		})
+	}
+	err := stopper.RunNamedTask("cn-service", func(ctx context.Context) {
+		var closeErr error
+		defer func() { finishTask(closeErr) }()
+		roleCtx, cancelRole := serviceLifecycle.roleContext(ctx, serviceRoleCN)
+		defer cancelRole()
 		cfg.initMetaCache()
 		commonConfigKVMap, _ := dumpCommonConfig(*cfg)
 		s, err := cnservice.NewService(
@@ -362,7 +375,7 @@ func startCNService(
 			panic(err)
 		}
 
-		<-ctx.Done()
+		<-roleCtx.Done()
 		// Close the cache client which is used in file service.
 		for _, fs := range cfg.FileServices {
 			if fs.Cache.QueryClient != nil {
@@ -370,9 +383,14 @@ func startCNService(
 			}
 		}
 		if err := s.Close(); err != nil {
+			closeErr = err
 			logutil.GetGlobalLogger().Error("failed to close cn service", zap.Error(err))
 		}
 	})
+	if err != nil {
+		finishTask(err)
+	}
+	return err
 }
 
 func (c *Config) verifySiriusBenchmarkNoGC() error {
@@ -388,9 +406,20 @@ func startTNService(
 	if err := waitClusterCondition(cfg.mustGetServiceUUID(), cfg.HAKeeperClient, waitHAKeeperRunning); err != nil {
 		return err
 	}
+	finish := serviceLifecycle.registerTask(serviceRoleTN)
 	serviceWG.Add(1)
-	return stopper.RunNamedTask("tn-service", func(ctx context.Context) {
-		defer serviceWG.Done()
+	var taskDone sync.Once
+	finishTask := func(err error) {
+		taskDone.Do(func() {
+			serviceWG.Done()
+			finish(err)
+		})
+	}
+	err := stopper.RunNamedTask("tn-service", func(ctx context.Context) {
+		var closeErr error
+		defer func() { finishTask(closeErr) }()
+		roleCtx, cancelRole := serviceLifecycle.roleContext(ctx, serviceRoleTN)
+		defer cancelRole()
 		cfg.initMetaCache()
 		c := cfg.getTNServiceConfig()
 		//notify the tn service it is in the standalone cluster
@@ -409,11 +438,16 @@ func startTNService(
 			panic(err)
 		}
 
-		<-ctx.Done()
+		<-roleCtx.Done()
 		if err := s.Close(); err != nil {
+			closeErr = err
 			logutil.GetGlobalLogger().Error("failed to close tn service", zap.Error(err))
 		}
 	})
+	if err != nil {
+		finishTask(err)
+	}
+	return err
 }
 
 func startLogService(
@@ -451,24 +485,42 @@ func startLogService(
 	if err != nil {
 		panic(err)
 	}
-	if err := s.Start(); err != nil {
-		panic(err)
-	}
+	finish := serviceLifecycle.registerTask(serviceRoleLog)
 	serviceWG.Add(1)
-	return stopper.RunNamedTask("log-service", func(ctx context.Context) {
-		defer serviceWG.Done()
+	var taskDone sync.Once
+	finishTask := func(err error) {
+		taskDone.Do(func() {
+			serviceWG.Done()
+			finish(err)
+		})
+	}
+	if err := s.Start(); err != nil {
+		closeErr := s.Close()
+		finishTask(errors.Join(err, closeErr))
+		return errors.Join(err, closeErr)
+	}
+	err = stopper.RunNamedTask("log-service", func(ctx context.Context) {
+		var closeErr error
+		defer func() { finishTask(closeErr) }()
+		roleCtx, cancelRole := serviceLifecycle.roleContext(ctx, serviceRoleLog)
+		defer cancelRole()
 		if cfg.LogService.BootstrapConfig.BootstrapCluster {
 			logutil.Infof("bootstrapping hakeeper...")
-			if err := s.BootstrapHAKeeper(ctx, cfg.LogService); err != nil {
+			if err := s.BootstrapHAKeeper(roleCtx, cfg.LogService); err != nil {
 				panic(err)
 			}
 		}
 
-		<-ctx.Done()
+		<-roleCtx.Done()
 		if err := s.Close(); err != nil {
+			closeErr = err
 			logutil.GetGlobalLogger().Error("failed to close log service", zap.Error(err))
 		}
 	})
+	if err != nil {
+		finishTask(err)
+	}
+	return err
 }
 
 type proxyServerLifecycle interface {
@@ -498,14 +550,25 @@ func startProxyService(cfg *Config, stopper *stopper.Stopper) error {
 	if err := waitClusterCondition(cfg.mustGetServiceUUID(), cfg.HAKeeperClient, waitHAKeeperRunning); err != nil {
 		return err
 	}
+	finish := serviceLifecycle.registerTask(serviceRoleProxy)
 	serviceWG.Add(1)
+	var taskDone sync.Once
+	finishTask := func(err error) {
+		taskDone.Do(func() {
+			serviceWG.Done()
+			finish(err)
+		})
+	}
 	err := stopper.RunNamedTask("proxy-service", func(ctx context.Context) {
-		defer serviceWG.Done()
+		var taskErr error
+		defer func() { finishTask(taskErr) }()
+		roleCtx, cancelRole := serviceLifecycle.roleContext(ctx, serviceRoleProxy)
+		defer cancelRole()
 		err := runProxyAfterFileServiceInitialization(
-			ctx,
-			func(ctx context.Context) (*fileservice.FileServices, error) {
+			roleCtx,
+			func(initCtx context.Context) (*fileservice.FileServices, error) {
 				return initServiceFileServices(
-					ctx,
+					initCtx,
 					metadata.ServiceType_PROXY,
 					cfg,
 					stopper,
@@ -524,22 +587,25 @@ func startProxyService(cfg *Config, stopper *stopper.Stopper) error {
 					},
 				)
 			},
-			func(ctx context.Context, fs *fileservice.FileServices) {
+			func(runCtx context.Context, fs *fileservice.FileServices) {
 				s, err := proxy.NewServer(
-					ctx,
+					runCtx,
 					cfg.getProxyConfig(),
 					proxy.WithRuntime(runtime.ServiceRuntime(cfg.getProxyConfig().UUID)),
 				)
 				if err != nil {
 					panic(err)
 				}
-				if err := runProxyServerUntilCanceled(ctx, s); err != nil {
+				if err := runProxyServerUntilCanceled(runCtx, s); err != nil {
 					panic(err)
 				}
 				goruntime.KeepAlive(fs)
 			},
 		)
 		if err != nil {
+			if !errors.Is(err, context.Canceled) {
+				taskErr = err
+			}
 			if errors.Is(err, context.Canceled) {
 				return
 			}
@@ -547,7 +613,7 @@ func startProxyService(cfg *Config, stopper *stopper.Stopper) error {
 		}
 	})
 	if err != nil {
-		serviceWG.Done()
+		finishTask(err)
 	}
 	return err
 }
@@ -642,9 +708,20 @@ func startPythonUdfService(cfg *Config, stopper *stopper.Stopper) error {
 	if err := waitClusterCondition(cfg.mustGetServiceUUID(), cfg.HAKeeperClient, waitHAKeeperRunning); err != nil {
 		return err
 	}
+	finish := serviceLifecycle.registerTask(serviceRolePython)
 	serviceWG.Add(1)
-	return stopper.RunNamedTask("python-udf-service", func(ctx context.Context) {
-		defer serviceWG.Done()
+	var taskDone sync.Once
+	finishTask := func(err error) {
+		taskDone.Do(func() {
+			serviceWG.Done()
+			finish(err)
+		})
+	}
+	err := stopper.RunNamedTask("python-udf-service", func(ctx context.Context) {
+		var closeErr error
+		defer func() { finishTask(closeErr) }()
+		roleCtx, cancelRole := serviceLifecycle.roleContext(ctx, serviceRolePython)
+		defer cancelRole()
 		s, err := pythonservice.NewService(cfg.PythonUdfServerConfig)
 		if err != nil {
 			panic(err)
@@ -652,11 +729,16 @@ func startPythonUdfService(cfg *Config, stopper *stopper.Stopper) error {
 		if err := s.Start(); err != nil {
 			panic(err)
 		}
-		<-ctx.Done()
+		<-roleCtx.Done()
 		if err := s.Close(); err != nil {
+			closeErr = err
 			logutil.GetGlobalLogger().Error("failed to close python udf service", zap.Error(err))
 		}
 	})
+	if err != nil {
+		finishTask(err)
+	}
+	return err
 }
 
 func runObservabilityTask(

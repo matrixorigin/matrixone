@@ -16,6 +16,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"os"
@@ -56,6 +57,7 @@ func startDynamicCluster(
 	if err := startDynamicCNServices("./mo-data", cfg.Dynamic); err != nil {
 		return err
 	}
+	serviceLifecycle.setDynamicCNStop(stopAllDynamicCNServicesGracefully)
 	if *withProxy {
 		if err := startProxyServiceCluster(ctx, cfg.ProxyServiceConfigsFiles, stopper, shutdownC); err != nil {
 			return err
@@ -275,4 +277,47 @@ func stopAllDynamicCNServices() {
 	for _, pid := range dynamicCNServicePIDs {
 		syscall.Kill(pid, syscall.SIGKILL)
 	}
+}
+
+// stopAllDynamicCNServicesGracefully is used only by the ordered shutdown
+// path. Chaos/restart keeps the SIGKILL helper above so that it can continue
+// to exercise abrupt-exit behavior.
+func stopAllDynamicCNServicesGracefully(ctx context.Context) error {
+	type result struct {
+		index int
+		err   error
+	}
+	results := make(chan result, len(dynamicCNServicePIDs))
+	count := 0
+	for i, pid := range dynamicCNServicePIDs {
+		if pid == 0 {
+			continue
+		}
+		count++
+		if err := syscall.Kill(pid, syscall.SIGTERM); err != nil {
+			results <- result{index: i, err: err}
+			continue
+		}
+		go func(index, childPID int) {
+			p, err := os.FindProcess(childPID)
+			if err == nil {
+				_, err = p.Wait()
+			}
+			results <- result{index: index, err: err}
+		}(i, pid)
+	}
+	var errs error
+	for i := 0; i < count; i++ {
+		select {
+		case r := <-results:
+			if r.err != nil {
+				errs = errors.Join(errs, r.err)
+			} else {
+				dynamicCNServicePIDs[r.index] = 0
+			}
+		case <-ctx.Done():
+			return errors.Join(errs, ctx.Err())
+		}
+	}
+	return errs
 }
