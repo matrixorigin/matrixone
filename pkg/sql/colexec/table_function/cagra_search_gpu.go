@@ -26,6 +26,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/cuvs"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex"
 	veccache "github.com/matrixorigin/matrixone/pkg/vectorindex/cache"
@@ -51,6 +52,9 @@ type cagraSearchState struct {
 	// Filter predicates JSON for the current row, populated from argVecs[2]
 	// when a third arg is present; empty → unfiltered.
 	predsJSON string
+	// Named-snapshot read TS (from tf.ScanSnapshot). When historical, the index is
+	// loaded at this TS so a `{snapshot=...}` vector search reads the historical index (#27927).
+	scanSnapshot *plan.Snapshot
 	// holding one call batch, cagraSearchState owns it.
 	batch *batch.Batch
 }
@@ -95,6 +99,7 @@ func (u *cagraSearchState) reset(tf *TableFunction, proc *process.Process) {
 	if u.batch != nil {
 		u.batch.CleanOnlyData()
 	}
+	u.scanSnapshot = nil
 }
 
 func (u *cagraSearchState) call(tf *TableFunction, proc *process.Process) (vm.CallResult, error) {
@@ -163,6 +168,8 @@ func cagraSearchPrepare(proc *process.Process, arg *TableFunction) (tvfState, er
 
 // start is called once per query vector row.
 func (u *cagraSearchState) start(tf *TableFunction, proc *process.Process, nthRow int, analyzer process.Analyzer) (err error) {
+	u.scanSnapshot = tf.ScanSnapshot
+
 	if !u.inited {
 		// ---- parse Params ----
 		if len(tf.Params) > 0 {
@@ -342,8 +349,21 @@ func cagraRunSearchQuery(proc *process.Process, u *cagraSearchState, fa any) (er
 		OrigFuncName: u.tblcfg.OrigFuncName,
 		FilterJSON:   u.predsJSON,
 	}
+	// Named-snapshot search (#27927): read the index at the snapshot TS. sp.SnapshotTS makes
+	// the nested index-load SQL time-travel via a cloned txn; the cache key is suffixed with
+	// the TS -- derived from EffectiveSnapshotTS, the SAME authority that decides the clone --
+	// so the historical index gets its own entry, never served from nor polluting the
+	// current-index entry, and concurrent same-snapshot queries share one load (OOM-safe).
+	sp := sqlexec.NewSqlProcess(proc)
+	cacheKey := u.tblcfg.IndexTable
+	if u.scanSnapshot != nil {
+		sp.SnapshotTS = u.scanSnapshot.TS
+		if ets := sp.EffectiveSnapshotTS(); ets != nil {
+			cacheKey = fmt.Sprintf("%s@%d-%d", u.tblcfg.IndexTable, ets.PhysicalTime, ets.LogicalTime)
+		}
+	}
 	var keys any
-	keys, u.distances, err = veccache.Cache.Search(sqlexec.NewSqlProcess(proc), u.tblcfg.IndexTable, algo, fa, rt)
+	keys, u.distances, err = veccache.Cache.Search(sp, cacheKey, algo, fa, rt)
 	if err != nil {
 		return err
 	}
