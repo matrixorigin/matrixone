@@ -5,7 +5,7 @@
 - Owner: iamlinjunhong
 - Base commit: `c46d897e9645b80178568ef0783dd8e99e527222`
 - Implementation PR: [matrixorigin/matrixone#27972](https://github.com/matrixorigin/matrixone/pull/27972)
-- Design revision: `window-hash-partition-2026-09-02-r2`
+- Design revision: `window-hash-partition-2026-09-02-r3`
 - Last updated: 2026-09-02
 
 ## 1. Decision
@@ -175,8 +175,10 @@ receive -> finalize -> emit -> end
   insert them into the group hash table in `hashmap.UnitLimit` chunks, and append
   returned group ids. Poll cancellation between chunks.
 - `finalize`: after EOF, count group sizes, build prefix offsets, fill a stable
-  selection array in arrival order, and shuffle one retained data batch into
-  group-contiguous order. Poll cancellation while counting and scattering.
+  selection array in arrival order, and materialize one replacement batch into
+  group-contiguous order. The materialization copies bounded selection units and
+  polls cancellation between units; it publishes the replacement only after the
+  full copy succeeds, so cancellation cannot expose a half-reordered batch.
 - `emit`: return a borrowed `Batch.Window(start, end)` for exactly one complete
   group per call. Release the previous borrowed view before returning the next.
 - `end`: return `ExecStop`; repeated calls do not produce rows.
@@ -189,9 +191,10 @@ fallback.
 
 ### 7.2 Resource bound and fallback
 
-Bulk hash allocations, including group ids, prefix offsets, and stable-selection
-indexes, are charged through the process mpool; retained batch growth is also
-reported through the operator analyzer. The planner's estimate is admission
+Bulk hash allocations, including group ids, prefix offsets, stable-selection
+indexes, and the overlapping final materialization batch, are charged through
+the process mpool and reported through the operator analyzer as one peak working
+set; retained batch growth is also reported there. The planner's estimate is admission
 control, not a hard runtime proof: NDV and variable-width statistics can be
 wrong. During receive, the operator checks actual hash size plus current and
 required row-index capacity against its `SpillMem` threshold. If the threshold
@@ -293,17 +296,20 @@ INT32-key rows) produced:
 The near-unique result motivated the explicit per-group work term rather than an
 `N log N` versus `N` comparison alone.
 
-The exact `window-hash-partition-2026-09-02-r2` head also ran the complete
-operator matrix with `-benchtime=1x -benchmem`: 72 Sort/HASH cells across 1K,
-64K, and 1M rows; NDV 1, 1%, and 100%; one/three fixed or varlen keys. It emits
-`peak-mpool-B` for HASH working state in addition to Go's allocation metrics.
-Representative 1M three-varlen-key samples on Apple M4 were 958 ms Sort / 260 ms
-HASH at NDV 1 (101 MB HASH peak), while the NDV-100% HASH cell allocated 1.85 GB
-per operation with a 185 MB HASH peak. The latter resource counterexample
-requires the key-count-scaled per-group cost above and remains on SORT. This is
-deliberately an operator microbenchmark, not a claim about end-to-end SQL
-latency: the public SQL BVT separately covers selected HASH output through
-aggregate, ranking, value, ROWS, RANGE, ordered, and unordered Window consumers.
+The historical r2 operator matrix used `-benchtime=1x -benchmem` across 1K,
+64K, and 1M rows; NDV 1, 1%, and 100%; one/three fixed or varlen keys. It
+informed the cost-model shape but is not r3 end-to-end acceptance evidence. On
+the exact r3 head, a repeated local 1M, three-fixed-key HASH check (`-count=3
+-benchtime=3x`) measured 137--153 ms/op and 48.1 MB `peak-mpool-B` at 1%-NDV,
+versus 1.216--1.222 s/op and 139.1 MB `peak-mpool-B` at 100%-NDV. The latter
+counterexample remains on SORT through the key-count-scaled per-group cost.
+
+This is deliberately an operator microbenchmark, not a claim about end-to-end
+SQL latency. Before merge, the performance gate still requires repeated
+selected-HASH-versus-SORT measurements through a real Window consumer for the
+ordered/unordered, activating/rejected, fallback, and multi-scope cases. The
+public SQL BVT independently covers selected HASH output through aggregate,
+ranking, value, ROWS, RANGE, ordered, and unordered Window consumers.
 
 ## 11. Rollout and observability
 
@@ -320,13 +326,14 @@ first revision.
 - Proposed semantic invariants: complete; HASH changes physical grouping only and preserves
   complete `N`-row window partitions.
 - Proposed failure and lifecycle closure: complete with required pre-output one-way sort
-  fallback and explicit Reset/Free tests.
+  fallback, cancellable final materialization, and explicit Reset/Free tests.
 - Proposed distributed topology: complete for the coordinator implementation; all streams
   merge before one partition owner.
 - Proposed compatibility: complete; zero-value SORT plus the protocol-version compile gate is
   safe across persisted and mixed-version protobuf readers.
-- Proposed cost/resource gate: complete with benchmark calibration, mpool-owned index buffers,
-  and actual-memory fallback tests.
+- Proposed cost/resource implementation: complete with benchmark calibration, mpool-owned
+  index buffers, actual-memory fallback tests, and explicit outstanding real-Window acceptance
+  measurements before merge.
 - Independent review decision: pending. This document is versioned with the
   implementation PR above; an independent reviewer must record approval of its
   exact revision before implementation approval can proceed.

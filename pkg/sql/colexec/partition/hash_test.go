@@ -312,6 +312,35 @@ func TestHashPartitionSortFallbackHonorsCancellationDuringFinalize(t *testing.T)
 	require.Zero(t, proc.Mp().CurrNB())
 }
 
+func TestHashPartitionHonorsCancellationDuringFinalMaterialization(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	rows := 2 * cancellationCheckInterval
+	keys := make([]int32, rows)
+	values := make([]int64, rows)
+	for i := range keys {
+		keys[i] = int32(i % 2)
+		values[i] = int64(i)
+	}
+	input := makeHashPartitionBatch(t, proc, keys, nil, values)
+	child := colexec.NewMockOperator().WithBatchs([]*batch.Batch{input})
+	arg := newHashPartitionArgument(1 << 30)
+	arg.AppendChild(child)
+	require.NoError(t, arg.Prepare(proc))
+
+	// Receive, EOF, count, and scatter each poll at the unit boundary. The
+	// ninth poll is between the first and second copy units, proving that a
+	// cancel after grouping is complete interrupts final materialization.
+	proc.Ctx = newCancelAfterDoneChecksContext(9)
+	_, err := arg.Call(proc)
+	require.ErrorIs(t, err, context.Canceled)
+	require.Nil(t, arg.hash.materializing)
+
+	arg.Free(proc, true, err)
+	child.Free(proc, true, err)
+	proc.Free()
+	require.Zero(t, proc.Mp().CurrNB())
+}
+
 func TestCopyPartitionSelectionsHonorsCancellationDuringTailCopy(t *testing.T) {
 	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
 	src := make([]int64, 2*cancellationCheckInterval)
@@ -341,8 +370,9 @@ func TestHashPartitionAccountsHashAndRowIndexMemory(t *testing.T) {
 
 	_, err := arg.Call(proc)
 	require.NoError(t, err)
-	require.Greater(t, arg.OpAnalyzer.GetOpStats().MemorySize, int64(arg.hash.retained.Size()),
-		"operator statistics must include hash and row-index allocations, not only retained batches")
+	rowIndexBytes := int64(arg.hash.retained.RowCount()+2*arg.hash.retained.RowCount()+len(arg.hash.groupBoundaries)) * int64(unsafe.Sizeof(int64(0)))
+	require.GreaterOrEqual(t, arg.OpAnalyzer.GetOpStats().MemorySize, int64(arg.hash.retained.Size())+rowIndexBytes,
+		"operator statistics must include hash and every finalization row-index workspace")
 
 	arg.Free(proc, false, nil)
 	child.Free(proc, false, nil)

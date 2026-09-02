@@ -49,6 +49,14 @@ type hashContainer struct {
 	fallbackToSort  bool
 	spillThreshold  int64
 	observedMemory  int64
+	// materializing is the replacement batch while a final selection is copied
+	// in bounded chunks. It is never published until the whole permutation has
+	// completed, so cancellation leaves retained in its original order.
+	materializing *batch.Batch
+	// scratchMemory is live mpool-owned finalization workspace that is not
+	// retained by a batch. accountMemory records its overlapping peak together
+	// with the retained and materializing batches.
+	scratchMemory int64
 }
 
 func (partition *Partition) prepareHash(proc *process.Process) (err error) {
@@ -274,6 +282,9 @@ func (ctr *hashContainer) finalize(proc *process.Process, analyzer process.Analy
 		return err
 	}
 	defer mpool.FreeSlice(proc.Mp(), positions)
+	positionsMemory := int64(cap(positions)) * int64(unsafe.Sizeof(int64(0)))
+	ctr.scratchMemory += positionsMemory
+	defer func() { ctr.scratchMemory -= positionsMemory }()
 	for i, groupID := range ctr.groupIDs {
 		if err := checkCanceled(proc, i); err != nil {
 			return err
@@ -299,6 +310,10 @@ func (ctr *hashContainer) finalize(proc *process.Process, analyzer process.Analy
 		return err
 	}
 	defer mpool.FreeSlice(proc.Mp(), selections)
+	selectionsMemory := int64(cap(selections)) * int64(unsafe.Sizeof(int64(0)))
+	ctr.scratchMemory += selectionsMemory
+	defer func() { ctr.scratchMemory -= selectionsMemory }()
+	ctr.accountMemory(analyzer)
 	for row, groupID := range ctr.groupIDs {
 		if err := checkCanceled(proc, row); err != nil {
 			return err
@@ -307,7 +322,7 @@ func (ctr *hashContainer) finalize(proc *process.Process, analyzer process.Analy
 		selections[int(positions[group])] = int64(row)
 		positions[group]++
 	}
-	if err := ctr.retained.Shuffle(selections, proc.Mp()); err != nil {
+	if err := ctr.shuffleRetained(proc, analyzer, selections); err != nil {
 		return err
 	}
 	ctr.freeGroupIDs(proc.Mp())
@@ -346,7 +361,10 @@ func (ctr *hashContainer) finalizeSortFallback(proc *process.Process, analyzer p
 		return err
 	}
 	defer mpool.FreeSlice(proc.Mp(), selections)
-	analyzer.Alloc(int64(cap(selections)) * int64(unsafe.Sizeof(int64(0))))
+	selectionsMemory := int64(cap(selections)) * int64(unsafe.Sizeof(int64(0)))
+	ctr.scratchMemory += selectionsMemory
+	defer func() { ctr.scratchMemory -= selectionsMemory }()
+	ctr.accountMemory(analyzer)
 	for i := range selections {
 		selections[i] = int64(i)
 	}
@@ -373,6 +391,7 @@ func (ctr *hashContainer) finalizeSortFallback(proc *process.Process, analyzer p
 	if err != nil {
 		return err
 	}
+	ctr.accountMemory(analyzer)
 	boundary := 0
 	for i := 1; i < len(selections); i++ {
 		if err := checkCanceled(proc, i); err != nil {
@@ -387,7 +406,57 @@ func (ctr *hashContainer) finalizeSortFallback(proc *process.Process, analyzer p
 		}
 	}
 	ctr.groupBoundaries[boundary] = int64(len(selections))
-	return ctr.retained.Shuffle(selections, proc.Mp())
+	return ctr.shuffleRetained(proc, analyzer, selections)
+}
+
+// shuffleRetained materializes a selected copy in bounded units instead of
+// calling Batch.Shuffle. Batch.Shuffle and Vector.Shuffle make a whole-vector
+// selection copy and have no cancellation hook. This operator can retain a
+// large, wide input, so cancellation must be observed during final copying too.
+func (ctr *hashContainer) shuffleRetained(proc *process.Process, analyzer process.Analyzer, selections []int64) (err error) {
+	attrs, attrTypes := ctr.retained.GetSchema()
+	materializing := batch.NewWithSchema(ctr.retained.HasAllocationAccount(), attrs, attrTypes)
+	if selection := ctr.retained.AllocationAccountSelection(); selection != nil {
+		if err = materializing.SetAllocationAccount(selection); err != nil {
+			materializing.Clean(proc.Mp())
+			return err
+		}
+	} else {
+		for i, vec := range ctr.retained.Vecs {
+			if selection := vec.AllocationAccountSelection(); selection != nil {
+				if err = materializing.Vecs[i].SetAllocationAccount(selection); err != nil {
+					materializing.Clean(proc.Mp())
+					return err
+				}
+			}
+		}
+	}
+	ctr.materializing = materializing
+	ctr.accountMemory(analyzer)
+	defer func() {
+		if err != nil {
+			materializing.Clean(proc.Mp())
+		}
+		ctr.materializing = nil
+	}()
+
+	for start := 0; start < len(selections); start += cancellationCheckInterval {
+		if err = checkCanceled(proc, start); err != nil {
+			return err
+		}
+		end := min(start+cancellationCheckInterval, len(selections))
+		if err = materializing.Union(ctr.retained, selections[start:end], proc.Mp()); err != nil {
+			return err
+		}
+		ctr.accountMemory(analyzer)
+	}
+
+	retained := ctr.retained
+	ctr.retained = materializing
+	ctr.materializing = nil
+	retained.Clean(proc.Mp())
+	ctr.accountMemory(analyzer)
+	return nil
 }
 
 // stableSortPartitionSelections keeps the fallback equivalent to sort.SliceStable
@@ -498,11 +567,15 @@ func (ctr *hashContainer) accountMemory(analyzer process.Analyzer) {
 	if ctr.retained != nil {
 		current += int64(ctr.retained.Size())
 	}
+	if ctr.materializing != nil {
+		current += int64(ctr.materializing.Size())
+	}
 	if ctr.hash.Hash != nil {
 		current += ctr.hash.Hash.Size()
 	}
 	current += int64(cap(ctr.groupIDs)) * int64(unsafe.Sizeof(uint64(0)))
 	current += int64(cap(ctr.groupBoundaries)) * int64(unsafe.Sizeof(int64(0)))
+	current += ctr.scratchMemory
 	if current > ctr.observedMemory {
 		analyzer.Alloc(current - ctr.observedMemory)
 	}
@@ -566,6 +639,10 @@ func (ctr *hashContainer) reset(proc *process.Process) {
 		ctr.retained.Clean(proc.Mp())
 		ctr.retained = nil
 	}
+	if ctr.materializing != nil {
+		ctr.materializing.Clean(proc.Mp())
+		ctr.materializing = nil
+	}
 	ctr.hash.Free0()
 	ctr.partitionEval.ResetForNextQuery()
 	ctr.freeGroupIDs(proc.Mp())
@@ -573,6 +650,7 @@ func (ctr *hashContainer) reset(proc *process.Process) {
 	ctr.outputGroup = 0
 	ctr.fallbackToSort = false
 	ctr.observedMemory = 0
+	ctr.scratchMemory = 0
 	ctr.keyNullable = false
 	ctr.isStrHash = false
 	ctr.state = vm.Build
