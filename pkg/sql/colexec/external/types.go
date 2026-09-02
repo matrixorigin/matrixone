@@ -481,6 +481,11 @@ type ParquetHandler struct {
 	pages          []parquet.Pages // cached pages iterators for each column
 	currentPage    []parquet.Page  // cached current page for each column
 	pageOffset     []int64         // current offset within each cached page
+	// dataColIndices are the physical leaf columns advanced together by page
+	// mode. budgetColIndices is the subset whose source or target is variable
+	// width and therefore participates in source-prefix sizing.
+	dataColIndices   []int
+	budgetColIndices []int
 	// Iceberg optional columns added after an older data file was written are
 	// materialized as NULL when the file has no matching field id.
 	icebergNullFill []bool

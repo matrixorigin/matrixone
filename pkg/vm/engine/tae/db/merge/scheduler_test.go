@@ -44,6 +44,23 @@ func (e *dummyExecutor) ExecuteFor(table catalog.MergeTable, task mergeTask) boo
 	return true
 }
 
+type recordingExecutor struct {
+	executed chan uint64
+	overflow atomic.Bool
+}
+
+func (e *recordingExecutor) ExecuteFor(table catalog.MergeTable, task mergeTask) bool {
+	if task.doneCB != nil {
+		task.doneCB.OnExecDone(nil)
+	}
+	select {
+	case e.executed <- table.ID():
+	default:
+		e.overflow.Store(true)
+	}
+	return true
+}
+
 type delayedCompletionExecutor struct {
 	tasks chan mergeTask
 }
@@ -99,22 +116,47 @@ func (c *dummyCatalogSource) GetMergeSettingsBatchFn() func() (*batch.Batch, fun
 	return c.settingsFn
 }
 
+// schedulerTestHangTimeout bounds every synchronization wait in this file. A
+// wait that exceeds it is a hang, not CI load; keep every guard site on this
+// one constant so they cannot drift apart.
+const schedulerTestHangTimeout = 10 * time.Second
+
+// waitOrFatal waits for one signal on ch or fails the test at the shared hang
+// guard.
+func waitOrFatal(t *testing.T, ch <-chan struct{}, msg string) {
+	t.Helper()
+	timer := time.NewTimer(schedulerTestHangTimeout)
+	defer timer.Stop()
+	select {
+	case <-ch:
+	case <-timer.C:
+		t.Fatal(msg)
+	}
+}
+
 func requireQuery(
 	t *testing.T,
 	sched *MergeScheduler,
 	table catalog.MergeTable,
 ) *QueryAnswer {
 	t.Helper()
-	answer, err := sched.Query(context.Background(), table)
+	ctx, cancel := context.WithTimeout(t.Context(), schedulerTestHangTimeout)
+	defer cancel()
+	answer, err := sched.Query(ctx, table)
 	require.NoError(t, err)
 	return answer
 }
 
 type droppedMergeTable struct {
 	catalog.MergeTable
+	checked chan struct{}
+	once    sync.Once
 }
 
 func (t *droppedMergeTable) HasDropCommitted() bool {
+	if t.checked != nil {
+		t.once.Do(func() { close(t.checked) })
+	}
 	return true
 }
 
@@ -175,10 +217,14 @@ func TestScheduler(t *testing.T) {
 		return catalog.ToMergeTable(table)
 	}
 
+	dropped := &droppedMergeTable{
+		MergeTable: newTestTable(1, 1003),
+		checked:    make(chan struct{}),
+	}
 	tables := []catalog.MergeTable{
 		newTestTable(1, 1001),
 		newTestTable(1, 1002),
-		&droppedMergeTable{MergeTable: newTestTable(1, 1003)},
+		dropped,
 	}
 
 	dummySource := &dummyCatalogSource{
@@ -186,17 +232,21 @@ func TestScheduler(t *testing.T) {
 		initTables: tables,
 	}
 
+	t1002TaskCnt := bigDataTaskCntThreshold + 1
+	executor := &recordingExecutor{executed: make(chan uint64, t1002TaskCnt+2)}
 	sched := NewMergeScheduler(
 		1*time.Millisecond,
 		dummySource,
-		&dummyExecutor{},
+		executor,
 		NewStdClock(),
 	)
+	// Admission is part of scheduler behavior, but host memory pressure is not
+	// an input to this unit test. A deterministic controller keeps the test from
+	// silently changing meaning with the CI runner's cgroup state.
+	sched.PatchTestRscController(newSimRscController(16 * common.Const1GBytes))
 
 	sched.Start()
 	defer sched.Stop()
-
-	time.Sleep(3 * time.Millisecond)
 
 	{
 		// switch on/off
@@ -251,7 +301,6 @@ func TestScheduler(t *testing.T) {
 
 	}
 
-	t1002TaskCnt := bigDataTaskCntThreshold + 1
 	{
 		// make merge task
 		trigger := NewMMsgTaskTrigger(tables[1])
@@ -284,7 +333,11 @@ func TestScheduler(t *testing.T) {
 		}
 
 		opts2 := NewVacuumOpts()
-		opts2.HollowTopK = 1
+		// Keep HollowTopK above the injected task count: a full HollowTopK arms a
+		// wall-clock 10s vacuum recheck whose persistent inject would emit an
+		// extra ExecuteFor event into the exactly-sized drain below under CI
+		// stalls. The recheck path has its own fake-clock test.
+		opts2.HollowTopK = 2
 		opts2.testInject = &vacuumTestInject{
 			compactTask: []mergeTask{
 				{
@@ -305,13 +358,17 @@ func TestScheduler(t *testing.T) {
 
 	{
 		// test policy patch
+		// Keep the patch alive beyond the test's hang guard. This block verifies
+		// policy composition, not expiration; expiration has a separate fake-clock
+		// test below.
+		policyPatchExpiry := sched.clock.Now().Add(time.Hour)
 
 		trigger := NewMMsgTaskTrigger(tables[0])
 		trigger.WithL0(DefaultLayerZeroOpts.Clone().WithToleranceDegressionCurve(20, 1, 10*time.Second, [4]float64{0, 0, 0, 0}))
 		trigger.WithLn(-1, 10, DefaultOverlapOpts.Clone().WithMinPointDepthPerCluster(4))
 		trigger.WithTombstone(DefaultTombstoneOpts.Clone().WithL2Count(10))
 		trigger.WithVacuumCheck(DefaultVacuumOpts.Clone().WithHollowTopK(20))
-		trigger.WithExpire(time.Now().Add(50 * time.Millisecond))
+		trigger.WithExpire(policyPatchExpiry)
 		sched.SendTrigger(trigger)
 
 		answer := requireQuery(t, sched, tables[0])
@@ -320,7 +377,7 @@ func TestScheduler(t *testing.T) {
 		// merge existing patch
 		sched.SendTrigger(
 			NewMMsgTaskTrigger(tables[0]).
-				WithExpire(time.Now().Add(25 * time.Millisecond)).
+				WithExpire(policyPatchExpiry).
 				WithTombstone(DefaultTombstoneOpts.Clone().WithL2Count(100)),
 		)
 
@@ -329,44 +386,143 @@ func TestScheduler(t *testing.T) {
 	}
 
 	{
-
-		var answer *QueryAnswer
-
-		for i := 0; i < 100; i++ {
-			answer = requireQuery(t, sched, t1004)
-			if answer.DataMergeCnt == 1 {
-				break
-			}
-			time.Sleep(5 * time.Millisecond)
+		// Wait on the executor boundary, not elapsed time. Receiving these events
+		// proves that both scheduler loops, resource admission, and completion
+		// accounting have handled every trigger under test.
+		expected := map[uint64]int{
+			t1004.ID():     1,
+			tables[1].ID(): t1002TaskCnt,
+			tables[0].ID(): 1,
 		}
+		remaining := 0
+		for _, count := range expected {
+			remaining += count
+		}
+		timer := time.NewTimer(schedulerTestHangTimeout)
+		defer timer.Stop()
+		for remaining > 0 {
+			select {
+			case tableID := <-executor.executed:
+				require.Positive(t, expected[tableID], "unexpected merge for table %d", tableID)
+				expected[tableID]--
+				remaining--
+			case <-timer.C:
+				t.Fatalf("merge scheduler did not execute all tasks: remaining=%v", expected)
+			}
+		}
+		require.False(t, executor.overflow.Load(), "merge executor observation buffer overflowed")
+
+		answer := requireQuery(t, sched, t1004)
 		require.Equal(t, answer.DataMergeCnt, 1)
 
-		for i := 0; i < 100; i++ {
-			answer = requireQuery(t, sched, tables[1])
-			if answer.DataMergeCnt == t1002TaskCnt {
-				break
-			}
-			time.Sleep(5 * time.Millisecond)
-		}
+		answer = requireQuery(t, sched, tables[1])
 		require.Equal(t, answer.DataMergeCnt, t1002TaskCnt)
 		require.Equal(t, answer.VaccumTrigCount, 1)
 
-		for i := 0; i < 100; i++ {
-			answer = requireQuery(t, sched, tables[0])
-			if answer.DataMergeCnt == 1 {
-				break
-			}
-			time.Sleep(5 * time.Millisecond)
-		}
+		answer = requireQuery(t, sched, tables[0])
 		require.Equal(t, answer.DataMergeCnt, 1)
 	}
 
 	{
 		// dropped table will be removed from scheduler
+		waitOrFatal(t, dropped.checked,
+			"merge scheduler did not inspect the dropped table")
 		answer := requireQuery(t, sched, tables[2])
 		require.Equal(t, answer.NotExists, true)
 	}
 
+}
+
+func TestVacuumRecheckArmsOnFullHollowTopKUsingInjectedClock(t *testing.T) {
+	clock := newFakeClock()
+	db := catalog.MockDBEntryWithAccInfo(1, 1001)
+	table := catalog.ToMergeTable(catalog.MockTableEntryWithDB(db, 1001))
+	sched := NewMergeScheduler(
+		time.Hour,
+		&dummyCatalogSource{initTables: []catalog.MergeTable{table}},
+		&dummyExecutor{},
+		clock,
+	)
+	generation := newMergeSchedulerGeneration()
+
+	newOpts := func(hollowTopK int) *VacuumOpts {
+		opts := NewVacuumOpts()
+		opts.HollowTopK = hollowTopK
+		opts.testInject = &vacuumTestInject{
+			compactTask: []mergeTask{{
+				objs: []*objectio.ObjectStats{
+					newTestObjectStats(t, 1, 2, 30*common.Const1MBytes, 1000, 1, nil, 0),
+				},
+				note:  "test",
+				level: 1,
+			}},
+		}
+		return opts
+	}
+
+	// A partially hollow table (tasks < HollowTopK) sends only the compact
+	// trigger and must not arm the recheck.
+	sched.ioVacuumCheck(generation, MMsgVacuumCheck{Table: table, opts: newOpts(2)})
+	require.Len(t, sched.msgChan, 1)
+	clock.Advance(time.Minute)
+	require.Never(t, func() bool { return len(sched.msgChan) > 1 },
+		50*time.Millisecond, time.Millisecond,
+		"a partially hollow table must not schedule a vacuum recheck")
+
+	// A fully hollow table (tasks == HollowTopK) arms one recheck that fires
+	// only after the injected clock crosses the 10s deadline.
+	sched.ioVacuumCheck(generation, MMsgVacuumCheck{Table: table, opts: newOpts(1)})
+	require.Len(t, sched.msgChan, 2)
+	clock.Advance(10*time.Second - time.Nanosecond)
+	require.Never(t, func() bool { return len(sched.msgChan) > 2 },
+		50*time.Millisecond, time.Millisecond,
+		"the vacuum recheck must not fire before its deadline")
+	clock.Advance(time.Nanosecond)
+	require.Eventually(t, func() bool { return len(sched.msgChan) == 3 },
+		schedulerTestHangTimeout, time.Millisecond,
+		"the vacuum recheck must fire once the injected clock crosses the deadline")
+	<-sched.msgChan
+	<-sched.msgChan
+	recheck := <-sched.msgChan
+	require.Equal(t, MMsgKindTrigger, recheck.Kind)
+	trigger := recheck.Value.(*MMsgTaskTrigger)
+	require.NotNil(t, trigger.vacuum, "the recheck must carry a vacuum check")
+}
+
+func TestSchedulerPolicyPatchExpirationUsesInjectedClock(t *testing.T) {
+	clock := newFakeClock()
+	db := catalog.MockDBEntryWithAccInfo(1, 1001)
+	table := catalog.ToMergeTable(catalog.MockTableEntryWithDB(db, 1001))
+	sched := NewMergeScheduler(
+		time.Hour,
+		&dummyCatalogSource{initTables: []catalog.MergeTable{table}},
+		&dummyExecutor{},
+		clock,
+	)
+	sched.PatchTestRscController(newSimRscController(16 * common.Const1GBytes))
+
+	expiresAt := clock.Now().Add(time.Minute)
+	sched.handleTaskTrigger(nil, NewMMsgTaskTrigger(table).
+		WithExpire(expiresAt).
+		WithTombstone(DefaultTombstoneOpts.Clone().WithL2Count(10)))
+	sched.handleTaskTrigger(nil, NewMMsgTaskTrigger(table).
+		WithExpire(expiresAt).
+		WithTombstone(DefaultTombstoneOpts.Clone().WithL2Count(100)))
+
+	supp := sched.supps[table.ID()]
+	require.NotNil(t, supp)
+	require.Len(t, supp.triggers, 1, "policy updates must merge in place")
+	require.Equal(t, 100, supp.triggers[0].tomb.L2Count)
+
+	// Expiration is strict: a patch remains valid at its deadline and is removed
+	// only after the injected clock moves past it.
+	clock.Advance(time.Minute)
+	sched.doSched(nil, supp.todo)
+	require.Len(t, supp.triggers, 1)
+
+	clock.Advance(time.Nanosecond)
+	sched.doSched(nil, supp.todo)
+	require.Empty(t, supp.triggers)
 }
 
 type blockingMergeTable struct {
