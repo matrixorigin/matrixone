@@ -5844,6 +5844,46 @@ func exportSetCheck(overloads []overload, inputs []types.Type) checkResult {
 	return newCheckResultWithSuccess(0)
 }
 
+func exportSetResultByteLength(bitsValue uint64, on, off, separator []byte, numberOfBits int64, maxResultLen int64) (int, bool) {
+	size := int64(0)
+	add := func(count int64, width int) bool {
+		if count == 0 || width == 0 {
+			return true
+		}
+		if int64(width) > (maxResultLen-size)/count {
+			return false
+		}
+		size += count * int64(width)
+		return true
+	}
+
+	onCount := int64(0)
+	for bit := int64(0); bit < numberOfBits; bit++ {
+		if (bitsValue>>uint(bit))&1 == 1 {
+			onCount++
+		}
+	}
+	if !add(onCount, len(on)) || !add(numberOfBits-onCount, len(off)) ||
+		!add(numberOfBits-1, len(separator)) {
+		return 0, false
+	}
+	return int(size), true
+}
+
+func writeExportSetResult(dst []byte, bitsValue uint64, on, off, separator []byte, numberOfBits int64) {
+	offset := 0
+	for bit := int64(0); bit < numberOfBits; bit++ {
+		if bit > 0 {
+			offset += copy(dst[offset:], separator)
+		}
+		value := off
+		if (bitsValue>>uint(bit))&1 == 1 {
+			value = on
+		}
+		offset += copy(dst[offset:], value)
+	}
+}
+
 // ExportSet: EXPORT_SET(bits, on, off[, separator[, number_of_bits]]) - Returns a string such that for every bit set in the value bits, you get an on string and for every bit not set, you get an off string.
 func ExportSet(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	rs := vector.MustFunctionResult[types.Varlena](result)
@@ -6029,18 +6069,19 @@ func ExportSet(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc
 			}
 		}
 
-		// Build the result string
-		var parts []string
-		for j := int64(0); j < numberOfBits; j++ {
-			if (bitsUint>>uint(j))&1 == 1 {
-				parts = append(parts, functionUtil.QuickBytesToStr(on))
-			} else {
-				parts = append(parts, functionUtil.QuickBytesToStr(off))
+		separatorBytes := functionUtil.QuickStrToBytes(separator)
+		size, ok := exportSetResultByteLength(bitsUint, on, off, separatorBytes, numberOfBits,
+			maxStringFunctionResultLength(result))
+		if !ok {
+			if err := rs.AppendBytes(nil, true); err != nil {
+				return err
 			}
+			continue
 		}
-
-		resultStr := strings.Join(parts, separator)
-		if err := rs.AppendBytes([]byte(resultStr), false); err != nil {
+		if err := rs.AppendBytesWithWriter(size, func(dst []byte) error {
+			writeExportSetResult(dst, bitsUint, on, off, separatorBytes, numberOfBits)
+			return nil
+		}); err != nil {
 			return err
 		}
 	}

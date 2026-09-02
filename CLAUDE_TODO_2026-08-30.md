@@ -133,3 +133,9 @@
 1. 将 REGEXP_REPLACE 从本 PR 的 result-domain closure 中完整移除，不再保留静态 helper 分支或 focused tests。
 2. 更新设计文档和 PR body，明确 REGEXP result-domain/runtime closure 由后续 linked fix 处理。
 3. 运行 function/planner tests、lint 与 diff check，commit/push 后回复 reviewers。
+
+# PR #27841 EXPORT_SET review 修复
+
+1. 在 EXPORT_SET 构造结果前按 on/off bit count 与 separator 精确计算 checked byte size。
+2. 超限返回 NULL；合法结果先通过 AppendBytesWithWriter 完成 MPool admission，再直接写 destination，删除 parts/strings.Join。
+3. 补 64-bit 边界与 low-MPool expansion UT，运行 owning tests/lint/diff check 后 commit/push。

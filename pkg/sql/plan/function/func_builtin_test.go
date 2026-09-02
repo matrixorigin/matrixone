@@ -1230,6 +1230,10 @@ func TestTextResultCapacityUsesResultDomain(t *testing.T) {
 }
 
 func TestExpandingFunctionsRejectMPoolBeforeBuildingResult(t *testing.T) {
+	size, ok := exportSetResultByteLength(^uint64(0), []byte("x"), nil, nil, 64, types.MaxBlobLen)
+	require.True(t, ok)
+	require.Equal(t, 64, size)
+
 	mp, err := mpool.NewMPool("expanding-allocation-rejection", 1<<20, mpool.NoFixed)
 	require.NoError(t, err)
 	proc := testutil.NewProcessWithMPool(t, "", mp)
@@ -1239,6 +1243,26 @@ func TestExpandingFunctionsRejectMPoolBeforeBuildingResult(t *testing.T) {
 		NewFunctionTestConstInput(types.T_blob.ToType(), []string{strings.Repeat("b", 2000)}, nil),
 	}, NewFunctionTestResult(types.T_blob.ToType(), true, nil, nil), fEvalFn(Replace))
 	ok, info := tc.Run()
+	require.True(t, ok, info)
+
+	tc = NewFunctionTestCase(proc, []FunctionTestInput{
+		NewFunctionTestConstInput(types.T_int64.ToType(), []int64{-1}, nil),
+		NewFunctionTestConstInput(types.T_blob.ToType(), []string{"x"}, nil),
+		NewFunctionTestConstInput(types.T_blob.ToType(), []string{""}, nil),
+		NewFunctionTestConstInput(types.T_blob.ToType(), []string{""}, nil),
+		NewFunctionTestConstInput(types.T_int64.ToType(), []int64{64}, nil),
+	}, NewFunctionTestResult(types.T_blob.ToType(), false, []string{strings.Repeat("x", 64)}, nil), fEvalFn(ExportSet))
+	ok, info = tc.Run()
+	require.True(t, ok, info)
+
+	tc = NewFunctionTestCase(proc, []FunctionTestInput{
+		NewFunctionTestConstInput(types.T_int64.ToType(), []int64{-1}, nil),
+		NewFunctionTestConstInput(types.T_blob.ToType(), []string{strings.Repeat("a", 20000)}, nil),
+		NewFunctionTestConstInput(types.T_blob.ToType(), []string{""}, nil),
+		NewFunctionTestConstInput(types.T_blob.ToType(), []string{""}, nil),
+		NewFunctionTestConstInput(types.T_int64.ToType(), []int64{64}, nil),
+	}, NewFunctionTestResult(types.T_blob.ToType(), true, nil, nil), fEvalFn(ExportSet))
+	ok, info = tc.Run()
 	require.True(t, ok, info)
 }
 
