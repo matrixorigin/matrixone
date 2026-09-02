@@ -74,7 +74,7 @@ select table_name, view_definition
 from information_schema.views
 where table_schema = 'information_schema_views_metadata' and table_name = 'stable_star_v';
 ➤ table_name[12,5000,0]  ¦  view_definition[-1,16383,0]  𝄀
-stable_star_v  ¦  select `t`.`a` as `a`, `t`.`b` as `b` from `t`  𝄀
+stable_star_v  ¦  select `t`.`a` as `a`, `t`.`b` as `b` from `t`
 select * from stable_star_v order by a, b;
 ➤ a[4,32,0]  ¦  b[4,32,0]  𝄀
 1  ¦  10  𝄀
