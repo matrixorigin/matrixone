@@ -69,6 +69,9 @@ func statementDigestSQLMode(proc *process.Process) (string, digest.SQLMode, erro
 	if flags.Has(mysql.SQLModeHighNotPrecedence) {
 		digestMode |= digest.ModeHighNotPrecedence
 	}
+	if flags.Has(mysql.SQLModeIgnoreSpace) {
+		digestMode |= digest.ModeIgnoreSpace
+	}
 	return mysql.SessionSQLModeForParser(sqlMode), digestMode, nil
 }
 
@@ -142,6 +145,7 @@ func StatementDigest(
 		SQLMode:                digestMode,
 		MaxDigestLength:        &maxDigestLength,
 		RejectParameterMarkers: true,
+		MySQLVersionID:         digest.DefaultMySQLVersionID,
 	})
 
 	return opUnaryBytesToBytesWithErrorCheck(ivecs, result, proc, length, func(input []byte) ([]byte, error) {

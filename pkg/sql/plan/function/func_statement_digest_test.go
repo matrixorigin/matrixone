@@ -190,6 +190,7 @@ func TestStatementDigestRejectsInvalidSQL(t *testing.T) {
 		"SELECT FROM",
 		"SELECT 1; SELECT 2",
 		"/*!80000 SELECT FROM */",
+		"$$body$$",
 		string([]byte{0xff, 0xfe}),
 	}
 	for _, input := range invalidInputs {
@@ -264,7 +265,7 @@ func TestStatementDigestHonorsParserSQLMode(t *testing.T) {
 		switch name {
 		case "sql_mode":
 			require.False(t, global)
-			return "ANSI_QUOTES,NO_BACKSLASH_ESCAPES,PIPES_AS_CONCAT,HIGH_NOT_PRECEDENCE", nil
+			return "ANSI_QUOTES,NO_BACKSLASH_ESCAPES,PIPES_AS_CONCAT,HIGH_NOT_PRECEDENCE,IGNORE_SPACE", nil
 		case "max_digest_length":
 			require.True(t, global)
 			return int64(defaultMaxDigestLength), nil
@@ -275,10 +276,11 @@ func TestStatementDigestHonorsParserSQLMode(t *testing.T) {
 	})
 	parserMode, digestMode, err = statementDigestSQLMode(proc)
 	require.NoError(t, err)
-	require.Equal(t, "ANSI_QUOTES,NO_BACKSLASH_ESCAPES,PIPES_AS_CONCAT,HIGH_NOT_PRECEDENCE", parserMode)
+	require.Equal(t, "ANSI_QUOTES,NO_BACKSLASH_ESCAPES,PIPES_AS_CONCAT,HIGH_NOT_PRECEDENCE,IGNORE_SPACE", parserMode)
 	require.NotZero(t, digestMode)
 	require.True(t, digestMode&digest.ModePipesAsConcat != 0)
 	require.True(t, digestMode&digest.ModeHighNotPrecedence != 0)
+	require.True(t, digestMode&digest.ModeIgnoreSpace != 0)
 	testCase := NewFunctionTestCase(
 		proc,
 		[]FunctionTestInput{NewFunctionTestInput(

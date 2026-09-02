@@ -204,6 +204,53 @@ func TestDigestSQLModeTokenIdentity(t *testing.T) {
 	require.Contains(t, isNotNull.Text, "NULL")
 }
 
+func TestDigestIgnoreSpaceFunctionTokenIdentity(t *testing.T) {
+	withoutIgnoreSpace, err := Compute("SELECT COUNT (1)")
+	require.NoError(t, err)
+	withIgnoreSpace, err := Compute("SELECT COUNT (1)", Options{SQLMode: ModeIgnoreSpace})
+	require.NoError(t, err)
+	require.NotEqual(t, withoutIgnoreSpace.Hash, withIgnoreSpace.Hash)
+	require.Equal(t, "SELECT `COUNT` (?)", withoutIgnoreSpace.Text)
+	require.Equal(t, "SELECT COUNT (?)", withIgnoreSpace.Text)
+
+	withoutSpace, err := Compute("SELECT COUNT(1)")
+	require.NoError(t, err)
+	require.Equal(t, withoutSpace, withIgnoreSpace)
+}
+
+func TestDigestOptimizerHintRequiresImmediateStatementKeyword(t *testing.T) {
+	for _, tc := range []struct{ sql, plain string }{
+		{sql: "SELECT 1 /*+ MAX_EXECUTION_TIME(1) */", plain: "SELECT 1"},
+		{sql: "SELECT ( /*+ MAX_EXECUTION_TIME(1) */ 1)", plain: "SELECT (1)"},
+	} {
+		plain, err := Compute(tc.plain)
+		require.NoError(t, err)
+		got, err := Compute(tc.sql)
+		require.NoError(t, err)
+		require.Equal(t, plain, got, tc.sql)
+	}
+}
+
+func TestDigestExecutableCommentVersionBoundaries(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		versionID  int
+		commentSQL string
+		wantText   string
+	}{
+		{name: "below target executes", versionID: 80400, commentSQL: "/*!80399 SELECT 1 */", wantText: "SELECT ?"},
+		{name: "target executes", versionID: 80400, commentSQL: "/*!80400 SELECT 1 */", wantText: "SELECT ?"},
+		{name: "above target skips", versionID: 80400, commentSQL: "/*!80401 SELECT 1 */", wantText: ""},
+		{name: "custom target executes newer guard", versionID: 80401, commentSQL: "/*!80401 SELECT 1 */", wantText: "SELECT ?"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := Compute(tc.commentSQL, Options{MySQLVersionID: tc.versionID})
+			require.NoError(t, err)
+			require.Equal(t, tc.wantText, got.Text)
+		})
+	}
+}
+
 func TestDigestNCharSQLModeEscaping(t *testing.T) {
 	sql := `SELECT N'a\'b'`
 	_, err := Compute(sql)

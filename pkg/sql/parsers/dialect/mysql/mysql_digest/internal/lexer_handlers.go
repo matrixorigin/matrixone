@@ -189,8 +189,8 @@ func (l *Lexer) handleIdent() lexResult {
 
 	// Check if it's a keyword
 	if tokval := l.findKeyword(length); tokval != 0 {
-		tokval = l.adjustKeywordForSQLMode(tokval)
 		l.skip() // Re-skip the character we ungot
+		tokval = l.adjustKeywordForSQLMode(tokval)
 		return doneWithNext(l.returnToken(Token{Type: tokval, Start: l.tokStart, End: l.tokStart + length}), MY_LEX_START)
 	}
 	l.skip() // Re-skip
@@ -275,7 +275,39 @@ func (l *Lexer) adjustKeywordForSQLMode(tok int) int {
 	if tok == NOT_SYM && l.sqlMode&MODE_HIGH_NOT_PRECEDENCE != 0 {
 		return NOT2_SYM
 	}
+	if tok != 0 && isFunctionKeyword(tok) &&
+		l.sqlMode&MODE_IGNORE_SPACE == 0 && l.followedByOpenParenAfterSpace() {
+		return IDENT
+	}
 	return tok
+}
+
+func (l *Lexer) followedByOpenParenAfterSpace() bool {
+	pos := l.pos
+	if pos >= len(l.input) || !isSpace(l.input[pos]) {
+		return false
+	}
+	for pos < len(l.input) && isSpace(l.input[pos]) {
+		pos++
+	}
+	return pos < len(l.input) && l.input[pos] == '('
+}
+
+func isFunctionKeyword(tok int) bool {
+	switch tok {
+	case AVG_SYM, ADDDATE_SYM, BIT_AND_SYM, BIT_OR_SYM, BIT_XOR_SYM,
+		CAST_SYM, COUNT_SYM, COALESCE, CONVERT_SYM, CUME_DIST_SYM,
+		CURDATE, CURTIME, DATE_ADD_INTERVAL, DATE_SUB_INTERVAL,
+		DENSE_RANK_SYM, EXTRACT_SYM, FIRST_VALUE_SYM, GROUP_CONCAT_SYM,
+		JSON_ARRAYAGG, JSON_DUALITY_OBJECT_SYM, JSON_OBJECTAGG, JSON_VALUE_SYM,
+		LAG_SYM, LAST_VALUE_SYM, LEAD_SYM, MAX_SYM, MIN_SYM, NTH_VALUE_SYM,
+		NOW_SYM, NTILE_SYM, PERCENT_RANK_SYM, POSITION_SYM, RANK_SYM,
+		ROW_NUMBER_SYM, ST_COLLECT_SYM, STDDEV_SAMP_SYM, STD_SYM, SUBDATE_SYM,
+		SUBSTRING, SUM_SYM, SYSDATE, TRIM, USER, VARIANCE_SYM:
+		return true
+	default:
+		return false
+	}
 }
 
 // handleSetVar handles MY_LEX_SET_VAR (:= operator).

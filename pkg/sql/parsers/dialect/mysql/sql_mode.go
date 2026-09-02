@@ -26,6 +26,7 @@ const (
 	sqlModeNoBackslashEscapes = "NO_BACKSLASH_ESCAPES"
 	sqlModeRealAsFloat        = "REAL_AS_FLOAT"
 	sqlModeHighNotPrecedence  = "HIGH_NOT_PRECEDENCE"
+	sqlModeIgnoreSpace        = "IGNORE_SPACE"
 )
 
 var parserSQLModeTokens = []string{
@@ -41,6 +42,7 @@ const (
 	SQLModeNoBackslashEscapes
 	SQLModeRealAsFloat
 	SQLModeHighNotPrecedence
+	SQLModeIgnoreSpace
 )
 
 type SQLModeFlags uint8
@@ -61,6 +63,8 @@ func ParseSQLModeFlags(mode string) SQLModeFlags {
 			flags |= SQLModeFlags(SQLModeRealAsFloat)
 		case sqlModeHighNotPrecedence:
 			flags |= SQLModeFlags(SQLModeHighNotPrecedence)
+		case sqlModeIgnoreSpace:
+			flags |= SQLModeFlags(SQLModeIgnoreSpace)
 		}
 	}
 	return flags

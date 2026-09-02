@@ -35,6 +35,8 @@ func (e *LexError) Error() string {
 }
 
 const (
+	DefaultMySQLVersionID = 80400
+
 	ErrUnterminatedString   = "unterminated string literal"
 	ErrUnterminatedComment  = "unterminated block comment"
 	ErrUnterminatedIdent    = "unterminated quoted identifier"
@@ -61,6 +63,8 @@ const (
 	MODE_PIPES_AS_CONCAT SQLMode = 1 << 2
 	// MODE_HIGH_NOT_PRECEDENCE makes NOT use the high-precedence token.
 	MODE_HIGH_NOT_PRECEDENCE SQLMode = 1 << 3
+	// MODE_IGNORE_SPACE allows whitespace between function names and '('.
+	MODE_IGNORE_SPACE SQLMode = 1 << 4
 )
 
 type Token struct {
@@ -85,6 +89,7 @@ type Lexer struct {
 	inVersionComment bool
 	hintAllowed      bool
 	tokenConfig      *TokenConfig
+	mysqlVersionID   int
 	sawComment       bool
 	sawNonComment    bool
 }
@@ -99,9 +104,10 @@ func (l *Lexer) SawNonComment() bool {
 
 func NewLexer(input string) *Lexer {
 	return &Lexer{
-		input:       input,
-		nextState:   MY_LEX_START,
-		tokenConfig: GetTokenConfig(),
+		input:          input,
+		nextState:      MY_LEX_START,
+		tokenConfig:    GetTokenConfig(),
+		mysqlVersionID: DefaultMySQLVersionID,
 	}
 }
 
@@ -110,7 +116,14 @@ func (l *Lexer) SetSQLMode(mode SQLMode) {
 }
 
 func (l *Lexer) mysqlVersionInt() int {
-	return 80400
+	return l.mysqlVersionID
+}
+
+func (l *Lexer) SetMySQLVersionID(versionID int) {
+	if versionID <= 0 {
+		versionID = DefaultMySQLVersionID
+	}
+	l.mysqlVersionID = versionID
 }
 
 func (l *Lexer) SetPrepareMode(enabled bool) {
@@ -235,8 +248,10 @@ func (l *Lexer) Lex() Token {
 
 		switch result.kind {
 		case lexEmit:
+			l.hintAllowed = TokenIsHintable(result.token.Type)
 			return result.token
 		case lexEmitAndPrime:
+			l.hintAllowed = TokenIsHintable(result.token.Type)
 			l.nextState = result.nextState
 			return result.token
 		case lexContinue:

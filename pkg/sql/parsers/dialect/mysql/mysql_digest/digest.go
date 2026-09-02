@@ -34,10 +34,15 @@ type Digest struct {
 type SQLMode = internal.SQLMode
 
 const (
+	// DefaultMySQLVersionID is MatrixOne's declared MySQL compatibility target
+	// for executable version comments (8.4.0).
+	DefaultMySQLVersionID = internal.DefaultMySQLVersionID
+
 	ModeNoBackslashEscapes = internal.MODE_NO_BACKSLASH_ESCAPES
 	ModeANSIQuotes         = internal.MODE_ANSI_QUOTES
 	ModePipesAsConcat      = internal.MODE_PIPES_AS_CONCAT
 	ModeHighNotPrecedence  = internal.MODE_HIGH_NOT_PRECEDENCE
+	ModeIgnoreSpace        = internal.MODE_IGNORE_SPACE
 	DefaultMaxDigestLength = 1024
 )
 
@@ -46,6 +51,7 @@ type Options struct {
 	SQLMode                SQLMode
 	MaxDigestLength        *int
 	RejectParameterMarkers bool
+	MySQLVersionID         int
 }
 
 // Digester computes statement digests with a fixed set of options.
@@ -77,6 +83,7 @@ func compute(sql string, opt Options) (Digest, error) {
 	lexer := internal.NewLexer(sql)
 	lexer.SetSQLMode(opt.SQLMode)
 	lexer.SetPrepareMode(opt.RejectParameterMarkers)
+	lexer.SetMySQLVersionID(opt.MySQLVersionID)
 
 	maxDigestLength := opt.MaxDigestLength
 	if maxDigestLength == nil {

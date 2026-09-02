@@ -83,9 +83,12 @@ func TestParserSQLModeCombinations(t *testing.T) {
 }
 
 func TestParseSQLModeFlagsIncludesDigestOnlyHighNotPrecedence(t *testing.T) {
-	flags := ParseSQLModeFlags("HIGH_NOT_PRECEDENCE")
+	flags := ParseSQLModeFlags("HIGH_NOT_PRECEDENCE,IGNORE_SPACE")
 	if !flags.Has(SQLModeHighNotPrecedence) {
 		t.Fatal("HIGH_NOT_PRECEDENCE was not recognized")
+	}
+	if !flags.Has(SQLModeIgnoreSpace) {
+		t.Fatal("IGNORE_SPACE was not recognized")
 	}
 	if len(ParserSQLModeCombinations()) != 16 {
 		t.Fatal("digest-only HIGH_NOT_PRECEDENCE must not change parser mode combinations")
