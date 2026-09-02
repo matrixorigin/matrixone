@@ -1399,24 +1399,31 @@ func (builder *QueryBuilder) applyFullTextFiltersForJoinChildren(nodeID int32, j
 	// fulltext-index result on the pk/doc_id. Fulltext search yields one row per matching
 	// doc, so that join is 1:1 and ROW-EQUIVALENT to the filter it replaces.
 	//
-	// INNER/SEMI (IN subqueries): both inputs are safe -- neither is row-preserving.
-	// LEFT/SINGLE: only the RIGHT (non-preserved / null-producing) child is eligible. That
-	// is where a scalar subquery's match lands -- correlated `select (select count(*) ...
-	// where match(...))` decorrelates to AGG over `outer LEFT/SINGLE JOIN docs(match)`, with
-	// docs as the right child (#27962). The LEFT/left and RIGHT/right PRESERVED child is left
-	// untouched (see TestFullTextJoinRewriteSkipsOuterJoins): the conservative skip there is
-	// intentional and out of scope for this fix.
+	// A child is eligible iff rewriting it cannot change the enclosing join's
+	// row-preservation:
+	//   - INNER/SEMI: neither input is row-preserving, so both are eligible.
+	//   - outer joins (LEFT/RIGHT/SINGLE/OUTER): only the NULL-EXTENDING (non-preserved)
+	//     child. That is where a scalar subquery's match lands -- correlated
+	//     `select (select count(*) ... where match(...))` decorrelates to AGG over
+	//     `outer LEFT/SINGLE JOIN docs(match)` with docs as the non-preserved child (#27962).
+	//
+	// Critically, applyIndices runs AFTER determineBuildAndProbeSide + swapJoinChildren, which
+	// can physically swap the children and convert LEFT->RIGHT (IsRightJoin) based on input-size
+	// statistics. So the non-preserved child is NOT a fixed index -- it is whatever
+	// nodeNullExtendsChild reports for the POST-SWAP shape (RIGHT -> child 0; right-swapped
+	// SINGLE -> child 0). Hard-coding child 1 made the fix stats-dependent: a swapped plan left
+	// the match unrewritten and failed with 20105 (#27952). The preserved child is never
+	// null-extending, so it stays untouched (TestFullTextJoinRewriteSkipsOuterJoins).
 	if joinNode == nil {
 		return false, nil
 	}
-	var eligible func(i int) bool
-	switch joinNode.JoinType {
-	case plan.Node_INNER, plan.Node_SEMI:
-		eligible = func(int) bool { return true }
-	case plan.Node_LEFT, plan.Node_SINGLE:
-		eligible = func(i int) bool { return i == 1 } // right (non-preserved) child only
-	default:
-		return false, nil
+	eligible := func(i int) bool {
+		switch joinNode.JoinType {
+		case plan.Node_INNER, plan.Node_SEMI:
+			return true
+		default:
+			return nodeNullExtendsChild(joinNode, i)
+		}
 	}
 
 	changed := false

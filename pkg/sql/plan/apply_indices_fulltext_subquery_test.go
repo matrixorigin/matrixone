@@ -113,3 +113,76 @@ func TestFullTextCorrelatedScalarSubqueryJoinChild(t *testing.T) {
 	require.Equal(t, 1, countReachableFullTextScans(builder.qry),
 		"the LEFT join-child rewrite must serve the MATCH via a fulltext index scan")
 }
+
+// applyIndices runs AFTER swapJoinChildren, which can physically swap the children and
+// convert LEFT->RIGHT (or right-swap SINGLE) based on input-size statistics. The two tests
+// below pin those EXACT post-swap shapes so eligibility must come from the null-extension
+// contract (nodeNullExtendsChild), not a hard-coded child index -- otherwise the same
+// #27962 query leaves the match unrewritten and fails with 20105 (#27952). The MATCH scan
+// is placed at child 0 (the non-preserved side after the swap) in both.
+
+// TestFullTextCorrelatedScalarSubqueryLeftToRightSwapped: LEFT physically swapped to RIGHT
+// (smaller outer input becomes the RIGHT build side). JoinType=RIGHT, MATCH scan at child 0
+// (the null-extending side for a RIGHT join).
+func TestFullTextCorrelatedScalarSubqueryLeftToRightSwapped(t *testing.T) {
+	builder := NewQueryBuilder(planpb.Query_SELECT, newFullTextJoinMockCompilerContext(), false, true)
+	ctx := NewBindContext(builder, nil)
+
+	matchScanID, _ := matchScanWithFulltextIndex(builder, ctx)
+	outerDef := makeFullTextJoinTestTableDef("outer", false)
+	outerTag := builder.genNewBindTag()
+	outerScanID := builder.appendNode(makeJoinIndexTestScan(outerDef, outerTag), ctx)
+
+	joinID := builder.appendNode(&planpb.Node{
+		NodeType: planpb.Node_JOIN,
+		JoinType: planpb.Node_RIGHT, // LEFT swapped to RIGHT: non-preserved (match) is now child 0
+		Children: []int32{matchScanID, outerScanID},
+	}, ctx)
+	aggID := builder.appendNode(&planpb.Node{
+		NodeType: planpb.Node_AGG,
+		Children: []int32{joinID},
+	}, ctx)
+
+	newID, err := builder.applyIndices(aggID, map[[2]int32]int{}, map[[2]int32]*planpb.Expr{})
+	require.NoError(t, err)
+	builder.qry.Steps = []int32{newID}
+
+	require.Zero(t, countReachableFullTextMatches(builder.qry),
+		"LEFT->RIGHT swap must still serve the MATCH (was 20105 with a hard-coded child index)")
+	require.Equal(t, 1, countReachableFullTextScans(builder.qry),
+		"the RIGHT join's null-extending child 0 must be rewritten to a fulltext index scan")
+}
+
+// TestFullTextCorrelatedScalarSubqueryRightSwappedSingle: SINGLE physically swapped
+// (IsRightJoin=true) without changing JoinType. MATCH scan at child 0 (the null-extending
+// side for a right-swapped SINGLE); the old hard-coded "child 1 only" inspected the wrong
+// relation and left the match unrewritten.
+func TestFullTextCorrelatedScalarSubqueryRightSwappedSingle(t *testing.T) {
+	builder := NewQueryBuilder(planpb.Query_SELECT, newFullTextJoinMockCompilerContext(), false, true)
+	ctx := NewBindContext(builder, nil)
+
+	matchScanID, _ := matchScanWithFulltextIndex(builder, ctx)
+	outerDef := makeFullTextJoinTestTableDef("outer", false)
+	outerTag := builder.genNewBindTag()
+	outerScanID := builder.appendNode(makeJoinIndexTestScan(outerDef, outerTag), ctx)
+
+	joinID := builder.appendNode(&planpb.Node{
+		NodeType:    planpb.Node_JOIN,
+		JoinType:    planpb.Node_SINGLE,
+		IsRightJoin: true, // right-swapped: non-preserved (match) is now child 0
+		Children:    []int32{matchScanID, outerScanID},
+	}, ctx)
+	aggID := builder.appendNode(&planpb.Node{
+		NodeType: planpb.Node_AGG,
+		Children: []int32{joinID},
+	}, ctx)
+
+	newID, err := builder.applyIndices(aggID, map[[2]int32]int{}, map[[2]int32]*planpb.Expr{})
+	require.NoError(t, err)
+	builder.qry.Steps = []int32{newID}
+
+	require.Zero(t, countReachableFullTextMatches(builder.qry),
+		"right-swapped SINGLE must still serve the MATCH (was 20105 inspecting the wrong child)")
+	require.Equal(t, 1, countReachableFullTextScans(builder.qry),
+		"the right-swapped SINGLE's null-extending child 0 must be rewritten to a fulltext index scan")
+}
