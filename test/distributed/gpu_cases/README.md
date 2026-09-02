@@ -32,6 +32,8 @@ CPU-only BVT run is not gated on a GPU.
 | `vector_ivfpq_async.sql` | IVF-PQ | `gpu_cases/pessimistic_transaction/vector/` | ASYNC build via InitSQL + ISCP CDC INSERT/DELETE/UPDATE into the tag=1 overflow |
 | `vector_cagra_load.sql` | CAGRA | `gpu_cases/pessimistic_transaction/vector/` | real 128-dim SIFT data: build over 10k rows, append another 10k via CDC, search both layers |
 | `vector_ivfpq_load.sql` | IVF-PQ | `gpu_cases/pessimistic_transaction/vector/` | real 128-dim SIFT data: build over 10k rows, append another 10k via CDC, search both layers |
+| `vector_cagra_snapshot.sql` | CAGRA | `gpu_cases/pessimistic_transaction/vector/` | **named-snapshot search (#27927)**: a `{snapshot=...}` top-k reads the HISTORICAL index (loaded through a read txn cloned at the snapshot TS, cached under a TS-suffixed key) instead of the current one — before the fix it searched the current index and the snapshotted base table filtered every hit away, returning EMPTY. Also asserts the current-index answer is unchanged afterwards, i.e. the historical entry never displaces it |
+| `vector_ivfpq_snapshot.sql` | IVF-PQ | `gpu_cases/pessimistic_transaction/vector/` | same named-snapshot search coverage as `vector_cagra_snapshot.sql` |
 | `vector_cagra_sharded.sql` | CAGRA | `gpu_cases/vector/` | `distribution_mode 'sharded'` (2-way + 3-way) via `gpu_multi_simulation` — shard split + top-k merge, exact-match search |
 | `vector_ivfpq_sharded.sql` | IVF-PQ | `gpu_cases/vector/` | `distribution_mode 'sharded'` (2-way) via `gpu_multi_simulation` — per-shard codebook + merge, exact-match search |
 | `vector_cagra_replicated.sql` | CAGRA | `gpu_cases/vector/` | `distribution_mode 'replicated'` via `gpu_multi_simulation` — full-copy replicas, load-balanced search |

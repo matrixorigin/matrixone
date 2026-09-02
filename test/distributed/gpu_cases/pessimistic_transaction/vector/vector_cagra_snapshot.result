@@ -1,0 +1,48 @@
+SET experimental_cagra_index = 1;
+drop database if exists cagra_snapshot_case;
+create database cagra_snapshot_case;
+use cagra_snapshot_case;
+create table t (id bigint primary key, v vecf32(8));
+insert into t values
+( 1, '[1,1,1,1,1,1,1,1]'),         ( 2, '[2,2,2,2,2,2,2,2]'),
+( 3, '[3,3,3,3,3,3,3,3]'),         ( 4, '[4,4,4,4,4,4,4,4]'),
+( 5, '[5,5,5,5,5,5,5,5]'),         ( 6, '[6,6,6,6,6,6,6,6]'),
+( 7, '[7,7,7,7,7,7,7,7]'),         ( 8, '[8,8,8,8,8,8,8,8]'),
+( 9, '[9,9,9,9,9,9,9,9]'),         (10, '[10,10,10,10,10,10,10,10]'),
+(11, '[11,11,11,11,11,11,11,11]'), (12, '[12,12,12,12,12,12,12,12]'),
+(13, '[13,13,13,13,13,13,13,13]'), (14, '[14,14,14,14,14,14,14,14]'),
+(15, '[15,15,15,15,15,15,15,15]'), (16, '[16,16,16,16,16,16,16,16]'),
+(17, '[17,17,17,17,17,17,17,17]'), (18, '[18,18,18,18,18,18,18,18]'),
+(19, '[19,19,19,19,19,19,19,19]'), (20, '[20,20,20,20,20,20,20,20]');
+create index ix using cagra on t (v)
+op_type 'vector_l2_ops' intermediate_graph_degree=16 graph_degree=8 itopk_size=32
+max_index_capacity 100;
+set @idx = (select index_table_name from mo_catalog.mo_indexes
+where name = 'ix' and algo = 'cagra' and algo_table_type = 'cagra_index'
+and table_id in (select rel_id from mo_catalog.mo_tables
+where reldatabase = database() and relname = 't')
+limit 1);
+create snapshot cagra_snapshot_case_sp for account;
+insert into t values (21, '[1.01,1.01,1.01,1.01,1.01,1.01,1.01,1.01]');
+set @wait_sql = concat('select count(*) > 0 as ready from `', database(), '`.`', @idx,
+'` where index_id = ''cdc_tail''');
+prepare wait_cdc from @wait_sql;
+execute wait_cdc;
+➤ ready[-7,1,0]  𝄀
+1
+deallocate prepare wait_cdc;
+select id from t order by l2_distance(v,'[1.01,1.01,1.01,1.01,1.01,1.01,1.01,1.01]') limit 1;
+➤ id[-5,64,0]  𝄀
+21
+select id from t {snapshot='cagra_snapshot_case_sp'} order by l2_distance(v,'[1.01,1.01,1.01,1.01,1.01,1.01,1.01,1.01]') limit 1 by rank with option 'mode=force';
+➤ id[-5,64,0]  𝄀
+1
+select id from t {snapshot='cagra_snapshot_case_sp'} order by l2_distance(v,'[1.01,1.01,1.01,1.01,1.01,1.01,1.01,1.01]') limit 1;
+➤ id[-5,64,0]  𝄀
+1
+select id from t order by l2_distance(v,'[1.01,1.01,1.01,1.01,1.01,1.01,1.01,1.01]') limit 1;
+➤ id[-5,64,0]  𝄀
+21
+drop snapshot cagra_snapshot_case_sp;
+drop database cagra_snapshot_case;
+SET experimental_cagra_index = 0;
