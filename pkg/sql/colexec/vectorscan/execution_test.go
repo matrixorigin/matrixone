@@ -338,6 +338,29 @@ func TestRequestFromScalarRejectsMalformedBoundExpressions(t *testing.T) {
 	require.ErrorContains(t, err, "first-round limit is not uint64")
 }
 
+func TestExplainDiagnosticsAreEnabledOnlyForScalarScans(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	spec := parameterizedScanTemplate(t)
+	cleanup := installStringParam(t, proc, "category")
+	defer cleanup()
+
+	scalar, err := PrepareScalar(spec, proc)
+	require.NoError(t, err)
+	scalarReq, ok, err := RequestFromScalar(scalar, searchIdentityForTest(), nil, false)
+	require.NoError(t, err)
+	require.True(t, ok)
+	require.True(t, scalarReq.CollectExplainDiagnostics)
+
+	execution, err := PrepareCorrelatedExecution(spec, proc)
+	require.NoError(t, err)
+	defer execution.Close()
+	require.NoError(t, execution.EvalBatch(batch.EmptyForConstFoldBatch, proc))
+	correlatedReq, ok, err := execution.RequestAt(0, searchIdentityForTest())
+	require.NoError(t, err)
+	require.True(t, ok)
+	require.False(t, correlatedReq.CollectExplainDiagnostics)
+}
+
 func searchIdentityForTest() searchplugin.ScanIdentity {
 	return searchplugin.ScanIdentity{PartitionCount: 1}
 }

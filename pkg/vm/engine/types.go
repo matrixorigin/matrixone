@@ -1210,6 +1210,13 @@ type Reader interface {
 	//SetScanType()
 }
 
+// ExplainDiagnosticReader is an optional Reader capability for execution
+// details that must reach EXPLAIN ANALYZE. TakeExplainDiagnostics transfers
+// ownership to the caller and must not return the same diagnostic twice.
+type ExplainDiagnosticReader interface {
+	TakeExplainDiagnostics() []*plan.Query
+}
+
 // ReaderFilterResult describes which rows survived a ReaderFilter. Sels must
 // contain sorted, unique positions in the callback's input batch, and its
 // length must equal the filtered batch row count. Sels is borrowed from the
