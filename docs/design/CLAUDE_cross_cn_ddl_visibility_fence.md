@@ -31,7 +31,7 @@ It is unsafe for any public or already-connected CN to commit DDL below v44 whil
 ### Measurable criteria
 
 - A create on CN0 followed immediately by a first read/load on CN1 succeeds without explicit `SYNCCOMMIT`.
-- Markerless startup preserves the current-main v42 baseline before the v44 cut.
+- Markerless startup preserves the current-main v43 baseline before the v44 cut.
 - No local downgrade below v44 is accepted after the monotonic v44 epoch is committed.
 - Membership change between final scan and epoch commit rejects the old target set atomically.
 - Restart, timeout, persistence failure, response loss, and leader failover remain fail-closed.
@@ -55,7 +55,7 @@ HAKeeper is the first owner of cluster epoch and membership linearization. CN lo
 
 A CN is in one of these logical states:
 
-1. **Baseline v42**: v44 not deployed; existing v38-v42 contracts remain active. Public ingress may be open.
+1. **Baseline v43**: v44 not deployed; existing v38-v43 contracts remain active. Public ingress may be open.
 2. **Withdrawing**: activation blocks new DDL, withdraws ingress, and drains active DDL.
 3. **Prepared v44**: local old-protocol producers are drained; runtime can receive v44 RPCs.
 4. **Provisionally fenced**: local frontier synchronization completed and `-44` is durable; ingress remains closed.
@@ -70,7 +70,7 @@ The cluster epoch commit is the linearization point. Prepared, Fenced, and the l
 ### First rollout
 
 1. All LogStore/HAKeeper replicas advertise support for the epoch schema.
-2. Every CN runs v44-capable code but markerless CNs keep protocol baseline v42.
+2. Every CN runs v44-capable code but markerless CNs keep protocol baseline v43.
 3. `mo_ctl SetProtocolVersion` refreshes raw authoritative CN membership.
 4. The requested set must exactly match all eligible CN tuples and each target must advertise the v44 receiver/barrier capability.
 5. Targets concurrently withdraw ingress, block and drain DDL, capture their reconstructed latest committed timestamp, then heartbeat Prepared together with that frontier. HAKeeper advances a cluster-lifetime maximum and never lowers it when an incarnation restarts, is replaced, or is removed.
@@ -80,11 +80,11 @@ The cluster epoch commit is the linearization point. Prepared, Fenced, and the l
 
 ### Steady-state DDL
 
-A public real-user DDL, and background DDL after public listeners are enabled, enters `DDLCommitGate`. After commit, the producer synchronously advances the monotonic HAKeeper cluster frontier before acknowledging success; publication failure fails the statement closed. The returned authoritative frontier must be at least the exact T submitted in that transition. Normally the returned `CommandBatch.ViewMetadataAdmission.Generation` must also equal the sender. One narrow exception closes the already-admitted takeover race: if generation 1 entered before generation 2 took ownership and then committed T, HAKeeper rejects every incarnation-scoped field from generation 1 but still monotonically absorbs T. Generation 1 synchronously revokes admission, force-fans T out to every barrier-ready DDL-capable CN, and only then returns the generation error. A legacy HAKeeper RSM that silently ignores the frontier still fails closed and does not fan out. Every direct CN heartbeat transfers its returned `CommandBatch` to the periodic heartbeat's command mutex/deduplication owner before returning, so startup, ingress, activation, withdrawal, and frontier publication cannot destructively consume and discard a legacy schedule command. TaskRunner, frontend, and full-service drains run asynchronously after the seal: a TaskRunner SQL DDL may itself discover the rejection, so synchronously waiting for that runner would self-deadlock. Revocation transfers a detached runner into shared drain ownership with a completion channel; normal `service.Close` waits for that completion before closing task/txn/RPC dependencies. Conversely, if normal Close takes runner ownership first, it releases the task mutex before `runner.Stop`, allowing the SQL task to seal revocation and exit. This removes both the commit-success-to-periodic-heartbeat crash window and the old-incarnation-after-takeover window without adding a revocation wait cycle. Protocol v44 normally triggers `SyncCommitV2`; the takeover exception may invoke the same method at the v42 runtime only for targets whose `DDLVisibilityBarrierReady` metadata proves the new receiver exists. Bootstrap background work before ingress remains exempt to avoid depending on an unavailable HAKeeper/QueryService.
+A public real-user DDL, and background DDL after public listeners are enabled, enters `DDLCommitGate`. After commit, the producer synchronously advances the monotonic HAKeeper cluster frontier before acknowledging success; publication failure fails the statement closed. The returned authoritative frontier must be at least the exact T submitted in that transition. Normally the returned `CommandBatch.ViewMetadataAdmission.Generation` must also equal the sender. One narrow exception closes the already-admitted takeover race: if generation 1 entered before generation 2 took ownership and then committed T, HAKeeper rejects every incarnation-scoped field from generation 1 but still monotonically absorbs T. Generation 1 synchronously revokes admission, force-fans T out to every barrier-ready DDL-capable CN, and only then returns the generation error. A legacy HAKeeper RSM that silently ignores the frontier still fails closed and does not fan out. Every direct CN heartbeat transfers its returned `CommandBatch` to the periodic heartbeat's command mutex/deduplication owner before returning, so startup, ingress, activation, withdrawal, and frontier publication cannot destructively consume and discard a legacy schedule command. TaskRunner, frontend, and full-service drains run asynchronously after the seal: a TaskRunner SQL DDL may itself discover the rejection, so synchronously waiting for that runner would self-deadlock. Revocation transfers a detached runner into shared drain ownership with a completion channel; normal `service.Close` waits for that completion before closing task/txn/RPC dependencies. Conversely, if normal Close takes runner ownership first, it releases the task mutex before `runner.Stop`, allowing the SQL task to seal revocation and exit. This removes both the commit-success-to-periodic-heartbeat crash window and the old-incarnation-after-takeover window without adding a revocation wait cycle. Protocol v44 normally triggers `SyncCommitV2`; the takeover exception may invoke the same method at the v43 runtime only for targets whose `DDLVisibilityBarrierReady` metadata proves the new receiver exists. Bootstrap background work before ingress remains exempt to avoid depending on an unavailable HAKeeper/QueryService.
 
 ### Scale-out and replacement
 
-A markerless CN performs an atomic ingress heartbeat handshake. If it linearizes before the cluster commit, it becomes authoritative membership and invalidates any old target proof. If it linearizes after commit, HAKeeper forces ingress false and returns epoch 44. It never becomes a public v42 producer after the cut.
+A markerless CN performs an atomic ingress heartbeat handshake. If it linearizes before the cluster commit, it becomes authoritative membership and invalidates any old target proof. If it linearizes after commit, HAKeeper forces ingress false and returns epoch 44. It never becomes a public v43 producer after the cut.
 
 ## 6. Failure, retry, and lifecycle behavior
 
@@ -105,7 +105,7 @@ Retries are idempotent for the same generation and target set. Replacement gener
 
 ### Mixed-version baseline
 
-Current main already deploys v42 semantics. A fresh v44-capable process without a DDL marker therefore remains at v42, not v37. The v44 DDL state is separate from unrelated v38-v42 capabilities.
+Current main already deploys v43 semantics. A fresh v44-capable process without a DDL marker therefore remains at v43, not v37. The v44 DDL state is separate from unrelated v38-v43 capabilities.
 
 ### Rollout order
 
@@ -116,7 +116,7 @@ Current main already deploys v42 semantics. A fresh v44-capable process without 
 
 ### Downgrade policy
 
-Before epoch 44, ordinary protocol changes at or below v42 remain possible. After epoch 44, local downgrade below v44 is rejected. A safe rollback would require a separately designed atomic cluster rollback that withdraws and drains every DDL producer before lowering the epoch; this revision deliberately does not implement epoch rollback.
+Before epoch 44, ordinary protocol changes at or below v43 remain possible. After epoch 44, local downgrade below v44 is rejected. A safe rollback would require a separately designed atomic cluster rollback that withdraws and drains every DDL producer before lowering the epoch; this revision deliberately does not implement epoch rollback.
 
 Binary rollback after epoch 44 is unsupported until such a rollback protocol exists. Operators must restore forward to a v44-capable binary.
 
@@ -169,7 +169,7 @@ Could provide a stronger generic read contract, but materially changes every tra
 
 | Contract | Deterministic evidence |
 |---|---|
-| v42 baseline preserved | markerless default-v44 startup UT |
+| v43 baseline preserved | markerless default-v44 startup UT |
 | post-cut downgrade rejected | completed-v44 downgrade UT |
 | exact authoritative targets | ctl raw-membership omission/capability UT |
 | join/commit atomicity | CNState RSM ordering UT: final scan, join, stale commit |
@@ -182,7 +182,7 @@ Could provide a stronger generic read contract, but materially changes every tra
 ## 14. Decision log and open items
 
 - Chosen linearization point: HAKeeper replicated heartbeat transition with exact tuple proof.
-- Chosen baseline: preserve current-main v42 before v44 activation.
+- Chosen baseline: preserve current-main v43 before v44 activation.
 - Chosen downgrade behavior: reject after monotonic epoch commit.
 - Chosen direct-ingress protection: local DDL gate in addition to proxy admission.
 - Non-blocking follow-up: add dedicated activation/fan-out metrics and publish N-CN staging latency evidence.

@@ -1059,7 +1059,7 @@ func TestCommitSyncsDDLCommitToBarrierReadyCNs(t *testing.T) {
 		previousGate, hadPreviousGate := rt.GetGlobalVariables(DDLCommitGateRuntimeKey)
 		rt.SetGlobalVariables(DDLCommitGateRuntimeKey, gate)
 		moruntime.ServiceRuntime(queryServiceID).SetGlobalVariables(
-			moruntime.MOProtocolVersion, defines.MORPCVersion42)
+			moruntime.MOProtocolVersion, defines.MORPCVersion43)
 		t.Cleanup(func() {
 			if hadPreviousGate {
 				rt.SetGlobalVariables(DDLCommitGateRuntimeKey, previousGate)

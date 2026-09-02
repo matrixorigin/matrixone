@@ -66,7 +66,7 @@ var methodVersions = map[pb.CmdMethod]int64{
 	// SyncCommitV2 is sent below the activation epoch only to CNs whose
 	// DDLVisibilityBarrierReady metadata proves this receiver exists. This lets
 	// an already-admitted DDL finish visibility after its generation is replaced.
-	pb.CmdMethod_SyncCommitV2: defines.MORPCVersion42,
+	pb.CmdMethod_SyncCommitV2: defines.MORPCVersion43,
 }
 
 type queryClient struct {
