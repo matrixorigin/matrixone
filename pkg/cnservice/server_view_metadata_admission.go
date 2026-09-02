@@ -16,6 +16,7 @@ package cnservice
 
 import (
 	"context"
+	"errors"
 	"time"
 
 	"go.uber.org/zap"
@@ -188,8 +189,30 @@ func (s *service) fenceViewMetadataCatalog(
 }
 
 func viewMetadataCatalogUpgradePending(err error) bool {
-	return moerr.IsMoErrCode(err, moerr.ErrNoSuchTable) ||
-		moerr.IsMoErrCode(err, moerr.ErrBadDB)
+	if err == nil {
+		return false
+	}
+	if joined, ok := err.(interface{ Unwrap() []error }); ok {
+		pending := false
+		for _, child := range joined.Unwrap() {
+			if child == nil {
+				continue
+			}
+			if !viewMetadataCatalogUpgradePending(child) {
+				return false
+			}
+			pending = true
+		}
+		return pending
+	}
+	if wrapped, ok := err.(interface{ Unwrap() error }); ok {
+		if child := wrapped.Unwrap(); child != nil {
+			return viewMetadataCatalogUpgradePending(child)
+		}
+	}
+	var moErr *moerr.Error
+	return errors.As(err, &moErr) &&
+		(moErr.ErrorCode() == moerr.ErrNoSuchTable || moErr.ErrorCode() == moerr.ErrBadDB)
 }
 
 func (s *service) waitForViewMetadataAdmission() error {

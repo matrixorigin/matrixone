@@ -96,6 +96,18 @@ func viewMetadataLifecycleGateTestResult() executor.Result {
 	return result.GetResult()
 }
 
+type admissionRollbackJoiningExecutor struct {
+	executor.SQLExecutor
+}
+
+func (e *admissionRollbackJoiningExecutor) ExecTxn(
+	ctx context.Context,
+	execFunc func(executor.TxnExecutor) error,
+	opts executor.Options,
+) error {
+	return errors.Join(e.SQLExecutor.ExecTxn(ctx, execFunc, opts), nil)
+}
+
 func TestCNViewMetadataAdmissionGenerationLifecycle(t *testing.T) {
 	serviceID := "cn-admission-generation-lifecycle"
 	runtime.SetupServiceBasedRuntime(serviceID, runtime.DefaultRuntime())
@@ -160,14 +172,23 @@ func TestCNViewMetadataAdmissionFencesCatalogBeforeReady(t *testing.T) {
 }
 
 func TestViewMetadataCatalogUpgradePending(t *testing.T) {
+	missingTable := moerr.NewNoSuchTableNoCtx("mo_catalog", "t")
+	missingDatabase := moerr.NewBadDBNoCtx("mo_catalog")
 	tests := []struct {
 		name string
 		err  error
 		want bool
 	}{
-		{name: "missing table", err: moerr.NewNoSuchTableNoCtx("mo_catalog", "t"), want: true},
-		{name: "missing database", err: moerr.NewBadDBNoCtx("mo_catalog"), want: true},
+		{name: "missing table", err: missingTable, want: true},
+		{name: "missing database", err: missingDatabase, want: true},
+		{name: "rollback joined missing table", err: errors.Join(missingTable, nil), want: true},
+		{name: "wrapped rollback join", err: fmt.Errorf("transaction failed: %w", errors.Join(missingDatabase, nil)), want: true},
 		{name: "other failure", err: errors.New("executor failed"), want: false},
+		{
+			name: "readiness plus rollback failure",
+			err:  errors.Join(missingTable, errors.New("rollback failed")),
+			want: false,
+		},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -245,17 +266,19 @@ func TestCNViewMetadataAdmissionWaitsForCatalogUpgradeCommit(t *testing.T) {
 			viewMetadataAdmissionUpdated:    make(chan struct{}, 1),
 		}
 		s.cfg.HAKeeper.DiscoveryTimeout.Duration = 5 * time.Second
-		s.sqlExecutor = executor.NewMemExecutor(func(sql string) (executor.Result, error) {
-			if !catalogCommitted.Load() {
-				attemptOnce.Do(func() { close(attempted[i]) })
-				<-releasePendingAttempts
+		s.sqlExecutor = &admissionRollbackJoiningExecutor{
+			SQLExecutor: executor.NewMemExecutor(func(sql string) (executor.Result, error) {
+				if !catalogCommitted.Load() {
+					attemptOnce.Do(func() { close(attempted[i]) })
+					<-releasePendingAttempts
+					return executor.Result{}, nil
+				}
+				if sql == catalog.ViewMetadataLifecycleGateSQL {
+					return viewMetadataLifecycleGateTestResult(), nil
+				}
 				return executor.Result{}, nil
-			}
-			if sql == catalog.ViewMetadataLifecycleGateSQL {
-				return viewMetadataLifecycleGateTestResult(), nil
-			}
-			return executor.Result{}, nil
-		})
+			}),
+		}
 		s.viewMetadataCatalogFenceReady.Store(true)
 		s.viewMetadataAdmission.Store(&logservicepb.ViewMetadataAdmission{
 			Enabled:              true,
