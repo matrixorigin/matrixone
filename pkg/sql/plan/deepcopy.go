@@ -1052,6 +1052,7 @@ func DeepCopyRuntimeFilterSpec(rf *plan.RuntimeFilterSpec) *plan.RuntimeFilterSp
 		NotOnPk:                    rf.NotOnPk,
 		UseMembershipFilter:        rf.UseMembershipFilter,
 		RequiredVectorSearchDomain: rf.RequiredVectorSearchDomain,
+		ScalarPredicate:            rf.ScalarPredicate,
 		KeyEncoding:                rf.KeyEncoding,
 		ProbeType:                  DeepCopyType(rf.ProbeType),
 		KeyComponentProbeTypes: slices.Clone(

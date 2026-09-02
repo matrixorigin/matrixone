@@ -1353,9 +1353,9 @@ func (c *Compile) shouldPrePipelineLockTable(target *plan.LockTarget) bool {
 func (c *Compile) compileQuery(qry *plan.Query) ([]*Scope, error) {
 	var err error
 	c.foundRowsOwnerNode = c.selectFoundRowsOwnerNode(qry)
-	c.compiledRightSingleNodes = nil
+	c.compiledLocalRuntimeFilterNodes = nil
 	defer func() {
-		c.compiledRightSingleNodes = nil
+		c.compiledLocalRuntimeFilterNodes = nil
 	}()
 
 	start := time.Now()
@@ -1411,7 +1411,7 @@ func (c *Compile) compileQuery(qry *plan.Query) ([]*Scope, error) {
 		}
 		steps = append(steps, scopes...)
 	}
-	if err = validateRightSingleRuntimeFilterTopology(qry, c.compiledRightSingleNodes, steps); err != nil {
+	if err = validateLocalRuntimeFilterTopology(qry, c.compiledLocalRuntimeFilterNodes, steps); err != nil {
 		return nil, err
 	}
 
@@ -1742,11 +1742,11 @@ func (c *Compile) compilePlanScopeWithUnionAllDemand(
 		return c.compileLimit(node, []*Scope{rs}), nil
 	}
 
-	if node.NodeType == plan.Node_JOIN && node.JoinType == plan.Node_SINGLE && node.IsRightJoin {
+	if nodeHasLocalRuntimeFilter(node) {
 		// This is deliberately after the literal LIMIT 0 shortcut. The flat
 		// logical plan retains pruned descendants, while topology validation must
-		// cover only right-SINGLE nodes whose physical subtree was constructed.
-		c.compiledRightSingleNodes = append(c.compiledRightSingleNodes, curNodeIdx)
+		// cover only local-filter nodes whose physical subtree was constructed.
+		c.compiledLocalRuntimeFilterNodes = append(c.compiledLocalRuntimeFilterNodes, curNodeIdx)
 	}
 
 	switch node.NodeType {
@@ -5829,7 +5829,8 @@ func (c *Compile) compileBuildSideForBroadcastJoin(node *plan.Node, rs, buildSco
 	}
 
 	if len(rs) == 1 { // broadcast join on single cn
-		buildScopes[0].setRootOperator(constructJoinBuildOperator(c, rs[0].RootOp, int32(rs[0].NodeInfo.Mcpu)))
+		buildScopes[0].setRootOperator(constructJoinBuildOperator(
+			c, rs[0].RootOp, int32(rs[0].NodeInfo.Mcpu), node.RuntimeFilterBuildList))
 		rs[0].PreScopes = append(rs[0].PreScopes, buildScopes[0])
 		return rs
 	}
@@ -5862,7 +5863,8 @@ func (c *Compile) compileBuildSideForBroadcastJoin(node *plan.Node, rs, buildSco
 			c.hasMergeOp = true
 			mergeOp.SetAnalyzeControl(c.anal.curNodeIdx, false)
 			bs.setRootOperator(mergeOp)
-			bs.setRootOperator(constructJoinBuildOperator(c, tmp[0].RootOp, int32(len(tmp))))
+			bs.setRootOperator(constructJoinBuildOperator(
+				c, tmp[0].RootOp, int32(len(tmp)), node.RuntimeFilterBuildList))
 			tmp[0].PreScopes = append(tmp[0].PreScopes, bs)
 			buildOpScopes = append(buildOpScopes, bs)
 		}
@@ -5885,7 +5887,8 @@ func (c *Compile) compileBuildSideForBroadcastJoin(node *plan.Node, rs, buildSco
 		c.hasMergeOp = true
 		mergeOp.SetAnalyzeControl(c.anal.curNodeIdx, false)
 		bs.setRootOperator(mergeOp)
-		bs.setRootOperator(constructJoinBuildOperator(c, rs[i].RootOp, int32(rs[i].NodeInfo.Mcpu)))
+		bs.setRootOperator(constructJoinBuildOperator(
+			c, rs[i].RootOp, int32(rs[i].NodeInfo.Mcpu), node.RuntimeFilterBuildList))
 		rs[i].PreScopes = append(rs[i].PreScopes, bs)
 		buildOpScopes = append(buildOpScopes, bs)
 	}
