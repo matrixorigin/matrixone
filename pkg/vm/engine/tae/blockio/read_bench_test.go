@@ -231,6 +231,7 @@ func BenchmarkBlockDataReadPersistedVectorRangeTopN(b *testing.B) {
 	for _, benchmark := range []struct {
 		name                   string
 		storageTopK            bool
+		membershipEvery        int
 		materializedEmbeddings int
 	}{
 		{
@@ -241,18 +242,28 @@ func BenchmarkBlockDataReadPersistedVectorRangeTopN(b *testing.B) {
 			name:        "storage_bounded_topk",
 			storageTopK: true,
 		},
+		{
+			name:                   "local_exact_membership",
+			membershipEvery:        8,
+			materializedEmbeddings: vectorRangeTopNBenchmarkRows / 8,
+		},
+		{
+			name:            "storage_exact_membership_topk",
+			storageTopK:     true,
+			membershipEvery: 8,
+		},
 	} {
 		b.Run(benchmark.name, func(b *testing.B) {
 			fixture := newVectorRangeTopNBenchmarkFixture(b)
 			b.Cleanup(fixture.close)
-			if err := fixture.read(benchmark.storageTopK); err != nil {
+			if err := fixture.read(benchmark.storageTopK, benchmark.membershipEvery); err != nil {
 				b.Fatal(err)
 			}
 
 			b.ReportAllocs()
 			b.ResetTimer()
 			for i := 0; i < b.N; i++ {
-				if err := fixture.read(benchmark.storageTopK); err != nil {
+				if err := fixture.read(benchmark.storageTopK, benchmark.membershipEvery); err != nil {
 					b.Fatal(err)
 				}
 			}
@@ -346,7 +357,7 @@ func (f *vectorRangeTopNBenchmarkFixture) newTop() *objectio.IndexReaderTopOp {
 	}
 }
 
-func (f *vectorRangeTopNBenchmarkFixture) read(storageTopK bool) (retErr error) {
+func (f *vectorRangeTopNBenchmarkFixture) read(storageTopK bool, membershipEvery int) (retErr error) {
 	mp := mpool.MustNewZero()
 	defer func() {
 		if bytes := mp.CurrNB(); bytes != 0 && retErr == nil {
@@ -363,9 +374,16 @@ func (f *vectorRangeTopNBenchmarkFixture) read(storageTopK bool) (retErr error) 
 	defer cacheVectors.Free(mp)
 
 	top := f.newTop()
+	var selectRows []int64
+	if membershipEvery > 0 {
+		selectRows = make([]int64, 0, vectorRangeTopNBenchmarkRows/membershipEvery)
+		for row := 0; row < vectorRangeTopNBenchmarkRows; row += membershipEvery {
+			selectRows = append(selectRows, int64(row))
+		}
+	}
 	if storageTopK {
 		if err := BlockDataReadInner(
-			f.ctx, &f.info, f.ds, f.columns, f.columnTypes, 1, types.TS{}, nil,
+			f.ctx, &f.info, f.ds, f.columns, f.columnTypes, 1, types.TS{}, selectRows,
 			top, fileservice.Policy(0), output, cacheVectors, mp, f.fs,
 		); err != nil {
 			return err
@@ -379,19 +397,24 @@ func (f *vectorRangeTopNBenchmarkFixture) read(storageTopK bool) (retErr error) 
 		return validateVectorRangeTopNBenchmarkResult(
 			vector.MustFixedColWithTypeCheck[int64](output.Vecs[0]),
 			vector.MustFixedColWithTypeCheck[float64](output.Vecs[len(f.columns)]),
+			membershipEvery,
 		)
 	}
 
 	if err := BlockDataReadInner(
-		f.ctx, &f.info, f.ds, f.columns, f.columnTypes, 1, types.TS{}, nil,
+		f.ctx, &f.info, f.ds, f.columns, f.columnTypes, 1, types.TS{}, selectRows,
 		nil, fileservice.Policy(0), output, cacheVectors, mp, f.fs,
 	); err != nil {
 		return err
 	}
-	if output.Vecs[2].Length() != vectorRangeTopNBenchmarkRows {
+	wantEmbeddings := vectorRangeTopNBenchmarkRows
+	if membershipEvery > 0 {
+		wantEmbeddings = len(selectRows)
+	}
+	if output.Vecs[2].Length() != wantEmbeddings {
 		return moerr.NewInternalErrorNoCtxf(
 			"local vector benchmark materialized %d embeddings, expected %d",
-			output.Vecs[2].Length(), vectorRangeTopNBenchmarkRows,
+			output.Vecs[2].Length(), wantEmbeddings,
 		)
 	}
 	rows, distances, err := objectio.TopNVector(f.ctx, nil, output.Vecs[2], top)
@@ -409,10 +432,10 @@ func (f *vectorRangeTopNBenchmarkFixture) read(storageTopK bool) (retErr error) 
 	for i, row := range rows {
 		selectedIDs[i] = ids[row]
 	}
-	return validateVectorRangeTopNBenchmarkResult(selectedIDs, distances)
+	return validateVectorRangeTopNBenchmarkResult(selectedIDs, distances, membershipEvery)
 }
 
-func validateVectorRangeTopNBenchmarkResult(ids []int64, distances []float64) error {
+func validateVectorRangeTopNBenchmarkResult(ids []int64, distances []float64, membershipEvery int) error {
 	if len(ids) != vectorRangeTopNBenchmarkLimit || len(distances) != vectorRangeTopNBenchmarkLimit {
 		return moerr.NewInternalErrorNoCtxf(
 			"vector benchmark result has %d ids and %d distances", len(ids), len(distances),
@@ -420,6 +443,9 @@ func validateVectorRangeTopNBenchmarkResult(ids []int64, distances []float64) er
 	}
 	for i := range ids {
 		wantID := int64(i + 1)
+		if membershipEvery > 0 {
+			wantID = int64(i*membershipEvery + 1)
+		}
 		wantDistance := float64(wantID * wantID)
 		if ids[i] != wantID || distances[i] != wantDistance {
 			return moerr.NewInternalErrorNoCtxf(

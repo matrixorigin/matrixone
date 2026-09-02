@@ -593,6 +593,21 @@ func TestCompileVectorIndexScanUsesAllQueryCNs(t *testing.T) {
 	require.Equal(t, "cn-local:6001", scopes[0].NodeInfo.Addr)
 	require.Equal(t, int32(1), scopes[0].NodeInfo.CNCNT)
 	require.Equal(t, 3, scopes[0].NodeInfo.Mcpu)
+
+	node.Stats.Dop = 0
+	scopes, err = c.compileVectorIndexScan(node)
+	require.NoError(t, err)
+	require.Len(t, scopes, 1)
+	require.Equal(t, 1, scopes[0].NodeInfo.Mcpu,
+		"missing DOP must fail closed instead of expanding to every local CPU")
+
+	node.Stats.Dop = 3
+	node.VectorIndexScan.BucketExpandStep = 1
+	scopes, err = c.compileVectorIndexScan(node)
+	require.NoError(t, err)
+	require.Len(t, scopes, 1)
+	require.Equal(t, 1, scopes[0].NodeInfo.Mcpu,
+		"one reader must own the adaptive search cursor")
 }
 
 func TestNormalizeVectorIndexScanSnapshot(t *testing.T) {

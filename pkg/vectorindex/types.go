@@ -319,6 +319,13 @@ type RuntimeConfig struct {
 	SearchRoundLimit uint
 	BucketExpandStep uint
 	SearchCursor     *IvfSearchCursor
+	// IvfPrepareRouteOnly ranks centroids into SearchCursor without scanning
+	// entries. It lets one CN search session prepare immutable routing once and
+	// share it across disjoint local readers.
+	IvfPrepareRouteOnly bool
+	// IvfRoutePrepared distinguishes a valid empty prepared route from a route
+	// that has not been ranked yet.
+	IvfRoutePrepared bool
 }
 
 type IvfIncludeResult struct {

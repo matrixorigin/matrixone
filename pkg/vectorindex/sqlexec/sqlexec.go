@@ -19,6 +19,7 @@ import (
 	"errors"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/common/docfilter"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/defines"
@@ -79,6 +80,11 @@ type SqlProcess struct {
 	RuntimeFilterSpecs []*plan.RuntimeFilterSpec
 	// Optional doc_id membership-filter bytes (tagged docfilter payload) for the ivf entries scan.
 	IvfMembershipFilter []byte
+	// Optional already-decoded IVF membership filter. VECTOR_INDEX_SCAN uses a
+	// shared exact filter so local DOP readers do not reconstruct the domain.
+	// The SqlProcess borrows this reference; each relation scan owns one Share
+	// while BuildReaders derives the shares owned by storage readers.
+	IvfMembershipFilterObject docfilter.MembershipFilter
 	// Optional doc_id membership-filter bytes (tagged docfilter payload) for the fulltext index scan.
 	FulltextMembershipFilter []byte
 

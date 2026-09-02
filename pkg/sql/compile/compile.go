@@ -4396,10 +4396,13 @@ func (c *Compile) compileVectorIndexScan(node *plan.Node) ([]*Scope, error) {
 	return ss, nil
 }
 
-func vectorIndexScanParallelism(node *plan.Node, nodes engine.Nodes, localCPU int) int {
-	parallelism := localCPU
+func vectorIndexScanParallelism(node *plan.Node, nodes engine.Nodes, _ int) int {
+	parallelism := 1
 	if node != nil && node.Stats != nil && node.Stats.Dop > 0 {
 		parallelism = int(node.Stats.Dop)
+	}
+	if node != nil && node.GetVectorIndexScan().GetBucketExpandStep() > 0 {
+		parallelism = 1
 	}
 	if parallelism <= 0 {
 		parallelism = 1

@@ -1686,7 +1686,7 @@ func (s *Scope) buildReaders(c *Compile) (readers []engine.Reader, err error) {
 	}
 	if s.DataSource.node != nil && s.DataSource.node.NodeType == plan.Node_VECTOR_INDEX_SCAN {
 		if emptyScan {
-			return []engine.Reader{new(readutil.EmptyReader)}, nil
+			return emptyScanReaders(s.NodeInfo.Mcpu), nil
 		}
 		return s.buildVectorIndexReaders(runtimeFilterList)
 	}
@@ -1926,11 +1926,7 @@ func (s *Scope) buildVectorIndexReaders(runtimeFilters []receivedRuntimeFilter) 
 		return nil, err
 	}
 	if !hasQuery {
-		readers := make([]engine.Reader, parallelism)
-		for i := range readers {
-			readers[i] = new(readutil.EmptyReader)
-		}
-		return readers, nil
+		return emptyScanReaders(parallelism), nil
 	}
 	readers, err := searcher.Search().NewReaders(s.Proc, spec, req, parallelism)
 	if err != nil {
@@ -1945,6 +1941,14 @@ func (s *Scope) buildVectorIndexReaders(runtimeFilters []receivedRuntimeFilter) 
 			len(readers), parallelism)
 	}
 	return readers, nil
+}
+
+func emptyScanReaders(parallelism int) []engine.Reader {
+	readers := make([]engine.Reader, max(1, parallelism))
+	for i := range readers {
+		readers[i] = new(readutil.EmptyReader)
+	}
+	return readers
 }
 
 func vectorScanMembershipFilter(runtimeFilters []receivedRuntimeFilter) ([]byte, bool) {

@@ -65,6 +65,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/readutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/message"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
@@ -2472,6 +2473,38 @@ func TestBuildScanParallelRunSetsOrderByOnParallelReaders(t *testing.T) {
 	for _, reader := range []*mockReaderForParallelOrderBy{reader1, reader2} {
 		require.Equal(t, 1, reader.orderByCalls)
 		require.Equal(t, orderBy, reader.orderBy)
+	}
+}
+
+func TestBuildScanParallelRunKeepsReaderCountForEmptyVectorDomain(t *testing.T) {
+	c := NewMockCompile(t)
+	board := message.NewMessageBoard()
+	defer board.Reset()
+	c.proc.SetMessageBoard(board)
+	spec := &plan.RuntimeFilterSpec{
+		Tag:                        1090,
+		UseMembershipFilter:        true,
+		RequiredVectorSearchDomain: true,
+	}
+	scope := generateScopeWithRootOperator(c.proc, []vm.OpType{vm.TableScan})
+	scope.NodeInfo = engine.Node{Mcpu: 3}
+	scope.DataSource = &Source{
+		node: &plan.Node{
+			NodeType:        plan.Node_VECTOR_INDEX_SCAN,
+			VectorIndexScan: &plan.VectorIndexScan{},
+		},
+		RuntimeFilterSpecs: []*plan.RuntimeFilterSpec{spec},
+	}
+	message.SendMessage(message.RuntimeFilterMessage{
+		Tag: spec.Tag,
+		Typ: message.RuntimeFilter_DROP,
+	}, board)
+
+	mergeScope, err := buildScanParallelRun(scope, c)
+	require.NoError(t, err)
+	require.Len(t, mergeScope.PreScopes, 3)
+	for _, child := range mergeScope.PreScopes {
+		require.IsType(t, new(readutil.EmptyReader), child.DataSource.R)
 	}
 }
 

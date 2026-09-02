@@ -1,6 +1,6 @@
 # Distributed IVFFlat search domains
 
-- Status: implemented
+- Status: in review
 - Tracking issue: matrixorigin/matrixone#27854
 - Implementation PR: same branch/PR as this document
 - Design decision: preserve the former TVF's domain-before-search phase while
@@ -30,14 +30,15 @@ SQL but also removed that phase boundary and parallel execution width.
 4. Entry objects have one physical owner per search.  Each CN owns a disjoint
    object partition and its local readers own disjoint portions of that
    partition.
-5. Membership and safe distance ranges are applied before local Top-K heap
-   admission.  Each reader emits at most the candidate budget; the coordinator
-   owns the global merge and final SQL recheck.
+5. Exact integer membership and safe distance ranges are applied by storage
+   before local Top-K heap admission.  Each reader emits at most the candidate
+   budget; the coordinator owns the global merge and final SQL recheck.
 6. Cancellation and every producer, broadcast, reader, and partial-open error
    release domain payloads, cache leases, engine readers, heaps, and batches
    effectively once.
 7. Domain memory remains under the existing broadcast HashBuild/query-memory
-   admission.  No second transport copy or independent queue is introduced.
+   admission.  Each CN reconstructs one exact filter and shares it across DOP;
+   the filter and centroid ranking are not multiplied by reader count.
 
 ## Execution protocol
 
@@ -53,17 +54,33 @@ clusters, async indexes without a global visibility watermark, correlated
 APPLY, adaptive multi-round/include searches, explicitly disabled rollout, and
 unsupported PK domains keep the established coordinator-only path.
 
-Within a CN, IVFFlat expands the CN partition into scheduled, disjoint local
-reader shards.  They share the process-local centroid cache generation while
-owning separate scanner, heap, result, and child-process state.
+Within a CN, one search session decodes the exact domain and ranks centroids
+once, then expands the CN partition into scheduled, disjoint local reader
+shards.  Every entries reader receives a share of the same exact filter;
+storage intersects it with visible rows before distance-range and Top-K work.
+Readers own separate scanners, heaps, results, and child contexts.  Adaptive
+multi-round and correlated searches retain one reader because their cursor or
+query vector is row-local.
+
+## Alternatives and decision
+
+- Post-Top-K membership is rejected because nearer nonmembers can occupy the
+  bounded heap and under-fill the exact result.
+- Disabling storage Top-K is rejected because it materializes and scores the
+  selected 768-dimensional entry vectors in CN, recreating #27854's critical
+  performance failure.
+- The selected path uses the existing exact integer `docfilter` as a storage
+  PK filter before vector Top-K, with one admitted filter and one centroid route
+  per CN search generation.
 
 ## Compatibility and rollback
 
-The required-domain plan field is append-only and gated by the next available
-cumulative MORPC version.  A cluster below that version never plans distributed
-required domains.  No catalog or hidden-table format changes.  The existing
-`forceOneCN=1` optimizer hint and intrinsic ForceOneCN fallbacks restore
-coordinator-only execution.
+The required-domain plan field is append-only and gated by the next cumulative
+MORPC version in authoritative `main`.  Open branches do not reserve versions:
+before every push this branch merges newest main and renumbers only if main has
+actually consumed its gate.  A cluster below the gate executes required domains
+coordinator-local.  No catalog or hidden-table format changes.  The existing
+`forceOneCN=1` hint and intrinsic ForceOneCN fallbacks restore local execution.
 
 ## Validation and acceptance
 
@@ -73,8 +90,22 @@ ordinals, child-context cancellation, exact filter-before-Top-K ordering, and
 the scalar/correlated reader-count contracts.  The full planner, compiler,
 APPLY, and IVFFlat package suites remain the local merge gate.
 
-Distributed BVT must return the same PRE results at one-CN and multi-CN width.
-Performance evidence must show that additional DOP reduces the entries-scan
-critical path without increasing recall loss; the filter-first path keeps
-memory bounded to one shared serialized domain plus per-reader lookup state,
-one batch, and the candidate budget.
+Distributed BVT must return the same PRE results at one-CN and multi-CN width,
+including an exact empty domain.  A persisted 8,192-by-768 benchmark must show
+that exact membership is applied before storage Top-K without materializing
+nonmember embeddings.  Wiki-10M evidence must record one-CN and three-CN QPS,
+latency, CPU, peak memory, scanned bytes, and recall.  Three-CN throughput must
+be at least 95% of the former TVF, no lower than current main, and at least 25%
+above the one-CN candidate; recall may not drop by more than 0.001 and CPU,
+memory, and scanned embedding bytes must remain within 110% of the former TVF.
+
+Local persisted-object evidence on an AMD Ryzen 9 7950X3D, Go 1.26.4,
+8,192 rows by 768 dimensions, ten iterations and three repetitions:
+
+- local exact-membership Top-K: 0.333-0.338 ms/op and 3 MiB materialized
+  embeddings/op;
+- storage exact-membership Top-K: 0.199-0.203 ms/op and zero materialized
+  embeddings/op.
+
+The storage path is 1.64-1.70x faster at this boundary. Wiki-10M deployment
+evidence remains a merge gate rather than being inferred from this benchmark.

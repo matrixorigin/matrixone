@@ -325,6 +325,9 @@ func (idx *IvfflatSearchIndex[T]) getBloomFilter(sqlproc *sqlexec.SqlProcess) (e
 	if sqlproc == nil || sqlproc.Proc == nil {
 		return
 	}
+	if sqlproc.IvfMembershipFilterObject != nil && sqlproc.IvfMembershipFilterObject.Valid() {
+		return nil
+	}
 
 	if len(sqlproc.IvfRuntimeFilterData) == 0 {
 		if len(sqlproc.RuntimeFilterSpecs) == 0 {
@@ -730,11 +733,13 @@ func (idx *IvfflatSearchIndex[T]) Search(
 	if sqlproc != nil {
 		prevRuntimeFilterData := sqlproc.IvfRuntimeFilterData
 		prevMembershipFilter := sqlproc.IvfMembershipFilter
+		prevMembershipFilterObject := sqlproc.IvfMembershipFilterObject
 		prevExactPkFilter := sqlproc.ExactPkFilter
 		sqlproc.IvfRuntimeFilterData = rt.RuntimeFilterData
 		defer func() {
 			sqlproc.IvfRuntimeFilterData = prevRuntimeFilterData
 			sqlproc.IvfMembershipFilter = prevMembershipFilter
+			sqlproc.IvfMembershipFilterObject = prevMembershipFilterObject
 			sqlproc.ExactPkFilter = prevExactPkFilter
 		}()
 	}
@@ -751,11 +756,14 @@ func (idx *IvfflatSearchIndex[T]) Search(
 		if cursor == nil {
 			cursor = &vectorindex.IvfSearchCursor{}
 		}
-		if len(cursor.RankedCentroidIDs) == 0 {
+		if len(cursor.RankedCentroidIDs) == 0 && !rt.IvfRoutePrepared {
 			cursor.RankedCentroidIDs, err = idx.rankCentroids(sqlproc, query, idxcfg)
 			if err != nil {
 				return nil, nil, err
 			}
+		}
+		if rt.IvfPrepareRouteOnly {
+			return []any{}, []float64{}, nil
 		}
 
 		activeCentroidIDs := buildActiveCentroidIDs(cursor, rt.Probe)

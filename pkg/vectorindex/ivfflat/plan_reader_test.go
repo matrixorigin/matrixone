@@ -20,6 +20,7 @@ import (
 	"errors"
 	"math"
 	"sync"
+	"sync/atomic"
 	"testing"
 
 	"github.com/golang/mock/gomock"
@@ -1321,6 +1322,35 @@ func TestRelationScannerPropagatesStorageFailure(t *testing.T) {
 	require.Empty(t, res.Batches)
 }
 
+func TestRelationScannerReleasesMembershipShareBeforeReaderConstruction(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	proc := testutil.NewProc(t)
+	t.Cleanup(proc.Free)
+	eng := mock_frontend.NewMockEngine(ctrl)
+	proc.Base.SessionInfo.StorageEngine = eng
+	eng.EXPECT().Database(gomock.Any(), "db", nil).
+		Return(nil, errors.New("database unavailable"))
+	keys := vector.NewVec(types.T_int64.ToType())
+	defer keys.Free(proc.Mp())
+	require.NoError(t, vector.AppendFixed(keys, int64(7), false, proc.Mp()))
+	payload, err := keys.MarshalBinary()
+	require.NoError(t, err)
+	session, err := newPlanSearchSession(proc, searchplugin.Request{
+		MembershipFilter: payload, HasMembershipFilter: true,
+	}, 1)
+	require.NoError(t, err)
+	membership := session.membership
+
+	_, err = (&relationScanner{proc: proc}).ScanRelation(sqlexec.RelationScanRequest{
+		Schema: "db", Table: "entries",
+		FilterHint: engine.FilterHint{BF: membership.Share()},
+	})
+	require.ErrorContains(t, err, "database unavailable")
+	require.True(t, membership.Valid())
+	session.release()
+	require.False(t, membership.Valid(), "the failed scan retained a membership share")
+}
+
 func TestRelationScannerUsesSnapshotCloneAndPublisherAccount(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	proc := testutil.NewProc(t)
@@ -1806,7 +1836,7 @@ func TestSearchPlanReaderValidatesRoundLimitsBeforeScanning(t *testing.T) {
 	require.NoError(t, searchPlanReader(reader, nil, idxcfg, tblcfg, []float32{0}))
 }
 
-func TestSearchPlanReaderAppliesMembershipBeforeBoundedLocalTopK(t *testing.T) {
+func TestSearchPlanReaderAppliesExactMembershipBeforeStorageTopK(t *testing.T) {
 	const cacheKey = "tenant=42:centroids_plan_reader:77"
 	cache.Cache.Remove(cacheKey)
 	t.Cleanup(func() { cache.Cache.Remove(cacheKey) })
@@ -1832,19 +1862,24 @@ func TestSearchPlanReaderAppliesMembershipBeforeBoundedLocalTopK(t *testing.T) {
 		case "entries_plan_reader":
 			require.NotNil(t, req.IndexParam)
 			require.Equal(t, uint64(12), req.IndexParam.GetLimit().GetLit().GetU64Val())
-			require.True(t, req.PostFilterTopOnly)
-			require.Nil(t, req.IndexParam.DistRange)
+			require.False(t, req.PostFilterTopOnly)
+			require.NotNil(t, req.IndexParam.DistRange)
+			require.Equal(t, float64(3), req.IndexParam.DistRange.UpperBound.GetLit().GetDval())
 			require.Empty(t, req.FilterHint.MembershipFilterBytes)
+			require.NotNil(t, req.FilterHint.BF)
+			require.True(t, req.FilterHint.BF.Exact())
+			req.FilterHint.BF.Free()
 			filterFn := req.Filter.GetF()
 			require.NotNil(t, filterFn)
-			require.Equal(t, function.AndFunctionName, filterFn.Func.ObjName)
-			require.Equal(t, function.InFunctionName, filterFn.Args[1].GetF().Func.ObjName)
-			bat := batch.NewWithSize(5)
+			require.Equal(t, function.PrefixInFunctionName, filterFn.Func.ObjName)
+			bat := batch.NewWithSize(7)
 			bat.Vecs[0] = vector.NewVec(types.T_int64.ToType())
 			bat.Vecs[1] = vector.NewVec(types.T_int64.ToType())
 			bat.Vecs[2] = vector.NewVec(types.T_int64.ToType())
 			bat.Vecs[3] = vector.NewVec(types.New(types.T_array_float32, 2, 0))
 			bat.Vecs[4] = vector.NewVec(types.T_int32.ToType())
+			bat.Vecs[5] = vector.NewVec(types.T_varchar.ToType())
+			bat.Vecs[6] = vector.NewVec(types.T_float64.ToType())
 			for _, row := range []struct {
 				pk  int64
 				vec []float32
@@ -1854,6 +1889,8 @@ func TestSearchPlanReaderAppliesMembershipBeforeBoundedLocalTopK(t *testing.T) {
 				require.NoError(t, vector.AppendFixed(bat.Vecs[2], row.pk, false, mp))
 				require.NoError(t, vector.AppendArray(bat.Vecs[3], row.vec, false, mp))
 				require.NoError(t, vector.AppendFixed(bat.Vecs[4], int32(row.pk*10), false, mp))
+				require.NoError(t, vector.AppendBytes(bat.Vecs[5], []byte("cpkey"), false, mp))
+				require.NoError(t, vector.AppendFixed(bat.Vecs[6], float64((row.pk-1)*(row.pk-1)), false, mp))
 			}
 			bat.SetRowCount(5)
 			return executor.Result{Mp: mp, Batches: []*batch.Batch{bat}}
@@ -1897,6 +1934,13 @@ func TestSearchPlanReaderAppliesMembershipBeforeBoundedLocalTopK(t *testing.T) {
 	membership, err := membershipVec.MarshalBinary()
 	require.NoError(t, err)
 	sqlproc.IvfHasMembershipFilter = true
+	session, err := newPlanSearchSession(proc, searchplugin.Request{
+		MembershipFilter:    membership,
+		HasMembershipFilter: true,
+	}, 1)
+	require.NoError(t, err)
+	defer session.release()
+	sqlproc.IvfMembershipFilterObject = session.membership
 	r := &planReader{
 		spec: &plan.VectorIndexScan{
 			InitialProbeCount: 1,
@@ -1919,6 +1963,7 @@ func TestSearchPlanReaderAppliesMembershipBeforeBoundedLocalTopK(t *testing.T) {
 				PartitionIndex: 1,
 			},
 		},
+		session: session,
 	}
 
 	require.NoError(t, searchPlanReader(r, sqlproc, idxcfg, tblcfg, []float32{0, 0}))
@@ -2226,6 +2271,90 @@ func TestNewPlanReaderOwnsItsExecutionState(t *testing.T) {
 	require.Equal(t, int64(8), snapshotPlanReader.scanner.snapshot.TS.PhysicalTime)
 }
 
+func TestPlanSearchSessionSharesExactDomainAndCentroidRoute(t *testing.T) {
+	mp := mpool.MustNewZero()
+	proc := testutil.NewProcessWithMPool(t, "", mp)
+	keys := vector.NewVec(types.T_int64.ToType())
+	defer keys.Free(mp)
+	require.NoError(t, vector.AppendFixedList(keys, []int64{3, 5, 8}, nil, mp))
+	payload, err := keys.MarshalBinary()
+	require.NoError(t, err)
+
+	const readers = 8
+	session, err := newPlanSearchSession(proc, searchplugin.Request{
+		MembershipFilter:    payload,
+		HasMembershipFilter: true,
+	}, readers)
+	require.NoError(t, err)
+	require.NotNil(t, session.membership)
+	require.True(t, session.membership.Exact())
+	membership := session.membership
+
+	var preparations atomic.Int32
+	start := make(chan struct{})
+	results := make(chan []int64, readers)
+	errors := make(chan error, readers)
+	var workers sync.WaitGroup
+	workers.Add(readers)
+	for i := 0; i < readers; i++ {
+		go func() {
+			defer workers.Done()
+			<-start
+			route, routeErr := session.prepareRoute(func(cursor *vectorindex.IvfSearchCursor) error {
+				preparations.Add(1)
+				cursor.RankedCentroidIDs = []int64{11, 7, 2}
+				return nil
+			})
+			results <- route
+			errors <- routeErr
+		}()
+	}
+	close(start)
+	workers.Wait()
+	close(results)
+	close(errors)
+	require.Equal(t, int32(1), preparations.Load())
+	for route := range results {
+		require.Equal(t, []int64{11, 7, 2}, route)
+	}
+	for routeErr := range errors {
+		require.NoError(t, routeErr)
+	}
+	var versionLoads atomic.Int32
+	for i := 0; i < readers; i++ {
+		version, versionErr := session.prepareVersion(func() (int64, error) {
+			versionLoads.Add(1)
+			return 77, nil
+		})
+		require.NoError(t, versionErr)
+		require.Equal(t, int64(77), version)
+	}
+	require.Equal(t, int32(1), versionLoads.Load())
+	cursor := &vectorindex.IvfSearchCursor{
+		Round: 1, NextBucketOffset: 2, CurrentBucketCount: 3,
+	}
+	for i := 0; i < readers-1; i++ {
+		require.Nil(t, session.recordSingleRoundDiagnostic(cursor, 10, i+1))
+	}
+	diagnostic := session.recordSingleRoundDiagnostic(cursor, 10, readers)
+	require.NotNil(t, diagnostic)
+	decoded, ok := vectorindex.DecodeIvfSearchRoundDiagnostic(diagnostic)
+	require.True(t, ok)
+	require.Equal(t, uint64(readers*(readers+1)/2), decoded.OutputRows)
+
+	for i := 0; i < readers-1; i++ {
+		session.release()
+		require.True(t, membership.Valid())
+	}
+	session.release()
+	require.False(t, membership.Valid())
+
+	emptySession, err := newPlanSearchSession(proc, searchplugin.Request{}, 2)
+	require.NoError(t, err)
+	emptySession.releaseUnopened(2)
+	require.Zero(t, emptySession.refs.Load())
+}
+
 // Centroid IDs reach ivfCentroidPrefixFilter ranked by distance to the query, not
 // by value. Block pruning reads the prefix list's first and last element as the
 // scan's lower and upper key bound (readutil/expr_filter.go), so publishing them
@@ -2265,6 +2394,26 @@ func TestIvfCentroidPrefixFilterPublishesSortedPrefixes(t *testing.T) {
 
 	// The pruning path never sorts, so the flag must state what is true.
 	require.True(t, published.GetSorted())
+}
+
+func TestIvfVersionPrefixFilterCoversEveryCentroidForVersion(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+	versionFilter, err := ivfVersionPrefixFilter(context.Background(), mp, 7, 4)
+	require.NoError(t, err)
+	versionFn := versionFilter.GetF()
+	require.Equal(t, function.PrefixEqualFunctionName, versionFn.Func.ObjName)
+	require.Equal(t, int32(4), versionFn.Args[0].GetCol().ColPos)
+	versionPrefix := []byte(versionFn.Args[1].GetLit().GetSval())
+	require.NotEmpty(t, versionPrefix)
+
+	centroidFilter, err := ivfCentroidPrefixFilter(
+		context.Background(), mp, 7, []int64{3}, 4)
+	require.NoError(t, err)
+	prefixes := new(vector.Vector)
+	require.NoError(t, prefixes.UnmarshalBinary(
+		centroidFilter.GetF().Args[1].GetVec().Data))
+	require.True(t, bytes.HasPrefix(prefixes.GetBytesAt(0), versionPrefix))
 }
 
 // Sorting the prefixes also compacts them, so the published Len must describe the
