@@ -35,6 +35,7 @@ func TestCTASAvgExactNumericMetadata(t *testing.T) {
 			sql: `create table t_avg as select
 avg(n_nationkey) as avg_i,
 avg(cast(n_nationkey as decimal(20,6))) as avg_d,
+avg(cast(n_nationkey as decimal(38,38))) as avg_high_scale,
 avg(cast(n_nationkey as double)) as avg_f
 from nation`,
 		},
@@ -43,6 +44,7 @@ from nation`,
 			sql: `create table t_avg_window as select
 avg(n_nationkey) over () as avg_i,
 avg(cast(n_nationkey as decimal(20,6))) over () as avg_d,
+avg(cast(n_nationkey as decimal(38,38))) over () as avg_high_scale,
 avg(cast(n_nationkey as double)) over () as avg_f
 from nation`,
 		},
@@ -61,14 +63,17 @@ from nation`,
 					visible = append(visible, col)
 				}
 			}
-			require.Len(t, visible, 3)
+			require.Len(t, visible, 4)
 			require.Equal(t, int32(types.T_decimal128), visible[0].Typ.Id)
 			require.Equal(t, int32(14), visible[0].Typ.Width)
 			require.Equal(t, int32(4), visible[0].Typ.Scale)
 			require.Equal(t, int32(types.T_decimal128), visible[1].Typ.Id)
 			require.Equal(t, int32(24), visible[1].Typ.Width)
 			require.Equal(t, int32(10), visible[1].Typ.Scale)
-			require.Equal(t, int32(types.T_float64), visible[2].Typ.Id)
+			require.Equal(t, int32(types.T_decimal256), visible[2].Typ.Id)
+			require.Equal(t, int32(42), visible[2].Typ.Width)
+			require.Equal(t, int32(38), visible[2].Typ.Scale)
+			require.Equal(t, int32(types.T_float64), visible[3].Typ.Id)
 		})
 	}
 }
@@ -76,7 +81,12 @@ from nation`,
 func TestCTASAvgUsesIntegerExpressionPrecision(t *testing.T) {
 	stmt, err := parsers.ParseOne(
 		context.Background(), dialect.MYSQL,
-		"create table t_avg_literal as select avg(2) as avg_i from nation",
+		`create table t_avg_literal as select
+avg(2) as avg_literal,
+avg(-2) as avg_negative_literal,
+avg(n_nationkey) as avg_column,
+avg(cast(2 as signed)) as avg_cast
+from nation`,
 		1,
 	)
 	require.NoError(t, err)
@@ -91,10 +101,16 @@ func TestCTASAvgUsesIntegerExpressionPrecision(t *testing.T) {
 			visible = append(visible, col)
 		}
 	}
-	require.Len(t, visible, 1)
-	require.Equal(t, int32(types.T_decimal128), visible[0].Typ.Id)
+	require.Len(t, visible, 4)
+	for _, col := range visible {
+		require.Equal(t, int32(types.T_decimal128), col.Typ.Id)
+		require.Equal(t, int32(4), col.Typ.Scale)
+	}
 	// MySQL uses the literal's DECIMAL(1,0) precision, then adds four
 	// fractional digits for AVG: DECIMAL(5,4), not BIGINT's DECIMAL(23,4).
 	require.Equal(t, int32(5), visible[0].Typ.Width)
-	require.Equal(t, int32(4), visible[0].Typ.Scale)
+	require.Equal(t, int32(5), visible[1].Typ.Width)
+	// A column and an explicit integer CAST retain their complete domains.
+	require.Equal(t, int32(14), visible[2].Typ.Width)
+	require.Equal(t, int32(23), visible[3].Typ.Width)
 }

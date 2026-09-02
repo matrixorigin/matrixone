@@ -228,7 +228,7 @@ select distinct pk from v1;
 drop view v1;
 drop table t12;
 SELECT AVG(2), BIT_AND(2), BIT_OR(2), BIT_XOR(2);
-➤ AVG(2)[3,38,4]  ¦  BIT_AND(2)[-5,64,0]  ¦  BIT_OR(2)[-5,64,0]  ¦  BIT_XOR(2)[-5,64,0]  𝄀
+➤ AVG(2)[3,5,4]  ¦  BIT_AND(2)[-5,64,0]  ¦  BIT_OR(2)[-5,64,0]  ¦  BIT_XOR(2)[-5,64,0]  𝄀
 2.0000  ¦  2  ¦  2  ¦  2
 select count(*);
 ➤ count(*)[-5,64,0]  𝄀

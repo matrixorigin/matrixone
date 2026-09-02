@@ -3531,11 +3531,11 @@ func (b *baseBinder) bindFuncExprImplByAstExpr(name string, astArgs []tree.Expr,
 		return nil, coerceErr
 	}
 	if name == "avg" && len(astArgs) == 1 && len(args) == 1 {
-		// MySQL derives AVG's exact result from the decimal precision of its
-		// expression, not from the physical integer container. Preserve that
-		// precision on the argument itself so the planner and all execution
-		// paths (including WINDOW and remote GROUP) select the same result type.
-		b.setAvgIntegerExpressionPrecision(astArgs[0], args[0])
+		// MySQL derives AVG's exact result from a direct integer literal's
+		// decimal precision, not from the physical BIGINT container used for
+		// untyped literals. Columns and explicit integer casts deliberately keep
+		// their full declared domains.
+		b.setAvgIntegerLiteralPrecision(astArgs[0], args[0])
 	}
 	if (name == "in" || name == "not_in") && len(args) == 2 &&
 		containsVolatileFunction(args[0]) && b.ctx != nil {
@@ -3700,177 +3700,43 @@ func markPreparedResultCastsProvisional(
 	}
 }
 
-func (b *baseBinder) setAvgIntegerExpressionPrecision(astExpr tree.Expr, arg *plan.Expr) {
-	if arg == nil {
+func (b *baseBinder) setAvgIntegerLiteralPrecision(astExpr tree.Expr, arg *plan.Expr) {
+	for {
+		switch expr := astExpr.(type) {
+		case *tree.ParenExpr:
+			astExpr = expr.Expr
+			continue
+		case *tree.UnaryExpr:
+			if expr.Op == tree.UNARY_PLUS || expr.Op == tree.UNARY_MINUS {
+				astExpr = expr.Expr
+				continue
+			}
+		}
+		break
+	}
+	literal, ok := astExpr.(*tree.NumVal)
+	if !ok || (literal.ValType != tree.P_int64 && literal.ValType != tree.P_uint64) || arg == nil {
 		return
 	}
 	typ := makeTypeByPlan2Expr(arg)
-	if !isExactAvgIntegerType(typ) {
+	if !typ.Oid.IsInteger() {
 		return
 	}
-	precision, ok := b.avgIntegerExpressionPrecision(astExpr, typ)
-	if !ok || precision <= 0 {
-		return
+	precision, isLiteral := decimalIntegerWidth(arg, typ)
+	if !isLiteral {
+		// Unary +/- is represented as a function expression, so the bound plan
+		// no longer carries a literal node. The AST still has the exact text and
+		// lets us retain the same digit-sensitive metadata for AVG(-2).
+		literalText := strings.TrimLeft(literal.String(), "+-")
+		precision = int32(len(literalText))
 	}
-	// Do not let an AST arithmetic estimate exceed the representable domain of
-	// the physical integer expression. Expressions whose result needs a wider
-	// exact domain are bound as DECIMAL and take the decimal path instead.
-	if domain := avgIntegerDomainPrecision(typ.Oid); domain > 0 && precision > domain {
-		precision = domain
+	if precision > 0 {
+		arg.Typ.Width = precision
+		// Integer casts use Scale == -1 to carry physical bit width. Mark the
+		// literal-derived precision as decimal metadata so AvgReturnType does
+		// not reinterpret it as a cast domain.
+		arg.Typ.Scale = 0
 	}
-	arg.Typ.Width = precision
-}
-
-func isExactAvgIntegerType(typ types.Type) bool {
-	switch typ.Oid {
-	case types.T_int8, types.T_int16, types.T_int32, types.T_int64,
-		types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64,
-		types.T_year:
-		return true
-	default:
-		return false
-	}
-}
-
-func avgIntegerDomainPrecision(oid types.T) int32 {
-	switch oid {
-	case types.T_int8, types.T_uint8:
-		return 3
-	case types.T_int16, types.T_uint16:
-		return 5
-	case types.T_int32, types.T_uint32:
-		return 10
-	case types.T_int64:
-		return 19
-	case types.T_uint64:
-		return 20
-	case types.T_year:
-		return 4
-	default:
-		return 0
-	}
-}
-
-func (b *baseBinder) avgIntegerExpressionPrecision(astExpr tree.Expr, boundType types.Type) (int32, bool) {
-	for {
-		paren, ok := astExpr.(*tree.ParenExpr)
-		if !ok {
-			break
-		}
-		astExpr = paren.Expr
-	}
-
-	switch expr := astExpr.(type) {
-	case *tree.NumVal:
-		// A literal has a value-dependent decimal precision. This is the
-		// important distinction between AVG(2), which is DECIMAL(5,4), and
-		// AVG(bigint_col), which uses the full BIGINT domain.
-		if expr.ValType != tree.P_int64 && expr.ValType != tree.P_uint64 {
-			return 0, false
-		}
-		bound := &Expr{}
-		var err error
-		bound, err = b.bindNumVal(expr, Type{})
-		if err != nil {
-			return 0, false
-		}
-		precision, _ := decimalIntegerWidth(bound, makeTypeByPlan2Expr(bound))
-		return precision, precision > 0
-
-	case *tree.UnresolvedName:
-		if typ, ok := b.numericColumnType(expr); ok {
-			return avgIntegerTypePrecision(makeTypeByPlan2Type(typ)), true
-		}
-		return 0, false
-
-	case *tree.ParamExpr, *tree.VarExpr:
-		// Parameter and user-variable precision is resolved by their runtime
-		// or prepared numeric contract; do not replace it with a guess here.
-		return 0, false
-
-	case *tree.CastExpr:
-		castType, err := getTypeFromAst(b.GetContext(), expr.Type)
-		if err != nil {
-			return 0, false
-		}
-		if isExactAvgIntegerType(makeTypeByPlan2Type(castType)) {
-			return avgIntegerTypePrecision(makeTypeByPlan2Type(castType)), true
-		}
-		return 0, false
-
-	case *tree.UnaryExpr:
-		if expr.Op != tree.UNARY_PLUS && expr.Op != tree.UNARY_MINUS {
-			return 0, false
-		}
-		return b.avgIntegerExpressionPrecision(expr.Expr, boundType)
-
-	case *tree.BinaryExpr:
-		if !isNumericBinaryOp(expr.Op) {
-			return 0, false
-		}
-		left, leftOK := b.avgIntegerExpressionPrecision(expr.Left, boundType)
-		right, rightOK := b.avgIntegerExpressionPrecision(expr.Right, boundType)
-		if !leftOK || !rightOK {
-			return 0, false
-		}
-		var precision int32
-		switch expr.Op {
-		case tree.MULTI:
-			precision = left + right
-		case tree.PLUS, tree.MINUS:
-			precision = max(left, right) + 1
-		case tree.MOD:
-			precision = min(left, right)
-		default:
-			return 0, false
-		}
-		return precision, precision > 0
-
-	case *tree.FuncExpr:
-		name := numericAstFunctionName(expr)
-		if len(expr.Exprs) == 0 {
-			return 0, false
-		}
-		// These functions preserve the integer coefficient domain of their
-		// value argument. Other functions fall back to the bound type below.
-		switch name {
-		case "abs", "ceil", "ceiling", "floor", "round", "truncate":
-			return b.avgIntegerExpressionPrecision(expr.Exprs[0], boundType)
-		}
-
-	case *tree.CaseExpr:
-		precision := int32(0)
-		found := false
-		for _, when := range expr.Whens {
-			if when == nil || when.Val == nil {
-				continue
-			}
-			value, ok := b.avgIntegerExpressionPrecision(when.Val, boundType)
-			if !ok {
-				return 0, false
-			}
-			precision = max(precision, value)
-			found = true
-		}
-		if expr.Else != nil {
-			value, ok := b.avgIntegerExpressionPrecision(expr.Else, boundType)
-			if !ok {
-				return 0, false
-			}
-			precision = max(precision, value)
-			found = true
-		}
-		return precision, found
-	}
-
-	return avgIntegerTypePrecision(boundType), avgIntegerTypePrecision(boundType) > 0
-}
-
-func avgIntegerTypePrecision(typ types.Type) int32 {
-	if typ.Width > 0 {
-		return typ.Width
-	}
-	return avgIntegerDomainPrecision(typ.Oid)
 }
 
 func (b *baseBinder) markVolatileInLeft(left *plan.Expr) {

@@ -190,6 +190,83 @@ func BenchmarkAggExecPaths(b *testing.B) {
 		}
 	})
 
+	b.Run("AvgInt32/BatchFillFlush", func(b *testing.B) {
+		b.ReportAllocs()
+		int32Vals := make([]int32, rows)
+		for i := range int32Vals {
+			int32Vals[i] = int32(i % 1024)
+		}
+		int32Vec := testutil.NewInt32Vector(rows, types.T_int32.ToType(), mp, false, nil, int32Vals)
+		defer int32Vec.Free(mp)
+		vectors := []*vector.Vector{int32Vec}
+		b.StopTimer()
+		for i := 0; i < b.N; i++ {
+			exec, err := MakeAgg(mp, AggIdOfAvg, false, types.T_int32.ToType())
+			if err != nil {
+				b.Fatal(err)
+			}
+			if err = exec.GroupGrow(groupSize); err != nil {
+				exec.Free()
+				b.Fatal(err)
+			}
+			b.StartTimer()
+			if err = exec.BatchFill(0, groups, vectors); err != nil {
+				b.StopTimer()
+				exec.Free()
+				b.Fatal(err)
+			}
+			results, err := exec.Flush()
+			b.StopTimer()
+			if err != nil {
+				exec.Free()
+				b.Fatal(err)
+			}
+			for _, result := range results {
+				result.Free(mp)
+			}
+			exec.Free()
+		}
+	})
+
+	b.Run("AvgInt32FloatReference/BatchFillFlush", func(b *testing.B) {
+		b.ReportAllocs()
+		int32Vals := make([]int32, rows)
+		for i := range int32Vals {
+			int32Vals[i] = int32(i % 1024)
+		}
+		int32Vec := testutil.NewInt32Vector(rows, types.T_int32.ToType(), mp, false, nil, int32Vals)
+		defer int32Vec.Free(mp)
+		vectors := []*vector.Vector{int32Vec}
+		b.StopTimer()
+		for i := 0; i < b.N; i++ {
+			// Before exact AVG finalization, INT32 used this native accumulator
+			// and reinterpreted the sum buffer as float64 at Flush. Keep that
+			// path as a local benchmark reference for the compatibility tradeoff.
+			exec := newSumAvgExec[int64, int32](mp, int64OfCheck, false, AggIdOfAvg, false, types.T_int32.ToType())
+			exec.(*sumAvgExec[int64, int32]).exactAvg = false
+			if err := exec.GroupGrow(groupSize); err != nil {
+				exec.Free()
+				b.Fatal(err)
+			}
+			b.StartTimer()
+			if err := exec.BatchFill(0, groups, vectors); err != nil {
+				b.StopTimer()
+				exec.Free()
+				b.Fatal(err)
+			}
+			results, err := exec.Flush()
+			b.StopTimer()
+			if err != nil {
+				exec.Free()
+				b.Fatal(err)
+			}
+			for _, result := range results {
+				result.Free(mp)
+			}
+			exec.Free()
+		}
+	})
+
 	b.Run("CountColumn/BatchFill", func(b *testing.B) {
 		b.ReportAllocs()
 		vectors := []*vector.Vector{intVec}

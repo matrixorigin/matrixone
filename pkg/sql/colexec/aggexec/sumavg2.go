@@ -15,6 +15,7 @@
 package aggexec
 
 import (
+	"math/bits"
 	"slices"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -72,12 +73,12 @@ func AvgReturnType(typs []types.Type) types.Type {
 }
 
 // Integer Type.Width is normally zero (the storage width is carried by Size),
-// but the planner fills it with an expression's decimal precision for AVG.
-// Keeping that precision on the argument type makes the plan and every
-// executor construction path agree, including GROUP, WINDOW, and remote
-// pipeline execution. A zero width falls back to the complete integer domain.
+// but the planner fills it with an expression's decimal precision for a direct
+// AVG literal. Explicit integer casts carry a bit width and Scale == -1; those
+// must fall back to the complete integer domain. Keeping literal precision on
+// the argument type makes all executor construction paths agree.
 func avgIntegerPrecision(typ types.Type) int32 {
-	if typ.Width > 0 {
+	if typ.Width > 0 && typ.Scale >= 0 {
 		return typ.Width
 	}
 	switch typ.Oid {
@@ -741,6 +742,62 @@ func decimal128FromNativeSum[T float64 | int64 | uint64](sum T) types.Decimal128
 	}
 }
 
+// decimal128NativeIntegerAvg handles the usual native-integer AVG result
+// scale without going through Decimal128.Scale/Mul128. The result scale for
+// native integer AVG is four, so a single machine-word multiply followed by
+// Div128 is both exact and materially cheaper than the general decimal path.
+// An overflow asks the caller to retry through the Decimal256-capable path.
+func decimal128NativeIntegerAvg[T float64 | int64 | uint64](sum T, count int64, resultScale int32) (types.Decimal128, error) {
+	if count <= 0 {
+		return types.Decimal128{}, moerr.NewInvalidInputNoCtxf("Decimal128 Div by Zero")
+	}
+	if resultScale < 0 || resultScale >= int32(len(types.Pow10)) {
+		return types.Decimal128{}, moerr.NewInternalErrorNoCtxf("invalid native AVG result scale %d", resultScale)
+	}
+
+	var magnitude uint64
+	negative := false
+	switch value := any(sum).(type) {
+	case int64:
+		negative = value < 0
+		if negative {
+			magnitude = uint64(-(value + 1)) + 1
+		} else {
+			magnitude = uint64(value)
+		}
+	case uint64:
+		magnitude = value
+	default:
+		return types.Decimal128{}, moerr.NewInternalErrorNoCtxf("unsupported native AVG sum type %T", sum)
+	}
+
+	hi, lo := bits.Mul64(magnitude, types.Pow10[resultScale])
+	if hi>>63 != 0 {
+		return types.Decimal128{}, moerr.NewInvalidInputNoCtxf("Decimal128 scale overflow")
+	}
+	var avg types.Decimal128
+	if hi == 0 {
+		// Most INT32 groups fit in one word after scaling. Use the same
+		// half-up rule as Div128 without constructing a multi-word divisor.
+		divisor := uint64(count)
+		quotient, remainder := bits.Div64(0, lo, divisor)
+		if remainder >= (divisor+1)/2 {
+			quotient++
+		}
+		avg = types.Decimal128{B0_63: quotient}
+	} else {
+		var err error
+		avg, err = (types.Decimal128{B0_63: lo, B64_127: hi}).Div128(types.Decimal128FromInt64(count))
+		if err != nil {
+			return types.Decimal128{}, err
+		}
+	}
+	if negative {
+		avg = avg.Minus()
+	}
+	return avg, nil
+}
+
 // flushExactAvg converts the native integer accumulator to the declared
 // Decimal128/Decimal256 result only once per group. Row and batch filling stay
 // on the compact integer path, which is important for the common INT AVG
@@ -795,7 +852,10 @@ func (exec *sumAvgExec[T, A]) flushExactAvg() (_ []*vector.Vector, retErr error)
 				if int(count) != xcnt {
 					panic(moerr.NewInternalErrorNoCtxf("invalid count: %d for y: %d, expected: %d", xcnt, j, count))
 				}
-				avg, err := decAvg(decimal128FromNativeSum(sum), int64(count), 0, resultType)
+				avg, err := decimal128NativeIntegerAvg(sum, int64(count), resultType.Scale)
+				if err != nil {
+					avg, err = decAvg(decimal128FromNativeSum(sum), int64(count), 0, resultType)
+				}
 				if err != nil {
 					return nil, err
 				}
@@ -818,6 +878,37 @@ func (exec *sumAvgExec[T, A]) flushExactAvg() (_ []*vector.Vector, retErr error)
 			}
 			if err = vecs[i].PreExtend(int(exec.state[i].length), exec.mp); err != nil {
 				return nil, err
+			}
+			// Native integer AVG always returns Decimal128. Build the whole
+			// fixed-width result in one append so the common non-DISTINCT path
+			// does not pay per-group vector metadata/allocation overhead.
+			if resultType.Oid == types.T_decimal128 {
+				values := make([]types.Decimal128, exec.state[i].length)
+				nulls := make([]bool, exec.state[i].length)
+				for j, count := range cnts {
+					if count == 0 {
+						nulls[j] = true
+						continue
+					}
+					avg, avgErr := decimal128NativeIntegerAvg(sums[j], count, resultType.Scale)
+					if avgErr != nil {
+						avg, avgErr = decAvg(decimal128FromNativeSum(sums[j]), count, 0, resultType)
+					}
+					if avgErr != nil {
+						return nil, avgErr
+					}
+					values[j] = avg
+				}
+				if err = vector.AppendFixedList(vecs[i], values, nulls, exec.mp); err != nil {
+					return nil, err
+				}
+				sumVec.Free(exec.mp)
+				cntVec.Free(exec.mp)
+				exec.state[i].vecs[0] = nil
+				exec.state[i].vecs[1] = nil
+				exec.state[i].length = 0
+				exec.state[i].capacity = 0
+				continue
 			}
 			for j, count := range cnts {
 				if count == 0 {
@@ -1511,6 +1602,36 @@ func decimal128FromDecimal256(value types.Decimal256) (types.Decimal128, bool) {
 	return types.Decimal128{B0_63: value.B0_63, B64_127: value.B64_127}, true
 }
 
+// decimal128AvgAtScaleSigned keeps the common exact AVG path in Decimal128.
+// Scaling the numerator before division makes Div128 perform the only
+// rounding step at the declared result scale. The caller can fall back to
+// Decimal256 when the scaled numerator does not fit in 128 bits.
+func decimal128AvgAtScaleSigned(value types.Decimal128, count int64, argScale, resultScale int32) (types.Decimal128, error) {
+	if count <= 0 {
+		return value, moerr.NewInvalidInputNoCtxf("Decimal128 Div by Zero")
+	}
+	if resultScale < argScale {
+		return value, moerr.NewInternalErrorNoCtxf(
+			"decimal avg result scale %d is below input scale %d", resultScale, argScale)
+	}
+	negative := value.Sign()
+	if negative {
+		value = value.Minus()
+	}
+	scaled, err := value.Scale(resultScale - argScale)
+	if err != nil {
+		return value, err
+	}
+	avg, err := scaled.Div128(types.Decimal128FromInt64(count))
+	if err != nil {
+		return value, err
+	}
+	if negative {
+		avg = avg.Minus()
+	}
+	return avg, nil
+}
+
 func decAvg[S sumAvgDecimalState](sum S, count int64, argScale int32, resultType types.Type) (S, error) {
 	var zero S
 	switch value := any(sum).(type) {
@@ -1519,6 +1640,14 @@ func decAvg[S sumAvgDecimalState](sum S, count int64, argScale int32, resultType
 			resultType.Width >= int32(len(decimal128PrecisionLimits)) ||
 			resultType.Scale < 0 || resultType.Scale > resultType.Width {
 			return zero, moerr.NewInternalErrorNoCtxf("invalid decimal avg result type %s", resultType.String())
+		}
+		if avg, err := decimal128AvgAtScaleSigned(value, count, argScale, resultType.Scale); err == nil {
+			if !decimal128FitsPrecision(avg, resultType.Width) {
+				return zero, moerr.NewInvalidInputNoCtxf(
+					"%s beyond the range, can't be converted to Decimal128(%d,%d).",
+					avg.Format(resultType.Scale), resultType.Width, resultType.Scale)
+			}
+			return any(avg).(S), nil
 		}
 		avgWide, err := decimal256AvgAtScaleSigned(
 			types.Decimal256FromDecimal128(value), count, argScale, resultType.Scale)
