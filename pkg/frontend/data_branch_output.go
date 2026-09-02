@@ -175,6 +175,7 @@ func newSQLValuesAppender(
 		deleteBuf:         deleteBuf,
 		insertCnt:         insertCnt,
 		insertBuf:         insertBuf,
+		updateState:       &dataBranchUpdateBuffer{},
 		writeFile:         writeFile,
 	}
 }
@@ -306,6 +307,45 @@ func (batchInfo *applyBatchInfo) stagedDeleteSQL(baseTable, deleteTable string) 
 	return fmt.Sprintf(
 		"delete %s from %s as %s join %s as %s on %s",
 		baseAlias, baseTable, baseAlias, deleteTable, stageAlias, strings.Join(predicates, " AND "),
+	), nil
+}
+
+func (batchInfo *applyBatchInfo) stagedUpdateSQL(baseTable, updateTable string) (string, error) {
+	if err := batchInfo.validateDeleteKeyLayout(); err != nil {
+		return "", err
+	}
+	if batchInfo.disableInsertStage {
+		return "", moerr.NewInternalErrorNoCtx("Data Branch update staging is disabled")
+	}
+
+	const baseAlias = "branch_apply_base"
+	const stageAlias = "branch_apply_stage"
+
+	keyNames := make(map[string]struct{}, len(batchInfo.deleteKeyNames))
+	for _, name := range batchInfo.deleteKeyNames {
+		keyNames[strings.ToLower(name)] = struct{}{}
+	}
+	assignments := make([]string, 0, len(batchInfo.writableNames))
+	for _, name := range batchInfo.writableNames {
+		if _, isKey := keyNames[strings.ToLower(name)]; isKey {
+			continue
+		}
+		quotedName := quoteIdentifierForSQL(name)
+		assignments = append(assignments, fmt.Sprintf("%s.%s = %s.%s", baseAlias, quotedName, stageAlias, quotedName))
+	}
+	if len(assignments) == 0 {
+		return "", moerr.NewInternalErrorNoCtx("Data Branch update has no writable non-key columns")
+	}
+
+	predicates := make([]string, len(batchInfo.deleteKeyNames))
+	for i := range batchInfo.deleteKeyNames {
+		left := fmt.Sprintf("%s.%s", baseAlias, quoteIdentifierForSQL(batchInfo.deleteKeyNames[i]))
+		right := fmt.Sprintf("%s.%s", stageAlias, quoteIdentifierForSQL(batchInfo.deleteKeyNames[i]))
+		predicates[i] = dataBranchSQLKeyEqual(left, right, batchInfo.deleteKeyTypes[i])
+	}
+	return fmt.Sprintf(
+		"update %s as %s join %s as %s on %s set %s",
+		baseTable, baseAlias, updateTable, stageAlias, strings.Join(predicates, " AND "), strings.Join(assignments, ","),
 	), nil
 }
 
@@ -1927,7 +1967,6 @@ func appendBatchRowsAsSQLValues(
 			return nil
 		}
 	}
-
 	//seenCols := make(map[int]struct{}, len(tblStuff.def.visibleIdxes))
 	row := make([]any, len(tblStuff.def.colNames))
 
@@ -1942,10 +1981,11 @@ func appendBatchRowsAsSQLValues(
 		); err != nil {
 			return
 		}
-		if err = appendOrExecuteDataBranchApplyRow(
+		err = appendOrStageDataBranchApplyRow(
 			ctx, ses, tblStuff, wrapped.kind, row, tmpValsBuffer, appender,
 			directUpdate, wrapped.restoreMissing,
-		); err != nil {
+		)
+		if err != nil {
 			return
 		}
 	}
@@ -1965,6 +2005,37 @@ func dataBranchDirectUpdateBatch(
 		return false, moerr.NewInternalErrorNoCtxf("unexpected Data Branch update batch kind %q", wrapped.kind)
 	}
 	return true, nil
+}
+
+func dataBranchStagesUpdate(appender sqlValuesAppender, directUpdate, restoreMissing bool) bool {
+	return directUpdate && !restoreMissing && appender.batchInfo != nil &&
+		!appender.batchInfo.disableInsertStage && !appender.batchInfo.deleteNeedsExactFloatKeyMatch()
+}
+
+func appendOrStageDataBranchApplyRow(
+	ctx context.Context,
+	ses *Session,
+	tblStuff tableStuff,
+	kind string,
+	row []any,
+	tmpValsBuffer *bytes.Buffer,
+	appender sqlValuesAppender,
+	directUpdate bool,
+	restoreMissing bool,
+) error {
+	if dataBranchStagesUpdate(appender, directUpdate, restoreMissing) {
+		return appendDataBranchApplyRowAsSQLValues(
+			ctx, ses, tblStuff, diffUpdate, row, tmpValsBuffer, appender,
+		)
+	}
+	if directUpdate && restoreMissing {
+		return appendDataBranchApplyRowAsSQLValues(
+			ctx, ses, tblStuff, diffInsert, row, tmpValsBuffer, appender,
+		)
+	}
+	return appendOrExecuteDataBranchApplyRow(
+		ctx, ses, tblStuff, kind, row, tmpValsBuffer, appender, directUpdate, restoreMissing,
+	)
 }
 
 func appendOrExecuteDataBranchApplyRow(
@@ -2385,14 +2456,44 @@ type sqlValuesAppender struct {
 	deleteBuf         *bytes.Buffer
 	insertCnt         *int
 	insertBuf         *bytes.Buffer
+	updateState       *dataBranchUpdateBuffer
 	writeFile         func([]byte) error
 }
 
+type dataBranchUpdateBuffer struct {
+	cnt int
+	buf bytes.Buffer
+}
+
 func (sva sqlValuesAppender) flushAll() error {
+	if err := sva.flushDeletesOrInserts(); err != nil {
+		return err
+	}
+	return sva.flushUpdates()
+}
+
+func (sva sqlValuesAppender) flushDeletesOrInserts() error {
 	return tryFlushDeletesOrInserts(
 		sva.ctx, sva.ses, sva.bh, sva.tblStuff, "",
 		0, 0, sva.deleteByFullRow, sva.batchInfo, sva.deleteCnt, sva.deleteBuf, sva.insertCnt, sva.insertBuf, sva.writeFile,
 	)
+}
+
+func (sva sqlValuesAppender) flushUpdates() error {
+	if sva.updateState == nil || sva.updateState.cnt == 0 {
+		return nil
+	}
+	if err := sva.flushDeletesOrInserts(); err != nil {
+		return err
+	}
+	if err := flushStagedUpdateValues(
+		sva.ctx, sva.ses, sva.bh, sva.updateState.buf.Bytes(), sva.batchInfo, sva.writeFile,
+	); err != nil {
+		return err
+	}
+	sva.updateState.cnt = 0
+	sva.updateState.buf.Reset()
+	return nil
 }
 
 func writeInsertRowValues(
@@ -2495,6 +2596,15 @@ func writeDeleteRowValuesWithColIdxes(
 }
 
 func (sva sqlValuesAppender) appendRow(kind string, rowValues []byte) error {
+	if kind == diffUpdate {
+		return sva.appendUpdateRow(rowValues)
+	}
+	if sva.updateState != nil && sva.updateState.cnt > 0 {
+		if err := sva.flushUpdates(); err != nil {
+			return err
+		}
+	}
+
 	var (
 		targetBuf *bytes.Buffer
 		rowCnt    *int
@@ -2538,6 +2648,37 @@ func (sva sqlValuesAppender) appendRow(kind string, rowValues []byte) error {
 	}
 	targetBuf.Write(rowValues)
 	*rowCnt++
+	return nil
+}
+
+func (sva sqlValuesAppender) appendUpdateRow(rowValues []byte) error {
+	if sva.updateState == nil {
+		return moerr.NewInternalErrorNoCtx("Data Branch update buffer is not initialized")
+	}
+	if sva.batchInfo == nil || sva.batchInfo.disableInsertStage {
+		return moerr.NewInternalErrorNoCtx("Data Branch update staging is unavailable")
+	}
+	if sva.updateState.cnt == 0 {
+		if err := sva.flushDeletesOrInserts(); err != nil {
+			return err
+		}
+	}
+
+	newValsLen := len(rowValues)
+	if sva.updateState.buf.Len() > 0 {
+		newValsLen++
+	}
+	if sva.updateState.buf.Len()+newValsLen >= maxSqlBatchSize ||
+		sva.updateState.cnt+1 >= maxSqlBatchCnt {
+		if err := sva.flushUpdates(); err != nil {
+			return err
+		}
+	}
+	if sva.updateState.buf.Len() > 0 {
+		sva.updateState.buf.WriteString(",")
+	}
+	sva.updateState.buf.Write(rowValues)
+	sva.updateState.cnt++
 	return nil
 }
 
@@ -2638,6 +2779,35 @@ func dropApplyTables(
 		stmts = append(stmts, fmt.Sprintf("drop table if exists %s", insertTable))
 	}
 	return execSQLStatements(ctx, ses, bh, writeFile, stmts)
+}
+
+func flushStagedUpdateValues(
+	ctx context.Context,
+	ses *Session,
+	bh BackgroundExec,
+	values []byte,
+	batchInfo *applyBatchInfo,
+	writeFile func([]byte) error,
+) error {
+	if len(values) == 0 {
+		return nil
+	}
+	if batchInfo == nil || batchInfo.disableInsertStage {
+		return moerr.NewInternalErrorNoCtx("Data Branch update staging is unavailable")
+	}
+	if err := batchInfo.validateDeleteKeyLayout(); err != nil {
+		return err
+	}
+
+	baseTable := qualifiedTableName(batchInfo.dbName, batchInfo.baseTable)
+	updateTable := qualifiedTableName(batchInfo.dbName, batchInfo.insertTable)
+	insertStmt := fmt.Sprintf("insert into %s values %s", updateTable, values)
+	updateStmt, err := batchInfo.stagedUpdateSQL(baseTable, updateTable)
+	if err != nil {
+		return err
+	}
+	clearStmt := fmt.Sprintf("delete from %s", updateTable)
+	return execSQLStatements(ctx, ses, bh, writeFile, []string{insertStmt, updateStmt, clearStmt})
 }
 
 // if `writeFile` is not nil, the sql will be flushed down into this file, or

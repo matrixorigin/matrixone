@@ -931,9 +931,13 @@ func runUpdateSplitDiffAsFile(t *testing.T, parentCtx context.Context, db *sql.D
 	sqlContent := readSQLFile(t, diffPath)
 	lowerContent := strings.ToLower(sqlContent)
 	baseTable := diffSQLTable(dbName, base)
-	require.Contains(t, lowerContent, "update "+baseTable+" set")
-	require.Contains(t, lowerContent, "where "+diffSQLIdent("id")+" = 1 limit 1")
-	require.Contains(t, lowerContent, "where "+diffSQLIdent("id")+" = 3 limit 1")
+	require.Contains(t, lowerContent, "update "+baseTable+" as branch_apply_base join")
+	require.Contains(t, lowerContent,
+		"on branch_apply_base."+diffSQLIdent("id")+" = branch_apply_stage."+diffSQLIdent("id")+
+			" set branch_apply_base."+diffSQLIdent("score")+" = branch_apply_stage."+diffSQLIdent("score")+
+			",branch_apply_base."+diffSQLIdent("note")+" = branch_apply_stage."+diffSQLIdent("note"))
+	require.Contains(t, lowerContent, "insert into "+diffSQLIdent(dbName)+".`__mo_diff_ins_")
+	require.NotContains(t, lowerContent, "update "+baseTable+" set")
 	require.NotContains(t, lowerContent, "insert into "+baseTable)
 	require.NotContains(t, lowerContent, "delete from "+baseTable)
 
@@ -967,9 +971,13 @@ func runCompositeUpdateSplitDiffAsFile(t *testing.T, parentCtx context.Context, 
 	sqlContent := readSQLFile(t, diffPath)
 	lowerContent := strings.ToLower(sqlContent)
 	baseTable := diffSQLTable(dbName, base)
-	require.Contains(t, lowerContent, "update "+baseTable+" set")
-	require.Contains(t, lowerContent, "where "+diffSQLIdent("org_id")+" = 1 and "+diffSQLIdent("event_id")+" = 2 limit 1")
-	require.Contains(t, lowerContent, "where "+diffSQLIdent("org_id")+" = 2 and "+diffSQLIdent("event_id")+" = 1 limit 1")
+	require.Contains(t, lowerContent, "update "+baseTable+" as branch_apply_base join")
+	require.Contains(t, lowerContent,
+		"on branch_apply_base."+diffSQLIdent("org_id")+" = branch_apply_stage."+diffSQLIdent("org_id")+
+			" and branch_apply_base."+diffSQLIdent("event_id")+" = branch_apply_stage."+diffSQLIdent("event_id")+
+			" set branch_apply_base."+diffSQLIdent("qty")+" = branch_apply_stage."+diffSQLIdent("qty")+
+			",branch_apply_base."+diffSQLIdent("note")+" = branch_apply_stage."+diffSQLIdent("note"))
+	require.NotContains(t, lowerContent, "update "+baseTable+" set")
 	require.Contains(t, lowerContent, "null")
 	require.NotContains(t, lowerContent, "insert into "+baseTable)
 	require.NotContains(t, lowerContent, "delete from "+baseTable)
@@ -1067,7 +1075,11 @@ create table %s (
 	sqlContent := readSQLFile(t, diffPath)
 	lowerContent := strings.ToLower(sqlContent)
 	baseTable := diffSQLTable(dbName, base)
-	require.Contains(t, lowerContent, "update "+baseTable+" set")
+	require.Contains(t, lowerContent, "update "+baseTable+" as branch_apply_base join")
+	require.Contains(t, lowerContent,
+		"on branch_apply_base."+diffSQLIdent("id")+" = branch_apply_stage."+diffSQLIdent("id")+
+			" set branch_apply_base."+diffSQLIdent("name")+" = branch_apply_stage."+diffSQLIdent("name"))
+	require.NotContains(t, lowerContent, "update "+baseTable+" set")
 	require.Contains(t, lowerContent, "insert into "+baseTable)
 	require.Contains(t, lowerContent, "delete from "+baseTable)
 	require.Contains(t, lowerContent, "null")

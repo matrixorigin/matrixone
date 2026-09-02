@@ -198,7 +198,7 @@ func pickMergeDiffs(
 		&deleteCnt, deleteFromVals, &insertCnt, insertIntoVals, nil,
 	)
 	var acceptedDirectUpdateKeys map[string]struct{}
-	if stmt.ConflictOpt != nil && stmt.ConflictOpt.Opt == tree.CONFLICT_ACCEPT {
+	if tblStuff.def.pkKind != fakeKind && stmt.ConflictOpt != nil && stmt.ConflictOpt.Opt == tree.CONFLICT_ACCEPT {
 		acceptedDirectUpdateKeys = make(map[string]struct{})
 	}
 	if err = initApplyTables(ctx, ses, bh, appender.batchInfo, appender.writeFile); err != nil {
@@ -298,6 +298,7 @@ func appendPickedBatchRows(
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
+		rowDirectUpdate := directUpdate
 
 		// Extract PK for conflict handling (FAIL error message, SKIP set).
 		pkKey, err2 := extractPKAsString(ses, tblStuff, wrapped.batch, rowIdx)
@@ -322,7 +323,7 @@ func appendPickedBatchRows(
 					skipSet[pkKey] = struct{}{}
 					continue // do not apply the DELETE
 				case tree.CONFLICT_ACCEPT:
-					if wrapped.hasReplacement {
+					if acceptedDirectUpdateKeys != nil && wrapped.hasReplacement {
 						// The matching source row is applied by a direct key update.
 						// Deferring the resolution avoids deleting a referenced row.
 						acceptedDirectUpdateKeys[pkKey] = struct{}{}
@@ -342,11 +343,11 @@ func appendPickedBatchRows(
 		}
 		if acceptedDirectUpdateKeys != nil && wrapped.side == diffSideTarget && wrapped.kind == diffInsert {
 			if _, accepted := acceptedDirectUpdateKeys[pkKey]; accepted {
-				directUpdate = true
+				rowDirectUpdate = true
 				delete(acceptedDirectUpdateKeys, pkKey)
 			}
 		}
-		if directUpdate && wrapped.kind == diffDelete {
+		if rowDirectUpdate && wrapped.kind == diffDelete {
 			continue
 		}
 
@@ -356,9 +357,9 @@ func appendPickedBatchRows(
 		); err != nil {
 			return
 		}
-		if err = appendOrExecuteDataBranchApplyRow(
+		if err = appendOrStageDataBranchApplyRow(
 			ctx, ses, tblStuff, wrapped.kind, row, tmpValsBuffer, appender,
-			directUpdate, wrapped.restoreMissing,
+			rowDirectUpdate, wrapped.restoreMissing,
 		); err != nil {
 			return
 		}

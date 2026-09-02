@@ -1634,6 +1634,39 @@ func TestDataBranchOutputFlushSqlValuesUsesExactFloatKeyMatch(t *testing.T) {
 	require.Contains(t, got, "delete from `db1`.`__mo_diff_del_x`;\n")
 }
 
+func TestDataBranchOutputFlushStagedUpdateValues(t *testing.T) {
+	batchInfo := &applyBatchInfo{
+		dbName:           "db1",
+		baseTable:        "t1",
+		insertTable:      "__mo_diff_ins_x",
+		deleteKeyNames:   []string{"org_id", "event_id"},
+		deleteStageNames: []string{"branch_apply_key_0", "branch_apply_key_1"},
+		deleteKeyTypes:   []types.Type{types.T_int64.ToType(), types.T_int64.ToType()},
+		writableNames:    []string{"org_id", "event_id", "qty", "note"},
+	}
+
+	var out bytes.Buffer
+	require.NoError(t, flushStagedUpdateValues(
+		context.Background(), nil, nil, []byte("(1,2,30,'changed'),(2,1,40,null)"), batchInfo,
+		func(b []byte) error {
+			_, err := out.Write(b)
+			return err
+		},
+	))
+
+	got := out.String()
+	require.Contains(t, got, "insert into `db1`.`__mo_diff_ins_x` values (1,2,30,'changed'),(2,1,40,null);\n")
+	require.Contains(t, got,
+		"update `db1`.`t1` as branch_apply_base join `db1`.`__mo_diff_ins_x` as branch_apply_stage on "+
+			"branch_apply_base.`org_id` = branch_apply_stage.`org_id` AND "+
+			"branch_apply_base.`event_id` = branch_apply_stage.`event_id` set "+
+			"branch_apply_base.`qty` = branch_apply_stage.`qty`,branch_apply_base.`note` = branch_apply_stage.`note`;\n")
+	assignments := strings.SplitN(got, " set ", 2)[1]
+	require.NotContains(t, assignments, "branch_apply_base.`org_id`")
+	require.NotContains(t, assignments, "branch_apply_base.`event_id`")
+	require.Contains(t, got, "delete from `db1`.`__mo_diff_ins_x`;\n")
+}
+
 func TestDataBranchOutputStagedDeleteRejectsIncompleteKeyLayout(t *testing.T) {
 	_, err := (&applyBatchInfo{
 		deleteKeyNames:   []string{"id"},
@@ -2320,7 +2353,7 @@ func TestDataBranchOutputAppendBatchRowsAsSQLValues(t *testing.T) {
 		require.Equal(t, "3,4", deleteBuf.String())
 	})
 
-	t.Run("applies primary-key updates directly", func(t *testing.T) {
+	t.Run("stages ordinary primary-key updates", func(t *testing.T) {
 		directUpdate, err := dataBranchDirectUpdateBatch(
 			tblStuff, batchWithKind{kind: diffInsert, fromUpdate: true}, &applyBatchInfo{},
 		)
@@ -2337,11 +2370,27 @@ func TestDataBranchOutputAppendBatchRowsAsSQLValues(t *testing.T) {
 
 		directUpdateTable := tblStuff
 		directUpdateTable.def.baseColNames = []string{"id", "name", "hidden"}
+		batchInfo := &applyBatchInfo{
+			dbName:           "db1",
+			baseTable:        "base",
+			insertTable:      "__mo_diff_ins_x",
+			deleteKeyNames:   []string{"id"},
+			deleteStageNames: []string{"branch_apply_key_0"},
+			deleteKeyTypes:   []types.Type{types.T_int64.ToType()},
+			writableNames:    []string{"id", "name"},
+		}
+		deleteCnt, insertCnt := 0, 0
+		deleteBuf, insertBuf := &bytes.Buffer{}, &bytes.Buffer{}
 		var out bytes.Buffer
 		appender := sqlValuesAppender{
-			ctx:       context.Background(),
-			tblStuff:  directUpdateTable,
-			batchInfo: &applyBatchInfo{},
+			ctx:         context.Background(),
+			tblStuff:    directUpdateTable,
+			batchInfo:   batchInfo,
+			deleteCnt:   &deleteCnt,
+			deleteBuf:   deleteBuf,
+			insertCnt:   &insertCnt,
+			insertBuf:   insertBuf,
+			updateState: &dataBranchUpdateBuffer{},
 			writeFile: func(b []byte) error {
 				_, err := out.Write(b)
 				return err
@@ -2364,7 +2413,14 @@ func TestDataBranchOutputAppendBatchRowsAsSQLValues(t *testing.T) {
 			batchWithKind{kind: diffInsert, fromUpdate: true, batch: insertBat},
 			&bytes.Buffer{}, appender,
 		))
-		require.Equal(t, "update `db1`.`base` set `name` = 'after' where `id` = 2 limit 1;\n", out.String())
+		require.Empty(t, out.String())
+		require.NoError(t, appender.flushAll())
+		require.Equal(t,
+			"insert into `db1`.`__mo_diff_ins_x` values (2,'after');\n"+
+				"update `db1`.`base` as branch_apply_base join `db1`.`__mo_diff_ins_x` as branch_apply_stage on branch_apply_base.`id` = branch_apply_stage.`id` set branch_apply_base.`name` = branch_apply_stage.`name`;\n"+
+				"delete from `db1`.`__mo_diff_ins_x`;\n",
+			out.String(),
+		)
 	})
 
 	t.Run("returns shape mismatch error", func(t *testing.T) {

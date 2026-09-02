@@ -15,6 +15,7 @@ insert into parent_t values (1, 1), (2, 2);
 data branch create table leaf_pick from child_t;
 update leaf_pick set note = 'leaf-pick-clean' where id = 1;
 update leaf_pick set note = 'leaf-pick' where id = 2;
+insert into leaf_pick values (3, 'leaf-pick-new');
 
 -- A non-conflicting picked update to a referenced row succeeds.
 data branch pick leaf_pick into child_t keys(1) when conflict accept;
@@ -25,7 +26,8 @@ update child_t set note = 'direct-control' where id = 2;
 select id, note from child_t order by id;
 data branch pick leaf_pick into child_t keys(2) when conflict fail;
 select id, note from child_t order by id;
-data branch pick leaf_pick into child_t keys(2) when conflict accept;
+-- ACCEPT must update the conflicting row and retain a concurrent source insert.
+data branch pick leaf_pick into child_t keys(2,3) when conflict accept;
 select id, note from child_t order by id;
 
 drop database branch_pick_foreign_key_update;

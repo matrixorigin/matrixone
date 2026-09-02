@@ -12,6 +12,7 @@ insert into parent_t values (1, 1), (2, 2);
 data branch create table leaf_pick from child_t;
 update leaf_pick set note = 'leaf-pick-clean' where id = 1;
 update leaf_pick set note = 'leaf-pick' where id = 2;
+insert into leaf_pick values (3, 'leaf-pick-new');
 data branch pick leaf_pick into child_t keys(1) when conflict accept;
 select id, note from child_t order by id;
 ➤ id[4,32,0]  ¦  note[12,32,0]  𝄀
@@ -28,9 +29,10 @@ select id, note from child_t order by id;
 ➤ id[4,32,0]  ¦  note[12,32,0]  𝄀
 1  ¦  leaf-pick-clean  𝄀
 2  ¦  direct-control
-data branch pick leaf_pick into child_t keys(2) when conflict accept;
+data branch pick leaf_pick into child_t keys(2,3) when conflict accept;
 select id, note from child_t order by id;
 ➤ id[4,32,0]  ¦  note[12,32,0]  𝄀
 1  ¦  leaf-pick-clean  𝄀
-2  ¦  leaf-pick
+2  ¦  leaf-pick  𝄀
+3  ¦  leaf-pick-new
 drop database branch_pick_foreign_key_update;
