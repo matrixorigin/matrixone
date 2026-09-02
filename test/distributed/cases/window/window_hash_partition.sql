@@ -35,7 +35,7 @@ select sum(first_v) from (
     select first_value(v) over (partition by k order by v) as first_v from t
 ) q;
 
--- ROWS and RANGE frames both traverse the selected HASH output.
+-- ROWS and RANGE frames preserve the Window contract on the fail-closed SORT path.
 select sum(frame_sum) from (
     select sum(v) over (
         partition by k order by v rows between 1 preceding and current row
