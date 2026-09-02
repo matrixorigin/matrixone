@@ -6002,11 +6002,38 @@ func TestAnalyzeSituationResponseSendsAllResults(t *testing.T) {
 	}
 	require.NoError(t, resper.respBySituation(ses, execCtx))
 	require.Len(t, writer.responses, 2)
+	require.Equal(t, int(COM_QUERY), writer.responses[0].cmd)
+	require.Equal(t, int(COM_QUERY), writer.responses[1].cmd)
 	require.NotZero(t, writer.responses[0].GetStatus()&SERVER_MORE_RESULTS_EXISTS)
 	require.Zero(t, writer.responses[1].GetStatus()&SERVER_MORE_RESULTS_EXISTS)
 	require.Same(t, first, writer.responses[0].GetData().(*MysqlExecutionResult).Mrs())
 	require.Same(t, second, writer.responses[1].GetData().(*MysqlExecutionResult).Mrs())
 	require.Nil(t, execCtx.results)
+}
+
+func TestAnalyzeSituationResponseUsesBinaryRowsForStmtExecute(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+	ses := newTestSession(t, ctrl)
+	writer := &countingMysqlWriter{testMysqlWriter: &testMysqlWriter{}}
+	resper := NewMysqlResp(writer)
+	execCtx := &ExecCtx{
+		reqCtx:     context.Background(),
+		ses:        ses,
+		isLastStmt: true,
+		input:      &UserInput{isBinaryProtExecute: true},
+		results: []ExecResult{
+			makeAnalyzeCountResult("approx_count_distinct(a)", 2),
+			makeAnalyzeCountResult("approx_count_distinct(x)", 4),
+		},
+	}
+
+	require.NoError(t, resper.respBySituation(ses, execCtx))
+	require.Len(t, writer.responses, 2)
+	require.Equal(t, int(COM_STMT_EXECUTE), writer.responses[0].cmd)
+	require.Equal(t, int(COM_STMT_EXECUTE), writer.responses[1].cmd)
+	require.NotZero(t, writer.responses[0].GetStatus()&SERVER_MORE_RESULTS_EXISTS)
+	require.Zero(t, writer.responses[1].GetStatus()&SERVER_MORE_RESULTS_EXISTS)
 }
 
 func TestCallSituationResponseSendsFinalAffectedRows(t *testing.T) {

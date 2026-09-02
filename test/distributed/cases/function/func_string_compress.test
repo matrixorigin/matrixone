@@ -3,11 +3,15 @@ SELECT UNCOMPRESS(COMPRESS('Hello World')) AS result1;
 
 # Additional test cases
 # Basic compression and decompression
-SELECT COMPRESS('Hello World') AS compressed;
+SELECT LEFT(HEX(COMPRESS('Hello World')), 12) AS compressed_header;
 SELECT UNCOMPRESS(COMPRESS('Hello World')) AS decompressed;
+SELECT UNCOMPRESS(UNHEX('0B000000789CF348CDC9C95708CF2FCA490100180B041D')) AS mysql_fixture;
+SELECT UNCOMPRESS(UNHEX('0C000000789CF348CDC9C95708CF2FCA490100180B041D')) AS mysql_larger_capacity;
+SELECT UNCOMPRESS(UNHEX('0B000000000B00F4FF48656C6C6F20576F726C640300')) AS legacy_matrixone_fixture;
+SELECT HEX(UNCOMPRESS(COMPRESS(UNHEX('000120FF20')))) AS binary_roundtrip;
 
 # Empty string
-SELECT COMPRESS('') AS empty_compressed;
+SELECT LENGTH(COMPRESS('')) AS empty_compressed_length;
 SELECT UNCOMPRESS(COMPRESS('')) AS empty_decompressed;
 
 # Long strings
@@ -25,9 +29,7 @@ SELECT UNCOMPRESS('invalid') AS invalid_compressed;
 # Table usage
 CREATE TABLE t1(plaintext VARCHAR(100));
 INSERT INTO t1 VALUES ('Hello'), ('World'), ('MatrixOne');
--- @bvt:issue#23021
-SELECT plaintext, COMPRESS(plaintext) AS compressed FROM t1;
--- @bvt:issue
+SELECT plaintext, UNCOMPRESSED_LENGTH(COMPRESS(plaintext)) AS original_length FROM t1;
 SELECT plaintext, UNCOMPRESS(COMPRESS(plaintext)) AS decompressed FROM t1;
 DROP TABLE t1;
 
@@ -38,9 +40,10 @@ SELECT * FROM t1 WHERE UNCOMPRESS(COMPRESS(plaintext)) = 'Hello';
 DROP TABLE t1;
 
 # Multiple COMPRESS operations
--- @bvt:issue#23021
-SELECT COMPRESS('text1') AS comp1, COMPRESS('text2') AS comp2, COMPRESS('text3') AS comp3;
--- @bvt:issue
+SELECT UNCOMPRESS(COMPRESS('text1')) AS text1, UNCOMPRESS(COMPRESS('text2')) AS text2, UNCOMPRESS(COMPRESS('text3')) AS text3;
+
+# MySQL appends a dot if the zlib stream ends in a space
+SELECT RIGHT(HEX(COMPRESS(UNHEX('1F'))), 4) AS trailing_space_marker;
 
 # Round-trip test with different data types
 SELECT UNCOMPRESS(COMPRESS('12345')) AS numeric_string;
@@ -65,6 +68,7 @@ SELECT UNCOMPRESSED_LENGTH(COMPRESS('MatrixOne数据库')) AS unicode_length;
 # UNCOMPRESSED_LENGTH with NULL
 SELECT UNCOMPRESSED_LENGTH(NULL) AS null_input;
 SELECT UNCOMPRESSED_LENGTH('invalid') AS invalid_compressed;
+SELECT UNCOMPRESSED_LENGTH('abc') AS short_invalid_compressed;
 
 # UNCOMPRESSED_LENGTH in table
 CREATE TABLE t1(plaintext VARCHAR(100));
@@ -136,4 +140,3 @@ CREATE TABLE t1(password VARCHAR(100));
 INSERT INTO t1 VALUES ('weak'), ('Password123'), ('Password123!'), ('VeryStrongP@ssw0rd123!');
 SELECT * FROM t1 WHERE VALIDATE_PASSWORD_STRENGTH(password) >= 50;
 DROP TABLE t1;
-

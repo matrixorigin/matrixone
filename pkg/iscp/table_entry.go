@@ -197,6 +197,7 @@ func (t *TableEntry) getCandidate() (iter []*IterationContext, minFromTS types.T
 		candidates = append(candidates, sinker)
 	}
 	iterations := make([]*IterationContext, 0, len(candidates))
+	shareableIterations := make([]*IterationContext, 0, len(candidates))
 	minFromTS = types.MaxTs()
 	for _, sinker := range candidates {
 		if sinker.watermark.IsEmpty() && sinker.state == ISCPJobState_Completed {
@@ -216,9 +217,14 @@ func (t *TableEntry) getCandidate() (iter []*IterationContext, minFromTS types.T
 		if !ok {
 			continue
 		}
+		// InitSQL is executed for exactly one job at a time. Keep its iteration
+		// out of the shared pool until the durable stage advances to Running.
+		if sinker.stage == JobStage_Init {
+			share = false
+		}
 		foundIteration := false
 		if share {
-			for _, iter := range iterations {
+			for _, iter := range shareableIterations {
 				if iter.fromTS.EQ(&from) && iter.toTS.EQ(&to) {
 					iter.jobNames = append(iter.jobNames, sinker.jobName)
 					iter.jobIDs = append(iter.jobIDs, sinker.jobID)
@@ -239,7 +245,7 @@ func (t *TableEntry) getCandidate() (iter []*IterationContext, minFromTS types.T
 			}
 		}
 		if !foundIteration {
-			iterations = append(iterations, &IterationContext{
+			iter := &IterationContext{
 				tableID:      t.tableID,
 				accountID:    t.accountID,
 				sourceTables: append([]TableInfo(nil), sinker.sourceTables...),
@@ -248,7 +254,11 @@ func (t *TableEntry) getCandidate() (iter []*IterationContext, minFromTS types.T
 				lsn:          []uint64{sinker.currentLSN + 1},
 				fromTS:       from,
 				toTS:         to,
-			})
+			}
+			iterations = append(iterations, iter)
+			if sinker.stage != JobStage_Init {
+				shareableIterations = append(shareableIterations, iter)
+			}
 			if from.LT(&minFromTS) {
 				minFromTS = from
 			}

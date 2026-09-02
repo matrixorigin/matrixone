@@ -15,6 +15,29 @@ select * from t1;
 2  ¦  2
 delete from t1;
 insert into t1 values (1,1);
+insert into t1 values (1,20), (2,30) on duplicate key update a=values(a), b=values(b);
+select * from t1 order by a;
+➤ a[4,32,0]  ¦  b[4,32,0]  𝄀
+1  ¦  20  𝄀
+2  ¦  30
+insert into t1 values (1,20), (2,30) on duplicate key update a=values(a), b=values(b);
+select * from t1 order by a;
+➤ a[4,32,0]  ¦  b[4,32,0]  𝄀
+1  ¦  20  𝄀
+2  ¦  30
+insert into t1 values (1,99) on duplicate key update a=values(a);
+select * from t1 order by a;
+➤ a[4,32,0]  ¦  b[4,32,0]  𝄀
+1  ¦  20  𝄀
+2  ¦  30
+insert into t1 values (1,99) on duplicate key update a=values(b);
+unsupported DML: update primary key on duplicate
+select * from t1 order by a;
+➤ a[4,32,0]  ¦  b[4,32,0]  𝄀
+1  ¦  20  𝄀
+2  ¦  30
+delete from t1;
+insert into t1 values (1,1);
 insert into t1 values (1,11), (2,22), (3,33) on duplicate key update a=a+1,b=100;
 unsupported DML: update primary key on duplicate
 select * from t1;
@@ -36,6 +59,23 @@ insert into t1 values (1,2),(2,22),(3,33) on duplicate key update a=a+1;
 unsupported DML: update primary key on duplicate
 drop table t1;
 create table t1(a int, b int, c int, primary key(a, b));
+delete from t1;
+insert into t1 values (1,1,10);
+insert into t1 values (1,1,20), (2,2,30) on duplicate key update a=values(a), b=values(b), c=values(c);
+select * from t1 order by a, b;
+➤ a[4,32,0]  ¦  b[4,32,0]  ¦  c[4,32,0]  𝄀
+1  ¦  1  ¦  20  𝄀
+2  ¦  2  ¦  30
+insert into t1 values (1,1,20), (2,2,30) on duplicate key update a=values(a), b=values(b), c=values(c);
+select * from t1 order by a, b;
+➤ a[4,32,0]  ¦  b[4,32,0]  ¦  c[4,32,0]  𝄀
+1  ¦  1  ¦  20  𝄀
+2  ¦  2  ¦  30
+insert into t1 values (1,1,99) on duplicate key update a=values(a), b=values(b);
+select * from t1 order by a, b;
+➤ a[4,32,0]  ¦  b[4,32,0]  ¦  c[4,32,0]  𝄀
+1  ¦  1  ¦  20  𝄀
+2  ¦  2  ¦  30
 delete from t1;
 insert into t1 values (1,1,1);
 insert into t1 values (1,1,2), (2,2,2) on duplicate key update c=c+10;
@@ -177,6 +217,15 @@ select * from t1 order by a;
 drop table if exists t1;
 create table t1(a int primary key, b int unique key);
 insert into t1 values (1,1),(2,2),(3,3);
+insert into t1 values (1,20) on duplicate key update a = values(a), b = values(b);
+unsupported DML: update primary key on duplicate
+insert into t1 values (20,1) on duplicate key update a = values(a), b = values(b);
+unsupported DML: update primary key on duplicate
+select * from t1 order by a;
+➤ a[4,32,0]  ¦  b[4,32,0]  𝄀
+1  ¦  1  𝄀
+2  ¦  2  𝄀
+3  ¦  3
 insert into t1 values (1,20) on duplicate key update b = b + 1;
 unsupported DML: update unique key on duplicate
 insert into t1 values (20,1) on duplicate key update a = a + 1;
@@ -229,6 +278,29 @@ insert into users (id, counter) values ('112',2) on duplicate key update counter
 select id, counter, create_at = update_at from users;
 ➤ id[4,32,0]  ¦  counter[4,32,0]  ¦  create_at = update_at[-7,1,0]  𝄀
 112  ¦  3  ¦  1
+drop table if exists t_pk_only_noop;
+create table t_pk_only_noop (
+id int primary key,
+val int,
+updated_at timestamp default '2026-01-01 00:00:00' on update current_timestamp
+);
+insert into t_pk_only_noop (id, val) values (1, 10);
+insert into t_pk_only_noop (id, val) values (1, 99) on duplicate key update id = values(id);
+select row_count();
+➤ row_count()[-5,64,0]  𝄀
+0
+select id, val, updated_at = '2026-01-01 00:00:00' as unchanged from t_pk_only_noop order by id;
+➤ id[4,32,0]  ¦  val[4,32,0]  ¦  unchanged[-7,1,0]  𝄀
+1  ¦  10  ¦  1
+insert into t_pk_only_noop (id, val) values (1, 88), (2, 20) on duplicate key update id = values(id);
+select row_count();
+➤ row_count()[-5,64,0]  𝄀
+1
+select id, val, updated_at = '2026-01-01 00:00:00' as unchanged from t_pk_only_noop order by id;
+➤ id[4,32,0]  ¦  val[4,32,0]  ¦  unchanged[-7,1,0]  𝄀
+1  ¦  10  ¦  1  𝄀
+2  ¦  20  ¦  1
+drop table t_pk_only_noop;
 drop table if exists t_null_dup;
 create table t_null_dup (id int primary key, a int, b int);
 insert into t_null_dup values (1, 100, 100), (3, 300, 300);

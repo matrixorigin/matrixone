@@ -185,15 +185,7 @@ func (s *service) notifyCommandPoll() {
 	}
 }
 
-func (s *service) heartbeat(ctx context.Context) {
-	start := time.Now()
-	defer func() {
-		v2.CNHeartbeatHistogram.Observe(time.Since(start).Seconds())
-	}()
-
-	ctx2, cancel := context.WithTimeoutCause(ctx, s.cfg.HAKeeper.HeatbeatTimeout.Duration, moerr.CauseHeartbeat)
-	defer cancel()
-
+func (s *service) newCNStoreHeartbeat() logservicepb.CNStoreHeartbeat {
 	hb := logservicepb.CNStoreHeartbeat{
 		UUID:                s.cfg.UUID,
 		ServiceAddress:      s.pipelineServiceServiceAddr(),
@@ -226,6 +218,47 @@ func (s *service) heartbeat(ctx context.Context) {
 		hb.GossipAddress = s.gossipServiceAddr()
 		hb.GossipJoined = s.gossipNode.Joined()
 	}
+	return hb
+}
+
+// withdrawViewMetadataAdmission publishes a final non-routable heartbeat after
+// the periodic heartbeat task and every ingress path have stopped. This is the
+// clean ownership-handoff point: a replacement can take the same UUID without
+// waiting for store timeout, while abrupt or partitioned processes still have
+// no acknowledgement and remain protected by the timeout fence.
+func (s *service) withdrawViewMetadataAdmission() error {
+	if s.viewMetadataAdmissionGeneration == 0 || s._hakeeperClient == nil {
+		return nil
+	}
+	s.viewMetadataIngressReady.Store(false)
+	timeout := s.cfg.HAKeeper.HeatbeatTimeout.Duration
+	if timeout <= 0 {
+		timeout = 3 * time.Second
+	}
+	ctx, cancel := context.WithTimeoutCause(
+		context.Background(), timeout, moerr.CauseHeartbeat)
+	defer cancel()
+	hb := s.newCNStoreHeartbeat()
+	_, err := s._hakeeperClient.SendCNHeartbeat(ctx, hb)
+	if err != nil {
+		return moerr.AttachCause(ctx, err)
+	}
+	if ctx.Err() != nil {
+		return moerr.AttachCause(ctx, ctx.Err())
+	}
+	return nil
+}
+
+func (s *service) heartbeat(ctx context.Context) {
+	start := time.Now()
+	defer func() {
+		v2.CNHeartbeatHistogram.Observe(time.Since(start).Seconds())
+	}()
+
+	ctx2, cancel := context.WithTimeoutCause(ctx, s.cfg.HAKeeper.HeatbeatTimeout.Duration, moerr.CauseHeartbeat)
+	defer cancel()
+
+	hb := s.newCNStoreHeartbeat()
 
 	s.heartbeatInFlight.Store(true)
 	s.notifyCommandPoll()

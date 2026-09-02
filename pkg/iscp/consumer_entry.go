@@ -58,8 +58,10 @@ func NewJobEntryWithStatus(
 	dropAt types.Timestamp,
 ) *JobEntry {
 	var currentLSN uint64
+	stage := int8(JobStage_Running)
 	if jobStatus != nil {
 		currentLSN = jobStatus.LSN
+		stage = jobStatus.Stage
 	}
 	jobEntry := &JobEntry{
 		tableInfo:          tableInfo,
@@ -70,6 +72,7 @@ func NewJobEntryWithStatus(
 		watermark:          watermark,
 		persistedWatermark: watermark,
 		state:              state,
+		stage:              stage,
 		dropAt:             dropAt,
 		currentLSN:         currentLSN,
 		// Only the trigger spec is retained, so the consumer class is recorded
@@ -93,6 +96,12 @@ func (jobEntry *JobEntry) update(
 	jobEntry.dropAt = dropAt
 	if jobEntry.state == ISCPJobState_Error {
 		return
+	}
+	// Stage is monotonic within one job generation. In particular, InitSQL
+	// completion can persist Init -> Running without changing the job LSN or
+	// iteration state, so retain that transition independently of progress.
+	if jobEntry.stage < jobStatus.Stage {
+		jobEntry.stage = jobStatus.Stage
 	}
 	// Running/Pending is an admission state, not durable progress.  A job
 	// that is still Completed in this executor generation has no worker that

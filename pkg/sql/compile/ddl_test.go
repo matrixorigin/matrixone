@@ -43,11 +43,13 @@ import (
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
+	icebergmodel "github.com/matrixorigin/matrixone/pkg/iceberg/model"
 	iscpPkg "github.com/matrixorigin/matrixone/pkg/iscp"
 	plan2 "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/sql/features"
+	sqliceberg "github.com/matrixorigin/matrixone/pkg/sql/iceberg"
 	sqlmongodb "github.com/matrixorigin/matrixone/pkg/sql/mongodb"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
@@ -380,6 +382,39 @@ func TestMongoDBTableMappingDDLValidationAndPersistence(t *testing.T) {
 		require.NoError(t, c.maybeDeleteMongoDBTableMapping(db, rel, tableDef))
 		require.Equal(t, []string{sqlmongodb.DeleteTableMappingSQL(7, 8, 9)}, exec.sqls)
 	})
+}
+
+func TestIcebergTableMappingLocksCatalogBeforePublishingMapping(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	exec := &mongoDBMappingTestExecutor{results: make(map[string]executor.Result)}
+	c, db, rel := newMongoDBMappingTestCompile(t, ctrl, exec)
+	db.EXPECT().GetDatabaseId(gomock.Any()).Return("8")
+	rel.EXPECT().GetTableID(gomock.Any()).Return(uint64(9))
+
+	mapping := icebergmodel.TableMapping{
+		CatalogID: 42, Namespace: "sales", TableName: "orders",
+		DefaultRef: icebergmodel.DefaultRefMain, ReadMode: icebergmodel.ReadModeAppendOnly,
+		WriteMode: icebergmodel.WriteModeReadOnly,
+	}
+	lookupSQL := sqliceberg.GetCatalogByNameForUpdateSQL(7, "source")
+	exec.results[lookupSQL] = icebergCatalogResult(t, c.proc, 42)
+	qry := &plan2.CreateTable{TableDef: &plan2.TableDef{
+		Createsql: sqliceberg.BuildCreateSQLEnvelope(mapping, "source"),
+	}}
+
+	require.NoError(t, c.maybeInsertIcebergTableMapping(db, rel, qry))
+	require.Len(t, exec.sqls, 2)
+	require.Equal(t, lookupSQL, exec.sqls[0])
+	require.Contains(t, exec.sqls[1], "insert into mo_catalog."+sqliceberg.TableTables)
+	require.Contains(t, exec.sqls[1], "values (7,8,9,42")
+}
+
+func icebergCatalogResult(t *testing.T, proc *process.Process, catalogID uint64) executor.Result {
+	t.Helper()
+	result := executor.NewMemResult([]types.Type{types.T_uint64.ToType(), types.T_uint64.ToType()}, proc.Mp())
+	result.NewBatchWithRowCount(1)
+	require.NoError(t, executor.AppendFixedRows(result, 1, []uint64{catalogID}))
+	return result.GetResult()
 }
 
 func TestConvertDBEOBToNoSuchTable(t *testing.T) {

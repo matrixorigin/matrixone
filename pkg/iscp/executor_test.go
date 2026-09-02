@@ -203,6 +203,70 @@ func TestNewJobWithInFlightPersistedStateCanBeScheduled(t *testing.T) {
 	require.True(t, iters[0].fromTS.IsEmpty())
 }
 
+func TestTableEntryDoesNotShareInitIterations(t *testing.T) {
+	exec := newRuntimeTestExecutor()
+	table := NewTableEntry(exec, 1, 2, 3, "db", "table")
+	spec := &JobSpec{
+		ConsumerInfo: ConsumerInfo{InitSQL: "select 1"},
+		TriggerSpec:  TriggerSpec{JobType: TriggerType_Default},
+	}
+	watermark := types.BuildTS(10, 0)
+	for i, name := range []string{"index_ft", "index_hv"} {
+		table.AddOrUpdateSinker(
+			context.Background(),
+			name,
+			spec,
+			&JobStatus{LSN: 5, Stage: JobStage_Init},
+			uint64(i+1),
+			watermark,
+			ISCPJobState_Completed,
+			0,
+		)
+	}
+
+	iters, _ := table.getCandidate()
+	require.Len(t, iters, 2)
+	for _, iter := range iters {
+		require.Len(t, iter.jobNames, 1)
+	}
+
+	// Once one job has initialized, it must still not share an iteration with
+	// the other job while that job remains in the Init stage.
+	table.AddOrUpdateSinker(
+		context.Background(),
+		"index_ft",
+		spec,
+		&JobStatus{LSN: 5, Stage: JobStage_Running},
+		1,
+		watermark,
+		ISCPJobState_Completed,
+		0,
+	)
+	require.Equal(t, int8(JobStage_Running), table.jobs[JobKey{JobName: "index_ft", JobID: 1}].stage)
+	require.Equal(t, uint64(5), table.jobs[JobKey{JobName: "index_ft", JobID: 1}].currentLSN)
+	iters, _ = table.getCandidate()
+	require.Len(t, iters, 2)
+	for _, iter := range iters {
+		require.Len(t, iter.jobNames, 1)
+	}
+
+	// Normal running jobs retain the existing shared-iteration behavior.
+	table.AddOrUpdateSinker(
+		context.Background(),
+		"index_hv",
+		spec,
+		&JobStatus{LSN: 5, Stage: JobStage_Running},
+		2,
+		watermark,
+		ISCPJobState_Completed,
+		0,
+	)
+	require.Equal(t, int8(JobStage_Running), table.jobs[JobKey{JobName: "index_hv", JobID: 2}].stage)
+	iters, _ = table.getCandidate()
+	require.Len(t, iters, 1)
+	require.ElementsMatch(t, []string{"index_ft", "index_hv"}, iters[0].jobNames)
+}
+
 func TestPublishRebuiltStateReplacesAbandonedGeneration(t *testing.T) {
 	exec := &ISCPTaskExecutor{tables: newISCPTableTree()}
 	oldTable := NewTableEntry(exec, 1, 2, 3, "db", "table")
