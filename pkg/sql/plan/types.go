@@ -362,6 +362,11 @@ type QueryBuilder struct {
 	// subscription metadata branch. It complements CompilerContext's publisher
 	// routing state with subscriber-local table visibility.
 	queryingSubscriptionMetadata *SubscriptionMetadata
+	// subscriptionStatisticsPublisherBranches is the statement-wide admission
+	// count for publisher STATISTICS view expansions. It is reserved before an
+	// occurrence binds either its local view or any publisher view, so an
+	// over-budget statement cannot produce a partial metadata plan.
+	subscriptionStatisticsPublisherBranches int
 
 	ctxByNode             []*BindContext
 	windowValidationScans []*plan.Node

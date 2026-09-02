@@ -40,6 +40,10 @@ type subscriptionMetadataTestContext struct {
 	defaultDB           string
 	metadata            []*SubscriptionMetadata
 	lowerCaseTableNames int64
+	metadataCalls       int
+	publisherBindCount  int
+	cancelPublisherBind int
+	cancelPlanning      context.CancelFunc
 }
 
 func (c *subscriptionMetadataTestContext) GetLowerCaseTableNames() int64 {
@@ -70,6 +74,7 @@ func (c *subscriptionMetadataTestContext) GetSubscriptionMeta(
 func (c *subscriptionMetadataTestContext) GetSubscriptionMetadata(
 	_ *Snapshot,
 ) ([]*SubscriptionMetadata, error) {
+	c.metadataCalls++
 	if c.metadata != nil {
 		return c.metadata, nil
 	}
@@ -82,6 +87,14 @@ func (c *subscriptionMetadataTestContext) GetSubscriptionMetadata(
 
 func (c *subscriptionMetadataTestContext) SetQueryingSubscription(subscription *SubscriptionMeta) {
 	c.querying = subscription
+	if subscription == nil {
+		return
+	}
+	c.publisherBindCount++
+	if c.cancelPlanning != nil && c.publisherBindCount == c.cancelPublisherBind {
+		c.cancelPlanning()
+		c.cancelPlanning = nil
+	}
 }
 
 func (c *subscriptionMetadataTestContext) GetQueryingSubscription() *SubscriptionMeta {
@@ -412,6 +425,88 @@ func TestSubscriptionStatisticsPlanningBudget(t *testing.T) {
 		require.Equal(t, 4, counts[fmt.Sprintf("sub_%02d", i)])
 	}
 	require.Nil(t, ctx.GetQueryingSubscription())
+}
+
+func TestSubscriptionStatisticsRejectsPublisherExpansionOverBudget(t *testing.T) {
+	t.Run("single occurrence", func(t *testing.T) {
+		_, ctx := newSubscriptionMetadataTestOptimizer()
+		ctx.metadata = subscriptionMetadataTestSet(maxSubscriptionStatisticsPublisherBranches + 1)
+		statements, err := mysql.Parse(context.Background(),
+			"select count(*) from information_schema.statistics where table_name = 'nation'", 1)
+		require.NoError(t, err)
+		require.Len(t, statements, 1)
+		defer statements[0].Free()
+
+		_, err = BuildPlan(ctx, statements[0], false)
+		require.ErrorContains(t, err, "publisher expansion exceeds planning budget of 256 branches")
+		require.Zero(t, ctx.publisherBindCount,
+			"admission must reject the occurrence before binding any publisher view")
+		require.Nil(t, ctx.GetQueryingSubscription())
+	})
+
+	t.Run("cumulative occurrences", func(t *testing.T) {
+		_, ctx := newSubscriptionMetadataTestOptimizer()
+		ctx.metadata = subscriptionMetadataTestSet(64)
+		statements, err := mysql.Parse(context.Background(),
+			"select count(*) from information_schema.statistics a "+
+				"join information_schema.statistics b on a.table_name = b.table_name "+
+				"join information_schema.statistics c on b.table_name = c.table_name "+
+				"join information_schema.statistics d on c.table_name = d.table_name "+
+				"join information_schema.statistics e on d.table_name = e.table_name "+
+				"where a.table_name = 'nation'", 1)
+		require.NoError(t, err)
+		require.Len(t, statements, 1)
+		defer statements[0].Free()
+
+		_, err = BuildPlan(ctx, statements[0], false)
+		require.ErrorContains(t, err, "publisher expansion exceeds planning budget of 256 branches")
+		require.Equal(t, maxSubscriptionStatisticsPublisherBranches, ctx.publisherBindCount,
+			"the fifth occurrence must fail admission before binding another publisher view")
+		require.Nil(t, ctx.GetQueryingSubscription())
+	})
+}
+
+func TestSubscriptionStatisticsPlanningObservesCancellation(t *testing.T) {
+	const sql = "select count(*) from information_schema.statistics where table_name = 'nation'"
+
+	t.Run("pre-canceled", func(t *testing.T) {
+		_, ctx := newSubscriptionMetadataTestOptimizer()
+		ctx.metadata = subscriptionMetadataTestSet(4)
+		statements, err := mysql.Parse(context.Background(), sql, 1)
+		require.NoError(t, err)
+		require.Len(t, statements, 1)
+		defer statements[0].Free()
+
+		canceledCtx, cancel := context.WithCancel(context.Background())
+		cancel()
+		ctx.SetContext(canceledCtx)
+		_, err = BuildPlan(ctx, statements[0], false)
+		require.ErrorIs(t, err, context.Canceled)
+		require.Zero(t, ctx.metadataCalls,
+			"pre-canceled planning must stop before subscription enumeration")
+		require.Zero(t, ctx.publisherBindCount)
+		require.Nil(t, ctx.GetQueryingSubscription())
+	})
+
+	t.Run("during publisher binding", func(t *testing.T) {
+		_, ctx := newSubscriptionMetadataTestOptimizer()
+		ctx.metadata = subscriptionMetadataTestSet(4)
+		statements, err := mysql.Parse(context.Background(), sql, 1)
+		require.NoError(t, err)
+		require.Len(t, statements, 1)
+		defer statements[0].Free()
+
+		planningCtx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+		ctx.SetContext(planningCtx)
+		ctx.cancelPublisherBind = 1
+		ctx.cancelPlanning = cancel
+		_, err = BuildPlan(ctx, statements[0], false)
+		require.ErrorIs(t, err, context.Canceled)
+		require.Equal(t, 1, ctx.publisherBindCount,
+			"the loop must observe cancellation before binding the next publisher view")
+		require.Nil(t, ctx.GetQueryingSubscription())
+	})
 }
 
 func BenchmarkSubscriptionStatisticsPlanning(b *testing.B) {

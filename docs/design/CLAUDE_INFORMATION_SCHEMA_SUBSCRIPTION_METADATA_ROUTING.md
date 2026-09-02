@@ -1,11 +1,11 @@
 # Information Schema Subscription Metadata Routing
 
-- Status: Proposed — awaiting independent design approval
+- Status: Proposed — implementation includes fail-closed admission; awaiting independent design approval
 - Owning issue: [#27759](https://github.com/matrixorigin/matrixone/issues/27759)
 - Implementation PR: [#27778](https://github.com/matrixorigin/matrixone/pull/27778)
 - Related local-visibility design: [Information Schema Metadata Visibility and Active-Role Closure](CLAUDE_INFORMATION_SCHEMA_METADATA_VISIBILITY.md)
-- Version: 2
-- Last updated: 2026-09-01
+- Version: 3
+- Last updated: 2026-09-02
 
 ## 1. Problem and evidence
 
@@ -310,10 +310,16 @@ budget for the current UNION implementation:
 - reference compile budget at the validated envelope: 500 ms and 256 MiB of
   cumulative Go allocations per plan build on an Apple M1 with 8 planner
   threads;
-- queries above the validated envelope are not truncated, but are outside the
-  performance contract of this implementation and require a follow-up runtime
-  metadata operator or equivalent shared representation before that envelope
-  is raised.
+- the planner admits at most 256 publisher view expansions across the complete
+  statement. It reserves an occurrence's full visible subscription set before
+  binding its local view or any publisher view. A request that would exceed the
+  limit fails planning explicitly; it is never truncated and no partial
+  metadata plan can execute;
+- cancellation is checked before subscription enumeration, while filtering the
+  enumerated set, and before every publisher view bind. A canceled statement
+  therefore does not continue consuming the remaining branch budget;
+- raising the 256-branch limit requires a follow-up runtime metadata operator
+  or equivalent shared representation plus new capacity evidence.
 
 The checked-in benchmark is reproducible with:
 
@@ -336,9 +342,11 @@ Reference evidence on 2026-09-01 (`darwin/arm64`, Apple M1) is:
 
 Wall-clock values are reference evidence, not a timing assertion in unit tests.
 The deterministic boundary test compiles 64 subscriptions across four
-occurrences and verifies all 256 publisher branches. CI executes the functional
-publication/subscription matrix against real catalogs; timing remains observed
-through existing statement and subscription duration metrics.
+occurrences and verifies all 256 publisher branches. Separate counterexamples
+verify that the 257th publisher branch fails before publisher binding and that
+pre-canceled or mid-expansion planning returns cancellation. CI executes the
+functional publication/subscription matrix against real catalogs; timing
+remains observed through existing statement and subscription duration metrics.
 
 ## 10. Failure handling and ownership
 
@@ -353,9 +361,11 @@ are closed with `defer`; compiler-context subscription identity is restored
 after each publisher branch. There is no global subscription metadata cache,
 background goroutine, retry loop, or cross-statement mutable branch list.
 
-Cancellation and memory admission continue to use the existing planner/query
-ownership paths. The explicit planning budget in Section 9 is the acceptance
-envelope for the current representation, not permission to bypass those limits.
+Cancellation uses the existing statement context and is polled at each
+subscription-expansion boundary. Branch admission is query-builder-local,
+monotonic for one statement, and discarded with a failed build. The explicit
+planning budget in Section 9 is a hard runtime admission limit for the current
+representation, not only a benchmark envelope.
 
 ## 11. Alternatives
 
@@ -425,7 +435,9 @@ freshness rule explicit.
 | Prepared create/withdraw/reauthorize/drop transitions rebuild | frontend lifecycle tests and public prepared BVT |
 | Guaranteed rebuild skips obsolete captured-reference validation | injected resolver test |
 | Identifier modes 0/1/2 and malformed bytes deduplicate correctly | planner unit tests and case-sensitive BVT |
-| 64 subscriptions × 4 occurrences preserve all 256 branches | deterministic planner budget test |
+| 64 subscriptions × 4 occurrences preserve all 256 branches | deterministic planner boundary test |
+| The 257th publisher branch fails before publisher binding | over-budget planner counterexample |
+| Pre-canceled and mid-expansion planning stop promptly | deterministic cancellation counterexamples |
 | Planning cost remains measurable across 0/16/64 and 1/4 | checked-in benchmark and Section 9 reference results |
 | Connector/J index and primary-key result shapes | public BVT plus Connector/J integration run |
 
@@ -465,8 +477,10 @@ branch/cardinality observability before raising the budget.
 - Publisher rewrites are query-owned and support legacy plus canonical
   persisted definitions without a catalog migration.
 - Identifier deduplication follows `lower_case_table_names`.
-- The current representation's explicit supported envelope is 64 active
-  subscriptions and four `STATISTICS` occurrences.
+- The current representation has a hard statement-wide admission limit of 256
+  publisher view expansions. Sixty-four active subscriptions across four
+  `STATISTICS` occurrences is the validated boundary; the 257th branch fails
+  closed without returning partial metadata.
 - No blocking design question is intentionally left unresolved. Raising the
   performance envelope is a separate design change.
 

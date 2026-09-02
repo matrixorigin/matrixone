@@ -25,7 +25,15 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 )
 
-const informationSchemaStatistics = "statistics"
+const (
+	informationSchemaStatistics = "statistics"
+	// maxSubscriptionStatisticsPublisherBranches is the validated admission
+	// envelope for the current UNION-based representation: 64 visible
+	// subscriptions across four logical STATISTICS occurrences. The limit is
+	// statement-wide and counts only publisher views; the local view is always
+	// retained. Exceeding it fails planning instead of truncating metadata.
+	maxSubscriptionStatisticsPublisherBranches = 256
+)
 
 // PreparedPlanDependsOnSubscriptionMetadata reports whether a prepared plan
 // expands INFORMATION_SCHEMA.STATISTICS. The expansion captures the complete
@@ -65,8 +73,14 @@ func (builder *QueryBuilder) bindSubscriptionStatisticsView(
 	obj *ObjectRef,
 	schema, table string,
 ) (int32, error) {
+	if err := builder.checkPlanningCanceled(); err != nil {
+		return 0, err
+	}
 	subscriptions, err := builder.visibleSubscriptionMetadata(snapshot)
 	if err != nil {
+		return 0, err
+	}
+	if err := builder.checkPlanningCanceled(); err != nil {
 		return 0, err
 	}
 
@@ -77,6 +91,9 @@ func (builder *QueryBuilder) bindSubscriptionStatisticsView(
 	}
 	nodes = append(nodes, localNode)
 	for _, subscription := range subscriptions {
+		if err := builder.checkPlanningCanceled(); err != nil {
+			return 0, err
+		}
 		nodeID, bindErr := builder.bindView(
 			ctx, tableDef, snapshot, obj, schema, table, subscription,
 		)
@@ -102,30 +119,26 @@ func (builder *QueryBuilder) visibleSubscriptionMetadata(
 	if err != nil {
 		return nil, err
 	}
-	subscriptions = append([]*SubscriptionMetadata(nil), subscriptions...)
-	lowerCaseTableNames := builder.compCtx.GetLowerCaseTableNames()
+	if err := builder.checkPlanningCanceled(); err != nil {
+		return nil, err
+	}
 
-	sort.SliceStable(subscriptions, func(i, j int) bool {
-		if subscriptions[i] == nil || subscriptions[i].Meta == nil {
-			return false
-		}
-		if subscriptions[j] == nil || subscriptions[j].Meta == nil {
-			return true
-		}
-		leftName := subscriptions[i].Meta.SubName
-		rightName := subscriptions[j].Meta.SubName
-		leftKey := subscriptionMetadataNameKey(leftName, lowerCaseTableNames)
-		rightKey := subscriptionMetadataNameKey(rightName, lowerCaseTableNames)
-		if leftKey != rightKey {
-			return leftKey < rightKey
-		}
-		// Make the selected representative deterministic when names compare equal
-		// under a case-insensitive mode.
-		return leftName < rightName
-	})
-	seen := make(map[string]struct{}, len(subscriptions))
-	visible := subscriptions[:0]
+	remaining := maxSubscriptionStatisticsPublisherBranches -
+		builder.subscriptionStatisticsPublisherBranches
+	if remaining < 0 {
+		remaining = 0
+	}
+	capacity := len(subscriptions)
+	if capacity > remaining {
+		capacity = remaining
+	}
+	lowerCaseTableNames := builder.compCtx.GetLowerCaseTableNames()
+	seen := make(map[string]struct{}, capacity)
+	visible := make([]*SubscriptionMetadata, 0, capacity)
 	for _, subscription := range subscriptions {
+		if err := builder.checkPlanningCanceled(); err != nil {
+			return nil, err
+		}
 		if subscription == nil ||
 			!validSubscriptionPublicationScope(subscription.Meta) ||
 			(!subscription.AllTablesVisible && len(subscription.VisibleTableIDs) == 0) {
@@ -135,9 +148,29 @@ func (builder *QueryBuilder) visibleSubscriptionMetadata(
 		if _, duplicate := seen[nameKey]; duplicate {
 			continue
 		}
+		if len(visible) == remaining {
+			return nil, moerr.NewInvalidInputf(
+				builder.GetContext(),
+				"information_schema.statistics publisher expansion exceeds planning budget of %d branches; reduce visible subscriptions or STATISTICS occurrences",
+				maxSubscriptionStatisticsPublisherBranches,
+			)
+		}
 		seen[nameKey] = struct{}{}
 		visible = append(visible, subscription)
 	}
+	sort.SliceStable(visible, func(i, j int) bool {
+		leftName := visible[i].Meta.SubName
+		rightName := visible[j].Meta.SubName
+		leftKey := subscriptionMetadataNameKey(leftName, lowerCaseTableNames)
+		rightKey := subscriptionMetadataNameKey(rightName, lowerCaseTableNames)
+		if leftKey != rightKey {
+			return leftKey < rightKey
+		}
+		// Make the selected representative deterministic when names compare equal
+		// under a case-insensitive mode.
+		return leftName < rightName
+	})
+	builder.subscriptionStatisticsPublisherBranches += len(visible)
 	return visible, nil
 }
 
