@@ -310,6 +310,8 @@ func newPreparedExecuteEnvForSQLWithCompilerContext(
 	preparePlan, err := buildPlan(ctx, nil, compilerContext, prepareString)
 	require.NoError(t, err)
 
+	fixedIntegerParamPositions, hasPaginationParams, hasLagLeadParams :=
+		preparedFixedIntegerParamPositions(preparePlan.GetDcl().GetPrepare().Plan)
 	prepareStmt := &PrepareStmt{
 		Name:                       stmtName,
 		Sql:                        prepareString.Sql,
@@ -321,8 +323,9 @@ func newPreparedExecuteEnvForSQLWithCompilerContext(
 		getFromSendLongData:        make(map[int]struct{}),
 		protocolVersion:            currentProtocolVersion(proc),
 		directResultParamPositions: plan2.PreparedPlanDirectResultParamPositions(preparePlan.GetDcl().GetPrepare().Plan),
-		hasPaginationParams:        plan2.PreparedPlanHasPaginationParams(preparePlan.GetDcl().GetPrepare().Plan),
-		hasLagLeadParams:           len(plan2.PreparedLagLeadParamPositions(preparePlan.GetDcl().GetPrepare().Plan)) > 0,
+		fixedIntegerParamPositions: fixedIntegerParamPositions,
+		hasPaginationParams:        hasPaginationParams,
+		hasLagLeadParams:           hasLagLeadParams,
 	}
 	prepareStmt.refreshNumericPrefixConsumer(
 		preparePlan.GetDcl().GetPrepare().Plan,
@@ -489,6 +492,8 @@ func TestIssue27640InitExecuteStmtParamAcceptsODBCIntegerTextPagination(t *testi
 			if test.pagination != nil {
 				require.Equal(t, test.pagination, plan2.PreparedPaginationParamPositions(
 					prepareStmt.PreparePlan.GetDcl().GetPrepare().Plan))
+				require.Equal(t, test.pagination, prepareStmt.fixedIntegerParamPositions,
+					"prepared-plan installation must cache fixed integer parameter positions")
 			}
 
 			// Connector/ODBC sends integer bindings as MYSQL_TYPE_STRING in
@@ -1963,7 +1968,7 @@ func TestRuntimeSpecializationReplacementCommitsOnlyAfterCompileSuccess(t *testi
 	require.Nil(t, prepareStmt.runtimeCompile)
 }
 
-func BenchmarkInitExecuteStmtParamRepeatedDecimalSemanticCategory(b *testing.B) {
+func BenchmarkInitExecuteStmtParamRepeatedDecimalSemanticCategoryNoPagination(b *testing.B) {
 	ses, prepareStmt, cw, execCtx := newPreparedExecuteEnvForSQL(b, 207, "select ?")
 	defer func() {
 		cw.proc.SetPrepareParams(nil)
@@ -1982,7 +1987,10 @@ func BenchmarkInitExecuteStmtParamRepeatedDecimalSemanticCategory(b *testing.B) 
 	prepareStmt.PreparePlan.GetDcl().GetPrepare().Plan = manualPlan
 	prepareStmt.directResultParamPositions = plan2.PreparedPlanDirectResultParamPositions(manualPlan)
 	prepareStmt.refreshNumericPrefixConsumer(manualPlan, 1)
+	prepareStmt.refreshFixedIntegerParamPositions(manualPlan)
 	require.True(b, prepareStmt.numericPrefixConsumer)
+	require.Empty(b, prepareStmt.fixedIntegerParamPositions,
+		"the no-pagination hot path must reuse empty fixed-position metadata")
 	prepareStmt.params = vector.NewVec(types.T_text.ToType())
 	require.NoError(b, vector.AppendBytes(prepareStmt.params, []byte("9.0"), false, cw.proc.Mp()))
 	prepareStmt.ParamTypes = []byte{byte(defines.MYSQL_TYPE_NEWDECIMAL), 0}

@@ -927,13 +927,10 @@ func applyBinaryDirectResultDecimalTypes(
 
 func filterBinaryNumericPrefixCandidates(
 	preparePlan *plan2.Plan,
+	fixedIntegerPositions []int32,
 	paramVals []any,
 	paramTypes []byte,
 ) bool {
-	fixedIntegerPositions := plan2.PreparedPaginationParamPositions(preparePlan)
-	fixedIntegerPositions = append(
-		fixedIntegerPositions, plan2.PreparedLagLeadParamPositions(preparePlan)...)
-	slices.Sort(fixedIntegerPositions)
 	anyRelevant := false
 	for i := range paramVals {
 		param, ok := paramVals[i].(plan2.ParamValue)
@@ -982,6 +979,24 @@ func filterBinaryNumericPrefixCandidates(
 		}
 	}
 	return anyRelevant
+}
+
+// preparedFixedIntegerParamPositions returns static execute-time metadata for
+// one prepared-plan generation. LIMIT/OFFSET and LAG/LEAD offsets have the
+// same fixed unsigned-integer contract, so retain one sorted position list for
+// all binary execute-time consumers.
+func preparedFixedIntegerParamPositions(preparePlan *plan2.Plan) ([]int32, bool, bool) {
+	paginationPositions := plan2.PreparedPaginationParamPositions(preparePlan)
+	lagLeadPositions := plan2.PreparedLagLeadParamPositions(preparePlan)
+	fixedIntegerPositions := append(paginationPositions, lagLeadPositions...)
+	slices.Sort(fixedIntegerPositions)
+	return fixedIntegerPositions, len(paginationPositions) > 0, len(lagLeadPositions) > 0
+}
+
+func (prepareStmt *PrepareStmt) refreshFixedIntegerParamPositions(preparePlan *plan2.Plan) {
+	prepareStmt.fixedIntegerParamPositions,
+		prepareStmt.hasPaginationParams,
+		prepareStmt.hasLagLeadParams = preparedFixedIntegerParamPositions(preparePlan)
 }
 
 func preparedPositionHasStaticExactNumericPeer(preparePlan *plan2.Plan, position int) bool {
@@ -1264,8 +1279,7 @@ func initExecuteStmtParamWithResolverInSession(
 			newPreparePlan.Plan, len(newPreparePlan.ParamTypes))
 		prepareStmt.numericOverloadParamPositions = plan2.PreparedPlanNumericFallbackParamPositions(
 			newPreparePlan.Plan)
-		prepareStmt.hasPaginationParams = plan2.PreparedPlanHasPaginationParams(newPreparePlan.Plan)
-		prepareStmt.hasLagLeadParams = len(plan2.PreparedLagLeadParamPositions(newPreparePlan.Plan)) > 0
+		prepareStmt.refreshFixedIntegerParamPositions(newPreparePlan.Plan)
 		prepareStmt.ColDefData = newColDefData
 		if execCtx.input != nil && execCtx.input.isBinaryProtExecute {
 			execCtx.prepareColDef = newColDefData
@@ -1450,7 +1464,8 @@ func initExecuteStmtParamWithResolverInSession(
 			}
 			if runtimeNumericPrefixCandidate && executionPlan.GetQuery() != nil {
 				runtimeNumericPrefixCandidate = filterBinaryNumericPrefixCandidates(
-					executionPlan, cwft.paramVals, prepareStmt.ParamTypes)
+					executionPlan, prepareStmt.fixedIntegerParamPositions,
+					cwft.paramVals, prepareStmt.ParamTypes)
 			}
 			if runtimeDirectResultCandidate && !runtimeNumericPrefixCandidate &&
 				!runtimeNumericOverloadCandidate && !needsRuntimeSpecialization {
@@ -1524,7 +1539,8 @@ func initExecuteStmtParamWithResolverInSession(
 		}
 	}
 	if prepareStmt.hasPaginationParams || prepareStmt.hasLagLeadParams {
-		if err := normalizePreparedOffsetBooleans(cwft.proc, preparePlan.Plan, cwft.paramVals); err != nil {
+		if err := normalizePreparedOffsetBooleans(
+			cwft.proc, prepareStmt.fixedIntegerParamPositions, cwft.paramVals); err != nil {
 			return nil, nil, nil, originSQL, false, err
 		}
 	}
@@ -2012,14 +2028,12 @@ func newPreparedExecutionRetry(
 	return retry
 }
 
-func normalizePreparedOffsetBooleans(proc *process.Process, preparePlan *plan.Plan, paramVals []any) error {
+func normalizePreparedOffsetBooleans(proc *process.Process, fixedIntegerPositions []int32, paramVals []any) error {
 	params := proc.GetPrepareParams()
 	if params == nil {
 		return nil
 	}
-	positions := plan2.PreparedPaginationParamPositions(preparePlan)
-	positions = append(positions, plan2.PreparedLagLeadParamPositions(preparePlan)...)
-	for _, position := range positions {
+	for _, position := range fixedIntegerPositions {
 		if position < 0 || int(position) >= len(paramVals) {
 			continue
 		}
