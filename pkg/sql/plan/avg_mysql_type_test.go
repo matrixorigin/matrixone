@@ -129,7 +129,8 @@ func TestCTASAvgBoundsWideIntegerExpressionPrecision(t *testing.T) {
 		`create table t_avg_wide_literal as select
 avg(0 * 100000000 * 100000000 * 100000000 * 100000) as avg_at_decimal128_limit,
 avg(0 * 100000000 * 100000000 * 100000000 * 1000000) as avg_above_decimal128_limit,
-avg(0 * 100000000 * 100000000 * 100000000 * 100000000) as avg_zero
+avg(0 * 100000000 * 100000000 * 100000000 * 100000000) as avg_zero,
+avg(0 * 100000000 * 100000000 * 100000000 * 100000000 * 100000000 * 100000000 * 100000000) as avg_capped
 from nation`,
 		1,
 	)
@@ -145,7 +146,7 @@ from nation`,
 			visible = append(visible, col)
 		}
 	}
-	require.Len(t, visible, 3)
+	require.Len(t, visible, 4)
 	// The first expression has precision 34, so AVG reaches the Decimal128
 	// boundary (38,4); the next two promote to valid Decimal256 metadata even
 	// though their values are exactly zero.
@@ -158,4 +159,7 @@ from nation`,
 	require.Equal(t, int32(types.T_decimal256), visible[2].Typ.Id)
 	require.Equal(t, int32(41), visible[2].Typ.Width)
 	require.Equal(t, int32(4), visible[2].Typ.Scale)
+	require.Equal(t, int32(types.T_decimal256), visible[3].Typ.Id)
+	require.Equal(t, int32(65), visible[3].Typ.Width)
+	require.Equal(t, int32(4), visible[3].Typ.Scale)
 }

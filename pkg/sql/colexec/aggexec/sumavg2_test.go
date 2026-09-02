@@ -307,6 +307,49 @@ func TestAvgWideIntegerExpressionPrecisionExecutionModes(t *testing.T) {
 	}
 }
 
+func TestAvgWideIntegerExpressionNativeFinalizer(t *testing.T) {
+	argType := types.New(types.T_int32, 37, 0)
+	resultType := types.New(types.T_decimal256, 41, 4)
+
+	for _, test := range []struct {
+		name     string
+		distinct bool
+		window   bool
+	}{
+		{name: "ordinary"},
+		{name: "distinct", distinct: true},
+		{name: "window", window: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			mp := mpool.MustNewZero()
+			defer mpool.DeleteMPool(mp)
+			input := buildAvgFixedVector(t, mp, argType, []int32{0})
+			defer input.Free(mp)
+
+			exec, err := MakeAgg(mp, AggIdOfAvg, test.distinct, argType)
+			require.NoError(t, err)
+			defer exec.Free()
+			require.NoError(t, exec.GroupGrow(1))
+			switch {
+			case test.window:
+				require.NoError(t, exec.Fill(0, 0, []*vector.Vector{input}))
+			case test.distinct:
+				require.NoError(t, exec.BatchFill(0, []uint64{1}, []*vector.Vector{input}))
+			default:
+				require.NoError(t, exec.BulkFill(0, []*vector.Vector{input}))
+			}
+
+			results, err := exec.Flush()
+			require.NoError(t, err)
+			require.Len(t, results, 1)
+			defer results[0].Free(mp)
+			require.Equal(t, resultType, *results[0].GetType())
+			require.Equal(t, types.Decimal256{},
+				vector.GetFixedAtNoTypeCheck[types.Decimal256](results[0], 0))
+		})
+	}
+}
+
 func TestAvgDecimalRoundingExecutionModes(t *testing.T) {
 	argType := types.New(types.T_decimal64, 8, 2)
 	values := make([]types.Decimal64, 113)
