@@ -1111,11 +1111,13 @@ func TestViewMetadataLifecycleSkipsInternalDatabasesBeforeCatalogProbe(t *testin
 
 	t.Run("user database still probes lifecycle", func(t *testing.T) {
 		proc := testutil.NewProcess(t)
-		exec := &viewMetadataCleanupRecordingExecutor{}
+		exec := &viewMetadataCleanupRecordingExecutor{failures: map[int]error{
+			1: moerr.NewNoSuchTableNoCtx("mo_catalog", catalog.MO_VIEW_DEPENDENCIES),
+		}}
 		installUnavailableViewMetadataTestExecutor(t, proc, exec)
 		require.NoError(t, (&Compile{proc: proc, pn: &planpb.Plan{}}).
 			refreshViewsAfterRelationMutation("user_db", "relation", 0, 0))
-		require.Equal(t, viewMetadataRequireRevalidationSQL(), exec.sqls)
+		require.Equal(t, []string{catalog.ViewMetadataLifecycleGateSQL}, exec.sqls)
 	})
 }
 
