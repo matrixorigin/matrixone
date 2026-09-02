@@ -297,6 +297,32 @@ func collectProjectedColumns(
 	return projected
 }
 
+// removeIvfCandidateImpliedNotNullFilter removes only a direct IS NOT NULL
+// predicate on the indexed vector column. A synchronous IVF scan never emits
+// a candidate for a NULL vector, so candidate membership already proves this
+// predicate. More complex expressions remain residual filters.
+func removeIvfCandidateImpliedNotNullFilter(
+	filters []*plan.Expr,
+	scanTag, partPos int32,
+) (remaining, removed []*plan.Expr) {
+	remaining = make([]*plan.Expr, 0, len(filters))
+	for _, filter := range filters {
+		if filter == nil {
+			remaining = append(remaining, filter)
+			continue
+		}
+		fn := filter.GetF()
+		if fn != nil && fn.Func != nil && len(fn.Args) == 1 &&
+			(fn.Func.ObjName == "isnotnull" || fn.Func.ObjName == "is_not_null") &&
+			exprIsCol(fn.Args[0], scanTag, partPos) {
+			removed = append(removed, filter)
+			continue
+		}
+		remaining = append(remaining, filter)
+	}
+	return remaining, removed
+}
+
 func collectScanColumnsFromExpr(expr *plan.Expr, scanTag, partPos int32, origFuncName string, vecLitArg *plan.Expr, tableDef *plan.TableDef, out map[string]struct{}) {
 	if expr == nil || tableDef == nil {
 		return
@@ -637,11 +663,30 @@ func (builder *QueryBuilder) applyIndicesForSortUsingIvfflat(nodeID int32, vecCt
 		}
 		remainingFilters = append(remainingFilters, expr)
 	}
+	asyncIndex, err := catalog.IndexParamAsync(ivfCtx.metaDef.IndexAlgoParams)
+	if err != nil {
+		return nodeID, err
+	}
 	// Multi-round search may stop on a candidate count only when the index scan has
 	// observed every filter. Keep residual predicates on the membership-filter
 	// topology and use the bounded, legacy-compatible single-round IVF search.
 	includeModeFallbackToPre := vecCtx.rankOption != nil && vecCtx.rankOption.Mode == "include" && len(remainingFilters) > 0
 	usePreFilter := ivfCtx.pushdownEnabled || includeModeFallbackToPre
+	if !asyncIndex && !usePreFilter {
+		var removedFilters []*plan.Expr
+		remainingFilters, removedFilters = removeIvfCandidateImpliedNotNullFilter(
+			remainingFilters, scanNode.BindingTags[0], ivfCtx.partPos)
+		// colRefCnt was computed before index rewrites. Keep it consistent with
+		// FilterList so the remapper can prune the wide vector column.
+		if colRefCnt != nil && len(removedFilters) > 0 {
+			key := [2]int32{scanNode.BindingTags[0], ivfCtx.partPos}
+			if count := colRefCnt[key]; count > len(removedFilters) {
+				colRefCnt[key] = count - len(removedFilters)
+			} else {
+				colRefCnt[key] = 0
+			}
+		}
+	}
 	canIndexOnly := boundaryProj != nil &&
 		canDoIndexOnlyScan(requiredCols, scanNode.TableDef, includeAwareColumns) && len(remainingFilters) == 0
 	tableFuncIncludeColumns := make([]string, 0, len(includeAwareColumns))
@@ -680,10 +725,6 @@ func (builder *QueryBuilder) applyIndicesForSortUsingIvfflat(nodeID int32, vecCt
 		if bucketExpandStep == 0 {
 			bucketExpandStep = 1
 		}
-	}
-	asyncIndex, err := catalog.IndexParamAsync(ivfCtx.metaDef.IndexAlgoParams)
-	if err != nil {
-		return nodeID, err
 	}
 	typedPreFilters := rebindIvfPreFilters(typedPushdownFilters, scanNode, includeColumns)
 
