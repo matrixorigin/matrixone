@@ -88,6 +88,10 @@ execute relaxed_stmt;
 set session sql_mode = 'ONLY_FULL_GROUP_BY,STRICT_TRANS_TABLES,ENABLE_BOOL_SUMAVG';
 execute relaxed_stmt;
 deallocate prepare relaxed_stmt;
-set session sql_mode = 'ONLY_FULL_GROUP_BY,STRICT_TRANS_TABLES';
+
+-- restore the session default. mo-tester reuses one connection across case
+-- files, so a case that changes sql_mode must reset it or the next case sees
+-- the leftover value.
+set session sql_mode = 'ERROR_FOR_DIVISION_BY_ZERO,NO_ENGINE_SUBSTITUTION,NO_ZERO_DATE,NO_ZERO_IN_DATE,ONLY_FULL_GROUP_BY,STRICT_TRANS_TABLES';
 
 drop database bool_sumavg_sqlmode;
