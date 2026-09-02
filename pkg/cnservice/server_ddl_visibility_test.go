@@ -252,6 +252,9 @@ func (c *ddlVisibilityWithdrawalHAKeeperClient) SendCNHeartbeat(
 	}
 	authoritativeGeneration := hb.ViewMetadataAdmissionGeneration
 	if generation := c.authoritativeGenerations[hb.UUID]; generation > authoritativeGeneration {
+		if !c.oldDDLFrontierRSM && c.cluster.globalFrontier.Less(hb.DDLVisibilityFrontier) {
+			c.cluster.globalFrontier = hb.DDLVisibilityFrontier
+		}
 		return logservicepb.CommandBatch{
 			DDLVisibilityDeployedProtocol: c.clusterDeployedProtocol,
 			DDLVisibilityFrontier:         &c.cluster.globalFrontier,
@@ -1770,16 +1773,15 @@ func TestStaleGenerationCannotAcknowledgeDDLFrontierPublication(t *testing.T) {
 		t.Fatal("TaskRunner drain did not finish after the rejected SQL task exited")
 	}
 	require.True(t, oldIncarnation.viewMetadataGenerationRevoked.Load())
-	require.Equal(t, oldFrontier, cluster.globalFrontier,
-		"stale generation heartbeat must not advance the durable frontier")
+	require.Equal(t, commitFrontier, cluster.globalFrontier,
+		"an already-admitted stale-generation commit must advance the durable frontier")
 
-	// After the stale process crashes, a future incarnation can only observe the
-	// old durable value. The failed publication therefore must not have been
-	// acknowledged by frontend (covered by the publisher-failure commit test).
+	// After the stale process exits, every future incarnation observes T even
+	// though no incarnation-scoped admission state was accepted from generation 1.
 	ctrl := gomock.NewController(t)
 	restartedTxnClient := mock_frontend.NewMockTxnClient(ctrl)
-	restartedTxnClient.EXPECT().WaitLogTailAppliedAt(gomock.Any(), oldFrontier).Return(oldFrontier, nil)
-	restartedTxnClient.EXPECT().SyncLatestCommitTS(oldFrontier)
+	restartedTxnClient.EXPECT().WaitLogTailAppliedAt(gomock.Any(), commitFrontier).Return(commitFrontier, nil)
+	restartedTxnClient.EXPECT().SyncLatestCommitTS(commitFrontier)
 	restarted := &service{
 		cfg: &Config{UUID: producerID}, _txnClient: restartedTxnClient,
 		_hakeeperClient: client,

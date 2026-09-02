@@ -1037,6 +1037,7 @@ func (th *TxnHandler) commitUnsafe(execCtx *ExecCtx) error {
 				owner.rollbackTempTableTransaction(tempTxnKey)
 			}
 		}
+		var revokedPublicationErr error
 		if haveDDL && !commitTs.IsEmpty() && (err == nil || commitResultUnknown) {
 			recordDDLCommitFrontier(execCtx.ses.GetService(), commitTs)
 			if execCtx.ses.GetFromRealUser() ||
@@ -1048,7 +1049,11 @@ func (th *TxnHandler) commitUnsafe(execCtx *ExecCtx) error {
 				if publishErr := publishDDLCommitFrontier(
 					ctx2, execCtx.ses.GetService(), commitTs,
 				); publishErr != nil {
-					err = errors.Join(err, publishErr)
+					if errors.Is(publishErr, ErrDDLFrontierPublishedByRevokedGeneration) {
+						revokedPublicationErr = publishErr
+					} else {
+						err = errors.Join(err, publishErr)
+					}
 				}
 			}
 		}
@@ -1060,13 +1065,15 @@ func (th *TxnHandler) commitUnsafe(execCtx *ExecCtx) error {
 			execCtx.ses.SetTxnId(dumpUUID[:])
 			return err
 		}
-		if err == nil && haveDDL && !visibilityTS.IsEmpty() &&
+		if (err == nil || revokedPublicationErr != nil) && haveDDL && !visibilityTS.IsEmpty() &&
 			(execCtx.ses.GetFromRealUser() ||
 				publicBackgroundDDLBarrierEnabled(execCtx.ses.GetService())) {
 			// A fresh proxy connection has no session commit timestamp to carry
 			// across CNs. Do not acknowledge a client DDL until every working CN
 			// has reached the commit, or the observed catalog frontier for a no-op.
-			err = syncDDLCommitToBarrierReadyCNs(ctx2, execCtx.ses.GetService(), visibilityTS)
+			syncErr := syncDDLCommitToBarrierReadyCNsWithForce(
+				ctx2, execCtx.ses.GetService(), visibilityTS, revokedPublicationErr != nil)
+			err = errors.Join(err, revokedPublicationErr, syncErr)
 		}
 	}
 	th.invalidateTxnUnsafe()
@@ -1093,6 +1100,15 @@ func syncDDLCommitToBarrierReadyCNs(
 	service string,
 	visibilityTS timestamp.Timestamp,
 ) error {
+	return syncDDLCommitToBarrierReadyCNsWithForce(ctx, service, visibilityTS, false)
+}
+
+func syncDDLCommitToBarrierReadyCNsWithForce(
+	ctx context.Context,
+	service string,
+	visibilityTS timestamp.Timestamp,
+	force bool,
+) error {
 	pu := getPuIfPresent(service)
 	if pu == nil || pu.QueryClient == nil {
 		return nil
@@ -1101,7 +1117,7 @@ func syncDDLCommitToBarrierReadyCNs(
 	qc := pu.QueryClient
 	protocol, ok := moruntime.ServiceRuntime(qc.ServiceID()).GetGlobalVariables(moruntime.MOProtocolVersion)
 	protocolVersion, valid := protocol.(int64)
-	if !ok || !valid || protocolVersion < defines.MORPCVersion44 {
+	if !force && (!ok || !valid || protocolVersion < defines.MORPCVersion44) {
 		return nil
 	}
 	cluster := clusterservice.GetMOCluster(qc.ServiceID())

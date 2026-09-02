@@ -16,6 +16,7 @@ package frontend
 
 import (
 	"context"
+	"errors"
 	"sync"
 	"sync/atomic"
 
@@ -25,6 +26,12 @@ import (
 )
 
 const DDLCommitGateRuntimeKey = "frontend.ddl-commit-gate"
+
+// ErrDDLFrontierPublishedByRevokedGeneration means T is durable, but the
+// producer lost UUID ownership. The committed DDL must still fan out before
+// this error is returned to the client.
+var ErrDDLFrontierPublishedByRevokedGeneration = errors.New(
+	"DDL frontier published by revoked CN generation")
 
 // DDLCommitGate gives DDL producers and live protocol activation one local
 // linearization point. Enter admits a commit while Block prevents new commits

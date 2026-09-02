@@ -1040,6 +1040,43 @@ func TestCommitSyncsDDLCommitToBarrierReadyCNs(t *testing.T) {
 		require.Empty(t, qc.requests, "fan-out and success must not follow failed durable publication")
 	})
 
+	t.Run("revoked generation finishes fan-out after durable publication", func(t *testing.T) {
+		ses, _, qc, execCtx := newState(t)
+		defer ses.Close()
+		defer execCtx.Close()
+		gate := NewDDLCommitGate()
+		var authoritativeFrontier timestamp.Timestamp
+		generationErr := errors.Join(
+			ErrDDLFrontierPublishedByRevokedGeneration,
+			errors.New("generation 1 replaced by generation 2"))
+		gate.SetFrontierPublisher(func(_ context.Context, ts timestamp.Timestamp) error {
+			// Model generation 1's already-admitted commit being durably absorbed
+			// after generation 2 has taken ownership.
+			authoritativeFrontier = ts
+			return generationErr
+		})
+		rt := moruntime.ServiceRuntime(ses.GetService())
+		previousGate, hadPreviousGate := rt.GetGlobalVariables(DDLCommitGateRuntimeKey)
+		rt.SetGlobalVariables(DDLCommitGateRuntimeKey, gate)
+		moruntime.ServiceRuntime(queryServiceID).SetGlobalVariables(
+			moruntime.MOProtocolVersion, defines.MORPCVersion42)
+		t.Cleanup(func() {
+			if hadPreviousGate {
+				rt.SetGlobalVariables(DDLCommitGateRuntimeKey, previousGate)
+			} else {
+				rt.SetGlobalVariables(DDLCommitGateRuntimeKey, nil)
+			}
+		})
+
+		err := ses.GetTxnHandler().Commit(execCtx)
+		require.ErrorIs(t, err, ErrDDLFrontierPublishedByRevokedGeneration)
+		require.Equal(t, commitTS, authoritativeFrontier)
+		require.Equal(t, []ddlSyncRequest{
+			{address: "cn-1:6001", method: querypb.CmdMethod_SyncCommitV2, commitTS: commitTS},
+			{address: "cn-2:6001", method: querypb.CmdMethod_SyncCommitV2, commitTS: commitTS},
+		}, qc.requests)
+	})
+
 	t.Run("activation gate drains and blocks concurrent DDL commit", func(t *testing.T) {
 		ses, op, _, execCtx := newState(t)
 		defer ses.Close()

@@ -451,6 +451,13 @@ func (s *stateMachine) updateCNViewMetadataAdmission(hb pb.CNStoreHeartbeat) boo
 	active := s.viewMetadataAdmissionActive()
 	if active && existed &&
 		hb.ViewMetadataAdmissionGeneration < previous.ViewMetadataAdmissionGeneration {
+		// The old incarnation may have entered the public DDL gate before its
+		// replacement took ownership and committed T afterwards. Reject all
+		// incarnation-scoped state, but retain that already-durable DDL fact so
+		// the old commit path can finish cross-CN visibility before exiting.
+		if s.state.CNState.DDLVisibilityFrontier.Less(hb.DDLVisibilityFrontier) {
+			s.state.CNState.DDLVisibilityFrontier = hb.DDLVisibilityFrontier
+		}
 		return false
 	}
 	newGeneration := !existed ||

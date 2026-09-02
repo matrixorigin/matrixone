@@ -16,6 +16,7 @@ package cnservice
 
 import (
 	"context"
+	"errors"
 	"time"
 
 	"go.uber.org/zap"
@@ -23,6 +24,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/system"
 	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/frontend"
 	"github.com/matrixorigin/matrixone/pkg/logservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	logservicepb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
@@ -220,14 +222,6 @@ func (s *service) publishDDLCommitFrontier(ctx context.Context, ts timestamp.Tim
 		return moerr.NewInvalidStateNoCtx(
 			"DDL frontier publication lacks an authoritative CN generation")
 	}
-	if admission.Generation != s.viewMetadataAdmissionGeneration {
-		if admission.Generation > s.viewMetadataAdmissionGeneration {
-			s.revokeViewMetadataGeneration(admission.Generation)
-		}
-		return moerr.NewInvalidStateNoCtxf(
-			"DDL frontier publication generation %d rejected by authoritative generation %d",
-			s.viewMetadataAdmissionGeneration, admission.Generation)
-	}
 	if batch.DDLVisibilityFrontier == nil || batch.DDLVisibilityFrontier.Less(ts) {
 		authoritative := "missing"
 		if batch.DDLVisibilityFrontier != nil {
@@ -236,6 +230,19 @@ func (s *service) publishDDLCommitFrontier(ctx context.Context, ts timestamp.Tim
 		return moerr.NewInvalidStateNoCtxf(
 			"DDL frontier publication %s was not durably acknowledged (authoritative frontier %s)",
 			ts.DebugString(), authoritative)
+	}
+	if admission.Generation != s.viewMetadataAdmissionGeneration {
+		if admission.Generation > s.viewMetadataAdmissionGeneration {
+			s.revokeViewMetadataGeneration(admission.Generation)
+			return errors.Join(
+				frontend.ErrDDLFrontierPublishedByRevokedGeneration,
+				moerr.NewInvalidStateNoCtxf(
+					"DDL frontier publication generation %d rejected by authoritative generation %d",
+					s.viewMetadataAdmissionGeneration, admission.Generation))
+		}
+		return moerr.NewInvalidStateNoCtxf(
+			"DDL frontier publication generation %d rejected by authoritative generation %d",
+			s.viewMetadataAdmissionGeneration, admission.Generation)
 	}
 	return nil
 }

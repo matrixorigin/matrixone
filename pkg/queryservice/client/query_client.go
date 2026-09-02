@@ -63,7 +63,10 @@ var methodVersions = map[pb.CmdMethod]int64{
 	pb.CmdMethod_ISCPDrainConsumer:        defines.MORPCVersion4,
 	pb.CmdMethod_IcebergCacheInvalidate:   defines.MORPCVersion4,
 	pb.CmdMethod_MongoDBClientRetire:      defines.MORPCVersion5,
-	pb.CmdMethod_SyncCommitV2:             defines.MORPCVersion44,
+	// SyncCommitV2 is sent below the activation epoch only to CNs whose
+	// DDLVisibilityBarrierReady metadata proves this receiver exists. This lets
+	// an already-admitted DDL finish visibility after its generation is replaced.
+	pb.CmdMethod_SyncCommitV2: defines.MORPCVersion42,
 }
 
 type queryClient struct {

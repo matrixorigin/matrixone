@@ -100,3 +100,10 @@
 1. markerless ingress publication 必须同步应用/验证 heartbeat 返回的 authoritative admission generation；takeover 后旧进程不得打开 ingress/DDL gate。
 2. 将最终 admission withdrawal 放到 TaskRunner/task command 依赖关闭前；direct heartbeat 返回的 legacy CreateTaskService/JoinGossip 必须由仍可用 owner 成功执行。
 3. 增加 takeover interleaving 和 shutdown legacy command 成功闭环回归；清理 design/PR body 的 v36/v43 残留，验证并推送。
+
+## 2026-09-02：已提交 DDL 与 generation takeover 线性化
+
+1. HAKeeper 对旧 generation heartbeat 拒绝 membership/admission 更新，但仍单调吸收其已提交 DDL frontier，并在响应中返回 authoritative generation/frontier。
+2. CN 区分“frontier 已持久化但 generation 已失效”与普通发布失败：同步 revoke admission，同时向 frontend 返回可识别状态。
+3. frontend 对该状态仍强制向所有 DDL-capable barrier-ready CN 执行 SyncCommitV2，完成后才返回 generation 错误；普通发布失败仍禁止 fan-out。
+4. 增加 Enter/commit -> takeover -> stale publication -> durable frontier + peer apply 的确定性回归，运行 race/vet。
