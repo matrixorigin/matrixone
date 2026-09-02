@@ -1386,13 +1386,16 @@ func (rb *remoteBackend) keepDataConnectionAfterReadTimeout(
 // stalled and a newer admission cannot rescue it — this also bounds a write
 // blocked against a dead peer to one window instead of letting the queued
 // state renew the connection until the request deadline. Stream traffic keeps
-// the coarser bound of one window from the most recent flushed stream message.
-// An idle backend (no open window at all) keeps the pre-existing idle-timeout
-// close behavior.
+// the coarser bound of one window from the most recent flushed stream message,
+// but only while no unary request owns a window. Once the oldest unary window
+// expires, newer stream traffic cannot rescue that already-stalled connection
+// generation. An idle backend (no open window at all) keeps the pre-existing
+// idle-timeout close behavior.
 func (rb *remoteBackend) keepOrdinaryDataConnection() bool {
 	now := rb.livenessTick()
-	if rb.withinReadWindow(now, rb.pendingRequestReadWindow()) {
-		return true
+	unaryWindow := rb.pendingRequestReadWindow()
+	if unaryWindow != 0 {
+		return rb.withinReadWindow(now, unaryWindow)
 	}
 	return rb.withinReadWindow(now, rb.atomic.lastStreamFlushAt.Load())
 }

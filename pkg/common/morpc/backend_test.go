@@ -622,6 +622,10 @@ func TestReadTimeoutDoesNotChargeIdleTimeToNewRequest(t *testing.T) {
 	pending.writtenAt.Store(rb.livenessTick() - rb.options.readTimeout.Nanoseconds())
 	require.False(t, rb.keepDataConnectionAfterReadTimeout(
 		context.Background(), context.DeadlineExceeded))
+	rb.atomic.lastStreamFlushAt.Store(rb.livenessTick())
+	require.False(t, rb.keepDataConnectionAfterReadTimeout(
+		context.Background(), context.DeadlineExceeded),
+		"fresh stream traffic must not rescue a generation with an expired unary request")
 	fresh := &Future{}
 	fresh.send.createAt = time.Now()
 	rb.mu.futures[2] = fresh
@@ -639,6 +643,12 @@ func TestReadTimeoutDoesNotChargeIdleTimeToNewRequest(t *testing.T) {
 	require.True(t, rb.keepDataConnectionAfterReadTimeout(
 		context.Background(), context.DeadlineExceeded),
 		"a freshly flushed stream message owns one complete read window")
+	failed := &Future{}
+	failed.waiting.Store(true)
+	rb.mu.futures[1] = failed
+	require.True(t, rb.keepDataConnectionAfterReadTimeout(
+		context.Background(), context.DeadlineExceeded),
+		"a terminal unary send failure owns no response window and must not suppress a live stream")
 	rb.atomic.lastStreamFlushAt.Store(
 		rb.livenessTick() - rb.options.readTimeout.Nanoseconds())
 	require.False(t, rb.keepDataConnectionAfterReadTimeout(
