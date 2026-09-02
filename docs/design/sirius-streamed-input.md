@@ -835,8 +835,8 @@ revision invalidates only the evidence whose semantic inputs changed.
 | Component | PR | Candidate delivery commit | Evidence |
 | --- | --- | --- | --- |
 | MatrixOne | [#27599](https://github.com/matrixorigin/matrixone/pull/27599) | `2706ef2723` | affected Substrait, Flight, and compile tests passed; final pre-push SCA is recorded on the delivery head; [SF10 five-mode record](https://github.com/matrixorigin/matrixone/pull/27599#issuecomment-5495966844) |
-| Sirius | [#9](https://github.com/matrixorigin/sirius/pull/9) | `82bc06bf8fb407af77f2c201ffcbd1f2d8d54ed2` | linked sidecar extension build passed; serial, same-stage PARTITION, and independent-pipeline concurrency tests passed |
-| sidecar | [#18](https://github.com/matrixorigin/mo-sirius-sidecar/pull/18) | `04e15e19c0b2287906cc65288ed9bb3f84a614d0` | pins the Sirius revision above; protocol/admission contract suite passed 76 assertions and the linked extension built successfully |
+| Sirius | [#10](https://github.com/matrixorigin/sirius/pull/10) | `18de35630e50674e6913bb3359c7fc54f832889b` | retains input, pending intermediate, processing handles, and reservation attachment through failed quiescence; quarantine bookkeeping terminates rather than unwinding owners if it cannot reserve storage; the deterministic launch-then-throw/fail-synchronize oracle passed 12 assertions, all GPU task cases passed 83 assertions, executor/OOM passed 21 assertions, concurrency gates passed 8 assertions, and repository-wide pre-commit passed |
+| sidecar | [#19](https://github.com/matrixorigin/mo-sirius-sidecar/pull/19) | `a27953ea84c444ba5d046bb3cbea82d5b2722c2a` | pins the Sirius revision above on top of merged #18; protocol/admission contract suite passed 76 assertions and the linked extension built successfully |
 
 The sidecar submodule must point to the approved Sirius commit. The MatrixOne PR
 body must link this design at its approved commit and the final evidence record.
