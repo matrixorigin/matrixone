@@ -152,6 +152,7 @@ func (proc *Process) BuildProcessInfo(
 			MatrixoneNativeMode: proc.Base.SessionInfo.MatrixOneNativeMode,
 			SqlMode:             resolveSqlMode(proc),
 		}
+		procInfo.SessionInfo.MaxDigestLength, procInfo.SessionInfo.MaxDigestLengthSet = resolveMaxDigestLength(proc)
 		nullifyZeroTemporal, err := ResolveExplicitZeroTemporalCastReturnsNull(proc)
 		if err != nil {
 			return procInfo, err
@@ -432,6 +433,8 @@ func ConvertToProcessSessionInfo(
 		MatrixOneNativeMode:                 sei.MatrixoneNativeMode,
 		ExplicitZeroTemporalCastReturnsNull: sei.ExplicitZeroTemporalCastReturnsNull,
 		SqlMode:                             sei.SqlMode,
+		MaxDigestLength:                     sei.MaxDigestLength,
+		MaxDigestLengthSet:                  sei.MaxDigestLengthSet,
 	}
 	t := time.Time{}
 	err := t.UnmarshalBinary(sei.TimeZone)
@@ -440,6 +443,55 @@ func ConvertToProcessSessionInfo(
 	}
 	sessionInfo.TimeZone = t.Location()
 	return sessionInfo, nil
+}
+
+const (
+	defaultMaxDigestLength = int64(1024)
+	maxMaxDigestLength     = int64(1048576)
+)
+
+// resolveMaxDigestLength captures the startup-only global variable for remote
+// expression execution. A decoded snapshot wins on non-frontend processes so
+// a background resolver's compiled default cannot overwrite it during a
+// second CN forward. The function evaluator performs the user-visible error
+// handling; an unusable resolver value is left unset here and falls back to
+// MySQL's default on the receiving CN.
+func resolveMaxDigestLength(proc *Process) (int64, bool) {
+	if proc == nil || proc.Base == nil {
+		return 0, false
+	}
+	if proc.Base.SessionInfo.MaxDigestLengthSet && !proc.Base.IsFrontend {
+		return proc.Base.SessionInfo.MaxDigestLength, true
+	}
+	if resolve := proc.GetResolveVariableFunc(); resolve != nil {
+		if value, err := resolve("max_digest_length", true, true); err == nil {
+			if resolved, ok := normalizedMaxDigestLength(value); ok {
+				return resolved, true
+			}
+		}
+	}
+	if proc.Base.SessionInfo.MaxDigestLengthSet {
+		return proc.Base.SessionInfo.MaxDigestLength, true
+	}
+	return 0, false
+}
+
+func normalizedMaxDigestLength(value any) (int64, bool) {
+	var resolved int64
+	switch typed := value.(type) {
+	case int64:
+		resolved = typed
+	case uint64:
+		if typed > uint64(maxMaxDigestLength) {
+			return 0, false
+		}
+		resolved = int64(typed)
+	case int:
+		resolved = int64(typed)
+	default:
+		return 0, false
+	}
+	return resolved, resolved >= 0 && resolved <= maxMaxDigestLength
 }
 
 func resolveSqlMode(proc *Process) string {

@@ -135,6 +135,10 @@ type SessionInfo struct {
 	// SqlMode is captured on the initiating CN and used when a remote process has
 	// no session variable resolver.
 	SqlMode string
+	// MaxDigestLength is captured on the initiating CN so STATEMENT_DIGEST uses
+	// the same token-buffer limit when its expression runs on a remote CN.
+	MaxDigestLength    int64
+	MaxDigestLengthSet bool // distinguishes an explicit zero from an unset value
 	// ApplySQLSelectLimit distinguishes client statements from frontend
 	// background SQL, which may inherit a session-variable resolver but must not
 	// be affected by a client's row cap.
