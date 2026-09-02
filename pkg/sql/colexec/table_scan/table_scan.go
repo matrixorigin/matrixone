@@ -169,6 +169,7 @@ func (tableScan *TableScan) Call(proc *process.Process) (vm.CallResult, error) {
 			e = err
 			return vm.CancelResult, err
 		}
+		colexec.CollectReaderExplainDiagnostics(tableScan.Reader, analyzer)
 
 		// Record ReadSize metrics when scan completes all blocks (isEnd == true)
 		// This matches explain analyze output which shows total read size for the entire scan
