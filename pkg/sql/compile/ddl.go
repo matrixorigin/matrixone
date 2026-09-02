@@ -6259,6 +6259,17 @@ func deleteManyWatermark(
 			return
 		}
 		deletedCnt += cnt
+
+		sql = cdc.CDCSQLBuilder.DeleteSnapshotEpochSQL(key.AccountId, key.TaskId)
+		logutil.Info(
+			"cdc.compile.delete_snapshot_epoch_sql",
+			zap.Uint64("account-id", key.AccountId),
+			zap.String("task-id", key.TaskId),
+			zap.String("sql", sql),
+		)
+		if _, err = ExecuteAndGetRowsAffected(ctx, tx, sql); err != nil {
+			return
+		}
 	}
 	return
 }

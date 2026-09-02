@@ -51,10 +51,9 @@ The implementation must maintain all of these invariants:
 ## Protocol
 
 New task creation persists an internal protocol marker in `additional_config`.
-The already persisted `task_create_time` is the stable initial snapshot epoch.
-The marker distinguishes new tasks from legacy tasks without a catalog schema
-change. It is not a user option. A task requesting split mode stores the legacy
-public boolean as `false` plus the internal marker and uses the
+The marker distinguishes new tasks from legacy tasks and is not a user option.
+A task requesting split mode stores the legacy public boolean as `false` plus
+the internal marker and uses the
 `InitCdcStableEpoch` daemon executor code. New CNs register both the legacy and
 stable-epoch codes. Old CNs register only the legacy code, and task dispatch
 resolves the executor before its compare-and-swap claim, so they cannot acquire
@@ -62,17 +61,30 @@ a marked task or publish a later watermark after a partial bounded commit.
 Keeping the public boolean false is defense in depth for tools that read task
 configuration, not the ownership fence.
 
+Each marked table pipeline synchronously obtains its own stable epoch before it
+starts a reader or sinker. The epoch is the current source transaction snapshot
+at the time that table generation is discovered, not `task_create_time`.
+`mo_catalog.mo_cdc_snapshot` stores it under
+`(account_id, task_id, db_name, table_name, source_table_id)`. A restart of the
+same source table ID reuses the persisted value even if the new transaction has
+a later snapshot. A recreated source table has a new ID, so the retired logical-
+table row is replaced with a fresh epoch before the new pipeline is published.
+This permits wildcard/database tasks to discover tables long after task creation
+without reading before the table existed or outside retained history.
+
 For a marked task with `InitSnapshotSplitTxn=true` and an empty watermark:
 
-1. Wait until the current transaction snapshot is at least the persisted epoch
-   `S`. This avoids reading a future timestamp under clock skew.
-2. Open source changes at exactly `S` (capped by an explicit `EndTs`).
-3. Begin a target transaction and stream snapshot batches into it.
-4. Before adding a batch that would cross either group limit, commit the current
+1. Persist or retrieve the table-generation epoch `S` before publishing either
+   pipeline goroutine.
+2. Wait until the current transaction snapshot is at least persisted `S`. This
+   avoids reading a future timestamp after restart or under clock skew.
+3. Open source changes at exactly `S` (capped by an explicit `EndTs`).
+4. Begin a target transaction and stream snapshot batches into it.
+5. Before adding a batch that would cross either group limit, commit the current
    group without updating the watermark, then begin a new target transaction.
-5. On `NoMoreData`, commit the final group and update the watermark to `S`. For
+6. On `NoMoreData`, commit the final group and update the watermark to `S`. For
    an empty table, update only the watermark.
-6. Subsequent rounds use the ordinary dynamic transaction snapshot and process
+7. Subsequent rounds use the ordinary dynamic transaction snapshot and process
    the incremental interval after `S`.
 
 `InitSnapshotSplitTxn=false` remains a single atomic target transaction. A task
@@ -93,6 +105,10 @@ configuration says split.
 | Pause, cancel, or stream close | Earlier committed groups only | Empty | Release batch permit; roll back current group |
 | Legacy task lacks protocol marker | No new partial-commit behavior | Empty | Use one atomic target transaction |
 | New CN disappears after a bounded group; old CN polls the task | Partial snapshot `S` | Empty | Old CN cannot resolve `InitCdcStableEpoch` and does not claim; a capable CN replays `S` |
+| Wildcard task discovers a table after task creation or retention expiry | None for the new table | Empty | Persist that table generation's current snapshot and begin at that epoch, independent of task creation time |
+| Table is dropped and recreated under the same logical name | Prior generation may have completed or failed | Old logical-table watermark is replaced by detector lifecycle | Replace the retired source-table-ID epoch before publishing the new pipeline |
+| Epoch INSERT reports an ambiguous failure | No reader has started for that generation | Empty | Retry reads the durable row first; it reuses a committed epoch or safely chooses a candidate if none committed |
+| Task is cancelled, restarted, or deleted | Existing target data follows task command semantics | Task metadata is removed/recreated as appropriate | Delete table epochs with task watermarks; periodic orphan cleanup removes rows whose task no longer exists |
 
 The batch permit ownership chain is:
 
@@ -121,8 +137,9 @@ cancellation remain non-blocking with respect to procfs/cgroupfs access.
   unbounded and the public default split option is ignored.
 - **Commit batches while selecting a new epoch on retry:** bounded but incorrect
   after source DELETE or primary-key changes.
-- **Persist a per-group cursor:** requires catalog migration and source scan
-  ordering semantics; it adds state without avoiding replay requirements.
+- **Persist a per-group cursor:** adds source scan ordering and cursor recovery
+  semantics. The implemented catalog state stores only one immutable epoch per
+  active table generation and continues to rely on idempotent replay.
 - **Use a staging target table:** changes target DDL, privileges, cleanup, and
   identity semantics, and is disproportionate to the problem.
 
@@ -139,6 +156,10 @@ Deterministic tests must prove:
 - legacy tasks use the atomic compatibility path;
 - new-CN partial commit plus DELETE/PK change cannot be claimed by a legacy
   executor and converges exactly after a capable-CN handoff;
+- a wildcard task that discovers a table after the task epoch is outside
+  retention selects a current table-generation epoch, reuses it after an
+  intermediate commit and restart, applies DELETE/PK-change tail mutations,
+  reaches exact target equality, and advances a live watermark;
 - limiter FIFO, cancellation, exact-once release, and race behavior.
 
 Unit tests validate protocol correctness and resource bounds without weakening

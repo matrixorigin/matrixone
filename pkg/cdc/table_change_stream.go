@@ -1277,10 +1277,10 @@ func (s *TableChangeStream) processWithTxn(
 			tsCapped = true
 		}
 		if currentSnapshotTs.LT(&toTs) {
-			// task_create_time is generated before the catalog transaction commits,
-			// so this is normally only possible under clock skew. Wait without
-			// selecting a different epoch: changing it would invalidate a partial
-			// target snapshot after retry.
+			// A persisted table-generation epoch normally came from an earlier
+			// transaction snapshot. Wait without selecting a different epoch if the
+			// current CN has not made it visible yet: changing it would invalidate a
+			// partial target snapshot after retry.
 			logutil.Info(
 				"cdc.table_stream.initial_snapshot_epoch_not_visible",
 				zap.String("table", s.tableInfo.String()),

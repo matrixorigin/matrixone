@@ -280,6 +280,16 @@ var (
     			primary key(account_id,task_id,db_name,table_name)
 			)`
 
+	MoCatalogMoCdcSnapshotDDL = `create table mo_catalog.mo_cdc_snapshot (
+				account_id bigint unsigned,
+				task_id uuid,
+				db_name varchar(256),
+				table_name varchar(256),
+				source_table_id bigint unsigned,
+				snapshot_epoch varchar(128),
+				primary key(account_id,task_id,db_name,table_name,source_table_id)
+			)`
+
 	MoCatalogMoISCPLogDDL = `CREATE TABLE mo_catalog.mo_iscp_log (
 				account_id INT UNSIGNED NOT NULL,
 				table_id BIGINT UNSIGNED NOT NULL,

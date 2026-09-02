@@ -542,6 +542,102 @@ func TestDataProcessor_PartialSnapshotRetryReplaysStableEpoch(t *testing.T) {
 	assert.Equal(t, expected, sinker.durableKeys())
 }
 
+func TestLateDiscoveredTableStableEpochRestartConverges(t *testing.T) {
+	ctx := context.Background()
+	epochExecutor := &snapshotEpochTestExecutor{}
+	epochUpdater := NewCDCWatermarkUpdater(t.Name(), epochExecutor)
+	key := &WatermarkKey{AccountId: 1, TaskId: "task1", DBName: "db1", TableName: "table1"}
+
+	// Model a wildcard task whose creation timestamp is already older than
+	// retained history. The late table must use its own current transaction
+	// snapshot, never the task-global creation timestamp.
+	taskCreation := types.BuildTS(1, 0)
+	lateTableSnapshot := types.BuildTS(100, 7)
+	epoch, err := epochUpdater.GetOrCreateInitialSnapshotEpoch(
+		ctx, key, 42, lateTableSnapshot)
+	require.NoError(t, err)
+	require.Equal(t, lateTableSnapshot, epoch)
+	require.NotEqual(t, taskCreation, epoch)
+
+	mp, err := mpool.NewMPool("late_table_snapshot_retry", 0, mpool.NoFixed)
+	require.NoError(t, err)
+	t.Cleanup(func() { mpool.DeleteMPool(mp) })
+	packerPool := fileservice.NewPool(
+		128,
+		func() *types.Packer { return types.NewPacker() },
+		func(packer *types.Packer) { packer.Reset() },
+		func(*types.Packer) {},
+	)
+	sinker := newTransactionalSnapshotSinker()
+	firstWatermark := newMockWatermarkUpdater()
+	firstTxnMgr := NewTransactionManager(sinker, firstWatermark, 1, "task1", "db1", "table1")
+	first := NewDataProcessor(
+		sinker, firstTxnMgr, mp, packerPool,
+		1, 0, 1, 0, true,
+		1, "task1", "db1", "table1",
+	)
+	first.SetTransactionRange(types.TS{}, epoch)
+	for value := int32(1); value <= 9; value++ {
+		require.NoError(t, first.ProcessChange(ctx, &ChangeData{
+			Type:        ChangeTypeSnapshot,
+			InsertBatch: buildBatch(t, mp, []int32{value}, epoch),
+		}))
+	}
+	require.Len(t, sinker.durableKeys(), initialSnapshotTxnBatchLimit)
+	require.False(t, firstWatermark.updateCalled)
+
+	readErr := moerr.NewInternalError(ctx, "late table snapshot read failed")
+	sinker.setError(readErr)
+	require.ErrorIs(t, first.ProcessChange(ctx, &ChangeData{Type: ChangeTypeSnapshot}), readErr)
+	require.NoError(t, firstTxnMgr.EnsureCleanup(ctx))
+	first.Cleanup()
+	sinker.ClearError()
+
+	// A new executor process proposes a newer timestamp, but the table-generation
+	// row must return the original epoch that already owns durable target groups.
+	restartedEpochUpdater := NewCDCWatermarkUpdater(t.Name()+"-restart", epochExecutor)
+	retryEpoch, err := restartedEpochUpdater.GetOrCreateInitialSnapshotEpoch(
+		ctx, key, 42, types.BuildTS(900, 9))
+	require.NoError(t, err)
+	require.Equal(t, epoch, retryEpoch)
+
+	retryWatermark := newMockWatermarkUpdater()
+	retryTxnMgr := NewTransactionManager(sinker, retryWatermark, 1, "task1", "db1", "table1")
+	retry := NewDataProcessor(
+		sinker, retryTxnMgr, mp, packerPool,
+		1, 0, 1, 0, true,
+		1, "task1", "db1", "table1",
+	)
+	retry.SetTransactionRange(types.TS{}, retryEpoch)
+	snapshotKeys := []int32{1, 2, 3, 4, 5, 6, 7, 8, 9}
+	require.NoError(t, retry.ProcessChange(ctx, &ChangeData{
+		Type:        ChangeTypeSnapshot,
+		InsertBatch: buildBatch(t, mp, snapshotKeys, retryEpoch),
+	}))
+	require.NoError(t, retry.ProcessChange(ctx, &ChangeData{Type: ChangeTypeNoMoreData}))
+
+	watermark, err := retryWatermark.GetFromCache(ctx, key)
+	require.NoError(t, err)
+	require.Equal(t, retryEpoch, watermark)
+
+	// DELETE(1) and the primary-key change 2 -> 20 happened after the stable
+	// epoch. Tail catch-up must remove both old keys and publish a live watermark.
+	tailTo := types.BuildTS(901, 0)
+	retry.SetTransactionRange(retryEpoch, tailTo)
+	require.NoError(t, retry.ProcessChange(ctx, &ChangeData{
+		Type:        ChangeTypeTailDone,
+		InsertBatch: buildBatch(t, mp, []int32{20}, tailTo),
+		DeleteBatch: buildBatch(t, mp, []int32{1, 2}, tailTo),
+	}))
+	require.NoError(t, retry.ProcessChange(ctx, &ChangeData{Type: ChangeTypeNoMoreData}))
+
+	expected := map[int32]struct{}{3: {}, 4: {}, 5: {}, 6: {}, 7: {}, 8: {}, 9: {}, 20: {}}
+	require.Equal(t, expected, sinker.durableKeys())
+	watermark, err = retryWatermark.GetFromCache(ctx, key)
+	require.NoError(t, err)
+	require.Equal(t, tailTo, watermark)
+}
+
 func TestDataProcessor_SnapshotGroupBoundaries(t *testing.T) {
 	dp := &DataProcessor{initSnapshotSplitTxn: true}
 

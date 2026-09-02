@@ -3734,7 +3734,7 @@ func TestCdcTask_retrieveCdcTask(t *testing.T) {
 			}
 			err := cdc.retrieveCdcTask(tt.args.ctx)
 			assert.NoError(t, err, fmt.Sprintf("retrieveCdcTask(%v)", tt.args.ctx))
-			assert.Equal(t, types.BuildTS(time.Date(2026, 9, 2, 12, 34, 56, 0, time.UTC).UnixNano(), 0), cdc.initialSnapshotEpoch)
+			assert.True(t, cdc.stableInitialSnapshot)
 		})
 	}
 }

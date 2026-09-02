@@ -618,10 +618,18 @@ func (s *TableDetector) cleanupOrphanWatermarks(ctx context.Context) {
 		return
 	}
 
-	sql := CDCSQLBuilder.DeleteOrphanWatermarkSQL()
 	cleanupCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
 
+	for _, sql := range []string{
+		CDCSQLBuilder.DeleteOrphanWatermarkSQL(),
+		CDCSQLBuilder.DeleteOrphanSnapshotEpochSQL(),
+	} {
+		s.cleanupOrphanMetadata(cleanupCtx, sql)
+	}
+}
+
+func (s *TableDetector) cleanupOrphanMetadata(cleanupCtx context.Context, sql string) {
 	logutil.Debug(
 		"cdc.table_detector.cleanup_watermark_execute",
 		zap.String("sql", sql),

@@ -19,6 +19,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/bootstrap/versions"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/frontend"
 	"github.com/matrixorigin/matrixone/pkg/pb/task"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 )
@@ -36,7 +37,11 @@ var clusterUpgEntries = []versions.UpgradeEntry{
 	addSQLTaskRunAccountIndex,
 	addAsyncTaskParentIndex,
 	cleanupLegacyOrphanSQLTaskChildren,
+	createMoCdcSnapshot,
 }
+
+var createMoCdcSnapshot = newCatalogTable(
+	catalog.MO_CDC_SNAPSHOT, frontend.MoCatalogMoCdcSnapshotDDL)
 
 var addSQLTaskAccountIndex = newTaskMetadataIndex(
 	catalog.MOSQLTask, "idx_account_id", "account_id")
@@ -115,6 +120,18 @@ var createMoViewRefresh = newViewMetadataCatalogTable(
 	catalog.MO_VIEW_REFRESH, catalog.MoViewRefreshDDL)
 
 func newViewMetadataCatalogTable(name, ddl string) versions.UpgradeEntry {
+	return versions.UpgradeEntry{
+		Schema:    catalog.MO_CATALOG,
+		TableName: name,
+		UpgType:   versions.CREATE_NEW_TABLE,
+		UpgSql:    ddl,
+		CheckFunc: func(txn executor.TxnExecutor, accountID uint32) (bool, error) {
+			return versions.CheckTableDefinition(txn, accountID, catalog.MO_CATALOG, name)
+		},
+	}
+}
+
+func newCatalogTable(name, ddl string) versions.UpgradeEntry {
 	return versions.UpgradeEntry{
 		Schema:    catalog.MO_CATALOG,
 		TableName: name,

@@ -159,6 +159,11 @@ IDLE --SendBegin--> ACTIVE --SendCommit--> COMMITTED --cleanup--> IDLE
 **Storage**:
 - In-memory cache: fast lookups during processing
 - Database (`mo_catalog.mo_cdc_watermark`): persistent state, survives restarts
+- Database (`mo_catalog.mo_cdc_snapshot`): the immutable initial-snapshot epoch
+  for each task/table/source-table generation. It is written synchronously before
+  the first split snapshot transaction can commit and reused after restart.
+  Dynamically discovered tables receive an epoch from their own discovery
+  transaction rather than from the CDC task creation time.
 
 **Watermark Persistence Design - At-Least-Once Semantics**:
 
@@ -1140,7 +1145,7 @@ Use curly braces `{}` to specify options. Options are comma-separated key-value 
 | `NoFull` | boolean | `false` | Skip initial snapshot, sync incremental only |
 | `MaxSqlLength` | integer | 4194304 (4MB) | Maximum SQL statement size in bytes |
 | `SendSqlTimeout` | duration | `10m` | Timeout for sending SQL to target |
-| `InitSnapshotSplitTxn` | boolean | `true` | Split large snapshot into multiple transactions |
+| `InitSnapshotSplitTxn` | boolean | `true` | Split a large initial snapshot into bounded transactions (at most 8 engine batches or 512 MiB each). The final group publishes the watermark; retries reuse a durable per-table-generation source epoch. |
 | `Frequency` | duration | `200ms` | Polling frequency for change detection |
 
 **Option Syntax**:
@@ -1471,7 +1476,9 @@ drop cdc all;
 
 1. **Stops Task**: If running, gracefully stops synchronization
 2. **Deletes Metadata**: Removes task configuration from `mo_catalog.mo_cdc_task`
-3. **Deletes Watermarks**: Removes all watermarks from `mo_catalog.mo_cdc_watermark`
+3. **Deletes Progress Metadata**: Removes all watermarks from
+   `mo_catalog.mo_cdc_watermark` and stable initial-snapshot epochs from
+   `mo_catalog.mo_cdc_snapshot`
 4. **Irreversible**: Cannot be undone
 
 ### ⚠️ Warning
@@ -3527,6 +3534,21 @@ Stores per-table watermarks and errors.
 | `table_name` | varchar(256) | Table name |
 | `watermark` | varchar(128) | Last synchronized timestamp |
 | `err_msg` | varchar(256) | Per-table error message |
+
+### mo_catalog.mo_cdc_snapshot
+
+Stores the immutable source epoch selected before a bounded initial snapshot
+can make its first partial target commit. This is internal recovery metadata;
+operators should not update it directly.
+
+| Column | Type | Description |
+|--------|------|-------------|
+| `account_id` | bigint unsigned | Account ID |
+| `task_id` | uuid | CDC task ID |
+| `db_name` | varchar(256) | Source database name |
+| `table_name` | varchar(256) | Source table name |
+| `source_table_id` | bigint unsigned | Physical source-table generation ID |
+| `snapshot_epoch` | varchar(128) | Stable source timestamp reused by every retry of this generation |
 
 ---
 

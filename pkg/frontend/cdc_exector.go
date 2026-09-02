@@ -151,15 +151,13 @@ type CDCTaskExecutor struct {
 	mp         *mpool.MPool
 	packerPool *fileservice.Pool[*types.Packer]
 
-	sinkUri        cdc.UriInfo
-	tables         cdc.PatternTuples
-	exclude        *regexp.Regexp
-	startTs, endTs types.TS
-	// initialSnapshotEpoch is populated only for tasks created with the
-	// stable-epoch snapshot protocol. A zero value identifies legacy tasks.
-	initialSnapshotEpoch types.TS
-	noFull               bool
-	additionalConfig     map[string]interface{}
+	sinkUri               cdc.UriInfo
+	tables                cdc.PatternTuples
+	exclude               *regexp.Regexp
+	startTs, endTs        types.TS
+	stableInitialSnapshot bool
+	noFull                bool
+	additionalConfig      map[string]interface{}
 	// initialSnapshotLimiter bounds retained initial-snapshot batches across all
 	// CDC tasks in this CN while allowing tables to make progress independently.
 	initialSnapshotLimiter *cdc.InitialSnapshotLimiter
@@ -2882,12 +2880,25 @@ func (exec *CDCTaskExecutor) addExecPipelineForTable(
 		DBName:    info.SourceDbName,
 		TableName: info.SourceTblName,
 	}
+	var initialSnapshotEpoch types.TS
 	if watermark, err = exec.watermarkUpdater.GetOrAddCommitted(
 		ctx,
 		&watermarkKey,
 		&watermark,
 	); err != nil {
 		return err
+	}
+	if exec.stableInitialSnapshot && watermark.IsEmpty() && !exec.noFull && exec.startTs.IsEmpty() {
+		candidate := types.TimestampToTS(txnOp.SnapshotTS())
+		initialSnapshotEpoch, err = exec.watermarkUpdater.GetOrCreateInitialSnapshotEpoch(
+			ctx,
+			&watermarkKey,
+			info.SourceTblId,
+			candidate,
+		)
+		if err != nil {
+			return err
+		}
 	}
 
 	// Note: Do NOT clear err_msg here
@@ -2930,7 +2941,7 @@ func (exec *CDCTaskExecutor) addExecPipelineForTable(
 	frequencyStr := exec.additionalConfig[cdc.CDCTaskExtraOptions_Frequency].(string)
 	frequency := cdc.ParseFrequencyToDuration(frequencyStr)
 	initSnapshotSplitTxn := exec.additionalConfig[cdc.CDCTaskExtraOptions_InitSnapshotSplitTxn].(bool)
-	if !exec.initialSnapshotEpoch.IsEmpty() {
+	if exec.stableInitialSnapshot {
 		// Stable-epoch tasks persist the legacy boolean as false so an older CN
 		// safely falls back to an atomic transaction during rolling upgrades.
 		initSnapshotSplitTxn = true
@@ -2954,7 +2965,7 @@ func (exec *CDCTaskExecutor) addExecPipelineForTable(
 		exec.noFull,
 		frequency,
 		cdc.WithInitialSnapshotLimiter(exec.initialSnapshotLimiter),
-		cdc.WithInitialSnapshotEpoch(exec.initialSnapshotEpoch),
+		cdc.WithInitialSnapshotEpoch(initialSnapshotEpoch),
 	)
 
 	// step 4. start goroutines (sinker first, then reader)
@@ -3077,24 +3088,6 @@ func (exec *CDCTaskExecutor) retrieveCdcTask(ctx context.Context) error {
 	}
 
 	protocol, _ := exec.additionalConfig[cdc.CDCTaskExtraOptions_InitialSnapshotProtocol].(string)
-	if protocol != cdc.CDCInitialSnapshotProtocolStableEpoch {
-		// An old task may already have partially committed a snapshot selected at
-		// a different timestamp. Never guess a new replay epoch for it.
-		exec.initialSnapshotEpoch = types.TS{}
-		return nil
-	}
-
-	taskCreateTime, err := res.GetString(ctx, 0, 9)
-	if err != nil {
-		return err
-	}
-	createdAt, err := CDCStrToTime(taskCreateTime, time.UTC)
-	if err != nil {
-		return moerr.NewInternalErrorf(ctx, "invalid CDC task creation time %q: %v", taskCreateTime, err)
-	}
-	exec.initialSnapshotEpoch = types.BuildTS(createdAt.UnixNano(), 0)
-	if exec.initialSnapshotEpoch.IsEmpty() {
-		return moerr.NewInternalError(ctx, "CDC stable snapshot protocol requires task_create_time")
-	}
+	exec.stableInitialSnapshot = protocol == cdc.CDCInitialSnapshotProtocolStableEpoch
 	return nil
 }

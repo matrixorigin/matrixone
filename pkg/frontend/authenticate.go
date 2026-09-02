@@ -1050,6 +1050,7 @@ var (
 		MoCatalogMoCacheDDL,
 		MoCatalogMoCdcTaskDDL,
 		MoCatalogMoCdcWatermarkDDL,
+		MoCatalogMoCdcSnapshotDDL,
 		MoCatalogMoDataKeyDDL,
 		MoCatalogMoTableStatsDDL,
 		MoCatalogMoAccountLockDDL,
@@ -10772,6 +10773,9 @@ func createTablesInMoCatalogOfGeneralTenant2(bh BackgroundExec, ca *createAccoun
 			return true
 		}
 		if strings.HasPrefix(sql, "create table mo_catalog.mo_cdc_watermark") {
+			return true
+		}
+		if strings.HasPrefix(sql, "create table mo_catalog.mo_cdc_snapshot") {
 			return true
 		}
 		if strings.HasPrefix(sql, "create table mo_catalog.mo_data_key") {
