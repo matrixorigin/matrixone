@@ -895,7 +895,6 @@ func (exec *CDCTaskExecutor) Resume() error {
 	}
 	exec.recordLeavingFailedMetrics(stateBeforeResume, StateStarting)
 	generation := exec.callbackGeneration.Add(1)
-	exec.cancelLifecycleContext()
 	failedRecovery := stateBeforeResume == StateFailed
 	var (
 		recoveryReady   chan error
@@ -1104,6 +1103,7 @@ func (exec *CDCTaskExecutor) Restart() error {
 	}
 	exec.recordLeavingFailedMetrics(stateBeforeRestart, StateRestarting)
 	generation := exec.callbackGeneration.Add(1)
+	exec.cancelLifecycleContext()
 	// Complete the lifecycle/generation critical section before performing
 	// potentially slow cleanup or waiting for the replacement. Existing table
 	// detector callbacks captured the previous generation and will reject
