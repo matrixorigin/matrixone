@@ -18,64 +18,41 @@ import (
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/stretchr/testify/require"
-	"github.com/tidwall/btree"
 )
 
-func makeIncrementalObject(
-	marker byte,
-	appendable bool,
-	createdAt, deletedAt int64,
-) *catalog.ObjectEntry {
-	var id objectio.ObjectId
-	id[0] = marker
-	entry := &catalog.ObjectEntry{
-		EntryMVCCNode: catalog.EntryMVCCNode{
-			CreatedAt: types.BuildTS(createdAt, 0),
-		},
-		ObjectMVCCNode: catalog.ObjectMVCCNode{
-			ObjectStats: *objectio.NewObjectStatsWithObjectID(&id, appendable, false, false),
-		},
-	}
-	if deletedAt != 0 {
-		entry.DeletedAt = types.BuildTS(deletedAt, 0)
-	}
-	return entry
-}
-
 func TestForeachIncrementalObjectUsesGroupBounds(t *testing.T) {
-	tree := btree.NewBTreeG((*catalog.ObjectEntry).Less)
-	for _, entry := range []*catalog.ObjectEntry{
-		makeIncrementalObject(1, true, 1, 0),
-		makeIncrementalObject(2, true, 3, 0),
-		makeIncrementalObject(3, true, 5, 0),
-		makeIncrementalObject(4, true, 7, 0),
-		makeIncrementalObject(8, false, 3, 0),
-		makeIncrementalObject(9, false, 4, 0),
-		makeIncrementalObject(10, false, 6, 0),
-		makeIncrementalObject(11, false, 7, 0),
-	} {
-		tree.Set(entry)
+	cata := catalog.MockCatalog(nil)
+	db := catalog.MockDBEntryWithAccInfo(0, 1)
+	table := catalog.MockTableEntryWithDB(db, 2)
+	for _, appendable := range []bool{true, false} {
+		for _, createdAt := range []int64{1, 3, 4, 5, 6, 7} {
+			catalog.MockCreatedObjectEntry2ListWithAppendable(
+				table, cata, false, appendable, types.BuildTS(createdAt, 0),
+			)
+		}
 	}
 
-	it := tree.Iter()
-	defer it.Release()
-	var markers []byte
+	snapshot := table.MakeDataObjectSnapshot()
+	var markers []int64
 	err := foreachIncrementalObject(
-		&it,
+		snapshot,
 		types.BuildTS(4, 0),
 		types.BuildTS(6, 0),
 		func(entry *catalog.ObjectEntry) error {
-			markers = append(markers, entry.ID()[0])
+			marker := entry.CreatedAt.Physical()
+			if !entry.IsAppendable() {
+				marker += 100
+			}
+			markers = append(markers, marker)
 			return nil
 		},
 	)
 	require.NoError(t, err)
 	// Every appendable create entry at or before to is visited because an old
 	// appendable object can contain an append prepared in the incremental range.
-	require.Equal(t, []byte{1, 2, 3, 9, 10}, markers)
+	require.Equal(t, []int64{1, 3, 4, 5, 6, 104, 105, 106}, markers)
 }
 
 func TestForeachIncrementalObjectDropStartsAfterFrom(t *testing.T) {
@@ -90,11 +67,10 @@ func TestForeachIncrementalObjectDropStartsAfterFrom(t *testing.T) {
 		catalog.MockDroppedObjectEntry2List(created, types.BuildTS(deletedAt, 0))
 	}
 
-	it := table.MakeDataObjectIt()
-	defer it.Release()
+	snapshot := table.MakeDataObjectSnapshot()
 	var deletedAt []types.TS
 	err := foreachIncrementalObject(
-		&it,
+		snapshot,
 		types.BuildTS(2, 0),
 		types.BuildTS(4, 0),
 		func(entry *catalog.ObjectEntry) error {

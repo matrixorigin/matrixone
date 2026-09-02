@@ -53,7 +53,8 @@ func MockTxnWithStartTS(ts types.TS) *txnbase.Txn {
 
 type AppendMVCCHandle struct {
 	*sync.RWMutex
-	meta *catalog.ObjectEntry
+	writerGate priorityWriterGate
+	meta       *catalog.ObjectEntry
 	// appends is ordered by (prepare TS, physical start row). Active nodes use
 	// UncommitTS and therefore stay at the end until their txn is prepared.
 	appends *txnbase.MVCCSlice[*AppendNode]
@@ -114,7 +115,34 @@ func NewAppendMVCCHandle(meta *catalog.ObjectEntry) *AppendMVCCHandle {
 		rows:    make([]*AppendNode, 0),
 	}
 	node.prepareTree.Store(&AppendPrepareSnapshot{tree: newAppendPrepareTree()})
+	node.writerGate.init()
 	return node
+}
+
+// LockForCommit gives transaction-finalization writers priority over append
+// work waiting for the same object's MVCC lock. The gate must always be
+// acquired before the MVCC lock and released after it.
+func (n *AppendMVCCHandle) LockForCommit() {
+	n.writerGate.acquireCommit()
+	n.Lock()
+}
+
+func (n *AppendMVCCHandle) UnlockForCommit() {
+	n.Unlock()
+	n.writerGate.release()
+}
+
+// LockForAppend admits Freeze/appender writers only when no commit writer is
+// active or waiting. It is intentionally object-scoped so unrelated objects
+// remain concurrent.
+func (n *AppendMVCCHandle) LockForAppend() {
+	n.writerGate.acquireAppend()
+	n.Lock()
+}
+
+func (n *AppendMVCCHandle) UnlockForAppend() {
+	n.Unlock()
+	n.writerGate.release()
 }
 
 // ==========================================================

@@ -595,21 +595,23 @@ func foreachAobjBefore(_ context.Context,
 	// 2. the ts is lagged, lowering the possibility of missing aobj. In contrast, we have to wait when checkpoint pending checkpoint tasks
 	// table.WaitDataObjectCommitted(ts)
 	// table.WaitTombstoneObjectCommitted(ts)
-	data := table.MakeDataObjectIt()
-	defer data.Release()
-	for ok := catalog.SeekObjectListGroup(&data, catalog.ObjectListGroupAppendableCreate, lastCkp); ok; ok = data.Next() {
-		item := data.Item()
-		if item.ObjectListGroup() != catalog.ObjectListGroupAppendableCreate || item.CreatedAt.GT(&ts) {
+	data := table.MakeDataObjectSnapshot()
+	dataGroup := data.Group(catalog.ObjectListGroupAppendableCreate)
+	defer dataGroup.Release()
+	for ok := catalog.SeekObjectListGroup(&dataGroup, catalog.ObjectListGroupAppendableCreate, lastCkp); ok; ok = dataGroup.Next() {
+		item := dataGroup.Item()
+		if item.CreatedAt.GT(&ts) {
 			break
 		}
 		df(item)
 	}
 
-	tomb := table.MakeTombstoneObjectIt()
-	defer tomb.Release()
-	for ok := catalog.SeekObjectListGroup(&tomb, catalog.ObjectListGroupAppendableCreate, lastCkp); ok; ok = tomb.Next() {
-		item := tomb.Item()
-		if item.ObjectListGroup() != catalog.ObjectListGroupAppendableCreate || item.CreatedAt.GT(&ts) {
+	tomb := table.MakeTombstoneObjectSnapshot()
+	tombGroup := tomb.Group(catalog.ObjectListGroupAppendableCreate)
+	defer tombGroup.Release()
+	for ok := catalog.SeekObjectListGroup(&tombGroup, catalog.ObjectListGroupAppendableCreate, lastCkp); ok; ok = tombGroup.Next() {
+		item := tombGroup.Item()
+		if item.CreatedAt.GT(&ts) {
 			break
 		}
 		tf(item)

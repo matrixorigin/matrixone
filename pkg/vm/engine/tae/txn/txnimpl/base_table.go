@@ -28,7 +28,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
-	"github.com/tidwall/btree"
 )
 
 var (
@@ -349,50 +348,53 @@ func (tbl *baseTable) getRowsByPK(ctx context.Context, pks containers.Vector) (r
 similar to findDeletes
 */
 func foreachIncrementalObject(
-	it *btree.IterG[*catalog.ObjectEntry],
+	snapshot catalog.ObjectListSnapshot,
 	from, to types.TS,
 	fn func(*catalog.ObjectEntry) error,
 ) error {
-	visit := func(obj *catalog.ObjectEntry, appendable bool) error {
-		if obj.CreatedAt.GT(&to) || (!appendable && obj.CreatedAt.LT(&from)) || !obj.VisibleByTS(to) {
-			return nil
-		}
-		return fn(obj)
-	}
 	visitCreateGroup := func(group catalog.ObjectListGroup, appendable bool) error {
 		// An appendable object created before from can still contain an append
-		// prepared in [from, to]. Do not use CreatedAt to truncate a create
-		// group: inspect every entry and let visit apply the per-entry bounds.
-		for ok := catalog.SeekObjectListGroup(it, group, types.TS{}); ok; ok = it.Next() {
-			obj := it.Item()
-			if obj.ObjectListGroup() != group {
-				break
+		// prepared in [from, to]. Do not use the lower CreatedAt bound to
+		// truncate an appendable create group. The upper bound is safe because
+		// the group's tree is ordered by CreatedAt.
+		var err error
+		visitEntry := func(obj *catalog.ObjectEntry) bool {
+			if obj.CreatedAt.GT(&to) {
+				return false
 			}
-			if err := visit(obj, appendable); err != nil {
-				return err
-			}
+			// A create-only group contains serving C entries without a D
+			// counterpart. With CreatedAt <= to established above,
+			// VisibleByTS(to) cannot reject the entry.
+			err = fn(obj)
+			return err == nil
 		}
-		return nil
+		if appendable {
+			snapshot.ScanGroup(group, visitEntry)
+		} else {
+			snapshot.AscendGroup(group, from, visitEntry)
+		}
+		return err
 	}
 	if err := visitCreateGroup(catalog.ObjectListGroupAppendableCreate, true); err != nil {
 		return err
 	}
 	visitDropGroup := func(group catalog.ObjectListGroup) error {
-		appendable := group == catalog.ObjectListGroupAppendableDrop
-		for ok := catalog.SeekObjectListGroup(it, group, from); ok; ok = it.Next() {
-			obj := it.Item()
-			if obj.ObjectListGroup() != group {
-				break
-			}
-			// Seek is inclusive. Drop processing starts strictly after from.
+		var err error
+		snapshot.AscendGroup(group, from, func(obj *catalog.ObjectEntry) bool {
+			// Ascend is inclusive. Drop processing starts strictly after from.
 			if !obj.DeletedAt.GT(&from) {
-				continue
+				return true
 			}
-			if err := visit(obj, appendable); err != nil {
-				return err
+			if obj.CreatedAt.GT(&to) {
+				return true
 			}
-		}
-		return nil
+			if !obj.VisibleByTS(to) {
+				return true
+			}
+			err = fn(obj)
+			return err == nil
+		})
+		return err
 	}
 	if err := visitDropGroup(catalog.ObjectListGroupAppendableDrop); err != nil {
 		return err
@@ -407,15 +409,14 @@ func foreachIncrementalObject(
 // incrementalGetRowsByPK checks the inclusive logical interval [from, to].
 // Callers that hold an exclusive dedup watermark must pass watermark.Next().
 func (tbl *baseTable) incrementalGetRowsByPK(ctx context.Context, pks containers.Vector, from, to types.TS, inQueue bool) (rowIDs containers.Vector, err error) {
-	var objIt btree.IterG[*catalog.ObjectEntry]
+	var snapshot catalog.ObjectListSnapshot
 	if tbl.isTombstone {
 		tbl.txnTable.entry.WaitTombstoneObjectCommitted(to)
-		objIt = tbl.txnTable.entry.MakeTombstoneObjectIt()
+		snapshot = tbl.txnTable.entry.MakeTombstoneObjectSnapshot()
 	} else {
 		tbl.txnTable.entry.WaitDataObjectCommitted(to)
-		objIt = tbl.txnTable.entry.MakeDataObjectIt()
+		snapshot = tbl.txnTable.entry.MakeDataObjectSnapshot()
 	}
-	defer objIt.Release()
 	rowIDs = tbl.txnTable.store.rt.VectorPool.Small.GetVector(&objectio.RowidType)
 	defer func() {
 		// Ownership transfers to the caller only on success. In particular,
@@ -432,7 +433,7 @@ func (tbl *baseTable) incrementalGetRowsByPK(ctx context.Context, pks containers
 		pks.Length(),
 		common.WorkspaceAllocator,
 	)
-	err = foreachIncrementalObject(&objIt, from, to, func(obj *catalog.ObjectEntry) error {
+	err = foreachIncrementalObject(snapshot, from, to, func(obj *catalog.ObjectEntry) error {
 		if isEmptyDroppedAppendableObject(obj) {
 			return nil
 		}

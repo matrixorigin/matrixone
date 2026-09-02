@@ -1595,8 +1595,8 @@ func (tbl *txnTable) findDeletes(
 retryScan:
 	for {
 		tbl.entry.WaitTombstoneObjectCommitted(to)
-		it := tbl.entry.MakeTombstoneObjectIt()
-		err = foreachIncrementalObject(&it, from, to, func(obj *catalog.ObjectEntry) error {
+		snapshot := tbl.entry.MakeTombstoneObjectSnapshot()
+		err = foreachIncrementalObject(snapshot, from, to, func(obj *catalog.ObjectEntry) error {
 			objData := obj.GetObjectData()
 			if objData == nil {
 				panic(fmt.Sprintf("logic error, object %v", obj.StringWithLevel(3)))
@@ -1620,7 +1620,6 @@ retryScan:
 				common.WorkspaceAllocator,
 			)
 		})
-		it.Release()
 		if err != nil {
 			if moerr.IsMoErrCode(err, moerr.ErrTxnWWConflict) &&
 				tbl.waitTombstoneRowsCommittedBefore(to, rowIDs, keysZM) {

@@ -200,20 +200,21 @@ func MockStaloneTableEntry(id uint64, schema *Schema) *TableEntry {
 
 func (entry *TableEntry) GetSoftdeleteObjects(dedupedTS, collectTS types.TS) (objs []*ObjectEntry) {
 	entry.WaitDataObjectCommitted(collectTS)
-	it := entry.MakeDataObjectIt()
-	defer it.Release()
+	snapshot := entry.MakeDataObjectSnapshot()
 	groups := [...]ObjectListGroup{
 		ObjectListGroupAppendableDrop,
 		ObjectListGroupNonAppendableDrop,
 	}
 	for _, group := range groups {
-		for ok := SeekObjectListGroup(&it, group, dedupedTS); ok; ok = it.Next() {
-			obj := it.Item()
-			if obj.ObjectListGroup() != group || obj.DeletedAt.GT(&collectTS) {
+		groupIt := snapshot.Group(group)
+		for ok := SeekObjectListGroup(&groupIt, group, dedupedTS); ok; ok = groupIt.Next() {
+			obj := groupIt.Item()
+			if obj.DeletedAt.GT(&collectTS) {
 				break
 			}
 			objs = append(objs, obj)
 		}
+		groupIt.Release()
 	}
 	return
 }
@@ -268,6 +269,10 @@ func (entry *TableEntry) MakeTombstoneObjectIt() btree.IterG[*ObjectEntry] {
 	return entry.tombstoneObjects.loadTree().Iter()
 }
 
+func (entry *TableEntry) MakeTombstoneObjectSnapshot() ObjectListSnapshot {
+	return ObjectListSnapshot{trees: entry.tombstoneObjects.loadTrees()}
+}
+
 // committed visible object iterator
 func (entry *TableEntry) MakeTombstoneVisibleObjectIt(txn txnif.TxnReader) *VisibleCommittedObjectIt {
 	return entry.tombstoneObjects.MakeVisibleCommittedObjectIt(txn)
@@ -279,6 +284,10 @@ func (entry *TableEntry) WaitTombstoneObjectCommitted(ts types.TS) {
 
 func (entry *TableEntry) MakeDataObjectIt() btree.IterG[*ObjectEntry] {
 	return entry.dataObjects.loadTree().Iter()
+}
+
+func (entry *TableEntry) MakeDataObjectSnapshot() ObjectListSnapshot {
+	return ObjectListSnapshot{trees: entry.dataObjects.loadTrees()}
 }
 
 func (entry *TableEntry) MakeDataVisibleObjectIt(txn txnif.TxnReader) *VisibleCommittedObjectIt {
@@ -298,22 +307,23 @@ func (entry *TableEntry) IsTableTailFlushed(start, end types.TS) (bool, *ObjectE
 }
 
 func IsTableTailFlushed(table *TableEntry, start, end types.TS, isTombstone bool) (bool, *ObjectEntry) {
-	var it btree.IterG[*ObjectEntry]
+	var snapshot ObjectListSnapshot
 	if isTombstone {
 		table.WaitTombstoneObjectCommitted(end)
-		it = table.MakeTombstoneObjectIt()
+		snapshot = table.MakeTombstoneObjectSnapshot()
 	} else {
 		table.WaitDataObjectCommitted(end)
-		it = table.MakeDataObjectIt()
+		snapshot = table.MakeDataObjectSnapshot()
 	}
-	if SeekObjectListGroupReverse(&it, ObjectListGroupAppendableCreate, end) {
-		return false, it.Item()
+	createIt := snapshot.Group(ObjectListGroupAppendableCreate)
+	defer createIt.Release()
+	if SeekObjectListGroupReverse(&createIt, ObjectListGroupAppendableCreate, end) {
+		return false, createIt.Item()
 	}
-	for ok := SeekObjectListGroupReverse(&it, ObjectListGroupAppendableCreateWithDrop, end); ok; ok = it.Prev() {
-		obj := it.Item()
-		if obj.ObjectListGroup() != ObjectListGroupAppendableCreateWithDrop {
-			break
-		}
+	droppedIt := snapshot.Group(ObjectListGroupAppendableCreateWithDrop)
+	defer droppedIt.Release()
+	for ok := SeekObjectListGroupReverse(&droppedIt, ObjectListGroupAppendableCreateWithDrop, end); ok; ok = droppedIt.Prev() {
+		obj := droppedIt.Item()
 		if next := obj.GetNextVersion(); !next.IsCommitted() {
 			return false, obj
 		}
@@ -675,23 +685,21 @@ func (entry *TableEntry) GetTableData() data.Table { return entry.tableData }
 // TryFindLastAppendableObject tries to find a serving appendable object in the tail of the list, specifically determined by time range [now-5min, now]
 // Note: It not a big deal to return nil to indicate no object found, because the caller will handle it by creating a new one.
 func (entry *TableEntry) TryFindLastAppendableObject(isTombstone bool) (obj *ObjectEntry) {
-	var it btree.IterG[*ObjectEntry]
+	var snapshot ObjectListSnapshot
 	if isTombstone {
-		it = entry.MakeTombstoneObjectIt()
+		snapshot = entry.MakeTombstoneObjectSnapshot()
 	} else {
-		it = entry.MakeDataObjectIt()
+		snapshot = entry.MakeDataObjectSnapshot()
 	}
-	defer it.Release()
 
 	ago := time.Now().Add(-10 * time.Minute).UTC().UnixNano()
 
 	// For Appendable objects:
 	// Deleting objects should be ignored, because they have been freezed, which is not valid for appending.
-	if SeekObjectListGroupReverse(&it, ObjectListGroupAppendableCreate, txnif.UncommitTS) {
-		itObj := it.Item()
-		if itObj.ObjectListGroup() == ObjectListGroupAppendableCreate {
-			obj = itObj
-		}
+	groupIt := snapshot.Group(ObjectListGroupAppendableCreate)
+	defer groupIt.Release()
+	if SeekObjectListGroupReverse(&groupIt, ObjectListGroupAppendableCreate, txnif.UncommitTS) {
+		obj = groupIt.Item()
 	}
 	if obj != nil && obj.CreatedAt.Physical() < ago {
 		obj = nil

@@ -74,10 +74,20 @@ func MockCreatedObjectEntry2List(
 	catalog *Catalog,
 	isTombstone bool,
 	create types.TS) *ObjectEntry {
+	return MockCreatedObjectEntry2ListWithAppendable(rel, catalog, isTombstone, false, create)
+}
+
+func MockCreatedObjectEntry2ListWithAppendable(
+	rel *TableEntry,
+	catalog *Catalog,
+	isTombstone bool,
+	appendable bool,
+	create types.TS) *ObjectEntry {
 	var obj objectio.ObjectStats
 	objname := objectio.MockObjectName()
 	objectio.SetObjectStatsObjectName(&obj, objname)
 	objectio.SetObjectStatsSize(&obj, uint32(1000))
+	objectio.SetObjectStatsAppendable(&obj, appendable)
 	object := &ObjectEntry{
 		table: rel,
 		ObjectNode: ObjectNode{
