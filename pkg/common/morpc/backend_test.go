@@ -573,7 +573,7 @@ func TestReadTimeoutDoesNotChargeIdleTimeToNewRequest(t *testing.T) {
 	rb.mu.activeStreams = map[uint64]*stream{1: {}}
 	require.False(t, rb.keepDataConnectionAfterReadTimeout(
 		context.Background(), context.DeadlineExceeded),
-		"an active stream must retain the ordinary backend's timeout semantics")
+		"a stream with no flushed message must retain the ordinary backend's timeout semantics")
 	clear(rb.mu.activeStreams)
 	internal := &Future{send: RPCMessage{internal: true}}
 	internal.writtenAt.Store(rb.livenessTick())
@@ -581,15 +581,23 @@ func TestReadTimeoutDoesNotChargeIdleTimeToNewRequest(t *testing.T) {
 	require.False(t, rb.keepDataConnectionAfterReadTimeout(
 		context.Background(), context.DeadlineExceeded),
 		"internal traffic must not extend the user-request read window")
-	rb.mu.futures = map[uint64]*Future{1: {oneWay: true}}
+	oneWay := &Future{oneWay: true}
+	oneWay.send.createAt = time.Now()
+	rb.mu.futures = map[uint64]*Future{1: oneWay}
 	require.False(t, rb.keepDataConnectionAfterReadTimeout(
 		context.Background(), context.DeadlineExceeded),
 		"one-way traffic must not create a response read window")
 	inFlight := &Future{}
+	inFlight.send.createAt = time.Now()
 	rb.mu.futures = map[uint64]*Future{1: inFlight}
 	require.True(t, rb.keepDataConnectionAfterReadTimeout(
 		context.Background(), context.DeadlineExceeded),
 		"an admitted request must not inherit the remainder of an idle read window")
+	inFlight.send.createAt = time.Now().Add(-rb.options.readTimeout)
+	require.False(t, rb.keepDataConnectionAfterReadTimeout(
+		context.Background(), context.DeadlineExceeded),
+		"a request stuck before flush must not renew the connection beyond one admission window")
+	inFlight.send.createAt = time.Now()
 	inFlight.waiting.Store(true)
 	require.False(t, rb.keepDataConnectionAfterReadTimeout(
 		context.Background(), context.DeadlineExceeded),
@@ -614,12 +622,28 @@ func TestReadTimeoutDoesNotChargeIdleTimeToNewRequest(t *testing.T) {
 	pending.writtenAt.Store(rb.livenessTick() - rb.options.readTimeout.Nanoseconds())
 	require.False(t, rb.keepDataConnectionAfterReadTimeout(
 		context.Background(), context.DeadlineExceeded))
-	rb.mu.futures[2] = &Future{}
+	fresh := &Future{}
+	fresh.send.createAt = time.Now()
+	rb.mu.futures[2] = fresh
 	require.False(t, rb.keepDataConnectionAfterReadTimeout(
 		context.Background(), context.DeadlineExceeded),
 		"new admissions must not keep an already-stalled request generation alive")
 	require.False(t, rb.keepDataConnectionAfterReadTimeout(
 		context.Background(), errors.New("connection reset")))
+
+	// Stream traffic owns one window from its most recent successful flush, so
+	// a stream message admitted late in an idle read window is not charged the
+	// idle time; once that window elapses the idle-close behavior returns.
+	clear(rb.mu.futures)
+	rb.atomic.lastStreamFlushAt.Store(rb.livenessTick())
+	require.True(t, rb.keepDataConnectionAfterReadTimeout(
+		context.Background(), context.DeadlineExceeded),
+		"a freshly flushed stream message owns one complete read window")
+	rb.atomic.lastStreamFlushAt.Store(
+		rb.livenessTick() - rb.options.readTimeout.Nanoseconds())
+	require.False(t, rb.keepDataConnectionAfterReadTimeout(
+		context.Background(), context.DeadlineExceeded),
+		"an expired stream window must not keep a silent connection open")
 }
 
 func TestReadTimeoutTracksRequestsWithoutLivenessProbe(t *testing.T) {
@@ -645,10 +669,39 @@ func TestReadTimeoutTracksRequestsWithoutLivenessProbe(t *testing.T) {
 			case <-ctx.Done():
 				t.Fatal("request did not reach server")
 			}
-			writtenAt, writePending := b.pendingRequestReadWindow()
-			require.NotZero(t, writtenAt,
+			require.NotZero(t, f.writtenAt.Load(),
+				"a flushed request must carry its flush stamp")
+			require.Equal(t, f.writtenAt.Load(), b.pendingRequestReadWindow(),
 				"read-timeout accounting must not depend on a liveness probe")
-			require.False(t, writePending)
+		},
+		WithBackendReadTimeout(200*time.Millisecond),
+	)
+}
+
+func TestReadTimeoutTracksStreamWritesWithoutLivenessProbe(t *testing.T) {
+	testBackendSend(t,
+		func(_ goetty.IOSession, _ interface{}, _ uint64) error {
+			// no response: only the write-side stamp is under test
+			return nil
+		},
+		func(b *remoteBackend) {
+			st, err := b.NewStream(false)
+			require.NoError(t, err)
+			defer func() {
+				require.NoError(t, st.Close(false))
+			}()
+
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+			defer cancel()
+			// Send returns only after the flush completed, so the stamp is
+			// already published.
+			require.NoError(t, st.Send(ctx, &testMessage{id: st.ID()}))
+
+			require.NotZero(t, b.atomic.lastStreamFlushAt.Load(),
+				"a flushed stream message must open a stream read window")
+			require.True(t, b.keepDataConnectionAfterReadTimeout(
+				context.Background(), context.DeadlineExceeded),
+				"a stream message admitted late in an idle read window must not be charged the idle time")
 		},
 		WithBackendReadTimeout(200*time.Millisecond),
 	)

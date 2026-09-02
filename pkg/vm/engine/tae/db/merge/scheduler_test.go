@@ -116,13 +116,31 @@ func (c *dummyCatalogSource) GetMergeSettingsBatchFn() func() (*batch.Batch, fun
 	return c.settingsFn
 }
 
+// schedulerTestHangTimeout bounds every synchronization wait in this file. A
+// wait that exceeds it is a hang, not CI load; keep every guard site on this
+// one constant so they cannot drift apart.
+const schedulerTestHangTimeout = 10 * time.Second
+
+// waitOrFatal waits for one signal on ch or fails the test at the shared hang
+// guard.
+func waitOrFatal(t *testing.T, ch <-chan struct{}, msg string) {
+	t.Helper()
+	timer := time.NewTimer(schedulerTestHangTimeout)
+	defer timer.Stop()
+	select {
+	case <-ch:
+	case <-timer.C:
+		t.Fatal(msg)
+	}
+}
+
 func requireQuery(
 	t *testing.T,
 	sched *MergeScheduler,
 	table catalog.MergeTable,
 ) *QueryAnswer {
 	t.Helper()
-	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+	ctx, cancel := context.WithTimeout(t.Context(), schedulerTestHangTimeout)
 	defer cancel()
 	answer, err := sched.Query(ctx, table)
 	require.NoError(t, err)
@@ -315,7 +333,11 @@ func TestScheduler(t *testing.T) {
 		}
 
 		opts2 := NewVacuumOpts()
-		opts2.HollowTopK = 1
+		// Keep HollowTopK above the injected task count: a full HollowTopK arms a
+		// wall-clock 10s vacuum recheck whose persistent inject would emit an
+		// extra ExecuteFor event into the exactly-sized drain below under CI
+		// stalls. The recheck path has its own fake-clock test.
+		opts2.HollowTopK = 2
 		opts2.testInject = &vacuumTestInject{
 			compactTask: []mergeTask{
 				{
@@ -376,7 +398,7 @@ func TestScheduler(t *testing.T) {
 		for _, count := range expected {
 			remaining += count
 		}
-		timer := time.NewTimer(10 * time.Second)
+		timer := time.NewTimer(schedulerTestHangTimeout)
 		defer timer.Stop()
 		for remaining > 0 {
 			select {
@@ -403,17 +425,68 @@ func TestScheduler(t *testing.T) {
 
 	{
 		// dropped table will be removed from scheduler
-		timer := time.NewTimer(10 * time.Second)
-		defer timer.Stop()
-		select {
-		case <-dropped.checked:
-		case <-timer.C:
-			t.Fatal("merge scheduler did not inspect the dropped table")
-		}
+		waitOrFatal(t, dropped.checked,
+			"merge scheduler did not inspect the dropped table")
 		answer := requireQuery(t, sched, tables[2])
 		require.Equal(t, answer.NotExists, true)
 	}
 
+}
+
+func TestVacuumRecheckArmsOnFullHollowTopKUsingInjectedClock(t *testing.T) {
+	clock := newFakeClock()
+	db := catalog.MockDBEntryWithAccInfo(1, 1001)
+	table := catalog.ToMergeTable(catalog.MockTableEntryWithDB(db, 1001))
+	sched := NewMergeScheduler(
+		time.Hour,
+		&dummyCatalogSource{initTables: []catalog.MergeTable{table}},
+		&dummyExecutor{},
+		clock,
+	)
+	generation := newMergeSchedulerGeneration()
+
+	newOpts := func(hollowTopK int) *VacuumOpts {
+		opts := NewVacuumOpts()
+		opts.HollowTopK = hollowTopK
+		opts.testInject = &vacuumTestInject{
+			compactTask: []mergeTask{{
+				objs: []*objectio.ObjectStats{
+					newTestObjectStats(t, 1, 2, 30*common.Const1MBytes, 1000, 1, nil, 0),
+				},
+				note:  "test",
+				level: 1,
+			}},
+		}
+		return opts
+	}
+
+	// A partially hollow table (tasks < HollowTopK) sends only the compact
+	// trigger and must not arm the recheck.
+	sched.ioVacuumCheck(generation, MMsgVacuumCheck{Table: table, opts: newOpts(2)})
+	require.Len(t, sched.msgChan, 1)
+	clock.Advance(time.Minute)
+	require.Never(t, func() bool { return len(sched.msgChan) > 1 },
+		50*time.Millisecond, time.Millisecond,
+		"a partially hollow table must not schedule a vacuum recheck")
+
+	// A fully hollow table (tasks == HollowTopK) arms one recheck that fires
+	// only after the injected clock crosses the 10s deadline.
+	sched.ioVacuumCheck(generation, MMsgVacuumCheck{Table: table, opts: newOpts(1)})
+	require.Len(t, sched.msgChan, 2)
+	clock.Advance(10*time.Second - time.Nanosecond)
+	require.Never(t, func() bool { return len(sched.msgChan) > 2 },
+		50*time.Millisecond, time.Millisecond,
+		"the vacuum recheck must not fire before its deadline")
+	clock.Advance(time.Nanosecond)
+	require.Eventually(t, func() bool { return len(sched.msgChan) == 3 },
+		schedulerTestHangTimeout, time.Millisecond,
+		"the vacuum recheck must fire once the injected clock crosses the deadline")
+	<-sched.msgChan
+	<-sched.msgChan
+	recheck := <-sched.msgChan
+	require.Equal(t, MMsgKindTrigger, recheck.Kind)
+	trigger := recheck.Value.(*MMsgTaskTrigger)
+	require.NotNil(t, trigger.vacuum, "the recheck must carry a vacuum check")
 }
 
 func TestSchedulerPolicyPatchExpirationUsesInjectedClock(t *testing.T) {

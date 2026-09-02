@@ -157,6 +157,23 @@ func TestDrainUpgradeTenantsStopsAfterCancellation(t *testing.T) {
 	require.Equal(t, 1, calls)
 }
 
+// drainToBarrier runs one full tenant-upgrade drain and encodes the
+// completion-barrier convention these tests share. A test whose SQL mock
+// cancels ctx at its barrier passes wantBarrier=true: ctx must end Canceled,
+// which proves the barrier was reached rather than the hang deadline
+// (DeadlineExceeded). A test whose drain finishes naturally passes
+// wantBarrier=false: ctx must carry no error at all.
+func drainToBarrier(t *testing.T, ctx context.Context, s *service, wantBarrier bool) {
+	t.Helper()
+	drainUpgradeTenants(ctx, s.newTenantUpgradePass(ctx))
+	if wantBarrier {
+		require.ErrorIs(t, ctx.Err(), context.Canceled,
+			"tenant upgrade did not reach its completion barrier")
+		return
+	}
+	require.NoError(t, ctx.Err(), "tenant upgrade hit the test hang guard")
+}
+
 func Test_asyncUpgradeTenantTask_SkipsTenantAtTargetVersion(t *testing.T) {
 	sid := ""
 	runtime.RunTest(
@@ -337,9 +354,7 @@ func Test_asyncUpgradeTenantTask_RunsSameVersionOffsetUpgrade(t *testing.T) {
 				return sqlExecutor.Exec(context.Background(), sql, executor.Options{})
 			}, txnOperator)
 
-			drainUpgradeTenants(ctx, s.newTenantUpgradePass(ctx))
-			require.ErrorIs(t, ctx.Err(), context.Canceled,
-				"tenant upgrade did not reach its completion barrier")
+			drainToBarrier(t, ctx, s, true)
 			require.True(t, taskReady.Load())
 			require.True(t, finalized.Load())
 			require.True(t, tenantVersionUpdated.Load())
@@ -413,9 +428,7 @@ func Test_asyncUpgradeTenantTask_AutoCompletesDeletedTenantTasks(t *testing.T) {
 				return sqlExecutor.Exec(context.Background(), sql, executor.Options{})
 			}, txnOperator)
 
-			drainUpgradeTenants(ctx, s.newTenantUpgradePass(ctx))
-			require.ErrorIs(t, ctx.Err(), context.Canceled,
-				"tenant upgrade did not reach its completion barrier")
+			drainToBarrier(t, ctx, s, true)
 			require.True(t, finalized.Load())
 			require.Zero(t, h.callHandleTenantUpgrade.Load())
 		},
@@ -474,9 +487,7 @@ func Test_asyncUpgradeTenantTask_ReconcilesReadyCountWhenTasksAlreadyFinished(t 
 				return sqlExecutor.Exec(context.Background(), sql, executor.Options{})
 			}, txnOperator)
 
-			drainUpgradeTenants(ctx, s.newTenantUpgradePass(ctx))
-			require.ErrorIs(t, ctx.Err(), context.Canceled,
-				"tenant upgrade did not reach its completion barrier")
+			drainToBarrier(t, ctx, s, true)
 			require.True(t, finalized.Load())
 			require.Zero(t, h.callHandleTenantUpgrade.Load())
 		},
@@ -538,8 +549,7 @@ func Test_asyncUpgradeTenantTask_SkipsReconcileWhenConflictTasksRemain(t *testin
 				return sqlExecutor.Exec(context.Background(), sql, executor.Options{})
 			}, txnOperator)
 
-			drainUpgradeTenants(ctx, s.newTenantUpgradePass(ctx))
-			require.NoError(t, ctx.Err(), "tenant upgrade hit the test hang guard")
+			drainToBarrier(t, ctx, s, false)
 			require.False(t, reconciled.Load())
 			require.False(t, upgraded.Load())
 			require.Zero(t, h.callHandleTenantUpgrade.Load())
@@ -597,8 +607,7 @@ func Test_asyncUpgradeTenantTask_SkipsAlreadyReconciledUpgradeCounts(t *testing.
 				return sqlExecutor.Exec(context.Background(), sql, executor.Options{})
 			}, txnOperator)
 
-			drainUpgradeTenants(ctx, s.newTenantUpgradePass(ctx))
-			require.NoError(t, ctx.Err(), "tenant upgrade hit the test hang guard")
+			drainToBarrier(t, ctx, s, false)
 			require.False(t, upgraded.Load())
 			require.Zero(t, h.callHandleTenantUpgrade.Load())
 		},

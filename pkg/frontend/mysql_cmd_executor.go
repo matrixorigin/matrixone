@@ -2466,7 +2466,7 @@ func writeExplainResult(
 				sqlMode = &prepared.schedulingSQLMode
 			}
 		}
-		schedulingPreview := previewQuerySchedulingWithSQLMode(
+		schedulingPreview := previewQueryScheduling(
 			reqCtx, ses, exPlan.GetQuery(), txnHaveDDL, rawSQL, sqlMode)
 		appendSchedulingExplain(buffer, schedulingPreview)
 	}
@@ -2493,24 +2493,12 @@ func writeExplainResult(
 	return trySaveQueryResult(reqCtx, ses, mrs)
 }
 
+// previewQueryScheduling owns the production best-effort latency policy: the
+// preview runs under its own schedulingPreviewTimeout so a slow or blocked
+// engine cannot delay the EXPLAIN response. A nil sqlMode means "use the
+// session's current mode". Callers that need to observe the scheduling
+// decision itself use previewQuerySchedulingInContext below.
 func previewQueryScheduling(
-	ctx context.Context,
-	ses *Session,
-	query *plan.Query,
-	txnHaveDDL bool,
-	statementSQL ...string,
-) schedule.Trace {
-	rawSQL := ""
-	if ses != nil {
-		rawSQL = ses.GetSql()
-	}
-	if len(statementSQL) > 0 {
-		rawSQL = statementSQL[0]
-	}
-	return previewQuerySchedulingWithSQLMode(ctx, ses, query, txnHaveDDL, rawSQL, nil)
-}
-
-func previewQuerySchedulingWithSQLMode(
 	ctx context.Context,
 	ses *Session,
 	query *plan.Query,

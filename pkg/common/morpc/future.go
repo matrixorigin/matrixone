@@ -246,6 +246,17 @@ func (f *Future) getSendMessageID() uint64 {
 	return f.id
 }
 
+// isUserUnary reports whether this Future carries an ordinary user unary
+// request: the only traffic class whose response owns a per-request read
+// window. The writeLoop flush stamp and pendingRequestReadWindow must use this
+// same predicate; a Future counted by the scan but never stamped would read as
+// pending forever, and one stamped but not scanned would lose its window.
+// (The probe-mode trackLiveness predicate in doWrite intentionally differs:
+// it also tracks one-way user traffic.)
+func (f *Future) isUserUnary() bool {
+	return !f.send.internal && !f.send.stream && !f.oneWay
+}
+
 func (f *Future) done(response Message, cb func()) bool {
 	f.mu.Lock()
 	if f.mu.notified || f.mu.closed || f.timeout() ||
