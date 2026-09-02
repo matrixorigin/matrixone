@@ -2381,6 +2381,8 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext)
 			rowNumberPos,
 			activePos,
 			indexes,
+			nil,
+			-1,
 			tableDef,
 			dmlCtx.objRefs[i],
 		)
@@ -2390,13 +2392,15 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext)
 		builder.irregularUpdateMaints = append(
 			builder.irregularUpdateMaints,
 			irregularUpdateMaintenance{
-				sourceStep:  builder.irregularMaintSourceStep,
-				deleteStep:  builder.irregularMaintDeleteStep,
-				deletePkPos: builder.irregularMaintDeletePkPos,
-				deletePkTyp: builder.irregularMaintDeletePkTyp,
-				indexes:     builder.irregularMaintIndexes,
-				tableDef:    builder.irregularMaintTableDef,
-				objRef:      builder.irregularMaintObjRef,
+				sourceStep:           builder.irregularMaintSourceStep,
+				deleteStep:           builder.irregularMaintDeleteStep,
+				deletePkPos:          builder.irregularMaintDeletePkPos,
+				deletePkTyp:          builder.irregularMaintDeletePkTyp,
+				indexes:              builder.irregularMaintIndexes,
+				insertOnlySourceStep: builder.irregularMaintInsertOnlySourceStep,
+				insertOnlyIndexes:    builder.irregularMaintInsertOnlyIndexes,
+				tableDef:             builder.irregularMaintTableDef,
+				objRef:               builder.irregularMaintObjRef,
 			},
 		)
 	}
@@ -4472,6 +4476,23 @@ func irregularIndexAffectedByUpdate(
 	tableDef *plan.TableDef,
 	idxDef *plan.IndexDef,
 	updateCols map[string]tree.Expr,
+) (bool, error) {
+	updatedCols := make(map[string]struct{}, len(updateCols))
+	for colName := range updateCols {
+		updatedCols[colName] = struct{}{}
+	}
+	return irregularIndexAffectedByUpdatedColumnNames(tableDef, idxDef, updatedCols)
+}
+
+// irregularIndexAffectedByUpdatedColumnNames is the shared dependency check for
+// UPDATE and ON DUPLICATE KEY UPDATE. The latter has already bound its values to
+// plan expressions, so it cannot reuse the tree.Expr map accepted by the former.
+// Keeping the plugin hook here makes both paths honor algorithm-owned metadata
+// dependencies such as IVFFLAT INCLUDE columns.
+func irregularIndexAffectedByUpdatedColumnNames(
+	tableDef *plan.TableDef,
+	idxDef *plan.IndexDef,
+	updateCols map[string]struct{},
 ) (bool, error) {
 	columnUpdated := func(colName string) bool {
 		colName = catalog.ResolveAlias(colName)

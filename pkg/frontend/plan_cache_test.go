@@ -444,6 +444,23 @@ func TestSessionSQLModePresenceChangeClearsPlanCache(t *testing.T) {
 	require.NoError(t, ses.SetSessionSysVar(ctx, "SQL_MODE", "STRICT_TRANS_TABLES,MATRIXONE_NATIVE"))
 	require.False(t, ses.isCached("cached-sql"))
 	require.Equal(t, 1, stmt.freed)
+
+	// ENABLE_BOOL_SUMAVG shapes the plan of sum/avg over BOOL at bind time, so
+	// enabling and disabling it must evict exactly like the two tokens above.
+	stmt = &trackedStatement{}
+	ses.cachePlan("cached-sql", []tree.Statement{stmt}, []*plan.Plan{{}})
+	require.NoError(t, ses.SetSessionSysVar(ctx, "sql_mode", "STRICT_TRANS_TABLES,MATRIXONE_NATIVE,ENABLE_BOOL_SUMAVG"))
+	require.False(t, ses.isCached("cached-sql"))
+	require.Equal(t, 1, stmt.freed)
+
+	stmt = &trackedStatement{}
+	ses.cachePlan("cached-sql", []tree.Statement{stmt}, []*plan.Plan{{}})
+	require.NoError(t, ses.SetSessionSysVar(ctx, "sql_mode", "MATRIXONE_NATIVE,ENABLE_BOOL_SUMAVG,STRICT_TRANS_TABLES"))
+	require.True(t, ses.isCached("cached-sql"), "reordering the same tokens keeps the cache")
+	require.Zero(t, stmt.freed)
+	require.NoError(t, ses.SetSessionSysVar(ctx, "sql_mode", "STRICT_TRANS_TABLES,MATRIXONE_NATIVE"))
+	require.False(t, ses.isCached("cached-sql"))
+	require.Equal(t, 1, stmt.freed)
 }
 
 func TestSessionProtocolVersionChangeInvalidatesPlanCache(t *testing.T) {
@@ -495,6 +512,17 @@ func TestSessionSQLModePresenceMatcherUsesExactToken(t *testing.T) {
 	has, ok = sqlModeHasOnlyFullGroupByValue("STRICT_TRANS_TABLES, ONLY_FULL_GROUP_BY_EXTRA")
 	require.True(t, ok)
 	require.False(t, has)
+
+	has, ok = sqlModeHasEnableBoolSumAvgValue("STRICT_TRANS_TABLES, ENABLE_BOOL_SUMAVG")
+	require.True(t, ok)
+	require.True(t, has)
+
+	has, ok = sqlModeHasEnableBoolSumAvgValue("STRICT_TRANS_TABLES, ENABLE_BOOL_SUMAVG_EXTRA")
+	require.True(t, ok)
+	require.False(t, has)
+
+	_, ok = sqlModeHasEnableBoolSumAvgValue(int64(0))
+	require.False(t, ok)
 }
 
 func TestPlanCachePreservesViewMetadataDependency(t *testing.T) {

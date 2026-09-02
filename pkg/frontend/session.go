@@ -1337,7 +1337,22 @@ func (ses *Session) sqlModeHasOnlyFullGroupBy() bool {
 	return ok && has
 }
 
-func (ses *Session) updateSqlModeCaches(oldNative, oldOnlyFullGroupBy bool, val interface{}) {
+func (ses *Session) sqlModeHasEnableBoolSumAvg() bool {
+	if ses == nil {
+		return false
+	}
+	value, err := ses.GetSessionSysVar("sql_mode")
+	if err != nil {
+		return false
+	}
+	has, ok := sqlModeHasEnableBoolSumAvgValue(value)
+	return ok && has
+}
+
+// updateSqlModeCaches evicts cached plans when a sql_mode token that shapes
+// the plan changes membership. Every token the planner reads at bind time
+// must be compared here: the cache is keyed by SQL text alone.
+func (ses *Session) updateSqlModeCaches(oldNative, oldOnlyFullGroupBy, oldBoolSumAvg bool, val interface{}) {
 	ses.updateSqlModeNoAutoValueOnZero(val)
 	newNative, ok := sqlModeHasMatrixOneNativeValue(val)
 	if !ok {
@@ -1347,7 +1362,12 @@ func (ses *Session) updateSqlModeCaches(oldNative, oldOnlyFullGroupBy bool, val 
 	if !ok {
 		return
 	}
-	if oldNative != newNative || oldOnlyFullGroupBy != newOnlyFullGroupBy {
+	newBoolSumAvg, ok := sqlModeHasEnableBoolSumAvgValue(val)
+	if !ok {
+		return
+	}
+	if oldNative != newNative || oldOnlyFullGroupBy != newOnlyFullGroupBy ||
+		oldBoolSumAvg != newBoolSumAvg {
 		ses.cleanCache()
 	}
 }

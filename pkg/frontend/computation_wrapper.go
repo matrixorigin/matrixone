@@ -1172,6 +1172,7 @@ func initExecuteStmtParamWithResolverInSession(
 	executionPlan := preparePlan.Plan
 	currentNativeMode := owner.sqlModeHasMatrixOneNative()
 	currentOnlyFullGroupBy := owner.sqlModeHasOnlyFullGroupBy()
+	currentBoolSumAvg := owner.sqlModeHasEnableBoolSumAvg()
 
 	// TODO check if schema change, obj.Obj is zero all the time in 0.6
 	eng := cwft.proc.Base.SessionInfo.StorageEngine
@@ -1243,7 +1244,8 @@ func initExecuteStmtParamWithResolverInSession(
 	// observe the current setting.
 	fkSensitive := shouldRebuildPreparePlan(false, preparePlan.Plan)
 	modeMismatch := prepareStmt.NativeMode != currentNativeMode ||
-		prepareStmt.onlyFullGroupBySet && prepareStmt.OnlyFullGroupBy != currentOnlyFullGroupBy
+		prepareStmt.sqlModeFlagsSet && (prepareStmt.OnlyFullGroupBy != currentOnlyFullGroupBy ||
+			prepareStmt.BoolSumAvg != currentBoolSumAvg)
 	protocolVersion := currentProtocolVersion(cwft.proc)
 	protocolMismatch := prepareStmt.protocolVersion != 0 &&
 		prepareStmt.protocolVersion != protocolVersion
@@ -1299,7 +1301,8 @@ func initExecuteStmtParamWithResolverInSession(
 		}
 		prepareStmt.NativeMode = currentNativeMode
 		prepareStmt.OnlyFullGroupBy = currentOnlyFullGroupBy
-		prepareStmt.onlyFullGroupBySet = true
+		prepareStmt.BoolSumAvg = currentBoolSumAvg
+		prepareStmt.sqlModeFlagsSet = true
 		prepareStmt.Ts = prepareTs
 		prepareStmt.tempTableVersion = currentTempTableVersion
 		prepareStmt.ddlVersion = currentDDLVersion
