@@ -65,6 +65,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
+	"github.com/matrixorigin/matrixone/pkg/util/fault"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/idxcron"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
@@ -221,7 +222,7 @@ func (s *Scope) DropDatabase(c *Compile) error {
 	}
 	if c.proc.Base.IsFrontend && !needSkipDbs[dbName] {
 		generation := uint64(c.proc.GetTxnOperator().SnapshotTS().PhysicalTime)
-		if err = c.enqueueViewsAfterDatabaseRemoval(accountId, droppedDatabaseID, generation); err != nil {
+		if err = c.enqueueViewsAfterDatabaseRemoval(dbName, accountId, droppedDatabaseID, generation); err != nil {
 			return err
 		}
 		if err = c.deleteDroppedDatabaseViewMetadata(accountId, droppedDatabaseID, dbName); err != nil {
@@ -2256,10 +2257,18 @@ func (c *Compile) maybeInsertIcebergTableMapping(dbSource engine.Database, rel e
 	if err != nil || dbID == 0 {
 		return moerr.NewInternalErrorf(c.proc.Ctx, "invalid database id for iceberg mapping: %s", dbIDText)
 	}
-	catalogID, err := c.lookupIcebergCatalogID(accountID, env.Catalog)
+	// Keep the catalog row locked in the outer CREATE TABLE transaction until
+	// the mapping is inserted.  DROP ICEBERG CATALOG uses this same row as its
+	// lifecycle lock, so it cannot delete a catalog between this validation and
+	// publication of a new mapping.
+	catalogID, err := c.lookupIcebergCatalogIDForUpdate(accountID, env.Catalog)
 	if err != nil {
 		return err
 	}
+	// This is inert unless an operator explicitly enables the named fault point.
+	// The E2E race test uses it to pause CREATE after the lifecycle lock is held
+	// without adding file-system polling or an environment-controlled wait to DDL.
+	fault.TriggerFaultWithContext(c.proc.Ctx, icebergCreateMappingAfterCatalogLockFault)
 
 	mapping := model.TableMapping{
 		AccountID:            accountID,
@@ -2279,9 +2288,11 @@ func (c *Compile) maybeInsertIcebergTableMapping(dbSource engine.Database, rel e
 	)
 }
 
-func (c *Compile) lookupIcebergCatalogID(accountID uint32, catalogName string) (uint64, error) {
+const icebergCreateMappingAfterCatalogLockFault = "iceberg-create-mapping-after-catalog-lock"
+
+func (c *Compile) lookupIcebergCatalogIDForUpdate(accountID uint32, catalogName string) (uint64, error) {
 	res, err := c.runSqlWithResultAndOptions(
-		sqliceberg.GetCatalogByNameSQL(accountID, catalogName),
+		sqliceberg.GetCatalogByNameForUpdateSQL(accountID, catalogName),
 		NoAccountId,
 		executor.StatementOption{}.WithDisableLog(),
 	)
@@ -4003,7 +4014,7 @@ func (s *Scope) dropTableSingle(c *Compile, qry *plan.DropTable) error {
 			return err
 		}
 		if isView {
-			if err = c.deleteDroppedViewMetadata(droppedRelationID); err != nil {
+			if err = c.deleteDroppedViewMetadata(dbName, droppedRelationID); err != nil {
 				return err
 			}
 		}
