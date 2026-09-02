@@ -17,6 +17,7 @@ package cnservice
 import (
 	"context"
 	"errors"
+	"fmt"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -26,6 +27,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/frontend"
@@ -88,6 +90,12 @@ func (c *admissionCNHAKeeperClient) AllocateIDByKey(ctx context.Context, key str
 	return c.id, nil
 }
 
+func viewMetadataLifecycleGateTestResult() executor.Result {
+	result := executor.NewMemResult(nil, nil)
+	result.NewBatchWithRowCount(1)
+	return result.GetResult()
+}
+
 func TestCNViewMetadataAdmissionGenerationLifecycle(t *testing.T) {
 	serviceID := "cn-admission-generation-lifecycle"
 	runtime.SetupServiceBasedRuntime(serviceID, runtime.DefaultRuntime())
@@ -127,8 +135,11 @@ func TestCNViewMetadataAdmissionFencesCatalogBeforeReady(t *testing.T) {
 		viewMetadataEpochFence:          compile.NewViewMetadataEpochFence(),
 		viewMetadataAdmissionUpdated:    make(chan struct{}, 1),
 	}
-	s.sqlExecutor = executor.NewMemExecutor(func(string) (executor.Result, error) {
+	s.sqlExecutor = executor.NewMemExecutor(func(sql string) (executor.Result, error) {
 		statements.Add(1)
+		if sql == catalog.ViewMetadataLifecycleGateSQL {
+			return viewMetadataLifecycleGateTestResult(), nil
+		}
 		return executor.Result{}, nil
 	})
 	s.viewMetadataCatalogFenceReady.Store(true)
@@ -146,6 +157,171 @@ func TestCNViewMetadataAdmissionFencesCatalogBeforeReady(t *testing.T) {
 	require.Equal(t, uint64(3), s.viewMetadataEpochFence.Epoch())
 	require.Equal(t, uint64(3), s.viewMetadataCatalogFencedEpoch.Load())
 	require.Positive(t, statements.Load())
+}
+
+func TestViewMetadataCatalogUpgradePending(t *testing.T) {
+	tests := []struct {
+		name string
+		err  error
+		want bool
+	}{
+		{name: "missing table", err: moerr.NewNoSuchTableNoCtx("mo_catalog", "t"), want: true},
+		{name: "missing database", err: moerr.NewBadDBNoCtx("mo_catalog"), want: true},
+		{name: "other failure", err: errors.New("executor failed"), want: false},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			require.Equal(t, test.want, viewMetadataCatalogUpgradePending(test.err))
+		})
+	}
+}
+
+func TestCNViewMetadataAdmissionDefersCatalogFenceWhileUpgradePending(t *testing.T) {
+	tests := []struct {
+		name               string
+		refreshGatePresent bool
+	}{
+		{name: "neither table exists"},
+		{name: "only dependencies exists"},
+		{name: "only refresh exists", refreshGatePresent: true},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			var statements atomic.Int64
+			s := &service{
+				cfg:                             &Config{},
+				logger:                          zap.NewNop(),
+				viewMetadataAdmissionGeneration: 7,
+				viewMetadataEpochFence:          compile.NewViewMetadataEpochFence(),
+				viewMetadataAdmissionUpdated:    make(chan struct{}, 1),
+			}
+			s.sqlExecutor = executor.NewMemExecutor(func(sql string) (executor.Result, error) {
+				statements.Add(1)
+				if sql == catalog.ViewMetadataLifecycleGateSQL {
+					if test.refreshGatePresent {
+						return viewMetadataLifecycleGateTestResult(), nil
+					}
+					return executor.Result{}, nil
+				}
+				return executor.Result{}, moerr.NewNoSuchTableNoCtx(
+					"mo_catalog", "mo_view_dependencies")
+			})
+			s.viewMetadataCatalogFenceReady.Store(true)
+
+			require.NoError(t, s.applyViewMetadataAdmission(context.Background(),
+				&logservicepb.ViewMetadataAdmission{
+					Enabled:              true,
+					Epoch:                3,
+					RevalidationRequired: true,
+					Generation:           7,
+					Admitted:             true,
+				}))
+			require.Positive(t, statements.Load())
+			require.Zero(t, s.viewMetadataCatalogFencedEpoch.Load(),
+				"an incomplete lifecycle catalog must never be acknowledged as fenced")
+		})
+	}
+}
+
+func TestCNViewMetadataAdmissionWaitsForCatalogUpgradeCommit(t *testing.T) {
+	const cnCount = 2
+	catalogCommitted := &atomic.Bool{}
+	releasePendingAttempts := make(chan struct{})
+	var releaseOnce sync.Once
+	releasePending := func() { releaseOnce.Do(func() { close(releasePendingAttempts) }) }
+	t.Cleanup(releasePending)
+	attempted := make([]chan struct{}, cnCount)
+	services := make([]*service, cnCount)
+	done := make(chan error, cnCount)
+
+	for i := range cnCount {
+		attempted[i] = make(chan struct{})
+		var attemptOnce sync.Once
+		s := &service{
+			cfg:                             &Config{UUID: fmt.Sprintf("catalog-upgrade-cn-%d", i)},
+			logger:                          zap.NewNop(),
+			viewMetadataAdmissionGeneration: 11,
+			viewMetadataEpochFence:          compile.NewViewMetadataEpochFence(),
+			viewMetadataAdmissionUpdated:    make(chan struct{}, 1),
+		}
+		s.cfg.HAKeeper.DiscoveryTimeout.Duration = 5 * time.Second
+		s.sqlExecutor = executor.NewMemExecutor(func(sql string) (executor.Result, error) {
+			if !catalogCommitted.Load() {
+				attemptOnce.Do(func() { close(attempted[i]) })
+				<-releasePendingAttempts
+				return executor.Result{}, nil
+			}
+			if sql == catalog.ViewMetadataLifecycleGateSQL {
+				return viewMetadataLifecycleGateTestResult(), nil
+			}
+			return executor.Result{}, nil
+		})
+		s.viewMetadataCatalogFenceReady.Store(true)
+		s.viewMetadataAdmission.Store(&logservicepb.ViewMetadataAdmission{
+			Enabled:              true,
+			Epoch:                5,
+			RevalidationRequired: true,
+			Generation:           11,
+			Admitted:             true,
+		})
+		services[i] = s
+		go func() { done <- s.waitForViewMetadataAdmission() }()
+	}
+
+	for i := range cnCount {
+		select {
+		case <-attempted[i]:
+		case <-time.After(time.Second):
+			t.Fatalf("CN %d did not reach the pre-upgrade catalog fence", i)
+		}
+	}
+	select {
+	case err := <-done:
+		t.Fatalf("CN admission completed before the catalog upgrade committed: %v", err)
+	default:
+	}
+
+	catalogCommitted.Store(true)
+	releasePending()
+	for range cnCount {
+		select {
+		case err := <-done:
+			require.NoError(t, err)
+		case <-time.After(3 * time.Second):
+			t.Fatal("CN admission did not retry after the catalog upgrade committed")
+		}
+	}
+	for i, s := range services {
+		require.Equal(t, uint64(5), s.viewMetadataCatalogFencedEpoch.Load(),
+			"CN %d did not durably fence the upgraded catalog", i)
+	}
+}
+
+func TestCNViewMetadataAdmissionCatalogUpgradeWaitIsBounded(t *testing.T) {
+	s := &service{
+		cfg:                             &Config{UUID: "catalog-upgrade-timeout"},
+		logger:                          zap.NewNop(),
+		viewMetadataAdmissionGeneration: 11,
+		viewMetadataEpochFence:          compile.NewViewMetadataEpochFence(),
+		viewMetadataAdmissionUpdated:    make(chan struct{}, 1),
+	}
+	s.cfg.HAKeeper.DiscoveryTimeout.Duration = 50 * time.Millisecond
+	s.sqlExecutor = executor.NewMemExecutor(func(string) (executor.Result, error) {
+		return executor.Result{}, moerr.NewNoSuchTableNoCtx(
+			"mo_catalog", "mo_view_dependencies")
+	})
+	s.viewMetadataCatalogFenceReady.Store(true)
+	s.viewMetadataAdmission.Store(&logservicepb.ViewMetadataAdmission{
+		Enabled:              true,
+		Epoch:                5,
+		RevalidationRequired: true,
+		Generation:           11,
+		Admitted:             true,
+	})
+
+	err := s.waitForViewMetadataAdmission()
+	require.ErrorContains(t, err, "was not admitted before startup deadline")
+	require.Zero(t, s.viewMetadataCatalogFencedEpoch.Load())
 }
 
 func TestCNViewMetadataAdmissionRejectsSupersededResponse(t *testing.T) {

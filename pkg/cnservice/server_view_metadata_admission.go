@@ -26,7 +26,10 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/compile"
 )
 
-const viewMetadataAdmissionGenerationKey = "view-metadata-admission-generation"
+const (
+	viewMetadataAdmissionGenerationKey    = "view-metadata-admission-generation"
+	viewMetadataCatalogFenceRetryInterval = time.Second
+)
 
 func (s *service) initViewMetadataAdmission(ctx context.Context) error {
 	s.viewMetadataEpochFence = compile.NewViewMetadataEpochFence()
@@ -110,7 +113,11 @@ func (s *service) applyViewMetadataAdmission(
 	copy := *snapshot
 	s.viewMetadataAdmission.Store(&copy)
 	s.notifyViewMetadataAdmissionUpdated()
-	return s.fenceViewMetadataCatalog(ctx, &copy)
+	if err := s.fenceViewMetadataCatalog(ctx, &copy); err != nil &&
+		!viewMetadataCatalogUpgradePending(err) {
+		return err
+	}
+	return nil
 }
 
 // revokeViewMetadataGeneration fences a process that no longer owns its UUID.
@@ -180,6 +187,11 @@ func (s *service) fenceViewMetadataCatalog(
 	return nil
 }
 
+func viewMetadataCatalogUpgradePending(err error) bool {
+	return moerr.IsMoErrCode(err, moerr.ErrNoSuchTable) ||
+		moerr.IsMoErrCode(err, moerr.ErrBadDB)
+}
+
 func (s *service) waitForViewMetadataAdmission() error {
 	if s.viewMetadataAdmissionGeneration == 0 {
 		// Focused unit tests can construct a partial service. Production
@@ -192,6 +204,8 @@ func (s *service) waitForViewMetadataAdmission() error {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
+	catalogRetryTicker := time.NewTicker(viewMetadataCatalogFenceRetryInterval)
+	defer catalogRetryTicker.Stop()
 
 	for {
 		snapshot := s.viewMetadataAdmission.Load()
@@ -211,10 +225,16 @@ func (s *service) waitForViewMetadataAdmission() error {
 				return moerr.AttachCause(ctx, err)
 			}
 		}
+		var catalogRetry <-chan time.Time
 		if err := s.fenceViewMetadataCatalog(ctx, snapshot); err != nil {
-			return moerr.AttachCause(ctx, err)
-		}
-		if snapshot != nil && snapshot.Admitted {
+			if !viewMetadataCatalogUpgradePending(err) {
+				return moerr.AttachCause(ctx, err)
+			}
+			// BootstrapUpgrade owns creating the lifecycle catalog asynchronously.
+			// Keep ingress closed and retry without requiring a new admission
+			// heartbeat after that transaction becomes visible.
+			catalogRetry = catalogRetryTicker.C
+		} else if snapshot != nil && snapshot.Admitted {
 			return nil
 		}
 
@@ -226,6 +246,7 @@ func (s *service) waitForViewMetadataAdmission() error {
 				s.cfg.UUID,
 				ctx.Err())
 		case <-s.viewMetadataAdmissionUpdated:
+		case <-catalogRetry:
 		}
 	}
 }
