@@ -158,6 +158,7 @@ func TestDigestLexicalEdgeCases(t *testing.T) {
 		{name: "quoted variable", sql: "SELECT @'user_name'"},
 		{name: "escaped quoted identifiers", sql: "SELECT `a``b`, \"a\"\"b\"", mode: ModeANSIQuotes},
 		{name: "national and dollar quoted strings", sql: "SELECT N'abc', $tag$body$tag$, $$body$$"},
+		{name: "national string honors backslash escapes", sql: `SELECT N'a\'b'`},
 		{name: "line comment variants", sql: "SELECT 1 # trailing\n; SELECT 2 -- trailing\n"},
 		{name: "version comments", sql: "/*! SELECT 1 */ /*!80000 SELECT 2 */ /*!99999 SELECT 3 */"},
 		{name: "hint decimal and quoted arguments", sql: "SELECT /*+ MAX_EXECUTION_TIME(1.5) QB_NAME('q''b') */ 1"},
@@ -168,8 +169,9 @@ func TestDigestLexicalEdgeCases(t *testing.T) {
 		{name: "invalid binary literal", sql: "SELECT B'102'", err: true},
 		{name: "invalid hint decimal", sql: "SELECT /*+ MAX_EXECUTION_TIME(1.) */ 1", err: true},
 		{name: "unterminated hint", sql: "SELECT /*+ MAX_EXECUTION_TIME(1) ", err: true},
-		{name: "dollar prefix without closing delimiter is an identifier", sql: "SELECT $tag$body"},
+		{name: "unterminated tagged dollar quoted string", sql: "SELECT $tag$body", err: true},
 		{name: "unterminated quoted identifier", sql: "SELECT `name", err: true},
+		{name: "unterminated dollar quoted string", sql: "SELECT $$unterminated", err: true},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -181,6 +183,43 @@ func TestDigestLexicalEdgeCases(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestDigestSQLModeTokenIdentity(t *testing.T) {
+	defaultDigest, err := Compute("SELECT 1 || 0")
+	require.NoError(t, err)
+	concatDigest, err := Compute("SELECT 1 || 0", Options{SQLMode: ModePipesAsConcat})
+	require.NoError(t, err)
+	require.NotEqual(t, defaultDigest.Hash, concatDigest.Hash)
+	require.Equal(t, "SELECT ? || ?", defaultDigest.Text)
+	require.Equal(t, "SELECT ? || ?", concatDigest.Text)
+
+	defaultNot, err := Compute("SELECT NOT 1")
+	require.NoError(t, err)
+	highNot, err := Compute("SELECT NOT 1", Options{SQLMode: ModeHighNotPrecedence})
+	require.NoError(t, err)
+	require.NotEqual(t, defaultNot.Hash, highNot.Hash)
+	isNotNull, err := Compute("SELECT a IS NOT NULL", Options{SQLMode: ModeHighNotPrecedence})
+	require.NoError(t, err)
+	require.Contains(t, isNotNull.Text, "NULL")
+}
+
+func TestDigestNCharSQLModeEscaping(t *testing.T) {
+	sql := `SELECT N'a\'b'`
+	_, err := Compute(sql)
+	require.NoError(t, err)
+	_, err = Compute(sql, Options{SQLMode: ModeNoBackslashEscapes})
+	require.Error(t, err)
+}
+
+func TestDigestRejectsParameterMarkersWhenRequested(t *testing.T) {
+	got, err := Compute("SELECT ?", Options{RejectParameterMarkers: true})
+	require.Error(t, err)
+	require.Equal(t, "SELECT", got.Text)
+
+	got, err = Compute("SELECT '?'", Options{RejectParameterMarkers: true})
+	require.NoError(t, err)
+	require.Equal(t, "SELECT ?", got.Text)
 }
 
 func TestDigestMaxLengthIsTokenBufferLimit(t *testing.T) {
@@ -251,6 +290,19 @@ func TestDigestMaxLengthIsTokenBufferLimit(t *testing.T) {
 			require.Equal(t, test.hash, got.Hash)
 		})
 	}
+
+	maxLength := 0
+	got, err := Compute("SELECT FROM", Options{MaxDigestLength: &maxLength})
+	require.NoError(t, err)
+	require.False(t, got.CommentOnly)
+
+	got, err = Compute("/* comment only */", Options{MaxDigestLength: &maxLength})
+	require.NoError(t, err)
+	require.True(t, got.CommentOnly)
+
+	got, err = Compute("/* comment */\x00SELECT 1", Options{MaxDigestLength: &maxLength})
+	require.NoError(t, err)
+	require.False(t, got.CommentOnly)
 
 	longSQL := "SELECT " + strings.Repeat("a+", 600) + "1"
 	defaultDigest, err := Compute(longSQL)

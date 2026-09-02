@@ -22,12 +22,25 @@ type tokenHandler struct {
 	lexer              *Lexer
 	store              *tokenStore
 	reducer            *reducer
+	rejectParamMarkers bool
+	sawToken           bool
 	sawDDL             bool
 	ddlTable           bool
 	parenDepth         int
 	columnAttrDepth    int
 	inColumnDefinition bool
 	lastLiteralNull    bool
+}
+
+// SetRejectParameterMarkers makes the handler reject prepared-statement
+// markers. The general digest API keeps accepting them because it is also used
+// to normalize prepared statements; STATEMENT_DIGEST enables this option.
+func (h *tokenHandler) SetRejectParameterMarkers(enabled bool) {
+	h.rejectParamMarkers = enabled
+}
+
+func (h *tokenHandler) SawToken() bool {
+	return h.sawToken
 }
 
 // NewTokenHandler creates a new token handler.
@@ -41,9 +54,6 @@ func NewTokenHandler(lexer *Lexer, store *tokenStore, reducer *reducer) *tokenHa
 
 func (h *tokenHandler) ProcessAll() error {
 	for {
-		if h.store.full {
-			return nil
-		}
 		tok := h.lexer.Lex()
 
 		if tok.Type == END_OF_INPUT {
@@ -51,6 +61,15 @@ func (h *tokenHandler) ProcessAll() error {
 		}
 		if tok.Type == ABORT_SYM {
 			return tok.Err
+		}
+		h.sawToken = true
+		if tok.Type == PARAM_MARKER && h.rejectParamMarkers {
+			return NewLexError(tok.Start, ErrParameterMarker, h.lexer.input)
+		}
+		// A full digest buffer must not stop lexical validation. MySQL parses
+		// the complete statement even when max_digest_length is zero.
+		if h.store.full {
+			continue
 		}
 
 		if err := h.handleToken(tok); err != nil {
@@ -177,7 +196,7 @@ func (h *tokenHandler) isNullKeywordContext() bool {
 	}
 
 	// Check for IS NOT pattern
-	if last == NOT_SYM && h.store.len() >= 2 {
+	if (last == NOT_SYM || last == NOT2_SYM) && h.store.len() >= 2 {
 		prev, _ := h.store.peek2()
 		if prev == IS {
 			return true

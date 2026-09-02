@@ -48,6 +48,11 @@ func (l *Lexer) handleStart() lexResult {
 	}
 	l.startToken()
 	c := l.advance()
+	if c == 0 && l.tokStart < len(l.input) {
+		// NUL is the lexer sentinel, not whitespace or a comment. Record it
+		// even when it follows a comment handled in the same Lex call.
+		l.sawNonComment = true
+	}
 	return cont(getStateMap(c))
 }
 
@@ -61,6 +66,7 @@ func (l *Lexer) handleEOL() lexResult {
 }
 
 func (l *Lexer) handleLineComment() lexResult {
+	l.sawComment = true
 	l.hintAllowed = false
 	l.scanLineComment()
 	return cont(MY_LEX_START)
@@ -183,6 +189,7 @@ func (l *Lexer) handleIdent() lexResult {
 
 	// Check if it's a keyword
 	if tokval := l.findKeyword(length); tokval != 0 {
+		tokval = l.adjustKeywordForSQLMode(tokval)
 		l.skip() // Re-skip the character we ungot
 		return doneWithNext(l.returnToken(Token{Type: tokval, Start: l.tokStart, End: l.tokStart + length}), MY_LEX_START)
 	}
@@ -248,10 +255,27 @@ func (l *Lexer) handleBool() lexResult {
 		return done(Token{Type: int(c), Start: l.tokStart, End: l.pos})
 	}
 	l.skip()
-	if tokval := l.findKeyword(2); tokval != 0 {
+	if tokval := l.boolToken(c); tokval != 0 {
 		return doneWithNext(Token{Type: tokval, Start: l.tokStart, End: l.pos}, MY_LEX_START)
 	}
 	return done(Token{Type: int(c), Start: l.tokStart, End: l.pos})
+}
+
+func (l *Lexer) boolToken(c byte) int {
+	if c == '|' {
+		if l.sqlMode&MODE_PIPES_AS_CONCAT != 0 {
+			return OR_OR_SYM
+		}
+		return OR2_SYM
+	}
+	return l.findKeyword(2)
+}
+
+func (l *Lexer) adjustKeywordForSQLMode(tok int) int {
+	if tok == NOT_SYM && l.sqlMode&MODE_HIGH_NOT_PRECEDENCE != 0 {
+		return NOT2_SYM
+	}
+	return tok
 }
 
 // handleSetVar handles MY_LEX_SET_VAR (:= operator).
@@ -637,7 +661,7 @@ func (l *Lexer) handleNChar() lexResult {
 	}
 	// Found N'string' - parse as NCHAR_STRING
 	l.skip() // Skip the opening '
-	return l.scanQuoted('\'', QuoteModeIdentifier, NCHAR_STRING)
+	return l.scanQuoted('\'', QuoteModeString, NCHAR_STRING)
 }
 
 func (l *Lexer) handleDollarQuoted() lexResult {
@@ -671,6 +695,7 @@ func (l *Lexer) handleDollarQuoted() lexResult {
 }
 
 func (l *Lexer) handleLongComment() lexResult {
+	l.sawComment = true
 	c := l.input[l.tokStart]
 	if l.peek() != '*' {
 		// Not a comment, just a '/' character (division operator)
@@ -812,5 +837,10 @@ func (l *Lexer) scanDollarQuotedString(tag string) Token {
 		}
 		l.pos++
 	}
-	return l.returnToken(Token{Type: ABORT_SYM, Start: l.tokStart, End: l.pos})
+	return l.returnToken(Token{
+		Type:  ABORT_SYM,
+		Start: l.tokStart,
+		End:   l.pos,
+		Err:   NewLexError(l.tokStart, ErrUnterminatedDollar, l.input),
+	})
 }

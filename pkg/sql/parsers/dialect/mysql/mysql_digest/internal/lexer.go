@@ -43,6 +43,7 @@ const (
 	ErrInvalidBinaryLiteral = "invalid binary literal"
 	ErrInvalidTokenBounds   = "invalid token bounds"
 	ErrUnterminatedDollar   = "unterminated dollar-quoted string"
+	ErrParameterMarker      = "parameter markers are not supported"
 )
 
 func NewLexError(position int, message string, input string) *LexError {
@@ -56,6 +57,10 @@ const (
 	MODE_NO_BACKSLASH_ESCAPES SQLMode = 1 << 0
 	// MODE_ANSI_QUOTES treats " as identifier delimiter instead of string delimiter
 	MODE_ANSI_QUOTES SQLMode = 1 << 1
+	// MODE_PIPES_AS_CONCAT makes || use MySQL's concatenation token.
+	MODE_PIPES_AS_CONCAT SQLMode = 1 << 2
+	// MODE_HIGH_NOT_PRECEDENCE makes NOT use the high-precedence token.
+	MODE_HIGH_NOT_PRECEDENCE SQLMode = 1 << 3
 )
 
 type Token struct {
@@ -80,6 +85,16 @@ type Lexer struct {
 	inVersionComment bool
 	hintAllowed      bool
 	tokenConfig      *TokenConfig
+	sawComment       bool
+	sawNonComment    bool
+}
+
+func (l *Lexer) SawComment() bool {
+	return l.sawComment
+}
+
+func (l *Lexer) SawNonComment() bool {
+	return l.sawNonComment
 }
 
 func NewLexer(input string) *Lexer {
@@ -199,6 +214,11 @@ func (l *Lexer) Lex() Token {
 	}
 
 	l.startToken()
+	if l.peek() == 0 && l.pos < len(l.input) {
+		// NUL is the lexer sentinel, not whitespace or a comment. Record it so
+		// callers can distinguish a malformed no-token input from comments.
+		l.sawNonComment = true
+	}
 	state := l.nextState
 	l.nextState = MY_LEX_START
 

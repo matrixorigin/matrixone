@@ -182,6 +182,16 @@ func TestRequiresMORPCVersion30NumericPrefix(t *testing.T) {
 	require.False(t, required)
 }
 
+func TestRequiredRemoteExpressionFeaturesDetectsStatementDigest(t *testing.T) {
+	expr := &Expr{Expr: &Expr_F{F: &Function{
+		Func: &ObjectRef{Obj: int64(578) << 32, ObjName: "statement_digest"},
+	}}}
+	features, err := RequiredRemoteExpressionFeatures(&struct{ Expr *Expr }{Expr: expr})
+	require.NoError(t, err)
+	require.True(t, features.StatementDigestFunction)
+	require.True(t, features.Any())
+}
+
 func TestRequiresMORPCVersion23DynamicStringProvenance(t *testing.T) {
 	textType := Type{Id: 61}
 	binaryType := Type{Id: 65}

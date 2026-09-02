@@ -96,6 +96,7 @@ func init() {
 	TokenInfos[OR2_SYM].StartExpr = true
 	TokenInfos[XOR].StartExpr = true
 	TokenInfos[NOT_SYM].StartExpr = true
+	TokenInfos[NOT2_SYM].StartExpr = true
 	TokenInfos[BETWEEN_SYM].StartExpr = true
 	TokenInfos[LIKE].StartExpr = true
 	TokenInfos[REGEXP].StartExpr = true

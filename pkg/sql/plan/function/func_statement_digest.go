@@ -16,7 +16,6 @@ package function
 
 import (
 	"context"
-	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -63,6 +62,12 @@ func statementDigestSQLMode(proc *process.Process) (string, digest.SQLMode, erro
 	}
 	if flags.Has(mysql.SQLModeANSIQuotes) {
 		digestMode |= digest.ModeANSIQuotes
+	}
+	if flags.Has(mysql.SQLModePipesAsConcat) {
+		digestMode |= digest.ModePipesAsConcat
+	}
+	if flags.Has(mysql.SQLModeHighNotPrecedence) {
+		digestMode |= digest.ModeHighNotPrecedence
 	}
 	return mysql.SessionSQLModeForParser(sqlMode), digestMode, nil
 }
@@ -134,8 +139,9 @@ func StatementDigest(
 		return err
 	}
 	digester := digest.NewDigester(digest.Options{
-		SQLMode:         digestMode,
-		MaxDigestLength: &maxDigestLength,
+		SQLMode:                digestMode,
+		MaxDigestLength:        &maxDigestLength,
+		RejectParameterMarkers: true,
 	})
 
 	return opUnaryBytesToBytesWithErrorCheck(ivecs, result, proc, length, func(input []byte) ([]byte, error) {
@@ -147,7 +153,7 @@ func StatementDigest(
 			// and hashes its empty token stream. MatrixOne's ParseOne reports no
 			// statement for that input, so distinguish it from empty/whitespace
 			// input using the independent digest lexer result.
-			if digestErr == nil && value.Text == "" && strings.TrimSpace(sql) != "" {
+			if digestErr == nil && value.CommentOnly {
 				return []byte(value.Hash), nil
 			}
 			return nil, err

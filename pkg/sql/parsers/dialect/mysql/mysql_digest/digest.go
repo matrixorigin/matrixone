@@ -25,6 +25,9 @@ import (
 type Digest struct {
 	Hash string
 	Text string
+	// CommentOnly distinguishes a comment-only statement from a statement
+	// whose token buffer was truncated before any token could be retained.
+	CommentOnly bool
 }
 
 // SQLMode contains the lexical SQL modes that affect digest tokenization.
@@ -33,13 +36,16 @@ type SQLMode = internal.SQLMode
 const (
 	ModeNoBackslashEscapes = internal.MODE_NO_BACKSLASH_ESCAPES
 	ModeANSIQuotes         = internal.MODE_ANSI_QUOTES
+	ModePipesAsConcat      = internal.MODE_PIPES_AS_CONCAT
+	ModeHighNotPrecedence  = internal.MODE_HIGH_NOT_PRECEDENCE
 	DefaultMaxDigestLength = 1024
 )
 
 // Options configures MySQL 8.4 digest tokenization.
 type Options struct {
-	SQLMode         SQLMode
-	MaxDigestLength *int
+	SQLMode                SQLMode
+	MaxDigestLength        *int
+	RejectParameterMarkers bool
 }
 
 // Digester computes statement digests with a fixed set of options.
@@ -70,6 +76,7 @@ func Compute(sql string, opts ...Options) (Digest, error) {
 func compute(sql string, opt Options) (Digest, error) {
 	lexer := internal.NewLexer(sql)
 	lexer.SetSQLMode(opt.SQLMode)
+	lexer.SetPrepareMode(opt.RejectParameterMarkers)
 
 	maxDigestLength := opt.MaxDigestLength
 	if maxDigestLength == nil {
@@ -79,11 +86,13 @@ func compute(sql string, opt Options) (Digest, error) {
 	store := internal.NewTokenStore(maxDigestLength)
 	reducer := internal.NewReducer(store)
 	handler := internal.NewTokenHandler(lexer, store, reducer)
+	handler.SetRejectParameterMarkers(opt.RejectParameterMarkers)
 
 	err := handler.ProcessAll()
 
 	return Digest{
-		Hash: store.ComputeHash(),
-		Text: store.BuildText(),
+		Hash:        store.ComputeHash(),
+		Text:        store.BuildText(),
+		CommentOnly: lexer.SawComment() && !lexer.SawNonComment() && !handler.SawToken(),
 	}, err
 }

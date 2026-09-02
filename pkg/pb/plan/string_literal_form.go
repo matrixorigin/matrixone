@@ -176,6 +176,7 @@ const (
 	notEqualFunctionID               int32 = 1
 	nullSafeEqualFunctionID          int32 = 406
 	internalJSONComparisonFunctionID int32 = 577
+	statementDigestFunctionID        int32 = 578
 	planBooleanTypeID                int32 = 10
 	planJSONTypeID                   int32 = 62
 )
@@ -183,18 +184,21 @@ const (
 // RemoteExpressionFeatures is the complete set of versioned expression
 // capabilities that can make a pipeline unsafe on an older remote worker.
 // NumericPrefix requires MORPC v30. JSONComparisonParam and
-// MixedJSONBooleanEquality require MORPC v36. A struct makes compatibility
-// call sites name every capability instead of relying on positional booleans.
+// MixedJSONBooleanEquality require MORPC v36. StatementDigestFunction requires
+// MORPC v43. A struct makes compatibility call sites name every capability
+// instead of relying on positional booleans.
 type RemoteExpressionFeatures struct {
 	NumericPrefix            bool
 	JSONComparisonParam      bool
 	MixedJSONBooleanEquality bool
+	StatementDigestFunction  bool
 }
 
 func (features RemoteExpressionFeatures) Any() bool {
 	return features.NumericPrefix ||
 		features.JSONComparisonParam ||
-		features.MixedJSONBooleanEquality
+		features.MixedJSONBooleanEquality ||
+		features.StatementDigestFunction
 }
 
 // RequiredRemoteExpressionFeatures reports the independent versioned
@@ -215,6 +219,10 @@ func RequiredRemoteExpressionFeatures(owner any) (features RemoteExpressionFeatu
 			}
 			if !features.MixedJSONBooleanEquality && isMixedJSONBooleanEquality(fn) {
 				features.MixedJSONBooleanEquality = true
+			}
+			if !features.StatementDigestFunction && fn != nil && fn.Func != nil &&
+				int32(fn.Func.Obj>>32) == statementDigestFunctionID {
+				features.StatementDigestFunction = true
 			}
 			return nil
 		})

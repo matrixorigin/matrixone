@@ -21,6 +21,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	digest "github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql/mysql_digest"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -203,6 +204,53 @@ func TestStatementDigestRejectsInvalidSQL(t *testing.T) {
 	}
 }
 
+func TestStatementDigestKeepsParserErrorsWithZeroDigestLength(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	proc.SetResolveVariableFunc(func(name string, system, global bool) (any, error) {
+		require.True(t, system)
+		if name == "sql_mode" {
+			require.False(t, global)
+			return "", nil
+		}
+		require.Equal(t, "max_digest_length", name)
+		require.True(t, global)
+		return int64(0), nil
+	})
+	for _, input := range []string{"SELECT FROM", string([]byte{0}) + "SELECT 1"} {
+		t.Run(input, func(t *testing.T) {
+			testCase := NewFunctionTestCase(
+				proc,
+				[]FunctionTestInput{NewFunctionTestInput(types.T_varchar.ToType(), []string{input}, nil)},
+				NewFunctionTestResult(statementDigestResultType(), true, []string{""}, nil),
+				StatementDigest,
+			)
+			succeed, info := testCase.Run()
+			require.True(t, succeed, info)
+		})
+	}
+}
+
+func TestStatementDigestRejectsParameterMarkers(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	for _, input := range []string{"SELECT ?", "SELECT ? + 1", "SELECT '?'", "SELECT /* ? */ 1"} {
+		t.Run(input, func(t *testing.T) {
+			wantError := input != "SELECT '?'" && input != "SELECT /* ? */ 1"
+			want := ""
+			if !wantError {
+				want = digestSelectLiteral
+			}
+			testCase := NewFunctionTestCase(
+				proc,
+				[]FunctionTestInput{NewFunctionTestInput(types.T_varchar.ToType(), []string{input}, nil)},
+				NewFunctionTestResult(statementDigestResultType(), wantError, []string{want}, nil),
+				StatementDigest,
+			)
+			succeed, info := testCase.Run()
+			require.True(t, succeed, info)
+		})
+	}
+}
+
 func TestStatementDigestHonorsParserSQLMode(t *testing.T) {
 	parserMode, digestMode, err := statementDigestSQLMode(nil)
 	require.NoError(t, err)
@@ -216,7 +264,7 @@ func TestStatementDigestHonorsParserSQLMode(t *testing.T) {
 		switch name {
 		case "sql_mode":
 			require.False(t, global)
-			return "ANSI_QUOTES,NO_BACKSLASH_ESCAPES", nil
+			return "ANSI_QUOTES,NO_BACKSLASH_ESCAPES,PIPES_AS_CONCAT,HIGH_NOT_PRECEDENCE", nil
 		case "max_digest_length":
 			require.True(t, global)
 			return int64(defaultMaxDigestLength), nil
@@ -227,8 +275,10 @@ func TestStatementDigestHonorsParserSQLMode(t *testing.T) {
 	})
 	parserMode, digestMode, err = statementDigestSQLMode(proc)
 	require.NoError(t, err)
-	require.Equal(t, "ANSI_QUOTES,NO_BACKSLASH_ESCAPES", parserMode)
+	require.Equal(t, "ANSI_QUOTES,NO_BACKSLASH_ESCAPES,PIPES_AS_CONCAT,HIGH_NOT_PRECEDENCE", parserMode)
 	require.NotZero(t, digestMode)
+	require.True(t, digestMode&digest.ModePipesAsConcat != 0)
+	require.True(t, digestMode&digest.ModeHighNotPrecedence != 0)
 	testCase := NewFunctionTestCase(
 		proc,
 		[]FunctionTestInput{NewFunctionTestInput(
