@@ -261,6 +261,7 @@ func RequestFromScalar(
 		return req, false, moerr.NewInvalidInputNoCtx("vector index result limit is not uint64")
 	}
 	req = requestForValues(spec, []byte(queryLit.GetVecVal()), spec.QueryVector.Typ, limit.U64Val, identity)
+	req.CollectExplainDiagnostics = true
 	req.MembershipFilter = append([]byte(nil), membership...)
 	req.HasMembershipFilter = hasMembership
 	if spec.FirstRoundLimit != nil {

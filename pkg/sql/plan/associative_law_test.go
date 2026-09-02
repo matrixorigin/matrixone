@@ -373,16 +373,6 @@ func associativityStats(outcnt, selectivity float64) *planpb.Stats {
 	}
 }
 
-func reachablePlanHasJoinType(query *planpb.Query, joinType planpb.Node_JoinType) bool {
-	for nodeID := range reachablePlanNodeIDs(query) {
-		node := query.Nodes[nodeID]
-		if node != nil && node.NodeType == planpb.Node_JOIN && node.JoinType == joinType {
-			return true
-		}
-	}
-	return false
-}
-
 func reachableJoinHasChildTableSets(
 	query *planpb.Query,
 	joinType planpb.Node_JoinType,

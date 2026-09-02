@@ -107,7 +107,8 @@ func (lc *leakChecker) doCheck() []ActiveTxn {
 	}
 	lc.RUnlock()
 
-	for _, txn := range values {
+	for i := range values {
+		txn := &values[i]
 		if txn.txnOp != nil {
 			txn.Options.Counter = txn.txnOp.counter()
 			txn.Options.InRunSql = txn.txnOp.inRunSql()

@@ -163,9 +163,10 @@ func NewQueryBuilder(queryType plan.Query_StatementType, ctx CompilerContext, is
 		optimizationHistory:      make([]string, 0),
 		// -1 means "no old-row delete maintenance" (set only on ODKU into an
 		// irregular-index table); step 0 is a valid index so it cannot be the zero value.
-		irregularMaintDeleteStep: -1,
-		returningSourceStep:      -1,
-		returningFilterPos:       -1,
+		irregularMaintDeleteStep:           -1,
+		irregularMaintInsertOnlySourceStep: -1,
+		returningSourceStep:                -1,
+		returningFilterPos:                 -1,
 	}
 }
 
@@ -3784,6 +3785,9 @@ func (builder *QueryBuilder) createQuery() (*Query, error) {
 			return nil, err
 		}
 		builder.qry.Steps[i] = builder.removeUnnecessaryProjections(rootID)
+		if !builder.subqueryPredicatePlanningDisabled() {
+			builder.generateScalarPredicateRuntimeFilters(builder.qry.Steps[i])
+		}
 	}
 
 	// Expose the SINK column remap so irregular-index maintenance sub-plans built

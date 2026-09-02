@@ -2235,6 +2235,8 @@ func handleOptimizerHints(str string, builder *QueryBuilder) {
 		builder.optimizerHints.disableRightJoin = value
 	case "disableRightSingleRF":
 		builder.optimizerHints.disableRightSingleRF = value
+	case "subqueryPredicatePlanning":
+		builder.optimizerHints.subqueryPredicatePlanning = value
 	case "printShuffle":
 		builder.optimizerHints.printShuffle = value
 	case "skipDedup":
@@ -2242,6 +2244,10 @@ func handleOptimizerHints(str string, builder *QueryBuilder) {
 	case "outerAntiPlanning":
 		builder.optimizerHints.outerAntiPlanning = value
 	}
+}
+
+func (builder *QueryBuilder) subqueryPredicatePlanningDisabled() bool {
+	return builder.optimizerHints != nil && builder.optimizerHints.subqueryPredicatePlanning == 1
 }
 
 func (builder *QueryBuilder) parseOptimizeHints() {
