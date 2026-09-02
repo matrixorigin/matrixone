@@ -303,6 +303,12 @@ type CDCWatermarkUpdater struct {
 	// Used to prevent watermark updates during pause operations
 	// Key: taskId (string), Value: pause timestamp (time.Time)
 	pausedTasks sync.Map
+	// deletedTasks is a terminal tombstone for dropped task IDs.
+	deletedTasks      sync.Map
+	deleteRetryCtx    context.Context
+	deleteRetryCancel context.CancelFunc
+	deleteRetries     sync.Map
+	persistMu         sync.Mutex
 
 	queue        sm.Queue
 	cronExecutor *tasks.CancelableJob
@@ -349,6 +355,7 @@ func NewCDCWatermarkUpdater(
 		committingErrMsgBuffer:  make([]*UpdaterJob, 0, 100),
 		readKeysBuffer:          make(map[WatermarkKey]WatermarkResult, 100),
 	}
+	u.deleteRetryCtx, u.deleteRetryCancel = context.WithCancel(context.Background())
 	for _, opt := range opts {
 		opt(u)
 	}
@@ -444,6 +451,10 @@ func (u *CDCWatermarkUpdater) onJobs(jobs ...any) {
 		case JT_CDC_CommittingWM:
 			u.committingBuffer = append(u.committingBuffer, job)
 		case JT_CDC_UpdateWMErrMsg:
+			if _, deleted := u.deletedTasks.Load(job.Key.TaskId); deleted {
+				job.DoneWithErr(nil)
+				continue
+			}
 			if _, err := u.GetFromCache(context.Background(), job.Key); err != nil {
 				if !errors.Is(err, ErrNoWatermarkFound) {
 					job.DoneWithErr(err)
@@ -662,7 +673,9 @@ func (u *CDCWatermarkUpdater) execBatchUpdateWM() (errMsg string, err error) {
 		defer cancel()
 		ctx = defines.AttachAccountId(ctx, catalog.System_Account)
 		startTime := time.Now()
+		u.persistMu.Lock()
 		err = u.ie.Exec(ctx, commitSql, ie.SessionOverrideOptions{})
+		u.persistMu.Unlock()
 		duration := time.Since(startTime)
 		v2.CdcWatermarkCommitDuration.Observe(duration.Seconds())
 	}
@@ -741,7 +754,9 @@ func (u *CDCWatermarkUpdater) execBatchUpdateWMErrMsg() (errMsg string, err erro
 	defer cancel()
 	errMsgSql := u.constructBatchUpdateWMErrMsgSQL(u.committingErrMsgBuffer)
 	ctx = defines.AttachAccountId(ctx, catalog.System_Account)
+	u.persistMu.Lock()
 	err = u.ie.Exec(ctx, errMsgSql, ie.SessionOverrideOptions{})
+	u.persistMu.Unlock()
 	if err != nil {
 		errMsg = fmt.Sprintf("update err_msg sql \"%s\" failed", errMsgSql)
 	}
@@ -883,6 +898,9 @@ func (u *CDCWatermarkUpdater) Start() {
 }
 
 func (u *CDCWatermarkUpdater) Stop() {
+	if u.deleteRetryCancel != nil {
+		u.deleteRetryCancel()
+	}
 	u.cronExecutor.Stop()
 	u.queue.Stop()
 }
@@ -952,6 +970,9 @@ func (u *CDCWatermarkUpdater) UpdateWatermarkErrMsg(
 	errMsg string,
 	errorCtx *ErrorContext,
 ) (err error) {
+	if _, deleted := u.deletedTasks.Load(key.TaskId); deleted {
+		return nil
+	}
 	// 1. Clear error: remove cache and persist empty string
 	if errMsg == "" {
 		u.Lock()
@@ -1069,6 +1090,10 @@ func (u *CDCWatermarkUpdater) UpdateWatermarkErrMsg(
 
 	// 7. Update memory cache (like UpdateWatermarkOnly - no SQL)
 	u.Lock()
+	if _, deleted := u.deletedTasks.Load(key.TaskId); deleted {
+		u.Unlock()
+		return nil
+	}
 	u.errorMetadataCache[*key] = newMetadata
 	u.Unlock()
 
@@ -1135,6 +1160,9 @@ func (u *CDCWatermarkUpdater) UpdateWatermarkOnly(
 	key *WatermarkKey,
 	watermark *types.TS,
 ) (err error) {
+	if _, deleted := u.deletedTasks.Load(key.TaskId); deleted {
+		return nil
+	}
 	// FIX: Check if this task is paused
 	// If paused, reject watermark updates to prevent data loss on resume
 	if pauseTime, paused := u.pausedTasks.Load(key.TaskId); paused {
@@ -1152,6 +1180,9 @@ func (u *CDCWatermarkUpdater) UpdateWatermarkOnly(
 
 	u.Lock()
 	defer u.Unlock()
+	if _, deleted := u.deletedTasks.Load(key.TaskId); deleted {
+		return nil
+	}
 
 	oldWatermark, hasOld := u.cacheUncommitted[*key]
 	u.cacheUncommitted[*key] = *watermark
@@ -1274,8 +1305,7 @@ func (u *CDCWatermarkUpdater) ForceFlush(ctx context.Context) (err error) {
 	if err = u.customized.scheduleJob(job); err != nil {
 		return
 	}
-	job.WaitDone()
-	err = job.GetResult().Err
+	err = job.WaitDoneContext(ctx).Err
 	return
 }
 
@@ -1289,6 +1319,10 @@ func (u *CDCWatermarkUpdater) DeleteTaskWatermarks(
 	accountID uint64,
 	taskID string,
 ) error {
+	// This is the linearization point for terminal cleanup. The tombstone is
+	// never removed: a reader that outlives Cancel must not be able to recreate
+	// the durable row.
+	u.MarkTaskDeleted(taskID)
 	flushErr := u.ForceFlush(ctx)
 	if flushErr != nil {
 		// Persistence is irrelevant for a task being dropped. ForceFlush is
@@ -1360,11 +1394,71 @@ func (u *CDCWatermarkUpdater) DeleteTaskWatermarks(
 		u.fallbackLog.Delete(tableLabel)
 	}
 
-	return u.ie.Exec(
+	u.persistMu.Lock()
+	err := u.ie.Exec(
 		defines.AttachAccountId(ctx, catalog.System_Account),
 		CDCSQLBuilder.DeleteWatermarkSQL(accountID, taskID),
 		ie.SessionOverrideOptions{},
 	)
+	u.persistMu.Unlock()
+	if err != nil {
+		logutil.Error(
+			"cdc.watermark.delete_task.retry_scheduled",
+			zap.Uint64("account-id", accountID),
+			zap.String("task-id", taskID),
+			zap.Error(err),
+		)
+		u.scheduleTaskWatermarkDeleteRetry(accountID, taskID)
+	}
+	return nil
+}
+
+type taskWatermarkDelete struct {
+	accountID uint64
+	taskID    string
+}
+
+func (u *CDCWatermarkUpdater) scheduleTaskWatermarkDeleteRetry(accountID uint64, taskID string) {
+	key := taskWatermarkDelete{accountID: accountID, taskID: taskID}
+	if _, loaded := u.deleteRetries.LoadOrStore(key, struct{}{}); loaded {
+		return
+	}
+	go func() {
+		defer u.deleteRetries.Delete(key)
+		ticker := time.NewTicker(time.Second)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-u.deleteRetryCtx.Done():
+				return
+			case <-ticker.C:
+			}
+			ctx, cancel := context.WithTimeout(u.deleteRetryCtx, 20*time.Second)
+			u.persistMu.Lock()
+			err := u.ie.Exec(
+				defines.AttachAccountId(ctx, catalog.System_Account),
+				CDCSQLBuilder.DeleteWatermarkSQL(accountID, taskID),
+				ie.SessionOverrideOptions{},
+			)
+			u.persistMu.Unlock()
+			cancel()
+			if err == nil {
+				return
+			}
+			logutil.Warn(
+				"cdc.watermark.delete_task.retry_failed",
+				zap.Uint64("account-id", accountID),
+				zap.String("task-id", taskID),
+				zap.Error(err),
+			)
+		}
+	}()
+}
+
+func (u *CDCWatermarkUpdater) MarkTaskDeleted(taskID string) {
+	u.Lock()
+	u.deletedTasks.Store(taskID, struct{}{})
+	u.Unlock()
 }
 
 // MarkTaskPaused marks a task as paused to block watermark updates

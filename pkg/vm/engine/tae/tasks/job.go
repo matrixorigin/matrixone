@@ -104,6 +104,7 @@ type Job struct {
 	ctx     context.Context
 	exec    JobExecutor
 	result  *JobResult
+	done    chan struct{}
 	startTs time.Time
 	endTs   time.Time
 }
@@ -119,6 +120,7 @@ func (job *Job) Run() {
 	}()
 	result := job.exec(job.ctx)
 	job.result = result
+	close(job.done)
 }
 
 func (job *Job) ID() string {
@@ -138,6 +140,20 @@ func (job *Job) WaitDone() *JobResult {
 	return job.result
 }
 
+// WaitDoneContext waits for completion without making callers depend on the
+// worker completing an uncancellable operation.
+func (job *Job) WaitDoneContext(ctx context.Context) *JobResult {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	select {
+	case <-job.done:
+		return job.result
+	case <-ctx.Done():
+		return &JobResult{Err: context.Cause(ctx)}
+	}
+}
+
 func (job *Job) GetResult() *JobResult {
 	job.wg.Wait()
 	return job.result
@@ -148,6 +164,7 @@ func (job *Job) DoneWithErr(err error) {
 	job.result = &JobResult{
 		Err: err,
 	}
+	close(job.done)
 }
 
 func (job *Job) DoneWithResult(res any) {
@@ -155,6 +172,7 @@ func (job *Job) DoneWithResult(res any) {
 	job.result = &JobResult{
 		Res: res,
 	}
+	close(job.done)
 }
 
 func (job *Job) Close() {
@@ -167,6 +185,7 @@ func (job *Job) Reset() {
 	job.id = ""
 	job.ctx = nil
 	job.wg = sync.WaitGroup{}
+	job.done = nil
 	job.exec = nil
 }
 
@@ -179,5 +198,6 @@ func (job *Job) Init(
 	job.ctx = ctx
 	job.exec = exec
 	job.typ = typ
+	job.done = make(chan struct{})
 	job.wg.Add(1)
 }

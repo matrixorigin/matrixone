@@ -172,6 +172,8 @@ type CDCTaskExecutor struct {
 	holdCh       chan int
 
 	callbackMu                    sync.RWMutex
+	callbackCount                 atomic.Int64
+	callbackDone                  chan struct{}
 	callbackGeneration            atomic.Uint64
 	restartWaitMu                 sync.Mutex
 	restartWaiters                map[uint64]chan error
@@ -1392,17 +1394,25 @@ func (exec *CDCTaskExecutor) Cancel() error {
 	// generation before taking the reader snapshot and performing the terminal
 	// watermark delete. Callbacks queued behind this fence observe the increment
 	// above and return without publishing work.
-	exec.waitForTableDetectorCallback()
 	exec.cancelLifecycleContext()
-	exec.recordLeavingFailedMetrics(stateBeforeCancel, StateCancelling)
-
-	// Fence watermark producers before stopping readers. The updater is shared
-	// by every CDC task on this CN, so deleting catalog rows in the frontend is
-	// not enough: an already buffered update can otherwise recreate them.
-	if exec.watermarkUpdater != nil {
-		exec.watermarkUpdater.MarkTaskPaused(exec.spec.TaskId)
-		defer exec.watermarkUpdater.UnmarkTaskPaused(exec.spec.TaskId)
+	if exec.watermarkUpdater != nil && exec.spec != nil {
+		// The tombstone is installed before waiting for any control mutex or
+		// reader shutdown so late callbacks remain fenced on every timeout path.
+		exec.watermarkUpdater.MarkTaskDeleted(exec.spec.TaskId)
 	}
+	exec.callbackMu.Lock()
+	callbackDone := exec.callbackDone
+	if callbackDone == nil {
+		callbackDone = closedChan()
+	}
+	exec.callbackMu.Unlock()
+	callbackDrainCtx, callbackDrainCancel := context.WithTimeout(context.Background(), 30*time.Second)
+	select {
+	case <-callbackDone:
+	case <-callbackDrainCtx.Done():
+	}
+	callbackDrainCancel()
+	exec.recordLeavingFailedMetrics(stateBeforeCancel, StateCancelling)
 
 	logutil.Info(
 		"cdc.frontend.task.cancel_start",
@@ -2232,16 +2242,38 @@ func (exec *CDCTaskExecutor) handleNewTables(allAccountTbls map[uint32]cdc.TblMa
 	return exec.handleNewTablesForGeneration(exec.callbackGeneration.Load(), allAccountTbls)
 }
 
+func closedChan() chan struct{} {
+	ch := make(chan struct{})
+	close(ch)
+	return ch
+}
+
 func (exec *CDCTaskExecutor) handleNewTablesForGeneration(
 	callbackGeneration uint64,
 	allAccountTbls map[uint32]cdc.TblMap,
 ) error {
-	exec.callbackMu.RLock()
-	defer exec.callbackMu.RUnlock()
-
+	exec.callbackMu.Lock()
 	if !exec.isCurrentCallbackGeneration(callbackGeneration) {
+		exec.callbackMu.Unlock()
 		return nil
 	}
+	if exec.callbackCount.Load() == 0 {
+		exec.callbackDone = make(chan struct{})
+	}
+	exec.callbackCount.Add(1)
+	callbackDone := exec.callbackDone
+	exec.callbackMu.Unlock()
+	defer func() {
+		if exec.callbackCount.Add(-1) == 0 {
+			exec.callbackMu.Lock()
+			if exec.callbackCount.Load() == 0 && exec.callbackDone == callbackDone {
+				close(exec.callbackDone)
+			}
+			exec.callbackMu.Unlock()
+		}
+	}()
+	accountId := uint32(exec.spec.Accounts[0].GetId())
+	ctx := defines.AttachAccountId(exec.replacementStartContext(), accountId)
 
 	// lock to avoid create pipelines for the same table
 	// 2025.7, this lock might be needless now
@@ -2254,11 +2286,14 @@ func (exec *CDCTaskExecutor) handleNewTablesForGeneration(
 
 	// if injected, we expect nothing
 	if sleepSeconds, injected := objectio.CDCHandleSlowInjected(); injected {
-		time.Sleep(time.Duration(sleepSeconds) * time.Second)
+		timer := time.NewTimer(time.Duration(sleepSeconds) * time.Second)
+		select {
+		case <-timer.C:
+		case <-ctx.Done():
+			timer.Stop()
+			return ctx.Err()
+		}
 	}
-
-	accountId := uint32(exec.spec.Accounts[0].GetId())
-	ctx := defines.AttachAccountId(context.Background(), accountId)
 
 	txnOp, err := cdc.GetTxnOp(ctx, exec.cnEngine, exec.cnTxnClient, "cdc-handleNewTables")
 	if err != nil {
@@ -2323,7 +2358,11 @@ func (exec *CDCTaskExecutor) handleNewTablesForGeneration(
 						defer close(waitChan)
 						reader.Wait()
 					}()
-					<-waitChan
+					select {
+					case <-waitChan:
+					case <-ctx.Done():
+						return ctx.Err()
+					}
 				} else {
 					continue
 				}

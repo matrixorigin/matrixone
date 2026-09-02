@@ -292,6 +292,49 @@ func TestWatermarkUpdater_DeleteTaskWatermarksDeletesAfterFlushFailure(t *testin
 	exec.mu.Unlock()
 }
 
+func TestWatermarkUpdater_DeleteTaskWatermarksRetriesDeleteAndKeepsTombstone(t *testing.T) {
+	exec := &retryableMockExecutor{failRemaining: 1}
+	updater := NewCDCWatermarkUpdater("delete-task-retry", exec, WithCronJobInterval(time.Hour))
+	updater.Start()
+	defer updater.Stop()
+
+	ctx := context.Background()
+	key := WatermarkKey{AccountId: 3, TaskId: "dropped-task", DBName: "db", TableName: "table"}
+	ts := types.BuildTS(40, 1)
+	require.NoError(t, updater.UpdateWatermarkOnly(ctx, &key, &ts))
+	require.NoError(t, updater.DeleteTaskWatermarks(ctx, key.AccountId, key.TaskId))
+
+	// The failed terminal DELETE has a retry owner in the updater. The
+	// tombstone must reject a late producer while that retry is pending.
+	require.NoError(t, updater.UpdateWatermarkOnly(ctx, &key, &ts))
+	updater.RLock()
+	_, cached := updater.cacheUncommitted[key]
+	updater.RUnlock()
+	require.False(t, cached)
+
+	require.Eventually(t, func() bool {
+		exec.mu.Lock()
+		defer exec.mu.Unlock()
+		return exec.lastSQL == CDCSQLBuilder.DeleteWatermarkSQL(key.AccountId, key.TaskId) && exec.execCalls >= 2
+	}, 3*time.Second, 10*time.Millisecond)
+}
+
+func TestWatermarkUpdater_ForceFlushHonorsContext(t *testing.T) {
+	updater := NewCDCWatermarkUpdater("force-flush-context")
+	updater.customized.scheduleJob = func(*UpdaterJob) error { return nil }
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	done := make(chan error, 1)
+	go func() { done <- updater.ForceFlush(ctx) }()
+	select {
+	case err := <-done:
+		require.ErrorIs(t, err, context.Canceled)
+	case <-time.After(time.Second):
+		t.Fatal("ForceFlush did not honor canceled context")
+	}
+}
+
 func TestWatermarkUpdater_CommitCircuitBreaker(t *testing.T) {
 	exec := &retryableMockExecutor{failRemaining: watermarkCommitMaxRetries}
 	updater := NewCDCWatermarkUpdater("circuit-breaker", exec)
