@@ -1,14 +1,41 @@
-# 增量维护物化视图 V1（中文对照）
+# 增量维护物化视图（中文对照）
 
-状态：草案，邀请设计评审
+状态：草案，邀请设计评审；实现尚未完成
 
 归属 Issue：https://github.com/matrixorigin/matrixone/issues/24553
 
 实现 PR：https://github.com/matrixorigin/matrixone/pull/27615
 
-本文描述 PR #27615 当前已有代码。该分支在设计正式批准前已经实现，因此 reviewer
-应先评审本文定义的用户契约和正确性不变量，再进入实现细节评审。第 3、12 节明确
-区分当前已实现能力与后续设计提案。若中英文有歧义，以获批的英文 revision 为准。
+合入单元：一个原子实现 PR。本文各能力 gate 不会作为多个产品阶段分别合入。
+
+最后更新：2026-09-02
+
+本文同时描述 PR #27615 当前已有代码和该 PR 合入前必须完成的其余代码。该分支在
+设计正式批准前已经实现，因此 reviewer 应先批准本文契约和不变量，再按该契约评审
+完整实现。第 3、12 节区分当前分支 baseline 与同一 PR 的最终 merge target。未来态
+文字不是对当前能力的声明，也不是分批合入计划。若中英文有歧义，以获批的英文
+revision 为准。
+
+## 设计决策
+
+物化视图使用 consumer 拥有的物理表，通过一条一致的 ISCP change stream 持续维护。
+一个 `MaterializedViewConsumer` 统一负责初始 snapshot hydration、tail、target 与内部
+state、失败恢复和 watermark 发布；不使用 `ConsumerInfo.InitSQL`、注册前 CTAS，也
+不为每个源创建独立 CDC job。
+
+本 PR 的最终实现只使用一套 canonical 持久化增量 operator specification。内部仍保留
+数值 `format_version`，仅用于让未知持久化数据失败关闭；它不是功能代际，也不代表
+分阶段交付。当前分支临时存在的 flat 和 UNION-specific encoding 必须在合入前归一，
+不能作为多个产品版本发布。
+
+刷新选择使用有类型、失败关闭的三态结果：
+
+- `FAST` 只接受 planner 能生成完整、可撤回且资源有界 operator state 的定义；
+- `FORCE` 优先增量，否则选择共同边界的完整刷新；
+- `COMPLETE` 始终完整求值并原子替换结果。
+
+完整 PR 可以按依赖顺序开发，但本文声明的每项能力都必须在 PR 转为非草稿前通过
+对应 merge gate。任何中间实现状态都不是受支持版本。
 
 ## 1. 问题与用户契约
 
@@ -16,7 +43,7 @@ MatrixOne 已有普通视图，但缺少面向 trace/metrics firehose、可持�
 预聚合结果。主要场景是 append-heavy 的 Dashboard 和告警查询，同时也要保证过期
 数据删除以及迟到/纠正事件 update 的正确性。
 
-V1 把 MV 存成物理表，支持两种刷新时机：
+本设计把 MV 存成物理表，支持两种刷新时机：
 
 - `ON CHANGE`：通过 ISCP 异步初始化和持续维护；
 - `ON DEMAND`：仅在用户显式执行完整刷新时初始化或替换结果。
@@ -32,6 +59,36 @@ V1 把 MV 存成物理表，支持两种刷新时机：
 `ON CHANGE` 是最终一致的，源 DML 不等待 MV。成功发布 tail watermark W 后，目标
 结果和内部状态必须等于定义 SQL 在 W 的结果。当前实现不承诺统一的最大 freshness
 lag。
+
+### 目标
+
+- 在持续 append-heavy trace/metrics 输入上降低 Dashboard 和告警查询成本，同时保证
+  delete/update 正确性；
+- 所有直接源共享一个 snapshot/change 边界；
+- 增量准入必须明确、确定且可诊断；
+- 在 FAST job 失去服务能力前限制或拒绝 state、fan-out 和单 iteration 工作量；
+- retry、restart 或 executor 切换后不重复也不遗漏贡献。
+
+### 非目标
+
+- Oracle 风格 PCT 或源分区 change tracking；
+- 把外表、临时表、订阅、内部状态表或循环依赖伪装成普通持久 change stream；
+- 把异步 `ON CHANGE` 宣称为同步源事务语义；同步 `ON COMMIT` 有独立源 DML 契约；
+- 静默近似精确 SQL，或把 FAST 静默改成 COMPLETE。
+
+### 第一性原理不变量
+
+1. 对每个已发布边界 W，target 和全部内部 operator state 必须等于定义 SQL 在 W 的
+   一次求值。
+2. target、state 和 tail watermark 只有一个事务和一个提交点，任何一项都不能单独
+   可见。
+3. 每个 source row delta 对每个匹配 operator input 或 UNION branch 恰好贡献一次，
+   retry、重复 delivery 和 restart 后也必须成立。
+4. 多源结果只能使用同一个 `[fromTS,toTS]`，快源不能使 MV 越过慢源。
+5. 只有当前 fenced consumer generation 可以修改 target、state 或进度；cancel 和
+   reassignment 必须终止旧 owner。
+6. FAST 准入要求 old-row contribution 可重现且更新算法有界；不支持、volatile、
+   损坏或超预算 state 必须在 watermark 发布前失败。
 
 ## 2. SQL 接口
 
@@ -62,6 +119,45 @@ DROP MATERIALIZED VIEW mv;
 statement schema 收集和权限提取。REFRESH 当前复用 ALTER VIEW/database ownership
 权限路径，没有新增 MV 专属权限。
 
+### 典型 observability 数据流
+
+```sql
+CREATE TABLE traces (
+  event_ts TIMESTAMP,
+  service VARCHAR(128),
+  endpoint VARCHAR(256),
+  region VARCHAR(32),
+  status_code INT,
+  duration_ms BIGINT,
+  trace_id UUID
+);
+
+CREATE MATERIALIZED VIEW trace_minute
+  REFRESH FAST ON CHANGE
+AS
+SELECT date_trunc('minute', event_ts) AS minute,
+       service, endpoint, region,
+       count(*) AS requests,
+       sum(CASE WHEN status_code >= 500 THEN 1 ELSE 0 END) AS errors,
+       sum(duration_ms) AS duration_sum,
+       avg(duration_ms) AS duration_avg,
+       min(duration_ms) AS duration_min,
+       max(duration_ms) AS duration_max,
+       count(DISTINCT trace_id) AS traces
+FROM traces
+GROUP BY date_trunc('minute', event_ts), service, endpoint, region;
+```
+
+创建时以 `startFromNow=false` 注册 job。Consumer 先从一个 ISCP snapshot hydration
+物理 target 和精确 distinct state。tail 中 insert 贡献 `+1`，delete 用旧行贡献 `-1`，
+update 贡献 `-old,+new`，包括过滤条件进入/退出和 group 移动。Consumer 合并 signed
+group delta，在同一事务更新 target/state 并发布 tail watermark。
+
+顶层 `UNION ALL` 独立编译每个兼容叶子，隐藏 identity 为
+`(branch_id, serialized_group_key)`，因此两个 branch 产生相同可见行时仍保留两个 bag
+row。同一个物理源出现在多个叶子时，ISCP 只订阅一次，consumer 把 delta 路由到所有
+匹配 branch。
+
 ## 3. 定义范围与刷新选择
 
 ### 3.1 源关系
@@ -75,7 +171,8 @@ MV 必须是顶层 select，包含 1～16 个直接、持久化的普通基表�
 
 ### 3.2 当前已实现的增量 SQL
 
-增量计划当前要求恰好一个直接基表和顶层 `SelectClause`，支持：
+增量计划当前接受一个直接基表上的顶层 `SelectClause`，或由 2～16 个兼容直接单表
+聚合叶子组成的顶层 `UNION ALL`。每个叶子支持：
 
 - 可选的确定性 row-local `WHERE`；
 - 普通 `GROUP BY`，或把 `SELECT DISTINCT` 改写成 grouping；
@@ -95,7 +192,8 @@ MV 必须是顶层 select，包含 1～16 个直接、持久化的普通基表�
 `UNION ALL` 使用稳定 branch ID 组成隐藏 group identity，因此不同分支产生的相同可见
 行不会被错误合并；同一物理源只订阅一次，delta 会路由到所有匹配分支。
 
-当前 PR **尚不支持以下增量能力**：
+当前分支 baseline **尚不支持以下增量能力**。第 12 节定义了这些能力在同一 PR 中
+仍需完成的代码和状态契约：
 
 - `HAVING`；
 - `SUM(DISTINCT)`、`AVG(DISTINCT)`；
@@ -117,15 +215,16 @@ source admission 的 derived table、普通 view 和特殊 relation 会直接拒
 包括多表 JOIN。保存的 refresh SQL 中所有源引用都会重写到同一个 ISCP `toTS`，
 因此结果不会混合不同源边界。
 
-多源当前只支持完整刷新。多源 job 通过引入其序列化 ISCP 结构的 MORPC 版本门控；
-旧服务拒绝创建，不能把它误解成旧单源 job。
+兼容的顶层 `UNION ALL` 已支持多源增量维护。其他当前多源定义（包括 JOIN）在第 12
+节 operator state 完成前走完整刷新。多源 job 通过引入其序列化 ISCP 结构的 MORPC
+能力门控；旧服务拒绝创建，不能把它误解成旧单源 job。
 
 ### 3.4 当前刷新边界
 
 | 输入/策略 | 当前行为 | 原因 |
 | --- | --- | --- |
 | 任意 `ON CHANGE` MV 的初始 snapshot | 完整构建 | 尚无 target/operator state，必须从一致性 snapshot hydration |
-| `FAST/FORCE ON CHANGE` 且存在 version-2 增量规格的 tail | 增量 | consumer 可把 insert/delete/update 转成有符号 group delta |
+| `FAST/FORCE ON CHANGE` 且存在有效 canonical 增量规格的 tail | 增量 | consumer 可把 insert/delete/update 转成有符号 operator delta |
 | `FORCE ON CHANGE` 且查询通过 source admission、但无增量规格 | 完整刷新 | 当前没有表达该查询的可撤回 operator state |
 | `FORCE` 增量事务失败 | 回滚后在同一 `toTS` 完整刷新 | 不能发布部分 target/state 或越过失败 boundary 的 watermark |
 | `FAST` 增量事务失败 | 报错，不 fallback | FAST 是“必须增量”的用户契约 |
@@ -146,21 +245,28 @@ MV 存为普通物理 relation，而不是逻辑 view。Catalog property 持久�
 - source SQL 和可执行 refresh SQL；
 - 满足条件时保存带版本号、base64 编码的增量规格。
 
-当前增量规格版本是 2，记录 source columns、filter、group expressions、aggregate
-kinds、可见输出列、隐藏状态列、序列化 group-key 列、策略和内部状态表身份。
-Consumer 遇到未知版本时失败关闭。
+最终合入只保留一套 canonical 增量 operator specification，记录 source identity/列、
+operator ID/输入边、typed key/payload schema、filter、group expression、aggregate kind、
+可见输出列、隐藏状态列、序列化 group/row identity、retraction 策略、资源 admission
+数据和全部内部 state relation ID。
+
+持久对象保留一个数值 `format_version`，只用于未来兼容。合入时 planner 只生成一种
+格式，consumer 也只接受该格式；未知格式失败关闭。数值格式不表示功能阶段。当前
+分支的 direct-aggregate 和 UNION envelope 临时 encoding 必须在合入前转换成 canonical
+schema。
 
 增量 target 使用二进制 `serial_full(...)` group key 作为隐藏主键，并保存 group
 row count、SUM/AVG sum/count 等隐藏状态。只支持全量刷新的 target 使用 MatrixOne
 隐藏 auto-increment fake primary key；创建时在 refresh 前初始化 sequence。
 
-MIN/MAX 和精确 COUNT(DISTINCT) 使用 consumer 拥有的内部状态表，表名由数据库和
-MV 名称的确定性 hash 生成。该 namespace 保留，普通用户不能创建、修改或单独
-删除状态表。
+MIN/MAX、精确 COUNT(DISTINCT) 以及后续所有 stateful operator 使用 consumer 拥有的
+内部 relation，由确定性 MV/operator identity 命名。该 namespace 保留，普通用户不能
+创建、读取、修改或单独删除这些 relation。JOIN、Top-K 和 window 加入后，设计不
+假设一张 state table 永远足够。
 
 ## 5. ISCP 生命周期与多源扩展
 
-V1 新增独立的 `ConsumerType_MaterializedView`，明确不使用
+本 PR 新增独立的 `ConsumerType_MaterializedView`，明确不使用
 `ConsumerInfo.InitSQL`，注册前也不执行 CTAS。
 
 `ON CHANGE` 创建时使用 `startFromNow=false` 注册一个 ISCP job：
@@ -172,6 +278,21 @@ V1 新增独立的 `ConsumerType_MaterializedView`，明确不使用
   -> 从 snapshot 边界继续 tail
   -> 增量或完整维护
 ```
+
+对外相关状态转换如下：
+
+| 状态 | Owner | 成功转换 | 失败/restart 转换 |
+| --- | --- | --- | --- |
+| 已注册、无可信 state | ISCP executor | admission 一个 snapshot worker | 保持可调度，不发布 watermark |
+| Snapshot running | 当前 consumer generation | 原子发布 hydration 后的 target/state，再 finalize snapshot watermark | 回滚/丢弃未发布工作；新 generation 只能重复或续建经过验证的 shadow build |
+| Tail pending/running | 当前 consumer generation | 提交 target/state/tail watermark，再调度下一边界 | 回滚；FAST 停止或重试同一边界，FORCE 可在同一 `toTS` rebuild |
+| Complete refresh running | 当前 consumer generation 或手动 caller | 原子替换 target/state generation | 保留旧可见 generation，不推进进度 |
+| Paused/errored | Executor/catalog owner | 记录原因后显式 retry、resume 或 rebuild | 保持不推进，并能从查询状态看出 unhealthy |
+| Dropping | DDL transaction | fence generation、注销 job、删除所属 state 和 target | 无法证明 ownership 时中止 DDL，不能删除其他 MV 的 state |
+
+Worker admission 是 ownership 转移点，事务 commit 是 tail 发布点。Snapshot 结果事务
+成功前不能声明完成；每次发布都必须检查 generation fence，不能根据内存 worker 是否
+存在来推断 ownership。
 
 Job 保留 `SrcTable` 作为兼容 anchor，并通过 `SrcTables` 保存完整源集合。Dirty
 table 检测覆盖所有源；一次 iteration 在同一个 `[fromTS,toTS]` 收集所有源。
@@ -232,6 +353,21 @@ Distinct/group identity 保存序列化值，不依赖未经碰撞校验的 hash
 Delta 渐进处理：逻辑 chunk 最多 32,768 行，生成 SQL 最多 8 MiB；过大 chunk 递归
 拆分。每条内部 SQL 推进 statement boundary，但共享同一事务。
 
+增量准入必须保持普通聚合和 grouping 的完整类型域，不能只检查表达式语法树：
+
+| 类型域 | 必须满足的契约 |
+| --- | --- |
+| Integer/decimal SUM、AVG | 使用扩大后的持久 state type，保持与完整求值相同的 overflow/error 行为；scale 和最终 cast 属于规格 |
+| FLOAT/DOUBLE | 保持 GROUP BY、HAVING 和后续 predicate 可观察到的 NaN、infinity、signed zero 行为，否则 affected-group rebuild 或 COMPLETE |
+| CHAR/VARCHAR | 序列化 resolved collation 和 pad-space identity；只有 SQL grouping domain 为 raw bytes 时才能直接编码 raw bytes |
+| Temporal | 保留源精度，并保证表达式不依赖变化的 session/timezone |
+| NULL | typed NULL marker 不得与任意 non-NULL encoding 重合；COUNT、SUM/AVG state 和 NULL-safe group matching 遵循 SQL 语义 |
+| Binary/UUID/JSON 或新类型 | full-row identity、comparison 和 state serialization 被证明可 round-trip 前保持不准入 |
+
+每种 aggregate 必须定义 zero-row、all-NULL、insert-last/delete-last、overflow 和旧值
+retraction 规律。一个 aggregate 或表达式不支持时，整个 FAST candidate 原子拒绝，
+不能生成部分增量定义。
+
 ### 6.3 失败与 fallback
 
 Parse、bind、row lookup、state、target、watermark、cancel 或事务错误都会回滚整个
@@ -257,16 +393,21 @@ error。查询物理 MV 时会重新验证持久定义中的源；源缺失或�
 当前不支持 ALTER MATERIALIZED VIEW、源 schema 变化后自动重建增量规格、明确的
 CASCADE/RESTRICT policy 或 MV 作为源。
 
-## 8. 兼容性与发布
+## 8. 兼容性与原子交付
 
 SQL grammar 和 plan protobuf 都增加了公开持久结构，PR 中同时重新生成
 `mysql_sql.go` 和 `plan.pb.go`。旧单源 ISCP job 继续使用 `SrcTable`；多源扩展是
 additive 的，并受 protocol gate 保护。
 
-当前没有 catalog feature-version negotiation、自动 downgrade 或 migration tool。
-不支持运行无法理解 MV metadata/多源 consumer 的旧 binary。Target、state、job
-log 和 source identity 作为一个逻辑对象的 backup/restore/PITR 尚未验证，V1 不
-声称已支持。
+未合入分支中的临时 MV 格式不构成兼容契约。合入前，所有 writer、reader、test 和
+generated metadata 必须使用第 4 节的一套 canonical 格式。合入后如需不兼容修改，
+必须显式 migration 或 shadow rebuild，不能原地重新解释旧 state。
+
+本 PR 修改了分布式 job/catalog shape，因此仍需要 mixed-version admission。没有声明
+所需 MV/多源协议能力的节点不能创建或接管 job。Backup、restore 和 PITR 必须把
+definition、target generation、内部 state、job log、source identity 和 watermark 当作
+一个逻辑对象；恢复时只能从验证过的共同边界继续，或 rebuild shadow generation，
+不能混用不同 generation 的组成部分。这些是单 PR merge gate，不是后续产品版本工作。
 
 回滚方式是 DROP MV，它会注销 job 并清理自有 state。当前没有 optimizer 自动
 query rewrite，因此删除 MV 不会改变普通查询计划。
@@ -280,8 +421,10 @@ query rewrite，因此删除 MV 不会改变普通查询计划。
 - FORCE 从增量 fallback 到全量的次数；
 - 成功 watermark 的 wall-clock lag histogram。
 
-当前还没有 per-MV label、state cardinality/bytes、affected-group count、chunk bytes、
-retry class 或 SQL status 接口。
+合入前还必须提供低基数的 per-MV SQL status，包括 hydration/running/paused/error、
+选中策略、watermark/freshness、最后成功/错误、retry/fallback、state bytes、affected
+groups 和 backlog。Metrics 只能使用稳定低基数 label，不能把原始 MV 名称做成无界
+label 空间。
 
 代数热路径目标复杂度与 changed rows、distinct-key transition 和 affected MIN/MAX
 groups 成正比；完整刷新仍与源数据量成正比。Freshness 还受 ISCP polling、事务和
@@ -303,14 +446,19 @@ planner 开销、target write amplification 以及磁盘吞吐限制。
 - executor restart recovery、admission ordering、fencing、cancellation、rollback 和
   protocol-version gate。
 
-该分支也使用本地/远程 SQL 脚本和长时间 append benchmark 验证过；这些脚本按要求
-不提交为本 PR 的 BVT。Benchmark 数字应在 PR summary 中附 exact revision 和机器，
-它们是证据，不是可移植 SLA。
+该分支也使用远程 SQL 脚本和长时间 append benchmark 验证过；这些脚本按要求不提交
+为本 PR 的 BVT。所有保留结果必须在 PR 中记录 exact base/head、host、hardware、
+storage、topology 和配置；没有版本身份或来自旧语义实现的结果不能作为 merge 证据。
 
-合并前，获批设计应要求补充确定性 public SQL test：snapshot、insert/delete/update
+单 PR merge gate 要求确定性 public SQL test：snapshot、insert/delete/update
 tail、complete multi-source refresh、FAST reject、FORCE 路径选择、source-drop 后
 查询失败、direct-DML reject、ON DEMAND refresh 和 restart recovery。BVT polling
 必须有界，避免测试套件超时。
+
+每项公开行为必须映射到一个具名 UT/BVT oracle。Oracle 在同一边界比较 MV 与完整
+定义查询，并覆盖 NULL、duplicate、old/new group movement、rollback、重复 delivery
+和 cleanup。PR evidence table 必须区分 committed deterministic test、远程临时 test、
+benchmark 和 CI，并注明 exact head。
 
 ## 11. 业界对标与目标能力并集
 
@@ -326,10 +474,10 @@ tail、complete multi-source refresh、FAST reject、FORCE 路径选择、source
 | [Materialize](https://materialize.com/docs/transform-data/optimization/) | insert/update/delete 下持续维护 JOIN、aggregate、DISTINCT、MIN/MAX、grouped Top-K；arrangement、group-size hint、temporal filter、freshness | 可撤回 operator state、keyed arrangement、资源 hint 和 freshness 语义 |
 | [RisingWave](https://docs.risingwave.com/sql/commands/sql-create-mv) | 持续 backfill/维护、JOIN、group Top-N、tumble/hop/session window、window-close、级联 MV、在线控制 | streaming operator、event-time、级联 pipeline、backfill admission |
 
-MatrixOne 最终应覆盖下面所有能力族，但必须按依赖顺序交付。某个算子没有状态、
-失败恢复和资源契约前，不能仅因为语法可解析就标记为 FAST。
+本 PR 以依赖顺序实现下面的能力族。声明能力缺少 state、失败、恢复、资源或验证
+契约时，PR 必须保持 draft，不能合入，也不能仅因语法可解析就标记为 FAST。
 
-上表描述的是被对标数据库的能力和未来设计输入，不代表 MatrixOne 当前已经支持。
+上表描述的是被对标数据库的能力和同一 PR 的设计输入，不代表当前分支已经支持。
 特别地，本 PR 实现的是基于 ISCP/CDC log 的维护，**不支持** Oracle 风格的 Partition
 Change Tracking（PCT），也不支持 MV 的分区级刷新；二者都不是本设计的目标。
 
@@ -337,8 +485,9 @@ Change Tracking（PCT），也不支持 MV 的分区级刷新；二者都不是�
 
 ### 12.0 从完整刷新迁移到增量维护
 
-目标不是把每个 SQL construct 都直接写进 ISCP，而是把当前扁平 version-2 规格升级
-为 version-3 增量 operator graph。Planner 对每个定义输出三态结果：
+目标不是把每个 SQL construct 都直接写进 ISCP，而是在本 PR 合入前，把当前临时的
+flat aggregate/UNION description 归一成一套 canonical 增量 operator graph。Planner
+对每个定义输出三态结果：
 
 - `INCREMENTAL(spec, cost)`：具备正确的 insert/delete/update 算法、持久 state schema
   和资源上界；
@@ -394,8 +543,9 @@ operator graph，需要在现有多源能力上补充：
    未发布的 shadow generation，并可独立提交；全部 chunk 成功后，再用一个事务原子
    发布 target generation 和 snapshot watermark。崩溃后可以续建或丢弃 shadow，绝不
    暴露部分 hydration 的 target。
-5. job status 持久化 spec version、generation、各 source progress 和最后成功 boundary。
-   老 CN 遇到 version-3/multi-source operator job 必须拒绝接管，不能按 version-2 解释。
+5. job status 持久化 format version、generation、各 source progress 和最后成功
+   boundary。没有 canonical operator graph/多源能力的 CN 必须拒绝接管，不能按旧
+   单源 job 解释。
 
 不选择“每种 MV 创建一组独立 CDC job”，因为多源共同 boundary、故障恢复和 watermark
 原子性会被拆散；也不把完整 base rows 永久复制进 consumer 内存，因为状态无界且
@@ -451,9 +601,11 @@ FORCE 的完整 fallback 也必须有 full-refresh cost budget 和 change coales
 如果重复全表扫描无法追上变化，应报告 backpressure 或明确暂停，不能形成无界 refresh
 队列。
 
-Version-2 MV 保持原 consumer 和 state schema。Version-3 通过 MORPC feature gate 创建；
-混合版本中旧节点不能调度新 job。升级不原地解释旧 state，默认保留 version-2，用户
-REBUILD 或 shadow generation 才迁移；回滚只能继续读兼容 version，或完整重建。
+由于临时 MV 格式尚未发布，本 PR 不同时保留 flat、UNION envelope 和 operator graph
+三套产品格式；合入前所有 producer、consumer 和 test 都转换到一套 canonical schema。
+该 schema 通过 MORPC feature gate 创建，旧节点不能调度新 job。发布后如需不兼容
+格式，只能显式 shadow migration 或完整 rebuild；回滚只能继续使用兼容格式和验证过
+的 generation。
 
 每个新 operator 至少要有：signed-delta UT、与同 boundary 完整查询比较的 public SQL
 BVT、insert/delete/update/NULL/duplicate、事务 rollback、consumer restart、重复 delivery
@@ -464,8 +616,8 @@ state bytes、write amplification、CPU/IO 和 backlog drain；仅结果最终�
 
 ### 12.1 Aggregate、HAVING、DISTINCT 与集合操作
 
-下一版持久化规格升级为 version-3 operator graph，用带类型状态算子和稳定 operator
-ID 代替扁平 aggregate list。
+Merge-target specification 是一套带 typed state operator 和稳定 operator ID 的
+operator graph。当前 flat aggregate list 只是临时分支状态，不是独立产品代际。
 
 - **HAVING**：完整 group state 始终存在内部 relation 中，即使当前不满足 HAVING、
   不出现在 target。每次 group delta 合并后求 HAVING；false→true insert，true→false
@@ -490,9 +642,9 @@ ID 代替扁平 aggregate list。
   multiplicity，再按 SQL set predicate 决定可见性；state 与 distinct input rows
   数量成正比。
 
-当前代码已实现顶层兼容 UNION ALL；下一批仍是 HAVING、SUM/AVG DISTINCT 和
-construct-specific FAST error。不兼容但通过 source admission 的定义只有 FORCE 能
-选择完整刷新。
+当前分支 baseline 已实现顶层兼容 UNION ALL；同一 PR 中紧接着必须完成 HAVING、
+SUM/AVG DISTINCT 和 construct-specific FAST error。在这些代码完成前，不兼容但通过
+source admission 的定义只有 FORCE 能选择完整刷新。
 
 ### 12.2 增量 JOIN
 
@@ -577,7 +729,8 @@ Read policy 包括 `FRESH`（等待合格 boundary）、`BOUNDED STALENESS inter
 
 ### 12.8 Partition、index、storage 与资源控制
 
-本节仅是后续设计。MatrixOne 当前不支持 PCT 或分区级 MV 刷新。当前实现要么对
+本节除 PCT 外属于同一 PR 的 storage/resource 工作；PCT 是明确非目标。MatrixOne
+当前不支持 PCT 或分区级 MV 刷新。当前实现要么对
 FAST 子集应用逐行 ISCP/CDC delta，要么完整替换 MV 结果；不会根据源表分区变化
 元数据把刷新范围限制到受影响分区。
 
@@ -677,23 +830,64 @@ continuous SQL。Vendor 公开数字不能与 MatrixOne 不同机器结果混在
 
 ## 14. 交付 Gate 与评审问题
 
-能力并集明显大于一个安全 change，交付顺序为：
+PR #27615 是唯一 merge unit。下面只是该 PR 内部的实现和评审顺序，不是分批发布：
 
-1. 稳定当前 PR 子集并补 public SQL lifecycle test；
+1. 归一 canonical operator specification，稳定 public SQL lifecycle test；
 2. HAVING、SUM/AVG DISTINCT、construct-specific FAST error；
 3. inner/unique-dimension JOIN 和 operator arrangement；
 4. Top-K、event-time tumble/hop window；
 5. cascading/replacement、scheduled/concurrent refresh、status control；
 6. query rewrite、同步 ON COMMIT 和高级 state。
 
-每个 gate 都必须升级 persistent-spec/compatibility table，补 failure/restart test，并通过
-对应 benchmark 后才能宣称 FAST。
+每个 gate 扩展同一套 canonical operator schema/compatibility table，补
+failure/restart test，并通过对应 benchmark 后才能宣称 FAST。前一 gate 通过只允许
+继续开发下一步，不允许提前合入；所有 scope 内 gate 和最终组合 topology/restart test
+都通过后，PR 才能转为非草稿。
+
+记录过的 reference host 上最低验收标准为：
+
+- 每个采样 boundary 与完整定义查询零 mismatch；
+- 持续 6,000 source rows/s observability workload 下，warm-up 后 freshness p99 不超过
+  5 秒，max 不超过 10 秒；
+- 一个代数聚合 MV 相比同 offered load/durability 的 no-MV control，持续 source
+  throughput 降幅不超过 20%；
+- 有界 burst 结束后，backlog 在不超过两倍 burst duration 内 drain；逻辑 state 稳定后
+  target/state disk usage 不再增长；
+- COMPLETE/FORCE control 在同一 source rate 下保持正确，过载时明确报告，不能形成
+  无界 refresh queue；
+- restart、executor reassignment 和重复 delivery 保持 visible contribution 恰好一次，
+  失败 boundary 不推进。
+
+如果 reference host 在不开 MV 时都无法承受 offered load，该测试无效，不能记为 MV
+失败。超过固定 gate 的 capacity search 单独报告，不能替代固定验收。
 
 邀请 reviewer 重点决定：
 
 - snapshot finalization 与 tail transaction 的 watermark contract 是否可接受；
 - FORCE 运行期 fallback 是否应该改为 operator-controlled；
-- version-2 spec 应作为稳定格式合并，还是发布前替换成 version-3 operator graph；
-- 当前实现早于设计批准的情况下，哪些 gate 应放在 PR #27615，哪些拆 follow-up；
-- ON COMMIT 和 optimizer rewrite 是否应单独设计，因为它们分别改变 source-DML 与
-  optimizer ownership。
+- canonical operator graph、state admission 和 generation model 是否足以覆盖这个
+  merge unit 中的全部能力；
+- ON COMMIT 和 optimizer rewrite 是否需要在本 PR 内单独章节和独立 owner approval，
+  因为它们分别改变 source-DML 与 optimizer ownership。
+
+## 15. 备选方案与决策记录
+
+| 决策 | 结果 | 原因 |
+| --- | --- | --- |
+| 通过 `ConsumerInfo.InitSQL` 初始化 | 拒绝 | 会把初始构建与 tail ownership 拆开，使 snapshot/watermark 衔接不明确 |
+| CTAS 后使用 `startFromNow=true` | 拒绝 | CTAS snapshot 和 ISCP start watermark 之间的提交可能丢失 |
+| 独立 MV consumer + `startFromNow=false` | 采用 | 同一 owner 接收一致 snapshot 和全部后续 tail boundary |
+| 每个 source 一个独立 CDC/ISCP job | 拒绝 | 独立进度无法提供共同多源边界和单一原子 watermark |
+| 一个多源 job + source-tagged batch | 采用 | 去重订阅，并在同一 boundary/事务处理全部 source delta |
+| 在 consumer 内存保存完整 source row | 拒绝 | state 无界、restart 后丢失，也不属于持久事务 ownership |
+| 持久 operator relation + 有界 cache/spill | 采用 | state 可恢复、可诊断，并与 target 进度一起提交 |
+| 强制 CDC 总携带 before-image | 当前 transport 拒绝 | RowID 能精确恢复 commit 前旧行时，不必承担全部 payload/协议成本 |
+| 永远只通过 tombstone RowID 回读 | 最终方案拒绝 | 正确但可能放大随机读；canonical input 允许兼容 before-image 并以 RowID fallback |
+| FAST 增量失败后静默全量 | 拒绝 | 违反用户 method contract，并隐藏无界刷新成本 |
+| FORCE 回滚后在同一 boundary 完整刷新 | 采用 | 在声明自动 fallback 的同时保持正确性 |
+| 把数值 format 当作产品阶段 | 拒绝 | 功能在一个 PR 原子交付；数字只用于发布后拒绝或迁移持久 schema |
+| Oracle PCT/partition refresh | 不在范围 | 本设计没有 MatrixOne source-partition change contract |
+| 把异步 `ON CHANGE` 当成同步 `ON COMMIT` | 拒绝 | source transaction latency、lock order 和分布式 deadlock ownership 是不同契约 |
+
+Reviewer 问题存在 blocking 项时，设计不能通过。解决后需要在 PR 记录 reviewer、设计
+commit 和理由。实现发生实质偏离时更新本文，只重新打开受影响决策，再继续实现评审。

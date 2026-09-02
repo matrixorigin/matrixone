@@ -1,16 +1,50 @@
-# Incrementally Maintained Materialized Views V1
+# Incrementally Maintained Materialized Views
 
-Status: draft; design review requested
+Status: draft; design review requested; implementation incomplete
 
 Owner issue: https://github.com/matrixorigin/matrixone/issues/24553
 
 Implementation PR: https://github.com/matrixorigin/matrixone/pull/27615
 
-This document describes the code currently present in PR #27615. The branch
-contains an implementation written before design approval; therefore reviewers
-should review this contract and its invariants before treating the code as ready
-for implementation review. Sections 3 and 12 separate implemented behavior
-from follow-up proposals.
+Merge unit: one atomic implementation PR. None of the capability gates in this
+document will be merged as separately released product stages.
+
+Last updated: 2026-09-02
+
+This document describes both the code currently present in PR #27615 and the
+remaining code required before that PR can merge. The branch contains an
+implementation written before design approval; reviewers should first approve
+this contract and its invariants, then review the complete implementation
+against it. Sections 3 and 12 distinguish the current branch baseline from the
+same-PR merge target. Future-looking text is not a promise of current support,
+but it is also not a plan for partial merges.
+
+## Design decision
+
+Implement materialized views as consumer-owned physical tables maintained from
+one consistent ISCP change stream. One `MaterializedViewConsumer` owns initial
+snapshot hydration, tail processing, target and auxiliary state, failure
+recovery, and watermark publication. It does not use `ConsumerInfo.InitSQL`, a
+pre-registration CTAS, or one independent CDC job per source.
+
+The final implementation in this PR uses one canonical persistent incremental
+operator specification. A numeric `format_version` remains an internal
+compatibility discriminator so unknown persisted data fails closed; it is not a
+feature generation or a staged delivery label. Temporary flat and UNION-specific
+encodings in the current branch must be normalized before merge rather than
+released as separately supported product versions.
+
+Refresh selection is typed and fail-closed:
+
+- `FAST` accepts only a definition for which the planner produces complete,
+  retractable and resource-bounded operator state;
+- `FORCE` uses that incremental plan when available and otherwise selects a
+  common-boundary complete refresh;
+- `COMPLETE` always evaluates and atomically replaces the complete result.
+
+The complete PR may be implemented in an internal dependency order, but every
+capability claimed by this document must pass its merge gate before the PR is
+made non-draft. No intermediate implementation state is a supported release.
 
 ## 1. Problem and user contract
 
@@ -19,7 +53,7 @@ continuously maintained for dashboards and alerts over a trace/metrics
 firehose. The primary workload is append-heavy, while expired or corrected
 events also require delete and update correctness.
 
-V1 stores an MV as a physical table and supports two refresh timings:
+The design stores an MV as a physical table and supports two refresh timings:
 
 - `ON CHANGE`: asynchronously initialize and maintain the MV through ISCP;
 - `ON DEMAND`: initialize or replace the result only when the user executes an
@@ -39,6 +73,42 @@ It supports three method policies:
 maintenance. For a successfully published tail watermark W, target rows and
 auxiliary state equal evaluation of the definition at W. The implementation
 does not define a universal maximum freshness lag.
+
+### Goals
+
+- Keep dashboard and alert queries cheap over sustained append-heavy
+  trace/metrics input while remaining correct for delete and update.
+- Preserve one snapshot/change boundary across every direct source.
+- Make incremental eligibility explicit, deterministic and inspectable.
+- Bound or reject state, fan-out and per-iteration work before they can make a
+  FAST job unserviceable.
+- Recover after retry, restart or executor reassignment without duplicate or
+  lost contributions.
+
+### Non-goals
+
+- Oracle-style PCT or source-partition change tracking.
+- Treating external, temporary, subscription, internal-state or cyclic sources
+  as ordinary durable change streams.
+- Claiming synchronous source-transaction semantics for asynchronous
+  `ON CHANGE`; synchronous `ON COMMIT` has a separate source-DML contract.
+- Silently approximating exact SQL or silently changing FAST into COMPLETE.
+
+### First-principles invariants
+
+1. For every published boundary W, target rows and all auxiliary operator state
+   equal one evaluation of the MV definition at W.
+2. Target changes, state changes and the tail watermark have one transaction and
+   one commit point. None may become visible alone.
+3. Every source row delta contributes exactly once to every matching operator
+   input or UNION branch, including after retry, duplicate delivery and restart.
+4. Every multi-source result uses one common `[fromTS,toTS]`; a faster source
+   cannot advance the MV past a slower source.
+5. Only the active fenced consumer generation may mutate target, state or
+   progress. Cancellation and reassignment terminate the prior owner.
+6. FAST eligibility requires a reproducible old-row contribution and a bounded
+   update algorithm. Unsupported, volatile, corrupt or over-budget state fails
+   before watermark publication.
 
 ## 2. SQL surface
 
@@ -70,6 +140,48 @@ The parser AST, plan protobuf, statement classification, database remapping,
 prepared-statement schema collection, and privilege extraction all recognize
 the new DDL. Refresh currently follows the ALTER VIEW/database ownership
 privilege path; a dedicated MV privilege is not introduced by this PR.
+
+### Representative observability flow
+
+```sql
+CREATE TABLE traces (
+  event_ts TIMESTAMP,
+  service VARCHAR(128),
+  endpoint VARCHAR(256),
+  region VARCHAR(32),
+  status_code INT,
+  duration_ms BIGINT,
+  trace_id UUID
+);
+
+CREATE MATERIALIZED VIEW trace_minute
+  REFRESH FAST ON CHANGE
+AS
+SELECT date_trunc('minute', event_ts) AS minute,
+       service, endpoint, region,
+       count(*) AS requests,
+       sum(CASE WHEN status_code >= 500 THEN 1 ELSE 0 END) AS errors,
+       sum(duration_ms) AS duration_sum,
+       avg(duration_ms) AS duration_avg,
+       min(duration_ms) AS duration_min,
+       max(duration_ms) AS duration_max,
+       count(DISTINCT trace_id) AS traces
+FROM traces
+GROUP BY date_trunc('minute', event_ts), service, endpoint, region;
+```
+
+Creation registers the job with `startFromNow=false`. The consumer first
+hydrates the physical target and exact-distinct state from one ISCP snapshot.
+For tail input, an insert contributes `+1`; a delete contributes the old row as
+`-1`; and an update contributes `-old,+new`, including filter entry/exit and
+group movement. The consumer consolidates signed group deltas, updates target
+and state, and publishes the tail watermark in the same transaction.
+
+A top-level `UNION ALL` compiles each compatible leaf independently. Its hidden
+identity is `(branch_id, serialized_group_key)`, so two branches that produce
+the same visible row remain two SQL bag rows. If one physical source appears in
+multiple leaves, ISCP subscribes to it once and the consumer routes its delta to
+every matching branch.
 
 ## 3. Definition scope and refresh selection
 
@@ -109,7 +221,9 @@ operators, comparisons, boolean/null/range predicates, casts, `CASE`, and
 volatile functions, subqueries, windows, aggregate nesting, and unsupported
 expression nodes do not produce an incremental specification.
 
-The following are **not incrementally supported by the current PR**:
+The following are **not incrementally supported by the current branch
+baseline**. Section 12 defines the code and state that must still be completed
+in this same PR before those capabilities can be claimed:
 
 - `HAVING`;
 - `SUM(DISTINCT)` and `AVG(DISTINCT)`;
@@ -135,17 +249,19 @@ sixteen direct ordinary sources. This includes multi-table JOIN definitions.
 Every source reference in the stored refresh query is rewritten to read the
 same ISCP `toTS`; therefore a full result never mixes source boundaries.
 
-Multi-source support is complete refresh only. A multi-source job is gated by
-the MORPC protocol version that introduced its serialized ISCP shape. Older
-services reject creation rather than interpreting the job as a legacy
-single-source job.
+Compatible top-level `UNION ALL` branches can already use incremental
+multi-source maintenance. Other current multi-source definitions, including
+JOIN, use complete refresh until their operator state in section 12 is
+implemented. A multi-source job is gated by the MORPC protocol version that
+introduced its serialized ISCP shape. Older services reject creation rather
+than interpreting the job as a legacy single-source job.
 
 ### 3.4 Current refresh boundary
 
 | Input/policy | Current behavior | Reason |
 | --- | --- | --- |
 | Initial snapshot of every `ON CHANGE` MV | Complete build | No target/operator state exists; hydrate from one consistent snapshot |
-| Tail with a version-2 spec under `FAST/FORCE ON CHANGE` | Incremental | The consumer can turn insert/delete/update into signed group deltas |
+| Tail with a valid current incremental specification under `FAST/FORCE ON CHANGE` | Incremental | The consumer can turn insert/delete/update into signed operator deltas |
 | Admitted `FORCE ON CHANGE` query without a spec | Complete refresh | No retractable operator state represents that query yet |
 | FORCE incremental transaction failure | Roll back, then complete refresh at the same `toTS` | Partial target/state or a watermark beyond a failed boundary cannot publish |
 | FAST incremental transaction failure | Error, no fallback | FAST is the user's incrementality requirement |
@@ -168,24 +284,34 @@ Its catalog properties persist:
 - source SQL and executable refresh SQL;
 - a versioned, base64-encoded incremental specification when eligible.
 
-The incremental specification is currently version 2. It records source
-columns, filter, group expressions, aggregate kinds, visible output columns,
-hidden state columns, serialized group-key column, strategy, and auxiliary
-state-table identity. Unknown specification versions fail closed in the
-consumer.
+The merge target has one canonical incremental operator specification. It
+records source identities and columns, operator IDs and edges, typed key and
+payload schemas, filters, group expressions, aggregate kinds, visible output
+columns, hidden state columns, serialized group/row identities, retraction
+strategy, resource admission data, and every auxiliary state-relation ID.
+
+The persisted object includes one numeric `format_version` solely for future
+compatibility. At merge, the planner emits one supported format and the
+consumer accepts that format only; unknown formats fail closed. Numeric format
+values do not name feature phases. The branch's provisional direct-aggregate
+and UNION envelope encodings are implementation history and must be converted
+to the canonical schema before merge.
 
 Incremental targets use a binary `serial_full(...)` group key as a hidden
 primary key. Hidden state includes group row count and SUM/AVG sum/count state.
 Full-refresh-only targets use MatrixOne's hidden auto-increment fake primary
 key; creation initializes that sequence before a refresh can run.
 
-MIN/MAX and exact COUNT(DISTINCT) use a consumer-owned auxiliary table named
-from a deterministic hash of database and MV name. Its namespace is reserved.
-Ordinary users cannot create, mutate, or independently drop this state table.
+MIN/MAX and exact COUNT(DISTINCT), and every later stateful operator, use
+consumer-owned auxiliary relations named from deterministic MV and operator
+identities. Their namespace is reserved. Ordinary users cannot create, read,
+mutate, or independently drop these relations. The design does not rely on a
+single state table remaining sufficient as JOIN, Top-K and window state are
+added.
 
 ## 5. ISCP lifecycle and multi-source extension
 
-V1 adds the dedicated `ConsumerType_MaterializedView`. It deliberately does
+This PR adds the dedicated `ConsumerType_MaterializedView`. It deliberately does
 not use `ConsumerInfo.InitSQL` and does not run CTAS before registration.
 
 For `ON CHANGE`, creation registers one ISCP job with `startFromNow=false`:
@@ -197,6 +323,22 @@ register job
   -> tail iterations after the snapshot boundary
   -> incremental or complete maintenance
 ```
+
+The externally relevant state transitions are:
+
+| State | Owner | Success transition | Failure/restart transition |
+| --- | --- | --- | --- |
+| Registered, no trusted state | ISCP executor | Admit one snapshot worker | Remain schedulable; no watermark is published |
+| Snapshot running | Active consumer generation | Atomically publish hydrated target/state, then finalize the snapshot watermark | Roll back/discard unpublished work; a new generation repeats or resumes only a validated shadow build |
+| Tail pending/running | Active consumer generation | Commit target/state/tail watermark and schedule the next boundary | Roll back; FAST stops/retries the same boundary, FORCE may rebuild at that same `toTS` |
+| Complete refresh running | Active consumer generation or manual caller | Atomically replace the target/state generation | Retain the prior visible generation; do not advance progress |
+| Paused/errored | Executor/catalog owner | Explicit retry, resume or rebuild after the cause is recorded | Remain non-advancing and query-visible as unhealthy |
+| Dropping | DDL transaction | Fence generations, unregister jobs, remove owned state and target | Abort DDL if ownership cannot be proved; never drop another MV's state |
+
+Worker admission is the ownership transfer point. Transaction commit is the
+tail publication point. Snapshot completion is not advertised until the result
+transaction succeeds. A generation fence is checked before every publication,
+not inferred from in-memory worker existence.
 
 The job retains `SrcTable` as its compatibility anchor and adds `SrcTables` for
 the complete source set. Dirty-table detection considers every source, and one
@@ -271,6 +413,23 @@ rows and generated SQL at 8 MiB; an oversized chunk is split recursively. Each
 internal SQL statement advances its statement boundary while sharing the same
 transaction.
 
+Incremental eligibility must preserve the ordinary aggregate and grouping
+domains, not merely accept an expression syntax tree:
+
+| Domain | Required contract |
+| --- | --- |
+| Integer/decimal SUM and AVG | Persist a widened state type that has the same overflow/error behavior as complete evaluation; scale and final casts are part of the specification |
+| FLOAT/DOUBLE | Preserve NaN, infinities and signed-zero behavior observed by GROUP BY, HAVING and later predicates; otherwise use affected-group rebuild or COMPLETE |
+| CHAR/VARCHAR | Serialize the resolved collation and pad-space identity, not raw bytes unless raw-byte equality is the SQL grouping domain |
+| Temporal | Preserve source precision and the resolved timezone/session-independent expression semantics |
+| NULL | Use a typed NULL marker distinct from every non-NULL encoding; COUNT, SUM/AVG state and NULL-safe group matching follow SQL semantics |
+| Binary/UUID/JSON or new types | Remain ineligible until their full-row identity, comparison and state serialization are proven round-trippable |
+
+Every aggregate implementation must document its zero-row, all-NULL,
+insert-last/delete-last, overflow and old-value retraction laws. One unsupported
+aggregate or expression rejects the complete FAST candidate atomically; the
+planner never emits a partially incremental definition.
+
 ### 6.3 Failure and fallback
 
 Parse, bind, row lookup, state, target, watermark, cancellation, or transaction
@@ -303,18 +462,27 @@ ALTER MATERIALIZED VIEW, source-schema evolution with automatic incremental
 spec regeneration, CASCADE/RESTRICT dependency policy, and MV-as-source are not
 implemented.
 
-## 8. Compatibility and rollout
+## 8. Compatibility and atomic delivery
 
 The SQL grammar and plan protobuf add public persistent shapes. Generated
 `mysql_sql.go` and `plan.pb.go` are regenerated in the PR. Legacy single-source
 ISCP jobs continue to use `SrcTable`; the multi-source extension is additive
 and protocol-gated.
 
-The implementation has no catalog feature-version negotiation, automatic
-downgrade, or migration tool. Running a binary that does not understand the MV
-metadata or multi-source consumer is unsupported. Backup/restore/PITR behavior
-for target, state, job log, and source identities has not yet been validated as
-one logical object and is not claimed by V1.
+No provisional MV format from this unmerged branch is a compatibility contract.
+Before merge, all writers, readers, tests and generated metadata must use the
+one canonical format described in section 4. After merge, any incompatible
+format change requires an explicit migration or shadow rebuild; it must not
+reinterpret old state in place.
+
+Mixed-version admission is still required because the PR changes distributed
+job and catalog shapes. A node that does not advertise the required MV and
+multi-source protocol capability cannot create or own such a job. Backup,
+restore and PITR must treat definition, target generation, auxiliary state,
+job log, source identities and watermark as one logical object. Restore either
+resumes from a validated common boundary or rebuilds a shadow generation; it
+must not combine pieces from unrelated generations. These are merge gates for
+the single PR, not deferred product-version work.
 
 The rollback path is to drop the MV, which unregisters its job and removes
 owned state. This feature is not wired to automatic optimizer query rewrite,
@@ -329,8 +497,11 @@ The PR registers these metrics:
 - FORCE incremental-to-full fallback count;
 - successful watermark wall-clock lag histogram.
 
-It does not yet expose per-MV labels, state cardinality/bytes, affected-group
-count, chunk bytes, retry class, or a SQL status surface.
+Before merge it must also expose bounded-cardinality per-MV status through SQL,
+including hydration/running/paused/error state, selected refresh strategy,
+watermark and wall-clock freshness, last success/error, retry/fallback, state
+bytes, affected groups and backlog. Metrics should use stable low-cardinality
+labels; raw MV names must not create an unbounded metrics label space.
 
 The intended algebraic hot path is proportional to changed rows, distinct-key
 transitions, and affected MIN/MAX groups. Complete refresh remains proportional
@@ -353,16 +524,23 @@ Committed unit tests cover:
 - executor restart recovery, admission ordering, fencing, cancellation,
   rollback, and protocol-version gating.
 
-The implementation branch was also exercised with local/remote SQL scripts and
+The implementation branch was also exercised with remote SQL scripts and
 long-running append benchmarks. Those scripts are intentionally not committed
-as BVT in this PR. Benchmark numbers belong in the PR description together
-with exact revision and hardware; they are evidence, not a portable SLA.
+as BVT in this PR. Every retained result must record exact base/head, host,
+hardware, storage, topology and configuration in the PR; an unversioned result
+or a result from an earlier semantic implementation is not merge evidence.
 
-Before merge, the accepted design should require deterministic public SQL tests
+The single-PR merge gate requires deterministic public SQL tests
 for snapshot plus insert/delete/update tails, complete multi-source refresh,
 FAST rejection, FORCE fallback selection, source-drop query failure, direct-DML
 rejection, ON DEMAND refresh, and restart recovery. BVT polling must be bounded
 to avoid suite timeouts.
+
+Each public behavior must map to a named UT or BVT oracle. The oracle compares
+the MV result with complete evaluation at the same boundary and covers NULL,
+duplicates, old/new group movement, rollback, duplicate delivery and cleanup.
+The evidence table in the PR must distinguish committed deterministic tests,
+remote temporary tests, benchmarks and CI, and must identify their exact head.
 
 ## 11. Industry comparison and target capability union
 
@@ -379,12 +557,14 @@ supports every row in the table.
 | [Materialize](https://materialize.com/docs/transform-data/optimization/) | Continuous insert/update/delete maintenance for joins, aggregates, DISTINCT, MIN/MAX and grouped Top-K; arrangements, group-size hints, temporal filters, freshness introspection | Reference for retractable operator state, keyed arrangements, resource hints, and freshness semantics |
 | [RisingWave](https://docs.risingwave.com/sql/commands/sql-create-mv) | Continuous backfill plus maintenance, joins, grouped Top-N, tumble/hop/session windows, emit-on-window-close, cascading MVs and online controls | Reference for streaming operator breadth, event-time policy, cascading pipelines, and backfill admission |
 
-MatrixOne should eventually provide all capability families below, but they
-must be delivered in dependency order. Marking a feature FAST before its state,
-failure, recovery, and resource contracts exist is not acceptable.
+This PR targets the capability families below and implements them in dependency
+order within the branch. The PR remains draft and cannot merge while a claimed
+capability lacks its state, failure, recovery, resource and validation
+contracts. Marking a feature FAST before those contracts exist is not
+acceptable.
 
 The comparison table describes capabilities of the referenced systems and
-future design inputs, not capabilities already present in MatrixOne. In
+same-PR design inputs, not capabilities already present in the current branch. In
 particular, this PR implements log-based ISCP/CDC maintenance but does **not**
 implement Oracle-style Partition Change Tracking (PCT) or partition-level MV
 refresh. Neither is a target of this design.
@@ -393,8 +573,9 @@ refresh. Neither is a target of this design.
 
 ### 12.0 Moving complete-refresh cases to incremental maintenance
 
-The goal is not to teach ISCP every SQL construct. The flat version-2 aggregate
-description evolves into a version-3 incremental operator graph. Planning
+The goal is not to teach ISCP every SQL construct. Before this PR merges, its
+provisional flat aggregate and UNION descriptions are normalized into one
+canonical incremental operator graph. Planning
 returns one of three typed outcomes:
 
 - `INCREMENTAL(spec, cost)`: insert/delete/update algorithms, durable state
@@ -457,9 +638,10 @@ extensions to the existing multi-source path:
    independently; after all chunks succeed, one transaction publishes the
    target generation and snapshot watermark. A crash can resume or discard the
    shadow generation, but can never expose a partially hydrated target.
-5. Job status persists spec version, generation, per-source progress, and last
-   successful boundary. An old CN must reject a version-3/multi-source operator
-   job rather than interpret it as version 2.
+5. Job status persists format version, generation, per-source progress, and last
+   successful boundary. A CN without the canonical operator-graph and
+   multi-source capabilities must reject the job rather than interpret it as a
+   legacy single-source job.
 
 Creating independent CDC jobs per source is rejected because it loses one
 multi-source boundary and atomic watermark ownership. Keeping complete base rows
@@ -522,11 +704,13 @@ coalescing policy. When repeated full scans cannot keep up, the job reports
 backpressure or pauses with an explicit error instead of building an unbounded
 refresh queue.
 
-Version-2 MVs keep their existing consumer and state schema. Version 3 is
-created behind an MORPC feature gate; old nodes cannot schedule new jobs. An
-upgrade does not reinterpret old state in place: version 2 remains active until
-REBUILD or a shadow generation migrates it. Rollback either continues a
-compatible version or performs a complete rebuild.
+Because no provisional MV format has been released, this PR does not preserve
+parallel flat, UNION-envelope and operator-graph product formats. It converts
+all producers, consumers and tests to one canonical schema before merge. That
+schema is created behind an MORPC feature gate, so an incapable node cannot
+schedule a job. After release, a later incompatible format must use an explicit
+shadow migration or complete rebuild; rollback may continue only from a
+compatible format and validated generation.
 
 Every new operator requires signed-delta UTs and a public SQL BVT comparing the
 MV with the complete definition at the same boundary, covering insert/delete/
@@ -539,9 +723,9 @@ deliverable incremental implementation.
 
 ### 12.1 Aggregate, HAVING, DISTINCT, and set operators
 
-The first extension of the current version-2 specification is a version-3
-operator graph. It replaces the flat aggregate list with typed state operators
-and stable operator IDs.
+The merge-target specification is one operator graph with typed state operators
+and stable operator IDs. The current flat aggregate list is temporary branch
+state and is not a separately supported generation.
 
 - **HAVING**: maintain complete group state in the auxiliary relation even when
   the group is absent from the visible target. Evaluate HAVING after every
@@ -573,10 +757,11 @@ and stable operator IDs.
   full-row type-preserving key and can consume state proportional to distinct
   input rows.
 
-Top-level compatible UNION ALL is implemented in this PR. The next code
-increment remains HAVING and SUM/AVG DISTINCT, together with stable
-construct-specific FAST errors; FORCE alone may select complete refresh for an
-admitted definition outside the incremental subset.
+Top-level compatible UNION ALL is present in the current branch baseline. The
+remaining immediate work in this same PR is HAVING and SUM/AVG DISTINCT,
+together with stable construct-specific FAST errors; until that code is
+complete, FORCE alone may select complete refresh for an admitted definition
+outside the current incremental subset.
 
 ### 12.2 Incremental JOIN
 
@@ -656,8 +841,8 @@ dependency graph transactionally.
   requires a declared non-overlapping range key and idempotency key.
 - **ON COMMIT** is a separate synchronous mode, not an alias for asynchronous
   ISCP. Source DML must invoke planner-produced delta operators inside the
-  source transaction and lock targets in deterministic dependency order. V1 of
-  this mode is restricted to one source and algebraic aggregates; multi-source
+  source transaction and lock targets in deterministic dependency order. The
+  initial synchronous scope is restricted to one source and algebraic aggregates; multi-source
   ON COMMIT needs a deadlock and distributed-transaction design.
 - **PAUSE/RESUME/REBUILD/CANCEL** fence the active generation. Resume continues
   from a valid watermark; rebuild creates a new snapshot generation.
@@ -677,7 +862,8 @@ for rejecting alternatives.
 
 ### 12.8 Partition, index, storage, and resource controls
 
-This subsection is a future design only. MatrixOne does not currently support
+This subsection defines same-PR storage/resource work except for PCT, which is
+an explicit non-goal. MatrixOne does not currently support
 PCT or partition-level MV refresh. The current implementation either applies
 row-level ISCP/CDC deltas for its FAST subset or replaces the complete MV
 result; it does not use source-partition change metadata to limit a refresh.
@@ -793,28 +979,73 @@ same machine.
 
 ## 14. Delivery gates and review questions
 
-The capability union is intentionally larger than one safe implementation
-change. Delivery order is:
+PR #27615 is the only merge unit. The list below is an implementation and review
+order inside that PR, not a sequence of partial releases:
 
-1. stabilize the current PR subset and public SQL lifecycle tests;
+1. normalize the canonical operator specification and stabilize public SQL
+   lifecycle tests;
 2. HAVING, SUM/AVG DISTINCT, and construct-specific FAST errors;
 3. inner/unique-dimension JOIN plus operator arrangements;
 4. Top-K and event-time tumble/hop windows;
 5. cascading/replacement, scheduled/concurrent refresh, and status controls;
 6. query rewrite, synchronous ON COMMIT, and advanced states.
 
-Each gate updates the persistent-spec version and compatibility table, has
-failure/restart tests, and passes its relevant benchmark subset before being
-advertised as FAST.
+Each gate extends the same canonical operator schema and compatibility table,
+has failure/restart tests, and passes its relevant benchmark subset before being
+advertised as FAST. Passing an earlier gate permits the next implementation
+step but does not permit merging the PR. The PR becomes non-draft only after all
+in-scope gates and the final combined topology/restart tests pass.
+
+Minimum acceptance criteria on the recorded reference host are:
+
+- zero result mismatches against complete evaluation at every sampled boundary;
+- at a sustained 6,000 source rows/s observability workload, freshness p99 no
+  greater than 5 seconds and max no greater than 10 seconds after warm-up;
+- with one algebraic MV, sustained source throughput no more than 20% below the
+  no-MV control at the same offered load and durability;
+- after a bounded burst ends, backlog drains in no more than twice the burst
+  duration and target/state disk usage stops growing when the logical state is
+  stable;
+- COMPLETE/FORCE controls remain correct under the same source rate, report
+  overload explicitly, and never create an unbounded refresh queue;
+- restart, executor reassignment and duplicate delivery preserve exactly-once
+  visible contributions and do not advance a failed boundary.
+
+If the reference host cannot sustain the offered source load without an MV, the
+test is invalid rather than an MV failure. Capacity-search results above the
+acceptance point are reported separately and do not replace the fixed gate.
 
 Reviewers are specifically asked to decide:
 
 - whether the current snapshot-finalization and tail-transaction watermark
   contract is acceptable;
 - whether FORCE runtime fallback is acceptable or must be operator-controlled;
-- whether the version-2 spec should be merged as a stable format or replaced by
-  the version-3 operator graph before release;
-- which capability gate belongs in PR #27615 versus follow-up PRs, given that
-  the implementation already predates design approval;
-- whether ON COMMIT and optimizer rewrite should be separate design documents
-  because they change source-DML and optimizer ownership respectively.
+- whether the canonical operator graph, state admission and generation model
+  are sufficient for every capability in this one merge unit;
+- whether ON COMMIT and optimizer rewrite need dedicated subsections and
+  separate owner approvals inside this PR because they change source-DML and
+  optimizer ownership respectively.
+
+## 15. Alternatives and decision log
+
+| Decision | Result | Reason |
+| --- | --- | --- |
+| Initialize through `ConsumerInfo.InitSQL` | Rejected | It splits initial result construction from tail ownership and makes snapshot/watermark handoff ambiguous |
+| CTAS followed by `startFromNow=true` | Rejected | Commits between the CTAS snapshot and ISCP start watermark can be lost |
+| Dedicated MV consumer with `startFromNow=false` | Selected | One owner receives a consistent snapshot and every subsequent tail boundary |
+| One independent CDC/ISCP job per source | Rejected | Independent progress cannot provide one multi-source boundary or one atomic watermark |
+| One multi-source job with source-tagged batches | Selected | Deduplicates subscriptions and lets one transaction evaluate all source deltas at the same boundary |
+| Keep complete source rows in consumer memory | Rejected | State is unbounded, unavailable after restart and outside durable transaction ownership |
+| Durable operator relations with bounded caches/spill | Selected | State is recoverable, inspectable and committed with target progress |
+| Require CDC before-images unconditionally | Rejected for the current transport | Payload and protocol compatibility costs are unnecessary when row identity can reconstruct the exact pre-commit row |
+| Tombstone RowID lookup only forever | Rejected as the final optimum | Correct but can amplify random reads; the canonical input permits compatible before-images with RowID fallback |
+| Incremental failure silently becomes complete under FAST | Rejected | It violates the user's method contract and hides unbounded refresh cost |
+| FORCE rollback followed by same-boundary complete refresh | Selected | Preserves correctness while allowing a declared automatic fallback |
+| Treat numeric format values as product stages | Rejected | The feature is delivered atomically in one PR; the number exists only to reject or migrate persisted schemas after release |
+| Oracle PCT/partition refresh | Out of scope | MatrixOne has no source-partition change contract in this design |
+| Asynchronous `ON CHANGE` as synchronous `ON COMMIT` | Rejected | Source-transaction latency, lock ordering and distributed deadlock ownership are different contracts |
+
+The design cannot pass while a reviewer question above remains blocking. A
+resolved decision records reviewer, design commit and rationale in the PR. A
+material implementation deviation updates this document and reopens only the
+affected decision before implementation review continues.
