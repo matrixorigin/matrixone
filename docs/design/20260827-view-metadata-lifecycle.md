@@ -4,7 +4,7 @@
 - **历史获批语义 checkpoint**：PR #27734 commit `351397e59a286ff13cef6113904f24313310a03c`，包含 cursor per-FETCH epoch fencing、E0 presence、disabled same-epoch semantics、metadata-only authority containment、独立 sealed provisional epoch gate，以及 multi-CN/frontend admission/hot-path evidence
 - **历史审批记录**：reviewer `fengttt` 于 `2026-08-30T00:00:03Z` 对包含该语义 checkpoint 的 exact head `310ad16bdb87ee74ac57f25f1d5a0ee3c2b2fe19` 提交 GitHub `APPROVED` review（[review 5059506799](https://github.com/matrixorigin/matrixone/pull/27734#pullrequestreview-5059506799)）。该 approval 不覆盖后续 semantic changes。
 - **重新审批原因**：`bc6f03e17e` 将 catalog capability 与 admission lease 解耦，使 catalog 已就绪但 admission-disabled 的 capable CN 仍维护当前 DDL metadata；后续 restore 修复改变 table/database restore 的 invalidation 与 rolling-upgrade catalog-readiness fallback。最终协议不使用 whole-account reset：relation-removal 在 restore 事务内将受影响 reverse closure 推进到非 `CURRENT` generation；disabled 但 catalog-ready 的 capable CN 同样发布 durable marker 与 affected-closure generation。事务末 reconciliation 按 restore scope 限定：table restore 只扫描目标 table identity/name，database restore 只扫描目标 database，只有 account restore 才扫描 account；各 scope 只删除 orphan targets/dependencies 并 seed missing restored Views。
-- **待审批语义 checkpoint**：本设计修订对应的 executable implementation commit。审批必须覆盖包含本修订的 exact PR head；该 head 将记录在 PR conformance 区域。
+- **待审批语义 checkpoint**：`22b4d606efc1f6f98ddaaf2f443f11492e7236d5`（包含最终 authority-disabled 兼容修复与 compile 边界证据的 executable/evidence head）。审批必须覆盖包含本修订与该 checkpoint 的 exact PR head；获批前状态保持 `Pending re-approval`。
 - **稳定版本**：PR 正文必须链接获批 checkpoint、审批记录与当前 conformance head；后续任何 semantic change 都重新进入 Pending re-approval
 - **Owning issue**：#26227
 - **实现系列**：#27267、#27370、#27430、#27734
