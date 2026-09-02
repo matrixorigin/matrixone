@@ -35,6 +35,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/google/uuid"
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -2012,7 +2013,9 @@ func appendBatchRowsAsSQLValues(
 	//seenCols := make(map[int]struct{}, len(tblStuff.def.visibleIdxes))
 	row := make([]any, len(tblStuff.def.colNames))
 	extraColIdxes := appender.extraColIdxesForRow(wrapped.kind)
-	stageUpdate := dataBranchStagesUpdate(appender, directUpdate, wrapped.restoreMissing)
+	stageUpdate := dataBranchStagesUpdate(
+		appender, directUpdate, wrapped.requiresNativeUpdate, wrapped.restoreMissing,
+	)
 	if stageUpdate {
 		extraColIdxes = append(extraColIdxes, appender.deleteKeyColIdxes...)
 	}
@@ -2056,22 +2059,27 @@ func dataBranchDirectUpdateBatch(
 
 func dataBranchStagesUpdate(
 	appender sqlValuesAppender,
-	directUpdate, restoreMissing bool,
+	directUpdate, requiresNativeUpdate, restoreMissing bool,
 ) bool {
-	return directUpdate && !restoreMissing && appender.batchInfo != nil &&
+	return directUpdate && !requiresNativeUpdate && !restoreMissing && appender.batchInfo != nil &&
 		!appender.batchInfo.disableInsertStage && !appender.batchInfo.deleteNeedsExactFloatKeyMatch()
 }
 
 // dataBranchStagedUpdateColumnNames partitions writable non-key columns by
 // the apply form they support. SET/ENUM and spatial assignments use a staged
-// ON DUPLICATE KEY UPDATE; every other assignment remains in the staged
-// UPDATE JOIN path. The partition is schema-level and shared by all rows in
-// an apply batch, so mixed schemas never fall back to one statement per row.
+// ON DUPLICATE KEY UPDATE except when they are part of a unique secondary
+// index: MatrixOne rejects those ODKU assignments, so changed rows take the
+// native UPDATE path. Every other assignment remains in the staged UPDATE
+// JOIN path, so mixed schemas stay batched for ordinary rows.
 func dataBranchStagedUpdateColumnNames(
 	tblStuff tableStuff,
 	baseDef *plan2.TableDef,
 	writableIdxes []int,
 ) (stagedNames, specialNames []string) {
+	indexedSpecial := make(map[int]struct{}, len(tblStuff.def.indexedSpecialUpdateIdxes))
+	for _, idx := range tblStuff.def.indexedSpecialUpdateIdxes {
+		indexedSpecial[idx] = struct{}{}
+	}
 	for _, idx := range writableIdxes {
 		if slices.Contains(tblStuff.def.pkColIdxes, idx) {
 			continue
@@ -2079,24 +2087,69 @@ func dataBranchStagedUpdateColumnNames(
 		if idx < 0 || idx >= len(tblStuff.def.colTypes) {
 			continue
 		}
-		isSpecial := false
-		switch tblStuff.def.colTypes[idx].Oid {
-		case types.T_geometry, types.T_geometry32:
-			isSpecial = true
-		}
-		if idx < len(tblStuff.def.baseColNames) {
-			baseCol := dataBranchColumnDefByName(baseDef, tblStuff.def.baseColNames[idx])
-			if baseCol != nil && baseCol.Typ.Enumvalues != "" {
-				isSpecial = true
+		if dataBranchSpecialUpdateColumn(tblStuff, baseDef, idx) {
+			if _, indexed := indexedSpecial[idx]; indexed {
+				continue
 			}
-		}
-		if isSpecial {
 			specialNames = append(specialNames, tblStuff.def.baseColNames[idx])
 		} else {
 			stagedNames = append(stagedNames, tblStuff.def.baseColNames[idx])
 		}
 	}
 	return stagedNames, specialNames
+}
+
+func dataBranchIndexedSpecialUpdateColIdxes(
+	tblStuff tableStuff,
+	baseDef *plan2.TableDef,
+	writableIdxes []int,
+) []int {
+	if baseDef == nil {
+		return nil
+	}
+	uniqueColumns := make(map[string]struct{})
+	for _, index := range baseDef.Indexes {
+		if index == nil || !index.Unique {
+			continue
+		}
+		for _, part := range index.Parts {
+			uniqueColumns[strings.ToLower(catalog.ResolveAlias(part))] = struct{}{}
+		}
+	}
+	if len(uniqueColumns) == 0 {
+		return nil
+	}
+
+	idxes := make([]int, 0)
+	for _, idx := range writableIdxes {
+		if slices.Contains(tblStuff.def.pkColIdxes, idx) ||
+			!dataBranchSpecialUpdateColumn(tblStuff, baseDef, idx) {
+			continue
+		}
+		if _, unique := uniqueColumns[strings.ToLower(tblStuff.def.baseColNames[idx])]; unique {
+			idxes = append(idxes, idx)
+		}
+	}
+	return idxes
+}
+
+func dataBranchSpecialUpdateColumn(
+	tblStuff tableStuff,
+	baseDef *plan2.TableDef,
+	idx int,
+) bool {
+	if idx < 0 || idx >= len(tblStuff.def.colTypes) {
+		return false
+	}
+	switch tblStuff.def.colTypes[idx].Oid {
+	case types.T_geometry, types.T_geometry32:
+		return true
+	}
+	if idx >= len(tblStuff.def.baseColNames) {
+		return false
+	}
+	baseCol := dataBranchColumnDefByName(baseDef, tblStuff.def.baseColNames[idx])
+	return baseCol != nil && baseCol.Typ.Enumvalues != ""
 }
 
 func appendOrStageDataBranchApplyRow(

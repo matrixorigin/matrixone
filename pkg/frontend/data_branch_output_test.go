@@ -2093,7 +2093,7 @@ func TestDataBranchOutputBatchesMixedSchemaSpecialUpdates(t *testing.T) {
 		},
 	}
 
-	require.True(t, dataBranchStagesUpdate(appender, true, false))
+	require.True(t, dataBranchStagesUpdate(appender, true, false, false))
 	for i := 0; i < maxSqlBatchCnt+1; i++ {
 		require.NoError(t, appender.appendRow(diffUpdate, []byte(fmt.Sprintf("(%d,'payload-%d','ready',%d)", i, i, i))))
 	}
@@ -2561,6 +2561,20 @@ func TestDataBranchOutputAppendBatchRowsAsSQLValues(t *testing.T) {
 		ordinaryTable, ordinaryDef := newSpecialTable(types.T_varchar.ToType(), "")
 		staged, special = dataBranchStagedUpdateColumnNames(ordinaryTable, ordinaryDef, ordinaryTable.def.writableIdxes)
 		require.Equal(t, []string{"payload", "value"}, staged)
+		require.Empty(t, special)
+
+		indexedEnumTable, indexedEnumDef := newSpecialTable(types.T_uint64.ToType(), "a,b,c")
+		indexedEnumDef.Indexes = []*plan.IndexDef{{
+			IndexName: "uk_value",
+			Parts:     []string{"value"},
+			Unique:    true,
+		}}
+		indexedEnumTable.def.indexedSpecialUpdateIdxes = dataBranchIndexedSpecialUpdateColIdxes(
+			indexedEnumTable, indexedEnumDef, indexedEnumTable.def.writableIdxes,
+		)
+		require.Equal(t, []int{2}, indexedEnumTable.def.indexedSpecialUpdateIdxes)
+		staged, special = dataBranchStagedUpdateColumnNames(indexedEnumTable, indexedEnumDef, indexedEnumTable.def.writableIdxes)
+		require.Equal(t, []string{"payload"}, staged)
 		require.Empty(t, special)
 	})
 

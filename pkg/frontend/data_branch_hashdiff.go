@@ -1626,6 +1626,54 @@ func compareTupleWithBatchRow(
 	return 0, nil
 }
 
+func dataBranchUpdateRequiresNativeUpdateFromBatch(
+	tblStuff tableStuff,
+	tuple types.Tuple,
+	bat *batch.Batch,
+	rowIdx int,
+) (bool, error) {
+	for _, colIdx := range tblStuff.def.indexedSpecialUpdateIdxes {
+		if colIdx < 0 || colIdx >= bat.VectorCount() {
+			return false, moerr.NewInternalErrorNoCtxf(
+				"column index %d out of range for batch width %d",
+				colIdx, bat.VectorCount(),
+			)
+		}
+		value, err := getTupleColumnValue(tuple, tblStuff, colIdx)
+		if err != nil {
+			return false, err
+		}
+		cmp, err := compareTupleValueWithVector(value, bat.Vecs[colIdx], rowIdx)
+		if err != nil {
+			return false, err
+		}
+		if cmp != 0 {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+func dataBranchUpdateRequiresNativeUpdateFromTuples(
+	tblStuff tableStuff,
+	left, right types.Tuple,
+) (bool, error) {
+	for _, colIdx := range tblStuff.def.indexedSpecialUpdateIdxes {
+		leftValue, err := getTupleColumnValue(left, tblStuff, colIdx)
+		if err != nil {
+			return false, err
+		}
+		rightValue, err := getTupleColumnValue(right, tblStuff, colIdx)
+		if err != nil {
+			return false, err
+		}
+		if types.CompareValue(leftValue, rightValue) != 0 {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
 func findDeleteAndUpdateBat(
 	ctx context.Context, ses *Session, bh BackgroundExec,
 	tblStuff tableStuff, tblName string, side int, tmpCh chan batchWithKind, branchTS types.TS,
@@ -1733,7 +1781,8 @@ func findDeleteAndUpdateBat(
 				}
 				tBat2 := tblStuff.retPool.acquireRetBatch(tblStuff, false)
 				seen := make([]bool, dBat.RowCount())
-				var updateBat *batch.Batch
+				var stagedUpdateBat *batch.Batch
+				var nativeUpdateBat *batch.Batch
 				var updateDeleteBat *batch.Batch
 				if _, err2 = dataHashmap.PopByVectorsStream(
 					[]*vector.Vector{dBat.Vecs[tblStuff.def.pkColIdx]}, false,
@@ -1756,8 +1805,27 @@ func findDeleteAndUpdateBat(
 						}
 
 						// delete on lca and insert into tar ==> update
+						requiresNativeUpdate := false
+						if expandUpdate {
+							var updateErr error
+							requiresNativeUpdate, updateErr = dataBranchUpdateRequiresNativeUpdateFromBatch(
+								tblStuff, tuple, dBat, idx,
+							)
+							if updateErr != nil {
+								return updateErr
+							}
+						}
+						updateBat := stagedUpdateBat
+						if requiresNativeUpdate {
+							updateBat = nativeUpdateBat
+						}
 						if updateBat == nil {
 							updateBat = tblStuff.retPool.acquireRetBatch(tblStuff, false)
+							if requiresNativeUpdate {
+								nativeUpdateBat = updateBat
+							} else {
+								stagedUpdateBat = updateBat
+							}
 						}
 						if expandUpdate && updateDeleteBat == nil {
 							updateDeleteBat = tblStuff.retPool.acquireRetBatch(tblStuff, false)
@@ -1775,8 +1843,11 @@ func findDeleteAndUpdateBat(
 				); err2 != nil {
 					tblStuff.retPool.releaseRetBatch(dBat, false)
 					tblStuff.retPool.releaseRetBatch(tBat2, false)
-					if updateBat != nil {
-						tblStuff.retPool.releaseRetBatch(updateBat, false)
+					if stagedUpdateBat != nil {
+						tblStuff.retPool.releaseRetBatch(stagedUpdateBat, false)
+					}
+					if nativeUpdateBat != nil {
+						tblStuff.retPool.releaseRetBatch(nativeUpdateBat, false)
 					}
 					if updateDeleteBat != nil {
 						tblStuff.retPool.releaseRetBatch(updateDeleteBat, false)
@@ -1792,8 +1863,11 @@ func findDeleteAndUpdateBat(
 					if err2 = tBat2.UnionOne(dBat, int64(i), ses.proc.Mp()); err2 != nil {
 						tblStuff.retPool.releaseRetBatch(dBat, false)
 						tblStuff.retPool.releaseRetBatch(tBat2, false)
-						if updateBat != nil {
-							tblStuff.retPool.releaseRetBatch(updateBat, false)
+						if stagedUpdateBat != nil {
+							tblStuff.retPool.releaseRetBatch(stagedUpdateBat, false)
+						}
+						if nativeUpdateBat != nil {
+							tblStuff.retPool.releaseRetBatch(nativeUpdateBat, false)
 						}
 						if updateDeleteBat != nil {
 							tblStuff.retPool.releaseRetBatch(updateDeleteBat, false)
@@ -1805,8 +1879,7 @@ func findDeleteAndUpdateBat(
 				tblStuff.retPool.releaseRetBatch(dBat, false)
 				tBat2.SetRowCount(tBat2.Vecs[0].Length())
 
-				if updateBat != nil {
-					updateBat.SetRowCount(updateBat.Vecs[0].Length())
+				if stagedUpdateBat != nil || nativeUpdateBat != nil {
 					if expandUpdate {
 						updateDeleteBat.SetRowCount(updateDeleteBat.Vecs[0].Length())
 						if err2 = send(batchWithKind{
@@ -1818,20 +1891,37 @@ func findDeleteAndUpdateBat(
 						}); err2 != nil {
 							return err2
 						}
-						if err2 = send(batchWithKind{
-							name:       tblName,
-							side:       side,
-							batch:      updateBat,
-							kind:       diffInsert,
-							fromUpdate: tblStuff.def.pkKind != fakeKind,
-						}); err2 != nil {
-							return err2
+						for _, update := range []struct {
+							bat                  *batch.Batch
+							requiresNativeUpdate bool
+						}{
+							{bat: stagedUpdateBat},
+							{bat: nativeUpdateBat, requiresNativeUpdate: true},
+						} {
+							if update.bat == nil {
+								continue
+							}
+							update.bat.SetRowCount(update.bat.Vecs[0].Length())
+							if err2 = send(batchWithKind{
+								name:                 tblName,
+								side:                 side,
+								batch:                update.bat,
+								kind:                 diffInsert,
+								fromUpdate:           tblStuff.def.pkKind != fakeKind,
+								requiresNativeUpdate: update.requiresNativeUpdate,
+							}); err2 != nil {
+								return err2
+							}
 						}
 					} else {
+						if stagedUpdateBat == nil {
+							stagedUpdateBat = nativeUpdateBat
+						}
+						stagedUpdateBat.SetRowCount(stagedUpdateBat.Vecs[0].Length())
 						if err2 = send(batchWithKind{
 							name:  tblName,
 							side:  side,
-							batch: updateBat,
+							batch: stagedUpdateBat,
 							kind:  diffUpdate,
 						}); err2 != nil {
 							return err2
@@ -2187,14 +2277,15 @@ func diffDataHelper(
 
 	if err = tarDataHashmap.ForEachShardParallel(func(cursor databranchutils.ShardCursor) error {
 		var (
-			err2          error
-			tarBat        *batch.Batch
-			baseBat       *batch.Batch
-			baseDeleteBat *batch.Batch
-			tarUpdateBat  *batch.Batch
-			tarTuple      types.Tuple
-			baseTuple     types.Tuple
-			checkRet      databranchutils.GetResult
+			err2               error
+			tarBat             *batch.Batch
+			baseBat            *batch.Batch
+			baseDeleteBat      *batch.Batch
+			tarUpdateBat       *batch.Batch
+			tarNativeUpdateBat *batch.Batch
+			tarTuple           types.Tuple
+			baseTuple          types.Tuple
+			checkRet           databranchutils.GetResult
 		)
 
 		tarBat = tblStuff.retPool.acquireRetBatch(tblStuff, false)
@@ -2202,6 +2293,9 @@ func diffDataHelper(
 		defer func() {
 			if tarUpdateBat != nil {
 				tblStuff.retPool.releaseRetBatch(tarUpdateBat, false)
+			}
+			if tarNativeUpdateBat != nil {
+				tblStuff.retPool.releaseRetBatch(tarNativeUpdateBat, false)
 			}
 		}()
 
@@ -2279,13 +2373,28 @@ func diffDataHelper(
 							if baseDeleteBat == nil {
 								baseDeleteBat = tblStuff.retPool.acquireRetBatch(tblStuff, false)
 							}
-							if tarUpdateBat == nil {
-								tarUpdateBat = tblStuff.retPool.acquireRetBatch(tblStuff, false)
+							requiresNativeUpdate, updateErr := dataBranchUpdateRequiresNativeUpdateFromTuples(
+								tblStuff, tarTuple, baseTuple,
+							)
+							if updateErr != nil {
+								return updateErr
+							}
+							updateBat := tarUpdateBat
+							if requiresNativeUpdate {
+								updateBat = tarNativeUpdateBat
+							}
+							if updateBat == nil {
+								updateBat = tblStuff.retPool.acquireRetBatch(tblStuff, false)
+								if requiresNativeUpdate {
+									tarNativeUpdateBat = updateBat
+								} else {
+									tarUpdateBat = updateBat
+								}
 							}
 							if err2 = appendTupleToBat(ses, baseDeleteBat, baseTuple, tblStuff); err2 != nil {
 								return err2
 							}
-							if err2 = appendTupleToBat(ses, tarUpdateBat, tarTuple, tblStuff); err2 != nil {
+							if err2 = appendTupleToBat(ses, updateBat, tarTuple, tblStuff); err2 != nil {
 								return err2
 							}
 						} else {
@@ -2333,6 +2442,23 @@ func diffDataHelper(
 				fromUpdate: true,
 			}, false, tblStuff.retPool)
 			tarUpdateBat = nil
+			if err3 != nil {
+				return err3
+			} else if stop {
+				return nil
+			}
+		}
+
+		if tarNativeUpdateBat != nil {
+			stop, err3 := emitBatch(emit, batchWithKind{
+				batch:                tarNativeUpdateBat,
+				kind:                 diffInsert,
+				name:                 tblStuff.tarRel.GetTableName(),
+				side:                 diffSideTarget,
+				fromUpdate:           true,
+				requiresNativeUpdate: true,
+			}, false, tblStuff.retPool)
+			tarNativeUpdateBat = nil
 			if err3 != nil {
 				return err3
 			} else if stop {

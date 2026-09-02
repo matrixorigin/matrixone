@@ -141,6 +141,46 @@ func TestCompareTupleWithBatchRow(t *testing.T) {
 	require.Contains(t, err.Error(), "out of range")
 }
 
+func TestDataBranchUpdateRequiresNativeUpdate(t *testing.T) {
+	ses := newValidateSession(t)
+	mp := ses.proc.Mp()
+	tblStuff := tableStuff{}
+	tblStuff.def.colTypes = []types.Type{types.T_int64.ToType(), types.T_uint64.ToType()}
+	tblStuff.def.indexedSpecialUpdateIdxes = []int{1}
+
+	bat := batch.NewWithSize(2)
+	bat.Vecs[0] = vector.NewVec(types.T_int64.ToType())
+	bat.Vecs[1] = vector.NewVec(types.T_uint64.ToType())
+	defer bat.Clean(mp)
+	require.NoError(t, vector.AppendFixed(bat.Vecs[0], int64(1), false, mp))
+	require.NoError(t, vector.AppendFixed(bat.Vecs[1], uint64(1), false, mp))
+	bat.SetRowCount(1)
+
+	requiresNativeUpdate, err := dataBranchUpdateRequiresNativeUpdateFromBatch(
+		tblStuff, types.Tuple{int64(1), uint64(2)}, bat, 0,
+	)
+	require.NoError(t, err)
+	require.True(t, requiresNativeUpdate)
+
+	requiresNativeUpdate, err = dataBranchUpdateRequiresNativeUpdateFromBatch(
+		tblStuff, types.Tuple{int64(1), uint64(1)}, bat, 0,
+	)
+	require.NoError(t, err)
+	require.False(t, requiresNativeUpdate)
+
+	requiresNativeUpdate, err = dataBranchUpdateRequiresNativeUpdateFromTuples(
+		tblStuff, types.Tuple{int64(1), uint64(2)}, types.Tuple{int64(1), uint64(1)},
+	)
+	require.NoError(t, err)
+	require.True(t, requiresNativeUpdate)
+
+	requiresNativeUpdate, err = dataBranchUpdateRequiresNativeUpdateFromTuples(
+		tblStuff, types.Tuple{int64(1), uint64(1)}, types.Tuple{int64(1), uint64(1)},
+	)
+	require.NoError(t, err)
+	require.False(t, requiresNativeUpdate)
+}
+
 func TestCompareTupleValueWithVectorNormalizesValues(t *testing.T) {
 	ses := newValidateSession(t)
 	mp := ses.proc.Mp()

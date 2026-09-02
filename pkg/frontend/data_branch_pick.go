@@ -350,7 +350,9 @@ func appendPickedBatchRows(
 		if rowDirectUpdate && wrapped.kind == diffDelete {
 			continue
 		}
-		stageUpdate := dataBranchStagesUpdate(appender, rowDirectUpdate, wrapped.restoreMissing)
+		stageUpdate := dataBranchStagesUpdate(
+			appender, rowDirectUpdate, wrapped.requiresNativeUpdate, wrapped.restoreMissing,
+		)
 		extraColIdxes := appender.extraColIdxesForRow(wrapped.kind)
 		if stageUpdate {
 			extraColIdxes = append(extraColIdxes, appender.deleteKeyColIdxes...)
