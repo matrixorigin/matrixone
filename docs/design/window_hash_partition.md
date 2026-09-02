@@ -5,7 +5,7 @@
 - Owner: iamlinjunhong
 - Base commit: `c46d897e9645b80178568ef0783dd8e99e527222`
 - Implementation PR: [matrixorigin/matrixone#27972](https://github.com/matrixorigin/matrixone/pull/27972)
-- Design revision: `window-hash-partition-2026-09-02`
+- Design revision: `window-hash-partition-2026-09-02-r2`
 - Last updated: 2026-09-02
 
 ## 1. Decision
@@ -125,13 +125,14 @@ The planner compares deterministic relative work:
 
 ```text
 sort_work = N * log2(max(N, 2)) * K
-hash_work = N * K + N + 16*G
+hash_work = N * K + N + 32*G*K
 hash_aux  = 16*N + G*(W + hash-entry-overhead)
 ```
 
-`16*G` represents the measured per-partition downstream call/wrapper cost;
-without it, near-unique keys look artificially cheap despite emitting `N`
-separate batches. `16*N` accounts for the group-id and stable-selection arrays.
+`32*G*K` is a conservative per-partition downstream/equality-state cost. It
+scales with the composite key width so near-unique multi-key inputs do not look
+artificially cheap despite emitting `N` separate batches. `16*N` accounts for
+the group-id and stable-selection arrays.
 Retained input batches are common to both blocking paths and are not used to make
 HASH look artificially worse. Overflow, missing statistics, invalid NDV, or an
 unbounded width estimate rejects HASH.
@@ -291,6 +292,18 @@ INT32-key rows) produced:
 
 The near-unique result motivated the explicit per-group work term rather than an
 `N log N` versus `N` comparison alone.
+
+The exact `window-hash-partition-2026-09-02-r2` head also ran the complete
+operator matrix with `-benchtime=1x -benchmem`: 72 Sort/HASH cells across 1K,
+64K, and 1M rows; NDV 1, 1%, and 100%; one/three fixed or varlen keys. It emits
+`peak-mpool-B` for HASH working state in addition to Go's allocation metrics.
+Representative 1M three-varlen-key samples on Apple M4 were 958 ms Sort / 260 ms
+HASH at NDV 1 (101 MB HASH peak), while the NDV-100% HASH cell allocated 1.85 GB
+per operation with a 185 MB HASH peak. The latter resource counterexample
+requires the key-count-scaled per-group cost above and remains on SORT. This is
+deliberately an operator microbenchmark, not a claim about end-to-end SQL
+latency: the public SQL BVT separately covers selected HASH output through
+aggregate, ranking, value, ROWS, RANGE, ordered, and unordered Window consumers.
 
 ## 11. Rollout and observability
 

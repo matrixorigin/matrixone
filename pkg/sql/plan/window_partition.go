@@ -26,7 +26,11 @@ import (
 const (
 	windowHashEntryOverhead = 32
 	windowVarlenKeyWidth    = 128
-	windowHashGroupWork     = 16
+	// Each hash group crosses the Window boundary and maintains one equality
+	// state per key. Scale this conservative cost by key count so a near-unique
+	// composite key cannot look cheaper than the local sort just because the
+	// sort comparator also has more keys.
+	windowHashGroupWork = 32
 )
 
 // determineWindowPartitionAlgorithms makes the planner's final physical
@@ -128,9 +132,10 @@ func shouldUseWindowHashPartition(
 		return false
 	}
 	sortWork := n * math.Log2(math.Max(n, 2)) * float64(keyCount)
-	// Each group is one downstream Window call. The fixed wrapper/scheduler
-	// cost is material for near-unique keys even when hashing itself is cheap.
-	hashWork := n*float64(keyCount) + n + windowHashGroupWork*groupCount
+	// Each group crosses the downstream Window boundary and carries equality
+	// state for every partition key. This is material for near-unique composite
+	// keys even when the hash lookup itself is cheap.
+	hashWork := n*float64(keyCount) + n + windowHashGroupWork*groupCount*float64(keyCount)
 	if hashWork >= sortWork {
 		return false
 	}

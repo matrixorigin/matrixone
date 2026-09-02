@@ -35,6 +35,7 @@ func TestShouldUseWindowHashPartition(t *testing.T) {
 	}{
 		{name: "large narrow input", rows: 1 << 16, groups: 64, width: 8, keys: 1, resolved: largeBudget, want: true},
 		{name: "near unique output cost", rows: 1 << 16, groups: 1 << 16, width: 8, keys: 1, resolved: largeBudget},
+		{name: "near unique composite output cost", rows: 1 << 16, groups: 1 << 16, width: 24, keys: 3, resolved: largeBudget},
 		{name: "small input", rows: 1024, groups: 64, width: 8, keys: 1, resolved: largeBudget},
 		{name: "memory unsafe", rows: 1 << 16, groups: 1 << 16, width: 256, keys: 1, resolved: 1 << 20},
 		{name: "row threshold", rows: 1 << 16, groups: 64, width: 8, keys: 1, configured: 1000, resolved: 1000},

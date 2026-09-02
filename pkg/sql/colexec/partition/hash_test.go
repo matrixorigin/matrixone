@@ -17,8 +17,10 @@ package partition
 import (
 	"context"
 	"fmt"
+	"strconv"
 	"strings"
 	"testing"
+	"unsafe"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -402,31 +404,35 @@ func BenchmarkHashPartition(b *testing.B) {
 }
 
 func BenchmarkWindowPartitionAlgorithms(b *testing.B) {
+	// This measures the Partition prerequisite itself. The SQL BVT covers the
+	// downstream Window contract independently; it would be misleading to claim
+	// that this operator microbenchmark measures full query latency.
 	for _, rows := range []int{1 << 10, 1 << 16, 1 << 20} {
 		for _, ndv := range []int{1, max(1, rows/100), rows} {
-			for _, algorithm := range []string{"sort", "hash"} {
-				b.Run(fmt.Sprintf("%s/rows=%d/ndv=%d", algorithm, rows, ndv), func(b *testing.B) {
-					for i := 0; i < b.N; i++ {
-						runWindowPartitionBenchmark(b, rows, ndv, algorithm == "hash")
+			for _, keyCount := range []int{1, 3} {
+				for _, varlen := range []bool{false, true} {
+					for _, algorithm := range []string{"sort", "hash"} {
+						name := fmt.Sprintf("%s/rows=%d/ndv=%d/keys=%d/%s",
+							algorithm, rows, ndv, keyCount, map[bool]string{false: "fixed", true: "varlen"}[varlen])
+						b.Run(name, func(b *testing.B) {
+							var peak int64
+							for i := 0; i < b.N; i++ {
+								peak = max(peak, runWindowPartitionBenchmark(b, rows, ndv, keyCount, varlen, algorithm == "hash"))
+							}
+							b.ReportMetric(float64(peak), "peak-mpool-B")
+						})
 					}
-				})
+				}
 			}
 		}
 	}
 }
 
-func runWindowPartitionBenchmark(b *testing.B, rows, ndv int, useHash bool) {
+func runWindowPartitionBenchmark(b *testing.B, rows, ndv, keyCount int, varlen, useHash bool) int64 {
 	mp := mpool.MustNewZero()
 	proc := testutil.NewProcessWithMPool(b, "", mp)
-	keys := make([]int32, rows)
-	payload := make([]int64, rows)
-	for row := range keys {
-		keys[row] = int32((row * 7919) % ndv)
-		payload[row] = int64(row)
-	}
-	input := makeHashPartitionBatch(b, proc, keys, nil, payload)
+	input, specs := makeWindowPartitionBenchmarkInput(b, proc, rows, ndv, keyCount, varlen)
 	child := colexec.NewMockOperator().WithBatchs([]*batch.Batch{input})
-	specs := []*plan.OrderBySpec{{Expr: newExpression(0, types.T_int32)}}
 	arg := &Partition{OrderBySpecs: specs}
 	if useHash {
 		arg.Algorithm = plan.Node_PARTITION_ALGORITHM_HASH
@@ -440,9 +446,22 @@ func runWindowPartitionBenchmark(b *testing.B, rows, ndv int, useHash bool) {
 		arg.AppendChild(order)
 	}
 	require.NoError(b, arg.Prepare(proc))
+	peak := mp.CurrNB()
 	for {
 		result, err := arg.Call(proc)
 		require.NoError(b, err)
+		peak = max(peak, mp.CurrNB())
+		if useHash {
+			// finalize frees its scratch before Call returns, so the current
+			// mpool value alone would under-report the peak hash working set.
+			peak = max(peak, arg.hash.observedMemory)
+			if arg.hash.retained != nil {
+				// At the maximum finalization point, the retained/hash accounting
+				// overlaps the stable-selection array and per-group positions.
+				scratch := int64(arg.hash.retained.RowCount()+len(arg.hash.groupBoundaries)) * int64(unsafe.Sizeof(int64(0)))
+				peak = max(peak, arg.hash.observedMemory+scratch)
+			}
+		}
 		if result.Status == vm.ExecStop {
 			break
 		}
@@ -454,6 +473,52 @@ func runWindowPartitionBenchmark(b *testing.B, rows, ndv int, useHash bool) {
 	child.Free(proc, false, nil)
 	proc.Free()
 	require.Zero(b, mp.CurrNB())
+	return peak
+}
+
+func makeWindowPartitionBenchmarkInput(
+	t testing.TB,
+	proc *process.Process,
+	rows, ndv, keyCount int,
+	varlen bool,
+) (*batch.Batch, []*plan.OrderBySpec) {
+	t.Helper()
+	bat := batch.New(nil)
+	bat.Attrs = make([]string, 0, keyCount+1)
+	bat.Vecs = make([]*vector.Vector, 0, keyCount+1)
+	specs := make([]*plan.OrderBySpec, 0, keyCount)
+	for key := 0; key < keyCount; key++ {
+		bat.Attrs = append(bat.Attrs, fmt.Sprintf("k%d", key))
+		if varlen {
+			vec := vector.NewVec(types.T_varchar.ToType())
+			values := make([][]byte, rows)
+			for row := range values {
+				values[row] = strconv.AppendInt(nil, int64((row*7919+key*104729)%ndv), 10)
+			}
+			require.NoError(t, vector.AppendBytesList(vec, values, nil, proc.Mp()))
+			bat.Vecs = append(bat.Vecs, vec)
+			specs = append(specs, &plan.OrderBySpec{Expr: newExpression(int32(key), types.T_varchar)})
+			continue
+		}
+		vec := vector.NewVec(types.T_int32.ToType())
+		values := make([]int32, rows)
+		for row := range values {
+			values[row] = int32((row*7919 + key*104729) % ndv)
+		}
+		require.NoError(t, vector.AppendFixedList(vec, values, nil, proc.Mp()))
+		bat.Vecs = append(bat.Vecs, vec)
+		specs = append(specs, &plan.OrderBySpec{Expr: newExpression(int32(key), types.T_int32)})
+	}
+	bat.Attrs = append(bat.Attrs, "v")
+	payload := make([]int64, rows)
+	for row := range payload {
+		payload[row] = int64(row)
+	}
+	payloadVec := vector.NewVec(types.T_int64.ToType())
+	require.NoError(t, vector.AppendFixedList(payloadVec, payload, nil, proc.Mp()))
+	bat.Vecs = append(bat.Vecs, payloadVec)
+	bat.SetRowCount(rows)
+	return bat, specs
 }
 
 func newHashPartitionArgument(spillMem int64) *Partition {
