@@ -397,8 +397,8 @@ func (idx *IvfflatSearchIndex[T]) getBloomFilter(sqlproc *sqlexec.SqlProcess) (e
 
 // exactRelationMembershipScan preserves the legacy PRE policy for small key
 // sets, where scanning every centroid and filtering before Top-K is bounded and
-// avoids under-filling selective queries. Larger sets use the approximate,
-// nprobe-bounded storage Top-K path.
+// avoids under-filling selective queries. Larger sets retain IVF's nprobe
+// boundary but still apply exact membership before the local Top-K heap.
 func exactRelationMembershipScan(sqlproc *sqlexec.SqlProcess) (exact, empty bool, err error) {
 	if sqlproc == nil || sqlproc.RelationScanner == nil || !sqlproc.IvfHasMembershipFilter {
 		return false, false, nil
@@ -792,7 +792,7 @@ func (idx *IvfflatSearchIndex[T]) Search(
 			// an absent filter and scan the index unrestricted.
 			return []any{}, []float64{}, nil
 		}
-		if !directExactMembership {
+		if !directExactMembership && (sqlproc == nil || sqlproc.RelationScanner == nil) {
 			if err = idx.getBloomFilter(sqlproc); err != nil {
 				return nil, nil, err
 			}

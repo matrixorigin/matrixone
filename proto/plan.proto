@@ -1491,6 +1491,10 @@ message RuntimeFilterSpec {
   // leave legacy expr unset. Probe specs continue to use expr for scan-side
   // evaluation.
   Expr build_expr = 10;
+  // The unique-key payload is a mandatory IVFFlat PRE search domain.  PASS is
+  // not a valid terminal value.  Every CN that owns a VECTOR_INDEX_SCAN shard
+  // builds the domain from its complete local broadcast-build stream.
+  bool required_vector_search_domain = 11;
 }
 
 message IdList {

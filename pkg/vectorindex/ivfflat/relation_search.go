@@ -31,7 +31,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/metric"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/quantizer"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/sqlexec"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 )
 
 func (idx *IvfflatSearchIndex[T]) entryQueryBytes(idxcfg vectorindex.IndexConfig, query []T) ([]byte, plan.Type, error) {
@@ -172,13 +171,6 @@ func (idx *IvfflatSearchIndex[T]) scanEntries(
 	if storageTopK {
 		blockFilters = []*plan.Expr{filter}
 	}
-	filterHint := engine.FilterHint{}
-	if storageTopK && sqlproc.IvfHasMembershipFilter {
-		// Preserve the bounded-recall PRE policy: readers rank each bounded
-		// centroid candidate set first, then apply membership. The exact SEMI
-		// join in the outer plan remains the final SQL predicate check.
-		filterHint.MembershipFilterBytes = sqlproc.IvfMembershipFilter
-	}
 	res, err := sqlproc.RelationScanner.ScanRelation(sqlexec.RelationScanRequest{
 		Schema:            tblcfg.DbName,
 		Table:             tblcfg.EntriesTable,
@@ -187,7 +179,6 @@ func (idx *IvfflatSearchIndex[T]) scanEntries(
 		BlockFilters:      blockFilters,
 		IndexParam:        indexParam,
 		PostFilterTopOnly: !storageTopK,
-		FilterHint:        filterHint,
 		BatchTransform: func(bat *batch.Batch) error {
 			batchResult := executor.Result{Batches: []*batch.Batch{bat}, Mp: sqlproc.Proc.Mp()}
 			if storageTopK {
@@ -270,16 +261,15 @@ func canUseStorageTopK(
 	limit uint,
 	rangeSupported bool,
 ) bool {
-	// Storage vector Top-N currently ranks only ascending distances. Membership
-	// alone may be applied after the bounded Top-K as the documented approximate
-	// PRE policy. Ordinary user predicates remain filter-first. Distance ranges
-	// are safe only after storageDistanceRange has translated them into the
-	// stored metric domain; objectio applies those bounds before heap admission.
+	// Storage vector Top-N currently ranks only ascending distances. PRE
+	// membership is a search-domain predicate and must run before heap admission,
+	// so it deliberately uses the local filter-first Top-K path. Ordinary user
+	// predicates do the same. Distance ranges are safe only after
+	// storageDistanceRange has translated them into the stored metric domain;
+	// objectio applies those bounds before heap admission.
 	if sqlproc == nil || !rangeSupported || len(centroidIDs) == 0 || len(filters) != 0 || limit == 0 ||
+		sqlproc.IvfHasMembershipFilter ||
 		ivfOrderFlag(sqlproc.IndexReaderParam)&plan.OrderBySpec_DESC != 0 {
-		return false
-	}
-	if sqlproc.IvfHasMembershipFilter && len(sqlproc.IvfMembershipFilter) == 0 {
 		return false
 	}
 	return true
@@ -448,8 +438,11 @@ func ivfRuntimeMembershipExpr(ctx context.Context, data []byte, left *plan.Expr)
 	right := &plan.Expr{
 		Typ: left.Typ,
 		Expr: &plan.Expr_Vec{Vec: &plan.LiteralVec{
-			Len:  int32(keyVec.Length()),
-			Data: append([]byte(nil), data...),
+			Len: int32(keyVec.Length()),
+			// The request owns this immutable payload for the reader generation.
+			// Local DOP readers deliberately share it instead of copying the whole
+			// exact domain once per shard.
+			Data: data,
 		}},
 	}
 	return ivfFuncExpr(ctx, function.InFunctionName, left, right)

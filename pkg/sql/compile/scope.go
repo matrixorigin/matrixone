@@ -31,6 +31,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	commonutil "github.com/matrixorigin/matrixone/pkg/common/util"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	indexplugin "github.com/matrixorigin/matrixone/pkg/indexplugin"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
@@ -1095,6 +1096,27 @@ func (s *Scope) waitForRuntimeFilters(c *Compile) ([]receivedRuntimeFilter, bool
 				if !ok {
 					panic("expect runtime filter message, receive unknown message!")
 				}
+				if spec.RequiredVectorSearchDomain {
+					switch msg.Typ {
+					case message.RuntimeFilter_PASS:
+						return nil, false, moerr.NewInvalidStateNoCtx(
+							"required vector search domain is unavailable")
+					case message.RuntimeFilter_DROP:
+						// An empty build is an exact empty domain.
+					case message.RuntimeFilter_UNIQUEJOINKEYS:
+						keyVector := new(vector.Vector)
+						if msg.Card <= 0 || len(msg.Data) == 0 ||
+							keyVector.UnmarshalBinary(msg.Data) != nil ||
+							keyVector.Length() != int(msg.Card) || keyVector.HasNull() ||
+							spec.Expr == nil || keyVector.GetType().Oid != types.T(spec.Expr.Typ.Id) {
+							return nil, false, moerr.NewInvalidStateNoCtx(
+								"required vector search domain is malformed")
+						}
+					default:
+						return nil, false, moerr.NewInvalidStateNoCtxf(
+							"required vector search domain has invalid message type %d", msg.Typ)
+					}
+				}
 				switch msg.Typ {
 				case message.RuntimeFilter_PASS:
 					continue
@@ -1873,6 +1895,7 @@ func (s *Scope) buildReaders(c *Compile) (readers []engine.Reader, err error) {
 }
 
 func (s *Scope) buildVectorIndexReaders(runtimeFilters []receivedRuntimeFilter) ([]engine.Reader, error) {
+	parallelism := max(1, s.NodeInfo.Mcpu)
 	node := s.DataSource.node
 	spec := node.GetVectorIndexScan()
 	if spec == nil || spec.GetIndex() == nil {
@@ -1903,13 +1926,25 @@ func (s *Scope) buildVectorIndexReaders(runtimeFilters []receivedRuntimeFilter) 
 		return nil, err
 	}
 	if !hasQuery {
-		return []engine.Reader{new(readutil.EmptyReader)}, nil
+		readers := make([]engine.Reader, parallelism)
+		for i := range readers {
+			readers[i] = new(readutil.EmptyReader)
+		}
+		return readers, nil
 	}
-	reader, err := searcher.Search().NewReader(s.Proc, spec, req)
+	readers, err := searcher.Search().NewReaders(s.Proc, spec, req, parallelism)
 	if err != nil {
 		return nil, err
 	}
-	return []engine.Reader{reader}, nil
+	if len(readers) != parallelism {
+		for _, reader := range readers {
+			_ = reader.Close()
+		}
+		return nil, moerr.NewInvalidStateNoCtxf(
+			"vector search plugin returned %d readers for parallelism %d",
+			len(readers), parallelism)
+	}
+	return readers, nil
 }
 
 func vectorScanMembershipFilter(runtimeFilters []receivedRuntimeFilter) ([]byte, bool) {

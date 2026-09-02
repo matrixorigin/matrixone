@@ -21,6 +21,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -32,7 +33,9 @@ import (
 	searchplugin "github.com/matrixorigin/matrixone/pkg/indexplugin/search"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
+	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/cache"
@@ -46,11 +49,12 @@ import (
 // planReader is the IVF-FLAT implementation of an optimizer-visible vector
 // index scan. It owns one execution generation and its direct relation scanner.
 type planReader struct {
-	proc    *process.Process
-	spec    *plan.VectorIndexScan
-	req     searchplugin.Request
-	scanner *relationScanner
-	closed  bool
+	proc        *process.Process
+	spec        *plan.VectorIndexScan
+	req         searchplugin.Request
+	scanner     *relationScanner
+	closed      bool
+	ownsContext bool
 
 	initialized  bool
 	keys         []any
@@ -63,6 +67,16 @@ type planReader struct {
 var _ engine.Reader = (*planReader)(nil)
 
 func NewPlanReader(proc *process.Process, spec *plan.VectorIndexScan, req searchplugin.Request) (engine.Reader, error) {
+	return newPlanReader(proc, spec, req, false, nil)
+}
+
+func newPlanReader(
+	proc *process.Process,
+	spec *plan.VectorIndexScan,
+	req searchplugin.Request,
+	ownsContext bool,
+	snapshotTxn *sharedSnapshotTxn,
+) (engine.Reader, error) {
 	if proc == nil || proc.GetTxnOperator() == nil || proc.GetSessionInfo() == nil || proc.GetSessionInfo().StorageEngine == nil {
 		return nil, moerr.NewInvalidStateNoCtx("ivfflat vector scan requires a process, transaction, and storage engine")
 	}
@@ -72,9 +86,13 @@ func NewPlanReader(proc *process.Process, spec *plan.VectorIndexScan, req search
 	if req.CandidateBudget < req.ResultLimit {
 		return nil, moerr.NewInvalidInputNoCtx("ivfflat candidate budget is smaller than the result limit")
 	}
-	r := &planReader{proc: proc, spec: spec, req: req}
+	if snapshotTxn == nil {
+		snapshotTxn = new(sharedSnapshotTxn)
+	}
+	r := &planReader{proc: proc, spec: spec, req: req, ownsContext: ownsContext}
 	r.scanner = &relationScanner{
 		proc:           proc,
+		snapshotTxn:    snapshotTxn,
 		partitionCount: req.Identity.PartitionCount,
 		partitionIndex: req.Identity.PartitionIndex,
 		ownsInMemory:   ownsInMemoryPartition(req.Identity.PartitionCount, req.Identity.PartitionIndex),
@@ -86,6 +104,63 @@ func NewPlanReader(proc *process.Process, spec *plan.VectorIndexScan, req search
 		r.scanner.accountID = &accountID
 	}
 	return r, nil
+}
+
+// NewPlanReaders expands one CN partition into disjoint local reader shards.
+// Metadata and centroid reads remain replicated, while entries object ownership
+// uses the combined CN/local-reader ordinal.
+func NewPlanReaders(
+	proc *process.Process,
+	spec *plan.VectorIndexScan,
+	req searchplugin.Request,
+	parallelism int,
+) ([]engine.Reader, error) {
+	if parallelism <= 0 {
+		return nil, moerr.NewInvalidInputNoCtx("ivfflat reader parallelism must be positive")
+	}
+	if proc == nil {
+		return nil, moerr.NewInvalidStateNoCtx("ivfflat vector scan requires a process")
+	}
+	if parallelism > 1 && proc.Ctx == nil {
+		return nil, moerr.NewInvalidStateNoCtx("parallel ivfflat readers require a pipeline context")
+	}
+	baseCount := req.Identity.PartitionCount
+	if baseCount <= 0 {
+		baseCount = 1
+	}
+	baseIndex := req.Identity.PartitionIndex
+	if baseIndex < 0 || baseIndex >= baseCount {
+		return nil, moerr.NewInvalidInputNoCtx("ivfflat reader partition index is out of range")
+	}
+	const maxInt32 = int64(^uint32(0) >> 1)
+	if int64(parallelism) > maxInt32/int64(baseCount) {
+		return nil, moerr.NewInvalidInputNoCtx("ivfflat reader partition count overflows int32")
+	}
+	readers := make([]engine.Reader, 0, parallelism)
+	snapshotTxn := new(sharedSnapshotTxn)
+	for i := 0; i < parallelism; i++ {
+		shardReq := req
+		shardReq.Identity.PartitionCount = baseCount * int32(parallelism)
+		shardReq.Identity.PartitionIndex = baseIndex*int32(parallelism) + int32(i)
+		readerProc := proc
+		ownsContext := false
+		if parallelism > 1 {
+			readerProc = proc.NewContextChildProc(0)
+			ownsContext = true
+		}
+		reader, err := newPlanReader(readerProc, spec, shardReq, ownsContext, snapshotTxn)
+		if err != nil {
+			if ownsContext && readerProc.Cancel != nil {
+				readerProc.Cancel(err)
+			}
+			for _, opened := range readers {
+				_ = opened.Close()
+			}
+			return nil, err
+		}
+		readers = append(readers, reader)
+	}
+	return readers, nil
 }
 
 func ownsInMemoryPartition(partitionCount, partitionIndex int32) bool {
@@ -122,6 +197,10 @@ func (r *planReader) Close() error {
 	r.includeData = nil
 	r.includeNulls = nil
 	r.scanner = nil
+	if r.ownsContext && r.proc != nil && r.proc.Cancel != nil {
+		r.proc.Cancel(nil)
+	}
+	r.proc = nil
 	return nil
 }
 
@@ -372,9 +451,9 @@ func searchPlanReader[T types.RealNumbers](
 	if source := r.spec.SourceTable; source != nil && source.PubInfo != nil {
 		key = fmt.Sprintf("tenant=%d:%s", source.PubInfo.TenantId, key)
 	}
-	if r.req.Identity.PartitionCount > 1 {
-		key = fmt.Sprintf("%s:%d/%d", key, r.req.Identity.PartitionIndex, r.req.Identity.PartitionCount)
-	}
+	// The cache owns only the replicated centroid model.  Entry reads use the
+	// caller's execution-local SqlProcess and physical shard identity, so local
+	// readers and CNs must not duplicate the centroid cache by partition ordinal.
 
 	multiRound := r.req.HasFirstRound || r.spec.BucketExpandStep > 0
 	var cursor *vectorindex.IvfSearchCursor
@@ -511,12 +590,30 @@ func (r *planReader) sortAndLimit(candidateLimit uint64) {
 // transaction. It is the direct-engine replacement for sqlexec.RunSql.
 type relationScanner struct {
 	proc           *process.Process
+	snapshotTxn    *sharedSnapshotTxn
 	accountID      *uint32
 	snapshot       *plan.Snapshot
 	partitionCount int32
 	partitionIndex int32
 	ownsInMemory   bool
 	txnOffset      int
+}
+
+// sharedSnapshotTxn seals one older-snapshot clone for all local shards in a
+// reader generation. Process children share BaseProcess, whose legacy clone
+// slot is not a per-reader synchronization boundary.
+type sharedSnapshotTxn struct {
+	mu  sync.Mutex
+	txn client.TxnOperator
+}
+
+func (s *sharedSnapshotTxn) getOrCreate(parent client.TxnOperator, snapshot timestamp.Timestamp) client.TxnOperator {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.txn == nil {
+		s.txn = parent.CloneSnapshotOp(snapshot)
+	}
+	return s.txn
 }
 
 var _ sqlexec.RelationScanExecutor = (*relationScanner)(nil)
@@ -531,12 +628,10 @@ func (s *relationScanner) ScanRelation(req sqlexec.RelationScanRequest) (res exe
 	if s.snapshot != nil && s.snapshot.TS != nil &&
 		(s.snapshot.TS.LogicalTime != 0 || s.snapshot.TS.PhysicalTime != 0) &&
 		s.snapshot.TS.Less(txn.Txn().SnapshotTS) {
-		clone := s.proc.GetCloneTxnOperator()
-		if clone == nil {
-			clone = txn.CloneSnapshotOp(*s.snapshot.TS)
-			s.proc.SetCloneTxnOperator(clone)
+		if s.snapshotTxn == nil {
+			s.snapshotTxn = new(sharedSnapshotTxn)
 		}
-		txn = clone
+		txn = s.snapshotTxn.getOrCreate(txn, *s.snapshot.TS)
 	}
 	db, err := s.proc.GetSessionInfo().StorageEngine.Database(ctx, req.Schema, txn)
 	if err != nil {

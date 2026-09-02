@@ -19,6 +19,7 @@ import (
 	"context"
 	"errors"
 	"math"
+	"sync"
 	"testing"
 
 	"github.com/golang/mock/gomock"
@@ -37,6 +38,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
+	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/cache"
@@ -264,7 +266,7 @@ func TestStorageTopKEligibility(t *testing.T) {
 	sqlproc.IvfHasMembershipFilter = true
 	require.False(t, canUseStorageTopK(sqlproc, centroids, nil, 1, true))
 	sqlproc.IvfMembershipFilter = []byte{1}
-	require.True(t, canUseStorageTopK(sqlproc, centroids, nil, 1, true))
+	require.False(t, canUseStorageTopK(sqlproc, centroids, nil, 1, true))
 	sqlproc.IvfHasMembershipFilter = false
 	sqlproc.IndexReaderParam = &plan.IndexReaderParam{DistRange: &plan.DistRange{
 		LowerBoundType: plan.BoundType_INCLUSIVE,
@@ -386,7 +388,7 @@ func TestScanEntriesPushesDistanceRangeToStorageTopK(t *testing.T) {
 		require.Equal(t, metric.DistFn_L2Distance, req.IndexParam.OrigFuncName)
 		require.NotNil(t, req.IndexParam.DistRange)
 		require.Equal(t, float64(2), req.IndexParam.DistRange.UpperBound.GetLit().GetDval())
-		require.Equal(t, []byte{1}, req.FilterHint.MembershipFilterBytes)
+		require.Empty(t, req.FilterHint.MembershipFilterBytes)
 
 		bat := batch.NewWithSize(len(req.Columns) + 1)
 		bat.Vecs[0] = vector.NewVec(types.T_int64.ToType())
@@ -407,8 +409,6 @@ func TestScanEntriesPushesDistanceRangeToStorageTopK(t *testing.T) {
 
 	sqlproc := sqlexec.NewSqlProcess(proc)
 	sqlproc.RelationScanner = scanner
-	sqlproc.IvfHasMembershipFilter = true
-	sqlproc.IvfMembershipFilter = []byte{1}
 	sqlproc.IndexReaderParam = &plan.IndexReaderParam{DistRange: &plan.DistRange{
 		LowerBoundType: plan.BoundType_UNBOUNDED,
 		UpperBoundType: plan.BoundType_INCLUSIVE,
@@ -1357,9 +1357,38 @@ func TestRelationScannerUsesSnapshotCloneAndPublisherAccount(t *testing.T) {
 		PartitionCount:    1,
 	}})
 	require.NoError(t, err)
-	_, err = reader.(*planReader).scanner.ScanRelation(sqlexec.RelationScanRequest{Schema: "db", Table: "entries"})
+	planReader := reader.(*planReader)
+	_, err = planReader.scanner.ScanRelation(sqlexec.RelationScanRequest{Schema: "db", Table: "entries"})
 	require.ErrorContains(t, err, "snapshot relation unavailable")
-	require.Same(t, clone, proc.GetCloneTxnOperator())
+	require.Same(t, clone, planReader.scanner.snapshotTxn.txn)
+	require.Nil(t, proc.GetCloneTxnOperator())
+}
+
+func TestSharedSnapshotTxnCreatesOneCloneAcrossReaders(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	parent := mock_frontend.NewMockTxnOperator(ctrl)
+	clone := mock_frontend.NewMockTxnOperator(ctrl)
+	snapshotTS := timestamp.Timestamp{PhysicalTime: 8}
+	parent.EXPECT().CloneSnapshotOp(snapshotTS).Return(clone).Times(1)
+
+	state := new(sharedSnapshotTxn)
+	start := make(chan struct{})
+	results := make(chan client.TxnOperator, 8)
+	var readers sync.WaitGroup
+	readers.Add(cap(results))
+	for i := 0; i < cap(results); i++ {
+		go func() {
+			defer readers.Done()
+			<-start
+			results <- state.getOrCreate(parent, snapshotTS)
+		}()
+	}
+	close(start)
+	readers.Wait()
+	close(results)
+	for result := range results {
+		require.Same(t, clone, result)
+	}
 }
 
 func TestRelationScannerKeepsCurrentTxnForEqualAndAheadSnapshots(t *testing.T) {
@@ -1777,8 +1806,8 @@ func TestSearchPlanReaderValidatesRoundLimitsBeforeScanning(t *testing.T) {
 	require.NoError(t, searchPlanReader(reader, nil, idxcfg, tblcfg, []float32{0}))
 }
 
-func TestSearchPlanReaderUsesBoundedMembershipStorageTopK(t *testing.T) {
-	const cacheKey = "tenant=42:centroids_plan_reader:77:1/2"
+func TestSearchPlanReaderAppliesMembershipBeforeBoundedLocalTopK(t *testing.T) {
+	const cacheKey = "tenant=42:centroids_plan_reader:77"
 	cache.Cache.Remove(cacheKey)
 	t.Cleanup(func() { cache.Cache.Remove(cacheKey) })
 
@@ -1803,29 +1832,19 @@ func TestSearchPlanReaderUsesBoundedMembershipStorageTopK(t *testing.T) {
 		case "entries_plan_reader":
 			require.NotNil(t, req.IndexParam)
 			require.Equal(t, uint64(12), req.IndexParam.GetLimit().GetLit().GetU64Val())
-			require.False(t, req.PostFilterTopOnly)
-			require.NotNil(t, req.IndexParam.DistRange)
-			require.Equal(t, float64(3), req.IndexParam.DistRange.UpperBound.GetLit().GetDval())
-			require.NotEmpty(t, req.FilterHint.MembershipFilterBytes)
+			require.True(t, req.PostFilterTopOnly)
+			require.Nil(t, req.IndexParam.DistRange)
+			require.Empty(t, req.FilterHint.MembershipFilterBytes)
 			filterFn := req.Filter.GetF()
 			require.NotNil(t, filterFn)
-			require.Equal(t, function.PrefixInFunctionName, filterFn.Func.ObjName)
-			prefixes := new(vector.Vector)
-			require.NoError(t, prefixes.UnmarshalBinary(filterFn.Args[1].GetVec().Data))
-			require.Equal(t, 1, prefixes.Length(), "nprobe=1 must not expand to every centroid")
-			packer := types.NewPacker()
-			defer packer.Close()
-			packer.EncodeInt64(77)
-			packer.EncodeInt64(0)
-			require.Equal(t, packer.Bytes(), prefixes.GetBytesAt(0))
-			bat := batch.NewWithSize(7)
+			require.Equal(t, function.AndFunctionName, filterFn.Func.ObjName)
+			require.Equal(t, function.InFunctionName, filterFn.Args[1].GetF().Func.ObjName)
+			bat := batch.NewWithSize(5)
 			bat.Vecs[0] = vector.NewVec(types.T_int64.ToType())
 			bat.Vecs[1] = vector.NewVec(types.T_int64.ToType())
 			bat.Vecs[2] = vector.NewVec(types.T_int64.ToType())
 			bat.Vecs[3] = vector.NewVec(types.New(types.T_array_float32, 2, 0))
 			bat.Vecs[4] = vector.NewVec(types.T_int32.ToType())
-			bat.Vecs[5] = vector.NewVec(types.T_varchar.ToType())
-			bat.Vecs[6] = vector.NewVec(types.T_float64.ToType())
 			for _, row := range []struct {
 				pk  int64
 				vec []float32
@@ -1835,8 +1854,6 @@ func TestSearchPlanReaderUsesBoundedMembershipStorageTopK(t *testing.T) {
 				require.NoError(t, vector.AppendFixed(bat.Vecs[2], row.pk, false, mp))
 				require.NoError(t, vector.AppendArray(bat.Vecs[3], row.vec, false, mp))
 				require.NoError(t, vector.AppendFixed(bat.Vecs[4], int32(row.pk*10), false, mp))
-				require.NoError(t, vector.AppendBytes(bat.Vecs[5], []byte("cpkey"), false, mp))
-				require.NoError(t, vector.AppendFixed(bat.Vecs[6], float64((row.pk-1)*(row.pk-1)), false, mp))
 			}
 			bat.SetRowCount(5)
 			return executor.Result{Mp: mp, Batches: []*batch.Batch{bat}}
@@ -2138,6 +2155,43 @@ func TestNewPlanReaderOwnsItsExecutionState(t *testing.T) {
 	r.SetIndexParam(nil)
 	r.SetFilterZM(objectio.ZoneMap{})
 	require.NoError(t, r.Close())
+
+	readers, err := NewPlanReaders(proc, &plan.VectorIndexScan{
+		Index:       &plan.IndexDef{},
+		SourceTable: &plan.ObjectRef{},
+	}, searchplugin.Request{Identity: searchplugin.ScanIdentity{
+		PartitionCount: 2,
+		PartitionIndex: 1,
+	}}, 3)
+	require.NoError(t, err)
+	require.Len(t, readers, 3)
+	for i, shard := range readers {
+		shardReader := shard.(*planReader)
+		require.Equal(t, int32(6), shardReader.scanner.partitionCount)
+		require.Equal(t, int32(3+i), shardReader.scanner.partitionIndex)
+		require.True(t, shardReader.ownsContext)
+		childContext := shardReader.proc.Ctx
+		require.NoError(t, childContext.Err())
+		require.NoError(t, shardReader.Close())
+		require.ErrorIs(t, childContext.Err(), context.Canceled)
+	}
+	readerSpec := &plan.VectorIndexScan{
+		Index:       &plan.IndexDef{},
+		SourceTable: &plan.ObjectRef{},
+	}
+	_, err = NewPlanReaders(proc, readerSpec, searchplugin.Request{}, 0)
+	require.ErrorContains(t, err, "parallelism must be positive")
+	_, err = NewPlanReaders(nil, readerSpec, searchplugin.Request{}, 2)
+	require.ErrorContains(t, err, "requires a process")
+	_, err = NewPlanReaders(proc, readerSpec, searchplugin.Request{Identity: searchplugin.ScanIdentity{
+		PartitionCount: 2,
+		PartitionIndex: 2,
+	}}, 2)
+	require.ErrorContains(t, err, "partition index is out of range")
+	_, err = NewPlanReaders(proc, readerSpec, searchplugin.Request{Identity: searchplugin.ScanIdentity{
+		PartitionCount: math.MaxInt32,
+	}}, 2)
+	require.ErrorContains(t, err, "partition count overflows")
 
 	publisherID := uint32(42)
 	reader, err = NewPlanReader(proc, &plan.VectorIndexScan{

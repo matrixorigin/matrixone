@@ -113,15 +113,16 @@ deallocate prepare null_both;
 select id from u where l2_distance(v,'[1,1,1]') < lim order by id;
 
 -- ============ large PRE membership + distance threshold (#27854) ============
--- More than exactPkFilterThreshold source rows force the bounded membership
--- path. The distance range must remain inside storage Top-K instead of making
--- CN read and score every selected entry vector.
+-- More than exactPkFilterThreshold source rows force the large membership
+-- path. Nearer nonmembers must not fill local Top-K before the exact PRE domain
+-- is applied; the distance range must also be evaluated before final admission.
 create table filtered_t(id int primary key, file_id varchar(20), v vecf32(3), key idx_file_id(file_id));
 insert into filtered_t values
     (1,'file1','[1,0,0]'),
     (2,'file1','[2,0,0]'),
     (3,'file1','[3,0,0]');
 insert into filtered_t select result + 3, 'file1', '[100,0,0]' from generate_series(1, 101) g;
+insert into filtered_t select result + 104, 'file2', '[0,0,0]' from generate_series(1, 20) g;
 create index filtered_idx using ivfflat on filtered_t(v) lists=1 op_type 'vector_l2_ops';
 
 select id from filtered_t

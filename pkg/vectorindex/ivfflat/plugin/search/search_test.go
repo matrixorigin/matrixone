@@ -23,8 +23,8 @@ import (
 )
 
 func TestHooksRejectIncompleteExecutionContext(t *testing.T) {
-	_, err := (Hooks{}).NewReader(nil, &plan.VectorIndexScan{
+	_, err := (Hooks{}).NewReaders(nil, &plan.VectorIndexScan{
 		Index: &plan.IndexDef{IndexAlgo: "ivfflat"},
-	}, searchplugin.Request{CandidateBudget: 1})
+	}, searchplugin.Request{CandidateBudget: 1}, 1)
 	require.Error(t, err)
 }

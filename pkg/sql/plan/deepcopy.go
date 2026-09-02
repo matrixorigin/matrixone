@@ -1044,15 +1044,16 @@ func DeepCopyRuntimeFilterSpec(rf *plan.RuntimeFilterSpec) *plan.RuntimeFilterSp
 		return nil
 	}
 	return &plan.RuntimeFilterSpec{
-		Tag:                 rf.Tag,
-		MatchPrefix:         rf.MatchPrefix,
-		UpperLimit:          rf.UpperLimit,
-		Expr:                DeepCopyExpr(rf.Expr),
-		BuildExpr:           DeepCopyExpr(rf.BuildExpr),
-		NotOnPk:             rf.NotOnPk,
-		UseMembershipFilter: rf.UseMembershipFilter,
-		KeyEncoding:         rf.KeyEncoding,
-		ProbeType:           DeepCopyType(rf.ProbeType),
+		Tag:                        rf.Tag,
+		MatchPrefix:                rf.MatchPrefix,
+		UpperLimit:                 rf.UpperLimit,
+		Expr:                       DeepCopyExpr(rf.Expr),
+		BuildExpr:                  DeepCopyExpr(rf.BuildExpr),
+		NotOnPk:                    rf.NotOnPk,
+		UseMembershipFilter:        rf.UseMembershipFilter,
+		RequiredVectorSearchDomain: rf.RequiredVectorSearchDomain,
+		KeyEncoding:                rf.KeyEncoding,
+		ProbeType:                  DeepCopyType(rf.ProbeType),
 		KeyComponentProbeTypes: slices.Clone(
 			rf.KeyComponentProbeTypes,
 		),

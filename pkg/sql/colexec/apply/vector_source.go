@@ -104,11 +104,17 @@ func (s *vectorSource) ApplyStart(row int, proc *process.Process, _ process.Anal
 	if !ok {
 		return moerr.NewNotSupportedf(proc.Ctx, "vector index algorithm %q has no scan reader", spec.Index.IndexAlgo)
 	}
-	reader, err := searcher.Search().NewReader(proc, spec, req)
+	readers, err := searcher.Search().NewReaders(proc, spec, req, 1)
 	if err != nil {
 		return err
 	}
-	s.reader = reader
+	if len(readers) != 1 {
+		for _, reader := range readers {
+			_ = reader.Close()
+		}
+		return moerr.NewInvalidState(proc.Ctx, "correlated vector search did not return exactly one reader")
+	}
+	s.reader = readers[0]
 	return nil
 }
 

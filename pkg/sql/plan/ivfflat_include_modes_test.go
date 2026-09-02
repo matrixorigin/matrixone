@@ -300,7 +300,8 @@ func TestApplyIndicesForSortUsingIvfflat_IncludeModePartialPushdownKeepsResidual
 	assert.Zero(t, tableFuncNode.VectorIndexScan.BucketExpandStep)
 	require.Len(t, tableFuncNode.RuntimeFilterProbeList, 1)
 	require.True(t, tableFuncNode.RuntimeFilterProbeList[0].UseMembershipFilter)
-	require.True(t, tableFuncNode.Stats.GetForceOneCN())
+	require.True(t, tableFuncNode.RuntimeFilterProbeList[0].RequiredVectorSearchDomain)
+	require.False(t, tableFuncNode.Stats.GetForceOneCN())
 	for _, node := range builder.qry.Nodes {
 		if node != nil && len(node.RuntimeFilterBuildList) > 0 {
 			require.Equal(t, plan.Node_SEMI, node.JoinType)
@@ -343,7 +344,8 @@ func TestApplyIndicesForSortUsingIvfflat_IncludeModeResidualOnlyUsesSingleRoundP
 	require.Zero(t, tableFuncNode.VectorIndexScan.FirstRoundLimit)
 	require.Len(t, tableFuncNode.RuntimeFilterProbeList, 1)
 	require.True(t, tableFuncNode.RuntimeFilterProbeList[0].UseMembershipFilter)
-	require.True(t, tableFuncNode.Stats.GetForceOneCN())
+	require.True(t, tableFuncNode.RuntimeFilterProbeList[0].RequiredVectorSearchDomain)
+	require.False(t, tableFuncNode.Stats.GetForceOneCN())
 	require.Len(t, scanNode.FilterList, 1)
 	require.Equal(t, "note", scanNode.FilterList[0].GetF().Args[0].GetCol().Name)
 }
@@ -389,6 +391,45 @@ func TestApplyIndicesForSortUsingIvfflat_ProtocolVersionDoesNotGateScan(t *testi
 	require.Equal(t, "note", scanNode.FilterList[0].GetF().Args[0].GetCol().Name)
 }
 
+func TestDistributedVectorDomainProtocolGate(t *testing.T) {
+	builder, _, scanNode, scanNodeID, multiTableIndex := newIvfIncludeModeTestBuilder(t)
+	service := builder.compCtx.GetProcess().GetService()
+	rt := moruntime.ServiceRuntime(service)
+	original, hadOriginal := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
+	t.Cleanup(func() {
+		if hadOriginal {
+			rt.SetGlobalVariables(moruntime.MOProtocolVersion, original)
+		} else {
+			rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCLatestVersion)
+		}
+	})
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion42)
+	require.False(t, localProtocolEnablesDistributedVectorDomain(service))
+	scanTag := scanNode.BindingTags[0]
+	scanNode.FilterList = []*plan.Expr{{
+		Typ: plan.Type{Id: int32(types.T_bool)},
+		Expr: &plan.Expr_F{F: &plan.Function{
+			Func: &plan.ObjectRef{ObjName: "="},
+			Args: []*plan.Expr{
+				{Typ: scanNode.TableDef.Cols[3].Typ, Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: scanTag, ColPos: 3, Name: "category"}}},
+				MakePlan2Int32ConstExprWithType(20),
+			},
+		}},
+	}}
+	vecCtx := newIvfIncludeModeVectorSortContext(scanNode, scanNodeID, "pre", 0, 2, 3)
+	_, err := builder.applyIndicesForSortUsingIvfflat(
+		scanNodeID, vecCtx, multiTableIndex, nil, nil)
+	require.NoError(t, err)
+	tableFuncNode := findIvfTableFunctionNode(builder, vecCtx.projNode.Children[0])
+	require.NotNil(t, tableFuncNode)
+	require.Len(t, tableFuncNode.RuntimeFilterProbeList, 1)
+	require.True(t, tableFuncNode.RuntimeFilterProbeList[0].RequiredVectorSearchDomain)
+	require.True(t, tableFuncNode.Stats.GetForceOneCN())
+
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion43)
+	require.True(t, localProtocolEnablesDistributedVectorDomain(service))
+}
+
 func TestApplyIndicesForSortUsingIvfflat_PreModeDoesNotAutoUseIncludePushdown(t *testing.T) {
 	builder, _, scanNode, scanNodeID, multiTableIndex := newIvfIncludeModeTestBuilder(t)
 
@@ -425,7 +466,8 @@ func TestApplyIndicesForSortUsingIvfflat_PreModeDoesNotAutoUseIncludePushdown(t 
 	require.True(t, tableFuncNode.VectorIndexScan.GetPostFilterOverFetch())
 	require.Empty(t, tableFuncNode.VectorIndexScan.PreFilters)
 	require.Len(t, tableFuncNode.RuntimeFilterProbeList, 1)
-	require.True(t, tableFuncNode.Stats.GetForceOneCN())
+	require.True(t, tableFuncNode.RuntimeFilterProbeList[0].RequiredVectorSearchDomain)
+	require.False(t, tableFuncNode.Stats.GetForceOneCN())
 }
 
 func TestApplyIndicesForSortUsingIvfflat_PreModeWithoutFiltersUsesCandidateWindow(t *testing.T) {
@@ -504,7 +546,8 @@ func TestApplyIndicesForSortUsingIvfflat_PreModeWithFiltersUsesCandidateWindow(t
 	require.True(t, tableFuncNode.VectorIndexScan.GetPostFilterOverFetch())
 	require.Empty(t, tableFuncNode.VectorIndexScan.PreFilters)
 	require.Len(t, tableFuncNode.RuntimeFilterProbeList, 1)
-	require.True(t, tableFuncNode.Stats.GetForceOneCN())
+	require.True(t, tableFuncNode.RuntimeFilterProbeList[0].RequiredVectorSearchDomain)
+	require.False(t, tableFuncNode.Stats.GetForceOneCN())
 }
 
 func TestApplyIndicesForSortUsingIvfflat_IncludeModeWithoutMetadataFallsBackToPost(t *testing.T) {

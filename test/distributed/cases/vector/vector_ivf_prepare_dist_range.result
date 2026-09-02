@@ -128,6 +128,7 @@ insert into filtered_t values
 (2,'file1','[2,0,0]'),
 (3,'file1','[3,0,0]');
 insert into filtered_t select result + 3, 'file1', '[100,0,0]' from generate_series(1, 101) g;
+insert into filtered_t select result + 104, 'file2', '[0,0,0]' from generate_series(1, 20) g;
 create index filtered_idx using ivfflat on filtered_t(v) lists=1 op_type 'vector_l2_ops';
 select id from filtered_t
 where file_id = 'file1' and l2_distance(v,'[0,0,0]') <= 3

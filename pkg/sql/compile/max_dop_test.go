@@ -561,7 +561,7 @@ func TestCompileVectorIndexScanUsesAllQueryCNs(t *testing.T) {
 				{Name: "score", Typ: plan.Type{Id: 31}},
 			},
 		},
-		Stats: &plan.Stats{Outcnt: 10},
+		Stats: &plan.Stats{Outcnt: 10, Dop: 3},
 		ScanSnapshot: &plan.Snapshot{
 			TS:     &timestamp.Timestamp{PhysicalTime: 123},
 			Tenant: &plan.SnapshotTenant{TenantID: 7},
@@ -580,7 +580,7 @@ func TestCompileVectorIndexScanUsesAllQueryCNs(t *testing.T) {
 	for i, scope := range scopes {
 		require.Equal(t, int32(2), scope.NodeInfo.CNCNT)
 		require.Equal(t, int32(i), scope.NodeInfo.CNIDX)
-		require.Equal(t, 1, scope.NodeInfo.Mcpu)
+		require.Equal(t, 3, scope.NodeInfo.Mcpu)
 		require.Equal(t, node.ScanSnapshot, scope.DataSource.node.ScanSnapshot)
 		require.Equal(t, node.VectorIndexScan.ScanSnapshot, scope.DataSource.node.VectorIndexScan.ScanSnapshot)
 		require.NotSame(t, node.ScanSnapshot, scope.DataSource.node.ScanSnapshot)
@@ -592,6 +592,7 @@ func TestCompileVectorIndexScanUsesAllQueryCNs(t *testing.T) {
 	require.Len(t, scopes, 1)
 	require.Equal(t, "cn-local:6001", scopes[0].NodeInfo.Addr)
 	require.Equal(t, int32(1), scopes[0].NodeInfo.CNCNT)
+	require.Equal(t, 3, scopes[0].NodeInfo.Mcpu)
 }
 
 func TestNormalizeVectorIndexScanSnapshot(t *testing.T) {
