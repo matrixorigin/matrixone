@@ -6000,11 +6000,38 @@ func TestAnalyzeSituationResponseSendsAllResults(t *testing.T) {
 	}
 	require.NoError(t, resper.respBySituation(ses, execCtx))
 	require.Len(t, writer.responses, 2)
+	require.Equal(t, int(COM_QUERY), writer.responses[0].cmd)
+	require.Equal(t, int(COM_QUERY), writer.responses[1].cmd)
 	require.NotZero(t, writer.responses[0].GetStatus()&SERVER_MORE_RESULTS_EXISTS)
 	require.Zero(t, writer.responses[1].GetStatus()&SERVER_MORE_RESULTS_EXISTS)
 	require.Same(t, first, writer.responses[0].GetData().(*MysqlExecutionResult).Mrs())
 	require.Same(t, second, writer.responses[1].GetData().(*MysqlExecutionResult).Mrs())
 	require.Nil(t, execCtx.results)
+}
+
+func TestAnalyzeSituationResponseUsesBinaryRowsForStmtExecute(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+	ses := newTestSession(t, ctrl)
+	writer := &countingMysqlWriter{testMysqlWriter: &testMysqlWriter{}}
+	resper := NewMysqlResp(writer)
+	execCtx := &ExecCtx{
+		reqCtx:     context.Background(),
+		ses:        ses,
+		isLastStmt: true,
+		input:      &UserInput{isBinaryProtExecute: true},
+		results: []ExecResult{
+			makeAnalyzeCountResult("approx_count_distinct(a)", 2),
+			makeAnalyzeCountResult("approx_count_distinct(x)", 4),
+		},
+	}
+
+	require.NoError(t, resper.respBySituation(ses, execCtx))
+	require.Len(t, writer.responses, 2)
+	require.Equal(t, int(COM_STMT_EXECUTE), writer.responses[0].cmd)
+	require.Equal(t, int(COM_STMT_EXECUTE), writer.responses[1].cmd)
+	require.NotZero(t, writer.responses[0].GetStatus()&SERVER_MORE_RESULTS_EXISTS)
+	require.Zero(t, writer.responses[1].GetStatus()&SERVER_MORE_RESULTS_EXISTS)
 }
 
 func TestCallSituationResponseSendsFinalAffectedRows(t *testing.T) {
@@ -6980,12 +7007,16 @@ func TestDirectSessionStrictPoolWithoutLabelSelectorFailsClosed(t *testing.T) {
 	}
 	require.Empty(t, ses.getCNLabels())
 	require.NoError(t, ses.SetSessionSysVar(context.Background(), queryPoolStrict, int64(1)))
+	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+	defer cancel()
 
-	trace := previewQueryScheduling(
-		context.Background(),
+	trace := previewQuerySchedulingInContext(
+		ctx,
 		ses,
 		&plan0.Query{Nodes: []*plan0.Node{{NodeType: plan0.Node_TABLE_SCAN}}},
 		false,
+		"",
+		nil,
 	)
 
 	require.Len(t, trace.Attempts, 1)
@@ -7230,6 +7261,8 @@ func TestSchedulingPreviewHasIndependentTimeout(t *testing.T) {
 		ses,
 		&plan0.Query{Nodes: []*plan0.Node{{NodeType: plan0.Node_TABLE_SCAN}}},
 		false,
+		ses.GetSql(),
+		nil,
 	)
 
 	require.Less(t, time.Since(started), time.Second)
@@ -7268,6 +7301,8 @@ func TestSchedulingPreviewTimeoutBoundsPoolResolution(t *testing.T) {
 		ses,
 		&plan0.Query{Nodes: []*plan0.Node{{NodeType: plan0.Node_TABLE_SCAN}}},
 		false,
+		ses.GetSql(),
+		nil,
 	)
 
 	require.Less(t, time.Since(started), time.Second)
@@ -7309,6 +7344,8 @@ func TestSchedulingPreviewDoesNotCallBlockingLegacyEngine(t *testing.T) {
 			ses,
 			&plan0.Query{Nodes: []*plan0.Node{{NodeType: plan0.Node_TABLE_SCAN}}},
 			false,
+			ses.GetSql(),
+			nil,
 		)
 	}()
 

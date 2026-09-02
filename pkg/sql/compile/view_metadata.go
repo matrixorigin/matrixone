@@ -131,7 +131,7 @@ func (c *Compile) persistViewDependencies(
 	databaseName string,
 	viewDef *planpb.TableDef,
 ) error {
-	if c.proc.GetSessionInfo().IsRestore {
+	if needSkipDbs[databaseName] || c.proc.GetSessionInfo().IsRestore {
 		return nil
 	}
 	available, err := c.viewMetadataRefreshAvailable()
@@ -282,6 +282,9 @@ func (c *Compile) refreshViewsAfterRelationMutation(
 	oldRelationID uint64,
 	oldLogicalID uint64,
 ) error {
+	if needSkipDbs[databaseName] {
+		return nil
+	}
 	if c.proc.GetSessionInfo().IsRestore {
 		// Table/database restore invalidates at the relation-removal boundary,
 		// where the old physical and logical identities are still available.
@@ -294,9 +297,6 @@ func (c *Compile) refreshViewsAfterRelationMutation(
 		return err
 	}
 	if !available {
-		return nil
-	}
-	if needSkipDbs[databaseName] {
 		return nil
 	}
 	accountID, err := defines.GetAccountId(c.proc.Ctx)
@@ -468,7 +468,8 @@ func (c *Compile) enqueueViewsAfterRelationRemoval(
 	relationID uint64,
 	logicalID uint64,
 ) error {
-	if c.proc.GetSessionInfo().IsRestore && !restoreInvalidatesViewMetadata(c.proc.Ctx) {
+	if needSkipDbs[databaseName] ||
+		(c.proc.GetSessionInfo().IsRestore && !restoreInvalidatesViewMetadata(c.proc.Ctx)) {
 		return nil
 	}
 	available, err := c.viewMetadataRefreshAvailable()
@@ -476,9 +477,6 @@ func (c *Compile) enqueueViewsAfterRelationRemoval(
 		return err
 	}
 	if !available {
-		return nil
-	}
-	if needSkipDbs[databaseName] {
 		return nil
 	}
 	accountID, err := defines.GetAccountId(c.proc.Ctx)
@@ -499,8 +497,9 @@ func (c *Compile) enqueueViewsAfterRelationRemoval(
 		viewRefreshKeyForMutation(mutation))
 }
 
-func (c *Compile) deleteDroppedViewMetadata(relationID uint64) error {
-	if c.proc.GetSessionInfo().IsRestore && !restoreInvalidatesViewMetadata(c.proc.Ctx) {
+func (c *Compile) deleteDroppedViewMetadata(databaseName string, relationID uint64) error {
+	if needSkipDbs[databaseName] ||
+		(c.proc.GetSessionInfo().IsRestore && !restoreInvalidatesViewMetadata(c.proc.Ctx)) {
 		return nil
 	}
 	available, err := c.viewMetadataRefreshAvailable()
@@ -535,7 +534,8 @@ func (c *Compile) deleteDroppedDatabaseViewMetadata(
 	databaseID uint64,
 	databaseName string,
 ) error {
-	if c.proc.GetSessionInfo().IsRestore && !restoreInvalidatesViewMetadata(c.proc.Ctx) {
+	if needSkipDbs[databaseName] ||
+		(c.proc.GetSessionInfo().IsRestore && !restoreInvalidatesViewMetadata(c.proc.Ctx)) {
 		return nil
 	}
 	available, err := c.viewMetadataRefreshAvailable()
