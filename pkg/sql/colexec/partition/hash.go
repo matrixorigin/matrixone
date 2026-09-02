@@ -16,7 +16,6 @@ package partition
 
 import (
 	"math"
-	"sort"
 	"unsafe"
 
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
@@ -49,6 +48,7 @@ type hashContainer struct {
 	outputGroup     int
 	fallbackToSort  bool
 	spillThreshold  int64
+	observedMemory  int64
 }
 
 func (partition *Partition) prepareHash(proc *process.Process) (err error) {
@@ -109,7 +109,7 @@ func (partition *Partition) callHash(proc *process.Process) (vm.CallResult, erro
 				if err, canceled := vm.CancelCheck(proc); canceled {
 					return vm.CancelResult, err
 				}
-				if err = ctr.finalize(proc, partition.OrderBySpecs); err != nil {
+				if err = ctr.finalize(proc, partition.OpAnalyzer, partition.OrderBySpecs); err != nil {
 					return result, err
 				}
 				ctr.state = vm.Eval
@@ -146,16 +146,12 @@ func (partition *Partition) callHash(proc *process.Process) (vm.CallResult, erro
 }
 
 func (ctr *hashContainer) consume(proc *process.Process, analyzer process.Analyzer, input *batch.Batch) error {
-	before := 0
-	if ctr.retained != nil {
-		before = ctr.retained.Size()
-	}
 	var err error
 	ctr.retained, err = ctr.retained.AppendWithCopy(proc.Ctx, proc.Mp(), input)
 	if err != nil {
 		return err
 	}
-	analyzer.Alloc(int64(ctr.retained.Size() - before))
+	ctr.accountMemory(analyzer)
 	if ctr.fallbackToSort {
 		return nil
 	}
@@ -175,6 +171,7 @@ func (ctr *hashContainer) consume(proc *process.Process, analyzer process.Analyz
 		ctr.fallbackToSort = true
 		ctr.hash.Free0()
 		ctr.freeGroupIDs(proc.Mp())
+		ctr.accountMemory(analyzer)
 		return nil
 	}
 	hashKeys, normalizedKeys, err := normalizeHashPartitionKeys(
@@ -208,8 +205,10 @@ func (ctr *hashContainer) consume(proc *process.Process, analyzer process.Analyz
 			ctr.fallbackToSort = true
 			ctr.hash.Free0()
 			ctr.freeGroupIDs(proc.Mp())
+			ctr.accountMemory(analyzer)
 			break
 		}
+		ctr.accountMemory(analyzer)
 	}
 	return nil
 }
@@ -259,12 +258,12 @@ func freeNormalizedHashPartitionKeys(keys []*vector.Vector, mp *mpool.MPool) {
 	}
 }
 
-func (ctr *hashContainer) finalize(proc *process.Process, specs []*plan.OrderBySpec) error {
+func (ctr *hashContainer) finalize(proc *process.Process, analyzer process.Analyzer, specs []*plan.OrderBySpec) error {
 	if ctr.retained == nil || ctr.retained.RowCount() == 0 {
 		return nil
 	}
 	if ctr.fallbackToSort {
-		return ctr.finalizeSortFallback(proc, specs)
+		return ctr.finalizeSortFallback(proc, analyzer, specs)
 	}
 	groupCount := int(ctr.hash.Hash.GroupCount())
 	if groupCount == 0 || len(ctr.groupIDs) != ctr.retained.RowCount() {
@@ -288,6 +287,7 @@ func (ctr *hashContainer) finalize(proc *process.Process, specs []*plan.OrderByS
 	if err != nil {
 		return err
 	}
+	ctr.accountMemory(analyzer)
 	total := int64(0)
 	for i, count := range positions {
 		positions[i] = total
@@ -315,7 +315,7 @@ func (ctr *hashContainer) finalize(proc *process.Process, specs []*plan.OrderByS
 	return nil
 }
 
-func (ctr *hashContainer) finalizeSortFallback(proc *process.Process, specs []*plan.OrderBySpec) error {
+func (ctr *hashContainer) finalizeSortFallback(proc *process.Process, analyzer process.Analyzer, specs []*plan.OrderBySpec) error {
 	inputs := []*batch.Batch{ctr.retained}
 	for i := range ctr.partitionEval.Executor {
 		vec, err := ctr.partitionEval.Executor[i].Eval(proc, inputs, nil)
@@ -346,19 +346,11 @@ func (ctr *hashContainer) finalizeSortFallback(proc *process.Process, specs []*p
 		return err
 	}
 	defer mpool.FreeSlice(proc.Mp(), selections)
+	analyzer.Alloc(int64(cap(selections)) * int64(unsafe.Sizeof(int64(0))))
 	for i := range selections {
 		selections[i] = int64(i)
 	}
-	sort.SliceStable(selections, func(i, j int) bool {
-		for _, cmp := range compares {
-			result := cmp.Compare(0, 1, selections[i], selections[j])
-			if result != 0 {
-				return result < 0
-			}
-		}
-		return false
-	})
-	if err, canceled := vm.CancelCheck(proc); canceled {
+	if err := stableSortPartitionSelections(proc, analyzer, selections, compares); err != nil {
 		return err
 	}
 	groupCount := 1
@@ -396,6 +388,98 @@ func (ctr *hashContainer) finalizeSortFallback(proc *process.Process, specs []*p
 	}
 	ctr.groupBoundaries[boundary] = int64(len(selections))
 	return ctr.retained.Shuffle(selections, proc.Mp())
+}
+
+// stableSortPartitionSelections keeps the fallback equivalent to sort.SliceStable
+// while polling cancellation between bounded merge runs. A global fallback sort
+// can be large precisely when estimates were wrong, so cancellation must not
+// wait for the entire O(N log N) comparison phase to finish.
+func stableSortPartitionSelections(proc *process.Process, analyzer process.Analyzer, selections []int64, compares []compare.Compare) error {
+	if err, canceled := vm.CancelCheck(proc); canceled {
+		return err
+	}
+	if len(selections) < 2 {
+		return nil
+	}
+	scratch, err := mpool.MakeSlice[int64](len(selections), proc.Mp(), true)
+	if err != nil {
+		return err
+	}
+	defer mpool.FreeSlice(proc.Mp(), scratch)
+	analyzer.Alloc(int64(cap(scratch)) * int64(unsafe.Sizeof(int64(0))))
+
+	src, dst := selections, scratch
+	sourceIsSelections := true
+	for width := 1; width < len(selections); {
+		for left := 0; left < len(selections); {
+			if err := checkCanceled(proc, left); err != nil {
+				return err
+			}
+			mid := left + width
+			if mid >= len(selections) {
+				copy(dst[left:], src[left:])
+				break
+			}
+			right := mid + width
+			if right < mid || right > len(selections) {
+				right = len(selections)
+			}
+			i, j, out := left, mid, left
+			for i < mid && j < right {
+				if err := checkCanceled(proc, out); err != nil {
+					return err
+				}
+				if partitionSelectionLess(compares, src[j], src[i]) {
+					dst[out] = src[j]
+					j++
+				} else {
+					dst[out] = src[i]
+					i++
+				}
+				out++
+			}
+			out += copy(dst[out:], src[i:mid])
+			copy(dst[out:], src[j:right])
+			left = right
+		}
+		src, dst = dst, src
+		sourceIsSelections = !sourceIsSelections
+		if width > len(selections)/2 {
+			width = len(selections)
+		} else {
+			width *= 2
+		}
+	}
+	if !sourceIsSelections {
+		copy(selections, src)
+	}
+	return nil
+}
+
+func partitionSelectionLess(compares []compare.Compare, left, right int64) bool {
+	for _, cmp := range compares {
+		result := cmp.Compare(0, 1, left, right)
+		if result != 0 {
+			return result < 0
+		}
+	}
+	return false
+}
+
+func (ctr *hashContainer) accountMemory(analyzer process.Analyzer) {
+	current := int64(0)
+	if ctr.retained != nil {
+		current += int64(ctr.retained.Size())
+	}
+	if ctr.hash.Hash != nil {
+		current += ctr.hash.Hash.Size()
+	}
+	current += int64(cap(ctr.groupIDs)) * int64(unsafe.Sizeof(uint64(0)))
+	current += int64(cap(ctr.groupBoundaries)) * int64(unsafe.Sizeof(int64(0)))
+	if current > ctr.observedMemory {
+		analyzer.Alloc(current - ctr.observedMemory)
+	}
+	ctr.observedMemory = current
 }
 
 func growHashPartitionSlice[T any](values []T, required int, mp *mpool.MPool) ([]T, error) {
@@ -461,6 +545,7 @@ func (ctr *hashContainer) reset(proc *process.Process) {
 	ctr.freeGroupBoundaries(proc.Mp())
 	ctr.outputGroup = 0
 	ctr.fallbackToSort = false
+	ctr.observedMemory = 0
 	ctr.keyNullable = false
 	ctr.isStrHash = false
 	ctr.state = vm.Build

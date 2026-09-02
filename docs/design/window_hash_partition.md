@@ -3,9 +3,10 @@
 - Status: pending independent design review
 - Tracking issue: [matrixorigin/matrixone#27943](https://github.com/matrixorigin/matrixone/issues/27943)
 - Owner: iamlinjunhong
-- Base commit: `33af6ae3c0c23e4f277137460577ea64678f7ecf`
+- Base commit: `c46d897e9645b80178568ef0783dd8e99e527222`
 - Implementation PR: [matrixorigin/matrixone#27972](https://github.com/matrixorigin/matrixone/pull/27972)
-- Last updated: 2026-09-01
+- Design revision: `window-hash-partition-2026-09-02`
+- Last updated: 2026-09-02
 
 ## 1. Decision
 
@@ -94,12 +95,16 @@ HASH is considered only when all conditions hold:
   equality identical to the current partition comparator.
 
 The first allowlist accepts boolean, signed/unsigned integer, decimal, date/time,
-timestamp, UUID, enum, binary, varbinary, char, varchar, text, blob, and supported
+timestamp, UUID, enum, binary, varbinary, varchar, text, blob, and supported
 fixed-width opaque identifiers after type-specific tests prove equality. FLOAT,
 DOUBLE, JSON, arrays, tuples, and other composite or newly introduced types fail
-closed to SORT. In particular, signed zero, NaN, JSON normalization, collation,
-padding, and NULL equality must not silently change partition membership. The
-compatibility predicate is shared with partition Top-N instead of duplicated.
+closed to SORT. CHAR is also rejected in this revision because its padding
+semantics have not yet been proven equivalent to the group hash table. In
+particular, signed zero, NaN, JSON normalization, collation, padding, and NULL
+equality must not silently change partition membership. Partition Top-N retains
+its broader, independent eligibility predicate because it has a different
+physical contract; this ordinary-window HASH predicate is intentionally
+conservative.
 
 NULL partition keys remain equal to NULL as in the established window behavior;
 the hash table is configured for nullable keys and tests cover single and
@@ -261,6 +266,10 @@ one owner before it can become a third optimizer candidate.
   HashPartition after Merge;
 - mocked multi-scope input proves one logical key is never split across Window
   calls.
+- a public SQL regression populates analyzed low-NDV input above one vector
+  batch, asserts `Hash Partition` in EXPLAIN, and checks aggregate, ranking,
+  value, ROWS/RANGE, ordered, and unordered window result oracles against
+  nearby SORT controls.
 
 ### Performance evidence
 
@@ -287,10 +296,11 @@ The near-unique result motivated the explicit per-group work term rather than an
 
 The plan enum makes rollout reversible: forcing the optimizer eligibility
 predicate false restores the complete old path without changing SQL or wire
-contracts. EXPLAIN records the selected algorithm. Existing operator analyzer
-statistics account retained data and hash growth; benchmark evidence records peak
-bytes and fallback activation. No user-visible session switch is introduced in
-the first revision.
+contracts. EXPLAIN records the selected algorithm. Operator analyzer statistics
+account retained batches, hash-table growth, group-id capacity, output-boundary
+indexes, and fallback selection scratch; benchmark evidence records peak bytes
+and fallback activation. No user-visible session switch is introduced in the
+first revision.
 
 ## 12. Design verification and review status
 

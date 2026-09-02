@@ -283,6 +283,86 @@ func TestHashPartitionHonorsCancellationBeforeFinalize(t *testing.T) {
 	require.Zero(t, proc.Mp().CurrNB())
 }
 
+func TestHashPartitionSortFallbackHonorsCancellationDuringFinalize(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	keys := make([]int32, 64)
+	values := make([]int64, len(keys))
+	for i := range keys {
+		keys[i] = int32(len(keys) - i)
+		values[i] = int64(i)
+	}
+	input := makeHashPartitionBatch(t, proc, keys, nil, values)
+	child := colexec.NewMockOperator().WithBatchs([]*batch.Batch{input})
+	arg := newHashPartitionArgument(1) // Force the pre-output sort fallback.
+	arg.AppendChild(child)
+	require.NoError(t, arg.Prepare(proc))
+
+	// The input chunk and EOF consume two checks. The fallback sorter then
+	// reaches its bounded merge checkpoint, where this context cancels.
+	proc.Ctx = newCancelAfterDoneChecksContext(4)
+	_, err := arg.Call(proc)
+	require.ErrorIs(t, err, context.Canceled)
+	require.True(t, arg.hash.fallbackToSort)
+
+	arg.Free(proc, true, err)
+	child.Free(proc, true, err)
+	proc.Free()
+	require.Zero(t, proc.Mp().CurrNB())
+}
+
+func TestHashPartitionAccountsHashAndRowIndexMemory(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	arg := newHashPartitionArgument(1 << 30)
+	input := makeHashPartitionBatch(t, proc,
+		[]int32{2, 1, 2, 1}, nil, []int64{0, 1, 2, 3})
+	child := colexec.NewMockOperator().WithBatchs([]*batch.Batch{input})
+	arg.AppendChild(child)
+	require.NoError(t, arg.Prepare(proc))
+
+	_, err := arg.Call(proc)
+	require.NoError(t, err)
+	require.Greater(t, arg.OpAnalyzer.GetOpStats().MemorySize, int64(arg.hash.retained.Size()),
+		"operator statistics must include hash and row-index allocations, not only retained batches")
+
+	arg.Free(proc, false, nil)
+	child.Free(proc, false, nil)
+	proc.Free()
+	require.Zero(t, proc.Mp().CurrNB())
+}
+
+type cancelAfterDoneChecksContext struct {
+	context.Context
+	remaining int
+	done      chan struct{}
+}
+
+func newCancelAfterDoneChecksContext(checks int) *cancelAfterDoneChecksContext {
+	return &cancelAfterDoneChecksContext{
+		Context:   context.Background(),
+		remaining: checks,
+		done:      make(chan struct{}),
+	}
+}
+
+func (ctx *cancelAfterDoneChecksContext) Done() <-chan struct{} {
+	if ctx.remaining > 0 {
+		ctx.remaining--
+		if ctx.remaining == 0 {
+			close(ctx.done)
+		}
+	}
+	return ctx.done
+}
+
+func (ctx *cancelAfterDoneChecksContext) Err() error {
+	select {
+	case <-ctx.done:
+		return context.Canceled
+	default:
+		return nil
+	}
+}
+
 func BenchmarkHashPartition(b *testing.B) {
 	for _, rows := range []int{1 << 10, 1 << 16} {
 		for _, ndv := range []int{1, 64, 1024} {
