@@ -237,11 +237,12 @@ func (opts *CDCCreateTaskOptions) ValidateAndFill(
 	if _, ok := extraOpts[cdc.CDCTaskExtraOptions_MaxSqlLength]; !ok {
 		extraOpts[cdc.CDCTaskExtraOptions_MaxSqlLength] = cdc.CDCDefaultTaskExtra_MaxSQLLen
 	}
-	// Fence mixed-version execution: an old CN understands only the public
-	// boolean, so persist false there and let a new CN recover the requested
-	// split behavior from the stable-epoch marker. Old CNs then fall back to one
-	// safe (though less bounded) atomic transaction during rolling upgrades.
-	cdc.FinalizeInitialSnapshotOptions(extraOpts)
+	// Only full snapshots need the stable-epoch capability fence. NoFull tasks
+	// remain eligible for legacy executors because they cannot partially commit
+	// an initial snapshot.
+	if !opts.NoFull {
+		cdc.FinalizeInitialSnapshotOptions(extraOpts)
+	}
 
 	var extraOptsBytes []byte
 	if extraOptsBytes, err = json.Marshal(extraOpts); err != nil {
@@ -254,9 +255,13 @@ func (opts *CDCCreateTaskOptions) ValidateAndFill(
 }
 
 func (opts *CDCCreateTaskOptions) BuildTaskMetadata() task.TaskMetadata {
+	executor := task.TaskCode_InitCdc
+	if !opts.NoFull && cdc.UsesStableEpochInitialSnapshot(opts.ExtraOpts) {
+		executor = task.TaskCode_InitCdcStableEpoch
+	}
 	return task.TaskMetadata{
 		ID:       opts.TaskId,
-		Executor: task.TaskCode_InitCdc,
+		Executor: executor,
 		Options: task.TaskOptions{
 			MaxRetryTimes: defaultCDCTaskMaxRetryTimes,
 			RetryInterval: defaultCDCTaskRetryInterval,

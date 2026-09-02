@@ -63,6 +63,11 @@ const (
 	retiredDaemonTaskBatchSize = 16
 )
 
+func isCDCTaskCode(code task.TaskCode) bool {
+	return code == task.TaskCode_InitCdc ||
+		code == task.TaskCode_InitCdcStableEpoch
+}
+
 func cdcRestartEventFields(t task.DaemonTask, fields ...zap.Field) []zap.Field {
 	out := logutil.StringFingerprintFields("task-name", taskNameFromDetails(t))
 	out = append(out, logutil.StringFingerprintFields("task-id", strconv.FormatUint(t.ID, 10))...)
@@ -185,7 +190,7 @@ func (t *startTask) Handle(_ context.Context) error {
 		if t.restartClaim {
 			executorCtx = WithRestartAdmission(ctx)
 		}
-		if t.task.task.Metadata.Executor == task.TaskCode_InitCdc {
+		if isCDCTaskCode(t.task.task.Metadata.Executor) {
 			executorCtx = withTaskExecutorTaskScheduler(
 				executorCtx,
 				t.runner.stopper.RunNamedTask,
@@ -1103,17 +1108,31 @@ func (r *taskRunner) pauseTasks(ctx context.Context) []task.DaemonTask {
 	// persisted as Paused. Keep polling Paused CDC tasks so the hook has a retry path.
 	var localPausedFinalize, laggedPausedFinalize []task.DaemonTask
 	if r.options.pauseTaskCompleted != nil {
-		localPausedFinalize = r.queryDaemonTasks(ctx,
-			WithTaskStatusCond(task.TaskStatus_Paused),
-			WithTaskRunnerCond(EQ, r.runnerID),
-			WithTaskExecutorCond(EQ, task.TaskCode_InitCdc),
-		)
+		for _, code := range []task.TaskCode{
+			task.TaskCode_InitCdc,
+			task.TaskCode_InitCdcStableEpoch,
+		} {
+			localPausedFinalize = append(localPausedFinalize,
+				r.queryDaemonTasks(ctx,
+					WithTaskStatusCond(task.TaskStatus_Paused),
+					WithTaskRunnerCond(EQ, r.runnerID),
+					WithTaskExecutorCond(EQ, code),
+				)...,
+			)
+		}
 		localPausedFinalize = r.filterUncompletedPauseTasks(localPausedFinalize)
-		laggedPausedFinalize = r.queryDaemonTasks(ctx,
-			WithTaskStatusCond(task.TaskStatus_Paused),
-			WithLastHeartbeat(LE, time.Now().UnixNano()-r.options.heartbeatTimeout.Nanoseconds()),
-			WithTaskExecutorCond(EQ, task.TaskCode_InitCdc),
-		)
+		for _, code := range []task.TaskCode{
+			task.TaskCode_InitCdc,
+			task.TaskCode_InitCdcStableEpoch,
+		} {
+			laggedPausedFinalize = append(laggedPausedFinalize,
+				r.queryDaemonTasks(ctx,
+					WithTaskStatusCond(task.TaskStatus_Paused),
+					WithLastHeartbeat(LE, time.Now().UnixNano()-r.options.heartbeatTimeout.Nanoseconds()),
+					WithTaskExecutorCond(EQ, code),
+				)...,
+			)
+		}
 		laggedPausedFinalize = r.filterUncompletedPauseTasks(laggedPausedFinalize)
 	}
 	tasks := r.mergeTasks(localPause, laggedPause, localPausedFinalize, laggedPausedFinalize)

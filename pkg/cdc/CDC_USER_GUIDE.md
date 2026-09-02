@@ -2990,6 +2990,12 @@ snapshot has expired from source retention, CDC fails closed instead of silently
 switching to a newer snapshot; recreate the task or use atomic mode after
 verifying the target state.
 
+During a rolling upgrade, bounded stable-snapshot tasks run only on CNs that
+support this protocol. Older CNs cannot claim these tasks, including after the
+original CN stops following a partial group commit. The task remains pending
+until a protocol-capable CN is available, then resumes from the persisted stable
+snapshot epoch. Legacy tasks remain eligible for the atomic executor.
+
 ---
 
 ## Best Practices

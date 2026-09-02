@@ -796,6 +796,17 @@ func TestFinalizeInitialSnapshotOptions(t *testing.T) {
 	})
 }
 
+func TestUsesStableEpochInitialSnapshot(t *testing.T) {
+	assert.True(t, UsesStableEpochInitialSnapshot(fmt.Sprintf(
+		`{"%s":"%s"}`,
+		CDCTaskExtraOptions_InitialSnapshotProtocol,
+		CDCInitialSnapshotProtocolStableEpoch,
+	)))
+	assert.False(t, UsesStableEpochInitialSnapshot(`{"InitSnapshotSplitTxn":true}`))
+	assert.False(t, UsesStableEpochInitialSnapshot(`{"_InitialSnapshotProtocol":"future"}`))
+	assert.False(t, UsesStableEpochInitialSnapshot(`not-json`))
+}
+
 func TestActiveRoutine_ClosePause(t *testing.T) {
 	ar := NewCdcActiveRoutine()
 	ar.ClosePause()

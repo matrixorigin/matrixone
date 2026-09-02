@@ -43,19 +43,24 @@ The implementation must maintain all of these invariants:
 6. **Bounded CN retention:** admission happens before `collector.Next`, one
    newly admitted batch must be measured before another unknown batch is
    admitted, and a permit is released exactly once by the terminal owner.
-7. **Compatibility is fail-safe:** tasks created before this protocol have no
-   stable-epoch marker. They retain the atomic single-transaction behavior; the
-   implementation never guesses an epoch for an already partial legacy task.
+7. **Compatibility is fail-safe:** protocol-marked tasks use a distinct daemon
+   executor code that old CNs do not register, so an old CN cannot claim a task
+   after bounded groups have committed. Unmarked legacy tasks retain the atomic
+   path; the implementation never guesses an epoch for a partial legacy task.
 
 ## Protocol
 
 New task creation persists an internal protocol marker in `additional_config`.
 The already persisted `task_create_time` is the stable initial snapshot epoch.
 The marker distinguishes new tasks from legacy tasks without a catalog schema
-change. It is not a user option. For rolling-upgrade safety, a task requesting
-split mode stores the legacy public boolean as `false` plus the internal marker:
-an old CN therefore chooses its safe atomic path, while a new CN recognizes the
-marker and restores the requested bounded behavior.
+change. It is not a user option. A task requesting split mode stores the legacy
+public boolean as `false` plus the internal marker and uses the
+`InitCdcStableEpoch` daemon executor code. New CNs register both the legacy and
+stable-epoch codes. Old CNs register only the legacy code, and task dispatch
+resolves the executor before its compare-and-swap claim, so they cannot acquire
+a marked task or publish a later watermark after a partial bounded commit.
+Keeping the public boolean false is defense in depth for tools that read task
+configuration, not the ownership fence.
 
 For a marked task with `InitSnapshotSplitTxn=true` and an empty watermark:
 
@@ -87,6 +92,7 @@ configuration says split.
 | Stable epoch or later incremental history is no longer readable | Partial or caught-up target state may exist | Empty or non-empty | Fail closed; never reset to a different full-snapshot epoch silently |
 | Pause, cancel, or stream close | Earlier committed groups only | Empty | Release batch permit; roll back current group |
 | Legacy task lacks protocol marker | No new partial-commit behavior | Empty | Use one atomic target transaction |
+| New CN disappears after a bounded group; old CN polls the task | Partial snapshot `S` | Empty | Old CN cannot resolve `InitCdcStableEpoch` and does not claim; a capable CN replays `S` |
 
 The batch permit ownership chain is:
 
@@ -131,6 +137,8 @@ Deterministic tests must prove:
 - commit/begin/read errors roll back only the active group and remain retryable;
 - stale stable snapshots fail closed;
 - legacy tasks use the atomic compatibility path;
+- new-CN partial commit plus DELETE/PK change cannot be claimed by a legacy
+  executor and converges exactly after a capable-CN handoff;
 - limiter FIFO, cancellation, exact-once release, and race behavior.
 
 Unit tests validate protocol correctness and resource bounds without weakening

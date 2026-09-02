@@ -16,9 +16,11 @@ package compile
 
 import (
 	"context"
+	"fmt"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/cdc"
+	"github.com/matrixorigin/matrixone/pkg/pb/task"
 	"github.com/stretchr/testify/require"
 )
 
@@ -36,4 +38,25 @@ func TestCDCCreateTaskOptionsPreservePatternValidationError(t *testing.T) {
 	)
 	require.EqualError(t, err, expected)
 	require.NotContains(t, err.Error(), "invalid level")
+}
+
+func TestCDCCreateTaskMetadataUsesCapabilityFence(t *testing.T) {
+	legacy := (&CDCCreateTaskOptions{TaskId: "legacy"}).BuildTaskMetadata()
+	require.Equal(t, task.TaskCode_InitCdc, legacy.Executor)
+
+	stableOpts := fmt.Sprintf(
+		`{"%s":"%s"}`,
+		cdc.CDCTaskExtraOptions_InitialSnapshotProtocol,
+		cdc.CDCInitialSnapshotProtocolStableEpoch,
+	)
+	stable := (&CDCCreateTaskOptions{
+		TaskId:    "stable",
+		ExtraOpts: stableOpts,
+	}).BuildTaskMetadata()
+	require.Equal(t, task.TaskCode_InitCdcStableEpoch, stable.Executor)
+
+	noFull := (&CDCCreateTaskOptions{
+		TaskId: "no-full", NoFull: true, ExtraOpts: stableOpts,
+	}).BuildTaskMetadata()
+	require.Equal(t, task.TaskCode_InitCdc, noFull.Executor)
 }

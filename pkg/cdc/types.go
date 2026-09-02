@@ -150,6 +150,18 @@ func FinalizeInitialSnapshotOptions(extraOpts map[string]any) {
 	}
 }
 
+// UsesStableEpochInitialSnapshot reports whether persisted task options require
+// the bounded stable-epoch executor. Invalid or legacy options fail closed to
+// the atomic executor.
+func UsesStableEpochInitialSnapshot(extraOptsJSON string) bool {
+	extraOpts := make(map[string]any)
+	if err := json.Unmarshal([]byte(extraOptsJSON), &extraOpts); err != nil {
+		return false
+	}
+	protocol, _ := extraOpts[CDCTaskExtraOptions_InitialSnapshotProtocol].(string)
+	return protocol == CDCInitialSnapshotProtocolStableEpoch
+}
+
 type TaskId = uuid.UUID
 
 func NewTaskId() TaskId {

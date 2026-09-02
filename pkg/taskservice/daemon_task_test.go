@@ -1186,6 +1186,96 @@ func TestDispatchTaskHandleCoverBranches(t *testing.T) {
 		WithRunnerFetchInterval(time.Millisecond))
 }
 
+func TestStableEpochCDCTaskRejectsLegacyRunnerBeforeClaim(t *testing.T) {
+	legacyRunner, store := newDaemonHandleTestRunner(t)
+
+	// Model a bounded snapshot at S after its first durable group, followed by
+	// a DELETE and a primary-key change before the owning new CN disappears.
+	target := map[int]string{1: "deleted-after-S"}
+	snapshotAtS := map[int]string{
+		1: "deleted-after-S",
+		2: "pk-before-change",
+		3: "unchanged",
+	}
+	sourceNow := map[int]string{
+		3:  "unchanged",
+		20: "pk-after-change",
+	}
+	watermark := ""
+	legacyExecuted := false
+	legacyRunner.RegisterExecutor(task.TaskCode_InitCdc, func(context.Context, task.Task) error {
+		legacyExecuted = true
+		// This is the unsafe old behavior: REPLACE the current snapshot without
+		// deleting keys retained by the partial snapshot at S.
+		for key, value := range sourceNow {
+			target[key] = value
+		}
+		watermark = "S2"
+		return nil
+	})
+
+	dt := newDaemonTaskForTest(1, task.TaskStatus_Running, "new-cn-at-S")
+	dt.Metadata.ID = "stable-epoch-handoff"
+	dt.Metadata.Executor = task.TaskCode_InitCdcStableEpoch
+	dt.LastHeartbeat = time.Now().Add(-legacyRunner.options.heartbeatTimeout - time.Second)
+	mustAddTestDaemonTask(t, store, 1, dt)
+
+	// An old binary has only TaskCode_InitCdc registered. Dispatch observes the
+	// stale task but cannot construct a handler, so no storage claim is made.
+	legacyCandidates := legacyRunner.startTasks(context.Background())
+	require.Len(t, legacyCandidates, 1)
+	_, err := legacyRunner.newDaemonTask(legacyCandidates[0])
+	require.ErrorContains(t, err, "executor with code 14 not exists")
+
+	legacyRunner.dispatchTaskHandle(context.Background())
+	require.Zero(t, len(legacyRunner.pendingTaskHandle))
+	require.False(t, legacyExecuted)
+	require.Equal(t, map[int]string{1: "deleted-after-S"}, target)
+	require.Empty(t, watermark)
+	stored := mustGetTestDaemonTask(t, store, 1, WithTaskIDCond(EQ, dt.ID))
+	require.Equal(t, "new-cn-at-S", stored[0].TaskRunner)
+
+	// A protocol-capable CN can claim the same stale task, replay S, and then
+	// apply the tail. This closes the handoff with exact target equality.
+	newRunner := NewTaskRunner(
+		"new-cn-retry",
+		legacyRunner.service,
+		func(string) bool { return true },
+		WithRunnerLogger(logutil.GetPanicLoggerWithLevel(zap.DebugLevel)),
+	).(*taskRunner)
+	t.Cleanup(newRunner.stopper.Stop)
+	done := make(chan struct{})
+	schedulerInjected := false
+	newRunner.RegisterExecutor(task.TaskCode_InitCdcStableEpoch, func(ctx context.Context, _ task.Task) error {
+		schedulerInjected = TaskExecutorTaskSchedulerFromContext(ctx) != nil
+		for key, value := range snapshotAtS {
+			target[key] = value
+		}
+		delete(target, 1)
+		delete(target, 2)
+		target[20] = "pk-after-change"
+		watermark = "S2"
+		close(done)
+		return nil
+	})
+
+	candidates := newRunner.startTasks(context.Background())
+	require.Len(t, candidates, 1)
+	taskRef, err := newRunner.newDaemonTask(candidates[0])
+	require.NoError(t, err)
+	require.NoError(t, newStartTask(newRunner, taskRef).Handle(context.Background()))
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("protocol-capable executor did not start")
+	}
+	require.True(t, schedulerInjected)
+	require.Equal(t, sourceNow, target)
+	require.Equal(t, "S2", watermark)
+	stored = mustGetTestDaemonTask(t, store, 1, WithTaskIDCond(EQ, dt.ID))
+	require.Equal(t, "new-cn-retry", stored[0].TaskRunner)
+}
+
 func TestCancelDaemonTask(t *testing.T) {
 	runTaskRunnerTest(t, func(r *taskRunner, s TaskService, store TaskStorage) {
 		dt := newDaemonTaskForTest(1, task.TaskStatus_Created, r.runnerID)

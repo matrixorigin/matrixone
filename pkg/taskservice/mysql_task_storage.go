@@ -1833,7 +1833,7 @@ func (m *mysqlTaskStorage) RunQueryDaemonTask(ctx context.Context, db SqlExecuto
 		t.LastRun = lastRun.Time
 
 		//if it is cdc,the cnlabels
-		if t.Metadata.GetExecutor() == task.TaskCode_InitCdc {
+		if isCDCTaskCode(t.Metadata.GetExecutor()) {
 			details := t.GetDetails()
 			createCdcDetails := details.GetDetails().(*task.Details_CreateCdc)
 

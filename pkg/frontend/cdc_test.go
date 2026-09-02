@@ -1063,6 +1063,27 @@ const (
 	mSqlIdx50
 )
 
+func TestCDCCreateTaskMetadataUsesCapabilityFence(t *testing.T) {
+	legacy := (&CDCCreateTaskOptions{TaskId: "legacy"}).BuildTaskMetadata()
+	require.Equal(t, task.TaskCode_InitCdc, legacy.Executor)
+
+	stableOpts := fmt.Sprintf(
+		`{"%s":"%s"}`,
+		cdc.CDCTaskExtraOptions_InitialSnapshotProtocol,
+		cdc.CDCInitialSnapshotProtocolStableEpoch,
+	)
+	stable := (&CDCCreateTaskOptions{
+		TaskId:    "stable",
+		ExtraOpts: stableOpts,
+	}).BuildTaskMetadata()
+	require.Equal(t, task.TaskCode_InitCdcStableEpoch, stable.Executor)
+
+	noFull := (&CDCCreateTaskOptions{
+		TaskId: "no-full", NoFull: true, ExtraOpts: stableOpts,
+	}).BuildTaskMetadata()
+	require.Equal(t, task.TaskCode_InitCdc, noFull.Executor)
+}
+
 func TestRegisterCdcExecutor(t *testing.T) {
 	type args struct {
 		logger       *zap.Logger
