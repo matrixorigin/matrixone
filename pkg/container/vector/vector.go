@@ -9115,11 +9115,11 @@ func (v *Vector) unionBatchContiguousVarlenRange(
 			}
 			v.area = append(v.area, payload...)
 		} else {
-			var err error
-			v.area, err = v.growArea2(mp, payload, baseOff+len(payload))
+			area, err := v.growArea2(mp, payload, baseOff+len(payload))
 			if err != nil {
 				return false, err
 			}
+			v.area = area
 		}
 	}
 

@@ -319,7 +319,7 @@ func newPreparedExecuteEnvForSQLWithCompilerContext(
 		PrepareStmt:                stmts[0],
 		NativeMode:                 ses.sqlModeHasMatrixOneNative(),
 		OnlyFullGroupBy:            ses.sqlModeHasOnlyFullGroupBy(),
-		onlyFullGroupBySet:         true,
+		sqlModeFlagsSet:            true,
 		getFromSendLongData:        make(map[int]struct{}),
 		protocolVersion:            currentProtocolVersion(proc),
 		directResultParamPositions: plan2.PreparedPlanDirectResultParamPositions(preparePlan.GetDcl().GetPrepare().Plan),
@@ -3002,7 +3002,7 @@ func TestInitExecuteStmtParamRebuildsPreparedPlanWhenOnlyFullGroupByChanges(t *t
 	execCtx.reqCtx = defines.AttachAccountId(execCtx.reqCtx, catalog.System_Account)
 	require.NoError(t, ses.SetSessionSysVar(execCtx.reqCtx, "sql_mode", ""))
 	prepareStmt.OnlyFullGroupBy = false
-	prepareStmt.onlyFullGroupBySet = true
+	prepareStmt.sqlModeFlagsSet = true
 	originalPlan := prepareStmt.PreparePlan
 	require.NoError(t, ses.SetSessionSysVar(execCtx.reqCtx, "sql_mode", "ONLY_FULL_GROUP_BY"))
 
@@ -3013,6 +3013,39 @@ func TestInitExecuteStmtParamRebuildsPreparedPlanWhenOnlyFullGroupByChanges(t *t
 	require.NotNil(t, retStmt)
 	require.True(t, prepareStmt.OnlyFullGroupBy)
 	require.NotSame(t, originalPlan, prepareStmt.PreparePlan)
+}
+
+// ENABLE_BOOL_SUMAVG is captured at PREPARE like ONLY_FULL_GROUP_BY, so an
+// EXECUTE after the token changes rebuilds the plan under the current mode in
+// both directions.
+func TestInitExecuteStmtParamRebuildsPreparedPlanWhenBoolSumAvgChanges(t *testing.T) {
+	ses, prepareStmt, cw, execCtx := newPreparedExecuteEnv(t, 111)
+	defer prepareStmt.Close()
+
+	execCtx.reqCtx = defines.AttachAccountId(execCtx.reqCtx, catalog.System_Account)
+	require.NoError(t, ses.SetSessionSysVar(execCtx.reqCtx, "sql_mode", "ONLY_FULL_GROUP_BY"))
+	prepareStmt.OnlyFullGroupBy = true
+	prepareStmt.BoolSumAvg = false
+	prepareStmt.sqlModeFlagsSet = true
+	originalPlan := prepareStmt.PreparePlan
+	require.NoError(t, ses.SetSessionSysVar(execCtx.reqCtx, "sql_mode", "ONLY_FULL_GROUP_BY,ENABLE_BOOL_SUMAVG"))
+
+	retComp, retPlan, retStmt, _, _, err := initExecuteStmtParam(execCtx, ses, cw, nil, prepareStmt.Name)
+	require.NoError(t, err)
+	require.Nil(t, retComp)
+	require.NotNil(t, retPlan)
+	require.NotNil(t, retStmt)
+	require.True(t, prepareStmt.BoolSumAvg)
+	require.True(t, prepareStmt.OnlyFullGroupBy)
+	require.NotSame(t, originalPlan, prepareStmt.PreparePlan)
+
+	// Dropping the token rebuilds again; an unchanged mode reuses the plan.
+	rebuiltPlan := prepareStmt.PreparePlan
+	require.NoError(t, ses.SetSessionSysVar(execCtx.reqCtx, "sql_mode", "ONLY_FULL_GROUP_BY"))
+	_, _, _, _, _, err = initExecuteStmtParam(execCtx, ses, cw, nil, prepareStmt.Name)
+	require.NoError(t, err)
+	require.False(t, prepareStmt.BoolSumAvg)
+	require.NotSame(t, rebuiltPlan, prepareStmt.PreparePlan)
 }
 
 func TestInitExecuteStmtParamRebuildsPlanInvalidatedDuringRun(t *testing.T) {
