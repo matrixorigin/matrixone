@@ -24,6 +24,9 @@ import (
 	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
 
+	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
+	"github.com/matrixorigin/matrixone/pkg/common/stopper"
+	"github.com/matrixorigin/matrixone/pkg/gossip"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 	"github.com/matrixorigin/matrixone/pkg/sql/compile"
@@ -207,24 +210,35 @@ func (c *blockingCNHeartbeatCommandClient) GetScheduleCommands(
 	return c.commandBatch, nil
 }
 
-func TestDirectCNHeartbeatProcessesLegacyScheduleCommand(t *testing.T) {
-	holder := &observingTaskHolder{createErr: errors.New("stop after observing command"), created: make(chan struct{}, 1)}
+func TestShutdownHeartbeatAppliesLegacyCommandBeforeDependenciesClose(t *testing.T) {
+	const serviceID = "shutdown-heartbeat-command-owner"
+	moruntime.SetupServiceBasedRuntime(serviceID, moruntime.DefaultRuntime())
+	gossipNode, err := gossip.NewNode(
+		context.Background(), serviceID,
+		gossip.WithListenAddrFn(func() string { return "127.0.0.1:0" }),
+		gossip.WithServiceAddrFn(func() string { return "127.0.0.1:1" }),
+		gossip.WithCacheServerAddrFn(func() string { return "127.0.0.1:2" }),
+	)
+	require.NoError(t, err)
+	require.NoError(t, gossipNode.Create())
+	defer func() { require.NoError(t, gossipNode.Leave(time.Second)) }()
 	client := &admissionFailureCNHeartbeatClient{
 		testHAKClient: &testHAKClient{},
 		batch: pb.CommandBatch{Commands: []pb.ScheduleCommand{{
 			ServiceType:       pb.CNService,
-			CreateTaskService: &pb.CreateTaskService{},
+			JoinGossipCluster: &pb.JoinGossipCluster{},
 		}}},
 	}
 	s := &service{
-		cfg: &Config{UUID: "direct-heartbeat-command-owner"}, config: util.NewConfigData(nil),
+		cfg: &Config{UUID: serviceID}, config: util.NewConfigData(nil),
 		logger: zap.NewNop(), _hakeeperClient: client,
+		gossipNode: gossipNode, stopper: stopper.NewStopper("shutdown-command-owner"),
+		viewMetadataAdmissionGeneration: 1,
 	}
-	s.task.holder = holder
+	defer s.stopper.Stop()
 
-	_, err := s.sendCNHeartbeat(context.Background(), s.newCNStoreHeartbeat())
-	require.NoError(t, err)
-	require.Equal(t, int32(1), holder.createCount.Load())
+	require.NoError(t, s.withdrawViewMetadataAdmission())
+	require.True(t, gossipNode.Joined(), "withdrawal response command must be accepted before gossip shutdown")
 }
 
 func Test_heartbeat(t *testing.T) {

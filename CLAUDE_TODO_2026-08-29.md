@@ -94,3 +94,9 @@
 2. 在同一 HAKeeper RSM heartbeat 响应中返回应用后的 authoritative frontier；CN 仅在 generation 精确匹配且 frontier >= T 时承认同步发布，旧 RSM 静默丢字段时 fail closed。
 3. 所有 direct CN heartbeat 将 CommandBatch 交给现有 command mutex/dedupe owner，避免 command-delivery-disabled 阶段的 destructive schedule command 丢失。
 4. 增加旧 HAKeeper 丢 frontier 与 legacy command delivery 的确定性回归，运行 affected package、race、vet 和 protobuf 测试。
+
+## 2026-09-02：startup generation 与 shutdown command ownership review
+
+1. markerless ingress publication 必须同步应用/验证 heartbeat 返回的 authoritative admission generation；takeover 后旧进程不得打开 ingress/DDL gate。
+2. 将最终 admission withdrawal 放到 TaskRunner/task command 依赖关闭前；direct heartbeat 返回的 legacy CreateTaskService/JoinGossip 必须由仍可用 owner 成功执行。
+3. 增加 takeover interleaving 和 shutdown legacy command 成功闭环回归；清理 design/PR body 的 v36/v43 残留，验证并推送。

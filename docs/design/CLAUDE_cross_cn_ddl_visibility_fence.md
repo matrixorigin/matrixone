@@ -61,7 +61,7 @@ A CN is in one of these logical states:
 4. **Provisionally fenced**: local frontier synchronization completed and `-44` is durable; ingress remains closed.
 5. **Cluster committed**: HAKeeper atomically validated exact `(serviceID, generation, queryAddress)` membership and advanced epoch to 43.
 6. **Locally committed**: CN persisted `43`; only then may it republish ingress and unblock DDL.
-7. **Markerless post-cut**: no local marker but HAKeeper epoch is 43; runtime remains v44 and ingress/DDL remain closed until a complete retry.
+7. **Markerless post-cut**: no local marker but HAKeeper epoch is 44; runtime remains v44 and ingress/DDL remain closed until a complete retry.
 
 The cluster epoch commit is the linearization point. Prepared, Fenced, and the last committed DDL frontier are published through each incarnation's heartbeat. The commit heartbeat contains the exact target tuples. In one replicated transition HAKeeper updates the sender heartbeat, compares all eligible raw CNState members, exact generation/address, receiver capability, and that each current incarnation itself published Prepared and Fenced, then advances the epoch only on exact equality. A replacement cannot reuse an older incarnation's Fenced proof. A join before this transition invalidates the target set; a join after it observes epoch 44 and is rejected as ingress-ready.
 
@@ -96,7 +96,7 @@ A markerless CN performs an atomic ingress heartbeat handshake. If it linearizes
 - **Committed local persistence failure**: cluster epoch remains committed; this CN remains closed and restarts from provisional state.
 - **Ingress publication uncertainty**: perform a bounded cleanup withdrawal; never assume publication failed.
 - **Restart**: committed marker runs startup frontier synchronization before opening; provisional or markerless post-cut starts v44 fail-closed.
-- **Shutdown**: stop periodic heartbeat publication, then withdraw ingress/barrier state before stopping QueryService.
+- **Shutdown**: stop periodic heartbeat publication, withdraw the DDL barrier, stop QueryService/frontend ingress, then publish the final admission withdrawal while TaskRunner and gossip command dependencies are still alive. The shared response owner applies any legacy destructive command before the subsequent task/gossip drains.
 - **Leader failover**: activation is gated until every voting and non-voting LogStore advertises epoch-schema capability, so any eligible HAKeeper leader preserves the field.
 
 Retries are idempotent for the same generation and target set. Replacement generations or addresses are rejected before local state mutation.

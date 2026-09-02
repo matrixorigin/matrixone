@@ -532,6 +532,11 @@ func (s *service) closeService() error {
 			s.stopFrontendSerialized,
 			s.closeSiriusRuntime,
 			s.closeBootstrapService,
+			// Withdraw while task and gossip command dependencies are still alive:
+			// a legacy HAKeeper may destructively return CreateTaskService or
+			// JoinGossipCluster in this final heartbeat. stopTask below drains any
+			// task runner created by that response.
+			s.withdrawViewMetadataAdmission,
 			// Frontend shutdown stops accepting interactive work, while stopTask
 			// drains scheduled ingestion statements. Only after both producers have
 			// stopped may the MongoDB pool disconnect clients still leased by a
@@ -545,7 +550,6 @@ func (s *service) closeService() error {
 			// dependencies, while keeping the trace consumer alive for final events.
 			s.waitPipelineHandlers,
 			s.closeIncrService,
-			s.withdrawViewMetadataAdmission,
 			s.stopRPCs,
 			s.closeTxnTraceService,
 			func() error {

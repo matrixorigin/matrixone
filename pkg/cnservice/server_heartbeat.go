@@ -286,8 +286,9 @@ func (s *service) newCNStoreHeartbeat() logservicepb.CNStoreHeartbeat {
 }
 
 // withdrawViewMetadataAdmission publishes a final non-routable heartbeat after
-// every local ingress path and TaskRunner have stopped. A clean replacement can
-// then take the UUID without waiting for the store timeout.
+// external ingress has stopped but before TaskRunner and gossip dependencies are
+// closed. This lets the shared response owner apply any destructively delivered
+// legacy schedule command; subsequent close steps drain what it created.
 func (s *service) withdrawViewMetadataAdmission() error {
 	if s.viewMetadataAdmissionGeneration == 0 || s._hakeeperClient == nil {
 		return nil

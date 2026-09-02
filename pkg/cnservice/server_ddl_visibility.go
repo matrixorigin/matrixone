@@ -184,7 +184,23 @@ func (s *service) publishDDLVisibilityIngressAfterStart() error {
 			cancel()
 			return err
 		}
+		if batch.ViewMetadataAdmission == nil {
+			cancel()
+			return moerr.NewInvalidStateNoCtx("markerless ingress heartbeat returned no authoritative generation")
+		}
+		if err := s.applyViewMetadataAdmission(ctx, batch.ViewMetadataAdmission); err != nil {
+			cancel()
+			return moerr.AttachCause(ctx, err)
+		}
 		cancel()
+		if err := s.checkViewMetadataGenerationRevoked(); err != nil {
+			return err
+		}
+		if batch.ViewMetadataAdmission.Generation != s.viewMetadataAdmissionGeneration {
+			return moerr.NewInvalidStateNoCtxf(
+				"markerless ingress generation mismatch: local %d, authoritative %d",
+				s.viewMetadataAdmissionGeneration, batch.ViewMetadataAdmission.Generation)
+		}
 		if batch.DDLVisibilityDeployedProtocol >= defines.MORPCVersion44 {
 			moruntime.ServiceRuntime(s.cfg.UUID).SetGlobalVariables(
 				moruntime.MOProtocolVersion, batch.DDLVisibilityDeployedProtocol)

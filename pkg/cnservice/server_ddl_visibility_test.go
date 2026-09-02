@@ -561,6 +561,33 @@ func TestMarkerlessCNIngressHandshakeLinearizesWithCommittedCut(t *testing.T) {
 	require.False(t, gate.PublicDDLEnabled())
 }
 
+func TestMarkerlessCNIngressRejectsGenerationTakeover(t *testing.T) {
+	const serviceID = "markerless-ingress-generation-takeover"
+	const localGeneration = uint64(7)
+	moruntime.SetupServiceBasedRuntime(serviceID, moruntime.DefaultRuntime())
+	cluster := &ddlVisibilityTestCluster{cnServices: []metadata.CNService{{
+		ServiceID: serviceID, ViewMetadataAdmissionGeneration: localGeneration,
+	}}}
+	client := &ddlVisibilityWithdrawalHAKeeperClient{
+		cluster:                  cluster,
+		authoritativeGenerations: map[string]uint64{serviceID: localGeneration + 1},
+	}
+	gate := frontend.NewDDLCommitGate()
+	s := &service{
+		cfg: &Config{UUID: serviceID}, logger: zap.NewNop(),
+		ddlCommitGate: gate, _hakeeperClient: client, config: util.NewConfigData(nil),
+		viewMetadataAdmissionGeneration: localGeneration,
+	}
+
+	require.NoError(t, s.prepareDDLVisibilityBarrier())
+	err := s.publishDDLVisibilityIngressAfterStart()
+	require.ErrorContains(t, err, "generation revoked")
+	require.True(t, s.viewMetadataGenerationRevoked.Load())
+	require.False(t, s.viewMetadataIngressReady.Load())
+	require.False(t, gate.PublicDDLEnabled())
+	require.False(t, cluster.cnServices[0].ViewMetadataIngressReady)
+}
+
 func TestMarkerlessCNJoinsCommittedClusterFailClosed(t *testing.T) {
 	const serviceID = "ddl-visibility-markerless-post-cut-test"
 	moruntime.SetupServiceBasedRuntime(serviceID, moruntime.DefaultRuntime())
