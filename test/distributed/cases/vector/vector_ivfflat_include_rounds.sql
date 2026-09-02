@@ -32,6 +32,20 @@ from include_rounds_main
 where category = 20
 order by l2_distance(embedding, "[0,0,0]")
 limit 2 by rank with option 'mode=include';
+
+-- EXPLAIN ANALYZE VERBOSE must report the adaptive widening that the static
+-- NProbe setting alone cannot describe. Ignore runtime timing fields while
+-- requiring both actual search rounds and their bounded summary.
+-- @separator:table
+-- @ignore:0
+-- @regex("Vector Index Search Round 1: bucket_window=0:1", true)
+-- @regex("Vector Index Search Round 2: bucket_window=1:2", true)
+-- @regex("Vector Index Search Summary: search_count=1 round_count=2 buckets_searched=2", true)
+explain analyze verbose select id, title, category
+from include_rounds_main
+where category = 20
+order by l2_distance(embedding, "[0,0,0]")
+limit 2 by rank with option 'mode=include';
 set probe_limit = 10;
 
 -- Check that each mode has an IVF search path without binding the test to
