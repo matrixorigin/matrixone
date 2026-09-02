@@ -354,6 +354,22 @@ func TestMarkIterationPendingIsAtomic(t *testing.T) {
 	require.Equal(t, ISCPJobState_Pending, table.jobs[JobKey{JobName: "job-2", JobID: 2}].state)
 }
 
+func TestPrepareIterationRangeRejectsRegressedUpperBound(t *testing.T) {
+	from := types.BuildTS(20, 1)
+	iter := &IterationContext{fromTS: from, toTS: types.MaxTs()}
+	regressed := from.Prev()
+
+	require.False(t, prepareIterationRange(iter, regressed))
+	require.True(t, iter.toTS.EQ(&regressed))
+}
+
+func TestPrepareIterationRangeAcceptsCaughtUpUpperBound(t *testing.T) {
+	from := types.BuildTS(20, 1)
+	iter := &IterationContext{fromTS: from, toTS: types.MaxTs()}
+
+	require.True(t, prepareIterationRange(iter, from))
+	require.True(t, iter.toTS.EQ(&from))
+}
 func TestTryFlushWatermarkSerializesWithReaders(t *testing.T) {
 	table := NewTableEntry(nil, 1, 2, 3, "db", "table")
 	jobKey := JobKey{JobName: "job", JobID: 1}

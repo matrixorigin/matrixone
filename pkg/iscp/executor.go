@@ -536,12 +536,12 @@ func (exec *ISCPTaskExecutor) scheduleIterations(ctx context.Context, worker Wor
 		logutil.Error("ISCP-Task get dirty tables failed", zap.Error(err))
 	}
 	for _, iter := range iterations {
-		maxTS := types.MaxTs()
-		if iter.toTS.EQ(&maxTS) {
-			iter.toTS = toTS
-		}
-		if iter.toTS.Physical()-iter.fromTS.Physical() > DefaultMaxChangeInterval.Nanoseconds() {
-			iter.toTS = types.BuildTS(iter.fromTS.Physical()+DefaultMaxChangeInterval.Nanoseconds(), 0)
+		if !prepareIterationRange(iter, toTS) {
+			// GetChangedTableList obtains its upper bound from a fresh transaction.
+			// That snapshot can temporarily lag the watermark persisted by the
+			// preceding iteration. Do not admit an inverted range: CollectChanges
+			// rejects it, and admission would leave the job pending until replay.
+			continue
 		}
 		var dirty bool
 		if iter.fromTS.IsEmpty() || getDirtyTablesFailed || iter.fromTS.LT(&minTS) {
@@ -594,6 +594,23 @@ func (exec *ISCPTaskExecutor) scheduleIterations(ctx context.Context, worker Wor
 			logutil.Infof("ISCP-Task injected hook %s", msg)
 		}
 	}
+}
+
+// prepareIterationRange replaces an open-ended candidate with the latest safe
+// upper bound and enforces the maximum chunk size. A false return means that
+// the upper bound has not caught up with the job watermark yet.
+func prepareIterationRange(iter *IterationContext, toTS types.TS) bool {
+	maxTS := types.MaxTs()
+	if iter.toTS.EQ(&maxTS) {
+		iter.toTS = toTS
+	}
+	if iter.toTS.LT(&iter.fromTS) {
+		return false
+	}
+	if iter.toTS.Physical()-iter.fromTS.Physical() > DefaultMaxChangeInterval.Nanoseconds() {
+		iter.toTS = types.BuildTS(iter.fromTS.Physical()+DefaultMaxChangeInterval.Nanoseconds(), 0)
+	}
+	return true
 }
 
 // For UT
