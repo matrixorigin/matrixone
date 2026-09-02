@@ -320,7 +320,7 @@ func TestWatermarkUpdater_DeleteTaskWatermarksRetriesDeleteAndKeepsTombstone(t *
 }
 
 func TestWatermarkUpdater_ForceFlushHonorsContext(t *testing.T) {
-	updater := NewCDCWatermarkUpdater("force-flush-context")
+	updater := NewCDCWatermarkUpdater("force-flush-context", nil)
 	updater.customized.scheduleJob = func(*UpdaterJob) error { return nil }
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
