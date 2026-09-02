@@ -17,6 +17,7 @@ package aggexec
 import (
 	"bytes"
 	"errors"
+	"math"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -178,5 +179,57 @@ func TestCountDistinctDrainPreparationFailureKeepsResidentOwner(t *testing.T) {
 	spill.Free()
 	require.NoError(t, spill.ClearAllocationAccount(allocation))
 	finishTestAggregateAllocation(t, registry, account)
+	require.Zero(t, mp.CurrNB())
+}
+
+func TestCountDistinctSpillStateRejectsInvalidTransitions(t *testing.T) {
+	mp := mpool.MustNewZero()
+	plain := newCountColumnExec(
+		mp, AggIdOfCountColumn, false, []types.Type{types.T_int64.ToType()}).(ExactCountDistinctSpillState)
+	require.False(t, plain.SupportsExactCountDistinctSpill())
+	_, err := plain.HasDistinctArguments()
+	require.Error(t, err)
+	_, _, err = plain.DistinctArgumentStats()
+	require.Error(t, err)
+	_, err = plain.BeginArgumentDrain(nil)
+	require.Error(t, err)
+	require.Error(t, plain.RehomeDistinctArgumentState(nil))
+	require.Error(t, plain.InsertDistinctArgument(0, nil))
+	require.Error(t, plain.AddDistinctCountContribution(0, 1, nil))
+	plain.Free()
+
+	var nilDrain *countDistinctArgumentDrain
+	require.Zero(t, nilDrain.KeyCount())
+	require.Zero(t, nilDrain.RetainedBytes())
+	require.Error(t, nilDrain.ForEach(func(int, []byte) error { return nil }))
+	require.Error(t, nilDrain.Commit())
+	nilDrain.Abort()
+
+	exec := newCountColumnExec(
+		mp, AggIdOfCountColumn, true, []types.Type{types.T_int64.ToType()}).(ExactCountDistinctSpillState)
+	require.NoError(t, exec.GroupGrow(1))
+	has, err := exec.HasDistinctArguments()
+	require.NoError(t, err)
+	require.False(t, has)
+	keys, retained, err := exec.DistinctArgumentStats()
+	require.NoError(t, err)
+	require.Zero(t, keys)
+	require.Positive(t, retained)
+	require.Error(t, exec.InsertDistinctArgument(-1, nil))
+	require.Error(t, exec.InsertDistinctArgument(1, nil))
+	require.Error(t, exec.AddDistinctCountContribution(-1, 1, nil))
+	require.Error(t, exec.AddDistinctCountContribution(0, math.MaxUint64, nil))
+	require.NoError(t, exec.AddDistinctCountContribution(0, math.MaxInt64, nil))
+	require.ErrorContains(t, exec.AddDistinctCountContribution(0, 1, nil), "overflow")
+	require.NoError(t, exec.InsertDistinctArgument(0, []byte("key")))
+	require.ErrorContains(t, exec.RehomeDistinctArgumentState(nil), "non-empty")
+
+	drain, err := exec.BeginArgumentDrain(nil)
+	require.NoError(t, err)
+	drain.Abort()
+	require.Error(t, drain.ForEach(func(int, []byte) error { return nil }))
+	require.Error(t, drain.Commit())
+	drain.Abort()
+	exec.Free()
 	require.Zero(t, mp.CurrNB())
 }
