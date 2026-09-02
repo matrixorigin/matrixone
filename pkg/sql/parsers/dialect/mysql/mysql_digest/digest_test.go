@@ -216,6 +216,26 @@ func TestDigestIgnoreSpaceFunctionTokenIdentity(t *testing.T) {
 	withoutSpace, err := Compute("SELECT COUNT(1)")
 	require.NoError(t, err)
 	require.Equal(t, withoutSpace, withIgnoreSpace)
+
+	// MySQL only makes the functions listed in sql/lex.h whitespace-sensitive.
+	// Other built-ins, such as AVG and JSON_ARRAYAGG, remain function tokens
+	// when a space precedes the opening parenthesis.
+	for _, name := range []string{"AVG", "JSON_ARRAYAGG"} {
+		withoutIgnoreSpace, err := Compute("SELECT " + name + " (1)")
+		require.NoError(t, err)
+		withIgnoreSpace, err := Compute("SELECT "+name+" (1)", Options{SQLMode: ModeIgnoreSpace})
+		require.NoError(t, err)
+		require.Equal(t, withoutIgnoreSpace, withIgnoreSpace, name)
+		require.Equal(t, "SELECT "+name+" (?)", withoutIgnoreSpace.Text, name)
+	}
+
+	withoutIgnoreSpace, err = Compute("SELECT VAR_SAMP (1)")
+	require.NoError(t, err)
+	withIgnoreSpace, err = Compute("SELECT VAR_SAMP (1)", Options{SQLMode: ModeIgnoreSpace})
+	require.NoError(t, err)
+	require.NotEqual(t, withoutIgnoreSpace, withIgnoreSpace)
+	require.Equal(t, "SELECT `VAR_SAMP` (?)", withoutIgnoreSpace.Text)
+	require.Equal(t, "SELECT VAR_SAMP (?)", withIgnoreSpace.Text)
 }
 
 func TestDigestOptimizerHintRequiresImmediateStatementKeyword(t *testing.T) {
