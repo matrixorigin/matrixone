@@ -438,12 +438,11 @@ func TestInformationSchemaCharacterSetsData(t *testing.T) {
 func TestInformationSchemaViewsMetadata(t *testing.T) {
 	// Keep the historical lexer-regexp fixtures below as parser coverage, but
 	// VIEWS must not execute that partial grammar for catalog rows.
-	assert.Contains(t, InformationSchemaViewsDDL, "json_extract_string(tbl.viewdef, '$.definition')")
+	assert.Contains(t, InformationSchemaViewsDDL, "mo_view_definition(tbl.viewdef)")
 	// Installing the upgrade view must not hide a real pre-upgrade viewdef that
-	// lacks the parser-derived field. It remains visible with a NULL definition
-	// until a future lifecycle activation backfills that field.
-	assert.Contains(t, InformationSchemaViewsDDL, "cast(nullif(json_extract_string(tbl.viewdef, '$.definition'), '') as text)")
-	assert.NotContains(t, InformationSchemaViewsDDL, "nullif(json_extract_string(tbl.viewdef, '$.definition'), '') is not null")
+	// lacks the frozen field. The internal parser compatibility function supplies
+	// its SELECT definition without depending on lifecycle activation.
+	assert.NotContains(t, InformationSchemaViewsDDL, "json_extract_string(tbl.viewdef, '$.definition')")
 	assert.NotContains(t, InformationSchemaViewsDDL, "regexp_substr")
 	assert.NotContains(t, InformationSchemaViewsDDL, "tbl.rel_createsql AS `VIEW_DEFINITION`")
 	if false { // historical extraction assertions; production uses the parser-derived field above.

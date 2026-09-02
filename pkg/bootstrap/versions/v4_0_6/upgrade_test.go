@@ -223,10 +223,11 @@ func TestUpgradeEntries(t *testing.T) {
 	require.Equal(t, sysview.InformationSchemaTablePrivilegesDDL, tablePrivileges.PostSql)
 }
 
-func TestInformationSchemaViewsUpgradeKeepsLegacyRowsVisible(t *testing.T) {
+func TestInformationSchemaViewsUpgradeUsesLegacyDefinitionCompatibility(t *testing.T) {
 	// A pre-upgrade viewdef has Stmt but no parser-derived definition. The
-	// MODIFY_VIEW entry must install a VIEWS definition that leaves that catalog
-	// row visible instead of filtering it while metadata recovery is inactive.
+	// MODIFY_VIEW entry must keep the public metadata contract available through
+	// the parser-aware compatibility function instead of returning NULL while the
+	// separate lifecycle recovery remains inactive.
 	var viewsEntry *versions.UpgradeEntry
 	for i := range tenantUpgEntries {
 		if tenantUpgEntries[i].TableName == "VIEWS" {
@@ -236,10 +237,8 @@ func TestInformationSchemaViewsUpgradeKeepsLegacyRowsVisible(t *testing.T) {
 	}
 	require.NotNil(t, viewsEntry)
 	require.Equal(t, versions.MODIFY_VIEW, viewsEntry.UpgType)
-	require.Contains(t, viewsEntry.UpgSql,
-		"cast(nullif(json_extract_string(tbl.viewdef, '$.definition'), '') as text)")
-	require.NotContains(t, viewsEntry.UpgSql,
-		"nullif(json_extract_string(tbl.viewdef, '$.definition'), '') is not null")
+	require.Contains(t, viewsEntry.UpgSql, "mo_view_definition(tbl.viewdef)")
+	require.NotContains(t, viewsEntry.UpgSql, "json_extract_string(tbl.viewdef, '$.definition')")
 }
 
 func TestInformationSchemaMetadataVisibilityUpgradeChecks(t *testing.T) {
