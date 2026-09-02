@@ -218,6 +218,11 @@ func statementDigestTextFunction() FuncNew {
 			newOp: func() executeLogicOfOverload {
 				return StatementDigestText
 			},
+			// The result depends on session sql_mode and the global digest
+			// length limit.  It must therefore never be folded or admitted into
+			// persistent expressions such as generated columns.
+			volatile:        true,
+			realTimeRelated: true,
 		})
 	}
 	return FuncNew{

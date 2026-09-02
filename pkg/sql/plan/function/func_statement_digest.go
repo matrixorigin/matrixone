@@ -18,6 +18,7 @@ import (
 	"context"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -36,8 +37,15 @@ func StatementDigestText(
 	}
 	sqlMode := statementDigestSQLMode(proc)
 	maxDigestLength := statementDigestMaxLength(proc)
-	discloseParseError := parameters[0].IsConst() &&
+	// MySQL only exposes parser diagnostics for a source SQL literal.  A
+	// constant vector is not sufficient: it can be the result of a folded
+	// expression, a cast, a subquery, or a prepared parameter.  String-source
+	// provenance is retained by the binder/executor for exactly this boundary.
+	discloseParseError := statementDigestTextAllLiteralInputs(parameters[0], length, selectList) &&
 		(proc == nil || proc.Base == nil || proc.GetPrepareParams() == nil)
+	if statementDigestTextHasBinaryInput(parameters[0], length, selectList) {
+		return moerr.NewUndisclosedParseErrorInDigestFunction(ctx)
+	}
 
 	return opUnaryBytesToBytesWithErrorCheck(
 		parameters, result, proc, length,
@@ -53,6 +61,68 @@ func StatementDigestText(
 		},
 		selectList,
 	)
+}
+
+// statementDigestTextAllLiteralInputs is deliberately conservative for a
+// mixed vector: one expression-owned row is enough to suppress parser details
+// for the whole batch, since the operation returns one error for the batch.
+func statementDigestTextAllLiteralInputs(
+	parameter *vector.Vector,
+	length int,
+	selectList *FunctionSelectList,
+) bool {
+	if parameter == nil || length <= 0 {
+		return false
+	}
+	seen := false
+	for row := 0; row < length; row++ {
+		if selectList != nil && selectList.Contains(uint64(row)) {
+			continue
+		}
+		physicalRow := row
+		if parameter.IsConst() {
+			physicalRow = 0
+		}
+		if parameter.IsNull(uint64(physicalRow)) {
+			continue
+		}
+		seen = true
+		if parameter.GetStringSourceAt(physicalRow) != types.StringSourceLiteral {
+			return false
+		}
+	}
+	return seen
+}
+
+// statementDigestTextHasBinaryInput rejects binary charset values before the
+// bytes are interpreted as SQL text.  The vector metadata supports both
+// statically binary OIDs (BINARY/VARBINARY/BLOB) and row-level binary
+// introducers flowing through a text-shaped common type.  NULL rows retain
+// normal strict-function NULL semantics and are intentionally ignored.
+func statementDigestTextHasBinaryInput(
+	parameter *vector.Vector,
+	length int,
+	selectList *FunctionSelectList,
+) bool {
+	if parameter == nil || length <= 0 {
+		return false
+	}
+	for row := 0; row < length; row++ {
+		if selectList != nil && selectList.Contains(uint64(row)) {
+			continue
+		}
+		physicalRow := row
+		if parameter.IsConst() {
+			physicalRow = 0
+		}
+		if parameter.IsNull(uint64(physicalRow)) {
+			continue
+		}
+		if parameter.GetIsBinaryStringAt(physicalRow) {
+			return true
+		}
+	}
+	return false
 }
 
 func statementDigestMaxLength(proc *process.Process) int {

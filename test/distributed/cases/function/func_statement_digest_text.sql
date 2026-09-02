@@ -47,5 +47,14 @@ select statement_digest_text('SELECT');
 select statement_digest_text('SELECT 1; SELECT 2');
 select statement_digest_text('SELECT ?');
 
+-- Runtime/expression provenance and binary charset inputs must not expose
+-- parser details or reinterpret bytes as UTF-8.
+select statement_digest_text(statement_digest_text('SELECT 1, 2, 3'));
+select statement_digest_text(_binary'SELECT 1');
+select statement_digest_text(cast('SELECT 1' as binary));
+create table statement_digest_text_generated (
+    g text generated always as (statement_digest_text('SELECT 1')) stored
+);
+
 drop table statement_digest_text_input;
 drop database statement_digest_text_test;
