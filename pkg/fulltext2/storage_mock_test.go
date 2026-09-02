@@ -37,8 +37,24 @@ import (
 // are mockable.
 func swapRunSql(t *testing.T, fn func(*sqlexec.SqlProcess, string) (executor.Result, error)) {
 	prev := runSql
+	prevQueryGeneration := queryCurrentGeneration
 	runSql = fn
-	t.Cleanup(func() { runSql = prev })
+	queryCurrentGeneration = func(_ context.Context, _ string, _ uint32, cfg TableConfig) (int64, int64, error) {
+		res, err := fn(nil, GenerationSQL(cfg))
+		if err != nil {
+			return 0, 0, err
+		}
+		defer res.Close()
+		generation, ok := resultGeneration(res)
+		if !ok {
+			return 0, 0, moerr.NewInternalErrorNoCtx("FULLTEXT2 generation query returned no row")
+		}
+		return generation.BaseTimestamp, generation.TailChunk, nil
+	}
+	t.Cleanup(func() {
+		runSql = prev
+		queryCurrentGeneration = prevQueryGeneration
+	})
 }
 
 func swapRunStreamingSql(t *testing.T, fn func(context.Context, *sqlexec.SqlProcess, string, chan executor.Result, chan error) (executor.Result, error)) {

@@ -88,7 +88,6 @@ type Fulltext2Search struct {
 	accountID      uint32
 	loadedTs       int64
 	loadedTail     int64
-	loadedEpoch    uint64
 	genValid       bool
 	loadWaiters    atomic.Int64
 	pendingTrace   *loadTrace
@@ -132,15 +131,75 @@ func (s *Fulltext2Search) ensureIdentity(sqlproc *sqlexec.SqlProcess) error {
 	return nil
 }
 
-// UseTransientLoad opts retired identities out of process-global publication.
-// They remain queryable from the caller's transaction snapshot, but the loaded
-// object is destroyed after this search and cannot poison a later transaction.
+// UseTransientLoad opts identities with an uncertain durable generation out of
+// process-global publication. They remain queryable from the caller's
+// transaction snapshot, but the loaded object is destroyed after this search
+// and cannot poison a later transaction.
 func (s *Fulltext2Search) UseTransientLoad(sqlproc *sqlexec.SqlProcess) (bool, error) {
 	if err := s.ensureIdentity(sqlproc); err != nil {
 		return false, err
 	}
 	s.transient = requiresTransientLoad(s.identity)
+	if !s.transient || sqlproc == nil {
+		return s.transient, nil
+	}
+	recoveryVersion, recover := localFences.beginRecovery(s.identity, time.Now())
+	if !recover {
+		return true, nil
+	}
+	recovered := false
+	defer func() { localFences.finishRecovery(s.identity, recoveryVersion, recovered, time.Now()) }()
+	parent := context.Background()
+	if candidate := sqlproc.GetContext(); candidate != nil {
+		parent = candidate
+	}
+	ctx, cancel := context.WithTimeout(parent, 5*time.Second)
+	defer cancel()
+	ts, tail, err := QueryGeneration(ctx, sqlproc.GetService(), s.identity.AccountID, s.cfg)
+	if err != nil {
+		return true, nil
+	}
+	observed := Generation{BaseTimestamp: ts, TailChunk: tail}
+	required, _, _ := InstallGenerationFence(s.identity, observed)
+	if !observed.AtLeast(required) {
+		return true, nil
+	}
+	recovered = true
+	s.transient = false
 	return s.transient, nil
+}
+
+var queryCurrentGeneration = QueryGeneration
+
+// validateGlobalAdmission is the publication terminal: a caller-transaction
+// snapshot may enter the process-global cache only when a fresh auto-commit read
+// proves that the assembled generation is still durable-current. Transient loads
+// skip this gate because the generic cache destroys them after the caller search.
+func (s *Fulltext2Search) validateGlobalAdmission(sqlproc *sqlexec.SqlProcess, loaded Generation) error {
+	parent := context.Background()
+	if candidate := sqlproc.GetContext(); candidate != nil {
+		parent = candidate
+	}
+	ctx, cancel := context.WithTimeout(parent, 5*time.Second)
+	defer cancel()
+	ts, tail, err := queryCurrentGeneration(ctx, sqlproc.GetService(), s.identity.AccountID, s.cfg)
+	if err != nil {
+		markGenerationUncertain(s.identity)
+		return errLoadGenerationSuperseded
+	}
+	current := Generation{BaseTimestamp: ts, TailChunk: tail}
+	if current != loaded {
+		if current.AtLeast(loaded) {
+			InstallGenerationFence(s.identity, current)
+		} else {
+			markGenerationUncertain(s.identity)
+		}
+		return errLoadGenerationSuperseded
+	}
+	if requiresTransientLoad(s.identity) {
+		return errLoadGenerationSuperseded
+	}
+	return nil
 }
 
 // Load reads the index from the chunk store: the tag=0 base sub-indexes plus the
@@ -149,7 +208,6 @@ func (s *Fulltext2Search) UseTransientLoad(sqlproc *sqlexec.SqlProcess) (bool, e
 // base, so segs may hold only tail segments (or be empty → a loaded, doc-less index).
 func (s *Fulltext2Search) Load(sqlproc *sqlexec.SqlProcess) (err error) {
 	ensureReusableLoadLifecycle()
-	loadEpoch := currentCoherenceEpoch()
 	if err := s.ensureIdentity(sqlproc); err != nil {
 		return err
 	}
@@ -237,44 +295,33 @@ func (s *Fulltext2Search) Load(sqlproc *sqlexec.SqlProcess) (err error) {
 	}
 	segs := append(bases, tails...)
 	idx := NewIndex(segs, deletes)
-	if required, exists := requiredGeneration(s.identity); (!s.transient && requiresTransientLoad(s.identity)) || loadEpoch != currentCoherenceEpoch() ||
-		exists && !(Generation{BaseTimestamp: baseGeneration, TailChunk: appliedTail}).AtLeast(required) {
+	loadedGeneration := Generation{BaseTimestamp: baseGeneration, TailChunk: appliedTail}
+	if required, exists := requiredGeneration(s.identity); (!s.transient && requiresTransientLoad(s.identity)) ||
+		exists && !loadedGeneration.AtLeast(required) {
 		idx.Free()
 		return errLoadGenerationSuperseded
 	}
+	if !s.transient {
+		if err := s.validateGlobalAdmission(sqlproc, loadedGeneration); err != nil {
+			idx.Free()
+			return err
+		}
+	}
 	s.idx = idx
 	s.loaded = true
-	s.loadedEpoch = loadEpoch
 	if loadGenerationCurrent(generation) {
 		consumeLoadReasonIfCurrent(index, reasonGeneration, generation)
 	}
 	trace.setGeneration(baseGeneration, appliedTail)
 
-	// Capture the generation + durable handles for IsStale. Same txn as the load, so the
-	// captured generation matches the loaded snapshot exactly. On any capture failure genValid
-	// stays false and IsStale reports the entry as uncheckable-hence-stale (evict + reload to
-	// retry capture) rather than pinning it in cache forever — see IsStale.
+	// Capture the exact generation applied to the Index plus durable handles for
+	// later pull checks. validateGlobalAdmission already proved that this applied
+	// generation matched a fresh auto-commit read before global publication.
 	s.cnUUID = sqlproc.GetService()
-	if acc, e := sqlproc.GetAccountID(); e == nil {
-		var genStart time.Time
-		if trace != nil {
-			genStart = time.Now()
-		}
-		ts, _, e2 := LoadGeneration(sqlproc, s.cfg)
-		if trace != nil {
-			trace.addInternalSQL(time.Since(genStart))
-		}
-		if e2 == nil {
-			s.accountID = acc
-			// Keep the generation actually applied to the assembled Index. If a
-			// writer committed while loading, IsStale will force a later refresh
-			// instead of falsely declaring the older snapshot current.
-			s.loadedTs, s.loadedTail, s.genValid = baseGeneration, appliedTail, true
-			if !generationReady {
-				s.loadedTs, s.loadedTail = ts, appliedTail
-			}
-			trace.setGeneration(s.loadedTs, s.loadedTail)
-		}
+	if acc, e := sqlproc.GetAccountID(); e == nil && generationReady {
+		s.accountID = acc
+		s.loadedTs, s.loadedTail, s.genValid = loadedGeneration.BaseTimestamp, loadedGeneration.TailChunk, true
+		trace.setGeneration(s.loadedTs, s.loadedTail)
 	}
 	return nil
 }
@@ -287,7 +334,7 @@ func isLoadCancellationError(err error) bool {
 }
 
 // OnCacheInvalidated is called by the generic cache only on invalidation paths;
-// it does not run on a warm query. The bounded registry lets the next load
+// it does not run on a warm query. The exact registry lets the next load
 // classify its miss without changing VectorIndexSearchIf.
 func (s *Fulltext2Search) OnCacheInvalidated(reason string) {
 	if reason == "" {
@@ -322,34 +369,49 @@ func (s *Fulltext2Search) FinishLoadObservation() {
 	trace.finish(err, canceled, s.loadWaiters.Load())
 }
 
+// OnFreshnessUncertain keeps reads available from each caller's transaction
+// snapshot without allowing that snapshot to replace the process-global cache.
+// A later successful durable-generation read clears this exact identity state.
+func (s *Fulltext2Search) OnFreshnessUncertain() {
+	markGenerationUncertain(s.identity)
+}
+
+func (s *Fulltext2Search) OnFreshnessConfirmed() {
+	clearGenerationUncertain(s.identity)
+}
+
 // IsStale reports whether the underlying index has changed since this entry was loaded, by
 // comparing the load-time generation to the current one (a REBUILD/MERGE bumps the metadata
 // timestamp; a CDC append bumps the tag=1 tail chunk_id). Run on the cache housekeeping
 // goroutine (NOT the search path), so it opens its own short auto-commit txn via the durable
 // cnUUID/accountID captured at load.
 //
-// On a query ERROR it returns (true, err): the most likely cause is the index tables were
-// dropped/rebuilt out from under us (DROP INDEX, restore), so the dead entry must be
-// reclaimed — the next search reloads, or fails cleanly if the index is truly gone. The err
-// is surfaced only for logging. (A no-op reload for a genuinely-transient blip is cheaper
-// than pinning a possibly-dead entry until TTL.) No captured generation (capture failed at load,
-// or no service to re-query) ⇒ (true, nil): the entry cannot self-check freshness, so evict it to
-// force a reload that retries capture. Returning (false, nil) would pin a hot entry — whose TTL
-// keeps sliding on every search — in cache indefinitely, serving pre-CDC/rebuild data forever;
-// the bounded reload (one per freshness sweep) self-heals the moment capture succeeds.
+// On a query error it returns (false, err). The generic cache marks this exact
+// identity uncertain without evicting the global object; subsequent callers use
+// transient loads until the per-identity bounded recovery probe succeeds. No
+// captured generation (capture failed at load, or no service to re-query) uses
+// the same error path. A successful higher generation installs its fence and
+// evicts the snapshotted stale object in the same sweep.
 func (s *Fulltext2Search) IsStale() (bool, error) {
 	return s.IsStaleWithContext(context.Background())
 }
 
+func isDefinitiveGenerationDrop(err error) bool {
+	return moerr.IsMoErrCode(err, moerr.ErrNoSuchTable) || moerr.IsMoErrCode(err, moerr.ErrBadDB)
+}
+
 func (s *Fulltext2Search) IsStaleWithContext(parent context.Context) (bool, error) {
 	if !s.genValid || s.cnUUID == "" {
-		return true, nil
+		return false, moerr.NewInvalidStateNoCtx("fulltext2 generation is unavailable")
 	}
 	ctx, cancel := context.WithTimeout(parent, 5*time.Second)
 	defer cancel()
 	ts, tail, err := QueryGeneration(ctx, s.cnUUID, s.accountID, s.cfg)
 	if err != nil {
-		return true, err
+		if isDefinitiveGenerationDrop(err) {
+			return true, nil
+		}
+		return false, err
 	}
 	current := Generation{BaseTimestamp: ts, TailChunk: tail}
 	loaded := Generation{BaseTimestamp: s.loadedTs, TailChunk: s.loadedTail}
@@ -369,12 +431,10 @@ func (s *Fulltext2Search) IsStaleWithContext(parent context.Context) (bool, erro
 // a loaded but doc-less index (matches nothing) — the caller returns an empty result.
 func (s *Fulltext2Search) prepare(proc *sqlexec.SqlProcess, query any, rt vectorindex.RuntimeConfig) (q Fulltext2Query, k int, pf *prefilter, free func(), empty bool, err error) {
 	free = func() {}
-	if (!s.transient && requiresTransientLoad(s.identity)) || s.loadedEpoch != currentCoherenceEpoch() {
-		// Overflow recovery uses a process-wide epoch because SyncMap.Range may
-		// miss a concurrent insertion. Claim this exact entry while the cache read
-		// lease is held; release becomes the deferred destruction owner and the
-		// caller's bounded coherence retry installs a current object.
-		veccache.Cache.ClaimRemoveWithReason(s.identity.Key(), string(LoadMissGenerationChange))
+	if !s.transient && requiresTransientLoad(s.identity) {
+		// Keep the warm object in place while freshness is unknown. The cache's
+		// bounded retry re-enters through UseTransientLoad, so this transaction can
+		// read its own snapshot without publishing it globally.
 		err = errLoadGenerationSuperseded
 		return
 	}

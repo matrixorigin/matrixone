@@ -396,7 +396,7 @@ func TestFulltext2LoadCannotPublishBelowRequiredGeneration(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, fenceInstalled.Load())
 	// One read for the superseded attempt, then the successful attempt's
-	// pre-load snapshot plus its background-pull handle capture.
+	// pre-load snapshot plus its fresh global-admission read.
 	require.Equal(t, int32(3), generationReads.Load())
 	value, ok := veccache.Cache.IndexMap.Load(id.Key())
 	require.True(t, ok)
@@ -404,7 +404,52 @@ func TestFulltext2LoadCannotPublishBelowRequiredGeneration(t *testing.T) {
 	require.Equal(t, int64(2), loaded.loadedTail)
 }
 
-func TestRetiredFenceCannotBeRepublishedByOlderSnapshot(t *testing.T) {
+func TestFreshnessUncertaintyKeepsOldSnapshotTransient(t *testing.T) {
+	previousCache := veccache.Cache
+	previousFences := localFences
+	veccache.Cache = veccache.NewVectorIndexCache()
+	localFences = newFenceRegistry(1)
+	t.Cleanup(func() {
+		veccache.Cache = previousCache
+		localFences = previousFences
+	})
+
+	cfg := testStorageCfg()
+	const accountID = uint32(19)
+	id := cfg.CacheIdentity(accountID)
+	proc, mp := mockSqlProc(t)
+	swapRunSql(t, func(_ *sqlexec.SqlProcess, sql string) (executor.Result, error) {
+		if strings.HasPrefix(sql, "SELECT (SELECT") {
+			return executor.Result{Mp: mp, Batches: []*batch.Batch{generationBatch(mp, 1, -1)}}, nil
+		}
+		return executor.Result{Mp: mp}, nil
+	})
+
+	query := Fulltext2Query{Pattern: []byte("x")}
+	_, _, err := veccache.Cache.Search(proc, id.Key(), NewFulltext2SearchForAccount(cfg, accountID), query, vectorindex.RuntimeConfig{Limit: 1})
+	require.NoError(t, err)
+	warm, ok := veccache.Cache.IndexMap.Load(id.Key())
+	require.True(t, ok)
+	warmSearch := warm.(*veccache.VectorIndexSearch).Algo.(*Fulltext2Search)
+
+	warmSearch.OnFreshnessUncertain()
+	require.True(t, requiresTransientLoad(id))
+	_, _, err = veccache.Cache.Search(proc, id.Key(), NewFulltext2SearchForAccount(cfg, accountID), query, vectorindex.RuntimeConfig{Limit: 1})
+	require.NoError(t, err)
+	after, ok := veccache.Cache.IndexMap.Load(id.Key())
+	require.True(t, ok)
+	require.Same(t, warm, after, "the old transaction snapshot must not replace the global entry")
+
+	warmSearch.OnFreshnessConfirmed()
+	require.False(t, requiresTransientLoad(id))
+	_, _, err = veccache.Cache.Search(proc, id.Key(), NewFulltext2SearchForAccount(cfg, accountID), query, vectorindex.RuntimeConfig{Limit: 1})
+	require.NoError(t, err)
+	after, ok = veccache.Cache.IndexMap.Load(id.Key())
+	require.True(t, ok)
+	require.Same(t, warm, after)
+}
+
+func TestExactFenceSurvivesCapacityGrowthAndRejectsOlderSnapshot(t *testing.T) {
 	previousCache := veccache.Cache
 	previousFences := localFences
 	veccache.Cache = veccache.NewVectorIndexCache()
@@ -425,9 +470,9 @@ func TestRetiredFenceCannotBeRepublishedByOlderSnapshot(t *testing.T) {
 	require.True(t, localFences.finishClaim(id, required))
 
 	proc, mp := mockSqlProc(t)
-	var retireOnce sync.Once
+	var growOnce sync.Once
 	swapRunSql(t, func(_ *sqlexec.SqlProcess, sql string) (executor.Result, error) {
-		retireOnce.Do(func() {
+		growOnce.Do(func() {
 			claim, _, overflow = localFences.install(other, required)
 			require.True(t, claim)
 			require.False(t, overflow)
@@ -441,10 +486,143 @@ func TestRetiredFenceCannotBeRepublishedByOlderSnapshot(t *testing.T) {
 	loader := NewFulltext2SearchForAccount(cfg, accountID)
 	_, _, err := veccache.Cache.Search(proc, id.Key(), loader,
 		Fulltext2Query{Pattern: []byte("x")}, vectorindex.RuntimeConfig{Limit: 1})
+	require.ErrorContains(t, err, "coherence retry exhausted")
+	require.Equal(t, required, localFences.required(id))
+	require.False(t, requiresTransientLoad(id))
+	_, published := veccache.Cache.IndexMap.Load(id.Key())
+	require.False(t, published, "an old transaction snapshot must never republish a fenced identity")
+}
+
+func TestPrunedFenceStillRejectsOlderSnapshotAtGlobalAdmission(t *testing.T) {
+	previousCache := veccache.Cache
+	previousFences := localFences
+	veccache.Cache = veccache.NewVectorIndexCache()
+	localFences = newFenceRegistry(1)
+	t.Cleanup(func() {
+		veccache.Cache = previousCache
+		localFences = previousFences
+	})
+
+	cfg := testStorageCfg()
+	const accountID = uint32(29)
+	id := cfg.CacheIdentity(accountID)
+	oldGeneration := Generation{BaseTimestamp: 1, TailChunk: -1}
+	currentGeneration := Generation{BaseTimestamp: 2, TailChunk: -1}
+	claim, _, overflow := localFences.install(id, currentGeneration)
+	require.True(t, claim)
+	require.False(t, overflow)
+	require.True(t, localFences.finishClaim(id, currentGeneration))
+	localFences.pruneInactive(func(string) bool { return false })
+	require.Zero(t, localFences.required(id))
+
+	proc, mp := mockSqlProc(t)
+	swapRunSql(t, func(_ *sqlexec.SqlProcess, sql string) (executor.Result, error) {
+		if strings.HasPrefix(sql, "SELECT (SELECT") {
+			return executor.Result{Mp: mp, Batches: []*batch.Batch{
+				generationBatch(mp, oldGeneration.BaseTimestamp, oldGeneration.TailChunk),
+			}}, nil
+		}
+		return executor.Result{Mp: mp}, nil
+	})
+	previousQueryCurrent := queryCurrentGeneration
+	queryCurrentGeneration = func(context.Context, string, uint32, TableConfig) (int64, int64, error) {
+		return currentGeneration.BaseTimestamp, currentGeneration.TailChunk, nil
+	}
+	t.Cleanup(func() { queryCurrentGeneration = previousQueryCurrent })
+
+	_, _, err := veccache.Cache.Search(proc, id.Key(), NewFulltext2SearchForAccount(cfg, accountID),
+		Fulltext2Query{Pattern: []byte("x")}, vectorindex.RuntimeConfig{Limit: 1})
+	require.ErrorContains(t, err, "coherence retry exhausted")
+	require.Equal(t, currentGeneration, localFences.required(id))
+	_, published := veccache.Cache.IndexMap.Load(id.Key())
+	require.False(t, published, "durable admission must reject an old snapshot after registry pruning")
+}
+
+func TestCapPlusOneFencesReturnToWarmSteadyState(t *testing.T) {
+	previousCache := veccache.Cache
+	previousFences := localFences
+	veccache.Cache = veccache.NewVectorIndexCache()
+	localFences = newFenceRegistry(2)
+	t.Cleanup(func() {
+		veccache.Cache = previousCache
+		localFences = previousFences
+	})
+
+	const accountID = uint32(31)
+	configs := []TableConfig{
+		{DbName: "db", IndexTable: "s1", MetadataTable: "m1", AccountID: accountID},
+		{DbName: "db", IndexTable: "s2", MetadataTable: "m2", AccountID: accountID},
+		{DbName: "db", IndexTable: "s3", MetadataTable: "m3", AccountID: accountID},
+	}
+	generation := Generation{BaseTimestamp: 1, TailChunk: -1}
+	for _, cfg := range configs {
+		_, claimed, overflow := InstallGenerationFence(cfg.CacheIdentity(accountID), generation)
+		require.True(t, claimed)
+		require.False(t, overflow)
+	}
+
+	proc, mp := mockSqlProc(t)
+	var generationReads atomic.Int32
+	swapRunSql(t, func(_ *sqlexec.SqlProcess, sql string) (executor.Result, error) {
+		if strings.HasPrefix(sql, "SELECT (SELECT") {
+			generationReads.Add(1)
+			return executor.Result{Mp: mp, Batches: []*batch.Batch{
+				generationBatch(mp, generation.BaseTimestamp, generation.TailChunk),
+			}}, nil
+		}
+		return executor.Result{Mp: mp}, nil
+	})
+	query := Fulltext2Query{Pattern: []byte("x")}
+	for _, cfg := range configs {
+		id := cfg.CacheIdentity(accountID)
+		_, _, err := veccache.Cache.Search(proc, id.Key(), NewFulltext2SearchForAccount(cfg, accountID),
+			query, vectorindex.RuntimeConfig{Limit: 1})
+		require.NoError(t, err)
+	}
+	coldReads := generationReads.Load()
+	require.Equal(t, int32(2*len(configs)), coldReads)
+
+	for _, cfg := range configs {
+		id := cfg.CacheIdentity(accountID)
+		_, _, err := veccache.Cache.Search(proc, id.Key(), NewFulltext2SearchForAccount(cfg, accountID),
+			query, vectorindex.RuntimeConfig{Limit: 1})
+		require.NoError(t, err)
+	}
+	require.Equal(t, coldReads, generationReads.Load(), "cap+1 identities must return to warm-hit cost")
+}
+
+func TestGlobalAdmissionErrorFallsBackToTransientWithoutPublishing(t *testing.T) {
+	previousCache := veccache.Cache
+	previousFences := localFences
+	veccache.Cache = veccache.NewVectorIndexCache()
+	localFences = newFenceRegistry(1)
+	t.Cleanup(func() {
+		veccache.Cache = previousCache
+		localFences = previousFences
+	})
+
+	cfg := testStorageCfg()
+	const accountID = uint32(37)
+	id := cfg.CacheIdentity(accountID)
+	proc, mp := mockSqlProc(t)
+	swapRunSql(t, func(_ *sqlexec.SqlProcess, sql string) (executor.Result, error) {
+		if strings.HasPrefix(sql, "SELECT (SELECT") {
+			return executor.Result{Mp: mp, Batches: []*batch.Batch{generationBatch(mp, 1, -1)}}, nil
+		}
+		return executor.Result{Mp: mp}, nil
+	})
+	previousQueryCurrent := queryCurrentGeneration
+	queryCurrentGeneration = func(context.Context, string, uint32, TableConfig) (int64, int64, error) {
+		return 0, 0, moerr.NewInternalErrorNoCtx("injected admission read failure")
+	}
+	t.Cleanup(func() { queryCurrentGeneration = previousQueryCurrent })
+
+	_, _, err := veccache.Cache.Search(proc, id.Key(), NewFulltext2SearchForAccount(cfg, accountID),
+		Fulltext2Query{Pattern: []byte("x")}, vectorindex.RuntimeConfig{Limit: 1})
 	require.NoError(t, err)
 	require.True(t, requiresTransientLoad(id))
 	_, published := veccache.Cache.IndexMap.Load(id.Key())
-	require.False(t, published, "an old transaction snapshot must never republish a retired identity")
+	require.False(t, published, "an unknown durable generation must remain one-shot")
 }
 
 func TestVectorIndexCacheRetriesSupersededFulltext2Load(t *testing.T) {
@@ -533,17 +711,22 @@ func TestGenerationSQL(t *testing.T) {
 	require.Contains(t, sql, vectorindex.CdcTailId) // scoped to the single CDC tail
 }
 
-// TestIsStaleUncheckableEvicts: the index loaded fine (loadedSearch assembles segments in memory)
-// but no generation was captured (genValid=false — the load-time capture failed). IsStale must
-// report stale, NOT a no-op: an uncheckable entry whose TTL keeps sliding on every search would
-// otherwise serve pre-CDC/rebuild data forever. Reporting stale forces a bounded evict+reload
-// that retries capture and self-heals once it succeeds.
-func TestIsStaleUncheckableEvicts(t *testing.T) {
+// An entry with no captured generation must enter the same uncertainty path as
+// a failed durable query. It stays available only through transient loads until
+// a current-generation probe succeeds.
+func TestIsStaleUncheckableBecomesUncertain(t *testing.T) {
+	previousFences := localFences
+	localFences = newFenceRegistry(1)
+	t.Cleanup(func() { localFences = previousFences })
 	s := loadedSearch(t)
+	s.identity = CacheIdentity{AccountID: 1, Database: "db", StorageTable: "s", MetadataTable: "m"}
+	s.identitySet = true
 	require.False(t, s.genValid) // loaded, but generation never captured
 	stale, err := s.IsStale()
-	require.NoError(t, err)
-	require.True(t, stale, "an entry that can't self-check freshness must be evicted, not pinned")
+	require.Error(t, err)
+	require.False(t, stale)
+	s.OnFreshnessUncertain()
+	require.True(t, requiresTransientLoad(s.identity))
 }
 
 func TestFulltext2SearchEmptyIndex(t *testing.T) {
@@ -661,8 +844,8 @@ func TestLoadGenerationHappy(t *testing.T) {
 
 // TestLoadGenerationRecover: if the generation read panics (e.g. a background housekeeping call
 // hits a torn-down executor), LoadGeneration must recover it into an error — never let it crash
-// the caller. The caller then leaves genValid=false, and IsStale evicts to retry (see
-// TestIsStaleUncheckableEvicts).
+// the caller. The caller then leaves genValid=false, and IsStale enters the
+// uncertainty fence (see TestIsStaleUncheckableBecomesUncertain).
 func TestLoadGenerationRecover(t *testing.T) {
 	old := runSql
 	defer func() { runSql = old }()
@@ -684,17 +867,22 @@ func TestLoadGenerationRejectsMissingResultRow(t *testing.T) {
 	require.ErrorContains(t, err, "generation query returned no row")
 }
 
-// TestFulltext2IsStaleQueryError: with a captured generation but an unresolvable CN service, the
-// background QueryGeneration read errors (its recover turns the ServiceRuntime panic into an
-// error), and IsStale treats a query error as stale so a dropped/rebuilt index's dead cache entry
-// is reclaimed — while surfacing the error for logging.
+// With a captured generation but an unresolvable CN service, the background
+// query error must enter uncertainty rather than masquerade as a confirmed
+// stale generation.
 func TestFulltext2IsStaleQueryError(t *testing.T) {
 	s := NewFulltext2Search(TableConfig{DbName: "db", MetadataTable: "m", IndexTable: "s"})
 	s.genValid = true
 	s.cnUUID = "no-such-cn-uuid"
 	stale, err := s.IsStale()
 	require.Error(t, err)
-	require.True(t, stale)
+	require.False(t, stale)
+}
+
+func TestGenerationDropErrorClassification(t *testing.T) {
+	require.True(t, isDefinitiveGenerationDrop(moerr.NewNoSuchTableNoCtx("db", "t")))
+	require.True(t, isDefinitiveGenerationDrop(moerr.NewBadDBNoCtx("db")))
+	require.False(t, isDefinitiveGenerationDrop(moerr.NewInternalErrorNoCtx("temporary failure")))
 }
 
 // TestFulltext2SearchInto pins the box-free LIMIT path: SearchInto fills the caller-owned

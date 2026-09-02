@@ -17,8 +17,8 @@ package fulltext2
 import (
 	"encoding/json"
 	"testing"
+	"time"
 
-	"github.com/matrixorigin/matrixone/pkg/vectorindex"
 	veccache "github.com/matrixorigin/matrixone/pkg/vectorindex/cache"
 	"github.com/stretchr/testify/require"
 )
@@ -55,7 +55,7 @@ func TestGenerationLexicographicOrderCoversTailReset(t *testing.T) {
 
 func TestFenceRegistryUsesDefaultCapacity(t *testing.T) {
 	r := newFenceRegistry(0)
-	require.Equal(t, defaultFenceRegistryCap, r.max)
+	require.Equal(t, defaultFenceRegistryInitialCapacity, r.initialCapacity)
 }
 
 func TestFenceRegistryClaimsExistingUnclaimedFence(t *testing.T) {
@@ -63,7 +63,7 @@ func TestFenceRegistryClaimsExistingUnclaimedFence(t *testing.T) {
 	id := CacheIdentity{AccountID: 1, Database: "db", StorageTable: "s", MetadataTable: "m"}
 	generation := Generation{BaseTimestamp: 1, TailChunk: 1}
 
-	r.entries[id.Key()] = &fenceEntry{required: generation}
+	r.entries[id.Key()] = &fenceEntry{required: generation, hasRequired: true}
 	claim, current, overflow := r.install(id, generation)
 	require.True(t, claim)
 	require.Equal(t, generation, current)
@@ -71,7 +71,7 @@ func TestFenceRegistryClaimsExistingUnclaimedFence(t *testing.T) {
 	require.True(t, r.finishClaim(id, generation))
 }
 
-func TestDropCacheIdentityClearsFenceState(t *testing.T) {
+func TestDropCacheIdentityRemovesLocalSafetyState(t *testing.T) {
 	oldRegistry := localFences
 	oldCache := veccache.Cache
 	localFences = newFenceRegistry(8)
@@ -90,6 +90,34 @@ func TestDropCacheIdentityClearsFenceState(t *testing.T) {
 
 	DropCacheIdentity(id)
 	require.Zero(t, localFences.required(id))
+	require.False(t, localFences.claimedAtLeast(id, generation))
+}
+
+func TestFenceRegistryPrunesOnlyInactiveIdentities(t *testing.T) {
+	r := newFenceRegistry(1)
+	active := CacheIdentity{AccountID: 1, Database: "db", StorageTable: "active", MetadataTable: "ma"}
+	inactive := CacheIdentity{AccountID: 1, Database: "db", StorageTable: "inactive", MetadataTable: "mi"}
+	claiming := CacheIdentity{AccountID: 1, Database: "db", StorageTable: "claiming", MetadataTable: "mc"}
+	recovering := CacheIdentity{AccountID: 1, Database: "db", StorageTable: "recovering", MetadataTable: "mr"}
+	generation := Generation{BaseTimestamp: 9, TailChunk: 9}
+	for _, id := range []CacheIdentity{active, inactive} {
+		claim, _, overflow := r.install(id, generation)
+		require.True(t, claim)
+		require.False(t, overflow)
+		require.True(t, r.finishClaim(id, generation))
+	}
+	claim, _, overflow := r.install(claiming, generation)
+	require.True(t, claim)
+	require.False(t, overflow)
+	r.markUncertain(recovering)
+	_, recover := r.beginRecovery(recovering, time.Now())
+	require.True(t, recover)
+
+	r.pruneInactive(func(key string) bool { return key == active.Key() })
+	require.Equal(t, generation, r.required(active))
+	require.Zero(t, r.required(inactive))
+	require.Equal(t, generation, r.required(claiming), "an in-flight claim must not be pruned")
+	require.True(t, r.uncertain(recovering), "an in-flight recovery token must not be recycled")
 }
 
 func TestFenceRegistryMonotonicClaimAndOutOfOrder(t *testing.T) {
@@ -121,7 +149,7 @@ func TestFenceRegistryMonotonicClaimAndOutOfOrder(t *testing.T) {
 	require.True(t, r.required(id).AtLeast(g2))
 }
 
-func TestFenceRegistryReclaimsClaimingFenceIntoTransientIdentity(t *testing.T) {
+func TestFenceRegistryRetainsClaimsBeyondInitialCapacity(t *testing.T) {
 	r := newFenceRegistry(1)
 	a := CacheIdentity{AccountID: 1, Database: "db", StorageTable: "a", MetadataTable: "ma"}
 	b := CacheIdentity{AccountID: 1, Database: "db", StorageTable: "b", MetadataTable: "mb"}
@@ -133,23 +161,45 @@ func TestFenceRegistryReclaimsClaimingFenceIntoTransientIdentity(t *testing.T) {
 	claim, _, overflow = r.install(b, g)
 	require.True(t, claim)
 	require.False(t, overflow)
-	require.Zero(t, r.required(a))
+	require.Equal(t, g, r.required(a))
 	require.Equal(t, g, r.required(b))
-	require.True(t, r.retiredIdentity(a))
-	require.False(t, r.finishClaim(a, g), "a reclaimed generation must not complete after b reuses the slot")
+	require.False(t, r.uncertain(a))
+	require.True(t, r.finishClaim(a, g))
 	require.True(t, r.finishClaim(b, g))
 }
 
-func TestInstallGenerationFenceCapacityReclaimsInFlightIdentity(t *testing.T) {
+func TestFenceRegistryCapPlusOneRotationConverges(t *testing.T) {
+	r := newFenceRegistry(2)
+	ids := []CacheIdentity{
+		{AccountID: 1, Database: "db", StorageTable: "a", MetadataTable: "ma"},
+		{AccountID: 1, Database: "db", StorageTable: "b", MetadataTable: "mb"},
+		{AccountID: 1, Database: "db", StorageTable: "c", MetadataTable: "mc"},
+	}
+	generation := Generation{BaseTimestamp: 1, TailChunk: 1}
+
+	for round := 0; round < 3; round++ {
+		for _, id := range ids {
+			claim, current, overflow := r.install(id, generation)
+			require.False(t, overflow)
+			require.Equal(t, generation, current)
+			if claim {
+				require.True(t, r.finishClaim(id, generation))
+			}
+		}
+		require.Len(t, r.entries, len(ids))
+		r.pruneInactive(func(string) bool { return false })
+		require.Empty(t, r.entries, "inactive rotation must recover exact registry memory")
+	}
+}
+
+func TestInstallGenerationFenceGrowsPastInitialCapacity(t *testing.T) {
 	oldRegistry := localFences
 	oldCache := veccache.Cache
-	oldEpoch := coherenceEpoch.Load()
 	localFences = newFenceRegistry(1)
 	veccache.Cache = veccache.NewVectorIndexCache()
 	t.Cleanup(func() {
 		localFences = oldRegistry
 		veccache.Cache = oldCache
-		coherenceEpoch.Store(oldEpoch)
 	})
 
 	a := CacheIdentity{AccountID: 1, Database: "db", StorageTable: "a", MetadataTable: "ma"}
@@ -163,34 +213,72 @@ func TestInstallGenerationFenceCapacityReclaimsInFlightIdentity(t *testing.T) {
 	require.Equal(t, g, current)
 	require.True(t, claimed)
 	require.False(t, overflow)
-	require.Equal(t, oldEpoch, coherenceEpoch.Load())
-	require.Zero(t, localFences.required(a))
-	require.True(t, requiresTransientLoad(a))
-	require.False(t, localFences.finishClaim(a, g))
+	require.Equal(t, g, localFences.required(a))
+	require.False(t, requiresTransientLoad(a))
+	require.True(t, localFences.finishClaim(a, g))
 
 	search := NewFulltext2SearchForAccount(a.TableConfig(), a.AccountID)
 	transient, err := search.UseTransientLoad(nil)
 	require.NoError(t, err)
-	require.True(t, transient)
+	require.False(t, transient)
 }
 
-func TestWarmSearchRejectsOlderCoherenceEpoch(t *testing.T) {
-	oldCache := veccache.Cache
-	oldEpoch := coherenceEpoch.Load()
-	veccache.Cache = veccache.NewVectorIndexCache()
-	t.Cleanup(func() {
-		veccache.Cache = oldCache
-		coherenceEpoch.Store(oldEpoch)
-	})
+func TestFreshnessUncertaintyIsTransientUntilConfirmed(t *testing.T) {
+	oldRegistry := localFences
+	localFences = newFenceRegistry(1)
+	t.Cleanup(func() { localFences = oldRegistry })
 
-	s := &Fulltext2Search{
-		identity:    CacheIdentity{AccountID: 1, Database: "db", StorageTable: "s", MetadataTable: "m"},
-		identitySet: true,
-		loadedEpoch: oldEpoch,
-	}
-	coherenceEpoch.Add(1)
-	_, _, _, _, _, err := s.prepare(nil, nil, vectorindex.RuntimeConfig{})
-	require.ErrorIs(t, err, errLoadGenerationSuperseded)
+	id := CacheIdentity{AccountID: 1, Database: "db", StorageTable: "s", MetadataTable: "m"}
+	s := NewFulltext2SearchForAccount(id.TableConfig(), id.AccountID)
+	s.OnFreshnessUncertain()
+	transient, err := s.UseTransientLoad(nil)
+	require.NoError(t, err)
+	require.True(t, transient)
+
+	s.OnFreshnessConfirmed()
+	transient, err = NewFulltext2SearchForAccount(id.TableConfig(), id.AccountID).UseTransientLoad(nil)
+	require.NoError(t, err)
+	require.False(t, transient)
+}
+
+func TestFenceRegistryUncertaintySurvivesPushAndBacksOffRecovery(t *testing.T) {
+	r := newFenceRegistry(1)
+	id := CacheIdentity{AccountID: 1, Database: "db", StorageTable: "s", MetadataTable: "m"}
+	generation := Generation{BaseTimestamp: 2, TailChunk: 3}
+	now := time.Unix(100, 0)
+
+	r.markUncertain(id)
+	claim, _, overflow := r.install(id, generation)
+	require.True(t, claim)
+	require.False(t, overflow)
+	require.True(t, r.finishClaim(id, generation))
+	require.True(t, r.uncertain(id), "push delivery is not a current-generation read")
+
+	version, ok := r.beginRecovery(id, now)
+	require.True(t, ok)
+	_, ok = r.beginRecovery(id, now)
+	require.False(t, ok, "recovery must be single-flight")
+	r.finishRecovery(id, version, false, now)
+	require.True(t, r.uncertain(id))
+	_, ok = r.beginRecovery(id, now.Add(freshnessRecoveryInitialBackoff-time.Nanosecond))
+	require.False(t, ok)
+	version, ok = r.beginRecovery(id, now.Add(freshnessRecoveryInitialBackoff))
+	require.True(t, ok)
+	r.finishRecovery(id, version, true, now.Add(freshnessRecoveryInitialBackoff))
+	require.False(t, r.uncertain(id))
+}
+
+func TestFenceRegistryRecoveryCannotClearNewerUncertainty(t *testing.T) {
+	r := newFenceRegistry(1)
+	id := CacheIdentity{AccountID: 1, Database: "db", StorageTable: "s", MetadataTable: "m"}
+	now := time.Unix(200, 0)
+	r.markUncertain(id)
+	version, ok := r.beginRecovery(id, now)
+	require.True(t, ok)
+
+	r.markUncertain(id)
+	r.finishRecovery(id, version, true, now)
+	require.True(t, r.uncertain(id), "a later failed sweep must dominate an older successful probe")
 }
 
 func TestFenceRegistryDropRecreateIsolation(t *testing.T) {

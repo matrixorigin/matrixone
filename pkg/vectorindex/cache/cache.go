@@ -250,6 +250,15 @@ type contextStaleChecker interface {
 	IsStaleWithContext(context.Context) (bool, error)
 }
 
+// freshnessUncertaintyAware is optional. A context-aware algorithm uses it to
+// fail closed after a pull timeout/query error without forcing a periodic
+// global eviction. FULLTEXT2 routes subsequent callers through transient loads
+// until one durable-generation read succeeds.
+type freshnessUncertaintyAware interface {
+	OnFreshnessUncertain()
+	OnFreshnessConfirmed()
+}
+
 // base VectorIndex Search structure for VectorIndexSearchIf (see HnswSearch)
 type VectorIndexSearch struct {
 	Mutex       sync.RWMutex
@@ -752,7 +761,9 @@ func (c *VectorIndexCache) checkFastStale(ctx context.Context, entries []staleCh
 				}
 				e := entries[i]
 				if sweepCtx.Err() != nil {
-					c.claimRemoveEntryWithReason(e.key, e.s, "generation_changed")
+					if aware, ok := e.sc.(freshnessUncertaintyAware); ok {
+						aware.OnFreshnessUncertain()
+					}
 					stats.record(freshnessOutcomeDeadline)
 					continue
 				}
@@ -785,11 +796,16 @@ func (c *VectorIndexCache) checkFastStaleEntry(ctx context.Context, e staleCheck
 	checker := e.sc.(contextStaleChecker)
 	stale, err := checker.IsStaleWithContext(checkCtx)
 	if err != nil {
-		c.claimRemoveEntryWithReason(e.key, e.s, "generation_changed")
+		if aware, ok := e.sc.(freshnessUncertaintyAware); ok {
+			aware.OnFreshnessUncertain()
+		}
 		if checkCtx.Err() != nil {
 			return freshnessOutcomeDeadline
 		}
 		return freshnessOutcomeQueryError
+	}
+	if aware, ok := e.sc.(freshnessUncertaintyAware); ok {
+		aware.OnFreshnessConfirmed()
 	}
 	if stale {
 		c.claimRemoveEntryWithReason(e.key, e.s, "generation_changed")

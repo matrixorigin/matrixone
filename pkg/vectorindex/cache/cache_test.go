@@ -187,13 +187,49 @@ type staleSweepTracker struct {
 
 type fastStaleSearch struct {
 	MockSearch
-	tracker *staleSweepTracker
+	tracker   *staleSweepTracker
+	uncertain atomic.Bool
 }
 
 type scriptedFastStaleSearch struct {
 	MockSearch
 	stale bool
 	err   error
+}
+
+type freshnessUncertaintySearch struct {
+	MockSearch
+	uncertain atomic.Bool
+	fail      atomic.Bool
+	loads     atomic.Int32
+}
+
+func (m *freshnessUncertaintySearch) Load(*sqlexec.SqlProcess) error {
+	m.loads.Add(1)
+	return nil
+}
+
+func (m *freshnessUncertaintySearch) IsStale() (bool, error) {
+	return m.IsStaleWithContext(context.Background())
+}
+
+func (m *freshnessUncertaintySearch) IsStaleWithContext(context.Context) (bool, error) {
+	if m.fail.Load() {
+		return false, moerr.NewInternalErrorNoCtx("freshness query failed")
+	}
+	return false, nil
+}
+
+func (m *freshnessUncertaintySearch) OnFreshnessUncertain() {
+	m.uncertain.Store(true)
+}
+
+func (m *freshnessUncertaintySearch) OnFreshnessConfirmed() {
+	m.uncertain.Store(false)
+}
+
+func (m *freshnessUncertaintySearch) UseTransientLoad(*sqlexec.SqlProcess) (bool, error) {
+	return m.uncertain.Load(), nil
 }
 
 type controlledFastStaleSearch struct {
@@ -283,6 +319,14 @@ func (m *fastStaleSearch) IsStaleWithContext(ctx context.Context) (bool, error) 
 	case <-m.tracker.release:
 		return true, nil
 	}
+}
+
+func (m *fastStaleSearch) OnFreshnessUncertain() {
+	m.uncertain.Store(true)
+}
+
+func (m *fastStaleSearch) OnFreshnessConfirmed() {
+	m.uncertain.Store(false)
 }
 
 func (m *scriptedFastStaleSearch) IsStale() (bool, error) {
@@ -387,15 +431,18 @@ func TestClaimRemoveDefersInFlightLoadDestructionWithoutBlocking(t *testing.T) {
 	}
 }
 
-func TestFastStaleSweepIsSingleFlightBoundedAndEvictsImmediately(t *testing.T) {
+func TestFastStaleSweepIsSingleFlightBoundedAndRetainsUnknownEntries(t *testing.T) {
 	proc := sqlexec.NewSqlProcess(testutil.NewProcessWithMPool(t, "", mpool.MustNewZero()))
 	c := NewVectorIndexCache()
 	c.fastStaleTimeout = 50 * time.Millisecond
 	tracker := &staleSweepTracker{release: make(chan struct{})}
 	t.Cleanup(func() { close(tracker.release) })
+	algos := make([]*fastStaleSearch, 0, 17)
 	for i := 0; i < 17; i++ {
 		key := fmt.Sprintf("fulltext2:%d", i)
-		_, _, err := c.Search(proc, key, &fastStaleSearch{tracker: tracker}, nil, vectorindex.RuntimeConfig{})
+		algo := &fastStaleSearch{tracker: tracker}
+		algos = append(algos, algo)
+		_, _, err := c.Search(proc, key, algo, nil, vectorindex.RuntimeConfig{})
 		require.NoError(t, err)
 	}
 
@@ -409,11 +456,12 @@ func TestFastStaleSweepIsSingleFlightBoundedAndEvictsImmediately(t *testing.T) {
 	require.Equal(t, int32(16), tracker.started.Load())
 	for i := 0; i < 17; i++ {
 		_, ok := c.IndexMap.Load(fmt.Sprintf("fulltext2:%d", i))
-		require.False(t, ok)
+		require.True(t, ok)
+		require.True(t, algos[i].uncertain.Load())
 	}
 }
 
-func TestFastStaleSweepBoundsWholeRegistry(t *testing.T) {
+func TestFastStaleSweepBoundsWholeRegistryWithoutEvictionStorm(t *testing.T) {
 	proc := sqlexec.NewSqlProcess(testutil.NewProcessWithMPool(t, "", mpool.MustNewZero()))
 	c := NewVectorIndexCache()
 	c.fastStaleTimeout = 50 * time.Millisecond
@@ -440,7 +488,7 @@ func TestFastStaleSweepBoundsWholeRegistry(t *testing.T) {
 	require.Zero(t, stats.queryError)
 	for i := 0; i < fastStaleRegistryTestSize; i++ {
 		_, ok := c.IndexMap.Load(fmt.Sprintf("fulltext2:blocked:%d", i))
-		require.False(t, ok)
+		require.True(t, ok)
 	}
 }
 
@@ -488,6 +536,46 @@ func TestFastStaleSweepRecordsTerminalOutcomes(t *testing.T) {
 	metricCount, err := promtestutil.GatherAndCount(metricv2.GetPrometheusGatherer(), "mo_vector_index_cache_freshness_sweep_duration_seconds")
 	require.NoError(t, err)
 	require.Equal(t, 1, metricCount)
+	_, stalePresent := c.IndexMap.Load("fulltext2:outcome:stale")
+	_, errorPresent := c.IndexMap.Load("fulltext2:outcome:error")
+	require.False(t, stalePresent)
+	require.True(t, errorPresent, "a query error must not trigger a global reload")
+}
+
+func TestFastStaleUncertaintyDoesNotEvictOrRepublish(t *testing.T) {
+	proc := sqlexec.NewSqlProcess(testutil.NewProcessWithMPool(t, "", mpool.MustNewZero()))
+	c := NewVectorIndexCache()
+	algo := &freshnessUncertaintySearch{}
+	algo.fail.Store(true)
+	const key = "fulltext2:uncertain"
+
+	_, _, err := c.Search(proc, key, algo, nil, vectorindex.RuntimeConfig{})
+	require.NoError(t, err)
+	require.Equal(t, int32(1), algo.loads.Load())
+	before, ok := c.IndexMap.Load(key)
+	require.True(t, ok)
+
+	stats := c.checkStale(context.Background(), true)
+	require.Equal(t, 1, stats.queryError)
+	require.True(t, algo.uncertain.Load())
+	after, ok := c.IndexMap.Load(key)
+	require.True(t, ok, "an unknown generation must not trigger periodic global eviction")
+	require.Same(t, before, after)
+
+	_, _, err = c.Search(proc, key, algo, nil, vectorindex.RuntimeConfig{})
+	require.NoError(t, err)
+	require.Equal(t, int32(2), algo.loads.Load(), "an uncertain query may load transiently")
+	after, ok = c.IndexMap.Load(key)
+	require.True(t, ok)
+	require.Same(t, before, after, "an old transaction snapshot must not replace the global entry")
+
+	algo.fail.Store(false)
+	stats = c.checkStale(context.Background(), true)
+	require.Equal(t, 1, stats.fresh)
+	require.False(t, algo.uncertain.Load())
+	_, _, err = c.Search(proc, key, algo, nil, vectorindex.RuntimeConfig{})
+	require.NoError(t, err)
+	require.Equal(t, int32(2), algo.loads.Load(), "a successful durable read should restore the warm cache")
 }
 
 func TestFastStaleSweepDoesNotEvictReplacement(t *testing.T) {

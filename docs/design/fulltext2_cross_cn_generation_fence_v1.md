@@ -46,12 +46,14 @@ combine values from two statements.
 
 ## Local fence state machine
 
-Each process owns a bounded registry keyed by `CacheIdentity.Key()`:
+Each process owns an exact registry keyed by `CacheIdentity.Key()`:
 
 ```
 absent -> required=G, claiming -> claimed
 claimed(G) -- newer H--> claiming(H)
 claiming/claimed(G) -- older/equal--> unchanged
+absent/claimed -- freshness unknown--> transient
+transient -- successful durable read/fence--> cacheable
 ```
 
 Only one caller may claim a generation.  It first advances the reusable
@@ -60,30 +62,43 @@ required generation claimed.  Equal, duplicate, old, and no-cache deliveries
 are idempotent.  If a newer generation arrives during a claim, the old claim
 does not mark the newer generation complete.
 
-The registry keeps at most 1024 exact entries.  A lower bound is not simply
-forgotten: before reclaiming the least-recently-used entry, including one whose
-eviction claim is still in flight, its identity is added to a fixed 16-Kbit,
-process-randomized retired Bloom filter.  A transaction may have fixed an older
-snapshot before the claim and start its first MATCH only later, so every retired
-identity bypasses the process-global cache permanently for that process.  It is
-still queryable through a one-shot load/search object that is destroyed after
-the statement; an old snapshot can therefore complete without publishing state
-that a later transaction could acquire.  Bloom false positives only disable
-caching for an additional FULLTEXT2 identity; they do not change results or
-availability.  DROP/recreate remains isolated by new hidden-table identities.
+The map reserves space for 1024 identities initially, but 1024 is not a product
+limit.  Exact lower bounds grow with the active cached identity set.  Existing
+housekeeping removes an identity's registry state only after the generic cache
+has neither a loading nor a loaded object for that key.  Every later cold load
+must pass a fresh auto-commit generation read before global publication, so the
+registry can converge without reopening an old-snapshot publication window.
+This prevents a cap+1 rotation from either forgetting an unvalidated lower
+bound or cumulatively turning every identity into a permanent one-shot load.
+Registry memory is proportional to active cache identities, rather than to
+MATCH count, historical lifecycle count, or fence count.  DROP/recreate remains
+isolated by new hidden-table identities.
 
-When the registry is full, it retires and reclaims the least-recently-used
-identity before inserting the incoming identity.  The incoming lower bound is
-therefore always recorded.  A late `finishClaim` for the reclaimed identity
-fails because its exact entry no longer exists, so that RPC is not ACKed; the
-retired filter keeps subsequent loads for that identity transient and
-fail-closed.  This avoids both an unbounded pending map and an overflow window
-in which a new identity has no required generation.
+Freshness uncertainty is exact and temporary.  A query error, per-entry
+timeout, or whole-sweep deadline marks the identity transient but does not
+remove its warm global object.  Subsequent MATCH callers load from their own
+transaction snapshot into a one-shot object and destroy it after the statement;
+they cannot replace the global entry.  Push delivery may raise the exact lower
+bound but never clears freshness uncertainty, because an older delayed push is
+not proof that no newer durable generation exists.  The first later successful
+current-generation read that is not below the installed lower bound clears the
+transient state.
 
-A load reads its durable generation before data and checks the registry both
-after the generation read and immediately before publishing its `Index`.  A
-lower generation destroys the in-progress object and returns the cache's
-dedicated retryable-load marker.  FULLTEXT2 opts into four coherence attempts
+Recovery is demand-driven and bounded per identity.  At most one MATCH caller
+runs the current-generation probe; other concurrent callers stay transient.
+Failed probes back off from 100 ms to 30 seconds.  This also lets an identity
+recover after a push or TTL eviction removed the old sweep object, without
+turning a metadata outage into one probe or global reload per concurrent query.
+
+A load reads its transaction-snapshot generation before data and checks the
+registry both after the generation read and immediately before publishing its
+`Index`.  At the publication terminal, a non-transient load also performs one
+five-second-bounded auto-commit generation read.  Only an exact match may remain
+in the process-global cache.  A lower, newer, unknown, or dropped generation
+destroys the in-progress object and returns the cache's dedicated retryable-load
+marker; uncertainty routes the retry through a one-shot object.  This terminal
+is what makes registry reclamation safe even for an arbitrarily old caller
+transaction or a delayed push.  FULLTEXT2 opts into four coherence attempts
 with context-aware 5/10/20 ms backoff; other algorithms keep the existing cache
 retry contract.
 
@@ -132,19 +147,28 @@ workers to exit, and closes the query client last.
 
 The cache runs a single-flight freshness sweep with a 30-second whole-sweep
 deadline, sixteen fixed workers, and a five-second per-entry context clipped by
-the remaining sweep deadline.  Fresh entries are retained.  Stale entries,
-query errors, and snapshot entries that cannot start before the deadline are
-claimed fail-closed using the exact snapshotted cache object, so a late result
-cannot evict a replacement published under the same key.  Each entry has one
-terminal outcome (`fresh`, `stale`, `query_error`, or `deadline`).  Those four
-fixed labels feed a counter, sweep duration feeds a histogram, and the cache
-emits only one aggregate summary log per sweep.  A higher durable generation is
-installed and evicted in the same sweep.  MATCH performs no catalog SQL on a
-warm hit.  Pull repairs sender crash, lost RPC, and new-CN join; it is not a
-successful ACK substitute.
+the remaining sweep deadline.  Fresh entries are retained.  A successfully
+observed stale entry installs its higher durable generation and is claimed
+fail-closed using the exact snapshotted cache object, so a late result cannot
+evict a replacement published under the same key.  Query errors and entries
+that cannot complete before the deadline enter the temporary transient state
+above; the sweep does not bulk-evict them, so a metadata outage cannot trigger
+periodic O(N) index reload work.  Each entry has one terminal outcome (`fresh`,
+`stale`, `query_error`, or `deadline`).  Those four fixed labels feed a counter,
+sweep duration feeds a histogram, and the cache emits only one aggregate
+summary log per sweep.  MATCH performs no catalog SQL on a normal warm hit.
+Pull repairs sender crash, lost RPC, and new-CN join; it is not a successful ACK
+substitute.
 
-DROP clears the exact cache, reusable pools, load generation, and fence.
-Recreate is isolated by new hidden names.  MERGE/REBUILD keep their existing
+DROP clears the exact cache, reusable pools, load generation, and local registry
+entry.  A remote pull that definitively observes `NoSuchTable`/`BadDB` claims
+the exact cached object stale.  A delayed push may temporarily reinstall an
+exact lower bound, but housekeeping removes it once no cache object owns the
+key.  An old caller snapshot still cannot republish after that reclamation,
+because the auto-commit publication terminal observes the missing hidden table
+and forces a transient one-shot load.  Ordinary query errors use the same
+uncertainty path without pretending the table was dropped.  Recreate is
+isolated by new hidden names.  MERGE/REBUILD keep their existing
 transaction-local invalidation and are repaired remotely by pull; adding a
 cross-transaction DDL notification is outside this issue unless a safe
 post-commit hook already exists.

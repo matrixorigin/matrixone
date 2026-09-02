@@ -15,19 +15,19 @@
 package fulltext2
 
 import (
-	"hash/maphash"
 	"strconv"
 	"strings"
 	"sync"
-	"sync/atomic"
+	"time"
 
 	veccache "github.com/matrixorigin/matrixone/pkg/vectorindex/cache"
 )
 
 const (
-	cacheKeyPrefix          = "fulltext2:"
-	defaultFenceRegistryCap = 1024
-	retiredFenceFilterWords = 256 // 16 Kibit; false positives only disable caching.
+	cacheKeyPrefix                      = "fulltext2:"
+	defaultFenceRegistryInitialCapacity = 1024
+	freshnessRecoveryInitialBackoff     = 100 * time.Millisecond
+	freshnessRecoveryMaxBackoff         = 30 * time.Second
 )
 
 // CacheIdentity is the stable tenant and lifecycle scoped identity of one
@@ -77,86 +77,46 @@ func (g Generation) AtLeast(other Generation) bool {
 func (g Generation) IsZero() bool { return g.BaseTimestamp == 0 && g.TailChunk == 0 }
 
 type fenceEntry struct {
-	required Generation
-	claiming bool
-	claimed  bool
-	lastUsed uint64
+	required           Generation
+	hasRequired        bool
+	claiming           bool
+	claimed            bool
+	uncertain          bool
+	uncertaintyVersion uint64
+	recovering         bool
+	retryAfter         time.Time
+	backoff            time.Duration
 }
 
 type fenceRegistry struct {
-	mu         sync.Mutex
-	entries    map[string]*fenceEntry
-	max        int
-	clock      uint64
-	retired    [retiredFenceFilterWords]uint64
-	retiredKey maphash.Seed
+	mu              sync.Mutex
+	entries         map[string]*fenceEntry
+	initialCapacity int
 }
 
-func newFenceRegistry(max int) *fenceRegistry {
-	if max <= 0 {
-		max = defaultFenceRegistryCap
+func newFenceRegistry(initialCapacity int) *fenceRegistry {
+	if initialCapacity <= 0 {
+		initialCapacity = defaultFenceRegistryInitialCapacity
 	}
-	return &fenceRegistry{entries: make(map[string]*fenceEntry), max: max, retiredKey: maphash.MakeSeed()}
-}
-
-func retiredHashes(seed maphash.Seed, key string) [4]uint64 {
-	h := maphash.String(seed, key)
-	h2 := (h ^ h>>29 ^ h<<17) | 1
-	return [4]uint64{h, h + h2, h + 2*h2, h + 3*h2}
-}
-
-func (r *fenceRegistry) markRetiredLocked(key string) {
-	for _, h := range retiredHashes(r.retiredKey, key) {
-		bit := h & (uint64(len(r.retired))*64 - 1)
-		r.retired[bit/64] |= uint64(1) << (bit % 64)
+	return &fenceRegistry{
+		entries:         make(map[string]*fenceEntry, initialCapacity),
+		initialCapacity: initialCapacity,
 	}
 }
 
-func (r *fenceRegistry) retiredIdentity(id CacheIdentity) bool {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	for _, h := range retiredHashes(r.retiredKey, id.Key()) {
-		bit := h & (uint64(len(r.retired))*64 - 1)
-		if r.retired[bit/64]&(uint64(1)<<(bit%64)) == 0 {
-			return false
-		}
-	}
-	return true
-}
-
-// reclaimOldestLocked retires the least-recently-used lower bound before
-// removing it. The entry may still have an eviction claim in flight; retiring
-// the identity makes that late claim fail closed and prevents its generation
-// from ever being published globally again.
-func (r *fenceRegistry) reclaimOldestLocked() bool {
-	var oldestKey string
-	var oldest uint64
-	for key, entry := range r.entries {
-		if oldestKey == "" || entry.lastUsed < oldest {
-			oldestKey, oldest = key, entry.lastUsed
-		}
-	}
-	if oldestKey == "" {
-		return false
-	}
-	r.markRetiredLocked(oldestKey)
-	delete(r.entries, oldestKey)
-	return true
-}
-
-// install returns whether the caller owns the eviction claim, the monotonic
-// current requirement, and whether capacity forced the global fail-closed path.
+// install returns whether the caller owns the eviction claim and the monotonic
+// current requirement. Exact lower bounds grow with the active cached identity
+// set; housekeeping reclaims inactive entries only because every later cold
+// load has a durable global-admission check.
 func (r *fenceRegistry) install(id CacheIdentity, generation Generation) (bool, Generation, bool) {
 	key := id.Key()
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	r.clock++
 	if entry, ok := r.entries[key]; ok {
-		entry.lastUsed = r.clock
-		if !generation.AtLeast(entry.required) {
+		if entry.hasRequired && !generation.AtLeast(entry.required) {
 			return false, entry.required, false
 		}
-		if generation == entry.required {
+		if entry.hasRequired && generation == entry.required {
 			if entry.claimed || entry.claiming {
 				return false, entry.required, false
 			}
@@ -164,14 +124,12 @@ func (r *fenceRegistry) install(id CacheIdentity, generation Generation) (bool, 
 			return true, entry.required, false
 		}
 		entry.required = generation
+		entry.hasRequired = true
 		entry.claimed = false
 		entry.claiming = true
 		return true, entry.required, false
 	}
-	if len(r.entries) >= r.max && !r.reclaimOldestLocked() {
-		return false, Generation{}, true
-	}
-	r.entries[key] = &fenceEntry{required: generation, claiming: true, lastUsed: r.clock}
+	r.entries[key] = &fenceEntry{required: generation, hasRequired: true, claiming: true}
 	return true, generation, false
 }
 
@@ -179,13 +137,11 @@ func (r *fenceRegistry) finishClaim(id CacheIdentity, generation Generation) boo
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	entry, ok := r.entries[id.Key()]
-	if !ok || entry.required != generation || !entry.claiming {
+	if !ok || !entry.hasRequired || entry.required != generation || !entry.claiming {
 		return false
 	}
 	entry.claiming = false
 	entry.claimed = true
-	r.clock++
-	entry.lastUsed = r.clock
 	return true
 }
 
@@ -197,9 +153,7 @@ func (r *fenceRegistry) required(id CacheIdentity) Generation {
 func (r *fenceRegistry) lookupRequired(id CacheIdentity) (Generation, bool) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	if entry := r.entries[id.Key()]; entry != nil {
-		r.clock++
-		entry.lastUsed = r.clock
+	if entry := r.entries[id.Key()]; entry != nil && entry.hasRequired {
 		return entry.required, true
 	}
 	return Generation{}, false
@@ -209,7 +163,109 @@ func (r *fenceRegistry) claimedAtLeast(id CacheIdentity, generation Generation) 
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	entry := r.entries[id.Key()]
-	return entry != nil && entry.claimed && entry.required.AtLeast(generation)
+	return entry != nil && entry.hasRequired && entry.claimed && entry.required.AtLeast(generation)
+}
+
+func (r *fenceRegistry) markUncertain(id CacheIdentity) {
+	key := id.Key()
+	r.mu.Lock()
+	entry := r.entries[key]
+	if entry == nil {
+		entry = &fenceEntry{}
+		r.entries[key] = entry
+	}
+	entry.uncertaintyVersion++
+	if !entry.uncertain {
+		entry.retryAfter = time.Time{}
+		entry.backoff = 0
+	}
+	entry.uncertain = true
+	r.mu.Unlock()
+}
+
+func (r *fenceRegistry) clearUncertain(id CacheIdentity) {
+	key := id.Key()
+	r.mu.Lock()
+	if entry := r.entries[key]; entry != nil {
+		entry.uncertain = false
+		entry.recovering = false
+		entry.retryAfter = time.Time{}
+		entry.backoff = 0
+		if !entry.hasRequired && !entry.claiming && !entry.claimed {
+			delete(r.entries, key)
+		}
+	}
+	r.mu.Unlock()
+}
+
+func (r *fenceRegistry) uncertain(id CacheIdentity) bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	entry := r.entries[id.Key()]
+	return entry != nil && entry.uncertain
+}
+
+// pruneInactive removes safety state only after the generic cache no longer has
+// a loading or loaded object for the identity. A later cold load is still safe:
+// Fulltext2Search performs a fresh auto-commit generation read before it may
+// remain in the process-global cache.
+func (r *fenceRegistry) pruneInactive(cachePresent func(string) bool) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for key, entry := range r.entries {
+		if !entry.claiming && !entry.recovering && !cachePresent(key) {
+			delete(r.entries, key)
+		}
+	}
+}
+
+func (r *fenceRegistry) clear() {
+	r.mu.Lock()
+	clear(r.entries)
+	r.mu.Unlock()
+}
+
+func (r *fenceRegistry) beginRecovery(id CacheIdentity, now time.Time) (uint64, bool) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	entry := r.entries[id.Key()]
+	if entry == nil || !entry.uncertain || entry.recovering || now.Before(entry.retryAfter) {
+		return 0, false
+	}
+	entry.recovering = true
+	return entry.uncertaintyVersion, true
+}
+
+func (r *fenceRegistry) finishRecovery(id CacheIdentity, version uint64, succeeded bool, now time.Time) {
+	key := id.Key()
+	r.mu.Lock()
+	entry := r.entries[key]
+	if entry == nil {
+		r.mu.Unlock()
+		return
+	}
+	entry.recovering = false
+	if !entry.uncertain {
+		r.mu.Unlock()
+		return
+	}
+	if succeeded && entry.uncertaintyVersion == version {
+		entry.uncertain = false
+		entry.retryAfter = time.Time{}
+		entry.backoff = 0
+		if !entry.hasRequired && !entry.claiming && !entry.claimed {
+			delete(r.entries, key)
+		}
+		r.mu.Unlock()
+		return
+	}
+	if entry.backoff <= 0 {
+		entry.backoff = freshnessRecoveryInitialBackoff
+	} else {
+		entry.backoff = min(entry.backoff*2, freshnessRecoveryMaxBackoff)
+	}
+	entry.retryAfter = now.Add(entry.backoff)
+	r.mu.Unlock()
 }
 
 func (r *fenceRegistry) drop(id CacheIdentity) {
@@ -218,8 +274,20 @@ func (r *fenceRegistry) drop(id CacheIdentity) {
 	r.mu.Unlock()
 }
 
-var localFences = newFenceRegistry(defaultFenceRegistryCap)
-var coherenceEpoch atomic.Uint64
+var localFences = newFenceRegistry(defaultFenceRegistryInitialCapacity)
+
+func init() {
+	veccache.RegisterLifecycleHook(func(shutdown bool) {
+		if shutdown {
+			localFences.clear()
+			return
+		}
+		localFences.pruneInactive(func(key string) bool {
+			_, ok := veccache.Cache.IndexMap.Load(key)
+			return ok
+		})
+	})
+}
 
 type FencePublisher interface {
 	Enqueue(CacheIdentity, Generation)
@@ -227,19 +295,10 @@ type FencePublisher interface {
 }
 
 // InstallGenerationFence installs the requirement and claims exact eviction.
-// overflow is fail-closed and intentionally not acknowledged by the RPC layer.
+// The overflow result is retained for the mixed-version RPC contract and is
+// always false now that the exact registry grows with active identities.
 func InstallGenerationFence(id CacheIdentity, generation Generation) (current Generation, claimed, overflow bool) {
 	claim, current, overflow := localFences.install(id, generation)
-	if overflow {
-		// A bump before the prefix claim covers entries concurrently loading but
-		// not yet visible to the range: their pre-publish check observes the new
-		// epoch and abandons the old object. The prefix claim prevents new readers
-		// from acquiring every already-visible FULLTEXT2 object without waiting on
-		// reader leases. The sender receives no ACK and retries the exact identity.
-		coherenceEpoch.Add(1)
-		veccache.Cache.ClaimRemovePrefixWithReason(cacheKeyPrefix, string(LoadMissGenerationChange))
-		return current, false, true
-	}
 	if !claim {
 		entry := localFences.required(id)
 		return entry, localFences.claimedAtLeast(id, generation), false
@@ -261,6 +320,8 @@ func requiredGeneration(id CacheIdentity) (Generation, bool) {
 	return required, exists
 }
 
-func currentCoherenceEpoch() uint64 { return coherenceEpoch.Load() }
+func markGenerationUncertain(id CacheIdentity) { localFences.markUncertain(id) }
 
-func requiresTransientLoad(id CacheIdentity) bool { return localFences.retiredIdentity(id) }
+func clearGenerationUncertain(id CacheIdentity) { localFences.clearUncertain(id) }
+
+func requiresTransientLoad(id CacheIdentity) bool { return localFences.uncertain(id) }
