@@ -740,6 +740,7 @@ var predefinedFunids = map[int]int{
 	ONNX_RUN:                       556,
 	APPROX_PERCENTILE:              557,
 	MO_IS_LEGACY_TEMPORARY_TABLE:   558,
+	MO_VIEW_DEFINITION:             578,
 	MAX_BY:                         559,
 	MAX_BY_NON_NULL:                560,
 	CHECK_CONSTRAINT_ASSERT:        561,
