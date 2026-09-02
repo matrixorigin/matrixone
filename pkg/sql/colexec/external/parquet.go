@@ -489,6 +489,12 @@ func (h *ParquetHandler) prepare(param *ExternalParam) error {
 		for colIdx, col := range h.cols {
 			if col != nil && col.Leaf() {
 				h.pages[colIdx] = rowGroupChunks[col.Index()].Pages()
+				h.dataColIndices = append(h.dataColIndices, colIdx)
+				sourceKind := col.Type().Kind()
+				if types.T(param.Cols[colIdx].Typ.Id).ToType().IsVarlen() ||
+					sourceKind == parquet.ByteArray || sourceKind == parquet.FixedLenByteArray {
+					h.budgetColIndices = append(h.budgetColIndices, colIdx)
+				}
 			}
 		}
 	}
@@ -3799,7 +3805,7 @@ func bigIntToTwosComplementBytes(ctx context.Context, bi *big.Int, size int) ([]
 func (h *ParquetHandler) getData(bat *batch.Batch, param *ExternalParam, proc *process.Process) error {
 	var err error
 	if h.rowCountOnly {
-		err = h.getDataRowCountOnly(bat)
+		err = h.getDataRowCountOnly(bat, param)
 	} else if h.hasNestedCols {
 		err = h.getDataByRow(bat, param, proc)
 	} else {
@@ -3837,12 +3843,12 @@ func (h *ParquetHandler) closePagesOnError(ctx context.Context, err error) error
 	return err
 }
 
-func (h *ParquetHandler) getDataRowCountOnly(bat *batch.Batch) error {
+func (h *ParquetHandler) getDataRowCountOnly(bat *batch.Batch, param *ExternalParam) error {
 	batchLimit := int(h.batchCnt)
 	rowCount := 0
 
 	if h.rowCountRemaining > 0 {
-		rowCount = min(h.rowCountRemaining, batchLimit)
+		rowCount = h.rowsToGeneratedByteBudget(min(h.rowCountRemaining, batchLimit), param)
 		h.rowCountRemaining -= rowCount
 	} else {
 		if h.currentRowGroup >= len(h.rowGroups) {
@@ -3851,7 +3857,7 @@ func (h *ParquetHandler) getDataRowCountOnly(bat *batch.Batch) error {
 		}
 		total := int(h.rowGroups[h.currentRowGroup].NumRows())
 		h.currentRowGroup++
-		rowCount = min(total, batchLimit)
+		rowCount = h.rowsToGeneratedByteBudget(min(total, batchLimit), param)
 		h.rowCountRemaining = total - rowCount
 	}
 
@@ -3943,102 +3949,445 @@ func (h *ParquetHandler) fillIcebergDMLMetadataColumns(
 func (h *ParquetHandler) getDataByPage(bat *batch.Batch, param *ExternalParam, proc *process.Process) error {
 	length := 0
 	finish := false
-	for _, attr := range param.Attrs {
-		colIdx := attr.ColIndex
-		if param.Cols[colIdx].Hidden {
-			continue
-		}
+	batchLimit := int(h.batchCnt)
+	if batchLimit <= 0 {
+		bat.SetRowCount(0)
+		return nil
+	}
+	if len(h.dataColIndices) == 0 {
+		return moerr.NewInternalError(param.Ctx, "parquet page mode has no physical data columns")
+	}
 
-		mapper := h.mappers[colIdx]
-		if mapper == nil {
-			continue
-		}
-
-		vec := bat.Vecs[colIdx]
-
-		pages := h.pages[colIdx]
-		n := h.batchCnt
-		pageOff := h.pageOffset[colIdx]
-	L:
-		for n > 0 {
-			// Use cached page if available, otherwise read next page
+	for length < batchLimit && !h.parquetBatchAtByteBudget(bat, length, param) {
+		available := int64(batchLimit - length)
+		for _, colIdx := range h.dataColIndices {
+			eof, err := h.ensureCurrentPage(colIdx, param)
+			if err != nil {
+				return err
+			}
+			if eof {
+				finish = true
+				available = 0
+				break
+			}
 			page := h.currentPage[colIdx]
-			if page == nil {
-				var err error
-				readStart := time.Now()
-				page, err = pages.ReadPage()
-				param.addParquetProfile(process.ParquetProfileStats{
-					ReadPageTime: time.Since(readStart).Nanoseconds(),
-				})
-				switch {
-				case errors.Is(err, io.EOF):
-					finish = true
-					break L
-				case err != nil:
-					return h.closePagesOnError(param.Ctx, moerr.ConvertGoError(param.Ctx, err))
-				}
-				h.currentPage[colIdx] = page
-				pageOff = 0
-			}
-
-			nr := page.NumRows()
-			if nr <= pageOff {
-				// Current page exhausted, clear cache and read next
-				h.currentPage[colIdx] = nil
-				h.pageOffset[colIdx] = 0
-				pageOff = 0
-				continue
-			}
-
 			if len(page.RepetitionLevels()) != 0 && !h.mappers[colIdx].allowRepetition {
 				err := moerr.NewNYI(param.Ctx, "page has repetition")
 				return h.closePagesOnError(param.Ctx, err)
 			}
+			available = min(available, page.NumRows()-h.pageOffset[colIdx])
+		}
+		if available <= 0 {
+			break
+		}
 
-			// Calculate how many rows to read from this page
-			remaining := nr - pageOff
-			toRead := min(n, remaining)
+		toRead := int64(nextParquetBatchRows(length, int(available), h.estimatedBatchSize(bat, length, param), param.maxBatchSize))
+		if length > 0 && param.maxBatchSize > 0 && len(h.budgetColIndices) > 0 {
+			remainingBudget := parquetRemainingBudget(h.estimatedBatchSize(bat, length, param), param.maxBatchSize)
+			toRead = min(toRead, h.rowsToSourceBudget(toRead, remainingBudget))
+		}
 
-			slicedPage := page.Slice(pageOff, pageOff+toRead)
-			pageOff += toRead
-			n -= toRead
-
-			// Update page offset
-			h.pageOffset[colIdx] = pageOff
-
-			// If we've consumed the entire page, clear the cache
-			if pageOff >= nr {
-				h.currentPage[colIdx] = nil
-				h.pageOffset[colIdx] = 0
-			}
-
-			mapStart := time.Now()
-			err := h.mappers[colIdx].mapping(slicedPage, proc, vec)
-			param.addParquetProfile(process.ParquetProfileStats{
-				MapTime: time.Since(mapStart).Nanoseconds(),
-			})
-			if err != nil {
-				return h.closePagesOnError(param.Ctx, err)
+		batchBytesBefore := h.physicalBatchSize(bat)
+		checkpoints, err := h.mapCurrentPageRows(bat, param, proc, toRead)
+		if err != nil {
+			return h.closePagesOnError(param.Ctx, err)
+		}
+		accepted := toRead
+		if h.parquetBatchAtByteBudget(bat, length+int(toRead), param) {
+			acceptedRows := h.parquetRowsToByteBudget(
+				bat, length, length+int(toRead), batchBytesBefore, param)
+			accepted = int64(acceptedRows - length)
+			if accepted < toRead {
+				h.rollbackPageAppend(bat, checkpoints, int(toRead))
+				if accepted == 0 {
+					break
+				}
+				if _, err = h.mapCurrentPageRows(bat, param, proc, accepted); err != nil {
+					return h.closePagesOnError(param.Ctx, err)
+				}
 			}
 		}
-		length = vec.Length()
+
+		h.advanceCurrentPages(accepted)
+		length += int(accepted)
 	}
 
 	bat.SetRowCount(length)
-
 	h.offset += int64(length)
 	if h.isFinished() {
 		finish = true
 	}
-
 	if finish {
 		if err := h.closePages(param.Ctx); err != nil {
 			return err
 		}
 		// File completion (FileFin/End) is now handled by Call's finishCurrentFile
 	}
-
 	return nil
+}
+
+func (h *ParquetHandler) ensureCurrentPage(colIdx int, param *ExternalParam) (bool, error) {
+	for {
+		page := h.currentPage[colIdx]
+		if page == nil {
+			readStart := time.Now()
+			var err error
+			page, err = h.pages[colIdx].ReadPage()
+			param.addParquetProfile(process.ParquetProfileStats{
+				ReadPageTime: time.Since(readStart).Nanoseconds(),
+			})
+			switch {
+			case errors.Is(err, io.EOF):
+				return true, nil
+			case err != nil:
+				return false, h.closePagesOnError(param.Ctx, moerr.ConvertGoError(param.Ctx, err))
+			}
+			h.currentPage[colIdx] = page
+			h.pageOffset[colIdx] = 0
+		}
+		if h.pageOffset[colIdx] < page.NumRows() {
+			return false, nil
+		}
+		h.currentPage[colIdx] = nil
+		h.pageOffset[colIdx] = 0
+	}
+}
+
+func (h *ParquetHandler) mapCurrentPageRows(
+	bat *batch.Batch,
+	param *ExternalParam,
+	proc *process.Process,
+	rows int64,
+) ([]vector.AppendCheckpoint, error) {
+	checkpoints := make([]vector.AppendCheckpoint, len(h.dataColIndices))
+	for i, colIdx := range h.dataColIndices {
+		vec := bat.Vecs[colIdx]
+		if vec == nil {
+			h.rollbackPageAppend(bat, checkpoints[:i], int(rows))
+			return nil, moerr.NewInternalErrorf(param.Ctx, "parquet output column %d is not allocated", colIdx)
+		}
+		checkpoints[i] = vec.MakeAppendCheckpoint()
+		startLength := vec.Length()
+		pageOff := h.pageOffset[colIdx]
+		page := h.currentPage[colIdx].Slice(pageOff, pageOff+rows)
+		mapStart := time.Now()
+		err := h.mappers[colIdx].mapping(page, proc, vec)
+		param.addParquetProfile(process.ParquetProfileStats{
+			MapTime: time.Since(mapStart).Nanoseconds(),
+		})
+		if err != nil {
+			h.rollbackPageAppend(bat, checkpoints[:i+1], int(rows))
+			return nil, err
+		}
+		if vec.Length() != startLength+int(rows) {
+			h.rollbackPageAppend(bat, checkpoints[:i+1], int(rows))
+			return nil, moerr.NewInternalErrorf(param.Ctx,
+				"parquet column %d appended %d rows, expected %d",
+				colIdx, vec.Length()-startLength, rows)
+		}
+	}
+	return checkpoints, nil
+}
+
+func (h *ParquetHandler) rollbackPageAppend(
+	bat *batch.Batch,
+	checkpoints []vector.AppendCheckpoint,
+	attemptedRows int,
+) {
+	for i, checkpoint := range checkpoints {
+		bat.Vecs[h.dataColIndices[i]].RollbackAppend(checkpoint, attemptedRows)
+	}
+}
+
+func (h *ParquetHandler) advanceCurrentPages(rows int64) {
+	for _, colIdx := range h.dataColIndices {
+		h.pageOffset[colIdx] += rows
+		if h.pageOffset[colIdx] >= h.currentPage[colIdx].NumRows() {
+			h.currentPage[colIdx] = nil
+			h.pageOffset[colIdx] = 0
+		}
+	}
+}
+
+func (h *ParquetHandler) rowsToSourceBudget(maxRows int64, budget uint64) int64 {
+	if maxRows <= 1 || budget == 0 {
+		return min(maxRows, 1)
+	}
+	hasDictionary := false
+	for _, colIdx := range h.budgetColIndices {
+		if h.currentPage[colIdx].Dictionary() != nil {
+			hasDictionary = true
+			break
+		}
+	}
+	if hasDictionary {
+		var size uint64
+		for row := int64(0); row < maxRows; row++ {
+			for _, colIdx := range h.budgetColIndices {
+				pageOff := h.pageOffset[colIdx]
+				size = addParquetBytes(size,
+					parquetDecodedPageSize(h.currentPage[colIdx].Slice(pageOff+row, pageOff+row+1)))
+			}
+			if size >= budget {
+				return row + 1
+			}
+		}
+		return maxRows
+	}
+
+	sizeAt := func(rows int64) uint64 {
+		var size uint64
+		for _, colIdx := range h.budgetColIndices {
+			pageOff := h.pageOffset[colIdx]
+			size = addParquetBytes(size,
+				parquetDecodedPageSize(h.currentPage[colIdx].Slice(pageOff, pageOff+rows)))
+		}
+		return size
+	}
+	if sizeAt(maxRows) < budget {
+		return maxRows
+	}
+	low, high := int64(1), maxRows
+	for low < high {
+		mid := low + (high-low)/2
+		if sizeAt(mid) >= budget {
+			high = mid
+		} else {
+			low = mid + 1
+		}
+	}
+	return low
+}
+
+func parquetDecodedPageSize(page parquet.Page) uint64 {
+	dict := page.Dictionary()
+	if dict == nil {
+		if page.Size() <= 0 {
+			return 0
+		}
+		return uint64(page.Size())
+	}
+	size := uint64(len(page.DefinitionLevels()) + len(page.RepetitionLevels()))
+	data := page.Data()
+	for _, idx := range data.Int32() {
+		if idx < 0 || int(idx) >= dict.Len() {
+			return addParquetBytes(size, uint64(max(page.Size(), 0)))
+		}
+		size = addParquetBytes(size, uint64(len(dict.Index(idx).Bytes())))
+	}
+	return size
+}
+
+func nextParquetBatchRows(currentRows, maxRows, currentBytes int, budget uint64) int {
+	if maxRows <= 0 {
+		return 0
+	}
+	if budget == 0 {
+		return maxRows
+	}
+	if currentRows == 0 {
+		return 1
+	}
+	remaining := parquetRemainingBudget(currentBytes, budget)
+	if remaining == 0 {
+		return 1
+	}
+	average := (uint64(currentBytes) + uint64(currentRows) - 1) / uint64(currentRows)
+	if average == 0 {
+		average = 1
+	}
+	rows := (remaining + average - 1) / average
+	if rows == 0 {
+		rows = 1
+	}
+	if rows > uint64(maxRows) {
+		return maxRows
+	}
+	return int(rows)
+}
+
+func parquetRemainingBudget(currentBytes int, budget uint64) uint64 {
+	if budget == 0 {
+		return ^uint64(0)
+	}
+	if currentBytes < 0 || uint64(currentBytes) >= budget {
+		return 0
+	}
+	return budget - uint64(currentBytes)
+}
+
+// generatedBatchBytes accounts for columns populated after parquet decoding.
+// They still belong to the returned batch, so admission reserves their logical
+// vector slots before source progress is published. Varlena payloads are
+// deliberately charged even when they fit inline: a smaller batch is safe,
+// while under-admitting can cross the configured byte boundary.
+func (h *ParquetHandler) generatedBatchBytes(rows int, param *ExternalParam) uint64 {
+	if rows <= 0 || param == nil {
+		return 0
+	}
+	var size uint64
+	addColumn := func(colIdx, valueBytes int, perRowValue bool) {
+		if colIdx < 0 || colIdx >= len(param.Cols) || param.Cols[colIdx] == nil {
+			return
+		}
+		typ := types.T(param.Cols[colIdx].Typ.Id).ToType()
+		size = addParquetBytes(size, uint64(rows)*uint64(typ.TypeSize()))
+		if typ.IsVarlen() && valueBytes > 0 {
+			payload := uint64(valueBytes)
+			if perRowValue {
+				payload *= uint64(rows)
+			}
+			size = addParquetBytes(size, payload)
+		}
+	}
+	if h.filepathColIndex >= 0 && param.Fileparam != nil {
+		addColumn(h.filepathColIndex, len(param.Fileparam.Filepath), false)
+	}
+	for _, colIdx := range h.partitionColIndices {
+		if colIdx < 0 || colIdx >= len(param.Cols) || param.Cols[colIdx] == nil {
+			continue
+		}
+		value := ""
+		if param.currentPartValues != nil {
+			value = param.currentPartValues[strings.ToLower(param.Cols[colIdx].Name)]
+		}
+		addColumn(colIdx, len(value), false)
+	}
+	if h.icebergDMLDataFilePathColIndex >= 0 && param.Fileparam != nil {
+		addColumn(h.icebergDMLDataFilePathColIndex, len(param.Fileparam.Filepath), true)
+	}
+	if h.icebergDMLRowOrdinalColIndex >= 0 {
+		addColumn(h.icebergDMLRowOrdinalColIndex, 0, false)
+	}
+	for colIdx, fillNull := range h.icebergNullFill {
+		if fillNull {
+			addColumn(colIdx, 0, false)
+		}
+	}
+	return size
+}
+
+func (h *ParquetHandler) estimatedBatchSize(bat *batch.Batch, rows int, param *ExternalParam) int {
+	// Virtual and generated columns are filled after parquet decoding. A reused
+	// batch may retain their logical vector length after CleanOnlyData (const
+	// NULL vectors have no data buffer to clear), so bat.Size() is not a safe
+	// source-size baseline here. Account only for decoded parquet columns and
+	// reserve generated output separately below.
+	base := h.physicalBatchSize(bat)
+	if base < 0 {
+		base = 0
+	}
+	generated := h.generatedBatchBytes(rows, param)
+	maxInt := int(^uint(0) >> 1)
+	if generated > uint64(maxInt-base) {
+		return maxInt
+	}
+	return base + int(generated)
+}
+
+func (h *ParquetHandler) physicalBatchSize(bat *batch.Batch) int {
+	if h == nil || bat == nil {
+		return 0
+	}
+	var size int
+	for colIdx, col := range h.cols {
+		if col == nil || colIdx >= len(bat.Vecs) || bat.Vecs[colIdx] == nil {
+			continue
+		}
+		size += bat.Vecs[colIdx].Size()
+	}
+	return size
+}
+
+func (h *ParquetHandler) parquetBatchAtByteBudget(bat *batch.Batch, rows int, param *ExternalParam) bool {
+	return rows > 0 && param.maxBatchSize > 0 && uint64(h.estimatedBatchSize(bat, rows, param)) >= param.maxBatchSize
+}
+
+func (h *ParquetHandler) rowsToGeneratedByteBudget(maxRows int, param *ExternalParam) int {
+	if maxRows <= 0 || param.maxBatchSize == 0 {
+		return maxRows
+	}
+	if h.generatedBatchBytes(1, param) > param.maxBatchSize {
+		return 1
+	}
+	if h.generatedBatchBytes(maxRows, param) <= param.maxBatchSize {
+		return maxRows
+	}
+
+	// generatedBatchBytes is monotonic in rows. Keep the count-only path
+	// constant time when no generated column is projected, and logarithmic when
+	// generated output must be admitted against the byte budget.
+	low, high := 1, maxRows
+	for low+1 < high {
+		mid := low + (high-low)/2
+		if h.generatedBatchBytes(mid, param) > param.maxBatchSize {
+			high = mid
+		} else {
+			low = mid
+		}
+	}
+	return low
+}
+
+type parquetVarlenaRange struct {
+	offset uint32
+	length uint32
+}
+
+func (h *ParquetHandler) parquetRowsToByteBudget(
+	bat *batch.Batch,
+	startRow int,
+	maxRows int,
+	baseBytes int,
+	param *ExternalParam,
+) int {
+	if maxRows <= startRow || param.maxBatchSize == 0 {
+		return maxRows
+	}
+	size := addParquetBytes(uint64(max(baseBytes, 0)), h.generatedBatchBytes(startRow, param))
+	seenRanges := make([]map[parquetVarlenaRange]struct{}, len(bat.Vecs))
+	for row := startRow; row < maxRows; row++ {
+		for colIdx, col := range h.cols {
+			if col == nil || colIdx >= len(bat.Vecs) {
+				continue
+			}
+			vec := bat.Vecs[colIdx]
+			if vec == nil || row >= vec.Length() {
+				continue
+			}
+			size = addParquetBytes(size, uint64(vec.GetType().TypeSize()))
+			if vec.GetType().IsVarlen() && !vec.IsNull(uint64(row)) {
+				value := vector.GetFixedAtNoTypeCheck[types.Varlena](vec, row)
+				if !value.IsSmall() {
+					offset, length := value.OffsetLen()
+					key := parquetVarlenaRange{offset: offset, length: length}
+					if seenRanges[colIdx] == nil {
+						seenRanges[colIdx] = make(map[parquetVarlenaRange]struct{})
+					}
+					if _, ok := seenRanges[colIdx][key]; !ok {
+						seenRanges[colIdx][key] = struct{}{}
+						size = addParquetBytes(size, uint64(length))
+					}
+				}
+			}
+		}
+		size = addParquetBytes(size,
+			h.generatedBatchBytes(row+1, param)-h.generatedBatchBytes(row, param))
+		if size > param.maxBatchSize {
+			if startRow == 0 && row == 0 {
+				return 1
+			}
+			return row
+		}
+	}
+	return maxRows
+}
+
+func addParquetBytes(a, b uint64) uint64 {
+	if ^uint64(0)-a < b {
+		return ^uint64(0)
+	}
+	return a + b
 }
 
 func (mp *columnMapper) mapping(page parquet.Page, proc *process.Process, vec *vector.Vector) error {
