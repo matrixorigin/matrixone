@@ -402,14 +402,15 @@ func BenchmarkHashPartition(b *testing.B) {
 }
 
 func BenchmarkWindowPartitionAlgorithms(b *testing.B) {
-	const rows = 1 << 16
-	for _, ndv := range []int{64, 1024, 16384, 1 << 16} {
-		for _, algorithm := range []string{"sort", "hash"} {
-			b.Run(fmt.Sprintf("%s/rows=%d/ndv=%d", algorithm, rows, ndv), func(b *testing.B) {
-				for i := 0; i < b.N; i++ {
-					runWindowPartitionBenchmark(b, rows, ndv, algorithm == "hash")
-				}
-			})
+	for _, rows := range []int{1 << 10, 1 << 16, 1 << 20} {
+		for _, ndv := range []int{1, max(1, rows/100), rows} {
+			for _, algorithm := range []string{"sort", "hash"} {
+				b.Run(fmt.Sprintf("%s/rows=%d/ndv=%d", algorithm, rows, ndv), func(b *testing.B) {
+					for i := 0; i < b.N; i++ {
+						runWindowPartitionBenchmark(b, rows, ndv, algorithm == "hash")
+					}
+				})
+			}
 		}
 	}
 }
