@@ -876,6 +876,38 @@ func TestCompileResetRecordsOnePreparedReuseSchedulingAttempt(t *testing.T) {
 	require.Equal(t, "retry-placement", retryTrace.Attempts[1].Query.Reason)
 }
 
+func TestCompileResetClearsPreparedExecutionBackgroundQueries(t *testing.T) {
+	c := NewCompile(
+		"local:6001",
+		"",
+		"execute p1",
+		"",
+		"",
+		nil,
+		motestutil.NewProcess(t),
+		nil,
+		false,
+		nil,
+		time.Now(),
+	)
+	c.isPrepare = true
+	c.anal = newAnalyzeModule()
+	c.anal.qry = &plan.Query{}
+	defer c.Release()
+
+	// Simulate two completed prepared executions: fillPlanNodeAnalyzeInfo
+	// transfers reader diagnostics to this logical plan after each generation.
+	c.anal.qry.BackgroundQueries = []*plan.Query{{Headings: []string{"first"}}}
+	c.Reset(c.proc, time.Now(), nil, "execute p1")
+	require.Empty(t, c.anal.qry.BackgroundQueries)
+
+	c.anal.qry.BackgroundQueries = []*plan.Query{{Headings: []string{"second"}}}
+	require.Len(t, c.anal.qry.BackgroundQueries, 1)
+	require.Equal(t, []string{"second"}, c.anal.qry.BackgroundQueries[0].Headings)
+	c.Reset(c.proc, time.Now(), nil, "execute p1")
+	require.Empty(t, c.anal.qry.BackgroundQueries)
+}
+
 func TestRecordScanSchedulingMetricsRecordsEveryScan(t *testing.T) {
 	c := NewMockCompile(t)
 	c.cnList = engine.Nodes{

@@ -50,7 +50,11 @@ type Request struct {
 	// HasMembershipFilter distinguishes an exact empty key set from the
 	// absence of a runtime membership predicate (for example RF PASS).
 	HasMembershipFilter bool
-	Identity            ScanIdentity
+	// CollectExplainDiagnostics is enabled only for standalone scalar scans.
+	// Correlated APPLY executes one reader per provider row and must not retain
+	// per-round diagnostics with unbounded outer-row cardinality.
+	CollectExplainDiagnostics bool
+	Identity                  ScanIdentity
 }
 
 // Hooks builds the reader for one vector-index scan execution generation.
