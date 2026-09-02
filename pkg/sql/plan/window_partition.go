@@ -29,8 +29,8 @@ const (
 	// contract for the blocking HASH implementation. SORT remains the wire-zero
 	// value and the only planner-selected algorithm meanwhile.
 	windowHashPartitionAutoEnabled = false
-	windowHashEntryOverhead = 32
-	windowVarlenKeyWidth    = 128
+	windowHashEntryOverhead        = 32
+	windowVarlenKeyWidth           = 128
 	// Each hash group crosses the Window boundary and maintains one equality
 	// state per key. Scale this conservative cost by key count so a near-unique
 	// composite key cannot look cheaper than the local sort just because the
@@ -49,19 +49,30 @@ func (builder *QueryBuilder) determineWindowPartitionAlgorithms(nodeID int32) {
 	if !windowHashPartitionAutoEnabled || node.NodeType != planpb.Node_WINDOW || len(node.Children) != 1 {
 		return
 	}
+	selectWindowHashPartition(builder, node)
+}
+
+// selectWindowHashPartition applies the admission contract after the caller has
+// established that experimental automatic selection is enabled. Keeping the
+// contract separate lets its fail-closed boundaries be verified without
+// changing the feature gate.
+func selectWindowHashPartition(builder *QueryBuilder, node *planpb.Node) bool {
+	if node.NodeType != planpb.Node_WINDOW || len(node.Children) != 1 {
+		return false
+	}
 	partitionNode := builder.qry.Nodes[node.Children[0]]
 	if partitionNode.NodeType != planpb.Node_PARTITION || partitionNode.Limit != nil ||
 		len(partitionNode.Children) != 1 || len(partitionNode.OrderBy) == 0 {
-		return
+		return false
 	}
 
 	child := builder.qry.Nodes[partitionNode.Children[0]]
 	if child.Stats == nil || !finitePositiveWindowStat(child.Stats.Outcnt) {
-		return
+		return false
 	}
 	n := child.Stats.Outcnt
 	if n < float64(colexec.DefaultBatchSize) {
-		return
+		return false
 	}
 
 	keyWidth := 0
@@ -69,17 +80,17 @@ func (builder *QueryBuilder) determineWindowPartitionAlgorithms(nodeID int32) {
 	for _, spec := range partitionNode.OrderBy {
 		if spec == nil || spec.Expr == nil || spec.Expr.GetCol() == nil ||
 			!partitionhash.Compatible(types.T(spec.Expr.Typ.Id)) {
-			return
+			return false
 		}
 		width, ok := windowPartitionKeyWidth(spec.Expr)
 		if !ok || keyWidth > math.MaxInt-width {
-			return
+			return false
 		}
 		keyWidth += width
 
 		ndv := getExprNdv(spec.Expr, builder)
 		if !finitePositiveWindowStat(ndv) {
-			return
+			return false
 		}
 		if groupCount > n/ndv {
 			groupCount = n
@@ -96,7 +107,9 @@ func (builder *QueryBuilder) determineWindowPartitionAlgorithms(nodeID int32) {
 	if shouldUseWindowHashPartition(n, groupCount, keyWidth, len(partitionNode.OrderBy), threshold, resolvedThreshold) {
 		partitionNode.PartitionAlgorithm = planpb.Node_PARTITION_ALGORITHM_HASH
 		partitionNode.SpillMem = threshold
+		return true
 	}
+	return false
 }
 
 func finitePositiveWindowStat(value float64) bool {
