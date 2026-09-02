@@ -134,10 +134,12 @@ func TestSingleJoinPushdownPreservesCardinalityErrorScope(t *testing.T) {
 					where o.id = (select s.id from ` + scalarTable + ` s)`
 				rows, queryErr := db.QueryContext(ctx, query)
 				if queryErr == nil {
-					for rows.Next() {
-					}
-					queryErr = rows.Err()
-					require.NoError(t, rows.Close())
+					func() {
+						defer rows.Close()
+						for rows.Next() {
+						}
+						queryErr = rows.Err()
+					}()
 				}
 				require.Error(t, queryErr)
 			})

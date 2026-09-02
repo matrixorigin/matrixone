@@ -106,10 +106,12 @@ func TestNullableExistsMarkKeepsHashEqualityAndBooleanResults(t *testing.T) {
 		requireQueryError := func(query string) {
 			rows, queryErr := db.QueryContext(ctx, query)
 			if queryErr == nil {
-				for rows.Next() {
-				}
-				queryErr = rows.Err()
-				require.NoError(t, rows.Close())
+				func() {
+					defer rows.Close()
+					for rows.Next() {
+					}
+					queryErr = rows.Err()
+				}()
 			}
 			require.Error(t, queryErr)
 		}

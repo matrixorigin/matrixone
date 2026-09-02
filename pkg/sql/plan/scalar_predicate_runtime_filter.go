@@ -41,7 +41,7 @@ func (builder *QueryBuilder) generateScalarPredicateRuntimeFilter(filter *plan.N
 	if proc == nil {
 		return
 	}
-	version, ok := runtime.ServiceRuntime(proc.GetService()).GetGlobalVariables(runtime.MOProtocolVersion)
+	version, _ := runtime.ServiceRuntime(proc.GetService()).GetGlobalVariables(runtime.MOProtocolVersion)
 	protocolVersion, ok := version.(int64)
 	if !ok || protocolVersion < defines.MORPCVersion43 {
 		return
