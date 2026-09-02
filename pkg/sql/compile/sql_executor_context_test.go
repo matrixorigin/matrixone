@@ -410,3 +410,50 @@ func TestInternalCompilerContextDropTableIfExistsExpectedEOBNoop(t *testing.T) {
 	require.Equal(t, "__mo_tmp_table", drop.GetTable())
 	require.Nil(t, drop.GetTableDef())
 }
+
+// CTAS follow-up SQL is a replay of the user's own statement, so a variable
+// that shaped the plan of that statement must shape the replay identically.
+// Internal SQL with no attached frontend context has no user session whose
+// variables could apply and keeps answering nil.
+func TestCompilerContextResolveVariableDelegatesToAttachedSession(t *testing.T) {
+	type resolved struct {
+		name               string
+		isSystem, isGlobal bool
+	}
+	var seen []resolved
+	delegate := plan.NewMockCompilerContext(false)
+	delegate.ResolveVariableFunc = func(name string, isSystemVar, isGlobalVar bool) (interface{}, error) {
+		seen = append(seen, resolved{name, isSystemVar, isGlobalVar})
+		if name == "sql_mode" {
+			return "ONLY_FULL_GROUP_BY,ENABLE_BOOL_SUMAVG", nil
+		}
+		return nil, moerr.NewInternalErrorNoCtx("unexpected variable")
+	}
+
+	attached := &compilerContext{
+		ctx:  attachInternalExecutorCompilerContext(context.Background(), delegate),
+		proc: testutil.NewProcess(t),
+	}
+	value, err := attached.ResolveVariable("sql_mode", true, false)
+	require.NoError(t, err)
+	require.Equal(t, "ONLY_FULL_GROUP_BY,ENABLE_BOOL_SUMAVG", value)
+	require.Equal(t, []resolved{{"sql_mode", true, false}}, seen)
+
+	// An error from the session must reach the caller rather than being
+	// flattened into the nil default, which would silently compile the replay
+	// under different rules than the statement the user ran.
+	_, err = attached.ResolveVariable("other", true, false)
+	require.Error(t, err)
+
+	detached := &compilerContext{ctx: context.Background(), proc: testutil.NewProcess(t)}
+	value, err = detached.ResolveVariable("sql_mode", true, false)
+	require.NoError(t, err)
+	require.Nil(t, value)
+
+	// A context attaching the same compilerContext must not recurse.
+	selfAttached := &compilerContext{proc: testutil.NewProcess(t)}
+	selfAttached.ctx = attachInternalExecutorCompilerContext(context.Background(), selfAttached)
+	value, err = selfAttached.ResolveVariable("sql_mode", true, false)
+	require.NoError(t, err)
+	require.Nil(t, value)
+}
