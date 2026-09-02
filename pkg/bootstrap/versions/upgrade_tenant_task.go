@@ -16,6 +16,7 @@ package versions
 
 import (
 	"fmt"
+	"sort"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -23,6 +24,18 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/lock"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 )
+
+type tenantVersionRows struct {
+	tenants  []int32
+	versions []string
+}
+
+func (r tenantVersionRows) Len() int           { return len(r.tenants) }
+func (r tenantVersionRows) Less(i, j int) bool { return r.tenants[i] < r.tenants[j] }
+func (r tenantVersionRows) Swap(i, j int) {
+	r.tenants[i], r.tenants[j] = r.tenants[j], r.tenants[i]
+	r.versions[i], r.versions[j] = r.versions[j], r.versions[i]
+}
 
 func AddUpgradeTenantTask(
 	upgradeID uint64,
@@ -205,7 +218,7 @@ func GetUpgradeTenantTasks(
 
 		tenants = tenants[:0]
 		versions = versions[:0]
-		sql = fmt.Sprintf("select account_id, create_version from mo_account where account_id >= %d and account_id <= %d for update",
+		sql = fmt.Sprintf("select account_id, create_version from mo_account where account_id >= %d and account_id <= %d order by account_id for update",
 			from, to)
 		res, err = txn.Exec(sql, executor.StatementOption{}.WithWaitPolicy(lock.WaitPolicy_FastFail))
 		if err != nil {
@@ -228,6 +241,9 @@ func GetUpgradeTenantTasks(
 			return true
 		})
 		res.Close()
+		// The durable cursor advances from tenants[0]. Keep the result ordered even
+		// if an executor fails to preserve the SQL ORDER BY contract.
+		sort.Sort(tenantVersionRows{tenants: tenants, versions: versions})
 		if len(tenants) == 0 {
 			hasDeletedTenantTasks = true
 			next, ok := nextUpgradeTenantTaskAfter(to)

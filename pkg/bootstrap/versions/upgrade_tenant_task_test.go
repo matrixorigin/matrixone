@@ -192,10 +192,10 @@ func TestGetUpgradeTenantTasksSkipsDeletedRanges(t *testing.T) {
 
 			firstTaskSQL := fmt.Sprintf("select id, from_account_id, to_account_id from %s where from_account_id >= %d and upgrade_id = %d and ready = %d order by id limit 1",
 				catalog.MOUpgradeTenantTable, 0, 10, No)
-			firstTenantSQL := "select account_id, create_version from mo_account where account_id >= 1 and account_id <= 4 for update"
+			firstTenantSQL := "select account_id, create_version from mo_account where account_id >= 1 and account_id <= 4 order by account_id for update"
 			secondTaskSQL := fmt.Sprintf("select id, from_account_id, to_account_id from %s where from_account_id >= %d and upgrade_id = %d and ready = %d order by id limit 1",
 				catalog.MOUpgradeTenantTable, 5, 10, No)
-			secondTenantSQL := "select account_id, create_version from mo_account where account_id >= 10 and account_id <= 12 for update"
+			secondTenantSQL := "select account_id, create_version from mo_account where account_id >= 10 and account_id <= 12 order by account_id for update"
 
 			exec := executor.NewMemTxnExecutor(func(sql string) (executor.Result, error) {
 				switch {
@@ -223,6 +223,41 @@ func TestGetUpgradeTenantTasksSkipsDeletedRanges(t *testing.T) {
 	)
 }
 
+func TestGetUpgradeTenantTasksOrdersAdversarialRowsBeforeCursorAdvance(t *testing.T) {
+	sid := ""
+	runtime.RunTest(sid, func(rt runtime.Runtime) {
+		txnOperator := mock_frontend.NewMockTxnOperator(gomock.NewController(t))
+		txnOperator.EXPECT().TxnOptions().Return(txn.TxnOptions{CN: sid}).AnyTimes()
+
+		taskSQL := fmt.Sprintf("select id, from_account_id, to_account_id from %s where from_account_id >= %d and upgrade_id = %d and ready = %d order by id limit 1",
+			catalog.MOUpgradeTenantTable, 0, 10, No)
+		tenantSQL := "select account_id, create_version from mo_account where account_id >= 10 and account_id <= 20 order by account_id for update"
+		exec := executor.NewMemTxnExecutor(func(sql string) (executor.Result, error) {
+			switch {
+			case strings.EqualFold(sql, taskSQL):
+				return buildUpgradeTenantTaskResult([]uint64{100}, []int32{10}, []int32{20}), nil
+			case strings.EqualFold(sql, tenantSQL):
+				// An adversarial executor result proves cursor safety does not depend only
+				// on the physical row order returned by storage.
+				return buildUpgradeTenantRows(
+					[]int32{20, 15, 10},
+					[]string{"20.0.0", "15.0.0", "10.0.0"},
+				), nil
+			default:
+				return executor.Result{}, fmt.Errorf("unexpected sql: %s", sql)
+			}
+		}, txnOperator)
+
+		taskID, tenants, createVersions, deleted, conflict, err := GetUpgradeTenantTasks(10, exec)
+		require.NoError(t, err)
+		require.Equal(t, uint64(100), taskID)
+		require.Equal(t, []int32{10, 15, 20}, tenants)
+		require.Equal(t, []string{"10.0.0", "15.0.0", "20.0.0"}, createVersions)
+		require.False(t, deleted)
+		require.False(t, conflict)
+	})
+}
+
 func TestGetUpgradeTenantTasksReturnsConflictHint(t *testing.T) {
 	sid := ""
 	runtime.RunTest(
@@ -233,10 +268,10 @@ func TestGetUpgradeTenantTasksReturnsConflictHint(t *testing.T) {
 
 			firstTaskSQL := fmt.Sprintf("select id, from_account_id, to_account_id from %s where from_account_id >= %d and upgrade_id = %d and ready = %d order by id limit 1",
 				catalog.MOUpgradeTenantTable, 0, 10, No)
-			firstTenantSQL := "select account_id, create_version from mo_account where account_id >= 1 and account_id <= 4 for update"
+			firstTenantSQL := "select account_id, create_version from mo_account where account_id >= 1 and account_id <= 4 order by account_id for update"
 			secondTaskSQL := fmt.Sprintf("select id, from_account_id, to_account_id from %s where from_account_id >= %d and upgrade_id = %d and ready = %d order by id limit 1",
 				catalog.MOUpgradeTenantTable, 5, 10, No)
-			secondTenantSQL := "select account_id, create_version from mo_account where account_id >= 10 and account_id <= 12 for update"
+			secondTenantSQL := "select account_id, create_version from mo_account where account_id >= 10 and account_id <= 12 order by account_id for update"
 			finalTaskSQL := fmt.Sprintf("select id, from_account_id, to_account_id from %s where from_account_id >= %d and upgrade_id = %d and ready = %d order by id limit 1",
 				catalog.MOUpgradeTenantTable, 13, 10, No)
 
@@ -325,7 +360,7 @@ func TestGetUpgradeTenantTasksStopsAtMaxInt32Conflict(t *testing.T) {
 			maxInt32 := int32(^uint32(0) >> 1)
 			taskSQL := fmt.Sprintf("select id, from_account_id, to_account_id from %s where from_account_id >= %d and upgrade_id = %d and ready = %d order by id limit 1",
 				catalog.MOUpgradeTenantTable, 0, 10, No)
-			tenantSQL := fmt.Sprintf("select account_id, create_version from mo_account where account_id >= %d and account_id <= %d for update",
+			tenantSQL := fmt.Sprintf("select account_id, create_version from mo_account where account_id >= %d and account_id <= %d order by account_id for update",
 				maxInt32, maxInt32)
 
 			exec := executor.NewMemTxnExecutor(func(sql string) (executor.Result, error) {
@@ -361,7 +396,7 @@ func TestGetUpgradeTenantTasksStopsAtMaxInt32DeletedRange(t *testing.T) {
 			maxInt32 := int32(^uint32(0) >> 1)
 			taskSQL := fmt.Sprintf("select id, from_account_id, to_account_id from %s where from_account_id >= %d and upgrade_id = %d and ready = %d order by id limit 1",
 				catalog.MOUpgradeTenantTable, 0, 10, No)
-			tenantSQL := fmt.Sprintf("select account_id, create_version from mo_account where account_id >= %d and account_id <= %d for update",
+			tenantSQL := fmt.Sprintf("select account_id, create_version from mo_account where account_id >= %d and account_id <= %d order by account_id for update",
 				maxInt32, maxInt32)
 
 			exec := executor.NewMemTxnExecutor(func(sql string) (executor.Result, error) {
