@@ -266,6 +266,36 @@ func TestMongoDBExternalScanAddsHiddenQuerySelectorColumn(t *testing.T) {
 		require.Nil(t, scanNode.ExternScan.MongodbScan.PushedPredicate,
 			"the synthetic selector must never be translated as a mapped MongoDB field")
 	})
+
+	t.Run("legacy mapped query column remains unambiguous", func(t *testing.T) {
+		mock := newMock()
+		mapping := sqlmongodb.TableMapping{
+			Connection: "telemetry_source", Database: "telemetry", Collection: "legacy_events",
+			SchemaMode: sqlmongodb.SchemaExplicit, Conversion: sqlmongodb.ConversionStrict, MaxParallelism: 1,
+			Columns: []sqlmongodb.ColumnMapping{
+				{Name: catalog.ExternalQuery, Path: "legacy_query", TypeID: int32(types.T_varchar), Width: 64, Conversion: sqlmongodb.ConversionStrict},
+			},
+		}
+		mock.ctxt.tables["events_external"] = &plan.TableDef{
+			Name: "events_external", TableType: catalog.SystemExternalRel,
+			FeatureFlag: features.MongoDBExternal,
+			Createsql:   sqlmongodb.BuildCreateSQLEnvelope(mapping),
+			Cols: []*plan.ColDef{{
+				Name: catalog.ExternalQuery, ColId: 7,
+				Typ: plan.Type{Id: int32(types.T_varchar), Width: 64},
+			}},
+		}
+
+		logicalPlan, err := runOneStmt(mock, t,
+			`select __mo_query from telemetry_source.events_external where __mo_query = 'legacy-value'`)
+		require.NoError(t, err)
+		scanNode := findScan(t, logicalPlan)
+		require.Len(t, scanNode.TableDef.Cols, 1)
+		require.Equal(t, uint64(7), scanNode.TableDef.Cols[0].ColId)
+		require.False(t, catalog.IsForeignQueryCol(scanNode.TableDef.Cols[0].Name, scanNode.TableDef.Cols[0].ColId))
+		require.Len(t, scanNode.FilterList, 1,
+			"the legacy mapped column remains an ordinary MatrixOne predicate")
+	})
 }
 
 func TestMongoDBExternalScanRejectsInvalidCatalogState(t *testing.T) {

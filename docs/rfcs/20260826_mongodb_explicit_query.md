@@ -119,7 +119,7 @@ SQL __mo_query constant
 
 | Boundary | First owner | Contract |
 | --- | --- | --- |
-| Synthetic column identity | `pkg/catalog` | Reserved hidden `__mo_query` identity is shared with query-driven external scans; existing real legacy columns are not reclassified. |
+| Synthetic column identity | `pkg/catalog` | Reserved hidden `__mo_query` identity is shared with query-driven external scans; existing real legacy columns are not reclassified. If an upgraded MongoDB mapping already has a real column with that name, the planner does not append the synthetic carrier, so the legacy column stays selectable and the explicit-query surface is unavailable until the mapping is changed. |
 | SQL candidate and residual separation | `pkg/sql/compile` | At most one constant selector; query predicate is removed only after selection; unsupported shapes fail before remote work. |
 | Parse, canonicalization, policy | `pkg/sql/mongodb/user_query.go` | Strict JSON, duplicate-key rejection, 64 KiB serialized bound, depth 32, at most 16 stages, and allowed shape/operator validation. |
 | Plan transport | `proto/plan.proto` and `pkg/pb/plan` | The producer emits validated BSON, kind, digest, and flags; execution revalidates every received payload. |

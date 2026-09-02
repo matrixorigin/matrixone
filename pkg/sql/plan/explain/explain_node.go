@@ -136,12 +136,15 @@ func mongodbExplainExprUsesQueryColumn(node *plan.Node, expr *plan.Expr) bool {
 		if typed.Col == nil {
 			return false
 		}
-		if strings.EqualFold(typed.Col.Name, catalog.ExternalQuery) {
-			return true
-		}
 		position := int(typed.Col.ColPos)
-		return node.TableDef != nil && position >= 0 && position < len(node.TableDef.Cols) &&
-			catalog.IsForeignQueryCol(node.TableDef.Cols[position].Name, node.TableDef.Cols[position].ColId)
+		if node.TableDef != nil && position >= 0 && position < len(node.TableDef.Cols) {
+			return catalog.IsForeignQueryCol(node.TableDef.Cols[position].Name, node.TableDef.Cols[position].ColId)
+		}
+		// Planner expressions normally retain a valid ColPos. Preserve the
+		// conservative name-only fallback for incomplete diagnostic-only nodes,
+		// but never mistake a valid legacy column with this name for the
+		// synthetic carrier.
+		return strings.EqualFold(typed.Col.Name, catalog.ExternalQuery)
 	case *plan.Expr_F:
 		if typed.F == nil {
 			return false

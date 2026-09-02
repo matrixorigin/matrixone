@@ -131,6 +131,22 @@ func TestMongoDBExplainRedactsUnsupportedSelectorShape(t *testing.T) {
 	require.NotContains(t, lines[0], catalog.ExternalQuery)
 }
 
+func TestMongoDBExplainDoesNotClassifyLegacyQueryNameAsSelector(t *testing.T) {
+	legacyValue := "legacy-value"
+	node := mongodbExplainTestNode(
+		mongodbExplainTestFunction("=", mongodbExplainTestColumn(0, catalog.ExternalQuery, types.T_varchar), mongodbExplainTestString(legacyValue)),
+	)
+	node.TableDef.Cols[0].Name = catalog.ExternalQuery
+	node.TableDef.Cols[0].ColId = 7
+	node.TableDef.Cols = node.TableDef.Cols[:1]
+
+	lines, err := NewNodeDescriptionImpl(node).GetExtraInfo(context.Background(), &ExplainOptions{})
+	require.NoError(t, err)
+	require.Len(t, lines, 2)
+	require.Contains(t, lines[1], legacyValue)
+	require.Contains(t, lines[1], catalog.ExternalQuery)
+}
+
 func TestMongoDBStructuredPlanRedactsSelector(t *testing.T) {
 	queryColumn := mongodbExplainTestColumn(1, catalog.ExternalQuery, types.T_varchar)
 	rawQuery := `{"filter":{"password":"super-secret-value"}}`
