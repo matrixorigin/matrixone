@@ -62,9 +62,13 @@ type planReader struct {
 	includeData  map[string][]any
 	includeNulls map[string][]bool
 	offset       int
+
+	recordExplainDiagnostics bool
+	explainDiagnostics       []*plan.Query
 }
 
 var _ engine.Reader = (*planReader)(nil)
+var _ engine.ExplainDiagnosticReader = (*planReader)(nil)
 
 func NewPlanReader(proc *process.Process, spec *plan.VectorIndexScan, req searchplugin.Request) (engine.Reader, error) {
 	return newPlanReader(proc, spec, req, false, nil)
@@ -89,7 +93,13 @@ func newPlanReader(
 	if snapshotTxn == nil {
 		snapshotTxn = new(sharedSnapshotTxn)
 	}
-	r := &planReader{proc: proc, spec: spec, req: req, ownsContext: ownsContext}
+	r := &planReader{
+		proc:                     proc,
+		spec:                     spec,
+		req:                      req,
+		ownsContext:              ownsContext,
+		recordExplainDiagnostics: req.CollectExplainDiagnostics,
+	}
 	r.scanner = &relationScanner{
 		proc:           proc,
 		snapshotTxn:    snapshotTxn,
@@ -196,12 +206,25 @@ func (r *planReader) Close() error {
 	r.distances = nil
 	r.includeData = nil
 	r.includeNulls = nil
+	r.explainDiagnostics = nil
 	r.scanner = nil
 	if r.ownsContext && r.proc != nil && r.proc.Cancel != nil {
 		r.proc.Cancel(nil)
 	}
 	r.proc = nil
 	return nil
+}
+
+// TakeExplainDiagnostics transfers this execution generation's diagnostics to
+// its owning operator. The slice is drained so repeated table-scan calls do not
+// duplicate completed search rounds.
+func (r *planReader) TakeExplainDiagnostics() []*plan.Query {
+	if r == nil || len(r.explainDiagnostics) == 0 {
+		return nil
+	}
+	diagnostics := r.explainDiagnostics
+	r.explainDiagnostics = nil
+	return diagnostics
 }
 
 func (r *planReader) Read(ctx context.Context, attrs []string, _ *plan.Expr, mp *mpool.MPool, out *batch.Batch) (bool, error) {
@@ -503,6 +526,7 @@ func searchPlanReader[T types.RealNumbers](
 		if !ok {
 			return moerr.NewInternalErrorNoCtx("ivfflat keys are not []any")
 		}
+		r.recordSearchRoundDiagnostic(cursor, firstRoundLimit, limit, len(keySlice))
 		r.keys = append(r.keys, keySlice...)
 		r.distances = append(r.distances, distances...)
 		for _, name := range r.spec.IncludedColumns {
@@ -517,6 +541,31 @@ func searchPlanReader[T types.RealNumbers](
 	}
 	r.sortAndLimit(uint64(limit))
 	return nil
+}
+
+func (r *planReader) recordSearchRoundDiagnostic(
+	cursor *vectorindex.IvfSearchCursor,
+	configuredRoundLimit uint,
+	resultLimit uint,
+	outputRows int,
+) {
+	if r == nil || !r.recordExplainDiagnostics || cursor == nil ||
+		cursor.Round == 0 || cursor.CurrentBucketCount == 0 {
+		return
+	}
+	rowLimit := configuredRoundLimit
+	if rowLimit == 0 {
+		rowLimit = resultLimit
+	}
+	r.explainDiagnostics = append(r.explainDiagnostics,
+		vectorindex.EncodeIvfSearchRoundDiagnostic(vectorindex.IvfSearchRoundDiagnostic{
+			Round:        uint64(cursor.Round),
+			BucketOffset: uint64(cursor.NextBucketOffset),
+			BucketCount:  uint64(cursor.CurrentBucketCount),
+			RowLimit:     uint64(rowLimit),
+			OutputRows:   uint64(outputRows),
+			Exhausted:    cursor.Exhausted,
+		}))
 }
 
 func advancePlanCursor(cursor *vectorindex.IvfSearchCursor) {
