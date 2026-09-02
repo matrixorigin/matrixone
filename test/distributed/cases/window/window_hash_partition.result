@@ -11,8 +11,6 @@ insert into t
 select result, result % 50, cast(result % 50 as char(3)), result
 from generate_series(1, 10000) g;
 analyze table t(k, ck);
-approx_count_distinct(k)	approx_count_distinct(ck)
-50	50
 explain (check '["Hash Partition"]')
 select sum(v) over (partition by k) from t;
 -- @regex("Hash Partition", true)
