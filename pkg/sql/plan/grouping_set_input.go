@@ -57,6 +57,9 @@ func (builder *QueryBuilder) registerGroupingSetInput(nodes []int32, contexts []
 }
 
 func (builder *QueryBuilder) sharePendingGroupingSetInputs(rootID int32) int32 {
+	if builder.sharedComputationDisabled() {
+		return rootID
+	}
 	proc := builder.compCtx.GetProcess()
 	if proc == nil {
 		return rootID

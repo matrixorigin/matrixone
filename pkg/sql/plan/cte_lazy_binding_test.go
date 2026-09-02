@@ -19,6 +19,7 @@ import (
 	"strings"
 	"testing"
 
+	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/internal/materialized"
@@ -790,6 +791,43 @@ func TestCTEMultiReferenceReusesRobustPredicateFreeSpillProducer(t *testing.T) {
 		}
 	}
 	require.Equal(t, 1, lineitemScans)
+}
+
+func TestCTEReuseRollbackHintKeepsConsumersInline(t *testing.T) {
+	mock := NewMockOptimizer(false)
+	rt := moruntime.ServiceRuntime(mock.CurrentContext().GetProcess().GetService())
+	oldHints, hadHints := rt.GetGlobalVariables("optimizer_hints")
+	t.Cleanup(func() {
+		if hadHints {
+			rt.SetGlobalVariables("optimizer_hints", oldHints)
+		} else {
+			rt.SetGlobalVariables("optimizer_hints", "")
+		}
+	})
+	rt.SetGlobalVariables("optimizer_hints", "sharedComputation=1")
+
+	logicPlan, err := runOneStmt(mock, t, `
+		with c as (
+			select l_suppkey, max(l_comment) as comment
+			from lineitem group by l_suppkey
+		)
+		select a.l_suppkey, a.comment
+		from c a join c b on a.l_suppkey = b.l_suppkey
+		join c d on a.l_suppkey = d.l_suppkey`)
+	require.NoError(t, err)
+
+	query := logicPlan.GetQuery()
+	require.Zero(t, countReachableNodeType(query, planpb.Node_SINK_SCAN))
+	require.Zero(t, countReachableNodeType(query, planpb.Node_SINK))
+	lineitemScans := 0
+	for nodeID := range cteReachablePlanNodes(query) {
+		node := query.Nodes[nodeID]
+		if node.NodeType == planpb.Node_TABLE_SCAN && node.TableDef != nil &&
+			node.TableDef.Name == "lineitem" {
+			lineitemScans++
+		}
+	}
+	require.Equal(t, 3, lineitemScans)
 }
 
 func TestCTEMultiReferenceRejectsNonHashBuildConsumers(t *testing.T) {

@@ -80,8 +80,13 @@ func bindAndOptimizeSelectQueryWithValidatorAndCapture(
 		return nil, err
 	}
 	builder.skipStats = skipStats
-	rootId = builder.reuseMultiReferenceCTEs(rootId)
-	rootId = builder.sharePendingGroupingSetInputs(rootId)
+	// Shared-computation rewrites happen before createQuery, so parse the
+	// service-level rollback hint before entering either rewrite.
+	builder.parseOptimizeHints()
+	if !builder.sharedComputationDisabled() {
+		rootId = builder.reuseMultiReferenceCTEs(rootId)
+		rootId = builder.sharePendingGroupingSetInputs(rootId)
+	}
 	ctx.SetViews(bindCtx.views)
 	if capture != nil {
 		capture(bindCtx)
