@@ -1038,6 +1038,7 @@ func (th *TxnHandler) commitUnsafe(execCtx *ExecCtx) error {
 			}
 		}
 		var revokedPublicationErr error
+		var revocationCompletion DDLRevocationCompletion
 		if haveDDL && !commitTs.IsEmpty() && (err == nil || commitResultUnknown) {
 			recordDDLCommitFrontier(execCtx.ses.GetService(), commitTs)
 			if execCtx.ses.GetFromRealUser() ||
@@ -1051,6 +1052,9 @@ func (th *TxnHandler) commitUnsafe(execCtx *ExecCtx) error {
 				); publishErr != nil {
 					if errors.Is(publishErr, ErrDDLFrontierPublishedByRevokedGeneration) {
 						revokedPublicationErr = publishErr
+						if errors.As(publishErr, &revocationCompletion) {
+							defer revocationCompletion.CompleteDDLRevocation()
+						}
 					} else {
 						err = errors.Join(err, publishErr)
 					}

@@ -16,7 +16,7 @@ package cnservice
 
 import (
 	"context"
-	"errors"
+	"sync"
 	"time"
 
 	"go.uber.org/zap"
@@ -32,6 +32,20 @@ import (
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/version"
 )
+
+type revokedDDLPublicationError struct {
+	cause error
+	done  chan struct{}
+	once  sync.Once
+}
+
+func (e *revokedDDLPublicationError) Error() string { return e.cause.Error() }
+func (e *revokedDDLPublicationError) Unwrap() []error {
+	return []error{frontend.ErrDDLFrontierPublishedByRevokedGeneration, e.cause}
+}
+func (e *revokedDDLPublicationError) CompleteDDLRevocation() {
+	e.once.Do(func() { close(e.done) })
+}
 
 var cnCommandPollFailed = logutil.Event{
 	Name:    "cn.schedule-command.poll.failed",
@@ -233,12 +247,14 @@ func (s *service) publishDDLCommitFrontier(ctx context.Context, ts timestamp.Tim
 	}
 	if admission.Generation != s.viewMetadataAdmissionGeneration {
 		if admission.Generation > s.viewMetadataAdmissionGeneration {
-			s.revokeViewMetadataGeneration(admission.Generation)
-			return errors.Join(
-				frontend.ErrDDLFrontierPublishedByRevokedGeneration,
-				moerr.NewInvalidStateNoCtxf(
+			publicationErr := &revokedDDLPublicationError{
+				cause: moerr.NewInvalidStateNoCtxf(
 					"DDL frontier publication generation %d rejected by authoritative generation %d",
-					s.viewMetadataAdmissionGeneration, admission.Generation))
+					s.viewMetadataAdmissionGeneration, admission.Generation),
+				done: make(chan struct{}),
+			}
+			s.revokeViewMetadataGenerationAfterDDL(admission.Generation, publicationErr.done)
+			return publicationErr
 		}
 		return moerr.NewInvalidStateNoCtxf(
 			"DDL frontier publication generation %d rejected by authoritative generation %d",

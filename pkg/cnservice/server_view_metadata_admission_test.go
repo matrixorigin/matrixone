@@ -290,6 +290,37 @@ func TestCNGenerationRevocationStopsFrontendBeforeTaskRunnerDrain(t *testing.T) 
 	require.Nil(t, s.GetTaskRunner())
 }
 
+func TestCNGenerationRevocationKeepsFrontendAliveUntilAdmittedDDLExits(t *testing.T) {
+	gate := frontend.NewDDLCommitGate()
+	leave, err := gate.Enter(context.Background())
+	require.NoError(t, err)
+	closeCalled := make(chan struct{})
+	s := &service{
+		cfg: &Config{UUID: "revoked-frontend-ddl-owner"}, logger: zap.NewNop(),
+		ddlCommitGate: gate, viewMetadataAdmissionGeneration: 7,
+		viewMetadataCloseFn: func() error { close(closeCalled); return nil },
+	}
+
+	s.revokeViewMetadataGeneration(8)
+	require.True(t, s.viewMetadataGenerationRevoked.Load())
+	blockedCtx, cancel := context.WithCancel(context.Background())
+	cancel()
+	_, err = gate.Enter(blockedCtx)
+	require.ErrorIs(t, err, context.Canceled, "revocation must synchronously reject new DDL")
+	select {
+	case <-closeCalled:
+		t.Fatal("frontend/service drain canceled an already-admitted DDL owner")
+	default:
+	}
+
+	leave()
+	select {
+	case <-closeCalled:
+	case <-time.After(time.Second):
+		t.Fatal("frontend/service drain did not resume after admitted DDL exited")
+	}
+}
+
 func TestCNGenerationRevocationDoesNotWaitForCloseOwnedTaskRunner(t *testing.T) {
 	runner := &blockedStopTaskRunner{
 		testRunner: &testRunner{}, stopEntered: make(chan struct{}),

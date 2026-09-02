@@ -1761,10 +1761,18 @@ func TestStaleGenerationCannotAcknowledgeDDLFrontierPublication(t *testing.T) {
 		t.Fatal("generation rejection self-waited on its own TaskRunner SQL task")
 	}
 	require.ErrorContains(t, err, "generation 1 rejected by authoritative generation 2")
+	var completion frontend.DDLRevocationCompletion
+	require.ErrorAs(t, err, &completion)
+	select {
+	case <-runner.stopEntered:
+		t.Fatal("physical drain started before stale DDL visibility completion")
+	default:
+	}
+	completion.CompleteDDLRevocation()
 	select {
 	case <-runner.stopEntered:
 	case <-time.After(time.Second):
-		t.Fatal("asynchronous revocation did not begin TaskRunner drain")
+		t.Fatal("asynchronous revocation did not begin TaskRunner drain after visibility completion")
 	}
 	close(runner.releaseStop)
 	select {

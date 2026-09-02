@@ -118,3 +118,10 @@
 1. 删除 stale-generation force fan-out 引入但未使用的兼容 wrapper，保留单一内部实现，修复 SCA `unused`。
 2. merge 最新 `mo/main`，按 v42/v43/v44 累积协议和生成文件所有权解决冲突。
 3. 运行 affected UT/race/vet/static-check/diff-check 后推送。
+
+## 2026-09-02：generation 独立单调与 stale frontend DDL completion
+
+1. HAKeeper generation ownership 不再依赖 ViewMetadataAdmission activation；任何已登记的更高 generation 都拒绝旧 incarnation 状态覆盖，同时仅吸收其已提交 DDL frontier。
+2. stale committed DDL revocation 同步 seal admission，但通过 completion barrier 延迟 MOServer/TaskRunner/full-service drain，frontend 在强制 SyncCommitV2 完成（成功或失败）后显式释放。
+3. 增加 admission 未激活 generation 回退 RSM 回归，以及真实 frontend commit owner 在 fan-out 前不被 drain/cancel、fan-out 后 drain 的确定性回归。
+4. 修复 issue_277xx 测试对共享集群 v44 epoch 的永久污染，清理设计 epoch/marker 43，并 merge 最新 main 后验证。

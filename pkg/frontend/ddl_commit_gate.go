@@ -32,6 +32,12 @@ const DDLCommitGateRuntimeKey = "frontend.ddl-commit-gate"
 var ErrDDLFrontierPublishedByRevokedGeneration = moerr.NewInvalidStateNoCtx(
 	"DDL frontier published by revoked CN generation")
 
+// DDLRevocationCompletion delays physical CN drain until an already-committed
+// stale-generation DDL has completed its mandatory visibility fan-out.
+type DDLRevocationCompletion interface {
+	CompleteDDLRevocation()
+}
+
 // DDLCommitGate gives DDL producers and live protocol activation one local
 // linearization point. Enter admits a commit while Block prevents new commits
 // and waits for already-admitted commits to leave. A failed activation may keep

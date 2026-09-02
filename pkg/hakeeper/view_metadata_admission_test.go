@@ -208,7 +208,7 @@ func TestViewMetadataAdmissionRejectsStaleGeneration(t *testing.T) {
 		rsm.state.CNState.Stores["cn-1"].ViewMetadataAdmissionGeneration)
 }
 
-func TestViewMetadataAdmissionAllowsGenerationRollbackBeforeActivation(t *testing.T) {
+func TestCNGenerationCannotRollbackBeforeAdmissionActivation(t *testing.T) {
 	rsm := NewStateMachine(0, 1).(*stateMachine)
 	rsm.state.Tick = 3
 	updateViewMetadataCN(t, rsm, pb.CNStoreHeartbeat{
@@ -235,9 +235,9 @@ func TestViewMetadataAdmissionAllowsGenerationRollbackBeforeActivation(t *testin
 	})
 
 	cn := rsm.state.CNState.Stores["cn-1"]
-	require.Equal(t, uint64(0), cn.ViewMetadataAdmissionGeneration)
-	require.Equal(t, uint64(7), cn.Tick)
-	require.Equal(t, "rolled-back-cn", cn.ServiceAddress)
+	require.Equal(t, uint64(12), cn.ViewMetadataAdmissionGeneration)
+	require.Equal(t, uint64(3), cn.Tick)
+	require.Equal(t, "new-cn", cn.ServiceAddress)
 	proxy := rsm.state.ProxyState.Stores["proxy-1"]
 	require.Equal(t, uint64(0), proxy.ViewMetadataAdmissionGeneration)
 	require.Equal(t, uint64(7), proxy.Tick)

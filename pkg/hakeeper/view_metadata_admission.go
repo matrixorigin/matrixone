@@ -449,7 +449,7 @@ func (s *stateMachine) handleEnableViewMetadataAdmission(cmd []byte) sm.Result {
 func (s *stateMachine) updateCNViewMetadataAdmission(hb pb.CNStoreHeartbeat) bool {
 	previous, existed := s.state.CNState.Stores[hb.UUID]
 	active := s.viewMetadataAdmissionActive()
-	if active && existed &&
+	if existed && previous.ViewMetadataAdmissionGeneration > 0 &&
 		hb.ViewMetadataAdmissionGeneration < previous.ViewMetadataAdmissionGeneration {
 		// The old incarnation may have entered the public DDL gate before its
 		// replacement took ownership and committed T afterwards. Reject all

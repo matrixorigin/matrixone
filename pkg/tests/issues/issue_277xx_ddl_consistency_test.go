@@ -24,9 +24,7 @@ import (
 	"time"
 
 	mysql "github.com/go-sql-driver/mysql"
-	"github.com/matrixorigin/matrixone/pkg/cnservice"
 	"github.com/matrixorigin/matrixone/pkg/embed"
-	"github.com/matrixorigin/matrixone/pkg/util/fault"
 	"github.com/stretchr/testify/require"
 )
 
@@ -43,47 +41,6 @@ func TestIssue277xxDDLConsistency(t *testing.T) {
 		defer db0.Close()
 		db1 := openIssue277xxDB(t, cn1.GetServiceConfig().CN.Frontend.Port)
 		defer db1.Close()
-
-		t.Run("27743 automatic cross-CN DDL visibility", func(t *testing.T) {
-			const database = "issue_27743_automatic_ddl_visibility"
-			targets := cn0.ServiceID() + "," + cn1.ServiceID()
-			var activation string
-			require.NoError(t, db0.QueryRowContext(ctx,
-				"select mo_ctl('cn', 'SetProtocolVersion', ?)", targets+":44").Scan(&activation))
-			require.Contains(t, activation, cn0.ServiceID()+":44")
-			require.Contains(t, activation, cn1.ServiceID()+":44")
-			// SetProtocolVersion returns success only after both target RPCs report
-			// v44 and HAKeeper acknowledges the atomically committed v44 epoch.
-
-			resetIssue277xxDatabase(t, ctx, db0, database)
-			defer execSQLMaybe(t, ctx, db0, "drop database if exists `"+database+"`")
-
-			// Prove this public path actually executes SyncCommitV2: an injected
-			// receiver failure must make CREATE fail after v44 activation.
-			require.True(t, fault.Enable())
-			defer fault.Disable()
-			faultPointRemoved := false
-			defer func() {
-				if !faultPointRemoved {
-					_, _ = fault.RemoveFaultPoint(context.Background(), cnservice.DDLVisibilitySyncCommitFaultPoint)
-				}
-			}()
-			require.NoError(t, fault.AddFaultPoint(ctx,
-				cnservice.DDLVisibilitySyncCommitFaultPoint, "1:1::", "return", 0, "expected", false))
-			_, err := db0.ExecContext(ctx,
-				"create table `"+database+"`.`must_fail_sync` (id int primary key)")
-			require.ErrorContains(t, err, "injected DDL visibility sync commit error")
-			_, removeErr := fault.RemoveFaultPoint(ctx, cnservice.DDLVisibilitySyncCommitFaultPoint)
-			require.NoError(t, removeErr)
-			faultPointRemoved = true
-
-			// Do not issue SYNCCOMMIT or retry the read. The v44 DDL commit contract
-			// must make the first fresh CN1 snapshot observe CN0's CREATE TABLE.
-			execSQLRequire(t, ctx, db0,
-				"create table `"+database+"`.`t` (id int primary key, payload varchar(32))")
-			require.Equal(t, 0, queryIssue277xxInt(t, ctx, db1,
-				"select count(*) from `"+database+"`.`t`"))
-		})
 
 		t.Run("27735 qualified alter drop index without default database", func(t *testing.T) {
 			const database = "issue_27735_qualified_drop"

@@ -120,15 +120,26 @@ func (s *service) applyViewMetadataAdmission(
 // generation while publishing a DDL frontier; waiting for TaskRunner.Stop on
 // that stack would make the runner wait for the task that is doing the stop.
 func (s *service) revokeViewMetadataGeneration(authoritative uint64) {
+	s.revokeViewMetadataGenerationAfterDDL(authoritative, nil)
+}
+
+func (s *service) revokeViewMetadataGenerationAfterDDL(
+	authoritative uint64,
+	ddlVisibilityDone <-chan struct{},
+) {
 	s.viewMetadataRevocationOnce.Do(func() {
 		s.viewMetadataGenerationRevoked.Store(true)
 		s.viewMetadataIngressReady.Store(false)
 		s.ddlVisibilityBarrierReady.Store(false)
+		if s.ddlCommitGate != nil {
+			_ = s.ddlCommitGate.BlockNew()
+		}
 		_ = s.closePipelineAdmission()
 		s.queryWork.beginClose()
 		runner, runnerDone := s.detachRevokedTaskRunner()
 
-		go s.drainRevokedViewMetadataGeneration(authoritative, runner, runnerDone)
+		go s.drainRevokedViewMetadataGeneration(
+			authoritative, runner, runnerDone, ddlVisibilityDone)
 	})
 }
 
@@ -136,7 +147,18 @@ func (s *service) drainRevokedViewMetadataGeneration(
 	authoritative uint64,
 	runner taskservice.TaskRunner,
 	runnerDone chan struct{},
+	ddlVisibilityDone <-chan struct{},
 ) {
+	// Keep the frontend owner and outbound QueryService dependencies alive until
+	// every DDL admitted before the synchronous seal has exited. In the stale
+	// publication path, the explicit completion additionally proves mandatory
+	// visibility fan-out ran before physical drain.
+	if s.ddlCommitGate != nil {
+		_ = s.ddlCommitGate.WaitDrained(context.Background())
+	}
+	if ddlVisibilityDone != nil {
+		<-ddlVisibilityDone
+	}
 	// Serialize physical frontend shutdown with MOServer.Start before waiting
 	// for task executors. The goroutine is independent of the rejected SQL task,
 	// allowing that task to return and satisfy TaskRunner.Stop's wait.

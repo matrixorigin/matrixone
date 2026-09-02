@@ -865,6 +865,21 @@ type ddlSyncRequest struct {
 	commitTS timestamp.Timestamp
 }
 
+type testDDLRevocationCompletionError struct {
+	drainStarted chan struct{}
+	once         sync.Once
+}
+
+func (e *testDDLRevocationCompletionError) Error() string {
+	return ErrDDLFrontierPublishedByRevokedGeneration.Error()
+}
+func (e *testDDLRevocationCompletionError) Unwrap() error {
+	return ErrDDLFrontierPublishedByRevokedGeneration
+}
+func (e *testDDLRevocationCompletionError) CompleteDDLRevocation() {
+	e.once.Do(func() { close(e.drainStarted) })
+}
+
 type ddlSyncQueryClient struct {
 	serviceID   string
 	sendError   map[string]error
@@ -1046,15 +1061,21 @@ func TestCommitSyncsDDLCommitToBarrierReadyCNs(t *testing.T) {
 		defer execCtx.Close()
 		gate := NewDDLCommitGate()
 		var authoritativeFrontier timestamp.Timestamp
-		generationErr := errors.Join(
-			ErrDDLFrontierPublishedByRevokedGeneration,
-			errors.New("generation 1 replaced by generation 2"))
+		generationErr := &testDDLRevocationCompletionError{drainStarted: make(chan struct{})}
 		gate.SetFrontierPublisher(func(_ context.Context, ts timestamp.Timestamp) error {
 			// Model generation 1's already-admitted commit being durably absorbed
-			// after generation 2 has taken ownership.
+			// after generation 2 has taken ownership. Physical frontend drain waits
+			// for CompleteDDLRevocation after this owner's mandatory fan-out.
 			authoritativeFrontier = ts
 			return generationErr
 		})
+		qc.beforeSend = func() {
+			select {
+			case <-generationErr.drainStarted:
+				t.Fatal("frontend drain started before stale DDL visibility fan-out")
+			default:
+			}
+		}
 		rt := moruntime.ServiceRuntime(ses.GetService())
 		previousGate, hadPreviousGate := rt.GetGlobalVariables(DDLCommitGateRuntimeKey)
 		rt.SetGlobalVariables(DDLCommitGateRuntimeKey, gate)
@@ -1071,6 +1092,11 @@ func TestCommitSyncsDDLCommitToBarrierReadyCNs(t *testing.T) {
 		err := ses.GetTxnHandler().Commit(execCtx)
 		require.ErrorIs(t, err, ErrDDLFrontierPublishedByRevokedGeneration)
 		require.Equal(t, commitTS, authoritativeFrontier)
+		select {
+		case <-generationErr.drainStarted:
+		default:
+			t.Fatal("frontend drain completion was not released after fan-out")
+		}
 		require.Equal(t, []ddlSyncRequest{
 			{address: "cn-1:6001", method: querypb.CmdMethod_SyncCommitV2, commitTS: commitTS},
 			{address: "cn-2:6001", method: querypb.CmdMethod_SyncCommitV2, commitTS: commitTS},
