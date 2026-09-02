@@ -138,23 +138,57 @@ func (h *ParquetHandler) getDataByRow(bat *batch.Batch, param *ExternalParam, pr
 		}
 	}
 
-	rowBuf := make([]parquet.Row, int(h.batchCnt))
-	n, err := h.rowReader.ReadRows(rowBuf)
-	if err != nil && !errors.Is(err, io.EOF) {
-		return moerr.ConvertGoError(param.Ctx, err)
-	}
-	rowBuf = rowBuf[:n]
-
-	for _, row := range rowBuf {
-		if err := h.processRow(row, bat, param, proc); err != nil {
-			return err
+	// Bound decoder lookahead before the actual materialized batch size can be
+	// checked. Any unread rows are revisited from h.offset on the next call.
+	const maxReadRows = 1024
+	rowBuf := make([]parquet.Row, min(int(h.batchCnt), maxReadRows))
+	rowsRead := 0
+	eof := false
+	batchBoundary := false
+	for rowsRead < int(h.batchCnt) && !h.parquetBatchAtByteBudget(bat, rowsRead, param) {
+		toRead := nextParquetBatchRows(rowsRead, min(len(rowBuf), int(h.batchCnt)-rowsRead), h.estimatedBatchSize(bat, rowsRead, param), param.maxBatchSize)
+		n, err := h.rowReader.ReadRows(rowBuf[:toRead])
+		if err != nil && !errors.Is(err, io.EOF) {
+			return moerr.ConvertGoError(param.Ctx, err)
+		}
+		if errors.Is(err, io.EOF) {
+			eof = true
+		}
+		for _, row := range rowBuf[:n] {
+			checkpoints := make([]vector.AppendCheckpoint, len(bat.Vecs))
+			for colIdx, vec := range bat.Vecs {
+				if vec != nil {
+					checkpoints[colIdx] = vec.MakeAppendCheckpoint()
+				}
+			}
+			if err := h.processRow(row, bat, param, proc); err != nil {
+				return err
+			}
+			if h.parquetBatchAtByteBudget(bat, rowsRead+1, param) {
+				if rowsRead > 0 {
+					for colIdx, vec := range bat.Vecs {
+						if vec != nil {
+							vec.RollbackAppend(checkpoints[colIdx], 1)
+						}
+					}
+					batchBoundary = true
+					break
+				}
+				rowsRead++
+				batchBoundary = true
+				break
+			}
+			rowsRead++
+		}
+		if n == 0 || eof || batchBoundary || h.parquetBatchAtByteBudget(bat, rowsRead, param) {
+			break
 		}
 	}
 
-	bat.SetRowCount(n)
-	h.offset += int64(n)
+	bat.SetRowCount(rowsRead)
+	h.offset += int64(rowsRead)
 
-	finish := n == 0 || h.isFinished()
+	finish := (eof && rowsRead == 0) || h.isFinished()
 	if finish {
 		h.cleanup()
 		// File completion (FileFin/End) is now handled by Call's finishCurrentFile
