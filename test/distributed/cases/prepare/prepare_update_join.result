@@ -36,4 +36,22 @@ select tenant, acct_id, status, amount, parent_id from acct order by tenant;
 1  ¦  101  ¦  closed  ¦  17.16  ¦  1  𝄀
 2  ¦  201  ¦  closed  ¦  39.63  ¦  2
 deallocate prepare s1;
+create table temporal_dst(id int primary key, tm time(6));
+create table temporal_src(k int primary key);
+insert into temporal_dst values(1, '00:00:01');
+insert into temporal_src values(10);
+prepare temporal_update from 'update temporal_dst d join temporal_src s on s.k=? set d.tm=? where d.id=?';
+set @temporal_key=10;
+set @temporal_value='02:03:04.000005';
+set @temporal_id=1;
+execute temporal_update using @temporal_key, @temporal_value, @temporal_id;
+select id, cast(tm as char) as tm from temporal_dst;
+➤ id[4,32,0]  ¦  tm[12,65535,0]  𝄀
+1  ¦  02:03:04.000005
+set @temporal_value='03:04:05.000006';
+execute temporal_update using @temporal_key, @temporal_value, @temporal_id;
+select id, cast(tm as char) as tm from temporal_dst;
+➤ id[4,32,0]  ¦  tm[12,65535,0]  𝄀
+1  ¦  03:04:05.000006
+deallocate prepare temporal_update;
 drop database prep_update_join;
