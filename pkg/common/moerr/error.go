@@ -130,6 +130,10 @@ const (
 	// required argument depends on a runtime system variable.
 	ErrWrongParamCountToNativeFct uint16 = 20333
 	ErrAESInvalidIV               uint16 = 20334
+	// Digest parser errors use the next free internal codes; 20331-20334 are
+	// already assigned to JSON/charset/native-function errors on main.
+	ErrDigestParse            uint16 = 20335
+	ErrDigestParseUndisclosed uint16 = 20336
 
 	// Group 4: unexpected state and io errors
 	ErrInvalidState                             uint16 = 20400
@@ -478,6 +482,9 @@ var errorMsgRefer = map[uint16]moErrorMsgItem{
 	ErrTooManyRows:          {ER_TOO_MANY_ROWS, []string{"42000"}, "Result consisted of more than one row"},
 	ErrCantChangeTxn:        {ER_CANT_CHANGE_TX_CHARACTERISTICS, []string{"25001"}, "Transaction characteristics can't be changed while a transaction is in progress"},
 	ErrInvalidGroupFuncUse:  {ER_INVALID_GROUP_FUNC_USE, []string{MySQLDefaultSqlState}, "Invalid use of group function"},
+
+	ErrDigestParse:            {ER_PARSE_ERROR_IN_DIGEST_FN, []string{MySQLDefaultSqlState}, "Could not parse argument to digest function: \"%s\"."},
+	ErrDigestParseUndisclosed: {ER_UNDISCLOSED_PARSE_ERROR_IN_DIGEST_FN, []string{MySQLDefaultSqlState}, "Could not parse argument to digest function."},
 	// Maps to MySQL's ER_FT_MATCHING_KEY_NOT_FOUND (1191), which rejects the same no-index
 	// CREATE / ALTER / CREATE OR REPLACE VIEW, so clients see the code and text they expect.
 	ErrFtMatchingKeyNotFound:               {ER_FT_MATCHING_KEY_NOT_FOUND, []string{MySQLDefaultSqlState}, FtMatchingKeyNotFoundMsg},
@@ -1192,6 +1199,14 @@ func NewParseErrorf(ctx context.Context, format string, args ...any) *Error {
 }
 func NewParseError(ctx context.Context, msg string) *Error {
 	return newError(ctx, ErrParseError, msg)
+}
+
+func NewParseErrorInDigestFunction(ctx context.Context, msg string) *Error {
+	return newError(ctx, ErrDigestParse, msg)
+}
+
+func NewUndisclosedParseErrorInDigestFunction(ctx context.Context) *Error {
+	return newError(ctx, ErrDigestParseUndisclosed)
 }
 
 func NewConstraintViolationf(ctx context.Context, format string, args ...any) *Error {
