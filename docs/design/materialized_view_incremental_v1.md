@@ -87,14 +87,19 @@ snapshot contracts, and prevents recursive MV dependencies.
 
 ### 3.2 Implemented incremental SQL subset
 
-Incremental planning currently requires exactly one direct base table and a
-top-level `SelectClause`. It accepts:
+Incremental planning accepts either one direct base table in a top-level
+`SelectClause`, or a top-level `UNION ALL` whose leaves are direct single-table
+aggregate branches with compatible output and hidden-state schemas. It accepts:
 
 - an optional deterministic row-local `WHERE`;
 - ordinary `GROUP BY`, or `SELECT DISTINCT` rewritten as grouping;
 - `COUNT(*)`, `COUNT(expr)`, `SUM(expr)`, and `AVG(expr)` by algebraic delta;
 - `MIN(expr)` and `MAX(expr)` by recomputing only affected groups;
 - exact `COUNT(DISTINCT expr)` using persistent value-multiplicity state;
+- two to sixteen compatible `UNION ALL` branches. A stable branch ID is included
+  in the hidden group identity, so equal visible rows from different branches
+  remain distinct. One physical source is subscribed once and its deltas are
+  routed to every matching branch;
 - insert, delete, and update tails.
 
 Every group expression must be projected exactly once. The scalar-expression
@@ -108,9 +113,8 @@ The following are **not incrementally supported by the current PR**:
 
 - `HAVING`;
 - `SUM(DISTINCT)` and `AVG(DISTINCT)`;
-- `UNION ALL` or any other set operation; top-level set operations are currently
-  rejected before source collection and therefore cannot yet fall back to a
-  FORCE complete refresh;
+- `UNION DISTINCT`, `INTERSECT`, `EXCEPT`, nested set operations inside a
+  branch, or `UNION ALL` branches whose output/aggregate-state shapes differ;
 - JOIN, CTE, subquery, window, `ORDER BY ... LIMIT`, ROLLUP, CUBE, GROUPING
   SETS, Top-K, percentile/quantile, bitmap/HLL, or user-defined aggregate state.
 
@@ -119,8 +123,10 @@ For an admitted query that cannot produce an incremental specification, `FAST`
 rejects creation while `FORCE` stores no specification and takes the complete
 refresh path. The current FAST error identifies the unsupported single-table
 incremental-aggregate class but not every individual construct. Derived tables,
-ordinary views, special relations, and current top-level set operations fail
-source admission rather than receiving a complete refresh.
+ordinary views, special relations, and unsupported top-level set operations
+fail source admission rather than receiving a complete refresh. A compatible
+top-level `UNION ALL` can use FAST; an admitted but non-incremental `UNION ALL`
+can use FORCE/COMPLETE.
 
 ### 3.3 Implemented complete-refresh scope
 
@@ -466,8 +472,8 @@ the default state store.
 Delivery order follows value and state complexity:
 
 1. fixed-key global aggregates and multiplicity GROUP BY;
-2. HAVING, SUM/AVG DISTINCT, and top-level UNION ALL, including fixing UNION ALL
-   source admission for FORCE/COMPLETE;
+2. HAVING and SUM/AVG DISTINCT (top-level compatible UNION ALL and its
+   FORCE/COMPLETE source admission are implemented in this PR);
 3. unique-dimension inner equi-join, followed by non-unique and multi-way joins;
 4. ROLLUP/CUBE/GROUPING SETS and provably finite-fan-out subquery decorrelation;
 5. Top-K, bounded windows, and event-time TUMBLE/HOP;
@@ -567,9 +573,10 @@ and stable operator IDs.
   full-row type-preserving key and can consume state proportional to distinct
   input rows.
 
-The first code increment remains HAVING, SUM/AVG DISTINCT, and top-level UNION
-ALL. It must add stable construct-specific FAST errors; FORCE alone may select
-complete refresh.
+Top-level compatible UNION ALL is implemented in this PR. The next code
+increment remains HAVING and SUM/AVG DISTINCT, together with stable
+construct-specific FAST errors; FORCE alone may select complete refresh for an
+admitted definition outside the incremental subset.
 
 ### 12.2 Incremental JOIN
 
@@ -790,7 +797,7 @@ The capability union is intentionally larger than one safe implementation
 change. Delivery order is:
 
 1. stabilize the current PR subset and public SQL lifecycle tests;
-2. HAVING, SUM/AVG DISTINCT, UNION ALL, and construct-specific FAST errors;
+2. HAVING, SUM/AVG DISTINCT, and construct-specific FAST errors;
 3. inner/unique-dimension JOIN plus operator arrangements;
 4. Top-K and event-time tumble/hop windows;
 5. cascading/replacement, scheduled/concurrent refresh, and status controls;

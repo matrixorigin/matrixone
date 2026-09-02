@@ -82,6 +82,14 @@ type incrementalDescription struct {
 	RowCountColumn string                 `json:"row_count_column"`
 	StateColumns   []string               `json:"state_columns"`
 	StateTable     string                 `json:"state_table,omitempty"`
+	BranchID       int                    `json:"branch_id,omitempty"`
+	SourceDatabase string                 `json:"source_database,omitempty"`
+	SourceTable    string                 `json:"source_table,omitempty"`
+	Branches       []incrementalBranch    `json:"branches,omitempty"`
+}
+
+type incrementalBranch struct {
+	Description *incrementalDescription `json:"description"`
 }
 
 type materializedViewChangeRow struct {
@@ -363,11 +371,6 @@ func materializedViewRefreshAtSourcesWithBoundary(query string, sources []TableI
 	if !ok {
 		return "", moerr.NewInternalErrorNoCtxf("materialized view refresh query is %T, expected select", stmt)
 	}
-	clause, ok := selectStmt.Select.(*tree.SelectClause)
-	if !ok || clause.From == nil {
-		return "", moerr.NewInternalErrorNoCtx("materialized view refresh query has no direct source tables")
-	}
-
 	type sourceKey struct {
 		database string
 		table    string
@@ -435,10 +438,40 @@ func materializedViewRefreshAtSourcesWithBoundary(query string, sources []TableI
 			return moerr.NewInternalErrorNoCtxf("materialized view source must be a direct base table (table=%T)", expr)
 		}
 	}
-	for _, expr := range clause.From.Tables {
-		if err := rewriteTableExpr(expr); err != nil {
-			return "", err
+	var rewriteSelect func(tree.SelectStatement) error
+	rewriteSelect = func(selection tree.SelectStatement) error {
+		switch node := selection.(type) {
+		case *tree.Select:
+			return rewriteSelect(node.Select)
+		case *tree.ParenSelect:
+			if node.Select == nil {
+				return moerr.NewInternalErrorNoCtx("materialized view refresh query has an empty parenthesized select")
+			}
+			return rewriteSelect(node.Select)
+		case *tree.UnionClause:
+			if node.Type != tree.UNION || !node.All || node.Distinct {
+				return moerr.NewInternalErrorNoCtx("materialized view refresh query contains an unsupported set operation")
+			}
+			if err := rewriteSelect(node.Left); err != nil {
+				return err
+			}
+			return rewriteSelect(node.Right)
+		case *tree.SelectClause:
+			if node.From == nil || len(node.From.Tables) == 0 {
+				return moerr.NewInternalErrorNoCtx("materialized view refresh query has no direct source tables")
+			}
+			for _, expr := range node.From.Tables {
+				if err := rewriteTableExpr(expr); err != nil {
+					return err
+				}
+			}
+			return nil
+		default:
+			return moerr.NewInternalErrorNoCtxf("materialized view refresh query contains unsupported select %T", selection)
 		}
+	}
+	if err := rewriteSelect(selectStmt); err != nil {
+		return "", err
 	}
 	for key, wasFound := range found {
 		if !wasFound {

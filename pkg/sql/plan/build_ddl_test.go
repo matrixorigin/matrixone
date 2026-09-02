@@ -1583,8 +1583,31 @@ func TestBuildMaterializedViewRefreshModes(t *testing.T) {
 	require.Equal(t, "fast", property(fastDef, "mv_refresh_method"))
 	require.NotEmpty(t, property(fastDef, "mv_incremental_spec"))
 
+	unionPlan, err := runOneStmt(mock, t, "create materialized view mv_union refresh fast on change as "+
+		"select n_regionkey k, count(*) c from nation group by n_regionkey "+
+		"union all select r_regionkey region_alias, count(*) rows_seen from region group by r_regionkey")
+	require.NoError(t, err)
+	unionDef := unionPlan.GetDdl().GetCreateView().GetTableDef()
+	require.NotEmpty(t, property(unionDef, "mv_incremental_spec"))
+	encodedSources, err := base64.StdEncoding.DecodeString(property(unionDef, "mv_source_tables"))
+	require.NoError(t, err)
+	var unionSources []struct{ Database, Table string }
+	require.NoError(t, json.Unmarshal(encodedSources, &unionSources))
+	require.Len(t, unionSources, 2)
+
+	_, err = runOneStmt(mock, t, "create materialized view mv_union_distinct refresh fast on change as "+
+		"select n_regionkey k, count(*) c from nation group by n_regionkey "+
+		"union distinct select r_regionkey, count(*) from region group by r_regionkey")
+	require.ErrorContains(t, err, "set operations must be UNION ALL")
+
+	tooManyBranches := "create materialized view mv_union_wide refresh force on change as " +
+		"select n_regionkey k, count(*) c from nation group by n_regionkey" +
+		strings.Repeat(" union all select n_regionkey, count(*) from nation group by n_regionkey", materializedViewMaxDirectInputs)
+	_, err = runOneStmt(mock, t, tooManyBranches)
+	require.ErrorContains(t, err, "supports at most 16 direct UNION ALL branches, got 17")
+
 	_, err = runOneStmt(mock, t, "create materialized view mv_bad refresh fast as select n_regionkey, count(*) c from nation group by n_regionkey having count(*) > 1")
-	require.ErrorContains(t, err, "requires a supported single-table incremental aggregate")
+	require.ErrorContains(t, err, "requires a supported incremental aggregate or UNION ALL query")
 
 	completePlan, err := runOneStmt(mock, t, "create materialized view mv_complete refresh complete on change as select n_regionkey, count(*) c from nation group by n_regionkey")
 	require.NoError(t, err)
@@ -1716,6 +1739,54 @@ func TestMaterializedViewIncrementalSpecPreservesGroupNullability(t *testing.T) 
 	decoded, err = json.Marshal(desc)
 	require.NoError(t, err)
 	require.Equal(t, []string{desc.GroupKeyColumn}, materializedViewIncrementalPrimaryKey(base64.StdEncoding.EncodeToString(decoded)))
+}
+
+func TestMaterializedViewUnionAllIncrementalPlan(t *testing.T) {
+	parse := func(query string) *tree.Select {
+		stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, query, 1)
+		require.NoError(t, err)
+		t.Cleanup(stmt.Free)
+		return stmt.(*tree.Select)
+	}
+	outputs := []*ColDef{
+		{Name: "service", Typ: Type{Id: int32(types.T_varchar)}},
+		{Name: "requests", Typ: Type{Id: int32(types.T_int64)}},
+		{Name: "duration_sum", Typ: Type{Id: int32(types.T_int64)}},
+	}
+	query := "select service, count(*) requests, sum(duration) duration_sum from events group by service " +
+		"union all select region, count(*) rows_seen, sum(latency) latency_sum from archive group by region"
+	encoded, stateCols, refreshSQL := buildMaterializedViewIncrementalPlanForDatabase(parse(query), outputs, "obs", "__state")
+	require.NotEmpty(t, encoded)
+	require.NotEmpty(t, stateCols)
+	require.Contains(t, refreshSQL, "serial_full(1, service)")
+	require.Contains(t, refreshSQL, "serial_full(2, region)")
+	require.Contains(t, strings.ToLower(refreshSQL), "union all")
+	reparsed, err := parsers.ParseOne(t.Context(), dialect.MYSQL, refreshSQL, 1)
+	require.NoError(t, err)
+	reparsed.Free()
+
+	decoded, err := base64.StdEncoding.DecodeString(encoded)
+	require.NoError(t, err)
+	var desc materializedViewIncrementalDescription
+	require.NoError(t, json.Unmarshal(decoded, &desc))
+	require.Equal(t, 3, desc.Version)
+	require.Equal(t, "union-all", desc.Strategy)
+	require.Len(t, desc.Branches, 2)
+	require.Equal(t, 1, desc.Branches[0].Description.BranchID)
+	require.Equal(t, "obs", desc.Branches[0].Description.SourceDatabase)
+	require.Equal(t, "events", desc.Branches[0].Description.SourceTable)
+	require.Equal(t, 2, desc.Branches[1].Description.BranchID)
+	require.Equal(t, "archive", desc.Branches[1].Description.SourceTable)
+	require.Equal(t, "service", desc.Branches[1].Description.Groups[0].OutputColumn)
+	require.Equal(t, "requests", desc.Branches[1].Description.Aggregates[0].OutputColumn)
+
+	encoded, _, _ = buildMaterializedViewIncrementalPlanForDatabase(parse(strings.Replace(query, "union all", "union distinct", 1)), outputs, "obs", "__state")
+	require.Empty(t, encoded)
+	encoded, _, _ = buildMaterializedViewIncrementalPlanForDatabase(parse(
+		"select service, count(*) requests, sum(duration) duration_sum from events group by service "+
+			"union all select region, sum(latency) rows_seen, sum(latency) latency_sum from archive group by region",
+	), outputs, "obs", "__state")
+	require.Empty(t, encoded, "branches with incompatible aggregate state must not use FAST")
 }
 
 func TestMaterializedViewRefreshCanWriteHiddenState(t *testing.T) {

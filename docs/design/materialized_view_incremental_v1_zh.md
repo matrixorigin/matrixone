@@ -89,20 +89,27 @@ MV 必须是顶层 select，包含 1～16 个直接、持久化的普通基表�
 `date_trunc`、`coalesce`、`ifnull`、`abs`、`floor`、`ceil`。未知或易变函数、
 子查询、窗口、嵌套聚合和不支持的表达式节点不能生成增量规格。
 
+当前增量规划既支持顶层单表 `SelectClause`，也支持包含 2～16 个分支的顶层
+`UNION ALL`：每个叶子必须是
+单个直接普通表上的聚合分支，并且各分支的输出列和隐藏状态 schema 必须兼容。
+`UNION ALL` 使用稳定 branch ID 组成隐藏 group identity，因此不同分支产生的相同可见
+行不会被错误合并；同一物理源只订阅一次，delta 会路由到所有匹配分支。
+
 当前 PR **尚不支持以下增量能力**：
 
 - `HAVING`；
 - `SUM(DISTINCT)`、`AVG(DISTINCT)`；
-- `UNION ALL` 或其他集合操作；其中顶层集合操作当前在源表收集之前即被拒绝，
-  尚不能通过 `FORCE` 退化为完整刷新；
+- `UNION DISTINCT`、`INTERSECT`、`EXCEPT`、分支内部嵌套集合操作，或输出/聚合
+  状态 shape 不兼容的 `UNION ALL`；
 - JOIN、CTE、子查询、窗口、`ORDER BY ... LIMIT`、ROLLUP、CUBE、GROUPING SETS、
   Top-K、percentile/quantile、bitmap/HLL、用户自定义聚合状态。
 
 查询必须先通过 3.1 的直接普通源 admission。通过 admission 但无法生成增量规格时，
 `FAST` 在创建阶段拒绝；当前错误能说明“不属于受支持的单表增量聚合”，但还不能
 对每种 SQL construct 返回独立原因。`FORCE` 不保存增量规格并走完整刷新。未通过
-source admission 的 derived table、普通 view、特殊 relation，以及当前的顶层集合
-操作会直接拒绝，而不是完整刷新。
+source admission 的 derived table、普通 view 和特殊 relation 会直接拒绝，而不是完整
+刷新。兼容的顶层 `UNION ALL` 可走 FAST；通过 source admission 但不能增量编译的
+`UNION ALL` 可由 FORCE/COMPLETE 完整刷新。
 
 ### 3.3 当前已实现的完整刷新
 
@@ -399,8 +406,8 @@ restart 后不可恢复。普通持久表加有界 cache/spill 是默认 state s
 交付顺序按收益和状态复杂度排列：
 
 1. 固定 group key 的全局 aggregate，以及 multiplicity GROUP BY；
-2. HAVING、SUM/AVG DISTINCT、顶层 UNION ALL，并同时修复 FORCE/COMPLETE 的
-   UNION ALL source admission；
+2. HAVING、SUM/AVG DISTINCT（顶层兼容 UNION ALL 及 FORCE/COMPLETE source
+   admission 已在本 PR 实现）；
 3. unique-dimension inner equi-join，再扩展 non-unique/multi-way join；
 4. ROLLUP/CUBE/GROUPING SETS 和可证明有限 fan-out 的子查询 decorrelation；
 5. Top-K、有界 window、event-time TUMBLE/HOP；
@@ -483,8 +490,9 @@ ID 代替扁平 aggregate list。
   multiplicity，再按 SQL set predicate 决定可见性；state 与 distinct input rows
   数量成正比。
 
-第一批代码仍是 HAVING、SUM/AVG DISTINCT、顶层 UNION ALL 和 construct-specific
-FAST error；只有 FORCE 能选择完整刷新。
+当前代码已实现顶层兼容 UNION ALL；下一批仍是 HAVING、SUM/AVG DISTINCT 和
+construct-specific FAST error。不兼容但通过 source admission 的定义只有 FORCE 能
+选择完整刷新。
 
 ### 12.2 增量 JOIN
 
@@ -672,7 +680,7 @@ continuous SQL。Vendor 公开数字不能与 MatrixOne 不同机器结果混在
 能力并集明显大于一个安全 change，交付顺序为：
 
 1. 稳定当前 PR 子集并补 public SQL lifecycle test；
-2. HAVING、SUM/AVG DISTINCT、UNION ALL、construct-specific FAST error；
+2. HAVING、SUM/AVG DISTINCT、construct-specific FAST error；
 3. inner/unique-dimension JOIN 和 operator arrangement；
 4. Top-K、event-time tumble/hop window；
 5. cascading/replacement、scheduled/concurrent refresh、status control；

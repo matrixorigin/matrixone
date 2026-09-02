@@ -145,6 +145,64 @@ select service, row_count, duration_count, duration_sum, duration_avg,
 from mv_fast
 order by service;
 
+-- UNION ALL keeps branch identity in the hidden key. Equal visible groups from
+-- different sources remain duplicate output rows and each source batch is
+-- routed only to its own incremental branch.
+create table union_events (
+    id bigint primary key,
+    service varchar(20),
+    duration int,
+    trace_id varchar(20)
+);
+create table union_archive (
+    id bigint primary key,
+    service varchar(20),
+    duration int,
+    trace_id varchar(20)
+);
+insert into union_events values (1, 'api', 10, 't1'), (2, 'web', 8, 't2');
+insert into union_archive values (10, 'api', 20, 'u1'), (11, 'db', 30, 'u2');
+
+create materialized view mv_union_all
+refresh fast on change as
+select service, count(*) as row_count, sum(duration) as duration_sum,
+       min(duration) as duration_min, max(duration) as duration_max,
+       count(distinct trace_id) as trace_count
+from union_events group by service
+union all
+select service, count(*) as rows_seen, sum(duration) as duration_total,
+       min(duration) as min_seen, max(duration) as max_seen,
+       count(distinct trace_id) as traces_seen
+from union_archive group by service;
+
+-- @wait_expect(2, 30)
+select count(*) = 4 and sum(row_count) = 4 as union_ready from mv_union_all;
+
+insert into union_events values (3, 'api', 5, 't1');
+
+-- Pure append must update only the matching branch even when another branch
+-- has the same visible group key. This check runs before any affected-group
+-- recomputation from a delete can mask cross-branch contamination.
+-- @wait_expect(2, 30)
+select count(*) = 2 and sum(row_count) = 3 and sum(duration_sum) = 35
+       and min(duration_min) = 5 and max(duration_max) = 20
+       and sum(trace_count) = 2 as union_append_ready
+from mv_union_all where service = 'api';
+
+delete from union_archive where id = 10;
+update union_events set service = 'api', duration = 7, trace_id = 't3' where id = 2;
+update union_archive set service = 'api', duration = 40, trace_id = 'u3' where id = 11;
+
+-- One branch now contributes three api rows while the other contributes one;
+-- UNION ALL must expose two api rows rather than merge them.
+-- @wait_expect(2, 30)
+select count(*) = 2 and sum(row_count) = 4 and sum(duration_sum) = 62 as union_ready
+from mv_union_all;
+
+select service, row_count, duration_sum, duration_min, duration_max, trace_count
+from mv_union_all
+order by duration_sum;
+
 -- COMPLETE and FORCE exercise boundary-consistent full replacement over two
 -- direct sources.  FORCE must select full refresh because JOIN is outside the
 -- incremental subset.
@@ -244,6 +302,7 @@ select label, row_count, amount_sum from mv_complete order by label;
 select label, row_count, amount_sum from mv_force order by label;
 
 drop materialized view mv_fast;
+drop materialized view mv_union_all;
 drop materialized view mv_complete;
 drop materialized view mv_force;
 drop database mv_e2e;

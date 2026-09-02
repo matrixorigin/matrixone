@@ -20,6 +20,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 
@@ -88,16 +89,52 @@ func decodeIncrementalDescription(encoded string) (*incrementalDescription, erro
 	if desc.Version == 0 {
 		desc.Version = 1
 	}
-	if desc.Version < 1 || desc.Version > 2 {
+	if desc.Version < 1 || desc.Version > 3 {
 		return nil, moerr.NewInternalErrorNoCtxf("unsupported materialized view incremental specification version %d", desc.Version)
+	}
+	if err := validateIncrementalDescription(&desc, false); err != nil {
+		return nil, err
+	}
+	return &desc, nil
+}
+
+func validateIncrementalDescription(desc *incrementalDescription, nested bool) error {
+	if desc == nil {
+		return moerr.NewInternalErrorNoCtx("incomplete materialized view incremental specification")
+	}
+	if desc.Strategy == "union-all" {
+		if nested || desc.Version != 3 || len(desc.Branches) < 2 || desc.GroupKeyColumn == "" ||
+			desc.RowCountColumn == "" || len(desc.StateColumns) == 0 {
+			return moerr.NewInternalErrorNoCtx("invalid materialized view UNION ALL incremental specification")
+		}
+		branchIDs := make(map[int]struct{}, len(desc.Branches))
+		for _, item := range desc.Branches {
+			branch := item.Description
+			if branch == nil || branch.BranchID <= 0 || branch.SourceDatabase == "" || branch.SourceTable == "" ||
+				branch.GroupKeyColumn != desc.GroupKeyColumn || branch.RowCountColumn != desc.RowCountColumn ||
+				!slices.Equal(branch.StateColumns, desc.StateColumns) {
+				return moerr.NewInternalErrorNoCtx("invalid materialized view UNION ALL branch specification")
+			}
+			if _, exists := branchIDs[branch.BranchID]; exists {
+				return moerr.NewInternalErrorNoCtx("duplicate materialized view UNION ALL branch identity")
+			}
+			branchIDs[branch.BranchID] = struct{}{}
+			if err := validateIncrementalDescription(branch, true); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+	if len(desc.Branches) != 0 {
+		return moerr.NewInternalErrorNoCtx("nested materialized view incremental branches are not supported")
 	}
 	if desc.SourceAlias == "" || len(desc.SourceColumns) == 0 || len(desc.Groups) == 0 ||
 		desc.RowCountColumn == "" || len(desc.StateColumns) == 0 {
-		return nil, moerr.NewInternalErrorNoCtx("incomplete materialized view incremental specification")
+		return moerr.NewInternalErrorNoCtx("incomplete materialized view incremental specification")
 	}
 	for _, group := range desc.Groups {
 		if group.Expression == "" || group.OutputColumn == "" {
-			return nil, moerr.NewInternalErrorNoCtx("invalid materialized view incremental group")
+			return moerr.NewInternalErrorNoCtx("invalid materialized view incremental group")
 		}
 	}
 	for _, agg := range desc.Aggregates {
@@ -105,32 +142,32 @@ func decodeIncrementalDescription(encoded string) (*incrementalDescription, erro
 		case "count_star":
 		case "count_column":
 			if agg.InputExpression == "" {
-				return nil, moerr.NewInternalErrorNoCtx("incremental COUNT requires an input")
+				return moerr.NewInternalErrorNoCtx("incremental COUNT requires an input")
 			}
 		case "sum":
 			if agg.InputExpression == "" || agg.StateCountColumn == "" {
-				return nil, moerr.NewInternalErrorNoCtx("incremental SUM requires input and state")
+				return moerr.NewInternalErrorNoCtx("incremental SUM requires input and state")
 			}
 			if desc.GroupKeyColumn != "" && agg.StateSumColumn == "" {
-				return nil, moerr.NewInternalErrorNoCtx("incremental SUM with a group key requires sum state")
+				return moerr.NewInternalErrorNoCtx("incremental SUM with a group key requires sum state")
 			}
 		case "avg":
 			if agg.InputExpression == "" || agg.StateSumColumn == "" || agg.StateCountColumn == "" {
-				return nil, moerr.NewInternalErrorNoCtx("incremental AVG requires input and state")
+				return moerr.NewInternalErrorNoCtx("incremental AVG requires input and state")
 			}
 		case "min", "max":
 			if agg.InputExpression == "" {
-				return nil, moerr.NewInternalErrorNoCtxf("incremental %s requires an input", strings.ToUpper(agg.Kind))
+				return moerr.NewInternalErrorNoCtxf("incremental %s requires an input", strings.ToUpper(agg.Kind))
 			}
 		case "count_distinct":
 			if desc.Version < 2 || desc.StateTable == "" || agg.InputExpression == "" || agg.StateIndex <= 0 {
-				return nil, moerr.NewInternalErrorNoCtx("incremental COUNT(DISTINCT) requires versioned auxiliary state")
+				return moerr.NewInternalErrorNoCtx("incremental COUNT(DISTINCT) requires versioned auxiliary state")
 			}
 		default:
-			return nil, moerr.NewInternalErrorNoCtxf("incremental aggregate %q is not supported", agg.Kind)
+			return moerr.NewInternalErrorNoCtxf("incremental aggregate %q is not supported", agg.Kind)
 		}
 	}
-	return &desc, nil
+	return nil
 }
 
 func (c *MaterializedViewConsumer) consumeIncremental(ctx context.Context, r DataRetriever) (drained bool, err error) {
@@ -148,23 +185,7 @@ func (c *MaterializedViewConsumer) consumeIncremental(ctx context.Context, r Dat
 		func(sqlproc *sqlexec.SqlProcess, _ any) error {
 			sqlctx := sqlproc.SqlCtx
 			refreshCtx := context.WithValue(sqlproc.GetContext(), defines.MaterializedViewRefreshKey{}, true)
-			db, err := c.cnEngine.Database(refreshCtx, c.jobID.DBName, sqlctx.Txn())
-			if err != nil {
-				return err
-			}
-			rel, err := db.Relation(refreshCtx, c.jobID.TableName, nil)
-			if err != nil {
-				return err
-			}
-			reader, ok := rel.(engine.RowIDReader)
-			if !ok {
-				return moerr.NewInternalErrorNoCtx("source relation does not support rowid lookup")
-			}
-			tableDef := rel.GetTableDef(refreshCtx)
-			if tableDef == nil {
-				return moerr.NewInternalErrorNoCtx("source relation has no table definition")
-			}
-			sourceTypes, err := materializedViewSourceColumnTypes(tableDef, desc.SourceColumns)
+			runtimes, byTableID, err := c.materializedViewIncrementalRuntimes(refreshCtx, sqlctx.Txn(), desc)
 			if err != nil {
 				return err
 			}
@@ -182,6 +203,11 @@ func (c *MaterializedViewConsumer) consumeIncremental(ctx context.Context, r Dat
 					data.Done()
 					return data.err
 				}
+				if data.noMoreData && data.insertBatch == nil && data.deleteBatch == nil {
+					drained = true
+					data.Done()
+					break
+				}
 				inserts, decodeErr := materializedViewRowsFromBatch(data.insertBatch, true)
 				if decodeErr != nil {
 					data.Done()
@@ -192,46 +218,56 @@ func (c *MaterializedViewConsumer) consumeIncremental(ctx context.Context, r Dat
 					data.Done()
 					return decodeErr
 				}
-				rows := make([]materializedViewSignedRow, 0, len(inserts)+len(deletes))
 				insertRows += len(inserts)
 				deleteRows += len(deletes)
-				for _, row := range inserts {
-					rows = append(rows, materializedViewSignedRow{values: row.Values, sign: 1})
+				selected := runtimes
+				if desc.Strategy == "union-all" {
+					selected = byTableID[data.SourceTableID]
+					if data.SourceTableID == 0 || len(selected) == 0 {
+						data.Done()
+						return moerr.NewInternalErrorNoCtxf("materialized view UNION ALL received unknown source table %d", data.SourceTableID)
+					}
 				}
-				if len(deletes) > 0 {
-					oldRows, readErr := readMaterializedViewDeletedRows(
-						refreshCtx, reader, deletes, from.GetFromTS(), desc.SourceColumns,
-					)
-					if readErr != nil {
-						data.Done()
-						return readErr
+				for _, runtime := range selected {
+					rows := make([]materializedViewSignedRow, 0, len(inserts)+len(deletes))
+					for _, row := range inserts {
+						rows = append(rows, materializedViewSignedRow{values: row.Values, sign: 1})
 					}
-					if len(oldRows) != len(deletes) {
-						data.Done()
-						return moerr.NewInternalErrorNoCtxf("rowid lookup returned %d rows for %d deletes", len(oldRows), len(deletes))
-					}
-					for i := range oldRows {
-						values := make(map[string]any, len(desc.SourceColumns))
-						for j, column := range desc.SourceColumns {
-							values[strings.ToLower(column)] = oldRows[i][j]
+					if len(deletes) > 0 {
+						oldRows, readErr := readMaterializedViewDeletedRows(
+							refreshCtx, runtime.reader, deletes, from.GetFromTS(), runtime.desc.SourceColumns,
+						)
+						if readErr != nil {
+							data.Done()
+							return readErr
 						}
-						rows = append(rows, materializedViewSignedRow{values: values, sign: -1})
+						if len(oldRows) != len(deletes) {
+							data.Done()
+							return moerr.NewInternalErrorNoCtxf("rowid lookup returned %d rows for %d deletes", len(oldRows), len(deletes))
+						}
+						for i := range oldRows {
+							values := make(map[string]any, len(runtime.desc.SourceColumns))
+							for j, column := range runtime.desc.SourceColumns {
+								values[strings.ToLower(column)] = oldRows[i][j]
+							}
+							rows = append(rows, materializedViewSignedRow{values: values, sign: -1})
+						}
 					}
-				}
-				for start := 0; start < len(rows); start += materializedViewDeltaBatchRows {
-					end := min(start+materializedViewDeltaBatchRows, len(rows))
-					chunk := rows[start:end]
-					if err := applyMaterializedViewDeltaRows(refreshCtx, sqlctx.GetService(), sqlctx.Txn(), c.info, desc, sourceTypes, chunk); err != nil {
-						data.Done()
-						return err
-					}
-					if err := applyMaterializedViewDistinctDeltas(refreshCtx, sqlctx.GetService(), sqlctx.Txn(), c.info, desc, sourceTypes, chunk); err != nil {
-						data.Done()
-						return err
-					}
-					if err := recordMaterializedViewAffectedGroups(refreshCtx, sqlctx.GetService(), sqlctx.Txn(), c.info, desc, sourceTypes, chunk); err != nil {
-						data.Done()
-						return err
+					for start := 0; start < len(rows); start += materializedViewDeltaBatchRows {
+						end := min(start+materializedViewDeltaBatchRows, len(rows))
+						chunk := rows[start:end]
+						if err := applyMaterializedViewDeltaRows(refreshCtx, sqlctx.GetService(), sqlctx.Txn(), c.info, runtime.desc, runtime.sourceTypes, chunk); err != nil {
+							data.Done()
+							return err
+						}
+						if err := applyMaterializedViewDistinctDeltas(refreshCtx, sqlctx.GetService(), sqlctx.Txn(), c.info, runtime.desc, runtime.sourceTypes, chunk); err != nil {
+							data.Done()
+							return err
+						}
+						if err := recordMaterializedViewAffectedGroups(refreshCtx, sqlctx.GetService(), sqlctx.Txn(), c.info, runtime.desc, runtime.sourceTypes, chunk); err != nil {
+							data.Done()
+							return err
+						}
 					}
 				}
 				done := data.noMoreData
@@ -245,10 +281,15 @@ func (c *MaterializedViewConsumer) consumeIncremental(ctx context.Context, r Dat
 			if !ok {
 				return moerr.NewInternalErrorNoCtx("materialized view retriever does not expose iteration boundary")
 			}
-			if err = recomputeMaterializedViewAffectedGroups(
-				refreshCtx, sqlctx.GetService(), sqlctx.Txn(), c.info, desc, boundary.GetToTS(),
-			); err != nil {
-				return err
+			for _, runtime := range runtimes {
+				if materializedViewNeedsAffectedGroups(runtime.desc) {
+					if err = recomputeMaterializedViewAffectedGroups(
+						refreshCtx, sqlctx.GetService(), sqlctx.Txn(), c.info, runtime.desc, boundary.GetToTS(),
+					); err != nil {
+						return err
+					}
+					break
+				}
 			}
 			return r.UpdateWatermark(refreshCtx, sqlctx.GetService(), sqlctx.Txn())
 		})
@@ -257,6 +298,56 @@ func (c *MaterializedViewConsumer) consumeIncremental(ctx context.Context, r Dat
 		metricv2.ISCPMaterializedViewRows.WithLabelValues("delete").Add(float64(deleteRows))
 	}
 	return drained, err
+}
+
+type materializedViewIncrementalRuntime struct {
+	desc        *incrementalDescription
+	reader      engine.RowIDReader
+	sourceTypes []*types.Type
+}
+
+func (c *MaterializedViewConsumer) materializedViewIncrementalRuntimes(
+	ctx context.Context,
+	txn client.TxnOperator,
+	desc *incrementalDescription,
+) ([]materializedViewIncrementalRuntime, map[uint64][]materializedViewIncrementalRuntime, error) {
+	descriptions := materializedViewLeafDescriptions(desc)
+	isUnion := desc != nil && desc.Strategy == "union-all"
+	runtimes := make([]materializedViewIncrementalRuntime, 0, len(descriptions))
+	byTableID := make(map[uint64][]materializedViewIncrementalRuntime)
+	for _, branch := range descriptions {
+		dbName, tableName := c.jobID.DBName, c.jobID.TableName
+		if branch.SourceTable != "" {
+			dbName, tableName = branch.SourceDatabase, branch.SourceTable
+		}
+		db, err := c.cnEngine.Database(ctx, dbName, txn)
+		if err != nil {
+			return nil, nil, err
+		}
+		rel, err := db.Relation(ctx, tableName, nil)
+		if err != nil {
+			return nil, nil, err
+		}
+		reader, ok := rel.(engine.RowIDReader)
+		if !ok {
+			return nil, nil, moerr.NewInternalErrorNoCtx("source relation does not support rowid lookup")
+		}
+		tableDef := rel.GetTableDef(ctx)
+		if tableDef == nil {
+			return nil, nil, moerr.NewInternalErrorNoCtx("source relation has no table definition")
+		}
+		sourceTypes, err := materializedViewSourceColumnTypes(tableDef, branch.SourceColumns)
+		if err != nil {
+			return nil, nil, err
+		}
+		runtime := materializedViewIncrementalRuntime{desc: branch, reader: reader, sourceTypes: sourceTypes}
+		runtimes = append(runtimes, runtime)
+		if isUnion {
+			tableID := rel.GetTableID(ctx)
+			byTableID[tableID] = append(byTableID[tableID], runtime)
+		}
+	}
+	return runtimes, byTableID, nil
 }
 
 // readMaterializedViewDeletedRows reads each row immediately before its own
@@ -436,7 +527,10 @@ func execMaterializedViewDeltaUpsert(
 }
 
 func materializedViewDeltaCanUpsert(desc *incrementalDescription) bool {
-	return desc != nil && len(desc.Groups) > 0 && desc.GroupKeyColumn != ""
+	if desc == nil || desc.GroupKeyColumn == "" {
+		return false
+	}
+	return len(desc.Groups) > 0 || desc.Strategy == "union-all" && len(desc.Branches) >= 2
 }
 
 func materializedViewDeltaUpsertSets(desc *incrementalDescription) []string {
@@ -506,9 +600,11 @@ func materializedViewHasDistinctState(desc *incrementalDescription) bool {
 	if desc == nil || desc.StateTable == "" {
 		return false
 	}
-	for _, agg := range desc.Aggregates {
-		if agg.Kind == "count_distinct" {
-			return true
+	for _, leaf := range materializedViewLeafDescriptions(desc) {
+		for _, agg := range leaf.Aggregates {
+			if agg.Kind == "count_distinct" {
+				return true
+			}
 		}
 	}
 	return false
@@ -518,9 +614,11 @@ func materializedViewNeedsAffectedGroups(desc *incrementalDescription) bool {
 	if desc == nil || desc.StateTable == "" {
 		return false
 	}
-	for _, agg := range desc.Aggregates {
-		if agg.Kind == "min" || agg.Kind == "max" || agg.Kind == "count_distinct" {
-			return true
+	for _, leaf := range materializedViewLeafDescriptions(desc) {
+		for _, agg := range leaf.Aggregates {
+			if agg.Kind == "min" || agg.Kind == "max" || agg.Kind == "count_distinct" {
+				return true
+			}
 		}
 	}
 	return false
@@ -528,6 +626,34 @@ func materializedViewNeedsAffectedGroups(desc *incrementalDescription) bool {
 
 func materializedViewHasAuxiliaryState(desc *incrementalDescription) bool {
 	return materializedViewHasDistinctState(desc) || materializedViewNeedsAffectedGroups(desc)
+}
+
+func materializedViewLeafDescriptions(desc *incrementalDescription) []*incrementalDescription {
+	if desc == nil {
+		return nil
+	}
+	if desc.Strategy != "union-all" {
+		return []*incrementalDescription{desc}
+	}
+	result := make([]*incrementalDescription, 0, len(desc.Branches))
+	for _, branch := range desc.Branches {
+		if branch.Description != nil {
+			result = append(result, branch.Description)
+		}
+	}
+	return result
+}
+
+func materializedViewSourceForBranch(info *ConsumerInfo, desc *incrementalDescription) ([]TableInfo, bool) {
+	if info == nil || desc == nil {
+		return nil, false
+	}
+	for _, source := range info.SourceTableInfos() {
+		if strings.EqualFold(source.DBName, desc.SourceDatabase) && strings.EqualFold(source.TableName, desc.SourceTable) {
+			return []TableInfo{source}, true
+		}
+	}
+	return nil, false
 }
 
 func ensureMaterializedViewStateTable(
@@ -597,9 +723,10 @@ func recordMaterializedViewAffectedGroups(
 		where += " AND (" + desc.Filter + ")"
 	}
 	state := sqlquote.QualifiedIdent(info.DBName, desc.StateTable)
+	groupKey := materializedViewGroupKeySQL(desc, groups)
 	sql := fmt.Sprintf(
 		"WITH %s INSERT INTO %s (aggregate_index,group_key,value_key,ref_count) SELECT 0,CAST(serial_full(%s) AS VARBINARY(65535)),CAST('' AS VARBINARY(65535)),1 FROM src AS %s WHERE %s GROUP BY %s ON DUPLICATE KEY UPDATE ref_count = ref_count",
-		sourceCTE, state, strings.Join(groups, ","), sqlquote.Ident(desc.SourceAlias), where, strings.Join(groups, ","))
+		sourceCTE, state, strings.Join(groupKey, ","), sqlquote.Ident(desc.SourceAlias), where, strings.Join(groups, ","))
 	return execMaterializedViewDeltaAndClose(ctx, sql, service, txn)
 }
 
@@ -660,11 +787,12 @@ func materializedViewDistinctDeltaCTE(
 	if desc.Filter != "" {
 		where = "(" + desc.Filter + ") AND " + where
 	}
+	groupKey := materializedViewGroupKeySQL(desc, groups)
 	cte := fmt.Sprintf(
 		"WITH %s, distinct_delta AS (SELECT %d AS aggregate_index, CAST(serial_full(%s) AS VARBINARY(65535)) AS group_key, CAST(serial_full(%s) AS VARBINARY(65535)) AS value_key, sum(__mo_sign) AS ref_delta FROM src AS %s WHERE %s GROUP BY %s,%s)",
 		sourceCTE,
 		agg.StateIndex,
-		strings.Join(groups, ","),
+		strings.Join(groupKey, ","),
 		agg.InputExpression,
 		sqlquote.Ident(desc.SourceAlias),
 		where,
@@ -742,36 +870,51 @@ func rebuildMaterializedViewDistinctState(
 	if err := execMaterializedViewDeltaAndClose(ctx, "DELETE FROM "+state+" WHERE aggregate_index > 0", service, txn); err != nil {
 		return err
 	}
-	groups := make([]string, len(desc.Groups))
-	for i := range desc.Groups {
-		groups[i] = desc.Groups[i].Expression
-	}
-	for _, agg := range desc.Aggregates {
-		if agg.Kind != "count_distinct" {
-			continue
+	for _, leaf := range materializedViewLeafDescriptions(desc) {
+		groups := make([]string, len(leaf.Groups))
+		for i := range leaf.Groups {
+			groups[i] = leaf.Groups[i].Expression
 		}
-		where := fmt.Sprintf("(%s) IS NOT NULL", agg.InputExpression)
-		if desc.Filter != "" {
-			where = "(" + desc.Filter + ") AND " + where
-		}
-		query := fmt.Sprintf(
-			"SELECT %d, CAST(serial_full(%s) AS VARBINARY(65535)), CAST(serial_full(%s) AS VARBINARY(65535)), count(*) FROM %s AS %s WHERE %s GROUP BY %s,%s",
-			agg.StateIndex,
-			strings.Join(groups, ","),
-			agg.InputExpression,
-			info.SourceSQL,
-			sqlquote.Ident(desc.SourceAlias),
-			where,
-			strings.Join(groups, ","),
-			agg.InputExpression,
-		)
-		atBoundary, err := materializedViewRefreshAtSources(query, info.SourceTableInfos(), boundary)
-		if err != nil {
-			return err
-		}
-		insert := fmt.Sprintf("INSERT INTO %s (aggregate_index,group_key,value_key,ref_count) %s", state, atBoundary)
-		if err = execMaterializedViewDeltaAndClose(ctx, insert, service, txn); err != nil {
-			return err
+		for _, agg := range leaf.Aggregates {
+			if agg.Kind != "count_distinct" {
+				continue
+			}
+			where := fmt.Sprintf("(%s) IS NOT NULL", agg.InputExpression)
+			if leaf.Filter != "" {
+				where = "(" + leaf.Filter + ") AND " + where
+			}
+			groupKey := materializedViewGroupKeySQL(leaf, groups)
+			sourceSQL := info.SourceSQL
+			if leaf.SourceTable != "" {
+				sourceSQL = sqlquote.QualifiedIdent(leaf.SourceDatabase, leaf.SourceTable)
+			}
+			query := fmt.Sprintf(
+				"SELECT %d, CAST(serial_full(%s) AS VARBINARY(65535)), CAST(serial_full(%s) AS VARBINARY(65535)), count(*) FROM %s AS %s WHERE %s GROUP BY %s,%s",
+				agg.StateIndex,
+				strings.Join(groupKey, ","),
+				agg.InputExpression,
+				sourceSQL,
+				sqlquote.Ident(leaf.SourceAlias),
+				where,
+				strings.Join(groups, ","),
+				agg.InputExpression,
+			)
+			sources := info.SourceTableInfos()
+			if leaf.SourceTable != "" {
+				var found bool
+				sources, found = materializedViewSourceForBranch(info, leaf)
+				if !found {
+					return moerr.NewInternalErrorNoCtxf("materialized view UNION ALL source %s.%s is missing", leaf.SourceDatabase, leaf.SourceTable)
+				}
+			}
+			atBoundary, err := materializedViewRefreshAtSources(query, sources, boundary)
+			if err != nil {
+				return err
+			}
+			insert := fmt.Sprintf("INSERT INTO %s (aggregate_index,group_key,value_key,ref_count) %s", state, atBoundary)
+			if err = execMaterializedViewDeltaAndClose(ctx, insert, service, txn); err != nil {
+				return err
+			}
 		}
 	}
 	return nil
@@ -984,6 +1127,7 @@ func materializedViewDeltaInsertProjection(desc *incrementalDescription, deltaAl
 			groupArgs[i] = deltaAlias + "." + materializedViewDeltaGroupAlias(i)
 		}
 		columns = append(columns, sqlquote.Ident(desc.GroupKeyColumn))
+		groupArgs = materializedViewGroupKeySQL(desc, groupArgs)
 		values = append(values, "serial_full("+strings.Join(groupArgs, ",")+")")
 	}
 	for i, agg := range desc.Aggregates {
@@ -1014,4 +1158,12 @@ func materializedViewDeltaInsertProjection(desc *incrementalDescription, deltaAl
 	columns = append(columns, sqlquote.Ident(desc.RowCountColumn))
 	values = append(values, deltaAlias+".__mo_row_delta")
 	return columns, values
+}
+
+func materializedViewGroupKeySQL(desc *incrementalDescription, groups []string) []string {
+	result := make([]string, 0, len(groups)+1)
+	if desc != nil && desc.BranchID > 0 {
+		result = append(result, fmt.Sprint(desc.BranchID))
+	}
+	return append(result, groups...)
 }

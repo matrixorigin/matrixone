@@ -608,3 +608,95 @@ func TestMaterializedViewConsumerAppliesInsertAndDeleteTail(t *testing.T) {
 	require.Equal(t, 1, watermarkUpdates)
 	require.Len(t, sqls, 3)
 }
+
+func TestMaterializedViewConsumerRoutesUnionAllTailBySource(t *testing.T) {
+	const service = "materialized-view-consumer-union-tail-test"
+	rt := moruntime.NewRuntime(metadata.ServiceType_CN, service, zap.NewNop())
+	moruntime.SetupServiceBasedRuntime(service, rt)
+	var sqls []string
+	rt.SetGlobalVariables(moruntime.InternalSQLExecutor, executor.NewMemExecutor(func(sql string) (executor.Result, error) {
+		sqls = append(sqls, sql)
+		return executor.Result{}, nil
+	}))
+	stubTxn := stubIndexConsumerTxnRunner()
+	t.Cleanup(stubTxn.Reset)
+
+	ctrl := gomock.NewController(t)
+	eng := mock_frontend.NewMockEngine(ctrl)
+	eventsDB := mock_frontend.NewMockDatabase(ctrl)
+	archiveDB := mock_frontend.NewMockDatabase(ctrl)
+	eventsRel := mock_frontend.NewMockRelation(ctrl)
+	archiveRel := mock_frontend.NewMockRelation(ctrl)
+	tableDef := &planpb.TableDef{Cols: []*planpb.ColDef{{Name: "service", Typ: planpb.Type{Id: int32(types.T_varchar)}}}}
+	eventsRel.EXPECT().GetTableDef(gomock.Any()).Return(tableDef).Times(2)
+	eventsRel.EXPECT().GetTableID(gomock.Any()).Return(uint64(11)).Times(2)
+	archiveRel.EXPECT().GetTableDef(gomock.Any()).Return(tableDef)
+	archiveRel.EXPECT().GetTableID(gomock.Any()).Return(uint64(22))
+	eng.EXPECT().Database(gomock.Any(), "obs", gomock.Any()).Return(eventsDB, nil).Times(2)
+	eventsDB.EXPECT().Relation(gomock.Any(), "events", gomock.Any()).Return(&materializedViewTestRelation{Relation: eventsRel}, nil).Times(2)
+	eng.EXPECT().Database(gomock.Any(), "cold", gomock.Any()).Return(archiveDB, nil)
+	archiveDB.EXPECT().Relation(gomock.Any(), "archive", gomock.Any()).Return(&materializedViewTestRelation{Relation: archiveRel}, nil)
+
+	mp := mpool.MustNewZero()
+	t.Cleanup(func() {
+		require.Zero(t, mp.CurrNB())
+		mpool.DeleteMPool(mp)
+	})
+	insertBat := testutil.NewBatchWithVectors([]*vector.Vector{
+		testutil.NewVector(1, types.T_varchar.ToType(), mp, false, [][]byte{[]byte("api")}),
+	}, nil)
+	insertBat.Attrs = []string{"service"}
+	t.Cleanup(func() { insertBat.Clean(mp) })
+	atomicInsert := NewAtomicBatch(mp)
+	atomicInsert.Batches = []*batch.Batch{insertBat}
+	atomicInsert.Rows.Set(AtomicBatchRow{Pk: []byte("insert"), Src: insertBat})
+
+	branch := func(id int, db, table string) *incrementalDescription {
+		return &incrementalDescription{
+			Version: 3, Strategy: "direct-delta", BranchID: id,
+			SourceDatabase: db, SourceTable: table, SourceAlias: "e", SourceColumns: []string{"service"},
+			Groups:         []incrementalGroup{{Expression: "e.service", OutputColumn: "service", NotNullable: true}},
+			Aggregates:     []incrementalAggregate{{Kind: "count_star", OutputColumn: "requests"}},
+			GroupKeyColumn: "__group_key", RowCountColumn: "__row_count",
+			StateColumns: []string{"__row_count", "__group_key"},
+		}
+	}
+	desc := incrementalDescription{
+		Version: 3, Strategy: "union-all", SourceAlias: "__union__",
+		GroupKeyColumn: "__group_key", RowCountColumn: "__row_count",
+		StateColumns: []string{"__row_count", "__group_key"},
+		Branches: []incrementalBranch{
+			{Description: branch(1, "obs", "events")},
+			{Description: branch(2, "cold", "archive")},
+			{Description: branch(3, "obs", "events")},
+		},
+	}
+	watermarkUpdates := 0
+	retriever := &materializedViewBoundaryRetriever{
+		MockRetriever: MockRetriever{
+			insertBatch: atomicInsert, dtype: ISCPDataType_Tail, sourceTableID: 11,
+			updateWatermark: func(context.Context, string, client.TxnOperator) error {
+				watermarkUpdates++
+				return nil
+			},
+		},
+		from: types.BuildTS(10, 0), to: types.BuildTS(30, 0),
+	}
+	consumer := &MaterializedViewConsumer{
+		cnUUID: service, cnEngine: eng,
+		info: &ConsumerInfo{
+			DBName: "db", TableName: "mv", Columns: []string{"service", "requests"},
+			SourceSQL: "events", RefreshSQL: "select service, count(*) requests from obs.events group by service union all select service, count(*) requests from cold.archive group by service",
+			IncrementalSpec: encodeMaterializedViewIncrementalDescription(t, desc), RefreshMethod: "fast",
+			SrcTables: []TableInfo{{DBName: "obs", TableName: "events", TableID: 11}, {DBName: "cold", TableName: "archive", TableID: 22}},
+		},
+	}
+	require.NoError(t, consumer.Consume(t.Context(), retriever))
+	require.Equal(t, 1, watermarkUpdates)
+	require.Len(t, sqls, 2)
+	require.Contains(t, sqls[0], "serial_full(1,d.__mo_g_0)")
+	require.Contains(t, sqls[1], "serial_full(3,d.__mo_g_0)")
+	for _, sql := range sqls {
+		require.NotContains(t, sql, "serial_full(2,d.__mo_g_0)")
+	}
+}

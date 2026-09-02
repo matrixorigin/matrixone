@@ -34,9 +34,69 @@ import (
 // outside this subset deliberately leave IncrementalSpec empty so the consumer
 // performs a snapshot-consistent full refresh instead.
 func buildMaterializedViewIncrementalPlan(stmt *tree.Select, outputCols []*ColDef, stateTable ...string) (string, []*ColDef, string) {
+	return buildMaterializedViewIncrementalPlanForDatabase(stmt, outputCols, "", stateTable...)
+}
+
+func buildMaterializedViewIncrementalPlanForDatabase(stmt *tree.Select, outputCols []*ColDef, defaultDB string, stateTable ...string) (string, []*ColDef, string) {
 	if stmt == nil || stmt.With != nil || stmt.TimeWindow != nil || stmt.Limit != nil || stmt.RankOption != nil {
 		return "", nil, ""
 	}
+	if _, ok := stmt.Select.(*tree.SelectClause); ok {
+		return buildMaterializedViewIncrementalBranchPlan(stmt, outputCols, defaultDB, 0, stateTable...)
+	}
+	clauses, ok := materializedViewUnionAllClauses(stmt.Select)
+	if !ok || len(clauses) < 2 || len(clauses) > materializedViewMaxDirectInputs {
+		return "", nil, ""
+	}
+	var commonCols []*ColDef
+	var common materializedViewIncrementalDescription
+	refreshBranches := make([]string, 0, len(clauses))
+	branches := make([]materializedViewIncrementalBranch, 0, len(clauses))
+	for i, clause := range clauses {
+		branchStmt := &tree.Select{Select: clause}
+		encoded, stateCols, refreshSQL := buildMaterializedViewIncrementalBranchPlan(
+			branchStmt, outputCols, defaultDB, i+1, stateTable...,
+		)
+		if encoded == "" || (i > 0 && !materializedViewStateColumnsCompatible(commonCols, stateCols)) {
+			return "", nil, ""
+		}
+		decoded, err := base64.StdEncoding.DecodeString(encoded)
+		if err != nil {
+			return "", nil, ""
+		}
+		var branch materializedViewIncrementalDescription
+		if json.Unmarshal(decoded, &branch) != nil {
+			return "", nil, ""
+		}
+		if i == 0 {
+			commonCols = stateCols
+			common = branch
+		} else if !materializedViewIncrementalBranchesCompatible(&common, &branch) {
+			return "", nil, ""
+		}
+		branches = append(branches, materializedViewIncrementalBranch{Description: &branch})
+		refreshBranches = append(refreshBranches, refreshSQL)
+	}
+	union := materializedViewIncrementalDescription{
+		Version: 3, Strategy: "union-all", SourceAlias: "__mo_union_all__",
+		GroupKeyColumn: common.GroupKeyColumn, RowCountColumn: common.RowCountColumn,
+		StateColumns: append([]string(nil), common.StateColumns...), StateTable: common.StateTable,
+		Branches: branches,
+	}
+	b, err := json.Marshal(union)
+	if err != nil {
+		return "", nil, ""
+	}
+	return base64.StdEncoding.EncodeToString(b), commonCols, strings.Join(refreshBranches, " UNION ALL ")
+}
+
+func buildMaterializedViewIncrementalBranchPlan(
+	stmt *tree.Select,
+	outputCols []*ColDef,
+	defaultDB string,
+	branchID int,
+	stateTable ...string,
+) (string, []*ColDef, string) {
 	clause, ok := stmt.Select.(*tree.SelectClause)
 	if !ok || clause.Having != nil ||
 		clause.From == nil || len(clause.From.Tables) != 1 || len(clause.Exprs) != len(outputCols) {
@@ -91,8 +151,17 @@ func buildMaterializedViewIncrementalPlan(stmt *tree.Select, outputCols []*ColDe
 		Version:        2,
 		Strategy:       "direct-delta",
 		SourceAlias:    sourceAlias,
+		SourceDatabase: string(source.SchemaName),
+		SourceTable:    string(source.ObjectName),
+		BranchID:       branchID,
 		Groups:         groups,
 		RowCountColumn: materializedViewUniqueStateColumn(outputCols, "__mo_mv_row_count"),
+	}
+	if spec.SourceDatabase == "" {
+		spec.SourceDatabase = defaultDB
+	}
+	if branchID > 0 {
+		spec.Version = 3
 	}
 	needsAuxiliaryState := false
 	if clause.Where != nil {
@@ -105,10 +174,10 @@ func buildMaterializedViewIncrementalPlan(stmt *tree.Select, outputCols []*ColDe
 	stateCols := []*ColDef{materializedViewStateColumn(spec.RowCountColumn, Type{Id: int32(types.T_int64)}, false)}
 	stateExprs := []string{"count(*)"}
 	for i, selectExpr := range clause.Exprs {
+		// UNION result column names are defined by the first branch. Always bind
+		// branch state to the already-bound target columns rather than a later
+		// branch's incidental alias.
 		outputName := outputCols[i].Name
-		if selectExpr.As != nil && !selectExpr.As.Empty() {
-			outputName = selectExpr.As.Origin()
-		}
 		if groupIdx, found := groupBySQL[strings.ToLower(materializedViewIncrementalExprSQL(selectExpr.Expr))]; found {
 			if spec.Groups[groupIdx].OutputColumn != "" {
 				return "", nil, ""
@@ -193,6 +262,9 @@ func buildMaterializedViewIncrementalPlan(stmt *tree.Select, outputCols []*ColDe
 	for i := range spec.Groups {
 		groupKeyArgs[i] = spec.Groups[i].Expression
 	}
+	if branchID > 0 {
+		groupKeyArgs = append([]string{fmt.Sprint(branchID)}, groupKeyArgs...)
+	}
 	stateExprs = append(stateExprs, "serial_full("+strings.Join(groupKeyArgs, ",")+")")
 
 	spec.SourceColumns = collector.columns()
@@ -209,6 +281,74 @@ func buildMaterializedViewIncrementalPlan(stmt *tree.Select, outputCols []*ColDe
 		return "", nil, ""
 	}
 	return base64.StdEncoding.EncodeToString(b), stateCols, stateRefreshSQL
+}
+
+func materializedViewUnionAllClauses(stmt tree.SelectStatement) ([]*tree.SelectClause, bool) {
+	switch node := stmt.(type) {
+	case *tree.SelectClause:
+		return []*tree.SelectClause{node}, true
+	case *tree.Select:
+		if node.With != nil || node.TimeWindow != nil || node.Limit != nil || node.RankOption != nil || len(node.OrderBy) != 0 {
+			return nil, false
+		}
+		return materializedViewUnionAllClauses(node.Select)
+	case *tree.ParenSelect:
+		if node.Select == nil {
+			return nil, false
+		}
+		return materializedViewUnionAllClauses(node.Select)
+	case *tree.UnionClause:
+		if node.Type != tree.UNION || !node.All || node.Distinct {
+			return nil, false
+		}
+		left, ok := materializedViewUnionAllClauses(node.Left)
+		if !ok {
+			return nil, false
+		}
+		right, ok := materializedViewUnionAllClauses(node.Right)
+		if !ok {
+			return nil, false
+		}
+		return append(left, right...), true
+	default:
+		return nil, false
+	}
+}
+
+func materializedViewStateColumnsCompatible(left, right []*ColDef) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	for i := range left {
+		if left[i].Name != right[i].Name || left[i].NotNull != right[i].NotNull ||
+			left[i].Typ.Id != right[i].Typ.Id || left[i].Typ.Width != right[i].Typ.Width ||
+			left[i].Typ.Scale != right[i].Typ.Scale || left[i].Typ.NotNullable != right[i].Typ.NotNullable {
+			return false
+		}
+	}
+	return true
+}
+
+func materializedViewIncrementalBranchesCompatible(left, right *materializedViewIncrementalDescription) bool {
+	if left == nil || right == nil || len(left.Groups) != len(right.Groups) ||
+		len(left.Aggregates) != len(right.Aggregates) || left.StateTable != right.StateTable {
+		return false
+	}
+	for i := range left.Groups {
+		if left.Groups[i].OutputColumn != right.Groups[i].OutputColumn ||
+			left.Groups[i].NotNullable != right.Groups[i].NotNullable {
+			return false
+		}
+	}
+	for i := range left.Aggregates {
+		a, b := left.Aggregates[i], right.Aggregates[i]
+		if a.Kind != b.Kind || a.OutputColumn != b.OutputColumn ||
+			a.StateSumColumn != b.StateSumColumn || a.StateCountColumn != b.StateCountColumn ||
+			a.StateIndex != b.StateIndex {
+			return false
+		}
+	}
+	return true
 }
 
 func materializedViewRefreshSQLWithStateForMode(

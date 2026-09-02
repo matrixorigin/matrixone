@@ -220,9 +220,39 @@ func TestDecodeIncrementalDescriptionVersionAndDistinctState(t *testing.T) {
 	require.ErrorContains(t, err, "versioned auxiliary state")
 
 	future := base
-	future.Version = 3
+	future.Version = 4
 	_, err = decodeIncrementalDescription(encode(future))
 	require.ErrorContains(t, err, "unsupported materialized view incremental specification version")
+}
+
+func TestDecodeUnionAllIncrementalDescription(t *testing.T) {
+	branch := func(id int, table string) *incrementalDescription {
+		return &incrementalDescription{
+			Version: 3, Strategy: "direct-delta", BranchID: id,
+			SourceDatabase: "obs", SourceTable: table, SourceAlias: "e",
+			SourceColumns:  []string{"service"},
+			Groups:         []incrementalGroup{{Expression: "e.service", OutputColumn: "service"}},
+			Aggregates:     []incrementalAggregate{{Kind: "count_star", OutputColumn: "requests"}},
+			GroupKeyColumn: "__key", RowCountColumn: "__rows", StateColumns: []string{"__rows", "__key"},
+		}
+	}
+	desc := incrementalDescription{
+		Version: 3, Strategy: "union-all", SourceAlias: "__union__",
+		GroupKeyColumn: "__key", RowCountColumn: "__rows", StateColumns: []string{"__rows", "__key"},
+		Branches: []incrementalBranch{{Description: branch(1, "events")}, {Description: branch(2, "archive")}},
+	}
+	encoded := encodeMaterializedViewIncrementalDescription(t, desc)
+	decoded, err := decodeIncrementalDescription(encoded)
+	require.NoError(t, err)
+	require.Len(t, materializedViewLeafDescriptions(decoded), 2)
+
+	desc.Branches[1].Description.BranchID = 1
+	_, err = decodeIncrementalDescription(encodeMaterializedViewIncrementalDescription(t, desc))
+	require.ErrorContains(t, err, "duplicate materialized view UNION ALL branch identity")
+	desc.Branches[1].Description.BranchID = 2
+	desc.Branches[1].Description.GroupKeyColumn = "__other"
+	_, err = decodeIncrementalDescription(encodeMaterializedViewIncrementalDescription(t, desc))
+	require.ErrorContains(t, err, "invalid materialized view UNION ALL branch specification")
 }
 
 func TestDecodeIncrementalDescriptionRejectsIncompleteOperators(t *testing.T) {
@@ -297,6 +327,12 @@ func TestMaterializedViewDeltaDescriptionPredicates(t *testing.T) {
 	desc.Aggregates = []incrementalAggregate{{Kind: "count_distinct"}}
 	require.True(t, materializedViewHasDistinctState(desc))
 	require.True(t, materializedViewHasAuxiliaryState(desc))
+
+	union := &incrementalDescription{
+		Strategy: "union-all", GroupKeyColumn: "__key",
+		Branches: []incrementalBranch{{Description: desc}, {Description: desc}},
+	}
+	require.True(t, materializedViewDeltaCanUpsert(union))
 }
 
 func TestMaterializedViewDeltaSourceCTEValidation(t *testing.T) {

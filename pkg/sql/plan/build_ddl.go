@@ -1600,20 +1600,16 @@ func buildCreateView(stmt *tree.CreateView, ctx CompilerContext) (*Plan, error) 
 		if stmt.RefreshTiming == tree.MaterializedViewRefreshOnDemand && stmt.RefreshMethod != tree.MaterializedViewRefreshComplete {
 			return nil, moerr.NewNotSupported(ctx.GetContext(), "materialized view ON DEMAND currently requires COMPLETE or FULL refresh")
 		}
-		clause, ok := stmt.AsSource.Select.(*tree.SelectClause)
-		if !ok || clause.From == nil || len(clause.From.Tables) == 0 {
-			return nil, moerr.NewNotSupported(ctx.GetContext(), "materialized view requires at least one base table")
+		clauses, unionAllDefinition := materializedViewUnionAllClauses(stmt.AsSource.Select)
+		if unionAllDefinition && len(clauses) > materializedViewMaxDirectInputs {
+			return nil, moerr.NewNotSupportedf(ctx.GetContext(), "materialized view supports at most %d direct UNION ALL branches, got %d", materializedViewMaxDirectInputs, len(clauses))
 		}
-		sources := make([]*tree.TableName, 0, len(clause.From.Tables))
-		for _, expr := range clause.From.Tables {
-			found, supported := materializedViewSourceTables(expr)
-			if !supported {
-				return nil, moerr.NewNotSupportedf(ctx.GetContext(), "materialized view source must be a direct base table (table=%T)", expr)
-			}
-			sources = append(sources, found...)
+		sources, ok := materializedViewDefinitionSources(stmt.AsSource, ctx.DefaultDatabase())
+		if !ok {
+			return nil, moerr.NewNotSupported(ctx.GetContext(), "materialized view source must be a direct base table; set operations must be UNION ALL of direct single-table branches")
 		}
-		if len(sources) == 0 || len(sources) > 16 {
-			return nil, moerr.NewNotSupportedf(ctx.GetContext(), "materialized view supports 1 to 16 base tables, got %d", len(sources))
+		if len(sources) == 0 || len(sources) > materializedViewMaxDirectInputs {
+			return nil, moerr.NewNotSupportedf(ctx.GetContext(), "materialized view supports 1 to %d base tables, got %d", materializedViewMaxDirectInputs, len(sources))
 		}
 		source := sources[0]
 		sourceDB := string(source.SchemaName)
@@ -1638,12 +1634,13 @@ func buildCreateView(stmt *tree.CreateView, ctx CompilerContext) (*Plan, error) 
 		createView.TableDef.TableType = catalog.SystemOrdinaryRel
 		refreshSQL := materializedViewRefreshSQL(stmt.AsSource)
 		incrementalSpec := ""
-		if stmt.RefreshTiming == tree.MaterializedViewRefreshOnChange && stmt.RefreshMethod != tree.MaterializedViewRefreshComplete && len(sources) == 1 {
+		if stmt.RefreshTiming == tree.MaterializedViewRefreshOnChange && stmt.RefreshMethod != tree.MaterializedViewRefreshComplete {
 			var stateCols []*ColDef
 			var stateRefreshSQL string
-			incrementalSpec, stateCols, stateRefreshSQL = buildMaterializedViewIncrementalPlan(
+			incrementalSpec, stateCols, stateRefreshSQL = buildMaterializedViewIncrementalPlanForDatabase(
 				stmt.AsSource,
 				createView.TableDef.Cols,
+				ctx.DefaultDatabase(),
 				materializedViewStateTableName(createView.Database, string(viewName)),
 			)
 			if incrementalSpec != "" {
@@ -1655,7 +1652,7 @@ func buildCreateView(stmt *tree.CreateView, ctx CompilerContext) (*Plan, error) 
 			}
 		}
 		if stmt.RefreshMethod == tree.MaterializedViewRefreshFast && incrementalSpec == "" {
-			return nil, moerr.NewNotSupported(ctx.GetContext(), "materialized view FAST or INCREMENTAL refresh requires a supported single-table incremental aggregate query")
+			return nil, moerr.NewNotSupported(ctx.GetContext(), "materialized view FAST or INCREMENTAL refresh requires a supported incremental aggregate or UNION ALL query")
 		}
 		if primaryKeys := materializedViewIncrementalPrimaryKey(incrementalSpec); len(primaryKeys) > 0 {
 			for _, col := range createView.TableDef.Cols {
@@ -1935,23 +1932,17 @@ func ValidateMaterializedViewSources(ctx CompilerContext, def *plan.TableDef) er
 	if !ok || !create.Materialized || create.AsSource == nil {
 		return moerr.NewInternalError(ctx.GetContext(), "invalid materialized view definition")
 	}
-	clause, ok := create.AsSource.Select.(*tree.SelectClause)
-	if !ok || clause.From == nil || len(clause.From.Tables) == 0 {
+	sources, ok := materializedViewDefinitionSources(create.AsSource, def.GetDbName())
+	if !ok || len(sources) == 0 {
 		return moerr.NewInternalError(ctx.GetContext(), "materialized view has no source table")
 	}
-	for _, expr := range clause.From.Tables {
-		sources, supported := materializedViewSourceTables(expr)
-		if !supported {
-			return moerr.NewInternalError(ctx.GetContext(), "invalid materialized view source definition")
+	for _, source := range sources {
+		dbName := string(source.SchemaName)
+		if dbName == "" {
+			dbName = def.GetDbName()
 		}
-		for _, source := range sources {
-			dbName := string(source.SchemaName)
-			if dbName == "" {
-				dbName = def.GetDbName()
-			}
-			if err := validateMaterializedViewSourceTable(ctx, dbName, string(source.ObjectName)); err != nil {
-				return err
-			}
+		if err := validateMaterializedViewSourceTable(ctx, dbName, string(source.ObjectName)); err != nil {
+			return err
 		}
 	}
 	return nil
@@ -1992,6 +1983,14 @@ type materializedViewIncrementalDescription struct {
 	RowCountColumn string                                 `json:"row_count_column"`
 	StateColumns   []string                               `json:"state_columns"`
 	StateTable     string                                 `json:"state_table,omitempty"`
+	BranchID       int                                    `json:"branch_id,omitempty"`
+	SourceDatabase string                                 `json:"source_database,omitempty"`
+	SourceTable    string                                 `json:"source_table,omitempty"`
+	Branches       []materializedViewIncrementalBranch    `json:"branches,omitempty"`
+}
+
+type materializedViewIncrementalBranch struct {
+	Description *materializedViewIncrementalDescription `json:"description"`
 }
 
 func materializedViewRefreshSQL(stmt *tree.Select) string {
@@ -2067,6 +2066,49 @@ func materializedViewSourceTables(expr tree.TableExpr) ([]*tree.TableName, bool)
 	default:
 		return nil, false
 	}
+}
+
+const materializedViewMaxDirectInputs = 16
+
+func materializedViewDefinitionSources(stmt *tree.Select, defaultDB string) ([]*tree.TableName, bool) {
+	if stmt == nil {
+		return nil, false
+	}
+	clauses, unionAll := materializedViewUnionAllClauses(stmt.Select)
+	if !unionAll || len(clauses) > materializedViewMaxDirectInputs {
+		return nil, false
+	}
+	// A non-UNION SelectClause retains the existing direct FROM/JOIN support.
+	isUnion := len(clauses) > 1
+	sources := make([]*tree.TableName, 0, len(clauses))
+	seen := make(map[string]struct{})
+	for _, clause := range clauses {
+		if clause == nil || clause.From == nil || len(clause.From.Tables) == 0 {
+			return nil, false
+		}
+		if isUnion && len(clause.From.Tables) != 1 {
+			return nil, false
+		}
+		for _, expr := range clause.From.Tables {
+			found, supported := materializedViewSourceTables(expr)
+			if !supported || isUnion && len(found) != 1 {
+				return nil, false
+			}
+			for _, source := range found {
+				dbName := string(source.SchemaName)
+				if dbName == "" {
+					dbName = defaultDB
+				}
+				key := strings.ToLower(dbName) + "\x00" + strings.ToLower(string(source.ObjectName))
+				if _, exists := seen[key]; exists {
+					continue
+				}
+				seen[key] = struct{}{}
+				sources = append(sources, source)
+			}
+		}
+	}
+	return sources, len(sources) > 0
 }
 
 func buildSequenceTableDef(stmt *tree.CreateSequence, ctx CompilerContext, cs *plan.CreateSequence) error {
