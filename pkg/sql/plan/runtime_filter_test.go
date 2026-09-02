@@ -320,11 +320,13 @@ func TestScalarRuntimeFilterScanColumnStopsAtSemanticBarriers(t *testing.T) {
 		joinType   planpb.Node_JoinType
 		childPos   int32
 		rightJoin  bool
+		shuffle    bool
 		unsafeOn   bool
 		unsafeScan bool
 		wantProbe  bool
 	}{
 		{name: "inner left", nodeType: planpb.Node_JOIN, joinType: planpb.Node_INNER, wantProbe: true},
+		{name: "shuffled inner lineage", nodeType: planpb.Node_JOIN, joinType: planpb.Node_INNER, shuffle: true},
 		{name: "inner build side", nodeType: planpb.Node_JOIN, joinType: planpb.Node_INNER, childPos: 1},
 		{name: "semi preserved side", nodeType: planpb.Node_JOIN, joinType: planpb.Node_SEMI, wantProbe: true},
 		{name: "semi build side", nodeType: planpb.Node_JOIN, joinType: planpb.Node_SEMI, childPos: 1},
@@ -354,6 +356,9 @@ func TestScalarRuntimeFilterScanColumnStopsAtSemanticBarriers(t *testing.T) {
 					IsRightJoin: tc.rightJoin,
 					Children:    children,
 					ProjectList: []*planpb.Expr{GetColExpr(typ, tc.childPos, 0)},
+					Stats: &planpb.Stats{HashmapStats: &planpb.HashMapStats{
+						Shuffle: tc.shuffle,
+					}},
 				},
 			}}}
 			unsafePredicate := &planpb.Expr{Typ: planpb.Type{Id: int32(types.T_bool)}}

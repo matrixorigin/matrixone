@@ -1353,9 +1353,9 @@ func (c *Compile) shouldPrePipelineLockTable(target *plan.LockTarget) bool {
 func (c *Compile) compileQuery(qry *plan.Query) ([]*Scope, error) {
 	var err error
 	c.foundRowsOwnerNode = c.selectFoundRowsOwnerNode(qry)
-	c.compiledRightSingleNodes = nil
+	c.compiledLocalRuntimeFilterNodes = nil
 	defer func() {
-		c.compiledRightSingleNodes = nil
+		c.compiledLocalRuntimeFilterNodes = nil
 	}()
 
 	start := time.Now()
@@ -1411,7 +1411,7 @@ func (c *Compile) compileQuery(qry *plan.Query) ([]*Scope, error) {
 		}
 		steps = append(steps, scopes...)
 	}
-	if err = validateRightSingleRuntimeFilterTopology(qry, c.compiledRightSingleNodes, steps); err != nil {
+	if err = validateLocalRuntimeFilterTopology(qry, c.compiledLocalRuntimeFilterNodes, steps); err != nil {
 		return nil, err
 	}
 
@@ -1742,11 +1742,11 @@ func (c *Compile) compilePlanScopeWithUnionAllDemand(
 		return c.compileLimit(node, []*Scope{rs}), nil
 	}
 
-	if node.NodeType == plan.Node_JOIN && node.JoinType == plan.Node_SINGLE && node.IsRightJoin {
+	if nodeHasLocalRuntimeFilter(node) {
 		// This is deliberately after the literal LIMIT 0 shortcut. The flat
 		// logical plan retains pruned descendants, while topology validation must
-		// cover only right-SINGLE nodes whose physical subtree was constructed.
-		c.compiledRightSingleNodes = append(c.compiledRightSingleNodes, curNodeIdx)
+		// cover only local-filter nodes whose physical subtree was constructed.
+		c.compiledLocalRuntimeFilterNodes = append(c.compiledLocalRuntimeFilterNodes, curNodeIdx)
 	}
 
 	switch node.NodeType {

@@ -169,9 +169,13 @@ func (builder *QueryBuilder) scalarRuntimeFilterScanColumn(
 	// or another SINGLE can change which rows, errors, or volatile expressions
 	// are observed.  Runtime filters must follow physical probe input 0. If we
 	// filtered build input 1, an empty build could short-circuit the unchecked
-	// probe subtree and suppress an error or volatile evaluation there.
+	// probe subtree and suppress an error or volatile evaluation there. A
+	// current-CN scalar message also cannot follow a probe column across a
+	// shuffle boundary.
 	if node.NodeType != plan.Node_JOIN || node.Limit != nil || node.Offset != nil ||
 		len(node.Children) != 2 ||
+		node.Stats == nil || node.Stats.HashmapStats == nil ||
+		node.Stats.HashmapStats.Shuffle ||
 		!areTruncationSafePredicates(node.OnList) ||
 		!areTruncationSafePredicates(node.FilterList) {
 		return 0, nil, false
