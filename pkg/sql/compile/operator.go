@@ -1427,6 +1427,7 @@ func constructTableFunction(node *plan.Node, qry *plan.Query) *table_function.Ta
 	arg.IsSingle = node.TableDef.TblFunc.IsSingle
 	arg.FulltextSourceRef = node.TableDef.TblFunc.FulltextSourceRef
 	arg.FulltextIndexRef = node.TableDef.TblFunc.FulltextIndexRef
+	arg.ScanSnapshot = node.ScanSnapshot
 	arg.Limit = node.Limit
 	// probe side runtime filter specs
 	arg.RuntimeFilterSpecs = node.RuntimeFilterProbeList

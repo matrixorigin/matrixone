@@ -404,6 +404,24 @@ func (u *fulltext2SearchState) start(tf *TableFunction, proc *process.Process, n
 	sp := sqlexec.NewSqlProcess(proc)
 	veccache.Cache.Once()
 
+	// Named-snapshot MATCH (#27941): read the index at the snapshot TS instead of the
+	// current one. sp.SnapshotTS makes the nested index-load SQL time-travel via a cloned
+	// txn; cacheKey is suffixed with the TS so the historical index gets its OWN cache
+	// entry -- never served from, nor polluting, the current-index entry keyed by name.
+	// Concurrent same-snapshot queries still share one load (the cache single-flights the
+	// key), so this stays OOM-safe. Guarded to a genuinely historical TS (matches
+	// sqlexec.txnForRun), so a non-snapshot query is unchanged.
+	cacheKey := u.tblcfg.IndexTable
+	if tf.ScanSnapshot != nil {
+		sp.SnapshotTS = tf.ScanSnapshot.TS
+		// Derive the key from the SAME authority txnForRun uses to clone, so the
+		// TS-suffixed key and the historical read can never disagree (a mismatch would
+		// pollute the current-index entry with historical data).
+		if ets := sp.EffectiveSnapshotTS(); ets != nil {
+			cacheKey = fmt.Sprintf("%s@%d-%d", u.tblcfg.IndexTable, ets.PhysicalTime, ets.LogicalTime)
+		}
+	}
+
 	// mode (argVecs[2], a query const): boolean → operator query, else NL phrase.
 	var mode int64
 	if mv := tf.ctr.argVecs[2]; mv != nil && mv.Length() > 0 {
@@ -478,7 +496,7 @@ func (u *fulltext2SearchState) start(tf *TableFunction, proc *process.Process, n
 			rt.RequestedIncludeColumns = u.includeNames
 		}
 		go func() {
-			_, _, serr := veccache.Cache.Search(sp, u.tblcfg.IndexTable, newsearch, q, rt)
+			_, _, serr := veccache.Cache.Search(sp, cacheKey, newsearch, q, rt)
 			u.errCh <- serr // buffered(1): send before close so call() reads it after drain
 			close(u.streamCh)
 		}()
@@ -498,7 +516,7 @@ func (u *fulltext2SearchState) start(tf *TableFunction, proc *process.Process, n
 	if u.out == nil {
 		u.out = &vectorindex.SearchOutput{}
 	}
-	return veccache.Cache.SearchInto(sp, u.tblcfg.IndexTable, newsearch, q, rt, u.out)
+	return veccache.Cache.SearchInto(sp, cacheKey, newsearch, q, rt, u.out)
 }
 
 // fulltext2ScoreAlgo resolves the relevance formula from fulltext2's OWN session

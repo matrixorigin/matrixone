@@ -23,6 +23,7 @@ import (
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
@@ -105,6 +106,46 @@ type SqlProcess struct {
 	// SQL/table-function arguments must never populate these fields.
 	AccountIDOverride *uint32
 	DatabaseOverride  string
+
+	// Optional named-snapshot read timestamp. When set (and historical), the
+	// internal SQL runs against a txn cloned at this TS, so index-table reads
+	// return the snapshot's historical state instead of the current one
+	// (fulltext/fulltext2 MATCH on a named snapshot, #27941). nil => current TS.
+	SnapshotTS *timestamp.Timestamp
+}
+
+// EffectiveSnapshotTS returns the historical read timestamp this SqlProcess will
+// actually time-travel to -- i.e. the TS txnForRun clones the read txn at -- or nil
+// when the read runs at the current txn (no SnapshotTS, an empty TS, or a TS not
+// earlier than the current one). It is the SINGLE source of truth for "is this a
+// historical read": any caller that keys a cache by the snapshot (e.g. the
+// fulltext2 TS-suffixed cache key) MUST derive that key from this, so the key can
+// never disagree with the clone decision. A disagreement would cache a historical
+// index under the current key and serve it to current queries (#27941).
+func (s *SqlProcess) EffectiveSnapshotTS() *timestamp.Timestamp {
+	if s.SnapshotTS == nil || s.Proc == nil {
+		return nil
+	}
+	txnOp := s.Proc.GetTxnOperator()
+	if txnOp == nil {
+		return nil
+	}
+	ts := *s.SnapshotTS
+	if ts.IsEmpty() || !ts.Less(txnOp.Txn().SnapshotTS) {
+		return nil
+	}
+	return s.SnapshotTS
+}
+
+// txnForRun returns the txn operator the internal SQL should run under: a clone
+// pinned at the historical snapshot TS when EffectiveSnapshotTS reports one, else
+// the process's current txn.
+func (s *SqlProcess) txnForRun(proc *process.Process) client.TxnOperator {
+	txnOp := proc.GetTxnOperator()
+	if ets := s.EffectiveSnapshotTS(); ets != nil && txnOp != nil {
+		return txnOp.CloneSnapshotOp(*ets)
+	}
+	return txnOp
 }
 
 func NewSqlProcess(proc *process.Process) *SqlProcess {
@@ -226,7 +267,7 @@ func RunSql(sqlproc *SqlProcess, sql string) (executor.Result, error) {
 			// All runSql and runSqlWithResult is a part of input sql, can not incr statement.
 			// All these sub-sql's need to be rolled back and retried en masse when they conflict in pessimistic mode
 			WithDisableIncrStatement().
-			WithTxn(proc.GetTxnOperator()).
+			WithTxn(sqlproc.txnForRun(proc)).
 			WithDatabase(sqlproc.executionDatabase(proc.GetSessionInfo().Database)).
 			WithTimeZone(proc.GetSessionInfo().TimeZone).
 			WithAccountID(accountId).
@@ -322,7 +363,7 @@ func RunStreamingSql(
 			// All runSql and runSqlWithResult is a part of input sql, can not incr statement.
 			// All these sub-sql's need to be rolled back and retried en masse when they conflict in pessimistic mode
 			WithDisableIncrStatement().
-			WithTxn(proc.GetTxnOperator()).
+			WithTxn(sqlproc.txnForRun(proc)).
 			WithDatabase(sqlproc.executionDatabase(proc.GetSessionInfo().Database)).
 			WithTimeZone(proc.GetSessionInfo().TimeZone).
 			WithAccountID(accountId).
@@ -385,7 +426,7 @@ func RunTxn(sqlproc *SqlProcess, execFunc func(executor.TxnExecutor) error) erro
 			// All runSql and runSqlWithResult is a part of input sql, can not incr statement.
 			// All these sub-sql's need to be rolled back and retried en masse when they conflict in pessimistic mode
 			WithDisableIncrStatement().
-			WithTxn(proc.GetTxnOperator()).
+			WithTxn(sqlproc.txnForRun(proc)).
 			WithDatabase(proc.GetSessionInfo().Database).
 			WithTimeZone(proc.GetSessionInfo().TimeZone).
 			WithAccountID(accountId).
