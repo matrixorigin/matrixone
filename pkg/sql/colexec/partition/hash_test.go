@@ -312,6 +312,24 @@ func TestHashPartitionSortFallbackHonorsCancellationDuringFinalize(t *testing.T)
 	require.Zero(t, proc.Mp().CurrNB())
 }
 
+func TestCopyPartitionSelectionsHonorsCancellationDuringTailCopy(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	src := make([]int64, 2*cancellationCheckInterval)
+	dst := make([]int64, len(src))
+	for i := range src {
+		src[i] = int64(i)
+	}
+	proc.Ctx = newCancelAfterDoneChecksContext(2)
+
+	copied, err := copyPartitionSelections(proc, dst, src, 0)
+	require.ErrorIs(t, err, context.Canceled)
+	require.Equal(t, cancellationCheckInterval, copied)
+	require.Equal(t, src[:copied], dst[:copied])
+
+	proc.Free()
+	require.Zero(t, proc.Mp().CurrNB())
+}
+
 func TestHashPartitionAccountsHashAndRowIndexMemory(t *testing.T) {
 	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
 	arg := newHashPartitionArgument(1 << 30)

@@ -417,7 +417,9 @@ func stableSortPartitionSelections(proc *process.Process, analyzer process.Analy
 			}
 			mid := left + width
 			if mid >= len(selections) {
-				copy(dst[left:], src[left:])
+				if _, err := copyPartitionSelections(proc, dst[left:], src[left:], left); err != nil {
+					return err
+				}
 				break
 			}
 			right := mid + width
@@ -438,8 +440,14 @@ func stableSortPartitionSelections(proc *process.Process, analyzer process.Analy
 				}
 				out++
 			}
-			out += copy(dst[out:], src[i:mid])
-			copy(dst[out:], src[j:right])
+			copied, err := copyPartitionSelections(proc, dst[out:], src[i:mid], out)
+			if err != nil {
+				return err
+			}
+			out += copied
+			if _, err = copyPartitionSelections(proc, dst[out:], src[j:right], out); err != nil {
+				return err
+			}
 			left = right
 		}
 		src, dst = dst, src
@@ -451,9 +459,28 @@ func stableSortPartitionSelections(proc *process.Process, analyzer process.Analy
 		}
 	}
 	if !sourceIsSelections {
-		copy(selections, src)
+		if _, err := copyPartitionSelections(proc, selections, src, 0); err != nil {
+			return err
+		}
 	}
 	return nil
+}
+
+// copyPartitionSelections bounds the cancellation latency of the merge tail.
+// A run can have an arbitrarily large remaining side after the other side is
+// exhausted, so a single bulk copy would otherwise bypass the merge loop's
+// cancellation checkpoints.
+func copyPartitionSelections(proc *process.Process, dst, src []int64, iteration int) (int, error) {
+	copied := 0
+	for copied < len(src) {
+		if err := checkCanceled(proc, iteration+copied); err != nil {
+			return copied, err
+		}
+		next := min(copied+cancellationCheckInterval, len(src))
+		copy(dst[copied:next], src[copied:next])
+		copied = next
+	}
+	return copied, nil
 }
 
 func partitionSelectionLess(compares []compare.Compare, left, right int64) bool {
