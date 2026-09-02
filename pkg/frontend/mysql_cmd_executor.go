@@ -2893,8 +2893,6 @@ func createPrepareStmtInSession(
 		ddlVersion:         owner.getDDLVersion(),
 		cloneSQL:           cloneSQL,
 		protocolVersion:    protocolVersion,
-		numericPrefixConsumer: preparedPlanHasNumericPrefixConsumer(
-			prepareControl.Plan, len(prepareControl.ParamTypes)),
 		numericOverloadParamPositions: plan2.PreparedPlanNumericFallbackParamPositions(
 			prepareControl.Plan),
 		directResultParamPositions: plan2.PreparedPlanDirectResultParamPositions(
@@ -2907,6 +2905,8 @@ func createPrepareStmtInSession(
 		getFromSendLongData: make(map[int]struct{}),
 		schedulingSQLMode:   schedulingSQLMode,
 	}
+	prepareStmt.refreshNumericPrefixConsumer(
+		prepareControl.Plan, len(prepareControl.ParamTypes))
 	prepareStmt.directResultParamPositions = plan2.PreparedPlanDirectResultParamPositions(prepareControl.Plan)
 	prepareStmt.directResultParamPositionsSet = true
 
