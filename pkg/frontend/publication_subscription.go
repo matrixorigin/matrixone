@@ -1575,6 +1575,44 @@ func getSubInfosFromPub(ctx context.Context, bh BackgroundExec, pubAccountName, 
 
 // getSubInfosFromSub return subInfo map for given subName
 func getSubInfosFromSub(ctx context.Context, bh BackgroundExec, subName string) (subInfo []*pubsub.SubInfo, err error) {
+	return getSubInfosFromSubWithOptions(ctx, bh, subName, false, 0)
+}
+
+// getActiveSubInfosFromSubBounded admits catalog candidates before the caller
+// allocates metadata or builds the subscriber-visibility query. The SQL reads
+// at most maxCandidates+1 rows so overflow can fail closed without returning a
+// partial subscription set.
+func getActiveSubInfosFromSubBounded(
+	ctx context.Context,
+	bh BackgroundExec,
+	maxCandidates int,
+) ([]*pubsub.SubInfo, error) {
+	if maxCandidates < 0 {
+		return nil, moerr.NewInvalidInput(ctx, "negative subscription metadata candidate budget")
+	}
+	subInfos, err := getSubInfosFromSubWithOptions(
+		ctx, bh, "", true, maxCandidates+1,
+	)
+	if err != nil {
+		return nil, err
+	}
+	if len(subInfos) > maxCandidates {
+		return nil, moerr.NewInvalidInputf(
+			ctx,
+			"information_schema.statistics subscription candidate enumeration exceeds planning budget of %d branches; reduce active subscriptions or STATISTICS occurrences",
+			maxCandidates,
+		)
+	}
+	return subInfos, nil
+}
+
+func getSubInfosFromSubWithOptions(
+	ctx context.Context,
+	bh BackgroundExec,
+	subName string,
+	activeOnly bool,
+	limit int,
+) (subInfo []*pubsub.SubInfo, err error) {
 	subAccountId, err := defines.GetAccountId(ctx)
 	if err != nil {
 		return
@@ -1593,7 +1631,16 @@ func getSubInfosFromSub(ctx context.Context, bh BackgroundExec, subName string) 
 	}
 	sql += fmt.Sprintf(" and sub_account_id = %d", subAccountId)
 	if len(subName) > 0 {
-		sql += fmt.Sprintf(" and sub_name = '%s'", subName)
+		sql += fmt.Sprintf(" and sub_name = '%s'", sanitizeSQLInput(subName))
+	}
+	if activeOnly {
+		sql += fmt.Sprintf(
+			" and status = %d and sub_name is not null and sub_name <> ''",
+			pubsub.SubStatusNormal,
+		)
+	}
+	if limit > 0 {
+		sql += fmt.Sprintf(" limit %d", limit)
 	}
 
 	ctx = defines.AttachAccountId(ctx, catalog.System_Account)

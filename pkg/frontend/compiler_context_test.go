@@ -17,6 +17,8 @@ package frontend
 import (
 	"context"
 	"errors"
+	"fmt"
+	"strings"
 	"testing"
 
 	"github.com/golang/mock/gomock"
@@ -107,6 +109,107 @@ func TestSubscriptionMetadataEnumerationObservesCancellation(t *testing.T) {
 	require.ErrorIs(t, err, wantErr)
 	_, err = extractSubInfosFromExecResultOld(ctx, []ExecResult{result})
 	require.ErrorIs(t, err, wantErr)
+}
+
+func TestActiveSubscriptionMetadataCandidatesAreBoundedAtCatalogQuery(t *testing.T) {
+	columnCheckSQL := "select 1 from mo_catalog.mo_columns where att_database = 'mo_catalog' and att_relname = 'mo_subs' and attname = 'sub_account_name'"
+
+	for _, test := range []struct {
+		name          string
+		modernCatalog bool
+		maxCandidates int
+		rowCount      int
+		wantError     bool
+	}{
+		{name: "exact boundary", modernCatalog: true, maxCandidates: 256, rowCount: 256},
+		{name: "overflow sentinel", modernCatalog: true, maxCandidates: 256, rowCount: 257, wantError: true},
+		{name: "no remaining budget", modernCatalog: true, maxCandidates: 0, rowCount: 1, wantError: true},
+		{name: "rolling upgrade catalog", maxCandidates: 1, rowCount: 2, wantError: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			columnExists := &MysqlResultSet{}
+			candidateSQL := getSubsSqlOld
+			if test.modernCatalog {
+				columnExists.AddRow([]interface{}{int64(1)})
+				candidateSQL = getSubsSql
+			}
+			candidateSQL += fmt.Sprintf(
+				" and sub_account_id = 7 and status = 0 and sub_name is not null and sub_name <> '' limit %d",
+				test.maxCandidates+1,
+			)
+			candidates := subscriptionCandidateResult(test.rowCount, test.modernCatalog)
+			bh := &backgroundExecTest{}
+			bh.init()
+			bh.sql2result[columnCheckSQL] = columnExists
+			bh.sql2result[candidateSQL] = candidates
+
+			ctx := defines.AttachAccountId(context.Background(), 7)
+			got, err := getActiveSubInfosFromSubBounded(ctx, bh, test.maxCandidates)
+			if test.wantError {
+				require.ErrorContains(t, err, fmt.Sprintf(
+					"candidate enumeration exceeds planning budget of %d branches", test.maxCandidates))
+				require.Nil(t, got, "overflow must not expose the bounded prefix as partial metadata")
+			} else {
+				require.NoError(t, err)
+				require.Len(t, got, test.maxCandidates)
+			}
+			require.Equal(t, []string{columnCheckSQL, candidateSQL}, bh.executedSQLs)
+			require.Equal(t, []uint32{catalog.System_Account, catalog.System_Account}, bh.executionAccountIDs)
+			require.NotContains(t, candidateSQL, " IN (",
+				"catalog admission must happen before constructing the visibility-name list")
+
+			if !test.wantError {
+				metas, convertErr := subscriptionMetasFromSubInfos(ctx, got)
+				require.NoError(t, convertErr)
+				names := make([]string, 0, len(metas))
+				for _, meta := range metas {
+					names = append(names, escapeSQLString(meta.SubName))
+				}
+				visibilitySQL := subscriptionMetadataVisibilitySQL(
+					strings.Join(names, ","), defines.MORPCVersion41,
+				)
+				bh.sql2result[visibilitySQL] = &MysqlResultSet{}
+				visible, visibilityErr := getVisibleSubscriptionMetadata(
+					ctx, bh, metas, defines.MORPCVersion41,
+				)
+				require.NoError(t, visibilityErr)
+				require.Empty(t, visible)
+				require.Len(t, bh.executedSQLs, 3)
+				require.Equal(t, visibilitySQL, bh.executedSQLs[2])
+				require.Equal(t, test.maxCandidates, strings.Count(visibilitySQL, "'sub_"),
+					"visibility SQL must encode only the admitted bounded candidate set")
+			}
+		})
+	}
+}
+
+func subscriptionCandidateResult(rowCount int, modernCatalog bool) *MysqlResultSet {
+	result := &MysqlResultSet{}
+	columnCount := 10
+	if modernCatalog {
+		columnCount = 12
+	}
+	for i := 0; i < columnCount; i++ {
+		column := &MysqlColumn{}
+		column.SetName(fmt.Sprintf("column_%d", i))
+		result.AddColumn(column)
+	}
+	for i := 0; i < rowCount; i++ {
+		row := []interface{}{
+			int64(7), "subscriber", fmt.Sprintf("sub_%03d", i), "2026-09-02",
+			int64(42), "publisher", "publication", "database", "*",
+			"2026-09-02", "", int64(pubsub.SubStatusNormal),
+		}
+		if !modernCatalog {
+			row = []interface{}{
+				int64(7), fmt.Sprintf("sub_%03d", i), "2026-09-02", "publisher",
+				"publication", "database", "*", "2026-09-02", "",
+				int64(pubsub.SubStatusNormal),
+			}
+		}
+		result.AddRow(row)
+	}
+	return result
 }
 
 func TestGetVisibleSubscriptionMetadata(t *testing.T) {

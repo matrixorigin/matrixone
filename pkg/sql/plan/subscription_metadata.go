@@ -15,6 +15,7 @@
 package plan
 
 import (
+	"context"
 	"sort"
 	"strconv"
 	"strings"
@@ -115,7 +116,26 @@ func (builder *QueryBuilder) visibleSubscriptionMetadata(
 	if !ok {
 		return nil, nil
 	}
-	subscriptions, err := provider.GetSubscriptionMetadata(snapshot)
+
+	remaining := maxSubscriptionStatisticsPublisherBranches -
+		builder.subscriptionStatisticsPublisherBranches
+	if remaining < 0 {
+		remaining = 0
+	}
+	snapshotKey, err := subscriptionMetadataSnapshotKey(snapshot)
+	if err != nil {
+		return nil, err
+	}
+	visible, cached := builder.subscriptionStatisticsMetadata[snapshotKey]
+	if cached {
+		if len(visible) > remaining {
+			return nil, subscriptionStatisticsBudgetError(builder.GetContext())
+		}
+		builder.subscriptionStatisticsPublisherBranches += len(visible)
+		return visible, nil
+	}
+
+	subscriptions, err := provider.GetSubscriptionMetadata(snapshot, remaining)
 	if err != nil {
 		return nil, err
 	}
@@ -123,18 +143,13 @@ func (builder *QueryBuilder) visibleSubscriptionMetadata(
 		return nil, err
 	}
 
-	remaining := maxSubscriptionStatisticsPublisherBranches -
-		builder.subscriptionStatisticsPublisherBranches
-	if remaining < 0 {
-		remaining = 0
-	}
 	capacity := len(subscriptions)
 	if capacity > remaining {
 		capacity = remaining
 	}
 	lowerCaseTableNames := builder.compCtx.GetLowerCaseTableNames()
 	seen := make(map[string]struct{}, capacity)
-	visible := make([]*SubscriptionMetadata, 0, capacity)
+	visible = make([]*SubscriptionMetadata, 0, capacity)
 	for _, subscription := range subscriptions {
 		if err := builder.checkPlanningCanceled(); err != nil {
 			return nil, err
@@ -149,11 +164,7 @@ func (builder *QueryBuilder) visibleSubscriptionMetadata(
 			continue
 		}
 		if len(visible) == remaining {
-			return nil, moerr.NewInvalidInputf(
-				builder.GetContext(),
-				"information_schema.statistics publisher expansion exceeds planning budget of %d branches; reduce visible subscriptions or STATISTICS occurrences",
-				maxSubscriptionStatisticsPublisherBranches,
-			)
+			return nil, subscriptionStatisticsBudgetError(builder.GetContext())
 		}
 		seen[nameKey] = struct{}{}
 		visible = append(visible, subscription)
@@ -170,8 +181,31 @@ func (builder *QueryBuilder) visibleSubscriptionMetadata(
 		// under a case-insensitive mode.
 		return leftName < rightName
 	})
+	if builder.subscriptionStatisticsMetadata == nil {
+		builder.subscriptionStatisticsMetadata = make(map[string][]*SubscriptionMetadata)
+	}
+	builder.subscriptionStatisticsMetadata[snapshotKey] = visible
 	builder.subscriptionStatisticsPublisherBranches += len(visible)
 	return visible, nil
+}
+
+func subscriptionMetadataSnapshotKey(snapshot *Snapshot) (string, error) {
+	if !IsSnapshotValid(snapshot) {
+		return "", nil
+	}
+	data, err := snapshot.Marshal()
+	if err != nil {
+		return "", err
+	}
+	return string(data), nil
+}
+
+func subscriptionStatisticsBudgetError(ctx context.Context) error {
+	return moerr.NewInvalidInputf(
+		ctx,
+		"information_schema.statistics publisher expansion exceeds planning budget of %d branches; reduce visible subscriptions or STATISTICS occurrences",
+		maxSubscriptionStatisticsPublisherBranches,
+	)
 }
 
 // subscriptionMetadataNameKey follows the server's database-identifier

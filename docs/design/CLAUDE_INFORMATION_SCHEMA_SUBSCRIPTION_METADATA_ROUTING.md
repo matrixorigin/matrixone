@@ -4,7 +4,7 @@
 - Owning issue: [#27759](https://github.com/matrixorigin/matrixone/issues/27759)
 - Implementation PR: [#27778](https://github.com/matrixorigin/matrixone/pull/27778)
 - Related local-visibility design: [Information Schema Metadata Visibility and Active-Role Closure](CLAUDE_INFORMATION_SCHEMA_METADATA_VISIBILITY.md)
-- Version: 3
+- Version: 4
 - Last updated: 2026-09-02
 
 ## 1. Problem and evidence
@@ -295,8 +295,11 @@ a fixed planner shape `V`. Plan construction and the number of catalog branches 
 but every publisher `mo_tables` scan is constrained by publisher account,
 publication database, and table set before index rows are returned.
 
-Enumeration adds one batched subscriber-local visibility query per logical
-`STATISTICS` source; it does not issue one RBAC query per subscription.
+Enumeration adds at most one bounded catalog query and one batched
+subscriber-local visibility query per requested snapshot in a statement. The
+query builder caches that complete visible set for sibling and nested
+`STATISTICS` occurrences at the same snapshot; it does not issue one RBAC
+query per subscription or repeat account-wide enumeration per occurrence.
 
 The subscription feature currently has no catalog-enforced per-account hard
 maximum. This design therefore does not truncate subscriptions or silently
@@ -315,6 +318,19 @@ budget for the current UNION implementation:
   binding its local view or any publisher view. A request that would exceed the
   limit fails planning explicitly; it is never truncated and no partial
   metadata plan can execute;
+- the remaining statement branch budget is passed into the account-wide
+  provider before catalog enumeration. The `mo_subs` query filters to normal,
+  non-empty subscription names and includes `LIMIT remaining+1`. The extra row
+  is an overflow sentinel: if present, planning fails before metadata
+  conversion, sorting, visibility-name encoding, or visibility SQL execution.
+  This deliberately fail-closed candidate cap can reject an account whose
+  active catalog candidates exceed the remaining budget even if subscriber
+  RBAC would later hide enough candidates; it never selects an arbitrary
+  visible prefix;
+- a successful provider result is complete for that effective snapshot and is
+  cached only inside the current query builder. Repeated occurrences reuse the
+  bounded set, while a different requested historical snapshot receives a separate
+  provider call with only the statement budget then remaining;
 - cancellation is checked while decoding subscription rows, converting and
   sorting metadata, constructing and consuming the subscriber-local visibility
   query, filtering the enumerated set, and before every publisher view bind. A
@@ -331,27 +347,33 @@ go test ./pkg/sql/plan -run '^$' \
   -benchmem -benchtime=3x -count=1
 ```
 
-Reference evidence on 2026-09-01 (`darwin/arm64`, Apple M1) is:
+Reference evidence on 2026-09-02 (`darwin/arm64`, Apple M1) is:
 
 | Active subscriptions | Occurrences | Planning time | Cumulative allocations |
 |---:|---:|---:|---:|
-| 0 | 1 | 3.4 ms | 1.1 MiB |
-| 0 | 4 | 11.9 ms | 4.4 MiB |
-| 16 | 1 | 31.1 ms | 12.9 MiB |
-| 16 | 4 | 87.8 ms | 52.5 MiB |
-| 64 | 1 | 69.5 ms | 49.7 MiB |
-| 64 | 4 | 399.4 ms | 204.2 MiB |
+| 0 | 1 | 1.4 ms | 1.0 MiB |
+| 0 | 4 | 4.7 ms | 4.2 MiB |
+| 16 | 1 | 13.5 ms | 12.3 MiB |
+| 16 | 4 | 60.7 ms | 50.0 MiB |
+| 64 | 1 | 54.6 ms | 47.4 MiB |
+| 64 | 4 | 249.7 ms | 194.8 MiB |
 
 Wall-clock values are reference evidence, not a timing assertion in unit tests.
 The deterministic boundary test compiles 64 subscriptions across four
-occurrences and verifies all 256 publisher branches. Separate counterexamples
-verify that the 257th publisher branch fails before publisher binding and that
-pre-canceled or mid-expansion planning returns the cancellation cause. Further
-counterexamples verify that rejected/duplicate metadata does not consume the
-budget, identifier case modes are applied at the exact boundary, and the budget
-does not leak across independent or prepared plan builds. CI executes the
-functional publication/subscription matrix against real catalogs; timing
-remains observed through existing statement and subscription duration metrics.
+occurrences, verifies all 256 publisher branches, and verifies that catalog and
+visibility enumeration happen once rather than four times. Separate
+counterexamples verify that the catalog SQL returns at most 257 rows, the 257th
+candidate fails without exposing a 256-row prefix or executing visibility SQL,
+and the 257th publisher branch fails before publisher binding. Snapshot-scoped
+counterexamples prove that equivalent sibling snapshots reuse enumeration but
+different snapshots do not share results or reset the remaining statement
+budget. Pre-canceled and mid-expansion tests preserve the cancellation cause.
+Further counterexamples verify that rejected/duplicate metadata does not
+consume the budget, identifier case modes are applied at the exact boundary,
+and the budget does not leak across independent or prepared plan builds. CI
+executes the functional publication/subscription matrix against real catalogs;
+timing remains observed through existing statement and subscription duration
+metrics.
 
 ## 10. Failure handling and ownership
 
@@ -361,9 +383,12 @@ to local-only or unscoped publisher results. A publication filter construction
 error likewise aborts the affected plan.
 
 All temporary subscription slices are query-owned. Enumeration copies and
-sorts the provider result before deduplication. Historical background executors
-are closed with `defer`; compiler-context subscription identity is restored
-after each publisher branch. There is no global subscription metadata cache,
+sorts the bounded provider result before deduplication. The complete visible
+set is cached by serialized requested snapshot only inside one query builder;
+invalid/current snapshots share the current-transaction key, while distinct
+valid historical snapshots do not alias. Historical background executors are
+closed with `defer`; compiler-context subscription identity is restored after
+each publisher branch. There is no global subscription metadata cache,
 background goroutine, retry loop, or cross-statement mutable branch list.
 
 Cancellation uses the existing statement context and is polled at each
@@ -414,12 +439,13 @@ direction if the supported envelope must exceed Section 9. It is substantially
 more invasive because it needs runtime catalog routing, predicate pushdown,
 snapshot ownership, distributed execution, and observability contracts.
 
-### G. Cache the account's subscription branch set
+### G. Cache the account's subscription branch set across statements
 
-Rejected for this change. Correct invalidation must cover creation, drop,
-publication withdrawal/reauthorization, snapshots, transaction visibility,
-case mode, restart, and tenant isolation. Rebuilding keeps the ownership and
-freshness rule explicit.
+Rejected. Correct invalidation must cover creation, drop, publication
+withdrawal/reauthorization, snapshots, transaction visibility, case mode,
+restart, and tenant isolation. Version 4 uses only a statement-owned,
+snapshot-keyed cache: it removes repeated enumeration within one plan build
+without introducing cross-statement freshness or invalidation state.
 
 ## 12. Validation map and acceptance criteria
 
@@ -441,6 +467,8 @@ freshness rule explicit.
 | Guaranteed rebuild skips obsolete captured-reference validation | injected resolver test |
 | Identifier modes 0/1/2 and malformed bytes deduplicate correctly | planner unit tests and case-sensitive BVT |
 | 64 subscriptions × 4 occurrences preserve all 256 branches | deterministic planner boundary test |
+| Catalog candidates, generated visibility SQL, and repeated occurrences remain bounded | 256/257 frontend sentinel test plus one-call planner cache test |
+| Same-snapshot occurrences reuse enumeration; different snapshots remain isolated | snapshot-keyed planner cache counterexample |
 | The 257th publisher branch fails before publisher binding | over-budget planner counterexample |
 | Rejected and duplicate metadata does not consume the branch budget | exact-boundary planner counterexample |
 | Identifier modes apply consistently at the exact branch boundary | mode 0/1/2 planner counterexamples |
@@ -489,6 +517,10 @@ branch/cardinality observability before raising the budget.
   publisher view expansions. Sixty-four active subscriptions across four
   `STATISTICS` occurrences is the validated boundary; the 257th branch fails
   closed without returning partial metadata.
+- Provider enumeration is admitted before materialization with an active
+  catalog-candidate `LIMIT remaining+1`. Overflow fails closed before RBAC SQL;
+  successful results are cached only for the same snapshot in the same plan
+  build.
 - No blocking design question is intentionally left unresolved. Raising the
   performance envelope is a separate design change.
 
@@ -504,7 +536,7 @@ To be completed by an authorized reviewer:
 ```text
 Change scope: cross-account subscription index metadata routing
 Trigger: authorization/tenant boundary; account-wide semantics; snapshot and cache lifecycle; planner amplification
-Design: docs/design/CLAUDE_INFORMATION_SCHEMA_SUBSCRIPTION_METADATA_ROUTING.md, version 2, <reviewed commit>
+Design: docs/design/CLAUDE_INFORMATION_SCHEMA_SUBSCRIPTION_METADATA_ROUTING.md, version 4, <reviewed commit>
 Blocking findings: <none or findings>
 Decision log: <accepted tradeoffs and resolved questions>
 Decision: PASS | REQUEST_CHANGES

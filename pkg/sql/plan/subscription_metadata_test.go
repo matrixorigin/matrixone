@@ -27,6 +27,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
@@ -40,8 +41,10 @@ type subscriptionMetadataTestContext struct {
 	querying            *SubscriptionMeta
 	defaultDB           string
 	metadata            []*SubscriptionMetadata
+	metadataBySnapshot  map[string][]*SubscriptionMetadata
 	lowerCaseTableNames int64
 	metadataCalls       int
+	metadataLimits      []int
 	publisherBindCount  int
 	cancelPublisherBind int
 	cancelPlanning      context.CancelFunc
@@ -73,9 +76,18 @@ func (c *subscriptionMetadataTestContext) GetSubscriptionMeta(
 }
 
 func (c *subscriptionMetadataTestContext) GetSubscriptionMetadata(
-	_ *Snapshot,
+	snapshot *Snapshot,
+	maxCandidates int,
 ) ([]*SubscriptionMetadata, error) {
 	c.metadataCalls++
+	c.metadataLimits = append(c.metadataLimits, maxCandidates)
+	if c.metadataBySnapshot != nil {
+		key, err := subscriptionMetadataSnapshotKey(snapshot)
+		if err != nil {
+			return nil, err
+		}
+		return c.metadataBySnapshot[key], nil
+	}
 	if c.metadata != nil {
 		return c.metadata, nil
 	}
@@ -426,6 +438,38 @@ func TestSubscriptionStatisticsPlanningBudget(t *testing.T) {
 		require.Equal(t, 4, counts[fmt.Sprintf("sub_%02d", i)])
 	}
 	require.Nil(t, ctx.GetQueryingSubscription())
+	require.Equal(t, 1, ctx.metadataCalls,
+		"sibling occurrences must reuse one bounded visibility enumeration")
+	require.Equal(t, []int{maxSubscriptionStatisticsPublisherBranches}, ctx.metadataLimits)
+}
+
+func TestSubscriptionStatisticsMetadataCacheIsSnapshotScoped(t *testing.T) {
+	_, ctx := newSubscriptionMetadataTestOptimizer()
+	snapshotA := &Snapshot{TS: &timestamp.Timestamp{PhysicalTime: 1}}
+	snapshotB := &Snapshot{TS: &timestamp.Timestamp{PhysicalTime: 2}}
+	keyA, err := subscriptionMetadataSnapshotKey(snapshotA)
+	require.NoError(t, err)
+	keyB, err := subscriptionMetadataSnapshotKey(snapshotB)
+	require.NoError(t, err)
+	ctx.metadataBySnapshot = map[string][]*SubscriptionMetadata{
+		keyA: subscriptionMetadataTestSet(2),
+		keyB: subscriptionMetadataTestSet(3),
+	}
+	builder := NewQueryBuilder(plan.Query_SELECT, ctx, false, false)
+
+	first, err := builder.visibleSubscriptionMetadata(snapshotA)
+	require.NoError(t, err)
+	second, err := builder.visibleSubscriptionMetadata(snapshotA)
+	require.NoError(t, err)
+	third, err := builder.visibleSubscriptionMetadata(snapshotB)
+	require.NoError(t, err)
+	require.Len(t, first, 2)
+	require.Len(t, second, 2)
+	require.Len(t, third, 3)
+	require.Equal(t, 2, ctx.metadataCalls,
+		"equivalent sibling snapshots reuse enumeration while distinct snapshots do not")
+	require.Equal(t, []int{256, 252}, ctx.metadataLimits,
+		"a new snapshot receives only the statement budget remaining after cached occurrences")
 }
 
 func TestSubscriptionStatisticsBudgetIgnoresRejectedAndDuplicateMetadata(t *testing.T) {

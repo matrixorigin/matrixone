@@ -1323,7 +1323,10 @@ func (tcc *TxnCompilerContext) GetSubscriptionMeta(dbName string, snapshot *plan
 // the current active-role closure. Publication membership establishes which
 // publisher objects may be scanned, while this method establishes the
 // subscriber-local RBAC boundary before any publisher catalog is accessed.
-func (tcc *TxnCompilerContext) GetSubscriptionMetadata(snapshot *plan2.Snapshot) ([]*plan2.SubscriptionMetadata, error) {
+func (tcc *TxnCompilerContext) GetSubscriptionMetadata(
+	snapshot *plan2.Snapshot,
+	maxCandidates int,
+) ([]*plan2.SubscriptionMetadata, error) {
 	tempCtx := tcc.execCtx.reqCtx
 	txn := tcc.GetTxnHandler().GetTxn()
 	var bh BackgroundExec
@@ -1347,7 +1350,7 @@ func (tcc *TxnCompilerContext) GetSubscriptionMetadata(snapshot *plan2.Snapshot)
 	}
 
 	bh.ClearExecResultSet()
-	subInfos, err := getSubInfosFromSub(tempCtx, bh, "")
+	subInfos, err := getActiveSubInfosFromSubBounded(tempCtx, bh, maxCandidates)
 	if err != nil {
 		return nil, err
 	}
