@@ -13,7 +13,7 @@ Owner: MatrixOne query execution
 
 Owning issue: [#27586](https://github.com/matrixorigin/matrixone/issues/27586)
 
-Implementation: MatrixOne [#27599](https://github.com/matrixorigin/matrixone/pull/27599), Sirius [#6](https://github.com/matrixorigin/sirius/pull/6) plus merged multi-stream fix [#8](https://github.com/matrixorigin/sirius/pull/8), sidecar [#14](https://github.com/matrixorigin/mo-sirius-sidecar/pull/14)
+Implementation: MatrixOne [#27599](https://github.com/matrixorigin/matrixone/pull/27599), Sirius [#6](https://github.com/matrixorigin/sirius/pull/6) plus version-1 contract fix [#9](https://github.com/matrixorigin/sirius/pull/9), sidecar [#14](https://github.com/matrixorigin/mo-sirius-sidecar/pull/14) plus version-1 contract fix [#18](https://github.com/matrixorigin/mo-sirius-sidecar/pull/18)
 
 ## 1. Decision
 
@@ -834,9 +834,9 @@ revision invalidates only the evidence whose semantic inputs changed.
 
 | Component | PR | Candidate delivery commit | Evidence |
 | --- | --- | --- | --- |
-| MatrixOne | [#27599](https://github.com/matrixorigin/matrixone/pull/27599) | `b659afafa0c86a707b79f9a6c4b68fd3beadc6aa` | full Go 1.26.4 pre-push SCA passed; affected packages and 20x race regressions passed; [SF10 five-mode record](https://github.com/matrixorigin/matrixone/pull/27599#issuecomment-5495966844) |
-| Sirius | [#6](https://github.com/matrixorigin/sirius/pull/6) | `b06f3657eeeb2f2b64a6254df887ae631d0c23ca` | source tree matches the sixth review iteration of the version-1 design at `fd347eb996c74d9910c3aaa94596feba14d5d035`, including merged multi-stream fix [#8](https://github.com/matrixorigin/sirius/pull/8); targeted Substrait/MO-scan, scheduler-concurrency, and task-lifecycle cases passed |
-| sidecar | [#14](https://github.com/matrixorigin/mo-sirius-sidecar/pull/14) | `55c8676d7d4463040d914e0f8c07210bf9559ab4` | pins the scoped Sirius revision above; targeted protocol/config and native stream/result cases passed |
+| MatrixOne | [#27599](https://github.com/matrixorigin/matrixone/pull/27599) | `2706ef2723` | affected Substrait, Flight, and compile tests passed; final pre-push SCA is recorded on the delivery head; [SF10 five-mode record](https://github.com/matrixorigin/matrixone/pull/27599#issuecomment-5495966844) |
+| Sirius | [#9](https://github.com/matrixorigin/sirius/pull/9) | `82bc06bf8fb407af77f2c201ffcbd1f2d8d54ed2` | linked sidecar extension build passed; serial, same-stage PARTITION, and independent-pipeline concurrency tests passed |
+| sidecar | [#18](https://github.com/matrixorigin/mo-sirius-sidecar/pull/18) | `04e15e19c0b2287906cc65288ed9bb3f84a614d0` | pins the Sirius revision above; protocol/admission contract suite passed 76 assertions and the linked extension built successfully |
 
 The sidecar submodule must point to the approved Sirius commit. The MatrixOne PR
 body must link this design at its approved commit and the final evidence record.
