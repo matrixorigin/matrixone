@@ -343,7 +343,7 @@ supports every row in the table.
 
 | System | Relevant public behavior | MatrixOne implication |
 | --- | --- | --- |
-| [Oracle](https://docs.oracle.com/en/database/oracle/oracle-database/26/dwhsg/basic-materialized-views.html) | FAST/FORCE/COMPLETE, ON COMMIT/ON DEMAND, log-based and partition-change refresh, aggregate/join/UNION ALL rules, nested MVs, query rewrite, refresh diagnostics | Reference for refresh policy, capability explanation, query rewrite, dependency DAG, and partition refresh |
+| [Oracle](https://docs.oracle.com/en/database/oracle/oracle-database/26/dwhsg/basic-materialized-views.html) | FAST/FORCE/COMPLETE, ON COMMIT/ON DEMAND, log-based and partition-change refresh, aggregate/join/UNION ALL rules, nested MVs, query rewrite, refresh diagnostics | Reference for refresh policy, capability explanation, query rewrite, dependency DAG, and possible future partition refresh; MatrixOne does not currently support PCT |
 | [PostgreSQL](https://www.postgresql.org/docs/current/sql-refreshmaterializedview.html) | General defining SQL with complete manual refresh, `CONCURRENTLY`, `WITH [NO] DATA`, table storage/index options | Reference for general fallback, deferred population, nonblocking replacement, and physical design |
 | [ClickHouse](https://clickhouse.com/docs/materialized-view/incremental-materialized-view) | Insert-trigger incremental views for real-time append and separately scheduled refreshable views with atomic replace/append and dependencies | Reference for a low-overhead append fast path and scheduled complete refresh; not a delete/update correctness baseline |
 | [Snowflake](https://docs.snowflake.com/en/user-guide/views-materialized) | Automatic single-table maintenance, query rewrite, clustering, AVG/COUNT/MIN/MAX/SUM, variance/stddev, bitwise aggregates and HLL; no JOIN/HAVING/window/ORDER BY/LIMIT | Reference for single-table aggregate breadth, optimizer integration, clustering, and maintenance-cost visibility |
@@ -353,6 +353,12 @@ supports every row in the table.
 MatrixOne should eventually provide all capability families below, but they
 must be delivered in dependency order. Marking a feature FAST before its state,
 failure, recovery, and resource contracts exist is not acceptable.
+
+The comparison table describes capabilities of the referenced systems and
+future design inputs, not capabilities already present in MatrixOne. In
+particular, this PR implements log-based ISCP/CDC maintenance but does **not**
+implement Oracle-style Partition Change Tracking (PCT) or partition-level MV
+refresh.
 
 ## 12. Designs for the remaining mainstream capability families
 
@@ -492,6 +498,11 @@ Plans expose the selected MV, its watermark, compensation predicate, and reason
 for rejecting alternatives.
 
 ### 12.8 Partition, index, storage, and resource controls
+
+This subsection is a future design only. MatrixOne does not currently support
+PCT or partition-level MV refresh. The current implementation either applies
+row-level ISCP/CDC deltas for its FAST subset or replaces the complete MV
+result; it does not use source-partition change metadata to limit a refresh.
 
 MV DDL should accept ordinary index, clustering, distribution, partition,
 tablespace/storage, and retention options. Partition change tracking maps each

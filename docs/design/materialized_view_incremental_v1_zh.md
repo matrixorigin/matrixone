@@ -292,7 +292,7 @@ tail、complete multi-source refresh、FAST reject、FORCE 路径选择、source
 
 | 系统 | 公开能力 | 对 MatrixOne 的参考意义 |
 | --- | --- | --- |
-| [Oracle](https://docs.oracle.com/en/database/oracle/oracle-database/26/dwhsg/basic-materialized-views.html) | FAST/FORCE/COMPLETE、ON COMMIT/ON DEMAND、log/PCT refresh、aggregate/JOIN/UNION ALL、嵌套 MV、query rewrite | refresh policy、能力解释、依赖 DAG、query rewrite、分区刷新 |
+| [Oracle](https://docs.oracle.com/en/database/oracle/oracle-database/26/dwhsg/basic-materialized-views.html) | FAST/FORCE/COMPLETE、ON COMMIT/ON DEMAND、log/PCT refresh、aggregate/JOIN/UNION ALL、嵌套 MV、query rewrite | refresh policy、能力解释、依赖 DAG、query rewrite，以及未来可能的分区刷新参考；MatrixOne 当前不支持 PCT |
 | [PostgreSQL](https://www.postgresql.org/docs/current/sql-refreshmaterializedview.html) | 通用 SQL 全量手动刷新、`CONCURRENTLY`、`WITH [NO] DATA`、普通表存储/index 参数 | 通用 fallback、延迟填充、非阻塞替换、物理设计 |
 | [ClickHouse](https://clickhouse.com/docs/materialized-view/incremental-materialized-view) | 实时 append 的 insert-trigger incremental MV，以及支持依赖和原子 replace/append 的定时 refreshable MV | append 快路径和定时全量；不能作为 delete/update 正确性基线 |
 | [Snowflake](https://docs.snowflake.com/en/user-guide/views-materialized) | 自动单表维护、query rewrite、clustering、常见聚合、variance/stddev、bitwise、HLL；不支持 JOIN/HAVING/window/ORDER BY/LIMIT | 单表聚合广度、optimizer 集成、clustering 和维护成本 |
@@ -301,6 +301,10 @@ tail、complete multi-source refresh、FAST reject、FORCE 路径选择、source
 
 MatrixOne 最终应覆盖下面所有能力族，但必须按依赖顺序交付。某个算子没有状态、
 失败恢复和资源契约前，不能仅因为语法可解析就标记为 FAST。
+
+上表描述的是被对标数据库的能力和未来设计输入，不代表 MatrixOne 当前已经支持。
+特别地，本 PR 实现的是基于 ISCP/CDC log 的维护，**不支持** Oracle 风格的 Partition
+Change Tracking（PCT），也不支持 MV 的分区级刷新。
 
 ## 12. 其余主流能力的实现设计
 
@@ -415,6 +419,10 @@ Read policy 包括 `FRESH`（等待合格 boundary）、`BOUNDED STALENESS inter
 展示所选 MV、watermark、compensation predicate 和拒绝其他候选的原因。
 
 ### 12.8 Partition、index、storage 与资源控制
+
+本节仅是后续设计。MatrixOne 当前不支持 PCT 或分区级 MV 刷新。当前实现要么对
+FAST 子集应用逐行 ISCP/CDC delta，要么完整替换 MV 结果；不会根据源表分区变化
+元数据把刷新范围限制到受影响分区。
 
 MV DDL 应接受普通 index、clustering、distribution、partition、tablespace/storage 和
 retention option。Partition change tracking 建立 source partition 到 affected MV
