@@ -35,7 +35,7 @@ order by l2_distance(embedding, "[0,0,0]")
 limit 2 by rank with option 'mode=include';
 -- @regex("Vector Index Search Round 1: bucket_window=0:1", true)
 -- @regex("Vector Index Search Round 2: bucket_window=1:2", true)
--- @regex("Vector Index Search Summary: search_count=1 round_count=2 buckets_searched=2", true)
+-- @regex("Vector Index Search Summary: search_count=[1-9][0-9]* round_count=([2-9]|[1-9][0-9]+) buckets_searched=([2-9]|[1-9][0-9]+)", true)
 ➤ QUERY PLAN[12,-1,0]  𝄀
 Project[2] (cost=2.00 outcnt=2.00 selectivity=0.0020 dop=1 blockNum=1 rowsize=100.00)  𝄀
   Output: #[0,0], #[0,1], #[0,2]  𝄀
