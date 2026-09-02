@@ -340,6 +340,39 @@ func TestCloseConcurrentAndRepeatedReturnsSameError(t *testing.T) {
 	require.Equal(t, int32(1), rpc.closeCalls.Load())
 }
 
+func TestQuiesceAndDrainWaitForAcceptedHandler(t *testing.T) {
+	runTestTxnServer(t, testTN1Addr, func(s *server) {
+		started := make(chan struct{})
+		release := make(chan struct{})
+		s.RegisterMethodHandler(txn.TxnMethod_Read, func(context.Context, *txn.TxnRequest, *txn.TxnResponse) error {
+			close(started)
+			<-release
+			return nil
+		})
+
+		msg := newMessage(&txn.TxnRequest{Method: txn.TxnMethod_Read})
+		require.NoError(t, s.onMessage(context.Background(), msg, 0,
+			newTestClientSession(make(chan morpc.Message, 1))))
+		select {
+		case <-started:
+		case <-time.After(time.Second):
+			require.FailNow(t, "handler did not start")
+		}
+
+		require.NoError(t, s.Quiesce())
+		drainCtx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+		err := s.Drain(drainCtx)
+		require.ErrorIs(t, err, context.DeadlineExceeded)
+		require.ErrorIs(t, err, ErrTxnDrainTimeout)
+		cancel()
+
+		close(release)
+		require.Eventually(t, func() bool {
+			return s.Drain(context.Background()) == nil
+		}, time.Second, time.Millisecond)
+	})
+}
+
 func newBlockedQueueTestServer(t *testing.T, rpcServer morpc.RPCServer) *server {
 	t.Helper()
 	rt := newTestRuntime(newTestClock(), logutil.GetPanicLogger())

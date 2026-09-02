@@ -54,6 +54,15 @@ var (
 	retryCreateStorageInterval = time.Second * 5
 )
 
+// txnServerLifecycle is deliberately kept private so adding the ordered
+// shutdown hooks does not change the public rpc.TxnServer contract. The
+// production RPC server implements it; a server without these hooks cannot be
+// safely drained before the TN storage is closed.
+type txnServerLifecycle interface {
+	Quiesce() error
+	Drain(context.Context) error
+}
+
 // WithConfigAdjust set adjust config func
 func WithConfigAdjust(adjustConfigFunc func(c *Config)) Option {
 	return func(s *store) {
@@ -114,6 +123,7 @@ type store struct {
 	replicas            *sync.Map
 	stopper             *stopper.Stopper
 	shutdownC           chan struct{}
+	quiesced            atomic.Bool
 	heartbeatInFlight   atomic.Bool
 	commandPollNeeded   atomic.Bool
 	commandPollWakeup   chan struct{}
@@ -250,8 +260,28 @@ func (s *store) Start() error {
 }
 
 func (s *store) Close() error {
-	// Reject new replica calls and cancel active start contexts before waiting
-	// for store tasks. Storage remains open until the RPC server drains below.
+	// Stop accepting new RPCs first, but keep replicas, WAL and storage alive
+	// while already accepted handlers finish. This prevents an in-flight commit
+	// from observing a cancelled replica context before WAL durability settles.
+	s.quiesced.Store(true)
+	if s.server != nil {
+		lifecycle, ok := s.server.(txnServerLifecycle)
+		if !ok {
+			return moerr.NewInternalErrorNoCtx("txn server does not support lifecycle drain")
+		}
+		if err := lifecycle.Quiesce(); err != nil {
+			return err
+		}
+		drainCtx, cancel := context.WithTimeout(context.Background(), 4*time.Minute)
+		err := lifecycle.Drain(drainCtx)
+		cancel()
+		if err != nil {
+			return err
+		}
+	}
+
+	// No handler can acquire a replica after the drain gate. It is now safe to
+	// cancel replica start contexts and close their storage.
 	s.replicas.Range(func(_, value any) bool {
 		r := value.(*replica)
 		r.cancelStart(false)
@@ -267,7 +297,9 @@ func (s *store) Close() error {
 	if s.cfg.ShardService.Enable {
 		err = errors.Join(err, s.shardServer.Close())
 	}
-	err = errors.Join(err, s.server.Close())
+	if s.server != nil {
+		err = errors.Join(err, s.server.Close())
+	}
 	s.replicas.Range(func(_, value any) bool {
 		r := value.(*replica)
 		if e := r.close(false); e != nil {

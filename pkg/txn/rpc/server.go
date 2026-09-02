@@ -17,6 +17,7 @@ package rpc
 import (
 	"context"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"sync"
 	"time"
@@ -146,11 +147,17 @@ type server struct {
 	stoppingC        chan struct{}
 	producers        sync.WaitGroup
 	producerAdmitted func()
+	quiesceOnce      sync.Once
+	quiesceErr       error
 	closeOnce        sync.Once
 	closeErr         error
 	lifecycle        struct {
 		sync.Mutex
 		stopping bool
+	}
+	activeHandlers struct {
+		sync.Mutex
+		active int
 	}
 }
 
@@ -217,13 +224,8 @@ func (s *server) Start() error {
 
 func (s *server) Close() error {
 	s.closeOnce.Do(func() {
-		s.lifecycle.Lock()
-		s.lifecycle.stopping = true
-		close(s.stoppingC)
-		s.lifecycle.Unlock()
-
-		s.closeErr = s.rpc.Close()
-		s.producers.Wait()
+		s.closeErr = s.Quiesce()
+		s.closeErr = errors.Join(s.closeErr, s.Drain(context.Background()))
 		s.stopper.Stop()
 
 		for {
@@ -239,6 +241,45 @@ func (s *server) Close() error {
 		}
 	})
 	return s.closeErr
+}
+
+// Quiesce closes the network listener and rejects new requests. Requests that
+// have already entered the queue retain ownership until Drain completes.
+func (s *server) Quiesce() error {
+	s.quiesceOnce.Do(func() {
+		s.lifecycle.Lock()
+		s.lifecycle.stopping = true
+		close(s.stoppingC)
+		s.lifecycle.Unlock()
+
+		s.quiesceErr = s.rpc.Close()
+		s.producers.Wait()
+		s.cleanupQueuedRequests()
+	})
+	return s.quiesceErr
+}
+
+// Drain waits for all requests accepted before Quiesce to reach a terminal
+// state. It deliberately leaves worker goroutines and storage available.
+func (s *server) Drain(ctx context.Context) error {
+	if err := s.Quiesce(); err != nil {
+		return err
+	}
+	ticker := time.NewTicker(10 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		s.activeHandlers.Lock()
+		active := s.activeHandlers.active
+		s.activeHandlers.Unlock()
+		if active == 0 {
+			return nil
+		}
+		select {
+		case <-ctx.Done():
+			return errors.Join(ErrTxnDrainTimeout, ctx.Err())
+		case <-ticker.C:
+		}
+	}
 }
 
 func (s *server) RegisterMethodHandler(m txn.TxnMethod, h TxnRequestHandleFunc) {
@@ -297,6 +338,7 @@ func (s *server) onMessage(
 	if s.producerAdmitted != nil {
 		s.producerAdmitted()
 	}
+	s.addHandler()
 
 	t := time.Now()
 	req := executor{
@@ -312,9 +354,11 @@ func (s *server) onMessage(
 	case s.queue <- req:
 	case <-ctx.Done():
 		s.cleanupRequest(m, msg.Cancel)
+		s.finishHandler()
 		return nil
 	case <-s.stoppingC:
 		s.cleanupRequest(m, msg.Cancel)
+		s.finishHandler()
 		return moerr.NewStreamClosedNoCtx()
 	}
 	n := len(s.queue)
@@ -348,6 +392,39 @@ func (s *server) cleanupRequest(req *txn.TxnRequest, cancel context.CancelFunc) 
 
 func (s *server) cleanupExecutor(req executor) {
 	s.cleanupRequest(req.req, req.cancel)
+	s.finishHandler()
+}
+
+func (s *server) cleanupQueuedRequests() {
+	for {
+		select {
+		case req := <-s.queue:
+			s.cleanupExecutor(req)
+		default:
+			return
+		}
+	}
+}
+
+func (s *server) isStopping() bool {
+	s.lifecycle.Lock()
+	stopping := s.lifecycle.stopping
+	s.lifecycle.Unlock()
+	return stopping
+}
+
+func (s *server) addHandler() {
+	s.activeHandlers.Lock()
+	s.activeHandlers.active++
+	s.activeHandlers.Unlock()
+}
+
+func (s *server) finishHandler() {
+	s.activeHandlers.Lock()
+	if s.activeHandlers.active > 0 {
+		s.activeHandlers.active--
+	}
+	s.activeHandlers.Unlock()
 }
 
 func (s *server) acquireResponse() *txn.TxnResponse {
@@ -374,6 +451,10 @@ func (s *server) handleTxnRequest(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case req := <-s.queue:
+			if s.isStopping() {
+				s.cleanupExecutor(req)
+				continue
+			}
 			state, waitReady, newHandler := s.getTxnHandleState()
 			switch state {
 			case TxnForwardWait:
@@ -401,6 +482,7 @@ func (s *server) handleTxnRequest(ctx context.Context) {
 						zap.Error(err))
 				}
 			}
+			s.finishHandler()
 		}
 	}
 }

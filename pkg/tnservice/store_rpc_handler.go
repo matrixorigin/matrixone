@@ -43,6 +43,9 @@ func (s *store) registerRPCHandlers() {
 }
 
 func (s *store) dispatchLocalRequest(shard metadata.TNShard) rpc.TxnRequestHandleFunc {
+	if s.quiesced.Load() {
+		return nil
+	}
 	// DNShard not found, TxnSender will RPC call
 	r := s.getReplica(shard.ShardID)
 	if r == nil {
