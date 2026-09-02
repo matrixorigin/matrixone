@@ -16,12 +16,21 @@ update t1 set b = b + 1 where a = 1;
 select count(distinct txn_id) = 2 from mo_transactions() t where t.user_txn = 'true';
 ➤ count(distinct txn_id) = 2[-7,1,0]  𝄀
 1
-select count(*) = 2 from (
-select txn_id from mo_locks() l where l.txn_id <> ''
+with target_table_ids as (
+select rel_id from mo_catalog.mo_tables
+where reldatabase in ('sv_sys_db', 'sv_tenant_db') and relname = 't1'
+), visible_txns as (
+select txn_id from mo_locks() l join target_table_ids t on l.table_id = t.rel_id
+where l.txn_id <> ''
 union
-select lock_wait from mo_locks() l where l.lock_wait <> ''
-) as visible_txns;
-➤ count(*) = 2[-7,1,0]  𝄀
+select lock_wait from mo_locks() l join target_table_ids t on l.table_id = t.rel_id
+where l.lock_wait <> ''
+)
+select count(distinct t.txn_id) = 2
+from mo_transactions() t
+join visible_txns v on t.txn_id = v.txn_id
+where t.user_txn = 'true';
+➤ count(distinct t.txn_id) = 2[-7,1,0]  𝄀
 1
 select count(distinct txn_id) = 1 from mo_transactions() t where t.user_txn = 'true';
 ➤ count(distinct txn_id) = 1[-7,1,0]  𝄀
