@@ -80,5 +80,15 @@ select statement_digest_text('SELECT 1; SELECT 2');
 Could not parse argument to digest function: "SQL parser error: syntax error, or too many sql to parse".
 select statement_digest_text('SELECT ?');
 Could not parse argument to digest function: "SQL parser error: parameter markers are not permitted".
+select statement_digest_text(statement_digest_text('SELECT 1, 2, 3'));
+Could not parse argument to digest function.
+select statement_digest_text(_binary'SELECT 1');
+Could not parse argument to digest function.
+select statement_digest_text(cast('SELECT 1' as binary));
+Could not parse argument to digest function.
+create table statement_digest_text_generated (
+    g text generated always as (statement_digest_text('SELECT 1')) stored
+);
+invalid input: expression of generated column cannot refer to a non-deterministic function 'statement_digest_text'
 drop table statement_digest_text_input;
 drop database statement_digest_text_test;
