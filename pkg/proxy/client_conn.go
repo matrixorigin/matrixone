@@ -63,6 +63,7 @@ func (c *clientInfo) parse(full string) error {
 	}
 	c.labelInfo.Tenant = Tenant(tenant.GetTenant())
 	c.username = tenant.GetUser()
+	c.role = tenant.GetDefaultRole()
 
 	// For label part.
 	if len(labelPart) > 0 {
@@ -399,6 +400,23 @@ func (c *clientConn) GetCapability() uint32 {
 	return c.mysqlProto.GetCapability()
 }
 
+func (c *clientConn) cacheReuseIdentity() cacheReuseIdentity {
+	if c == nil {
+		return cacheReuseIdentity{}
+	}
+	identity := cacheReuseIdentity{
+		tenant:   c.clientInfo.Tenant,
+		username: c.clientInfo.username,
+		role:     c.clientInfo.role,
+		originIP: c.clientInfo.originIP.String(),
+	}
+	if c.mysqlProto != nil {
+		identity.capability = c.mysqlProto.GetCapability()
+		identity.collationID = c.mysqlProto.GetCollationID()
+	}
+	return identity
+}
+
 // RawConn implements the ClientConn interface.
 func (c *clientConn) RawConn() net.Conn {
 	if c != nil {
@@ -550,6 +568,12 @@ func (c *clientConn) HandleEvent(ctx context.Context, e IEvent, resp chan<- []by
 		return c.handleKill(ctx, ev, resp)
 	case *setVarEvent:
 		return c.handleSetVar(ev)
+	case *identityChangeEvent:
+		if c.tun != nil {
+			c.tun.markCacheIdentityChanged()
+		}
+		ev.notify()
+		return nil
 	case *quitEvent:
 		if c.tun != nil {
 			c.tun.markExpectedCacheQuit()
@@ -876,13 +900,23 @@ func (c *clientConn) handleQuitEventInternal(ctx context.Context, waitClientPipe
 		}
 		// PING only fences completed CLOSE commands. Recheck all state before
 		// handing the backend to ResetSession and the next tunnel generation.
-		if c.tun.hasUnsafeClientState() {
+		if c.tun.hasCacheIdentityChanged() || c.tun.hasUnsafeClientState() {
+			if c.tun.hasCacheIdentityChanged() && c.counterSet != nil {
+				c.counterSet.connCacheIdentityChangedDiscard.Add(1)
+			}
 			discardBackend()
 			return
 		}
 		// c2s is terminal and s2c is paused, so no pipe from the originating
 		// generation can issue a command or consume a reset response after Push.
-		if !c.connCache.Push(c.clientInfo.hash, c.sc) {
+		cached := false
+		if identityCache, ok := c.connCache.(identityConnCache); ok {
+			cached = identityCache.PushWithIdentity(
+				c.clientInfo.hash, c.sc, c.cacheReuseIdentity())
+		} else {
+			cached = c.connCache.Push(c.clientInfo.hash, c.sc)
+		}
+		if !cached {
 			discardBackend()
 		} else {
 			if c.counterSet != nil {
@@ -1029,7 +1063,19 @@ func (c *clientConn) connectToBackendContext(
 		if _, pluginMode := c.router.(*pluginRouter); pluginMode {
 			goto skipConnCache
 		}
-		if contextual, ok := c.connCache.(contextConnCache); ok {
+		if contextual, ok := c.connCache.(identityContextConnCache); ok {
+			cacheCtx, cancel := context.WithTimeout(ctx, defaultTransferTimeout)
+			sc = contextual.PopContextWithIdentity(
+				cacheCtx,
+				c.clientInfo.hash,
+				c.connID,
+				c.mysqlProto.GetSalt(),
+				c.mysqlProto.GetAuthResponse(),
+				c.clientInfo,
+				c.cacheReuseIdentity(),
+			)
+			cancel()
+		} else if contextual, ok := c.connCache.(contextConnCache); ok {
 			cacheCtx, cancel := context.WithTimeout(ctx, defaultTransferTimeout)
 			sc = contextual.PopContext(
 				cacheCtx,
@@ -1040,6 +1086,15 @@ func (c *clientConn) connectToBackendContext(
 				c.clientInfo,
 			)
 			cancel()
+		} else if identityCache, ok := c.connCache.(identityConnCache); ok {
+			sc = identityCache.PopWithIdentity(
+				c.clientInfo.hash,
+				c.connID,
+				c.mysqlProto.GetSalt(),
+				c.mysqlProto.GetAuthResponse(),
+				c.clientInfo,
+				c.cacheReuseIdentity(),
+			)
 		} else {
 			sc = c.connCache.Pop(
 				c.clientInfo.hash,

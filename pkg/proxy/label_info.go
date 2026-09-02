@@ -42,6 +42,9 @@ type clientInfo struct {
 	labelInfo
 	// username of the client, unique under each tenant
 	username string
+	// role is the role supplied in the login identity. An empty role means that
+	// the server resolves the user's implicit default role.
+	role string
 	// originIP that client used to communicate with server
 	originIP net.IP
 	// originPort is the origin port of client.

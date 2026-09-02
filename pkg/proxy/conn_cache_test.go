@@ -403,6 +403,93 @@ func TestConnCache(t *testing.T) {
 	})
 }
 
+func TestConnCacheRejectsDifferentPrincipal(t *testing.T) {
+	runTestWithNewConnCacheWithAuthConstructor(t, nil, func(cc ConnCache) {
+		c1, _ := net.Pipe()
+		backend := newMockServerConn(c1)
+		backend.setCN(&CNServer{uuid: "cn-1"})
+		identity := cacheReuseIdentity{
+			tenant:      "tenant-a",
+			username:    "cached-user",
+			role:        "role-a",
+			originIP:    "127.0.0.1",
+			capability:  frontend.CLIENT_PROTOCOL_41,
+			collationID: 45,
+		}
+		identityCache := cc.(identityConnCache)
+		require.True(t, identityCache.PushWithIdentity("tenant-a", backend, identity))
+
+		client := clientInfo{labelInfo: labelInfo{Tenant: "tenant-a"}, username: "other-user"}
+		require.Nil(t, identityCache.PopWithIdentity(
+			"tenant-a", 1, nil, nil, client,
+			cacheReuseIdentity{
+				tenant:      "tenant-a",
+				username:    client.username,
+				role:        "role-a",
+				originIP:    "127.0.0.1",
+				capability:  frontend.CLIENT_PROTOCOL_41,
+				collationID: 45,
+			},
+		))
+		require.Equal(t, 1, cc.Count())
+	})
+}
+
+func TestConnCacheSelectsCompatibleGenerationWithinBucket(t *testing.T) {
+	runTestWithNewConnCacheWithAuthConstructor(t, nil, func(cc ConnCache) {
+		identityCache := cc.(identityConnCache)
+		firstLocal, firstPeer := net.Pipe()
+		defer firstPeer.Close()
+		secondLocal, secondPeer := net.Pipe()
+		defer secondPeer.Close()
+		first := newMockServerConn(firstLocal)
+		second := newMockServerConn(secondLocal)
+		firstIdentity := cacheReuseIdentity{
+			tenant:      "tenant-a",
+			username:    "first",
+			role:        "role-a",
+			originIP:    "127.0.0.1",
+			capability:  frontend.CLIENT_PROTOCOL_41,
+			collationID: 45,
+		}
+		secondIdentity := firstIdentity
+		secondIdentity.username = "second"
+		require.True(t, identityCache.PushWithIdentity("tenant-a", first, firstIdentity))
+		require.True(t, identityCache.PushWithIdentity("tenant-a", second, secondIdentity))
+
+		reused := identityCache.PopWithIdentity(
+			"tenant-a", 2, nil, nil,
+			clientInfo{labelInfo: labelInfo{Tenant: "tenant-a"}, username: "second"},
+			secondIdentity,
+		)
+		require.Same(t, second, reused)
+		require.Equal(t, 1, cc.Count())
+
+		incompatible := firstIdentity
+		incompatible.capability++
+		require.Nil(t, identityCache.PopWithIdentity(
+			"tenant-a", 3, nil, nil,
+			clientInfo{labelInfo: labelInfo{Tenant: "tenant-a"}, username: "first"},
+			incompatible,
+		))
+		require.Equal(t, 1, cc.Count())
+		incompatible = firstIdentity
+		incompatible.collationID++
+		require.Nil(t, identityCache.PopWithIdentity(
+			"tenant-a", 3, nil, nil,
+			clientInfo{labelInfo: labelInfo{Tenant: "tenant-a"}, username: "first"},
+			incompatible,
+		))
+		require.Equal(t, 1, cc.Count())
+
+		require.Same(t, first, identityCache.PopWithIdentity(
+			"tenant-a", 4, nil, nil,
+			clientInfo{labelInfo: labelInfo{Tenant: "tenant-a"}, username: "first"},
+			firstIdentity,
+		))
+	})
+}
+
 func TestConnCachePopClearsReadDeadlineAfterConnectionID(t *testing.T) {
 	runTestWithNewConnCacheWithAuthConstructor(t, nil, func(cc ConnCache) {
 		local, remote := net.Pipe()
@@ -723,7 +810,8 @@ func TestPreparedShortConnectionQuitPublishesReusableBackend(t *testing.T) {
 
 		// Pop is the next client's login/SET CONNECTION ID boundary. The same
 		// backend must remain usable for a prepared statement and a query.
-		reused := cache.Pop("tenant-a", 99, nil, nil, clientInfo{})
+		reused := cache.(identityConnCache).PopWithIdentity(
+			"tenant-a", 99, nil, nil, clientInfo{}, client.cacheReuseIdentity())
 		require.Same(t, backend, reused)
 		ok, err := reused.ExecStmt(internalStmt{cmdType: cmdQuery, s: "prepare p from 'select 1'"}, nil)
 		require.NoError(t, err)

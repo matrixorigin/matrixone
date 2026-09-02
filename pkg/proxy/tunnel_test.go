@@ -1730,6 +1730,25 @@ func TestTunnelRequestBoundaryTracker(t *testing.T) {
 	})
 }
 
+func TestTunnelIdentityChangeDisablesCachePublication(t *testing.T) {
+	tun := &tunnel{}
+	packet := make([]byte, mysqlHeadLen+1)
+	packet[0] = 1
+	packet[4] = byte(frontend.COM_CHANGE_USER)
+	tun.trackClientRequest(packet)
+	require.True(t, tun.hasCacheIdentityChanged())
+
+	e, handled := makeEvent(makeSimplePacket("set role analyst"), nil)
+	require.IsType(t, &identityChangeEvent{}, e)
+	require.False(t, handled)
+	cc := &clientConn{tun: tun}
+	eventDone := make(chan error, 1)
+	go func() { eventDone <- cc.HandleEvent(context.Background(), e, nil) }()
+	e.wait()
+	require.NoError(t, <-eventDone)
+	require.True(t, tun.hasCacheIdentityChanged())
+}
+
 func TestTunnelTransferAfterStmtLongDataIsClosed(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()

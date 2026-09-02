@@ -37,6 +37,8 @@ func (t eventType) String() string {
 		return "Quit"
 	case TypeUpgrade:
 		return "Upgrade"
+	case TypeIdentityChange:
+		return "IdentityChange"
 	}
 	return "Unknown"
 }
@@ -50,6 +52,9 @@ const (
 	TypeQuit eventType = 3
 	// TypeUpgrade indicates the "upgrade account all" statement.
 	TypeUpgrade eventType = 4
+	// TypeIdentityChange indicates a statement that changes the authenticated
+	// principal of the backend session and therefore disables cache publication.
+	TypeIdentityChange eventType = 5
 )
 
 // IEvent is the event interface.
@@ -111,6 +116,10 @@ func makeEvent(msg []byte, b *msgBuf) (IEvent, bool) {
 		case *tree.SetVar:
 			// This event should be sent to dst, so return false,
 			return makeSetVarEvent(sql, s), false
+		case *tree.SetRole:
+			// SET ROLE is forwarded to CN, but the resulting role is not part of
+			// the original handshake and cannot be reconstructed by ResetSession.
+			return makeIdentityChangeEvent(), false
 		case *tree.UpgradeStatement:
 			return makeUpgradeEvent(sql), true
 		default:
@@ -123,6 +132,18 @@ func makeEvent(msg []byte, b *msgBuf) (IEvent, bool) {
 		return makeQuitEvent(), true
 	}
 	return nil, false
+}
+
+type identityChangeEvent struct {
+	baseEvent
+}
+
+func makeIdentityChangeEvent() IEvent {
+	e := &identityChangeEvent{
+		baseEvent: baseEvent{waitC: make(chan struct{})},
+	}
+	e.typ = TypeIdentityChange
+	return e
 }
 
 // killEvent is the event that "kill query" or "kill connection" statement is captured.

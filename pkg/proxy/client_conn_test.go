@@ -496,6 +496,9 @@ func TestClientConn_HandleQuitEventRequiresCleanResponseBoundary(t *testing.T) {
 			tun.trackClientRequest(makeStmtCommandPacket(
 				frontend.COM_STMT_SEND_LONG_DATA, 1, 0, 0, 'x'))
 		}},
+		{name: "changed session identity", makeUnsafe: func(tun *tunnel) {
+			tun.markCacheIdentityChanged()
+		}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			tun := &tunnel{}
@@ -789,6 +792,7 @@ func TestAccountParser(t *testing.T) {
 		str      string
 		tenant   string
 		username string
+		role     string
 		hasErr   bool
 	}{
 		{
@@ -827,6 +831,13 @@ func TestAccountParser(t *testing.T) {
 			username: "u1",
 			hasErr:   false,
 		},
+		{
+			str:      "t1:u1:role1",
+			tenant:   "t1",
+			username: "u1",
+			role:     "role1",
+			hasErr:   false,
+		},
 	}
 	for _, item := range cases {
 		a := clientInfo{}
@@ -838,6 +849,7 @@ func TestAccountParser(t *testing.T) {
 		}
 		require.Equal(t, string(a.labelInfo.Tenant), item.tenant)
 		require.Equal(t, a.username, item.username)
+		require.Equal(t, a.role, item.role)
 	}
 }
 

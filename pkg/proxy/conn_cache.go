@@ -60,8 +60,20 @@ type EntryOperation interface {
 	peek(store *cacheStore) *serverConnAuth
 }
 
+// compatibleEntryOperation is an internal extension used by the production
+// cache. Keeping it separate preserves the existing EntryOperation contract
+// for in-package strategies and test doubles.
+type compatibleEntryOperation interface {
+	EntryOperation
+	// popCompatible removes the oldest entry with the same immutable client and
+	// protocol identity as identity. The cache lock is held by the caller.
+	popCompatible(store *cacheStore, identity cacheReuseIdentity, postPop func()) *serverConnAuth
+}
+
 // entryOpFIFO is the first-in-first-out operator of the connection entry.
 type entryOpFIFO struct{}
+
+var _ compatibleEntryOperation = (*entryOpFIFO)(nil)
 
 // push implements the EntryOperation interface.
 func (o *entryOpFIFO) push(store *cacheStore, conn *serverConnAuth, postPush func()) {
@@ -85,6 +97,32 @@ func (o *entryOpFIFO) pop(store *cacheStore, postPop func()) *serverConnAuth {
 		postPop()
 	}
 	return sc
+}
+
+// popCompatible implements the FIFO operator while retaining entries that
+// belong to another client identity. A bucket is bounded by the per-tenant
+// cache limit, so this scan cannot grow with the number of client connections.
+func (o *entryOpFIFO) popCompatible(
+	store *cacheStore,
+	identity cacheReuseIdentity,
+	postPop func(),
+) *serverConnAuth {
+	if store == nil {
+		return nil
+	}
+	for i, sc := range store.connections {
+		if sc == nil || sc.identity != identity {
+			continue
+		}
+		copy(store.connections[i:], store.connections[i+1:])
+		store.connections[len(store.connections)-1] = nil
+		store.connections = store.connections[:len(store.connections)-1]
+		if postPop != nil {
+			postPop()
+		}
+		return sc
+	}
+	return nil
 }
 
 // peek implements the EntryOperation interface.
@@ -133,7 +171,21 @@ func (a *pwdAuthenticator) Authenticate(salt, authResp []byte) bool {
 type serverConnAuth struct {
 	ServerConn
 	Authenticator
+	identity  cacheReuseIdentity
 	closeOnce sync.Once
+}
+
+// cacheReuseIdentity describes state that is fixed by the client handshake or
+// by a session command that makes the backend generation unsafe to cache.
+// Database and password material are deliberately excluded: ResetSession and
+// the normal login authentication path handle those independently.
+type cacheReuseIdentity struct {
+	tenant      Tenant
+	username    string
+	role        string
+	originIP    string
+	capability  uint32
+	collationID int
 }
 
 // newServerConnAuth creates a new server connection entry with authenticator.
@@ -200,6 +252,26 @@ type contextConnCache interface {
 	PopContext(context.Context, cacheKey, uint32, []byte, []byte, clientInfo) ServerConn
 }
 
+// identityConnCache is implemented by the production cache. The legacy
+// ConnCache methods remain available to lightweight internal callers and test
+// doubles; client connections use these methods whenever the cache supports
+// identity-aware reuse.
+type identityConnCache interface {
+	PushWithIdentity(cacheKey, ServerConn, cacheReuseIdentity) bool
+	PopWithIdentity(cacheKey, uint32, []byte, []byte, clientInfo, cacheReuseIdentity) ServerConn
+}
+
+type identityContextConnCache interface {
+	PopContextWithIdentity(context.Context, cacheKey, uint32, []byte, []byte, clientInfo, cacheReuseIdentity) ServerConn
+}
+
+var (
+	_ ConnCache                = (*connCache)(nil)
+	_ contextConnCache         = (*connCache)(nil)
+	_ identityConnCache        = (*connCache)(nil)
+	_ identityContextConnCache = (*connCache)(nil)
+)
+
 // the main cache struct.
 type connCache struct {
 	ctx    context.Context
@@ -235,6 +307,9 @@ type connCache struct {
 	// for a fresh client login. If it returns false, the cached connection is
 	// discarded before any SET CONNECTION ID or auth work is attempted.
 	canReuseCN func(*CNServer, clientInfo) bool
+	// counterSet counts cache identity compatibility outcomes. It is optional
+	// for standalone cache tests.
+	counterSet *counterSet
 }
 
 // connCacheOption is the option for connCache.
@@ -292,6 +367,12 @@ func withQueryClient(qc client.QueryClient) connCacheOption {
 func withCanReuseCN(f func(*CNServer, clientInfo) bool) connCacheOption {
 	return func(c *connCache) {
 		c.canReuseCN = f
+	}
+}
+
+func withCounterSet(cs *counterSet) connCacheOption {
+	return func(c *connCache) {
+		c.counterSet = cs
 	}
 }
 
@@ -368,6 +449,16 @@ func (c *connCache) canPushLocked(key cacheKey, sc ServerConn) bool {
 
 // Push implements the ConnCache interface.
 func (c *connCache) Push(key cacheKey, sc ServerConn) bool {
+	return c.PushWithIdentity(key, sc, cacheReuseIdentity{})
+}
+
+// PushWithIdentity publishes a backend together with the immutable client and
+// protocol identity that made the generation safe to reuse.
+func (c *connCache) PushWithIdentity(
+	key cacheKey,
+	sc ServerConn,
+	identity cacheReuseIdentity,
+) bool {
 	c.mu.Lock()
 	if !c.canPushLocked(key, sc) {
 		c.mu.Unlock()
@@ -389,6 +480,7 @@ func (c *connCache) Push(key cacheKey, sc ServerConn) bool {
 	} else {
 		scWithAuth = newServerConnAuth(sc, nil)
 	}
+	scWithAuth.identity = identity
 
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -429,7 +521,7 @@ func (c *connCache) Pop(
 ) ServerConn {
 	ctx, cancel := context.WithTimeout(context.Background(), defaultTransferTimeout)
 	defer cancel()
-	return c.PopContext(ctx, key, connID, salt, authResp, client)
+	return c.PopContextWithIdentity(ctx, key, connID, salt, authResp, client, cacheReuseIdentity{})
 }
 
 func (c *connCache) PopContext(
@@ -439,6 +531,34 @@ func (c *connCache) PopContext(
 	salt []byte,
 	authResp []byte,
 	client clientInfo,
+) ServerConn {
+	return c.PopContextWithIdentity(ctx, key, connID, salt, authResp, client, cacheReuseIdentity{})
+}
+
+// PopWithIdentity implements identity-aware reuse for callers that do not
+// carry a context. It preserves the historical timeout and cancellation
+// behavior of Pop.
+func (c *connCache) PopWithIdentity(
+	key cacheKey,
+	connID uint32,
+	salt []byte,
+	authResp []byte,
+	client clientInfo,
+	identity cacheReuseIdentity,
+) ServerConn {
+	ctx, cancel := context.WithTimeout(context.Background(), defaultTransferTimeout)
+	defer cancel()
+	return c.PopContextWithIdentity(ctx, key, connID, salt, authResp, client, identity)
+}
+
+func (c *connCache) PopContextWithIdentity(
+	ctx context.Context,
+	key cacheKey,
+	connID uint32,
+	salt []byte,
+	authResp []byte,
+	client clientInfo,
+	identity cacheReuseIdentity,
 ) ServerConn {
 	if ctx == nil {
 		ctx = context.Background()
@@ -456,10 +576,23 @@ func (c *connCache) PopContext(
 			return nil
 		}
 		store := c.mu.cache[key]
-		sc := connOperator[c.opStrategy].pop(store, nil)
+		hadEntries := store != nil && store.count() > 0
+		operator := connOperator[c.opStrategy]
+		compatible, ok := operator.(compatibleEntryOperation)
+		if !ok {
+			c.mu.Unlock()
+			return nil
+		}
+		sc := compatible.popCompatible(store, identity, nil)
 		c.mu.Unlock()
 		if sc == nil {
+			if hadEntries && c.counterSet != nil {
+				c.counterSet.connCacheCompatibilityMiss.Add(1)
+			}
 			return nil
+		}
+		if c.counterSet != nil {
+			c.counterSet.connCacheCompatibilityHit.Add(1)
 		}
 
 		// Push is initiated by the originating tunnel's event handler. The cache
