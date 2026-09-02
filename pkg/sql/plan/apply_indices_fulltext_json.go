@@ -28,6 +28,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/indexplugin/coverage"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	veccache "github.com/matrixorigin/matrixone/pkg/vectorindex/cache"
 )
 
 // Turning a json_extract comparison into a fulltext2 index probe.
@@ -356,10 +357,15 @@ func (builder *QueryBuilder) addJSONFulltextProbes(scanNode *plan.Node) {
 // predicate ever ran. That is a wrong answer, not a stale score.
 //
 // For an async index the algorithm is asked, through the optional coverage
-// capability, whether its durable state has reached this query's read snapshot.
-// Everything here FAILS CLOSED: no plugin capability, no process, no
-// transaction, a lookup error, or a watermark behind the snapshot all decline
-// the probe and leave the query to the retained predicate alone.
+// capability, whether its durable state has reached this query's read snapshot --
+// but relaxed by asyncCoverageStaleness (see asyncCoverageBar). A strict
+// "watermark >= now" is unreachable for an always-async index and pointless to
+// demand, because the probe reads the index through a cache that already serves
+// entries that stale; so we accept a watermark within that same window and the
+// probe becomes eventually consistent instead of dead for every current read
+// (#27926). Everything else still FAILS CLOSED: no plugin capability, no process,
+// no transaction, a lookup error, or a job that is not being kept current all
+// decline the probe and leave the query to the retained predicate alone.
 func (builder *QueryBuilder) indexCoversSnapshot(scanNode *plan.Node, idx *plan.IndexDef) bool {
 	algo := catalog.ToLower(idx.IndexAlgo)
 	if !indexplugin.AlwaysAsync(algo, idx.IndexAlgoParams) {
@@ -381,7 +387,7 @@ func (builder *QueryBuilder) indexCoversSnapshot(scanNode *plan.Node, idx *plan.
 		Txn:      txn,
 		TableID:  scanNode.TableDef.TblId,
 		IndexDef: idx,
-		Snapshot: types.TimestampToTS(txn.SnapshotTS()),
+		Snapshot: asyncCoverageBar(types.TimestampToTS(txn.SnapshotTS())),
 	})
 	if err != nil {
 		// a freshness check that cannot answer is not a query error; it just
@@ -390,6 +396,45 @@ func (builder *QueryBuilder) indexCoversSnapshot(scanNode *plan.Node, idx *plan.
 		return false
 	}
 	return covered
+}
+
+// asyncCoverageStaleness is how far an async index's watermark may trail the read
+// snapshot and still be treated as covering it.
+//
+// A strict bar (watermark >= now) can essentially never hold for an always-async
+// index: the ISCP watermark chases the wall clock with a built-in lag (a ~10s
+// scheduler tick plus a ~5s index-job flush) and even advances on an idle table,
+// so it always trails "now" and "now" never stays covered -- which is why the
+// json probe was unreachable for current reads (#27926). Demanding that freshness
+// is also pointless, because the probe does not read the durable index directly:
+// it reads a per-CN VectorIndexCache copy that is itself served up to its
+// cross-CN freshness window stale. Requiring coverage fresher than the cache can
+// ever deliver only disables the probe with no correctness benefit.
+//
+// So we accept an index whose watermark is within that same envelope --
+// 2*VectorIndexCacheTTL, the cache's own ~10-minute cross-CN freshness bound. The
+// probe then becomes eventually consistent within a window MO already tolerates
+// for every other async index, rather than dead for all current reads. It stays
+// safe: the retained json_extract predicate re-checks every candidate the probe
+// returns, so a returned row is never wrong; the probe may only omit a row
+// written inside the window -- exactly what the cached read path can already do.
+// A genuinely broken/stuck job (watermark further behind than the window) still
+// declines, so the index is not trusted when it is truly stale.
+//
+// A var, not a const: VectorIndexCacheTTL is itself a package var (tunable), so
+// this tracks it rather than freezing a copy.
+var asyncCoverageStaleness = 2 * veccache.VectorIndexCacheTTL
+
+// asyncCoverageBar lowers a read snapshot by asyncCoverageStaleness, producing the
+// timestamp the watermark must reach for the index to count as covering. Underflow
+// (a snapshot older than the window, e.g. tiny synthetic timestamps in tests)
+// clamps to the original TS, preserving the strict check there.
+func asyncCoverageBar(ts types.TS) types.TS {
+	p := ts.Physical() - int64(asyncCoverageStaleness)
+	if p <= 0 || p >= ts.Physical() {
+		return ts
+	}
+	return types.BuildTS(p, ts.Logical())
 }
 
 // findJSONTupleIndex returns the fulltext2 index over exactly colPos whose
