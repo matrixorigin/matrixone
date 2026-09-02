@@ -42,7 +42,7 @@ const (
 // producer step and one SINK_SCAN per consumer. All uncertain shapes keep the
 // historical inline behavior.
 func (builder *QueryBuilder) reuseMultiReferenceCTEs(rootID int32) int32 {
-	if builder.isForUpdate {
+	if builder.isForUpdate || builder.sharedComputationDisabled() {
 		return rootID
 	}
 

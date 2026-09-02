@@ -31,11 +31,17 @@ func useLegacyGroupingSetPlan(t *testing.T, mock *MockOptimizer) {
 	proc := mock.CurrentContext().GetProcess()
 	rt := moruntime.ServiceRuntime(proc.GetService())
 	oldVersion, hadVersion := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
+	oldHints, hadHints := rt.GetGlobalVariables("optimizer_hints")
 	t.Cleanup(func() {
 		if hadVersion {
 			rt.SetGlobalVariables(moruntime.MOProtocolVersion, oldVersion)
 		} else {
 			rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCLatestVersion)
+		}
+		if hadHints {
+			rt.SetGlobalVariables("optimizer_hints", oldHints)
+		} else {
+			rt.SetGlobalVariables("optimizer_hints", "")
 		}
 	})
 	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion42)
@@ -80,6 +86,12 @@ func TestGroupingSetInputSharingProtocolGate(t *testing.T) {
 	require.Equal(t, 1, shared.aggregatesOnExpand)
 	require.Equal(t, 3, shared.sinkScans)
 	require.Equal(t, []bool{true, true, true, false, false, false}, shared.flags)
+	require.True(t, shared.hasEmptyRowMarker)
+
+	rt.SetGlobalVariables("optimizer_hints", "sharedComputation=1")
+	rolledBack := reachableGroupingSetShape(build(defines.MORPCVersion43))
+	require.Equal(t, 3, rolledBack.tableScans)
+	require.Zero(t, rolledBack.expandProjects)
 }
 
 func TestRewriteGroupingSetExprPreservesSQLBitOrder(t *testing.T) {
@@ -130,6 +142,7 @@ type groupingSetShape struct {
 	aggregatesOnExpand int
 	sinkScans          int
 	flags              []bool
+	hasEmptyRowMarker  bool
 }
 
 func reachableGroupingSetShape(query *planpb.Query) groupingSetShape {
@@ -158,6 +171,12 @@ func reachableGroupingSetShape(query *planpb.Query) groupingSetShape {
 			if _, ok := DecodeGroupingSetExpandOption(node.ExtraOptions); ok {
 				shape.expandProjects++
 				shape.flags = append([]bool(nil), node.GroupingFlag...)
+				if len(node.ProjectList) >= 2 {
+					marker := node.ProjectList[len(node.ProjectList)-2]
+					setID := node.ProjectList[len(node.ProjectList)-1]
+					shape.hasEmptyRowMarker = types.T(marker.Typ.Id) == types.T_bool &&
+						types.T(setID.Typ.Id) == types.T_int64
+				}
 			}
 		}
 		for _, childID := range node.Children {

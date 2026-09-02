@@ -2790,12 +2790,18 @@ func (builder *QueryBuilder) remapAllColRefsForConsumer(
 
 	case plan.Node_PROJECT, plan.Node_MATERIAL:
 		projectTag := node.BindingTags[0]
+		_, groupingSetExpand := DecodeGroupingSetExpandOption(node.ExtraOptions)
 
 		var neededProj []int32
 
 		for i, expr := range node.ProjectList {
 			globalRef := [2]int32{projectTag, int32(i)}
-			if colRefCnt[globalRef] == 0 {
+			// A grouping-set expansion PROJECT has positional execution metadata:
+			// its penultimate column marks synthetic empty-input rows and is
+			// consumed directly by Group rather than by a plan expression. Keep
+			// the complete row image so column pruning cannot remove or relocate
+			// that marker (or the trailing set id).
+			if !groupingSetExpand && colRefCnt[globalRef] == 0 {
 				continue
 			}
 
