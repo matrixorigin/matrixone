@@ -142,10 +142,12 @@ type applyBatchInfo struct {
 	baseTable              string
 	deleteTable            string
 	insertTable            string
+	updateTable            string
 	deleteKeyNames         []string
 	deleteStageNames       []string
 	deleteKeyTypes         []types.Type
 	writableNames          []string
+	updateValueIdxes       []int
 	disableInsertStage     bool
 	insertRowsIndividually bool
 }
@@ -245,6 +247,9 @@ func newApplyBatchInfo(
 	for i, idx := range writableIdxes {
 		writableNames[i] = tblStuff.def.baseColNames[idx]
 	}
+	updateValueIdxes := make([]int, 0, len(writableIdxes)+len(deleteKeyColIdxes))
+	updateValueIdxes = append(updateValueIdxes, writableIdxes...)
+	updateValueIdxes = append(updateValueIdxes, deleteKeyColIdxes...)
 
 	seq := atomic.AddUint64(&diffTempTableSeq, 1)
 	sessionTag := strings.ReplaceAll(ses.GetUUIDString(), "-", "")
@@ -253,10 +258,12 @@ func newApplyBatchInfo(
 		baseTable:              tblStuff.baseRel.GetTableName(),
 		deleteTable:            fmt.Sprintf("__mo_diff_del_%s_%d", sessionTag, seq),
 		insertTable:            fmt.Sprintf("__mo_diff_ins_%s_%d", sessionTag, seq),
+		updateTable:            fmt.Sprintf("__mo_diff_upd_%s_%d", sessionTag, seq),
 		deleteKeyNames:         deleteKeyNames,
 		deleteStageNames:       deleteStageNames,
 		deleteKeyTypes:         deleteKeyTypes,
 		writableNames:          writableNames,
+		updateValueIdxes:       updateValueIdxes,
 		disableInsertStage:     disableInsertStage,
 		insertRowsIndividually: insertRowsIndividually,
 	}
@@ -340,7 +347,7 @@ func (batchInfo *applyBatchInfo) stagedUpdateSQL(baseTable, updateTable string) 
 	predicates := make([]string, len(batchInfo.deleteKeyNames))
 	for i := range batchInfo.deleteKeyNames {
 		left := fmt.Sprintf("%s.%s", baseAlias, quoteIdentifierForSQL(batchInfo.deleteKeyNames[i]))
-		right := fmt.Sprintf("%s.%s", stageAlias, quoteIdentifierForSQL(batchInfo.deleteKeyNames[i]))
+		right := fmt.Sprintf("%s.%s", stageAlias, quoteIdentifierForSQL(batchInfo.deleteStageNames[i]))
 		predicates[i] = dataBranchSQLKeyEqual(left, right, batchInfo.deleteKeyTypes[i])
 	}
 	return fmt.Sprintf(
@@ -1933,6 +1940,18 @@ func appendDataBranchApplyRowAsSQLValues(
 				return err
 			}
 		}
+	} else if kind == diffUpdate {
+		if appender.batchInfo == nil {
+			return moerr.NewInternalErrorNoCtx("Data Branch update staging is unavailable")
+		}
+		if len(appender.batchInfo.updateValueIdxes) == 0 {
+			return moerr.NewInternalErrorNoCtx("Data Branch update staging has no values")
+		}
+		if err = writeInsertRowValues(
+			ses, tblStuff, row, tmpValsBuffer, appender.batchInfo.updateValueIdxes,
+		); err != nil {
+			return err
+		}
 	} else {
 		insertIdxes := tblStuff.def.writableIdxes
 		if len(tblStuff.def.tarOnlyIdxes) > 0 {
@@ -1969,6 +1988,11 @@ func appendBatchRowsAsSQLValues(
 	}
 	//seenCols := make(map[int]struct{}, len(tblStuff.def.visibleIdxes))
 	row := make([]any, len(tblStuff.def.colNames))
+	extraColIdxes := appender.extraColIdxesForRow(wrapped.kind)
+	stageUpdate := dataBranchStagesUpdate(ctx, tblStuff, appender, directUpdate, wrapped.restoreMissing)
+	if stageUpdate {
+		extraColIdxes = append(extraColIdxes, appender.deleteKeyColIdxes...)
+	}
 
 	for rowIdx := range wrapped.batch.RowCount() {
 		if ctx.Err() != nil {
@@ -1976,14 +2000,14 @@ func appendBatchRowsAsSQLValues(
 		}
 
 		if err = extractDataBranchApplyRow(
-			ctx, ses, tblStuff, wrapped.batch, rowIdx, appender.extraColIdxesForRow(wrapped.kind), row,
+			ctx, ses, tblStuff, wrapped.batch, rowIdx, extraColIdxes, row,
 			"data branch output batch shape mismatch",
 		); err != nil {
 			return
 		}
 		err = appendOrStageDataBranchApplyRow(
 			ctx, ses, tblStuff, wrapped.kind, row, tmpValsBuffer, appender,
-			directUpdate, wrapped.restoreMissing,
+			directUpdate, stageUpdate, wrapped.restoreMissing,
 		)
 		if err != nil {
 			return
@@ -2007,9 +2031,45 @@ func dataBranchDirectUpdateBatch(
 	return true, nil
 }
 
-func dataBranchStagesUpdate(appender sqlValuesAppender, directUpdate, restoreMissing bool) bool {
+func dataBranchStagesUpdate(
+	ctx context.Context,
+	tblStuff tableStuff,
+	appender sqlValuesAppender,
+	directUpdate, restoreMissing bool,
+) bool {
 	return directUpdate && !restoreMissing && appender.batchInfo != nil &&
-		!appender.batchInfo.disableInsertStage && !appender.batchInfo.deleteNeedsExactFloatKeyMatch()
+		!appender.batchInfo.disableInsertStage && !appender.batchInfo.deleteNeedsExactFloatKeyMatch() &&
+		!dataBranchUpdateNeedsDirectSQL(tblStuff, tblStuff.baseRel.GetTableDef(ctx))
+}
+
+// dataBranchUpdateNeedsDirectSQL identifies types that MatrixOne cannot apply
+// through a multi-table UPDATE. SET/ENUM and spatial assignments must use the
+// exact-key single-row UPDATE path; all other real-primary-key updates remain
+// batched in the staged UPDATE JOIN path.
+func dataBranchUpdateNeedsDirectSQL(tblStuff tableStuff, baseDef *plan2.TableDef) bool {
+	writableIdxes := tblStuff.def.writableIdxes
+	if len(tblStuff.def.tarOnlyIdxes) > 0 {
+		writableIdxes = tblStuff.def.commonWritableIdxes
+	}
+	for _, idx := range writableIdxes {
+		if slices.Contains(tblStuff.def.pkColIdxes, idx) {
+			continue
+		}
+		if idx < 0 || idx >= len(tblStuff.def.colTypes) {
+			continue
+		}
+		switch tblStuff.def.colTypes[idx].Oid {
+		case types.T_geometry, types.T_geometry32:
+			return true
+		}
+		if idx < len(tblStuff.def.baseColNames) {
+			baseCol := dataBranchColumnDefByName(baseDef, tblStuff.def.baseColNames[idx])
+			if baseCol != nil && baseCol.Typ.Enumvalues != "" {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func appendOrStageDataBranchApplyRow(
@@ -2020,10 +2080,10 @@ func appendOrStageDataBranchApplyRow(
 	row []any,
 	tmpValsBuffer *bytes.Buffer,
 	appender sqlValuesAppender,
-	directUpdate bool,
+	directUpdate, stageUpdate bool,
 	restoreMissing bool,
 ) error {
-	if dataBranchStagesUpdate(appender, directUpdate, restoreMissing) {
+	if stageUpdate {
 		return appendDataBranchApplyRowAsSQLValues(
 			ctx, ses, tblStuff, diffUpdate, row, tmpValsBuffer, appender,
 		)
@@ -2731,6 +2791,7 @@ func initApplyTables(
 	baseTable := qualifiedTableName(batchInfo.dbName, batchInfo.baseTable)
 	deleteTable := qualifiedTableName(batchInfo.dbName, batchInfo.deleteTable)
 	insertTable := qualifiedTableName(batchInfo.dbName, batchInfo.insertTable)
+	updateTable := qualifiedTableName(batchInfo.dbName, batchInfo.updateTable)
 
 	deleteStageNames := batchInfo.deleteStageNames
 	deleteSelectExprs := make([]string, len(batchInfo.deleteKeyNames))
@@ -2743,6 +2804,18 @@ func initApplyTables(
 	}
 	deleteCols := strings.Join(deleteSelectExprs, ",")
 	insertCols := joinQuotedColumnNames(batchInfo.writableNames)
+	updateSelectExprs := make([]string, 0, len(batchInfo.writableNames)+len(batchInfo.deleteKeyNames))
+	for _, name := range batchInfo.writableNames {
+		updateSelectExprs = append(updateSelectExprs, quoteIdentifierForSQL(name))
+	}
+	for i := range batchInfo.deleteKeyNames {
+		updateSelectExprs = append(updateSelectExprs, fmt.Sprintf(
+			"%s as %s",
+			quoteIdentifierForSQL(batchInfo.deleteKeyNames[i]),
+			quoteIdentifierForSQL(batchInfo.deleteStageNames[i]),
+		))
+	}
+	updateCols := strings.Join(updateSelectExprs, ",")
 
 	stmts := []string{
 		fmt.Sprintf("drop table if exists %s", deleteTable),
@@ -2752,6 +2825,8 @@ func initApplyTables(
 		stmts = append(stmts,
 			fmt.Sprintf("drop table if exists %s", insertTable),
 			fmt.Sprintf("create table %s as select %s from %s where 1=0", insertTable, insertCols, baseTable),
+			fmt.Sprintf("drop table if exists %s", updateTable),
+			fmt.Sprintf("create table %s as select %s from %s where 1=0", updateTable, updateCols, baseTable),
 		)
 	}
 
@@ -2771,12 +2846,16 @@ func dropApplyTables(
 
 	deleteTable := qualifiedTableName(batchInfo.dbName, batchInfo.deleteTable)
 	insertTable := qualifiedTableName(batchInfo.dbName, batchInfo.insertTable)
+	updateTable := qualifiedTableName(batchInfo.dbName, batchInfo.updateTable)
 
 	stmts := []string{
 		fmt.Sprintf("drop table if exists %s", deleteTable),
 	}
 	if !batchInfo.disableInsertStage {
-		stmts = append(stmts, fmt.Sprintf("drop table if exists %s", insertTable))
+		stmts = append(stmts,
+			fmt.Sprintf("drop table if exists %s", insertTable),
+			fmt.Sprintf("drop table if exists %s", updateTable),
+		)
 	}
 	return execSQLStatements(ctx, ses, bh, writeFile, stmts)
 }
@@ -2800,7 +2879,7 @@ func flushStagedUpdateValues(
 	}
 
 	baseTable := qualifiedTableName(batchInfo.dbName, batchInfo.baseTable)
-	updateTable := qualifiedTableName(batchInfo.dbName, batchInfo.insertTable)
+	updateTable := qualifiedTableName(batchInfo.dbName, batchInfo.updateTable)
 	insertStmt := fmt.Sprintf("insert into %s values %s", updateTable, values)
 	updateStmt, err := batchInfo.stagedUpdateSQL(baseTable, updateTable)
 	if err != nil {

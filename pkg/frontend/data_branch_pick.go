@@ -350,16 +350,21 @@ func appendPickedBatchRows(
 		if rowDirectUpdate && wrapped.kind == diffDelete {
 			continue
 		}
+		stageUpdate := dataBranchStagesUpdate(ctx, tblStuff, appender, rowDirectUpdate, wrapped.restoreMissing)
+		extraColIdxes := appender.extraColIdxesForRow(wrapped.kind)
+		if stageUpdate {
+			extraColIdxes = append(extraColIdxes, appender.deleteKeyColIdxes...)
+		}
 
 		if err = extractDataBranchApplyRow(
-			ctx, ses, tblStuff, wrapped.batch, rowIdx, appender.extraColIdxesForRow(wrapped.kind), row,
+			ctx, ses, tblStuff, wrapped.batch, rowIdx, extraColIdxes, row,
 			"data branch pick batch shape mismatch",
 		); err != nil {
 			return
 		}
 		if err = appendOrStageDataBranchApplyRow(
 			ctx, ses, tblStuff, wrapped.kind, row, tmpValsBuffer, appender,
-			rowDirectUpdate, wrapped.restoreMissing,
+			rowDirectUpdate, stageUpdate, wrapped.restoreMissing,
 		); err != nil {
 			return
 		}

@@ -218,7 +218,49 @@ func TestDataBranchDiffAsFile(t *testing.T) {
 			t.Run("stage_round_trip", func(t *testing.T) {
 				runDiffOutputToStage(t, ctx, sqlDB, dbName)
 			})
+			t.Run("update_apply_special_columns", func(t *testing.T) {
+				runDataBranchUpdateApplySpecialColumns(t, ctx, sqlDB)
+			})
 		})
+}
+
+func runDataBranchUpdateApplySpecialColumns(t *testing.T, ctx context.Context, db *sql.DB) {
+	t.Helper()
+
+	t.Run("generated_primary_key", func(t *testing.T) {
+		execSQLDB(t, ctx, db, "create table update_generated_base (a int, b int generated always as (a * 2) stored, payload int, primary key (b))")
+		execSQLDB(t, ctx, db, "insert into update_generated_base(a, payload) values (1, 10)")
+		execSQLDB(t, ctx, db, "data branch create table update_generated_branch from update_generated_base")
+		execSQLDB(t, ctx, db, "update update_generated_branch set payload = 11 where b = 2")
+		execSQLDB(t, ctx, db, "data branch merge update_generated_branch into update_generated_base when conflict accept")
+		require.Equal(t, [][]string{{"1", "2", "11"}}, queryStringRows(t, ctx, db, "select a, b, payload from update_generated_base"))
+
+		execSQLDB(t, ctx, db, "create table update_generated_pick_base (a int, b int generated always as (a * 2) stored, payload int, primary key (b))")
+		execSQLDB(t, ctx, db, "insert into update_generated_pick_base(a, payload) values (1, 10)")
+		execSQLDB(t, ctx, db, "data branch create table update_generated_pick_src from update_generated_pick_base")
+		execSQLDB(t, ctx, db, "data branch create table update_generated_pick_dst from update_generated_pick_base")
+		execSQLDB(t, ctx, db, "update update_generated_pick_src set payload = 11 where b = 2")
+		execSQLDB(t, ctx, db, "data branch pick update_generated_pick_src into update_generated_pick_dst keys(2) when conflict accept")
+		require.Equal(t, [][]string{{"1", "2", "11"}}, queryStringRows(t, ctx, db, "select a, b, payload from update_generated_pick_dst"))
+	})
+
+	t.Run("set", func(t *testing.T) {
+		execSQLDB(t, ctx, db, "create table update_set_base (id int primary key, v set('a','b','c'))")
+		execSQLDB(t, ctx, db, "insert into update_set_base values (1, 'a')")
+		execSQLDB(t, ctx, db, "data branch create table update_set_branch from update_set_base")
+		execSQLDB(t, ctx, db, "update update_set_branch set v = 'b,c' where id = 1")
+		execSQLDB(t, ctx, db, "data branch merge update_set_branch into update_set_base when conflict accept")
+		require.Equal(t, [][]string{{"1", "b,c"}}, queryStringRows(t, ctx, db, "select id, cast(v as char) from update_set_base"))
+	})
+
+	t.Run("geometry32", func(t *testing.T) {
+		execSQLDB(t, ctx, db, "create table update_geometry_base (id int primary key, g geometry32)")
+		execSQLDB(t, ctx, db, "insert into update_geometry_base values (1, cast('POINT(1 1)' as geometry32))")
+		execSQLDB(t, ctx, db, "data branch create table update_geometry_branch from update_geometry_base")
+		execSQLDB(t, ctx, db, "update update_geometry_branch set g = cast('POINT(2 2)' as geometry32) where id = 1")
+		execSQLDB(t, ctx, db, "data branch merge update_geometry_branch into update_geometry_base when conflict accept")
+		require.Equal(t, [][]string{{"1", "POINT(2 2)"}}, queryStringRows(t, ctx, db, "select id, st_astext(g) from update_geometry_base"))
+	})
 }
 
 func cleanupTestDatabases(t *testing.T, db *sql.DB, names ...string) {
@@ -931,12 +973,12 @@ func runUpdateSplitDiffAsFile(t *testing.T, parentCtx context.Context, db *sql.D
 	sqlContent := readSQLFile(t, diffPath)
 	lowerContent := strings.ToLower(sqlContent)
 	baseTable := diffSQLTable(dbName, base)
-	require.Contains(t, lowerContent, "update "+baseTable+" as branch_apply_base join")
+	require.Contains(t, lowerContent, "update "+baseTable+" as branch_apply_base join "+diffSQLIdent(dbName)+".`__mo_diff_upd_")
 	require.Contains(t, lowerContent,
-		"on branch_apply_base."+diffSQLIdent("id")+" = branch_apply_stage."+diffSQLIdent("id")+
-			" set branch_apply_base."+diffSQLIdent("score")+" = branch_apply_stage."+diffSQLIdent("score")+
+		"branch_apply_base."+diffSQLIdent("id")+" = branch_apply_stage."+diffSQLIdent("branch_apply_key_0"))
+	require.Contains(t, lowerContent,
+		"set branch_apply_base."+diffSQLIdent("score")+" = branch_apply_stage."+diffSQLIdent("score")+
 			",branch_apply_base."+diffSQLIdent("note")+" = branch_apply_stage."+diffSQLIdent("note"))
-	require.Contains(t, lowerContent, "insert into "+diffSQLIdent(dbName)+".`__mo_diff_ins_")
 	require.NotContains(t, lowerContent, "update "+baseTable+" set")
 	require.NotContains(t, lowerContent, "insert into "+baseTable)
 	require.NotContains(t, lowerContent, "delete from "+baseTable)
@@ -971,11 +1013,12 @@ func runCompositeUpdateSplitDiffAsFile(t *testing.T, parentCtx context.Context, 
 	sqlContent := readSQLFile(t, diffPath)
 	lowerContent := strings.ToLower(sqlContent)
 	baseTable := diffSQLTable(dbName, base)
-	require.Contains(t, lowerContent, "update "+baseTable+" as branch_apply_base join")
+	require.Contains(t, lowerContent, "update "+baseTable+" as branch_apply_base join "+diffSQLIdent(dbName)+".`__mo_diff_upd_")
 	require.Contains(t, lowerContent,
-		"on branch_apply_base."+diffSQLIdent("org_id")+" = branch_apply_stage."+diffSQLIdent("org_id")+
-			" and branch_apply_base."+diffSQLIdent("event_id")+" = branch_apply_stage."+diffSQLIdent("event_id")+
-			" set branch_apply_base."+diffSQLIdent("qty")+" = branch_apply_stage."+diffSQLIdent("qty")+
+		"branch_apply_base."+diffSQLIdent("org_id")+" = branch_apply_stage."+diffSQLIdent("branch_apply_key_0")+
+			" and branch_apply_base."+diffSQLIdent("event_id")+" = branch_apply_stage."+diffSQLIdent("branch_apply_key_1"))
+	require.Contains(t, lowerContent,
+		"set branch_apply_base."+diffSQLIdent("qty")+" = branch_apply_stage."+diffSQLIdent("qty")+
 			",branch_apply_base."+diffSQLIdent("note")+" = branch_apply_stage."+diffSQLIdent("note"))
 	require.NotContains(t, lowerContent, "update "+baseTable+" set")
 	require.Contains(t, lowerContent, "null")
@@ -1075,10 +1118,11 @@ create table %s (
 	sqlContent := readSQLFile(t, diffPath)
 	lowerContent := strings.ToLower(sqlContent)
 	baseTable := diffSQLTable(dbName, base)
-	require.Contains(t, lowerContent, "update "+baseTable+" as branch_apply_base join")
+	require.Contains(t, lowerContent, "update "+baseTable+" as branch_apply_base join "+diffSQLIdent(dbName)+".`__mo_diff_upd_")
 	require.Contains(t, lowerContent,
-		"on branch_apply_base."+diffSQLIdent("id")+" = branch_apply_stage."+diffSQLIdent("id")+
-			" set branch_apply_base."+diffSQLIdent("name")+" = branch_apply_stage."+diffSQLIdent("name"))
+		"branch_apply_base."+diffSQLIdent("id")+" = branch_apply_stage."+diffSQLIdent("branch_apply_key_0"))
+	require.Contains(t, lowerContent,
+		"set branch_apply_base."+diffSQLIdent("name")+" = branch_apply_stage."+diffSQLIdent("name"))
 	require.NotContains(t, lowerContent, "update "+baseTable+" set")
 	require.Contains(t, lowerContent, "insert into "+baseTable)
 	require.Contains(t, lowerContent, "delete from "+baseTable)

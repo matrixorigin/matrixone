@@ -1481,6 +1481,7 @@ func TestDataBranchOutputInitAndDropApplyTablesWithWriteFile(t *testing.T) {
 		baseTable:        "base_t",
 		deleteTable:      "__mo_diff_del_x",
 		insertTable:      "__mo_diff_ins_x",
+		updateTable:      "__mo_diff_upd_x",
 		deleteKeyNames:   []string{"id"},
 		deleteStageNames: []string{"branch_apply_key_0"},
 		deleteKeyTypes:   []types.Type{types.T_int64.ToType()},
@@ -1499,8 +1500,10 @@ func TestDataBranchOutputInitAndDropApplyTablesWithWriteFile(t *testing.T) {
 	got := out.String()
 	require.Contains(t, got, "drop table if exists `db1`.`__mo_diff_del_x`;\n")
 	require.Contains(t, got, "drop table if exists `db1`.`__mo_diff_ins_x`;\n")
+	require.Contains(t, got, "drop table if exists `db1`.`__mo_diff_upd_x`;\n")
 	require.Contains(t, got, "create table `db1`.`__mo_diff_del_x` as select `id` as `branch_apply_key_0` from `db1`.`base_t` where 1=0;\n")
 	require.Contains(t, got, "create table `db1`.`__mo_diff_ins_x` as select `id`,`name` from `db1`.`base_t` where 1=0;\n")
+	require.Contains(t, got, "create table `db1`.`__mo_diff_upd_x` as select `id`,`name`,`id` as `branch_apply_key_0` from `db1`.`base_t` where 1=0;\n")
 }
 
 func TestDataBranchOutputFlushSqlValuesWithWriteFile(t *testing.T) {
@@ -1528,6 +1531,7 @@ func TestDataBranchOutputFlushSqlValuesWithWriteFile(t *testing.T) {
 		baseTable:        "t1",
 		deleteTable:      "__mo_diff_del_x",
 		insertTable:      "__mo_diff_ins_x",
+		updateTable:      "__mo_diff_upd_x",
 		deleteKeyNames:   []string{"id", "name"},
 		deleteStageNames: []string{"branch_apply_key_0", "branch_apply_key_1"},
 		deleteKeyTypes:   []types.Type{types.T_int64.ToType(), types.T_varchar.ToType()},
@@ -1638,7 +1642,7 @@ func TestDataBranchOutputFlushStagedUpdateValues(t *testing.T) {
 	batchInfo := &applyBatchInfo{
 		dbName:           "db1",
 		baseTable:        "t1",
-		insertTable:      "__mo_diff_ins_x",
+		updateTable:      "__mo_diff_upd_x",
 		deleteKeyNames:   []string{"org_id", "event_id"},
 		deleteStageNames: []string{"branch_apply_key_0", "branch_apply_key_1"},
 		deleteKeyTypes:   []types.Type{types.T_int64.ToType(), types.T_int64.ToType()},
@@ -1647,7 +1651,7 @@ func TestDataBranchOutputFlushStagedUpdateValues(t *testing.T) {
 
 	var out bytes.Buffer
 	require.NoError(t, flushStagedUpdateValues(
-		context.Background(), nil, nil, []byte("(1,2,30,'changed'),(2,1,40,null)"), batchInfo,
+		context.Background(), nil, nil, []byte("(1,2,30,'changed',1,2),(2,1,40,null,2,1)"), batchInfo,
 		func(b []byte) error {
 			_, err := out.Write(b)
 			return err
@@ -1655,16 +1659,41 @@ func TestDataBranchOutputFlushStagedUpdateValues(t *testing.T) {
 	))
 
 	got := out.String()
-	require.Contains(t, got, "insert into `db1`.`__mo_diff_ins_x` values (1,2,30,'changed'),(2,1,40,null);\n")
+	require.Contains(t, got, "insert into `db1`.`__mo_diff_upd_x` values (1,2,30,'changed',1,2),(2,1,40,null,2,1);\n")
 	require.Contains(t, got,
-		"update `db1`.`t1` as branch_apply_base join `db1`.`__mo_diff_ins_x` as branch_apply_stage on "+
-			"branch_apply_base.`org_id` = branch_apply_stage.`org_id` AND "+
-			"branch_apply_base.`event_id` = branch_apply_stage.`event_id` set "+
+		"update `db1`.`t1` as branch_apply_base join `db1`.`__mo_diff_upd_x` as branch_apply_stage on "+
+			"branch_apply_base.`org_id` = branch_apply_stage.`branch_apply_key_0` AND "+
+			"branch_apply_base.`event_id` = branch_apply_stage.`branch_apply_key_1` set "+
 			"branch_apply_base.`qty` = branch_apply_stage.`qty`,branch_apply_base.`note` = branch_apply_stage.`note`;\n")
-	assignments := strings.SplitN(got, " set ", 2)[1]
-	require.NotContains(t, assignments, "branch_apply_base.`org_id`")
-	require.NotContains(t, assignments, "branch_apply_base.`event_id`")
-	require.Contains(t, got, "delete from `db1`.`__mo_diff_ins_x`;\n")
+	require.Contains(t, got, "delete from `db1`.`__mo_diff_upd_x`;\n")
+}
+
+func TestDataBranchOutputStagedUpdateGeneratedPrimaryKey(t *testing.T) {
+	batchInfo := &applyBatchInfo{
+		dbName:           "db1",
+		baseTable:        "t1",
+		updateTable:      "__mo_diff_upd_x",
+		deleteKeyNames:   []string{"generated_key"},
+		deleteStageNames: []string{"branch_apply_key_0"},
+		deleteKeyTypes:   []types.Type{types.T_int64.ToType()},
+		writableNames:    []string{"input", "payload"},
+	}
+
+	var out bytes.Buffer
+	require.NoError(t, flushStagedUpdateValues(
+		context.Background(), nil, nil, []byte("(1,'changed',2)"), batchInfo,
+		func(b []byte) error {
+			_, err := out.Write(b)
+			return err
+		},
+	))
+
+	require.Equal(t,
+		"insert into `db1`.`__mo_diff_upd_x` values (1,'changed',2);\n"+
+			"update `db1`.`t1` as branch_apply_base join `db1`.`__mo_diff_upd_x` as branch_apply_stage on branch_apply_base.`generated_key` = branch_apply_stage.`branch_apply_key_0` set branch_apply_base.`input` = branch_apply_stage.`input`,branch_apply_base.`payload` = branch_apply_stage.`payload`;\n"+
+			"delete from `db1`.`__mo_diff_upd_x`;\n",
+		out.String(),
+	)
 }
 
 func TestDataBranchOutputStagedDeleteRejectsIncompleteKeyLayout(t *testing.T) {
@@ -1682,6 +1711,7 @@ func TestDataBranchOutputTryFlushDeletesOrInserts(t *testing.T) {
 		baseTable:        "t1",
 		deleteTable:      "__mo_diff_del_x",
 		insertTable:      "__mo_diff_ins_x",
+		updateTable:      "__mo_diff_upd_x",
 		deleteKeyNames:   []string{"id"},
 		deleteStageNames: []string{"branch_apply_key_0"},
 		deleteKeyTypes:   []types.Type{types.T_int64.ToType()},
@@ -1838,6 +1868,8 @@ func TestDataBranchOutputBuildDataBranchApplyLayout(t *testing.T) {
 	require.True(t, info.insertRowsIndividually)
 	require.True(t, strings.HasPrefix(info.deleteTable, "__mo_diff_del_"))
 	require.True(t, strings.HasPrefix(info.insertTable, "__mo_diff_ins_"))
+	require.True(t, strings.HasPrefix(info.updateTable, "__mo_diff_upd_"))
+	require.Equal(t, []int{0, 1, 2, 0, 2}, info.updateValueIdxes)
 
 	fakeTblStuff := newFakePKBranchTableStuff(ctrl)
 	deleteByFullRow, deleteKeyColIdxes, info = buildDataBranchApplyLayout(
@@ -1915,6 +1947,7 @@ func TestDataBranchOutputAppenderAppendRowAndFlushAll(t *testing.T) {
 		baseTable:        "t1",
 		deleteTable:      "__mo_diff_del_x",
 		insertTable:      "__mo_diff_ins_x",
+		updateTable:      "__mo_diff_upd_x",
 		deleteKeyNames:   []string{"id"},
 		deleteStageNames: []string{"branch_apply_key_0"},
 		deleteKeyTypes:   []types.Type{types.T_int64.ToType()},
@@ -2373,11 +2406,12 @@ func TestDataBranchOutputAppendBatchRowsAsSQLValues(t *testing.T) {
 		batchInfo := &applyBatchInfo{
 			dbName:           "db1",
 			baseTable:        "base",
-			insertTable:      "__mo_diff_ins_x",
+			updateTable:      "__mo_diff_upd_x",
 			deleteKeyNames:   []string{"id"},
 			deleteStageNames: []string{"branch_apply_key_0"},
 			deleteKeyTypes:   []types.Type{types.T_int64.ToType()},
 			writableNames:    []string{"id", "name"},
+			updateValueIdxes: []int{0, 1, 0},
 		}
 		deleteCnt, insertCnt := 0, 0
 		deleteBuf, insertBuf := &bytes.Buffer{}, &bytes.Buffer{}
@@ -2416,11 +2450,34 @@ func TestDataBranchOutputAppendBatchRowsAsSQLValues(t *testing.T) {
 		require.Empty(t, out.String())
 		require.NoError(t, appender.flushAll())
 		require.Equal(t,
-			"insert into `db1`.`__mo_diff_ins_x` values (2,'after');\n"+
-				"update `db1`.`base` as branch_apply_base join `db1`.`__mo_diff_ins_x` as branch_apply_stage on branch_apply_base.`id` = branch_apply_stage.`id` set branch_apply_base.`name` = branch_apply_stage.`name`;\n"+
-				"delete from `db1`.`__mo_diff_ins_x`;\n",
+			"insert into `db1`.`__mo_diff_upd_x` values (2,'after',2);\n"+
+				"update `db1`.`base` as branch_apply_base join `db1`.`__mo_diff_upd_x` as branch_apply_stage on branch_apply_base.`id` = branch_apply_stage.`branch_apply_key_0` set branch_apply_base.`name` = branch_apply_stage.`name`;\n"+
+				"delete from `db1`.`__mo_diff_upd_x`;\n",
 			out.String(),
 		)
+	})
+
+	t.Run("uses exact updates for planner-incompatible value types", func(t *testing.T) {
+		newSpecialTable := func(typ types.Type, enumValues string) (tableStuff, *plan.TableDef) {
+			var tbl tableStuff
+			tbl.def.colTypes = []types.Type{types.T_int64.ToType(), typ}
+			tbl.def.writableIdxes = []int{0, 1}
+			tbl.def.pkColIdxes = []int{0}
+			tbl.def.baseColNames = []string{"id", "value"}
+			return tbl, &plan.TableDef{Cols: []*plan.ColDef{
+				{Name: "id", Typ: plan.Type{Id: int32(types.T_int64)}},
+				{Name: "value", Typ: plan.Type{Id: int32(typ.Oid), Enumvalues: enumValues}},
+			}}
+		}
+
+		setTable, setDef := newSpecialTable(types.T_uint64.ToType(), "a,b,c")
+		require.True(t, dataBranchUpdateNeedsDirectSQL(setTable, setDef))
+
+		geometryTable, geometryDef := newSpecialTable(types.T_geometry32.ToType(), "")
+		require.True(t, dataBranchUpdateNeedsDirectSQL(geometryTable, geometryDef))
+
+		ordinaryTable, ordinaryDef := newSpecialTable(types.T_varchar.ToType(), "")
+		require.False(t, dataBranchUpdateNeedsDirectSQL(ordinaryTable, ordinaryDef))
 	})
 
 	t.Run("returns shape mismatch error", func(t *testing.T) {
