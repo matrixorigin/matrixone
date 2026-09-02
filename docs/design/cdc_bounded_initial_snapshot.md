@@ -1,6 +1,7 @@
 # Bounded and retry-safe CDC initial snapshots
 
-Status: reviewed design for MatrixOne PR #27939
+Status: proposed design for MatrixOne PR #27939; independent design approval
+for the current revision is pending.
 
 ## Problem
 
@@ -132,6 +133,42 @@ Deterministic tests must prove:
 - legacy tasks use the atomic compatibility path;
 - limiter FIFO, cancellation, exact-once release, and race behavior.
 
-The issue-scale TPCC case remains the end-to-end performance acceptance test;
-unit tests validate protocol correctness and resource bounds without weakening
-coverage or substituting sleeps for synchronization.
+Unit tests validate protocol correctness and resource bounds without weakening
+coverage or substituting sleeps for synchronization. The issue-scale TPCC case
+is the end-to-end performance acceptance test.
+
+### Issue #27863 acceptance result
+
+The terminal issue-scale run completed on the exact implementation head
+`e0c092ef38c1aa1afb21d46a075e148b1410e91c` on 2026-09-02. It used a freshly
+built `mo-service`, a fresh data directory, and ten TPCC tables on the same
+source and MatrixOne target endpoints. The task reached terminal initial-
+snapshot equality in 235 seconds. Progress was sampled every five seconds;
+large tables advanced in bounded increments throughout the run instead of
+stalling on retained engine batches. Peak `mo-service` RSS was 3,942,996 KiB.
+
+| Table | Source rows | Target rows | Final watermark |
+| --- | ---: | ---: | --- |
+| `bmsql_config` | 4 | 4 | `2026-09-01 22:52:56.036237168 -0400 EDT` |
+| `bmsql_customer` | 300,000 | 300,000 | `2026-09-01 22:52:55.976237067 -0400 EDT` |
+| `bmsql_district` | 100 | 100 | `2026-09-01 22:52:55.952191038 -0400 EDT` |
+| `bmsql_history` | 300,000 | 300,000 | `2026-09-01 22:52:56.031447528 -0400 EDT` |
+| `bmsql_item` | 100,000 | 100,000 | `2026-09-01 22:52:55.982337393 -0400 EDT` |
+| `bmsql_new_order` | 90,000 | 90,000 | `2026-09-01 22:52:55.907715381 -0400 EDT` |
+| `bmsql_oorder` | 300,000 | 300,000 | `2026-09-01 22:52:55.891970278 -0400 EDT` |
+| `bmsql_order_line` | 2,999,795 | 2,999,795 | `2026-09-01 22:52:55.999679580 -0400 EDT` |
+| `bmsql_stock` | 1,000,000 | 1,000,000 | `2026-09-01 22:52:56.073969240 -0400 EDT` |
+| `bmsql_warehouse` | 10 | 10 | `2026-09-01 22:52:55.916025702 -0400 EDT` |
+
+The target-side TPCC order/order-line consistency check was empty in both
+directions:
+
+- grouped `oorder.sum(o_ol_cnt)` minus grouped `order_line.count(ol_o_id)`: 0;
+- grouped `order_line.count(ol_o_id)` minus grouped `oorder.sum(o_ol_cnt)`: 0.
+
+A separate failure-injection run on the same head observed 65,536 target rows,
+paused with 196,608 rows already committed and an empty watermark, then applied
+a source DELETE and primary-key change before resume. It converged to 2,999,794
+rows; the source-minus-target and target-minus-source primary-key differences
+were both empty. This exercises partial commit, same-epoch replay, and tail
+catch-up through a real `mo-service` rather than only the deterministic unit
