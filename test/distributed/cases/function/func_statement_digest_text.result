@@ -31,6 +31,9 @@ SELECT (?) , ( (?) ) , `ABS` (?) , COALESCE (?)
 select statement_digest_text('SELECT DISTINCT a, CURRENT_TIMESTAMP FROM t WHERE a = ANY (SELECT b FROM u)') as digest;
 digest
 SELECT DISTINCTROW `a` , NOW FROM `t` WHERE `a` = SOME ( SELECT `b` FROM `u` )
+select statement_digest_text('SELECT CURRENT_DATE, CURDATE(), CURRENT_TIME, CURTIME(), SESSION_USER(), USER(), STD(x), STDDEV(x), VARIANCE(x) FROM t') as digest;
+digest
+SELECT CURDATE , CURDATE ( ) , CURTIME , CURTIME ( ) , SYSTEM_USER ( ) , SYSTEM_USER ( ) , STDDEV_POP ( `x` ) , STDDEV_POP ( `x` ) , VAR_POP ( `x` ) FROM `t`
 select statement_digest_text('SELECT _utf8''a'', _latin1''b'', _foo''c''') as digest;
 digest
 SELECT (_charset) ? , (_charset) ? , `_foo` ?
@@ -86,6 +89,11 @@ select statement_digest_text(_binary'SELECT 1');
 Could not parse argument to digest function.
 select statement_digest_text(cast('SELECT 1' as binary));
 Could not parse argument to digest function.
+set sql_mode='ANSI_QUOTES';
+select statement_digest_text('SELECT @"odd name"') as digest;
+digest
+SELECT @`odd name`
+set sql_mode='';
 create table statement_digest_text_generated (
     g text generated always as (statement_digest_text('SELECT 1')) stored
 );

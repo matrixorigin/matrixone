@@ -66,6 +66,7 @@ func NormalizeStatementDigest(ctx context.Context, sql, sqlMode string, maxDiges
 	bangRun := 0
 	skipQuotedUserVarValue := false
 	lastScanPos := 0
+	ansiQuotedUserVar := false
 	for {
 		typ, value := scanner.Scan()
 		scannedSource := sql[lastScanPos:scanner.Pos]
@@ -84,6 +85,14 @@ func NormalizeStatementDigest(ctx context.Context, sql, sqlMode string, maxDiges
 		if skipQuotedUserVarValue {
 			skipQuotedUserVarValue = false
 			continue
+		}
+		if ansiQuotedUserVar {
+			ansiQuotedUserVar = false
+			if typ == QUOTE_ID && len(tokens) > 0 && tokens[len(tokens)-1].text == "@" {
+				tokens[len(tokens)-1].text += "`" + value + "`"
+				tokens[len(tokens)-1].size += 2 + len(value)
+				continue
+			}
 		}
 		if !storing {
 			continue
@@ -117,9 +126,16 @@ func NormalizeStatementDigest(ctx context.Context, sql, sqlMode string, maxDiges
 		}
 		if typ == '@' && scanner.Pos < len(sql) {
 			quote := sql[scanner.Pos]
-			quotedUserVar := strings.TrimSpace(rawSource) == "@" && (quote == '\'' || quote == '"')
+			if quote == '"' && sqlModeFlags.Has(SQLModeANSIQuotes) {
+				ansiQuotedUserVar = true
+			}
+			quotedUserVar := strings.TrimSpace(rawSource) == "@" &&
+				(quote == '\'' || (quote == '"' && !sqlModeFlags.Has(SQLModeANSIQuotes)))
 			if !quotedUserVar && len(scannedSource) >= 2 {
 				quotedUserVar = strings.HasSuffix(scannedSource, "@'") || strings.HasSuffix(scannedSource, "@\"")
+				if quote == '"' && sqlModeFlags.Has(SQLModeANSIQuotes) {
+					quotedUserVar = false
+				}
 			}
 			if quotedUserVar {
 				userVarToken := digestToken{kind: digestTokenValue, text: "@?", size: 2}
@@ -186,6 +202,7 @@ func NormalizeStatementDigest(ctx context.Context, sql, sqlMode string, maxDiges
 		}
 
 		text := digestTokenText(typ, value, strings.TrimSpace(rawSource))
+		text = canonicalDigestAlias(text, typ, scanner)
 		if text == "" {
 			return "", moerr.NewParseErrorf(ctx, "unsupported token %d", typ)
 		}
@@ -1026,4 +1043,40 @@ func digestTokenText(typ int, value, source string) string {
 		return string(rune(typ))
 	}
 	return strings.ToUpper(value)
+}
+
+// canonicalDigestAlias maps MySQL spelling aliases to the token spelling used
+// by the digest normalizer. Function-only aliases are selected using the
+// scanner's lookahead so that an identifier such as SESSION_USER remains an
+// identifier when it is not called.
+func canonicalDigestAlias(text string, typ int, scanner *Scanner) string {
+	switch typ {
+	case CURRENT_DATE, CURDATE:
+		return "CURDATE"
+	case CURRENT_TIME, CURTIME:
+		return "CURTIME"
+	case USER:
+		return "SYSTEM_USER"
+	case SESSION_USER:
+		if digestFunctionCallAhead(scanner) {
+			return "SYSTEM_USER"
+		}
+		return "`" + strings.ToUpper(text) + "`"
+	case STD, STDDEV:
+		if digestFunctionCallAhead(scanner) {
+			return "STDDEV_POP"
+		}
+		return "`" + strings.ToUpper(text) + "`"
+	case VARIANCE:
+		if digestFunctionCallAhead(scanner) {
+			return "VAR_POP"
+		}
+		return "`" + strings.ToUpper(text) + "`"
+	}
+	return text
+}
+
+func digestFunctionCallAhead(scanner *Scanner) bool {
+	pos := scanner.skipBlankAndCommentsFrom(scanner.Pos)
+	return pos < len(scanner.buf) && scanner.buf[pos] == '('
 }
