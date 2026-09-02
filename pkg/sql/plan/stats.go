@@ -549,11 +549,6 @@ func (builder *QueryBuilder) getStatsInfoByCol(col *plan.ColRef) *StatsInfoWrapp
 }
 
 func (builder *QueryBuilder) getColNdv(col *plan.ColRef) float64 {
-	if builder != nil {
-		if ndv, ok := builder.derivedColNdv[[2]int32{col.RelPos, col.ColPos}]; ok {
-			return ndv
-		}
-	}
 	w := builder.getStatsInfoByCol(col)
 	if w == nil || w.GetStats() == nil {
 		return -1
@@ -1303,15 +1298,7 @@ func ReCalcNodeStats(nodeID int32, builder *QueryBuilder, recursive bool, leafNo
 			incnt := childStats.Outcnt
 			outcnt := 1.0
 			for i, groupby := range node.GroupBy {
-				ndv := -1.0
-				if len(node.BindingTags) > 0 {
-					if derived, ok := builder.derivedColNdv[[2]int32{node.BindingTags[0], int32(i)}]; ok {
-						ndv = derived
-					}
-				}
-				if ndv <= 0 {
-					ndv = getExprNdv(groupby, builder)
-				}
+				ndv := getExprNdv(groupby, builder)
 				if ndv > 1 {
 					groupby.Ndv = ndv
 					if isPhysicalGroupByKey(node, i) {
