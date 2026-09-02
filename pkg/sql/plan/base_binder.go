@@ -3669,6 +3669,28 @@ func (b *baseBinder) setAvgIntegerLiteralPrecision(astExpr tree.Expr, arg *plan.
 	arg.Typ.Scale = 0
 }
 
+// AVG adds four fractional digits to an exact integer argument. Keep the
+// precision recorded for a constant expression bounded to the largest input
+// precision that can produce the public Decimal256(65,4) result. The executor
+// applies the same cap; without it a long multiplication/addition chain could
+// overflow int32 while constructing planner metadata.
+const maxAvgIntegerExpressionPrecision int32 = 65 - 4
+
+func capAvgIntegerExpressionPrecision(precision int32) int32 {
+	if precision > maxAvgIntegerExpressionPrecision {
+		return maxAvgIntegerExpressionPrecision
+	}
+	return precision
+}
+
+func addAvgIntegerExpressionPrecision(left, right int32) int32 {
+	if left >= maxAvgIntegerExpressionPrecision || right >= maxAvgIntegerExpressionPrecision ||
+		left > maxAvgIntegerExpressionPrecision-right {
+		return maxAvgIntegerExpressionPrecision
+	}
+	return left + right
+}
+
 func avgIntegerConstantPrecision(astExpr tree.Expr) (int32, bool) {
 	switch expr := astExpr.(type) {
 	case *tree.ParenExpr:
@@ -3683,6 +3705,9 @@ func avgIntegerConstantPrecision(astExpr tree.Expr) (int32, bool) {
 			return 0, false
 		}
 		literal := strings.TrimLeft(expr.String(), "+-")
+		if len(literal) > int(maxAvgIntegerExpressionPrecision) {
+			return maxAvgIntegerExpressionPrecision, true
+		}
 		return int32(len(literal)), true
 	case *tree.BinaryExpr:
 		left, leftOK := avgIntegerConstantPrecision(expr.Left)
@@ -3692,9 +3717,9 @@ func avgIntegerConstantPrecision(astExpr tree.Expr) (int32, bool) {
 		}
 		switch expr.Op {
 		case tree.MULTI:
-			return left + right, true
+			return addAvgIntegerExpressionPrecision(left, right), true
 		case tree.PLUS, tree.MINUS:
-			return max(left, right) + 1, true
+			return capAvgIntegerExpressionPrecision(max(left, right) + 1), true
 		case tree.MOD:
 			return min(left, right), true
 		default:

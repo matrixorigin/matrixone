@@ -122,3 +122,40 @@ from nation`,
 	require.Equal(t, int32(14), visible[6].Typ.Width)
 	require.Equal(t, int32(23), visible[7].Typ.Width)
 }
+
+func TestCTASAvgBoundsWideIntegerExpressionPrecision(t *testing.T) {
+	stmt, err := parsers.ParseOne(
+		context.Background(), dialect.MYSQL,
+		`create table t_avg_wide_literal as select
+avg(0 * 100000000 * 100000000 * 100000000 * 100000) as avg_at_decimal128_limit,
+avg(0 * 100000000 * 100000000 * 100000000 * 1000000) as avg_above_decimal128_limit,
+avg(0 * 100000000 * 100000000 * 100000000 * 100000000) as avg_zero
+from nation`,
+		1,
+	)
+	require.NoError(t, err)
+	defer stmt.Free()
+
+	logicPlan, err := BuildPlan(NewMockCompilerContext(true), stmt, false)
+	require.NoError(t, err)
+
+	var visible []*planpb.ColDef
+	for _, col := range logicPlan.GetDdl().GetCreateTable().GetTableDef().GetCols() {
+		if !col.Hidden {
+			visible = append(visible, col)
+		}
+	}
+	require.Len(t, visible, 3)
+	// The first expression has precision 34, so AVG reaches the Decimal128
+	// boundary (38,4); the next two promote to valid Decimal256 metadata even
+	// though their values are exactly zero.
+	require.Equal(t, int32(types.T_decimal128), visible[0].Typ.Id)
+	require.Equal(t, int32(38), visible[0].Typ.Width)
+	require.Equal(t, int32(4), visible[0].Typ.Scale)
+	require.Equal(t, int32(types.T_decimal256), visible[1].Typ.Id)
+	require.Equal(t, int32(39), visible[1].Typ.Width)
+	require.Equal(t, int32(4), visible[1].Typ.Scale)
+	require.Equal(t, int32(types.T_decimal256), visible[2].Typ.Id)
+	require.Equal(t, int32(41), visible[2].Typ.Width)
+	require.Equal(t, int32(4), visible[2].Typ.Scale)
+}

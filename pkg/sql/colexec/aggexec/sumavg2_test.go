@@ -59,6 +59,9 @@ func TestAvgExactNumericReturnType(t *testing.T) {
 		{name: "bigint unsigned", input: types.T_uint64.ToType(), want: types.New(types.T_decimal128, 24, 4)},
 		{name: "bigint cast domain", input: types.New(types.T_int64, 64, -1), want: types.New(types.T_decimal128, 23, 4)},
 		{name: "literal precision", input: types.New(types.T_int64, 1, 0), want: types.New(types.T_decimal128, 5, 4)},
+		{name: "literal precision at decimal128 limit", input: types.New(types.T_int64, 34, 0), want: types.New(types.T_decimal128, 38, 4)},
+		{name: "literal precision promotes to decimal256", input: types.New(types.T_int64, 35, 0), want: types.New(types.T_decimal256, 39, 4)},
+		{name: "literal precision caps decimal256", input: types.New(types.T_int64, 100, 0), want: types.New(types.T_decimal256, 65, 4)},
 		{name: "year", input: types.T_year.ToType(), want: types.New(types.T_decimal128, 8, 4)},
 		{name: "decimal64", input: types.New(types.T_decimal64, 8, 2), want: types.New(types.T_decimal128, 12, 6)},
 		{name: "decimal128", input: types.New(types.T_decimal128, 20, 6), want: types.New(types.T_decimal128, 24, 10)},
@@ -165,6 +168,9 @@ func TestAvgNativeIntegerHelperBoundaries(t *testing.T) {
 	require.Equal(t, types.Decimal128FromInt64(-1), decimal128FromNativeSum(int64(-1)))
 	require.Equal(t, types.Decimal128{B0_63: 1}, decimal128FromNativeSum(uint64(1)))
 	require.Panics(t, func() { decimal128FromNativeSum(float64(1)) })
+	require.Equal(t, types.Decimal256FromInt64(-1), decimal256FromNativeSum(int64(-1)))
+	require.Equal(t, types.Decimal256{B0_63: 1}, decimal256FromNativeSum(uint64(1)))
+	require.Panics(t, func() { decimal256FromNativeSum(float64(1)) })
 }
 
 func TestAvgDecimalConversionHelpers(t *testing.T) {
@@ -253,6 +259,50 @@ func TestAvgIntegerExpressionPrecisionExecution(t *testing.T) {
 			require.Equal(t, types.New(types.T_decimal128, 5, 4), *results[0].GetType())
 			value := vector.GetFixedAtNoTypeCheck[types.Decimal128](results[0], 0)
 			require.Equal(t, "0.0088", value.Format(results[0].GetType().Scale))
+		})
+	}
+}
+
+func TestAvgWideIntegerExpressionPrecisionExecutionModes(t *testing.T) {
+	argType := types.New(types.T_int64, 37, 0)
+	resultType := types.New(types.T_decimal256, 41, 4)
+	values := []int64{0}
+
+	for _, test := range []struct {
+		name     string
+		distinct bool
+		window   bool
+	}{
+		{name: "ordinary"},
+		{name: "distinct", distinct: true},
+		{name: "window", window: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			mp := mpool.MustNewZero()
+			defer mpool.DeleteMPool(mp)
+			input := buildAvgFixedVector(t, mp, argType, values)
+			defer input.Free(mp)
+
+			exec, err := MakeAgg(mp, AggIdOfAvg, test.distinct, argType)
+			require.NoError(t, err)
+			defer exec.Free()
+			require.NoError(t, exec.GroupGrow(1))
+			switch {
+			case test.window:
+				require.NoError(t, exec.Fill(0, 0, []*vector.Vector{input}))
+			case test.distinct:
+				require.NoError(t, exec.BatchFill(0, []uint64{1}, []*vector.Vector{input}))
+			default:
+				require.NoError(t, exec.BulkFill(0, []*vector.Vector{input}))
+			}
+
+			results, err := exec.Flush()
+			require.NoError(t, err)
+			require.Len(t, results, 1)
+			defer results[0].Free(mp)
+			require.Equal(t, resultType, *results[0].GetType())
+			require.Equal(t, types.Decimal256{},
+				vector.GetFixedAtNoTypeCheck[types.Decimal256](results[0], 0))
 		})
 	}
 }
