@@ -302,13 +302,14 @@ type PrepareStmt struct {
 	OnlyFullGroupBy bool
 	// onlyFullGroupBySet distinguishes a captured disabled mode from legacy or
 	// minimal in-memory fixtures that predate this plan dependency.
-	onlyFullGroupBySet bool
-	ParamTypes         []byte
-	ColDefData         [][]byte
-	IsCloudNonuser     bool
-	proc               *process.Process
-	remapDb            map[string]string
-	defaultDatabase    string
+	onlyFullGroupBySet           bool
+	ParamTypes                   []byte
+	ColDefData                   [][]byte
+	IsCloudNonuser               bool
+	proc                         *process.Process
+	remapDb                      map[string]string
+	defaultDatabase              string
+	viewMetadataColumnsDependent bool
 
 	params              *vector.Vector
 	getFromSendLongData map[int]struct{}
@@ -397,9 +398,11 @@ type preparedStmtCursor struct {
 	maxBytes uint64
 	// maxBytesSet distinguishes an explicit zero query_result_maxsize from
 	// an in-memory test/legacy cursor that has not been initialized yet.
-	maxBytesSet bool
-	maxRows     uint64
-	owner       *Session
+	maxBytesSet      bool
+	maxRows          uint64
+	owner            *Session
+	metadataEpoch    uint64
+	metadataEpochSet bool
 }
 
 func (cursor *preparedStmtCursor) close() {
@@ -409,6 +412,8 @@ func (cursor *preparedStmtCursor) close() {
 	if cursor.owner != nil && cursor.bytes > 0 {
 		cursor.owner.releasePreparedCursorBytes(cursor.bytes)
 	}
+	cursor.metadataEpoch = 0
+	cursor.metadataEpochSet = false
 	cursor.result = nil
 	cursor.offset = 0
 	cursor.bytes = 0
@@ -1106,14 +1111,17 @@ type ExecCtx struct {
 	inMigration bool
 	//In the session migration, executeParamTypes for the EXECUTE stmt should be migrated
 	//from the old session to the new session.
-	executeParamTypes []byte
-	resper            Responser
-	results           []ExecResult
-	prepareColDef     [][]byte
-	cursorResultSaver StagedBinaryWriter
-	returning         *returningState
-	selectInto        *selectIntoUserVariables
-	isIssue3482       bool
+	executeParamTypes           []byte
+	resper                      Responser
+	results                     []ExecResult
+	prepareColDef               [][]byte
+	cursorResultSaver           StagedBinaryWriter
+	returning                   *returningState
+	selectInto                  *selectIntoUserVariables
+	isIssue3482                 bool
+	viewMetadataSensitive       bool
+	viewMetadataResponseStarted bool
+	viewMetadataLease           *compile.ViewMetadataEpochLease
 	// remapDb is the effective database remap (role/session/inline merged) for
 	// this statement. It is applied at the AST level to qualified references by
 	// applyRemapDb, and to the current database (for unqualified references) by
@@ -1176,6 +1184,9 @@ func (execCtx *ExecCtx) Close() {
 	execCtx.results = nil
 	execCtx.prepareColDef = nil
 	execCtx.selectInto = nil
+	execCtx.viewMetadataSensitive = false
+	execCtx.viewMetadataResponseStarted = false
+	execCtx.viewMetadataLease = nil
 	execCtx.rewriteEnabled = false
 }
 

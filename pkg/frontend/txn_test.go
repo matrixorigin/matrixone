@@ -30,12 +30,14 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
+	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/frontend/databranchutils"
 	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
 	"github.com/matrixorigin/matrixone/pkg/pb/lock"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
+	"github.com/matrixorigin/matrixone/pkg/sql/compile"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/txn/rpc"
@@ -1108,6 +1110,80 @@ func TestFinishTxnRollsBackWhenRequestIsCancelled(t *testing.T) {
 	err := finishTxnFunc(ses, nil, execCtx)
 	require.ErrorIs(t, err, context.Canceled)
 	require.Equal(t, 0, txnOp.commitCalls)
+	require.Equal(t, 1, txnOp.rollbackCalls)
+}
+
+func TestCommitOwnerRejectsAuthorityExpiryAfterPrecheck(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	ctx := defines.AttachAccountId(context.Background(), sysAccountID)
+	ses := newTestSession(t, ctrl)
+	defer ses.Close()
+	setPu("", config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil))
+	fence := compile.NewViewMetadataEpochFence()
+	clockOffset := moruntime.ServiceRuntime("").Clock().MaxOffset()
+	fence.RenewAuthority(time.Now().Add(clockOffset + 50*time.Millisecond))
+	moruntime.ServiceRuntime("").SetGlobalVariables(
+		compile.ViewMetadataEpochFenceRuntimeKey, fence)
+	defer moruntime.ServiceRuntime("").SetGlobalVariables(
+		compile.ViewMetadataEpochFenceRuntimeKey, compile.NewViewMetadataEpochFence())
+	eng := mock_frontend.NewMockEngine(ctrl)
+	eng.EXPECT().Hints().Return(engine.Hints{CommitOrRollbackTimeout: time.Second}).AnyTimes()
+	ses.txnHandler.storage = eng
+	ses.txnHandler.viewMetadataAuthorityRequired = true
+
+	txnOp := newTestTxnOp()
+	txnOp.meta = txn.TxnMeta{ID: []byte{1, 2, 3, 4}, Status: txn.TxnStatus_Active}
+	txnOp.wp.readonly = false
+	txnOp.commitCheckContext = true
+	txnOp.commitHook = func() { time.Sleep(100 * time.Millisecond) }
+	ses.txnHandler.txnOp = txnOp
+	ses.txnHandler.txnCtx = ctx
+	execCtx := newTestExecCtx(ctx, ctrl)
+	execCtx.ses = ses
+	execCtx.stmt = &tree.Insert{}
+	execCtx.txnOpt = FeTxnOption{autoCommit: true}
+
+	err := finishTxnFunc(ses, nil, execCtx)
+	require.ErrorIs(t, err, context.DeadlineExceeded)
+	require.Equal(t, 1, txnOp.commitCalls)
+	require.NotNil(t, txnOp.commitCtx)
+	deadline, ok := txnOp.commitCtx.Deadline()
+	require.True(t, ok)
+	require.Less(t, time.Until(deadline), 10*time.Millisecond)
+}
+
+func TestExplicitCommitRejectsStaleViewMetadataEpoch(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	ctx := defines.AttachAccountId(context.Background(), sysAccountID)
+	ses := newTestSession(t, ctrl)
+	defer ses.Close()
+	setPu("", config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil))
+	fence := compile.NewViewMetadataEpochFence()
+	require.NoError(t, fence.Advance(context.Background(), 2))
+	fence.RenewAuthority(time.Now().Add(time.Minute))
+	moruntime.ServiceRuntime("").SetGlobalVariables(
+		compile.ViewMetadataEpochFenceRuntimeKey, fence)
+	defer moruntime.ServiceRuntime("").SetGlobalVariables(
+		compile.ViewMetadataEpochFenceRuntimeKey, compile.NewViewMetadataEpochFence())
+	ses.txnHandler.viewMetadataEpoch = 1
+	ses.txnHandler.viewMetadataAuthorityRequired = true
+	eng := mock_frontend.NewMockEngine(ctrl)
+	eng.EXPECT().Hints().Return(engine.Hints{CommitOrRollbackTimeout: time.Second}).AnyTimes()
+	ses.txnHandler.storage = eng
+
+	txnOp := newTestTxnOp()
+	txnOp.meta = txn.TxnMeta{ID: []byte{1, 2, 3, 4}, Status: txn.TxnStatus_Active}
+	txnOp.wp.readonly = false
+	ses.txnHandler.txnOp = txnOp
+	ses.txnHandler.txnCtx = ctx
+	execCtx := newTestExecCtx(ctx, ctrl)
+	execCtx.ses = ses
+	execCtx.stmt = &tree.CommitTransaction{}
+	execCtx.txnOpt = FeTxnOption{byCommit: true}
+
+	err := finishTxnFunc(ses, nil, execCtx)
+	require.ErrorContains(t, err, "admission epoch changed during transaction")
+	require.Zero(t, txnOp.commitCalls)
 	require.Equal(t, 1, txnOp.rollbackCalls)
 }
 

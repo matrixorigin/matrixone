@@ -17,6 +17,7 @@ package plan
 import (
 	"context"
 	"math"
+	"sync"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -320,6 +321,43 @@ func TestStatsSelectivityClampAvoidsNonFiniteJoin(t *testing.T) {
 		require.GreaterOrEqual(t, join.Stats.Selectivity, 0.0)
 		require.LessOrEqual(t, join.Stats.Selectivity, 1.0)
 	})
+}
+
+func TestReCalcNodeStatsOwnsJoinPredicateAnnotations(t *testing.T) {
+	shared := MakePlan2BoolConstExprWithType(true)
+	newBuilder := func() (*QueryBuilder, *planpb.Node) {
+		builder := NewQueryBuilder(planpb.Query_SELECT,
+			&MockCompilerContext{ctx: context.Background()}, false, false)
+		left := &planpb.Node{NodeType: planpb.Node_VALUE_SCAN,
+			Stats: &planpb.Stats{Outcnt: 10, Cost: 10, Selectivity: 1}}
+		right := &planpb.Node{NodeType: planpb.Node_VALUE_SCAN,
+			Stats: &planpb.Stats{Outcnt: 10, Cost: 10, Selectivity: 1}}
+		join := &planpb.Node{NodeType: planpb.Node_JOIN, JoinType: planpb.Node_INNER,
+			Children: []int32{0, 1}, OnList: []*planpb.Expr{shared}, Stats: DefaultStats()}
+		builder.qry.Nodes = []*planpb.Node{left, right, join}
+		return builder, join
+	}
+	firstBuilder, firstJoin := newBuilder()
+	secondBuilder, secondJoin := newBuilder()
+	start := make(chan struct{})
+	var wg sync.WaitGroup
+	for _, builder := range []*QueryBuilder{firstBuilder, secondBuilder} {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-start
+			ReCalcNodeStats(2, builder, false, false, false)
+		}()
+	}
+	close(start)
+	wg.Wait()
+
+	require.Zero(t, shared.Ndv)
+	require.NotSame(t, shared, firstJoin.OnList[0])
+	require.NotSame(t, shared, secondJoin.OnList[0])
+	require.NotSame(t, firstJoin.OnList[0], secondJoin.OnList[0])
+	require.Equal(t, float64(-1), firstJoin.OnList[0].Ndv)
+	require.Equal(t, float64(-1), secondJoin.OnList[0].Ndv)
 }
 
 func newStatsTestBuilderWithNDV(colName string, ndv float64) *QueryBuilder {

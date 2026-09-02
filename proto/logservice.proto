@@ -211,6 +211,9 @@ message LogStoreHeartbeat {
   // this Log store. It remains stable across process restarts and changes when
   // the store starts from a new data directory.
   string StoreIncarnation = 11;
+  // ViewMetadataRefreshSupported proves that every HAKeeper RSM hosted by this
+  // LogStore understands refresh activation and its persistent state.
+  bool ViewMetadataRefreshSupported = 12;
 };
 
 // TNShardInfo contains information of a launched TN shard.
@@ -655,6 +658,20 @@ message ViewMetadataAdmission {
   // Admitted authorizes a CN heartbeat sender to finish local startup. Ready
   // is stronger: it also requires the CN's public ingress to be prepared.
   bool Admitted = 8;
+  // RefreshReady allows current-epoch workers to run only after every known CN
+  // advertises lifecycle support. It does not authorize public metadata reads.
+  bool RefreshReady = 9;
+  // RefreshEnabled authorizes lifecycle maintenance and public metadata reads
+  // after a durable revalidation completion for Epoch.
+  bool RefreshEnabled = 10;
+  // OwnerExpiryRemainingTicks is non-zero when this sender replaced a captured
+  // same-UUID generation that must expire before admission. TickPerSecond
+  // converts the replicated deadline into a local startup wait budget.
+  uint64 OwnerExpiryRemainingTicks = 11;
+  uint64 TickPerSecond = 12;
+  // AuthorityLeaseTicks is the replicated CN-store expiry basis. A supported
+  // CN renews a local fail-closed timer from each successful heartbeat response.
+  uint64 AuthorityLeaseTicks = 13;
 }
 
 // ViewMetadataAdmissionTargets makes timeout-based phase-two/reconciliation
@@ -664,6 +681,7 @@ message ViewMetadataAdmissionTargets {
   uint64 CNStoreTimeoutTicks = 2;
   uint64 ProxyStoreTimeoutTicks = 3;
   bool EvaluateCurrentStores = 4;
+  uint64 TickPerSecond = 5;
 }
 
 // CNStoreInfo contains information on a CN store.
@@ -808,6 +826,7 @@ message LogStoreInfo {
   bool CommandDeliverySupported = 9;
   bool ViewMetadataAdmissionSupported = 10;
   string StoreIncarnation = 11;
+  bool ViewMetadataRefreshSupported = 12;
 }
 
 message LogState {
@@ -928,6 +947,13 @@ message HAKeeperRSMState {
   // this liveness proof for an older process.
   map<string, uint64> ViewMetadataAdmissionCNTargetTicks = 41;
   map<string, uint64> ViewMetadataAdmissionProxyTargetTicks = 42;
+  // ViewMetadataRefreshActivated is durable history. Once true, a later
+  // lifecycle-unaware CN cannot be admitted during a required epoch.
+  bool ViewMetadataRefreshActivated = 43;
+  // Persist the timeout basis used by the replicated target-expiry decision so
+  // heartbeat snapshots can expose the same authoritative replacement wait.
+  uint64 ViewMetadataAdmissionCNStoreTimeoutTicks = 44;
+  uint64 ViewMetadataAdmissionTickPerSecond = 45;
 }
 
 // ReplicaInfo contains details of a replica

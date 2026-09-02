@@ -1603,6 +1603,7 @@ func (l *store) getHeartbeatMessage() pb.LogStoreHeartbeat {
 		Locality:                       l.cfg.getLocality(),
 		CommandDeliverySupported:       true,
 		ViewMetadataAdmissionSupported: true,
+		ViewMetadataRefreshSupported:   true,
 	}
 	opts := dragonboat.NodeHostInfoOption{
 		SkipLogInfo: true,

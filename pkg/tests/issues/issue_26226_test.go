@@ -38,6 +38,7 @@ func TestIssue26226ViewDistinctUsesVisibleSetValue(t *testing.T) {
 		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
 		defer cancel()
 		execSQLRequire(t, ctx, dbConn, "set role moadmin")
+		waitForViewMetadataActivation(t, ctx, cn.ServiceID())
 
 		const db = "issue_26226"
 		for _, stmt := range []string{

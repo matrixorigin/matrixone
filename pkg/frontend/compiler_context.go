@@ -31,6 +31,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/pubsub"
+	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
@@ -38,11 +39,13 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/statsinfo"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
+	"github.com/matrixorigin/matrixone/pkg/sql/compile"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
+	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace/statistic"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
@@ -351,6 +354,9 @@ func (tcc *TxnCompilerContext) DatabaseExists(name string, snapshot *plan2.Snaps
 			tempCtx = context.WithValue(tempCtx, defines.TenantIDKey{}, snapshot.Tenant.TenantID)
 		}
 	}
+	if queryingSubscription := tcc.GetQueryingSubscription(); queryingSubscription != nil && name != queryingSubscription.SubName {
+		tempCtx = defines.AttachAccountId(tempCtx, uint32(queryingSubscription.AccountId))
+	}
 
 	//open database
 	ses := tcc.GetSession()
@@ -468,10 +474,15 @@ func (tcc *TxnCompilerContext) getRelation(
 		}
 	}
 
-	account := ses.GetTenantInfo()
 	if isClusterTable(dbName, tableName) {
-		//if it is the cluster table in the general account, switch into the sys account
-		if account != nil && account.GetTenantID() != sysAccountID {
+		// The effective binding account can differ from the frontend session
+		// during tenant bootstrap and snapshot binding. Cluster relations always
+		// live in the system account.
+		effectiveAccountID, accountErr := defines.GetAccountId(tempCtx)
+		if accountErr != nil {
+			return nil, nil, accountErr
+		}
+		if effectiveAccountID != sysAccountID {
 			tempCtx = defines.AttachAccountId(tempCtx, sysAccountID)
 		}
 	}
@@ -659,6 +670,13 @@ func (tcc *TxnCompilerContext) Resolve(dbName string, tableName string, snapshot
 		return nil, nil, err
 	}
 
+	if strings.EqualFold(dbName, "information_schema") &&
+		strings.EqualFold(tableName, "columns") {
+		if wrapper, ok := tcc.tcw.(*TxnComputationWrapper); ok {
+			wrapper.markViewMetadataColumnsDependent()
+		}
+	}
+
 	if sub != nil {
 		isSubMetaTable := pubsub.InSubMetaTables(sub, tableName)
 		if !isSubMetaTable {
@@ -707,6 +725,104 @@ func (tcc *TxnCompilerContext) Resolve(dbName string, tableName string, snapshot
 		}
 	}
 	return obj, tableDef, nil
+}
+
+// EnsureViewMetadataCurrent prevents DESC/SHOW COLUMNS and current-catalog
+// CTAS from presenting a durable but stale View TableDef as current.
+func (tcc *TxnCompilerContext) EnsureViewMetadataCurrent(
+	databaseName string,
+	relationName string,
+	ownerAccountID uint32,
+	relationID uint64,
+) error {
+	if slices.Contains(catalog.SystemDatabases, strings.ToLower(databaseName)) {
+		return nil
+	}
+	refreshEnabled := compile.ViewMetadataRefreshEnabled(tcc.GetSession().GetService())
+	stale, err := tcc.hasNonCurrentViewMetadata(ownerAccountID, relationID, refreshEnabled)
+	if err != nil {
+		return err
+	}
+	if stale {
+		return moerr.NewBadView(tcc.GetContext(), databaseName, relationName)
+	}
+	return nil
+}
+
+func (tcc *TxnCompilerContext) hasNonCurrentViewMetadata(
+	ownerAccountID uint32,
+	relationID uint64,
+	refreshEnabled bool,
+) (bool, error) {
+	value, ok := moruntime.ServiceRuntime(tcc.GetSession().GetService()).
+		GetGlobalVariables(moruntime.InternalSQLExecutor)
+	if !ok {
+		return false, moerr.NewInternalError(tcc.GetContext(), "internal SQL executor is unavailable")
+	}
+	result, err := value.(executor.SQLExecutor).Exec(tcc.GetContext(), fmt.Sprintf(
+		"select (select r.status from %s.%s r where r.account_id=%d and r.target_relation_id=%d limit 1),"+
+			"(select d.source_relation_kind from %s.%s d where d.account_id=%d "+
+			"and d.target_relation_id=0 and d.dependency_ordinal=0 limit 1),"+
+			"(select g.source_relation_kind from %s.%s g where g.account_id=0 "+
+			"and g.target_relation_id=0 and g.dependency_ordinal=0 limit 1)",
+		catalog.MO_CATALOG, catalog.MO_VIEW_REFRESH, ownerAccountID, relationID,
+		catalog.MO_CATALOG, catalog.MO_VIEW_DEPENDENCIES, ownerAccountID,
+		catalog.MO_CATALOG, catalog.MO_VIEW_DEPENDENCIES),
+		executor.Options{}.WithDisableIncrStatement().WithTxn(tcc.GetTxnHandler().GetTxn()).
+			WithAccountID(catalog.System_Account))
+	if err != nil {
+		if ignoreViewMetadataCatalogReadinessError(err, refreshEnabled) {
+			return false, nil
+		}
+		return false, err
+	}
+	defer result.Close()
+	found, status, markerStatus, globalStatus := false, "", "", ""
+	result.ReadRows(func(rows int, columns []*vector.Vector) bool {
+		if rows > 0 {
+			if !columns[0].IsNull(0) {
+				found = true
+				status = columns[0].GetStringAt(0)
+			}
+			if !columns[1].IsNull(0) {
+				markerStatus = columns[1].GetStringAt(0)
+			}
+			if !columns[2].IsNull(0) {
+				globalStatus = columns[2].GetStringAt(0)
+			}
+		}
+		return false
+	})
+	return !viewMetadataStatusIsCurrent(
+		found, status, markerStatus, globalStatus, refreshEnabled), nil
+}
+
+func ignoreViewMetadataCatalogReadinessError(err error, refreshEnabled bool) bool {
+	return !refreshEnabled && (moerr.IsMoErrCode(err, moerr.ErrNoSuchTable) ||
+		moerr.IsMoErrCode(err, moerr.ErrBadDB))
+}
+
+func viewMetadataStatusIsCurrent(
+	found bool,
+	status string,
+	markerStatus string,
+	globalStatus string,
+	refreshEnabled bool,
+) bool {
+	if globalStatus == catalog.ViewRefreshStatusRevalidateRequired ||
+		globalStatus == catalog.ViewRefreshStatusRevalidateScan ||
+		(!refreshEnabled && globalStatus == catalog.ViewRefreshStatusActivated) {
+		return false
+	}
+	if !refreshEnabled {
+		return true
+	}
+	globalRevalidationComplete := globalStatus == catalog.ViewRefreshStatusActivated ||
+		globalStatus == catalog.ViewRefreshStatusLegacyScan
+	return found && status == catalog.ViewRefreshStatusCurrent &&
+		(globalRevalidationComplete ||
+			(markerStatus != catalog.ViewRefreshStatusRevalidateScan &&
+				markerStatus != catalog.ViewRefreshStatusRevalidateRequired))
 }
 
 func (tcc *TxnCompilerContext) ResolveIndexTableByRef(
@@ -1302,6 +1418,12 @@ func (tcc *TxnCompilerContext) GetSubscriptionMeta(dbName string, snapshot *plan
 	defer func() {
 		v2.GetSubMetaDurationHistogram.Observe(time.Since(start).Seconds())
 	}()
+	if queryingSubscription := tcc.GetQueryingSubscription(); queryingSubscription != nil && dbName != queryingSubscription.SubName {
+		publisherBinding := *queryingSubscription
+		publisherBinding.DbName = dbName
+		publisherBinding.Tables = pubsub.TableAll
+		return &publisherBinding, nil
+	}
 
 	tempCtx := tcc.execCtx.reqCtx
 	txn := tcc.GetTxnHandler().GetTxn()

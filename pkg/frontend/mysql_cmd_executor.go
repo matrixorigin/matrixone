@@ -2878,21 +2878,27 @@ func createPrepareStmtInSession(
 		}
 	}
 
+	viewMetadataColumnsDependent := viewMetadataStatementMustRetainLease(saveStmt)
+	if wrapper, ok := execCtx.cw.(interface{ viewMetadataPlanNeedsLease() bool }); ok {
+		viewMetadataColumnsDependent = viewMetadataColumnsDependent ||
+			wrapper.viewMetadataPlanNeedsLease()
+	}
 	prepareStmt := &PrepareStmt{
-		Name:               preparePlan.GetDcl().GetPrepare().GetName(),
-		Sql:                originSQL,
-		compile:            comp,
-		PreparePlan:        preparePlan,
-		PrepareStmt:        saveStmt,
-		NativeMode:         owner.sqlModeHasMatrixOneNative(),
-		OnlyFullGroupBy:    owner.sqlModeHasOnlyFullGroupBy(),
-		onlyFullGroupBySet: true,
-		remapDb:            maps.Clone(execCtx.remapDb),
-		defaultDatabase:    executionSes.GetTxnCompileCtx().GetDatabase(),
-		tempTableVersion:   owner.GetTempTableVersion(),
-		ddlVersion:         owner.getDDLVersion(),
-		cloneSQL:           cloneSQL,
-		protocolVersion:    protocolVersion,
+		Name:                         preparePlan.GetDcl().GetPrepare().GetName(),
+		Sql:                          originSQL,
+		compile:                      comp,
+		PreparePlan:                  preparePlan,
+		PrepareStmt:                  saveStmt,
+		NativeMode:                   owner.sqlModeHasMatrixOneNative(),
+		OnlyFullGroupBy:              owner.sqlModeHasOnlyFullGroupBy(),
+		onlyFullGroupBySet:           true,
+		remapDb:                      maps.Clone(execCtx.remapDb),
+		defaultDatabase:              executionSes.GetTxnCompileCtx().GetDatabase(),
+		viewMetadataColumnsDependent: viewMetadataColumnsDependent,
+		tempTableVersion:             owner.GetTempTableVersion(),
+		ddlVersion:                   owner.getDDLVersion(),
+		cloneSQL:                     cloneSQL,
+		protocolVersion:              protocolVersion,
 		numericOverloadParamPositions: plan2.PreparedPlanNumericFallbackParamPositions(
 			prepareControl.Plan),
 		directResultParamPositions: plan2.PreparedPlanDirectResultParamPositions(
@@ -4140,6 +4146,7 @@ var GetComputationWrapper = func(execCtx *ExecCtx, db string, user string, eng e
 		tcw.plan = preparePlan.GetDcl().GetPrepare().Plan
 		tcw.binaryPrepare = execCtx.input.isBinaryProtExecute
 		tcw.prepareName = execCtx.input.stmtName
+		tcw.viewMetadataColumnsDependent = execCtx.input.viewMetadataColumnsDependent
 		if tcw.binaryPrepare {
 			// COM_STMT_EXECUTE borrows the AST retained by PrepareStmt. Mark it
 			// before Compile so every early error path keeps the shared AST alive.
@@ -4177,6 +4184,7 @@ var GetComputationWrapper = func(execCtx *ExecCtx, db string, user string, eng e
 			tcw.cachedPlanGeneration = cached.plans[i]
 			tcw.setPlanSnapshotTS(cached.planSnapshotTS[i])
 			tcw.planGenerationReused = true
+			tcw.viewMetadataColumnsDependent = cached.viewMetadataColumnsDependent[i]
 			tcw.protocolVersion = cached.protocolVersion
 			tcw.SetRemapDb(statementRemaps[i])
 			tcw.SetSchedulingSQL(statementSchedulingSQL[i])
@@ -4965,6 +4973,13 @@ func executeStmtWithResponse(ses *Session,
 	execCtx.reqCtx, span = trace.Start(execCtx.reqCtx, "executeStmtWithResponse",
 		trace.WithKind(trace.SpanKindStatement))
 	defer span.End(trace.WithStatementExtra(ses.GetTxnId(), ses.GetStmtId(), ses.GetSqlOfStmt()))
+	lease, viewMetadataSensitive, err := acquireViewMetadataStatementLease(ses, execCtx)
+	if err != nil {
+		return err
+	}
+	execCtx.viewMetadataSensitive = viewMetadataSensitive
+	execCtx.viewMetadataLease = lease
+	defer finishViewMetadataStatementLease(execCtx)
 	defer func() {
 		if execCtx.returning != nil {
 			if closeErr := execCtx.returning.Close(execCtx); closeErr != nil {
@@ -4998,6 +5013,9 @@ func executeStmtWithResponse(ses *Session,
 	// separate MatrixOne table in the same explicit transaction.
 	ses.FinalizeKafkaProgress(err == nil)
 	if err != nil {
+		// Preserve ordinary pre-response SQL errors, but retain metadata terminal
+		// handling after any response packet may have been published.
+		downgradeViewMetadataLeaseOnPreResponseError(execCtx)
 		return abortPreparedCursorQueryResult(execCtx, abortStagedReturning(execCtx, err))
 	}
 
@@ -5006,11 +5024,27 @@ func executeStmtWithResponse(ses *Session,
 	// COM_QUERY via the session) reads the correct value.
 	recordLastAffectedRows(ses, execCtx)
 
+	if execCtx.viewMetadataSensitive {
+		if err = validateViewMetadataLeaseAuthority(execCtx); err != nil {
+			return err
+		}
+		if resper, ok := execCtx.resper.(*MysqlResp); ok {
+			if err = installViewMetadataWriteDeadline(execCtx, resper.mysqlRrWr); err != nil {
+				return err
+			}
+		}
+	}
 	err = respClientWhenSuccess(ses, execCtx)
 	if err != nil {
 		return err
 	}
 	recordLastFoundRows(ses, execCtx)
+	if execCtx.viewMetadataSensitive && execCtx.viewMetadataLease != nil &&
+		execCtx.input != nil && execCtx.input.isCursorExecute &&
+		execCtx.prepareStmt != nil && execCtx.prepareStmt.cursor != nil {
+		execCtx.prepareStmt.cursor.metadataEpoch = execCtx.viewMetadataLease.Epoch()
+		execCtx.prepareStmt.cursor.metadataEpochSet = true
+	}
 
 	return
 }
@@ -5161,11 +5195,15 @@ func executeStmtWithWorkspace(ses FeSession,
 	}
 
 	execCtx.txnOpt.autoCommit = autocommit
+	execCtx.txnOpt.viewMetadataSensitive = execCtx.viewMetadataSensitive
 	err = ses.GetTxnHandler().Create(execCtx)
 	if err != nil {
 		return err
 	}
 	finishTxnOnReturn = true
+	// The provisional lease must cover snapshot creation and planning. Epoch
+	// validation is deferred until planning reveals whether the expanded plan is
+	// an actual lifecycle consumer; ordinary base-table plans release early.
 
 	//skip BEGIN stmt
 	if beginStmt {
@@ -5216,6 +5254,439 @@ func executeStmtWithWorkspace(ses FeSession,
 	recordSessionDDL(ses, execCtx, err)
 
 	return
+}
+
+func acquireViewMetadataStatementLease(
+	ses FeSession,
+	execCtx *ExecCtx,
+) (*compile.ViewMetadataEpochLease, bool, error) {
+	if execCtx == nil {
+		return nil, false, nil
+	}
+	binaryExecute := execCtx.input != nil && execCtx.input.isBinaryProtExecute
+	if !binaryExecute && !viewMetadataStatementNeedsLease(
+		execCtx.stmt, ses.GetDatabaseName()) {
+		return nil, false, nil
+	}
+	// This is a provisional planning lease: it serializes relation resolution
+	// with epoch publication, but deliberately does not require live metadata
+	// authority. Planning determines whether the relation is an ordinary base
+	// table; only a retained metadata consumer validates authority below.
+	lease, err := compile.AcquireViewMetadataProvisionalLease(
+		execCtx.reqCtx, ses.GetService())
+	return lease, true, err
+}
+
+func downgradeViewMetadataLeaseOnPreResponseError(execCtx *ExecCtx) {
+	if execCtx != nil && !execCtx.viewMetadataResponseStarted {
+		execCtx.viewMetadataSensitive = false
+	}
+}
+
+func finishViewMetadataStatementLease(execCtx *ExecCtx) {
+	if execCtx == nil {
+		return
+	}
+	// Release while the sensitivity bit still describes the completed
+	// statement, so successful metadata responses clear their write deadline.
+	releaseViewMetadataStatementLease(execCtx)
+	execCtx.viewMetadataSensitive = false
+	execCtx.viewMetadataResponseStarted = false
+}
+
+func releaseViewMetadataStatementLease(execCtx *ExecCtx) {
+	if execCtx == nil || execCtx.viewMetadataLease == nil {
+		return
+	}
+	if resper, ok := execCtx.resper.(*MysqlResp); ok && execCtx.viewMetadataSensitive {
+		if execCtx.viewMetadataLease.ValidateAuthority() != nil {
+			if closer, ok := resper.mysqlRrWr.(authorityConnectionCloser); ok {
+				_ = closer.CloseExpiredAuthorityConnection()
+			}
+		} else if setter, ok := resper.mysqlRrWr.(authorityWriteDeadlineSetter); ok {
+			// The successful terminator has flushed every buffered metadata packet;
+			// only then may the connection return to its ordinary deadline policy.
+			_ = setter.SetWriteDeadline(time.Time{})
+		}
+	}
+	execCtx.viewMetadataLease.Release()
+	execCtx.viewMetadataLease = nil
+}
+
+func viewMetadataStatementMustRetainLease(stmt tree.Statement) bool {
+	switch statement := stmt.(type) {
+	case *tree.ShowColumns:
+		return true
+	case *tree.CreateTable:
+		return statement.IsAsSelect
+	case *tree.ExplainStmt:
+		return viewMetadataStatementMustRetainLease(statement.Statement)
+	case *tree.ExplainAnalyze:
+		return viewMetadataStatementMustRetainLease(statement.Statement)
+	case *tree.ExplainPhyPlan:
+		return viewMetadataStatementMustRetainLease(statement.Statement)
+	default:
+		return false
+	}
+}
+
+func finalizeViewMetadataLeaseAfterPlanning(ses FeSession, execCtx *ExecCtx) error {
+	if execCtx == nil || !execCtx.viewMetadataSensitive {
+		return nil
+	}
+	retain := false
+	if wrapper, ok := execCtx.cw.(interface{ viewMetadataPlanNeedsLease() bool }); ok {
+		retain = wrapper.viewMetadataPlanNeedsLease()
+	}
+	retain = retain || viewMetadataStatementMustRetainLease(execCtx.stmt)
+	if !retain {
+		// Downgrade before releasing so an expired metadata authority cannot
+		// apply metadata terminal handling (including connection closure) to an
+		// ordinary relation query.
+		execCtx.viewMetadataSensitive = false
+		releaseViewMetadataStatementLease(execCtx)
+		return nil
+	}
+	if err := validateViewMetadataTransactionEpoch(ses); err != nil {
+		return err
+	}
+	ses.GetTxnHandler().MarkViewMetadataAuthorityRequired()
+	return validateViewMetadataLeaseAuthority(execCtx)
+}
+
+func validateViewMetadataLeaseAuthority(execCtx *ExecCtx) error {
+	if execCtx == nil || execCtx.viewMetadataLease == nil {
+		return nil
+	}
+	return execCtx.viewMetadataLease.ValidateAuthority()
+}
+
+func validateCurrentViewMetadataAuthority(ses FeSession) error {
+	return compile.ValidateViewMetadataAuthority(ses.GetService())
+}
+
+func validateViewMetadataTransactionEpoch(ses FeSession) error {
+	return validateViewMetadataTransactionEpochs(
+		compile.ViewMetadataEpoch(ses.GetService()),
+		ses.GetTxnHandler().ViewMetadataEpoch(),
+	)
+}
+
+func validateViewMetadataTransactionEpochs(currentEpoch, transactionEpoch uint64) error {
+	if currentEpoch == 0 || transactionEpoch == currentEpoch {
+		return nil
+	}
+	return moerr.NewInvalidStateNoCtxf(
+		"transaction predates View metadata epoch: transaction=%d current=%d; rollback and retry",
+		transactionEpoch, currentEpoch)
+}
+
+func viewMetadataStatementNeedsLease(stmt tree.Statement, defaultDatabase string) bool {
+	switch statement := stmt.(type) {
+	case *tree.ShowColumns:
+		return true
+	case *tree.CreateTable:
+		return statement.IsAsSelect
+	case *tree.Execute:
+		// The prepared statement owns the inner AST and plan. Acquiring for every
+		// EXECUTE keeps a cached metadata consumer inside the epoch boundary.
+		return true
+	case *tree.ExplainStmt:
+		return viewMetadataStatementNeedsLease(statement.Statement, defaultDatabase)
+	case *tree.ExplainAnalyze:
+		return viewMetadataStatementNeedsLease(statement.Statement, defaultDatabase)
+	case *tree.ExplainPhyPlan:
+		return viewMetadataStatementNeedsLease(statement.Statement, defaultDatabase)
+	default:
+		// Relation identity, not the top-level statement kind or original SQL
+		// spelling, owns the lease decision. Start at every executable statement
+		// root so DML sources/subqueries and execution wrappers cannot hide an
+		// information_schema.columns read from the epoch boundary.
+		return viewMetadataASTNeedsLease(
+			reflect.ValueOf(statement), defaultDatabase,
+			make(map[string]struct{}), make(map[uintptr]struct{}))
+	}
+}
+
+func viewMetadataASTNeedsLease(
+	value reflect.Value,
+	defaultDatabase string,
+	cteScope map[string]struct{},
+	visited map[uintptr]struct{},
+) bool {
+	if !value.IsValid() {
+		return false
+	}
+	if value.Kind() == reflect.Interface {
+		if value.IsNil() {
+			return false
+		}
+		return viewMetadataASTNeedsLease(
+			value.Elem(), defaultDatabase, cteScope, visited)
+	}
+	if value.Kind() == reflect.Pointer {
+		if value.IsNil() {
+			return false
+		}
+		if value.CanInterface() {
+			switch node := value.Interface().(type) {
+			case *tree.TableName:
+				return viewMetadataTableNeedsLease(node, cteScope)
+			case *tree.Select:
+				return viewMetadataSelectNeedsLease(
+					node, defaultDatabase, cteScope, visited)
+			case *tree.Insert:
+				return viewMetadataInsertNeedsLease(
+					node, defaultDatabase, cteScope, visited)
+			case *tree.Update:
+				return viewMetadataUpdateNeedsLease(
+					node, defaultDatabase, cteScope, visited)
+			case *tree.MultiInsert:
+				return viewMetadataMultiInsertNeedsLease(
+					node, defaultDatabase, cteScope, visited)
+			case *tree.Delete:
+				return viewMetadataDeleteNeedsLease(
+					node, defaultDatabase, cteScope, visited)
+			}
+		}
+		pointer := value.Pointer()
+		if _, ok := visited[pointer]; ok {
+			return false
+		}
+		visited[pointer] = struct{}{}
+		return viewMetadataASTNeedsLease(
+			value.Elem(), defaultDatabase, cteScope, visited)
+	}
+
+	switch value.Kind() {
+	case reflect.Struct:
+		valueType := value.Type()
+		for index := 0; index < value.NumField(); index++ {
+			// Parser implementation markers and private caches are not semantic
+			// children. Every relation-bearing AST field is exported.
+			if valueType.Field(index).PkgPath != "" {
+				continue
+			}
+			if viewMetadataASTNeedsLease(
+				value.Field(index), defaultDatabase, cteScope, visited) {
+				return true
+			}
+		}
+	case reflect.Slice, reflect.Array:
+		for index := 0; index < value.Len(); index++ {
+			if viewMetadataASTNeedsLease(
+				value.Index(index), defaultDatabase, cteScope, visited) {
+				return true
+			}
+		}
+	case reflect.Map:
+		iterator := value.MapRange()
+		for iterator.Next() {
+			if viewMetadataASTNeedsLease(
+				iterator.Value(), defaultDatabase, cteScope, visited) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func viewMetadataSelectNeedsLease(
+	statement *tree.Select,
+	defaultDatabase string,
+	outerScope map[string]struct{},
+	visited map[uintptr]struct{},
+) bool {
+	if statement == nil {
+		return false
+	}
+	mainScope, cteNeedsLease := viewMetadataWithScopeNeedsLease(
+		statement.With, defaultDatabase, outerScope, visited)
+	if cteNeedsLease {
+		return true
+	}
+	query := *statement
+	query.With = nil
+	return viewMetadataASTNeedsLease(
+		reflect.ValueOf(&query).Elem(), defaultDatabase, mainScope, visited)
+}
+
+func viewMetadataInsertNeedsLease(
+	statement *tree.Insert,
+	defaultDatabase string,
+	outerScope map[string]struct{},
+	visited map[uintptr]struct{},
+) bool {
+	if statement == nil {
+		return false
+	}
+	mainScope, cteNeedsLease := viewMetadataWithScopeNeedsLease(
+		statement.With, defaultDatabase, outerScope, visited)
+	if cteNeedsLease {
+		return true
+	}
+	query := *statement
+	query.With = nil
+	query.Table = nil
+	return viewMetadataASTNeedsLease(
+		reflect.ValueOf(&query).Elem(), defaultDatabase, mainScope, visited)
+}
+
+func viewMetadataUpdateNeedsLease(
+	statement *tree.Update,
+	defaultDatabase string,
+	outerScope map[string]struct{},
+	visited map[uintptr]struct{},
+) bool {
+	if statement == nil {
+		return false
+	}
+	mainScope, cteNeedsLease := viewMetadataWithScopeNeedsLease(
+		statement.With, defaultDatabase, outerScope, visited)
+	if cteNeedsLease {
+		return true
+	}
+	query := *statement
+	query.With = nil
+	// MySQL UPDATE JOIN stores both the write target and joined read sources in
+	// Tables. Preserve a join tree, but exclude a plain write-only target.
+	if !viewMetadataTableExprsContainJoin(query.Tables) {
+		query.Tables = nil
+	}
+	return viewMetadataASTNeedsLease(
+		reflect.ValueOf(&query).Elem(), defaultDatabase, mainScope, visited)
+}
+
+func viewMetadataTableExprsContainJoin(tables tree.TableExprs) bool {
+	for _, table := range tables {
+		if viewMetadataTableExprContainsJoin(table) {
+			return true
+		}
+	}
+	return false
+}
+
+func viewMetadataTableExprContainsJoin(table tree.TableExpr) bool {
+	switch node := table.(type) {
+	case *tree.JoinTableExpr, *tree.ApplyTableExpr:
+		return true
+	case *tree.ParenTableExpr:
+		return viewMetadataTableExprContainsJoin(node.Expr)
+	case *tree.AliasedTableExpr:
+		return viewMetadataTableExprContainsJoin(node.Expr)
+	default:
+		return false
+	}
+}
+
+func viewMetadataMultiInsertNeedsLease(
+	statement *tree.MultiInsert,
+	defaultDatabase string,
+	outerScope map[string]struct{},
+	visited map[uintptr]struct{},
+) bool {
+	if statement == nil {
+		return false
+	}
+	mainScope, cteNeedsLease := viewMetadataWithScopeNeedsLease(
+		statement.With, defaultDatabase, outerScope, visited)
+	if cteNeedsLease {
+		return true
+	}
+	if viewMetadataASTNeedsLease(
+		reflect.ValueOf(statement.Source), defaultDatabase, mainScope, visited) {
+		return true
+	}
+	for _, when := range statement.Whens {
+		if when != nil && viewMetadataASTNeedsLease(
+			reflect.ValueOf(when.Cond), defaultDatabase, mainScope, visited) {
+			return true
+		}
+	}
+	for _, target := range statement.AllTargets() {
+		if target != nil && viewMetadataASTNeedsLease(
+			reflect.ValueOf(target.Values), defaultDatabase, mainScope, visited) {
+			return true
+		}
+	}
+	return false
+}
+
+func viewMetadataDeleteNeedsLease(
+	statement *tree.Delete,
+	defaultDatabase string,
+	outerScope map[string]struct{},
+	visited map[uintptr]struct{},
+) bool {
+	if statement == nil {
+		return false
+	}
+	mainScope, cteNeedsLease := viewMetadataWithScopeNeedsLease(
+		statement.With, defaultDatabase, outerScope, visited)
+	if cteNeedsLease {
+		return true
+	}
+	query := *statement
+	query.With = nil
+	query.Tables = nil
+	return viewMetadataASTNeedsLease(
+		reflect.ValueOf(&query).Elem(), defaultDatabase, mainScope, visited)
+}
+
+func viewMetadataWithScopeNeedsLease(
+	with *tree.With,
+	defaultDatabase string,
+	outerScope map[string]struct{},
+	visited map[uintptr]struct{},
+) (map[string]struct{}, bool) {
+	mainScope := viewMetadataCloneCTEScope(outerScope)
+	if with == nil {
+		return mainScope, false
+	}
+	visibleToBody := viewMetadataCloneCTEScope(outerScope)
+	for _, cte := range with.CTEs {
+		if cte == nil || cte.Name == nil {
+			continue
+		}
+		name := strings.ToLower(string(cte.Name.Alias))
+		bodyScope := viewMetadataCloneCTEScope(visibleToBody)
+		if with.IsRecursive {
+			bodyScope[name] = struct{}{}
+		}
+		if viewMetadataASTNeedsLease(
+			reflect.ValueOf(cte.Stmt), defaultDatabase, bodyScope, visited) {
+			return mainScope, true
+		}
+		visibleToBody[name] = struct{}{}
+		mainScope[name] = struct{}{}
+	}
+	return mainScope, false
+}
+
+func viewMetadataCloneCTEScope(scope map[string]struct{}) map[string]struct{} {
+	clone := make(map[string]struct{}, len(scope)+1)
+	for name := range scope {
+		clone[name] = struct{}{}
+	}
+	return clone
+}
+
+func viewMetadataTableNeedsLease(
+	tableName *tree.TableName,
+	cteScope map[string]struct{},
+) bool {
+	if tableName == nil || string(tableName.Name()) == "" {
+		return false
+	}
+	if string(tableName.Schema()) == "" {
+		if _, shadowed := cteScope[strings.ToLower(string(tableName.Name()))]; shadowed {
+			return false
+		}
+	}
+	// Before a transaction snapshot exists, resolving whether a relation is a
+	// base table or a direct/nested View would itself require catalog access.
+	// Conservatively lease every unshadowed read relation instead.
+	return true
 }
 
 func recordSessionDDL(ses FeSession, execCtx *ExecCtx, err error) {
@@ -5393,6 +5864,11 @@ func executeStmt(ses *Session,
 	}
 	switch getExecLocation() {
 	case tree.EXEC_IN_FRONTEND:
+		if execCtx.viewMetadataSensitive {
+			if err := validateViewMetadataTransactionEpoch(ses); err != nil {
+				return err
+			}
+		}
 		stats, err := execInFrontend(ses, execCtx)
 		defer execCtx.cw.RecordCompoundStmt(execCtx.reqCtx, stats)
 		return err
@@ -5461,6 +5937,9 @@ func executeStmt(ses *Session,
 	ses.EnterFPrint(FPExecStmtBeforeCompile)
 	defer ses.ExitFPrint(FPExecStmtBeforeCompile)
 	if ret, err = execCtx.cw.Compile(execCtx, ses.GetOutputCallback(execCtx)); err != nil {
+		return
+	}
+	if err = finalizeViewMetadataLeaseAfterPlanning(ses, execCtx); err != nil {
 		return
 	}
 
@@ -5998,6 +6477,7 @@ func doComQuery(ses *Session, execCtx *ExecCtx, input *UserInput) (retErr error)
 	cacheProtocolVersion := currentProtocolVersion(proc)
 	planStatsVersions := make([]map[optimizerStatsTableKey]uint64, len(cws))
 	planSnapshotTS := make([]timestamp.Timestamp, len(cws))
+	viewMetadataColumnsDependent := make([]bool, len(cws))
 	for i, cw := range cws {
 		tcw, ok := cw.(*TxnComputationWrapper)
 		if !ok || tcw.protocolVersion != cacheProtocolVersion {
@@ -6008,6 +6488,7 @@ func doComQuery(ses *Session, execCtx *ExecCtx, input *UserInput) (retErr error)
 		if !hasPlanSnapshotTS {
 			return nil
 		}
+		viewMetadataColumnsDependent[i] = tcw.viewMetadataColumnsDependent
 		planStatsVersions[i] = tcw.optimizerStatsVersions
 	}
 
@@ -6023,8 +6504,9 @@ func doComQuery(ses *Session, execCtx *ExecCtx, input *UserInput) (retErr error)
 		cw.Clear()
 	}
 	Cached = true
-	ses.cachePlanWithSnapshotsAndStatsVersions(
-		cacheKey, stmts, plans, planSnapshotTS, planStatsVersions, cacheProtocolVersion)
+	ses.cachePlanWithSnapshotsMetadataAndStats(
+		cacheKey, stmts, plans, planSnapshotTS,
+		viewMetadataColumnsDependent, planStatsVersions, cacheProtocolVersion)
 
 	return nil
 }
@@ -6161,9 +6643,10 @@ func newBinaryExecuteUserInput(sql string, prepareStmt *PrepareStmt, cursorReque
 	return &UserInput{
 		sql: sql, stmtName: prepareStmt.Name, stmt: prepareStmt.PrepareStmt,
 		preparePlan: prepareStmt.PreparePlan, isBinaryProtExecute: true,
-		preparedDefaultDatabase: prepareStmt.defaultDatabase,
-		isCursorExecute:         cursorRequested,
-		remapDb:                 prepareStmt.remapDb,
+		viewMetadataColumnsDependent: prepareStmt.viewMetadataColumnsDependent,
+		preparedDefaultDatabase:      prepareStmt.defaultDatabase,
+		isCursorExecute:              cursorRequested,
+		remapDb:                      prepareStmt.remapDb,
 	}
 }
 
@@ -6507,6 +6990,31 @@ func executeStmtFetch(ctx context.Context, ses *Session, data []byte) (*Response
 	}
 
 	cursor := stmt.cursor
+	writer := ses.GetResponser().MysqlRrWr()
+	var fetchLease *compile.ViewMetadataEpochLease
+	if cursor.metadataEpochSet {
+		fetchLease, _, err = compile.AcquireViewMetadataRefreshLease(ctx, ses.GetService())
+		if err == nil && (fetchLease == nil || fetchLease.Epoch() != cursor.metadataEpoch) {
+			err = moerr.NewInternalError(ctx,
+				"View metadata admission epoch changed while prepared cursor was idle")
+		}
+		if err != nil {
+			if fetchLease != nil {
+				fetchLease.Release()
+			}
+			stmt.closeCursor()
+			return nil, err
+		}
+		defer fetchLease.Release()
+		fetchCtx := &ExecCtx{reqCtx: ctx, viewMetadataLease: fetchLease}
+		if err = installViewMetadataWriteDeadline(fetchCtx, writer); err != nil {
+			if closer, ok := writer.(authorityConnectionCloser); ok {
+				_ = closer.CloseExpiredAuthorityConnection()
+			}
+			stmt.closeCursor()
+			return nil, err
+		}
+	}
 	total := cursor.result.GetRowCount()
 	start := cursor.offset
 	if start > total {
@@ -6521,7 +7029,7 @@ func executeStmtFetch(ctx context.Context, ses *Session, data []byte) (*Response
 		Data:    cursor.result.Data[start:end],
 	}
 	if end > start {
-		if err = ses.GetResponser().MysqlRrWr().WriteResultSetRow(rows, end-start); err != nil {
+		if err = writer.WriteResultSetRow(rows, end-start); err != nil {
 			stmt.closeCursor()
 			return nil, err
 		}
@@ -6530,15 +7038,21 @@ func executeStmtFetch(ctx context.Context, ses *Session, data []byte) (*Response
 
 	status := checkMoreResultSet(ses.getStatusAfterTxnIsEnded(), true)
 	status &^= SERVER_STATUS_CURSOR_EXISTS | SERVER_STATUS_LAST_ROW_SENT
-	if end >= total {
+	lastFetch := end >= total
+	if lastFetch {
 		status |= SERVER_STATUS_LAST_ROW_SENT
-		stmt.closeCursor()
 	} else {
 		status |= SERVER_STATUS_CURSOR_EXISTS
 	}
-	if err = ses.GetResponser().MysqlRrWr().WriteEOFOrOK(0, status); err != nil {
+	if err = writer.WriteEOFOrOK(0, status); err != nil {
 		stmt.closeCursor()
 		return nil, err
+	}
+	if setter, ok := writer.(authorityWriteDeadlineSetter); ok {
+		_ = setter.SetWriteDeadline(time.Time{})
+	}
+	if lastFetch {
+		stmt.closeCursor()
 	}
 	setRowCount(ses, ses.GetProc(), -1)
 	return nil, nil

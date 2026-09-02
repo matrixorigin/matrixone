@@ -1789,8 +1789,8 @@ func (ses *Session) cachePlanWithSnapshots(
 	planSnapshotTS []timestamp.Timestamp,
 	versions ...int64,
 ) {
-	ses.cachePlanWithSnapshotsAndStatsVersions(
-		sql, stmts, plans, planSnapshotTS,
+	ses.cachePlanWithSnapshotsMetadataAndStats(
+		sql, stmts, plans, planSnapshotTS, make([]bool, len(plans)),
 		make([]map[optimizerStatsTableKey]uint64, len(plans)), versions...)
 }
 
@@ -1799,6 +1799,19 @@ func (ses *Session) cachePlanWithSnapshotsAndStatsVersions(
 	stmts []tree.Statement,
 	plans []*plan.Plan,
 	planSnapshotTS []timestamp.Timestamp,
+	planStatsVersions []map[optimizerStatsTableKey]uint64,
+	versions ...int64,
+) {
+	ses.cachePlanWithSnapshotsMetadataAndStats(
+		sql, stmts, plans, planSnapshotTS, make([]bool, len(plans)), planStatsVersions, versions...)
+}
+
+func (ses *Session) cachePlanWithSnapshotsMetadataAndStats(
+	sql string,
+	stmts []tree.Statement,
+	plans []*plan.Plan,
+	planSnapshotTS []timestamp.Timestamp,
+	viewMetadataColumnsDependent []bool,
 	planStatsVersions []map[optimizerStatsTableKey]uint64,
 	versions ...int64,
 ) {
@@ -1822,8 +1835,9 @@ func (ses *Session) cachePlanWithSnapshotsAndStatsVersions(
 	if len(versions) > 0 {
 		protocolVersion = versions[0]
 	}
-	ses.planCache.cacheWithPlanSnapshotsAndStatsVersions(
-		sql, stmts, plans, planSnapshotTS, planStatsVersions, protocolVersion)
+	ses.planCache.cacheWithPlanSnapshotsMetadataAndStats(
+		sql, stmts, plans, planSnapshotTS, viewMetadataColumnsDependent,
+		planStatsVersions, protocolVersion)
 }
 
 func (ses *Session) getCachedPlan(sql string) *cachedPlan {

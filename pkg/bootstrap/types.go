@@ -56,6 +56,9 @@ type Service interface {
 	GetFinalVersion() string
 	// GetFinalVersionOffset Get mo final version offset, which is based on the current code
 	GetFinalVersionOffset() int32
+	// IsFinalVersionReady reports whether this CN has observed the catalog at
+	// its exact final version and offset in the READY state.
+	IsFinalVersionReady() bool
 	// Close close bootstrap service
 	Close() error
 }

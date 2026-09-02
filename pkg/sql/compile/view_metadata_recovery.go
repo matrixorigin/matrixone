@@ -19,6 +19,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -284,6 +285,18 @@ func StartViewMetadataRevalidation(ctx context.Context, sqlExecutor executor.SQL
 	}, executor.Options{}.WithAccountID(catalog.System_Account))
 }
 
+var viewMetadataRecoveryTestBarriers sync.Map
+
+// SetViewMetadataRecoveryBarrierForTest pauses one CN recovery worker at the
+// start of each tick. It exists only for deterministic embedded-cluster tests.
+func SetViewMetadataRecoveryBarrierForTest(workerID string, reached chan<- struct{}, release <-chan struct{}) func() {
+	viewMetadataRecoveryTestBarriers.Store(workerID, struct {
+		reached chan<- struct{}
+		release <-chan struct{}
+	}{reached: reached, release: release})
+	return func() { viewMetadataRecoveryTestBarriers.Delete(workerID) }
+}
+
 // RunViewMetadataRecovery performs one bounded local-CN recovery tick. It is
 // deliberately not a task-service executor: an older CN can never receive an
 // executor code that it does not implement during a rolling upgrade.
@@ -292,6 +305,21 @@ func RunViewMetadataRecovery(
 	sqlExecutor executor.SQLExecutor,
 	workerID string,
 ) error {
+	if value, ok := viewMetadataRecoveryTestBarriers.Load(workerID); ok {
+		barrier := value.(struct {
+			reached chan<- struct{}
+			release <-chan struct{}
+		})
+		select {
+		case barrier.reached <- struct{}{}:
+		default:
+		}
+		select {
+		case <-barrier.release:
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
 	callCtx, cancel := context.WithTimeout(ctx, viewMetadataRecoveryCallTimeout)
 	defer cancel()
 	ctx = callCtx
@@ -383,6 +411,40 @@ func viewMetadataRevalidationStillRequired(
 	return required, nil
 }
 
+// ViewMetadataRevalidationComplete reports only a durable terminal pass. An
+// empty local work selection is not completion: the global cursor must have
+// wrapped to ACTIVATED, every tenant marker must have left REQUIRED/SCAN, and
+// no retryable/running target may remain.
+func ViewMetadataRevalidationComplete(
+	ctx context.Context,
+	sqlExecutor executor.SQLExecutor,
+) (bool, error) {
+	callCtx, cancel := context.WithTimeout(ctx, viewMetadataRecoveryCallTimeout)
+	defer cancel()
+	result, err := sqlExecutor.Exec(callCtx, fmt.Sprintf(
+		"select 1 where exists (select 1 from %s.%s where account_id=0 "+
+			"and target_relation_id=0 and dependency_ordinal=0 and source_relation_kind='%s') "+
+			"and not exists (select 1 from %s.%s where account_id<>0 and target_relation_id=0 "+
+			"and dependency_ordinal=0 and source_relation_kind in ('%s','%s')) "+
+			"and not exists (select 1 from %s.%s where status in ('%s','%s','%s'))",
+		catalog.MO_CATALOG, catalog.MO_VIEW_DEPENDENCIES, catalog.ViewRefreshStatusActivated,
+		catalog.MO_CATALOG, catalog.MO_VIEW_DEPENDENCIES,
+		catalog.ViewRefreshStatusRevalidateRequired, catalog.ViewRefreshStatusRevalidateScan,
+		catalog.MO_CATALOG, catalog.MO_VIEW_REFRESH,
+		viewRefreshStatusPending, viewRefreshStatusDiscovering, viewRefreshStatusRunning),
+		executor.Options{}.WithAccountID(catalog.System_Account))
+	if err != nil {
+		return false, err
+	}
+	defer result.Close()
+	complete := false
+	result.ReadRows(func(rows int, _ []*vector.Vector) bool {
+		complete = rows > 0
+		return false
+	})
+	return complete, nil
+}
+
 func selectPendingViewMetadataTarget(
 	ctx context.Context,
 	sqlExecutor executor.SQLExecutor,
@@ -469,7 +531,7 @@ func init() {
 }
 
 func recoverViewMetadataCommand(proc *process.Process, parameter string) (int, error) {
-	if !viewMetadataRefreshEnabled(proc.GetService()) {
+	if !viewMetadataRecoveryEnabled(proc.GetService()) {
 		return 0, nil
 	}
 	if err := lockViewMetadataLifecycleGate(proc); err != nil {
@@ -510,7 +572,7 @@ func beginViewMetadataRevalidation(proc *process.Process) (int, error) {
 }
 
 func lockViewMetadataLifecycleGate(proc *process.Process) error {
-	if !viewMetadataRefreshEnabled(proc.GetService()) {
+	if !viewMetadataRecoveryEnabled(proc.GetService()) {
 		return nil
 	}
 	v, ok := moruntime.ServiceRuntime(proc.GetService()).GetGlobalVariables(moruntime.InternalSQLExecutor)

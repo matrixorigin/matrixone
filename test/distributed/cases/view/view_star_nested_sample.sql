@@ -32,6 +32,7 @@ select (
 ) as outer_sample_sql_ok;
 
 alter table t add column c int default 7;
+-- @wait_expect(2, 60)
 select (
     select group_concat(column_name order by ordinal_position separator ',')
     from information_schema.columns
@@ -41,6 +42,7 @@ select count(*) = 2 as sample_rows_ok from v_sample;
 select * from v_sample order by a;
 -- error ER_BAD_FIELD_ERROR
 select c from v_sample;
+-- @wait_expect(2, 60)
 select (
     select group_concat(column_name order by ordinal_position separator ',')
     from information_schema.columns
@@ -53,6 +55,7 @@ alter view v_outer as
 select * from t
 where exists (select sample(*, 100 percent) from u);
 alter table t add column d int default 8;
+-- @wait_expect(2, 60)
 select (
     select group_concat(column_name order by ordinal_position separator ',')
     from information_schema.columns

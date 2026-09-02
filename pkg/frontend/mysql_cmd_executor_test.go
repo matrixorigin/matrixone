@@ -23,6 +23,7 @@ import (
 	"fmt"
 	"io"
 	"math"
+	goruntime "runtime"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -81,6 +82,44 @@ import (
 func init() {
 	motrace.Init(context.Background(), motrace.EnableTracer(false))
 	motrace.DisableLogErrorReport(true)
+}
+
+var benchmarkViewMetadataStatement tree.Statement
+
+func BenchmarkViewMetadataStatementNeedsLease(b *testing.B) {
+	cases := []struct {
+		name string
+		sql  string
+	}{
+		{name: "simple-tp-read", sql: "select n_name from nation where n_nationkey = 1"},
+		{name: "prepared-cached-execute", sql: "execute cached_stmt using @id"},
+		{name: "metadata-sensitive", sql: "select column_name from information_schema.columns where table_name = 'nation'"},
+	}
+	for _, test := range cases {
+		stmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL, test.sql, 1)
+		require.NoError(b, err)
+		defer stmt.Free()
+		b.Run(test.name+"/baseline", func(b *testing.B) {
+			b.ReportAllocs()
+			for range b.N {
+				benchmarkViewMetadataStatement = stmt
+			}
+		})
+		b.Run(test.name+"/admission", func(b *testing.B) {
+			b.ReportAllocs()
+			for range b.N {
+				viewMetadataStatementNeedsLease(stmt, "tpch")
+			}
+		})
+		b.Run(test.name+"/admission-parallel", func(b *testing.B) {
+			b.ReportAllocs()
+			b.RunParallel(func(pb *testing.PB) {
+				for pb.Next() {
+					viewMetadataStatementNeedsLease(stmt, "tpch")
+				}
+			})
+		})
+	}
 }
 
 func mockRecordStatement(ctx context.Context) (context.Context, *gostub.Stubs) {
@@ -2572,6 +2611,425 @@ func Test_GetColumns(t *testing.T) {
 	})
 }
 
+func TestViewMetadataStatementNeedsLease(t *testing.T) {
+	for _, tc := range []struct {
+		name            string
+		stmt            tree.Statement
+		sql             string
+		defaultDatabase string
+		want            bool
+	}{
+		{name: "show columns", stmt: &tree.ShowColumns{}, want: true},
+		{name: "ctas", stmt: &tree.CreateTable{IsAsSelect: true}, want: true},
+		{name: "plain create table", stmt: &tree.CreateTable{}},
+		{name: "prepared execution", stmt: &tree.Execute{}, want: true},
+		{name: "qualified with comments",
+			sql: "select * from information_schema/**/.columns", want: true},
+		{name: "qualified with quoting",
+			sql: "select * from `information_schema` . `columns`", want: true},
+		{name: "default database", sql: "select * from columns",
+			defaultDatabase: "INFORMATION_SCHEMA", want: true},
+		{name: "join relation",
+			sql: "select c.* from db.t join information_schema.columns c on true", want: true},
+		{name: "scalar subquery",
+			sql: "select (select count(*) from information_schema.columns)", want: true},
+		{name: "insert source",
+			sql: "insert into dst select * from information_schema.columns", want: true},
+		{name: "update scalar subquery",
+			sql: "update dst set n = (select count(*) from information_schema.columns)", want: true},
+		{name: "update join source",
+			sql:  "update app.dst d join information_schema.columns c on d.n = c.ordinal_position set d.n = 1",
+			want: true},
+		{name: "update join user view source",
+			sql:  "update app.dst d join app.metadata_cols c on d.n = c.ordinal_position set d.n = 1",
+			want: true},
+		{name: "delete predicate subquery",
+			sql:  "delete from dst where n in (select ordinal_position from information_schema.columns)",
+			want: true},
+		{name: "explain analyze wrapper",
+			sql: "explain analyze select * from information_schema.columns", want: true},
+		{name: "ordinary insert", sql: "insert into dst values (1)"},
+		{name: "insert top-level cte shadows default database table",
+			sql:             "with columns as (select 1 as n) insert into app.dst select n from columns",
+			defaultDatabase: "information_schema"},
+		{name: "update top-level cte shadows default database table",
+			sql:             "with columns as (select 1 as n) update app.dst set n = (select n from columns)",
+			defaultDatabase: "information_schema"},
+		{name: "delete top-level cte shadows default database table",
+			sql:             "with columns as (select 1 as n) delete from app.dst where n in (select n from columns)",
+			defaultDatabase: "information_schema"},
+		{name: "insert cte body reads relation",
+			sql:  "with source as (select * from app.metadata_cols) insert into app.dst select * from source",
+			want: true},
+		{name: "multi insert cte-only source",
+			sql: "with s as (select 1 as n) insert all into app.dst (n) select n from s"},
+		{name: "multi insert relation source",
+			sql:  "insert all into app.dst (n) select ordinal_position from information_schema.columns",
+			want: true},
+		{name: "cte body", sql: "with c as (select * from information_schema.columns) select * from c",
+			want: true},
+		{name: "cte shadows default database table",
+			sql:             "with columns as (select 1 as n) select n from columns",
+			defaultDatabase: "information_schema"},
+		{name: "qualified table is not shadowed by cte",
+			sql:             "with columns as (select 1 as n) select * from information_schema.columns",
+			defaultDatabase: "information_schema", want: true},
+		{name: "union branch", sql: "select 1 union select count(*) from information_schema.columns",
+			want: true},
+		{name: "text is not relation", sql: "select 'information_schema.columns'"},
+		{name: "explicit relation may resolve user view", sql: "select * from app.columns",
+			defaultDatabase: "information_schema", want: true},
+		{name: "ordinary relation may resolve user view", sql: "select * from db.t", want: true},
+		{name: "direct user view shape", sql: "select * from app.metadata_cols", want: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			stmt := tc.stmt
+			if stmt == nil {
+				var err error
+				stmt, err = parsers.ParseOne(
+					context.Background(), dialect.MYSQL, tc.sql, 1)
+				require.NoError(t, err)
+			}
+			require.Equal(t, tc.want,
+				viewMetadataStatementNeedsLease(stmt, tc.defaultDatabase))
+		})
+	}
+}
+
+func waitViewMetadataAdvanceAtPublicBarrier(
+	t *testing.T,
+	fence *compile.ViewMetadataEpochFence,
+) {
+	t.Helper()
+	canceledCtx, cancel := context.WithCancel(context.Background())
+	cancel()
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		probe, err := fence.Acquire(canceledCtx)
+		if err != nil {
+			require.ErrorIs(t, err, context.Canceled)
+			return
+		}
+		probe.Release()
+		goruntime.Gosched()
+	}
+	t.Fatal("epoch advance did not close the public acquisition barrier")
+}
+
+func TestInformationSchemaColumnsLeaseBlocksEpochAdvance(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		sql  string
+	}{
+		{name: "select", sql: "select * from information_schema/**/.columns"},
+		{name: "user view relation", sql: "select * from app.metadata_cols"},
+		{name: "insert source", sql: "insert into dst select * from information_schema.columns"},
+		{name: "update subquery", sql: "update dst set n = (select count(*) from information_schema.columns)"},
+		{name: "update join", sql: "update app.dst d join information_schema.columns c on d.n = c.ordinal_position set d.n = 1"},
+		{name: "delete subquery", sql: "delete from dst where n in (select ordinal_position from information_schema.columns)"},
+		{name: "explain analyze", sql: "explain analyze select * from information_schema.columns"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			runtime.RunTest(t.Name(), func(rt runtime.Runtime) {
+				fence := compile.NewViewMetadataEpochFence()
+				require.NoError(t, fence.Advance(context.Background(), 1))
+				require.True(t, fence.MarkCatalogFenced(1))
+				require.True(t, fence.MarkRefreshReady(1))
+				require.True(t, fence.EnableRefresh(1))
+				rt.SetGlobalVariables(compile.ViewMetadataEpochFenceRuntimeKey, fence)
+
+				stmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL, tc.sql, 1)
+				require.NoError(t, err)
+				ses := newSes(nil, gomock.NewController(t))
+				ses.service = t.Name()
+				lease, sensitive, err := acquireViewMetadataStatementLease(ses, &ExecCtx{
+					reqCtx: context.Background(),
+					stmt:   stmt,
+				})
+				require.NoError(t, err)
+				require.True(t, sensitive)
+				require.NotNil(t, lease)
+
+				advanceCtx, cancelAdvance := context.WithTimeout(context.Background(), time.Second)
+				defer cancelAdvance()
+				advanceDone := make(chan error, 1)
+				go func() { advanceDone <- fence.Advance(advanceCtx, 2) }()
+				waitViewMetadataAdvanceAtPublicBarrier(t, fence)
+				select {
+				case advanceErr := <-advanceDone:
+					t.Fatalf("epoch advanced before information_schema.columns lease drained: %v", advanceErr)
+				default:
+				}
+
+				lease.Release()
+				require.NoError(t, <-advanceDone)
+				require.Equal(t, uint64(2), fence.Epoch())
+			})
+		})
+	}
+}
+
+func TestViewMetadataLeaseDowngradesAfterPlanning(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		retain bool
+	}{
+		{name: "ordinary base table"},
+		{name: "expanded metadata dependency", retain: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			runtime.RunTest(t.Name(), func(rt runtime.Runtime) {
+				fence := compile.NewViewMetadataEpochFence()
+				require.NoError(t, fence.Advance(context.Background(), 1))
+				require.True(t, fence.MarkCatalogFenced(1))
+				require.True(t, fence.MarkRefreshReady(1))
+				require.True(t, fence.EnableRefresh(1))
+				rt.SetGlobalVariables(compile.ViewMetadataEpochFenceRuntimeKey, fence)
+
+				lease, _, err := compile.AcquireViewMetadataRefreshLease(
+					context.Background(), t.Name())
+				require.NoError(t, err)
+				wrapper := &TxnComputationWrapper{}
+				if tc.retain {
+					wrapper.markViewMetadataColumnsDependent()
+				}
+				ses := &Session{feSessionImpl: feSessionImpl{
+					service:    t.Name(),
+					txnHandler: &TxnHandler{viewMetadataEpoch: 1},
+				}}
+				execCtx := &ExecCtx{
+					cw:                    wrapper,
+					viewMetadataSensitive: true,
+					viewMetadataLease:     lease,
+				}
+				require.NoError(t, finalizeViewMetadataLeaseAfterPlanning(ses, execCtx))
+				if !tc.retain {
+					require.Nil(t, execCtx.viewMetadataLease)
+					require.False(t, execCtx.viewMetadataSensitive)
+					require.NoError(t, fence.Advance(context.Background(), 2))
+					return
+				}
+
+				require.NotNil(t, execCtx.viewMetadataLease)
+				advanceDone := make(chan error, 1)
+				go func() { advanceDone <- fence.Advance(context.Background(), 2) }()
+				waitViewMetadataAdvanceAtPublicBarrier(t, fence)
+				releaseViewMetadataStatementLease(execCtx)
+				require.NoError(t, <-advanceDone)
+			})
+		})
+	}
+}
+
+func TestViewMetadataProvisionalLeaseContainsExpiredAuthority(t *testing.T) {
+	for _, test := range []struct {
+		name              string
+		sql               string
+		binaryExecute     bool
+		metadataDependent bool
+		wantAuthorityErr  bool
+	}{
+		{name: "ordinary base table", sql: "select * from nation"},
+		{name: "ordinary prepared cached execute", sql: "select * from nation", binaryExecute: true},
+		{name: "show columns", sql: "show columns from nation", wantAuthorityErr: true},
+		{name: "information schema columns", sql: "select * from information_schema.columns", metadataDependent: true, wantAuthorityErr: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			runtime.RunTest(t.Name(), func(rt runtime.Runtime) {
+				fence := compile.NewViewMetadataEpochFence()
+				require.NoError(t, fence.Advance(context.Background(), 1))
+				require.True(t, fence.MarkCatalogFenced(1))
+				require.True(t, fence.MarkRefreshReady(1))
+				require.True(t, fence.EnableRefresh(1))
+				fence.RenewAuthority(time.Now().Add(time.Hour))
+				require.True(t, fence.ExpireAuthority(time.Time{}))
+				rt.SetGlobalVariables(compile.ViewMetadataEpochFenceRuntimeKey, fence)
+
+				stmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL, test.sql, 1)
+				require.NoError(t, err)
+				defer stmt.Free()
+				wrapper := &TxnComputationWrapper{stmt: stmt}
+				if test.metadataDependent {
+					wrapper.markViewMetadataColumnsDependent()
+				}
+				ses := newSes(nil, gomock.NewController(t))
+				ses.service = t.Name()
+				ses.GetTxnHandler().viewMetadataEpoch = 1
+				execCtx := &ExecCtx{
+					reqCtx: context.Background(),
+					stmt:   stmt,
+					cw:     wrapper,
+					input:  &UserInput{isBinaryProtExecute: test.binaryExecute},
+				}
+				lease, sensitive, err := acquireViewMetadataStatementLease(ses, execCtx)
+				require.NoError(t, err, "provisional frontend admission must ignore metadata authority")
+				require.True(t, sensitive)
+				require.NotNil(t, lease)
+				execCtx.viewMetadataSensitive = sensitive
+				execCtx.viewMetadataLease = lease
+				err = finalizeViewMetadataLeaseAfterPlanning(ses, execCtx)
+				if test.wantAuthorityErr {
+					require.ErrorIs(t, err, context.Canceled)
+					releaseViewMetadataStatementLease(execCtx)
+					return
+				}
+				require.NoError(t, err)
+				require.False(t, execCtx.viewMetadataSensitive)
+				require.Nil(t, execCtx.viewMetadataLease)
+			})
+		})
+	}
+
+	// A successful heartbeat reopens a real metadata consumer through the same
+	// frontend provisional/finalization boundary.
+	recoveredService := t.Name() + "-recovered"
+	runtime.RunTest(recoveredService, func(rt runtime.Runtime) {
+		fence := compile.NewViewMetadataEpochFence()
+		require.NoError(t, fence.Advance(context.Background(), 1))
+		require.True(t, fence.MarkCatalogFenced(1))
+		require.True(t, fence.MarkRefreshReady(1))
+		require.True(t, fence.EnableRefresh(1))
+		fence.RenewAuthority(time.Now().Add(time.Hour))
+		rt.SetGlobalVariables(compile.ViewMetadataEpochFenceRuntimeKey, fence)
+		stmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL, "show columns from nation", 1)
+		require.NoError(t, err)
+		defer stmt.Free()
+		ses := newSes(nil, gomock.NewController(t))
+		ses.service = recoveredService
+		ses.GetTxnHandler().viewMetadataEpoch = 1
+		execCtx := &ExecCtx{reqCtx: context.Background(), stmt: stmt, cw: &TxnComputationWrapper{stmt: stmt}}
+		lease, sensitive, err := acquireViewMetadataStatementLease(ses, execCtx)
+		require.NoError(t, err)
+		execCtx.viewMetadataSensitive, execCtx.viewMetadataLease = sensitive, lease
+		require.NoError(t, finalizeViewMetadataLeaseAfterPlanning(ses, execCtx))
+		releaseViewMetadataStatementLease(execCtx)
+	})
+}
+
+func TestFinishViewMetadataStatementLeaseClearsWriteDeadline(t *testing.T) {
+	fence := compile.NewViewMetadataEpochFence()
+	require.NoError(t, fence.Advance(context.Background(), 1))
+	fence.RenewAuthority(time.Now().Add(time.Hour))
+	lease, err := fence.Acquire(context.Background())
+	require.NoError(t, err)
+	writer := &testMysqlWriter{}
+	require.NoError(t, writer.SetWriteDeadline(time.Now().Add(time.Minute)))
+	execCtx := &ExecCtx{
+		viewMetadataSensitive: true,
+		viewMetadataLease:     lease,
+		resper:                &MysqlResp{mysqlRrWr: writer},
+	}
+
+	finishViewMetadataStatementLease(execCtx)
+
+	require.False(t, execCtx.viewMetadataSensitive)
+	require.Nil(t, execCtx.viewMetadataLease)
+	require.Len(t, writer.writeDeadlines, 2)
+	require.True(t, writer.writeDeadlines[1].IsZero(),
+		"successful metadata response must restore the ordinary connection deadline")
+}
+
+func TestPlannedShowColumnsRetainsLeaseThroughEpochAdvance(t *testing.T) {
+	stmt, err := parsers.ParseOne(
+		context.Background(), dialect.MYSQL, "show columns from nation", 1)
+	require.NoError(t, err)
+	compilerCtx := plan.NewMockCompilerContext(false)
+	compilerCtx.SetContext(context.Background())
+	planned, err := plan.BuildPlan(compilerCtx, stmt, false)
+	require.NoError(t, err)
+	require.NotNil(t, planned.GetQuery(), "SHOW COLUMNS must exercise its rewritten engine plan")
+
+	runtime.RunTest(t.Name(), func(rt runtime.Runtime) {
+		fence := compile.NewViewMetadataEpochFence()
+		require.NoError(t, fence.Advance(context.Background(), 1))
+		require.True(t, fence.MarkCatalogFenced(1))
+		require.True(t, fence.MarkRefreshReady(1))
+		require.True(t, fence.EnableRefresh(1))
+		rt.SetGlobalVariables(compile.ViewMetadataEpochFenceRuntimeKey, fence)
+		lease, _, err := compile.AcquireViewMetadataRefreshLease(context.Background(), t.Name())
+		require.NoError(t, err)
+
+		wrapper := &TxnComputationWrapper{stmt: stmt, plan: planned}
+		ses := &Session{feSessionImpl: feSessionImpl{
+			service:    t.Name(),
+			txnHandler: &TxnHandler{viewMetadataEpoch: 1},
+		}}
+		execCtx := &ExecCtx{
+			stmt:                  stmt,
+			cw:                    wrapper,
+			viewMetadataSensitive: true,
+			viewMetadataLease:     lease,
+		}
+		require.NoError(t, finalizeViewMetadataLeaseAfterPlanning(ses, execCtx))
+		require.NotNil(t, execCtx.viewMetadataLease)
+
+		advanceDone := make(chan error, 1)
+		go func() { advanceDone <- fence.Advance(context.Background(), 2) }()
+		waitViewMetadataAdvanceAtPublicBarrier(t, fence)
+		releaseViewMetadataStatementLease(execCtx)
+		require.NoError(t, <-advanceDone)
+	})
+}
+
+func TestViewMetadataErrorDowngradeDistinguishesResponseBoundary(t *testing.T) {
+	preResponse := &ExecCtx{viewMetadataSensitive: true}
+	downgradeViewMetadataLeaseOnPreResponseError(preResponse)
+	require.False(t, preResponse.viewMetadataSensitive)
+
+	postResponse := &ExecCtx{
+		viewMetadataSensitive:       true,
+		viewMetadataResponseStarted: true,
+	}
+	downgradeViewMetadataLeaseOnPreResponseError(postResponse)
+	require.True(t, postResponse.viewMetadataSensitive)
+}
+
+func TestViewMetadataAuthorityTerminalValidationRejectsExpiredLease(t *testing.T) {
+	runtime.RunTest(t.Name(), func(rt runtime.Runtime) {
+		fence := compile.NewViewMetadataEpochFence()
+		require.NoError(t, fence.Advance(context.Background(), 1))
+		require.True(t, fence.MarkCatalogFenced(1))
+		require.True(t, fence.MarkRefreshReady(1))
+		require.True(t, fence.EnableRefresh(1))
+		fence.RenewAuthority(time.Now().Add(time.Minute))
+		rt.SetGlobalVariables(compile.ViewMetadataEpochFenceRuntimeKey, fence)
+		lease, _, err := compile.AcquireViewMetadataRefreshLease(context.Background(), t.Name())
+		require.NoError(t, err)
+		defer lease.Release()
+		execCtx := &ExecCtx{viewMetadataLease: lease, viewMetadataSensitive: true}
+		ses := &Session{feSessionImpl: feSessionImpl{service: t.Name()}}
+
+		// Model resuming from a process pause after the authority deadline but
+		// before the asynchronous shutdown callback runs.
+		fence.RenewAuthority(time.Now().Add(-time.Second))
+		require.ErrorIs(t, validateViewMetadataLeaseAuthority(execCtx), context.Canceled)
+		require.ErrorIs(t, validateCurrentViewMetadataAuthority(ses), context.Canceled)
+	})
+}
+
+func TestValidateViewMetadataTransactionEpochs(t *testing.T) {
+	require.NoError(t, validateViewMetadataTransactionEpochs(0, 0))
+	require.NoError(t, validateViewMetadataTransactionEpochs(5, 5))
+	err := validateViewMetadataTransactionEpochs(5, 4)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "rollback and retry")
+}
+
+func TestValidateViewMetadataTransactionEpochUsesSessionGeneration(t *testing.T) {
+	runtime.RunTest(t.Name(), func(rt runtime.Runtime) {
+		fence := compile.NewViewMetadataEpochFence()
+		require.NoError(t, fence.Advance(context.Background(), 5))
+		rt.SetGlobalVariables(compile.ViewMetadataEpochFenceRuntimeKey, fence)
+		ses := &Session{feSessionImpl: feSessionImpl{
+			service:    t.Name(),
+			txnHandler: &TxnHandler{viewMetadataEpoch: 4},
+		}}
+		require.Error(t, validateViewMetadataTransactionEpoch(ses))
+		ses.txnHandler.viewMetadataEpoch = 5
+		require.NoError(t, validateViewMetadataTransactionEpoch(ses))
+	})
+}
+
 func Test_GetComputationWrapper(t *testing.T) {
 	convey.Convey("GetComputationWrapper succ", t, func() {
 		db, sql, user := "T", "SHOW TABLES", "root"
@@ -4230,6 +4688,97 @@ func TestExecuteStmtFetchAdvancesAndClosesCursor(t *testing.T) {
 	require.Nil(t, resp)
 	require.Nil(t, stmt.cursor)
 	require.Zero(t, ses.preparedCursorBytes.Load())
+}
+
+func TestIdleMetadataCursorDoesNotBlockEpochAndStaleFetchFails(t *testing.T) {
+	for _, tc := range []struct {
+		name         string
+		materialized uint64
+		target       uint64
+	}{
+		{name: "initial activation E0 to E1", materialized: 0, target: 1},
+		{name: "steady transition E1 to E2", materialized: 1, target: 2},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			runtime.RunTest(t.Name(), func(rt runtime.Runtime) {
+				fence := compile.NewViewMetadataEpochFence()
+				if tc.materialized > 0 {
+					require.NoError(t, fence.Advance(context.Background(), tc.materialized))
+					require.True(t, fence.MarkCatalogFenced(tc.materialized))
+					require.True(t, fence.MarkRefreshReady(tc.materialized))
+					require.True(t, fence.EnableRefresh(tc.materialized))
+				}
+				fence.RenewAuthority(time.Now().Add(time.Minute))
+				rt.SetGlobalVariables(compile.ViewMetadataEpochFenceRuntimeKey, fence)
+
+				writer := &testMysqlWriter{writeEOFOrOKFunc: func(uint16, uint16) error { return nil }}
+				ses := &Session{
+					feSessionImpl: feSessionImpl{
+						service: t.Name(), respr: NewMysqlResp(writer), txnHandler: &TxnHandler{},
+					},
+					prepareStmts: make(map[string]*PrepareStmt),
+				}
+				stmt := &PrepareStmt{Name: getPrepareStmtName(274), cursor: &preparedStmtCursor{
+					result:        &MysqlResultSet{Data: [][]interface{}{{int64(1)}}},
+					metadataEpoch: tc.materialized, metadataEpochSet: true,
+				}}
+				ses.prepareStmts[strings.ToLower(stmt.Name)] = stmt
+				data := make([]byte, 8)
+				binary.LittleEndian.PutUint32(data[0:4], 274)
+				binary.LittleEndian.PutUint32(data[4:8], 1)
+
+				// No cross-request lease exists, so a healthy idle client cannot
+				// enter the admission wait-for graph, including initial activation.
+				require.NoError(t, fence.Advance(context.Background(), tc.target))
+				require.True(t, fence.MarkCatalogFenced(tc.target))
+				require.True(t, fence.MarkRefreshReady(tc.target))
+				require.True(t, fence.EnableRefresh(tc.target))
+
+				resp, err := executeStmtFetch(context.Background(), ses, data)
+				require.ErrorContains(t, err,
+					"admission epoch changed while prepared cursor was idle")
+				require.Nil(t, resp)
+				require.Nil(t, stmt.cursor)
+			})
+		})
+	}
+}
+
+func TestDisabledSameEpochMetadataCursorFetchSucceeds(t *testing.T) {
+	for _, epoch := range []uint64{0, 2} {
+		t.Run(fmt.Sprintf("E%d", epoch), func(t *testing.T) {
+			runtime.RunTest(t.Name(), func(rt runtime.Runtime) {
+				fence := compile.NewViewMetadataEpochFence()
+				if epoch > 0 {
+					require.NoError(t, fence.Advance(context.Background(), epoch))
+					require.True(t, fence.MarkCatalogFenced(epoch))
+				}
+				fence.RenewAuthority(time.Now().Add(time.Minute))
+				rt.SetGlobalVariables(compile.ViewMetadataEpochFenceRuntimeKey, fence)
+
+				writer := &testMysqlWriter{writeEOFOrOKFunc: func(uint16, uint16) error { return nil }}
+				ses := &Session{
+					feSessionImpl: feSessionImpl{
+						service: t.Name(), respr: NewMysqlResp(writer), txnHandler: &TxnHandler{},
+					},
+					prepareStmts: make(map[string]*PrepareStmt),
+				}
+				stmt := &PrepareStmt{Name: getPrepareStmtName(275), cursor: &preparedStmtCursor{
+					result:        &MysqlResultSet{Data: [][]interface{}{{int64(1)}}},
+					metadataEpoch: epoch, metadataEpochSet: true,
+				}}
+				ses.prepareStmts[strings.ToLower(stmt.Name)] = stmt
+				data := make([]byte, 8)
+				binary.LittleEndian.PutUint32(data[0:4], 275)
+				binary.LittleEndian.PutUint32(data[4:8], 1)
+
+				resp, err := executeStmtFetch(context.Background(), ses, data)
+				require.NoError(t, err)
+				require.Nil(t, resp)
+				require.Nil(t, stmt.cursor)
+			})
+		})
+	}
 }
 
 func TestExecuteStmtFetchEmptyCursorClosesOnFirstFetch(t *testing.T) {

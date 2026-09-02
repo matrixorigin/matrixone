@@ -1157,7 +1157,14 @@ func ReCalcNodeStats(nodeID int32, builder *QueryBuilder, recursive bool, leafNo
 		selectivity := clampSelectivity(math.Pow(rightSelectivity, math.Pow(leftSelectivity, 0.2)), 1)
 		selectivity_out := andSelectivity(leftSelectivity, rightSelectivity)
 
-		for _, pred := range node.OnList {
+		for i, pred := range node.OnList {
+			if node.JoinType == plan.Node_DEDUP && node.IsRightJoin || pred.Ndv <= 0 {
+				// Flattening and cached-plan rewrites may intentionally share an
+				// expression between plan nodes. NDV is a node-local statistics
+				// annotation, so never write through that shared pointer.
+				pred = DeepCopyExpr(pred)
+				node.OnList[i] = pred
+			}
 			if node.JoinType == plan.Node_DEDUP && node.IsRightJoin {
 				pred.Ndv = leftStats.Outcnt
 			} else if pred.Ndv <= 0 {

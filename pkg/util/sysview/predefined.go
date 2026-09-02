@@ -214,6 +214,8 @@ func informationSchemaMetadataVisibilityCTEWithActiveRoles(activeRolesSQL string
 // `information_schema` database
 // They are all Tenant level system tables/system views
 var (
+	systemDatabaseListSQL = "'" + strings.Join(catalog.SystemDatabases, "','") + "'"
+
 	InformationSchemaKeyColumnUsageDDL = fmt.Sprintf("CREATE VIEW information_schema.KEY_COLUMN_USAGE AS "+
 		informationSchemaMetadataVisibilityCTE()+"SELECT "+
 		"CAST('def' AS varchar(64)) AS CONSTRAINT_CATALOG, "+
@@ -289,8 +291,27 @@ var (
 		"where (ki.type = 'PRIMARY' or ki.ordinal_position = 1) and ki.type in ('PRIMARY', 'UNIQUE', 'MULTIPLE', 'FULLTEXT', 'SPATIAL') "+
 		"group by ki.table_id, ki.column_name) mk ON mk.table_id = mt.rel_id AND mk.column_name = mc.attname "+
 		"where mc.account_id = current_account_id() "+
-		"and mc.att_is_hidden = 0 and mc.att_relname!='%s' and mc.att_relname not like '%s' and mc.attname != '%s' and mc.att_relname not like '%s' and mc.att_relname != '%s' and not startswith(mc.att_relname, '%s') and %s",
-		catalog.MOAutoIncrTable, catalog.PrefixPriColName+"%", catalog.Row_ID, catalog.PartitionSubTableWildcard, catalog.MO_ACCOUNT_LOCK, catalog.IndexTableNamePrefix, catalog.NonTemporaryTableSQLPredicate("mt"))
+		"and mc.att_is_hidden = 0 "+
+		"and (mt.relkind<>'v' or mt.reldatabase in (%s) or "+
+		"(not exists (select 1 from mo_catalog.mo_view_refresh vr "+
+		"where vr.account_id=mc.account_id and vr.target_relation_id=mc.att_relname_id) and "+
+		"not exists (select 1 from mo_catalog.mo_view_dependencies vd "+
+		"where vd.account_id=mc.account_id and vd.target_relation_id=0 and vd.dependency_ordinal=0) and "+
+		"not exists (select 1 from mo_catalog.mo_view_dependencies gd "+
+		"where gd.account_id=0 and gd.target_relation_id=0 and gd.dependency_ordinal=0 "+
+		"and gd.source_relation_kind in ('REVALIDATE_REQUIRED','REVALIDATE_SCAN'))) or "+
+		"(exists (select 1 from mo_catalog.mo_view_refresh vr "+
+		"where vr.account_id=mc.account_id and vr.target_relation_id=mc.att_relname_id "+
+		"and vr.status='CURRENT') and (not exists (select 1 from mo_catalog.mo_view_dependencies vd "+
+		"where vd.account_id=mc.account_id and vd.target_relation_id=0 and vd.dependency_ordinal=0) or "+
+		"exists (select 1 from mo_catalog.mo_view_dependencies ga "+
+		"where ga.account_id=0 and ga.target_relation_id=0 and ga.dependency_ordinal=0 "+
+		"and ga.source_relation_kind not in ('REVALIDATE_REQUIRED','REVALIDATE_SCAN'))) and "+
+		"not exists (select 1 from mo_catalog.mo_view_dependencies gd "+
+		"where gd.account_id=0 and gd.target_relation_id=0 and gd.dependency_ordinal=0 "+
+		"and gd.source_relation_kind in ('REVALIDATE_REQUIRED','REVALIDATE_SCAN')))) "+
+		"and mc.att_relname!='%s' and mc.att_relname not like '%s' and mc.attname != '%s' and mc.att_relname not like '%s' and mc.att_relname != '%s' and not startswith(mc.att_relname, '%s') and %s",
+		systemDatabaseListSQL, catalog.MOAutoIncrTable, catalog.PrefixPriColName+"%", catalog.Row_ID, catalog.PartitionSubTableWildcard, catalog.MO_ACCOUNT_LOCK, catalog.IndexTableNamePrefix, catalog.NonTemporaryTableSQLPredicate("mt"))
 
 	InformationSchemaProfilingDDL = "CREATE TABLE information_schema.PROFILING (" +
 		"QUERY_ID int NOT NULL DEFAULT '0'," +

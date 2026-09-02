@@ -943,9 +943,20 @@ func doRestoreSnapshot(ctx context.Context, ses *Session, stmt *tree.RestoreSnap
 		if err = restoreSystemCatalogsAfterObjects(ctx, ses.GetService(), bh, snapshot.ts, restoreAccount, toAccountId); err != nil {
 			return stats, err
 		}
-		if err = reconcileAccountViewMetadata(ctx, ses, bh, toAccountId); err != nil {
-			return stats, err
-		}
+	}
+	// Table and database restore replace relation identities too. Reconcile the
+	// complete account after every object-level restore so dependency edges are
+	// rebound before the transaction publishes the restored catalog.
+	reconcileDatabaseName, reconcileRelationName := "", ""
+	if stmt.Level == tree.RESTORELEVELDATABASE || stmt.Level == tree.RESTORELEVELTABLE {
+		reconcileDatabaseName = dbName
+	}
+	if stmt.Level == tree.RESTORELEVELTABLE {
+		reconcileRelationName = tblName
+	}
+	if err = reconcileViewMetadata(
+		ctx, ses, bh, toAccountId, reconcileDatabaseName, reconcileRelationName); err != nil {
+		return stats, err
 	}
 	if stmt.Level == tree.RESTORELEVELACCOUNT && toAccountId == catalog.System_Account {
 		if err = seedMissingViewMetadataAfterCatalogReset(ctx, ses, bh); err != nil {
@@ -3281,8 +3292,8 @@ func seedMissingViewMetadataAfterCatalogReset(
 	ses *Session,
 	bh BackgroundExec,
 ) error {
-	enabled, err := prepareViewMetadataMutation(ctx, bh, ses.GetService())
-	if err != nil || !enabled {
+	ready, err := prepareViewMetadataCatalogMutation(ctx, bh, ses.GetService())
+	if err != nil || !ready {
 		return err
 	}
 	systemCtx := process.WithSystemCTELimits(defines.AttachAccountId(ctx, catalog.System_Account))
@@ -3321,11 +3332,22 @@ func reconcileAccountViewMetadata(
 	bh BackgroundExec,
 	accountID uint32,
 ) error {
-	enabled, err := prepareViewMetadataMutation(ctx, bh, ses.GetService())
-	if err != nil || !enabled {
+	return reconcileViewMetadata(ctx, ses, bh, accountID, "", "")
+}
+
+func reconcileViewMetadata(
+	ctx context.Context,
+	ses *Session,
+	bh BackgroundExec,
+	accountID uint32,
+	databaseName string,
+	relationName string,
+) error {
+	ready, err := prepareViewMetadataCatalogMutation(ctx, bh, ses.GetService())
+	if err != nil || !ready {
 		return err
 	}
-	return reconcileAccountViewMetadataEnabled(ctx, bh, accountID)
+	return reconcileViewMetadataEnabled(ctx, bh, accountID, databaseName, relationName)
 }
 
 func reconcileAccountViewMetadataEnabled(
@@ -3333,11 +3355,22 @@ func reconcileAccountViewMetadataEnabled(
 	bh BackgroundExec,
 	accountID uint32,
 ) error {
+	return reconcileViewMetadataEnabled(ctx, bh, accountID, "", "")
+}
+
+func reconcileViewMetadataEnabled(
+	ctx context.Context,
+	bh BackgroundExec,
+	accountID uint32,
+	databaseName string,
+	relationName string,
+) error {
 	systemCtx := process.WithSystemCTELimits(defines.AttachAccountId(ctx, catalog.System_Account))
 	if err := bh.Exec(systemCtx, catalog.ViewMetadataLifecycleGateSQL); err != nil {
 		return err
 	}
-	for _, sql := range compile.ReconcileAccountViewMetadataSQL(accountID, uint64(time.Now().UnixNano())) {
+	for _, sql := range compile.ReconcileScopedViewMetadataSQL(
+		accountID, databaseName, relationName, uint64(time.Now().UnixNano())) {
 		if err := bh.Exec(systemCtx, sql); err != nil {
 			return err
 		}
@@ -3346,6 +3379,21 @@ func reconcileAccountViewMetadataEnabled(
 }
 
 func prepareViewMetadataMutation(
+	ctx context.Context,
+	bh BackgroundExec,
+	serviceID string,
+) (bool, error) {
+	if compile.ViewMetadataRefreshEnabled(serviceID) {
+		return true, nil
+	}
+	_, err := prepareViewMetadataCatalogMutation(ctx, bh, serviceID)
+	return false, err
+}
+
+// prepareViewMetadataCatalogMutation separates catalog readiness from admission.
+// Restore cleanup and seeding must run whenever the lifecycle catalogs exist,
+// including rolling-upgrade windows in which metadata admission is still sealed.
+func prepareViewMetadataCatalogMutation(
 	ctx context.Context,
 	bh BackgroundExec,
 	serviceID string,
@@ -3362,7 +3410,7 @@ func prepareViewMetadataMutation(
 			return false, err
 		}
 	}
-	return false, nil
+	return true, nil
 }
 
 func createDroppedAccount(ctx context.Context, ses *Session, bh BackgroundExec, snapshotName string, account accountRecord) (err error) {

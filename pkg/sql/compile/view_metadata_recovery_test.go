@@ -52,9 +52,14 @@ type viewMetadataCleanupRecordingExecutor struct {
 
 func enableViewMetadataRefreshForTest(t *testing.T) {
 	t.Helper()
-	original := viewMetadataRefreshEnabled
+	originalRefresh := viewMetadataRefreshEnabled
+	originalRecovery := viewMetadataRecoveryEnabled
 	viewMetadataRefreshEnabled = func(string) bool { return true }
-	t.Cleanup(func() { viewMetadataRefreshEnabled = original })
+	viewMetadataRecoveryEnabled = func(string) bool { return true }
+	t.Cleanup(func() {
+		viewMetadataRefreshEnabled = originalRefresh
+		viewMetadataRecoveryEnabled = originalRecovery
+	})
 }
 
 func setSynchronousViewRefreshBudgetForTest(t *testing.T, budget int) {
@@ -136,7 +141,7 @@ func TestSeedMissingViewMetadataUsesOnlyUserViewsWithoutState(t *testing.T) {
 	require.Contains(t, sql, "t.reldatabase not in ('")
 }
 
-func TestReconcileAccountViewMetadataRemovesOrphansAndSeedsMissingViews(t *testing.T) {
+func TestReconcileAccountViewMetadataRemovesOnlyOrphansAndSeedsMissingViews(t *testing.T) {
 	sqls := ReconcileAccountViewMetadataSQL(42, 77)
 	require.Len(t, sqls, 3)
 	for _, sql := range sqls[:2] {
@@ -145,9 +150,30 @@ func TestReconcileAccountViewMetadataRemovesOrphansAndSeedsMissingViews(t *testi
 		require.Contains(t, sql, "not exists")
 		require.Contains(t, sql, "t.relkind='v'")
 	}
+	// Existing targets are intentionally not reset account-wide; the relation-removal
+	// boundary has already enqueued only the affected reverse closure.
+	require.NotContains(t, strings.Join(sqls, " "), "update mo_catalog.mo_view_refresh")
 	require.Contains(t, sqls[2], "where t.account_id=42")
 	require.Contains(t, sqls[2], "77,0,'DISCOVERING'")
 	require.Contains(t, sqls[2], "r.target_relation_id is null")
+}
+
+func TestReconcileScopedViewMetadataLimitsForegroundRestoreScans(t *testing.T) {
+	databaseSQL := ReconcileScopedViewMetadataSQL(42, "db'name", "", 77)
+	require.Len(t, databaseSQL, 3)
+	for _, sql := range databaseSQL[:2] {
+		require.Contains(t, sql, "target_database_name='db''name'")
+		require.NotContains(t, sql, "target_relation_name=")
+	}
+	require.Contains(t, databaseSQL[2], "t.reldatabase='db''name'")
+
+	tableSQL := ReconcileScopedViewMetadataSQL(42, "db'name", "view'name", 77)
+	for _, sql := range tableSQL[:2] {
+		require.Contains(t, sql, "target_database_name='db''name'")
+		require.Contains(t, sql, "target_relation_name='view''name'")
+	}
+	require.Contains(t, tableSQL[2], "t.reldatabase='db''name'")
+	require.Contains(t, tableSQL[2], "t.relname='view''name'")
 }
 
 func TestConflictingRecoveryTargetGetsGenerationFencedBackoff(t *testing.T) {
@@ -1105,24 +1131,70 @@ func TestViewMetadataLifecycleSkipsRestoreCatalogDDL(t *testing.T) {
 }
 
 func TestTableAndDatabaseRestoreInvalidateAtRelationRemoval(t *testing.T) {
-	for _, level := range []tree.CloneLevelType{
-		tree.RestoreCloneLevelTable,
-		tree.RestoreCloneLevelDatabase,
+	for _, refreshEnabled := range []bool{false, true} {
+		name := "refresh disabled"
+		if refreshEnabled {
+			name = "refresh enabled"
+		}
+		t.Run(name, func(t *testing.T) {
+			if refreshEnabled {
+				enableViewMetadataRefreshForTest(t)
+			}
+			for _, level := range []tree.CloneLevelType{
+				tree.RestoreCloneLevelTable,
+				tree.RestoreCloneLevelDatabase,
+			} {
+				t.Run(fmt.Sprint(level), func(t *testing.T) {
+					proc := testutil.NewProcess(t)
+					proc.GetSessionInfo().IsRestore = true
+					proc.Ctx = defines.AttachAccountId(
+						context.WithValue(proc.Ctx, tree.CloneLevelCtxKey{}, level), 7)
+					ctrl := gomock.NewController(t)
+					txnOperator := mock_frontend.NewMockTxnOperator(ctrl)
+					txnOperator.EXPECT().SnapshotTS().Return(timestamp.Timestamp{PhysicalTime: 31})
+					proc.Base.TxnOperator = txnOperator
+					exec := &viewMetadataCleanupRecordingExecutor{}
+					installViewMetadataTestExecutor(t, proc, exec)
+					c := &Compile{proc: proc, pn: &planpb.Plan{}}
+
+					require.NoError(t, c.enqueueViewsAfterRelationRemoval("db", "src", 8, 9, 10))
+					closureSQL := exec.sqls[len(exec.sqls)-1]
+					require.Contains(t, closureSQL, "d.source_account_id=7")
+					require.Contains(t, closureSQL, "d.source_relation_id in (9,0)")
+					if refreshEnabled {
+						require.Len(t, exec.sqls, 1)
+					} else {
+						require.Len(t, exec.sqls, len(viewMetadataRequireRevalidationSQL())+1)
+						require.Equal(t, viewMetadataRequireRevalidationSQL(), exec.sqls[:len(exec.sqls)-1])
+					}
+
+					exec.sqls = nil
+					require.NoError(t, c.refreshViewsAfterRelationMutation("db", "src", 9, 10))
+					require.Empty(t, exec.sqls)
+				})
+			}
+		})
+	}
+}
+
+func TestRestoreViewMetadataInvalidationPreservesCatalogReadinessFallback(t *testing.T) {
+	for catalogErrorName, catalogError := range map[string]error{
+		"missing table":    moerr.NewNoSuchTableNoCtx("mo_catalog", catalog.MO_VIEW_DEPENDENCIES),
+		"missing database": moerr.NewBadDBNoCtx("mo_catalog"),
 	} {
-		proc := testutil.NewProcess(t)
-		proc.GetSessionInfo().IsRestore = true
-		proc.Ctx = context.WithValue(proc.Ctx, tree.CloneLevelCtxKey{}, level)
-		exec := &viewMetadataCleanupRecordingExecutor{}
-		installViewMetadataTestExecutor(t, proc, exec)
-		c := &Compile{proc: proc, pn: &planpb.Plan{}}
+		t.Run(catalogErrorName, func(t *testing.T) {
+			proc := testutil.NewProcess(t)
+			proc.GetSessionInfo().IsRestore = true
+			proc.Ctx = context.WithValue(
+				proc.Ctx, tree.CloneLevelCtxKey{}, tree.RestoreCloneLevelDatabase)
+			exec := &viewMetadataCleanupRecordingExecutor{failures: map[int]error{1: catalogError}}
+			installViewMetadataTestExecutor(t, proc, exec)
 
-		require.NoError(t, c.enqueueViewsAfterRelationRemoval("db", "src", 8, 9, 10))
-		require.Equal(t, viewMetadataRequireRevalidationSQL(), exec.sqls)
-		require.Contains(t, exec.sqls[2], "source_relation_kind='REVALIDATE_REQUIRED'")
-
-		exec.sqls = nil
-		require.NoError(t, c.refreshViewsAfterRelationMutation("db", "src", 9, 10))
-		require.Empty(t, exec.sqls)
+			err := (&Compile{proc: proc, pn: &planpb.Plan{}}).
+				enqueueViewsAfterRelationRemoval("db", "src", 8, 9, 10)
+			require.NoError(t, err)
+			require.Equal(t, []string{catalog.ViewMetadataLifecycleGateSQL}, exec.sqls)
+		})
 	}
 }
 
@@ -1205,8 +1277,9 @@ func TestViewMetadataLifecycleBeforeCapabilityActivation(t *testing.T) {
 		proc := testutil.NewProcess(t)
 		exec := &viewMetadataCleanupRecordingExecutor{}
 		installUnavailableViewMetadataTestExecutor(t, proc, exec)
-		require.NoError(t, (&Compile{proc: proc, pn: &planpb.Plan{}}).
-			persistViewDependencies(nil, "db", nil))
+		available, err := (&Compile{proc: proc, pn: &planpb.Plan{}}).viewMetadataRefreshAvailable()
+		require.NoError(t, err)
+		require.True(t, available)
 		require.Equal(t, viewMetadataRequireRevalidationSQL(), exec.sqls)
 		require.Contains(t, exec.sqls[2], "source_relation_kind='REVALIDATE_REQUIRED'")
 	})
@@ -1243,10 +1316,11 @@ func TestViewMetadataCleanupLocksLifecycleGateBeforeRows(t *testing.T) {
 			exec := &viewMetadataCleanupRecordingExecutor{}
 			installViewMetadataTestExecutor(t, proc, exec)
 			require.NoError(t, tc.run(&Compile{proc: proc, pn: &planpb.Plan{}}))
-			require.Len(t, exec.sqls, 3)
-			require.Equal(t, catalog.ViewMetadataLifecycleGateSQL, exec.sqls[0])
-			require.Equal(t, viewMetadataRequireRevalidationSQL(), exec.sqls)
+			require.Len(t, exec.sqls, 5)
+			require.Equal(t, viewMetadataRequireRevalidationSQL(), exec.sqls[:3])
 			require.Contains(t, exec.sqls[2], "source_relation_kind='REVALIDATE_REQUIRED'")
+			require.Contains(t, exec.sqls[3], "delete from mo_catalog.mo_view_dependencies")
+			require.Contains(t, exec.sqls[4], "delete from mo_catalog.mo_view_refresh")
 		})
 	}
 }

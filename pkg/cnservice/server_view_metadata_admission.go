@@ -54,6 +54,13 @@ func (s *service) initViewMetadataAdmission(ctx context.Context) error {
 }
 
 func (s *service) closeViewMetadataAdmission() {
+	s.viewMetadataAuthorityMu.Lock()
+	s.viewMetadataAuthorityVersion++
+	if s.viewMetadataAuthorityTimer != nil {
+		s.viewMetadataAuthorityTimer.Stop()
+		s.viewMetadataAuthorityTimer = nil
+	}
+	s.viewMetadataAuthorityMu.Unlock()
 	if s.viewMetadataEpochFence == nil {
 		return
 	}
@@ -62,6 +69,59 @@ func (s *service) closeViewMetadataAdmission() {
 		compile.ViewMetadataEpochFenceRuntimeKey,
 		s.viewMetadataEpochFence,
 	)
+}
+
+func viewMetadataAuthorityLeaseDuration(ticks, tickPerSecond uint64) time.Duration {
+	if ticks == 0 || tickPerSecond == 0 {
+		return 0
+	}
+	// HAKeeper expires a store only after its age exceeds the configured timeout.
+	// Expire locally one replicated tick earlier, leaving transport/scheduling
+	// margin while never extending authority beyond the durable owner lease.
+	if ticks == 1 {
+		return time.Nanosecond
+	}
+	return time.Duration(ticks-1) * time.Second / time.Duration(tickPerSecond)
+}
+
+func (s *service) renewViewMetadataAuthorityLease(
+	snapshot *logservicepb.ViewMetadataAdmission,
+	heartbeatElapsed time.Duration,
+) {
+	if snapshot == nil || snapshot.Generation != s.viewMetadataAdmissionGeneration {
+		return
+	}
+	duration := viewMetadataAuthorityLeaseDuration(
+		snapshot.AuthorityLeaseTicks, snapshot.TickPerSecond) - heartbeatElapsed
+	if duration <= 0 {
+		if s.viewMetadataEpochFence != nil {
+			s.viewMetadataEpochFence.ExpireAuthority(time.Time{})
+		}
+		return
+	}
+	authorityDeadline := time.Now().Add(duration)
+	if s.viewMetadataEpochFence != nil {
+		s.viewMetadataEpochFence.RenewAuthority(authorityDeadline)
+	}
+	s.viewMetadataAuthorityMu.Lock()
+	s.viewMetadataAuthorityVersion++
+	version := s.viewMetadataAuthorityVersion
+	if s.viewMetadataAuthorityTimer != nil {
+		s.viewMetadataAuthorityTimer.Stop()
+	}
+	s.viewMetadataAuthorityTimer = time.AfterFunc(duration, func() {
+		s.expireViewMetadataAuthority(version, authorityDeadline)
+	})
+	s.viewMetadataAuthorityMu.Unlock()
+}
+
+func (s *service) expireViewMetadataAuthority(version uint64, deadline time.Time) {
+	s.viewMetadataAuthorityMu.Lock()
+	current := s.viewMetadataAuthorityVersion == version
+	s.viewMetadataAuthorityMu.Unlock()
+	if current && s.viewMetadataEpochFence != nil {
+		s.viewMetadataEpochFence.ExpireAuthority(deadline)
+	}
 }
 
 func (s *service) notifyViewMetadataAdmissionUpdated() {
@@ -110,7 +170,20 @@ func (s *service) applyViewMetadataAdmission(
 	copy := *snapshot
 	s.viewMetadataAdmission.Store(&copy)
 	s.notifyViewMetadataAdmissionUpdated()
-	return s.fenceViewMetadataCatalog(ctx, &copy)
+	if err := s.fenceViewMetadataCatalog(ctx, &copy); err != nil {
+		return err
+	}
+	if copy.Epoch > 0 && s.viewMetadataCatalogFencedEpoch.Load() >= copy.Epoch {
+		s.viewMetadataEpochFence.MarkCatalogFenced(copy.Epoch)
+	}
+	if copy.RefreshReady && !s.viewMetadataEpochFence.MarkRefreshReady(copy.Epoch) {
+		return moerr.NewInvalidStateNoCtx("cannot prepare View metadata recovery for an unfenced epoch")
+	}
+	if copy.RefreshEnabled && !copy.RevalidationRequired &&
+		!s.viewMetadataEpochFence.EnableRefresh(copy.Epoch) {
+		return moerr.NewInvalidStateNoCtx("cannot enable View metadata refresh for an unfenced epoch")
+	}
+	return nil
 }
 
 // revokeViewMetadataGeneration fences a process that no longer owns its UUID.
@@ -157,7 +230,7 @@ func (s *service) fenceViewMetadataCatalog(
 	ctx context.Context,
 	snapshot *logservicepb.ViewMetadataAdmission,
 ) error {
-	if snapshot == nil || !snapshot.RevalidationRequired || snapshot.Epoch == 0 ||
+	if snapshot == nil || snapshot.Epoch == 0 ||
 		s.viewMetadataCatalogFencedEpoch.Load() >= snapshot.Epoch {
 		return nil
 	}
@@ -170,7 +243,8 @@ func (s *service) fenceViewMetadataCatalog(
 		s.viewMetadataCatalogFencedEpoch.Store(snapshot.Epoch)
 		return nil
 	}
-	if !s.viewMetadataCatalogFenceReady.Load() || s.sqlExecutor == nil {
+	if !snapshot.RevalidationRequired ||
+		!s.viewMetadataCatalogFenceReady.Load() || s.sqlExecutor == nil {
 		return nil
 	}
 	if err := compile.RequireViewMetadataRevalidation(ctx, s.sqlExecutor); err != nil {
@@ -180,27 +254,62 @@ func (s *service) fenceViewMetadataCatalog(
 	return nil
 }
 
+func viewMetadataAdmissionWaitTimeout(
+	discoveryTimeout time.Duration,
+	snapshot *logservicepb.ViewMetadataAdmission,
+) time.Duration {
+	if discoveryTimeout <= 0 {
+		discoveryTimeout = 30 * time.Second
+	}
+	if snapshot == nil || snapshot.OwnerExpiryRemainingTicks == 0 || snapshot.TickPerSecond == 0 {
+		return discoveryTimeout
+	}
+	ownerWait := time.Duration(
+		(snapshot.OwnerExpiryRemainingTicks+snapshot.TickPerSecond-1)/snapshot.TickPerSecond) * time.Second
+	// One discovery window after authoritative owner expiry covers the next
+	// replicated reconciliation and heartbeat response without coupling the CN
+	// deadline to an unrelated local multiplier.
+	return ownerWait + discoveryTimeout
+}
+
 func (s *service) waitForViewMetadataAdmission() error {
 	if s.viewMetadataAdmissionGeneration == 0 {
 		// Focused unit tests can construct a partial service. Production
 		// NewService always allocates a non-zero generation.
 		return nil
 	}
-	timeout := s.cfg.HAKeeper.DiscoveryTimeout.Duration
-	if timeout <= 0 {
-		timeout = 30 * time.Second
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), timeout)
-	defer cancel()
+	discoveryTimeout := s.cfg.HAKeeper.DiscoveryTimeout.Duration
+	deadline := time.Now().Add(viewMetadataAdmissionWaitTimeout(discoveryTimeout, nil))
+	var lastOwnerExpiryRemainingTicks uint64
+	ownerExpiryObserved := false
 
 	for {
 		snapshot := s.viewMetadataAdmission.Load()
+		if snapshot != nil {
+			remaining := snapshot.OwnerExpiryRemainingTicks
+			// A decreasing replicated remainder describes the same absolute
+			// deadline. Extend only for the first owner or a newly captured owner
+			// whose remainder jumps, never for duplicate heartbeat snapshots.
+			if remaining > 0 && (!ownerExpiryObserved ||
+				remaining > lastOwnerExpiryRemainingTicks) {
+				candidate := time.Now().Add(
+					viewMetadataAdmissionWaitTimeout(discoveryTimeout, snapshot))
+				if candidate.After(deadline) {
+					deadline = candidate
+				}
+				ownerExpiryObserved = true
+			}
+			lastOwnerExpiryRemainingTicks = remaining
+		}
+		ctx, cancel := context.WithDeadline(context.Background(), deadline)
 		if snapshot != nil && !snapshot.Preparing && !snapshot.Enabled {
+			cancel()
 			return nil
 		}
 		if snapshot != nil && snapshot.Generation != s.viewMetadataAdmissionGeneration {
+			cancel()
 			return moerr.NewInternalErrorf(
-				ctx,
+				context.Background(),
 				"CN %s admission generation was superseded: local=%d authoritative=%d",
 				s.cfg.UUID,
 				s.viewMetadataAdmissionGeneration,
@@ -208,24 +317,32 @@ func (s *service) waitForViewMetadataAdmission() error {
 		}
 		if snapshot != nil && snapshot.Epoch > 0 && s.viewMetadataEpochFence.Epoch() < snapshot.Epoch {
 			if err := s.viewMetadataEpochFence.Advance(ctx, snapshot.Epoch); err != nil {
-				return moerr.AttachCause(ctx, err)
+				result := moerr.AttachCause(ctx, err)
+				cancel()
+				return result
 			}
 		}
 		if err := s.fenceViewMetadataCatalog(ctx, snapshot); err != nil {
-			return moerr.AttachCause(ctx, err)
+			result := moerr.AttachCause(ctx, err)
+			cancel()
+			return result
 		}
 		if snapshot != nil && snapshot.Admitted {
+			cancel()
 			return nil
 		}
 
 		select {
 		case <-ctx.Done():
+			deadlineErr := ctx.Err()
+			cancel()
 			return moerr.NewInternalErrorf(
 				context.Background(),
 				"CN %s was not admitted before startup deadline: %v",
 				s.cfg.UUID,
-				ctx.Err())
+				deadlineErr)
 		case <-s.viewMetadataAdmissionUpdated:
+			cancel()
 		}
 	}
 }

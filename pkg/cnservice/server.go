@@ -469,6 +469,9 @@ func (s *service) Start() (err error) {
 	if err = s.startUnlessViewMetadataGenerationRevoked(s.server.Start); err != nil {
 		return err
 	}
+	if err = s.startViewMetadataRecovery(); err != nil {
+		return err
+	}
 
 	// Admission authorizes local initialization; it does not make this CN
 	// routable. Publish ingress readiness only after every remote entry point is
@@ -621,9 +624,14 @@ func (s *service) closeBootstrapService() error {
 	s.bootstrapMu.Lock()
 	defer s.bootstrapMu.Unlock()
 	if s.bootstrapService == nil {
+		s.viewMetadataBootstrap.Store(nil)
 		return nil
 	}
 	service := s.bootstrapService
+	if service.IsFinalVersionReady() {
+		s.viewMetadataReady.Store(true)
+	}
+	s.viewMetadataBootstrap.Store(nil)
 	s.bootstrapService = nil
 	return service.Close()
 }
@@ -1324,6 +1332,7 @@ func (s *service) bootstrap() error {
 			s.options.bootstrapOptions...,
 		)
 	}
+	s.viewMetadataBootstrap.Store(&bootstrapReadiness{service: s.bootstrapService})
 
 	ctx, cancel := context.WithTimeoutCause(context.Background(), time.Minute*5, moerr.CauseBootstrap)
 	ctx = context.WithValue(ctx, config.ParameterUnitKey, s.pu)

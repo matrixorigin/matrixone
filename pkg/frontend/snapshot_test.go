@@ -578,10 +578,46 @@ func TestReconcileAccountViewMetadataUsesSystemContext(t *testing.T) {
 	require.Len(t, bh.executedSQLs, 4)
 	require.Equal(t, catalog.ViewMetadataLifecycleGateSQL, bh.executedSQLs[0])
 	require.Contains(t, bh.executedSQLs[1], "delete from mo_catalog.mo_view_dependencies")
+	require.Contains(t, bh.executedSQLs[1], "not exists")
 	require.Contains(t, bh.executedSQLs[2], "delete from mo_catalog.mo_view_refresh")
+	require.Contains(t, bh.executedSQLs[2], "not exists")
 	require.Contains(t, bh.executedSQLs[3], "where t.account_id=42")
+	require.NotContains(t, strings.Join(bh.executedSQLs, " "), "update mo_catalog.mo_view_refresh")
 	require.Equal(t, []uint32{0, 0, 0, 0}, bh.executionAccountIDs)
 	require.Equal(t, []bool{true, true, true, true}, bh.systemCTELimits)
+}
+
+func TestReconcileTableViewMetadataUsesOnlyRestoredObjectScope(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	ses := newTestSession(t, ctrl)
+	t.Cleanup(ses.Close)
+	bh := &backgroundExecTest{}
+	bh.init()
+
+	require.NoError(t, reconcileViewMetadataEnabled(
+		context.Background(), bh, 42, "restore_db", "restore_view"))
+	for _, sql := range bh.executedSQLs[1:3] {
+		require.Contains(t, sql, "target_database_name='restore_db'")
+		require.Contains(t, sql, "target_relation_name='restore_view'")
+	}
+	require.Contains(t, bh.executedSQLs[3], "t.reldatabase='restore_db'")
+	require.Contains(t, bh.executedSQLs[3], "t.relname='restore_view'")
+}
+
+func TestReconcileAccountViewMetadataRunsWhenAdmissionDisabledButCatalogReady(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	ses := newTestSession(t, ctrl)
+	t.Cleanup(ses.Close)
+	bh := &backgroundExecTest{}
+	bh.init()
+
+	require.NoError(t, reconcileAccountViewMetadata(context.Background(), ses, bh, 42))
+	markerCount := len(compile.ViewMetadataRequireRevalidationSQL())
+	require.Equal(t, compile.ViewMetadataRequireRevalidationSQL(), bh.executedSQLs[:markerCount])
+	require.Equal(t, catalog.ViewMetadataLifecycleGateSQL, bh.executedSQLs[markerCount])
+	require.Contains(t, bh.executedSQLs[markerCount+1], "delete from mo_catalog.mo_view_dependencies")
+	require.Contains(t, bh.executedSQLs[markerCount+2], "delete from mo_catalog.mo_view_refresh")
+	require.Contains(t, bh.executedSQLs[markerCount+3], "where t.account_id=42")
 }
 
 type failSecondBackgroundExec struct {
