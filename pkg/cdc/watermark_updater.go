@@ -1458,6 +1458,7 @@ func (u *CDCWatermarkUpdater) scheduleTaskWatermarkDeleteRetry(accountID uint64,
 func (u *CDCWatermarkUpdater) MarkTaskDeleted(taskID string) {
 	u.Lock()
 	u.deletedTasks.Store(taskID, struct{}{})
+	u.pausedTasks.Delete(taskID)
 	u.Unlock()
 }
 
