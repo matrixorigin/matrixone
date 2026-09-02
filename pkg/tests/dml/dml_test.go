@@ -242,6 +242,21 @@ func runDataBranchUpdateApplySpecialColumns(t *testing.T, ctx context.Context, d
 		execSQLDB(t, ctx, db, "update update_generated_pick_src set payload = 11 where b = 2")
 		execSQLDB(t, ctx, db, "data branch pick update_generated_pick_src into update_generated_pick_dst keys(2) when conflict accept")
 		require.Equal(t, [][]string{{"1", "2", "11"}}, queryStringRows(t, ctx, db, "select a, b, payload from update_generated_pick_dst"))
+
+		execSQLDB(t, ctx, db, "create table update_generated_special_base (a int, b int generated always as (a * 2) stored, v set('a','b','c'), primary key (b))")
+		execSQLDB(t, ctx, db, "insert into update_generated_special_base(a, v) values (1, 'a')")
+		execSQLDB(t, ctx, db, "data branch create table update_generated_special_branch from update_generated_special_base")
+		execSQLDB(t, ctx, db, "update update_generated_special_branch set v = 'b,c' where b = 2")
+		execSQLDB(t, ctx, db, "data branch merge update_generated_special_branch into update_generated_special_base when conflict accept")
+		require.Equal(t, [][]string{{"1", "2", "b,c"}}, queryStringRows(t, ctx, db, "select a, b, cast(v as char) from update_generated_special_base"))
+
+		execSQLDB(t, ctx, db, "create table update_generated_special_pick_base (a int, b int generated always as (a * 2) stored, v set('a','b','c'), primary key (b))")
+		execSQLDB(t, ctx, db, "insert into update_generated_special_pick_base(a, v) values (1, 'a')")
+		execSQLDB(t, ctx, db, "data branch create table update_generated_special_pick_src from update_generated_special_pick_base")
+		execSQLDB(t, ctx, db, "data branch create table update_generated_special_pick_dst from update_generated_special_pick_base")
+		execSQLDB(t, ctx, db, "update update_generated_special_pick_src set v = 'b,c' where b = 2")
+		execSQLDB(t, ctx, db, "data branch pick update_generated_special_pick_src into update_generated_special_pick_dst keys(2) when conflict accept")
+		require.Equal(t, [][]string{{"1", "2", "b,c"}}, queryStringRows(t, ctx, db, "select a, b, cast(v as char) from update_generated_special_pick_dst"))
 	})
 
 	t.Run("set", func(t *testing.T) {
@@ -251,6 +266,25 @@ func runDataBranchUpdateApplySpecialColumns(t *testing.T, ctx context.Context, d
 		execSQLDB(t, ctx, db, "update update_set_branch set v = 'b,c' where id = 1")
 		execSQLDB(t, ctx, db, "data branch merge update_set_branch into update_set_base when conflict accept")
 		require.Equal(t, [][]string{{"1", "b,c"}}, queryStringRows(t, ctx, db, "select id, cast(v as char) from update_set_base"))
+
+		execSQLDB(t, ctx, db, "create table update_set_fk_merge_base (id int primary key, v set('a','b','c'))")
+		execSQLDB(t, ctx, db, "create table update_set_fk_merge_child (id int primary key, parent_id int, constraint fk_set_merge foreign key (parent_id) references update_set_fk_merge_base(id))")
+		execSQLDB(t, ctx, db, "insert into update_set_fk_merge_base values (1, 'a')")
+		execSQLDB(t, ctx, db, "insert into update_set_fk_merge_child values (1, 1)")
+		execSQLDB(t, ctx, db, "data branch create table update_set_fk_merge_branch from update_set_fk_merge_base")
+		execSQLDB(t, ctx, db, "update update_set_fk_merge_branch set v = 'b,c' where id = 1")
+		execSQLDB(t, ctx, db, "data branch merge update_set_fk_merge_branch into update_set_fk_merge_base when conflict accept")
+		require.Equal(t, [][]string{{"1", "b,c", "1"}}, queryStringRows(t, ctx, db, "select p.id, cast(p.v as char), c.parent_id from update_set_fk_merge_base p join update_set_fk_merge_child c on p.id = c.parent_id"))
+
+		execSQLDB(t, ctx, db, "create table update_set_fk_pick_base (id int primary key, v set('a','b','c'))")
+		execSQLDB(t, ctx, db, "create table update_set_fk_pick_child (id int primary key, parent_id int, constraint fk_set_pick foreign key (parent_id) references update_set_fk_pick_base(id))")
+		execSQLDB(t, ctx, db, "insert into update_set_fk_pick_base values (1, 'a')")
+		execSQLDB(t, ctx, db, "insert into update_set_fk_pick_child values (1, 1)")
+		execSQLDB(t, ctx, db, "data branch create table update_set_fk_pick_src from update_set_fk_pick_base")
+		execSQLDB(t, ctx, db, "update update_set_fk_pick_src set v = 'b,c' where id = 1")
+		execSQLDB(t, ctx, db, "update update_set_fk_pick_base set v = 'c' where id = 1")
+		execSQLDB(t, ctx, db, "data branch pick update_set_fk_pick_src into update_set_fk_pick_base keys(1) when conflict accept")
+		require.Equal(t, [][]string{{"1", "b,c", "1"}}, queryStringRows(t, ctx, db, "select p.id, cast(p.v as char), c.parent_id from update_set_fk_pick_base p join update_set_fk_pick_child c on p.id = c.parent_id"))
 	})
 
 	t.Run("geometry32", func(t *testing.T) {
@@ -260,6 +294,29 @@ func runDataBranchUpdateApplySpecialColumns(t *testing.T, ctx context.Context, d
 		execSQLDB(t, ctx, db, "update update_geometry_branch set g = cast('POINT(2 2)' as geometry32) where id = 1")
 		execSQLDB(t, ctx, db, "data branch merge update_geometry_branch into update_geometry_base when conflict accept")
 		require.Equal(t, [][]string{{"1", "POINT(2 2)"}}, queryStringRows(t, ctx, db, "select id, st_astext(g) from update_geometry_base"))
+	})
+
+	t.Run("mixed_schema_ordinary_assignment", func(t *testing.T) {
+		execSQLDB(t, ctx, db, "create table update_mixed_merge_base (id int primary key, payload varchar(32), status enum('new','ready'))")
+		execSQLDB(t, ctx, db, "insert into update_mixed_merge_base values (1, 'one', 'new'), (2, 'two', 'ready'), (3, 'three', 'new')")
+		execSQLDB(t, ctx, db, "data branch create table update_mixed_merge_branch from update_mixed_merge_base")
+		execSQLDB(t, ctx, db, "update update_mixed_merge_branch set payload = concat('branch-', payload) where id in (1, 2, 3)")
+		execSQLDB(t, ctx, db, "data branch merge update_mixed_merge_branch into update_mixed_merge_base when conflict accept")
+		require.Equal(t,
+			[][]string{{"1", "branch-one", "new"}, {"2", "branch-two", "ready"}, {"3", "branch-three", "new"}},
+			queryStringRows(t, ctx, db, "select id, payload, cast(status as char) from update_mixed_merge_base order by id"),
+		)
+
+		execSQLDB(t, ctx, db, "create table update_mixed_pick_base (id int primary key, payload varchar(32), status enum('new','ready'))")
+		execSQLDB(t, ctx, db, "insert into update_mixed_pick_base values (1, 'one', 'new'), (2, 'two', 'ready'), (3, 'three', 'new')")
+		execSQLDB(t, ctx, db, "data branch create table update_mixed_pick_src from update_mixed_pick_base")
+		execSQLDB(t, ctx, db, "data branch create table update_mixed_pick_dst from update_mixed_pick_base")
+		execSQLDB(t, ctx, db, "update update_mixed_pick_src set payload = concat('branch-', payload) where id in (1, 2, 3)")
+		execSQLDB(t, ctx, db, "data branch pick update_mixed_pick_src into update_mixed_pick_dst keys(1, 2, 3) when conflict accept")
+		require.Equal(t,
+			[][]string{{"1", "branch-one", "new"}, {"2", "branch-two", "ready"}, {"3", "branch-three", "new"}},
+			queryStringRows(t, ctx, db, "select id, payload, cast(status as char) from update_mixed_pick_dst order by id"),
+		)
 	})
 }
 

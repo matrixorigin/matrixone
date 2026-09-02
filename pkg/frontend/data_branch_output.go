@@ -147,6 +147,8 @@ type applyBatchInfo struct {
 	deleteStageNames       []string
 	deleteKeyTypes         []types.Type
 	writableNames          []string
+	stagedUpdateNames      []string
+	specialUpdateNames     []string
 	updateValueIdxes       []int
 	disableInsertStage     bool
 	insertRowsIndividually bool
@@ -247,6 +249,11 @@ func newApplyBatchInfo(
 	for i, idx := range writableIdxes {
 		writableNames[i] = tblStuff.def.baseColNames[idx]
 	}
+	var baseDef *plan2.TableDef
+	if tblStuff.baseRel != nil {
+		baseDef = tblStuff.baseRel.GetTableDef(ctx)
+	}
+	stagedUpdateNames, specialUpdateNames := dataBranchStagedUpdateColumnNames(tblStuff, baseDef, writableIdxes)
 	updateValueIdxes := make([]int, 0, len(writableIdxes)+len(deleteKeyColIdxes))
 	updateValueIdxes = append(updateValueIdxes, writableIdxes...)
 	updateValueIdxes = append(updateValueIdxes, deleteKeyColIdxes...)
@@ -263,6 +270,8 @@ func newApplyBatchInfo(
 		deleteStageNames:       deleteStageNames,
 		deleteKeyTypes:         deleteKeyTypes,
 		writableNames:          writableNames,
+		stagedUpdateNames:      stagedUpdateNames,
+		specialUpdateNames:     specialUpdateNames,
 		updateValueIdxes:       updateValueIdxes,
 		disableInsertStage:     disableInsertStage,
 		insertRowsIndividually: insertRowsIndividually,
@@ -328,20 +337,13 @@ func (batchInfo *applyBatchInfo) stagedUpdateSQL(baseTable, updateTable string) 
 	const baseAlias = "branch_apply_base"
 	const stageAlias = "branch_apply_stage"
 
-	keyNames := make(map[string]struct{}, len(batchInfo.deleteKeyNames))
-	for _, name := range batchInfo.deleteKeyNames {
-		keyNames[strings.ToLower(name)] = struct{}{}
-	}
-	assignments := make([]string, 0, len(batchInfo.writableNames))
-	for _, name := range batchInfo.writableNames {
-		if _, isKey := keyNames[strings.ToLower(name)]; isKey {
-			continue
-		}
+	assignments := make([]string, 0, len(batchInfo.stagedUpdateNames))
+	for _, name := range batchInfo.stagedUpdateNames {
 		quotedName := quoteIdentifierForSQL(name)
 		assignments = append(assignments, fmt.Sprintf("%s.%s = %s.%s", baseAlias, quotedName, stageAlias, quotedName))
 	}
 	if len(assignments) == 0 {
-		return "", moerr.NewInternalErrorNoCtx("Data Branch update has no writable non-key columns")
+		return "", nil
 	}
 
 	predicates := make([]string, len(batchInfo.deleteKeyNames))
@@ -354,6 +356,27 @@ func (batchInfo *applyBatchInfo) stagedUpdateSQL(baseTable, updateTable string) 
 		"update %s as %s join %s as %s on %s set %s",
 		baseTable, baseAlias, updateTable, stageAlias, strings.Join(predicates, " AND "), strings.Join(assignments, ","),
 	), nil
+}
+
+// stagedSpecialUpsertSQL applies assignments that MatrixOne cannot execute in
+// a multi-table UPDATE. The stage retains the full writable source row; an
+// INSERT ... SELECT with ON DUPLICATE KEY UPDATE preserves the existing key
+// while applying only those assignments.
+func (batchInfo *applyBatchInfo) stagedSpecialUpsertSQL(baseTable, updateTable string) []string {
+	if len(batchInfo.specialUpdateNames) == 0 {
+		return nil
+	}
+
+	columns := joinQuotedColumnNames(batchInfo.writableNames)
+	assignments := make([]string, len(batchInfo.specialUpdateNames))
+	for i, name := range batchInfo.specialUpdateNames {
+		quotedName := quoteIdentifierForSQL(name)
+		assignments[i] = fmt.Sprintf("%s = values(%s)", quotedName, quotedName)
+	}
+	return []string{fmt.Sprintf(
+		"insert into %s (%s) select %s from %s on duplicate key update %s",
+		baseTable, columns, columns, updateTable, strings.Join(assignments, ","),
+	)}
 }
 
 func mergeDiffs(
@@ -1989,7 +2012,7 @@ func appendBatchRowsAsSQLValues(
 	//seenCols := make(map[int]struct{}, len(tblStuff.def.visibleIdxes))
 	row := make([]any, len(tblStuff.def.colNames))
 	extraColIdxes := appender.extraColIdxesForRow(wrapped.kind)
-	stageUpdate := dataBranchStagesUpdate(ctx, tblStuff, appender, directUpdate, wrapped.restoreMissing)
+	stageUpdate := dataBranchStagesUpdate(appender, directUpdate, wrapped.restoreMissing)
 	if stageUpdate {
 		extraColIdxes = append(extraColIdxes, appender.deleteKeyColIdxes...)
 	}
@@ -2032,25 +2055,23 @@ func dataBranchDirectUpdateBatch(
 }
 
 func dataBranchStagesUpdate(
-	ctx context.Context,
-	tblStuff tableStuff,
 	appender sqlValuesAppender,
 	directUpdate, restoreMissing bool,
 ) bool {
 	return directUpdate && !restoreMissing && appender.batchInfo != nil &&
-		!appender.batchInfo.disableInsertStage && !appender.batchInfo.deleteNeedsExactFloatKeyMatch() &&
-		!dataBranchUpdateNeedsDirectSQL(tblStuff, tblStuff.baseRel.GetTableDef(ctx))
+		!appender.batchInfo.disableInsertStage && !appender.batchInfo.deleteNeedsExactFloatKeyMatch()
 }
 
-// dataBranchUpdateNeedsDirectSQL identifies types that MatrixOne cannot apply
-// through a multi-table UPDATE. SET/ENUM and spatial assignments must use the
-// exact-key single-row UPDATE path; all other real-primary-key updates remain
-// batched in the staged UPDATE JOIN path.
-func dataBranchUpdateNeedsDirectSQL(tblStuff tableStuff, baseDef *plan2.TableDef) bool {
-	writableIdxes := tblStuff.def.writableIdxes
-	if len(tblStuff.def.tarOnlyIdxes) > 0 {
-		writableIdxes = tblStuff.def.commonWritableIdxes
-	}
+// dataBranchStagedUpdateColumnNames partitions writable non-key columns by
+// the apply form they support. SET/ENUM and spatial assignments use a staged
+// ON DUPLICATE KEY UPDATE; every other assignment remains in the staged
+// UPDATE JOIN path. The partition is schema-level and shared by all rows in
+// an apply batch, so mixed schemas never fall back to one statement per row.
+func dataBranchStagedUpdateColumnNames(
+	tblStuff tableStuff,
+	baseDef *plan2.TableDef,
+	writableIdxes []int,
+) (stagedNames, specialNames []string) {
 	for _, idx := range writableIdxes {
 		if slices.Contains(tblStuff.def.pkColIdxes, idx) {
 			continue
@@ -2058,18 +2079,24 @@ func dataBranchUpdateNeedsDirectSQL(tblStuff tableStuff, baseDef *plan2.TableDef
 		if idx < 0 || idx >= len(tblStuff.def.colTypes) {
 			continue
 		}
+		isSpecial := false
 		switch tblStuff.def.colTypes[idx].Oid {
 		case types.T_geometry, types.T_geometry32:
-			return true
+			isSpecial = true
 		}
 		if idx < len(tblStuff.def.baseColNames) {
 			baseCol := dataBranchColumnDefByName(baseDef, tblStuff.def.baseColNames[idx])
 			if baseCol != nil && baseCol.Typ.Enumvalues != "" {
-				return true
+				isSpecial = true
 			}
 		}
+		if isSpecial {
+			specialNames = append(specialNames, tblStuff.def.baseColNames[idx])
+		} else {
+			stagedNames = append(stagedNames, tblStuff.def.baseColNames[idx])
+		}
 	}
-	return false
+	return stagedNames, specialNames
 }
 
 func appendOrStageDataBranchApplyRow(
@@ -2885,8 +2912,16 @@ func flushStagedUpdateValues(
 	if err != nil {
 		return err
 	}
+	specialUpdateStmts := batchInfo.stagedSpecialUpsertSQL(baseTable, updateTable)
 	clearStmt := fmt.Sprintf("delete from %s", updateTable)
-	return execSQLStatements(ctx, ses, bh, writeFile, []string{insertStmt, updateStmt, clearStmt})
+	stmts := make([]string, 0, 2+len(specialUpdateStmts))
+	stmts = append(stmts, insertStmt)
+	if updateStmt != "" {
+		stmts = append(stmts, updateStmt)
+	}
+	stmts = append(stmts, specialUpdateStmts...)
+	stmts = append(stmts, clearStmt)
+	return execSQLStatements(ctx, ses, bh, writeFile, stmts)
 }
 
 // if `writeFile` is not nil, the sql will be flushed down into this file, or
