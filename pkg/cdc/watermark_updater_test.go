@@ -292,8 +292,8 @@ func TestWatermarkUpdater_DeleteTaskWatermarksDeletesAfterFlushFailure(t *testin
 	exec.mu.Unlock()
 }
 
-func TestWatermarkUpdater_DeleteTaskWatermarksRetriesDeleteAndKeepsTombstone(t *testing.T) {
-	exec := &retryableMockExecutor{failRemaining: 1}
+func TestWatermarkUpdater_DeleteTaskWatermarksReturnsDeleteFailureAndKeepsTombstone(t *testing.T) {
+	exec := &retryableMockExecutor{failRemaining: 2}
 	updater := NewCDCWatermarkUpdater("delete-task-retry", exec, WithCronJobInterval(time.Hour))
 	updater.Start()
 	defer updater.Stop()
@@ -302,21 +302,36 @@ func TestWatermarkUpdater_DeleteTaskWatermarksRetriesDeleteAndKeepsTombstone(t *
 	key := WatermarkKey{AccountId: 3, TaskId: "dropped-task", DBName: "db", TableName: "table"}
 	ts := types.BuildTS(40, 1)
 	require.NoError(t, updater.UpdateWatermarkOnly(ctx, &key, &ts))
-	require.NoError(t, updater.DeleteTaskWatermarks(ctx, key.AccountId, key.TaskId))
+	require.Error(t, updater.DeleteTaskWatermarks(ctx, key.AccountId, key.TaskId))
 
-	// The failed terminal DELETE has a retry owner in the updater. The
-	// tombstone must reject a late producer while that retry is pending.
+	// The tombstone must reject a late producer even when the lifecycle owner
+	// receives the terminal DELETE failure and is responsible for retrying.
 	require.NoError(t, updater.UpdateWatermarkOnly(ctx, &key, &ts))
 	updater.RLock()
 	_, cached := updater.cacheUncommitted[key]
 	updater.RUnlock()
 	require.False(t, cached)
 
-	require.Eventually(t, func() bool {
-		exec.mu.Lock()
-		defer exec.mu.Unlock()
-		return exec.lastSQL == CDCSQLBuilder.DeleteWatermarkSQL(key.AccountId, key.TaskId) && exec.execCalls >= 2
-	}, 3*time.Second, 10*time.Millisecond)
+	exec.mu.Lock()
+	require.Equal(t, 2, exec.execCalls)
+	require.Equal(t, CDCSQLBuilder.DeleteWatermarkSQL(key.AccountId, key.TaskId), exec.lastSQL)
+	exec.mu.Unlock()
+}
+
+func TestWatermarkUpdater_GetOrAddCommittedRejectsDeletedTask(t *testing.T) {
+	exec := &retryableMockExecutor{}
+	updater := NewCDCWatermarkUpdater("get-or-add-deleted", exec)
+	updater.Start()
+	defer updater.Stop()
+	key := &WatermarkKey{AccountId: 4, TaskId: "deleted-task", DBName: "db", TableName: "table"}
+	updater.MarkTaskDeleted(key.TaskId)
+	ts := types.BuildTS(50, 1)
+	ret, err := updater.GetOrAddCommitted(context.Background(), key, &ts)
+	require.NoError(t, err)
+	require.True(t, ret.IsEmpty())
+	exec.mu.Lock()
+	require.Empty(t, exec.lastSQL)
+	exec.mu.Unlock()
 }
 
 func TestWatermarkUpdater_ForceFlushHonorsContext(t *testing.T) {

@@ -895,6 +895,7 @@ func (exec *CDCTaskExecutor) Resume() error {
 	}
 	exec.recordLeavingFailedMetrics(stateBeforeResume, StateStarting)
 	generation := exec.callbackGeneration.Add(1)
+	exec.cancelLifecycleContext()
 	failedRecovery := stateBeforeResume == StateFailed
 	var (
 		recoveryReady   chan error
@@ -1115,8 +1116,15 @@ func (exec *CDCTaskExecutor) Restart() error {
 	// marker. Requiring it at ready/failure publication prevents a concurrent
 	// PAUSE that reaches paused from being changed back to running.
 	ready := exec.beginRestartWaiter(generation, cdc.CDCState_Restarting)
+	callbackDone := exec.callbackDone
+	if callbackDone == nil {
+		callbackDone = closedChan()
+	}
 	exec.callbackMu.Unlock()
 	defer exec.removeRestartWaiter(generation)
+	if _, timedOut := waitForCDCCompletion(callbackDone, timeout); timedOut {
+		return moerr.NewInternalErrorNoCtx("CDC restart timed out waiting for table detector callbacks")
+	}
 	startupTimeoutErr := moerr.NewInternalErrorNoCtx("CDC restart startup timed out")
 
 	// A Start owns mutable executor resources until it exits. Do not publish a

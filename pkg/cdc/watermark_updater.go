@@ -304,11 +304,8 @@ type CDCWatermarkUpdater struct {
 	// Key: taskId (string), Value: pause timestamp (time.Time)
 	pausedTasks sync.Map
 	// deletedTasks is a terminal tombstone for dropped task IDs.
-	deletedTasks      sync.Map
-	deleteRetryCtx    context.Context
-	deleteRetryCancel context.CancelFunc
-	deleteRetries     sync.Map
-	persistMu         sync.Mutex
+	deletedTasks sync.Map
+	persistMu    sync.Mutex
 
 	queue        sm.Queue
 	cronExecutor *tasks.CancelableJob
@@ -355,7 +352,6 @@ func NewCDCWatermarkUpdater(
 		committingErrMsgBuffer:  make([]*UpdaterJob, 0, 100),
 		readKeysBuffer:          make(map[WatermarkKey]WatermarkResult, 100),
 	}
-	u.deleteRetryCtx, u.deleteRetryCancel = context.WithCancel(context.Background())
 	for _, opt := range opts {
 		opt(u)
 	}
@@ -443,6 +439,10 @@ func (u *CDCWatermarkUpdater) onJobs(jobs ...any) {
 		job := j.(*UpdaterJob)
 		switch job.Type() {
 		case JT_CDC_GetOrAddCommittedWM:
+			if _, deleted := u.deletedTasks.Load(job.Key.TaskId); deleted {
+				job.DoneWithErr(nil)
+				continue
+			}
 			u.getOrAddCommittedBuffer = append(u.getOrAddCommittedBuffer, job)
 			u.readKeysBuffer[*job.Key] = WatermarkResult{
 				Watermark: types.TS{},
@@ -602,6 +602,11 @@ func (u *CDCWatermarkUpdater) execReadWM() (errMsg string, err error) {
 		}
 	}
 	for i, job := range u.getOrAddCommittedBuffer {
+		if _, deleted := u.deletedTasks.Load(job.Key.TaskId); deleted {
+			job.DoneWithErr(nil)
+			u.getOrAddCommittedBuffer[i] = nil
+			continue
+		}
 		if u.readKeysBuffer[*job.Key].Ok {
 			u.cacheCommitted[*job.Key] = u.readKeysBuffer[*job.Key].Watermark
 			job.DoneWithResult(u.readKeysBuffer[*job.Key].Watermark)
@@ -821,6 +826,18 @@ func (u *CDCWatermarkUpdater) execAddWM() (errMsg string, err error) {
 	if len(u.addCommittedBuffer) == 0 {
 		return "", nil
 	}
+	active := u.addCommittedBuffer[:0]
+	for _, job := range u.addCommittedBuffer {
+		if _, deleted := u.deletedTasks.Load(job.Key.TaskId); deleted {
+			job.DoneWithErr(nil)
+			continue
+		}
+		active = append(active, job)
+	}
+	u.addCommittedBuffer = active
+	if len(u.addCommittedBuffer) == 0 {
+		return "", nil
+	}
 	ctx, cancel := context.WithTimeoutCause(context.Background(), 20*time.Second, moerr.CauseWatermarkAdd)
 	defer cancel()
 	addSql := u.constructAddWMSQL(u.addCommittedBuffer)
@@ -833,6 +850,11 @@ func (u *CDCWatermarkUpdater) execAddWM() (errMsg string, err error) {
 	u.Lock()
 	defer u.Unlock()
 	for i, job := range u.addCommittedBuffer {
+		if _, deleted := u.deletedTasks.Load(job.Key.TaskId); deleted {
+			job.DoneWithErr(nil)
+			u.addCommittedBuffer[i] = nil
+			continue
+		}
 		// add the watermark to the cacheCommitted
 		u.cacheCommitted[*job.Key] = job.Watermark
 		// notify the job with the watermark
@@ -898,9 +920,6 @@ func (u *CDCWatermarkUpdater) Start() {
 }
 
 func (u *CDCWatermarkUpdater) Stop() {
-	if u.deleteRetryCancel != nil {
-		u.deleteRetryCancel()
-	}
 	u.cronExecutor.Stop()
 	u.queue.Stop()
 }
@@ -1408,51 +1427,9 @@ func (u *CDCWatermarkUpdater) DeleteTaskWatermarks(
 			zap.String("task-id", taskID),
 			zap.Error(err),
 		)
-		u.scheduleTaskWatermarkDeleteRetry(accountID, taskID)
+		return err
 	}
 	return nil
-}
-
-type taskWatermarkDelete struct {
-	accountID uint64
-	taskID    string
-}
-
-func (u *CDCWatermarkUpdater) scheduleTaskWatermarkDeleteRetry(accountID uint64, taskID string) {
-	key := taskWatermarkDelete{accountID: accountID, taskID: taskID}
-	if _, loaded := u.deleteRetries.LoadOrStore(key, struct{}{}); loaded {
-		return
-	}
-	go func() {
-		defer u.deleteRetries.Delete(key)
-		ticker := time.NewTicker(time.Second)
-		defer ticker.Stop()
-		for {
-			select {
-			case <-u.deleteRetryCtx.Done():
-				return
-			case <-ticker.C:
-			}
-			ctx, cancel := context.WithTimeout(u.deleteRetryCtx, 20*time.Second)
-			u.persistMu.Lock()
-			err := u.ie.Exec(
-				defines.AttachAccountId(ctx, catalog.System_Account),
-				CDCSQLBuilder.DeleteWatermarkSQL(accountID, taskID),
-				ie.SessionOverrideOptions{},
-			)
-			u.persistMu.Unlock()
-			cancel()
-			if err == nil {
-				return
-			}
-			logutil.Warn(
-				"cdc.watermark.delete_task.retry_failed",
-				zap.Uint64("account-id", accountID),
-				zap.String("task-id", taskID),
-				zap.Error(err),
-			)
-		}
-	}()
 }
 
 func (u *CDCWatermarkUpdater) MarkTaskDeleted(taskID string) {
@@ -1529,6 +1506,9 @@ func (u *CDCWatermarkUpdater) GetOrAddCommitted(
 	key *WatermarkKey,
 	watermark *types.TS,
 ) (ret types.TS, err error) {
+	if _, deleted := u.deletedTasks.Load(key.TaskId); deleted {
+		return types.TS{}, nil
+	}
 	u.RLock()
 	persisted, ok := u.cacheCommitted[*key]
 	u.RUnlock()
@@ -1542,6 +1522,9 @@ func (u *CDCWatermarkUpdater) GetOrAddCommitted(
 	job := NewGetOrAddCommittedWMJob(ctx, key, watermark)
 	if _, err = u.queue.Enqueue(job); err != nil {
 		if errors.Is(err, sm.ErrClose) {
+			if _, deleted := u.deletedTasks.Load(key.TaskId); deleted {
+				return types.TS{}, nil
+			}
 			if watermark != nil {
 				u.Lock()
 				u.cacheCommitted[*key] = *watermark
@@ -1564,6 +1547,9 @@ func (u *CDCWatermarkUpdater) GetOrAddCommitted(
 	}
 	job.WaitDone()
 	res := job.GetResult()
+	if _, deleted := u.deletedTasks.Load(key.TaskId); deleted {
+		return types.TS{}, nil
+	}
 	if res.Err != nil {
 		err = res.Err
 	} else {
