@@ -191,7 +191,8 @@ func (s *serviceSupervisor) shutdown(ctx context.Context) error {
 		// external SQL before CN ingress is withdrawn.
 		if cnProxy != nil {
 			if err := cnProxy.Stop(); err != nil {
-				s.shutdownErr = errors.Join(s.shutdownErr, err)
+				s.shutdownErr = err
+				return
 			}
 		}
 
