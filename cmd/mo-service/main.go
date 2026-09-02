@@ -145,7 +145,13 @@ func main() {
 	}
 	if startErr != nil {
 		cleanupErr := serviceLifecycle.shutdown(context.Background())
-		stopper.Stop()
+		// A failed lifecycle phase deliberately leaves its dependencies alive so
+		// the process can fail-stop without racing the in-flight owner.  Calling
+		// the global stopper here would cancel every role concurrently and undo
+		// the dependency ordering that cleanup just established.
+		if cleanupErr == nil {
+			stopper.Stop()
+		}
 		panic(errors.Join(startErr, cleanupErr))
 	}
 
@@ -190,7 +196,11 @@ func waitSignalToStop(stopper *stopper.Stopper, shutdownC chan struct{}) error {
 
 	logutil.GetGlobalLogger().Info(detail)
 	err := serviceLifecycle.shutdown(context.Background())
-	stopper.Stop()
+	if err == nil {
+		// All business roles have already closed in dependency order.  The
+		// stopper now only releases observability and other process-level tasks.
+		stopper.Stop()
+	}
 	return err
 }
 

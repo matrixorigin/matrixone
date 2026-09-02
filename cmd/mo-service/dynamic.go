@@ -21,6 +21,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"sync"
 	"syscall"
 	"time"
 
@@ -38,8 +39,10 @@ var (
 )
 
 var (
+	dynamicCNMu              sync.RWMutex
 	dynamicCNServicePIDs     []int
 	dynamicCNServiceCommands [][]string
+	dynamicChaosTester       *chaos.ChaosTester
 )
 
 func startDynamicCluster(
@@ -102,15 +105,20 @@ func startDynamicCNServices(
 		return err
 	}
 
+	dynamicCNMu.Lock()
 	dynamicCNServiceCommands = make([][]string, cfg.ServiceCount)
 	dynamicCNServicePIDs = make([]int, cfg.ServiceCount)
+	dynamicCNMu.Unlock()
 	for i := 0; i < cfg.ServiceCount; i++ {
-		dynamicCNServiceCommands[i] = []string{
+		command := []string{
 			os.Args[0],
 			"-cfg", "./mo-data/cn-" + fmt.Sprintf("%d", i) + ".toml",
 			"-max-processor", fmt.Sprintf("%d", cfg.CpuCount),
 			"-debug-http", fmt.Sprintf("127.0.0.1:606%d", i),
 		}
+		dynamicCNMu.Lock()
+		dynamicCNServiceCommands[i] = command
+		dynamicCNMu.Unlock()
 		if err := startDynamicCNByIndex(i); err != nil {
 			return err
 		}
@@ -121,7 +129,18 @@ func startDynamicCNServices(
 	cfg.Chaos.Restart.KillFunc = stopDynamicCNByIndex
 	cfg.Chaos.Restart.RestartFunc = startDynamicCNByIndex
 	chaosTester := chaos.NewChaosTester(cfg.Chaos)
-	return chaosTester.Start()
+	dynamicCNMu.Lock()
+	dynamicChaosTester = chaosTester
+	dynamicCNMu.Unlock()
+	if err := chaosTester.Start(); err != nil {
+		dynamicCNMu.Lock()
+		if dynamicChaosTester == chaosTester {
+			dynamicChaosTester = nil
+		}
+		dynamicCNMu.Unlock()
+		return err
+	}
+	return nil
 }
 
 func genDynamicCNConfigs(
@@ -203,7 +222,14 @@ func startDynamicCtlHTTPServer(addr string) error {
 			}
 
 			index := format.MustParseStringInt(cn)
-			if index < 0 || index >= len(dynamicCNServiceCommands) {
+			dynamicCNMu.RLock()
+			valid := index >= 0 && index < len(dynamicCNServiceCommands)
+			pid := 0
+			if valid {
+				pid = dynamicCNServicePIDs[index]
+			}
+			dynamicCNMu.RUnlock()
+			if !valid {
 				resp.WriteHeader(http.StatusBadRequest)
 				resp.Write([]byte("invalid request"))
 				return
@@ -211,7 +237,7 @@ func startDynamicCtlHTTPServer(addr string) error {
 
 			switch action {
 			case "start":
-				if dynamicCNServicePIDs[index] != 0 {
+				if pid != 0 {
 					resp.WriteHeader(http.StatusBadRequest)
 					resp.Write([]byte("already started"))
 					return
@@ -222,17 +248,16 @@ func startDynamicCtlHTTPServer(addr string) error {
 					resp.Write([]byte("OK"))
 				}
 			case "stop":
-				if dynamicCNServicePIDs[index] == 0 {
+				if pid == 0 {
 					resp.WriteHeader(http.StatusBadRequest)
 					resp.Write([]byte("already stopped"))
 					return
 				}
 
-				if err := syscall.Kill(dynamicCNServicePIDs[index], syscall.SIGKILL); err != nil {
+				if err := stopDynamicCNByIndex(index); err != nil {
 					resp.Write([]byte(err.Error()))
 				} else {
 					resp.Write([]byte("OK"))
-					dynamicCNServicePIDs[index] = 0
 				}
 			default:
 				resp.WriteHeader(http.StatusBadRequest)
@@ -247,7 +272,25 @@ func startDynamicCtlHTTPServer(addr string) error {
 }
 
 func stopDynamicCNByIndex(index int) error {
-	return syscall.Kill(dynamicCNServicePIDs[index], syscall.SIGKILL)
+	dynamicCNMu.RLock()
+	if index < 0 || index >= len(dynamicCNServicePIDs) {
+		dynamicCNMu.RUnlock()
+		return errors.New("invalid dynamic cn index")
+	}
+	pid := dynamicCNServicePIDs[index]
+	dynamicCNMu.RUnlock()
+	if pid == 0 {
+		return errors.New("dynamic cn is not running")
+	}
+	if err := syscall.Kill(pid, syscall.SIGKILL); err != nil {
+		return err
+	}
+	dynamicCNMu.Lock()
+	if dynamicCNServicePIDs[index] == pid {
+		dynamicCNServicePIDs[index] = 0
+	}
+	dynamicCNMu.Unlock()
+	return nil
 }
 
 func startDynamicCNByIndex(index int) error {
@@ -255,9 +298,18 @@ func startDynamicCNByIndex(index int) error {
 	if err != nil {
 		return err
 	}
+	dynamicCNMu.Lock()
+	defer dynamicCNMu.Unlock()
+	if index < 0 || index >= len(dynamicCNServiceCommands) {
+		return errors.New("invalid dynamic cn index")
+	}
+	if dynamicCNServicePIDs[index] != 0 {
+		return errors.New("dynamic cn is already running")
+	}
+	command := append([]string(nil), dynamicCNServiceCommands[index]...)
 	pid, err := syscall.ForkExec(
-		dynamicCNServiceCommands[index][0],
-		dynamicCNServiceCommands[index],
+		command[0],
+		command,
 		&syscall.ProcAttr{
 			Dir: pwd,
 			Env: os.Environ(),
@@ -274,8 +326,20 @@ func startDynamicCNByIndex(index int) error {
 }
 
 func stopAllDynamicCNServices() {
-	for _, pid := range dynamicCNServicePIDs {
-		syscall.Kill(pid, syscall.SIGKILL)
+	dynamicCNMu.RLock()
+	pids := append([]int(nil), dynamicCNServicePIDs...)
+	dynamicCNMu.RUnlock()
+	for i, pid := range pids {
+		if pid == 0 {
+			continue
+		}
+		if err := syscall.Kill(pid, syscall.SIGKILL); err == nil {
+			dynamicCNMu.Lock()
+			if i < len(dynamicCNServicePIDs) && dynamicCNServicePIDs[i] == pid {
+				dynamicCNServicePIDs[i] = 0
+			}
+			dynamicCNMu.Unlock()
+		}
 	}
 }
 
@@ -283,13 +347,22 @@ func stopAllDynamicCNServices() {
 // path. Chaos/restart keeps the SIGKILL helper above so that it can continue
 // to exercise abrupt-exit behavior.
 func stopAllDynamicCNServicesGracefully(ctx context.Context) error {
+	dynamicCNMu.Lock()
+	chaosTester := dynamicChaosTester
+	dynamicChaosTester = nil
+	pids := append([]int(nil), dynamicCNServicePIDs...)
+	dynamicCNMu.Unlock()
+	var errs error
+	if chaosTester != nil {
+		errs = errors.Join(errs, chaosTester.Stop())
+	}
 	type result struct {
 		index int
 		err   error
 	}
-	results := make(chan result, len(dynamicCNServicePIDs))
+	results := make(chan result, len(pids))
 	count := 0
-	for i, pid := range dynamicCNServicePIDs {
+	for i, pid := range pids {
 		if pid == 0 {
 			continue
 		}
@@ -306,14 +379,17 @@ func stopAllDynamicCNServicesGracefully(ctx context.Context) error {
 			results <- result{index: index, err: err}
 		}(i, pid)
 	}
-	var errs error
 	for i := 0; i < count; i++ {
 		select {
 		case r := <-results:
 			if r.err != nil {
 				errs = errors.Join(errs, r.err)
 			} else {
-				dynamicCNServicePIDs[r.index] = 0
+				dynamicCNMu.Lock()
+				if r.index < len(dynamicCNServicePIDs) && dynamicCNServicePIDs[r.index] == pids[r.index] {
+					dynamicCNServicePIDs[r.index] = 0
+				}
+				dynamicCNMu.Unlock()
 			}
 		case <-ctx.Done():
 			return errors.Join(errs, ctx.Err())

@@ -16,6 +16,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"sync"
 	"testing"
 	"time"
@@ -58,4 +59,47 @@ func TestServiceSupervisorRoleTimeoutDoesNotAdvanceDependency(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Millisecond)
 	defer cancel()
 	require.ErrorIs(t, s.stopRole(ctx, serviceRoleCN), context.DeadlineExceeded)
+}
+
+func TestServiceSupervisorRoleErrorDoesNotAdvanceDependency(t *testing.T) {
+	s := newServiceSupervisor()
+	finishCN := s.registerTask(serviceRoleCN)
+	finishCN(errors.New("cn close failed"))
+	finishTN := s.registerTask(serviceRoleTN)
+	defer finishTN(nil)
+
+	err := s.shutdown(context.Background())
+	require.ErrorContains(t, err, "cn close failed")
+	select {
+	case <-s.roles[serviceRoleTN].stopC:
+		require.FailNow(t, "dependent TN role was stopped after CN failure")
+	default:
+	}
+}
+
+func TestServiceSupervisorConcurrentShutdownRunsOnce(t *testing.T) {
+	s := newServiceSupervisor()
+	finish := s.registerTask(serviceRoleCN)
+	go func() {
+		ctx, cancel := s.roleContext(context.Background(), serviceRoleCN)
+		defer cancel()
+		<-ctx.Done()
+		finish(nil)
+	}()
+
+	const callers = 2
+	errs := make(chan error, callers)
+	var wg sync.WaitGroup
+	for i := 0; i < callers; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			errs <- s.shutdown(context.Background())
+		}()
+	}
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		require.NoError(t, err)
+	}
 }
