@@ -120,6 +120,83 @@ func TestAvgRoundsDirectlyAtDeclaredScale(t *testing.T) {
 	}
 }
 
+func TestAvgNativeIntegerHelperBoundaries(t *testing.T) {
+	for _, test := range []struct {
+		name        string
+		sum         any
+		count       int64
+		resultScale int32
+		wantErr     string
+	}{
+		{name: "positive int64", sum: int64(1), count: 113, resultScale: 4},
+		{name: "negative int64", sum: int64(-1), count: 113, resultScale: 4},
+		{name: "wide int64", sum: int64(1 << 60), count: 1, resultScale: 4},
+		{name: "uint64", sum: uint64(1), count: 113, resultScale: 4},
+		{name: "zero count", sum: int64(1), count: 0, resultScale: 4, wantErr: "Div by Zero"},
+		{name: "invalid scale", sum: int64(1), count: 1, resultScale: -1, wantErr: "invalid native AVG result scale"},
+		{name: "scale outside native table", sum: int64(1), count: 1, resultScale: int32(len(types.Pow10)), wantErr: "invalid native AVG result scale"},
+		{name: "unsupported float", sum: float64(1), count: 1, resultScale: 4, wantErr: "unsupported native AVG sum type"},
+		{name: "uint64 scale overflow", sum: ^uint64(0), count: 1, resultScale: 19, wantErr: "scale overflow"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			var (
+				got types.Decimal128
+				err error
+			)
+			switch sum := test.sum.(type) {
+			case int64:
+				got, err = decimal128NativeIntegerAvg(sum, test.count, test.resultScale)
+			case uint64:
+				got, err = decimal128NativeIntegerAvg(sum, test.count, test.resultScale)
+			case float64:
+				got, err = decimal128NativeIntegerAvg(sum, test.count, test.resultScale)
+			default:
+				t.Fatalf("unsupported test value %T", test.sum)
+			}
+			if test.wantErr == "" {
+				require.NoError(t, err)
+				require.NotZero(t, got)
+			} else {
+				require.ErrorContains(t, err, test.wantErr)
+			}
+		})
+	}
+
+	require.Equal(t, types.Decimal128FromInt64(-1), decimal128FromNativeSum(int64(-1)))
+	require.Equal(t, types.Decimal128{B0_63: 1}, decimal128FromNativeSum(uint64(1)))
+	require.Panics(t, func() { decimal128FromNativeSum(float64(1)) })
+}
+
+func TestAvgDecimalConversionHelpers(t *testing.T) {
+	positive := types.Decimal256FromInt64(1)
+	negative := types.Decimal256FromInt64(-1)
+	for _, value := range []types.Decimal256{positive, negative} {
+		converted, ok := decimal128FromDecimal256(value)
+		require.True(t, ok)
+		require.Equal(t, types.Decimal128{B0_63: value.B0_63, B64_127: value.B64_127}, converted)
+	}
+	_, ok := decimal128FromDecimal256(types.Decimal256{B128_191: 1})
+	require.False(t, ok)
+	_, ok = decimal128FromDecimal256(types.Decimal256{B64_127: 1 << 63, B192_255: ^uint64(0)})
+	require.False(t, ok)
+
+	value := types.Decimal256FromInt64(1)
+	_, err := decimal256AvgAtScale(value, 0, 0, 4)
+	require.ErrorContains(t, err, "Div by Zero")
+	_, err = decimal256AvgAtScale(value, 1, 5, 4)
+	require.ErrorContains(t, err, "below input scale")
+	_, err = decimal128AvgAtScaleSigned(types.Decimal128FromInt64(1), 0, 0, 4)
+	require.ErrorContains(t, err, "Div by Zero")
+	_, err = decimal128AvgAtScaleSigned(types.Decimal128FromInt64(1), 1, 5, 4)
+	require.ErrorContains(t, err, "below input scale")
+
+	resultType := types.New(types.T_decimal128, 5, 4)
+	_, err = decAvg[types.Decimal128](types.Decimal128FromInt64(1), 1, 0, types.New(types.T_decimal256, 42, 4))
+	require.ErrorContains(t, err, "invalid decimal avg result type")
+	_, err = decAvg[types.Decimal256](types.Decimal256FromInt64(1), 1, 0, resultType)
+	require.ErrorContains(t, err, "invalid decimal avg result type")
+}
+
 func TestAvgIntegerExpressionPrecisionExecution(t *testing.T) {
 	argType := types.New(types.T_int32, 1, 0)
 	values := make([]int32, 113)
