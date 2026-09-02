@@ -3987,7 +3987,7 @@ func (h *ParquetHandler) getDataByPage(bat *batch.Batch, param *ExternalParam, p
 			toRead = min(toRead, h.rowsToSourceBudget(toRead, remainingBudget))
 		}
 
-		batchBytesBefore := bat.Size()
+		batchBytesBefore := h.physicalBatchSize(bat)
 		checkpoints, err := h.mapCurrentPageRows(bat, param, proc, toRead)
 		if err != nil {
 			return h.closePagesOnError(param.Ctx, err)
@@ -4268,7 +4268,12 @@ func (h *ParquetHandler) generatedBatchBytes(rows int, param *ExternalParam) uin
 }
 
 func (h *ParquetHandler) estimatedBatchSize(bat *batch.Batch, rows int, param *ExternalParam) int {
-	base := bat.Size()
+	// Virtual and generated columns are filled after parquet decoding. A reused
+	// batch may retain their logical vector length after CleanOnlyData (const
+	// NULL vectors have no data buffer to clear), so bat.Size() is not a safe
+	// source-size baseline here. Account only for decoded parquet columns and
+	// reserve generated output separately below.
+	base := h.physicalBatchSize(bat)
 	if base < 0 {
 		base = 0
 	}
@@ -4278,6 +4283,20 @@ func (h *ParquetHandler) estimatedBatchSize(bat *batch.Batch, rows int, param *E
 		return maxInt
 	}
 	return base + int(generated)
+}
+
+func (h *ParquetHandler) physicalBatchSize(bat *batch.Batch) int {
+	if h == nil || bat == nil {
+		return 0
+	}
+	var size int
+	for colIdx, col := range h.cols {
+		if col == nil || colIdx >= len(bat.Vecs) || bat.Vecs[colIdx] == nil {
+			continue
+		}
+		size += bat.Vecs[colIdx].Size()
+	}
+	return size
 }
 
 func (h *ParquetHandler) parquetBatchAtByteBudget(bat *batch.Batch, rows int, param *ExternalParam) bool {
@@ -4328,7 +4347,11 @@ func (h *ParquetHandler) parquetRowsToByteBudget(
 	size := addParquetBytes(uint64(max(baseBytes, 0)), h.generatedBatchBytes(startRow, param))
 	seenRanges := make([]map[parquetVarlenaRange]struct{}, len(bat.Vecs))
 	for row := startRow; row < maxRows; row++ {
-		for colIdx, vec := range bat.Vecs {
+		for colIdx, col := range h.cols {
+			if col == nil || colIdx >= len(bat.Vecs) {
+				continue
+			}
+			vec := bat.Vecs[colIdx]
 			if vec == nil || row >= vec.Length() {
 				continue
 			}

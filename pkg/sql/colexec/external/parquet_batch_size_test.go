@@ -300,6 +300,34 @@ func TestParquetReaderBatchByteBudget(t *testing.T) {
 		require.Equal(t, []int{1, 1, 1}, rowsPerBatch)
 	})
 
+	t.Run("reused batch ignores stale Hive default partition state", func(t *testing.T) {
+		values := make([]int32, 100)
+		for i := range values {
+			values[i] = int32(i)
+		}
+		data := writeBatchBudgetInt32Parquet(t, values)
+		reader, _, proc := newBatchBudgetHiveDefaultPartitionReader(t, data, 1<<10)
+		defer reader.Close()
+
+		bat := batch.NewWithSchema(false, []string{"c", "p"},
+			[]types.Type{types.T_int32.ToType(), types.T_text.ToType()})
+		finished, err := reader.ReadBatch(context.Background(), bat, proc, nil)
+		require.NoError(t, err)
+		require.False(t, finished)
+		firstRows := bat.RowCount()
+		require.Positive(t, firstRows)
+		require.True(t, bat.Vecs[1].IsConstNull())
+
+		bat.CleanOnlyData()
+		finished, err = reader.ReadBatch(context.Background(), bat, proc, nil)
+		require.NoError(t, err)
+		require.False(t, finished)
+		require.Equal(t, firstRows, bat.RowCount())
+		require.Equal(t, int32(firstRows), vector.MustFixedColWithTypeCheck[int32](bat.Vecs[0])[0])
+		require.True(t, bat.Vecs[1].IsConstNull())
+		bat.Clean(proc.Mp())
+	})
+
 	t.Run("Iceberg generated metadata reserves bytes and advances", func(t *testing.T) {
 		data := writeBatchBudgetInt32Parquet(t, []int32{1, 2, 3})
 		path := strings.Repeat("f", 32)
@@ -467,6 +495,47 @@ func newBatchBudgetProjectedParquetReader(
 			FileSize: []int64{int64(len(data))},
 		},
 		ExParam: ExParam{Fileparam: &ExFileparam{FileIndex: 1, Filepath: filePath, FileCnt: 1}},
+	}
+	proc := testutil.NewProc(t)
+	reader := NewParquetReader(param, proc)
+	empty, err := reader.Open(param, proc)
+	require.NoError(t, err)
+	require.False(t, empty)
+	return reader, param, proc
+}
+
+func newBatchBudgetHiveDefaultPartitionReader(
+	t testing.TB,
+	data []byte,
+	budget uint64,
+) (*ParquetReader, *ExternalParam, *process.Process) {
+	t.Helper()
+	param := &ExternalParam{
+		ExParamConst: ExParamConst{
+			Ctx:          context.Background(),
+			maxBatchSize: budget,
+			Attrs: []plan.ExternAttr{
+				{ColName: "c", ColIndex: 0},
+				{ColName: "p", ColIndex: 1},
+			},
+			Cols: []*plan.ColDef{
+				{Typ: plan.Type{Id: int32(types.T_int32), NotNullable: true}, NotNull: true},
+				{Name: "p", Typ: plan.Type{Id: int32(types.T_text)}, Default: &plan.Default{NullAbility: true}},
+			},
+			Extern: &tree.ExternParam{ExParamConst: tree.ExParamConst{
+				ScanType:          tree.INLINE,
+				Format:            tree.PARQUET,
+				Data:              string(data),
+				Filepath:          "/fixture",
+				HivePartitioning:  true,
+				HivePartitionCols: []string{"p"},
+			}},
+			FileSize: []int64{int64(len(data))},
+		},
+		ExParam: ExParam{
+			Fileparam:         &ExFileparam{FileIndex: 1, Filepath: "/fixture/p=__HIVE_DEFAULT_PARTITION__/data.parquet", FileCnt: 1},
+			currentPartValues: map[string]string{"p": HiveDefaultPartition},
+		},
 	}
 	proc := testutil.NewProc(t)
 	reader := NewParquetReader(param, proc)
