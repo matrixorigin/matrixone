@@ -13,6 +13,7 @@ select statement_digest_text('SELECT * FROM t WHERE a IS NULL OR b IS NOT NULL')
 select statement_digest_text('SELECT 数量 FROM 订单 WHERE 编号 = 42') as digest;
 select statement_digest_text('SELECT (1), ((1)), ABS(1), COALESCE(1)') as digest;
 select statement_digest_text('SELECT DISTINCT a, CURRENT_TIMESTAMP FROM t WHERE a = ANY (SELECT b FROM u)') as digest;
+select statement_digest_text('SELECT CURRENT_DATE, CURDATE(), CURRENT_TIME, CURTIME(), SESSION_USER(), USER(), STD(x), STDDEV(x), VARIANCE(x) FROM t') as digest;
 select statement_digest_text('SELECT _utf8''a'', _latin1''b'', _foo''c''') as digest;
 select statement_digest_text('SELECT /*+ INDEX(@qb t idx) */ * FROM t') as digest;
 select statement_digest_text('CREATE TABLE t(a INT NULL, b INT DEFAULT NULL)') as digest;
@@ -52,6 +53,9 @@ select statement_digest_text('SELECT ?');
 select statement_digest_text(statement_digest_text('SELECT 1, 2, 3'));
 select statement_digest_text(_binary'SELECT 1');
 select statement_digest_text(cast('SELECT 1' as binary));
+set sql_mode='ANSI_QUOTES';
+select statement_digest_text('SELECT @"odd name"') as digest;
+set sql_mode='';
 create table statement_digest_text_generated (
     g text generated always as (statement_digest_text('SELECT 1')) stored
 );

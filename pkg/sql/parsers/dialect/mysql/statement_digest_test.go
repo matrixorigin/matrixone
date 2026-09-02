@@ -84,6 +84,10 @@ func TestNormalizeStatementDigestMySQLCounterexamples(t *testing.T) {
 		{name: "statement keyword aliases", sql: "CREATE DATABASE d", want: "CREATE SCHEMA `d`"},
 		{name: "describe alias", sql: "DESCRIBE t", want: "EXPLAIN `t`"},
 		{name: "select keyword aliases", sql: "SELECT DISTINCT a, CURRENT_TIMESTAMP, LOCALTIME, LOCALTIMESTAMP FROM t WHERE a = ANY (SELECT b FROM u)", want: "SELECT DISTINCTROW `a` , NOW , NOW , NOW FROM `t` WHERE `a` = SOME ( SELECT `b` FROM `u` )"},
+		{name: "function aliases", sql: "SELECT CURRENT_DATE, CURDATE(), CURRENT_TIME, CURTIME(), SESSION_USER(), USER(), STD(x), STDDEV(x), VARIANCE(x) FROM t", want: "SELECT CURDATE , CURDATE ( ) , CURTIME , CURTIME ( ) , SYSTEM_USER ( ) , SYSTEM_USER ( ) , STDDEV_POP ( `x` ) , STDDEV_POP ( `x` ) , VAR_POP ( `x` ) FROM `t`"},
+		{name: "function alias identifiers", sql: "SELECT SESSION_USER, STD, STDDEV, VARIANCE FROM t", want: "SELECT `SESSION_USER` , `STD` , `STDDEV` , `VARIANCE` FROM `t`"},
+		{name: "user variable ansi quote mode", sql: "SELECT @\"odd name\"", want: "SELECT @?"},
+		{name: "user variable ansi quote identifier", sql: "SELECT @\"odd name\"", want: "SELECT @`odd name`"},
 		{name: "show columns alias", sql: "SHOW COLUMNS FROM t", want: "SHOW FIELDS FROM `t`"},
 		{name: "show databases alias", sql: "SHOW DATABASES", want: "SHOW SCHEMAS"},
 		{name: "interval units", sql: "SELECT NOW()+INTERVAL 1 QUARTER, NOW()+INTERVAL 1 MONTH, NOW()+INTERVAL 1 DAY, NOW()+INTERVAL 1 HOUR, NOW()+INTERVAL 1 MINUTE, NOW()+INTERVAL 1 SECOND", want: "SELECT NOW ( ) + INTERVAL ? SQL_TSI_QUARTER , NOW ( ) + INTERVAL ? SQL_TSI_MONTH , NOW ( ) + INTERVAL ? SQL_TSI_DAY , NOW ( ) + INTERVAL ? SQL_TSI_HOUR , NOW ( ) + INTERVAL ? SQL_TSI_MINUTE , NOW ( ) + INTERVAL ? SQL_TSI_SECOND"},
@@ -117,7 +121,11 @@ func TestNormalizeStatementDigestMySQLCounterexamples(t *testing.T) {
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			got, err := NormalizeStatementDigest(context.Background(), test.sql, "", 1024)
+			mode := ""
+			if test.name == "user variable ansi quote identifier" {
+				mode = "ANSI_QUOTES"
+			}
+			got, err := NormalizeStatementDigest(context.Background(), test.sql, mode, 1024)
 			require.NoError(t, err)
 			require.Equal(t, test.want, got)
 		})
