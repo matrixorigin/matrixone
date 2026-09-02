@@ -60,11 +60,29 @@ type storeQueryService struct {
 
 type storeTxnServer struct {
 	rpc.TxnServer
-	beforeClose func()
+	beforeQuiesce func()
+	beforeDrain   func()
+	beforeClose   func()
+}
+
+func (s *storeTxnServer) Quiesce() error {
+	if s.beforeQuiesce != nil {
+		s.beforeQuiesce()
+	}
+	return s.TxnServer.(txnServerLifecycle).Quiesce()
+}
+
+func (s *storeTxnServer) Drain(ctx context.Context) error {
+	if s.beforeDrain != nil {
+		s.beforeDrain()
+	}
+	return s.TxnServer.(txnServerLifecycle).Drain(ctx)
 }
 
 func (s *storeTxnServer) Close() error {
-	s.beforeClose()
+	if s.beforeClose != nil {
+		s.beforeClose()
+	}
 	return s.TxnServer.Close()
 }
 
@@ -290,13 +308,21 @@ func TestStoreCloseClosesQueryService(t *testing.T) {
 	})
 }
 
-func TestStoreCloseCancelsReplicasBeforeDrainingRPCServer(t *testing.T) {
+func TestStoreCloseDrainsRPCBeforeCancellingReplicas(t *testing.T) {
+	var canceledBeforeDrain atomic.Bool
 	var canceledBeforeServerClose atomic.Bool
+	var drainedBeforeServerClose atomic.Bool
 	runTNStoreTest(t, func(s *store) {
 		r := newReplica(newTestTNShard(1, 2, 3), s.rt)
 		s.replicas.Store(r.shard.ShardID, r)
 		s.server = &storeTxnServer{
 			TxnServer: s.server,
+			beforeDrain: func() {
+				r.mu.RLock()
+				canceledBeforeDrain.Store(r.mu.cancelled)
+				r.mu.RUnlock()
+				drainedBeforeServerClose.Store(true)
+			},
 			beforeClose: func() {
 				r.mu.RLock()
 				defer r.mu.RUnlock()
@@ -304,7 +330,9 @@ func TestStoreCloseCancelsReplicasBeforeDrainingRPCServer(t *testing.T) {
 			},
 		}
 	})
+	require.False(t, canceledBeforeDrain.Load())
 	require.True(t, canceledBeforeServerClose.Load())
+	require.True(t, drainedBeforeServerClose.Load())
 }
 
 type neverReadyHAKeeperClient struct {
