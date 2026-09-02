@@ -168,6 +168,24 @@ func setIvfIncludeModeTestPagination(vecCtx *vectorSortContext, limit, offset ui
 	vecCtx.sortNode.Offset = makePlan2Uint64ConstExprWithType(offset)
 }
 
+func makeIvfIncludeModeIsNotNullFilter(scanNode *plan.Node, colPos int32) *plan.Expr {
+	colDef := scanNode.TableDef.Cols[colPos]
+	return &plan.Expr{
+		Typ: plan.Type{Id: int32(types.T_bool)},
+		Expr: &plan.Expr_F{F: &plan.Function{
+			Func: &plan.ObjectRef{ObjName: "is_not_null"},
+			Args: []*plan.Expr{{
+				Typ: colDef.Typ,
+				Expr: &plan.Expr_Col{Col: &plan.ColRef{
+					RelPos: scanNode.BindingTags[0],
+					ColPos: colPos,
+					Name:   colDef.Name,
+				}},
+			}},
+		}},
+	}
+}
+
 func findIvfTableFunctionNode(builder *QueryBuilder, nodeID int32) *plan.Node {
 	if int(nodeID) >= len(builder.qry.Nodes) || builder.qry.Nodes[nodeID] == nil {
 		return nil
@@ -244,6 +262,115 @@ func TestApplyIndicesForSortUsingIvfflat_PostModeDoesNotAutoUseIncludeOptimizati
 	require.Len(t, scanNode.FilterList, 2)
 	require.Equal(t, "category", scanNode.FilterList[0].GetF().Args[0].GetCol().Name)
 	require.Equal(t, "note", scanNode.FilterList[1].GetF().Args[0].GetCol().Name)
+}
+
+func TestApplyIndicesForSortUsingIvfflat_ElidesImpliedVectorNotNullOnlyForSyncPostMode(t *testing.T) {
+	t.Run("sync post", func(t *testing.T) {
+		builder, _, scanNode, scanNodeID, multiTableIndex := newIvfIncludeModeTestBuilder(t)
+		scanNode.FilterList = []*plan.Expr{makeIvfIncludeModeIsNotNullFilter(scanNode, 1)}
+		colRefCnt := map[[2]int32]int{{scanNode.BindingTags[0], 1}: 1}
+
+		vecCtx := newIvfIncludeModeVectorSortContext(scanNode, scanNodeID, "post", 0, 2)
+		_, err := builder.applyIndicesForSortUsingIvfflat(scanNodeID, vecCtx, multiTableIndex, colRefCnt, nil)
+		require.NoError(t, err)
+
+		require.Empty(t, scanNode.FilterList)
+		require.Zero(t, colRefCnt[[2]int32{scanNode.BindingTags[0], 1}])
+		tableFuncNode := findIvfTableFunctionNode(builder, vecCtx.projNode.Children[0])
+		require.NotNil(t, tableFuncNode)
+		require.Equal(t, uint64(2), tableFuncNode.Limit.GetLit().GetU64Val())
+		require.False(t, tableFuncNode.Stats.GetForceOneCN())
+	})
+
+	t.Run("sync default post", func(t *testing.T) {
+		builder, _, scanNode, scanNodeID, multiTableIndex := newIvfIncludeModeTestBuilder(t)
+		scanNode.FilterList = []*plan.Expr{makeIvfIncludeModeIsNotNullFilter(scanNode, 1)}
+
+		vecCtx := newIvfIncludeModeVectorSortContext(scanNode, scanNodeID, "", 0, 2)
+		_, err := builder.applyIndicesForSortUsingIvfflat(scanNodeID, vecCtx, multiTableIndex, nil, nil)
+		require.NoError(t, err)
+
+		require.Empty(t, scanNode.FilterList)
+		tableFuncNode := findIvfTableFunctionNode(builder, vecCtx.projNode.Children[0])
+		require.NotNil(t, tableFuncNode)
+		require.Equal(t, uint64(2), tableFuncNode.Limit.GetLit().GetU64Val())
+		require.False(t, tableFuncNode.Stats.GetForceOneCN())
+	})
+
+	t.Run("sync post keeps projected vector reference", func(t *testing.T) {
+		builder, _, scanNode, scanNodeID, multiTableIndex := newIvfIncludeModeTestBuilder(t)
+		scanNode.FilterList = []*plan.Expr{makeIvfIncludeModeIsNotNullFilter(scanNode, 1)}
+		colRefCnt := map[[2]int32]int{{scanNode.BindingTags[0], 1}: 2}
+
+		vecCtx := newIvfIncludeModeVectorSortContext(scanNode, scanNodeID, "post", 0, 1)
+		_, err := builder.applyIndicesForSortUsingIvfflat(scanNodeID, vecCtx, multiTableIndex, colRefCnt, nil)
+		require.NoError(t, err)
+
+		require.Empty(t, scanNode.FilterList)
+		require.Equal(t, 1, colRefCnt[[2]int32{scanNode.BindingTags[0], 1}])
+	})
+
+	t.Run("sync post keeps other residual filter", func(t *testing.T) {
+		builder, _, scanNode, scanNodeID, multiTableIndex := newIvfIncludeModeTestBuilder(t)
+		otherFilter := makeIvfIncludeModeIsNotNullFilter(scanNode, 4)
+		colRefCnt := map[[2]int32]int{
+			{scanNode.BindingTags[0], 1}: 1,
+			{scanNode.BindingTags[0], 4}: 1,
+		}
+		scanNode.FilterList = []*plan.Expr{
+			makeIvfIncludeModeIsNotNullFilter(scanNode, 1),
+			otherFilter,
+		}
+
+		vecCtx := newIvfIncludeModeVectorSortContext(scanNode, scanNodeID, "post", 0, 2)
+		_, err := builder.applyIndicesForSortUsingIvfflat(scanNodeID, vecCtx, multiTableIndex, colRefCnt, nil)
+		require.NoError(t, err)
+
+		require.Equal(t, []*plan.Expr{otherFilter}, scanNode.FilterList)
+		require.Zero(t, colRefCnt[[2]int32{scanNode.BindingTags[0], 1}])
+		require.Equal(t, 1, colRefCnt[[2]int32{scanNode.BindingTags[0], 4}])
+		tableFuncNode := findIvfTableFunctionNode(builder, vecCtx.projNode.Children[0])
+		require.NotNil(t, tableFuncNode)
+		require.Equal(t, uint64(12), tableFuncNode.Limit.GetLit().GetU64Val())
+		require.False(t, tableFuncNode.Stats.GetForceOneCN())
+	})
+
+	t.Run("async post", func(t *testing.T) {
+		builder, _, scanNode, scanNodeID, multiTableIndex := newIvfIncludeModeTestBuilder(t)
+		for _, indexDef := range multiTableIndex.IndexDefs {
+			indexDef.IndexAlgoParams = `{"op_type":"vector_l2_ops","async":"true"}`
+		}
+		scanNode.FilterList = []*plan.Expr{makeIvfIncludeModeIsNotNullFilter(scanNode, 1)}
+		colRefCnt := map[[2]int32]int{{scanNode.BindingTags[0], 1}: 1}
+
+		vecCtx := newIvfIncludeModeVectorSortContext(scanNode, scanNodeID, "post", 0, 2)
+		_, err := builder.applyIndicesForSortUsingIvfflat(scanNodeID, vecCtx, multiTableIndex, colRefCnt, nil)
+		require.NoError(t, err)
+
+		require.Len(t, scanNode.FilterList, 1)
+		require.Equal(t, 1, colRefCnt[[2]int32{scanNode.BindingTags[0], 1}])
+		tableFuncNode := findIvfTableFunctionNode(builder, vecCtx.projNode.Children[0])
+		require.NotNil(t, tableFuncNode)
+		require.Equal(t, uint64(12), tableFuncNode.Limit.GetLit().GetU64Val())
+		require.True(t, tableFuncNode.Stats.GetForceOneCN())
+	})
+
+	t.Run("sync pre", func(t *testing.T) {
+		builder, _, scanNode, scanNodeID, multiTableIndex := newIvfIncludeModeTestBuilder(t)
+		scanNode.FilterList = []*plan.Expr{makeIvfIncludeModeIsNotNullFilter(scanNode, 1)}
+		colRefCnt := map[[2]int32]int{{scanNode.BindingTags[0], 1}: 1}
+
+		vecCtx := newIvfIncludeModeVectorSortContext(scanNode, scanNodeID, "pre", 0, 2)
+		_, err := builder.applyIndicesForSortUsingIvfflat(scanNodeID, vecCtx, multiTableIndex, colRefCnt, nil)
+		require.NoError(t, err)
+
+		require.Len(t, scanNode.FilterList, 1)
+		require.Equal(t, 1, colRefCnt[[2]int32{scanNode.BindingTags[0], 1}])
+		tableFuncNode := findIvfTableFunctionNode(builder, vecCtx.projNode.Children[0])
+		require.NotNil(t, tableFuncNode)
+		require.Equal(t, uint64(2), tableFuncNode.Limit.GetLit().GetU64Val())
+		require.True(t, tableFuncNode.Stats.GetForceOneCN())
+	})
 }
 
 func TestApplyIndicesForSortUsingIvfflat_IncludeModePartialPushdownKeepsResidualFilter(t *testing.T) {

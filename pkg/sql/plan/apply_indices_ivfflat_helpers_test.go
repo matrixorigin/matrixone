@@ -117,6 +117,45 @@ func TestIvfIncludeHelperColumnCollection(t *testing.T) {
 	}, projected)
 }
 
+func TestRemoveIvfCandidateImpliedNotNullFilterIsNarrow(t *testing.T) {
+	_, _, scanNode, _, _ := newIvfIncludeModeTestBuilder(t)
+	scanTag := scanNode.BindingTags[0]
+	boolType := Type{Id: int32(types.T_bool)}
+
+	direct := makeIvfHelperFnExpr(
+		"is_not_null", boolType,
+		makeIvfHelperColExpr(scanTag, 1, scanNode.TableDef),
+	)
+	directAlias := makeIvfHelperFnExpr(
+		"isnotnull", boolType,
+		makeIvfHelperColExpr(scanTag, 1, scanNode.TableDef),
+	)
+	otherColumn := makeIvfHelperFnExpr(
+		"is_not_null", boolType,
+		makeIvfHelperColExpr(scanTag, 4, scanNode.TableDef),
+	)
+	isNull := makeIvfHelperFnExpr(
+		"is_null", boolType,
+		makeIvfHelperColExpr(scanTag, 1, scanNode.TableDef),
+	)
+	wrappedVector := makeIvfHelperFnExpr(
+		"is_not_null", boolType,
+		makeIvfHelperFnExpr(
+			"cast",
+			scanNode.TableDef.Cols[1].Typ,
+			makeIvfHelperColExpr(scanTag, 1, scanNode.TableDef),
+		),
+	)
+
+	remaining, removed := removeIvfCandidateImpliedNotNullFilter(
+		[]*Expr{direct, otherColumn, nil, directAlias, isNull, wrappedVector},
+		scanTag,
+		1,
+	)
+	require.Equal(t, []*Expr{otherColumn, nil, isNull, wrappedVector}, remaining)
+	require.Equal(t, []*Expr{direct, directAlias}, removed)
+}
+
 func TestIvfIncludeHelperFilterCoverageAndSerialization(t *testing.T) {
 	_, _, scanNode, _, _ := newIvfIncludeModeTestBuilder(t)
 	scanTag := scanNode.BindingTags[0]

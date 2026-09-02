@@ -308,6 +308,33 @@ func collectProjectedColumns(
 	return projected
 }
 
+// removeIvfCandidateImpliedNotNullFilter removes only a direct IS NOT NULL
+// predicate on the indexed vector column. ivf_search never emits an entry with
+// a NULL distance, so every candidate produced by a synchronously maintained
+// IVF index already satisfies this predicate. More complex expressions stay as
+// residual filters because candidate membership does not imply them.
+func removeIvfCandidateImpliedNotNullFilter(
+	filters []*plan.Expr,
+	scanTag, partPos int32,
+) (remaining, removed []*plan.Expr) {
+	remaining = make([]*plan.Expr, 0, len(filters))
+	for _, filter := range filters {
+		if filter == nil {
+			remaining = append(remaining, filter)
+			continue
+		}
+		fn := filter.GetF()
+		if fn != nil && fn.Func != nil && len(fn.Args) == 1 &&
+			(fn.Func.ObjName == "isnotnull" || fn.Func.ObjName == "is_not_null") &&
+			exprIsCol(fn.Args[0], scanTag, partPos) {
+			removed = append(removed, filter)
+			continue
+		}
+		remaining = append(remaining, filter)
+	}
+	return remaining, removed
+}
+
 func collectScanColumnsFromExpr(expr *plan.Expr, scanTag, partPos int32, tableDef *plan.TableDef, out map[string]struct{}) {
 	if expr == nil || tableDef == nil {
 		return
@@ -1389,6 +1416,24 @@ func (builder *QueryBuilder) applyIndicesForSortUsingIvfflat(nodeID int32, vecCt
 	asyncIndex, err := catalog.IndexParamAsync(ivfCtx.metaDef.IndexAlgoParams)
 	if err != nil {
 		return nodeID, err
+	}
+	if !asyncIndex && !usePreFilter {
+		// Async entries may lag the base row, so they still require this
+		// base-table recheck. Synchronous IVF maintenance shares the base
+		// transaction and ivf_search excludes NULL-distance candidates.
+		var removedFilters []*plan.Expr
+		remainingFilters, removedFilters = removeIvfCandidateImpliedNotNullFilter(
+			remainingFilters, scanNode.BindingTags[0], ivfCtx.partPos)
+		// colRefCnt was computed before index rewrites. Keep it consistent with
+		// FilterList so the remapper can prune the wide vector column.
+		if colRefCnt != nil && len(removedFilters) > 0 {
+			key := [2]int32{scanNode.BindingTags[0], ivfCtx.partPos}
+			if count := colRefCnt[key]; count > len(removedFilters) {
+				colRefCnt[key] = count - len(removedFilters)
+			} else {
+				colRefCnt[key] = 0
+			}
+		}
 	}
 
 	// build ivf_search table function node
