@@ -6055,7 +6055,7 @@ func (c *Compile) compileSort(node *plan.Node, ss []*Scope) []*Scope {
 			if topN < limit || topN < offset {
 				overflow = true
 			}
-			if !overflow && topN <= 8192*2 {
+			if !overflow && topN <= mergeTopResidentPlanThreshold {
 				// if n is small, convert `order by col limit m offset n` to `top m+n offset n`
 				return c.compileOffset(node, c.compileTop(node, plan2.MakePlan2Uint64ConstExprWithType(topN), ss))
 			}
@@ -6077,6 +6077,23 @@ func (c *Compile) compileSort(node *plan.Node, ss []*Scope) []*Scope {
 	default:
 		return ss
 	}
+}
+
+const mergeTopResidentPlanThreshold uint64 = 8192 * 2
+
+// canUseResidentMergeTop limits the resident-only global MergeTop to small,
+// statically bounded plans. Large or runtime limits use the existing spill-capable
+// Top and MergeOrder operators instead.
+func canUseResidentMergeTop(topN *plan.Expr) bool {
+	if topN == nil {
+		return false
+	}
+	literal, ok := topN.Expr.(*plan.Expr_Lit)
+	if !ok || literal.Lit == nil {
+		return false
+	}
+	value, ok := literal.Lit.Value.(*plan.Literal_U64Val)
+	return ok && value.U64Val <= mergeTopResidentPlanThreshold
 }
 
 func (c *Compile) compileTop(node *plan.Node, topN *plan.Expr, ss []*Scope) []*Scope {
@@ -6102,11 +6119,23 @@ func (c *Compile) compileTop(node *plan.Node, topN *plan.Expr, ss []*Scope) []*S
 	rs := c.newMergeScope(ss)
 
 	currentFirstFlag = c.anal.isFirst
-	arg := constructMergeTop(node, topN)
-	arg.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
-	rs.setRootOperator(arg)
+	if canUseResidentMergeTop(topN) {
+		arg := constructMergeTop(node, topN)
+		arg.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
+		rs.setRootOperator(arg)
+		c.anal.isFirst = false
+		return []*Scope{rs}
+	}
+
+	mergeOrder := constructMergeOrder(node)
+	mergeOrder.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
+	rs.setRootOperator(mergeOrder)
 	c.anal.isFirst = false
 
+	globalLimit := constructLimit(&plan.Node{Limit: topN})
+	globalLimit.SetAnalyzeControl(c.anal.curNodeIdx, c.anal.isFirst)
+	rs.setRootOperator(globalLimit)
+	c.anal.isFirst = false
 	return []*Scope{rs}
 }
 
