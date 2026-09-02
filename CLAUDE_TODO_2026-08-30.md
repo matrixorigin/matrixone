@@ -121,3 +121,9 @@
 1. 按 #27218/#27217 ownership，撤回 REGEXP_REPLACE 的 expanding result-domain。
 2. REGEXP_REPLACE 恢复 source-derived VARCHAR metadata，避免在 #27218 放宽 runtime 可达结果。
 3. 更新 focused result-domain UT；REGEXP runtime admission/Q3 由 #27217 完整处理。
+
+# PR #27841 最新 main conflict 修复
+
+1. 合并 `mo/main@c46d897e96`。
+2. 以已自动合并的 `mysql_sql.y` 为 source of truth，重新生成冲突的 `mysql_sql.go`。
+3. 运行 parser、planner/function owning tests、lint 与 diff check，创建 merge commit 并 push。

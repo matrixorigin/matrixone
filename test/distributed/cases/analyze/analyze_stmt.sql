@@ -88,6 +88,24 @@ select 'AFTER_SNAPSHOT_ANALYZE';
 drop snapshot analyze_schema_snapshot;
 drop table snapshot_cols;
 
+-- SQL PREPARE/EXECUTE keeps ANALYZE's dynamic result shape and default database
+prepare analyze_explicit from analyze table t_analyze_01(a, b);
+execute analyze_explicit;
+execute analyze_explicit;
+deallocate prepare analyze_explicit;
+prepare analyze_implicit from analyze table t_analyze_01;
+execute analyze_implicit;
+deallocate prepare analyze_implicit;
+create database analyze_prepare_other;
+create table analyze_prepare_other.t_analyze_01(a int, b int);
+insert into analyze_prepare_other.t_analyze_01 values (9, 9), (9, 9);
+prepare analyze_bound from analyze table t_analyze_01(a);
+use analyze_prepare_other;
+execute analyze_bound;
+use db_analyze_stmt;
+deallocate prepare analyze_bound;
+drop database analyze_prepare_other;
+
 -- CHECK TABLE: returns not-supported error
 check table t_analyze_01;
 check table t_analyze_01 extended;

@@ -3509,6 +3509,7 @@ prepareable_stmt:
 		$$ = &tree.SetVar{Assignments: $2}
     }
 |   perform_stmt
+|   analyze_stmt
 |   select_stmt
     {
         $$ = $1

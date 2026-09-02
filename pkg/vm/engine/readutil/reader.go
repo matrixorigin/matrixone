@@ -19,6 +19,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math"
 	"slices"
 	"strings"
 	"time"
@@ -639,11 +640,11 @@ func (r *reader) SetIndexParam(param *plan.IndexReaderParam) {
 					indexTop.LowerBoundType = plan.BoundType_UNBOUNDED
 					indexTop.LowerBound = 0
 				} else {
-					indexTop.LowerBound *= indexTop.LowerBound
+					indexTop.LowerBound = squareL2BoundOutward(indexTop.LowerBound, math.Inf(-1))
 				}
 			}
 			if indexTop.UpperBoundType != plan.BoundType_UNBOUNDED && indexTop.UpperBound >= 0 {
-				indexTop.UpperBound *= indexTop.UpperBound
+				indexTop.UpperBound = squareL2BoundOutward(indexTop.UpperBound, math.Inf(1))
 			}
 		}
 	}
@@ -651,6 +652,13 @@ func (r *reader) SetIndexParam(param *plan.IndexReaderParam) {
 	// Avoid eager O(limit) allocation; blockio grows the heap as rows are accepted.
 	indexTop.DistHeap = nil
 	r.orderByLimit = indexTop
+}
+
+// squareL2BoundOutward keeps the squared-distance storage gate a superset of
+// the original L2 predicate. The source-domain filter removes any boundary
+// false positives introduced by this one-ULP widening.
+func squareL2BoundOutward(bound, direction float64) float64 {
+	return math.Nextafter(bound*bound, direction)
 }
 
 func validBoundType(boundType plan.BoundType) bool {
