@@ -447,13 +447,37 @@ func TestPreparedParamValuesPreservesNullProtocolProvenance(t *testing.T) {
 
 func TestIssue27640InitExecuteStmtParamAcceptsODBCIntegerTextPagination(t *testing.T) {
 	for index, test := range []struct {
-		name   string
-		sql    string
-		values []string
+		name       string
+		sql        string
+		values     []string
+		mysqlTypes []defines.MysqlType
+		pagination []int32
+		prefix     []bool
 	}{
 		{name: "limit", sql: "select 1 limit ?", values: []string{"2"}},
 		{name: "limit offset", sql: "select 1 limit ? offset ?", values: []string{"2", "1"}},
 		{name: "offset", sql: "select 1 offset ?", values: []string{"1"}},
+		{
+			name: "having and limit", sql: "select sum(1) having sum(1) > ? limit ?",
+			values: []string{"0", "1"},
+			mysqlTypes: []defines.MysqlType{
+				defines.MYSQL_TYPE_BLOB,
+				defines.MYSQL_TYPE_STRING,
+			},
+			pagination: []int32{1},
+			prefix:     []bool{false, false},
+		},
+		{
+			name: "having and limit offset", sql: "select sum(1) having sum(1) > ? limit ? offset ?",
+			values: []string{"0", "1", "0"},
+			mysqlTypes: []defines.MysqlType{
+				defines.MYSQL_TYPE_BLOB,
+				defines.MYSQL_TYPE_STRING,
+				defines.MYSQL_TYPE_STRING,
+			},
+			pagination: []int32{1, 2},
+			prefix:     []bool{false, false, false},
+		},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			ses, prepareStmt, cw, execCtx := newPreparedExecuteEnvForSQL(
@@ -462,19 +486,31 @@ func TestIssue27640InitExecuteStmtParamAcceptsODBCIntegerTextPagination(t *testi
 				cw.proc.SetPrepareParams(nil)
 				prepareStmt.Close()
 			}()
+			if test.pagination != nil {
+				require.Equal(t, test.pagination, plan2.PreparedPaginationParamPositions(
+					prepareStmt.PreparePlan.GetDcl().GetPrepare().Plan))
+			}
 
 			// Connector/ODBC sends integer bindings as MYSQL_TYPE_STRING in
 			// COM_STMT_EXECUTE, so reproduce that wire representation directly.
 			prepareStmt.params = vector.NewVec(types.T_text.ToType())
 			prepareStmt.ParamTypes = make([]byte, 0, len(test.values)*2)
 			wantParamVals := make([]any, 0, len(test.values))
-			for _, value := range test.values {
+			for valueIndex, value := range test.values {
 				require.NoError(t, vector.AppendBytes(
 					prepareStmt.params, []byte(value), false, cw.proc.Mp()))
+				mysqlType := defines.MYSQL_TYPE_STRING
+				if valueIndex < len(test.mysqlTypes) {
+					mysqlType = test.mysqlTypes[valueIndex]
+				}
 				prepareStmt.ParamTypes = append(prepareStmt.ParamTypes,
-					byte(defines.MYSQL_TYPE_STRING), 0)
+					byte(mysqlType), 0)
+				enableNumericPrefix := true
+				if valueIndex < len(test.prefix) {
+					enableNumericPrefix = test.prefix[valueIndex]
+				}
 				wantParamVals = append(wantParamVals, plan2.ParamValue{
-					Value: value, IsBinaryProtocol: true, EnableNumericPrefix: true,
+					Value: value, IsBinaryProtocol: true, EnableNumericPrefix: enableNumericPrefix,
 				})
 			}
 

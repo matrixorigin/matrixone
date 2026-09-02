@@ -930,10 +930,26 @@ func filterBinaryNumericPrefixCandidates(
 	paramVals []any,
 	paramTypes []byte,
 ) bool {
+	fixedIntegerPositions := plan2.PreparedPaginationParamPositions(preparePlan)
+	fixedIntegerPositions = append(
+		fixedIntegerPositions, plan2.PreparedLagLeadParamPositions(preparePlan)...)
+	slices.Sort(fixedIntegerPositions)
 	anyRelevant := false
 	for i := range paramVals {
 		param, ok := paramVals[i].(plan2.ParamValue)
 		if !ok {
+			continue
+		}
+		mysqlTypeEligible := i*2+1 < len(paramTypes) &&
+			binaryProtocolMayNeedNumericPrefix(defines.MysqlType(paramTypes[i*2]))
+		_, fixedInteger := slices.BinarySearch(fixedIntegerPositions, int32(i))
+		if !mysqlTypeEligible || fixedInteger {
+			// Numeric-prefix admission is position-local. A text-capable marker
+			// elsewhere in the plan must not reclassify BLOB values or parameters
+			// with a fixed unsigned-integer contract such as LIMIT/OFFSET.
+			param.EnableNumericPrefix = false
+			param.RetainParamRef = false
+			paramVals[i] = param
 			continue
 		}
 		candidates := append([]any(nil), paramVals...)
