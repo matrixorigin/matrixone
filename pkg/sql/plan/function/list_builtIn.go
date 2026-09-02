@@ -202,7 +202,36 @@ func wkbConstructor(id int, fn executeLogicOfOverload) FuncNew {
 	}
 }
 
+func statementDigestTextFunction() FuncNew {
+	stringTypes := []types.T{
+		types.T_varchar, types.T_char, types.T_text,
+		types.T_binary, types.T_varbinary, types.T_blob,
+	}
+	overloads := make([]overload, 0, len(stringTypes))
+	for i, typ := range stringTypes {
+		overloads = append(overloads, overload{
+			overloadId: i,
+			args:       []types.T{typ},
+			retType: func(parameters []types.Type) types.Type {
+				return derivedStringReturnType(parameters, 0, types.T_text)
+			},
+			newOp: func() executeLogicOfOverload {
+				return StatementDigestText
+			},
+		})
+	}
+	return FuncNew{
+		functionId: STATEMENT_DIGEST_TEXT,
+		class:      plan.Function_STRICT,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    fixedTypeMatch,
+		Overloads:  overloads,
+	}
+}
+
 var supportedStringBuiltIns = []FuncNew{
+	statementDigestTextFunction(),
+
 	// function `ascii`
 	{
 		functionId: ASCII,
