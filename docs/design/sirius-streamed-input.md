@@ -2,7 +2,10 @@
 
 Status: approved for implementation
 
-Design version: 6
+Design version: 1
+
+Review iterations: 6. Review iterations refine the same unmerged version-1
+design and are not protocol or design-version increments.
 
 Approval: [PASS by XuPeng-SH](https://github.com/matrixorigin/matrixone/pull/27599#pullrequestreview-5072324636) for exact design revision `0ec46e52658b86bfd9ceedd2c13db008558397ca`
 
@@ -47,7 +50,7 @@ while retaining Sirius execution for the remainder of the plan.
 
 The first implementation acknowledged each staged batch and immediately
 self-scheduled another `GPU_MO_SCAN` task. That bounded the Flight slot but not
-the downstream Sirius repositories or task queue. Version 2 removed that eager
+the downstream Sirius repositories or task queue. Review iteration 2 removed that eager
 source continuation, but SF10 disproved its claimed end-to-end bound: a `FULL`
 partition barrier legitimately asks its producer to finish and retained 2.71
 GiB of source-derived host data for Q9. Once the barrier opened, two configured
@@ -59,10 +62,10 @@ byte-identical with two workers, and reduced Q9 fingerprints remained exact
 through `part`, `lineitem`, `partsupp`, and `orders`, isolating the failure to
 the large concurrent partition phase rather than Flight or the native codec.
 
-Version 3 kept ordinary GPU task parallelism but admitted only one `PARTITION`
+Review iteration 3 kept ordinary GPU task parallelism but admitted only one `PARTITION`
 execution per GPU until that operator's CUDA stream was synchronized. It also
 replaced the false one-published-batch memory claim with a process-global input
-budget. Version 4 removed multi-frame `GPU_MO_SCAN` staging: one Sirius source
+budget. Review iteration 4 removed multi-frame `GPU_MO_SCAN` staging: one Sirius source
 task consumes one wire frame and produces one host representation, while one
 subsequent frame may occupy the sidecar's one-slot prefetch window.
 
@@ -74,8 +77,8 @@ work and then throw before `run_one_operator` reaches its success-only stream
 synchronization. The task then releases processing handles and its reservation,
 and the executor returns the borrowed stream to the pool, even though queued GPU
 work may still reference those resources or the stream may contain a sticky
-CUDA failure. Version 5 fixed that owner boundary and required `PARTITION` to be
-reentrant rather than serialized. Version 6 closes the remaining failure-domain
+CUDA failure. Review iteration 5 fixed that owner boundary and required `PARTITION` to be
+reentrant rather than serialized. Review iteration 6 closes the remaining failure-domain
 contract: a context/device-fatal CUDA failure seals the whole paired sidecar,
 cancels every ticket, makes Flight readiness fail, and terminates the process
 for supervisor restart. Ordinary errors whose streams quiesce cleanly remain
@@ -194,7 +197,7 @@ canonical decoding, and coordinated rollout contain that cost.
 Setting `executor.pipeline.num_threads` to one made SF10 Q9 deterministic, but
 it serializes joins, aggregates, projections, and scans and hides ownership
 bugs that remain reachable with smaller task sizes. It also changes deployment
-behavior for direct `TaeRead`. Version 5 therefore requires correctness with at
+behavior for direct `TaeRead`. Review iteration 5 therefore requires correctness with at
 least two GPU workers and does not accept global serialization.
 
 ### 4.5 Selective partition serialization
@@ -203,7 +206,7 @@ A per-GPU partition permit would preserve concurrency for other operators, but
 it still makes correctness depend on suppressing a schedule that normal Sirius
 supports. It does not repair resource release before stream quiescence or
 prevent a poisoned stream from being reused after another operator fails.
-Version 5 instead makes the task lifetime exception-safe and the partition
+Review iteration 5 instead makes the task lifetime exception-safe and the partition
 execution state reentrant. If an isolated test proves the pinned libcudf
 primitive cannot run on independent streams after those fixes, delivery stops
 and the design must be reconsidered; serialization is not added silently.
@@ -222,7 +225,7 @@ Current upstream Sirius has newer partial-barrier, adaptive-join, and task
 admission machinery, but the MatrixOne TAE/Substrait stack is based on a fork
 hundreds of upstream commits behind it. Porting that stack is the preferred
 long-term route to general streaming, but it is a separate migration with a
-larger compatibility and validation surface. Version 5 fixes the common task
+larger compatibility and validation surface. Review iteration 5 fixes the common task
 ownership boundary on the current fork and records unbounded execution as a
 non-goal.
 
@@ -816,7 +819,7 @@ and closes every row below.
 | SF10 correctness and decision data | typed equality for all 22 queries on one reused process; Q9 repeats ten times; record storage bytes, rows/bytes before serialization, transferred bytes, CN CPU/peak memory, sidecar host/GPU peak and utilization, time to first row, and total latency |
 | partition safety control | repeated direct-TAE Q9 plus deterministic TAE- and MO-derived concurrent partition-content fingerprints prove correctness is independent of source representation and batch size |
 | snapshot advantage | unflushed committed tail and visible tombstone cases equal native MatrixOne while direct `TaeRead` rejects them |
-| static/build quality | MatrixOne exact-head CI (including SCA/UT/BVT/coverage) is the merge gate; Sirius and sidecar CI status is informational and non-blocking |
+| static/build quality | MatrixOne SCA/UT/BVT/coverage; Sirius build matrix and tests; sidecar CUDA build/tests and review |
 
 Functional lifecycle tests use deterministic barriers rather than sleeps.
 Performance and capacity measurements run in the performance harness, not as
@@ -825,15 +828,14 @@ wall-clock assertions in ordinary unit tests.
 ## 15. Delivery pins
 
 The delivered candidate is pinned to these immutable revisions. Final
-implementation approval remains dependent on MatrixOne exact-head CI and the
-acceptance evidence in section 14. Sirius and sidecar CI status is not a merge
-gate for the MatrixOne PR. Updating any production revision invalidates only
-the evidence whose semantic inputs changed.
+implementation approval remains dependent on the three-repository static/build
+evidence and the acceptance evidence in section 14. Updating any production
+revision invalidates only the evidence whose semantic inputs changed.
 
 | Component | PR | Candidate delivery commit | Evidence |
 | --- | --- | --- | --- |
 | MatrixOne | [#27599](https://github.com/matrixorigin/matrixone/pull/27599) | `b659afafa0c86a707b79f9a6c4b68fd3beadc6aa` | full Go 1.26.4 pre-push SCA passed; affected packages and 20x race regressions passed; [SF10 five-mode record](https://github.com/matrixorigin/matrixone/pull/27599#issuecomment-5495966844) |
-| Sirius | [#6](https://github.com/matrixorigin/sirius/pull/6) | `b06f3657eeeb2f2b64a6254df887ae631d0c23ca` | source tree matches the scoped v6 implementation at `fd347eb996c74d9910c3aaa94596feba14d5d035`, including merged multi-stream fix [#8](https://github.com/matrixorigin/sirius/pull/8); targeted Substrait/MO-scan, scheduler-concurrency, and task-lifecycle cases passed |
+| Sirius | [#6](https://github.com/matrixorigin/sirius/pull/6) | `b06f3657eeeb2f2b64a6254df887ae631d0c23ca` | source tree matches the sixth review iteration of the version-1 design at `fd347eb996c74d9910c3aaa94596feba14d5d035`, including merged multi-stream fix [#8](https://github.com/matrixorigin/sirius/pull/8); targeted Substrait/MO-scan, scheduler-concurrency, and task-lifecycle cases passed |
 | sidecar | [#14](https://github.com/matrixorigin/mo-sirius-sidecar/pull/14) | `55c8676d7d4463040d914e0f8c07210bf9559ab4` | pins the scoped Sirius revision above; targeted protocol/config and native stream/result cases passed |
 
 The sidecar submodule must point to the approved Sirius commit. The MatrixOne PR

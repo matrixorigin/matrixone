@@ -567,7 +567,17 @@ func TestBoundInt64SumIsAdvertisedWithDecimalResult(t *testing.T) {
 }
 
 func TestCapabilityHashMatchesSidecarContract(t *testing.T) {
-	require.Equal(t, "bdbe2509d6519bcbf184e07ef897123a76e3a016855fd5dc889858b0f9c6800a", hex.EncodeToString(CapabilityHash[:]))
+	for _, identity := range []string{
+		`"stream_input_host_accounting":"pre-admitted-execution-v2"`,
+		`"gpu_fatal_recovery":"process-fail-stop-v1"`,
+		`"gpu_partition_concurrency":"same-stage-reentrant-v1"`,
+	} {
+		require.Contains(t, CapabilityDocument, identity)
+		withoutIdentity := strings.Replace(CapabilityDocument, identity+",", "", 1)
+		require.NotEqual(t, sha256.Sum256([]byte(withoutIdentity)), CapabilityHash,
+			"a peer missing %s must fail exact capability negotiation", identity)
+	}
+	require.Equal(t, "32f14380770bf4016cbf1b0f564e4423421f6b86779018e9dfcb7aba94f67ea7", hex.EncodeToString(CapabilityHash[:]))
 }
 
 func TestBoundDecimalUnaryMinusLowersToSubtractFromTypedZero(t *testing.T) {
