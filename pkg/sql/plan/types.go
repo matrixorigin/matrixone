@@ -306,9 +306,20 @@ type QueryBuilder struct {
 	irregularMaintDeletePkPos int32
 	irregularMaintDeletePkTyp plan.Type
 	irregularMaintIndexes     []*plan.IndexDef
-	irregularMaintTableDef    *plan.TableDef
-	irregularMaintObjRef      *plan.ObjectRef
-	irregularMaintSkipInsert  bool
+	// irregularMaintInsertOnlyIndexes are logical irregular indexes whose parts
+	// cannot change in an ODKU conflict. Their insert maintenance reads only
+	// non-conflicting rows from irregularMaintInsertOnlySourceStep; delete
+	// maintenance is intentionally absent.
+	irregularMaintInsertOnlySourceStep int32
+	irregularMaintInsertOnlyIndexes    []*plan.IndexDef
+	// irregularMaintValueChangedSourceSteps maps an affected logical index to a
+	// derivative source containing only new rows or conflict rows whose stored
+	// index inputs actually changed. Groups absent from the map retain the
+	// conservative unfiltered maintenance source.
+	irregularMaintValueChangedSourceSteps map[string]int32
+	irregularMaintTableDef                *plan.TableDef
+	irregularMaintObjRef                  *plan.ObjectRef
+	irregularMaintSkipInsert              bool
 
 	// DML RETURNING consumes an attempt-local row image from a dedicated sink.
 	// The mutation plan and the returning projection use independent SINK_SCAN

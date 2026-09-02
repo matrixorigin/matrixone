@@ -1216,16 +1216,22 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext)
 
 		alias := dmlCtx.aliases[i]
 		pkPos := finalColName2Idx[alias+"."+dmlCtx.tableDefs[i].Pkey.PkeyColName]
-		lastNodeID = builder.appendOnDupIrregularMaintSource(
+		lastNodeID, err = builder.appendOnDupIrregularMaintSource(
 			bindCtx,
 			lastNodeID,
 			finalProjTag,
 			pkPos,
 			finalProjList[pkPos].Typ,
 			indexes,
+			nil,
+			-1,
+			nil,
 			dmlCtx.tableDefs[i],
 			dmlCtx.objRefs[i],
 		)
+		if err != nil {
+			return 0, err
+		}
 		hasInlineIrregularMaintenance = true
 		// Multi-target UPDATE is routed to the legacy planner before this point,
 		// so at most one target can require inline irregular maintenance here.
@@ -1259,6 +1265,23 @@ func irregularIndexAffectedByUpdate(
 	tableDef *plan.TableDef,
 	idxDef *plan.IndexDef,
 	updateCols map[string]tree.Expr,
+) (bool, error) {
+	updatedCols := make(map[string]struct{}, len(updateCols))
+	for colName := range updateCols {
+		updatedCols[colName] = struct{}{}
+	}
+	return irregularIndexAffectedByUpdatedColumnNames(tableDef, idxDef, updatedCols)
+}
+
+// irregularIndexAffectedByUpdatedColumnNames is the shared dependency check for
+// UPDATE and ON DUPLICATE KEY UPDATE. The latter has already bound its values to
+// plan expressions, so it cannot reuse the tree.Expr map accepted by the former.
+// Keeping the plugin hook here makes both paths honor algorithm-owned metadata
+// dependencies such as IVFFLAT INCLUDE columns.
+func irregularIndexAffectedByUpdatedColumnNames(
+	tableDef *plan.TableDef,
+	idxDef *plan.IndexDef,
+	updateCols map[string]struct{},
 ) (bool, error) {
 	columnUpdated := func(colName string) bool {
 		colName = catalog.ResolveAlias(colName)
