@@ -5637,6 +5637,26 @@ func (builder *QueryBuilder) bindSelect(stmt *tree.Select, ctx *BindContext, isR
 		ctx.hasSingleRow = true
 	}
 
+	// All aggregate consumers in this query block are bound now. Compact exact
+	// affine SUM families before aggregate arguments are flattened and the AGG
+	// node fixes their physical slot layout.
+	affineOrderBys := slices.Clone(boundOrderBys)
+	if boundTimeWindowOrderBy != nil {
+		affineOrderBys = append(affineOrderBys, boundTimeWindowOrderBy)
+	}
+	builder.rewriteAffineSumFamilies(
+		ctx,
+		[][]*plan.Expr{
+			ctx.projects,
+			ctx.windows,
+			ctx.times,
+			boundHavingList,
+			fillVals,
+			fillCols,
+		},
+		affineOrderBys,
+	)
+
 	// Flatten aggregate argument subqueries before building the AGG node.
 	if !ctx.sampleFunc.hasSampleFunc && !ctx.bindingRecurStmt() {
 		for i, agg := range ctx.aggregates {
