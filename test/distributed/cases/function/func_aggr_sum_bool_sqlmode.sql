@@ -66,11 +66,28 @@ select bit_or(i<>0) from t;
 select sum(i) from t;
 select sum(cast(i as char)) from t;
 
--- dropping the mode restores the strict typing in the same session
+-- dropping the mode restores the strict typing in the same session. The
+-- statement text is repeated first so a plan cached under the mode is on
+-- record: the session plan cache must not answer it once the mode is gone.
+select sum(i<>0) from t;
+select sum(i<>0) from t;
 set session sql_mode = 'ONLY_FULL_GROUP_BY,STRICT_TRANS_TABLES';
 select sum(i<>0) from t;
 select avg(i<>0) from t;
 create table ctas_off as select sum(i<>0) as s from t;
 select min(i<>0), max(i<>0) from t;
+
+-- prepared statements take the same decision as direct queries, and EXECUTE
+-- follows the session's current mode rather than the PREPARE-time one
+prepare strict_stmt from 'select sum(i<>0) from t';
+set session sql_mode = 'ONLY_FULL_GROUP_BY,STRICT_TRANS_TABLES,ENABLE_BOOL_SUMAVG';
+prepare relaxed_stmt from 'select sum(i<>0) from t';
+execute relaxed_stmt;
+set session sql_mode = 'ONLY_FULL_GROUP_BY,STRICT_TRANS_TABLES';
+execute relaxed_stmt;
+set session sql_mode = 'ONLY_FULL_GROUP_BY,STRICT_TRANS_TABLES,ENABLE_BOOL_SUMAVG';
+execute relaxed_stmt;
+deallocate prepare relaxed_stmt;
+set session sql_mode = 'ONLY_FULL_GROUP_BY,STRICT_TRANS_TABLES';
 
 drop database bool_sumavg_sqlmode;

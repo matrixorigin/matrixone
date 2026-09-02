@@ -300,15 +300,17 @@ type PrepareStmt struct {
 	PrepareStmt     tree.Statement
 	NativeMode      bool
 	OnlyFullGroupBy bool
-	// onlyFullGroupBySet distinguishes a captured disabled mode from legacy or
-	// minimal in-memory fixtures that predate this plan dependency.
-	onlyFullGroupBySet bool
-	ParamTypes         []byte
-	ColDefData         [][]byte
-	IsCloudNonuser     bool
-	proc               *process.Process
-	remapDb            map[string]string
-	defaultDatabase    string
+	BoolSumAvg      bool
+	// sqlModeFlagsSet distinguishes captured disabled modes (OnlyFullGroupBy,
+	// BoolSumAvg) from legacy or minimal in-memory fixtures that predate these
+	// plan dependencies.
+	sqlModeFlagsSet bool
+	ParamTypes      []byte
+	ColDefData      [][]byte
+	IsCloudNonuser  bool
+	proc            *process.Process
+	remapDb         map[string]string
+	defaultDatabase string
 
 	params              *vector.Vector
 	getFromSendLongData map[int]struct{}
@@ -1728,9 +1730,11 @@ func (ses *Session) SetSessionSysVar(ctx context.Context, name string, val inter
 	name = strings.ToLower(name)
 	oldMatrixOneNative := false
 	oldOnlyFullGroupBy := false
+	oldBoolSumAvg := false
 	if name == "sql_mode" {
 		oldMatrixOneNative = ses.sqlModeHasMatrixOneNative()
 		oldOnlyFullGroupBy = ses.sqlModeHasOnlyFullGroupBy()
+		oldBoolSumAvg = ses.sqlModeHasEnableBoolSumAvg()
 	}
 
 	def, ok := gSysVarsDefs[name]
@@ -1790,7 +1794,7 @@ func (ses *Session) SetSessionSysVar(ctx context.Context, name string, val inter
 		ses.sesSysVars.Set(canonicalName, val)
 	}
 	if err == nil && name == "sql_mode" {
-		ses.updateSqlModeCaches(oldMatrixOneNative, oldOnlyFullGroupBy, val)
+		ses.updateSqlModeCaches(oldMatrixOneNative, oldOnlyFullGroupBy, oldBoolSumAvg, val)
 	}
 	if err == nil && setTxnIsolation {
 		if txnHandler := ses.GetTxnHandler(); txnHandler != nil {

@@ -59,8 +59,8 @@ func TestSQLModeEnableBoolSumAvgContract(t *testing.T) {
 	}
 }
 
-// Appending is what keeps every previously stored sql_mode meaning what it did:
-// SET bit indexes are positional and string2bits also accepts the numeric form.
+// Appending keeps the bit index of every existing value stable: SET bit
+// indexes are positional.
 func TestSQLModeExistingValueBitsAreStable(t *testing.T) {
 	setType, ok := gSysVarsDefs["sql_mode"].Type.(SystemVariableSetType)
 	require.True(t, ok)

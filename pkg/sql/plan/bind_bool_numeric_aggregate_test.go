@@ -23,43 +23,39 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// defaultSQLMode mirrors the sql_mode default in pkg/frontend/variables.go, so
-// the disabled case is the mode a real session actually starts with rather than
-// an empty string.
-const defaultSQLMode = "ERROR_FOR_DIVISION_BY_ZERO,NO_ENGINE_SUBSTITUTION," +
-	"NO_ZERO_DATE,NO_ZERO_IN_DATE,ONLY_FULL_GROUP_BY,STRICT_TRANS_TABLES"
-
-// boolSumAvgMockContext answers sql_mode with or without ENABLE_BOOL_SUMAVG
-// added to the default modes, so a test states only the mode under test and
-// still proves the token composes with the modes a session already carries.
+// boolSumAvgMockContext answers sql_mode with the mock's default modes, plus
+// ENABLE_BOOL_SUMAVG when enabled, so a test states only the mode under test
+// and still proves the token composes with the modes a session already has.
 func boolSumAvgMockContext(enabled bool) *MockCompilerContext {
-	mode := defaultSQLMode
-	if enabled {
-		mode += "," + mysql.SQLModeEnableBoolSumAvg
-	}
 	ctx := NewMockCompilerContext(false)
-	ctx.ResolveVariableFunc = func(name string, isSystemVar, isGlobalVar bool) (interface{}, error) {
-		if name == "sql_mode" {
-			return mode, nil
-		}
-		return nil, nil
+	if enabled {
+		ctx.SetSqlModeOverride("ONLY_FULL_GROUP_BY," + mysql.SQLModeEnableBoolSumAvg)
 	}
 	return ctx
 }
 
-func buildOneQuery(t *testing.T, ctx CompilerContext, sql string) (*Plan, error) {
+// bindModes are the two entry points a statement can take into the binder.
+// The mode is resolved once on the QueryBuilder, so both must agree.
+var bindModes = []struct {
+	name    string
+	prepare bool
+}{
+	{"direct", false},
+	{"prepare", true},
+}
+
+func buildOneQuery(t *testing.T, ctx CompilerContext, sql string, prepare bool) (*Plan, error) {
 	t.Helper()
 	stmts, err := mysql.Parse(ctx.GetContext(), sql, 1)
 	require.NoError(t, err)
 	require.Len(t, stmts, 1)
 	defer stmts[0].Free()
-	return BuildPlan(ctx, stmts[0], false)
+	return BuildPlan(ctx, stmts[0], prepare)
 }
 
-// aggregateArgTypes returns the argument types of the single aggregate in the
-// built plan. It reads the bound plan rather than the SQL text, so it proves
-// what the executor will actually run.
-func aggregateArgTypes(t *testing.T, p *Plan) []types.T {
+// firstAggregate returns the single aggregate of the built plan. It reads the
+// bound plan rather than the SQL text, so it proves what the executor runs.
+func firstAggregate(t *testing.T, p *Plan) *Expr {
 	t.Helper()
 	query := p.GetQuery()
 	require.NotNil(t, query)
@@ -68,43 +64,38 @@ func aggregateArgTypes(t *testing.T, p *Plan) []types.T {
 			continue
 		}
 		require.Len(t, node.AggList, 1)
-		fn := node.AggList[0].GetF()
-		require.NotNil(t, fn)
-		argTypes := make([]types.T, len(fn.Args))
-		for i, arg := range fn.Args {
-			argTypes[i] = types.T(arg.Typ.Id)
-		}
-		return argTypes
+		return node.AggList[0]
 	}
 	t.Fatal("plan contains no aggregate")
 	return nil
 }
 
-func aggregateReturnType(t *testing.T, p *Plan) types.T {
+func aggregateArgTypes(t *testing.T, p *Plan) []types.T {
 	t.Helper()
-	query := p.GetQuery()
-	require.NotNil(t, query)
-	for _, node := range query.Nodes {
-		if len(node.AggList) == 0 {
-			continue
-		}
-		return types.T(node.AggList[0].Typ.Id)
+	fn := firstAggregate(t, p).GetF()
+	require.NotNil(t, fn)
+	argTypes := make([]types.T, len(fn.Args))
+	for i, arg := range fn.Args {
+		argTypes[i] = types.T(arg.Typ.Id)
 	}
-	t.Fatal("plan contains no aggregate")
-	return types.T_any
+	return argTypes
 }
 
-// A BOOL argument is rejected by default. MO's stricter typing is the correct
-// behavior; the mode only relaxes it on request, so the default must keep
-// producing the established diagnostic.
+// A BOOL argument is rejected by default, from both entry points. MO's
+// stricter typing is the correct behavior; the mode only relaxes it on
+// request, so the default must keep producing the established diagnostic.
 func TestBoolNumericAggregateRejectedByDefault(t *testing.T) {
-	for _, sql := range []string{
-		"select sum(n_nationkey <> 0) from nation",
-		"select avg(n_nationkey <> 0) from nation",
-	} {
-		_, err := buildOneQuery(t, boolSumAvgMockContext(false), sql)
-		require.Error(t, err, sql)
-		require.Contains(t, err.Error(), "invalid argument aggregate function", sql)
+	for _, mode := range bindModes {
+		for _, sql := range []string{
+			"select sum(n_nationkey <> 0) from nation",
+			"select avg(n_nationkey <> 0) from nation",
+			"select sum(n_nationkey <> 0) over () from nation",
+			"select n_name from nation group by n_name having sum(n_nationkey <> 0) > 0",
+		} {
+			_, err := buildOneQuery(t, boolSumAvgMockContext(false), sql, mode.prepare)
+			require.Error(t, err, "%s %s", mode.name, sql)
+			require.Contains(t, err.Error(), "invalid argument aggregate function", "%s %s", mode.name, sql)
+		}
 	}
 }
 
@@ -125,16 +116,16 @@ func TestBoolNumericAggregateUnresolvableSQLModeStaysStrict(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			ctx := NewMockCompilerContext(false)
 			ctx.ResolveVariableFunc = resolve
-			_, err := buildOneQuery(t, ctx, "select sum(n_nationkey <> 0) from nation")
+			_, err := buildOneQuery(t, ctx, "select sum(n_nationkey <> 0) from nation", false)
 			require.Error(t, err)
 			require.Contains(t, err.Error(), "invalid argument aggregate function")
 		})
 	}
 }
 
-// Under the mode, SUM/AVG over BOOL bind as the TINYINT aggregate. Asserting
-// the bound argument type (not the SQL text) proves the executor runs the
-// existing integer aggregate rather than some new BOOL path.
+// Under the mode, SUM/AVG over BOOL bind as the TINYINT aggregate from both
+// entry points. Asserting the bound argument type (not the SQL text) proves
+// the executor runs the existing integer aggregate rather than a BOOL path.
 func TestBoolNumericAggregateBindsAsTinyint(t *testing.T) {
 	cases := []struct {
 		sql        string
@@ -146,12 +137,20 @@ func TestBoolNumericAggregateBindsAsTinyint(t *testing.T) {
 		{"select avg(n_nationkey <> 0) from nation", types.T_float64},
 		{"select sum(distinct n_nationkey <> 0) from nation", types.T_int64},
 		{"select sum(n_nationkey <> 0) from nation group by n_name", types.T_int64},
+		{"select n_name from nation group by n_name having sum(n_nationkey <> 0) > 0", types.T_int64},
 	}
-	for _, c := range cases {
-		p, err := buildOneQuery(t, boolSumAvgMockContext(true), c.sql)
-		require.NoError(t, err, c.sql)
-		require.Equal(t, []types.T{types.T_int8}, aggregateArgTypes(t, p), c.sql)
-		require.Equal(t, c.wantReturn, aggregateReturnType(t, p), c.sql)
+	for _, mode := range bindModes {
+		for _, c := range cases {
+			p, err := buildOneQuery(t, boolSumAvgMockContext(true), c.sql, mode.prepare)
+			require.NoError(t, err, "%s %s", mode.name, c.sql)
+			require.Equal(t, []types.T{types.T_int8}, aggregateArgTypes(t, p), "%s %s", mode.name, c.sql)
+			require.Equal(t, c.wantReturn, types.T(firstAggregate(t, p).Typ.Id), "%s %s", mode.name, c.sql)
+		}
+		// A window aggregate takes the window binder's route to the same
+		// coercion.
+		_, err := buildOneQuery(t, boolSumAvgMockContext(true),
+			"select sum(n_nationkey <> 0) over () from nation", mode.prepare)
+		require.NoError(t, err, mode.name)
 	}
 }
 
@@ -167,7 +166,7 @@ func TestBoolNumericAggregateScopeIsUnchanged(t *testing.T) {
 			"select min(n_nationkey <> 0) from nation",
 			"select max(n_nationkey <> 0) from nation",
 		} {
-			p, err := buildOneQuery(t, ctx, sql)
+			p, err := buildOneQuery(t, ctx, sql, false)
 			require.NoError(t, err, sql)
 			require.Equal(t, []types.T{types.T_bool}, aggregateArgTypes(t, p), sql)
 		}
@@ -179,32 +178,33 @@ func TestBoolNumericAggregateScopeIsUnchanged(t *testing.T) {
 			"select bit_or(n_nationkey <> 0) from nation",
 			"select bit_xor(n_nationkey <> 0) from nation",
 		} {
-			_, err := buildOneQuery(t, ctx, sql)
+			_, err := buildOneQuery(t, ctx, sql, false)
 			require.Error(t, err, sql)
 		}
 	})
 
 	t.Run("non-bool arguments are untouched", func(t *testing.T) {
-		p, err := buildOneQuery(t, ctx, "select sum(n_nationkey) from nation")
-		require.NoError(t, err)
-		require.Equal(t, []types.T{types.T_int32}, aggregateArgTypes(t, p))
+		for _, mode := range bindModes {
+			p, err := buildOneQuery(t, ctx, "select sum(n_nationkey) from nation", mode.prepare)
+			require.NoError(t, err, mode.name)
+			require.Equal(t, []types.T{types.T_int32}, aggregateArgTypes(t, p), mode.name)
 
-		_, err = buildOneQuery(t, ctx, "select sum(n_name) from nation")
-		require.Error(t, err, "a VARCHAR argument must still be rejected")
+			_, err = buildOneQuery(t, ctx, "select sum(n_name) from nation", mode.prepare)
+			require.Error(t, err, "%s: a VARCHAR argument must still be rejected", mode.name)
+		}
 	})
 
 	t.Run("non-aggregate calls bind identically with the mode on and off", func(t *testing.T) {
-		// The mode resolves sql_mode only for a single-argument SUM/AVG whose
-		// argument bound to BOOL. Whatever an ordinary function does with the
-		// same predicate, it must do the same thing either way -- this control
-		// does not assume which outcome that is.
+		// Whatever an ordinary function does with the same predicate, it must
+		// do the same thing either way -- this control does not assume which
+		// outcome that is.
 		for _, sql := range []string{
 			"select abs(n_nationkey <> 0) from nation",
 			"select n_nationkey <> 0 from nation",
 			"select count(n_nationkey <> 0) from nation",
 		} {
-			onPlan, onErr := buildOneQuery(t, boolSumAvgMockContext(true), sql)
-			offPlan, offErr := buildOneQuery(t, boolSumAvgMockContext(false), sql)
+			onPlan, onErr := buildOneQuery(t, boolSumAvgMockContext(true), sql, false)
+			offPlan, offErr := buildOneQuery(t, boolSumAvgMockContext(false), sql, false)
 			if offErr != nil {
 				require.Error(t, onErr, sql)
 				require.Equal(t, offErr.Error(), onErr.Error(), sql)

@@ -3230,8 +3230,12 @@ func (b *baseBinder) bindPreparedNumericFuncExpr(
 	if strings.EqualFold(name, "abs") && !hasExplicitFloatCast {
 		b.markPreparedNumericFallback(arg)
 	}
+	args, err := b.coerceBoolNumericAggregateArg(name, []*plan.Expr{arg})
+	if err != nil {
+		return nil, err
+	}
 	return bindBoundFuncExprAndConstFold(
-		b.GetContext(), b.builder.compCtx.GetProcess(), name, []*plan.Expr{arg},
+		b.GetContext(), b.builder.compCtx.GetProcess(), name, args,
 	)
 }
 
@@ -3264,58 +3268,32 @@ func (b *baseBinder) bindFullTextMatchExpr(astExpr *tree.FullTextMatchExpr, dept
 	return BindFuncExprImplByPlanExpr(b.GetContext(), "fulltext_match", args)
 }
 
-// boolNumericAggregate reports whether an aggregate takes a numeric argument in
-// MO but accepts a predicate directly in MySQL. MySQL has no BOOL type, so a
-// predicate there is already an integer 0/1 and SUM/AVG over one is ordinary
-// numeric aggregation. MO types the predicate as BOOL, which SumSupportedTypes
-// rejects, so sum(i<>0) and avg(i<>0) fail with ErrInvalidArg.
-func boolNumericAggregate(name string) bool {
-	return name == "sum" || name == "avg"
-}
-
 // coerceBoolNumericAggregateArg gives SUM/AVG over a BOOL argument the MySQL
-// reading under the ENABLE_BOOL_SUMAVG sql_mode, by binding that argument as
-// TINYINT. That is exactly the sum(cast(pred as tinyint)) a user writes today:
-// it reuses the existing integer aggregate, so it adds no aggregate state, no
-// executor path, and no per-row cost, and it keeps sum(bool) -> BIGINT
-// consistent with MO's own sum(tinyint) -> BIGINT rather than introducing a
-// third convention.
+// reading under the ENABLE_BOOL_SUMAVG sql_mode by binding that argument as
+// TINYINT. MySQL has no BOOL type: a predicate there is an integer 0/1 and
+// SUM/AVG over one is ordinary numeric aggregation, while MO types it as BOOL,
+// which SumSupportedTypes rejects. The cast is exactly the
+// sum(cast(pred as tinyint)) a user writes today, so it reuses the existing
+// integer aggregate (no new aggregate state, no executor path, no per-row
+// cost) and keeps sum(bool) -> BIGINT consistent with sum(tinyint).
 //
-// sql_mode is resolved only for a single-argument SUM/AVG whose argument
-// actually bound to BOOL, so every other function binding is untouched.
+// The mode is read from the builder flag that NewQueryBuilder resolved once
+// from sql_mode, the same way ONLY_FULL_GROUP_BY is, so the direct and the
+// prepared bind paths agree and a binder without a builder stays strict.
 func (b *baseBinder) coerceBoolNumericAggregateArg(
 	name string, args []*plan.Expr,
 ) ([]*plan.Expr, error) {
-	if len(args) != 1 || args[0] == nil ||
-		args[0].Typ.Id != int32(types.T_bool) || !boolNumericAggregate(name) {
+	if b.builder == nil || !b.builder.boolSumAvgCompat || len(args) != 1 ||
+		args[0].Typ.Id != int32(types.T_bool) ||
+		!(strings.EqualFold(name, "sum") || strings.EqualFold(name, "avg")) {
 		return args, nil
 	}
-	if b.builder == nil || b.builder.compCtx == nil || !b.boolSumAvgSQLModeEnabled() {
-		return args, nil
-	}
-
 	tinyint := types.T_int8.ToType()
 	casted, err := appendCastBeforeExpr(b.GetContext(), args[0], makePlan2Type(&tinyint))
 	if err != nil {
 		return nil, err
 	}
 	return []*plan.Expr{casted}, nil
-}
-
-// boolSumAvgSQLModeEnabled reports whether the session opted in through
-// sql_mode. An unreadable or unset sql_mode means the strict default, never an
-// error: this only ever relaxes a restriction, so failing to read it must not
-// fail a query that the strict path would have rejected anyway.
-func (b *baseBinder) boolSumAvgSQLModeEnabled() bool {
-	val, err := b.builder.compCtx.ResolveVariable("sql_mode", true, false)
-	if err != nil || val == nil {
-		return false
-	}
-	mode, ok := val.(string)
-	if !ok {
-		return false
-	}
-	return mysqlparser.HasEnableBoolSumAvgSQLMode(mode)
 }
 
 func (b *baseBinder) bindFuncExprImplByAstExpr(name string, astArgs []tree.Expr, depth int32) (*plan.Expr, error) {
