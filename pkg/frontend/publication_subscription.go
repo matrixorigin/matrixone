@@ -1385,6 +1385,9 @@ func extractSubInfosFromExecResultOld(ctx context.Context, erArray []ExecResult)
 	)
 	for _, result := range erArray {
 		for i := uint64(0); i < result.GetRowCount(); i++ {
+			if err = context.Cause(ctx); err != nil {
+				return
+			}
 			if subAccountId, err = result.GetInt64(ctx, i, 0); err != nil {
 				return
 			}
@@ -1463,6 +1466,9 @@ func extractSubInfosFromExecResult(ctx context.Context, erArray []ExecResult) (s
 	)
 	for _, result := range erArray {
 		for i := uint64(0); i < result.GetRowCount(); i++ {
+			if err = context.Cause(ctx); err != nil {
+				return
+			}
 			if subAccountId, err = result.GetInt64(ctx, i, 0); err != nil {
 				return
 			}

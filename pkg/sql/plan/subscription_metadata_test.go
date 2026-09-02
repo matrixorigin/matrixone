@@ -17,6 +17,7 @@ package plan
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"testing"
@@ -427,6 +428,106 @@ func TestSubscriptionStatisticsPlanningBudget(t *testing.T) {
 	require.Nil(t, ctx.GetQueryingSubscription())
 }
 
+func TestSubscriptionStatisticsBudgetIgnoresRejectedAndDuplicateMetadata(t *testing.T) {
+	optimizer, ctx := newSubscriptionMetadataTestOptimizer()
+	ctx.metadata = subscriptionMetadataTestSet(maxSubscriptionStatisticsPublisherBranches)
+	ctx.metadata = append(ctx.metadata,
+		nil,
+		ctx.metadata[0],
+		&SubscriptionMetadata{Meta: nil, AllTablesVisible: true},
+		&SubscriptionMetadata{Meta: &SubscriptionMeta{
+			AccountId: 0,
+			DbName:    "",
+			SubName:   "empty_database",
+			Tables:    "nation",
+		}, AllTablesVisible: true},
+		&SubscriptionMetadata{Meta: &SubscriptionMeta{
+			AccountId: 0,
+			DbName:    "tpch",
+			SubName:   "empty_tables",
+			Tables:    " , ",
+		}, AllTablesVisible: true},
+		&SubscriptionMetadata{Meta: &SubscriptionMeta{
+			AccountId: 0,
+			DbName:    "tpch",
+			SubName:   "not_visible",
+			Tables:    "nation",
+		}},
+	)
+
+	queryPlan, err := runOneStmt(optimizer, t,
+		"select count(*) from information_schema.statistics where table_name = 'nation'")
+	require.NoError(t, err)
+	require.Len(t, statisticsPublisherScanCounts(queryPlan.GetQuery()),
+		maxSubscriptionStatisticsPublisherBranches)
+	require.Equal(t, maxSubscriptionStatisticsPublisherBranches, ctx.publisherBindCount,
+		"only distinct, valid, visible publisher branches may consume the budget")
+	require.Nil(t, ctx.GetQueryingSubscription())
+}
+
+func TestSubscriptionStatisticsBudgetUsesIdentifierCaseMode(t *testing.T) {
+	metadata := subscriptionMetadataTestSet(maxSubscriptionStatisticsPublisherBranches - 1)
+	metadata = append(metadata,
+		&SubscriptionMetadata{Meta: &SubscriptionMeta{
+			AccountId: 0, DbName: "tpch", SubName: "SubCase", Tables: "nation",
+		}, AllTablesVisible: true},
+		&SubscriptionMetadata{Meta: &SubscriptionMeta{
+			AccountId: 0, DbName: "tpch", SubName: "subcase", Tables: "nation",
+		}, AllTablesVisible: true},
+	)
+
+	t.Run("case-sensitive names are distinct", func(t *testing.T) {
+		_, ctx := newSubscriptionMetadataTestOptimizer()
+		ctx.lowerCaseTableNames = 0
+		ctx.metadata = metadata
+		statements, err := mysql.Parse(context.Background(),
+			"select count(*) from information_schema.statistics", 1)
+		require.NoError(t, err)
+		require.Len(t, statements, 1)
+		defer statements[0].Free()
+
+		_, err = BuildPlan(ctx, statements[0], false)
+		require.ErrorContains(t, err, "publisher expansion exceeds planning budget of 256 branches")
+		require.Zero(t, ctx.publisherBindCount)
+		require.Nil(t, ctx.GetQueryingSubscription())
+	})
+
+	for _, mode := range []int64{1, 2} {
+		t.Run(fmt.Sprintf("case-insensitive mode %d deduplicates", mode), func(t *testing.T) {
+			optimizer, ctx := newSubscriptionMetadataTestOptimizer()
+			ctx.lowerCaseTableNames = mode
+			ctx.metadata = metadata
+
+			queryPlan, err := runOneStmt(optimizer, t,
+				"select count(*) from information_schema.statistics")
+			require.NoError(t, err)
+			require.Len(t, statisticsPublisherScanCounts(queryPlan.GetQuery()),
+				maxSubscriptionStatisticsPublisherBranches)
+			require.Equal(t, maxSubscriptionStatisticsPublisherBranches, ctx.publisherBindCount)
+			require.Nil(t, ctx.GetQueryingSubscription())
+		})
+	}
+}
+
+func TestSubscriptionStatisticsBudgetDoesNotLeakAcrossBuilds(t *testing.T) {
+	_, ctx := newSubscriptionMetadataTestOptimizer()
+	ctx.metadata = subscriptionMetadataTestSet(129)
+	statements, err := mysql.Parse(context.Background(),
+		"select count(*) from information_schema.statistics", 1)
+	require.NoError(t, err)
+	require.Len(t, statements, 1)
+	defer statements[0].Free()
+
+	for build := 0; build < 2; build++ {
+		queryPlan, buildErr := BuildPlan(ctx, statements[0], false)
+		require.NoError(t, buildErr)
+		require.Len(t, statisticsPublisherScanCounts(queryPlan.GetQuery()), 129)
+		require.Nil(t, ctx.GetQueryingSubscription())
+	}
+	require.Equal(t, 258, ctx.publisherBindCount,
+		"the statement-wide budget must be fresh for each independent build")
+}
+
 func TestSubscriptionStatisticsRejectsPublisherExpansionOverBudget(t *testing.T) {
 	t.Run("single occurrence", func(t *testing.T) {
 		_, ctx := newSubscriptionMetadataTestOptimizer()
@@ -477,11 +578,12 @@ func TestSubscriptionStatisticsPlanningObservesCancellation(t *testing.T) {
 		require.Len(t, statements, 1)
 		defer statements[0].Free()
 
-		canceledCtx, cancel := context.WithCancel(context.Background())
-		cancel()
+		wantErr := errors.New("stop planning")
+		canceledCtx, cancel := context.WithCancelCause(context.Background())
+		cancel(wantErr)
 		ctx.SetContext(canceledCtx)
 		_, err = BuildPlan(ctx, statements[0], false)
-		require.ErrorIs(t, err, context.Canceled)
+		require.ErrorIs(t, err, wantErr)
 		require.Zero(t, ctx.metadataCalls,
 			"pre-canceled planning must stop before subscription enumeration")
 		require.Zero(t, ctx.publisherBindCount)

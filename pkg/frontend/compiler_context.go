@@ -1352,15 +1352,24 @@ func (tcc *TxnCompilerContext) GetSubscriptionMetadata(snapshot *plan2.Snapshot)
 		return nil, err
 	}
 
-	metas := subscriptionMetasFromSubInfos(subInfos)
+	metas, err := subscriptionMetasFromSubInfos(tempCtx, subInfos)
+	if err != nil {
+		return nil, err
+	}
 	return getVisibleSubscriptionMetadata(
 		tempCtx, bh, metas, currentProtocolVersion(tcc.GetProcess()),
 	)
 }
 
-func subscriptionMetasFromSubInfos(subInfos []*pubsub.SubInfo) []*plan.SubscriptionMeta {
+func subscriptionMetasFromSubInfos(
+	ctx context.Context,
+	subInfos []*pubsub.SubInfo,
+) ([]*plan.SubscriptionMeta, error) {
 	metas := make([]*plan.SubscriptionMeta, 0, len(subInfos))
 	for _, subInfo := range subInfos {
+		if err := context.Cause(ctx); err != nil {
+			return nil, err
+		}
 		if subInfo == nil || subInfo.Status != pubsub.SubStatusNormal || subInfo.SubName == "" {
 			continue
 		}
@@ -1376,7 +1385,10 @@ func subscriptionMetasFromSubInfos(subInfos []*pubsub.SubInfo) []*plan.Subscript
 	slices.SortFunc(metas, func(left, right *plan.SubscriptionMeta) int {
 		return cmp.Compare(strings.ToLower(left.SubName), strings.ToLower(right.SubName))
 	})
-	return metas
+	if err := context.Cause(ctx); err != nil {
+		return nil, err
+	}
+	return metas, nil
 }
 
 func getVisibleSubscriptionMetadata(
@@ -1385,6 +1397,9 @@ func getVisibleSubscriptionMetadata(
 	metas []*plan.SubscriptionMeta,
 	protocolVersion int64,
 ) ([]*plan2.SubscriptionMetadata, error) {
+	if err := context.Cause(ctx); err != nil {
+		return nil, err
+	}
 	if len(metas) == 0 {
 		return nil, nil
 	}
@@ -1392,6 +1407,9 @@ func getVisibleSubscriptionMetadata(
 	metadataByName := make(map[string]*plan2.SubscriptionMetadata, len(metas))
 	names := make([]string, 0, len(metas))
 	for _, meta := range metas {
+		if err := context.Cause(ctx); err != nil {
+			return nil, err
+		}
 		if meta == nil || meta.SubName == "" {
 			continue
 		}
@@ -1403,6 +1421,9 @@ func getVisibleSubscriptionMetadata(
 	}
 
 	slices.Sort(names)
+	if err := context.Cause(ctx); err != nil {
+		return nil, err
+	}
 	visibilitySQL := subscriptionMetadataVisibilitySQL(strings.Join(names, ","), protocolVersion)
 	bh.ClearExecResultSet()
 	if err := bh.Exec(ctx, visibilitySQL); err != nil {
@@ -1414,6 +1435,9 @@ func getVisibleSubscriptionMetadata(
 	}
 	for _, result := range results {
 		for row := uint64(0); row < result.GetRowCount(); row++ {
+			if err := context.Cause(ctx); err != nil {
+				return nil, err
+			}
 			subscriptionName, getErr := result.GetString(ctx, row, 0)
 			if getErr != nil {
 				return nil, getErr
@@ -1435,6 +1459,9 @@ func getVisibleSubscriptionMetadata(
 	}
 	visible := make([]*plan2.SubscriptionMetadata, 0, len(metas))
 	for _, meta := range metas {
+		if err := context.Cause(ctx); err != nil {
+			return nil, err
+		}
 		if meta == nil {
 			continue
 		}

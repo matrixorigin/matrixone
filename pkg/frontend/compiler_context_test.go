@@ -33,7 +33,7 @@ import (
 var _ plan2.ViewDependencyIdentityResolver = (*TxnCompilerContext)(nil)
 
 func TestSubscriptionMetasFromSubInfos(t *testing.T) {
-	metas := subscriptionMetasFromSubInfos([]*pubsub.SubInfo{
+	metas, err := subscriptionMetasFromSubInfos(context.Background(), []*pubsub.SubInfo{
 		{
 			SubName:        "Zulu",
 			PubAccountId:   42,
@@ -57,6 +57,7 @@ func TestSubscriptionMetasFromSubInfos(t *testing.T) {
 			Status:         pubsub.SubStatusNormal,
 		},
 	})
+	require.NoError(t, err)
 
 	require.Equal(t, []*pbplan.SubscriptionMeta{
 		{
@@ -76,6 +77,36 @@ func TestSubscriptionMetasFromSubInfos(t *testing.T) {
 			Tables:      "t1,t2",
 		},
 	}, metas)
+}
+
+func TestSubscriptionMetadataEnumerationObservesCancellation(t *testing.T) {
+	wantErr := errors.New("stop subscription metadata enumeration")
+	ctx, cancel := context.WithCancelCause(context.Background())
+	cancel(wantErr)
+
+	metas, err := subscriptionMetasFromSubInfos(ctx, []*pubsub.SubInfo{{
+		SubName: "sub_db",
+		Status:  pubsub.SubStatusNormal,
+	}})
+	require.ErrorIs(t, err, wantErr)
+	require.Nil(t, metas)
+
+	bh := &backgroundExecTest{}
+	bh.init()
+	visible, err := getVisibleSubscriptionMetadata(ctx, bh, []*pbplan.SubscriptionMeta{{
+		SubName: "sub_db",
+	}}, defines.MORPCVersion41)
+	require.ErrorIs(t, err, wantErr)
+	require.Nil(t, visible)
+	require.Empty(t, bh.executedSQLs,
+		"canceled metadata enumeration must stop before constructing and executing the visibility query")
+
+	result := &MysqlResultSet{}
+	result.AddRow([]interface{}{})
+	_, err = extractSubInfosFromExecResult(ctx, []ExecResult{result})
+	require.ErrorIs(t, err, wantErr)
+	_, err = extractSubInfosFromExecResultOld(ctx, []ExecResult{result})
+	require.ErrorIs(t, err, wantErr)
 }
 
 func TestGetVisibleSubscriptionMetadata(t *testing.T) {

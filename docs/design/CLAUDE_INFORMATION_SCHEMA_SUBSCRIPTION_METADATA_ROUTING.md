@@ -315,9 +315,11 @@ budget for the current UNION implementation:
   binding its local view or any publisher view. A request that would exceed the
   limit fails planning explicitly; it is never truncated and no partial
   metadata plan can execute;
-- cancellation is checked before subscription enumeration, while filtering the
-  enumerated set, and before every publisher view bind. A canceled statement
-  therefore does not continue consuming the remaining branch budget;
+- cancellation is checked while decoding subscription rows, converting and
+  sorting metadata, constructing and consuming the subscriber-local visibility
+  query, filtering the enumerated set, and before every publisher view bind. A
+  canceled statement therefore does not continue doing unbounded metadata work
+  or consuming the remaining branch budget;
 - raising the 256-branch limit requires a follow-up runtime metadata operator
   or equivalent shared representation plus new capacity evidence.
 
@@ -344,7 +346,10 @@ Wall-clock values are reference evidence, not a timing assertion in unit tests.
 The deterministic boundary test compiles 64 subscriptions across four
 occurrences and verifies all 256 publisher branches. Separate counterexamples
 verify that the 257th publisher branch fails before publisher binding and that
-pre-canceled or mid-expansion planning returns cancellation. CI executes the
+pre-canceled or mid-expansion planning returns the cancellation cause. Further
+counterexamples verify that rejected/duplicate metadata does not consume the
+budget, identifier case modes are applied at the exact boundary, and the budget
+does not leak across independent or prepared plan builds. CI executes the
 functional publication/subscription matrix against real catalogs; timing
 remains observed through existing statement and subscription duration metrics.
 
@@ -437,7 +442,10 @@ freshness rule explicit.
 | Identifier modes 0/1/2 and malformed bytes deduplicate correctly | planner unit tests and case-sensitive BVT |
 | 64 subscriptions × 4 occurrences preserve all 256 branches | deterministic planner boundary test |
 | The 257th publisher branch fails before publisher binding | over-budget planner counterexample |
-| Pre-canceled and mid-expansion planning stop promptly | deterministic cancellation counterexamples |
+| Rejected and duplicate metadata does not consume the branch budget | exact-boundary planner counterexample |
+| Identifier modes apply consistently at the exact branch boundary | mode 0/1/2 planner counterexamples |
+| Independent builds receive independent statement-wide budgets | repeated-build planner counterexample |
+| Cancellation stops row decoding, visibility enumeration, and publisher binding | deterministic frontend and planner counterexamples |
 | Planning cost remains measurable across 0/16/64 and 1/4 | checked-in benchmark and Section 9 reference results |
 | Connector/J index and primary-key result shapes | public BVT plus Connector/J integration run |
 
