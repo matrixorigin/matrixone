@@ -142,6 +142,47 @@ func TestDigestMatchesMySQL84TokenSemantics(t *testing.T) {
 	}
 }
 
+func TestDigestLexicalEdgeCases(t *testing.T) {
+	tests := []struct {
+		name string
+		sql  string
+		mode SQLMode
+		err  bool
+	}{
+		{name: "hex and binary literals", sql: "SELECT 0xFF, 0b101, X'0F', B'101'"},
+		{name: "decimal and exponent forms", sql: "SELECT .5, 1., 1.25, 1e10, 1e+2, 1e-2"},
+		{name: "invalid exponent falls back to identifier", sql: "SELECT 1e, 1e+"},
+		{name: "comparison and boolean operators", sql: "SELECT a = b, a != b, a <=> b, a && b, a || b, a := b"},
+		{name: "json arrows", sql: "SELECT doc->'$.a', doc->>'$.a'"},
+		{name: "user and system variables", sql: "SELECT @user_name, @@global.time_zone, @@`quoted`"},
+		{name: "quoted variable", sql: "SELECT @'user_name'"},
+		{name: "escaped quoted identifiers", sql: "SELECT `a``b`, \"a\"\"b\"", mode: ModeANSIQuotes},
+		{name: "national and dollar quoted strings", sql: "SELECT N'abc', $tag$body$tag$, $$body$$"},
+		{name: "line comment variants", sql: "SELECT 1 # trailing\n; SELECT 2 -- trailing\n"},
+		{name: "version comments", sql: "/*! SELECT 1 */ /*!80000 SELECT 2 */ /*!99999 SELECT 3 */"},
+		{name: "hint decimal and quoted arguments", sql: "SELECT /*+ MAX_EXECUTION_TIME(1.5) QB_NAME('q''b') */ 1"},
+		{name: "hint scaled and identifier arguments", sql: "SELECT /*+ MAX_EXECUTION_TIME(1K) QB_NAME(foo) */ 1"},
+		{name: "hint backtick identifier", sql: "SELECT /*+ QB_NAME(`q``b`) */ 1"},
+		{name: "hint punctuation", sql: "SELECT /*+ BKA(t) NO_INDEX_MERGE(t) */ 1"},
+		{name: "invalid hex literal", sql: "SELECT X'0G'", err: true},
+		{name: "invalid binary literal", sql: "SELECT B'102'", err: true},
+		{name: "invalid hint decimal", sql: "SELECT /*+ MAX_EXECUTION_TIME(1.) */ 1", err: true},
+		{name: "unterminated hint", sql: "SELECT /*+ MAX_EXECUTION_TIME(1) ", err: true},
+		{name: "dollar prefix without closing delimiter is an identifier", sql: "SELECT $tag$body"},
+		{name: "unterminated quoted identifier", sql: "SELECT `name", err: true},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := Compute(tc.sql, Options{SQLMode: tc.mode})
+			if tc.err {
+				require.Error(t, err)
+			} else {
+				require.NoError(t, err)
+			}
+		})
+	}
+}
+
 func TestDigestMaxLengthIsTokenBufferLimit(t *testing.T) {
 	tests := []struct {
 		name      string

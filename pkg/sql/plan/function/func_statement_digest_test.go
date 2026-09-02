@@ -68,6 +68,25 @@ func TestStatementDigestTypeResolution(t *testing.T) {
 	require.Error(t, err)
 }
 
+func TestStatementDigestRegisteredOverloads(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	for _, oid := range []types.T{
+		types.T_varchar,
+		types.T_text,
+		types.T_blob,
+		types.T_char,
+		types.T_binary,
+		types.T_varbinary,
+	} {
+		fn, err := GetFunctionByName(proc.Ctx, "statement_digest", []types.Type{oid.ToType()})
+		require.NoError(t, err, oid.String())
+		overload, ok := GetFunctionByIdWithoutError(fn.GetEncodedOverloadID())
+		require.True(t, ok, oid.String())
+		require.NotNil(t, overload.newOp, oid.String())
+		require.NotNil(t, overload.newOp(), oid.String())
+	}
+}
+
 func TestStatementDigestMySQLCompatibility(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	inputs := []string{
