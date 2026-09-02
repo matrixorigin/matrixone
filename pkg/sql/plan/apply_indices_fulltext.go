@@ -1395,15 +1395,35 @@ func (builder *QueryBuilder) scanHasMatchedFullTextFilter(node *plan.Node) bool 
 
 func (builder *QueryBuilder) applyFullTextFiltersForJoinChildren(nodeID int32, joinNode *plan.Node,
 	colRefCnt map[[2]int32]int, idxColMap map[[2]int32]*plan.Expr) (bool, error) {
-	// IN subqueries are flattened into SEMI joins. Filters on either input of
-	// an INNER or SEMI join can be replaced by an equivalent fulltext index
-	// scan without changing the join's row-preservation semantics.
-	if joinNode == nil || (joinNode.JoinType != plan.Node_INNER && joinNode.JoinType != plan.Node_SEMI) {
+	// The per-child rewrite replaces a scan's `WHERE match` with an INNER join to the
+	// fulltext-index result on the pk/doc_id. Fulltext search yields one row per matching
+	// doc, so that join is 1:1 and ROW-EQUIVALENT to the filter it replaces.
+	//
+	// INNER/SEMI (IN subqueries): both inputs are safe -- neither is row-preserving.
+	// LEFT/SINGLE: only the RIGHT (non-preserved / null-producing) child is eligible. That
+	// is where a scalar subquery's match lands -- correlated `select (select count(*) ...
+	// where match(...))` decorrelates to AGG over `outer LEFT/SINGLE JOIN docs(match)`, with
+	// docs as the right child (#27962). The LEFT/left and RIGHT/right PRESERVED child is left
+	// untouched (see TestFullTextJoinRewriteSkipsOuterJoins): the conservative skip there is
+	// intentional and out of scope for this fix.
+	if joinNode == nil {
+		return false, nil
+	}
+	var eligible func(i int) bool
+	switch joinNode.JoinType {
+	case plan.Node_INNER, plan.Node_SEMI:
+		eligible = func(int) bool { return true }
+	case plan.Node_LEFT, plan.Node_SINGLE:
+		eligible = func(i int) bool { return i == 1 } // right (non-preserved) child only
+	default:
 		return false, nil
 	}
 
 	changed := false
 	for i, childID := range joinNode.Children {
+		if !eligible(i) {
+			continue
+		}
 		child := builder.qry.Nodes[childID]
 		if child == nil || child.NodeType != plan.Node_TABLE_SCAN {
 			continue
