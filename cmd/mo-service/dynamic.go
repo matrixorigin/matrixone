@@ -325,27 +325,8 @@ func startDynamicCNByIndex(index int) error {
 	return nil
 }
 
-func stopAllDynamicCNServices() {
-	dynamicCNMu.RLock()
-	pids := append([]int(nil), dynamicCNServicePIDs...)
-	dynamicCNMu.RUnlock()
-	for i, pid := range pids {
-		if pid == 0 {
-			continue
-		}
-		if err := syscall.Kill(pid, syscall.SIGKILL); err == nil {
-			dynamicCNMu.Lock()
-			if i < len(dynamicCNServicePIDs) && dynamicCNServicePIDs[i] == pid {
-				dynamicCNServicePIDs[i] = 0
-			}
-			dynamicCNMu.Unlock()
-		}
-	}
-}
-
 // stopAllDynamicCNServicesGracefully is used only by the ordered shutdown
-// path. Chaos/restart keeps the SIGKILL helper above so that it can continue
-// to exercise abrupt-exit behavior.
+// path; stopDynamicCNByIndex remains the abrupt-exit helper for chaos tests.
 func stopAllDynamicCNServicesGracefully(ctx context.Context) error {
 	dynamicCNMu.Lock()
 	chaosTester := dynamicChaosTester

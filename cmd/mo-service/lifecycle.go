@@ -103,17 +103,6 @@ func (s *serviceSupervisor) registerTask(role serviceRole) func(error) {
 	}
 }
 
-func (s *serviceSupervisor) waitForStop(ctx context.Context, role serviceRole) {
-	if s == nil {
-		<-ctx.Done()
-		return
-	}
-	select {
-	case <-ctx.Done():
-	case <-s.roles[role].stopC:
-	}
-}
-
 // roleContext derives a context that is cancelled when the supervisor reaches
 // the role's shutdown phase. Service tasks use it only for their run loops;
 // the service Close method still owns its orderly shutdown.
