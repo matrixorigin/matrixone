@@ -20,6 +20,7 @@ import (
 	"fmt"
 	"io"
 	"math"
+	"os"
 	"strings"
 	"testing"
 
@@ -52,6 +53,17 @@ func TestDistinctSpillRecordEnvelopeRejectsCorruption(t *testing.T) {
 		&encoded, 17, 11, 0, groups, 0, []byte("key"))
 	require.NoError(t, err)
 	valid := bytes.Clone(encoded.Bytes())
+	body := bytes.Clone(valid[16 : len(valid)-12])
+	payloadLengthOffset := len(body) - 4 - len("key")
+	withPayloadLength := func(length int32) []byte {
+		var payload bytes.Buffer
+		_, err := payload.Write(body[:payloadLengthOffset])
+		require.NoError(t, err)
+		require.NoError(t, types.WriteInt32(&payload, length))
+		_, err = payload.Write(body[payloadLengthOffset+4:])
+		require.NoError(t, err)
+		return distinctTestEnvelope(t, distinctSpillKindKey, payload.Bytes())
+	}
 	_, err = controller.writeRecord(
 		shortGroupSpillWriter{}, 17, 11, 0, groups, 0, []byte("key"))
 	require.ErrorIs(t, err, io.ErrShortWrite)
@@ -67,6 +79,8 @@ func TestDistinctSpillRecordEnvelopeRejectsCorruption(t *testing.T) {
 	_, _, _, _, eof, err := controller.readRecord(bytes.NewReader(nil), groups)
 	require.NoError(t, err)
 	require.True(t, eof)
+	_, _, _, _, _, err = controller.readRecord(nil, groups)
+	require.Error(t, err)
 
 	hash, groupHash, aggregate, payload, eof, err := controller.readRecord(
 		bytes.NewReader(valid), groups)
@@ -169,6 +183,23 @@ func TestDistinctSpillRecordEnvelopeRejectsCorruption(t *testing.T) {
 			require.Error(t, err)
 		})
 	}
+	for _, test := range []struct {
+		name string
+		wire []byte
+	}{
+		{name: "inner route hash", wire: distinctTestEnvelope(t, distinctSpillKindKey, body[:1])},
+		{name: "inner group hash", wire: distinctTestEnvelope(t, distinctSpillKindKey, body[:8])},
+		{name: "inner aggregate", wire: distinctTestEnvelope(t, distinctSpillKindKey, body[:16])},
+		{name: "inner group", wire: distinctTestEnvelope(t, distinctSpillKindKey, body[:20])},
+		{name: "inner payload length", wire: distinctTestEnvelope(t, distinctSpillKindKey, body[:payloadLengthOffset])},
+		{name: "payload exceeds body", wire: withPayloadLength(int32(len("key") + 1))},
+		{name: "trailing inner payload", wire: withPayloadLength(int32(len("key") - 1))},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			_, _, _, _, _, err := controller.readRecord(bytes.NewReader(test.wire), groups)
+			require.Error(t, err)
+		})
+	}
 	require.Zero(t, mp.CurrNB())
 }
 
@@ -191,6 +222,8 @@ func TestDistinctContributionEnvelopeRejectsCorruption(t *testing.T) {
 	require.NoError(t, err)
 	valid, err := io.ReadAll(controller.result.file)
 	require.NoError(t, err)
+	body := bytes.Clone(valid[16 : len(valid)-12])
+	countOffset := len(body) - 8
 
 	hash, aggregate, count, eof, err := controller.readContribution(bytes.NewReader(valid), groups)
 	require.NoError(t, err)
@@ -201,6 +234,8 @@ func TestDistinctContributionEnvelopeRejectsCorruption(t *testing.T) {
 	_, _, _, eof, err = controller.readContribution(bytes.NewReader(nil), groups)
 	require.NoError(t, err)
 	require.True(t, eof)
+	_, _, _, _, err = controller.readContribution(nil, groups)
+	require.Error(t, err)
 
 	for _, test := range []struct {
 		name   string
@@ -237,6 +272,34 @@ func TestDistinctContributionEnvelopeRejectsCorruption(t *testing.T) {
 			require.Error(t, err)
 		})
 	}
+	for _, test := range []struct {
+		name string
+		wire []byte
+	}{
+		{name: "inner group hash", wire: distinctTestEnvelope(t, distinctSpillKindContribution, body[:1])},
+		{name: "inner aggregate", wire: distinctTestEnvelope(t, distinctSpillKindContribution, body[:8])},
+		{name: "inner group", wire: distinctTestEnvelope(t, distinctSpillKindContribution, body[:12])},
+		{name: "inner count", wire: distinctTestEnvelope(t, distinctSpillKindContribution, body[:countOffset])},
+		{name: "truncated inner count", wire: distinctTestEnvelope(t, distinctSpillKindContribution, body[:countOffset+4])},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			_, _, _, _, err := controller.readContribution(bytes.NewReader(test.wire), groups)
+			require.Error(t, err)
+		})
+	}
+
+	for failAt := 1; failAt <= 7; failAt++ {
+		controller.result.writer = &distinctFailNthWriter{failAt: failAt}
+		err = controller.writeContribution(proc, spillfs, 11, 0, groups, 0, 3)
+		require.ErrorIs(t, err, io.ErrClosedPipe)
+	}
+	controller.result.writer = nil
+	result := controller.result
+	controller.result = nil
+	require.ErrorContains(t,
+		controller.writeContribution(proc, spillfs, 11, 0, groups, 0, 3),
+		"closed")
+	controller.result = result
 
 	controller.close()
 	g.Free(proc, false, nil)
@@ -257,6 +320,90 @@ func (w *distinctFailNthWriter) Write(value []byte) (int, error) {
 		return 0, io.ErrClosedPipe
 	}
 	return len(value), nil
+}
+
+type distinctFlushErrorWriter struct {
+	err error
+}
+
+func (w *distinctFlushErrorWriter) Write(value []byte) (int, error) {
+	return len(value), nil
+}
+
+func (w *distinctFlushErrorWriter) Flush() error {
+	return w.err
+}
+
+type distinctResizeErrorBuffer struct {
+	err      error
+	capacity int
+}
+
+func (b *distinctResizeErrorBuffer) Write(value []byte) (int, error) {
+	return len(value), nil
+}
+
+func (*distinctResizeErrorBuffer) Bytes() []byte { return nil }
+func (*distinctResizeErrorBuffer) Len() int      { return 0 }
+func (*distinctResizeErrorBuffer) Reset()        {}
+func (b *distinctResizeErrorBuffer) Cap() int    { return b.capacity }
+func (b *distinctResizeErrorBuffer) Resize(int) error {
+	return b.err
+}
+func (*distinctResizeErrorBuffer) Free() {}
+
+type distinctFailNthBuffer struct {
+	unaccountedSpillBuffer
+	writes int
+	failAt int
+	err    error
+}
+
+func (b *distinctFailNthBuffer) Write(value []byte) (int, error) {
+	b.writes++
+	if b.writes == b.failAt {
+		return 0, b.err
+	}
+	return b.unaccountedSpillBuffer.Write(value)
+}
+
+func distinctTestEnvelope(t *testing.T, kind uint16, payload []byte) []byte {
+	t.Helper()
+	require.LessOrEqual(t, len(payload), math.MaxInt32)
+	var encoded bytes.Buffer
+	require.NoError(t, types.WriteUint64(&encoded, distinctSpillMagic))
+	require.NoError(t, types.WriteUint16(&encoded, distinctSpillVersion))
+	require.NoError(t, types.WriteUint16(&encoded, kind))
+	require.NoError(t, types.WriteInt32(&encoded, int32(len(payload))))
+	_, err := encoded.Write(payload)
+	require.NoError(t, err)
+	require.NoError(t, types.WriteInt32(&encoded, int32(len(payload))))
+	require.NoError(t, types.WriteUint64(&encoded, distinctSpillMagic))
+	return encoded.Bytes()
+}
+
+func distinctTestFile(t *testing.T, contents []byte) *os.File {
+	t.Helper()
+	file, err := os.CreateTemp(t.TempDir(), "distinct-spill-")
+	require.NoError(t, err)
+	if len(contents) > 0 {
+		_, err = file.Write(contents)
+		require.NoError(t, err)
+	}
+	_, err = file.Seek(0, io.SeekStart)
+	require.NoError(t, err)
+	return file
+}
+
+func distinctTestSortFile(t *testing.T, keys ...[]byte) *os.File {
+	t.Helper()
+	file := distinctTestFile(t, nil)
+	for _, key := range keys {
+		require.NoError(t, writeDistinctSortKey(file, key))
+	}
+	_, err := file.Seek(0, io.SeekStart)
+	require.NoError(t, err)
+	return file
 }
 
 func TestDistinctSpillControllerBoundaryContracts(t *testing.T) {
@@ -282,6 +429,10 @@ func TestDistinctSpillControllerBoundaryContracts(t *testing.T) {
 	require.GreaterOrEqual(t, distinctGroupBucket(17, 1), 0)
 
 	controller := &distinctSpillController{}
+	require.ErrorIs(t, controller.ensureRecordBuffer(), mpool.ErrAllocationAccountInvalid)
+	controller.recordCompletion()
+	require.True(t, controller.completionRecorded)
+	controller.completionRecorded = false
 	require.ErrorIs(t, controller.pushPartialChildren(nil), mpool.ErrAllocationAccountInvalid)
 	children := [spillNumBuckets]*spillBucket{}
 	children[1] = &spillBucket{name: "pending", cnt: 1}
@@ -358,6 +509,20 @@ func TestDistinctSpillControllerBoundaryContracts(t *testing.T) {
 	require.True(t, eof)
 	_, _, err = readDistinctSortKey(nil, buffer)
 	require.ErrorIs(t, err, mpool.ErrAllocationAccountInvalid)
+	var truncatedKey bytes.Buffer
+	require.NoError(t, types.WriteInt32(&truncatedKey, 3))
+	_, err = truncatedKey.Write([]byte("x"))
+	require.NoError(t, err)
+	_, _, err = readDistinctSortKey(&truncatedKey, buffer)
+	require.ErrorIs(t, err, io.ErrUnexpectedEOF)
+	var resizeKey bytes.Buffer
+	require.NoError(t, types.WriteInt32(&resizeKey, 1))
+	_, err = resizeKey.Write([]byte("x"))
+	require.NoError(t, err)
+	resizeErr := fmt.Errorf("resize distinct key")
+	_, _, err = readDistinctSortKey(
+		&resizeKey, &distinctResizeErrorBuffer{err: resizeErr})
+	require.ErrorIs(t, err, resizeErr)
 	var zeroLength bytes.Buffer
 	require.NoError(t, types.WriteInt32(&zeroLength, 0))
 	_, _, err = readDistinctSortKey(&zeroLength, buffer)
@@ -387,8 +552,425 @@ func TestDistinctSpillControllerBoundaryContracts(t *testing.T) {
 		proc, controller, nil, nil, nil), mpool.ErrAllocationAccountInvalid)
 	(*container)(nil).finishDistinctContributions()
 	(*container)(nil).resetForDistinctPartialLeaf()
+	flushErr := fmt.Errorf("flush distinct partition")
+	require.ErrorIs(t, controller.mergeCommittedWave(
+		proc,
+		spillfs,
+		&[spillNumBuckets]*spillBucket{
+			0: {cnt: 1, writer: &distinctFlushErrorWriter{err: flushErr}},
+		}), flushErr)
+	_, err = controller.mergeSortRuns(
+		proc,
+		spillfs,
+		&spillBucket{writer: &distinctFlushErrorWriter{err: flushErr}},
+		&spillBucket{},
+	)
+	require.ErrorIs(t, err, flushErr)
+	_, err = controller.mergeSortRuns(
+		proc,
+		spillfs,
+		&spillBucket{},
+		&spillBucket{writer: &distinctFlushErrorWriter{err: flushErr}},
+	)
+	require.ErrorIs(t, err, flushErr)
 	buffer.Free()
 	controller.close()
+	pending := &distinctSpillController{partialPendingCount: 1}
+	pending.partialPending[0] = &spillBucket{}
+	pending.close()
+
+	g.Free(proc, false, nil)
+	require.Zero(t, allocation.account.Snapshot().Used)
+	finalizeGroupTestAllocation(t, g, allocation)
+	proc.Free()
+	require.Zero(t, proc.Mp().CurrNB())
+}
+
+func TestDistinctSpillInternalIOFailureBoundaries(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	g := newGroupOp(proc, nil, []aggexec.AggFuncExecExpression{countDistinctAgg(0)})
+	allocation := installGroupTestAllocation(t, g, proc, 64<<20)
+	require.NoError(t, g.Prepare(proc))
+	controller, err := newDistinctSpillController(&g.ctr)
+	require.NoError(t, err)
+	defer controller.close()
+	spillfs, err := proc.GetSpillFileService()
+	require.NoError(t, err)
+	groups := batch.NewWithSize(0)
+	groups.SetRowCount(1)
+	sentinel := fmt.Errorf("distinct spill buffer failure")
+
+	for failAt := 1; failAt <= 6; failAt++ {
+		controller.record = &distinctFailNthBuffer{failAt: failAt, err: sentinel}
+		_, err = controller.writeRecord(
+			io.Discard, 17, 11, 0, groups, 0, []byte("key"))
+		require.ErrorIs(t, err, sentinel)
+		controller.record.Free()
+		controller.record = nil
+	}
+	for failAt := 1; failAt <= 4; failAt++ {
+		controller.record = &distinctFailNthBuffer{failAt: failAt, err: sentinel}
+		err = controller.writeContribution(proc, spillfs, 11, 0, groups, 0, 3)
+		require.ErrorIs(t, err, sentinel)
+		controller.record.Free()
+		controller.record = nil
+	}
+
+	var encoded bytes.Buffer
+	_, err = controller.writeRecord(
+		&encoded, 17, 11, 0, groups, 0, []byte("key"))
+	require.NoError(t, err)
+	validRecord := bytes.Clone(encoded.Bytes())
+	recordBodyLength := len(validRecord) - 16 - 12
+	_, _, _, _, _, err = controller.readRecord(
+		bytes.NewReader(validRecord[:16+recordBodyLength]), groups)
+	require.ErrorIs(t, err, io.EOF)
+	controller.record = &distinctResizeErrorBuffer{err: sentinel}
+	_, _, _, _, _, err = controller.readRecord(bytes.NewReader(validRecord), groups)
+	require.ErrorIs(t, err, sentinel)
+	controller.record = nil
+	missingRecordController := &distinctSpillController{}
+	_, _, _, _, _, err = missingRecordController.readRecord(
+		bytes.NewReader(validRecord), groups)
+	require.ErrorIs(t, err, mpool.ErrAllocationAccountInvalid)
+
+	groups.SetRowCount(1)
+	require.NoError(t, controller.writeContribution(proc, spillfs, 11, 0, groups, 0, 3))
+	require.NoError(t, controller.result.flushWriter())
+	_, err = controller.result.file.Seek(0, io.SeekStart)
+	require.NoError(t, err)
+	validContribution, err := io.ReadAll(controller.result.file)
+	require.NoError(t, err)
+	contributionBodyLength := len(validContribution) - 16 - 12
+	_, _, _, _, err = controller.readContribution(
+		bytes.NewReader(validContribution[:16+contributionBodyLength]), groups)
+	require.ErrorIs(t, err, io.EOF)
+	controller.record = &distinctResizeErrorBuffer{err: sentinel}
+	_, _, _, _, err = controller.readContribution(
+		bytes.NewReader(validContribution), groups)
+	require.ErrorIs(t, err, sentinel)
+	controller.record = nil
+	_, _, _, _, err = missingRecordController.readContribution(
+		bytes.NewReader(validContribution), groups)
+	require.ErrorIs(t, err, mpool.ErrAllocationAccountInvalid)
+
+	noContainer := &distinctSpillController{}
+	require.ErrorIs(t, noContainer.ensureSortBuffers(), mpool.ErrAllocationAccountInvalid)
+	noContainer.sortKey = &unaccountedSpillBuffer{}
+	require.ErrorIs(t, noContainer.ensureSortBuffers(), mpool.ErrAllocationAccountInvalid)
+	noContainer.mergeLeft = &unaccountedSpillBuffer{}
+	require.ErrorIs(t, noContainer.ensureSortBuffers(), mpool.ErrAllocationAccountInvalid)
+	require.ErrorIs(t, noContainer.mergeCommittedWave(
+		proc, spillfs, &[spillNumBuckets]*spillBucket{}),
+		mpool.ErrAllocationAccountInvalid)
+	_, err = noContainer.mergeSortRuns(
+		proc, spillfs, &spillBucket{}, &spillBucket{})
+	require.ErrorIs(t, err, mpool.ErrAllocationAccountInvalid)
+	controller.copy = &distinctResizeErrorBuffer{err: sentinel}
+	require.ErrorIs(t, controller.mergeCommittedWave(
+		proc, spillfs, &[spillNumBuckets]*spillBucket{}), sentinel)
+	controller.copy = nil
+	controller.copy = &distinctResizeErrorBuffer{
+		err: sentinel, capacity: spillWrBufSize,
+	}
+	resizeSource := distinctTestFile(t, nil)
+	resizeWave := &[spillNumBuckets]*spillBucket{
+		0: {file: resizeSource, cnt: 1},
+	}
+	require.ErrorIs(t,
+		controller.mergeCommittedWave(proc, spillfs, resizeWave), sentinel)
+	controller.copy = nil
+	require.NoError(t, resizeSource.Close())
+	originalContext := proc.Ctx
+	canceledContext, cancel := context.WithCancel(proc.Ctx)
+	proc.Ctx = canceledContext
+	cancel()
+	require.Error(t, controller.mergeCommittedWave(
+		proc, spillfs, &[spillNumBuckets]*spillBucket{}))
+	proc.Ctx = originalContext
+	closedWaveFile := distinctTestFile(t, nil)
+	require.NoError(t, closedWaveFile.Close())
+	closedWave := &[spillNumBuckets]*spillBucket{
+		0: {file: closedWaveFile, cnt: 1},
+	}
+	require.Error(t, controller.mergeCommittedWave(proc, spillfs, closedWave))
+	copySource := distinctTestFile(t, []byte("copy"))
+	copyTarget := distinctTestFile(t, nil)
+	controller.root[0] = &spillBucket{
+		file: copyTarget, writer: &distinctFailNthWriter{failAt: 1},
+	}
+	copyWave := &[spillNumBuckets]*spillBucket{
+		0: {file: copySource, cnt: 1},
+	}
+	require.ErrorIs(t,
+		controller.mergeCommittedWave(proc, spillfs, copyWave), io.ErrClosedPipe)
+	require.NoError(t, copySource.Close())
+	closedLeft := distinctTestFile(t, nil)
+	require.NoError(t, closedLeft.Close())
+	validRight := distinctTestSortFile(t, []byte("right"))
+	_, err = controller.mergeSortRuns(
+		proc, spillfs, &spillBucket{file: closedLeft}, &spillBucket{file: validRight})
+	require.Error(t, err)
+	require.NoError(t, validRight.Close())
+	validLeft := distinctTestSortFile(t, []byte("left"))
+	closedRight := distinctTestFile(t, nil)
+	require.NoError(t, closedRight.Close())
+	_, err = controller.mergeSortRuns(
+		proc, spillfs, &spillBucket{file: validLeft}, &spillBucket{file: closedRight})
+	require.Error(t, err)
+	require.NoError(t, validLeft.Close())
+
+	malformedLeft := distinctTestFile(t, []byte{1})
+	emptyRight := distinctTestFile(t, nil)
+	_, err = controller.mergeSortRuns(
+		proc, spillfs, &spillBucket{file: malformedLeft}, &spillBucket{file: emptyRight})
+	require.Error(t, err)
+	require.NoError(t, malformedLeft.Close())
+	require.NoError(t, emptyRight.Close())
+	emptyLeft := distinctTestFile(t, nil)
+	malformedRight := distinctTestFile(t, []byte{1})
+	_, err = controller.mergeSortRuns(
+		proc, spillfs, &spillBucket{file: emptyLeft}, &spillBucket{file: malformedRight})
+	require.Error(t, err)
+	require.NoError(t, emptyLeft.Close())
+	require.NoError(t, malformedRight.Close())
+
+	cancelLeft := distinctTestSortFile(t, []byte("left"))
+	cancelRight := distinctTestSortFile(t, []byte("right"))
+	originalContext = proc.Ctx
+	canceledContext, cancel = context.WithCancel(proc.Ctx)
+	proc.Ctx = canceledContext
+	cancel()
+	_, err = controller.mergeSortRuns(
+		proc, spillfs, &spillBucket{file: cancelLeft}, &spillBucket{file: cancelRight})
+	require.Error(t, err)
+	proc.Ctx = originalContext
+	require.NoError(t, cancelLeft.Close())
+	require.NoError(t, cancelRight.Close())
+
+	repartitionFlushFile := distinctTestFile(t, nil)
+	_, _, err = controller.repartition(proc, &spillBucket{
+		file:   repartitionFlushFile,
+		writer: &distinctFlushErrorWriter{err: sentinel},
+		cnt:    1,
+	}, groups)
+	require.ErrorIs(t, err, sentinel)
+	require.NoError(t, repartitionFlushFile.Close())
+	repartitionClosed := distinctTestFile(t, nil)
+	require.NoError(t, repartitionClosed.Close())
+	_, _, err = controller.repartition(
+		proc, &spillBucket{file: repartitionClosed, cnt: 1}, groups)
+	require.Error(t, err)
+	repartitionMalformed := distinctTestFile(t, []byte{1})
+	_, _, err = controller.repartition(
+		proc, &spillBucket{file: repartitionMalformed, cnt: 1}, groups)
+	require.Error(t, err)
+	require.NoError(t, repartitionMalformed.Close())
+	repartitionWrite := distinctTestFile(t, nil)
+	groups.SetRowCount(1)
+	_, err = controller.writeRecord(
+		repartitionWrite, 0, 0, 0, groups, 0, []byte("key"))
+	require.NoError(t, err)
+	_, err = repartitionWrite.Seek(0, io.SeekStart)
+	require.NoError(t, err)
+	controller.record = &distinctFailNthBuffer{failAt: 1, err: sentinel}
+	_, _, err = controller.repartition(
+		proc, &spillBucket{file: repartitionWrite, cnt: 1}, groups)
+	require.ErrorIs(t, err, sentinel)
+	controller.record = nil
+	require.NoError(t, repartitionWrite.Close())
+
+	controller.close()
+	g.Free(proc, false, nil)
+	require.Zero(t, allocation.account.Snapshot().Used)
+	finalizeGroupTestAllocation(t, g, allocation)
+	proc.Free()
+	require.Zero(t, proc.Mp().CurrNB())
+}
+
+func TestDistinctSpillExternalSortFailureBoundaries(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	g := newGroupOp(proc, nil, []aggexec.AggFuncExecExpression{countDistinctAgg(0)})
+	allocation := installGroupTestAllocation(t, g, proc, 64<<20)
+	require.NoError(t, g.Prepare(proc))
+	controller, err := newDistinctSpillController(&g.ctr)
+	require.NoError(t, err)
+	defer controller.close()
+	groups := batch.NewWithSize(0)
+	groups.SetRowCount(1)
+
+	flushErr := fmt.Errorf("flush external sort partition")
+	flushFile := distinctTestFile(t, nil)
+	_, err = controller.externalSortH0Partition(
+		proc, &spillBucket{file: flushFile, writer: &distinctFlushErrorWriter{err: flushErr}})
+	require.ErrorIs(t, err, flushErr)
+	require.NoError(t, flushFile.Close())
+	closed := distinctTestFile(t, nil)
+	require.NoError(t, closed.Close())
+	_, err = controller.externalSortH0Partition(proc, &spillBucket{file: closed})
+	require.Error(t, err)
+
+	empty := distinctTestFile(t, nil)
+	counts, err := controller.externalSortH0Partition(proc, &spillBucket{file: empty})
+	require.NoError(t, err)
+	require.Equal(t, []uint64{0}, counts)
+	require.NoError(t, empty.Close())
+	malformed := distinctTestFile(t, []byte{1})
+	_, err = controller.externalSortH0Partition(proc, &spillBucket{file: malformed})
+	require.Error(t, err)
+	require.NoError(t, malformed.Close())
+
+	outOfRange := distinctTestFile(t, nil)
+	_, err = controller.writeRecord(outOfRange, 0, 0, 1, groups, 0, []byte("key"))
+	require.NoError(t, err)
+	_, err = outOfRange.Seek(0, io.SeekStart)
+	require.NoError(t, err)
+	_, err = controller.externalSortH0Partition(proc, &spillBucket{file: outOfRange})
+	require.ErrorContains(t, err, "ordinal")
+	require.NoError(t, outOfRange.Close())
+
+	resizeFile := distinctTestFile(t, nil)
+	_, err = controller.writeRecord(resizeFile, 0, 0, 0, groups, 0, []byte("key"))
+	require.NoError(t, err)
+	_, err = resizeFile.Seek(0, io.SeekStart)
+	require.NoError(t, err)
+	resizeErr := fmt.Errorf("resize external sort key")
+	controller.sortKey = &distinctResizeErrorBuffer{err: resizeErr}
+	_, err = controller.externalSortH0Partition(proc, &spillBucket{file: resizeFile})
+	require.ErrorIs(t, err, resizeErr)
+	controller.sortKey = nil
+	require.NoError(t, resizeFile.Close())
+
+	wide := distinctTestFile(t, nil)
+	_, err = controller.writeRecord(
+		wide, 0, 0, 0, groups, 0, []byte(strings.Repeat("x", 64*1024)))
+	require.NoError(t, err)
+	_, err = wide.Seek(0, io.SeekStart)
+	require.NoError(t, err)
+	controller.sortArenaBytesForUT = 4 * 1024
+	_, err = controller.externalSortH0Partition(proc, &spillBucket{file: wide})
+	require.ErrorContains(t, err, "requires more than")
+	controller.sortArenaBytesForUT = 0
+	require.NoError(t, wide.Close())
+
+	controller.close()
+	g.Free(proc, false, nil)
+	require.Zero(t, allocation.account.Snapshot().Used)
+	finalizeGroupTestAllocation(t, g, allocation)
+	proc.Free()
+	require.Zero(t, proc.Mp().CurrNB())
+}
+
+func TestDistinctSpillTerminalStateBoundaries(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	g := newGroupOp(
+		proc,
+		[]*plan.Expr{colExpr(0, types.T_int32)},
+		[]aggexec.AggFuncExecExpression{countDistinctAgg(1)},
+	)
+	allocation := installGroupTestAllocation(t, g, proc, 64<<20)
+	require.NoError(t, g.Prepare(proc))
+
+	emptyController, err := newDistinctSpillController(&g.ctr)
+	require.NoError(t, err)
+	g.ctr.distinctSpill = emptyController
+	loaded, err := g.ctr.loadNextDistinctPartialLeaf(proc)
+	require.NoError(t, err)
+	require.False(t, loaded)
+	require.Nil(t, g.ctr.distinctSpill)
+	require.True(t, g.ctr.distinctFinalized)
+
+	g.ctr.distinctFinalized = false
+	preparedController, err := newDistinctSpillController(&g.ctr)
+	require.NoError(t, err)
+	g.ctr.distinctSpill = preparedController
+	require.NoError(t, g.ctr.prepareGroupedDistinctContributions(proc))
+	require.True(t, g.ctr.distinctContributionsPrepared)
+	g.ctr.finishDistinctContributions()
+	require.Nil(t, g.ctr.distinctSpill)
+	require.True(t, g.ctr.distinctFinalized)
+
+	g.ctr.distinctFinalized = false
+	applyController, err := newDistinctSpillController(&g.ctr)
+	require.NoError(t, err)
+	applyController.result = nil
+	g.ctr.distinctSpill = applyController
+	bucket := &spillBucket{pathLen: 1, path: [spillMaxPass]uint8{1}}
+	require.NoError(t, g.ctr.applyDistinctContributions(proc, bucket))
+	require.NoError(t, g.ctr.applyDistinctContributions(proc, bucket))
+	require.ErrorContains(t,
+		g.ctr.applyDistinctContributions(proc, &spillBucket{}), "path")
+	applyController.close()
+	g.ctr.distinctSpill = nil
+
+	flushController, err := newDistinctSpillController(&g.ctr)
+	require.NoError(t, err)
+	flushResultFile := distinctTestFile(t, nil)
+	flushController.result = &spillBucket{
+		file:   flushResultFile,
+		writer: &distinctFlushErrorWriter{err: fmt.Errorf("flush contributions")},
+		cnt:    1,
+	}
+	g.ctr.distinctSpill = flushController
+	require.Error(t, g.ctr.applyDistinctContributions(proc, bucket))
+	flushController.close()
+
+	seekController, err := newDistinctSpillController(&g.ctr)
+	require.NoError(t, err)
+	seekResultFile := distinctTestFile(t, nil)
+	require.NoError(t, seekResultFile.Close())
+	seekController.result = &spillBucket{file: seekResultFile, cnt: 1}
+	g.ctr.distinctSpill = seekController
+	require.Error(t, g.ctr.applyDistinctContributions(proc, bucket))
+	seekController.close()
+
+	malformedController, err := newDistinctSpillController(&g.ctr)
+	require.NoError(t, err)
+	malformedController.result = &spillBucket{
+		file: distinctTestFile(t, []byte{1}), cnt: 1,
+	}
+	g.ctr.distinctSpill = malformedController
+	require.Error(t, g.ctr.applyDistinctContributions(proc, bucket))
+	malformedController.close()
+
+	spillfs, err := proc.GetSpillFileService()
+	require.NoError(t, err)
+	contributionGroups, err := g.ctr.createNewGroupByBatchWithAllocation(
+		nil, 1, g.ctr.spillGroupByAllocation)
+	require.NoError(t, err)
+	contributionGroups.SetRowCount(1)
+	groupHash := uint64(11)
+	matchingBucket := &spillBucket{
+		pathLen: 1,
+		path:    [spillMaxPass]uint8{uint8(distinctGroupBucket(groupHash, 1))},
+	}
+	outOfRangeController, err := newDistinctSpillController(&g.ctr)
+	require.NoError(t, err)
+	require.NoError(t, outOfRangeController.writeContribution(
+		proc, spillfs, groupHash, 1, contributionGroups, 0, 1))
+	g.ctr.distinctSpill = outOfRangeController
+	require.ErrorContains(t,
+		g.ctr.applyDistinctContributions(proc, matchingBucket), "out of range")
+	outOfRangeController.close()
+	contributionGroups.Clean(proc.Mp())
+	g.ctr.distinctSpill = nil
+
+	resetController, err := newDistinctSpillController(&g.ctr)
+	require.NoError(t, err)
+	g.ctr.distinctSpill = resetController
+	g.ctr.distinctGroupReset = true
+	require.ErrorContains(t,
+		g.ctr.finalizeGroupedExactCountDistinct(proc), "identity")
+	g.ctr.distinctGroupReset = false
+	resetController.close()
+	g.ctr.distinctSpill = nil
+
+	g.ctr.distinctContributionsPrepared = true
+	require.NoError(t, g.ctr.finalizeExactCountDistinct(proc, g.OpAnalyzer))
+	g.ctr.distinctContributionsPrepared = false
+	g.ctr.distinctFinalized = false
+	require.NoError(t, g.ctr.finalizeExactCountDistinct(proc, g.OpAnalyzer))
+	require.True(t, g.ctr.distinctFinalized)
 
 	g.Free(proc, false, nil)
 	require.Zero(t, allocation.account.Snapshot().Used)
