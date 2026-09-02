@@ -112,3 +112,9 @@
 
 1. 将 generation-takeover sentinel 从标准库 `errors.New` 改为仓库要求的 `moerr`。
 2. 运行 static-check、frontend focused UT 和 diff check，直接推送。
+
+## 2026-09-02：SCA unused 与 main 冲突
+
+1. 删除 stale-generation force fan-out 引入但未使用的兼容 wrapper，保留单一内部实现，修复 SCA `unused`。
+2. merge 最新 `mo/main`，按 v42/v43/v44 累积协议和生成文件所有权解决冲突。
+3. 运行 affected UT/race/vet/static-check/diff-check 后推送。

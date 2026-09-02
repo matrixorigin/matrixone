@@ -1071,7 +1071,7 @@ func (th *TxnHandler) commitUnsafe(execCtx *ExecCtx) error {
 			// A fresh proxy connection has no session commit timestamp to carry
 			// across CNs. Do not acknowledge a client DDL until every working CN
 			// has reached the commit, or the observed catalog frontier for a no-op.
-			syncErr := syncDDLCommitToBarrierReadyCNsWithForce(
+			syncErr := syncDDLCommitToBarrierReadyCNs(
 				ctx2, execCtx.ses.GetService(), visibilityTS, revokedPublicationErr != nil)
 			err = errors.Join(err, revokedPublicationErr, syncErr)
 		}
@@ -1096,14 +1096,6 @@ type ddlVisibilityTarget struct {
 // clusters retain legacy behavior without invoking an old receiver's fatal
 // SyncCommit path.
 func syncDDLCommitToBarrierReadyCNs(
-	ctx context.Context,
-	service string,
-	visibilityTS timestamp.Timestamp,
-) error {
-	return syncDDLCommitToBarrierReadyCNsWithForce(ctx, service, visibilityTS, false)
-}
-
-func syncDDLCommitToBarrierReadyCNsWithForce(
 	ctx context.Context,
 	service string,
 	visibilityTS timestamp.Timestamp,
