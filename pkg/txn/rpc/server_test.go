@@ -385,6 +385,7 @@ func newBlockedQueueTestServer(t *testing.T, rpcServer morpc.RPCServer) *server 
 		stopper:   stopper.NewStopper("txn rpc test"),
 		stoppingC: make(chan struct{}),
 	}
+	s.activeHandlers.zero = make(chan struct{})
 	s.options.maxChannelBufferSize = 1
 	s.handlers[txn.TxnMethod_Read] = func(context.Context, *txn.TxnRequest, *txn.TxnResponse) error {
 		return nil
