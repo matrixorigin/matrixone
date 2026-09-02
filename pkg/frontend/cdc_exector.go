@@ -174,6 +174,8 @@ type CDCTaskExecutor struct {
 	callbackMu                    sync.RWMutex
 	callbackCount                 atomic.Int64
 	callbackDone                  chan struct{}
+	callbackCtx                   context.Context
+	callbackCancel                context.CancelFunc
 	callbackGeneration            atomic.Uint64
 	restartWaitMu                 sync.Mutex
 	restartWaiters                map[uint64]chan error
@@ -297,6 +299,35 @@ func (exec *CDCTaskExecutor) cancelLifecycleContext() {
 	if cancel != nil {
 		cancel()
 	}
+}
+
+// callbackContextLocked returns the context for the currently admitted table
+// detector generation. The runner lifecycle remains live across Restart and
+// only this generation context is canceled when replacing callbacks.
+func (exec *CDCTaskExecutor) callbackContextLocked() context.Context {
+	if exec.callbackCtx == nil {
+		exec.callbackCtx, exec.callbackCancel = context.WithCancel(exec.replacementStartContext())
+	}
+	return exec.callbackCtx
+}
+
+func (exec *CDCTaskExecutor) rotateCallbackContextLocked() {
+	if exec.callbackCancel != nil {
+		exec.callbackCancel()
+	}
+	exec.callbackCtx = nil
+	exec.callbackCancel = nil
+	if exec.stateMachine.State() != StateCancelling && exec.stateMachine.State() != StateCancelled {
+		exec.callbackContextLocked()
+	}
+}
+
+func (exec *CDCTaskExecutor) cancelCallbackContextLocked() {
+	if exec.callbackCancel != nil {
+		exec.callbackCancel()
+	}
+	exec.callbackCtx = nil
+	exec.callbackCancel = nil
 }
 
 func (exec *CDCTaskExecutor) runLifecycleTask(
@@ -895,6 +926,7 @@ func (exec *CDCTaskExecutor) Resume() error {
 	}
 	exec.recordLeavingFailedMetrics(stateBeforeResume, StateStarting)
 	generation := exec.callbackGeneration.Add(1)
+	exec.rotateCallbackContextLocked()
 	failedRecovery := stateBeforeResume == StateFailed
 	var (
 		recoveryReady   chan error
@@ -1103,7 +1135,7 @@ func (exec *CDCTaskExecutor) Restart() error {
 	}
 	exec.recordLeavingFailedMetrics(stateBeforeRestart, StateRestarting)
 	generation := exec.callbackGeneration.Add(1)
-	exec.cancelLifecycleContext()
+	exec.rotateCallbackContextLocked()
 	// Complete the lifecycle/generation critical section before performing
 	// potentially slow cleanup or waiting for the replacement. Existing table
 	// detector callbacks captured the previous generation and will reject
@@ -1411,14 +1443,17 @@ func (exec *CDCTaskExecutor) Cancel() (err error) {
 		exec.watermarkUpdater.MarkTaskDeleted(exec.spec.TaskId)
 	}
 	exec.callbackMu.Lock()
+	exec.cancelCallbackContextLocked()
 	callbackDone := exec.callbackDone
 	if callbackDone == nil {
 		callbackDone = closedChan()
 	}
 	exec.callbackMu.Unlock()
 	callbackDrainCtx, callbackDrainCancel := context.WithTimeout(context.Background(), 30*time.Second)
+	callbacksDrained := false
 	select {
 	case <-callbackDone:
+		callbacksDrained = true
 	case <-callbackDrainCtx.Done():
 	}
 	callbackDrainCancel()
@@ -1466,13 +1501,14 @@ func (exec *CDCTaskExecutor) Cancel() (err error) {
 	if attempt := exec.activeStart(); attempt != nil {
 		attempt.cancel()
 	}
+	readersStopped := true
 	if wasActive {
 		cdc.GetTableDetector(exec.cnUUID).UnRegister(exec.spec.TaskId)
 		exec.closeActiveRoutineCancel()
 
 		// Synchronously wait for all readers to stop before proceeding
 		// This ensures no goroutine leaks and no interference with new tasks
-		exec.stopAllReaders()
+		readersStopped = exec.stopAllReaders()
 
 		// let Start() go
 		select {
@@ -1502,6 +1538,9 @@ func (exec *CDCTaskExecutor) Cancel() (err error) {
 				zap.Error(err),
 			)
 			return err
+		}
+		if callbacksDrained && readersStopped {
+			exec.watermarkUpdater.ForgetTaskDeleted(exec.spec.TaskId)
 		}
 	}
 	cancelSucceeded = true
@@ -1581,9 +1620,9 @@ func (exec *CDCTaskExecutor) logCurrentWatermarks(phase string) {
 
 // stopAllReaders stops all running readers and waits for them to exit
 // This method ensures complete cleanup before Cancel/Pause returns
-func (exec *CDCTaskExecutor) stopAllReaders() {
+func (exec *CDCTaskExecutor) stopAllReaders() bool {
 	if exec.runningReaders == nil {
-		return
+		return true
 	}
 
 	logutil.Info(
@@ -1614,6 +1653,7 @@ func (exec *CDCTaskExecutor) stopAllReaders() {
 	})
 
 	// Step 2: Wait for all readers to completely exit
+	allStopped := true
 	exec.runningReaders.Range(func(key, value interface{}) bool {
 		reader := value.(cdc.ChangeReader)
 		tableKey, _ := key.(string)
@@ -1637,6 +1677,7 @@ func (exec *CDCTaskExecutor) stopAllReaders() {
 				zap.Duration("cost", time.Since(waitStart)),
 			)
 		case <-time.After(10 * time.Second):
+			allStopped = false
 			logutil.Warn(
 				"cdc.frontend.task.stop_reader_wait_timeout",
 				zap.String("task-id", exec.spec.TaskId),
@@ -1658,6 +1699,7 @@ func (exec *CDCTaskExecutor) stopAllReaders() {
 		zap.String("task-id", exec.spec.TaskId),
 		zap.Int("reader-count", readerCount),
 	)
+	return allStopped
 }
 
 type removedReaderShutdown struct {
@@ -2271,6 +2313,7 @@ func (exec *CDCTaskExecutor) handleNewTablesForGeneration(
 	}
 	exec.callbackCount.Add(1)
 	callbackDone := exec.callbackDone
+	callbackCtx := exec.callbackContextLocked()
 	exec.callbackMu.Unlock()
 	defer func() {
 		if exec.callbackCount.Add(-1) == 0 {
@@ -2282,7 +2325,7 @@ func (exec *CDCTaskExecutor) handleNewTablesForGeneration(
 		}
 	}()
 	accountId := uint32(exec.spec.Accounts[0].GetId())
-	ctx := defines.AttachAccountId(exec.replacementStartContext(), accountId)
+	ctx := defines.AttachAccountId(callbackCtx, accountId)
 
 	// lock to avoid create pipelines for the same table
 	// 2025.7, this lock might be needless now

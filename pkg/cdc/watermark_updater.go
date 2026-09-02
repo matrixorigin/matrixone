@@ -842,7 +842,9 @@ func (u *CDCWatermarkUpdater) execAddWM() (errMsg string, err error) {
 	defer cancel()
 	addSql := u.constructAddWMSQL(u.addCommittedBuffer)
 	ctx = defines.AttachAccountId(ctx, catalog.System_Account)
+	u.persistMu.Lock()
 	err = u.ie.Exec(ctx, addSql, ie.SessionOverrideOptions{})
+	u.persistMu.Unlock()
 	if err != nil {
 		errMsg = fmt.Sprintf("add sql \"%s\" failed", addSql)
 		return
@@ -1437,6 +1439,14 @@ func (u *CDCWatermarkUpdater) MarkTaskDeleted(taskID string) {
 	u.deletedTasks.Store(taskID, struct{}{})
 	u.pausedTasks.Delete(taskID)
 	u.Unlock()
+}
+
+// ForgetTaskDeleted releases a terminal tombstone only after the caller has
+// proved that all producers for the task have exited and durable deletion has
+// succeeded. Keeping the proof at the caller prevents late readers from
+// recreating a deleted row.
+func (u *CDCWatermarkUpdater) ForgetTaskDeleted(taskID string) {
+	u.deletedTasks.Delete(taskID)
 }
 
 // MarkTaskPaused marks a task as paused to block watermark updates
