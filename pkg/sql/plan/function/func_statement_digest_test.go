@@ -99,7 +99,7 @@ func TestStatementDigestTextRejectsBinaryCharset(t *testing.T) {
 		types.T_geometry, types.T_geometry32,
 	} {
 		t.Run(oid.String(), func(t *testing.T) {
-			for _, value := range [][]byte{[]byte("SELECT 1"), []byte{0xff, 0x00, 0xc3, 0x28}} {
+			for _, value := range [][]byte{[]byte("SELECT 1"), {0xff, 0x00, 0xc3, 0x28}} {
 				input, err := vector.NewConstBytes(oid.ToType(), value, 1, proc.Mp())
 				require.NoError(t, err)
 				fn, err := GetFunctionByName(proc.Ctx, "statement_digest_text", []types.Type{oid.ToType()})
