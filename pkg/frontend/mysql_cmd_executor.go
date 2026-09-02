@@ -2881,6 +2881,8 @@ func createPrepareStmtInSession(
 		}
 	}
 
+	fixedIntegerParamPositions, hasPaginationParams, hasLagLeadParams :=
+		preparedFixedIntegerParamPositions(prepareControl.Plan)
 	prepareStmt := &PrepareStmt{
 		Name:               preparePlan.GetDcl().GetPrepare().GetName(),
 		Sql:                originSQL,
@@ -2903,10 +2905,11 @@ func createPrepareStmtInSession(
 		directResultParamPositionsSet: true,
 		jsonComparisonParamPositions: plan2.PreparedJSONComparisonParamPositions(
 			prepareControl.Plan),
-		hasPaginationParams: plan2.PreparedPlanHasPaginationParams(prepareControl.Plan),
-		hasLagLeadParams:    len(plan2.PreparedLagLeadParamPositions(prepareControl.Plan)) > 0,
-		getFromSendLongData: make(map[int]struct{}),
-		schedulingSQLMode:   schedulingSQLMode,
+		fixedIntegerParamPositions: fixedIntegerParamPositions,
+		hasPaginationParams:        hasPaginationParams,
+		hasLagLeadParams:           hasLagLeadParams,
+		getFromSendLongData:        make(map[int]struct{}),
+		schedulingSQLMode:          schedulingSQLMode,
 	}
 	prepareStmt.refreshNumericPrefixConsumer(
 		prepareControl.Plan, len(prepareControl.ParamTypes))
