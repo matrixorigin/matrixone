@@ -4209,7 +4209,7 @@ func (builder *QueryBuilder) buildUnionWithResultLen(
 			}
 		}
 		if allPureNull {
-			ctx.outputColumnProvenance[int32(colIdx)] = OutputColumnProvenance{State: ProvenancePureNull}
+			ctx.setOutputColumnProvenance(int32(colIdx), OutputColumnProvenance{State: ProvenancePureNull})
 		}
 	}
 	// A set-operation result keeps ENUM/SET definition-order provenance only
@@ -11256,7 +11256,7 @@ func (builder *QueryBuilder) appendMySQLSpecialTypeBoundary(
 	}
 	if needsBoundary {
 		for i := 0; i < visibleProjects && i < len(provenance); i++ {
-			ctx.outputColumnProvenance[int32(i)] = provenance[i]
+			ctx.setOutputColumnProvenance(int32(i), provenance[i])
 		}
 		ctx.projectTag = builder.genNewBindTag()
 		ctx.resultTag = 0
