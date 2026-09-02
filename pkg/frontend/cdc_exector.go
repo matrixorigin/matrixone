@@ -1508,17 +1508,6 @@ func (exec *CDCTaskExecutor) Cancel() (err error) {
 	return nil
 }
 
-// waitForTableDetectorCallback acquires the callback write lock so callbacks
-// that already passed their generation check finish before cancellation moves
-// on to reader and watermark cleanup.
-func (exec *CDCTaskExecutor) waitForTableDetectorCallback() {
-	exec.callbackMu.Lock()
-	// Reading the generation makes the synchronization point explicit while
-	// holding the lock; callbacks use the same generation fence.
-	exec.callbackGeneration.Load()
-	exec.callbackMu.Unlock()
-}
-
 func (exec *CDCTaskExecutor) recordLeavingFailedMetrics(fromState ExecutorState, toState ExecutorState) {
 	if fromState != StateFailed {
 		return
