@@ -233,6 +233,7 @@ func TestWithdrawViewMetadataAdmissionPublishesFinalHeartbeat(t *testing.T) {
 		cfg:                             conf,
 		_hakeeperClient:                 client,
 		config:                          util.NewConfigData(nil),
+		logger:                          logutil.GetPanicLogger(),
 		viewMetadataAdmissionGeneration: 17,
 		viewMetadataEpochFence:          compile.NewViewMetadataEpochFence(),
 	}
