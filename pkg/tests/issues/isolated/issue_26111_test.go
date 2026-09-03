@@ -70,8 +70,8 @@ func TestIssue26111DataBranchDatabaseWithCyclicForeignKeys(t *testing.T) {
 	)
 	// This regression owns a fresh embedded cluster and its private data path.
 	// Closing that cluster makes all SQL state unreachable, so SQL-level pre-clean
-	// and teardown would only duplicate lifecycle ownership. In particular, DROP
-	// ACCOUNT expands with the tenant catalog and can exhaust a shared cleanup
+	// and bulk teardown would only duplicate lifecycle ownership. In particular,
+	// DROP ACCOUNT expands with the tenant catalog and can exhaust a shared cleanup
 	// deadline before the remaining objects are visited.
 
 	execSQLRequire(t, ctx, db, "create database `"+sourceDB+"`")
@@ -143,4 +143,8 @@ func TestIssue26111DataBranchDatabaseWithCyclicForeignKeys(t *testing.T) {
 	require.NoError(t, targetDB.QueryRowContext(ctx,
 		"select count(*) from mo_catalog.mo_foreign_keys where db_name = '"+accountBranch+"' and refer_db_name = '"+accountBranch+"'").Scan(&count))
 	require.Equal(t, 2, count)
+
+	// Keep database lifecycle as an explicit product oracle, separate from fixture
+	// cleanup: a branch with restored cyclic foreign keys must remain droppable.
+	execSQLRequire(t, ctx, db, "drop database `"+branchDB+"`")
 }
