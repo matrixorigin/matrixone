@@ -44,6 +44,7 @@ type wmMockSQLExecutor struct {
 type retryableMockExecutor struct {
 	mu            sync.Mutex
 	failRemaining int
+	failOnCall    int
 	execCalls     int
 	lastSQL       string
 }
@@ -67,6 +68,9 @@ func (m *retryableMockExecutor) Exec(_ context.Context, sql string, _ ie.Session
 	defer m.mu.Unlock()
 	m.execCalls++
 	m.lastSQL = sql
+	if m.failOnCall == m.execCalls {
+		return moerr.NewInternalErrorNoCtx("mock exec failure")
+	}
 	if m.failRemaining > 0 {
 		m.failRemaining--
 		return moerr.NewInternalErrorNoCtx("mock exec failure")
@@ -416,7 +420,9 @@ func TestWatermarkUpdater_DeleteTaskWatermarksFlushTimeoutKeepsDeleteAuthoritati
 }
 
 func TestWatermarkUpdater_DeleteTaskWatermarksReturnsDeleteFailureAndKeepsTombstone(t *testing.T) {
-	exec := &retryableMockExecutor{failRemaining: 2}
+	// The flush is the first persistence call; fail the following terminal
+	// DELETE specifically so this test remains distinct from flush failures.
+	exec := &retryableMockExecutor{failOnCall: 2}
 	updater := NewCDCWatermarkUpdater("delete-task-retry", exec, WithCronJobInterval(time.Hour))
 	updater.Start()
 	defer updater.Stop()
