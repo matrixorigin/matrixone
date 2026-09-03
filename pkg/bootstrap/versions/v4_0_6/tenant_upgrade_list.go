@@ -62,6 +62,8 @@ var tenantUpgEntries = []versions.UpgradeEntry{
 	upgradeInformationSchemaMetadataVisibilityView("SCHEMATA", sysview.InformationSchemaSchemataDDL),
 	upgradeInformationSchemaTablePrivileges(),
 	addIcebergCatalogIDAllocatorIndex(),
+	upgradeInformationSchemaColumnsBinaryStrings(),
+	refreshInformationSchemaCharacterSetsUTF8Maxlen(),
 }
 
 // The catalog ID allocator is storage-owned.  MatrixOne only materializes an
@@ -371,7 +373,7 @@ func informationSchemaCharacterSetsCheckSQL() string {
 		"SELECT 1 FROM information_schema.CHARACTER_SETS "+
 			"WHERE CHARACTER_SET_NAME = 'binary' AND DEFAULT_COLLATE_NAME = '%s' AND MAXLEN = 1 "+
 			"AND EXISTS (SELECT 1 FROM information_schema.CHARACTER_SETS "+
-			"WHERE CHARACTER_SET_NAME = 'utf8' AND DEFAULT_COLLATE_NAME = '%s' AND MAXLEN = 4) "+
+			"WHERE CHARACTER_SET_NAME = 'utf8' AND DEFAULT_COLLATE_NAME = '%s' AND MAXLEN = 3) "+
 			"AND EXISTS (SELECT 1 FROM information_schema.CHARACTER_SETS "+
 			"WHERE CHARACTER_SET_NAME = 'utf8mb4' AND DEFAULT_COLLATE_NAME = '%s' AND MAXLEN = 4) "+
 			"LIMIT 1",
@@ -379,6 +381,32 @@ func informationSchemaCharacterSetsCheckSQL() string {
 		sysview.DefaultCollationForCharset("utf8"),
 		sysview.DefaultCollationForCharset("utf8mb4"),
 	)
+}
+
+func upgradeInformationSchemaColumnsBinaryStrings() versions.UpgradeEntry {
+	return versions.UpgradeEntry{
+		Schema:                  sysview.InformationDBConst,
+		TableName:               "COLUMNS",
+		UpgType:                 versions.MODIFY_VIEW,
+		PreSql:                  "DROP VIEW IF EXISTS information_schema.COLUMNS;",
+		UpgSql:                  sysview.InformationSchemaColumnsDDL,
+		CheckFunc:               checkViewDefinition("COLUMNS", sysview.InformationSchemaColumnsDDL),
+		RequiredProtocolVersion: defines.MORPCVersion45,
+	}
+}
+
+func refreshInformationSchemaCharacterSetsUTF8Maxlen() versions.UpgradeEntry {
+	return versions.UpgradeEntry{
+		Schema:    sysview.InformationDBConst,
+		TableName: "CHARACTER_SETS",
+		UpgType:   versions.MODIFY_METADATA,
+		PreSql:    "delete from information_schema.character_sets",
+		UpgSql:    sysview.InformationSchemaCharacterSetsData,
+		CheckFunc: func(txn executor.TxnExecutor, accountID uint32) (bool, error) {
+			return versions.CheckTableDataExist(txn, accountID, informationSchemaCharacterSetsCheckSQL())
+		},
+		RequiredProtocolVersion: defines.MORPCVersion45,
+	}
 }
 
 func newMongoDBCatalogTable(name, ddl string) versions.UpgradeEntry {

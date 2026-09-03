@@ -627,6 +627,52 @@ func TestPadSpaceRemoteProtocolValidation(t *testing.T) {
 	require.NoError(t, validateRemotePadSpacePipelineProtocol(proc, ordinary))
 }
 
+func TestBinaryStringRemoteProtocolValidationAtSenderAndReceiver(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	rt := runtime.ServiceRuntime(proc.GetService())
+	defer rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCLatestVersion)
+
+	binaryLength := &plan.Expr{
+		Typ: plan.Type{Id: int32(types.T_int64)},
+		Expr: &plan.Expr_F{F: &plan.Function{
+			Func: &plan.ObjectRef{
+				Obj:     function.EncodeOverloadID(function.LENGTH_UTF8, 0),
+				ObjName: "char_length",
+			},
+			Args: []*plan.Expr{{
+				Typ: plan.Type{Id: int32(types.T_varbinary), Charset: uint32(types.CharsetBinary)},
+				Expr: &plan.Expr_Lit{Lit: &plan.Literal{
+					Value: &plan.Literal_Sval{Sval: "\xff"},
+				}},
+			}},
+		}},
+	}
+	semanticPipeline := &pipeline.Pipeline{InstructionList: []*pipeline.Instruction{{
+		Op: int32(vm.Projection), ProjectList: []*plan.Expr{binaryLength},
+	}}}
+	ordinaryPipeline := &pipeline.Pipeline{InstructionList: []*pipeline.Instruction{{
+		Op: int32(vm.Projection), ProjectList: []*plan.Expr{{
+			Typ: plan.Type{Id: int32(types.T_int64)},
+			Expr: &plan.Expr_Lit{Lit: &plan.Literal{
+				Value: &plan.Literal_I64Val{I64Val: 1},
+			}},
+		}},
+	}}}
+
+	for _, boundary := range []string{"sender", "receiver"} {
+		t.Run(boundary, func(t *testing.T) {
+			rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion44)
+			require.ErrorContains(t,
+				validateRemoteBinaryStringPipelineProtocol(proc, semanticPipeline),
+				"require MORPC protocol version 45")
+			require.NoError(t, validateRemoteBinaryStringPipelineProtocol(proc, ordinaryPipeline))
+
+			rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion45)
+			require.NoError(t, validateRemoteBinaryStringPipelineProtocol(proc, semanticPipeline))
+		})
+	}
+}
+
 func TestPadCharModeRemoteProtocolValidation(t *testing.T) {
 	proc := newResolveVariableProcess(t, "PAD_CHAR_TO_FULL_LENGTH")
 	rt := runtime.ServiceRuntime(proc.GetService())

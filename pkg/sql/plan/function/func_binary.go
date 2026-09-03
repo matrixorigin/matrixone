@@ -6568,28 +6568,6 @@ func FromUnixTimeDecimal256Format(ivecs []*vector.Vector, result vector.Function
 	return nil
 }
 
-// Slice from left to right, starting from 0
-func getSliceFromLeft(s string, offset int64) string {
-	sourceRune := []rune(s)
-	elemsize := int64(len(sourceRune))
-	if offset > elemsize {
-		return ""
-	}
-	substrRune := sourceRune[offset:]
-	return string(substrRune)
-}
-
-// Cut slices from right to left, starting from 1
-func getSliceFromRight(s string, offset int64) string {
-	sourceRune := []rune(s)
-	elemsize := int64(len(sourceRune))
-	if offset > elemsize {
-		return ""
-	}
-	substrRune := sourceRune[elemsize-offset:]
-	return string(substrRune)
-}
-
 func StrCmp(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) (err error) {
 	return opBinaryStrStrToFixedWithErrorCheck[int8](ivecs, result, proc, length, strcmp, nil)
 }
@@ -6631,44 +6609,6 @@ func SubStringWith2Args(ivecs []*vector.Vector, result vector.FunctionResultWrap
 		}
 	}
 	return setSelectedStringResultDomain(ivecs[0], result, proc)
-}
-
-// Cut the slice with length from left to right, starting from 0
-func getSliceFromLeftWithLength(s string, offset int64, length int64) string {
-	if offset < 0 {
-		return ""
-	}
-	return getSliceOffsetLen(s, offset, length)
-}
-
-func getSliceOffsetLen(s string, offset int64, length int64) string {
-	sourceRune := []rune(s)
-	elemsize := int64(len(sourceRune))
-	if offset < 0 {
-		offset += elemsize
-		if offset < 0 {
-			return ""
-		}
-	}
-	if offset >= elemsize {
-		return ""
-	}
-
-	if length <= 0 {
-		return ""
-	} else {
-		end := offset + length
-		if end > elemsize {
-			end = elemsize
-		}
-		substrRune := sourceRune[offset:end]
-		return string(substrRune)
-	}
-}
-
-// From right to left, cut the slice with length from 1
-func getSliceFromRightWithLength(s string, offset int64, length int64) string {
-	return getSliceOffsetLen(s, -offset, length)
 }
 
 func SubStringWith3Args(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) (err error) {

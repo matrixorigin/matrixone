@@ -1046,51 +1046,34 @@ func (tcc *TxnCompilerContext) ResolveVariableIsBin(varName string, isSystemVar,
 	return udVar.IsBin, nil
 }
 
-func planTypeIsBinaryString(typ plan2.Type) bool {
-	if typ.Id == 0 {
-		return false
-	}
-	containerType := types.NewWithCharset(
-		types.T(typ.Id), typ.Width, typ.Scale, uint8(typ.Charset))
-	return types.StaticStringDomain(containerType) == types.StringDomainBinary
-}
-
-// ResolveVariableBinaryString reports the runtime string domain independently
-// of Literal.IsBin. The latter also controls numeric interpretation of hex/bit
-// literals and must not be used as the authoritative string-domain signal.
-func (tcc *TxnCompilerContext) ResolveVariableBinaryString(
+// ResolveVariableStringDomain returns only an explicit row-level override.
+// Static BINARY/VARBINARY/BLOB identity remains in the variable's Type, while
+// Literal.IsBin independently controls numeric interpretation of hex/bit forms.
+func (tcc *TxnCompilerContext) ResolveVariableStringDomain(
 	varName string,
 	isSystemVar, _ bool,
-) (bool, error) {
+) (types.RuntimeStringDomain, error) {
 	if tcc.execCtx != nil {
-		if value, declaredType, hasDeclaredType, ok := resolveStoredProcedureVariableWithType(
+		if _, _, _, ok := resolveStoredProcedureVariableWithType(
 			tcc.execCtx.reqCtx, varName,
 		); ok {
-			if hasDeclaredType {
-				return planTypeIsBinaryString(declaredType), nil
-			}
-			return planTypeIsBinaryString(inferUserDefinedVarType(value)), nil
+			return types.RuntimeStringInherit, nil
 		}
 	}
 	if isSystemVar {
-		return false, nil
+		return types.RuntimeStringInherit, nil
 	}
 	udVar, err := tcc.GetSession().GetUserDefinedVar(varName)
 	if err != nil {
 		// An unassigned user variable is NULL and has no runtime string domain.
-		return false, nil
+		return types.RuntimeStringInherit, nil
 	}
-	typ := udVar.Type
-	if typ.Id == 0 {
-		typ = inferUserDefinedVarType(udVar.Value)
+	if !udVar.RuntimeStringDomain.Valid() {
+		return types.RuntimeStringInherit, moerr.NewInvalidInputNoCtxf(
+			"invalid runtime string domain %d for user variable %s",
+			udVar.RuntimeStringDomain, varName)
 	}
-	if planTypeIsBinaryString(typ) {
-		return true, nil
-	}
-	// Preserve binary-literal provenance for legacy callers that stored a
-	// textual value without its assignment type. Restrict the fallback to SQL
-	// string types so numeric hex/bit literals remain only Literal.IsBin.
-	return udVar.IsBin && types.T(typ.Id).IsMySQLString(), nil
+	return udVar.RuntimeStringDomain, nil
 }
 
 func (tcc *TxnCompilerContext) ResolveVariablePrepareParamKind(

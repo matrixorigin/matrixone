@@ -310,6 +310,33 @@ func TestPreparedNumericAggregateParameterIdentity(t *testing.T) {
 	require.NoError(t, err)
 }
 
+func TestSQLPreparedNullRetainsBinarySourceTypeAndRuntimeDomain(t *testing.T) {
+	prepare := buildPreparedAggregatePlan(t, "select char_length(?) from nation")
+	filled, specialized, err := FillValuesOfParamsInPlanWithSpecialization(
+		context.Background(), prepare.Plan, []any{ParamValue{
+			Value:               nil,
+			SourceType:          types.T_varbinary.ToType(),
+			HasSourceType:       true,
+			RuntimeStringDomain: types.RuntimeStringText,
+		}})
+	require.NoError(t, err)
+	require.True(t, specialized)
+
+	found := false
+	require.NoError(t, planpb.VisitExpressionsInOwner(filled, func(root *planpb.Expr) error {
+		return planpb.VisitExprTree(root, func(expr *planpb.Expr) error {
+			literal := expr.GetLit()
+			if literal != nil && literal.Isnull && expr.Typ.Id == int32(types.T_varbinary) {
+				found = true
+				require.Equal(t,
+					planpb.StringLiteralForm_STRING_LITERAL_TEXT, literal.LiteralForm)
+			}
+			return nil
+		})
+	}))
+	require.True(t, found, "typed NULL must remain VARBINARY with its explicit text override")
+}
+
 func TestPreparedAggregateRuntimeTypeReachesResultProjection(t *testing.T) {
 	prepare := buildPreparedAggregatePlan(t, "select sum(?) from nation")
 

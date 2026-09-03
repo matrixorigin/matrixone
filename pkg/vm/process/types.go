@@ -446,7 +446,7 @@ type BaseProcess struct {
 	Aicm                                *defines.AutoIncrCacheManager
 	resolveVariableFunc                 func(varName string, isSystemVar, isGlobalVar bool) (interface{}, error)
 	resolveVariableIsBinFunc            func(varName string, isSystemVar, isGlobalVar bool) (bool, error)
-	resolveVariableBinaryStringFunc     func(varName string, isSystemVar, isGlobalVar bool) (bool, error)
+	resolveVariableStringDomainFunc     func(varName string, isSystemVar, isGlobalVar bool) (types.RuntimeStringDomain, error)
 	resolveVariablePrepareParamKindFunc func(varName string, isSystemVar, isGlobalVar bool) (vector.PrepareParamKind, error)
 	prepareParams                       *vector.Vector
 	prepareParamsIsBin                  []bool
@@ -719,12 +719,16 @@ func (proc *Process) GetResolveVariableIsBinFunc() func(varName string, isSystem
 	return proc.Base.resolveVariableIsBinFunc
 }
 
-func (proc *Process) SetResolveVariableBinaryStringFunc(f func(varName string, isSystemVar, isGlobalVar bool) (bool, error)) {
-	proc.Base.resolveVariableBinaryStringFunc = f
+func (proc *Process) SetResolveVariableStringDomainFunc(
+	f func(varName string, isSystemVar, isGlobalVar bool) (types.RuntimeStringDomain, error),
+) {
+	proc.Base.resolveVariableStringDomainFunc = f
 }
 
-func (proc *Process) GetResolveVariableBinaryStringFunc() func(varName string, isSystemVar, isGlobalVar bool) (bool, error) {
-	return proc.Base.resolveVariableBinaryStringFunc
+func (proc *Process) GetResolveVariableStringDomainFunc() func(
+	varName string, isSystemVar, isGlobalVar bool,
+) (types.RuntimeStringDomain, error) {
+	return proc.Base.resolveVariableStringDomainFunc
 }
 
 func (proc *Process) SetResolveVariablePrepareParamKindFunc(

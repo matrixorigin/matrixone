@@ -602,6 +602,10 @@ func (expr *ParamExpressionExecutor) Eval(proc *process.Process, batches []*batc
 		expr.folded = true
 		expr.foldedNull = true
 		if params := proc.GetPrepareParams(); params != nil {
+			if err = expr.null.SetRuntimeStringDomainWithMP(
+				params.GetRuntimeStringDomainAt(expr.pos), proc.Mp()); err != nil {
+				return nil, err
+			}
 			if err = expr.null.SetStringSource(params.GetStringSourceAt(expr.pos)); err != nil {
 				return nil, err
 			}
@@ -619,7 +623,17 @@ func (expr *ParamExpressionExecutor) Eval(proc *process.Process, batches []*batc
 	}
 	if err == nil {
 		expr.vec.SetIsBin(proc.GetPrepareParamIsBin(expr.pos))
-		expr.vec.SetIsBinaryString(proc.GetPrepareParamIsBinaryString(expr.pos))
+		runtimeDomain := types.RuntimeStringInherit
+		if params := proc.GetPrepareParams(); params != nil {
+			runtimeDomain = params.GetRuntimeStringDomainAt(expr.pos)
+		}
+		if runtimeDomain == types.RuntimeStringInherit && proc.GetPrepareParamIsBinaryString(expr.pos) {
+			runtimeDomain = types.RuntimeStringBinary
+		}
+		err = expr.vec.SetRuntimeStringDomainWithMP(runtimeDomain, proc.Mp())
+		if err != nil {
+			return nil, err
+		}
 		expr.vec.SetPrepareParamKind(proc.GetPrepareParamKind(expr.pos))
 		if params := proc.GetPrepareParams(); params != nil {
 			err = expr.vec.SetStringSource(params.GetStringSourceAt(expr.pos))
@@ -719,9 +733,9 @@ func (expr *VarExpressionExecutor) Eval(proc *process.Process, batches []*batch.
 			return nil, err
 		}
 	}
-	binaryString := false
-	if resolveBinaryString := proc.GetResolveVariableBinaryStringFunc(); resolveBinaryString != nil {
-		binaryString, err = resolveBinaryString(expr.name, expr.system, expr.global)
+	runtimeDomain := types.RuntimeStringInherit
+	if resolveStringDomain := proc.GetResolveVariableStringDomainFunc(); resolveStringDomain != nil {
+		runtimeDomain, err = resolveStringDomain(expr.name, expr.system, expr.global)
 		if err != nil {
 			return nil, err
 		}
@@ -742,7 +756,10 @@ func (expr *VarExpressionExecutor) Eval(proc *process.Process, batches []*batch.
 		}
 		if err == nil {
 			expr.null.SetIsBin(isBin)
-			expr.null.SetIsBinaryString(binaryString)
+			err = expr.null.SetRuntimeStringDomainWithMP(runtimeDomain, proc.Mp())
+			if err != nil {
+				return nil, err
+			}
 			expr.null.SetPrepareParamKind(prepareParamKind)
 			err = expr.null.SetStringSource(types.StringSourceUserVariable)
 			expr.null.SetLength(rowCount)
@@ -777,7 +794,10 @@ func (expr *VarExpressionExecutor) Eval(proc *process.Process, batches []*batch.
 	}
 	if err == nil {
 		expr.vec.SetIsBin(isBin)
-		expr.vec.SetIsBinaryString(binaryString)
+		err = expr.vec.SetRuntimeStringDomainWithMP(runtimeDomain, proc.Mp())
+		if err != nil {
+			return nil, err
+		}
 		expr.vec.SetPrepareParamKind(prepareParamKind)
 		err = expr.vec.SetStringSource(types.StringSourceUserVariable)
 		expr.vec.SetLength(rowCount)

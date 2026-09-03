@@ -1401,12 +1401,12 @@ func TestVarExpressionExecutor(t *testing.T) {
 func TestVarExpressionExecutorPreservesBinaryStringMetadataOnReuse(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	value := "\xe4\xbd\xa0"
-	binaryString := true
+	runtimeDomain := types.RuntimeStringBinary
 	proc.SetResolveVariableFunc(func(string, bool, bool) (interface{}, error) {
 		return value, nil
 	})
-	proc.SetResolveVariableBinaryStringFunc(func(string, bool, bool) (bool, error) {
-		return binaryString, nil
+	proc.SetResolveVariableStringDomainFunc(func(string, bool, bool) (types.RuntimeStringDomain, error) {
+		return runtimeDomain, nil
 	})
 
 	executor, err := NewExpressionExecutor(proc, &plan.Expr{
@@ -1424,12 +1424,12 @@ func TestVarExpressionExecutorPreservesBinaryStringMetadataOnReuse(t *testing.T)
 	require.True(t, vec.GetBinaryStringMetadataAt(1))
 	require.Equal(t, types.StringSourceUserVariable, vec.GetStringSourceAt(0))
 
-	binaryString = false
+	runtimeDomain = types.RuntimeStringText
 	value = "text"
 	vec, err = executor.Eval(proc, []*batch.Batch{input}, nil)
 	require.NoError(t, err)
-	require.False(t, vec.GetBinaryStringMetadataAt(0),
-		"a reused variable vector must not leak the preceding binary domain")
+	require.Equal(t, types.RuntimeStringText, vec.GetRuntimeStringDomainAt(0),
+		"a reused variable vector must replace the preceding binary override")
 	require.Equal(t, "text", vec.GetStringAt(1))
 }
 

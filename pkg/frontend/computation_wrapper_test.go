@@ -350,7 +350,7 @@ func newPreparedExecuteEnvForSQLWithCompilerContext(
 	ses.GetTxnCompileCtx().SetExecCtx(execCtx)
 	proc.SetResolveVariableFunc(ses.txnCompileCtx.ResolveVariable)
 	proc.SetResolveVariableIsBinFunc(ses.txnCompileCtx.ResolveVariableIsBin)
-	proc.SetResolveVariableBinaryStringFunc(ses.txnCompileCtx.ResolveVariableBinaryString)
+	proc.SetResolveVariableStringDomainFunc(ses.txnCompileCtx.ResolveVariableStringDomain)
 	proc.SetResolveVariablePrepareParamKindFunc(ses.txnCompileCtx.ResolveVariablePrepareParamKind)
 	return ses, prepareStmt, cw, execCtx
 }
@@ -359,7 +359,9 @@ func TestInitExecuteStmtParamPreservesBinaryFlagPerUserVariable(t *testing.T) {
 	ses, prepareStmt, cw, execCtx := newPreparedExecuteEnvForSQL(t, 102, "select ?, ?")
 	defer prepareStmt.Close()
 
-	require.NoError(t, ses.setUserDefinedVar("binary_param", "AB\x00\x00", "", true))
+	require.NoError(t, ses.setUserDefinedVarWithType(
+		"binary_param", "AB\x00\x00", "", true,
+		plan.Type{Id: int32(types.T_varbinary), Charset: uint32(types.CharsetBinary)}))
 	require.NoError(t, ses.SetUserDefinedVar("text_param", "text", ""))
 	isBin, err := ses.txnCompileCtx.ResolveVariableIsBin("binary_param", false, false)
 	require.NoError(t, err)
@@ -395,11 +397,11 @@ func TestInitExecuteStmtParamPreservesBinaryFlagPerUserVariable(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, cw.proc.GetPrepareParamIsBin(0))
 	require.False(t, cw.proc.GetPrepareParamIsBin(1))
-	require.True(t, cw.proc.GetPrepareParamIsBinaryString(0))
+	require.False(t, cw.proc.GetPrepareParamIsBinaryString(0),
+		"static binary type must not be flattened into a runtime override")
 	require.False(t, cw.proc.GetPrepareParamIsBinaryString(1))
 	require.Equal(t, plan2.ParamValue{
 		Value: "AB\x00\x00", IsBin: true, EnableNumericPrefix: true,
-		SourceType: types.T_varbinary.ToType(), HasSourceType: true,
 	}, cw.paramVals[0])
 	require.Equal(t, plan2.ParamValue{
 		Value: "text", IsBin: false, EnableNumericPrefix: true,
@@ -449,7 +451,35 @@ func TestPreparedParamValuesPreservesNullProtocolProvenance(t *testing.T) {
 		IsBinaryProtocol:    true,
 		PrepareParamKind:    vector.PrepareParamDecimal,
 		EnableNumericPrefix: true,
+		RuntimeType:         types.T_decimal256.ToType(),
+		HasRuntimeType:      true,
 	}}, values)
+}
+
+func TestPreparedNullBlobRetainsBinaryProtocolType(t *testing.T) {
+	_, prepareStmt, cw, _ := newPreparedExecuteEnvForSQL(t, 122, "select ?")
+	defer prepareStmt.Close()
+
+	params := vector.NewVec(types.T_text.ToType())
+	require.NoError(t, vector.AppendBytes(params, nil, true, cw.proc.Mp()))
+	cw.proc.SetPrepareParamsWithMeta(params, []bool{false}, []vector.PrepareParamKind{vector.PrepareParamNone})
+	defer func() {
+		cw.proc.SetPrepareParams(nil)
+		params.Free(cw.proc.Mp())
+	}()
+	paramTypes := []byte{byte(defines.MYSQL_TYPE_BLOB), 0}
+
+	runtimeTypes := binaryProtocolRuntimeParamTypes(paramTypes, params)
+	require.Equal(t, []types.Type{types.T_blob.ToType()}, runtimeTypes)
+	values, err := preparedParamValues(cw.proc, paramTypes)
+	require.NoError(t, err)
+	require.Equal(t, []any{plan2.ParamValue{
+		IsBinaryProtocol:    true,
+		RuntimeType:         types.T_blob.ToType(),
+		HasRuntimeType:      true,
+		EnableNumericPrefix: true,
+	}}, values)
+	require.Equal(t, []int32{0}, preparedDirectResultRuntimePositions(values, []int32{0}))
 }
 
 func TestInitExecuteStmtParamSetsCOMStmtBinaryStringMetadata(t *testing.T) {
@@ -1830,8 +1860,8 @@ func TestPreparedArithmeticDMLReusesStableRuntimeCategory(t *testing.T) {
 		execCtx, ses, cw, nil, prepareStmt.Name)
 	freeStmt(stmt, owned)
 	require.NoError(t, err)
-	require.NotSame(t, integerCompile, retComp,
-		"NULL has no stable runtime category and must not reuse the integer compile")
+	require.Same(t, integerCompile, retComp,
+		"typed NULL must reuse the compile for its stable packet category")
 	require.Same(t, integerCompile, prepareStmt.runtimeCompile,
 		"a non-cacheable execution must not evict the last valid category")
 	require.Nil(t, cw.runtimeCachePlan)
@@ -2369,12 +2399,12 @@ func TestResolveVariableIsBinHonorsStoredProcedureScope(t *testing.T) {
 	isBin, err := ses.txnCompileCtx.ResolveVariableIsBin("V1", false, false)
 	require.NoError(t, err)
 	require.False(t, isBin)
-	binaryString, err := ses.txnCompileCtx.ResolveVariableBinaryString("V1", false, false)
+	runtimeDomain, err := ses.txnCompileCtx.ResolveVariableStringDomain("V1", false, false)
 	require.NoError(t, err)
-	require.False(t, binaryString)
-	binaryString, err = ses.txnCompileCtx.ResolveVariableBinaryString("binary_value", false, false)
+	require.Equal(t, types.RuntimeStringInherit, runtimeDomain)
+	runtimeDomain, err = ses.txnCompileCtx.ResolveVariableStringDomain("binary_value", false, false)
 	require.NoError(t, err)
-	require.True(t, binaryString)
+	require.Equal(t, types.RuntimeStringInherit, runtimeDomain)
 	kind, err := ses.txnCompileCtx.ResolveVariablePrepareParamKind("V1", false, false)
 	require.NoError(t, err)
 	require.Equal(t, vector.PrepareParamInteger, kind)
@@ -2399,12 +2429,13 @@ func TestResolveVariableIsBinHonorsStoredProcedureScope(t *testing.T) {
 	isBin, err = ses.txnCompileCtx.ResolveVariableIsBin("session_only", false, false)
 	require.NoError(t, err)
 	require.True(t, isBin)
-	binaryString, err = ses.txnCompileCtx.ResolveVariableBinaryString("session_only", false, false)
+	runtimeDomain, err = ses.txnCompileCtx.ResolveVariableStringDomain("session_only", false, false)
 	require.NoError(t, err)
-	require.True(t, binaryString)
-	binaryString, err = ses.txnCompileCtx.ResolveVariableBinaryString("numeric_hex", false, false)
+	require.Equal(t, types.RuntimeStringInherit, runtimeDomain)
+	runtimeDomain, err = ses.txnCompileCtx.ResolveVariableStringDomain("numeric_hex", false, false)
 	require.NoError(t, err)
-	require.False(t, binaryString, "numeric Literal.IsBin must not become binary-string provenance")
+	require.Equal(t, types.RuntimeStringInherit, runtimeDomain,
+		"numeric Literal.IsBin must not become binary-string provenance")
 	kind, err = ses.txnCompileCtx.ResolveVariablePrepareParamKind("session_only", false, false)
 	require.NoError(t, err)
 	require.Equal(t, vector.PrepareParamNone, kind)
@@ -2415,12 +2446,37 @@ func TestResolveVariableIsBinHonorsStoredProcedureScope(t *testing.T) {
 	isBin, err = ses.txnCompileCtx.ResolveVariableIsBin("missing_user_var", false, false)
 	require.NoError(t, err)
 	require.False(t, isBin)
-	binaryString, err = ses.txnCompileCtx.ResolveVariableBinaryString("missing_user_var", false, false)
+	runtimeDomain, err = ses.txnCompileCtx.ResolveVariableStringDomain("missing_user_var", false, false)
 	require.NoError(t, err)
-	require.False(t, binaryString)
+	require.Equal(t, types.RuntimeStringInherit, runtimeDomain)
 	kind, err = ses.txnCompileCtx.ResolveVariablePrepareParamKind("missing_user_var", false, false)
 	require.NoError(t, err)
 	require.Equal(t, vector.PrepareParamNone, kind)
+}
+
+func TestBuildExecuteUserParamsPreservesExplicitTextOverride(t *testing.T) {
+	ses, prepareStmt, cw, _ := newPreparedExecuteEnv(t, 123)
+	defer prepareStmt.Close()
+	binaryType := plan.Type{
+		Id: int32(types.T_varbinary), Width: 16, Charset: uint32(types.CharsetBinary),
+	}
+	require.NoError(t, ses.setUserDefinedVarWithTypeAndKindAndReplayability(
+		"text_override", "你", "", false, binaryType, vector.PrepareParamNone,
+		false, types.RuntimeStringText))
+
+	domain, err := ses.txnCompileCtx.ResolveVariableStringDomain("text_override", false, false)
+	require.NoError(t, err)
+	require.Equal(t, types.RuntimeStringText, domain)
+	params, values, _, binary, _, _, err := buildExecuteUserParams(cw.proc, []*plan.Expr{{
+		Typ: binaryType, Expr: &plan.Expr_V{V: &plan.VarRef{Name: "text_override"}},
+	}}, nil)
+	require.NoError(t, err)
+	defer params.Free(cw.proc.Mp())
+	require.Equal(t, types.RuntimeStringText, params.GetRuntimeStringDomainAt(0))
+	require.Equal(t, []bool{false}, binary)
+	param := values[0].(plan2.ParamValue)
+	require.Equal(t, types.RuntimeStringText, param.RuntimeStringDomain)
+	require.Equal(t, types.NewWithCharset(types.T_varbinary, 16, 0, types.CharsetBinary), param.SourceType)
 }
 
 func TestBuildExecuteUserParamsHonorsStoredProcedureScope(t *testing.T) {
@@ -2445,7 +2501,7 @@ func TestBuildExecuteUserParamsHonorsStoredProcedureScope(t *testing.T) {
 	defer params.Free(cw.proc.Mp())
 
 	require.Equal(t, []bool{false, false, true}, paramIsBin)
-	require.Equal(t, []bool{false, false, true}, paramBinaryString)
+	require.Equal(t, []bool{false, false, false}, paramBinaryString)
 	require.Equal(t, []vector.PrepareParamKind{
 		vector.PrepareParamInteger,
 		vector.PrepareParamInteger,
@@ -2461,7 +2517,6 @@ func TestBuildExecuteUserParamsHonorsStoredProcedureScope(t *testing.T) {
 		},
 		plan2.ParamValue{
 			Value: "session-binary", IsBin: true, EnableNumericPrefix: true,
-			SourceType: types.T_varbinary.ToType(), HasSourceType: true,
 		},
 	}, paramVals)
 	require.Equal(t, "10", params.GetStringAt(0))
@@ -2501,7 +2556,7 @@ func TestBuildExecuteUserParamsRetainsExecuteArgumentSourceType(t *testing.T) {
 	defer params.Free(cw.proc.Mp())
 
 	require.Equal(t, "2.500", params.GetStringAt(0))
-	require.Equal(t, []bool{false, false, true}, paramBinaryString)
+	require.Equal(t, []bool{false, false, false}, paramBinaryString)
 	decimalParam, ok := paramVals[0].(plan2.ParamValue)
 	require.True(t, ok)
 	require.True(t, decimalParam.HasSourceType)
@@ -2516,7 +2571,7 @@ func TestBuildExecuteUserParamsRetainsExecuteArgumentSourceType(t *testing.T) {
 	binaryParam, ok := paramVals[2].(plan2.ParamValue)
 	require.True(t, ok)
 	require.True(t, binaryParam.HasSourceType)
-	require.Equal(t, types.NewWithCharset(types.T_varbinary, 8, 0, types.CharsetBinary), binaryParam.SourceType)
+	require.Equal(t, types.NewWithCharset(types.T_varchar, 8, 0, types.CharsetBinary), binaryParam.SourceType)
 }
 
 // A nil cached compile means the statement was rejected for prepare-time

@@ -98,6 +98,29 @@ execute binary_string_stmt using @text_value, @text_value, @text_value, @text_va
                                  @text_value, @text_value;
 deallocate prepare binary_string_stmt;
 
+-- A selected text row must remain an explicit text override even when the
+-- expression's common static type is binary.
+set @selected_text = if(false, X'ff', '你a');
+select charset(@selected_text), collation(@selected_text),
+       char_length(@selected_text), hex(left(@selected_text, 1));
+select if(false, X'ff', '你a') into @selected_text_into;
+select charset(@selected_text_into), collation(@selected_text_into),
+       char_length(@selected_text_into), hex(left(@selected_text_into, 1));
+set @choose_binary = false;
+prepare prepared_set_domain from
+    'set @prepared_selected_text = if(?, X''ff'', ''你a'')';
+execute prepared_set_domain using @choose_binary;
+select charset(@prepared_selected_text), collation(@prepared_selected_text),
+       char_length(@prepared_selected_text), hex(left(@prepared_selected_text, 1));
+deallocate prepare prepared_set_domain;
+
+set @typed_binary_null = cast(null as binary(8));
+prepare typed_binary_null_stmt from
+    'select charset(?), collation(?), charset(left(?, 1)), collation(left(?, 1))';
+execute typed_binary_null_stmt using @typed_binary_null, @typed_binary_null,
+                                     @typed_binary_null, @typed_binary_null;
+deallocate prepare typed_binary_null_stmt;
+
 create table binary_function_ctas as
 select left(bin, 1) as binary_left,
        lower(bin) as binary_lower,

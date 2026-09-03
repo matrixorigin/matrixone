@@ -128,6 +128,33 @@ execute binary_string_stmt using @text_value, @text_value, @text_value, @text_va
 ➤ char_length(?)[-5,64,0]  ¦  hex(left(?, 1))[12,65535,0]  ¦  ord(?)[-5,64,0]  ¦  ? like ____[-7,1,0]  ¦  charset(left(?, 1))[12,65535,0]  ¦  collation(left(?, 1))[12,65535,0]  𝄀
 2  ¦  E4BDA0  ¦  14990752  ¦  0  ¦  utf8mb4  ¦  utf8mb4_general_ci
 deallocate prepare binary_string_stmt;
+set @selected_text = if(false, X'ff', '你a');
+select charset(@selected_text), collation(@selected_text),
+char_length(@selected_text), hex(left(@selected_text, 1));
+➤ charset(@selected_text)[12,65535,0]  ¦  collation(@selected_text)[12,65535,0]  ¦  char_length(@selected_text)[-5,64,0]  ¦  hex(left(@selected_text, 1))[12,65535,0]  𝄀
+binary  ¦  binary  ¦  2  ¦  E4BDA0
+select if(false, X'ff', '你a') into @selected_text_into;
+select charset(@selected_text_into), collation(@selected_text_into),
+char_length(@selected_text_into), hex(left(@selected_text_into, 1));
+➤ charset(@selected_text_into)[12,65535,0]  ¦  collation(@selected_text_into)[12,65535,0]  ¦  char_length(@selected_text_into)[-5,64,0]  ¦  hex(left(@selected_text_into, 1))[12,65535,0]  𝄀
+binary  ¦  binary  ¦  2  ¦  E4BDA0
+set @choose_binary = false;
+prepare prepared_set_domain from
+'set @prepared_selected_text = if(?, X''ff'', ''你a'')';
+execute prepared_set_domain using @choose_binary;
+select charset(@prepared_selected_text), collation(@prepared_selected_text),
+char_length(@prepared_selected_text), hex(left(@prepared_selected_text, 1));
+➤ charset(@prepared_selected_text)[12,65535,0]  ¦  collation(@prepared_selected_text)[12,65535,0]  ¦  char_length(@prepared_selected_text)[-5,64,0]  ¦  hex(left(@prepared_selected_text, 1))[12,65535,0]  𝄀
+binary  ¦  binary  ¦  2  ¦  E4BDA0
+deallocate prepare prepared_set_domain;
+set @typed_binary_null = cast(null as binary(8));
+prepare typed_binary_null_stmt from
+'select charset(?), collation(?), charset(left(?, 1)), collation(left(?, 1))';
+execute typed_binary_null_stmt using @typed_binary_null, @typed_binary_null,
+@typed_binary_null, @typed_binary_null;
+➤ charset(?)[12,65535,0]  ¦  collation(?)[12,65535,0]  ¦  charset(left(?, 1))[12,65535,0]  ¦  collation(left(?, 1))[12,65535,0]  𝄀
+binary  ¦  binary  ¦  binary  ¦  binary
+deallocate prepare typed_binary_null_stmt;
 create table binary_function_ctas as
 select left(bin, 1) as binary_left,
 lower(bin) as binary_lower,

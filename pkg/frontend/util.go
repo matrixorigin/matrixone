@@ -201,7 +201,7 @@ func getExprValueWithPrepareMode(
 	preparedExpression bool,
 	isBin ...*bool,
 ) (interface{}, error) {
-	value, _, err := getExprValueWithPrepareMeta(e, ses, execCtx, preparedExpression, nil, nil, isBin...)
+	value, _, err := getExprValueWithPrepareMeta(e, ses, execCtx, preparedExpression, nil, nil, nil, isBin...)
 	return value, err
 }
 
@@ -212,6 +212,7 @@ func getExprValueWithPrepareMeta(
 	preparedExpression bool,
 	materializedResult **plan.Expr,
 	prepareParamKind *vector.PrepareParamKind,
+	runtimeDomain *types.RuntimeStringDomain,
 	isBin ...*bool,
 ) (interface{}, plan.Type, error) {
 	/*
@@ -334,6 +335,9 @@ func getExprValueWithPrepareMeta(
 
 	if len(isBin) > 0 {
 		*isBin[0] = resultVec.GetIsBin()
+	}
+	if runtimeDomain != nil {
+		*runtimeDomain = resultVec.GetRuntimeStringDomainAt(0)
 	}
 	if prepareParamKind != nil {
 		*prepareParamKind = resultVec.GetPrepareParamKind()
@@ -558,6 +562,7 @@ func getPreparedPlanExprValueWithSubqueries(
 	ses *Session,
 	execCtx *ExecCtx,
 	prepareParamKind *vector.PrepareParamKind,
+	runtimeDomain *types.RuntimeStringDomain,
 	isBin *bool,
 ) (interface{}, plan.Type, error) {
 	var subqueries []*tree.Subquery
@@ -567,7 +572,7 @@ func getPreparedPlanExprValueWithSubqueries(
 		var subqueryKind vector.PrepareParamKind
 		var subqueryIsBin bool
 		_, _, err := getExprValueWithPrepareMeta(
-			subquery, ses, execCtx, true, &replacements[i], &subqueryKind, &subqueryIsBin)
+			subquery, ses, execCtx, true, &replacements[i], &subqueryKind, nil, &subqueryIsBin)
 		if err != nil {
 			return nil, plan.Type{}, err
 		}
@@ -582,7 +587,8 @@ func getPreparedPlanExprValueWithSubqueries(
 	if position != len(replacements) {
 		return nil, plan.Type{}, moerr.NewInternalErrorNoCtx("prepared SET expression subquery count mismatch")
 	}
-	return getPreparedPlanExprValueWithMeta(runtimeExpr, ses, execCtx, prepareParamKind, isBin)
+	return getPreparedPlanExprValueWithMeta(
+		runtimeExpr, ses, execCtx, prepareParamKind, runtimeDomain, isBin)
 }
 
 func preparedPlanExprContainsSubquery(expr *plan.Expr) bool {
@@ -599,6 +605,7 @@ func getPreparedPlanExprValueWithMeta(
 	ses *Session,
 	execCtx *ExecCtx,
 	prepareParamKind *vector.PrepareParamKind,
+	runtimeDomain *types.RuntimeStringDomain,
 	isBin *bool,
 ) (interface{}, plan.Type, error) {
 	executor, err := colexec.NewExpressionExecutor(execCtx.proc, expr)
@@ -615,6 +622,9 @@ func getPreparedPlanExprValueWithMeta(
 	}
 	if isBin != nil {
 		*isBin = result.GetIsBin()
+	}
+	if runtimeDomain != nil {
+		*runtimeDomain = result.GetRuntimeStringDomainAt(0)
 	}
 	if prepareParamKind != nil {
 		*prepareParamKind = result.GetPrepareParamKind()

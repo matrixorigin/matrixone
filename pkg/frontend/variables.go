@@ -4339,8 +4339,9 @@ type UserDefinedVar struct {
 	// compatibility, but MySQL fixes their effective type at statement start.
 	// Keeping the assignment type here prevents a numeric sibling operand from
 	// silently narrowing a decimal or floating-point variable.
-	Type             planpb.Type
-	PrepareParamKind vector.PrepareParamKind
+	Type                planpb.Type
+	PrepareParamKind    vector.PrepareParamKind
+	RuntimeStringDomain types.RuntimeStringDomain
 	// Replayable is true only when the proxy can replay the assignment as a
 	// captured raw COM_QUERY SET statement during legacy migration.
 	Replayable bool

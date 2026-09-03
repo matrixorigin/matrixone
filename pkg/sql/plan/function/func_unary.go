@@ -7676,17 +7676,9 @@ func Ltrim(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *pr
 	return opUnaryBytesToBytesByStringDomain(ivecs, result, proc, length, trim, trim, selectList)
 }
 
-func ltrim(xs string) string {
-	return strings.TrimLeft(xs, " ")
-}
-
 func Rtrim(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	trim := func(value []byte) []byte { return bytes.TrimRight(value, " ") }
 	return opUnaryBytesToBytesByStringDomain(ivecs, result, proc, length, trim, trim, selectList)
-}
-
-func rtrim(xs string) string {
-	return strings.TrimRight(xs, " ")
 }
 
 func Reverse(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {

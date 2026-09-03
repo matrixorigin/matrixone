@@ -15,6 +15,7 @@
 package function
 
 import (
+	"bytes"
 	"math"
 	"testing"
 
@@ -482,6 +483,50 @@ func TestByteLikeUsesByteWildcardsAndEscape(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			require.Equal(t, test.want, byteLike(test.pattern, test.value, test.escape, test.enabled))
 		})
+	}
+}
+
+func TestLikeEscapeValidationUsesEffectiveRowDomain(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	mp := proc.Mp()
+	values := makeBinaryStringTestInput(t, proc, types.T_varchar.ToType(), [][]byte{
+		[]byte("a_"), []byte("a_"),
+	}, []types.RuntimeStringDomain{types.RuntimeStringBinary, types.RuntimeStringText})
+	defer values.Free(mp)
+	patterns := makeBinaryStringTestInput(t, proc, types.T_varchar.ToType(), [][]byte{
+		{'a', 0xff, '_'}, {'a', 0xff, '_'},
+	}, nil)
+	defer patterns.Free(mp)
+	escape, err := vector.NewConstBytes(types.T_varbinary.ToType(), []byte{0xff}, 2, mp)
+	require.NoError(t, err)
+	defer escape.Free(mp)
+
+	result := vector.NewFunctionResultWrapper(types.T_bool.ToType(), mp)
+	defer result.Free()
+	require.NoError(t, result.PreExtendAndReset(2))
+	err = newOpBuiltInRegexp().likeFn(
+		[]*vector.Vector{values, patterns, escape}, result, proc, 2, nil)
+	require.ErrorContains(t, err, "Incorrect arguments to ESCAPE",
+		"the text row must reject an invalid UTF-8 escape")
+
+	require.NoError(t, result.PreExtendAndReset(2))
+	require.NoError(t, newOpBuiltInRegexp().likeFn(
+		[]*vector.Vector{values, patterns, escape}, result, proc, 2,
+		&FunctionSelectList{AnyNull: true, SelectList: []bool{true, false}}))
+	require.True(t, vector.MustFixedColNoTypeCheck[bool](result.GetResultVector())[0],
+		"the binary row must accept one arbitrary escape byte")
+}
+
+func BenchmarkByteLikeAdversarialLiteralSuffix(b *testing.B) {
+	value := bytes.Repeat([]byte{'a'}, 64<<10)
+	pattern := append([]byte{'%'}, bytes.Repeat([]byte{'a'}, 64<<10)...)
+	pattern = append(pattern, 'b')
+	b.SetBytes(int64(len(value) + len(pattern)))
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		if byteLike(pattern, value, nil, false) {
+			b.Fatal("unexpected match")
+		}
 	}
 }
 

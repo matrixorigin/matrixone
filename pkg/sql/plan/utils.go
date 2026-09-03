@@ -4758,8 +4758,9 @@ type ParamValue struct {
 	// through a text vector, and their source type is used only after an
 	// arithmetic consumer establishes a numeric domain. Comparisons keep their
 	// existing common-type and numeric-prefix contracts.
-	SourceType    types.Type
-	HasSourceType bool
+	SourceType          types.Type
+	HasSourceType       bool
+	RuntimeStringDomain types.RuntimeStringDomain
 	// RuntimeType is the type advertised by the binary-protocol parameter
 	// binding.  Prepared plans deliberately keep parameter markers as TEXT
 	// while they are cached, so the execute-time copy can use this optional
@@ -5789,6 +5790,7 @@ func replaceParamValsWithSelection(
 		hasRuntimeType := false
 		numericPrefixSource := false
 		retainParamRef := false
+		runtimeStringDomain := types.RuntimeStringInherit
 		if param, ok := val.(ParamValue); ok {
 			val = param.Value
 			if param.MaterializedValue != "" {
@@ -5799,7 +5801,8 @@ func replaceParamValsWithSelection(
 			hasRuntimeType = param.HasRuntimeType
 			numericPrefixSource = param.EnableNumericPrefix
 			retainParamRef = param.RetainParamRef
-			if !param.IsBinaryProtocol && param.HasSourceType && param.Value != nil &&
+			runtimeStringDomain = param.RuntimeStringDomain
+			if !param.IsBinaryProtocol && param.HasSourceType &&
 				types.StaticStringDomain(param.SourceType) != types.StringDomainNone {
 				// SQL EXECUTE USING owns an assignment-time string type. Rebind
 				// domain-sensitive functions with that type instead of flattening a
@@ -5859,6 +5862,14 @@ func replaceParamValsWithSelection(
 				Expr: &plan.Expr_Lit{
 					Lit: pc,
 				},
+			}
+		}
+		if literal := params[i].GetLit(); literal != nil {
+			switch runtimeStringDomain {
+			case types.RuntimeStringText:
+				literal.LiteralForm = plan.StringLiteralForm_STRING_LITERAL_TEXT
+			case types.RuntimeStringBinary:
+				literal.LiteralForm = plan.StringLiteralForm_STRING_LITERAL_BINARY_INTRODUCER
 			}
 		}
 		if (numericPrefixSource || retainParamRef || directRuntimeResult) && params[i].GetLit() != nil {
