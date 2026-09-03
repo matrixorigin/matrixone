@@ -1034,7 +1034,7 @@ func TestCOSMultipartInitRecoversBeforeRequest(t *testing.T) {
 	require.Equal(t, int32(1), state.initCalls.Load())
 	require.True(t, state.completed.Load())
 	require.Equal(t, attemptsBefore+2, testutil.ToFloat64(metric.FSMultipartInitAttemptCounter))
-	require.Equal(t, ambiguousBefore+1, testutil.ToFloat64(metric.FSMultipartInitAmbiguousCounter))
+	require.Equal(t, ambiguousBefore, testutil.ToFloat64(metric.FSMultipartInitAmbiguousCounter))
 	require.Equal(t, recoveredBefore+1, testutil.ToFloat64(metric.FSMultipartInitRecoveredCounter))
 }
 
@@ -1101,6 +1101,49 @@ func TestCOSMultipartInitCancellationCleansOwnedUpload(t *testing.T) {
 	require.Equal(t, cleanupBefore+1, testutil.ToFloat64(metric.FSMultipartInitCleanupCounter))
 }
 
+func TestCOSMultipartInitCancellationOverridesRetryableError(t *testing.T) {
+	server, state := newMockCOSServer(t, 0)
+	defer server.Close()
+	ctx, cancel := context.WithCancel(context.Background())
+	transport := &cosMultipartInitBeforeRequestTransport{
+		base:      server.Client().Transport,
+		err:       errors.New("http: server closed idle connection"),
+		failures:  1,
+		onFailure: cancel,
+	}
+	sdk := newTestCOSClientWithTransport(t, server, transport)
+
+	data := bytes.Repeat([]byte("r"), int(minMultipartPartSize+1))
+	size := int64(len(data))
+	err := sdk.WriteMultipartParallel(ctx, "object", bytes.NewReader(data), &size, nil)
+	require.ErrorIs(t, err, context.Canceled)
+	require.Equal(t, int32(1), transport.initCalls.Load())
+	require.Zero(t, state.initCalls.Load())
+}
+
+func TestCOSMultipartInitDefinitiveErrorOverridesEarlierRetryableError(t *testing.T) {
+	server, state := newMockCOSServer(t, 0)
+	defer server.Close()
+	state.failCreate = true
+	state.failCreateStatus = http.StatusForbidden
+	sentinel := errors.New("http: server closed idle connection")
+	transport := &cosMultipartInitBeforeRequestTransport{
+		base:     server.Client().Transport,
+		err:      sentinel,
+		failures: 1,
+	}
+	sdk := newTestCOSClientWithTransport(t, server, transport)
+
+	data := bytes.Repeat([]byte("r"), int(minMultipartPartSize+1))
+	size := int64(len(data))
+	err := sdk.WriteMultipartParallel(context.Background(), "object", bytes.NewReader(data), &size, nil)
+	require.Error(t, err)
+	require.NotContains(t, err.Error(), sentinel.Error())
+	require.Contains(t, err.Error(), "403")
+	require.Equal(t, int32(2), transport.initCalls.Load())
+	require.Equal(t, int32(1), state.initCalls.Load())
+}
+
 func TestCOSMultipartInitDoesNotRetryAfterRequestCommitted(t *testing.T) {
 	tests := []struct {
 		name string
@@ -1114,6 +1157,7 @@ func TestCOSMultipartInitDoesNotRetryAfterRequestCommitted(t *testing.T) {
 		{name: "server closed connection", err: errors.New("http: server closed idle connection")},
 	}
 
+	ambiguousBefore := testutil.ToFloat64(metric.FSMultipartInitAmbiguousCounter)
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			var initCalls atomic.Int32
@@ -1139,6 +1183,7 @@ func TestCOSMultipartInitDoesNotRetryAfterRequestCommitted(t *testing.T) {
 			require.Equal(t, int32(1), initCalls.Load())
 		})
 	}
+	require.Equal(t, ambiguousBefore+float64(len(tests)), testutil.ToFloat64(metric.FSMultipartInitAmbiguousCounter))
 }
 
 func TestCOSMultipartInitRetriesAreBoundedBeforeRequest(t *testing.T) {

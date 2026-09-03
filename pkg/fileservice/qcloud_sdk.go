@@ -373,7 +373,7 @@ func (a *QCloudSDK) initiateMultipartUpload(
 	ctx, cancel := context.WithTimeoutCause(ctx, qcloudMultipartInitTimeout, context.DeadlineExceeded)
 	defer cancel()
 
-	var firstErr error
+	var lastErr error
 	for attempt := 0; attempt < qcloudMultipartInitMaxAttempts; attempt++ {
 		var wroteRequest atomic.Bool
 		attemptCtx := httptrace.WithClientTrace(ctx, &httptrace.ClientTrace{
@@ -383,17 +383,12 @@ func (a *QCloudSDK) initiateMultipartUpload(
 		})
 
 		metric.FSMultipartInitAttemptCounter.Inc()
-		output, _, createErr := a.client.Object.InitiateMultipartUpload(attemptCtx, key, opt)
+		output, response, createErr := a.client.Object.InitiateMultipartUpload(attemptCtx, key, opt)
 		if createErr == nil && (output == nil || output.UploadID == "") {
 			createErr = moerr.NewInternalErrorNoCtxf("cos initiate multipart upload returned an empty upload id for key %q", key)
 		}
-		if createErr != nil && firstErr == nil {
-			firstErr = createErr
-		}
+		lastErr = createErr
 		if output != nil && output.UploadID != "" {
-			if createErr != nil {
-				metric.FSMultipartInitAmbiguousCounter.Inc()
-			}
 			if ctxErr := ctx.Err(); ctxErr != nil {
 				cleanupCtx, cleanupCancel := context.WithTimeoutCause(
 					context.WithoutCancel(ctx),
@@ -406,30 +401,40 @@ func (a *QCloudSDK) initiateMultipartUpload(
 				} else {
 					metric.FSMultipartInitCleanupCounter.Inc()
 				}
-				if firstErr != nil {
-					return nil, firstErr
-				}
 				return nil, ctxErr
 			}
-			if firstErr != nil {
+			if attempt > 0 || createErr != nil {
 				metric.FSMultipartInitRecoveredCounter.Inc()
 			}
 			return output, nil
 		}
-
-		metric.FSMultipartInitAmbiguousCounter.Inc()
-		if ctx.Err() != nil || wroteRequest.Load() || !IsRetryableError(createErr) ||
-			attempt+1 >= qcloudMultipartInitMaxAttempts {
-			return nil, firstErr
+		commitAmbiguous := response == nil && wroteRequest.Load()
+		if commitAmbiguous {
+			metric.FSMultipartInitAmbiguousCounter.Inc()
+		}
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return nil, ctxErr
+		}
+		if commitAmbiguous {
+			// Without an UploadID, no client can distinguish this request's
+			// server-side state from another CN's upload. Do not list, claim, or
+			// abort candidates here; COS bucket lifecycle must reclaim any orphan.
+			logutil.Warn("cos multipart init is commit-ambiguous; bucket lifecycle must abort incomplete uploads",
+				zap.Error(createErr))
+			return nil, createErr
+		}
+		if !IsRetryableError(createErr) || attempt+1 >= qcloudMultipartInitMaxAttempts {
+			return nil, createErr
 		}
 		// WroteRequest is emitted by net/http once writing starts, including
 		// write failures. Its absence proves this attempt never crossed the
-		// transport write boundary, so retrying cannot duplicate an upload.
+		// transport write boundary. A server error response also proves the
+		// attempt failed, so either outcome is safe to retry.
 		if err := waitQCloudMultipartInitRetry(ctx, attempt); err != nil {
-			return nil, firstErr
+			return nil, err
 		}
 	}
-	return nil, firstErr
+	return nil, lastErr
 }
 
 func (a *QCloudSDK) WriteMultipartParallel(
