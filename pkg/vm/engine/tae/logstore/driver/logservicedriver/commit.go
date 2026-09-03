@@ -15,11 +15,13 @@
 package logservicedriver
 
 import (
+	"errors"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/driver/entry"
+	"github.com/panjf2000/ants/v2"
 	"go.uber.org/zap"
 )
 
@@ -83,7 +85,7 @@ func (d *LogServiceDriver) asyncCommit(committer *groupCommitter) {
 	committer.writer.SetSafeDSN(d.getCommittedDSNWatermark())
 
 	committer.startCommit()
-	if err := d.workers.Submit(func() {
+	if err := d.submitCommit(func() {
 		defer committer.finishCommit()
 		if err2 := committer.Commit(); err2 != nil {
 			committer.setError(err2)
@@ -102,6 +104,32 @@ func (d *LogServiceDriver) asyncCommit(committer *groupCommitter) {
 		// ownership until onWaitCommitted and is handled below.
 		committer.PutbackClient()
 		committer.finishCommit()
+	}
+}
+
+// submitCommit keeps normal traffic from turning the short interval between
+// committer completion and ants worker reuse into a WAL failure. During close,
+// closeC makes the retry bounded so intake can still stop at the driver's
+// deadline.
+func (d *LogServiceDriver) submitCommit(task func()) error {
+	for {
+		err := d.workers.Submit(task)
+		if !errors.Is(err, ants.ErrPoolOverload) {
+			return err
+		}
+
+		timer := time.NewTimer(time.Millisecond)
+		select {
+		case <-d.closeC:
+			if !timer.Stop() {
+				select {
+				case <-timer.C:
+				default:
+				}
+			}
+			return err
+		case <-timer.C:
+		}
 	}
 }
 

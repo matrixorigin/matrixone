@@ -46,36 +46,6 @@ func initTest(t *testing.T) (*logservice.Service, *logservice.ClientConfig) {
 	return service, &ccfg
 }
 
-func TestAsyncCommitSubmissionFailureCompletesWaiterAndReleasesClient(t *testing.T) {
-	service, ccfg := initTest(t)
-	defer service.Close()
-	cfg := NewConfig(
-		"",
-		WithConfigOptClientConfig("", ccfg),
-		WithConfigOptMaxClient(1),
-		WithConfigOptClientBufSize(10*mpool.KB),
-	)
-	d := NewLogServiceDriver(&cfg)
-	blocked := make(chan struct{})
-	require.NoError(t, d.workers.Submit(func() { <-blocked }))
-
-	committer := getCommitter()
-	e := entry.MockEntryWithPayload([]byte("submission failure"))
-	e.DSN = 1
-	committer.AddIntent(e)
-	d.asyncCommit(committer)
-
-	err := e.WaitDone()
-	require.Error(t, err)
-	require.Eventually(t, func() bool {
-		d.clientPool.cond.L.Lock()
-		defer d.clientPool.cond.L.Unlock()
-		return len(d.clientPool.clients) == 1
-	}, time.Second, time.Millisecond)
-	close(blocked)
-	require.NoError(t, d.Close())
-}
-
 func TestClientAcquisitionFailureCompletesWaiterBeforePanic(t *testing.T) {
 	service, ccfg := initTest(t)
 	defer service.Close()
@@ -129,7 +99,7 @@ func (c *blockingBackendClient) Append(ctx context.Context, record logservice.Lo
 	}
 }
 
-func TestCommitSubmissionFailureRunsThroughWaitLoop(t *testing.T) {
+func TestCommitSubmissionWaitsForWorkerHandoff(t *testing.T) {
 	backend := NewMockBackend()
 	started := make(chan struct{})
 	release := make(chan struct{})
@@ -143,8 +113,8 @@ func TestCommitSubmissionFailureRunsThroughWaitLoop(t *testing.T) {
 	cfg := NewConfig("", WithConfigOptClientFactory(factory), WithConfigOptMaxClient(2))
 	d := NewLogServiceDriver(&cfg)
 	// Keep two clients available while constraining the append worker capacity
-	// to one, so the second accepted committer exercises Submit's bounded
-	// failure path instead of blocking in client acquisition.
+	// to one, so the second accepted committer reaches the worker handoff while
+	// the first task is still running.
 	d.workers.Release()
 	d.workers, _ = ants.NewPool(1, ants.WithNonblocking(true))
 
@@ -156,16 +126,69 @@ func TestCommitSubmissionFailureRunsThroughWaitLoop(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("first append did not enter the production worker")
 	}
-	d.onCommitIntents(second)
+	secondSubmitted := make(chan struct{})
+	go func() {
+		d.onCommitIntents(second)
+		close(secondSubmitted)
+	}()
 
-	require.Error(t, second.WaitDone())
-	// The wait loop preserves commit order and is blocked on the first
-	// committer until its append is released, so both accepted committers are
-	// still pending here even though the second waiter already has its error.
 	require.Eventually(t, func() bool { return d.pendingWait.Load() == 2 }, time.Second, time.Millisecond)
+	select {
+	case <-secondSubmitted:
+		t.Fatal("second committer was submitted before the first worker returned")
+	default:
+	}
+
 	close(release)
 	require.NoError(t, first.WaitDone())
+	require.NoError(t, second.WaitDone())
+	select {
+	case <-secondSubmitted:
+	case <-time.After(time.Second):
+		t.Fatal("second committer did not finish worker handoff")
+	}
 	require.Eventually(t, func() bool { return d.pendingWait.Load() == 0 }, time.Second, time.Millisecond)
+	require.NoError(t, d.Close())
+}
+
+func TestSubmitCommitWaitsAfterCommitterCompletion(t *testing.T) {
+	service, ccfg := initTest(t)
+	defer service.Close()
+	cfg := NewConfig("", WithConfigOptClientConfig("", ccfg), WithConfigOptMaxClient(1))
+	d := NewLogServiceDriver(&cfg)
+	d.workers.Release()
+	d.workers, _ = ants.NewPool(1, ants.WithNonblocking(true))
+
+	committer := getCommitter()
+	committer.startCommit()
+	donePublished := make(chan struct{})
+	releaseWorker := make(chan struct{})
+	require.NoError(t, d.workers.Submit(func() {
+		committer.finishCommit()
+		close(donePublished)
+		<-releaseWorker
+	}))
+	<-donePublished
+
+	taskRan := make(chan struct{})
+	submitDone := make(chan error, 1)
+	go func() {
+		submitDone <- d.submitCommit(func() { close(taskRan) })
+	}()
+	select {
+	case err := <-submitDone:
+		t.Fatalf("submit returned before the worker was reusable: %v", err)
+	default:
+	}
+
+	close(releaseWorker)
+	require.NoError(t, <-submitDone)
+	select {
+	case <-taskRan:
+	case <-time.After(time.Second):
+		t.Fatal("submitted task did not run after worker handoff")
+	}
+	putCommitter(committer)
 	require.NoError(t, d.Close())
 }
 
@@ -194,13 +217,23 @@ func TestCloseDeadlineIncludesIntakeAndWorkerDrain(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("first append did not enter the production worker")
 	}
-	d.onCommitIntents(second)
-	require.Error(t, second.WaitDone())
+	secondSubmitted := make(chan struct{})
+	go func() {
+		d.onCommitIntents(second)
+		close(secondSubmitted)
+	}()
+	require.Eventually(t, func() bool { return d.pendingWait.Load() == 2 }, time.Second, time.Millisecond)
 
 	start := time.Now()
 	err := d.Close()
 	require.Error(t, err)
 	require.Less(t, time.Since(start), time.Second)
+	select {
+	case <-secondSubmitted:
+	case <-time.After(time.Second):
+		t.Fatal("close did not unblock worker submission")
+	}
+	require.Error(t, second.WaitDone())
 
 	firstDone := make(chan error, 1)
 	go func() { firstDone <- first.WaitDone() }()

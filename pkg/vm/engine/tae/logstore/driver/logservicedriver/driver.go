@@ -94,6 +94,7 @@ type LogServiceDriver struct {
 
 	ctx    context.Context
 	cancel context.CancelFunc
+	closeC chan struct{}
 
 	workers   *ants.Pool
 	closeOnce sync.Once
@@ -122,6 +123,7 @@ func NewLogServiceDriver(cfg *Config) *LogServiceDriver {
 		commitWaitQueue:     make(chan any, 10000),
 		postCommitQueue:     make(chan any, 10000),
 		workers:             pool,
+		closeC:              make(chan struct{}),
 		closeTimeout:        defaultDriverCloseTimeout,
 		onAppendFailure: func(err error) {
 			logutil.Fatal(
@@ -155,6 +157,7 @@ func (d *LogServiceDriver) GetMaxClient() int {
 
 func (d *LogServiceDriver) Close() error {
 	d.closeOnce.Do(func() {
+		close(d.closeC)
 		// The deadline covers intake, worker submission and waiter delivery.  In
 		// particular, it must begin before SafeQueue.Stop: a callback may be
 		// waiting to submit to a saturated worker pool.
