@@ -1395,15 +1395,42 @@ func (builder *QueryBuilder) scanHasMatchedFullTextFilter(node *plan.Node) bool 
 
 func (builder *QueryBuilder) applyFullTextFiltersForJoinChildren(nodeID int32, joinNode *plan.Node,
 	colRefCnt map[[2]int32]int, idxColMap map[[2]int32]*plan.Expr) (bool, error) {
-	// IN subqueries are flattened into SEMI joins. Filters on either input of
-	// an INNER or SEMI join can be replaced by an equivalent fulltext index
-	// scan without changing the join's row-preservation semantics.
-	if joinNode == nil || (joinNode.JoinType != plan.Node_INNER && joinNode.JoinType != plan.Node_SEMI) {
+	// The per-child rewrite replaces a scan's `WHERE match` with an INNER join to the
+	// fulltext-index result on the pk/doc_id. Fulltext search yields one row per matching
+	// doc, so that join is 1:1 and ROW-EQUIVALENT to the filter it replaces.
+	//
+	// A child is eligible iff rewriting it cannot change the enclosing join's
+	// row-preservation:
+	//   - INNER/SEMI: neither input is row-preserving, so both are eligible.
+	//   - outer joins (LEFT/RIGHT/SINGLE/OUTER): only the NULL-EXTENDING (non-preserved)
+	//     child. That is where a scalar subquery's match lands -- correlated
+	//     `select (select count(*) ... where match(...))` decorrelates to AGG over
+	//     `outer LEFT/SINGLE JOIN docs(match)` with docs as the non-preserved child (#27962).
+	//
+	// Critically, applyIndices runs AFTER determineBuildAndProbeSide + swapJoinChildren, which
+	// can physically swap the children and convert LEFT->RIGHT (IsRightJoin) based on input-size
+	// statistics. So the non-preserved child is NOT a fixed index -- it is whatever
+	// nodeNullExtendsChild reports for the POST-SWAP shape (RIGHT -> child 0; right-swapped
+	// SINGLE -> child 0). Hard-coding child 1 made the fix stats-dependent: a swapped plan left
+	// the match unrewritten and failed with 20105 (#27952). The preserved child is never
+	// null-extending, so it stays untouched (TestFullTextJoinRewriteSkipsOuterJoins).
+	if joinNode == nil {
 		return false, nil
+	}
+	eligible := func(i int) bool {
+		switch joinNode.JoinType {
+		case plan.Node_INNER, plan.Node_SEMI:
+			return true
+		default:
+			return nodeNullExtendsChild(joinNode, i)
+		}
 	}
 
 	changed := false
 	for i, childID := range joinNode.Children {
+		if !eligible(i) {
+			continue
+		}
 		child := builder.qry.Nodes[childID]
 		if child == nil || child.NodeType != plan.Node_TABLE_SCAN {
 			continue
