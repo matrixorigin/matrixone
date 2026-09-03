@@ -129,6 +129,27 @@ func TestSnapshotBoundNeverRefusesCurrentGeneration(t *testing.T) {
 	require.NoError(t, searchAt(c, "__mo_index_secondary_other_table", &countingSearch{}))
 }
 
+// The bound is GLOBAL, not per index table. This is the property that bounds algorithms with
+// no byte-level load gate of their own (HNSW, whose search path mmaps), and it is what closes
+// the "N snapshots of N DIFFERENT indexes" variant of the growth path -- a per-index bound
+// would admit MaxHistoricalIndexes copies for every index in the database.
+func TestSnapshotBoundIsGlobalAcrossIndexes(t *testing.T) {
+	c := newBoundCache(t, 2)
+
+	require.NoError(t, searchAt(c, SnapshotKey("__mo_index_secondary_tbl_a", snapshotTS(100)), &countingSearch{}))
+	require.NoError(t, searchAt(c, SnapshotKey("__mo_index_secondary_tbl_b", snapshotTS(100)), &countingSearch{}))
+
+	third := &countingSearch{}
+	err := searchAt(c, SnapshotKey("__mo_index_secondary_tbl_c", snapshotTS(100)), third)
+	require.Error(t, err, "a THIRD index's snapshot must be refused: the budget spans indexes")
+	require.EqualValues(t, 0, third.loads.Load())
+
+	// Current generations of all three remain admissible -- only snapshots share the budget.
+	for _, tbl := range []string{"__mo_index_secondary_tbl_a", "__mo_index_secondary_tbl_b", "__mo_index_secondary_tbl_c"} {
+		require.NoError(t, searchAt(c, tbl, &countingSearch{}))
+	}
+}
+
 // Repeated queries on the SAME snapshot share one entry and one load, so they consume one
 // unit of the budget -- the bound counts generations, not queries.
 func TestSnapshotBoundSameTSSharesOneLoad(t *testing.T) {
