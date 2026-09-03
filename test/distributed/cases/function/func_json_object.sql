@@ -83,6 +83,22 @@ select id, json_object('js', js) from jot;
 select id, json_object('nullval', null) from jot;
 select id, json_object('vf32', vf32, 'vf64', vf64) from jot;
 
+-- MySQL-compatible typed values retain their JSON representation.
+select json_type(json_extract(json_object('year', cast('2024' as year)), '$.year')), json_contains(json_object('year', cast('2024' as year)), '2024', '$.year'), json_contains(json_object('year', cast('2024' as year)), '"2024"', '$.year');
+select json_unquote(json_extract(json_object('t0', cast('04:05:06' as time(0)), 't6', cast('04:05:06.123456' as time(6))), '$.t0')), json_unquote(json_extract(json_object('t0', cast('04:05:06' as time(0)), 't6', cast('04:05:06.123456' as time(6))), '$.t6'));
+select json_unquote(json_extract(json_object('bin', cast(x'00ff' as binary(2)), 'varbin', cast(x'00ff' as varbinary), 'blob', cast(x'00ff' as blob), 'bit', cast(b'1010' as bit(4))), '$.bin')), json_unquote(json_extract(json_object('bin', cast(x'00ff' as binary(2)), 'varbin', cast(x'00ff' as varbinary), 'blob', cast(x'00ff' as blob), 'bit', cast(b'1010' as bit(4))), '$.varbin')), json_unquote(json_extract(json_object('bin', cast(x'00ff' as binary(2)), 'varbin', cast(x'00ff' as varbinary), 'blob', cast(x'00ff' as blob), 'bit', cast(b'1010' as bit(4))), '$.blob')), json_unquote(json_extract(json_object('bin', cast(x'00ff' as binary(2)), 'varbin', cast(x'00ff' as varbinary), 'blob', cast(x'00ff' as blob), 'bit', cast(b'1010' as bit(4))), '$.bit'));
+select json_extract(json_object('g', st_geomfromtext('POINT(1 2)')), '$.g') = convert(st_geomfromtext('POINT(1 2)'), json);
+set time_zone = '+00:00';
+select json_unquote(json_extract(json_object('ts', ts), '$.ts')) from jot where id = 1;
+set time_zone = '+08:00';
+select json_unquote(json_extract(json_object('ts', ts), '$.ts')) from jot where id = 1;
+
+set @json_object_year = '2024';
+set @json_object_time = '04:05:06.123456';
+prepare json_object_typed from 'select json_object(''year'', cast(? as year), ''time'', cast(? as time(6)))';
+execute json_object_typed using @json_object_year, @json_object_time;
+deallocate prepare json_object_typed;
+
 -- all types combined
 select id, json_object('id', id, 'b', b, 'bi', bi, 'f', f, 'd', d, 'd64', d64, 'd128', d128, 'd256', d256, 'c1', c1, 'vc', vc, 't', t, 'bin', bin, 'vbin', vbin, 'bit', bitcol, 'date', td, 'time', tt, 'dt', tdt, 'ts', ts, 'yr', yr, 'uid', uid, 'js', js, 'vf32', vf32, 'vf64', vf64) from jot;
 
