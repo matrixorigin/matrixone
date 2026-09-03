@@ -422,6 +422,16 @@ func (s *server) isStopping() bool {
 	return stopping
 }
 
+// beginHandler linearizes the transition from an accepted queue item to the
+// handler.  Once it succeeds the item is counted by Drain; if shutdown has
+// already started, the caller must release it instead of entering a handler.
+func (s *server) beginHandler() bool {
+	s.lifecycle.Lock()
+	stopping := s.lifecycle.stopping
+	s.lifecycle.Unlock()
+	return !stopping
+}
+
 func (s *server) finishHandler() {
 	s.activeHandlers.Lock()
 	if s.activeHandlers.active > 0 {
@@ -461,22 +471,28 @@ func (s *server) handleTxnRequest(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case req := <-s.queue:
-			if s.isStopping() {
+			if !s.beginHandler() {
 				s.cleanupExecutor(req)
 				continue
 			}
 			state, waitReady, newHandler := s.getTxnHandleState()
 			switch state {
 			case TxnForwardWait:
-				wait := true
-				for wait {
-					select {
-					case <-ctx.Done():
-						wait = false
-					case <-waitReady:
-						wait = false
-						req.handler = newHandler
+				select {
+				case <-ctx.Done():
+					s.cleanupExecutor(req)
+					continue
+				case <-s.stoppingC:
+					s.cleanupExecutor(req)
+					continue
+				case <-waitReady:
+					// Quiesce and state promotion can race.  A request that
+					// has not reached the forwarding handler is still cancelable.
+					if s.isStopping() {
+						s.cleanupExecutor(req)
+						continue
 					}
+					req.handler = newHandler
 				}
 
 			case TxnLocalHandle:

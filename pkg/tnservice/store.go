@@ -124,6 +124,7 @@ type store struct {
 	stopper             *stopper.Stopper
 	shutdownC           chan struct{}
 	quiesced            atomic.Bool
+	localHandlers       localHandlerLifecycle
 	heartbeatInFlight   atomic.Bool
 	commandPollNeeded   atomic.Bool
 	commandPollWakeup   chan struct{}
@@ -162,6 +163,87 @@ type store struct {
 	queryService queryservice.QueryService
 
 	queryClient client.QueryClient
+}
+
+// localHandlerLifecycle covers requests dispatched through TxnSender's local
+// fast path.  A sender may cache a handler, so checking quiesced only during
+// lookup is insufficient; every invocation must acquire this lease.
+type localHandlerLifecycle struct {
+	sync.Mutex
+	quiesced bool
+	active   int
+	zero     chan struct{}
+}
+
+func (s *store) quiesceLocalHandlers() {
+	s.localHandlers.Lock()
+	if s.localHandlers.zero == nil {
+		s.localHandlers.zero = make(chan struct{})
+	}
+	s.localHandlers.quiesced = true
+	if s.localHandlers.active == 0 {
+		select {
+		case <-s.localHandlers.zero:
+		default:
+			close(s.localHandlers.zero)
+		}
+	}
+	s.localHandlers.Unlock()
+}
+
+func (s *store) acquireLocalHandler() (func(), bool) {
+	s.localHandlers.Lock()
+	defer s.localHandlers.Unlock()
+	if s.localHandlers.zero == nil {
+		s.localHandlers.zero = make(chan struct{})
+	}
+	if s.localHandlers.quiesced {
+		return nil, false
+	}
+	if s.localHandlers.active == 0 {
+		// A closed zero channel belongs to the previous drain epoch.  Keep a
+		// fresh channel for the handler that is about to become active.
+		select {
+		case <-s.localHandlers.zero:
+			s.localHandlers.zero = make(chan struct{})
+		default:
+		}
+	}
+	s.localHandlers.active++
+	return func() { s.releaseLocalHandler() }, true
+}
+
+func (s *store) releaseLocalHandler() {
+	s.localHandlers.Lock()
+	if s.localHandlers.active > 0 {
+		s.localHandlers.active--
+	}
+	if s.localHandlers.quiesced && s.localHandlers.active == 0 {
+		select {
+		case <-s.localHandlers.zero:
+		default:
+			close(s.localHandlers.zero)
+		}
+	}
+	s.localHandlers.Unlock()
+}
+
+func (s *store) drainLocalHandlers(ctx context.Context) error {
+	s.localHandlers.Lock()
+	if s.localHandlers.zero == nil {
+		s.localHandlers.zero = make(chan struct{})
+		if s.localHandlers.active == 0 {
+			close(s.localHandlers.zero)
+		}
+	}
+	zero := s.localHandlers.zero
+	s.localHandlers.Unlock()
+	select {
+	case <-zero:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
 }
 
 // NewService create TN Service
@@ -264,6 +346,7 @@ func (s *store) Close() error {
 	// while already accepted handlers finish. This prevents an in-flight commit
 	// from observing a cancelled replica context before WAL durability settles.
 	s.quiesced.Store(true)
+	s.quiesceLocalHandlers()
 	if s.server != nil {
 		lifecycle, ok := s.server.(txnServerLifecycle)
 		if !ok {
@@ -279,6 +362,12 @@ func (s *store) Close() error {
 			return err
 		}
 	}
+	localDrainCtx, localDrainCancel := context.WithTimeout(context.Background(), 4*time.Minute)
+	err := s.drainLocalHandlers(localDrainCtx)
+	localDrainCancel()
+	if err != nil {
+		return err
+	}
 
 	// No handler can acquire a replica after the drain gate. It is now safe to
 	// cancel replica start contexts and close their storage.
@@ -290,7 +379,7 @@ func (s *store) Close() error {
 	s.stopper.Stop()
 	s.moCluster.Close()
 
-	var err error
+	err = nil
 	if s.queryService != nil {
 		err = errors.Join(err, s.queryService.Close())
 	}
