@@ -18,6 +18,7 @@ package cache
 // exemption for snapshot entries (#27927).
 
 import (
+	"fmt"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -62,11 +63,17 @@ func snapshotTS(physical int64) timestamp.Timestamp {
 // emptied on cleanup.
 func newBoundCache(t *testing.T, limit int) *VectorIndexCache {
 	t.Helper()
+	return newBoundCacheWithTotal(t, limit, 0)
+}
+
+// newBoundCacheWithTotal sets both ceilings; total 0 disables the process-wide one.
+func newBoundCacheWithTotal(t *testing.T, perTable, total int) *VectorIndexCache {
+	t.Helper()
 	c := NewVectorIndexCache()
-	orig := MaxHistoricalIndexes
-	MaxHistoricalIndexes = limit
+	origPer, origTotal := MaxHistoricalIndexesPerTable, MaxHistoricalIndexesTotal
+	MaxHistoricalIndexesPerTable, MaxHistoricalIndexesTotal = perTable, total
 	t.Cleanup(func() {
-		MaxHistoricalIndexes = orig
+		MaxHistoricalIndexesPerTable, MaxHistoricalIndexesTotal = origPer, origTotal
 		c.IndexMap.Range(func(key, _ any) bool {
 			c.IndexMap.Delete(key)
 			return true
@@ -238,56 +245,155 @@ func TestSnapshotKeyRoundTrip(t *testing.T) {
 		"the logical clock must be part of the identity")
 }
 
-// The effective bound comes from the session variable max_snapshot_index_cache.
-func TestSnapshotCacheLimitFromSessionVariable(t *testing.T) {
-	c := newBoundCache(t, 1)
-	const tbl = "__mo_index_secondary_sessvar"
-
+// procWithLimit returns a SqlProcess whose resolver reports v for max_snapshot_index_cache.
+func procWithLimit(t *testing.T, v int64) *sqlexec.SqlProcess {
+	t.Helper()
 	proc := testutil.NewProc(t)
 	t.Cleanup(proc.Free)
-	var resolved atomic.Int64
-	resolved.Store(3)
 	proc.SetResolveVariableFunc(func(name string, _, _ bool) (interface{}, error) {
 		if name == "max_snapshot_index_cache" {
-			return resolved.Load(), nil
+			return v, nil
 		}
 		return nil, nil
 	})
-	sp := &sqlexec.SqlProcess{Proc: proc}
-
-	for _, ts := range []int64{100, 200, 300} {
-		_, _, err := c.Search(sp, SnapshotKey(tbl, snapshotTS(ts)), &countingSearch{}, nil, vectorindex.RuntimeConfig{})
-		require.NoError(t, err, "the session limit of 3 must admit three generations")
-	}
-	_, _, err := c.Search(sp, SnapshotKey(tbl, snapshotTS(400)), &countingSearch{}, nil, vectorindex.RuntimeConfig{})
-	require.Error(t, err, "the fourth must be refused at a session limit of 3")
-	require.Contains(t, err.Error(), "max_snapshot_index_cache")
-	require.Contains(t, err.Error(), "3 of 3", "the message must report the EFFECTIVE limit, not the default")
+	return &sqlexec.SqlProcess{Proc: proc}
 }
 
-// snapshotCacheLimit falls back to MaxHistoricalIndexes when the variable is unreadable.
+// A session value below the server ceiling lowers the per-table budget.
+func TestSnapshotCacheLimitSessionValueLowersBudget(t *testing.T) {
+	c := newBoundCacheWithTotal(t, 4, 0)
+	const tbl = "__mo_index_secondary_lower"
+	sp := procWithLimit(t, 2)
+
+	for _, ts := range []int64{100, 200} {
+		_, _, err := c.Search(sp, SnapshotKey(tbl, snapshotTS(ts)), &countingSearch{}, nil, vectorindex.RuntimeConfig{})
+		require.NoError(t, err)
+	}
+	_, _, err := c.Search(sp, SnapshotKey(tbl, snapshotTS(300)), &countingSearch{}, nil, vectorindex.RuntimeConfig{})
+	require.Error(t, err, "the session value of 2 must bind below the server ceiling of 4")
+	require.Contains(t, err.Error(), "2 of 2")
+}
+
+// A session value above the server ceiling does not raise it.
+func TestSnapshotCacheLimitSessionValueCannotRaiseBudget(t *testing.T) {
+	c := newBoundCacheWithTotal(t, 2, 0)
+	const tbl = "__mo_index_secondary_raise"
+	sp := procWithLimit(t, 1024)
+
+	require.Equal(t, 2, snapshotCacheLimit(sp), "the session value must be clamped to the server ceiling")
+
+	for _, ts := range []int64{100, 200} {
+		_, _, err := c.Search(sp, SnapshotKey(tbl, snapshotTS(ts)), &countingSearch{}, nil, vectorindex.RuntimeConfig{})
+		require.NoError(t, err)
+	}
+	_, _, err := c.Search(sp, SnapshotKey(tbl, snapshotTS(300)), &countingSearch{}, nil, vectorindex.RuntimeConfig{})
+	require.Error(t, err, "a session value of 1024 must not admit past the server ceiling of 2")
+	require.Contains(t, err.Error(), "not raise it above the server limit of 2")
+}
+
+// The process-wide ceiling bounds the total across index tables.
+func TestSnapshotBoundTotalCeilingAcrossManyIndexes(t *testing.T) {
+	c := newBoundCacheWithTotal(t, 4, 5)
+	sp := procWithLimit(t, 1024)
+
+	admitted := 0
+	for i := 0; i < 32; i++ {
+		tbl := fmt.Sprintf("__mo_index_secondary_many_%02d", i)
+		_, _, err := c.Search(sp, SnapshotKey(tbl, snapshotTS(100)), &countingSearch{}, nil, vectorindex.RuntimeConfig{})
+		if err == nil {
+			admitted++
+			continue
+		}
+		require.Contains(t, err.Error(), "this CN already holds")
+	}
+	require.Equal(t, 5, admitted, "32 distinct index tables must not admit past the total ceiling")
+	require.Equal(t, 5, residentSnapshots(c))
+}
+
+// An index under both ceilings still makes progress while another is at its per-table budget.
+func TestSnapshotBoundUnrelatedIndexProgressesUnderCeilings(t *testing.T) {
+	c := newBoundCacheWithTotal(t, 2, 8)
+	const busy = "__mo_index_secondary_busy"
+	const quiet = "__mo_index_secondary_quiet"
+
+	for _, ts := range []int64{100, 200} {
+		require.NoError(t, searchAt(c, SnapshotKey(busy, snapshotTS(ts)), &countingSearch{}))
+	}
+	require.Error(t, searchAt(c, SnapshotKey(busy, snapshotTS(300)), &countingSearch{}),
+		"busy index is at its per-table budget")
+
+	require.NoError(t, searchAt(c, SnapshotKey(quiet, snapshotTS(100)), &countingSearch{}),
+		"an unrelated index must still make progress under the total ceiling")
+	require.NoError(t, searchAt(c, busy, &countingSearch{}), "current generations are never bounded")
+	require.NoError(t, searchAt(c, quiet, &countingSearch{}))
+}
+
+// Admission is serialized, so concurrent misses cannot collectively over-admit past a ceiling.
+// All goroutines are released from one barrier and the scenario is repeated, so the
+// count-then-decide window is hit rather than merely stepped over.
+func TestSnapshotBoundConcurrentAdmissionsRespectCeiling(t *testing.T) {
+	const ceiling = 4
+	for round := 0; round < 16; round++ {
+		c := newBoundCacheWithTotal(t, 64, ceiling)
+		release := make(chan struct{})
+		var wg sync.WaitGroup
+		var admitted atomic.Int64
+		for i := 0; i < 64; i++ {
+			wg.Add(1)
+			go func(i int) {
+				defer wg.Done()
+				key := SnapshotKey(fmt.Sprintf("__mo_index_secondary_conc_%02d", i), snapshotTS(100))
+				<-release
+				if _, _, err := c.Search(nil, key, &countingSearch{}, nil, vectorindex.RuntimeConfig{}); err == nil {
+					admitted.Add(1)
+				}
+			}(i)
+		}
+		close(release)
+		wg.Wait()
+
+		require.LessOrEqual(t, admitted.Load(), int64(ceiling),
+			"round %d: concurrent admissions exceeded the total ceiling", round)
+		require.LessOrEqual(t, residentSnapshots(c), ceiling,
+			"round %d: resident snapshot generations exceeded the total ceiling", round)
+	}
+}
+
+// residentSnapshots counts snapshot keys in the cache.
+func residentSnapshots(c *VectorIndexCache) int {
+	n := 0
+	c.IndexMap.Range(func(key, _ any) bool {
+		if k, ok := key.(string); ok && IsSnapshotKey(k) {
+			n++
+		}
+		return true
+	})
+	return n
+}
+
+// snapshotCacheLimit falls back to MaxHistoricalIndexesPerTable when unreadable.
 func TestSnapshotCacheLimitFallsBackToDefault(t *testing.T) {
 	proc := testutil.NewProc(t)
 	t.Cleanup(proc.Free)
 
-	require.Equal(t, MaxHistoricalIndexes, snapshotCacheLimit(nil), "no sqlproc")
-	require.Equal(t, MaxHistoricalIndexes, snapshotCacheLimit(&sqlexec.SqlProcess{}), "no proc or sqlctx")
+	require.Equal(t, MaxHistoricalIndexesPerTable, snapshotCacheLimit(nil), "no sqlproc")
+	require.Equal(t, MaxHistoricalIndexesPerTable, snapshotCacheLimit(&sqlexec.SqlProcess{}), "no proc or sqlctx")
 
 	proc.SetResolveVariableFunc(func(string, bool, bool) (interface{}, error) {
 		return nil, moerr.NewInternalErrorNoCtx("boom")
 	})
-	require.Equal(t, MaxHistoricalIndexes, snapshotCacheLimit(&sqlexec.SqlProcess{Proc: proc}), "resolver error")
+	require.Equal(t, MaxHistoricalIndexesPerTable, snapshotCacheLimit(&sqlexec.SqlProcess{Proc: proc}), "resolver error")
 
 	proc.SetResolveVariableFunc(func(string, bool, bool) (interface{}, error) { return "not an int", nil })
-	require.Equal(t, MaxHistoricalIndexes, snapshotCacheLimit(&sqlexec.SqlProcess{Proc: proc}), "wrong type")
+	require.Equal(t, MaxHistoricalIndexesPerTable, snapshotCacheLimit(&sqlexec.SqlProcess{Proc: proc}), "wrong type")
 
 	proc.SetResolveVariableFunc(func(string, bool, bool) (interface{}, error) { return int64(0), nil })
-	require.Equal(t, MaxHistoricalIndexes, snapshotCacheLimit(&sqlexec.SqlProcess{Proc: proc}), "non-positive")
+	require.Equal(t, MaxHistoricalIndexesPerTable, snapshotCacheLimit(&sqlexec.SqlProcess{Proc: proc}), "non-positive")
 }
 
 // The package default matches the declared session variable default.
 func TestSnapshotCacheLimitDefaultMatchesDeclaredVariable(t *testing.T) {
-	require.Equal(t, 4, MaxHistoricalIndexes,
+	require.Equal(t, 4, MaxHistoricalIndexesPerTable,
 		"max_snapshot_index_cache is declared with Default int64(4) in pkg/frontend/variables.go")
 	require.True(t, strings.HasPrefix(SnapshotKey("t", snapshotTS(1)), "t@"))
 }

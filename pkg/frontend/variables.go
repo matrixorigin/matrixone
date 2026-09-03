@@ -3825,6 +3825,9 @@ var gSysVarsDefs = map[string]SystemVariable{
 		Type:              InitSystemVariableBoolType("fulltext_bloom_filter_pushdown"),
 		Default:           int8(0),
 	},
+	// Per-index-table budget for resident named-snapshot index generations. Clamped by the
+	// server ceiling cache.MaxHistoricalIndexesPerTable: a session value can lower the budget
+	// but not raise it.
 	"max_snapshot_index_cache": {
 		Name:              "max_snapshot_index_cache",
 		Scope:             ScopeBoth,

@@ -62,10 +62,15 @@ var (
 	VectorIndexCacheTTL time.Duration     = 5 * time.Minute
 	Cache               *VectorIndexCache = NewVectorIndexCache()
 
-	// MaxHistoricalIndexes is the default per-index-table bound on resident named-snapshot
-	// generations. The effective bound is the session variable max_snapshot_index_cache; this
-	// value applies where no session is reachable.
-	MaxHistoricalIndexes = 4
+	// MaxHistoricalIndexesTotal is the process-wide ceiling on resident named-snapshot
+	// generations across all index tables. Owned by the CN, not settable per request. 0
+	// disables the ceiling.
+	MaxHistoricalIndexesTotal = 8
+
+	// MaxHistoricalIndexesPerTable is the ceiling on resident named-snapshot generations of
+	// one index table, and the upper bound on the session variable max_snapshot_index_cache.
+	// 0 disables the per-table limit.
+	MaxHistoricalIndexesPerTable = 4
 )
 
 type retryableLoadError struct {
@@ -201,7 +206,10 @@ type VectorIndexSearch struct {
 	ttlMu       sync.Mutex  // serializes sliding TTL renewal with eviction claims
 	stale       atomic.Bool // set by the IsStale freshness check; reclaimed next sweep. Separate from
 	// ExpireAt so a concurrent Search's extend() (sliding TTL) can't un-mark a stale entry.
-	evicting         atomic.Bool
+	evicting atomic.Bool
+	// admitted is set under VectorIndexCache.admitMu when a snapshot generation passes
+	// admission. Only admitted entries count toward the ceilings.
+	admitted         atomic.Bool
 	invalidationOnce sync.Once
 }
 
@@ -421,6 +429,7 @@ type VectorIndexCache struct {
 	started        atomic.Bool
 	exited         atomic.Bool
 	once           sync.Once
+	admitMu        sync.Mutex  // serializes snapshot-generation admission counting
 	hkTicks        int         // HouseKeeping tick counter, gates the IsStale sweep cadence
 	staleChecking  atomic.Bool // single-flight guard for the async freshness sweep
 }
@@ -502,46 +511,59 @@ func (c *VectorIndexCache) evictEntry(key string, expected *VectorIndexSearch, r
 	return true
 }
 
-// historicalCount returns the number of live named-snapshot generations of exclude's index
-// table, not counting exclude itself.
-func (c *VectorIndexCache) historicalCount(exclude string) int {
+// historicalCounts returns the number of admitted named-snapshot generations in the whole
+// cache and the number belonging to exclude's index table, neither counting exclude itself.
+//
+// Counts admitted entries, not merely published ones: LoadOrStore publishes before admission
+// runs, so counting published entries would let concurrent admissions consume each other's
+// budget and refuse loads that fit.
+func (c *VectorIndexCache) historicalCounts(exclude string) (total, perTable int) {
 	table, _, _ := strings.Cut(exclude, snapshotKeySep)
 	prefix := table + snapshotKeySep
-	n := 0
 	c.IndexMap.Range(func(key, value any) bool {
 		k, ok := key.(string)
-		if !ok || k == exclude || !strings.HasPrefix(k, prefix) {
+		if !ok || k == exclude || !IsSnapshotKey(k) {
 			return true
 		}
 		entry, ok := value.(*VectorIndexSearch)
-		if !ok || entry.evicting.Load() {
+		if !ok || entry.evicting.Load() || !entry.admitted.Load() {
 			return true
 		}
-		if st := entry.Status.Load(); st == STATUS_NOT_INIT || st == STATUS_LOADED {
-			n++
+		if st := entry.Status.Load(); st != STATUS_NOT_INIT && st != STATUS_LOADED {
+			return true
+		}
+		total++
+		if strings.HasPrefix(k, prefix) {
+			perTable++
 		}
 		return true
 	})
-	return n
+	return total, perTable
 }
 
-// snapshotCacheLimit returns the session's max_snapshot_index_cache, or MaxHistoricalIndexes
-// when no session is reachable or the value is unreadable.
+// snapshotCacheLimit returns the per-index-table budget for this request: the session's
+// max_snapshot_index_cache clamped to MaxHistoricalIndexesPerTable. A session value can only
+// lower the budget, never raise it. Returns MaxHistoricalIndexesPerTable when no session is
+// reachable or the value is unreadable.
 func snapshotCacheLimit(sqlproc *sqlexec.SqlProcess) int {
+	cap := MaxHistoricalIndexesPerTable
 	if sqlproc == nil {
-		return MaxHistoricalIndexes
+		return cap
 	}
 	resolve := sqlproc.GetResolveVariableFunc()
 	if resolve == nil {
-		return MaxHistoricalIndexes
+		return cap
 	}
 	val, err := resolve("max_snapshot_index_cache", true, false)
 	if err != nil || val == nil {
-		return MaxHistoricalIndexes
+		return cap
 	}
 	n, ok := val.(int64)
 	if !ok || n <= 0 {
-		return MaxHistoricalIndexes
+		return cap
+	}
+	if cap > 0 && int(n) > cap {
+		return cap
 	}
 	return int(n)
 }
@@ -549,25 +571,35 @@ func snapshotCacheLimit(sqlproc *sqlexec.SqlProcess) int {
 // admitHistorical returns an error when key is a snapshot key and its index table already has
 // the limit's worth of generations resident. Current-generation keys are always admitted.
 // Called after LoadOrStore; the caller discards the entry it stored on error.
-func (c *VectorIndexCache) admitHistorical(sqlproc *sqlexec.SqlProcess, key string) error {
+func (c *VectorIndexCache) admitHistorical(sqlproc *sqlexec.SqlProcess, key string, entry *VectorIndexSearch) error {
 	if !IsSnapshotKey(key) {
 		return nil
 	}
-	limit := snapshotCacheLimit(sqlproc)
-	if limit <= 0 {
-		return nil
+	// Count, decide and reserve under one lock, so concurrent admissions cannot collectively
+	// exceed a ceiling. Not held across the load.
+	c.admitMu.Lock()
+	defer c.admitMu.Unlock()
+
+	total, perTable := c.historicalCounts(key)
+	if MaxHistoricalIndexesTotal > 0 && total >= MaxHistoricalIndexesTotal {
+		return moerr.NewInternalErrorNoCtx(fmt.Sprintf(
+			"this CN already holds %d of %d named-snapshot index generations -- cannot load %q. "+
+				"Each snapshot timestamp loads a separate copy of an index. Retry once one ages "+
+				"out of the cache (TTL %s), or query fewer distinct snapshots concurrently.",
+			total, MaxHistoricalIndexesTotal, key, VectorIndexCacheTTL))
 	}
-	if n := c.historicalCount(key); n >= limit {
+	limit := snapshotCacheLimit(sqlproc)
+	if limit > 0 && perTable >= limit {
 		table, _, _ := strings.Cut(key, snapshotKeySep)
 		return moerr.NewInternalErrorNoCtx(fmt.Sprintf(
 			"index %q already has %d of %d named-snapshot generations cached -- cannot load %q. "+
-				"Each snapshot timestamp loads a SEPARATE copy of the index. The limit is per "+
-				"index table, so other indexes and other tenants are unaffected. Retry once one "+
-				"of this index's generations ages out of the cache (TTL %s), query fewer "+
-				"distinct snapshots of this index concurrently, or raise "+
-				"max_snapshot_index_cache (currently %d).",
-			table, n, limit, key, VectorIndexCacheTTL, limit))
+				"Each snapshot timestamp loads a separate copy of the index. Retry once one of "+
+				"this index's generations ages out of the cache (TTL %s), or query fewer "+
+				"distinct snapshots of this index concurrently. max_snapshot_index_cache can "+
+				"lower this budget but not raise it above the server limit of %d.",
+			table, perTable, limit, key, VectorIndexCacheTTL, MaxHistoricalIndexesPerTable))
 	}
+	entry.admitted.Store(true)
 	return nil
 }
 
@@ -684,7 +716,7 @@ func (c *VectorIndexCache) Search(sqlproc *sqlexec.SqlProcess, key string, newal
 		value, loaded := c.IndexMap.LoadOrStore(key, s)
 		algo := value.(*VectorIndexSearch)
 		if !loaded {
-			if aerr := c.admitHistorical(sqlproc, key); aerr != nil {
+			if aerr := c.admitHistorical(sqlproc, key, algo); aerr != nil {
 				c.discardFailedLoad(key, algo)
 				return nil, nil, aerr
 			}
@@ -729,7 +761,7 @@ func (c *VectorIndexCache) SearchInto(sqlproc *sqlexec.SqlProcess, key string, n
 		value, loaded := c.IndexMap.LoadOrStore(key, s)
 		algo := value.(*VectorIndexSearch)
 		if !loaded {
-			if aerr := c.admitHistorical(sqlproc, key); aerr != nil {
+			if aerr := c.admitHistorical(sqlproc, key, algo); aerr != nil {
 				c.discardFailedLoad(key, algo)
 				return aerr
 			}
