@@ -1515,14 +1515,14 @@ func (exec *CDCTaskExecutor) Cancel() (err error) {
 		exec.setReaderShutdownCompletion(readersDone)
 	} else if readersDone != nil {
 		_, readersStopped = waitForCDCCompletion(readersDone, 10*time.Second)
-
-		// let Start() go
-		select {
-		case exec.holdCh <- 1:
-			// Signal sent successfully
-		default:
-			// Channel full or Start() already exited, ignore
-		}
+	}
+	// let Start() go, including the no-reader path where there is no
+	// completion channel to wait on.
+	select {
+	case exec.holdCh <- 1:
+		// Signal sent successfully
+	default:
+		// Channel full or Start() already exited, ignore
 	}
 
 	// DROP CDC removes metadata before taskservice asynchronously reaches this
