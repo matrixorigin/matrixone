@@ -3541,6 +3541,17 @@ func initJsonUnquoteTestCase() []tcTemp {
 				[]string{"hello", "world", "", `"x"`, `""`},
 				[]bool{false, false, true, false, false}),
 		},
+		{
+			info: "test json unquote preserves non-string SQL text",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(),
+					[]string{"plain text", `{"a":1}`, `[1,2]`, "1e2", `"leading`, `trailing"`, ` "framed" `, "你好"},
+					[]bool{false, false, false, false, false, false, false, false}),
+			},
+			expect: NewFunctionTestResult(types.T_varchar.ToType(), false,
+				[]string{"plain text", `{"a":1}`, `[1,2]`, "1e2", `"leading`, `trailing"`, ` "framed" `, "你好"},
+				[]bool{false, false, false, false, false, false, false, false}),
+		},
 	}
 }
 
@@ -3554,6 +3565,20 @@ func TestJsonUnquote(t *testing.T) {
 			tc.inputs, tc.expect, JsonUnquote)
 		s, info := fcTC.Run()
 		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
+	}
+}
+
+func TestJsonUnquoteRejectsInvalidFramedStringAndUTF8(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	for _, input := range []string{`"\x"`, string([]byte{0xff})} {
+		tc := NewFunctionTestCase(proc,
+			[]FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(), []string{input}, []bool{false}),
+			},
+			NewFunctionTestResult(types.T_varchar.ToType(), false, []string{""}, []bool{false}),
+			JsonUnquote)
+		s, _ := tc.Run()
+		require.False(t, s)
 	}
 }
 
