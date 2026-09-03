@@ -832,4 +832,9 @@ message RefreshSessionAuthRequest {
 message RefreshSessionAuthResponse {
   bool Success = 1;
   bytes AuthString = 2;
+  // AuthenticationFailed means the request reached the canonical catalog
+  // authentication boundary and the client credentials were rejected. It is
+  // distinct from transport, protocol-version, and routine-lifecycle errors,
+  // which may be retried against another cached backend.
+  bool AuthenticationFailed = 3;
 }

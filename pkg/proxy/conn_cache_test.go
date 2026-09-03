@@ -572,6 +572,75 @@ func TestConnCacheRefreshAuthenticationFailureDiscardsGeneration(t *testing.T) {
 	require.Zero(t, cache.Count())
 }
 
+func TestConnCacheRefreshAuthenticationRejectionStopsCompatibleScan(t *testing.T) {
+	var calls atomic.Int64
+	cache := newConnCache(
+		context.Background(), "", runtime.DefaultRuntime().Logger(),
+		withResetSessionFunc(func(ServerConn) ([]byte, error) { return nil, nil }),
+		withAuthConstructor(nil),
+		withRefreshSessionAuthFunc(func(context.Context, ServerConn, clientInfo, []byte, []byte) ([]byte, error) {
+			calls.Add(1)
+			return nil, &cacheAuthRejectedError{cause: fmt.Errorf("check password failed")}
+		}),
+	)
+	defer cache.Close()
+
+	identity := cacheReuseIdentity{tenant: "tenant-a", username: "dump"}
+	for range 2 {
+		local, peer := net.Pipe()
+		defer peer.Close()
+		require.True(t, cache.(identityConnCache).PushWithIdentity(
+			"tenant-a", newMockServerConn(local), identity))
+	}
+
+	sc, err := cache.(*connCache).PopContextWithIdentityError(
+		context.Background(),
+		"tenant-a", 7, nil, nil,
+		clientInfo{labelInfo: labelInfo{Tenant: "tenant-a"}, username: "dump"}, identity,
+	)
+	require.Nil(t, sc)
+	require.ErrorContains(t, err, "check password failed")
+	require.Equal(t, codeAuthFailed, getErrorCode(err))
+	require.Equal(t, int64(1), calls.Load(),
+		"one client login must cause at most one catalog authentication attempt")
+	require.Equal(t, 1, cache.Count(),
+		"a terminal authentication rejection must not drain other compatible entries")
+}
+
+func TestConnCacheReapsExpiredIncompatibleEntriesBeforeLookup(t *testing.T) {
+	cache := newConnCache(
+		context.Background(), "", runtime.DefaultRuntime().Logger(),
+		withResetSessionFunc(func(ServerConn) ([]byte, error) { return nil, nil }),
+		withAuthConstructor(nil),
+		withMaxNumTotal(1),
+		withMaxNumPerTenant(1),
+		withConnTimeout(0),
+	)
+	defer cache.Close()
+
+	cachedLocal, cachedPeer := net.Pipe()
+	defer cachedPeer.Close()
+	cached := newMockServerConn(cachedLocal)
+	cachedIdentity := cacheReuseIdentity{tenant: "tenant-a", username: "cached"}
+	require.True(t, cache.(identityConnCache).PushWithIdentity(
+		"tenant-a", cached, cachedIdentity))
+
+	require.Nil(t, cache.(identityConnCache).PopWithIdentity(
+		"tenant-a", 7, nil, nil,
+		clientInfo{labelInfo: labelInfo{Tenant: "tenant-a"}, username: "other"},
+		cacheReuseIdentity{tenant: "tenant-a", username: "other"},
+	))
+	require.Zero(t, cache.Count(),
+		"an expired incompatible entry must not retain cache capacity")
+
+	freshLocal, freshPeer := net.Pipe()
+	defer freshPeer.Close()
+	require.True(t, cache.(identityConnCache).PushWithIdentity(
+		"tenant-a", newMockServerConn(freshLocal),
+		cacheReuseIdentity{tenant: "tenant-a", username: "other"}))
+	require.Equal(t, 1, cache.Count())
+}
+
 func TestConnCachePopClearsReadDeadlineAfterConnectionID(t *testing.T) {
 	runTestWithNewConnCacheWithAuthConstructor(t, nil, func(cc ConnCache) {
 		local, remote := net.Pipe()

@@ -2029,6 +2029,7 @@ func TestRoutineRefreshSessionAuthReauthenticatesCandidate(t *testing.T) {
 	)
 	require.ErrorContains(t, err, "check password failed")
 	require.False(t, badResp.Success)
+	require.True(t, badResp.AuthenticationFailed)
 	require.Same(t, refreshed, routine.getSession())
 	require.Equal(t, user, protocol.GetUserName())
 	require.Equal(t, newSalt, protocol.GetSalt())

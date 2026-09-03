@@ -1053,6 +1053,7 @@ func (c *clientConn) connectToBackendContext(
 	}
 
 	var sc ServerConn
+	var cachePopErr error
 	// If connCache is enabled, try to get connection from the cache.
 	// NB: Cache reuse is only valid for first login. During connection
 	// migration (prevAdd != ""), we must build a fresh backend connection and
@@ -1069,7 +1070,19 @@ func (c *clientConn) connectToBackendContext(
 		if _, pluginMode := c.router.(*pluginRouter); pluginMode {
 			goto skipConnCache
 		}
-		if contextual, ok := c.connCache.(identityContextConnCache); ok {
+		if contextual, ok := c.connCache.(identityContextConnCacheWithError); ok {
+			cacheCtx, cancel := context.WithTimeout(ctx, defaultTransferTimeout)
+			sc, cachePopErr = contextual.PopContextWithIdentityError(
+				cacheCtx,
+				c.clientInfo.hash,
+				c.connID,
+				c.mysqlProto.GetSalt(),
+				c.mysqlProto.GetAuthResponse(),
+				c.clientInfo,
+				c.cacheReuseIdentity(),
+			)
+			cancel()
+		} else if contextual, ok := c.connCache.(identityContextConnCache); ok {
 			cacheCtx, cancel := context.WithTimeout(ctx, defaultTransferTimeout)
 			sc = contextual.PopContextWithIdentity(
 				cacheCtx,
@@ -1109,6 +1122,9 @@ func (c *clientConn) connectToBackendContext(
 				c.mysqlProto.GetAuthResponse(),
 				c.clientInfo,
 			)
+		}
+		if cachePopErr != nil {
+			return nil, cachePopErr
 		}
 		if sc != nil {
 			// ResetSession clears the cached backend's database; restore the

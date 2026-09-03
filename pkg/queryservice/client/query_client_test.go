@@ -60,4 +60,15 @@ func TestUnwrapResponseError(t *testing.T) {
 	resp2, err = client.unwrapResponseError(resp1)
 	assert.Equal(t, "internal error: test", err.Error())
 	assert.Nil(t, resp2)
+
+	resp1 = &query.Response{
+		CmdMethod: query.CmdMethod_RefreshSessionAuth,
+		Error:     moe,
+		RefreshSessionAuthResponse: &query.RefreshSessionAuthResponse{
+			AuthenticationFailed: true,
+		},
+	}
+	resp2, err = client.unwrapResponseError(resp1)
+	assert.Equal(t, "internal error: test", err.Error())
+	assert.Same(t, resp1, resp2)
 }

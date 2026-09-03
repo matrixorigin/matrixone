@@ -153,6 +153,11 @@ func (c *queryClient) Close() error {
 
 func (c *queryClient) unwrapResponseError(resp *pb.Response) (*pb.Response, error) {
 	if err := resp.UnwrapError(); err != nil {
+		if resp.CmdMethod == pb.CmdMethod_RefreshSessionAuth &&
+			resp.RefreshSessionAuthResponse != nil &&
+			resp.RefreshSessionAuthResponse.AuthenticationFailed {
+			return resp, err
+		}
 		c.pool.ReleaseResponse(resp)
 		return nil, err
 	}

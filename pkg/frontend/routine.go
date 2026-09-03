@@ -18,6 +18,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -906,6 +907,7 @@ func (rt *Routine) refreshSessionAuthWithContext(
 	if resp != nil {
 		resp.Success = false
 		resp.AuthString = nil
+		resp.AuthenticationFailed = false
 	}
 	operationCtx, ok := rt.mc.tryBeginOperationWithContext(ctx)
 	if !ok {
@@ -986,6 +988,7 @@ func (rt *Routine) refreshSessionAuthWithContext(
 	// initializes system variables exactly as a fresh login does.
 	protocol.SetSalt(append([]byte(nil), req.Salt...))
 	if err := protocol.authenticateUser(operationCtx, change.authResponse); err != nil {
+		resp.AuthenticationFailed = needConvertedToAccessDeniedError(strings.ToLower(err.Error()))
 		return err
 	}
 	authString := append([]byte(nil), protocol.GetAuthString()...)

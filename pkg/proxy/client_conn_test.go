@@ -224,6 +224,23 @@ type mockConnCache struct {
 	popFn  func(cacheKey, uint32, []byte, []byte) ServerConn
 }
 
+type terminalAuthConnCache struct {
+	mockConnCache
+	err error
+}
+
+func (m *terminalAuthConnCache) PopContextWithIdentityError(
+	context.Context,
+	cacheKey,
+	uint32,
+	[]byte,
+	[]byte,
+	clientInfo,
+	cacheReuseIdentity,
+) (ServerConn, error) {
+	return nil, m.err
+}
+
 func (m *mockConnCache) Push(key cacheKey, sc ServerConn) bool {
 	if m.pushFn != nil {
 		return m.pushFn(key, sc)
@@ -2855,6 +2872,25 @@ func Test_connectToBackend_PassesClientInfoToContextCache(t *testing.T) {
 	require.Nil(t, sConn)
 	require.Equal(t, 1, cache.popContextCount)
 	require.Equal(t, client, cache.lastClient)
+}
+
+func Test_connectToBackend_PropagatesCacheAuthenticationRejection(t *testing.T) {
+	cacheErr := withCode(
+		&cacheAuthRejectedError{cause: fmt.Errorf("check password failed")},
+		codeAuthFailed,
+	)
+	cConn := &clientConn{
+		ctx:        context.Background(),
+		router:     &routeErrRouter{},
+		mysqlProto: &frontend.MysqlProtocolImpl{},
+		connCache:  &terminalAuthConnCache{err: cacheErr},
+		log:        runtime.DefaultRuntime().Logger(),
+	}
+
+	sConn, err := cConn.connectToBackend("")
+	require.Nil(t, sConn)
+	require.ErrorIs(t, err, cacheErr)
+	require.Equal(t, codeAuthFailed, getErrorCode(err))
 }
 
 func Test_connectToBackend_SkipCacheWhenPluginRouterEnabled(t *testing.T) {
