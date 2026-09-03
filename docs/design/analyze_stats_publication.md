@@ -158,6 +158,13 @@ consumers, temporary tables, views, and non-persistent relation kinds. These
 paths preserve the legacy derived ANALYZE result and do not claim a current
 engine-cache boundary.
 
+The same rule applies when a non-system account's physical scan receives an
+implicit planner account filter (cluster tables and the tenant-filtered system
+tables). Such a statement observes only a subset of a system-owned physical
+table, so it returns the tenant-visible ANALYZE result without refreshing the
+shared statistics key. The planner and publication gate share one account-
+filter classifier rather than maintaining separate table lists.
+
 An ANALYZE whose statement starts with an active transaction also preserves the
 legacy result without global publication. The derived SQL can see the
 transaction workspace, whereas `GlobalStats` is committed-object state. Mixing
@@ -176,7 +183,9 @@ derived ANALYZE query succeeds
   -> subscribe current partition and resolve current table definition
   -> submit visible-object tasks
   -> wait for every task result or rejection
-  -> atomically replace GlobalStats entry and wake engine waiters
+  -> under the catalog table-change read lock, validate the observation's
+     schema version and atomically replace GlobalStats entry
+  -> wake engine waiters
   -> commit engine refresh scheduling metadata
   -> release engine stripe
   -> advance frontend table generation
@@ -188,7 +197,8 @@ derived ANALYZE query succeeds
 There are two related linearization points:
 
 - the engine data publication point is replacement of `statsInfoMap[key]` after
-  all object tasks succeed;
+  all object tasks succeed and while the catalog schema version remains locked
+  against concurrent table changes;
 - the frontend reuse boundary is advancement of the table generation while the
   frontend publication stripe is still held.
 
@@ -439,6 +449,8 @@ checks on affected plan-cache hits.
 | slow generation-N read cannot overwrite N+1 | session-cache race UT |
 | plan build spanning publication is not cached | plan-cache generation UT |
 | physical account/view/temporary/transaction rules | focused frontend table-driven UT and ANALYZE BVT |
+| system account plus two tenant subsets cannot cross-publish cluster-table statistics | multi-session ANALYZE BVT |
+| validate-V1/ALTER-V2/publication cannot publish a stale observation | catalog lock and barrier-based engine UT |
 | no-dependency and 1/4/16-dependency cache-hit cost | allocation/latency benchmarks |
 | SQL-visible existing-session plan changes after ANALYZE | recorded real-service validation and explain-plan assertion |
 

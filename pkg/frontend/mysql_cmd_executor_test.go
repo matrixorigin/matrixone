@@ -5202,6 +5202,33 @@ func TestAnalyzeStatsPublicationRequiresStatementOwnedTransaction(t *testing.T) 
 	}
 }
 
+func TestAnalyzeStatsObservationRequiresCompletePhysicalTableDomain(t *testing.T) {
+	for _, test := range []struct {
+		name         string
+		accountID    uint32
+		databaseName string
+		tableName    string
+		tableType    string
+		want         bool
+	}{
+		{name: "system account cluster table", databaseName: "db", tableName: "events", tableType: catalog.SystemClusterRel, want: true},
+		{name: "tenant ordinary table", accountID: 7, databaseName: "db", tableName: "events", want: true},
+		{name: "tenant cluster table", accountID: 7, databaseName: "db", tableName: "events", tableType: catalog.SystemClusterRel},
+		{name: "tenant mo_database", accountID: 7, databaseName: catalog.MO_CATALOG, tableName: catalog.MO_DATABASE},
+		{name: "tenant mo_tables", accountID: 7, databaseName: catalog.MO_CATALOG, tableName: catalog.MO_TABLES},
+		{name: "tenant mo_columns", accountID: 7, databaseName: catalog.MO_CATALOG, tableName: catalog.MO_COLUMNS},
+		{name: "tenant statement_info", accountID: 7, databaseName: catalog.MO_SYSTEM, tableName: catalog.MO_STATEMENT},
+		{name: "tenant metric", accountID: 7, databaseName: catalog.MO_SYSTEM_METRICS, tableName: catalog.MO_METRIC},
+		{name: "tenant sql_statement_cu", accountID: 7, databaseName: catalog.MO_SYSTEM_METRICS, tableName: catalog.MO_SQL_STMT_CU},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			require.Equal(t, test.want, analyzeStatsObservationCoversPhysicalTable(
+				test.accountID, test.databaseName, test.tableName, test.tableType,
+			))
+		})
+	}
+}
+
 func TestAnalyzeStatsRefreshOptionsUsesTableWideNDV(t *testing.T) {
 	ctx := context.Background()
 	tableDef := &plan0.TableDef{

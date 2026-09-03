@@ -294,6 +294,11 @@ type GlobalStats struct {
 	// with gs.mu held immediately before cond.Wait atomically releases it.
 	beforeStatsWait func(pb.StatsInfoKey, *updateRecord)
 
+	// beforeVersionedStatsPublish is for deterministic schema-publication
+	// tests only. It runs after schema validation while the catalog table-change
+	// read lock is still held and before the statistics cache swap.
+	beforeVersionedStatsPublish func(pb.StatsInfoKey, uint32)
+
 	// afterAutomaticUpdateStarted is for deterministic producer-cancellation
 	// tests only. It runs after worker admission and before refresh admission.
 	afterAutomaticUpdateStarted func(pb.StatsInfoKey, *updateRecord)
@@ -1497,23 +1502,24 @@ func (gs *GlobalStats) refreshStatsWithMode(
 	if cause := gs.statsRefreshCancellationCause(ctx); cause != nil {
 		return nil, cause
 	}
-	// The derived ANALYZE observation belongs to a specific schema snapshot.
-	// Re-resolve immediately before applying it so a concurrent ALTER cannot
-	// silently retarget an old NDV to a replacement column with the same name.
-	optionTableDef := table.TableDef
-	if options.TableRowCount != nil || len(options.ColumnNDVs) > 0 {
-		latest := gs.engine.GetLatestCatalogCache().GetTableById(
-			key.AccId, key.DatabaseID, key.TableID)
-		if latest == nil || latest.TableDef == nil {
-			return nil, moerr.NewInternalErrorNoCtx("table not found while applying statistics observation")
-		}
-		optionTableDef = latest.TableDef
-	}
-	if err := applyStatsRefreshOptions(stats, optionTableDef, options); err != nil {
+	// Validate the observation against the schema snapshot that owned the
+	// collection. Publication below validates that same version again while
+	// holding the catalog change lock through the cache swap.
+	if err := applyStatsRefreshOptions(stats, table.TableDef, options); err != nil {
 		return nil, err
 	}
 
-	if !gs.publishStatsForGeneration(key, generation, stats) {
+	published := false
+	if options.TableRowCount != nil || len(options.ColumnNDVs) > 0 {
+		published, err = gs.publishStatsForGenerationAtTableVersion(
+			key, generation, stats, *options.TableDefVersion)
+		if err != nil {
+			return nil, err
+		}
+	} else {
+		published = gs.publishStatsForGeneration(key, generation, stats)
+	}
+	if !published {
 		if cause := gs.statsRefreshCancellationCause(ctx); cause != nil {
 			return nil, cause
 		}
@@ -1539,7 +1545,11 @@ func applyStatsRefreshOptions(
 	if stats == nil || tableDef == nil {
 		return moerr.NewInternalErrorNoCtx("cannot apply statistics refresh options without table statistics")
 	}
-	if options.TableDefVersion != nil && *options.TableDefVersion != tableDef.Version {
+	if options.TableDefVersion == nil {
+		return moerr.NewInternalErrorNoCtx(
+			"cannot apply a table-wide statistics observation without its schema version")
+	}
+	if *options.TableDefVersion != tableDef.Version {
 		return moerr.NewInternalErrorNoCtxf(
 			"cannot apply statistics observation from table schema version %d to current version %d for table %q",
 			*options.TableDefVersion, tableDef.Version, tableDef.Name)
@@ -1608,26 +1618,92 @@ func (gs *GlobalStats) publishStatsForGeneration(
 	generation *updateRecord,
 	stats *pb.StatsInfo,
 ) bool {
+	gs.mu.Lock()
+	defer gs.mu.Unlock()
+	published := gs.publishStatsForGenerationLocked(key, generation, stats)
+	if published {
+		gs.broadcastStats(key)
+	}
+	if gs.mu.cond != nil {
+		gs.mu.cond.Broadcast()
+	}
+	return published
+}
+
+// publishStatsForGenerationLocked performs only the bounded cache swap. The
+// caller owns gs.mu and is responsible for wakeup and gossip after any outer
+// catalog critical section has ended.
+func (gs *GlobalStats) publishStatsForGenerationLocked(
+	key pb.StatsInfoKey,
+	generation *updateRecord,
+	stats *pb.StatsInfo,
+) bool {
 	if generation == nil || stats == nil {
 		return false
 	}
-	gs.mu.Lock()
-	defer gs.mu.Unlock()
 	if gs.ctx != nil && context.Cause(gs.ctx) != nil {
 		return false
 	}
 	if !gs.statsUpdateGenerationActive(key, generation) {
-		if gs.mu.cond != nil {
-			gs.mu.cond.Broadcast()
-		}
 		return false
 	}
 	gs.mu.statsInfoMap[key] = stats
-	gs.broadcastStats(key)
-	if gs.mu.cond != nil {
-		gs.mu.cond.Broadcast()
-	}
 	return true
+}
+
+// publishStatsForGenerationAtTableVersion makes schema validation and stats
+// publication atomic with catalog table changes. If publication wins the
+// catalog lock it linearizes before ALTER; if ALTER wins, the old observation
+// is rejected and can never be published into the new schema.
+func (gs *GlobalStats) publishStatsForGenerationAtTableVersion(
+	key pb.StatsInfoKey,
+	generation *updateRecord,
+	stats *pb.StatsInfo,
+	expectedVersion uint32,
+) (bool, error) {
+	if gs.engine == nil {
+		return false, moerr.NewInternalErrorNoCtx("cannot validate table schema without an engine")
+	}
+	cc := gs.engine.GetLatestCatalogCache()
+	if cc == nil {
+		return false, moerr.NewInternalErrorNoCtx("cannot validate table schema without a catalog cache")
+	}
+
+	published := false
+	statsLocked := false
+	actualVersion, found, matched := cc.WithTableVersion(
+		key.AccId, key.DatabaseID, key.TableID, expectedVersion,
+		func() {
+			if gs.beforeVersionedStatsPublish != nil {
+				gs.beforeVersionedStatsPublish(key, expectedVersion)
+			}
+			gs.mu.Lock()
+			statsLocked = true
+			published = gs.publishStatsForGenerationLocked(key, generation, stats)
+		},
+	)
+	if statsLocked {
+		// The cache swap above was protected by the catalog lock. Release that
+		// lock before gossip, while retaining gs.mu so cleanup cannot remove
+		// the entry between publication and notification.
+		if published {
+			gs.broadcastStats(key)
+		}
+		if gs.mu.cond != nil {
+			gs.mu.cond.Broadcast()
+		}
+		gs.mu.Unlock()
+	}
+	if !found {
+		return false, moerr.NewInternalErrorNoCtxf(
+			"table %d no longer exists while publishing statistics", key.TableID)
+	}
+	if !matched {
+		return false, moerr.NewInternalErrorNoCtxf(
+			"cannot publish statistics observation from table schema version %d to current version %d for table %d",
+			expectedVersion, actualVersion, key.TableID)
+	}
+	return published, nil
 }
 
 func (gs *GlobalStats) executeStatsUpdate(ctx context.Context, ps *logtailreplay.PartitionState, key pb.StatsInfoKey, stats *pb.StatsInfo) (bool, float64) {

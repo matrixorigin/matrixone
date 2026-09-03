@@ -71,6 +71,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/explain"
 	planfunction "github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/sql/schedule"
+	sqlutil "github.com/matrixorigin/matrixone/pkg/sql/util"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	txnTrace "github.com/matrixorigin/matrixone/pkg/txn/trace"
 	"github.com/matrixorigin/matrixone/pkg/util"
@@ -2176,6 +2177,18 @@ func refreshAnalyzeTableStats(
 	if obj.PubInfo != nil || !analyzeTableOwnsPersistentStats(tableDef) {
 		return nil
 	}
+	// A global physical-table key may only receive an observation over that
+	// table's complete row domain. Non-system tenants see account-filtered
+	// subsets of cluster and selected system tables; publishing those counts or
+	// NDVs would corrupt the shared optimizer statistics for every tenant.
+	if !analyzeStatsObservationCoversPhysicalTable(
+		ses.GetAccountId(), obj.SchemaName, obj.ObjName, tableDef.TableType,
+	) {
+		// The derived result remains valid for the tenant, but even a metadata-
+		// only refresh would mutate the shared physical-table cache from a
+		// statement whose authorization domain is only a tenant subset.
+		return nil
+	}
 	refreshOptions := engine.StatsRefreshOptions{}
 	if observationCanBePublished {
 		refreshOptions, err = analyzeStatsRefreshOptions(ctx, tableDef, cols, observation)
@@ -2200,6 +2213,17 @@ func refreshAnalyzeTableStats(
 		TableName:  obj.ObjName,
 	}
 	return publishAnalyzeTableStats(ses, ctx, key, refreshOptions, refresher)
+}
+
+func analyzeStatsObservationCoversPhysicalTable(
+	accountID uint32,
+	databaseName string,
+	tableName string,
+	tableType string,
+) bool {
+	return sqlutil.BuildTableScanAccountFilter(
+		accountID, databaseName, tableName, tableType,
+	) == nil
 }
 
 type analyzeStatsObservation struct {

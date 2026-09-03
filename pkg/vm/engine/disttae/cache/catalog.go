@@ -367,6 +367,36 @@ func (cc *CatalogCache) GetTableById(aid uint32, databaseId, tblId uint64) *Tabl
 	})
 }
 
+// WithTableVersion runs fn only when the current table identity still has the
+// expected schema version. The table-change read lock remains held through fn,
+// making the version check and the caller's publication one linearizable
+// operation with respect to InsertTable, DeleteTable, and setTableItem.
+//
+// fn must be bounded and must not mutate this CatalogCache.
+func (cc *CatalogCache) WithTableVersion(
+	aid uint32,
+	databaseID uint64,
+	tableID uint64,
+	expectedVersion uint32,
+	fn func(),
+) (actualVersion uint32, found bool, matched bool) {
+	cc.tableChange.RLock()
+	defer cc.tableChange.RUnlock()
+
+	item := cc.GetTableById(aid, databaseID, tableID)
+	if item == nil {
+		return 0, false, false
+	}
+	actualVersion = item.Version
+	if actualVersion != expectedVersion {
+		return actualVersion, true, false
+	}
+	if fn != nil {
+		fn()
+	}
+	return actualVersion, true, true
+}
+
 // GetTableByName's complexicity is O(n), where n is the number of all items of the database.
 func (cc *CatalogCache) GetTableByName(aid uint32, databaseID uint64, tableName string) *TableItem {
 	return cc.scanThrough(aid, databaseID, func(item *TableItem) bool {

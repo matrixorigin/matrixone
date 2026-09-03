@@ -35,6 +35,51 @@ const (
 	Rows = 10
 )
 
+func TestWithTableVersionHoldsCatalogChangeLockThroughCallback(t *testing.T) {
+	cc := NewCatalog()
+	cc.setTableItem(&TableItem{
+		AccountId: 1, DatabaseId: 2, Id: 3, Name: "events", Version: 7,
+	}, true)
+
+	entered := make(chan struct{})
+	release := make(chan struct{})
+	type versionResult struct {
+		actual         uint32
+		found, matched bool
+	}
+	done := make(chan versionResult, 1)
+	go func() {
+		actual, found, matched := cc.WithTableVersion(1, 2, 3, 7, func() {
+			close(entered)
+			<-release
+		})
+		done <- versionResult{actual: actual, found: found, matched: matched}
+	}()
+
+	<-entered
+	require.False(t, cc.tableChange.TryLock(),
+		"catalog writers must not cross the version-check/publication boundary")
+	close(release)
+	result := <-done
+	require.Equal(t, uint32(7), result.actual)
+	require.True(t, result.found)
+	require.True(t, result.matched)
+	require.True(t, cc.tableChange.TryLock())
+	cc.tableChange.Unlock()
+
+	called := false
+	actual, found, matched := cc.WithTableVersion(1, 2, 3, 6, func() { called = true })
+	require.Equal(t, uint32(7), actual)
+	require.True(t, found)
+	require.False(t, matched)
+	require.False(t, called)
+
+	_, found, matched = cc.WithTableVersion(1, 2, 4, 7, func() { called = true })
+	require.False(t, found)
+	require.False(t, matched)
+	require.False(t, called)
+}
+
 func TestGetTableDefRestoresChecksFromSchemaExtra(t *testing.T) {
 	check := &plan.CheckDef{Name: "t_chk_1", Check: &plan.Expr{}}
 	tableDef, _ := getTableDef(&TableItem{

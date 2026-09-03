@@ -82,6 +82,11 @@ analyzed.
    table. Any relation rewrite may filter or transform that table, so its
    derived count and NDVs are not treated as whole-table statistics; the
    existing metadata-only refresh remains the safe fallback.
+10. A non-system account scan for which the planner injects an implicit account
+    filter does not refresh the shared physical-table cache at all. Plan
+    construction and ANALYZE admission use the same filter-classification
+    function, so adding a new tenant-filtered system table cannot silently
+    create a statistics-publication gap.
 
 ## 4. Visibility and concurrency
 
@@ -95,7 +100,11 @@ object metadata slightly newer. This is normal statistics staleness, not a
 mixed uncommitted visibility domain. The physical table ID prevents a
 drop/recreate of the same name from receiving the old observation. The schema
 version carried with that observation also makes a concurrent ALTER or
-drop/re-add of a same-named column fail closed before cache publication.
+drop/re-add of a same-named column fail closed before cache publication. The
+final schema-version comparison and `statsInfoMap` replacement execute while
+the catalog table-change read lock is held. Publication therefore linearizes
+entirely before a concurrent ALTER, or observes the newer version and rejects
+the stale observation; there is no validate-then-ALTER-then-publish window.
 
 The existing frontend and engine table stripes serialize explicit same-table
 publications. Disttae applies the options while holding the exact refresh

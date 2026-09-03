@@ -22,6 +22,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/statsinfo"
@@ -103,7 +105,8 @@ func TestApplyStatsRefreshOptions(t *testing.T) {
 			NdvMap:   map[string]float64{"url": 10, "kind": 7},
 		}
 		err := applyStatsRefreshOptions(stats, tableDef, engine.StatsRefreshOptions{
-			ColumnNDVs: map[string]float64{"url": 1_100},
+			TableDefVersion: uint32Pointer(7),
+			ColumnNDVs:      map[string]float64{"url": 1_100},
 		})
 		require.NoError(t, err)
 		require.Equal(t, float64(1_000), stats.NdvMap["url"])
@@ -118,8 +121,9 @@ func TestApplyStatsRefreshOptions(t *testing.T) {
 			NullCntMap: map[string]uint64{"url": 800, "kind": 3},
 		}
 		err := applyStatsRefreshOptions(stats, tableDef, engine.StatsRefreshOptions{
-			TableRowCount: &rowCount,
-			ColumnNDVs:    map[string]float64{"url": 3},
+			TableDefVersion: uint32Pointer(7),
+			TableRowCount:   &rowCount,
+			ColumnNDVs:      map[string]float64{"url": 3},
 		})
 		require.NoError(t, err)
 		require.Equal(t, rowCount, stats.TableCnt)
@@ -144,8 +148,35 @@ func TestApplyStatsRefreshOptions(t *testing.T) {
 		stats := &pb.StatsInfo{TableCnt: 100}
 		err := applyStatsRefreshOptions(stats, &planpb.TableDef{
 			Name: "broken", Cols: []*planpb.ColDef{nil},
-		}, engine.StatsRefreshOptions{ColumnNDVs: map[string]float64{"kind": 8}})
+		}, engine.StatsRefreshOptions{
+			TableDefVersion: uint32Pointer(0),
+			ColumnNDVs:      map[string]float64{"kind": 8},
+		})
 		require.Error(t, err)
+	})
+
+	t.Run("missing schema version is rejected", func(t *testing.T) {
+		stats := &pb.StatsInfo{TableCnt: 100}
+		err := applyStatsRefreshOptions(stats, tableDef, engine.StatsRefreshOptions{
+			ColumnNDVs: map[string]float64{"kind": 8},
+		})
+		require.ErrorContains(t, err, "without its schema version")
+	})
+
+	t.Run("missing candidate statistics is rejected", func(t *testing.T) {
+		err := applyStatsRefreshOptions(nil, tableDef, engine.StatsRefreshOptions{
+			TableDefVersion: uint32Pointer(7),
+			ColumnNDVs:      map[string]float64{"kind": 8},
+		})
+		require.ErrorContains(t, err, "without table statistics")
+	})
+
+	t.Run("missing table definition is rejected", func(t *testing.T) {
+		err := applyStatsRefreshOptions(&pb.StatsInfo{}, nil, engine.StatsRefreshOptions{
+			TableDefVersion: uint32Pointer(7),
+			ColumnNDVs:      map[string]float64{"kind": 8},
+		})
+		require.ErrorContains(t, err, "without table statistics")
 	})
 
 	for _, test := range []struct {
@@ -166,13 +197,132 @@ func TestApplyStatsRefreshOptions(t *testing.T) {
 		t.Run(test.name+" is rejected atomically", func(t *testing.T) {
 			stats := &pb.StatsInfo{TableCnt: 100, NdvMap: map[string]float64{"kind": 7}}
 			err := applyStatsRefreshOptions(stats, tableDef, engine.StatsRefreshOptions{
-				TableRowCount: test.rowCount,
-				ColumnNDVs:    map[string]float64{"kind": 8, test.column: test.ndv},
+				TableDefVersion: uint32Pointer(7),
+				TableRowCount:   test.rowCount,
+				ColumnNDVs:      map[string]float64{"kind": 8, test.column: test.ndv},
 			})
 			require.Error(t, err)
 			require.Equal(t, map[string]float64{"kind": 7}, stats.NdvMap)
 		})
 	}
+}
+
+func TestVersionedStatsPublicationLinearizesWithCatalogChange(t *testing.T) {
+	keyWithoutOwner := pb.StatsInfoKey{DatabaseID: 1, TableID: 2}
+	published, err := (&GlobalStats{}).publishStatsForGenerationAtTableVersion(
+		keyWithoutOwner, nil, nil, 0,
+	)
+	require.ErrorContains(t, err, "without an engine")
+	require.False(t, published)
+
+	published, err = (&GlobalStats{engine: &Engine{}}).publishStatsForGenerationAtTableVersion(
+		keyWithoutOwner, nil, nil, 0,
+	)
+	require.ErrorContains(t, err, "without a catalog cache")
+	require.False(t, published)
+
+	runTest(t, func(_ context.Context, e *Engine) {
+		const (
+			databaseID = uint64(1000)
+			tableID    = uint64(1001)
+		)
+		insertTable(t, e, databaseID, tableID, "db", "events")
+		key := pb.StatsInfoKey{
+			DatabaseID: databaseID,
+			TableID:    tableID,
+			DbName:     "db",
+			TableName:  "events",
+		}
+		generation := e.globalStats.currentOrCreateUpdateRecord(key)
+
+		alterTuple, err := catalog.GenCreateTableTuple(catalog.Table{
+			AccountId:    key.AccId,
+			DatabaseId:   databaseID,
+			TableId:      tableID,
+			DatabaseName: key.DbName,
+			TableName:    key.TableName,
+			Version:      1,
+		}, e.mp, types.NewPacker())
+		require.NoError(t, err)
+		_, err = fillRandomRowidAndZeroTs(alterTuple, e.mp)
+		require.NoError(t, err)
+		defer alterTuple.Clean(e.mp)
+
+		type validationPoint struct {
+			key     pb.StatsInfoKey
+			version uint32
+		}
+		validated := make(chan validationPoint, 1)
+		allowPublish := make(chan struct{})
+		e.globalStats.beforeVersionedStatsPublish = func(gotKey pb.StatsInfoKey, version uint32) {
+			validated <- validationPoint{key: gotKey, version: version}
+			<-allowPublish
+		}
+
+		type publishResult struct {
+			published bool
+			err       error
+		}
+		firstStats := &pb.StatsInfo{TableCnt: 10}
+		publishDone := make(chan publishResult, 1)
+		go func() {
+			published, err := e.globalStats.publishStatsForGenerationAtTableVersion(
+				key, generation, firstStats, 0,
+			)
+			publishDone <- publishResult{published: published, err: err}
+		}()
+		point := <-validated
+		require.Equal(t, key, point.key)
+		require.Equal(t, uint32(0), point.version)
+
+		alterAttempted := make(chan struct{})
+		alterDone := make(chan struct{})
+		go func() {
+			close(alterAttempted)
+			e.GetLatestCatalogCache().InsertTable(alterTuple)
+			close(alterDone)
+		}()
+		<-alterAttempted
+		select {
+		case <-alterDone:
+			close(allowPublish)
+			t.Fatal("ALTER crossed the schema-validation/publication boundary")
+		default:
+		}
+
+		close(allowPublish)
+		result := <-publishDone
+		require.NoError(t, result.err)
+		require.True(t, result.published)
+		<-alterDone
+		e.globalStats.beforeVersionedStatsPublish = nil
+		require.Equal(t, uint32(1), e.GetLatestCatalogCache().GetTableById(
+			key.AccId, key.DatabaseID, key.TableID).Version)
+
+		staleStats := &pb.StatsInfo{TableCnt: 99}
+		published, err := e.globalStats.publishStatsForGenerationAtTableVersion(
+			key, generation, staleStats, 0,
+		)
+		require.ErrorContains(t, err, "current version 1")
+		require.False(t, published)
+		e.globalStats.mu.Lock()
+		require.Same(t, firstStats, e.globalStats.mu.statsInfoMap[key])
+		e.globalStats.mu.Unlock()
+
+		missingKey := key
+		missingKey.TableID++
+		published, err = e.globalStats.publishStatsForGenerationAtTableVersion(
+			missingKey, generation, staleStats, 0,
+		)
+		require.ErrorContains(t, err, "no longer exists")
+		require.False(t, published)
+
+		published, err = e.globalStats.publishStatsForGenerationAtTableVersion(
+			key, nil, nil, 1,
+		)
+		require.NoError(t, err)
+		require.False(t, published)
+	})
 }
 
 func float64Pointer(value float64) *float64 {
