@@ -644,9 +644,9 @@ func (idx *HnswModel[T]) loadChunk(ctx context.Context,
 	case err = <-error_chan:
 		return false, err
 	case <-procCtx.Done():
-		return false, moerr.NewInternalError(procCtx, "context cancelled")
+		return false, context.Cause(procCtx)
 	case <-ctx.Done():
-		return false, moerr.NewInternalErrorf(ctx, "context cancelled: %v", ctx.Err())
+		return false, context.Cause(ctx)
 	}
 
 	bat := res.Batches[0]
