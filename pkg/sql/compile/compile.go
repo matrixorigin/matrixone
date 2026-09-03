@@ -6971,7 +6971,7 @@ func supportsRemoteMongoUserQuery(service string) bool {
 		return false
 	}
 	protocolVersion, ok := version.(int64)
-	return ok && protocolVersion >= defines.MORPCVersion45
+	return ok && protocolVersion >= defines.MORPCVersion44
 }
 
 // mongoScanUsesV44Payload reports whether a scan uses any field introduced by
@@ -7095,7 +7095,7 @@ func supportsRemoteParquetWholeFileFanout(service string) bool {
 		return false
 	}
 	protocolVersion, ok := version.(int64)
-	return ok && protocolVersion >= defines.MORPCVersion44
+	return ok && protocolVersion >= defines.MORPCVersion45
 }
 
 func (c *Compile) canCompileShuffleGroup(node *plan.Node) bool {
