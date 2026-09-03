@@ -42,7 +42,9 @@ type testProxy struct {
 }
 
 func (p *testProxy) Start() error {
-	p.started = true
+	if p.startErr == nil {
+		p.started = true
+	}
 	return p.startErr
 }
 
@@ -91,6 +93,7 @@ func setLaunchTestHooks(t *testing.T) {
 	oldNewProxy := launchNewProxy
 	oldNewClient := launchNewHAKeeperClient
 	oldSleep := launchSleep
+	oldStartDynamicCNServices := launchStartDynamicCNServices
 	oldLaunchFile := *launchFile
 	oldWithProxy := *withProxy
 	oldCNProxy := cnProxy
@@ -100,10 +103,33 @@ func setLaunchTestHooks(t *testing.T) {
 		launchNewProxy = oldNewProxy
 		launchNewHAKeeperClient = oldNewClient
 		launchSleep = oldSleep
+		launchStartDynamicCNServices = oldStartDynamicCNServices
 		*launchFile = oldLaunchFile
 		*withProxy = oldWithProxy
 		cnProxy = oldCNProxy
 	})
+}
+
+func TestStartDynamicClusterRegistersCleanupBeforeChildStartup(t *testing.T) {
+	setLaunchTestHooks(t)
+	logConfig := writeLaunchTestFile(t, "log.toml", "service-type=\"LOG\"\n")
+	tnConfig := writeLaunchTestFile(t, "tn.toml", "service-type=\"TN\"\n")
+	cfg := &LaunchConfig{
+		LogServiceConfigFiles: []string{logConfig},
+		TNServiceConfigsFiles: []string{tnConfig},
+		Dynamic:               Dynamic{ServiceCount: 2},
+	}
+	launchStartService = func(context.Context, *Config, *stopper.Stopper, chan struct{}) error {
+		return nil
+	}
+	launchStartDynamicCNServices = func(string, Dynamic) error {
+		return errors.New("second dynamic CN failed to start")
+	}
+	serviceLifecycle = newServiceSupervisor()
+	err := startDynamicCluster(context.Background(), cfg, nil, nil)
+	require.Error(t, err)
+	require.NotNil(t, serviceLifecycle.dynamicCNStop,
+		"partial dynamic startup must be owned by supervisor cleanup")
 }
 
 func TestStartClusterUsesConfiguredProxy(t *testing.T) {
@@ -490,6 +516,21 @@ func TestStartDynamicBuiltinProxyOwnership(t *testing.T) {
 	require.NoError(t, startDynamicBuiltinProxy(2, false))
 	require.True(t, proxy.started)
 	require.Equal(t, []string{"127.0.0.1:16001", "127.0.0.1:16002"}, proxy.upstreams)
+}
+
+func TestStartDynamicBuiltinProxyDoesNotPublishFailedProxy(t *testing.T) {
+	setLaunchTestHooks(t)
+	old := &testProxy{}
+	cnProxy = old
+	failed := &testProxy{startErr: errors.New("listen: address already in use")}
+	launchNewProxy = func(string, *zap.Logger) goetty.Proxy { return failed }
+
+	err := startDynamicBuiltinProxy(1, false)
+	require.Error(t, err)
+	require.Same(t, old, cnProxy,
+		"a proxy that failed Start must not replace the published proxy")
+	require.False(t, failed.started,
+		"failed proxy must not be visible to lifecycle cleanup")
 }
 
 func TestV1LaunchWithProxyOwnsLegacyPort(t *testing.T) {

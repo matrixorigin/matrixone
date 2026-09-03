@@ -39,10 +39,11 @@ var (
 )
 
 var (
-	dynamicCNMu              sync.RWMutex
-	dynamicCNServicePIDs     []int
-	dynamicCNServiceCommands [][]string
-	dynamicChaosTester       *chaos.ChaosTester
+	dynamicCNMu                  sync.RWMutex
+	dynamicCNServicePIDs         []int
+	dynamicCNServiceCommands     [][]string
+	dynamicChaosTester           *chaos.ChaosTester
+	launchStartDynamicCNServices = startDynamicCNServices
 )
 
 func startDynamicCluster(
@@ -57,10 +58,13 @@ func startDynamicCluster(
 	if _, err := startTNServiceCluster(ctx, cfg.TNServiceConfigsFiles, stopper, shutdownC); err != nil {
 		return err
 	}
-	if err := startDynamicCNServices("./mo-data", cfg.Dynamic); err != nil {
+	// Register the dynamic-CN cleanup before starting the first child.  A
+	// partial startup must be cleaned by the same ordered supervisor path when
+	// a later child (or the chaos tester) fails to start.
+	serviceLifecycle.setDynamicCNStop(stopAllDynamicCNServicesGracefully)
+	if err := launchStartDynamicCNServices("./mo-data", cfg.Dynamic); err != nil {
 		return err
 	}
-	serviceLifecycle.setDynamicCNStop(stopAllDynamicCNServicesGracefully)
 	if *withProxy {
 		if err := startProxyServiceCluster(ctx, cfg.ProxyServiceConfigsFiles, stopper, shutdownC); err != nil {
 			return err
@@ -86,12 +90,16 @@ func startDynamicBuiltinProxy(serviceCount int, proxyOwns6001 bool) error {
 	if !shouldStartDynamicBuiltinProxy(serviceCount, proxyOwns6001) {
 		return nil
 	}
-	cnProxy = launchNewProxy("0.0.0.0:6001", logutil.GetGlobalLogger().Named("mysql-proxy"))
+	proxy := launchNewProxy("0.0.0.0:6001", logutil.GetGlobalLogger().Named("mysql-proxy"))
 	for i := 0; i < serviceCount; i++ {
 		port := baseFrontendPort + i
-		cnProxy.AddUpStream(fmt.Sprintf("127.0.0.1:%d", port), time.Second*10)
+		proxy.AddUpStream(fmt.Sprintf("127.0.0.1:%d", port), time.Second*10)
 	}
-	return cnProxy.Start()
+	if err := proxy.Start(); err != nil {
+		return err
+	}
+	cnProxy = proxy
+	return nil
 }
 
 func shouldStartDynamicBuiltinProxy(serviceCount int, proxyOwns6001 bool) bool {
