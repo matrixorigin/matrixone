@@ -1404,12 +1404,22 @@ func handleBootstrapErr(ctx context.Context, err error) error {
 	return moerr.AttachCause(ctx, err)
 }
 
-func (s *service) initTxnTraceService() {
-	rt := runtime.ServiceRuntime(s.cfg.UUID)
-	traceDataPath := s.options.traceDataPath
-	if traceDataPath != "" {
-		traceDataPath = filepath.Join(traceDataPath, s.cfg.UUID)
+func resolveTxnTraceDataPath(rootDir, serviceID string) (string, error) {
+	if err := validateCNServiceUUID(serviceID); err != nil {
+		return "", err
 	}
+	if rootDir == "" {
+		return "", nil
+	}
+	return filepath.Join(rootDir, serviceID), nil
+}
+
+func (s *service) initTxnTraceService() {
+	traceDataPath, err := resolveTxnTraceDataPath(s.options.traceDataPath, s.cfg.UUID)
+	if err != nil {
+		panic(err)
+	}
+	rt := runtime.ServiceRuntime(s.cfg.UUID)
 	ts, err := trace.NewService(
 		traceDataPath,
 		s.cfg.UUID,

@@ -819,6 +819,62 @@ func TestInitTxnTraceServiceFailurePreservesSiblingDirectory(t *testing.T) {
 	require.FileExists(t, marker)
 }
 
+func TestInitTxnTraceServiceRejectsUnsafeServiceID(t *testing.T) {
+	testCases := []struct {
+		name string
+		id   string
+	}{
+		{name: "empty", id: ""},
+		{name: "dot", id: "."},
+		{name: "parent", id: ".."},
+		{name: "trace root alias", id: "../trace"},
+		{name: "shared service directory", id: "../shared2"},
+		{name: "dotted child", id: "./cn"},
+		{name: "slash separator", id: "cn/child"},
+		{name: "backslash separator", id: `cn\child`},
+	}
+
+	for _, testCase := range testCases {
+		t.Run(testCase.name, func(t *testing.T) {
+			dataDir := t.TempDir()
+			traceRoot := filepath.Join(dataDir, "trace")
+			targetDir := filepath.Join(traceRoot, testCase.id)
+			targetMarker := filepath.Join(targetDir, "target-owner")
+			siblingMarker := filepath.Join(dataDir, "sibling", "owner")
+			require.NoError(t, os.MkdirAll(targetDir, 0755))
+			require.NoError(t, os.MkdirAll(filepath.Dir(siblingMarker), 0755))
+			require.NoError(t, os.WriteFile(targetMarker, []byte("target"), 0644))
+			require.NoError(t, os.WriteFile(siblingMarker, []byte("sibling"), 0644))
+
+			cfg := &Config{UUID: testCase.id}
+			if testCase.id == "" {
+				require.Panics(t, func() { _ = cfg.Validate() })
+			} else {
+				err := cfg.Validate()
+				require.Error(t, err)
+				require.True(t, moerr.IsMoErrCode(err, moerr.ErrBadConfig))
+			}
+			cfg.Txn.Trace.BufferSize = 8
+			s := &service{cfg: cfg}
+			s.options.traceDataPath = traceRoot
+
+			panicValue := func() (value any) {
+				defer func() {
+					value = recover()
+				}()
+				s.initTxnTraceService()
+				return nil
+			}()
+			require.NotNil(t, panicValue)
+			err, ok := panicValue.(error)
+			require.True(t, ok)
+			require.True(t, moerr.IsMoErrCode(err, moerr.ErrBadConfig))
+			require.FileExists(t, targetMarker)
+			require.FileExists(t, siblingMarker)
+		})
+	}
+}
+
 func TestServiceCloseDrainsAutoIncrementBeforeTxnClient(t *testing.T) {
 	moruntime.RunTest(
 		t.Name(),
