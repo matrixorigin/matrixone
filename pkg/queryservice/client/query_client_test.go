@@ -35,7 +35,7 @@ func TestMongoDBClientRetireRequiresProtocolVersion5(t *testing.T) {
 }
 
 func TestRefreshSessionAuthRequiresCurrentProtocolVersion(t *testing.T) {
-	assert.Equal(t, defines.MORPCVersion43, methodVersions[query.CmdMethod_RefreshSessionAuth])
+	assert.Equal(t, defines.MORPCVersion44, methodVersions[query.CmdMethod_RefreshSessionAuth])
 }
 
 func TestNewCacheClient(t *testing.T) {

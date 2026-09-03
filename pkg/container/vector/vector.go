@@ -9110,11 +9110,11 @@ func (v *Vector) unionBatchContiguousVarlenRange(
 			}
 			v.area = append(v.area, payload...)
 		} else {
-			var err error
-			v.area, err = v.growArea2(mp, payload, baseOff+len(payload))
+			area, err := v.growArea2(mp, payload, baseOff+len(payload))
 			if err != nil {
 				return false, err
 			}
+			v.area = area
 		}
 	}
 
@@ -9163,6 +9163,45 @@ func AppendBytes(vec *Vector, val []byte, isNull bool, mp *mpool.MPool) error {
 		panic(moerr.NewInternalErrorNoCtx("vector append does not have a mpool"))
 	}
 	return appendOneBytes(vec, val, isNull, mp)
+}
+
+func AppendBytesWithWriter(vec *Vector, size int, mp *mpool.MPool, writer func([]byte) error) (err error) {
+	if vec.IsConst() || size < 0 || mp == nil {
+		return moerr.NewInternalErrorNoCtx("invalid direct varlena append")
+	}
+	checkpoint := vec.MakeAppendCheckpoint()
+	defer func() {
+		if err != nil {
+			vec.RollbackAppend(checkpoint, 1)
+		}
+	}()
+	if err = vec.prepareOrdinaryAppendMetadata(1, mp); err != nil {
+		return err
+	}
+	// Admit descriptor capacity before invoking writer. Once writer starts, the
+	// append must not discover another mpool failure after user code has run.
+	if err = extend(vec, 1, mp); err != nil {
+		return err
+	}
+
+	var value types.Varlena
+	if size <= types.VarlenaInlineSize {
+		value[0] = byte(size)
+		if err = writer(value.ByteSlice()); err != nil {
+			return err
+		}
+	} else {
+		if err = vec.PreExtendWithArea(0, size, mp); err != nil {
+			return err
+		}
+		offset := len(vec.area)
+		vec.area = vec.area[:offset+size]
+		if err = writer(vec.area[offset:]); err != nil {
+			return err
+		}
+		value.SetOffsetLen(uint32(offset), uint32(size))
+	}
+	return appendOneOwnedVarlena(vec, value, mp)
 }
 
 func AppendByteJson(vec *Vector, bj bytejson.ByteJson, isNull bool, mp *mpool.MPool) error {

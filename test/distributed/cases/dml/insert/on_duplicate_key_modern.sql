@@ -148,17 +148,28 @@ drop table if exists t_odku_realpk;
 -- ============================================================
 set experimental_fulltext_index = 1;
 drop table if exists t_odku_ft;
-create table t_odku_ft(id int primary key, uk int unique, body text, val int);
-insert into t_odku_ft values (1, 10, 'hello world', 100), (2, 20, 'foo bar', 200);
+create table t_odku_ft(id int primary key, uk int unique, body text, embedding vecf32(3), val int);
+insert into t_odku_ft values (1, 10, 'hello world', '[1,2,3]', 100), (2, 20, 'foo bar', '[4,5,6]', 200);
 create fulltext index ftidx on t_odku_ft(body);
+select id from t_odku_ft where match(body) against('hello') order by id;
 
--- PK conflict on a fulltext-indexed table: modern path, updates row 1
-insert into t_odku_ft values (1, 99, 'changed', 5) on duplicate key update val = val + 1;
+-- PK conflict updates only a non-indexed scalar. The raw vector has no ANN
+-- index, and the unchanged fulltext posting must remain searchable.
+insert into t_odku_ft values (1, 99, 'changed', '[7,8,9]', 5) on duplicate key update val = val + 1;
 select id, uk, val from t_odku_ft order by id;
+select id from t_odku_ft where match(body) against('hello') order by id;
 
 -- unique-key conflict (uk=10 hits row 1): updates the conflicting row, keeps id=1
-insert into t_odku_ft values (3, 10, 'new', 5) on duplicate key update val = val + 1;
+insert into t_odku_ft values (3, 10, 'new', '[1,1,1]', 5) on duplicate key update val = val + 1;
 select id, uk, val from t_odku_ft order by id;
+select id from t_odku_ft where match(body) against('hello') order by id;
+
+-- One statement can contain a conflict and a fresh insert. The conflict must
+-- skip fulltext rebuild while the fresh row still receives postings.
+insert into t_odku_ft values (1, 99, 'ignored', '[9,9,9]', 5), (3, 30, 'fresh token', '[3,3,3]', 300) on duplicate key update val = val + 1;
+select id, uk, val from t_odku_ft order by id;
+select id from t_odku_ft where match(body) against('hello') order by id;
+select id from t_odku_ft where match(body) against('fresh') order by id;
 
 drop table if exists t_odku_ft;
 
@@ -174,6 +185,15 @@ select id, body from t_odku_ft2 order by id;
 select id from t_odku_ft2 where match(body) against('alpha') order by id;
 select id from t_odku_ft2 where match(body) against('hello') order by id;
 select id from t_odku_ft2 where match(body) against('foo') order by id;
+-- Rollback must undo both the base-row update and synchronous posting changes.
+begin;
+insert into t_odku_ft2 values (1, 'ignored') on duplicate key update body = 'rollback token';
+rollback;
+select id from t_odku_ft2 where match(body) against('rollback') order by id;
+select id from t_odku_ft2 where match(body) against('alpha') order by id;
+-- Replaying the same final indexed value remains one visible document.
+insert into t_odku_ft2 values (1, 'ignored') on duplicate key update body = 'alpha beta';
+select id from t_odku_ft2 where match(body) against('alpha') order by id;
 -- no-conflict insert is also indexed
 insert into t_odku_ft2 values (3, 'gamma delta') on duplicate key update body = 'nope';
 select id from t_odku_ft2 where match(body) against('gamma') order by id;

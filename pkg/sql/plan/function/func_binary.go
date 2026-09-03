@@ -33,6 +33,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/matrixorigin/matrixone/pkg/util/fault"
 	"go.uber.org/zap"
@@ -1161,7 +1162,7 @@ func concatWsCheck(overloads []overload, inputs []types.Type) checkResult {
 			}
 			if can, _ := fixedImplicitTypeCast(t, types.T_varchar); can {
 				shouldConvert = true
-				ret[i] = types.T_varchar.ToType()
+				ret[i] = formattedScalarStringType(t)
 			} else {
 				return newCheckResultWithFailure(failedFunctionParametersWrong)
 			}
@@ -5461,7 +5462,7 @@ func eltCheck(overloads []overload, inputs []types.Type) checkResult {
 			}
 			if c == matchByCast {
 				shouldCast = true
-				castTypes[i] = types.T_varchar.ToType()
+				castTypes[i] = formattedScalarStringType(inputs[i])
 			} else {
 				castTypes[i] = inputs[i]
 			}
@@ -5584,7 +5585,7 @@ func makeSetCheck(overloads []overload, inputs []types.Type) checkResult {
 			}
 			if c == matchByCast {
 				shouldCast = true
-				castTypes[i] = types.T_varchar.ToType()
+				castTypes[i] = formattedScalarStringType(inputs[i])
 			} else {
 				castTypes[i] = inputs[i]
 			}
@@ -5792,7 +5793,7 @@ func exportSetCheck(overloads []overload, inputs []types.Type) checkResult {
 			}
 			if c == matchByCast {
 				shouldCast = true
-				castTypes[i] = types.T_varchar.ToType()
+				castTypes[i] = formattedScalarStringType(inputs[i])
 			} else {
 				castTypes[i] = inputs[i]
 			}
@@ -5810,7 +5811,7 @@ func exportSetCheck(overloads []overload, inputs []types.Type) checkResult {
 			}
 			if c == matchByCast {
 				shouldCast = true
-				castTypes[3] = types.T_varchar.ToType()
+				castTypes[3] = formattedScalarStringType(inputs[3])
 			} else {
 				castTypes[3] = inputs[3]
 			}
@@ -5841,6 +5842,46 @@ func exportSetCheck(overloads []overload, inputs []types.Type) checkResult {
 		return newCheckResultWithCast(0, castTypes)
 	}
 	return newCheckResultWithSuccess(0)
+}
+
+func exportSetResultByteLength(bitsValue uint64, on, off, separator []byte, numberOfBits int64, maxResultLen int64) (int, bool) {
+	size := int64(0)
+	add := func(count int64, width int) bool {
+		if count == 0 || width == 0 {
+			return true
+		}
+		if int64(width) > (maxResultLen-size)/count {
+			return false
+		}
+		size += count * int64(width)
+		return true
+	}
+
+	onCount := int64(0)
+	for bit := int64(0); bit < numberOfBits; bit++ {
+		if (bitsValue>>uint(bit))&1 == 1 {
+			onCount++
+		}
+	}
+	if !add(onCount, len(on)) || !add(numberOfBits-onCount, len(off)) ||
+		!add(numberOfBits-1, len(separator)) {
+		return 0, false
+	}
+	return int(size), true
+}
+
+func writeExportSetResult(dst []byte, bitsValue uint64, on, off, separator []byte, numberOfBits int64) {
+	offset := 0
+	for bit := int64(0); bit < numberOfBits; bit++ {
+		if bit > 0 {
+			offset += copy(dst[offset:], separator)
+		}
+		value := off
+		if (bitsValue>>uint(bit))&1 == 1 {
+			value = on
+		}
+		offset += copy(dst[offset:], value)
+	}
 }
 
 // ExportSet: EXPORT_SET(bits, on, off[, separator[, number_of_bits]]) - Returns a string such that for every bit set in the value bits, you get an on string and for every bit not set, you get an off string.
@@ -6028,18 +6069,19 @@ func ExportSet(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc
 			}
 		}
 
-		// Build the result string
-		var parts []string
-		for j := int64(0); j < numberOfBits; j++ {
-			if (bitsUint>>uint(j))&1 == 1 {
-				parts = append(parts, functionUtil.QuickBytesToStr(on))
-			} else {
-				parts = append(parts, functionUtil.QuickBytesToStr(off))
+		separatorBytes := functionUtil.QuickStrToBytes(separator)
+		size, ok := exportSetResultByteLength(bitsUint, on, off, separatorBytes, numberOfBits,
+			maxStringFunctionResultLength(result))
+		if !ok {
+			if err := rs.AppendBytes(nil, true); err != nil {
+				return err
 			}
+			continue
 		}
-
-		resultStr := strings.Join(parts, separator)
-		if err := rs.AppendBytes([]byte(resultStr), false); err != nil {
+		if err := rs.AppendBytesWithWriter(size, func(dst []byte) error {
+			writeExportSetResult(dst, bitsUint, on, off, separatorBytes, numberOfBits)
+			return nil
+		}); err != nil {
 			return err
 		}
 	}
@@ -9103,98 +9145,130 @@ func Replace(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *pro
 	p2 := vector.GenerateFunctionStrParameter(ivecs[1])
 	p3 := vector.GenerateFunctionStrParameter(ivecs[2])
 	rs := vector.MustFunctionResult[types.Varlena](result)
-
 	for i := uint64(0); i < uint64(length); i++ {
-		v1, null1 := p1.GetStrValue(i)
-		v2, null2 := p2.GetStrValue(i)
-		v3, null3 := p3.GetStrValue(i)
-
-		if null1 || null2 || null3 {
+		v1, n1 := p1.GetStrValue(i)
+		v2, n2 := p2.GetStrValue(i)
+		v3, n3 := p3.GetStrValue(i)
+		if n1 || n2 || n3 {
 			if err = rs.AppendBytes(nil, true); err != nil {
 				return err
 			}
-		} else {
-			v1Str := functionUtil.QuickBytesToStr(v1)
-			v2Str := functionUtil.QuickBytesToStr(v2)
-			var res string
-			if v2Str == "" {
-				res = v1Str
-			} else {
-				res = strings.ReplaceAll(v1Str, v2Str, functionUtil.QuickBytesToStr(v3))
-			}
-
-			if err = rs.AppendBytes(functionUtil.QuickStrToBytes(res), false); err != nil {
+			continue
+		}
+		size, ok := replaceResultByteLength(v1, v2, v3, maxStringFunctionResultLength(result))
+		if !ok {
+			if err = rs.AppendBytes(nil, true); err != nil {
 				return err
 			}
+			continue
+		}
+		if err = rs.AppendBytesWithWriter(size, func(dst []byte) error { writeReplaceBytes(dst, v1, v2, v3); return nil }); err != nil {
+			return err
 		}
 	}
 	return nil
 }
-
+func writeReplaceBytes(dst, src, needle, replacement []byte) {
+	if len(needle) == 0 {
+		copy(dst, src)
+		return
+	}
+	at := 0
+	for {
+		idx := bytes.Index(src, needle)
+		if idx < 0 {
+			copy(dst[at:], src)
+			return
+		}
+		at += copy(dst[at:], src[:idx])
+		at += copy(dst[at:], replacement)
+		src = src[idx+len(needle):]
+	}
+}
+func replaceResultByteLength(src, needle, replacement []byte, maxBytes int64) (int, bool) {
+	if len(needle) == 0 {
+		return len(src), int64(len(src)) <= maxBytes
+	}
+	matches := bytes.Count(src, needle)
+	n := int64(len(src)) + int64(matches)*(int64(len(replacement))-int64(len(needle)))
+	if n < 0 || n > maxBytes {
+		return 0, false
+	}
+	return int(n), true
+}
+func insertResultLayout(source []byte, pos, remove int64, replacement []byte) (size, start, end int, raw bool) {
+	count := utf8.RuneCount(source)
+	if pos <= 0 || pos > int64(count) {
+		return len(source), 0, 0, true
+	}
+	start = int(pos - 1)
+	end = count
+	remain := int64(count - start)
+	if remove == 0 {
+		end = start
+	} else if remove > 0 && remove < remain {
+		end = start + int(remove)
+	}
+	size = encodedRuneRangeBytes(source, 0, start) + len(replacement) + encodedRuneRangeBytes(source, end, math.MaxInt)
+	return
+}
+func encodedRuneRangeBytes(v []byte, start, end int) int {
+	n := 0
+	for off, idx := 0, 0; off < len(v); idx++ {
+		r, size := utf8.DecodeRune(v[off:])
+		if idx >= start && idx < end {
+			n += utf8.RuneLen(r)
+		}
+		off += size
+	}
+	return n
+}
+func writeEncodedRuneRange(dst, v []byte, start, end int) int {
+	n := 0
+	for off, idx := 0, 0; off < len(v); idx++ {
+		r, size := utf8.DecodeRune(v[off:])
+		if idx >= start && idx < end {
+			n += utf8.EncodeRune(dst[n:], r)
+		}
+		off += size
+	}
+	return n
+}
 func Insert(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int, selectList *FunctionSelectList) (err error) {
-	p1 := vector.GenerateFunctionStrParameter(ivecs[0])              // str
-	p2 := vector.GenerateFunctionFixedTypeParameter[int64](ivecs[1]) // pos
-	p3 := vector.GenerateFunctionFixedTypeParameter[int64](ivecs[2]) // len
-	p4 := vector.GenerateFunctionStrParameter(ivecs[3])              // newstr
+	p1 := vector.GenerateFunctionStrParameter(ivecs[0])
+	p2 := vector.GenerateFunctionFixedTypeParameter[int64](ivecs[1])
+	p3 := vector.GenerateFunctionFixedTypeParameter[int64](ivecs[2])
+	p4 := vector.GenerateFunctionStrParameter(ivecs[3])
 	rs := vector.MustFunctionResult[types.Varlena](result)
-
 	for i := uint64(0); i < uint64(length); i++ {
-		v1, null1 := p1.GetStrValue(i)
-		v2, null2 := p2.GetValue(i)
-		v3, null3 := p3.GetValue(i)
-		v4, null4 := p4.GetStrValue(i)
-
-		if null1 || null2 || null3 || null4 {
+		v1, n1 := p1.GetStrValue(i)
+		pos, n2 := p2.GetValue(i)
+		remove, n3 := p3.GetValue(i)
+		v4, n4 := p4.GetStrValue(i)
+		if n1 || n2 || n3 || n4 {
 			if err = rs.AppendBytes(nil, true); err != nil {
 				return err
 			}
-		} else {
-			str := functionUtil.QuickBytesToStr(v1)
-			pos := v2
-			replaceLen := v3
-			newstr := functionUtil.QuickBytesToStr(v4)
-
-			// Convert to runes for proper character handling
-			runes := []rune(str)
-			strLen := int64(len(runes))
-
-			// MySQL INSERT behavior:
-			// - If pos <= 0 or pos > string length, return original string
-			// - If replaceLen = 0, insert newstr at position pos without removing anything
-			// - If replaceLen < 0, replace from pos to the end of the string
-			// - Otherwise, replace replaceLen characters starting at pos with newstr
-			// - Position is 1-based
-
-			var result string
-			if pos <= 0 || pos > strLen {
-				// Invalid position, return original string
-				result = str
-			} else if replaceLen == 0 {
-				// Insert without removing
-				posIdx := int(pos - 1) // Convert to 0-based index
-				if posIdx >= len(runes) {
-					result = str + newstr
-				} else {
-					result = string(runes[:posIdx]) + newstr + string(runes[posIdx:])
-				}
-			} else {
-				// Replace replaceLen characters starting at pos
-				posIdx := int(pos - 1) // Convert to 0-based index
-				endIdx := len(runes)
-				remaining := int64(len(runes) - posIdx)
-				if replaceLen > 0 && replaceLen < remaining {
-					endIdx = posIdx + int(replaceLen)
-				}
-				if posIdx >= len(runes) {
-					result = str + newstr
-				} else {
-					result = string(runes[:posIdx]) + newstr + string(runes[endIdx:])
-				}
-			}
-
-			if err = rs.AppendBytes(functionUtil.QuickStrToBytes(result), false); err != nil {
+			continue
+		}
+		size, start, end, raw := insertResultLayout(v1, pos, remove, v4)
+		if int64(size) > maxStringFunctionResultLength(result) {
+			if err = rs.AppendBytes(nil, true); err != nil {
 				return err
 			}
+			continue
+		}
+		if err = rs.AppendBytesWithWriter(size, func(dst []byte) error {
+			if raw {
+				copy(dst, v1)
+				return nil
+			}
+			at := writeEncodedRuneRange(dst, v1, 0, start)
+			at += copy(dst[at:], v4)
+			writeEncodedRuneRange(dst[at:], v1, end, math.MaxInt)
+			return nil
+		}); err != nil {
+			return err
 		}
 	}
 	return nil
