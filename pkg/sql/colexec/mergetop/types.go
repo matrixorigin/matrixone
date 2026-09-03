@@ -286,7 +286,9 @@ func mergeTopTerminalCapacityError(ctx context.Context, err error) error {
 		errors.Is(err, process.ErrExecutionMemoryCeilingMissing) {
 		return err
 	}
-	if mpool.AllocationFailureReasonOf(err) == mpool.AllocationFailureCapacity &&
+	reason := mpool.AllocationFailureReasonOf(err)
+	if (reason == mpool.AllocationFailureCapacity ||
+		reason == mpool.AllocationFailureAllocatorLimit) &&
 		!mpool.IsMPoolCapacityFailure(err) {
 		return moerr.NewResourceExhaustedf(
 			ctx,
