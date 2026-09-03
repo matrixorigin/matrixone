@@ -5236,6 +5236,67 @@ func TestAnalyzeStatsRefreshOptionsUsesTableWideNDV(t *testing.T) {
 	}, options.ColumnNDVs)
 }
 
+func TestAnalyzeUnsignedIntegerResultAcceptsSupportedRepresentations(t *testing.T) {
+	ctx := context.Background()
+	for _, test := range []struct {
+		name  string
+		value any
+		want  uint64
+	}{
+		{name: "uint8", value: uint8(8), want: 8},
+		{name: "uint16", value: uint16(16), want: 16},
+		{name: "uint32", value: uint32(32), want: 32},
+		{name: "uint64", value: uint64(64), want: 64},
+		{name: "uint", value: uint(65), want: 65},
+		{name: "int8", value: int8(7), want: 7},
+		{name: "int16", value: int16(15), want: 15},
+		{name: "int32", value: int32(31), want: 31},
+		{name: "int64", value: int64(63), want: 63},
+		{name: "int", value: int(66), want: 66},
+		{name: "float32 integer", value: float32(67), want: 67},
+		{name: "float64 integer", value: float64(68), want: 68},
+		{name: "decimal string", value: "69", want: 69},
+		{name: "decimal bytes", value: []byte("70"), want: 70},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			result := &MysqlResultSet{}
+			result.AddColumn(&MysqlColumn{})
+			result.AddRow([]any{test.value})
+
+			got, err := analyzeUnsignedIntegerResult(ctx, result, 0, "test value")
+			require.NoError(t, err)
+			require.Equal(t, test.want, got)
+		})
+	}
+}
+
+func TestAnalyzeUnsignedIntegerResultRejectsNegativeSignedRepresentations(t *testing.T) {
+	ctx := context.Background()
+	for _, test := range []struct {
+		name  string
+		value any
+	}{
+		{name: "int8", value: int8(-1)},
+		{name: "int16", value: int16(-1)},
+		{name: "int32", value: int32(-1)},
+		{name: "int64", value: int64(-1)},
+		{name: "int", value: int(-1)},
+		{name: "float32", value: float32(-1)},
+		{name: "float64", value: float64(-1)},
+		{name: "decimal string", value: "-1"},
+		{name: "decimal bytes", value: []byte("-1")},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			result := &MysqlResultSet{}
+			result.AddColumn(&MysqlColumn{})
+			result.AddRow([]any{test.value})
+
+			_, err := analyzeUnsignedIntegerResult(ctx, result, 0, "test value")
+			require.Error(t, err)
+		})
+	}
+}
+
 func TestAnalyzeStatsRefreshOptionsRejectsInvalidResults(t *testing.T) {
 	ctx := context.Background()
 	noRow := &struct{}{}

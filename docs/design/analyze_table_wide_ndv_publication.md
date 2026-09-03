@@ -1,6 +1,8 @@
 # Publish table-wide ANALYZE NDVs to optimizer statistics
 
 - Status: implemented and validated
+- Tracking issue: [matrixorigin/matrixone#27728](https://github.com/matrixorigin/matrixone/issues/27728)
+- Implementation PR: [matrixorigin/matrixone#28067](https://github.com/matrixorigin/matrixone/pull/28067)
 - Builds on: `docs/design/analyze_stats_publication.md`
 - Last updated: 2026-09-03
 
