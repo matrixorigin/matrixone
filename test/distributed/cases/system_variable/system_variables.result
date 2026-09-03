@@ -260,7 +260,7 @@ table_name  ¦  VARCHAR(5000)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 view_definition  ¦  TEXT(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 check_option  ¦  VARCHAR(9)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
 is_updatable  ¦  VARCHAR(3)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
-definer  ¦  VARCHAR(65535)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+definer  ¦  VARCHAR(401)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 security_type  ¦  VARCHAR(7)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
 character_set_client  ¦  VARCHAR(7)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
 collation_connection  ¦  VARCHAR(18)  ¦  NO  ¦    ¦  null  ¦    ¦  
