@@ -194,6 +194,20 @@ type ObjectStorage interface {
 	)
 }
 
+// objectStorageIdentityReader is an optional provider capability used by
+// format-neutral conditional FileService reads. Implementations must preserve
+// expected.VersionID or expected.ETag across every internal retry.
+type objectStorageIdentityReader interface {
+	StatObjectIdentity(ctx context.Context, key string) (ObjectIdentity, error)
+	ReadObjectWithIdentity(
+		ctx context.Context,
+		key string,
+		min *int64,
+		max *int64,
+		expected ObjectIdentity,
+	) (io.ReadCloser, error)
+}
+
 // objectStorageCopier is implemented by object-store SDK adapters that can
 // ask the provider to copy an object without downloading it through CN.
 type objectStorageCopier interface {

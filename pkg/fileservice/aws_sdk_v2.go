@@ -62,6 +62,7 @@ type AwsSDKv2 struct {
 }
 
 var _ objectStorageCopier = new(AwsSDKv2)
+var _ objectStorageIdentityReader = new(AwsSDKv2)
 
 func (a *AwsSDKv2) CopyObject(
 	ctx context.Context,
@@ -324,6 +325,63 @@ func (a *AwsSDKv2) Stat(
 	size = *output.ContentLength
 
 	return
+}
+
+func (a *AwsSDKv2) StatObjectIdentity(ctx context.Context, key string) (ObjectIdentity, error) {
+	output, err := a.headObject(ctx, &s3.HeadObjectInput{
+		Bucket: ptrTo(a.bucket),
+		Key:    ptrTo(key),
+	})
+	if err != nil {
+		return ObjectIdentity{}, a.mapError(err, key)
+	}
+	identity := ObjectIdentity{
+		Size:      aws.ToInt64(output.ContentLength),
+		ETag:      aws.ToString(output.ETag),
+		VersionID: aws.ToString(output.VersionId),
+	}
+	if output.LastModified != nil {
+		identity.LastModified = *output.LastModified
+	}
+	return identity, identity.Validate()
+}
+
+func (a *AwsSDKv2) ReadObjectWithIdentity(
+	ctx context.Context,
+	key string,
+	min *int64,
+	max *int64,
+	expected ObjectIdentity,
+) (io.ReadCloser, error) {
+	if err := expected.Validate(); err != nil {
+		return nil, err
+	}
+	params := &s3.GetObjectInput{Bucket: ptrTo(a.bucket), Key: ptrTo(key)}
+	if expected.VersionID != "" {
+		params.VersionId = ptrTo(expected.VersionID)
+	} else {
+		params.IfMatch = ptrTo(expected.ETag)
+	}
+	r, err := a.getObject(ctx, min, max, params)
+	if err != nil {
+		return nil, mapAWSConditionalReadError(a.mapError(err, key))
+	}
+	if max == nil {
+		return r, nil
+	}
+	return &readCloser{
+		r:         io.LimitReader(r, *max-*min),
+		closeFunc: r.Close,
+	}, nil
+}
+
+func mapAWSConditionalReadError(err error) error {
+	var responseError *http.ResponseError
+	if errors.As(err, &responseError) && responseError.Response != nil &&
+		responseError.Response.StatusCode == 412 {
+		return fmt.Errorf("%w: conditional S3 read failed", ErrObjectChanged)
+	}
+	return err
 }
 
 func (a *AwsSDKv2) Exists(
@@ -974,7 +1032,7 @@ func (a *AwsSDKv2) getObject(ctx context.Context, min *int64, max *int64, params
 			defer LogEvent(ctx, str_retryable_reader_new_reader_end)
 			var rang string
 			if max != nil {
-				rang = fmt.Sprintf("bytes=%d-%d", offset, *max)
+				rang = fmt.Sprintf("bytes=%d-%d", offset, *max-1)
 			} else {
 				rang = fmt.Sprintf("bytes=%d-", offset)
 			}
