@@ -247,7 +247,10 @@ func (r *ArrowReader) Open(param *ExternalParam, proc *process.Process) (_ bool,
 		}
 		metric.ArrowLoadObjectCounter.WithLabelValues(outcome).Inc()
 	}()
-	if r == nil || param == nil || param.Extern == nil || proc == nil {
+	if r == nil || param == nil || param.Extern == nil || param.Fileparam == nil || proc == nil {
+		if param != nil && param.Fileparam == nil {
+			return false, moerr.NewInvalidInputNoCtx("Arrow reader file parameter is missing")
+		}
 		return false, moerr.NewInvalidInputNoCtx("invalid Arrow reader open")
 	}
 	if err := r.Close(); err != nil {

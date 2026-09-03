@@ -537,6 +537,26 @@ func TestIPCStreamReaderAndContainerValidation(t *testing.T) {
 	require.Error(t, err)
 }
 
+func TestIPCStreamRequiresEOSMarker(t *testing.T) {
+	payload, expected := makeIPC(t, ContainerStream)
+	defer releaseRecords(expected)
+	require.GreaterOrEqual(t, len(payload), 4)
+	truncated := payload[:len(payload)-4]
+	fs := writeMemoryFile(t, "arrow-stream-missing-eos", truncated)
+	reader, err := Open(
+		context.Background(), fs, "arrow-stream-missing-eos", int64(len(truncated)), ContainerStream,
+		new(testAdmission), Options{},
+	)
+	require.NoError(t, err)
+	for index := range expected {
+		require.True(t, reader.Next(), "record %d: %v", index, reader.Err())
+		require.True(t, array.RecordEqual(expected[index], reader.RecordBatch()))
+	}
+	require.False(t, reader.Next())
+	require.Error(t, reader.Err(), "a stream without its EOS marker is truncated")
+	require.NoError(t, reader.Close())
+}
+
 func TestIPCFileAndStreamCompression(t *testing.T) {
 	for _, test := range []struct {
 		name      string
