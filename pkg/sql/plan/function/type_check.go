@@ -200,6 +200,9 @@ func fixedTypeMatch(overloads []overload, inputs []types.Type) checkResult {
 			castType[i] = inputs[i]
 		} else {
 			castType[i] = ov.args[i].ToType()
+			if ov.args[i] == types.T_varchar && !inputs[i].Oid.IsMySQLString() {
+				castType[i] = formattedScalarStringType(inputs[i])
+			}
 			SetTargetScaleFromSource(&inputs[i], &castType[i])
 			if isCollatedTextType(inputs[i].Oid) && isCollatedTextType(castType[i].Oid) {
 				// CHAR/VARCHAR/TEXT conversions change the storage shape, not the
@@ -210,6 +213,78 @@ func fixedTypeMatch(overloads []overload, inputs []types.Type) checkResult {
 		}
 	}
 	return newCheckResultWithCast(minIndex, castType)
+}
+
+// stringDomainFixedTypeMatch keeps every MySQL string input in its original
+// OID/width/charset while applying the ordinary fixed matcher to control
+// arguments. Varlena string executors can consume every string family; casting
+// them through VARCHAR would truncate BLOB and erase the binary domain before
+// return-type derivation.
+func stringDomainFixedTypeMatch(overloads []overload, inputs []types.Type) checkResult {
+	return stringDomainFixedTypeMatchIf(overloads, inputs, func(oid types.T) bool { return oid.IsMySQLString() })
+}
+
+// collatedTextFixedTypeMatch preserves CHAR/VARCHAR/TEXT metadata, but leaves
+// binary families on ordinary overload casts until their rune-based consumers
+// have byte-preserving kernels.
+func collatedTextFixedTypeMatch(overloads []overload, inputs []types.Type) checkResult {
+	return stringDomainFixedTypeMatchIf(overloads, inputs, isCollatedTextType)
+}
+
+func stringDomainFixedTypeMatchIf(overloads []overload, inputs []types.Type, preserve func(types.T) bool) checkResult {
+	// Never let an earlier castable overload shadow an exact overload.
+	for overloadIndex, ov := range overloads {
+		if len(ov.args) != len(inputs) {
+			continue
+		}
+		if status, _ := tryToMatch(inputs, ov.args); status == matchDirectly {
+			return newCheckResultWithSuccess(overloadIndex)
+		}
+	}
+
+	minIndex, minCost := -1, math.MaxInt
+	var minTargets []types.Type
+	minNeedsCast := false
+	for overloadIndex, ov := range overloads {
+		if len(ov.args) != len(inputs) {
+			continue
+		}
+		targets := make([]types.Type, len(inputs))
+		needsCast, matched, cost := false, true, 0
+		for i, expected := range ov.args {
+			if expected.IsMySQLString() && preserve(inputs[i].Oid) {
+				targets[i] = inputs[i]
+				continue
+			}
+			status, castCost := tryToMatch([]types.Type{inputs[i]}, []types.T{expected})
+			if status == matchFailed {
+				matched = false
+				break
+			}
+			cost += castCost
+			if status == matchByCast {
+				needsCast = true
+				targets[i] = expected.ToType()
+				if expected == types.T_varchar && !inputs[i].Oid.IsMySQLString() {
+					targets[i] = formattedScalarStringType(inputs[i])
+				}
+				SetTargetScaleFromSource(&inputs[i], &targets[i])
+			} else {
+				targets[i] = inputs[i]
+			}
+		}
+		if matched && cost < minCost {
+			minIndex, minCost = overloadIndex, cost
+			minTargets, minNeedsCast = targets, needsCast
+		}
+	}
+	if minIndex == -1 {
+		return newCheckResultWithFailure(failedFunctionParametersWrong)
+	}
+	if minNeedsCast {
+		return newCheckResultWithCast(minIndex, minTargets)
+	}
+	return newCheckResultWithSuccess(minIndex)
 }
 
 func isCollatedTextType(oid types.T) bool {
