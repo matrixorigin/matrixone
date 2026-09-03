@@ -79,7 +79,8 @@ const (
 	MORPCVersion41     int64 = 41 // cycle-safe bounded current-role closure table function
 	MORPCVersion42     int64 = 42 // transactional SQL-task child cleanup
 	MORPCVersion43     int64 = 43 // scalar-predicate runtime-filter terminal states
-	MORPCLatestVersion       = MORPCVersion43
+	MORPCVersion44     int64 = 44 // validated MongoDB explicit-query scan payload
+	MORPCLatestVersion       = MORPCVersion44
 )
 
 // DefaultLockWaitTimeoutSeconds is shared by the frontend default and by

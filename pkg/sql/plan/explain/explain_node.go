@@ -22,9 +22,11 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	sqlmongodb "github.com/matrixorigin/matrixone/pkg/sql/mongodb"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
 	"github.com/matrixorigin/matrixone/pkg/vm/message"
@@ -49,6 +51,137 @@ func NewNodeDescriptionImpl(node *plan.Node) *NodeDescribeImpl {
 const TableScan = "Table Scan"
 const IndexTableScan = "Index Table Scan"
 const ExternalScan = "External Scan"
+
+// mongodbExplainOperation also recognizes the planner-form selector. The
+// execution compiler later removes __mo_query predicates and stores validated
+// BSON on MongoScan, but EXPLAIN renders the logical plan before that step. It
+// must still report the operation without rendering the source query text.
+func mongodbExplainOperation(ctx context.Context, node *plan.Node, scan *plan.MongoScan) (string, string) {
+	operation := "find"
+	digest := "none"
+	if scan.UserQueryKind != 0 {
+		switch scan.UserQueryKind {
+		case int32(sqlmongodb.UserQueryFilter):
+			operation = "find-filter"
+		case int32(sqlmongodb.UserQueryPipeline):
+			operation = "aggregate"
+		default:
+			operation = "invalid"
+		}
+		digest = scan.UserQueryDigest
+	} else if source, found, valid := mongodbExplainQuerySource(node); found {
+		// The compiler can evaluate constant expressions that EXPLAIN cannot
+		// reduce without a process. Keep those shapes redacted and describe them
+		// generically instead of incorrectly calling a supported constant invalid.
+		operation = "explicit"
+		if valid {
+			query, err := sqlmongodb.ParseUserQuery(ctx, source)
+			if err == nil {
+				switch query.Kind {
+				case sqlmongodb.UserQueryFilter:
+					operation = "find-filter"
+				case sqlmongodb.UserQueryPipeline:
+					operation = "aggregate"
+				}
+				digest = query.Digest
+			}
+		}
+	}
+	if len(digest) > 12 {
+		digest = digest[:12]
+	}
+	return operation, digest
+}
+
+// mongodbExplainQuerySource extracts the one simple constant equality form
+// accepted by the MongoDB MVP. Any expression that references the synthetic
+// column remains sensitive even when its shape is invalid, so callers redact
+// it independently of this return value.
+func mongodbExplainQuerySource(node *plan.Node) (source string, found, valid bool) {
+	count := 0
+	for _, filter := range node.FilterList {
+		if !mongodbExplainExprUsesQueryColumn(node, filter) {
+			continue
+		}
+		found = true
+		function := filter.GetF()
+		if function == nil || function.Func == nil || function.Func.ObjName != "=" || len(function.Args) != 2 {
+			continue
+		}
+		for index := range 2 {
+			if !mongodbExplainExprUsesQueryColumn(node, function.Args[index]) {
+				continue
+			}
+			literal := function.Args[1-index].GetLit()
+			if literal == nil {
+				continue
+			}
+			if _, ok := literal.Value.(*plan.Literal_Sval); !ok {
+				continue
+			}
+			count++
+			source = literal.GetSval()
+			break
+		}
+	}
+	return source, found, count == 1
+}
+
+func mongodbExplainExprUsesQueryColumn(node *plan.Node, expr *plan.Expr) bool {
+	if node == nil || expr == nil {
+		return false
+	}
+	switch typed := expr.Expr.(type) {
+	case *plan.Expr_Col:
+		if typed.Col == nil {
+			return false
+		}
+		position := int(typed.Col.ColPos)
+		if node.TableDef != nil && position >= 0 && position < len(node.TableDef.Cols) {
+			return catalog.IsForeignQueryCol(node.TableDef.Cols[position].Name, node.TableDef.Cols[position].ColId)
+		}
+		// Planner expressions normally retain a valid ColPos. Preserve the
+		// conservative name-only fallback for incomplete diagnostic-only nodes,
+		// but never mistake a valid legacy column with this name for the
+		// synthetic carrier.
+		return strings.EqualFold(typed.Col.Name, catalog.ExternalQuery)
+	case *plan.Expr_F:
+		if typed.F == nil {
+			return false
+		}
+		for _, argument := range typed.F.Args {
+			if mongodbExplainExprUsesQueryColumn(node, argument) {
+				return true
+			}
+		}
+	case *plan.Expr_List:
+		if typed.List == nil {
+			return false
+		}
+		for _, item := range typed.List.List {
+			if mongodbExplainExprUsesQueryColumn(node, item) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func explainFilterList(node *plan.Node) []*plan.Expr {
+	if node == nil {
+		return nil
+	}
+	if node.ExternScan == nil || node.ExternScan.MongodbScan == nil {
+		return node.FilterList
+	}
+	filters := make([]*plan.Expr, 0, len(node.FilterList))
+	for _, filter := range node.FilterList {
+		if !mongodbExplainExprUsesQueryColumn(node, filter) {
+			filters = append(filters, filter)
+		}
+	}
+	return filters
+}
 
 func (ndesc *NodeDescribeImpl) GetNodeBasicInfo(ctx context.Context, options *ExplainOptions) (string, error) {
 	buf := bytes.NewBuffer(make([]byte, 0, 400))
@@ -335,8 +468,12 @@ func (ndesc *NodeDescribeImpl) GetExtraInfo(ctx context.Context, options *Explai
 			}
 		}
 		countPredicate(scan.PushedPredicate)
-		lines = append(lines, fmt.Sprintf("MongoDB Scan: table=%d columns=%d pushed=%d residual=%s",
-			scan.TableId, len(scan.Columns), pushed, scan.ResidualFilterDigest))
+		operation, queryDigest := mongodbExplainOperation(ctx, ndesc.Node, scan)
+		if scan.EmptyResult {
+			operation = "empty"
+		}
+		lines = append(lines, fmt.Sprintf("MongoDB Scan: table=%d columns=%d pushed=%d residual=%s operation=%s query_digest=%s",
+			scan.TableId, len(scan.Columns), pushed, scan.ResidualFilterDigest, operation, queryDigest))
 	}
 
 	// Get Sort list info
@@ -455,7 +592,9 @@ func (ndesc *NodeDescribeImpl) GetExtraInfo(ctx context.Context, options *Explai
 		if err != nil {
 			return nil, err
 		}
-		lines = append(lines, filterInfo)
+		if filterInfo != "" {
+			lines = append(lines, filterInfo)
+		}
 	}
 
 	// Get Block Filter list info
@@ -805,6 +944,10 @@ func (ndesc *NodeDescribeImpl) GetDedupJoinCtxInfo(ctx context.Context, options 
 	return lines, nil
 }
 func (ndesc *NodeDescribeImpl) GetFilterConditionInfo(ctx context.Context, options *ExplainOptions) (string, error) {
+	filters := explainFilterList(ndesc.Node)
+	if len(filters) == 0 {
+		return "", nil
+	}
 	buf := bytes.NewBuffer(make([]byte, 0, 512))
 	if ndesc.Node.NodeType == plan.Node_ASSERT {
 		buf.WriteString("Assert Cond: ")
@@ -813,7 +956,7 @@ func (ndesc *NodeDescribeImpl) GetFilterConditionInfo(ctx context.Context, optio
 	}
 	if options.Format == EXPLAIN_FORMAT_TEXT {
 		first := true
-		for _, v := range ndesc.Node.FilterList {
+		for _, v := range filters {
 			if !first {
 				buf.WriteString(", ")
 			}
@@ -825,7 +968,7 @@ func (ndesc *NodeDescribeImpl) GetFilterConditionInfo(ctx context.Context, optio
 		}
 
 		// Add optimization hints for cast expressions
-		hint := getDecimalCastOptimizationHint(ndesc.Node.FilterList)
+		hint := getDecimalCastOptimizationHint(filters)
 		if hint != "" {
 			buf.WriteString("\n              ")
 			buf.WriteString(hint)
