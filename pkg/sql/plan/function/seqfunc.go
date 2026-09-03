@@ -18,6 +18,7 @@ import (
 	"fmt"
 	"math"
 	"strconv"
+	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -85,6 +86,9 @@ func Nextval(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *
 
 func nextval(tblname string, proc *process.Process, e engine.Engine, txn client.TxnOperator) (string, error) {
 	db := proc.GetSessionInfo().Database
+	if qualifiedDB, qualifiedTable, ok := strings.Cut(tblname, "."); ok && qualifiedDB != "" && qualifiedTable != "" {
+		db, tblname = qualifiedDB, qualifiedTable
+	}
 	dbHandler, err := e.Database(proc.Ctx, db, txn)
 	if err != nil {
 		return "", err

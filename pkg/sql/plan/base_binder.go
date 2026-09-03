@@ -2838,6 +2838,17 @@ func (b *baseBinder) bindFuncExpr(astExpr *tree.FuncExpr, depth int32, isRoot bo
 		return nil, moerr.NewNYIf(b.GetContext(), "function expr '%v'", astExpr)
 	}
 	funcName := funcRef.ColName()
+	// NEXTVAL resolves its sequence at execution time. Preserve the database
+	// scope in the plan so an expanded view keeps using the view owner's
+	// database instead of the caller's current database.
+	if strings.EqualFold(funcName, "nextval") && b.ctx != nil && b.ctx.defaultDatabase != "" && len(astExpr.Exprs) == 1 {
+		if arg, ok := astExpr.Exprs[0].(*tree.NumVal); ok && arg.ValType == tree.P_char && !strings.Contains(arg.String(), ".") {
+			qualified := b.ctx.defaultDatabase + "." + arg.String()
+			copyExpr := *astExpr
+			copyExpr.Exprs = []tree.Expr{tree.NewNumVal(qualified, qualified, false, tree.P_char)}
+			astExpr = &copyExpr
+		}
+	}
 	if strings.EqualFold(funcName, "grouping") {
 		return b.bindGroupingFuncExpr(astExpr)
 	}
