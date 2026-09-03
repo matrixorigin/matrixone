@@ -19,9 +19,6 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
-	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
@@ -968,17 +965,14 @@ func (builder *QueryBuilder) applyIndicesForSortUsingIvfflat(nodeID int32, vecCt
 		probeSpec := MakeRuntimeFilter(rfTag, false, 0, probeExpr, false)
 		probeSpec.UseMembershipFilter = true
 		requiredDomain := candidateNodeID == tableFuncNodeID
-		distributedDomain := requiredDomain && !asyncIndex && types.T(ivfCtx.pkType.Id).IsInteger() &&
-			bucketExpandStep == 0 &&
-			(builder.optimizerHints == nil || builder.optimizerHints.forceOneCN == 0) &&
-			localProtocolEnablesDistributedVectorDomain(
-				builder.compCtx.GetProcess().GetService())
 		buildSpec.RequiredVectorSearchDomain = requiredDomain
 		probeSpec.RequiredVectorSearchDomain = requiredDomain
 		tableFuncNode.RuntimeFilterProbeList = []*plan.RuntimeFilterSpec{probeSpec}
-		// Older deployments and execution shapes that cannot seal one scalar domain
-		// before reader construction retain the established coordinator-local path.
-		tableFuncNode.Stats.ForceOneCN = !distributedDomain
+		// A required PRE domain is complete only on the coordinator message board.
+		// Keep its scan on that CN until representative multi-CN performance and
+		// memory evidence justifies a separate distributed rollout. Local reader
+		// DOP still partitions the admitted domain into disjoint storage shards.
+		tableFuncNode.Stats.ForceOneCN = true
 
 		// The original scan was guarded during the recursive planner pass so the vector rewrite
 		// could see the raw table scan shape. Once the IVF subtree is constructed, we can
@@ -1124,16 +1118,6 @@ func (builder *QueryBuilder) applyIndicesForSortUsingIvfflat(nodeID int32, vecCt
 	}
 	remap := vectorRemapForChildProject(childNode, orderExpr, orderByScore[0].Expr, scanRemap)
 	return builder.spliceVectorRewrite(vecCtx, nodeID, sortByID, remap, idxColMap), nil
-}
-
-func localProtocolEnablesDistributedVectorDomain(service string) bool {
-	runtime := moruntime.ServiceRuntime(service)
-	if runtime == nil {
-		return false
-	}
-	value, ok := runtime.GetGlobalVariables(moruntime.MOProtocolVersion)
-	version, valid := value.(int64)
-	return ok && valid && version >= defines.MORPCVersion45
 }
 
 func rebindIvfPreFilters(filters []*plan.Expr, scanNode *plan.Node, includeColumns []string) []*plan.Expr {

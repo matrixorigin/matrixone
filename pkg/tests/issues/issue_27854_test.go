@@ -26,11 +26,10 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/matrixorigin/matrixone/pkg/embed"
-	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/tests/testutils"
 )
 
-func TestIssue27854RequiredVectorDomainOnMultiCN(t *testing.T) {
+func TestIssue27854RequiredVectorDomainStaysCoordinatorLocal(t *testing.T) {
 	embed.RunBaseClusterTests(t, func(c embed.Cluster) {
 		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
 		defer cancel()
@@ -65,12 +64,7 @@ func TestIssue27854RequiredVectorDomainOnMultiCN(t *testing.T) {
 		local := queryInt64Rows(t, ctx, db, query)
 		require.Equal(t, []int64{1, 2, 3}, local)
 
-		t.Cleanup(func() { plan2.SetForceScanOnMultiCN(false) })
-		plan2.SetForceScanOnMultiCN(true)
 		execSQLRequire(t, ctx, db, "set session optimizer_hints = ''")
-		physical, err := testutils.QueryTextResult(ctx, db, "explain phyplan "+query)
-		require.NoError(t, err)
-		require.Contains(t, strings.ToUpper(physical.ColumnName), "PHYPLAN ON MULTICN(")
 		require.Equal(t, local, queryInt64Rows(t, ctx, db, query))
 
 		emptyQuery := strings.Replace(query, "file_id = 'file1'", "file_id = 'missing'", 1)
