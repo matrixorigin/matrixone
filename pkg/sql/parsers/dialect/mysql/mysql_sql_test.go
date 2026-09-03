@@ -5180,6 +5180,10 @@ var (
 			input:  "analyze table t1",
 			output: "analyze table t1",
 		},
+		{
+			input:  "analyze table t1 (a, b), t2 fullscan",
+			output: "analyze table t1(a, b), t2 fullscan",
+		},
 		// Issue #23122: CHECK TABLE
 		{
 			input:  "check table t1",
