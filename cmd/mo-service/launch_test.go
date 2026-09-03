@@ -18,6 +18,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"syscall"
@@ -98,6 +100,7 @@ func setLaunchTestHooks(t *testing.T) {
 	oldStartDynamicCNServices := launchStartDynamicCNServices
 	oldDynamicForkExec := dynamicForkExec
 	oldDynamicKill := dynamicKill
+	oldDynamicListenAndServe := dynamicListenAndServe
 	oldDynamicWaitProcess := dynamicWaitProcess
 	dynamicCNMu.Lock()
 	oldDynamicPIDs := append([]int(nil), dynamicCNServicePIDs...)
@@ -117,6 +120,7 @@ func setLaunchTestHooks(t *testing.T) {
 		launchStartDynamicCNServices = oldStartDynamicCNServices
 		dynamicForkExec = oldDynamicForkExec
 		dynamicKill = oldDynamicKill
+		dynamicListenAndServe = oldDynamicListenAndServe
 		dynamicWaitProcess = oldDynamicWaitProcess
 		dynamicCNMu.Lock()
 		dynamicCNServicePIDs = oldDynamicPIDs
@@ -250,6 +254,34 @@ func TestDynamicProxyStartFailureStillCleansStartedChildren(t *testing.T) {
 	require.Equal(t, syscall.SIGTERM, signal)
 }
 
+func TestDynamicCNServicesStartsConfiguredChaosTester(t *testing.T) {
+	setLaunchTestHooks(t)
+	t.Cleanup(func() {
+		dynamicCNMu.Lock()
+		chaosTester := dynamicChaosTester
+		dynamicCNMu.Unlock()
+		if chaosTester != nil {
+			_ = chaosTester.Stop()
+		}
+	})
+	template := writeLaunchTestFile(t, "cn-template.toml", "")
+	cfg := Dynamic{
+		CNTemplate: template,
+	}
+	cfg.Chaos.Enable = true
+	require.NoError(t, startDynamicCNServices(t.TempDir(), cfg))
+	dynamicCNMu.RLock()
+	chaosTester := dynamicChaosTester
+	dynamicCNMu.RUnlock()
+	require.NotNil(t, chaosTester)
+	require.NoError(t, stopAllDynamicCNServicesGracefully(context.Background()))
+}
+
+func TestDynamicWaitProcessRejectsInvalidPID(t *testing.T) {
+	setLaunchTestHooks(t)
+	require.Error(t, dynamicWaitProcess(-1))
+}
+
 func TestDynamicCNStartStopLifecycleErrors(t *testing.T) {
 	setLaunchTestHooks(t)
 	dynamicCNMu.Lock()
@@ -274,6 +306,77 @@ func TestDynamicCNStartStopLifecycleErrors(t *testing.T) {
 		return nil
 	}
 	require.NoError(t, stopDynamicCNByIndex(0))
+}
+
+func TestDynamicCNControlHTTPRoutesRequests(t *testing.T) {
+	setLaunchTestHooks(t)
+	oldListenAddr := *httpListenAddr
+	oldMux := http.DefaultServeMux
+	t.Cleanup(func() {
+		*httpListenAddr = oldListenAddr
+		http.DefaultServeMux = oldMux
+	})
+	http.DefaultServeMux = http.NewServeMux()
+	*httpListenAddr = "127.0.0.1:bad"
+	serverDone := make(chan struct{})
+	dynamicListenAndServe = func(string, http.Handler) error {
+		close(serverDone)
+		return nil
+	}
+	require.NoError(t, startDynamicCtlHTTPServer("127.0.0.1:bad"))
+	select {
+	case <-serverDone:
+	case <-time.After(time.Second):
+		t.Fatal("dynamic control server did not start")
+	}
+
+	request := func(path string) *httptest.ResponseRecorder {
+		req := httptest.NewRequest(http.MethodGet, path, nil)
+		resp := httptest.NewRecorder()
+		http.DefaultServeMux.ServeHTTP(resp, req)
+		return resp
+	}
+
+	resp := request("/dynamic/cn")
+	require.Equal(t, http.StatusBadRequest, resp.Code)
+	require.Equal(t, "invalid request", resp.Body.String())
+
+	dynamicCNMu.Lock()
+	dynamicCNServiceCommands = [][]string{{"mo-service", "-cfg", "cn.toml"}}
+	dynamicCNServicePIDs = []int{42}
+	dynamicCNMu.Unlock()
+	resp = request("/dynamic/cn?cn=9&action=start")
+	require.Equal(t, http.StatusBadRequest, resp.Code)
+	resp = request("/dynamic/cn?cn=0&action=start")
+	require.Equal(t, http.StatusBadRequest, resp.Code)
+	require.Equal(t, "already started", resp.Body.String())
+
+	dynamicCNMu.Lock()
+	dynamicCNServicePIDs[0] = 0
+	dynamicCNMu.Unlock()
+	dynamicForkExec = func(string, []string, *syscall.ProcAttr) (int, error) {
+		return 0, errors.New("fork failed")
+	}
+	resp = request("/dynamic/cn?cn=0&action=start")
+	require.Equal(t, "fork failed", resp.Body.String())
+	dynamicForkExec = func(string, []string, *syscall.ProcAttr) (int, error) {
+		return 43, nil
+	}
+	resp = request("/dynamic/cn?cn=0&action=start")
+	require.Equal(t, "OK", resp.Body.String())
+
+	dynamicKill = func(int, syscall.Signal) error { return errors.New("kill failed") }
+	resp = request("/dynamic/cn?cn=0&action=stop")
+	require.Equal(t, "kill failed", resp.Body.String())
+	dynamicKill = func(int, syscall.Signal) error { return nil }
+	resp = request("/dynamic/cn?cn=0&action=stop")
+	require.Equal(t, "OK", resp.Body.String())
+	resp = request("/dynamic/cn?cn=0&action=stop")
+	require.Equal(t, http.StatusBadRequest, resp.Code)
+	require.Equal(t, "already stopped", resp.Body.String())
+	resp = request("/dynamic/cn?cn=0&action=restart")
+	require.Equal(t, http.StatusBadRequest, resp.Code)
+	require.Equal(t, "invalid request", resp.Body.String())
 }
 
 func TestStopAllDynamicCNServicesGracefullyWaitsAndHonorsContext(t *testing.T) {

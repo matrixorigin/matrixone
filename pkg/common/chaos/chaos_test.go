@@ -62,6 +62,31 @@ func TestChaosTesterStopBeforeBootstrapPreventsStart(t *testing.T) {
 	require.Zero(t, tester.stopCount.Load())
 }
 
+func TestChaosTesterCanceledBootstrapSkipsStart(t *testing.T) {
+	tester := &lifecycleTestTester{}
+	chaosTester := newTestChaosTester(tester)
+	t.Cleanup(func() { _ = chaosTester.Stop() })
+	waitStarted := make(chan struct{})
+	require.NoError(t, chaosTester.startWith(func() bool {
+		close(waitStarted)
+		<-chaosTester.stopC
+		return false
+	}))
+	select {
+	case <-waitStarted:
+	case <-time.After(time.Second):
+		require.FailNow(t, "chaos tester did not start waiting")
+	}
+	require.NoError(t, chaosTester.Stop())
+	select {
+	case <-chaosTester.startDone:
+	case <-time.After(time.Second):
+		require.FailNow(t, "chaos tester did not finish after cancellation")
+	}
+	require.Zero(t, tester.startCount.Load())
+	require.Zero(t, tester.stopCount.Load())
+}
+
 func TestChaosTesterStartAndStopAreExactlyOnce(t *testing.T) {
 	tester := &lifecycleTestTester{}
 	chaosTester := newTestChaosTester(tester)
@@ -80,4 +105,10 @@ func TestChaosTesterStartAndStopAreExactlyOnce(t *testing.T) {
 	require.NoError(t, chaosTester.Stop())
 	require.Equal(t, int32(1), tester.startCount.Load())
 	require.Equal(t, int32(1), tester.stopCount.Load())
+}
+
+func TestNewChaosTesterCanStopBeforeBootstrap(t *testing.T) {
+	chaosTester := NewChaosTester(Config{})
+	require.NoError(t, chaosTester.Stop())
+	require.NoError(t, chaosTester.Stop())
 }

@@ -46,6 +46,7 @@ var (
 	launchStartDynamicCNServices = startDynamicCNServices
 	dynamicForkExec              = syscall.ForkExec
 	dynamicKill                  = syscall.Kill
+	dynamicListenAndServe        = http.ListenAndServe
 	dynamicWaitProcess           = func(pid int) error {
 		p, err := os.FindProcess(pid)
 		if err != nil {
@@ -284,7 +285,7 @@ func startDynamicCtlHTTPServer(addr string) error {
 			}
 		})
 	go func() {
-		http.ListenAndServe(*httpListenAddr, nil)
+		dynamicListenAndServe(*httpListenAddr, nil)
 	}()
 	return nil
 }
