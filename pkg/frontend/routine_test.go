@@ -1947,6 +1947,22 @@ func TestRoutineChangeUserAuthenticatesBeforeReplacingSession(t *testing.T) {
 func TestRoutineRefreshSessionAuthReauthenticatesCandidate(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	oldSession := newTestSession(t, ctrl)
+	txnClient := mock_frontend.NewMockTxnClient(ctrl)
+	txnClient.EXPECT().WaitLogTailAppliedAt(gomock.Any(), gomock.Any()).
+		Times(2).
+		Return(timestamp.Timestamp{PhysicalTime: math.MaxInt64}, nil)
+	pu := getPu("")
+	oldTxnClient, oldStorageEngine := pu.TxnClient, pu.StorageEngine
+	t.Cleanup(func() {
+		pu.TxnClient = oldTxnClient
+		pu.StorageEngine = oldStorageEngine
+	})
+	pu.TxnClient = txnClient
+	pu.StorageEngine = &authenticationBarrierEngine{acquire: func(context.Context) (
+		timestamp.Timestamp, error,
+	) {
+		return timestamp.Timestamp{PhysicalTime: math.MaxInt64}, nil
+	}}
 	rm, err := NewRoutineManager(context.Background(), "")
 	require.NoError(t, err)
 	rm.sessionManager = queryservice.NewSessionManager()
