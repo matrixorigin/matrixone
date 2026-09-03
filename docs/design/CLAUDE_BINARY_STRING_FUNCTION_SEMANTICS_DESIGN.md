@@ -103,7 +103,7 @@ MySQL 会在部分 text-subject + invalid binary auxiliary coercion 上执行 ch
 
 逐行 executor 的顺序是：读取同一 logical row（const wrapper 自行映射 row 0）→ NULL/mask 判断 → 选择 subject domain → checked sizing/direct writer → append value → 批量安装 runtime domain。任何错误返回时仍由现有 FunctionResult owner 释放；不增加 unaccounted full-result buffer。
 
-`LIKE` 的 normal text fast path和 regexp cache保留；只有可能出现 binary/mixed subject 时使用 byte wildcard matcher。Binary matcher按 byte解析 `%`、`_` 和现有 escape contract，不能把 value/pattern转成 rune。pattern先编译为紧凑 token stream，再按 `%` 分成固定长度 segment；prefix/suffix锚定，中间 segment以最长 literal run作为 Two-Way search anchor并从单调 value cursor寻找最早合法 alignment，不再执行 value × patternWords NFA。constant pattern每 batch只编译一次，dynamic row复用同一 scratch容量。编译存储固定为至多 `2 * normalizedPatternTokens`，由 process MPool off-heap申请并传播 admission failure；不存在 distinct-byte倍增或逐行 Go heap masks。性能保护不得把合法 LIKE结果转换成 SQL error。
+`LIKE` 的 normal text fast path和 regexp cache保留；只有可能出现 binary/mixed subject 时使用 byte wildcard matcher。Binary matcher按 byte解析 `%`、`_` 和现有 escape contract，不能把 value/pattern转成 rune。pattern先编译为紧凑 token stream，再按 `%` 分成固定长度 segment；prefix/suffix锚定，中间 segment根据当前 value byte frequency选择最稀有 literal run作为 Two-Way search anchor，从单调 value cursor寻找最早合法 alignment，并从 segment两端验证约束，不再让常见但无判别力的 anchor触发整段重复扫描，也不执行 value × patternWords NFA。constant pattern每 batch只编译一次，dynamic row复用同一 scratch容量。编译存储固定为至多 `2 * normalizedPatternTokens`，由 process MPool off-heap申请并传播 admission failure；不存在 distinct-byte倍增或逐行 Go heap masks。性能保护不得把合法 LIKE结果转换成 SQL error。
 
 ## 6. Metadata 与 materialization closure
 

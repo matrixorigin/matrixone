@@ -358,6 +358,10 @@ func (compiled *compiledByteLikePattern) match(value []byte) bool {
 		}
 	}
 
+	var literalFrequency [256]int
+	for _, b := range value[cursor:searchLimit] {
+		literalFrequency[b]++
+	}
 	for segmentAt < suffixAt {
 		segmentEnd := slices.Index(compiled.kinds[segmentAt:suffixAt], byteLikeAny)
 		if segmentEnd < 0 {
@@ -365,7 +369,8 @@ func (compiled *compiledByteLikePattern) match(value []byte) bool {
 		} else {
 			segmentEnd += segmentAt
 		}
-		matchAt := compiled.findSegment(segmentAt, segmentEnd, value, cursor, searchLimit)
+		matchAt := compiled.findSegment(
+			segmentAt, segmentEnd, value, cursor, searchLimit, &literalFrequency)
 		if matchAt < 0 {
 			return false
 		}
@@ -382,21 +387,30 @@ func (compiled *compiledByteLikePattern) matchSegmentAt(start, end int, value []
 	if end-start > len(value)-valueAt {
 		return false
 	}
-	for patternAt := start; patternAt < end; patternAt++ {
-		if compiled.kinds[patternAt] == byteLikeLiteral &&
-			compiled.literals[patternAt] != value[valueAt+patternAt-start] {
+	for left, right := start, end-1; left <= right; left, right = left+1, right-1 {
+		if compiled.kinds[left] == byteLikeLiteral &&
+			compiled.literals[left] != value[valueAt+left-start] {
+			return false
+		}
+		if right != left && compiled.kinds[right] == byteLikeLiteral &&
+			compiled.literals[right] != value[valueAt+right-start] {
 			return false
 		}
 	}
 	return true
 }
 
-func (compiled *compiledByteLikePattern) findSegment(start, end int, value []byte, from, limit int) int {
+func (compiled *compiledByteLikePattern) findSegment(
+	start, end int,
+	value []byte,
+	from, limit int,
+	literalFrequency *[256]int,
+) int {
 	segmentLength := end - start
 	if segmentLength > limit-from {
 		return -1
 	}
-	anchorStart, anchorEnd := compiled.longestLiteralRun(start, end)
+	anchorStart, anchorEnd := compiled.rarestLiteralRun(start, end, literalFrequency)
 	if anchorStart == anchorEnd {
 		return from
 	}
@@ -418,18 +432,29 @@ func (compiled *compiledByteLikePattern) findSegment(start, end int, value []byt
 	return -1
 }
 
-func (compiled *compiledByteLikePattern) longestLiteralRun(start, end int) (bestStart, bestEnd int) {
+func (compiled *compiledByteLikePattern) rarestLiteralRun(
+	start, end int,
+	literalFrequency *[256]int,
+) (bestStart, bestEnd int) {
+	maxInt := int(^uint(0) >> 1)
+	bestFrequency := maxInt
 	for at := start; at < end; {
 		if compiled.kinds[at] != byteLikeLiteral {
 			at++
 			continue
 		}
 		runStart := at
+		runFrequency := maxInt
 		for at < end && compiled.kinds[at] == byteLikeLiteral {
+			if literalFrequency[compiled.literals[at]] < runFrequency {
+				runFrequency = literalFrequency[compiled.literals[at]]
+			}
 			at++
 		}
-		if at-runStart > bestEnd-bestStart {
+		if runFrequency < bestFrequency ||
+			(runFrequency == bestFrequency && at-runStart >= bestEnd-bestStart) {
 			bestStart, bestEnd = runStart, at
+			bestFrequency = runFrequency
 		}
 	}
 	return bestStart, bestEnd

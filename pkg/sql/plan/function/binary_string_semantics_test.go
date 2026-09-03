@@ -601,6 +601,17 @@ func TestByteLikeSegmentMatcherFindsLateValidAlignment(t *testing.T) {
 	require.False(t, matched)
 }
 
+func TestByteLikeSegmentMatcherRejectsRepeatedAnchor(t *testing.T) {
+	mp := mpool.MustNewZero()
+	value := bytes.Repeat([]byte{'a'}, 32_000)
+	pattern := []byte{'%', 'a'}
+	pattern = append(pattern, bytes.Repeat([]byte{'_'}, 16_000-2)...)
+	pattern = append(pattern, 'b', '%')
+	matched, err := byteLike(pattern, value, nil, false, mp)
+	require.NoError(t, err)
+	require.False(t, matched)
+}
+
 func TestByteLikeCompiledPatternUsesLinearAccountedStorage(t *testing.T) {
 	pattern := make([]byte, 64<<10)
 	for i := range pattern {
@@ -675,6 +686,29 @@ func TestCompiledByteLikePatternReusesRowScratch(t *testing.T) {
 		require.NoError(t, compiled.reset(bytes.Repeat([]byte{byte('a' + i)}, 32<<10), nil, false))
 		require.Same(t, storage, &compiled.storage[0])
 		require.Equal(t, allocated, mp.CurrNB())
+	}
+}
+
+func BenchmarkByteLikeRepeatedAnchorRejection(b *testing.B) {
+	for _, size := range []int{2_000, 4_000, 8_000, 16_000, 32_000, 64_000} {
+		b.Run(fmt.Sprintf("n=%d", size), func(b *testing.B) {
+			value := bytes.Repeat([]byte{'a'}, size)
+			pattern := []byte{'%', 'a'}
+			pattern = append(pattern, bytes.Repeat([]byte{'_'}, size/2-2)...)
+			pattern = append(pattern, 'b', '%')
+			compiled, err := compileByteLikePattern(pattern, nil, false, mpool.MustNewZero())
+			if err != nil {
+				b.Fatal(err)
+			}
+			defer compiled.free()
+			b.SetBytes(int64(len(value) + len(pattern)))
+			b.ResetTimer()
+			for i := 0; i < b.N; i++ {
+				if compiled.match(value) {
+					b.Fatal("unexpected match")
+				}
+			}
+		})
 	}
 }
 
