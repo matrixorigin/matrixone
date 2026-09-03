@@ -23,7 +23,9 @@
 package plan
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	planplugin "github.com/matrixorigin/matrixone/pkg/indexplugin/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
@@ -31,9 +33,44 @@ import (
 
 // Compile-time interface check.
 var _ planplugin.Hooks = Hooks{}
+var _ planplugin.DMLMaintenanceNoOpHook = Hooks{}
 
 // Hooks implements plugin/plan.Hooks for fulltext indexes.
 type Hooks struct{}
+
+// DMLMaintenanceNoOpColumns declares when an old fulltext posting set is
+// provably identical to the final one. VARCHAR and TEXT preserve the bytes that
+// determine tokenization. CHAR, JSON, and DATALINK stay conservative because
+// SQL NULL-safe equality is not a proof of identical tokenizer input for them.
+func (Hooks) DMLMaintenanceNoOpColumns(
+	tableDef *plan.TableDef,
+	indexDef *plan.IndexDef,
+) ([]string, bool, error) {
+	if tableDef == nil || indexDef == nil || len(indexDef.Parts) == 0 {
+		return nil, false, nil
+	}
+
+	columns := make([]string, 0, len(indexDef.Parts))
+	seen := make(map[string]struct{}, len(indexDef.Parts))
+	for _, part := range indexDef.Parts {
+		name := catalog.ResolveAlias(part)
+		pos, ok := tableDef.Name2ColIndex[name]
+		if !ok || pos < 0 || int(pos) >= len(tableDef.Cols) {
+			return nil, false, nil
+		}
+		switch types.T(tableDef.Cols[pos].Typ.Id) {
+		case types.T_varchar, types.T_text:
+		default:
+			return nil, false, nil
+		}
+		if _, ok := seen[name]; ok {
+			continue
+		}
+		seen[name] = struct{}{}
+		columns = append(columns, name)
+	}
+	return columns, len(columns) > 0, nil
+}
 
 // BuildSecondaryIndexDefs is unreachable for fulltext — the
 // plan-build dispatch routes *tree.Index parse trees to the vector
