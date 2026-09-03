@@ -345,6 +345,7 @@ select * from t36_remap;
 -- ============================================================
 create table t37_odku_pk (a int, b int generated always as (a*2) stored, primary key(b));
 insert into t37_odku_pk (a) values (1);
+-- ODKU that can change a generated primary key is rejected as unsupported DML.
 insert into t37_odku_pk (a) values (1) on duplicate key update a=5;
 select * from t37_odku_pk;
 
@@ -385,6 +386,33 @@ select count(*) as bad_rows from t42_churn where c != a + b;
 select * from t42_churn where id between 1 and 5 order by id;
 
 -- ============================================================
--- 44. Cleanup
+-- 44. ODKU generated UNIQUE key safety (#28051)
+-- ============================================================
+create table t43_odku_generated_unique (id int primary key, doc json, kind varchar(20) generated always as (doc ->> '$.kind') stored, payload int, unique key uk_kind(kind));
+insert into t43_odku_generated_unique (id, doc, payload) values (1, '{"kind":"alpha"}', 10), (2, '{"kind":"beta"}', 20);
+-- The original #28051 shape must be rejected before it can make two rows share beta.
+insert into t43_odku_generated_unique (id, doc, payload) values (3, '{"kind":"alpha"}', 30) on duplicate key update doc = json_set(doc, '$.kind', 'beta');
+select id, kind, payload from t43_odku_generated_unique order by id;
+select id, kind from t43_odku_generated_unique force index (uk_kind) order by id;
+-- An update of an unrelated column remains supported.
+insert into t43_odku_generated_unique (id, doc, payload) values (1, '{"kind":"alpha"}', 99) on duplicate key update payload = values(payload);
+select id, kind, payload from t43_odku_generated_unique order by id;
+-- A multi-row statement is rejected atomically when its update may change the key.
+insert into t43_odku_generated_unique (id, doc, payload) values (1, '{"kind":"gamma"}', 111), (2, '{"kind":"delta"}', 222) on duplicate key update doc = values(doc);
+select id, kind, payload from t43_odku_generated_unique order by id;
+-- Ordinary UPDATE keeps its existing duplicate-key behavior as the control group.
+update t43_odku_generated_unique set doc = json_set(doc, '$.kind', 'beta') where id = 1;
+
+-- ============================================================
+-- 45. ODKU generated non-unique index maintenance
+-- ============================================================
+create table t44_odku_generated_index (id int primary key, source int, payload int, generated_key int generated always as (source * 2) stored, key idx_generated_key(generated_key));
+insert into t44_odku_generated_index (id, source, payload) values (1, 1, 10), (2, 2, 20);
+insert into t44_odku_generated_index (id, source, payload) values (1, 2, 11) on duplicate key update source = values(source);
+select id, generated_key from t44_odku_generated_index force index (idx_generated_key) where generated_key = 2;
+select id, generated_key from t44_odku_generated_index force index (idx_generated_key) where generated_key = 4 order by id;
+
+-- ============================================================
+-- 46. Cleanup
 -- ============================================================
 drop database test_generated_col;
