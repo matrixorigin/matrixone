@@ -1385,15 +1385,18 @@ func (u *CDCWatermarkUpdater) DeleteTaskWatermarks(
 	u.MarkTaskDeleted(taskID)
 	flushErr := u.ForceFlush(ctx)
 	if flushErr != nil {
-		// Persistence is irrelevant for a task being dropped. ForceFlush is
-		// still useful as a queue barrier; remove its retried cache entries and
-		// continue to the authoritative DELETE.
+		// A failed flush is not a completed queue barrier. An older batch may
+		// already have admitted a durable writer and still be blocked in an
+		// earlier persistence phase. Keep the tombstone and leave cleanup to the
+		// lifecycle owner's retry; deleting now could let that writer recreate
+		// the task watermark after the DELETE.
 		logutil.Warn(
 			"cdc.watermark.delete_task.flush_failed",
 			zap.Uint64("account-id", accountID),
 			zap.String("task-id", taskID),
 			zap.Error(flushErr),
 		)
+		return flushErr
 	}
 
 	keysToClean := make(map[WatermarkKey]struct{})

@@ -48,6 +48,16 @@ type retryableMockExecutor struct {
 	lastSQL       string
 }
 
+type delayedWatermarkBatchExecutor struct {
+	mu             sync.Mutex
+	queryStarted   chan struct{}
+	releaseQuery   chan struct{}
+	queryStartOnce sync.Once
+	rowExists      bool
+	errMsgWrites   int
+	deleteCalls    int
+}
+
 type failAddWatermarkExecutor struct {
 	insertErr error
 }
@@ -69,6 +79,38 @@ func (m *retryableMockExecutor) Query(_ context.Context, _ string, _ ie.SessionO
 }
 
 func (m *retryableMockExecutor) ApplySessionOverride(_ ie.SessionOverrideOptions) {}
+
+func (m *delayedWatermarkBatchExecutor) Exec(
+	_ context.Context,
+	sql string,
+	_ ie.SessionOverrideOptions,
+) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	switch {
+	case strings.HasPrefix(sql, "DELETE FROM `mo_catalog`.`mo_cdc_watermark`"):
+		m.rowExists = false
+		m.deleteCalls++
+	case strings.Contains(sql, "ON DUPLICATE KEY UPDATE err_msg"):
+		m.rowExists = true
+		m.errMsgWrites++
+	}
+	return nil
+}
+
+func (m *delayedWatermarkBatchExecutor) Query(
+	_ context.Context,
+	_ string,
+	_ ie.SessionOverrideOptions,
+) ie.InternalExecResult {
+	m.queryStartOnce.Do(func() { close(m.queryStarted) })
+	<-m.releaseQuery
+	return &InternalExecResultForTest{
+		resultSet: &MysqlResultSetForTest{Data: [][]interface{}{}},
+	}
+}
+
+func (m *delayedWatermarkBatchExecutor) ApplySessionOverride(_ ie.SessionOverrideOptions) {}
 
 func (m *failAddWatermarkExecutor) Exec(_ context.Context, sql string, _ ie.SessionOverrideOptions) error {
 	if strings.HasPrefix(sql, "INSERT INTO `mo_catalog`.`mo_cdc_watermark`") {
@@ -259,7 +301,7 @@ func TestWatermarkUpdater_DeleteTaskWatermarksDrainsAndFencesCache(t *testing.T)
 	exec.mu.Unlock()
 }
 
-func TestWatermarkUpdater_DeleteTaskWatermarksDeletesAfterFlushFailure(t *testing.T) {
+func TestWatermarkUpdater_DeleteTaskWatermarksRetriesAfterFlushFailure(t *testing.T) {
 	exec := &retryableMockExecutor{failRemaining: 1}
 	updater := NewCDCWatermarkUpdater("delete-task-flush-failure", exec)
 	updater.Start()
@@ -275,6 +317,18 @@ func TestWatermarkUpdater_DeleteTaskWatermarksDeletesAfterFlushFailure(t *testin
 	ts := types.BuildTS(30, 1)
 	require.NoError(t, updater.UpdateWatermarkOnly(ctx, &key, &ts))
 
+	require.Error(t, updater.DeleteTaskWatermarks(ctx, key.AccountId, key.TaskId))
+
+	updater.RLock()
+	_, uncommittedAfterFailure := updater.cacheUncommitted[key]
+	updater.RUnlock()
+	require.True(t, uncommittedAfterFailure)
+
+	exec.mu.Lock()
+	require.NotEqual(t, CDCSQLBuilder.DeleteWatermarkSQL(key.AccountId, key.TaskId), exec.lastSQL)
+	require.Equal(t, 1, exec.execCalls)
+	exec.mu.Unlock()
+
 	require.NoError(t, updater.DeleteTaskWatermarks(ctx, key.AccountId, key.TaskId))
 
 	updater.RLock()
@@ -288,7 +342,76 @@ func TestWatermarkUpdater_DeleteTaskWatermarksDeletesAfterFlushFailure(t *testin
 
 	exec.mu.Lock()
 	require.Equal(t, CDCSQLBuilder.DeleteWatermarkSQL(key.AccountId, key.TaskId), exec.lastSQL)
-	require.Equal(t, 2, exec.execCalls)
+	require.Equal(t, 3, exec.execCalls)
+	exec.mu.Unlock()
+}
+
+func TestWatermarkUpdater_DeleteTaskWatermarksFlushTimeoutKeepsDeleteAuthoritative(t *testing.T) {
+	exec := &delayedWatermarkBatchExecutor{
+		queryStarted: make(chan struct{}),
+		releaseQuery: make(chan struct{}),
+	}
+	// Model a barrier admitted behind the blocked onJobs batch. It cannot
+	// complete before the caller's cleanup deadline.
+	updater := NewCDCWatermarkUpdater(
+		"delete-task-delayed-batch",
+		exec,
+		WithCustomizedScheduleJob(func(_ *UpdaterJob) error { return nil }),
+	)
+	key := WatermarkKey{
+		AccountId: 4,
+		TaskId:    "dropped-task",
+		DBName:    "db",
+		TableName: "table",
+	}
+	watermark := types.BuildTS(50, 1)
+	readJob := NewGetOrAddCommittedWMJob(context.Background(), &key, &watermark)
+	errMsgJob := NewUpdateWMErrMsgJob(context.Background(), &key, "delayed error")
+	batchDone := make(chan struct{})
+	go func() {
+		updater.onJobs(readJob, errMsgJob)
+		close(batchDone)
+	}()
+
+	select {
+	case <-exec.queryStarted:
+	case <-time.After(time.Second):
+		require.FailNow(t, "watermark read batch did not block")
+	}
+
+	cleanupCtx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	err := updater.DeleteTaskWatermarks(cleanupCtx, key.AccountId, key.TaskId)
+	cancel()
+	require.ErrorIs(t, err, context.DeadlineExceeded)
+
+	exec.mu.Lock()
+	require.Equal(t, 0, exec.deleteCalls)
+	require.False(t, exec.rowExists)
+	exec.mu.Unlock()
+
+	// The already-admitted err_msg writer is allowed to finish while the
+	// tombstone rejects new work. Since no DELETE was reported successful yet,
+	// the lifecycle owner can retry and make deletion terminal afterward.
+	close(exec.releaseQuery)
+	select {
+	case <-batchDone:
+	case <-time.After(time.Second):
+		require.FailNow(t, "delayed watermark batch did not finish")
+	}
+	exec.mu.Lock()
+	require.Equal(t, 1, exec.errMsgWrites)
+	require.True(t, exec.rowExists)
+	exec.mu.Unlock()
+
+	updater.customized.scheduleJob = func(job *UpdaterJob) error {
+		updater.onJobs(job)
+		return nil
+	}
+	require.NoError(t, updater.DeleteTaskWatermarks(context.Background(), key.AccountId, key.TaskId))
+
+	exec.mu.Lock()
+	require.Equal(t, 1, exec.deleteCalls)
+	require.False(t, exec.rowExists)
 	exec.mu.Unlock()
 }
 
