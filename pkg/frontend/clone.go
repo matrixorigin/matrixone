@@ -651,6 +651,8 @@ func resolveSnapshot(
 	return snapshot, nil
 }
 
+var resolveSnapshotForClone = resolveSnapshot
+
 func newMoTimestampHint(snapshotTS int64) *tree.AtTimeStamp {
 	origin := strconv.FormatInt(snapshotTS, 10)
 	return &tree.AtTimeStamp{
@@ -721,7 +723,7 @@ func getOpAndToAccountId(
 	atTsExpr *tree.AtTimeStamp,
 ) (opAccountId, toAccountId uint32, snapshot *plan2.Snapshot, err error) {
 
-	if snapshot, err = resolveSnapshot(ses, atTsExpr); err != nil {
+	if snapshot, err = resolveSnapshotForClone(ses, atTsExpr); err != nil {
 		if atTsExpr != nil && plan.IsSnapshotNotFound(err) {
 			return 0, 0, nil, plan.NewSnapshotNotFoundError(
 				reqCtx,
