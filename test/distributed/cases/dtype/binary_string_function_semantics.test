@@ -1,0 +1,116 @@
+-- @suite
+
+-- @case
+-- @desc: ordinary binary-string functions use byte semantics without changing static metadata
+-- @label:bvt
+
+--- @metacmp(true)
+
+drop database if exists binary_string_function_semantics;
+create database binary_string_function_semantics;
+use binary_string_function_semantics;
+
+select length('你a'), char_length('你a'), length(X'e4bda061'), char_length(X'e4bda061'),
+       ord('你a'), ord(X'e4bda061');
+select hex(left('你a', 1)), hex(left(X'e4bda061', 1)),
+       hex(right('a你', 1)), hex(right(X'61e4bda0', 1)),
+       hex(substring('你好', 2, 1)), hex(substring(X'e4bda0e5a5bd', 2, 1));
+select hex(reverse('你a')), hex(reverse(X'e4bda061')),
+       hex(lower('ÄA')), hex(lower(X'c38441')),
+       hex(upper('äa')), hex(upper(X'c3a461'));
+select hex(insert('你a', 2, 1, X'78')), hex(insert(X'e4bda061', 2, 1, 'x')),
+       hex(lpad('你a', 3, X'e5a5bd')), hex(lpad(X'e4bda061', 3, '好')),
+       hex(rpad('你', 2, X'78')), hex(rpad(X'e4bda0', 2, 'x'));
+select locate(X'bd', '你a'), locate(X'bd', X'e4bda061'),
+       instr('你a', X'bd'), instr(X'e4bda061', X'bd'),
+       '你a' like '____', X'e4bda061' like '____';
+select hex(replace('你a', X'bd', X'78')), hex(replace(X'e4bda061', X'bd', 'x')),
+       hex(substring_index('a你b你c', X'e4bda0', 1)),
+       hex(substring_index(X'61e4bda062e4bda063', '你', 1));
+select hex(ltrim(' 你 ')), hex(ltrim(X'20e4bda020')),
+       hex(rtrim(' 你 ')), hex(rtrim(X'20e4bda020')),
+       char_length(repeat('你', 2)), char_length(repeat(X'e4bda0', 2));
+
+select charset('你'), collation('你'), charset(X'e4bda0'), collation(X'e4bda0'),
+       charset(null), collation(null), charset(123), collation(123);
+select charset(cast(null as char)), collation(cast(null as char)),
+       charset(cast(null as binary)), collation(cast(null as binary));
+
+create table domains (
+    id int,
+    txt varchar(16),
+    bin varbinary(16),
+    invalid_bytes blob
+);
+insert into domains values
+    (1, '你a', null, X'ffe4bda0'),
+    (2, null, X'e4bda061', X'ffe4bda0'),
+    (3, '你a', X'e4bda061', X'ffe4bda0');
+select id, hex(coalesce(txt, bin)), char_length(coalesce(txt, bin)),
+       charset(coalesce(txt, bin)), collation(coalesce(txt, bin))
+from domains order by id;
+select id, hex(left(coalesce(txt, bin), 1)), hex(reverse(coalesce(txt, bin))),
+       char_length(concat(coalesce(txt, bin), 'x'))
+from domains order by id;
+select id, hex(left(invalid_bytes, 1)), hex(reverse(invalid_bytes)),
+       char_length(invalid_bytes), invalid_bytes like '____'
+from domains order by id;
+
+create table concat_ws_domains (
+    id int,
+    sep varbinary(1),
+    first_value varchar(16),
+    second_value varchar(16)
+);
+insert into concat_ws_domains values
+    (1, X'2d', '你', null),
+    (2, X'2d', '你', 'a');
+select id, hex(concat_ws(sep, first_value, second_value)),
+       char_length(concat_ws(sep, first_value, second_value)),
+       charset(concat_ws(sep, first_value, second_value))
+from concat_ws_domains order by id;
+
+create table collation_domains (
+    ci varchar(16) collate utf8mb4_general_ci,
+    exact varchar(16) collate utf8mb4_bin,
+    bytes_value varbinary(16)
+);
+insert into collation_domains values ('A你', 'A你', X'41e4bda0');
+select locate('a', ci), instr(ci, 'a'), locate('a', exact), instr(exact, 'a'),
+       locate(X'bd', bytes_value), instr(bytes_value, X'bd')
+from collation_domains;
+select charset(ci), collation(ci), charset(exact), collation(exact),
+       charset(bytes_value), collation(bytes_value)
+from collation_domains;
+
+set @binary_value = X'e4bda061';
+set @text_value = '你a';
+select char_length(@binary_value), hex(left(@binary_value, 1)), ord(@binary_value),
+       @binary_value like '____';
+select char_length(@text_value), hex(left(@text_value, 1)), ord(@text_value),
+       @text_value like '____';
+prepare binary_string_stmt from
+    'select char_length(?), hex(left(?, 1)), ord(?), ? like ''____'',
+            charset(left(?, 1)), collation(left(?, 1))';
+execute binary_string_stmt using @binary_value, @binary_value, @binary_value, @binary_value,
+                                 @binary_value, @binary_value;
+execute binary_string_stmt using @text_value, @text_value, @text_value, @text_value,
+                                 @text_value, @text_value;
+deallocate prepare binary_string_stmt;
+
+create table binary_function_ctas as
+select left(bin, 1) as binary_left,
+       lower(bin) as binary_lower,
+       replace(txt, X'bd', X'78') as text_replace
+from domains where id = 3;
+select column_name, data_type, character_maximum_length, character_octet_length,
+       character_set_name, collation_name
+from information_schema.columns
+where table_schema = 'binary_string_function_semantics'
+  and table_name = 'binary_function_ctas'
+order by ordinal_position;
+select hex(binary_left), hex(binary_lower), hex(text_replace),
+       char_length(binary_left), char_length(binary_lower), char_length(text_replace)
+from binary_function_ctas;
+
+drop database binary_string_function_semantics;

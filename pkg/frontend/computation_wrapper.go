@@ -1118,6 +1118,13 @@ func binaryProtocolPrepareParamDomains(
 		// Keep NULL on the prepared plan's original domain.  The next execute
 		// packet may carry a concrete type and will specialize it then.
 		return types.Type{}, types.Type{}, "", false, false
+	case defines.MYSQL_TYPE_TINY_BLOB, defines.MYSQL_TYPE_MEDIUM_BLOB,
+		defines.MYSQL_TYPE_LONG_BLOB, defines.MYSQL_TYPE_BLOB:
+		// COM_STMT has no character-set field for parameter values. Clients use
+		// the BLOB family for byte slices and the STRING family for text, so keep
+		// that only available domain distinction through specialization and the
+		// Process binary-string sidecar.
+		return types.T_blob.ToType(), types.Type{}, "", false, true
 	default:
 		return types.T_text.ToType(), types.Type{}, "", false, true
 	}
@@ -1390,6 +1397,23 @@ func initExecuteStmtParamWithResolverInSession(
 			return nil, nil, nil, originSQL, false, err
 		}
 		runtimeParamTypes := binaryProtocolRuntimeParamTypes(prepareStmt.ParamTypes, prepareStmt.params)
+		if cap(prepareStmt.paramBinaryStrings) < paramCount {
+			prepareStmt.paramBinaryStrings = make([]bool, paramCount)
+		} else {
+			prepareStmt.paramBinaryStrings = prepareStmt.paramBinaryStrings[:paramCount]
+			clear(prepareStmt.paramBinaryStrings)
+		}
+		hasBinaryString := false
+		for i := 0; i < paramCount && i < len(runtimeParamTypes); i++ {
+			binaryString := !prepareStmt.params.IsNull(uint64(i)) &&
+				types.StaticStringDomain(runtimeParamTypes[i]) == types.StringDomainBinary
+			prepareStmt.paramBinaryStrings[i] = binaryString
+			hasBinaryString = hasBinaryString || binaryString
+		}
+		var paramBinaryStrings []bool
+		if hasBinaryString {
+			paramBinaryStrings = prepareStmt.paramBinaryStrings
+		}
 		// A text-comparison rewrite is impossible when every current packet has a
 		// numeric (or NULL) domain. Guard the plan walk before invoking it: TPCC
 		// binds only numeric parameters and executes this path for every statement.
@@ -1445,10 +1469,11 @@ func initExecuteStmtParamWithResolverInSession(
 		if hasConcreteType {
 			prepareStmt.paramMetadata = cwft.proc.SetPrepareParamsWithReusableTypedMeta(
 				prepareStmt.params, nil, prepareStmt.paramKinds,
-				prepareStmt.paramConcreteTypes, prepareStmt.paramMetadata)
-		} else if hasParamKind {
+				prepareStmt.paramConcreteTypes, prepareStmt.paramMetadata, paramBinaryStrings)
+		} else if hasParamKind || hasBinaryString {
 			prepareStmt.paramMetadata = cwft.proc.SetPrepareParamsWithReusableMeta(
-				prepareStmt.params, nil, prepareStmt.paramKinds, prepareStmt.paramMetadata)
+				prepareStmt.params, nil, prepareStmt.paramKinds,
+				prepareStmt.paramMetadata, paramBinaryStrings)
 		} else {
 			cwft.proc.SetPrepareParams(prepareStmt.params)
 		}
@@ -1489,7 +1514,7 @@ func initExecuteStmtParamWithResolverInSession(
 		if len(execPlan.Args) != numParams {
 			return nil, nil, nil, originSQL, false, moerr.NewInvalidInput(reqCtx, "Incorrect arguments to EXECUTE")
 		}
-		params, paramVals, paramIsBin, paramKinds, paramTypes, err := buildExecuteUserParams(
+		params, paramVals, paramIsBin, paramBinaryString, paramKinds, paramTypes, err := buildExecuteUserParams(
 			cwft.proc, execPlan.Args, prepareStmt.jsonComparisonParamPositions)
 		if err != nil {
 			return nil, nil, nil, originSQL, false, err
@@ -1500,9 +1525,10 @@ func initExecuteStmtParamWithResolverInSession(
 		}
 		if paramTypes != nil {
 			cwft.proc.SetOwnedPrepareParamsWithTypedMeta(
-				params, paramIsBin, paramKinds, paramTypes)
+				params, paramIsBin, paramKinds, paramTypes, paramBinaryString)
 		} else {
-			cwft.proc.SetOwnedPrepareParamsWithMeta(params, paramIsBin, paramKinds)
+			cwft.proc.SetOwnedPrepareParamsWithMeta(
+				params, paramIsBin, paramKinds, paramBinaryString)
 		}
 		cwft.paramVals = paramVals
 	} else {
@@ -1782,8 +1808,8 @@ func preparedDirectResultSemanticKey(paramVals []any, positions []int32) string 
 		if param.HasRuntimeType {
 			runtimeType = param.RuntimeType
 		}
-		fmt.Fprintf(&key, "%d:%d:%d:%d:%d;", position, param.PrepareParamKind,
-			runtimeType.Oid, runtimeType.Width, runtimeType.Scale)
+		fmt.Fprintf(&key, "%d:%d:%d:%d:%d:%d;", position, param.PrepareParamKind,
+			runtimeType.Oid, runtimeType.Charset, runtimeType.Width, runtimeType.Scale)
 	}
 	return key.String()
 }
@@ -1817,15 +1843,16 @@ func preparedRuntimeSemanticKey(paramVals []any) string {
 		if !param.HasRuntimeType || runtimeType.Oid == types.T_text {
 			runtimeType = plan2.PreparedNumericPrefixTypeFromString(fmt.Sprintf("%v", param.Value))
 		}
-		fmt.Fprintf(&key, "%d:%d:%d:%d:%d;", i, param.PrepareParamKind,
-			runtimeType.Oid, runtimeType.Width, runtimeType.Scale)
+		fmt.Fprintf(&key, "%d:%d:%d:%d:%d:%d;", i, param.PrepareParamKind,
+			runtimeType.Oid, runtimeType.Charset, runtimeType.Width, runtimeType.Scale)
 		if param.HasSourceType {
 			// SQL EXECUTE arithmetic specializes from the user variable's logical
 			// type. Keep that dependency in the cache identity without replacing
 			// the value-derived domain above: comparison specialization still
 			// relies on the latter to separate values such as 200 and 10.
-			fmt.Fprintf(&key, "source:%d:%d:%d;",
-				param.SourceType.Oid, param.SourceType.Width, param.SourceType.Scale)
+			fmt.Fprintf(&key, "source:%d:%d:%d:%d;",
+				param.SourceType.Oid, param.SourceType.Charset,
+				param.SourceType.Width, param.SourceType.Scale)
 		}
 	}
 	return key.String()
@@ -2253,8 +2280,7 @@ func binaryProtocolRuntimeParamTypes(paramTypes []byte, params *vector.Vector) [
 
 func runtimeParamTypesContainText(runtimeTypes []types.Type) bool {
 	for _, runtimeType := range runtimeTypes {
-		switch runtimeType.Oid {
-		case types.T_char, types.T_varchar, types.T_text:
+		if runtimeType.Oid.IsMySQLString() {
 			return true
 		}
 	}
@@ -2305,6 +2331,7 @@ func buildExecuteUserParams(
 	params *vector.Vector,
 	paramVals []any,
 	paramIsBin []bool,
+	paramBinaryString []bool,
 	paramKinds []vector.PrepareParamKind,
 	paramTypes []types.T,
 	err error,
@@ -2317,6 +2344,7 @@ func buildExecuteUserParams(
 	}()
 	paramVals = make([]any, len(args))
 	paramIsBin = make([]bool, len(args))
+	paramBinaryString = make([]bool, len(args))
 	paramKinds = make([]vector.PrepareParamKind, len(args))
 	for i, arg := range args {
 		exprImpl := arg.Expr.(*plan.Expr_V)
@@ -2328,6 +2356,14 @@ func buildExecuteUserParams(
 		resolveIsBin := proc.GetResolveVariableIsBinFunc()
 		if resolveIsBin != nil {
 			paramIsBin[i], err = resolveIsBin(exprImpl.V.Name, exprImpl.V.System, exprImpl.V.Global)
+			if err != nil {
+				return
+			}
+		}
+		resolveBinaryString := proc.GetResolveVariableBinaryStringFunc()
+		if resolveBinaryString != nil {
+			paramBinaryString[i], err = resolveBinaryString(
+				exprImpl.V.Name, exprImpl.V.System, exprImpl.V.Global)
 			if err != nil {
 				return
 			}
@@ -2364,14 +2400,11 @@ func buildExecuteUserParams(
 			PrepareParamKind:    paramKinds[i],
 			EnableNumericPrefix: currentProtocolVersion(proc) >= defines.MORPCVersion30,
 		}
-		if paramIsBin[i] {
-			// User variables assigned from binary literals retain a binary SQL
-			// result domain even when the EXECUTE argument itself is untyped.
-			paramValue.SourceType = types.T_varbinary.ToType()
-			paramValue.HasSourceType = true
-		} else if arg.Typ.Id != 0 {
+		if arg.Typ.Id != 0 {
 			sourceOID := types.T(arg.Typ.Id)
-			if arg.Typ.Charset == uint32(types.CharsetBinary) {
+			sourceCharset := uint8(arg.Typ.Charset)
+			if paramBinaryString[i] || sourceCharset == types.CharsetBinary {
+				sourceCharset = types.CharsetBinary
 				switch sourceOID {
 				case types.T_char:
 					sourceOID = types.T_binary
@@ -2382,7 +2415,12 @@ func buildExecuteUserParams(
 				}
 			}
 			paramValue.SourceType = types.NewWithCharset(
-				sourceOID, arg.Typ.Width, arg.Typ.Scale, uint8(arg.Typ.Charset))
+				sourceOID, arg.Typ.Width, arg.Typ.Scale, sourceCharset)
+			paramValue.HasSourceType = true
+		} else if paramBinaryString[i] {
+			// Legacy user variables can predate assignment-type capture. Keep the
+			// binary string domain without reusing Literal.IsBin as its owner.
+			paramValue.SourceType = types.T_varbinary.ToType()
 			paramValue.HasSourceType = true
 		}
 		paramVals[i] = paramValue

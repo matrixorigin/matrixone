@@ -3945,15 +3945,8 @@ func preparedComparisonTypeIsNumeric(typ types.T) bool {
 }
 
 func (rule *preparedRuntimeTextComparisonScanRule) paramTypeIsText(position int) bool {
-	if position < 0 || position >= len(rule.runtimeParamTypes) {
-		return false
-	}
-	switch rule.runtimeParamTypes[position].Oid {
-	case types.T_char, types.T_varchar, types.T_text:
-		return true
-	default:
-		return false
-	}
+	return position >= 0 && position < len(rule.runtimeParamTypes) &&
+		rule.runtimeParamTypes[position].Oid.IsMySQLString()
 }
 
 func (rule *preparedRuntimeSpecializationScanRule) MatchNode(_ *Node) bool {
@@ -4186,6 +4179,12 @@ func preparedRuntimeSpecializationFunction(name string) bool {
 	switch name {
 	case "ntile", "sleep",
 		"date_add", "date_sub", "adddate", "subdate", "timestampadd", "timestampdiff",
+		"ord", "char_length", "character_length",
+		"left", "right", "substring", "substr", "mid", "reverse",
+		"lower", "lcase", "upper", "ucase", "trim", "ltrim", "rtrim",
+		"locate", "instr", "position", "insert", "replace", "lpad", "rpad",
+		"substring_index", "split_part", "repeat", "concat", "concat_ws",
+		"charset", "collation",
 		"=", "<=>", "!=", "<>", "<", "<=", ">", ">=",
 		"like", "ilike", "regexp", "not_regexp", "between", "not_between",
 		"in", "not_in", "partition_in":
@@ -5800,6 +5799,14 @@ func replaceParamValsWithSelection(
 			hasRuntimeType = param.HasRuntimeType
 			numericPrefixSource = param.EnableNumericPrefix
 			retainParamRef = param.RetainParamRef
+			if !param.IsBinaryProtocol && param.HasSourceType && param.Value != nil &&
+				types.StaticStringDomain(param.SourceType) != types.StringDomainNone {
+				// SQL EXECUTE USING owns an assignment-time string type. Rebind
+				// domain-sensitive functions with that type instead of flattening a
+				// BINARY/VARBINARY/BLOB variable into the TEXT transport vector.
+				runtimeType = param.SourceType
+				hasRuntimeType = true
+			}
 			if param.HasSourceType && param.Value != nil {
 				sqlExecuteStringBackedParams[i] = isStringBackedType(param.SourceType)
 				sqlExecuteNumericParams[i], err = preparedSQLExecuteNumericParamExpr(

@@ -355,10 +355,25 @@ func TestInformationSchemaCheckConstraintsDDL(t *testing.T) {
 	}
 }
 
+func TestInformationSchemaColumnsUsesTypeCharsetIdentity(t *testing.T) {
+	for _, expected := range []string{
+		"WHEN 0 then 'utf8'",
+		"WHEN 1 then 'utf8mb4'",
+		"WHEN 2 then 'binary'",
+		"WHEN 3 then 'utf8mb4'",
+		"WHEN 0 then 'utf8_general_ci'",
+		"WHEN 1 then 'utf8mb4_bin'",
+		"WHEN 2 then 'binary'",
+		"WHEN 3 then 'utf8mb4_general_ci'",
+	} {
+		assert.Contains(t, InformationSchemaColumnsDDL, expected)
+	}
+}
+
 func TestInformationSchemaCharacterSetsData(t *testing.T) {
 	for _, expected := range []string{
 		"('binary','binary','Binary pseudo charset',1)",
-		"('utf8','utf8_general_ci','UTF-8 Unicode',4)",
+		"('utf8','utf8_general_ci','UTF-8 Unicode',3)",
 		"('utf8mb4','utf8mb4_general_ci','UTF-8 Unicode',4)",
 	} {
 		assert.Contains(t, InformationSchemaCharacterSetsData, expected)

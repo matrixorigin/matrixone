@@ -719,6 +719,13 @@ func (expr *VarExpressionExecutor) Eval(proc *process.Process, batches []*batch.
 			return nil, err
 		}
 	}
+	binaryString := false
+	if resolveBinaryString := proc.GetResolveVariableBinaryStringFunc(); resolveBinaryString != nil {
+		binaryString, err = resolveBinaryString(expr.name, expr.system, expr.global)
+		if err != nil {
+			return nil, err
+		}
+	}
 	prepareParamKind := vector.PrepareParamNone
 	if resolveKind := proc.GetResolveVariablePrepareParamKindFunc(); resolveKind != nil {
 		prepareParamKind, err = resolveKind(expr.name, expr.system, expr.global)
@@ -735,6 +742,7 @@ func (expr *VarExpressionExecutor) Eval(proc *process.Process, batches []*batch.
 		}
 		if err == nil {
 			expr.null.SetIsBin(isBin)
+			expr.null.SetIsBinaryString(binaryString)
 			expr.null.SetPrepareParamKind(prepareParamKind)
 			err = expr.null.SetStringSource(types.StringSourceUserVariable)
 			expr.null.SetLength(rowCount)
@@ -769,6 +777,7 @@ func (expr *VarExpressionExecutor) Eval(proc *process.Process, batches []*batch.
 	}
 	if err == nil {
 		expr.vec.SetIsBin(isBin)
+		expr.vec.SetIsBinaryString(binaryString)
 		expr.vec.SetPrepareParamKind(prepareParamKind)
 		err = expr.vec.SetStringSource(types.StringSourceUserVariable)
 		expr.vec.SetLength(rowCount)

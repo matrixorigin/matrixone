@@ -16,12 +16,12 @@ aa
 select lpad(X'61', 2, X'62') as bounded_lpad;
 ➤ bounded_lpad[-3,2,0]  𝄀
 ba
-select lpad(cast('😀' as varbinary(4)), 2, '😀') as multibyte_lpad;
-➤ multibyte_lpad[-3,8,0]  𝄀
-ðð
-select rpad(cast('😀' as varbinary(4)), 2, '😀') as multibyte_rpad;
-➤ multibyte_rpad[-3,8,0]  𝄀
-ðð
+select hex(lpad(cast('😀' as varbinary(4)), 2, '😀')) as multibyte_lpad_hex;
+➤ multibyte_lpad_hex[12,65535,0]  𝄀
+F09F
+select hex(rpad(cast('😀' as varbinary(4)), 2, '😀')) as multibyte_rpad_hex;
+➤ multibyte_rpad_hex[12,65535,0]  𝄀
+F09F
 select repeat(X'61', cast(2 as signed)) as dynamic_repeat;
 ➤ dynamic_repeat[-4,2147483647,0]  𝄀
 aa
@@ -61,7 +61,7 @@ select column_name, data_type, character_maximum_length, character_set_name, col
 from information_schema.columns
 where table_schema = 'binary_string_result_domain' and table_name = 'binary_result_ctas'
 order by ordinal_position;
-➤ column_name[12,256,0]  ¦  data_type[12,65535,0]  ¦  character_maximum_length[-5,64,0]  ¦  character_set_name[12,6,0]  ¦  collation_name[12,8,0]  𝄀
+➤ column_name[12,256,0]  ¦  data_type[12,65535,0]  ¦  character_maximum_length[-5,64,0]  ¦  character_set_name[12,7,0]  ¦  collation_name[12,18,0]  𝄀
 repeated  ¦  blob  ¦  0  ¦  binary  ¦  binary  𝄀
 concatenated  ¦  blob  ¦  0  ¦  binary  ¦  binary
 drop database binary_string_result_domain;

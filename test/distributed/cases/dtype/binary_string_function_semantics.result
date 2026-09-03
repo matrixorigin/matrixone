@@ -1,0 +1,151 @@
+drop database if exists binary_string_function_semantics;
+create database binary_string_function_semantics;
+use binary_string_function_semantics;
+select length('你a'), char_length('你a'), length(X'e4bda061'), char_length(X'e4bda061'),
+ord('你a'), ord(X'e4bda061');
+➤ length(你a)[-5,64,0]  ¦  char_length(你a)[-5,64,0]  ¦  length(0xe4bda061)[-5,64,0]  ¦  char_length(0xe4bda061)[-5,64,0]  ¦  ord(你a)[-5,64,0]  ¦  ord(0xe4bda061)[-5,64,0]  𝄀
+4  ¦  2  ¦  4  ¦  4  ¦  14990752  ¦  228
+select hex(left('你a', 1)), hex(left(X'e4bda061', 1)),
+hex(right('a你', 1)), hex(right(X'61e4bda0', 1)),
+hex(substring('你好', 2, 1)), hex(substring(X'e4bda0e5a5bd', 2, 1));
+➤ hex(left(你a, 1))[12,65535,0]  ¦  hex(left(0xe4bda061, 1))[12,65535,0]  ¦  hex(right(a你, 1))[12,65535,0]  ¦  hex(right(0x61e4bda0, 1))[12,65535,0]  ¦  hex(substring(你好, 2, 1))[12,65535,0]  ¦  hex(substring(0xe4bda0e5a5bd, 2, 1))[12,65535,0]  𝄀
+E4BDA0  ¦  E4  ¦  E4BDA0  ¦  A0  ¦  E5A5BD  ¦  BD
+select hex(reverse('你a')), hex(reverse(X'e4bda061')),
+hex(lower('ÄA')), hex(lower(X'c38441')),
+hex(upper('äa')), hex(upper(X'c3a461'));
+➤ hex(reverse(你a))[12,65535,0]  ¦  hex(reverse(0xe4bda061))[12,65535,0]  ¦  hex(lower(ÄA))[12,65535,0]  ¦  hex(lower(0xc38441))[12,65535,0]  ¦  hex(upper(äa))[12,65535,0]  ¦  hex(upper(0xc3a461))[12,65535,0]  𝄀
+61E4BDA0  ¦  61A0BDE4  ¦  C3A461  ¦  C38441  ¦  C38441  ¦  C3A461
+select hex(insert('你a', 2, 1, X'78')), hex(insert(X'e4bda061', 2, 1, 'x')),
+hex(lpad('你a', 3, X'e5a5bd')), hex(lpad(X'e4bda061', 3, '好')),
+hex(rpad('你', 2, X'78')), hex(rpad(X'e4bda0', 2, 'x'));
+➤ hex(insert(你a, 2, 1, 0x78))[12,65535,0]  ¦  hex(insert(0xe4bda061, 2, 1, x))[12,65535,0]  ¦  hex(lpad(你a, 3, 0xe5a5bd))[12,65535,0]  ¦  hex(lpad(0xe4bda061, 3, 好))[12,65535,0]  ¦  hex(rpad(你, 2, 0x78))[12,65535,0]  ¦  hex(rpad(0xe4bda0, 2, x))[12,65535,0]  𝄀
+E4BDA078  ¦  E478A061  ¦  E5A5BDE4BDA061  ¦  E4BDA0  ¦  E4BDA078  ¦  E4BD
+select locate(X'bd', '你a'), locate(X'bd', X'e4bda061'),
+instr('你a', X'bd'), instr(X'e4bda061', X'bd'),
+'你a' like '____', X'e4bda061' like '____';
+➤ locate(0xbd, 你a)[-5,64,0]  ¦  locate(0xbd, 0xe4bda061)[-5,64,0]  ¦  instr(你a, 0xbd)[-5,64,0]  ¦  instr(0xe4bda061, 0xbd)[-5,64,0]  ¦  你a like ____[-7,1,0]  ¦  0xe4bda061 like ____[-7,1,0]  𝄀
+0  ¦  2  ¦  0  ¦  2  ¦  0  ¦  1
+select hex(replace('你a', X'bd', X'78')), hex(replace(X'e4bda061', X'bd', 'x')),
+hex(substring_index('a你b你c', X'e4bda0', 1)),
+hex(substring_index(X'61e4bda062e4bda063', '你', 1));
+➤ hex(replace(你a, 0xbd, 0x78))[12,65535,0]  ¦  hex(replace(0xe4bda061, 0xbd, x))[12,65535,0]  ¦  hex(substring_index(a你b你c, 0xe4bda0, 1))[12,65535,0]  ¦  hex(substring_index(0x61e4bda062e4bda063, 你, 1))[12,65535,0]  𝄀
+E478A061  ¦  E478A061  ¦  61  ¦  61
+select hex(ltrim(' 你 ')), hex(ltrim(X'20e4bda020')),
+hex(rtrim(' 你 ')), hex(rtrim(X'20e4bda020')),
+char_length(repeat('你', 2)), char_length(repeat(X'e4bda0', 2));
+➤ hex(ltrim( 你 ))[12,65535,0]  ¦  hex(ltrim(0x20e4bda020))[12,65535,0]  ¦  hex(rtrim( 你 ))[12,65535,0]  ¦  hex(rtrim(0x20e4bda020))[12,65535,0]  ¦  char_length(repeat(你, 2))[-5,64,0]  ¦  char_length(repeat(0xe4bda0, 2))[-5,64,0]  𝄀
+E4BDA020  ¦  E4BDA020  ¦  20E4BDA0  ¦  20E4BDA0  ¦  2  ¦  6
+select charset('你'), collation('你'), charset(X'e4bda0'), collation(X'e4bda0'),
+charset(null), collation(null), charset(123), collation(123);
+➤ charset(你)[12,65535,0]  ¦  collation(你)[12,65535,0]  ¦  charset(0xe4bda0)[12,65535,0]  ¦  collation(0xe4bda0)[12,65535,0]  ¦  charset(null)[12,65535,0]  ¦  collation(null)[12,65535,0]  ¦  charset(123)[12,65535,0]  ¦  collation(123)[12,65535,0]  𝄀
+utf8mb4  ¦  utf8mb4_general_ci  ¦  binary  ¦  binary  ¦  binary  ¦  binary  ¦  binary  ¦  binary
+select charset(cast(null as char)), collation(cast(null as char)),
+charset(cast(null as binary)), collation(cast(null as binary));
+➤ charset(cast(null as varchar))[12,65535,0]  ¦  collation(cast(null as varchar))[12,65535,0]  ¦  charset(cast(null as binary))[12,65535,0]  ¦  collation(cast(null as binary))[12,65535,0]  𝄀
+utf8mb4  ¦  utf8mb4_general_ci  ¦  binary  ¦  binary
+create table domains (
+id int,
+txt varchar(16),
+bin varbinary(16),
+invalid_bytes blob
+);
+insert into domains values
+(1, '你a', null, X'ffe4bda0'),
+(2, null, X'e4bda061', X'ffe4bda0'),
+(3, '你a', X'e4bda061', X'ffe4bda0');
+select id, hex(coalesce(txt, bin)), char_length(coalesce(txt, bin)),
+charset(coalesce(txt, bin)), collation(coalesce(txt, bin))
+from domains order by id;
+➤ id[4,32,0]  ¦  hex(coalesce(txt, bin))[12,65535,0]  ¦  char_length(coalesce(txt, bin))[-5,64,0]  ¦  charset(coalesce(txt, bin))[12,65535,0]  ¦  collation(coalesce(txt, bin))[12,65535,0]  𝄀
+1  ¦  E4BDA061  ¦  2  ¦  utf8mb4  ¦  utf8mb4_general_ci  𝄀
+2  ¦  E4BDA061  ¦  4  ¦  utf8mb4  ¦  utf8mb4_general_ci  𝄀
+3  ¦  E4BDA061  ¦  2  ¦  utf8mb4  ¦  utf8mb4_general_ci
+select id, hex(left(coalesce(txt, bin), 1)), hex(reverse(coalesce(txt, bin))),
+char_length(concat(coalesce(txt, bin), 'x'))
+from domains order by id;
+➤ id[4,32,0]  ¦  hex(left(coalesce(txt, bin), 1))[12,65535,0]  ¦  hex(reverse(coalesce(txt, bin)))[12,65535,0]  ¦  char_length(concat(coalesce(txt, bin), x))[-5,64,0]  𝄀
+1  ¦  E4BDA0  ¦  61E4BDA0  ¦  3  𝄀
+2  ¦  E4  ¦  61A0BDE4  ¦  5  𝄀
+3  ¦  E4BDA0  ¦  61E4BDA0  ¦  3
+select id, hex(left(invalid_bytes, 1)), hex(reverse(invalid_bytes)),
+char_length(invalid_bytes), invalid_bytes like '____'
+from domains order by id;
+➤ id[4,32,0]  ¦  hex(left(invalid_bytes, 1))[12,65535,0]  ¦  hex(reverse(invalid_bytes))[12,65535,0]  ¦  char_length(invalid_bytes)[-5,64,0]  ¦  invalid_bytes like ____[-7,1,0]  𝄀
+1  ¦  FF  ¦  A0BDE4FF  ¦  4  ¦  1  𝄀
+2  ¦  FF  ¦  A0BDE4FF  ¦  4  ¦  1  𝄀
+3  ¦  FF  ¦  A0BDE4FF  ¦  4  ¦  1
+create table concat_ws_domains (
+id int,
+sep varbinary(1),
+first_value varchar(16),
+second_value varchar(16)
+);
+insert into concat_ws_domains values
+(1, X'2d', '你', null),
+(2, X'2d', '你', 'a');
+select id, hex(concat_ws(sep, first_value, second_value)),
+char_length(concat_ws(sep, first_value, second_value)),
+charset(concat_ws(sep, first_value, second_value))
+from concat_ws_domains order by id;
+➤ id[4,32,0]  ¦  hex(concat_ws(sep, first_value, second_value))[12,65535,0]  ¦  char_length(concat_ws(sep, first_value, second_value))[-5,64,0]  ¦  charset(concat_ws(sep, first_value, second_value))[12,65535,0]  𝄀
+1  ¦  E4BDA0  ¦  1  ¦  binary  𝄀
+2  ¦  E4BDA02D61  ¦  5  ¦  binary
+create table collation_domains (
+ci varchar(16) collate utf8mb4_general_ci,
+exact varchar(16) collate utf8mb4_bin,
+bytes_value varbinary(16)
+);
+insert into collation_domains values ('A你', 'A你', X'41e4bda0');
+select locate('a', ci), instr(ci, 'a'), locate('a', exact), instr(exact, 'a'),
+locate(X'bd', bytes_value), instr(bytes_value, X'bd')
+from collation_domains;
+➤ locate(a, ci)[-5,64,0]  ¦  instr(ci, a)[-5,64,0]  ¦  locate(a, exact)[-5,64,0]  ¦  instr(exact, a)[-5,64,0]  ¦  locate(0xbd, bytes_value)[-5,64,0]  ¦  instr(bytes_value, 0xbd)[-5,64,0]  𝄀
+1  ¦  1  ¦  0  ¦  0  ¦  3  ¦  3
+select charset(ci), collation(ci), charset(exact), collation(exact),
+charset(bytes_value), collation(bytes_value)
+from collation_domains;
+➤ charset(ci)[12,65535,0]  ¦  collation(ci)[12,65535,0]  ¦  charset(exact)[12,65535,0]  ¦  collation(exact)[12,65535,0]  ¦  charset(bytes_value)[12,65535,0]  ¦  collation(bytes_value)[12,65535,0]  𝄀
+utf8mb4  ¦  utf8mb4_general_ci  ¦  utf8mb4  ¦  utf8mb4_bin  ¦  binary  ¦  binary
+set @binary_value = X'e4bda061';
+set @text_value = '你a';
+select char_length(@binary_value), hex(left(@binary_value, 1)), ord(@binary_value),
+@binary_value like '____';
+➤ char_length(@binary_value)[-5,64,0]  ¦  hex(left(@binary_value, 1))[12,65535,0]  ¦  ord(@binary_value)[-5,64,0]  ¦  @binary_value like ____[-7,1,0]  𝄀
+4  ¦  E4  ¦  228  ¦  1
+select char_length(@text_value), hex(left(@text_value, 1)), ord(@text_value),
+@text_value like '____';
+➤ char_length(@text_value)[-5,64,0]  ¦  hex(left(@text_value, 1))[12,65535,0]  ¦  ord(@text_value)[-5,64,0]  ¦  @text_value like ____[-7,1,0]  𝄀
+2  ¦  E4BDA0  ¦  14990752  ¦  0
+prepare binary_string_stmt from
+'select char_length(?), hex(left(?, 1)), ord(?), ? like ''____'',
+charset(left(?, 1)), collation(left(?, 1))';
+execute binary_string_stmt using @binary_value, @binary_value, @binary_value, @binary_value,
+@binary_value, @binary_value;
+➤ char_length(?)[-5,64,0]  ¦  hex(left(?, 1))[12,65535,0]  ¦  ord(?)[-5,64,0]  ¦  ? like ____[-7,1,0]  ¦  charset(left(?, 1))[12,65535,0]  ¦  collation(left(?, 1))[12,65535,0]  𝄀
+4  ¦  E4  ¦  228  ¦  1  ¦  binary  ¦  binary
+execute binary_string_stmt using @text_value, @text_value, @text_value, @text_value,
+@text_value, @text_value;
+➤ char_length(?)[-5,64,0]  ¦  hex(left(?, 1))[12,65535,0]  ¦  ord(?)[-5,64,0]  ¦  ? like ____[-7,1,0]  ¦  charset(left(?, 1))[12,65535,0]  ¦  collation(left(?, 1))[12,65535,0]  𝄀
+2  ¦  E4BDA0  ¦  14990752  ¦  0  ¦  utf8mb4  ¦  utf8mb4_general_ci
+deallocate prepare binary_string_stmt;
+create table binary_function_ctas as
+select left(bin, 1) as binary_left,
+lower(bin) as binary_lower,
+replace(txt, X'bd', X'78') as text_replace
+from domains where id = 3;
+select column_name, data_type, character_maximum_length, character_octet_length,
+character_set_name, collation_name
+from information_schema.columns
+where table_schema = 'binary_string_function_semantics'
+and table_name = 'binary_function_ctas'
+order by ordinal_position;
+➤ column_name[12,256,0]  ¦  data_type[12,65535,0]  ¦  character_maximum_length[-5,64,0]  ¦  character_octet_length[-5,64,0]  ¦  character_set_name[12,7,0]  ¦  collation_name[12,18,0]  𝄀
+binary_left  ¦  varbinary  ¦  16  ¦  16  ¦  binary  ¦  binary  𝄀
+binary_lower  ¦  varbinary  ¦  16  ¦  16  ¦  binary  ¦  binary  𝄀
+text_replace  ¦  varchar  ¦  16  ¦  64  ¦  utf8mb4  ¦  utf8mb4_general_ci
+select hex(binary_left), hex(binary_lower), hex(text_replace),
+char_length(binary_left), char_length(binary_lower), char_length(text_replace)
+from binary_function_ctas;
+➤ hex(binary_left)[12,65535,0]  ¦  hex(binary_lower)[12,65535,0]  ¦  hex(text_replace)[12,65535,0]  ¦  char_length(binary_left)[-5,64,0]  ¦  char_length(binary_lower)[-5,64,0]  ¦  char_length(text_replace)[-5,64,0]  𝄀
+E4  ¦  E4BDA061  ¦  E478A061  ¦  1  ¦  4  ¦  2
+drop database binary_string_function_semantics;

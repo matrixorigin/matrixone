@@ -410,6 +410,44 @@ func TestPreparedRuntimeSpecializationCoversResultDomainAggregates(t *testing.T)
 	}
 }
 
+func TestPreparedRuntimeSpecializationCoversBinaryStringSemantics(t *testing.T) {
+	for _, name := range []string{
+		"ord", "char_length", "character_length",
+		"left", "right", "substring", "substr", "mid", "reverse",
+		"lower", "lcase", "upper", "ucase", "trim", "ltrim", "rtrim",
+		"locate", "instr", "position", "insert", "replace", "lpad", "rpad",
+		"substring_index", "split_part", "repeat", "concat", "concat_ws",
+		"charset", "collation",
+	} {
+		require.True(t, preparedRuntimeSpecializationFunction(name), name)
+	}
+
+	prepared, err := runOneStmt(NewMockOptimizer(false), t,
+		"prepare binary_domains from 'select charset(left(?, 1)), char_length(?), ord(?)'")
+	require.NoError(t, err)
+	preparedPlan := prepared.GetDcl().GetPrepare().Plan
+	require.True(t, PreparedPlanNeedsRuntimeSpecialization(preparedPlan))
+
+	binaryParam := ParamValue{
+		Value: "\xe4\xbd\xa0", SourceType: types.T_varbinary.ToType(), HasSourceType: true,
+	}
+	filled, specialized, err := FillValuesOfParamsInPlanWithSpecialization(
+		context.Background(), preparedPlan, []any{binaryParam, binaryParam, binaryParam})
+	require.NoError(t, err)
+	require.True(t, specialized)
+
+	left := findPlanFunctionExpr(filled, "left")
+	require.NotNil(t, left)
+	require.Equal(t, int32(types.T_varbinary), left.Typ.Id)
+	require.Equal(t, uint32(types.CharsetBinary), left.Typ.Charset)
+	charLength := findPlanFunctionExpr(filled, "char_length")
+	require.NotNil(t, charLength)
+	require.Equal(t, int32(types.T_varbinary), charLength.GetF().Args[0].Typ.Id)
+	ord := findPlanFunctionExpr(filled, "ord")
+	require.NotNil(t, ord)
+	require.Equal(t, int32(types.T_varbinary), ord.GetF().Args[0].Typ.Id)
+}
+
 func TestPreparedDMLRuntimeSpecializationPreservesWriteParameters(t *testing.T) {
 	predicateOnly := buildPreparedAggregatePlan(t,
 		"update nation set n_comment = ''x'' where ? = ?")

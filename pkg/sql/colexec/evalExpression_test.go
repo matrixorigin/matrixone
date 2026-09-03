@@ -1398,6 +1398,41 @@ func TestVarExpressionExecutor(t *testing.T) {
 	require.Equal(t, int64(67890), vector.MustFixedColNoTypeCheck[int64](vec)[0])
 }
 
+func TestVarExpressionExecutorPreservesBinaryStringMetadataOnReuse(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	value := "\xe4\xbd\xa0"
+	binaryString := true
+	proc.SetResolveVariableFunc(func(string, bool, bool) (interface{}, error) {
+		return value, nil
+	})
+	proc.SetResolveVariableBinaryStringFunc(func(string, bool, bool) (bool, error) {
+		return binaryString, nil
+	})
+
+	executor, err := NewExpressionExecutor(proc, &plan.Expr{
+		Expr: &plan.Expr_V{V: &plan.VarRef{Name: "domain_var"}},
+		Typ:  plan.Type{Id: int32(types.T_varchar)},
+	})
+	require.NoError(t, err)
+	t.Cleanup(executor.Free)
+
+	input := batch.New(nil)
+	input.SetRowCount(2)
+	vec, err := executor.Eval(proc, []*batch.Batch{input}, nil)
+	require.NoError(t, err)
+	require.True(t, vec.GetBinaryStringMetadataAt(0))
+	require.True(t, vec.GetBinaryStringMetadataAt(1))
+	require.Equal(t, types.StringSourceUserVariable, vec.GetStringSourceAt(0))
+
+	binaryString = false
+	value = "text"
+	vec, err = executor.Eval(proc, []*batch.Batch{input}, nil)
+	require.NoError(t, err)
+	require.False(t, vec.GetBinaryStringMetadataAt(0),
+		"a reused variable vector must not leak the preceding binary domain")
+	require.Equal(t, "text", vec.GetStringAt(1))
+}
+
 func TestParamExpressionExecutorMatchesBatchRowCount(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	params := vector.NewVec(types.T_varchar.ToType())

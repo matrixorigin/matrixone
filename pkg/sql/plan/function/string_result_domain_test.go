@@ -226,12 +226,14 @@ func TestExpandingReplacementAndInsertBounds(t *testing.T) {
 
 	inserted := insertStringReturnType([]types.Type{varbinary(1), types.T_int64.ToType(), types.T_int64.ToType(), varbinary(1)})
 	require.Equal(t, types.T_varbinary, inserted.Oid)
-	require.Equal(t, int32(4), inserted.Width)
+	require.Equal(t, int32(2), inserted.Width)
 
 	binaryReplacement := replacementStringReturnType([]types.Type{varchar(2), varchar(1), varbinary(1)})
-	require.Equal(t, types.T_varbinary, binaryReplacement.Oid)
+	require.Equal(t, types.T_varchar, binaryReplacement.Oid)
+	require.Equal(t, types.CharsetUTF8, binaryReplacement.Charset)
 	binaryInsertion := insertStringReturnType([]types.Type{varchar(1), types.T_int64.ToType(), types.T_int64.ToType(), varbinary(1)})
-	require.Equal(t, types.T_varbinary, binaryInsertion.Oid)
+	require.Equal(t, types.T_varchar, binaryInsertion.Oid)
+	require.Equal(t, types.CharsetUTF8, binaryInsertion.Charset)
 }
 
 func TestStringConsumersPreserveTextAndBoundedWidths(t *testing.T) {
@@ -239,9 +241,10 @@ func TestStringConsumersPreserveTextAndBoundedWidths(t *testing.T) {
 	binaryReverse, err := GetFunctionByName(proc.Ctx, "reverse", []types.Type{types.New(types.T_varbinary, 1, 0)})
 	require.NoError(t, err)
 	casts, needCast := binaryReverse.ShouldDoImplicitTypeCast()
-	require.True(t, needCast)
-	require.Equal(t, types.T_blob, casts[0].Oid)
-	require.Equal(t, types.T_blob, binaryReverse.GetReturnType().Oid)
+	require.False(t, needCast)
+	require.Empty(t, casts)
+	require.Equal(t, types.T_varbinary, binaryReverse.GetReturnType().Oid)
+	require.Equal(t, int32(1), binaryReverse.GetReturnType().Width)
 
 	blobReverse, err := GetFunctionByName(proc.Ctx, "reverse", []types.Type{types.T_blob.ToType()})
 	require.NoError(t, err)
@@ -402,13 +405,8 @@ func TestPadResultByteLengthEnforcesEncodedBudget(t *testing.T) {
 	_, rejected = padResultByteLength("😀", int64(types.MaxBlobLen), "😀", int64(types.MaxBlobLen))
 	require.True(t, rejected)
 
-	length, rejected = padResultByteLength("a", 2, "", int64(types.MaxVarcharLen))
-	require.False(t, rejected)
-	require.Zero(t, length)
-	dst := make([]byte, length)
-	require.NotPanics(t, func() { writePadResult(dst, "a", 2, "", true) })
-	require.Empty(t, dst)
-	require.NotPanics(t, func() { writePadResult(dst, "a", 2, "", false) })
+	_, rejected = padResultByteLength("a", 2, "", int64(types.MaxVarcharLen))
+	require.True(t, rejected)
 }
 
 func TestExpandingTextResultsUseTextCapacity(t *testing.T) {

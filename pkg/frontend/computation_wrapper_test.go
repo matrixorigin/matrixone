@@ -350,6 +350,7 @@ func newPreparedExecuteEnvForSQLWithCompilerContext(
 	ses.GetTxnCompileCtx().SetExecCtx(execCtx)
 	proc.SetResolveVariableFunc(ses.txnCompileCtx.ResolveVariable)
 	proc.SetResolveVariableIsBinFunc(ses.txnCompileCtx.ResolveVariableIsBin)
+	proc.SetResolveVariableBinaryStringFunc(ses.txnCompileCtx.ResolveVariableBinaryString)
 	proc.SetResolveVariablePrepareParamKindFunc(ses.txnCompileCtx.ResolveVariablePrepareParamKind)
 	return ses, prepareStmt, cw, execCtx
 }
@@ -394,6 +395,8 @@ func TestInitExecuteStmtParamPreservesBinaryFlagPerUserVariable(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, cw.proc.GetPrepareParamIsBin(0))
 	require.False(t, cw.proc.GetPrepareParamIsBin(1))
+	require.True(t, cw.proc.GetPrepareParamIsBinaryString(0))
+	require.False(t, cw.proc.GetPrepareParamIsBinaryString(1))
 	require.Equal(t, plan2.ParamValue{
 		Value: "AB\x00\x00", IsBin: true, EnableNumericPrefix: true,
 		SourceType: types.T_varbinary.ToType(), HasSourceType: true,
@@ -411,6 +414,7 @@ func TestInitExecuteStmtParamPreservesBinaryFlagPerUserVariable(t *testing.T) {
 	require.Zero(t, params.Length(), "the previous owned params must be released on successful replacement")
 	require.Nil(t, params.GetData())
 	require.False(t, cw.proc.GetPrepareParamIsBin(0))
+	require.False(t, cw.proc.GetPrepareParamIsBinaryString(0))
 	require.Equal(t, "now-text", cw.proc.GetPrepareParams().GetStringAt(0))
 	require.Equal(t, types.StringSourceSQLPrepare, cw.proc.GetPrepareParams().GetStringSourceAt(0))
 
@@ -446,6 +450,72 @@ func TestPreparedParamValuesPreservesNullProtocolProvenance(t *testing.T) {
 		PrepareParamKind:    vector.PrepareParamDecimal,
 		EnableNumericPrefix: true,
 	}}, values)
+}
+
+func TestInitExecuteStmtParamSetsCOMStmtBinaryStringMetadata(t *testing.T) {
+	ses, prepareStmt, cw, execCtx := newPreparedExecuteEnvForSQL(
+		t, 120, "select char_length(?), char_length(?)")
+	defer func() {
+		cw.proc.SetPrepareParams(nil)
+		prepareStmt.Close()
+	}()
+
+	prepareStmt.params = vector.NewVec(types.T_text.ToType())
+	require.NoError(t, vector.AppendBytes(
+		prepareStmt.params, []byte("\xe4\xbd\xa0"), false, cw.proc.Mp()))
+	require.NoError(t, vector.AppendBytes(
+		prepareStmt.params, []byte("\xe4\xbd\xa0"), false, cw.proc.Mp()))
+	prepareStmt.ParamTypes = []byte{
+		byte(defines.MYSQL_TYPE_BLOB), 0,
+		byte(defines.MYSQL_TYPE_VAR_STRING), 0,
+	}
+
+	_, _, executionStmt, _, owned, err := initExecuteStmtParam(
+		execCtx, ses, cw, nil, prepareStmt.Name)
+	require.NoError(t, err)
+	if owned {
+		executionStmt.Free()
+	}
+	require.True(t, cw.proc.GetPrepareParamIsBinaryString(0))
+	require.False(t, cw.proc.GetPrepareParamIsBinaryString(1))
+	require.Equal(t, types.StringSourceCOMStmt, cw.proc.GetPrepareParams().GetStringSourceAt(0))
+	require.Equal(t, types.StringSourceCOMStmt, cw.proc.GetPrepareParams().GetStringSourceAt(1))
+}
+
+func TestInitExecuteStmtParamSpecializesCOMStmtBinaryFunction(t *testing.T) {
+	ses, prepareStmt, cw, execCtx := newPreparedExecuteEnvForSQL(
+		t, 121, "select left(?, 1) as binary_left")
+	defer func() {
+		cw.proc.SetPrepareParams(nil)
+		prepareStmt.Close()
+	}()
+
+	prepareStmt.params = vector.NewVec(types.T_text.ToType())
+	require.NoError(t, vector.AppendBytes(
+		prepareStmt.params, []byte("\xe4\xbd\xa0"), false, cw.proc.Mp()))
+	prepareStmt.ParamTypes = []byte{byte(defines.MYSQL_TYPE_BLOB), 0}
+
+	_, runtimePlan, executionStmt, _, owned, err := initExecuteStmtParam(
+		execCtx, ses, cw, nil, prepareStmt.Name)
+	require.NoError(t, err)
+	if owned {
+		executionStmt.Free()
+	}
+	require.NotSame(t, prepareStmt.PreparePlan.GetDcl().GetPrepare().Plan, runtimePlan)
+	root := runtimePlan.GetQuery().Nodes[runtimePlan.GetQuery().Steps[len(runtimePlan.GetQuery().Steps)-1]]
+	require.Len(t, root.ProjectList, 1)
+	require.Equal(t, int32(types.T_blob), root.ProjectList[0].Typ.Id)
+	require.Equal(t, uint32(types.CharsetBinary), root.ProjectList[0].Typ.Charset)
+
+	executor, err := colexec.NewExpressionExecutor(cw.proc, root.ProjectList[0])
+	require.NoError(t, err)
+	defer executor.Free()
+	input := batch.New(nil)
+	input.SetRowCount(1)
+	value, err := executor.Eval(cw.proc, []*batch.Batch{input}, nil)
+	require.NoError(t, err)
+	require.Equal(t, []byte{0xe4}, value.GetBytesAt(0))
+	require.True(t, value.GetIsBinaryStringAt(0))
 }
 
 func TestIssue27640InitExecuteStmtParamAcceptsODBCIntegerTextPagination(t *testing.T) {
@@ -514,9 +584,14 @@ func TestIssue27640InitExecuteStmtParamAcceptsODBCIntegerTextPagination(t *testi
 				if valueIndex < len(test.prefix) {
 					enableNumericPrefix = test.prefix[valueIndex]
 				}
-				wantParamVals = append(wantParamVals, plan2.ParamValue{
+				expectedParam := plan2.ParamValue{
 					Value: value, IsBinaryProtocol: true, EnableNumericPrefix: enableNumericPrefix,
-				})
+				}
+				if mysqlType == defines.MYSQL_TYPE_BLOB {
+					expectedParam.RuntimeType = types.T_blob.ToType()
+					expectedParam.HasRuntimeType = true
+				}
+				wantParamVals = append(wantParamVals, expectedParam)
 			}
 
 			retComp, _, executionStmt, _, owned, err := initExecuteStmtParam(
@@ -856,6 +931,7 @@ func TestBinaryProtocolPrepareParamType(t *testing.T) {
 		{name: "unsigned integer", mysqlType: defines.MYSQL_TYPE_LONGLONG, isUnsigned: true, want: types.T_uint64},
 		{name: "double", mysqlType: defines.MYSQL_TYPE_DOUBLE, want: types.T_float64},
 		{name: "string", mysqlType: defines.MYSQL_TYPE_VAR_STRING, want: types.T_text},
+		{name: "blob", mysqlType: defines.MYSQL_TYPE_BLOB, want: types.T_blob},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			got, ok := binaryProtocolPrepareParamType(test.mysqlType, test.isUnsigned, []byte("5"))
@@ -1895,6 +1971,16 @@ func TestPreparedRuntimeSemanticKeyKeepsValueAndSQLSourceDomains(t *testing.T) {
 		preparedRuntimeSemanticKey(decimal("2.5", 20, 5)),
 		preparedRuntimeSemanticKey(decimal("2.5", 30, 8)),
 		"a different SQL source domain must not reuse stale arithmetic metadata")
+
+	collated := func(charset uint8) []any {
+		return []any{plan2.ParamValue{
+			Value: "A", SourceType: types.NewWithCharset(types.T_varchar, 8, 0, charset), HasSourceType: true,
+		}}
+	}
+	require.NotEqual(t,
+		preparedRuntimeSemanticKey(collated(types.CharsetUTF8)),
+		preparedRuntimeSemanticKey(collated(types.CharsetUTF8MB4Bin)),
+		"collation-sensitive string functions must not reuse a plan from another charset identity")
 }
 
 func TestPreparedDirectResultSemanticKeyPreservesDecimalMetadataDomain(t *testing.T) {
@@ -2145,7 +2231,7 @@ func TestInitExecuteStmtParamFreesParamsOnResolveError(t *testing.T) {
 			{Expr: &plan.Expr_V{V: &plan.VarRef{Name: "second"}}},
 		},
 	}
-	params, _, _, _, _, err := buildExecuteUserParams(cw.proc, execPlan.Args, nil)
+	params, _, _, _, _, _, err := buildExecuteUserParams(cw.proc, execPlan.Args, nil)
 	require.ErrorIs(t, err, assert.AnError)
 	require.Zero(t, params.Length())
 	require.Nil(t, params.GetData())
@@ -2213,7 +2299,7 @@ func TestBuildExecuteUserParamsPreservesBoundConcreteTypes(t *testing.T) {
 		wantTypes = append(wantTypes, test.typ)
 	}
 
-	params, _, _, paramKinds, paramTypes, err := buildExecuteUserParams(
+	params, _, _, _, paramKinds, paramTypes, err := buildExecuteUserParams(
 		cw.proc, args, typedPositions)
 	require.NoError(t, err)
 	defer params.Free(cw.proc.Mp())
@@ -2234,7 +2320,7 @@ func TestBuildExecuteUserParamsRejectsBoundTypeKindMismatch(t *testing.T) {
 	require.NoError(t, ses.setUserDefinedVarWithKind(
 		"mismatched", int8(1), "", false, vector.PrepareParamFloat))
 
-	params, _, _, _, _, err := buildExecuteUserParams(cw.proc, []*plan.Expr{{
+	params, _, _, _, _, _, err := buildExecuteUserParams(cw.proc, []*plan.Expr{{
 		Typ:  plan.Type{Id: int32(types.T_int8)},
 		Expr: &plan.Expr_V{V: &plan.VarRef{Name: "mismatched"}},
 	}}, []int32{0})
@@ -2249,6 +2335,8 @@ func TestResolveVariableIsBinHonorsStoredProcedureScope(t *testing.T) {
 	defer prepareStmt.Close()
 	require.NoError(t, ses.setUserDefinedVar("v1", "session-binary", "", true))
 	require.NoError(t, ses.setUserDefinedVar("session_only", "session-binary", "", true))
+	require.NoError(t, ses.setUserDefinedVarWithType(
+		"numeric_hex", int64(1), "", true, plan.Type{Id: int32(types.T_int64)}))
 	scopes := []map[string]interface{}{
 		{"v1": int64(10), "declared_only_outer": "5.0"},
 		{
@@ -2257,6 +2345,7 @@ func TestResolveVariableIsBinHonorsStoredProcedureScope(t *testing.T) {
 			"decimal_value":       "5.00",
 			"year_value":          "2024",
 			"string_value":        "5",
+			"binary_value":        "binary",
 			"declared_only_outer": "5.0",
 		},
 	}
@@ -2267,6 +2356,7 @@ func TestResolveVariableIsBinHonorsStoredProcedureScope(t *testing.T) {
 			"decimal_value": {Id: int32(types.T_decimal64)},
 			"year_value":    {Id: int32(types.T_year)},
 			"string_value":  {Id: int32(types.T_varchar)},
+			"binary_value":  {Id: int32(types.T_varbinary)},
 		},
 	}
 	execCtx.reqCtx = context.WithValue(execCtx.reqCtx, defines.VarScopeKey{}, &scopes)
@@ -2279,6 +2369,12 @@ func TestResolveVariableIsBinHonorsStoredProcedureScope(t *testing.T) {
 	isBin, err := ses.txnCompileCtx.ResolveVariableIsBin("V1", false, false)
 	require.NoError(t, err)
 	require.False(t, isBin)
+	binaryString, err := ses.txnCompileCtx.ResolveVariableBinaryString("V1", false, false)
+	require.NoError(t, err)
+	require.False(t, binaryString)
+	binaryString, err = ses.txnCompileCtx.ResolveVariableBinaryString("binary_value", false, false)
+	require.NoError(t, err)
+	require.True(t, binaryString)
 	kind, err := ses.txnCompileCtx.ResolveVariablePrepareParamKind("V1", false, false)
 	require.NoError(t, err)
 	require.Equal(t, vector.PrepareParamInteger, kind)
@@ -2303,6 +2399,12 @@ func TestResolveVariableIsBinHonorsStoredProcedureScope(t *testing.T) {
 	isBin, err = ses.txnCompileCtx.ResolveVariableIsBin("session_only", false, false)
 	require.NoError(t, err)
 	require.True(t, isBin)
+	binaryString, err = ses.txnCompileCtx.ResolveVariableBinaryString("session_only", false, false)
+	require.NoError(t, err)
+	require.True(t, binaryString)
+	binaryString, err = ses.txnCompileCtx.ResolveVariableBinaryString("numeric_hex", false, false)
+	require.NoError(t, err)
+	require.False(t, binaryString, "numeric Literal.IsBin must not become binary-string provenance")
 	kind, err = ses.txnCompileCtx.ResolveVariablePrepareParamKind("session_only", false, false)
 	require.NoError(t, err)
 	require.Equal(t, vector.PrepareParamNone, kind)
@@ -2313,6 +2415,9 @@ func TestResolveVariableIsBinHonorsStoredProcedureScope(t *testing.T) {
 	isBin, err = ses.txnCompileCtx.ResolveVariableIsBin("missing_user_var", false, false)
 	require.NoError(t, err)
 	require.False(t, isBin)
+	binaryString, err = ses.txnCompileCtx.ResolveVariableBinaryString("missing_user_var", false, false)
+	require.NoError(t, err)
+	require.False(t, binaryString)
 	kind, err = ses.txnCompileCtx.ResolveVariablePrepareParamKind("missing_user_var", false, false)
 	require.NoError(t, err)
 	require.Equal(t, vector.PrepareParamNone, kind)
@@ -2334,12 +2439,13 @@ func TestBuildExecuteUserParamsHonorsStoredProcedureScope(t *testing.T) {
 		{Expr: &plan.Expr_V{V: &plan.VarRef{Name: "local_shadow"}}},
 		{Expr: &plan.Expr_V{V: &plan.VarRef{Name: "session_only"}}},
 	}
-	params, paramVals, paramIsBin, paramKinds, paramTypes, err := buildExecuteUserParams(
+	params, paramVals, paramIsBin, paramBinaryString, paramKinds, paramTypes, err := buildExecuteUserParams(
 		cw.proc, args, []int32{0, 1, 2})
 	require.NoError(t, err)
 	defer params.Free(cw.proc.Mp())
 
 	require.Equal(t, []bool{false, false, true}, paramIsBin)
+	require.Equal(t, []bool{false, false, true}, paramBinaryString)
 	require.Equal(t, []vector.PrepareParamKind{
 		vector.PrepareParamInteger,
 		vector.PrepareParamInteger,
@@ -2390,11 +2496,12 @@ func TestBuildExecuteUserParamsRetainsExecuteArgumentSourceType(t *testing.T) {
 			Expr: &plan.Expr_V{V: &plan.VarRef{Name: "runtime_binary"}},
 		},
 	}
-	params, paramVals, _, _, _, err := buildExecuteUserParams(cw.proc, args, nil)
+	params, paramVals, _, paramBinaryString, _, _, err := buildExecuteUserParams(cw.proc, args, nil)
 	require.NoError(t, err)
 	defer params.Free(cw.proc.Mp())
 
 	require.Equal(t, "2.500", params.GetStringAt(0))
+	require.Equal(t, []bool{false, false, true}, paramBinaryString)
 	decimalParam, ok := paramVals[0].(plan2.ParamValue)
 	require.True(t, ok)
 	require.True(t, decimalParam.HasSourceType)

@@ -56,6 +56,13 @@ func (op *opBuiltInRegexp) likeFn(parameters []*vector.Vector, result vector.Fun
 		return op.likeFnWithEscape(parameters, result, proc, length, selectList, false)
 	}
 
+	uniformBinary, perRow := stringDomainMode(parameters[0])
+	if uniformBinary || perRow {
+		return op.likeByStringDomain(
+			parameters, result, length, selectList, uniformBinary, perRow,
+			[]byte{byte(DefaultEscapeChar)}, DefaultEscapeChar, true)
+	}
+
 	p1 := vector.GenerateFunctionStrParameter(parameters[0])
 	p2 := vector.GenerateFunctionStrParameter(parameters[1])
 	rs := vector.MustFunctionResult[bool](result)
@@ -135,9 +142,136 @@ func (op *opBuiltInRegexp) likeFnWithEscape(
 			escape, _ = utf8.DecodeRune(escapeBytes)
 		}
 	}
+	uniformBinary, perRow := stringDomainMode(parameters[0])
+	if !caseInsensitive && (uniformBinary || perRow) {
+		return op.likeByStringDomain(
+			parameters[:2], result, length, selectList, uniformBinary, perRow,
+			escapeBytes, escape, escapeEnabled)
+	}
 	return opBinaryBytesBytesToFixedWithErrorCheck[bool](parameters[:2], result, proc, length, func(value, pattern []byte) (bool, error) {
 		return op.regMap.regularMatchForLikeOpWithEscape(pattern, value, escape, escapeEnabled, caseInsensitive)
 	}, selectList)
+}
+
+func (op *opBuiltInRegexp) likeByStringDomain(
+	parameters []*vector.Vector,
+	result vector.FunctionResultWrapper,
+	length int,
+	selectList *FunctionSelectList,
+	uniformBinary, perRow bool,
+	escapeBytes []byte,
+	escapeRune rune,
+	escapeEnabled bool,
+) error {
+	values := vector.GenerateFunctionStrParameter(parameters[0])
+	patterns := vector.GenerateFunctionStrParameter(parameters[1])
+	rs := vector.MustFunctionResult[bool](result)
+	for row := uint64(0); row < uint64(length); row++ {
+		if functionRowSkipped(selectList, row) {
+			if err := rs.Append(false, true); err != nil {
+				return err
+			}
+			continue
+		}
+		value, valueNull := values.GetStrValue(row)
+		pattern, patternNull := patterns.GetStrValue(row)
+		if valueNull || patternNull {
+			if err := rs.Append(false, true); err != nil {
+				return err
+			}
+			continue
+		}
+		var matched bool
+		var err error
+		if binaryStringAt(parameters[0], int(row), uniformBinary, perRow) {
+			matched = byteLike(pattern, value, escapeBytes, escapeEnabled)
+		} else {
+			matched, err = op.regMap.regularMatchForLikeOpWithEscape(
+				pattern, value, escapeRune, escapeEnabled, false)
+		}
+		if err != nil {
+			return err
+		}
+		if err = rs.Append(matched, false); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+const (
+	byteLikeLiteral byte = iota
+	byteLikeOne
+	byteLikeAny
+)
+
+func byteLike(pattern, value, escape []byte, escapeEnabled bool) bool {
+	valueAt, patternAt := 0, 0
+	lastAnyPattern, lastAnyValue := -1, -1
+	for valueAt < len(value) {
+		if patternAt >= len(pattern) {
+			if lastAnyPattern < 0 {
+				return false
+			}
+			lastAnyValue++
+			valueAt = lastAnyValue
+			patternAt = lastAnyPattern
+			continue
+		}
+		kind, literal, nextPattern := nextByteLikeToken(pattern, patternAt, escape, escapeEnabled)
+		switch {
+		case kind == byteLikeOne:
+			valueAt++
+			patternAt = nextPattern
+			continue
+		case kind == byteLikeLiteral && len(literal) <= len(value)-valueAt && bytes.Equal(value[valueAt:valueAt+len(literal)], literal):
+			valueAt += len(literal)
+			patternAt = nextPattern
+			continue
+		case kind == byteLikeAny:
+			lastAnyPattern = nextPattern
+			lastAnyValue = valueAt
+			patternAt = nextPattern
+			continue
+		case lastAnyPattern >= 0:
+			lastAnyValue++
+			valueAt = lastAnyValue
+			patternAt = lastAnyPattern
+			continue
+		default:
+			return false
+		}
+	}
+	for patternAt < len(pattern) {
+		kind, _, nextPattern := nextByteLikeToken(pattern, patternAt, escape, escapeEnabled)
+		if kind != byteLikeAny {
+			return false
+		}
+		patternAt = nextPattern
+	}
+	return true
+}
+
+func nextByteLikeToken(pattern []byte, at int, escape []byte, escapeEnabled bool) (kind byte, literal []byte, next int) {
+	if at >= len(pattern) {
+		return byteLikeLiteral, nil, at
+	}
+	if escapeEnabled && len(escape) > 0 && len(escape) <= len(pattern)-at &&
+		bytes.Equal(pattern[at:at+len(escape)], escape) {
+		next = at + len(escape)
+		if next >= len(pattern) {
+			return byteLikeLiteral, pattern[at:next], next
+		}
+		return byteLikeLiteral, pattern[next : next+1], next + 1
+	}
+	switch pattern[at] {
+	case '_':
+		return byteLikeOne, nil, at + 1
+	case '%':
+		return byteLikeAny, nil, at + 1
+	default:
+		return byteLikeLiteral, pattern[at : at+1], at + 1
+	}
 }
 
 func likeNoBackslashEscapes(proc *process.Process) bool {
