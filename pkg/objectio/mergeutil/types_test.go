@@ -15,14 +15,18 @@
 package mergeutil
 
 import (
+	"errors"
 	"math/rand/v2"
 	"slices"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
+	"github.com/matrixorigin/matrixone/pkg/sort"
 	"github.com/stretchr/testify/require"
 )
 
@@ -144,6 +148,221 @@ func TestMergeSortBatchesYear(t *testing.T) {
 	require.Equal(t, []int32{10, 20, 30, 40, 50}, gotPayloads)
 }
 
+func TestMergeSortBatchesDisjointRanges(t *testing.T) {
+	mp := mpool.MustNewZero()
+	rows := objectio.BlockMaxRows + 7
+	lowRows := objectio.BlockMaxRows / 2
+	batches := []*batch.Batch{
+		newInt64MergeBatch(t, mp, lowRows, rows),
+		newInt64MergeBatch(t, mp, 0, lowRows),
+	}
+	for _, bat := range batches {
+		defer bat.Clean(mp)
+	}
+
+	merge := newMerge(
+		sort.GenericLess[int64],
+		&fixedDataSlice[int64]{getFixedCols[int64](batches, 0)},
+		[]*nulls.Nulls{batches[0].Vecs[0].GetNulls(), batches[1].Vecs[0].GetNulls()},
+	)
+	require.Equal(t, []int{1, 0}, merge.disjointBatchOrder())
+
+	newBuffer := func() *batch.Batch {
+		return batch.NewWithSchema(false, []string{"id", "payload"}, []types.Type{types.T_int64.ToType(), types.T_int64.ToType()})
+	}
+	buffer := newBuffer()
+	var gotKeys, gotPayloads []int64
+	var outputRows []int
+	var putBackOrder []int
+	buffer, err := MergeSortBatches(batches, 0, buffer, func(out *batch.Batch) (*batch.Batch, error) {
+		gotKeys = append(gotKeys, vector.MustFixedColNoTypeCheck[int64](out.Vecs[0])...)
+		gotPayloads = append(gotPayloads, vector.MustFixedColNoTypeCheck[int64](out.Vecs[1])...)
+		outputRows = append(outputRows, out.RowCount())
+		out.Clean(mp)
+		return newBuffer(), nil
+	}, mp, func(index int) {
+		putBackOrder = append(putBackOrder, index)
+	})
+	require.NoError(t, err)
+	defer buffer.Clean(mp)
+	require.Equal(t, []int{objectio.BlockMaxRows, 7}, outputRows)
+	require.Equal(t, []int{1, 0}, putBackOrder)
+	require.Len(t, gotKeys, rows)
+	for i := range rows {
+		require.Equal(t, int64(i), gotKeys[i])
+		require.Equal(t, -int64(i), gotPayloads[i])
+	}
+}
+
+func TestDisjointBatchOrderFallsBackForOverlappingRanges(t *testing.T) {
+	ds := &fixedDataSlice[int64]{cols: [][]int64{{1, 4}, {2, 3}}}
+	merge := newMerge(sort.GenericLess[int64], ds, []*nulls.Nulls{
+		nulls.NewWithSize(2),
+		nulls.NewWithSize(2),
+	})
+	require.Nil(t, merge.disjointBatchOrder())
+}
+
+func TestDisjointBatchOrderFallsBackForEqualBoundaries(t *testing.T) {
+	ds := &fixedDataSlice[int64]{cols: [][]int64{{1, 2}, {2, 3}}}
+	merge := newMerge(sort.GenericLess[int64], ds, []*nulls.Nulls{
+		nulls.NewWithSize(2),
+		nulls.NewWithSize(2),
+	})
+	require.Nil(t, merge.disjointBatchOrder())
+}
+
+func TestDisjointBatchOrderHandlesNullBoundariesConservatively(t *testing.T) {
+	leftNulls := nulls.NewWithSize(3)
+	leftNulls.Add(0)
+	rightNulls := nulls.NewWithSize(3)
+	rightNulls.Add(0)
+	ds := &fixedDataSlice[int64]{cols: [][]int64{{0, 1, 2}, {0, 3, 4}}}
+	merge := newMerge(sort.GenericLess[int64], ds, []*nulls.Nulls{leftNulls, rightNulls})
+	require.Nil(t, merge.disjointBatchOrder(), "mixed null/non-null ranges overlap")
+
+	allNulls := nulls.NewWithSize(2)
+	allNulls.Add(0, 1)
+	ds = &fixedDataSlice[int64]{cols: [][]int64{{0, 0}, {1, 2}}}
+	merge = newMerge(sort.GenericLess[int64], ds, []*nulls.Nulls{allNulls, nulls.NewWithSize(2)})
+	require.Equal(t, []int{0, 1}, merge.disjointBatchOrder())
+}
+
+func TestMergeSortBatchesDisjointSinkError(t *testing.T) {
+	mp := mpool.MustNewZero()
+	batches := []*batch.Batch{
+		newInt64MergeBatch(t, mp, 2, 4),
+		newInt64MergeBatch(t, mp, 0, 2),
+	}
+	for _, bat := range batches {
+		defer bat.Clean(mp)
+	}
+	buffer := batch.NewWithSchema(false, []string{"id", "payload"}, []types.Type{types.T_int64.ToType(), types.T_int64.ToType()})
+	sinkErr := errors.New("sink failed")
+	returned, err := MergeSortBatches(batches, 0, buffer, func(out *batch.Batch) (*batch.Batch, error) {
+		return out, sinkErr
+	}, mp, nil)
+	require.ErrorIs(t, err, sinkErr)
+	require.Same(t, buffer, returned)
+	buffer.Clean(mp)
+}
+
+func TestMergeSortBatchesEmptyFloatBatches(t *testing.T) {
+	mp := mpool.MustNewZero()
+	batches := []*batch.Batch{
+		batch.NewWithSchema(false, []string{"id"}, []types.Type{types.T_float64.ToType()}),
+		batch.NewWithSchema(false, []string{"id"}, []types.Type{types.T_float64.ToType()}),
+	}
+	for _, bat := range batches {
+		defer bat.Clean(mp)
+	}
+	buffer := batch.NewWithSchema(false, []string{"id"}, []types.Type{types.T_float64.ToType()})
+	sinkCalls := 0
+	buffer, err := MergeSortBatches(batches, 0, buffer, func(out *batch.Batch) (*batch.Batch, error) {
+		sinkCalls++
+		return out, nil
+	}, mp, nil)
+	require.NoError(t, err)
+	defer buffer.Clean(mp)
+	require.Zero(t, sinkCalls)
+	require.Zero(t, buffer.RowCount())
+}
+
+func TestMergeSortBatchesDisjointVarlenaRanges(t *testing.T) {
+	mp := mpool.MustNewZero()
+	typ := types.T_varchar.ToType()
+	batches := []*batch.Batch{
+		newVarlenaMergeBatch(t, mp, typ, [][]byte{[]byte("middle"), []byte("z")}, []int32{20, 30}),
+		newVarlenaMergeBatch(t, mp, typ, [][]byte{[]byte("a"), []byte("begin")}, []int32{1, 10}),
+	}
+	for _, bat := range batches {
+		defer bat.Clean(mp)
+	}
+
+	newBuffer := func() *batch.Batch {
+		return batch.NewWithSchema(false, []string{"id", "payload"}, []types.Type{typ, types.T_int32.ToType()})
+	}
+	buffer := newBuffer()
+	var gotKeys []string
+	var gotPayloads []int32
+	buffer, err := MergeSortBatches(batches, 0, buffer, func(out *batch.Batch) (*batch.Batch, error) {
+		for i := 0; i < out.RowCount(); i++ {
+			gotKeys = append(gotKeys, string(out.Vecs[0].GetBytesAt(i)))
+		}
+		gotPayloads = append(gotPayloads, vector.MustFixedColNoTypeCheck[int32](out.Vecs[1])...)
+		out.Clean(mp)
+		return newBuffer(), nil
+	}, mp, nil)
+	require.NoError(t, err)
+	defer buffer.Clean(mp)
+	require.Equal(t, []string{"a", "begin", "middle", "z"}, gotKeys)
+	require.Equal(t, []int32{1, 10, 20, 30}, gotPayloads)
+}
+
+func BenchmarkMergeSortBatchesDisjointRanges(b *testing.B) {
+	mp := mpool.MustNewZero()
+	const batchCount = 16
+	batches := make([]*batch.Batch, 0, batchCount)
+	for i := batchCount - 1; i >= 0; i-- {
+		batches = append(batches, newInt64MergeBatch(b, mp,
+			i*objectio.BlockMaxRows, (i+1)*objectio.BlockMaxRows))
+	}
+	defer func() {
+		for _, bat := range batches {
+			bat.Clean(mp)
+		}
+	}()
+	buffer := batch.NewWithSchema(false, []string{"id", "payload"}, []types.Type{types.T_int64.ToType(), types.T_int64.ToType()})
+	defer buffer.Clean(mp)
+	b.ReportAllocs()
+	b.ResetTimer()
+	for range b.N {
+		var err error
+		buffer, err = MergeSortBatches(batches, 0, buffer, func(out *batch.Batch) (*batch.Batch, error) {
+			out.CleanOnlyData()
+			return out, nil
+		}, mp, nil)
+		if err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
+func BenchmarkMergeSortBatchesOverlappingRanges(b *testing.B) {
+	mp := mpool.MustNewZero()
+	const batchCount = 16
+	batches := make([]*batch.Batch, 0, batchCount)
+	for i := 0; i < batchCount; i++ {
+		bat := batch.NewWithSchema(false, []string{"id", "payload"}, []types.Type{types.T_int64.ToType(), types.T_int64.ToType()})
+		for row := 0; row < objectio.BlockMaxRows; row++ {
+			key := int64(row*batchCount + i)
+			require.NoError(b, vector.AppendFixed(bat.Vecs[0], key, false, mp))
+			require.NoError(b, vector.AppendFixed(bat.Vecs[1], -key, false, mp))
+		}
+		bat.SetRowCount(objectio.BlockMaxRows)
+		batches = append(batches, bat)
+	}
+	defer func() {
+		for _, bat := range batches {
+			bat.Clean(mp)
+		}
+	}()
+	buffer := batch.NewWithSchema(false, []string{"id", "payload"}, []types.Type{types.T_int64.ToType(), types.T_int64.ToType()})
+	defer buffer.Clean(mp)
+	b.ReportAllocs()
+	b.ResetTimer()
+	for range b.N {
+		var err error
+		buffer, err = MergeSortBatches(batches, 0, buffer, func(out *batch.Batch) (*batch.Batch, error) {
+			out.CleanOnlyData()
+			return out, nil
+		}, mp, nil)
+		if err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
 func TestMergeSortBatchesBinaryTypes(t *testing.T) {
 	testCases := []struct {
 		name string
@@ -226,6 +445,17 @@ func newYearMergeBatch(
 		require.NoError(t, vector.AppendFixed(bat.Vecs[1], payloads[i], false, mp))
 	}
 	bat.SetRowCount(len(keys))
+	return bat
+}
+
+func newInt64MergeBatch(t testing.TB, mp *mpool.MPool, start, end int) *batch.Batch {
+	t.Helper()
+	bat := batch.NewWithSchema(false, []string{"id", "payload"}, []types.Type{types.T_int64.ToType(), types.T_int64.ToType()})
+	for i := start; i < end; i++ {
+		require.NoError(t, vector.AppendFixed(bat.Vecs[0], int64(i), false, mp))
+		require.NoError(t, vector.AppendFixed(bat.Vecs[1], -int64(i), false, mp))
+	}
+	bat.SetRowCount(end - start)
 	return bat
 }
 
