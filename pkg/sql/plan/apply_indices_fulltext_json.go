@@ -346,20 +346,9 @@ func (builder *QueryBuilder) addJSONFulltextProbes(scanNode *plan.Node) {
 	}
 }
 
-// indexCoversSnapshot reports whether idx may be used as a MANDATORY filter for
-// this query.
-//
-// A synchronously maintained index always may: its hidden tables move with the
-// source DML. An ASYNC one may not by default — its postings trail the base
-// table, so a row written inside the maintenance lag satisfies the retained
-// predicate but has no posting, and the ANDed probe would remove it before the
-// predicate ever ran. That is a wrong answer, not a stale score.
-//
-// For an async index the algorithm is asked, through the optional coverage
-// capability, whether its durable state has reached this query's read snapshot.
-// Everything here FAILS CLOSED: no plugin capability, no process, no
-// transaction, a lookup error, or a watermark behind the snapshot all decline
-// the probe and leave the query to the retained predicate alone.
+// indexCoversSnapshot reports whether idx may back a mandatory probe. A
+// synchronous index always may. An async index is checked via the coverage hook.
+// Returns false on nil builder/compCtx/process/transaction or a lookup error.
 func (builder *QueryBuilder) indexCoversSnapshot(scanNode *plan.Node, idx *plan.IndexDef) bool {
 	algo := catalog.ToLower(idx.IndexAlgo)
 	if !indexplugin.AlwaysAsync(algo, idx.IndexAlgoParams) {
@@ -376,7 +365,8 @@ func (builder *QueryBuilder) indexCoversSnapshot(scanNode *plan.Node, idx *plan.
 	if txn == nil {
 		return false
 	}
-	covered, err := indexplugin.CoversSnapshot(proc.Ctx, algo, coverage.Request{
+	// proc.Ctx is canceled during planning; use the top context.
+	covered, err := indexplugin.CoversSnapshot(proc.GetTopContext(), algo, coverage.Request{
 		CNUUID:   proc.GetService(),
 		Txn:      txn,
 		TableID:  scanNode.TableDef.TblId,

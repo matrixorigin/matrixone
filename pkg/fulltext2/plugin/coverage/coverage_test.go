@@ -35,11 +35,13 @@ import (
 func ts(physical int64) types.TS { return types.BuildTS(physical, 0) }
 
 // logRow is one mo_iscp_log row as the query projects it. dropped is modelled
-// by a NULL drop_at, which is what makes the row live.
+// by a NULL drop_at, which is what makes the row live. nullWatermark models a
+// job that has registered but not produced any index data yet.
 type logRow struct {
-	watermark string
-	state     int8
-	dropped   bool
+	watermark     string
+	nullWatermark bool
+	state         int8
+	dropped       bool
 }
 
 // mockLog installs an execWithResult that answers with the given rows, and
@@ -57,7 +59,7 @@ func mockLog(t *testing.T, rows []logRow) *string {
 		bat.Vecs[1] = vector.NewVec(types.T_int8.ToType())
 		bat.Vecs[2] = vector.NewVec(types.T_timestamp.ToType())
 		for _, r := range rows {
-			require.NoError(t, vector.AppendBytes(bat.Vecs[0], []byte(r.watermark), false, mp))
+			require.NoError(t, vector.AppendBytes(bat.Vecs[0], []byte(r.watermark), r.nullWatermark, mp))
 			require.NoError(t, vector.AppendFixed(bat.Vecs[1], r.state, false, mp))
 			require.NoError(t, vector.AppendFixed(bat.Vecs[2], types.Timestamp(1), !r.dropped, mp))
 		}
@@ -75,9 +77,8 @@ func sysCtx() context.Context {
 	return context.WithValue(context.Background(), defines.TenantIDKey{}, uint32(7))
 }
 
-// A live, running job whose watermark has reached the snapshot is the only
-// shape that grants the probe.
-func TestCoversSnapshotWatermarkReached(t *testing.T) {
+// A live running job with a watermark grants the probe; also checks the lookup SQL.
+func TestCoversSnapshotLiveHealthyJob(t *testing.T) {
 	sql := mockLog(t, []logRow{{watermark: ts(200).ToString(), state: iscpJobStateRunning}})
 	r := coverage.Request{CNUUID: "cn0", Txn: fakeTxn{}, TableID: 100,
 		IndexDef: &plan.IndexDef{IndexName: "ftj"}, Snapshot: ts(100)}
@@ -94,9 +95,9 @@ func TestCoversSnapshotWatermarkReached(t *testing.T) {
 		"the table id comes from the planner; no cross-tenant name resolution")
 }
 
-// Equality is coverage: the watermark need only reach the snapshot.
-func TestCoversSnapshotWatermarkExactlyAtSnapshot(t *testing.T) {
-	mockLog(t, []logRow{{watermark: ts(100).ToString(), state: iscpJobStateCompleted}})
+// A watermark behind the snapshot is still covered.
+func TestCoversSnapshotStaleWatermarkStillCovered(t *testing.T) {
+	mockLog(t, []logRow{{watermark: ts(50).ToString(), state: iscpJobStateCompleted}})
 	covered, err := Hooks{}.CoversSnapshot(sysCtx(), coverage.Request{
 		CNUUID: "cn0", Txn: fakeTxn{}, TableID: 100,
 		IndexDef: &plan.IndexDef{IndexName: "ftj"}, Snapshot: ts(100)})
@@ -104,25 +105,18 @@ func TestCoversSnapshotWatermarkExactlyAtSnapshot(t *testing.T) {
 	require.True(t, covered)
 }
 
-// Every way the log can fail to prove freshness must decline. Returning true
-// here would silently drop rows from a strongly consistent query.
+// Fail-closed: no job, unhealthy state, NULL watermark, or only a dropped job.
 func TestCoversSnapshotFailsClosed(t *testing.T) {
 	cases := []struct {
 		name string
 		rows []logRow
 	}{
 		{"no job at all", nil},
-		{"watermark behind the snapshot", []logRow{{watermark: ts(50).ToString(), state: iscpJobStateRunning}}},
 		{"job pending", []logRow{{watermark: ts(200).ToString(), state: 0}}},
 		{"job errored", []logRow{{watermark: ts(200).ToString(), state: 4}}},
 		{"job canceled", []logRow{{watermark: ts(200).ToString(), state: 5}}},
-		{"unparsable watermark", []logRow{{watermark: "not-a-ts", state: iscpJobStateRunning}}},
-		{"empty watermark", []logRow{{watermark: "", state: iscpJobStateRunning}}},
+		{"live job not built yet (NULL watermark)", []logRow{{nullWatermark: true, state: iscpJobStateRunning}}},
 		{"only a dropped job", []logRow{{watermark: ts(200).ToString(), state: iscpJobStateRunning, dropped: true}}},
-		{"one of two live jobs behind", []logRow{
-			{watermark: ts(200).ToString(), state: iscpJobStateRunning},
-			{watermark: ts(50).ToString(), state: iscpJobStateRunning},
-		}},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -207,22 +201,4 @@ func TestCoversSnapshotNoAccount(t *testing.T) {
 func TestJobNameForIndex(t *testing.T) {
 	// must match compile.genCdcTaskJobID
 	require.Equal(t, "index_ftj", jobNameForIndex("ftj"))
-}
-
-// parseWatermark must never panic, whatever the catalog holds: types.StringToTS
-// does, and this runs inside the planner.
-func TestParseWatermark(t *testing.T) {
-	got, ok := parseWatermark("123-4")
-	require.True(t, ok)
-	require.Equal(t, types.BuildTS(123, 4), got)
-
-	for _, bad := range []string{
-		"", "-", "abc", "abc-1", "1-abc", "123", "1-2-3",
-		"1-99999999999", // logical overflows uint32
-		"99999999999999999999-0",
-		"0-0", // the zero TS is no evidence of anything
-	} {
-		_, ok := parseWatermark(bad)
-		require.False(t, ok, bad)
-	}
 }

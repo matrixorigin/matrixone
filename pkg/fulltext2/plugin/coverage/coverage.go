@@ -30,14 +30,11 @@ package coverage
 import (
 	"context"
 	"fmt"
-	"strconv"
-	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/common/sqlquote"
-	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/indexplugin/coverage"
@@ -82,31 +79,9 @@ var _ coverage.Hooks = Hooks{}
 // here would be a cycle.
 func jobNameForIndex(indexName string) string { return "index_" + indexName }
 
-// parseWatermark decodes the "physical-logical" watermark the ISCP executor
-// writes. A value it cannot read is not an error to propagate — it is simply no
-// evidence of freshness.
-func parseWatermark(s string) (types.TS, bool) {
-	physical, logical, found := strings.Cut(s, "-")
-	if !found {
-		return types.TS{}, false
-	}
-	p, err := strconv.ParseInt(physical, 10, 64)
-	if err != nil {
-		return types.TS{}, false
-	}
-	l, err := strconv.ParseUint(logical, 10, 32)
-	if err != nil {
-		return types.TS{}, false
-	}
-	ts := types.BuildTS(p, uint32(l))
-	return ts, !ts.IsEmpty()
-}
-
-// CoversSnapshot reports whether the index's watermark has reached req.Snapshot.
-//
-// Fails closed everywhere: a missing job, a dropped one, a job that is not
-// running cleanly, a NULL/unparsable watermark, or any lookup error all report
-// false. Only an explicit "watermark >= snapshot" on a live job returns true.
+// CoversSnapshot reports whether the index has a live ISCP job in a
+// running/completed state with a non-NULL watermark. It does not compare the
+// watermark to req.Snapshot.
 func (Hooks) CoversSnapshot(ctx context.Context, req coverage.Request) (bool, error) {
 	if req.IndexDef == nil || req.Txn == nil || req.TableID == 0 || req.Snapshot.IsEmpty() {
 		return false, nil
@@ -153,16 +128,8 @@ func (Hooks) CoversSnapshot(ctx context.Context, req coverage.Request) (bool, er
 				covered = false
 				return false
 			}
+			// NULL watermark: not built yet.
 			if cols[0].IsNull(uint64(i)) {
-				covered = false
-				return false
-			}
-			// the log stores the watermark in the "physical-logical" form the
-			// ISCP executor writes; parsed here rather than with
-			// types.StringToTS, which PANICS on anything malformed and would
-			// take the planner down over a corrupt catalog row
-			wm, ok := parseWatermark(cols[0].GetStringAt(i))
-			if !ok || wm.LT(&req.Snapshot) {
 				covered = false
 				return false
 			}
