@@ -198,7 +198,7 @@ func TestBuildIndex(t *testing.T) {
 	idxcfg.Usearch.Metric = 100
 	//tblcfg := vectorindex.IndexTableConfig{DbName: "db", SrcTable: "src", MetadataTable: "__secondary_meta", IndexTable: "__secondary_index"}
 
-	idx, err := NewHnswModelForBuild[float32]("abc-0", idxcfg, 1, MaxIndexCapacity)
+	idx, err := NewHnswModelForBuild[float32]("abc-0", idxcfg, 1, MaxIndexCapacity, "")
 	require.Nil(t, err)
 
 	empty, err := idx.Empty()

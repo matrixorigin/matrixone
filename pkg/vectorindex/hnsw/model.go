@@ -49,6 +49,12 @@ type HnswModel[T types.RealNumbers] struct {
 	Path     string
 	FileSize int64
 
+	// TmpDir is where this model's local file is created: the LOCAL fileservice scratch
+	// volume, resolved once by whoever built the model (see hnswSpillDir). Empty means
+	// $TMPDIR, which os.CreateTemp reads from "" -- the behaviour for callers with no
+	// fileservice to reach, such as unit tests. Mirrors CagraModel/IvfpqModel.TmpDir.
+	TmpDir string
+
 	// info required for build
 	MaxCapacity uint
 	NThread     uint
@@ -74,9 +80,9 @@ type HnswModel[T types.RealNumbers] struct {
 }
 
 // New HnswModel struct
-func NewHnswModelForBuild[T types.RealNumbers](id string, cfg vectorindex.IndexConfig, nthread int, max_capacity uint) (*HnswModel[T], error) {
+func NewHnswModelForBuild[T types.RealNumbers](id string, cfg vectorindex.IndexConfig, nthread int, max_capacity uint, tmpdir string) (*HnswModel[T], error) {
 	var err error
-	idx := &HnswModel[T]{}
+	idx := &HnswModel[T]{TmpDir: tmpdir}
 
 	idx.Id = id
 	idx.NThread = uint(nthread)
@@ -204,8 +210,8 @@ func (idx *HnswModel[T]) SaveToFile() error {
 		return nil
 	}
 
-	// save to file
-	f, err := os.CreateTemp("", "hnsw")
+	// save to file, on the LOCAL fileservice volume when the builder resolved one
+	f, err := os.CreateTemp(idx.TmpDir, "hnsw")
 	if err != nil {
 		return err
 	}
@@ -470,8 +476,23 @@ func (idx *HnswModel[T]) Contains(key int64) (found bool, err error) {
 // Mirrors what ivfpq/cagra FetchArtifact already does. HostSpillDir returns "" when there is no
 // LOCAL fileservice, and os.CreateTemp reads "" as $TMPDIR, so unit tests and one-shot tools keep
 // today's behaviour with no branch at the call sites.
+// spillDir is this model's scratch directory: whatever the builder already resolved, else
+// resolved now from the request. Mirrors ivfpq/cagra FetchArtifact's TmpDir-then-HostSpillDir.
+func (idx *HnswModel[T]) spillDir(sqlproc *sqlexec.SqlProcess) string {
+	if idx.TmpDir != "" {
+		return idx.TmpDir
+	}
+	return hnswSpillDir(sqlproc)
+}
+
 func hnswSpillDir(sqlproc *sqlexec.SqlProcess) string {
-	if sqlproc == nil || sqlproc.Proc == nil {
+	if sqlproc == nil {
+		return ""
+	}
+	if sqlproc.Proc == nil {
+		// A background / ISCP job runs on a SqlContext with no process.Process, so there is
+		// no FileService to reach from here. Those callers resolve the directory themselves
+		// and hand it to NewHnswSync -- see pkg/iscp, which does the same for fulltext2.
 		return ""
 	}
 	return vimemory.HostSpillDir(sqlproc.GetTopContext(), sqlproc.Proc.Base.FileService)
@@ -506,7 +527,7 @@ func (idx *HnswModel[T]) LoadIndexFromBuffer(
 		// mmap it via View(). This keeps the index data entirely off the
 		// Go heap, eliminating GC pressure for multi-GB indexes.
 
-		fp, err = os.CreateTemp(hnswSpillDir(sqlproc), "hnsw")
+		fp, err = os.CreateTemp(idx.spillDir(sqlproc), "hnsw")
 		if err != nil {
 			return err
 		}
@@ -726,7 +747,7 @@ func (idx *HnswModel[T]) LoadIndex(
 	if len(idx.Path) == 0 {
 
 		// create tempfile for writing
-		fp, err = os.CreateTemp(hnswSpillDir(sqlproc), "hnsw")
+		fp, err = os.CreateTemp(idx.spillDir(sqlproc), "hnsw")
 		if err != nil {
 			return err
 		}

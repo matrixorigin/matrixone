@@ -49,6 +49,10 @@ type HnswBuild[T types.RealNumbers] struct {
 	stopped   chan struct{}
 	errMu     sync.Mutex
 	workerErr error
+
+	// tmpDir is the LOCAL fileservice scratch volume, resolved once here because
+	// getIndexForAdd creates models with no SqlProcess in scope.
+	tmpDir string
 }
 
 // recordWorkerErr stores the first worker error and wakes any blocked producer /
@@ -99,6 +103,7 @@ func NewHnswBuild[T types.RealNumbers](sqlproc *sqlexec.SqlProcess, uid string, 
 	}
 
 	info = &HnswBuild[T]{
+		tmpDir:  hnswSpillDir(sqlproc),
 		uid:     uid,
 		cfg:     cfg,
 		tblcfg:  tblcfg,
@@ -221,7 +226,7 @@ func (h *HnswBuild[T]) getIndexForAdd() (idx *HnswModel[T], save_idx *HnswModel[
 	save_idx = nil
 	nidx := int64(len(h.indexes))
 	if nidx == 0 {
-		idx, err = NewHnswModelForBuild[T](h.createIndexUniqueKey(nidx), h.cfg, h.nthread, uint(h.cfg.IndexCapacity))
+		idx, err = NewHnswModelForBuild[T](h.createIndexUniqueKey(nidx), h.cfg, h.nthread, uint(h.cfg.IndexCapacity), h.tmpDir)
 		if err != nil {
 			return nil, nil, err
 		}
@@ -236,7 +241,7 @@ func (h *HnswBuild[T]) getIndexForAdd() (idx *HnswModel[T], save_idx *HnswModel[
 			save_idx = idx
 
 			// create new index
-			idx, err = NewHnswModelForBuild[T](h.createIndexUniqueKey(nidx), h.cfg, h.nthread, uint(h.cfg.IndexCapacity))
+			idx, err = NewHnswModelForBuild[T](h.createIndexUniqueKey(nidx), h.cfg, h.nthread, uint(h.cfg.IndexCapacity), h.tmpDir)
 			if err != nil {
 				return nil, nil, err
 			}
