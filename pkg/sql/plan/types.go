@@ -609,6 +609,18 @@ func cloneHeadingProvenance(provenance headingProvenance) headingProvenance {
 	return headingProvenance{parts: append([]headingPart(nil), provenance.parts...)}
 }
 
+func headingProvenanceEqual(left, right headingProvenance) bool {
+	if len(left.parts) != len(right.parts) {
+		return false
+	}
+	for i := range left.parts {
+		if left.parts[i] != right.parts[i] {
+			return false
+		}
+	}
+	return true
+}
+
 func cloneHeadingProvenances(provenances headingProvenanceMap) headingProvenanceMap {
 	if len(provenances) == 0 {
 		return nil

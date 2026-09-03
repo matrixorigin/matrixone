@@ -106,6 +106,50 @@ func (bc *BindContext) setHeadingProvenance(index int32, provenance headingProve
 	bc.headingProvenance[index] = cloneHeadingProvenance(provenance)
 }
 
+// headingProvenanceForBindingColumn returns the structural heading metadata
+// for a column exposed by a derived binding. The lookup is deliberately based
+// on the binding's column ordinal: the binding name is lower-cased for name
+// resolution, while headingProvenance retains the original expression syntax.
+func headingProvenanceForBindingColumn(binding *Binding, col string) headingProvenance {
+	if binding == nil {
+		return headingProvenance{}
+	}
+	colPos, ok := binding.colIdByName[col]
+	if !ok || colPos < 0 || int(colPos) >= len(binding.cols) {
+		return headingProvenance{}
+	}
+	return cloneHeadingProvenance(binding.headingProvenance[colPos])
+}
+
+// headingProvenanceForUsing returns metadata for the visible column emitted
+// by a JOIN ... USING clause. A non-FOJ USING column is the chosen side's
+// value, so only that binding contributes to its heading. A coalesced column
+// can contain values from every listed arm; preserve metadata only when all
+// arms have identical structural provenance. If any arm is ordinary or the
+// arms disagree, returning empty metadata applies the existing safe
+// full-lowercase normalization deterministically.
+func (bc *BindContext) headingProvenanceForUsing(using NameTuple) headingProvenance {
+	if len(using.coalesceArms) < 2 {
+		return headingProvenanceForBindingColumn(bc.bindingByTable[using.table], using.col)
+	}
+
+	var provenance headingProvenance
+	for i, table := range using.coalesceArms {
+		candidate := headingProvenanceForBindingColumn(bc.bindingByTable[table], using.col)
+		if len(candidate.parts) == 0 {
+			return headingProvenance{}
+		}
+		if i == 0 {
+			provenance = candidate
+			continue
+		}
+		if !headingProvenanceEqual(provenance, candidate) {
+			return headingProvenance{}
+		}
+	}
+	return provenance
+}
+
 // newCTEDeclarationContext records the name-resolution scope at a WITH
 // declaration without retaining bindings that the declaring query block adds
 // later while binding its FROM clause. The normal child-context constructor
@@ -565,6 +609,12 @@ func (bc *BindContext) doUnfoldStar(ctx context.Context, root *BindingTreeNode, 
 			}
 			*exprs = append(*exprs, tree.SelectExpr{Expr: expr})
 			*names = append(*names, using.col)
+			if provenance := bc.headingProvenanceForUsing(using); len(provenance.parts) > 0 {
+				if *provenances == nil {
+					*provenances = make(headingProvenanceMap)
+				}
+				(*provenances)[int32(len(*exprs)-1)] = provenance
+			}
 		}
 	}
 

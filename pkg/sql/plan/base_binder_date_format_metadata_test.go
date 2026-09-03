@@ -232,6 +232,21 @@ func TestBuildCTASPreservesDateFormatHeadingThroughDerivedStars(t *testing.T) {
 	}
 }
 
+func TestBuildCTASPreservesDateFormatHeadingThroughJoinUsingStar(t *testing.T) {
+	requireCTASColumnName(t, newDateFormatCompilerContext(),
+		"create table time02 as select * from (select date_format(col2, '%M') from time01) a "+
+			"join (select date_format(col2, '%M') from time01) b using (`date_format(col2, '%M')`)",
+		"date_format(col2, '%M')")
+}
+
+func TestBuildCTASUsesSafeHeadingForMismatchedFullJoinUsing(t *testing.T) {
+	requireCTASColumnName(t, newDateFormatCompilerContext(),
+		"create table time02 as select * from (select date_format(col2, '%M') from time01) a "+
+			"full outer join (select date_format(col2, '%m') from time01) b "+
+			"using (`date_format(col2, '%M')`)",
+		"date_format(col2, '%m')")
+}
+
 func TestBuildCTASPreservesDateFormatHeadingThroughRollupWindowRewrite(t *testing.T) {
 	ctx := newDateFormatCompilerContext()
 	sql := "create table time02 as select date_format(col2, '%M'), date_format(col2, '%m'), row_number() over () from time01 group by col2 with rollup"
