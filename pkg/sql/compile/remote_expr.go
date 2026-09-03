@@ -602,6 +602,9 @@ func containsFunctionIDInValue(v reflect.Value, seen map[uintptr]struct{}, funct
 		}
 	case reflect.Struct:
 		for i := 0; i < v.NumField(); i++ {
+			if !v.Type().Field(i).IsExported() {
+				continue
+			}
 			if containsFunctionIDInValue(v.Field(i), seen, functionID) {
 				return true
 			}

@@ -17,6 +17,7 @@ package compile
 import (
 	"context"
 	"encoding/json"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -734,6 +735,22 @@ func TestViewDefinitionRemoteProtocolValidationV44FastPathIsAllocationFree(t *te
 		}
 	})
 	require.Equal(t, float64(0), allocs)
+}
+
+func TestPipelineFunctionIDScanSkipsUnexportedFields(t *testing.T) {
+	viewDefinition := &plan.Expr{
+		Expr: &plan.Expr_F{F: &plan.Function{Func: &plan.ObjectRef{
+			Obj: function.EncodeOverloadID(function.MO_VIEW_DEFINITION, 0),
+		}}},
+	}
+	container := struct {
+		expression *plan.Expr
+	}{expression: viewDefinition}
+
+	require.NotPanics(t, func() {
+		require.False(t, containsFunctionIDInValue(
+			reflect.ValueOf(container), nil, function.MO_VIEW_DEFINITION))
+	})
 }
 
 func TestScopeContainsVarExprInAggArguments(t *testing.T) {
