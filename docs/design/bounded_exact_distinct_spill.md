@@ -305,7 +305,13 @@ input batch
 
 Drain iterates existing skiplists directly. It never first materializes a
 slice of all keys. One record is encoded into reusable accounted scratch and
-written before the next key is visited.
+written before the next key is visited. Beginning a drain validates and freezes
+the logical view without allocating an empty state for every aggregate chunk.
+After the private wave is flushed, commit allocates one bounded replacement
+chunk through recovery capacity, swaps it with the corresponding resident
+chunk, releases the old chunk, and only then advances. Rehoming to ordinary
+capacity uses the same one-chunk transition. Replacement overlap is therefore
+constant rather than proportional to resident group count.
 
 ### 8.2 Intermediate Group
 
@@ -407,10 +413,13 @@ The controller owns:
 - reusable accounted encode/decode/read/write buffers; and
 - every FD and disk reservation token associated with those files.
 
-The aggregate executor owns only resident argument state. A successful drain
-transfers each key's logical ownership to the controller before its arena is
-released. A failed drain leaves the resident state authoritative and destroys
-the incomplete child wave; it never publishes two owners.
+The aggregate executor owns only resident argument state. Before commit, a
+failed drain leaves every resident chunk authoritative and destroys the
+incomplete private wave. Commit transfers one chunk at a time to the flushed
+private wave before releasing that chunk's arena. A commit or publication
+failure is terminal for the operator generation: cleanup destroys the private
+or published wave plus every remaining resident chunk, so no partial transfer
+can continue into another input work unit.
 
 ### 9.2 Execution-local record envelope
 

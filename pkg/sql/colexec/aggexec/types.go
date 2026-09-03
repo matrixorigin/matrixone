@@ -297,9 +297,10 @@ type SpillStateCodec interface {
 
 // ExactCountDistinctSpillState exposes the narrow ownership transfer required
 // by Group's bounded exact COUNT(DISTINCT ...) spill path. BeginArgumentDrain
-// prepares an empty replacement before the caller writes any key. The caller
-// must Commit only after its private spill wave is durably published; Abort
-// keeps the resident state authoritative.
+// validates and freezes the drain view without allocating a replacement for
+// every aggregate chunk. Commit installs bounded empty replacements one chunk
+// at a time after the caller has written the private spill wave; Abort keeps
+// the resident state authoritative.
 //
 // Argument payloads use the aggregate's existing canonical key grammar without
 // the chunk-local group prefix. InsertDistinctArgument accepts only payloads

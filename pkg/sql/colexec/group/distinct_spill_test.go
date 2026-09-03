@@ -1912,6 +1912,8 @@ func assertGroupedDistinctHardAccountResult(
 	t *testing.T,
 	proc *process.Process,
 	op vm.Operator,
+	wantRows int,
+	wantCount int64,
 ) {
 	t.Helper()
 	rows := 0
@@ -1924,10 +1926,10 @@ func assertGroupedDistinctHardAccountResult(
 		rows += result.Batch.RowCount()
 		for _, count := range vector.MustFixedColNoTypeCheck[int64](
 			result.Batch.Vecs[1]) {
-			require.Equal(t, int64(2), count)
+			require.Equal(t, wantCount, count)
 		}
 	}
-	require.Equal(t, aggexec.AggBatchSize, rows)
+	require.Equal(t, wantRows, rows)
 }
 
 func TestGroupedDistinctSpillFinalizationCompletesWithinHardAccount(t *testing.T) {
@@ -1945,7 +1947,8 @@ func TestGroupedDistinctSpillFinalizationCompletesWithinHardAccount(t *testing.T
 	allocation := installGroupTestAllocation(t, g, proc, 1<<20)
 	require.NoError(t, g.Prepare(proc))
 
-	assertGroupedDistinctHardAccountResult(t, proc, g)
+	assertGroupedDistinctHardAccountResult(
+		t, proc, g, aggexec.AggBatchSize, 2)
 	require.GreaterOrEqual(t,
 		g.OpAnalyzer.GetOpStats().ExtraStats["GroupDistinctSpillActivations"],
 		int64(2),
@@ -1983,7 +1986,8 @@ func TestMergeGroupedDistinctSpillFinalizationCompletesWithinHardAccount(t *test
 	allocation := installGroupTestAllocation(t, merge, proc, 1<<20)
 	require.NoError(t, merge.Prepare(proc))
 
-	assertGroupedDistinctHardAccountResult(t, proc, merge)
+	assertGroupedDistinctHardAccountResult(
+		t, proc, merge, aggexec.AggBatchSize, 2)
 	require.GreaterOrEqual(t,
 		merge.OpAnalyzer.GetOpStats().ExtraStats["GroupDistinctSpillActivations"],
 		int64(2),
@@ -1994,6 +1998,84 @@ func TestMergeGroupedDistinctSpillFinalizationCompletesWithinHardAccount(t *test
 	merge.Free(proc, false, nil)
 	require.Zero(t, allocation.account.Snapshot().Used)
 	require.LessOrEqual(t, allocation.account.Snapshot().Peak, uint64(1<<20))
+	require.Zero(t, allocation.generation.Snapshot().SpillDiskUsed)
+	require.Zero(t, allocation.generation.Snapshot().SpillFDUsed)
+	finalizeGroupTestAllocation(t, merge, allocation)
+	for _, partial := range partials {
+		partial.Clean(proc.Mp())
+	}
+	proc.Free()
+	require.Zero(t, proc.Mp().CurrNB())
+}
+
+func TestGroupedDistinctSpillMultiChunkDrainCompletesWithinHardAccount(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	const chunks = 3
+	inputs := make([]*batch.Batch, 0, chunks)
+	for chunk := range chunks {
+		inputs = append(inputs, groupedDistinctHardAccountInputRange(
+			proc,
+			chunk*aggexec.AggBatchSize,
+			aggexec.AggBatchSize,
+			1,
+		))
+	}
+	g := newGroupOp(
+		proc,
+		[]*plan.Expr{colExpr(0, types.T_int32)},
+		[]aggexec.AggFuncExecExpression{countDistinctAgg(1)},
+	)
+	g.SpillMem = 64 << 20
+	g.AppendChild(colexec.NewMockOperator().WithBatchs(inputs))
+	allocation := installGroupTestAllocation(t, g, proc, 2<<20)
+	require.NoError(t, g.Prepare(proc))
+
+	assertGroupedDistinctHardAccountResult(
+		t, proc, g, chunks*aggexec.AggBatchSize, 1)
+	require.Positive(t,
+		g.OpAnalyzer.GetOpStats().ExtraStats["GroupDistinctSpillActivations"])
+
+	g.Free(proc, false, nil)
+	require.Zero(t, allocation.account.Snapshot().Used)
+	require.LessOrEqual(t, allocation.account.Snapshot().Peak, uint64(2<<20))
+	require.Zero(t, allocation.generation.Snapshot().SpillDiskUsed)
+	require.Zero(t, allocation.generation.Snapshot().SpillFDUsed)
+	finalizeGroupTestAllocation(t, g, allocation)
+	for _, input := range inputs {
+		input.Clean(proc.Mp())
+	}
+	proc.Free()
+	require.Zero(t, proc.Mp().CurrNB())
+}
+
+func TestMergeGroupedDistinctSpillMultiChunkDrainCompletesWithinHardAccount(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	const chunks = 3
+	partials := make([]*batch.Batch, 0, chunks)
+	for chunk := range chunks {
+		partials = append(partials, buildGroupedDistinctPartial(
+			t,
+			proc,
+			chunk*aggexec.AggBatchSize,
+			aggexec.AggBatchSize,
+			1,
+		))
+	}
+	merge := newMergeGroupOp(
+		[]aggexec.AggFuncExecExpression{countDistinctAgg(1)})
+	merge.SpillMem = 64 << 20
+	merge.AppendChild(colexec.NewMockOperator().WithBatchs(partials))
+	allocation := installGroupTestAllocation(t, merge, proc, 2<<20)
+	require.NoError(t, merge.Prepare(proc))
+
+	assertGroupedDistinctHardAccountResult(
+		t, proc, merge, chunks*aggexec.AggBatchSize, 1)
+	require.Positive(t,
+		merge.OpAnalyzer.GetOpStats().ExtraStats["GroupDistinctSpillActivations"])
+
+	merge.Free(proc, false, nil)
+	require.Zero(t, allocation.account.Snapshot().Used)
+	require.LessOrEqual(t, allocation.account.Snapshot().Peak, uint64(2<<20))
 	require.Zero(t, allocation.generation.Snapshot().SpillDiskUsed)
 	require.Zero(t, allocation.generation.Snapshot().SpillFDUsed)
 	finalizeGroupTestAllocation(t, merge, allocation)

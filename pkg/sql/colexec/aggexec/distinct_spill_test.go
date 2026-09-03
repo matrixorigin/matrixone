@@ -134,7 +134,7 @@ func TestCountDistinctArgumentDrainAbortKeepsResidentOwner(t *testing.T) {
 	require.Equal(t, baseline, mp.CurrNB())
 }
 
-func TestCountDistinctDrainPreparationFailureKeepsResidentOwner(t *testing.T) {
+func TestCountDistinctDrainCommitFailureKeepsResidentOwner(t *testing.T) {
 	mp := mpool.MustNewZero()
 	registry, err := mpool.NewAllocationAccountRegistry(1, 64)
 	require.NoError(t, err)
@@ -167,8 +167,11 @@ func TestCountDistinctDrainPreparationFailureKeepsResidentOwner(t *testing.T) {
 	require.NoError(t, exec.BatchFill(
 		0, []uint64{1}, []*vector.Vector{input}))
 	spill := exec.(ExactCountDistinctSpillState)
-	_, err = spill.BeginArgumentDrain(allocation)
+	drain, err := spill.BeginArgumentDrain(allocation)
+	require.NoError(t, err)
+	err = drain.Commit()
 	require.ErrorIs(t, err, mpool.ErrAllocationAccountCapacity)
+	drain.Abort()
 
 	result, err := spill.Flush()
 	require.NoError(t, err)

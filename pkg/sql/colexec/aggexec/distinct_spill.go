@@ -28,11 +28,11 @@ import (
 var _ ExactCountDistinctSpillState = (*countColumnExec)(nil)
 
 type countDistinctArgumentDrain struct {
-	exec         *countColumnExec
-	replacements []aggState
-	keys         uint64
-	bytes        uint64
-	done         bool
+	exec        *countColumnExec
+	replacement *AllocationAccount
+	keys        uint64
+	bytes       uint64
+	done        bool
 }
 
 func initBoundedDistinctWorkState(
@@ -135,23 +135,8 @@ func (exec *countColumnExec) BeginArgumentDrain(
 			"aggregate does not support exact distinct argument spill")
 	}
 	drain := &countDistinctArgumentDrain{
-		exec:         exec,
-		replacements: make([]aggState, len(exec.state)),
-	}
-	for i := range exec.state {
-		state := &exec.state[i]
-		if state.argSkl == nil || state.length < 0 || state.capacity <= 0 {
-			drain.Abort()
-			return nil, moerr.NewInternalErrorNoCtx(
-				"invalid exact distinct argument state")
-		}
-		if err := initBoundedDistinctWorkState(
-			&drain.replacements[i], exec.mp, state.length,
-			state.capacity, replacement,
-		); err != nil {
-			drain.Abort()
-			return nil, err
-		}
+		exec:        exec,
+		replacement: replacement,
 	}
 	var err error
 	drain.keys, drain.bytes, err = exec.DistinctArgumentStats()
@@ -197,16 +182,25 @@ func (d *countDistinctArgumentDrain) RetainedBytes() uint64 {
 }
 
 func (d *countDistinctArgumentDrain) Commit() error {
-	if d == nil || d.done || d.exec == nil ||
-		len(d.replacements) != len(d.exec.state) {
+	if d == nil || d.done || d.exec == nil {
 		return moerr.NewInternalErrorNoCtx("invalid exact distinct drain commit")
 	}
 	for i := range d.exec.state {
-		d.exec.state[i].free(d.exec.mp)
-		d.exec.state[i] = d.replacements[i]
-		d.replacements[i] = aggState{}
+		state := &d.exec.state[i]
+		var replacement aggState
+		if err := initBoundedDistinctWorkState(
+			&replacement,
+			d.exec.mp,
+			state.length,
+			state.capacity,
+			d.replacement,
+		); err != nil {
+			return err
+		}
+		state.free(d.exec.mp)
+		*state = replacement
 	}
-	d.replacements = nil
+	d.replacement = nil
 	d.done = true
 	d.exec = nil
 	return nil
@@ -216,12 +210,7 @@ func (d *countDistinctArgumentDrain) Abort() {
 	if d == nil || d.done {
 		return
 	}
-	if d.exec != nil {
-		for i := range d.replacements {
-			d.replacements[i].free(d.exec.mp)
-		}
-	}
-	d.replacements = nil
+	d.replacement = nil
 	d.done = true
 	d.exec = nil
 }
@@ -261,22 +250,16 @@ func (exec *countColumnExec) RehomeDistinctArgumentState(
 		return moerr.NewInternalErrorNoCtx(
 			"cannot rehome non-empty exact distinct argument state")
 	}
-	replacements := make([]aggState, len(exec.state))
 	for i := range exec.state {
 		state := &exec.state[i]
+		var replacement aggState
 		if err := initBoundedDistinctWorkState(
-			&replacements[i], exec.mp, state.length, state.capacity, allocation,
+			&replacement, exec.mp, state.length, state.capacity, allocation,
 		); err != nil {
-			for j := range replacements {
-				replacements[j].free(exec.mp)
-			}
 			return err
 		}
-	}
-	for i := range exec.state {
-		exec.state[i].free(exec.mp)
-		exec.state[i] = replacements[i]
-		replacements[i] = aggState{}
+		state.free(exec.mp)
+		*state = replacement
 	}
 	return nil
 }
