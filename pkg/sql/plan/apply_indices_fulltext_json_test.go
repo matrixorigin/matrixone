@@ -24,9 +24,20 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/fulltext2"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
+	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	veccache "github.com/matrixorigin/matrixone/pkg/vectorindex/cache"
 	"github.com/stretchr/testify/require"
 )
+
+// fakeCoverageTxn is a non-nil TxnOperator that only needs to answer SnapshotTS();
+// indexCoversSnapshot reads no other method on this path. Any other call panics,
+// which would surface an unexpected new dependency rather than hide it.
+type fakeCoverageTxn struct{ client.TxnOperator }
+
+func (fakeCoverageTxn) SnapshotTS() timestamp.Timestamp {
+	return timestamp.Timestamp{PhysicalTime: 1_700_000_000_000_000_000}
+}
 
 func jpColExpr(pos int32) *plan.Expr {
 	return &plan.Expr{Expr: &plan.Expr_Col{Col: &plan.ColRef{ColPos: pos}}}
@@ -87,6 +98,24 @@ func TestAsyncCoverageBar(t *testing.T) {
 	// so the strict check is preserved rather than wrapping negative.
 	tiny := types.BuildTS(10, 3)
 	require.Equal(t, tiny, asyncCoverageBar(tiny), "underflow clamps to the original TS")
+}
+
+// TestIndexCoversSnapshotReachesCoverageHook drives the async-coverage POSITIVE
+// path: a non-nil builder with a real mock process/txn reaches the CoversSnapshot
+// lookup under the live top context (the other tests use a nil builder and stop at
+// the fail-closed guard). No live ISCP job exists in a unit context, so the hook
+// reports not-covered -- the point is exercising the reachable path safely (#27926).
+func TestIndexCoversSnapshotReachesCoverageHook(t *testing.T) {
+	mockCtx := NewMockCompilerContext(false)
+	proc := mockCtx.GetProcess()
+	proc.Base.TxnOperator = fakeCoverageTxn{} // the mock proc has no txn otherwise
+	b := &QueryBuilder{compCtx: mockCtx}
+	idx := jpJSONIndex("j", `{"parser":"json"}`)
+	scanNode := jpScanNode("j", idx)
+	scanNode.TableDef.TblId = 424242 // must be non-zero to pass the guard
+
+	require.False(t, b.indexCoversSnapshot(scanNode, idx),
+		"with no live coverage job, an async index must not be treated as covering")
 }
 
 // The headline rewrite from the issue.
