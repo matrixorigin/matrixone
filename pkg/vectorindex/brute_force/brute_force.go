@@ -202,6 +202,15 @@ func (idx *UsearchBruteForceIndex[T]) Load(sqlproc *sqlexec.SqlProcess) error {
 	return nil
 }
 
+// GetIndexSize reports the flattened dataset the index holds in host memory. Nothing here
+// reaches a GPU, so the device figure is 0.
+func (idx *UsearchBruteForceIndex[T]) GetIndexSize() (hostBytes, deviceBytes int64) {
+	if idx.Dataset == nil {
+		return 0, 0
+	}
+	return int64(len(*idx.Dataset)) * int64(util.UnsafeSizeOf[T]()), 0
+}
+
 func (idx *UsearchBruteForceIndex[T]) SearchFloat32(proc *sqlexec.SqlProcess, _queries any, rt vectorindex.RuntimeConfig, outKeys []int64, outDists []float32) error {
 	keys, dists, err := idx.Search(proc, _queries, rt)
 	if err != nil {
@@ -326,6 +335,17 @@ func (idx *UsearchBruteForceIndex[T]) Destroy() {
 
 func (idx *GoBruteForceIndex[T, R]) Load(sqlproc *sqlexec.SqlProcess) error {
 	return nil
+}
+
+// GetIndexSize reports the row-major dataset the index holds in host memory: the vectors plus
+// the per-row slice headers backing them. Nothing here reaches a GPU, so the device figure is 0.
+func (idx *GoBruteForceIndex[T, R]) GetIndexSize() (hostBytes, deviceBytes int64) {
+	var elems int64
+	for _, row := range idx.Dataset {
+		elems += int64(len(row))
+	}
+	rows := int64(len(idx.Dataset))
+	return elems*int64(util.UnsafeSizeOf[T]()) + rows*int64(util.UnsafeSizeOf[[]T]()), 0
 }
 
 func (idx *GoBruteForceIndex[T, R]) Destroy() {

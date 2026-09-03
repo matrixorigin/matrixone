@@ -105,6 +105,7 @@ func (m *MockSearch) Search(sqlproc *sqlexec.SqlProcess, query any, rt vectorind
 	return []int64{1}, []float64{2.0}, nil
 }
 
+func (m *MockSearch) GetIndexSize() (int64, int64) { return 0, 0 }
 func (m *MockSearch) Destroy() {
 }
 

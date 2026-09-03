@@ -66,7 +66,13 @@ type CagraModel[B, Q cuvs.VectorType] struct {
 	// under gpu_multi_simulation several ranks alias onto the same physical device
 	// and it holds all of theirs.
 	DeviceComponentBytes map[string]int64
-	MaxCapacity          uint64
+	// HostComponentBytes is what this sub-index keeps in HOST memory once loaded --
+	// ids.bin, the INCLUDE blobs, the quantizer, the bitset: cuvs.PackSizes.Host, the
+	// complement of DeviceComponentBytes. Kept beside it so the cache's byte governor
+	// can charge RAM and VRAM to their own budgets instead of summing two arenas that
+	// are not interchangeable.
+	HostComponentBytes int64
+	MaxCapacity        uint64
 
 	// build/load configuration
 	Idxcfg  vectorindex.IndexConfig
@@ -320,6 +326,7 @@ func (idx *CagraModel[B, Q]) saveToFile() error {
 			idx.DeviceComponentBytes[name] = sz
 		}
 	}
+	idx.HostComponentBytes = packSizes.Host
 
 	// Free GPU memory — the index is now persisted on disk.
 	if err = idx.Index.Destroy(); err != nil {

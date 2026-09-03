@@ -3825,16 +3825,17 @@ var gSysVarsDefs = map[string]SystemVariable{
 		Type:              InitSystemVariableBoolType("fulltext_bloom_filter_pushdown"),
 		Default:           int8(0),
 	},
-	// Per-index-table budget for resident named-snapshot index generations. Clamped by the
-	// server ceiling cache.MaxHistoricalIndexesPerTable: a session value can lower the budget
-	// but not raise it.
-	"max_snapshot_index_cache": {
-		Name:              "max_snapshot_index_cache",
-		Scope:             ScopeBoth,
+	// Byte budget for the vector/fulltext index cache, read per account. The value on the
+	// SYS account (id 0) caps every tenant's resident indexes on the CN together; the value
+	// on a tenant caps that tenant alone. 0 means no limit, which is the default, so an
+	// unconfigured deployment behaves exactly as before.
+	"max_index_cache_size": {
+		Name:              "max_index_cache_size",
+		Scope:             ScopeGlobal,
 		Dynamic:           true,
 		SetVarHintApplies: false,
-		Type:              InitSystemVariableIntType("max_snapshot_index_cache", 1, 1024, false),
-		Default:           int64(4),
+		Type:              InitSystemVariableIntType("max_index_cache_size", 0, math.MaxInt64, false),
+		Default:           int64(0),
 	},
 	"probe_limit": {
 		Name:              "probe_limit",

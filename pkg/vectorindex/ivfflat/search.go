@@ -1146,6 +1146,17 @@ func (s *IvfflatSearch[T]) Load(sqlproc *sqlexec.SqlProcess) error {
 	return nil
 }
 
+// GetIndexSize reports the centroids, the only part of an IVFFLAT index the cache holds
+// resident: the entries stay in the index table and are read per query. Centroids is itself a
+// VectorIndexSearchIf (a brute-force index over the centroid vectors), so both arenas come
+// straight from it -- in GPU mode those centroids are device resident.
+func (s *IvfflatSearch[T]) GetIndexSize() (hostBytes, deviceBytes int64) {
+	if s.Index == nil || s.Index.Centroids == nil {
+		return 0, 0
+	}
+	return s.Index.Centroids.GetIndexSize()
+}
+
 // check config and update some parameters such as ef_search
 func (s *IvfflatSearch[T]) SearchFloat32(proc *sqlexec.SqlProcess, query any, rt vectorindex.RuntimeConfig, outKeys []int64, outDists []float32) error {
 	keys, dists, err := s.Search(proc, query, rt)

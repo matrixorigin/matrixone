@@ -142,6 +142,14 @@ func (idx *GpuAdhocBruteForceIndex[T]) Load(sqlproc *sqlexec.SqlProcess) error {
 	return nil
 }
 
+// GetIndexSize reports the flattened dataset this ad-hoc index holds. The bytes are charged to
+// the HOST arena only: the dataset lives in Go memory and is uploaded per search, so nothing is
+// device RESIDENT between queries -- the transient device copy is bounded by the search itself,
+// not by this cache entry's lifetime.
+func (idx *GpuAdhocBruteForceIndex[T]) GetIndexSize() (hostBytes, deviceBytes int64) {
+	return int64(len(idx.dataset)) * int64(util.UnsafeSizeOf[T]()), 0
+}
+
 // SearchFloat32 implements VectorIndexSearchIf — writes results into caller-provided slices.
 func (idx *GpuAdhocBruteForceIndex[T]) SearchFloat32(proc *sqlexec.SqlProcess, _queries any, rt vectorindex.RuntimeConfig, outKeys []int64, outDists []float32) error {
 	var flattenedQueries []T
@@ -334,6 +342,14 @@ func (idx *GpuBruteForceIndex[T]) Load(sqlproc *sqlexec.SqlProcess) (err error) 
 		return moerr.NewInternalErrorNoCtx("GpuBruteForce not initialized")
 	}
 	return idx.index.Build()
+}
+
+// GetIndexSize reports the dataset cuVS holds on the GPU: count * dimension * sizeof(T). It is
+// charged to the DEVICE arena only -- unlike GpuAdhocBruteForceIndex, which keeps its vectors in
+// Go memory and uploads per search, this index owns a built device-resident cuVS index for the
+// whole life of the cache entry, and the Go copy is released at build time.
+func (idx *GpuBruteForceIndex[T]) GetIndexSize() (hostBytes, deviceBytes int64) {
+	return 0, int64(idx.count) * int64(idx.dimension) * int64(util.UnsafeSizeOf[T]())
 }
 
 // SearchFloat32 implements VectorIndexSearchIf — writes results into caller-provided slices.

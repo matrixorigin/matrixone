@@ -16,7 +16,6 @@ package cache
 
 import (
 	"errors"
-	"fmt"
 	"os"
 	"os/signal"
 	"strings"
@@ -61,16 +60,6 @@ const (
 var (
 	VectorIndexCacheTTL time.Duration     = 5 * time.Minute
 	Cache               *VectorIndexCache = NewVectorIndexCache()
-
-	// MaxHistoricalIndexesTotal is the process-wide ceiling on resident named-snapshot
-	// generations across all index tables. Owned by the CN, not settable per request. 0
-	// disables the ceiling.
-	MaxHistoricalIndexesTotal = 8
-
-	// MaxHistoricalIndexesPerTable is the ceiling on resident named-snapshot generations of
-	// one index table, and the upper bound on the session variable max_snapshot_index_cache.
-	// 0 disables the per-table limit.
-	MaxHistoricalIndexesPerTable = 4
 )
 
 type retryableLoadError struct {
@@ -152,6 +141,16 @@ type VectorIndexSearchIf interface {
 	// (mirrors how fulltext2 stubs SearchFloat32).
 	SearchInto(proc *sqlexec.SqlProcess, query any, rt vectorindex.RuntimeConfig, out *vectorindex.SearchOutput) error
 	Load(*sqlexec.SqlProcess) error
+	// GetIndexSize reports the bytes this index holds resident after a successful Load, for
+	// the max_index_cache_size governor, split by arena: hostBytes is RAM, deviceBytes is
+	// VRAM. They are NOT interchangeable and must never be summed into one figure -- a CN has
+	// far more of one than the other, so a conflated total bounds neither. An implementation
+	// reports 0 for an arena it does not occupy: the CPU algos report host only, the cuVS
+	// algos report the device-resident quantity their load gate already measures.
+	//
+	// The cache calls it once, right after Load, and caches the result on the entry, so it
+	// need not be cheap and is never called on the search path.
+	GetIndexSize() (hostBytes, deviceBytes int64)
 	Destroy()
 }
 
@@ -207,9 +206,14 @@ type VectorIndexSearch struct {
 	stale       atomic.Bool // set by the IsStale freshness check; reclaimed next sweep. Separate from
 	// ExpireAt so a concurrent Search's extend() (sliding TTL) can't un-mark a stale entry.
 	evicting atomic.Bool
-	// admitted is set when a snapshot generation passes admission. Only admitted entries
-	// count toward the ceilings.
-	admitted         atomic.Bool
+	// accountID is the tenant that loaded this entry, taken from the loading request. An
+	// index table name is globally unique, so a key belongs to one tenant for its whole life.
+	accountID atomic.Uint32
+	// hostBytes/deviceBytes are Algo.GetIndexSize() charged once after a successful Load, the
+	// two quantities the max_index_cache_size governor sums. Kept apart because RAM and VRAM
+	// are separate budgets. Both 0 until the load succeeds.
+	hostBytes        atomic.Int64
+	deviceBytes      atomic.Int64
 	invalidationOnce sync.Once
 }
 
@@ -431,6 +435,7 @@ type VectorIndexCache struct {
 	once           sync.Once
 	hkTicks        int         // HouseKeeping tick counter, gates the IsStale sweep cadence
 	staleChecking  atomic.Bool // single-flight guard for the async freshness sweep
+	sysLimit       sysLimitCache
 }
 
 func NewVectorIndexCache() *VectorIndexCache {
@@ -508,96 +513,6 @@ func (c *VectorIndexCache) evictEntry(key string, expected *VectorIndexSearch, r
 	}
 	algo.Destroy()
 	return true
-}
-
-// historicalCounts returns the number of admitted named-snapshot generations in the whole
-// cache and the number belonging to exclude's index table, neither counting exclude itself.
-//
-// Counts admitted entries, not merely published ones: LoadOrStore publishes before admission
-// runs, so counting published entries would let concurrent admissions consume each other's
-// budget and refuse loads that fit.
-func (c *VectorIndexCache) historicalCounts(exclude string) (total, perTable int) {
-	table, _, _ := strings.Cut(exclude, snapshotKeySep)
-	prefix := table + snapshotKeySep
-	c.IndexMap.Range(func(key, value any) bool {
-		k, ok := key.(string)
-		if !ok || k == exclude || !IsSnapshotKey(k) {
-			return true
-		}
-		entry, ok := value.(*VectorIndexSearch)
-		if !ok || entry.evicting.Load() || !entry.admitted.Load() {
-			return true
-		}
-		if st := entry.Status.Load(); st != STATUS_NOT_INIT && st != STATUS_LOADED {
-			return true
-		}
-		total++
-		if strings.HasPrefix(k, prefix) {
-			perTable++
-		}
-		return true
-	})
-	return total, perTable
-}
-
-// snapshotCacheLimit returns the per-index-table budget for this request: the session's
-// max_snapshot_index_cache clamped to MaxHistoricalIndexesPerTable. A session value can only
-// lower the budget, never raise it. Returns MaxHistoricalIndexesPerTable when no session is
-// reachable or the value is unreadable.
-func snapshotCacheLimit(sqlproc *sqlexec.SqlProcess) int {
-	ceiling := MaxHistoricalIndexesPerTable
-	if sqlproc == nil {
-		return ceiling
-	}
-	resolve := sqlproc.GetResolveVariableFunc()
-	if resolve == nil {
-		return ceiling
-	}
-	val, err := resolve("max_snapshot_index_cache", true, false)
-	if err != nil || val == nil {
-		return ceiling
-	}
-	n, ok := val.(int64)
-	if !ok || n <= 0 {
-		return ceiling
-	}
-	if ceiling > 0 && int(n) > ceiling {
-		return ceiling
-	}
-	return int(n)
-}
-
-// admitHistorical returns an error when key is a snapshot key and either ceiling is already
-// met. Current-generation keys are always admitted. Called after LoadOrStore; the caller
-// discards the entry it stored on error.
-//
-// Counting is not serialized against other admissions, so concurrent misses can overshoot a
-// ceiling by up to the number of them in flight; steady-state residency is still bounded.
-func (c *VectorIndexCache) admitHistorical(sqlproc *sqlexec.SqlProcess, key string, entry *VectorIndexSearch) error {
-	if !IsSnapshotKey(key) {
-		return nil
-	}
-	limit := snapshotCacheLimit(sqlproc)
-	total, perTable := c.historicalCounts(key)
-	if MaxHistoricalIndexesTotal > 0 && total >= MaxHistoricalIndexesTotal {
-		return moerr.NewInternalErrorNoCtx(fmt.Sprintf(
-			"this CN already holds %d of %d named-snapshot index generations -- cannot load %q. "+
-				"Each snapshot timestamp loads a separate copy of an index. Retry once one ages "+
-				"out of the cache (TTL %s), or query fewer distinct snapshots concurrently.",
-			total, MaxHistoricalIndexesTotal, key, VectorIndexCacheTTL))
-	}
-	if limit > 0 && perTable >= limit {
-		table, _, _ := strings.Cut(key, snapshotKeySep)
-		return moerr.NewInternalErrorNoCtx(fmt.Sprintf(
-			"index %q already has %d of %d named-snapshot generations cached -- cannot load %q. "+
-				"Each snapshot timestamp loads a separate copy of the index. Retry once one of "+
-				"this index's generations ages out of the cache (TTL %s), or query fewer "+
-				"distinct snapshots of this index concurrently. max_snapshot_index_cache can "+
-				"lower this budget but not raise it above the server limit of %d.",
-			table, perTable, limit, key, VectorIndexCacheTTL, MaxHistoricalIndexesPerTable))
-	}
-	entry.admitted.Store(true)
-	return nil
 }
 
 func (c *VectorIndexCache) discardFailedLoad(key string, algo *VectorIndexSearch) {
@@ -713,10 +628,6 @@ func (c *VectorIndexCache) Search(sqlproc *sqlexec.SqlProcess, key string, newal
 		value, loaded := c.IndexMap.LoadOrStore(key, s)
 		algo := value.(*VectorIndexSearch)
 		if !loaded {
-			if aerr := c.admitHistorical(sqlproc, key, algo); aerr != nil {
-				c.discardFailedLoad(key, algo)
-				return nil, nil, aerr
-			}
 			// Remove only this exact failed entry, then destroy it without a
 			// key-wide invalidation hook; the loader owns reusable-state rollback.
 			err := algo.Load(sqlproc)
@@ -733,6 +644,7 @@ func (c *VectorIndexCache) Search(sqlproc *sqlexec.SqlProcess, key string, newal
 				}
 				return nil, nil, err
 			}
+			c.chargeAndEnforce(sqlproc, key, algo)
 		}
 		keys, distances, err = algo.Search(sqlproc, newalgo, query, rt)
 		if err != nil {
@@ -758,10 +670,6 @@ func (c *VectorIndexCache) SearchInto(sqlproc *sqlexec.SqlProcess, key string, n
 		value, loaded := c.IndexMap.LoadOrStore(key, s)
 		algo := value.(*VectorIndexSearch)
 		if !loaded {
-			if aerr := c.admitHistorical(sqlproc, key, algo); aerr != nil {
-				c.discardFailedLoad(key, algo)
-				return aerr
-			}
 			if err := algo.Load(sqlproc); err != nil {
 				if algo.evicting.Load() {
 					continue
@@ -775,6 +683,7 @@ func (c *VectorIndexCache) SearchInto(sqlproc *sqlexec.SqlProcess, key string, n
 				}
 				return err
 			}
+			c.chargeAndEnforce(sqlproc, key, algo)
 		}
 		err := algo.SearchInto(sqlproc, query, rt, out)
 		if err != nil {

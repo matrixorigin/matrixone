@@ -315,6 +315,19 @@ func (s *HnswSearch[T]) Load(sqlproc *sqlexec.SqlProcess) error {
 	return nil
 }
 
+// GetIndexSize reports the usearch models this search holds resident, as the sum of their
+// metadata FileSize: a loaded usearch index is the model file's contents in host memory, so
+// the persisted size is the resident size. Nothing here is device resident, so the device
+// figure is 0.
+func (s *HnswSearch[T]) GetIndexSize() (hostBytes, deviceBytes int64) {
+	for _, idx := range s.Indexes {
+		if idx != nil {
+			hostBytes += idx.FileSize
+		}
+	}
+	return hostBytes, 0
+}
+
 // IsStale reports whether the loaded model has fallen behind the persisted index — any content
 // change (CDC append/delete rewriting a model file, REBUILD/MERGE, or an emptied model) changes the
 // checksum fingerprint / model count — for the VectorIndexCache cross-CN freshness check.

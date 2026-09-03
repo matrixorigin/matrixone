@@ -14,19 +14,15 @@
 
 package cache
 
-// Tests for the per-index bound on resident named-snapshot generations and the staleness
-// exemption for snapshot entries (#27927).
+// Tests for named-snapshot cache keys: shared loads per timestamp, and the staleness
+// exemption that keeps an immutable snapshot generation from being swept (#27927).
 
 import (
-	"fmt"
-	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
 
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
-	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/sqlexec"
 	"github.com/stretchr/testify/require"
@@ -34,11 +30,15 @@ import (
 
 const boundIdxTable = "__mo_index_secondary_bound_test"
 
-// countingSearch counts Load calls.
+// countingSearch counts Load calls and reports a fixed per-arena size.
 type countingSearch struct {
-	loads atomic.Int64
-	stale bool
+	loads  atomic.Int64
+	stale  bool
+	host   int64
+	device int64
 }
+
+func (m *countingSearch) GetIndexSize() (int64, int64) { return m.host, m.device }
 
 func (m *countingSearch) Search(*sqlexec.SqlProcess, any, vectorindex.RuntimeConfig) (any, []float64, error) {
 	return []int64{1}, []float64{2.0}, nil
@@ -59,21 +59,11 @@ func snapshotTS(physical int64) timestamp.Timestamp {
 	return timestamp.Timestamp{PhysicalTime: physical, LogicalTime: 1}
 }
 
-// newBoundCache returns a private cache with MaxHistoricalIndexes set to limit, restored and
-// emptied on cleanup.
-func newBoundCache(t *testing.T, limit int) *VectorIndexCache {
-	t.Helper()
-	return newBoundCacheWithTotal(t, limit, 0)
-}
-
-// newBoundCacheWithTotal sets both ceilings; total 0 disables the process-wide one.
-func newBoundCacheWithTotal(t *testing.T, perTable, total int) *VectorIndexCache {
+// newBoundCache returns a private cache, emptied on cleanup.
+func newBoundCache(t *testing.T) *VectorIndexCache {
 	t.Helper()
 	c := NewVectorIndexCache()
-	origPer, origTotal := MaxHistoricalIndexesPerTable, MaxHistoricalIndexesTotal
-	MaxHistoricalIndexesPerTable, MaxHistoricalIndexesTotal = perTable, total
 	t.Cleanup(func() {
-		MaxHistoricalIndexesPerTable, MaxHistoricalIndexesTotal = origPer, origTotal
 		c.IndexMap.Range(func(key, _ any) bool {
 			c.IndexMap.Delete(key)
 			return true
@@ -87,89 +77,9 @@ func searchAt(c *VectorIndexCache, key string, algo VectorIndexSearchIf) error {
 	return err
 }
 
-// The (N+1)th generation is refused and no resident entry is removed.
-func TestSnapshotBoundRefusesBeyondLimit(t *testing.T) {
-	c := newBoundCache(t, 2)
-
-	require.NoError(t, searchAt(c, boundIdxTable, &countingSearch{}))
-
-	first := SnapshotKey(boundIdxTable, snapshotTS(100))
-	second := SnapshotKey(boundIdxTable, snapshotTS(200))
-	require.NoError(t, searchAt(c, first, &countingSearch{}))
-	require.NoError(t, searchAt(c, second, &countingSearch{}))
-
-	third := &countingSearch{}
-	err := searchAt(c, SnapshotKey(boundIdxTable, snapshotTS(300)), third)
-	require.Error(t, err, "the third snapshot generation must be refused at limit 2")
-	require.Contains(t, err.Error(), "named-snapshot generations cached")
-	require.EqualValues(t, 0, third.loads.Load(), "a refused load must not pay for the index")
-
-	for _, k := range []string{boundIdxTable, first, second} {
-		_, ok := c.IndexMap.Load(k)
-		require.True(t, ok, "refusing a new generation must not evict %q", k)
-	}
-	_, ok := c.IndexMap.Load(SnapshotKey(boundIdxTable, snapshotTS(300)))
-	require.False(t, ok, "a refused load must not leave its key in the map")
-}
-
-// Current-generation loads are never refused.
-func TestSnapshotBoundNeverRefusesCurrentGeneration(t *testing.T) {
-	c := newBoundCache(t, 1)
-	require.NoError(t, searchAt(c, SnapshotKey(boundIdxTable, snapshotTS(100)), &countingSearch{}))
-
-	// At limit for snapshots, yet the bare key still admits.
-	require.Error(t, searchAt(c, SnapshotKey(boundIdxTable, snapshotTS(200)), &countingSearch{}))
-	require.NoError(t, searchAt(c, boundIdxTable, &countingSearch{}))
-	require.NoError(t, searchAt(c, "__mo_index_secondary_other_table", &countingSearch{}))
-}
-
-// The budget applies per index table: saturating one index does not affect another.
-func TestSnapshotBoundIsPerIndexTable(t *testing.T) {
-	c := newBoundCache(t, 2)
-	const tblA = "__mo_index_secondary_tbl_a"
-	const tblB = "__mo_index_secondary_tbl_b"
-
-	// Saturate index A.
-	require.NoError(t, searchAt(c, SnapshotKey(tblA, snapshotTS(100)), &countingSearch{}))
-	require.NoError(t, searchAt(c, SnapshotKey(tblA, snapshotTS(200)), &countingSearch{}))
-	require.Error(t, searchAt(c, SnapshotKey(tblA, snapshotTS(300)), &countingSearch{}),
-		"index A is at its own limit")
-
-	// Index B has its own budget.
-	for _, ts := range []int64{100, 200} {
-		b := &countingSearch{}
-		require.NoError(t, searchAt(c, SnapshotKey(tblB, snapshotTS(ts)), b),
-			"another index's snapshots must not consume this index's budget")
-		require.EqualValues(t, 1, b.loads.Load())
-	}
-	require.Error(t, searchAt(c, SnapshotKey(tblB, snapshotTS(300)), &countingSearch{}),
-		"index B has its own limit, applied independently")
-
-	for _, tbl := range []string{tblA, tblB} {
-		require.NoError(t, searchAt(c, tbl, &countingSearch{}))
-	}
-}
-
-// extendForSearch renews ExpireAt on every search, so a hot incumbent is never reclaimed and
-// the refusal stands while it stays in use.
-func TestSnapshotBoundRefusalPersistsWhileIncumbentsAreHot(t *testing.T) {
-	c := newBoundCache(t, 1)
-	const tbl = "__mo_index_secondary_hot"
-	incumbent := &countingSearch{}
-	require.NoError(t, searchAt(c, SnapshotKey(tbl, snapshotTS(100)), incumbent))
-
-	for i := 0; i < 3; i++ {
-		require.NoError(t, searchAt(c, SnapshotKey(tbl, snapshotTS(100)), incumbent))
-		c.HouseKeeping()
-		require.Error(t, searchAt(c, SnapshotKey(tbl, snapshotTS(200)), &countingSearch{}),
-			"a hot incumbent is never reclaimed, so the refusal stands")
-	}
-	require.EqualValues(t, 1, incumbent.loads.Load(), "the incumbent is never evicted or reloaded")
-}
-
 // Queries on the same snapshot share one entry and one Load.
 func TestSnapshotBoundSameTSSharesOneLoad(t *testing.T) {
-	c := newBoundCache(t, 1)
+	c := newBoundCache(t)
 	key := SnapshotKey(boundIdxTable, snapshotTS(100))
 
 	shared := &countingSearch{}
@@ -188,29 +98,9 @@ func TestSnapshotBoundSameTSSharesOneLoad(t *testing.T) {
 	require.NoError(t, searchAt(c, key, shared), "a resident generation is never refused")
 }
 
-// Once a resident generation expires, a previously refused load succeeds.
-func TestSnapshotBoundRefusalIsTransient(t *testing.T) {
-	c := newBoundCache(t, 1)
-	first := SnapshotKey(boundIdxTable, snapshotTS(100))
-	require.NoError(t, searchAt(c, first, &countingSearch{}))
-
-	second := SnapshotKey(boundIdxTable, snapshotTS(200))
-	require.Error(t, searchAt(c, second, &countingSearch{}))
-
-	// Expire the incumbent.
-	value, ok := c.IndexMap.Load(first)
-	require.True(t, ok)
-	value.(*VectorIndexSearch).ExpireAt.Store(1)
-	c.HouseKeeping()
-	_, ok = c.IndexMap.Load(first)
-	require.False(t, ok, "the expired generation must be reclaimed")
-
-	require.NoError(t, searchAt(c, second, &countingSearch{}), "the refused load must now succeed")
-}
-
 // checkStale skips snapshot entries and still marks current-generation ones.
 func TestStaleSweepSkipsSnapshotGenerations(t *testing.T) {
-	c := newBoundCache(t, 4)
+	c := newBoundCache(t)
 
 	current := &countingSearch{stale: true}
 	historical := &countingSearch{stale: true}
@@ -245,89 +135,6 @@ func TestSnapshotKeyRoundTrip(t *testing.T) {
 		"the logical clock must be part of the identity")
 }
 
-// procWithLimit returns a SqlProcess whose resolver reports v for max_snapshot_index_cache.
-func procWithLimit(t *testing.T, v int64) *sqlexec.SqlProcess {
-	t.Helper()
-	proc := testutil.NewProc(t)
-	t.Cleanup(proc.Free)
-	proc.SetResolveVariableFunc(func(name string, _, _ bool) (interface{}, error) {
-		if name == "max_snapshot_index_cache" {
-			return v, nil
-		}
-		return nil, nil
-	})
-	return &sqlexec.SqlProcess{Proc: proc}
-}
-
-// A session value below the server ceiling lowers the per-table budget.
-func TestSnapshotCacheLimitSessionValueLowersBudget(t *testing.T) {
-	c := newBoundCacheWithTotal(t, 4, 0)
-	const tbl = "__mo_index_secondary_lower"
-	sp := procWithLimit(t, 2)
-
-	for _, ts := range []int64{100, 200} {
-		_, _, err := c.Search(sp, SnapshotKey(tbl, snapshotTS(ts)), &countingSearch{}, nil, vectorindex.RuntimeConfig{})
-		require.NoError(t, err)
-	}
-	_, _, err := c.Search(sp, SnapshotKey(tbl, snapshotTS(300)), &countingSearch{}, nil, vectorindex.RuntimeConfig{})
-	require.Error(t, err, "the session value of 2 must bind below the server ceiling of 4")
-	require.Contains(t, err.Error(), "2 of 2")
-}
-
-// A session value above the server ceiling does not raise it.
-func TestSnapshotCacheLimitSessionValueCannotRaiseBudget(t *testing.T) {
-	c := newBoundCacheWithTotal(t, 2, 0)
-	const tbl = "__mo_index_secondary_raise"
-	sp := procWithLimit(t, 1024)
-
-	require.Equal(t, 2, snapshotCacheLimit(sp), "the session value must be clamped to the server ceiling")
-
-	for _, ts := range []int64{100, 200} {
-		_, _, err := c.Search(sp, SnapshotKey(tbl, snapshotTS(ts)), &countingSearch{}, nil, vectorindex.RuntimeConfig{})
-		require.NoError(t, err)
-	}
-	_, _, err := c.Search(sp, SnapshotKey(tbl, snapshotTS(300)), &countingSearch{}, nil, vectorindex.RuntimeConfig{})
-	require.Error(t, err, "a session value of 1024 must not admit past the server ceiling of 2")
-	require.Contains(t, err.Error(), "not raise it above the server limit of 2")
-}
-
-// The process-wide ceiling bounds the total across index tables.
-func TestSnapshotBoundTotalCeilingAcrossManyIndexes(t *testing.T) {
-	c := newBoundCacheWithTotal(t, 4, 5)
-	sp := procWithLimit(t, 1024)
-
-	admitted := 0
-	for i := 0; i < 32; i++ {
-		tbl := fmt.Sprintf("__mo_index_secondary_many_%02d", i)
-		_, _, err := c.Search(sp, SnapshotKey(tbl, snapshotTS(100)), &countingSearch{}, nil, vectorindex.RuntimeConfig{})
-		if err == nil {
-			admitted++
-			continue
-		}
-		require.Contains(t, err.Error(), "this CN already holds")
-	}
-	require.Equal(t, 5, admitted, "32 distinct index tables must not admit past the total ceiling")
-	require.Equal(t, 5, residentSnapshots(c))
-}
-
-// An index under both ceilings still makes progress while another is at its per-table budget.
-func TestSnapshotBoundUnrelatedIndexProgressesUnderCeilings(t *testing.T) {
-	c := newBoundCacheWithTotal(t, 2, 8)
-	const busy = "__mo_index_secondary_busy"
-	const quiet = "__mo_index_secondary_quiet"
-
-	for _, ts := range []int64{100, 200} {
-		require.NoError(t, searchAt(c, SnapshotKey(busy, snapshotTS(ts)), &countingSearch{}))
-	}
-	require.Error(t, searchAt(c, SnapshotKey(busy, snapshotTS(300)), &countingSearch{}),
-		"busy index is at its per-table budget")
-
-	require.NoError(t, searchAt(c, SnapshotKey(quiet, snapshotTS(100)), &countingSearch{}),
-		"an unrelated index must still make progress under the total ceiling")
-	require.NoError(t, searchAt(c, busy, &countingSearch{}), "current generations are never bounded")
-	require.NoError(t, searchAt(c, quiet, &countingSearch{}))
-}
-
 // residentSnapshots counts snapshot keys in the cache.
 func residentSnapshots(c *VectorIndexCache) int {
 	n := 0
@@ -338,31 +145,4 @@ func residentSnapshots(c *VectorIndexCache) int {
 		return true
 	})
 	return n
-}
-
-// snapshotCacheLimit falls back to MaxHistoricalIndexesPerTable when unreadable.
-func TestSnapshotCacheLimitFallsBackToDefault(t *testing.T) {
-	proc := testutil.NewProc(t)
-	t.Cleanup(proc.Free)
-
-	require.Equal(t, MaxHistoricalIndexesPerTable, snapshotCacheLimit(nil), "no sqlproc")
-	require.Equal(t, MaxHistoricalIndexesPerTable, snapshotCacheLimit(&sqlexec.SqlProcess{}), "no proc or sqlctx")
-
-	proc.SetResolveVariableFunc(func(string, bool, bool) (interface{}, error) {
-		return nil, moerr.NewInternalErrorNoCtx("boom")
-	})
-	require.Equal(t, MaxHistoricalIndexesPerTable, snapshotCacheLimit(&sqlexec.SqlProcess{Proc: proc}), "resolver error")
-
-	proc.SetResolveVariableFunc(func(string, bool, bool) (interface{}, error) { return "not an int", nil })
-	require.Equal(t, MaxHistoricalIndexesPerTable, snapshotCacheLimit(&sqlexec.SqlProcess{Proc: proc}), "wrong type")
-
-	proc.SetResolveVariableFunc(func(string, bool, bool) (interface{}, error) { return int64(0), nil })
-	require.Equal(t, MaxHistoricalIndexesPerTable, snapshotCacheLimit(&sqlexec.SqlProcess{Proc: proc}), "non-positive")
-}
-
-// The package default matches the declared session variable default.
-func TestSnapshotCacheLimitDefaultMatchesDeclaredVariable(t *testing.T) {
-	require.Equal(t, 4, MaxHistoricalIndexesPerTable,
-		"max_snapshot_index_cache is declared with Default int64(4) in pkg/frontend/variables.go")
-	require.True(t, strings.HasPrefix(SnapshotKey("t", snapshotTS(1)), "t@"))
 }

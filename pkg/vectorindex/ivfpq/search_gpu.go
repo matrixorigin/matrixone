@@ -201,6 +201,24 @@ func (s *IvfpqSearch[B, Q]) Load(sqlproc *sqlexec.SqlProcess) (err error) {
 	return nil
 }
 
+// GetIndexSize reports this IVF-PQ index's resident footprint split by arena, from the exact
+// quantities its load gate measured with cuvs.MeasureTar: DeviceComponentBytes is what was
+// deserialized onto the GPU, HostComponentBytes is what stayed in RAM (ids, INCLUDE blobs,
+// quantizer, bitset). The tar's FileSize is deliberately NOT used -- it conflates the two, and
+// charging it to either budget would be wrong for the same reason the load gate refuses it.
+func (s *IvfpqSearch[B, Q]) GetIndexSize() (hostBytes, deviceBytes int64) {
+	for _, idx := range s.Indexes {
+		if idx == nil {
+			continue
+		}
+		hostBytes += idx.HostComponentBytes
+		for _, sz := range idx.DeviceComponentBytes {
+			deviceBytes += sz
+		}
+	}
+	return hostBytes, deviceBytes
+}
+
 // IsStale reports whether the loaded index has fallen behind the persisted one (REBUILD bumps
 // the metadata timestamp; a CDC append bumps the tag=1 tail chunk_id), for the VectorIndexCache
 // cross-CN freshness check. Runs on the housekeeping goroutine via a background auto-commit txn.
@@ -533,6 +551,12 @@ func (s *IvfpqSearch[B, Q]) loadIndexes(sqlproc *sqlexec.SqlProcess, indexes []*
 			}
 		}
 		comps = append(comps, device)
+		// Stamp what the gate just measured onto the model, so the loaded sub-index can
+		// report its own footprint to the cache's byte governor. The build path stamps
+		// the same two fields in saveToFile; without this the load path would leave a
+		// model that knows its tar size but not how that tar splits across RAM and VRAM.
+		idx.DeviceComponentBytes = device
+		idx.HostComponentBytes = sizes.Host
 
 		// Re-check the RUNNING aggregate rather than waiting for the last tar.
 		// A sub-index only adds bytes to the device that holds it, so the peak is

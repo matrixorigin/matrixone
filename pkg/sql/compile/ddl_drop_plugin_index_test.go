@@ -44,6 +44,7 @@ func (s *stubIndexSearch) SearchInto(*sqlexec.SqlProcess, any, vectorindex.Runti
 }
 func (s *stubIndexSearch) Load(*sqlexec.SqlProcess) error { return nil }
 func (s *stubIndexSearch) Destroy()                       { s.destroyed = true }
+func (s *stubIndexSearch) GetIndexSize() (int64, int64)   { return 0, 0 }
 
 // seedCachedIndex puts an entry in the vector-index cache under key, as a
 // completed search would, and returns the stub so the test can see Destroy().

@@ -131,6 +131,25 @@ func (s *Fulltext2Search) Load(sqlproc *sqlexec.SqlProcess) error {
 	return nil
 }
 
+// GetIndexSize reports the Go-heap cost of the loaded index, charged with the SAME per-doc
+// model checkBaseLoadBudget uses to admit the load in the first place (estBytesPerDocHeap), so
+// the governor bounds exactly the quantity that gate measured. Base posting blocks are excluded
+// for the same reason they are excluded there: they are views into a shared read-only mmap --
+// reclaimable OS page cache, not heap, and they cannot OOM the CN. Nothing here is device
+// resident, so the device figure is 0.
+func (s *Fulltext2Search) GetIndexSize() (hostBytes, deviceBytes int64) {
+	if !s.loaded || s.idx == nil {
+		return 0, 0
+	}
+	var ndoc int64
+	for _, seg := range s.idx.segments {
+		if seg != nil {
+			ndoc += seg.N
+		}
+	}
+	return ndoc * estBytesPerDocHeap, 0
+}
+
 // IsStale reports whether the underlying index has changed since this entry was loaded, by
 // comparing the load-time generation to the current one (a REBUILD/MERGE bumps the metadata
 // timestamp; a CDC append bumps the tag=1 tail chunk_id). Run on the cache housekeeping

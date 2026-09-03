@@ -77,7 +77,8 @@ func (s *ft2StubIndex) Load(*sqlexec.SqlProcess) error {
 	return nil
 }
 
-func (s *ft2StubIndex) Destroy() {}
+func (s *ft2StubIndex) Destroy()                     {}
+func (s *ft2StubIndex) GetIndexSize() (int64, int64) { return 0, 0 }
 
 func (s *ft2StubIndex) state() (hits int, ts *timestamp.Timestamp, loadHit bool) {
 	s.mu.Lock()
