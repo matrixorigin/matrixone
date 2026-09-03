@@ -798,6 +798,7 @@ type service struct {
 	legacyDedupeArmed               bool
 	viewMetadataAdmissionGeneration uint64
 	viewMetadataAdmissionMu         sync.Mutex
+	viewMetadataAdmissionMuWaiters  atomic.Int32
 	viewMetadataAdmission           atomic.Pointer[logservicepb.ViewMetadataAdmission]
 	viewMetadataCatalogFencedEpoch  atomic.Uint64
 	viewMetadataEpochFence          *compile.ViewMetadataEpochFence

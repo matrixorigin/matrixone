@@ -79,6 +79,12 @@ func (s *service) notifyViewMetadataAdmissionUpdated() {
 	}
 }
 
+func (s *service) lockViewMetadataAdmission() {
+	s.viewMetadataAdmissionMuWaiters.Add(1)
+	s.viewMetadataAdmissionMu.Lock()
+	s.viewMetadataAdmissionMuWaiters.Add(-1)
+}
+
 func (s *service) applyViewMetadataAdmission(
 	ctx context.Context,
 	snapshot *logservicepb.ViewMetadataAdmission,
@@ -87,7 +93,7 @@ func (s *service) applyViewMetadataAdmission(
 		return nil
 	}
 	if snapshot == nil {
-		s.viewMetadataAdmissionMu.Lock()
+		s.lockViewMetadataAdmission()
 		s.viewMetadataAdmission.Store(&logservicepb.ViewMetadataAdmission{Ready: true, Admitted: true})
 		s.notifyViewMetadataAdmissionUpdated()
 		s.viewMetadataAdmissionMu.Unlock()
@@ -103,7 +109,7 @@ func (s *service) applyViewMetadataAdmission(
 	}
 	if snapshot.Generation > s.viewMetadataAdmissionGeneration {
 		copy := *snapshot
-		s.viewMetadataAdmissionMu.Lock()
+		s.lockViewMetadataAdmission()
 		s.viewMetadataAdmission.Store(&copy)
 		s.notifyViewMetadataAdmissionUpdated()
 		s.viewMetadataAdmissionMu.Unlock()
@@ -117,7 +123,7 @@ func (s *service) applyViewMetadataAdmission(
 		return err
 	}
 	copy := *snapshot
-	s.viewMetadataAdmissionMu.Lock()
+	s.lockViewMetadataAdmission()
 	s.viewMetadataAdmission.Store(&copy)
 	s.notifyViewMetadataAdmissionUpdated()
 	startupWaiting := s.viewMetadataCatalogFenceStartupWaiting.Load()
@@ -238,7 +244,7 @@ func (s *service) acceptViewMetadataAdmissionSnapshot(
 	disabled bool,
 	publishIngress bool,
 ) bool {
-	s.viewMetadataAdmissionMu.Lock()
+	s.lockViewMetadataAdmission()
 	defer s.viewMetadataAdmissionMu.Unlock()
 
 	current := s.viewMetadataAdmission.Load()

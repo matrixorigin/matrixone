@@ -574,8 +574,9 @@ func TestCNViewMetadataAdmissionLinearizesFinalIngressHandoff(t *testing.T) {
 		})
 	}()
 	require.Eventually(t, func() bool {
-		return s.viewMetadataEpochFence.Epoch() == 6
-	}, time.Second, time.Millisecond, "updater did not reach snapshot publication")
+		return s.viewMetadataEpochFence.Epoch() == 6 &&
+			s.viewMetadataAdmissionMuWaiters.Load() == 1
+	}, time.Second, time.Millisecond, "updater did not block acquiring the snapshot publication mutex")
 	select {
 	case err := <-applyDone:
 		t.Fatalf("new snapshot publication bypassed the final handoff: %v", err)
