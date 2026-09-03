@@ -1,0 +1,47 @@
+-- @label:bvt
+-- MySQL MEMBER [OF] compares one value with a JSON document's direct value.
+drop database if exists func_json_member_of;
+create database func_json_member_of;
+use func_json_member_of;
+select 'a' member of ('["a", "b", "c"]');
+select 1 member of ('[1,2,3]'), 4 member of ('[1,2,3]');
+select '1' member of ('[1, "1"]'), 1 member of ('["1"]');
+select null member of ('[null, 1]'), cast('null' as json) member of ('[null]'), 'x' member of (null), 'null' member of ('[null]');
+
+-- JSON-typed arrays and objects are complete direct elements, not recursive containment.
+select cast('[1,2]' as json) member of ('[[1,2], [2,1]]');
+select cast('{"a":1}' as json) member of ('[{"a":1}, {"a":1,"b":2}]');
+select cast('{"a":1}' as json) member of ('[{"a":1,"b":2}]');
+select cast('[1,2]' as json) member of ('[1,2]');
+
+drop table if exists member_json;
+create table member_json (member_doc json);
+insert into member_json values ('[2,3]'), ('[4]');
+select 2 member of (member_doc) from member_json;
+drop table member_json;
+
+-- A non-array RHS is compared as one complete JSON value.
+select 1 member of ('1'), 1 member of ('2');
+select cast('{"a":1}' as json) member of ('{"a":1}');
+
+-- OF is optional and MEMBER remains usable as a non-reserved identifier.
+select 1 member ('[1]'), 1 member of ('[2]');
+select 1 + 1 member of ('[2]') and 3 member of ('[3]');
+drop table if exists member;
+create table member (member int);
+insert into member values (1);
+select member from member;
+drop table member;
+
+-- Prepared parameters preserve their typed scalar value while the RHS is JSON text.
+set @member_value = 2;
+set @member_document = '[2,3]';
+prepare member_of_stmt from 'select ? member of (?)';
+execute member_of_stmt using @member_value, @member_document;
+deallocate prepare member_of_stmt;
+
+-- SQL NULL and JSON null are distinct; malformed and unsupported RHS inputs are errors.
+select 'null' member of ('[null]');
+select 1 member of ('[1');
+select 1 member of (1);
+drop database func_json_member_of;

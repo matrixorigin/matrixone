@@ -237,6 +237,7 @@ const (
 	NOT_ILIKE
 	REG_MATCH     // REG_MATCH
 	NOT_REG_MATCH // NOT REG_MATCH
+	MEMBER_OF     // MEMBER [OF]
 	IS_DISTINCT_FROM
 	IS_NOT_DISTINCT_FROM
 	NULL_SAFE_EQUAL // <=>
@@ -290,6 +291,8 @@ func (op ComparisonOp) ToString() string {
 		return "ilike"
 	case NOT_ILIKE:
 		return "not ilike"
+	case MEMBER_OF:
+		return "member of"
 	default:
 		return "Unknown ComparisonExprOperator"
 	}
@@ -312,6 +315,12 @@ func (node *ComparisonExpr) Format(ctx *FmtCtx) {
 		ctx.WriteByte(' ')
 	}
 	ctx.WriteString(node.Op.ToString())
+	if node.Op == MEMBER_OF {
+		ctx.WriteString(" (")
+		ctx.PrintExpr(node, node.Right, false)
+		ctx.WriteByte(')')
+		return
+	}
 	ctx.WriteByte(' ')
 
 	if node.SubOp != ComparisonOp(0) {

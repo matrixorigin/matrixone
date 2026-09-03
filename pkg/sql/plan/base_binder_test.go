@@ -1191,6 +1191,22 @@ func TestBindFuncExprImplByPlanExpr_JsonValid(t *testing.T) {
 	})
 }
 
+func TestBindMemberOfOperator(t *testing.T) {
+	stmt, err := parsers.ParseOne(
+		context.Background(), dialect.MYSQL, "select 1 member of ('[1]')", 1)
+	require.NoError(t, err)
+	defer stmt.Free()
+
+	selectStmt := stmt.(*tree.Select)
+	selectClause := selectStmt.Select.(*tree.SelectClause)
+	binder := NewDefaultBinder(context.Background(), nil, nil, plan.Type{}, nil)
+	bound, err := binder.BindExpr(selectClause.Exprs[0].Expr, 0, false)
+	require.NoError(t, err)
+	require.NotNil(t, bound.GetF())
+	require.Equal(t, "member of", bound.GetF().Func.GetObjName())
+	require.Equal(t, int32(types.T_int64), bound.Typ.Id)
+}
+
 func TestBindFuncExprImplByPlanExpr_DatetimeTimestampComparisonRemainsCrossTyped(t *testing.T) {
 	datetimeColumn := &plan.Expr{
 		Typ: plan.Type{Id: int32(types.T_datetime), Scale: 6},

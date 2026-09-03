@@ -2546,6 +2546,8 @@ func (b *baseBinder) bindComparisonExpr(astExpr *tree.ComparisonExpr, depth int3
 		op = "reg_match"
 	case tree.NOT_REG_MATCH:
 		op = "not_reg_match"
+	case tree.MEMBER_OF:
+		op = "member of"
 	default:
 		return nil, moerr.NewNYIf(b.GetContext(), "'%v'", astExpr)
 	}

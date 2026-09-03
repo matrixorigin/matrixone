@@ -1768,6 +1768,26 @@ var supportedStringBuiltIns = []FuncNew{
 			},
 		},
 	},
+	// Internal implementation of the MySQL MEMBER [OF] JSON operator.
+	{
+		functionId: INTERNAL_JSON_MEMBER_OF,
+		class:      plan.Function_STRICT,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    jsonMemberOfCheckFn,
+
+		Overloads: []overload{
+			{
+				overloadId: 0,
+				args:       []types.T{},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_int64.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return jsonMemberOf
+				},
+			},
+		},
+	},
 	// function `json_contains_path`
 	{
 		functionId: JSON_CONTAINS_PATH,

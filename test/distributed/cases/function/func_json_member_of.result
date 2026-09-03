@@ -1,0 +1,69 @@
+drop database if exists func_json_member_of;
+create database func_json_member_of;
+use func_json_member_of;
+select 'a' member of ('["a", "b", "c"]');
+➤ a member of (["a", "b", "c"])[-5,64,0]  𝄀
+1
+select 1 member of ('[1,2,3]'), 4 member of ('[1,2,3]');
+➤ 1 member of ([1,2,3])[-5,64,0]  ¦  4 member of ([1,2,3])[-5,64,0]  𝄀
+1  ¦  0
+select '1' member of ('[1, "1"]'), 1 member of ('["1"]');
+➤ 1 member of ([1, "1"])[-5,64,0]  ¦  1 member of (["1"])[-5,64,0]  𝄀
+1  ¦  0
+select null member of ('[null, 1]'), cast('null' as json) member of ('[null]'), 'x' member of (null), 'null' member of ('[null]');
+➤ null member of ([null, 1])[-5,64,0]  ¦  cast(null as json) member of ([null])[-5,64,0]  ¦  x member of (null)[-5,64,0]  ¦  null member of ([null])[-5,64,0]  𝄀
+null  ¦  1  ¦  null  ¦  0
+select cast('[1,2]' as json) member of ('[[1,2], [2,1]]');
+➤ cast([1,2] as json) member of ([[1,2], [2,1]])[-5,64,0]  𝄀
+1
+select cast('{"a":1}' as json) member of ('[{"a":1}, {"a":1,"b":2}]');
+➤ cast({"a":1} as json) member of ([{"a":1}, {"a":1,"b":2}])[-5,64,0]  𝄀
+1
+select cast('{"a":1}' as json) member of ('[{"a":1,"b":2}]');
+➤ cast({"a":1} as json) member of ([{"a":1,"b":2}])[-5,64,0]  𝄀
+0
+select cast('[1,2]' as json) member of ('[1,2]');
+➤ cast([1,2] as json) member of ([1,2])[-5,64,0]  𝄀
+0
+drop table if exists member_json;
+create table member_json (member_doc json);
+insert into member_json values ('[2,3]'), ('[4]');
+select 2 member of (member_doc) from member_json;
+➤ 2 member of (member_doc)[-5,64,0]  𝄀
+1  𝄀
+0
+drop table member_json;
+select 1 member of ('1'), 1 member of ('2');
+➤ 1 member of (1)[-5,64,0]  ¦  1 member of (2)[-5,64,0]  𝄀
+1  ¦  0
+select cast('{"a":1}' as json) member of ('{"a":1}');
+➤ cast({"a":1} as json) member of ({"a":1})[-5,64,0]  𝄀
+1
+select 1 member ('[1]'), 1 member of ('[2]');
+➤ 1 member of ([1])[-5,64,0]  ¦  1 member of ([2])[-5,64,0]  𝄀
+1  ¦  0
+select 1 + 1 member of ('[2]') and 3 member of ('[3]');
+➤ 1 + 1 member of ([2]) and 3 member of ([3])[-7,1,0]  𝄀
+1
+drop table if exists member;
+create table member (member int);
+insert into member values (1);
+select member from member;
+➤ member[4,32,0]  𝄀
+1
+drop table member;
+set @member_value = 2;
+set @member_document = '[2,3]';
+prepare member_of_stmt from 'select ? member of (?)';
+execute member_of_stmt using @member_value, @member_document;
+➤ ? member of (?)[-5,64,0]  𝄀
+1
+deallocate prepare member_of_stmt;
+select 'null' member of ('[null]');
+➤ null member of ([null])[-5,64,0]  𝄀
+0
+select 1 member of ('[1');
+invalid argument member of, bad value invalid JSON document
+select 1 member of (1);
+Invalid data type for JSON data in argument 2 to function member of; a JSON string or JSON type is required.
+drop database func_json_member_of;
