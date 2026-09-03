@@ -23,8 +23,29 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/fulltext2"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
+	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/stretchr/testify/require"
 )
+
+type fakeCoverageTxn struct{ client.TxnOperator }
+
+func (fakeCoverageTxn) SnapshotTS() timestamp.Timestamp {
+	return timestamp.Timestamp{PhysicalTime: 1_700_000_000_000_000_000}
+}
+
+// Drives indexCoversSnapshot to the coverage lookup (positive path).
+func TestIndexCoversSnapshotReachesCoverageHook(t *testing.T) {
+	mockCtx := NewMockCompilerContext(false)
+	proc := mockCtx.GetProcess()
+	proc.Base.TxnOperator = fakeCoverageTxn{}
+	b := &QueryBuilder{compCtx: mockCtx}
+	idx := jpJSONIndex("j", `{"parser":"json"}`)
+	scanNode := jpScanNode("j", idx)
+	scanNode.TableDef.TblId = 424242
+
+	require.False(t, b.indexCoversSnapshot(scanNode, idx))
+}
 
 func jpColExpr(pos int32) *plan.Expr {
 	return &plan.Expr{Expr: &plan.Expr_Col{Col: &plan.ColRef{ColPos: pos}}}
