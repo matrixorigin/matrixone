@@ -2697,6 +2697,63 @@ func TestPreparedFloatingPointBinaryProtocolMetadata(t *testing.T) {
 	}
 }
 
+func TestPreparedBinaryStringResultMetadata(t *testing.T) {
+	ctx := context.TODO()
+	tests := []struct {
+		name   string
+		sql    string
+		typ    defines.MysqlType
+		length uint32
+	}{
+		{name: "default char is binary", sql: "select char(65, 66) as result", typ: defines.MYSQL_TYPE_VAR_STRING, length: 8},
+		{name: "bounded binary repeat", sql: "select repeat(X'61', 2) as result", typ: defines.MYSQL_TYPE_VAR_STRING, length: 2},
+		{name: "constant pad bounds blob", sql: "select lpad(cast(X'61' as blob), 2, X'62') as result", typ: defines.MYSQL_TYPE_VAR_STRING, length: 8},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			conn := &prepareResponseCaptureConn{}
+			proto, _, prepareStmt := newBinaryPrepareProtocolTestCaseWithConn(t, test.sql, conn)
+			proto.capability &^= CLIENT_DEPRECATE_EOF
+			require.NoError(t, proto.SendPrepareResponse(ctx, prepareStmt))
+
+			packets := splitProtocolPackets(t, conn.writes)
+			require.Len(t, packets, 3)
+			result := parsePrepareColumnDefinition(t, packets[1])
+			require.Equal(t, "result", result.name)
+			require.Equal(t, test.typ, result.typ)
+			require.Equal(t, uint16(charsetBinary), result.charset)
+			require.Equal(t, test.length, result.length)
+			require.NotZero(t, result.flags&uint16(defines.BINARY_FLAG))
+		})
+	}
+}
+
+func TestPreparedExpandingTextResultMetadata(t *testing.T) {
+	ctx := context.TODO()
+	for _, test := range []struct {
+		name string
+		sql  string
+	}{
+		{name: "replace", sql: "select replace(cast(repeat('a', 40000) as text), 'a', 'bb') as result"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			conn := &prepareResponseCaptureConn{}
+			proto, _, prepareStmt := newBinaryPrepareProtocolTestCaseWithConn(t, test.sql, conn)
+			proto.capability &^= CLIENT_DEPRECATE_EOF
+			require.NoError(t, proto.SendPrepareResponse(ctx, prepareStmt))
+
+			packets := splitProtocolPackets(t, conn.writes)
+			require.Len(t, packets, 3)
+			result := parsePrepareColumnDefinition(t, packets[1])
+			require.Equal(t, "result", result.name)
+			require.Equal(t, defines.MYSQL_TYPE_BLOB, result.typ)
+			require.Equal(t, uint16(Utf8mb4CollationID), result.charset)
+			require.Zero(t, result.flags&uint16(defines.BINARY_FLAG))
+		})
+	}
+}
+
 func TestPreparedSetBinaryProtocolReportsAndReplacesParameters(t *testing.T) {
 	ctx := context.TODO()
 	conn := &prepareResponseCaptureConn{}
