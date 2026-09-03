@@ -66,6 +66,111 @@ func concatReturnType(parameters []types.Type) types.Type {
 	return mergedDerivedStringReturnType(parameters, 0)
 }
 
+func concatWsReturnType(parameters []types.Type) types.Type {
+	binary := hasBinaryStringDomain(parameters)
+	bound := concatTextResultBound(parameters, 1)
+	if binary {
+		bound = concatResultBound(parameters, 1)
+	}
+	if len(parameters) > 2 {
+		separator := declaredTextCharacterBound(parameters[0])
+		if binary {
+			separator = formattedStringByteBound(parameters[0])
+		}
+		bound = addStringResultBounds(bound, multiplyStringResultBound(separator, uint64(len(parameters)-2)))
+	}
+	if binary {
+		return binaryStringResultType(bound)
+	}
+	return textStringResultType(bound, types.MergeStringCharset(parameters, types.CharsetUTF8))
+}
+
+func stringResultTypeForDomains(parameters []types.Type, sourceIndices []int, bound stringResultBound) types.Type {
+	if len(sourceIndices) == 0 || sourceIndices[0] < 0 || sourceIndices[0] >= len(parameters) {
+		return types.T_varchar.ToType()
+	}
+	for _, sourceIndex := range sourceIndices {
+		if sourceIndex >= 0 && sourceIndex < len(parameters) &&
+			types.StaticStringDomain(parameters[sourceIndex]) == types.StringDomainBinary {
+			return binaryStringResultType(bound)
+		}
+	}
+	return textStringResultType(bound, parameters[sourceIndices[0]].Charset)
+}
+
+func stringResultTypeForDomain(parameters []types.Type, sourceIndex int, bound stringResultBound) types.Type {
+	return stringResultTypeForDomains(parameters, []int{sourceIndex}, bound)
+}
+
+func expandingStringReturnType(parameters []types.Type, sourceIndex int) types.Type {
+	return stringResultTypeForDomain(parameters, sourceIndex, unknownStringResultBound())
+}
+
+func caseConversionReturnType(parameters []types.Type) types.Type {
+	if len(parameters) == 0 {
+		return types.T_varchar.ToType()
+	}
+	source := parameters[0]
+	switch source.Oid {
+	case types.T_char, types.T_varchar:
+		return textStringResultType(declaredTextCharacterBound(source), source.Charset)
+	case types.T_text:
+		if source.Width == types.MaxTinyTextLen {
+			// Case conversion preserves rune count. Express bounded TINYTEXT as
+			// VARCHAR characters instead of inventing a non-persistable TEXT width.
+			return types.NewWithCharset(types.T_varchar, source.Width, 0, source.Charset)
+		}
+		// Wider TEXT families cannot express the potentially expanded byte bound
+		// with a standard persistent subtype marker. Unknown is safer than a cap.
+		result := types.T_text.ToType()
+		result.Charset = source.Charset
+		return result
+	default:
+		return types.T_varchar.ToType()
+	}
+}
+
+func replacementStringReturnType(parameters []types.Type) types.Type {
+	if len(parameters) < 3 {
+		return types.T_varchar.ToType()
+	}
+	binary := types.StaticStringDomain(parameters[0]) == types.StringDomainBinary ||
+		types.StaticStringDomain(parameters[2]) == types.StringDomainBinary
+	boundFor := declaredTextCharacterBound
+	if binary {
+		boundFor = declaredStringByteBound
+	}
+	source := boundFor(parameters[0])
+	replacement := boundFor(parameters[2])
+	if replacement.unknown || source.unknown {
+		return stringResultTypeForDomains(parameters, []int{0, 2}, unknownStringResultBound())
+	}
+	factor := max(uint64(1), replacement.bytes)
+	return stringResultTypeForDomains(parameters, []int{0, 2}, multiplyStringResultBound(source, factor))
+}
+
+func insertStringReturnType(parameters []types.Type) types.Type {
+	if len(parameters) < 4 {
+		return types.T_varchar.ToType()
+	}
+	binary := types.StaticStringDomain(parameters[0]) == types.StringDomainBinary ||
+		types.StaticStringDomain(parameters[3]) == types.StringDomainBinary
+	boundFor := declaredTextCharacterBound
+	if binary {
+		boundFor = declaredStringByteBound
+		sourceBound := boundFor(parameters[0])
+		if types.StaticStringDomain(parameters[0]) == types.StringDomainBinary {
+			// The current rune-position kernel re-encodes every invalid binary
+			// source byte as the three-byte UTF-8 RuneError.
+			sourceBound = multiplyStringResultBound(sourceBound, 3)
+		}
+		return stringResultTypeForDomains(parameters, []int{0, 3},
+			addStringResultBounds(sourceBound, boundFor(parameters[3])))
+	}
+	return stringResultTypeForDomains(parameters, []int{0, 3},
+		addStringResultBounds(boundFor(parameters[0]), boundFor(parameters[3])))
+}
+
 // commonConditionalStringType keeps the common physical text type selected by
 // CASE/IF/COALESCE while deriving width and collation from every value branch.
 // Their checkers may rebuild CHAR/VARCHAR/TEXT with ToType while aligning
@@ -146,40 +251,133 @@ func coalesceStringReturnType(resultOID types.T, parameters []types.Type) types.
 	return commonConditionalStringType(resultOID.ToType(), parameters)
 }
 
-func mergedDerivedStringReturnType(parameters []types.Type, start int) types.Type {
-	result := types.T_varchar.ToType()
+func makeSetReturnType(parameters []types.Type) types.Type {
+	if len(parameters) <= 1 {
+		return types.T_varchar.ToType()
+	}
+	binary := hasBinaryStringDomain(parameters[1:])
+	bound := concatTextResultBound(parameters, 1)
+	if binary {
+		bound = concatResultBound(parameters, 1)
+	}
+	bound = addStringResultBounds(bound, stringResultBound{bytes: uint64(len(parameters) - 2)})
+	if binary {
+		return binaryStringResultType(bound)
+	}
+	return textStringResultType(bound, types.MergeStringCharset(parameters[1:], types.CharsetUTF8))
+}
+
+func exportSetReturnType(parameters []types.Type) types.Type {
+	if len(parameters) < 3 {
+		return types.T_varchar.ToType()
+	}
+	binary := hasBinaryStringDomain(parameters[1:])
+	boundFor := declaredTextCharacterBound
+	if binary {
+		boundFor = formattedStringByteBound
+	}
+	on := boundFor(parameters[1])
+	off := boundFor(parameters[2])
+	value := on
+	if off.unknown || (!value.unknown && off.bytes > value.bytes) {
+		value = off
+	}
+	separator := stringResultBound{bytes: 1}
+	if len(parameters) > 3 {
+		separator = boundFor(parameters[3])
+	}
+	bound := addStringResultBounds(
+		multiplyStringResultBound(value, 64),
+		multiplyStringResultBound(separator, 63),
+	)
+	if binary {
+		return binaryStringResultType(bound)
+	}
+	return textStringResultType(bound, types.MergeStringCharset(parameters[1:], types.CharsetUTF8))
+}
+
+func quoteReturnType(parameters []types.Type) types.Type {
+	if len(parameters) == 0 {
+		return types.T_varchar.ToType()
+	}
+	binary := types.StaticStringDomain(parameters[0]) == types.StringDomainBinary
+	bound := declaredTextCharacterBound(parameters[0])
+	if binary {
+		bound = declaredStringByteBound(parameters[0])
+	}
+	bound = addStringResultBounds(multiplyStringResultBound(bound, 2), stringResultBound{bytes: 2})
+	if binary {
+		return binaryStringResultType(bound)
+	}
+	return textStringResultType(bound, parameters[0].Charset)
+}
+
+func selectedStringReturnType(parameters []types.Type, start int) types.Type {
 	if start < 0 || start > len(parameters) {
-		return result
+		return types.T_text.ToType()
 	}
+	binary := hasBinaryStringDomain(parameters[start:])
+	bound := stringResultBound{}
 	for _, parameter := range parameters[start:] {
-		if !parameter.Oid.IsMySQLString() {
-			continue
+		candidate := declaredTextCharacterBound(parameter)
+		if binary {
+			candidate = formattedStringByteBound(parameter)
 		}
-		if parameter.Oid == types.T_binary || parameter.Oid == types.T_varbinary ||
-			parameter.Oid == types.T_blob {
-			return types.T_blob.ToType()
+		if candidate.unknown {
+			bound = candidate
+			break
+		}
+		if candidate.bytes > bound.bytes {
+			bound = candidate
 		}
 	}
-	result.Charset = types.MergeStringCharset(parameters[start:], result.Charset)
-	return result
+	if binary {
+		return binaryStringResultType(bound)
+	}
+	return textStringResultType(bound, types.MergeStringCharset(parameters[start:], types.CharsetUTF8))
+}
+
+func mergedDerivedStringReturnType(parameters []types.Type, start int) types.Type {
+	if start < 0 || start > len(parameters) {
+		return types.T_text.ToType()
+	}
+	if hasBinaryStringDomain(parameters[start:]) {
+		return binaryStringResultType(concatResultBound(parameters, start))
+	}
+	return textStringResultType(
+		concatTextResultBound(parameters, start),
+		types.MergeStringCharset(parameters[start:], types.CharsetUTF8),
+	)
 }
 
 func derivedStringReturnType(parameters []types.Type, sourceIndex int, resultOID types.T) types.Type {
-	result := resultOID.ToType()
-	if sourceIndex >= 0 && sourceIndex < len(parameters) {
-		// These functions copy or transform bytes from one designated source
-		// string. Keep that source's collation identity so a surrounding string
-		// comparison or MIN/MAX does not silently switch ordering semantics.
-		result.Charset = parameters[sourceIndex].Charset
+	if sourceIndex < 0 || sourceIndex >= len(parameters) {
+		return resultOID.ToType()
 	}
-	return result
+	if types.StaticStringDomain(parameters[sourceIndex]) == types.StringDomainBinary {
+		return binaryStringResultType(declaredStringByteBound(parameters[sourceIndex]))
+	}
+	return textStringResultType(declaredTextCharacterBound(parameters[sourceIndex]), parameters[sourceIndex].Charset)
+}
+
+// ConvertReturnTypeForBinder derives CONVERT metadata from the source types
+// before the executor's implicit VARCHAR cast is inserted.
+func ConvertReturnTypeForBinder(parameters []types.Type) types.Type {
+	return convertReturnType(parameters)
 }
 
 func convertReturnType(parameters []types.Type) types.Type {
-	// The binder records the constant USING charset on the synthetic charset
-	// argument. Keeping the derivation here also covers callers that resolve the
-	// overload directly with a charset-aware second argument type.
-	return derivedStringReturnType(parameters, 1, types.T_varchar)
+	if len(parameters) < 2 {
+		return types.T_text.ToType()
+	}
+	if parameters[1].Charset == types.CharsetBinary {
+		return binaryStringResultType(formattedStringByteBound(parameters[0]))
+	}
+	bound := formattedStringByteBound(parameters[0])
+	if parameters[0].Oid.IsMySQLString() {
+		bound = declaredTextCharacterBound(parameters[0])
+	}
+	return textStringResultType(bound, parameters[1].Charset)
 }
 
 // wkbConstructor builds a typed WKB geometry constructor function definition
@@ -439,7 +637,7 @@ var supportedStringBuiltIns = []FuncNew{
 			{
 				overloadId: 0,
 				retType: func(parameters []types.Type) types.Type {
-					return types.T_varchar.ToType()
+					return binaryStringResultType(stringResultBound{bytes: uint64(len(parameters)) * 4})
 				},
 				newOp: func() executeLogicOfOverload {
 					return builtInChar
@@ -459,7 +657,7 @@ var supportedStringBuiltIns = []FuncNew{
 			{
 				overloadId: 0,
 				args:       []types.T{},
-				retType:    concatReturnType,
+				retType:    concatWsReturnType,
 				newOp: func() executeLogicOfOverload {
 					return ConcatWs
 				},
@@ -472,7 +670,7 @@ var supportedStringBuiltIns = []FuncNew{
 		functionId: CONVERT,
 		class:      plan.Function_STRICT,
 		layout:     STANDARD_FUNCTION,
-		checkFn:    fixedTypeMatch,
+		checkFn:    stringDomainFixedTypeMatch,
 
 		Overloads: []overload{
 			{
@@ -602,7 +800,7 @@ var supportedStringBuiltIns = []FuncNew{
 			{
 				overloadId: 0,
 				retType: func(parameters []types.Type) types.Type {
-					return mergedDerivedStringReturnType(parameters, 1)
+					return selectedStringReturnType(parameters, 1)
 				},
 				newOp: func() executeLogicOfOverload {
 					return Elt
@@ -622,7 +820,7 @@ var supportedStringBuiltIns = []FuncNew{
 			{
 				overloadId: 0,
 				retType: func(parameters []types.Type) types.Type {
-					return mergedDerivedStringReturnType(parameters, 1)
+					return makeSetReturnType(parameters)
 				},
 				newOp: func() executeLogicOfOverload {
 					return MakeSet
@@ -642,7 +840,7 @@ var supportedStringBuiltIns = []FuncNew{
 			{
 				overloadId: 0,
 				retType: func(parameters []types.Type) types.Type {
-					return mergedDerivedStringReturnType(parameters, 1)
+					return exportSetReturnType(parameters)
 				},
 				newOp: func() executeLogicOfOverload {
 					return ExportSet
@@ -2428,7 +2626,7 @@ var supportedStringBuiltIns = []FuncNew{
 		functionId: LEFT,
 		class:      plan.Function_STRICT,
 		layout:     STANDARD_FUNCTION,
-		checkFn:    fixedTypeMatch,
+		checkFn:    collatedTextFixedTypeMatch,
 
 		Overloads: []overload{
 			{
@@ -2459,7 +2657,7 @@ var supportedStringBuiltIns = []FuncNew{
 		functionId: RIGHT,
 		class:      plan.Function_STRICT,
 		layout:     STANDARD_FUNCTION,
-		checkFn:    fixedTypeMatch,
+		checkFn:    collatedTextFixedTypeMatch,
 
 		Overloads: []overload{
 			{
@@ -2612,14 +2810,14 @@ var supportedStringBuiltIns = []FuncNew{
 		functionId: LPAD,
 		class:      plan.Function_STRICT,
 		layout:     STANDARD_FUNCTION,
-		checkFn:    fixedTypeMatch,
+		checkFn:    stringDomainFixedTypeMatch,
 
 		Overloads: []overload{
 			{
 				overloadId: 0,
 				args:       []types.T{types.T_varchar, types.T_int64, types.T_varchar},
 				retType: func(parameters []types.Type) types.Type {
-					return derivedStringReturnType(parameters, 0, types.T_varchar)
+					return stringResultTypeForDomains(parameters, []int{0, 2}, unknownStringResultBound())
 				},
 				newOp: func() executeLogicOfOverload {
 					return builtInLpad
@@ -2653,7 +2851,7 @@ var supportedStringBuiltIns = []FuncNew{
 		functionId: LTRIM,
 		class:      plan.Function_STRICT,
 		layout:     STANDARD_FUNCTION,
-		checkFn:    fixedTypeMatch,
+		checkFn:    collatedTextFixedTypeMatch,
 
 		Overloads: []overload{
 			{
@@ -2705,14 +2903,14 @@ var supportedStringBuiltIns = []FuncNew{
 		functionId: REPLACE,
 		class:      plan.Function_STRICT,
 		layout:     STANDARD_FUNCTION,
-		checkFn:    fixedTypeMatch,
+		checkFn:    stringDomainFixedTypeMatch,
 
 		Overloads: []overload{
 			{
 				overloadId: 0,
 				args:       []types.T{types.T_varchar, types.T_varchar, types.T_varchar},
 				retType: func(parameters []types.Type) types.Type {
-					return derivedStringReturnType(parameters, 0, types.T_varchar)
+					return replacementStringReturnType(parameters)
 				},
 				newOp: func() executeLogicOfOverload {
 					return Replace
@@ -2726,14 +2924,14 @@ var supportedStringBuiltIns = []FuncNew{
 		functionId: INSERT,
 		class:      plan.Function_STRICT,
 		layout:     STANDARD_FUNCTION,
-		checkFn:    fixedTypeMatch,
+		checkFn:    stringDomainFixedTypeMatch,
 
 		Overloads: []overload{
 			{
 				overloadId: 0,
 				args:       []types.T{types.T_varchar, types.T_int64, types.T_int64, types.T_varchar},
 				retType: func(parameters []types.Type) types.Type {
-					return derivedStringReturnType(parameters, 0, types.T_varchar)
+					return insertStringReturnType(parameters)
 				},
 				newOp: func() executeLogicOfOverload {
 					return Insert
@@ -2743,7 +2941,7 @@ var supportedStringBuiltIns = []FuncNew{
 				overloadId: 1,
 				args:       []types.T{types.T_char, types.T_int64, types.T_int64, types.T_char},
 				retType: func(parameters []types.Type) types.Type {
-					return derivedStringReturnType(parameters, 0, types.T_varchar)
+					return insertStringReturnType(parameters)
 				},
 				newOp: func() executeLogicOfOverload {
 					return Insert
@@ -2944,14 +3142,14 @@ var supportedStringBuiltIns = []FuncNew{
 		functionId: REPEAT,
 		class:      plan.Function_STRICT,
 		layout:     STANDARD_FUNCTION,
-		checkFn:    fixedTypeMatch,
+		checkFn:    stringDomainFixedTypeMatch,
 
 		Overloads: []overload{
 			{
 				overloadId: 0,
 				args:       []types.T{types.T_varchar, types.T_int64},
 				retType: func(parameters []types.Type) types.Type {
-					return derivedStringReturnType(parameters, 0, types.T_varchar)
+					return expandingStringReturnType(parameters, 0)
 				},
 				newOp: func() executeLogicOfOverload {
 					return builtInRepeat
@@ -2965,7 +3163,7 @@ var supportedStringBuiltIns = []FuncNew{
 		functionId: REVERSE,
 		class:      plan.Function_STRICT,
 		layout:     STANDARD_FUNCTION,
-		checkFn:    fixedTypeMatch,
+		checkFn:    collatedTextFixedTypeMatch,
 
 		Overloads: []overload{
 			{
@@ -3006,14 +3204,14 @@ var supportedStringBuiltIns = []FuncNew{
 		functionId: RPAD,
 		class:      plan.Function_STRICT,
 		layout:     STANDARD_FUNCTION,
-		checkFn:    fixedTypeMatch,
+		checkFn:    stringDomainFixedTypeMatch,
 
 		Overloads: []overload{
 			{
 				overloadId: 0,
 				args:       []types.T{types.T_varchar, types.T_int64, types.T_varchar},
 				retType: func(parameters []types.Type) types.Type {
-					return derivedStringReturnType(parameters, 0, types.T_varchar)
+					return stringResultTypeForDomains(parameters, []int{0, 2}, unknownStringResultBound())
 				},
 				newOp: func() executeLogicOfOverload {
 					return builtInRpad
@@ -3047,7 +3245,7 @@ var supportedStringBuiltIns = []FuncNew{
 		functionId: RTRIM,
 		class:      plan.Function_STRICT,
 		layout:     STANDARD_FUNCTION,
-		checkFn:    fixedTypeMatch,
+		checkFn:    collatedTextFixedTypeMatch,
 
 		Overloads: []overload{
 			{
@@ -3184,7 +3382,7 @@ var supportedStringBuiltIns = []FuncNew{
 		functionId: SPLIT_PART,
 		class:      plan.Function_STRICT,
 		layout:     STANDARD_FUNCTION,
-		checkFn:    fixedTypeMatch,
+		checkFn:    collatedTextFixedTypeMatch,
 
 		Overloads: []overload{
 			{
@@ -3806,7 +4004,7 @@ var supportedStringBuiltIns = []FuncNew{
 		functionId: SUBSTRING,
 		class:      plan.Function_STRICT,
 		layout:     STANDARD_FUNCTION,
-		checkFn:    fixedTypeMatch,
+		checkFn:    collatedTextFixedTypeMatch,
 
 		Overloads: []overload{
 			{
@@ -3887,7 +4085,7 @@ var supportedStringBuiltIns = []FuncNew{
 		functionId: SUBSTRING_INDEX,
 		class:      plan.Function_STRICT,
 		layout:     STANDARD_FUNCTION,
-		checkFn:    fixedTypeMatch, // TODO:
+		checkFn:    collatedTextFixedTypeMatch, // TODO:
 
 		Overloads: []overload{
 			{
@@ -4152,7 +4350,7 @@ var supportedStringBuiltIns = []FuncNew{
 		functionId: TRIM,
 		class:      plan.Function_STRICT,
 		layout:     STANDARD_FUNCTION,
-		checkFn:    fixedTypeMatch,
+		checkFn:    collatedTextFixedTypeMatch,
 
 		Overloads: []overload{
 			{
@@ -4173,14 +4371,14 @@ var supportedStringBuiltIns = []FuncNew{
 		functionId: LOWER,
 		class:      plan.Function_STRICT,
 		layout:     STANDARD_FUNCTION,
-		checkFn:    fixedTypeMatch,
+		checkFn:    collatedTextFixedTypeMatch,
 
 		Overloads: []overload{
 			{
 				overloadId: 0,
 				args:       []types.T{types.T_varchar},
 				retType: func(parameters []types.Type) types.Type {
-					return parameters[0]
+					return caseConversionReturnType(parameters)
 				},
 				newOp: func() executeLogicOfOverload {
 					return builtInToLower
@@ -4194,14 +4392,14 @@ var supportedStringBuiltIns = []FuncNew{
 		functionId: UPPER,
 		class:      plan.Function_STRICT,
 		layout:     STANDARD_FUNCTION,
-		checkFn:    fixedTypeMatch,
+		checkFn:    collatedTextFixedTypeMatch,
 
 		Overloads: []overload{
 			{
 				overloadId: 0,
 				args:       []types.T{types.T_varchar},
 				retType: func(parameters []types.Type) types.Type {
-					return parameters[0]
+					return caseConversionReturnType(parameters)
 				},
 				newOp: func() executeLogicOfOverload {
 					return builtInToUpper
@@ -4298,14 +4496,14 @@ var supportedStringBuiltIns = []FuncNew{
 		functionId: QUOTE,
 		class:      plan.Function_STRICT,
 		layout:     STANDARD_FUNCTION,
-		checkFn:    fixedTypeMatch,
+		checkFn:    stringDomainFixedTypeMatch,
 
 		Overloads: []overload{
 			{
 				overloadId: 0,
 				args:       []types.T{types.T_varchar},
 				retType: func(parameters []types.Type) types.Type {
-					return derivedStringReturnType(parameters, 0, types.T_varchar)
+					return quoteReturnType(parameters)
 				},
 				newOp: func() executeLogicOfOverload {
 					return Quote
@@ -4315,7 +4513,7 @@ var supportedStringBuiltIns = []FuncNew{
 				overloadId: 1,
 				args:       []types.T{types.T_char},
 				retType: func(parameters []types.Type) types.Type {
-					return derivedStringReturnType(parameters, 0, types.T_varchar)
+					return quoteReturnType(parameters)
 				},
 				newOp: func() executeLogicOfOverload {
 					return Quote
@@ -4325,7 +4523,7 @@ var supportedStringBuiltIns = []FuncNew{
 				overloadId: 2,
 				args:       []types.T{types.T_text},
 				retType: func(parameters []types.Type) types.Type {
-					return derivedStringReturnType(parameters, 0, types.T_varchar)
+					return quoteReturnType(parameters)
 				},
 				newOp: func() executeLogicOfOverload {
 					return Quote

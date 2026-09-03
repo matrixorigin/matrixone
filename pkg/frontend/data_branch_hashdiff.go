@@ -1094,7 +1094,29 @@ func hashDiffIfHasLCA(
 		baseDeleteBatches  []batchWithKind
 		baseUpdateBatches  []batchWithKind
 		restoreMissingKeys = make(map[string]struct{})
+		// A source update reaches this matcher as a delete of its LCA row followed
+		// by an insert of its replacement row. Record destination updates that
+		// changed an indexed special column so their source replacement can use a
+		// full-row native UPDATE even after the destination batch is consumed.
+		destinationChangedIndexedSpecialKeys = make(map[string]struct{})
+		sourceNativeUpdateKeys               = make(map[string]struct{})
 	)
+
+	rememberDestinationChangedIndexedSpecialKeys := func(wrapped batchWithKind) error {
+		if copt.conflictOpt == nil || copt.conflictOpt.Opt != tree.CONFLICT_ACCEPT ||
+			!copt.expandUpdate || !wrapped.fromUpdate || !wrapped.requiresNativeUpdate ||
+			wrapped.kind != diffInsert {
+			return nil
+		}
+		for rowIdx := range wrapped.batch.RowCount() {
+			key, keyErr := extractPKAsString(ses, tblStuff, wrapped.batch, rowIdx)
+			if keyErr != nil {
+				return keyErr
+			}
+			destinationChangedIndexedSpecialKeys[key] = struct{}{}
+		}
+		return nil
+	}
 
 	handleBaseDeleteAndUpdates := func(wrapped batchWithKind) error {
 		wrapped.side = diffSideBase
@@ -1106,6 +1128,9 @@ func hashDiffIfHasLCA(
 		if wrapped.kind == diffDelete {
 			baseDeleteBatches = append(baseDeleteBatches, wrapped)
 		} else {
+			if err := rememberDestinationChangedIndexedSpecialKeys(wrapped); err != nil {
+				return err
+			}
 			baseUpdateBatches = append(baseUpdateBatches, wrapped)
 		}
 
@@ -1159,7 +1184,20 @@ func hashDiffIfHasLCA(
 			}
 			wrapped.batch.Shrink(keep, true)
 		}
-		if len(baseUpdateBatches) == 0 && len(baseDeleteBatches) == 0 {
+		if copt.conflictOpt != nil && copt.conflictOpt.Opt == tree.CONFLICT_ACCEPT &&
+			copt.expandUpdate && wrapped.kind == diffInsert && wrapped.fromUpdate &&
+			!wrapped.requiresNativeUpdate {
+			for rowIdx := range wrapped.batch.RowCount() {
+				key, keyErr := extractPKAsString(ses, tblStuff, wrapped.batch, rowIdx)
+				if keyErr != nil {
+					return keyErr
+				}
+				if _, changed := destinationChangedIndexedSpecialKeys[key]; changed {
+					sourceNativeUpdateKeys[key] = struct{}{}
+				}
+			}
+		}
+		if len(baseUpdateBatches) == 0 && len(baseDeleteBatches) == 0 && len(sourceNativeUpdateKeys) == 0 {
 			// no need to check conflict
 			if stop, e := emitBatch(emit, wrapped, false, tblStuff.retPool); e != nil {
 				return e
@@ -1348,14 +1386,36 @@ func hashDiffIfHasLCA(
 
 		if pickConflictBat != nil {
 			if stop, e := emitBatch(emit, batchWithKind{
-				batch: pickConflictBat,
-				kind:  diffDelete,
-				name:  tblStuff.baseRel.GetTableName(),
-				side:  diffSideBase,
+				batch:          pickConflictBat,
+				kind:           diffDelete,
+				name:           tblStuff.baseRel.GetTableName(),
+				side:           diffSideBase,
+				hasReplacement: wrapped.kind == diffInsert || wrapped.fromUpdate,
 			}, false, tblStuff.retPool); e != nil {
 				return e
 			} else if stop {
 				return nil
+			}
+		}
+		if len(sourceNativeUpdateKeys) != 0 {
+			var nativeUpdateBat *batch.Batch
+			nativeUpdateBat, err2 = splitDataBranchBatchForNativeUpdate(
+				ses, tblStuff, wrapped.batch, sourceNativeUpdateKeys,
+			)
+			if err2 != nil {
+				return
+			}
+			if nativeUpdateBat != nil {
+				nativeWrapped := wrapped
+				nativeWrapped.batch = nativeUpdateBat
+				nativeWrapped.requiresNativeUpdate = true
+				if stop, e := emitBatch(emit, nativeWrapped, false, tblStuff.retPool); e != nil {
+					tblStuff.retPool.releaseRetBatch(wrapped.batch, false)
+					return e
+				} else if stop {
+					tblStuff.retPool.releaseRetBatch(wrapped.batch, false)
+					return nil
+				}
 			}
 		}
 		if wrapped.batch.RowCount() == 0 {
@@ -1625,6 +1685,95 @@ func compareTupleWithBatchRow(
 	return 0, nil
 }
 
+func dataBranchUpdateRequiresNativeUpdateFromBatch(
+	tblStuff tableStuff,
+	tuple types.Tuple,
+	bat *batch.Batch,
+	rowIdx int,
+) (bool, error) {
+	for _, colIdx := range tblStuff.def.indexedSpecialUpdateIdxes {
+		if colIdx < 0 || colIdx >= bat.VectorCount() {
+			return false, moerr.NewInternalErrorNoCtxf(
+				"column index %d out of range for batch width %d",
+				colIdx, bat.VectorCount(),
+			)
+		}
+		value, err := getTupleColumnValue(tuple, tblStuff, colIdx)
+		if err != nil {
+			return false, err
+		}
+		cmp, err := compareTupleValueWithVector(value, bat.Vecs[colIdx], rowIdx)
+		if err != nil {
+			return false, err
+		}
+		if cmp != 0 {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+// splitDataBranchBatchForNativeUpdate moves only the accepted conflict rows
+// that need a full-row native UPDATE out of a staged source-update batch. The
+// remaining rows retain the bounded staged apply path.
+func splitDataBranchBatchForNativeUpdate(
+	ses *Session,
+	tblStuff tableStuff,
+	bat *batch.Batch,
+	nativeUpdateKeys map[string]struct{},
+) (*batch.Batch, error) {
+	if len(nativeUpdateKeys) == 0 {
+		return nil, nil
+	}
+
+	nativeBat := tblStuff.retPool.acquireRetBatch(tblStuff, false)
+	nativeRowIdxes := make([]int64, 0, len(nativeUpdateKeys))
+	for rowIdx := range bat.RowCount() {
+		key, err := extractPKAsString(ses, tblStuff, bat, rowIdx)
+		if err != nil {
+			tblStuff.retPool.releaseRetBatch(nativeBat, false)
+			return nil, err
+		}
+		if _, ok := nativeUpdateKeys[key]; !ok {
+			continue
+		}
+		if err := nativeBat.UnionOne(bat, int64(rowIdx), ses.proc.Mp()); err != nil {
+			tblStuff.retPool.releaseRetBatch(nativeBat, false)
+			return nil, err
+		}
+		nativeRowIdxes = append(nativeRowIdxes, int64(rowIdx))
+		delete(nativeUpdateKeys, key)
+	}
+	if len(nativeRowIdxes) == 0 {
+		tblStuff.retPool.releaseRetBatch(nativeBat, false)
+		return nil, nil
+	}
+
+	nativeBat.SetRowCount(nativeBat.Vecs[0].Length())
+	bat.Shrink(nativeRowIdxes, true)
+	return nativeBat, nil
+}
+
+func dataBranchUpdateRequiresNativeUpdateFromTuples(
+	tblStuff tableStuff,
+	left, right types.Tuple,
+) (bool, error) {
+	for _, colIdx := range tblStuff.def.indexedSpecialUpdateIdxes {
+		leftValue, err := getTupleColumnValue(left, tblStuff, colIdx)
+		if err != nil {
+			return false, err
+		}
+		rightValue, err := getTupleColumnValue(right, tblStuff, colIdx)
+		if err != nil {
+			return false, err
+		}
+		if types.CompareValue(leftValue, rightValue) != 0 {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
 func findDeleteAndUpdateBat(
 	ctx context.Context, ses *Session, bh BackgroundExec,
 	tblStuff tableStuff, tblName string, side int, tmpCh chan batchWithKind, branchTS types.TS,
@@ -1732,7 +1881,8 @@ func findDeleteAndUpdateBat(
 				}
 				tBat2 := tblStuff.retPool.acquireRetBatch(tblStuff, false)
 				seen := make([]bool, dBat.RowCount())
-				var updateBat *batch.Batch
+				var stagedUpdateBat *batch.Batch
+				var nativeUpdateBat *batch.Batch
 				var updateDeleteBat *batch.Batch
 				if _, err2 = dataHashmap.PopByVectorsStream(
 					[]*vector.Vector{dBat.Vecs[tblStuff.def.pkColIdx]}, false,
@@ -1755,8 +1905,27 @@ func findDeleteAndUpdateBat(
 						}
 
 						// delete on lca and insert into tar ==> update
+						requiresNativeUpdate := false
+						if expandUpdate {
+							var updateErr error
+							requiresNativeUpdate, updateErr = dataBranchUpdateRequiresNativeUpdateFromBatch(
+								tblStuff, tuple, dBat, idx,
+							)
+							if updateErr != nil {
+								return updateErr
+							}
+						}
+						updateBat := stagedUpdateBat
+						if requiresNativeUpdate {
+							updateBat = nativeUpdateBat
+						}
 						if updateBat == nil {
 							updateBat = tblStuff.retPool.acquireRetBatch(tblStuff, false)
+							if requiresNativeUpdate {
+								nativeUpdateBat = updateBat
+							} else {
+								stagedUpdateBat = updateBat
+							}
 						}
 						if expandUpdate && updateDeleteBat == nil {
 							updateDeleteBat = tblStuff.retPool.acquireRetBatch(tblStuff, false)
@@ -1774,8 +1943,11 @@ func findDeleteAndUpdateBat(
 				); err2 != nil {
 					tblStuff.retPool.releaseRetBatch(dBat, false)
 					tblStuff.retPool.releaseRetBatch(tBat2, false)
-					if updateBat != nil {
-						tblStuff.retPool.releaseRetBatch(updateBat, false)
+					if stagedUpdateBat != nil {
+						tblStuff.retPool.releaseRetBatch(stagedUpdateBat, false)
+					}
+					if nativeUpdateBat != nil {
+						tblStuff.retPool.releaseRetBatch(nativeUpdateBat, false)
 					}
 					if updateDeleteBat != nil {
 						tblStuff.retPool.releaseRetBatch(updateDeleteBat, false)
@@ -1791,8 +1963,11 @@ func findDeleteAndUpdateBat(
 					if err2 = tBat2.UnionOne(dBat, int64(i), ses.proc.Mp()); err2 != nil {
 						tblStuff.retPool.releaseRetBatch(dBat, false)
 						tblStuff.retPool.releaseRetBatch(tBat2, false)
-						if updateBat != nil {
-							tblStuff.retPool.releaseRetBatch(updateBat, false)
+						if stagedUpdateBat != nil {
+							tblStuff.retPool.releaseRetBatch(stagedUpdateBat, false)
+						}
+						if nativeUpdateBat != nil {
+							tblStuff.retPool.releaseRetBatch(nativeUpdateBat, false)
 						}
 						if updateDeleteBat != nil {
 							tblStuff.retPool.releaseRetBatch(updateDeleteBat, false)
@@ -1804,8 +1979,7 @@ func findDeleteAndUpdateBat(
 				tblStuff.retPool.releaseRetBatch(dBat, false)
 				tBat2.SetRowCount(tBat2.Vecs[0].Length())
 
-				if updateBat != nil {
-					updateBat.SetRowCount(updateBat.Vecs[0].Length())
+				if stagedUpdateBat != nil || nativeUpdateBat != nil {
 					if expandUpdate {
 						updateDeleteBat.SetRowCount(updateDeleteBat.Vecs[0].Length())
 						if err2 = send(batchWithKind{
@@ -1817,20 +1991,37 @@ func findDeleteAndUpdateBat(
 						}); err2 != nil {
 							return err2
 						}
-						if err2 = send(batchWithKind{
-							name:       tblName,
-							side:       side,
-							batch:      updateBat,
-							kind:       diffInsert,
-							fromUpdate: tblStuff.def.pkKind != fakeKind,
-						}); err2 != nil {
-							return err2
+						for _, update := range []struct {
+							bat                  *batch.Batch
+							requiresNativeUpdate bool
+						}{
+							{bat: stagedUpdateBat},
+							{bat: nativeUpdateBat, requiresNativeUpdate: true},
+						} {
+							if update.bat == nil {
+								continue
+							}
+							update.bat.SetRowCount(update.bat.Vecs[0].Length())
+							if err2 = send(batchWithKind{
+								name:                 tblName,
+								side:                 side,
+								batch:                update.bat,
+								kind:                 diffInsert,
+								fromUpdate:           tblStuff.def.pkKind != fakeKind,
+								requiresNativeUpdate: update.requiresNativeUpdate,
+							}); err2 != nil {
+								return err2
+							}
 						}
 					} else {
+						if stagedUpdateBat == nil {
+							stagedUpdateBat = nativeUpdateBat
+						}
+						stagedUpdateBat.SetRowCount(stagedUpdateBat.Vecs[0].Length())
 						if err2 = send(batchWithKind{
 							name:  tblName,
 							side:  side,
-							batch: updateBat,
+							batch: stagedUpdateBat,
 							kind:  diffUpdate,
 						}); err2 != nil {
 							return err2
@@ -2186,14 +2377,15 @@ func diffDataHelper(
 
 	if err = tarDataHashmap.ForEachShardParallel(func(cursor databranchutils.ShardCursor) error {
 		var (
-			err2          error
-			tarBat        *batch.Batch
-			baseBat       *batch.Batch
-			baseDeleteBat *batch.Batch
-			tarUpdateBat  *batch.Batch
-			tarTuple      types.Tuple
-			baseTuple     types.Tuple
-			checkRet      databranchutils.GetResult
+			err2               error
+			tarBat             *batch.Batch
+			baseBat            *batch.Batch
+			baseDeleteBat      *batch.Batch
+			tarUpdateBat       *batch.Batch
+			tarNativeUpdateBat *batch.Batch
+			tarTuple           types.Tuple
+			baseTuple          types.Tuple
+			checkRet           databranchutils.GetResult
 		)
 
 		tarBat = tblStuff.retPool.acquireRetBatch(tblStuff, false)
@@ -2201,6 +2393,9 @@ func diffDataHelper(
 		defer func() {
 			if tarUpdateBat != nil {
 				tblStuff.retPool.releaseRetBatch(tarUpdateBat, false)
+			}
+			if tarNativeUpdateBat != nil {
+				tblStuff.retPool.releaseRetBatch(tarNativeUpdateBat, false)
 			}
 		}()
 
@@ -2278,13 +2473,28 @@ func diffDataHelper(
 							if baseDeleteBat == nil {
 								baseDeleteBat = tblStuff.retPool.acquireRetBatch(tblStuff, false)
 							}
-							if tarUpdateBat == nil {
-								tarUpdateBat = tblStuff.retPool.acquireRetBatch(tblStuff, false)
+							requiresNativeUpdate, updateErr := dataBranchUpdateRequiresNativeUpdateFromTuples(
+								tblStuff, tarTuple, baseTuple,
+							)
+							if updateErr != nil {
+								return updateErr
+							}
+							updateBat := tarUpdateBat
+							if requiresNativeUpdate {
+								updateBat = tarNativeUpdateBat
+							}
+							if updateBat == nil {
+								updateBat = tblStuff.retPool.acquireRetBatch(tblStuff, false)
+								if requiresNativeUpdate {
+									tarNativeUpdateBat = updateBat
+								} else {
+									tarUpdateBat = updateBat
+								}
 							}
 							if err2 = appendTupleToBat(ses, baseDeleteBat, baseTuple, tblStuff); err2 != nil {
 								return err2
 							}
-							if err2 = appendTupleToBat(ses, tarUpdateBat, tarTuple, tblStuff); err2 != nil {
+							if err2 = appendTupleToBat(ses, updateBat, tarTuple, tblStuff); err2 != nil {
 								return err2
 							}
 						} else {
@@ -2332,6 +2542,23 @@ func diffDataHelper(
 				fromUpdate: true,
 			}, false, tblStuff.retPool)
 			tarUpdateBat = nil
+			if err3 != nil {
+				return err3
+			} else if stop {
+				return nil
+			}
+		}
+
+		if tarNativeUpdateBat != nil {
+			stop, err3 := emitBatch(emit, batchWithKind{
+				batch:                tarNativeUpdateBat,
+				kind:                 diffInsert,
+				name:                 tblStuff.tarRel.GetTableName(),
+				side:                 diffSideTarget,
+				fromUpdate:           true,
+				requiresNativeUpdate: true,
+			}, false, tblStuff.retPool)
+			tarNativeUpdateBat = nil
 			if err3 != nil {
 				return err3
 			} else if stop {
