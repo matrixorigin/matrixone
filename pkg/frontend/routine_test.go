@@ -2011,6 +2011,23 @@ func TestRoutineRefreshSessionAuthReauthenticatesCandidate(t *testing.T) {
 	require.Len(t, rm.sessionManager.GetAllSessions(), 1)
 }
 
+func TestRoutineManagerRefreshSessionAuthRejectsInvalidTarget(t *testing.T) {
+	rm, err := NewRoutineManager(context.Background(), "")
+	require.NoError(t, err)
+	t.Cleanup(rm.cancelCtx)
+
+	require.ErrorContains(t, rm.RefreshSessionAuthWithContext(
+		context.Background(), nil, &query.RefreshSessionAuthResponse{}),
+		"invalid refresh session authentication request")
+	require.ErrorContains(t, rm.RefreshSessionAuthWithContext(
+		context.Background(), &query.RefreshSessionAuthRequest{}, nil),
+		"invalid refresh session authentication request")
+	require.ErrorContains(t, rm.RefreshSessionAuthWithContext(
+		context.Background(), &query.RefreshSessionAuthRequest{ConnID: 1},
+		&query.RefreshSessionAuthResponse{}),
+		"cannot get routine to refresh session authentication 1")
+}
+
 func TestRoutineResetSessionRejectsLifecycleConflict(t *testing.T) {
 	routine := NewRoutine(context.Background(), &testMysqlWriter{}, &config.FrontendParameters{})
 	t.Cleanup(routine.cancelRoutineFunc)
