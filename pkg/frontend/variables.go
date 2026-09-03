@@ -738,18 +738,15 @@ func (svst SystemVariableSetType) bits2string(bits uint64) (string, error) {
 			if !ok {
 				return "", errorValueIsInvalid
 			}
-			bld.WriteString(v)
-			if i != 0 {
+			if bld.Len() > 0 {
 				bld.WriteByte(',')
 			}
+			bld.WriteString(v)
 		}
 	}
 
 	bldString := bld.String()
-	if len(bldString) == 0 {
-		return bldString, nil
-	}
-	return bldString[:len(bldString)-1], nil
+	return bldString, nil
 }
 
 func (svst SystemVariableSetType) string2bits(s string) (uint64, error) {
