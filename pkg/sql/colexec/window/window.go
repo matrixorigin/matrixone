@@ -34,6 +34,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sort"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/rule"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -84,7 +85,7 @@ func (window *Window) Prepare(proc *process.Process) (err error) {
 		if expr == nil || expr.GetW() == nil {
 			continue
 		}
-		runtimeFrames[i], err = materializeRowsFrame(proc, expr.GetW().Frame)
+		runtimeFrames[i], err = materializeWindowFrame(proc, expr.GetW().Frame)
 		if err != nil {
 			return err
 		}
@@ -109,19 +110,19 @@ func (window *Window) Prepare(proc *process.Process) (err error) {
 	return nil
 }
 
-func materializeRowsFrame(proc *process.Process, planned *plan.FrameClause) (*plan.FrameClause, error) {
+func materializeWindowFrame(proc *process.Process, planned *plan.FrameClause) (*plan.FrameClause, error) {
 	if planned == nil {
 		return nil, nil
 	}
 
 	runtimeFrame := &plan.FrameClause{Type: planned.Type}
 	var err error
-	if planned.Type == plan.FrameClause_ROWS {
-		runtimeFrame.Start, err = materializeRowsBound(proc, planned.Start)
+	if planned.Type == plan.FrameClause_ROWS || planned.Type == plan.FrameClause_RANGE {
+		runtimeFrame.Start, err = materializeWindowBound(proc, planned.Start, planned.Type)
 		if err != nil {
 			return nil, err
 		}
-		runtimeFrame.End, err = materializeRowsBound(proc, planned.End)
+		runtimeFrame.End, err = materializeWindowBound(proc, planned.End, planned.Type)
 		if err != nil {
 			return nil, err
 		}
@@ -144,9 +145,18 @@ func cloneFrameBound(planned *plan.FrameBound) *plan.FrameBound {
 	}
 }
 
-func materializeRowsBound(proc *process.Process, planned *plan.FrameBound) (*plan.FrameBound, error) {
+func materializeWindowBound(
+	proc *process.Process,
+	planned *plan.FrameBound,
+	frameType plan.FrameClause_FrameType,
+) (*plan.FrameBound, error) {
 	runtimeBound := cloneFrameBound(planned)
 	if planned == nil || planned.Val == nil || planned.Val.GetLit() != nil {
+		return runtimeBound, nil
+	}
+	// Temporal RANGE bounds are normalized interval expression lists at bind
+	// time. They are already immutable constants, not deferred parameters.
+	if frameType == plan.FrameClause_RANGE && planned.Val.GetList() != nil {
 		return runtimeBound, nil
 	}
 	if proc == nil || proc.GetPrepareParams() == nil {
@@ -169,23 +179,59 @@ func materializeRowsBound(proc *process.Process, planned *plan.FrameBound) (*pla
 	if vec.IsNull(0) {
 		return nil, moerr.NewInvalidInput(proc.Ctx, "window frame bound cannot be NULL")
 	}
-	if vec.GetType().Oid != types.T_uint64 {
+	if frameType == plan.FrameClause_ROWS && vec.GetType().Oid != types.T_uint64 {
 		return nil, moerr.NewInvalidInputf(
 			proc.Ctx,
 			"window frame bound must evaluate to uint64, got %s",
 			vec.GetType().String(),
 		)
 	}
+	if frameType == plan.FrameClause_RANGE {
+		if err = validateRangeFrameBound(proc.Ctx, vec); err != nil {
+			return nil, err
+		}
+	}
 
 	runtimeBound.Val = &plan.Expr{
-		Typ: plan.Type{Id: int32(types.T_uint64)},
-		Expr: &plan.Expr_Lit{Lit: &plan.Literal{
-			Value: &plan.Literal_U64Val{
-				U64Val: vector.MustFixedColWithTypeCheck[uint64](vec)[0],
-			},
-		}},
+		Typ:  planned.Val.Typ,
+		Expr: &plan.Expr_Lit{Lit: rule.GetConstantValue(vec, false, 0)},
 	}
 	return runtimeBound, nil
+}
+
+func validateRangeFrameBound(ctx context.Context, vec *vector.Vector) error {
+	valid := true
+	switch vec.GetType().Oid {
+	case types.T_bit, types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64:
+	case types.T_int8:
+		valid = vector.MustFixedColWithTypeCheck[int8](vec)[0] >= 0
+	case types.T_int16:
+		valid = vector.MustFixedColWithTypeCheck[int16](vec)[0] >= 0
+	case types.T_int32:
+		valid = vector.MustFixedColWithTypeCheck[int32](vec)[0] >= 0
+	case types.T_int64:
+		valid = vector.MustFixedColWithTypeCheck[int64](vec)[0] >= 0
+	case types.T_float32:
+		value := vector.MustFixedColWithTypeCheck[float32](vec)[0]
+		valid = value >= 0 && !math.IsInf(float64(value), 0) && !math.IsNaN(float64(value))
+	case types.T_float64:
+		value := vector.MustFixedColWithTypeCheck[float64](vec)[0]
+		valid = value >= 0 && !math.IsInf(value, 0) && !math.IsNaN(value)
+	case types.T_decimal64:
+		valid = !vector.MustFixedColWithTypeCheck[types.Decimal64](vec)[0].Sign()
+	case types.T_decimal128:
+		valid = !vector.MustFixedColWithTypeCheck[types.Decimal128](vec)[0].Sign()
+	default:
+		return moerr.NewInvalidInputf(
+			ctx,
+			"window RANGE frame bound must be numeric, got %s",
+			vec.GetType().String(),
+		)
+	}
+	if !valid {
+		return moerr.NewInvalidInput(ctx, "window RANGE frame bound must be a finite non-negative numeric value")
+	}
+	return nil
 }
 
 func (ctr *container) frameAt(idx int, planned *plan.FrameClause) *plan.FrameClause {

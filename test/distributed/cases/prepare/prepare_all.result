@@ -734,21 +734,41 @@ drop table if exists replace_prepare;
 drop table if exists replace_prepare_src;
 drop table if exists prepared_window_frame;
 create table prepared_window_frame(id int primary key, n int);
-insert into prepared_window_frame values (1,10),(2,20),(3,30);
+insert into prepared_window_frame values (1,10),(3,20),(4,30);
 prepare prepared_rows_frame from 'select id, sum(n) over (order by id rows between ? preceding and ? following) from prepared_window_frame order by id';
 set @before = 1, @after = 1;
 execute prepared_rows_frame using @before, @after;
 ➤ id[4,32,0]  ¦  sum(n) over (order by id rows between ? preceding and ? following)[-5,64,0]  𝄀
 1  ¦  30  𝄀
-2  ¦  60  𝄀
-3  ¦  50
+3  ¦  60  𝄀
+4  ¦  50
 set @before = 0, @after = 0;
 execute prepared_rows_frame using @before, @after;
 ➤ id[4,32,0]  ¦  sum(n) over (order by id rows between ? preceding and ? following)[-5,64,0]  𝄀
 1  ¦  10  𝄀
-2  ¦  20  𝄀
-3  ¦  30
+3  ¦  20  𝄀
+4  ¦  30
 deallocate prepare prepared_rows_frame;
+prepare prepared_range_frame from 'select id, sum(n) over (order by id range ? preceding) from prepared_window_frame order by id';
+set @before = 1;
+execute prepared_range_frame using @before;
+➤ id[4,32,0]  ¦  sum(n) over (order by id range ? preceding)[-5,64,0]  𝄀
+1  ¦  10  𝄀
+3  ¦  20  𝄀
+4  ¦  50
+set @before = 2;
+execute prepared_range_frame using @before;
+➤ id[4,32,0]  ¦  sum(n) over (order by id range ? preceding)[-5,64,0]  𝄀
+1  ¦  10  𝄀
+3  ¦  30  𝄀
+4  ¦  50
+set @before = -1;
+execute prepared_range_frame using @before;
+invalid input: window RANGE frame bound must be a finite non-negative numeric value
+set @before = null;
+execute prepared_range_frame using @before;
+invalid input: window frame bound cannot be NULL
+deallocate prepare prepared_range_frame;
 drop table prepared_window_frame;
 set @input = 41;
 prepare prepared_set_literal from 'set @prepared_literal = 41 + 1';
