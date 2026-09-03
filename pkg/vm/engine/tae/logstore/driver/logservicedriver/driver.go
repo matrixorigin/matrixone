@@ -132,11 +132,12 @@ func (d *LogServiceDriver) GetMaxClient() int {
 }
 
 func (d *LogServiceDriver) Close() error {
-	d.clientPool.Close()
 	d.cancel()
 	d.commitLoop.Stop()
 	d.waitCommitLoop.Stop()
+	// Flush pending truncation requests while the client pool is still usable.
 	d.truncateQueue.Stop()
+	d.clientPool.Close()
 	close(d.commitWaitQueue)
 	close(d.postCommitQueue)
 	d.workers.Release()
