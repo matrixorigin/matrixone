@@ -207,8 +207,8 @@ type VectorIndexSearch struct {
 	stale       atomic.Bool // set by the IsStale freshness check; reclaimed next sweep. Separate from
 	// ExpireAt so a concurrent Search's extend() (sliding TTL) can't un-mark a stale entry.
 	evicting atomic.Bool
-	// admitted is set under VectorIndexCache.admitMu when a snapshot generation passes
-	// admission. Only admitted entries count toward the ceilings.
+	// admitted is set when a snapshot generation passes admission. Only admitted entries
+	// count toward the ceilings.
 	admitted         atomic.Bool
 	invalidationOnce sync.Once
 }
@@ -429,7 +429,6 @@ type VectorIndexCache struct {
 	started        atomic.Bool
 	exited         atomic.Bool
 	once           sync.Once
-	admitMu        sync.Mutex  // serializes snapshot-generation admission counting
 	hkTicks        int         // HouseKeeping tick counter, gates the IsStale sweep cadence
 	staleChecking  atomic.Bool // single-flight guard for the async freshness sweep
 }
@@ -546,40 +545,39 @@ func (c *VectorIndexCache) historicalCounts(exclude string) (total, perTable int
 // lower the budget, never raise it. Returns MaxHistoricalIndexesPerTable when no session is
 // reachable or the value is unreadable.
 func snapshotCacheLimit(sqlproc *sqlexec.SqlProcess) int {
-	cap := MaxHistoricalIndexesPerTable
+	ceiling := MaxHistoricalIndexesPerTable
 	if sqlproc == nil {
-		return cap
+		return ceiling
 	}
 	resolve := sqlproc.GetResolveVariableFunc()
 	if resolve == nil {
-		return cap
+		return ceiling
 	}
 	val, err := resolve("max_snapshot_index_cache", true, false)
 	if err != nil || val == nil {
-		return cap
+		return ceiling
 	}
 	n, ok := val.(int64)
 	if !ok || n <= 0 {
-		return cap
+		return ceiling
 	}
-	if cap > 0 && int(n) > cap {
-		return cap
+	if ceiling > 0 && int(n) > ceiling {
+		return ceiling
 	}
 	return int(n)
 }
 
-// admitHistorical returns an error when key is a snapshot key and its index table already has
-// the limit's worth of generations resident. Current-generation keys are always admitted.
-// Called after LoadOrStore; the caller discards the entry it stored on error.
+// admitHistorical returns an error when key is a snapshot key and either ceiling is already
+// met. Current-generation keys are always admitted. Called after LoadOrStore; the caller
+// discards the entry it stored on error.
+//
+// Counting is not serialized against other admissions, so concurrent misses can overshoot a
+// ceiling by up to the number of them in flight; steady-state residency is still bounded.
 func (c *VectorIndexCache) admitHistorical(sqlproc *sqlexec.SqlProcess, key string, entry *VectorIndexSearch) error {
 	if !IsSnapshotKey(key) {
 		return nil
 	}
-	// Count, decide and reserve under one lock, so concurrent admissions cannot collectively
-	// exceed a ceiling. Not held across the load.
-	c.admitMu.Lock()
-	defer c.admitMu.Unlock()
-
+	limit := snapshotCacheLimit(sqlproc)
 	total, perTable := c.historicalCounts(key)
 	if MaxHistoricalIndexesTotal > 0 && total >= MaxHistoricalIndexesTotal {
 		return moerr.NewInternalErrorNoCtx(fmt.Sprintf(
@@ -588,7 +586,6 @@ func (c *VectorIndexCache) admitHistorical(sqlproc *sqlexec.SqlProcess, key stri
 				"out of the cache (TTL %s), or query fewer distinct snapshots concurrently.",
 			total, MaxHistoricalIndexesTotal, key, VectorIndexCacheTTL))
 	}
-	limit := snapshotCacheLimit(sqlproc)
 	if limit > 0 && perTable >= limit {
 		table, _, _ := strings.Cut(key, snapshotKeySep)
 		return moerr.NewInternalErrorNoCtx(fmt.Sprintf(

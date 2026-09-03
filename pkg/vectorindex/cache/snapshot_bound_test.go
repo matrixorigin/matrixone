@@ -328,37 +328,6 @@ func TestSnapshotBoundUnrelatedIndexProgressesUnderCeilings(t *testing.T) {
 	require.NoError(t, searchAt(c, quiet, &countingSearch{}))
 }
 
-// Admission is serialized, so concurrent misses cannot collectively over-admit past a ceiling.
-// All goroutines are released from one barrier and the scenario is repeated, so the
-// count-then-decide window is hit rather than merely stepped over.
-func TestSnapshotBoundConcurrentAdmissionsRespectCeiling(t *testing.T) {
-	const ceiling = 4
-	for round := 0; round < 16; round++ {
-		c := newBoundCacheWithTotal(t, 64, ceiling)
-		release := make(chan struct{})
-		var wg sync.WaitGroup
-		var admitted atomic.Int64
-		for i := 0; i < 64; i++ {
-			wg.Add(1)
-			go func(i int) {
-				defer wg.Done()
-				key := SnapshotKey(fmt.Sprintf("__mo_index_secondary_conc_%02d", i), snapshotTS(100))
-				<-release
-				if _, _, err := c.Search(nil, key, &countingSearch{}, nil, vectorindex.RuntimeConfig{}); err == nil {
-					admitted.Add(1)
-				}
-			}(i)
-		}
-		close(release)
-		wg.Wait()
-
-		require.LessOrEqual(t, admitted.Load(), int64(ceiling),
-			"round %d: concurrent admissions exceeded the total ceiling", round)
-		require.LessOrEqual(t, residentSnapshots(c), ceiling,
-			"round %d: resident snapshot generations exceeded the total ceiling", round)
-	}
-}
-
 // residentSnapshots counts snapshot keys in the cache.
 func residentSnapshots(c *VectorIndexCache) int {
 	n := 0
