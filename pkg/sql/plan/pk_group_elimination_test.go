@@ -410,6 +410,9 @@ func TestSingleRowCastIsTotal(t *testing.T) {
 	typ := func(oid types.T) planpb.Type {
 		return planpb.Type{Id: int32(oid)}
 	}
+	stringType := func(oid types.T, width int32, charset uint32) planpb.Type {
+		return planpb.Type{Id: int32(oid), Width: width, Charset: charset}
+	}
 	decimal := func(oid types.T, width, scale int32) planpb.Type {
 		return planpb.Type{Id: int32(oid), Width: width, Scale: scale}
 	}
@@ -428,6 +431,12 @@ func TestSingleRowCastIsTotal(t *testing.T) {
 		{"malformed decimal source", decimal(types.T_decimal64, 19, 2), typ(types.T_float64), false},
 		{"malformed decimal target", decimal(types.T_decimal64, 7, 2), decimal(types.T_decimal64, 19, 2), false},
 		{"same malformed decimal", decimal(types.T_decimal64, 19, 2), decimal(types.T_decimal64, 19, 2), false},
+		{"varchar to wider char", stringType(types.T_varchar, 17, uint32(types.CharsetUTF8)), stringType(types.T_char, 25, uint32(types.CharsetUTF8)), true},
+		{"char widening", stringType(types.T_char, 10, uint32(types.CharsetUTF8)), stringType(types.T_char, 25, uint32(types.CharsetUTF8)), true},
+		{"varchar to narrower char", stringType(types.T_varchar, 25, uint32(types.CharsetUTF8)), stringType(types.T_char, 10, uint32(types.CharsetUTF8)), false},
+		{"unbounded varchar to char", stringType(types.T_varchar, 0, uint32(types.CharsetUTF8)), stringType(types.T_char, 25, uint32(types.CharsetUTF8)), false},
+		{"varchar to char charset change", stringType(types.T_varchar, 17, uint32(types.CharsetUTF8MB4Bin)), stringType(types.T_char, 25, uint32(types.CharsetUTF8)), false},
+		{"text to char", stringType(types.T_text, 17, uint32(types.CharsetUTF8)), stringType(types.T_char, 25, uint32(types.CharsetUTF8)), false},
 		{"text to integer", typ(types.T_varchar), typ(types.T_int64), false},
 		{"float widening", typ(types.T_float32), typ(types.T_float64), true},
 		{"float narrowing", typ(types.T_float64), typ(types.T_float32), false},
