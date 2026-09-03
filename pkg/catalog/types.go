@@ -47,8 +47,8 @@ const (
 	// remapping, unlike TbColToDataCol's original file-field indexes.
 	ExternalFilePathColId = ^uint64(0)
 
-	// ExternalQuery is the hidden column of ESQL/SQL foreign external tables
-	// (ENGINE = ESQL|SQL). The query text plays the role the file name plays
+	// ExternalQuery is the hidden column of query-driven foreign and MongoDB
+	// external tables. The query text plays the role the file name plays
 	// for __mo_filepath: `__mo_query = '<text>'` predicates select what is sent
 	// to the foreign source, and every returned row carries the text of the
 	// query that produced it. See docs/cn/esql_sql_exttab.md.
@@ -172,9 +172,10 @@ func ContainExternalHidenCol(col string) bool {
 }
 
 // IsForeignQueryCol reports whether (name, colId) is the SYNTHETIC __mo_query
-// column of an ESQL/SQL foreign external scan, as opposed to a real user
-// column of the same name in a pre-existing schema (new schemas cannot create
-// one: see IsReservedExternalColName).
+// column of a query-driven foreign or MongoDB external scan, as opposed to a
+// real user column of the same name in a pre-existing schema (new schemas
+// cannot create one: see IsReservedExternalColName). The historical function
+// name is retained because the identity is shared by both scan families.
 func IsForeignQueryCol(name string, colId uint64) bool {
 	return name == ExternalQuery && colId == ExternalQueryColId
 }
