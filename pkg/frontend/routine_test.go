@@ -1968,17 +1968,41 @@ func TestRoutineRefreshSessionAuthReauthenticatesCandidate(t *testing.T) {
 
 	newSalt := []byte("abcdefghijabcdefghij")
 	authResponse := mysqlNativePasswordResponse(password, newSalt)
+	validReq := &query.RefreshSessionAuthRequest{
+		ConnID:        connectionID,
+		UserInput:     user,
+		Database:      "new_db",
+		AuthResponse:  authResponse,
+		Salt:          newSalt,
+		ClientAddress: "127.0.0.1:3306",
+	}
+	busyResp := &query.RefreshSessionAuthResponse{}
+	require.True(t, routine.mc.beginOperation())
+	err = routine.refreshSessionAuthWithContext(context.Background(), validReq, busyResp)
+	routine.mc.endOperation()
+	require.ErrorContains(t, err, "cannot refresh session authentication as routine is closed or busy")
+	require.False(t, busyResp.Success)
+
+	canceledCtx, cancel := context.WithCancel(context.Background())
+	cancel()
+	require.True(t, routine.mc.beginOperation())
+	err = routine.refreshSessionAuthWithContext(canceledCtx, validReq, &query.RefreshSessionAuthResponse{})
+	routine.mc.endOperation()
+	require.ErrorIs(t, err, context.Canceled)
+
+	require.ErrorContains(t, routine.refreshSessionAuthWithContext(context.Background(), validReq, nil),
+		"refresh session authentication response is nil")
+	require.ErrorContains(t, routine.refreshSessionAuthWithContext(
+		context.Background(), &query.RefreshSessionAuthRequest{}, &query.RefreshSessionAuthResponse{}),
+		"refresh session authentication requires a user")
+	require.ErrorContains(t, routine.refreshSessionAuthWithContext(
+		context.Background(), &query.RefreshSessionAuthRequest{UserInput: user}, &query.RefreshSessionAuthResponse{}),
+		"refresh session authentication requires a salt")
+
 	resp := &query.RefreshSessionAuthResponse{}
 	require.NoError(t, rm.RefreshSessionAuthWithContext(
 		context.Background(),
-		&query.RefreshSessionAuthRequest{
-			ConnID:        connectionID,
-			UserInput:     user,
-			Database:      "new_db",
-			AuthResponse:  authResponse,
-			Salt:          newSalt,
-			ClientAddress: "127.0.0.1:3306",
-		},
+		validReq,
 		resp,
 	))
 	refreshed := routine.getSession()
