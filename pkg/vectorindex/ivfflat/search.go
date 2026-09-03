@@ -1134,6 +1134,11 @@ func (s *IvfflatSearch[T]) Destroy() {
 }
 
 // load index from database (implement VectorIndexSearch.LoadFromDatabase)
+// Preload is a no-op: an IVFFLAT entry's resident part is its centroids, and their size is not
+// known until LoadCentroids has read them, so GetIndexSize reports 0 until Load completes. The
+// governor therefore reclaims for this algorithm after the fact rather than ahead of it.
+func (s *IvfflatSearch[T]) Preload(sqlproc *sqlexec.SqlProcess) error { return nil }
+
 func (s *IvfflatSearch[T]) Load(sqlproc *sqlexec.SqlProcess) error {
 
 	idx := &IvfflatSearchIndex[T]{}

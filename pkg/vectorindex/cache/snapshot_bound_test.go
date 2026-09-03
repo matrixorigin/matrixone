@@ -38,7 +38,8 @@ type countingSearch struct {
 	device int64
 }
 
-func (m *countingSearch) GetIndexSize() (int64, int64) { return m.host, m.device }
+func (m *countingSearch) Preload(*sqlexec.SqlProcess) error { return nil }
+func (m *countingSearch) GetIndexSize() (int64, int64)      { return m.host, m.device }
 
 func (m *countingSearch) Search(*sqlexec.SqlProcess, any, vectorindex.RuntimeConfig) (any, []float64, error) {
 	return []int64{1}, []float64{2.0}, nil

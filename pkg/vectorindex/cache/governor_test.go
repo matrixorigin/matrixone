@@ -407,3 +407,73 @@ func TestGovernorSysReadDrivesEviction(t *testing.T) {
 		"400 > the catalog-read SYS cap of 250")
 	require.True(t, isResident(c, "__mo_index_secondary_syssql_b"))
 }
+
+// observeAtLoad reports its size from Preload onward and records cache state at the moment Load
+// is called, so the ORDER of reclaim vs load is observable rather than inferred.
+type observeAtLoad struct {
+	countingSearch
+	c            *VectorIndexCache
+	watch        string
+	watchAtLoad  bool
+	preloadRan   bool
+	loadRan      bool
+	sizeAtReload int64
+}
+
+func (m *observeAtLoad) Preload(*sqlexec.SqlProcess) error {
+	m.preloadRan = true
+	return nil
+}
+
+func (m *observeAtLoad) Load(*sqlexec.SqlProcess) error {
+	m.loadRan = true
+	m.watchAtLoad = isResident(m.c, m.watch)
+	return nil
+}
+
+// Room is reclaimed BETWEEN Preload and Load: by the time the new index is being materialized
+// the victim is already gone, so peak residency tracks the cap instead of exceeding it by a
+// whole index.
+func TestGovernorMakesRoomBeforeLoadNotAfter(t *testing.T) {
+	c := newBoundCache(t)
+	sp := govProc(t, c, 1, hostCap(250), caps{})
+
+	victim := "__mo_index_secondary_victim"
+	loadInto(t, c, sp, victim, 200, 0)
+	entryOf(t, c, victim).ExpireAt.Store(1)
+
+	// 200 more against a cap of 250: the victim must go before this one is loaded.
+	newcomer := &observeAtLoad{countingSearch: countingSearch{host: 200}, c: c, watch: victim}
+	_, _, err := c.Search(sp, "__mo_index_secondary_newcomer", newcomer, nil, vectorindex.RuntimeConfig{})
+	require.NoError(t, err)
+
+	require.True(t, newcomer.preloadRan, "Preload must run on a miss")
+	require.True(t, newcomer.loadRan)
+	require.False(t, newcomer.watchAtLoad,
+		"the victim must already be evicted when Load is entered, not reclaimed afterwards")
+	require.True(t, isResident(c, "__mo_index_secondary_newcomer"))
+}
+
+// An index larger than the whole budget still loads: the governor empties what it can and gets
+// out of the way rather than failing a query on an accounting rule.
+func TestGovernorOversizedIndexStillLoads(t *testing.T) {
+	c := newBoundCache(t)
+	sp := govProc(t, c, 1, hostCap(250), caps{})
+
+	old := "__mo_index_secondary_old"
+	loadInto(t, c, sp, old, 200, 0)
+	entryOf(t, c, old).ExpireAt.Store(1)
+
+	loadInto(t, c, sp, "__mo_index_secondary_huge", 10_000, 0)
+	require.False(t, isResident(c, old), "everything reclaimable is reclaimed")
+	require.True(t, isResident(c, "__mo_index_secondary_huge"), "the load is never refused")
+}
+
+// caps.less floors at zero and leaves an unset arena unlimited.
+func TestCapsLess(t *testing.T) {
+	require.Equal(t, caps{host: 50}, caps{host: 250}.less(caps{host: 200}))
+	require.Equal(t, caps{host: 0}, caps{host: 250}.less(caps{host: 10_000}), "floored, not negative")
+	require.Equal(t, caps{}, caps{}.less(caps{host: 99}), "unlimited minus anything is unlimited")
+	require.Equal(t, caps{device: 5}, caps{device: 20}.less(caps{host: 99, device: 15}),
+		"each arena is reduced by its own incoming bytes")
+}

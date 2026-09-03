@@ -83,6 +83,11 @@ type Fulltext2Search struct {
 	loadedTs   int64
 	loadedTail int64
 	genValid   bool
+
+	// preloadNdoc is the base doc count read by Preload, so GetIndexSize can report what the
+	// following Load will cost before any base is mapped. Superseded by the loaded segments
+	// once Load succeeds.
+	preloadNdoc int64
 }
 
 var _ veccache.VectorIndexSearchIf = (*Fulltext2Search)(nil)
@@ -97,6 +102,18 @@ func NewFulltext2Search(cfg TableConfig) *Fulltext2Search {
 // tag=1 CdcTail delta frames (+ delete set), assembled into a queryable Index with
 // global stats and per-pk liveness. An index created on an empty table has no tag=0
 // base, so segs may hold only tail segments (or be empty → a loaded, doc-less index).
+// Preload counts the docs across every tag=0 base -- the quantity the heap cost is derived
+// from -- without loading or mapping any of them, so the cache can reclaim room for this index
+// before Load claims it.
+func (s *Fulltext2Search) Preload(sqlproc *sqlexec.SqlProcess) error {
+	ndoc, err := baseDocCount(sqlproc, s.cfg)
+	if err != nil {
+		return err
+	}
+	s.preloadNdoc = ndoc
+	return nil
+}
+
 func (s *Fulltext2Search) Load(sqlproc *sqlexec.SqlProcess) error {
 	// Fail fast on the QUERY path if the bases' per-doc metadata won't fit the heap
 	// budget, rather than OOM-killing the CN (which takes down every query on the node).
@@ -139,7 +156,8 @@ func (s *Fulltext2Search) Load(sqlproc *sqlexec.SqlProcess) error {
 // resident, so the device figure is 0.
 func (s *Fulltext2Search) GetIndexSize() (hostBytes, deviceBytes int64) {
 	if !s.loaded || s.idx == nil {
-		return 0, 0
+		// Between Preload and Load: report what Load is about to cost.
+		return s.preloadNdoc * estBytesPerDocHeap, 0
 	}
 	var ndoc int64
 	for _, seg := range s.idx.segments {

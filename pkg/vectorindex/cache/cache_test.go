@@ -40,7 +40,8 @@ func (m *MockSearch) Search(sqlproc *sqlexec.SqlProcess, query any, rt vectorind
 	return []int64{1}, []float64{2.0}, nil
 }
 
-func (m *MockSearch) GetIndexSize() (int64, int64) { return 0, 0 }
+func (m *MockSearch) Preload(*sqlexec.SqlProcess) error { return nil }
+func (m *MockSearch) GetIndexSize() (int64, int64)      { return 0, 0 }
 func (m *MockSearch) Destroy() {
 }
 
@@ -63,7 +64,8 @@ func (m *MockAnySearch) Search(sqlproc *sqlexec.SqlProcess, query any, rt vector
 	return []any{any(1)}, []float64{2.0}, nil
 }
 
-func (m *MockAnySearch) GetIndexSize() (int64, int64) { return 0, 0 }
+func (m *MockAnySearch) Preload(*sqlexec.SqlProcess) error { return nil }
+func (m *MockAnySearch) GetIndexSize() (int64, int64)      { return 0, 0 }
 func (m *MockAnySearch) Destroy() {
 }
 
@@ -86,7 +88,8 @@ func (m *MockSearchLoadError) Search(sqlproc *sqlexec.SqlProcess, query any, rt 
 	return []int64{1}, []float64{2.0}, nil
 }
 
-func (m *MockSearchLoadError) GetIndexSize() (int64, int64) { return 0, 0 }
+func (m *MockSearchLoadError) Preload(*sqlexec.SqlProcess) error { return nil }
+func (m *MockSearchLoadError) GetIndexSize() (int64, int64)      { return 0, 0 }
 func (m *MockSearchLoadError) Destroy() {
 
 }
@@ -109,7 +112,8 @@ func (m *MockSearchSearchError) Search(sqlproc *sqlexec.SqlProcess, query any, r
 	return nil, nil, moerr.NewInternalErrorNoCtx("Search error")
 }
 
-func (m *MockSearchSearchError) GetIndexSize() (int64, int64) { return 0, 0 }
+func (m *MockSearchSearchError) Preload(*sqlexec.SqlProcess) error { return nil }
+func (m *MockSearchSearchError) GetIndexSize() (int64, int64)      { return 0, 0 }
 func (m *MockSearchSearchError) Destroy() {
 
 }
@@ -165,8 +169,9 @@ func (m *MockRuntimeSearch) SearchFloat32(proc *sqlexec.SqlProcess, query any, r
 	return nil
 }
 
-func (m *MockRuntimeSearch) GetIndexSize() (int64, int64) { return 0, 0 }
-func (m *MockRuntimeSearch) Destroy()                     {}
+func (m *MockRuntimeSearch) Preload(*sqlexec.SqlProcess) error { return nil }
+func (m *MockRuntimeSearch) GetIndexSize() (int64, int64)      { return 0, 0 }
+func (m *MockRuntimeSearch) Destroy()                          {}
 
 func (m *MockRuntimeSearch) Load(*sqlexec.SqlProcess) error {
 	m.loads++

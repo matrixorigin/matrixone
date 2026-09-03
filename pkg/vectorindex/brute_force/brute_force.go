@@ -198,6 +198,10 @@ func NewUsearchBruteForceIndexFlattened[T types.RealNumbers](dataset []T,
 	return idx, nil
 }
 
+// Preload has nothing to measure: the dataset is supplied at construction, so GetIndexSize
+// already answers before Load.
+func (idx *UsearchBruteForceIndex[T]) Preload(sqlproc *sqlexec.SqlProcess) error { return nil }
+
 func (idx *UsearchBruteForceIndex[T]) Load(sqlproc *sqlexec.SqlProcess) error {
 	return nil
 }
@@ -332,6 +336,9 @@ func (idx *UsearchBruteForceIndex[T]) Destroy() {
 		idx.Dataset = nil
 	}
 }
+
+// Preload has nothing to measure: the dataset is supplied at construction.
+func (idx *GoBruteForceIndex[T, R]) Preload(sqlproc *sqlexec.SqlProcess) error { return nil }
 
 func (idx *GoBruteForceIndex[T, R]) Load(sqlproc *sqlexec.SqlProcess) error {
 	return nil

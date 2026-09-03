@@ -103,6 +103,22 @@ func (c caps) of(a arena) int64 {
 
 func (c caps) unset() bool { return c.host <= 0 && c.device <= 0 }
 
+// less returns the caps with incoming subtracted from each set arena, floored at 0. An unset
+// (0) arena stays unset: unlimited minus anything is still unlimited. A floor of 0 means an
+// index larger than the whole budget empties what it can and then loads anyway -- refusing it
+// would fail a query on an accounting rule, and its own memory gate is the thing that decides
+// whether it physically fits.
+func (c caps) less(incoming caps) caps {
+	out := c
+	if out.host > 0 {
+		out.host = max(out.host-incoming.host, 0)
+	}
+	if out.device > 0 {
+		out.device = max(out.device-incoming.device, 0)
+	}
+	return out
+}
+
 // arena names the two budgets, kept apart because RAM and VRAM are not interchangeable.
 type arena int
 
@@ -139,6 +155,38 @@ type resident struct {
 	account  uint32
 	expireAt int64
 	size     usage
+}
+
+// makeRoom reclaims for an index that is measured but NOT yet resident, between its Preload and
+// its Load. It evicts until the incoming size fits under every cap, so peak residency tracks the
+// budget rather than exceeding it by one whole index -- the best a post-load charge alone can do
+// is notice the overshoot after paying for it.
+//
+// It also runs BEFORE the algorithm's own per-load memory gate. Those gates sample FREE memory
+// (memory.HostRowsFitting reads MemoryAvailableIncludingCache; DeviceAggregateFitsFree re-samples
+// free VRAM), so entries this governor is about to reclaim would otherwise read as memory that is
+// gone, and could veto a load that in fact fits.
+//
+// Called with NO entry lock held -- see VectorIndexSearch.Preload for why that matters.
+func (c *VectorIndexCache) makeRoom(sqlproc *sqlexec.SqlProcess, key string, entry *VectorIndexSearch) {
+	host, device := entry.Algo.GetIndexSize()
+	if host <= 0 && device <= 0 {
+		return
+	}
+	account := uint32(catalog.System_Account)
+	if hasSession(sqlproc) {
+		if a, err := sqlproc.GetAccountID(); err == nil {
+			account = a
+		}
+	}
+	tenant, sys := c.limits(sqlproc)
+	if tenant.unset() && sys.unset() {
+		return
+	}
+	// Reclaim against caps reduced by what is about to arrive, so the room freed is room the
+	// incoming index can actually occupy.
+	c.enforce(account, tenant.less(caps{host: host, device: device}),
+		sys.less(caps{host: host, device: device}), key)
 }
 
 // chargeAndEnforce records what a freshly loaded entry costs, then brings the cache back under

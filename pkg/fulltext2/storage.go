@@ -291,13 +291,24 @@ const estBytesPerDocHeap = 256
 // - live Go heap (cgroup-aware). Turns a node-killing OOM into a clear, actionable
 // error suggesting compaction.
 func checkBaseLoadBudget(sqlproc *sqlexec.SqlProcess, cfg TableConfig) error {
+	ndoc, err := baseDocCount(sqlproc, cfg)
+	if err != nil {
+		return err
+	}
+	return checkBaseLoadBudgetFor(sqlproc, cfg, ndoc)
+}
+
+// baseDocCount sums the doc count over every tag=0 base, the quantity both the load budget and
+// the index cache's size estimate are derived from. Split out so Preload can read it before any
+// base is loaded.
+func baseDocCount(sqlproc *sqlexec.SqlProcess, cfg TableConfig) (int64, error) {
 	// CAST AS SIGNED so the sum reads back as int64 regardless of how SUM types its
 	// result (GetFixedAtNoTypeCheck[int64] would misread a decimal vector).
 	sql := fmt.Sprintf("SELECT CAST(COALESCE(SUM(%s), 0) AS SIGNED) FROM %s",
 		catalog.FullText2Index_TblCol_Metadata_Nrow, sqlquote.QualifiedIdent(cfg.DbName, cfg.MetadataTable))
 	res, err := runSql(sqlproc, sql)
 	if err != nil {
-		return err
+		return 0, err
 	}
 	defer res.Close()
 	var ndoc int64
@@ -307,6 +318,11 @@ func checkBaseLoadBudget(sqlproc *sqlexec.SqlProcess, cfg TableConfig) error {
 		}
 		ndoc = vector.GetFixedAtNoTypeCheck[int64](bat.Vecs[0], 0)
 	}
+	return ndoc, nil
+}
+
+// checkBaseLoadBudgetFor is the budget decision itself, over an already-counted ndoc.
+func checkBaseLoadBudgetFor(sqlproc *sqlexec.SqlProcess, cfg TableConfig, ndoc int64) error {
 	need := ndoc * estBytesPerDocHeap
 	avail := int64(system.MemoryTotal())*8/10 - int64(system.MemoryGolang())
 	if need > avail {

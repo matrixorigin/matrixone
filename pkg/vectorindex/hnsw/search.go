@@ -221,9 +221,12 @@ func (s *HnswSearch[T]) Contains(key int64) (bool, error) {
 
 // Destroy HnswSearch (implement VectorIndexSearch.Destroy)
 func (s *HnswSearch[T]) Destroy() {
-	// destroy index
+	// Through the model's own Destroy, not idx.Index.Destroy(): after Preload a model carries
+	// metadata with a nil Index (and possibly a fetched Path), and a load abandoned between
+	// Preload and Load reaches here. HnswModel.Destroy nil-checks the handle and also releases
+	// the on-disk file and buffer, matching what LoadIndex's error path already does.
 	for _, idx := range s.Indexes {
-		idx.Index.Destroy()
+		idx.Destroy()
 	}
 	s.Indexes = nil
 }
@@ -284,18 +287,35 @@ func (s *HnswSearch[T]) LoadIndex(sqlproc *sqlexec.SqlProcess, indexes []*HnswMo
 	return indexes, nil
 }
 
-// load index from database (implement VectorIndexSearch.LoadFromDatabase)
-func (s *HnswSearch[T]) Load(sqlproc *sqlexec.SqlProcess) error {
-	// load metadata
+// Preload reads the metadata rows, which carry each model's FileSize -- the cost the following
+// Load will claim in host memory. The models are parked on s.Indexes unloaded, so GetIndexSize
+// answers before a single model file is read.
+func (s *HnswSearch[T]) Preload(sqlproc *sqlexec.SqlProcess) error {
 	indexes, err := LoadMetadata[T](sqlproc, s.Tblcfg.DbName, s.Tblcfg.MetadataTable)
 	if err != nil {
 		return err
 	}
+	s.Indexes = indexes
+	return nil
+}
+
+// load index from database (implement VectorIndexSearch.LoadFromDatabase)
+func (s *HnswSearch[T]) Load(sqlproc *sqlexec.SqlProcess) error {
+	// Metadata was read by Preload; a caller that skipped it still gets a correct load.
+	indexes := s.Indexes
+	if indexes == nil {
+		var err error
+		if indexes, err = LoadMetadata[T](sqlproc, s.Tblcfg.DbName, s.Tblcfg.MetadataTable); err != nil {
+			return err
+		}
+	}
 
 	if len(indexes) > 0 {
 		// load index model
+		var err error
 		indexes, err = s.LoadIndex(sqlproc, indexes)
 		if err != nil {
+			s.Indexes = nil
 			return err
 		}
 	}

@@ -140,6 +140,20 @@ type VectorIndexSearchIf interface {
 	// Implemented by fulltext2; the vector algos stub it "not supported" until each migrates
 	// (mirrors how fulltext2 stubs SearchFloat32).
 	SearchInto(proc *sqlexec.SqlProcess, query any, rt vectorindex.RuntimeConfig, out *vectorindex.SearchOutput) error
+	// Preload does the measurable, non-resident half of a load: read the metadata, fetch the
+	// artifacts, and work out what the index will cost -- everything up to, but not
+	// including, materializing it in host or device memory. After it returns, GetIndexSize
+	// reports the size the following Load will claim.
+	//
+	// The split exists so the cache can reclaim room for THIS index before it is loaded,
+	// rather than discovering the cost afterwards. It is what makes peak residency track the
+	// budget instead of exceeding it by one whole index, and it lets the reclaim happen while
+	// no entry lock is held -- the cache calls Preload and Load as separate locked sections
+	// and does its bookkeeping in the gap between them.
+	//
+	// Preload must be safe to call exactly once before Load, and must leave nothing resident
+	// that Destroy would not release: a load can be abandoned between the two.
+	Preload(*sqlexec.SqlProcess) error
 	Load(*sqlexec.SqlProcess) error
 	// GetIndexSize reports the bytes this index holds resident after a successful Load, for
 	// the max_index_cache_size governor, split by arena: hostBytes is RAM, deviceBytes is
@@ -270,6 +284,24 @@ func (s *VectorIndexSearch) destroyFailedLoad() {
 	}()
 	s.Algo.Destroy()
 	s.Status.Store(STATUS_DESTROYED)
+}
+
+// Preload runs the algorithm's measuring half under the same lock discipline as Load. It is a
+// SEPARATE locked section on purpose: the caller reclaims cache room between Preload and Load,
+// and must not do that while holding this entry's write lock (it would block on a victim's lock,
+// and would run the governor's catalog read under a lock held across a whole index load).
+//
+// Releasing the lock in the gap is safe. Only the LoadOrStore winner ever reaches here, so no
+// second loader can interleave; searchers wait on Status via Cond and simply keep waiting; and
+// an eviction claimed in the gap is caught by Load's evicting check, which sends the caller
+// around the retry loop.
+func (s *VectorIndexSearch) Preload(sqlproc *sqlexec.SqlProcess) error {
+	s.Mutex.Lock()
+	defer s.Mutex.Unlock()
+	if s.evicting.Load() {
+		return moerr.NewInvalidStateNoCtx("Index destroyed")
+	}
+	return s.Algo.Preload(sqlproc)
 }
 
 func (s *VectorIndexSearch) Load(sqlproc *sqlexec.SqlProcess) error {
@@ -628,6 +660,22 @@ func (c *VectorIndexCache) Search(sqlproc *sqlexec.SqlProcess, key string, newal
 		value, loaded := c.IndexMap.LoadOrStore(key, s)
 		algo := value.(*VectorIndexSearch)
 		if !loaded {
+			// Measure first, reclaim room for what it will cost, then load. The reclaim
+			// runs in the gap between the two locked sections -- see Preload.
+			if perr := algo.Preload(sqlproc); perr != nil {
+				if algo.evicting.Load() {
+					continue
+				}
+				if IsRetryableLoadError(perr) {
+					c.discardFailedLoad(key, algo)
+					continue
+				}
+				if c.IndexMap.CompareAndDelete(key, algo) {
+					algo.destroyFailedLoad()
+				}
+				return nil, nil, perr
+			}
+			c.makeRoom(sqlproc, key, algo)
 			// Remove only this exact failed entry, then destroy it without a
 			// key-wide invalidation hook; the loader owns reusable-state rollback.
 			err := algo.Load(sqlproc)
@@ -670,6 +718,20 @@ func (c *VectorIndexCache) SearchInto(sqlproc *sqlexec.SqlProcess, key string, n
 		value, loaded := c.IndexMap.LoadOrStore(key, s)
 		algo := value.(*VectorIndexSearch)
 		if !loaded {
+			if perr := algo.Preload(sqlproc); perr != nil {
+				if algo.evicting.Load() {
+					continue
+				}
+				if IsRetryableLoadError(perr) {
+					c.discardFailedLoad(key, algo)
+					continue
+				}
+				if c.IndexMap.CompareAndDelete(key, algo) {
+					algo.destroyFailedLoad()
+				}
+				return perr
+			}
+			c.makeRoom(sqlproc, key, algo)
 			if err := algo.Load(sqlproc); err != nil {
 				if algo.evicting.Load() {
 					continue

@@ -155,6 +155,19 @@ func (s *IvfpqSearch[B, Q]) SearchFloat32(proc *sqlexec.SqlProcess, query any, r
 }
 
 // Load implements cache.VectorIndexSearchIf.
+// Preload is deliberately a no-op for now, so this algorithm keeps today's load behaviour
+// exactly while the Preload/Load split lands. The measurement it would move here --
+// FetchArtifact + cuvs.MeasureTar -- is already split out of the load in loadIndexes, but it is
+// INTERLEAVED with the device gate on purpose: the running aggregate is re-checked after each
+// tar so a IVF-PQ index that cannot fit is refused as soon as the total says so, instead of
+// after downloading the remaining gigabytes. Hoisting the measurement into Preload means either
+// losing that early abort or running the gate twice, which is a decision of its own and is
+// tracked separately.
+//
+// Until then GetIndexSize reports 0 before Load, so the governor reclaims for this algorithm
+// after the fact rather than ahead of it -- the same position ivfflat is in.
+func (s *IvfpqSearch[B, Q]) Preload(sqlproc *sqlexec.SqlProcess) error { return nil }
+
 func (s *IvfpqSearch[B, Q]) Load(sqlproc *sqlexec.SqlProcess) (err error) {
 	indexes, err := LoadMetadata[B, Q](sqlproc, s.Tblcfg.DbName, s.Tblcfg.MetadataTable)
 	if err != nil {

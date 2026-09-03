@@ -138,6 +138,9 @@ func NewGpuAdhocBruteForceIndex[T cuvs.VectorType](dataset [][]T,
 	}, nil
 }
 
+// Preload has nothing to measure: the dataset is supplied at construction.
+func (idx *GpuAdhocBruteForceIndex[T]) Preload(sqlproc *sqlexec.SqlProcess) error { return nil }
+
 func (idx *GpuAdhocBruteForceIndex[T]) Load(sqlproc *sqlexec.SqlProcess) error {
 	return nil
 }
@@ -336,6 +339,10 @@ func NewGpuBruteForceIndex[T cuvs.VectorType](dataset [][]T,
 		count:     uint(len(dataset)),
 	}, nil
 }
+
+// Preload has nothing to measure: count and dimension are fixed at construction, so the device
+// cost is known before Build claims it.
+func (idx *GpuBruteForceIndex[T]) Preload(sqlproc *sqlexec.SqlProcess) error { return nil }
 
 func (idx *GpuBruteForceIndex[T]) Load(sqlproc *sqlexec.SqlProcess) (err error) {
 	if idx.index == nil {
