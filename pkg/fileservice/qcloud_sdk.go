@@ -408,7 +408,9 @@ func (a *QCloudSDK) initiateMultipartUpload(
 			}
 			return output, nil
 		}
-		commitAmbiguous := response == nil && wroteRequest.Load()
+		definitiveFailure := response != nil && response.Response != nil &&
+			(response.StatusCode < http.StatusOK || response.StatusCode >= http.StatusMultipleChoices)
+		commitAmbiguous := !definitiveFailure && (response != nil || wroteRequest.Load())
 		if commitAmbiguous {
 			metric.FSMultipartInitAmbiguousCounter.Inc()
 		}
@@ -428,7 +430,7 @@ func (a *QCloudSDK) initiateMultipartUpload(
 		}
 		// WroteRequest is emitted by net/http once writing starts, including
 		// write failures. Its absence proves this attempt never crossed the
-		// transport write boundary. A server error response also proves the
+		// transport write boundary. A non-2xx server response also proves the
 		// attempt failed, so either outcome is safe to retry.
 		if err := waitQCloudMultipartInitRetry(ctx, attempt); err != nil {
 			return nil, err

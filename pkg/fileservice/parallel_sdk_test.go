@@ -1186,6 +1186,52 @@ func TestCOSMultipartInitDoesNotRetryAfterRequestCommitted(t *testing.T) {
 	require.Equal(t, ambiguousBefore+float64(len(tests)), testutil.ToFloat64(metric.FSMultipartInitAmbiguousCounter))
 }
 
+func TestCOSMultipartInitDoesNotRetryInvalidSuccessBody(t *testing.T) {
+	tests := []struct {
+		name string
+		body func() io.ReadCloser
+		err  error
+	}{
+		{
+			name: "empty",
+			body: func() io.ReadCloser { return io.NopCloser(strings.NewReader("")) },
+			err:  io.EOF,
+		},
+		{
+			name: "truncated",
+			body: func() io.ReadCloser {
+				return io.NopCloser(io.MultiReader(
+					strings.NewReader(`<InitiateMultipartUploadResult><UploadId>`),
+					multipartInitErrorReader{err: io.ErrUnexpectedEOF},
+				))
+			},
+			err: io.ErrUnexpectedEOF,
+		},
+	}
+
+	ambiguousBefore := testutil.ToFloat64(metric.FSMultipartInitAmbiguousCounter)
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			server, state := newMockCOSServer(t, 0)
+			defer server.Close()
+			state.uploadID = "committed-upload"
+			sdk := newTestCOSClientWithTransport(t, server, &cosMultipartInitInvalidSuccessBodyTransport{
+				base: server.Client().Transport,
+				body: test.body,
+			})
+
+			data := bytes.Repeat([]byte("r"), int(minMultipartPartSize+1))
+			size := int64(len(data))
+			err := sdk.WriteMultipartParallel(context.Background(), "object", bytes.NewReader(data), &size, nil)
+			require.ErrorContains(t, err, test.err.Error())
+			require.Equal(t, int32(1), state.initCalls.Load())
+			require.False(t, state.completed.Load())
+			require.False(t, state.aborted.Load())
+		})
+	}
+	require.Equal(t, ambiguousBefore+float64(len(tests)), testutil.ToFloat64(metric.FSMultipartInitAmbiguousCounter))
+}
+
 func TestCOSMultipartInitRetriesAreBoundedBeforeRequest(t *testing.T) {
 	server, state := newMockCOSServer(t, 0)
 	defer server.Close()
@@ -1216,6 +1262,19 @@ type cosMultipartInitBeforeRequestTransport struct {
 type cosMultipartInitResponseLostTransport struct {
 	base http.RoundTripper
 	err  error
+}
+
+type cosMultipartInitInvalidSuccessBodyTransport struct {
+	base http.RoundTripper
+	body func() io.ReadCloser
+}
+
+type multipartInitErrorReader struct {
+	err error
+}
+
+func (r multipartInitErrorReader) Read([]byte) (int, error) {
+	return 0, r.err
 }
 
 type denyMultipartListTransport struct {
@@ -1249,6 +1308,20 @@ func (t *cosMultipartInitResponseLostTransport) RoundTrip(req *http.Request) (*h
 		_, _ = io.Copy(io.Discard, resp.Body)
 		_ = resp.Body.Close()
 		return nil, t.err
+	}
+	return resp, nil
+}
+
+func (t *cosMultipartInitInvalidSuccessBodyTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	resp, err := t.base.RoundTrip(req)
+	if err != nil {
+		return nil, err
+	}
+	if req.Method == http.MethodPost && req.URL.Query().Has("uploads") {
+		_, _ = io.Copy(io.Discard, resp.Body)
+		_ = resp.Body.Close()
+		resp.Body = t.body()
+		resp.ContentLength = -1
 	}
 	return resp, nil
 }
