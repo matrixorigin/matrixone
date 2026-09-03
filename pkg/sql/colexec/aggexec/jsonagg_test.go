@@ -53,8 +53,10 @@ func TestAccountedJSONAggregatesLifecycleAndSpill(t *testing.T) {
 	}
 	keys := buildVarlenVec(t, mp, types.T_varchar.ToType(),
 		[]string{"b", "a", "a", "c", "c"})
+	years := buildFixedVec(t, mp, types.T_year.ToType(), []types.MoYear{2024, 2025})
 	defer values.Free(mp)
 	defer keys.Free(mp)
+	defer years.Free(mp)
 
 	for _, tc := range []struct {
 		name     string
@@ -71,6 +73,12 @@ func TestAccountedJSONAggregatesLifecycleAndSpill(t *testing.T) {
 			want:    `[1,"two",null,null]`,
 		},
 		{
+			name: "array-year", id: AggIdOfJsonArrayAgg,
+			params:  []types.Type{types.T_year.ToType()},
+			vectors: []*vector.Vector{years},
+			want:    `[2024,2025]`,
+		},
+		{
 			name: "object-last-wins", id: AggIdOfJsonObjectAgg,
 			params:  []types.Type{types.T_varchar.ToType(), types.T_json.ToType()},
 			vectors: []*vector.Vector{keys, values},
@@ -83,7 +91,7 @@ func TestAccountedJSONAggregatesLifecycleAndSpill(t *testing.T) {
 			owner := exec.(AllocationAccountOwner)
 			require.NoError(t, owner.SetAllocationAccount(allocation))
 			require.NoError(t, exec.GroupGrow(1))
-			groups := slices.Repeat([]uint64{1}, values.Length())
+			groups := slices.Repeat([]uint64{1}, tc.vectors[0].Length())
 			preflight := exec.(BatchCapacityPreflight)
 			require.NoError(t, preflight.PreflightBatchFill(0, groups, tc.vectors))
 			peak := account.Snapshot().Peak
@@ -125,7 +133,33 @@ func TestAccountedJSONPreflightOneByteShortDoesNotPublish(t *testing.T) {
 	raw, err := value.Marshal()
 	require.NoError(t, err)
 
-	run := func(limit uint64) (uint64, uint32, error) {
+	tests := []struct {
+		name  string
+		typ   types.Type
+		build func(*mpool.MPool) *vector.Vector
+	}{
+		{
+			name: "json", typ: types.T_json.ToType(),
+			build: func(mp *mpool.MPool) *vector.Vector {
+				input := vector.NewVec(types.T_json.ToType())
+				require.NoError(t, vector.AppendBytes(input, raw, false, mp))
+				return input
+			},
+		},
+		{
+			name: "year", typ: types.T_year.ToType(),
+			build: func(mp *mpool.MPool) *vector.Vector {
+				values := slices.Repeat([]types.MoYear{2024}, 256)
+				return buildFixedVec(t, mp, types.T_year.ToType(), values)
+			},
+		},
+	}
+
+	run := func(limit uint64, tc struct {
+		name  string
+		typ   types.Type
+		build func(*mpool.MPool) *vector.Vector
+	}) (uint64, uint32, error) {
 		mp := mpool.MustNewZero()
 		registry, err := mpool.NewAllocationAccountRegistry(1, 512)
 		require.NoError(t, err)
@@ -136,15 +170,15 @@ func TestAccountedJSONPreflightOneByteShortDoesNotPublish(t *testing.T) {
 			ArgumentCount: 5, ArgumentArena: 6,
 		})
 		require.NoError(t, err)
-		exec, err := MakeAgg(mp, AggIdOfJsonArrayAgg, false, types.T_json.ToType())
+		exec, err := MakeAgg(mp, AggIdOfJsonArrayAgg, false, tc.typ)
 		require.NoError(t, err)
 		owner := exec.(AllocationAccountOwner)
 		require.NoError(t, owner.SetAllocationAccount(allocation))
 		require.NoError(t, exec.GroupGrow(1))
-		input := vector.NewVec(types.T_json.ToType())
-		require.NoError(t, vector.AppendBytes(input, raw, false, mp))
+		input := tc.build(mp)
+		groups := slices.Repeat([]uint64{1}, input.Length())
 		err = exec.(BatchCapacityPreflight).PreflightBatchFill(
-			0, []uint64{1}, []*vector.Vector{input})
+			0, groups, []*vector.Vector{input})
 		published := exec.(*jsonArrayAggExec).state[0].argCnt[0]
 		peak := account.Snapshot().Peak
 		input.Free(mp)
@@ -155,12 +189,16 @@ func TestAccountedJSONPreflightOneByteShortDoesNotPublish(t *testing.T) {
 		return peak, published, err
 	}
 
-	peak, published, err := run(128 << 20)
-	require.NoError(t, err)
-	require.Zero(t, published)
-	_, published, err = run(peak - 1)
-	require.ErrorIs(t, err, mpool.ErrAllocationAccountCapacity)
-	require.Zero(t, published)
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			peak, published, err := run(128<<20, tc)
+			require.NoError(t, err)
+			require.Zero(t, published)
+			_, published, err = run(peak-1, tc)
+			require.ErrorIs(t, err, mpool.ErrAllocationAccountCapacity)
+			require.Zero(t, published)
+		})
+	}
 }
 
 func TestAccountedJSONAggregatePreservesLegacyValueSemantics(t *testing.T) {
@@ -274,6 +312,79 @@ func TestAccountedJSONAggregatePreservesLegacyValueSemantics(t *testing.T) {
 			accountedElement := accounted.GetArrayElem(0)
 			require.Equal(t, legacyElement.TYPE(), accountedElement.TYPE())
 			require.Equal(t, legacyElement.Data, accountedElement.Data)
+		})
+	}
+	require.Zero(t, mp.CurrNB())
+}
+
+func TestJSONArrayAggregateSharedTemporalAndYearConversion(t *testing.T) {
+	mp := mpool.MustNewZero()
+	time0, err := types.ParseTime("04:05:06", 0)
+	require.NoError(t, err)
+	time6, err := types.ParseTime("04:05:06.123456", 6)
+	require.NoError(t, err)
+	datetime0, err := types.ParseDatetime("2024-02-03 04:05:06", 0)
+	require.NoError(t, err)
+	datetime6, err := types.ParseDatetime("2024-02-03 04:05:06.123456", 6)
+	require.NoError(t, err)
+
+	tests := []struct {
+		name     string
+		vec      *vector.Vector
+		wantJSON string
+		wantType string
+	}{
+		{
+			name: "time scale zero",
+			vec: buildFixedVec(t, mp, types.New(types.T_time, 0, 0),
+				[]types.Time{time0}),
+			wantJSON: `["04:05:06.000000"]`, wantType: "TIME",
+		},
+		{
+			name: "time scale six",
+			vec: buildFixedVec(t, mp, types.New(types.T_time, 0, 6),
+				[]types.Time{time6}),
+			wantJSON: `["04:05:06.123456"]`, wantType: "TIME",
+		},
+		{
+			name: "datetime scale zero",
+			vec: buildFixedVec(t, mp, types.New(types.T_datetime, 0, 0),
+				[]types.Datetime{datetime0}),
+			wantJSON: `["2024-02-03 04:05:06.000000"]`, wantType: "DATETIME",
+		},
+		{
+			name: "datetime scale six",
+			vec: buildFixedVec(t, mp, types.New(types.T_datetime, 0, 6),
+				[]types.Datetime{datetime6}),
+			wantJSON: `["2024-02-03 04:05:06.123456"]`, wantType: "DATETIME",
+		},
+		{
+			name:     "year",
+			vec:      buildFixedVec(t, mp, types.T_year.ToType(), []types.MoYear{2024}),
+			wantJSON: `[2024]`, wantType: "INTEGER",
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			defer test.vec.Free(mp)
+			regular := runJSONArrayAggregate(t, mp, test.vec, nil)
+
+			registry, account, allocation := newTestAggregateAllocation(t)
+			accounted := runJSONArrayAggregate(t, mp, test.vec, allocation)
+			finishTestAggregateAllocation(t, registry, account)
+
+			require.Equal(t, regular.Type, accounted.Type)
+			require.Equal(t, regular.Data, accounted.Data)
+			require.JSONEq(t, test.wantJSON, regular.String())
+			require.Equal(t, test.wantType, regular.GetArrayElem(0).TYPE())
+
+			size, err := jsonArrayAggregateValueSize(test.vec, 0)
+			require.NoError(t, err)
+			encoded, err := appendJSONArrayAggregateValue(make([]byte, 0, size), test.vec, 0)
+			require.NoError(t, err)
+			require.Len(t, encoded, size)
+			require.Equal(t, regular.GetArrayElem(0), types.DecodeJson(encoded))
 		})
 	}
 	require.Zero(t, mp.CurrNB())
@@ -682,7 +793,7 @@ func TestJsonAggNonDistinctWrapperPaths(t *testing.T) {
 	arrayInfo := multiAggInfo{
 		aggID:     48,
 		distinct:  false,
-		argTypes:  []types.Type{types.T_int64.ToType()},
+		argTypes:  []types.Type{types.T_year.ToType()},
 		retType:   types.T_json.ToType(),
 		emptyNull: true,
 	}
@@ -691,10 +802,14 @@ func TestJsonAggNonDistinctWrapperPaths(t *testing.T) {
 	require.NoError(t, leftArray.PreAllocateGroups(1))
 	require.NoError(t, leftArray.GroupGrow(1))
 	require.NoError(t, rightArray.GroupGrow(1))
-	ints := buildFixedVec(t, mg, types.T_int64.ToType(), []int64{1, 2})
-	require.NoError(t, leftArray.Fill(0, 0, []*vector.Vector{ints}))
-	require.NoError(t, rightArray.Fill(0, 1, []*vector.Vector{ints}))
+	years := buildFixedVec(t, mg, types.T_year.ToType(), []types.MoYear{2024, 2025})
+	require.NoError(t, leftArray.Fill(0, 0, []*vector.Vector{years}))
+	require.NoError(t, rightArray.Fill(0, 1, []*vector.Vector{years}))
 	require.NoError(t, leftArray.Merge(rightArray, 0, 0))
+	arrayResults, err := leftArray.Flush()
+	require.NoError(t, err)
+	require.JSONEq(t, `[2024,2025]`, types.DecodeJson(arrayResults[0].GetBytesAt(0)).String())
+	arrayResults[0].Free(mg)
 
 	objectInfo := multiAggInfo{
 		aggID:     49,
@@ -714,7 +829,7 @@ func TestJsonAggNonDistinctWrapperPaths(t *testing.T) {
 	require.NoError(t, rightObject.Fill(0, 1, []*vector.Vector{keys, vals}))
 	require.NoError(t, leftObject.Merge(rightObject, 0, 0))
 
-	ints.Free(mg)
+	years.Free(mg)
 	keys.Free(mg)
 	vals.Free(mg)
 	leftArray.Free()

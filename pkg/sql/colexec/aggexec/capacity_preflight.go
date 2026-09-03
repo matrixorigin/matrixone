@@ -2599,6 +2599,17 @@ func accountedJSONValueSize(
 	return jsonAggregateValueSize(vec, uint64(row))
 }
 
+func accountedJSONArrayValueSize(
+	vec *vector.Vector,
+	logicalRow int,
+) (int, error) {
+	row, err := preflightPhysicalRow(vec, logicalRow)
+	if err != nil {
+		return 0, err
+	}
+	return jsonArrayAggregateValueSize(vec, uint64(row))
+}
+
 func addJSONArgumentCapacity(
 	base *aggExec,
 	needs *[hashmap.UnitLimit]argumentChunkCapacity,
@@ -2661,7 +2672,7 @@ func (exec *jsonArrayAggExec) PreflightBatchFill(
 		if group == GroupNotMatched {
 			continue
 		}
-		valueSize, err := accountedJSONValueSize(vectors[0], offset+i)
+		valueSize, err := accountedJSONArrayValueSize(vectors[0], offset+i)
 		if err != nil {
 			return err
 		}
@@ -2678,7 +2689,7 @@ func (exec *jsonArrayAggExec) PreflightBatchFill(
 				if err != nil {
 					return nil, err
 				}
-				return appendJSONAggregateValue(dst, vectors[0], uint64(row))
+				return appendJSONArrayAggregateValue(dst, vectors[0], uint64(row))
 			})
 		if err != nil {
 			return err
