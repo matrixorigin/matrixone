@@ -1491,6 +1491,11 @@ message RuntimeFilterSpec {
   // leave legacy expr unset. Probe specs continue to use expr for scan-side
   // evaluation.
   Expr build_expr = 10;
+  // The producer is the materialized result of an uncorrelated scalar
+  // subquery. The executor may publish an exact filter only after observing
+  // exactly one row; multiple rows must fail open so the SINGLE operator can
+  // enforce cardinality at its original logical scope.
+  bool scalar_predicate = 11;
 }
 
 message IdList {

@@ -1053,6 +1053,7 @@ func DeepCopyRuntimeFilterSpec(rf *plan.RuntimeFilterSpec) *plan.RuntimeFilterSp
 		UseMembershipFilter: rf.UseMembershipFilter,
 		KeyEncoding:         rf.KeyEncoding,
 		ProbeType:           DeepCopyType(rf.ProbeType),
+		ScalarPredicate:     rf.ScalarPredicate,
 		KeyComponentProbeTypes: slices.Clone(
 			rf.KeyComponentProbeTypes,
 		),

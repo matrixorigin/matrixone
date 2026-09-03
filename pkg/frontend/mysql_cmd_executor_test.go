@@ -7009,12 +7009,16 @@ func TestDirectSessionStrictPoolWithoutLabelSelectorFailsClosed(t *testing.T) {
 	}
 	require.Empty(t, ses.getCNLabels())
 	require.NoError(t, ses.SetSessionSysVar(context.Background(), queryPoolStrict, int64(1)))
+	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+	defer cancel()
 
-	trace := previewQueryScheduling(
-		context.Background(),
+	trace := previewQuerySchedulingInContext(
+		ctx,
 		ses,
 		&plan0.Query{Nodes: []*plan0.Node{{NodeType: plan0.Node_TABLE_SCAN}}},
 		false,
+		"",
+		nil,
 	)
 
 	require.Len(t, trace.Attempts, 1)
@@ -7259,6 +7263,8 @@ func TestSchedulingPreviewHasIndependentTimeout(t *testing.T) {
 		ses,
 		&plan0.Query{Nodes: []*plan0.Node{{NodeType: plan0.Node_TABLE_SCAN}}},
 		false,
+		ses.GetSql(),
+		nil,
 	)
 
 	require.Less(t, time.Since(started), time.Second)
@@ -7297,6 +7303,8 @@ func TestSchedulingPreviewTimeoutBoundsPoolResolution(t *testing.T) {
 		ses,
 		&plan0.Query{Nodes: []*plan0.Node{{NodeType: plan0.Node_TABLE_SCAN}}},
 		false,
+		ses.GetSql(),
+		nil,
 	)
 
 	require.Less(t, time.Since(started), time.Second)
@@ -7338,6 +7346,8 @@ func TestSchedulingPreviewDoesNotCallBlockingLegacyEngine(t *testing.T) {
 			ses,
 			&plan0.Query{Nodes: []*plan0.Node{{NodeType: plan0.Node_TABLE_SCAN}}},
 			false,
+			ses.GetSql(),
+			nil,
 		)
 	}()
 
