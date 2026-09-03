@@ -21,6 +21,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"path/filepath"
 	"sync"
 	"time"
 
@@ -1405,8 +1406,12 @@ func handleBootstrapErr(ctx context.Context, err error) error {
 
 func (s *service) initTxnTraceService() {
 	rt := runtime.ServiceRuntime(s.cfg.UUID)
+	traceDataPath := s.options.traceDataPath
+	if traceDataPath != "" {
+		traceDataPath = filepath.Join(traceDataPath, s.cfg.UUID)
+	}
 	ts, err := trace.NewService(
-		s.options.traceDataPath,
+		traceDataPath,
 		s.cfg.UUID,
 		s._txnClient,
 		rt.Clock(),

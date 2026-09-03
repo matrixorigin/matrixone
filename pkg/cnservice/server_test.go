@@ -17,7 +17,10 @@ package cnservice
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net"
+	"os"
+	"path/filepath"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -733,6 +736,87 @@ func TestServiceCloseWaitsForTraceProducers(t *testing.T) {
 			}
 		},
 	)
+}
+
+func TestInitTxnTraceServiceUsesCNOwnedDirectory(t *testing.T) {
+	for _, enable := range []bool{false, true} {
+		t.Run(fmt.Sprintf("enable=%t", enable), func(t *testing.T) {
+			root := t.TempDir()
+			ids := []string{"trace-dir-cn-1", "trace-dir-cn-2", "trace-dir-cn-3"}
+			services := make([]*service, 0, len(ids))
+			markers := make([]string, 0, len(ids))
+
+			newService := func(id string) *service {
+				moruntime.SetupServiceBasedRuntime(id, moruntime.DefaultRuntime())
+				cfg := &Config{UUID: id}
+				cfg.Txn.Trace.BufferSize = 8
+				cfg.Txn.Trace.Enable = enable
+				s := &service{cfg: cfg}
+				s.options.traceDataPath = root
+				t.Cleanup(func() {
+					require.NoError(t, s.closeTxnTraceService())
+				})
+				s.initTxnTraceService()
+				return s
+			}
+
+			for i, id := range ids {
+				s := newService(id)
+				services = append(services, s)
+				for _, marker := range markers {
+					require.FileExists(t, marker)
+				}
+
+				dir := filepath.Join(root, id)
+				require.DirExists(t, dir)
+				marker := filepath.Join(dir, fmt.Sprintf("owner-%d", i))
+				require.NoError(t, os.WriteFile(marker, []byte(id), 0644))
+				markers = append(markers, marker)
+			}
+
+			require.NoError(t, services[1].closeTxnTraceService())
+			services[1] = newService(ids[1])
+			require.FileExists(t, markers[0])
+			require.NoFileExists(t, markers[1])
+			require.FileExists(t, markers[2])
+			require.DirExists(t, filepath.Join(root, ids[1]))
+		})
+	}
+}
+
+func TestInitTxnTraceServiceFailurePreservesSiblingDirectory(t *testing.T) {
+	root := t.TempDir()
+
+	newService := func(id string) *service {
+		moruntime.SetupServiceBasedRuntime(id, moruntime.DefaultRuntime())
+		cfg := &Config{UUID: id}
+		cfg.Txn.Trace.BufferSize = 8
+		s := &service{cfg: cfg}
+		s.options.traceDataPath = root
+		t.Cleanup(func() {
+			require.NoError(t, s.closeTxnTraceService())
+		})
+		return s
+	}
+
+	first := newService("trace-dir-cn-a")
+	first.initTxnTraceService()
+	marker := filepath.Join(root, first.cfg.UUID, "owner")
+	require.NoError(t, os.WriteFile(marker, []byte(first.cfg.UUID), 0644))
+
+	require.NoError(t, os.Chmod(root, 0555))
+	t.Cleanup(func() {
+		require.NoError(t, os.Chmod(root, 0755))
+	})
+	probe := filepath.Join(root, "permission-probe")
+	if err := os.WriteFile(probe, []byte("probe"), 0644); err == nil {
+		require.NoError(t, os.Remove(probe))
+		t.Skip("filesystem does not enforce read-only directory permissions")
+	}
+
+	second := newService("trace-dir-cn-b")
+	require.Panics(t, second.initTxnTraceService)
+	require.FileExists(t, marker)
 }
 
 func TestServiceCloseDrainsAutoIncrementBeforeTxnClient(t *testing.T) {
