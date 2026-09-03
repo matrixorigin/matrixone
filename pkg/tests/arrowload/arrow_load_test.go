@@ -51,9 +51,16 @@ func TestArrowLoadBVT(t *testing.T) {
 	t.Run("LocalStage", func(t *testing.T) { testArrowLocalStage(t, db) })
 	t.Run("MultiObjectSchemaMismatch", func(t *testing.T) { testArrowSchemaMismatchRollback(t, db) })
 	t.Run("ConstraintViolationRollback", func(t *testing.T) { testArrowConstraintViolationRollback(t, db) })
+	t.Run("CorruptInputRollback", func(t *testing.T) { testArrowCorruptInputRollback(t, db) })
 	t.Run("ExplicitTransactionVisibility", func(t *testing.T) { testArrowExplicitTransaction(t, c) })
 	t.Run("TwoSessionIsolation", func(t *testing.T) { testArrowTwoSessionIsolation(t, c) })
 	t.Run("DifferentialVsInsert", func(t *testing.T) { testArrowDifferentialVsInsert(t, db) })
+	t.Run("LocalMinIO", func(t *testing.T) { testArrowLoadLocalMinIO(t, db) })
+
+	// Restart is deliberately last: it destroys every existing SQL connection
+	// while preserving the cluster data directory. No later subtest may depend on
+	// the original CN generation.
+	t.Run("ClusterRestartPersistence", func(t *testing.T) { testArrowClusterRestart(t, c, db) })
 }
 
 // TestArrowLoadGateDisabled proves the primary rollout gate fails closed: with
@@ -370,6 +377,57 @@ func testArrowConstraintViolationRollback(t *testing.T, db *sql.DB) {
 	})
 }
 
+// testArrowCorruptInputRollback reaches malformed File and Stream containers
+// through the SQL/frontend/transaction path. Each failure must preserve the
+// committed seed row, and a subsequent valid LOAD on the same cluster must
+// succeed, proving failed reader generations do not poison later statements.
+func testArrowCorruptInputRollback(t *testing.T, db *sql.DB) {
+	t.Run("file_in_multi_object_load", func(t *testing.T) {
+		dir := t.TempDir()
+		validPath := fixtureIDName(t, dir, "01-valid.arrow", containerFile,
+			[][]idNameRow{{{id: 1, name: "valid"}}})
+		require.NoError(t, os.WriteFile(filepath.Join(dir, "02-corrupt.arrow"), []byte("not an Arrow IPC file"), 0o600))
+
+		mustExec(t, db, "drop table if exists corrupt_file_rollback")
+		mustExec(t, db, "create table corrupt_file_rollback(id bigint not null, name varchar(50))")
+		mustExec(t, db, "insert into corrupt_file_rollback values (0, 'seed')")
+		_, err := db.Exec(fmt.Sprintf(
+			"load data infile {'filepath'='%s','format'='arrow'} into table corrupt_file_rollback parallel 'true'",
+			filepath.Join(dir, "*.arrow")))
+		require.Error(t, err)
+		require.Equal(t, int64(1), queryCount(t, db, "select count(*) from corrupt_file_rollback"))
+
+		mustExec(t, db, fmt.Sprintf(
+			"load data infile {'filepath'='%s','format'='arrow'} into table corrupt_file_rollback", validPath))
+		require.Equal(t, int64(2), queryCount(t, db, "select count(*) from corrupt_file_rollback"))
+	})
+
+	t.Run("truncated_stream", func(t *testing.T) {
+		dir := t.TempDir()
+		validPath := fixtureIDName(t, dir, "valid.stream", containerStream,
+			[][]idNameRow{{{id: 1, name: "valid"}}})
+		payload, err := os.ReadFile(validPath)
+		require.NoError(t, err)
+		require.Greater(t, len(payload), 16)
+		corruptPath := filepath.Join(dir, "truncated.stream")
+		require.NoError(t, os.WriteFile(corruptPath, payload[:len(payload)/2], 0o600))
+
+		mustExec(t, db, "drop table if exists corrupt_stream_rollback")
+		mustExec(t, db, "create table corrupt_stream_rollback(id bigint not null, name varchar(50))")
+		mustExec(t, db, "insert into corrupt_stream_rollback values (0, 'seed')")
+		_, err = db.Exec(fmt.Sprintf(
+			"load data infile {'filepath'='%s','format'='arrow','arrow_container'='stream'} into table corrupt_stream_rollback",
+			corruptPath))
+		require.Error(t, err)
+		require.Equal(t, int64(1), queryCount(t, db, "select count(*) from corrupt_stream_rollback"))
+
+		mustExec(t, db, fmt.Sprintf(
+			"load data infile {'filepath'='%s','format'='arrow','arrow_container'='stream'} into table corrupt_stream_rollback",
+			validPath))
+		require.Equal(t, int64(2), queryCount(t, db, "select count(*) from corrupt_stream_rollback"))
+	})
+}
+
 // testArrowExplicitTransaction adapts the begin/rollback and start-transaction/commit
 // shape from test/distributed/cases/optimistic/atomicity_1.sql to Arrow LOAD, run
 // directly as a Go test (no mo-tester, no @bvt:issue wrapper) against a dedicated
@@ -454,4 +512,32 @@ func testArrowDifferentialVsInsert(t *testing.T, db *sql.DB) {
 		"select count(*) from (select * from differential_arrow except select * from differential_insert) x"))
 	require.Equal(t, int64(0), queryCount(t, db,
 		"select count(*) from (select * from differential_insert except select * from differential_arrow) x"))
+}
+
+// testArrowClusterRestart proves both sides of the restart boundary: rows loaded
+// before a full embedded-cluster stop/start remain committed, and the restarted
+// CN generation can build a fresh Arrow reader and LOAD the same disk object.
+func testArrowClusterRestart(t *testing.T, c embed.Cluster, db *sql.DB) {
+	path := fixtureIDName(t, t.TempDir(), "restart.arrow", containerFile,
+		[][]idNameRow{{{id: 1, name: "before-restart"}}})
+	mustExec(t, db, "use arrow_bvt")
+	mustExec(t, db, "drop table if exists restart_persistence")
+	mustExec(t, db, "create table restart_persistence(id bigint not null, name varchar(50))")
+	mustExec(t, db, fmt.Sprintf(
+		"load data infile {'filepath'='%s','format'='arrow'} into table restart_persistence", path))
+	require.Equal(t, int64(1), queryCount(t, db, "select count(*) from restart_persistence"))
+
+	require.NoError(t, db.Close())
+	require.NoError(t, c.Close())
+	require.NoError(t, c.Start())
+
+	restartedDB := openArrowLoadDB(t, c, 0)
+	mustExec(t, restartedDB, "use arrow_bvt")
+	require.Equal(t, int64(1), queryCount(t, restartedDB, "select count(*) from restart_persistence"),
+		"a committed Arrow LOAD must survive a complete local cluster restart")
+	mustExec(t, restartedDB, "truncate table restart_persistence")
+	mustExec(t, restartedDB, fmt.Sprintf(
+		"load data infile {'filepath'='%s','format'='arrow'} into table restart_persistence", path))
+	require.Equal(t, int64(1), queryCount(t, restartedDB, "select count(*) from restart_persistence"),
+		"the restarted CN generation must accept a new Arrow LOAD")
 }
