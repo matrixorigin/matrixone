@@ -101,11 +101,17 @@ func viewDefinitionFromPersistedData(ctx context.Context, persisted string) (str
 	}
 	statements, err := parsers.ParseWithSQLMode(
 		ctx, dialect.MYSQL, data.Stmt, lowerCaseTableNames, parserSQLMode)
-	if err != nil || len(statements) != 1 {
+	defer func() {
+		for _, statement := range statements {
+			statement.Free()
+		}
+	}()
+	if err != nil || len(statements) == 0 {
 		return "", false
 	}
-	defer statements[0].Free()
 
+	// Legacy ViewData.Stmt can be the entire COM_QUERY text. View binding uses
+	// its first parsed statement, so metadata must retain that compatibility.
 	var selectStmt *tree.Select
 	switch statement := statements[0].(type) {
 	case *tree.CreateView:
