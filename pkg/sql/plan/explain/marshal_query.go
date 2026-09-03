@@ -160,7 +160,7 @@ func (m MarshalNodeImpl) GetNodeTitle(ctx context.Context, options *ExplainOptio
 		}
 	case plan.Node_FILTER, plan.Node_ASSERT:
 		//"title" : "(D_0.D_MONTH_SEQ >= 1189) AND (D_0.D_MONTH_SEQ <= 1200)",
-		exprs := NewExprListDescribeImpl(m.node.FilterList)
+		exprs := NewExprListDescribeImpl(explainFilterList(m.node))
 		err = exprs.GetDescription(ctx, options, buf)
 		if err != nil {
 			return "", err
@@ -451,7 +451,7 @@ func (m MarshalNodeImpl) GetNodeLabels(ctx context.Context, options *ExplainOpti
 			})
 		}
 	case plan.Node_FILTER:
-		value, err := GetExprsLabelValue(ctx, m.node.FilterList, options)
+		value, err := GetExprsLabelValue(ctx, explainFilterList(m.node), options)
 		if err != nil {
 			return nil, err
 		}
@@ -625,7 +625,7 @@ func (m MarshalNodeImpl) GetNodeLabels(ctx context.Context, options *ExplainOpti
 			Value: []string{},
 		})
 	case plan.Node_ASSERT:
-		value, err := GetExprsLabelValue(ctx, m.node.FilterList, options)
+		value, err := GetExprsLabelValue(ctx, explainFilterList(m.node), options)
 		if err != nil {
 			return nil, err
 		}
@@ -708,8 +708,9 @@ func (m MarshalNodeImpl) GetNodeLabels(ctx context.Context, options *ExplainOpti
 	}
 
 	// 2. handle shared label information for all nodes, such as filter conditions
-	if len(m.node.FilterList) > 0 && m.node.NodeType != plan.Node_FILTER && m.node.NodeType != plan.Node_ASSERT {
-		value, err := GetExprsLabelValue(ctx, m.node.FilterList, options)
+	filters := explainFilterList(m.node)
+	if len(filters) > 0 && m.node.NodeType != plan.Node_FILTER && m.node.NodeType != plan.Node_ASSERT {
+		value, err := GetExprsLabelValue(ctx, filters, options)
 		if err != nil {
 			return nil, err
 		}

@@ -522,7 +522,7 @@ func (cwft *TxnComputationWrapper) Compile(any any, fill func(*batch.Batch, *per
 			cwft.ses.SetShowStmtType(ShowTableStatus)
 			cwft.ses.SetData(nil)
 		case *tree.SetVar, *tree.ShowVariables, *tree.ShowErrors, *tree.ShowWarnings,
-			*tree.CreateAccount, *tree.AlterAccount, *tree.DropAccount:
+			*tree.CreateAccount, *tree.AlterAccount, *tree.DropAccount, *tree.AnalyzeStmt:
 			return nil, nil
 		}
 
@@ -927,6 +927,7 @@ func applyBinaryDirectResultDecimalTypes(
 
 func filterBinaryNumericPrefixCandidates(
 	preparePlan *plan2.Plan,
+	fixedIntegerPositions []int32,
 	paramVals []any,
 	paramTypes []byte,
 ) bool {
@@ -934,6 +935,18 @@ func filterBinaryNumericPrefixCandidates(
 	for i := range paramVals {
 		param, ok := paramVals[i].(plan2.ParamValue)
 		if !ok {
+			continue
+		}
+		mysqlTypeEligible := i*2+1 < len(paramTypes) &&
+			binaryProtocolMayNeedNumericPrefix(defines.MysqlType(paramTypes[i*2]))
+		_, fixedInteger := slices.BinarySearch(fixedIntegerPositions, int32(i))
+		if !mysqlTypeEligible || fixedInteger {
+			// Numeric-prefix admission is position-local. A text-capable marker
+			// elsewhere in the plan must not reclassify BLOB values or parameters
+			// with a fixed unsigned-integer contract such as LIMIT/OFFSET.
+			param.EnableNumericPrefix = false
+			param.RetainParamRef = false
+			paramVals[i] = param
 			continue
 		}
 		candidates := append([]any(nil), paramVals...)
@@ -966,6 +979,24 @@ func filterBinaryNumericPrefixCandidates(
 		}
 	}
 	return anyRelevant
+}
+
+// preparedFixedIntegerParamPositions returns static execute-time metadata for
+// one prepared-plan generation. LIMIT/OFFSET and LAG/LEAD offsets have the
+// same fixed unsigned-integer contract, so retain one sorted position list for
+// all binary execute-time consumers.
+func preparedFixedIntegerParamPositions(preparePlan *plan2.Plan) ([]int32, bool, bool) {
+	paginationPositions := plan2.PreparedPaginationParamPositions(preparePlan)
+	lagLeadPositions := plan2.PreparedLagLeadParamPositions(preparePlan)
+	fixedIntegerPositions := append(paginationPositions, lagLeadPositions...)
+	slices.Sort(fixedIntegerPositions)
+	return fixedIntegerPositions, len(paginationPositions) > 0, len(lagLeadPositions) > 0
+}
+
+func (prepareStmt *PrepareStmt) refreshFixedIntegerParamPositions(preparePlan *plan2.Plan) {
+	prepareStmt.fixedIntegerParamPositions,
+		prepareStmt.hasPaginationParams,
+		prepareStmt.hasLagLeadParams = preparedFixedIntegerParamPositions(preparePlan)
 }
 
 func preparedPositionHasStaticExactNumericPeer(preparePlan *plan2.Plan, position int) bool {
@@ -1130,6 +1161,7 @@ func initExecuteStmtParamWithResolverInSession(
 	executionPlan := preparePlan.Plan
 	currentNativeMode := owner.sqlModeHasMatrixOneNative()
 	currentOnlyFullGroupBy := owner.sqlModeHasOnlyFullGroupBy()
+	currentBoolSumAvg := owner.sqlModeHasEnableBoolSumAvg()
 
 	// TODO check if schema change, obj.Obj is zero all the time in 0.6
 	eng := cwft.proc.Base.SessionInfo.StorageEngine
@@ -1176,7 +1208,8 @@ func initExecuteStmtParamWithResolverInSession(
 	// value, while subscription metadata plans expand the current visible
 	// subscription set. Rebuild both classes on every EXECUTE.
 	modeMismatch := prepareStmt.NativeMode != currentNativeMode ||
-		prepareStmt.onlyFullGroupBySet && prepareStmt.OnlyFullGroupBy != currentOnlyFullGroupBy
+		prepareStmt.sqlModeFlagsSet && (prepareStmt.OnlyFullGroupBy != currentOnlyFullGroupBy ||
+			prepareStmt.BoolSumAvg != currentBoolSumAvg)
 	protocolVersion := currentProtocolVersion(cwft.proc)
 	protocolMismatch := prepareStmt.protocolVersion != 0 &&
 		prepareStmt.protocolVersion != protocolVersion
@@ -1219,19 +1252,19 @@ func initExecuteStmtParamWithResolverInSession(
 		prepareStmt.directResultParamPositionsSet = true
 		prepareStmt.jsonComparisonParamPositions =
 			plan2.PreparedJSONComparisonParamPositions(executionPlan)
-		prepareStmt.numericPrefixConsumer = preparedPlanHasNumericPrefixConsumer(
+		prepareStmt.refreshNumericPrefixConsumer(
 			newPreparePlan.Plan, len(newPreparePlan.ParamTypes))
 		prepareStmt.numericOverloadParamPositions = plan2.PreparedPlanNumericFallbackParamPositions(
 			newPreparePlan.Plan)
-		prepareStmt.hasPaginationParams = plan2.PreparedPlanHasPaginationParams(newPreparePlan.Plan)
-		prepareStmt.hasLagLeadParams = len(plan2.PreparedLagLeadParamPositions(newPreparePlan.Plan)) > 0
+		prepareStmt.refreshFixedIntegerParamPositions(newPreparePlan.Plan)
 		prepareStmt.ColDefData = newColDefData
 		if execCtx.input != nil && execCtx.input.isBinaryProtExecute {
 			execCtx.prepareColDef = newColDefData
 		}
 		prepareStmt.NativeMode = currentNativeMode
 		prepareStmt.OnlyFullGroupBy = currentOnlyFullGroupBy
-		prepareStmt.onlyFullGroupBySet = true
+		prepareStmt.BoolSumAvg = currentBoolSumAvg
+		prepareStmt.sqlModeFlagsSet = true
 		prepareStmt.Ts = prepareTs
 		prepareStmt.tempTableVersion = currentTempTableVersion
 		prepareStmt.ddlVersion = currentDDLVersion
@@ -1299,6 +1332,7 @@ func initExecuteStmtParamWithResolverInSession(
 	needsRuntimeSpecialization := prepareStmt.runtimeSpecializationNeeded ||
 		(executionPlan != nil && executionPlan.GetDdl() != nil)
 	numParams := len(preparePlan.ParamTypes)
+	prepareStmt.refreshNumericPrefixConsumer(executionPlan, numParams)
 	binaryExecute := execCtx.input != nil && execCtx.input.isBinaryProtExecute
 	binaryLiteralPlan := binaryExecute &&
 		(executionPlan.GetDdl() != nil || executionPlan.GetDcl().GetSetVariables() != nil)
@@ -1317,7 +1351,6 @@ func initExecuteStmtParamWithResolverInSession(
 	runtimeTextComparisonSpecialization := false
 	directResultPositions := prepareStmt.directResultParamPositions
 	runtimeDirectResultPositions := make([]int32, 0, len(directResultPositions))
-	hasNumericPrefixPacket := false
 	needsRuntimeParamVals := !binaryExecute || binaryLiteralPlan ||
 		prepareStmt.hasPaginationParams || prepareStmt.hasLagLeadParams || preparedExplain ||
 		runtimeNumericOverloadCandidate
@@ -1380,17 +1413,9 @@ func initExecuteStmtParamWithResolverInSession(
 				runtimeDirectResultPositions = append(runtimeDirectResultPositions, int32(i))
 			}
 			if binaryProtocolMayNeedNumericPrefix(mysqlType) {
-				hasNumericPrefixPacket = true
 				runtimeNumericPrefixCandidate = runtimeNumericPrefixCandidate || prepareStmt.numericPrefixConsumer
 			}
 			hasParamKind = hasParamKind || kind != vector.PrepareParamNone
-		}
-		if hasNumericPrefixPacket && !runtimeNumericPrefixCandidate {
-			// Older/rebuilt plan shapes can hide the candidate behind generated
-			// index expressions. This fallback scans only DECIMAL/text/NULL packets;
-			// ordinary integer TPCC executions never enter it.
-			runtimeNumericPrefixCandidate = preparedPlanHasStaticExactNumericPeer(executionPlan) &&
-				preparedPlanAdmitsPotentialDecimal(executionPlan, paramCount)
 		}
 		if hasConcreteType {
 			prepareStmt.paramMetadata = cwft.proc.SetPrepareParamsWithReusableTypedMeta(
@@ -1417,7 +1442,8 @@ func initExecuteStmtParamWithResolverInSession(
 			}
 			if runtimeNumericPrefixCandidate && executionPlan.GetQuery() != nil {
 				runtimeNumericPrefixCandidate = filterBinaryNumericPrefixCandidates(
-					executionPlan, cwft.paramVals, prepareStmt.ParamTypes)
+					executionPlan, prepareStmt.fixedIntegerParamPositions,
+					cwft.paramVals, prepareStmt.ParamTypes)
 			}
 			if runtimeDirectResultCandidate && !runtimeNumericPrefixCandidate &&
 				!runtimeNumericOverloadCandidate && !needsRuntimeSpecialization {
@@ -1491,7 +1517,8 @@ func initExecuteStmtParamWithResolverInSession(
 		}
 	}
 	if prepareStmt.hasPaginationParams || prepareStmt.hasLagLeadParams {
-		if err := normalizePreparedOffsetBooleans(cwft.proc, preparePlan.Plan, cwft.paramVals); err != nil {
+		if err := normalizePreparedOffsetBooleans(
+			cwft.proc, prepareStmt.fixedIntegerParamPositions, cwft.paramVals); err != nil {
 			return nil, nil, nil, originSQL, false, err
 		}
 	}
@@ -1785,6 +1812,22 @@ func preparedPlanHasNumericPrefixConsumer(preparePlan *plan2.Plan, paramCount in
 		preparedPlanAdmitsPotentialDecimal(preparePlan, paramCount)
 }
 
+func (prepareStmt *PrepareStmt) refreshNumericPrefixConsumer(
+	preparePlan *plan2.Plan,
+	paramCount int,
+) {
+	if preparePlan == nil {
+		prepareStmt.numericPrefixConsumerPlan = nil
+		prepareStmt.numericPrefixConsumer = false
+		return
+	}
+	if prepareStmt.numericPrefixConsumerPlan == preparePlan {
+		return
+	}
+	prepareStmt.numericPrefixConsumer = preparedPlanHasNumericPrefixConsumer(preparePlan, paramCount)
+	prepareStmt.numericPrefixConsumerPlan = preparePlan
+}
+
 func preparedPlanAdmitsPotentialDecimal(preparePlan *plan2.Plan, paramCount int) bool {
 	values := make([]any, paramCount)
 	for candidate := 0; candidate < paramCount; candidate++ {
@@ -1963,14 +2006,12 @@ func newPreparedExecutionRetry(
 	return retry
 }
 
-func normalizePreparedOffsetBooleans(proc *process.Process, preparePlan *plan.Plan, paramVals []any) error {
+func normalizePreparedOffsetBooleans(proc *process.Process, fixedIntegerPositions []int32, paramVals []any) error {
 	params := proc.GetPrepareParams()
 	if params == nil {
 		return nil
 	}
-	positions := plan2.PreparedPaginationParamPositions(preparePlan)
-	positions = append(positions, plan2.PreparedLagLeadParamPositions(preparePlan)...)
-	for _, position := range positions {
+	for _, position := range fixedIntegerPositions {
 		if position < 0 || int(position) >= len(paramVals) {
 			continue
 		}

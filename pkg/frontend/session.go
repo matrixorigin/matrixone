@@ -1337,7 +1337,22 @@ func (ses *Session) sqlModeHasOnlyFullGroupBy() bool {
 	return ok && has
 }
 
-func (ses *Session) updateSqlModeCaches(oldNative, oldOnlyFullGroupBy bool, val interface{}) {
+func (ses *Session) sqlModeHasEnableBoolSumAvg() bool {
+	if ses == nil {
+		return false
+	}
+	value, err := ses.GetSessionSysVar("sql_mode")
+	if err != nil {
+		return false
+	}
+	has, ok := sqlModeHasEnableBoolSumAvgValue(value)
+	return ok && has
+}
+
+// updateSqlModeCaches evicts cached plans when a sql_mode token that shapes
+// the plan changes membership. Every token the planner reads at bind time
+// must be compared here: the cache is keyed by SQL text alone.
+func (ses *Session) updateSqlModeCaches(oldNative, oldOnlyFullGroupBy, oldBoolSumAvg bool, val interface{}) {
 	ses.updateSqlModeNoAutoValueOnZero(val)
 	newNative, ok := sqlModeHasMatrixOneNativeValue(val)
 	if !ok {
@@ -1347,7 +1362,12 @@ func (ses *Session) updateSqlModeCaches(oldNative, oldOnlyFullGroupBy bool, val 
 	if !ok {
 		return
 	}
-	if oldNative != newNative || oldOnlyFullGroupBy != newOnlyFullGroupBy {
+	newBoolSumAvg, ok := sqlModeHasEnableBoolSumAvgValue(val)
+	if !ok {
+		return
+	}
+	if oldNative != newNative || oldOnlyFullGroupBy != newOnlyFullGroupBy ||
+		oldBoolSumAvg != newBoolSumAvg {
 		ses.cleanCache()
 	}
 }
@@ -2523,16 +2543,22 @@ func (ses *Session) AuthenticateUser(ctx context.Context, userInput string, dbNa
 	ses.UpdateDebugString()
 
 	ses.Debugf(ctx, "check special user")
-	// check the special user for initialization
-	if isSpecial, pwdBytes, specialAccount := isSpecialUser(tenant.GetUser()); isSpecial && specialAccount.IsMoAdminRole() {
+	isSpecial, pwdBytes, specialAccount := isSpecialUser(tenant.GetUser())
+	isBootstrapSpecial := isSpecial && specialAccount.IsMoAdminRole()
+	// Internal special users bootstrap the service before catalog access is
+	// available. External special users are normal client connections and must
+	// observe the same fresh catalog boundary as every other public session.
+	if !isBootstrapSpecial || !ses.isInternal {
+		if err = ses.prepareAuthenticationSnapshot(ctx); err != nil {
+			return nil, err
+		}
+	}
+	if isBootstrapSpecial {
 		ses.SetTenantInfo(specialAccount)
 		if len(ses.requestLabel) == 0 {
 			ses.requestLabel = db_holder.GetLabelSelector()
 		}
 		return GetPassWord(HashPassWordWithByte(pwdBytes))
-	}
-	if err = ses.prepareAuthenticationSnapshot(ctx); err != nil {
-		return nil, err
 	}
 
 	bh := ses.GetBackgroundExec(ctx, &BackgroundExecOption{

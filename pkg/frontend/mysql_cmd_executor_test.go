@@ -113,6 +113,24 @@ func TestDoComQueryParseErrorReplacesPreviousDiagnostics(t *testing.T) {
 	require.NotContains(t, info.msgs, "stale diagnostic marker")
 }
 
+func TestDoComQueryParseErrorRedactsMongoDBSelector(t *testing.T) {
+	ctx := defines.AttachAccountId(context.Background(), catalog.System_Account)
+	ctrl := gomock.NewController(t)
+	ses := newTestSession(t, ctrl)
+	defer ses.Close()
+	execCtx := newTestExecCtx(ctx, ctrl)
+	execCtx.ses = ses
+
+	sql := `select * from mongo_events where __mo_query = '{"filter":{"password":"super-secret-value"}}`
+	err := doComQuery(ses, execCtx, &UserInput{sql: sql})
+	require.Error(t, err)
+	assertMongoDBSelectorIsRedacted(t, ses.GetSqlOfStmt())
+	assertMongoDBSelectorIsAbsent(t, err.Error())
+	redactedErr := redactStatementErrorForLogging(err, sql).Error()
+	require.Contains(t, redactedErr, "<redacted MongoDB __mo_query statement>")
+	assertMongoDBSelectorIsAbsent(t, redactedErr)
+}
+
 func TestDoComQueryPrepareMultiReplacesPreviousDiagnostics(t *testing.T) {
 	ctx := defines.AttachAccountId(context.Background(), catalog.System_Account)
 	ctrl := gomock.NewController(t)
@@ -1502,6 +1520,53 @@ func TestRecordStatementResetsDivByZeroErrorMode(t *testing.T) {
 	require.Equal(t, int32(-1), atomic.LoadInt32(&proc.Base.DivByZeroErrorMode))
 	require.Equal(t, "Insert", ses.GetStmtType())
 	require.Equal(t, tree.QueryTypeDML, ses.GetQueryType())
+}
+
+func TestRecordStatementRedactsMongoDBPreparedExpansion(t *testing.T) {
+	ctx := context.Background()
+	sv := &config.FrontendParameters{}
+	sv.SetDefaultValues()
+	setPu("", config.NewParameterUnit(sv, nil, nil, nil))
+
+	for _, test := range []struct {
+		name   string
+		binary bool
+	}{
+		{name: "execute using"},
+		{name: "binary execute", binary: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			ctrl := gomock.NewController(t)
+			ses := NewSession(ctx, "", &testMysqlWriter{}, nil)
+			proc := ses.GetProc()
+			const preparedName = "mongo_query"
+			require.NoError(t, ses.SetPrepareStmt(ctx, preparedName, &PrepareStmt{
+				Name: preparedName,
+				Sql:  `select * from mongo_events where __mo_query = '{"pipeline":[{"$match":{"api_key":"super-secret-value"}}]}'`,
+			}))
+
+			cw := mock_frontend.NewMockComputationWrapper(ctrl)
+			cw.EXPECT().GetUUID().Return(make([]byte, 16))
+			cw.EXPECT().GetAst().Return(&tree.Execute{Name: preparedName})
+			cw.EXPECT().BinaryExecute().Return(test.binary, preparedName)
+			_, err := RecordStatement(ctx, ses, proc, cw, time.Now(), "execute mongo_query", constant.ExternSql, true)
+			require.NoError(t, err)
+			assertMongoDBSelectorIsRedacted(t, ses.GetSqlOfStmt())
+		})
+	}
+}
+
+func assertMongoDBSelectorIsRedacted(t *testing.T, text string) {
+	t.Helper()
+	require.Equal(t, "<redacted MongoDB __mo_query statement>", text)
+	assertMongoDBSelectorIsAbsent(t, text)
+}
+
+func assertMongoDBSelectorIsAbsent(t *testing.T, text string) {
+	t.Helper()
+	require.NotContains(t, text, "api_key")
+	require.NotContains(t, text, "password")
+	require.NotContains(t, text, "super-secret-value")
 }
 
 func TestRecordStatementSkippedInternalEmptyDoesNotOpenMemoryEpoch(t *testing.T) {
@@ -6000,11 +6065,38 @@ func TestAnalyzeSituationResponseSendsAllResults(t *testing.T) {
 	}
 	require.NoError(t, resper.respBySituation(ses, execCtx))
 	require.Len(t, writer.responses, 2)
+	require.Equal(t, int(COM_QUERY), writer.responses[0].cmd)
+	require.Equal(t, int(COM_QUERY), writer.responses[1].cmd)
 	require.NotZero(t, writer.responses[0].GetStatus()&SERVER_MORE_RESULTS_EXISTS)
 	require.Zero(t, writer.responses[1].GetStatus()&SERVER_MORE_RESULTS_EXISTS)
 	require.Same(t, first, writer.responses[0].GetData().(*MysqlExecutionResult).Mrs())
 	require.Same(t, second, writer.responses[1].GetData().(*MysqlExecutionResult).Mrs())
 	require.Nil(t, execCtx.results)
+}
+
+func TestAnalyzeSituationResponseUsesBinaryRowsForStmtExecute(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+	ses := newTestSession(t, ctrl)
+	writer := &countingMysqlWriter{testMysqlWriter: &testMysqlWriter{}}
+	resper := NewMysqlResp(writer)
+	execCtx := &ExecCtx{
+		reqCtx:     context.Background(),
+		ses:        ses,
+		isLastStmt: true,
+		input:      &UserInput{isBinaryProtExecute: true},
+		results: []ExecResult{
+			makeAnalyzeCountResult("approx_count_distinct(a)", 2),
+			makeAnalyzeCountResult("approx_count_distinct(x)", 4),
+		},
+	}
+
+	require.NoError(t, resper.respBySituation(ses, execCtx))
+	require.Len(t, writer.responses, 2)
+	require.Equal(t, int(COM_STMT_EXECUTE), writer.responses[0].cmd)
+	require.Equal(t, int(COM_STMT_EXECUTE), writer.responses[1].cmd)
+	require.NotZero(t, writer.responses[0].GetStatus()&SERVER_MORE_RESULTS_EXISTS)
+	require.Zero(t, writer.responses[1].GetStatus()&SERVER_MORE_RESULTS_EXISTS)
 }
 
 func TestCallSituationResponseSendsFinalAffectedRows(t *testing.T) {
@@ -6980,12 +7072,16 @@ func TestDirectSessionStrictPoolWithoutLabelSelectorFailsClosed(t *testing.T) {
 	}
 	require.Empty(t, ses.getCNLabels())
 	require.NoError(t, ses.SetSessionSysVar(context.Background(), queryPoolStrict, int64(1)))
+	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+	defer cancel()
 
-	trace := previewQueryScheduling(
-		context.Background(),
+	trace := previewQuerySchedulingInContext(
+		ctx,
 		ses,
 		&plan0.Query{Nodes: []*plan0.Node{{NodeType: plan0.Node_TABLE_SCAN}}},
 		false,
+		"",
+		nil,
 	)
 
 	require.Len(t, trace.Attempts, 1)
@@ -7230,6 +7326,8 @@ func TestSchedulingPreviewHasIndependentTimeout(t *testing.T) {
 		ses,
 		&plan0.Query{Nodes: []*plan0.Node{{NodeType: plan0.Node_TABLE_SCAN}}},
 		false,
+		ses.GetSql(),
+		nil,
 	)
 
 	require.Less(t, time.Since(started), time.Second)
@@ -7268,6 +7366,8 @@ func TestSchedulingPreviewTimeoutBoundsPoolResolution(t *testing.T) {
 		ses,
 		&plan0.Query{Nodes: []*plan0.Node{{NodeType: plan0.Node_TABLE_SCAN}}},
 		false,
+		ses.GetSql(),
+		nil,
 	)
 
 	require.Less(t, time.Since(started), time.Second)
@@ -7309,6 +7409,8 @@ func TestSchedulingPreviewDoesNotCallBlockingLegacyEngine(t *testing.T) {
 			ses,
 			&plan0.Query{Nodes: []*plan0.Node{{NodeType: plan0.Node_TABLE_SCAN}}},
 			false,
+			ses.GetSql(),
+			nil,
 		)
 	}()
 

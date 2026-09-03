@@ -437,13 +437,17 @@ type QueryBuilder struct {
 	isPrepareStatement     bool
 	mysqlCompatible        bool
 	mysqlFullGroupByCompat bool
-	isForUpdate            bool // if it's a query plan for update
-	isRestore              bool
-	isRestoreByTs          bool
-	isSkipResolveTableDef  bool
-	skipStats              bool
-	isInsertIgnore         bool             // INSERT IGNORE: over-length CHAR/VARCHAR writes are truncated instead of rejected
-	deleteNode             map[uint64]int32 //delete node in this query. key is tableId, value is the nodeId of sinkScan node in the delete plan
+	// boolSumAvgCompat is the ENABLE_BOOL_SUMAVG sql_mode, resolved once per
+	// builder like the two flags above so every bind path (direct, HAVING,
+	// window, PREPARE) reads the same decision.
+	boolSumAvgCompat      bool
+	isForUpdate           bool // if it's a query plan for update
+	isRestore             bool
+	isRestoreByTs         bool
+	isSkipResolveTableDef bool
+	skipStats             bool
+	isInsertIgnore        bool             // INSERT IGNORE: over-length CHAR/VARCHAR writes are truncated instead of rejected
+	deleteNode            map[uint64]int32 //delete node in this query. key is tableId, value is the nodeId of sinkScan node in the delete plan
 
 	// spill memory for aggregate function
 	// jsonProbeFtNodes marks the fulltext index-scan nodes built for a json
@@ -490,10 +494,16 @@ type QueryBuilder struct {
 	irregularMaintDeletePkPos int32
 	irregularMaintDeletePkTyp plan.Type
 	irregularMaintIndexes     []*plan.IndexDef
-	irregularMaintTableDef    *plan.TableDef
-	irregularMaintObjRef      *plan.ObjectRef
-	irregularMaintSkipInsert  bool
-	irregularUpdateMaints     []irregularUpdateMaintenance
+	// irregularMaintInsertOnlyIndexes are logical irregular indexes whose parts
+	// cannot change in an ODKU conflict. Their insert maintenance reads only
+	// non-conflicting rows from irregularMaintInsertOnlySourceStep; delete
+	// maintenance is intentionally absent.
+	irregularMaintInsertOnlySourceStep int32
+	irregularMaintInsertOnlyIndexes    []*plan.IndexDef
+	irregularMaintTableDef             *plan.TableDef
+	irregularMaintObjRef               *plan.ObjectRef
+	irregularMaintSkipInsert           bool
+	irregularUpdateMaints              []irregularUpdateMaintenance
 
 	// DML RETURNING consumes an attempt-local row image from a dedicated sink.
 	// The mutation plan and the returning projection use independent SINK_SCAN
@@ -538,13 +548,15 @@ type QueryBuilder struct {
 }
 
 type irregularUpdateMaintenance struct {
-	sourceStep  int32
-	deleteStep  int32
-	deletePkPos int32
-	deletePkTyp plan.Type
-	indexes     []*plan.IndexDef
-	tableDef    *plan.TableDef
-	objRef      *plan.ObjectRef
+	sourceStep           int32
+	deleteStep           int32
+	deletePkPos          int32
+	deletePkTyp          plan.Type
+	indexes              []*plan.IndexDef
+	insertOnlySourceStep int32
+	insertOnlyIndexes    []*plan.IndexDef
+	tableDef             *plan.TableDef
+	objRef               *plan.ObjectRef
 }
 
 type OptimizerHints struct {
@@ -568,8 +580,10 @@ type OptimizerHints struct {
 	execType                   int
 	disableRightJoin           int
 	disableRightSingleRF       int
+	subqueryPredicatePlanning  int
 	printShuffle               int
 	skipDedup                  int
+	outerAntiPlanning          int
 }
 
 type CTERef struct {
@@ -728,9 +742,13 @@ type BindContext struct {
 	// boundary column references.
 	timeBoundaryType *plan.Type
 
-	groupByAst             map[string]int32
-	groupByCanonicalAst    map[string]int32
-	groupByParamAst        map[string]int32
+	groupByAst          map[string]int32
+	groupByCanonicalAst map[string]int32
+	groupByParamAst     map[string]int32
+	// sampleGroupByAst retains the logical identity of stable GROUP BY
+	// literals removed from the physical key. SAMPLE must still reject those
+	// expressions even though ordinary projection binding should see literals.
+	sampleGroupByAst       map[string]struct{}
 	aggregateByAst         map[string]int32
 	sampleByAst            map[string]int32
 	windowByAst            map[string]int32

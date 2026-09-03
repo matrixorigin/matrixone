@@ -12,16 +12,26 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package compile
+package frontend
 
 import (
 	"testing"
 
+	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/stretchr/testify/require"
 )
 
-func TestParserFromParams(t *testing.T) {
-	require.Empty(t, parserFromParams(""))
-	require.Empty(t, parserFromParams("{"))
-	require.Equal(t, "gojieba", parserFromParams(`{"parser":"gojieba"}`))
+func TestPreparedAnalyzeProtocolContract(t *testing.T) {
+	require.NotZero(t, DefaultCapability&CLIENT_PS_MULTI_RESULTS)
+
+	stmt, err := mysql.ParseOne(t.Context(), "prepare p from analyze table t(a)", 1)
+	require.NoError(t, err)
+	defer stmt.Free()
+	prepareStmt := stmt.(*tree.PrepareStmt)
+	require.IsType(t, &tree.AnalyzeStmt{}, prepareStmt.Stmt)
+
+	columns := getPreparedResultColumnsFor(prepareStmt.Stmt, &planpb.Plan{}, false)
+	require.Empty(t, columns)
 }

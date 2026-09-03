@@ -271,8 +271,8 @@ var (
 		"internal_numeric_precision(mc.atttyp) AS NUMERIC_PRECISION,"+
 		"internal_numeric_scale(mc.atttyp) AS NUMERIC_SCALE,"+
 		"internal_datetime_scale(mc.atttyp) AS DATETIME_PRECISION,"+
-		"(case internal_column_character_set(mc.atttyp) WHEN 0 then 'utf8' WHEN 1 then 'utf8' else NULL end) AS CHARACTER_SET_NAME,"+
-		"(case internal_column_character_set(mc.atttyp) WHEN 0 then 'utf8_bin' WHEN 1 then 'utf8_bin' else NULL end) AS COLLATION_NAME,"+
+		"(case internal_column_character_set(mc.atttyp) WHEN 0 then 'utf8' WHEN 1 then 'utf8' WHEN 2 then 'binary' else NULL end) AS CHARACTER_SET_NAME,"+
+		"(case internal_column_character_set(mc.atttyp) WHEN 0 then 'utf8_bin' WHEN 1 then 'utf8_bin' WHEN 2 then 'binary' else NULL end) AS COLLATION_NAME,"+
 		"(case when length(mc.attr_enum) > 0 then mo_show_visible_bin_enum(mc.atttyp, mc.attr_enum) else mo_show_visible_bin(mc.atttyp,3) end) as COLUMN_TYPE,"+
 		"case when mc.att_constraint_type = 'p' or mk.key_priority = 3 then 'PRI' when mk.key_priority = 2 then 'UNI' when mk.key_priority = 1 then 'MUL' else '' end as COLUMN_KEY,"+
 		"cast(case when mc.att_is_auto_increment = 1 then 'auto_increment' when mc.attr_has_generated = 1 then ifnull(mo_show_visible_bin(mc.attr_generated, 6), '') else '' end as varchar(24)) as EXTRA,"+
@@ -609,14 +609,51 @@ var (
 		"`IS_GRANTABLE` varchar(3) NOT NULL DEFAULT ''" +
 		")"
 
-	InformationSchemaTablePrivilegesDDL = "CREATE TABLE information_schema.`TABLE_PRIVILEGES` (" +
-		"`GRANTEE` varchar(292) NOT NULL DEFAULT ''," +
-		"`TABLE_CATALOG` varchar(512) NOT NULL DEFAULT ''," +
-		"`TABLE_SCHEMA` varchar(64) NOT NULL DEFAULT ''," +
-		"`TABLE_NAME` varchar(64) NOT NULL DEFAULT ''," +
-		"`PRIVILEGE_TYPE` varchar(64) NOT NULL DEFAULT ''," +
-		"`IS_GRANTABLE` varchar(3) NOT NULL DEFAULT ''" +
-		")"
+	InformationSchemaTablePrivilegesDDL = "CREATE VIEW information_schema.`TABLE_PRIVILEGES` AS " +
+		informationSchemaMetadataVisibilityCTE() +
+		", __mo_can_inspect_all_table_grants AS (" +
+		"SELECT 1 FROM mo_catalog.mo_role_privs inspect_priv " +
+		"JOIN __mo_active_roles inspect_role ON inspect_priv.role_id = inspect_role.role_id " +
+		"WHERE inspect_priv.obj_type = 'account' AND inspect_priv.obj_id = 0 " +
+		"AND inspect_priv.privilege_level = '*' " +
+		"AND inspect_priv.privilege_name IN ('manage grants','account all','account ownership') LIMIT 1" +
+		"), __mo_authorized_table_grants AS (" +
+		"SELECT grant_priv.role_id, grant_priv.obj_id, grant_priv.privilege_name, grant_priv.with_grant_option " +
+		"FROM mo_catalog.mo_role_privs grant_priv " +
+		"JOIN __mo_active_roles grant_role ON grant_priv.role_id = grant_role.role_id " +
+		"WHERE grant_priv.obj_type IN ('table','view') AND grant_priv.privilege_level IN ('d.t','t') " +
+		"UNION ALL " +
+		"SELECT grant_priv.role_id, grant_priv.obj_id, grant_priv.privilege_name, grant_priv.with_grant_option " +
+		"FROM mo_catalog.mo_role_privs grant_priv " +
+		"WHERE EXISTS (SELECT 1 FROM __mo_can_inspect_all_table_grants) " +
+		"AND grant_priv.role_id NOT IN (SELECT role_id FROM __mo_active_roles) " +
+		"AND grant_priv.obj_type IN ('table','view') AND grant_priv.privilege_level IN ('d.t','t')" +
+		"), __mo_concrete_table_privileges(privilege_type) AS (" +
+		"SELECT 'SELECT' UNION ALL SELECT 'INSERT' UNION ALL SELECT 'UPDATE' UNION ALL SELECT 'TRUNCATE' " +
+		"UNION ALL SELECT 'DELETE' UNION ALL SELECT 'REFERENCE' UNION ALL SELECT 'INDEX' UNION ALL SELECT 'VALUES'" +
+		"), __mo_expanded_table_grant_rows AS (" +
+		"SELECT grant_priv.role_id, grant_priv.obj_id, upper(grant_priv.privilege_name) AS privilege_type, " +
+		"grant_priv.with_grant_option FROM __mo_authorized_table_grants grant_priv " +
+		"WHERE grant_priv.privilege_name <> 'table all' " +
+		"UNION ALL " +
+		"SELECT grant_priv.role_id, grant_priv.obj_id, concrete_priv.privilege_type, grant_priv.with_grant_option " +
+		"FROM __mo_authorized_table_grants grant_priv CROSS JOIN __mo_concrete_table_privileges concrete_priv " +
+		"WHERE grant_priv.privilege_name = 'table all'" +
+		"), __mo_expanded_table_grants AS (" +
+		"SELECT role_id, obj_id, privilege_type, " +
+		"max(cast(with_grant_option AS int)) = 1 AS with_grant_option " +
+		"FROM __mo_expanded_table_grant_rows GROUP BY role_id, obj_id, privilege_type" +
+		") SELECT " +
+		"CAST(coalesce(granted_role.role_name, '') AS varchar(292)) AS `GRANTEE`," +
+		"CAST('def' AS varchar(512)) AS `TABLE_CATALOG`," +
+		"CAST(coalesce(tbl.reldatabase, '') AS varchar(64)) AS `TABLE_SCHEMA`," +
+		"CAST(coalesce(tbl.relname, '') AS varchar(64)) AS `TABLE_NAME`," +
+		"CAST(coalesce(grant_priv.privilege_type, '') AS varchar(64)) AS `PRIVILEGE_TYPE`," +
+		"CAST(coalesce(case when grant_priv.with_grant_option then 'YES' else 'NO' end, '') AS varchar(3)) AS `IS_GRANTABLE` " +
+		"FROM __mo_expanded_table_grants grant_priv " +
+		"JOIN mo_catalog.mo_role granted_role ON grant_priv.role_id = granted_role.role_id " +
+		"JOIN __mo_visible_tables tbl ON grant_priv.obj_id = tbl.rel_logical_id " +
+		"WHERE tbl.account_id = current_account_id()"
 
 	InformationSchemaColumnPrivilegesDDL = "CREATE TABLE information_schema.`COLUMN_PRIVILEGES` (" +
 		"`GRANTEE` varchar(292) NOT NULL DEFAULT ''," +

@@ -81,6 +81,31 @@ func TestCreateTablePreservesIndexIdentifierCase(t *testing.T) {
 	require.Equal(t, []string{"MixedCaseIdx", "UniQue_Mix"}, names)
 }
 
+func TestConfigIsNonReservedIdentifier(t *testing.T) {
+	_, err := ParseOne(context.Background(), "CREATE TABLE config ("+
+		"`key` VARCHAR(255) PRIMARY KEY,"+
+		"value TEXT NOT NULL DEFAULT (''),"+
+		"ctime TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,"+
+		"mtime TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP"+
+		")", 1)
+	require.NoError(t, err)
+
+	_, err = ParseOne(context.Background(), "create table t (config int)", 1)
+	require.NoError(t, err)
+	_, err = ParseOne(context.Background(), "show config", 1)
+	require.NoError(t, err)
+	_, err = ParseOne(context.Background(), "alter account config set MYSQL_COMPATIBILITY_MODE a = 1", 1)
+	require.NoError(t, err)
+	_, err = ParseOne(context.Background(), "alter account config tenant1 set MYSQL_COMPATIBILITY_MODE = '1'", 1)
+	require.NoError(t, err)
+	_, err = ParseOne(context.Background(), "create account config admin_name = admin identified by 'Passw0rd'", 1)
+	require.NoError(t, err)
+	_, err = ParseOne(context.Background(), "alter account config suspend", 1)
+	require.NoError(t, err)
+	_, err = ParseOne(context.Background(), "select account config from t", 1)
+	require.NoError(t, err)
+}
+
 func TestCreateTablePreservesIndexIdentifierCaseWithTypeOption(t *testing.T) {
 	stmt, err := ParseOne(context.Background(),
 		"create table t (v varchar(20), key TypeOptionIdx type btree(v))", 1)
@@ -639,6 +664,22 @@ func TestConvertToJSONBuildsCastExpr(t *testing.T) {
 	require.False(t, isCast)
 }
 
+func TestConvertUsingDeparseRoundTrip(t *testing.T) {
+	for _, sql := range []string{
+		"select convert(payload using binary) from t",
+		"select convert('1' using utf8mb4)",
+	} {
+		ast, err := ParseOne(context.Background(), sql, 1)
+		require.NoError(t, err)
+		fmtCtx := tree.NewFmtCtx(dialect.MYSQL, tree.WithQuoteString(true))
+		ast.Format(fmtCtx)
+		formatted := fmtCtx.String()
+		require.Contains(t, formatted, " using ")
+		_, err = ParseOne(context.Background(), formatted, 1)
+		require.NoError(t, err, formatted)
+	}
+}
+
 func TestParseFirstWithSQLMode(t *testing.T) {
 	ctx := context.Background()
 	parser := &MySQLParser{}
@@ -785,6 +826,99 @@ func TestBitXorWindowSpec(t *testing.T) {
 	identifier, ok := firstSelectExpr(t, identifierStmt).(*tree.UnresolvedName)
 	require.True(t, ok)
 	require.Equal(t, "bit_xor", identifier.ColName())
+}
+
+func TestValueWindowDefaultModifiers(t *testing.T) {
+	testCases := []struct {
+		name      string
+		sql       string
+		canonical string
+	}{
+		{
+			name:      "LAG RESPECT NULLS",
+			sql:       "select lag(v) respect nulls over (order by id) from t",
+			canonical: "select lag(v) over (order by id) from t",
+		},
+		{
+			name:      "LAG with offset RESPECT NULLS",
+			sql:       "select lag(v, 2) respect nulls over (order by id) from t",
+			canonical: "select lag(v, 2) over (order by id) from t",
+		},
+		{
+			name:      "LAG with offset and default RESPECT NULLS",
+			sql:       "select lag(v, 2, 0) respect nulls over (order by id) from t",
+			canonical: "select lag(v, 2, 0) over (order by id) from t",
+		},
+		{
+			name:      "LEAD RESPECT NULLS",
+			sql:       "select lead(v) respect nulls over (order by id) from t",
+			canonical: "select lead(v) over (order by id) from t",
+		},
+		{
+			name:      "LEAD with offset RESPECT NULLS",
+			sql:       "select lead(v, 2) respect nulls over (order by id) from t",
+			canonical: "select lead(v, 2) over (order by id) from t",
+		},
+		{
+			name:      "LEAD with offset and default RESPECT NULLS",
+			sql:       "select lead(v, 2, 0) respect nulls over (order by id) from t",
+			canonical: "select lead(v, 2, 0) over (order by id) from t",
+		},
+		{
+			name:      "FIRST_VALUE RESPECT NULLS",
+			sql:       "select first_value(v) respect nulls over (order by id) from t",
+			canonical: "select first_value(v) over (order by id) from t",
+		},
+		{
+			name:      "LAST_VALUE RESPECT NULLS",
+			sql:       "select last_value(v) respect nulls over (order by id) from t",
+			canonical: "select last_value(v) over (order by id) from t",
+		},
+		{
+			name:      "NTH_VALUE RESPECT NULLS",
+			sql:       "select nth_value(v, 2) respect nulls over (order by id) from t",
+			canonical: "select nth_value(v, 2) over (order by id) from t",
+		},
+		{
+			name:      "NTH_VALUE FROM FIRST",
+			sql:       "select nth_value(v, 2) from first over (order by id) from t",
+			canonical: "select nth_value(v, 2) over (order by id) from t",
+		},
+		{
+			name:      "NTH_VALUE FROM FIRST RESPECT NULLS",
+			sql:       "select nth_value(v, 2) from first respect nulls over (order by id) from t",
+			canonical: "select nth_value(v, 2) over (order by id) from t",
+		},
+		{
+			name:      "RESPECT remains a non-reserved identifier",
+			sql:       "select respect from t",
+			canonical: "select respect from t",
+		},
+		{
+			name:      "RESPECT remains a generic function name",
+			sql:       "select respect()",
+			canonical: "select respect()",
+		},
+	}
+
+	for _, testCase := range testCases {
+		t.Run(testCase.name, func(t *testing.T) {
+			stmt, err := ParseOne(context.Background(), testCase.sql, 1)
+			require.NoError(t, err)
+			defer stmt.Free()
+			require.Equal(t, testCase.canonical, tree.String(stmt, dialect.MYSQL))
+		})
+	}
+
+	for _, sql := range []string{
+		"select lag(v) ignore nulls over (order by id) from t",
+		"select nth_value(v, 2) from last over (order by id) from t",
+	} {
+		t.Run("reject "+sql, func(t *testing.T) {
+			_, err := ParseOne(context.Background(), sql, 1)
+			require.Error(t, err)
+		})
+	}
 }
 
 func TestNamedWindowClause(t *testing.T) {
