@@ -333,7 +333,7 @@ func TestVersionedStatsPublicationLinearizesWithCatalogChange(t *testing.T) {
 		e.globalStats.beforeSubscribeTable = func(pb.StatsInfoKey) { subscribed = true }
 		require.Same(t, firstStats, e.globalStats.Get(ctx, key, false),
 			"a local diagnostic reader may inspect the published observation")
-		require.Nil(t, e.globalStats.GetForRemote(ctx, key),
+		require.Nil(t, e.StatsForRemote(ctx, key),
 			"a remote reader cannot safely export a bound observation")
 		require.False(t, subscribed,
 			"a non-blocking incompatible read must fail before subscription or remote I/O")
