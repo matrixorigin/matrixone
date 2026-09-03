@@ -45,24 +45,37 @@ import (
 
 type mockStatsKeyRouter struct {
 	target string
+	key    statsinfo.StatsInfoKey
 }
 
-func (r *mockStatsKeyRouter) Target(statsinfo.StatsInfoKey) string { return r.target }
-func (r *mockStatsKeyRouter) AddItem(gossip.CommonItem)            {}
+func (r *mockStatsKeyRouter) Target(key statsinfo.StatsInfoKey) string {
+	r.key = key
+	return r.target
+}
+func (r *mockStatsKeyRouter) AddItem(gossip.CommonItem) {}
 
 type mockStatsQueryClient struct {
 	response    *querypb.Response
 	sendStarted chan struct{}
 	allowReturn chan struct{}
+	target      string
+	request     *querypb.Request
+	releases    atomic.Int32
 }
 
 func (m *mockStatsQueryClient) ServiceID() string {
 	return "mock-stats-query-client"
 }
 
-func (m *mockStatsQueryClient) SendMessage(context.Context, string, *querypb.Request) (*querypb.Response, error) {
-	close(m.sendStarted)
-	<-m.allowReturn
+func (m *mockStatsQueryClient) SendMessage(_ context.Context, target string, req *querypb.Request) (*querypb.Response, error) {
+	m.target = target
+	m.request = req
+	if m.sendStarted != nil {
+		close(m.sendStarted)
+	}
+	if m.allowReturn != nil {
+		<-m.allowReturn
+	}
 	return m.response, nil
 }
 
@@ -70,10 +83,52 @@ func (m *mockStatsQueryClient) NewRequest(method querypb.CmdMethod) *querypb.Req
 	return &querypb.Request{CmdMethod: method}
 }
 
-func (m *mockStatsQueryClient) Release(*querypb.Response) {}
+func (m *mockStatsQueryClient) Release(*querypb.Response) {
+	m.releases.Add(1)
+}
 
 func (m *mockStatsQueryClient) Close() error {
 	return nil
+}
+
+func installRemoteStatsTestTable(
+	t *testing.T,
+	ctx context.Context,
+	e *Engine,
+	dbID uint64,
+	tblID uint64,
+) (statsinfo.StatsInfoKey, *subEntry) {
+	t.Helper()
+	e.pClient.eng = e
+	e.pClient.subscribed.eng = e
+
+	ent := &subEntry{dbID: dbID, state: Subscribed}
+	ent.lastTs.Store(time.Now().UnixNano())
+	if e.pClient.subscribed.m == nil {
+		e.pClient.subscribed.m = make(map[uint64]*subEntry)
+	}
+	e.pClient.subscribed.m[tblID] = ent
+
+	key := statsinfo.StatsInfoKey{
+		AccId:      0,
+		DatabaseID: dbID,
+		TableID:    tblID,
+		TableName:  "t",
+		DbName:     "d",
+	}
+	part := e.GetOrCreateLatestPart(ctx, 0, dbID, tblID)
+	state, done := part.MutateState()
+	defer done()
+	oid := types.NewObjectid()
+	stats := objectio.NewObjectStatsWithObjectID(&oid, false, false, false)
+	require.NoError(t, objectio.SetObjectStatsBlkCnt(stats, 1))
+	require.NoError(t, objectio.SetObjectStatsRowCnt(stats, 1))
+	require.NoError(t, objectio.SetObjectStatsSize(stats, 1))
+	require.NoError(t, state.HandleObjectEntry(ctx, nil, objectio.ObjectEntry{
+		ObjectStats: *stats,
+		CreateTime:  types.BuildTS(time.Now().UnixNano(), 0),
+	}, false))
+	return key, ent
 }
 
 func runTest(
@@ -2636,38 +2691,7 @@ func TestGlobalStatsGetDoesNotCacheRemoteInfoAfterUnsubscribe(t *testing.T) {
 		gs := e.globalStats
 		const dbID uint64 = 100
 		const tblID uint64 = 10001
-
-		e.pClient.eng = e
-		e.pClient.subscribed.eng = e
-
-		ent := &subEntry{dbID: dbID, state: Subscribed}
-		ent.lastTs.Store(time.Now().UnixNano())
-
-		if e.pClient.subscribed.m == nil {
-			e.pClient.subscribed.m = make(map[uint64]*subEntry)
-		}
-		e.pClient.subscribed.m[tblID] = ent
-
-		key := statsinfo.StatsInfoKey{
-			AccId:      0,
-			DatabaseID: dbID,
-			TableID:    tblID,
-			TableName:  "t",
-			DbName:     "d",
-		}
-
-		part := e.GetOrCreateLatestPart(ctx, 0, dbID, tblID)
-		state, done := part.MutateState()
-		oid := types.NewObjectid()
-		stats := objectio.NewObjectStatsWithObjectID(&oid, false, false, false)
-		require.NoError(t, objectio.SetObjectStatsBlkCnt(stats, 1))
-		require.NoError(t, objectio.SetObjectStatsRowCnt(stats, 1))
-		require.NoError(t, objectio.SetObjectStatsSize(stats, 1))
-		require.NoError(t, state.HandleObjectEntry(ctx, nil, objectio.ObjectEntry{
-			ObjectStats: *stats,
-			CreateTime:  types.BuildTS(time.Now().UnixNano(), 0),
-		}, false))
-		done()
+		key, _ := installRemoteStatsTestTable(t, ctx, e, dbID, tblID)
 
 		remoteInfo := plan2.NewStatsInfo()
 		remoteInfo.TableCnt = 42
@@ -2682,8 +2706,9 @@ func TestGlobalStatsGetDoesNotCacheRemoteInfoAfterUnsubscribe(t *testing.T) {
 		oldQC := e.qc
 		oldRouter := gs.KeyRouter
 		oldHook := gs.beforeCacheRemoteInfo
+		router := &mockStatsKeyRouter{target: "cn1"}
 		e.qc = qc
-		gs.KeyRouter = &mockStatsKeyRouter{target: "cn1"}
+		gs.KeyRouter = router
 		defer func() {
 			e.qc = oldQC
 			gs.KeyRouter = oldRouter
@@ -2710,6 +2735,16 @@ func TestGlobalStatsGetDoesNotCacheRemoteInfoAfterUnsubscribe(t *testing.T) {
 		case <-time.After(time.Second):
 			t.Fatal("GlobalStats.Get did not request remote stats")
 		}
+		require.Equal(t, "cn1", qc.target)
+		require.Equal(t, statsinfo.StatsInfoKey{
+			DatabaseID: key.DatabaseID,
+			TableID:    key.TableID,
+		}, router.key)
+		require.NotNil(t, qc.request)
+		require.Equal(t, querypb.CmdMethod_GetStatsInfo, qc.request.CmdMethod)
+		require.NotNil(t, qc.request.GetStatsInfoRequest)
+		require.NotNil(t, qc.request.GetStatsInfoRequest.StatsInfoKey)
+		require.Equal(t, key, *qc.request.GetStatsInfoRequest.StatsInfoKey)
 
 		close(qc.allowReturn)
 
@@ -2733,5 +2768,38 @@ func TestGlobalStatsGetDoesNotCacheRemoteInfoAfterUnsubscribe(t *testing.T) {
 		_, ok := gs.mu.statsInfoMap[key]
 		gs.mu.Unlock()
 		assert.False(t, ok)
+		require.Equal(t, int32(1), qc.releases.Load())
+	})
+}
+
+func TestGlobalStatsGetReleasesRemoteResponseWithoutStatsPayload(t *testing.T) {
+	runTest(t, func(ctx context.Context, e *Engine) {
+		gs := e.globalStats
+		key, _ := installRemoteStatsTestTable(t, ctx, e, 101, 10002)
+		qc := &mockStatsQueryClient{response: &querypb.Response{}}
+
+		oldQC := e.qc
+		oldRouter := gs.KeyRouter
+		router := &mockStatsKeyRouter{target: "cn-empty"}
+		e.qc = qc
+		gs.KeyRouter = router
+		defer func() {
+			e.qc = oldQC
+			gs.KeyRouter = oldRouter
+		}()
+
+		getCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
+		defer cancel()
+		require.Nil(t, gs.Get(getCtx, key, false))
+		require.Equal(t, "cn-empty", qc.target)
+		require.Equal(t, statsinfo.StatsInfoKey{
+			DatabaseID: key.DatabaseID,
+			TableID:    key.TableID,
+		}, router.key)
+		require.NotNil(t, qc.request)
+		require.NotNil(t, qc.request.GetStatsInfoRequest)
+		require.NotNil(t, qc.request.GetStatsInfoRequest.StatsInfoKey)
+		require.Equal(t, key, *qc.request.GetStatsInfoRequest.StatsInfoKey)
+		require.Equal(t, int32(1), qc.releases.Load())
 	})
 }

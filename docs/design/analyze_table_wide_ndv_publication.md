@@ -4,7 +4,7 @@
 - Tracking issue: [matrixorigin/matrixone#27728](https://github.com/matrixorigin/matrixone/issues/27728)
 - Implementation PR: [matrixorigin/matrixone#28067](https://github.com/matrixorigin/matrixone/pull/28067)
 - Builds on: `docs/design/analyze_stats_publication.md`
-- Last updated: 2026-09-03
+- Last updated: 2026-09-04
 
 ## 1. Problem
 
@@ -102,6 +102,10 @@ analyzed.
     from the same table-definition version. An unversioned remote reader cannot
     export it; a local diagnostic reader may inspect it. A later metadata-only
     refresh atomically replaces the entry and removes the local version binding.
+    Cross-CN lookup routes by the advertised physical `(database ID, table ID)`
+    identity, sends the complete statistics key in the RPC payload, and releases
+    every successful pooled response even when its optional stats payload is
+    absent.
 12. Current-table lookup treats the newest row for each table name as
     authoritative. A DROP tombstone hides historical live rows, while
     TRUNCATE exposes only the replacement table identity.
@@ -159,6 +163,7 @@ The acceptance matrix covers:
 - NDV above row count, retained NDV/NULL counts above a newly exact row count,
   unknown columns, negative/fractional/non-finite result cells, schema-version
   replacement both before and after publication, unversioned remote reads,
+  complete remote request encoding, physical-key routing, empty-response release,
   DROP tombstones, TRUNCATE replacement identities, malformed result shape,
   cancellation, refresh failure, and subscription cleanup races;
 - multiple tables in one ANALYZE statement and unrelated-table parallelism;

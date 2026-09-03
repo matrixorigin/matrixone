@@ -716,12 +716,30 @@ func (gs *GlobalStats) get(
 	// Get stats info from remote node.
 	if !incompatible && gs.KeyRouter != nil && gs.engine.qc != nil {
 		client := gs.engine.qc
-		target := gs.KeyRouter.Target(key)
+		// Gossip advertises statistics ownership by the stable physical table
+		// identity only. Names and account context are needed by the stats
+		// producer, but including them in the exact router-map lookup would not
+		// match the advertised key and would silently disable remote reuse.
+		routingKey := pb.StatsInfoKey{
+			DatabaseID: key.DatabaseID,
+			TableID:    key.TableID,
+		}
+		target := gs.KeyRouter.Target(routingKey)
 		if len(target) != 0 {
-			resp, err := client.SendMessage(ctx, target, client.NewRequest(query.CmdMethod_GetStatsInfo))
+			req := client.NewRequest(query.CmdMethod_GetStatsInfo)
+			req.GetStatsInfoRequest = &query.GetStatsInfoRequest{
+				StatsInfoKey: &key,
+			}
+			resp, err := client.SendMessage(ctx, target, req)
 			if err != nil || resp == nil {
-				logutil.Errorf("failed to send request to %s, err: %v, resp: %v", "", err, resp)
-			} else if resp.GetStatsInfoResponse != nil {
+				logutil.Errorf("failed to send request to %s, err: %v, resp: %v", target, err, resp)
+			} else if resp.GetStatsInfoResponse == nil || resp.GetStatsInfoResponse.StatsInfo == nil {
+				// A remote miss may fall back to a synchronous local build. Return
+				// the empty pooled response before that potentially long wait.
+				client.Release(resp)
+			} else {
+				// Keep a response that owns usable stats alive until the stats have
+				// been copied into the local cache (or rejected by the lifetime gate).
 				defer client.Release(resp)
 				remoteInfo = resp.GetStatsInfoResponse.StatsInfo
 			}
