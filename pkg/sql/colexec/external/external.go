@@ -82,6 +82,12 @@ func (external *External) Prepare(proc *process.Process) error {
 	}
 
 	param := external.Es
+	if param == nil {
+		return moerr.NewInvalidInput(proc.Ctx, "external parameter is missing")
+	}
+	if param.Fileparam == nil {
+		return moerr.NewInvalidInput(proc.Ctx, "external file parameter is missing")
+	}
 	if err := validateParquetWholeFileFanoutProtocol(proc, param); err != nil {
 		return err
 	}
@@ -144,6 +150,12 @@ func (external *External) Prepare(proc *process.Process) error {
 	}
 	param.Ctx = proc.Ctx
 	param.addParquetProfile(icebergParquetProfileStats(param))
+	// Validate the physical output mapping before constructing a reader. A
+	// failed mapping must not leave a reader or batch behind for the caller to
+	// clean up after Prepare returns an error.
+	if err := validateExternalOutputAttrs(proc.Ctx, param.Attrs, param.Cols); err != nil {
+		return err
+	}
 
 	// Filter public preprocessing
 	if param.Filter == nil {
@@ -223,9 +235,12 @@ func (external *External) Prepare(proc *process.Process) error {
 		if param.Extern.Format == tree.PARQUET {
 			flag = false
 		}
-		//alloc space for vector
-		for i := range param.Attrs {
-			typ := makeType(&param.Cols[i].Typ, flag)
+		// Allocate output vectors in Attrs order, but resolve their physical
+		// types through ColIndex. Generated or hidden columns can be omitted
+		// from Attrs, so output position and table-column position differ.
+		for i, attr := range param.Attrs {
+			colIndex := int(attr.ColIndex)
+			typ := makeType(&param.Cols[colIndex].Typ, flag)
 			external.ctr.buf.Vecs[i] = vector.NewOffHeapVecWithType(typ)
 		}
 	}
@@ -255,6 +270,16 @@ func validateParquetWholeFileFanoutProtocol(proc *process.Process, param *Extern
 	protocolVersion, ok := version.(int64)
 	if !ok || protocolVersion < defines.MORPCVersion45 {
 		return moerr.NewNotSupported(proc.Ctx, "Parquet whole-file fanout remote execution requires MORPC protocol version 45")
+	}
+	return nil
+}
+
+func validateExternalOutputAttrs(ctx context.Context, attrs []plan.ExternAttr, cols []*plan.ColDef) error {
+	for _, attr := range attrs {
+		colIndex := int(attr.ColIndex)
+		if colIndex < 0 || colIndex >= len(cols) || cols[colIndex] == nil {
+			return moerr.NewInvalidInputf(ctx, "external output column index %d is invalid", attr.ColIndex)
+		}
 	}
 	return nil
 }

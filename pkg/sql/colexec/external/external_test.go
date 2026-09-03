@@ -407,6 +407,107 @@ func TestPrepareSetsLoadEmptyNumericAsZeroForParallelRequestedLoad(t *testing.T)
 	}
 }
 
+func TestPrepareAllocatesArrowVectorsByPhysicalColumnIndex(t *testing.T) {
+	proc := testutil.NewProc(t)
+	defer proc.Free()
+
+	fs, err := fileservice.NewMemoryFS("arrow-prepare", fileservice.DisabledCacheConfig, nil)
+	require.NoError(t, err)
+	param := externalArrowParam(fs, "arrow-prepare:unused.arrow", 0, tree.ARROW_CONTAINER_FILE)
+	param.Attrs = []plan.ExternAttr{
+		{ColName: "payload", ColIndex: 0},
+		{ColName: "id", ColIndex: 2},
+	}
+	param.Cols = []*plan.ColDef{
+		{Name: "payload", Typ: plan.Type{Id: int32(types.T_varchar), Width: 100}},
+		{Name: "generated", Typ: plan.Type{Id: int32(types.T_varchar), Width: 100}},
+		{Name: "id", Typ: plan.Type{Id: int32(types.T_int64)}},
+	}
+
+	registry, err := mpool.NewAllocationAccountRegistry(1, 128)
+	require.NoError(t, err)
+	account, err := registry.Open(64 << 20)
+	require.NoError(t, err)
+	arg := NewArgument().WithEs(param)
+	require.NoError(t, arg.SetAllocationAccount(account))
+	require.NoError(t, arg.Prepare(proc))
+
+	// Attrs is the physical-column projection. The second output slot maps to
+	// Cols[2], even though Cols[1] is a generated column omitted from Attrs.
+	require.Equal(t, types.T_int64, arg.ctr.buf.Vecs[1].GetType().Oid)
+
+	arg.Free(proc, false, nil)
+	require.NoError(t, arg.ClearAllocationAccount(account))
+	arg.Release()
+	account.Seal()
+	_, err = registry.Finalize(account)
+	require.NoError(t, err)
+}
+
+func TestExternalPrepareRejectsMissingFileParam(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	defer proc.Free()
+
+	param := &ExternalParam{
+		ExParamConst: ExParamConst{
+			FileList: []string{"unused.csv"},
+			Extern: &tree.ExternParam{
+				ExParamConst: tree.ExParamConst{
+					Format: tree.CSV,
+					Tail:   &tree.TailParameter{},
+				},
+				ExParam: tree.ExParam{ExternType: int32(plan.ExternType_LOAD)},
+			},
+		},
+	}
+	arg := &External{Es: param}
+
+	var err error
+	require.NotPanics(t, func() {
+		err = arg.Prepare(proc)
+	})
+	require.Error(t, err)
+	require.ErrorContains(t, err, "external file parameter is missing")
+}
+
+func TestExternalPrepareRejectsInvalidAttrIndexWithoutPartialState(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	defer proc.Free()
+
+	fs, err := fileservice.NewMemoryFS("arrow-prepare-invalid-attr", fileservice.DisabledCacheConfig, nil)
+	require.NoError(t, err)
+	param := externalArrowParam(fs, "arrow-prepare-invalid-attr:unused.arrow", 0, tree.ARROW_CONTAINER_FILE)
+	param.Attrs = []plan.ExternAttr{
+		{ColName: "id", ColIndex: 0},
+		{ColName: "missing", ColIndex: 2},
+	}
+	param.Cols = []*plan.ColDef{
+		{Name: "id", Typ: plan.Type{Id: int32(types.T_int64)}},
+		{Name: "name", Typ: plan.Type{Id: int32(types.T_varchar), Width: 100}},
+	}
+
+	registry, err := mpool.NewAllocationAccountRegistry(1, 128)
+	require.NoError(t, err)
+	account, err := registry.Open(64 << 20)
+	require.NoError(t, err)
+	arg := NewArgument().WithEs(param)
+	defer func() {
+		arg.Free(proc, true, err)
+		require.NoError(t, arg.ClearAllocationAccount(account))
+		arg.Release()
+		account.Seal()
+		_, finalizeErr := registry.Finalize(account)
+		require.NoError(t, finalizeErr)
+	}()
+	require.NoError(t, arg.SetAllocationAccount(account))
+
+	err = arg.Prepare(proc)
+	require.Error(t, err)
+	require.ErrorContains(t, err, "external output column index 2 is invalid")
+	require.Nil(t, arg.reader)
+	require.Nil(t, arg.ctr.buf)
+}
+
 func TestGetColDataParallelLoadNullNumericRemainsNull(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	defer proc.Free()

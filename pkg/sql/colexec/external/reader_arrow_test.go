@@ -142,6 +142,15 @@ func TestArrowLoadErrorCategory(t *testing.T) {
 	}
 }
 
+func TestArrowReaderOpenRejectsMissingFileParam(t *testing.T) {
+	proc := testutil.NewProc(t)
+	reader := new(ArrowReader)
+	_, err := reader.Open(&ExternalParam{
+		ExParamConst: ExParamConst{Extern: &tree.ExternParam{}},
+	}, proc)
+	require.ErrorContains(t, err, "file parameter")
+}
+
 type countingArrowCapacityLease struct {
 	releases atomic.Int64
 }

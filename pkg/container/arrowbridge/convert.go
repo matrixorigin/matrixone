@@ -23,6 +23,7 @@ import (
 
 	"github.com/apache/arrow-go/v18/arrow"
 	"github.com/apache/arrow-go/v18/arrow/array"
+	"github.com/apache/arrow-go/v18/arrow/decimal128"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -176,6 +177,23 @@ func convertFixed(
 			}
 			if !column.IsNull(row) && (value < 0 || value >= microsPerDay) {
 				return nil, stats, moerr.NewConstraintViolationf(ctx, "Arrow Time64 value at row %d is outside [0,24h)", row)
+			}
+		}
+	}
+	if column.DataType().ID() == arrow.DECIMAL128 {
+		decimalType, ok := column.DataType().(*arrow.Decimal128Type)
+		values, valuesOK := column.(*array.Decimal128)
+		if !ok || !valuesOK {
+			return nil, stats, moerr.NewInvalidInput(ctx, "invalid Arrow Decimal128 array")
+		}
+		for row := 0; row < values.Len(); row++ {
+			if err := checkConvertContext(ctx, row); err != nil {
+				return nil, stats, err
+			}
+			if !column.IsNull(row) {
+				if err := validateDecimal128Value(ctx, values.Value(row), decimalType.Precision, row); err != nil {
+					return nil, stats, err
+				}
 			}
 		}
 	}
@@ -613,7 +631,13 @@ func materializeConverted(
 				return fail(err)
 			}
 			if binding.target.Type.Oid == types.T_date {
-				date := types.DaysFromUnixEpochToDate(int32(value))
+				date := types.Date(0)
+				if !values.IsNull(row) {
+					date, err = arrowDaysToDate(int64(value))
+					if err != nil {
+						return fail(moerr.NewConstraintViolationf(ctx, "Arrow Date32 value at row %d is out of MatrixOne range", row))
+					}
+				}
 				if err := vector.AppendFixed(vec, date, values.IsNull(row), mp); err != nil {
 					return fail(err)
 				}
@@ -642,7 +666,14 @@ func materializeConverted(
 				return fail(moerr.NewConstraintViolationf(ctx, "Arrow Date64 value at row %d is not an integral representable day", row))
 			}
 			if binding.target.Type.Oid == types.T_date {
-				if err := vector.AppendFixed(vec, types.DaysFromUnixEpochToDate(int32(days)), values.IsNull(row), mp); err != nil {
+				date := types.Date(0)
+				if !values.IsNull(row) {
+					date, err = arrowDaysToDate(days)
+					if err != nil {
+						return fail(moerr.NewConstraintViolationf(ctx, "Arrow Date64 value at row %d is out of MatrixOne range", row))
+					}
+				}
+				if err := vector.AppendFixed(vec, date, values.IsNull(row), mp); err != nil {
 					return fail(err)
 				}
 			} else {
@@ -868,6 +899,30 @@ func timeToMicros(value int64, unit arrow.TimeUnit) (int64, error) {
 	}
 }
 
+// validateDecimal128Value closes the gap between Arrow's schema precision and
+// the actual raw scaled integer stored in a Decimal128 array. Exact-layout
+// conversion borrows that integer, so accepting an oversized value would let
+// a target DECIMAL column observe a value outside its declared range.
+func validateDecimal128Value(ctx context.Context, value decimal128.Num, precision int32, row int) error {
+	if !value.FitsInPrecision(precision) {
+		return moerr.NewConstraintViolationf(ctx,
+			"Arrow Decimal128 value at row %d exceeds precision %d", row, precision)
+	}
+	return nil
+}
+
+func arrowDaysToDate(days int64) (types.Date, error) {
+	if days < math.MinInt32 || days > math.MaxInt32 {
+		return 0, moerr.NewOutOfRangeNoCtx("date", "MatrixOne")
+	}
+	value := types.DaysFromUnixEpochToDate(int32(days))
+	year, month, day, _ := value.Calendar(true)
+	if !types.ValidDate(year, month, day) {
+		return 0, moerr.NewOutOfRangeNoCtx("date", "MatrixOne")
+	}
+	return value, nil
+}
+
 func arrowDaysToDatetime(days int64) (types.Datetime, error) {
 	if days > math.MaxInt64/(24*60*60) || days < math.MinInt64/(24*60*60) {
 		return 0, moerr.NewOutOfRangeNoCtx("date", "MatrixOne datetime")
@@ -1052,6 +1107,15 @@ func appendDictionaryValue(
 		return 0, appendDictionaryFixed(vec, typed.Value(index), isNull, mp)
 	case *array.Decimal128:
 		value := typed.Value(index)
+		if !isNull {
+			decimalType, ok := values.DataType().(*arrow.Decimal128Type)
+			if !ok {
+				return 0, moerr.NewInvalidInputf(ctx, "invalid Arrow Decimal128 dictionary type %T", values.DataType())
+			}
+			if err := validateDecimal128Value(ctx, value, decimalType.Precision, row); err != nil {
+				return 0, err
+			}
+		}
 		converted := types.Decimal128{B0_63: value.LowBits(), B64_127: uint64(value.HighBits())}
 		return 0, appendDictionaryFixed(vec, converted, isNull, mp)
 	case *array.Time64:
@@ -1064,14 +1128,27 @@ func appendDictionaryValue(
 		return 0, appendDictionaryFixed(vec, types.Time(value), isNull, mp)
 	case *array.Boolean:
 		return 0, appendDictionaryFixed(vec, typed.Value(index), isNull, mp)
+	case *array.Null:
+		return 0, appendDictionaryNull(vec, target, mp)
 	case *array.Date32:
 		if target.Oid == types.T_date {
-			value := types.DaysFromUnixEpochToDate(int32(typed.Value(index)))
+			value := types.Date(0)
+			if !isNull {
+				var err error
+				value, err = arrowDaysToDate(int64(typed.Value(index)))
+				if err != nil {
+					return 0, moerr.NewConstraintViolationf(ctx, "Arrow Date32 value at row %d is out of MatrixOne range", row)
+				}
+			}
 			return 0, appendDictionaryFixed(vec, value, isNull, mp)
 		}
-		value, err := arrowDaysToDatetime(int64(typed.Value(index)))
-		if err != nil {
-			return 0, moerr.NewConstraintViolationf(ctx, "Arrow Date32 value at row %d is out of MatrixOne range", row)
+		value := types.Datetime(0)
+		if !isNull {
+			var err error
+			value, err = arrowDaysToDatetime(int64(typed.Value(index)))
+			if err != nil {
+				return 0, moerr.NewConstraintViolationf(ctx, "Arrow Date32 value at row %d is out of MatrixOne range", row)
+			}
 		}
 		return 0, appendDictionaryFixed(vec, value, isNull, mp)
 	case *array.Date64:
@@ -1083,13 +1160,25 @@ func appendDictionaryValue(
 				"Arrow Date64 value at row %d is not an integral representable day", row)
 		}
 		if target.Oid == types.T_date {
-			return 0, appendDictionaryFixed(vec, types.DaysFromUnixEpochToDate(int32(days)), isNull, mp)
+			date := types.Date(0)
+			if !isNull {
+				var err error
+				date, err = arrowDaysToDate(days)
+				if err != nil {
+					return 0, moerr.NewConstraintViolationf(ctx, "Arrow Date64 value at row %d is out of MatrixOne range", row)
+				}
+			}
+			return 0, appendDictionaryFixed(vec, date, isNull, mp)
 		}
-		converted, err := arrowDaysToDatetime(days)
-		if err != nil {
-			return 0, moerr.NewConstraintViolationf(ctx, "Arrow Date64 value at row %d is out of MatrixOne range", row)
+		datetime := types.Datetime(0)
+		if !isNull {
+			var err error
+			datetime, err = arrowDaysToDatetime(days)
+			if err != nil {
+				return 0, moerr.NewConstraintViolationf(ctx, "Arrow Date64 value at row %d is out of MatrixOne range", row)
+			}
 		}
-		return 0, appendDictionaryFixed(vec, converted, isNull, mp)
+		return 0, appendDictionaryFixed(vec, datetime, isNull, mp)
 	case *array.Timestamp:
 		timestampType, ok := values.DataType().(*arrow.TimestampType)
 		if !ok {
@@ -1133,9 +1222,14 @@ func appendDictionaryFixed[T any](vec *vector.Vector, value T, isNull bool, mp *
 }
 
 func appendDictionaryNull(vec *vector.Vector, target types.Type, mp *mpool.MPool) error {
+	if target.IsVarlen() {
+		return vector.AppendBytes(vec, nil, true, mp)
+	}
 	switch target.Oid {
 	case types.T_bool:
 		return vector.AppendFixed(vec, false, true, mp)
+	case types.T_bit:
+		return vector.AppendFixed(vec, uint64(0), true, mp)
 	case types.T_int8:
 		return vector.AppendFixed(vec, int8(0), true, mp)
 	case types.T_int16:
@@ -1156,8 +1250,24 @@ func appendDictionaryNull(vec *vector.Vector, target types.Type, mp *mpool.MPool
 		return vector.AppendFixed(vec, float32(0), true, mp)
 	case types.T_float64:
 		return vector.AppendFixed(vec, float64(0), true, mp)
+	case types.T_year:
+		return vector.AppendFixed(vec, types.MoYear(0), true, mp)
+	case types.T_enum:
+		return vector.AppendFixed(vec, types.Enum(0), true, mp)
+	case types.T_decimal64:
+		return vector.AppendFixed(vec, types.Decimal64(0), true, mp)
 	case types.T_decimal128:
 		return vector.AppendFixed(vec, types.Decimal128{}, true, mp)
+	case types.T_decimal256:
+		return vector.AppendFixed(vec, types.Decimal256{}, true, mp)
+	case types.T_uuid:
+		return vector.AppendFixed(vec, types.Uuid{}, true, mp)
+	case types.T_TS:
+		return vector.AppendFixed(vec, types.TS{}, true, mp)
+	case types.T_Rowid:
+		return vector.AppendFixed(vec, types.Rowid{}, true, mp)
+	case types.T_Blockid:
+		return vector.AppendFixed(vec, types.Blockid{}, true, mp)
 	case types.T_date:
 		return vector.AppendFixed(vec, types.Date(0), true, mp)
 	case types.T_time:

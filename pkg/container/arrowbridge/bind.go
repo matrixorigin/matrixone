@@ -24,6 +24,7 @@ import (
 	"strings"
 
 	"github.com/apache/arrow-go/v18/arrow"
+	"github.com/apache/arrow-go/v18/arrow/decimal128"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 )
@@ -210,6 +211,9 @@ func validateSchemaShape(ctx context.Context, schema *arrow.Schema) error {
 		if current.field.Type == nil {
 			return moerr.NewInvalidInputf(ctx, "Arrow field %q type is nil", current.field.Name)
 		}
+		if err := validateArrowTypeContract(ctx, current.field.Name, current.field.Type); err != nil {
+			return err
+		}
 		if current.depth > MaxNestingDepth {
 			return moerr.NewInvalidInputf(ctx,
 				"Arrow field %q nesting depth exceeds %d", current.field.Name, MaxNestingDepth)
@@ -220,6 +224,33 @@ func validateSchemaShape(ctx context.Context, schema *arrow.Schema) error {
 				pending = append(pending, pendingField{field: child, depth: current.depth + 1})
 			}
 		}
+	}
+	return nil
+}
+
+// validateArrowTypeContract checks type metadata that later conversion code
+// relies on for bounded arithmetic. Dictionary value types are not exposed as
+// NestedType children by Arrow, so they need an explicit recursive check here.
+func validateArrowTypeContract(ctx context.Context, fieldName string, typ arrow.DataType) error {
+	switch typed := typ.(type) {
+	case *arrow.Decimal128Type:
+		if typed.Precision < 1 || typed.Precision > decimal128.MaxPrecision {
+			return moerr.NewInvalidInputf(ctx,
+				"Arrow field %q has invalid Decimal128 precision %d", fieldName, typed.Precision)
+		}
+	case *arrow.TimestampType:
+		// GetZone validates both IANA names and fixed offsets. Do this while
+		// binding the schema so an invalid timezone cannot survive until the
+		// first record happens to exercise the timestamp conversion.
+		if _, err := typed.GetZone(); err != nil {
+			return moerr.NewInvalidInputf(ctx,
+				"Arrow field %q has invalid timestamp timezone %q: %v", fieldName, typed.TimeZone, err)
+		}
+	case *arrow.DictionaryType:
+		if typed.ValueType == nil {
+			return moerr.NewInvalidInputf(ctx, "Arrow field %q has a dictionary with nil value type", fieldName)
+		}
+		return validateArrowTypeContract(ctx, fieldName, typed.ValueType)
 	}
 	return nil
 }
