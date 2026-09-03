@@ -11811,23 +11811,35 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, t
 					},
 				}
 				tableDef.Cols = append(tableDef.Cols, col)
-			} else if externType == plan.ExternType_FOREIGN_TB {
+			} else if externType == plan.ExternType_FOREIGN_TB || externType == plan.ExternType_MONGODB_TB {
 				// The hidden query-text column: `__mo_query = '<text>'`
-				// predicates select what is sent to the foreign source, and
+				// predicates select what is sent to the foreign/MongoDB source, and
 				// each returned row carries the text that produced it. Must
 				// stay the LAST column (the query-level filter classifier
-				// requires it).
-				col := &ColDef{
-					ColId: catalog.ExternalQueryColId,
-					Name:  catalog.ExternalQuery,
-					Typ: plan.Type{
-						Id:      int32(types.T_varchar),
-						Width:   types.MaxVarcharLen,
-						Table:   table,
-						Charset: uint32(types.CharsetUTF8),
-					},
+				// requires it). An older external table may already have a
+				// mapped, real column of the same name. Keep that legacy column
+				// addressable instead of making the binding ambiguous; the explicit
+				// query carrier is unavailable for that colliding schema.
+				hasLegacyQueryColumn := false
+				for _, existing := range tableDef.Cols {
+					if existing != nil && strings.EqualFold(existing.Name, catalog.ExternalQuery) {
+						hasLegacyQueryColumn = true
+						break
+					}
 				}
-				tableDef.Cols = append(tableDef.Cols, col)
+				if !hasLegacyQueryColumn {
+					col := &ColDef{
+						ColId: catalog.ExternalQueryColId,
+						Name:  catalog.ExternalQuery,
+						Typ: plan.Type{
+							Id:      int32(types.T_varchar),
+							Width:   types.MaxVarcharLen,
+							Table:   table,
+							Charset: uint32(types.CharsetUTF8),
+						},
+					}
+					tableDef.Cols = append(tableDef.Cols, col)
+				}
 			} else if externType == plan.ExternType_KAFKA_TB {
 				// Synthetic Kafka columns: four per-message metadata columns
 				// and three WHERE-only read controls (their conjuncts are
@@ -12098,7 +12110,7 @@ func (builder *QueryBuilder) refreshMongoScanPushdown(node *plan.Node) error {
 	scan := node.ExternScan.MongodbScan
 	names := make([]string, 0, len(node.TableDef.Cols))
 	for _, column := range node.TableDef.Cols {
-		if column != nil && !column.Hidden {
+		if column != nil && !column.Hidden && !catalog.IsForeignQueryCol(column.Name, column.ColId) {
 			names = append(names, column.Name)
 		}
 	}

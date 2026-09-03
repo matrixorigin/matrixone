@@ -20,6 +20,7 @@ import (
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/stretchr/testify/require"
 )
 
@@ -46,4 +47,42 @@ func TestDataStreamCreateStatementLoggingRedactsApiKey(t *testing.T) {
 	ordinaryStmt, err := mysql.ParseOne(context.Background(), ordinary, 1)
 	require.NoError(t, err)
 	require.Equal(t, ordinary, redactStatementTextForLogging(ordinaryStmt, ordinary))
+}
+
+func TestMongoDBQueryStatementLoggingRedactsSelector(t *testing.T) {
+	for _, test := range []struct {
+		name  string
+		sql   string
+		parse bool
+	}{
+		{
+			name:  "filter",
+			sql:   `select * from mongo_events where __mo_query = '{"filter":{"password":"super-secret-value"}}'`,
+			parse: true,
+		},
+		{
+			name:  "pipeline",
+			sql:   `select * from mongo_events where __MO_QUERY = '{"pipeline":[{"$match":{"api_key":"super-secret-value"}}]}'`,
+			parse: true,
+		},
+		{
+			name: "without AST",
+			sql:  `select * from mongo_events where __mo_query = '{"filter":{"password":"super-secret-value"}'`,
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			var stmt tree.Statement
+			if test.parse {
+				var err error
+				stmt, err = mysql.ParseOne(context.Background(), test.sql, 1)
+				require.NoError(t, err)
+			}
+
+			redacted := redactStatementTextForLogging(stmt, test.sql)
+			require.NotContains(t, redacted, "password")
+			require.NotContains(t, redacted, "api_key")
+			require.NotContains(t, redacted, "super-secret-value")
+			require.Equal(t, "<redacted MongoDB __mo_query statement>", redacted)
+		})
+	}
 }
