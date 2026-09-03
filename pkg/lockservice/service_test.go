@@ -5558,6 +5558,12 @@ func TestHandleBindChangedConcurrently(t *testing.T) {
 			ctx context.Context,
 			s *service,
 			lt *localLockTable) {
+			// This is a scheduler-sensitive stress test: 20 workers each
+			// perform 1000 lock/unlock pairs while bind-change handling runs.
+			// Do not let the runner's ordinary 20-second operation budget turn
+			// aggregate CI load into spurious context deadline failures.
+			stressCtx, cancel := context.WithTimeout(context.Background(), time.Minute)
+			defer cancel()
 			bind := lt.getBind()
 			core, logs := observer.New(zap.InfoLevel)
 			s.logger = log.GetServiceLogger(zap.New(core), metadata.ServiceType_CN, s.serviceID).
@@ -5574,9 +5580,9 @@ func TestHandleBindChangedConcurrently(t *testing.T) {
 					rows := newTestRows(1)
 					txn := newTestTxnID(byte(i))
 					for i := 0; i < 1000; i++ {
-						_, err := s.Lock(ctx, table, rows, txn, option)
+						_, err := s.Lock(stressCtx, table, rows, txn, option)
 						require.NoError(t, err)
-						require.NoError(t, s.Unlock(ctx, txn, timestamp.Timestamp{}))
+						require.NoError(t, s.Unlock(stressCtx, txn, timestamp.Timestamp{}))
 					}
 				}(i)
 			}
