@@ -152,6 +152,34 @@ type UpdaterJob struct {
 	Key       *WatermarkKey
 	Watermark types.TS
 	ErrMsg    string
+	done      chan struct{}
+}
+
+func (job *UpdaterJob) Init(ctx context.Context, id string, typ tasks.JobType, exec tasks.JobExecutor) {
+	job.Job.Init(ctx, id, typ, exec)
+	job.done = make(chan struct{})
+}
+
+func (job *UpdaterJob) WaitDoneContext(ctx context.Context) *tasks.JobResult {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	select {
+	case <-job.done:
+		return job.GetResult()
+	case <-ctx.Done():
+		return &tasks.JobResult{Err: context.Cause(ctx)}
+	}
+}
+
+func (job *UpdaterJob) DoneWithErr(err error) {
+	job.Job.DoneWithErr(err)
+	close(job.done)
+}
+
+func (job *UpdaterJob) DoneWithResult(res any) {
+	job.Job.DoneWithResult(res)
+	close(job.done)
 }
 
 type UpdateOption func(*CDCWatermarkUpdater)

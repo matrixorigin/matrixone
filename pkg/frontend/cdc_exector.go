@@ -177,6 +177,8 @@ type CDCTaskExecutor struct {
 	callbackCtx                   context.Context
 	callbackCancel                context.CancelFunc
 	callbackGeneration            atomic.Uint64
+	readerShutdownMu              sync.Mutex
+	readerShutdownDone            <-chan struct{}
 	restartWaitMu                 sync.Mutex
 	restartWaiters                map[uint64]chan error
 	restartCatalogState           map[uint64]string
@@ -1502,7 +1504,7 @@ func (exec *CDCTaskExecutor) Cancel() (err error) {
 		attempt.cancel()
 	}
 	readersStopped := true
-	var readersDone <-chan struct{}
+	readersDone := exec.readerShutdownCompletion()
 	if wasActive {
 		cdc.GetTableDetector(exec.cnUUID).UnRegister(exec.spec.TaskId)
 		exec.closeActiveRoutineCancel()
@@ -1510,6 +1512,9 @@ func (exec *CDCTaskExecutor) Cancel() (err error) {
 		// Synchronously wait for all readers to stop before proceeding
 		// This ensures no goroutine leaks and no interference with new tasks
 		readersStopped, readersDone = exec.stopAllReaders()
+		exec.setReaderShutdownCompletion(readersDone)
+	} else if readersDone != nil {
+		readersStopped = waitForCDCCompletion(readersDone, 10*time.Second)
 
 		// let Start() go
 		select {
@@ -1635,90 +1640,70 @@ func (exec *CDCTaskExecutor) stopAllReaders() (bool, <-chan struct{}) {
 		return true, readersDone
 	}
 
-	logutil.Info(
-		"cdc.frontend.task.stop_all_readers_start",
-		zap.String("task-id", exec.spec.TaskId),
-	)
-
-	// Step 1: Send stop signal to all readers
-	readerCount := 0
+	logutil.Info("cdc.frontend.task.stop_all_readers_start", zap.String("task-id", exec.spec.TaskId))
+	type shutdownEntry struct {
+		key    string
+		reader cdc.ChangeReader
+	}
+	readers := make([]shutdownEntry, 0)
 	exec.runningReaders.Range(func(key, value interface{}) bool {
-		reader := value.(cdc.ChangeReader)
-		tableKey, _ := key.(string)
-		closeStart := time.Now()
-		logutil.Debug(
-			"cdc.frontend.task.stop_reader_close_start",
-			zap.String("task-id", exec.spec.TaskId),
-			zap.String("table", tableKey),
-		)
-		reader.Close()
-		logutil.Debug(
-			"cdc.frontend.task.stop_reader_close_done",
-			zap.String("task-id", exec.spec.TaskId),
-			zap.String("table", tableKey),
-			zap.Duration("cost", time.Since(closeStart)),
-		)
-		readerCount++
+		readers = append(readers, shutdownEntry{key: key.(string), reader: value.(cdc.ChangeReader)})
 		return true
 	})
 
-	// Step 2: Wait for all readers to completely exit. Keep an aggregate
-	// completion signal after the bounded wait so delayed readers can still
-	// release the deletion tombstone safely.
-	allStopped := true
 	var readerWG sync.WaitGroup
-	exec.runningReaders.Range(func(key, value interface{}) bool {
-		reader := value.(cdc.ChangeReader)
-		tableKey, _ := key.(string)
-		waitStart := time.Now()
-		logutil.Debug(
-			"cdc.frontend.task.stop_reader_wait_start",
-			zap.String("task-id", exec.spec.TaskId),
-			zap.String("table", tableKey),
-		)
-		done := make(chan struct{})
-		readerWG.Add(1)
-		go func() {
+	readerWG.Add(len(readers))
+	for _, entry := range readers {
+		go func(entry shutdownEntry) {
 			defer readerWG.Done()
-			reader.Wait()
-			close(done)
-		}()
-		select {
-		case <-done:
-			logutil.Debug(
-				"cdc.frontend.task.stop_reader_wait_done",
-				zap.String("task-id", exec.spec.TaskId),
-				zap.String("table", tableKey),
-				zap.Duration("cost", time.Since(waitStart)),
-			)
-		case <-time.After(10 * time.Second):
-			allStopped = false
-			logutil.Warn(
-				"cdc.frontend.task.stop_reader_wait_timeout",
-				zap.String("task-id", exec.spec.TaskId),
-				zap.String("table", tableKey),
-				zap.Duration("waited", time.Since(waitStart)),
-			)
-		}
-		return true
-	})
-
-	// Step 3: Clear the map
-	exec.runningReaders.Range(func(key, value interface{}) bool {
-		exec.runningReaders.Delete(key)
-		return true
-	})
+			closeStart := time.Now()
+			logutil.Debug("cdc.frontend.task.stop_reader_close_start", zap.String("task-id", exec.spec.TaskId), zap.String("table", entry.key))
+			entry.reader.Close()
+			logutil.Debug("cdc.frontend.task.stop_reader_close_done", zap.String("task-id", exec.spec.TaskId), zap.String("table", entry.key), zap.Duration("cost", time.Since(closeStart)))
+			entry.reader.Wait()
+		}(entry)
+	}
 	go func() {
 		readerWG.Wait()
 		close(readersDone)
 	}()
 
-	logutil.Debug(
-		"cdc.frontend.task.stop_all_readers_complete",
-		zap.String("task-id", exec.spec.TaskId),
-		zap.Int("reader-count", readerCount),
-	)
+	allStopped := waitForCDCCompletion(readersDone, 10*time.Second)
+	if !allStopped {
+		logutil.Warn("cdc.frontend.task.stop_reader_wait_timeout", zap.String("task-id", exec.spec.TaskId), zap.Duration("waited", 10*time.Second))
+	}
+	exec.runningReaders.Range(func(key, value interface{}) bool {
+		exec.runningReaders.Delete(key)
+		return true
+	})
+	logutil.Debug("cdc.frontend.task.stop_all_readers_complete", zap.String("task-id", exec.spec.TaskId), zap.Int("reader-count", len(readers)))
 	return allStopped, readersDone
+}
+
+func waitForCDCCompletion(done <-chan struct{}, timeout time.Duration) bool {
+	if done == nil {
+		return true
+	}
+	timer := time.NewTimer(timeout)
+	defer timer.Stop()
+	select {
+	case <-done:
+		return true
+	case <-timer.C:
+		return false
+	}
+}
+
+func (exec *CDCTaskExecutor) readerShutdownCompletion() <-chan struct{} {
+	exec.readerShutdownMu.Lock()
+	defer exec.readerShutdownMu.Unlock()
+	return exec.readerShutdownDone
+}
+
+func (exec *CDCTaskExecutor) setReaderShutdownCompletion(done <-chan struct{}) {
+	exec.readerShutdownMu.Lock()
+	exec.readerShutdownDone = done
+	exec.readerShutdownMu.Unlock()
 }
 
 func (exec *CDCTaskExecutor) reclaimDeletedWatermark(
