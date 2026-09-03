@@ -16,6 +16,7 @@ package cache
 
 import (
 	"errors"
+	"fmt"
 	"os"
 	"os/signal"
 	"strings"
@@ -60,6 +61,24 @@ const (
 var (
 	VectorIndexCacheTTL time.Duration     = 5 * time.Minute
 	Cache               *VectorIndexCache = NewVectorIndexCache()
+
+	// MaxHistoricalIndexes bounds how many named-snapshot generations may be resident at
+	// once, process-wide (#27927). Each distinct snapshot TS is its own cache key, so
+	// without a bound one client can admit an unbounded number of FULL index instances by
+	// querying N snapshots of the same large index inside one TTL window; the sliding TTL
+	// bounds idle lifetime, not admission rate.
+	//
+	// The bound REFUSES rather than evicts. Evicting a resident generation to make room
+	// does not free it for the query that wanted room: in-flight searches hold the entry's
+	// read lock so Destroy blocks, and every subsequent search on the evicted key retries
+	// into a full reload -- so two hot snapshots under pressure evict each other
+	// indefinitely, making no progress. A clear refusal is the better failure, and it is
+	// transient: an idle generation ages out on the next TTL sweep.
+	//
+	// This is a BACKSTOP for many small indexes. The binding limit for a large one is the
+	// per-algorithm load-time memory gate that already exists and already refuses --
+	// DeviceAggregateFitsFree for the GPU algorithms, checkTailLoadBudget for fulltext2.
+	MaxHistoricalIndexes = 4
 )
 
 type retryableLoadError struct {
@@ -496,6 +515,52 @@ func (c *VectorIndexCache) evictEntry(key string, expected *VectorIndexSearch, r
 	return true
 }
 
+// historicalCount returns how many LIVE named-snapshot generations are resident, excluding
+// the key of the load being admitted (which the caller has already LoadOrStore'd).
+//
+// Only live entries count: an entry whose load errored, or that a concurrent sweep has
+// already claimed, is not holding an index and must not consume the budget.
+func (c *VectorIndexCache) historicalCount(exclude string) int {
+	n := 0
+	c.IndexMap.Range(func(key, value any) bool {
+		k, ok := key.(string)
+		if !ok || k == exclude || !IsSnapshotKey(k) {
+			return true
+		}
+		entry, ok := value.(*VectorIndexSearch)
+		if !ok || entry.evicting.Load() {
+			return true
+		}
+		if st := entry.Status.Load(); st == STATUS_NOT_INIT || st == STATUS_LOADED {
+			n++
+		}
+		return true
+	})
+	return n
+}
+
+// admitHistorical enforces MaxHistoricalIndexes for a snapshot load that is about to begin.
+// It returns nil for a current-generation key (never bounded here -- the bare key is the
+// shared warm entry every ordinary query depends on) and for a snapshot load that fits.
+//
+// It runs AFTER LoadOrStore, not before, so the count and the admission are decided against
+// a key that is already published: a pre-check could let N concurrent misses each observe
+// N-1 and all admit. The caller discards the entry it stored on refusal.
+func (c *VectorIndexCache) admitHistorical(key string) error {
+	if !IsSnapshotKey(key) || MaxHistoricalIndexes <= 0 {
+		return nil
+	}
+	if n := c.historicalCount(key); n >= MaxHistoricalIndexes {
+		return moerr.NewInternalErrorNoCtx(fmt.Sprintf(
+			"too many named-snapshot index generations resident (%d of %d) -- cannot load %q. "+
+				"Snapshot reads load a SEPARATE copy of the index per snapshot timestamp. "+
+				"Retry once an idle generation ages out of the cache (TTL %s), query fewer "+
+				"distinct snapshots concurrently, or raise the limit.",
+			n, MaxHistoricalIndexes, key, VectorIndexCacheTTL))
+	}
+	return nil
+}
+
 func (c *VectorIndexCache) discardFailedLoad(key string, algo *VectorIndexSearch) {
 	if c.IndexMap.CompareAndDelete(key, algo) {
 		algo.destroyFailedLoad()
@@ -552,6 +617,24 @@ func (c *VectorIndexCache) checkStale() {
 		if algo.Status.Load() != STATUS_LOADED {
 			return true // skip loading/errored/destroyed entries
 		}
+		// A named-snapshot generation is IMMUTABLE: it is the index as of a past TS, and
+		// nothing committed since can change what that TS saw. Asking whether it matches
+		// the CURRENT persisted generation is a category error, and answering it evicts a
+		// perfectly good entry two ways (#27927):
+		//
+		//   - once the index has moved on from the snapshot, the generations differ by
+		//     definition, so the entry is stale on EVERY sweep and a hot snapshot can
+		//     never stay warm;
+		//   - after the index is dropped, IsStale's background current-TS query errors,
+		//     and an error is deliberately reported as stale ("dropped out from under
+		//     us") -- yet the snapshot read still works, because a snapshot is a clone:
+		//     `{snapshot=...}` search on a DROPped index still resolves and answers.
+		//
+		// So historical entries are reclaimed by TTL and the MaxHistoricalIndexes bound
+		// only, never by the freshness sweep.
+		if k, ok := key.(string); ok && IsSnapshotKey(k) {
+			return true
+		}
 		if sc, ok := algo.Algo.(StaleChecker); ok {
 			entries = append(entries, staleEntry{algo, sc, key})
 		}
@@ -604,6 +687,13 @@ func (c *VectorIndexCache) Search(sqlproc *sqlexec.SqlProcess, key string, newal
 		value, loaded := c.IndexMap.LoadOrStore(key, s)
 		algo := value.(*VectorIndexSearch)
 		if !loaded {
+			// Bound resident snapshot generations BEFORE paying for the load. Refuses
+			// rather than evicting -- see MaxHistoricalIndexes. The entry this caller
+			// just published is discarded so the key does not linger unloaded.
+			if aerr := c.admitHistorical(key); aerr != nil {
+				c.discardFailedLoad(key, algo)
+				return nil, nil, aerr
+			}
 			// Remove only this exact failed entry, then destroy it without a
 			// key-wide invalidation hook; the loader owns reusable-state rollback.
 			err := algo.Load(sqlproc)
@@ -645,6 +735,13 @@ func (c *VectorIndexCache) SearchInto(sqlproc *sqlexec.SqlProcess, key string, n
 		value, loaded := c.IndexMap.LoadOrStore(key, s)
 		algo := value.(*VectorIndexSearch)
 		if !loaded {
+			// Bound resident snapshot generations BEFORE paying for the load. Refuses
+			// rather than evicting -- see MaxHistoricalIndexes. The entry this caller
+			// just published is discarded so the key does not linger unloaded.
+			if aerr := c.admitHistorical(key); aerr != nil {
+				c.discardFailedLoad(key, algo)
+				return aerr
+			}
 			if err := algo.Load(sqlproc); err != nil {
 				if algo.evicting.Load() {
 					continue

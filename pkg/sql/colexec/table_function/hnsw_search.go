@@ -283,16 +283,20 @@ func runHnswSearch[T types.RealNumbers](proc *process.Process, u *hnswSearchStat
 		OrigFuncName: u.tblcfg.OrigFuncName,
 	}
 	// Named-snapshot search (#27927): read the index at the snapshot TS. sp.SnapshotTS makes
-	// the nested index-load SQL time-travel via a cloned txn; the cache key is suffixed with
-	// the TS -- derived from EffectiveSnapshotTS, the SAME authority that decides the clone --
-	// so the historical index gets its own entry, never served from nor polluting the
-	// current-index entry, and concurrent same-snapshot queries share one load (OOM-safe).
+	// the nested index-load SQL time-travel via a cloned txn; the cache key carries that same
+	// TS -- derived from EffectiveSnapshotTS, the SAME authority that decides the clone -- so
+	// the historical index gets its own entry, never served from nor polluting the
+	// current-index entry, and concurrent same-snapshot queries share one load.
+	//
+	// Distinct snapshots are distinct keys and therefore distinct resident copies; the cache
+	// bounds how many may be resident (veccache.MaxHistoricalIndexes) and REFUSES beyond it,
+	// on top of this algorithm's own load-time memory gate.
 	sp := sqlexec.NewSqlProcess(proc)
 	cacheKey := u.tblcfg.IndexTable
 	if u.scanSnapshot != nil {
 		sp.SnapshotTS = u.scanSnapshot.TS
 		if ets := sp.EffectiveSnapshotTS(); ets != nil {
-			cacheKey = fmt.Sprintf("%s@%d-%d", u.tblcfg.IndexTable, ets.PhysicalTime, ets.LogicalTime)
+			cacheKey = veccache.SnapshotKey(u.tblcfg.IndexTable, *ets)
 		}
 	}
 	var keys any

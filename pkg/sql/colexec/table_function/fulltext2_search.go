@@ -406,11 +406,15 @@ func (u *fulltext2SearchState) start(tf *TableFunction, proc *process.Process, n
 
 	// Named-snapshot MATCH (#27941): read the index at the snapshot TS instead of the
 	// current one. sp.SnapshotTS makes the nested index-load SQL time-travel via a cloned
-	// txn; cacheKey is suffixed with the TS so the historical index gets its OWN cache
-	// entry -- never served from, nor polluting, the current-index entry keyed by name.
-	// Concurrent same-snapshot queries still share one load (the cache single-flights the
-	// key), so this stays OOM-safe. Guarded to a genuinely historical TS (matches
-	// sqlexec.txnForRun), so a non-snapshot query is unchanged.
+	// txn; cacheKey carries that TS so the historical index gets its OWN cache entry --
+	// never served from, nor polluting, the current-index entry keyed by name. Concurrent
+	// same-snapshot queries still share one load (the cache single-flights the key).
+	// Guarded to a genuinely historical TS (matches sqlexec.txnForRun), so a non-snapshot
+	// query is unchanged.
+	//
+	// Distinct snapshots are distinct keys and therefore distinct resident copies; the cache
+	// bounds how many may be resident (veccache.MaxHistoricalIndexes) and REFUSES beyond it,
+	// on top of fulltext2's own checkTailLoadBudget memory gate.
 	cacheKey := u.tblcfg.IndexTable
 	if tf.ScanSnapshot != nil {
 		sp.SnapshotTS = tf.ScanSnapshot.TS
@@ -418,7 +422,7 @@ func (u *fulltext2SearchState) start(tf *TableFunction, proc *process.Process, n
 		// TS-suffixed key and the historical read can never disagree (a mismatch would
 		// pollute the current-index entry with historical data).
 		if ets := sp.EffectiveSnapshotTS(); ets != nil {
-			cacheKey = fmt.Sprintf("%s@%d-%d", u.tblcfg.IndexTable, ets.PhysicalTime, ets.LogicalTime)
+			cacheKey = veccache.SnapshotKey(u.tblcfg.IndexTable, *ets)
 		}
 	}
 
