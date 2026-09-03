@@ -68,20 +68,11 @@ func TestIssue26111DataBranchDatabaseWithCyclicForeignKeys(t *testing.T) {
 		existingTarget = "issue_26111_existing"
 		targetAccount  = "i26111t"
 	)
-	execSQLRequire(t, ctx, db, "drop account if exists `"+targetAccount+"`")
-	execSQLRequire(t, ctx, db, "drop snapshot if exists "+snapshotName)
-	for _, name := range []string{branchDB, snapshotBranch, existingTarget, sourceDB} {
-		execSQLRequire(t, ctx, db, "drop database if exists `"+name+"`")
-	}
-	defer func() {
-		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 30*time.Second)
-		defer cleanupCancel()
-		execSQLMaybe(t, cleanupCtx, db, "drop account if exists `"+targetAccount+"`")
-		execSQLRequire(t, cleanupCtx, db, "drop snapshot if exists "+snapshotName)
-		for _, name := range []string{branchDB, snapshotBranch, existingTarget, sourceDB} {
-			execSQLRequire(t, cleanupCtx, db, "drop database if exists `"+name+"`")
-		}
-	}()
+	// This regression owns a fresh embedded cluster and its private data path.
+	// Closing that cluster makes all SQL state unreachable, so SQL-level pre-clean
+	// and teardown would only duplicate lifecycle ownership. In particular, DROP
+	// ACCOUNT expands with the tenant catalog and can exhaust a shared cleanup
+	// deadline before the remaining objects are visited.
 
 	execSQLRequire(t, ctx, db, "create database `"+sourceDB+"`")
 	execSQLRequire(t, ctx, db, "create table `"+sourceDB+"`.`a` (id int primary key, b_id int)")
