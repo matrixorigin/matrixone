@@ -14,16 +14,8 @@
 
 package table_function
 
-// TVF-side half of the named-snapshot MATCH fix (#27941) for classic fulltext.
-//
-// Unlike the vector algorithms, classic fulltext has no veccache entry to key: every index
-// read goes through fulltextState.sqlProcess, so the whole fix is that ONE function handing
-// the snapshot TS to the SqlProcess. sqlexec.txnForRun then clones the read txn at that TS
-// (covered in pkg/vectorindex/sqlexec/snapshot_test.go), and the index SQL time-travels.
-//
-// These tests pin that hand-off directly rather than through a full start()/call() drive,
-// because sqlProcess IS the whole surface -- and it must compose with the publisher
-// identity override, which shares the same SqlProcess and predates this fix.
+// SqlProcess.SnapshotTS behaviour of the classic fulltext TVF under a named snapshot
+// (#27941).
 
 import (
 	"testing"
@@ -34,9 +26,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// A snapshotted MATCH must put the snapshot TS on the SqlProcess, so the index SQL reads
-// the historical index. Before the fix the TS never reached here and every MATCH read the
-// current index, whatever snapshot the query named.
+// A snapshotted MATCH puts the snapshot TS on the SqlProcess.
 func TestFulltextSQLProcessCarriesSnapshotTS(t *testing.T) {
 	proc := testutil.NewProc(t)
 	t.Cleanup(proc.Free)
@@ -50,7 +40,7 @@ func TestFulltextSQLProcessCarriesSnapshotTS(t *testing.T) {
 	require.Equal(t, ts.LogicalTime, sp.SnapshotTS.LogicalTime)
 }
 
-// No snapshot => no TS, so the index SQL runs on the current txn exactly as before the fix.
+// Without a snapshot the SqlProcess carries no TS.
 func TestFulltextSQLProcessNoSnapshotLeavesTSNil(t *testing.T) {
 	proc := testutil.NewProc(t)
 	t.Cleanup(proc.Free)
@@ -59,9 +49,7 @@ func TestFulltextSQLProcessNoSnapshotLeavesTSNil(t *testing.T) {
 		"an unsnapshotted MATCH must leave the read at the current txn")
 }
 
-// The snapshot TS and the publisher identity override live on the same SqlProcess and are
-// set by the same function; a subscribed (PubInfo) table read on a snapshot needs BOTH, so
-// neither may clobber the other.
+// The snapshot TS and the publisher identity override coexist on the same SqlProcess.
 func TestFulltextSQLProcessSnapshotComposesWithPublisherIdentity(t *testing.T) {
 	proc := testutil.NewProc(t)
 	t.Cleanup(proc.Free)
@@ -82,8 +70,7 @@ func TestFulltextSQLProcessSnapshotComposesWithPublisherIdentity(t *testing.T) {
 	require.Equal(t, "pub_db", sp.DatabaseOverride)
 }
 
-// resetRowState runs per query row and must clear the snapshot, so a reused operator cannot
-// carry one row's snapshot into the next row's index read.
+// resetRowState clears the snapshot.
 func TestFulltextResetRowStateClearsSnapshot(t *testing.T) {
 	proc := testutil.NewProc(t)
 	t.Cleanup(proc.Free)

@@ -47,8 +47,7 @@ type hnswSearchState struct {
 	limit     uint64
 	keys      []int64
 	distances []float64
-	// Named-snapshot read TS (from tf.ScanSnapshot). When historical, the index is
-	// loaded at this TS so a `{snapshot=...}` vector search reads the historical index (#27927).
+	// Named-snapshot read TS, from tf.ScanSnapshot (#27927).
 	scanSnapshot *plan.Snapshot
 	// holding one call batch, tokenizedState owns it.
 	batch *batch.Batch
@@ -282,15 +281,9 @@ func runHnswSearch[T types.RealNumbers](proc *process.Process, u *hnswSearchStat
 		Limit:        uint(searchLimit),
 		OrigFuncName: u.tblcfg.OrigFuncName,
 	}
-	// Named-snapshot search (#27927): read the index at the snapshot TS. sp.SnapshotTS makes
-	// the nested index-load SQL time-travel via a cloned txn; the cache key carries that same
-	// TS -- derived from EffectiveSnapshotTS, the SAME authority that decides the clone -- so
-	// the historical index gets its own entry, never served from nor polluting the
-	// current-index entry, and concurrent same-snapshot queries share one load.
-	//
-	// Distinct snapshots are distinct keys and therefore distinct resident copies; the cache
-	// bounds how many may be resident (veccache.MaxHistoricalIndexes) and REFUSES beyond it,
-	// on top of this algorithm's own load-time memory gate.
+	// Named-snapshot search (#27927): sp.SnapshotTS makes the index-load SQL run on a txn
+	// cloned at that TS, and the cache key carries the same TS so the historical index is a
+	// separate cache entry from the current one.
 	sp := sqlexec.NewSqlProcess(proc)
 	cacheKey := u.tblcfg.IndexTable
 	if u.scanSnapshot != nil {

@@ -26,23 +26,11 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// Plan-side half of the named-snapshot vector search fix (#27927) for the two GPU
-// algorithms. The TVF reads its hidden index tables through nested internal SQL, which
-// runs at the CURRENT txn unless the snapshot TS reaches it; the only path from the
-// `{snapshot=...}` scan to the TVF is Node.ScanSnapshot on the FUNCTION_SCAN node the
-// optimizer appends here. These tests pin that hand-off for IVF-PQ and CAGRA:
-// present-and-deep-copied when the base scan is snapshotted, and absent otherwise (so a
-// non-snapshot query keeps reading the current index).
-//
-// The pushdown builders are GPU-agnostic Go (apply_indices_ivfpq.go / _cagra.go have no
-// build tag), so this runs in the ordinary CPU test suite; the GPU-tagged half — that the
-// TVF turns this field into a time-travelling read plus a TS-suffixed cache key — lives in
-// pkg/sql/colexec/table_function/vector_search_snapshot_gpu_test.go.
+// ScanSnapshot propagation from the base scan into the ivfpq_search / cagra_search
+// FUNCTION_SCAN nodes (#27927).
 
 // gpuVectorSnapshotFixture builds the scan/sort/project shape both applyIndicesForSortUsing*
-// entry points expect, matching the existing _Success fixtures in
-// apply_indices_ivfpq_test.go / apply_indices_cagra_test.go. snapshot is attached to the
-// BASE SCAN node, which is where a `{snapshot=...}` query puts it.
+// entry points expect. snapshot is attached to the base scan node.
 func gpuVectorSnapshotFixture(
 	t *testing.T, threadsVar string, windowVar string, snapshot *plan.Snapshot,
 ) (*QueryBuilder, int32, *vectorSortContext) {
@@ -83,7 +71,6 @@ func gpuVectorSnapshotFixture(
 	}
 	scanNodeID := builder.appendNode(scanNode, bindCtx)
 
-	// Pre-extend ctxByNode for the JOIN/SORT/FUNCTION_SCAN nodes appended below.
 	for i := 0; i < 30; i++ {
 		builder.ctxByNode = append(builder.ctxByNode, bindCtx)
 	}
@@ -128,8 +115,7 @@ func gpuVectorSnapshotMTI(algo, metaType, storageType string) *MultiTableIndex {
 	}
 }
 
-// findVectorSearchTVF walks from the rewritten PROJECT down to the FUNCTION_SCAN the
-// pushdown appended (PROJECT → SORT → JOIN(SCAN, FUNCTION_SCAN)).
+// findVectorSearchTVF walks PROJECT -> SORT -> JOIN(SCAN, FUNCTION_SCAN).
 func findVectorSearchTVF(t *testing.T, builder *QueryBuilder, vecCtx *vectorSortContext) *plan.Node {
 	t.Helper()
 	sort := builder.qry.Nodes[vecCtx.projNode.Children[0]]
@@ -147,9 +133,7 @@ func gpuVectorTestSnapshot() *plan.Snapshot {
 	}
 }
 
-// A snapshotted base scan must hand its read TS to the ivfpq_search TVF, as a DEEP COPY:
-// the TVF node must not alias the scan node's Snapshot, or a later rewrite of one would
-// silently retarget the other's read.
+// The ivfpq_search TVF node carries a deep copy of the base scan's snapshot.
 func TestApplyIndicesForSortUsingIvfpq_PropagatesScanSnapshot(t *testing.T) {
 	snapshot := gpuVectorTestSnapshot()
 	builder, scanNodeID, vecCtx := gpuVectorSnapshotFixture(
@@ -169,8 +153,7 @@ func TestApplyIndicesForSortUsingIvfpq_PropagatesScanSnapshot(t *testing.T) {
 	assert.NotSame(t, snapshot.TS, tvf.ScanSnapshot.TS, "the TS must be deep-copied too")
 }
 
-// No snapshot on the base scan => none on the TVF, so the search keeps reading the
-// current index (DeepCopySnapshot(nil) is nil).
+// No snapshot on the base scan leaves the TVF node's ScanSnapshot nil.
 func TestApplyIndicesForSortUsingIvfpq_NoSnapshotLeavesTVFUnsnapshotted(t *testing.T) {
 	builder, scanNodeID, vecCtx := gpuVectorSnapshotFixture(
 		t, "ivfpq_threads_search", "ivfpq_batch_window", nil)
@@ -183,7 +166,7 @@ func TestApplyIndicesForSortUsingIvfpq_NoSnapshotLeavesTVFUnsnapshotted(t *testi
 	assert.Nil(t, findVectorSearchTVF(t, builder, vecCtx).ScanSnapshot)
 }
 
-// CAGRA twin of TestApplyIndicesForSortUsingIvfpq_PropagatesScanSnapshot.
+// The cagra_search TVF node carries a deep copy of the base scan's snapshot.
 func TestApplyIndicesForSortUsingCagra_PropagatesScanSnapshot(t *testing.T) {
 	snapshot := gpuVectorTestSnapshot()
 	builder, scanNodeID, vecCtx := gpuVectorSnapshotFixture(
@@ -203,7 +186,7 @@ func TestApplyIndicesForSortUsingCagra_PropagatesScanSnapshot(t *testing.T) {
 	assert.NotSame(t, snapshot.TS, tvf.ScanSnapshot.TS, "the TS must be deep-copied too")
 }
 
-// CAGRA twin of TestApplyIndicesForSortUsingIvfpq_NoSnapshotLeavesTVFUnsnapshotted.
+// No snapshot on the base scan leaves the TVF node's ScanSnapshot nil.
 func TestApplyIndicesForSortUsingCagra_NoSnapshotLeavesTVFUnsnapshotted(t *testing.T) {
 	builder, scanNodeID, vecCtx := gpuVectorSnapshotFixture(
 		t, "cagra_threads_search", "cagra_batch_window", nil)

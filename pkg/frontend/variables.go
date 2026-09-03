@@ -3825,6 +3825,14 @@ var gSysVarsDefs = map[string]SystemVariable{
 		Type:              InitSystemVariableBoolType("fulltext_bloom_filter_pushdown"),
 		Default:           int8(0),
 	},
+	"max_snapshot_index_cache": {
+		Name:              "max_snapshot_index_cache",
+		Scope:             ScopeBoth,
+		Dynamic:           true,
+		SetVarHintApplies: false,
+		Type:              InitSystemVariableIntType("max_snapshot_index_cache", 1, 1024, false),
+		Default:           int64(4),
+	},
 	"probe_limit": {
 		Name:              "probe_limit",
 		Scope:             ScopeBoth,

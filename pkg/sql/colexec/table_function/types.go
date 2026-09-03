@@ -44,12 +44,8 @@ type TableFunction struct {
 	FulltextSourceRef *plan.ObjectRef
 	FulltextIndexRef  *plan.ObjectRef
 
-	// Named-snapshot read timestamp propagated from the FUNCTION_SCAN node
-	// (Node.ScanSnapshot). An index-search TVF (fulltext/fulltext2/...) reads its
-	// hidden index tables via nested internal SQL, which otherwise runs at the
-	// current txn; carrying the snapshot here lets the TVF clone the read txn at
-	// the historical TS so a `{snapshot=...} MATCH` reads the historical index
-	// instead of the current one (#27941). Never set from TVF arguments.
+	// Named-snapshot read timestamp from the FUNCTION_SCAN node (Node.ScanSnapshot). Set by
+	// the planner only, never from TVF arguments (#27941).
 	ScanSnapshot *plan.Snapshot
 
 	// probe side runtime filter specs

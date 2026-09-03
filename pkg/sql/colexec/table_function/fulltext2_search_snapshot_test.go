@@ -14,19 +14,8 @@
 
 package table_function
 
-// TVF-side half of the named-snapshot MATCH fix (#27941) for fulltext2.
-//
-// fulltext2 reads its index through the shared veccache, so the fix has two halves that MUST
-// agree: SqlProcess.SnapshotTS (which makes the index-load SQL time-travel via a cloned txn)
-// and a TS-suffixed cache key (so the historical index gets its own entry instead of being
-// served from -- or polluting -- the current-index entry keyed by the bare table name). Both
-// are derived from EffectiveSnapshotTS precisely so they cannot disagree.
-//
-// These tests pin the agreement from the outside: a stub index is planted in the live cache
-// under ONE key, and start() only reaches it if the TVF looked under that same key. A
-// regression that keeps the bare key therefore fails by missing the stub entirely, not by a
-// soft assertion. The stub also records the SqlProcess it was handed, so the same test
-// proves the read TS travelled with the key.
+// Cache-key and SqlProcess.SnapshotTS behaviour of the fulltext2 search TVF under a named
+// snapshot, on both the materialized and streaming paths (#27941).
 
 import (
 	"fmt"
@@ -50,9 +39,7 @@ import (
 
 const ft2SnapshotCurrentPhysicalTS int64 = 3_000_000
 
-// ft2StubIndex is a pre-loaded cache entry: it records the SqlProcess of the search that
-// reached it, so a test can assert both THAT the TVF looked under this key and WHICH read TS
-// it carried. Never loaded (the entry is planted as STATUS_LOADED), so Load must not fire.
+// ft2StubIndex records the SqlProcess of each search that reaches it, and whether Load fired.
 type ft2StubIndex struct {
 	mu      sync.Mutex
 	hits    int
@@ -98,8 +85,7 @@ func (s *ft2StubIndex) state() (hits int, ts *timestamp.Timestamp, loadHit bool)
 	return s.hits, s.lastTS, s.loadHit
 }
 
-// plantFT2Index stores an already-loaded cache entry under key, so a search that looks under
-// that key skips loading and lands straight on the stub. Removed on cleanup.
+// plantFT2Index stores a STATUS_LOADED cache entry under key. Removed on cleanup.
 func plantFT2Index(t *testing.T, key string) *ft2StubIndex {
 	t.Helper()
 	stub := &ft2StubIndex{}
@@ -112,17 +98,15 @@ func plantFT2Index(t *testing.T, key string) *ft2StubIndex {
 }
 
 // startFT2SnapshotSearch drives fulltext2SearchState.start with a pushed LIMIT (the
-// materialized SearchInto path, which returns synchronously) against a mocked txn reading at
-// ft2SnapshotCurrentPhysicalTS.
+// materialized SearchInto path) against a mocked txn at ft2SnapshotCurrentPhysicalTS.
 func startFT2SnapshotSearch(t *testing.T, indexTable string, snapshot *plan.Snapshot) error {
 	t.Helper()
 	_, err := startFT2SnapshotSearchWithLimit(t, indexTable, snapshot, 1)
 	return err
 }
 
-// startFT2SnapshotSearchWithLimit is the same drive with an explicit pushed LIMIT, so a
-// caller can select the STREAMING path (limit 0) instead of the materialized one. It returns
-// the state so a streaming caller can await the producer goroutine.
+// startFT2SnapshotSearchWithLimit takes an explicit pushed LIMIT; 0 selects the streaming
+// path. Returns the state so a streaming caller can await the producer goroutine.
 func startFT2SnapshotSearchWithLimit(
 	t *testing.T, indexTable string, snapshot *plan.Snapshot, limit uint64,
 ) (*fulltext2SearchState, error) {
@@ -136,8 +120,7 @@ func startFT2SnapshotSearchWithLimit(
 		SnapshotTS: timestamp.Timestamp{PhysicalTime: ft2SnapshotCurrentPhysicalTS},
 	}).AnyTimes()
 	proc.Base.TxnOperator = txnOp
-	// fulltext2ScoreAlgo reads a session variable; the default resolver is nil on a bare
-	// test process.
+	// fulltext2ScoreAlgo reads a session variable.
 	proc.SetResolveVariableFunc(func(string, bool, bool) (interface{}, error) { return nil, nil })
 
 	tf := newFT2TF([]string{"doc_id", "score"}, ft2SearchRets())
@@ -151,10 +134,7 @@ func startFT2SnapshotSearchWithLimit(
 		ft2ConstStr(t, mp, fmt.Sprintf(`{"index":"%s"}`, indexTable)), patVec, modeVec,
 	}
 
-	// A pushed LIMIT selects the materialized SearchInto path, so the search completes
-	// inline; limit 0 selects the streaming path, where a producer goroutine runs the
-	// search instead. start() resets limit from plannedLimit on every row, so plannedLimit
-	// is the one to set.
+	// start() resets limit from plannedLimit on every row.
 	st := &fulltext2SearchState{plannedLimit: limit}
 	err := st.start(tf, proc, 0, nil)
 	t.Cleanup(func() { st.free(tf, proc, false, nil) })
@@ -168,9 +148,8 @@ func ft2HistoricalSnapshot() *plan.Snapshot {
 	}}
 }
 
-// A snapshotted MATCH must look the index up under the TS-suffixed key AND carry the read TS
-// on the SqlProcess. The stub is planted ONLY under the suffixed key, so a regression that
-// kept the bare key would miss it and fall through to a real index load.
+// A snapshotted MATCH resolves the TS-suffixed key and carries the read TS on the SqlProcess.
+// The stub is planted only under the suffixed key.
 func TestFulltext2SearchSnapshotUsesTSSuffixedCacheKey(t *testing.T) {
 	const idxTable = "__idx_ft2_snapshot_hist"
 	snapshot := ft2HistoricalSnapshot()
@@ -186,12 +165,11 @@ func TestFulltext2SearchSnapshotUsesTSSuffixedCacheKey(t *testing.T) {
 	require.Equal(t, snapshot.TS.PhysicalTime, ts.PhysicalTime)
 	require.Equal(t, snapshot.TS.LogicalTime, ts.LogicalTime)
 
-	// The current-index entry must be untouched: nothing was cached under the bare name.
 	_, bare := veccache.Cache.IndexMap.Load(idxTable)
 	require.False(t, bare, "a historical read must not create or warm the current-index entry")
 }
 
-// No snapshot: the bare key, and no read TS, exactly as before the fix.
+// Without a snapshot the bare key is used and no read TS is set.
 func TestFulltext2SearchNoSnapshotUsesBareCacheKey(t *testing.T) {
 	const idxTable = "__idx_ft2_snapshot_none"
 	stub := plantFT2Index(t, idxTable)
@@ -203,11 +181,7 @@ func TestFulltext2SearchNoSnapshotUsesBareCacheKey(t *testing.T) {
 	require.Nil(t, ts, "and must leave the read at the current txn")
 }
 
-// A snapshot TS that is NOT earlier than the current txn's is not a historical read --
-// txnForRun would not clone -- so the key must stay bare. Deriving the key from
-// EffectiveSnapshotTS rather than from "ScanSnapshot != nil" is what keeps the two in
-// agreement; keying on the nil check alone would strand this query on an entry the read
-// never time-travels to.
+// A snapshot TS not earlier than the current txn's is not historical: the key stays bare.
 func TestFulltext2SearchNonHistoricalSnapshotUsesBareCacheKey(t *testing.T) {
 	const idxTable = "__idx_ft2_snapshot_future"
 	future := &plan.Snapshot{TS: &timestamp.Timestamp{
@@ -225,9 +199,8 @@ func TestFulltext2SearchNonHistoricalSnapshotUsesBareCacheKey(t *testing.T) {
 	require.False(t, found, "a non-historical snapshot must not create %q", suffixed)
 }
 
-// The streaming path (no pushed LIMIT) runs the search on a producer goroutine through
-// Cache.Search rather than inline through SearchInto -- a separate call site, which must key
-// and time-travel identically. Awaiting errCh joins the producer before asserting.
+// The streaming path (no pushed LIMIT) runs the search through Cache.Search on a producer
+// goroutine. Awaiting errCh joins it before asserting.
 func TestFulltext2SearchStreamingSnapshotUsesTSSuffixedCacheKey(t *testing.T) {
 	const idxTable = "__idx_ft2_snapshot_stream"
 	snapshot := ft2HistoricalSnapshot()

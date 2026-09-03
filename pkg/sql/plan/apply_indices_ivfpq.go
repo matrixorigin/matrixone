@@ -227,8 +227,7 @@ func (builder *QueryBuilder) applyIndicesForSortUsingIvfpq(nodeID int32, vecCtx 
 		},
 		BindingTags:     []int32{tableFuncTag},
 		TblFuncExprList: tableFuncExprs,
-		// Named-snapshot vector search (#27927): thread the base scan's snapshot into the TVF so
-		// the search reads the HISTORICAL index at that TS, not the current one.
+		// Named-snapshot read TS for the TVF (#27927).
 		ScanSnapshot: DeepCopySnapshot(vecCtx.scanNode.ScanSnapshot),
 	}
 	tableFuncNodeID := builder.appendNode(tableFuncNode, ctx)

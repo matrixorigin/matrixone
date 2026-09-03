@@ -67,8 +67,7 @@ type fulltextState struct {
 	ranking          bool
 	publisherAccount *uint32
 	publisherDB      string
-	// Named-snapshot read TS (from tf.ScanSnapshot). When historical, the index
-	// SQL runs at this TS so a `{snapshot=...} MATCH` reads the historical index (#27941).
+	// Named-snapshot read TS, from tf.ScanSnapshot (#27941).
 	scanSnapshot *plan.Snapshot
 
 	// Partition-ordered traversal of agghtab for the zero-LIMIT scoring path.
@@ -132,8 +131,7 @@ func (u *fulltextState) sqlProcess(proc *process.Process) *sqlexec.SqlProcess {
 	if u.publisherAccount != nil {
 		sqlProc.WithExecutionIdentity(*u.publisherAccount, u.publisherDB)
 	}
-	// Read the fulltext index at the named-snapshot TS so a `{snapshot=...} MATCH`
-	// sees the historical index, not the current one (#27941). nil TS => current.
+	// Named-snapshot read TS; nil leaves the read at the current txn (#27941).
 	if u.scanSnapshot != nil {
 		sqlProc.SnapshotTS = u.scanSnapshot.TS
 	}

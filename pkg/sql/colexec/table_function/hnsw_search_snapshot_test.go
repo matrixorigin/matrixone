@@ -14,21 +14,8 @@
 
 package table_function
 
-// TVF-side half of the named-snapshot vector search fix (#27927) for HNSW.
-//
-// runHnswSearch must, when the FUNCTION_SCAN node carries a snapshot (plan side:
-// apply_indices_hnsw.go), set SqlProcess.SnapshotTS so the nested index-load SQL
-// time-travels via a cloned read txn, AND suffix the veccache key with the EFFECTIVE
-// snapshot TS so the historical index gets its own cache entry -- never served from, and
-// never polluting, the current-index entry keyed by the bare index table name.
-//
-// The key is asserted on the live cache map and the un-suffixed key is asserted ABSENT, so
-// a regression that caches historical data under the current name fails here rather than at
-// some later query. The suffix must appear only for a genuinely historical TS -- the same
-// condition sqlexec.txnForRun clones on -- so an ordinary query keeps hitting the shared
-// warm entry instead of fragmenting the cache.
-//
-// The GPU algorithms' twin of this file is vector_search_snapshot_gpu_test.go.
+// Cache-key and SqlProcess.SnapshotTS behaviour of the HNSW search TVF under a named
+// snapshot (#27927).
 
 import (
 	"fmt"
@@ -52,18 +39,16 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// The current txn reads at this TS; a snapshot BELOW it is historical (clone + suffixed
-// cache key), a snapshot at or above it is not (current txn, bare key).
+// Current txn read TS. A snapshot below it is historical; at or above it is not.
 const hnswSnapshotCurrentPhysicalTS int64 = 2_000_000
 
 func hnswSnapshotTblCfg(indexTable string) string {
 	return fmt.Sprintf(`{"db":"db","src":"src","metadata":"__metadata","index":"%s"}`, indexTable)
 }
 
-// runHnswSnapshotSearch drives hnsw_search through prepare → start with tf.ScanSnapshot set
-// to snapshot, against a mocked txn reading at hnswSnapshotCurrentPhysicalTS. Every cache
-// entry it creates is dropped on cleanup so the process-wide veccache stays clean for the
-// rest of the package.
+// runHnswSnapshotSearch drives hnsw_search through prepare and start with tf.ScanSnapshot
+// set, against a mocked txn at hnswSnapshotCurrentPhysicalTS. Cache entries are dropped on
+// cleanup.
 func runHnswSnapshotSearch(
 	t *testing.T, indexTable string, snapshot *plan.Snapshot,
 ) (*TableFunction, *process.Process, tvfState) {
@@ -72,9 +57,7 @@ func runHnswSnapshotSearch(
 	ctrl := gomock.NewController(t)
 	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
 	txnOp := mock_frontend.NewMockTxnOperator(ctrl)
-	// Only Txn() is reachable here: the historical decision reads the current txn's TS, and
-	// MockSearch.Load runs no SQL, so CloneSnapshotOp is never called. gomock fails the test
-	// if the production code reaches for anything else.
+	// Only Txn() is reachable: MockSearch.Load runs no SQL, so CloneSnapshotOp is not called.
 	txnOp.EXPECT().Txn().Return(txn.TxnMeta{
 		SnapshotTS: timestamp.Timestamp{PhysicalTime: hnswSnapshotCurrentPhysicalTS},
 	}).AnyTimes()
@@ -115,14 +98,13 @@ func runHnswSnapshotSearch(
 
 	state := tf.ctr.state
 	t.Cleanup(func() {
-		// RemovePrefix drops both the bare and every TS-suffixed generation of this key.
 		veccache.Cache.RemovePrefix(indexTable)
 		state.free(tf, proc, false, nil)
 	})
 	return tf, proc, state
 }
 
-// hnswSnapshotCacheKeys reports which of the two candidate keys the search actually created.
+// hnswSnapshotCacheKeys reports which candidate keys exist in the cache.
 func hnswSnapshotCacheKeys(indexTable string, ts *timestamp.Timestamp) (bare bool, suffixed bool, key string) {
 	_, bare = veccache.Cache.IndexMap.Load(indexTable)
 	if ts == nil {
@@ -140,9 +122,7 @@ func hnswHistoricalSnapshot() *plan.Snapshot {
 	}}
 }
 
-// A historical snapshot must land the index under its OWN, TS-suffixed cache entry, leaving
-// the current-index entry untouched. Before the fix the search used the bare key and the
-// current txn, so a `{snapshot=...}` query read (and warmed) the CURRENT index.
+// A historical snapshot caches under the TS-suffixed key and not the bare key.
 func TestHnswSearchSnapshotUsesTSSuffixedCacheKey(t *testing.T) {
 	orig := newHnswAlgo
 	newHnswAlgo = newMockAlgoFn
@@ -156,8 +136,6 @@ func TestHnswSearchSnapshotUsesTSSuffixedCacheKey(t *testing.T) {
 	require.True(t, suffixed, "historical search must cache the index under %q", key)
 	require.False(t, bare, "historical search must not touch the current-index cache entry %q", idxTable)
 
-	// The TS also has to reach the state, and reset() must clear it so a reused operator
-	// does not carry a stale snapshot into the next query.
 	u := st.(*hnswSearchState)
 	require.NotNil(t, u.scanSnapshot)
 	require.Equal(t, snapshot.TS.PhysicalTime, u.scanSnapshot.TS.PhysicalTime)
@@ -165,8 +143,7 @@ func TestHnswSearchSnapshotUsesTSSuffixedCacheKey(t *testing.T) {
 	require.Nil(t, u.scanSnapshot, "reset must clear the per-query snapshot")
 }
 
-// No snapshot: the ordinary query keeps the bare key, so every current query shares one
-// warm entry (the fix must not fragment the cache).
+// Without a snapshot the bare key is used.
 func TestHnswSearchNoSnapshotUsesBareCacheKey(t *testing.T) {
 	orig := newHnswAlgo
 	newHnswAlgo = newMockAlgoFn
@@ -180,9 +157,7 @@ func TestHnswSearchNoSnapshotUsesBareCacheKey(t *testing.T) {
 	require.Nil(t, st.(*hnswSearchState).scanSnapshot)
 }
 
-// A snapshot TS that is NOT earlier than the current txn's is not a historical read --
-// txnForRun would not clone -- so the key must stay bare. Deriving the key from
-// EffectiveSnapshotTS (not from "snapshot != nil") is what keeps the two in agreement.
+// A snapshot TS not earlier than the current txn's is not historical: the key stays bare.
 func TestHnswSearchNonHistoricalSnapshotUsesBareCacheKey(t *testing.T) {
 	orig := newHnswAlgo
 	newHnswAlgo = newMockAlgoFn
@@ -199,8 +174,7 @@ func TestHnswSearchNonHistoricalSnapshotUsesBareCacheKey(t *testing.T) {
 	require.False(t, suffixed, "a non-historical snapshot must not create %q", key)
 }
 
-// Two queries on the SAME snapshot must share one cache entry (one load), and a second,
-// different snapshot must get its own -- neither may collapse onto the other.
+// Two distinct snapshots produce two entries; the same snapshot produces one.
 func TestHnswSearchDistinctSnapshotsGetDistinctCacheEntries(t *testing.T) {
 	orig := newHnswAlgo
 	newHnswAlgo = newMockAlgoFn

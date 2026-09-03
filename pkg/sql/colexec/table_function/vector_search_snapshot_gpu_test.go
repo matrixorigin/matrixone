@@ -16,23 +16,8 @@
 
 package table_function
 
-// TVF-side half of the named-snapshot vector search fix (#27927) for the two GPU
-// algorithms, IVF-PQ and CAGRA.
-//
-// ivfpqRunSearchQuery / cagraRunSearchQuery must, when the FUNCTION_SCAN node carries a
-// snapshot (plan side: apply_indices_gpu_vector_snapshot_test.go):
-//
-//  1. set SqlProcess.SnapshotTS, so the nested index-load SQL time-travels via a cloned
-//     read txn (sqlexec.txnForRun; covered in pkg/vectorindex/sqlexec/snapshot_test.go), and
-//  2. suffix the veccache key with the EFFECTIVE snapshot TS, so the historical index gets
-//     its own cache entry -- never served from, and never polluting, the current-index
-//     entry keyed by the bare index table name.
-//
-// Point 2 is the load-bearing one and is what these tests pin: the key is asserted on the
-// live cache map, and the un-suffixed key is asserted ABSENT so a regression that caches
-// historical data under the current name fails here rather than at some later query. The
-// suffix must also appear only for a genuinely historical TS -- the same condition
-// txnForRun clones on -- so an ordinary query keeps hitting the shared warm entry.
+// Cache-key and SqlProcess.SnapshotTS behaviour of the IVF-PQ and CAGRA search TVFs under a
+// named snapshot (#27927).
 
 import (
 	"fmt"
@@ -57,17 +42,15 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// The current txn reads at this TS; a snapshot BELOW it is historical (clone + suffixed
-// cache key), a snapshot at or above it is not (current txn, bare key).
+// Current txn read TS. A snapshot below it is historical; at or above it is not.
 const gpuSnapshotCurrentPhysicalTS int64 = 1_000_000
 
 func newCagraMockAlgoFn(idxcfg vectorindex.IndexConfig, tblcfg vectorindex.IndexTableConfig) veccache.VectorIndexSearchIf {
 	return &MockSearch{Idxcfg: idxcfg, Tblcfg: tblcfg}
 }
 
-// gpuSnapshotSearchArgs builds the (IndexTableConfig const, vecf32(4) query) argument pair
-// both GPU search TVFs take. parttype must name the index base column type or the TVF
-// rejects the query outright (see makeConstInputExprsIvfpqSearch).
+// gpuSnapshotSearchArgs builds the (IndexTableConfig const, vecf32(4) query) argument pair.
+// parttype must name the index base column type or the TVF rejects the query.
 func gpuSnapshotSearchArgs(indexTable string) []*plan.Expr {
 	tblcfg := fmt.Sprintf(
 		`{"db":"db","src":"src","metadata":"__meta","index":"%s","parttype":%d}`,
@@ -94,10 +77,9 @@ func gpuSnapshotSearchBatch(proc *process.Process, indexTable string) *batch.Bat
 	return bat
 }
 
-// runGpuSnapshotSearch drives funcName's TVF through prepare → start with tf.ScanSnapshot
-// set to snapshot, against a mocked txn reading at gpuSnapshotCurrentPhysicalTS. It returns
-// the state so callers can inspect/reset it. Every cache entry it created is dropped on
-// cleanup so the process-wide veccache stays clean for the rest of the package.
+// runGpuSnapshotSearch drives funcName's TVF through prepare and start with tf.ScanSnapshot
+// set, against a mocked txn at gpuSnapshotCurrentPhysicalTS. Cache entries are dropped on
+// cleanup.
 func runGpuSnapshotSearch(
 	t *testing.T, funcName, params, indexTable string, snapshot *plan.Snapshot,
 ) (*TableFunction, *process.Process, tvfState) {
@@ -106,9 +88,7 @@ func runGpuSnapshotSearch(
 	ctrl := gomock.NewController(t)
 	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
 	txnOp := mock_frontend.NewMockTxnOperator(ctrl)
-	// Only Txn() is reachable here: the historical decision reads the current txn's TS, and
-	// MockSearch.Load runs no SQL, so CloneSnapshotOp is never called. gomock fails the test
-	// if the production code reaches for anything else.
+	// Only Txn() is reachable: MockSearch.Load runs no SQL, so CloneSnapshotOp is not called.
 	txnOp.EXPECT().Txn().Return(txn.TxnMeta{
 		SnapshotTS: timestamp.Timestamp{PhysicalTime: gpuSnapshotCurrentPhysicalTS},
 	}).AnyTimes()
@@ -140,15 +120,13 @@ func runGpuSnapshotSearch(
 
 	state := tf.ctr.state
 	t.Cleanup(func() {
-		// RemovePrefix drops both the bare and every TS-suffixed generation of this key,
-		// so these fixtures cannot leak into the rest of the package's cache assertions.
 		veccache.Cache.RemovePrefix(indexTable)
 		state.free(tf, proc, false, nil)
 	})
 	return tf, proc, state
 }
 
-// gpuSnapshotCacheKeys reports which of the two candidate keys the search actually created.
+// gpuSnapshotCacheKeys reports which candidate keys exist in the cache.
 func gpuSnapshotCacheKeys(indexTable string, ts *timestamp.Timestamp) (bare bool, suffixed bool, key string) {
 	_, bare = veccache.Cache.IndexMap.Load(indexTable)
 	if ts == nil {
@@ -170,9 +148,7 @@ func historicalSnapshot() *plan.Snapshot {
 
 const ivfpqSnapshotParams = `{"op_type":"vector_l2_ops","lists":"4","m":"2","bits_per_code":"8"}`
 
-// A historical snapshot must land the index under its OWN, TS-suffixed cache entry, leaving
-// the current-index entry untouched. Before the fix the search used the bare key and the
-// current txn, so a `{snapshot=...}` query read (and warmed) the CURRENT index.
+// A historical snapshot caches under the TS-suffixed key and not the bare key.
 func TestIvfpqSearchSnapshotUsesTSSuffixedCacheKey(t *testing.T) {
 	orig := newIvfpqAlgo
 	newIvfpqAlgo = newIvfpqMockAlgoFn
@@ -186,8 +162,6 @@ func TestIvfpqSearchSnapshotUsesTSSuffixedCacheKey(t *testing.T) {
 	require.True(t, suffixed, "historical search must cache the index under %q", key)
 	require.False(t, bare, "historical search must not touch the current-index cache entry %q", idxTable)
 
-	// The TS also has to reach the state, and reset() must clear it so a reused operator
-	// does not carry a stale snapshot into the next query.
 	u := st.(*ivfpqSearchState)
 	require.NotNil(t, u.scanSnapshot)
 	require.Equal(t, snapshot.TS.PhysicalTime, u.scanSnapshot.TS.PhysicalTime)
@@ -195,8 +169,7 @@ func TestIvfpqSearchSnapshotUsesTSSuffixedCacheKey(t *testing.T) {
 	require.Nil(t, u.scanSnapshot, "reset must clear the per-query snapshot")
 }
 
-// No snapshot: the ordinary query keeps the bare key, so every current query shares one
-// warm entry (the fix must not fragment the cache).
+// Without a snapshot the bare key is used.
 func TestIvfpqSearchNoSnapshotUsesBareCacheKey(t *testing.T) {
 	orig := newIvfpqAlgo
 	newIvfpqAlgo = newIvfpqMockAlgoFn
@@ -210,9 +183,7 @@ func TestIvfpqSearchNoSnapshotUsesBareCacheKey(t *testing.T) {
 	require.Nil(t, st.(*ivfpqSearchState).scanSnapshot)
 }
 
-// A snapshot TS that is NOT earlier than the current txn's is not a historical read --
-// txnForRun would not clone -- so the key must stay bare. Deriving the key from
-// EffectiveSnapshotTS (not from "snapshot != nil") is what keeps the two in agreement.
+// A snapshot TS not earlier than the current txn's is not historical: the key stays bare.
 func TestIvfpqSearchNonHistoricalSnapshotUsesBareCacheKey(t *testing.T) {
 	orig := newIvfpqAlgo
 	newIvfpqAlgo = newIvfpqMockAlgoFn
@@ -229,8 +200,7 @@ func TestIvfpqSearchNonHistoricalSnapshotUsesBareCacheKey(t *testing.T) {
 	require.False(t, suffixed, "a non-historical snapshot must not create %q", key)
 }
 
-// Two queries on the SAME snapshot must share one cache entry (one load), and a second,
-// different snapshot must get its own -- neither may collapse onto the other.
+// Two distinct snapshots produce two entries; the same snapshot produces one.
 func TestIvfpqSearchDistinctSnapshotsGetDistinctCacheEntries(t *testing.T) {
 	orig := newIvfpqAlgo
 	newIvfpqAlgo = newIvfpqMockAlgoFn

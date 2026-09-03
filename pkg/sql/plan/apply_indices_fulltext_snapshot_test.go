@@ -14,15 +14,8 @@
 
 package plan
 
-// Plan-side half of the named-snapshot MATCH fix (#27941) for the fulltext2 COVERED fast
-// path. That path is the one fulltext2 rewrite that drops the base-table JOIN and reads
-// pk/score/include straight off the TVF, so it builds its FUNCTION_SCAN node in its own
-// place -- and therefore needs its own copy of the snapshot hand-off. Miss it and a
-// `{snapshot=...} MATCH` on a fully-covered projection silently reads the CURRENT index
-// while the rest of the query time-travels.
-//
-// The JOIN path's twin of this is exercised by the fulltext BVT cases; this one has no
-// unit-test fixture upstream of it, hence the hand-built one below.
+// ScanSnapshot propagation into the fulltext2_search FUNCTION_SCAN node built by the covered
+// fast path (#27941).
 
 import (
 	"testing"
@@ -37,9 +30,8 @@ import (
 )
 
 // coveredFulltext2Fixture builds the minimal shape that clears every tryApplyCoveredFulltext2
-// guard: one MATCH filter driving one fulltext2 index with an INCLUDE column, no residual
-// predicate, and a projection of nothing but the pk (so coverage guard (d) holds). snapshot
-// is attached to the BASE SCAN, which is where a `{snapshot=...}` query puts it.
+// guard: one MATCH filter, one fulltext2 index with an INCLUDE column, no residual predicate,
+// and a pk-only projection. snapshot is attached to the base scan.
 func coveredFulltext2Fixture(t *testing.T, snapshot *plan.Snapshot) (
 	builder *QueryBuilder, nodeID int32, projNode, sortNode, scanNode *plan.Node, idxdef *plan.IndexDef,
 ) {
@@ -61,7 +53,6 @@ func coveredFulltext2Fixture(t *testing.T, snapshot *plan.Snapshot) (
 			},
 			Pkey:          &plan.PrimaryKeyDef{PkeyColName: "id"},
 			Name2ColIndex: map[string]int32{"id": 0, "body": 1, "tag": 2},
-			// The storage/metadata sibling pair buildFulltext2SearchCfg resolves the index by.
 			Indexes: []*plan.IndexDef{
 				{IndexName: "ft2idx", IndexAlgoTableType: catalog.FullText2Index_TblType_Storage, IndexTableName: "__store"},
 				{IndexName: "ft2idx", IndexAlgoTableType: catalog.FullText2Index_TblType_Metadata, IndexTableName: "__meta"},
@@ -69,7 +60,7 @@ func coveredFulltext2Fixture(t *testing.T, snapshot *plan.Snapshot) (
 		},
 		BindingTags:  []int32{scanTag},
 		ScanSnapshot: snapshot,
-		// The single MATCH filter: match(body, 'x' IN NATURAL LANGUAGE MODE).
+		// match(body, 'x' IN NATURAL LANGUAGE MODE)
 		FilterList: []*plan.Expr{{
 			Typ: plan.Type{Id: int32(types.T_float32)},
 			Expr: &plan.Expr_F{F: &plan.Function{
@@ -85,7 +76,6 @@ func coveredFulltext2Fixture(t *testing.T, snapshot *plan.Snapshot) (
 		}},
 	}
 	nodeID = builder.appendNode(scanNode, bindCtx)
-	// Pre-extend ctxByNode for the FUNCTION_SCAN / SORT nodes the rewrite appends.
 	for i := 0; i < 10; i++ {
 		builder.ctxByNode = append(builder.ctxByNode, bindCtx)
 	}
@@ -93,7 +83,7 @@ func coveredFulltext2Fixture(t *testing.T, snapshot *plan.Snapshot) (
 	projNode = &plan.Node{
 		NodeType: plan.Node_PROJECT,
 		Children: []int32{nodeID},
-		// pk only => fully covered.
+		// pk only
 		ProjectList: []*plan.Expr{{
 			Typ:  plan.Type{Id: int32(types.T_int64), Width: 64},
 			Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: scanTag, ColPos: 0}},
@@ -109,9 +99,8 @@ func coveredFulltext2Fixture(t *testing.T, snapshot *plan.Snapshot) (
 	return
 }
 
-// The covered fast path must hand the base scan's snapshot to the fulltext2_search TVF it
-// builds, as a DEEP copy -- the TVF node must not alias the scan node's Snapshot, or a later
-// rewrite of one would silently retarget the other's read.
+// The covered path's fulltext2_search TVF node carries a deep copy of the base scan's
+// snapshot.
 func TestTryApplyCoveredFulltext2PropagatesScanSnapshot(t *testing.T) {
 	snapshot := &plan.Snapshot{TS: &timestamp.Timestamp{PhysicalTime: 1700000000, LogicalTime: 7}}
 	builder, nodeID, projNode, sortNode, scanNode, idxdef := coveredFulltext2Fixture(t, snapshot)
@@ -130,8 +119,7 @@ func TestTryApplyCoveredFulltext2PropagatesScanSnapshot(t *testing.T) {
 	assert.NotSame(t, snapshot.TS, tvf.ScanSnapshot.TS, "the TS must be deep-copied too")
 }
 
-// No snapshot on the base scan => none on the TVF, so the MATCH keeps reading the current
-// index (DeepCopySnapshot(nil) is nil).
+// No snapshot on the base scan leaves the TVF node's ScanSnapshot nil.
 func TestTryApplyCoveredFulltext2NoSnapshotLeavesTVFUnsnapshotted(t *testing.T) {
 	builder, nodeID, projNode, sortNode, scanNode, idxdef := coveredFulltext2Fixture(t, nil)
 
@@ -143,7 +131,7 @@ func TestTryApplyCoveredFulltext2NoSnapshotLeavesTVFUnsnapshotted(t *testing.T) 
 	assert.Nil(t, findCoveredFulltext2TVF(t, builder).ScanSnapshot)
 }
 
-// findCoveredFulltext2TVF returns the single FUNCTION_SCAN node the covered rewrite appended.
+// findCoveredFulltext2TVF returns the single FUNCTION_SCAN node appended by the rewrite.
 func findCoveredFulltext2TVF(t *testing.T, builder *QueryBuilder) *plan.Node {
 	t.Helper()
 	var found *plan.Node

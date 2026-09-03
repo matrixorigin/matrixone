@@ -89,10 +89,7 @@ func TestTxnForRunEmptySnapshotUsesCurrent(t *testing.T) {
 	require.Same(t, original, sp.txnForRun(proc), "an empty SnapshotTS must not clone")
 }
 
-// EffectiveSnapshotTS is the SINGLE authority for "is this a historical read" -- txnForRun
-// clones on it, and every TS-suffixed cache key is derived from it. Its guards therefore
-// have to hold for a process that has no txn to compare against, not just for a live one:
-// answering "historical" there would key a cache entry that the read could never honour.
+// EffectiveSnapshotTS guards: no txn operator, no process, and the historical case.
 
 func TestEffectiveSnapshotTSNilTxnOperatorIsNotHistorical(t *testing.T) {
 	proc := testutil.NewProc(t)
@@ -111,9 +108,7 @@ func TestEffectiveSnapshotTSNilProcIsNotHistorical(t *testing.T) {
 	require.Nil(t, sp.EffectiveSnapshotTS(), "no process => not a historical read")
 }
 
-// The positive case: a TS earlier than the current txn's is reported as the effective read
-// TS, and it is the SAME pointer the caller passed in -- callers build cache keys from the
-// returned value, so it must be the TS that txnForRun actually clones at.
+// A TS earlier than the current txn's is returned, as the same pointer the caller passed.
 func TestEffectiveSnapshotTSHistoricalReturnsTheTS(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	proc := testutil.NewProc(t)
