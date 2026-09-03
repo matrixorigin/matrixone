@@ -71,7 +71,12 @@ func MappingSnapshotMatchesPlan(mapping TableMapping, scan *plan.MongoScan) bool
 	}
 	planned := ColumnsFromPlan(scan.Columns)
 	if len(planned) == 0 {
-		return false
+		// SELECT __mo_query and COUNT(*) over an explicit user query need no
+		// mapped value vectors; a pruned explicit query needs no row source at all.
+		// Compile already validated the complete mapping definition and pinned its
+		// version; execution still validates every identity/version field above
+		// before allowing these intentional zero-column plans.
+		return scan.IncludeQueryColumn || scan.EmptyResult || scan.UserQueryKind != int32(UserQueryInvalid)
 	}
 	for _, projected := range planned {
 		matched := false
@@ -156,6 +161,13 @@ func PredicateFromPlan(ctx context.Context, input *plan.MongoPredicate) (*Predic
 		return nil, nil
 	}
 	result := &Predicate{Op: PredicateOp(input.Op), Path: input.Path}
+	switch result.Op {
+	case PredicateEqual, PredicateNotEqual, PredicateLess, PredicateLessEqual,
+		PredicateGreater, PredicateGreaterEqual:
+		if len(input.ValueBson) == 0 {
+			return nil, moerr.NewInvalidInput(ctx, "MongoDB comparison predicate requires a value")
+		}
+	}
 	var err error
 	if len(input.ValueBson) > 0 {
 		result.Value, err = predicateValue(ctx, input.ValueBson)

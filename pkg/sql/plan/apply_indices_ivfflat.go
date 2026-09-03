@@ -1133,7 +1133,7 @@ func localProtocolEnablesDistributedVectorDomain(service string) bool {
 	}
 	value, ok := runtime.GetGlobalVariables(moruntime.MOProtocolVersion)
 	version, valid := value.(int64)
-	return ok && valid && version >= defines.MORPCVersion44
+	return ok && valid && version >= defines.MORPCVersion45
 }
 
 func rebindIvfPreFilters(filters []*plan.Expr, scanNode *plan.Node, includeColumns []string) []*plan.Expr {

@@ -137,7 +137,7 @@ func NewCompile(
 	c.db = db
 	c.tenant = tenant
 	c.uid = uid
-	c.sql = sql
+	c.sql = sqlmongodb.RedactSQLForDiagnostics(sql)
 	c.proc.SetMessageBoard(c.MessageBoard)
 	c.stmt = stmt
 	c.addr = addr
@@ -283,7 +283,7 @@ func (c *Compile) Reset(proc *process.Process, startAt time.Time, fill func(*bat
 	c.captureStringShuffleHashAlgorithm()
 
 	c.fill = fill
-	c.sql = sql
+	c.sql = sqlmongodb.RedactSQLForDiagnostics(sql)
 	c.affectRows.Store(0)
 	// Reset reuses an existing logical/physical generation. Reused generations
 	// are deliberately ineligible for LOAD unique-index promotion.
@@ -2647,10 +2647,13 @@ func (c *Compile) compileExternScanWithPlanNodeID(node *plan.Node, planNodeID in
 
 	if node.ExternScan != nil && node.ExternScan.Type == int32(plan.ExternType_MONGODB_TB) {
 		// Hydration resolves execution-time catalog state and prunes the source
-		// mapping to the physical projection.  Keep that mutation isolated even
+		// mapping to the physical projection. Keep that mutation isolated even
 		// when this helper is called outside compilePlanScope, because a prepared
 		// execution may otherwise hand us its cached logical plan directly.
 		executionNode := plan2.DeepCopyNode(node)
+		if err := c.configureMongoUserQuery(executionNode); err != nil {
+			return nil, err
+		}
 		if err := c.hydrateMongoScan(executionNode); err != nil {
 			return nil, err
 		}
@@ -2953,6 +2956,120 @@ func (c *Compile) constructMongoScanScope() *Scope {
 	return scope
 }
 
+// configureMongoUserQuery extracts at most one explicit __mo_query value from
+// the compile-owned node. The text is parsed and reduced to validated BSON
+// before it enters the execution plan. Query-level predicates are evaluated
+// against that one candidate and removed; every ordinary predicate remains an
+// MO residual.
+func (c *Compile) configureMongoUserQuery(node *plan.Node) error {
+	if node == nil || node.ExternScan == nil || node.ExternScan.MongodbScan == nil {
+		return moerr.NewInvalidInput(c.proc.Ctx, "MongoDB external table is missing scan metadata")
+	}
+	scan := node.ExternScan.MongodbScan
+	queryList, err := external.DeriveForeignQueryList(c.proc.Ctx, node, c.proc)
+	if err != nil {
+		return err
+	}
+	if len(queryList) > 1 {
+		return moerr.NewNotSupported(c.proc.Ctx, "MongoDB MVP accepts exactly one __mo_query value")
+	}
+	if len(queryList) == 0 {
+		if mongoQueryColumnUsed(node, node.FilterList) {
+			return moerr.NewNotSupported(c.proc.Ctx, "MongoDB MVP requires __mo_query = <constant>")
+		}
+		scan.IncludeQueryColumn = mongoQueryColumnUsed(node, node.ProjectList)
+		if mongoScanUsesV44Payload(scan) && !supportsRemoteMongoUserQuery(c.proc.GetService()) {
+			return moerr.NewNotSupported(
+				c.proc.Ctx,
+				"MongoDB query semantics require MORPC protocol version 44",
+			)
+		}
+		return nil
+	}
+
+	queryList, _, residual, err := external.FilterFileList(
+		c.proc.Ctx, node, c.proc, queryList, []int64{-1})
+	if err != nil {
+		return err
+	}
+	node.FilterList = residual
+	scan.IncludeQueryColumn = mongoQueryColumnUsed(node, node.FilterList) ||
+		mongoQueryColumnUsed(node, node.ProjectList)
+	if len(queryList) == 0 {
+		scan.EmptyResult = true
+		if !supportsRemoteMongoUserQuery(c.proc.GetService()) {
+			return moerr.NewNotSupported(
+				c.proc.Ctx,
+				"MongoDB query semantics require MORPC protocol version 44",
+			)
+		}
+		return nil
+	}
+	if len(queryList) != 1 {
+		return moerr.NewNotSupported(c.proc.Ctx, "MongoDB MVP accepts exactly one __mo_query value")
+	}
+	query, err := sqlmongodb.ParseUserQuery(c.proc.Ctx, queryList[0])
+	if err != nil {
+		return err
+	}
+	if !supportsRemoteMongoUserQuery(c.proc.GetService()) {
+		return moerr.NewNotSupported(
+			c.proc.Ctx,
+			"MongoDB explicit queries require MORPC protocol version 44",
+		)
+	}
+	// The planner retains the selector as a local filter around an opaque
+	// aggregation pipeline. Keep the hidden carrier available even when it is
+	// not selected so that filter evaluates against the same canonical source
+	// value the scan used; otherwise a three-column pipeline batch can reach a
+	// four-column selector and panic.
+	if query.Kind == sqlmongodb.UserQueryPipeline {
+		scan.IncludeQueryColumn = true
+	}
+	return sqlmongodb.ApplyUserQueryToPlan(c.proc.Ctx, query, scan)
+}
+
+func mongoQueryColumnUsed(node *plan.Node, expressions []*plan.Expr) bool {
+	if node == nil || node.TableDef == nil {
+		return false
+	}
+	usesQueryColumn := func(expr *plan.Expr) bool {
+		var visit func(*plan.Expr) bool
+		visit = func(current *plan.Expr) bool {
+			if current == nil {
+				return false
+			}
+			if col := current.GetCol(); col != nil {
+				position := int(col.ColPos)
+				return position >= 0 && position < len(node.TableDef.Cols) &&
+					catalog.IsForeignQueryCol(node.TableDef.Cols[position].Name, node.TableDef.Cols[position].ColId)
+			}
+			if functionExpr := current.GetF(); functionExpr != nil {
+				for _, arg := range functionExpr.Args {
+					if visit(arg) {
+						return true
+					}
+				}
+			}
+			if list := current.GetList(); list != nil {
+				for _, item := range list.List {
+					if visit(item) {
+						return true
+					}
+				}
+			}
+			return false
+		}
+		return visit(expr)
+	}
+	for _, expr := range expressions {
+		if usesQueryColumn(expr) {
+			return true
+		}
+	}
+	return false
+}
+
 func (c *Compile) hydrateMongoScan(node *plan.Node) error {
 	if node == nil || node.ExternScan == nil || node.ExternScan.MongodbScan == nil {
 		return moerr.NewInvalidInput(c.proc.Ctx, "MongoDB external table is missing scan metadata")
@@ -3005,7 +3122,12 @@ func (c *Compile) hydrateMongoScan(node *plan.Node) error {
 			parseErr = moerr.NewInvalidInput(c.proc.Ctx, "MongoDB table mapping changed during planning; retry the statement")
 			return false
 		}
-		columns, parseErr = projectedMongoColumns(c.proc.Ctx, columns, node.TableDef)
+		columns, parseErr = projectedMongoColumns(
+			c.proc.Ctx,
+			columns,
+			node.TableDef,
+			scan.IncludeQueryColumn || scan.EmptyResult || scan.UserQueryKind != int32(sqlmongodb.UserQueryInvalid),
+		)
 		if parseErr != nil {
 			return false
 		}
@@ -3030,21 +3152,35 @@ func (c *Compile) hydrateMongoScan(node *plan.Node) error {
 	if scan.MaxParallelism != 1 {
 		return moerr.NewNotSupported(c.proc.Ctx, "MongoDB MVP requires max_parallelism=1")
 	}
-	scan.PushedPredicate, scan.ResidualFilterDigest = sqlmongodb.PushdownPlanFilters(c.proc.Ctx, node.FilterList, scan.Columns)
+	pushed, residualDigest := sqlmongodb.PushdownPlanFilters(c.proc.Ctx, node.FilterList, scan.Columns)
+	if scan.UserQueryKind == int32(sqlmongodb.UserQueryPipeline) {
+		// Ordinary MO predicates refer to the pipeline output. Moving them ahead
+		// of an opaque user pipeline can change its meaning, so they remain local.
+		pushed = nil
+	}
+	scan.PushedPredicate, scan.ResidualFilterDigest = pushed, residualDigest
 	return nil
 }
 
-func projectedMongoColumns(ctx context.Context, columns []sqlmongodb.ColumnMapping, tableDef *plan.TableDef) ([]sqlmongodb.ColumnMapping, error) {
+func projectedMongoColumns(
+	ctx context.Context,
+	columns []sqlmongodb.ColumnMapping,
+	tableDef *plan.TableDef,
+	allowEmpty bool,
+) ([]sqlmongodb.ColumnMapping, error) {
 	if tableDef == nil {
 		return nil, moerr.NewInternalError(ctx, "MongoDB external scan is missing its table definition")
 	}
 	names := make([]string, 0, len(tableDef.Cols))
 	for _, column := range tableDef.Cols {
-		if column != nil && !column.Hidden {
+		if column != nil && !column.Hidden && !catalog.IsForeignQueryCol(column.Name, column.ColId) {
 			names = append(names, column.Name)
 		}
 	}
 	if len(names) == 0 {
+		if allowEmpty {
+			return nil, nil
+		}
 		return nil, moerr.NewInternalError(ctx, "MongoDB external scan has no retained mapped columns")
 	}
 	return sqlmongodb.ProjectColumnsByName(ctx, columns, names)
@@ -6074,7 +6210,7 @@ func (c *Compile) compileSort(node *plan.Node, ss []*Scope) []*Scope {
 			if topN < limit || topN < offset {
 				overflow = true
 			}
-			if !overflow && topN <= 8192*2 {
+			if !overflow && topN <= mergeTopResidentPlanThreshold {
 				// if n is small, convert `order by col limit m offset n` to `top m+n offset n`
 				return c.compileOffset(node, c.compileTop(node, plan2.MakePlan2Uint64ConstExprWithType(topN), ss))
 			}
@@ -6096,6 +6232,23 @@ func (c *Compile) compileSort(node *plan.Node, ss []*Scope) []*Scope {
 	default:
 		return ss
 	}
+}
+
+const mergeTopResidentPlanThreshold uint64 = 8192 * 2
+
+// canUseResidentMergeTop limits the resident-only global MergeTop to small,
+// statically bounded plans. Large or runtime limits use the existing spill-capable
+// Top and MergeOrder operators instead.
+func canUseResidentMergeTop(topN *plan.Expr) bool {
+	if topN == nil {
+		return false
+	}
+	literal, ok := topN.Expr.(*plan.Expr_Lit)
+	if !ok || literal.Lit == nil {
+		return false
+	}
+	value, ok := literal.Lit.Value.(*plan.Literal_U64Val)
+	return ok && value.U64Val <= mergeTopResidentPlanThreshold
 }
 
 func (c *Compile) compileTop(node *plan.Node, topN *plan.Expr, ss []*Scope) []*Scope {
@@ -6121,11 +6274,23 @@ func (c *Compile) compileTop(node *plan.Node, topN *plan.Expr, ss []*Scope) []*S
 	rs := c.newMergeScope(ss)
 
 	currentFirstFlag = c.anal.isFirst
-	arg := constructMergeTop(node, topN)
-	arg.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
-	rs.setRootOperator(arg)
+	if canUseResidentMergeTop(topN) {
+		arg := constructMergeTop(node, topN)
+		arg.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
+		rs.setRootOperator(arg)
+		c.anal.isFirst = false
+		return []*Scope{rs}
+	}
+
+	mergeOrder := constructMergeOrder(node)
+	mergeOrder.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
+	rs.setRootOperator(mergeOrder)
 	c.anal.isFirst = false
 
+	globalLimit := constructLimit(&plan.Node{Limit: topN})
+	globalLimit.SetAnalyzeControl(c.anal.curNodeIdx, c.anal.isFirst)
+	rs.setRootOperator(globalLimit)
+	c.anal.isFirst = false
 	return []*Scope{rs}
 }
 
@@ -6677,6 +6842,30 @@ func supportsRemoteAsofJoin(service string) bool {
 	}
 	protocolVersion, ok := version.(int64)
 	return ok && protocolVersion >= defines.MORPCVersion27
+}
+
+// supportsRemoteMongoUserQuery guards the MongoScan payload that carries
+// validated BSON. An older CN would ignore these protobuf fields and silently
+// execute the legacy unfiltered Find path, so explicit queries must wait until
+// deployment has raised the cluster's oldest-live protocol version.
+func supportsRemoteMongoUserQuery(service string) bool {
+	rt := moruntime.ServiceRuntime(service)
+	if rt == nil {
+		return false
+	}
+	version, ok := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
+	if !ok {
+		return false
+	}
+	protocolVersion, ok := version.(int64)
+	return ok && protocolVersion >= defines.MORPCVersion44
+}
+
+// mongoScanUsesV44Payload reports whether a scan uses any field introduced by
+// the MongoDB query protocol. Older receivers ignore all three fields, so each
+// one must be rejected during a mixed-version rollout.
+func mongoScanUsesV44Payload(scan *plan.MongoScan) bool {
+	return scan != nil && (scan.UserQueryKind != 0 || scan.IncludeQueryColumn || scan.EmptyResult)
 }
 
 func supportsRemoteTargetAwareUpdate(service string) bool {
@@ -8862,7 +9051,7 @@ func (c *Compile) fatalLog(retry int, err error) {
 }
 
 func (c *Compile) SetOriginSQL(sql string) {
-	c.originSQL = sql
+	c.originSQL = sqlmongodb.RedactSQLForDiagnostics(sql)
 }
 
 // SetResourceAttemptOwnerEligible marks this Compile as the top-level

@@ -16,11 +16,15 @@ package main
 
 import (
 	"context"
+	"crypto/md5"
 	"database/sql"
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"go/parser"
 	"go/token"
+	"io"
+	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -32,6 +36,8 @@ import (
 
 	"github.com/DATA-DOG/go-sqlmock"
 	"github.com/stretchr/testify/require"
+	"github.com/xdg-go/scram"
+	"go.mongodb.org/mongo-driver/v2/bson"
 )
 
 func TestMongoDBLocalE2ERunnerDoesNotImportKernelPackages(t *testing.T) {
@@ -55,8 +61,9 @@ func TestMongoDBLocalE2EKeyfileMountUsesDirectory(t *testing.T) {
 	repoRoot := mongoDBTestRepoRoot(t)
 	script, err := os.ReadFile(filepath.Join(repoRoot, "optools", "mongodb_ci.bash"))
 	require.NoError(t, err)
-	require.Contains(t, string(script), "MONGODB_KEYFILE_DIR=\"$TMP_DIR/mongodb-key-source\"")
+	require.Contains(t, string(script), "MONGODB_KEYFILE_DIR=\"$(mktemp -d \"$ROOT_DIR/../.mo-mongodb-key-source.XXXXXX\")\"")
 	require.Contains(t, string(script), "MONGODB_KEYFILE=\"$MONGODB_KEYFILE_DIR/mongodb-keyfile\"")
+	require.Contains(t, string(script), "$(basename \"$MONGODB_KEYFILE_DIR\")\" == .mo-mongodb-key-source.*")
 
 	compose, err := os.ReadFile(filepath.Join(repoRoot, "etc", "launch-mongodb-local", "compose.yaml"))
 	require.NoError(t, err)
@@ -354,6 +361,17 @@ func mongoDBPortPlanEnv(overrides map[string]string) []string {
 	return environment
 }
 
+type testTransferMonitor struct {
+	reset             func(context.Context) error
+	documentsReturned func(context.Context) (int64, error)
+}
+
+func (m testTransferMonitor) Reset(ctx context.Context) error { return m.reset(ctx) }
+
+func (m testTransferMonitor) DocumentsReturned(ctx context.Context) (int64, error) {
+	return m.documentsReturned(ctx)
+}
+
 func TestMongoDBLocalE2ERunContract(t *testing.T) {
 	repoRoot := mongoDBTestRepoRoot(t)
 	previous, err := os.Getwd()
@@ -365,7 +383,7 @@ func TestMongoDBLocalE2ERunContract(t *testing.T) {
 	require.NoError(t, err)
 	db, mock := newMongoDBE2ESQLMock(t)
 
-	for range 9 {
+	for range 10 {
 		mock.ExpectExec(".*").WillReturnResult(sqlmock.NewResult(0, 1))
 	}
 	mock.ExpectQuery("show mongodb connections").WillReturnRows(sqlmock.NewRows([]string{
@@ -376,6 +394,7 @@ func TestMongoDBLocalE2ERunContract(t *testing.T) {
 		AddRow("mongodb_ci", "seeds", "SCRAM-SHA-256", "disabled", "primary", "majority", 3, 0))
 	mock.ExpectQuery("show create table").WillReturnRows(sqlmock.NewRows([]string{"table", "ddl"}).AddRow(
 		"events", "CREATE EXTERNAL TABLE events (id CHAR(24) MONGODB_PATH '_id') ENGINE = MONGODB WITH ('connection'='mongodb_ci')"))
+	expectMongoDBE2EScalar(mock, "STRING")
 	expectMongoDBE2EScalar(mock, "text")
 	expectMongoDBE2EScalar(mock, "2")
 	expectMongoDBE2EScalar(mock, "1")
@@ -410,6 +429,20 @@ func TestMongoDBLocalE2ERunContract(t *testing.T) {
 	mock.ExpectExec("set @mongo_measurement = 19").WillReturnResult(sqlmock.NewResult(0, 0))
 	expectMongoDBE2EScalar(mock, "2")
 	mock.ExpectExec("deallocate prepare mongo_pruned_text").WillReturnResult(sqlmock.NewResult(0, 0))
+	expectMongoDBE2EScalar(mock, "1")
+	expectMongoDBE2EScalar(mock, `{"filter":{"site_id":"site-west"}}`)
+	expectMongoDBE2EScalar(mock, "device-001|4|18.5")
+	expectMongoDBE2EScalar(mock, "device-001|4|18.5")
+	expectMongoDBE2EScalar(mock, "1")
+	mock.ExpectQuery("explain select").WillReturnRows(sqlmock.NewRows([]string{"QUERY PLAN"}).
+		AddRow("MongoDB Scan: operation=aggregate query_digest=0123456789ab").
+		AddRow("Filter Cond: event_count >= 1"))
+	for range 4 {
+		mock.ExpectQuery("select count").WillReturnError(errors.New("MongoDB pipeline stage is not allowed"))
+	}
+	mock.ExpectQuery("select count").WillReturnError(errors.New("MongoDB __mo_query must contain only a filter or pipeline field"))
+	mock.ExpectQuery("select count").WillReturnError(errors.New("MongoDB __mo_query must be strict Extended JSON"))
+	expectMongoDBE2EScalar(mock, "5")
 	mock.ExpectExec("create table mongodb_ci.events_insert_target").WillReturnResult(sqlmock.NewResult(0, 0))
 	mock.ExpectExec("insert into mongodb_ci.events_insert_target").WillReturnResult(sqlmock.NewResult(0, 1))
 	expectMongoDBE2EScalar(mock, "1")
@@ -458,8 +491,22 @@ func TestMongoDBLocalE2ERunContract(t *testing.T) {
 	mock.ExpectExec("alter mongodb connection mongodb_ci enable").WillReturnResult(sqlmock.NewResult(0, 1))
 	expectMongoDBE2EScalar(mock, "5")
 
+	transferSteps := 0
+	monitor := testTransferMonitor{
+		reset: func(context.Context) error {
+			transferSteps++
+			return nil
+		},
+		documentsReturned: func(context.Context) (int64, error) {
+			transferSteps++
+			if transferSteps == 2 {
+				return 5, nil
+			}
+			return 1, nil
+		},
+	}
 	result := report{}
-	require.NoError(t, run(t.Context(), db, "127.0.0.1:27017", &result))
+	require.NoError(t, runWithDSNAndTransferMonitor(t.Context(), db, "", "127.0.0.1:27017", &result, monitor))
 	require.Equal(t, []string{
 		"secret-backed-ddl",
 		"show-connections-admin-metadata-redaction",
@@ -469,6 +516,10 @@ func TestMongoDBLocalE2ERunContract(t *testing.T) {
 		"truncate-read-only-source-preserved",
 		"scan-projection-pushdown-null-conversion",
 		"prepared-scan-binary-and-text-reuse-recovery-metadata",
+		"explicit-filter-and-query-column",
+		"explicit-reducing-aggregation-pipeline",
+		"explicit-query-explain-redaction",
+		"explicit-query-fail-closed",
 		"insert-select-primary-key-targets",
 		"date-format-order-by",
 		"low-precision-temporal-residual",
@@ -481,6 +532,7 @@ func TestMongoDBLocalE2ERunContract(t *testing.T) {
 		"credential-generation-rotation",
 		"connection-disable-enable",
 	}, result.Cases)
+	require.Equal(t, &transferEvidence{RawScanDocuments: 5, PipelineDocuments: 1}, result.Transfer)
 	require.NoError(t, mock.ExpectationsWereMet())
 }
 
@@ -500,7 +552,7 @@ func TestMongoDBLocalE2ERunPropagatesRelaxedJSONQueryFailures(t *testing.T) {
 			t.Cleanup(func() { require.NoError(t, os.Chdir(previous)) })
 
 			db, mock := newMongoDBE2ESQLMock(t)
-			for range 9 {
+			for range 10 {
 				mock.ExpectExec(".*").WillReturnResult(sqlmock.NewResult(0, 1))
 			}
 			mock.ExpectQuery("show mongodb connections").WillReturnRows(sqlmock.NewRows([]string{
@@ -509,6 +561,7 @@ func TestMongoDBLocalE2ERunPropagatesRelaxedJSONQueryFailures(t *testing.T) {
 			}).AddRow("mongodb_ci", "seeds", "SCRAM-SHA-256", "disabled", "primary", "majority", 3, 0))
 			mock.ExpectQuery("show create table").WillReturnRows(sqlmock.NewRows([]string{"table", "ddl"}).AddRow(
 				"events", "CREATE EXTERNAL TABLE events (id CHAR(24) MONGODB_PATH '_id') ENGINE = MONGODB WITH ('connection'='mongodb_ci')"))
+			expectMongoDBE2EScalar(mock, "STRING")
 			expectMongoDBE2EScalar(mock, "text")
 			if tc.failedQuery == "json_contains" {
 				expectMongoDBE2EScalar(mock, "2")
@@ -738,6 +791,10 @@ func TestMongoDBLocalE2EHelpers(t *testing.T) {
 		require.ErrorContains(t, expectScalar(t.Context(), db, "scalar-error", "1"), "query failed")
 		mock.ExpectQuery("scalar-mismatch").WillReturnRows(sqlmock.NewRows([]string{"value"}).AddRow("2"))
 		require.ErrorContains(t, expectScalar(t.Context(), db, "scalar-mismatch", "1"), "expected")
+		mock.ExpectQuery("select __mo_query").WillReturnRows(sqlmock.NewRows([]string{"value"}).AddRow("secret-actual"))
+		err := expectScalar(t.Context(), db, "select __mo_query /* secret-query */", "secret-expected")
+		require.ErrorContains(t, err, "result mismatch")
+		require.NotContains(t, err.Error(), "secret-")
 		mock.ExpectQuery("unexpected-success").WillReturnRows(sqlmock.NewRows([]string{"value"}).AddRow("1"))
 		require.ErrorContains(t, expectQueryFailure(t.Context(), db, "unexpected-success", ""), "unexpectedly succeeded")
 		mock.ExpectQuery("wrong-error").WillReturnError(errors.New("different"))
@@ -835,6 +892,7 @@ func TestMongoDBLocalE2EHelpers(t *testing.T) {
 
 	t.Run("redaction and report", func(t *testing.T) {
 		require.Equal(t, "<redacted MongoDB DDL>", redact("CREDENTIAL_SECRET_REF='secret'"))
+		require.Equal(t, "<redacted MongoDB __mo_query statement>", redact("select __mo_query from t"))
 		require.Equal(t, "select 1", redact("select 1"))
 		dir := t.TempDir()
 		require.NoError(t, writeReport(dir, report{Status: "passed", Cases: []string{"scan"}}))
@@ -848,6 +906,154 @@ func TestMongoDBLocalE2EHelpers(t *testing.T) {
 		require.NoError(t, os.WriteFile(fileParent, []byte("x"), 0o600))
 		require.Error(t, writeReport(filepath.Join(fileParent, "child"), report{}))
 	})
+}
+
+func TestMongoDBTransferProfilerProtocol(t *testing.T) {
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancel()
+
+	host, commands := newMongoDBTransferTestServer(t)
+	_, err := newMongoTransferMonitor(ctx, host, "", "secret")
+	require.ErrorContains(t, err, "requires both root credentials")
+
+	profiler, err := newMongoTransferMonitor(ctx, host, "root", "secret")
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, profiler.Close(context.Background())) })
+	require.NoError(t, profiler.Reset(ctx))
+	returned, err := profiler.DocumentsReturned(ctx)
+	require.NoError(t, err)
+	require.EqualValues(t, 6, returned)
+
+	var received []string
+	for len(commands) > 0 {
+		received = append(received, <-commands)
+	}
+	joined := strings.Join(received, "\n")
+	require.Contains(t, joined, "profile")
+	require.Contains(t, joined, "drop")
+	require.Contains(t, joined, "find")
+	require.NoError(t, (*mongoProfiler)(nil).Close(ctx))
+	require.NoError(t, (*mongoProfiler)(nil).Reset(ctx))
+	returned, err = (*mongoProfiler)(nil).DocumentsReturned(ctx)
+	require.NoError(t, err)
+	require.Zero(t, returned)
+}
+
+func newMongoDBTransferTestServer(t *testing.T) (string, chan string) {
+	t.Helper()
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	commands := make(chan string, 16)
+	digest := fmt.Sprintf("%x", md5.Sum([]byte("root:mongo:secret")))
+	client, err := scram.SHA1.NewClientUnprepped("root", digest, "")
+	require.NoError(t, err)
+	credentials := client.GetStoredCredentials(scram.KeyFactors{Salt: "test-salt", Iters: 4096})
+	server, err := scram.SHA1.NewServer(func(username string) (scram.StoredCredentials, error) {
+		if username != "root" {
+			return scram.StoredCredentials{}, fmt.Errorf("unknown test user %q", username)
+		}
+		return credentials, nil
+	})
+	require.NoError(t, err)
+	go func() {
+		for {
+			conn, err := listener.Accept()
+			if err != nil {
+				return
+			}
+			go serveMongoDBTransferTestConnection(conn, commands, server)
+		}
+	}()
+	t.Cleanup(func() { _ = listener.Close() })
+	return listener.Addr().String(), commands
+}
+
+func serveMongoDBTransferTestConnection(conn net.Conn, commands chan<- string, server *scram.Server) {
+	defer conn.Close()
+	var conversation *scram.ServerConversation
+	for {
+		header := make([]byte, 16)
+		if _, err := io.ReadFull(conn, header); err != nil {
+			return
+		}
+		length := int(binary.LittleEndian.Uint32(header[:4]))
+		if length < len(header) {
+			return
+		}
+		body := make([]byte, length-len(header))
+		if _, err := io.ReadFull(conn, body); err != nil {
+			return
+		}
+		command := string(body)
+		commands <- command
+		response := bson.D{{Key: "ok", Value: 1}, {Key: "isWritablePrimary", Value: true}, {Key: "minWireVersion", Value: 0}, {Key: "maxWireVersion", Value: 13}}
+		request, err := mongoDBTransferCommand(header, body)
+		if err != nil {
+			return
+		}
+		if payload, ok := request["payload"].(bson.Binary); ok {
+			if _, started := request["saslStart"]; started {
+				conversation = server.NewConversation()
+			}
+			if conversation != nil {
+				reply, err := conversation.Step(string(payload.Data))
+				if err != nil {
+					return
+				}
+				response = bson.D{{Key: "ok", Value: 1}, {Key: "conversationId", Value: 1}, {Key: "done", Value: conversation.Done()}, {Key: "payload", Value: bson.Binary{Subtype: 0, Data: []byte(reply)}}}
+			}
+		}
+		if strings.Contains(command, "find") {
+			response = bson.D{{Key: "ok", Value: 1}, {Key: "cursor", Value: bson.D{{Key: "id", Value: int64(0)}, {Key: "ns", Value: "mongodb_source.system.profile"}, {Key: "firstBatch", Value: bson.A{bson.D{{Key: "nreturned", Value: 5}}, bson.D{{Key: "nreturned", Value: 1}}}}}}}
+		}
+		encoded, err := bson.Marshal(response)
+		if err != nil {
+			return
+		}
+		if _, err := conn.Write(mongoDBTransferWireResponse(header, encoded)); err != nil {
+			return
+		}
+	}
+}
+
+func mongoDBTransferCommand(header, body []byte) (bson.M, error) {
+	var document []byte
+	if binary.LittleEndian.Uint32(header[12:16]) == 2004 { // OP_QUERY
+		if len(body) < 4 {
+			return nil, errors.New("short OP_QUERY test command")
+		}
+		remainder := body[4:]
+		if end := strings.IndexByte(string(remainder), 0); end >= 0 && len(remainder) >= end+9 {
+			document = remainder[end+9:]
+		}
+	} else if len(body) >= 5 { // OP_MSG flags followed by a document section
+		document = body[5:]
+	}
+	var command bson.M
+	if err := bson.Unmarshal(document, &command); err != nil {
+		return nil, err
+	}
+	return command, nil
+}
+
+func mongoDBTransferWireResponse(requestHeader, document []byte) []byte {
+	requestID := binary.LittleEndian.Uint32(requestHeader[4:8])
+	if binary.LittleEndian.Uint32(requestHeader[12:16]) == 2004 { // OP_QUERY
+		message := make([]byte, 16+4+8+4+4+len(document))
+		binary.LittleEndian.PutUint32(message[:4], uint32(len(message)))
+		binary.LittleEndian.PutUint32(message[8:12], requestID)
+		binary.LittleEndian.PutUint32(message[12:16], 1) // OP_REPLY
+		binary.LittleEndian.PutUint32(message[32:36], 1)
+		copy(message[36:], document)
+		return message
+	}
+	message := make([]byte, 16+4+1+len(document))
+	binary.LittleEndian.PutUint32(message[:4], uint32(len(message)))
+	binary.LittleEndian.PutUint32(message[8:12], requestID)
+	binary.LittleEndian.PutUint32(message[12:16], 2013) // OP_MSG
+	message[20] = 0                                     // BSON document section
+	copy(message[21:], document)
+	return message
 }
 
 func mongoDBTestRepoRoot(t *testing.T) string {

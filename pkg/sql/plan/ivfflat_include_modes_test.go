@@ -554,7 +554,7 @@ func TestDistributedVectorDomainProtocolGate(t *testing.T) {
 			rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCLatestVersion)
 		}
 	})
-	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion43)
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion44)
 	require.False(t, localProtocolEnablesDistributedVectorDomain(service))
 	scanTag := scanNode.BindingTags[0]
 	scanNode.FilterList = []*plan.Expr{{
@@ -577,7 +577,7 @@ func TestDistributedVectorDomainProtocolGate(t *testing.T) {
 	require.True(t, tableFuncNode.RuntimeFilterProbeList[0].RequiredVectorSearchDomain)
 	require.True(t, tableFuncNode.Stats.GetForceOneCN())
 
-	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion44)
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion45)
 	require.True(t, localProtocolEnablesDistributedVectorDomain(service))
 }
 

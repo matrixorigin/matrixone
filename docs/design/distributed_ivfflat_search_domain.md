@@ -75,12 +75,14 @@ query vector is row-local.
 
 ## Compatibility and rollback
 
-The required-domain plan field is append-only and gated by the next cumulative
-MORPC version in authoritative `main`.  Open branches do not reserve versions:
-before every push this branch merges newest main and renumbers only if main has
-actually consumed its gate.  A cluster below the gate executes required domains
-coordinator-local.  No catalog or hidden-table format changes.  The existing
-`forceOneCN=1` hint and intrinsic ForceOneCN fallbacks restore local execution.
+The required-domain plan field is append-only and gated by `MORPCVersion45`,
+the next cumulative version after authoritative `main` consumed version 44 for
+the validated MongoDB explicit-query payload. Open branches do not reserve
+versions: before every push this branch merges newest main and renumbers only
+if main has actually consumed its gate. A cluster below the gate executes
+required domains coordinator-local. No catalog or hidden-table format changes.
+The existing `forceOneCN=1` hint and intrinsic ForceOneCN fallbacks restore
+local execution.
 
 ## Validation and acceptance
 
