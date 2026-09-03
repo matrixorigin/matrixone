@@ -4229,8 +4229,8 @@ func preparedFunctionResultDependsOnRuntimeParam(expr *plan.Expr) bool {
 		for _, candidate := range preparedRuntimeParamTypeCandidates() {
 			candidateArgs := append([]types.Type(nil), argTypes...)
 			candidateArgs[paramArg] = candidate
-			resolved, err := function.GetFunctionByName(context.Background(), fn.Func.GetObjName(), candidateArgs)
-			if err != nil {
+			resolved, ok := function.GetFunctionByNameWithoutError(fn.Func.GetObjName(), candidateArgs)
+			if !ok {
 				continue
 			}
 			if resolved.GetEncodedOverloadID() != fn.Func.GetObj() || !resolved.GetReturnType().Eq(makeTypeByPlan2Expr(expr)) {
