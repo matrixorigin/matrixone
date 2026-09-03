@@ -3745,14 +3745,6 @@ var gSysVarsDefs = map[string]SystemVariable{
 		Type:              InitSystemVariableBoolType("experimental_ivf_index"),
 		Default:           int8(0),
 	},
-	"experimental_manual_analyze": {
-		Name:              "experimental_manual_analyze",
-		Scope:             ScopeSession,
-		Dynamic:           true,
-		SetVarHintApplies: false,
-		Type:              InitSystemVariableBoolType("experimental_manual_analyze"),
-		Default:           int8(0),
-	},
 	"ivf_threads_build": {
 		Name:              "ivf_threads_build",
 		Scope:             ScopeBoth,

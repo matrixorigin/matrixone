@@ -22,34 +22,17 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestManualAnalyzeFeatureGateDefaultsOff(t *testing.T) {
-	ses := &Session{}
-	enabled, err := manualAnalyzeEnabled(ses)
-	require.NoError(t, err)
-	require.False(t, enabled)
-
-	ses.sesSysVars = &SystemVariables{mp: map[string]any{manualAnalyzeVariable: int8(1)}}
-	enabled, err = manualAnalyzeEnabled(ses)
-	require.NoError(t, err)
-	require.True(t, enabled)
-}
-
 func TestBuildAnalyzeAuthorizationProbeQuotesIdentifiers(t *testing.T) {
-	entry := &tree.AnalyzeTableEntry{Table: tree.NewTableName(
-		"tick`table",
-		tree.ObjectNamePrefix{SchemaName: "select-db", ExplicitSchema: true},
-		nil,
-	)}
 	probe := buildAnalyzeAuthorizationProbe(
-		entry, tree.IdentifierList{"select", "a-b", "tick`name"})
+		"select-db", "tick`table", tree.IdentifierList{"select", "a-b", "tick`name"})
 	require.Equal(t,
 		"select `select`,`a-b`,`tick``name` from `select-db`.`tick``table` where false",
 		probe)
 }
 
-func TestAddManualAnalyzeResultColumns(t *testing.T) {
+func TestAddAnalyzeResultColumns(t *testing.T) {
 	mrs := &MysqlResultSet{}
-	addManualAnalyzeResultColumns(mrs)
+	addAnalyzeResultColumns(mrs)
 	require.Equal(t, uint64(11), mrs.GetColumnCount())
 	column, err := mrs.GetColumn(t.Context(), 0)
 	require.NoError(t, err)

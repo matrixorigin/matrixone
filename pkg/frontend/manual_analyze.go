@@ -27,46 +27,25 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 )
 
-const manualAnalyzeVariable = "experimental_manual_analyze"
-
 type boundAnalyzeTable struct {
 	ctx      context.Context
-	entry    *tree.AnalyzeTableEntry
 	columns  tree.IdentifierList
 	relation engine.AnalyzableRelation
 	key      pbstats.StatsInfoKey
 }
 
-func manualAnalyzeEnabled(ses *Session) (bool, error) {
-	value, err := ses.GetSessionSysVar(manualAnalyzeVariable)
-	if err != nil {
-		return false, err
-	}
-	switch typed := value.(type) {
-	case int8:
-		return typed != 0, nil
-	case int64:
-		return typed != 0, nil
-	case bool:
-		return typed, nil
-	default:
-		return false, moerr.NewInternalErrorNoCtxf(
-			"invalid %s value %T", manualAnalyzeVariable, value)
-	}
-}
-
-func handleManualAnalyzeStmt(ses *Session, execCtx *ExecCtx, stmt *tree.AnalyzeStmt) error {
+func handleAnalyzeStatsStmt(ses *Session, execCtx *ExecCtx, stmt *tree.AnalyzeStmt) error {
 	if !analyzeStatsPublicationAllowed(execCtx) {
 		return moerr.NewNotSupported(execCtx.reqCtx,
-			"manual ANALYZE cannot run inside an active user transaction")
+			"ANALYZE TABLE cannot run inside an active user transaction")
 	}
 	storage := getPu(ses.GetService()).StorageEngine
 	publisher, ok := storage.(engine.AnalyzedStatsPublisher)
 	if !ok {
 		return moerr.NewNotSupported(execCtx.reqCtx,
-			"manual ANALYZE is not supported by this storage engine")
+			"ANALYZE TABLE is not supported by this storage engine")
 	}
-	tables, err := bindManualAnalyzeTables(ses, execCtx, stmt)
+	tables, err := bindAnalyzeTables(ses, execCtx, stmt)
 	if err != nil {
 		return err
 	}
@@ -77,7 +56,8 @@ func handleManualAnalyzeStmt(ses *Session, execCtx *ExecCtx, stmt *tree.AnalyzeS
 	// and performs ordinary SELECT authorization without reading table data.
 	for _, table := range tables {
 		if _, err = executeAnalyzeDerivedQuery(
-			ses, execCtx, buildAnalyzeAuthorizationProbe(table.entry, table.columns)); err != nil {
+			ses, execCtx, buildAnalyzeAuthorizationProbe(
+				table.key.DbName, table.key.TableName, table.columns)); err != nil {
 			return err
 		}
 	}
@@ -86,7 +66,7 @@ func handleManualAnalyzeStmt(ses *Session, execCtx *ExecCtx, stmt *tree.AnalyzeS
 	// clear the statement result set. Install a fresh one for ANALYZE's summary.
 	mrs := &MysqlResultSet{}
 	ses.SetMysqlResultSet(mrs)
-	addManualAnalyzeResultColumns(mrs)
+	addAnalyzeResultColumns(mrs)
 	for _, table := range tables {
 		tableKey := optimizerStatsTableKey{
 			accountID: table.key.AccId,
@@ -112,7 +92,7 @@ func handleManualAnalyzeStmt(ses *Session, execCtx *ExecCtx, stmt *tree.AnalyzeS
 		if result == nil || result.Stats == nil {
 			release()
 			return moerr.NewInternalErrorNoCtxf(
-				"manual ANALYZE did not collect statistics for %s.%s",
+				"ANALYZE TABLE did not collect statistics for %s.%s",
 				table.key.DbName, table.key.TableName)
 		}
 		if err = publishCollectedAnalyzeStats(
@@ -142,14 +122,14 @@ func handleManualAnalyzeStmt(ses *Session, execCtx *ExecCtx, stmt *tree.AnalyzeS
 	return nil
 }
 
-func bindManualAnalyzeTables(
+func bindAnalyzeTables(
 	ses *Session,
 	execCtx *ExecCtx,
 	stmt *tree.AnalyzeStmt,
 ) ([]boundAnalyzeTable, error) {
 	tcc := ses.GetTxnCompileCtx()
 	if tcc == nil {
-		return nil, moerr.NewInternalErrorNoCtx("manual ANALYZE requires a transaction compiler context")
+		return nil, moerr.NewInternalErrorNoCtx("ANALYZE TABLE requires a transaction compiler context")
 	}
 	tables := make([]boundAnalyzeTable, 0, len(stmt.Entries))
 	seen := make(map[optimizerStatsTableKey]struct{}, len(stmt.Entries))
@@ -159,7 +139,7 @@ func bindManualAnalyzeTables(
 		}
 		if entry.Table.AtTsExpr != nil {
 			return nil, moerr.NewNotSupported(execCtx.reqCtx,
-				"manual ANALYZE does not support historical snapshots")
+				"ANALYZE TABLE does not support historical snapshots")
 		}
 		columns := entry.Cols
 		var err error
@@ -184,7 +164,7 @@ func bindManualAnalyzeTables(
 		if obj.PubInfo != nil || !analyzeTableOwnsPersistentStats(tableDef) ||
 			tableDef.IsTemporary || tableDef.ViewSql != nil {
 			return nil, moerr.NewNotSupported(execCtx.reqCtx,
-				"manual ANALYZE supports only owned physical tables")
+				"ANALYZE TABLE supports only owned physical tables")
 		}
 		physicalCtx, relation, err := tcc.getRelation(dbName, string(entry.Table.Name()), nil, nil)
 		if err != nil {
@@ -197,7 +177,7 @@ func bindManualAnalyzeTables(
 		analyzer, ok := relation.(engine.AnalyzableRelation)
 		if !ok {
 			return nil, moerr.NewNotSupported(execCtx.reqCtx,
-				"manual ANALYZE is not supported by this relation")
+				"ANALYZE TABLE is not supported by this relation")
 		}
 		accountID := tcc.resolvePhysicalObjectAccount(obj, tableDef, nil)
 		databaseID := tableDef.DbId
@@ -214,7 +194,7 @@ func bindManualAnalyzeTables(
 		}
 		seen[identity] = struct{}{}
 		tables = append(tables, boundAnalyzeTable{
-			ctx: physicalCtx, entry: entry, columns: columns, relation: analyzer,
+			ctx: physicalCtx, columns: columns, relation: analyzer,
 			key: pbstats.StatsInfoKey{
 				AccId: accountID, DatabaseID: databaseID, TableID: uint64(obj.Obj),
 				DbName: obj.SchemaName, TableName: obj.ObjName,
@@ -238,7 +218,7 @@ func publishCollectedAnalyzeStats(
 	}
 	if published == nil {
 		return moerr.NewInternalErrorNoCtxf(
-			"manual ANALYZE did not publish statistics for %s.%s", key.DbName, key.TableName)
+			"ANALYZE TABLE did not publish statistics for %s.%s", key.DbName, key.TableName)
 	}
 	version := advanceOptimizerStatsVersion(ses.GetService(), tableKey)
 	ses.cachePublishedStats(tableKey, version, published)
@@ -246,7 +226,8 @@ func publishCollectedAnalyzeStats(
 }
 
 func buildAnalyzeAuthorizationProbe(
-	entry *tree.AnalyzeTableEntry,
+	databaseName string,
+	tableName string,
 	columns tree.IdentifierList,
 ) string {
 	ctx := tree.NewFmtCtx(dialect.MYSQL, tree.WithQuoteIdentifier())
@@ -258,7 +239,9 @@ func buildAnalyzeAuthorizationProbe(
 		ctx.WriteIdentifier(column)
 	}
 	ctx.WriteString(" from ")
-	entry.Table.Format(ctx)
+	ctx.WriteIdentifier(tree.Identifier(databaseName))
+	ctx.WriteByte('.')
+	ctx.WriteIdentifier(tree.Identifier(tableName))
 	ctx.WriteString(" where false")
 	return ctx.String()
 }
@@ -271,7 +254,7 @@ func identifiersToStrings(columns tree.IdentifierList) []string {
 	return result
 }
 
-func addManualAnalyzeResultColumns(mrs *MysqlResultSet) {
+func addAnalyzeResultColumns(mrs *MysqlResultSet) {
 	definitions := []struct {
 		name string
 		typ  defines.MysqlType
