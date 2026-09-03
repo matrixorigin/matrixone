@@ -651,3 +651,23 @@ coalesce_plain_null  ¦  VARCHAR(2)  𝄀
 case_plain_null  ¦  VARCHAR(2)  𝄀
 if_plain_null  ¦  BIGINT(0)
 drop view v_conditional_typed_null;
+select case when null then 'a' else 'b' end as literal_null_condition;
+➤ literal_null_condition[12,1,0]  𝄀
+b
+select case when null then 'a' when 1 = 1 then 'b' else 'c' end as mixed_null_condition;
+➤ mixed_null_condition[12,1,0]  𝄀
+b
+select case when 0 / 0 then 'a' else 'b' end as null_arithmetic_condition;
+➤ null_arithmetic_condition[12,1,0]  𝄀
+b
+drop table if exists t_case_nullable_condition;
+create table t_case_nullable_condition (id int primary key, cond double);
+insert into t_case_nullable_condition values (1, null), (2, 0), (3, 2.5);
+select id, case when cond then 'true' else 'false' end as condition_result
+from t_case_nullable_condition
+order by id;
+➤ id[4,32,0]  ¦  condition_result[12,5,0]  𝄀
+1  ¦  false  𝄀
+2  ¦  false  𝄀
+3  ¦  true
+drop table t_case_nullable_condition;
