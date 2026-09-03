@@ -3230,8 +3230,12 @@ func (b *baseBinder) bindPreparedNumericFuncExpr(
 	if strings.EqualFold(name, "abs") && !hasExplicitFloatCast {
 		b.markPreparedNumericFallback(arg)
 	}
+	args, err := b.coerceBoolNumericAggregateArg(name, []*plan.Expr{arg})
+	if err != nil {
+		return nil, err
+	}
 	return bindBoundFuncExprAndConstFold(
-		b.GetContext(), b.builder.compCtx.GetProcess(), name, []*plan.Expr{arg},
+		b.GetContext(), b.builder.compCtx.GetProcess(), name, args,
 	)
 }
 
@@ -3262,6 +3266,34 @@ func (b *baseBinder) bindFullTextMatchExpr(astExpr *tree.FullTextMatchExpr, dept
 	}
 
 	return BindFuncExprImplByPlanExpr(b.GetContext(), "fulltext_match", args)
+}
+
+// coerceBoolNumericAggregateArg gives SUM/AVG over a BOOL argument the MySQL
+// reading under the ENABLE_BOOL_SUMAVG sql_mode by binding that argument as
+// TINYINT. MySQL has no BOOL type: a predicate there is an integer 0/1 and
+// SUM/AVG over one is ordinary numeric aggregation, while MO types it as BOOL,
+// which SumSupportedTypes rejects. The cast is exactly the
+// sum(cast(pred as tinyint)) a user writes today, so it reuses the existing
+// integer aggregate (no new aggregate state, no executor path, no per-row
+// cost) and keeps sum(bool) -> BIGINT consistent with sum(tinyint).
+//
+// The mode is read from the builder flag that NewQueryBuilder resolved once
+// from sql_mode, the same way ONLY_FULL_GROUP_BY is, so the direct and the
+// prepared bind paths agree and a binder without a builder stays strict.
+func (b *baseBinder) coerceBoolNumericAggregateArg(
+	name string, args []*plan.Expr,
+) ([]*plan.Expr, error) {
+	if b.builder == nil || !b.builder.boolSumAvgCompat || len(args) != 1 ||
+		args[0].Typ.Id != int32(types.T_bool) ||
+		!(strings.EqualFold(name, "sum") || strings.EqualFold(name, "avg")) {
+		return args, nil
+	}
+	tinyint := types.T_int8.ToType()
+	casted, err := appendCastBeforeExpr(b.GetContext(), args[0], makePlan2Type(&tinyint))
+	if err != nil {
+		return nil, err
+	}
+	return []*plan.Expr{casted}, nil
 }
 
 func (b *baseBinder) bindFuncExprImplByAstExpr(name string, astArgs []tree.Expr, depth int32) (*plan.Expr, error) {
@@ -3494,6 +3526,10 @@ func (b *baseBinder) bindFuncExprImplByAstExpr(name string, astArgs []tree.Expr,
 		}
 	}
 	args = useStoredMySQLSpecialTypesForNumericContract(b.GetContext(), name, args)
+	args, coerceErr := b.coerceBoolNumericAggregateArg(name, args)
+	if coerceErr != nil {
+		return nil, coerceErr
+	}
 	if (name == "in" || name == "not_in") && len(args) == 2 &&
 		containsVolatileFunction(args[0]) && b.ctx != nil {
 		b.markVolatileInLeft(args[0])
@@ -4511,7 +4547,7 @@ func bindFuncExprImplByPlanExpr(
 		} else if args[0].Typ.Id == int32(types.T_interval) && args[1].Typ.Id == int32(types.T_int64) && intervalUnitIsDayOrLarger(args[0]) {
 			name = "date_add"
 			args, err = resetDateFunctionArgs(ctx, args[1], args[0])
-		} else if args[0].Typ.Id == int32(types.T_varchar) && args[1].Typ.Id == int32(types.T_varchar) {
+		} else if isCollatedTextPlanType(args[0]) && isCollatedTextPlanType(args[1]) {
 			name = "concat"
 		}
 		if err != nil {
@@ -4880,6 +4916,13 @@ func bindFuncExprImplByPlanExpr(
 	funcID = fGet.GetEncodedOverloadID()
 	returnType = fGet.GetReturnType()
 	argsCastType, _ = fGet.ShouldDoImplicitTypeCast()
+	// CONVERT's executor consumes a VARCHAR cast, but its declared result bound
+	// belongs to the pre-cast source type. Derive metadata before inserting the
+	// execution cast so fixed numeric/temporal/UUID widths are not replaced by
+	// VARCHAR(65535) and spuriously promoted to BLOB.
+	if name == "convert" {
+		returnType = function.ConvertReturnTypeForBinder(argsType)
+	}
 	adjustControlFlowMetadata(name, args, argsType, &returnType, argsCastType)
 
 	// Optimization: avoid casting columns in comparisons to preserve index usage
@@ -5192,6 +5235,12 @@ func bindFuncExprImplByPlanExpr(
 			}
 		}
 
+	case "repeat":
+		refineRepeatLiteralReturnType(args, &returnType)
+
+	case "lpad", "rpad":
+		refinePadLiteralReturnType(args, &returnType)
+
 	case "python_user_defined_function":
 		size := (argsLength - 2) / 2
 		args = args[:size+1]
@@ -5280,6 +5329,151 @@ func bindFuncExprImplByPlanExpr(
 		},
 		Typ: Typ,
 	}, nil
+}
+
+func isCollatedTextPlanType(expr *plan.Expr) bool {
+	if expr == nil {
+		return false
+	}
+	switch types.T(expr.Typ.Id) {
+	case types.T_char, types.T_varchar, types.T_text:
+		return true
+	default:
+		return false
+	}
+}
+
+func refineRepeatLiteralReturnType(args []*plan.Expr, returnType *types.Type) {
+	if len(args) != 2 {
+		return
+	}
+	countLiteral := args[1].GetLit()
+	if countLiteral == nil {
+		return
+	}
+	count, ok := literalSignedValue(countLiteral)
+	if !ok || count < 0 {
+		return
+	}
+	binary := returnType.Charset == types.CharsetBinary
+	sourceWidth, known := stringExprBound(args[0], binary)
+	if !known {
+		return
+	}
+	if sourceWidth != 0 && uint64(count) > math.MaxUint64/sourceWidth {
+		return
+	}
+	refineKnownStringResultType(returnType, sourceWidth*uint64(count), binary)
+}
+
+func refinePadLiteralReturnType(args []*plan.Expr, returnType *types.Type) {
+	if len(args) != 3 {
+		return
+	}
+	targetLiteral := args[1].GetLit()
+	if targetLiteral == nil {
+		return
+	}
+	target, ok := literalSignedValue(targetLiteral)
+	if !ok || target < 0 {
+		return
+	}
+	if returnType.Charset != types.CharsetBinary {
+		refineKnownStringResultType(returnType, uint64(target), false)
+		return
+	}
+	sourceRuneBytes, sourceKnown := binaryExprMaxRuntimeRuneBytes(args[0])
+	padRuneBytes, padKnown := binaryExprMaxRuntimeRuneBytes(args[2])
+	if !sourceKnown || !padKnown {
+		return
+	}
+	maxRuneBytes := max(sourceRuneBytes, padRuneBytes)
+	if maxRuneBytes != 0 && uint64(target) > math.MaxUint64/maxRuneBytes {
+		return
+	}
+	refineKnownStringResultType(returnType, uint64(target)*maxRuneBytes, true)
+}
+
+func binaryExprMaxRuntimeRuneBytes(expr *plan.Expr) (uint64, bool) {
+	if lit := expr.GetLit(); lit != nil && !lit.Isnull {
+		if value, ok := lit.GetValue().(*plan.Literal_Sval); ok {
+			var bound uint64
+			for input := value.Sval; len(input) > 0; {
+				r, size := utf8.DecodeRuneInString(input)
+				encoded := uint64(size)
+				if r == utf8.RuneError && size == 1 {
+					encoded = uint64(utf8.RuneLen(utf8.RuneError))
+				}
+				bound = max(bound, encoded)
+				input = input[size:]
+			}
+			return bound, true
+		}
+	}
+	if expr.Typ.Width <= 0 || types.T(expr.Typ.Id) == types.T_blob {
+		// PAD's target is a character count. Every runtime rune occupies at most
+		// UTFMax encoded bytes even when the source declaration itself is
+		// unbounded, so a constant target still gives a finite payload bound.
+		return uint64(utf8.UTFMax), true
+	}
+	if oid := types.T(expr.Typ.Id); oid == types.T_char || oid == types.T_varchar {
+		// Binary-charset CHAR/VARCHAR width remains a character count.
+		return uint64(utf8.UTFMax), true
+	}
+	// Native binary widths count bytes. Invalid UTF-8 bytes become the
+	// three-byte RuneError; valid UTF-8 can consume up to four source bytes.
+	return min(max(uint64(expr.Typ.Width), uint64(utf8.RuneLen(utf8.RuneError))), uint64(utf8.UTFMax)), true
+}
+
+func stringExprBound(expr *plan.Expr, binary bool) (uint64, bool) {
+	if binary {
+		return binaryExprByteBound(expr)
+	}
+	if lit := expr.GetLit(); lit != nil && !lit.Isnull {
+		if value, ok := lit.GetValue().(*plan.Literal_Sval); ok {
+			return uint64(utf8.RuneCountInString(value.Sval)), true
+		}
+	}
+	if expr.Typ.Width > 0 && types.T(expr.Typ.Id) != types.T_text {
+		return uint64(expr.Typ.Width), true
+	}
+	return 0, false
+}
+
+func binaryExprByteBound(expr *plan.Expr) (uint64, bool) {
+	if lit := expr.GetLit(); lit != nil && !lit.Isnull {
+		if value, ok := lit.GetValue().(*plan.Literal_Sval); ok {
+			return uint64(len(value.Sval)), true
+		}
+	}
+	width := expr.Typ.Width
+	if width > 0 && types.T(expr.Typ.Id) != types.T_blob {
+		if oid := types.T(expr.Typ.Id); oid == types.T_char || oid == types.T_varchar {
+			if uint64(width) > math.MaxUint64/uint64(utf8.UTFMax) {
+				return 0, false
+			}
+			return uint64(width) * uint64(utf8.UTFMax), true
+		}
+		return uint64(width), true
+	}
+	return 0, false
+}
+
+func refineKnownStringResultType(returnType *types.Type, width uint64, binary bool) {
+	if binary {
+		if width <= uint64(types.MaxVarBinaryLen) {
+			*returnType = types.T_varbinary.ToType()
+			returnType.Width = int32(width)
+			returnType.Charset = types.CharsetBinary
+		}
+		return
+	}
+	if width <= uint64(types.MaxVarcharLen) {
+		charset := returnType.Charset
+		*returnType = types.T_varchar.ToType()
+		returnType.Width = int32(width)
+		returnType.Charset = charset
+	}
 }
 
 func bindConvertUsingCharset(ctx context.Context, args []*plan.Expr) error {

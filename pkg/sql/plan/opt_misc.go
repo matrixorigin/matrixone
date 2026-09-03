@@ -1834,6 +1834,15 @@ func singleRowCastIsTotal(source, target plan.Type) bool {
 	if isSameColumnType(source, target) {
 		return !sourceID.IsDecimal() || validDecimalPlanType(source)
 	}
+	// CHAR comparison binding casts text operands to the fixed CHAR domain.
+	// With the same charset and a target at least as wide as the declared
+	// source, that cast cannot reject or truncate any source value.
+	if targetID == types.T_char &&
+		(sourceID == types.T_char || sourceID == types.T_varchar) &&
+		source.Charset == target.Charset && source.Width > 0 &&
+		target.Width >= source.Width {
+		return true
+	}
 	if sourceID.IsDecimal() {
 		if !validDecimalPlanType(source) {
 			return false
@@ -2241,6 +2250,8 @@ func handleOptimizerHints(str string, builder *QueryBuilder) {
 		builder.optimizerHints.printShuffle = value
 	case "skipDedup":
 		builder.optimizerHints.skipDedup = value
+	case "outerAntiPlanning":
+		builder.optimizerHints.outerAntiPlanning = value
 	}
 }
 
