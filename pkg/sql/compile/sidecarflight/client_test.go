@@ -100,6 +100,8 @@ type testFlightServer struct {
 	doPutOnce           sync.Once
 	doPutBatches        atomic.Int32
 	notNeededInput      bool
+	rejectDoPut         bool
+	invalidDoPutAck     bool
 	cancelFailures      atomic.Int32
 	deadlineUnixMS      atomic.Int64
 }
@@ -456,26 +458,35 @@ func TestNativeInputBackpressureSerializesFramesAndAbortReleasesWaiters(t *testi
 	require.NoError(t, err)
 	require.NoError(t, input.Start(context.Background()))
 
-	mp := mpool.MustNewZero()
+	sourceMP := mpool.MustNewZero()
+	frameMP := mpool.MustNewZero()
 	bat := batch.NewWithSize(1)
 	bat.Vecs[0] = vector.NewVec(types.T_int64.ToType())
 	for row := int64(0); row < 20; row++ {
-		require.NoError(t, vector.AppendFixed(bat.Vecs[0], row, false, mp))
+		require.NoError(t, vector.AppendFixed(bat.Vecs[0], row, false, sourceMP))
 	}
 	bat.SetRowCount(20)
-	defer bat.Clean(mp)
+	defer func() {
+		bat.Clean(sourceMP)
+		require.Zero(t, sourceMP.CurrNB())
+		require.Zero(t, frameMP.CurrNB())
+	}()
+	firstPlan, err := planNativeWindow(bat, 0, runtime.config.MaxBatchBytes)
+	require.NoError(t, err)
 	firstDone := make(chan error, 1)
-	go func() { firstDone <- input.Send(context.Background(), bat, mp) }()
+	go func() { firstDone <- input.Send(context.Background(), bat, frameMP) }()
 	select {
 	case <-server.doPutBatch:
 	case <-time.After(time.Second):
 		t.Fatal("native input batch did not reach the server")
 	}
+	require.Equal(t, int64(nativeBatchFrameHeaderBytes+firstPlan.payloadBytes), frameMP.CurrNB(),
+		"the acknowledged frame must remain charged while its acknowledgement is blocked")
 	secondStarted := make(chan struct{})
 	secondDone := make(chan error, 1)
 	go func() {
 		close(secondStarted)
-		secondDone <- input.Send(context.Background(), bat, mp)
+		secondDone <- input.Send(context.Background(), bat, frameMP)
 	}()
 	<-secondStarted
 	input.Abort(errors.New("injected cancellation"))
@@ -492,6 +503,7 @@ func TestNativeInputBackpressureSerializesFramesAndAbortReleasesWaiters(t *testi
 	}
 	require.Equal(t, int32(1), server.doPutBatches.Load(),
 		"the second Send must remain behind the first frame's acknowledgement")
+	require.Zero(t, frameMP.CurrNB())
 }
 
 func TestNativeInputRetireCancelsBlockedAcknowledgementWithoutError(t *testing.T) {
@@ -512,19 +524,27 @@ func TestNativeInputRetireCancelsBlockedAcknowledgementWithoutError(t *testing.T
 	require.NoError(t, err)
 	require.NoError(t, input.Start(context.Background()))
 
-	mp := mpool.MustNewZero()
+	sourceMP := mpool.MustNewZero()
+	frameMP := mpool.MustNewZero()
 	bat := batch.NewWithSize(1)
 	bat.Vecs[0] = vector.NewVec(types.T_int64.ToType())
-	require.NoError(t, vector.AppendFixed(bat.Vecs[0], int64(1), false, mp))
+	require.NoError(t, vector.AppendFixed(bat.Vecs[0], int64(1), false, sourceMP))
 	bat.SetRowCount(1)
-	defer bat.Clean(mp)
+	defer func() {
+		bat.Clean(sourceMP)
+		require.Zero(t, sourceMP.CurrNB())
+		require.Zero(t, frameMP.CurrNB())
+	}()
+	payloadBytes, err := bat.MarshalBinarySize()
+	require.NoError(t, err)
 	sendDone := make(chan error, 1)
-	go func() { sendDone <- input.Send(context.Background(), bat, mp) }()
+	go func() { sendDone <- input.Send(context.Background(), bat, frameMP) }()
 	select {
 	case <-server.doPutBatch:
 	case <-time.After(time.Second):
 		t.Fatal("native input batch did not reach the server")
 	}
+	require.Equal(t, int64(nativeBatchFrameHeaderBytes+payloadBytes), frameMP.CurrNB())
 	input.Retire()
 	select {
 	case sendErr := <-sendDone:
@@ -534,6 +554,7 @@ func TestNativeInputRetireCancelsBlockedAcknowledgementWithoutError(t *testing.T
 	}
 	require.True(t, input.NotNeeded())
 	require.NoError(t, input.Err())
+	require.Zero(t, frameMP.CurrNB())
 }
 
 func TestNativeInputSplitsOversizedBatchesWithinNegotiatedLimit(t *testing.T) {
@@ -553,19 +574,70 @@ func TestNativeInputSplitsOversizedBatchesWithinNegotiatedLimit(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, input.Start(context.Background()))
 
-	mp := mpool.MustNewZero()
+	sourceMP := mpool.MustNewZero()
+	frameMP := mpool.MustNewZero()
 	bat := batch.NewWithSize(1)
 	bat.Vecs[0] = vector.NewVec(types.T_int64.ToType())
 	for row := int64(0); row < 20; row++ {
-		require.NoError(t, vector.AppendFixed(bat.Vecs[0], row, false, mp))
+		require.NoError(t, vector.AppendFixed(bat.Vecs[0], row, false, sourceMP))
 	}
 	bat.SetRowCount(20)
-	defer bat.Clean(mp)
-	require.NoError(t, input.Send(context.Background(), bat, mp))
+	defer func() {
+		bat.Clean(sourceMP)
+		require.Zero(t, sourceMP.CurrNB())
+		require.Zero(t, frameMP.CurrNB())
+	}()
+	require.NoError(t, input.Send(context.Background(), bat, frameMP))
+	require.Zero(t, frameMP.CurrNB())
 	require.NoError(t, input.Finish(context.Background()))
 	require.Greater(t, input.sequence, uint64(1))
 	require.Equal(t, uint64(20), input.rows)
 	require.LessOrEqual(t, input.bytes, input.sequence*runtime.config.MaxBatchBytes)
+}
+
+func TestNativeInputFrameReleasedAfterTerminalSendOutcomes(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		server *testFlightServer
+		want   string
+	}{
+		{name: "server rejection", server: &testFlightServer{rejectDoPut: true}, want: "receive native input acknowledgement"},
+		{name: "invalid acknowledgement", server: &testFlightServer{invalidDoPutAck: true}, want: "invalid native input acknowledgement"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			server := tc.server
+			server.schema = mustHex(t, fixtureSchemaHex)
+			server.ticket = make([]byte, ticketBytes)
+			server.hash = make([]byte, sha256.Size)
+			runtime := &Runtime{
+				config: Config{MaxBatchBytes: 1 << 20, RequestTimeout: time.Second, CleanupTimeout: time.Second},
+				conn:   testFlightConnection(t, server), executions: make(map[*Execution]struct{}),
+			}
+			copy(runtime.capabilityHash[:], server.hash)
+			typesOut, headings := fixtureOutputShape()
+			execution, err := runtime.Prepare(
+				context.Background(), 1, make([]byte, 16), []byte("plan"),
+				typesOut, headings, testFlightDeadline(), testFlightRelease,
+			)
+			require.NoError(t, err)
+			input, err := execution.NewNativeInput(bytes.Repeat([]byte{7}, 32))
+			require.NoError(t, err)
+			require.NoError(t, input.Start(context.Background()))
+
+			sourceMP := mpool.MustNewZero()
+			frameMP := mpool.MustNewZero()
+			bat := batch.NewWithSize(1)
+			bat.Vecs[0] = vector.NewVec(types.T_int64.ToType())
+			require.NoError(t, vector.AppendFixed(bat.Vecs[0], int64(1), false, sourceMP))
+			bat.SetRowCount(1)
+			err = input.Send(context.Background(), bat, frameMP)
+			require.ErrorContains(t, err, tc.want)
+			require.Zero(t, frameMP.CurrNB())
+			bat.Clean(sourceMP)
+			require.Zero(t, sourceMP.CurrNB())
+			require.NoError(t, execution.Cleanup(context.Background()))
+		})
+	}
 }
 
 func TestNativeInputAcceptsEarlyNotNeeded(t *testing.T) {
@@ -1195,7 +1267,14 @@ func testDoPut(service any, stream grpc.ServerStream) error {
 				return context.Cause(stream.Context())
 			}
 		}
-		ack, _ := proto.Marshal(&uploadInputAck{AcknowledgedBatches: batches, Rows: rows, Bytes: bytesSeen})
+		if server.rejectDoPut {
+			return status.Error(codes.Unavailable, "injected native input rejection")
+		}
+		ackRows := rows
+		if server.invalidDoPutAck {
+			ackRows++
+		}
+		ack, _ := proto.Marshal(&uploadInputAck{AcknowledgedBatches: batches, Rows: ackRows, Bytes: bytesSeen})
 		if err = stream.SendMsg(&flightPutResult{AppMetadata: ack}); err != nil {
 			return err
 		}
