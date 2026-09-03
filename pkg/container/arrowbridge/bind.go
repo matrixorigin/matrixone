@@ -178,6 +178,9 @@ func BindLoad(
 			return nil, moerr.NewNotSupportedf(ctx, "Arrow field %q (%s) to MatrixOne column %q (%s): %v",
 				schema.Field(sourceIndex).Name, schema.Field(sourceIndex).Type, target.Name, target.Type, err)
 		}
+		if err := validateLoadTargetType(ctx, target.Type); err != nil {
+			return nil, err
+		}
 		plan.columns[target.MOIndex] = columnPlan{source: sourceIndex, target: target, kind: kind}
 		plan.attrs[target.MOIndex] = target.AttrName
 	}
@@ -239,6 +242,10 @@ func validateArrowTypeContract(ctx context.Context, fieldName string, typ arrow.
 				"Arrow field %q has invalid Decimal128 precision %d", fieldName, typed.Precision)
 		}
 	case *arrow.TimestampType:
+		if !validArrowTimeUnit(typed.Unit) {
+			return moerr.NewInvalidInputf(ctx,
+				"Arrow field %q has invalid timestamp time unit %d", fieldName, typed.Unit)
+		}
 		// GetZone validates both IANA names and fixed offsets. Do this while
 		// binding the schema so an invalid timezone cannot survive until the
 		// first record happens to exercise the timestamp conversion.
@@ -246,11 +253,53 @@ func validateArrowTypeContract(ctx context.Context, fieldName string, typ arrow.
 			return moerr.NewInvalidInputf(ctx,
 				"Arrow field %q has invalid timestamp timezone %q: %v", fieldName, typed.TimeZone, err)
 		}
+	case *arrow.Time32Type:
+		if typed.Unit != arrow.Second && typed.Unit != arrow.Millisecond {
+			return moerr.NewInvalidInputf(ctx,
+				"Arrow field %q has invalid time32 time unit %d", fieldName, typed.Unit)
+		}
+	case *arrow.Time64Type:
+		if typed.Unit != arrow.Microsecond && typed.Unit != arrow.Nanosecond {
+			return moerr.NewInvalidInputf(ctx,
+				"Arrow field %q has invalid time64 time unit %d", fieldName, typed.Unit)
+		}
 	case *arrow.DictionaryType:
 		if typed.ValueType == nil {
 			return moerr.NewInvalidInputf(ctx, "Arrow field %q has a dictionary with nil value type", fieldName)
 		}
 		return validateArrowTypeContract(ctx, fieldName, typed.ValueType)
+	}
+	return nil
+}
+
+func validArrowTimeUnit(unit arrow.TimeUnit) bool {
+	return unit == arrow.Second || unit == arrow.Millisecond ||
+		unit == arrow.Microsecond || unit == arrow.Nanosecond
+}
+
+func validateLoadTargetType(ctx context.Context, typ types.Type) error {
+	var expected int32
+	switch typ.Oid {
+	case types.T_bool, types.T_int8, types.T_uint8:
+		expected = 1
+	case types.T_int16, types.T_uint16, types.T_year:
+		expected = 2
+	case types.T_int32, types.T_uint32, types.T_date, types.T_float32:
+		expected = 4
+	case types.T_int64, types.T_uint64, types.T_datetime, types.T_time, types.T_timestamp,
+		types.T_float64, types.T_decimal64:
+		expected = 8
+	case types.T_decimal128:
+		expected = 16
+	case types.T_char, types.T_varchar, types.T_text, types.T_binary, types.T_varbinary, types.T_blob:
+		expected = int32(types.VarlenaSize)
+	default:
+		return nil
+	}
+	if typ.Size != expected {
+		return moerr.NewInvalidInputf(ctx,
+			"invalid MatrixOne target type size %d for %s, expected %d",
+			typ.Size, typ.Oid, expected)
 	}
 	return nil
 }

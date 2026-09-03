@@ -148,6 +148,12 @@ func InspectMessage(
 	if headerType == 0 {
 		return MessageInfo{}, moerr.NewInvalidInput(ctx, "Arrow IPC message header is missing")
 	}
+	if headerType != ipcflatbuf.MessageHeaderSchema &&
+		headerType != ipcflatbuf.MessageHeaderDictionaryBatch &&
+		headerType != ipcflatbuf.MessageHeaderRecordBatch {
+		return MessageInfo{}, moerr.NewInvalidInputf(ctx,
+			"unsupported Arrow IPC message header %d", headerType)
+	}
 	bodyLength := message.BodyLength()
 	if bodyLength < 0 || bodyLength > options.MaxBodyBytes || bodyLength > int64(math.MaxInt) {
 		return MessageInfo{}, moerr.NewInvalidInputf(ctx,
@@ -164,6 +170,10 @@ func InspectMessage(
 		return MessageInfo{}, moerr.NewInvalidInputf(ctx,
 			"Arrow IPC message body length %d does not match available body length %d",
 			bodyLength, len(options.Body))
+	}
+	if headerType == ipcflatbuf.MessageHeaderSchema && bodyLength != 0 {
+		return MessageInfo{}, moerr.NewInvalidInputf(ctx,
+			"invalid Arrow IPC schema message body length %d", bodyLength)
 	}
 
 	result := MessageInfo{HeaderType: byte(headerType), BodyBytes: bodyLength}
@@ -264,6 +274,10 @@ func validateRecordBatchMetadata(
 			return moerr.NewInvalidInputf(ctx,
 				"Arrow IPC buffer %d range [%d,%d) exceeds message body %d",
 				index, offset, offset+length, bodyBytes)
+		}
+		if offset%8 != 0 {
+			return moerr.NewInvalidInputf(ctx,
+				"Arrow IPC buffer %d has unaligned buffer offset %d", index, offset)
 		}
 		if !options.ValidateBody {
 			continue

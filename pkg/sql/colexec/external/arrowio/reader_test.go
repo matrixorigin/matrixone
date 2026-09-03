@@ -480,6 +480,44 @@ func TestIPCFilePlanningAndIndependentRecordShard(t *testing.T) {
 	require.ErrorContains(t, err, "dictionary closure")
 }
 
+func TestFilePlanShardRejectsIncompletePlan(t *testing.T) {
+	plan := &FilePlan{RecordBatches: []RecordBatchInfo{{Index: 0, Rows: 1}}}
+	var (
+		shard    FileShard
+		rows     int64
+		wireSize int64
+		err      error
+	)
+	require.NotPanics(t, func() {
+		shard, rows, wireSize, err = plan.Shard(0, 1)
+	})
+	require.Empty(t, shard)
+	require.Zero(t, rows)
+	require.Zero(t, wireSize)
+	require.ErrorContains(t, err, "incomplete")
+}
+
+func TestFilePlanShardRejectsNegativeEstimates(t *testing.T) {
+	plan := &FilePlan{
+		Schema:        arrow.NewSchema([]arrow.Field{{Name: "value", Type: arrow.PrimitiveTypes.Int64}}, nil),
+		RecordBatches: []RecordBatchInfo{{Index: 0, Rows: -1, WireBytes: -1}},
+		recordBlocks:  []fileBlock{{offset: 8, metadata: 8, body: 8}},
+	}
+	var (
+		shard    FileShard
+		rows     int64
+		wireSize int64
+		err      error
+	)
+	require.NotPanics(t, func() {
+		shard, rows, wireSize, err = plan.Shard(0, 1)
+	})
+	require.Empty(t, shard)
+	require.Zero(t, rows)
+	require.Zero(t, wireSize)
+	require.ErrorContains(t, err, "negative")
+}
+
 func TestIPCFilePlanningDictionaryClosure(t *testing.T) {
 	payload, expected := makeDictionaryIPC(t, ContainerFile, false)
 	defer releaseRecords(expected)
@@ -849,6 +887,14 @@ func TestIPCFileLimitsCancellationAndAdmission(t *testing.T) {
 	cancel()
 	_, err = Open(ctx, fs, "arrow-limits", int64(len(fileBytes)), ContainerFile, new(testAdmission), Options{})
 	require.ErrorIs(t, err, context.Canceled)
+}
+
+func TestNormalizeOptionsCapsMetadataLimit(t *testing.T) {
+	options, err := normalizeOptions(Options{
+		MaxMetadataBytes: DefaultMaxMetadataBytes * 2,
+	})
+	require.NoError(t, err)
+	require.Equal(t, int64(DefaultMaxMetadataBytes), options.MaxMetadataBytes)
 }
 
 func TestIPCBodyLimitForFileAndStream(t *testing.T) {

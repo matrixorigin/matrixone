@@ -185,12 +185,18 @@ func (b *schemaMetadataBudget) validateField(
 			typeIDCount, childCount)
 	}
 	b.unionTypeIDs += typeIDCount
+	seenTypeIDs := make(map[int32]struct{}, typeIDCount)
 	for index := 0; index < typeIDCount; index++ {
 		value := union.TypeIDs(index)
 		if value < 0 || value >= MaxUnionTypeIDsPerField {
 			return moerr.NewInvalidInputf(ctx,
 				"Arrow IPC union type ID %d at index %d is out of bounds", value, index)
 		}
+		if _, exists := seenTypeIDs[value]; exists {
+			return moerr.NewInvalidInputf(ctx,
+				"Arrow IPC duplicate union type ID %d at index %d", value, index)
+		}
+		seenTypeIDs[value] = struct{}{}
 	}
 	return nil
 }

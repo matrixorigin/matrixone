@@ -63,12 +63,19 @@ type FilePlan struct {
 // selected record is safe even when projection-specific dependencies are not
 // provable.
 func (p *FilePlan) Shard(start, end int) (FileShard, int64, int64, error) {
-	if p == nil || start < 0 || start >= end || end > len(p.RecordBatches) {
+	if p == nil || p.Schema == nil || len(p.recordBlocks) != len(p.RecordBatches) ||
+		len(p.dictBlocks) != len(p.Dictionaries) {
+		return FileShard{}, 0, 0, moerr.NewInvalidInputNoCtx("incomplete Arrow IPC File plan")
+	}
+	if start < 0 || start >= end || end > len(p.RecordBatches) {
 		return FileShard{}, 0, 0, moerr.NewInvalidInputNoCtx("invalid Arrow IPC File shard interval")
 	}
 	shard := FileShard{RecordBatchStart: int32(start), RecordBatchEnd: int32(end)}
 	var rows, wireBytes int64
 	for _, record := range p.RecordBatches[start:end] {
+		if record.Rows < 0 || record.WireBytes < 0 {
+			return FileShard{}, 0, 0, moerr.NewInvalidInputNoCtx("Arrow shard estimates cannot be negative")
+		}
 		if record.Rows > 0 && rows > maxInt64-record.Rows {
 			return FileShard{}, 0, 0, moerr.NewInvalidInputNoCtx("Arrow shard row count overflows")
 		}

@@ -39,6 +39,24 @@ func (p *Plan) MaxOutputRows(
 	if p == nil || record == nil || start < 0 || start >= record.NumRows() || maxRows <= 0 {
 		return 0, moerr.NewInvalidInput(ctx, "invalid Arrow output budget input")
 	}
+	if schemaFingerprint(record.Schema()) != p.schemaFingerprint {
+		return 0, moerr.NewInvalidInput(ctx, "Arrow record schema does not match the bound schema")
+	}
+	if record.NumCols() != int64(len(p.columns)) {
+		return 0, moerr.NewInvalidInputf(ctx, "Arrow record has %d columns, expected %d", record.NumCols(), len(p.columns))
+	}
+	for _, binding := range p.columns {
+		column := record.Column(binding.source)
+		if column == nil || int64(column.Len()) != record.NumRows() {
+			actualRows := -1
+			if column != nil {
+				actualRows = column.Len()
+			}
+			return 0, moerr.NewInvalidInputf(ctx,
+				"Arrow column %q has %d rows, expected %d",
+				binding.target.Name, actualRows, record.NumRows())
+		}
+	}
 	available := record.NumRows() - start
 	if int64(maxRows) > available {
 		maxRows = int(available)
