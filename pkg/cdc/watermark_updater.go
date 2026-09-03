@@ -1332,9 +1332,9 @@ func (u *CDCWatermarkUpdater) ForceFlush(ctx context.Context) (err error) {
 		err = u.customized.scheduleJob(job)
 	}
 	if err != nil {
-		// A job which was not admitted to the queue has no consumer that can
-		// signal completion. Complete it here so callers never wait forever.
-		job.DoneWithErr(err)
+		// The scheduler owns completion when it admits a job. On admission
+		// failure no caller waits on this unadmitted job, and legacy custom
+		// schedulers may already have completed it before returning the error.
 		return
 	}
 	err = job.WaitDoneContext(ctx).Err

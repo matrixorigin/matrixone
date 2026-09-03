@@ -2849,6 +2849,12 @@ func (exec *CDCTaskExecutor) addExecPipelineForTable(
 	// to prevent duplicate readers (see TableChangeStream.Run line 287)
 	go sinker.Run(ctx, routine)
 	go reader.Run(ctx, routine)
+	// Reader publication happens inside Run. Do not let this callback return
+	// before publication, otherwise Cancel can observe both callbackDone and an
+	// empty reader map while the newly launched reader is still starting.
+	if starter, ok := reader.(interface{ RegistrationDone() <-chan struct{} }); ok {
+		<-starter.RegistrationDone()
+	}
 
 	return
 }
