@@ -125,6 +125,58 @@ func TestFilter(t *testing.T) {
 			wantErr: false,
 		},
 		{
+			// A scalar Fold with nil data is SQL NULL, not an empty literal.
+			// Pruning must fail open because evaluating a nil Literal would panic.
+			name: "range filter - folded null scans all partitions",
+			filters: []*plan.Expr{
+				makeFoldEqualExprInt32WithData(0, nil),
+			},
+			metadata: partition.PartitionMetadata{
+				Method: partition.PartitionMethod_Range,
+				Partitions: []partition.Partition{
+					{Position: 0, Expr: newTestRangeExpr("a", 0)},
+					{Position: 1, Expr: newTestRangeExpr("a", 1)},
+					{Position: 2, Expr: newTestRangeExpr("a", 2)},
+				},
+			},
+			want:    []int{0, 1, 2},
+			wantErr: false,
+		},
+		{
+			// Fixed-width decoders use unsafe loads. Truncated runtime data must
+			// disable pruning instead of panicking or selecting a wrong partition.
+			name: "hash filter - malformed folded scalar scans all partitions",
+			filters: []*plan.Expr{
+				makeFoldEqualExprInt32WithData(0, []byte{1}),
+			},
+			metadata: partition.PartitionMetadata{
+				Method: partition.PartitionMethod_Hash,
+				Partitions: []partition.Partition{
+					{Position: 0, Expr: newTestHashExpr("a", 0)},
+					{Position: 1, Expr: newTestHashExpr("a", 1)},
+					{Position: 2, Expr: newTestHashExpr("a", 2)},
+				},
+			},
+			want:    []int{0, 1, 2},
+			wantErr: false,
+		},
+		{
+			name: "list filter - folded null scans all partitions",
+			filters: []*plan.Expr{
+				makeFoldEqualExprInt32WithData(0, nil),
+			},
+			metadata: partition.PartitionMetadata{
+				Method: partition.PartitionMethod_List,
+				Partitions: []partition.Partition{
+					{Position: 0, Expr: newTestValuesInExpr("a")},
+					{Position: 1, Expr: newTestValuesInExpr("a")},
+					{Position: 2, Expr: newTestValuesInExpr("a")},
+				},
+			},
+			want:    []int{0, 1, 2},
+			wantErr: false,
+		},
+		{
 			// a = 5
 			// a % 3
 			name: "hash filter - equal condition",
@@ -425,11 +477,15 @@ func makeEqualExprInt32(colPos int32, value int32) *plan.Expr {
 }
 
 func makeFoldEqualExprInt32(colPos int32, value int32) *plan.Expr {
-	expr := makeEqualExprInt32(colPos, value)
+	return makeFoldEqualExprInt32WithData(colPos, types.EncodeInt32(&value))
+}
+
+func makeFoldEqualExprInt32WithData(colPos int32, data []byte) *plan.Expr {
+	expr := makeEqualExprInt32(colPos, 0)
 	expr.GetF().Args[1].Expr = &plan.Expr_Fold{
 		Fold: &plan.FoldVal{
 			IsConst: true,
-			Data:    types.EncodeInt32(&value),
+			Data:    data,
 		},
 	}
 	return expr
@@ -883,10 +939,9 @@ func makeLessEqualExpr(colPos int32, value int64) *plan.Expr {
 
 func TestConvertFoldExprToNormal(t *testing.T) {
 	tests := []struct {
-		name    string
-		expr    *plan.Expr
-		want    *plan.Expr
-		wantErr bool
+		name string
+		expr *plan.Expr
+		want *plan.Expr
 	}{
 		{
 			name: "constant fold expression - int64",
@@ -907,7 +962,6 @@ func TestConvertFoldExprToNormal(t *testing.T) {
 					},
 				},
 			},
-			wantErr: false,
 		},
 		{
 			name: "constant fold expression - int32",
@@ -928,7 +982,6 @@ func TestConvertFoldExprToNormal(t *testing.T) {
 					},
 				},
 			},
-			wantErr: false,
 		},
 		{
 			name: "constant fold expression - float64",
@@ -949,7 +1002,6 @@ func TestConvertFoldExprToNormal(t *testing.T) {
 					},
 				},
 			},
-			wantErr: false,
 		},
 		{
 			name: "constant fold expression - bool",
@@ -970,7 +1022,6 @@ func TestConvertFoldExprToNormal(t *testing.T) {
 					},
 				},
 			},
-			wantErr: false,
 		},
 		{
 			name: "constant fold expression - varchar",
@@ -991,7 +1042,6 @@ func TestConvertFoldExprToNormal(t *testing.T) {
 					},
 				},
 			},
-			wantErr: false,
 		},
 		{
 			name: "function expression",
@@ -1017,7 +1067,6 @@ func TestConvertFoldExprToNormal(t *testing.T) {
 					},
 				},
 			},
-			wantErr: false,
 		},
 		{
 			name: "vector fold expression",
@@ -1029,8 +1078,10 @@ func TestConvertFoldExprToNormal(t *testing.T) {
 						Data: func() []byte {
 							mp := mpool.MustNewZeroNoFixed()
 							vec := vector.NewVec(types.T_int64.ToType())
-							_ = vector.AppendFixed[int64](vec, int64(1), false, mp)
-							data, _ := vec.MarshalBinary()
+							require.NoError(t, vector.AppendFixed[int64](vec, int64(1), false, mp))
+							data, err := vec.MarshalBinary()
+							require.NoError(t, err)
+							vec.Free(mp)
 							return data
 						}(),
 					},
@@ -1044,31 +1095,113 @@ func TestConvertFoldExprToNormal(t *testing.T) {
 						Data: func() []byte {
 							mp := mpool.MustNewZeroNoFixed()
 							vec := vector.NewVec(types.T_int64.ToType())
-							_ = vector.AppendFixed[int64](vec, int64(1), false, mp)
+							require.NoError(t, vector.AppendFixed[int64](vec, int64(1), false, mp))
 							vec.InplaceSortAndCompact()
-							data, _ := vec.MarshalBinary()
+							data, err := vec.MarshalBinary()
+							require.NoError(t, err)
+							vec.Free(mp)
 							return data
 						}(),
 					},
 				},
 			},
-			wantErr: false,
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			got, err := ConvertFoldExprToNormal(tt.expr)
-			if tt.wantErr {
-				require.Error(t, err)
-				return
-			}
 			require.NoError(t, err)
 			if tt.want != nil {
 				require.Equal(t, tt.want, got)
 			}
 		})
 	}
+}
+
+func TestNormalizePartitionValuePreservesEmptyScalar(t *testing.T) {
+	original := &plan.Expr{
+		Typ: plan.Type{Id: int32(types.T_varchar)},
+		Expr: &plan.Expr_Fold{Fold: &plan.FoldVal{
+			IsConst: true,
+			Data:    []byte{},
+		}},
+	}
+
+	normalized, canPrune := normalizePartitionValue(original)
+	require.True(t, canPrune)
+	require.NotNil(t, original.GetFold().Data)
+	require.Empty(t, original.GetFold().Data)
+	require.Empty(t, normalized.GetLit().GetSval())
+}
+
+func TestConvertFoldExprToNormalRejectsAmbiguousScalars(t *testing.T) {
+	tests := []struct {
+		name string
+		typ  types.T
+		data []byte
+	}{
+		{name: "null", typ: types.T_varchar, data: nil},
+		{name: "truncated fixed width", typ: types.T_int64, data: []byte{1}},
+		{name: "oversized fixed width", typ: types.T_int32, data: make([]byte, 8)},
+		{name: "producer-unsupported enum", typ: types.T_enum, data: make([]byte, types.T_enum.TypeLen())},
+		{name: "unsupported UUID literal", typ: types.T_uuid, data: make([]byte, types.T_uuid.TypeLen())},
+		{name: "unknown type", typ: types.T(255), data: []byte{1}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			expr := &plan.Expr{
+				Typ: plan.Type{Id: int32(tt.typ)},
+				Expr: &plan.Expr_Fold{Fold: &plan.FoldVal{
+					IsConst: true,
+					Data:    tt.data,
+				}},
+			}
+			got, canPrune := convertFoldExprToNormal(expr)
+			require.False(t, canPrune)
+			require.Nil(t, got)
+		})
+	}
+
+	_, err := ConvertFoldExprToNormal(&plan.Expr{
+		Typ:  plan.Type{Id: int32(types.T_int64)},
+		Expr: &plan.Expr_Fold{Fold: &plan.FoldVal{IsConst: true}},
+	})
+	require.Error(t, err)
+}
+
+func TestConvertFoldExprToNormalRejectsInvalidVectors(t *testing.T) {
+	t.Run("malformed encoding", func(t *testing.T) {
+		expr := &plan.Expr{
+			Typ: plan.Type{Id: int32(types.T_int64)},
+			Expr: &plan.Expr_Fold{Fold: &plan.FoldVal{
+				Data: []byte{1},
+			}},
+		}
+		got, canPrune := convertFoldExprToNormal(expr)
+		require.False(t, canPrune)
+		require.Nil(t, got)
+	})
+
+	t.Run("payload type mismatch", func(t *testing.T) {
+		mp := mpool.MustNewZeroNoFixed()
+		vec := vector.NewVec(types.T_int64.ToType())
+		require.NoError(t, vector.AppendFixed(vec, int64(1), false, mp))
+		data, err := vec.MarshalBinary()
+		require.NoError(t, err)
+		vec.Free(mp)
+
+		expr := &plan.Expr{
+			Typ: plan.Type{Id: int32(types.T_int32)},
+			Expr: &plan.Expr_Fold{Fold: &plan.FoldVal{
+				Data: data,
+			}},
+		}
+		got, canPrune := convertFoldExprToNormal(expr)
+		require.False(t, canPrune)
+		require.Nil(t, got)
+	})
 }
 
 func TestGetConstantFromBytes(t *testing.T) {
@@ -1086,6 +1219,16 @@ func TestGetConstantFromBytes(t *testing.T) {
 			},
 			expected: &plan.Literal{
 				Value: &plan.Literal_Bval{Bval: true},
+			},
+		},
+		{
+			name: "bit type",
+			data: types.EncodeUint64(&[]uint64{7}[0]),
+			typ: plan.Type{
+				Id: int32(types.T_bit),
+			},
+			expected: &plan.Literal{
+				Value: &plan.Literal_U64Val{U64Val: 7},
 			},
 		},
 		{
@@ -1199,6 +1342,16 @@ func TestGetConstantFromBytes(t *testing.T) {
 			},
 		},
 		{
+			name: "time type",
+			data: types.EncodeTime(&[]types.Time{42}[0]),
+			typ: plan.Type{
+				Id: int32(types.T_time),
+			},
+			expected: &plan.Literal{
+				Value: &plan.Literal_Timeval{Timeval: 42},
+			},
+		},
+		{
 			name: "datetime type",
 			data: types.EncodeDatetime(&[]types.Datetime{42}[0]),
 			typ: plan.Type{
@@ -1249,10 +1402,38 @@ func TestGetConstantFromBytes(t *testing.T) {
 			},
 		},
 		{
-			name: "empty data",
+			name: "varbinary type",
+			data: []byte{'a', 0, 'b'},
+			typ: plan.Type{
+				Id: int32(types.T_varbinary),
+			},
+			expected: &plan.Literal{
+				Value: &plan.Literal_Sval{Sval: "a\x00b"},
+			},
+		},
+		{
+			name: "empty fixed-width data",
 			data: []byte{},
 			typ: plan.Type{
 				Id: int32(types.T_int64),
+			},
+			expected: nil,
+		},
+		{
+			name: "empty varchar",
+			data: []byte{},
+			typ: plan.Type{
+				Id: int32(types.T_varchar),
+			},
+			expected: &plan.Literal{
+				Value: &plan.Literal_Sval{Sval: ""},
+			},
+		},
+		{
+			name: "null varchar",
+			data: nil,
+			typ: plan.Type{
+				Id: int32(types.T_varchar),
 			},
 			expected: nil,
 		},
@@ -1260,11 +1441,8 @@ func TestGetConstantFromBytes(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result, err := getConstantFromBytes(tt.data, tt.typ)
-			if err != nil {
-				t.Errorf("getConstantFromBytes() error = %v", err)
-				return
-			}
+			result, ok := getConstantFromBytes(tt.data, tt.typ)
+			require.Equal(t, tt.expected != nil, ok)
 			if !reflect.DeepEqual(result, tt.expected) {
 				t.Errorf("getConstantFromBytes() = %v, want %v", result, tt.expected)
 			}

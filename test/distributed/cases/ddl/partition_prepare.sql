@@ -198,5 +198,13 @@ select o_w_id, o_d_id, o_id, o_c_id, o_carrier_id, o_ol_cnt, o_all_local from bm
 commit;
 select o_w_id, o_d_id, o_id, o_c_id, o_carrier_id, o_ol_cnt, o_all_local from bmsql_oorder order by o_w_id, o_d_id, o_id;
 
+-- A receiver-evaluated prepared NULL is represented by a scalar Fold with a
+-- nil payload. Partition pruning must fail open; the residual predicate still
+-- produces the SQL result.
+prepare __mo_stmt_partition_null from 'select count(*) from bmsql_oorder where o_w_id = ?';
+SET @o_w_id_null = NULL;
+EXECUTE __mo_stmt_partition_null USING @o_w_id_null;
+deallocate prepare __mo_stmt_partition_null;
+
 drop table bmsql_oorder;
 drop database if exists tpcc;
