@@ -3713,9 +3713,9 @@ func preparedFunctionReturnTypeDependsOnRuntimeParamAt(expr *plan.Expr, argIndex
 	for _, candidateType := range preparedRuntimeParamTypeCandidates() {
 		candidateArgs := append([]types.Type(nil), argTypes...)
 		candidateArgs[argIndex] = candidateType
-		resolved, err := function.GetFunctionByName(
-			context.Background(), functionExpr.Func.GetObjName(), candidateArgs)
-		if err == nil && !resolved.GetReturnType().Eq(preparedReturnType) {
+		resolved, ok := function.GetFunctionByNameWithoutError(
+			functionExpr.Func.GetObjName(), candidateArgs)
+		if ok && !resolved.GetReturnType().Eq(preparedReturnType) {
 			return true
 		}
 	}
