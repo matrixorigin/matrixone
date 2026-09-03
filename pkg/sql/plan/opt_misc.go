@@ -2250,6 +2250,8 @@ func handleOptimizerHints(str string, builder *QueryBuilder) {
 		builder.optimizerHints.printShuffle = value
 	case "skipDedup":
 		builder.optimizerHints.skipDedup = value
+	case "outerAntiPlanning":
+		builder.optimizerHints.outerAntiPlanning = value
 	}
 }
 

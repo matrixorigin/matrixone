@@ -62,6 +62,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/compile"
 	"github.com/matrixorigin/matrixone/pkg/sql/models"
+	sqlmongodb "github.com/matrixorigin/matrixone/pkg/sql/mongodb"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
@@ -201,8 +202,10 @@ var RecordStatement = func(ctx context.Context, ses *Session, proc *process.Proc
 	if cw != nil {
 		copy(stmID[:], cw.GetUUID())
 		statement = cw.GetAst()
-		envStmt = redactStatementTextForLogging(statement, envStmt)
+	}
+	envStmt = redactStatementTextForLogging(statement, envStmt)
 
+	if cw != nil {
 		ses.ast = statement
 		binExec, prepareName := cw.BinaryExecute()
 		execSql := makeExecuteSql(ctx, ses, statement, binExec, prepareName)
@@ -226,6 +229,11 @@ var RecordStatement = func(ctx context.Context, ses *Session, proc *process.Proc
 		stmID = uuid.UUID(u)
 		text = commonutil.Abbreviate(envStmt, int(getPu(ses.GetService()).SV.LengthOfQueryPrinted))
 	}
+	// A prepared execution adds its prepared SQL and parameter values after
+	// envStmt has been redacted. Redact the completed diagnostic payload too:
+	// this is the final boundary before either session state or statement
+	// telemetry can retain it.
+	text = redactStatementTextForLogging(nil, text)
 	ses.SetStmtId(stmID)
 	stmtTyp := getStatementType(statement).GetStatementType()
 	queryTyp := getStatementType(statement).GetQueryType()
@@ -343,6 +351,17 @@ var RecordStatement = func(ctx context.Context, ses *Session, proc *process.Proc
 }
 
 func redactStatementTextForLogging(statement tree.Statement, text string) string {
+	// __mo_query is a user-supplied MongoDB filter or pipeline. It is valid in
+	// ordinary SELECT statements, whose AST formatting deliberately preserves
+	// string literals, so neither the default branch nor a re-rendered AST is a
+	// safe diagnostic representation. This is the last common boundary before
+	// session state and statement telemetry retain the SQL text. Redact the
+	// whole statement rather than trying to recognize one SQL expression shape:
+	// invalid, nested, or future selector forms must not become a logging leak.
+	if diagnostic := sqlmongodb.RedactSQLForDiagnostics(text); diagnostic != text {
+		return diagnostic
+	}
+
 	switch stmt := statement.(type) {
 	case *tree.CreateIcebergCatalog, *tree.AlterIcebergCatalog,
 		*tree.CreateMongoDBConnection, *tree.AlterMongoDBConnection:
@@ -360,6 +379,15 @@ func redactStatementTextForLogging(statement tree.Statement, text string) string
 	default:
 		return text
 	}
+}
+
+// redactStatementErrorForLogging replaces a parser echo of __mo_query before it
+// reaches a client, statement telemetry, or the terminal statement logger.
+func redactStatementErrorForLogging(err error, text string) error {
+	if err == nil || sqlmongodb.RedactSQLForDiagnostics(text) == text {
+		return err
+	}
+	return moerr.NewParseErrorNoCtx("parse error in <redacted MongoDB __mo_query statement>")
 }
 
 func isIgnoreStatement(statement tree.Statement) bool {
@@ -5747,6 +5775,7 @@ func doComQuery(ses *Session, execCtx *ExecCtx, input *UserInput) (retErr error)
 			ses.resetDiagnostics()
 		}
 		statsInfo.ParseStage.ParseDuration = time.Since(beginInstant)
+		diagnosticErr := redactStatementErrorForLogging(parseErr, errorInput.getSql())
 		var recordErr error
 		execCtx.reqCtx, recordErr = RecordParseErrorStatement(
 			execCtx.reqCtx,
@@ -5755,15 +5784,20 @@ func doComQuery(ses *Session, execCtx *ExecCtx, input *UserInput) (retErr error)
 			beginInstant,
 			parsers.HandleSqlForRecord(errorInput.getSql()),
 			errorInput.getSqlSourceTypes(),
-			parseErr,
+			diagnosticErr,
 		)
 		if recordErr != nil {
 			return recordErr
 		}
-		if _, ok := parseErr.(*moerr.Error); !ok {
+		if sqlmongodb.RedactSQLForDiagnostics(errorInput.getSql()) != errorInput.getSql() {
+			parseErr = diagnosticErr
+		} else if _, ok := parseErr.(*moerr.Error); !ok {
 			parseErr = moerr.NewParseError(execCtx.reqCtx, parseErr.Error())
 		}
-		logStatementStringStatus(execCtx.reqCtx, ses, errorInput.getSql(), fail, parseErr)
+		// Keep the terminal error log on the same diagnostic boundary as
+		// RecordParseErrorStatement. Parse failures have no AST, so use the raw
+		// text scanner and never pass the original selector to the logger.
+		logStatementStringStatus(execCtx.reqCtx, ses, redactStatementTextForLogging(nil, errorInput.getSql()), fail, diagnosticErr)
 		return parseErr
 	}
 
