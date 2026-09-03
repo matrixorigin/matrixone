@@ -11518,6 +11518,52 @@ func TestTransferDeletes(t *testing.T) {
 	wg.Wait()
 }
 
+func TestFreezeTransferIncludesMergeAtUpperBound(t *testing.T) {
+	defer testutils.AfterTest(t)()
+	testutils.EnsureNoLeak(t)
+	ctx := context.Background()
+
+	opts := config.WithLongScanAndCKPOpts(nil)
+	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
+	defer tae.Close()
+
+	schema := catalog.MockSchema(2, 0)
+	schema.Extra.BlockMaxRows = 10
+	schema.Extra.ObjectMaxBlocks = 10
+	tae.BindSchema(schema)
+	bat := catalog.MockBatch(schema, 1)
+	defer bat.Close()
+	tae.CreateRelAndAppend(bat, true)
+	tae.CompactBlocks(true)
+
+	mergeTxn, mergeRel := tae.GetRelation()
+	source := testutil.GetOneBlockMeta(mergeRel)
+	mergeTask, err := jobs.NewMergeObjectsTask(
+		nil, mergeTxn, []*catalog.ObjectEntry{source}, tae.Runtime, 0, false,
+	)
+	require.NoError(t, err)
+	require.NoError(t, mergeTask.OnExec(ctx))
+
+	// Resolve the row while the merge source is still visible, so the update's
+	// tombstone initially points at the source object.
+	updateTxn, updateRel := tae.GetRelation()
+	pk := bat.Vecs[schema.GetSingleSortKeyIdx()].Get(0)
+	require.NoError(t, updateRel.UpdateByFilter(
+		ctx, handle.NewEQFilter(pk), 1, int32(42), false,
+	))
+
+	require.NoError(t, mergeTxn.Commit(ctx))
+	mergeTS := mergeTxn.GetCommitTS()
+	originalNow := tae.Runtime.Now
+	tae.Runtime.Now = func() types.TS { return mergeTS }
+	defer func() { tae.Runtime.Now = originalNow }()
+
+	// Transfer and dedup both use mergeTS as their inclusive upper fence. The
+	// source tombstone must be transferred before dedup sees the merge output.
+	require.NoError(t, updateTxn.Commit(ctx))
+	tae.CheckRowsByScan(1, true)
+}
+
 // TestTransferDeleteVectorRealloc verifies that TransferDeletes Part 2
 // refreshes the rowids unsafe.Slice after each TransferDeleteRows call.
 //
