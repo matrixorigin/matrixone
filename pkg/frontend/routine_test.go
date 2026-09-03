@@ -2012,7 +2012,12 @@ func TestRoutineRefreshSessionAuthReauthenticatesCandidate(t *testing.T) {
 }
 
 func TestRoutineManagerRefreshSessionAuthRejectsInvalidTarget(t *testing.T) {
-	rm, err := NewRoutineManager(context.Background(), "")
+	parameters := &config.FrontendParameters{}
+	parameters.SetDefaultValues()
+	service := newRoutineManagerTestService(t)
+	pu := config.NewParameterUnit(parameters, nil, nil, nil)
+	ctx := context.WithValue(context.Background(), config.ParameterUnitKey, pu)
+	rm, err := NewRoutineManager(ctx, service)
 	require.NoError(t, err)
 	t.Cleanup(rm.cancelCtx)
 
