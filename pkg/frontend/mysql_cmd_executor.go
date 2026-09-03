@@ -2091,6 +2091,14 @@ func handleAnalyzeStmt(ses *Session, execCtx *ExecCtx, stmt *tree.AnalyzeStmt) e
 	if len(stmt.Entries) == 0 {
 		return moerr.NewInternalError(execCtx.reqCtx, "ANALYZE TABLE requires at least one table")
 	}
+	if enabled, err := manualAnalyzeEnabled(ses); err != nil {
+		return err
+	} else if enabled {
+		return handleManualAnalyzeStmt(ses, execCtx, stmt)
+	} else if stmt.FullScan {
+		return moerr.NewNotSupported(execCtx.reqCtx,
+			"ANALYZE TABLE FULLSCAN requires experimental_manual_analyze")
+	}
 
 	results := make([]ExecResult, 0, len(stmt.Entries))
 	for _, entry := range stmt.Entries {

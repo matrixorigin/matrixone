@@ -129,6 +129,9 @@ func TestNDVAccumulatorOverflowDisablesOnlyAffectedFrame(t *testing.T) {
 	require.NoError(t, a.ObserveSampleValue(one))
 	require.NoError(t, a.BeginIncidenceBlock())
 	require.NoError(t, a.ObserveIncidenceValue(one))
+	require.NoError(t, a.EndIncidenceBlock())
+	require.NoError(t, a.BeginIncidenceBlock())
+	require.NoError(t, a.ObserveIncidenceValue(one))
 	require.ErrorIs(t, a.ObserveIncidenceValue(two), ErrAccumulatorLimit)
 	require.ErrorIs(t, a.EndIncidenceBlock(), ErrAccumulatorLimit)
 
@@ -136,4 +139,12 @@ func TestNDVAccumulatorOverflowDisablesOnlyAffectedFrame(t *testing.T) {
 	require.NoError(t, err)
 	require.False(t, estimate.HasIncidence)
 	require.True(t, estimate.HasDuj1)
+}
+
+func TestHashTypedValueSeparatesLogicalTypes(t *testing.T) {
+	raw := []byte{1, 2, 3, 4}
+	require.Equal(t, HashTypedValue(1, 4, 0, raw), HashTypedValue(1, 4, 0, raw))
+	require.NotEqual(t, HashTypedValue(1, 4, 0, raw), HashTypedValue(2, 4, 0, raw))
+	require.NotEqual(t, HashTypedValue(1, 4, 0, raw), HashTypedValue(1, 8, 0, raw))
+	require.NotEqual(t, HashTypedValue(1, 4, 0, raw), HashTypedValue(1, 4, 2, raw))
 }

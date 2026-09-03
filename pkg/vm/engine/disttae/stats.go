@@ -23,6 +23,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/gogo/protobuf/proto"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
@@ -1508,6 +1509,106 @@ func (gs *GlobalStats) refreshStatsWithMode(
 		key, generation, stats.AccurateObjectNumber, samplingRatio)
 
 	return stats, nil
+}
+
+// publishAnalyzedStats publishes a complete manual collection in one cache
+// transition. Fields not collected by an explicit column list retain the last
+// compatible metadata estimate until the persistent per-column provider is
+// enabled; selected columns and the table cardinality are replaced.
+func (gs *GlobalStats) publishAnalyzedStats(
+	ctx context.Context,
+	key pb.StatsInfoKey,
+	collected *pb.StatsInfo,
+) (*pb.StatsInfo, error) {
+	if collected == nil {
+		return nil, moerr.NewInternalErrorNoCtx("cannot publish nil analyzed statistics")
+	}
+	release, err := gs.acquireStatsRefresh(ctx, key)
+	if err != nil {
+		return nil, err
+	}
+	defer release()
+	refreshCtx, stopRefresh, err := gs.newStatsRefreshContext(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer stopRefresh()
+
+	if _, err = gs.engine.pClient.toSubscribeTable(
+		refreshCtx,
+		uint64(key.AccId),
+		key.TableID,
+		key.TableName,
+		key.DatabaseID,
+		key.DbName,
+	); err != nil {
+		if cause := gs.statsRefreshCancellationCause(ctx); cause != nil {
+			return nil, cause
+		}
+		return nil, moerr.NewInternalErrorNoCtxf("failed to subscribe table: %v", err)
+	}
+	generation, ok := gs.currentOrCreateSubscribedUpdateRecord(key)
+	if !ok {
+		return nil, moerr.NewInternalErrorNoCtxf(
+			"manual statistics publication crossed subscription boundary for table %d", key.TableID)
+	}
+
+	gs.mu.Lock()
+	current := gs.mu.statsInfoMap[key]
+	var merged *pb.StatsInfo
+	if current == nil {
+		merged = plan2.NewStatsInfo()
+	} else {
+		merged = proto.Clone(current).(*pb.StatsInfo)
+	}
+	gs.mu.Unlock()
+	mergeAnalyzedStats(merged, collected)
+
+	if cause := gs.statsRefreshCancellationCause(ctx); cause != nil {
+		return nil, cause
+	}
+	if !gs.publishStatsForGeneration(key, generation, merged) {
+		if cause := gs.statsRefreshCancellationCause(ctx); cause != nil {
+			return nil, cause
+		}
+		return nil, moerr.NewInternalErrorNoCtxf(
+			"manual statistics publication crossed cleanup boundary for table %d", key.TableID)
+	}
+	gs.markExplicitUpdateComplete(
+		key, generation, merged.AccurateObjectNumber, gs.GetSamplingRatio(key))
+	return merged, nil
+}
+
+func mergeAnalyzedStats(dst, src *pb.StatsInfo) {
+	if dst.NdvMap == nil {
+		dst.NdvMap = make(map[string]float64)
+	}
+	if dst.NullCntMap == nil {
+		dst.NullCntMap = make(map[string]uint64)
+	}
+	if dst.SizeMap == nil {
+		dst.SizeMap = make(map[string]uint64)
+	}
+	if dst.DataTypeMap == nil {
+		dst.DataTypeMap = make(map[string]uint64)
+	}
+	for name, value := range src.NdvMap {
+		dst.NdvMap[name] = value
+	}
+	for name, value := range src.NullCntMap {
+		dst.NullCntMap[name] = value
+	}
+	for name, value := range src.SizeMap {
+		dst.SizeMap[name] = value
+	}
+	for name, value := range src.DataTypeMap {
+		dst.DataTypeMap[name] = value
+	}
+	dst.TableCnt = src.TableCnt
+	dst.BlockNumber = src.BlockNumber
+	if src.TableName != "" {
+		dst.TableName = src.TableName
+	}
 }
 
 // publishStatsForGeneration replaces the cache only while the exact table

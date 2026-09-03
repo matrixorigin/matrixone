@@ -75,6 +75,29 @@ func TestPlanBlockSampleFullCoverageAndDegenerateInputs(t *testing.T) {
 	require.ErrorIs(t, err, ErrSampleBudget)
 }
 
+func TestPlanBlockSampleHonorsMinimumSpatialCoverage(t *testing.T) {
+	seed := sha256.Sum256([]byte("clustered table"))
+	plan, err := PlanBlockSample(
+		1_000_000_000,
+		100_000,
+		SampleConfig{TargetRows: 300_000, MinBlocks: 512, MaxBlocks: 4_096, MaxStrata: 64},
+		seed,
+	)
+	require.NoError(t, err)
+	require.Len(t, plan.Blocks, 512)
+	require.Equal(t, MustFraction(3, 10_000), plan.Q)
+	require.Equal(t, MustFraction(8, 1563), plan.QBlocks)
+
+	bounded, err := PlanBlockSample(
+		1_000_000,
+		100,
+		SampleConfig{TargetRows: 1, MinBlocks: 512, MaxBlocks: 32, MaxStrata: 64},
+		seed,
+	)
+	require.NoError(t, err)
+	require.Len(t, bounded.Blocks, 32)
+}
+
 func TestFloydSelectionHasExpectedDeterministicCoverage(t *testing.T) {
 	const (
 		population = uint64(8)

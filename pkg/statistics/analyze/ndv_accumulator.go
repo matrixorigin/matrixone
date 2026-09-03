@@ -16,6 +16,7 @@ package analyze
 
 import (
 	"crypto/sha256"
+	"encoding/binary"
 	"errors"
 	"math"
 )
@@ -29,6 +30,22 @@ type ValueHash [16]byte
 
 func HashValue(canonicalValue []byte) ValueHash {
 	sum := sha256.Sum256(canonicalValue)
+	var result ValueHash
+	copy(result[:], sum[:len(result)])
+	return result
+}
+
+// HashTypedValue includes the logical type fingerprint in the hash domain.
+// Partial states with different column types can therefore never become
+// accidentally interchangeable merely because their vector bytes match.
+func HashTypedValue(typeID uint32, width, scale int32, canonicalValue []byte) ValueHash {
+	valueDigest := sha256.Sum256(canonicalValue)
+	var input [44]byte
+	binary.BigEndian.PutUint32(input[0:4], typeID)
+	binary.BigEndian.PutUint32(input[4:8], uint32(width))
+	binary.BigEndian.PutUint32(input[8:12], uint32(scale))
+	copy(input[12:], valueDigest[:])
+	sum := sha256.Sum256(input[:])
 	var result ValueHash
 	copy(result[:], sum[:len(result)])
 	return result
@@ -214,7 +231,9 @@ func (a *NDVAccumulator) Estimate(populationNonNull float64) (NDVEstimate, error
 	incidenceDistinct := uint64(0)
 	incidenceSingletons := uint64(0)
 	incidenceDoubletons := uint64(0)
+	incidenceBlocks := uint64(0)
 	if a.incidenceErr == nil {
+		incidenceBlocks = a.incidenceBlocks
 		incidenceDistinct = uint64(len(a.incidenceCounts))
 		for _, count := range a.incidenceCounts {
 			switch count {
@@ -225,13 +244,13 @@ func (a *NDVAccumulator) Estimate(populationNonNull float64) (NDVEstimate, error
 			}
 		}
 	}
-	observed := make(map[ValueHash]struct{}, len(a.rowCounts)+len(a.incidenceCounts))
-	for value := range a.rowCounts {
-		observed[value] = struct{}{}
-	}
+	observedDistinct := uint64(len(a.rowCounts))
 	if a.incidenceErr == nil {
-		for value := range a.incidenceCounts {
-			observed[value] = struct{}{}
+		observedDistinct = uint64(len(a.incidenceCounts))
+		for value := range a.rowCounts {
+			if _, exists := a.incidenceCounts[value]; !exists {
+				observedDistinct++
+			}
 		}
 	}
 	return EstimateSampledNDV(SampledNDVInput{
@@ -239,11 +258,11 @@ func (a *NDVAccumulator) Estimate(populationNonNull float64) (NDVEstimate, error
 		SampleRows:          a.sampleRows,
 		SampleDistinct:      uint64(len(a.rowCounts)),
 		SampleSingletons:    singletons,
-		IncidenceBlocks:     a.incidenceBlocks,
+		IncidenceBlocks:     incidenceBlocks,
 		IncidenceDistinct:   incidenceDistinct,
 		IncidenceSingletons: incidenceSingletons,
 		IncidenceDoubletons: incidenceDoubletons,
-		ObservedDistinct:    uint64(len(observed)),
+		ObservedDistinct:    observedDistinct,
 	})
 }
 

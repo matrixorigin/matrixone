@@ -144,12 +144,25 @@ func greatestCommonDivisor(a, b uint64) uint64 {
 
 type SampleConfig struct {
 	TargetRows uint64
+	MinBlocks  uint64
 	MaxBlocks  uint64
 	MaxStrata  uint32
 }
 
+const (
+	DefaultTargetRows = uint64(300_000)
+	DefaultMinBlocks  = uint64(512)
+	DefaultMaxBlocks  = uint64(4_096)
+	DefaultMaxStrata  = uint32(64)
+)
+
 func DefaultSampleConfig() SampleConfig {
-	return SampleConfig{TargetRows: 300_000, MaxBlocks: 4_096, MaxStrata: 64}
+	return SampleConfig{
+		TargetRows: DefaultTargetRows,
+		MinBlocks:  DefaultMinBlocks,
+		MaxBlocks:  DefaultMaxBlocks,
+		MaxStrata:  DefaultMaxStrata,
+	}
 }
 
 type Stratum struct {
@@ -219,9 +232,10 @@ func PlanBlockSample(populationRows, populationBlocks uint64, cfg SampleConfig, 
 	if populationRows > cfg.TargetRows {
 		target = MustFraction(cfg.TargetRows, populationRows)
 	}
+	minBlocks := min(cfg.MinBlocks, cfg.MaxBlocks, populationBlocks)
 	for selected < cfg.MaxBlocks {
 		minID := minimumCoverageStratum(strata)
-		if strata[minID].Probability().Compare(target) >= 0 {
+		if selected >= minBlocks && strata[minID].Probability().Compare(target) >= 0 {
 			break
 		}
 		if strata[minID].Selected == strata[minID].Blocks {
