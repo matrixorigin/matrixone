@@ -751,6 +751,15 @@ func convertFoldExprToNormal(expr *plan.Expr) (*plan.Expr, bool) {
 				(expr.Typ.Charset != 0 && uint32(vecType.Charset) != expr.Typ.Charset) {
 				return nil, false
 			}
+			// InplaceSortAndCompact's ordinary value-only path does not move the
+			// null bitmap with the reordered payload. A nullable Fold could
+			// therefore turn {1, NULL} into {0, NULL} and make pruning omit the
+			// partition that contains 1. Nullable predicates retain their SQL
+			// residual filter, so failing open is both safe and cheaper than
+			// materializing a null-aware copy solely for optional pruning.
+			if vec.IsConstNull() || vec.GetNulls().Any() {
+				return nil, false
+			}
 			vec.InplaceSortAndCompact()
 			data, err := vec.MarshalBinary()
 			if err != nil {

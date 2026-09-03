@@ -177,6 +177,44 @@ func TestFilter(t *testing.T) {
 			wantErr: false,
 		},
 		{
+			// A nullable folded IN vector cannot be sorted safely: the generic
+			// vector sorter does not keep the null bitmap aligned with the value
+			// payload. Pruning is optional, so retain all partitions instead of
+			// risking a false negative. The value-before-NULL order exercises the
+			// payload permutation that previously changed {1, NULL} into
+			// {0, NULL}.
+			name: "list filter - nullable folded vector scans all partitions",
+			filters: []*plan.Expr{
+				makeFoldInExprInt32(t, 0, false),
+			},
+			metadata: partition.PartitionMetadata{
+				Method: partition.PartitionMethod_List,
+				Partitions: []partition.Partition{
+					{Position: 0, Expr: newTestValuesInExprWithValue("a", 0)},
+					{Position: 1, Expr: newTestValuesInExprWithValue("a", 1)},
+					{Position: 2, Expr: newTestValuesInExprWithValue("a", 2)},
+				},
+			},
+			want:    []int{0, 1, 2},
+			wantErr: false,
+		},
+		{
+			name: "list filter - nullable folded vector reverse order scans all partitions",
+			filters: []*plan.Expr{
+				makeFoldInExprInt32(t, 0, true),
+			},
+			metadata: partition.PartitionMetadata{
+				Method: partition.PartitionMethod_List,
+				Partitions: []partition.Partition{
+					{Position: 0, Expr: newTestValuesInExprWithValue("a", 0)},
+					{Position: 1, Expr: newTestValuesInExprWithValue("a", 1)},
+					{Position: 2, Expr: newTestValuesInExprWithValue("a", 2)},
+				},
+			},
+			want:    []int{0, 1, 2},
+			wantErr: false,
+		},
+		{
 			// a = 5
 			// a % 3
 			name: "hash filter - equal condition",
@@ -536,6 +574,35 @@ func makeInExpr(colPos int32, values []int32) *plan.Expr {
 	}
 }
 
+func makeFoldInExprInt32(t *testing.T, colPos int32, nullFirst bool) *plan.Expr {
+	t.Helper()
+	mp := mpool.MustNewZeroNoFixed()
+	vec := vector.NewVec(types.T_int32.ToType())
+	appendValue := func(value int32, isNull bool) {
+		require.NoError(t, vector.AppendFixed(vec, value, isNull, mp))
+	}
+	if nullFirst {
+		appendValue(0, true)
+		appendValue(1, false)
+	} else {
+		appendValue(1, false)
+		appendValue(0, true)
+	}
+	data, err := vec.MarshalBinary()
+	require.NoError(t, err)
+	vec.Free(mp)
+
+	expr := makeInExpr(colPos, []int32{1})
+	expr.GetF().Args[1] = &plan.Expr{
+		Typ: plan.Type{Id: int32(types.T_int32)},
+		Expr: &plan.Expr_Fold{Fold: &plan.FoldVal{
+			IsConst: false,
+			Data:    data,
+		}},
+	}
+	return expr
+}
+
 func newTestHashExpr(col string, id uint64) *plan.Expr {
 	return &plan.Expr{
 		Typ: plan.Type{Id: 10},
@@ -839,6 +906,14 @@ func newTestValuesInExpr(col string) *plan.Expr {
 			},
 		},
 	}
+}
+
+func newTestValuesInExprWithValue(col string, value int64) *plan.Expr {
+	expr := newTestValuesInExpr(col)
+	values := expr.GetF().Args[1].GetList().List
+	values[0].GetF().Args[0].GetLit().Value = &plan.Literal_I64Val{I64Val: value}
+	expr.GetF().Args[1].GetList().List = values[:1]
+	return expr
 }
 
 func makeOrExpr(left, right *plan.Expr) *plan.Expr {
@@ -1188,6 +1263,64 @@ func TestConvertFoldExprToNormalRejectsInvalidVectors(t *testing.T) {
 		mp := mpool.MustNewZeroNoFixed()
 		vec := vector.NewVec(types.T_int64.ToType())
 		require.NoError(t, vector.AppendFixed(vec, int64(1), false, mp))
+		data, err := vec.MarshalBinary()
+		require.NoError(t, err)
+		vec.Free(mp)
+
+		expr := &plan.Expr{
+			Typ: plan.Type{Id: int32(types.T_int32)},
+			Expr: &plan.Expr_Fold{Fold: &plan.FoldVal{
+				Data: data,
+			}},
+		}
+		got, canPrune := convertFoldExprToNormal(expr)
+		require.False(t, canPrune)
+		require.Nil(t, got)
+	})
+}
+
+func TestConvertFoldExprToNormalFailsOpenOnNullableVectors(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		typ       types.Type
+		nullFirst bool
+	}{
+		{name: "fixed value then null", typ: types.T_int32.ToType()},
+		{name: "fixed null then value", typ: types.T_int32.ToType(), nullFirst: true},
+		{name: "varlen value then null", typ: types.T_varchar.ToType()},
+		{name: "varlen null then value", typ: types.T_varchar.ToType(), nullFirst: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			mp := mpool.MustNewZeroNoFixed()
+			vec := vector.NewVec(tc.typ)
+			appendValue := func(isNull bool) {
+				if tc.typ.Oid == types.T_varchar {
+					require.NoError(t, vector.AppendBytes(vec, []byte("keep"), isNull, mp))
+					return
+				}
+				require.NoError(t, vector.AppendFixed(vec, int32(1), isNull, mp))
+			}
+			appendValue(tc.nullFirst)
+			appendValue(!tc.nullFirst)
+			data, err := vec.MarshalBinary()
+			require.NoError(t, err)
+			vec.Free(mp)
+
+			expr := &plan.Expr{
+				Typ: plan.Type{Id: int32(tc.typ.Oid)},
+				Expr: &plan.Expr_Fold{Fold: &plan.FoldVal{
+					Data: data,
+				}},
+			}
+			got, canPrune := convertFoldExprToNormal(expr)
+			require.False(t, canPrune)
+			require.Nil(t, got)
+		})
+	}
+
+	t.Run("constant null vector", func(t *testing.T) {
+		mp := mpool.MustNewZeroNoFixed()
+		vec := vector.NewConstNull(types.T_int32.ToType(), 2, mp)
 		data, err := vec.MarshalBinary()
 		require.NoError(t, err)
 		vec.Free(mp)
