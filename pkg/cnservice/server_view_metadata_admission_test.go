@@ -830,6 +830,42 @@ func TestServiceStartPropagatesBootstrapUpgradeFailure(t *testing.T) {
 	require.Zero(t, s.viewMetadataCatalogFencedEpoch.Load())
 }
 
+func TestServiceStartRejectsBufferedBootstrapUpgradeFailure(t *testing.T) {
+	upgradeErr := errors.New("cluster upgrade failed after catalog commit")
+	upgradeReturned := make(chan struct{})
+	boot := &testBootService{
+		bootstrapUpgradeHook: func(context.Context) error {
+			close(upgradeReturned)
+			return upgradeErr
+		},
+	}
+	var s *service
+	sqlExecutor := &admissionRollbackJoiningExecutor{
+		SQLExecutor: executor.NewMemExecutor(func(sql string) (executor.Result, error) {
+			if sql != catalog.ViewMetadataLifecycleGateSQL {
+				return executor.Result{}, nil
+			}
+			<-upgradeReturned
+			deadline := time.NewTimer(time.Second)
+			defer deadline.Stop()
+			for len(s.bootstrapUpgradeResult) == 0 {
+				select {
+				case <-deadline.C:
+					return executor.Result{}, errors.New("upgrade result was not published")
+				case <-time.After(time.Millisecond):
+				}
+			}
+			return viewMetadataLifecycleGateTestResult(), nil
+		}),
+	}
+	s = newViewMetadataAdmissionStartService(t, boot, sqlExecutor, time.Second)
+	t.Cleanup(func() { _ = s.Close() })
+
+	err := s.Start()
+	require.ErrorIs(t, err, upgradeErr)
+	require.False(t, s.viewMetadataIngressReady.Load())
+}
+
 func TestCNViewMetadataAdmissionWithoutUpgradeOwnerIsBounded(t *testing.T) {
 	s := &service{
 		cfg:                             &Config{UUID: "catalog-upgrade-timeout"},

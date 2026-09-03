@@ -243,28 +243,34 @@ func (s *service) acceptViewMetadataAdmissionSnapshot(
 	fenced *logservicepb.ViewMetadataAdmission,
 	disabled bool,
 	publishIngress bool,
-) bool {
+	upgradeResult <-chan error,
+) (bool, <-chan error, error) {
 	s.lockViewMetadataAdmission()
 	defer s.viewMetadataAdmissionMu.Unlock()
 
+	var upgradeErr error
+	upgradeResult, upgradeErr = pollBootstrapUpgradeResult(upgradeResult)
+	if upgradeErr != nil {
+		return false, upgradeResult, upgradeErr
+	}
 	current := s.viewMetadataAdmission.Load()
 	if fenced == nil || current == nil ||
 		current.Generation != fenced.Generation || current.Epoch != fenced.Epoch {
-		return false
+		return false, upgradeResult, nil
 	}
 	if disabled {
 		if current.Preparing || current.Enabled {
-			return false
+			return false, upgradeResult, nil
 		}
 	} else {
 		if !current.Admitted || current.Epoch > 0 &&
 			(s.viewMetadataEpochFence == nil || s.viewMetadataEpochFence.Epoch() < current.Epoch) {
-			return false
+			return false, upgradeResult, nil
 		}
 		if current.RevalidationRequired && current.Epoch > 0 &&
 			current.CatalogFencedEpoch < current.Epoch &&
 			s.viewMetadataCatalogFencedEpoch.Load() < current.Epoch {
-			return false
+			return false, upgradeResult, nil
 		}
 	}
 	if publishIngress {
@@ -277,7 +283,7 @@ func (s *service) acceptViewMetadataAdmissionSnapshot(
 		s.viewMetadataCatalogFenceStartupWaiting.Store(false)
 		s.viewMetadataIngressReady.Store(true)
 	}
-	return true
+	return true, upgradeResult, nil
 }
 
 func viewMetadataCatalogFenceRetryDelay(serviceID string, attempt uint32) time.Duration {
@@ -306,6 +312,15 @@ func (s *service) waitForViewMetadataAdmission() error {
 
 func (s *service) waitForViewMetadataIngressAdmission() error {
 	return s.waitForViewMetadataAdmissionHandoff(true)
+}
+
+func pollBootstrapUpgradeResult(result <-chan error) (<-chan error, error) {
+	select {
+	case err := <-result:
+		return nil, err
+	default:
+		return result, nil
+	}
 }
 
 func (s *service) waitForViewMetadataAdmissionHandoff(publishIngress bool) error {
@@ -345,7 +360,13 @@ func (s *service) waitForViewMetadataAdmissionHandoff(publishIngress bool) error
 	for {
 		snapshot := s.viewMetadataAdmission.Load()
 		if snapshot != nil && !snapshot.Preparing && !snapshot.Enabled {
-			if s.acceptViewMetadataAdmissionSnapshot(snapshot, true, publishIngress) {
+			accepted, result, upgradeErr := s.acceptViewMetadataAdmissionSnapshot(
+				snapshot, true, publishIngress, upgradeResult)
+			upgradeResult = result
+			if upgradeErr != nil {
+				return upgradeErr
+			}
+			if accepted {
 				return nil
 			}
 			continue
@@ -420,7 +441,13 @@ func (s *service) waitForViewMetadataAdmissionHandoff(publishIngress bool) error
 				default:
 				}
 			}
-			if s.acceptViewMetadataAdmissionSnapshot(snapshot, false, publishIngress) {
+			accepted, result, upgradeErr := s.acceptViewMetadataAdmissionSnapshot(
+				snapshot, false, publishIngress, upgradeResult)
+			upgradeResult = result
+			if upgradeErr != nil {
+				return upgradeErr
+			}
+			if accepted {
 				return nil
 			}
 		}

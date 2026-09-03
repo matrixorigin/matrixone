@@ -1371,7 +1371,11 @@ func (s *service) bootstrap() error {
 						"bootstrap system automatic upgrade failed by: ", zap.Error(err))
 				}
 			}
+			// Serialize terminal-result publication with admission acceptance so
+			// startup cannot commit a success after an already-completed failure.
+			s.lockViewMetadataAdmission()
 			s.bootstrapUpgradeResult <- err
+			s.viewMetadataAdmissionMu.Unlock()
 		}); err != nil {
 			return err
 		}
