@@ -760,6 +760,35 @@ func TestBuildPreparedCaseConditionParameter(t *testing.T) {
 	}
 }
 
+func TestBuildSearchedCaseAcceptsImplicitBooleanConditions(t *testing.T) {
+	for _, test := range []struct {
+		name string
+		sql  string
+	}{
+		{
+			name: "literal null",
+			sql:  "select case when null then 'a' else 'b' end",
+		},
+		{
+			name: "null arithmetic",
+			sql:  "select case when 0 / 0 then 'a' else 'b' end",
+		},
+		{
+			name: "mixed conditions",
+			sql:  "select case when null then 'a' when 1 = 1 then 'b' else 'c' end",
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			stmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL, test.sql, 1)
+			require.NoError(t, err)
+
+			queryPlan, err := BuildPlan(NewMockCompilerContext(true), stmt, false)
+			require.NoError(t, err)
+			require.NotNil(t, findPlanFunctionExpr(queryPlan, "case"))
+		})
+	}
+}
+
 func requirePreparedCaseCondition(t *testing.T, condition *planpb.Expr, hasParam bool) {
 	t.Helper()
 	require.Equal(t, int32(types.T_bool), condition.Typ.Id)
