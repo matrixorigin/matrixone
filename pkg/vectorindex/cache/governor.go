@@ -16,18 +16,21 @@ package cache
 
 // The max_index_cache_size governor.
 //
-// max_index_cache_size is a BYTE budget on resident index bytes, read per account:
+// Two BYTE budgets on resident index bytes -- max_index_cache_size for HOST memory and
+// max_gpu_index_cache_size for DEVICE memory -- each read per account:
 //
 //   - its value on the SYS account (id 0) caps every tenant's indexes on this CN together
 //   - its value on a tenant caps that tenant alone
 //
-// Both apply; whichever binds first evicts. 0 means no limit and is the default, so an
-// unconfigured deployment pays nothing: with both limits 0 the governor returns before it
+// All four apply; whichever binds first evicts. 0 means no limit and is the default, so an
+// unconfigured deployment pays nothing: with every limit 0 the governor returns before it
 // walks the map.
 //
-// Host and device bytes are budgeted SEPARATELY against the same number, never summed. A CN
-// has far more RAM than VRAM, so one conflated total would bound neither arena; charging each
-// arena its own sum means the cap is whichever of the two fills first.
+// The arenas get their OWN variables rather than sharing one number, because a CN has far more
+// RAM than VRAM: a single figure large enough to be a sane host budget would never bind on the
+// device, and one small enough to bound VRAM would cripple the host cache. They are likewise
+// never summed when charged -- evicting a host-only index to relieve device pressure would
+// free no VRAM at all.
 //
 // The bound is enforced by EVICTION, not refusal. A refusal would fail an ordinary query on a
 // cache accounting rule, and there is nothing special about a named-snapshot generation here:
@@ -53,9 +56,10 @@ import (
 )
 
 const (
-	// maxIndexCacheSizeVar is the byte budget, declared in pkg/frontend/variables.go with
-	// Scope ScopeGlobal and Default int64(0).
-	maxIndexCacheSizeVar = "max_index_cache_size"
+	// maxIndexCacheSizeVar and maxGpuIndexCacheSizeVar are the host and device byte budgets,
+	// both declared in pkg/frontend/variables.go with Scope ScopeGlobal and Default int64(0).
+	maxIndexCacheSizeVar    = "max_index_cache_size"
+	maxGpuIndexCacheSizeVar = "max_gpu_index_cache_size"
 
 	// sysLimitTTL bounds how stale the SYS account's value may be. The read costs one
 	// auto-commit SQL and only ever runs on a cache MISS, which has just paid for a full
@@ -63,13 +67,13 @@ const (
 	sysLimitTTL = 15 * time.Second
 )
 
-// sysLimitSQL reads the SYS account's max_index_cache_size straight from the catalog. The
-// session resolver cannot answer this: it resolves for the CALLING tenant, and the CN-wide cap
-// lives on account 0.
+// sysLimitSQL reads both of the SYS account's caps straight from the catalog, in one query.
+// The session resolver cannot answer this: it resolves for the CALLING tenant, and the CN-wide
+// caps live on account 0.
 var sysLimitSQL = fmt.Sprintf(
-	"select variable_value from mo_catalog.mo_mysql_compatibility_mode "+
-		"where account_id = %d and system_variables = true and variable_name = '%s'",
-	catalog.System_Account, maxIndexCacheSizeVar)
+	"select variable_name, variable_value from mo_catalog.mo_mysql_compatibility_mode "+
+		"where account_id = %d and system_variables = true and variable_name in ('%s', '%s')",
+	catalog.System_Account, maxIndexCacheSizeVar, maxGpuIndexCacheSizeVar)
 
 // runSysSql is indirected so the governor's catalog read is testable without a CN.
 var runSysSql = sqlexec.RunSqlAutoCommit
@@ -79,10 +83,25 @@ var runSysSql = sqlexec.RunSqlAutoCommit
 // silently unbound the cache.
 type sysLimitCache struct {
 	mu      sync.Mutex
-	value   int64
+	value   caps
 	fetched time.Time
 	valid   bool
 }
+
+// caps is one budget pair: the bytes allowed in each arena, 0 meaning unlimited.
+type caps struct {
+	host   int64
+	device int64
+}
+
+func (c caps) of(a arena) int64 {
+	if a == arenaHost {
+		return c.host
+	}
+	return c.device
+}
+
+func (c caps) unset() bool { return c.host <= 0 && c.device <= 0 }
 
 // arena names the two budgets, kept apart because RAM and VRAM are not interchangeable.
 type arena int
@@ -138,17 +157,17 @@ func (c *VectorIndexCache) chargeAndEnforce(sqlproc *sqlexec.SqlProcess, key str
 	// catalog.System_Account). Leaving it unattributed would exempt it from every cap.
 
 	tenant, sys := c.limits(sqlproc)
-	if tenant <= 0 && sys <= 0 {
+	if tenant.unset() && sys.unset() {
 		return
 	}
 	c.enforce(entry.accountID.Load(), tenant, sys, key)
 }
 
-// limits returns the calling tenant's cap and the CN-wide SYS cap, both in bytes, 0 meaning
+// limits returns the calling tenant's caps and the CN-wide SYS caps, host and device, 0 meaning
 // unlimited. Unreadable resolves to unlimited: the governor is a memory policy, not a
 // correctness gate, and must never fail a query because a variable could not be read.
-func (c *VectorIndexCache) limits(sqlproc *sqlexec.SqlProcess) (tenant, sys int64) {
-	return tenantCacheLimit(sqlproc), c.sysCacheLimit(sqlproc)
+func (c *VectorIndexCache) limits(sqlproc *sqlexec.SqlProcess) (tenant, sys caps) {
+	return tenantCacheLimits(sqlproc), c.sysCacheLimit(sqlproc)
 }
 
 // hasSession reports whether sqlproc can be asked anything at all. SqlProcess delegates to
@@ -159,17 +178,26 @@ func hasSession(sqlproc *sqlexec.SqlProcess) bool {
 	return sqlproc != nil && (sqlproc.Proc != nil || sqlproc.SqlCtx != nil)
 }
 
-// tenantCacheLimit reads max_index_cache_size for the CALLING account through the request's
-// own resolver, at global scope so SET GLOBAL takes effect without a reconnect.
-func tenantCacheLimit(sqlproc *sqlexec.SqlProcess) int64 {
+// tenantCacheLimits reads both caps for the CALLING account through the request's own
+// resolver, at global scope so SET GLOBAL takes effect without a reconnect.
+func tenantCacheLimits(sqlproc *sqlexec.SqlProcess) caps {
 	if !hasSession(sqlproc) {
-		return 0
+		return caps{}
 	}
 	resolve := sqlproc.GetResolveVariableFunc()
 	if resolve == nil {
-		return 0
+		return caps{}
 	}
-	val, err := resolve(maxIndexCacheSizeVar, true, true)
+	return caps{
+		host:   resolveByteVar(resolve, maxIndexCacheSizeVar),
+		device: resolveByteVar(resolve, maxGpuIndexCacheSizeVar),
+	}
+}
+
+// resolveByteVar reads one global-scope byte budget, 0 for anything it cannot read as a
+// non-negative int64.
+func resolveByteVar(resolve func(string, bool, bool) (interface{}, error), name string) int64 {
+	val, err := resolve(name, true, true)
 	if err != nil || val == nil {
 		return 0
 	}
@@ -185,13 +213,13 @@ func tenantCacheLimit(sqlproc *sqlexec.SqlProcess) int64 {
 // The read runs as the SYS account on a FRESH context: sqlexec.RunSqlAutoCommit rebinds
 // defines.TenantIDKey to the account it is given, so the caller's tenant-bound context is never
 // reused to read another account's catalog row.
-func (c *VectorIndexCache) sysCacheLimit(sqlproc *sqlexec.SqlProcess) int64 {
+func (c *VectorIndexCache) sysCacheLimit(sqlproc *sqlexec.SqlProcess) caps {
 	if !hasSession(sqlproc) {
-		return 0
+		return caps{}
 	}
 	cnUUID := sqlproc.GetService()
 	if cnUUID == "" {
-		return 0
+		return caps{}
 	}
 
 	c.sysLimit.mu.Lock()
@@ -205,16 +233,27 @@ func (c *VectorIndexCache) sysCacheLimit(sqlproc *sqlexec.SqlProcess) int64 {
 	res, err := runSysSql(ctx, cnUUID, catalog.System_Account, "", sysLimitSQL)
 	if err != nil {
 		// Keep the last known good value; a catalog blip must not unbound the cache.
-		logutil.Warnf("index cache governor: reading sys %s failed: %v", maxIndexCacheSizeVar, err)
+		logutil.Warnf("index cache governor: reading the sys index cache caps failed: %v", err)
 		return c.sysLimit.value
 	}
 	defer res.Close()
 
-	value := int64(0) // no row means the SYS account never SET it: unlimited
+	// A name the SYS account never SET has no row, and stays 0: unlimited.
+	var value caps
 	for _, bat := range res.Batches {
+		if bat == nil {
+			continue
+		}
 		for i := 0; i < bat.RowCount(); i++ {
-			if n, perr := parseByteLimit(bat.Vecs[0].GetStringAt(i)); perr == nil {
-				value = n
+			n, perr := parseByteLimit(bat.Vecs[1].GetStringAt(i))
+			if perr != nil {
+				continue
+			}
+			switch strings.TrimSpace(bat.Vecs[0].GetStringAt(i)) {
+			case maxIndexCacheSizeVar:
+				value.host = n
+			case maxGpuIndexCacheSizeVar:
+				value.device = n
 			}
 		}
 	}
@@ -258,7 +297,7 @@ func (c *VectorIndexCache) snapshotResidents(protect string) (list []resident, p
 
 // enforce evicts coldest-first until the charging account is under its own cap and the CN is
 // under the SYS cap, in both arenas. protect is the key just loaded, never a victim.
-func (c *VectorIndexCache) enforce(account uint32, tenant, sys int64, protect string) {
+func (c *VectorIndexCache) enforce(account uint32, tenant, sys caps, protect string) {
 	list, perAccount, total := c.snapshotResidents(protect)
 	if len(list) == 0 {
 		return
@@ -269,28 +308,28 @@ func (c *VectorIndexCache) enforce(account uint32, tenant, sys int64, protect st
 
 	for _, a := range []arena{arenaHost, arenaDevice} {
 		var freed int64
-		if tenant > 0 {
-			freed = c.reclaim(list, a, tenant, perAccount[account].of(a), func(r resident) bool {
+		if tenantLimit := tenant.of(a); tenantLimit > 0 {
+			freed = c.reclaim(list, a, tenantLimit, perAccount[account].of(a), func(r resident) bool {
 				return r.account == account
 			})
 		}
-		if sys > 0 {
+		if sysLimit := sys.of(a); sysLimit > 0 {
 			// The tenant pass already gave bytes back to the CN total; charging them twice
 			// would evict a second, innocent tenant's entries for room that is already free.
-			c.reclaim(list, a, sys, total.of(a)-freed, func(resident) bool { return true })
+			c.reclaim(list, a, sysLimit, total.of(a)-freed, func(resident) bool { return true })
 		}
 	}
 }
 
-// parseByteLimit reads the catalog's text representation of max_index_cache_size. A value that
-// does not parse is treated as unset by the caller rather than guessed at.
+// parseByteLimit reads the catalog's text representation of a byte budget. A value that does
+// not parse is treated as unset by the caller rather than guessed at.
 func parseByteLimit(raw string) (int64, error) {
 	n, err := strconv.ParseInt(strings.TrimSpace(raw), 10, 64)
 	if err != nil {
 		return 0, err
 	}
 	if n < 0 {
-		return 0, moerr.NewInternalErrorNoCtx("negative " + maxIndexCacheSizeVar)
+		return 0, moerr.NewInternalErrorNoCtx("negative index cache byte budget")
 	}
 	return n, nil
 }
@@ -310,6 +349,10 @@ func (c *VectorIndexCache) reclaim(list []resident, a arena, limit, used int64, 
 			continue
 		}
 		reason := fmt.Sprintf("%s_cache_size_limit", a)
+		limitVar := maxIndexCacheSizeVar
+		if a == arenaDevice {
+			limitVar = maxGpuIndexCacheSizeVar
+		}
 		// A false return means someone else already claimed the entry -- housekeeping, a
 		// stale sweep, or the other arena's pass. Its bytes are on their way back either
 		// way, but they are not ours to count.
@@ -319,7 +362,7 @@ func (c *VectorIndexCache) reclaim(list []resident, a arena, limit, used int64, 
 		used -= r.size.of(a)
 		freed += r.size.of(a)
 		logutil.Infof("index cache governor: evicted %q (account %d, %s %d bytes) to stay under %s of %d bytes",
-			r.key, r.account, a, r.size.of(a), maxIndexCacheSizeVar, limit)
+			r.key, r.account, a, r.size.of(a), limitVar, limit)
 	}
 	return freed
 }

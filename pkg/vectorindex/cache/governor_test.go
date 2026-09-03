@@ -33,9 +33,9 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// govProc returns a SqlProcess for account with tenantLimit as its max_index_cache_size, and
-// stubs the SYS catalog read to report sysLimit. A limit of 0 means unset (unlimited).
-func govProc(t *testing.T, c *VectorIndexCache, account uint32, tenantLimit, sysLimit int64) *sqlexec.SqlProcess {
+// govProc returns a SqlProcess for account with tenantLimit as its caps, and stubs the SYS
+// catalog read to report sysLimit. A 0 in either arena means unset (unlimited).
+func govProc(t *testing.T, c *VectorIndexCache, account uint32, tenantLimit, sysLimit caps) *sqlexec.SqlProcess {
 	t.Helper()
 	stubSysLimit(t, c, sysLimit)
 	return &sqlexec.SqlProcess{SqlCtx: &sqlexec.SqlContext{
@@ -43,16 +43,27 @@ func govProc(t *testing.T, c *VectorIndexCache, account uint32, tenantLimit, sys
 		CNUuid:    "gov-test-cn",
 		AccountId: account,
 		ResolveVariableFunc: func(name string, _, isGlobal bool) (interface{}, error) {
-			require.Equal(t, maxIndexCacheSizeVar, name)
-			require.True(t, isGlobal, "the cap is global-scope and must be read as such")
-			return tenantLimit, nil
+			require.True(t, isGlobal, "the caps are global-scope and must be read as such")
+			switch name {
+			case maxIndexCacheSizeVar:
+				return tenantLimit.host, nil
+			case maxGpuIndexCacheSizeVar:
+				return tenantLimit.device, nil
+			}
+			require.Fail(t, "unexpected variable", name)
+			return nil, nil
 		},
 	}}
 }
 
+// hostCap and gpuCap name a one-arena budget at the call sites, so a bare pair of numbers never
+// has to be read positionally.
+func hostCap(n int64) caps { return caps{host: n} }
+func gpuCap(n int64) caps  { return caps{device: n} }
+
 // stubSysLimit replaces the SYS catalog read for the duration of the test and clears the
 // memoized value so each test starts from a cold read.
-func stubSysLimit(t *testing.T, c *VectorIndexCache, value int64) {
+func stubSysLimit(t *testing.T, c *VectorIndexCache, value caps) {
 	t.Helper()
 	orig := runSysSql
 	runSysSql = func(context.Context, string, uint32, string, string) (executor.Result, error) {
@@ -79,7 +90,7 @@ func isResident(c *VectorIndexCache, key string) bool {
 // A successful load is charged to the entry, split by arena, and attributed to its tenant.
 func TestGovernorChargesLoadedEntry(t *testing.T) {
 	c := newBoundCache(t)
-	sp := govProc(t, c, 7, 0, 0)
+	sp := govProc(t, c, 7, caps{}, caps{})
 
 	loadInto(t, c, sp, "__mo_index_secondary_charge", 300, 40)
 
@@ -94,7 +105,7 @@ func TestGovernorChargesLoadedEntry(t *testing.T) {
 // Both caps unset is the default, and it evicts nothing however much is resident.
 func TestGovernorUnsetCapNeverEvicts(t *testing.T) {
 	c := newBoundCache(t)
-	sp := govProc(t, c, 1, 0, 0)
+	sp := govProc(t, c, 1, caps{}, caps{})
 
 	keys := []string{"__mo_index_secondary_a", "__mo_index_secondary_b", "__mo_index_secondary_c"}
 	for _, k := range keys {
@@ -109,7 +120,7 @@ func TestGovernorUnsetCapNeverEvicts(t *testing.T) {
 // just loaded is not.
 func TestGovernorTenantCapEvictsColdestNotNewest(t *testing.T) {
 	c := newBoundCache(t)
-	sp := govProc(t, c, 1, 250, 0)
+	sp := govProc(t, c, 1, hostCap(250), caps{})
 
 	cold := "__mo_index_secondary_cold"
 	warm := "__mo_index_secondary_warm"
@@ -131,11 +142,11 @@ func TestGovernorTenantCapEvictsColdestNotNewest(t *testing.T) {
 // One tenant's residency does not consume another's budget.
 func TestGovernorTenantCapIsPerTenant(t *testing.T) {
 	c := newBoundCache(t)
-	spA := govProc(t, c, 1, 250, 0)
+	spA := govProc(t, c, 1, hostCap(250), caps{})
 
 	loadInto(t, c, spA, "__mo_index_secondary_a1", 200, 0)
 
-	spB := govProc(t, c, 2, 250, 0)
+	spB := govProc(t, c, 2, hostCap(250), caps{})
 	loadInto(t, c, spB, "__mo_index_secondary_b1", 200, 0)
 
 	require.True(t, isResident(c, "__mo_index_secondary_a1"), "tenant 2's load must not evict tenant 1")
@@ -145,11 +156,11 @@ func TestGovernorTenantCapIsPerTenant(t *testing.T) {
 // The SYS cap bounds the CN as a whole and reclaims across tenants.
 func TestGovernorSysCapSpansTenants(t *testing.T) {
 	c := newBoundCache(t)
-	spA := govProc(t, c, 1, 0, 250)
+	spA := govProc(t, c, 1, caps{}, hostCap(250))
 	loadInto(t, c, spA, "__mo_index_secondary_sysa", 200, 0)
 	entryOf(t, c, "__mo_index_secondary_sysa").ExpireAt.Store(1)
 
-	spB := govProc(t, c, 2, 0, 250)
+	spB := govProc(t, c, 2, caps{}, hostCap(250))
 	loadInto(t, c, spB, "__mo_index_secondary_sysb", 200, 0)
 
 	require.False(t, isResident(c, "__mo_index_secondary_sysa"),
@@ -157,29 +168,58 @@ func TestGovernorSysCapSpansTenants(t *testing.T) {
 	require.True(t, isResident(c, "__mo_index_secondary_sysb"))
 }
 
-// Host and device are separate budgets: device pressure never reclaims a host-only entry,
-// whose eviction would free no VRAM at all.
+// The two arenas have their own variables and never cross: a host cap ignores device-resident
+// bytes, and a device cap ignores host-resident ones -- evicting a host-only index to relieve
+// VRAM pressure would free no VRAM at all.
 func TestGovernorArenasAreBudgetedSeparately(t *testing.T) {
-	c := newBoundCache(t)
-	sp := govProc(t, c, 1, 100, 0)
+	t.Run("a host cap does not reclaim device bytes", func(t *testing.T) {
+		c := newBoundCache(t)
+		sp := govProc(t, c, 1, hostCap(100), caps{})
 
-	hostOnly := "__mo_index_secondary_hostonly"
-	loadInto(t, c, sp, hostOnly, 10, 0)
-	entryOf(t, c, hostOnly).ExpireAt.Store(1)
+		deviceOnly := "__mo_index_secondary_devonly"
+		loadInto(t, c, sp, deviceOnly, 0, 5000)
+		entryOf(t, c, deviceOnly).ExpireAt.Store(1)
 
-	// 150 device bytes against a cap of 100, while host is only 10+0 and well under.
-	deviceHeavy := "__mo_index_secondary_deviceheavy"
-	loadInto(t, c, sp, deviceHeavy, 0, 150)
+		// 150 host bytes against a host cap of 100, with the device budget unset.
+		loadInto(t, c, sp, "__mo_index_secondary_hostheavy", 150, 0)
 
-	require.True(t, isResident(c, hostOnly),
-		"a host-only entry frees no VRAM, so device pressure must not take it")
-	require.True(t, isResident(c, deviceHeavy), "the entry just loaded is never the victim")
+		require.True(t, isResident(c, deviceOnly),
+			"max_index_cache_size bounds RAM; a device-only entry frees none of it")
+	})
+
+	t.Run("a device cap does not reclaim host bytes", func(t *testing.T) {
+		c := newBoundCache(t)
+		sp := govProc(t, c, 1, gpuCap(100), caps{})
+
+		hostOnly := "__mo_index_secondary_hostonly"
+		loadInto(t, c, sp, hostOnly, 5000, 0)
+		entryOf(t, c, hostOnly).ExpireAt.Store(1)
+
+		// 150 device bytes against a device cap of 100, with the host budget unset.
+		loadInto(t, c, sp, "__mo_index_secondary_devheavy", 0, 150)
+
+		require.True(t, isResident(c, hostOnly),
+			"max_gpu_index_cache_size bounds VRAM; a host-only entry frees none of it")
+	})
+
+	t.Run("the device cap binds its own arena", func(t *testing.T) {
+		c := newBoundCache(t)
+		sp := govProc(t, c, 1, gpuCap(250), caps{})
+
+		cold := "__mo_index_secondary_gpucold"
+		loadInto(t, c, sp, cold, 0, 200)
+		entryOf(t, c, cold).ExpireAt.Store(1)
+		loadInto(t, c, sp, "__mo_index_secondary_gpunew", 0, 200)
+
+		require.False(t, isResident(c, cold), "400 > the device cap of 250")
+		require.True(t, isResident(c, "__mo_index_secondary_gpunew"))
+	})
 }
 
 // An entry holding nothing is charged nothing and is never chosen as a victim.
 func TestGovernorIgnoresZeroSizedEntries(t *testing.T) {
 	c := newBoundCache(t)
-	sp := govProc(t, c, 1, 50, 0)
+	sp := govProc(t, c, 1, hostCap(50), caps{})
 
 	free := "__mo_index_secondary_free"
 	loadInto(t, c, sp, free, 0, 0)
@@ -210,26 +250,26 @@ func TestGovernorUnreadableLimitIsUnlimited(t *testing.T) {
 			return nil, moerr.NewInternalErrorNoCtx("boom")
 		},
 	}}
-	require.EqualValues(t, 0, tenantCacheLimit(boom), "resolver error")
+	require.Equal(t, caps{}, tenantCacheLimits(boom), "resolver error")
 
 	wrong := &sqlexec.SqlProcess{SqlCtx: &sqlexec.SqlContext{
 		Ctx: context.Background(), CNUuid: "gov-test-cn", AccountId: 1,
 		ResolveVariableFunc: func(string, bool, bool) (interface{}, error) { return "not an int", nil },
 	}}
-	require.EqualValues(t, 0, tenantCacheLimit(wrong), "wrong type")
+	require.Equal(t, caps{}, tenantCacheLimits(wrong), "wrong type")
 
-	require.EqualValues(t, 0, tenantCacheLimit(nil), "no session")
-	require.EqualValues(t, 0, tenantCacheLimit(&sqlexec.SqlProcess{}), "no proc or sqlctx")
+	require.Equal(t, caps{}, tenantCacheLimits(nil), "no session")
+	require.Equal(t, caps{}, tenantCacheLimits(&sqlexec.SqlProcess{}), "no proc or sqlctx")
 }
 
 // A failed SYS read keeps the last known good cap rather than falling open to unlimited.
 func TestGovernorSysReadFailureKeepsLastKnownCap(t *testing.T) {
 	c := newBoundCache(t)
-	sp := govProc(t, c, 1, 0, 250)
+	sp := govProc(t, c, 1, caps{}, hostCap(250))
 
 	// Expire the memoized value so the next call re-reads, and let that read fail.
 	c.sysLimit.fetched = time.Now().Add(-2 * sysLimitTTL)
-	require.EqualValues(t, 250, c.sysCacheLimit(sp),
+	require.Equal(t, hostCap(250), c.sysCacheLimit(sp),
 		"a catalog blip must not silently unbound the cache")
 }
 
@@ -253,17 +293,20 @@ func entryOf(t *testing.T, c *VectorIndexCache, key string) *VectorIndexSearch {
 	return value.(*VectorIndexSearch)
 }
 
-// varcharResult builds the shape the SYS read actually gets back: variable_value is a varchar
-// column in mo_mysql_compatibility_mode, one row per matching variable. No values means the
-// SYS account never SET the cap.
-func varcharResult(t *testing.T, mp *mpool.MPool, values ...string) executor.Result {
+// varRows builds the shape the SYS read actually gets back: (variable_name, variable_value),
+// both varchar columns of mo_mysql_compatibility_mode, one row per variable the SYS account has
+// SET. No rows means it set neither cap.
+func varRows(t *testing.T, mp *mpool.MPool, nameValue ...string) executor.Result {
 	t.Helper()
-	bat := batch.NewWithSize(1)
+	require.Zero(t, len(nameValue)%2, "varRows takes name/value pairs")
+	bat := batch.NewWithSize(2)
 	bat.Vecs[0] = vector.NewVec(types.T_varchar.ToType())
-	for _, v := range values {
-		require.NoError(t, vector.AppendBytes(bat.Vecs[0], []byte(v), false, mp))
+	bat.Vecs[1] = vector.NewVec(types.T_varchar.ToType())
+	for i := 0; i < len(nameValue); i += 2 {
+		require.NoError(t, vector.AppendBytes(bat.Vecs[0], []byte(nameValue[i]), false, mp))
+		require.NoError(t, vector.AppendBytes(bat.Vecs[1], []byte(nameValue[i+1]), false, mp))
 	}
-	bat.SetRowCount(len(values))
+	bat.SetRowCount(len(nameValue) / 2)
 	return executor.Result{Mp: mp, Batches: []*batch.Batch{bat}}
 }
 
@@ -295,33 +338,46 @@ func TestGovernorSysReadExtractsValue(t *testing.T) {
 	withSysSql(t, c, func(_ context.Context, cn string, account uint32, _, sql string) (executor.Result, error) {
 		calls++
 		gotCN, gotAccount, gotSQL = cn, account, sql
-		return varcharResult(t, mp, "1048576"), nil
+		return varRows(t, mp,
+			maxIndexCacheSizeVar, "1048576",
+			maxGpuIndexCacheSizeVar, "4096"), nil
 	})
 
-	require.EqualValues(t, 1048576, c.sysCacheLimit(sysProc()))
-	require.EqualValues(t, 0, gotAccount, "the CN-wide cap must be read as the SYS account, not the caller")
+	want := caps{host: 1048576, device: 4096}
+	require.Equal(t, want, c.sysCacheLimit(sysProc()),
+		"each variable must land in its own arena, keyed by name not row order")
+	require.EqualValues(t, 0, gotAccount, "the CN-wide caps must be read as the SYS account, not the caller")
 	require.Equal(t, "gov-test-cn", gotCN)
 	require.Contains(t, gotSQL, "account_id = 0")
 	require.Contains(t, gotSQL, maxIndexCacheSizeVar)
+	require.Contains(t, gotSQL, maxGpuIndexCacheSizeVar)
 
 	// Memoized: a second call inside the TTL does not re-query.
-	require.EqualValues(t, 1048576, c.sysCacheLimit(sysProc()))
+	require.Equal(t, want, c.sysCacheLimit(sysProc()))
 	require.Equal(t, 1, calls)
 
 	// Past the TTL it re-reads and picks up a new value.
 	c.sysLimit.fetched = time.Now().Add(-2 * sysLimitTTL)
-	require.EqualValues(t, 1048576, c.sysCacheLimit(sysProc()))
+	require.Equal(t, want, c.sysCacheLimit(sysProc()))
 	require.Equal(t, 2, calls, "the memo must expire so SET GLOBAL takes effect without a restart")
 }
 
-// No row means the SYS account never set the cap: unlimited.
+// No row means the SYS account never set that cap: unlimited. Setting only one leaves the other
+// unlimited rather than defaulting it to the one that was set.
 func TestGovernorSysReadNoRowIsUnlimited(t *testing.T) {
 	c := newBoundCache(t)
 	mp := mpool.MustNewZero()
 	withSysSql(t, c, func(context.Context, string, uint32, string, string) (executor.Result, error) {
-		return varcharResult(t, mp), nil
+		return varRows(t, mp), nil
 	})
-	require.EqualValues(t, 0, c.sysCacheLimit(sysProc()))
+	require.Equal(t, caps{}, c.sysCacheLimit(sysProc()))
+
+	c2 := newBoundCache(t)
+	withSysSql(t, c2, func(context.Context, string, uint32, string, string) (executor.Result, error) {
+		return varRows(t, mp, maxGpuIndexCacheSizeVar, "512"), nil
+	})
+	require.Equal(t, gpuCap(512), c2.sysCacheLimit(sysProc()),
+		"an unset host cap stays unlimited when only the device cap is set")
 }
 
 // A value that does not parse is ignored rather than guessed at.
@@ -329,9 +385,9 @@ func TestGovernorSysReadUnparseableValueIsIgnored(t *testing.T) {
 	c := newBoundCache(t)
 	mp := mpool.MustNewZero()
 	withSysSql(t, c, func(context.Context, string, uint32, string, string) (executor.Result, error) {
-		return varcharResult(t, mp, "8MB"), nil
+		return varRows(t, mp, maxIndexCacheSizeVar, "8MB"), nil
 	})
-	require.EqualValues(t, 0, c.sysCacheLimit(sysProc()))
+	require.Equal(t, caps{}, c.sysCacheLimit(sysProc()))
 }
 
 // The SYS cap read through the catalog binds a real load, end to end.
@@ -339,7 +395,7 @@ func TestGovernorSysReadDrivesEviction(t *testing.T) {
 	c := newBoundCache(t)
 	mp := mpool.MustNewZero()
 	withSysSql(t, c, func(context.Context, string, uint32, string, string) (executor.Result, error) {
-		return varcharResult(t, mp, "250"), nil
+		return varRows(t, mp, maxIndexCacheSizeVar, "250"), nil
 	})
 
 	sp := sysProc()

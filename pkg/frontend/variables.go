@@ -3825,16 +3825,31 @@ var gSysVarsDefs = map[string]SystemVariable{
 		Type:              InitSystemVariableBoolType("fulltext_bloom_filter_pushdown"),
 		Default:           int8(0),
 	},
-	// Byte budget for the vector/fulltext index cache, read per account. The value on the
-	// SYS account (id 0) caps every tenant's resident indexes on the CN together; the value
-	// on a tenant caps that tenant alone. 0 means no limit, which is the default, so an
-	// unconfigured deployment behaves exactly as before.
+	// HOST memory byte budget for the vector/fulltext index cache, read per account. The
+	// value on the SYS account (id 0) caps every tenant's resident indexes on the CN
+	// together; the value on a tenant caps that tenant alone. 0 means no limit, which is the
+	// default, so an unconfigured deployment behaves exactly as before.
+	//
+	// Device memory has its own budget, max_gpu_index_cache_size: a CN has far more RAM than
+	// VRAM, so one number cannot express both.
 	"max_index_cache_size": {
 		Name:              "max_index_cache_size",
 		Scope:             ScopeGlobal,
 		Dynamic:           true,
 		SetVarHintApplies: false,
 		Type:              InitSystemVariableIntType("max_index_cache_size", 0, math.MaxInt64, false),
+		Default:           int64(0),
+	},
+	// DEVICE (VRAM) byte budget for the index cache, the GPU counterpart of
+	// max_index_cache_size and read per account the same way: SYS caps the CN, a tenant's
+	// value caps that tenant. Only the cuVS algorithms (cagra, ivfpq) charge against it.
+	// 0 means no limit.
+	"max_gpu_index_cache_size": {
+		Name:              "max_gpu_index_cache_size",
+		Scope:             ScopeGlobal,
+		Dynamic:           true,
+		SetVarHintApplies: false,
+		Type:              InitSystemVariableIntType("max_gpu_index_cache_size", 0, math.MaxInt64, false),
 		Default:           int64(0),
 	},
 	"probe_limit": {
