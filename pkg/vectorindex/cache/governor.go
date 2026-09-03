@@ -169,7 +169,9 @@ type resident struct {
 //
 // Called with NO entry lock held -- see VectorIndexSearch.Preload for why that matters.
 func (c *VectorIndexCache) makeRoom(sqlproc *sqlexec.SqlProcess, key string, entry *VectorIndexSearch) {
-	host, device := entry.Algo.GetIndexSize()
+	// Preload published its estimate to these atomics under the entry lock; never call
+	// GetIndexSize from here, where no lock is held and Destroy may be nilling algo state.
+	host, device := entry.hostBytes.Load(), entry.deviceBytes.Load()
 	if host <= 0 && device <= 0 {
 		return
 	}
@@ -192,9 +194,8 @@ func (c *VectorIndexCache) makeRoom(sqlproc *sqlexec.SqlProcess, key string, ent
 // chargeAndEnforce records what a freshly loaded entry costs, then brings the cache back under
 // the caps. Called once per successful load, from the miss path only.
 func (c *VectorIndexCache) chargeAndEnforce(sqlproc *sqlexec.SqlProcess, key string, entry *VectorIndexSearch) {
-	host, device := entry.Algo.GetIndexSize()
-	entry.hostBytes.Store(host)
-	entry.deviceBytes.Store(device)
+	// The size was captured under the entry lock by Load (see captureSize); read the atomics
+	// rather than the algorithm, which a concurrent eviction may be tearing down.
 	if hasSession(sqlproc) {
 		if account, err := sqlproc.GetAccountID(); err == nil {
 			entry.accountID.Store(account)

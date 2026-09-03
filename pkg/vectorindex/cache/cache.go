@@ -220,15 +220,59 @@ type VectorIndexSearch struct {
 	stale       atomic.Bool // set by the IsStale freshness check; reclaimed next sweep. Separate from
 	// ExpireAt so a concurrent Search's extend() (sliding TTL) can't un-mark a stale entry.
 	evicting atomic.Bool
+	// destroyed is closed once this wrapper's Algo teardown has finished, so a caller about to
+	// REUSE that Algo in a fresh wrapper can wait for the old one to let go of it. See
+	// awaitDestroyed.
+	destroyed   chan struct{}
+	destroyOnce sync.Once
 	// accountID is the tenant that loaded this entry, taken from the loading request. An
 	// index table name is globally unique, so a key belongs to one tenant for its whole life.
 	accountID atomic.Uint32
-	// hostBytes/deviceBytes are Algo.GetIndexSize() charged once after a successful Load, the
-	// two quantities the max_index_cache_size governor sums. Kept apart because RAM and VRAM
-	// are separate budgets. Both 0 until the load succeeds.
+	// hostBytes/deviceBytes are Algo.GetIndexSize() published by captureSize under this
+	// entry's lock -- an estimate after Preload, the real figure after Load -- and are the
+	// ONLY size the governor reads. Kept apart because RAM and VRAM are separate budgets.
+	// Both 0 until Preload runs; usage sums ignore them until Status is STATUS_LOADED, so the
+	// estimate never counts toward anyone's budget.
 	hostBytes        atomic.Int64
 	deviceBytes      atomic.Int64
 	invalidationOnce sync.Once
+}
+
+// newVectorIndexSearch wraps algo for the cache. Both retry loops build every attempt through
+// here, so each attempt's wrapper has its own teardown signal.
+func newVectorIndexSearch(algo VectorIndexSearchIf) *VectorIndexSearch {
+	s := &VectorIndexSearch{Algo: algo, destroyed: make(chan struct{})}
+	// use RLocker to let Cond.Wait() to use Rlock() and RUnlock()
+	s.Cond = sync.NewCond(s.Mutex.RLocker())
+	return s
+}
+
+// markDestroyed publishes that Algo teardown is complete. Idempotent, and a no-op on a wrapper
+// built without the constructor (tests), whose awaitDestroyed then returns immediately.
+func (s *VectorIndexSearch) markDestroyed() {
+	if s.destroyed == nil {
+		return
+	}
+	s.destroyOnce.Do(func() { close(s.destroyed) })
+}
+
+// awaitDestroyed blocks until this wrapper has finished tearing its Algo down.
+//
+// The retry loops in Search/SearchInto re-wrap the SAME caller-supplied algo on every attempt,
+// so without this a retry can call Preload/Load on an algo that an evicting goroutine is still
+// inside Destroy on: two wrappers, two different mutexes, one object -- a data race, and a load
+// that reuses state another goroutine is tearing down.
+//
+// It cannot hang. An entry only becomes unreachable through a CompareAndDelete that is
+// immediately followed by Destroy or destroyFailedLoad (evictEntry, discardFailedLoad, and both
+// load error paths), so whoever takes the entry away always completes the teardown and closes
+// this channel. The wait is bounded by whatever that Destroy waits on -- at worst an in-flight
+// search holding the read lock.
+func (s *VectorIndexSearch) awaitDestroyed() {
+	if s.destroyed == nil {
+		return
+	}
+	<-s.destroyed
 }
 
 func (s *VectorIndexSearch) Destroy() {
@@ -269,6 +313,7 @@ func (s *VectorIndexSearch) DestroyWithReason(reason string) {
 	s.Algo.Destroy()
 	// destroyed
 	s.Status.Store(STATUS_DESTROYED)
+	s.markDestroyed()
 }
 
 // destroyFailedLoad releases an entry whose load failed after the caller has
@@ -284,6 +329,7 @@ func (s *VectorIndexSearch) destroyFailedLoad() {
 	}()
 	s.Algo.Destroy()
 	s.Status.Store(STATUS_DESTROYED)
+	s.markDestroyed()
 }
 
 // Preload runs the algorithm's measuring half under the same lock discipline as Load. It is a
@@ -301,7 +347,21 @@ func (s *VectorIndexSearch) Preload(sqlproc *sqlexec.SqlProcess) error {
 	if s.evicting.Load() {
 		return moerr.NewInvalidStateNoCtx("Index destroyed")
 	}
-	return s.Algo.Preload(sqlproc)
+	if err := s.Algo.Preload(sqlproc); err != nil {
+		return err
+	}
+	s.captureSize()
+	return nil
+}
+
+// captureSize reads Algo.GetIndexSize into the entry's atomics. MUST be called under the entry
+// lock: GetIndexSize walks algorithm state (s.Indexes and friends) that Destroy nils out, so
+// reading it from outside -- as the governor would, between Preload and Load -- races a
+// concurrent eviction. Publishing to atomics here means the governor never touches the algo.
+func (s *VectorIndexSearch) captureSize() {
+	host, device := s.Algo.GetIndexSize()
+	s.hostBytes.Store(host)
+	s.deviceBytes.Store(device)
 }
 
 func (s *VectorIndexSearch) Load(sqlproc *sqlexec.SqlProcess) error {
@@ -333,6 +393,8 @@ func (s *VectorIndexSearch) Load(sqlproc *sqlexec.SqlProcess) error {
 		}
 		return err
 	}
+	// Replace Preload's estimate with what the load actually claimed, still under this lock.
+	s.captureSize()
 	// Loaded
 	s.Status.Store(STATUS_LOADED)
 	s.extend(true)
@@ -654,9 +716,7 @@ func (c *VectorIndexCache) Destroy() {
 func (c *VectorIndexCache) Search(sqlproc *sqlexec.SqlProcess, key string, newalgo VectorIndexSearchIf,
 	query any, rt vectorindex.RuntimeConfig) (keys any, distances []float64, err error) {
 	for {
-		s := &VectorIndexSearch{Algo: newalgo}
-		// use RLocker to let Cond.Wait() to use Rlock() and RUnlock()
-		s.Cond = sync.NewCond(s.Mutex.RLocker())
+		s := newVectorIndexSearch(newalgo)
 		value, loaded := c.IndexMap.LoadOrStore(key, s)
 		algo := value.(*VectorIndexSearch)
 		if !loaded {
@@ -664,10 +724,18 @@ func (c *VectorIndexCache) Search(sqlproc *sqlexec.SqlProcess, key string, newal
 			// runs in the gap between the two locked sections -- see Preload.
 			if perr := algo.Preload(sqlproc); perr != nil {
 				if algo.evicting.Load() {
+					// Another goroutine is tearing this wrapper down, and the next
+					// attempt re-wraps the SAME algo -- wait for it to let go first.
+					algo.awaitDestroyed()
 					continue
 				}
 				if IsRetryableLoadError(perr) {
+					// discardFailedLoad only tears down when its CompareAndDelete
+					// wins; if another goroutine took the entry first it is mid
+					// teardown of the algo this loop reuses. Already-closed when we
+					// did the destroying ourselves, so this is free in that case.
 					c.discardFailedLoad(key, algo)
+					algo.awaitDestroyed()
 					continue
 				}
 				if c.IndexMap.CompareAndDelete(key, algo) {
@@ -681,10 +749,18 @@ func (c *VectorIndexCache) Search(sqlproc *sqlexec.SqlProcess, key string, newal
 			err := algo.Load(sqlproc)
 			if err != nil {
 				if algo.evicting.Load() {
+					// Another goroutine is tearing this wrapper down, and the next
+					// attempt re-wraps the SAME algo -- wait for it to let go first.
+					algo.awaitDestroyed()
 					continue
 				}
 				if IsRetryableLoadError(err) {
+					// discardFailedLoad only tears down when its CompareAndDelete
+					// wins; if another goroutine took the entry first it is mid
+					// teardown of the algo this loop reuses. Already-closed when we
+					// did the destroying ourselves, so this is free in that case.
 					c.discardFailedLoad(key, algo)
+					algo.awaitDestroyed()
 					continue
 				}
 				if c.IndexMap.CompareAndDelete(key, algo) {
@@ -697,7 +773,9 @@ func (c *VectorIndexCache) Search(sqlproc *sqlexec.SqlProcess, key string, newal
 		keys, distances, err = algo.Search(sqlproc, newalgo, query, rt)
 		if err != nil {
 			if moerr.IsMoErrCode(err, moerr.ErrInvalidState) {
-				// index destroyed by Remove() or HouseKeeping.  Retry!
+				// index destroyed by Remove() or HouseKeeping.  Retry -- but not before
+				// this wrapper has finished with the algo the next attempt reuses.
+				algo.awaitDestroyed()
 				continue
 			}
 			return nil, nil, err
@@ -713,17 +791,24 @@ func (c *VectorIndexCache) Search(sqlproc *sqlexec.SqlProcess, key string, newal
 func (c *VectorIndexCache) SearchInto(sqlproc *sqlexec.SqlProcess, key string, newalgo VectorIndexSearchIf,
 	query any, rt vectorindex.RuntimeConfig, out *vectorindex.SearchOutput) error {
 	for {
-		s := &VectorIndexSearch{Algo: newalgo}
-		s.Cond = sync.NewCond(s.Mutex.RLocker())
+		s := newVectorIndexSearch(newalgo)
 		value, loaded := c.IndexMap.LoadOrStore(key, s)
 		algo := value.(*VectorIndexSearch)
 		if !loaded {
 			if perr := algo.Preload(sqlproc); perr != nil {
 				if algo.evicting.Load() {
+					// Another goroutine is tearing this wrapper down, and the next
+					// attempt re-wraps the SAME algo -- wait for it to let go first.
+					algo.awaitDestroyed()
 					continue
 				}
 				if IsRetryableLoadError(perr) {
+					// discardFailedLoad only tears down when its CompareAndDelete
+					// wins; if another goroutine took the entry first it is mid
+					// teardown of the algo this loop reuses. Already-closed when we
+					// did the destroying ourselves, so this is free in that case.
 					c.discardFailedLoad(key, algo)
+					algo.awaitDestroyed()
 					continue
 				}
 				if c.IndexMap.CompareAndDelete(key, algo) {
@@ -734,10 +819,18 @@ func (c *VectorIndexCache) SearchInto(sqlproc *sqlexec.SqlProcess, key string, n
 			c.makeRoom(sqlproc, key, algo)
 			if err := algo.Load(sqlproc); err != nil {
 				if algo.evicting.Load() {
+					// Another goroutine is tearing this wrapper down, and the next
+					// attempt re-wraps the SAME algo -- wait for it to let go first.
+					algo.awaitDestroyed()
 					continue
 				}
 				if IsRetryableLoadError(err) {
+					// discardFailedLoad only tears down when its CompareAndDelete
+					// wins; if another goroutine took the entry first it is mid
+					// teardown of the algo this loop reuses. Already-closed when we
+					// did the destroying ourselves, so this is free in that case.
 					c.discardFailedLoad(key, algo)
+					algo.awaitDestroyed()
 					continue
 				}
 				if c.IndexMap.CompareAndDelete(key, algo) {
@@ -750,7 +843,10 @@ func (c *VectorIndexCache) SearchInto(sqlproc *sqlexec.SqlProcess, key string, n
 		err := algo.SearchInto(sqlproc, query, rt, out)
 		if err != nil {
 			if moerr.IsMoErrCode(err, moerr.ErrInvalidState) {
-				continue // index destroyed by Remove()/HouseKeeping — retry
+				// index destroyed by Remove()/HouseKeeping — wait for the teardown to
+				// release the algo this loop reuses, then retry
+				algo.awaitDestroyed()
+				continue
 			}
 			return err
 		}

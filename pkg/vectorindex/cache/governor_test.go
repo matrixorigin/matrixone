@@ -19,6 +19,7 @@ package cache
 
 import (
 	"context"
+	"sync"
 	"testing"
 	"time"
 
@@ -476,4 +477,80 @@ func TestCapsLess(t *testing.T) {
 	require.Equal(t, caps{}, caps{}.less(caps{host: 99}), "unlimited minus anything is unlimited")
 	require.Equal(t, caps{device: 5}, caps{device: 20}.less(caps{host: 99, device: 15}),
 		"each arena is reduced by its own incoming bytes")
+}
+
+// mutatingSizeSearch has algorithm state that Destroy tears down and GetIndexSize walks -- the
+// exact shape (hnsw's s.Indexes, cagra's sub-index slice) that a governor reading sizes outside
+// the entry lock would race.
+type mutatingSizeSearch struct {
+	countingSearch
+	parts []int64
+}
+
+func (m *mutatingSizeSearch) Preload(*sqlexec.SqlProcess) error {
+	m.parts = []int64{40, 60}
+	return nil
+}
+func (m *mutatingSizeSearch) Load(*sqlexec.SqlProcess) error {
+	m.parts = []int64{40, 60, 100}
+	return nil
+}
+func (m *mutatingSizeSearch) GetIndexSize() (int64, int64) {
+	var n int64
+	for _, p := range m.parts {
+		n += p
+	}
+	return n, 0
+}
+func (m *mutatingSizeSearch) Destroy() { m.parts = nil }
+
+// Loads racing evictions must not touch algorithm state from outside the entry lock. The size is
+// published to atomics by captureSize under the lock; if the governor ever went back to calling
+// Algo.GetIndexSize from makeRoom or chargeAndEnforce, -race would flag it here against Destroy.
+func TestGovernorSizeReadsDoNotRaceEviction(t *testing.T) {
+	c := newBoundCache(t)
+	keys := []string{
+		"__mo_index_secondary_race0",
+		"__mo_index_secondary_race1",
+		"__mo_index_secondary_race2",
+	}
+
+	// Stub the SYS read and build every session UP FRONT: govProc mutates package-level state
+	// (runSysSql) and the cache's memo, neither of which is safe to touch from the goroutines.
+	stubSysLimit(t, c, hostCap(400))
+	procs := make([]*sqlexec.SqlProcess, 3)
+	for i := range procs {
+		procs[i] = &sqlexec.SqlProcess{SqlCtx: &sqlexec.SqlContext{
+			Ctx: context.Background(), CNUuid: "gov-test-cn", AccountId: uint32(i),
+			ResolveVariableFunc: func(name string, _, _ bool) (interface{}, error) {
+				if name == maxIndexCacheSizeVar {
+					return int64(150), nil
+				}
+				return int64(0), nil
+			},
+		}}
+	}
+
+	var wg sync.WaitGroup
+	for i := 0; i < 8; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			sp := procs[i%3]
+			for n := 0; n < 40; n++ {
+				_, _, _ = c.Search(sp, keys[n%len(keys)], &mutatingSizeSearch{}, nil, vectorindex.RuntimeConfig{})
+			}
+		}(i)
+	}
+	for i := 0; i < 4; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			for n := 0; n < 40; n++ {
+				c.Remove(keys[n%len(keys)])
+				c.HouseKeeping()
+			}
+		}(i)
+	}
+	wg.Wait()
 }
