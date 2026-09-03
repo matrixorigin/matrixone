@@ -400,42 +400,85 @@ func TestQCloudSDKBasicObjectOperations(t *testing.T) {
 	}
 }
 
-func TestQCloudSDKReadPreservesInFlightCancellation(t *testing.T) {
-	requestStarted := make(chan struct{}, 1)
-	server := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, request *http.Request) {
-		select {
-		case requestStarted <- struct{}{}:
-		default:
-		}
-		<-request.Context().Done()
-	}))
-	t.Cleanup(server.Close)
+func TestQCloudSDKReadOnlyOperationsPreserveInFlightCancellation(t *testing.T) {
+	tests := []struct {
+		name string
+		run  func(context.Context, *QCloudSDK) error
+	}{
+		{
+			name: "bucket head",
+			run: func(ctx context.Context, sdk *QCloudSDK) error {
+				_, err := doQCloudReadWithRetry(ctx, "cos bucket head", func() (*cos.Response, error) {
+					return sdk.client.Bucket.Head(ctx, &cos.BucketHeadOptions{})
+				})
+				return err
+			},
+		},
+		{
+			name: "list",
+			run: func(ctx context.Context, sdk *QCloudSDK) error {
+				_, err := sdk.listObjects(ctx, "", "")
+				return err
+			},
+		},
+		{
+			name: "stat",
+			run: func(ctx context.Context, sdk *QCloudSDK) error {
+				_, err := sdk.statObject(ctx, "object")
+				return err
+			},
+		},
+		{
+			name: "read",
+			run: func(ctx context.Context, sdk *QCloudSDK) error {
+				reader, err := sdk.Read(ctx, "object", nil, nil)
+				if reader != nil {
+					_ = reader.Close()
+				}
+				return err
+			},
+		},
+	}
 
-	sdk := newTestCOSClient(t, server)
-	// Match production: MatrixOne owns retries, while the COS SDK still wraps
-	// the one attempted request in cos.RetryError.
-	sdk.client.Conf.RetryOpt.Count = 0
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			requestStarted := make(chan struct{}, 1)
+			server := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, request *http.Request) {
+				select {
+				case requestStarted <- struct{}{}:
+				default:
+				}
+				<-request.Context().Done()
+			}))
+			t.Cleanup(server.Close)
 
-	ctx, cancel := context.WithCancel(context.Background())
-	cancelDone := make(chan struct{})
-	go func() {
-		defer close(cancelDone)
-		select {
-		case <-requestStarted:
-			cancel()
-		case <-ctx.Done():
-		}
-	}()
-	t.Cleanup(func() {
-		cancel()
-		<-cancelDone
-	})
+			sdk := newTestCOSClient(t, server)
+			// Match production: MatrixOne owns retries, while the COS SDK still wraps
+			// the one attempted request in cos.RetryError.
+			sdk.client.Conf.RetryOpt.Count = 0
 
-	reader, err := sdk.Read(ctx, "object", nil, nil)
-	require.Nil(t, reader)
-	require.ErrorIs(t, err, context.Canceled)
-	var retryErr *cos.RetryError
-	require.False(t, errors.As(err, &retryErr), "QCloudSDK must not leak the opaque COS cancellation wrapper")
+			ctx, cancel := context.WithCancel(context.Background())
+			cancelDone := make(chan struct{})
+			go func() {
+				defer close(cancelDone)
+				select {
+				case <-requestStarted:
+					cancel()
+				case <-ctx.Done():
+				}
+			}()
+			t.Cleanup(func() {
+				cancel()
+				<-cancelDone
+			})
+
+			err := test.run(ctx, sdk)
+			require.ErrorIs(t, err, context.Canceled)
+			var retryErr *cos.RetryError
+			require.False(t, errors.As(err, &retryErr),
+				"QCloudSDK must not leak the opaque COS cancellation wrapper")
+		})
+	}
 }
 
 func TestNormalizeQCloudContextErrorIsConservative(t *testing.T) {

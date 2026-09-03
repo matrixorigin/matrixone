@@ -124,9 +124,9 @@ func NewQCloudSDK(
 
 	if !args.NoBucketValidation {
 		// validate bucket
-		_, err := DoWithRetryContext(ctx, "cos bucket head", func() (*cos.Response, error) {
+		_, err := doQCloudReadWithRetry(ctx, "cos bucket head", func() (*cos.Response, error) {
 			return client.Bucket.Head(ctx, &cos.BucketHeadOptions{})
-		}, maxRetryAttemps, IsRetryableError)
+		})
 		if err != nil {
 			return nil, err
 		}
@@ -726,7 +726,7 @@ func (a *QCloudSDK) listObjects(ctx context.Context, prefix string, marker strin
 		opts.MaxKeys = a.listMaxKeys
 	}
 
-	return DoWithRetryContext(
+	return doQCloudReadWithRetry(
 		ctx,
 		"s3 list objects",
 		func() (*cos.BucketGetResult, error) {
@@ -739,8 +739,6 @@ func (a *QCloudSDK) listObjects(ctx context.Context, prefix string, marker strin
 			}
 			return result, nil
 		},
-		maxRetryAttemps,
-		IsRetryableError,
 	)
 }
 
@@ -748,7 +746,7 @@ func (a *QCloudSDK) statObject(ctx context.Context, key string) (http.Header, er
 	ctx, task := gotrace.NewTask(ctx, "QCloudSDK.statObject")
 	defer task.End()
 
-	return DoWithRetryContext(
+	return doQCloudReadWithRetry(
 		ctx,
 		"s3 head object",
 		func() (http.Header, error) {
@@ -761,8 +759,6 @@ func (a *QCloudSDK) statObject(ctx context.Context, key string) (http.Header, er
 			}
 			return resp.Header, nil
 		},
-		maxRetryAttemps,
-		IsRetryableError,
 	)
 }
 
@@ -815,7 +811,7 @@ func (a *QCloudSDK) getObject(ctx context.Context, key string, min *int64, max *
 				Range: rang,
 			}
 
-			reader, err := DoWithRetryContext(
+			return doQCloudReadWithRetry(
 				ctx,
 				"s3 get object",
 				func() (io.ReadCloser, error) {
@@ -835,15 +831,30 @@ func (a *QCloudSDK) getObject(ctx context.Context, key string, min *int64, max *
 						},
 					}, nil
 				},
-				maxRetryAttemps,
-				IsRetryableError,
 			)
-			return reader, normalizeQCloudContextError(ctx, err)
 
 		},
 		*min,
 		IsRetryableError,
 	)
+}
+
+// doQCloudReadWithRetry keeps cancellation recognizable across the COS SDK's
+// opaque RetryError boundary. It is limited to side-effect-free operations;
+// mutating requests need operation-specific handling for ambiguous outcomes.
+func doQCloudReadWithRetry[T any](
+	ctx context.Context,
+	what string,
+	fn func() (T, error),
+) (T, error) {
+	result, err := DoWithRetryContext(
+		ctx,
+		what,
+		fn,
+		maxRetryAttemps,
+		IsRetryableError,
+	)
+	return result, normalizeQCloudContextError(ctx, err)
 }
 
 func normalizeQCloudContextError(ctx context.Context, err error) error {
