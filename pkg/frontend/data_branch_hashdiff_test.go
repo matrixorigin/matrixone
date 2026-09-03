@@ -181,6 +181,37 @@ func TestDataBranchUpdateRequiresNativeUpdate(t *testing.T) {
 	require.False(t, requiresNativeUpdate)
 }
 
+func TestSplitDataBranchBatchForNativeUpdate(t *testing.T) {
+	ses := newValidateSession(t)
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	tblStuff := newTestBranchTableStuff(ctrl)
+	bat := tblStuff.retPool.acquireRetBatch(tblStuff, false)
+	defer tblStuff.retPool.releaseRetBatch(bat, false)
+	require.NoError(t, appendTupleToBat(
+		ses, bat, types.Tuple{int64(1), []byte("source-one"), []byte("h1")}, tblStuff,
+	))
+	require.NoError(t, appendTupleToBat(
+		ses, bat, types.Tuple{int64(2), []byte("source-two"), []byte("h2")}, tblStuff,
+	))
+
+	nativeKeys := map[string]struct{}{"1": {}}
+	nativeBat, err := splitDataBranchBatchForNativeUpdate(ses, tblStuff, bat, nativeKeys)
+	require.NoError(t, err)
+	require.NotNil(t, nativeBat)
+	defer tblStuff.retPool.releaseRetBatch(nativeBat, false)
+	require.Empty(t, nativeKeys)
+	require.Equal(t,
+		[][]any{{int64(1), "source-one", "h1"}},
+		decodeCapturedRows(t, nativeBat, tblStuff.def.colTypes),
+	)
+	require.Equal(t,
+		[][]any{{int64(2), "source-two", "h2"}},
+		decodeCapturedRows(t, bat, tblStuff.def.colTypes),
+	)
+}
+
 func TestCompareTupleValueWithVectorNormalizesValues(t *testing.T) {
 	ses := newValidateSession(t)
 	mp := ses.proc.Mp()

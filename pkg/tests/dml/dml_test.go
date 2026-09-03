@@ -339,6 +339,31 @@ func runDataBranchUpdateApplySpecialColumns(t *testing.T, ctx context.Context, d
 		require.Equal(t, [][]string{{"1", "new"}, {"2", "shipped"}}, queryStringRows(t, ctx, db, "select id, cast(status as char) from update_enum_unique_pick_duplicate_dst order by id"))
 	})
 
+	t.Run("indexed_enum_conflict_accept", func(t *testing.T) {
+		execSQLDB(t, ctx, db, "create table update_enum_unique_conflict_merge_base (id int primary key, payload varchar(32), status enum('new','paid','shipped'), unique key uk_status(status))")
+		execSQLDB(t, ctx, db, "insert into update_enum_unique_conflict_merge_base values (1, 'base-one', 'new'), (2, 'two', 'paid')")
+		execSQLDB(t, ctx, db, "data branch create table update_enum_unique_conflict_merge_src from update_enum_unique_conflict_merge_base")
+		execSQLDB(t, ctx, db, "update update_enum_unique_conflict_merge_src set payload = 'source-one' where id = 1")
+		execSQLDB(t, ctx, db, "update update_enum_unique_conflict_merge_base set status = 'shipped' where id = 1")
+		execSQLDB(t, ctx, db, "data branch merge update_enum_unique_conflict_merge_src into update_enum_unique_conflict_merge_base when conflict accept")
+		require.Equal(t,
+			[][]string{{"1", "source-one", "new"}, {"2", "two", "paid"}},
+			queryStringRows(t, ctx, db, "select id, payload, cast(status as char) from update_enum_unique_conflict_merge_base order by id"),
+		)
+
+		execSQLDB(t, ctx, db, "create table update_enum_unique_conflict_pick_base (id int primary key, payload varchar(32), status enum('new','paid','shipped'), unique key uk_status(status))")
+		execSQLDB(t, ctx, db, "insert into update_enum_unique_conflict_pick_base values (1, 'base-one', 'new'), (2, 'two', 'paid')")
+		execSQLDB(t, ctx, db, "data branch create table update_enum_unique_conflict_pick_src from update_enum_unique_conflict_pick_base")
+		execSQLDB(t, ctx, db, "data branch create table update_enum_unique_conflict_pick_dst from update_enum_unique_conflict_pick_base")
+		execSQLDB(t, ctx, db, "update update_enum_unique_conflict_pick_src set payload = 'source-one' where id = 1")
+		execSQLDB(t, ctx, db, "update update_enum_unique_conflict_pick_dst set status = 'shipped' where id = 1")
+		execSQLDB(t, ctx, db, "data branch pick update_enum_unique_conflict_pick_src into update_enum_unique_conflict_pick_dst keys(1) when conflict accept")
+		require.Equal(t,
+			[][]string{{"1", "source-one", "new"}, {"2", "two", "paid"}},
+			queryStringRows(t, ctx, db, "select id, payload, cast(status as char) from update_enum_unique_conflict_pick_dst order by id"),
+		)
+	})
+
 	t.Run("mixed_schema_ordinary_assignment", func(t *testing.T) {
 		execSQLDB(t, ctx, db, "create table update_mixed_merge_base (id int primary key, payload varchar(32), status enum('new','ready'))")
 		execSQLDB(t, ctx, db, "insert into update_mixed_merge_base values (1, 'one', 'new'), (2, 'two', 'ready'), (3, 'three', 'new')")
