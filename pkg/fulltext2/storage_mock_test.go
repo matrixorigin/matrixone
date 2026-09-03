@@ -292,7 +292,7 @@ func TestLoadTailSegmentsErrorPaths(t *testing.T) {
 	})
 
 	t.Run("valid delete", func(t *testing.T) {
-		frame, err := FrameDeletes(types.T_int64, []DeleteRecord{{Pk: int64(7)}})
+		frame, err := FrameDeletes(int32(types.T_int64), []DeleteRecord{{Pk: int64(7)}})
 		require.NoError(t, err)
 		segs, deletes, err := loadChunks(t, []TailChunk{{ChunkId: 4, Data: frame}})
 		require.NoError(t, err)
