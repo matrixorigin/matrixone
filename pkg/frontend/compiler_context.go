@@ -1458,6 +1458,13 @@ func getVisibleSubscriptionMetadata(
 				metadata.VisibleTableIDs = nil
 				continue
 			}
+			tableID, tableIDErr := result.GetUint64(ctx, row, 2)
+			if tableIDErr != nil {
+				return nil, tableIDErr
+			}
+			if tableID != 0 && !metadata.AllTablesVisible {
+				metadata.VisibleTableIDs = append(metadata.VisibleTableIDs, tableID)
+			}
 		}
 	}
 	visible := make([]*plan2.SubscriptionMetadata, 0, len(metas))
@@ -1482,10 +1489,10 @@ func getVisibleSubscriptionMetadata(
 
 // subscriptionMetadataVisibilitySQL mirrors the canonical
 // information_schema table visibility rules using only subscriber-local
-// objects. Subscription tables are virtual in the subscriber catalog, so the
-// supported grant surface is database/global scope; exact table grants cannot
-// be resolved there. Subscriber role IDs are never evaluated in the publisher
-// account.
+// objects. Exact table/view grants are resolved through the subscriber-local
+// mo_tables rows so each logical table ID remains attached to the subscription
+// schema on which it was granted. Subscriber role IDs are never evaluated in
+// the publisher account.
 func subscriptionMetadataVisibilitySQL(subscriptionNames string, protocolVersion int64) string {
 	activeRolesSQL := "SELECT role_id FROM mo_current_roles() role_closure"
 	if protocolVersion < defines.MORPCVersion41 {
@@ -1524,9 +1531,25 @@ func subscriptionMetadataVisibilitySQL(subscriptionNames string, protocolVersion
               AND ((rp.privilege_level IN ('*','*.*') AND rp.obj_id = 0)
                    OR (rp.privilege_level = 'd' AND rp.obj_id = db.dat_id))
        )
+), __subscription_exact_visibility AS (
+    SELECT DISTINCT db.datname, tbl.rel_logical_id AS table_id
+    FROM __subscription_databases db
+    JOIN mo_catalog.mo_tables tbl
+      ON tbl.account_id = current_account_id()
+     AND tbl.reldatabase_id = db.dat_id
+     AND tbl.reldatabase = db.datname
+    JOIN mo_catalog.mo_role_privs rp
+      ON rp.obj_id = tbl.rel_logical_id
+    JOIN __subscription_active_roles ar
+      ON rp.role_id = ar.role_id
+    WHERE rp.obj_type IN ('table','view')
+      AND rp.privilege_level IN ('d.t','t')
 )
 SELECT datname, 1 AS all_tables, 0 AS table_id
-FROM __subscription_broad_visibility`, activeRolesSQL, subscriptionNames)
+FROM __subscription_broad_visibility
+UNION ALL
+SELECT datname, 0 AS all_tables, table_id
+FROM __subscription_exact_visibility`, activeRolesSQL, subscriptionNames)
 }
 
 func (tcc *TxnCompilerContext) CheckSubscriptionValid(subName, accName, pubName string) error {
