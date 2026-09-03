@@ -121,6 +121,11 @@ execute typed_binary_null_stmt using @typed_binary_null, @typed_binary_null,
                                      @typed_binary_null, @typed_binary_null;
 deallocate prepare typed_binary_null_stmt;
 
+-- A valid late wildcard alignment must not be rejected by a performance guard.
+select concat(repeat(_binary 'a', 8998), _binary 'bxc')
+       like concat(_binary '%', repeat(_binary '_', 5000), _binary 'b_%c')
+       as late_binary_like;
+
 create table binary_function_ctas as
 select left(bin, 1) as binary_left,
        lower(bin) as binary_lower,

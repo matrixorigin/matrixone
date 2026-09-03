@@ -155,6 +155,11 @@ execute typed_binary_null_stmt using @typed_binary_null, @typed_binary_null,
 ➤ charset(?)[12,65535,0]  ¦  collation(?)[12,65535,0]  ¦  charset(left(?, 1))[12,65535,0]  ¦  collation(left(?, 1))[12,65535,0]  𝄀
 binary  ¦  binary  ¦  binary  ¦  binary
 deallocate prepare typed_binary_null_stmt;
+select concat(repeat(_binary 'a', 8998), _binary 'bxc')
+like concat(_binary '%', repeat(_binary '_', 5000), _binary 'b_%c')
+as late_binary_like;
+➤ late_binary_like[-7,1,0]  𝄀
+1
 create table binary_function_ctas as
 select left(bin, 1) as binary_left,
 lower(bin) as binary_lower,

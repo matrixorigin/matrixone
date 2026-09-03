@@ -2039,11 +2039,6 @@ func validateRemoteBinaryStringPipelineProtocol(
 	proc *process.Process,
 	p *pipeline.Pipeline,
 ) error {
-	if p == nil || !pipelineContainsFunction(p, func(functionID, _ int32) bool {
-		return binaryStringSemanticFunction(functionID)
-	}) {
-		return nil
-	}
 	if proc != nil {
 		value, ok := moruntime.ServiceRuntime(proc.GetService()).
 			GetGlobalVariables(moruntime.MOProtocolVersion)
@@ -2051,6 +2046,11 @@ func validateRemoteBinaryStringPipelineProtocol(
 		if ok && versionOK && version >= defines.MORPCVersion45 {
 			return nil
 		}
+	}
+	if p == nil || !pipelineContainsFunction(p, func(functionID, _ int32) bool {
+		return binaryStringSemanticFunction(functionID)
+	}) {
+		return nil
 	}
 	return moerr.NewNotSupportedNoCtxf(
 		"binary string function semantics require MORPC protocol version %d",

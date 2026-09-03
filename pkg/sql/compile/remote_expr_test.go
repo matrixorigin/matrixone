@@ -690,6 +690,47 @@ func TestBinaryStringRemoteProtocolValidationAtSenderAndReceiver(t *testing.T) {
 	require.NoError(t, validateRemoteBinaryStringPipelineProtocol(proc, ordinaryPipeline))
 }
 
+func TestBinaryStringRemoteProtocolV45FastPathDoesNotScanPipeline(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	rt := runtime.ServiceRuntime(proc.GetService())
+	defer rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCLatestVersion)
+	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion45)
+
+	wide := &pipeline.Pipeline{InstructionList: []*pipeline.Instruction{{
+		Op: int32(vm.Projection), ProjectList: make([]*plan.Expr, 1_000),
+	}}}
+	for i := range wide.InstructionList[0].ProjectList {
+		wide.InstructionList[0].ProjectList[i] = &plan.Expr{
+			Typ: plan.Type{Id: int32(types.T_int64)},
+			Expr: &plan.Expr_Lit{Lit: &plan.Literal{
+				Value: &plan.Literal_I64Val{I64Val: int64(i)},
+			}},
+		}
+	}
+	var validationErr error
+	allocations := testing.AllocsPerRun(100, func() {
+		validationErr = validateRemoteBinaryStringPipelineProtocol(proc, wide)
+	})
+	require.NoError(t, validationErr)
+	require.Zero(t, allocations)
+}
+
+func BenchmarkBinaryStringRemoteProtocolV45FastPath(b *testing.B) {
+	proc := testutil.NewProcess(b)
+	runtime.ServiceRuntime(proc.GetService()).SetGlobalVariables(
+		runtime.MOProtocolVersion, defines.MORPCVersion45)
+	wide := &pipeline.Pipeline{InstructionList: []*pipeline.Instruction{{
+		Op: int32(vm.Projection), ProjectList: make([]*plan.Expr, 1_000),
+	}}}
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		if err := validateRemoteBinaryStringPipelineProtocol(proc, wide); err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
 func TestPadCharModeRemoteProtocolValidation(t *testing.T) {
 	proc := newResolveVariableProcess(t, "PAD_CHAR_TO_FULL_LENGTH")
 	rt := runtime.ServiceRuntime(proc.GetService())

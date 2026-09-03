@@ -486,9 +486,7 @@ func TestByteLikeUsesByteWildcardsAndEscape(t *testing.T) {
 		{name: "empty", pattern: nil, value: nil, want: true},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			got, err := byteLike(test.pattern, test.value, test.escape, test.enabled)
-			require.NoError(t, err)
-			require.Equal(t, test.want, got)
+			require.Equal(t, test.want, byteLike(test.pattern, test.value, test.escape, test.enabled))
 		})
 	}
 }
@@ -524,13 +522,89 @@ func TestLikeEscapeValidationUsesEffectiveRowDomain(t *testing.T) {
 		"the binary row must accept one arbitrary escape byte")
 }
 
-func TestByteLikeBoundsUnoptimizedBacktracking(t *testing.T) {
-	value := bytes.Repeat([]byte{'a'}, 10_000)
+func TestByteLikeMatchesDynamicProgrammingOracle(t *testing.T) {
+	generate := func(alphabet []byte, maxLength int) [][]byte {
+		values := [][]byte{nil}
+		for length := 1; length <= maxLength; length++ {
+			for _, prefix := range values {
+				if len(prefix) != length-1 {
+					continue
+				}
+				for _, symbol := range alphabet {
+					candidate := append(append([]byte(nil), prefix...), symbol)
+					values = append(values, candidate)
+				}
+			}
+		}
+		return values
+	}
+	reference := func(pattern, value []byte) bool {
+		reachable := make([]bool, len(pattern)+1)
+		reachable[0] = true
+		for i, token := range pattern {
+			if token == '%' && reachable[i] {
+				reachable[i+1] = true
+			}
+		}
+		for _, b := range value {
+			next := make([]bool, len(pattern)+1)
+			for i, token := range pattern {
+				if !reachable[i] {
+					continue
+				}
+				switch token {
+				case '%':
+					next[i] = true
+				case '_':
+					next[i+1] = true
+				default:
+					if token == b {
+						next[i+1] = true
+					}
+				}
+			}
+			for i, token := range pattern {
+				if token == '%' && next[i] {
+					next[i+1] = true
+				}
+			}
+			reachable = next
+		}
+		return reachable[len(pattern)]
+	}
+
+	for _, pattern := range generate([]byte{'a', 'b', '_', '%'}, 4) {
+		for _, value := range generate([]byte{'a', 'b'}, 4) {
+			require.Equalf(t, reference(pattern, value), byteLike(pattern, value, nil, false),
+				"pattern=%q value=%q", pattern, value)
+		}
+	}
+}
+
+func TestByteLikeNFAFindsLateValidAlignment(t *testing.T) {
+	value := append(bytes.Repeat([]byte{'a'}, 8_998), 'b', 'x', 'c')
 	pattern := append([]byte{'%'}, bytes.Repeat([]byte{'_'}, 5_000)...)
 	pattern = append(pattern, 'b', '_', '%', 'c')
-	matched, err := byteLike(pattern, value, nil, false)
-	require.False(t, matched)
-	require.ErrorContains(t, err, "requires too much backtracking")
+	require.True(t, byteLike(pattern, value, nil, false))
+
+	value[len(value)-1] = 'd'
+	require.False(t, byteLike(pattern, value, nil, false))
+}
+
+func BenchmarkByteLikeNFALateAlignment(b *testing.B) {
+	for _, size := range []int{2_000, 4_000, 8_000} {
+		b.Run(fmt.Sprintf("n=%d", size), func(b *testing.B) {
+			value := append(bytes.Repeat([]byte{'a'}, size-3), 'b', 'x', 'c')
+			pattern := append([]byte{'%'}, bytes.Repeat([]byte{'_'}, size/2)...)
+			pattern = append(pattern, 'b', '_', '%', 'c')
+			b.SetBytes(int64(len(value) + len(pattern)))
+			for i := 0; i < b.N; i++ {
+				if !byteLike(pattern, value, nil, false) {
+					b.Fatal("expected match")
+				}
+			}
+		})
+	}
 }
 
 func BenchmarkByteLikeAdversarialSkippedLiteralSegment(b *testing.B) {
@@ -541,9 +615,8 @@ func BenchmarkByteLikeAdversarialSkippedLiteralSegment(b *testing.B) {
 			pattern = append(pattern, 'b', '%', 'c')
 			b.SetBytes(int64(len(value) + len(pattern)))
 			for i := 0; i < b.N; i++ {
-				matched, err := byteLike(pattern, value, nil, false)
-				if err != nil || matched {
-					b.Fatalf("unexpected result: matched=%v err=%v", matched, err)
+				if byteLike(pattern, value, nil, false) {
+					b.Fatal("unexpected match")
 				}
 			}
 		})
@@ -557,9 +630,8 @@ func BenchmarkByteLikeAdversarialLiteralSuffix(b *testing.B) {
 	b.SetBytes(int64(len(value) + len(pattern)))
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		matched, err := byteLike(pattern, value, nil, false)
-		if err != nil || matched {
-			b.Fatalf("unexpected result: matched=%v err=%v", matched, err)
+		if byteLike(pattern, value, nil, false) {
+			b.Fatal("unexpected match")
 		}
 	}
 }
