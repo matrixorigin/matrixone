@@ -815,7 +815,7 @@ func (a *QCloudSDK) getObject(ctx context.Context, key string, min *int64, max *
 				Range: rang,
 			}
 
-			return DoWithRetryContext(
+			reader, err := DoWithRetryContext(
 				ctx,
 				"s3 get object",
 				func() (io.ReadCloser, error) {
@@ -838,11 +838,34 @@ func (a *QCloudSDK) getObject(ctx context.Context, key string, min *int64, max *
 				maxRetryAttemps,
 				IsRetryableError,
 			)
+			return reader, normalizeQCloudContextError(ctx, err)
 
 		},
 		*min,
 		IsRetryableError,
 	)
+}
+
+func normalizeQCloudContextError(ctx context.Context, err error) error {
+	if err == nil || ctx == nil {
+		return err
+	}
+	contextErr := ctx.Err()
+	if contextErr == nil {
+		return err
+	}
+
+	// cos.RetryError does not implement Unwrap, so an in-flight request can
+	// lose its cancellation identity even when its only child is ctx.Err().
+	// Do not collapse mixed or unrelated storage errors.
+	retryErr, ok := err.(*cos.RetryError)
+	if !ok ||
+		len(retryErr.Errs) != 1 ||
+		!errors.Is(retryErr.Errs[0], contextErr) {
+		return err
+	}
+
+	return contextErr
 }
 
 func (a *QCloudSDK) deleteObject(ctx context.Context, key string) (bool, error) {

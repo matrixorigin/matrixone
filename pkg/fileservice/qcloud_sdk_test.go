@@ -400,6 +400,72 @@ func TestQCloudSDKBasicObjectOperations(t *testing.T) {
 	}
 }
 
+func TestQCloudSDKReadPreservesInFlightCancellation(t *testing.T) {
+	requestStarted := make(chan struct{}, 1)
+	server := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, request *http.Request) {
+		select {
+		case requestStarted <- struct{}{}:
+		default:
+		}
+		<-request.Context().Done()
+	}))
+	t.Cleanup(server.Close)
+
+	sdk := newTestCOSClient(t, server)
+	// Match production: MatrixOne owns retries, while the COS SDK still wraps
+	// the one attempted request in cos.RetryError.
+	sdk.client.Conf.RetryOpt.Count = 0
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancelDone := make(chan struct{})
+	go func() {
+		defer close(cancelDone)
+		select {
+		case <-requestStarted:
+			cancel()
+		case <-ctx.Done():
+		}
+	}()
+	t.Cleanup(func() {
+		cancel()
+		<-cancelDone
+	})
+
+	reader, err := sdk.Read(ctx, "object", nil, nil)
+	require.Nil(t, reader)
+	require.ErrorIs(t, err, context.Canceled)
+	var retryErr *cos.RetryError
+	require.False(t, errors.As(err, &retryErr), "QCloudSDK must not leak the opaque COS cancellation wrapper")
+}
+
+func TestNormalizeQCloudContextErrorIsConservative(t *testing.T) {
+	t.Run("active context", func(t *testing.T) {
+		retryErr := &cos.RetryError{Errs: []error{context.Canceled}}
+		require.Same(t, retryErr, normalizeQCloudContextError(context.Background(), retryErr))
+	})
+
+	t.Run("unrelated error", func(t *testing.T) {
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+		retryErr := &cos.RetryError{Errs: []error{errors.New("read failed")}}
+		require.Same(t, retryErr, normalizeQCloudContextError(ctx, retryErr))
+	})
+
+	t.Run("mixed errors", func(t *testing.T) {
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+		retryErr := &cos.RetryError{Errs: []error{context.Canceled, errors.New("read failed")}}
+		require.Same(t, retryErr, normalizeQCloudContextError(ctx, retryErr))
+	})
+
+	t.Run("matching deadline", func(t *testing.T) {
+		ctx, cancel := context.WithDeadline(context.Background(), time.Now().Add(-time.Second))
+		defer cancel()
+		retryErr := &cos.RetryError{Errs: []error{fmt.Errorf("request failed: %w", context.DeadlineExceeded)}}
+		require.ErrorIs(t, normalizeQCloudContextError(ctx, retryErr), context.DeadlineExceeded)
+	})
+}
+
 func TestQCloudSDKListStopsRetryingAtContextDeadline(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusBadGateway)
