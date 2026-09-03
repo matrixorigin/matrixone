@@ -1094,14 +1094,6 @@ func (ses *Session) cacheStatsForTableDefVersionIfCurrent(
 	return true
 }
 
-func (ses *Session) cachePublishedStats(
-	key optimizerStatsTableKey,
-	version uint64,
-	stats *pbstats.StatsInfo,
-) {
-	ses.cachePublishedStatsForTableDefVersion(key, version, nil, stats)
-}
-
 func (ses *Session) cachePublishedStatsForTableDefVersion(
 	key optimizerStatsTableKey,
 	version uint64,
