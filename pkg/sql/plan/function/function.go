@@ -192,6 +192,42 @@ func GetFunctionByName(ctx context.Context, name string, args []types.Type) (r F
 	return r, err
 }
 
+// GetFunctionByNameWithoutError tries to resolve a function overload without
+// constructing an error for an expected mismatch. It is intended for
+// speculative planner checks where unsupported candidate types are normal and
+// the caller only needs the successful resolution metadata.
+func GetFunctionByNameWithoutError(name string, args []types.Type) (r FuncGetResult, ok bool) {
+	r.fid, ok = getFunctionIdByNameWithoutErr(name)
+	if !ok || r.fid < 0 || int(r.fid) >= len(allSupportedFunctions) {
+		return FuncGetResult{}, false
+	}
+
+	f := allSupportedFunctions[r.fid]
+	if len(f.Overloads) == 0 || f.checkFn == nil {
+		return FuncGetResult{}, false
+	}
+
+	check := f.checkFn(f.Overloads, args)
+	switch check.status {
+	case succeedMatched:
+		r.overloadId = int32(check.idx)
+		r.retType = f.Overloads[r.overloadId].retType(args)
+		r.cannotRunInParallel = f.Overloads[r.overloadId].cannotParallel
+		return r, true
+
+	case succeedWithCast:
+		r.overloadId = int32(check.idx)
+		r.needCast = true
+		r.targetTypes = check.finalType
+		r.retType = f.Overloads[r.overloadId].retType(r.targetTypes)
+		r.cannotRunInParallel = f.Overloads[r.overloadId].cannotParallel
+		return r, true
+
+	default:
+		return FuncGetResult{}, false
+	}
+}
+
 // GetFunctionByNameWithOverload validates the arguments using the function's
 // normal type checker, then selects a specific overload. It is intended for
 // planner-only variants that must keep the same SQL function name and layout.
