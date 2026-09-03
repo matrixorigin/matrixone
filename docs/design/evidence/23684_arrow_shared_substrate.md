@@ -76,10 +76,33 @@ GOWORK=off go test -mod=readonly -race -count=1 -timeout=180s \
 
 All completed successfully. The final fuzz run loaded 47 baseline inputs and
 executed about 372,000 mutations. The full `pkg/sql/colexec/external` consumer
-suite, including its local MinIO object-change path, and the public MySQL
-protocol suite in `pkg/tests/arrowload` also passed. The formal distributed case
-`test/distributed/cases/load_data/load_data_arrow.sql` passed 50/50 twice on one
-clean instance built from the exact worktree.
+suite, including its local MinIO object-change path, also passed. The formal
+distributed case `test/distributed/cases/load_data/load_data_arrow.sql` passed
+50/50 twice on one clean instance built from the exact worktree.
+
+The public MySQL-protocol suite in `pkg/tests/arrowload` now starts ephemeral
+embedded clusters and, when the `minio` binary is available, its own ephemeral
+MinIO server. It covers disk and S3 File/Stream input, direct S3 and S3-backed
+stage syntax, multi-object success, corrupt-object rollback followed by reader
+reuse, same-key object replacement, conditional-range object-change rejection,
+client request cancellation, `KILL QUERY`, 2-CN fanout, and committed-data
+persistence across a complete local cluster restart. No cloud credentials or
+external services are needed. The added scenarios passed the full package,
+focused race runs, and a same-process two-run 1-CN BVT repetition:
+
+```text
+.agents/skills/mo-dev/scripts/mo-cgo-test -p=1 -count=1 -timeout=1200s \
+  ./pkg/tests/arrowload
+.agents/skills/mo-dev/scripts/mo-cgo-test -race -count=1 -timeout=1200s \
+  -run '^TestArrowLoadBVT/(CorruptInputRollback|LocalMinIO)$' \
+  ./pkg/tests/arrowload
+.agents/skills/mo-dev/scripts/mo-cgo-test -race -count=1 -timeout=1200s \
+  -run '^TestArrowLoadMultiCN/(CancelMidLoad|ClientContextCancel)$' \
+  ./pkg/tests/arrowload
+.agents/skills/mo-dev/scripts/mo-cgo-test -p=1 -count=2 -timeout=1200s \
+  -run '^TestArrowLoadBVT$' ./pkg/tests/arrowload
+go vet ./pkg/tests/arrowload
+```
 
 The self-review added deterministic regressions for duplicate output indices
 when attribute names are empty, metadata limits that cannot be raised by a

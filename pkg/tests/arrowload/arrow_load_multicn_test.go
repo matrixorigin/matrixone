@@ -35,9 +35,11 @@ func TestArrowLoadMultiCN(t *testing.T) {
 	db := openArrowLoadDB(t, c, 0)
 	mustExec(t, db, "create database if not exists arrow_multicn")
 	mustExec(t, db, "use arrow_multicn")
+	path, ddl := fixtureLarge(t)
 
-	t.Run("DistributedRecordBatchFanout", func(t *testing.T) { testArrowMultiCNFanout(t, db) })
-	t.Run("CancelMidLoad", func(t *testing.T) { testArrowCancelMidLoad(t, c) })
+	t.Run("DistributedRecordBatchFanout", func(t *testing.T) { testArrowMultiCNFanout(t, db, path, ddl) })
+	t.Run("CancelMidLoad", func(t *testing.T) { testArrowCancelMidLoad(t, c, path, ddl) })
+	t.Run("ClientContextCancel", func(t *testing.T) { testArrowClientContextCancel(t, c, path, ddl) })
 }
 
 // testArrowMultiCNFanout loads the "large" multi-record-batch fixture with
@@ -45,8 +47,7 @@ func TestArrowLoadMultiCN(t *testing.T) {
 // correctness. Shard-routing internals are already unit-tested in
 // pkg/sql/compile's arrow_scope_test.go; this test's job is proving the whole thing
 // produces correct data on a real multi-CN cluster, not re-deriving that routing.
-func testArrowMultiCNFanout(t *testing.T, db *sql.DB) {
-	path, ddl := fixtureLarge(t)
+func testArrowMultiCNFanout(t *testing.T, db *sql.DB, path, ddl string) {
 	mustExec(t, db, "drop table if exists large_fanout")
 	mustExec(t, db, fmt.Sprintf("create table large_fanout(%s)", ddl))
 	mustExec(t, db, fmt.Sprintf(
@@ -65,7 +66,7 @@ func testArrowMultiCNFanout(t *testing.T, db *sql.DB) {
 // all-or-nothing invariant applies to a single cancelled statement too), and the
 // killed connection itself remains usable afterward (KILL QUERY, not KILL
 // CONNECTION), mirroring pkg/frontend/mysql_protocol_test.go's kill-query test.
-func testArrowCancelMidLoad(t *testing.T, c embed.Cluster) {
+func testArrowCancelMidLoad(t *testing.T, c embed.Cluster, path, ddl string) {
 	loaderDB := openArrowLoadDB(t, c, 0)
 	killerDB := openArrowLoadDB(t, c, 0)
 
@@ -76,7 +77,6 @@ func testArrowCancelMidLoad(t *testing.T, c embed.Cluster) {
 
 	_, err = conn.ExecContext(ctx, "use arrow_multicn")
 	require.NoError(t, err)
-	path, ddl := fixtureLarge(t)
 	_, err = conn.ExecContext(ctx, "drop table if exists cancel_mid_load")
 	require.NoError(t, err)
 	_, err = conn.ExecContext(ctx, fmt.Sprintf("create table cancel_mid_load(%s)", ddl))
@@ -109,4 +109,47 @@ func testArrowCancelMidLoad(t *testing.T, c embed.Cluster) {
 	pingCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	require.NoError(t, conn.PingContext(pingCtx), "the connection must remain usable after KILL QUERY (not KILL CONNECTION)")
+}
+
+// testArrowClientContextCancel covers the other public cancellation source:
+// client-side context cancellation closes the in-flight request instead of
+// issuing KILL QUERY from a second session. The server must still roll back the
+// whole multi-batch LOAD and leave the cluster usable for verification.
+func testArrowClientContextCancel(t *testing.T, c embed.Cluster, path, ddl string) {
+	loaderDB := openArrowLoadDB(t, c, 0)
+	observerDB := openArrowLoadDB(t, c, 0)
+	ctx := context.Background()
+	conn, err := loaderDB.Conn(ctx)
+	require.NoError(t, err)
+	defer conn.Close()
+	_, err = conn.ExecContext(ctx, "use arrow_multicn")
+	require.NoError(t, err)
+	_, err = conn.ExecContext(ctx, "drop table if exists client_cancel_load")
+	require.NoError(t, err)
+	_, err = conn.ExecContext(ctx, fmt.Sprintf("create table client_cancel_load(%s)", ddl))
+	require.NoError(t, err)
+
+	var connID int64
+	require.NoError(t, conn.QueryRowContext(ctx, "select connection_id()").Scan(&connID))
+	loadCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	loadErrCh := make(chan error, 1)
+	go func() {
+		_, execErr := conn.ExecContext(loadCtx, fmt.Sprintf(
+			"load data infile {'filepath'='%s','format'='arrow'} into table client_cancel_load", path))
+		loadErrCh <- execErr
+	}()
+
+	waitUntilStatementRunning(t, observerDB, connID, "load data", 30*time.Second)
+	cancel()
+	select {
+	case err := <-loadErrCh:
+		require.Error(t, err, "a client-canceled LOAD must return an error")
+	case <-time.After(30 * time.Second):
+		t.Fatal("timed out waiting for the client-canceled LOAD statement to return")
+	}
+
+	verifyDB := openArrowLoadDB(t, c, 0)
+	require.Equal(t, int64(0), queryCount(t, verifyDB, "select count(*) from arrow_multicn.client_cancel_load"),
+		"client cancellation must not leave partially committed rows")
 }
