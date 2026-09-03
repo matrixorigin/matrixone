@@ -63,6 +63,28 @@ func TestCompareByteJsonOpaqueBinaryUsesRawBytes(t *testing.T) {
 	require.Equal(t, `"AA=="`, zero.String())
 	require.Equal(t, "AA==", mustUnquote(t, zero))
 	require.Equal(t, "AQ==", mustUnquote(t, bit))
+	require.Zero(t, CompareByteJson(NewMySQLOpaque(16, []byte{0x01}), bit))
+}
+
+func TestCompareByteJsonMySQLOpaqueUsesFieldTypeAndRawBytes(t *testing.T) {
+	varbinary := NewMySQLOpaque(15, []byte{0x00})
+	varbinaryNext := NewMySQLOpaque(15, []byte{0x01})
+	blob := NewMySQLOpaque(252, []byte{0x00})
+	legacyBlob := makeBinaryJson(TpCodeBlob, []byte("AA=="))
+	legacyOpaque := makeBinaryJson(TpCodeOpaque, []byte{0x00})
+
+	require.Less(t, CompareByteJson(varbinary, varbinaryNext), 0)
+	require.Less(t, CompareByteJson(varbinary, blob), 0)
+	require.Zero(t, CompareByteJson(blob, legacyBlob))
+	require.Zero(t, CompareByteJson(blob, legacyOpaque))
+	varbinaryKey, ok := AppendCanonicalBinary(nil, varbinary)
+	require.True(t, ok)
+	blobKey, ok := AppendCanonicalBinary(nil, blob)
+	require.True(t, ok)
+	require.NotEqual(t, varbinaryKey, blobKey)
+	blobSize, ok := CanonicalBinarySize(blob)
+	require.True(t, ok)
+	require.Equal(t, blobSize, len(blobKey))
 }
 
 func TestCompareByteJsonLegacyBlobLargePayloadAllocations(t *testing.T) {
@@ -174,9 +196,9 @@ func TestCompareByteJson_DecimalCrossType(t *testing.T) {
 }
 
 // TestCompareByteJson_Int64Uint64CrossType verifies that INT64-vs-UINT64
-// comparisons are handled correctly even though both report TYPE()="INTEGER"
-// (same jsonTpOrder).  Without the cross-type check, the same-type branch
-// would use the wrong accessor.
+// comparisons are handled correctly even though both share one numeric type
+// order. Without the cross-type check, the same-type branch would use the
+// wrong accessor.
 func TestCompareByteJson_Int64Uint64CrossType(t *testing.T) {
 	// INT64 == small UINT64
 	require.Equal(t, 0, CompareByteJson(makeJson(t, "42"), makeJson(t, "42")))

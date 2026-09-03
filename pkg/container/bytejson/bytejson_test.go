@@ -96,6 +96,48 @@ func TestMarshalBinarySubtypesRemainLegacyReadable(t *testing.T) {
 	}
 }
 
+func TestMySQLOpaqueTaggedValue(t *testing.T) {
+	payload := []byte{0x00, 0xff, 0x41}
+	for _, tc := range []struct {
+		name      string
+		fieldType uint8
+		want      string
+	}{
+		{name: "varbinary", fieldType: 15, want: "base64:type15:AP9B"},
+		{name: "bit", fieldType: 16, want: "base64:type16:AP9B"},
+		{name: "blob", fieldType: 252, want: "base64:type252:AP9B"},
+		{name: "binary", fieldType: 254, want: "base64:type254:AP9B"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			value := NewMySQLOpaque(tc.fieldType, payload)
+			require.Equal(t, TpCodeBlob, value.Type)
+			wantType := "BLOB"
+			if tc.fieldType == 16 {
+				wantType = "BIT"
+			}
+			require.Equal(t, wantType, value.TYPE())
+			require.Equal(t, strconv.Quote(tc.want), value.String())
+			require.Equal(t, tc.want, mustUnquote(t, value))
+			length, ok := BinaryJSONPayloadLen(value)
+			require.True(t, ok)
+			require.Equal(t, len(payload), length)
+
+			stored, err := value.Marshal()
+			require.NoError(t, err)
+			requireLegacyJSONReadable(t, stored)
+			var restored ByteJson
+			require.NoError(t, restored.Unmarshal(stored))
+			require.Equal(t, value.String(), restored.String())
+		})
+	}
+}
+
+func TestUint64TypeRemainsInteger(t *testing.T) {
+	value, err := CreateByteJSON(uint64(2024))
+	require.NoError(t, err)
+	require.Equal(t, "INTEGER", value.TYPE())
+}
+
 func TestBinaryJSONPayloadLenLegacyBlobLargePayloadAllocations(t *testing.T) {
 	payload := bytes.Repeat([]byte{0xef}, 1<<20)
 	legacy := makeBinaryJson(TpCodeBlob, []byte(base64.StdEncoding.EncodeToString(payload)))
