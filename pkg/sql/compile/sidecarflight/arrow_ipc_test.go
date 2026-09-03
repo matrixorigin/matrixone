@@ -129,6 +129,144 @@ func TestArrowIPCRejectsMalformedAndMismatchedData(t *testing.T) {
 	require.Equal(t, int64(0), mp.CurrNB())
 }
 
+func TestArrowIPCRejectsDateOutsideMatrixOneRange(t *testing.T) {
+	schemaWire := mustHex(t, fixtureSchemaHex)
+	header := mustHex(t, fixtureHeaderHex)
+	body := mustHex(t, fixtureBodyHex)
+	expected, headings := fixtureOutputShape()
+	schema, err := ParseSchema(schemaWire, expected, headings)
+	require.NoError(t, err)
+
+	metadata, err := ipcMetadata(header)
+	require.NoError(t, err)
+	message, err := rootTable(metadata)
+	require.NoError(t, err)
+	record, ok, err := message.tableField(2)
+	require.NoError(t, err)
+	require.True(t, ok)
+	bufferBytes, bufferCount, err := record.structVector(2, 16)
+	require.NoError(t, err)
+	dateBuffer := 0
+	for _, field := range schema.fields[:10] {
+		dateBuffer += field.bufferCount
+	}
+	dateBuffer++ // skip the date validity bitmap
+	require.Less(t, dateBuffer, bufferCount)
+	bodyOffset := binary.LittleEndian.Uint64(bufferBytes[dateBuffer*16:])
+	bodyLength := binary.LittleEndian.Uint64(bufferBytes[dateBuffer*16+8:])
+	require.GreaterOrEqual(t, bodyLength, uint64(4))
+	require.Less(t, bodyOffset+bodyLength, uint64(len(body)+1))
+	binary.LittleEndian.PutUint32(body[bodyOffset:], uint32(math.MaxInt32))
+
+	mp := mpool.MustNewZero()
+	decoded, err := schema.decodeRecordBatch(header, body, 1<<20, mp)
+	if decoded != nil {
+		decoded.Clean(mp)
+	}
+	require.ErrorContains(t, err, "date")
+	require.Zero(t, mp.CurrNB())
+}
+
+func TestArrowIPCRejectsDecimalValueOutsidePrecision(t *testing.T) {
+	schemaWire := mustHex(t, fixtureSchemaHex)
+	header := mustHex(t, fixtureHeaderHex)
+	body := mustHex(t, fixtureBodyHex)
+	expected, headings := fixtureOutputShape()
+	schema, err := ParseSchema(schemaWire, expected, headings)
+	require.NoError(t, err)
+
+	metadata, err := ipcMetadata(header)
+	require.NoError(t, err)
+	message, err := rootTable(metadata)
+	require.NoError(t, err)
+	record, ok, err := message.tableField(2)
+	require.NoError(t, err)
+	require.True(t, ok)
+	bufferBytes, bufferCount, err := record.structVector(2, 16)
+	require.NoError(t, err)
+	decimalBuffer := 0
+	for _, field := range schema.fields[:9] {
+		decimalBuffer += field.bufferCount
+	}
+	decimalBuffer++ // skip the decimal128 validity bitmap
+	require.Less(t, decimalBuffer, bufferCount)
+	bodyOffset := binary.LittleEndian.Uint64(bufferBytes[decimalBuffer*16:])
+	bodyLength := binary.LittleEndian.Uint64(bufferBytes[decimalBuffer*16+8:])
+	require.GreaterOrEqual(t, bodyLength, uint64(16))
+	binary.LittleEndian.PutUint64(body[bodyOffset:], math.MaxUint64)
+	binary.LittleEndian.PutUint64(body[bodyOffset+8:], math.MaxInt64)
+
+	mp := mpool.MustNewZero()
+	decoded, err := schema.decodeRecordBatch(header, body, 1<<20, mp)
+	if decoded != nil {
+		decoded.Clean(mp)
+	}
+	require.ErrorContains(t, err, "precision")
+	require.Zero(t, mp.CurrNB())
+}
+
+func TestArrowSchemaRejectsDecimal64PrecisionOverflow(t *testing.T) {
+	schemaWire := mustHex(t, fixtureSchemaHex)
+	expected, headings := fixtureOutputShape()
+	expected[8].Width = 38
+	metadata, err := ipcMetadata(schemaWire)
+	require.NoError(t, err)
+	message, err := rootTable(metadata)
+	require.NoError(t, err)
+	schemaTable, ok, err := message.tableField(2)
+	require.NoError(t, err)
+	require.True(t, ok)
+	fields, err := schemaTable.tableVector(1)
+	require.NoError(t, err)
+	typeTable, ok, err := fields[8].tableField(3)
+	require.NoError(t, err)
+	require.True(t, ok)
+	precisionPosition, ok, err := typeTable.field(0, 4)
+	require.NoError(t, err)
+	require.True(t, ok)
+	binary.LittleEndian.PutUint32(metadata[precisionPosition:], 38)
+
+	_, err = ParseSchema(schemaWire, expected, headings)
+	require.ErrorContains(t, err, "precision")
+}
+
+func TestArrowIPCRejectsInvalidUTF8Value(t *testing.T) {
+	schemaWire := mustHex(t, fixtureSchemaHex)
+	header := mustHex(t, fixtureHeaderHex)
+	body := mustHex(t, fixtureBodyHex)
+	expected, headings := fixtureOutputShape()
+	schema, err := ParseSchema(schemaWire, expected, headings)
+	require.NoError(t, err)
+
+	metadata, err := ipcMetadata(header)
+	require.NoError(t, err)
+	message, err := rootTable(metadata)
+	require.NoError(t, err)
+	record, ok, err := message.tableField(2)
+	require.NoError(t, err)
+	require.True(t, ok)
+	bufferBytes, bufferCount, err := record.structVector(2, 16)
+	require.NoError(t, err)
+	stringBuffer := 0
+	for _, field := range schema.fields[:7] {
+		stringBuffer += field.bufferCount
+	}
+	stringBuffer += 2 // skip string validity and offsets
+	require.Less(t, stringBuffer, bufferCount)
+	bodyOffset := binary.LittleEndian.Uint64(bufferBytes[stringBuffer*16:])
+	bodyLength := binary.LittleEndian.Uint64(bufferBytes[stringBuffer*16+8:])
+	require.GreaterOrEqual(t, bodyLength, uint64(1))
+	body[bodyOffset] = 0xff
+
+	mp := mpool.MustNewZero()
+	decoded, err := schema.decodeRecordBatch(header, body, 1<<20, mp)
+	if decoded != nil {
+		decoded.Clean(mp)
+	}
+	require.ErrorContains(t, err, "UTF8")
+	require.Zero(t, mp.CurrNB())
+}
+
 func TestArrowIPCLowLevelBoundsAndFraming(t *testing.T) {
 	_, err := ipcMetadata(nil)
 	require.ErrorContains(t, err, "truncated")

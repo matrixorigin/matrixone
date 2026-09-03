@@ -17,6 +17,7 @@ package arrowbridge
 import (
 	"context"
 	"math/big"
+	"reflect"
 	"testing"
 	"time"
 	"unsafe"
@@ -26,6 +27,7 @@ import (
 	"github.com/apache/arrow-go/v18/arrow/decimal128"
 	"github.com/apache/arrow-go/v18/arrow/memory"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/stretchr/testify/require"
@@ -1615,6 +1617,177 @@ type mismatchedRowsRecordBatch struct {
 
 func (r *mismatchedRowsRecordBatch) NumRows() int64 {
 	return r.rows
+}
+
+func TestMaxOutputRowsRejectsNilRecordSchema(t *testing.T) {
+	schema := arrow.NewSchema([]arrow.Field{{Name: "value", Type: arrow.PrimitiveTypes.Int64}}, nil)
+	values := array.NewInt64Builder(memory.NewGoAllocator())
+	values.Append(1)
+	record := &nilSchemaRecordBatch{
+		RecordBatch: array.NewRecordBatch(schema, []arrow.Array{values.NewArray()}, 1),
+	}
+	values.Release()
+	plan, err := BindLoad(context.Background(), schema, []TargetColumn{{
+		Name: "value", Type: types.T_int64.ToType(),
+	}}, MatchByName)
+	require.NoError(t, err)
+
+	var rows int
+	require.NotPanics(t, func() {
+		rows, err = plan.MaxOutputRows(context.Background(), record, 0, 1, 1024)
+	})
+	require.Zero(t, rows)
+	require.ErrorContains(t, err, "schema")
+	record.Release()
+}
+
+func TestConvertRejectsNilRecordSchema(t *testing.T) {
+	schema := arrow.NewSchema([]arrow.Field{{Name: "value", Type: arrow.PrimitiveTypes.Int64}}, nil)
+	values := array.NewInt64Builder(memory.NewGoAllocator())
+	values.Append(1)
+	record := &nilSchemaRecordBatch{
+		RecordBatch: array.NewRecordBatch(schema, []arrow.Array{values.NewArray()}, 1),
+	}
+	values.Release()
+	plan, err := BindLoad(context.Background(), schema, []TargetColumn{{
+		Name: "value", Type: types.T_int64.ToType(),
+	}}, MatchByName)
+	require.NoError(t, err)
+
+	mp := mpool.MustNewZero()
+	var converted *batch.Batch
+	require.NotPanics(t, func() {
+		converted, _, err = plan.Convert(context.Background(), record, mp, ConvertOptions{})
+	})
+	require.Nil(t, converted)
+	require.ErrorContains(t, err, "schema")
+	record.Release()
+}
+
+func TestConvertRejectsNilRecordColumn(t *testing.T) {
+	schema := arrow.NewSchema([]arrow.Field{{Name: "value", Type: arrow.PrimitiveTypes.Int64}}, nil)
+	values := array.NewInt64Builder(memory.NewGoAllocator())
+	values.Append(1)
+	record := &nilColumnRecordBatch{
+		RecordBatch: array.NewRecordBatch(schema, []arrow.Array{values.NewArray()}, 1),
+	}
+	values.Release()
+	plan, err := BindLoad(context.Background(), schema, []TargetColumn{{
+		Name: "value", Type: types.T_int64.ToType(),
+	}}, MatchByName)
+	require.NoError(t, err)
+
+	rows, budgetErr := plan.MaxOutputRows(context.Background(), record, 0, 1, 1024)
+	require.Zero(t, rows)
+	require.ErrorContains(t, budgetErr, "column")
+
+	mp := mpool.MustNewZero()
+	var converted *batch.Batch
+	require.NotPanics(t, func() {
+		converted, _, err = plan.Convert(context.Background(), record, mp, ConvertOptions{})
+	})
+	require.Nil(t, converted)
+	require.ErrorContains(t, err, "column")
+	record.Release()
+}
+
+func TestConvertRejectsRecordColumnTypeDrift(t *testing.T) {
+	schema := arrow.NewSchema([]arrow.Field{{Name: "value", Type: arrow.PrimitiveTypes.Int64}}, nil)
+	intValues := array.NewInt64Builder(memory.NewGoAllocator())
+	intValues.Append(1)
+	record := &driftedTypeRecordBatch{
+		RecordBatch: array.NewRecordBatch(schema, []arrow.Array{intValues.NewArray()}, 1),
+	}
+	intValues.Release()
+	floatValues := array.NewFloat64Builder(memory.NewGoAllocator())
+	floatValues.Append(1.5)
+	record.column = floatValues.NewArray()
+	floatValues.Release()
+	plan, err := BindLoad(context.Background(), schema, []TargetColumn{{
+		Name: "value", Type: types.T_int64.ToType(),
+	}}, MatchByName)
+	require.NoError(t, err)
+
+	mp := mpool.MustNewZero()
+	var converted *batch.Batch
+	require.NotPanics(t, func() {
+		converted, _, err = plan.Convert(context.Background(), record, mp, ConvertOptions{})
+	})
+	require.Nil(t, converted)
+	require.ErrorContains(t, err, "data type")
+	record.Release()
+	record.column.Release()
+}
+
+func TestConvertRejectsMalformedRecordSchema(t *testing.T) {
+	schema := arrow.NewSchema([]arrow.Field{{Name: "value", Type: arrow.PrimitiveTypes.Int64}}, nil)
+	values := array.NewInt64Builder(memory.NewGoAllocator())
+	values.Append(1)
+	record := &customSchemaRecordBatch{
+		RecordBatch: array.NewRecordBatch(schema, []arrow.Array{values.NewArray()}, 1),
+		schema:      schemaWithNilFieldType(schema),
+	}
+	values.Release()
+	plan, err := BindLoad(context.Background(), schema, []TargetColumn{{
+		Name: "value", Type: types.T_int64.ToType(),
+	}}, MatchByName)
+	require.NoError(t, err)
+
+	rows, budgetErr := plan.MaxOutputRows(context.Background(), record, 0, 1, 1024)
+	require.Zero(t, rows)
+	require.ErrorContains(t, budgetErr, "schema")
+
+	mp := mpool.MustNewZero()
+	var converted *batch.Batch
+	require.NotPanics(t, func() {
+		converted, _, err = plan.Convert(context.Background(), record, mp, ConvertOptions{})
+	})
+	require.Nil(t, converted)
+	require.ErrorContains(t, err, "schema")
+	record.Release()
+}
+
+func schemaWithNilFieldType(schema *arrow.Schema) *arrow.Schema {
+	malformed := *schema
+	fields := malformed.Fields()
+	fields[0].Type = nil
+	privateFields := reflect.ValueOf(&malformed).Elem().FieldByName("fields")
+	reflect.NewAt(privateFields.Type(), unsafe.Pointer(privateFields.UnsafeAddr())).Elem().Set(reflect.ValueOf(fields))
+	return &malformed
+}
+
+type nilSchemaRecordBatch struct {
+	arrow.RecordBatch
+}
+
+func (r *nilSchemaRecordBatch) Schema() *arrow.Schema {
+	return nil
+}
+
+type nilColumnRecordBatch struct {
+	arrow.RecordBatch
+}
+
+func (r *nilColumnRecordBatch) Column(int) arrow.Array {
+	return nil
+}
+
+type driftedTypeRecordBatch struct {
+	arrow.RecordBatch
+	column arrow.Array
+}
+
+func (r *driftedTypeRecordBatch) Column(int) arrow.Array {
+	return r.column
+}
+
+type customSchemaRecordBatch struct {
+	arrow.RecordBatch
+	schema *arrow.Schema
+}
+
+func (r *customSchemaRecordBatch) Schema() *arrow.Schema {
+	return r.schema
 }
 
 func TestConvertRollbackSchemaDriftNotNullAndCancel(t *testing.T) {

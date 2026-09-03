@@ -124,6 +124,9 @@ func InspectMessage(
 	if options.MaxMetadataBytes == 0 {
 		options.MaxMetadataBytes = DefaultMaxMetadataBytes
 	}
+	if options.BodyEnvelopeBytes < -1 {
+		return MessageInfo{}, moerr.NewInvalidInput(ctx, "invalid Arrow IPC body envelope length")
+	}
 	if options.MaxBodyBytes < 0 || options.MaxDecodedRecordBytes <= 0 {
 		return MessageInfo{}, moerr.NewInvalidInput(ctx, "invalid Arrow IPC validation limits")
 	}
