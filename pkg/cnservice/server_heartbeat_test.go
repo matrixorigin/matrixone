@@ -52,6 +52,23 @@ type recordingCNHeartbeatClient struct {
 	heartbeat pb.CNStoreHeartbeat
 }
 
+type failingWithdrawalHeartbeatClient struct {
+	*testHAKClient
+	err             error
+	returnNilOnDone bool
+}
+
+func (c *failingWithdrawalHeartbeatClient) SendCNHeartbeat(
+	ctx context.Context,
+	_ pb.CNStoreHeartbeat,
+) (pb.CommandBatch, error) {
+	if c.returnNilOnDone {
+		<-ctx.Done()
+		return pb.CommandBatch{}, nil
+	}
+	return pb.CommandBatch{}, c.err
+}
+
 func (c *recordingCNHeartbeatClient) SendCNHeartbeat(
 	_ context.Context,
 	hb pb.CNStoreHeartbeat,
@@ -249,6 +266,50 @@ func TestWithdrawViewMetadataAdmissionPublishesFinalHeartbeat(t *testing.T) {
 	require.Equal(t, uint64(3), client.heartbeat.ViewMetadataObservedEpoch)
 	require.Equal(t, uint64(3), client.heartbeat.ViewMetadataCatalogFencedEpoch)
 	require.False(t, client.heartbeat.ViewMetadataIngressReady)
+}
+
+func TestWithdrawViewMetadataAdmissionFailureIsNotCleanHandoff(t *testing.T) {
+	t.Run("disabled admission has nothing to withdraw", func(t *testing.T) {
+		s := &service{}
+		require.NoError(t, s.withdrawViewMetadataAdmission())
+		s.viewMetadataAdmissionGeneration = 1
+		require.NoError(t, s.withdrawViewMetadataAdmission())
+	})
+
+	t.Run("heartbeat error is returned", func(t *testing.T) {
+		conf := &Config{UUID: "failing-cn"}
+		conf.HAKeeper.HeatbeatTimeout.Duration = time.Second
+		failure := errors.New("hakeeper unavailable")
+		s := &service{
+			cfg: conf,
+			_hakeeperClient: &failingWithdrawalHeartbeatClient{
+				testHAKClient: &testHAKClient{cfg: conf},
+				err:           failure,
+			},
+			config:                          util.NewConfigData(nil),
+			logger:                          zap.NewNop(),
+			viewMetadataAdmissionGeneration: 7,
+		}
+		s.viewMetadataIngressReady.Store(true)
+		require.ErrorIs(t, s.withdrawViewMetadataAdmission(), failure)
+		require.False(t, s.viewMetadataIngressReady.Load())
+	})
+
+	t.Run("deadline after send is returned", func(t *testing.T) {
+		conf := &Config{UUID: "timing-out-cn"}
+		conf.HAKeeper.HeatbeatTimeout.Duration = time.Millisecond
+		s := &service{
+			cfg: conf,
+			_hakeeperClient: &failingWithdrawalHeartbeatClient{
+				testHAKClient:   &testHAKClient{cfg: conf},
+				returnNilOnDone: true,
+			},
+			config:                          util.NewConfigData(nil),
+			logger:                          zap.NewNop(),
+			viewMetadataAdmissionGeneration: 8,
+		}
+		require.ErrorIs(t, s.withdrawViewMetadataAdmission(), context.DeadlineExceeded)
+	})
 }
 
 func TestCNCommandPollProgressesWhileHeartbeatIsBlocked(t *testing.T) {

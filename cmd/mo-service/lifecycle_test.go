@@ -103,3 +103,86 @@ func TestServiceSupervisorConcurrentShutdownRunsOnce(t *testing.T) {
 		require.NoError(t, err)
 	}
 }
+
+func TestServiceSupervisorNilAndRoleHelpers(t *testing.T) {
+	var s *serviceSupervisor
+	s.registerTask(serviceRoleCN)(errors.New("ignored"))
+	ctx, cancel := s.roleContext(context.Background(), serviceRoleCN)
+	cancel()
+	require.NoError(t, s.shutdown(context.Background()))
+	s.setDynamicCNStop(func(context.Context) error { return errors.New("ignored") })
+	require.Equal(t, "unknown", serviceRole(serviceRoleCount).String())
+	require.NotNil(t, ctx)
+
+	s = newServiceSupervisor()
+	finish := s.registerTask(serviceRoleCN)
+	finish(errors.New("first"))
+	finish(errors.New("second"))
+	err := s.stopRole(context.Background(), serviceRoleCN)
+	require.ErrorContains(t, err, "first")
+	require.NotContains(t, err.Error(), "second")
+}
+
+func TestServiceSupervisorRoleContextFollowsParent(t *testing.T) {
+	s := newServiceSupervisor()
+	parent, cancelParent := context.WithCancel(context.Background())
+	ctx, cancel := s.roleContext(parent, serviceRoleCN)
+	cancelParent()
+	select {
+	case <-ctx.Done():
+	case <-time.After(time.Second):
+		t.Fatal("role context did not follow parent cancellation")
+	}
+	cancel()
+}
+
+func TestServiceSupervisorProxyFailureStopsBeforeRoles(t *testing.T) {
+	oldProxy := cnProxy
+	t.Cleanup(func() { cnProxy = oldProxy })
+	proxyErr := errors.New("proxy close failed")
+	cnProxy = &testProxy{stopErr: proxyErr}
+	s := newServiceSupervisor()
+	finish := s.registerTask(serviceRoleProxy)
+	defer finish(nil)
+	require.ErrorIs(t, s.shutdown(context.Background()), proxyErr)
+	select {
+	case <-s.roles[serviceRoleProxy].stopC:
+		t.Fatal("role shutdown advanced after builtin proxy failure")
+	default:
+	}
+}
+
+func TestServiceSupervisorDynamicCNFailureStopsBeforeTN(t *testing.T) {
+	oldProxy := cnProxy
+	cnProxy = nil
+	t.Cleanup(func() { cnProxy = oldProxy })
+	s := newServiceSupervisor()
+	dynamicErr := errors.New("dynamic CN close failed")
+	s.setDynamicCNStop(func(context.Context) error { return dynamicErr })
+	finishTN := s.registerTask(serviceRoleTN)
+	defer finishTN(nil)
+
+	require.ErrorIs(t, s.shutdown(context.Background()), dynamicErr)
+	select {
+	case <-s.roles[serviceRoleTN].stopC:
+		t.Fatal("TN was stopped after dynamic CN failed to close")
+	default:
+	}
+}
+
+func TestServiceSupervisorShutdownContextStopsBlockedRole(t *testing.T) {
+	oldProxy := cnProxy
+	cnProxy = nil
+	t.Cleanup(func() { cnProxy = oldProxy })
+	s := newServiceSupervisor()
+	finish := s.registerTask(serviceRoleCN)
+	defer finish(nil)
+	ctx, cancel := context.WithTimeout(context.Background(), time.Millisecond)
+	defer cancel()
+	require.ErrorIs(t, s.shutdown(ctx), context.DeadlineExceeded)
+	select {
+	case <-s.roles[serviceRoleTN].stopC:
+		t.Fatal("shutdown advanced after CN timeout")
+	default:
+	}
+}

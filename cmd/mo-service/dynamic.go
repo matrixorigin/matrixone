@@ -44,6 +44,16 @@ var (
 	dynamicCNServiceCommands     [][]string
 	dynamicChaosTester           *chaos.ChaosTester
 	launchStartDynamicCNServices = startDynamicCNServices
+	dynamicForkExec              = syscall.ForkExec
+	dynamicKill                  = syscall.Kill
+	dynamicWaitProcess           = func(pid int) error {
+		p, err := os.FindProcess(pid)
+		if err != nil {
+			return err
+		}
+		_, err = p.Wait()
+		return err
+	}
 )
 
 func startDynamicCluster(
@@ -290,7 +300,7 @@ func stopDynamicCNByIndex(index int) error {
 	if pid == 0 {
 		return errors.New("dynamic cn is not running")
 	}
-	if err := syscall.Kill(pid, syscall.SIGKILL); err != nil {
+	if err := dynamicKill(pid, syscall.SIGKILL); err != nil {
 		return err
 	}
 	dynamicCNMu.Lock()
@@ -315,7 +325,7 @@ func startDynamicCNByIndex(index int) error {
 		return errors.New("dynamic cn is already running")
 	}
 	command := append([]string(nil), dynamicCNServiceCommands[index]...)
-	pid, err := syscall.ForkExec(
+	pid, err := dynamicForkExec(
 		command[0],
 		command,
 		&syscall.ProcAttr{
@@ -356,16 +366,12 @@ func stopAllDynamicCNServicesGracefully(ctx context.Context) error {
 			continue
 		}
 		count++
-		if err := syscall.Kill(pid, syscall.SIGTERM); err != nil {
+		if err := dynamicKill(pid, syscall.SIGTERM); err != nil {
 			results <- result{index: i, err: err}
 			continue
 		}
 		go func(index, childPID int) {
-			p, err := os.FindProcess(childPID)
-			if err == nil {
-				_, err = p.Wait()
-			}
-			results <- result{index: index, err: err}
+			results <- result{index: index, err: dynamicWaitProcess(childPID)}
 		}(i, pid)
 	}
 	for i := 0; i < count; i++ {
