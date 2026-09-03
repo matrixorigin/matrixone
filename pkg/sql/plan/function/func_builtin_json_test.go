@@ -15,6 +15,7 @@
 package function
 
 import (
+	"context"
 	"encoding/binary"
 	"testing"
 
@@ -353,6 +354,51 @@ func TestNewTypedByteJson(t *testing.T) {
 			l, n := binary.Uvarint(bj.Data)
 			require.Equal(t, int(l), len(tt.s), "uvarint length mismatch")
 			require.Equal(t, tt.s, string(bj.Data[n:]), "data mismatch")
+		})
+	}
+}
+
+func TestGeometryToByteJSON(t *testing.T) {
+	value, err := geometryToByteJSON(context.Background(), encodeGeometryPayload("POINT(1 2)", 0, false))
+	require.NoError(t, err)
+	require.Equal(t, bytejson.TpCodeObject, value.Type)
+	require.Equal(t, `{"coordinates": [1, 2], "type": "Point"}`, value.String())
+
+	_, err = geometryToByteJSON(context.Background(), []byte{1})
+	require.ErrorContains(t, err, "invalid geometry payload")
+}
+
+func TestJsonObjectKeysPreserveExistingConversion(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	timeValue, err := types.ParseTime("04:05:06", 0)
+	require.NoError(t, err)
+
+	for _, tc := range []struct {
+		name string
+		key  FunctionTestInput
+		want string
+	}{
+		{
+			name: "time keeps declared scale",
+			key: NewFunctionTestInput(types.New(types.T_time, 0, 0),
+				[]types.Time{timeValue}, []bool{false}),
+			want: `{"04:05:06": 1}`,
+		},
+		{
+			name: "binary keeps legacy base64 key",
+			key: NewFunctionTestInput(types.T_binary.ToType(),
+				[]string{"\x00\xff"}, []bool{false}),
+			want: `{"AP8=": 1}`,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			vec := runJsonFunctionWithSelectList(t, proc,
+				[]FunctionTestInput{
+					tc.key,
+					NewFunctionTestInput(types.T_int64.ToType(), []int64{1}, []bool{false}),
+				},
+				types.T_json.ToType(), newOpBuiltInJsonObject().jsonObject, nil)
+			require.Equal(t, tc.want, jsonVectorRowString(t, vec, 0))
 		})
 	}
 }

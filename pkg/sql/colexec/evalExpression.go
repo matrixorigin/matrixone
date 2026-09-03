@@ -1820,9 +1820,10 @@ func generateConstExpressionExecutor(
 			vec, err = newExpressionConstFixed(constTimestampTypes[scale], types.Timestamp(val.Timestampval), 1, proc.Mp(), selection)
 		case *plan.Literal_Sval:
 			sval := val.Sval
-			// Distinguish binary with non-binary string.
+			// A folded CAST keeps its resolved SQL binary subtype so downstream
+			// consumers such as JSON constructors can preserve MySQL type tags.
 			if typ.Oid == types.T_binary || typ.Oid == types.T_varbinary || typ.Oid == types.T_blob {
-				vec, err = newExpressionConstBytes(constBinType, []byte(sval), 1, proc.Mp(), selection)
+				vec, err = newExpressionConstBytes(typ, []byte(sval), 1, proc.Mp(), selection)
 			} else if typ.Oid == types.T_geometry {
 				vec, err = newExpressionConstBytes(typ, []byte(sval), 1, proc.Mp(), selection)
 			} else if typ.Oid == types.T_array_float32 {
