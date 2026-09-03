@@ -89,11 +89,12 @@ select statement_digest_text(_binary'SELECT 1');
 Could not parse argument to digest function.
 select statement_digest_text(cast('SELECT 1' as binary));
 Could not parse argument to digest function.
+set @old_sql_mode = @@sql_mode;
 set sql_mode='ANSI_QUOTES';
 select statement_digest_text('SELECT @"odd name"') as digest;
 digest
 SELECT @`odd name`
-set sql_mode='';
+set sql_mode=@old_sql_mode;
 create table statement_digest_text_generated (
 g text generated always as (statement_digest_text('SELECT 1')) stored
 );

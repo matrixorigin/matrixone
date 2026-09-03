@@ -53,9 +53,10 @@ select statement_digest_text('SELECT ?');
 select statement_digest_text(statement_digest_text('SELECT 1, 2, 3'));
 select statement_digest_text(_binary'SELECT 1');
 select statement_digest_text(cast('SELECT 1' as binary));
+set @old_sql_mode = @@sql_mode;
 set sql_mode='ANSI_QUOTES';
 select statement_digest_text('SELECT @"odd name"') as digest;
-set sql_mode='';
+set sql_mode=@old_sql_mode;
 create table statement_digest_text_generated (
     g text generated always as (statement_digest_text('SELECT 1')) stored
 );
