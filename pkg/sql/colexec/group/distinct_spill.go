@@ -582,6 +582,24 @@ func (c *distinctSpillController) writeContributionEnvelope(
 	return nil
 }
 
+func (c *distinctSpillController) flushContributionWriters() error {
+	if c == nil || c.closed {
+		return mpool.ErrAllocationAccountInvalid
+	}
+	for level := range c.result {
+		for bucket := range c.result[level] {
+			partition := c.result[level][bucket]
+			if partition == nil || partition.writer == nil {
+				continue
+			}
+			if err := partition.flushWriter(); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
 func (c *distinctSpillController) readContribution(
 	reader io.Reader,
 	groups *batch.Batch,
@@ -1227,6 +1245,11 @@ func (c *distinctSpillController) externalSortH0Partition(
 		return nil, err
 	}
 	defer reader.Free()
+	aggregateCount := len(c.ctr.aggExprs)
+	if aggregateCount == 0 {
+		return nil, moerr.NewInternalErrorNoCtx(
+			"distinct sort aggregate shape is empty")
+	}
 
 	var slots [64]*spillBucket
 	defer func() {
@@ -1281,7 +1304,7 @@ func (c *distinctSpillController) externalSortH0Partition(
 		if eof {
 			break
 		}
-		if aggregate < 0 || aggregate >= len(c.ctr.aggList) {
+		if aggregate < 0 || aggregate >= aggregateCount {
 			return nil, moerr.NewInvalidInputNoCtx(
 				"distinct sort aggregate ordinal out of range")
 		}
@@ -1339,7 +1362,7 @@ func (c *distinctSpillController) externalSortH0Partition(
 		slots[level] = nil
 	}
 	if final == nil {
-		return make([]uint64, len(c.ctr.aggList)), nil
+		return make([]uint64, aggregateCount), nil
 	}
 	defer func() {
 		if final != nil {
@@ -1359,7 +1382,7 @@ func (c *distinctSpillController) externalSortH0Partition(
 		return nil, err
 	}
 	defer finalReader.Free()
-	counts = make([]uint64, len(c.ctr.aggList))
+	counts = make([]uint64, aggregateCount)
 	for {
 		key, eof, err := readDistinctSortKey(finalReader, c.mergeLeft)
 		if err != nil {
@@ -2761,39 +2784,36 @@ func (ctr *container) applyDistinctContributions(
 	return partition.free()
 }
 
-func (ctr *container) finalizeGroupedExactCountDistinct(
+// finalizeGroupedExactCountDistinctViaSpill externalizes the ordinary group
+// state before materializing compact DISTINCT count contributions. Once exact
+// key spill has activated, retaining the complete group hash/table while also
+// allocating a contribution vector can exceed a hard statement account even
+// though the exact-key drain itself made progress. Reusing generic Group spill
+// makes one bounded group-hash leaf the contribution accumulator and preserves
+// the existing two-phase equality/merge contract.
+func (ctr *container) finalizeGroupedExactCountDistinctViaSpill(
 	proc *process.Process,
+	opAnalyzer process.Analyzer,
 ) error {
-	if ctr == nil || proc == nil || ctr.mtyp == H0 || ctr.distinctSpill == nil {
+	if ctr == nil || proc == nil || opAnalyzer == nil || ctr.mtyp == H0 ||
+		ctr.distinctSpill == nil {
 		return mpool.ErrAllocationAccountInvalid
 	}
-	if ctr.distinctGroupReset {
-		return moerr.NewInternalErrorNoCtx(
-			"distinct spill group identity crossed generic group spill")
-	}
-	controller := ctr.distinctSpill
-	groups, err := ctr.createNewGroupByBatchWithAllocation(
-		nil, 1, ctr.spillGroupByAllocation)
+	bytes, rows, err := ctr.spillDataToDisk(proc, opAnalyzer, nil)
 	if err != nil {
 		return err
 	}
-	defer groups.Clean(ctr.mp)
-	for bucket := range controller.root {
-		partition := controller.root[bucket]
-		if partition == nil || partition.cnt == 0 {
-			continue
-		}
-		if err := ctr.finalizeGroupedDistinctPartition(
-			proc, controller, partition, groups, false); err != nil {
-			return err
-		}
-		controller.root[bucket] = nil
+	if rows <= 0 {
+		return moerr.NewInternalErrorNoCtx(
+			"grouped distinct finalization did not spill resident groups")
 	}
-	controller.recordCompletion()
-	controller.close()
-	ctr.distinctSpill = nil
-	ctr.distinctFinalized = true
-	return nil
+	opAnalyzer.Spill(bytes)
+	opAnalyzer.SpillRows(rows)
+	if err := ctr.prepareGroupedDistinctContributions(proc); err != nil {
+		return err
+	}
+	_, err = ctr.loadSpilledData(proc, opAnalyzer, ctr.aggExprs)
+	return err
 }
 
 func (ctr *container) prepareGroupedDistinctContributions(
@@ -2819,6 +2839,13 @@ func (ctr *container) prepareGroupedDistinctContributions(
 			return err
 		}
 		controller.root[bucket] = nil
+	}
+	// Contribution writers carry optional per-file coalescing buffers. Release
+	// all of them before generic Group reload borrows the hard-account recovery
+	// floor; leaving up to 32 buffers live can otherwise prevent even the first
+	// bounded group leaf from materializing.
+	if err := controller.flushContributionWriters(); err != nil {
+		return err
 	}
 	ctr.distinctContributionsPrepared = true
 	return nil
@@ -3108,5 +3135,5 @@ func (ctr *container) finalizeExactCountDistinct(
 	if ctr.mtyp == H0 {
 		return ctr.finalizeH0ExactCountDistinct(proc)
 	}
-	return ctr.finalizeGroupedExactCountDistinct(proc)
+	return ctr.finalizeGroupedExactCountDistinctViaSpill(proc, opAnalyzer)
 }

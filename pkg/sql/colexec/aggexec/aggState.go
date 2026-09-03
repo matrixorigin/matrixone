@@ -217,6 +217,15 @@ func (ag *aggState) initWithAllocation(
 		}
 
 		bufsz := kAggArgArenaSize
+		// A hard-account exact COUNT(DISTINCT) can spill its canonical keys.
+		// Avoid speculatively retaining a 512 KiB arena per chunk before the
+		// first drain. Normal pre-activation growth remains 512 KiB at a time;
+		// the spill transition separately switches replacement work sets to
+		// bounded 64 KiB growth.
+		if allocation != nil && info.aggId == AggIdOfCountColumn &&
+			info.isDistinct {
+			bufsz = 64 * 1024
+		}
 		if c < 1024 {
 			bufsz = 16 * 1024
 		}

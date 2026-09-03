@@ -35,6 +35,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/aggexec"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
 )
 
@@ -543,7 +544,12 @@ func TestDistinctSpillControllerBoundaryContracts(t *testing.T) {
 	require.NoError(t, (*container)(nil).applyDistinctContributions(proc, nil))
 	_, err = (*container)(nil).loadNextDistinctPartialLeaf(proc)
 	require.NoError(t, err)
-	require.ErrorIs(t, (*container)(nil).finalizeGroupedExactCountDistinct(proc),
+	require.ErrorIs(t, (*container)(nil).finalizeGroupedExactCountDistinctViaSpill(
+		proc, nil),
+		mpool.ErrAllocationAccountInvalid)
+	require.ErrorIs(t, (*distinctSpillController)(nil).flushContributionWriters(),
+		mpool.ErrAllocationAccountInvalid)
+	require.ErrorIs(t, (&distinctSpillController{closed: true}).flushContributionWriters(),
 		mpool.ErrAllocationAccountInvalid)
 	require.ErrorIs(t, (*container)(nil).prepareGroupedDistinctContributions(proc),
 		mpool.ErrAllocationAccountInvalid)
@@ -923,13 +929,18 @@ func TestDistinctSpillTerminalStateBoundaries(t *testing.T) {
 	flushController, err := newDistinctSpillController(&g.ctr)
 	require.NoError(t, err)
 	flushResultFile := distinctTestFile(t, nil)
+	contributionFlushErr := fmt.Errorf("flush contributions")
 	flushController.result[0][1] = &spillBucket{
 		file:    flushResultFile,
-		writer:  &distinctFlushErrorWriter{err: fmt.Errorf("flush contributions")},
+		writer:  &distinctFlushErrorWriter{err: contributionFlushErr},
 		cnt:     1,
 		path:    [spillMaxPass]uint8{1},
 		pathLen: 1,
 	}
+	require.ErrorIs(t, flushController.flushContributionWriters(),
+		contributionFlushErr)
+	flushController.result[0][1].writer =
+		&distinctFlushErrorWriter{err: contributionFlushErr}
 	g.ctr.distinctSpill = flushController
 	require.Error(t, g.ctr.applyDistinctContributions(proc, bucket))
 	flushController.close()
@@ -978,14 +989,13 @@ func TestDistinctSpillTerminalStateBoundaries(t *testing.T) {
 	contributionGroups.Clean(proc.Mp())
 	g.ctr.distinctSpill = nil
 
-	resetController, err := newDistinctSpillController(&g.ctr)
+	emptyGroupedController, err := newDistinctSpillController(&g.ctr)
 	require.NoError(t, err)
-	g.ctr.distinctSpill = resetController
-	g.ctr.distinctGroupReset = true
+	g.ctr.distinctSpill = emptyGroupedController
 	require.ErrorContains(t,
-		g.ctr.finalizeGroupedExactCountDistinct(proc), "identity")
-	g.ctr.distinctGroupReset = false
-	resetController.close()
+		g.ctr.finalizeGroupedExactCountDistinctViaSpill(proc, g.OpAnalyzer),
+		"did not spill resident groups")
+	emptyGroupedController.close()
 	g.ctr.distinctSpill = nil
 
 	g.ctr.distinctContributionsPrepared = true
@@ -1304,18 +1314,25 @@ func TestGroupedHotKeyCountDistinctCompletesThroughKeySpill(t *testing.T) {
 	require.NoError(t, g.Prepare(proc))
 	g.ctr.distinctDrainKeysForUT = 2
 
-	result, err := vm.Exec(g, proc)
-	require.NoError(t, err)
-	require.NotNil(t, result.Batch)
-	keys := vector.MustFixedColNoTypeCheck[int32](result.Batch.Vecs[0])
-	counts := vector.MustFixedColNoTypeCheck[int64](result.Batch.Vecs[1])
-	got := make(map[int32]int64, len(keys))
-	for row, key := range keys {
-		got[key] = counts[row]
+	got := make(map[int32]int64)
+	for {
+		result, err := vm.Exec(g, proc)
+		require.NoError(t, err)
+		if result.Batch == nil || result.Status == vm.ExecStop {
+			break
+		}
+		output := result.Batch
+		keys := vector.MustFixedColNoTypeCheck[int32](output.Vecs[0])
+		counts := vector.MustFixedColNoTypeCheck[int64](output.Vecs[1])
+		for row, key := range keys {
+			got[key] = counts[row]
+		}
 	}
 	require.Equal(t, map[int32]int64{1: 1, 2: 2}, got)
 	require.Nil(t, g.ctr.distinctSpill)
-	require.False(t, g.ctr.distinctGroupReset)
+	require.True(t, g.ctr.distinctGroupReset)
+	require.Positive(t,
+		g.OpAnalyzer.GetOpStats().ExtraStats["GroupSpillRecords"])
 
 	g.Free(proc, false, nil)
 	require.Zero(t, allocation.account.Snapshot().Used)
@@ -1355,14 +1372,21 @@ func TestGroupedHotKeyForcedCollisionUsesExternalSort(t *testing.T) {
 	drained, err := g.ctr.drainExactCountDistinct(proc, g.OpAnalyzer)
 	require.NoError(t, err)
 	require.True(t, drained)
-	require.NoError(t, g.ctr.finalizeGroupedExactCountDistinct(proc))
+	require.NoError(t,
+		g.ctr.finalizeGroupedExactCountDistinctViaSpill(proc, g.OpAnalyzer))
 	require.Positive(t, controller.externalSorts)
 
-	result, err := g.ctr.aggList[0].Flush()
-	require.NoError(t, err)
-	require.Equal(t, []int64{100},
-		vector.MustFixedColNoTypeCheck[int64](result[0]))
-	result[0].Free(g.ctr.mp)
+	var counts []int64
+	for {
+		result, err := g.ctr.outputOneBatchFinal(proc, g.OpAnalyzer, g.Aggs)
+		require.NoError(t, err)
+		if result.Batch == nil {
+			break
+		}
+		counts = append(counts,
+			vector.MustFixedColNoTypeCheck[int64](result.Batch.Vecs[1])...)
+	}
+	require.Equal(t, []int64{100}, counts)
 
 	g.Free(proc, false, nil)
 	require.Zero(t, allocation.account.Snapshot().Used)
@@ -1402,15 +1426,24 @@ func TestGroupedDistinctSpillRecursivelyRepartitionsOversizedLeaf(t *testing.T) 
 	drained, err := g.ctr.drainExactCountDistinct(proc, g.OpAnalyzer)
 	require.NoError(t, err)
 	require.True(t, drained)
-	require.NoError(t, g.ctr.finalizeGroupedExactCountDistinct(proc))
+	require.NoError(t,
+		g.ctr.finalizeGroupedExactCountDistinctViaSpill(proc, g.OpAnalyzer))
 	require.Positive(t, controller.repartitions)
 
-	result, err := g.ctr.aggList[0].Flush()
-	require.NoError(t, err)
-	for _, count := range vector.MustFixedColNoTypeCheck[int64](result[0]) {
-		require.Equal(t, int64(10), count)
+	rows := 0
+	for {
+		result, err := g.ctr.outputOneBatchFinal(proc, g.OpAnalyzer, g.Aggs)
+		require.NoError(t, err)
+		if result.Batch == nil {
+			break
+		}
+		for _, count := range vector.MustFixedColNoTypeCheck[int64](
+			result.Batch.Vecs[1]) {
+			require.Equal(t, int64(10), count)
+			rows++
+		}
 	}
-	result[0].Free(g.ctr.mp)
+	require.Equal(t, 10, rows)
 
 	g.Free(proc, false, nil)
 	require.Zero(t, allocation.account.Snapshot().Used)
@@ -1446,22 +1479,27 @@ func TestGroupedDistinctSpillPreservesMixedAggregateState(t *testing.T) {
 	require.NoError(t, g.Prepare(proc))
 	g.ctr.distinctDrainKeysForUT = 2
 
-	result, err := vm.Exec(g, proc)
-	require.NoError(t, err)
-	require.NotNil(t, result.Batch)
-	keys := vector.MustFixedColNoTypeCheck[int32](result.Batch.Vecs[0])
-	sums := vector.MustFixedColNoTypeCheck[int64](result.Batch.Vecs[1])
-	rows := vector.MustFixedColNoTypeCheck[int64](result.Batch.Vecs[2])
-	distinct := vector.MustFixedColNoTypeCheck[int64](result.Batch.Vecs[3])
 	type aggregateResult struct {
 		sum      int64
 		rows     int64
 		distinct int64
 	}
-	got := make(map[int32]aggregateResult, len(keys))
-	for row, key := range keys {
-		got[key] = aggregateResult{
-			sum: sums[row], rows: rows[row], distinct: distinct[row],
+	got := make(map[int32]aggregateResult)
+	for {
+		result, err := vm.Exec(g, proc)
+		require.NoError(t, err)
+		if result.Batch == nil || result.Status == vm.ExecStop {
+			break
+		}
+		output := result.Batch
+		keys := vector.MustFixedColNoTypeCheck[int32](output.Vecs[0])
+		sums := vector.MustFixedColNoTypeCheck[int64](output.Vecs[1])
+		rows := vector.MustFixedColNoTypeCheck[int64](output.Vecs[2])
+		distinct := vector.MustFixedColNoTypeCheck[int64](output.Vecs[3])
+		for row, key := range keys {
+			got[key] = aggregateResult{
+				sum: sums[row], rows: rows[row], distinct: distinct[row],
+			}
 		}
 	}
 	require.Equal(t, map[int32]aggregateResult{
@@ -1814,6 +1852,156 @@ func TestIntermediateDistinctSpillTerminalLeafContinuesWithinHardAccount(t *test
 			require.Zero(t, proc.Mp().CurrNB())
 		})
 	}
+}
+
+func groupedDistinctHardAccountInput(
+	proc *process.Process,
+	argument int32,
+) *batch.Batch {
+	return groupedDistinctHardAccountInputRange(
+		proc, 0, aggexec.AggBatchSize, argument)
+}
+
+func groupedDistinctHardAccountInputRange(
+	proc *process.Process,
+	start int,
+	groups int,
+	argument int32,
+) *batch.Batch {
+	keys := make([]int32, groups)
+	arguments := make([]int32, groups)
+	for row := range groups {
+		keys[row] = int32(start + row)
+		arguments[row] = argument
+	}
+	input := batch.NewWithSize(2)
+	input.Vecs[0] = testutil.MakeInt32Vector(keys, nil, proc.Mp())
+	input.Vecs[1] = testutil.MakeInt32Vector(arguments, nil, proc.Mp())
+	input.SetRowCount(groups)
+	return input
+}
+
+func buildGroupedDistinctPartial(
+	t *testing.T,
+	proc *process.Process,
+	start int,
+	groups int,
+	argument int32,
+) *batch.Batch {
+	t.Helper()
+	input := groupedDistinctHardAccountInputRange(
+		proc, start, groups, argument)
+	partial := newGroupOp(
+		proc,
+		[]*plan.Expr{colExpr(0, types.T_int32)},
+		[]aggexec.AggFuncExecExpression{countDistinctAgg(1)},
+	)
+	partial.NeedEval = false
+	partial.AppendChild(colexec.NewMockOperator().WithBatchs(
+		[]*batch.Batch{input}))
+	require.NoError(t, partial.Prepare(proc))
+	outputs := collectBatches(t, partial, proc)
+	require.Len(t, outputs, 1)
+	cloned := cloneBatch(t, proc, outputs[0])
+	partial.Free(proc, false, nil)
+	input.Clean(proc.Mp())
+	return cloned
+}
+
+func assertGroupedDistinctHardAccountResult(
+	t *testing.T,
+	proc *process.Process,
+	op vm.Operator,
+) {
+	t.Helper()
+	rows := 0
+	for {
+		result, err := vm.Exec(op, proc)
+		require.NoError(t, err)
+		if result.Batch == nil || result.Status == vm.ExecStop {
+			break
+		}
+		rows += result.Batch.RowCount()
+		for _, count := range vector.MustFixedColNoTypeCheck[int64](
+			result.Batch.Vecs[1]) {
+			require.Equal(t, int64(2), count)
+		}
+	}
+	require.Equal(t, aggexec.AggBatchSize, rows)
+}
+
+func TestGroupedDistinctSpillFinalizationCompletesWithinHardAccount(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	first := groupedDistinctHardAccountInput(proc, 1)
+	second := groupedDistinctHardAccountInput(proc, 2)
+	g := newGroupOp(
+		proc,
+		[]*plan.Expr{colExpr(0, types.T_int32)},
+		[]aggexec.AggFuncExecExpression{countDistinctAgg(1)},
+	)
+	g.SpillMem = 64 << 20
+	g.AppendChild(colexec.NewMockOperator().WithBatchs(
+		[]*batch.Batch{first, second}))
+	allocation := installGroupTestAllocation(t, g, proc, 1<<20)
+	require.NoError(t, g.Prepare(proc))
+
+	assertGroupedDistinctHardAccountResult(t, proc, g)
+	require.GreaterOrEqual(t,
+		g.OpAnalyzer.GetOpStats().ExtraStats["GroupDistinctSpillActivations"],
+		int64(2),
+	)
+	require.Positive(t,
+		g.OpAnalyzer.GetOpStats().ExtraStats["GroupSpillRecords"])
+
+	g.Free(proc, false, nil)
+	require.Zero(t, allocation.account.Snapshot().Used)
+	require.LessOrEqual(t, allocation.account.Snapshot().Peak, uint64(1<<20))
+	require.Zero(t, allocation.generation.Snapshot().SpillDiskUsed)
+	require.Zero(t, allocation.generation.Snapshot().SpillFDUsed)
+	finalizeGroupTestAllocation(t, g, allocation)
+	first.Clean(proc.Mp())
+	second.Clean(proc.Mp())
+	proc.Free()
+	require.Zero(t, proc.Mp().CurrNB())
+}
+
+func TestMergeGroupedDistinctSpillFinalizationCompletesWithinHardAccount(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	const partialGroups = 512
+	partials := make([]*batch.Batch, 0,
+		2*aggexec.AggBatchSize/partialGroups)
+	for _, argument := range []int32{1, 2} {
+		for start := 0; start < aggexec.AggBatchSize; start += partialGroups {
+			partials = append(partials, buildGroupedDistinctPartial(
+				t, proc, start, partialGroups, argument))
+		}
+	}
+	merge := newMergeGroupOp(
+		[]aggexec.AggFuncExecExpression{countDistinctAgg(1)})
+	merge.SpillMem = 64 << 20
+	merge.AppendChild(colexec.NewMockOperator().WithBatchs(partials))
+	allocation := installGroupTestAllocation(t, merge, proc, 1<<20)
+	require.NoError(t, merge.Prepare(proc))
+
+	assertGroupedDistinctHardAccountResult(t, proc, merge)
+	require.GreaterOrEqual(t,
+		merge.OpAnalyzer.GetOpStats().ExtraStats["GroupDistinctSpillActivations"],
+		int64(2),
+	)
+	require.Positive(t,
+		merge.OpAnalyzer.GetOpStats().ExtraStats["GroupSpillRecords"])
+
+	merge.Free(proc, false, nil)
+	require.Zero(t, allocation.account.Snapshot().Used)
+	require.LessOrEqual(t, allocation.account.Snapshot().Peak, uint64(1<<20))
+	require.Zero(t, allocation.generation.Snapshot().SpillDiskUsed)
+	require.Zero(t, allocation.generation.Snapshot().SpillFDUsed)
+	finalizeGroupTestAllocation(t, merge, allocation)
+	for _, partial := range partials {
+		partial.Clean(proc.Mp())
+	}
+	proc.Free()
+	require.Zero(t, proc.Mp().CurrNB())
 }
 
 func TestH0DistinctSpillPreservesMultiArgumentNullSemantics(t *testing.T) {

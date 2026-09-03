@@ -300,7 +300,11 @@ func (exec *countColumnExec) AddDistinctCountContribution(
 		if err != nil {
 			return err
 		}
-		if err := contributions.PreExtend(int(exec.state[x].capacity), exec.mp); err != nil {
+		// Contributions are installed only after the owning Group work set is
+		// complete. Reserve the published rows, not the spare aggregate chunk
+		// capacity: generic spill leaves are deliberately much smaller than
+		// AggBatchSize under a hard statement account.
+		if err := contributions.PreExtend(int(exec.state[x].length), exec.mp); err != nil {
 			contributions.Free(exec.mp)
 			return err
 		}

@@ -1,8 +1,8 @@
 # Bounded exact DISTINCT-key spill
 
-Status: approved for implementation by developer direction
+Status: in review; implementation and validation ready for independent approval
 
-Design version: 1
+Design version: 2 (2026-09-03)
 
 Owner: MatrixOne query execution
 
@@ -11,7 +11,7 @@ Owning issue: [#27698](https://github.com/matrixorigin/matrixone/issues/27698)
 Related partition-parallel work:
 [#27720](https://github.com/matrixorigin/matrixone/issues/27720)
 
-Implementation PR: pending publication
+Implementation PR: [#28003](https://github.com/matrixorigin/matrixone/pull/28003)
 
 ## 1. Decision
 
@@ -716,8 +716,8 @@ race protocol, then the owning Group and aggexec packages once under race.
 
 ### 18.2 Public SQL and topology coverage
 
-Add a constrained-memory integration regression using the smallest data that
-crosses an injected execution threshold:
+The public regression uses the smallest data that crosses an injected execution
+threshold:
 
 - global `COUNT(DISTINCT i)`;
 - grouped one-hot-key integer and VARCHAR cases;
@@ -726,9 +726,27 @@ crosses an injected execution threshold:
 - one CN/DOP=1 and a multi-owner partial/MergeGroup topology; and
 - no-spill controls with identical results.
 
-Compare with an independent `SELECT DISTINCT`/count oracle. The test must prove
-actual spill statistics, bounded peak accounted memory, and zero spill residue,
-not merely successful query completion.
+`test/distributed/cases/qexec/group_h0_spill.sql` covers the global, grouped
+integer and VARCHAR, multi-argument NULL, mixed-aggregate, and identical
+no-spill result contracts. A `SELECT DISTINCT` subquery supplies an independent
+relational oracle for the grouped VARCHAR cardinality.
+The physical ownership and resource oracles stay in deterministic typed tests,
+where they are observable rather than inferred from a public plan:
+
+- `TestGroupedDistinctSpillFinalizationCompletesWithinHardAccount` and its
+  MergeGroup twin use 8,192 groups, two distinct arguments per group, and a
+  1 MiB hard account; they require multiple exact-key drains, generic group
+  spill, exact results, bounded peak use, and zero allocation/disk/FD debt;
+- `TestIntermediateDistinctSpillEmitsExactKeysAcrossWorkers` proves that two
+  partial owners retain exact keys through MergeGroup and remove their shared
+  key only at the final owner; and
+- the public BVT compares spill and no-spill outputs for the same SQL result
+  cells without coupling the external contract to an unstable plan topology or
+  internal metric rendering.
+
+This split follows the public/typed oracle boundary: SQL result semantics are
+black-box, while exact operator ownership, forced thresholds, accounting and
+spill residue are package contracts.
 
 ### 18.3 Performance evidence
 
