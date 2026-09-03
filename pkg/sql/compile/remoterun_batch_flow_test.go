@@ -21,6 +21,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
 	"github.com/stretchr/testify/require"
 )
@@ -159,7 +160,9 @@ func TestPipelineBatchFlowAbortWakesWaitersAndReleasesAccounting(t *testing.T) {
 
 	firstCause := errors.New("stop sending")
 	flow.abort(firstCause)
-	flow.abort(errors.New("later abort"))
+	flow.stop(errors.New("later receiver stop"))
+	require.False(t, flow.wasStoppedByReceiver(),
+		"a late StopSending must not reclassify an earlier substantive abort")
 
 	select {
 	case err := <-reserveDone:
@@ -179,6 +182,94 @@ func TestPipelineBatchFlowAbortWakesWaitersAndReleasesAccounting(t *testing.T) {
 	require.Zero(t, flow.bytes)
 	flow.mu.Unlock()
 	require.NoError(t, flow.acknowledge(seq), "an ACK already in flight must be harmless after abort")
+}
+
+func TestPipelineBatchFlowDrainClassifiesReceiverStop(t *testing.T) {
+	newOutstandingFlow := func(t *testing.T) *pipelineBatchFlow {
+		flow := newPipelineBatchFlow(1, 1024)
+		_, err := flow.reserve(context.Background(), context.Background(), 10)
+		require.NoError(t, err)
+		return flow
+	}
+	waitAsync := func(
+		flow *pipelineBatchFlow,
+		messageCtx context.Context,
+		connectionCtx context.Context,
+	) (<-chan struct{}, <-chan error) {
+		started := make(chan struct{})
+		done := make(chan error, 1)
+		go func() {
+			close(started)
+			done <- waitUntilPipelineBatchFlowDrained(
+				messageCtx, connectionCtx, flow, nil)
+		}()
+		return started, done
+	}
+	requireResult := func(t *testing.T, done <-chan error) error {
+		select {
+		case err := <-done:
+			return err
+		case <-time.After(time.Second):
+			t.Fatal("pipeline batch drain did not observe its terminal event")
+			return nil
+		}
+	}
+
+	t.Run("internal receiver stop is successful", func(t *testing.T) {
+		flow := newOutstandingFlow(t)
+		started, done := waitAsync(flow, context.Background(), context.Background())
+		<-started
+		flow.stop(moerr.NewQueryInterrupted(context.Background()))
+		flow.abort(errors.New("later abort"))
+		require.True(t, flow.wasStoppedByReceiver(),
+			"a late abort must not reclassify the receiver stop")
+		require.NoError(t, requireResult(t, done))
+	})
+
+	t.Run("query cancellation remains terminal", func(t *testing.T) {
+		flow := newOutstandingFlow(t)
+		queryCtx, cancelQuery := context.WithCancelCause(context.Background())
+		started, done := waitAsync(flow, queryCtx, context.Background())
+		<-started
+		cancelQuery(context.Canceled)
+
+		err := requireResult(t, done)
+		require.ErrorIs(t, err, context.Canceled)
+	})
+
+	t.Run("query cancellation wins a recorded receiver stop", func(t *testing.T) {
+		flow := newOutstandingFlow(t)
+		flow.stop(moerr.NewQueryInterrupted(context.Background()))
+		queryCtx, cancelQuery := context.WithCancelCause(context.Background())
+		cancelQuery(context.Canceled)
+
+		err := waitUntilPipelineBatchFlowDrained(
+			queryCtx, context.Background(), flow, nil)
+		require.ErrorIs(t, err, context.Canceled)
+	})
+
+	t.Run("connection cancellation remains terminal", func(t *testing.T) {
+		flow := newOutstandingFlow(t)
+		connectionCtx, closeConnection := context.WithCancel(context.Background())
+		started, done := waitAsync(flow, context.Background(), connectionCtx)
+		<-started
+		closeConnection()
+
+		err := requireResult(t, done)
+		require.Error(t, err)
+		require.True(t, moerr.IsMoErrCode(err, moerr.ErrStreamClosed), err)
+	})
+
+	t.Run("substantive abort remains terminal", func(t *testing.T) {
+		flow := newOutstandingFlow(t)
+		cause := errors.New("remote execution failed")
+		started, done := waitAsync(flow, context.Background(), context.Background())
+		<-started
+		flow.abort(cause)
+
+		err := requireResult(t, done)
+		require.ErrorIs(t, err, cause)
+	})
 }
 
 func TestHandlePipelineBatchAck(t *testing.T) {

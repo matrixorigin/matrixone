@@ -151,9 +151,10 @@ func CnServerMessageHandler(
 	// response and FIN still need the same cleanup barrier.
 	handlerErr := handlePipelineMessage(&receiver)
 	if handlerErr == nil && lifecycle != nil && lifecycle.batchFlow != nil {
-		handlerErr = lifecycle.batchFlow.waitUntilDrained(
+		handlerErr = waitUntilPipelineBatchFlowDrained(
 			receiver.messageCtx,
 			receiver.connectionCtx,
+			lifecycle.batchFlow,
 			func(count int, bytes uint64) {
 				logutil.Warn("pipeline batch drain delayed before terminal response",
 					zap.Uint64("stream-id", receiver.messageId),
@@ -202,6 +203,33 @@ func CnServerMessageHandler(
 	return err
 }
 
+// waitUntilPipelineBatchFlowDrained preserves the ownership boundary between
+// an internal receiver-driven StopSending and cancellation of the query or its
+// connection.  StopSending aborts outstanding batch credits so this wait can
+// finish, but it is a successful terminal path only while both external
+// contexts remain active.
+func waitUntilPipelineBatchFlowDrained(
+	messageCtx context.Context,
+	connectionCtx context.Context,
+	flow *pipelineBatchFlow,
+	onDelayed func(count int, bytes uint64),
+) error {
+	err := flow.waitUntilDrained(messageCtx, connectionCtx, onDelayed)
+	if err == nil {
+		return nil
+	}
+	if messageCtx != nil && messageCtx.Err() != nil {
+		return moerr.AttachCause(messageCtx, messageCtx.Err())
+	}
+	if connectionCtx != nil && connectionCtx.Err() != nil {
+		return moerr.NewStreamClosed(messageCtx)
+	}
+	if flow.wasStoppedByReceiver() && isScopeCancellationError(err) {
+		return nil
+	}
+	return err
+}
+
 // waitUntilDisconnectedOrCancelled blocks until either the client connection is
 // closed or the message context is cancelled (e.g. the query was killed). It
 // keeps listening so a remote dispatch can still stream data back, but no longer
@@ -225,7 +253,7 @@ func (receiver *messageReceiverOnServer) abortBatchFlowForPendingStop() {
 	if receiver.colexecServer.HasPendingPipelineCancellation(
 		receiver.clientSession, receiver.messageId,
 	) {
-		receiver.streamLifecycle.batchFlow.abort(
+		receiver.streamLifecycle.batchFlow.stop(
 			moerr.NewQueryInterrupted(receiver.messageCtx),
 		)
 	}
