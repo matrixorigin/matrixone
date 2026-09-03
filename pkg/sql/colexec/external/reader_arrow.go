@@ -18,20 +18,24 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha256"
+	"errors"
 	"fmt"
+	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/apache/arrow-go/v18/arrow"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/container/arrowbridge"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/arrowbridge"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/external/arrowio"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
+	metric "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -43,6 +47,135 @@ const (
 	arrowVectorGroupingSite  mpool.AllocationSite = 6
 	arrowMaxOutputRows                            = 100_000
 )
+
+var arrowPinnedMetricState struct {
+	sync.Mutex
+	current int64
+	peak    int64
+}
+
+// These wrappers observe the same capacity reservation that owns the backing;
+// they do not introduce a second quota or release path. Only a successful
+// Commit changes the gauge, and the returned lease's idempotent Release removes
+// that exact capacity after the FileService/Arrow backing is no longer live.
+type meteredArrowRangeAdmission struct {
+	inner fileservice.RangeReadAdmission
+}
+
+type meteredArrowCapacityReservation struct {
+	inner fileservice.CapacityReservation
+}
+
+type meteredArrowCapacityLease struct {
+	inner    fileservice.CapacityLease
+	capacity int64
+	released atomic.Bool
+}
+
+func (a meteredArrowRangeAdmission) Reserve(
+	ctx context.Context,
+	upperBound int64,
+) (fileservice.CapacityReservation, error) {
+	reservation, err := a.inner.Reserve(ctx, upperBound)
+	if err != nil {
+		return nil, err
+	}
+	return meteredArrowCapacityReservation{inner: reservation}, nil
+}
+
+func (r meteredArrowCapacityReservation) Commit(
+	actualCapacity int64,
+) (fileservice.CapacityLease, error) {
+	lease, err := r.inner.Commit(actualCapacity)
+	if err != nil {
+		return nil, err
+	}
+	adjustArrowPinnedBytes(actualCapacity)
+	return &meteredArrowCapacityLease{inner: lease, capacity: actualCapacity}, nil
+}
+
+func (r meteredArrowCapacityReservation) Abort() {
+	r.inner.Abort()
+}
+
+func (l *meteredArrowCapacityLease) Release() {
+	if l == nil || !l.released.CompareAndSwap(false, true) {
+		return
+	}
+	defer adjustArrowPinnedBytes(-l.capacity)
+	l.inner.Release()
+}
+
+func adjustArrowPinnedBytes(delta int64) {
+	arrowPinnedMetricState.Lock()
+	defer arrowPinnedMetricState.Unlock()
+	arrowPinnedMetricState.current += delta
+	// Capacity leases are idempotent, so underflow would indicate a metric-only
+	// bookkeeping defect. Keep the exported gauge valid while lifecycle tests
+	// assert that every reader returns to its starting value.
+	if arrowPinnedMetricState.current < 0 {
+		arrowPinnedMetricState.current = 0
+	}
+	metric.ArrowLoadPinnedBytesGauge.Set(float64(arrowPinnedMetricState.current))
+	if arrowPinnedMetricState.current > arrowPinnedMetricState.peak {
+		arrowPinnedMetricState.peak = arrowPinnedMetricState.current
+		metric.ArrowLoadPinnedBytesHighWaterGauge.Set(float64(arrowPinnedMetricState.peak))
+	}
+}
+
+func observeArrowPhase(start time.Time, phase string, err error) {
+	outcome := "success"
+	if err != nil {
+		outcome = "error"
+	}
+	metric.ArrowLoadPhaseDurationHistogram.WithLabelValues(phase, outcome).Observe(time.Since(start).Seconds())
+}
+
+func observeArrowConvertStats(stats arrowbridge.ConvertStats) {
+	metric.ArrowLoadPayloadBytesCounter.WithLabelValues("eligible").Add(float64(stats.EligiblePayloadBytes))
+	metric.ArrowLoadPayloadBytesCounter.WithLabelValues("borrowed").Add(float64(stats.BorrowedPayloadBytes))
+	metric.ArrowLoadPayloadBytesCounter.WithLabelValues("retained_capacity").Add(float64(stats.RetainedCapacityBytes))
+	metric.ArrowLoadCopyBytesCounter.WithLabelValues("arrow_to_mo").Add(float64(stats.MaterializedPayloadBytes))
+	metric.ArrowLoadConversionColumnCounter.WithLabelValues("borrowed").Add(float64(stats.BorrowedColumns))
+	metric.ArrowLoadConversionColumnCounter.WithLabelValues("materialized").Add(float64(stats.MaterializedColumns))
+	metric.ArrowLoadFallbackCounter.WithLabelValues("pin_amplification").Add(float64(stats.PinAmplificationFallbacks))
+	metric.ArrowLoadFallbackCounter.WithLabelValues("unaligned").Add(float64(stats.UnalignedFallbacks))
+}
+
+func arrowLoadErrorCategory(err error) string {
+	var moError *moerr.Error
+	moCode := uint16(0)
+	if errors.As(err, &moError) {
+		moCode = moError.ErrorCode()
+	}
+	switch {
+	case errors.Is(err, context.Canceled) || moCode == moerr.ErrQueryInterrupted:
+		return "canceled"
+	case errors.Is(err, context.DeadlineExceeded) || moCode == moerr.ErrQueryTimeout:
+		return "deadline_exceeded"
+	case errors.Is(err, fileservice.ErrObjectChanged):
+		return "object_changed"
+	case errors.Is(err, mpool.ErrAllocationAccountCapacity) ||
+		moCode == moerr.ErrOOM || moCode == moerr.ErrMPoolCapacity:
+		return "resource_exhausted"
+	case moCode == moerr.ErrNotSupported || moCode == moerr.ErrNYI:
+		return "not_supported"
+	case moCode == moerr.ErrConstraintViolation:
+		return "constraint_violation"
+	case moCode == moerr.ErrInvalidInput || moCode == moerr.ErrOutOfRange:
+		return "invalid_input"
+	case moCode == moerr.ErrInternal:
+		return "internal"
+	default:
+		return "io"
+	}
+}
+
+func observeArrowError(err error) {
+	if err != nil {
+		metric.ArrowLoadErrorCounter.WithLabelValues(arrowLoadErrorCategory(err)).Inc()
+	}
+}
 
 // ArrowReader is the LOAD-only adapter between the format-neutral External
 // operator and the canonical Arrow-to-MO bridge. The IPC reader owns the
@@ -98,10 +231,22 @@ func NewArrowReader(
 	if err != nil {
 		return nil, err
 	}
-	return &ArrowReader{param: param, admission: admission, allocation: allocation}, nil
+	return &ArrowReader{
+		param: param, admission: meteredArrowRangeAdmission{inner: admission}, allocation: allocation,
+	}, nil
 }
 
-func (r *ArrowReader) Open(param *ExternalParam, proc *process.Process) (bool, error) {
+func (r *ArrowReader) Open(param *ExternalParam, proc *process.Process) (_ bool, retErr error) {
+	startTime := time.Now()
+	defer func() {
+		observeArrowPhase(startTime, "open", retErr)
+		outcome := "success"
+		if retErr != nil {
+			outcome = "error"
+			observeArrowError(retErr)
+		}
+		metric.ArrowLoadObjectCounter.WithLabelValues(outcome).Inc()
+	}()
 	if r == nil || param == nil || param.Extern == nil || proc == nil {
 		return false, moerr.NewInvalidInputNoCtx("invalid Arrow reader open")
 	}
@@ -151,7 +296,9 @@ func (r *ArrowReader) Open(param *ExternalParam, proc *process.Process) (bool, e
 	if param.Extern.ArrowMatchByPosition {
 		mode = arrowbridge.MatchByPosition
 	}
-	r.plan, err = arrowbridge.Bind(proc.Ctx, reader.Schema(), targets, mode)
+	// LOAD uses a deliberately more permissive type policy than exact result
+	// protocols such as Python UDF. Keep the policy explicit at this boundary.
+	r.plan, err = arrowbridge.BindLoad(proc.Ctx, reader.Schema(), targets, mode)
 	if err != nil {
 		r.Close()
 		return false, err
@@ -176,7 +323,12 @@ func (r *ArrowReader) Open(param *ExternalParam, proc *process.Process) (bool, e
 		return false, err
 	}
 	if finished {
-		r.Close()
+		if err = r.Close(); err != nil {
+			return false, err
+		}
+	}
+	if fileShard != nil {
+		metric.ArrowLoadShardCounter.Inc()
 	}
 	return finished, nil
 }
@@ -186,23 +338,30 @@ func (r *ArrowReader) Open(param *ExternalParam, proc *process.Process) (bool, e
 // reader's previous record; any published borrowed MO vectors hold their own
 // ArrayData references and remain valid.
 func (r *ArrowReader) advanceToNextNonEmptyRecord() (bool, error) {
+	startTime := time.Now()
+	var retErr error
+	defer func() { observeArrowPhase(startTime, "next_record", retErr) }()
 	if r == nil || r.reader == nil {
-		return false, moerr.NewInternalErrorNoCtx("Arrow reader is not open")
+		retErr = moerr.NewInternalErrorNoCtx("Arrow reader is not open")
+		return false, retErr
 	}
 	for r.reader.Next() {
 		record := r.reader.RecordBatch()
 		if record == nil {
-			return false, moerr.NewInvalidInputNoCtx("Arrow reader returned a nil record batch")
+			retErr = moerr.NewInvalidInputNoCtx("Arrow reader returned a nil record batch")
+			return false, retErr
 		}
 		if record.NumRows() == 0 {
 			continue
 		}
 		r.pending = record
 		r.rowOffset = 0
+		metric.ArrowLoadRecordCounter.Inc()
 		return false, nil
 	}
 	if err := r.reader.Err(); err != nil {
-		return false, err
+		retErr = err
+		return false, retErr
 	}
 	r.pending = nil
 	r.rowOffset = 0
@@ -305,7 +464,8 @@ func (r *ArrowReader) ReadBatch(
 	buf *batch.Batch,
 	proc *process.Process,
 	_ process.Analyzer,
-) (bool, error) {
+) (_ bool, retErr error) {
+	defer func() { observeArrowError(retErr) }()
 	if r == nil || r.reader == nil || r.plan == nil || r.pending == nil || buf == nil || proc == nil {
 		return false, moerr.NewInvalidInput(ctx, "Arrow reader is not open")
 	}
@@ -333,13 +493,18 @@ func (r *ArrowReader) ReadBatch(
 	if proc.GetSessionInfo() != nil && proc.GetSessionInfo().TimeZone != nil {
 		location = proc.GetSessionInfo().TimeZone
 	}
-	converted, _, err := r.plan.Convert(ctx, view, proc.Mp(), arrowbridge.ConvertOptions{
+	convertStart := time.Now()
+	converted, stats, err := r.plan.Convert(ctx, view, proc.Mp(), arrowbridge.ConvertOptions{
 		Location: location, Allocation: r.allocation,
 	})
+	observeArrowPhase(convertStart, "convert", err)
 	if err != nil {
 		return false, err
 	}
+	observeArrowConvertStats(stats)
+	wireBudgetStart := time.Now()
 	converted, actualRows, err := fitArrowBatchToWireBudget(ctx, converted, r.param.maxBatchSize, proc.Mp())
+	observeArrowPhase(wireBudgetStart, "wire_budget", err)
 	if err != nil {
 		converted.Clean(proc.Mp())
 		return false, err
@@ -358,10 +523,15 @@ func (r *ArrowReader) ReadBatch(
 			return false, err
 		}
 	}
+	publishStart := time.Now()
 	if err = replaceArrowBatch(buf, converted, proc.Mp()); err != nil {
+		observeArrowPhase(publishStart, "publish", err)
 		converted.Clean(proc.Mp())
 		return false, err
 	}
+	observeArrowPhase(publishStart, "publish", nil)
+	metric.ArrowLoadBatchCounter.Inc()
+	metric.ArrowLoadRowCounter.Add(float64(rows))
 	return fileFinished, nil
 }
 

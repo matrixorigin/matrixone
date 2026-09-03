@@ -41,6 +41,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/system"
 	commonutil "github.com/matrixorigin/matrixone/pkg/common/util"
 	"github.com/matrixorigin/matrixone/pkg/config"
+	"github.com/matrixorigin/matrixone/pkg/container/arrowbridge"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -56,7 +57,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/aggexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/apply"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/arrowbridge"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/connector"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/deletion"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/dispatch"
@@ -2414,56 +2414,11 @@ func (c *Compile) arrowExecutionScope(node *plan.Node, param *tree.ExternParam) 
 func (c *Compile) requireArrowLoadEnabled(
 	param *tree.ExternParam,
 ) (config.ArrowLoadParameters, error) {
-	ctx := context.Background()
-	if c != nil && c.proc != nil && c.proc.Ctx != nil {
-		ctx = c.proc.Ctx
+	var proc *process.Process
+	if c != nil {
+		proc = c.proc
 	}
-	var parameterUnit *config.ParameterUnit
-	if value := ctx.Value(config.ParameterUnitKey); value != nil {
-		parameterUnit, _ = value.(*config.ParameterUnit)
-	}
-	if parameterUnit == nil && c != nil && c.proc != nil {
-		if runtime := moruntime.ServiceRuntime(c.proc.GetService()); runtime != nil {
-			if value, ok := runtime.GetGlobalVariables("parameter-unit"); ok {
-				parameterUnit, _ = value.(*config.ParameterUnit)
-			}
-		}
-	}
-	if parameterUnit == nil || parameterUnit.SV == nil {
-		return config.ArrowLoadParameters{}, moerr.NewNotSupported(
-			ctx, "Arrow LOAD is disabled because runtime configuration is unavailable",
-		)
-	}
-	settings := parameterUnit.SV.ArrowLoad
-	if !settings.Enabled {
-		return settings, moerr.NewNotSupported(ctx, "Arrow LOAD is disabled by configuration")
-	}
-	if arrowLoadUsesS3(param) && !settings.S3Enabled {
-		return settings, moerr.NewNotSupported(ctx, "Arrow LOAD from S3 or stage is disabled by configuration")
-	}
-	return settings, nil
-}
-
-func arrowLoadUsesS3(param *tree.ExternParam) bool {
-	if param == nil {
-		return false
-	}
-	if param.ScanType == tree.S3 {
-		return true
-	}
-	if _, ok := param.FileService.(*fileservice.S3FS); ok {
-		return true
-	}
-	parsed, err := fileservice.ParsePath(param.Filepath)
-	if err != nil {
-		return false
-	}
-	switch strings.ToLower(parsed.Service) {
-	case "s3", "s3-no-key", "s3-opts", "opts", "options", "minio":
-		return true
-	default:
-		return false
-	}
+	return plan2.RequireArrowLoadEnabled(proc, param)
 }
 
 func arrowParamForRollout(
@@ -3651,7 +3606,9 @@ func (c *Compile) planArrowCompileRuntime(
 		default:
 			return nil, moerr.NewInvalidInputf(ctx, "invalid Arrow IPC container %d", actualContainer)
 		}
-		conversionPlan, err := arrowbridge.Bind(ctx, schema, targets, matchMode)
+		// Compile and execution must fingerprint the same explicit LOAD policy;
+		// exact result protocols use a separate binder and version contract.
+		conversionPlan, err := arrowbridge.BindLoad(ctx, schema, targets, matchMode)
 		if err != nil {
 			return nil, err
 		}

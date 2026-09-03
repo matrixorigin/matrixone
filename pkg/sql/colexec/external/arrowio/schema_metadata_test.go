@@ -25,8 +25,17 @@ import (
 	"github.com/apache/arrow-go/v18/arrow"
 	"github.com/apache/arrow-go/v18/arrow/ipc"
 	flatbuffers "github.com/google/flatbuffers/go"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/external/arrowio/ipcflatbuf"
+	"github.com/matrixorigin/matrixone/pkg/container/arrowipc"
+	"github.com/matrixorigin/matrixone/pkg/container/arrowipc/ipcflatbuf"
 	"github.com/stretchr/testify/require"
+)
+
+const (
+	maxArrowSchemaFields          = arrowipc.MaxSchemaFields
+	maxArrowSchemaDepth           = arrowipc.MaxSchemaDepth
+	maxArrowSchemaMetadataEntries = arrowipc.MaxSchemaMetadataEntries
+	maxArrowSchemaFeatures        = arrowipc.MaxSchemaFeatures
+	maxArrowUnionTypeIDsPerField  = arrowipc.MaxUnionTypeIDsPerField
 )
 
 func TestIPCSchemaVectorCountRejectedBeforeArrowGoForFileAndStream(t *testing.T) {
@@ -94,7 +103,7 @@ func TestIPCSchemaMetadataAndUnionLimits(t *testing.T) {
 		var schema ipcflatbuf.Schema
 		schema.Init(metadata, flatbuffers.GetUOffsetT(metadata))
 		require.ErrorContains(t,
-			validateIPCSchemaMetadata(context.Background(), &schema, len(metadata)),
+			arrowipc.ValidateSchemaMetadata(context.Background(), &schema, len(metadata)),
 			"schema decoded string bytes exceed metadata size",
 		)
 	})
@@ -137,12 +146,12 @@ func TestIPCSchemaMetadataAndUnionLimits(t *testing.T) {
 		metadata := makeFlatbufferSchemaWithFeatures(t, maxArrowSchemaFeatures)
 		var schema ipcflatbuf.Schema
 		schema.Init(metadata, flatbuffers.GetUOffsetT(metadata))
-		require.NoError(t, validateIPCSchemaMetadata(context.Background(), &schema, len(metadata)))
+		require.NoError(t, arrowipc.ValidateSchemaMetadata(context.Background(), &schema, len(metadata)))
 
 		metadata = makeFlatbufferSchemaWithFeatures(t, maxArrowSchemaFeatures+1)
 		schema.Init(metadata, flatbuffers.GetUOffsetT(metadata))
 		require.ErrorContains(t,
-			validateIPCSchemaMetadata(context.Background(), &schema, len(metadata)),
+			arrowipc.ValidateSchemaMetadata(context.Background(), &schema, len(metadata)),
 			"schema feature count 65 exceeds limit 64",
 		)
 	})

@@ -116,7 +116,7 @@ func TestArrowIPCRejectsMalformedAndMismatchedData(t *testing.T) {
 		require.Error(t, err)
 	}
 	_, err = schema.decodeRecordBatch(mustHex(t, fixtureHeaderHex), body, 1, mp)
-	require.ErrorContains(t, err, "decoded-memory budget")
+	require.ErrorContains(t, err, "decoded record body exceeds limit")
 
 	required := *schema
 	required.fields = append([]arrowField(nil), schema.fields...)
@@ -125,7 +125,7 @@ func TestArrowIPCRejectsMalformedAndMismatchedData(t *testing.T) {
 	require.ErrorContains(t, err, "required field contains nulls")
 
 	_, err = schema.decodeRecordBatch(mustHex(t, fixtureHeaderHex), body[:len(body)-1], 1<<20, mp)
-	require.ErrorContains(t, err, "body length mismatch")
+	require.ErrorContains(t, err, "exceeds limit")
 	require.Equal(t, int64(0), mp.CurrNB())
 }
 
@@ -296,7 +296,7 @@ func TestArrowSchemaRejectsNegotiationMismatches(t *testing.T) {
 	require.True(t, ok)
 	headerMutation[headerPosition] = 0
 	_, err = ParseSchema(headerMutation, typesOut, headings)
-	require.ErrorContains(t, err, "header type")
+	require.ErrorContains(t, err, "header is missing")
 
 	missingSchema := append([]byte(nil), metadata...)
 	missingMessage, err := rootTable(missingSchema)
@@ -305,7 +305,7 @@ func TestArrowSchemaRejectsNegotiationMismatches(t *testing.T) {
 	require.NoError(t, err)
 	binary.LittleEndian.PutUint16(missingSchema[vtable+8:], 0)
 	_, err = ParseSchema(missingSchema, typesOut, headings)
-	require.ErrorContains(t, err, "missing its schema")
+	require.ErrorContains(t, err, "schema header is missing")
 }
 
 func validFlatTableData() []byte {

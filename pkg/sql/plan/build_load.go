@@ -832,6 +832,9 @@ func applyLoadParallelAdmission(param *tree.ExternParam, offset int64) {
 }
 
 func checkFileExist(param *tree.ExternParam, ctx CompilerContext) (string, error) {
+	if _, err := RequireArrowLoadEnabled(ctx.GetProcess(), param); err != nil {
+		return "", err
+	}
 	if param.ScanType == tree.INLINE {
 		return "", nil
 	}
@@ -844,6 +847,11 @@ func checkFileExist(param *tree.ExternParam, ctx CompilerContext) (string, error
 		if err := InitInfileOrStageParam(param, ctx.GetProcess()); err != nil {
 			return "", err
 		}
+	}
+	// Stage resolution may reveal an S3-backed source. Recheck the sub-gate
+	// before ReadDir or StatFile can perform object-store I/O.
+	if _, err := RequireArrowLoadEnabled(ctx.GetProcess(), param); err != nil {
+		return "", err
 	}
 	if param.Local {
 		return param.Filepath, nil

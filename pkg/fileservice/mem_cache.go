@@ -706,7 +706,32 @@ func (m *MemCache) Read(
 			Offset: entry.Offset,
 			Sz:     entry.Size,
 		}
-		bs, ok := m.cache.Get(ctx, key)
+		var bs fscache.Data
+		var ok bool
+		if entry.admitCachedData != nil {
+			cache, supportsAdmission := m.cache.(fscache.DataCacheWithPinAdmission)
+			if !supportsAdmission {
+				continue
+			}
+			var release func()
+			bs, release, ok, err = cache.GetWithPinAdmission(ctx, key, entry.admitCachedData)
+			if errors.Is(err, fscache.ErrCacheAdmissionRejected) {
+				// The key exists, but retaining its physical backing would violate
+				// the caller's pin policy or budget. Treat that as a cache miss so
+				// cache warmth cannot turn an otherwise valid read into a failure.
+				numRead++
+				err = nil
+				continue
+			}
+			if err != nil {
+				return err
+			}
+			if ok {
+				vector.Entries[i].releaseCachedData = release
+			}
+		} else {
+			bs, ok = m.cache.Get(ctx, key)
+		}
 		numRead++
 		if ok {
 			vector.Entries[i].CachedData = bs

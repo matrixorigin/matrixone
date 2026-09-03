@@ -24,6 +24,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/fileservice/fscache"
 )
 
 // ErrObjectChanged is returned when a conditional object read can no longer
@@ -175,6 +176,8 @@ type fileServiceRangeReader struct {
 	fs FileService
 }
 
+const maxRangeLeasePinAmplification = int64(4)
+
 // NewLeasedRangeReader adapts every FileService through its ordinary Read
 // contract. Backend-specific implementations may replace this adapter while
 // preserving the same ownership and admission semantics.
@@ -292,8 +295,50 @@ func (r *fileServiceRangeReader) ReadRangeLease(
 		return nil, moerr.NewInvalidInput(ctx, "invalid leased range read")
 	}
 
-	return readRangeLease(ctx, path, offset, size, admission, func(destination []byte) error {
-		vector := &IOVector{
+	vector := &IOVector{
+		FilePath: path,
+		// Only an exact memory-cache entry can transfer its backing into this
+		// lease. Disk and remote cache tiers allocate while reading and cannot
+		// run the pre-retain statement admission hook.
+		Policy: SkipDiskCache | SkipRemoteCache | SkipFullFilePreloads,
+		Entries: []IOEntry{{
+			Offset: offset,
+			Size:   size,
+		}},
+	}
+	entry := &vector.Entries[0]
+	entry.admitCachedData = func(capacity int64) (func(), error) {
+		return admitRangeCachePin(ctx, admission, size, capacity)
+	}
+	published := false
+	defer func() {
+		if !published {
+			vector.ReleaseReadResultOnError()
+		}
+	}()
+
+	// Avoid allocating a raw destination when the exact range is already in
+	// memory cache. MemCache performs admission before retaining the hit.
+	if err := r.fs.ReadCache(ctx, vector); err != nil {
+		return nil, err
+	}
+	if entry.CachedData != nil {
+		lease, err := rangeLeaseFromCachedData(ctx, vector, size)
+		if err != nil {
+			return nil, err
+		}
+		published = true
+		return lease, nil
+	}
+
+	// A miss keeps the established exact-destination path: it introduces no
+	// cache copy and reserves exactly the raw backing before allocation. Other
+	// FileService consumers may populate the memory cache for a later leased
+	// read, but a range lease never creates two authoritative copies itself.
+	published = true
+	vector.Release()
+	lease, err := readRangeLease(ctx, path, offset, size, admission, func(destination []byte) error {
+		readVector := &IOVector{
 			FilePath: path,
 			Policy:   SkipAllCache,
 			Entries: []IOEntry{{
@@ -302,22 +347,77 @@ func (r *fileServiceRangeReader) ReadRangeLease(
 				Data:   destination,
 			}},
 		}
-		if err := r.fs.Read(ctx, vector); err != nil {
-			vector.ReleaseReadResultOnError()
+		if err := r.fs.Read(ctx, readVector); err != nil {
+			readVector.ReleaseReadResultOnError()
 			return err
 		}
-		entry := &vector.Entries[0]
-		if entry.CachedData != nil || entry.releaseData != nil || len(entry.Data) != len(destination) ||
-			(cap(entry.Data) > 0 && &entry.Data[0] != &destination[0]) {
-			vector.Release()
+		readEntry := &readVector.Entries[0]
+		if readEntry.CachedData != nil || readEntry.releaseData != nil ||
+			len(readEntry.Data) != len(destination) ||
+			(cap(readEntry.Data) > 0 && &readEntry.Data[0] != &destination[0]) {
+			readVector.Release()
 			return moerr.NewInvalidInput(ctx, "leased range backend replaced exact destination")
 		}
-		// Drop the IOVector owner without dropping destination. The generic
-		// adapter supplied the backing and no backend release hook owns it.
-		entry.Data = nil
-		vector.Release()
+		readEntry.Data = nil
+		readVector.Release()
 		return nil
 	})
+	if err != nil {
+		return nil, err
+	}
+	published = true
+	return lease, nil
+}
+
+func admitRangeCachePin(
+	ctx context.Context,
+	admission RangeReadAdmission,
+	logicalSize, capacity int64,
+) (func(), error) {
+	if err := validateRangePinAmplification(ctx, logicalSize, capacity); err != nil {
+		return nil, errors.Join(fscache.ErrCacheAdmissionRejected, err)
+	}
+	reservation, err := admission.Reserve(ctx, capacity)
+	if err != nil {
+		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+			return nil, err
+		}
+		return nil, errors.Join(fscache.ErrCacheAdmissionRejected, err)
+	}
+	capacityLease, err := reservation.Commit(capacity)
+	if err != nil {
+		reservation.Abort()
+		return nil, errors.Join(fscache.ErrCacheAdmissionRejected, err)
+	}
+	return capacityLease.Release, nil
+}
+
+func validateRangePinAmplification(ctx context.Context, logicalSize, capacity int64) error {
+	if logicalSize <= 0 || capacity < logicalSize ||
+		(logicalSize <= math.MaxInt64/maxRangeLeasePinAmplification &&
+			capacity > logicalSize*maxRangeLeasePinAmplification) {
+		return moerr.NewInvalidInput(ctx, "leased range cache pin amplification exceeds limit")
+	}
+	return nil
+}
+
+func rangeLeaseFromCachedData(
+	ctx context.Context,
+	vector *IOVector,
+	logicalSize int64,
+) (RangeLease, error) {
+	entry := &vector.Entries[0]
+	if entry.CachedData == nil || entry.releaseCachedData == nil ||
+		entry.CachedData.Size() != logicalSize || int64(len(entry.CachedData.Bytes())) != logicalSize {
+		return nil, moerr.NewInvalidInput(ctx, "leased range backend did not return admitted exact cache data")
+	}
+	capacity := entry.CachedData.Capacity()
+	if err := validateRangePinAmplification(ctx, logicalSize, capacity); err != nil {
+		return nil, err
+	}
+	return &ioVectorRangeLease{
+		data: entry.CachedData.Bytes(), capacity: capacity, vector: vector,
+	}, nil
 }
 
 func readRangeLease(

@@ -60,6 +60,9 @@ func NewRemoteCache(client client.QueryClient, factory KeyRouterFactory[query.Ca
 }
 
 func (r *RemoteCache) Read(ctx context.Context, vector *IOVector) error {
+	if vector.Policy.Any(SkipRemoteCacheReads) {
+		return nil
+	}
 	if r.keyRouterFactory == nil {
 		return nil
 	}

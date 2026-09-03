@@ -17,13 +17,12 @@ package arrowio
 import (
 	"context"
 	"encoding/binary"
-	"math"
 
 	"github.com/apache/arrow-go/v18/arrow"
 	"github.com/apache/arrow-go/v18/arrow/ipc"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/container/arrowipc"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/external/arrowio/ipcflatbuf"
 )
 
 const (
@@ -284,11 +283,8 @@ func inspectFileBlockMetadataBytes(
 	)
 }
 
-// inspectIPCMessageMetadata validates the untrusted FlatBuffers envelope and,
-// when the body is present, the total decoded size declared by compressed
-// buffer prefixes. bodyEnvelopeBytes is -1 for a stream whose exact body size
-// is not known until the metadata has been inspected; otherwise it includes
-// at most seven bytes of IPC alignment padding.
+// inspectIPCMessageMetadata adapts the shared transport-neutral validator to
+// the File planner's private metadata shape.
 func inspectIPCMessageMetadata(
 	ctx context.Context,
 	payload []byte,
@@ -297,187 +293,21 @@ func inspectIPCMessageMetadata(
 	body []byte,
 	validateBody bool,
 	maxDecodedRecordBytes int64,
-) (_ inspectedBlockMetadata, retErr error) {
-	defer func() {
-		if recovered := recover(); recovered != nil {
-			retErr = moerr.NewInvalidInputf(ctx, "invalid Arrow IPC message metadata: %v", recovered)
-		}
-	}()
-	if len(payload) < 4 {
-		return inspectedBlockMetadata{}, moerr.NewInvalidInput(ctx, "Arrow IPC message metadata is truncated")
+) (inspectedBlockMetadata, error) {
+	info, err := arrowipc.InspectMessage(ctx, payload, arrowipc.ValidationOptions{
+		MaxMetadataBytes:      DefaultMaxMetadataBytes,
+		MaxBodyBytes:          maxBodyBytes,
+		BodyEnvelopeBytes:     bodyEnvelopeBytes,
+		Body:                  body,
+		ValidateBody:          validateBody,
+		MaxDecodedRecordBytes: maxDecodedRecordBytes,
+	})
+	if err != nil {
+		return inspectedBlockMetadata{}, err
 	}
-	root := binary.LittleEndian.Uint32(payload)
-	if uint64(root) >= uint64(len(payload)) {
-		return inspectedBlockMetadata{}, moerr.NewInvalidInput(ctx, "Arrow IPC message root is out of bounds")
-	}
-	message := ipcflatbuf.GetRootAsMessage(payload)
-	headerType := message.HeaderType()
-	if headerType == 0 {
-		return inspectedBlockMetadata{}, moerr.NewInvalidInput(ctx, "Arrow IPC message header is missing")
-	}
-	bodyLength := message.BodyLength()
-	if bodyLength < 0 || bodyLength > maxBodyBytes || bodyLength > int64(math.MaxInt) {
-		return inspectedBlockMetadata{}, moerr.NewInvalidInputf(ctx,
-			"Arrow IPC message body length %d exceeds limit %d", bodyLength, maxBodyBytes)
-	}
-	if bodyEnvelopeBytes >= 0 &&
-		(bodyLength > bodyEnvelopeBytes || bodyEnvelopeBytes-bodyLength >= 8) {
-		return inspectedBlockMetadata{}, moerr.NewInvalidInputf(ctx,
-			"Arrow IPC message body length %d does not match envelope body length %d",
-			bodyLength, bodyEnvelopeBytes)
-	}
-	if validateBody && (int64(len(body)) < bodyLength || int64(len(body))-bodyLength >= 8) {
-		return inspectedBlockMetadata{}, moerr.NewInvalidInputf(ctx,
-			"Arrow IPC message body length %d does not match available body length %d",
-			bodyLength, len(body))
-	}
-	result := inspectedBlockMetadata{headerType: byte(headerType), bodyBytes: bodyLength}
-	switch headerType {
-	case ipcflatbuf.MessageHeaderSchema:
-		var schema ipcflatbuf.Schema
-		if !message.Schema(&schema) {
-			return inspectedBlockMetadata{}, moerr.NewInvalidInput(ctx, "Arrow schema header is missing")
-		}
-		if err := validateIPCSchemaMetadata(ctx, &schema, len(payload)); err != nil {
-			return inspectedBlockMetadata{}, err
-		}
-	case ipcflatbuf.MessageHeaderRecordBatch:
-		var record ipcflatbuf.RecordBatch
-		if !message.RecordBatch(&record) {
-			return inspectedBlockMetadata{}, moerr.NewInvalidInput(ctx, "Arrow record data header is missing")
-		}
-		if err := validateRecordBatchMetadata(
-			ctx, &record, len(payload), bodyLength, body, validateBody, maxDecodedRecordBytes,
-		); err != nil {
-			return inspectedBlockMetadata{}, err
-		}
-		result.rows = record.Length()
-	case ipcflatbuf.MessageHeaderDictionaryBatch:
-		var dictionary ipcflatbuf.DictionaryBatch
-		if !message.DictionaryBatch(&dictionary) {
-			return inspectedBlockMetadata{}, moerr.NewInvalidInput(ctx, "Arrow dictionary header is missing")
-		}
-		var record ipcflatbuf.RecordBatch
-		if !dictionary.Data(&record) {
-			return inspectedBlockMetadata{}, moerr.NewInvalidInput(ctx, "Arrow dictionary data header is missing")
-		}
-		if err := validateRecordBatchMetadata(
-			ctx, &record, len(payload), bodyLength, body, validateBody, maxDecodedRecordBytes,
-		); err != nil {
-			return inspectedBlockMetadata{}, err
-		}
-		result.dictionaryID = dictionary.ID()
-		result.isDelta = dictionary.IsDelta()
-		result.rows = record.Length()
-	default:
-		return result, nil
-	}
-	return result, nil
-}
-
-// validateRecordBatchMetadata closes a gap in Arrow-Go's panic-to-error path:
-// malformed buffer descriptors can panic after the message body has been
-// retained but before an ArrayData owner exists to release it. Validate every
-// descriptor while the FileService lease still has a single, explicit owner.
-func validateRecordBatchMetadata(
-	ctx context.Context,
-	record *ipcflatbuf.RecordBatch,
-	metadataBytes int,
-	bodyBytes int64,
-	body []byte,
-	validateBody bool,
-	maxDecodedRecordBytes int64,
-) error {
-	rows := record.Length()
-	if rows < 0 || rows > int64(math.MaxInt) {
-		return moerr.NewInvalidInputf(ctx, "Arrow IPC message has invalid row count %d", rows)
-	}
-
-	nodeCount := record.NodesLength()
-	if nodeCount < 0 || nodeCount > metadataBytes/16 {
-		return moerr.NewInvalidInputf(ctx, "Arrow IPC field-node count %d exceeds metadata", nodeCount)
-	}
-	var node ipcflatbuf.FieldNode
-	for index := 0; index < nodeCount; index++ {
-		if !record.Nodes(&node, index) {
-			return moerr.NewInvalidInputf(ctx, "Arrow IPC field node %d is missing", index)
-		}
-		length, nullCount := node.Length(), node.NullCount()
-		if length < 0 || nullCount < 0 || nullCount > length {
-			return moerr.NewInvalidInputf(ctx,
-				"Arrow IPC field node %d has invalid length %d and null count %d",
-				index, length, nullCount)
-		}
-	}
-
-	compression := record.Compression(nil)
-	if compression != nil {
-		codec := compression.Codec()
-		if codec != ipcflatbuf.CompressionTypeLZ4Frame && codec != ipcflatbuf.CompressionTypeZSTD {
-			return moerr.NewInvalidInputf(ctx, "Arrow IPC compression codec %d is unsupported", codec)
-		}
-		if method := compression.Method(); method != ipcflatbuf.BodyCompressionMethodBuffer {
-			return moerr.NewInvalidInputf(ctx, "Arrow IPC compression method %d is unsupported", method)
-		}
-	}
-
-	bufferCount := record.BuffersLength()
-	if bufferCount < 0 || bufferCount > metadataBytes/16 {
-		return moerr.NewInvalidInputf(ctx, "Arrow IPC buffer count %d exceeds metadata", bufferCount)
-	}
-	var buffer ipcflatbuf.Buffer
-	var decodedBytes int64
-	for index := 0; index < bufferCount; index++ {
-		if !record.Buffers(&buffer, index) {
-			return moerr.NewInvalidInputf(ctx, "Arrow IPC buffer %d is missing", index)
-		}
-		offset, length := buffer.Offset(), buffer.Length()
-		if offset < 0 || length < 0 || offset > bodyBytes || length > bodyBytes-offset {
-			return moerr.NewInvalidInputf(ctx,
-				"Arrow IPC buffer %d range [%d,%d) exceeds message body %d",
-				index, offset, offset+length, bodyBytes)
-		}
-		if !validateBody {
-			continue
-		}
-		decodedLength := length
-		if compression != nil && length != 0 {
-			if length < 8 {
-				return moerr.NewInvalidInputf(ctx,
-					"Arrow IPC compressed buffer %d is shorter than its decoded-size prefix", index)
-			}
-			declared := int64(binary.LittleEndian.Uint64(body[int(offset) : int(offset)+8]))
-			switch {
-			case declared == -1:
-				decodedLength = length - 8
-			case declared < 0 || declared > int64(math.MaxInt):
-				return moerr.NewInvalidInputf(ctx,
-					"Arrow IPC compressed buffer %d has invalid decoded size %d", index, declared)
-			default:
-				decodedLength = declared
-			}
-		}
-		if decodedLength > maxDecodedRecordBytes-decodedBytes {
-			return moerr.NewInvalidInputf(ctx,
-				"Arrow IPC decoded record body exceeds limit %d", maxDecodedRecordBytes)
-		}
-		decodedBytes += decodedLength
-	}
-
-	variadicCount := record.VariadicBufferCountsLength()
-	if variadicCount < 0 || variadicCount > metadataBytes/8 {
-		return moerr.NewInvalidInputf(ctx,
-			"Arrow IPC variadic-buffer count %d exceeds metadata", variadicCount)
-	}
-	var variadicBuffers int64
-	for index := 0; index < variadicCount; index++ {
-		count := record.VariadicBufferCounts(index)
-		if count < 0 || count > int64(bufferCount)-variadicBuffers {
-			return moerr.NewInvalidInputf(ctx,
-				"Arrow IPC variadic-buffer count %d at index %d exceeds buffer count %d",
-				count, index, bufferCount)
-		}
-		variadicBuffers += count
-	}
-	return nil
+	return inspectedBlockMetadata{
+		headerType: info.HeaderType, rows: info.Rows,
+		dictionaryID: info.DictionaryID, isDelta: info.IsDelta,
+		bodyBytes: info.BodyBytes,
+	}, nil
 }

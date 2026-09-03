@@ -94,7 +94,7 @@ func estimateColumnRowBytes(
 		if !ok {
 			return 0, moerr.NewInvalidInput(ctx, "invalid Arrow Dictionary array")
 		}
-		valueKind, err := selectConversion(dictionary.Dictionary().DataType(), binding.target.Type)
+		valueKind, err := selectLoadConversion(dictionary.Dictionary().DataType(), binding.target.Type)
 		if err != nil {
 			return 0, err
 		}
