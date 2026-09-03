@@ -544,7 +544,7 @@ func TestDataProcessor_PartialSnapshotRetryReplaysStableEpoch(t *testing.T) {
 
 func TestLateDiscoveredTableStableEpochRestartConverges(t *testing.T) {
 	ctx := context.Background()
-	epochExecutor := &snapshotEpochTestExecutor{}
+	epochExecutor := newSnapshotEpochTestExecutor()
 	epochUpdater := NewCDCWatermarkUpdater(t.Name(), epochExecutor)
 	key := &WatermarkKey{AccountId: 1, TaskId: "task1", DBName: "db1", TableName: "table1"}
 
