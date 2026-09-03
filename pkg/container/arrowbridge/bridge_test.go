@@ -145,6 +145,15 @@ func TestBindRejectsDuplicateOutputIndexWhenAttributeNameIsEmpty(t *testing.T) {
 	require.ErrorContains(t, err, "duplicate MatrixOne output column index 0")
 }
 
+func TestBindRejectsMalformedFixedTargetSize(t *testing.T) {
+	target := types.T_int64.ToType()
+	target.Size = 1
+	_, err := BindLoad(context.Background(), arrow.NewSchema([]arrow.Field{{
+		Name: "value", Type: arrow.PrimitiveTypes.Int64,
+	}}, nil), []TargetColumn{{Name: "value", Type: target}}, MatchByName)
+	require.ErrorContains(t, err, "invalid MatrixOne target type size")
+}
+
 func TestBindBoundsTotalFieldsAndNestingBeforeFingerprint(t *testing.T) {
 	allowed := arrow.DataType(arrow.PrimitiveTypes.Int64)
 	for range MaxNestingDepth - 1 {
@@ -1198,6 +1207,28 @@ func TestBindRejectsInvalidTimestampTimezone(t *testing.T) {
 	require.ErrorContains(t, err, "timezone")
 }
 
+func TestBindRejectsInvalidTimeUnit(t *testing.T) {
+	for _, test := range []struct {
+		name string
+		typ  arrow.DataType
+	}{
+		{name: "time32", typ: &arrow.Time32Type{Unit: arrow.TimeUnit(99)}},
+		{name: "time64", typ: &arrow.Time64Type{Unit: arrow.TimeUnit(99)}},
+		{name: "timestamp", typ: &arrow.TimestampType{Unit: arrow.TimeUnit(99)}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			schema := arrow.NewSchema([]arrow.Field{{Name: "t", Type: test.typ}}, nil)
+			var err error
+			require.NotPanics(t, func() {
+				_, err = Bind(context.Background(), schema, []TargetColumn{{
+					Name: "t", Type: types.T_time.ToType(),
+				}}, MatchByName)
+			})
+			require.ErrorContains(t, err, "time unit")
+		})
+	}
+}
+
 func TestTimestampUnitAndPrecisionMatrix(t *testing.T) {
 	for _, test := range []struct {
 		name  string
@@ -1547,6 +1578,43 @@ func TestMaxOutputRowsHonorsByteBudgetAndProgress(t *testing.T) {
 	ints.Release()
 	strings.Release()
 	alloc.AssertSize(t, 0)
+}
+
+func TestMaxOutputRowsRejectsMismatchedColumnRows(t *testing.T) {
+	alloc := memory.NewCheckedAllocator(memory.NewGoAllocator())
+	builder := array.NewStringBuilder(alloc)
+	builder.Append("one")
+	values := builder.NewArray()
+	builder.Release()
+	schema := arrow.NewSchema([]arrow.Field{{Name: "value", Type: arrow.BinaryTypes.String}}, nil)
+	record := &mismatchedRowsRecordBatch{
+		RecordBatch: array.NewRecordBatch(schema, []arrow.Array{values}, 1),
+		rows:        2,
+	}
+	plan, err := BindLoad(context.Background(), schema, []TargetColumn{{
+		Name: "value", Type: types.T_varchar.ToType(),
+	}}, MatchByName)
+	require.NoError(t, err)
+
+	var rows int
+	require.NotPanics(t, func() {
+		rows, err = plan.MaxOutputRows(context.Background(), record, 0, 2, 1024)
+	})
+	require.Zero(t, rows)
+	require.ErrorContains(t, err, "rows")
+
+	record.Release()
+	values.Release()
+	alloc.AssertSize(t, 0)
+}
+
+type mismatchedRowsRecordBatch struct {
+	arrow.RecordBatch
+	rows int64
+}
+
+func (r *mismatchedRowsRecordBatch) NumRows() int64 {
+	return r.rows
 }
 
 func TestConvertRollbackSchemaDriftNotNullAndCancel(t *testing.T) {

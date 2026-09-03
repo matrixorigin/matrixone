@@ -161,6 +161,9 @@ func normalizeOptions(options Options) (Options, error) {
 	if options.MaxMetadataBytes == 0 {
 		options.MaxMetadataBytes = DefaultMaxMetadataBytes
 	}
+	if options.MaxMetadataBytes > DefaultMaxMetadataBytes {
+		options.MaxMetadataBytes = DefaultMaxMetadataBytes
+	}
 	if options.MaxBodyBytes == 0 {
 		options.MaxBodyBytes = DefaultMaxBodyBytes
 	}

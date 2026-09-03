@@ -142,6 +142,26 @@ func TestIPCSchemaMetadataAndUnionLimits(t *testing.T) {
 		require.Zero(t, admission.active.Load())
 	})
 
+	t.Run("duplicate union type ids", func(t *testing.T) {
+		schema := arrow.NewSchema([]arrow.Field{{
+			Name: "union",
+			Type: arrow.DenseUnionOf([]arrow.Field{
+				{Name: "first", Type: arrow.PrimitiveTypes.Int8},
+				{Name: "second", Type: arrow.PrimitiveTypes.Int16},
+			}, []arrow.UnionTypeCode{1, 1}),
+		}}, nil)
+		payload := makeEmptyIPC(t, ContainerStream, schema)
+		admission := new(testAdmission)
+		reader, err := Open(
+			context.Background(), writeMemoryFile(t, "arrow-duplicate-union-id", payload),
+			"arrow-duplicate-union-id", int64(len(payload)), ContainerStream, admission, Options{},
+		)
+		if reader != nil {
+			require.NoError(t, reader.Close())
+		}
+		require.ErrorContains(t, err, "duplicate union type ID")
+	})
+
 	t.Run("feature boundary", func(t *testing.T) {
 		metadata := makeFlatbufferSchemaWithFeatures(t, maxArrowSchemaFeatures)
 		var schema ipcflatbuf.Schema

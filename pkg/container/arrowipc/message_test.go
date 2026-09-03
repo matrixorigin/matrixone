@@ -22,8 +22,13 @@ import (
 	"testing"
 
 	"github.com/apache/arrow-go/v18/arrow"
+	"github.com/apache/arrow-go/v18/arrow/array"
 	"github.com/apache/arrow-go/v18/arrow/ipc"
+	"github.com/apache/arrow-go/v18/arrow/memory"
+	flatbuffers "github.com/google/flatbuffers/go"
 	"github.com/stretchr/testify/require"
+
+	"github.com/matrixorigin/matrixone/pkg/container/arrowipc/ipcflatbuf"
 )
 
 func TestMetadataAcceptsRawAndFramedMessages(t *testing.T) {
@@ -88,7 +93,9 @@ func TestInspectMessageValidatesGeneratedSchemaBeforeConsumerPolicy(t *testing.T
 	malformed := append([]byte(nil), wire...)
 	metadata, err := Metadata(context.Background(), malformed, DefaultMaxMetadataBytes)
 	require.NoError(t, err)
-	binary.LittleEndian.PutUint32(metadata, math.MaxUint32)
+	// Keep the malformed root distinct from the continuation token so the
+	// framing parser reaches the FlatBuffers root bounds check.
+	binary.LittleEndian.PutUint32(metadata, math.MaxUint32-1)
 	_, err = InspectMessage(context.Background(), malformed, ValidationOptions{
 		MaxBodyBytes:          0,
 		BodyEnvelopeBytes:     0,
@@ -97,12 +104,121 @@ func TestInspectMessageValidatesGeneratedSchemaBeforeConsumerPolicy(t *testing.T
 	require.ErrorContains(t, err, "root is out of bounds")
 }
 
+func TestInspectMessageRejectsUnsupportedHeaderType(t *testing.T) {
+	schema := arrow.NewSchema([]arrow.Field{{
+		Name: "value", Type: arrow.PrimitiveTypes.Int64,
+	}}, nil)
+	var stream bytes.Buffer
+	writer := ipc.NewWriter(&stream, ipc.WithSchema(schema))
+	require.NoError(t, writer.Close())
+	wire := firstStreamMetadata(t, stream.Bytes())
+	metadata, err := Metadata(context.Background(), wire, DefaultMaxMetadataBytes)
+	require.NoError(t, err)
+
+	root := binary.LittleEndian.Uint32(metadata)
+	message := flatbuffers.Table{Bytes: metadata, Pos: flatbuffers.UOffsetT(root)}
+	headerOffset := flatbuffers.UOffsetT(message.Offset(6))
+	require.NotZero(t, headerOffset)
+	metadata[headerOffset+message.Pos] = 4 // Tensor, not an IPC scan message.
+
+	_, err = InspectMessage(context.Background(), metadata, ValidationOptions{
+		MaxBodyBytes:          0,
+		BodyEnvelopeBytes:     0,
+		MaxDecodedRecordBytes: 1,
+	})
+	require.ErrorContains(t, err, "unsupported Arrow IPC message header")
+}
+
+func TestInspectMessageRejectsSchemaBody(t *testing.T) {
+	schema := arrow.NewSchema([]arrow.Field{{
+		Name: "value", Type: arrow.PrimitiveTypes.Int64,
+	}}, nil)
+	var stream bytes.Buffer
+	writer := ipc.NewWriter(&stream, ipc.WithSchema(schema))
+	alloc := memory.NewGoAllocator()
+	values := array.NewInt64Builder(alloc)
+	values.Append(1)
+	record := array.NewRecordBatch(schema, []arrow.Array{values.NewArray()}, 1)
+	values.Release()
+	require.NoError(t, writer.Write(record))
+	record.Release()
+	require.NoError(t, writer.Close())
+	metadata := streamMetadataAt(t, stream.Bytes(), 1)
+
+	root := binary.LittleEndian.Uint32(metadata)
+	message := flatbuffers.Table{Bytes: metadata, Pos: flatbuffers.UOffsetT(root)}
+	headerOffset := flatbuffers.UOffsetT(message.Offset(6))
+	require.NotZero(t, headerOffset)
+	metadata[headerOffset+message.Pos] = byte(ipcflatbuf.MessageHeaderSchema)
+
+	_, err := InspectMessage(context.Background(), metadata, ValidationOptions{
+		MaxBodyBytes:          8,
+		BodyEnvelopeBytes:     8,
+		MaxDecodedRecordBytes: 1,
+	})
+	require.ErrorContains(t, err, "schema message body")
+}
+
+func TestInspectMessageRejectsUnalignedBufferOffset(t *testing.T) {
+	schema := arrow.NewSchema([]arrow.Field{{
+		Name: "value", Type: arrow.PrimitiveTypes.Int64,
+	}}, nil)
+	var stream bytes.Buffer
+	writer := ipc.NewWriter(&stream, ipc.WithSchema(schema))
+	alloc := memory.NewGoAllocator()
+	values := array.NewInt64Builder(alloc)
+	values.Append(1)
+	record := array.NewRecordBatch(schema, []arrow.Array{values.NewArray()}, 1)
+	values.Release()
+	require.NoError(t, writer.Write(record))
+	record.Release()
+	require.NoError(t, writer.Close())
+	metadata := streamMetadataAt(t, stream.Bytes(), 1)
+
+	root := binary.LittleEndian.Uint32(metadata)
+	messageTable := flatbuffers.Table{Bytes: metadata, Pos: flatbuffers.UOffsetT(root)}
+	headerOffset := flatbuffers.UOffsetT(messageTable.Offset(8))
+	require.NotZero(t, headerOffset)
+	var recordTable flatbuffers.Table
+	messageTable.Union(&recordTable, headerOffset)
+	buffersOffset := flatbuffers.UOffsetT(recordTable.Offset(8))
+	require.NotZero(t, buffersOffset)
+	bufferPos := recordTable.Vector(buffersOffset)
+	binary.LittleEndian.PutUint64(recordTable.Bytes[bufferPos:], 1)
+
+	bodyLength := ipcflatbuf.GetRootAsMessage(metadata).BodyLength()
+	_, err := InspectMessage(context.Background(), metadata, ValidationOptions{
+		MaxBodyBytes:          bodyLength,
+		BodyEnvelopeBytes:     bodyLength,
+		MaxDecodedRecordBytes: 1,
+	})
+	require.ErrorContains(t, err, "unaligned buffer offset")
+}
+
 func firstStreamMetadata(t *testing.T, stream []byte) []byte {
+	return streamMetadataAt(t, stream, 0)
+}
+
+func streamMetadataAt(t *testing.T, stream []byte, target int) []byte {
 	t.Helper()
-	require.GreaterOrEqual(t, len(stream), 8)
-	require.Equal(t, ContinuationToken, binary.LittleEndian.Uint32(stream))
-	length := int(binary.LittleEndian.Uint32(stream[4:]))
-	require.Positive(t, length)
-	require.LessOrEqual(t, length, len(stream)-8)
-	return stream[:8+length]
+	position := 0
+	for index := 0; index <= target; index++ {
+		require.LessOrEqual(t, position+8, len(stream))
+		require.Equal(t, ContinuationToken, binary.LittleEndian.Uint32(stream[position:]))
+		length := int(binary.LittleEndian.Uint32(stream[position+4:]))
+		require.Positive(t, length)
+		metadataStart := position + 8
+		metadataEnd := metadataStart + length
+		require.LessOrEqual(t, metadataEnd, len(stream))
+		if index == target {
+			return stream[metadataStart:metadataEnd]
+		}
+		metadata := stream[metadataStart:metadataEnd]
+		message := ipcflatbuf.GetRootAsMessage(metadata)
+		bodyLength := message.BodyLength()
+		require.GreaterOrEqual(t, bodyLength, int64(0))
+		position = metadataStart + (length+7)/8*8 + (int(bodyLength)+7)/8*8
+	}
+	t.Fatalf("stream message %d is missing", target)
+	return nil
 }
