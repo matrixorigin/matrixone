@@ -51,21 +51,8 @@ select count(*) as connect_only_secret_index_rows
 from information_schema.statistics where table_name = 'secret_t';
 ➤ connect_only_secret_index_rows[-5,64,0]  𝄀
 0
-grant select on table idx_meta_sub_db.visible_t to idx_meta_visible_parent_role;
-grant idx_meta_visible_parent_role to idx_meta_connect_only_role;
-select count(*) as inherited_exact_visible_index_rows
-from information_schema.statistics where table_name = 'visible_t';
-➤ inherited_exact_visible_index_rows[-5,64,0]  𝄀
-3
-select count(*) as inherited_exact_secret_index_rows
-from information_schema.statistics where table_name = 'secret_t';
-➤ inherited_exact_secret_index_rows[-5,64,0]  𝄀
-0
-select count(*) as inherited_exact_unpublished_index_rows
-from information_schema.statistics where table_name = 'unpublished_t';
-➤ inherited_exact_unpublished_index_rows[-5,64,0]  𝄀
-0
 grant select on table idx_meta_sub_db.* to idx_meta_visible_parent_role;
+grant idx_meta_visible_parent_role to idx_meta_connect_only_role;
 select count(*) as granted_visible_index_rows
 from information_schema.statistics where table_name = 'visible_t';
 ➤ granted_visible_index_rows[-5,64,0]  𝄀

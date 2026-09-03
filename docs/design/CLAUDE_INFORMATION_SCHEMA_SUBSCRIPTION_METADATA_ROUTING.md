@@ -4,8 +4,8 @@
 - Owning issue: [#27759](https://github.com/matrixorigin/matrixone/issues/27759)
 - Implementation PR: [#27778](https://github.com/matrixorigin/matrixone/pull/27778)
 - Related local-visibility design: [Information Schema Metadata Visibility and Active-Role Closure](CLAUDE_INFORMATION_SCHEMA_METADATA_VISIBILITY.md)
-- Version: 6
-- Last updated: 2026-09-03
+- Version: 5
+- Last updated: 2026-09-02
 
 ## 1. Problem and evidence
 
@@ -106,8 +106,9 @@ it is not a replacement for subscriber RBAC. Before entering a publisher
 catalog, the compiler evaluates the subscription database against the current
 subscriber session's active-role closure. Database ownership, database-wide or
 global table grants, and database metadata grants admit all publication-member
-tables. Exact table/view grants are supported on subscription tables and admit
-only the granted logical table IDs. A connect-only user therefore gets no
+tables. Subscription tables are virtual and do not exist as grantable objects
+in the subscriber catalog, so exact table/view grants cannot be resolved for
+this account-wide metadata path. A connect-only user therefore gets no
 subscription metadata branch.
 
 After that subscriber-local decision, the publisher branch must not evaluate
@@ -134,14 +135,9 @@ object references. Planning enforces all four scopes independently:
 3. publication-database scope on the publisher `mo_tables` scan;
 4. publication-table scope on that same `mo_tables` scan.
 
-For a broad database/global grant, the publisher `mo_tables` scan requires
-membership in publication set `T`. For exact grants, the subscriber-side query
-first joins each active-role privilege row to subscriber-local `mo_tables`, so
-the logical table ID remains attached to the subscription schema on which it
-was granted. The publisher scan then intersects that per-subscription ID set
-with publisher account, database, and publication table set `T`. If subscriber
-RBAC establishes neither broad visibility nor a non-empty exact set for a
-subscription, its branch is omitted entirely. Incomplete publication metadata
+The publisher `mo_tables` scan always requires membership in publication set
+`T`. If subscriber RBAC does not establish broad database/global visibility,
+the subscription branch is omitted entirely. Incomplete publication metadata
 (for example an empty publisher database or an empty table set) is also omitted
 and, at the final filter boundary, converted to a contradictory row predicate so
 that malformed state can never degrade into an unfiltered cross-account scan.
@@ -155,8 +151,8 @@ The canonical view's `__mo_visible_tables` CTE normally evaluates the current
 tenant's role closure. The account-wide provider evaluates that same role
 closure locally first. In a publisher branch the planner then replaces the
 CTE's subscriber-role predicate with the publisher-account predicate and adds
-the captured broad decision or per-subscription logical table IDs. Publication
-database/table filters remain on `mo_tables`; replacing the CTE is
+the captured subscriber authorization decision. Publication database/table
+filters remain on `mo_tables`; replacing the CTE is
 not a standalone authorization grant.
 
 An unsupported `__mo_visible_tables` shape fails planning. The planner never
@@ -434,8 +430,8 @@ meaning the publisher never granted.
 
 Subscriber RBAC is still mandatory, but it is evaluated against the
 subscriber-local subscription database and privilege rows before publisher
-routing. Only the resulting broad decision or per-subscription logical table
-ID set crosses that boundary; subscriber role IDs never do.
+routing. Only the resulting database/global visibility decision crosses that
+boundary; subscriber role IDs never do.
 
 ### C. Execute under a publisher user or role
 
@@ -479,7 +475,6 @@ without introducing cross-statement freshness or invalidation state.
 | Publisher account/database/table isolation; unpublished table absent | plan-shape tests and public BVT |
 | Connect-only subscriber cannot discover published table/index names | restricted-user public BVT and omitted-branch planner test |
 | Inherited database-wide subscriber grants intersect publication scope | public BVT plus active-role visibility-provider tests |
-| Inherited exact table grants expose only that subscription table | provider scoping unit test plus restricted-user public BVT |
 | Invalid/empty publication scope cannot produce an unfiltered publisher scan | omitted-branch and contradictory-filter unit tests |
 | Rolling upgrade does not call a v41-only role function on older CNs | protocol-specific visibility SQL test |
 | Subscriber role IDs do not authorize publisher catalogs | canonical CTE rewrite and publisher-RBAC negative tests |

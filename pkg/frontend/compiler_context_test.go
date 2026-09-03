@@ -28,7 +28,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
 	pbplan "github.com/matrixorigin/matrixone/pkg/pb/plan"
-	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/stretchr/testify/require"
 )
@@ -419,8 +418,6 @@ func TestGetVisibleSubscriptionMetadata(t *testing.T) {
 			escapeSQLString("table_visible"),
 		defines.MORPCVersion41,
 	)
-	_, err := mysql.ParseOne(context.Background(), query, 1)
-	require.NoError(t, err)
 	result := &MysqlResultSet{}
 	for _, name := range []string{"datname", "all_tables", "table_id"} {
 		column := &MysqlColumn{}
@@ -428,11 +425,7 @@ func TestGetVisibleSubscriptionMetadata(t *testing.T) {
 		result.AddColumn(column)
 	}
 	result.AddRow([]interface{}{"all_visible", int64(1), uint64(0)})
-	result.AddRow([]interface{}{"all_visible", int64(0), uint64(99)})
-	result.AddRow([]interface{}{"table_visible", int64(0), uint64(42)})
-	result.AddRow([]interface{}{"table_visible", int64(0), uint64(7)})
-	result.AddRow([]interface{}{"table_visible", int64(0), uint64(42)})
-	result.AddRow([]interface{}{"hidden", int64(0), uint64(0)})
+	result.AddRow([]interface{}{"table_visible", int64(1), uint64(0)})
 	result.AddRow([]interface{}{"unknown", int64(1), uint64(0)})
 
 	bh := &backgroundExecTest{}
@@ -444,48 +437,13 @@ func TestGetVisibleSubscriptionMetadata(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, []*plan2.SubscriptionMetadata{
 		{Meta: metas[0], AllTablesVisible: true},
-		{Meta: metas[1], VisibleTableIDs: []uint64{7, 42}},
+		{Meta: metas[1], AllTablesVisible: true},
 	}, got)
 	require.Equal(t, []string{query}, bh.executedSQLs)
 	require.Contains(t, query, "SELECT role_id FROM mo_current_roles() role_closure")
 	require.Contains(t, query, "db.owner IN")
-	require.Contains(t, query, "rp.privilege_level IN ('d.t','t')")
-	require.Contains(t, query, "tbl.account_id = current_account_id()")
-	require.Contains(t, query, "tbl.reldatabase_id = db.dat_id")
-	require.Contains(t, query, "tbl.reldatabase = db.datname")
-	require.Contains(t, query, "rp.obj_id = tbl.rel_logical_id")
-}
-
-func TestGetVisibleSubscriptionMetadataKeepsExactGrantsSubscriptionScoped(t *testing.T) {
-	metas := []*pbplan.SubscriptionMeta{
-		{SubName: "sub_a", AccountId: 1, DbName: "pub_a", Tables: "shared_t,secret_t"},
-		{SubName: "sub_b", AccountId: 2, DbName: "pub_b", Tables: "shared_t,secret_t"},
-	}
-	query := subscriptionMetadataVisibilitySQL(
-		escapeSQLString("sub_a")+","+escapeSQLString("sub_b"),
-		defines.MORPCVersion41,
-	)
-	result := &MysqlResultSet{}
-	for _, name := range []string{"datname", "all_tables", "table_id"} {
-		column := &MysqlColumn{}
-		column.SetName(name)
-		result.AddColumn(column)
-	}
-	result.AddRow([]interface{}{"sub_a", int64(0), uint64(11)})
-	result.AddRow([]interface{}{"sub_b", int64(0), uint64(22)})
-	result.AddRow([]interface{}{"sub_b", int64(0), uint64(22)})
-
-	bh := &backgroundExecTest{}
-	bh.init()
-	bh.sql2result[query] = result
-	got, err := getVisibleSubscriptionMetadata(
-		context.Background(), bh, metas, defines.MORPCVersion41,
-	)
-	require.NoError(t, err)
-	require.Equal(t, []*plan2.SubscriptionMetadata{
-		{Meta: metas[0], VisibleTableIDs: []uint64{11}},
-		{Meta: metas[1], VisibleTableIDs: []uint64{22}},
-	}, got)
+	require.NotContains(t, query, "rp.privilege_level IN ('d.t','t')")
+	require.NotContains(t, query, "tbl.account_id")
 }
 
 func TestSubscriptionMetadataVisibilitySQLUsesRollingUpgradeFallback(t *testing.T) {
