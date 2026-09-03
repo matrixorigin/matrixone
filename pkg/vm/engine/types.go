@@ -1334,6 +1334,20 @@ type Engine interface {
 	LatestLogtailAppliedTime() timestamp.Timestamp
 }
 
+// TableVersionedStats is an optional engine capability for readers that know
+// the table definition used by their plan. Implementations must not return
+// schema-bound statistics collected for another definition version. It is
+// optional so engines and mocks that expose only metadata-derived statistics
+// keep the existing Engine contract.
+type TableVersionedStats interface {
+	StatsAtTableVersion(
+		ctx context.Context,
+		key pb.StatsInfoKey,
+		sync bool,
+		tableDefVersion uint32,
+	) *pb.StatsInfo
+}
+
 // StatsRefreshOptions carries statistics that the statement computed from a
 // table-wide scan. Object metadata remains the source of all fields not
 // present here.

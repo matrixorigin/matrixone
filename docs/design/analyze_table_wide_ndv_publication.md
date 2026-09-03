@@ -47,6 +47,14 @@ collection succeeds and before the atomic cache publication, disttae validates
 and applies the count and the table-wide NDVs for only the columns selected by
 ANALYZE.
 
+The local cache stores the table-definition version beside only those entries
+that contain a table-wide observation. Planner statistics reads carry the
+`TableDef` used by the scan, frontend session-cache entries carry the same
+version, and disttae returns a schema-bound entry only to a matching reader.
+This metadata is process-local: no protobuf, wire, catalog, or persisted format
+changes. A remote or otherwise unversioned reader cannot export a schema-bound
+entry and falls back to its existing local metadata refresh.
+
 This adds no extra scan, storage, or network work to ANALYZE; one scalar count
 state piggybacks on the existing aggregate. It changes neither automatic
 metadata refresh nor planning for tables that have not been explicitly
@@ -56,7 +64,9 @@ analyzed.
 
 1. A successful publish contains one complete metadata refresh plus the valid
    table-wide row count and NDV overrides. Readers never observe the
-   intermediate metadata estimate.
+   intermediate metadata estimate. A completed table-wide observation is
+   usable even when the persisted-object count or the exact row count is zero;
+   its table name distinguishes that state from an uninitialized statistic.
 2. Any invalid override or schema-version mismatch rejects the whole refresh
    before cache replacement. Applying a map must not partially mutate the
    candidate statistics object.
@@ -87,6 +97,13 @@ analyzed.
     construction and ANALYZE admission use the same filter-classification
     function, so adding a new tenant-filtered system table cannot silently
     create a statistics-publication gap.
+11. A schema-bound cache entry is consumable only by a plan built from the same
+    table-definition version. An unversioned reader cannot export it. A later
+    metadata-only refresh atomically replaces the entry and removes the local
+    version binding.
+12. Current-table lookup treats the newest row for each table name as
+    authoritative. A DROP tombstone hides historical live rows, while
+    TRUNCATE exposes only the replacement table identity.
 
 ## 4. Visibility and concurrency
 
@@ -98,13 +115,18 @@ reads process-global committed state independently. The derived row count and
 NDVs therefore share one snapshot, while a concurrent commit may make the
 object metadata slightly newer. This is normal statistics staleness, not a
 mixed uncommitted visibility domain. The physical table ID prevents a
-drop/recreate of the same name from receiving the old observation. The schema
-version carried with that observation also makes a concurrent ALTER or
-drop/re-add of a same-named column fail closed before cache publication. The
-final schema-version comparison and `statsInfoMap` replacement execute while
-the catalog table-change read lock is held. Publication therefore linearizes
-entirely before a concurrent ALTER, or observes the newer version and rejects
-the stale observation; there is no validate-then-ALTER-then-publish window.
+drop/recreate of the same name from receiving the old observation. Current
+identity resolution is tombstone-aware, so a dropped or truncated historical
+row cannot satisfy that check. The schema version carried with the observation
+also makes a concurrent ALTER or drop/re-add of a same-named column fail closed
+before cache publication. The final schema-version comparison and
+`statsInfoMap` plus version-tag replacement execute while the catalog
+table-change read lock is held. Publication therefore linearizes entirely
+before a concurrent ALTER, or observes the newer version and rejects the stale
+observation; there is no validate-then-ALTER-then-publish window. If publication
+wins first and ALTER completes afterward, the old entry may remain available
+to a matching old snapshot, but a new plan's versioned frontend and engine
+reads reject it.
 
 The existing frontend and engine table stripes serialize explicit same-table
 publications. Disttae applies the options while holding the exact refresh
@@ -135,8 +157,9 @@ The acceptance matrix covers:
   identifiers, and duplicate requested identifiers;
 - NDV above row count, retained NDV/NULL counts above a newly exact row count,
   unknown columns, negative/fractional/non-finite result cells, schema-version
-  replacement, malformed result shape, cancellation, refresh failure, and
-  subscription cleanup races;
+  replacement both before and after publication, unversioned remote reads,
+  DROP tombstones, TRUNCATE replacement identities, malformed result shape,
+  cancellation, refresh failure, and subscription cleanup races;
 - multiple tables in one ANALYZE statement and unrelated-table parallelism;
 - pre-existing user transactions, snapshots, views, temporary tables,
   publications, legacy refresh implementations, database remaps, and

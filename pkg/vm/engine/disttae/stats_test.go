@@ -1739,6 +1739,9 @@ func TestRemoveTid(t *testing.T) {
 			gs.mu.statsInfoMap[k1] = plan2.NewStatsInfo()
 			gs.mu.statsInfoMap[k2] = nil // simulate failed update
 			gs.mu.statsInfoMap[k3] = plan2.NewStatsInfo()
+			gs.mu.tableDefVersions[k1] = 7
+			gs.mu.tableDefVersions[k2] = 7
+			gs.mu.tableDefVersions[k3] = 9
 			gs.mu.Unlock()
 			generation := gs.currentOrCreateUpdateRecord(k1)
 			gs.currentOrCreateUpdateRecord(k2)
@@ -1765,10 +1768,17 @@ func TestRemoveTid(t *testing.T) {
 			_, ok1 := gs.mu.statsInfoMap[k1]
 			_, ok2 := gs.mu.statsInfoMap[k2]
 			_, ok3 := gs.mu.statsInfoMap[k3]
+			_, version1 := gs.mu.tableDefVersions[k1]
+			_, version2 := gs.mu.tableDefVersions[k2]
+			version3 := gs.mu.tableDefVersions[k3]
 			gs.mu.Unlock()
 			assert.False(t, ok1, "k1 should be removed")
 			assert.False(t, ok2, "k2 should be removed")
 			assert.True(t, ok3, "k3 should not be removed")
+			assert.False(t, version1, "k1 schema metadata should be removed")
+			assert.False(t, version2, "k2 schema metadata should be removed")
+			assert.Equal(t, uint32(9), version3,
+				"unrelated schema metadata should remain")
 
 			gs.updatingMu.Lock()
 			_, updating1 := gs.updatingMu.updating[k1]
@@ -1924,6 +1934,66 @@ func TestStatsPublicationRejectsStoppedOwnerLifecycle(t *testing.T) {
 		"failed publication must not advance the object-count baseline")
 	require.Equal(t, 0.25, generation.samplingRatio)
 	gs.updatingMu.Unlock()
+}
+
+func TestMetadataRefreshClearsSchemaBoundObservationVersion(t *testing.T) {
+	key := statsinfo.StatsInfoKey{AccId: 1, DatabaseID: 10, TableID: 42}
+	old := plan2.NewStatsInfo()
+	fresh := plan2.NewStatsInfo()
+	generation := &updateRecord{inProgress: true}
+	gs := &GlobalStats{}
+	gs.mu.statsInfoMap = map[statsinfo.StatsInfoKey]*statsinfo.StatsInfo{key: old}
+	gs.mu.tableDefVersions = map[statsinfo.StatsInfoKey]uint32{key: 7}
+	gs.mu.cond = sync.NewCond(&gs.mu)
+	gs.updatingMu.updating = map[statsinfo.StatsInfoKey]*updateRecord{key: generation}
+
+	require.True(t, gs.completeAutomaticStatsCacheUpdate(
+		key, generation, fresh, true))
+	gs.mu.Lock()
+	require.Same(t, fresh, gs.mu.statsInfoMap[key])
+	require.NotContains(t, gs.mu.tableDefVersions, key,
+		"metadata-only statistics are not bound to the ANALYZE schema observation")
+	gs.mu.Unlock()
+}
+
+func TestStatsWaiterRejectsOldSchemaUntilReplacementPublishes(t *testing.T) {
+	key := statsinfo.StatsInfoKey{AccId: 1, DatabaseID: 10, TableID: 42}
+	old := plan2.NewStatsInfo()
+	old.TableCnt = 7
+	fresh := plan2.NewStatsInfo()
+	fresh.TableCnt = 8
+	generation := &updateRecord{inProgress: true}
+	gs := &GlobalStats{}
+	gs.mu.statsInfoMap = map[statsinfo.StatsInfoKey]*statsinfo.StatsInfo{key: old}
+	gs.mu.tableDefVersions = map[statsinfo.StatsInfoKey]uint32{key: 7}
+	gs.mu.cond = sync.NewCond(&gs.mu)
+	gs.updatingMu.updating = map[statsinfo.StatsInfoKey]*updateRecord{key: generation}
+
+	waiting := make(chan struct{})
+	var once sync.Once
+	gs.beforeStatsWait = func(statsinfo.StatsInfoKey, *updateRecord) {
+		once.Do(func() { close(waiting) })
+	}
+	version := uint32(8)
+	done := make(chan *statsinfo.StatsInfo, 1)
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	go func() {
+		done <- gs.waitForStatsUpdate(
+			ctx, key, generation, &version)
+	}()
+	select {
+	case <-waiting:
+	case <-ctx.Done():
+		t.Fatal("version-mismatched waiter did not reach the wait boundary")
+	}
+
+	gs.mu.Lock()
+	gs.mu.statsInfoMap[key] = fresh
+	delete(gs.mu.tableDefVersions, key)
+	gs.mu.cond.Broadcast()
+	gs.mu.Unlock()
+	require.Same(t, fresh, <-done)
 }
 
 func TestGlobalStatsGetDoesNotHoldMuWhileSubscribing(t *testing.T) {
@@ -2527,7 +2597,7 @@ func TestCacheRemoteInfoIfSubscribedBroadcastsWaiters(t *testing.T) {
 			}
 		}, time.Second, 10*time.Millisecond, "waiter did not enter cond.Wait")
 
-		info := gs.cacheRemoteInfoIfSubscribed(key, ent, remoteInfo)
+		info := gs.cacheRemoteInfoIfSubscribed(key, ent, remoteInfo, nil)
 		require.NotNil(t, info)
 		require.Equal(t, remoteInfo, info)
 

@@ -27,6 +27,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/statsinfo"
+	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/util/fault"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/stretchr/testify/require"
@@ -97,6 +98,21 @@ func TestApplyStatsRefreshOptions(t *testing.T) {
 		require.Equal(t, map[string]float64{
 			"url": 3, "kind": 2, "__mo_fake_pk_col": 4,
 		}, stats.NdvMap)
+		require.Equal(t, tableDef.Name, stats.TableName)
+	})
+
+	t.Run("empty table remains a completed usable observation", func(t *testing.T) {
+		rowCount := float64(0)
+		stats := &pb.StatsInfo{}
+		err := applyStatsRefreshOptions(stats, tableDef, engine.StatsRefreshOptions{
+			TableDefVersion: uint32Pointer(7),
+			TableRowCount:   &rowCount,
+			ColumnNDVs:      map[string]float64{"url": 0},
+		})
+		require.NoError(t, err)
+		require.Zero(t, stats.TableCnt)
+		require.Equal(t, tableDef.Name, stats.TableName)
+		require.True(t, plan2.StatsInfoUsable(stats))
 	})
 
 	t.Run("selected NDV is capped and unselected metadata is retained", func(t *testing.T) {
@@ -221,7 +237,7 @@ func TestVersionedStatsPublicationLinearizesWithCatalogChange(t *testing.T) {
 	require.ErrorContains(t, err, "without a catalog cache")
 	require.False(t, published)
 
-	runTest(t, func(_ context.Context, e *Engine) {
+	runTest(t, func(ctx context.Context, e *Engine) {
 		const (
 			databaseID = uint64(1000)
 			tableID    = uint64(1001)
@@ -307,7 +323,19 @@ func TestVersionedStatsPublicationLinearizesWithCatalogChange(t *testing.T) {
 		require.False(t, published)
 		e.globalStats.mu.Lock()
 		require.Same(t, firstStats, e.globalStats.mu.statsInfoMap[key])
+		require.Equal(t, uint32(0), e.globalStats.mu.tableDefVersions[key])
 		e.globalStats.mu.Unlock()
+		require.Same(t, firstStats,
+			e.globalStats.GetAtTableVersion(ctx, key, false, 0))
+		require.Nil(t, e.globalStats.GetAtTableVersion(ctx, key, false, 1),
+			"a plan for the altered schema must not consume the old observation")
+		subscribed := false
+		e.globalStats.beforeSubscribeTable = func(pb.StatsInfoKey) { subscribed = true }
+		require.Nil(t, e.globalStats.Get(ctx, key, false),
+			"a reader without a schema version cannot safely export a bound observation")
+		require.False(t, subscribed,
+			"a non-blocking incompatible read must fail before subscription or remote I/O")
+		e.globalStats.beforeSubscribeTable = nil
 
 		missingKey := key
 		missingKey.TableID++
@@ -322,6 +350,17 @@ func TestVersionedStatsPublicationLinearizesWithCatalogChange(t *testing.T) {
 		)
 		require.NoError(t, err)
 		require.False(t, published)
+
+		secondStats := &pb.StatsInfo{TableCnt: 20}
+		published, err = e.globalStats.publishStatsForGenerationAtTableVersion(
+			key, generation, secondStats, 1,
+		)
+		require.NoError(t, err)
+		require.True(t, published)
+		require.Same(t, secondStats,
+			e.globalStats.GetAtTableVersion(ctx, key, false, 1))
+		require.Nil(t, e.globalStats.GetAtTableVersion(ctx, key, false, 0),
+			"an old snapshot must not consume the replacement observation")
 	})
 }
 

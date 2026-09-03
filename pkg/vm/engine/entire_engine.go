@@ -24,6 +24,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 )
 
+var _ TableVersionedStats = new(EntireEngine)
+
 func (e *EntireEngine) New(ctx context.Context, op client.TxnOperator) error {
 	return e.Engine.New(ctx, op)
 }
@@ -107,6 +109,18 @@ func (e *EntireEngine) PrefetchTableMeta(ctx context.Context, key pb.StatsInfoKe
 }
 
 func (e *EntireEngine) Stats(ctx context.Context, key pb.StatsInfoKey, sync bool) *pb.StatsInfo {
+	return e.Engine.Stats(ctx, key, sync)
+}
+
+func (e *EntireEngine) StatsAtTableVersion(
+	ctx context.Context,
+	key pb.StatsInfoKey,
+	sync bool,
+	tableDefVersion uint32,
+) *pb.StatsInfo {
+	if versioned, ok := e.Engine.(TableVersionedStats); ok {
+		return versioned.StatsAtTableVersion(ctx, key, sync, tableDefVersion)
+	}
 	return e.Engine.Stats(ctx, key, sync)
 }
 

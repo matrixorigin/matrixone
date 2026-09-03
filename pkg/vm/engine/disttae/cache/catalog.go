@@ -341,30 +341,12 @@ func (cc *CatalogCache) GetTableByIdAndTime(accountID uint32, databaseId, tblId 
 	return rel
 }
 
-func (cc *CatalogCache) scanThrough(aid uint32, did uint64, f func(*TableItem) bool) (ret *TableItem) {
-	key := &TableItem{
-		AccountId:  aid,
-		DatabaseId: did,
-	}
-	cc.tables.data.Ascend(key, func(item *TableItem) bool {
-		if item.AccountId != aid || item.DatabaseId != did {
-			return false
-		}
-		// delete entry has incomplete information for tableitem
-		if !item.deleted && f(item) {
-			ret = item
-			return false
-		}
-		return true
-	})
-	return
-}
-
-// GetTableById's complexicity is O(n), where n is the number of all items of the database.
+// GetTableById scans retained catalog versions. A latest DROP tombstone hides
+// every older incarnation of that name, so historical rows cannot make a
+// dropped or truncated table appear current.
 func (cc *CatalogCache) GetTableById(aid uint32, databaseId, tblId uint64) *TableItem {
-	return cc.scanThrough(aid, databaseId, func(item *TableItem) bool {
-		return item.Id == tblId
-	})
+	return cc.GetTableByIdAndTime(
+		aid, databaseId, tblId, types.MaxTs().ToTimestamp())
 }
 
 // WithTableVersion runs fn only when the current table identity still has the
@@ -397,11 +379,29 @@ func (cc *CatalogCache) WithTableVersion(
 	return actualVersion, true, true
 }
 
-// GetTableByName's complexicity is O(n), where n is the number of all items of the database.
+// GetTableByName's complexity is O(log n) plus the newest item lookup. The
+// first item for a name is authoritative; if it is a tombstone, older live
+// rows are historical and must remain hidden.
 func (cc *CatalogCache) GetTableByName(aid uint32, databaseID uint64, tableName string) *TableItem {
-	return cc.scanThrough(aid, databaseID, func(item *TableItem) bool {
-		return item.Name == tableName
+	probe := cc.tableQueryProbePool.Get().(*TableItem)
+	*probe = TableItem{
+		AccountId:  aid,
+		DatabaseId: databaseID,
+		Name:       tableName,
+		Ts:         types.MaxTs().ToTimestamp(),
+	}
+	var current *TableItem
+	cc.tables.data.Ascend(probe, func(item *TableItem) bool {
+		if item.AccountId != aid || item.DatabaseId != databaseID || item.Name != tableName {
+			return false
+		}
+		if !item.deleted {
+			current = item
+		}
+		return false
 	})
+	releaseTableQueryProbe(&cc.tableQueryProbePool, probe)
+	return current
 }
 
 func (cc *CatalogCache) GetTable(tbl *TableItem) bool {

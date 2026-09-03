@@ -2459,7 +2459,8 @@ func publishAnalyzeTableStats(
 	// this table's version invalidates only dependent session entries; unrelated
 	// table statistics and plans remain reusable.
 	version := advanceOptimizerStatsVersion(ses.GetService(), tableKey)
-	ses.cachePublishedStats(tableKey, version, stats)
+	ses.cachePublishedStatsForTableDefVersion(
+		tableKey, version, options.TableDefVersion, stats)
 	return nil
 }
 
@@ -2600,7 +2601,10 @@ func buildAnalyzeDerivedSQL(entry *tree.AnalyzeTableEntry, cols tree.IdentifierL
 		ctx.WriteIdentifier(ident)
 		ctx.WriteByte(')')
 	}
-	ctx.WriteString(",count(*)")
+	if len(cols) > 0 {
+		ctx.WriteByte(',')
+	}
+	ctx.WriteString("count(*)")
 	ctx.WriteString(" from ")
 	entry.Table.Format(ctx)
 	return ctx.String()

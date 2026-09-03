@@ -5499,6 +5499,31 @@ func TestCompilerContextRecordsTheStatsVersionActuallyRead(t *testing.T) {
 		"a plan that read both sides of publication must retain its stale dependency and be rejected")
 }
 
+func TestCompilerContextUsesTableWideStatsBeforeFirstObjectFlush(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+	ses, execCtx := newAnalyzeHandlerTestSession(t, ctrl)
+	isolateOptimizerStatsTest(t, ses)
+
+	const tableID = uint64(42)
+	tableDef := &plan0.TableDef{TblId: tableID, Version: 7}
+	obj := &plan0.ObjectRef{Obj: int64(tableID), SchemaName: "db", ObjName: "events"}
+	key := ses.optimizerStatsKey(tableID)
+	stats := plan.NewStatsInfo()
+	stats.TableCnt = 42
+	version := currentOptimizerStatsVersion(ses.GetService(), key)
+	require.True(t, ses.cacheStatsForTableDefVersionIfCurrent(
+		key, version, &tableDef.Version, stats))
+
+	tcc := ses.GetTxnCompileCtx()
+	tcc.SetExecCtx(execCtx)
+	got, err := tcc.StatsWithTableDef(obj, tableDef, nil)
+	require.NoError(t, err)
+	require.Same(t, stats, got)
+	require.Zero(t, got.AccurateObjectNumber,
+		"the table-wide row count is valid before any object is flushed")
+}
+
 func TestSessionStatsCacheDoesNotAliasSameTableIDAcrossAccounts(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
@@ -5531,6 +5556,41 @@ func TestSessionStatsCacheDoesNotAliasSameTableIDAcrossAccounts(t *testing.T) {
 	wrapper = cache.Get(tableID)
 	require.False(t, wrapper.Exists(),
 		"switching back must not expose statistics from the system account")
+}
+
+func TestSessionStatsCacheDoesNotCrossTableDefVersion(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+	ses, _ := newAnalyzeHandlerTestSession(t, ctrl)
+	isolateOptimizerStatsTest(t, ses)
+
+	const tableID = uint64(42)
+	key := ses.optimizerStatsKey(tableID)
+	stats := plan.NewStatsInfo()
+	stats.TableCnt = 42
+	statsVersion := currentOptimizerStatsVersion(ses.GetService(), key)
+	tableVersion := uint32(7)
+	require.True(t, ses.cacheStatsForTableDefVersionIfCurrent(
+		key, statsVersion, &tableVersion, stats))
+
+	cache, _ := ses.getStatsCacheForTableDefVersion(key, &tableVersion)
+	wrapper := cache.Get(tableID)
+	require.Same(t, stats, wrapper.GetStats())
+	cache, _ = ses.getStatsCacheWithVersion(key)
+	wrapper = cache.Get(tableID)
+	require.False(t, wrapper.Exists(),
+		"a reader without a schema version must not consume bound statistics")
+	require.NotContains(t, ses.statsCacheVersions, tableID)
+
+	require.True(t, ses.cacheStatsForTableDefVersionIfCurrent(
+		key, statsVersion, &tableVersion, stats))
+
+	newTableVersion := uint32(8)
+	cache, _ = ses.getStatsCacheForTableDefVersion(key, &newTableVersion)
+	wrapper = cache.Get(tableID)
+	require.False(t, wrapper.Exists(),
+		"the frontend cache must not bypass the engine's schema-version fence")
+	require.NotContains(t, ses.statsCacheVersions, tableID)
 }
 
 func TestOptimizerStatsVersionsCompactWithoutRevalidatingOldEntries(t *testing.T) {
@@ -5607,14 +5667,20 @@ func TestPublishAnalyzeTableStatsDefinesCacheBoundary(t *testing.T) {
 		gotOptions = options
 		return freshStats, nil
 	})
-	wantOptions := engine.StatsRefreshOptions{ColumnNDVs: map[string]float64{"url": 1_000_000}}
+	tableDefVersion := uint32(7)
+	wantOptions := engine.StatsRefreshOptions{
+		TableDefVersion: &tableDefVersion,
+		ColumnNDVs:      map[string]float64{"url": 1_000_000},
+	}
 
 	require.NoError(t, publishAnalyzeTableStats(ses, execCtx.reqCtx, key, wantOptions, refresher))
 	require.Equal(t, key, gotKey)
 	require.Equal(t, wantOptions, gotOptions)
-	cache, _ := ses.getStatsCacheWithVersion(physicalKey)
+	cache, _ := ses.getStatsCacheForTableDefVersion(physicalKey, &tableDefVersion)
 	wrapper := cache.Get(tableID)
 	require.Same(t, freshStats, wrapper.GetStats())
+	require.Equal(t, tableDefVersion, ses.statsCacheVersions[tableID].tableDefVersion)
+	require.True(t, ses.statsCacheVersions[tableID].tableVersionBound)
 	otherSes.cachePlanWithStatsVersions("compiled before analyze completed",
 		[]tree.Statement{&tree.Select{}}, []*plan0.Plan{dependentPlan}, compileVersions)
 	require.Nil(t, otherSes.getCachedPlan("compiled before analyze completed"),
@@ -5991,6 +6057,11 @@ func TestBuildAnalyzeDerivedSQLQuotesIdentifiers(t *testing.T) {
 	require.Equal(t,
 		"select approx_count_distinct(`select`),approx_count_distinct(`a-b`),approx_count_distinct(`tick``name`),count(*) from `select-db`.`tick``table`",
 		buildAnalyzeDerivedSQL(entry, entry.Cols),
+	)
+	require.Equal(t,
+		"select count(*) from `select-db`.`tick``table`",
+		buildAnalyzeDerivedSQL(entry, nil),
+		"a table with no visible columns must still produce valid internal SQL",
 	)
 }
 
