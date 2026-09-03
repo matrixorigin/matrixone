@@ -20,6 +20,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/container/bytejson"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 )
@@ -690,8 +691,10 @@ func makeMinMaxExecWithLegacyText(
 			return newUTF8mb4BinMinMaxExec(mp, aggID, isMin, param)
 		}
 		return newTextMinMaxExec(mp, aggID, isMin, param)
-	case types.T_blob, types.T_binary, types.T_varbinary, types.T_json, types.T_datalink:
+	case types.T_blob, types.T_binary, types.T_varbinary, types.T_datalink:
 		return newStrMinMaxExec(mp, aggID, isMin, param)
+	case types.T_json:
+		return newJsonMinMaxExec(mp, aggID, isMin, param)
 	case types.T_array_float32, types.T_array_float64:
 		return newArrayMinMaxExec(mp, aggID, isMin, param)
 	}
@@ -789,6 +792,20 @@ func newStrMinMaxExec(mp *mpool.MPool, aggID int64, isMin bool, param types.Type
 		exec.comp = bytes.Compare
 	} else {
 		exec.comp = func(x, y []byte) int { return -bytes.Compare(x, y) }
+	}
+	setupAggInfo(&exec.aggInfo, aggID, param)
+	return &exec
+}
+
+func newJsonMinMaxExec(mp *mpool.MPool, aggID int64, isMin bool, param types.Type) AggFuncExec {
+	var exec minMaxExecBytes
+	exec.mp = mp
+	exec.comp = func(left, right []byte) int {
+		cmp := bytejson.CompareByteJson(types.DecodeJson(left), types.DecodeJson(right))
+		if isMin {
+			return cmp
+		}
+		return -cmp
 	}
 	setupAggInfo(&exec.aggInfo, aggID, param)
 	return &exec

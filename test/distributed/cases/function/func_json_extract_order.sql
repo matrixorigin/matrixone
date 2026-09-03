@@ -92,4 +92,29 @@ SELECT id, json_data
 FROM data_table
 ORDER BY JSON_EXTRACT(json_data, '$.value') DESC;
 
+-- MySQL JSON scalar precedence: null, number, string, object, array,
+-- false, true, date, time, datetime, bit, blob.
+drop table if exists json_order_values;
+create table json_order_values(rank_no int, label varchar(16), j json);
+insert into json_order_values values
+  (0, 'sql-null', null),
+  (1, 'json-null', convert('null', json)),
+  (2, 'number', convert('0', json)),
+  (3, 'string', convert('"x"', json)),
+  (4, 'object', convert('{"a":1}', json)),
+  (5, 'array', convert('[1]', json)),
+  (6, 'false', convert(false, json)),
+  (7, 'true', convert(true, json)),
+  (8, 'date', json_extract(json_array(cast('2024-01-02' as date)), '$[0]')),
+  (9, 'time', json_extract(json_array(cast('10:00:00.1' as time(1))), '$[0]')),
+  (10, 'datetime', json_extract(json_array(cast('2024-01-02 03:04:05.120000' as datetime(6))), '$[0]')),
+  (11, 'bit', json_extract(json_array(cast(b'1' as bit(1))), '$[0]')),
+  (12, 'blob', json_extract(json_array(cast(x'01' as blob)), '$[0]'));
+select rank_no, label, json_type(j) from json_order_values order by rank_no;
+select sum(case when (a.j < b.j) = (a.rank_no < b.rank_no) then 0 else 1 end) as lt_mismatches, sum(case when (a.j = b.j) = (a.rank_no = b.rank_no) then 0 else 1 end) as eq_mismatches, sum(case when (a.j > b.j) = (a.rank_no > b.rank_no) then 0 else 1 end) as gt_mismatches from json_order_values a cross join json_order_values b where a.rank_no > 0 and b.rank_no > 0;
+select rank_no, label from json_order_values order by j asc, rank_no asc;
+select rank_no, label from json_order_values order by j desc, rank_no desc;
+select json_type(min(j)) as min_type, json_type(max(j)) as max_type from json_order_values;
+drop table json_order_values;
+
 drop database if exists test;

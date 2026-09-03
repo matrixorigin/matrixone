@@ -185,20 +185,22 @@ func (bj ByteJson) TYPE() string {
 	}
 }
 
-var jsonTpOrder = map[string]int{
-	"ARRAY":    -1,
-	"OBJECT":   -2,
-	"STRING":   -3,
-	"INTEGER":  -4,
-	"DOUBLE":   -5,
-	"DECIMAL":  -6,
-	"DATE":     -7,
-	"TIME":     -8,
-	"DATETIME": -9,
-	"BLOB":     -10,
-	"BIT":      -10,
-	"LITERAL":  -11,
-}
+type jsonTypeRank byte
+
+const (
+	jsonRankNull jsonTypeRank = iota
+	jsonRankNumber
+	jsonRankString
+	jsonRankObject
+	jsonRankArray
+	jsonRankBoolean
+	jsonRankDate
+	jsonRankTime
+	jsonRankDatetime
+	jsonRankBit
+	jsonRankBlob
+	jsonRankUnknown
+)
 
 type JsonModifyType byte
 
@@ -217,67 +219,161 @@ const (
 )
 
 func CompareByteJson(left, right ByteJson) int {
-	if cmp, ok := CompareBinaryJSON(left, right); ok {
-		return cmp
+	leftBinary := isByteJsonBinary(left.Type)
+	rightBinary := isByteJsonBinary(right.Type)
+	if leftBinary && rightBinary {
+		if !isValidByteJsonStringEncoding(left.Data) || !isValidByteJsonStringEncoding(right.Data) {
+			return compareByteJsonFallback(left, right)
+		}
+		if cmp, ok := CompareBinaryJSON(left, right); ok {
+			return cmp
+		}
 	}
 	if isByteJsonNumeric(left.Type) && isByteJsonNumeric(right.Type) {
-		return compareByteJsonNumeric(left, right)
+		if cmp, ok := CompareNumeric(left, right); ok {
+			return cmp
+		}
+		return compareByteJsonFallback(left, right)
 	}
 
-	order1 := jsonTpOrder[left.TYPE()]
-	order2 := jsonTpOrder[right.TYPE()]
+	leftRank, leftKnown := byteJsonTypeRank(left)
+	rightRank, rightKnown := byteJsonTypeRank(right)
+	if !leftKnown || !rightKnown {
+		return compareByteJsonFallback(left, right)
+	}
+	if leftRank != rightRank {
+		return compareInt64(int64(leftRank), int64(rightRank))
+	}
 
 	var cmp int
-	if order1 == order2 {
-		if order1 == jsonTpOrder["LITERAL"] {
-			cmp = 0
+	switch leftRank {
+	case jsonRankNull:
+		return 0
+	case jsonRankBoolean:
+		return compareInt64(int64(booleanLiteralOrder(left.Data[0])), int64(booleanLiteralOrder(right.Data[0])))
+	case jsonRankString, jsonRankDate, jsonRankTime, jsonRankDatetime:
+		cmp = bytes.Compare(left.GetString(), right.GetString())
+	case jsonRankArray, jsonRankObject:
+		return compareByteJsonContainer(left, right, leftRank)
+	default:
+		return compareByteJsonFallback(left, right)
+	}
+	return cmp
+}
+
+func byteJsonTypeRank(value ByteJson) (jsonTypeRank, bool) {
+	switch value.Type {
+	case TpCodeLiteral:
+		if len(value.Data) == 0 {
+			return jsonRankUnknown, false
 		}
-		switch left.Type {
-		case TpCodeLiteral:
-			cmp = int(left.Data[0]) - int(right.Data[0])
-		case TpCodeString, TpCodeDate, TpCodeTime, TpCodeDatetime:
-			cmp = bytes.Compare(left.GetString(), right.GetString())
-		case TpCodeArray:
-			leftCnt := left.GetElemCnt()
-			rightCnt := right.GetElemCnt()
-			for i := 0; i < leftCnt && i < rightCnt; i++ {
-				elem1 := left.getArrayElem(i)
-				elem2 := right.getArrayElem(i)
-				cmp = CompareByteJson(elem1, elem2)
-				if cmp != 0 {
-					return cmp
-				}
-			}
-			cmp = leftCnt - rightCnt
-		case TpCodeObject:
-			leftCnt := left.GetElemCnt()
-			rightCnt := right.GetElemCnt()
-			cmp = compareInt64(int64(leftCnt), int64(rightCnt))
+		switch value.Data[0] {
+		case LiteralNull:
+			return jsonRankNull, true
+		case LiteralTrue, LiteralFalse:
+			return jsonRankBoolean, true
+		default:
+			return jsonRankUnknown, false
+		}
+	case TpCodeInt64, TpCodeUint64, TpCodeFloat64, TpCodeDecimal:
+		return jsonRankNumber, isValidNumericEncoding(value)
+	case TpCodeString:
+		return jsonRankString, isValidByteJsonStringEncoding(value.Data)
+	case TpCodeObject:
+		return jsonRankObject, isValidByteJsonContainerHeader(value)
+	case TpCodeArray:
+		return jsonRankArray, isValidByteJsonContainerHeader(value)
+	case TpCodeDate:
+		return jsonRankDate, isValidByteJsonStringEncoding(value.Data)
+	case TpCodeTime:
+		return jsonRankTime, isValidByteJsonStringEncoding(value.Data)
+	case TpCodeDatetime:
+		return jsonRankDatetime, isValidByteJsonStringEncoding(value.Data)
+	case TpCodeBit:
+		return jsonRankBit, isValidByteJsonStringEncoding(value.Data)
+	case TpCodeBlob:
+		if !isValidByteJsonStringEncoding(value.Data) {
+			return jsonRankUnknown, false
+		}
+		if _, ok := value.persistedBitPayload(); ok {
+			return jsonRankBit, true
+		}
+		return jsonRankBlob, true
+	case TpCodeOpaque:
+		return jsonRankBlob, isValidByteJsonStringEncoding(value.Data)
+	default:
+		return jsonRankUnknown, false
+	}
+}
+
+func isByteJsonBinary(tp TpCode) bool {
+	return tp == TpCodeBlob || tp == TpCodeOpaque || tp == TpCodeBit
+}
+
+func isValidByteJsonStringEncoding(data []byte) bool {
+	payloadLength, prefixLength := binary.Uvarint(data)
+	return prefixLength > 0 && payloadLength == uint64(len(data)-prefixLength)
+}
+
+func isValidByteJsonContainerHeader(value ByteJson) bool {
+	if len(value.Data) < headerSize {
+		return false
+	}
+	count := uint64(endian.Uint32(value.Data))
+	tableEntrySize := uint64(valEntrySize)
+	if value.Type == TpCodeObject {
+		tableEntrySize += uint64(keyEntrySize)
+	}
+	minimumSize := uint64(headerSize) + count*tableEntrySize
+	documentSize := uint64(endian.Uint32(value.Data[docSizeOff:]))
+	return minimumSize <= documentSize && documentSize <= uint64(len(value.Data))
+}
+
+func compareByteJsonContainer(left, right ByteJson, rank jsonTypeRank) (cmp int) {
+	defer func() {
+		if recover() != nil {
+			cmp = compareByteJsonFallback(left, right)
+		}
+	}()
+
+	leftCnt := left.GetElemCnt()
+	rightCnt := right.GetElemCnt()
+	if rank == jsonRankArray {
+		for i := 0; i < leftCnt && i < rightCnt; i++ {
+			cmp = CompareByteJson(left.getArrayElem(i), right.getArrayElem(i))
 			if cmp != 0 {
 				return cmp
 			}
-			for i := 0; i < leftCnt; i++ {
-				leftKey := left.getObjectKey(i)
-				rightKey := right.getObjectKey(i)
-				cmp = bytes.Compare(leftKey, rightKey)
-				if cmp != 0 {
-					return cmp
-				}
-				cmp = CompareByteJson(left.getObjectVal(i), right.getObjectVal(i))
-				if cmp != 0 {
-					return cmp
-				}
-			}
 		}
-	} else {
-		cmp = order1 - order2
-		if cmp > 0 {
-			cmp = 1
-		} else if cmp < 0 {
-			cmp = -1
+		return leftCnt - rightCnt
+	}
+
+	if cmp = compareInt64(int64(leftCnt), int64(rightCnt)); cmp != 0 {
+		return cmp
+	}
+	for i := 0; i < leftCnt; i++ {
+		if cmp = bytes.Compare(left.getObjectKey(i), right.getObjectKey(i)); cmp != 0 {
+			return cmp
+		}
+		if cmp = CompareByteJson(left.getObjectVal(i), right.getObjectVal(i)); cmp != 0 {
+			return cmp
 		}
 	}
-	return cmp
+	return 0
+}
+
+func booleanLiteralOrder(literal byte) byte {
+	if literal == LiteralFalse {
+		return 0
+	}
+	return 1
+}
+
+func compareByteJsonFallback(left, right ByteJson) int {
+	if left.Type != right.Type {
+		return compareInt64(int64(left.Type), int64(right.Type))
+	}
+	return bytes.Compare(left.Data, right.Data)
 }
 
 func isByteJsonNumeric(tp TpCode) bool {
