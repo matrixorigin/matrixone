@@ -185,9 +185,7 @@ func (a *NDVAccumulator) Merge(other *NDVAccumulator) error {
 	)
 	if a.incidenceErr != nil {
 		clear(a.incidenceCounts)
-	}
-	if a.rowErr != nil && a.incidenceErr != nil {
-		return ErrAccumulatorLimit
+		return a.incidenceErr
 	}
 	return nil
 }
@@ -218,35 +216,43 @@ func mergeValueCounts(
 	return nil
 }
 
-func (a *NDVAccumulator) Estimate(populationNonNull float64) (NDVEstimate, error) {
-	if a == nil || a.blockOpen || a.rowErr != nil {
+func (a *NDVAccumulator) Estimate(
+	populationNonNull float64,
+	blockSample Fraction,
+) (NDVEstimate, error) {
+	if a == nil || a.blockOpen {
 		return NDVEstimate{}, ErrAccumulatorState
 	}
-	singletons := uint64(0)
-	for _, count := range a.rowCounts {
-		if count == 1 {
-			singletons++
-		}
+	if a.incidenceErr != nil {
+		return NDVEstimate{}, a.incidenceErr
 	}
-	incidenceDistinct := uint64(0)
-	incidenceSingletons := uint64(0)
-	incidenceDoubletons := uint64(0)
-	incidenceBlocks := uint64(0)
-	if a.incidenceErr == nil {
-		incidenceBlocks = a.incidenceBlocks
-		incidenceDistinct = uint64(len(a.incidenceCounts))
-		for _, count := range a.incidenceCounts {
-			switch count {
-			case 1:
-				incidenceSingletons++
-			case 2:
-				incidenceDoubletons++
+	sampleRows := a.sampleRows
+	singletons := uint64(0)
+	if a.rowErr == nil {
+		for _, count := range a.rowCounts {
+			if count == 1 {
+				singletons++
 			}
 		}
+	} else {
+		// The row frame is diagnostic for NDV. A complete COLLAPSE frame remains
+		// publishable when this independently bounded frame overflows.
+		sampleRows = 0
 	}
-	observedDistinct := uint64(len(a.rowCounts))
-	if a.incidenceErr == nil {
-		observedDistinct = uint64(len(a.incidenceCounts))
+	incidenceDistinct := uint64(len(a.incidenceCounts))
+	incidenceObservations := uint64(0)
+	incidenceSingletons := uint64(0)
+	for _, count := range a.incidenceCounts {
+		if math.MaxUint64-incidenceObservations < count {
+			return NDVEstimate{}, ErrAccumulatorState
+		}
+		incidenceObservations += count
+		if count == 1 {
+			incidenceSingletons++
+		}
+	}
+	observedDistinct := uint64(len(a.incidenceCounts))
+	if a.rowErr == nil {
 		for value := range a.rowCounts {
 			if _, exists := a.incidenceCounts[value]; !exists {
 				observedDistinct++
@@ -254,15 +260,17 @@ func (a *NDVAccumulator) Estimate(populationNonNull float64) (NDVEstimate, error
 		}
 	}
 	return EstimateSampledNDV(SampledNDVInput{
-		PopulationRows:      populationNonNull,
-		SampleRows:          a.sampleRows,
-		SampleDistinct:      uint64(len(a.rowCounts)),
-		SampleSingletons:    singletons,
-		IncidenceBlocks:     incidenceBlocks,
-		IncidenceDistinct:   incidenceDistinct,
-		IncidenceSingletons: incidenceSingletons,
-		IncidenceDoubletons: incidenceDoubletons,
-		ObservedDistinct:    observedDistinct,
+		PopulationRows:         populationNonNull,
+		SampleRows:             sampleRows,
+		SampleDistinct:         uint64(len(a.rowCounts)),
+		SampleSingletons:       singletons,
+		IncidenceBlocks:        a.incidenceBlocks,
+		IncidenceObservations:  incidenceObservations,
+		IncidenceDistinct:      incidenceDistinct,
+		IncidenceSingletons:    incidenceSingletons,
+		BlockSampleNumerator:   blockSample.Numerator,
+		BlockSampleDenominator: blockSample.Denominator,
+		ObservedDistinct:       observedDistinct,
 	})
 }
 

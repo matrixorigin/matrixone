@@ -19,46 +19,60 @@ import (
 	"math"
 )
 
-const SampledNDVAlgorithmV1 = "NDV_DUJ1_BLOCK_GUARDED_V1"
+const SampledNDVAlgorithmV2 = "NDV_COLLAPSED_BLOCK_DUJ1_V2"
 
 var ErrInvalidNDVInput = errors.New("analyze: invalid sampled NDV input")
 
-// SampledNDVInput is the complete scalar state consumed by the version-one
+// SampledNDVInput is the complete scalar state consumed by the version-two
 // sampled estimator. All counts describe non-null values.
 type SampledNDVInput struct {
-	PopulationRows      float64
-	SampleRows          uint64
-	SampleDistinct      uint64
-	SampleSingletons    uint64
-	IncidenceBlocks     uint64
-	IncidenceDistinct   uint64
-	IncidenceSingletons uint64
-	IncidenceDoubletons uint64
-	ObservedDistinct    uint64
+	PopulationRows         float64
+	SampleRows             uint64
+	SampleDistinct         uint64
+	SampleSingletons       uint64
+	IncidenceBlocks        uint64
+	IncidenceObservations  uint64
+	IncidenceDistinct      uint64
+	IncidenceSingletons    uint64
+	BlockSampleNumerator   uint64
+	BlockSampleDenominator uint64
+	ObservedDistinct       uint64
 }
 
 type NDVEstimate struct {
-	Algorithm       string
-	Point           float64
-	ObservedLower   float64
-	RelationalUpper float64
-	Duj1            float64
-	Incidence       float64
-	HasDuj1         bool
-	HasIncidence    bool
+	Algorithm        string
+	Point            float64
+	ObservedLower    float64
+	RelationalUpper  float64
+	Duj1             float64
+	CollapsedDuj1    float64
+	HasDuj1          bool
+	HasCollapsedDuj1 bool
 }
 
-// EstimateSampledNDV combines the Haas-Stokes Duj1 row-frequency estimate with
-// a guarded Chao incidence estimate. Components are never added: their unseen
-// domains may overlap. The exact union of observed hashes is the lower bound.
+// EstimateSampledNDV applies Haas-Stokes Duj1 to a COLLAPSE frame:
+// repeated occurrences within one sampled block count as one observation.
+// This makes the estimator compatible with block sampling even when values are
+// physically clustered. The row-frequency estimate is diagnostic only: an
+// unavailable COLLAPSE frame must fail closed instead of publishing an estimate
+// whose assumptions do not match block sampling. The union of observed hashes
+// is a lower bound.
 func EstimateSampledNDV(input SampledNDVInput) (NDVEstimate, error) {
+	hasIncidenceState := input.IncidenceBlocks > 0 || input.IncidenceObservations > 0 ||
+		input.IncidenceDistinct > 0 || input.IncidenceSingletons > 0
 	if !finiteNonNegative(input.PopulationRows) ||
 		input.SampleDistinct > input.SampleRows ||
 		input.SampleSingletons > input.SampleDistinct ||
+		input.IncidenceDistinct > input.IncidenceObservations ||
+		(input.IncidenceObservations > 0 && input.IncidenceDistinct == 0) ||
 		input.IncidenceSingletons > input.IncidenceDistinct ||
-		input.IncidenceDoubletons > input.IncidenceDistinct ||
 		input.ObservedDistinct < input.SampleDistinct ||
-		input.ObservedDistinct < input.IncidenceDistinct {
+		input.ObservedDistinct < input.IncidenceDistinct ||
+		(hasIncidenceState && (input.IncidenceBlocks == 0 ||
+			input.BlockSampleNumerator == 0 || input.BlockSampleDenominator == 0 ||
+			input.BlockSampleNumerator > input.BlockSampleDenominator)) ||
+		(input.PopulationRows > 0 && input.IncidenceObservations == 0) ||
+		(!hasIncidenceState && (input.SampleRows > 0 || input.ObservedDistinct > 0)) {
 		return NDVEstimate{}, ErrInvalidNDVInput
 	}
 
@@ -66,7 +80,7 @@ func EstimateSampledNDV(input SampledNDVInput) (NDVEstimate, error) {
 	population := math.Max(input.PopulationRows, observed)
 	population = math.Max(population, float64(input.SampleRows))
 	estimate := NDVEstimate{
-		Algorithm:       SampledNDVAlgorithmV1,
+		Algorithm:       SampledNDVAlgorithmV2,
 		ObservedLower:   observed,
 		RelationalUpper: population,
 	}
@@ -82,25 +96,25 @@ func EstimateSampledNDV(input SampledNDVInput) (NDVEstimate, error) {
 		}
 	}
 
-	if input.IncidenceBlocks >= 2 {
-		m := float64(input.IncidenceBlocks)
-		s := float64(input.IncidenceDistinct)
-		q1 := float64(input.IncidenceSingletons)
-		q2 := float64(input.IncidenceDoubletons)
-		if q2 > 0 {
-			estimate.Incidence = s + ((m-1)/m)*q1*q1/(2*q2)
-		} else {
-			estimate.Incidence = s + ((m-1)/m)*q1*(q1-1)/2
+	if input.IncidenceObservations > 0 {
+		n := float64(input.IncidenceObservations)
+		d := float64(input.IncidenceDistinct)
+		f1 := float64(input.IncidenceSingletons)
+		qBlocks := float64(input.BlockSampleNumerator) /
+			float64(input.BlockSampleDenominator)
+		denominator := n - f1 + f1*qBlocks
+		if denominator > 0 {
+			estimate.CollapsedDuj1 = n * d / denominator
+			estimate.HasCollapsedDuj1 = finiteNonNegative(estimate.CollapsedDuj1)
 		}
-		estimate.HasIncidence = finiteNonNegative(estimate.Incidence)
+		if !estimate.HasCollapsedDuj1 {
+			return NDVEstimate{}, ErrInvalidNDVInput
+		}
 	}
 
 	point := observed
-	if estimate.HasDuj1 {
-		point = math.Max(point, estimate.Duj1)
-	}
-	if estimate.HasIncidence {
-		point = math.Max(point, estimate.Incidence)
+	if estimate.HasCollapsedDuj1 {
+		point = math.Max(point, estimate.CollapsedDuj1)
 	}
 	if !finiteNonNegative(point) {
 		return NDVEstimate{}, ErrInvalidNDVInput

@@ -114,7 +114,7 @@ func (tbl *txnTable) AnalyzeTable(
 	if err != nil {
 		return nil, err
 	}
-	selected, populationBlocks, q, err := selectAnalyzeRanges(
+	selected, populationBlocks, q, qBlocks, err := selectAnalyzeRanges(
 		ranges.GetBlockInfoSlice(), populationRows, request)
 	if err != nil {
 		return nil, err
@@ -180,7 +180,8 @@ func (tbl *txnTable) AnalyzeTable(
 			return nil, moerr.NewInternalErrorNoCtx("ANALYZE sample byte counter overflow")
 		}
 		result.SampleBytes += passBytes
-		if err = finalizeAnalyzeColumns(stats, states, populationRows, passRows); err != nil {
+		if err = finalizeAnalyzeColumns(
+			stats, states, populationRows, passRows, qBlocks); err != nil {
 			return nil, err
 		}
 	}
@@ -242,7 +243,7 @@ func selectAnalyzeRanges(
 	all objectio.BlockInfoSlice,
 	populationRows uint64,
 	request engine.AnalyzeTableRequest,
-) ([]analyzeSelectedRange, uint64, analyzestats.Fraction, error) {
+) ([]analyzeSelectedRange, uint64, analyzestats.Fraction, analyzestats.Fraction, error) {
 	var memory *objectio.BlockInfo
 	persisted := make([]objectio.BlockInfo, 0, all.Len())
 	for i := 0; i < all.Len(); i++ {
@@ -266,15 +267,15 @@ func selectAnalyzeRanges(
 			}
 			rowThreshold, rowAll, err := q.Threshold128()
 			if err != nil {
-				return nil, 0, analyzestats.Fraction{}, err
+				return nil, 0, analyzestats.Fraction{}, analyzestats.Fraction{}, err
 			}
 			selected = append(selected, analyzeSelectedRange{
 				block: *memory, rowThreshold: rowThreshold,
 				rowThresholdAll: rowAll, incidenceAll: true,
 			})
-			return selected, 0, q, nil
+			return selected, 0, q, one, nil
 		}
-		return selected, 0, one, nil
+		return selected, 0, one, one, nil
 	}
 
 	if request.FullScan {
@@ -289,7 +290,7 @@ func selectAnalyzeRanges(
 				block: persisted[i], rowThresholdAll: true, incidenceAll: true,
 			})
 		}
-		return selected, populationBlocks, one, nil
+		return selected, populationBlocks, one, one, nil
 	}
 
 	samplePlan, err := analyzestats.PlanBlockSample(
@@ -304,17 +305,17 @@ func selectAnalyzeRanges(
 		request.Seed,
 	)
 	if err != nil {
-		return nil, 0, analyzestats.Fraction{}, err
+		return nil, 0, analyzestats.Fraction{}, analyzestats.Fraction{}, err
 	}
 	selected := make([]analyzeSelectedRange, 0, len(samplePlan.Blocks)+1)
 	if memory != nil {
 		rowThreshold, rowAll, thresholdErr := samplePlan.Q.Threshold128()
 		if thresholdErr != nil {
-			return nil, 0, analyzestats.Fraction{}, thresholdErr
+			return nil, 0, analyzestats.Fraction{}, analyzestats.Fraction{}, thresholdErr
 		}
 		incidenceThreshold, incidenceAll, thresholdErr := samplePlan.QBlocks.Threshold128()
 		if thresholdErr != nil {
-			return nil, 0, analyzestats.Fraction{}, thresholdErr
+			return nil, 0, analyzestats.Fraction{}, analyzestats.Fraction{}, thresholdErr
 		}
 		selected = append(selected, analyzeSelectedRange{
 			block:        *memory,
@@ -331,7 +332,7 @@ func selectAnalyzeRanges(
 			incidenceAll:       sampled.IncidenceAll,
 		})
 	}
-	return selected, populationBlocks, samplePlan.Q, nil
+	return selected, populationBlocks, samplePlan.Q, samplePlan.QBlocks, nil
 }
 
 func (tbl *txnTable) scanAnalyzeColumnGroup(
@@ -479,18 +480,19 @@ func finalizeAnalyzeColumns(
 	states []analyzeColumnState,
 	populationRows uint64,
 	sampleRows uint64,
+	blockSample analyzestats.Fraction,
 ) error {
 	if populationRows > 0 && sampleRows == 0 {
 		return moerr.NewInternalErrorNoCtx("ANALYZE retained no visible sample rows")
 	}
 	for i := range states {
 		state := &states[i]
-		if state.ndv.RowStateError() != nil {
-			return fmt.Errorf("ANALYZE column %s: %w", state.name, state.ndv.RowStateError())
+		if state.ndv.IncidenceStateError() != nil {
+			return fmt.Errorf("ANALYZE column %s: %w", state.name, state.ndv.IncidenceStateError())
 		}
 		nullCount := scaleSampleRatio(state.sampleNulls, sampleRows, populationRows)
 		populationNonNull := populationRows - min(nullCount, populationRows)
-		estimate, err := state.ndv.Estimate(float64(populationNonNull))
+		estimate, err := state.ndv.Estimate(float64(populationNonNull), blockSample)
 		if err != nil {
 			return fmt.Errorf("ANALYZE column %s NDV: %w", state.name, err)
 		}
@@ -500,8 +502,8 @@ func finalizeAnalyzeColumns(
 			zap.Float64("observed-ndv", estimate.ObservedLower),
 			zap.Float64("duj1", estimate.Duj1),
 			zap.Bool("has-duj1", estimate.HasDuj1),
-			zap.Float64("incidence", estimate.Incidence),
-			zap.Bool("has-incidence", estimate.HasIncidence),
+			zap.Float64("collapsed-duj1", estimate.CollapsedDuj1),
+			zap.Bool("has-collapsed-duj1", estimate.HasCollapsedDuj1),
 			zap.Uint64("sample-rows", sampleRows),
 			zap.Uint64("population-rows", populationRows))
 		stats.NdvMap[state.name] = estimate.Point

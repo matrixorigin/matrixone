@@ -41,18 +41,20 @@ func TestSelectAnalyzeRangesIsBoundedAndDeterministic(t *testing.T) {
 		MaxStrata:  8,
 	}
 
-	first, blocks, q, err := selectAnalyzeRanges(
+	first, blocks, q, qBlocks, err := selectAnalyzeRanges(
 		all, uint64(objectio.BlockMaxRows)*100, request)
 	require.NoError(t, err)
-	second, _, secondQ, err := selectAnalyzeRanges(
+	second, _, secondQ, secondQBlocks, err := selectAnalyzeRanges(
 		all, uint64(objectio.BlockMaxRows)*100, request)
 	require.NoError(t, err)
 	require.Equal(t, uint64(100), blocks)
 	require.Equal(t, first, second)
 	require.Equal(t, q, secondQ)
+	require.Equal(t, qBlocks, secondQBlocks)
 	require.Len(t, first, 9) // eight persisted strata plus the memory marker
 	require.True(t, first[0].block.IsMemBlk())
 	require.Less(t, q.Numerator, q.Denominator)
+	require.Less(t, qBlocks.Numerator, qBlocks.Denominator)
 
 	seen := make(map[types.Blockid]struct{}, len(first)-1)
 	for _, selected := range first[1:] {
@@ -70,7 +72,7 @@ func TestSelectAnalyzeRangesFullscanIncludesEveryRange(t *testing.T) {
 	objectio.SetObjectStatsBlkCnt(stats, 3)
 	objectio.SetObjectStatsRowCnt(stats, objectio.BlockMaxRows*3)
 	all := objectio.ObjectStatsToBlockInfoSlice(stats, true)
-	selected, blocks, q, err := selectAnalyzeRanges(
+	selected, blocks, q, qBlocks, err := selectAnalyzeRanges(
 		all,
 		uint64(objectio.BlockMaxRows)*3,
 		engine.AnalyzeTableRequest{FullScan: true},
@@ -78,6 +80,7 @@ func TestSelectAnalyzeRangesFullscanIncludesEveryRange(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, uint64(3), blocks)
 	require.Equal(t, analyzestats.MustFraction(1, 1), q)
+	require.Equal(t, analyzestats.MustFraction(1, 1), qBlocks)
 	require.Len(t, selected, 4)
 	for _, descriptor := range selected {
 		require.True(t, descriptor.rowThresholdAll)
@@ -102,18 +105,36 @@ func TestFinalizeAnalyzeColumnsUsesVisiblePopulationBounds(t *testing.T) {
 	err := finalizeAnalyzeColumns(stats, []analyzeColumnState{{
 		name: "c", typ: types.T_int64.ToType(), ndv: accumulator,
 		sampleNulls: 1, sampleBytes: 24,
-	}}, 100, 4)
+	}}, 100, 4, analyzestats.MustFraction(1, 2))
 	require.NoError(t, err)
 	require.Equal(t, uint64(25), stats.NullCntMap["c"])
 	require.Equal(t, uint64(600), stats.SizeMap["c"])
-	require.GreaterOrEqual(t, stats.NdvMap["c"], float64(2))
-	require.LessOrEqual(t, stats.NdvMap["c"], float64(75))
+	require.Equal(t, float64(4), stats.NdvMap["c"])
 	require.Equal(t, uint64(types.T_int64), stats.DataTypeMap["c"])
 
 	err = finalizeAnalyzeColumns(plan2.NewStatsInfo(), []analyzeColumnState{{
 		name: "c", typ: types.T_int64.ToType(), ndv: analyzestats.NewNDVAccumulator(1),
-	}}, 1, 0)
+	}}, 1, 0, analyzestats.MustFraction(1, 1))
 	require.Error(t, err)
+}
+
+func TestFinalizeAnalyzeColumnsFailsClosedOnIncidenceOverflow(t *testing.T) {
+	accumulator := analyzestats.NewNDVAccumulator(1)
+	one := analyzestats.HashValue([]byte("one"))
+	two := analyzestats.HashValue([]byte("two"))
+	require.NoError(t, accumulator.ObserveSampleValue(one))
+	require.NoError(t, accumulator.BeginIncidenceBlock())
+	require.NoError(t, accumulator.ObserveIncidenceValue(one))
+	require.ErrorIs(t, accumulator.ObserveIncidenceValue(two), analyzestats.ErrAccumulatorLimit)
+	require.ErrorIs(t, accumulator.EndIncidenceBlock(), analyzestats.ErrAccumulatorLimit)
+
+	stats := plan2.NewStatsInfo()
+	err := finalizeAnalyzeColumns(stats, []analyzeColumnState{{
+		name: "c", typ: types.T_int64.ToType(), ndv: accumulator,
+	}}, 10, 1, analyzestats.MustFraction(1, 2))
+	require.ErrorIs(t, err, analyzestats.ErrAccumulatorLimit)
+	_, published := stats.NdvMap["c"]
+	require.False(t, published)
 }
 
 func TestResolveAnalyzeColumnsRejectsMissingAndDuplicate(t *testing.T) {
