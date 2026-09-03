@@ -47,6 +47,19 @@ type admissionFailureCNHeartbeatClient struct {
 	batch pb.CommandBatch
 }
 
+type recordingCNHeartbeatClient struct {
+	*testHAKClient
+	heartbeat pb.CNStoreHeartbeat
+}
+
+func (c *recordingCNHeartbeatClient) SendCNHeartbeat(
+	_ context.Context,
+	hb pb.CNStoreHeartbeat,
+) (pb.CommandBatch, error) {
+	c.heartbeat = hb
+	return pb.CommandBatch{}, nil
+}
+
 type canceledCNResponseClient struct {
 	*testHAKClient
 	heartbeatEntered chan struct{}
@@ -210,6 +223,31 @@ func Test_heartbeat(t *testing.T) {
 		logger:          logutil.GetPanicLogger(),
 	}
 	sv.heartbeat(ctx)
+}
+
+func TestWithdrawViewMetadataAdmissionPublishesFinalHeartbeat(t *testing.T) {
+	conf := &Config{UUID: "cleanly-stopping-cn"}
+	conf.HAKeeper.HeatbeatTimeout.Duration = time.Second
+	client := &recordingCNHeartbeatClient{testHAKClient: &testHAKClient{cfg: conf}}
+	s := &service{
+		cfg:                             conf,
+		_hakeeperClient:                 client,
+		config:                          util.NewConfigData(nil),
+		viewMetadataAdmissionGeneration: 17,
+		viewMetadataEpochFence:          compile.NewViewMetadataEpochFence(),
+	}
+	require.NoError(t, s.viewMetadataEpochFence.Advance(context.Background(), 3))
+	s.viewMetadataCatalogFencedEpoch.Store(3)
+	s.viewMetadataIngressReady.Store(true)
+
+	require.NoError(t, s.withdrawViewMetadataAdmission())
+	require.False(t, s.viewMetadataIngressReady.Load())
+	require.Equal(t, conf.UUID, client.heartbeat.UUID)
+	require.True(t, client.heartbeat.ViewMetadataAdmissionSupported)
+	require.Equal(t, uint64(17), client.heartbeat.ViewMetadataAdmissionGeneration)
+	require.Equal(t, uint64(3), client.heartbeat.ViewMetadataObservedEpoch)
+	require.Equal(t, uint64(3), client.heartbeat.ViewMetadataCatalogFencedEpoch)
+	require.False(t, client.heartbeat.ViewMetadataIngressReady)
 }
 
 func TestCNCommandPollProgressesWhileHeartbeatIsBlocked(t *testing.T) {

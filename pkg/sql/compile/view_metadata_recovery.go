@@ -1311,11 +1311,13 @@ func (c *Compile) enqueueCurrentDependentViews(mutation viewRelationMutation) er
 }
 
 func (c *Compile) enqueueViewsAfterDatabaseRemoval(
+	databaseName string,
 	accountID uint32,
 	databaseID uint64,
 	generation uint64,
 ) error {
-	if c.proc.GetSessionInfo().IsRestore && !restoreInvalidatesViewMetadata(c.proc.Ctx) {
+	if needSkipDbs[databaseName] ||
+		(c.proc.GetSessionInfo().IsRestore && !restoreInvalidatesViewMetadata(c.proc.Ctx)) {
 		return nil
 	}
 	available, err := c.viewMetadataRefreshAvailable()

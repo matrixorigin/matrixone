@@ -2466,7 +2466,7 @@ func writeExplainResult(
 				sqlMode = &prepared.schedulingSQLMode
 			}
 		}
-		schedulingPreview := previewQuerySchedulingWithSQLMode(
+		schedulingPreview := previewQueryScheduling(
 			reqCtx, ses, exPlan.GetQuery(), txnHaveDDL, rawSQL, sqlMode)
 		appendSchedulingExplain(buffer, schedulingPreview)
 	}
@@ -2493,24 +2493,12 @@ func writeExplainResult(
 	return trySaveQueryResult(reqCtx, ses, mrs)
 }
 
+// previewQueryScheduling owns the production best-effort latency policy: the
+// preview runs under its own schedulingPreviewTimeout so a slow or blocked
+// engine cannot delay the EXPLAIN response. A nil sqlMode means "use the
+// session's current mode". Callers that need to observe the scheduling
+// decision itself use previewQuerySchedulingInContext below.
 func previewQueryScheduling(
-	ctx context.Context,
-	ses *Session,
-	query *plan.Query,
-	txnHaveDDL bool,
-	statementSQL ...string,
-) schedule.Trace {
-	rawSQL := ""
-	if ses != nil {
-		rawSQL = ses.GetSql()
-	}
-	if len(statementSQL) > 0 {
-		rawSQL = statementSQL[0]
-	}
-	return previewQuerySchedulingWithSQLMode(ctx, ses, query, txnHaveDDL, rawSQL, nil)
-}
-
-func previewQuerySchedulingWithSQLMode(
 	ctx context.Context,
 	ses *Session,
 	query *plan.Query,
@@ -2523,9 +2511,24 @@ func previewQuerySchedulingWithSQLMode(
 	}
 	previewCtx, cancel := context.WithTimeout(ctx, schedulingPreviewTimeout)
 	defer cancel()
+	return previewQuerySchedulingInContext(previewCtx, ses, query, txnHaveDDL, rawSQL, sqlMode)
+}
+
+// previewQuerySchedulingInContext computes a preview under the caller-owned
+// context. The frontend wrapper above owns the best-effort latency policy;
+// callers that need to observe the scheduling decision itself can provide a
+// lifecycle context without racing that decision against an unrelated clock.
+func previewQuerySchedulingInContext(
+	ctx context.Context,
+	ses *Session,
+	query *plan.Query,
+	txnHaveDDL bool,
+	rawSQL string,
+	sqlMode *string,
+) schedule.Trace {
 	if ses == nil {
 		return compile.PreviewQueryScheduling(compile.SchedulingPreviewRequest{
-			Context: previewCtx,
+			Context: ctx,
 			Query:   query,
 		})
 	}
@@ -2538,7 +2541,7 @@ func previewQuerySchedulingWithSQLMode(
 		intent = querySchedulingIntentForStatementWithSQLMode(ses, rawSQL, *sqlMode)
 	}
 	return compile.PreviewQueryScheduling(compile.SchedulingPreviewRequest{
-		Context:    previewCtx,
+		Context:    ctx,
 		Query:      query,
 		Engine:     ses.GetTxnHandler().GetStorage(),
 		Process:    ses.GetProc(),
@@ -2878,23 +2881,24 @@ func createPrepareStmtInSession(
 		}
 	}
 
+	fixedIntegerParamPositions, hasPaginationParams, hasLagLeadParams :=
+		preparedFixedIntegerParamPositions(prepareControl.Plan)
 	prepareStmt := &PrepareStmt{
-		Name:               preparePlan.GetDcl().GetPrepare().GetName(),
-		Sql:                originSQL,
-		compile:            comp,
-		PreparePlan:        preparePlan,
-		PrepareStmt:        saveStmt,
-		NativeMode:         owner.sqlModeHasMatrixOneNative(),
-		OnlyFullGroupBy:    owner.sqlModeHasOnlyFullGroupBy(),
-		onlyFullGroupBySet: true,
-		remapDb:            maps.Clone(execCtx.remapDb),
-		defaultDatabase:    executionSes.GetTxnCompileCtx().GetDatabase(),
-		tempTableVersion:   owner.GetTempTableVersion(),
-		ddlVersion:         owner.getDDLVersion(),
-		cloneSQL:           cloneSQL,
-		protocolVersion:    protocolVersion,
-		numericPrefixConsumer: preparedPlanHasNumericPrefixConsumer(
-			prepareControl.Plan, len(prepareControl.ParamTypes)),
+		Name:             preparePlan.GetDcl().GetPrepare().GetName(),
+		Sql:              originSQL,
+		compile:          comp,
+		PreparePlan:      preparePlan,
+		PrepareStmt:      saveStmt,
+		NativeMode:       owner.sqlModeHasMatrixOneNative(),
+		OnlyFullGroupBy:  owner.sqlModeHasOnlyFullGroupBy(),
+		BoolSumAvg:       owner.sqlModeHasEnableBoolSumAvg(),
+		sqlModeFlagsSet:  true,
+		remapDb:          maps.Clone(execCtx.remapDb),
+		defaultDatabase:  executionSes.GetTxnCompileCtx().GetDatabase(),
+		tempTableVersion: owner.GetTempTableVersion(),
+		ddlVersion:       owner.getDDLVersion(),
+		cloneSQL:         cloneSQL,
+		protocolVersion:  protocolVersion,
 		numericOverloadParamPositions: plan2.PreparedPlanNumericFallbackParamPositions(
 			prepareControl.Plan),
 		directResultParamPositions: plan2.PreparedPlanDirectResultParamPositions(
@@ -2902,11 +2906,14 @@ func createPrepareStmtInSession(
 		directResultParamPositionsSet: true,
 		jsonComparisonParamPositions: plan2.PreparedJSONComparisonParamPositions(
 			prepareControl.Plan),
-		hasPaginationParams: plan2.PreparedPlanHasPaginationParams(prepareControl.Plan),
-		hasLagLeadParams:    len(plan2.PreparedLagLeadParamPositions(prepareControl.Plan)) > 0,
-		getFromSendLongData: make(map[int]struct{}),
-		schedulingSQLMode:   schedulingSQLMode,
+		fixedIntegerParamPositions: fixedIntegerParamPositions,
+		hasPaginationParams:        hasPaginationParams,
+		hasLagLeadParams:           hasLagLeadParams,
+		getFromSendLongData:        make(map[int]struct{}),
+		schedulingSQLMode:          schedulingSQLMode,
 	}
+	prepareStmt.refreshNumericPrefixConsumer(
+		prepareControl.Plan, len(prepareControl.ParamTypes))
 	prepareStmt.directResultParamPositions = plan2.PreparedPlanDirectResultParamPositions(prepareControl.Plan)
 	prepareStmt.directResultParamPositionsSet = true
 

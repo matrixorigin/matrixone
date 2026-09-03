@@ -225,6 +225,12 @@ pb: generate-pb
 VERSION_INFO :=-X '$(GO_MODULE)/pkg/version.GoVersion=$(GO_VERSION)' -X '$(GO_MODULE)/pkg/version.BranchName=$(BRANCH_NAME)' -X '$(GO_MODULE)/pkg/version.CommitID=$(LAST_COMMIT_ID)' -X '$(GO_MODULE)/pkg/version.BuildTime=$(BUILD_TIME)' -X '$(GO_MODULE)/pkg/version.Version=$(MO_VERSION)'
 THIRDPARTIES_INSTALL_DIR=$(ROOT_DIR)/thirdparties/install
 CGO_DIR=$(ROOT_DIR)/cgo
+# mo-service links libmo dynamically (-L$(CGO_DIR) -lmo picks the shared
+# library over libmo.a), so libmo is a runtime dependency resolved through
+# the binary's rpath -- $ORIGIN/lib on Linux, @executable_path/lib on macOS.
+# cgo/ is not on that rpath, so libmo must be published into lib/ beside the
+# thirdparty libraries or the built binary cannot start.
+LIBMO_NAME := $(if $(filter darwin,$(UNAME_S)),libmo.dylib,libmo.so)
 JIEBA_DICT_SRC_DIR=$(ROOT_DIR)/pkg/monlp/tokenizer/dict
 RACE_OPT :=
 DEBUG_OPT :=
@@ -303,6 +309,8 @@ endef
 .PHONY: cgo cgo-native-prepare-internal cgo-native-thirdparties-internal
 cgo: cgo-native-thirdparties-internal
 	@(cd cgo; ${MAKE} $(if $(NATIVE_BUILD_JOBS),-j$(NATIVE_BUILD_JOBS)) ${CGO_DEBUG_OPT})
+	@"$(ROOT_DIR)/cgo/mo-stage-native-libs" --file \
+		"$(CGO_DIR)/$(LIBMO_NAME)" "$(ROOT_DIR)/lib/$(LIBMO_NAME)"
 ifeq ($(MO_CL_CUDA),1)
 	@"$(ROOT_DIR)/cgo/mo-stage-native-libs" --file \
 		"$(ROOT_DIR)/cgo/cuda/mocl_kernel64.fatbin" \

@@ -18,6 +18,8 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"net"
+	"sync"
 	"testing"
 	"time"
 
@@ -25,8 +27,77 @@ import (
 	mysqlDriver "github.com/go-sql-driver/mysql"
 	"github.com/stretchr/testify/require"
 
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/embed"
 )
+
+type issue27907ODBCTypeConn struct {
+	net.Conn
+
+	mu                sync.Mutex
+	rewriteParamCount int
+	rewritten         bool
+}
+
+func (c *issue27907ODBCTypeConn) rewriteNextExecute(paramCount int) {
+	c.mu.Lock()
+	c.rewriteParamCount = paramCount
+	c.rewritten = false
+	c.mu.Unlock()
+}
+
+func (c *issue27907ODBCTypeConn) wasRewritten() bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.rewritten
+}
+
+func (c *issue27907ODBCTypeConn) Write(data []byte) (int, error) {
+	c.mu.Lock()
+	if c.rewriteParamCount > 0 {
+		modified := append([]byte(nil), data...)
+		if issue27907RewriteFirstParamAsBlob(modified, c.rewriteParamCount) {
+			data = modified
+			c.rewriteParamCount = 0
+			c.rewritten = true
+		}
+	}
+	c.mu.Unlock()
+	return c.Conn.Write(data)
+}
+
+// issue27907RewriteFirstParamAsBlob reproduces Connector/ODBC's parameter
+// descriptors while retaining the driver's length-encoded string payloads.
+func issue27907RewriteFirstParamAsBlob(data []byte, paramCount int) bool {
+	const (
+		packetHeaderSize = 4
+		stmtExecute      = 0x17
+		executeHeaderLen = 1 + 4 + 1 + 4
+	)
+	if paramCount <= 0 {
+		return false
+	}
+	for pos := 0; pos+packetHeaderSize <= len(data); {
+		payloadLen := int(data[pos]) | int(data[pos+1])<<8 | int(data[pos+2])<<16
+		end := pos + packetHeaderSize + payloadLen
+		if end > len(data) {
+			return false
+		}
+		payload := data[pos+packetHeaderSize : end]
+		nullBitmapLen := (paramCount + 7) / 8
+		newTypesFlagPos := executeHeaderLen + nullBitmapLen
+		typePos := newTypesFlagPos + 1
+		if len(payload) > typePos+1 && payload[0] == stmtExecute &&
+			payload[newTypesFlagPos] == 1 &&
+			(payload[typePos] == byte(defines.MYSQL_TYPE_VAR_STRING) ||
+				payload[typePos] == byte(defines.MYSQL_TYPE_STRING)) {
+			payload[typePos] = byte(defines.MYSQL_TYPE_BLOB)
+			return true
+		}
+		pos = end
+	}
+	return false
+}
 
 func TestIssue25408PreparedPaginationParameters(t *testing.T) {
 	embed.RunBaseClusterTests(t, func(c embed.Cluster) {
@@ -334,6 +405,70 @@ func TestIssue25408PreparedPaginationParameters(t *testing.T) {
 			defer ctas.Close()
 			_, err = ctas.ExecContext(ctx, "1.0")
 			assertMySQLError(t, err, 1210)
+		})
+
+		t.Run("Connector ODBC HAVING and pagination", func(t *testing.T) {
+			var connMu sync.Mutex
+			var wireConn *issue27907ODBCTypeConn
+			mysqlDriver.RegisterDialContext("issue27907odbc", func(ctx context.Context, addr string) (net.Conn, error) {
+				conn, dialErr := (&net.Dialer{}).DialContext(ctx, "tcp", addr)
+				if dialErr != nil {
+					return nil, dialErr
+				}
+				wrapped := &issue27907ODBCTypeConn{Conn: conn}
+				connMu.Lock()
+				wireConn = wrapped
+				connMu.Unlock()
+				return wrapped, nil
+			})
+			defer mysqlDriver.DeregisterDialContext("issue27907odbc")
+			cn, cnErr := c.GetCNService(0)
+			require.NoError(t, cnErr)
+			odbcDB, openErr := sql.Open("mysql", fmt.Sprintf(
+				"dump:111@issue27907odbc(127.0.0.1:%d)/?interpolateParams=false",
+				cn.GetServiceConfig().CN.Frontend.Port))
+			require.NoError(t, openErr)
+			odbcDB.SetMaxOpenConns(1)
+			odbcDB.SetMaxIdleConns(1)
+			defer odbcDB.Close()
+
+			for _, test := range []struct {
+				name string
+				sql  string
+				args []any
+			}{
+				{
+					name: "limit",
+					sql: "select id, sum(id) from " + dbName + ".page group by id " +
+						"having sum(id) > ? order by id limit ?",
+					args: []any{"1", "1"},
+				},
+				{
+					name: "limit offset",
+					sql: "select id, sum(id) from " + dbName + ".page group by id " +
+						"having sum(id) > ? order by id limit ? offset ?",
+					args: []any{"0", "1", "1"},
+				},
+			} {
+				t.Run(test.name, func(t *testing.T) {
+					stmt, prepareErr := odbcDB.PrepareContext(ctx, test.sql)
+					require.NoError(t, prepareErr)
+					defer stmt.Close()
+
+					connMu.Lock()
+					capturedConn := wireConn
+					connMu.Unlock()
+					require.NotNil(t, capturedConn)
+					capturedConn.rewriteNextExecute(len(test.args))
+
+					var id, total int
+					require.NoError(t, stmt.QueryRowContext(ctx, test.args...).Scan(&id, &total))
+					require.Equal(t, 2, id)
+					require.Equal(t, 2, total)
+					require.True(t, capturedConn.wasRewritten(),
+						"test did not send MYSQL_TYPE_BLOB for the HAVING parameter")
+				})
+			}
 		})
 
 		for index, paginationSQL := range []string{

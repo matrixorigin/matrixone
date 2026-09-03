@@ -1107,7 +1107,7 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindReplace(
 		lastNodeID, err = builder.appendOnDupIrregularMaintSource(
 			bindCtx, lastNodeID, finalProjTag, replaceOldPkPos, replaceOldPkTyp,
 			-1, -1,
-			irregularIndexes, tableDef, objRef)
+			irregularIndexes, nil, -1, tableDef, objRef)
 		if err != nil {
 			return 0, err
 		}
@@ -1123,7 +1123,7 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindReplace(
 			BindingTags: []int32{finalProjTag},
 			LockTargets: lockTargets,
 		}, bindCtx)
-		applySharedLockTableFallback(builder)
+		applyLockTableFallback(builder)
 	}
 
 	if len(replaceOldParentPos) > 0 {
@@ -1150,7 +1150,7 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindReplace(
 			builder.preserveLockProjection = make(map[int32]struct{})
 		}
 		builder.preserveLockProjection[lockedSourceID] = struct{}{}
-		applySharedLockTableFallback(builder)
+		applyLockTableFallback(builder)
 
 		sharedSinkID := appendSinkNode(builder, bindCtx, lockedSourceID)
 		builder.preserveSinkProjection[sharedSinkID] = struct{}{}
