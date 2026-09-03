@@ -28,16 +28,16 @@ group by g order by g;
 1  ¦  17
 select g, count(*) as d
 from (
-    select distinct result % 2 as g, concat('v', result % 17) as v
-    from generate_series(1, 300)
+select distinct result % 2 as g, concat('v', result % 17) as v
+from generate_series(1, 300)
 ) oracle
 group by g order by g;
 ➤ g[-5,64,0]  ¦  d[-5,64,0]  𝄀
 0  ¦  17  𝄀
 1  ¦  17
 select result % 3 as g,
-       count(distinct result % 10,
-             case when result % 7 = 0 then null else result % 5 end) as d
+count(distinct result % 10,
+case when result % 7 = 0 then null else result % 5 end) as d
 from generate_series(1, 300)
 group by g order by g;
 ➤ g[-5,64,0]  ¦  d[-5,64,0]  𝄀
@@ -45,7 +45,7 @@ group by g order by g;
 1  ¦  10  𝄀
 2  ¦  10
 select result % 4 as g, count(*) as rows, sum(result) as total,
-       count(distinct result % 11) as d
+count(distinct result % 11) as d
 from generate_series(1, 300)
 group by g order by g;
 ➤ g[-5,64,0]  ¦  rows[-5,64,0]  ¦  total[-5,64,0]  ¦  d[-5,64,0]  𝄀
@@ -76,8 +76,8 @@ group by g order by g;
 0  ¦  17  𝄀
 1  ¦  17
 select result % 3 as g,
-       count(distinct result % 10,
-             case when result % 7 = 0 then null else result % 5 end) as d
+count(distinct result % 10,
+case when result % 7 = 0 then null else result % 5 end) as d
 from generate_series(1, 300)
 group by g order by g;
 ➤ g[-5,64,0]  ¦  d[-5,64,0]  𝄀
@@ -85,7 +85,7 @@ group by g order by g;
 1  ¦  10  𝄀
 2  ¦  10
 select result % 4 as g, count(*) as rows, sum(result) as total,
-       count(distinct result % 11) as d
+count(distinct result % 11) as d
 from generate_series(1, 300)
 group by g order by g;
 ➤ g[-5,64,0]  ¦  rows[-5,64,0]  ¦  total[-5,64,0]  ¦  d[-5,64,0]  𝄀
