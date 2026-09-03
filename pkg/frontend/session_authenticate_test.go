@@ -419,6 +419,83 @@ func TestAuthenticateUserWaitsForLogtailBarrierBeforeBackgroundTransaction(t *te
 	require.True(t, gotCancellable)
 }
 
+func TestAuthenticateSpecialUserSnapshotBoundary(t *testing.T) {
+	const userName = "issue27743-special-user"
+	SetSpecialUser(userName, []byte("Issue27743Pass01"))
+	t.Cleanup(func() {
+		specialUsers.Lock()
+		delete(specialUsers.users, userName)
+		specialUsers.Unlock()
+	})
+
+	t.Run("external special user waits for barrier", func(t *testing.T) {
+		ses := newAuthenticationSnapshotTestSession(t, 100, 20*time.Nanosecond)
+		moruntime.ServiceRuntime(ses.GetService()).SetGlobalVariables(
+			moruntime.MOProtocolVersion, defines.MORPCVersion39)
+		barrierFrontier := timestamp.Timestamp{PhysicalTime: 80, LogicalTime: 7}
+		ctrl := gomock.NewController(t)
+		txnClient := mock_frontend.NewMockTxnClient(ctrl)
+		barrierCompleted := false
+		txnClient.EXPECT().WaitLogTailAppliedAt(gomock.Any(), barrierFrontier).
+			DoAndReturn(func(context.Context, timestamp.Timestamp) (timestamp.Timestamp, error) {
+				require.True(t, barrierCompleted)
+				return barrierFrontier, nil
+			})
+		setPu(ses.GetService(), &mo_config.ParameterUnit{
+			TxnClient: txnClient,
+			StorageEngine: &authenticationBarrierEngine{acquire: func(context.Context) (
+				timestamp.Timestamp, error,
+			) {
+				barrierCompleted = true
+				return barrierFrontier, nil
+			}},
+		})
+
+		_, err := ses.AuthenticateUser(
+			t.Context(), userName, "", nil, nil,
+			func([]byte, []byte, []byte) bool { return false },
+		)
+		require.NoError(t, err)
+		require.True(t, barrierCompleted)
+		require.Equal(t, barrierFrontier, ses.getLastCommitTS())
+	})
+
+	t.Run("external special user fails closed", func(t *testing.T) {
+		ses := newAuthenticationSnapshotTestSession(t, 100, 20*time.Nanosecond)
+		moruntime.ServiceRuntime(ses.GetService()).SetGlobalVariables(
+			moruntime.MOProtocolVersion, defines.MORPCVersion39)
+		wantErr := moerr.NewInternalErrorNoCtx("barrier unavailable")
+		setPu(ses.GetService(), &mo_config.ParameterUnit{
+			TxnClient: mock_frontend.NewMockTxnClient(gomock.NewController(t)),
+			StorageEngine: &authenticationBarrierEngine{acquire: func(context.Context) (
+				timestamp.Timestamp, error,
+			) {
+				return timestamp.Timestamp{}, wantErr
+			}},
+		})
+
+		_, err := ses.AuthenticateUser(
+			t.Context(), userName, "", nil, nil,
+			func([]byte, []byte, []byte) bool { return false },
+		)
+		require.ErrorIs(t, err, wantErr)
+	})
+
+	t.Run("internal special user keeps bootstrap path", func(t *testing.T) {
+		ses := &Session{
+			feSessionImpl: feSessionImpl{service: "issue27743-internal-special-user"},
+			isInternal:    true,
+		}
+
+		_, err := ses.AuthenticateUser(
+			t.Context(), userName, "", nil, nil,
+			func([]byte, []byte, []byte) bool { return false },
+		)
+		require.NoError(t, err)
+		require.True(t, ses.getLastCommitTS().IsEmpty())
+	})
+}
+
 func TestResolveImplicitDefaultRole(t *testing.T) {
 	const (
 		userID   = int64(42)
