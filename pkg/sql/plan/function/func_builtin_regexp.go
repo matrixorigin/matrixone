@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"fmt"
 	"regexp"
+	"slices"
 	"strings"
 	"unicode"
 	"unicode/utf8"
@@ -25,6 +26,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/util"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -59,7 +61,7 @@ func (op *opBuiltInRegexp) likeFn(parameters []*vector.Vector, result vector.Fun
 	uniformBinary, perRow := stringDomainMode(parameters[0])
 	if uniformBinary || perRow {
 		return op.likeByStringDomain(
-			parameters, result, length, selectList, uniformBinary, perRow,
+			parameters, result, proc, length, selectList, uniformBinary, perRow,
 			[]byte{byte(DefaultEscapeChar)}, true)
 	}
 
@@ -135,7 +137,7 @@ func (op *opBuiltInRegexp) likeFnWithEscape(
 	uniformBinary, perRow := stringDomainMode(parameters[0])
 	if !caseInsensitive && (uniformBinary || perRow) {
 		return op.likeByStringDomain(
-			parameters[:2], result, length, selectList, uniformBinary, perRow,
+			parameters[:2], result, proc, length, selectList, uniformBinary, perRow,
 			escapeBytes, escapeEnabled)
 	}
 	if !escapeIsNull && (!utf8.Valid(escapeBytes) || utf8.RuneCount(escapeBytes) > 1) {
@@ -153,6 +155,7 @@ func (op *opBuiltInRegexp) likeFnWithEscape(
 func (op *opBuiltInRegexp) likeByStringDomain(
 	parameters []*vector.Vector,
 	result vector.FunctionResultWrapper,
+	proc *process.Process,
 	length int,
 	selectList *FunctionSelectList,
 	uniformBinary, perRow bool,
@@ -162,6 +165,10 @@ func (op *opBuiltInRegexp) likeByStringDomain(
 	values := vector.GenerateFunctionStrParameter(parameters[0])
 	patterns := vector.GenerateFunctionStrParameter(parameters[1])
 	rs := vector.MustFunctionResult[bool](result)
+	constantPattern := parameters[1].IsConst()
+	compiledPattern := &compiledByteLikePattern{mp: proc.Mp()}
+	compiledPatternReady := false
+	defer compiledPattern.free()
 	for row := uint64(0); row < uint64(length); row++ {
 		if functionRowSkipped(selectList, row) {
 			if err := rs.Append(false, true); err != nil {
@@ -183,7 +190,13 @@ func (op *opBuiltInRegexp) likeByStringDomain(
 			if escapeEnabled && len(escapeBytes) != 1 {
 				return moerr.NewInvalidInputNoCtx("Incorrect arguments to ESCAPE")
 			}
-			matched = byteLike(pattern, value, escapeBytes, escapeEnabled)
+			if !constantPattern || !compiledPatternReady {
+				if err = compiledPattern.reset(pattern, escapeBytes, escapeEnabled); err != nil {
+					return err
+				}
+				compiledPatternReady = true
+			}
+			matched = compiledPattern.match(value)
 		} else {
 			if !utf8.Valid(escapeBytes) || utf8.RuneCount(escapeBytes) > 1 {
 				return moerr.NewInvalidInputNoCtx("Incorrect arguments to ESCAPE")
@@ -211,69 +224,30 @@ const (
 	byteLikeAny
 )
 
-// Fast paths are linear in value plus pattern size. Patterns which cannot use
-// them are matched by a bit-parallel NFA: it scans value once, never backtracks,
-// and uses one bit per pattern state.
-func byteLike(pattern, value, escape []byte, escapeEnabled bool) bool {
-	valueAt, patternAt := 0, 0
-	for valueAt < len(value) {
-		if patternAt >= len(pattern) {
-			return false
-		}
-		kind, literal, nextPattern := nextByteLikeToken(pattern, patternAt, escape, escapeEnabled)
-		switch {
-		case kind == byteLikeOne:
-			valueAt++
-			patternAt = nextPattern
-		case kind == byteLikeLiteral && len(literal) <= len(value)-valueAt &&
-			bytes.Equal(value[valueAt:valueAt+len(literal)], literal):
-			valueAt += len(literal)
-			patternAt = nextPattern
-		case kind == byteLikeAny:
-			if matched, terminal := matchTerminalByteLikeSuffix(
-				pattern, nextPattern, value, valueAt, escape, escapeEnabled); terminal {
-				return matched
-			}
-			if skipped, literal, nextAny, ok := nextByteLikeSkippedLiteralSegment(
-				pattern, nextPattern, escape, escapeEnabled); ok && len(literal) > 0 {
-				searchAt := valueAt + skipped
-				if searchAt > len(value) {
-					return false
-				}
-				index := bytes.Index(value[searchAt:], literal)
-				if index < 0 {
-					return false
-				}
-				valueAt = searchAt + index + len(literal)
-				patternAt = nextAny
-				continue
-			}
-			if literal, nextAny, ok := nextRawByteLikeLiteralRun(
-				pattern, nextPattern, escape, escapeEnabled); ok && len(literal) > 0 {
-				index := bytes.Index(value[valueAt:], literal)
-				if index < 0 {
-					return false
-				}
-				valueAt += index + len(literal)
-				patternAt = nextAny
-				continue
-			}
-			return byteLikeNFA(pattern, value, escape, escapeEnabled)
-		default:
-			return false
-		}
-	}
-	for patternAt < len(pattern) {
-		kind, _, nextPattern := nextByteLikeToken(pattern, patternAt, escape, escapeEnabled)
-		if kind != byteLikeAny {
-			return false
-		}
-		patternAt = nextPattern
-	}
-	return true
+type compiledByteLikePattern struct {
+	storage  []byte
+	kinds    []byte
+	literals []byte
+	mp       *mpool.MPool
 }
 
-func byteLikeNFA(pattern, value, escape []byte, escapeEnabled bool) bool {
+func compileByteLikePattern(
+	pattern, escape []byte,
+	escapeEnabled bool,
+	mp *mpool.MPool,
+) (*compiledByteLikePattern, error) {
+	compiled := &compiledByteLikePattern{mp: mp}
+	if err := compiled.reset(pattern, escape, escapeEnabled); err != nil {
+		compiled.free()
+		return nil, err
+	}
+	return compiled, nil
+}
+
+func (compiled *compiledByteLikePattern) reset(
+	pattern, escape []byte,
+	escapeEnabled bool,
+) error {
 	tokenCount := 0
 	previousAny := false
 	for at := 0; at < len(pattern); {
@@ -288,154 +262,177 @@ func byteLikeNFA(pattern, value, escape []byte, escapeEnabled bool) bool {
 		previousAny = kind == byteLikeAny
 		at = next
 	}
+	storageSize := tokenCount * 2
+	if cap(compiled.storage) < storageSize {
+		storage, err := compiled.mp.Grow(compiled.storage, storageSize, true)
+		if err != nil {
+			return err
+		}
+		compiled.storage = storage
+	}
+	compiled.storage = compiled.storage[:storageSize]
+	compiled.kinds = compiled.storage[:tokenCount]
+	compiled.literals = compiled.storage[tokenCount:]
 
-	words := (tokenCount + 1 + 63) / 64
-	oneMask := make([]uint64, words)
-	anyMask := make([]uint64, words)
-	var literalMasks [256][]uint64
 	position := 0
 	previousAny = false
 	for at := 0; at < len(pattern); {
 		kind, literal, next := nextByteLikeToken(pattern, at, escape, escapeEnabled)
-		switch {
-		case kind == byteLikeAny:
-			if !previousAny {
-				anyMask[position/64] |= uint64(1) << (position % 64)
-				position++
-			}
-		case kind == byteLikeOne:
-			oneMask[position/64] |= uint64(1) << (position % 64)
-			position++
-		default:
-			for _, b := range literal {
-				if literalMasks[b] == nil {
-					literalMasks[b] = make([]uint64, words)
+		if kind != byteLikeAny || !previousAny {
+			if kind == byteLikeLiteral {
+				for _, b := range literal {
+					compiled.kinds[position] = byteLikeLiteral
+					compiled.literals[position] = b
+					position++
 				}
-				literalMasks[b][position/64] |= uint64(1) << (position % 64)
+			} else {
+				compiled.kinds[position] = kind
 				position++
 			}
 		}
 		previousAny = kind == byteLikeAny
 		at = next
 	}
-
-	active := make([]uint64, words)
-	next := make([]uint64, words)
-	active[0] = 1
-	byteLikeAnyClosure(active, anyMask)
-	for _, b := range value {
-		clear(next)
-		literalMask := literalMasks[b]
-		for word := range active {
-			matched := active[word] & oneMask[word]
-			if literalMask != nil {
-				matched |= active[word] & literalMask[word]
-			}
-			next[word] |= matched << 1
-			if word+1 < words {
-				next[word+1] |= matched >> 63
-			}
-			next[word] |= active[word] & anyMask[word]
-		}
-		byteLikeAnyClosure(next, anyMask)
-		active, next = next, active
-	}
-	return active[tokenCount/64]&(uint64(1)<<(tokenCount%64)) != 0
+	return nil
 }
 
-func byteLikeAnyClosure(states, anyMask []uint64) {
-	for word := range states {
-		anyStates := states[word] & anyMask[word]
-		states[word] |= anyStates << 1
-		if word+1 < len(states) {
-			states[word+1] |= anyStates >> 63
-		}
-	}
-}
-
-func matchTerminalByteLikeSuffix(
-	pattern []byte,
-	patternAt int,
-	value []byte,
-	minimumValueAt int,
-	escape []byte,
+func byteLike(
+	pattern, value, escape []byte,
 	escapeEnabled bool,
-) (bool, bool) {
-	consumed := 0
-	for at := patternAt; at < len(pattern); {
-		kind, literal, next := nextByteLikeToken(pattern, at, escape, escapeEnabled)
-		if kind == byteLikeAny {
-			return false, false
+	mp *mpool.MPool,
+) (bool, error) {
+	compiled, err := compileByteLikePattern(pattern, escape, escapeEnabled, mp)
+	if err != nil {
+		return false, err
+	}
+	defer compiled.free()
+	return compiled.match(value), nil
+}
+
+func (compiled *compiledByteLikePattern) free() {
+	if compiled != nil && compiled.storage != nil {
+		compiled.mp.Free(compiled.storage)
+		compiled.storage = nil
+		compiled.kinds = nil
+		compiled.literals = nil
+	}
+}
+
+func (compiled *compiledByteLikePattern) match(value []byte) bool {
+	if len(compiled.kinds) == 0 {
+		return len(value) == 0
+	}
+	firstAny := slices.Index(compiled.kinds, byteLikeAny)
+	if firstAny < 0 {
+		return len(value) == len(compiled.kinds) && compiled.matchSegmentAt(0, len(compiled.kinds), value, 0)
+	}
+
+	cursor := 0
+	segmentAt := 0
+	if firstAny > 0 {
+		if len(value) < firstAny || !compiled.matchSegmentAt(0, firstAny, value, 0) {
+			return false
 		}
-		if kind == byteLikeOne {
-			consumed++
+		cursor = firstAny
+		segmentAt = firstAny
+	}
+	for segmentAt < len(compiled.kinds) && compiled.kinds[segmentAt] == byteLikeAny {
+		segmentAt++
+	}
+
+	lastAny := len(compiled.kinds) - 1
+	for compiled.kinds[lastAny] != byteLikeAny {
+		lastAny--
+	}
+	suffixAt := len(compiled.kinds)
+	searchLimit := len(value)
+	if lastAny < len(compiled.kinds)-1 {
+		suffixAt = lastAny + 1
+		suffixLength := len(compiled.kinds) - suffixAt
+		if suffixLength > len(value)-cursor {
+			return false
+		}
+		searchLimit = len(value) - suffixLength
+		if !compiled.matchSegmentAt(suffixAt, len(compiled.kinds), value, searchLimit) {
+			return false
+		}
+	}
+
+	for segmentAt < suffixAt {
+		segmentEnd := slices.Index(compiled.kinds[segmentAt:suffixAt], byteLikeAny)
+		if segmentEnd < 0 {
+			segmentEnd = suffixAt
 		} else {
-			consumed += len(literal)
+			segmentEnd += segmentAt
 		}
-		at = next
-	}
-	if consumed > len(value)-minimumValueAt {
-		return false, true
-	}
-	valueAt := len(value) - consumed
-	for at := patternAt; at < len(pattern); {
-		kind, literal, next := nextByteLikeToken(pattern, at, escape, escapeEnabled)
-		if kind == byteLikeOne {
-			valueAt++
-		} else if len(literal) > len(value)-valueAt ||
-			!bytes.Equal(value[valueAt:valueAt+len(literal)], literal) {
-			return false, true
-		} else {
-			valueAt += len(literal)
+		matchAt := compiled.findSegment(segmentAt, segmentEnd, value, cursor, searchLimit)
+		if matchAt < 0 {
+			return false
 		}
-		at = next
+		cursor = matchAt + segmentEnd - segmentAt
+		segmentAt = segmentEnd
+		for segmentAt < suffixAt && compiled.kinds[segmentAt] == byteLikeAny {
+			segmentAt++
+		}
 	}
-	return true, true
+	return cursor <= searchLimit
 }
 
-func nextByteLikeSkippedLiteralSegment(
-	pattern []byte,
-	at int,
-	escape []byte,
-	escapeEnabled bool,
-) (skipped int, literal []byte, nextAny int, ok bool) {
-	for at < len(pattern) {
-		kind, _, next := nextByteLikeToken(pattern, at, escape, escapeEnabled)
-		if kind != byteLikeOne {
-			break
+func (compiled *compiledByteLikePattern) matchSegmentAt(start, end int, value []byte, valueAt int) bool {
+	if end-start > len(value)-valueAt {
+		return false
+	}
+	for patternAt := start; patternAt < end; patternAt++ {
+		if compiled.kinds[patternAt] == byteLikeLiteral &&
+			compiled.literals[patternAt] != value[valueAt+patternAt-start] {
+			return false
 		}
-		skipped++
-		at = next
 	}
-	if skipped == 0 {
-		return 0, nil, 0, false
-	}
-	literal, nextAny, ok = nextRawByteLikeLiteralRun(pattern, at, escape, escapeEnabled)
-	return skipped, literal, nextAny, ok
+	return true
 }
 
-func nextRawByteLikeLiteralRun(
-	pattern []byte,
-	at int,
-	escape []byte,
-	escapeEnabled bool,
-) ([]byte, int, bool) {
-	start := at
-	for at < len(pattern) {
-		if escapeEnabled && len(escape) > 0 && len(escape) <= len(pattern)-at &&
-			bytes.Equal(pattern[at:at+len(escape)], escape) {
-			return nil, 0, false
+func (compiled *compiledByteLikePattern) findSegment(start, end int, value []byte, from, limit int) int {
+	segmentLength := end - start
+	if segmentLength > limit-from {
+		return -1
+	}
+	anchorStart, anchorEnd := compiled.longestLiteralRun(start, end)
+	if anchorStart == anchorEnd {
+		return from
+	}
+	anchor := compiled.literals[anchorStart:anchorEnd]
+	anchorOffset := anchorStart - start
+	searchAt := from + anchorOffset
+	lastAnchorAt := limit - segmentLength + anchorOffset
+	for searchAt <= lastAnchorAt {
+		found := bytes.Index(value[searchAt:lastAnchorAt+len(anchor)], anchor)
+		if found < 0 {
+			return -1
 		}
-		switch pattern[at] {
-		case '_':
-			return nil, 0, false
-		case '%':
-			return pattern[start:at], at, true
-		default:
+		candidate := searchAt + found - anchorOffset
+		if compiled.matchSegmentAt(start, end, value, candidate) {
+			return candidate
+		}
+		searchAt += found + 1
+	}
+	return -1
+}
+
+func (compiled *compiledByteLikePattern) longestLiteralRun(start, end int) (bestStart, bestEnd int) {
+	for at := start; at < end; {
+		if compiled.kinds[at] != byteLikeLiteral {
+			at++
+			continue
+		}
+		runStart := at
+		for at < end && compiled.kinds[at] == byteLikeLiteral {
 			at++
 		}
+		if at-runStart > bestEnd-bestStart {
+			bestStart, bestEnd = runStart, at
+		}
 	}
-	return pattern[start:at], at, true
+	return bestStart, bestEnd
 }
 
 func nextByteLikeToken(pattern []byte, at int, escape []byte, escapeEnabled bool) (kind byte, literal []byte, next int) {

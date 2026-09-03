@@ -103,7 +103,7 @@ MySQL 会在部分 text-subject + invalid binary auxiliary coercion 上执行 ch
 
 逐行 executor 的顺序是：读取同一 logical row（const wrapper 自行映射 row 0）→ NULL/mask 判断 → 选择 subject domain → checked sizing/direct writer → append value → 批量安装 runtime domain。任何错误返回时仍由现有 FunctionResult owner 释放；不增加 unaccounted full-result buffer。
 
-`LIKE` 的 normal text fast path和 regexp cache保留；只有可能出现 binary/mixed subject 时使用 byte wildcard matcher。Binary matcher按 byte解析 `%`、`_` 和现有 escape contract，不能把 value/pattern转成 rune。terminal suffix、纯 literal run，以及 `%` 后 `_` run + literal segment 使用无分配线性 fast path；其余通用模式使用 bit-parallel NFA，对 value单向扫描且不回溯，时间上界为 `O(valueBytes * ceil(patternTokens/64))`，空间上界为 `O(distinctLiteralBytes * ceil(patternTokens/64))`。性能保护不得把合法 LIKE结果转换成 SQL error。
+`LIKE` 的 normal text fast path和 regexp cache保留；只有可能出现 binary/mixed subject 时使用 byte wildcard matcher。Binary matcher按 byte解析 `%`、`_` 和现有 escape contract，不能把 value/pattern转成 rune。pattern先编译为紧凑 token stream，再按 `%` 分成固定长度 segment；prefix/suffix锚定，中间 segment以最长 literal run作为 Two-Way search anchor并从单调 value cursor寻找最早合法 alignment，不再执行 value × patternWords NFA。constant pattern每 batch只编译一次，dynamic row复用同一 scratch容量。编译存储固定为至多 `2 * normalizedPatternTokens`，由 process MPool off-heap申请并传播 admission failure；不存在 distinct-byte倍增或逐行 Go heap masks。性能保护不得把合法 LIKE结果转换成 SQL error。
 
 ## 6. Metadata 与 materialization closure
 
@@ -139,7 +139,7 @@ MySQL 会在部分 text-subject + invalid binary auxiliary coercion 上执行 ch
 | length/ORD/position | focused executor UT：text/binary最近控制、empty/NULL、0/1/-1/越界、4-byte UTF-8、invalid bytes |
 | slice/reverse/case/trim | table UT：static text + runtime binary、static binary + runtime text、mixed rows、const与mask |
 | insert/pad/replace | direct-writer UT：byte/rune unit、invalid bytes、result limit与已有 #27218 width controls |
-| LIKE | matcher UT + executor mixed-row UT：`_` 的 character/byte差异、`%`、escape、invalid bytes、reviewer adversarial fast-path benchmark、late valid alignment NFA UT/BVT及 benchmark；REGEXP测试不改 |
+| LIKE | matcher UT + executor mixed-row UT：`_` 的 character/byte差异、`%`、escape、invalid bytes、独立 DP exhaustive oracle、late valid alignment segment UT/BVT、64KB constant-pattern多行复用、MPool failure与规模 benchmark；REGEXP测试不改 |
 | result provenance | nested consumer UT：变换结果再进 `CHAR_LENGTH`；无 metadata fast path断言不分配 sidecar |
 | CHARSET/COLLATION | static type table UT；runtime mixed override不改变名称；legacy fallback控制 |
 | information_schema/CTAS | internal metadata UT + public BVT，核对 binary/general-ci/utf8mb4-bin |
