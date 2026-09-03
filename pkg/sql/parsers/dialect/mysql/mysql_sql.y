@@ -14246,6 +14246,7 @@ name_confict:
 |   REPEAT
 |   REPLACE
 |   REVERSE
+|   RESPECT
 |   RIGHT
 |   ROW_COUNT
 |   SECOND

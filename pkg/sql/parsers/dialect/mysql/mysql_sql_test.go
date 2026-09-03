@@ -894,6 +894,11 @@ func TestValueWindowDefaultModifiers(t *testing.T) {
 			sql:       "select respect from t",
 			canonical: "select respect from t",
 		},
+		{
+			name:      "RESPECT remains a generic function name",
+			sql:       "select respect()",
+			canonical: "select respect()",
+		},
 	}
 
 	for _, testCase := range testCases {
