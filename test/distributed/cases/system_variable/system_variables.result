@@ -236,7 +236,7 @@ character_octet_length  ¦  BIGINT(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 numeric_precision  ¦  BIGINT(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 numeric_scale  ¦  BIGINT(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 datetime_precision  ¦  BIGINT(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-character_set_name  ¦  VARCHAR(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+character_set_name  ¦  VARCHAR(6)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 collation_name  ¦  VARCHAR(8)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 column_type  ¦  VARCHAR(65535)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 column_key  ¦  VARCHAR(3)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
@@ -260,7 +260,7 @@ table_name  ¦  VARCHAR(5000)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 view_definition  ¦  TEXT(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 check_option  ¦  VARCHAR(4)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
 is_updatable  ¦  VARCHAR(3)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
-definer  ¦  VARCHAR(65535)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+definer  ¦  VARCHAR(401)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 security_type  ¦  VARCHAR(7)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
 character_set_client  ¦  VARCHAR(7)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
 collation_connection  ¦  VARCHAR(18)  ¦  NO  ¦    ¦  null  ¦    ¦  

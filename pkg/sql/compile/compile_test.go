@@ -92,6 +92,41 @@ func TestHasOrderedGroupConcat(t *testing.T) {
 	require.False(t, hasOrderedGroupConcat(ordered))
 }
 
+func TestCompileMongoDBQueryDiagnosticsAreRedacted(t *testing.T) {
+	for _, sql := range []string{
+		`select * from mongo_events where __mo_query = '{"filter":{"password":"super-secret-value"}}'`,
+		`select * from mongo_events where __MO_QUERY = '{"pipeline":[{"$match":{"api_key":"super-secret-value"}}]}'`,
+	} {
+		t.Run(sql[:20], func(t *testing.T) {
+			proc := testutil.NewProcess(t)
+			ctrl := gomock.NewController(t)
+			_, txnOp := newTestTxnClientAndOp(ctrl)
+			proc.Base.TxnOperator = txnOp
+			compile := NewCompile("test", "test", sql, "", "", nil, proc, nil, false, nil, time.Now())
+			t.Cleanup(compile.Release)
+
+			compile.SetOriginSQL(sql)
+			for _, diagnostic := range []string{compile.sql, compile.originSQL} {
+				require.Equal(t, "<redacted MongoDB __mo_query statement>", diagnostic)
+				require.NotContains(t, diagnostic, "password")
+				require.NotContains(t, diagnostic, "api_key")
+				require.NotContains(t, diagnostic, "super-secret-value")
+			}
+
+			info, err := proc.BuildProcessInfo(compile.sql)
+			require.NoError(t, err)
+			diagnostic := info.String()
+			require.Contains(t, diagnostic, "redacted MongoDB")
+			require.NotContains(t, diagnostic, "password")
+			require.NotContains(t, diagnostic, "api_key")
+			require.NotContains(t, diagnostic, "super-secret-value")
+
+			require.NoError(t, compile.Reset(proc, time.Now(), nil, sql))
+			require.Equal(t, "<redacted MongoDB __mo_query statement>", compile.sql)
+		})
+	}
+}
+
 func TestFilterScanStorageExprsExcludesVolatilePredicates(t *testing.T) {
 	randFn, err := function.GetFunctionByName(context.Background(), "rand", nil)
 	require.NoError(t, err)

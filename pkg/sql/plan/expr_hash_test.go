@@ -671,6 +671,73 @@ func TestApplyDistributivityFindsJoinKeyBesideTernaryPredicate(t *testing.T) {
 	require.Equal(t, "or", conjuncts[1].GetF().Func.ObjName)
 }
 
+func TestApplyDistributivityFactorsCommonWideningCharPredicate(t *testing.T) {
+	ctx := context.Background()
+	intType := planpb.Type{Id: int32(types.T_int64)}
+	intCol := func(rel, pos int32) *planpb.Expr {
+		return &planpb.Expr{Typ: intType, Expr: &planpb.Expr_Col{
+			Col: &planpb.ColRef{RelPos: rel, ColPos: pos},
+		}}
+	}
+	bind := func(name string, args ...*planpb.Expr) *planpb.Expr {
+		expr, err := BindFuncExprImplByPlanExpr(ctx, name, args)
+		require.NoError(t, err)
+		return expr
+	}
+
+	joinKey := bind("=", intCol(0, 0), intCol(1, 0))
+	shipInstructType := planpb.Type{
+		Id:      int32(types.T_char),
+		Width:   25,
+		Charset: uint32(types.CharsetUTF8),
+	}
+	shipInstructCol := &planpb.Expr{Typ: shipInstructType, Expr: &planpb.Expr_Col{
+		Col: &planpb.ColRef{RelPos: 1, ColPos: 1},
+	}}
+	wideningCharLiteral := func(value string, target planpb.Type) *planpb.Expr {
+		literal, err := makePlan2CastExpr(
+			ctx, makePlan2StringConstExprWithType(value), target,
+		)
+		require.NoError(t, err)
+		return literal
+	}
+	commonShipInstruct := bind("=", shipInstructCol,
+		wideningCharLiteral("DELIVER IN PERSON", shipInstructType))
+	shipModeType := planpb.Type{
+		Id: int32(types.T_char), Width: 10, Charset: uint32(types.CharsetUTF8),
+	}
+	shipModeCol := &planpb.Expr{Typ: shipModeType, Expr: &planpb.Expr_Col{
+		Col: &planpb.ColRef{RelPos: 1, ColPos: 2},
+	}}
+	shipModes := &planpb.Expr{
+		Typ: planpb.Type{Id: int32(types.T_tuple)},
+		Expr: &planpb.Expr_List{List: &planpb.ExprList{List: []*planpb.Expr{
+			wideningCharLiteral("AIR", shipModeType),
+			wideningCharLiteral("AIR REG", shipModeType),
+		}}},
+	}
+	commonShipMode := bind("in", shipModeCol, shipModes)
+	leftOnly := bind("=", intCol(0, 2), intCol(1, 2))
+	rightOnly := bind("=", intCol(0, 3), intCol(1, 3))
+	branch := func(unique *planpb.Expr) *planpb.Expr {
+		return bind("and",
+			bind("and",
+				bind("and", DeepCopyExpr(joinKey), DeepCopyExpr(commonShipInstruct)),
+				DeepCopyExpr(commonShipMode)),
+			unique)
+	}
+	orExpr := bind("or", branch(leftOnly), branch(rightOnly))
+
+	result := applyDistributivity(ctx, orExpr)
+	conjuncts := splitPlanConjunction(result)
+	require.Len(t, conjuncts, 4)
+	require.True(t, exprStructuralEqual(joinKey, conjuncts[0]),
+		"the common equality must become a visible join key")
+	require.True(t, exprStructuralEqual(commonShipInstruct, conjuncts[1]))
+	require.True(t, exprStructuralEqual(commonShipMode, conjuncts[2]))
+	require.Equal(t, "or", conjuncts[3].GetF().Func.ObjName)
+}
+
 func TestApplyDistributivityKeepsSingleTableDNFForKeyFolding(t *testing.T) {
 	ctx := context.Background()
 	intType := planpb.Type{Id: int32(types.T_int64)}
