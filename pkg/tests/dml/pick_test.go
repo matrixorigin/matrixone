@@ -57,6 +57,9 @@ func TestDataBranchPick(t *testing.T) {
 			t.Run("conflict_policies", func(t *testing.T) {
 				runPickConflictMatrix(t, ctx, sqlDB)
 			})
+			t.Run("accept_mixed_update_and_insert", func(t *testing.T) {
+				runPickAcceptMixedUpdateAndInsert(t, ctx, sqlDB)
+			})
 			t.Run("subquery_keys", func(t *testing.T) {
 				runPickSubqueryKeys(t, ctx, sqlDB)
 			})
@@ -328,6 +331,26 @@ func runPickConflictMatrix(t *testing.T, parentCtx context.Context, db *sql.DB) 
 			}
 		})
 	}
+}
+
+func runPickAcceptMixedUpdateAndInsert(t *testing.T, parentCtx context.Context, db *sql.DB) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(parentCtx, 90*time.Second)
+	defer cancel()
+
+	defer cleanupPickCaseTables(t, db)
+
+	execSQLDB(t, ctx, db, "create table base (a int primary key, b int)")
+	execSQLDB(t, ctx, db, "insert into base values (1,10),(2,20)")
+	execSQLDB(t, ctx, db, "data branch create table src from base")
+	execSQLDB(t, ctx, db, "data branch create table dst from base")
+	execSQLDB(t, ctx, db, "update src set b=11 where a=1")
+	execSQLDB(t, ctx, db, "insert into src values (3,30)")
+	execSQLDB(t, ctx, db, "update dst set b=99 where a=1")
+
+	execSQLDB(t, ctx, db, "data branch pick src into dst keys(1,3) when conflict accept")
+	require.Equal(t, [][]string{{"1", "11"}, {"2", "20"}, {"3", "30"}},
+		queryStringRows(t, ctx, db, "select a, b from dst order by a"))
 }
 
 // runPickSubqueryKeys: use a SELECT subquery to specify which PKs to pick.

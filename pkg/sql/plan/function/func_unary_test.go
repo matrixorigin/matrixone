@@ -903,6 +903,35 @@ func TestQuote(t *testing.T) {
 	}
 }
 
+func TestQuoteHonorsSelectList(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	for _, test := range []struct {
+		name       string
+		selectList *FunctionSelectList
+		nulls      []bool
+	}{
+		{
+			name:       "partial mask",
+			selectList: &FunctionSelectList{AnyNull: true, SelectList: []bool{true, false}},
+			nulls:      []bool{false, true},
+		},
+		{
+			name:       "all rows masked",
+			selectList: &FunctionSelectList{AnyNull: true, AllNull: true, SelectList: []bool{false, false}},
+			nulls:      []bool{true, true},
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			fcTC := NewFunctionTestCase(proc, []FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(), []string{"a", "b"}, nil),
+			}, NewFunctionTestResult(types.T_varchar.ToType(), false, []string{"'a'", ""}, test.nulls), Quote).
+				WithSelectList(test.selectList)
+			ok, info := fcTC.Run()
+			require.True(t, ok, info)
+		})
+	}
+}
+
 // SOUNDEX
 func initSoundexTestCase() []tcTemp {
 	return []tcTemp{
