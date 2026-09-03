@@ -174,20 +174,20 @@ func addOverflowFilterChunks[B, OB cuvs.VectorType](
 }
 
 // Load implements cache.VectorIndexSearchIf: loads metadata then index data from the database.
-// Preload is deliberately a no-op for now, so this algorithm keeps today's load behaviour
-// exactly while the Preload/Load split lands. The measurement it would move here --
-// FetchArtifact + cuvs.MeasureTar -- is already split out of the load in loadIndexes, but it is
-// INTERLEAVED with the device gate on purpose: the running aggregate is re-checked after each
-// tar so a CAGRA index that cannot fit is refused as soon as the total says so, instead of
-// after downloading the remaining gigabytes. Hoisting the measurement into Preload means either
-// losing that early abort or running the gate twice, which is a decision of its own and is
-// tracked separately.
+// Preload reads the metadata, fetches every sub-index artifact, and runs the device admission
+// gate -- everything up to the first deserialize. Afterwards GetIndexSize reports the arena split
+// cuvs.MeasureTar measured, so the cache can reclaim room for this index before Load claims it.
 //
-// Until then GetIndexSize reports 0 before Load, so the governor reclaims for this algorithm
-// after the fact rather than ahead of it -- the same position ivfflat is in.
-func (s *CagraSearch[B, Q]) Preload(sqlproc *sqlexec.SqlProcess) error { return nil }
-
-func (s *CagraSearch[B, Q]) Load(sqlproc *sqlexec.SqlProcess) (err error) {
+// The gate stays HERE, interleaved with the fetch loop, rather than moving to Load: the running
+// aggregate is re-checked after each tar so a CAGRA index that cannot fit is refused as soon as
+// the total says so, instead of after downloading the remaining gigabytes. That early abort is
+// worth more than letting the gate see the room the governor is about to free, and it keeps the
+// gate running exactly once.
+//
+// On refusal the deferred cleanup in admitIndexes removes the tars this call fetched. Past the
+// gate they are owned by s.Indexes, and Destroy removes them if the load is abandoned before or
+// during Load -- CagraModel[B, Q].Destroy releases the tar as well as the GPU handle.
+func (s *CagraSearch[B, Q]) Preload(sqlproc *sqlexec.SqlProcess) (err error) {
 	indexes, err := LoadMetadata[B, Q](sqlproc, s.Tblcfg.DbName, s.Tblcfg.MetadataTable)
 	if err != nil {
 		return err
@@ -196,21 +196,39 @@ func (s *CagraSearch[B, Q]) Load(sqlproc *sqlexec.SqlProcess) (err error) {
 		// This algorithm's own fraction, not the governor default: IVF-PQ claims at
 		// 65% (ivf_pq_cost::kBudgetPercent), so a gate left on 75% would admit an
 		// index the very first deserialize then refuses.
-		indexes, err = s.loadIndexes(sqlproc, indexes, cuvs.BudgetFor(s.Idxcfg.Type))
-		if err != nil {
+		if err = s.admitIndexes(sqlproc, indexes, cuvs.BudgetFor(s.Idxcfg.Type)); err != nil {
 			return err
 		}
 	}
+	// From here the artifacts are owned by s: Destroy is what releases them.
 	s.Indexes = indexes
-	// From here the GPU sub-indexes are owned by s. If a later step fails, the
-	// cache drops the entry WITHOUT calling Destroy (see VectorIndexCache.Search),
-	// and there is no finalizer, so release them here to avoid orphaning GPU
-	// memory on every failed load. Destroy is idempotent and safe on partial state.
+	return nil
+}
+
+func (s *CagraSearch[B, Q]) Load(sqlproc *sqlexec.SqlProcess) (err error) {
+	// Preload normally ran already; a caller that skipped it still gets a correct load.
+	if s.Indexes == nil {
+		if err = s.Preload(sqlproc); err != nil {
+			return err
+		}
+	}
+	// If any step below fails, the cache drops the entry WITHOUT calling Destroy (see
+	// VectorIndexCache.Search), and there is no finalizer, so release the sub-indexes here to
+	// avoid orphaning GPU memory and fetched tars on every failed load. Destroy is idempotent
+	// and safe on partial state.
 	defer func() {
 		if err != nil {
 			s.Destroy()
 		}
 	}()
+
+	// Deserialize onto the GPU. Past the gate in Preload, and past the cache's reclaim.
+	for _, idx := range s.Indexes {
+		idx.Devices = s.Devices
+		if err = idx.LoadIndex(sqlproc, s.Idxcfg, s.Tblcfg, s.ThreadsSearch, true); err != nil {
+			return err
+		}
+	}
 	if err = s.loadCdcTail(sqlproc); err != nil {
 		return err
 	}
@@ -533,8 +551,8 @@ func (s *CagraSearch[B, Q]) buildMultiIndex() (*cuvs.MultiGpuCagra[B, Q], error)
 // -- the short-circuit is the whole point of checking per tar, and a version that
 // fetched them all would otherwise still pass every assertion. Production passes
 // cuvs.BudgetFor, the same value the CREATE gate is given.
-func (s *CagraSearch[B, Q]) loadIndexes(sqlproc *sqlexec.SqlProcess, indexes []*CagraModel[B, Q],
-	budget memory.DeviceBudget) ([]*CagraModel[B, Q], error) {
+func (s *CagraSearch[B, Q]) admitIndexes(sqlproc *sqlexec.SqlProcess, indexes []*CagraModel[B, Q],
+	budget memory.DeviceBudget) error {
 	// Fetch, admit, and only then load. Splitting the download from the load is
 	// what lets the gate see the SAME quantity CREATE checked: the device-resident
 	// components of each packed artifact, measured with cuvs.MeasureTar and reduced
@@ -570,14 +588,14 @@ func (s *CagraSearch[B, Q]) loadIndexes(sqlproc *sqlexec.SqlProcess, indexes []*
 		if len(idx.Path) == 0 {
 			fetched, ferr := idx.FetchArtifact(sqlproc, s.Tblcfg)
 			if ferr != nil {
-				return nil, ferr
+				return ferr
 			}
 			idx.Path = fetched
 			fetchedHere = append(fetchedHere, idx)
 		}
 		sizes, merr := cuvs.MeasureTar(idx.Path)
 		if merr != nil {
-			return nil, merr
+			return merr
 		}
 		device := make(map[string]int64, len(sizes.Files))
 		for name, sz := range sizes.Files {
@@ -610,23 +628,14 @@ func (s *CagraSearch[B, Q]) loadIndexes(sqlproc *sqlexec.SqlProcess, indexes []*
 			memory.PerDeviceDemand(participants, comps),
 			len(comps), len(indexes), budget,
 		); err != nil {
-			return nil, err
+			return err
 		}
 	}
 
 	// Past the gate the loads own the tars; the cleanup above must not race them.
 	admitted = true
 
-	for _, idx := range indexes {
-		idx.Devices = s.Devices
-		if err := idx.LoadIndex(sqlproc, s.Idxcfg, s.Tblcfg, s.ThreadsSearch, true); err != nil {
-			for _, idx2 := range indexes {
-				idx2.Destroy()
-			}
-			return nil, err
-		}
-	}
-	return indexes, nil
+	return nil
 }
 
 // Destroy implements cache.VectorIndexSearchIf.

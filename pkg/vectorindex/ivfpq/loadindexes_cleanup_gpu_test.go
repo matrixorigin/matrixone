@@ -49,7 +49,7 @@ func (b testBudget) RowsFitting(dev int, perRow uint64) (int64, uint64, error) {
 	return b.rows(dev, perRow)
 }
 
-// tempArtifacts lists the fetch scratch files loadIndexes creates. FetchArtifact
+// tempArtifacts lists the fetch scratch files admitIndexes creates. FetchArtifact
 // uses os.CreateTemp("", "ivfpq"), so a leaked download is visible by name.
 func tempArtifacts(t *testing.T) map[string]bool {
 	t.Helper()
@@ -62,7 +62,7 @@ func tempArtifacts(t *testing.T) map[string]bool {
 	return out
 }
 
-// loadIndexes downloads every sub-index BEFORE it admits the aggregate, so between
+// admitIndexes downloads every sub-index BEFORE it admits the aggregate, so between
 // the first fetch and the gate it owns N tars that nothing else will ever remove:
 // Load returns on error before it assigns s.Indexes or arms its deferred Destroy.
 //
@@ -119,9 +119,9 @@ func TestLoadIndexesRemovesFetchedTarsOnError(t *testing.T) {
 	t.Cleanup(s.Destroy)
 
 	// Every scratch tar this load created is gone. A survivor here is the leak:
-	// nothing downstream of loadIndexes ever sees these paths.
+	// nothing downstream of admitIndexes ever sees these paths.
 	for p := range tempArtifacts(t) {
-		require.True(t, before[p], "loadIndexes leaked the fetched artifact %s", p)
+		require.True(t, before[p], "admitIndexes leaked the fetched artifact %s", p)
 	}
 }
 
@@ -191,7 +191,7 @@ func TestLoadIndexesStopsFetchingOnceOverBudget(t *testing.T) {
 	require.NoError(t, lerr)
 	require.Len(t, indexes, len(ids))
 
-	_, err = s.loadIndexes(sqlproc, indexes, testBudget{rows: rowsFitting})
+	err = s.admitIndexes(sqlproc, indexes, testBudget{rows: rowsFitting})
 	require.Error(t, err, "two sub-indexes exceed the budget, so the load must be refused")
 	require.Contains(t, err.Error(), "at least",
 		"a refusal on a partial aggregate must not state its figure as the whole index")
@@ -199,7 +199,7 @@ func TestLoadIndexesStopsFetchingOnceOverBudget(t *testing.T) {
 
 	// The point of the change: the third tar was never downloaded.
 	require.Equal(t, 2, fetches,
-		"loadIndexes must stop at the sub-index that broke the budget, not fetch all %d", len(ids))
+		"admitIndexes must stop at the sub-index that broke the budget, not fetch all %d", len(ids))
 
 	// And the two it did fetch are gone -- an early return owns its downloads.
 	for _, idx := range indexes {
