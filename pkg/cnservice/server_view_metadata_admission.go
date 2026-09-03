@@ -28,8 +28,9 @@ import (
 )
 
 const (
-	viewMetadataAdmissionGenerationKey    = "view-metadata-admission-generation"
-	viewMetadataCatalogFenceRetryInterval = time.Second
+	viewMetadataAdmissionGenerationKey        = "view-metadata-admission-generation"
+	viewMetadataCatalogFenceInitialRetryDelay = 250 * time.Millisecond
+	viewMetadataCatalogFenceMaxRetryDelay     = 5 * time.Second
 )
 
 func (s *service) initViewMetadataAdmission(ctx context.Context) error {
@@ -114,6 +115,9 @@ func (s *service) applyViewMetadataAdmission(
 	copy := *snapshot
 	s.viewMetadataAdmission.Store(&copy)
 	s.notifyViewMetadataAdmissionUpdated()
+	if s.viewMetadataCatalogFenceStartupWaiting.Load() {
+		return nil
+	}
 	if err := s.fenceViewMetadataCatalog(ctx, &copy); err != nil &&
 		!viewMetadataCatalogUpgradePending(err) {
 		return err
@@ -215,6 +219,26 @@ func viewMetadataCatalogUpgradePending(err error) bool {
 		(moErr.ErrorCode() == moerr.ErrNoSuchTable || moErr.ErrorCode() == moerr.ErrBadDB)
 }
 
+func viewMetadataCatalogFenceRetryDelay(serviceID string, attempt uint32) time.Duration {
+	delay := viewMetadataCatalogFenceInitialRetryDelay
+	for remaining := attempt; remaining > 0 && delay < viewMetadataCatalogFenceMaxRetryDelay/2; remaining-- {
+		delay *= 2
+	}
+
+	// Stable per-CN jitter spreads transactions across a bounded ±20% window
+	// without introducing a process-global random source into startup tests.
+	hash := uint64(14695981039346656037)
+	for i := range len(serviceID) {
+		hash ^= uint64(serviceID[i])
+		hash *= 1099511628211
+	}
+	hash ^= uint64(attempt)
+	hash *= 1099511628211
+	jitterWindow := delay / 5
+	jitter := time.Duration(hash%uint64(2*jitterWindow+1)) - jitterWindow
+	return delay + jitter
+}
+
 func (s *service) waitForViewMetadataAdmission() error {
 	if s.viewMetadataAdmissionGeneration == 0 {
 		// Focused unit tests can construct a partial service. Production
@@ -225,10 +249,26 @@ func (s *service) waitForViewMetadataAdmission() error {
 	if timeout <= 0 {
 		timeout = 30 * time.Second
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	discoveryCtx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
-	catalogRetryTicker := time.NewTicker(viewMetadataCatalogFenceRetryInterval)
-	defer catalogRetryTicker.Stop()
+
+	operationCtx := discoveryCtx
+	var upgradeResult <-chan error
+	if s.bootstrapUpgradeContext != nil {
+		operationCtx = s.bootstrapUpgradeContext
+		upgradeResult = s.bootstrapUpgradeResult
+	}
+	s.viewMetadataCatalogFenceStartupWaiting.Store(true)
+	defer s.viewMetadataCatalogFenceStartupWaiting.Store(false)
+
+	catalogRetryTimer := time.NewTimer(time.Hour)
+	if !catalogRetryTimer.Stop() {
+		<-catalogRetryTimer.C
+	}
+	defer catalogRetryTimer.Stop()
+	var catalogRetryAttempt uint32
+	var catalogPendingEpoch uint64
+	catalogRetryReady := true
 
 	for {
 		snapshot := s.viewMetadataAdmission.Load()
@@ -237,39 +277,110 @@ func (s *service) waitForViewMetadataAdmission() error {
 		}
 		if snapshot != nil && snapshot.Generation != s.viewMetadataAdmissionGeneration {
 			return moerr.NewInternalErrorf(
-				ctx,
+				operationCtx,
 				"CN %s admission generation was superseded: local=%d authoritative=%d",
 				s.cfg.UUID,
 				s.viewMetadataAdmissionGeneration,
 				snapshot.Generation)
 		}
 		if snapshot != nil && snapshot.Epoch > 0 && s.viewMetadataEpochFence.Epoch() < snapshot.Epoch {
-			if err := s.viewMetadataEpochFence.Advance(ctx, snapshot.Epoch); err != nil {
-				return moerr.AttachCause(ctx, err)
+			if err := s.viewMetadataEpochFence.Advance(operationCtx, snapshot.Epoch); err != nil {
+				return moerr.AttachCause(operationCtx, err)
 			}
 		}
+
+		catalogPending := false
 		var catalogRetry <-chan time.Time
-		if err := s.fenceViewMetadataCatalog(ctx, snapshot); err != nil {
+		var catalogEpoch uint64
+		if snapshot != nil {
+			catalogEpoch = snapshot.Epoch
+		}
+		catalogFenceStillPending := snapshot != nil && snapshot.RevalidationRequired && catalogEpoch > 0 &&
+			snapshot.CatalogFencedEpoch < catalogEpoch &&
+			s.viewMetadataCatalogFencedEpoch.Load() < catalogEpoch
+		if !catalogRetryReady && catalogFenceStillPending && catalogEpoch == catalogPendingEpoch {
+			// A heartbeat may refresh the same admission snapshot while the
+			// catalog is unavailable. Process authority changes immediately, but
+			// do not let that notification bypass the catalog backoff.
+			catalogPending = true
+			catalogRetry = catalogRetryTimer.C
+		} else if err := s.fenceViewMetadataCatalog(operationCtx, snapshot); err != nil {
 			if !viewMetadataCatalogUpgradePending(err) {
-				return moerr.AttachCause(ctx, err)
+				select {
+				case upgradeErr := <-upgradeResult:
+					if upgradeErr != nil {
+						return upgradeErr
+					}
+				default:
+				}
+				return moerr.AttachCause(operationCtx, err)
 			}
+			catalogPending = true
+			if catalogEpoch != catalogPendingEpoch {
+				catalogRetryAttempt = 0
+			}
+			catalogPendingEpoch = catalogEpoch
+			catalogRetryReady = false
 			// BootstrapUpgrade owns creating the lifecycle catalog asynchronously.
 			// Keep ingress closed and retry without requiring a new admission
 			// heartbeat after that transaction becomes visible.
-			catalogRetry = catalogRetryTicker.C
-		} else if snapshot != nil && snapshot.Admitted {
-			return nil
+			if !catalogRetryTimer.Stop() {
+				select {
+				case <-catalogRetryTimer.C:
+				default:
+				}
+			}
+			catalogRetryTimer.Reset(viewMetadataCatalogFenceRetryDelay(
+				s.cfg.UUID, catalogRetryAttempt))
+			catalogRetryAttempt++
+			catalogRetry = catalogRetryTimer.C
+		} else {
+			catalogPendingEpoch = 0
+			catalogRetryAttempt = 0
+			catalogRetryReady = true
+			if !catalogRetryTimer.Stop() {
+				select {
+				case <-catalogRetryTimer.C:
+				default:
+				}
+			}
+			if snapshot != nil && snapshot.Admitted {
+				return nil
+			}
 		}
 
+		discoveryDone := discoveryCtx.Done()
+		var upgradeDone <-chan struct{}
+		if catalogPending && upgradeResult != nil {
+			// Once the asynchronous catalog owner is known to be progressing,
+			// HAKeeper discovery's shorter deadline no longer owns this wait.
+			discoveryDone = nil
+			upgradeDone = operationCtx.Done()
+		}
 		select {
-		case <-ctx.Done():
+		case <-discoveryDone:
 			return moerr.NewInternalErrorf(
 				context.Background(),
 				"CN %s was not admitted before startup deadline: %v",
 				s.cfg.UUID,
-				ctx.Err())
+				discoveryCtx.Err())
+		case upgradeErr := <-upgradeResult:
+			if upgradeErr != nil {
+				return upgradeErr
+			}
+			upgradeResult = nil
+		case <-upgradeDone:
+			select {
+			case upgradeErr := <-upgradeResult:
+				if upgradeErr != nil {
+					return upgradeErr
+				}
+			default:
+			}
+			return moerr.AttachCause(operationCtx, operationCtx.Err())
 		case <-s.viewMetadataAdmissionUpdated:
 		case <-catalogRetry:
+			catalogRetryReady = true
 		}
 	}
 }

@@ -30,9 +30,12 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
+	"github.com/matrixorigin/matrixone/pkg/common/stopper"
 	"github.com/matrixorigin/matrixone/pkg/frontend"
+	"github.com/matrixorigin/matrixone/pkg/lockservice"
 	"github.com/matrixorigin/matrixone/pkg/logservice"
 	logservicepb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
+	"github.com/matrixorigin/matrixone/pkg/queryservice"
 	"github.com/matrixorigin/matrixone/pkg/sql/compile"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 )
@@ -108,6 +111,64 @@ func (e *admissionRollbackJoiningExecutor) ExecTxn(
 	return errors.Join(e.SQLExecutor.ExecTxn(ctx, execFunc, opts), nil)
 }
 
+type admissionStartLockService struct {
+	lockservice.LockService
+}
+
+func (*admissionStartLockService) Close() error {
+	return nil
+}
+
+type admissionStartQueryService struct {
+	queryservice.QueryService
+}
+
+func (*admissionStartQueryService) Start() error {
+	return nil
+}
+
+func (*admissionStartQueryService) Close() error {
+	return nil
+}
+
+func newViewMetadataAdmissionStartService(
+	t *testing.T,
+	boot *testBootService,
+	sqlExecutor executor.SQLExecutor,
+	discoveryTimeout time.Duration,
+) *service {
+	t.Helper()
+	serviceID := t.Name()
+	runtime.SetupServiceBasedRuntime(serviceID, runtime.DefaultRuntime())
+	cfg := &Config{UUID: serviceID, AutomaticUpgrade: true}
+	cfg.HAKeeper.DiscoveryTimeout.Duration = discoveryTimeout
+	cfg.Txn.Trace.BufferSize = 1
+	s := &service{
+		cfg:                             cfg,
+		logger:                          zap.NewNop(),
+		server:                          closeOnlyRPCServer{},
+		mo:                              closeErrorMOServer{},
+		cancelMoServerFunc:              func() {},
+		lockService:                     &admissionStartLockService{},
+		queryService:                    &admissionStartQueryService{},
+		sqlExecutor:                     sqlExecutor,
+		bootstrapService:                boot,
+		stopper:                         stopper.NewStopper("view-metadata-admission-start"),
+		viewMetadataAdmissionGeneration: 11,
+		viewMetadataEpochFence:          compile.NewViewMetadataEpochFence(),
+		viewMetadataAdmissionUpdated:    make(chan struct{}, 1),
+	}
+	s.options.traceDataPath = t.TempDir()
+	s.viewMetadataAdmission.Store(&logservicepb.ViewMetadataAdmission{
+		Enabled:              true,
+		Epoch:                5,
+		RevalidationRequired: true,
+		Generation:           11,
+		Admitted:             true,
+	})
+	return s
+}
+
 func TestCNViewMetadataAdmissionGenerationLifecycle(t *testing.T) {
 	serviceID := "cn-admission-generation-lifecycle"
 	runtime.SetupServiceBasedRuntime(serviceID, runtime.DefaultRuntime())
@@ -169,6 +230,27 @@ func TestCNViewMetadataAdmissionFencesCatalogBeforeReady(t *testing.T) {
 	require.Equal(t, uint64(3), s.viewMetadataEpochFence.Epoch())
 	require.Equal(t, uint64(3), s.viewMetadataCatalogFencedEpoch.Load())
 	require.Positive(t, statements.Load())
+}
+
+func TestCNViewMetadataCatalogFenceShortcuts(t *testing.T) {
+	snapshot := &logservicepb.ViewMetadataAdmission{
+		Epoch:                3,
+		RevalidationRequired: true,
+	}
+
+	t.Run("authority already fenced", func(t *testing.T) {
+		s := &service{}
+		copy := *snapshot
+		copy.CatalogFencedEpoch = copy.Epoch
+		require.NoError(t, s.fenceViewMetadataCatalog(context.Background(), &copy))
+		require.Equal(t, copy.Epoch, s.viewMetadataCatalogFencedEpoch.Load())
+	})
+
+	t.Run("executor not ready", func(t *testing.T) {
+		s := &service{}
+		require.NoError(t, s.fenceViewMetadataCatalog(context.Background(), snapshot))
+		require.Zero(t, s.viewMetadataCatalogFencedEpoch.Load())
+	})
 }
 
 func TestViewMetadataCatalogUpgradePending(t *testing.T) {
@@ -320,7 +402,136 @@ func TestCNViewMetadataAdmissionWaitsForCatalogUpgradeCommit(t *testing.T) {
 	}
 }
 
-func TestCNViewMetadataAdmissionCatalogUpgradeWaitIsBounded(t *testing.T) {
+func TestViewMetadataCatalogFenceRetryDelayIsBoundedAndJittered(t *testing.T) {
+	base := viewMetadataCatalogFenceInitialRetryDelay
+	var previous time.Duration
+	for attempt := uint32(0); attempt < 20; attempt++ {
+		delay := viewMetadataCatalogFenceRetryDelay("cn-a", attempt)
+		require.GreaterOrEqual(t, delay, base*4/5)
+		require.LessOrEqual(t, delay, base*6/5)
+		require.LessOrEqual(t, delay, viewMetadataCatalogFenceMaxRetryDelay)
+		if attempt <= 4 {
+			require.Greater(t, delay, previous)
+		}
+		previous = delay
+		if base < viewMetadataCatalogFenceMaxRetryDelay/2 {
+			base *= 2
+		}
+	}
+	require.NotEqual(t,
+		viewMetadataCatalogFenceRetryDelay("cn-a", 0),
+		viewMetadataCatalogFenceRetryDelay("cn-b", 0))
+}
+
+func TestServiceStartWaitsForCatalogUpgradePastDiscoveryDeadline(t *testing.T) {
+	const discoveryTimeout = 20 * time.Millisecond
+	var catalogCommitted atomic.Bool
+	var catalogStatements atomic.Int64
+	catalogAttempted := make(chan struct{})
+	var attemptOnce sync.Once
+	boot := &testBootService{}
+	sqlExecutor := &admissionRollbackJoiningExecutor{
+		SQLExecutor: executor.NewMemExecutor(func(sql string) (executor.Result, error) {
+			catalogStatements.Add(1)
+			if sql == catalog.ViewMetadataLifecycleGateSQL {
+				if !catalogCommitted.Load() {
+					attemptOnce.Do(func() { close(catalogAttempted) })
+					return executor.Result{}, nil
+				}
+				return viewMetadataLifecycleGateTestResult(), nil
+			}
+			return executor.Result{}, nil
+		}),
+	}
+	s := newViewMetadataAdmissionStartService(t, boot, sqlExecutor, discoveryTimeout)
+	startDone := make(chan error, 1)
+	go func() { startDone <- s.Start() }()
+	t.Cleanup(func() {
+		catalogCommitted.Store(true)
+		s.notifyViewMetadataAdmissionUpdated()
+		_ = s.Close()
+	})
+
+	select {
+	case <-catalogAttempted:
+	case <-time.After(time.Second):
+		t.Fatal("Start did not reach the pre-upgrade catalog fence")
+	}
+	for range 3 {
+		require.NoError(t, s.applyViewMetadataAdmission(context.Background(), s.viewMetadataAdmission.Load()))
+	}
+	select {
+	case err := <-startDone:
+		t.Fatalf("Start returned before the upgrade owner deadline: %v", err)
+	case <-time.After(2 * discoveryTimeout):
+	}
+	require.Equal(t, int64(1), catalogStatements.Load(),
+		"heartbeat updates must not bypass the startup catalog backoff")
+
+	catalogCommitted.Store(true)
+	select {
+	case err := <-startDone:
+		require.NoError(t, err)
+	case <-time.After(2 * time.Second):
+		t.Fatal("Start did not converge after the catalog upgrade committed")
+	}
+	require.True(t, s.viewMetadataIngressReady.Load())
+	require.Equal(t, uint64(5), s.viewMetadataCatalogFencedEpoch.Load())
+}
+
+func TestServiceStartPropagatesBootstrapUpgradeFailure(t *testing.T) {
+	upgradeErr := errors.New("cluster catalog upgrade failed")
+	upgradeEntered := make(chan struct{})
+	releaseUpgrade := make(chan struct{})
+	var releaseOnce sync.Once
+	release := func() { releaseOnce.Do(func() { close(releaseUpgrade) }) }
+	boot := &testBootService{
+		bootstrapUpgradeHook: func(context.Context) error {
+			close(upgradeEntered)
+			<-releaseUpgrade
+			return upgradeErr
+		},
+	}
+	catalogAttempted := make(chan struct{})
+	var attemptOnce sync.Once
+	sqlExecutor := &admissionRollbackJoiningExecutor{
+		SQLExecutor: executor.NewMemExecutor(func(string) (executor.Result, error) {
+			attemptOnce.Do(func() { close(catalogAttempted) })
+			return executor.Result{}, nil
+		}),
+	}
+	s := newViewMetadataAdmissionStartService(t, boot, sqlExecutor, time.Second)
+	startDone := make(chan error, 1)
+	go func() { startDone <- s.Start() }()
+	t.Cleanup(func() {
+		release()
+		_ = s.Close()
+	})
+
+	select {
+	case <-upgradeEntered:
+	case <-time.After(time.Second):
+		t.Fatal("automatic bootstrap upgrade did not start")
+	}
+	select {
+	case <-catalogAttempted:
+	case <-time.After(time.Second):
+		t.Fatal("Start did not wait on the incomplete catalog")
+	}
+	release()
+
+	select {
+	case err := <-startDone:
+		require.ErrorIs(t, err, upgradeErr)
+		require.NotContains(t, err.Error(), "was not admitted before startup deadline")
+	case <-time.After(time.Second):
+		t.Fatal("Start did not propagate the automatic upgrade failure")
+	}
+	require.False(t, s.viewMetadataIngressReady.Load())
+	require.Zero(t, s.viewMetadataCatalogFencedEpoch.Load())
+}
+
+func TestCNViewMetadataAdmissionWithoutUpgradeOwnerIsBounded(t *testing.T) {
 	s := &service{
 		cfg:                             &Config{UUID: "catalog-upgrade-timeout"},
 		logger:                          zap.NewNop(),

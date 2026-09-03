@@ -774,6 +774,11 @@ type service struct {
 	udfService       udf.Service
 	bootstrapMu      sync.RWMutex
 	bootstrapService bootstrap.Service
+
+	bootstrapUpgradeContext      context.Context
+	bootstrapUpgradeResult       chan error
+	bootstrapUpgradeStartupReady chan struct{}
+	bootstrapUpgradeReadyOnce    sync.Once
 	// beforeBootstrapClose is a deterministic test barrier.
 	beforeBootstrapClose func()
 	incrservice          incrservice.AutoIncrementService
@@ -801,6 +806,8 @@ type service struct {
 	viewMetadataIngressReady        atomic.Bool
 	viewMetadataGenerationRevoked   atomic.Bool
 	viewMetadataRevocationOnce      sync.Once
+
+	viewMetadataCatalogFenceStartupWaiting atomic.Bool
 	// viewMetadataCloseFn is a deterministic test hook for the asynchronous
 	// close request issued after synchronous ingress revocation.
 	viewMetadataCloseFn func() error
