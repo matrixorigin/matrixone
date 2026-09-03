@@ -50,6 +50,7 @@ type AliyunSDK struct {
 }
 
 var _ objectStorageCopier = new(AliyunSDK)
+var _ objectStorageIdentityReader = new(AliyunSDK)
 
 func (a *AliyunSDK) CopyObject(
 	ctx context.Context,
@@ -233,6 +234,66 @@ func (a *AliyunSDK) Stat(
 	}
 
 	return
+}
+
+func (a *AliyunSDK) StatObjectIdentity(ctx context.Context, key string) (ObjectIdentity, error) {
+	info, err := a.statObject(ctx, key)
+	if err != nil {
+		if a.is404(err) {
+			return ObjectIdentity{}, moerr.NewFileNotFoundNoCtx(key)
+		}
+		return ObjectIdentity{}, err
+	}
+	size, err := strconv.ParseInt(info.Get(oss.HTTPHeaderContentLength), 10, 64)
+	if err != nil {
+		return ObjectIdentity{}, err
+	}
+	identity := ObjectIdentity{
+		VersionID: oss.GetVersionId(info),
+		ETag:      info.Get(oss.HTTPHeaderEtag),
+		Size:      size,
+	}
+	if modified := info.Get(oss.HTTPHeaderLastModified); modified != "" {
+		identity.LastModified, err = http.ParseTime(modified)
+		if err != nil {
+			return ObjectIdentity{}, err
+		}
+	}
+	return identity, identity.Validate()
+}
+
+func (a *AliyunSDK) ReadObjectWithIdentity(
+	ctx context.Context,
+	key string,
+	min *int64,
+	max *int64,
+	expected ObjectIdentity,
+) (io.ReadCloser, error) {
+	if err := expected.Validate(); err != nil {
+		return nil, err
+	}
+	var options []oss.Option
+	if expected.VersionID != "" {
+		options = append(options, oss.VersionId(expected.VersionID))
+	} else {
+		options = append(options, oss.IfMatch(expected.ETag))
+	}
+	r, err := a.getObject(ctx, key, min, max, options...)
+	if err != nil {
+		return nil, mapAliyunConditionalReadError(err)
+	}
+	if max == nil {
+		return r, nil
+	}
+	return &readCloser{r: io.LimitReader(r, *max-*min), closeFunc: r.Close}, nil
+}
+
+func mapAliyunConditionalReadError(err error) error {
+	var serviceError oss.ServiceError
+	if errors.As(err, &serviceError) && serviceError.StatusCode == http.StatusPreconditionFailed {
+		return fmt.Errorf("%w: conditional OSS read failed", ErrObjectChanged)
+	}
+	return err
 }
 
 func (a *AliyunSDK) Exists(
@@ -492,7 +553,13 @@ func (a *AliyunSDK) putObject(
 	return err
 }
 
-func (a *AliyunSDK) getObject(ctx context.Context, key string, min *int64, max *int64) (io.ReadCloser, error) {
+func (a *AliyunSDK) getObject(
+	ctx context.Context,
+	key string,
+	min *int64,
+	max *int64,
+	extraOptions ...oss.Option,
+) (io.ReadCloser, error) {
 	ctx, task := gotrace.NewTask(ctx, "AliyunSDK.getObject")
 	defer task.End()
 	if min == nil {
@@ -503,9 +570,10 @@ func (a *AliyunSDK) getObject(ctx context.Context, key string, min *int64, max *
 			opts := []oss.Option{
 				oss.WithContext(ctx),
 			}
+			opts = append(opts, extraOptions...)
 			var rang string
 			if max != nil {
-				rang = fmt.Sprintf("%d-%d", offset, *max)
+				rang = fmt.Sprintf("%d-%d", offset, *max-1)
 			} else {
 				rang = fmt.Sprintf("%d-", offset)
 			}

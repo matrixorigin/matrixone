@@ -70,7 +70,7 @@ func (builder *QueryBuilder) bindExternalScan(
 	if err := InitNullMap(stmt.Param, ctx); err != nil {
 		return -1, nil, err
 	}
-	if err := validateLoadParquetOptions(stmt.Param, ctx); err != nil {
+	if err := validateLoadColumnarOptions(stmt.Param, ctx); err != nil {
 		return -1, nil, err
 	}
 	defaultParquetLoadParallel(stmt.Param, ctx)
@@ -161,6 +161,8 @@ func (builder *QueryBuilder) bindExternalScan(
 		}
 		stmt.Param.FileStartOff = offset
 	}
+	stmt.Param.ArrowMatchByPosition = stmt.Param.Format == tree.ARROW &&
+		stmt.Param.Tail != nil && len(stmt.Param.Tail.ColumnList) > 0
 	applyLoadParallelAdmission(stmt.Param, offset)
 
 	stmt.Param.Tail.ColumnList = nil

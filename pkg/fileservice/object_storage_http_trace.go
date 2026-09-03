@@ -38,6 +38,7 @@ func newObjectStorageHTTPTrace(upstream ObjectStorage) *objectStorageHTTPTrace {
 var _ ObjectStorage = new(objectStorageHTTPTrace)
 var _ ParallelMultipartWriter = new(objectStorageHTTPTrace)
 var _ objectStorageCopier = new(objectStorageHTTPTrace)
+var _ objectStorageIdentityReader = new(objectStorageHTTPTrace)
 
 func (o *objectStorageHTTPTrace) CopyObject(
 	ctx context.Context,
@@ -81,6 +82,34 @@ func (o *objectStorageHTTPTrace) Read(ctx context.Context, key string, min *int6
 	defer o.closeTraceInfo(traceInfo)
 	ctx = httptrace.WithClientTrace(ctx, traceInfo.trace)
 	return o.upstream.Read(ctx, key, min, max)
+}
+
+func (o *objectStorageHTTPTrace) StatObjectIdentity(ctx context.Context, key string) (ObjectIdentity, error) {
+	upstream, ok := o.upstream.(objectStorageIdentityReader)
+	if !ok {
+		return ObjectIdentity{}, moerr.NewNotSupported(ctx, "object storage identity")
+	}
+	traceInfo := o.newTraceInfo()
+	defer o.closeTraceInfo(traceInfo)
+	ctx = httptrace.WithClientTrace(ctx, traceInfo.trace)
+	return upstream.StatObjectIdentity(ctx, key)
+}
+
+func (o *objectStorageHTTPTrace) ReadObjectWithIdentity(
+	ctx context.Context,
+	key string,
+	min *int64,
+	max *int64,
+	expected ObjectIdentity,
+) (io.ReadCloser, error) {
+	upstream, ok := o.upstream.(objectStorageIdentityReader)
+	if !ok {
+		return nil, moerr.NewNotSupported(ctx, "conditional object storage read")
+	}
+	traceInfo := o.newTraceInfo()
+	defer o.closeTraceInfo(traceInfo)
+	ctx = httptrace.WithClientTrace(ctx, traceInfo.trace)
+	return upstream.ReadObjectWithIdentity(ctx, key, min, max, expected)
 }
 
 func (o *objectStorageHTTPTrace) Stat(ctx context.Context, key string) (size int64, err error) {

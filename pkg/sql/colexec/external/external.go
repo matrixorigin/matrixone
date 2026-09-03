@@ -40,6 +40,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/geo"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/crt"
@@ -121,6 +122,11 @@ func (external *External) Prepare(proc *process.Process) error {
 	if !loadFormatIsValid(param.Extern) {
 		return moerr.NewNYIf(proc.Ctx, "load format '%s'", param.Extern.Format)
 	}
+	if param.Extern.Format == tree.ARROW &&
+		(param.Extern.ExternType != int32(plan.ExternType_LOAD) ||
+			param.ArrowExecutionScope != pipeline.ArrowExecutionScope_ArrowLoadData) {
+		return moerr.NewNotSupported(proc.Ctx, "Arrow format is supported only by LOAD DATA")
+	}
 	if param.Extern.ExternType == int32(plan.ExternType_LOAD) &&
 		(param.Extern.Parallel || param.Extern.ParallelLoadRequested) {
 		param.LoadEmptyNumericAsZero = true
@@ -183,6 +189,12 @@ func (external *External) Prepare(proc *process.Process) error {
 		external.reader = NewZonemapReader(param, proc)
 	case param.Extern.Format == tree.PARQUET:
 		external.reader = NewParquetReader(param, proc)
+	case param.Extern.Format == tree.ARROW:
+		reader, err := NewArrowReader(param, proc, external.allocationAccount)
+		if err != nil {
+			return err
+		}
+		external.reader = reader
 	default:
 		r, err := NewCsvReader(param, proc)
 		if err != nil {
@@ -331,6 +343,9 @@ func (external *External) Call(proc *process.Process) (vm.CallResult, error) {
 		external.reader.Close()
 		external.fileOpened = false
 		param.Fileparam.End = true
+		if external.ctr.buf != nil {
+			external.ctr.buf.CleanOnlyData()
+		}
 		return result, err
 	}
 	if external.ctr.buf != nil && external.ctr.buf.RowCount() > 0 {
@@ -2051,7 +2066,7 @@ func parseLoadDataYear(field csvparser.Field) (types.MoYear, error) {
 
 func loadFormatIsValid(param *tree.ExternParam) bool {
 	switch param.Format {
-	case tree.JSONLINE, tree.CSV, tree.PARQUET:
+	case tree.JSONLINE, tree.CSV, tree.PARQUET, tree.ARROW:
 		return true
 	}
 	return false

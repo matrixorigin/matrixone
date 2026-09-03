@@ -2297,10 +2297,16 @@ func InitInfileParam(param *tree.ExternParam) error {
 			param.CompressType = param.Option[i+1]
 		case "format":
 			format := strings.ToLower(param.Option[i+1])
-			if format != tree.CSV && format != tree.JSONLINE && format != tree.PARQUET {
+			if format != tree.CSV && format != tree.JSONLINE && format != tree.PARQUET && format != tree.ARROW {
 				return moerr.NewBadConfigf(param.Ctx, "the format '%s' is not supported", format)
 			}
 			param.Format = format
+		case "arrow_container":
+			container, err := normalizeArrowContainer(param.Ctx, param.Option[i+1])
+			if err != nil {
+				return err
+			}
+			param.ArrowContainer = container
 		case "jsondata":
 			jsondata := strings.ToLower(param.Option[i+1])
 			if jsondata != tree.OBJECT && jsondata != tree.ARRAY {
@@ -2326,6 +2332,9 @@ func InitInfileParam(param *tree.ExternParam) error {
 	}
 	if len(param.Format) == 0 {
 		param.Format = tree.CSV
+	}
+	if err := validateArrowContainerOption(param); err != nil {
+		return err
 	}
 	return nil
 }
@@ -2363,10 +2372,16 @@ func InitS3Param(param *tree.ExternParam) error {
 			param.S3Param.ExternalId = param.Option[i+1]
 		case "format":
 			format := strings.ToLower(param.Option[i+1])
-			if format != tree.CSV && format != tree.JSONLINE && format != tree.PARQUET {
+			if format != tree.CSV && format != tree.JSONLINE && format != tree.PARQUET && format != tree.ARROW {
 				return moerr.NewBadConfigf(param.Ctx, "the format '%s' is not supported", format)
 			}
 			param.Format = format
+		case "arrow_container":
+			container, err := normalizeArrowContainer(param.Ctx, param.Option[i+1])
+			if err != nil {
+				return err
+			}
+			param.ArrowContainer = container
 		case "jsondata":
 			jsondata := strings.ToLower(param.Option[i+1])
 			if jsondata != tree.OBJECT && jsondata != tree.ARRAY {
@@ -2389,6 +2404,29 @@ func InitS3Param(param *tree.ExternParam) error {
 	}
 	if len(param.Format) == 0 {
 		param.Format = tree.CSV
+	}
+	if err := validateArrowContainerOption(param); err != nil {
+		return err
+	}
+	return nil
+}
+
+func normalizeArrowContainer(ctx context.Context, value string) (string, error) {
+	value = strings.ToLower(strings.TrimSpace(value))
+	switch value {
+	case tree.ARROW_CONTAINER_AUTO, tree.ARROW_CONTAINER_FILE, tree.ARROW_CONTAINER_STREAM:
+		return value, nil
+	default:
+		return "", moerr.NewBadConfigf(ctx, "the arrow_container '%s' is not supported", value)
+	}
+}
+
+func validateArrowContainerOption(param *tree.ExternParam) error {
+	if param.ArrowContainer != "" && param.Format != tree.ARROW {
+		return moerr.NewBadConfig(param.Ctx, "arrow_container requires format='arrow'")
+	}
+	if param.Format == tree.ARROW && param.ArrowContainer == "" {
+		param.ArrowContainer = tree.ARROW_CONTAINER_AUTO
 	}
 	return nil
 }
@@ -2512,10 +2550,16 @@ func InitStageS3Param(param *tree.ExternParam, s stage.StageDef) error {
 			continue
 		case "format":
 			format := strings.ToLower(param.Option[i+1])
-			if format != tree.CSV && format != tree.JSONLINE && format != tree.PARQUET {
+			if format != tree.CSV && format != tree.JSONLINE && format != tree.PARQUET && format != tree.ARROW {
 				return moerr.NewBadConfigf(param.Ctx, "the format '%s' is not supported", format)
 			}
 			param.Format = format
+		case "arrow_container":
+			container, err := normalizeArrowContainer(param.Ctx, param.Option[i+1])
+			if err != nil {
+				return err
+			}
+			param.ArrowContainer = container
 		case "jsondata":
 			jsondata := strings.ToLower(param.Option[i+1])
 			if jsondata != tree.OBJECT && jsondata != tree.ARRAY {
@@ -2539,6 +2583,9 @@ func InitStageS3Param(param *tree.ExternParam, s stage.StageDef) error {
 	}
 	if len(param.Format) == 0 {
 		param.Format = tree.CSV
+	}
+	if err := validateArrowContainerOption(param); err != nil {
+		return err
 	}
 
 	return nil

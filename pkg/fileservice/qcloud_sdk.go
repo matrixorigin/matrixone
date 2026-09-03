@@ -150,6 +150,7 @@ func NewQCloudSDK(
 }
 
 var _ objectStorageCopier = new(QCloudSDK)
+var _ objectStorageIdentityReader = new(QCloudSDK)
 
 func (a *QCloudSDK) CopyObject(
 	ctx context.Context,
@@ -249,6 +250,61 @@ func (a *QCloudSDK) Stat(
 	}
 
 	return
+}
+
+func (a *QCloudSDK) StatObjectIdentity(ctx context.Context, key string) (ObjectIdentity, error) {
+	header, err := a.statObject(ctx, key)
+	if err != nil {
+		if a.is404(err) {
+			return ObjectIdentity{}, moerr.NewFileNotFoundNoCtx(key)
+		}
+		return ObjectIdentity{}, err
+	}
+	size, err := strconv.ParseInt(header.Get("Content-Length"), 10, 64)
+	if err != nil {
+		return ObjectIdentity{}, err
+	}
+	identity := ObjectIdentity{
+		VersionID: header.Get("x-cos-version-id"),
+		ETag:      header.Get("ETag"),
+		Size:      size,
+	}
+	if modified := header.Get("Last-Modified"); modified != "" {
+		identity.LastModified, err = http.ParseTime(modified)
+		if err != nil {
+			return ObjectIdentity{}, err
+		}
+	}
+	return identity, identity.Validate()
+}
+
+func (a *QCloudSDK) ReadObjectWithIdentity(
+	ctx context.Context,
+	key string,
+	min *int64,
+	max *int64,
+	expected ObjectIdentity,
+) (io.ReadCloser, error) {
+	if err := expected.Validate(); err != nil {
+		return nil, err
+	}
+	r, err := a.getObjectWithIdentity(ctx, key, min, max, &expected)
+	if err != nil {
+		return nil, mapQCloudConditionalReadError(err)
+	}
+	if max == nil {
+		return r, nil
+	}
+	return &readCloser{r: io.LimitReader(r, *max-*min), closeFunc: r.Close}, nil
+}
+
+func mapQCloudConditionalReadError(err error) error {
+	var response *cos.ErrorResponse
+	if errors.As(err, &response) && response.Response != nil &&
+		response.Response.StatusCode == http.StatusPreconditionFailed {
+		return fmt.Errorf("%w: conditional COS read failed", ErrObjectChanged)
+	}
+	return err
 }
 
 func (a *QCloudSDK) Exists(
@@ -887,6 +943,16 @@ func (a *QCloudSDK) putObject(
 }
 
 func (a *QCloudSDK) getObject(ctx context.Context, key string, min *int64, max *int64) (io.ReadCloser, error) {
+	return a.getObjectWithIdentity(ctx, key, min, max, nil)
+}
+
+func (a *QCloudSDK) getObjectWithIdentity(
+	ctx context.Context,
+	key string,
+	min *int64,
+	max *int64,
+	expected *ObjectIdentity,
+) (io.ReadCloser, error) {
 	ctx, task := gotrace.NewTask(ctx, "QCloudSDK.getObject")
 	defer task.End()
 
@@ -898,12 +964,17 @@ func (a *QCloudSDK) getObject(ctx context.Context, key string, min *int64, max *
 		func(offset int64) (io.ReadCloser, error) {
 			var rang string
 			if max != nil {
-				rang = fmt.Sprintf("bytes=%d-%d", offset, *max)
+				rang = fmt.Sprintf("bytes=%d-%d", offset, *max-1)
 			} else {
 				rang = fmt.Sprintf("bytes=%d-", offset)
 			}
 			opts := &cos.ObjectGetOptions{
 				Range: rang,
+			}
+			if expected != nil && expected.VersionID == "" {
+				headers := make(http.Header)
+				headers.Set("If-Match", expected.ETag)
+				opts.XOptionHeader = &headers
 			}
 
 			return doQCloudReadWithRetry(
@@ -913,7 +984,13 @@ func (a *QCloudSDK) getObject(ctx context.Context, key string, min *int64, max *
 					perfcounter.Update(ctx, func(counter *perfcounter.CounterSet) {
 						counter.FileService.S3.Get.Add(1)
 					}, a.perfCounterSets...)
-					resp, err := a.client.Object.Get(ctx, key, opts)
+					var resp *cos.Response
+					var err error
+					if expected != nil && expected.VersionID != "" {
+						resp, err = a.client.Object.Get(ctx, key, opts, expected.VersionID)
+					} else {
+						resp, err = a.client.Object.Get(ctx, key, opts)
+					}
 					if err != nil {
 						return nil, err
 					}

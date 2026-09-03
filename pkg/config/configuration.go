@@ -287,6 +287,15 @@ type MongoDBParameters struct {
 	enableDefaulted  bool
 }
 
+// ArrowLoadParameters are rollout gates for the LOAD-only Arrow IPC surface.
+// Every gate defaults off so a mixed-version cluster cannot start producing
+// Arrow pipeline metadata before all CNs have been upgraded deliberately.
+type ArrowLoadParameters struct {
+	Enabled            bool `toml:"enabled" user_setting:"advanced"`
+	S3Enabled          bool `toml:"s3-enabled" user_setting:"advanced"`
+	DistributedEnabled bool `toml:"distributed-enabled" user_setting:"advanced"`
+}
+
 // NewMongoDBParameters returns MongoDB parameters with defaults that must be
 // established before TOML decoding. Initializing Enable here lets an explicit
 // false from either TOML or programmatic configuration remain meaningful when
@@ -660,8 +669,9 @@ type FrontendParameters struct {
 	// globally for new sessions with SET GLOBAL sidecar_url = '...'.
 	SidecarURL string `toml:"sidecarUrl" user_setting:"advanced"`
 
-	Iceberg IcebergParameters `toml:"iceberg" user_setting:"advanced"`
-	MongoDB MongoDBParameters `toml:"mongodb" user_setting:"advanced"`
+	Iceberg   IcebergParameters   `toml:"iceberg" user_setting:"advanced"`
+	MongoDB   MongoDBParameters   `toml:"mongodb" user_setting:"advanced"`
+	ArrowLoad ArrowLoadParameters `toml:"arrow-load" user_setting:"advanced"`
 }
 
 func (fp *FrontendParameters) SetDefaultValues() {

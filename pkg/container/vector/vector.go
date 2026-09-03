@@ -105,6 +105,10 @@ type Vector struct {
 
 	cantFreeData bool
 	cantFreeArea bool
+	// Borrowed leases are independent release owners for data and area. The
+	// cantFree bits remain only as the legacy-alias compatibility marker.
+	dataLease BufferLease
+	areaLease BufferLease
 
 	sorted bool // for some optimization
 
@@ -223,6 +227,7 @@ func (v *Vector) SetSorted(b bool) {
 // Reset update vector's fields with a specific type.
 // we should redefine the value of capacity and values-ptr because of the possible change in type.
 func (v *Vector) Reset(typ types.Type) {
+	v.releaseBorrowedBacking()
 	v.typ = typ
 	v.resetPrepareParamKind()
 	v.resetStringSource()
@@ -245,6 +250,7 @@ func (v *Vector) Reset(typ types.Type) {
 }
 
 func (v *Vector) ResetWithSameType() {
+	v.releaseBorrowedBacking()
 	v.resetPrepareParamKind()
 	v.resetStringSource()
 	v.class = FLAT
@@ -264,12 +270,14 @@ func (v *Vector) ResetWithSameType() {
 }
 
 func (v *Vector) ResetArea() {
+	v.releaseBorrowedArea()
 	v.area = v.area[:0]
 	v.areaDisjoint = v.length == 0
 }
 
 // TODO: It is semantically same as Reset, need to merge them later.
 func (v *Vector) ResetWithNewType(t *types.Type) {
+	v.releaseBorrowedBacking()
 	v.typ = *t
 	v.resetPrepareParamKind()
 	v.resetStringSource()
@@ -3725,7 +3733,9 @@ func (v *Vector) propagateBinaryStringBatch(w *Vector, oldLength int, offset int
 }
 
 func (v *Vector) NeedDup() bool {
-	return v.cantFreeArea || v.cantFreeData
+	return v.AreaBackingKind() != OwnedMPoolUnique ||
+		v.DataBackingKind() != OwnedMPoolUnique ||
+		v.nsp.HasBorrowedValidity()
 }
 
 // make sure the type check is done before calling this function
@@ -3787,7 +3797,9 @@ func (v *Vector) GetRawBytesAt(i int) []byte {
 }
 
 func (v *Vector) CleanOnlyData() {
-	if v.data != nil {
+	hadData := v.data != nil
+	v.releaseBorrowedBacking()
+	if hadData {
 		v.length = 0
 	}
 	if v.area != nil {
@@ -4134,6 +4146,9 @@ func (v *Vector) UnsetNull(i uint64) {
 
 // call this function if type already checked
 func SetFixedAtNoTypeCheck[T types.FixedSizeT](v *Vector, idx int, t T) error {
+	if v.HasBorrowedBacking() {
+		return moerr.NewInternalErrorNoCtx("borrowed vector must be materialized before mutation")
+	}
 	if v.typ.IsVarlen() {
 		// A caller-provided varlena descriptor can alias an existing area range.
 		v.areaDisjoint = false
@@ -4152,6 +4167,9 @@ func SetFixedAtNoTypeCheck[T types.FixedSizeT](v *Vector, idx int, t T) error {
 // Note:
 // it is 10x slower than SetFixedAtNoTypeCheck
 func SetFixedAtWithTypeCheck[T types.FixedSizeT](v *Vector, idx int, t T) error {
+	if v.HasBorrowedBacking() {
+		return moerr.NewInternalErrorNoCtx("borrowed vector must be materialized before mutation")
+	}
 	if v.typ.IsVarlen() {
 		// A caller-provided varlena descriptor can alias an existing area range.
 		v.areaDisjoint = false
@@ -4170,6 +4188,9 @@ func SetFixedAtWithTypeCheck[T types.FixedSizeT](v *Vector, idx int, t T) error 
 }
 
 func SetBytesAt(v *Vector, idx int, bs []byte, mp *mpool.MPool) error {
+	if err := v.MaterializeOwned(mp); err != nil {
+		return err
+	}
 	disjoint := v.areaDisjoint
 	var va types.Varlena
 	err := BuildVarlenaFromByteSlice(v, &va, &bs, mp)
@@ -4349,10 +4370,14 @@ func (v *Vector) Free(mp *mpool.MPool) {
 		return
 	}
 
-	if !v.cantFreeData {
+	if v.dataLease != nil {
+		v.releaseBorrowedData()
+	} else if !v.cantFreeData {
 		mp.Free(v.data)
 	}
-	if !v.cantFreeArea {
+	if v.areaLease != nil {
+		v.releaseBorrowedArea()
+	} else if !v.cantFreeArea {
 		mp.Free(v.area)
 	}
 	v.freeBitmapStorage(mp)
@@ -4362,6 +4387,8 @@ func (v *Vector) Free(mp *mpool.MPool) {
 	v.length = 0
 	v.cantFreeData = false
 	v.cantFreeArea = false
+	v.dataLease = nil
+	v.areaLease = nil
 
 	v.nsp.Reset()
 	v.gsp.Reset()
@@ -4409,11 +4436,12 @@ func (v *Vector) MarshalBinaryWithBuffer(buf *bytes.Buffer) error {
 // MarshalBinaryPlan is a validated, allocation-free snapshot of one Vector's
 // wire lengths. It lets batch writers size once and encode once.
 type MarshalBinaryPlan struct {
-	vector     *Vector
-	size       int
-	dataLength uint32
-	areaLength uint32
-	nullLength uint32
+	vector          *Vector
+	size            int
+	dataLength      uint32
+	areaLength      uint32
+	nullLength      uint32
+	canonicalVarlen bool
 }
 
 func (p MarshalBinaryPlan) Size() int {
@@ -4449,6 +4477,39 @@ func (v *Vector) PrepareMarshalBinary() (MarshalBinaryPlan, error) {
 		dataLength = 0
 	}
 	areaLength := uint64(len(v.area))
+	canonicalVarlen := isVarlenaMarshalType(v.typ.Oid) && dataLength > 0
+	if canonicalVarlen {
+		if dataLength%types.VarlenaSize != 0 {
+			return MarshalBinaryPlan{}, moerr.NewInvalidInputNoCtx(
+				"varlen vector data is not descriptor aligned",
+			)
+		}
+		areaLength = 0
+		descriptors := MustFixedColNoTypeCheck[types.Varlena](v)
+		if uint64(len(descriptors))*types.VarlenaSize != dataLength {
+			return MarshalBinaryPlan{}, moerr.NewInvalidInputNoCtx(
+				"varlen vector descriptor count does not match marshal length",
+			)
+		}
+		for index := range descriptors {
+			if v.IsNull(uint64(index)) || descriptors[index].IsSmall() {
+				continue
+			}
+			offset, length := descriptors[index].OffsetLen()
+			end := uint64(offset) + uint64(length)
+			if end > uint64(len(v.area)) {
+				return MarshalBinaryPlan{}, moerr.NewInvalidInputNoCtx(
+					"varlen vector descriptor is outside its area",
+				)
+			}
+			if uint64(length) > maxWireBuffer-areaLength {
+				return MarshalBinaryPlan{}, moerr.NewInvalidInputNoCtx(
+					"canonical varlen area exceeds marshal format",
+				)
+			}
+			areaLength += uint64(length)
+		}
+	}
 	nullLength := uint64(v.nsp.MarshalSize())
 	if dataLength > maxWireBuffer ||
 		areaLength > maxWireBuffer ||
@@ -4470,12 +4531,25 @@ func (v *Vector) PrepareMarshalBinary() (MarshalBinaryPlan, error) {
 		)
 	}
 	return MarshalBinaryPlan{
-		vector:     v,
-		size:       int(total),
-		dataLength: uint32(dataLength),
-		areaLength: uint32(areaLength),
-		nullLength: uint32(nullLength),
+		vector:          v,
+		size:            int(total),
+		dataLength:      uint32(dataLength),
+		areaLength:      uint32(areaLength),
+		nullLength:      uint32(nullLength),
+		canonicalVarlen: canonicalVarlen,
 	}, nil
+}
+
+func isVarlenaMarshalType(oid types.T) bool {
+	switch oid {
+	case types.T_char, types.T_varchar, types.T_blob, types.T_json, types.T_text,
+		types.T_binary, types.T_varbinary, types.T_array_float32, types.T_array_float64,
+		types.T_array_bf16, types.T_array_float16, types.T_array_int8, types.T_array_uint8,
+		types.T_datalink, types.T_geometry, types.T_geometry32:
+		return true
+	default:
+		return false
+	}
 }
 
 func (v *Vector) MarshalBinarySize() (int, error) {
@@ -4511,8 +4585,26 @@ func (p MarshalBinaryPlan) MarshalTo(w io.Writer) error {
 		return err
 	}
 	if p.dataLength > 0 {
-		if err := writeVectorMarshalBytes(w, v.data[:p.dataLength]); err != nil {
-			return err
+		if p.canonicalVarlen {
+			var compactOffset uint32
+			for index, descriptor := range MustFixedColNoTypeCheck[types.Varlena](v) {
+				canonical := descriptor
+				if v.IsNull(uint64(index)) {
+					canonical = types.Varlena{}
+				} else if !descriptor.IsSmall() {
+					_, length := descriptor.OffsetLen()
+					canonical.SetOffsetLen(compactOffset, length)
+					compactOffset += length
+				}
+				bytes := unsafe.Slice((*byte)(unsafe.Pointer(&canonical)), types.VarlenaSize)
+				if err := writeVectorMarshalBytes(w, bytes); err != nil {
+					return err
+				}
+			}
+		} else {
+			if err := writeVectorMarshalBytes(w, v.data[:p.dataLength]); err != nil {
+				return err
+			}
 		}
 	}
 
@@ -4520,8 +4612,20 @@ func (p MarshalBinaryPlan) MarshalTo(w io.Writer) error {
 		return err
 	}
 	if p.areaLength > 0 {
-		if err := writeVectorMarshalBytes(w, v.area); err != nil {
-			return err
+		if p.canonicalVarlen {
+			for index, descriptor := range MustFixedColNoTypeCheck[types.Varlena](v) {
+				if v.IsNull(uint64(index)) || descriptor.IsSmall() {
+					continue
+				}
+				offset, length := descriptor.OffsetLen()
+				if err := writeVectorMarshalBytes(w, v.area[offset:offset+length]); err != nil {
+					return err
+				}
+			}
+		} else {
+			if err := writeVectorMarshalBytes(w, v.area); err != nil {
+				return err
+			}
 		}
 	}
 
@@ -5143,6 +5247,9 @@ func (v *Vector) ToConst() {
 // PreExtend use to expand the capacity of the vector.
 // PreExtend does not change the length of the vector.
 func (v *Vector) PreExtend(rows int, mp *mpool.MPool) error {
+	if err := v.MaterializeOwned(mp); err != nil {
+		return err
+	}
 	if v.class == CONSTANT {
 		return nil
 	}
@@ -5153,12 +5260,18 @@ func (v *Vector) PreExtend(rows int, mp *mpool.MPool) error {
 // represent rows without allocating vector data. Unaccounted vectors are
 // unchanged.
 func (v *Vector) PreExtendBitmap(rows int, mp *mpool.MPool) error {
+	if err := v.MaterializeOwned(mp); err != nil {
+		return err
+	}
 	return v.ensureBitmapCapacity(rows, mp)
 }
 
 // PreExtendNulls ensures allocation-accounted null storage can represent rows.
 // Unaccounted vectors are unchanged.
 func (v *Vector) PreExtendNulls(rows int, mp *mpool.MPool) error {
+	if err := v.MaterializeOwned(mp); err != nil {
+		return err
+	}
 	return v.ensureNullCapacity(rows, mp)
 }
 
@@ -5567,10 +5680,12 @@ func (v *Vector) dup(
 	}
 	// A bitmap may be shorter than a sparse vector or longer than a reused vector
 	// that was shortened with SetLength. Preserve both the complete row domain
-	// and the source bitmap extent before InitWith copies its storage.
-	if v.GetNulls().GetBitmap().Len() > 0 {
+	// and the source bitmap extent. Len does not materialize borrowed Arrow
+	// validity, which lets the destination admit its owned bitmap first.
+	nullLength := v.GetNulls().Len()
+	if nullLength > 0 {
 		if err := w.ensureNullCapacity(
-			max(v.length, int(v.GetNulls().GetBitmap().Len())),
+			max(v.length, int(nullLength)),
 			mp,
 		); err != nil {
 			w.Free(mp)
@@ -5587,7 +5702,15 @@ func (v *Vector) dup(
 		}
 	}
 	w.length = v.length
-	w.GetNulls().InitWith(v.GetNulls())
+	if v.GetNulls().HasBorrowedValidity() {
+		w.GetNulls().GetBitmap().InitWithSize(nullLength)
+		v.GetNulls().Foreach(func(row uint64) bool {
+			w.GetNulls().GetBitmap().Add(row)
+			return true
+		})
+	} else {
+		w.GetNulls().InitWith(v.GetNulls())
+	}
 	w.GetGrouping().InitWith(v.GetGrouping())
 	if err := v.copyBinaryStringTo(w, mp); err != nil {
 		w.Free(mp)
@@ -8871,6 +8994,9 @@ func (v *Vector) RowToString(idx int) string {
 }
 
 func SetConstNull(vec *Vector, length int, mp *mpool.MPool) error {
+	if err := vec.MaterializeOwned(mp); err != nil {
+		return err
+	}
 	if vec.typ.IsVarlen() {
 		vec.areaDisjoint = false
 	}
@@ -8883,6 +9009,9 @@ func SetConstNull(vec *Vector, length int, mp *mpool.MPool) error {
 }
 
 func SetConstFixed[T any](vec *Vector, val T, length int, mp *mpool.MPool) error {
+	if err := vec.MaterializeOwned(mp); err != nil {
+		return err
+	}
 	if vec.typ.IsVarlen() {
 		vec.areaDisjoint = false
 	}
@@ -8898,6 +9027,9 @@ func SetConstFixed[T any](vec *Vector, val T, length int, mp *mpool.MPool) error
 }
 
 func SetConstBytes(vec *Vector, val []byte, length int, mp *mpool.MPool) error {
+	if err := vec.MaterializeOwned(mp); err != nil {
+		return err
+	}
 	vec.areaDisjoint = false
 	if err := extend(vec, 1, mp); err != nil {
 		return err
@@ -8912,6 +9044,9 @@ func SetConstBytes(vec *Vector, val []byte, length int, mp *mpool.MPool) error {
 }
 
 func SetConstByteJson(vec *Vector, bj bytejson.ByteJson, length int, mp *mpool.MPool) error {
+	if err := vec.MaterializeOwned(mp); err != nil {
+		return err
+	}
 	vec.areaDisjoint = false
 	if err := extend(vec, 1, mp); err != nil {
 		return err
@@ -8931,6 +9066,9 @@ func SetConstByteJsonEncoded(
 	length int,
 	mp *mpool.MPool,
 ) error {
+	if err := vec.MaterializeOwned(mp); err != nil {
+		return err
+	}
 	vec.areaDisjoint = false
 	oldAreaLen := len(vec.area)
 	var value types.Varlena
@@ -8950,6 +9088,9 @@ func SetConstByteJsonEncoded(
 
 // SetConstArray set current vector as Constant_Array vector of given length.
 func SetConstArray[T types.ArrayElement](vec *Vector, val []T, length int, mp *mpool.MPool) error {
+	if err := vec.MaterializeOwned(mp); err != nil {
+		return err
+	}
 	vec.areaDisjoint = false
 	var err error
 
@@ -10035,6 +10176,20 @@ func (v *Vector) window(
 		}
 		w.data = v.data
 		w.area = v.area
+		if v.dataLease != nil {
+			if !v.dataLease.Retain() {
+				w.Free(mp)
+				return nil, moerr.NewInternalErrorNoCtx("buffer lease is already released")
+			}
+			w.dataLease = v.dataLease
+		}
+		if v.areaLease != nil {
+			if !v.areaLease.Retain() {
+				w.Free(mp)
+				return nil, moerr.NewInternalErrorNoCtx("buffer lease is already released")
+			}
+			w.areaLease = v.areaLease
+		}
 		// Const-null is a scalar property. In particular, an offset logical
 		// window must not lose it merely because the physical null marker (when
 		// present) lives at row zero.
@@ -10048,9 +10203,23 @@ func (v *Vector) window(
 	if start != end {
 		w.data = v.data[start*v.typ.TypeSize() : end*v.typ.TypeSize()]
 	}
+	if v.dataLease != nil {
+		if !v.dataLease.Retain() {
+			w.Free(mp)
+			return nil, moerr.NewInternalErrorNoCtx("buffer lease is already released")
+		}
+		w.dataLease = v.dataLease
+	}
 	if v.typ.IsVarlen() {
 		w.area = v.area
 		w.areaDisjoint = v.areaDisjoint
+		if v.areaLease != nil {
+			if !v.areaLease.Retain() {
+				w.Free(mp)
+				return nil, moerr.NewInternalErrorNoCtx("buffer lease is already released")
+			}
+			w.areaLease = v.areaLease
+		}
 	}
 	w.cantFreeData = true
 	w.cantFreeArea = true
@@ -10092,14 +10261,50 @@ func (v *Vector) CoversLogicalRows(start, rows int) bool {
 
 func (v *Vector) copyWindowBitmaps(w *Vector, start, end int, mp *mpool.MPool) error {
 	length := end - start
-	hasNull := v.nsp.GetBitmap().CountRange(uint64(start), uint64(end)) > 0
+	if v.nsp.HasBorrowedValidity() {
+		if v.nsp.CountRange(uint64(start), uint64(end)) > 0 {
+			// Retained/asynchronous windows provide an MPool and must reserve
+			// their independent COW destination before sharing the source view.
+			if mp != nil {
+				if err := w.PrepareBorrowedValidity(length, mp); err != nil {
+					return err
+				}
+			}
+			if _, err := v.nsp.InitBorrowedWindow(&w.nsp, start, end); err != nil {
+				return err
+			}
+		}
+	} else {
+		hasNull := v.nsp.GetBitmap().CountRange(uint64(start), uint64(end)) > 0
+		if hasNull {
+			if err := w.PreExtendNulls(length, mp); err != nil {
+				return err
+			}
+			nulls.Range(&v.nsp, uint64(start), uint64(end), uint64(start), &w.nsp)
+		}
+	}
 	hasGrouping := v.gsp.GetBitmap().CountRange(uint64(start), uint64(end)) > 0
-	if hasNull {
+	if hasGrouping {
+		if err := w.PreExtendGrouping(length, mp); err != nil {
+			return err
+		}
+		nulls.Range(&v.gsp, uint64(start), uint64(end), uint64(start), &w.gsp)
+	}
+	return nil
+}
+
+// copyWindowBitmapsOwned is the deep-copy counterpart of copyWindowBitmaps.
+// It never lets a borrowed Arrow validity lease cross an owning Clone/Dup
+// boundary.
+func (v *Vector) copyWindowBitmapsOwned(w *Vector, start, end int, mp *mpool.MPool) error {
+	length := end - start
+	if v.nsp.CountRange(uint64(start), uint64(end)) > 0 {
 		if err := w.PreExtendNulls(length, mp); err != nil {
 			return err
 		}
 		nulls.Range(&v.nsp, uint64(start), uint64(end), uint64(start), &w.nsp)
 	}
+	hasGrouping := v.gsp.GetBitmap().CountRange(uint64(start), uint64(end)) > 0
 	if hasGrouping {
 		if err := w.PreExtendGrouping(length, mp); err != nil {
 			return err
@@ -10174,7 +10379,7 @@ func (v *Vector) CloneWindowTo(w *Vector, start, end int, mp *mpool.MPool) error
 	if err := v.copyStringSourceWindowToWithMP(w, start, end, mp); err != nil {
 		return err
 	}
-	if err := v.copyWindowBitmaps(w, start, end, mp); err != nil {
+	if err := v.copyWindowBitmapsOwned(w, start, end, mp); err != nil {
 		return err
 	}
 	if v.IsConstNull() {

@@ -835,6 +835,11 @@ func convertToPipelineInstruction(op vm.Operator, proc *process.Process, ctx *sc
 
 	case *external.External:
 		in.ExternalScan = &pipeline.ExternalScan{
+			ArrowExecutionScope:         t.Es.ArrowExecutionScope,
+			ArrowObjectIdentities:       t.Es.ArrowObjectIdentities,
+			ArrowRecordBatchShards:      t.Es.ArrowRecordBatchShards,
+			ArrowSchemaFingerprint:      t.Es.ArrowSchemaFingerprint,
+			ArrowConversionPlanVersion:  t.Es.ArrowConversionPlanVersion,
 			Attrs:                       t.Es.Attrs,
 			ColumnListLen:               t.Es.ColumnListLen,
 			Cols:                        t.Es.Cols,
@@ -1437,6 +1442,11 @@ func convertToVmOperator(opr *pipeline.Instruction, ctx *scopeContext, eng engin
 		op = external.NewArgument().WithEs(
 			&external.ExternalParam{
 				ExParamConst: external.ExParamConst{
+					ArrowExecutionScope:         t.ArrowExecutionScope,
+					ArrowObjectIdentities:       t.ArrowObjectIdentities,
+					ArrowRecordBatchShards:      t.ArrowRecordBatchShards,
+					ArrowSchemaFingerprint:      t.ArrowSchemaFingerprint,
+					ArrowConversionPlanVersion:  t.ArrowConversionPlanVersion,
 					Attrs:                       t.Attrs,
 					ColumnListLen:               t.ColumnListLen,
 					FileSize:                    t.FileSize,

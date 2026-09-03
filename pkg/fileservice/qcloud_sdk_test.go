@@ -156,6 +156,74 @@ func TestQCloudSDKCopyObject(t *testing.T) {
 	require.False(t, copied)
 }
 
+func TestQCloudSDKConditionalObjectIdentityReads(t *testing.T) {
+	const lastModRaw = "Wed, 02 Sep 2026 03:04:05 GMT"
+	var requests []*http.Request
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests = append(requests, r.Clone(context.Background()))
+		if r.URL.Query().Get("versionId") == "stale" || r.Header.Get("If-Match") == `"stale"` {
+			w.Header().Set("Content-Type", "application/xml")
+			w.WriteHeader(http.StatusPreconditionFailed)
+			_, _ = io.WriteString(w, `<Error><Code>PreconditionFailed</Code><Message>object changed</Message></Error>`)
+			return
+		}
+		if r.Method == http.MethodHead {
+			w.Header().Set("Content-Length", "6")
+			w.Header().Set("ETag", `"etag-v1"`)
+			w.Header().Set("x-cos-version-id", "version-v1")
+			w.Header().Set("Last-Modified", lastModRaw)
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+		w.Header().Set("Content-Length", "3")
+		w.Header().Set("Content-Range", "bytes 1-3/6")
+		w.Header().Set("ETag", `"etag-v1"`)
+		w.Header().Set("Last-Modified", lastModRaw)
+		w.WriteHeader(http.StatusPartialContent)
+		_, _ = io.WriteString(w, "bcd")
+	}))
+	defer server.Close()
+
+	sdk := newTestCOSClient(t, server)
+	identity, err := sdk.StatObjectIdentity(context.Background(), "object")
+	require.NoError(t, err)
+	wantLastModified, err := time.Parse(http.TimeFormat, lastModRaw)
+	require.NoError(t, err)
+	require.Equal(t, ObjectIdentity{
+		VersionID: "version-v1", ETag: `"etag-v1"`, Size: 6, LastModified: wantLastModified,
+	}, identity)
+
+	min, max := int64(1), int64(4)
+	reader, err := sdk.ReadObjectWithIdentity(context.Background(), "object", &min, &max, identity)
+	require.NoError(t, err)
+	data, err := io.ReadAll(reader)
+	require.NoError(t, err)
+	require.NoError(t, reader.Close())
+	require.Equal(t, "bcd", string(data))
+	versionRequest := requests[len(requests)-1]
+	require.Equal(t, "version-v1", versionRequest.URL.Query().Get("versionId"))
+	require.Empty(t, versionRequest.Header.Get("If-Match"))
+	require.Equal(t, "bytes=1-3", versionRequest.Header.Get("Range"))
+
+	etagIdentity := identity
+	etagIdentity.VersionID = ""
+	reader, err = sdk.ReadObjectWithIdentity(context.Background(), "object", &min, &max, etagIdentity)
+	require.NoError(t, err)
+	require.NoError(t, reader.Close())
+	etagRequest := requests[len(requests)-1]
+	require.Empty(t, etagRequest.URL.Query().Get("versionId"))
+	require.Equal(t, `"etag-v1"`, etagRequest.Header.Get("If-Match"))
+
+	stale := identity
+	stale.VersionID = "stale"
+	_, err = sdk.ReadObjectWithIdentity(context.Background(), "object", &min, &max, stale)
+	require.ErrorIs(t, err, ErrObjectChanged)
+	stale.VersionID = ""
+	stale.ETag = `"stale"`
+	_, err = sdk.ReadObjectWithIdentity(context.Background(), "object", &min, &max, stale)
+	require.ErrorIs(t, err, ErrObjectChanged)
+}
+
 func TestQCloudSDKWriteRetriesSeekablePut(t *testing.T) {
 	data := bytes.Repeat([]byte("x"), int(smallObjectThreshold))
 	size := int64(len(data))

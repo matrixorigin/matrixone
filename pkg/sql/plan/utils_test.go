@@ -1825,6 +1825,19 @@ func TestInitInfileParam_Plain(t *testing.T) {
 	require.NoError(t, InitInfileParam(param))
 	assert.Equal(t, "csv", param.Format)
 	assert.Equal(t, "REM", GetCSVComment(param))
+
+	param = &tree.ExternParam{ExParamConst: tree.ExParamConst{Option: []string{
+		"filepath", "/data.arrow", "format", "ArRoW", "arrow_container", "FiLe",
+	}}}
+	require.NoError(t, InitInfileParam(param))
+	assert.Equal(t, tree.ARROW, param.Format)
+	assert.Equal(t, tree.ARROW_CONTAINER_FILE, param.ArrowContainer)
+
+	param = &tree.ExternParam{ExParamConst: tree.ExParamConst{Option: []string{
+		"filepath", "/data.arrow", "format", "arrow",
+	}}}
+	require.NoError(t, InitInfileParam(param))
+	assert.Equal(t, tree.ARROW_CONTAINER_AUTO, param.ArrowContainer)
 }
 
 // TestGetCSVComment covers the COMMENT option accessor.
@@ -1944,6 +1957,12 @@ func TestInitS3Param_Plain(t *testing.T) {
 	param.Option = []string{"bucket", "b", "jsondata", "array"}
 	require.NoError(t, InitS3Param(param))
 	assert.Equal(t, "jsonline", param.Format)
+
+	param = &tree.ExternParam{ExParamConst: tree.ExParamConst{Option: []string{
+		"bucket", "b", "filepath", "data.arrow", "format", "arrow", "arrow_container", "stream",
+	}}}
+	require.NoError(t, InitS3Param(param))
+	assert.Equal(t, tree.ARROW_CONTAINER_STREAM, param.ArrowContainer)
 }
 
 func TestInitS3Param_HiveLegacyOption(t *testing.T) {
