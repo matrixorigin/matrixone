@@ -286,26 +286,28 @@ FROM kb_portal_article_order a
 LEFT JOIN kb_portal_article_item i ON i.uniqueCode=a.uniqueCode
 WHERE a.spaceId=12 AND a.uniqueCode='U003';
 id    ar
-3    null
+3    65536
 SELECT a.id, CHAR_LENGTH(i.rtfContent) ar
 FROM kb_portal_article_order a
 LEFT JOIN kb_portal_article_item i ON i.uniqueCode=a.uniqueCode
 WHERE a.spaceId=12 AND a.uniqueCode='U004';
 id    ar
-4    null
+4    217554
 SELECT a.id, CHAR_LENGTH(SUBSTRING(i.rtfContent,1,65535)) as ar_trunc
 FROM kb_portal_article_order a
 LEFT JOIN kb_portal_article_item i ON i.uniqueCode=a.uniqueCode
 WHERE a.spaceId=12 AND a.uniqueCode in ('U003','U004');
 id    ar_trunc
-3    null
-4    null
+3    65535
+4    65535
 SELECT a.id
 FROM kb_portal_article_order a
 JOIN kb_portal_article_item i ON i.uniqueCode=a.uniqueCode
 WHERE a.spaceId=12 AND CHAR_LENGTH(SUBSTRING(i.rtfContent,1,65535)) = 65535;
 id
 2
+3
+4
 SELECT a.id, CHAR_LENGTH(i.rtfContent) as ar
 FROM kb_portal_article_order a
 LEFT JOIN kb_portal_article_item i ON i.uniqueCode=a.uniqueCode
