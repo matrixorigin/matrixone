@@ -1334,12 +1334,38 @@ type Engine interface {
 	LatestLogtailAppliedTime() timestamp.Timestamp
 }
 
+// StatsRefreshOptions carries statistics that the statement computed from a
+// table-wide scan. Object metadata remains the source of all fields not
+// present here.
+type StatsRefreshOptions struct {
+	// TableRowCount is the exact row count observed by the same table-wide scan
+	// as ColumnNDVs. Nil leaves the object-metadata estimate unchanged.
+	TableRowCount *float64
+
+	// ColumnNDVs maps canonical column names to table-wide approximate distinct
+	// counts. The engine validates the names and values, caps them at the
+	// effective table row count, and applies them before publishing the new
+	// statistics object.
+	ColumnNDVs map[string]float64
+}
+
 // StatsRefresher is an optional engine capability for statements that define
 // a synchronous statistics-publication boundary, such as ANALYZE TABLE.
 // Implementations must not return until Stats() can observe the returned
 // statistics on the local engine instance.
 type StatsRefresher interface {
 	RefreshTableStats(ctx context.Context, key pb.StatsInfoKey) (*pb.StatsInfo, error)
+}
+
+// StatsRefresherWithOptions extends StatsRefresher without breaking engines
+// that implement the original synchronous refresh capability.
+type StatsRefresherWithOptions interface {
+	StatsRefresher
+	RefreshTableStatsWithOptions(
+		ctx context.Context,
+		key pb.StatsInfoKey,
+		options StatsRefreshOptions,
+	) (*pb.StatsInfo, error)
 }
 
 // LogtailReadBarrier is an optional engine capability that establishes a

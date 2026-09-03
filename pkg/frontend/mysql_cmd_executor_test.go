@@ -5121,9 +5121,27 @@ func TestHandleAnalyzeStmtRestoresOuterExecCtxOnError(t *testing.T) {
 	require.Same(t, outerExecCtx, ses.GetTxnCompileCtx().execCtx)
 }
 
-type analyzeStatsRefresherFunc func(context.Context, pbstats.StatsInfoKey) (*pbstats.StatsInfo, error)
+type analyzeStatsRefresherFunc func(
+	context.Context,
+	pbstats.StatsInfoKey,
+	engine.StatsRefreshOptions,
+) (*pbstats.StatsInfo, error)
 
 func (f analyzeStatsRefresherFunc) RefreshTableStats(
+	ctx context.Context, key pbstats.StatsInfoKey,
+) (*pbstats.StatsInfo, error) {
+	return f(ctx, key, engine.StatsRefreshOptions{})
+}
+
+func (f analyzeStatsRefresherFunc) RefreshTableStatsWithOptions(
+	ctx context.Context, key pbstats.StatsInfoKey, options engine.StatsRefreshOptions,
+) (*pbstats.StatsInfo, error) {
+	return f(ctx, key, options)
+}
+
+type legacyAnalyzeStatsRefresherFunc func(context.Context, pbstats.StatsInfoKey) (*pbstats.StatsInfo, error)
+
+func (f legacyAnalyzeStatsRefresherFunc) RefreshTableStats(
 	ctx context.Context, key pbstats.StatsInfoKey,
 ) (*pbstats.StatsInfo, error) {
 	return f(ctx, key)
@@ -5182,6 +5200,79 @@ func TestAnalyzeStatsPublicationRequiresStatementOwnedTransaction(t *testing.T) 
 			require.Equal(t, test.want, analyzeStatsPublicationAllowed(test.execCtx))
 		})
 	}
+}
+
+func TestAnalyzeStatsRefreshOptionsUsesTableWideNDV(t *testing.T) {
+	ctx := context.Background()
+	tableDef := &plan0.TableDef{
+		Name: "events",
+		Cols: []*plan0.ColDef{
+			{Name: "url", OriginName: "URL"},
+			{Name: "kind"},
+		},
+	}
+	result := &MysqlResultSet{}
+	result.AddColumn(&MysqlColumn{})
+	result.AddColumn(&MysqlColumn{})
+	result.AddColumn(&MysqlColumn{})
+	result.AddRow([]any{uint64(9_967_970), uint64(996), uint64(10_000_000)})
+	observation, err := consumeAnalyzeDerivedResult(ctx, result, 2)
+	require.NoError(t, err)
+	require.Equal(t, uint64(2), result.GetColumnCount(), "the internal count must not be SQL-visible")
+	require.Len(t, result.Data[0], 2)
+
+	options, err := analyzeStatsRefreshOptions(
+		ctx, tableDef, tree.IdentifierList{"URL", "kind"}, observation,
+	)
+	require.NoError(t, err)
+	require.NotNil(t, options.TableRowCount)
+	require.Equal(t, float64(10_000_000), *options.TableRowCount)
+	require.Equal(t, map[string]float64{
+		"url":  9_967_970,
+		"kind": 996,
+	}, options.ColumnNDVs)
+}
+
+func TestAnalyzeStatsRefreshOptionsRejectsInvalidResults(t *testing.T) {
+	ctx := context.Background()
+	noRow := &struct{}{}
+	twoColumns := func(first, second any) *MysqlResultSet {
+		result := &MysqlResultSet{}
+		result.AddColumn(&MysqlColumn{})
+		result.AddColumn(&MysqlColumn{})
+		if first != noRow {
+			result.AddRow([]any{first, second})
+		}
+		return result
+	}
+
+	for _, test := range []struct {
+		name   string
+		result *MysqlResultSet
+	}{
+		{name: "missing result"},
+		{name: "missing row", result: twoColumns(noRow, nil)},
+		{name: "wrong column count", result: makeAnalyzeCountResult("only_ndv", 1)},
+		{name: "NULL NDV", result: twoColumns(nil, uint64(1))},
+		{name: "NULL row count", result: twoColumns(uint64(1), nil)},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			_, err := consumeAnalyzeDerivedResult(ctx, test.result, 1)
+			require.Error(t, err)
+		})
+	}
+
+	tableDef := &plan0.TableDef{Name: "events", Cols: []*plan0.ColDef{{Name: "url"}}}
+	_, err := analyzeStatsRefreshOptions(ctx, tableDef, tree.IdentifierList{"missing"}, analyzeStatsObservation{
+		tableRowCount: 1,
+		columnNDVs:    []float64{1},
+	})
+	require.Error(t, err)
+	_, err = analyzeStatsRefreshOptions(ctx, tableDef, tree.IdentifierList{"url", "missing"}, analyzeStatsObservation{
+		tableRowCount: 1,
+		columnNDVs:    []float64{1},
+	})
+	require.Error(t, err)
 }
 
 func isolateOptimizerStatsTest(t *testing.T, sessions ...*Session) {
@@ -5405,13 +5496,19 @@ func TestPublishAnalyzeTableStatsDefinesCacheBoundary(t *testing.T) {
 	freshStats.AccurateObjectNumber = 8
 	freshStats.NdvMap["url"] = 1_000_000
 	var gotKey pbstats.StatsInfoKey
-	refresher := analyzeStatsRefresherFunc(func(_ context.Context, key pbstats.StatsInfoKey) (*pbstats.StatsInfo, error) {
+	var gotOptions engine.StatsRefreshOptions
+	refresher := analyzeStatsRefresherFunc(func(
+		_ context.Context, key pbstats.StatsInfoKey, options engine.StatsRefreshOptions,
+	) (*pbstats.StatsInfo, error) {
 		gotKey = key
+		gotOptions = options
 		return freshStats, nil
 	})
+	wantOptions := engine.StatsRefreshOptions{ColumnNDVs: map[string]float64{"url": 1_000_000}}
 
-	require.NoError(t, publishAnalyzeTableStats(ses, execCtx.reqCtx, key, refresher))
+	require.NoError(t, publishAnalyzeTableStats(ses, execCtx.reqCtx, key, wantOptions, refresher))
 	require.Equal(t, key, gotKey)
+	require.Equal(t, wantOptions, gotOptions)
 	cache, _ := ses.getStatsCacheWithVersion(physicalKey)
 	wrapper := cache.Get(tableID)
 	require.Same(t, freshStats, wrapper.GetStats())
@@ -5442,6 +5539,36 @@ func TestPublishAnalyzeTableStatsDefinesCacheBoundary(t *testing.T) {
 	require.Same(t, freshStats, currentWrapper.GetStats())
 }
 
+func TestPublishAnalyzeTableStatsKeepsLegacyRefresherCompatibility(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+	ses, execCtx := newAnalyzeHandlerTestSession(t, ctrl)
+	isolateOptimizerStatsTest(t, ses)
+	key := pbstats.StatsInfoKey{TableID: 42, DbName: "db", TableName: "events"}
+	freshStats := plan.NewStatsInfo()
+	var called bool
+	refresher := legacyAnalyzeStatsRefresherFunc(func(
+		_ context.Context, gotKey pbstats.StatsInfoKey,
+	) (*pbstats.StatsInfo, error) {
+		called = true
+		require.Equal(t, key, gotKey)
+		return freshStats, nil
+	})
+
+	err := publishAnalyzeTableStats(
+		ses,
+		execCtx.reqCtx,
+		key,
+		engine.StatsRefreshOptions{ColumnNDVs: map[string]float64{"url": 10}},
+		refresher,
+	)
+	require.NoError(t, err)
+	require.True(t, called)
+	cache, _ := ses.getStatsCacheWithVersion(ses.optimizerStatsKey(key.TableID))
+	wrapper := cache.Get(key.TableID)
+	require.Same(t, freshStats, wrapper.GetStats())
+}
+
 func TestPublishAnalyzeTableStatsDoesNotExposeFailedRefresh(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
@@ -5454,11 +5581,11 @@ func TestPublishAnalyzeTableStatsDoesNotExposeFailedRefresh(t *testing.T) {
 	cacheOptimizerStatsForTest(t, ses, tableID, oldStats)
 	cacheOptimizerPlanForTest(ses, "select url from events", tableID)
 	wantErr := moerr.NewInternalError(execCtx.reqCtx, "refresh failed")
-	refresher := analyzeStatsRefresherFunc(func(context.Context, pbstats.StatsInfoKey) (*pbstats.StatsInfo, error) {
+	refresher := analyzeStatsRefresherFunc(func(context.Context, pbstats.StatsInfoKey, engine.StatsRefreshOptions) (*pbstats.StatsInfo, error) {
 		return nil, wantErr
 	})
 
-	err := publishAnalyzeTableStats(ses, execCtx.reqCtx, key, refresher)
+	err := publishAnalyzeTableStats(ses, execCtx.reqCtx, key, engine.StatsRefreshOptions{}, refresher)
 	require.ErrorIs(t, err, wantErr)
 	cache, _ := ses.getStatsCacheWithVersion(ses.optimizerStatsKey(tableID))
 	wrapper := cache.Get(tableID)
@@ -5475,8 +5602,8 @@ func TestPublishAnalyzeTableStatsDoesNotExposeFailedRefresh(t *testing.T) {
 		t.Fatal("a failed refresh leaked same-table publication admission")
 	}
 	freshStats := plan.NewStatsInfo()
-	require.NoError(t, publishAnalyzeTableStats(ses, execCtx.reqCtx, key,
-		analyzeStatsRefresherFunc(func(context.Context, pbstats.StatsInfoKey) (*pbstats.StatsInfo, error) {
+	require.NoError(t, publishAnalyzeTableStats(ses, execCtx.reqCtx, key, engine.StatsRefreshOptions{},
+		analyzeStatsRefresherFunc(func(context.Context, pbstats.StatsInfoKey, engine.StatsRefreshOptions) (*pbstats.StatsInfo, error) {
 			return freshStats, nil
 		})), "a failed refresh must release same-table publication admission")
 }
@@ -5494,11 +5621,11 @@ func TestPublishAnalyzeTableStatsRejectsMissingRefreshResult(t *testing.T) {
 	cacheOptimizerPlanForTest(ses, "select url from events", tableID)
 	version := currentOptimizerStatsVersion(ses.GetService(), ses.optimizerStatsKey(tableID))
 	clock := currentOptimizerStatsClock(ses.GetService())
-	refresher := analyzeStatsRefresherFunc(func(context.Context, pbstats.StatsInfoKey) (*pbstats.StatsInfo, error) {
+	refresher := analyzeStatsRefresherFunc(func(context.Context, pbstats.StatsInfoKey, engine.StatsRefreshOptions) (*pbstats.StatsInfo, error) {
 		return nil, nil
 	})
 
-	err := publishAnalyzeTableStats(ses, execCtx.reqCtx, key, refresher)
+	err := publishAnalyzeTableStats(ses, execCtx.reqCtx, key, engine.StatsRefreshOptions{}, refresher)
 	require.Error(t, err)
 	require.Equal(t, version,
 		currentOptimizerStatsVersion(ses.GetService(), ses.optimizerStatsKey(tableID)))
@@ -5530,8 +5657,8 @@ func TestPublishAnalyzeTableStatsSerializesAndCancelsAdmission(t *testing.T) {
 	t.Cleanup(releaseFirst)
 	firstDone := make(chan error, 1)
 	go func() {
-		firstDone <- publishAnalyzeTableStats(firstSes, firstExecCtx.reqCtx, key,
-			analyzeStatsRefresherFunc(func(context.Context, pbstats.StatsInfoKey) (*pbstats.StatsInfo, error) {
+		firstDone <- publishAnalyzeTableStats(firstSes, firstExecCtx.reqCtx, key, engine.StatsRefreshOptions{},
+			analyzeStatsRefresherFunc(func(context.Context, pbstats.StatsInfoKey, engine.StatsRefreshOptions) (*pbstats.StatsInfo, error) {
 				close(entered)
 				<-unblock
 				return plan.NewStatsInfo(), nil
@@ -5544,8 +5671,8 @@ func TestPublishAnalyzeTableStatsSerializesAndCancelsAdmission(t *testing.T) {
 	otherKey.TableID = 43
 	otherKey.TableName = "other_events"
 	var otherCalled atomic.Bool
-	require.NoError(t, publishAnalyzeTableStats(secondSes, secondExecCtx.reqCtx, otherKey,
-		analyzeStatsRefresherFunc(func(context.Context, pbstats.StatsInfoKey) (*pbstats.StatsInfo, error) {
+	require.NoError(t, publishAnalyzeTableStats(secondSes, secondExecCtx.reqCtx, otherKey, engine.StatsRefreshOptions{},
+		analyzeStatsRefresherFunc(func(context.Context, pbstats.StatsInfoKey, engine.StatsRefreshOptions) (*pbstats.StatsInfo, error) {
 			otherCalled.Store(true)
 			return plan.NewStatsInfo(), nil
 		})))
@@ -5554,8 +5681,8 @@ func TestPublishAnalyzeTableStatsSerializesAndCancelsAdmission(t *testing.T) {
 	secondCtx, cancel := context.WithCancel(secondExecCtx.reqCtx)
 	cancel()
 	var secondCalled atomic.Bool
-	err := publishAnalyzeTableStats(secondSes, secondCtx, key,
-		analyzeStatsRefresherFunc(func(context.Context, pbstats.StatsInfoKey) (*pbstats.StatsInfo, error) {
+	err := publishAnalyzeTableStats(secondSes, secondCtx, key, engine.StatsRefreshOptions{},
+		analyzeStatsRefresherFunc(func(context.Context, pbstats.StatsInfoKey, engine.StatsRefreshOptions) (*pbstats.StatsInfo, error) {
 			secondCalled.Store(true)
 			return plan.NewStatsInfo(), nil
 		}))
@@ -5759,7 +5886,7 @@ func TestBuildAnalyzeDerivedSQLQuotesIdentifiers(t *testing.T) {
 		Cols: tree.IdentifierList{"select", "a-b", "tick`name"},
 	}
 	require.Equal(t,
-		"select approx_count_distinct(`select`),approx_count_distinct(`a-b`),approx_count_distinct(`tick``name`) from `select-db`.`tick``table`",
+		"select approx_count_distinct(`select`),approx_count_distinct(`a-b`),approx_count_distinct(`tick``name`),count(*) from `select-db`.`tick``table`",
 		buildAnalyzeDerivedSQL(entry, entry.Cols),
 	)
 }
@@ -5810,6 +5937,26 @@ func TestInheritAnalyzeRewriteHint(t *testing.T) {
 	})
 }
 
+func TestAnalyzeDerivedStatsCanPublishObservation(t *testing.T) {
+	for _, test := range []struct {
+		name string
+		sql  string
+		want bool
+	}{
+		{name: "no hint", sql: "select count(*) from t", want: true},
+		{name: "optimizer hint", sql: "/*+ force_index(t) */ select count(*) from t", want: true},
+		{name: "database remap only", sql: `/*+ {"remapdb":{"src":"dst"}} */ select count(*) from dst.t`, want: true},
+		{name: "empty rewrites", sql: `/*+ {"rewrites":{}} */ select count(*) from t`, want: true},
+		{name: "relation rewrite", sql: `/*+ {"rewrites":{"t":"select * from t where keep=1"}} */ select count(*) from t`},
+		{name: "materialized rewrite chain", sql: `/*+ {"rewrites":{"t":["select * from t","select * from t where keep=1"]}} */ select count(*) from t`},
+		{name: "malformed JSON is conservative", sql: `/*+ {"rewrites": */ select count(*) from t`},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			require.Equal(t, test.want, analyzeDerivedStatsCanPublishObservation(test.sql))
+		})
+	}
+}
+
 func TestHandleAnalyzeStmtInheritsCurrentStatementRewriteOnly(t *testing.T) {
 	jsonHint := ` {"rewrites":{"db.t":"select * from db.t where inline_keep = 1"}} `
 	tests := []struct {
@@ -5819,13 +5966,13 @@ func TestHandleAnalyzeStmtInheritsCurrentStatementRewriteOnly(t *testing.T) {
 			name:         "second statement inline is inherited",
 			commandSQL:   "select 1; /*+" + jsonHint + "*/ analyze table db.t(id)",
 			statementSQL: "/*+" + jsonHint + "*/ analyze table db.t(id)",
-			wantDerived:  "/*+" + jsonHint + "*/ select approx_count_distinct(`id`) from `db`.`t`",
+			wantDerived:  "/*+" + jsonHint + "*/ select approx_count_distinct(`id`),count(*) from `db`.`t`",
 		},
 		{
 			name:         "first statement inline is not inherited by later analyze",
 			commandSQL:   "/*+" + jsonHint + "*/ select 1; analyze table db.t(id)",
 			statementSQL: "analyze table db.t(id)",
-			wantDerived:  "select approx_count_distinct(`id`) from `db`.`t`",
+			wantDerived:  "select approx_count_distinct(`id`),count(*) from `db`.`t`",
 		},
 	}
 	for _, tt := range tests {
@@ -5850,7 +5997,7 @@ func TestHandleAnalyzeStmtInheritsCurrentStatementRewriteOnly(t *testing.T) {
 				require.NoError(t, err)
 				results := map[string]*result{
 					gotDerived: {gen: func(*Session) *MysqlResultSet {
-						return makeAnalyzeCountResult("approx_count_distinct(id)", 2)
+						return makeAnalyzeDerivedResult("approx_count_distinct(id)", 2, 4)
 					}},
 				}
 				return []ComputationWrapper{newMockWrapper(ctrl, innerSes, results, nil, gotDerived, stmts[0], proc)}, nil
@@ -6200,11 +6347,11 @@ func TestHandleAnalyzeStmtCollectsDerivedResultsInEntryOrder(t *testing.T) {
 	defer ctrl.Finish()
 	ses, execCtx := newAnalyzeHandlerTestSession(t, ctrl)
 
-	firstSQL := "select approx_count_distinct(`a`) from `first_table`"
-	secondSQL := "select approx_count_distinct(`x`) from `second_table`"
+	firstSQL := "select approx_count_distinct(`a`),count(*) from `first_table`"
+	secondSQL := "select approx_count_distinct(`x`),count(*) from `second_table`"
 	results := map[string]*result{
-		firstSQL:  {gen: func(*Session) *MysqlResultSet { return makeAnalyzeCountResult("approx_count_distinct(a)", 2) }},
-		secondSQL: {gen: func(*Session) *MysqlResultSet { return makeAnalyzeCountResult("approx_count_distinct(x)", 4) }},
+		firstSQL:  {gen: func(*Session) *MysqlResultSet { return makeAnalyzeDerivedResult("approx_count_distinct(a)", 2, 4) }},
+		secondSQL: {gen: func(*Session) *MysqlResultSet { return makeAnalyzeDerivedResult("approx_count_distinct(x)", 4, 4) }},
 	}
 	var derivedSQL []string
 	stub := gostub.Stub(&GetComputationWrapper, func(innerExecCtx *ExecCtx, _ string, _ string, _ engine.Engine, proc *process.Process, innerSes *Session) ([]ComputationWrapper, error) {
@@ -6232,10 +6379,10 @@ func TestHandleAnalyzeStmtDoesNotPublishPartialResultsOnDerivedError(t *testing.
 	defer ctrl.Finish()
 	ses, execCtx := newAnalyzeHandlerTestSession(t, ctrl)
 
-	firstSQL := "select approx_count_distinct(`a`) from `first_table`"
-	secondSQL := "select approx_count_distinct(`x`) from `second_table`"
+	firstSQL := "select approx_count_distinct(`a`),count(*) from `first_table`"
+	secondSQL := "select approx_count_distinct(`x`),count(*) from `second_table`"
 	results := map[string]*result{
-		firstSQL: {gen: func(*Session) *MysqlResultSet { return makeAnalyzeCountResult("approx_count_distinct(a)", 2) }},
+		firstSQL: {gen: func(*Session) *MysqlResultSet { return makeAnalyzeDerivedResult("approx_count_distinct(a)", 2, 4) }},
 	}
 	var derivedSQL []string
 	stub := gostub.Stub(&GetComputationWrapper, func(innerExecCtx *ExecCtx, _ string, _ string, _ engine.Engine, proc *process.Process, innerSes *Session) ([]ComputationWrapper, error) {
@@ -6291,6 +6438,16 @@ func makeAnalyzeCountResult(name string, value uint64) *MysqlResultSet {
 	col.SetColumnType(defines.MYSQL_TYPE_LONGLONG)
 	mrs.AddColumn(col)
 	mrs.AddRow([]any{value})
+	return mrs
+}
+
+func makeAnalyzeDerivedResult(name string, ndv, rowCount uint64) *MysqlResultSet {
+	mrs := makeAnalyzeCountResult(name, ndv)
+	countCol := &MysqlColumn{}
+	countCol.SetName("count(*)")
+	countCol.SetColumnType(defines.MYSQL_TYPE_LONGLONG)
+	mrs.AddColumn(countCol)
+	mrs.Data[0] = append(mrs.Data[0], rowCount)
 	return mrs
 }
 

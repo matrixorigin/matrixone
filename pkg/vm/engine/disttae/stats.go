@@ -23,6 +23,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
@@ -40,6 +41,7 @@ import (
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace/statistic"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/logtailreplay"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 	"go.uber.org/zap"
@@ -1405,7 +1407,7 @@ func (gs *GlobalStats) completeAutomaticStatsRefresh(
 
 // RefreshWithMode triggers a stats refresh with the specified sampling mode
 func (gs *GlobalStats) RefreshWithMode(ctx context.Context, key pb.StatsInfoKey, samplingMode string) error {
-	_, err := gs.refreshStatsWithMode(ctx, key, samplingMode)
+	_, err := gs.refreshStatsWithMode(ctx, key, samplingMode, engine.StatsRefreshOptions{})
 	return err
 }
 
@@ -1417,6 +1419,7 @@ func (gs *GlobalStats) refreshStatsWithMode(
 	ctx context.Context,
 	key pb.StatsInfoKey,
 	samplingMode string,
+	options engine.StatsRefreshOptions,
 ) (*pb.StatsInfo, error) {
 	release, err := gs.acquireStatsRefresh(ctx, key)
 	if err != nil {
@@ -1494,6 +1497,9 @@ func (gs *GlobalStats) refreshStatsWithMode(
 	if cause := gs.statsRefreshCancellationCause(ctx); cause != nil {
 		return nil, cause
 	}
+	if err := applyStatsRefreshOptions(stats, table.TableDef, options); err != nil {
+		return nil, err
+	}
 
 	if !gs.publishStatsForGeneration(key, generation, stats) {
 		if cause := gs.statsRefreshCancellationCause(ctx); cause != nil {
@@ -1508,6 +1514,52 @@ func (gs *GlobalStats) refreshStatsWithMode(
 		key, generation, stats.AccurateObjectNumber, samplingRatio)
 
 	return stats, nil
+}
+
+func applyStatsRefreshOptions(
+	stats *pb.StatsInfo,
+	tableDef *plan2.TableDef,
+	options engine.StatsRefreshOptions,
+) error {
+	if options.TableRowCount == nil && len(options.ColumnNDVs) == 0 {
+		return nil
+	}
+	if stats == nil || tableDef == nil {
+		return moerr.NewInternalErrorNoCtx("cannot apply statistics refresh options without table statistics")
+	}
+	knownColumns := make(map[string]struct{}, len(tableDef.Cols))
+	for _, col := range tableDef.Cols {
+		knownColumns[col.Name] = struct{}{}
+	}
+	rowCount := stats.TableCnt
+	if options.TableRowCount != nil {
+		rowCount = *options.TableRowCount
+		if math.IsNaN(rowCount) || math.IsInf(rowCount, 0) || rowCount < 0 {
+			return moerr.NewInternalErrorNoCtxf(
+				"invalid row count %v for table %q", rowCount, tableDef.Name)
+		}
+	}
+	for column, ndv := range options.ColumnNDVs {
+		if _, ok := knownColumns[column]; !ok {
+			return moerr.NewInternalErrorNoCtxf(
+				"cannot apply NDV for unknown column %q in table %q", column, tableDef.Name)
+		}
+		if math.IsNaN(ndv) || math.IsInf(ndv, 0) || ndv < 0 {
+			return moerr.NewInternalErrorNoCtxf(
+				"invalid NDV %v for column %q in table %q", ndv, column, tableDef.Name)
+		}
+	}
+	if stats.NdvMap == nil {
+		stats.NdvMap = make(map[string]float64, len(options.ColumnNDVs)+1)
+	}
+	stats.TableCnt = rowCount
+	if _, hasFakePrimaryKey := knownColumns[catalog.FakePrimaryKeyColName]; options.TableRowCount != nil && hasFakePrimaryKey {
+		stats.NdvMap[catalog.FakePrimaryKeyColName] = rowCount
+	}
+	for column, ndv := range options.ColumnNDVs {
+		stats.NdvMap[column] = min(ndv, rowCount)
+	}
+	return nil
 }
 
 // publishStatsForGeneration replaces the cache only while the exact table

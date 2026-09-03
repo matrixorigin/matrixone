@@ -17,13 +17,16 @@ package disttae
 import (
 	"context"
 	"errors"
+	"math"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/objectio"
+	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/statsinfo"
 	"github.com/matrixorigin/matrixone/pkg/util/fault"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/stretchr/testify/require"
 )
 
@@ -32,15 +35,18 @@ type optimizerStatsStoreStub struct {
 	refreshErr error
 	key        pb.StatsInfoKey
 	mode       string
+	options    engine.StatsRefreshOptions
 }
 
 func (s *optimizerStatsStoreStub) refreshStatsWithMode(
 	_ context.Context,
 	key pb.StatsInfoKey,
 	mode string,
+	options engine.StatsRefreshOptions,
 ) (*pb.StatsInfo, error) {
 	s.key = key
 	s.mode = mode
+	s.options = options
 	return s.stats, s.refreshErr
 }
 
@@ -49,22 +55,86 @@ func TestRefreshTableStatsDefinesPublicationBoundary(t *testing.T) {
 	t.Run("success", func(t *testing.T) {
 		fresh := &pb.StatsInfo{TableCnt: 1_000_000}
 		store := &optimizerStatsStoreStub{stats: fresh}
+		options := engine.StatsRefreshOptions{ColumnNDVs: map[string]float64{"url": 900_000}}
 
-		got, err := refreshTableStats(context.Background(), key, store)
+		got, err := refreshTableStats(context.Background(), key, options, store)
 		require.NoError(t, err)
 		require.Same(t, fresh, got)
 		require.Equal(t, key, store.key)
 		require.Equal(t, "auto", store.mode)
+		require.Equal(t, options, store.options)
 	})
 
 	t.Run("refresh failure is not published", func(t *testing.T) {
 		wantErr := errors.New("refresh failed")
 		store := &optimizerStatsStoreStub{refreshErr: wantErr}
 
-		got, err := refreshTableStats(context.Background(), key, store)
+		got, err := refreshTableStats(context.Background(), key, engine.StatsRefreshOptions{}, store)
 		require.ErrorIs(t, err, wantErr)
 		require.Nil(t, got)
 	})
+}
+
+func TestApplyStatsRefreshOptions(t *testing.T) {
+	tableDef := &planpb.TableDef{
+		Name: "events",
+		Cols: []*planpb.ColDef{{Name: "url"}, {Name: "kind"}, {Name: "__mo_fake_pk_col", Hidden: true}},
+	}
+
+	t.Run("table-wide row count and NDV replace missing metadata atomically", func(t *testing.T) {
+		rowCount := float64(4)
+		stats := &pb.StatsInfo{}
+		err := applyStatsRefreshOptions(stats, tableDef, engine.StatsRefreshOptions{
+			TableRowCount: &rowCount,
+			ColumnNDVs:    map[string]float64{"url": 3, "kind": 2},
+		})
+		require.NoError(t, err)
+		require.Equal(t, rowCount, stats.TableCnt)
+		require.Equal(t, map[string]float64{
+			"url": 3, "kind": 2, "__mo_fake_pk_col": 4,
+		}, stats.NdvMap)
+	})
+
+	t.Run("selected NDV is capped and unselected metadata is retained", func(t *testing.T) {
+		stats := &pb.StatsInfo{
+			TableCnt: 1_000,
+			NdvMap:   map[string]float64{"url": 10, "kind": 7},
+		}
+		err := applyStatsRefreshOptions(stats, tableDef, engine.StatsRefreshOptions{
+			ColumnNDVs: map[string]float64{"url": 1_100},
+		})
+		require.NoError(t, err)
+		require.Equal(t, float64(1_000), stats.NdvMap["url"])
+		require.Equal(t, float64(7), stats.NdvMap["kind"])
+	})
+
+	for _, test := range []struct {
+		name     string
+		column   string
+		ndv      float64
+		rowCount *float64
+	}{
+		{name: "unknown column", column: "missing", ndv: 1},
+		{name: "negative", column: "url", ndv: -1},
+		{name: "NaN", column: "url", ndv: math.NaN()},
+		{name: "positive infinity", column: "url", ndv: math.Inf(1)},
+		{name: "negative row count", column: "url", ndv: 1, rowCount: float64Pointer(-1)},
+		{name: "NaN row count", column: "url", ndv: 1, rowCount: float64Pointer(math.NaN())},
+	} {
+		t.Run(test.name+" is rejected atomically", func(t *testing.T) {
+			stats := &pb.StatsInfo{TableCnt: 100, NdvMap: map[string]float64{"kind": 7}}
+			err := applyStatsRefreshOptions(stats, tableDef, engine.StatsRefreshOptions{
+				TableRowCount: test.rowCount,
+				ColumnNDVs:    map[string]float64{"kind": 8, test.column: test.ndv},
+			})
+			require.Error(t, err)
+			require.Equal(t, map[string]float64{"kind": 7}, stats.NdvMap)
+		})
+	}
+}
+
+func float64Pointer(value float64) *float64 {
+	return &value
 }
 
 func TestOptimizerStatsRefreshAdmissionIsTableScopedAndCancelable(t *testing.T) {
@@ -279,7 +349,7 @@ func TestExplicitStatsRefreshSubscribeFailureDoesNotRetainGeneration(t *testing.
 	require.NoError(t, err)
 	t.Cleanup(removeFault)
 
-	stats, err := gs.refreshStatsWithMode(context.Background(), key, "auto")
+	stats, err := gs.refreshStatsWithMode(context.Background(), key, "auto", engine.StatsRefreshOptions{})
 	require.Error(t, err)
 	require.Nil(t, stats)
 

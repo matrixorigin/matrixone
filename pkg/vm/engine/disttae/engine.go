@@ -59,6 +59,7 @@ import (
 
 var _ engine.Engine = new(Engine)
 var _ engine.StatsRefresher = new(Engine)
+var _ engine.StatsRefresherWithOptions = new(Engine)
 var _ engine.LogtailReadBarrier = new(Engine)
 
 const (
@@ -1283,15 +1284,33 @@ func (e *Engine) Stats(ctx context.Context, key pb.StatsInfoKey, sync bool) *pb.
 // RefreshTableStats synchronously replaces the local optimizer statistics for
 // key. The cache swap is the publication boundary observed by later plans.
 func (e *Engine) RefreshTableStats(ctx context.Context, key pb.StatsInfoKey) (*pb.StatsInfo, error) {
-	return refreshTableStats(ctx, key, e.globalStats)
+	return e.RefreshTableStatsWithOptions(ctx, key, engine.StatsRefreshOptions{})
+}
+
+func (e *Engine) RefreshTableStatsWithOptions(
+	ctx context.Context,
+	key pb.StatsInfoKey,
+	options engine.StatsRefreshOptions,
+) (*pb.StatsInfo, error) {
+	return refreshTableStats(ctx, key, options, e.globalStats)
 }
 
 type optimizerStatsStore interface {
-	refreshStatsWithMode(context.Context, pb.StatsInfoKey, string) (*pb.StatsInfo, error)
+	refreshStatsWithMode(
+		context.Context,
+		pb.StatsInfoKey,
+		string,
+		engine.StatsRefreshOptions,
+	) (*pb.StatsInfo, error)
 }
 
-func refreshTableStats(ctx context.Context, key pb.StatsInfoKey, store optimizerStatsStore) (*pb.StatsInfo, error) {
-	return store.refreshStatsWithMode(ctx, key, "auto")
+func refreshTableStats(
+	ctx context.Context,
+	key pb.StatsInfoKey,
+	options engine.StatsRefreshOptions,
+	store optimizerStatsStore,
+) (*pb.StatsInfo, error) {
+	return store.refreshStatsWithMode(ctx, key, "auto", options)
 }
 
 // GetGlobalStats returns the GlobalStats instance
