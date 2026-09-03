@@ -23,6 +23,7 @@ import (
 	"io"
 	"iter"
 	"net/http"
+	"net/http/httptrace"
 	"net/url"
 	"os"
 	gotrace "runtime/trace"
@@ -48,41 +49,12 @@ type QCloudSDK struct {
 	copyCredentialDomain objectStorageCopyCredentialDomain
 	perfCounterSets      []*perfcounter.CounterSet
 	listMaxKeys          int
-	multipartInitGates   [64]qcloudMultipartInitGate
-}
-
-type qcloudMultipartInitGate struct {
-	once  sync.Once
-	token chan struct{}
-}
-
-func (g *qcloudMultipartInitGate) lock(ctx context.Context) (func(), error) {
-	if err := ctx.Err(); err != nil {
-		return nil, err
-	}
-	g.once.Do(func() {
-		g.token = make(chan struct{}, 1)
-		g.token <- struct{}{}
-	})
-	select {
-	case <-ctx.Done():
-		return nil, ctx.Err()
-	case <-g.token:
-		if err := ctx.Err(); err != nil {
-			g.token <- struct{}{}
-			return nil, err
-		}
-		return func() { g.token <- struct{}{} }, nil
-	}
 }
 
 const (
-	qcloudMultipartAbortTimeout       = 30 * time.Second
-	qcloudMultipartInitTimeout        = 30 * time.Second
-	qcloudMultipartInitMaxAttempts    = 3
-	qcloudMultipartListMaxAttempts    = 3
-	qcloudMultipartListMaxPages       = 16
-	qcloudMultipartListMaxUploadsPage = 1000
+	qcloudMultipartAbortTimeout    = 30 * time.Second
+	qcloudMultipartInitTimeout     = 30 * time.Second
+	qcloudMultipartInitMaxAttempts = 3
 )
 
 func NewQCloudSDK(
@@ -375,124 +347,6 @@ func (a *QCloudSDK) SupportsParallelMultipart() bool {
 	return true
 }
 
-func (a *QCloudSDK) multipartInitGate(key string) *qcloudMultipartInitGate {
-	// FNV-1a keeps the lock table fixed-size while distributing object keys.
-	var hash uint32 = 2166136261
-	for i := 0; i < len(key); i++ {
-		hash ^= uint32(key[i])
-		hash *= 16777619
-	}
-	return &a.multipartInitGates[int(hash%uint32(len(a.multipartInitGates)))]
-}
-
-func (a *QCloudSDK) listMultipartUploadIDs(ctx context.Context, key string) (map[string]struct{}, error) {
-	ids := make(map[string]struct{})
-	var keyMarker, uploadIDMarker string
-	for page := 0; page < qcloudMultipartListMaxPages; page++ {
-		opts := &cos.ListMultipartUploadsOptions{
-			Prefix:         key,
-			MaxUploads:     qcloudMultipartListMaxUploadsPage,
-			KeyMarker:      keyMarker,
-			UploadIDMarker: uploadIDMarker,
-		}
-		result, err := DoWithRetryContext(ctx, "cos list multipart uploads", func() (*cos.ListMultipartUploadsResult, error) {
-			perfcounter.Update(ctx, func(counter *perfcounter.CounterSet) {
-				counter.FileService.S3.List.Add(1)
-			}, a.perfCounterSets...)
-			res, _, listErr := a.client.Bucket.ListMultipartUploads(ctx, opts)
-			return res, listErr
-		}, qcloudMultipartListMaxAttempts, IsRetryableError)
-		if err != nil {
-			return nil, err
-		}
-		if result == nil {
-			return nil, moerr.NewInternalErrorNoCtxf("cos multipart upload listing returned no result for key %q", key)
-		}
-		for _, upload := range result.Uploads {
-			if upload.Key == key && upload.UploadID != "" {
-				ids[upload.UploadID] = struct{}{}
-			}
-		}
-		if !result.IsTruncated {
-			return ids, nil
-		}
-		nextKeyMarker := result.NextKeyMarker
-		nextUploadIDMarker := result.NextUploadIDMarker
-		if nextKeyMarker == keyMarker && nextUploadIDMarker == uploadIDMarker {
-			return nil, moerr.NewInternalErrorNoCtxf("cos multipart upload listing did not advance for key %q", key)
-		}
-		keyMarker, uploadIDMarker = nextKeyMarker, nextUploadIDMarker
-	}
-	return nil, moerr.NewInternalErrorNoCtxf(
-		"cos multipart upload listing exceeded %d pages for key %q",
-		qcloudMultipartListMaxPages,
-		key,
-	)
-}
-
-func newMultipartUploadIDs(current, baseline map[string]struct{}) []string {
-	ids := make([]string, 0, len(current))
-	for id := range current {
-		if _, existed := baseline[id]; !existed {
-			ids = append(ids, id)
-		}
-	}
-	slices.Sort(ids)
-	return ids
-}
-
-func (a *QCloudSDK) cleanupMultipartUploadIDs(parentCtx context.Context, key string, uploadIDs []string) {
-	cleanupCtx, cleanupCancel := context.WithTimeoutCause(
-		context.WithoutCancel(parentCtx),
-		qcloudMultipartAbortTimeout,
-		context.DeadlineExceeded,
-	)
-	defer cleanupCancel()
-	a.cleanupMultipartUploadIDsWithContext(cleanupCtx, key, uploadIDs)
-}
-
-func (a *QCloudSDK) cleanupMultipartUploadIDsWithContext(ctx context.Context, key string, uploadIDs []string) {
-	for _, uploadID := range uploadIDs {
-		if err := ctx.Err(); err != nil {
-			logutil.Warn("stopped cos multipart-init cleanup",
-				zap.String("key", key),
-				zap.Error(err))
-			return
-		}
-		if err := a.abortMultipartUpload(ctx, key, uploadID); err != nil {
-			logutil.Warn("failed to clean up cos multipart upload after ambiguous init",
-				zap.String("key", key),
-				zap.Error(err))
-			if ctx.Err() != nil {
-				return
-			}
-			continue
-		}
-		metric.FSMultipartInitCleanupCounter.Inc()
-	}
-}
-
-func (a *QCloudSDK) cleanupNewMultipartUploads(
-	parentCtx context.Context,
-	key string,
-	baseline map[string]struct{},
-) {
-	cleanupCtx, cleanupCancel := context.WithTimeoutCause(
-		context.WithoutCancel(parentCtx),
-		qcloudMultipartAbortTimeout,
-		context.DeadlineExceeded,
-	)
-	defer cleanupCancel()
-	current, err := a.listMultipartUploadIDs(cleanupCtx, key)
-	if err != nil {
-		logutil.Warn("failed to reconcile ambiguous cos multipart upload",
-			zap.String("key", key),
-			zap.Error(err))
-		return
-	}
-	a.cleanupMultipartUploadIDsWithContext(cleanupCtx, key, newMultipartUploadIDs(current, baseline))
-}
-
 func waitQCloudMultipartInitRetry(ctx context.Context, attempt int) error {
 	delay := initialRetryInterval
 	for i := 0; i < attempt && delay < maxRetryInterval; i++ {
@@ -519,21 +373,17 @@ func (a *QCloudSDK) initiateMultipartUpload(
 	ctx, cancel := context.WithTimeoutCause(ctx, qcloudMultipartInitTimeout, context.DeadlineExceeded)
 	defer cancel()
 
-	unlock, err := a.multipartInitGate(key).lock(ctx)
-	if err != nil {
-		return nil, err
-	}
-	defer unlock()
-
-	baseline, err := a.listMultipartUploadIDs(ctx, key)
-	if err != nil {
-		return nil, err
-	}
-
 	var firstErr error
 	for attempt := 0; attempt < qcloudMultipartInitMaxAttempts; attempt++ {
+		var wroteRequest atomic.Bool
+		attemptCtx := httptrace.WithClientTrace(ctx, &httptrace.ClientTrace{
+			WroteRequest: func(httptrace.WroteRequestInfo) {
+				wroteRequest.Store(true)
+			},
+		})
+
 		metric.FSMultipartInitAttemptCounter.Inc()
-		output, _, createErr := a.client.Object.InitiateMultipartUpload(ctx, key, opt)
+		output, _, createErr := a.client.Object.InitiateMultipartUpload(attemptCtx, key, opt)
 		if createErr == nil && (output == nil || output.UploadID == "") {
 			createErr = moerr.NewInternalErrorNoCtxf("cos initiate multipart upload returned an empty upload id for key %q", key)
 		}
@@ -541,15 +391,25 @@ func (a *QCloudSDK) initiateMultipartUpload(
 			firstErr = createErr
 		}
 		if output != nil && output.UploadID != "" {
+			if createErr != nil {
+				metric.FSMultipartInitAmbiguousCounter.Inc()
+			}
 			if ctxErr := ctx.Err(); ctxErr != nil {
-				a.cleanupMultipartUploadIDs(ctx, key, []string{output.UploadID})
+				cleanupCtx, cleanupCancel := context.WithTimeoutCause(
+					context.WithoutCancel(ctx),
+					qcloudMultipartAbortTimeout,
+					context.DeadlineExceeded,
+				)
+				defer cleanupCancel()
+				if err := a.abortMultipartUpload(cleanupCtx, key, output.UploadID); err != nil {
+					logutil.Warn("failed to clean up canceled cos multipart init", zap.Error(err))
+				} else {
+					metric.FSMultipartInitCleanupCounter.Inc()
+				}
 				if firstErr != nil {
 					return nil, firstErr
 				}
 				return nil, ctxErr
-			}
-			if createErr != nil {
-				metric.FSMultipartInitAmbiguousCounter.Inc()
 			}
 			if firstErr != nil {
 				metric.FSMultipartInitRecoveredCounter.Inc()
@@ -558,44 +418,14 @@ func (a *QCloudSDK) initiateMultipartUpload(
 		}
 
 		metric.FSMultipartInitAmbiguousCounter.Inc()
-		if ctx.Err() != nil {
-			a.cleanupNewMultipartUploads(ctx, key, baseline)
+		if ctx.Err() != nil || wroteRequest.Load() || !IsRetryableError(createErr) ||
+			attempt+1 >= qcloudMultipartInitMaxAttempts {
 			return nil, firstErr
 		}
-
-		current, reconcileErr := a.listMultipartUploadIDs(ctx, key)
-		if reconcileErr != nil {
-			a.cleanupNewMultipartUploads(ctx, key, baseline)
-			return nil, firstErr
-		}
-		newIDs := newMultipartUploadIDs(current, baseline)
-		switch len(newIDs) {
-		case 0:
-			// A retry is safe only after the strongly consistent multipart listing
-			// proves that this attempt did not create server-side state.
-		case 1:
-			if ctx.Err() != nil {
-				a.cleanupMultipartUploadIDs(ctx, key, newIDs)
-				return nil, firstErr
-			}
-			metric.FSMultipartInitRecoveredCounter.Inc()
-			return &cos.InitiateMultipartUploadResult{
-				Key:      key,
-				UploadID: newIDs[0],
-			}, nil
-		default:
-			// More than one new upload cannot be attributed safely. Same-key
-			// concurrent creates violate FileService's create-only ownership, so
-			// fail all contenders and reclaim their newly created state.
-			a.cleanupMultipartUploadIDs(ctx, key, newIDs)
-			return nil, firstErr
-		}
-
-		if !IsRetryableError(createErr) || attempt+1 >= qcloudMultipartInitMaxAttempts {
-			return nil, firstErr
-		}
+		// WroteRequest is emitted by net/http once writing starts, including
+		// write failures. Its absence proves this attempt never crossed the
+		// transport write boundary, so retrying cannot duplicate an upload.
 		if err := waitQCloudMultipartInitRetry(ctx, attempt); err != nil {
-			a.cleanupNewMultipartUploads(ctx, key, baseline)
 			return nil, firstErr
 		}
 	}

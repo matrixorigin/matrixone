@@ -691,34 +691,11 @@ func newMockCOSServer(t *testing.T, failPart int) (*httptest.Server, *cosServerS
 		failPartStatus:     http.StatusBadRequest,
 		failCompleteStatus: http.StatusBadRequest,
 		failCreateStatus:   http.StatusBadRequest,
-		failListStatus:     http.StatusBadRequest,
 		uploadID:           "cos-upload",
 		parts:              make(map[int][]byte),
-		activeUploads:      make(map[string]string),
 	}
 	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
-		case r.Method == http.MethodGet && r.URL.Query().Has("uploads"):
-			state.listCalls.Add(1)
-			if state.failList {
-				w.WriteHeader(state.failListStatus)
-				return
-			}
-			prefix := r.URL.Query().Get("prefix")
-			state.mu.Lock()
-			uploads := make(map[string]string, len(state.activeUploads))
-			for id, key := range state.activeUploads {
-				if strings.HasPrefix(key, prefix) {
-					uploads[id] = key
-				}
-			}
-			state.mu.Unlock()
-			w.Header().Set("Content-Type", "application/xml")
-			_, _ = io.WriteString(w, `<ListMultipartUploadsResult><IsTruncated>false</IsTruncated>`)
-			for id, key := range uploads {
-				_, _ = fmt.Fprintf(w, `<Upload><Key>%s</Key><UploadId>%s</UploadId></Upload>`, key, id)
-			}
-			_, _ = io.WriteString(w, `</ListMultipartUploadsResult>`)
 		case r.Method == http.MethodPost && strings.Contains(r.URL.RawQuery, "uploads"):
 			initCall := state.initCalls.Add(1)
 			if state.failCreate {
@@ -727,16 +704,9 @@ func newMockCOSServer(t *testing.T, failPart int) (*httptest.Server, *cosServerS
 			}
 			_, _ = io.ReadAll(r.Body)
 			uploadID := state.uploadID
-			if initCall > 1 {
+			if state.generateUploadIDs {
 				uploadID = fmt.Sprintf("%s-%d", uploadID, initCall)
 			}
-			key := strings.TrimPrefix(r.URL.Path, "/")
-			state.mu.Lock()
-			state.activeUploads[uploadID] = key
-			if state.addConcurrentUploadOnInit {
-				state.activeUploads[uploadID+"-concurrent"] = key
-			}
-			state.mu.Unlock()
 			w.Header().Set("Content-Type", "application/xml")
 			_, _ = fmt.Fprintf(w, `<InitiateMultipartUploadResult><UploadId>%s</UploadId></InitiateMultipartUploadResult>`, uploadID)
 		case r.Method == http.MethodPut && !strings.Contains(r.URL.RawQuery, "partNumber") && !strings.Contains(r.URL.RawQuery, "uploadId") && !strings.Contains(r.URL.RawQuery, "uploads"):
@@ -768,6 +738,7 @@ func newMockCOSServer(t *testing.T, failPart int) (*httptest.Server, *cosServerS
 			}
 			state.mu.Lock()
 			state.completeBody = append([]byte{}, body...)
+			state.completedUploadID = r.URL.Query().Get("uploadId")
 			for partNum := 1; partNum < len(state.parts); partNum++ {
 				if len(state.parts[partNum]) < int(minMultipartPartSize) {
 					state.mu.Unlock()
@@ -777,19 +748,12 @@ func newMockCOSServer(t *testing.T, failPart int) (*httptest.Server, *cosServerS
 					return
 				}
 			}
-			delete(state.activeUploads, r.URL.Query().Get("uploadId"))
-			responseBody := `<CompleteMultipartUploadResult><Location>loc</Location><Bucket>bucket</Bucket><Key>object</Key><ETag>etag</ETag></CompleteMultipartUploadResult>`
-			state.respBody = responseBody
 			state.mu.Unlock()
 			w.Header().Set("Content-Type", "application/xml")
+			state.respBody = `<CompleteMultipartUploadResult><Location>loc</Location><Bucket>bucket</Bucket><Key>object</Key><ETag>etag</ETag></CompleteMultipartUploadResult>`
 			state.completed.Store(true)
-			_, _ = w.Write([]byte(responseBody))
+			_, _ = w.Write([]byte(state.respBody))
 		case r.Method == http.MethodDelete && strings.Contains(r.URL.RawQuery, "uploadId"):
-			state.mu.Lock()
-			uploadID := r.URL.Query().Get("uploadId")
-			delete(state.activeUploads, uploadID)
-			state.abortedUploadIDs = append(state.abortedUploadIDs, uploadID)
-			state.mu.Unlock()
 			state.aborted.Store(true)
 			w.WriteHeader(http.StatusOK)
 		default:
@@ -800,30 +764,26 @@ func newMockCOSServer(t *testing.T, failPart int) (*httptest.Server, *cosServerS
 }
 
 type cosServerState struct {
-	mu                        sync.Mutex
-	parts                     map[int][]byte
-	activeUploads             map[string]string
-	abortedUploadIDs          []string
-	addConcurrentUploadOnInit bool
-	completeBody              []byte
-	failPart                  int
-	failPartSeen              chan struct{}
-	failPartOnce              sync.Once
-	failPartStatus            int
-	failComplete              bool
-	failCompleteStatus        int
-	failCreate                bool
-	failCreateStatus          int
-	failList                  bool
-	failListStatus            int
-	uploadID                  string
-	initCalls                 atomic.Int32
-	listCalls                 atomic.Int32
-	aborted                   atomic.Bool
-	completed                 atomic.Bool
-	respBody                  string
-	putCount                  int
-	putBody                   []byte
+	mu                 sync.Mutex
+	parts              map[int][]byte
+	completeBody       []byte
+	failPart           int
+	failPartSeen       chan struct{}
+	failPartOnce       sync.Once
+	failPartStatus     int
+	failComplete       bool
+	failCompleteStatus int
+	failCreate         bool
+	failCreateStatus   int
+	uploadID           string
+	generateUploadIDs  bool
+	completedUploadID  string
+	initCalls          atomic.Int32
+	aborted            atomic.Bool
+	completed          atomic.Bool
+	respBody           string
+	putCount           int
+	putBody            []byte
 }
 
 func newTestCOSClient(t *testing.T, srv *httptest.Server) *QCloudSDK {
@@ -871,9 +831,6 @@ func TestCOSParallelMultipartSuccess(t *testing.T) {
 	}
 	if len(state.completeBody) == 0 {
 		t.Fatalf("complete body not recorded")
-	}
-	if got := state.listCalls.Load(); got != 1 {
-		t.Fatalf("expected one baseline multipart LIST, got %d", got)
 	}
 	if got := counter.FileService.S3.Put.Load(); got != 2 {
 		t.Fatalf("expected 2 physical PUT requests, got %d", got)
@@ -1059,10 +1016,10 @@ func TestCOSMultipartInitRecoversBeforeRequest(t *testing.T) {
 	server, state := newMockCOSServer(t, 0)
 	defer server.Close()
 	state.uploadID = "cos-uid-init-before-request"
-
+	sentinel := errors.New("http: server closed idle connection")
 	transport := &cosMultipartInitBeforeRequestTransport{
 		base:     server.Client().Transport,
-		err:      errors.New("http: server closed idle connection"),
+		err:      sentinel,
 		failures: 1,
 	}
 	sdk := newTestCOSClientWithTransport(t, server, transport)
@@ -1072,21 +1029,79 @@ func TestCOSMultipartInitRecoversBeforeRequest(t *testing.T) {
 	recoveredBefore := testutil.ToFloat64(metric.FSMultipartInitRecoveredCounter)
 	data := bytes.Repeat([]byte("r"), int(minMultipartPartSize+1))
 	size := int64(len(data))
-	err := sdk.WriteMultipartParallel(context.Background(), "object", bytes.NewReader(data), &size, &ParallelMultipartOption{
-		PartSize:    minMultipartPartSize,
-		Concurrency: 1,
-	})
-	require.NoError(t, err)
+	require.NoError(t, sdk.WriteMultipartParallel(context.Background(), "object", bytes.NewReader(data), &size, nil))
 	require.Equal(t, int32(2), transport.initCalls.Load())
-	require.Equal(t, int32(1), state.initCalls.Load(), "retry must create exactly one server-side upload")
-	require.Equal(t, int32(2), state.listCalls.Load(), "normal baseline and failed-attempt reconciliation")
+	require.Equal(t, int32(1), state.initCalls.Load())
 	require.True(t, state.completed.Load())
 	require.Equal(t, attemptsBefore+2, testutil.ToFloat64(metric.FSMultipartInitAttemptCounter))
 	require.Equal(t, ambiguousBefore+1, testutil.ToFloat64(metric.FSMultipartInitAmbiguousCounter))
 	require.Equal(t, recoveredBefore+1, testutil.ToFloat64(metric.FSMultipartInitRecoveredCounter))
 }
 
-func TestCOSMultipartInitRecoversCommittedResponse(t *testing.T) {
+func TestCOSMultipartInitDoesNotAdoptAnotherInstanceUpload(t *testing.T) {
+	server, state := newMockCOSServer(t, 0)
+	defer server.Close()
+	state.uploadID = "upload"
+	state.generateUploadIDs = true
+	sentinel := errors.New("http: server closed idle connection")
+	transport := &cosMultipartInitBeforeRequestTransport{
+		base:     server.Client().Transport,
+		err:      sentinel,
+		failures: 1,
+		onFailure: func() {
+			resp, err := http.Post(server.URL+"/object?uploads", "application/octet-stream", nil)
+			require.NoError(t, err)
+			_ = resp.Body.Close()
+		},
+	}
+	sdk := newTestCOSClientWithTransport(t, server, transport)
+
+	data := bytes.Repeat([]byte("r"), int(minMultipartPartSize+1))
+	size := int64(len(data))
+	require.NoError(t, sdk.WriteMultipartParallel(context.Background(), "object", bytes.NewReader(data), &size, nil))
+	require.Equal(t, int32(2), state.initCalls.Load(), "one external init and one init owned by this writer")
+	state.mu.Lock()
+	require.Equal(t, "upload-2", state.completedUploadID)
+	state.mu.Unlock()
+	require.False(t, state.aborted.Load())
+}
+
+func TestCOSMultipartInitDoesNotRequireListPermission(t *testing.T) {
+	server, state := newMockCOSServer(t, 0)
+	defer server.Close()
+	state.uploadID = "cos-uid-no-list-permission"
+	transport := &denyMultipartListTransport{base: server.Client().Transport}
+	sdk := newTestCOSClientWithTransport(t, server, transport)
+
+	data := bytes.Repeat([]byte("r"), int(minMultipartPartSize+1))
+	size := int64(len(data))
+	require.NoError(t, sdk.WriteMultipartParallel(context.Background(), "object", bytes.NewReader(data), &size, nil))
+	require.Zero(t, transport.listCalls.Load())
+	require.Equal(t, int32(1), state.initCalls.Load())
+}
+
+func TestCOSMultipartInitCancellationCleansOwnedUpload(t *testing.T) {
+	server, state := newMockCOSServer(t, 0)
+	defer server.Close()
+	state.uploadID = "cos-uid-canceled"
+	ctx, cancel := context.WithCancel(context.Background())
+	transport := &cosMultipartInitCancelAfterResponseTransport{
+		base:   server.Client().Transport,
+		cancel: cancel,
+	}
+	sdk := newTestCOSClientWithTransport(t, server, transport)
+
+	cleanupBefore := testutil.ToFloat64(metric.FSMultipartInitCleanupCounter)
+	data := bytes.Repeat([]byte("r"), int(minMultipartPartSize+1))
+	size := int64(len(data))
+	err := sdk.WriteMultipartParallel(ctx, "object", bytes.NewReader(data), &size, nil)
+	require.ErrorIs(t, err, context.Canceled)
+	require.True(t, state.aborted.Load())
+	require.False(t, state.completed.Load())
+	require.Equal(t, cleanupBefore+1, testutil.ToFloat64(metric.FSMultipartInitCleanupCounter))
+}
+
+func TestCOSMultipartInitDoesNotRetryAfterRequestCommitted(t *testing.T) {
 	tests := []struct {
 		name string
 		err  error
@@ -1101,75 +1116,32 @@ func TestCOSMultipartInitRecoversCommittedResponse(t *testing.T) {
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			server, state := newMockCOSServer(t, 0)
+			var initCalls atomic.Int32
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.Method != http.MethodPost || !r.URL.Query().Has("uploads") {
+					w.WriteHeader(http.StatusNotFound)
+					return
+				}
+				uploadID := fmt.Sprintf("upload-%d", initCalls.Add(1))
+				w.Header().Set("Content-Type", "application/xml")
+				_, _ = fmt.Fprintf(w, `<InitiateMultipartUploadResult><UploadId>%s</UploadId></InitiateMultipartUploadResult>`, uploadID)
+			}))
 			defer server.Close()
-			state.uploadID = "cos-uid-response-lost"
-			transport := &cosMultipartInitResponseLostTransport{
+
+			sdk := newTestCOSClientWithTransport(t, server, &cosMultipartInitResponseLostTransport{
 				base: server.Client().Transport,
 				err:  test.err,
-			}
-			sdk := newTestCOSClientWithTransport(t, server, transport)
-
+			})
 			data := bytes.Repeat([]byte("r"), int(minMultipartPartSize+1))
 			size := int64(len(data))
 			err := sdk.WriteMultipartParallel(context.Background(), "object", bytes.NewReader(data), &size, nil)
-			require.NoError(t, err)
-			require.Equal(t, int32(1), state.initCalls.Load(), "response loss must not create a second upload")
-			require.True(t, state.completed.Load())
-			state.mu.Lock()
-			require.Empty(t, state.activeUploads)
-			state.mu.Unlock()
+			require.ErrorContains(t, err, test.err.Error())
+			require.Equal(t, int32(1), initCalls.Load())
 		})
 	}
 }
 
-func TestCOSMultipartInitReconcileExcludesBaseline(t *testing.T) {
-	server, state := newMockCOSServer(t, 0)
-	defer server.Close()
-	state.uploadID = "cos-uid-new"
-	state.activeUploads["cos-uid-old"] = "object"
-	transport := &cosMultipartInitResponseLostTransport{
-		base: server.Client().Transport,
-		err:  errors.New("http: server closed idle connection"),
-	}
-	sdk := newTestCOSClientWithTransport(t, server, transport)
-
-	data := bytes.Repeat([]byte("r"), int(minMultipartPartSize+1))
-	size := int64(len(data))
-	require.NoError(t, sdk.WriteMultipartParallel(context.Background(), "object", bytes.NewReader(data), &size, nil))
-	state.mu.Lock()
-	require.Equal(t, map[string]string{"cos-uid-old": "object"}, state.activeUploads)
-	require.NotContains(t, state.abortedUploadIDs, "cos-uid-old")
-	state.mu.Unlock()
-}
-
-func TestCOSMultipartInitCleansAmbiguousConcurrentUploads(t *testing.T) {
-	server, state := newMockCOSServer(t, 0)
-	defer server.Close()
-	state.uploadID = "cos-uid-ambiguous"
-	state.addConcurrentUploadOnInit = true
-	sentinel := errors.New("http: server closed idle connection")
-	transport := &cosMultipartInitResponseLostTransport{
-		base: server.Client().Transport,
-		err:  sentinel,
-	}
-	sdk := newTestCOSClientWithTransport(t, server, transport)
-
-	cleanupBefore := testutil.ToFloat64(metric.FSMultipartInitCleanupCounter)
-	data := bytes.Repeat([]byte("r"), int(minMultipartPartSize+1))
-	size := int64(len(data))
-	err := sdk.WriteMultipartParallel(context.Background(), "object", bytes.NewReader(data), &size, nil)
-	require.ErrorContains(t, err, sentinel.Error())
-	require.Equal(t, int32(1), state.initCalls.Load())
-	require.False(t, state.completed.Load())
-	state.mu.Lock()
-	require.Empty(t, state.activeUploads)
-	require.Len(t, state.abortedUploadIDs, 2)
-	state.mu.Unlock()
-	require.Equal(t, cleanupBefore+2, testutil.ToFloat64(metric.FSMultipartInitCleanupCounter))
-}
-
-func TestCOSMultipartInitRetriesAreBounded(t *testing.T) {
+func TestCOSMultipartInitRetriesAreBoundedBeforeRequest(t *testing.T) {
 	server, state := newMockCOSServer(t, 0)
 	defer server.Close()
 	sentinel := errors.New("http: server closed idle connection")
@@ -1186,182 +1158,6 @@ func TestCOSMultipartInitRetriesAreBounded(t *testing.T) {
 	require.ErrorContains(t, err, sentinel.Error())
 	require.Equal(t, int32(qcloudMultipartInitMaxAttempts), transport.initCalls.Load())
 	require.Zero(t, state.initCalls.Load())
-	require.Equal(t, int32(qcloudMultipartInitMaxAttempts+1), state.listCalls.Load())
-	state.mu.Lock()
-	require.Empty(t, state.activeUploads)
-	state.mu.Unlock()
-}
-
-func TestCOSMultipartInitRequiresReconciliationBaseline(t *testing.T) {
-	server, state := newMockCOSServer(t, 0)
-	defer server.Close()
-	state.failList = true
-	sdk := newTestCOSClient(t, server)
-
-	data := bytes.Repeat([]byte("r"), int(minMultipartPartSize+1))
-	size := int64(len(data))
-	err := sdk.WriteMultipartParallel(context.Background(), "object", bytes.NewReader(data), &size, nil)
-	require.Error(t, err)
-	require.Zero(t, state.initCalls.Load(), "init must not create state without a reconciliation baseline")
-}
-
-func TestCOSMultipartInitDoesNotRetryNonRetryableError(t *testing.T) {
-	server, state := newMockCOSServer(t, 0)
-	defer server.Close()
-	state.failCreate = true
-	sdk := newTestCOSClient(t, server)
-
-	data := bytes.Repeat([]byte("r"), int(minMultipartPartSize+1))
-	size := int64(len(data))
-	err := sdk.WriteMultipartParallel(context.Background(), "object", bytes.NewReader(data), &size, nil)
-	require.Error(t, err)
-	require.Equal(t, int32(1), state.initCalls.Load())
-	require.Equal(t, int32(2), state.listCalls.Load())
-	state.mu.Lock()
-	require.Empty(t, state.activeUploads)
-	state.mu.Unlock()
-}
-
-func TestCOSMultipartInitCancellationCleansCommittedUpload(t *testing.T) {
-	server, state := newMockCOSServer(t, 0)
-	defer server.Close()
-	state.uploadID = "cos-uid-canceled"
-	ctx, cancel := context.WithCancel(context.Background())
-	sentinel := errors.New("http: server closed idle connection")
-	transport := &cosMultipartInitResponseLostTransport{
-		base:        server.Client().Transport,
-		err:         sentinel,
-		afterCommit: cancel,
-	}
-	sdk := newTestCOSClientWithTransport(t, server, transport)
-
-	data := bytes.Repeat([]byte("r"), int(minMultipartPartSize+1))
-	size := int64(len(data))
-	err := sdk.WriteMultipartParallel(ctx, "object", bytes.NewReader(data), &size, nil)
-	require.ErrorContains(t, err, context.Canceled.Error())
-	require.True(t, state.aborted.Load())
-	state.mu.Lock()
-	require.Empty(t, state.activeUploads)
-	require.Equal(t, []string{"cos-uid-canceled"}, state.abortedUploadIDs)
-	state.mu.Unlock()
-}
-
-func TestCOSMultipartInitConcurrentWritersRecoverIndependently(t *testing.T) {
-	server, state := newMockCOSServer(t, 0)
-	defer server.Close()
-	state.uploadID = "cos-uid-concurrent"
-	transport := &cosMultipartInitResponseLostTransport{
-		base: server.Client().Transport,
-		err:  errors.New("http: server closed idle connection"),
-	}
-	sdk := newTestCOSClientWithTransport(t, server, transport)
-
-	start := make(chan struct{})
-	errs := make(chan error, 2)
-	for _, key := range []string{"object-a", "object-b"} {
-		go func(key string) {
-			<-start
-			data := bytes.Repeat([]byte(key), int(minMultipartPartSize/int64(len(key))+1))
-			size := int64(len(data))
-			errs <- sdk.WriteMultipartParallel(context.Background(), key, bytes.NewReader(data), &size, nil)
-		}(key)
-	}
-	close(start)
-	require.NoError(t, <-errs)
-	require.NoError(t, <-errs)
-	require.Equal(t, int32(2), state.initCalls.Load())
-	state.mu.Lock()
-	require.Empty(t, state.activeUploads)
-	state.mu.Unlock()
-}
-
-func TestQCloudListMultipartUploadIDsPagination(t *testing.T) {
-	var calls atomic.Int32
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		call := calls.Add(1)
-		require.Equal(t, http.MethodGet, r.Method)
-		require.Equal(t, "object", r.URL.Query().Get("prefix"))
-		w.Header().Set("Content-Type", "application/xml")
-		if call == 1 {
-			require.Empty(t, r.URL.Query().Get("key-marker"))
-			_, _ = io.WriteString(w, `<ListMultipartUploadsResult><IsTruncated>true</IsTruncated><NextKeyMarker>object</NextKeyMarker><NextUploadIdMarker>id-1</NextUploadIdMarker><Upload><Key>object</Key><UploadId>id-1</UploadId></Upload><Upload><Key>object-suffix</Key><UploadId>ignored</UploadId></Upload></ListMultipartUploadsResult>`)
-			return
-		}
-		require.Equal(t, "object", r.URL.Query().Get("key-marker"))
-		require.Equal(t, "id-1", r.URL.Query().Get("upload-id-marker"))
-		_, _ = io.WriteString(w, `<ListMultipartUploadsResult><IsTruncated>false</IsTruncated><Upload><Key>object</Key><UploadId>id-2</UploadId></Upload></ListMultipartUploadsResult>`)
-	}))
-	defer server.Close()
-
-	sdk := newTestCOSClient(t, server)
-	ids, err := sdk.listMultipartUploadIDs(context.Background(), "object")
-	require.NoError(t, err)
-	require.Equal(t, map[string]struct{}{"id-1": {}, "id-2": {}}, ids)
-	require.Equal(t, int32(2), calls.Load())
-}
-
-func TestQCloudListMultipartUploadIDsRejectsStalledPagination(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		w.Header().Set("Content-Type", "application/xml")
-		_, _ = io.WriteString(w, `<ListMultipartUploadsResult><IsTruncated>true</IsTruncated></ListMultipartUploadsResult>`)
-	}))
-	defer server.Close()
-
-	sdk := newTestCOSClient(t, server)
-	_, err := sdk.listMultipartUploadIDs(context.Background(), "object")
-	require.ErrorContains(t, err, "did not advance")
-}
-
-func TestQCloudMultipartInitGateHonorsCancellation(t *testing.T) {
-	sdk := new(QCloudSDK)
-	holderUnlock, err := sdk.multipartInitGate("object").lock(context.Background())
-	require.NoError(t, err)
-	defer func() {
-		if holderUnlock != nil {
-			holderUnlock()
-		}
-	}()
-
-	baseCtx, cancel := context.WithCancel(context.Background())
-	ctx := &doneObservedContext{
-		Context:  baseCtx,
-		observed: make(chan struct{}),
-	}
-	result := make(chan error, 1)
-	go func() {
-		_, lockErr := sdk.multipartInitGate("object").lock(ctx)
-		result <- lockErr
-	}()
-
-	select {
-	case <-ctx.observed:
-	case <-time.After(time.Second):
-		t.Fatal("gate waiter did not start")
-	}
-	cancel()
-	select {
-	case err = <-result:
-		require.ErrorIs(t, err, context.Canceled)
-	case <-time.After(time.Second):
-		t.Fatal("gate waiter did not observe cancellation")
-	}
-
-	holderUnlock()
-	holderUnlock = nil
-	unlock, err := sdk.multipartInitGate("object").lock(context.Background())
-	require.NoError(t, err)
-	unlock()
-}
-
-type doneObservedContext struct {
-	context.Context
-	once     sync.Once
-	observed chan struct{}
-}
-
-func (c *doneObservedContext) Done() <-chan struct{} {
-	c.once.Do(func() { close(c.observed) })
-	return c.Context.Done()
 }
 
 type cosMultipartInitBeforeRequestTransport struct {
@@ -1369,19 +1165,25 @@ type cosMultipartInitBeforeRequestTransport struct {
 	err       error
 	failures  int32
 	initCalls atomic.Int32
+	onFailure func()
 }
 
 type cosMultipartInitResponseLostTransport struct {
-	base        http.RoundTripper
-	err         error
-	afterCommit func()
+	base http.RoundTripper
+	err  error
 }
 
-func newTestCOSClientWithTransport(
-	t *testing.T,
-	server *httptest.Server,
-	transport http.RoundTripper,
-) *QCloudSDK {
+type denyMultipartListTransport struct {
+	base      http.RoundTripper
+	listCalls atomic.Int32
+}
+
+type cosMultipartInitCancelAfterResponseTransport struct {
+	base   http.RoundTripper
+	cancel context.CancelFunc
+}
+
+func newTestCOSClientWithTransport(t *testing.T, server *httptest.Server, transport http.RoundTripper) *QCloudSDK {
 	t.Helper()
 	baseURL, err := url.Parse(server.URL)
 	require.NoError(t, err)
@@ -1401,10 +1203,25 @@ func (t *cosMultipartInitResponseLostTransport) RoundTrip(req *http.Request) (*h
 	if req.Method == http.MethodPost && req.URL.Query().Has("uploads") {
 		_, _ = io.Copy(io.Discard, resp.Body)
 		_ = resp.Body.Close()
-		if t.afterCommit != nil {
-			t.afterCommit()
-		}
 		return nil, t.err
+	}
+	return resp, nil
+}
+
+func (t *cosMultipartInitCancelAfterResponseTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	resp, err := t.base.RoundTrip(req)
+	if err != nil {
+		return nil, err
+	}
+	if req.Method == http.MethodPost && req.URL.Query().Has("uploads") {
+		body, readErr := io.ReadAll(resp.Body)
+		_ = resp.Body.Close()
+		if readErr != nil {
+			return nil, readErr
+		}
+		resp.Body = io.NopCloser(bytes.NewReader(body))
+		resp.ContentLength = int64(len(body))
+		t.cancel()
 	}
 	return resp, nil
 }
@@ -1415,8 +1232,24 @@ func (t *cosMultipartInitBeforeRequestTransport) RoundTrip(req *http.Request) (*
 			if req.Body != nil {
 				_ = req.Body.Close()
 			}
+			if t.onFailure != nil {
+				t.onFailure()
+			}
 			return nil, t.err
 		}
+	}
+	return t.base.RoundTrip(req)
+}
+
+func (t *denyMultipartListTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	if req.Method == http.MethodGet && req.URL.Query().Has("uploads") {
+		t.listCalls.Add(1)
+		return &http.Response{
+			StatusCode: http.StatusForbidden,
+			Header:     make(http.Header),
+			Body:       io.NopCloser(strings.NewReader("Access Denied")),
+			Request:    req,
+		}, nil
 	}
 	return t.base.RoundTrip(req)
 }
