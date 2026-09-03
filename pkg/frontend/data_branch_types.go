@@ -245,6 +245,10 @@ type tableStuff struct {
 		baseColToTarIdx     []int    // for base batch Vec[i+1], the target column index, or -1
 		baseColNames        []string // target data column index to lineage-resolved base name
 		lcaColNames         []string // target data column index to lineage-resolved LCA name
+		// indexedSpecialUpdateIdxes are special writable columns that belong to
+		// a unique secondary index. MatrixOne rejects assigning those columns in
+		// ON DUPLICATE KEY UPDATE, so changed values use a native UPDATE instead.
+		indexedSpecialUpdateIdxes []int
 	}
 
 	worker               *ants.Pool
@@ -278,11 +282,17 @@ func (t *tableStuff) resolvedSnapshots(ses *Session) (tarSP, baseSP types.TS) {
 }
 
 type batchWithKind struct {
-	name           string
-	kind           string
-	side           int
-	fromUpdate     bool
-	restoreMissing bool
+	name       string
+	kind       string
+	side       int
+	fromUpdate bool
+	// requiresNativeUpdate marks an update whose changed special column is
+	// part of a unique secondary index. It must bypass the staged ODKU path.
+	requiresNativeUpdate bool
+	restoreMissing       bool
+	// hasReplacement marks a preserved PICK conflict whose source side emitted
+	// a row to replace the destination conflict victim.
+	hasReplacement bool
 	batch          *batch.Batch
 }
 

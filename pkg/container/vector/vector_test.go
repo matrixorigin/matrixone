@@ -6276,6 +6276,37 @@ func BenchmarkCopyPreallocatedNullVectorReverseFill(b *testing.B) {
 	}
 }
 
+func TestUnionBatchCapacityFailurePreservesDestinationArea(t *testing.T) {
+	oldCapLimit := mpool.CapLimit
+	mpool.CapLimit = 64 << 10
+	t.Cleanup(func() {
+		mpool.CapLimit = oldCapLimit
+	})
+
+	mp := mpool.MustNewZeroNoFixed()
+	destination := NewVec(types.New(types.T_array_float32, 1024, 0))
+	source := NewVec(types.New(types.T_array_float32, 1024, 0))
+	defer func() {
+		destination.Free(mp)
+		source.Free(mp)
+		require.Zero(t, mp.CurrNB())
+		mpool.DeleteMPool(mp)
+	}()
+
+	value := make([]float32, 1024)
+	for range 15 {
+		require.NoError(t, AppendArray(destination, value, false, mp))
+	}
+	require.NoError(t, AppendArray(source, value, false, mp))
+	beforeLength := destination.Length()
+	beforeArea := bytes.Clone(destination.GetArea())
+
+	err := destination.UnionBatch(source, 0, 1, nil, mp)
+	require.ErrorIs(t, err, mpool.ErrAllocationAllocatorLimit)
+	require.Equal(t, beforeLength, destination.Length())
+	require.Equal(t, beforeArea, destination.GetArea())
+}
+
 func TestUnionBatchNoSelectionDoesNotPublishStringSourceMetadata(t *testing.T) {
 	mp := mpool.MustNewZero()
 	destination := NewVec(types.T_int64.ToType())

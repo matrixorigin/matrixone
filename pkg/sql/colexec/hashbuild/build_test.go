@@ -1560,6 +1560,112 @@ func TestRuntimeFilterPayloadStateContract(t *testing.T) {
 	}
 }
 
+func TestScalarRuntimeFilterUsesActualCardinality(t *testing.T) {
+	tests := []struct {
+		name      string
+		values    []int32
+		nulls     []uint64
+		wantType  int32
+		wantValue int32
+	}{
+		{name: "empty drops", wantType: message.RuntimeFilter_DROP},
+		{name: "one value filters", values: []int32{7}, wantType: message.RuntimeFilter_IN, wantValue: 7},
+		{name: "one null drops", values: []int32{0}, nulls: []uint64{0}, wantType: message.RuntimeFilter_DROP},
+		{name: "multiple rows pass", values: []int32{7, 8}, wantType: message.RuntimeFilter_PASS},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			tc := newTestCase(t, []bool{len(test.nulls) > 0},
+				[]types.Type{types.T_int32.ToType()}, nil)
+			tc.arg.NeedHashMap = false
+			tc.arg.NeedBatches = true
+			tc.arg.RuntimeFilterSpec = rawRuntimeFilterSpec(
+				tc.arg.JoinMapTag+7000, 1, types.T_int32.ToType())
+			tc.arg.RuntimeFilterSpec.ScalarPredicate = true
+			tc.arg.SetChildren([]vm.Operator{tc.marg})
+			require.NoError(t, tc.marg.Prepare(tc.proc))
+			require.NoError(t, tc.arg.Prepare(tc.proc))
+
+			if len(test.values) > 0 {
+				build := batch.NewWithSize(1)
+				build.Vecs[0] = testutil.MakeInt32Vector(
+					test.values, test.nulls, tc.proc.Mp())
+				build.SetRowCount(len(test.values))
+				tc.proc.Reg.MergeReceivers[0].Ch2 <- process.NewPipelineSignalToDirectly(build, nil, tc.proc.Mp())
+			}
+			tc.proc.Reg.MergeReceivers[0].Ch2 <- process.NewPipelineSignalToDirectly(nil, nil, tc.proc.Mp())
+
+			result, err := vm.Exec(tc.arg, tc.proc)
+			require.NoError(t, err)
+			require.Equal(t, vm.ExecStop, result.Status)
+
+			receiver := message.NewMessageReceiver(
+				[]int32{tc.arg.RuntimeFilterSpec.Tag},
+				message.AddrBroadCastOnCurrentCN(),
+				tc.proc.GetMessageBoard())
+			msgs, done, err := receiver.ReceiveMessage(false, tc.proc.Ctx)
+			require.NoError(t, err)
+			require.False(t, done)
+			require.Len(t, msgs, 1)
+			runtimeFilter := msgs[0].(message.RuntimeFilterMessage)
+			require.Equal(t, test.wantType, runtimeFilter.Typ)
+			if test.wantType == message.RuntimeFilter_IN {
+				require.True(t, tc.arg.ctr.runtimeFilterIn)
+				require.Equal(t, int32(1), runtimeFilter.Card)
+				payload := vector.NewVec(types.T_any.ToType())
+				require.NoError(t, payload.UnmarshalBinary(runtimeFilter.Data))
+				require.Equal(t, []int32{test.wantValue},
+					vector.MustFixedColNoTypeCheck[int32](payload))
+				payload.Free(tc.proc.Mp())
+			} else {
+				require.False(t, tc.arg.ctr.runtimeFilterIn)
+			}
+
+			tc.arg.Free(tc.proc, false, nil)
+			tc.marg.Reset(tc.proc, false, nil)
+			tc.proc.GetMessageBoard().Reset()
+			tc.proc.Free()
+			require.Zero(t, tc.proc.Mp().CurrNB())
+		})
+	}
+}
+
+func TestScalarRuntimeFilterMalformedBuildShapeFailsOpen(t *testing.T) {
+	tc := newTestCase(t, []bool{false},
+		[]types.Type{types.T_int32.ToType()}, nil)
+	tc.arg.NeedHashMap = false
+	tc.arg.NeedBatches = false
+	tc.arg.RuntimeFilterSpec = rawRuntimeFilterSpec(
+		tc.arg.JoinMapTag+7100, 1, types.T_int32.ToType())
+	tc.arg.RuntimeFilterSpec.ScalarPredicate = true
+	tc.arg.SetChildren([]vm.Operator{tc.marg})
+	require.NoError(t, tc.marg.Prepare(tc.proc))
+	require.NoError(t, tc.arg.Prepare(tc.proc))
+	tc.proc.Reg.MergeReceivers[0].Ch2 <- process.NewPipelineSignalToDirectly(nil, nil, tc.proc.Mp())
+
+	result, err := vm.Exec(tc.arg, tc.proc)
+	require.NoError(t, err)
+	require.Equal(t, vm.ExecStop, result.Status)
+
+	receiver := message.NewMessageReceiver(
+		[]int32{tc.arg.RuntimeFilterSpec.Tag},
+		message.AddrBroadCastOnCurrentCN(),
+		tc.proc.GetMessageBoard())
+	msgs, done, err := receiver.ReceiveMessage(false, tc.proc.Ctx)
+	require.NoError(t, err)
+	require.False(t, done)
+	require.Len(t, msgs, 1)
+	require.Equal(t, int32(message.RuntimeFilter_PASS),
+		msgs[0].(message.RuntimeFilterMessage).Typ)
+
+	tc.arg.Free(tc.proc, false, nil)
+	tc.marg.Reset(tc.proc, false, nil)
+	tc.proc.GetMessageBoard().Reset()
+	tc.proc.Free()
+	require.Zero(t, tc.proc.Mp().CurrNB())
+}
+
 func TestRuntimeFilterStaleProbeContractFailsOpen(t *testing.T) {
 	payloadType := types.New(types.T_decimal64, 18, 3)
 	probeType := types.New(types.T_decimal64, 18, 2)

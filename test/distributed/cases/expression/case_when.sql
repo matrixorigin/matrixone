@@ -529,3 +529,19 @@ from information_schema.columns
 where table_schema = database() and table_name = 'v_conditional_typed_null'
 order by ordinal_position;
 drop view v_conditional_typed_null;
+
+-- @case
+-- @desc:searched CASE treats NULL conditions as UNKNOWN and continues to the next branch
+-- @label:bvt
+-- Regression for issue #27958.
+select case when null then 'a' else 'b' end as literal_null_condition;
+select case when null then 'a' when 1 = 1 then 'b' else 'c' end as mixed_null_condition;
+select case when 0 / 0 then 'a' else 'b' end as null_arithmetic_condition;
+
+drop table if exists t_case_nullable_condition;
+create table t_case_nullable_condition (id int primary key, cond double);
+insert into t_case_nullable_condition values (1, null), (2, 0), (3, 2.5);
+select id, case when cond then 'true' else 'false' end as condition_result
+from t_case_nullable_condition
+order by id;
+drop table t_case_nullable_condition;
