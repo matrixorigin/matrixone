@@ -119,7 +119,7 @@ func (s *service) applyViewMetadataAdmission(
 		return nil
 	}
 	if err := s.fenceViewMetadataCatalog(ctx, &copy); err != nil &&
-		!viewMetadataCatalogUpgradePending(err) {
+		!viewMetadataCatalogFenceRetryable(err, false) {
 		return err
 	}
 	return nil
@@ -192,31 +192,38 @@ func (s *service) fenceViewMetadataCatalog(
 	return nil
 }
 
-func viewMetadataCatalogUpgradePending(err error) bool {
+func viewMetadataCatalogFenceRetryable(err error, upgradeOwnerActive bool) bool {
 	if err == nil {
 		return false
 	}
 	if joined, ok := err.(interface{ Unwrap() []error }); ok {
-		pending := false
+		retryable := false
 		for _, child := range joined.Unwrap() {
 			if child == nil {
 				continue
 			}
-			if !viewMetadataCatalogUpgradePending(child) {
+			if !viewMetadataCatalogFenceRetryable(child, upgradeOwnerActive) {
 				return false
 			}
-			pending = true
+			retryable = true
 		}
-		return pending
+		return retryable
 	}
 	if wrapped, ok := err.(interface{ Unwrap() error }); ok {
 		if child := wrapped.Unwrap(); child != nil {
-			return viewMetadataCatalogUpgradePending(child)
+			return viewMetadataCatalogFenceRetryable(child, upgradeOwnerActive)
 		}
 	}
 	var moErr *moerr.Error
-	return errors.As(err, &moErr) &&
-		(moErr.ErrorCode() == moerr.ErrNoSuchTable || moErr.ErrorCode() == moerr.ErrBadDB)
+	if errors.As(err, &moErr) {
+		switch moErr.ErrorCode() {
+		case moerr.ErrNoSuchTable, moerr.ErrBadDB:
+			return true
+		case moerr.ErrTxnNeedRetry, moerr.ErrTxnNeedRetryWithDefChanged:
+			return upgradeOwnerActive
+		}
+	}
+	return upgradeOwnerActive && errors.Is(err, context.DeadlineExceeded)
 }
 
 func viewMetadataCatalogFenceRetryDelay(serviceID string, attempt uint32) time.Duration {
@@ -305,7 +312,8 @@ func (s *service) waitForViewMetadataAdmission() error {
 			catalogPending = true
 			catalogRetry = catalogRetryTimer.C
 		} else if err := s.fenceViewMetadataCatalog(operationCtx, snapshot); err != nil {
-			if !viewMetadataCatalogUpgradePending(err) {
+			upgradeOwnerActive := upgradeResult != nil && operationCtx.Err() == nil
+			if !viewMetadataCatalogFenceRetryable(err, upgradeOwnerActive) {
 				select {
 				case upgradeErr := <-upgradeResult:
 					if upgradeErr != nil {

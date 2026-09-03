@@ -253,28 +253,51 @@ func TestCNViewMetadataCatalogFenceShortcuts(t *testing.T) {
 	})
 }
 
-func TestViewMetadataCatalogUpgradePending(t *testing.T) {
+func TestViewMetadataCatalogFenceRetryable(t *testing.T) {
 	missingTable := moerr.NewNoSuchTableNoCtx("mo_catalog", "t")
 	missingDatabase := moerr.NewBadDBNoCtx("mo_catalog")
+	txnRetry := moerr.NewTxnNeedRetryNoCtx()
+	txnRetryWithDefChanged := moerr.NewTxnNeedRetryWithDefChangedNoCtx()
+	rollbackErr := errors.New("rollback failed")
 	tests := []struct {
-		name string
-		err  error
-		want bool
+		name               string
+		err                error
+		upgradeOwnerActive bool
+		want               bool
 	}{
-		{name: "missing table", err: missingTable, want: true},
-		{name: "missing database", err: missingDatabase, want: true},
+		{name: "missing table without owner", err: missingTable, want: true},
+		{name: "missing database without owner", err: missingDatabase, want: true},
 		{name: "rollback joined missing table", err: errors.Join(missingTable, nil), want: true},
 		{name: "wrapped rollback join", err: fmt.Errorf("transaction failed: %w", errors.Join(missingDatabase, nil)), want: true},
-		{name: "other failure", err: errors.New("executor failed"), want: false},
+		{name: "deadline without owner", err: context.DeadlineExceeded, want: false},
+		{name: "deadline with owner", err: context.DeadlineExceeded, upgradeOwnerActive: true, want: true},
+		{name: "txn retry without owner", err: txnRetry, want: false},
+		{name: "txn retry with owner", err: txnRetry, upgradeOwnerActive: true, want: true},
 		{
-			name: "readiness plus rollback failure",
-			err:  errors.Join(missingTable, errors.New("rollback failed")),
-			want: false,
+			name:               "txn retry with definition change and owner",
+			err:                fmt.Errorf("fence failed: %w", txnRetryWithDefChanged),
+			upgradeOwnerActive: true,
+			want:               true,
+		},
+		{name: "owner cancellation", err: context.Canceled, upgradeOwnerActive: true, want: false},
+		{name: "other failure", err: errors.New("executor failed"), upgradeOwnerActive: true, want: false},
+		{
+			name:               "readiness plus rollback failure",
+			err:                errors.Join(missingTable, rollbackErr),
+			upgradeOwnerActive: true,
+			want:               false,
+		},
+		{
+			name:               "txn retry plus rollback failure",
+			err:                errors.Join(txnRetry, rollbackErr),
+			upgradeOwnerActive: true,
+			want:               false,
 		},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			require.Equal(t, test.want, viewMetadataCatalogUpgradePending(test.err))
+			require.Equal(t, test.want,
+				viewMetadataCatalogFenceRetryable(test.err, test.upgradeOwnerActive))
 		})
 	}
 }
@@ -477,6 +500,97 @@ func TestServiceStartWaitsForCatalogUpgradePastDiscoveryDeadline(t *testing.T) {
 	}
 	require.True(t, s.viewMetadataIngressReady.Load())
 	require.Equal(t, uint64(5), s.viewMetadataCatalogFencedEpoch.Load())
+}
+
+func TestServiceStartRetriesTransientCatalogFenceErrors(t *testing.T) {
+	tests := []struct {
+		name string
+		err  error
+	}{
+		{name: "deadline", err: context.DeadlineExceeded},
+		{name: "txn retry", err: moerr.NewTxnNeedRetryNoCtx()},
+		{name: "txn retry with definition change", err: moerr.NewTxnNeedRetryWithDefChangedNoCtx()},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			const discoveryTimeout = 20 * time.Millisecond
+			var catalogReady atomic.Bool
+			catalogAttempted := make(chan struct{})
+			var attemptOnce sync.Once
+			sqlExecutor := &admissionRollbackJoiningExecutor{
+				SQLExecutor: executor.NewMemExecutor(func(sql string) (executor.Result, error) {
+					if sql == catalog.ViewMetadataLifecycleGateSQL {
+						if !catalogReady.Load() {
+							attemptOnce.Do(func() { close(catalogAttempted) })
+							return executor.Result{}, test.err
+						}
+						return viewMetadataLifecycleGateTestResult(), nil
+					}
+					return executor.Result{}, nil
+				}),
+			}
+			s := newViewMetadataAdmissionStartService(t, &testBootService{}, sqlExecutor, discoveryTimeout)
+			startDone := make(chan error, 1)
+			go func() { startDone <- s.Start() }()
+			t.Cleanup(func() {
+				catalogReady.Store(true)
+				s.notifyViewMetadataAdmissionUpdated()
+				_ = s.Close()
+			})
+
+			select {
+			case <-catalogAttempted:
+			case <-time.After(time.Second):
+				t.Fatal("Start did not execute the catalog fence")
+			}
+			select {
+			case err := <-startDone:
+				t.Fatalf("transient catalog fence error terminated Start: %v", err)
+			case <-time.After(2 * discoveryTimeout):
+			}
+
+			catalogReady.Store(true)
+			select {
+			case err := <-startDone:
+				require.NoError(t, err)
+			case <-time.After(2 * time.Second):
+				t.Fatal("Start did not retry the transient catalog fence error")
+			}
+			require.True(t, s.viewMetadataIngressReady.Load())
+			require.Equal(t, uint64(5), s.viewMetadataCatalogFencedEpoch.Load())
+		})
+	}
+}
+
+func TestServiceStartRejectsMixedCatalogFenceRollbackFailure(t *testing.T) {
+	rollbackErr := errors.New("catalog fence rollback failed")
+	mixedErr := errors.Join(moerr.NewTxnNeedRetryNoCtx(), rollbackErr)
+	catalogAttempted := make(chan struct{})
+	var attemptOnce sync.Once
+	sqlExecutor := &admissionRollbackJoiningExecutor{
+		SQLExecutor: executor.NewMemExecutor(func(string) (executor.Result, error) {
+			attemptOnce.Do(func() { close(catalogAttempted) })
+			return executor.Result{}, mixedErr
+		}),
+	}
+	s := newViewMetadataAdmissionStartService(t, &testBootService{}, sqlExecutor, time.Second)
+	startDone := make(chan error, 1)
+	go func() { startDone <- s.Start() }()
+	t.Cleanup(func() { _ = s.Close() })
+
+	select {
+	case <-catalogAttempted:
+	case <-time.After(time.Second):
+		t.Fatal("Start did not execute the catalog fence")
+	}
+	select {
+	case err := <-startDone:
+		require.ErrorIs(t, err, rollbackErr)
+	case <-time.After(time.Second):
+		t.Fatal("mixed rollback failure did not fail closed")
+	}
+	require.False(t, s.viewMetadataIngressReady.Load())
+	require.Zero(t, s.viewMetadataCatalogFencedEpoch.Load())
 }
 
 func TestServiceStartPropagatesBootstrapUpgradeFailure(t *testing.T) {
