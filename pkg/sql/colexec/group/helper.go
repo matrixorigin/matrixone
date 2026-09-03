@@ -106,6 +106,50 @@ func (w *spillRecordWriter) Write(value []byte) (int, error) {
 	return n, err
 }
 
+func (w *spillRecordWriter) WriteSelectedFixedRows(
+	data []byte,
+	width int,
+	rows []int32,
+) (int, error) {
+	if w == nil || w.target == nil {
+		return 0, io.ErrClosedPipe
+	}
+	fastWriter, ok := w.target.(interface {
+		WriteSelectedFixedRows([]byte, int, []int32) (int, error)
+	})
+	if !ok {
+		if width < 0 || (width != 0 && len(data)%width != 0) {
+			return 0, moerr.NewInvalidInputNoCtx(
+				"invalid fixed-width group spill selection")
+		}
+		if width == 0 {
+			return 0, nil
+		}
+		written := 0
+		rowCount := len(data) / width
+		for _, selected := range rows {
+			row := int(selected)
+			if row < 0 || row >= rowCount {
+				return written, moerr.NewInvalidInputNoCtx(
+					"invalid fixed-width group spill row")
+			}
+			n, err := w.Write(data[row*width : (row+1)*width])
+			written += n
+			if err != nil {
+				return written, err
+			}
+		}
+		return written, nil
+	}
+	n, err := fastWriter.WriteSelectedFixedRows(data, width, rows)
+	w.written += int64(n)
+	if err == nil && width >= 0 && width <= math.MaxInt/max(1, len(rows)) &&
+		n != width*len(rows) {
+		err = io.ErrShortWrite
+	}
+	return n, err
+}
+
 func newGroupSpillBuffer(
 	ctr *container,
 	site mpool.AllocationSite,

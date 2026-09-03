@@ -56,12 +56,19 @@ const (
 	selectedRowsSourceRows    = byte(2)
 )
 
+// selectedFixedRowsWriter lets an execution-owned buffered writer gather a
+// sparse fixed-width selection without paying one io.Writer call per value.
+// The ordinary io.Writer path remains the wire-format reference and fallback.
+type selectedFixedRowsWriter interface {
+	WriteSelectedFixedRows(data []byte, width int, rows []int32) (int, error)
+}
+
 // MarshalSelectedRowsTo writes a bounded, private execution codec for the
 // selected rows. Unlike MarshalBinaryTo it does not first materialize a
 // selection Vector, which lets spill make progress when retained state has
 // reached its allocation-account capacity.
 func (v *Vector) MarshalSelectedRowsTo(w io.Writer, rows []int32) error {
-	return v.marshalSelectedRowsTo(w, len(rows), func(i int) int {
+	return v.marshalSelectedRowsTo(w, len(rows), rows, func(i int) int {
 		return int(rows[i])
 	})
 }
@@ -77,7 +84,7 @@ func (v *Vector) MarshalSelectedFlagsTo(w io.Writer, flags []uint8) (int, error)
 	}
 	next := 0
 	lastRequest := -1
-	err := v.marshalSelectedRowsTo(w, count, func(i int) int {
+	err := v.marshalSelectedRowsTo(w, count, nil, func(i int) int {
 		// marshalSelectedRowsTo makes multiple ordered passes over the selected
 		// rows (metadata, values, and optionally parameter kinds). Reset the
 		// cursor at the start of each pass without materializing row indexes.
@@ -98,6 +105,7 @@ func (v *Vector) MarshalSelectedFlagsTo(w io.Writer, flags []uint8) (int, error)
 func (v *Vector) marshalSelectedRowsTo(
 	w io.Writer,
 	count int,
+	rows []int32,
 	rowAt func(int) int,
 ) error {
 	if v == nil || w == nil || count < 0 || count > math.MaxInt32 {
@@ -224,6 +232,23 @@ func (v *Vector) marshalSelectedRowsTo(
 
 	withRowFlags := metadata&(selectedRowsHasNull|selectedRowsHasGrouping) != 0 ||
 		binaryMode == selectedRowsBinaryRows
+	if !v.IsConst() && !isVarlen && !withRowFlags && rows != nil {
+		fixedWidth := v.typ.TypeSize()
+		if fixedWidth != 0 && count > math.MaxInt/fixedWidth {
+			return moerr.NewInvalidInputNoCtx("selected vector value exceeds wire format")
+		}
+		if fastWriter, ok := w.(selectedFixedRowsWriter); ok {
+			expected := count * fixedWidth
+			written, err := fastWriter.WriteSelectedFixedRows(v.data, fixedWidth, rows)
+			if err != nil {
+				return err
+			}
+			if written != expected {
+				return io.ErrShortWrite
+			}
+			goto metadataTrailers
+		}
+	}
 	for i := 0; i < count; i++ {
 		row := rowAt(i)
 		nullValue := v.IsNull(uint64(row))
@@ -263,6 +288,8 @@ func (v *Vector) marshalSelectedRowsTo(
 			return err
 		}
 	}
+
+metadataTrailers:
 	if kindMode == selectedRowsKindRows {
 		for i := 0; i < count; i++ {
 			if err := writeVectorMarshalByte(w, byte(v.GetPrepareParamKindAt(rowAt(i)))); err != nil {
