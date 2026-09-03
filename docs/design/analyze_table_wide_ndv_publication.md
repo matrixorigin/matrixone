@@ -55,19 +55,22 @@ analyzed.
 1. A successful publish contains one complete metadata refresh plus the valid
    table-wide row count and NDV overrides. Readers never observe the
    intermediate metadata estimate.
-2. Any invalid override rejects the whole refresh before cache replacement.
-   Applying a map must not partially mutate the candidate statistics object.
+2. Any invalid override or schema-version mismatch rejects the whole refresh
+   before cache replacement. Applying a map must not partially mutate the
+   candidate statistics object.
 3. Override names are canonical physical column names. User spelling and
    original case are resolved against the current table definition before the
    engine boundary.
 4. The internal derived result has exactly one row, one value per requested
    column, and one final row-count value; missing, NULL, non-integral, or extra
    values are errors. The final value is never exposed to the client.
-5. Row count and NDV are finite and non-negative, and NDV is capped by the
-   table-wide row count. `approx_count_distinct` may legitimately estimate above that
-   mathematical upper bound.
+5. Row count is an unsigned integer; NDV is finite and non-negative. Every NDV
+   and NULL count is capped by the table-wide row count because neither may
+   exceed that mathematical upper bound. `approx_count_distinct` may
+   legitimately estimate above it before the cap.
 6. Partial-column ANALYZE overrides only those columns. Metadata estimates for
-   every other column remain intact.
+   every other column remain intact except for restoring the universal
+   `NDV <= rows` and `NULLs <= rows` bounds when the exact row count decreases.
 7. Publication ownership, table identity, transaction visibility, cancellation,
    cleanup generation, and plan-cache invalidation remain the contracts from
    `analyze_stats_publication.md`.
@@ -81,12 +84,16 @@ analyzed.
 ## 4. Visibility and concurrency
 
 ANALYZE publication remains limited to a current physical table when the
-statement did not begin inside a user transaction. The derived aggregation
-commits before metadata refresh starts. Its row count and NDVs share one
-snapshot, while a concurrent commit may make the object metadata slightly
-newer. This is normal statistics staleness, not a mixed uncommitted visibility
-domain. Publishing the internally consistent table-wide count and NDVs avoids
-mixing two snapshots within cardinality statistics.
+statement did not begin inside a user transaction. The derived aggregation and
+the frontend's physical table resolution share the outer ANALYZE transaction
+snapshot; the metadata refresh starts after the aggregation completes and
+reads process-global committed state independently. The derived row count and
+NDVs therefore share one snapshot, while a concurrent commit may make the
+object metadata slightly newer. This is normal statistics staleness, not a
+mixed uncommitted visibility domain. The physical table ID prevents a
+drop/recreate of the same name from receiving the old observation. The schema
+version carried with that observation also makes a concurrent ALTER or
+drop/re-add of a same-named column fail closed before cache publication.
 
 The existing frontend and engine table stripes serialize explicit same-table
 publications. Disttae applies the options while holding the exact refresh
@@ -115,8 +122,10 @@ The acceptance matrix covers:
 - numeric, date/time, decimal, CHAR, VARCHAR, TEXT, and nullable columns;
 - explicit subsets, all visible columns, original-case identifiers, reserved
   identifiers, and duplicate requested identifiers;
-- NDV above row count, unknown columns, NULL result cells, malformed result
-  shape, cancellation, refresh failure, and subscription cleanup races;
+- NDV above row count, retained NDV/NULL counts above a newly exact row count,
+  unknown columns, negative/fractional/non-finite result cells, schema-version
+  replacement, malformed result shape, cancellation, refresh failure, and
+  subscription cleanup races;
 - multiple tables in one ANALYZE statement and unrelated-table parallelism;
 - pre-existing user transactions, snapshots, views, temporary tables,
   publications, legacy refresh implementations, database remaps, and

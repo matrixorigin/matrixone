@@ -5205,7 +5205,8 @@ func TestAnalyzeStatsPublicationRequiresStatementOwnedTransaction(t *testing.T) 
 func TestAnalyzeStatsRefreshOptionsUsesTableWideNDV(t *testing.T) {
 	ctx := context.Background()
 	tableDef := &plan0.TableDef{
-		Name: "events",
+		Name:    "events",
+		Version: 7,
 		Cols: []*plan0.ColDef{
 			{Name: "url", OriginName: "URL"},
 			{Name: "kind"},
@@ -5225,6 +5226,8 @@ func TestAnalyzeStatsRefreshOptionsUsesTableWideNDV(t *testing.T) {
 		ctx, tableDef, tree.IdentifierList{"URL", "kind"}, observation,
 	)
 	require.NoError(t, err)
+	require.NotNil(t, options.TableDefVersion)
+	require.Equal(t, uint32(7), *options.TableDefVersion)
 	require.NotNil(t, options.TableRowCount)
 	require.Equal(t, float64(10_000_000), *options.TableRowCount)
 	require.Equal(t, map[string]float64{
@@ -5255,6 +5258,11 @@ func TestAnalyzeStatsRefreshOptionsRejectsInvalidResults(t *testing.T) {
 		{name: "wrong column count", result: makeAnalyzeCountResult("only_ndv", 1)},
 		{name: "NULL NDV", result: twoColumns(nil, uint64(1))},
 		{name: "NULL row count", result: twoColumns(uint64(1), nil)},
+		{name: "negative NDV", result: twoColumns(int64(-1), uint64(1))},
+		{name: "fractional NDV", result: twoColumns(1.5, uint64(2))},
+		{name: "NaN NDV", result: twoColumns(math.NaN(), uint64(2))},
+		{name: "boolean NDV", result: twoColumns(true, uint64(1))},
+		{name: "overflow row count", result: twoColumns(uint64(1), "18446744073709551616")},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			_, err := consumeAnalyzeDerivedResult(ctx, test.result, 1)
@@ -5269,6 +5277,13 @@ func TestAnalyzeStatsRefreshOptionsRejectsInvalidResults(t *testing.T) {
 	})
 	require.Error(t, err)
 	_, err = analyzeStatsRefreshOptions(ctx, tableDef, tree.IdentifierList{"url", "missing"}, analyzeStatsObservation{
+		tableRowCount: 1,
+		columnNDVs:    []float64{1},
+	})
+	require.Error(t, err)
+	_, err = analyzeStatsRefreshOptions(ctx, &plan0.TableDef{
+		Name: "broken", Cols: []*plan0.ColDef{nil},
+	}, tree.IdentifierList{"url"}, analyzeStatsObservation{
 		tableRowCount: 1,
 		columnNDVs:    []float64{1},
 	})

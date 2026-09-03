@@ -77,16 +77,18 @@ func TestRefreshTableStatsDefinesPublicationBoundary(t *testing.T) {
 
 func TestApplyStatsRefreshOptions(t *testing.T) {
 	tableDef := &planpb.TableDef{
-		Name: "events",
-		Cols: []*planpb.ColDef{{Name: "url"}, {Name: "kind"}, {Name: "__mo_fake_pk_col", Hidden: true}},
+		Name:    "events",
+		Version: 7,
+		Cols:    []*planpb.ColDef{{Name: "url"}, {Name: "kind"}, {Name: "__mo_fake_pk_col", Hidden: true}},
 	}
 
 	t.Run("table-wide row count and NDV replace missing metadata atomically", func(t *testing.T) {
 		rowCount := float64(4)
 		stats := &pb.StatsInfo{}
 		err := applyStatsRefreshOptions(stats, tableDef, engine.StatsRefreshOptions{
-			TableRowCount: &rowCount,
-			ColumnNDVs:    map[string]float64{"url": 3, "kind": 2},
+			TableDefVersion: uint32Pointer(7),
+			TableRowCount:   &rowCount,
+			ColumnNDVs:      map[string]float64{"url": 3, "kind": 2},
 		})
 		require.NoError(t, err)
 		require.Equal(t, rowCount, stats.TableCnt)
@@ -108,6 +110,44 @@ func TestApplyStatsRefreshOptions(t *testing.T) {
 		require.Equal(t, float64(7), stats.NdvMap["kind"])
 	})
 
+	t.Run("exact row count restores retained count bounds", func(t *testing.T) {
+		rowCount := float64(4)
+		stats := &pb.StatsInfo{
+			TableCnt:   1_000,
+			NdvMap:     map[string]float64{"url": 900, "kind": 7},
+			NullCntMap: map[string]uint64{"url": 800, "kind": 3},
+		}
+		err := applyStatsRefreshOptions(stats, tableDef, engine.StatsRefreshOptions{
+			TableRowCount: &rowCount,
+			ColumnNDVs:    map[string]float64{"url": 3},
+		})
+		require.NoError(t, err)
+		require.Equal(t, rowCount, stats.TableCnt)
+		require.Equal(t, map[string]float64{
+			"url": 3, "kind": 4, "__mo_fake_pk_col": 4,
+		}, stats.NdvMap)
+		require.Equal(t, map[string]uint64{"url": 4, "kind": 3}, stats.NullCntMap)
+	})
+
+	t.Run("schema replacement is rejected atomically", func(t *testing.T) {
+		stats := &pb.StatsInfo{TableCnt: 100, NdvMap: map[string]float64{"kind": 7}}
+		err := applyStatsRefreshOptions(stats, tableDef, engine.StatsRefreshOptions{
+			TableDefVersion: uint32Pointer(6),
+			ColumnNDVs:      map[string]float64{"kind": 8},
+		})
+		require.Error(t, err)
+		require.Equal(t, float64(100), stats.TableCnt)
+		require.Equal(t, map[string]float64{"kind": 7}, stats.NdvMap)
+	})
+
+	t.Run("invalid catalog column is an error rather than a panic", func(t *testing.T) {
+		stats := &pb.StatsInfo{TableCnt: 100}
+		err := applyStatsRefreshOptions(stats, &planpb.TableDef{
+			Name: "broken", Cols: []*planpb.ColDef{nil},
+		}, engine.StatsRefreshOptions{ColumnNDVs: map[string]float64{"kind": 8}})
+		require.Error(t, err)
+	})
+
 	for _, test := range []struct {
 		name     string
 		column   string
@@ -120,6 +160,8 @@ func TestApplyStatsRefreshOptions(t *testing.T) {
 		{name: "positive infinity", column: "url", ndv: math.Inf(1)},
 		{name: "negative row count", column: "url", ndv: 1, rowCount: float64Pointer(-1)},
 		{name: "NaN row count", column: "url", ndv: 1, rowCount: float64Pointer(math.NaN())},
+		{name: "fractional row count", column: "url", ndv: 1, rowCount: float64Pointer(1.5)},
+		{name: "infinite row count", column: "url", ndv: 1, rowCount: float64Pointer(math.Inf(1))},
 	} {
 		t.Run(test.name+" is rejected atomically", func(t *testing.T) {
 			stats := &pb.StatsInfo{TableCnt: 100, NdvMap: map[string]float64{"kind": 7}}
@@ -134,6 +176,10 @@ func TestApplyStatsRefreshOptions(t *testing.T) {
 }
 
 func float64Pointer(value float64) *float64 {
+	return &value
+}
+
+func uint32Pointer(value uint32) *uint32 {
 	return &value
 }
 

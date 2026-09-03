@@ -1338,6 +1338,13 @@ type Engine interface {
 // table-wide scan. Object metadata remains the source of all fields not
 // present here.
 type StatsRefreshOptions struct {
+	// TableDefVersion is the schema version that owned the table-wide
+	// observation. When present, the engine rejects the observation if the
+	// current physical table has crossed a schema boundary. This prevents an
+	// old column value from being applied to a dropped-and-recreated column
+	// with the same name.
+	TableDefVersion *uint32
+
 	// TableRowCount is the exact row count observed by the same table-wide scan
 	// as ColumnNDVs. Nil leaves the object-metadata estimate unchanged.
 	TableRowCount *float64

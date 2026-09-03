@@ -2223,29 +2223,15 @@ func consumeAnalyzeDerivedResult(
 	}
 	observation := analyzeStatsObservation{columnNDVs: make([]float64, columnCount)}
 	for i := range columnCount {
-		isNull, err := result.ColumnIsNull(ctx, 0, uint64(i))
-		if err != nil {
-			return analyzeStatsObservation{}, err
-		}
-		if isNull {
-			return analyzeStatsObservation{}, moerr.NewInternalErrorf(
-				ctx, "ANALYZE TABLE returned NULL NDV for column position %d", i)
-		}
-		ndv, err := result.GetUint64(ctx, 0, uint64(i))
+		ndv, err := analyzeUnsignedIntegerResult(
+			ctx, result, uint64(i), fmt.Sprintf("NDV for column position %d", i))
 		if err != nil {
 			return analyzeStatsObservation{}, err
 		}
 		observation.columnNDVs[i] = float64(ndv)
 	}
 	rowCountColumn := uint64(columnCount)
-	isNull, err := result.ColumnIsNull(ctx, 0, rowCountColumn)
-	if err != nil {
-		return analyzeStatsObservation{}, err
-	}
-	if isNull {
-		return analyzeStatsObservation{}, moerr.NewInternalError(ctx, "ANALYZE TABLE returned NULL row count")
-	}
-	rowCount, err := result.GetUint64(ctx, 0, rowCountColumn)
+	rowCount, err := analyzeUnsignedIntegerResult(ctx, result, rowCountColumn, "row count")
 	if err != nil {
 		return analyzeStatsObservation{}, err
 	}
@@ -2256,6 +2242,86 @@ func consumeAnalyzeDerivedResult(
 	result.Columns = result.Columns[:columnCount]
 	result.Data[0] = result.Data[0][:columnCount]
 	return observation, nil
+}
+
+func analyzeUnsignedIntegerResult(
+	ctx context.Context,
+	result *MysqlResultSet,
+	column uint64,
+	label string,
+) (uint64, error) {
+	value, err := result.GetValue(ctx, 0, column)
+	if err != nil {
+		return 0, err
+	}
+	invalid := func() (uint64, error) {
+		return 0, moerr.NewInternalErrorf(
+			ctx, "ANALYZE TABLE returned invalid %s: expected a non-negative integer, got %v", label, value)
+	}
+	switch v := value.(type) {
+	case uint8:
+		return uint64(v), nil
+	case uint16:
+		return uint64(v), nil
+	case uint32:
+		return uint64(v), nil
+	case uint64:
+		return v, nil
+	case uint:
+		return uint64(v), nil
+	case int8:
+		if v < 0 {
+			return invalid()
+		}
+		return uint64(v), nil
+	case int16:
+		if v < 0 {
+			return invalid()
+		}
+		return uint64(v), nil
+	case int32:
+		if v < 0 {
+			return invalid()
+		}
+		return uint64(v), nil
+	case int64:
+		if v < 0 {
+			return invalid()
+		}
+		return uint64(v), nil
+	case int:
+		if v < 0 {
+			return invalid()
+		}
+		return uint64(v), nil
+	case float32:
+		asFloat64 := float64(v)
+		if asFloat64 < 0 || math.IsNaN(asFloat64) || math.IsInf(asFloat64, 0) ||
+			math.Trunc(asFloat64) != asFloat64 || asFloat64 >= math.Exp2(64) {
+			return invalid()
+		}
+		return uint64(asFloat64), nil
+	case float64:
+		if v < 0 || math.IsNaN(v) || math.IsInf(v, 0) ||
+			math.Trunc(v) != v || v >= math.Exp2(64) {
+			return invalid()
+		}
+		return uint64(v), nil
+	case string:
+		parsed, parseErr := strconv.ParseUint(v, 10, 64)
+		if parseErr != nil {
+			return invalid()
+		}
+		return parsed, nil
+	case []byte:
+		parsed, parseErr := strconv.ParseUint(string(v), 10, 64)
+		if parseErr != nil {
+			return invalid()
+		}
+		return parsed, nil
+	default:
+		return invalid()
+	}
 }
 
 func analyzeStatsRefreshOptions(
@@ -2281,11 +2347,19 @@ func analyzeStatsRefreshOptions(
 		ndvs[column] = observation.columnNDVs[i]
 	}
 	rowCount := observation.tableRowCount
-	return engine.StatsRefreshOptions{TableRowCount: &rowCount, ColumnNDVs: ndvs}, nil
+	tableDefVersion := tableDef.Version
+	return engine.StatsRefreshOptions{
+		TableDefVersion: &tableDefVersion,
+		TableRowCount:   &rowCount,
+		ColumnNDVs:      ndvs,
+	}, nil
 }
 
 func canonicalAnalyzeColumnName(tableDef *plan.TableDef, requested string) (string, bool) {
 	for _, col := range tableDef.Cols {
+		if col == nil {
+			continue
+		}
 		if strings.EqualFold(requested, col.Name) || strings.EqualFold(requested, col.GetOriginCaseName()) {
 			return col.Name, true
 		}

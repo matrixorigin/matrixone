@@ -1497,7 +1497,19 @@ func (gs *GlobalStats) refreshStatsWithMode(
 	if cause := gs.statsRefreshCancellationCause(ctx); cause != nil {
 		return nil, cause
 	}
-	if err := applyStatsRefreshOptions(stats, table.TableDef, options); err != nil {
+	// The derived ANALYZE observation belongs to a specific schema snapshot.
+	// Re-resolve immediately before applying it so a concurrent ALTER cannot
+	// silently retarget an old NDV to a replacement column with the same name.
+	optionTableDef := table.TableDef
+	if options.TableRowCount != nil || len(options.ColumnNDVs) > 0 {
+		latest := gs.engine.GetLatestCatalogCache().GetTableById(
+			key.AccId, key.DatabaseID, key.TableID)
+		if latest == nil || latest.TableDef == nil {
+			return nil, moerr.NewInternalErrorNoCtx("table not found while applying statistics observation")
+		}
+		optionTableDef = latest.TableDef
+	}
+	if err := applyStatsRefreshOptions(stats, optionTableDef, options); err != nil {
 		return nil, err
 	}
 
@@ -1527,17 +1539,27 @@ func applyStatsRefreshOptions(
 	if stats == nil || tableDef == nil {
 		return moerr.NewInternalErrorNoCtx("cannot apply statistics refresh options without table statistics")
 	}
+	if options.TableDefVersion != nil && *options.TableDefVersion != tableDef.Version {
+		return moerr.NewInternalErrorNoCtxf(
+			"cannot apply statistics observation from table schema version %d to current version %d for table %q",
+			*options.TableDefVersion, tableDef.Version, tableDef.Name)
+	}
 	knownColumns := make(map[string]struct{}, len(tableDef.Cols))
 	for _, col := range tableDef.Cols {
+		if col == nil {
+			return moerr.NewInternalErrorNoCtxf(
+				"cannot apply statistics observation to table %q with an invalid column definition", tableDef.Name)
+		}
 		knownColumns[col.Name] = struct{}{}
 	}
 	rowCount := stats.TableCnt
 	if options.TableRowCount != nil {
 		rowCount = *options.TableRowCount
-		if math.IsNaN(rowCount) || math.IsInf(rowCount, 0) || rowCount < 0 {
-			return moerr.NewInternalErrorNoCtxf(
-				"invalid row count %v for table %q", rowCount, tableDef.Name)
-		}
+	}
+	if math.IsNaN(rowCount) || math.IsInf(rowCount, 0) || rowCount < 0 ||
+		math.Trunc(rowCount) != rowCount || rowCount >= math.Exp2(64) {
+		return moerr.NewInternalErrorNoCtxf(
+			"invalid row count %v for table %q", rowCount, tableDef.Name)
 	}
 	for column, ndv := range options.ColumnNDVs {
 		if _, ok := knownColumns[column]; !ok {
@@ -1558,6 +1580,20 @@ func applyStatsRefreshOptions(
 	}
 	for column, ndv := range options.ColumnNDVs {
 		stats.NdvMap[column] = min(ndv, rowCount)
+	}
+	if options.TableRowCount != nil {
+		// A partial ANALYZE intentionally retains unselected estimates, but no
+		// distinct or NULL count may exceed the now-exact table cardinality.
+		for column, ndv := range stats.NdvMap {
+			if ndv > rowCount {
+				stats.NdvMap[column] = rowCount
+			}
+		}
+		for column, nullCount := range stats.NullCntMap {
+			if float64(nullCount) > rowCount {
+				stats.NullCntMap[column] = uint64(rowCount)
+			}
+		}
 	}
 	return nil
 }
