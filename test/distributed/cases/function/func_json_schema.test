@@ -85,3 +85,20 @@ insert into t1 values ('{"a":1}'), ('{"a":"not_number"}'), ('{"b":2}');
 select json_schema_valid(json_object('type', 'object', 'properties', json_object('a', json_object('type', 'number')), 'required', json_array('a')), j) from t1;
 select json_schema_validation_report(json_object('type', 'object', 'properties', json_object('a', json_object('type', 'number')), 'required', json_array('a')), j) from t1;
 drop table t1;
+
+-- MySQL Draft 4 dialect compatibility
+select json_schema_valid('{"const":1}', '2');
+select json_schema_validation_report('{"const":1}', '2');
+select json_schema_valid('{"if":{"type":"integer"},"then":{"minimum":5},"else":{"pattern":"^x$"}}', '2');
+select json_schema_valid('{"format":"email"}', '"not-an-email"');
+select json_schema_valid('{"minimum":5,"exclusiveMinimum":true}', '5');
+select json_schema_valid('{"minimum":5,"exclusiveMinimum":true}', '6');
+select json_schema_valid('{"exclusiveMinimum":5}', '5');
+select json_schema_valid('{"exclusiveMinimum":5}', '6');
+select json_schema_valid('{"$schema":"http://json-schema.org/draft-07/schema#","const":1}', '2');
+
+drop table if exists json_schema_draft4_rows;
+create table json_schema_draft4_rows (id int primary key, s varchar(1024), d json);
+insert into json_schema_draft4_rows values (1, '{"format":"email"}', '"not-an-email"'), (2, '{"type":"integer","minimum":5}', '2');
+select id, json_schema_valid(s, d), json_schema_validation_report(s, d) from json_schema_draft4_rows order by id;
+drop table json_schema_draft4_rows;
