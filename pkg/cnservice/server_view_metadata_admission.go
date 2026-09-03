@@ -226,6 +226,23 @@ func viewMetadataCatalogFenceRetryable(err error, upgradeOwnerActive bool) bool 
 	return upgradeOwnerActive && errors.Is(err, context.DeadlineExceeded)
 }
 
+func (s *service) viewMetadataAdmissionSnapshotStillAdmitted(
+	fenced *logservicepb.ViewMetadataAdmission,
+) bool {
+	current := s.viewMetadataAdmission.Load()
+	if fenced == nil || current == nil || !current.Admitted ||
+		current.Generation != fenced.Generation || current.Epoch != fenced.Epoch {
+		return false
+	}
+	if current.Epoch > 0 &&
+		(s.viewMetadataEpochFence == nil || s.viewMetadataEpochFence.Epoch() < current.Epoch) {
+		return false
+	}
+	return !current.RevalidationRequired || current.Epoch == 0 ||
+		current.CatalogFencedEpoch >= current.Epoch ||
+		s.viewMetadataCatalogFencedEpoch.Load() >= current.Epoch
+}
+
 func viewMetadataCatalogFenceRetryDelay(serviceID string, attempt uint32) time.Duration {
 	delay := viewMetadataCatalogFenceInitialRetryDelay
 	for remaining := attempt; remaining > 0 && delay < viewMetadataCatalogFenceMaxRetryDelay/2; remaining-- {
@@ -352,7 +369,7 @@ func (s *service) waitForViewMetadataAdmission() error {
 				default:
 				}
 			}
-			if snapshot != nil && snapshot.Admitted {
+			if s.viewMetadataAdmissionSnapshotStillAdmitted(snapshot) {
 				return nil
 			}
 		}

@@ -425,6 +425,90 @@ func TestCNViewMetadataAdmissionWaitsForCatalogUpgradeCommit(t *testing.T) {
 	}
 }
 
+func TestCNViewMetadataAdmissionRejectsStaleFencedSnapshot(t *testing.T) {
+	oldFenceEntered := make(chan struct{})
+	newFenceEntered := make(chan struct{})
+	releaseOldFence := make(chan struct{})
+	releaseNewFence := make(chan struct{})
+	var releaseOldOnce sync.Once
+	var releaseNewOnce sync.Once
+	releaseOld := func() { releaseOldOnce.Do(func() { close(releaseOldFence) }) }
+	releaseNew := func() { releaseNewOnce.Do(func() { close(releaseNewFence) }) }
+	t.Cleanup(func() {
+		releaseOld()
+		releaseNew()
+	})
+
+	var gateAttempts atomic.Int64
+	s := &service{
+		cfg:                             &Config{UUID: "stale-fenced-snapshot"},
+		logger:                          zap.NewNop(),
+		viewMetadataAdmissionGeneration: 11,
+		viewMetadataEpochFence:          compile.NewViewMetadataEpochFence(),
+		viewMetadataAdmissionUpdated:    make(chan struct{}, 1),
+	}
+	s.cfg.HAKeeper.DiscoveryTimeout.Duration = 5 * time.Second
+	s.sqlExecutor = executor.NewMemExecutor(func(sql string) (executor.Result, error) {
+		if sql == catalog.ViewMetadataLifecycleGateSQL {
+			switch gateAttempts.Add(1) {
+			case 1:
+				close(oldFenceEntered)
+				<-releaseOldFence
+			case 2:
+				close(newFenceEntered)
+				<-releaseNewFence
+			}
+			return viewMetadataLifecycleGateTestResult(), nil
+		}
+		return executor.Result{}, nil
+	})
+	s.viewMetadataCatalogFenceReady.Store(true)
+	s.viewMetadataAdmission.Store(&logservicepb.ViewMetadataAdmission{
+		Enabled:              true,
+		Epoch:                5,
+		RevalidationRequired: true,
+		Generation:           11,
+		Admitted:             true,
+	})
+
+	done := make(chan error, 1)
+	go func() { done <- s.waitForViewMetadataAdmission() }()
+	select {
+	case <-oldFenceEntered:
+	case <-time.After(time.Second):
+		t.Fatal("startup waiter did not begin fencing the old epoch")
+	}
+
+	newSnapshot := &logservicepb.ViewMetadataAdmission{
+		Enabled:              true,
+		Epoch:                6,
+		RevalidationRequired: true,
+		Generation:           11,
+		Admitted:             false,
+	}
+	require.NoError(t, s.applyViewMetadataAdmission(context.Background(), newSnapshot))
+	releaseOld()
+	select {
+	case err := <-done:
+		t.Fatalf("startup accepted the stale admitted snapshot: %v", err)
+	case <-newFenceEntered:
+	}
+	require.Equal(t, uint64(5), s.viewMetadataCatalogFencedEpoch.Load())
+	require.Equal(t, uint64(6), s.viewMetadataAdmission.Load().Epoch)
+	require.False(t, s.viewMetadataAdmission.Load().Admitted)
+
+	newSnapshot.Admitted = true
+	require.NoError(t, s.applyViewMetadataAdmission(context.Background(), newSnapshot))
+	releaseNew()
+	select {
+	case err := <-done:
+		require.NoError(t, err)
+	case <-time.After(time.Second):
+		t.Fatal("startup did not accept the current fenced and admitted epoch")
+	}
+	require.Equal(t, uint64(6), s.viewMetadataCatalogFencedEpoch.Load())
+}
+
 func TestViewMetadataCatalogFenceRetryDelayIsBoundedAndJittered(t *testing.T) {
 	base := viewMetadataCatalogFenceInitialRetryDelay
 	var previous time.Duration
