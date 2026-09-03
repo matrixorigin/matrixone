@@ -27,8 +27,9 @@ import (
 	"github.com/apache/arrow-go/v18/arrow/ipc"
 	"github.com/apache/arrow-go/v18/arrow/memory"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/container/arrowipc"
+	"github.com/matrixorigin/matrixone/pkg/container/arrowipc/ipcflatbuf"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/external/arrowio/ipcflatbuf"
 )
 
 const (
@@ -201,7 +202,7 @@ func readFooterBlocks(
 		return nil, nil, moerr.NewInvalidInput(ctx, "Arrow IPC File footer root is out of bounds")
 	}
 	footerMetadata := ipcflatbuf.GetRootAsFooter(footerBytes)
-	if err := validateIPCSchemaMetadata(
+	if err := arrowipc.ValidateSchemaMetadata(
 		ctx, footerMetadata.Schema(nil), len(footerBytes),
 	); err != nil {
 		return nil, nil, err

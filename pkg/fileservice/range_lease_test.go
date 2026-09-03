@@ -23,6 +23,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/fileservice/fscache"
+	"github.com/matrixorigin/matrixone/pkg/util/toml"
 	"github.com/stretchr/testify/require"
 )
 
@@ -63,6 +65,22 @@ type testRangeAdmission struct {
 	released     atomic.Int64
 	aborted      atomic.Int64
 	commitReject error
+}
+
+type rejectFirstRangeAdmission struct {
+	first error
+	calls atomic.Int64
+	inner testRangeAdmission
+}
+
+func (a *rejectFirstRangeAdmission) Reserve(
+	ctx context.Context,
+	upper int64,
+) (CapacityReservation, error) {
+	if a.calls.Add(1) == 1 {
+		return nil, a.first
+	}
+	return a.inner.Reserve(ctx, upper)
 }
 
 func (a *testRangeAdmission) Reserve(_ context.Context, upper int64) (CapacityReservation, error) {
@@ -130,6 +148,92 @@ func TestReadRangeLeaseLifecycle(t *testing.T) {
 	require.Equal(t, int64(3), admission.released.Load())
 }
 
+func TestReadRangeLeaseMemoryCacheAdmissionLifecycle(t *testing.T) {
+	ctx := context.Background()
+	cacheCapacity := toml.ByteSize(1 << 20)
+	fs, err := NewLocalFS2(ctx, "range-cache", t.TempDir(), CacheConfig{
+		MemoryCapacity: &cacheCapacity,
+	}, nil)
+	require.NoError(t, err)
+	t.Cleanup(func() { fs.Close(ctx) })
+	require.NoError(t, fs.Write(ctx, IOVector{
+		FilePath: "range-cache:file",
+		Entries:  []IOEntry{{Offset: 0, Size: 6, Data: []byte("abcdef")}},
+		Policy:   SkipAllCache,
+	}))
+	reader := NewLeasedRangeReader(fs)
+
+	missAdmission := new(testRangeAdmission)
+	miss, err := reader.ReadRangeLease(ctx, "range-cache:file", 2, 3, missAdmission)
+	require.NoError(t, err)
+	require.Equal(t, []byte("cde"), miss.Bytes())
+	require.Equal(t, int64(3), miss.Capacity())
+	require.Equal(t, int64(3), missAdmission.reserved.Load())
+	require.Zero(t, missAdmission.aborted.Load())
+	require.Equal(t, int64(3), missAdmission.committed.Load())
+	miss.Release()
+	require.Equal(t, missAdmission.committed.Load(), missAdmission.released.Load())
+
+	// Populate the exact memory-cache key through the ordinary FileService
+	// cache path. The next range read must pin this backing without allocating
+	// or reserving a raw destination.
+	warm := &IOVector{
+		FilePath: "range-cache:file",
+		Policy:   SkipDiskCache | SkipRemoteCache | SkipFullFilePreloads,
+		Entries: []IOEntry{{
+			Offset:      2,
+			Size:        3,
+			ToCacheData: CacheOriginalData,
+		}},
+	}
+	require.NoError(t, fs.Read(ctx, warm))
+	require.NotNil(t, warm.Entries[0].CachedData)
+	warm.Release()
+
+	hitAdmission := new(testRangeAdmission)
+	hit, err := reader.ReadRangeLease(ctx, "range-cache:file", 2, 3, hitAdmission)
+	require.NoError(t, err)
+	require.Equal(t, []byte("cde"), hit.Bytes())
+	require.Equal(t, hit.Capacity(), hitAdmission.reserved.Load(),
+		"cache hit must not allocate or reserve a raw destination")
+	require.Zero(t, hitAdmission.aborted.Load())
+	require.Equal(t, hit.Capacity(), hitAdmission.committed.Load())
+	hit.Release()
+	require.Equal(t, hitAdmission.committed.Load(), hitAdmission.released.Load())
+
+	// A cache-only rejection is a miss, not a statement failure. The fallback
+	// reserves the exact raw range and avoids making success depend on whether
+	// another reader happened to warm a larger cache backing first.
+	fallbackAdmission := &rejectFirstRangeAdmission{first: errors.New("pin budget rejected")}
+	fallback, err := reader.ReadRangeLease(ctx, "range-cache:file", 2, 3, fallbackAdmission)
+	require.NoError(t, err)
+	require.Equal(t, []byte("cde"), fallback.Bytes())
+	require.Equal(t, int64(2), fallbackAdmission.calls.Load())
+	require.Equal(t, int64(3), fallbackAdmission.inner.committed.Load())
+	fallback.Release()
+	require.Equal(t, int64(3), fallbackAdmission.inner.released.Load())
+
+	reject := errors.New("pin budget rejected")
+	_, err = reader.ReadRangeLease(ctx, "range-cache:file", 2, 3, &testRangeAdmission{reject: reject})
+	require.ErrorIs(t, err, reject)
+
+	// A rejected pin did not retain or corrupt the cache entry.
+	recoveryAdmission := new(testRangeAdmission)
+	recovered, err := reader.ReadRangeLease(ctx, "range-cache:file", 2, 3, recoveryAdmission)
+	require.NoError(t, err)
+	require.Equal(t, []byte("cde"), recovered.Bytes())
+	recovered.Release()
+	require.Equal(t, recoveryAdmission.committed.Load(), recoveryAdmission.released.Load())
+}
+
+func TestReadRangeLeaseRejectsPinAmplificationBeforeAdmission(t *testing.T) {
+	admission := new(testRangeAdmission)
+	_, err := admitRangeCachePin(context.Background(), admission, 3, 13)
+	require.ErrorIs(t, err, fscache.ErrCacheAdmissionRejected)
+	require.ErrorContains(t, err, "pin amplification")
+	require.Zero(t, admission.reserved.Load())
+}
+
 func TestReadRangeLeaseAdmissionAndCommitFailure(t *testing.T) {
 	ctx := context.Background()
 	fs, err := NewMemoryFS("range-errors", DisabledCacheConfig, nil)
@@ -174,7 +278,8 @@ func TestReadRangeLeaseRejectsInvalidAndCanceledReads(t *testing.T) {
 	cancel()
 	_, err = reader.ReadRangeLease(ctx, "range-invalid:file", 0, 1, admission)
 	require.ErrorIs(t, err, context.Canceled)
-	require.Equal(t, int64(1), admission.aborted.Load())
+	require.Zero(t, admission.reserved.Load(), "canceled cache probe must fail before raw admission")
+	require.Zero(t, admission.aborted.Load())
 }
 
 func TestConditionalRangeLeaseFixesObjectIdentity(t *testing.T) {

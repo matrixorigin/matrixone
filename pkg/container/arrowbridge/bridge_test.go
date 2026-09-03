@@ -130,6 +130,20 @@ func TestBindRejectsAmbiguousMissingAndUnsupported(t *testing.T) {
 	require.ErrorContains(t, err, "target has 2")
 }
 
+func TestBindRejectsDuplicateOutputIndexWhenAttributeNameIsEmpty(t *testing.T) {
+	schema := arrow.NewSchema([]arrow.Field{
+		{Name: "", Type: arrow.PrimitiveTypes.Int64},
+		{Name: "", Type: arrow.PrimitiveTypes.Int64},
+		{Name: "third", Type: arrow.PrimitiveTypes.Int64},
+	}, nil)
+	_, err := BindLoad(context.Background(), schema, []TargetColumn{
+		{Name: "", Type: types.T_int64.ToType(), MOIndex: 0},
+		{Name: "", Type: types.T_int64.ToType(), MOIndex: 0},
+		{Name: "third", Type: types.T_int64.ToType(), MOIndex: 1},
+	}, MatchByPosition)
+	require.ErrorContains(t, err, "duplicate MatrixOne output column index 0")
+}
+
 func TestBindBoundsTotalFieldsAndNestingBeforeFingerprint(t *testing.T) {
 	allowed := arrow.DataType(arrow.PrimitiveTypes.Int64)
 	for range MaxNestingDepth - 1 {
@@ -171,6 +185,11 @@ func TestFixedBorrowValidityLifetimeAndWindow(t *testing.T) {
 	bat, stats, err := plan.Convert(context.Background(), record, mp, ConvertOptions{})
 	require.NoError(t, err)
 	require.Equal(t, int64(24), stats.BorrowedPayloadBytes)
+	require.Equal(t, int64(24), stats.EligiblePayloadBytes)
+	require.Equal(t, int64(1), stats.BorrowedColumns)
+	require.Zero(t, stats.MaterializedColumns)
+	require.Zero(t, stats.PinAmplificationFallbacks)
+	require.Zero(t, stats.UnalignedFallbacks)
 	require.True(t, bat.Vecs[0].HasBorrowedBacking())
 	require.True(t, bat.Vecs[0].GetNulls().HasBorrowedValidity())
 	expectedData := sliced.Data().Buffers()[1].Bytes()[sliced.Data().Offset()*8:]
@@ -243,6 +262,9 @@ func TestExactFixedWidthTypeMatrixBorrowsPayload(t *testing.T) {
 			require.NoError(t, err)
 			require.True(t, bat.Vecs[0].HasBorrowedBacking())
 			require.Equal(t, int64(test.target.TypeSize()), stats.BorrowedPayloadBytes)
+			require.Equal(t, int64(test.target.TypeSize()), stats.EligiblePayloadBytes)
+			require.Equal(t, int64(1), stats.BorrowedColumns)
+			require.Zero(t, stats.MaterializedColumns)
 			require.Zero(t, stats.MaterializedPayloadBytes)
 			sourceData := values.Data().Buffers()[1].Bytes()
 			require.Equal(t,
@@ -327,6 +349,89 @@ func TestMaterializedConversionUsesStatementAllocationSelection(t *testing.T) {
 	require.NoError(t, err)
 }
 
+func TestConvertReleasesUnpublishedVectorWhenPreExtendIsRejected(t *testing.T) {
+	registry, err := mpool.NewAllocationAccountRegistry(1, 16)
+	require.NoError(t, err)
+	// One byte cannot admit either a fixed-width value buffer or a varlena
+	// descriptor. This deterministically fails while the new vector is still
+	// owned by the conversion helper rather than by the output batch.
+	account, err := registry.Open(1)
+	require.NoError(t, err)
+	selection, err := vector.NewAllocationAccountSelection(
+		account, mpool.AllocationOwnerExternal, 20, 21, 22, 23,
+	)
+	require.NoError(t, err)
+
+	allocator := memory.NewCheckedAllocator(memory.NewGoAllocator())
+	builder := array.NewInt64Builder(allocator)
+	builder.Append(42)
+	values := builder.NewArray()
+	builder.Release()
+	schema := arrow.NewSchema([]arrow.Field{{Name: "v", Type: arrow.PrimitiveTypes.Int64}}, nil)
+	record := array.NewRecordBatch(schema, []arrow.Array{values}, 1)
+	plan, err := BindLoad(context.Background(), schema, []TargetColumn{{
+		Name: "v", Type: types.T_int64.ToType(),
+	}}, MatchByName)
+	require.NoError(t, err)
+
+	mp := mpool.MustNewZero()
+	bat, _, err := plan.Convert(context.Background(), record, mp, ConvertOptions{
+		Allocation:       selection,
+		ForceMaterialize: true,
+	})
+	require.Error(t, err)
+	require.Nil(t, bat)
+	require.Zero(t, account.Snapshot().Used)
+	require.Zero(t, mp.CurrNB())
+
+	record.Release()
+	values.Release()
+	allocator.AssertSize(t, 0)
+	account.Seal()
+	_, err = registry.Finalize(account)
+	require.NoError(t, err)
+}
+
+func TestConvertReleasesBorrowedVarlenVectorWhenDescriptorAdmissionIsRejected(t *testing.T) {
+	registry, err := mpool.NewAllocationAccountRegistry(1, 16)
+	require.NoError(t, err)
+	account, err := registry.Open(1)
+	require.NoError(t, err)
+	selection, err := vector.NewAllocationAccountSelection(
+		account, mpool.AllocationOwnerExternal, 20, 21, 22, 23,
+	)
+	require.NoError(t, err)
+
+	allocator := memory.NewCheckedAllocator(memory.NewGoAllocator())
+	builder := array.NewStringBuilder(allocator)
+	builder.Append("a borrowed Arrow value that is longer than the inline threshold")
+	values := builder.NewArray()
+	builder.Release()
+	schema := arrow.NewSchema([]arrow.Field{{Name: "v", Type: arrow.BinaryTypes.String}}, nil)
+	record := array.NewRecordBatch(schema, []arrow.Array{values}, 1)
+	plan, err := BindLoad(context.Background(), schema, []TargetColumn{{
+		Name: "v", Type: types.T_varchar.ToType(),
+	}}, MatchByName)
+	require.NoError(t, err)
+
+	mp := mpool.MustNewZero()
+	bat, _, err := plan.Convert(context.Background(), record, mp, ConvertOptions{
+		Allocation:          selection,
+		MaxPinAmplification: 100,
+	})
+	require.Error(t, err)
+	require.Nil(t, bat)
+	require.Zero(t, account.Snapshot().Used)
+	require.Zero(t, mp.CurrNB())
+
+	record.Release()
+	values.Release()
+	allocator.AssertSize(t, 0)
+	account.Seal()
+	_, err = registry.Finalize(account)
+	require.NoError(t, err)
+}
+
 func TestVarlenBorrowLongInlineShortAndLifetime(t *testing.T) {
 	alloc := memory.NewCheckedAllocator(memory.NewGoAllocator())
 	builder := array.NewStringBuilder(alloc)
@@ -343,6 +448,10 @@ func TestVarlenBorrowLongInlineShortAndLifetime(t *testing.T) {
 	bat, stats, err := plan.Convert(context.Background(), record, mp, ConvertOptions{MaxPinAmplification: 100})
 	require.NoError(t, err)
 	require.Equal(t, int64(len(long)), stats.BorrowedPayloadBytes)
+	require.Equal(t, int64(len(long)), stats.EligiblePayloadBytes)
+	require.Equal(t, int64(len("tiny")), stats.MaterializedPayloadBytes)
+	require.Equal(t, int64(1), stats.BorrowedColumns)
+	require.Zero(t, stats.MaterializedColumns)
 	require.True(t, bat.Vecs[0].HasBorrowedBacking())
 	descriptors, area := vector.MustVarlenaRawData(bat.Vecs[0])
 	require.True(t, descriptors[0].IsSmall())
@@ -378,12 +487,66 @@ func TestVarlenPinAmplificationMaterializes(t *testing.T) {
 	require.NoError(t, err)
 	require.False(t, bat.Vecs[0].HasBorrowedBacking())
 	require.Zero(t, stats.BorrowedPayloadBytes)
+	require.Equal(t, int64(len(long)), stats.EligiblePayloadBytes)
 	require.Equal(t, int64(len(long)), stats.MaterializedPayloadBytes)
+	require.Equal(t, int64(1), stats.MaterializedColumns)
+	require.Equal(t, int64(1), stats.PinAmplificationFallbacks)
 	require.Equal(t, long, string(bat.Vecs[0].GetBytesAt(0)))
 	record.Release()
 	arr.Release()
 	bat.Clean(mp)
 	require.Equal(t, int64(0), mp.CurrNB())
+	alloc.AssertSize(t, 0)
+}
+
+func TestForceMaterializeBorrowEligibleColumns(t *testing.T) {
+	alloc := memory.NewCheckedAllocator(memory.NewGoAllocator())
+	ints := array.NewInt64Builder(alloc)
+	ints.AppendValues([]int64{10, 20}, nil)
+	intValues := ints.NewArray()
+	ints.Release()
+	strings := array.NewStringBuilder(alloc)
+	long := "a payload deliberately longer than twenty three bytes"
+	strings.AppendValues([]string{long, long}, nil)
+	stringValues := strings.NewArray()
+	strings.Release()
+	schema := arrow.NewSchema([]arrow.Field{
+		{Name: "i", Type: arrow.PrimitiveTypes.Int64},
+		{Name: "s", Type: arrow.BinaryTypes.String},
+	}, nil)
+	record := array.NewRecordBatch(schema, []arrow.Array{intValues, stringValues}, 2)
+	plan, err := Bind(context.Background(), schema, []TargetColumn{
+		{Name: "i", Type: types.T_int64.ToType()},
+		{Name: "s", Type: types.T_varchar.ToType()},
+	}, MatchByName)
+	require.NoError(t, err)
+	mp := mpool.MustNewZero()
+
+	borrowed, borrowedStats, err := plan.Convert(context.Background(), record, mp, ConvertOptions{})
+	require.NoError(t, err)
+	require.Equal(t, int64(2), borrowedStats.BorrowedColumns)
+	require.Zero(t, borrowedStats.MaterializedColumns)
+	require.Equal(t, int64(16+2*len(long)), borrowedStats.EligiblePayloadBytes)
+	require.Equal(t, borrowedStats.EligiblePayloadBytes, borrowedStats.BorrowedPayloadBytes)
+
+	materialized, materializedStats, err := plan.Convert(
+		context.Background(), record, mp, ConvertOptions{ForceMaterialize: true},
+	)
+	require.NoError(t, err)
+	require.Zero(t, materializedStats.BorrowedColumns)
+	require.Equal(t, int64(2), materializedStats.MaterializedColumns)
+	require.Equal(t, borrowedStats.EligiblePayloadBytes, materializedStats.EligiblePayloadBytes)
+	require.Equal(t, borrowedStats.EligiblePayloadBytes, materializedStats.MaterializedPayloadBytes)
+	require.Zero(t, materializedStats.PinAmplificationFallbacks)
+	require.False(t, materialized.Vecs[0].HasBorrowedBacking())
+	require.False(t, materialized.Vecs[1].HasBorrowedBacking())
+
+	borrowed.Clean(mp)
+	materialized.Clean(mp)
+	record.Release()
+	intValues.Release()
+	stringValues.Release()
+	require.Zero(t, mp.CurrNB())
 	alloc.AssertSize(t, 0)
 }
 

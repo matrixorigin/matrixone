@@ -15,10 +15,12 @@
 package sidecarflight
 
 import (
+	"context"
 	"encoding/binary"
 	"math"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/container/arrowipc"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -28,7 +30,7 @@ import (
 const (
 	arrowHeaderSchema      = byte(1)
 	arrowHeaderRecordBatch = byte(3)
-	maxArrowMetadataBytes  = 1 << 20
+	maxArrowMetadataBytes  = int(arrowipc.DefaultMaxMetadataBytes)
 
 	arrowTypeInt           = byte(2)
 	arrowTypeFloatingPoint = byte(3)
@@ -69,6 +71,20 @@ func ParseSchema(wire []byte, expected []planpb.Type, headings []string) (*Schem
 	if len(expected) == 0 || len(headings) != len(expected) {
 		return nil, internalErrorf("MatrixOne result schema is empty or inconsistent")
 	}
+	// The shared pass owns hostile FlatBuffers/vector bounds. The code below
+	// remains the Sirius-specific exact schema and negotiated type policy.
+	info, err := arrowipc.InspectMessage(context.Background(), wire, arrowipc.ValidationOptions{
+		MaxMetadataBytes:      int64(maxArrowMetadataBytes),
+		MaxBodyBytes:          0,
+		BodyEnvelopeBytes:     0,
+		MaxDecodedRecordBytes: 1,
+	})
+	if err != nil {
+		return nil, internalErrorf("Arrow schema message: %w", err)
+	}
+	if info.HeaderType != arrowHeaderSchema {
+		return nil, internalErrorf("Arrow schema message has header type %d", info.HeaderType)
+	}
 	metadata, err := ipcMetadata(wire)
 	if err != nil {
 		return nil, err
@@ -80,13 +96,6 @@ func ParseSchema(wire []byte, expected []planpb.Type, headings []string) (*Schem
 	version, err := message.byteField(0, 0)
 	if err != nil || version != 4 {
 		return nil, internalErrorf("Arrow schema message has unsupported metadata version %d", version)
-	}
-	headerType, err := message.byteField(1, 0)
-	if err != nil || headerType != arrowHeaderSchema {
-		return nil, internalErrorf("Arrow schema message has header type %d", headerType)
-	}
-	if bodyLength, bodyErr := message.int64Field(3, 0); bodyErr != nil || bodyLength != 0 {
-		return nil, internalErrorf("Arrow schema message has an invalid body length")
 	}
 	schemaTable, ok, err := message.tableField(2)
 	if err != nil {
@@ -307,8 +316,30 @@ func (s *Schema) decodeRecordBatch(header, body []byte, maxDecodedBytes uint64, 
 	if s == nil || mp == nil || maxDecodedBytes == 0 {
 		return nil, internalErrorf("sidecar flight: missing schema or memory pool")
 	}
+	if maxDecodedBytes > math.MaxInt64 {
+		return nil, internalErrorf("Arrow record batch decoded-memory budget overflows")
+	}
 	if len(header) == 0 || len(header) > maxArrowMetadataBytes {
 		return nil, internalErrorf("Arrow record batch metadata exceeds the supported bound")
+	}
+	// Validate transport-independent structure before this decoder allocates
+	// MO vectors. Exact field counts and Sirius conversions remain local.
+	info, inspectErr := arrowipc.InspectMessage(context.Background(), header, arrowipc.ValidationOptions{
+		MaxMetadataBytes:      int64(maxArrowMetadataBytes),
+		MaxBodyBytes:          int64(len(body)),
+		BodyEnvelopeBytes:     int64(len(body)),
+		Body:                  body,
+		ValidateBody:          true,
+		MaxDecodedRecordBytes: int64(maxDecodedBytes),
+	})
+	if inspectErr != nil {
+		return nil, internalErrorf("Arrow record batch: %w", inspectErr)
+	}
+	if info.HeaderType != arrowHeaderRecordBatch {
+		return nil, internalErrorf("Arrow message has unsupported header type %d", info.HeaderType)
+	}
+	if info.BodyBytes != int64(len(body)) {
+		return nil, internalErrorf("Arrow record batch body length mismatch")
 	}
 	metadata, err := ipcMetadata(header)
 	if err != nil {
@@ -321,14 +352,6 @@ func (s *Schema) decodeRecordBatch(header, body []byte, maxDecodedBytes uint64, 
 	version, err := message.byteField(0, 0)
 	if err != nil || version != 4 {
 		return nil, internalErrorf("Arrow record batch has unsupported metadata version %d", version)
-	}
-	headerType, err := message.byteField(1, 0)
-	if err != nil || headerType != arrowHeaderRecordBatch {
-		return nil, internalErrorf("Arrow message has unsupported header type %d", headerType)
-	}
-	bodyLength, err := message.int64Field(3, 0)
-	if err != nil || bodyLength < 0 || bodyLength != int64(len(body)) {
-		return nil, internalErrorf("Arrow record batch body length mismatch")
 	}
 	record, ok, err := message.tableField(2)
 	if err != nil {
@@ -554,24 +577,11 @@ func sliceBuffer(body []byte, buffer arrowBuffer) []byte {
 // ipcMetadata accepts both raw Message flatbuffers and stream-framed IPC
 // metadata (continuation marker plus size, or the legacy size prefix).
 func ipcMetadata(wire []byte) ([]byte, error) {
-	if len(wire) < 4 {
-		return nil, internalErrorf("Arrow IPC metadata is truncated")
+	metadata, err := arrowipc.Metadata(context.Background(), wire, int64(maxArrowMetadataBytes))
+	if err != nil {
+		return nil, internalErrorf("%v", err)
 	}
-	if binary.LittleEndian.Uint32(wire[:4]) == math.MaxUint32 {
-		if len(wire) < 8 {
-			return nil, internalErrorf("Arrow IPC continuation header is truncated")
-		}
-		length := uint64(binary.LittleEndian.Uint32(wire[4:8]))
-		if length == 0 || length > uint64(len(wire)-8) {
-			return nil, internalErrorf("Arrow IPC metadata length is invalid")
-		}
-		return wire[8 : 8+length], nil
-	}
-	length := uint64(binary.LittleEndian.Uint32(wire[:4]))
-	if length != 0 && length == uint64(len(wire)-4) {
-		return wire[4:], nil
-	}
-	return wire, nil
+	return metadata, nil
 }
 
 type flatTable struct {

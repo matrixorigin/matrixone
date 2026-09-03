@@ -28,11 +28,12 @@ import (
 	"github.com/apache/arrow-go/v18/arrow/ipc"
 	"github.com/apache/arrow-go/v18/arrow/memory"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/container/arrowipc"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 )
 
 const (
-	DefaultMaxMetadataBytes      int64 = 1 << 20
+	DefaultMaxMetadataBytes            = arrowipc.DefaultMaxMetadataBytes
 	DefaultMaxBodyBytes          int64 = 256 << 20
 	DefaultMaxDecodedRecordBytes int64 = 256 << 20
 )

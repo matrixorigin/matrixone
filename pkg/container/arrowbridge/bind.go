@@ -12,8 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// Package arrowbridge binds an Arrow schema to MatrixOne target columns and
-// converts record batches under one immutable, validated conversion plan.
 package arrowbridge
 
 import (
@@ -31,8 +29,13 @@ import (
 )
 
 const (
-	MaxFields             = 4096
-	MaxNestingDepth       = 32
+	// MaxFields and MaxNestingDepth bound the already-decoded Arrow schema.
+	// Wire-level FlatBuffers vectors have separate, stricter validation in
+	// container/arrowipc before Arrow-Go is allowed to construct this schema.
+	MaxFields       = 4096
+	MaxNestingDepth = 32
+	// ConversionPlanVersion fences distributed LOAD plans from binaries that
+	// implement a different binding/conversion contract.
 	ConversionPlanVersion = uint32(1)
 )
 
@@ -40,7 +43,11 @@ const (
 type MatchMode uint8
 
 const (
+	// MatchByName binds case-insensitively and rejects missing or ambiguous
+	// source names.
 	MatchByName MatchMode = iota
+	// MatchByPosition ignores source names but still fingerprints both schemas
+	// so execution cannot accept a drifted record.
 	MatchByPosition
 )
 
@@ -75,7 +82,7 @@ type columnPlan struct {
 	kind   conversionKind
 }
 
-// Plan is immutable after Bind and may be reused for records carrying the
+// Plan is immutable after BindLoad and may be reused for records carrying the
 // exact same Arrow schema.
 type Plan struct {
 	schemaFingerprint     [sha256.Size]byte
@@ -84,9 +91,25 @@ type Plan struct {
 	attrs                 []string
 }
 
-// Bind validates cardinality, mapping ambiguity, and the exact supported type
-// conversion before any record data is acquired.
+// Bind is the compatibility spelling for BindLoad.
+//
+// Deprecated: new callers must use BindLoad so the LOAD conversion policy is
+// visible at the call site. Other Arrow consumers, especially Python UDF, must
+// not treat this policy as their wire ABI.
 func Bind(
+	ctx context.Context,
+	schema *arrow.Schema,
+	targets []TargetColumn,
+	mode MatchMode,
+) (*Plan, error) {
+	return BindLoad(ctx, schema, targets, mode)
+}
+
+// BindLoad validates cardinality, mapping ambiguity, and the supported LOAD
+// conversion matrix before any record data is acquired. The matrix permits a
+// small set of checked widening and temporal conversions that are useful for
+// ingestion but are intentionally forbidden by exact result protocols.
+func BindLoad(
 	ctx context.Context,
 	schema *arrow.Schema,
 	targets []TargetColumn,
@@ -115,6 +138,7 @@ func Bind(
 		explicitOutputOrder = explicitOutputOrder || target.MOIndex != 0
 	}
 	used := make([]bool, schema.NumFields())
+	outputUsed := make([]bool, len(targets))
 	for targetIndex, target := range targets {
 		if !explicitOutputOrder {
 			target.MOIndex = targetIndex
@@ -122,9 +146,12 @@ func Bind(
 		if target.MOIndex < 0 || target.MOIndex >= len(targets) {
 			return nil, moerr.NewInvalidInputf(ctx, "invalid MatrixOne output column index %d", target.MOIndex)
 		}
-		if plan.attrs[target.MOIndex] != "" {
+		// AttrName is allowed to be empty at this transport-neutral boundary,
+		// so it cannot double as an occupancy sentinel for output ordering.
+		if outputUsed[target.MOIndex] {
 			return nil, moerr.NewInvalidInputf(ctx, "duplicate MatrixOne output column index %d", target.MOIndex)
 		}
+		outputUsed[target.MOIndex] = true
 		if target.AttrName == "" {
 			target.AttrName = target.Name
 		}
@@ -145,7 +172,7 @@ func Bind(
 		}
 		used[sourceIndex] = true
 
-		kind, err := selectConversion(schema.Field(sourceIndex).Type, target.Type)
+		kind, err := selectLoadConversion(schema.Field(sourceIndex).Type, target.Type)
 		if err != nil {
 			return nil, moerr.NewNotSupportedf(ctx, "Arrow field %q (%s) to MatrixOne column %q (%s): %v",
 				schema.Field(sourceIndex).Name, schema.Field(sourceIndex).Type, target.Name, target.Type, err)
@@ -177,6 +204,11 @@ func validateSchemaShape(ctx context.Context, schema *arrow.Schema) error {
 		total++
 		if total > MaxFields {
 			return moerr.NewInvalidInputf(ctx, "Arrow total field count exceeds %d", MaxFields)
+		}
+		// BindLoad is also a public in-process boundary; callers may construct an
+		// Arrow schema directly rather than through the validated IPC decoder.
+		if current.field.Type == nil {
+			return moerr.NewInvalidInputf(ctx, "Arrow field %q type is nil", current.field.Name)
 		}
 		if current.depth > MaxNestingDepth {
 			return moerr.NewInvalidInputf(ctx,
@@ -299,7 +331,10 @@ func fieldIndicesFold(schema *arrow.Schema, name string) []int {
 	return indices
 }
 
-func selectConversion(source arrow.DataType, target types.Type) (conversionKind, error) {
+// selectLoadConversion is intentionally private: its result is an execution
+// kernel choice, not a reusable Arrow ABI declaration. Consumers with an
+// exact protocol must first validate their own versioned logical descriptor.
+func selectLoadConversion(source arrow.DataType, target types.Type) (conversionKind, error) {
 	if source.ID() == arrow.DICTIONARY {
 		dictionary, ok := source.(*arrow.DictionaryType)
 		if !ok || dictionary.IndexType == nil || dictionary.ValueType == nil {
@@ -314,7 +349,7 @@ func selectConversion(source arrow.DataType, target types.Type) (conversionKind,
 		if dictionary.ValueType.ID() == arrow.DICTIONARY {
 			return 0, fmt.Errorf("nested Arrow dictionaries are not supported")
 		}
-		if _, err := selectConversion(dictionary.ValueType, target); err != nil {
+		if _, err := selectLoadConversion(dictionary.ValueType, target); err != nil {
 			return 0, err
 		}
 		return conversionMaterializeDictionary, nil

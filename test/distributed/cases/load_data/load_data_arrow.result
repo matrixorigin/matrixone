@@ -1,0 +1,88 @@
+drop database if exists arrow_load_bvt;
+create database arrow_load_bvt;
+use arrow_load_bvt;
+create table arrow_file(id bigint, name varchar(50));
+load data infile {'filepath'='$resources/load_data/arrow_file.arrow', 'format'='arrow', 'arrow_container'='file'} into table arrow_file;
+select * from arrow_file order by id;
+➤ id[-5,64,0]  ¦  name[12,50,0]  𝄀
+1  ¦  alpha  𝄀
+2  ¦  beta  𝄀
+3  ¦  null
+create table arrow_stream(id bigint, name varchar(50));
+load data infile {'filepath'='$resources/load_data/arrow_stream.arrow', 'format'='arrow', 'arrow_container'='stream'} into table arrow_stream;
+select * from arrow_stream order by id;
+➤ id[-5,64,0]  ¦  name[12,50,0]  𝄀
+4  ¦  delta  𝄀
+5  ¦  epsilon
+create table arrow_pattern(id bigint, name varchar(50));
+load data infile {'filepath'='$resources/load_data/arrow_part_*.arrow', 'format'='arrow'} into table arrow_pattern parallel 'true';
+select * from arrow_pattern order by id;
+➤ id[-5,64,0]  ¦  name[12,50,0]  𝄀
+10  ¦  ten  𝄀
+11  ¦  eleven
+create table arrow_schema_rollback(id bigint, name varchar(50));
+insert into arrow_schema_rollback values (0, 'seed');
+load data infile {'filepath'='$resources/load_data/arrow_mismatch_*.arrow', 'format'='arrow'} into table arrow_schema_rollback parallel 'true';
+not supported: Arrow field "id" (float64) to MatrixOne column "id" (BIGINT): no exact long-term conversion
+select * from arrow_schema_rollback order by id;
+➤ id[-5,64,0]  ¦  name[12,50,0]  𝄀
+0  ¦  seed
+create table arrow_constraint_rollback(id bigint not null, name varchar(50));
+insert into arrow_constraint_rollback values (0, 'seed');
+load data infile {'filepath'='$resources/load_data/arrow_notnull_*.arrow', 'format'='arrow'} into table arrow_constraint_rollback parallel 'true';
+constraint violation: Arrow column "id" contains NULL for a NOT NULL target
+select * from arrow_constraint_rollback order by id;
+➤ id[-5,64,0]  ¦  name[12,50,0]  𝄀
+0  ¦  seed
+create table arrow_corrupt(id bigint, name varchar(50));
+load data infile {'filepath'='$resources/load_data/arrow_corrupt.arrow', 'format'='arrow'} into table arrow_corrupt;
+invalid input: invalid Arrow IPC Stream: arrow/ipc: could not read message schema: invalid input: Arrow IPC Stream metadata length 1330795073 exceeds limit 1048576
+select count(*) from arrow_corrupt;
+➤ count(*)[-5,64,0]  𝄀
+0
+create table arrow_txn(id bigint, name varchar(50));
+begin;
+load data infile {'filepath'='$resources/load_data/arrow_file.arrow', 'format'='arrow'} into table arrow_txn;
+select count(*) from arrow_txn;
+➤ count(*)[-5,64,0]  𝄀
+3
+rollback;
+select count(*) from arrow_txn;
+➤ count(*)[-5,64,0]  𝄀
+0
+begin;
+load data infile {'filepath'='$resources/load_data/arrow_file.arrow', 'format'='arrow'} into table arrow_txn;
+commit;
+select count(*) from arrow_txn;
+➤ count(*)[-5,64,0]  𝄀
+3
+create table arrow_isolation(id bigint, name varchar(50));
+begin;
+load data infile {'filepath'='$resources/load_data/arrow_stream.arrow', 'format'='arrow', 'arrow_container'='stream'} into table arrow_isolation;
+use arrow_load_bvt;
+select count(*) from arrow_isolation;
+➤ count(*)[-5,64,0]  𝄀
+0
+commit;
+select count(*) from arrow_isolation;
+➤ count(*)[-5,64,0]  𝄀
+2
+create external table arrow_external_reject(id bigint, name varchar(50))
+infile {'filepath'='$resources/load_data/arrow_file.arrow', 'format'='arrow'};
+not supported: Arrow format is supported only by LOAD DATA
+create table arrow_option_reject(id bigint, name varchar(50));
+load data local infile {'filepath'='$resources/load_data/arrow_file.arrow', 'format'='arrow'} into table arrow_option_reject;
+not supported: Arrow format is supported only by non-LOCAL LOAD DATA
+load data infile {'filepath'='$resources/load_data/arrow_file.arrow', 'format'='arrow', 'compression'='gzip'} into table arrow_option_reject;
+invalid configuration: LOAD DATA with format='arrow' does not support external compression
+load data infile {'filepath'='$resources/load_data/arrow_file.arrow', 'format'='arrow', 'arrow_container'='flight'} into table arrow_option_reject;
+invalid configuration: the arrow_container 'flight' is not supported
+create table arrow_insert_reference(id bigint, name varchar(50));
+insert into arrow_insert_reference values (1, 'alpha'), (2, 'beta'), (3, null);
+select count(*) from (select * from arrow_file except select * from arrow_insert_reference) a;
+➤ count(*)[-5,64,0]  𝄀
+0
+select count(*) from (select * from arrow_insert_reference except select * from arrow_file) a;
+➤ count(*)[-5,64,0]  𝄀
+0
+drop database arrow_load_bvt;

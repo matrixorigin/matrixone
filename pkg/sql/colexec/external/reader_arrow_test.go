@@ -23,6 +23,8 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 	"unsafe"
@@ -31,25 +33,36 @@ import (
 	"github.com/apache/arrow-go/v18/arrow/array"
 	"github.com/apache/arrow-go/v18/arrow/ipc"
 	"github.com/apache/arrow-go/v18/arrow/memory"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/container/arrowbridge"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/arrowbridge"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
+	metric "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/minio/minio-go/v7"
 	"github.com/minio/minio-go/v7/pkg/credentials"
+	promtestutil "github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/stretchr/testify/require"
 )
 
 func TestExternalArrowLoadFileAndStream(t *testing.T) {
 	for _, container := range []string{tree.ARROW_CONTAINER_FILE, tree.ARROW_CONTAINER_STREAM} {
 		t.Run(container, func(t *testing.T) {
+			objectsBefore := promtestutil.ToFloat64(metric.ArrowLoadObjectCounter.WithLabelValues("success"))
+			recordsBefore := promtestutil.ToFloat64(metric.ArrowLoadRecordCounter)
+			batchesBefore := promtestutil.ToFloat64(metric.ArrowLoadBatchCounter)
+			rowsBefore := promtestutil.ToFloat64(metric.ArrowLoadRowCounter)
+			eligibleBefore := promtestutil.ToFloat64(metric.ArrowLoadPayloadBytesCounter.WithLabelValues("eligible"))
+			borrowedBefore := promtestutil.ToFloat64(metric.ArrowLoadPayloadBytesCounter.WithLabelValues("borrowed"))
+			copyBefore := promtestutil.ToFloat64(metric.ArrowLoadCopyBytesCounter.WithLabelValues("arrow_to_mo"))
+			pinnedBefore := promtestutil.ToFloat64(metric.ArrowLoadPinnedBytesGauge)
 			fileBytes := makeExternalArrowIPC(t, container)
 			fs, err := fileservice.NewMemoryFS("etl", fileservice.DisabledCacheConfig, nil)
 			require.NoError(t, err)
@@ -96,8 +109,72 @@ func TestExternalArrowLoadFileAndStream(t *testing.T) {
 			account.Seal()
 			_, err = registry.Finalize(account)
 			require.NoError(t, err)
+			require.Equal(t, objectsBefore+1, promtestutil.ToFloat64(metric.ArrowLoadObjectCounter.WithLabelValues("success")))
+			require.Equal(t, recordsBefore+2, promtestutil.ToFloat64(metric.ArrowLoadRecordCounter))
+			require.Equal(t, batchesBefore+2, promtestutil.ToFloat64(metric.ArrowLoadBatchCounter))
+			require.Equal(t, rowsBefore+4, promtestutil.ToFloat64(metric.ArrowLoadRowCounter))
+			require.Greater(t, promtestutil.ToFloat64(metric.ArrowLoadPayloadBytesCounter.WithLabelValues("eligible")), eligibleBefore)
+			require.Greater(t, promtestutil.ToFloat64(metric.ArrowLoadPayloadBytesCounter.WithLabelValues("borrowed")), borrowedBefore)
+			require.Greater(t, promtestutil.ToFloat64(metric.ArrowLoadCopyBytesCounter.WithLabelValues("arrow_to_mo")), copyBefore)
+			require.Equal(t, pinnedBefore, promtestutil.ToFloat64(metric.ArrowLoadPinnedBytesGauge))
 		})
 	}
+}
+
+func TestArrowLoadErrorCategory(t *testing.T) {
+	tests := []struct {
+		err      error
+		category string
+	}{
+		{err: context.Canceled, category: "canceled"},
+		{err: context.DeadlineExceeded, category: "deadline_exceeded"},
+		{err: fmt.Errorf("wrapped: %w", fileservice.ErrObjectChanged), category: "object_changed"},
+		{err: mpool.ErrAllocationAccountCapacity, category: "resource_exhausted"},
+		{err: moerr.NewNotSupportedNoCtx("type"), category: "not_supported"},
+		{err: moerr.NewConstraintViolationNoCtx("value"), category: "constraint_violation"},
+		{err: moerr.NewInvalidInputNoCtx("input"), category: "invalid_input"},
+		{err: fmt.Errorf("wrapped: %w", moerr.NewInvalidInputNoCtx("input")), category: "invalid_input"},
+		{err: moerr.NewInternalErrorNoCtx("state"), category: "internal"},
+		{err: errors.New("backend"), category: "io"},
+	}
+	for _, test := range tests {
+		require.Equal(t, test.category, arrowLoadErrorCategory(test.err))
+	}
+}
+
+type countingArrowCapacityLease struct {
+	releases atomic.Int64
+}
+
+func (l *countingArrowCapacityLease) Release() {
+	l.releases.Add(1)
+}
+
+func TestMeteredArrowCapacityLeaseConcurrentRelease(t *testing.T) {
+	const capacity = int64(64)
+	arrowPinnedMetricState.Lock()
+	start := arrowPinnedMetricState.current
+	arrowPinnedMetricState.Unlock()
+
+	inner := new(countingArrowCapacityLease)
+	lease := &meteredArrowCapacityLease{inner: inner, capacity: capacity}
+	adjustArrowPinnedBytes(capacity)
+
+	var wait sync.WaitGroup
+	for index := 0; index < 32; index++ {
+		wait.Add(1)
+		go func() {
+			defer wait.Done()
+			lease.Release()
+		}()
+	}
+	wait.Wait()
+
+	require.Equal(t, int64(1), inner.releases.Load())
+	arrowPinnedMetricState.Lock()
+	require.Equal(t, start, arrowPinnedMetricState.current)
+	arrowPinnedMetricState.Unlock()
+	require.Equal(t, float64(start), promtestutil.ToFloat64(metric.ArrowLoadPinnedBytesGauge))
 }
 
 func TestExternalArrowLoadFromLocalMinIOAndRejectsObjectChange(t *testing.T) {

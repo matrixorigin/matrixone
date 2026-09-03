@@ -12,26 +12,28 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package arrowio
+package arrowipc
 
 import (
 	"context"
 
 	flatbuffers "github.com/google/flatbuffers/go"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/external/arrowio/ipcflatbuf"
+	"github.com/matrixorigin/matrixone/pkg/container/arrowipc/ipcflatbuf"
 )
 
 const (
 	// Keep the total field limit aligned with plan.TableColumnCountLimit. It
 	// applies to top-level and nested fields together so a deeply nested schema
-	// cannot multiply Arrow-Go's field allocations behind the table limit.
-	maxArrowSchemaFields          = 4096
-	maxArrowSchemaDepth           = 64
-	maxArrowSchemaMetadataEntries = 4096
-	maxArrowSchemaFeatures        = 64
-	maxArrowUnionTypeIDsPerField  = 128
-	maxArrowSchemaUnionTypeIDs    = 4096
+	// cannot multiply decoder allocations behind the table limit. These bounds
+	// are shared by file and Flight trust boundaries; a consumer may impose a
+	// lower negotiated limit but must not raise them locally.
+	MaxSchemaFields          = 4096
+	MaxSchemaDepth           = 64
+	MaxSchemaMetadataEntries = 4096
+	MaxSchemaFeatures        = 64
+	MaxUnionTypeIDsPerField  = 128
+	MaxSchemaUnionTypeIDs    = 4096
 )
 
 type schemaMetadataBudget struct {
@@ -42,13 +44,13 @@ type schemaMetadataBudget struct {
 	decodedStrings int
 }
 
-// validateIPCSchemaMetadata bounds every schema vector and recursively walks
-// it before Arrow-Go's schemaFromFB can allocate slices from untrusted vector
-// lengths. Walking every element also proves that the declared vector and
-// string ranges fit in the metadata buffer. decodedStrings prevents aliased
-// FlatBuffers offsets from amplifying a bounded wire message into unbounded Go
-// string allocations.
-func validateIPCSchemaMetadata(
+// ValidateSchemaMetadata bounds every schema vector and recursively walks it
+// before a decoder can allocate slices from untrusted vector lengths. Walking
+// every element also proves that declared vector and string ranges fit in the
+// metadata buffer. decodedStrings prevents aliased FlatBuffers offsets from
+// amplifying a bounded wire message into unbounded Go string allocations. This
+// validates structure, not a consumer's SQL type or ABI policy.
+func ValidateSchemaMetadata(
 	ctx context.Context,
 	schema *ipcflatbuf.Schema,
 	metadataBytes int,
@@ -86,10 +88,10 @@ func (b *schemaMetadataBudget) validateSchema(ctx context.Context, schema *ipcfl
 	if err := b.consumeVector(ctx, "feature", featureCount, 8); err != nil {
 		return err
 	}
-	if featureCount > maxArrowSchemaFeatures {
+	if featureCount > MaxSchemaFeatures {
 		return moerr.NewInvalidInputf(ctx,
 			"Arrow IPC schema feature count %d exceeds limit %d",
-			featureCount, maxArrowSchemaFeatures)
+			featureCount, MaxSchemaFeatures)
 	}
 	for index := 0; index < featureCount; index++ {
 		_ = schema.Features(index)
@@ -112,9 +114,9 @@ func (b *schemaMetadataBudget) validateField(
 	field *ipcflatbuf.Field,
 	depth int,
 ) error {
-	if depth > maxArrowSchemaDepth {
+	if depth > MaxSchemaDepth {
 		return moerr.NewInvalidInputf(ctx,
-			"Arrow IPC schema nesting depth %d exceeds limit %d", depth, maxArrowSchemaDepth)
+			"Arrow IPC schema nesting depth %d exceeds limit %d", depth, MaxSchemaDepth)
 	}
 	if err := b.consumeStringBytes(ctx, len(field.Name())); err != nil {
 		return err
@@ -157,10 +159,10 @@ func (b *schemaMetadataBudget) validateField(
 	if typeID != ipcflatbuf.TypeUnion {
 		return nil
 	}
-	if childCount > maxArrowUnionTypeIDsPerField {
+	if childCount > MaxUnionTypeIDsPerField {
 		return moerr.NewInvalidInputf(ctx,
 			"Arrow IPC union child count %d exceeds limit %d",
-			childCount, maxArrowUnionTypeIDsPerField)
+			childCount, MaxUnionTypeIDsPerField)
 	}
 	var union ipcflatbuf.Union
 	union.Init(typeTable.Bytes, typeTable.Pos)
@@ -168,14 +170,14 @@ func (b *schemaMetadataBudget) validateField(
 	if err := b.consumeVector(ctx, "union type ID", typeIDCount, 4); err != nil {
 		return err
 	}
-	if typeIDCount > maxArrowUnionTypeIDsPerField {
+	if typeIDCount > MaxUnionTypeIDsPerField {
 		return moerr.NewInvalidInputf(ctx,
 			"Arrow IPC union type ID count %d exceeds per-field limit %d",
-			typeIDCount, maxArrowUnionTypeIDsPerField)
+			typeIDCount, MaxUnionTypeIDsPerField)
 	}
-	if typeIDCount > maxArrowSchemaUnionTypeIDs-b.unionTypeIDs {
+	if typeIDCount > MaxSchemaUnionTypeIDs-b.unionTypeIDs {
 		return moerr.NewInvalidInputf(ctx,
-			"Arrow IPC union type ID count exceeds limit %d", maxArrowSchemaUnionTypeIDs)
+			"Arrow IPC union type ID count exceeds limit %d", MaxSchemaUnionTypeIDs)
 	}
 	if typeIDCount != 0 && typeIDCount != childCount {
 		return moerr.NewInvalidInputf(ctx,
@@ -185,7 +187,7 @@ func (b *schemaMetadataBudget) validateField(
 	b.unionTypeIDs += typeIDCount
 	for index := 0; index < typeIDCount; index++ {
 		value := union.TypeIDs(index)
-		if value < 0 || value >= maxArrowUnionTypeIDsPerField {
+		if value < 0 || value >= MaxUnionTypeIDsPerField {
 			return moerr.NewInvalidInputf(ctx,
 				"Arrow IPC union type ID %d at index %d is out of bounds", value, index)
 		}
@@ -202,10 +204,10 @@ func (b *schemaMetadataBudget) validateCustomMetadata(
 	if err := b.consumeVector(ctx, owner+" custom-metadata", count, 4); err != nil {
 		return err
 	}
-	if count > maxArrowSchemaMetadataEntries-b.metadata {
+	if count > MaxSchemaMetadataEntries-b.metadata {
 		return moerr.NewInvalidInputf(ctx,
 			"Arrow IPC schema custom metadata entry count exceeds limit %d",
-			maxArrowSchemaMetadataEntries)
+			MaxSchemaMetadataEntries)
 	}
 	b.metadata += count
 	for index := 0; index < count; index++ {
@@ -225,9 +227,9 @@ func (b *schemaMetadataBudget) validateCustomMetadata(
 }
 
 func (b *schemaMetadataBudget) consumeFields(ctx context.Context, count int) error {
-	if count < 0 || count > maxArrowSchemaFields-b.fields {
+	if count < 0 || count > MaxSchemaFields-b.fields {
 		return moerr.NewInvalidInputf(ctx,
-			"Arrow IPC schema field count exceeds limit %d", maxArrowSchemaFields)
+			"Arrow IPC schema field count exceeds limit %d", MaxSchemaFields)
 	}
 	b.fields += count
 	return nil
