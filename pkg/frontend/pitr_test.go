@@ -2672,13 +2672,16 @@ func Test_doCreatePitr(t *testing.T) {
 				"",
 				uint64(1),
 				uint8(1),
-				"d",
+				"mo",
 			},
 		})
 		bh.sql2result[sql] = mrs
 
+		stmt.PitrValue = 30
 		err = doCreatePitr(ctx, ses, stmt)
 		assert.NoError(t, err)
+		assert.Contains(t, bh.executedSQLs,
+			"update mo_catalog.mo_pitr set pitr_length = 31, pitr_unit = 'd' where pitr_name = 'sys_mo_catalog_pitr';")
 
 		commitErr := errors.New("pitr commit conflict")
 		bh.sql2err["commit;"] = commitErr
@@ -3700,6 +3703,57 @@ func newPitrLifecycleTestSession(
 	return ses, bh, ctx
 }
 
+func registerPitrRecordResult(
+	bh *backgroundExecTest,
+	pitrName string,
+	accountID uint64,
+	pitrValue uint8,
+	pitrUnit string,
+) {
+	registerPitrRecordResultWithStatus(bh, pitrName, accountID, pitrValue, pitrUnit, nil)
+}
+
+func registerPitrRecordResultWithStatus(
+	bh *backgroundExecTest,
+	pitrName string,
+	accountID uint64,
+	pitrValue uint8,
+	pitrUnit string,
+	pitrStatus *uint8,
+) {
+	sql := fmt.Sprintf(
+		"%s where pitr_name = '%s' and create_account = %d",
+		getPitrFormat,
+		pitrName,
+		accountID,
+	)
+	row := []interface{}{
+		"pitr-id",
+		pitrName,
+		accountID,
+		time.Now().Add(-24 * time.Hour).UnixNano(),
+		time.Now().Add(-24 * time.Hour).UnixNano(),
+		"ACCOUNT",
+		accountID,
+		sysAccountName,
+		"",
+		"",
+		accountID,
+		pitrValue,
+		pitrUnit,
+	}
+	mrs := newMrsForPitrRecord(nil)
+	if pitrStatus != nil {
+		statusColumn := &MysqlColumn{}
+		statusColumn.SetName("pitr_status")
+		statusColumn.SetColumnType(defines.MYSQL_TYPE_TINY)
+		mrs.AddColumn(statusColumn)
+		row = append(row, *pitrStatus)
+	}
+	mrs.AddRow(row)
+	bh.sql2result[sql] = mrs
+}
+
 func TestDoDropPitrCompactsHistoricalAlterLineage(t *testing.T) {
 	ses, bh, ctx := newPitrLifecycleTestSession(t)
 	stmt := &tree.DropPitr{Name: "pitr01"}
@@ -3723,9 +3777,60 @@ func TestDoAlterPitrCompactsHistoricalAlterLineage(t *testing.T) {
 	checkSQL, err := getSqlForCheckPitr(ctx, "pitr01", sysAccountID)
 	require.NoError(t, err)
 	bh.sql2result[checkSQL] = newMrsForPitrRecord([][]interface{}{{"pitr-id"}})
+	registerPitrRecordResult(bh, "pitr01", sysAccountID, 2, "h")
 
 	require.NoError(t, doAlterPitr(ctx, ses, stmt))
 	require.Contains(t, bh.executedSQLs, historicalAlterLineageMetadataSQL())
+}
+
+func TestDoAlterPitrRejectsRecoveryRangeExpansion(t *testing.T) {
+	ses, bh, ctx := newPitrLifecycleTestSession(t)
+	stmt := &tree.AlterPitr{Name: "pitr01", PitrValue: 2, PitrUnit: "h"}
+
+	checkSQL, err := getSqlForCheckPitr(ctx, "pitr01", sysAccountID)
+	require.NoError(t, err)
+	bh.sql2result[checkSQL] = newMrsForPitrRecord([][]interface{}{{"pitr-id"}})
+	registerPitrRecordResult(bh, "pitr01", sysAccountID, 1, "h")
+
+	err = doAlterPitr(ctx, ses, stmt)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "cannot expand PITR pitr01 recovery range")
+	require.Contains(t, bh.executedSQLs, "rollback;")
+	require.NotContains(t, bh.executedSQLs, "commit;")
+	require.NotContains(t, bh.executedSQLs, historicalAlterLineageMetadataSQL())
+	for _, sql := range bh.executedSQLs {
+		require.NotContains(t, sql, "update mo_catalog.mo_pitr set modified_time")
+	}
+}
+
+func TestDoAlterPitrRejectsInactivePitr(t *testing.T) {
+	ses, bh, ctx := newPitrLifecycleTestSession(t)
+	stmt := &tree.AlterPitr{Name: "pitr01", PitrValue: 2, PitrUnit: "mo"}
+
+	checkSQL, err := getSqlForCheckPitr(ctx, "pitr01", sysAccountID)
+	require.NoError(t, err)
+	bh.sql2result[checkSQL] = newMrsForPitrRecord([][]interface{}{{"pitr-id"}})
+	inactive := uint8(0)
+	registerPitrRecordResultWithStatus(bh, "pitr01", sysAccountID, 1, "y", &inactive)
+
+	err = doAlterPitr(ctx, ses, stmt)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "cannot alter inactive pitr pitr01")
+	require.Contains(t, bh.executedSQLs, "rollback;")
+	require.NotContains(t, bh.executedSQLs, "commit;")
+	for _, sql := range bh.executedSQLs {
+		require.NotContains(t, sql, "update mo_catalog.mo_pitr set modified_time")
+	}
+}
+
+func TestDoAlterPitrRejectsZeroRangeBeforeTransaction(t *testing.T) {
+	ses, bh, ctx := newPitrLifecycleTestSession(t)
+	stmt := &tree.AlterPitr{Name: "pitr01", PitrValue: 0, PitrUnit: "h"}
+
+	err := doAlterPitr(ctx, ses, stmt)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "invalid pitr value 0")
+	require.NotContains(t, bh.executedSQLs, "begin;")
 }
 
 // Test_unservableViewErrorIsIdentifiable pins the contract the restore paths rely on.

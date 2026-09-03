@@ -17,6 +17,7 @@ package frontend
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"math"
 	"net"
@@ -472,7 +473,25 @@ func (ses *Session) InitSystemVariables(ctx context.Context, bh BackgroundExec) 
 	if sv, err = GSysVarsMgr.Get(ses.GetTenantInfo().TenantID, ses, ctx, bh); err != nil {
 		return
 	}
+	return ses.initSystemVariablesFromGlobal(ctx, sv)
+}
+
+func (ses *Session) initSystemVariablesFromGlobal(ctx context.Context, sv *SystemVariables) (err error) {
+	if sv == nil {
+		return moerr.NewInternalError(ctx, "global system variables are not initialized")
+	}
 	sessionVars := sv.Clone()
+	// A fresh session generation must initialize runtime state as well as the
+	// values visible through @@session. time_zone is the only registered
+	// variable whose setter owns additional Session state.
+	if value := sessionVars.Get("time_zone"); value != nil {
+		if _, ok := value.(string); !ok {
+			return moerr.NewInternalErrorf(ctx, "invalid time_zone value %T", value)
+		}
+		if err = updateTimeZone(ctx, ses, sessionVars, "time_zone", value); err != nil {
+			return err
+		}
+	}
 	transactionIsolationValue := sessionVars.Get(transactionIsolationSystemVariable)
 	if transactionIsolationValue == nil {
 		transactionIsolationValue = gSysVarsDefs[transactionIsolationSystemVariable].Default
@@ -1318,7 +1337,22 @@ func (ses *Session) sqlModeHasOnlyFullGroupBy() bool {
 	return ok && has
 }
 
-func (ses *Session) updateSqlModeCaches(oldNative, oldOnlyFullGroupBy bool, val interface{}) {
+func (ses *Session) sqlModeHasEnableBoolSumAvg() bool {
+	if ses == nil {
+		return false
+	}
+	value, err := ses.GetSessionSysVar("sql_mode")
+	if err != nil {
+		return false
+	}
+	has, ok := sqlModeHasEnableBoolSumAvgValue(value)
+	return ok && has
+}
+
+// updateSqlModeCaches evicts cached plans when a sql_mode token that shapes
+// the plan changes membership. Every token the planner reads at bind time
+// must be compared here: the cache is keyed by SQL text alone.
+func (ses *Session) updateSqlModeCaches(oldNative, oldOnlyFullGroupBy, oldBoolSumAvg bool, val interface{}) {
 	ses.updateSqlModeNoAutoValueOnZero(val)
 	newNative, ok := sqlModeHasMatrixOneNativeValue(val)
 	if !ok {
@@ -1328,7 +1362,12 @@ func (ses *Session) updateSqlModeCaches(oldNative, oldOnlyFullGroupBy bool, val 
 	if !ok {
 		return
 	}
-	if oldNative != newNative || oldOnlyFullGroupBy != newOnlyFullGroupBy {
+	newBoolSumAvg, ok := sqlModeHasEnableBoolSumAvgValue(val)
+	if !ok {
+		return
+	}
+	if oldNative != newNative || oldOnlyFullGroupBy != newOnlyFullGroupBy ||
+		oldBoolSumAvg != newBoolSumAvg {
 		ses.cleanCache()
 	}
 }
@@ -1527,73 +1566,118 @@ func (ses *Session) ReserveConnAndClose() {
 	ses.Close()
 }
 
-func (ses *Session) Close() {
-	// Clean up temporary tables
-	type tempTableEntry struct {
-		dbName   string
-		realName string
-	}
-	var tenant *TenantInfo
+type sessionTempTable struct {
+	aliasKey string
+	dbName   string
+	realName string
+	identity tempTableIdentity
+}
+
+func (ses *Session) takeTempTables() ([]sessionTempTable, *TenantInfo) {
 	ses.mu.Lock()
-	tempTables := make([]tempTableEntry, 0, len(ses.tempTables))
+	tempTables := make([]sessionTempTable, 0, len(ses.tempTables))
 	for key, realName := range ses.tempTables {
 		identity := ses.tempTableIdentityLocked(key)
-		tempTables = append(tempTables, tempTableEntry{
-			dbName: identity.dbName, realName: realName,
+		tempTables = append(tempTables, sessionTempTable{
+			aliasKey: key,
+			dbName:   identity.dbName,
+			realName: realName,
+			identity: identity,
 		})
 	}
 	ses.tempTables = nil
 	ses.tempTablesRev = nil
 	ses.tempTableIdentities = nil
 	ses.tempTableTxnJournals = nil
-	tenant = ses.tenant
+	tenant := ses.tenant
 	ses.mu.Unlock()
-	var tenantInfo *TenantInfo
 	if tenant != nil {
-		tenantInfo = tenant.Copy()
+		tenant = tenant.Copy()
 	}
+	return tempTables, tenant
+}
 
+func dropSessionTempTables(
+	ctx context.Context,
+	service string,
+	timeZone *time.Location,
+	tenant *TenantInfo,
+	tempTables []sessionTempTable,
+) error {
+	if len(tempTables) == 0 {
+		return nil
+	}
+	serviceRuntime := moruntime.ServiceRuntime(service)
+	if serviceRuntime == nil {
+		return moerr.NewInternalError(ctx, "failed to clean temporary tables: service runtime is not ready")
+	}
+	v, ok := serviceRuntime.GetGlobalVariables(moruntime.InternalSQLExecutor)
+	if !ok {
+		return moerr.NewInternalError(ctx, "failed to clean temporary tables: internal SQL executor is not ready")
+	}
+	exec, ok := v.(executor.SQLExecutor)
+	if !ok {
+		return moerr.NewInternalError(ctx, "failed to clean temporary tables: invalid internal SQL executor")
+	}
+	opts := executor.Options{}.WithTimeZone(timeZone)
+	if tenant != nil {
+		opts = opts.WithAccountID(tenant.GetTenantID()).WithStatementOption(
+			executor.StatementOption{}.
+				WithAccountID(tenant.GetTenantID()).
+				WithUserID(tenant.GetUserID()).
+				WithRoleID(tenant.GetDefaultRoleID()),
+		)
+	}
+	var cleanupErr error
+	for _, tbl := range tempTables {
+		dropSQL := "DROP TABLE IF EXISTS " + sqlquote.QualifiedIdent(tbl.dbName, tbl.realName)
+		res, err := exec.Exec(ctx, dropSQL, opts)
+		if err != nil {
+			cleanupErr = errors.Join(cleanupErr, err)
+			continue
+		}
+		res.Close()
+	}
+	return cleanupErr
+}
+
+// resetTempTables synchronously removes every physical temporary table before
+// a replacement session generation is published. Session.Close may clean up
+// asynchronously because a disconnected client has no generation to reuse.
+func (ses *Session) resetTempTables(ctx context.Context) error {
+	tempTables, tenant := ses.takeTempTables()
+	if err := dropSessionTempTables(ctx, ses.GetService(), ses.GetTimeZone(), tenant, tempTables); err != nil {
+		// Preserve a retryable owner on failure. DROP IF EXISTS makes entries that
+		// were already removed safe to execute again on the next reset attempt.
+		ses.mu.Lock()
+		ses.tempTables = make(map[string]string, len(tempTables))
+		ses.tempTablesRev = make(map[string]string, len(tempTables))
+		ses.tempTableIdentities = make(map[string]tempTableIdentity, len(tempTables))
+		for _, tbl := range tempTables {
+			ses.tempTables[tbl.aliasKey] = tbl.realName
+			ses.tempTablesRev[tbl.realName] = tbl.aliasKey
+			ses.tempTableIdentities[tbl.aliasKey] = tbl.identity
+		}
+		ses.mu.Unlock()
+		return err
+	}
+	return nil
+}
+
+func (ses *Session) Close() {
+	// The disconnect path has no next borrower, so temporary-table cleanup can
+	// be asynchronous. Reset uses resetTempTables before it reaches Close.
+	tempTables, tenantInfo := ses.takeTempTables()
 	if len(tempTables) > 0 {
 		service := ses.GetService()
 		timeZone := ses.GetTimeZone()
 		go func() {
-			// use a new context to clean up temp tables
 			ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 			defer cancel()
 
 			_, _ = ExecuteFuncWithRecover(func() error {
-				serviceRuntime := moruntime.ServiceRuntime(service)
-				if serviceRuntime == nil {
-					logutil.Errorf("failed to clean temporary tables: service runtime is not ready")
-					return nil
-				}
-				v, ok := serviceRuntime.GetGlobalVariables(moruntime.InternalSQLExecutor)
-				if !ok {
-					logutil.Errorf("failed to clean temporary tables: internal SQL executor is not ready")
-					return nil
-				}
-				exec, ok := v.(executor.SQLExecutor)
-				if !ok {
-					logutil.Errorf("failed to clean temporary tables: invalid internal SQL executor")
-					return nil
-				}
-				opts := executor.Options{}.WithTimeZone(timeZone)
-				if tenantInfo != nil {
-					opts = opts.WithAccountID(tenantInfo.GetTenantID()).WithStatementOption(
-						executor.StatementOption{}.
-							WithAccountID(tenantInfo.GetTenantID()).
-							WithUserID(tenantInfo.GetUserID()).
-							WithRoleID(tenantInfo.GetDefaultRoleID()),
-					)
-				}
-				for _, tbl := range tempTables {
-					dropSQL := "DROP TABLE IF EXISTS " + sqlquote.QualifiedIdent(tbl.dbName, tbl.realName)
-					res, err := exec.Exec(ctx, dropSQL, opts)
-					if err != nil {
-						logutil.Errorf("failed to drop temp table %s: %v", tbl.realName, err)
-						continue
-					}
-					res.Close()
+				if err := dropSessionTempTables(ctx, service, timeZone, tenantInfo, tempTables); err != nil {
+					logutil.Errorf("failed to clean temporary tables: %v", err)
 				}
 				return nil
 			})
@@ -2459,16 +2543,22 @@ func (ses *Session) AuthenticateUser(ctx context.Context, userInput string, dbNa
 	ses.UpdateDebugString()
 
 	ses.Debugf(ctx, "check special user")
-	// check the special user for initialization
-	if isSpecial, pwdBytes, specialAccount := isSpecialUser(tenant.GetUser()); isSpecial && specialAccount.IsMoAdminRole() {
+	isSpecial, pwdBytes, specialAccount := isSpecialUser(tenant.GetUser())
+	isBootstrapSpecial := isSpecial && specialAccount.IsMoAdminRole()
+	// Internal special users bootstrap the service before catalog access is
+	// available. External special users are normal client connections and must
+	// observe the same fresh catalog boundary as every other public session.
+	if !isBootstrapSpecial || !ses.isInternal {
+		if err = ses.prepareAuthenticationSnapshot(ctx); err != nil {
+			return nil, err
+		}
+	}
+	if isBootstrapSpecial {
 		ses.SetTenantInfo(specialAccount)
 		if len(ses.requestLabel) == 0 {
 			ses.requestLabel = db_holder.GetLabelSelector()
 		}
 		return GetPassWord(HashPassWordWithByte(pwdBytes))
-	}
-	if err = ses.prepareAuthenticationSnapshot(ctx); err != nil {
-		return nil, err
 	}
 
 	bh := ses.GetBackgroundExec(ctx, &BackgroundExecOption{
@@ -3142,6 +3232,27 @@ func (ses *Session) getCleanupContext() context.Context {
 	return context.Background()
 }
 
+// inheritPhysicalConnection copies only metadata owned by the authenticated
+// transport. Identity and session-scoped SQL state are intentionally excluded.
+func (ses *Session) inheritPhysicalConnection(prev *Session) {
+	ses.uuid = prev.uuid
+	ses.fromRealUser = prev.fromRealUser
+	ses.rm = prev.rm
+	ses.rt = prev.rt
+	ses.requestLabel = make(map[string]string, len(prev.requestLabel))
+	for key, value := range prev.requestLabel {
+		ses.requestLabel[key] = value
+	}
+	ses.connType = prev.connType
+	ses.timestampMap = make(map[TS]time.Time, len(prev.timestampMap))
+	for key, value := range prev.timestampMap {
+		ses.timestampMap[key] = value
+	}
+	ses.fromProxy = prev.fromProxy
+	ses.clientAddr = prev.clientAddr
+	ses.proxyAddr = prev.proxyAddr
+}
+
 // reset resets the ses instance and copy some fields of prev, then
 // close the prev.
 func (ses *Session) reset(ctx context.Context, prev *Session) error {
@@ -3155,30 +3266,54 @@ func (ses *Session) reset(ctx context.Context, prev *Session) error {
 	for k, v := range prev.label {
 		ses.label[k] = v
 	}
-	// Callers treat time.Location values as immutable and share them by pointer.
-	// New sessions default to time.Local, so copying into the pointed value
-	// would mutate the process-wide location while loggers and other sessions
-	// read it.
-	ses.timeZone = prev.timeZone
-	ses.uuid = prev.uuid
-	ses.fromRealUser = prev.fromRealUser
-	ses.rm = prev.rm
-	ses.rt = prev.rt
-	ses.requestLabel = make(map[string]string, len(prev.requestLabel))
-	for k, v := range prev.requestLabel {
-		ses.requestLabel[k] = v
-	}
-	ses.connType = prev.connType
-	ses.timestampMap = make(map[TS]time.Time, len(prev.timestampMap))
-	for k, v := range prev.timestampMap {
-		ses.timestampMap[k] = v
-	}
-	ses.fromProxy = prev.fromProxy
-	ses.clientAddr = prev.clientAddr
-	ses.proxyAddr = prev.proxyAddr
+	ses.inheritPhysicalConnection(prev)
 
+	// Initialize the unpublished generation from the account's current global
+	// defaults. This deliberately does not copy the old session variables or
+	// their derived runtime state (for example time_zone).
+	initCtx := ctx
+	if initCtx == nil {
+		initCtx = context.Background()
+	}
+	if tenant := ses.GetTenantInfo(); tenant != nil {
+		initCtx = defines.AttachAccount(
+			initCtx,
+			tenant.GetTenantID(),
+			tenant.GetUserID(),
+			tenant.GetDefaultRoleID(),
+		)
+	}
+	prev.mu.Lock()
+	globalVars := prev.gSysVars
+	prev.mu.Unlock()
+	var err error
+	if globalVars != nil {
+		err = ses.initSystemVariablesFromGlobal(initCtx, globalVars)
+	} else {
+		// This fallback is for internal or partially initialized sessions. Normal
+		// authenticated sessions already retain the account-global snapshot.
+		bh := ses.GetBackgroundExec(initCtx)
+		err = ses.InitSystemVariables(initCtx, bh)
+		bh.Close()
+	}
+	if err != nil {
+		return err
+	}
+
+	return prev.closeForReset(ctx)
+}
+
+// errSessionResetConnectionMustClose marks an error after the old session
+// generation has changed state. The MySQL connection must not be reused: an
+// ERR response alone cannot restore physical temporary-table state.
+var errSessionResetConnectionMustClose = moerr.NewInternalErrorNoCtx("session reset must close connection")
+
+// closeForReset retires a session generation while preserving the physical
+// protocol connection. All reusable server-side state must be gone before
+// the replacement generation can be published.
+func (ses *Session) closeForReset(ctx context.Context) error {
 	// rollback the transactions in the old session.
-	rollbackCtx := prev.getCleanupContext()
+	rollbackCtx := ses.getCleanupContext()
 	if ctx != nil {
 		cancelCtx, cancel := context.WithCancelCause(rollbackCtx)
 		stopCancel := context.AfterFunc(ctx, func() {
@@ -3195,22 +3330,47 @@ func (ses *Session) reset(ctx context.Context, prev *Session) error {
 	}
 	tempExecCtx := ExecCtx{
 		reqCtx: rollbackCtx,
-		ses:    prev,
+		ses:    ses,
 		txnOpt: FeTxnOption{byRollback: true},
 	}
-	err := prev.GetTxnHandler().rollbackWithContext(rollbackCtx, &tempExecCtx)
+	err := ses.GetTxnHandler().rollbackWithContext(rollbackCtx, &tempExecCtx)
+	tempExecCtx.Close()
 	if err != nil {
-		prev.Error(tempExecCtx.reqCtx, "failed to rollback txn",
+		ses.Error(rollbackCtx, "failed to rollback txn",
 			zap.Error(err))
-		return err
+		// rollbackUnsafe invalidates the transaction handle even when the
+		// storage rollback fails or its context expires. The old generation is
+		// therefore no longer an untouched, reusable session: fail closed just
+		// as we do after a partially completed temporary-table cleanup.
+		return errors.Join(err, errSessionResetConnectionMustClose)
 	}
 	if ctx != nil {
 		if cause := context.Cause(ctx); cause != nil {
-			return cause
+			return errors.Join(cause, errSessionResetConnectionMustClose)
 		}
 	}
+	// Internal SQL execution requires a bounded context. The transaction cleanup
+	// context intentionally outlives request contexts and therefore has no
+	// deadline of its own, so carry the reset deadline across when one exists and
+	// otherwise use the same safety bound as asynchronous disconnect cleanup.
+	tempCleanupCtx := rollbackCtx
+	var tempCleanupCancel context.CancelFunc
+	if ctx != nil {
+		if deadline, ok := ctx.Deadline(); ok {
+			tempCleanupCtx, tempCleanupCancel = context.WithDeadline(rollbackCtx, deadline)
+		}
+	}
+	if tempCleanupCancel == nil {
+		tempCleanupCtx, tempCleanupCancel = context.WithTimeout(rollbackCtx, time.Minute)
+	}
+	defer tempCleanupCancel()
+	if err = ses.resetTempTables(tempCleanupCtx); err != nil {
+		ses.Error(tempCleanupCtx, "failed to drop temporary tables during session reset",
+			zap.Error(err))
+		return errors.Join(err, errSessionResetConnectionMustClose)
+	}
 	// close the previous session.
-	prev.ReserveConnAndClose()
+	ses.ReserveConnAndClose()
 	return nil
 }
 

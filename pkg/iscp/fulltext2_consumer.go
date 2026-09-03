@@ -21,7 +21,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/fulltext2"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
-	veccache "github.com/matrixorigin/matrixone/pkg/vectorindex/cache"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/sqlexec"
 )
 
@@ -44,7 +43,9 @@ func RunFulltext2(c *IndexConsumer, ctx context.Context, errch chan error, r Dat
 	}
 
 	// Parser-aware tokenize (ngram/gojieba/json) so build and query tokens match.
-	tokenize, err := fulltext2.CdcTokenizer(w.cfg.Parser)
+	// The json term shape travels with the config so this path and the CREATE
+	// build agree on the terms they emit.
+	tokenize, err := fulltext2.CdcTokenizerWithJSONOptions(w.cfg.Parser, w.cfg.JSONTermOptions())
 	if err != nil {
 		errch <- err
 		return
@@ -119,17 +120,6 @@ func RunFulltext2(c *IndexConsumer, ctx context.Context, errch chan error, r Dat
 				if err != nil {
 					errch <- err
 					return
-				}
-				// Evict the cached search index so the next query reloads tag=0 + the
-				// freshly-appended tag=1 frames, instead of serving the warm (stale)
-				// cache until its idle TTL. Only when frames were actually written.
-				// NOTE: this eviction is LOCAL to this CN — cross-CN cache coherence is
-				// a known cache-layer gap deferred to a follow-up PR (see the Decision
-				// block on veccache.VectorIndexCache.Remove).
-				if len(segs) > 0 {
-					fulltext2.NewFulltext2Search(w.cfg).OnCacheInvalidated(string(fulltext2.LoadMissCDCFlush))
-					veccache.Cache.Remove(w.cfg.IndexTable)
-					logutil.Debugf("[ftv2-sink] evicted search cache for index=%s", w.cfg.IndexTable) // per-flush: Debug, not Info
 				}
 				return
 			}

@@ -16,6 +16,7 @@ package taskservice
 
 import (
 	"context"
+	"fmt"
 	"testing"
 	"time"
 
@@ -493,6 +494,46 @@ func TestTriggerSQLTask(t *testing.T) {
 			n, err = s.TriggerSQLTask(context.Background(), sqlTask, asyncTask)
 			require.NoError(t, err)
 			require.Equal(t, 0, n)
+		})
+	}
+}
+
+func TestDeleteSQLTaskCleansQueuedAsyncChildren(t *testing.T) {
+	for name, factory := range storages {
+		t.Run(name, func(t *testing.T) {
+			s := factory(t)
+			defer func() {
+				assert.NoError(t, s.Close())
+			}()
+
+			sqlTask := newTestSQLTask("task-delete-queued", 1)
+			sqlTask.TriggerCount = 0
+			mustAddTestSQLTask(t, s, 1, sqlTask)
+			sqlTask = mustGetTestSQLTask(t, s, 1)[0]
+			sqlTask.TriggerCount++
+
+			parentTaskID := fmt.Sprintf("sql-task:%d", sqlTask.TaskID)
+			asyncTask := newTestAsyncTask(parentTaskID + ":1")
+			asyncTask.ParentTaskID = parentTaskID
+			affected, err := s.TriggerSQLTask(context.Background(), sqlTask, asyncTask)
+			require.NoError(t, err)
+			require.Equal(t, 2, affected)
+			mustGetTestAsyncTask(t, s, 1, WithTaskParentTaskIDCond(EQ, parentTaskID))
+			mustGetTestSQLTaskRun(t, s, 0, WithTaskIDCond(EQ, sqlTask.TaskID))
+
+			unrelated := newTestAsyncTask("unrelated")
+			unrelated.ParentTaskID = "sql-task:999999"
+			mustAddTestAsyncTask(t, s, 1, unrelated)
+
+			mustDeleteTestSQLTask(t, s, 1, WithTaskIDCond(EQ, sqlTask.TaskID))
+			mustGetTestSQLTask(t, s, 0, WithTaskIDCond(EQ, sqlTask.TaskID))
+			mustGetTestAsyncTask(t, s, 0, WithTaskParentTaskIDCond(EQ, parentTaskID))
+			mustGetTestAsyncTask(t, s, 1, WithTaskParentTaskIDCond(EQ, unrelated.ParentTaskID))
+			mustGetTestSQLTaskRun(t, s, 0, WithTaskIDCond(EQ, sqlTask.TaskID))
+
+			_, err = s.AcquireSQLTaskRun(context.Background(), sqlTask,
+				newTestSQLTaskRun(sqlTask.TaskID, sqlTask.TaskName, SQLTaskStatusRunning))
+			require.ErrorIs(t, err, ErrSQLTaskNotFound)
 		})
 	}
 }

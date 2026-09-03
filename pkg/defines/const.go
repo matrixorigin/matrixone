@@ -76,7 +76,11 @@ const (
 	MORPCVersion38     int64 = 38 // session temporary-table connection migration
 	MORPCVersion39     int64 = 39 // linearizable TN-ordered logtail read barrier
 	MORPCVersion40     int64 = 40 // PAD SPACE comparison casts and set-operation equality keys
-	MORPCLatestVersion       = MORPCVersion40
+	MORPCVersion41     int64 = 41 // cycle-safe bounded current-role closure table function
+	MORPCVersion42     int64 = 42 // transactional SQL-task child cleanup
+	MORPCVersion43     int64 = 43 // scalar-predicate runtime-filter terminal states
+	MORPCVersion44     int64 = 44 // validated MongoDB explicit-query scan payload
+	MORPCLatestVersion       = MORPCVersion44
 )
 
 // DefaultLockWaitTimeoutSeconds is shared by the frontend default and by

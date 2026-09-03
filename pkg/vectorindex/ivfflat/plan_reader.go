@@ -58,9 +58,13 @@ type planReader struct {
 	includeData  map[string][]any
 	includeNulls map[string][]bool
 	offset       int
+
+	recordExplainDiagnostics bool
+	explainDiagnostics       []*plan.Query
 }
 
 var _ engine.Reader = (*planReader)(nil)
+var _ engine.ExplainDiagnosticReader = (*planReader)(nil)
 
 func NewPlanReader(proc *process.Process, spec *plan.VectorIndexScan, req searchplugin.Request) (engine.Reader, error) {
 	if proc == nil || proc.GetTxnOperator() == nil || proc.GetSessionInfo() == nil || proc.GetSessionInfo().StorageEngine == nil {
@@ -72,7 +76,12 @@ func NewPlanReader(proc *process.Process, spec *plan.VectorIndexScan, req search
 	if req.CandidateBudget < req.ResultLimit {
 		return nil, moerr.NewInvalidInputNoCtx("ivfflat candidate budget is smaller than the result limit")
 	}
-	r := &planReader{proc: proc, spec: spec, req: req}
+	r := &planReader{
+		proc:                     proc,
+		spec:                     spec,
+		req:                      req,
+		recordExplainDiagnostics: req.CollectExplainDiagnostics,
+	}
 	r.scanner = &relationScanner{
 		proc:           proc,
 		partitionCount: req.Identity.PartitionCount,
@@ -121,8 +130,21 @@ func (r *planReader) Close() error {
 	r.distances = nil
 	r.includeData = nil
 	r.includeNulls = nil
+	r.explainDiagnostics = nil
 	r.scanner = nil
 	return nil
+}
+
+// TakeExplainDiagnostics transfers this execution generation's diagnostics to
+// its owning operator. The slice is drained so repeated table-scan calls do not
+// duplicate completed search rounds.
+func (r *planReader) TakeExplainDiagnostics() []*plan.Query {
+	if r == nil || len(r.explainDiagnostics) == 0 {
+		return nil
+	}
+	diagnostics := r.explainDiagnostics
+	r.explainDiagnostics = nil
+	return diagnostics
 }
 
 func (r *planReader) Read(ctx context.Context, attrs []string, _ *plan.Expr, mp *mpool.MPool, out *batch.Batch) (bool, error) {
@@ -424,6 +446,7 @@ func searchPlanReader[T types.RealNumbers](
 		if !ok {
 			return moerr.NewInternalErrorNoCtx("ivfflat keys are not []any")
 		}
+		r.recordSearchRoundDiagnostic(cursor, firstRoundLimit, limit, len(keySlice))
 		r.keys = append(r.keys, keySlice...)
 		r.distances = append(r.distances, distances...)
 		for _, name := range r.spec.IncludedColumns {
@@ -438,6 +461,31 @@ func searchPlanReader[T types.RealNumbers](
 	}
 	r.sortAndLimit(uint64(limit))
 	return nil
+}
+
+func (r *planReader) recordSearchRoundDiagnostic(
+	cursor *vectorindex.IvfSearchCursor,
+	configuredRoundLimit uint,
+	resultLimit uint,
+	outputRows int,
+) {
+	if r == nil || !r.recordExplainDiagnostics || cursor == nil ||
+		cursor.Round == 0 || cursor.CurrentBucketCount == 0 {
+		return
+	}
+	rowLimit := configuredRoundLimit
+	if rowLimit == 0 {
+		rowLimit = resultLimit
+	}
+	r.explainDiagnostics = append(r.explainDiagnostics,
+		vectorindex.EncodeIvfSearchRoundDiagnostic(vectorindex.IvfSearchRoundDiagnostic{
+			Round:        uint64(cursor.Round),
+			BucketOffset: uint64(cursor.NextBucketOffset),
+			BucketCount:  uint64(cursor.CurrentBucketCount),
+			RowLimit:     uint64(rowLimit),
+			OutputRows:   uint64(outputRows),
+			Exhausted:    cursor.Exhausted,
+		}))
 }
 
 func advancePlanCursor(cursor *vectorindex.IvfSearchCursor) {
@@ -618,6 +666,12 @@ func (s *relationScanner) ScanRelation(req sqlexec.RelationScanRequest) (res exe
 			res.Batches = nil
 		}
 	}()
+	var earlyColumns []int
+	if req.PostFilterTopOnly {
+		// Storage Top-K has its own bounded vector path. Late materialization is
+		// only for the exact-filter-first fallback that deliberately disables it.
+		earlyColumns = relationFilterEarlyColumns(tableDef, req.Columns, req.Filter)
+	}
 
 	for _, reader := range readers {
 		if !req.PostFilterTopOnly {
@@ -628,7 +682,30 @@ func (s *relationScanner) ScanRelation(req sqlexec.RelationScanRequest) (res exe
 			if makeErr != nil {
 				return res, makeErr
 			}
-			end, readErr := reader.Read(ctx, req.Columns, req.Filter, s.proc.Mp(), bat)
+			var (
+				end           bool
+				readErr       error
+				filterApplied bool
+			)
+			if filterExecutor != nil && len(earlyColumns) > 0 {
+				if lateReader, ok := reader.(engine.LateMaterializationReader); ok {
+					end, readErr = lateReader.ReadWithFilter(
+						ctx,
+						req.Columns,
+						earlyColumns,
+						func(filtered *batch.Batch, loadedColumns []int) (engine.ReaderFilterResult, error) {
+							return filterRelationBatchRows(s.proc, filterExecutor, filtered, loadedColumns)
+						},
+						s.proc.Mp(),
+						bat,
+					)
+					filterApplied = true
+				} else {
+					end, readErr = reader.Read(ctx, req.Columns, req.Filter, s.proc.Mp(), bat)
+				}
+			} else {
+				end, readErr = reader.Read(ctx, req.Columns, req.Filter, s.proc.Mp(), bat)
+			}
 			if readErr != nil {
 				bat.Clean(s.proc.Mp())
 				return res, readErr
@@ -637,7 +714,7 @@ func (s *relationScanner) ScanRelation(req sqlexec.RelationScanRequest) (res exe
 				bat.Clean(s.proc.Mp())
 				break
 			}
-			if filterExecutor != nil && !bat.IsEmpty() {
+			if filterExecutor != nil && !filterApplied && !bat.IsEmpty() {
 				if readErr = filterRelationBatch(s.proc, filterExecutor, bat); readErr != nil {
 					bat.Clean(s.proc.Mp())
 					return res, readErr
@@ -683,9 +760,19 @@ func relationScanPolicy(partitionCount int32, ownsInMemory bool) engine.DataColl
 }
 
 func filterRelationBatch(proc *process.Process, executor colexec.ExpressionExecutor, bat *batch.Batch) error {
+	_, err := filterRelationBatchRows(proc, executor, bat, nil)
+	return err
+}
+
+func filterRelationBatchRows(
+	proc *process.Process,
+	executor colexec.ExpressionExecutor,
+	bat *batch.Batch,
+	loadedColumns []int,
+) (engine.ReaderFilterResult, error) {
 	result, err := executor.Eval(proc, []*batch.Batch{bat}, nil)
 	if err != nil {
-		return err
+		return engine.ReaderFilterResult{}, err
 	}
 	values := vector.GenerateFunctionFixedTypeParameter[bool](result)
 	sels := make([]int64, 0, bat.RowCount())
@@ -696,14 +783,115 @@ func filterRelationBatch(proc *process.Process, executor colexec.ExpressionExecu
 		}
 	}
 	if len(sels) == bat.RowCount() {
-		return nil
+		return engine.ReaderFilterResult{All: true}, nil
 	}
 	if len(sels) == 0 {
 		bat.CleanOnlyData()
+		return engine.ReaderFilterResult{Sels: sels}, nil
+	}
+	if loadedColumns == nil {
+		bat.Shrink(sels, false)
+	} else {
+		for _, pos := range loadedColumns {
+			bat.Vecs[pos].Shrink(sels, false)
+		}
+		bat.SetRowCount(len(sels))
+	}
+	return engine.ReaderFilterResult{Sels: sels}, nil
+}
+
+// relationFilterEarlyColumns returns the output positions that must be loaded
+// before evaluating an exact relation filter. Wide vector columns unused by
+// the predicate are delayed until after filtering, so INCLUDE predicates do
+// not copy every probed entry vector before discarding most rows.
+func relationFilterEarlyColumns(
+	tableDef *plan.TableDef,
+	columns []string,
+	filter *plan.Expr,
+) []int {
+	if tableDef == nil || filter == nil || len(columns) < 2 {
 		return nil
 	}
-	bat.Shrink(sels, false)
-	return nil
+	referenced := make(map[int32]struct{})
+	if !collectRelationFilterColumns(filter, int32(len(columns)), referenced) {
+		return nil
+	}
+	early := make([]int, 0, len(columns))
+	hasLateVector := false
+	for outputPos, name := range columns {
+		defPos, ok := tableDef.Name2ColIndex[name]
+		if !ok {
+			defPos, ok = tableDef.Name2ColIndex[strings.ToLower(name)]
+		}
+		if !ok || defPos < 0 || int(defPos) >= len(tableDef.Cols) || tableDef.Cols[defPos] == nil {
+			return nil
+		}
+		_, usedByFilter := referenced[int32(outputPos)]
+		if types.T(tableDef.Cols[defPos].Typ.Id).IsArrayRelate() && !usedByFilter {
+			hasLateVector = true
+			continue
+		}
+		early = append(early, outputPos)
+	}
+	if !hasLateVector || len(early) == 0 {
+		return nil
+	}
+	return early
+}
+
+func collectRelationFilterColumns(expr *plan.Expr, columnCount int32, columns map[int32]struct{}) bool {
+	if expr == nil {
+		return true
+	}
+	switch item := expr.Expr.(type) {
+	case *plan.Expr_Col:
+		if item.Col == nil || item.Col.ColPos < 0 || item.Col.ColPos >= columnCount {
+			return false
+		}
+		columns[item.Col.ColPos] = struct{}{}
+		return true
+	case *plan.Expr_F:
+		if item.F == nil {
+			return false
+		}
+		for _, arg := range item.F.Args {
+			if !collectRelationFilterColumns(arg, columnCount, columns) {
+				return false
+			}
+		}
+		return true
+	case *plan.Expr_List:
+		if item.List == nil {
+			return false
+		}
+		for _, arg := range item.List.List {
+			if !collectRelationFilterColumns(arg, columnCount, columns) {
+				return false
+			}
+		}
+		return true
+	case *plan.Expr_Lit:
+		if item.Lit == nil {
+			return false
+		}
+		return collectRelationFilterColumns(item.Lit.Src, columnCount, columns)
+	case *plan.Expr_P:
+		return item.P != nil
+	case *plan.Expr_V:
+		return item.V != nil
+	case *plan.Expr_T:
+		return item.T != nil
+	case *plan.Expr_Max:
+		return item.Max != nil
+	case *plan.Expr_Vec:
+		return item.Vec != nil
+	case *plan.Expr_Fold:
+		return item.Fold != nil
+	case *plan.Expr_Raw, *plan.Expr_W, *plan.Expr_Sub, *plan.Expr_Corr:
+		return false
+	default:
+		return false
+	}
 }
 
 func relationVectorTopLimit(param *plan.IndexReaderParam, postFilterTopOnly bool) (int, bool) {

@@ -228,19 +228,29 @@ func (vq *VisitPlan) exploreNode(ctx context.Context, rule VisitPlanRule, node *
 	// expression here; it must receive the same execute-time coercion as the
 	// scan filter or the lock path can still run the stale strict cast.
 	for _, target := range node.LockTargets {
-		if target == nil || target.LockRows == nil {
+		if target == nil {
 			continue
 		}
-		originalLockRows := target.LockRows
-		target.LockRows, err = rule.ApplyExpr(originalLockRows)
-		if err != nil {
-			return err
-		}
 		if normalizer, ok := rule.(interface {
-			NormalizePreparedLockRows(*Expr, plan.Type) *Expr
+			NormalizePreparedLockRows(*Expr, plan.Type) (*Expr, error)
 		}); ok {
-			target.LockRows = normalizer.NormalizePreparedLockRows(
-				target.LockRows, target.PrimaryColTyp)
+			if target.LockRows != nil {
+				target.LockRows, err = rule.ApplyExpr(target.LockRows)
+				if err != nil {
+					return err
+				}
+				rewrittenLockRows := target.LockRows
+				target.LockRows, err = normalizer.NormalizePreparedLockRows(
+					rewrittenLockRows, target.PrimaryColTyp)
+				if err != nil {
+					return err
+				}
+			}
+		} else if target.LockRows != nil {
+			target.LockRows, err = rule.ApplyExpr(target.LockRows)
+			if err != nil {
+				return err
+			}
 		}
 	}
 
@@ -292,6 +302,15 @@ func (vq *VisitPlan) exploreNode(ctx context.Context, rule VisitPlanRule, node *
 		// assignment cast: that cast carries the target-column layout and SQL
 		// mode semantics for the write path.
 		if preserveAssignmentCast {
+			return e, nil
+		}
+		// This visitor owns type restoration, not assignment semantics.  A
+		// same-physical-type TIME or constrained TINYTEXT expression can still
+		// require an assignment cast at the writer boundary, but adding it to an
+		// unchanged intermediate projection breaks operators such as JOIN whose
+		// result list is a positional column mapping.  The binder already owns the
+		// real DML assignment cast; only restore a type changed by the visit rule.
+		if makeTypeByPlan2Expr(e).Eq(makeTypeByPlan2Type(oldType)) {
 			return e, nil
 		}
 		if (oldType.Id == int32(types.T_float32) || oldType.Id == int32(types.T_float64)) && (e.Typ.Id == int32(types.T_decimal64) || e.Typ.Id == int32(types.T_decimal128)) {

@@ -225,11 +225,24 @@ pb: generate-pb
 VERSION_INFO :=-X '$(GO_MODULE)/pkg/version.GoVersion=$(GO_VERSION)' -X '$(GO_MODULE)/pkg/version.BranchName=$(BRANCH_NAME)' -X '$(GO_MODULE)/pkg/version.CommitID=$(LAST_COMMIT_ID)' -X '$(GO_MODULE)/pkg/version.BuildTime=$(BUILD_TIME)' -X '$(GO_MODULE)/pkg/version.Version=$(MO_VERSION)'
 THIRDPARTIES_INSTALL_DIR=$(ROOT_DIR)/thirdparties/install
 CGO_DIR=$(ROOT_DIR)/cgo
+# mo-service links libmo dynamically (-L$(CGO_DIR) -lmo picks the shared
+# library over libmo.a), so libmo is a runtime dependency resolved through
+# the binary's rpath -- $ORIGIN/lib on Linux, @executable_path/lib on macOS.
+# cgo/ is not on that rpath, so libmo must be published into lib/ beside the
+# thirdparty libraries or the built binary cannot start.
+LIBMO_NAME := $(if $(filter darwin,$(UNAME_S)),libmo.dylib,libmo.so)
 JIEBA_DICT_SRC_DIR=$(ROOT_DIR)/pkg/monlp/tokenizer/dict
 RACE_OPT :=
 DEBUG_OPT :=
 CGO_DEBUG_OPT :=
 TAGS :=
+
+# Native artifacts are reusable only when every semantic build input matches.
+# Keep these dimensions independent so adding one feature cannot silently alias
+# an existing artifact generation.
+NATIVE_PROVENANCE_ACCELERATOR = $(if $(filter 1,$(MO_CL_CUDA)),gpu,cpu)
+NATIVE_PROVENANCE_OPTIMIZATION = $(if $(filter debug,$(CGO_DEBUG_OPT)),debug,release)
+NATIVE_PROVENANCE_SIMSIMD = $(if $(filter 1,$(MO_CL_SIMSIMD)),1,0)
 
 # Env-var prefix for the build command. On x86_64 the arch-specific SIMD kernels in
 # pkg/vectorindex/metric are compiled by default (ARCHSIMD=1): GOAMD64 defaults to v3
@@ -288,14 +301,88 @@ ifeq ($(GOBUILD_OPT),)
 	GOBUILD_OPT :=
 endif
 
-.PHONY: cgo
-cgo: thirdparties
+define BUILD_THIRDPARTIES
+@$(MAKE) -C thirdparties $(if $(NATIVE_BUILD_JOBS),-j$(NATIVE_BUILD_JOBS))
+@"$(ROOT_DIR)/cgo/mo-stage-native-libs" "$(THIRDPARTIES_INSTALL_DIR)/lib" "$(ROOT_DIR)/lib"
+endef
+
+.PHONY: cgo cgo-native-prepare-internal cgo-native-thirdparties-internal
+cgo: cgo-native-thirdparties-internal
 	@(cd cgo; ${MAKE} $(if $(NATIVE_BUILD_JOBS),-j$(NATIVE_BUILD_JOBS)) ${CGO_DEBUG_OPT})
+	@"$(ROOT_DIR)/cgo/mo-stage-native-libs" --file \
+		"$(CGO_DIR)/$(LIBMO_NAME)" "$(ROOT_DIR)/lib/$(LIBMO_NAME)"
+ifeq ($(MO_CL_CUDA),1)
+	@"$(ROOT_DIR)/cgo/mo-stage-native-libs" --file \
+		"$(ROOT_DIR)/cgo/cuda/mocl_kernel64.fatbin" \
+		"$(ROOT_DIR)/mocl_kernel64.fatbin"
+endif
+	@GO="$(GO)" ./cgo/mo-native-provenance record "$(ROOT_DIR)" \
+		"$(NATIVE_PROVENANCE_ACCELERATOR)" "$(NATIVE_PROVENANCE_OPTIMIZATION)" \
+		"$(NATIVE_PROVENANCE_SIMSIMD)"
+
+cgo-native-thirdparties-internal: cgo-native-prepare-internal
+	$(BUILD_THIRDPARTIES)
+
+cgo-native-prepare-internal:
+	@set -eu; \
+		case "$(firstword $(MAKEFLAGS))" in \
+			-*) ;; \
+			*n*|*t*|*q*) exit 0 ;; \
+			esac; \
+		case " $(MAKEFLAGS) " in \
+			*" -n "*|*" -t "*|*" -q "*|*" --just-print "*|*" --dry-run "*|*" --recon "*|*" --touch "*|*" --question "*) exit 0 ;; \
+		esac; \
+		action=$$(GO="$(GO)" ./cgo/mo-native-provenance prepare \
+			"$(ROOT_DIR)" "$(NATIVE_PROVENANCE_ACCELERATOR)" \
+			"$(NATIVE_PROVENANCE_OPTIMIZATION)" "$(NATIVE_PROVENANCE_SIMSIMD)"); \
+		case "$$action" in \
+			local|reuse) ;; \
+			rebuild-cgo) \
+				echo "native provenance: cleaning CGo outputs before rebuilding $(NATIVE_PROVENANCE_ACCELERATOR)/$(NATIVE_PROVENANCE_OPTIMIZATION)"; \
+				$(MAKE) -C cgo clean; \
+				rm -f "$(ROOT_DIR)/mocl_kernel64.fatbin" ;; \
+			rebuild-all) \
+				echo "native provenance: cleaning thirdparty and CGo outputs before rebuilding $(NATIVE_PROVENANCE_ACCELERATOR)/$(NATIVE_PROVENANCE_OPTIMIZATION), simsimd=$(NATIVE_PROVENANCE_SIMSIMD)"; \
+				$(MAKE) -C cgo clean; \
+				rm -f "$(ROOT_DIR)/mocl_kernel64.fatbin"; \
+				$(MAKE) -C thirdparties clean ;; \
+			*) echo "invalid native rebuild action: $$action" >&2; exit 1 ;; \
+		esac; \
+		GO="$(GO)" ./cgo/mo-native-provenance begin \
+			"$(ROOT_DIR)" "$(NATIVE_PROVENANCE_ACCELERATOR)" \
+			"$(NATIVE_PROVENANCE_OPTIMIZATION)" "$(NATIVE_PROVENANCE_SIMSIMD)"
 
 .PHONY: thirdparties
+
+# GNU/BSD make deduplicate a shared target, but not two different targets that
+# expand the same recipe. When users explicitly request `thirdparties` beside a
+# native consumer, make the public goal wait for that consumer instead of
+# becoming a second thirdparty owner.
+NATIVE_RELEASE_OWNER_GOALS := all cgo build build-typecheck mo-tool ut \
+	dev-create-dashboard dev-list-dashboard dev-delete-dashboard launch-minio
+NATIVE_DEBUG_OWNER_GOALS := debug launch-minio-debug
+NATIVE_REQUESTED_RELEASE_OWNER := $(firstword $(filter $(NATIVE_RELEASE_OWNER_GOALS),$(MAKECMDGOALS)))
+NATIVE_REQUESTED_DEBUG_OWNER := $(firstword $(filter $(NATIVE_DEBUG_OWNER_GOALS),$(MAKECMDGOALS)))
+
+ifneq ($(NATIVE_REQUESTED_RELEASE_OWNER),)
+ifneq ($(NATIVE_REQUESTED_DEBUG_OWNER),)
+$(error release and debug native build goals cannot share one invocation)
+endif
+endif
+
+ifneq ($(filter thirdparties,$(MAKECMDGOALS)),)
+ifneq ($(NATIVE_REQUESTED_DEBUG_OWNER),)
+thirdparties: $(NATIVE_REQUESTED_DEBUG_OWNER)
+else ifneq ($(NATIVE_REQUESTED_RELEASE_OWNER),)
+thirdparties: $(NATIVE_REQUESTED_RELEASE_OWNER)
+else
 thirdparties:
-	@(cd thirdparties; ${MAKE} $(if $(NATIVE_BUILD_JOBS),-j$(NATIVE_BUILD_JOBS)))
-	cp -r $(THIRDPARTIES_INSTALL_DIR)/lib $(ROOT_DIR)/
+	$(BUILD_THIRDPARTIES)
+endif
+else
+thirdparties:
+	$(BUILD_THIRDPARTIES)
+endif
 
 # Stage the jieba dictionary next to the binary, the same way thirdparties/lib
 # is staged. jiebaDictPaths() in pkg/monlp/tokenizer/jieba_dict.go searches
@@ -310,7 +397,7 @@ jieba-dict:
 
 # build mo-service binary
 .PHONY: build
-build: config cgo thirdparties jieba-dict
+build: config cgo jieba-dict
 	$(info [Build binary])
 	$(MO_SERVICE_BUILD)
 
@@ -356,7 +443,7 @@ musl:
 
 # build mo-tool
 .PHONY: mo-tool
-mo-tool: config cgo thirdparties
+mo-tool: config cgo
 	$(info [Build mo-tool tool])
 	$(GOEXPERIMENT_OPT) $(CGO_OPTS) $(GO) build $(GO_MODULE_MODE) $(GOLDFLAGS) -o mo-tool ./cmd/mo-tool
 
@@ -367,11 +454,26 @@ mo-tool: config cgo thirdparties
 # the build.  Override with MVN=/path/to/mvn to use a preinstalled Maven.  The
 # jar targets Java 8 bytecode so it runs on the BVT tester image's JDK 8.
 MVN ?= ./mvnw
+JSTFU_MVN_FLAGS ?= -B --no-transfer-progress -Dmaven.wagon.http.retryHandler.count=3
 .PHONY: jstfu
 jstfu:
 	$(info [Build jstfu datastream server])
-	@cd xtool/jstfu && $(MVN) -q -B -DskipTests package
+	@cd xtool/jstfu && $(MVN) $(JSTFU_MVN_FLAGS) -DskipTests package
 	@echo "built xtool/jstfu/target/jstfu.jar"
+
+.PHONY: jstfu-test
+jstfu-test:
+	$(info [Test and build jstfu datastream server])
+	@cd xtool/jstfu && $(MVN) $(JSTFU_MVN_FLAGS) verify
+	@test -s xtool/jstfu/target/jstfu.jar
+	@echo "tested and built xtool/jstfu/target/jstfu.jar"
+
+# The S0 Connector/J pool regression deliberately builds its Java fixture and
+# fails when MatrixOne is unavailable; it must never report green by skipping
+# either prerequisite.
+.PHONY: test-connectorj-pool-reset-e2e-local
+test-connectorj-pool-reset-e2e-local:
+	@bash ./optools/connectorj_pool_reset_ci.bash
 
 # build mo-service binary for debugging with go's race detector enabled
 # produced executable is 10x slower and consumes much more memory
@@ -394,7 +496,7 @@ build-typecheck: build
 # Excluding frontend test cases temporarily
 # Argument SKIP_TEST to skip a specific go test
 .PHONY: ut
-UT_PREREQUISITES := cgo thirdparties
+UT_PREREQUISITES := cgo
 # CI times config separately to monitor module-proxy health. Let that caller
 # attest that the exact checkout already passed config instead of verifying the
 # same package graph twice; direct developer invocations retain the prerequisite.
@@ -1301,6 +1403,7 @@ clean:
 	$(MAKE) -C cgo clean
 	$(MAKE) -C thirdparties clean
 	rm -rf $(ROOT_DIR)/lib
+	rm -f $(ROOT_DIR)/mocl_kernel64.fatbin
 	rm -rf $(ROOT_DIR)/dict
 
 ###############################################################################

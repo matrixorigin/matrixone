@@ -456,6 +456,20 @@ func (c *compilerContext) Resolve(dbName string, tableName string, snapshot *pla
 }
 
 func (c *compilerContext) ResolveVariable(varName string, isSystemVar bool, isGlobalVar bool) (interface{}, error) {
+	// CTAS follow-up compilation replays the user's own statement and carries
+	// the original frontend compiler context. A variable that shaped the plan
+	// of that statement must shape the replay identically, for the same reason
+	// Resolve delegates: the two compilations cannot be allowed to diverge.
+	// Variables read as values are already folded in before the replay; the
+	// ones that reach here decide how the query compiles, so answering nil
+	// silently compiles the replay under different rules than the statement
+	// the user ran.
+	//
+	// Internal SQL with no attached frontend context keeps the nil default: it
+	// has no user session whose variables could apply.
+	if delegate := getInternalExecutorCompilerContext(c.ctx); delegate != nil && delegate != c {
+		return delegate.ResolveVariable(varName, isSystemVar, isGlobalVar)
+	}
 	return nil, nil
 }
 

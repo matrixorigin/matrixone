@@ -17,6 +17,7 @@ package taskservice
 import (
 	"context"
 	"fmt"
+	"sync"
 	"time"
 
 	"github.com/robfig/cron/v3"
@@ -35,11 +36,12 @@ type sqlTaskCrons struct {
 }
 
 type sqlTaskCronJob struct {
-	state cronJobState
-	s     *taskService
-	task  SQLTask
-	cron  *cron.Cron
-	entry cron.EntryID
+	state  cronJobState
+	taskMu sync.RWMutex
+	s      *taskService
+	task   SQLTask
+	cron   *cron.Cron
+	entry  cron.EntryID
 }
 
 func (s *taskService) StartScheduleSQLTask() {
@@ -107,7 +109,7 @@ func (s *taskService) loadSQLTasks(ctx context.Context) {
 		current[t.TaskID] = t
 		if job, ok := s.sqlCrons.jobs[t.TaskID]; !ok {
 			s.addSQLTask(t)
-		} else if sqlTaskNeedsRefresh(job.task, t) {
+		} else if sqlTaskNeedsRefresh(job.taskSnapshot(), t) {
 			s.replaceSQLTask(t)
 		}
 	}
@@ -165,6 +167,18 @@ func newSQLTaskCronJob(sqlTask SQLTask, s *taskService) (*sqlTaskCronJob, error)
 	return job, nil
 }
 
+func (j *sqlTaskCronJob) taskSnapshot() SQLTask {
+	j.taskMu.RLock()
+	defer j.taskMu.RUnlock()
+	return j.task
+}
+
+func (j *sqlTaskCronJob) setTask(sqlTask SQLTask) {
+	j.taskMu.Lock()
+	defer j.taskMu.Unlock()
+	j.task = sqlTask
+}
+
 func (j *sqlTaskCronJob) Run() {
 	if !j.state.canRun() {
 		return
@@ -175,10 +189,11 @@ func (j *sqlTaskCronJob) Run() {
 	queryCtx, cancel := context.WithTimeoutCause(context.Background(), 10*time.Second, moerr.CauseDoRun)
 	defer cancel()
 
-	tasks, err := j.s.store.QuerySQLTask(queryCtx, WithTaskIDCond(EQ, j.task.TaskID))
+	scheduled := j.taskSnapshot()
+	tasks, err := j.s.store.QuerySQLTask(queryCtx, WithTaskIDCond(EQ, scheduled.TaskID))
 	if err != nil || len(tasks) != 1 {
 		if err != nil {
-			j.s.rt.Logger().Error("query sql task failed", zap.Uint64("task-id", j.task.TaskID), zap.Error(moerr.AttachCause(queryCtx, err)))
+			j.s.rt.Logger().Error("query sql task failed", zap.Uint64("task-id", scheduled.TaskID), zap.Error(moerr.AttachCause(queryCtx, err)))
 		}
 		return
 	}
@@ -221,7 +236,7 @@ func (j *sqlTaskCronJob) Run() {
 		j.s.rt.Logger().Error("trigger sql task failed", zap.Uint64("task-id", current.TaskID), zap.Error(moerr.AttachCause(queryCtx, err)))
 		return
 	}
-	j.task = current
+	j.setTask(current)
 }
 
 func sqlTaskNeedsRefresh(oldTask, newTask SQLTask) bool {

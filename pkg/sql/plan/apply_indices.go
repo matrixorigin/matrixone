@@ -619,6 +619,24 @@ func (builder *QueryBuilder) applyIndices(nodeID int32, colRefCnt map[[2]int32]i
 		// path above, and would otherwise fall back to a full scan + exact sort.
 		return builder.applyIndicesForSort(nodeID, node, colRefCnt, idxColMap)
 
+	case plan.Node_AGG:
+		// Third fulltext anchor: an AGG -> SCAN(MATCH) whose parent is NOT a single-input
+		// PROJECT. A flattened scalar subquery -- `select (select count(*) from t where
+		// match(...) against(...))` -- becomes JOIN(SINGLE/LEFT) -> AGG -> SCAN, so the
+		// project-anchored resolveFullTextIndexPath (which stops at the 2-input JOIN) never
+		// reaches the AGG and the MATCH survives to execution as error 20105 (#27962).
+		// Anchoring on the AGG itself rewrites it. When the AGG *does* sit under a PROJECT
+		// (top-level `select count(*) ... where match`), this fires first during child
+		// recursion and consumes the scan's MATCH filters, so the later PROJECT pass finds
+		// none and no-ops -- no double rewrite.
+		if scanNode := builder.resolveScanNodeWithIndex(node, 1); scanNode != nil {
+			filterids, filterFTIdxs := builder.getFullTextMatchFiltersFromScanNode(scanNode)
+			wrappedFTExprs, wrappedFTIdxs := builder.getWrappedFullTextMatches(nil, scanNode, filterids, nil)
+			if len(filterids) > 0 || len(wrappedFTExprs) > 0 {
+				return builder.applyIndicesForAggUsingFullTextIndex(nodeID, nil, node, scanNode,
+					filterids, filterFTIdxs, wrappedFTExprs, wrappedFTIdxs, colRefCnt, idxColMap)
+			}
+		}
 	}
 
 	return nodeID, nil
@@ -833,6 +851,13 @@ func (builder *QueryBuilder) applyIndicesForProject(nodeID int32, projNode *plan
 		// Rewrites either a direct projection path or the aggregate input/scan
 		// boundary found through its single-input ancestors.
 		path := builder.resolveFullTextIndexPath(projNode)
+		// Turn json_extract comparisons on this scan into index probes BEFORE the
+		// MATCH filters are collected below, so a probe is picked up by the very
+		// same rewrite. Runs after scan-level index application, so adding a
+		// fulltext filter here cannot suppress a master/regular index.
+		if path != nil {
+			builder.addJSONFulltextProbes(path.scanNode)
+		}
 		if path != nil && path.aggNode != nil {
 			// agg node and scan node present
 			// get the list of filter that is fulltext_match func
@@ -4565,6 +4590,10 @@ func (builder *QueryBuilder) applyIndicesForJoins(nodeID int32, node *plan.Node,
 			hashSlot: hashSlot,
 		}
 		hashSlot++
+	}
+
+	if leftChild.TableDef == nil || leftChild.TableDef.Pkey == nil {
+		return nodeID, nil
 	}
 
 	joinOnPK := true

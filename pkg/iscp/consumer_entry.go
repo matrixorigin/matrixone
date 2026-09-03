@@ -58,8 +58,10 @@ func NewJobEntryWithStatus(
 	dropAt types.Timestamp,
 ) *JobEntry {
 	var currentLSN uint64
+	stage := int8(JobStage_Running)
 	if jobStatus != nil {
 		currentLSN = jobStatus.LSN
+		stage = jobStatus.Stage
 	}
 	jobEntry := &JobEntry{
 		tableInfo:          tableInfo,
@@ -69,8 +71,13 @@ func NewJobEntryWithStatus(
 		watermark:          watermark,
 		persistedWatermark: watermark,
 		state:              state,
+		stage:              stage,
 		dropAt:             dropAt,
 		currentLSN:         currentLSN,
+		// Only the trigger spec is retained, so the consumer class is recorded
+		// here: it selects the watermark flush threshold below, and it is the
+		// one thing about the consumer this entry still needs to know.
+		isIndexJob: jobSpec.ConsumerInfo.ConsumerType == int8(ConsumerType_IndexSync),
 	}
 	return jobEntry
 }
@@ -87,6 +94,12 @@ func (jobEntry *JobEntry) update(
 	jobEntry.dropAt = dropAt
 	if jobEntry.state == ISCPJobState_Error {
 		return
+	}
+	// Stage is monotonic within one job generation. In particular, InitSQL
+	// completion can persist Init -> Running without changing the job LSN or
+	// iteration state, so retain that transition independently of progress.
+	if jobEntry.stage < jobStatus.Stage {
+		jobEntry.stage = jobStatus.Stage
 	}
 	needApply := false
 	if jobEntry.currentLSN < jobStatus.LSN {
@@ -154,11 +167,28 @@ func (jobEntry *JobEntry) UpdateWatermark(
 	jobEntry.watermark = to
 }
 
+// flushThreshold is how far the in-memory watermark must run ahead of the
+// persisted one before it is worth a catalog write. Index jobs use their own,
+// much shorter threshold: their watermark is READ by the optimizer to decide
+// whether the index may back a mandatory filter, so a stale persisted value
+// costs query plans, not just restart work.
+func (jobEntry *JobEntry) flushThreshold(general time.Duration) time.Duration {
+	if !jobEntry.isIndexJob || jobEntry.tableInfo == nil ||
+		jobEntry.tableInfo.exec == nil || jobEntry.tableInfo.exec.option == nil {
+		return general
+	}
+	if idx := jobEntry.tableInfo.exec.option.IndexFlushWatermarkInterval; idx > 0 {
+		return idx
+	}
+	return general
+}
+
 func (jobEntry *JobEntry) tryFlushWatermark(
 	ctx context.Context,
 	txn client.TxnOperator,
 	threshold time.Duration,
 ) (needFlush bool, err error) {
+	threshold = jobEntry.flushThreshold(threshold)
 	if jobEntry.state != ISCPJobState_Completed ||
 		jobEntry.watermark.Physical()-jobEntry.persistedWatermark.Physical() < threshold.Nanoseconds() {
 		return

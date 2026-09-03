@@ -207,8 +207,10 @@ func (p *PartitionState) GetChangedTombstoneObjsBetween(from types.TS) (objs []o
 	return
 }
 
-// GetChangedObjsBetween get changed objects between [begin, end],
-// notice that if an object is created after begin and deleted before end, it will be ignored.
+// GetChangedObjsBetween gets object changes in (begin, end]. Objects at begin
+// are already part of the transaction snapshot. An object created and deleted
+// wholly inside the interval is ignored because the transaction cannot have a
+// tombstone that references it.
 func (p *PartitionState) GetChangedObjsBetween(
 	begin types.TS,
 	end types.TS,
@@ -229,6 +231,9 @@ func (p *PartitionState) GetChangedObjsBetween(
 
 		if entry.Time.GT(&end) {
 			break
+		}
+		if !entry.Time.GT(&begin) {
+			continue
 		}
 
 		if entry.IsDelete {
@@ -282,6 +287,11 @@ func (p *PartitionState) CollectObjectsBetween(
 		if entry.Time.GT(&end) {
 			break
 		}
+		// start is the transaction snapshot already observed by the caller;
+		// only object transitions after it require RowID transfer.
+		if !entry.Time.GT(&start) {
+			continue
+		}
 
 		var ss objectio.ObjectStats
 		objectio.SetObjectStatsShortName(&ss, &entry.ShortObjName)
@@ -294,53 +304,21 @@ func (p *PartitionState) CollectObjectsBetween(
 			continue
 		}
 
-		// case1: no soft delete
-		if val.DeleteTime.IsEmpty() {
-			insertList = append(insertList, val.ObjectStats)
-		} else {
-			if val.CreateTime.LT(&start) {
-				// create --------- delete
-				//          start -------- end
-				if val.DeleteTime.LE(&end) {
-					deletedList = append(deletedList, val.ObjectStats)
-				}
-			} else {
-				//        create ---------- delete
-				// start ------------ end
-				if val.DeleteTime.GT(&end) {
-					insertList = append(insertList, val.ObjectStats)
-				}
+		if entry.IsDelete {
+			// A source object visible at start and deleted in (start, end]
+			// needs its transaction tombstones transferred.
+			if val.CreateTime.LE(&start) {
+				deletedList = append(deletedList, val.ObjectStats)
 			}
+		} else if val.DeleteTime.IsEmpty() || val.DeleteTime.GT(&end) {
+			// Keep only replacement objects that survive through end. Objects
+			// created and deleted wholly inside the interval are not visible to
+			// the transaction and cannot be transfer sources or final targets.
+			insertList = append(insertList, val.ObjectStats)
 		}
 	}
 
 	return
-}
-
-func (p *PartitionState) CheckIfObjectDeletedBeforeTS(
-	ts types.TS,
-	isTombstone bool,
-	objId *objectio.ObjectId,
-) bool {
-
-	var tree *btree.BTreeG[objectio.ObjectEntry]
-	if isTombstone {
-		tree = p.tombstoneObjectsNameIndex
-	} else {
-		tree = p.dataObjectsNameIndex
-	}
-
-	var stats objectio.ObjectStats
-	objectio.SetObjectStatsShortName(&stats, (*objectio.ObjectNameShort)(objId))
-	val, exist := tree.Get(objectio.ObjectEntry{
-		ObjectStats: stats,
-	})
-
-	if !exist {
-		return true
-	}
-
-	return !val.DeleteTime.IsEmpty() && val.DeleteTime.LE(&ts)
 }
 
 func (p *PartitionState) GetObject(name objectio.ObjectNameShort) (objectio.ObjectEntry, bool) {

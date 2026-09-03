@@ -87,7 +87,8 @@ go_test_embedded() {
 }
 
 go_test_adapter() {
-  (cd "${ROOT_DIR}/pkg/iceberg/adapter/iceberggo" && run go test -tags iceberggo -count=1 ./...)
+  local goflags="${MO_ICEBERG_ADAPTER_GOFLAGS:-${GOFLAGS:-}}"
+  (cd "${ROOT_DIR}/pkg/iceberg/adapter/iceberggo" && run env GOFLAGS="${goflags}" go test -tags iceberggo -count=1 ./...)
 }
 
 go_test_golden() {
@@ -123,29 +124,103 @@ PY
 }
 
 ICEBERG_E2E_TMP_DIR=""
+ICEBERG_E2E_TMP_PREFIX=""
 ICEBERG_E2E_MO_PID=""
+ICEBERG_E2E_LAUNCH_CONFIG=""
+ICEBERG_E2E_BINARY=""
+
+iceberg_e2e_prepare_launch_config() {
+  local config_dir="${ICEBERG_E2E_TMP_DIR}/mo-config"
+  mkdir -p "$config_dir"
+  for name in log tn cn; do
+    sed -e "s#\./etc/launch-minio-local/mo-data#${ICEBERG_E2E_TMP_DIR}/mo-data#g" \
+      -e "s#\"etc/launch-minio-local/mo-data/#\"${ICEBERG_E2E_TMP_DIR}/mo-data/#g" \
+      "${ROOT_DIR}/etc/launch-minio-local/${name}.toml" >"${config_dir}/${name}.toml"
+  done
+  ICEBERG_E2E_LAUNCH_CONFIG="${config_dir}/launch.toml"
+  printf 'logservices = [\n    "%s/log.toml",\n]\n\n' "$config_dir" >"$ICEBERG_E2E_LAUNCH_CONFIG"
+  printf 'tnservices = [\n    "%s/tn.toml",\n]\n\n' "$config_dir" >>"$ICEBERG_E2E_LAUNCH_CONFIG"
+  printf 'cnservices = [\n    "%s/cn.toml",\n]\n' "$config_dir" >>"$ICEBERG_E2E_LAUNCH_CONFIG"
+}
 
 iceberg_e2e_collect_logs() {
   [[ -n "$ICEBERG_E2E_TMP_DIR" ]] || return
-  mkdir -p "$REPORT_DIR"
-  sanitize_artifact_file "${ICEBERG_E2E_TMP_DIR}/mo-service.log" "${REPORT_DIR}/mo-service.log"
+  local collect_status=0
+  mkdir -p "$REPORT_DIR" || return
+  sanitize_artifact_file "${ICEBERG_E2E_TMP_DIR}/mo-service.log" "${REPORT_DIR}/mo-service.log" || collect_status=$?
   if command -v docker >/dev/null 2>&1; then
     (cd "${ROOT_DIR}/etc/launch-minio-local" && docker compose logs --no-color nessie >"${ICEBERG_E2E_TMP_DIR}/nessie.log" 2>&1) || true
     (cd "${ROOT_DIR}/etc/launch-minio-local" && docker compose logs --no-color minio >"${ICEBERG_E2E_TMP_DIR}/minio.log" 2>&1) || true
-    sanitize_artifact_file "${ICEBERG_E2E_TMP_DIR}/nessie.log" "${REPORT_DIR}/nessie.log"
-    sanitize_artifact_file "${ICEBERG_E2E_TMP_DIR}/minio.log" "${REPORT_DIR}/minio.log"
+    sanitize_artifact_file "${ICEBERG_E2E_TMP_DIR}/nessie.log" "${REPORT_DIR}/nessie.log" || collect_status=$?
+    sanitize_artifact_file "${ICEBERG_E2E_TMP_DIR}/minio.log" "${REPORT_DIR}/minio.log" || collect_status=$?
   fi
+  return "$collect_status"
+}
+
+iceberg_e2e_remove_tmpdir() {
+  [[ -n "$ICEBERG_E2E_TMP_DIR" ]] || return
+  [[ -n "$ICEBERG_E2E_TMP_PREFIX" && "$ICEBERG_E2E_TMP_DIR" == "${ICEBERG_E2E_TMP_PREFIX}"* ]] || {
+    log "refusing to remove unexpected Iceberg E2E temporary directory: ${ICEBERG_E2E_TMP_DIR}"
+    return 1
+  }
+  rm -rf -- "$ICEBERG_E2E_TMP_DIR" || return
+  ICEBERG_E2E_TMP_DIR=""
 }
 
 iceberg_e2e_cleanup() {
   local status=$?
+  local cleanup_status=0
   if [[ -n "$ICEBERG_E2E_MO_PID" ]] && kill -0 "$ICEBERG_E2E_MO_PID" >/dev/null 2>&1; then
     kill "$ICEBERG_E2E_MO_PID" >/dev/null 2>&1 || true
     wait "$ICEBERG_E2E_MO_PID" >/dev/null 2>&1 || true
   fi
-  iceberg_e2e_collect_logs
-  (cd "$ROOT_DIR" && make dev-down-iceberg-tier-a >/dev/null 2>&1) || true
-  return "$status"
+  iceberg_e2e_collect_logs || cleanup_status=$?
+  (cd "$ROOT_DIR" && make dev-down-iceberg-tier-a >/dev/null 2>&1) || cleanup_status=$?
+  iceberg_e2e_remove_tmpdir || cleanup_status=$?
+  local final_status="$status"
+  if [[ "$final_status" -eq 0 && "$cleanup_status" -ne 0 ]]; then
+    final_status="$cleanup_status"
+    log "Iceberg E2E cleanup failed (status ${cleanup_status}); promoting successful body exit"
+  fi
+  trap - EXIT
+  exit "$final_status"
+}
+
+iceberg_e2e_preflight_ports() {
+  python3 - <<'PY'
+import socket
+
+ports = [6001, 7001, 32001, *range(18000, 18020), *range(19000, 19020)]
+sockets = []
+try:
+    for port in ports:
+        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 0)
+        sock.bind(("127.0.0.1", port))
+        sockets.append(sock)
+except OSError as err:
+    raise SystemExit(f"MatrixOne Iceberg E2E port {port} is unavailable: {err}")
+finally:
+    for sock in sockets:
+        sock.close()
+PY
+}
+
+iceberg_e2e_wait_for_mo() {
+  local deadline=$((SECONDS + ${MO_ICEBERG_E2E_START_TIMEOUT:-90}))
+  local status_url="http://127.0.0.1:7001/metrics"
+  while (( SECONDS < deadline )); do
+    if ! kill -0 "$ICEBERG_E2E_MO_PID" >/dev/null 2>&1; then
+      wait "$ICEBERG_E2E_MO_PID" || true
+      die "mo-service exited before becoming ready; see ${ICEBERG_E2E_TMP_DIR}/mo-service.log"
+    fi
+    if curl --fail --silent --show-error --max-time 1 "$status_url" >/dev/null; then
+      log "mo-service pid ${ICEBERG_E2E_MO_PID} is ready on the preflighted status port"
+      return
+    fi
+    sleep 1
+  done
+  die "timed out waiting for mo-service pid ${ICEBERG_E2E_MO_PID} on the preflighted status port; see ${ICEBERG_E2E_TMP_DIR}/mo-service.log"
 }
 
 iceberg_e2e_local() {
@@ -153,19 +228,32 @@ iceberg_e2e_local() {
   require_cmd curl
   require_cmd python3
 
-  mkdir -p "$REPORT_DIR"
-  ICEBERG_E2E_TMP_DIR="$(mktemp -d "${TMPDIR:-/tmp}/mo-iceberg-e2e-local.XXXXXX")"
-  trap iceberg_e2e_cleanup EXIT
+  local build_target="${MO_ICEBERG_E2E_BUILD_TARGET:-build}"
+  case "$build_target" in
+    build|build-with-prebuilt-native) ;;
+    *) die "MO_ICEBERG_E2E_BUILD_TARGET must be build or build-with-prebuilt-native" ;;
+  esac
 
-  run make build
+  mkdir -p "$REPORT_DIR"
+  local tmp_root="${TMPDIR:-/tmp}"
+  [[ -d "$tmp_root" && -w "$tmp_root" ]] || die "temporary directory is not writable: $tmp_root"
+  ICEBERG_E2E_TMP_PREFIX="${tmp_root%/}/mo-iceberg-e2e-local."
+  ICEBERG_E2E_TMP_DIR="$(mktemp -d "${ICEBERG_E2E_TMP_PREFIX}XXXXXX")"
+  ICEBERG_E2E_BINARY="${ICEBERG_E2E_TMP_DIR}/mo-service"
+  trap iceberg_e2e_cleanup EXIT
+  iceberg_e2e_prepare_launch_config
+
+  run make "$build_target" "BIN_NAME=${ICEBERG_E2E_BINARY}"
   go_test_adapter
   go_test_golden
 
+  iceberg_e2e_preflight_ports
   run make dev-up-iceberg-tier-a
   log "starting mo-service for Iceberg E2E local"
-  MO_ICEBERG_ALLOW_PLAIN_HTTP=1 "${ROOT_DIR}/mo-service" -launch "${ROOT_DIR}/etc/launch-minio-local/launch.toml" \
+  MO_ICEBERG_ALLOW_PLAIN_HTTP=1 "$ICEBERG_E2E_BINARY" -launch "$ICEBERG_E2E_LAUNCH_CONFIG" \
     >"${ICEBERG_E2E_TMP_DIR}/mo-service.log" 2>&1 &
   ICEBERG_E2E_MO_PID="$!"
+  iceberg_e2e_wait_for_mo
 
   run go run ./test/iceberg/iceberg_e2e_local.go \
     --catalog-uri "${MO_ICEBERG_E2E_CATALOG_URI:-http://127.0.0.1:19120/iceberg}" \

@@ -852,6 +852,9 @@ func bindWindowSpec(
 		if err != nil {
 			return nil, err
 		}
+		if err = rejectStandaloneIntervalExpr(b.GetContext(), expr, "window PARTITION BY"); err != nil {
+			return nil, err
+		}
 		if err = rejectWindowResultDependency(b.GetContext(), expr, ctx.windowTag); err != nil {
 			return nil, err
 		}
@@ -870,6 +873,9 @@ func bindWindowSpec(
 		for _, order := range ws.OrderBy {
 			expr, err := b.BindExpr(order.Expr, depth, isRoot)
 			if err != nil {
+				return nil, err
+			}
+			if err = rejectStandaloneIntervalOrderExpr(b.GetContext(), expr); err != nil {
 				return nil, err
 			}
 			if err = rejectWindowResultDependency(b.GetContext(), expr, ctx.windowTag); err != nil {

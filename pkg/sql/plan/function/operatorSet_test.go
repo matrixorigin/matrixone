@@ -15,6 +15,7 @@
 package function
 
 import (
+	"fmt"
 	"testing"
 	"unicode/utf8"
 
@@ -823,6 +824,34 @@ func Test_CaseCheck_MixedStringNumeric(t *testing.T) {
 	require.Equal(t, int32(types.MaxVarBinaryLen), result.finalType[2].Width)
 }
 
+func TestCaseCheckAcceptsImplicitBooleanConditions(t *testing.T) {
+	for _, test := range []struct {
+		name      string
+		condition types.Type
+	}{
+		{name: "null", condition: types.T_any.ToType()},
+		{name: "float", condition: types.T_float64.ToType()},
+		{name: "string", condition: types.T_varchar.ToType()},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			result := caseCheck(nil, []types.Type{
+				test.condition,
+				types.T_varchar.ToType(),
+				types.T_varchar.ToType(),
+			})
+			require.Equal(t, succeedWithCast, result.status)
+			require.Equal(t, types.T_bool, result.finalType[0].Oid)
+		})
+	}
+
+	result := caseCheck(nil, []types.Type{
+		types.T_date.ToType(),
+		types.T_varchar.ToType(),
+		types.T_varchar.ToType(),
+	})
+	require.Equal(t, failedFunctionParametersWrong, result.status)
+}
+
 func TestSignedUnsignedIntegerCommonTypeWithNull(t *testing.T) {
 	for _, test := range []struct {
 		name   string
@@ -1451,6 +1480,118 @@ func Test_CoalesceCheck_TextStringBranchesStayText(t *testing.T) {
 	for _, typ := range result.finalType {
 		require.Equal(t, types.T_text, typ.Oid)
 		require.Zero(t, typ.Width)
+	}
+}
+
+func Test_CoalesceCheck_JSONCharacterResolution(t *testing.T) {
+	proc := testutil.NewProcess(t)
+
+	for _, tt := range []struct {
+		name       string
+		inputs     []types.Type
+		wantReturn types.T
+		wantCast   bool
+	}{
+		{
+			name:       "json then varchar",
+			inputs:     []types.Type{types.T_json.ToType(), types.T_varchar.ToType()},
+			wantReturn: types.T_text,
+			wantCast:   true,
+		},
+		{
+			name:       "varchar then json",
+			inputs:     []types.Type{types.T_varchar.ToType(), types.T_json.ToType()},
+			wantReturn: types.T_text,
+			wantCast:   true,
+		},
+		{
+			name:       "json and char",
+			inputs:     []types.Type{types.T_json.ToType(), types.T_char.ToType()},
+			wantReturn: types.T_text,
+			wantCast:   true,
+		},
+		{
+			name:       "json and text",
+			inputs:     []types.Type{types.T_json.ToType(), types.T_text.ToType()},
+			wantReturn: types.T_text,
+			wantCast:   true,
+		},
+		{
+			name:       "null does not change text result",
+			inputs:     []types.Type{types.T_json.ToType(), types.T_any.ToType(), types.T_varchar.ToType()},
+			wantReturn: types.T_text,
+			wantCast:   true,
+		},
+		{
+			name:       "json varchar numeric",
+			inputs:     []types.Type{types.T_json.ToType(), types.T_varchar.ToType(), types.T_int64.ToType()},
+			wantReturn: types.T_text,
+			wantCast:   true,
+		},
+		{
+			name:       "varchar numeric json",
+			inputs:     []types.Type{types.T_varchar.ToType(), types.T_int64.ToType(), types.T_json.ToType()},
+			wantReturn: types.T_text,
+			wantCast:   true,
+		},
+		{
+			name:       "numeric json varchar",
+			inputs:     []types.Type{types.T_int64.ToType(), types.T_json.ToType(), types.T_varchar.ToType()},
+			wantReturn: types.T_text,
+			wantCast:   true,
+		},
+		{
+			name:       "json and numeric",
+			inputs:     []types.Type{types.T_json.ToType(), types.T_int64.ToType()},
+			wantReturn: types.T_text,
+			wantCast:   true,
+		},
+		{
+			name:       "all json stays json",
+			inputs:     []types.Type{types.T_json.ToType(), types.T_json.ToType()},
+			wantReturn: types.T_json,
+		},
+		{
+			name:       "null does not change json result",
+			inputs:     []types.Type{types.T_json.ToType(), types.T_any.ToType()},
+			wantReturn: types.T_json,
+			wantCast:   true,
+		},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			result, err := GetFunctionByName(proc.Ctx, "coalesce", tt.inputs)
+			require.NoError(t, err)
+			require.Equal(t, tt.wantReturn, result.GetReturnType().Oid)
+			if tt.wantReturn == types.T_text {
+				require.Zero(t, result.GetReturnType().Width)
+			}
+
+			castTypes, shouldCast := result.ShouldDoImplicitTypeCast()
+			require.Equal(t, tt.wantCast, shouldCast)
+			if !tt.wantCast {
+				return
+			}
+			require.Len(t, castTypes, len(tt.inputs))
+			for i := range castTypes {
+				require.Equal(t, tt.wantReturn, castTypes[i].Oid)
+				if tt.wantReturn == types.T_text {
+					require.Zero(t, castTypes[i].Width)
+				}
+			}
+		})
+	}
+
+	for _, typ := range []types.T{types.T_binary, types.T_varbinary, types.T_blob} {
+		for _, inputs := range [][]types.Type{
+			{types.T_json.ToType(), typ.ToType()},
+			{types.T_json.ToType(), typ.ToType(), types.T_int64.ToType()},
+			{types.T_int64.ToType(), typ.ToType(), types.T_json.ToType()},
+		} {
+			t.Run(fmt.Sprintf("reject %s at %v", typ, inputs), func(t *testing.T) {
+				_, err := GetFunctionByName(proc.Ctx, "coalesce", inputs)
+				require.Error(t, err)
+			})
+		}
 	}
 }
 

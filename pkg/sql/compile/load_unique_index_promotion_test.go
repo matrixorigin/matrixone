@@ -33,6 +33,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
+	mock_lock "github.com/matrixorigin/matrixone/pkg/frontend/test/mock_lock"
 	"github.com/matrixorigin/matrixone/pkg/lockservice"
 	lockpb "github.com/matrixorigin/matrixone/pkg/pb/lock"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -61,6 +62,8 @@ func (e *testLoadLogtailBarrierEngine) AcquireLogtailReadBarrier(
 }
 
 type advancingLoadTimestampWaiter struct{}
+
+const testLoadUniqueIndexMaxRowLocks = 20_000
 
 func (advancingLoadTimestampWaiter) GetTimestamp(
 	_ context.Context,
@@ -117,7 +120,7 @@ func newLoadUniqueIndexPromotionPlan() *plan.Plan {
 	}
 	load := &plan.Node{
 		NodeType: plan.Node_EXTERNAL_SCAN,
-		Stats:    &plan.Stats{Cost: 1 << 20, Rowsize: 1 << 10},
+		Stats:    &plan.Stats{Cost: 1 << 20, Outcnt: testLoadUniqueIndexMaxRowLocks + 1, Rowsize: 1 << 10},
 		TableDef: &plan.TableDef{Createsql: `{
             "ScanType":1,
             "FileSize":1073741824,
@@ -150,11 +153,10 @@ func newLoadUniqueIndexPromotionPlan() *plan.Plan {
 		},
 	}
 	return &plan.Plan{Plan: &plan.Plan_Query{Query: &plan.Query{
-		StmtType:    plan.Query_INSERT,
-		Steps:       []int32{2},
-		Nodes:       []*plan.Node{load, lock, update},
-		LoadTag:     true,
-		LoadWriteS3: true,
+		StmtType: plan.Query_INSERT,
+		Steps:    []int32{2},
+		Nodes:    []*plan.Node{load, lock, update},
+		LoadTag:  true,
 	}}}
 }
 
@@ -254,20 +256,26 @@ func TestLoadUniqueIndexPromotionTxnEligibility(t *testing.T) {
 
 func TestAnalyzeLoadUniqueIndexPromotionPlan(t *testing.T) {
 	pn := newLoadUniqueIndexPromotionPlan()
-	targets, ok := analyzeLoadUniqueIndexPromotionPlan(pn)
+	targets, ok := analyzeLoadUniqueIndexPromotionPlan(pn, testLoadUniqueIndexMaxRowLocks)
 	require.True(t, ok)
 	require.Len(t, targets, 1)
 	require.Equal(t, uint64(20), targets[0].rowTarget.TableId)
 	require.NotSame(t, pn.GetQuery().Nodes[1].LockTargets[1], targets[0].rowTarget)
+	pn.GetQuery().LoadWriteS3 = true
+	_, ok = analyzeLoadUniqueIndexPromotionPlan(pn, testLoadUniqueIndexMaxRowLocks)
+	require.True(t, ok,
+		"an execution-path marker must not change lock-safety admission")
 
 	tests := []struct {
 		name   string
 		mutate func(*plan.Plan)
 	}{
-		{"small estimate", func(p *plan.Plan) { p.GetQuery().Nodes[0].Stats.Cost = 1 }},
-		{"nan estimate", func(p *plan.Plan) { p.GetQuery().Nodes[0].Stats.Cost = math.NaN() }},
-		{"infinite estimate", func(p *plan.Plan) { p.GetQuery().Nodes[0].Stats.Rowsize = math.Inf(1) }},
-		{"legacy load", func(p *plan.Plan) { p.GetQuery().LoadWriteS3 = false }},
+		{"estimate at row-lock budget", func(p *plan.Plan) { p.GetQuery().Nodes[0].Stats.Outcnt = testLoadUniqueIndexMaxRowLocks }},
+		{"small byte estimate", func(p *plan.Plan) { p.GetQuery().Nodes[0].Stats.Cost = 1 }},
+		{"nan row estimate", func(p *plan.Plan) { p.GetQuery().Nodes[0].Stats.Outcnt = math.NaN() }},
+		{"infinite row estimate", func(p *plan.Plan) { p.GetQuery().Nodes[0].Stats.Outcnt = math.Inf(1) }},
+		{"nan byte estimate", func(p *plan.Plan) { p.GetQuery().Nodes[0].Stats.Cost = math.NaN() }},
+		{"infinite row size", func(p *plan.Plan) { p.GetQuery().Nodes[0].Stats.Rowsize = math.Inf(1) }},
 		{"missing source metadata", func(p *plan.Plan) { p.GetQuery().Nodes[0].TableDef.Createsql = "" }},
 		{"compressed source", func(p *plan.Plan) {
 			p.GetQuery().Nodes[0].TableDef.Createsql = `{"ScanType":1,"FileSize":1073741824,"Filepath":"large.csv.gz","CompressType":"auto","Format":"csv"}`
@@ -323,8 +331,55 @@ func TestAnalyzeLoadUniqueIndexPromotionPlan(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			candidate := newLoadUniqueIndexPromotionPlan()
 			tc.mutate(candidate)
-			_, admitted := analyzeLoadUniqueIndexPromotionPlan(candidate)
+			_, admitted := analyzeLoadUniqueIndexPromotionPlan(candidate, testLoadUniqueIndexMaxRowLocks)
 			require.False(t, admitted)
+		})
+	}
+}
+
+func TestLoadEstimateEligible(t *testing.T) {
+	tests := []struct {
+		name     string
+		stats    *plan.Stats
+		budget   float64
+		eligible bool
+	}{
+		{
+			name: "above row budget at byte threshold",
+			stats: &plan.Stats{
+				Cost:    1 << 20,
+				Outcnt:  20_001,
+				Rowsize: 1 << 10,
+			},
+			budget:   20_000,
+			eligible: true,
+		},
+		{
+			name: "equal to row budget",
+			stats: &plan.Stats{
+				Cost:    1 << 20,
+				Outcnt:  20_000,
+				Rowsize: 1 << 10,
+			},
+			budget: 20_000,
+		},
+		{
+			name: "above row budget below byte threshold",
+			stats: &plan.Stats{
+				Cost:    (1 << 20) - 1,
+				Outcnt:  20_001,
+				Rowsize: 1 << 10,
+			},
+			budget: 20_000,
+		},
+		{name: "missing stats", budget: 20_000},
+		{name: "invalid row estimate", stats: &plan.Stats{Cost: 1 << 20, Outcnt: math.NaN(), Rowsize: 1 << 10}, budget: 20_000},
+		{name: "invalid byte estimate", stats: &plan.Stats{Cost: math.Inf(1), Outcnt: 20_001, Rowsize: 1 << 10}, budget: 20_000},
+		{name: "invalid budget", stats: &plan.Stats{Cost: 1 << 20, Outcnt: 20_001, Rowsize: 1 << 10}},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			require.Equal(t, tc.eligible, loadEstimateEligible(tc.stats, tc.budget))
 		})
 	}
 }
@@ -334,7 +389,7 @@ func BenchmarkAnalyzeLoadUniqueIndexPromotionPlan(b *testing.B) {
 	b.ReportAllocs()
 	b.ResetTimer()
 	for range b.N {
-		if _, ok := analyzeLoadUniqueIndexPromotionPlan(pn); !ok {
+		if _, ok := analyzeLoadUniqueIndexPromotionPlan(pn, testLoadUniqueIndexMaxRowLocks); !ok {
 			b.Fatal("eligible plan rejected")
 		}
 	}
@@ -375,7 +430,7 @@ func TestAnalyzeLoadUniqueIndexPromotionAllowsSynchronousNonUniqueSibling(t *tes
 		},
 	})
 
-	targets, ok := analyzeLoadUniqueIndexPromotionPlan(pn)
+	targets, ok := analyzeLoadUniqueIndexPromotionPlan(pn, testLoadUniqueIndexMaxRowLocks)
 	require.True(t, ok)
 	require.Len(t, targets, 1,
 		"only UNIQUE row-lock targets are replaced; synchronous non-unique maintenance stays exact main")
@@ -392,7 +447,8 @@ func TestAnalyzeLoadUniqueIndexPromotionMatchesPlannerShape(t *testing.T) {
 	qry, err := plan2.NewMockOptimizer(true).Optimize(stmt)
 	require.NoError(t, err)
 	pn := &plan.Plan{Plan: &plan.Plan_Query{Query: qry}}
-	qry.LoadWriteS3 = true
+	require.False(t, qry.LoadWriteS3,
+		"the modern LOAD binder does not use the legacy write-path marker")
 	var external, lockNode, updateNode *plan.Node
 	for _, node := range qry.Nodes {
 		switch node.NodeType {
@@ -407,7 +463,7 @@ func TestAnalyzeLoadUniqueIndexPromotionMatchesPlannerShape(t *testing.T) {
 	require.NotNil(t, external)
 	require.NotNil(t, lockNode)
 	require.NotNil(t, updateNode)
-	external.Stats = &plan.Stats{Cost: 1 << 20, Rowsize: 1 << 10}
+	external.Stats = &plan.Stats{Cost: 1 << 20, Outcnt: testLoadUniqueIndexMaxRowLocks + 1, Rowsize: 1 << 10}
 	external.ExternScan.LoadType = 1
 	external.ExternScan.Format = "csv"
 	external.TableDef.Createsql = `{"ScanType":1,"FileSize":1073741824,"Filepath":"load/large.csv","CompressType":"auto","Format":"csv"}`
@@ -440,7 +496,7 @@ func TestAnalyzeLoadUniqueIndexPromotionMatchesPlannerShape(t *testing.T) {
 		}
 	}
 
-	targets, ok := analyzeLoadUniqueIndexPromotionPlan(pn)
+	targets, ok := analyzeLoadUniqueIndexPromotionPlan(pn, testLoadUniqueIndexMaxRowLocks)
 	require.True(t, ok, "the classifier must match the planner's real LOAD/LOCK_OP/MULTI_UPDATE topology")
 	require.NotEmpty(t, targets)
 }
@@ -478,6 +534,11 @@ func TestPrepareLoadUniqueIndexPromotionRequiresRuntimeAdmission(t *testing.T) {
 	txnOp.EXPECT().TxnOptions().Return(opts).AnyTimes()
 	proc := testutil.NewProcess(t)
 	proc.Base.TxnOperator = txnOp
+	lockService := mock_lock.NewMockLockService(ctrl)
+	lockService.EXPECT().GetConfig().Return(lockservice.Config{
+		MaxLockRowCount: testLoadUniqueIndexMaxRowLocks,
+	}).AnyTimes()
+	proc.Base.LockService = lockService
 	rt := moruntime.ServiceRuntime(proc.GetService())
 	require.NotNil(t, rt)
 	original, hadOriginal := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
@@ -1031,7 +1092,7 @@ func TestBindLoadUniqueIndexPromotionSnapshotIsProofScoped(t *testing.T) {
 
 func TestCompileLockFiltersOnlyValidatedPromotionProof(t *testing.T) {
 	pn := newLoadUniqueIndexPromotionPlan()
-	targets, ok := analyzeLoadUniqueIndexPromotionPlan(pn)
+	targets, ok := analyzeLoadUniqueIndexPromotionPlan(pn, testLoadUniqueIndexMaxRowLocks)
 	require.True(t, ok)
 	frontier := timestamp.Timestamp{PhysicalTime: 20}
 	installed := frontier.Next()

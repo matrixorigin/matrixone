@@ -18,7 +18,6 @@ import (
 	"context"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -28,6 +27,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex"
+	cuvscdc "github.com/matrixorigin/matrixone/pkg/vectorindex/cuvs"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/sqlexec"
 	"github.com/stretchr/testify/require"
 )
@@ -184,8 +184,7 @@ func TestLoadAllBasesEmpty(t *testing.T) {
 	swapRunSql(t, func(_ *sqlexec.SqlProcess, _ string) (executor.Result, error) {
 		return executor.Result{Mp: mp, Batches: nil}, nil
 	})
-	trace := &loadTrace{start: time.Now()}
-	bases, err := loadAllBasesUncached(sp, cfg, trace)
+	bases, err := LoadAllBases(sp, cfg)
 	require.NoError(t, err)
 	require.Empty(t, bases)
 }
@@ -202,12 +201,104 @@ func TestLoadTailSegmentsEmpty(t *testing.T) {
 		}
 		return executor.Result{Mp: mp, Batches: nil}, nil
 	})
-	trace := &loadTrace{start: time.Now()}
-	segs, deletes, _, err := loadTailSegmentsAfter(sp, cfg, 7, trace)
+	segs, deletes, err := LoadTailSegments(sp, cfg)
 	require.NoError(t, err)
 	require.Empty(t, segs)
 	require.Empty(t, deletes)
-	require.GreaterOrEqual(t, trace.phase.internalSQL, time.Duration(0))
+}
+
+func TestLoadAllBasesRunSqlError(t *testing.T) {
+	sp, _ := mockSqlProc(t)
+	swapRunSql(t, func(_ *sqlexec.SqlProcess, _ string) (executor.Result, error) {
+		return executor.Result{}, moerr.NewInternalErrorNoCtx("base enumeration failed")
+	})
+
+	_, err := LoadAllBases(sp, testStorageCfg())
+	require.ErrorContains(t, err, "base enumeration failed")
+}
+
+func TestLoadFromStorageStreamError(t *testing.T) {
+	sp, mp := mockSqlProc(t)
+	cfg := testStorageCfg()
+	swapRunSql(t, func(_ *sqlexec.SqlProcess, _ string) (executor.Result, error) {
+		return executor.Result{Mp: mp, Batches: []*batch.Batch{metaBatch(mp, "chk", 1, 0)}}, nil
+	})
+	swapRunStreamingSql(t, func(_ context.Context, _ *sqlexec.SqlProcess, _ string, _ chan executor.Result, _ chan error) (executor.Result, error) {
+		return executor.Result{}, moerr.NewInternalErrorNoCtx("stream failed")
+	})
+
+	_, err := LoadFromStorage(sp, cfg, "seg0")
+	require.ErrorContains(t, err, "stream failed")
+}
+
+func TestLoadTailSegmentsErrorPaths(t *testing.T) {
+	loadChunks := func(t *testing.T, chunks []TailChunk) ([]*Segment, map[any]int64, error) {
+		t.Helper()
+		sp, mp := mockSqlProc(t)
+		calls := 0
+		swapRunSql(t, func(_ *sqlexec.SqlProcess, _ string) (executor.Result, error) {
+			calls++
+			if calls == 1 {
+				return executor.Result{Mp: mp, Batches: []*batch.Batch{int64Batch(mp, 0)}}, nil
+			}
+			return executor.Result{Mp: mp, Batches: []*batch.Batch{tailChunkBatch(mp, chunks)}}, nil
+		})
+		return LoadTailSegments(sp, testStorageCfg())
+	}
+
+	t.Run("budget", func(t *testing.T) {
+		sp, _ := mockSqlProc(t)
+		swapRunSql(t, func(_ *sqlexec.SqlProcess, _ string) (executor.Result, error) {
+			return executor.Result{}, moerr.NewInternalErrorNoCtx("tail budget failed")
+		})
+		_, _, err := LoadTailSegments(sp, testStorageCfg())
+		require.ErrorContains(t, err, "tail budget failed")
+	})
+
+	t.Run("tail query", func(t *testing.T) {
+		sp, mp := mockSqlProc(t)
+		calls := 0
+		swapRunSql(t, func(_ *sqlexec.SqlProcess, _ string) (executor.Result, error) {
+			calls++
+			if calls == 1 {
+				return executor.Result{Mp: mp, Batches: []*batch.Batch{int64Batch(mp, 0)}}, nil
+			}
+			return executor.Result{}, moerr.NewInternalErrorNoCtx("tail query failed")
+		})
+		_, _, err := LoadTailSegments(sp, testStorageCfg())
+		require.ErrorContains(t, err, "tail query failed")
+	})
+
+	t.Run("gap", func(t *testing.T) {
+		_, _, err := loadChunks(t, []TailChunk{{ChunkId: 1, Data: []byte("x")}, {ChunkId: 3, Data: []byte("x")}})
+		require.ErrorContains(t, err, "gap or duplicate")
+	})
+
+	t.Run("bad frame", func(t *testing.T) {
+		_, _, err := loadChunks(t, []TailChunk{{ChunkId: 0, Data: []byte("bad frame")}})
+		require.Error(t, err)
+	})
+
+	t.Run("invalid insert payload", func(t *testing.T) {
+		frame := cuvscdc.FrameCdcChunk([]byte{1}, nil, 1, 0, 0)
+		_, _, err := loadChunks(t, []TailChunk{{ChunkId: 0, Data: frame}})
+		require.Error(t, err)
+	})
+
+	t.Run("invalid delete payload", func(t *testing.T) {
+		frame := cuvscdc.FrameCdcChunk([]byte{1}, nil, 0, 1, 0)
+		_, _, err := loadChunks(t, []TailChunk{{ChunkId: 0, Data: frame}})
+		require.Error(t, err)
+	})
+
+	t.Run("valid delete", func(t *testing.T) {
+		frame, err := FrameDeletes(int32(types.T_int64), []DeleteRecord{{Pk: int64(7)}})
+		require.NoError(t, err)
+		segs, deletes, err := loadChunks(t, []TailChunk{{ChunkId: 4, Data: frame}})
+		require.NoError(t, err)
+		require.Empty(t, segs)
+		require.Equal(t, int64(4), deletes[int64(7)])
+	})
 }
 
 // TestLoadFromStorageRoundTrip mocks the metadata read + base-chunk stream with a REAL
@@ -236,14 +327,11 @@ func TestLoadFromStorageRoundTrip(t *testing.T) {
 		return executor.Result{}, nil
 	})
 
-	trace := &loadTrace{start: time.Now()}
-	loaded, err := loadFromStorage(sp, cfg, "seg0", trace)
+	loaded, err := LoadFromStorage(sp, cfg, "seg0")
 	require.NoError(t, err)
 	require.Equal(t, "seg0", loaded.Id)
 	require.Equal(t, int64(5), loaded.Recency)
 	require.Equal(t, seg.N, loaded.N)
-	require.Equal(t, filesize, trace.event.BaseBytes)
-	require.Positive(t, trace.phase.tempWrite)
 	loaded.Free()
 
 	// a checksum mismatch (corrupt stream) is detected and rejected.
@@ -315,15 +403,6 @@ func TestCompactSegmentsFoldsTail(t *testing.T) {
 			return executor.Result{Mp: mp}, nil
 		}
 	})
-
-	trace := &loadTrace{start: time.Now()}
-	tracedSegs, tracedDeletes, maxChunk, err := loadTailSegmentsAfter(sp, cfg, -1, trace)
-	require.NoError(t, err)
-	require.Len(t, tracedSegs, 1)
-	require.Empty(t, tracedDeletes)
-	require.Equal(t, chunks[len(chunks)-1].ChunkId, maxChunk)
-	require.Positive(t, trace.event.TailBytes)
-	freeSegs(tracedSegs)
 
 	nlive, err := CompactSegments(sp, cfg, 0, 0)
 	require.NoError(t, err)
@@ -405,8 +484,7 @@ func TestLoadAllBasesFreesOnPartialFailure(t *testing.T) {
 		return executor.Result{}, nil
 	})
 
-	trace := &loadTrace{start: time.Now()}
-	bases, err := loadAllBasesUncached(sp, cfg, trace)
+	bases, err := LoadAllBases(sp, cfg)
 	require.Error(t, err, "s1 fails to load")
 	require.Nil(t, bases, "no partial slice is returned (s0 was freed)")
 }

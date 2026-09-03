@@ -539,6 +539,36 @@ func (t *tunnel) hasUnsafeClientState() bool {
 		len(t.requestBoundary.closedStatements) > 0
 }
 
+// hasFenceableClosedStatementState reports whether the only remaining unsafe
+// client state is a completed COM_STMT_CLOSE. A successful COM_PING on the same
+// backend socket fences every packet sent before it, including an overflowed
+// close tombstone set. Other protocol states remain non-cacheable.
+func (t *tunnel) hasFenceableClosedStatementState() bool {
+	if t == nil {
+		return false
+	}
+	t.requestBoundary.Lock()
+	defer t.requestBoundary.Unlock()
+	s := &t.requestBoundary
+	if s.inFlight || s.requestContinuation || s.localInfileUpload || s.ambiguous ||
+		s.pendingLongDataOverflow || len(s.pendingLongData) > 0 {
+		return false
+	}
+	return s.closedStatementsOverflow || len(s.closedStatements) > 0
+}
+
+// completeClosedStatementFence clears only state proven delivered by the
+// same-backend PING. It deliberately leaves every other protocol state intact.
+func (t *tunnel) completeClosedStatementFence() {
+	if t == nil {
+		return
+	}
+	t.requestBoundary.Lock()
+	defer t.requestBoundary.Unlock()
+	clear(t.requestBoundary.closedStatements)
+	t.requestBoundary.closedStatementsOverflow = false
+}
+
 func (t *tunnel) hasUntransferableClientState() bool {
 	if t == nil {
 		return false

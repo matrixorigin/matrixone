@@ -492,6 +492,39 @@ func TestMakeTimeReturnScale(t *testing.T) {
 	require.Equal(t, types.T_time.ToTypeWithScale(6), defaultFloatResult.retType)
 }
 
+func TestSecToTimeReturnScale(t *testing.T) {
+	proc := testutil.NewProcess(t)
+
+	integerResult, err := GetFunctionByName(proc.Ctx, "sec_to_time", []types.Type{
+		types.T_int64.ToType(),
+	})
+	require.NoError(t, err)
+	require.Equal(t, types.T_time.ToType(), integerResult.retType)
+
+	decimalResult, err := GetFunctionByName(proc.Ctx, "sec_to_time", []types.Type{
+		types.New(types.T_decimal128, 20, 3),
+	})
+	require.NoError(t, err)
+	require.True(t, decimalResult.needCast)
+	require.Equal(t, types.T_varchar, decimalResult.targetTypes[0].Oid)
+	require.Equal(t, int32(3), decimalResult.targetTypes[0].Scale)
+	require.Equal(t, types.T_time.ToTypeWithScale(3), decimalResult.retType)
+
+	stringResult, err := GetFunctionByName(proc.Ctx, "sec_to_time", []types.Type{
+		types.T_varchar.ToType(),
+	})
+	require.NoError(t, err)
+	require.True(t, stringResult.needCast)
+	require.Equal(t, int32(-1), stringResult.targetTypes[0].Scale)
+	require.Equal(t, types.T_time.ToTypeWithScale(6), stringResult.retType)
+
+	floatResult, err := GetFunctionByName(proc.Ctx, "sec_to_time", []types.Type{
+		{Oid: types.T_float64, Size: 8, Scale: -1},
+	})
+	require.NoError(t, err)
+	require.Equal(t, types.T_time.ToTypeWithScale(6), floatResult.retType)
+}
+
 func TestUnixTimestampTemporalReturnScale(t *testing.T) {
 	proc := testutil.NewProcess(t)
 
@@ -639,28 +672,28 @@ func TestConcatFunctionsPreserveStringCollation(t *testing.T) {
 			name:        "concat keeps legacy byte ordering",
 			function:    "concat",
 			inputs:      []types.Type{general, legacy},
-			wantOID:     types.T_varchar,
+			wantOID:     types.T_text,
 			wantCharset: types.CharsetLegacy,
 		},
 		{
 			name:        "concat keeps utf8mb4 bin",
 			function:    "concat",
 			inputs:      []types.Type{general, utf8mb4Bin},
-			wantOID:     types.T_varchar,
+			wantOID:     types.T_text,
 			wantCharset: types.CharsetUTF8MB4Bin,
 		},
 		{
 			name:        "concat ws keeps utf8mb4 bin",
 			function:    "concat_ws",
 			inputs:      []types.Type{general, utf8mb4Bin, utf8mb4Bin},
-			wantOID:     types.T_varchar,
+			wantOID:     types.T_text,
 			wantCharset: types.CharsetUTF8MB4Bin,
 		},
 		{
 			name:        "opaque binary dominates utf8mb4 bin",
 			function:    "concat",
 			inputs:      []types.Type{utf8mb4Bin, opaqueBinary},
-			wantOID:     types.T_varchar,
+			wantOID:     types.T_varbinary,
 			wantCharset: types.CharsetBinary,
 		},
 		{
@@ -1082,6 +1115,7 @@ func TestGetFunctionIsVolatileOrRealTimeRelatedByName(t *testing.T) {
 	assert.True(t, GetFunctionIsVolatileOrRealTimeRelatedByName("uuid"))
 	assert.True(t, GetFunctionIsVolatileOrRealTimeRelatedByName("now"))
 	assert.True(t, GetFunctionIsVolatileOrRealTimeRelatedByName("current_timestamp"))
+	assert.True(t, GetFunctionIsVolatileOrRealTimeRelatedByName("current_role_id"))
 	assert.False(t, GetFunctionIsVolatileOrRealTimeRelatedByName("abs"))
 	assert.False(t, GetFunctionIsVolatileOrRealTimeRelatedByName("unknown_function"))
 }

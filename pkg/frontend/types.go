@@ -300,15 +300,17 @@ type PrepareStmt struct {
 	PrepareStmt     tree.Statement
 	NativeMode      bool
 	OnlyFullGroupBy bool
-	// onlyFullGroupBySet distinguishes a captured disabled mode from legacy or
-	// minimal in-memory fixtures that predate this plan dependency.
-	onlyFullGroupBySet bool
-	ParamTypes         []byte
-	ColDefData         [][]byte
-	IsCloudNonuser     bool
-	proc               *process.Process
-	remapDb            map[string]string
-	defaultDatabase    string
+	BoolSumAvg      bool
+	// sqlModeFlagsSet distinguishes captured disabled modes (OnlyFullGroupBy,
+	// BoolSumAvg) from legacy or minimal in-memory fixtures that predate these
+	// plan dependencies.
+	sqlModeFlagsSet bool
+	ParamTypes      []byte
+	ColDefData      [][]byte
+	IsCloudNonuser  bool
+	proc            *process.Process
+	remapDb         map[string]string
+	defaultDatabase string
 
 	params              *vector.Vector
 	getFromSendLongData map[int]struct{}
@@ -344,13 +346,22 @@ type PrepareStmt struct {
 	// ordinary COM_STMT executions never scan or copy the cached plan. Direct
 	// result positions identify parameters whose binary runtime type is also the
 	// visible result-column type.
+	// numericPrefixConsumer belongs to numericPrefixConsumerPlan. Prepared plans
+	// are immutable within one generation; replacing the plan invalidates this
+	// cached capability and refreshes it once before execution.
+	numericPrefixConsumerPlan     *plan.Plan
 	numericPrefixConsumer         bool
 	directResultParamPositions    []int32
 	directResultParamPositionsSet bool
-	hasPaginationParams           bool
-	hasLagLeadParams              bool
-	paramKinds                    []vector.PrepareParamKind
-	paramMetadata                 []bool
+	// fixedIntegerParamPositions identifies parameters with a fixed unsigned-
+	// integer contract (LIMIT/OFFSET and LAG/LEAD offsets). It is installed
+	// with each prepared-plan generation so binary EXECUTE never walks the plan
+	// merely to classify a runtime parameter.
+	fixedIntegerParamPositions []int32
+	hasPaginationParams        bool
+	hasLagLeadParams           bool
+	paramKinds                 []vector.PrepareParamKind
+	paramMetadata              []bool
 	// jsonComparisonParamPositions is computed once per prepared-plan
 	// generation. Only these parameters need an exact SQL type in Process
 	// metadata; paramConcreteTypes is a reusable execution buffer.
@@ -785,15 +796,19 @@ func (prepareStmt *PrepareStmt) installRuntimeSpecializationCache(
 	key string,
 	runtimePlan *plan.Plan,
 	runtimeCompile *compile.Compile,
-) {
+) *compile.Compile {
 	oldRuntimeCompile := prepareStmt.runtimeCompile
 	runtimeCompile.SetIsPrepare(true)
 	prepareStmt.runtimeSpecializationKey = key
 	prepareStmt.runtimePlan = runtimePlan
 	prepareStmt.runtimeCompile = runtimeCompile
-	if oldRuntimeCompile != runtimeCompile {
-		prepareStmt.releaseRuntimeCompile(oldRuntimeCompile)
+	if oldRuntimeCompile == runtimeCompile {
+		return nil
 	}
+	// The caller must release the displaced compile only after the statement
+	// using runtimeCompile has finished. Both compiles share the session Process,
+	// and releasing the old one synchronously would clear the new one's state.
+	return oldRuntimeCompile
 }
 
 func (prepareStmt *PrepareStmt) clearRuntimeSpecializationCache() {
@@ -1720,9 +1735,11 @@ func (ses *Session) SetSessionSysVar(ctx context.Context, name string, val inter
 	name = strings.ToLower(name)
 	oldMatrixOneNative := false
 	oldOnlyFullGroupBy := false
+	oldBoolSumAvg := false
 	if name == "sql_mode" {
 		oldMatrixOneNative = ses.sqlModeHasMatrixOneNative()
 		oldOnlyFullGroupBy = ses.sqlModeHasOnlyFullGroupBy()
+		oldBoolSumAvg = ses.sqlModeHasEnableBoolSumAvg()
 	}
 
 	def, ok := gSysVarsDefs[name]
@@ -1782,7 +1799,7 @@ func (ses *Session) SetSessionSysVar(ctx context.Context, name string, val inter
 		ses.sesSysVars.Set(canonicalName, val)
 	}
 	if err == nil && name == "sql_mode" {
-		ses.updateSqlModeCaches(oldMatrixOneNative, oldOnlyFullGroupBy, val)
+		ses.updateSqlModeCaches(oldMatrixOneNative, oldOnlyFullGroupBy, oldBoolSumAvg, val)
 	}
 	if err == nil && setTxnIsolation {
 		if txnHandler := ses.GetTxnHandler(); txnHandler != nil {

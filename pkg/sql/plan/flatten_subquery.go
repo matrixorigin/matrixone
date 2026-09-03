@@ -909,22 +909,32 @@ func (builder *QueryBuilder) casePreservesType(expr *plan.Expr) bool {
 
 func (builder *QueryBuilder) insertMarkJoin(left, right int32, joinPreds []*plan.Expr, outerPred *plan.Expr, negate bool, ctx *BindContext) (nodeID int32, markExpr *plan.Expr, err error) {
 	markTag := builder.genNewBindTag()
+	existential := outerPred == nil
 
-	for i, pred := range joinPreds {
-		if !pred.Typ.NotNullable {
-			joinPreds[i], err = BindFuncExprImplByPlanExpr(builder.GetContext(), "istrue", []*plan.Expr{pred})
-			if err != nil {
-				return
+	// EXISTS only asks whether any predicate evaluates to TRUE.  Keep its raw
+	// predicate on the MARK join so an equality remains eligible for HashJoin,
+	// then totalize the marker below.  IN/ANY/ALL still need the join predicate's
+	// three-valued result, so retain the historical per-predicate IS TRUE there.
+	// Exposing a raw existential predicate can expand its evaluation domain
+	// during hash-key lowering. Keep the historical IS TRUE wrapper unless the
+	// predicate is proven total and side-effect-free.
+	keepRawExistential := existential && !builder.subqueryPredicatePlanningDisabled() &&
+		areTruncationSafePredicates(joinPreds)
+	if !keepRawExistential {
+		for i, pred := range joinPreds {
+			if !pred.Typ.NotNullable {
+				joinPreds[i], err = BindFuncExprImplByPlanExpr(builder.GetContext(), "istrue", []*plan.Expr{pred})
+				if err != nil {
+					return
+				}
 			}
 		}
 	}
 
-	notNull := true
-
 	if outerPred != nil {
 		joinPreds = append(joinPreds, outerPred)
-		notNull = outerPred.Typ.NotNullable
 	}
+	markNotNullable := outerPred != nil && outerPred.Typ.NotNullable
 
 	nodeID = builder.appendNode(&plan.Node{
 		NodeType:    plan.Node_JOIN,
@@ -938,7 +948,7 @@ func (builder *QueryBuilder) insertMarkJoin(left, right int32, joinPreds []*plan
 	markExpr = &plan.Expr{
 		Typ: plan.Type{
 			Id:          int32(types.T_bool),
-			NotNullable: notNull,
+			NotNullable: markNotNullable,
 		},
 		Expr: &plan.Expr_Col{
 			Col: &plan.ColRef{
@@ -946,6 +956,13 @@ func (builder *QueryBuilder) insertMarkJoin(left, right int32, joinPreds []*plan
 				ColPos: 0,
 			},
 		},
+	}
+
+	if existential {
+		markExpr, err = BindFuncExprImplByPlanExpr(builder.GetContext(), "istrue", []*plan.Expr{markExpr})
+		if err != nil {
+			return
+		}
 	}
 
 	if negate {
@@ -1367,7 +1384,13 @@ func nullPropagatesThroughDeepScalarConsumer(fn *plan.ObjectRef) bool {
 	case function.EQUAL, function.NOT_EQUAL,
 		function.GREAT_THAN, function.GREAT_EQUAL,
 		function.LESS_THAN, function.LESS_EQUAL,
-		function.NOT, function.CAST, function.CAST_STRICT:
+		function.NOT, function.CAST, function.CAST_STRICT,
+		// The affine SUM-family rewrite materializes omitted aggregate
+		// results with these registered STRICT operators.  Preserve the
+		// NULL-on-empty proof through that derived expression; accepting a
+		// broader function class here would also widen deep decorrelation to
+		// consumers whose evaluation contract has not been audited.
+		function.PLUS, function.MINUS, function.MULTI:
 		return true
 	default:
 		return false

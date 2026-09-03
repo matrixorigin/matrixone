@@ -17,7 +17,6 @@ package plan
 import (
 	"context"
 	"fmt"
-	"math"
 	"testing"
 	"unsafe"
 
@@ -428,48 +427,41 @@ func TestPreparedNumericPlanHelpersCoverDeferredAndIntegerPaths(t *testing.T) {
 
 func TestPreparedNumericRuntimeLiteralRebindingHelpers(t *testing.T) {
 	ctx := context.Background()
+	provenIntegral := makePlan2Float64ConstExprWithType(1)
+	provenIntegral.GetLit().Src = makePlan2Int64ConstExprWithType(1)
+	provenDecimal := makePlan2Float64ConstExprWithType(1.25)
+	decimalType := types.New(types.T_decimal64, 3, 2)
+	decimalSource, err := preparedRuntimeParamExpr(ctx, "1.25", false, decimalType)
+	require.NoError(t, err)
+	provenDecimal.GetLit().Src = decimalSource
+	doubleType := types.T_float64.ToType()
+	explicitDouble, err := appendExplicitCastBeforeExpr(
+		ctx, makePlan2Int64ConstExprWithType(1), makePlan2Type(&doubleType))
+	require.NoError(t, err)
+	implicitDouble, err := makePlan2CastExpr(
+		ctx, makePlan2Int64ConstExprWithType(1), makePlan2Type(&doubleType))
+	require.NoError(t, err)
 
 	for _, tc := range []struct {
-		name string
-		expr *planpb.Expr
-		want bool
+		name     string
+		expr     *planpb.Expr
+		want     bool
+		wantType types.T
 	}{
-		{name: "float64 integral", expr: makePlan2Float64ConstExprWithType(12), want: true},
-		{name: "float32 integral", expr: makePlan2Float32ConstExprWithType(7), want: true},
-		{name: "fractional", expr: makePlan2Float64ConstExprWithType(1.25), want: false},
-		{name: "nan", expr: makePlan2Float64ConstExprWithType(math.NaN()), want: false},
-		{name: "infinity", expr: makePlan2Float64ConstExprWithType(math.Inf(1)), want: false},
-		{name: "non-float", expr: makePlan2Int64ConstExprWithType(1), want: false},
-		{name: "nil", expr: nil, want: false},
+		{name: "proven integral source", expr: provenIntegral, want: true, wantType: types.T_int64},
+		{name: "proven decimal source", expr: provenDecimal, want: true, wantType: types.T_decimal64},
+		{name: "implicit numeric cast", expr: implicitDouble, want: true, wantType: types.T_int64},
+		{name: "source-less integral scientific float", expr: makePlan2Float64ConstExprWithType(1)},
+		{name: "source-less fractional scientific float", expr: makePlan2Float64ConstExprWithType(0.1)},
+		{name: "explicit double", expr: explicitDouble},
+		{name: "non-float", expr: makePlan2Int64ConstExprWithType(1)},
+		{name: "nil", expr: nil},
 	} {
-		t.Run("integral "+tc.name, func(t *testing.T) {
-			converted, ok := provisionalIntegralFloatLiteral(tc.expr)
+		t.Run(tc.name, func(t *testing.T) {
+			source, ok := provisionalExactNumericSource(tc.expr)
 			require.Equal(t, tc.want, ok)
 			if tc.want {
-				require.Equal(t, int32(types.T_int64), converted.Typ.Id)
-			}
-		})
-	}
-
-	for _, tc := range []struct {
-		name string
-		expr *planpb.Expr
-		want bool
-	}{
-		{name: "float64 fractional", expr: makePlan2Float64ConstExprWithType(1.25), want: true},
-		{name: "float64 zero", expr: makePlan2Float64ConstExprWithType(0), want: true},
-		{name: "float32 fractional", expr: makePlan2Float32ConstExprWithType(1.5), want: true},
-		{name: "nan", expr: makePlan2Float64ConstExprWithType(math.NaN()), want: false},
-		{name: "infinity", expr: makePlan2Float64ConstExprWithType(math.Inf(1)), want: false},
-		{name: "non-float", expr: makePlan2Int64ConstExprWithType(1), want: false},
-		{name: "nil", expr: nil, want: false},
-	} {
-		t.Run("decimal "+tc.name, func(t *testing.T) {
-			converted, ok, err := provisionalDecimalFloatLiteral(ctx, tc.expr)
-			require.NoError(t, err)
-			require.Equal(t, tc.want, ok)
-			if tc.want {
-				require.True(t, types.T(converted.Typ.Id).IsDecimal())
+				require.Equal(t, int32(tc.wantType), source.Typ.Id)
 			}
 		})
 	}
@@ -764,6 +756,35 @@ func TestBuildPreparedCaseConditionParameter(t *testing.T) {
 				require.Equal(t, test.want, conditionArg.GetLit().GetSval())
 				require.Equal(t, test.name == "binary true", conditionArg.GetLit().GetIsBin())
 			}
+		})
+	}
+}
+
+func TestBuildSearchedCaseAcceptsImplicitBooleanConditions(t *testing.T) {
+	for _, test := range []struct {
+		name string
+		sql  string
+	}{
+		{
+			name: "literal null",
+			sql:  "select case when null then 'a' else 'b' end",
+		},
+		{
+			name: "null arithmetic",
+			sql:  "select case when 0 / 0 then 'a' else 'b' end",
+		},
+		{
+			name: "mixed conditions",
+			sql:  "select case when null then 'a' when 1 = 1 then 'b' else 'c' end",
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			stmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL, test.sql, 1)
+			require.NoError(t, err)
+
+			queryPlan, err := BuildPlan(NewMockCompilerContext(true), stmt, false)
+			require.NoError(t, err)
+			require.NotNil(t, findPlanFunctionExpr(queryPlan, "case"))
 		})
 	}
 }

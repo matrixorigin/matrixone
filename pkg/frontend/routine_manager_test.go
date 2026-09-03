@@ -993,6 +993,7 @@ func TestRoutineManagerResetSessionWaitsForRequestAfterResponseWrite(t *testing.
 	rm.setBaseService(&testMOServerBaseService{id: ""})
 
 	oldSession.respr = NewMysqlResp(protocol)
+	oldSession.SetDatabaseName("must_not_leak")
 	oldSession.setRoutineManager(rm)
 	oldSession.setRoutine(routine)
 	routine.setSession(oldSession)
@@ -1088,6 +1089,8 @@ func TestRoutineManagerResetSessionWaitsForRequestAfterResponseWrite(t *testing.
 	}
 	newSession := routine.getSession()
 	require.NotSame(t, oldSession, newSession)
+	require.Empty(t, newSession.GetDatabaseName(),
+		"QueryService ResetSession must clear the previous client's database")
 	require.Nil(t, oldSession.GetProc())
 	require.Nil(t, oldSession.GetTxnHandler())
 	registered = rm.sessionManager.GetAllSessions()
@@ -1122,6 +1125,7 @@ func TestRoutineManagerHandlerRejectsLifecycleConflictBeforeSessionRead(t *testi
 		routinesByConnID: map[uint32]*Routine{1010: routine},
 	}
 
+	require.ErrorContains(t, rm.Handler(conn, nil), "empty MySQL command packet")
 	require.ErrorContains(
 		t,
 		rm.Handler(conn, []byte{byte(COM_PING)}),

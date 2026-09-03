@@ -633,3 +633,189 @@ func TestApplyDistributivityDoesNotFactorCrossDomainTextOverride(t *testing.T) {
 	require.NotNil(t, result.GetF())
 	require.Equal(t, "or", result.GetF().Func.ObjName)
 }
+
+func TestApplyDistributivityFindsJoinKeyBesideTernaryPredicate(t *testing.T) {
+	ctx := context.Background()
+	intType := planpb.Type{Id: int32(types.T_int64)}
+	boolType := planpb.Type{Id: int32(types.T_bool)}
+	col := func(rel, pos int32) *planpb.Expr {
+		return &planpb.Expr{Typ: intType, Expr: &planpb.Expr_Col{
+			Col: &planpb.ColRef{RelPos: rel, ColPos: pos},
+		}}
+	}
+	lit := func(value int64) *planpb.Expr {
+		return &planpb.Expr{Typ: intType, Expr: &planpb.Expr_Lit{
+			Lit: &planpb.Literal{Value: &planpb.Literal_I64Val{I64Val: value}},
+		}}
+	}
+	bind := func(name string, args ...*planpb.Expr) *planpb.Expr {
+		expr, err := BindFuncExprImplByPlanExpr(ctx, name, args)
+		require.NoError(t, err)
+		return expr
+	}
+
+	joinKey := bind("=", col(0, 0), col(1, 0))
+	branch := func(flag, low, high int64) *planpb.Expr {
+		return bind("and",
+			bind("and", DeepCopyExpr(joinKey), bind("=", col(0, 1), lit(flag))),
+			bind("between", col(1, 1), lit(low), lit(high)))
+	}
+	orExpr := bind("or", branch(1, 10, 20), branch(2, 30, 40))
+	require.Equal(t, boolType.Id, orExpr.Typ.Id)
+
+	result := applyDistributivity(ctx, orExpr)
+	conjuncts := splitPlanConjunction(result)
+	require.Len(t, conjuncts, 2)
+	require.True(t, exprStructuralEqual(joinKey, conjuncts[0]),
+		"the cross-table equality must become a visible join key")
+	require.Equal(t, "or", conjuncts[1].GetF().Func.ObjName)
+}
+
+func TestApplyDistributivityFactorsCommonWideningCharPredicate(t *testing.T) {
+	ctx := context.Background()
+	intType := planpb.Type{Id: int32(types.T_int64)}
+	intCol := func(rel, pos int32) *planpb.Expr {
+		return &planpb.Expr{Typ: intType, Expr: &planpb.Expr_Col{
+			Col: &planpb.ColRef{RelPos: rel, ColPos: pos},
+		}}
+	}
+	bind := func(name string, args ...*planpb.Expr) *planpb.Expr {
+		expr, err := BindFuncExprImplByPlanExpr(ctx, name, args)
+		require.NoError(t, err)
+		return expr
+	}
+
+	joinKey := bind("=", intCol(0, 0), intCol(1, 0))
+	shipInstructType := planpb.Type{
+		Id:      int32(types.T_char),
+		Width:   25,
+		Charset: uint32(types.CharsetUTF8),
+	}
+	shipInstructCol := &planpb.Expr{Typ: shipInstructType, Expr: &planpb.Expr_Col{
+		Col: &planpb.ColRef{RelPos: 1, ColPos: 1},
+	}}
+	wideningCharLiteral := func(value string, target planpb.Type) *planpb.Expr {
+		literal, err := makePlan2CastExpr(
+			ctx, makePlan2StringConstExprWithType(value), target,
+		)
+		require.NoError(t, err)
+		return literal
+	}
+	commonShipInstruct := bind("=", shipInstructCol,
+		wideningCharLiteral("DELIVER IN PERSON", shipInstructType))
+	shipModeType := planpb.Type{
+		Id: int32(types.T_char), Width: 10, Charset: uint32(types.CharsetUTF8),
+	}
+	shipModeCol := &planpb.Expr{Typ: shipModeType, Expr: &planpb.Expr_Col{
+		Col: &planpb.ColRef{RelPos: 1, ColPos: 2},
+	}}
+	shipModes := &planpb.Expr{
+		Typ: planpb.Type{Id: int32(types.T_tuple)},
+		Expr: &planpb.Expr_List{List: &planpb.ExprList{List: []*planpb.Expr{
+			wideningCharLiteral("AIR", shipModeType),
+			wideningCharLiteral("AIR REG", shipModeType),
+		}}},
+	}
+	commonShipMode := bind("in", shipModeCol, shipModes)
+	leftOnly := bind("=", intCol(0, 2), intCol(1, 2))
+	rightOnly := bind("=", intCol(0, 3), intCol(1, 3))
+	branch := func(unique *planpb.Expr) *planpb.Expr {
+		return bind("and",
+			bind("and",
+				bind("and", DeepCopyExpr(joinKey), DeepCopyExpr(commonShipInstruct)),
+				DeepCopyExpr(commonShipMode)),
+			unique)
+	}
+	orExpr := bind("or", branch(leftOnly), branch(rightOnly))
+
+	result := applyDistributivity(ctx, orExpr)
+	conjuncts := splitPlanConjunction(result)
+	require.Len(t, conjuncts, 4)
+	require.True(t, exprStructuralEqual(joinKey, conjuncts[0]),
+		"the common equality must become a visible join key")
+	require.True(t, exprStructuralEqual(commonShipInstruct, conjuncts[1]))
+	require.True(t, exprStructuralEqual(commonShipMode, conjuncts[2]))
+	require.Equal(t, "or", conjuncts[3].GetF().Func.ObjName)
+}
+
+func TestApplyDistributivityKeepsSingleTableDNFForKeyFolding(t *testing.T) {
+	ctx := context.Background()
+	intType := planpb.Type{Id: int32(types.T_int64)}
+	col := func(pos int32) *planpb.Expr {
+		return &planpb.Expr{Typ: intType, Expr: &planpb.Expr_Col{
+			Col: &planpb.ColRef{RelPos: 0, ColPos: pos},
+		}}
+	}
+	lit := func(value int64) *planpb.Expr {
+		return &planpb.Expr{Typ: intType, Expr: &planpb.Expr_Lit{
+			Lit: &planpb.Literal{Value: &planpb.Literal_I64Val{I64Val: value}},
+		}}
+	}
+	bind := func(name string, args ...*planpb.Expr) *planpb.Expr {
+		expr, err := BindFuncExprImplByPlanExpr(ctx, name, args)
+		require.NoError(t, err)
+		return expr
+	}
+
+	common := bind("=", col(0), lit(1))
+	orExpr := bind("or",
+		bind("and", DeepCopyExpr(common), bind("=", col(1), lit(2))),
+		bind("and", DeepCopyExpr(common), bind("=", col(1), lit(3))))
+
+	result := applyDistributivity(ctx, orExpr)
+	require.Equal(t, "or", result.GetF().Func.ObjName,
+		"single-table DNF must remain available to composite-key folding")
+}
+
+func TestApplyDistributivityDoesNotFactorFallibleCommonPredicate(t *testing.T) {
+	ctx := context.Background()
+	intType := planpb.Type{Id: int32(types.T_int64)}
+	boolType := planpb.Type{Id: int32(types.T_bool)}
+	col := func(rel, pos int32) *planpb.Expr {
+		return &planpb.Expr{Typ: intType, Expr: &planpb.Expr_Col{
+			Col: &planpb.ColRef{RelPos: rel, ColPos: pos},
+		}}
+	}
+	bind := func(name string, args ...*planpb.Expr) *planpb.Expr {
+		expr, err := BindFuncExprImplByPlanExpr(ctx, name, args)
+		require.NoError(t, err)
+		return expr
+	}
+	fallible := &planpb.Expr{Typ: intType, Expr: &planpb.Expr_F{F: &planpb.Function{
+		Func: &planpb.ObjectRef{ObjName: "fallible_test_function"},
+		Args: []*planpb.Expr{col(1, 0)},
+	}}}
+	common := bind("=", fallible, col(0, 0))
+	orExpr := bind("or",
+		bind("and", DeepCopyExpr(common), bind("=", col(0, 1), col(1, 1))),
+		bind("and", DeepCopyExpr(common), bind("=", col(0, 2), col(1, 2))))
+	require.Equal(t, boolType.Id, orExpr.Typ.Id)
+
+	result := applyDistributivity(ctx, orExpr)
+	require.Equal(t, "or", result.GetF().Func.ObjName,
+		"factoring must fail closed when the common predicate is not proven total")
+}
+
+func TestApplyDistributivityRollbackUsesLegacyRelationGate(t *testing.T) {
+	ctx := context.Background()
+	intType := planpb.Type{Id: int32(types.T_int64)}
+	col := func(rel, pos int32) *planpb.Expr {
+		return &planpb.Expr{Typ: intType, Expr: &planpb.Expr_Col{
+			Col: &planpb.ColRef{RelPos: rel, ColPos: pos},
+		}}
+	}
+	bind := func(name string, args ...*planpb.Expr) *planpb.Expr {
+		expr, err := BindFuncExprImplByPlanExpr(ctx, name, args)
+		require.NoError(t, err)
+		return expr
+	}
+	common := bind("=", col(0, 0), col(1, 0))
+	branch := func(value int32) *planpb.Expr {
+		return bind("and", DeepCopyExpr(common), bind("=", col(0, value), col(1, value)))
+	}
+	orExpr := bind("or", branch(1), branch(2))
+
+	result := applyDistributivity(ctx, orExpr, false)
+	require.Equal(t, "or", result.GetF().Func.ObjName,
+		"the rollback path must retain the pre-feature DNF relation heuristic")
+}

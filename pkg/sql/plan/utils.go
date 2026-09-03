@@ -412,6 +412,13 @@ func splitAndBindCondition(astExpr tree.Expr, expandAlias ExpandAliasMode, ctx *
 		if err != nil {
 			return nil, err
 		}
+		// WHERE, HAVING and JOIN ON are executable scalar boundaries. Check
+		// before boolean coercion so an interval pseudo-value reports the real
+		// contract violation instead of an incidental INTERVAL-to-BOOL cast
+		// overload error.
+		if err = rejectStandaloneIntervalExpr(ctx.binder.GetContext(), expr, "predicate"); err != nil {
+			return nil, err
+		}
 		needCast := true
 		fn := expr.GetF()
 		if fn != nil {
@@ -458,11 +465,12 @@ func splitAstConjunction(astExpr tree.Expr) []tree.Expr {
 // IN/OR trees the old Marshal path walked every expression twice (ProtoSize
 // + writeTo) per lookup and dominated CPU; hashing traverses once with no
 // allocation and collisions are rare enough that Equal rarely runs.
-func applyDistributivity(ctx context.Context, expr *plan.Expr) *plan.Expr {
+func applyDistributivity(ctx context.Context, expr *plan.Expr, exposeCrossTableKeys ...bool) *plan.Expr {
+	exposeCrossTable := len(exposeCrossTableKeys) == 0 || exposeCrossTableKeys[0]
 	switch exprImpl := expr.Expr.(type) {
 	case *plan.Expr_F:
 		for i, arg := range exprImpl.F.Args {
-			exprImpl.F.Args[i] = applyDistributivity(ctx, arg)
+			exprImpl.F.Args[i] = applyDistributivity(ctx, arg, exposeCrossTable)
 		}
 
 		if exprImpl.F.Func.ObjName != "or" {
@@ -483,26 +491,34 @@ func applyDistributivity(ctx context.Context, expr *plan.Expr) *plan.Expr {
 		rightBuckets := make(map[uint64][]*rightEntry, len(rightConds))
 		rightEntries := make([]*rightEntry, len(rightConds))
 
-		relPos := int32(-1)
+		rightRelations := make(map[int32]struct{}, 2)
+		rightRelationsKnown := true
+		legacyRelPos := int32(-1)
 		for i, cond := range rightConds {
 			h := exprStructuralHash(cond)
 			entry := &rightEntry{cond: cond, side: JoinSideRight}
 			rightEntries[i] = entry
 			rightBuckets[h] = append(rightBuckets[h], entry)
-
-			args := cond.GetF().GetArgs()
-			if len(args) != 2 {
-				continue
-			}
-			if col := args[0].GetCol(); col != nil {
-				if relPos == -1 {
-					relPos = col.RelPos
-				} else if relPos != col.RelPos {
-					relPos = -2
+			rightRelationsKnown = collectExprRelations(cond, rightRelations) && rightRelationsKnown
+			if !exposeCrossTable {
+				args := cond.GetF().GetArgs()
+				if len(args) == 2 {
+					if col := args[0].GetCol(); col != nil {
+						if legacyRelPos == -1 {
+							legacyRelPos = col.RelPos
+						} else if legacyRelPos != col.RelPos {
+							legacyRelPos = -2
+						}
+					}
 				}
 			}
 		}
-		if relPos >= 0 {
+		// Keep single-table DNF intact for composite-key range folding. The old
+		// first-argument heuristic missed columns hidden in BETWEEN/IN and the
+		// second side of equalities, so a cross-table DNF could be mistaken for
+		// a single-table predicate and hide a common hash-join key.
+		if exposeCrossTable && rightRelationsKnown && len(rightRelations) == 1 ||
+			!exposeCrossTable && legacyRelPos >= 0 {
 			return expr
 		}
 
@@ -538,6 +554,13 @@ func applyDistributivity(ctx context.Context, expr *plan.Expr) *plan.Expr {
 		if len(commonConds) == 0 {
 			return expr
 		}
+		// Factoring evaluates a common predicate before the residual OR. That is
+		// only observationally equivalent when the common predicate is total and
+		// side-effect-free; otherwise it can expose an error or volatile call on
+		// rows for which the original expression short-circuited.
+		if exposeCrossTable && !areTruncationSafePredicates(commonConds) {
+			return expr
+		}
 
 		expr, _ = combinePlanConjunction(ctx, commonConds)
 
@@ -554,6 +577,65 @@ func applyDistributivity(ctx context.Context, expr *plan.Expr) *plan.Expr {
 	}
 
 	return expr
+}
+
+func collectExprRelations(expr *plan.Expr, relations map[int32]struct{}) bool {
+	if expr == nil {
+		return true
+	}
+	switch item := expr.Expr.(type) {
+	case *plan.Expr_Col:
+		if item.Col == nil || item.Col.RelPos < 0 {
+			return false
+		}
+		relations[item.Col.RelPos] = struct{}{}
+	case *plan.Expr_Corr:
+		if item.Corr == nil || item.Corr.RelPos < 0 {
+			return false
+		}
+		relations[item.Corr.RelPos] = struct{}{}
+	case *plan.Expr_F:
+		if item.F != nil {
+			for _, arg := range item.F.Args {
+				if !collectExprRelations(arg, relations) {
+					return false
+				}
+			}
+		}
+	case *plan.Expr_List:
+		if item.List != nil {
+			for _, arg := range item.List.List {
+				if !collectExprRelations(arg, relations) {
+					return false
+				}
+			}
+		}
+	case *plan.Expr_W:
+		if item.W != nil {
+			if !collectExprRelations(item.W.WindowFunc, relations) {
+				return false
+			}
+			for _, arg := range item.W.PartitionBy {
+				if !collectExprRelations(arg, relations) {
+					return false
+				}
+			}
+			for _, order := range item.W.OrderBy {
+				if !collectExprRelations(order.Expr, relations) {
+					return false
+				}
+			}
+		}
+	case *plan.Expr_Sub:
+		if item.Sub != nil && !collectExprRelations(item.Sub.Child, relations) {
+			return false
+		}
+	case *plan.Expr_Lit:
+		if item.Lit != nil && !collectExprRelations(item.Lit.Src, relations) {
+			return false
+		}
+	}
+	return true
 }
 
 func unionSlice(left, right []string) []string {
@@ -1051,11 +1133,16 @@ func copyPreparedNumericMetadata(metadata *plan.PreparedNumericMetadata) *plan.P
 		return nil
 	}
 	return &plan.PreparedNumericMetadata{
-		Fallback:             metadata.Fallback,
-		ParamPos:             metadata.ParamPos,
-		FallbackSource:       metadata.FallbackSource,
-		FallbackSourceNodeId: metadata.FallbackSourceNodeId,
-		FallbackSourceColPos: metadata.FallbackSourceColPos,
+		Fallback:                    metadata.Fallback,
+		ParamPos:                    metadata.ParamPos,
+		FallbackSource:              metadata.FallbackSource,
+		FallbackSourceNodeId:        metadata.FallbackSourceNodeId,
+		FallbackSourceColPos:        metadata.FallbackSourceColPos,
+		ProvisionalResultCast:       metadata.ProvisionalResultCast,
+		ProvisionalResultPeer:       metadata.ProvisionalResultPeer,
+		ProvisionalResultPeerTypeId: metadata.ProvisionalResultPeerTypeId,
+		ProvisionalResultPeerWidth:  metadata.ProvisionalResultPeerWidth,
+		ProvisionalResultPeerScale:  metadata.ProvisionalResultPeerScale,
 	}
 }
 
@@ -1614,7 +1701,11 @@ func constantFoldWithPreparedExactSource(
 	preservePreparedExactSource bool,
 ) (*plan.Expr, error) {
 	if expr.Typ.Id == int32(types.T_interval) {
-		panic(moerr.NewInternalError(proc.Ctx, "not supported type INTERVAL"))
+		// INTERVAL is an executable argument type but has no standalone scalar
+		// constant-fold representation. Keep it unchanged so callers can fold an
+		// enclosing temporal expression or let a public scalar boundary reject it
+		// without turning a bound expression into a planner panic.
+		return expr, nil
 	}
 
 	// If it is Expr_List, perform constant folding on its elements
@@ -1690,6 +1781,9 @@ func constantFoldWithPreparedExactSource(
 		return nil, err
 	}
 	if f.CannotFold() {
+		return expr, nil
+	}
+	if rule.IsLegacyTimeAssignmentOutsideInternalRange(fn) {
 		return expr, nil
 	}
 	if f.IsRealTimeRelated() && !varAndParamIsConst {
@@ -3620,6 +3714,21 @@ func preparedDMLWriteExpressions(query *plan.Query) map[*plan.Expr]struct{} {
 		if node == nil {
 			continue
 		}
+		// LOCK_OP consumes the primary-key expression positionally from its
+		// child batch. Multi-table INSERT builds each target as an independent
+		// write step, so these row-image roots are not necessarily reachable
+		// from a MULTI_UPDATE child edge.
+		if node.NodeType == plan.Node_LOCK_OP && len(node.Children) == 1 {
+			childID := node.Children[0]
+			if childID >= 0 && int(childID) < len(query.Nodes) {
+				input := query.Nodes[childID]
+				if input != nil {
+					for _, expr := range input.ProjectList {
+						add(expr)
+					}
+				}
+			}
+		}
 		// INSERT/MULTI_UPDATE may carry a writer projection directly on the
 		// sink node.  DELETE has no value projection; its parameters belong to
 		// filter expressions and must remain eligible for specialization.
@@ -3751,16 +3860,17 @@ func (rule *preparedRuntimeTextComparisonScanRule) exprHasNumericDomain(expr *pl
 	}
 	if isImplicitPreparedParamCast(expr) {
 		position, ok := implicitPreparedParamPosition(expr)
-		return ok && rule.paramTypeIsNumeric(position)
+		return preparedComparisonTypeIsNumeric(types.T(expr.Typ.Id)) ||
+			(ok && rule.paramTypeIsNumeric(position))
 	}
 	if expr.GetCol() != nil {
 		// A numeric column is a numeric comparison domain too. Keep the column
 		// expression itself unchanged; the text marker is rebound to the
 		// engine's DOUBLE conversion so numeric-prefix and warning semantics are
 		// preserved without relying on the stale prepare-time integer cast.
-		return (types.Type{Oid: types.T(expr.Typ.Id)}).IsNumeric()
+		return preparedComparisonTypeIsNumeric(types.T(expr.Typ.Id))
 	}
-	if (types.Type{Oid: types.T(expr.Typ.Id)}).IsNumeric() {
+	if preparedComparisonTypeIsNumeric(types.T(expr.Typ.Id)) {
 		return true
 	}
 	if list := expr.GetList(); list != nil {
@@ -3826,7 +3936,12 @@ func (rule *preparedRuntimeTextComparisonScanRule) collectTextParams(expr *plan.
 }
 
 func (rule *preparedRuntimeTextComparisonScanRule) paramTypeIsNumeric(position int) bool {
-	return position >= 0 && position < len(rule.runtimeParamTypes) && rule.runtimeParamTypes[position].IsNumeric()
+	return position >= 0 && position < len(rule.runtimeParamTypes) &&
+		preparedComparisonTypeIsNumeric(rule.runtimeParamTypes[position].Oid)
+}
+
+func preparedComparisonTypeIsNumeric(typ types.T) bool {
+	return typ == types.T_bit || (types.Type{Oid: typ}).IsNumeric()
 }
 
 func (rule *preparedRuntimeTextComparisonScanRule) paramTypeIsText(position int) bool {
@@ -4041,8 +4156,27 @@ func preparedExprContainsParam(expr *plan.Expr) bool {
 	return false
 }
 
+func canonicalPreparedResultFunctionName(name string) string {
+	if name == "iff" {
+		return "if"
+	}
+	return name
+}
+
+func preparedNumericResultPolymorphicFunction(name string) bool {
+	switch canonicalPreparedResultFunctionName(name) {
+	case "case", "if", "coalesce", "ifnull", "nullif", "greatest", "least",
+		"sum", "avg", "min", "max", "any_value",
+		"first_value", "last_value", "lag", "lead", "nth_value", "max_by", "max_by_non_null":
+		return true
+	default:
+		return false
+	}
+}
+
 func preparedRuntimeSpecializationFunction(name string) bool {
-	if isNumericContextFunction(name) || supportsGenericNumericFunctionContext(name) {
+	if isNumericContextFunction(name) || supportsGenericNumericFunctionContext(name) ||
+		preparedNumericResultPolymorphicFunction(name) {
 		return true
 	}
 	// Result-domain-polymorphic functions must stay on the specialization path
@@ -4050,8 +4184,7 @@ func preparedRuntimeSpecializationFunction(name string) bool {
 	// the type of its first argument, so a binary parameter can change the
 	// result-column type from the prepare-time placeholder domain.
 	switch name {
-	case "case", "greatest", "least", "sum", "avg", "min", "max", "any_value", "max_by", "max_by_non_null",
-		"first_value", "last_value", "lag", "lead", "ntile", "nth_value", "sleep",
+	case "ntile", "sleep",
 		"date_add", "date_sub", "adddate", "subdate", "timestampadd", "timestampdiff",
 		"=", "<=>", "!=", "<>", "<", "<=", ">", ">=",
 		"like", "ilike", "regexp", "not_regexp", "between", "not_between",
@@ -4621,6 +4754,13 @@ type ParamValue struct {
 	// binary-protocol value without being a binary string literal.
 	IsBinaryProtocol bool
 	PrepareParamKind vector.PrepareParamKind
+	// SourceType is the logical type of a SQL EXECUTE USING user variable. It
+	// is deliberately separate from RuntimeType: SQL parameters are transported
+	// through a text vector, and their source type is used only after an
+	// arithmetic consumer establishes a numeric domain. Comparisons keep their
+	// existing common-type and numeric-prefix contracts.
+	SourceType    types.Type
+	HasSourceType bool
 	// RuntimeType is the type advertised by the binary-protocol parameter
 	// binding.  Prepared plans deliberately keep parameter markers as TEXT
 	// while they are cached, so the execute-time copy can use this optional
@@ -5175,6 +5315,9 @@ func exprContainsPreparedPosition(expr *plan.Expr, position int) bool {
 	if param := expr.GetP(); param != nil && param.Pos == int32(position) {
 		return true
 	}
+	if literal := expr.GetLit(); literal != nil && exprContainsPreparedPosition(literal.Src, position) {
+		return true
+	}
 	if fn := expr.GetF(); fn != nil {
 		for _, arg := range fn.Args {
 			if exprContainsPreparedPosition(arg, position) {
@@ -5384,6 +5527,40 @@ func isPositivePreparedInteger(value any) bool {
 // specialized result domain after a scalar subquery is executed separately.
 func PreparedRuntimeParamExpr(ctx context.Context, value any, isBin bool, runtimeType types.Type) (*Expr, error) {
 	return preparedRuntimeParamExpr(ctx, value, isBin, runtimeType)
+}
+
+func preparedSQLExecuteNumericParamExpr(
+	ctx context.Context,
+	value any,
+	isBin bool,
+	sourceType types.Type,
+) (*Expr, error) {
+	source, err := preparedRuntimeParamExpr(ctx, value, isBin, sourceType)
+	if err != nil {
+		return nil, err
+	}
+	if isStringBackedType(sourceType) {
+		if _, ok := function.GetNumericStringPrefix(fmt.Sprintf("%v", value)); !ok {
+			// An entirely non-numeric string must retain the existing cast/error
+			// contract of the prepared expression. The approximate arithmetic
+			// source path only owns strings with a MySQL numeric prefix.
+			return nil, nil
+		}
+		// A SQL string user variable enters arithmetic through MySQL's
+		// approximate numeric-prefix domain. Keep that distinct from a DECIMAL
+		// user variable, even though both arrive in the frontend's text vector.
+		return appendExplicitCastBeforeExpr(ctx, source, makeSimplePlan2Type(types.T_float64))
+	}
+	if sourceType.Oid == types.T_bool {
+		return makePlan2CastExpr(ctx, source, makeSimplePlan2Type(types.T_int64))
+	}
+	if sourceType.Oid == types.T_bit {
+		return makePlan2CastExpr(ctx, source, makeSimplePlan2Type(types.T_uint64))
+	}
+	if sourceType.IsNumeric() || sourceType.Oid == types.T_year {
+		return source, nil
+	}
+	return nil, nil
 }
 
 func preparedRuntimeParamExpr(ctx context.Context, value any, isBin bool, runtimeType types.Type) (*Expr, error) {
@@ -5601,6 +5778,8 @@ func replaceParamValsWithSelection(
 ) (bool, error) {
 	directResultPositions := PreparedPlanDirectResultParamPositions(plan0)
 	params := make([]*Expr, len(paramVals))
+	sqlExecuteNumericParams := make([]*Expr, len(paramVals))
+	sqlExecuteStringBackedParams := make([]bool, len(paramVals))
 	var err error
 	for i, val := range paramVals {
 		if selected != nil && (i >= len(selected) || !selected[i]) {
@@ -5621,6 +5800,20 @@ func replaceParamValsWithSelection(
 			hasRuntimeType = param.HasRuntimeType
 			numericPrefixSource = param.EnableNumericPrefix
 			retainParamRef = param.RetainParamRef
+			if param.HasSourceType && param.Value != nil {
+				sqlExecuteStringBackedParams[i] = isStringBackedType(param.SourceType)
+				sqlExecuteNumericParams[i], err = preparedSQLExecuteNumericParamExpr(
+					ctx, param.Value, param.IsBin, param.SourceType)
+				if err != nil {
+					return false, err
+				}
+				if sqlExecuteNumericParams[i] != nil && (numericPrefixSource || retainParamRef) {
+					attachPreparedRuntimeParamSource(sqlExecuteNumericParams[i], &plan.Expr{
+						Typ:  makePlan2Type(&param.SourceType),
+						Expr: &plan.Expr_P{P: &plan.ParamRef{Pos: int32(i)}},
+					})
+				}
+			}
 		}
 		paramType := plan.Type{Id: int32(types.T_text)}
 		if hasRuntimeType {
@@ -5667,7 +5860,22 @@ func replaceParamValsWithSelection(
 			}
 		}
 	}
+	// LIMIT/OFFSET and LAG/LEAD offset markers have fixed unsigned-integer
+	// contracts. Their assignment-time SQL SourceType must not participate in
+	// result-domain specialization (for example SET @k = 2 may carry DECIMAL
+	// metadata while LIMIT still requires UINT64).
+	fixedIntegerPositions := PreparedPaginationParamPositions(plan0)
+	fixedIntegerPositions = append(fixedIntegerPositions, PreparedLagLeadParamPositions(plan0)...)
+	for _, position := range fixedIntegerPositions {
+		if position >= 0 && int(position) < len(sqlExecuteNumericParams) {
+			sqlExecuteNumericParams[position] = nil
+			sqlExecuteStringBackedParams[position] = false
+		}
+	}
+
 	paramRule := NewResetParamRefRule(ctx, params)
+	paramRule.sqlExecuteNumericParams = sqlExecuteNumericParams
+	paramRule.sqlExecuteStringBackedParams = sqlExecuteStringBackedParams
 	paramRule.setPreparedPlan(plan0)
 	// Keep the original execute-time values and protocol categories on the
 	// rebinding rule.  The plan parameters above intentionally use their
@@ -5683,7 +5891,13 @@ func replaceParamValsWithSelection(
 			continue
 		}
 		param, ok := val.(ParamValue)
-		if !ok || !param.IsBinaryProtocol {
+		if !ok {
+			continue
+		}
+		if !param.IsBinaryProtocol {
+			if param.HasSourceType && isStringBackedType(param.SourceType) {
+				runtimeParamTypes[i] = types.T_text.ToType()
+			}
 			continue
 		}
 		if param.PrepareParamKind == vector.PrepareParamBoolean {

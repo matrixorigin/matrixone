@@ -18,17 +18,18 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"math"
 	"os"
 	"path/filepath"
 	"strings"
 	"sync"
-	"time"
 
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/sqlquote"
 	"github.com/matrixorigin/matrixone/pkg/common/system"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
@@ -59,7 +60,16 @@ type TableConfig struct {
 	// retrieval only; ~half the footprint, FST kept). Sourced from the persisted
 	// position_free algo_param so every build path (create, CDC tail, compact) agrees.
 	PositionFree bool `json:"position_free,omitempty"`
-	FromSource   bool `json:"from_source,omitempty"`
+	// JSONNoKeys is the json word breaker's term shape, sourced from the
+	// persisted algo params so every build path (create, CDC tail, compact)
+	// emits identical terms.
+	//
+	// It is INVERTED on purpose. Keys are ON by default, so the zero value of a
+	// TableConfig has to mean "keys on": a plain `bool IncludeKeys` would make
+	// any config that forgot to set it silently emit no tuple terms at all,
+	// which is exactly the kind of half-built index this design guards against.
+	JSONNoKeys bool `json:"json_no_keys,omitempty"`
+	FromSource bool `json:"from_source,omitempty"`
 	// IncludeTypes is the INCLUDE columns' types.T in column order. The build SQL passes the
 	// INCLUDE source columns as the trailing fulltext2_create args (after the text columns),
 	// so the TVF knows how many trailing argVecs are INCLUDE values (vs text) and their types
@@ -319,66 +329,9 @@ func checkBaseLoadBudget(sqlproc *sqlexec.SqlProcess, cfg TableConfig) error {
 // suggests, but MERGE must load the bases to reclaim dead docs. The query path calls
 // the guard itself (Fulltext2Search.Load); MERGE stays exempt so it can always run.
 func LoadAllBases(sqlproc *sqlexec.SqlProcess, cfg TableConfig) ([]*Segment, error) {
-	return loadAllBasesUncached(sqlproc, cfg, nil)
-}
-
-func loadAllBasesUncached(sqlproc *sqlexec.SqlProcess, cfg TableConfig, trace *loadTrace) ([]*Segment, error) {
 	idSQL := fmt.Sprintf("SELECT %s FROM %s",
 		catalog.FullText2Index_TblCol_Metadata_Index_Id, sqlquote.QualifiedIdent(cfg.DbName, cfg.MetadataTable))
-	var sqlStart time.Time
-	if trace != nil {
-		sqlStart = time.Now()
-	}
 	res, err := runSql(sqlproc, idSQL)
-	if trace != nil {
-		trace.addInternalSQL(time.Since(sqlStart))
-	}
-	if err != nil {
-		return nil, err
-	}
-	var ids []string
-	for _, bat := range res.Batches {
-		if bat == nil {
-			continue
-		}
-		for i := 0; i < bat.RowCount(); i++ {
-			ids = append(ids, bat.Vecs[0].GetStringAt(i))
-		}
-	}
-	res.Close()
-	bases := make([]*Segment, 0, len(ids))
-	for _, id := range ids {
-		m, lerr := loadFromStorage(sqlproc, cfg, id, trace)
-		if lerr != nil {
-			freeSegs(bases)
-			return nil, lerr
-		}
-		bases = append(bases, m)
-	}
-	return bases, nil
-}
-
-func loadAllBases(sqlproc *sqlexec.SqlProcess, cfg TableConfig, trace *loadTrace, generation loadGeneration) ([]*Segment, error) {
-	indexKey := cfg.DbName + "." + cfg.IndexTable
-	committed := false
-	defer func() {
-		if !committed {
-			// A later base can fail after earlier segments have been acquired.
-			// Roll back only claims held by this load; another generation may have
-			// reused or committed the same immutable base in the meantime.
-			loadedBasePool.rollback(generation.owner)
-		}
-	}()
-	idSQL := fmt.Sprintf("SELECT %s FROM %s",
-		catalog.FullText2Index_TblCol_Metadata_Index_Id, sqlquote.QualifiedIdent(cfg.DbName, cfg.MetadataTable))
-	var sqlStart time.Time
-	if trace != nil {
-		sqlStart = time.Now()
-	}
-	res, err := runSql(sqlproc, idSQL)
-	if trace != nil {
-		trace.addInternalSQL(time.Since(sqlStart))
-	}
 	if err != nil {
 		return nil, err
 	}
@@ -394,32 +347,8 @@ func loadAllBases(sqlproc *sqlexec.SqlProcess, cfg TableConfig, trace *loadTrace
 	res.Close()
 
 	bases := make([]*Segment, 0, len(ids))
-	used := make(map[baseKey]struct{}, len(ids))
 	for _, id := range ids {
-		var metaStart time.Time
-		if trace != nil {
-			metaStart = time.Now()
-		}
-		checksum, filesize, recency, found, lerr := readMetadata(sqlproc, cfg, id)
-		if trace != nil {
-			trace.addInternalSQL(time.Since(metaStart))
-		}
-		if lerr != nil {
-			freeSegs(bases)
-			return nil, lerr
-		}
-		if !found {
-			freeSegs(bases)
-			return nil, moerr.NewInternalError(sqlproc.GetContext(), fmt.Sprintf("fulltext2 index %s metadata not found", id))
-		}
-		if filesize <= 0 {
-			freeSegs(bases)
-			return nil, moerr.NewInternalError(sqlproc.GetContext(), fmt.Sprintf("fulltext2 index %s has empty filesize", id))
-		}
-		key := baseKey{index: indexKey, id: id, checksum: checksum, filesize: filesize}
-		m, lerr := loadedBasePool.acquireOwned(sqlproc.GetContext(), key, func() (*Segment, error) {
-			return loadFromStorageMetadata(sqlproc, cfg, id, checksum, filesize, recency, trace)
-		}, recency, generation.owner)
+		m, lerr := LoadFromStorage(sqlproc, cfg, id)
 		if lerr != nil {
 			// Free the segments already mapped this call before bailing: each owns an
 			// mmap (+ a linked /tmp spill file on the fallback path), so returning without
@@ -429,19 +358,7 @@ func loadAllBases(sqlproc *sqlexec.SqlProcess, cfg TableConfig, trace *loadTrace
 			return nil, lerr
 		}
 		bases = append(bases, m)
-		used[key] = struct{}{}
 	}
-	if !loadGenerationCurrent(generation) {
-		loadedBasePool.rollback(generation.owner)
-	} else {
-		published := loadedBasePool.commitOwnedIfCurrent(indexKey, used, generation.owner, func() bool {
-			return loadGenerationCurrent(generation)
-		})
-		if !published {
-			loadedBasePool.rollback(generation.owner)
-		}
-	}
-	committed = true
 	return bases, nil
 }
 
@@ -449,18 +366,7 @@ func loadAllBases(sqlproc *sqlexec.SqlProcess, cfg TableConfig, trace *loadTrace
 // and deserializes it. Chunks stream by chunk_id offset into a temp file so the
 // mpool never holds the whole index.
 func LoadFromStorage(sqlproc *sqlexec.SqlProcess, cfg TableConfig, id string) (*Segment, error) {
-	return loadFromStorage(sqlproc, cfg, id, nil)
-}
-
-func loadFromStorage(sqlproc *sqlexec.SqlProcess, cfg TableConfig, id string, trace *loadTrace) (*Segment, error) {
-	var sqlStart time.Time
-	if trace != nil {
-		sqlStart = time.Now()
-	}
 	checksum, filesize, recency, found, err := readMetadata(sqlproc, cfg, id)
-	if trace != nil {
-		trace.addInternalSQL(time.Since(sqlStart))
-	}
 	if err != nil {
 		return nil, err
 	}
@@ -469,13 +375,6 @@ func loadFromStorage(sqlproc *sqlexec.SqlProcess, cfg TableConfig, id string, tr
 	}
 	if filesize <= 0 {
 		return nil, moerr.NewInternalError(sqlproc.GetContext(), fmt.Sprintf("fulltext2 index %s has empty filesize", id))
-	}
-	return loadFromStorageMetadata(sqlproc, cfg, id, checksum, filesize, recency, trace)
-}
-
-func loadFromStorageMetadata(sqlproc *sqlexec.SqlProcess, cfg TableConfig, id, checksum string, filesize, recency int64, trace *loadTrace) (*Segment, error) {
-	if trace != nil {
-		trace.addBaseBytes(filesize)
 	}
 
 	// Materialize the segment on the fast LOCAL (SSD) fileservice so mmap page faults
@@ -496,20 +395,13 @@ func loadFromStorageMetadata(sqlproc *sqlexec.SqlProcess, cfg TableConfig, id, c
 		cleanup()
 		return nil, err
 	}
-	if err = streamChunksToFile(sqlproc, cfg, id, filesize, fp, trace); err != nil {
+	if err = streamChunksToFile(sqlproc, cfg, id, filesize, fp); err != nil {
 		cleanup()
 		return nil, err
 	}
 	// mmap the file read-only (shared across queries; FST + positions are views into
 	// it, page-cache-backed). The fd is not needed once mapped.
-	var mmapStart time.Time
-	if trace != nil {
-		mmapStart = time.Now()
-	}
 	data, err := mmapReadOnly(fp)
-	if trace != nil {
-		trace.addMmap(time.Since(mmapStart))
-	}
 	fp.Close()
 	if err != nil {
 		if path != "" {
@@ -518,15 +410,7 @@ func loadFromStorageMetadata(sqlproc *sqlexec.SqlProcess, cfg TableConfig, id, c
 		return nil, err
 	}
 	// Checksum the mapped bytes (the anonymous SSD file has no path to CheckSum).
-	var checksumStart time.Time
-	if trace != nil {
-		checksumStart = time.Now()
-	}
-	actualChecksum := vectorindex.CheckSumFromBuffer(data)
-	if trace != nil {
-		trace.addChecksum(time.Since(checksumStart))
-	}
-	if actualChecksum != checksum {
+	if vectorindex.CheckSumFromBuffer(data) != checksum {
 		_ = munmap(data)
 		if path != "" {
 			os.Remove(path)
@@ -630,38 +514,20 @@ func createLocalTempFile(sqlproc *sqlexec.SqlProcess, name string) (*os.File, st
 // gates an INCREMENTAL load. The 0.8 headroom absorbs the (small) transient query-mpool
 // usage the formula omits.
 func checkTailLoadBudget(sqlproc *sqlexec.SqlProcess, cfg TableConfig) error {
-	return checkTailLoadBudgetAfter(sqlproc, cfg, -1, nil)
-}
-
-func checkTailLoadBudgetAfter(sqlproc *sqlexec.SqlProcess, cfg TableConfig, after int64, trace *loadTrace) error {
-	where := fmt.Sprintf("%s = %s AND %s = %d",
+	// CAST AS SIGNED is load-bearing: SUM over an integer expression yields
+	// DECIMAL128, and the result is read as an int64 below. Without the cast the
+	// read reinterprets decimal bytes as an int64 — a garbage budget in a normal
+	// build, and a CN-killing panic in a type-checked one.
+	sql := fmt.Sprintf("SELECT CAST(COALESCE(SUM(LENGTH(%s)), 0) AS SIGNED) FROM %s WHERE %s = %s AND %s = %d",
+		catalog.FullText2Index_TblCol_Storage_Data, sqlquote.QualifiedIdent(cfg.DbName, cfg.IndexTable),
 		catalog.FullText2Index_TblCol_Storage_Index_Id, sqlquote.String(vectorindex.CdcTailId),
 		catalog.FullText2Index_TblCol_Storage_Tag, int(vectorindex.Tag_CdcEvents))
-	if after >= 0 {
-		where += fmt.Sprintf(" AND %s > %d", catalog.FullText2Index_TblCol_Storage_Chunk_Id, after)
-	}
-	sql := fmt.Sprintf("SELECT COALESCE(SUM(LENGTH(%s)), 0) FROM %s WHERE %s",
-		catalog.FullText2Index_TblCol_Storage_Data, sqlquote.QualifiedIdent(cfg.DbName, cfg.IndexTable),
-		where)
-	var sqlStart time.Time
-	if trace != nil {
-		sqlStart = time.Now()
-	}
 	res, err := runSql(sqlproc, sql)
-	if trace != nil {
-		trace.addInternalSQL(time.Since(sqlStart))
-	}
 	if err != nil {
 		return err
 	}
 	defer res.Close()
-	var need int64
-	for _, bat := range res.Batches {
-		if bat == nil || bat.RowCount() == 0 {
-			continue
-		}
-		need = vector.GetFixedAtNoTypeCheck[int64](bat.Vecs[0], 0)
-	}
+	need := resultScalarInt64(res)
 	// LoadTailSegments holds SEVERAL full copies of the tail bytes at once — the raw
 	// per-chunk []byte copies, the reassembled per-frame buffers, and the Deserialized
 	// segments — so the real peak is a multiple of the stored bytes, not 1x. Scale the
@@ -685,71 +551,42 @@ func checkTailLoadBudgetAfter(sqlproc *sqlexec.SqlProcess, cfg TableConfig, afte
 // Recency = the frame's first chunk_id). Delete frames are folded into the pk
 // tombstone map. Empty tail → (nil, nil, nil).
 func LoadTailSegments(sqlproc *sqlexec.SqlProcess, cfg TableConfig) ([]*Segment, map[any]int64, error) {
-	return loadTailSegments(sqlproc, cfg, nil)
-}
-
-func loadTailSegments(sqlproc *sqlexec.SqlProcess, cfg TableConfig, trace *loadTrace) ([]*Segment, map[any]int64, error) {
-	segs, deletes, _, err := loadTailSegmentsAfter(sqlproc, cfg, -1, trace)
-	return segs, deletes, err
-}
-
-func loadTailSegmentsAfter(sqlproc *sqlexec.SqlProcess, cfg TableConfig, after int64, trace *loadTrace) ([]*Segment, map[any]int64, int64, error) {
 	// Fail fast if the tail can't fit in the memory budget, rather than letting it
 	// OOM-kill the CN as it decodes into the Go heap.
-	if err := checkTailLoadBudgetAfter(sqlproc, cfg, after, trace); err != nil {
-		return nil, nil, 0, err
+	if err := checkTailLoadBudget(sqlproc, cfg); err != nil {
+		return nil, nil, err
 	}
-	where := fmt.Sprintf("%s = %s AND %s = %d",
-		catalog.FullText2Index_TblCol_Storage_Index_Id, sqlquote.String(vectorindex.CdcTailId),
-		catalog.FullText2Index_TblCol_Storage_Tag, int(vectorindex.Tag_CdcEvents))
-	if after >= 0 {
-		where += fmt.Sprintf(" AND %s > %d", catalog.FullText2Index_TblCol_Storage_Chunk_Id, after)
-	}
-	sql := fmt.Sprintf("SELECT %s, %s FROM %s WHERE %s",
+	sql := fmt.Sprintf("SELECT %s, %s FROM %s WHERE %s = %s AND %s = %d",
 		catalog.FullText2Index_TblCol_Storage_Chunk_Id, catalog.FullText2Index_TblCol_Storage_Data,
 		sqlquote.QualifiedIdent(cfg.DbName, cfg.IndexTable),
-		where)
-	var sqlStart time.Time
-	if trace != nil {
-		sqlStart = time.Now()
-	}
+		catalog.FullText2Index_TblCol_Storage_Index_Id, sqlquote.String(vectorindex.CdcTailId),
+		catalog.FullText2Index_TblCol_Storage_Tag, int(vectorindex.Tag_CdcEvents))
 	res, err := runSql(sqlproc, sql)
-	if trace != nil {
-		trace.addInternalSQL(time.Since(sqlStart))
-	}
 	if err != nil {
-		return nil, nil, 0, err
+		return nil, nil, err
 	}
 	var chunks []TailChunk
-	maxChunk := after
 	for _, bat := range res.Batches {
 		if bat == nil {
 			continue
 		}
 		cids := vector.MustFixedColNoTypeCheck[int64](bat.Vecs[0])
 		for i := 0; i < bat.RowCount(); i++ {
-			data := bat.Vecs[1].GetRawBytesAt(i)
-			if trace != nil {
-				trace.addTailBytes(int64(len(data)))
-			}
-			if cids[i] > maxChunk {
-				maxChunk = cids[i]
-			}
-			chunks = append(chunks, TailChunk{ChunkId: cids[i], Data: append([]byte(nil), data...)})
+			chunks = append(chunks, TailChunk{ChunkId: cids[i], Data: append([]byte(nil), bat.Vecs[1].GetRawBytesAt(i)...)})
 		}
 	}
 	res.Close()
 	if len(chunks) == 0 {
-		return nil, nil, maxChunk, nil
+		return nil, nil, nil
 	}
 
 	ordered, err := orderTailChunks(chunks)
 	if err != nil {
-		return nil, nil, 0, err
+		return nil, nil, err
 	}
 	frames, err := reassembleFrames(ordered)
 	if err != nil {
-		return nil, nil, 0, err
+		return nil, nil, err
 	}
 
 	var segs []*Segment
@@ -758,14 +595,14 @@ func loadTailSegmentsAfter(sqlproc *sqlexec.SqlProcess, cfg TableConfig, after i
 		records, _, nInserts, nDeletes, _, uerr := cuvscdc.UnframeCdcChunk(f.Data)
 		if uerr != nil {
 			freeSegs(segs)
-			return nil, nil, 0, uerr
+			return nil, nil, uerr
 		}
 		switch {
 		case nInserts > 0:
 			seg, derr := Deserialize(fmt.Sprintf("tail-%d", f.ChunkId), bytes.NewReader(records))
 			if derr != nil {
 				freeSegs(segs)
-				return nil, nil, 0, derr
+				return nil, nil, derr
 			}
 			seg.Recency = f.ChunkId
 			segs = append(segs, seg)
@@ -773,22 +610,22 @@ func loadTailSegmentsAfter(sqlproc *sqlexec.SqlProcess, cfg TableConfig, after i
 			recs, derr := DecodeDeleteLog(records)
 			if derr != nil {
 				freeSegs(segs)
-				return nil, nil, 0, derr
+				return nil, nil, derr
 			}
 			deletes = foldDeleteFrame(deletes, recs, f.ChunkId)
 		}
 	}
-	return segs, deletes, maxChunk, nil
+	return segs, deletes, nil
 }
 
 // streamChunksToFile streams a tag=0 index's chunk rows, writing each at
 // chunk_id*MaxChunkSize into fp; the assembled bytes must fill filesize exactly.
-func streamChunksToFile(sqlproc *sqlexec.SqlProcess, cfg TableConfig, id string, filesize int64, fp *os.File, trace *loadTrace) error {
+func streamChunksToFile(sqlproc *sqlexec.SqlProcess, cfg TableConfig, id string, filesize int64, fp *os.File) error {
 	sql := fmt.Sprintf("SELECT %s, %s FROM %s WHERE %s = %s",
 		catalog.FullText2Index_TblCol_Storage_Chunk_Id, catalog.FullText2Index_TblCol_Storage_Data,
 		sqlquote.QualifiedIdent(cfg.DbName, cfg.IndexTable),
 		catalog.FullText2Index_TblCol_Storage_Index_Id, sqlquote.String(id))
-	written, _, err := streamChunkRowsToFile(sqlproc, sql, 0, filesize, fp, trace)
+	written, _, err := streamChunkRowsToFile(sqlproc, sql, 0, filesize, fp)
 	if err != nil {
 		return err
 	}
@@ -802,7 +639,7 @@ func streamChunksToFile(sqlproc *sqlexec.SqlProcess, cfg TableConfig, id string,
 // streamChunkRowsToFile streams the (chunk_id, data) rows of sql and writes each
 // at (chunk_id-baseChunk)*MaxChunkSize into fp, bounding the mpool to the stream
 // buffer. Returns bytes written + chunk-row count.
-func streamChunkRowsToFile(sqlproc *sqlexec.SqlProcess, sql string, baseChunk, bound int64, fp *os.File, trace *loadTrace) (written, nchunks int64, err error) {
+func streamChunkRowsToFile(sqlproc *sqlexec.SqlProcess, sql string, baseChunk, bound int64, fp *os.File) (written, nchunks int64, err error) {
 	streamCh := make(chan executor.Result, 2)
 	errorCh := make(chan error, 2)
 	ctx, cancel := context.WithCancelCause(sqlproc.GetTopContext())
@@ -815,15 +652,8 @@ func streamChunkRowsToFile(sqlproc *sqlexec.SqlProcess, sql string, baseChunk, b
 			close(streamCh)
 			wg.Done()
 		}()
-		var sqlStart time.Time
-		if trace != nil {
-			sqlStart = time.Now()
-		}
 		if _, e := runStreamingSql(ctx, sqlproc, sql, streamCh, errorCh); e != nil {
 			errorCh <- e
-		}
-		if trace != nil {
-			trace.addInternalSQL(time.Since(sqlStart))
 		}
 	}()
 
@@ -860,16 +690,9 @@ func streamChunkRowsToFile(sqlproc *sqlexec.SqlProcess, sql string, baseChunk, b
 						break
 					}
 					seen[cid] = struct{}{}
-					var writeStart time.Time
-					if trace != nil {
-						writeStart = time.Now()
-					}
 					if _, e := fp.WriteAt(data, off); e != nil {
 						loopErr = e
 						break
-					}
-					if trace != nil {
-						trace.addTempWrite(time.Since(writeStart))
 					}
 					written += int64(len(data))
 					nchunks++
@@ -967,7 +790,7 @@ func resultScalarInt64(res executor.Result) int64 {
 		if bat == nil || bat.RowCount() == 0 {
 			continue
 		}
-		return vector.GetFixedAtNoTypeCheck[int64](bat.Vecs[0], 0)
+		return scalarInt64(bat.Vecs[0])
 	}
 	return 0
 }
@@ -1035,7 +858,8 @@ func CountTailChunks(sqlproc *sqlexec.SqlProcess, cfg TableConfig) (int64, error
 // SumBaseNrow sums metadata.nrow over the tag=0 bases — the base doc count for the
 // dead-doc estimate (compared to the live source row count).
 func SumBaseNrow(sqlproc *sqlexec.SqlProcess, cfg TableConfig) (int64, error) {
-	sql := fmt.Sprintf("SELECT COALESCE(SUM(%s), 0) FROM %s",
+	// CAST AS SIGNED: SUM yields DECIMAL128, and scanInt64 reads an int64.
+	sql := fmt.Sprintf("SELECT CAST(COALESCE(SUM(%s), 0) AS SIGNED) FROM %s",
 		catalog.FullText2Index_TblCol_Metadata_Nrow, sqlquote.QualifiedIdent(cfg.DbName, cfg.MetadataTable))
 	return scanInt64(sqlproc, sql)
 }
@@ -1046,12 +870,32 @@ func scanInt64(sqlproc *sqlexec.SqlProcess, sql string) (int64, error) {
 		return 0, err
 	}
 	defer res.Close()
-	for _, bat := range res.Batches {
-		if bat != nil && bat.RowCount() > 0 {
-			return vector.GetFixedAtNoTypeCheck[int64](bat.Vecs[0], 0), nil
-		}
+	return resultScalarInt64(res), nil
+}
+
+// scalarInt64 reads a one-row aggregate as an int64 without trusting the result
+// type. COUNT is int64 but SUM is DECIMAL128, and every call site here casts in
+// SQL to keep them uniform — this is the backstop for the one that forgets,
+// because the NoTypeCheck read it replaces reinterprets the bytes instead of
+// failing, and panics outright in a type-checked build.
+func scalarInt64(vec *vector.Vector) int64 {
+	if vec == nil || vec.Length() == 0 || vec.IsNull(0) {
+		return 0
 	}
-	return 0, nil
+	switch vec.GetType().Oid {
+	case types.T_int64:
+		return vector.GetFixedAtNoTypeCheck[int64](vec, 0)
+	case types.T_decimal128:
+		d := vector.GetFixedAtNoTypeCheck[types.Decimal128](vec, 0)
+		// the aggregates read here are byte/row counts with scale 0; a value
+		// beyond int64 is not a real budget, so saturate rather than wrap
+		if d.B64_127 != 0 || d.B0_63 > math.MaxInt64 {
+			return math.MaxInt64
+		}
+		return int64(d.B0_63)
+	default:
+		return 0
+	}
 }
 
 // FrameChunkCount is how many MaxChunkSize storage rows a frame of frameLen bytes

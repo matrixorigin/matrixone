@@ -65,6 +65,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
+	"github.com/matrixorigin/matrixone/pkg/util/fault"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/idxcron"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
@@ -221,7 +222,7 @@ func (s *Scope) DropDatabase(c *Compile) error {
 	}
 	if c.proc.Base.IsFrontend && !needSkipDbs[dbName] {
 		generation := uint64(c.proc.GetTxnOperator().SnapshotTS().PhysicalTime)
-		if err = c.enqueueViewsAfterDatabaseRemoval(accountId, droppedDatabaseID, generation); err != nil {
+		if err = c.enqueueViewsAfterDatabaseRemoval(dbName, accountId, droppedDatabaseID, generation); err != nil {
 			return err
 		}
 		if err = c.deleteDroppedDatabaseViewMetadata(accountId, droppedDatabaseID, dbName); err != nil {
@@ -2256,10 +2257,18 @@ func (c *Compile) maybeInsertIcebergTableMapping(dbSource engine.Database, rel e
 	if err != nil || dbID == 0 {
 		return moerr.NewInternalErrorf(c.proc.Ctx, "invalid database id for iceberg mapping: %s", dbIDText)
 	}
-	catalogID, err := c.lookupIcebergCatalogID(accountID, env.Catalog)
+	// Keep the catalog row locked in the outer CREATE TABLE transaction until
+	// the mapping is inserted.  DROP ICEBERG CATALOG uses this same row as its
+	// lifecycle lock, so it cannot delete a catalog between this validation and
+	// publication of a new mapping.
+	catalogID, err := c.lookupIcebergCatalogIDForUpdate(accountID, env.Catalog)
 	if err != nil {
 		return err
 	}
+	// This is inert unless an operator explicitly enables the named fault point.
+	// The E2E race test uses it to pause CREATE after the lifecycle lock is held
+	// without adding file-system polling or an environment-controlled wait to DDL.
+	fault.TriggerFaultWithContext(c.proc.Ctx, icebergCreateMappingAfterCatalogLockFault)
 
 	mapping := model.TableMapping{
 		AccountID:            accountID,
@@ -2279,9 +2288,11 @@ func (c *Compile) maybeInsertIcebergTableMapping(dbSource engine.Database, rel e
 	)
 }
 
-func (c *Compile) lookupIcebergCatalogID(accountID uint32, catalogName string) (uint64, error) {
+const icebergCreateMappingAfterCatalogLockFault = "iceberg-create-mapping-after-catalog-lock"
+
+func (c *Compile) lookupIcebergCatalogIDForUpdate(accountID uint32, catalogName string) (uint64, error) {
 	res, err := c.runSqlWithResultAndOptions(
-		sqliceberg.GetCatalogByNameSQL(accountID, catalogName),
+		sqliceberg.GetCatalogByNameForUpdateSQL(accountID, catalogName),
 		NoAccountId,
 		executor.StatementOption{}.WithDisableLog(),
 	)
@@ -4003,7 +4014,7 @@ func (s *Scope) dropTableSingle(c *Compile, qry *plan.DropTable) error {
 			return err
 		}
 		if isView {
-			if err = c.deleteDroppedViewMetadata(droppedRelationID); err != nil {
+			if err = c.deleteDroppedViewMetadata(dbName, droppedRelationID); err != nil {
 				return err
 			}
 		}
@@ -5599,16 +5610,23 @@ func (s *Scope) CreatePitr(c *Compile) error {
 
 	var needInsertSysPitr = true
 	var needUpdateSysPitr = false
+	var mergedSysPitrLength = uint64(createPitr.GetPitrValue())
+	var mergedSysPitrUnit = createPitr.GetPitrUnit()
 	if len(sysRes.Batches) > 0 && sysRes.Batches[0].RowCount() > 0 {
 		// sys_mo_catalog_pitr exists
-		needInsertSysPitr, needUpdateSysPitr, err = CheckSysMoCatalogPitrResult(c.proc.Ctx, sysRes.Batches[0].Vecs, uint64(createPitr.GetPitrValue()), createPitr.GetPitrUnit())
+		needInsertSysPitr, needUpdateSysPitr, mergedSysPitrLength, mergedSysPitrUnit, err = CheckSysMoCatalogPitrResult(
+			c.proc.Ctx,
+			sysRes.Batches[0].Vecs,
+			uint64(createPitr.GetPitrValue()),
+			createPitr.GetPitrUnit(),
+		)
 		if err != nil {
 			return err
 		}
 	}
 
 	if needUpdateSysPitr {
-		updateSql := fmt.Sprintf("UPDATE mo_catalog.mo_pitr SET pitr_length = %d, pitr_unit = '%s' WHERE pitr_name = '%s'", createPitr.GetPitrValue(), createPitr.GetPitrUnit(), sysMoCatalogPitr)
+		updateSql := fmt.Sprintf("UPDATE mo_catalog.mo_pitr SET pitr_length = %d, pitr_unit = '%s' WHERE pitr_name = '%s'", mergedSysPitrLength, mergedSysPitrUnit, sysMoCatalogPitr)
 		err = c.runSqlWithAccountIdAndOptions(updateSql, sysAccountId, executor.StatementOption{}.WithDisableLog())
 		if err != nil {
 			return err
@@ -5717,23 +5735,6 @@ func (c *Compile) resolveCurrentPitrObjectID(createPitr *plan.CreatePitr) (uint6
 		return rel.GetTableID(ctx), nil
 	default:
 		return 0, moerr.NewInternalErrorf(ctx, "invalid pitr level %d", createPitr.GetLevel())
-	}
-}
-
-// addTimeSpan returns the UTC time that is 'length' units before now, where unit is one of "h", "d", "mo", "y"
-func addTimeSpan(length int, unit string) (time.Time, error) {
-	now := time.Now().UTC()
-	switch unit {
-	case "h":
-		return now.Add(time.Duration(-length) * time.Hour), nil
-	case "d":
-		return now.AddDate(0, 0, -length), nil
-	case "mo":
-		return now.AddDate(0, -length, 0), nil
-	case "y":
-		return now.AddDate(-length, 0, 0), nil
-	default:
-		return time.Time{}, moerr.NewInternalErrorNoCtxf("unknown unit '%s'", unit)
 	}
 }
 
@@ -5852,15 +5853,22 @@ func getSqlForCheckDupPitrFormat(accountId uint32, objId uint64) string {
 //
 //	needInsert: true if sys_mo_catalog_pitr does not exist
 //	needUpdate: true if it exists and needs update
-//	oldLength, oldUnit: the old values if exist (for debug)
+//	mergedLength, mergedUnit: a future-stable range covering old and new values
 //	err: error if any
-func CheckSysMoCatalogPitrResult(ctx context.Context, vecs []*vector.Vector, newLength uint64, newUnit string) (needInsert, needUpdate bool, err error) {
+func CheckSysMoCatalogPitrResult(
+	ctx context.Context,
+	vecs []*vector.Vector,
+	newLength uint64,
+	newUnit string,
+) (needInsert, needUpdate bool, mergedLength uint64, mergedUnit string, err error) {
 	needInsert = true
 	needUpdate = false
+	mergedLength = newLength
+	mergedUnit = newUnit
 	var oldLength uint64
 	oldUnit := ""
 	if len(vecs) < 2 {
-		return false, false, moerr.NewInternalErrorf(ctx, "unexpected sys_mo_catalog_pitr result columns")
+		return false, false, 0, "", moerr.NewInternalErrorf(ctx, "unexpected sys_mo_catalog_pitr result columns")
 	}
 	if vecs[0].Length() > 0 {
 		col := vector.MustFixedColNoTypeCheck[uint64](vecs[0])
@@ -5872,20 +5880,28 @@ func CheckSysMoCatalogPitrResult(ctx context.Context, vecs []*vector.Vector, new
 	}
 	if vecs[0].Length() > 0 && vecs[1].Length() > 0 {
 		needInsert = false
-		// Compare time ranges
-		oldMinTs, err1 := addTimeSpan(int(oldLength), oldUnit)
-		if err1 != nil {
-			return false, false, err1
+		if oldLength > 100 || newLength > 100 {
+			return false, false, 0, "", moerr.NewInvalidInputf(
+				ctx,
+				"invalid PITR lengths %d and %d",
+				oldLength,
+				newLength,
+			)
 		}
-		newMinTs, err2 := addTimeSpan(int(newLength), newUnit)
-		if err2 != nil {
-			return false, false, err2
+		merged, unit, mergeErr := databranchutils.MergePitrRetentionRanges(
+			int(oldLength),
+			oldUnit,
+			int(newLength),
+			newUnit,
+		)
+		if mergeErr != nil {
+			return false, false, 0, "", mergeErr
 		}
-		if newMinTs.UnixNano() < oldMinTs.UnixNano() {
-			needUpdate = true
-		}
+		mergedLength = uint64(merged)
+		mergedUnit = unit
+		needUpdate = mergedLength != oldLength || mergedUnit != oldUnit
 	}
-	return needInsert, needUpdate, nil
+	return needInsert, needUpdate, mergedLength, mergedUnit, nil
 }
 
 func getSqlForCheckPitrExists(pitrName string, accountId uint32) string {

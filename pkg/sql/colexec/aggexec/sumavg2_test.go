@@ -166,25 +166,32 @@ func checkVecAll(vec *vector.Vector, expected []expectedResult) error {
 	return nil
 }
 
-func requireSingleAggResultEqual(t *testing.T, mp *mpool.MPool, left, right AggFuncExec) {
+func requireSingleAggResultEqual(t *testing.T, mp *mpool.MPool, left, right AggFuncExec, wantErr string) {
 	t.Helper()
 
-	leftResults, err := left.Flush()
-	require.NoError(t, err)
+	leftResults, leftErr := left.Flush()
 	defer func() {
 		for _, result := range leftResults {
 			result.Free(mp)
 		}
 	}()
-
-	rightResults, err := right.Flush()
-	require.NoError(t, err)
+	rightResults, rightErr := right.Flush()
 	defer func() {
 		for _, result := range rightResults {
 			result.Free(mp)
 		}
 	}()
 
+	if wantErr != "" {
+		require.Nil(t, leftResults)
+		require.Nil(t, rightResults)
+		require.ErrorContains(t, leftErr, wantErr)
+		require.ErrorContains(t, rightErr, wantErr)
+		return
+	}
+
+	require.NoError(t, leftErr)
+	require.NoError(t, rightErr)
 	require.Len(t, leftResults, 1)
 	require.Len(t, rightResults, 1)
 	require.Equal(t, leftResults[0].Length(), rightResults[0].Length())
@@ -384,7 +391,48 @@ func TestSumAvgBulkFillPreservesBatchFillOverflowSemantics(t *testing.T) {
 
 			require.NoError(t, batch.BatchFill(0, []uint64{1, 1, 1}, []*vector.Vector{delta}))
 			require.NoError(t, bulk.BulkFill(0, []*vector.Vector{delta}))
-			requireSingleAggResultEqual(t, mp, batch, bulk)
+			requireSingleAggResultEqual(t, mp, batch, bulk, "")
+		})
+	}
+}
+
+func TestAvgDecimal256FinalizationPrecisionOverflow(t *testing.T) {
+	param := types.New(types.T_decimal256, 65, 10)
+	testCases := []struct {
+		name  string
+		value string
+	}{
+		{
+			name:  "positive",
+			value: "100000000000000000000000000000000000000000000000000000.0000000000",
+		},
+		{
+			name:  "negative",
+			value: "-100000000000000000000000000000000000000000000000000000.0000000000",
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			mp := mpool.MustNewZero()
+			value, err := types.ParseDecimal256(tc.value, param.Width, param.Scale)
+			require.NoError(t, err)
+
+			vec := buildDecimal256Vector(t, mp, param, nil, []types.Decimal256{value})
+			defer vec.Free(mp)
+			exec := makeAvgExec(t, mp, param)
+			defer exec.Free()
+			require.NoError(t, exec.GroupGrow(1))
+			require.NoError(t, exec.BatchFill(0, []uint64{1}, []*vector.Vector{vec}))
+
+			results, err := exec.Flush()
+			defer func() {
+				for _, result := range results {
+					result.Free(mp)
+				}
+			}()
+			require.Nil(t, results)
+			require.ErrorContains(t, err, "Decimal256(65,12)")
 		})
 	}
 }
@@ -409,12 +457,13 @@ func TestSumAvgDecimal256BulkFillPreservesBatchFillOverflowSemantics(t *testing.
 	defer delta.Free(mp)
 
 	testCases := []struct {
-		name  string
-		isSum bool
-		aggID int64
+		name       string
+		isSum      bool
+		aggID      int64
+		flushError string
 	}{
-		{"sum", true, AggIdOfSum},
-		{"avg", false, AggIdOfAvg},
+		{name: "sum", isSum: true, aggID: AggIdOfSum},
+		{name: "avg", aggID: AggIdOfAvg, flushError: "Decimal256 Div overflow"},
 	}
 
 	for _, tc := range testCases {
@@ -431,7 +480,7 @@ func TestSumAvgDecimal256BulkFillPreservesBatchFillOverflowSemantics(t *testing.
 
 			require.NoError(t, batch.BatchFill(0, []uint64{1, 1, 1}, []*vector.Vector{delta}))
 			require.NoError(t, bulk.BulkFill(0, []*vector.Vector{delta}))
-			requireSingleAggResultEqual(t, mp, batch, bulk)
+			requireSingleAggResultEqual(t, mp, batch, bulk, tc.flushError)
 		})
 	}
 }

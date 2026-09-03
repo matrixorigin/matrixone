@@ -2697,6 +2697,63 @@ func TestPreparedFloatingPointBinaryProtocolMetadata(t *testing.T) {
 	}
 }
 
+func TestPreparedBinaryStringResultMetadata(t *testing.T) {
+	ctx := context.TODO()
+	tests := []struct {
+		name   string
+		sql    string
+		typ    defines.MysqlType
+		length uint32
+	}{
+		{name: "default char is binary", sql: "select char(65, 66) as result", typ: defines.MYSQL_TYPE_VAR_STRING, length: 8},
+		{name: "bounded binary repeat", sql: "select repeat(X'61', 2) as result", typ: defines.MYSQL_TYPE_VAR_STRING, length: 2},
+		{name: "constant pad bounds blob", sql: "select lpad(cast(X'61' as blob), 2, X'62') as result", typ: defines.MYSQL_TYPE_VAR_STRING, length: 8},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			conn := &prepareResponseCaptureConn{}
+			proto, _, prepareStmt := newBinaryPrepareProtocolTestCaseWithConn(t, test.sql, conn)
+			proto.capability &^= CLIENT_DEPRECATE_EOF
+			require.NoError(t, proto.SendPrepareResponse(ctx, prepareStmt))
+
+			packets := splitProtocolPackets(t, conn.writes)
+			require.Len(t, packets, 3)
+			result := parsePrepareColumnDefinition(t, packets[1])
+			require.Equal(t, "result", result.name)
+			require.Equal(t, test.typ, result.typ)
+			require.Equal(t, uint16(charsetBinary), result.charset)
+			require.Equal(t, test.length, result.length)
+			require.NotZero(t, result.flags&uint16(defines.BINARY_FLAG))
+		})
+	}
+}
+
+func TestPreparedExpandingTextResultMetadata(t *testing.T) {
+	ctx := context.TODO()
+	for _, test := range []struct {
+		name string
+		sql  string
+	}{
+		{name: "replace", sql: "select replace(cast(repeat('a', 40000) as text), 'a', 'bb') as result"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			conn := &prepareResponseCaptureConn{}
+			proto, _, prepareStmt := newBinaryPrepareProtocolTestCaseWithConn(t, test.sql, conn)
+			proto.capability &^= CLIENT_DEPRECATE_EOF
+			require.NoError(t, proto.SendPrepareResponse(ctx, prepareStmt))
+
+			packets := splitProtocolPackets(t, conn.writes)
+			require.Len(t, packets, 3)
+			result := parsePrepareColumnDefinition(t, packets[1])
+			require.Equal(t, "result", result.name)
+			require.Equal(t, defines.MYSQL_TYPE_BLOB, result.typ)
+			require.Equal(t, uint16(Utf8mb4CollationID), result.charset)
+			require.Zero(t, result.flags&uint16(defines.BINARY_FLAG))
+		})
+	}
+}
+
 func TestPreparedSetBinaryProtocolReportsAndReplacesParameters(t *testing.T) {
 	ctx := context.TODO()
 	conn := &prepareResponseCaptureConn{}
@@ -3527,6 +3584,68 @@ func Test_send_packet(t *testing.T) {
 
 		err = proto.sendEOFOrOkPacket(1, 0)
 		convey.So(err, convey.ShouldBeNil)
+	})
+}
+
+func TestParseChangeUserRequest(t *testing.T) {
+	t.Run("protocol 41 secure auth plugin and attributes", func(t *testing.T) {
+		proto := &MysqlProtocolImpl{
+			io: gIO,
+			capability: CLIENT_PROTOCOL_41 | CLIENT_SECURE_CONNECTION |
+				CLIENT_PLUGIN_AUTH | CLIENT_CONNECT_ATTRS,
+		}
+		payload := append([]byte("tenant:user\x00"), byte(4))
+		payload = append(payload, 1, 2, 3, 4)
+		payload = append(payload, []byte("db1\x00")...)
+		payload = append(payload, byte(Utf8mb4CollationID), 0)
+		payload = append(payload, []byte(AuthNativePassword+"\x00")...)
+		// length-encoded block: "k" => "value"
+		payload = append(payload, 8, 1, 'k', 5, 'v', 'a', 'l', 'u', 'e')
+
+		req, err := proto.parseChangeUserRequest(context.Background(), payload)
+		require.NoError(t, err)
+		require.Equal(t, "tenant:user", req.username)
+		require.Equal(t, []byte{1, 2, 3, 4}, req.authResponse)
+		require.Equal(t, "db1", req.database)
+		require.True(t, req.hasCollation)
+		require.Equal(t, int(Utf8mb4CollationID), req.collationID)
+		require.Equal(t, AuthNativePassword, req.clientPluginName)
+		require.Equal(t, map[string]string{"k": "value"}, req.connectAttrs)
+	})
+
+	t.Run("legacy nul terminated auth", func(t *testing.T) {
+		proto := &MysqlProtocolImpl{io: gIO}
+		req, err := proto.parseChangeUserRequest(
+			context.Background(), []byte("user\x00password-token\x00db2\x00"),
+		)
+		require.NoError(t, err)
+		require.Equal(t, "user", req.username)
+		require.Equal(t, []byte("password-token"), req.authResponse)
+		require.Equal(t, "db2", req.database)
+		require.False(t, req.hasCollation)
+	})
+
+	t.Run("reject malformed fields", func(t *testing.T) {
+		tests := []struct {
+			name       string
+			capability uint32
+			payload    []byte
+		}{
+			{name: "username", payload: []byte("user")},
+			{name: "secure auth length", capability: CLIENT_SECURE_CONNECTION, payload: []byte("user\x00")},
+			{name: "secure auth body", capability: CLIENT_SECURE_CONNECTION, payload: []byte{'u', 0, 2, 1}},
+			{name: "database", capability: CLIENT_SECURE_CONNECTION, payload: []byte{'u', 0, 0, 'd'}},
+			{name: "collation", capability: CLIENT_SECURE_CONNECTION | CLIENT_PROTOCOL_41, payload: []byte{'u', 0, 0, 0, 0xff, 0xff}},
+			{name: "attributes", capability: CLIENT_SECURE_CONNECTION | CLIENT_CONNECT_ATTRS, payload: []byte{'u', 0, 0, 0, 4, 1, 'k'}},
+			{name: "trailing", capability: CLIENT_SECURE_CONNECTION, payload: []byte{'u', 0, 0, 0, 1}},
+		}
+		for _, test := range tests {
+			t.Run(test.name, func(t *testing.T) {
+				proto := &MysqlProtocolImpl{io: gIO, capability: test.capability}
+				_, err := proto.parseChangeUserRequest(context.Background(), test.payload)
+				require.Error(t, err)
+			})
+		}
 	})
 }
 

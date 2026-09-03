@@ -259,6 +259,34 @@ func (u *fulltext2CreateState) rowTerms(tf *TableFunction, proc *process.Process
 		}
 	}
 
+	// The tuple json breaker must run BEFORE any flatten: flattening joins the
+	// leaf values and throws the keys away, and the keys are the whole point.
+	// This is the create-side half of the CREATE/ISCP pair — the ISCP writer
+	// calls the same per-column encoder (see Fulltext2SqlWriter.rowText).
+	if u.tblcfg.UsesJSONTupleTerms() {
+		opt := u.tblcfg.JSONTermOptions()
+		var terms []fulltext2.WordPos
+		for i := 2; i < textEnd; i++ {
+			binary := argVecs[i].GetType().Oid == types.T_json
+			var raw []byte
+			if binary {
+				raw = argVecs[i].GetRawBytesAt(nthRow)
+			} else {
+				raw = []byte(argVecs[i].GetStringAt(nthRow))
+			}
+			ts, err := fulltext2.JSONTupleColumnTerms(raw, binary, opt)
+			if err != nil {
+				return nil, err
+			}
+			for _, t := range ts {
+				// ordinal position: a tuple term has no meaningful byte offset,
+				// and ISCP numbers them the same way so the two agree.
+				terms = append(terms, fulltext2.WordPos{Word: t, Pos: int32(len(terms))})
+			}
+		}
+		return terms, nil
+	}
+
 	jsonValue := fulltext2.IsJSONValueParser(u.tblcfg.Parser)
 	var content bytes.Buffer
 	if fulltext2.IsJSONParser(u.tblcfg.Parser) {
@@ -359,7 +387,6 @@ func (u *fulltext2CreateState) end(tf *TableFunction, proc *process.Process) err
 	// A fresh tag=0 was written (CREATE build, or a REBUILD reusing this TVF) — evict
 	// any cached search index so the next query reloads the new base(s) instead of the
 	// stale one held until the TTL. Local to this CN's cache.
-	fulltext2.NewFulltext2Search(u.tblcfg).OnCacheInvalidated(string(fulltext2.LoadMissRebuild))
 	veccache.Cache.Remove(u.tblcfg.IndexTable)
 	return nil
 }

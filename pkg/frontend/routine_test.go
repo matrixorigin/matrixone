@@ -17,7 +17,10 @@ package frontend
 import (
 	"context"
 	"database/sql"
+	"encoding/binary"
 	"fmt"
+	"io"
+	"math"
 	"net"
 	"sync"
 	"sync/atomic"
@@ -41,6 +44,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	plan2 "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/query"
+	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/queryservice"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
@@ -1332,22 +1336,54 @@ func TestRoutineResetSessionKeepsReplacementRegistered(t *testing.T) {
 	oldSession := newTestSession(t, ctrl)
 	timeZone := time.FixedZone("reset-session-test", 8*60*60)
 	oldSession.SetTimeZone(timeZone)
+	require.NoError(t, oldSession.SetUserDefinedVar("must_not_leak", int64(1), "set @must_not_leak = 1"))
+	leakedPrepared := &PrepareStmt{
+		Name: "must_not_leak",
+		cursor: &preparedStmtCursor{
+			owner: oldSession,
+			bytes: 1,
+		},
+	}
+	oldSession.preparedCursorBytes.Store(1)
+	require.NoError(t, oldSession.SetPrepareStmt(
+		context.Background(), "must_not_leak", leakedPrepared,
+	))
+	require.NoError(t, oldSession.SetSessionSysVar(context.Background(), "sql_mode", "ANSI"))
+	connectionID := oldSession.GetConnectionID()
+	oldSession.GetTxnHandler().Close()
+	eng := mock_frontend.NewMockEngine(ctrl)
+	eng.EXPECT().Hints().Return(engine.Hints{CommitOrRollbackTimeout: time.Second}).AnyTimes()
+	txnOp := mock_frontend.NewMockTxnOperator(ctrl)
+	txnOp.EXPECT().Txn().Return(txn.TxnMeta{}).AnyTimes()
+	txnOp.EXPECT().SetFootPrints(gomock.Any(), gomock.Any()).AnyTimes()
+	workspace := mock_frontend.NewMockWorkspace(ctrl)
+	workspace.EXPECT().GetHaveDDL().Return(false)
+	txnOp.EXPECT().GetWorkspace().Return(workspace)
+	txnOp.EXPECT().Rollback(gomock.Any()).Return(nil)
+	oldSession.txnHandler = InitTxnHandler("", eng, context.Background(), txnOp)
+	oldSession.txnHandler.shareTxn = false
 	rm, err := NewRoutineManager(context.Background(), "")
 	require.NoError(t, err)
 	rm.sessionManager = queryservice.NewSessionManager()
 
-	routine := NewRoutine(context.Background(), oldSession.GetResponser().MysqlRrWr(), &config.FrontendParameters{})
+	parameters := &config.FrontendParameters{}
+	parameters.SetDefaultValues()
+	routine := NewRoutine(context.Background(), oldSession.GetResponser().MysqlRrWr(), parameters)
 	oldSession.setRoutineManager(rm)
 	oldSession.setRoutine(routine)
 	routine.setSession(oldSession)
 	rm.sessionManager.AddSession(oldSession)
+	protocol := oldSession.GetResponser().MysqlRrWr().(*MysqlProtocolImpl)
+	oldSession.SetDatabaseName("db1")
+	conn := protocol.GetTcpConnection()
+	rm.setRoutine(conn, protocol.ConnectionID(), routine)
 	require.Len(t, rm.sessionManager.GetAllSessions(), 1)
 
-	resp := &query.ResetSessionResponse{}
-	require.NoError(t, routine.resetSession("", resp))
+	require.NoError(t, rm.Handler(conn, []byte{byte(COM_RESET_CONNECTION)}))
 
 	newSession := routine.getSession()
 	t.Cleanup(func() {
+		rm.deleteRoutine(conn)
 		rm.sessionManager.RemoveSession(newSession)
 		newSession.Close()
 		rm.cancelCtx()
@@ -1355,12 +1391,30 @@ func TestRoutineResetSessionKeepsReplacementRegistered(t *testing.T) {
 
 	require.NotSame(t, oldSession, newSession)
 	require.Equal(t, oldSession.GetUUIDString(), newSession.GetUUIDString())
+	require.Equal(t, connectionID, newSession.GetConnectionID())
+	require.Equal(t, "db1", newSession.GetDatabaseName(), "COM_RESET_CONNECTION preserves the selected database")
 	_, err = newSession.GetUserDefinedVar("must_not_leak")
 	require.ErrorContains(t, err, "does not exist")
-	require.Same(t, timeZone, newSession.GetTimeZone())
+	_, err = newSession.GetPrepareStmt(context.Background(), "must_not_leak")
+	require.Error(t, err)
+	require.Nil(t, leakedPrepared.cursor)
+	require.Zero(t, oldSession.preparedCursorBytes.Load())
+	newSQLMode, err := newSession.GetSessionSysVar("sql_mode")
+	require.NoError(t, err)
+	require.NotEqual(t, "ANSI", newSQLMode)
+	require.NotEqual(t, timeZone.String(), newSession.GetTimeZone().String())
 
 	registered := rm.sessionManager.GetAllSessions()
 	require.Len(t, registered, 1, "successful reset must keep the replacement session registered")
+	require.Same(t, newSession, registered[0])
+
+	firstReplacement := newSession
+	require.NoError(t, rm.Handler(conn, []byte{byte(COM_RESET_CONNECTION)}))
+	newSession = routine.getSession()
+	require.NotSame(t, firstReplacement, newSession)
+	require.Equal(t, connectionID, newSession.GetConnectionID())
+	registered = rm.sessionManager.GetAllSessions()
+	require.Len(t, registered, 1, "repeated reset must replace rather than accumulate sessions")
 	require.Same(t, newSession, registered[0])
 }
 
@@ -1370,15 +1424,18 @@ func TestRoutineResetSessionFailureRestoresProtocolState(t *testing.T) {
 	rm, err := NewRoutineManager(context.Background(), "")
 	require.NoError(t, err)
 	rm.sessionManager = queryservice.NewSessionManager()
-	t.Cleanup(func() {
-		oldSession.Close()
-		rm.cancelCtx()
-	})
 
 	protocol := oldSession.GetResponser().MysqlRrWr()
 	protocol.SetStr(DBNAME, "db1")
 	routine := NewRoutine(context.Background(), protocol, &config.FrontendParameters{})
 	t.Cleanup(routine.cancelRoutineFunc)
+	t.Cleanup(func() {
+		if current := routine.getSession(); current != nil {
+			rm.sessionManager.RemoveSession(current)
+			current.Close()
+		}
+		rm.cancelCtx()
+	})
 	oldSession.setRoutineManager(rm)
 	oldSession.setRoutine(routine)
 	routine.setSession(oldSession)
@@ -1399,11 +1456,492 @@ func TestRoutineResetSessionFailureRestoresProtocolState(t *testing.T) {
 
 	err = routine.resetSession("", &query.ResetSessionResponse{})
 	require.ErrorIs(t, err, assert.AnError)
+	require.ErrorIs(t, err, errSessionResetConnectionMustClose)
 	require.Same(t, oldSession, routine.getSession())
 	require.Equal(t, "db1", protocol.GetStr(DBNAME))
 	registered := rm.sessionManager.GetAllSessions()
 	require.Len(t, registered, 1)
 	require.Same(t, oldSession, registered[0])
+
+	// rollbackUnsafe has invalidated the transaction generation, so the handler
+	// must retire this connection instead of attempting another reset on it.
+}
+
+func TestRoutineHandleSessionCommandRejectsResetPayload(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	session := newTestSession(t, ctrl)
+	parameters := &config.FrontendParameters{}
+	parameters.SetDefaultValues()
+	routine := NewRoutine(context.Background(), session.GetResponser().MysqlRrWr(), parameters)
+	routine.setSession(session)
+	t.Cleanup(func() {
+		session.Close()
+		routine.cancelRoutineFunc()
+	})
+
+	err := routine.handleSessionCommand(context.Background(), &Request{
+		cmd:  COM_RESET_CONNECTION,
+		data: []byte{1},
+	})
+	require.NoError(t, err, "malformed reset must return an ERR packet")
+	require.Same(t, session, routine.getSession(), "malformed reset must not replace the session")
+}
+
+func TestRoutineHandleSessionCommandRejectsInvalidStateAndPayload(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	session := newTestSession(t, ctrl)
+	parameters := &config.FrontendParameters{}
+	parameters.SetDefaultValues()
+	routine := NewRoutine(context.Background(), session.GetResponser().MysqlRrWr(), parameters)
+	t.Cleanup(func() {
+		session.Close()
+		routine.cancelRoutineFunc()
+	})
+
+	err := routine.handleSessionCommand(context.Background(), &Request{cmd: COM_RESET_CONNECTION})
+	require.ErrorContains(t, err, "cannot reset a missing session")
+
+	routine.setSession(session)
+	err = routine.handleSessionCommand(context.Background(), &Request{cmd: COM_QUERY})
+	require.ErrorContains(t, err, "unsupported session command")
+
+	err = routine.handleSessionCommand(context.Background(), &Request{
+		cmd:  COM_CHANGE_USER,
+		data: "not a change-user packet",
+	})
+	require.NoError(t, err, "malformed change-user payload must return an ERR packet")
+	require.Same(t, session, routine.getSession(), "malformed change-user payload must not replace the session")
+}
+
+type disconnectRecordingProtocol struct {
+	MysqlRrWr
+	disconnects int
+}
+
+func (p *disconnectRecordingProtocol) Disconnect() error {
+	p.disconnects++
+	return p.MysqlRrWr.Disconnect()
+}
+
+func TestRoutineHandleSessionCommandClosesPartialTempTableReset(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	oldSession := newTestSession(t, ctrl)
+	rm, err := NewRoutineManager(context.Background(), "")
+	require.NoError(t, err)
+	rm.sessionManager = queryservice.NewSessionManager()
+
+	mysqlProtocol := oldSession.GetResponser().MysqlRrWr().(*MysqlProtocolImpl)
+	protocol := &disconnectRecordingProtocol{MysqlRrWr: mysqlProtocol}
+	parameters := &config.FrontendParameters{}
+	parameters.SetDefaultValues()
+	routine := NewRoutine(context.Background(), protocol, parameters)
+	oldSession.setRoutineManager(rm)
+	oldSession.setRoutine(routine)
+	routine.setSession(oldSession)
+	rm.sessionManager.AddSession(oldSession)
+	conn := mysqlProtocol.GetTcpConnection()
+	rm.setRoutine(conn, mysqlProtocol.ConnectionID(), routine)
+
+	oldSession.GetTxnHandler().Close()
+	eng := mock_frontend.NewMockEngine(ctrl)
+	eng.EXPECT().Hints().Return(engine.Hints{CommitOrRollbackTimeout: time.Second}).AnyTimes()
+	txnOp := mock_frontend.NewMockTxnOperator(ctrl)
+	txnOp.EXPECT().Txn().Return(txn.TxnMeta{}).AnyTimes()
+	txnOp.EXPECT().SetFootPrints(gomock.Any(), gomock.Any()).AnyTimes()
+	workspace := mock_frontend.NewMockWorkspace(ctrl)
+	workspace.EXPECT().GetHaveDDL().Return(false)
+	txnOp.EXPECT().GetWorkspace().Return(workspace)
+	txnOp.EXPECT().Rollback(gomock.Any()).Return(nil)
+	oldSession.txnHandler = InitTxnHandler("", eng, context.Background(), txnOp)
+	oldSession.txnHandler.shareTxn = false
+	oldSession.AddTempTable("db", "first", "first_physical")
+	oldSession.AddTempTable("db", "second", "second_physical")
+
+	serviceRuntime := moruntime.ServiceRuntime(oldSession.GetService())
+	previousExecutor, hadExecutor := serviceRuntime.GetGlobalVariables(moruntime.InternalSQLExecutor)
+	exec := &resetTempTableExecutor{failAt: 2}
+	serviceRuntime.SetGlobalVariables(moruntime.InternalSQLExecutor, exec)
+	t.Cleanup(func() {
+		if hadExecutor {
+			serviceRuntime.SetGlobalVariables(moruntime.InternalSQLExecutor, previousExecutor)
+		} else {
+			serviceRuntime.SetGlobalVariables(moruntime.InternalSQLExecutor, nil)
+		}
+	})
+	t.Cleanup(func() {
+		rm.deleteRoutine(conn)
+		rm.sessionManager.RemoveSession(oldSession)
+		assert.NoError(t, oldSession.resetTempTables(context.Background()))
+		oldSession.Close()
+		routine.cancelRoutineFunc()
+		rm.cancelCtx()
+	})
+
+	require.NoError(t, rm.Handler(conn, []byte{byte(COM_RESET_CONNECTION)}))
+	require.Len(t, exec.sql, 2, "the injected failure must follow one successful physical DROP")
+	require.Equal(t, 1, protocol.disconnects, "a partially reset connection must not be reusable")
+	require.Same(t, oldSession, routine.getSession(), "the replacement generation must remain unpublished")
+}
+
+func TestRoutineHandleSessionCommandClosesRollbackFailedReset(t *testing.T) {
+	for name, rollback := range map[string]func(context.Context) error{
+		"storage error": func(context.Context) error { return assert.AnError },
+		"deadline": func(ctx context.Context) error {
+			<-ctx.Done()
+			return context.Cause(ctx)
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			ctrl := gomock.NewController(t)
+			oldSession := newTestSession(t, ctrl)
+			rm, err := NewRoutineManager(context.Background(), "")
+			require.NoError(t, err)
+			rm.sessionManager = queryservice.NewSessionManager()
+
+			mysqlProtocol := oldSession.GetResponser().MysqlRrWr().(*MysqlProtocolImpl)
+			protocol := &disconnectRecordingProtocol{MysqlRrWr: mysqlProtocol}
+			parameters := &config.FrontendParameters{}
+			parameters.SetDefaultValues()
+			if name == "deadline" {
+				parameters.SessionTimeout.Duration = time.Millisecond
+			}
+			routine := NewRoutine(context.Background(), protocol, parameters)
+			oldSession.setRoutineManager(rm)
+			oldSession.setRoutine(routine)
+			routine.setSession(oldSession)
+			rm.sessionManager.AddSession(oldSession)
+			conn := mysqlProtocol.GetTcpConnection()
+			rm.setRoutine(conn, mysqlProtocol.ConnectionID(), routine)
+			t.Cleanup(func() {
+				rm.deleteRoutine(conn)
+				rm.sessionManager.RemoveSession(oldSession)
+				oldSession.Close()
+				routine.cancelRoutineFunc()
+				rm.cancelCtx()
+			})
+
+			oldSession.GetTxnHandler().Close()
+			eng := mock_frontend.NewMockEngine(ctrl)
+			eng.EXPECT().Hints().Return(engine.Hints{CommitOrRollbackTimeout: time.Second}).AnyTimes()
+			txnOp := mock_frontend.NewMockTxnOperator(ctrl)
+			txnOp.EXPECT().Txn().Return(txn.TxnMeta{}).AnyTimes()
+			txnOp.EXPECT().SetFootPrints(gomock.Any(), gomock.Any()).AnyTimes()
+			workspace := mock_frontend.NewMockWorkspace(ctrl)
+			workspace.EXPECT().GetHaveDDL().Return(false)
+			txnOp.EXPECT().GetWorkspace().Return(workspace)
+			txnOp.EXPECT().Rollback(gomock.Any()).DoAndReturn(rollback)
+			oldSession.txnHandler = InitTxnHandler("", eng, context.Background(), txnOp)
+			oldSession.txnHandler.shareTxn = false
+
+			require.NoError(t, rm.Handler(conn, []byte{byte(COM_RESET_CONNECTION)}))
+			require.Equal(t, 1, protocol.disconnects, "a reset that invalidated its transaction generation must close the physical connection")
+			require.Same(t, oldSession, routine.getSession(), "a failed reset must not publish a replacement generation")
+		})
+	}
+}
+
+func mysqlNativePasswordResponse(password, salt []byte) []byte {
+	hash1 := HashSha1(password)
+	hash2 := HashSha1(hash1)
+	digestInput := append(append([]byte(nil), salt...), hash2...)
+	digest := HashSha1(digestInput)
+	for i := range digest {
+		digest[i] ^= hash1[i]
+	}
+	return digest
+}
+
+func changeUserPacket(username string, authResponse []byte, database string) []byte {
+	payload := append([]byte(username), 0)
+	payload = append(payload, byte(len(authResponse)))
+	payload = append(payload, authResponse...)
+	payload = append(payload, []byte(database)...)
+	payload = append(payload, 0, byte(Utf8mb4CollationID), 0)
+	payload = append(payload, []byte(AuthNativePassword)...)
+	payload = append(payload, 0)
+	return payload
+}
+
+func writeWirePacket(t *testing.T, conn net.Conn, sequence byte, payload []byte) {
+	t.Helper()
+	header := []byte{byte(len(payload)), byte(len(payload) >> 8), byte(len(payload) >> 16), sequence}
+	for _, data := range [][]byte{header, payload} {
+		for len(data) > 0 {
+			n, err := conn.Write(data)
+			require.NoError(t, err)
+			data = data[n:]
+		}
+	}
+}
+
+func readWirePacket(t *testing.T, conn net.Conn) (byte, []byte) {
+	t.Helper()
+	header := make([]byte, HeaderLengthOfTheProtocol)
+	_, err := io.ReadFull(conn, header)
+	require.NoError(t, err)
+	length := int(header[0]) | int(header[1])<<8 | int(header[2])<<16
+	payload := make([]byte, length)
+	_, err = io.ReadFull(conn, payload)
+	require.NoError(t, err)
+	return header[3], payload
+}
+
+func wireOKPacketStatus(t *testing.T, payload []byte) uint16 {
+	t.Helper()
+	require.GreaterOrEqual(t, len(payload), 5)
+	require.Equal(t, byte(defines.OKHeader), payload[0])
+	// The focused exchange carries zero affected rows and zero last-insert ID,
+	// both encoded as one byte. The following two bytes are the server status.
+	return binary.LittleEndian.Uint16(payload[3:5])
+}
+
+func wireHandshakeResponse(username string) []byte {
+	return wireHandshakeResponseWithDatabase(username, "")
+}
+
+func wireHandshakeResponseWithDatabase(username, database string) []byte {
+	capability := uint32(CLIENT_PROTOCOL_41 | CLIENT_SECURE_CONNECTION | CLIENT_PLUGIN_AUTH)
+	if database != "" {
+		capability |= CLIENT_CONNECT_WITH_DB
+	}
+	payload := make([]byte, 4+4+1+23)
+	binary.LittleEndian.PutUint32(payload, capability)
+	binary.LittleEndian.PutUint32(payload[4:], 1<<24)
+	payload[8] = byte(Utf8mb4CollationID)
+	payload = append(payload, username...)
+	payload = append(payload, 0, 0) // username terminator and empty auth response
+	if database != "" {
+		payload = append(payload, database...)
+		payload = append(payload, 0)
+	}
+	payload = append(payload, AuthNativePassword...)
+	return append(payload, 0)
+}
+
+func wireChangeUserRequest(username, plugin string) []byte {
+	payload := append([]byte{byte(COM_CHANGE_USER)}, username...)
+	payload = append(payload, 0, 0) // username terminator and empty secure auth response
+	payload = append(payload, 0)    // empty database
+	payload = append(payload, byte(Utf8mb4CollationID), 0)
+	payload = append(payload, plugin...)
+	return append(payload, 0)
+}
+
+func TestMySQLWireChangeUserAuthSwitchAndRepeatedBorrow(t *testing.T) {
+	previousServerVars, ok := serverVarsMap.Load("")
+	require.True(t, ok)
+	serverVarsMap.Store("", &ServerLevelVariables{})
+	parameters := &config.FrontendParameters{}
+	parameters.SetDefaultValues()
+	parameters.SkipCheckUser = true
+	parameters.KillRountinesInterval = 0
+	setPu("", config.NewParameterUnit(parameters, nil, nil, nil))
+	setSessionAlloc("", NewLeakCheckAllocator())
+	rm, err := NewRoutineManager(context.Background(), "")
+	require.NoError(t, err)
+	setRtMgr("", rm)
+
+	clientConn, serverConn := net.Pipe()
+	t.Cleanup(func() {
+		_ = clientConn.Close()
+		_ = serverConn.Close()
+		rm.cancelCtx()
+		serverVarsMap.Store("", previousServerVars)
+	})
+	serverDone := make(chan struct{})
+	go func() {
+		defer close(serverDone)
+		startInnerServer(serverConn)
+	}()
+
+	_, handshake := readWirePacket(t, clientConn)
+	versionEnd := 1
+	for versionEnd < len(handshake) && handshake[versionEnd] != 0 {
+		versionEnd++
+	}
+	require.Greater(t, len(handshake), versionEnd+4)
+	connectionID := binary.LittleEndian.Uint32(handshake[versionEnd+1:])
+	writeWirePacket(t, clientConn, 1, wireHandshakeResponse("dump"))
+	_, response := readWirePacket(t, clientConn)
+	require.NotEmpty(t, response)
+	require.Equal(t, byte(defines.OKHeader), response[0])
+
+	// Connector/J 8.0.15 falls back to COM_CHANGE_USER and has to answer the
+	// server's mysql_native_password authentication-switch packet. Exercise the
+	// real packet loop twice to prove a physical connection can be borrowed again.
+	for borrow := 0; borrow < 2; borrow++ {
+		writeWirePacket(t, clientConn, 0, wireChangeUserRequest("dump", "caching_sha2_password"))
+		_, switchRequest := readWirePacket(t, clientConn)
+		require.NotEmpty(t, switchRequest)
+		require.Equal(t, byte(defines.EOFHeader), switchRequest[0])
+		require.Contains(t, string(switchRequest), AuthNativePassword)
+		writeWirePacket(t, clientConn, 2, nil)
+		_, response = readWirePacket(t, clientConn)
+		require.NotEmpty(t, response)
+		require.Equal(t, byte(defines.OKHeader), response[0])
+		require.NotZero(t, wireOKPacketStatus(t, response)&SERVER_STATUS_AUTOCOMMIT,
+			"COM_CHANGE_USER must publish a clean autocommit status to the pooled client")
+
+		routine := rm.getRoutineByConnID(connectionID)
+		require.NotNil(t, routine)
+		require.Equal(t, connectionID, routine.getConnectionID())
+		require.Equal(t, "dump", routine.getSession().GetTenantInfo().GetUser())
+	}
+
+	require.NoError(t, clientConn.Close())
+	select {
+	case <-serverDone:
+	case <-time.After(time.Second):
+		t.Fatal("MySQL wire server did not stop after the client closed")
+	}
+}
+
+func TestMySQLWireResetConnectionPreservesDatabase(t *testing.T) {
+	previousServerVars, ok := serverVarsMap.Load("")
+	require.True(t, ok)
+	serverVarsMap.Store("", &ServerLevelVariables{})
+	parameters := &config.FrontendParameters{}
+	parameters.SetDefaultValues()
+	parameters.SkipCheckUser = true
+	parameters.KillRountinesInterval = 0
+	setPu("", config.NewParameterUnit(parameters, nil, nil, nil))
+	setSessionAlloc("", NewLeakCheckAllocator())
+	rm, err := NewRoutineManager(context.Background(), "")
+	require.NoError(t, err)
+	setRtMgr("", rm)
+
+	clientConn, serverConn := net.Pipe()
+	t.Cleanup(func() {
+		_ = clientConn.Close()
+		_ = serverConn.Close()
+		rm.cancelCtx()
+		serverVarsMap.Store("", previousServerVars)
+	})
+	serverDone := make(chan struct{})
+	go func() {
+		defer close(serverDone)
+		startInnerServer(serverConn)
+	}()
+
+	_, handshake := readWirePacket(t, clientConn)
+	versionEnd := 1
+	for versionEnd < len(handshake) && handshake[versionEnd] != 0 {
+		versionEnd++
+	}
+	require.Greater(t, len(handshake), versionEnd+4)
+	connectionID := binary.LittleEndian.Uint32(handshake[versionEnd+1:])
+	writeWirePacket(t, clientConn, 1, wireHandshakeResponseWithDatabase("dump", "db1"))
+	_, response := readWirePacket(t, clientConn)
+	require.NotEmpty(t, response)
+	require.Equal(t, byte(defines.OKHeader), response[0])
+	// The in-process wire fixture does not install the catalog-backed global
+	// system-variable snapshot that a real authenticated session already has.
+	// Supply the empty snapshot explicitly so reset does not create a background
+	// transaction merely to populate it.
+	routine := rm.getRoutineByConnID(connectionID)
+	require.NotNil(t, routine)
+	routine.getSession().gSysVars = &SystemVariables{mp: map[string]interface{}{}}
+
+	// Connector/J 8.4 and later use COM_RESET_CONNECTION before exposing each
+	// logical pooled borrow. A successful reset must retain the URL-selected DB.
+	for borrow := 0; borrow < 2; borrow++ {
+		writeWirePacket(t, clientConn, 0, []byte{byte(COM_RESET_CONNECTION)})
+		_, response = readWirePacket(t, clientConn)
+		require.NotEmpty(t, response)
+		require.Equal(t, byte(defines.OKHeader), response[0])
+		require.NotZero(t, wireOKPacketStatus(t, response)&SERVER_STATUS_AUTOCOMMIT)
+
+		routine := rm.getRoutineByConnID(connectionID)
+		require.NotNil(t, routine)
+		require.Equal(t, connectionID, routine.getConnectionID())
+		require.Equal(t, "db1", routine.getSession().GetDatabaseName())
+	}
+
+	require.NoError(t, clientConn.Close())
+	select {
+	case <-serverDone:
+	case <-time.After(time.Second):
+		t.Fatal("MySQL wire server did not stop after the client closed")
+	}
+}
+
+func TestRoutineChangeUserAuthenticatesBeforeReplacingSession(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	oldSession := newTestSession(t, ctrl)
+	txnClient := mock_frontend.NewMockTxnClient(ctrl)
+	txnClient.EXPECT().WaitLogTailAppliedAt(gomock.Any(), gomock.Any()).
+		Times(2).
+		Return(timestamp.Timestamp{PhysicalTime: math.MaxInt64}, nil)
+	pu := getPu("")
+	oldTxnClient, oldStorageEngine := pu.TxnClient, pu.StorageEngine
+	t.Cleanup(func() {
+		pu.TxnClient = oldTxnClient
+		pu.StorageEngine = oldStorageEngine
+	})
+	pu.TxnClient = txnClient
+	pu.StorageEngine = &authenticationBarrierEngine{acquire: func(context.Context) (
+		timestamp.Timestamp, error,
+	) {
+		return timestamp.Timestamp{PhysicalTime: math.MaxInt64}, nil
+	}}
+	rm, err := NewRoutineManager(context.Background(), "")
+	require.NoError(t, err)
+	rm.sessionManager = queryservice.NewSessionManager()
+
+	protocol := oldSession.GetResponser().MysqlRrWr().(*MysqlProtocolImpl)
+	protocol.SetCapability(CLIENT_PROTOCOL_41 | CLIENT_SECURE_CONNECTION | CLIENT_PLUGIN_AUTH)
+	protocol.SetUserName(rootName)
+	protocol.SetDatabaseName("old_db")
+	salt := []byte("01234567890123456789")
+	protocol.SetSalt(salt)
+	parameters := &config.FrontendParameters{}
+	parameters.SetDefaultValues()
+	routine := NewRoutine(context.Background(), protocol, parameters)
+	oldSession.setRoutineManager(rm)
+	oldSession.setRoutine(routine)
+	routine.setSession(oldSession)
+	rm.sessionManager.AddSession(oldSession)
+	connectionID := routine.getConnectionID()
+
+	const user = "change_user_auth_test"
+	password := []byte("secret")
+	SetSpecialUser(user, password)
+	t.Cleanup(func() {
+		specialUsers.Lock()
+		delete(specialUsers.users, user)
+		specialUsers.Unlock()
+		if current := routine.getSession(); current != nil {
+			rm.sessionManager.RemoveSession(current)
+			current.Close()
+		}
+		routine.cancelRoutineFunc()
+		rm.cancelCtx()
+	})
+	stubs := gostub.StubFunc(&ExeSqlInBgSes, nil, nil)
+	defer stubs.Reset()
+
+	authResponse := mysqlNativePasswordResponse(password, salt)
+	require.NoError(t, routine.changeUserWithContext(
+		context.Background(), changeUserPacket(user, authResponse, ""),
+	))
+	newSession := routine.getSession()
+	require.NotSame(t, oldSession, newSession)
+	require.Equal(t, user, protocol.GetUserName())
+	require.Equal(t, connectionID, routine.getConnectionID())
+	require.Equal(t, user, newSession.GetTenantInfo().GetUser())
+	require.Len(t, rm.sessionManager.GetAllSessions(), 1)
+
+	// A bad password must not publish the speculative generation or change the
+	// authenticated protocol identity. The wire handler sends ERR and closes the
+	// connection for this error; the core remains directly testable here.
+	err = routine.changeUserWithContext(
+		context.Background(), changeUserPacket(user, make([]byte, 20), ""),
+	)
+	require.ErrorContains(t, err, "check password failed")
+	require.Same(t, newSession, routine.getSession())
+	require.Equal(t, user, protocol.GetUserName())
+	require.Equal(t, connectionID, routine.getConnectionID())
+	require.Len(t, rm.sessionManager.GetAllSessions(), 1)
 }
 
 func TestRoutineResetSessionRejectsLifecycleConflict(t *testing.T) {

@@ -260,6 +260,15 @@ message PreparedNumericMetadata {
   bool fallback_source = 3;
   int32 fallback_source_node_id = 4;
   int32 fallback_source_col_pos = 5;
+  // Marks a result-arm cast introduced only because a prepared marker is TEXT
+  // before SQL EXECUTE supplies its source domain. User-authored CAST never
+  // carries this bit and remains an authoritative boundary.
+  bool provisional_result_cast = 6;
+  // Marks a result peer coerced into the marker's prepare-time TEXT envelope.
+  bool provisional_result_peer = 7;
+  int32 provisional_result_peer_type_id = 8;
+  int32 provisional_result_peer_width = 9;
+  int32 provisional_result_peer_scale = 10;
 }
 
 message Expr {
@@ -1342,6 +1351,24 @@ message MongoScan {
   // during compilation. It remains distinct from the catalog mapping_id so a
   // cached logical plan can be compiled more than once without identity drift.
   uint64 table_id = 15;
+  // user_query_* is the validated, credential-free BSON representation selected
+  // by an explicit __mo_query predicate. kind is 1 for filter and 2 for pipeline;
+  // zero keeps the ordinary Find path unchanged.
+  int32 user_query_kind = 16;
+  bytes user_filter_bson = 17;
+  repeated bytes user_pipeline_stage_bson = 18;
+  // Only the digest and validated BSON cross the plan/pipeline boundary. The
+  // original query text can contain sensitive literals and must not appear in
+  // protobuf diagnostics. Execution reconstructs canonical Extended JSON from
+  // BSON only when __mo_query is explicitly projected.
+  string user_query_digest = 19;
+  // include_query_column asks MongoScan to append the synthetic __mo_query
+  // value to its converted batch. It is set only when a residual or projection
+  // still consumes that hidden column.
+  bool include_query_column = 20;
+  // empty_result records that query-level pruning rejected the only derived
+  // user query. Execution validates catalog identity but opens no source cursor.
+  bool empty_result = 21;
 }
 
 message MongoColumnMapping {
@@ -1482,6 +1509,11 @@ message RuntimeFilterSpec {
   // leave legacy expr unset. Probe specs continue to use expr for scan-side
   // evaluation.
   Expr build_expr = 10;
+  // The producer is the materialized result of an uncorrelated scalar
+  // subquery. The executor may publish an exact filter only after observing
+  // exactly one row; multiple rows must fail open so the SINGLE operator can
+  // enforce cardinality at its original logical scope.
+  bool scalar_predicate = 11;
 }
 
 message IdList {

@@ -43,14 +43,15 @@ import (
 // 	return nodeID
 // }
 
-// applySharedLockTableFallback upgrades cardinality-known shared lock targets
-// before their first row lock is acquired. An exclusive owner can safely
-// coarsen its own rows later, but a shared row may already have other holders;
-// converting that ownership in the middle of a transaction is not always
-// possible without changing Shared compatibility. Estimates that are low and
-// transactions with many statements retain exact Shared rows up to the fixed
-// bookkeeping-pool ceiling rather than changing lock semantics at this budget.
-func applySharedLockTableFallback(builder *QueryBuilder) {
+// applyLockTableFallback upgrades cardinality-known lock targets before their
+// first row lock is acquired. Shared targets need this planner fallback because
+// converting already-shared rows is not always possible without changing
+// Shared compatibility. Exclusive targets normally coarsen on the owner side;
+// the only planner exception is an admitted unrestricted single-target UPDATE:
+// its target universe is the whole table, every written keyspace has a total
+// range, and no earlier lock target would have its order reversed. Bounded
+// predicates retain row/range locks even when their estimate is large.
+func applyLockTableFallback(builder *QueryBuilder) {
 	proc := builder.compCtx.GetProcess()
 	if proc == nil || proc.Base.LockService == nil {
 		return
@@ -68,6 +69,10 @@ func applySharedLockTableFallback(builder *QueryBuilder) {
 		}
 		for _, target := range node.LockTargets {
 			if target.Mode == lockpb.LockMode_Shared {
+				target.LockTable = true
+				continue
+			}
+			if _, ok := builder.fullTableUpdateLockTargets[target]; ok {
 				target.LockTable = true
 			}
 		}
@@ -599,10 +604,11 @@ func buildDefaultExpr(col *tree.ColumnTableDef, typ plan.Type, proc *process.Pro
 
 	originExpr := expr
 	semanticExpr := unwrapParenExpr(expr)
+	_, isExpressionDefault := originExpr.(*tree.ParenExpr)
 
 	colNameOrigin := col.Name.ColNameOrigin()
 	if typ.Id == int32(types.T_json) {
-		if semanticExpr != nil && !isNullAstExpr(semanticExpr) {
+		if semanticExpr != nil && !isNullAstExpr(semanticExpr) && !isExpressionDefault {
 			return nil, moerr.NewNotSupported(proc.Ctx, fmt.Sprintf("JSON column '%s' cannot have default value", colNameOrigin))
 		}
 	}
@@ -622,8 +628,6 @@ func buildDefaultExpr(col *tree.ColumnTableDef, typ plan.Type, proc *process.Pro
 			OriginString: "",
 		}, nil
 	}
-	_, isExpressionDefault := originExpr.(*tree.ParenExpr)
-
 	binder := NewDefaultBinder(proc.Ctx, nil, nil, typ, nil)
 	planExpr, err := binder.BindExpr(semanticExpr, 0, false)
 	if err != nil {

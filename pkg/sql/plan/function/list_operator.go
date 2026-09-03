@@ -2921,9 +2921,9 @@ var supportedOperators = []FuncNew{
 	// operator `cast_assign`
 	// Used by DML assignment paths (INSERT/UPDATE projection) for SQL-mode-sensitive
 	// targets. It applies strict/non-strict behavior at runtime to width-constrained
-	// strings and YEAR values. The overload is marked volatile so it is not
-	// constant-folded, letting prepared statements resolve sql_mode at execution
-	// time rather than at prepare time.
+	// strings, YEAR values, and TIME column boundaries. The overload is marked
+	// volatile so it is not constant-folded, letting prepared statements resolve
+	// sql_mode at execution time rather than at prepare time.
 	{
 		functionId: CAST_ASSIGN,
 		class:      plan.Function_STRICT,
@@ -3445,7 +3445,7 @@ var supportedOperators = []FuncNew{
 
 func isStrictAssignmentCastTarget(target types.T) bool {
 	switch target {
-	case types.T_char, types.T_varchar, types.T_text, types.T_date, types.T_datetime, types.T_timestamp, types.T_year:
+	case types.T_char, types.T_varchar, types.T_text, types.T_date, types.T_time, types.T_datetime, types.T_timestamp, types.T_year:
 		return true
 	default:
 		return false

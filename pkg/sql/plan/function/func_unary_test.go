@@ -903,6 +903,35 @@ func TestQuote(t *testing.T) {
 	}
 }
 
+func TestQuoteHonorsSelectList(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	for _, test := range []struct {
+		name       string
+		selectList *FunctionSelectList
+		nulls      []bool
+	}{
+		{
+			name:       "partial mask",
+			selectList: &FunctionSelectList{AnyNull: true, SelectList: []bool{true, false}},
+			nulls:      []bool{false, true},
+		},
+		{
+			name:       "all rows masked",
+			selectList: &FunctionSelectList{AnyNull: true, AllNull: true, SelectList: []bool{false, false}},
+			nulls:      []bool{true, true},
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			fcTC := NewFunctionTestCase(proc, []FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(), []string{"a", "b"}, nil),
+			}, NewFunctionTestResult(types.T_varchar.ToType(), false, []string{"'a'", ""}, test.nulls), Quote).
+				WithSelectList(test.selectList)
+			ok, info := fcTC.Run()
+			require.True(t, ok, info)
+		})
+	}
+}
+
 // SOUNDEX
 func initSoundexTestCase() []tcTemp {
 	return []tcTemp{
@@ -5407,6 +5436,36 @@ func TestMd5(t *testing.T) {
 		fcTC := NewFunctionTestCase(proc, tc.inputs, tc.expect, Md5)
 		s, info := fcTC.Run()
 		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
+	}
+}
+
+func TestMd5LargeStringUsesFullValue(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	payload := []byte(strings.Repeat("a", 65536))
+	tests := []struct {
+		name string
+		typ  types.Type
+	}{
+		{name: "text", typ: types.T_text.ToType()},
+		{name: "blob", typ: types.T_blob.ToType()},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			input := vector.NewVec(test.typ)
+			defer input.Free(proc.Mp())
+			require.NoError(t, vector.AppendBytes(input, payload, false, proc.Mp()))
+
+			fn, err := GetFunctionByName(proc.Ctx, "md5", []types.Type{test.typ})
+			require.NoError(t, err)
+			_, shouldCast := fn.ShouldDoImplicitTypeCast()
+			require.False(t, shouldCast)
+
+			result, err := RunFunctionDirectly(proc, fn.GetEncodedOverloadID(), []*vector.Vector{input}, 1)
+			require.NoError(t, err)
+			defer result.Free(proc.Mp())
+			require.Equal(t, "2d61aa54b58c2e94403fb092c3dbc027", string(result.GetBytesAt(0)))
+		})
 	}
 }
 

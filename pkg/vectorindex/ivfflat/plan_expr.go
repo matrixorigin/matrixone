@@ -53,6 +53,13 @@ func ivfUint64Expr(value uint64) *plan.Expr {
 	}
 }
 
+func ivfFloat64Expr(value float64) *plan.Expr {
+	return &plan.Expr{
+		Typ:  plan.Type{Id: int32(types.T_float64)},
+		Expr: &plan.Expr_Lit{Lit: &plan.Literal{Value: &plan.Literal_Dval{Dval: value}}},
+	}
+}
+
 func ivfFuncExpr(ctx context.Context, name string, args ...*plan.Expr) (*plan.Expr, error) {
 	argTypes := make([]types.Type, len(args))
 	for i, arg := range args {

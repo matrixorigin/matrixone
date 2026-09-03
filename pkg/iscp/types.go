@@ -203,8 +203,12 @@ type JobEntry struct {
 	watermark          types.TS
 	persistedWatermark types.TS
 	state              int8
+	stage              int8
 	dropAt             types.Timestamp
 	currentLSN         uint64
+	// isIndexJob marks a ConsumerType_IndexSync job, whose watermark is flushed
+	// on IndexFlushWatermarkInterval rather than the general threshold.
+	isIndexJob bool
 }
 
 type JobKey struct {

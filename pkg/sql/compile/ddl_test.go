@@ -43,10 +43,12 @@ import (
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
+	icebergmodel "github.com/matrixorigin/matrixone/pkg/iceberg/model"
 	plan2 "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/sql/features"
+	sqliceberg "github.com/matrixorigin/matrixone/pkg/sql/iceberg"
 	sqlmongodb "github.com/matrixorigin/matrixone/pkg/sql/mongodb"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
@@ -379,6 +381,39 @@ func TestMongoDBTableMappingDDLValidationAndPersistence(t *testing.T) {
 		require.NoError(t, c.maybeDeleteMongoDBTableMapping(db, rel, tableDef))
 		require.Equal(t, []string{sqlmongodb.DeleteTableMappingSQL(7, 8, 9)}, exec.sqls)
 	})
+}
+
+func TestIcebergTableMappingLocksCatalogBeforePublishingMapping(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	exec := &mongoDBMappingTestExecutor{results: make(map[string]executor.Result)}
+	c, db, rel := newMongoDBMappingTestCompile(t, ctrl, exec)
+	db.EXPECT().GetDatabaseId(gomock.Any()).Return("8")
+	rel.EXPECT().GetTableID(gomock.Any()).Return(uint64(9))
+
+	mapping := icebergmodel.TableMapping{
+		CatalogID: 42, Namespace: "sales", TableName: "orders",
+		DefaultRef: icebergmodel.DefaultRefMain, ReadMode: icebergmodel.ReadModeAppendOnly,
+		WriteMode: icebergmodel.WriteModeReadOnly,
+	}
+	lookupSQL := sqliceberg.GetCatalogByNameForUpdateSQL(7, "source")
+	exec.results[lookupSQL] = icebergCatalogResult(t, c.proc, 42)
+	qry := &plan2.CreateTable{TableDef: &plan2.TableDef{
+		Createsql: sqliceberg.BuildCreateSQLEnvelope(mapping, "source"),
+	}}
+
+	require.NoError(t, c.maybeInsertIcebergTableMapping(db, rel, qry))
+	require.Len(t, exec.sqls, 2)
+	require.Equal(t, lookupSQL, exec.sqls[0])
+	require.Contains(t, exec.sqls[1], "insert into mo_catalog."+sqliceberg.TableTables)
+	require.Contains(t, exec.sqls[1], "values (7,8,9,42")
+}
+
+func icebergCatalogResult(t *testing.T, proc *process.Process, catalogID uint64) executor.Result {
+	t.Helper()
+	result := executor.NewMemResult([]types.Type{types.T_uint64.ToType(), types.T_uint64.ToType()}, proc.Mp())
+	result.NewBatchWithRowCount(1)
+	require.NoError(t, executor.AppendFixedRows(result, 1, []uint64{catalogID}))
+	return result.GetResult()
 }
 
 func TestConvertDBEOBToNoSuchTable(t *testing.T) {
@@ -1624,33 +1659,6 @@ func TestScope_Database(t *testing.T) {
 	})
 }
 
-func Test_addTimeSpan(t *testing.T) {
-	cases := []struct {
-		name    string
-		len     int
-		unit    string
-		wantOk  bool
-		wantMsg string
-	}{
-		{"hour", 1, "h", true, ""},
-		{"day", 2, "d", true, ""},
-		{"month", 3, "mo", true, ""},
-		{"year", 4, "y", true, ""},
-		{"invalid", 5, "xx", false, "unknown unit"},
-	}
-	for _, c := range cases {
-		t.Run(c.name, func(t *testing.T) {
-			_, err := addTimeSpan(c.len, c.unit)
-			if c.wantOk {
-				assert.NoError(t, err)
-			} else {
-				assert.Error(t, err)
-				assert.Contains(t, err.Error(), c.wantMsg)
-			}
-		})
-	}
-}
-
 func Test_getSqlForCheckPitrDup(t *testing.T) {
 	mk := func(level int32, origin bool) *plan2.CreatePitr {
 		return &plan2.CreatePitr{
@@ -1766,20 +1774,24 @@ func TestCheckSysMoCatalogPitrResult(t *testing.T) {
 	ctx := context.Background()
 
 	t.Run("empty vecs", func(t *testing.T) {
-		needInsert, needUpdate, err := CheckSysMoCatalogPitrResult(ctx, []*vector.Vector{}, 10, "d")
+		needInsert, needUpdate, length, unit, err := CheckSysMoCatalogPitrResult(ctx, []*vector.Vector{}, 10, "d")
 		assert.Error(t, err)
 		assert.False(t, needInsert)
 		assert.False(t, needUpdate)
+		assert.Zero(t, length)
+		assert.Empty(t, unit)
 	})
 
 	t.Run("insert needed", func(t *testing.T) {
 		v1 := vector.NewVec(types.T_uint64.ToType())
 		v2 := vector.NewVec(types.T_varchar.ToType())
 		// no data in vectors
-		needInsert, needUpdate, err := CheckSysMoCatalogPitrResult(ctx, []*vector.Vector{v1, v2}, 10, "d")
+		needInsert, needUpdate, length, unit, err := CheckSysMoCatalogPitrResult(ctx, []*vector.Vector{v1, v2}, 10, "d")
 		assert.NoError(t, err)
 		assert.True(t, needInsert)
 		assert.False(t, needUpdate)
+		assert.Equal(t, uint64(10), length)
+		assert.Equal(t, "d", unit)
 	})
 
 	t.Run("update needed", func(t *testing.T) {
@@ -1787,10 +1799,12 @@ func TestCheckSysMoCatalogPitrResult(t *testing.T) {
 		_ = vector.AppendFixed(v1, uint64(5), false, mp)
 		v2 := vector.NewVec(types.T_varchar.ToType())
 		_ = vector.AppendBytes(v2, []byte("d"), false, mp)
-		needInsert, needUpdate, err := CheckSysMoCatalogPitrResult(ctx, []*vector.Vector{v1, v2}, 10, "d")
+		needInsert, needUpdate, length, unit, err := CheckSysMoCatalogPitrResult(ctx, []*vector.Vector{v1, v2}, 10, "d")
 		assert.NoError(t, err)
 		assert.False(t, needInsert)
 		assert.True(t, needUpdate)
+		assert.Equal(t, uint64(10), length)
+		assert.Equal(t, "d", unit)
 	})
 
 	t.Run("no update needed", func(t *testing.T) {
@@ -1798,10 +1812,25 @@ func TestCheckSysMoCatalogPitrResult(t *testing.T) {
 		_ = vector.AppendFixed(v1, uint64(20), false, mp)
 		v2 := vector.NewVec(types.T_varchar.ToType())
 		_ = vector.AppendBytes(v2, []byte("d"), false, mp)
-		needInsert, needUpdate, err := CheckSysMoCatalogPitrResult(ctx, []*vector.Vector{v1, v2}, 10, "d")
+		needInsert, needUpdate, length, unit, err := CheckSysMoCatalogPitrResult(ctx, []*vector.Vector{v1, v2}, 10, "d")
 		assert.NoError(t, err)
 		assert.False(t, needInsert)
 		assert.False(t, needUpdate)
+		assert.Equal(t, uint64(20), length)
+		assert.Equal(t, "d", unit)
+	})
+
+	t.Run("mixed month and days use stable envelope", func(t *testing.T) {
+		v1 := vector.NewVec(types.T_uint64.ToType())
+		_ = vector.AppendFixed(v1, uint64(1), false, mp)
+		v2 := vector.NewVec(types.T_varchar.ToType())
+		_ = vector.AppendBytes(v2, []byte("mo"), false, mp)
+		needInsert, needUpdate, length, unit, err := CheckSysMoCatalogPitrResult(ctx, []*vector.Vector{v1, v2}, 30, "d")
+		assert.NoError(t, err)
+		assert.False(t, needInsert)
+		assert.True(t, needUpdate)
+		assert.Equal(t, uint64(31), length)
+		assert.Equal(t, "d", unit)
 	})
 }
 
