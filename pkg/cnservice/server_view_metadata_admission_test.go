@@ -509,6 +509,103 @@ func TestCNViewMetadataAdmissionRejectsStaleFencedSnapshot(t *testing.T) {
 	require.Equal(t, uint64(6), s.viewMetadataCatalogFencedEpoch.Load())
 }
 
+func TestCNViewMetadataAdmissionLinearizesFinalIngressHandoff(t *testing.T) {
+	handoffValidated := make(chan struct{})
+	releaseHandoff := make(chan struct{})
+	newFenceEntered := make(chan struct{})
+	releaseNewFence := make(chan struct{})
+	var releaseHandoffOnce sync.Once
+	var releaseNewFenceOnce sync.Once
+	releaseValidatedHandoff := func() { releaseHandoffOnce.Do(func() { close(releaseHandoff) }) }
+	releaseFence := func() { releaseNewFenceOnce.Do(func() { close(releaseNewFence) }) }
+	t.Cleanup(func() {
+		releaseValidatedHandoff()
+		releaseFence()
+	})
+
+	s := &service{
+		cfg:                             &Config{UUID: "linearized-admission-handoff"},
+		logger:                          zap.NewNop(),
+		viewMetadataAdmissionGeneration: 11,
+		viewMetadataEpochFence:          compile.NewViewMetadataEpochFence(),
+		viewMetadataAdmissionUpdated:    make(chan struct{}, 1),
+	}
+	s.cfg.HAKeeper.DiscoveryTimeout.Duration = 5 * time.Second
+	s.sqlExecutor = executor.NewMemExecutor(func(sql string) (executor.Result, error) {
+		if sql == catalog.ViewMetadataLifecycleGateSQL {
+			close(newFenceEntered)
+			<-releaseNewFence
+			return viewMetadataLifecycleGateTestResult(), nil
+		}
+		return executor.Result{}, nil
+	})
+	s.viewMetadataCatalogFenceReady.Store(true)
+	require.NoError(t, s.viewMetadataEpochFence.Advance(context.Background(), 5))
+	s.viewMetadataCatalogFencedEpoch.Store(5)
+	s.viewMetadataAdmission.Store(&logservicepb.ViewMetadataAdmission{
+		Enabled:              true,
+		Epoch:                5,
+		RevalidationRequired: true,
+		Generation:           11,
+		Admitted:             true,
+	})
+	var handoffOnce sync.Once
+	s.beforeViewMetadataAdmissionHandoff = func() {
+		handoffOnce.Do(func() { close(handoffValidated) })
+		<-releaseHandoff
+	}
+
+	waitDone := make(chan error, 1)
+	go func() { waitDone <- s.waitForViewMetadataIngressAdmission() }()
+	select {
+	case <-handoffValidated:
+	case <-time.After(time.Second):
+		t.Fatal("startup did not reach final admission handoff")
+	}
+
+	applyDone := make(chan error, 1)
+	go func() {
+		applyDone <- s.applyViewMetadataAdmission(context.Background(), &logservicepb.ViewMetadataAdmission{
+			Enabled:              true,
+			Epoch:                6,
+			RevalidationRequired: true,
+			Generation:           11,
+			Admitted:             false,
+		})
+	}()
+	select {
+	case err := <-applyDone:
+		t.Fatalf("new snapshot publication bypassed the final handoff: %v", err)
+	case <-time.After(20 * time.Millisecond):
+	}
+	require.Equal(t, uint64(5), s.viewMetadataAdmission.Load().Epoch)
+
+	releaseValidatedHandoff()
+	select {
+	case err := <-waitDone:
+		require.NoError(t, err)
+	case <-time.After(time.Second):
+		t.Fatal("final admission handoff did not complete")
+	}
+	require.True(t, s.viewMetadataIngressReady.Load())
+	select {
+	case <-newFenceEntered:
+	case <-time.After(time.Second):
+		t.Fatal("post-handoff snapshot skipped its catalog fence")
+	}
+	require.Equal(t, uint64(6), s.viewMetadataAdmission.Load().Epoch)
+	require.False(t, s.viewMetadataCatalogFenceStartupWaiting.Load())
+
+	releaseFence()
+	select {
+	case err := <-applyDone:
+		require.NoError(t, err)
+	case <-time.After(time.Second):
+		t.Fatal("post-handoff snapshot did not finish catalog fencing")
+	}
+	require.Equal(t, uint64(6), s.viewMetadataCatalogFencedEpoch.Load())
+}
+
 func TestViewMetadataCatalogFenceRetryDelayIsBoundedAndJittered(t *testing.T) {
 	base := viewMetadataCatalogFenceInitialRetryDelay
 	var previous time.Duration

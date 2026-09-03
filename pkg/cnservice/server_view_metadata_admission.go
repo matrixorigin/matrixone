@@ -87,8 +87,10 @@ func (s *service) applyViewMetadataAdmission(
 		return nil
 	}
 	if snapshot == nil {
+		s.viewMetadataAdmissionMu.Lock()
 		s.viewMetadataAdmission.Store(&logservicepb.ViewMetadataAdmission{Ready: true, Admitted: true})
 		s.notifyViewMetadataAdmissionUpdated()
+		s.viewMetadataAdmissionMu.Unlock()
 		return nil
 	}
 	if snapshot.Generation < s.viewMetadataAdmissionGeneration {
@@ -101,8 +103,10 @@ func (s *service) applyViewMetadataAdmission(
 	}
 	if snapshot.Generation > s.viewMetadataAdmissionGeneration {
 		copy := *snapshot
+		s.viewMetadataAdmissionMu.Lock()
 		s.viewMetadataAdmission.Store(&copy)
 		s.notifyViewMetadataAdmissionUpdated()
+		s.viewMetadataAdmissionMu.Unlock()
 		s.revokeViewMetadataGeneration(snapshot.Generation)
 		return nil
 	}
@@ -113,9 +117,12 @@ func (s *service) applyViewMetadataAdmission(
 		return err
 	}
 	copy := *snapshot
+	s.viewMetadataAdmissionMu.Lock()
 	s.viewMetadataAdmission.Store(&copy)
 	s.notifyViewMetadataAdmissionUpdated()
-	if s.viewMetadataCatalogFenceStartupWaiting.Load() {
+	startupWaiting := s.viewMetadataCatalogFenceStartupWaiting.Load()
+	s.viewMetadataAdmissionMu.Unlock()
+	if startupWaiting {
 		return nil
 	}
 	if err := s.fenceViewMetadataCatalog(ctx, &copy); err != nil &&
@@ -226,21 +233,45 @@ func viewMetadataCatalogFenceRetryable(err error, upgradeOwnerActive bool) bool 
 	return upgradeOwnerActive && errors.Is(err, context.DeadlineExceeded)
 }
 
-func (s *service) viewMetadataAdmissionSnapshotStillAdmitted(
+func (s *service) acceptViewMetadataAdmissionSnapshot(
 	fenced *logservicepb.ViewMetadataAdmission,
+	disabled bool,
+	publishIngress bool,
 ) bool {
+	s.viewMetadataAdmissionMu.Lock()
+	defer s.viewMetadataAdmissionMu.Unlock()
+
 	current := s.viewMetadataAdmission.Load()
-	if fenced == nil || current == nil || !current.Admitted ||
+	if fenced == nil || current == nil ||
 		current.Generation != fenced.Generation || current.Epoch != fenced.Epoch {
 		return false
 	}
-	if current.Epoch > 0 &&
-		(s.viewMetadataEpochFence == nil || s.viewMetadataEpochFence.Epoch() < current.Epoch) {
-		return false
+	if disabled {
+		if current.Preparing || current.Enabled {
+			return false
+		}
+	} else {
+		if !current.Admitted || current.Epoch > 0 &&
+			(s.viewMetadataEpochFence == nil || s.viewMetadataEpochFence.Epoch() < current.Epoch) {
+			return false
+		}
+		if current.RevalidationRequired && current.Epoch > 0 &&
+			current.CatalogFencedEpoch < current.Epoch &&
+			s.viewMetadataCatalogFencedEpoch.Load() < current.Epoch {
+			return false
+		}
 	}
-	return !current.RevalidationRequired || current.Epoch == 0 ||
-		current.CatalogFencedEpoch >= current.Epoch ||
-		s.viewMetadataCatalogFencedEpoch.Load() >= current.Epoch
+	if publishIngress {
+		if s.beforeViewMetadataAdmissionHandoff != nil {
+			s.beforeViewMetadataAdmissionHandoff()
+		}
+		// This store and snapshot publication share one lock. An update is
+		// therefore either validated above or observes startupWaiting=false and
+		// owns fencing its newer epoch after this handoff.
+		s.viewMetadataCatalogFenceStartupWaiting.Store(false)
+		s.viewMetadataIngressReady.Store(true)
+	}
+	return true
 }
 
 func viewMetadataCatalogFenceRetryDelay(serviceID string, attempt uint32) time.Duration {
@@ -264,9 +295,20 @@ func viewMetadataCatalogFenceRetryDelay(serviceID string, attempt uint32) time.D
 }
 
 func (s *service) waitForViewMetadataAdmission() error {
+	return s.waitForViewMetadataAdmissionHandoff(false)
+}
+
+func (s *service) waitForViewMetadataIngressAdmission() error {
+	return s.waitForViewMetadataAdmissionHandoff(true)
+}
+
+func (s *service) waitForViewMetadataAdmissionHandoff(publishIngress bool) error {
 	if s.viewMetadataAdmissionGeneration == 0 {
 		// Focused unit tests can construct a partial service. Production
 		// NewService always allocates a non-zero generation.
+		if publishIngress {
+			s.viewMetadataIngressReady.Store(true)
+		}
 		return nil
 	}
 	timeout := s.cfg.HAKeeper.DiscoveryTimeout.Duration
@@ -297,7 +339,10 @@ func (s *service) waitForViewMetadataAdmission() error {
 	for {
 		snapshot := s.viewMetadataAdmission.Load()
 		if snapshot != nil && !snapshot.Preparing && !snapshot.Enabled {
-			return nil
+			if s.acceptViewMetadataAdmissionSnapshot(snapshot, true, publishIngress) {
+				return nil
+			}
+			continue
 		}
 		if snapshot != nil && snapshot.Generation != s.viewMetadataAdmissionGeneration {
 			return moerr.NewInternalErrorf(
@@ -369,7 +414,7 @@ func (s *service) waitForViewMetadataAdmission() error {
 				default:
 				}
 			}
-			if s.viewMetadataAdmissionSnapshotStillAdmitted(snapshot) {
+			if s.acceptViewMetadataAdmissionSnapshot(snapshot, false, publishIngress) {
 				return nil
 			}
 		}

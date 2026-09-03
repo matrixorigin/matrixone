@@ -797,6 +797,7 @@ type service struct {
 	lastCommandHash                 [32]byte
 	legacyDedupeArmed               bool
 	viewMetadataAdmissionGeneration uint64
+	viewMetadataAdmissionMu         sync.Mutex
 	viewMetadataAdmission           atomic.Pointer[logservicepb.ViewMetadataAdmission]
 	viewMetadataCatalogFencedEpoch  atomic.Uint64
 	viewMetadataEpochFence          *compile.ViewMetadataEpochFence
@@ -808,6 +809,8 @@ type service struct {
 	viewMetadataRevocationOnce      sync.Once
 
 	viewMetadataCatalogFenceStartupWaiting atomic.Bool
+	// beforeViewMetadataAdmissionHandoff is a deterministic test barrier.
+	beforeViewMetadataAdmissionHandoff func()
 	// viewMetadataCloseFn is a deterministic test hook for the asynchronous
 	// close request issued after synchronous ingress revocation.
 	viewMetadataCloseFn func() error

@@ -452,7 +452,6 @@ func (s *service) Start() (err error) {
 	if err = s.waitForViewMetadataAdmission(); err != nil {
 		return err
 	}
-	s.completeBootstrapUpgradeStartupWait()
 	if err = s.startUnlessViewMetadataGenerationRevoked(func() error {
 		return s.startSiriusRuntime(context.Background())
 	}); err != nil {
@@ -472,13 +471,14 @@ func (s *service) Start() (err error) {
 	}
 
 	// Admission authorizes local initialization; it does not make this CN
-	// routable. Publish ingress readiness only after every remote entry point is
-	// listening. A failed heartbeat leaves the CN safely pending and the normal
-	// heartbeat loop will retry without tearing down already-live listeners.
-	if err = s.checkViewMetadataGenerationRevoked(); err != nil {
+	// routable. Revalidate after every remote entry point is listening, then
+	// linearize authoritative snapshot validation and ingress publication with
+	// heartbeat snapshot storage. Keep the automatic upgrade owner alive until
+	// this final handoff closes.
+	if err = s.waitForViewMetadataIngressAdmission(); err != nil {
 		return err
 	}
-	s.viewMetadataIngressReady.Store(true)
+	s.completeBootstrapUpgradeStartupWait()
 	if err = s.checkViewMetadataGenerationRevoked(); err != nil {
 		return err
 	}
