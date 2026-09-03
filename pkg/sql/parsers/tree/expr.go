@@ -995,9 +995,18 @@ func (node *FuncExpr) Format(ctx *FmtCtx) {
 		ctx.WriteString(node.Type.ToString())
 		ctx.WriteByte(' ')
 	}
+	isConvertUsing := strings.EqualFold(funcName, "convert") && len(node.Exprs) == 2
 	isGroupConcat := strings.EqualFold(funcName, "group_concat") ||
 		strings.EqualFold(node.Func.FunctionReference.(*UnresolvedName).ColName(), "group_concat")
-	if isGroupConcat && len(node.Exprs) > 0 {
+	if isConvertUsing {
+		node.Exprs[0].Format(ctx)
+		ctx.WriteString(" using ")
+		if charset, ok := node.Exprs[1].(*NumVal); ok {
+			ctx.WriteString(charset.String())
+		} else {
+			node.Exprs[1].Format(ctx)
+		}
+	} else if isGroupConcat && len(node.Exprs) > 0 {
 		// The parser stores GROUP_CONCAT's separator as the final expression so
 		// binders can consume it uniformly. It is not a concatenated argument.
 		node.Exprs[:len(node.Exprs)-1].Format(ctx)
