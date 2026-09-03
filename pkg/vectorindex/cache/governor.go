@@ -365,7 +365,15 @@ func (c *VectorIndexCache) enforce(account uint32, tenant, sys caps, protect str
 		if sysLimit := sys.of(a); sysLimit > 0 {
 			// The tenant pass already gave bytes back to the CN total; charging them twice
 			// would evict a second, innocent tenant's entries for room that is already free.
-			c.reclaim(list, a, sysLimit, total.of(a)-freed, func(resident) bool { return true })
+			used := total.of(a) - freed
+			// The account asking for room pays for it first. Coldest-first alone lets a
+			// tenant that floods the CN evict a quiet neighbour's older entry before its own
+			// -- the CN-wide cap still held, but the cost of holding it landed on the wrong
+			// tenant. Only once this account has nothing left to give does the pass widen.
+			used -= c.reclaim(list, a, sysLimit, used, func(r resident) bool {
+				return r.account == account
+			})
+			c.reclaim(list, a, sysLimit, used, func(resident) bool { return true })
 		}
 	}
 }

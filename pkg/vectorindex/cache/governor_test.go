@@ -479,6 +479,51 @@ func TestCapsLess(t *testing.T) {
 		"each arena is reduced by its own incoming bytes")
 }
 
+// When the CN-wide cap binds, the account asking for room gives up its own entries before a
+// quiet neighbour's, even when the neighbour's is colder.
+func TestGovernorSysCapChargesTheLoadingAccountFirst(t *testing.T) {
+	c := newBoundCache(t)
+
+	// A cap of 300 with 200-byte loads: the first greedy load fits beside the quiet entry
+	// (60 <= 300-200), so tenant 1 arrives at the second one already holding enough of its
+	// own to cover the overage. That is what isolates WHOSE entry is taken -- with a tighter
+	// cap the widening would be legitimate, because tenant 1 would have nothing to give.
+	spB := govProc(t, c, 2, caps{}, hostCap(300))
+	loadInto(t, c, spB, "__mo_index_secondary_quiet", 60, 0)
+	entryOf(t, c, "__mo_index_secondary_quiet").ExpireAt.Store(1)
+
+	// Tenant 1 floods. Its own older entry is WARMER than tenant 2's.
+	spA := govProc(t, c, 1, caps{}, hostCap(300))
+	loadInto(t, c, spA, "__mo_index_secondary_greedy1", 200, 0)
+	require.True(t, isResident(c, "__mo_index_secondary_quiet"), "precondition: nothing evicted yet")
+	entryOf(t, c, "__mo_index_secondary_greedy1").ExpireAt.Store(9)
+	loadInto(t, c, spA, "__mo_index_secondary_greedy2", 200, 0)
+
+	require.True(t, isResident(c, "__mo_index_secondary_quiet"),
+		"the quiet tenant keeps its entry: the flooding account had bytes of its own to give")
+	require.False(t, isResident(c, "__mo_index_secondary_greedy1"),
+		"the account asking for room pays first, even though its entry is warmer")
+	require.True(t, isResident(c, "__mo_index_secondary_greedy2"), "never the entry just loaded")
+}
+
+// If the loading account cannot free enough on its own, the pass widens to everyone.
+func TestGovernorSysCapWidensWhenLoaderHasNothingLeft(t *testing.T) {
+	c := newBoundCache(t)
+
+	spB := govProc(t, c, 2, caps{}, hostCap(150))
+	loadInto(t, c, spB, "__mo_index_secondary_other", 100, 0)
+	entryOf(t, c, "__mo_index_secondary_other").ExpireAt.Store(1)
+
+	// Tenant 1 arrives holding nothing, and its single load already exceeds the cap on its
+	// own, so there is no entry of its own to reclaim.
+	spA := govProc(t, c, 1, caps{}, hostCap(150))
+	loadInto(t, c, spA, "__mo_index_secondary_newcomer", 120, 0)
+
+	require.False(t, isResident(c, "__mo_index_secondary_other"),
+		"with nothing of its own to give, the pass widens to the coldest entry anywhere")
+	require.True(t, isResident(c, "__mo_index_secondary_newcomer"))
+}
+
 // mutatingSizeSearch has algorithm state that Destroy tears down and GetIndexSize walks -- the
 // exact shape (hnsw's s.Indexes, cagra's sub-index slice) that a governor reading sizes outside
 // the entry lock would race.
