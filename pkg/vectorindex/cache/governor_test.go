@@ -23,6 +23,10 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/sqlexec"
@@ -247,4 +251,103 @@ func entryOf(t *testing.T, c *VectorIndexCache, key string) *VectorIndexSearch {
 	value, ok := c.IndexMap.Load(key)
 	require.True(t, ok, "%q must be resident", key)
 	return value.(*VectorIndexSearch)
+}
+
+// varcharResult builds the shape the SYS read actually gets back: variable_value is a varchar
+// column in mo_mysql_compatibility_mode, one row per matching variable. No values means the
+// SYS account never SET the cap.
+func varcharResult(t *testing.T, mp *mpool.MPool, values ...string) executor.Result {
+	t.Helper()
+	bat := batch.NewWithSize(1)
+	bat.Vecs[0] = vector.NewVec(types.T_varchar.ToType())
+	for _, v := range values {
+		require.NoError(t, vector.AppendBytes(bat.Vecs[0], []byte(v), false, mp))
+	}
+	bat.SetRowCount(len(values))
+	return executor.Result{Mp: mp, Batches: []*batch.Batch{bat}}
+}
+
+// sysProc is a session with no tenant cap, so only the SYS read is under test.
+func sysProc() *sqlexec.SqlProcess {
+	return &sqlexec.SqlProcess{SqlCtx: &sqlexec.SqlContext{
+		Ctx: context.Background(), CNUuid: "gov-test-cn", AccountId: 3,
+		ResolveVariableFunc: func(string, bool, bool) (interface{}, error) { return int64(0), nil },
+	}}
+}
+
+// withSysSql installs a SYS-read stub and starts the memo cold.
+func withSysSql(t *testing.T, c *VectorIndexCache, f func(context.Context, string, uint32, string, string) (executor.Result, error)) {
+	t.Helper()
+	orig := runSysSql
+	runSysSql = f
+	t.Cleanup(func() { runSysSql = orig })
+	c.sysLimit = sysLimitCache{}
+}
+
+// The SYS read extracts the cap from the catalog row, as the SYS account and on its own context.
+func TestGovernorSysReadExtractsValue(t *testing.T) {
+	c := newBoundCache(t)
+	mp := mpool.MustNewZero()
+
+	var gotAccount uint32
+	var gotCN, gotSQL string
+	calls := 0
+	withSysSql(t, c, func(_ context.Context, cn string, account uint32, _, sql string) (executor.Result, error) {
+		calls++
+		gotCN, gotAccount, gotSQL = cn, account, sql
+		return varcharResult(t, mp, "1048576"), nil
+	})
+
+	require.EqualValues(t, 1048576, c.sysCacheLimit(sysProc()))
+	require.EqualValues(t, 0, gotAccount, "the CN-wide cap must be read as the SYS account, not the caller")
+	require.Equal(t, "gov-test-cn", gotCN)
+	require.Contains(t, gotSQL, "account_id = 0")
+	require.Contains(t, gotSQL, maxIndexCacheSizeVar)
+
+	// Memoized: a second call inside the TTL does not re-query.
+	require.EqualValues(t, 1048576, c.sysCacheLimit(sysProc()))
+	require.Equal(t, 1, calls)
+
+	// Past the TTL it re-reads and picks up a new value.
+	c.sysLimit.fetched = time.Now().Add(-2 * sysLimitTTL)
+	require.EqualValues(t, 1048576, c.sysCacheLimit(sysProc()))
+	require.Equal(t, 2, calls, "the memo must expire so SET GLOBAL takes effect without a restart")
+}
+
+// No row means the SYS account never set the cap: unlimited.
+func TestGovernorSysReadNoRowIsUnlimited(t *testing.T) {
+	c := newBoundCache(t)
+	mp := mpool.MustNewZero()
+	withSysSql(t, c, func(context.Context, string, uint32, string, string) (executor.Result, error) {
+		return varcharResult(t, mp), nil
+	})
+	require.EqualValues(t, 0, c.sysCacheLimit(sysProc()))
+}
+
+// A value that does not parse is ignored rather than guessed at.
+func TestGovernorSysReadUnparseableValueIsIgnored(t *testing.T) {
+	c := newBoundCache(t)
+	mp := mpool.MustNewZero()
+	withSysSql(t, c, func(context.Context, string, uint32, string, string) (executor.Result, error) {
+		return varcharResult(t, mp, "8MB"), nil
+	})
+	require.EqualValues(t, 0, c.sysCacheLimit(sysProc()))
+}
+
+// The SYS cap read through the catalog binds a real load, end to end.
+func TestGovernorSysReadDrivesEviction(t *testing.T) {
+	c := newBoundCache(t)
+	mp := mpool.MustNewZero()
+	withSysSql(t, c, func(context.Context, string, uint32, string, string) (executor.Result, error) {
+		return varcharResult(t, mp, "250"), nil
+	})
+
+	sp := sysProc()
+	loadInto(t, c, sp, "__mo_index_secondary_syssql_a", 200, 0)
+	entryOf(t, c, "__mo_index_secondary_syssql_a").ExpireAt.Store(1)
+	loadInto(t, c, sp, "__mo_index_secondary_syssql_b", 200, 0)
+
+	require.False(t, isResident(c, "__mo_index_secondary_syssql_a"),
+		"400 > the catalog-read SYS cap of 250")
+	require.True(t, isResident(c, "__mo_index_secondary_syssql_b"))
 }
