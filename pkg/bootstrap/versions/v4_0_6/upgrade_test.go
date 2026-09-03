@@ -164,7 +164,10 @@ func TestUpgradeEntries(t *testing.T) {
 		"drop view if exists information_schema.statistics")
 	for _, entry := range tenantUpgEntries {
 		ddl := entry.UpgSql + entry.PostSql
-		if strings.Contains(ddl, "mo_subscription_tables()") ||
+		if entry.TableName == "VIEWS" {
+			require.Equal(t, int64(defines.MORPCVersion47), entry.RequiredProtocolVersion,
+				"view upgrade %s must wait for mo_view_definition", entry.TableName)
+		} else if strings.Contains(ddl, "mo_subscription_tables()") ||
 			strings.Contains(ddl, "mo_subscription_columns()") {
 			require.Equal(t, int64(defines.MORPCVersion46), entry.RequiredProtocolVersion,
 				"view upgrade %s must wait for subscription metadata functions", entry.TableName)
@@ -205,6 +208,8 @@ func TestUpgradeEntries(t *testing.T) {
 		expectedProtocol := int64(defines.MORPCVersion41)
 		if view.name == "TABLES" || view.name == "COLUMNS" {
 			expectedProtocol = defines.MORPCVersion46
+		} else if view.name == "VIEWS" {
+			expectedProtocol = defines.MORPCVersion47
 		}
 		require.Equal(t, expectedProtocol, entry.RequiredProtocolVersion)
 		require.Contains(t, strings.ToLower(entry.PreSql),

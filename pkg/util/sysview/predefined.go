@@ -585,6 +585,22 @@ var (
 		"'" + DefaultCollationForCharset("utf8mb4") + "' AS `COLLATION_CONNECTION` " +
 		informationSchemaViewsSourceSQL
 
+	// InformationSchemaViewsLegacyDDL is installed until every CN supports the
+	// parser-derived definition function. It must not reference a function ID an
+	// older remote receiver cannot resolve.
+	InformationSchemaViewsLegacyDDL = "CREATE VIEW information_schema.VIEWS AS " +
+		informationSchemaMetadataVisibilityCTE() + "SELECT 'def' AS `TABLE_CATALOG`," +
+		"tbl.reldatabase AS `TABLE_SCHEMA`," +
+		"tbl.relname AS `TABLE_NAME`," +
+		"tbl.rel_createsql AS `VIEW_DEFINITION`," +
+		"'NONE' AS `CHECK_OPTION`," +
+		"'YES' AS `IS_UPDATABLE`," +
+		"usr.user_name + '@' + usr.user_host AS `DEFINER`," +
+		"'DEFINER' AS `SECURITY_TYPE`," +
+		"'utf8mb4' AS `CHARACTER_SET_CLIENT`," +
+		"'" + DefaultCollationForCharset("utf8mb4") + "' AS `COLLATION_CONNECTION` " +
+		informationSchemaViewsSourceSQL
+
 	InformationSchemaStatisticsDDL = fmt.Sprintf("CREATE VIEW information_schema.`STATISTICS` AS "+informationSchemaMetadataVisibilityCTE()+
 		"select 'def' AS `TABLE_CATALOG`,"+
 		"`tbl`.`reldatabase` AS `TABLE_SCHEMA`,"+
