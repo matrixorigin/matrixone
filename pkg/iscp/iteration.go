@@ -378,7 +378,10 @@ func ExecuteIterationWithRuntime(
 			break
 		}
 	}
-	sources := jobSpecs[0].ConsumerInfo.SourceTableInfos()
+	// A shared iteration is admitted from the union of all jobs' source
+	// tables. Collect every relation in that union; each consumer is filtered
+	// to its own source set when the batches are fanned out below.
+	sources := iterCtx.sourceTables
 	if len(sources) == 0 {
 		sources = []TableInfo{jobSpecs[0].ConsumerInfo.SrcTable}
 	}
@@ -503,6 +506,7 @@ func ExecuteIterationWithRuntime(
 		delTSColIdx,
 		delCompositedPkColIdx,
 		retainRowID,
+		jobSpecs,
 	)
 	for i, status := range statuses {
 		if runtime != nil && runtime.IsJobFenced(NewJobRuntimeKey(iterCtx.accountID, iterCtx.tableID, iterCtx.jobNames[i], iterCtx.jobIDs[i])) {
@@ -556,6 +560,7 @@ func runISCPTaskIterationConsumers(
 	delTSColIdx int,
 	delCompositedPkColIdx int,
 	retainRowID bool,
+	jobSpecs []*JobSpec,
 ) {
 	var changeStreams []iterationSourceChanges
 	switch changes := changeInput.(type) {
@@ -750,7 +755,7 @@ func runISCPTaskIterationConsumers(
 			noMoreData := data.noMoreData
 			active := make([]DataRetrieverConsumer, 0, len(dataRetrievers))
 			for i := range dataRetrievers {
-				if dataRetrievers[i] != nil && !dataRetrievers[i].IsCanceled() {
+				if dataRetrievers[i] != nil && !dataRetrievers[i].IsCanceled() && consumerAcceptsSource(jobSpecs, i, data.SourceTableID) {
 					active = append(active, dataRetrievers[i])
 				}
 			}
@@ -835,6 +840,30 @@ func runISCPTaskIterationConsumers(
 
 	cancel()
 	changeHandelWg.Wait()
+}
+
+// consumerAcceptsSource keeps a shared iteration's union stream from leaking
+// rows from one job's source set into another job. A zero source ID is the
+// legacy single-source/error shape and is intentionally broadcast.
+func consumerAcceptsSource(jobSpecs []*JobSpec, consumerIdx int, sourceID uint64) bool {
+	if sourceID == 0 || consumerIdx < 0 || consumerIdx >= len(jobSpecs) || jobSpecs[consumerIdx] == nil {
+		return true
+	}
+	sources := jobSpecs[consumerIdx].ConsumerInfo.SourceTableInfos()
+	if len(sources) == 0 {
+		return true
+	}
+	for _, source := range sources {
+		if source.TableID == 0 {
+			// Persisted legacy jobs may not have resolved source IDs yet. Keep
+			// their compatibility behavior until registration resolves them.
+			return true
+		}
+		if source.TableID == sourceID {
+			return true
+		}
+	}
+	return false
 }
 
 func flushFinalJobStatusOnIterationState(

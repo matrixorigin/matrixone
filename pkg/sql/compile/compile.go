@@ -6686,7 +6686,7 @@ func supportsMultiSourceISCP(service string) bool {
 		return false
 	}
 	protocolVersion, ok := version.(int64)
-	return ok && protocolVersion >= defines.MORPCVersion43
+	return ok && protocolVersion >= defines.MORPCVersion44
 }
 
 func supportsRemoteTextCollationAggregates(service string) bool {

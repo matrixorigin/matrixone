@@ -2739,9 +2739,9 @@ func (s *Scope) CreateView(c *Compile) error {
 				for _, name := range names {
 					spec.SrcTables = append(spec.SrcTables, iscp.TableInfo{DBName: name.Database, TableName: name.Table})
 				}
-				if len(spec.SrcTables) > 1 && !supportsMultiSourceISCP(c.proc.GetService()) {
-					return moerr.NewNotSupported(c.proc.Ctx, "cross-table materialized view requires all services to support multi-source ISCP")
-				}
+			}
+			if !supportsMultiSourceISCP(c.proc.GetService()) {
+				return moerr.NewNotSupported(c.proc.Ctx, "materialized view requires all services to support ISCP materialized view consumers")
 			}
 			job := &iscp.JobID{DBName: sourceDB, TableName: sourceTable, JobName: "materialized_view_" + dbName + "_" + viewName}
 			if _, err = CreateCdcTask(c, spec, job, false); err != nil {

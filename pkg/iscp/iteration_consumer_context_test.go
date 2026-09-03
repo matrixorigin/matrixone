@@ -149,6 +149,19 @@ func testIterationContext(jobNames ...string) *IterationContext {
 	}
 }
 
+func TestSharedIterationRoutesEachSourceOnlyToOwningJob(t *testing.T) {
+	jobSpecs := []*JobSpec{
+		{ConsumerInfo: ConsumerInfo{SrcTables: []TableInfo{{TableID: 10}, {TableID: 20}}}},
+		{ConsumerInfo: ConsumerInfo{SrcTables: []TableInfo{{TableID: 10}, {TableID: 30}}}},
+	}
+	require.True(t, consumerAcceptsSource(jobSpecs, 0, 10))
+	require.True(t, consumerAcceptsSource(jobSpecs, 0, 20))
+	require.False(t, consumerAcceptsSource(jobSpecs, 0, 30))
+	require.True(t, consumerAcceptsSource(jobSpecs, 1, 10))
+	require.False(t, consumerAcceptsSource(jobSpecs, 1, 20))
+	require.True(t, consumerAcceptsSource(jobSpecs, 1, 30))
+}
+
 func runIterationConsumersForTest(
 	ctx context.Context,
 	iterCtx *IterationContext,
@@ -194,6 +207,7 @@ func runIterationConsumersWithStatusesForTest(
 			1,
 			0,
 			false,
+			nil,
 		)
 	}()
 	return done, statuses
@@ -289,6 +303,7 @@ func TestRunIterationRestoresAttrsWithRetainedRowID(t *testing.T) {
 			{Name: "event_id"}, {Name: "bytes_sent"}, {Name: objectio.DefaultCommitTS_Attr},
 		}},
 		ISCPDataType_Tail, packer, mp, 3, 0, 2, 1, true,
+		nil,
 	)
 	require.Equal(t, []string{
 		catalog.Row_ID, "event_id", "bytes_sent", objectio.DefaultCommitTS_Attr,

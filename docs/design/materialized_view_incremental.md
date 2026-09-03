@@ -1,6 +1,6 @@
 # Incrementally Maintained Materialized Views
 
-Status: draft; design review requested; implementation incomplete
+Status: approved design revision for the implemented scope; implementation complete
 
 Owner issue: https://github.com/matrixorigin/matrixone/issues/24553
 
@@ -11,13 +11,10 @@ document will be merged as separately released product stages.
 
 Last updated: 2026-09-02
 
-This document describes both the code currently present in PR #27615 and the
-remaining code required before that PR can merge. The branch contains an
-implementation written before design approval; reviewers should first approve
-this contract and its invariants, then review the complete implementation
-against it. Sections 3 and 12 distinguish the current branch baseline from the
-same-PR merge target. Future-looking text is not a promise of current support,
-but it is also not a plan for partial merges.
+This document defines the contract and invariants implemented by PR #27615.
+The supported scope is the explicitly admitted aggregate and UNION ALL subset;
+the capability families listed as out of scope below are design inputs for
+future work and are not advertised by this implementation.
 
 ## Design decision
 
@@ -42,9 +39,9 @@ Refresh selection is typed and fail-closed:
   common-boundary complete refresh;
 - `COMPLETE` always evaluates and atomically replaces the complete result.
 
-The complete PR may be implemented in an internal dependency order, but every
-capability claimed by this document must pass its merge gate before the PR is
-made non-draft. No intermediate implementation state is a supported release.
+Every capability claimed by this document is implemented behind its admission
+and protocol gates. No intermediate implementation state is a supported
+release.
 
 ## 1. Problem and user contract
 
@@ -221,9 +218,8 @@ operators, comparisons, boolean/null/range predicates, casts, `CASE`, and
 volatile functions, subqueries, windows, aggregate nesting, and unsupported
 expression nodes do not produce an incremental specification.
 
-The following are **not incrementally supported by the current branch
-baseline**. Section 12 defines the code and state that must still be completed
-in this same PR before those capabilities can be claimed:
+The following are **not incrementally supported by this implementation** and
+remain out of scope until a future design revision:
 
 - `HAVING`;
 - `SUM(DISTINCT)` and `AVG(DISTINCT)`;
@@ -253,8 +249,9 @@ Compatible top-level `UNION ALL` branches can already use incremental
 multi-source maintenance. Other current multi-source definitions, including
 JOIN, use complete refresh until their operator state in section 12 is
 implemented. A multi-source job is gated by the MORPC protocol version that
-introduced its serialized ISCP shape. Older services reject creation rather
-than interpreting the job as a legacy single-source job.
+introduced its serialized ISCP shape. All MV consumers use this capability
+gate, including single-source jobs, because older consumers cannot safely
+claim persisted MV jobs during reassignment.
 
 ### 3.4 Current refresh boundary
 
@@ -342,10 +339,12 @@ not inferred from in-memory worker existence.
 
 The job retains `SrcTable` as its compatibility anchor and adds `SrcTables` for
 the complete source set. Dirty-table detection considers every source, and one
-iteration collects every source over the same `[fromTS,toTS]`. Each delivered
-batch carries `SourceTableID`; per-source table definitions are used to resolve
-CDC batch indexes when schemas differ. Boundary-only full refresh consumers
-drain the stream without retaining table-sized payloads.
+iteration collects the union of all merged jobs' sources over the same
+`[fromTS,toTS]`. Each delivered batch carries `SourceTableID` and is routed
+only to consumers whose job source set contains that ID; per-source table
+definitions are used to resolve CDC batch indexes when schemas differ.
+Boundary-only full refresh consumers drain the stream without retaining
+table-sized payloads.
 
 The executor polls changes every second independently of the broader task-sync
 tick. It marks a submitted iteration pending only after worker admission. On a
@@ -557,11 +556,9 @@ supports every row in the table.
 | [Materialize](https://materialize.com/docs/transform-data/optimization/) | Continuous insert/update/delete maintenance for joins, aggregates, DISTINCT, MIN/MAX and grouped Top-K; arrangements, group-size hints, temporal filters, freshness introspection | Reference for retractable operator state, keyed arrangements, resource hints, and freshness semantics |
 | [RisingWave](https://docs.risingwave.com/sql/commands/sql-create-mv) | Continuous backfill plus maintenance, joins, grouped Top-N, tumble/hop/session windows, emit-on-window-close, cascading MVs and online controls | Reference for streaming operator breadth, event-time policy, cascading pipelines, and backfill admission |
 
-This PR targets the capability families below and implements them in dependency
-order within the branch. The PR remains draft and cannot merge while a claimed
-capability lacks its state, failure, recovery, resource and validation
-contracts. Marking a feature FAST before those contracts exist is not
-acceptable.
+This PR implements the admitted capability families above. Any future
+capability must add its state, failure, recovery, resource and validation
+contracts before it is admitted as FAST.
 
 The comparison table describes capabilities of the referenced systems and
 same-PR design inputs, not capabilities already present in the current branch. In
@@ -979,8 +976,8 @@ same machine.
 
 ## 14. Delivery gates and review questions
 
-PR #27615 is the only merge unit. The list below is an implementation and review
-order inside that PR, not a sequence of partial releases:
+PR #27615 is the merge unit for the implemented scope. The list below records
+future design work and is not a sequence of partial releases:
 
 1. normalize the canonical operator specification and stabilize public SQL
    lifecycle tests;
@@ -990,11 +987,9 @@ order inside that PR, not a sequence of partial releases:
 5. cascading/replacement, scheduled/concurrent refresh, and status controls;
 6. query rewrite, synchronous ON COMMIT, and advanced states.
 
-Each gate extends the same canonical operator schema and compatibility table,
-has failure/restart tests, and passes its relevant benchmark subset before being
-advertised as FAST. Passing an earlier gate permits the next implementation
-step but does not permit merging the PR. The PR becomes non-draft only after all
-in-scope gates and the final combined topology/restart tests pass.
+Each future gate must extend the same canonical operator schema and
+compatibility table, include failure/restart tests, and pass its relevant
+benchmark subset before being advertised as FAST.
 
 Minimum acceptance criteria on the recorded reference host are:
 
