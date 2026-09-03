@@ -203,8 +203,9 @@ MV 必须是顶层 select，包含 1～16 个直接、持久化的普通基表�
   Top-K、percentile/quantile、bitmap/HLL、用户自定义聚合状态。
 
 查询必须先通过 3.1 的直接普通源 admission。通过 admission 但无法生成增量规格时，
-`FAST` 在创建阶段拒绝；当前错误能说明“不属于受支持的单表增量聚合”，但还不能
-对每种 SQL construct 返回独立原因。`FORCE` 不保存增量规格并走完整刷新。未通过
+`FAST` 在创建阶段拒绝，并按 SQL construct、表达式节点和缺失的状态能力返回可诊断的
+独立原因；如果一条定义同时包含多个不兼容 construct，应保留完整的原因集合，而不是
+只返回一个笼统的“不属于受支持的单表增量聚合”。`FORCE` 不保存增量规格并走完整刷新。未通过
 source admission 的 derived table、普通 view 和特殊 relation 会直接拒绝，而不是完整
 刷新。兼容的顶层 `UNION ALL` 可走 FAST；通过 source admission 但不能增量编译的
 `UNION ALL` 可由 FORCE/COMPLETE 完整刷新。
@@ -245,6 +246,24 @@ MV 存为普通物理 relation，而不是逻辑 view。Catalog property 持久�
 - source SQL 和可执行 refresh SQL；
 - 满足条件时保存带版本号、base64 编码的增量规格。
 
+上述 Catalog property 只保存 MV 的定义和维护入口，不等同于增量维护所需的全部
+运行状态。MV 的物理对象分为四层，并通过稳定的 MV/operator identity 关联：
+
+1. **定义元数据**：Catalog property 中的 MV 标记、刷新策略、源关系、source/refresh
+   SQL、依赖信息和增量规格；
+2. **最终结果 relation**：用户查询的 MV 物理 relation，只暴露定义 SQL 的可见输出列；
+3. **持久化 operator state relation**：由 consumer generation 拥有并恢复的中间状态，
+   例如 group aggregate state、`MIN/MAX` 候选集合、DISTINCT multiplicity、JOIN
+   arrangement、UNION branch identity 和 Top-K 候选集；
+4. **iteration 临时产物**：单次 snapshot/tail 使用的 delta、affected-group、shadow
+   target/state 等 relation 或批次数据。它们必须带 generation/iteration identity，成功
+   发布后转为新的可恢复状态或清理，不能暴露部分结果。
+
+简单的 `COUNT/SUM/AVG` 可能只需要在最终结果 relation 中保存隐藏聚合列；但凡删除或
+更新时无法仅凭当前结果恢复旧贡献的 operator，都必须创建相应的持久化中间状态。
+这些 state relation、最终结果 relation 和 watermark 的发布必须遵守同一事务边界；
+consumer 重启、重试、rebuild 或 generation fence 时，不能依赖内存中的中间结果。
+
 最终合入只保留一套 canonical 增量 operator specification，记录 source identity/列、
 operator ID/输入边、typed key/payload schema、filter、group expression、aggregate kind、
 可见输出列、隐藏状态列、序列化 group/row identity、retraction 策略、资源 admission
@@ -255,9 +274,21 @@ operator ID/输入边、typed key/payload schema、filter、group expression、a
 分支的 direct-aggregate 和 UNION envelope 临时 encoding 必须在合入前转换成 canonical
 schema。
 
-增量 target 使用二进制 `serial_full(...)` group key 作为隐藏主键，并保存 group
-row count、SUM/AVG sum/count 等隐藏状态。只支持全量刷新的 target 使用 MatrixOne
-隐藏 auto-increment fake primary key；创建时在 refresh 前初始化 sequence。
+对于每个输入 group 只产生一条可见结果行的增量聚合，target 使用确定性的、带类型信息
+的 `serial_full(...)` group identity 作为隐藏主键，并保存 group row count、SUM/AVG
+sum/count 等隐藏状态。这里的一一对应关系只适用于该类普通分组聚合：NULL、数据类型、
+字符排序规则等必须使用无歧义的编码；空 group 或 HAVING 可见性变化也必须通过插入、
+撤回结果行正确维护。
+
+包含 `UNION ALL`、ROLLUP/CUBE、GROUPING SETS 或其他额外结果维度时，identity 必须
+包含相应的 branch ID、grouping-set ID 或 operator identity，例如
+`(branch_id, serialized_group_key)`；JOIN、DISTINCT、MIN/MAX 候选集、Top-K 等无法
+与可见 MV 行一一对应的中间状态，必须保存在独立的持久化 state relation 中，而不能
+只依赖 target 的 group key。
+
+只支持全量刷新的 target 使用 MatrixOne 隐藏 auto-increment fake primary key；创建时
+在 refresh 前初始化 sequence。该 fake primary key 仅用于满足物理 relation 的写入要求，
+不表示跨刷新稳定的逻辑行 identity，完整刷新可以在共同 boundary 删除并重建结果。
 
 MIN/MAX、精确 COUNT(DISTINCT) 以及后续所有 stateful operator 使用 consumer 拥有的
 内部 relation，由确定性 MV/operator identity 命名。该 namespace 保留，普通用户不能
