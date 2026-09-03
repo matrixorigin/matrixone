@@ -16,12 +16,16 @@ package logservicedriver
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/lni/vfs"
+	"github.com/panjf2000/ants/v2"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
@@ -40,6 +44,221 @@ func initTest(t *testing.T) (*logservice.Service, *logservice.ClientConfig) {
 	require.NoError(t, err)
 	require.NotNil(t, service)
 	return service, &ccfg
+}
+
+func TestAsyncCommitSubmissionFailureCompletesWaiterAndReleasesClient(t *testing.T) {
+	service, ccfg := initTest(t)
+	defer service.Close()
+	cfg := NewConfig(
+		"",
+		WithConfigOptClientConfig("", ccfg),
+		WithConfigOptMaxClient(1),
+		WithConfigOptClientBufSize(10*mpool.KB),
+	)
+	d := NewLogServiceDriver(&cfg)
+	blocked := make(chan struct{})
+	require.NoError(t, d.workers.Submit(func() { <-blocked }))
+
+	committer := getCommitter()
+	e := entry.MockEntryWithPayload([]byte("submission failure"))
+	e.DSN = 1
+	committer.AddIntent(e)
+	d.asyncCommit(committer)
+
+	err := e.WaitDone()
+	require.Error(t, err)
+	require.Eventually(t, func() bool {
+		d.clientPool.cond.L.Lock()
+		defer d.clientPool.cond.L.Unlock()
+		return len(d.clientPool.clients) == 1
+	}, time.Second, time.Millisecond)
+	close(blocked)
+	require.NoError(t, d.Close())
+}
+
+func TestClientAcquisitionFailureCompletesWaiterBeforePanic(t *testing.T) {
+	service, ccfg := initTest(t)
+	defer service.Close()
+	cfg := NewConfig(
+		"",
+		WithConfigOptClientConfig("", ccfg),
+		WithConfigOptMaxClient(1),
+	)
+	d := NewLogServiceDriver(&cfg)
+	d.clientPool.Close()
+
+	committer := getCommitter()
+	e := entry.MockEntryWithPayload([]byte("client acquisition failure"))
+	e.DSN = 1
+	committer.AddIntent(e)
+	require.Panics(t, func() { d.asyncCommit(committer) })
+	require.ErrorIs(t, e.WaitDone(), ErrClientPoolClosed)
+	require.NoError(t, d.Close())
+}
+
+type blockingBackendClient struct {
+	*mockBackendClient
+	appendStarted chan struct{}
+	release       chan struct{}
+	startOnce     sync.Once
+}
+
+type deadlineBlockingBackendClient struct {
+	*mockBackendClient
+	appendStarted chan struct{}
+	release       chan struct{}
+	startOnce     sync.Once
+}
+
+func (c *deadlineBlockingBackendClient) Append(
+	_ context.Context,
+	record logservice.LogRecord,
+) (uint64, error) {
+	c.startOnce.Do(func() { close(c.appendStarted) })
+	<-c.release
+	return c.mockBackendClient.Append(context.Background(), record)
+}
+
+func (c *blockingBackendClient) Append(ctx context.Context, record logservice.LogRecord) (uint64, error) {
+	c.startOnce.Do(func() { close(c.appendStarted) })
+	select {
+	case <-c.release:
+		return c.mockBackendClient.Append(ctx, record)
+	case <-ctx.Done():
+		return 0, ctx.Err()
+	}
+}
+
+func TestCommitSubmissionFailureRunsThroughWaitLoop(t *testing.T) {
+	backend := NewMockBackend()
+	started := make(chan struct{})
+	release := make(chan struct{})
+	factory := func() (logservice.Client, error) {
+		return &blockingBackendClient{
+			mockBackendClient: newMockBackendClient(backend),
+			appendStarted:     started,
+			release:           release,
+		}, nil
+	}
+	cfg := NewConfig("", WithConfigOptClientFactory(factory), WithConfigOptMaxClient(2))
+	d := NewLogServiceDriver(&cfg)
+	// Keep two clients available while constraining the append worker capacity
+	// to one, so the second accepted committer exercises Submit's bounded
+	// failure path instead of blocking in client acquisition.
+	d.workers.Release()
+	d.workers, _ = ants.NewPool(1, ants.WithNonblocking(true))
+
+	first := entry.MockEntryWithPayload([]byte("first"))
+	second := entry.MockEntryWithPayload([]byte("second"))
+	d.onCommitIntents(first)
+	select {
+	case <-started:
+	case <-time.After(time.Second):
+		t.Fatal("first append did not enter the production worker")
+	}
+	d.onCommitIntents(second)
+
+	require.Error(t, second.WaitDone())
+	// The wait loop preserves commit order and is blocked on the first
+	// committer until its append is released, so both accepted committers are
+	// still pending here even though the second waiter already has its error.
+	require.Eventually(t, func() bool { return d.pendingWait.Load() == 2 }, time.Second, time.Millisecond)
+	close(release)
+	require.NoError(t, first.WaitDone())
+	require.Eventually(t, func() bool { return d.pendingWait.Load() == 0 }, time.Second, time.Millisecond)
+	require.NoError(t, d.Close())
+}
+
+func TestCloseDeadlineIncludesIntakeAndWorkerDrain(t *testing.T) {
+	backend := NewMockBackend()
+	started := make(chan struct{})
+	release := make(chan struct{})
+	factory := func() (logservice.Client, error) {
+		return &deadlineBlockingBackendClient{
+			mockBackendClient: newMockBackendClient(backend),
+			appendStarted:     started,
+			release:           release,
+		}, nil
+	}
+	cfg := NewConfig("", WithConfigOptClientFactory(factory), WithConfigOptMaxClient(2))
+	d := NewLogServiceDriver(&cfg)
+	d.closeTimeout = 50 * time.Millisecond
+	d.workers.Release()
+	d.workers, _ = ants.NewPool(1, ants.WithNonblocking(true))
+
+	first := entry.MockEntryWithPayload([]byte("first"))
+	second := entry.MockEntryWithPayload([]byte("second"))
+	d.onCommitIntents(first)
+	select {
+	case <-started:
+	case <-time.After(time.Second):
+		t.Fatal("first append did not enter the production worker")
+	}
+	d.onCommitIntents(second)
+	require.Error(t, second.WaitDone())
+
+	start := time.Now()
+	err := d.Close()
+	require.Error(t, err)
+	require.Less(t, time.Since(start), time.Second)
+
+	firstDone := make(chan error, 1)
+	go func() { firstDone <- first.WaitDone() }()
+	select {
+	case <-firstDone:
+		t.Fatal("in-flight append acquired a synthetic terminal result")
+	default:
+	}
+
+	close(release)
+	require.NoError(t, <-firstDone)
+	require.Eventually(t, func() bool { return d.pendingWait.Load() == 0 }, time.Second, time.Millisecond)
+
+	// A production caller fail-stops after the deadline error. The test keeps
+	// the process alive, so release the remaining internal loops explicitly.
+	d.waitCommitLoop.Stop()
+	d.truncateQueue.Stop()
+	d.clientPool.Close()
+	d.cancel()
+	close(d.commitWaitQueue)
+	close(d.postCommitQueue)
+}
+
+type failingBackendClient struct {
+	*mockBackendClient
+	err error
+}
+
+func (c *failingBackendClient) Append(context.Context, logservice.LogRecord) (uint64, error) {
+	return 0, c.err
+}
+
+func TestAppendFailureCompletesWaiterBeforeFailStop(t *testing.T) {
+	backend := NewMockBackend()
+	errExpected := errors.New("append failed")
+	factory := func() (logservice.Client, error) {
+		return &failingBackendClient{
+			mockBackendClient: newMockBackendClient(backend),
+			err:               errExpected,
+		}, nil
+	}
+	cfg := NewConfig(
+		"",
+		WithConfigOptClientFactory(factory),
+		WithConfigOptMaxClient(1),
+		WithConfigOptMaxTimeout(time.Millisecond),
+	)
+	d := NewLogServiceDriver(&cfg)
+	failStop := make(chan error, 1)
+	d.onAppendFailure = func(err error) { failStop <- err }
+
+	e := entry.MockEntryWithPayload([]byte("append failure"))
+	d.onCommitIntents(e)
+	require.ErrorIs(t, e.WaitDone(), errExpected)
+	require.ErrorIs(t, <-failStop, errExpected)
+	require.Eventually(t, func() bool { return d.pendingWait.Load() == 0 }, time.Second, time.Millisecond)
+	require.Zero(t, d.getCommittedDSNWatermark())
+	require.NoError(t, d.Close())
 }
 
 func restartDriver(t *testing.T, d *LogServiceDriver, h func(*entry.Entry)) *LogServiceDriver {
