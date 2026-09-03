@@ -587,6 +587,78 @@ func TestWindowPrepareValidatesRangeFrameBounds(t *testing.T) {
 	}
 }
 
+func TestValidateRangeFrameBound(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer func() {
+		require.Zero(t, mp.CurrNB())
+	}()
+
+	newVec := func(typ types.Type, value any) *vector.Vector {
+		var vec *vector.Vector
+		var err error
+		switch value := value.(type) {
+		case uint8:
+			vec, err = vector.NewConstFixed(typ, value, 1, mp)
+		case int8:
+			vec, err = vector.NewConstFixed(typ, value, 1, mp)
+		case int16:
+			vec, err = vector.NewConstFixed(typ, value, 1, mp)
+		case int32:
+			vec, err = vector.NewConstFixed(typ, value, 1, mp)
+		case int64:
+			vec, err = vector.NewConstFixed(typ, value, 1, mp)
+		case float32:
+			vec, err = vector.NewConstFixed(typ, value, 1, mp)
+		case float64:
+			vec, err = vector.NewConstFixed(typ, value, 1, mp)
+		case types.Decimal64:
+			vec, err = vector.NewConstFixed(typ, value, 1, mp)
+		case types.Decimal128:
+			vec, err = vector.NewConstFixed(typ, value, 1, mp)
+		case bool:
+			vec, err = vector.NewConstFixed(typ, value, 1, mp)
+		default:
+			t.Fatalf("unsupported test value type %T", value)
+		}
+		require.NoError(t, err)
+		return vec
+	}
+
+	tests := []struct {
+		name    string
+		typ     types.Type
+		value   any
+		wantErr bool
+	}{
+		{name: "unsigned", typ: types.T_uint8.ToType(), value: uint8(1)},
+		{name: "int8", typ: types.T_int8.ToType(), value: int8(1)},
+		{name: "int16", typ: types.T_int16.ToType(), value: int16(1)},
+		{name: "int32", typ: types.T_int32.ToType(), value: int32(-1), wantErr: true},
+		{name: "int64", typ: types.T_int64.ToType(), value: int64(1)},
+		{name: "float32", typ: types.T_float32.ToType(), value: float32(1.5)},
+		{name: "float32 infinity", typ: types.T_float32.ToType(), value: float32(math.Inf(1)), wantErr: true},
+		{name: "float64", typ: types.T_float64.ToType(), value: float64(1.5)},
+		{name: "float64 nan", typ: types.T_float64.ToType(), value: math.NaN(), wantErr: true},
+		{name: "decimal64", typ: types.T_decimal64.ToType(), value: types.Decimal64(1)},
+		{name: "decimal64 negative", typ: types.T_decimal64.ToType(), value: types.Decimal64Min, wantErr: true},
+		{name: "decimal128", typ: types.T_decimal128.ToType(), value: types.Decimal128FromInt64(1)},
+		{name: "decimal128 negative", typ: types.T_decimal128.ToType(), value: types.Decimal128FromInt64(-1), wantErr: true},
+		{name: "non-numeric", typ: types.T_bool.ToType(), value: true, wantErr: true},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			vec := newVec(test.typ, test.value)
+			defer vec.Free(mp)
+			if test.wantErr {
+				require.Error(t, validateRangeFrameBound(context.Background(), vec))
+			} else {
+				require.NoError(t, validateRangeFrameBound(context.Background(), vec))
+			}
+		})
+	}
+}
+
 func TestWindowPrepareClearsPartialRowsFrameBoundsOnError(t *testing.T) {
 	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
 	valid := makePreparedRowsFrame(t, 0, 0)
