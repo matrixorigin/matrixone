@@ -61,7 +61,7 @@ func TestStatementDigestTypeResolution(t *testing.T) {
 	require.NoError(t, err)
 	castTypes, shouldCast := fn.ShouldDoImplicitTypeCast()
 	require.True(t, shouldCast)
-	require.Equal(t, []types.Type{types.T_varchar.ToType()}, castTypes)
+	require.Equal(t, []types.Type{formattedScalarStringType(types.T_int64.ToType())}, castTypes)
 
 	_, err = GetFunctionByName(proc.Ctx, "statement_digest", nil)
 	require.Error(t, err)

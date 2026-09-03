@@ -20,6 +20,13 @@ type SQLModeFlag uint8
 
 const SQLModeMatrixOneNative = "MATRIXONE_NATIVE"
 
+// SQLModeEnableBoolSumAvg opts in to MySQL's reading of SUM/AVG over a
+// predicate. MySQL has no BOOL type, so a predicate is an integer 0/1 there and
+// aggregating one is ordinary numeric aggregation; MO types it as BOOL and
+// rejects it. Unlike SQLModeMatrixOneNative, which preserves MO behavior where
+// MySQL's is the default, this enables a behavior MO does not have by default.
+const SQLModeEnableBoolSumAvg = "ENABLE_BOOL_SUMAVG"
+
 const (
 	sqlModeANSIQuotes         = "ANSI_QUOTES"
 	sqlModePipesAsConcat      = "PIPES_AS_CONCAT"
@@ -106,6 +113,10 @@ func HasSQLMode(mode string, token string) bool {
 
 func HasMatrixOneNativeSQLMode(mode string) bool {
 	return HasSQLMode(mode, SQLModeMatrixOneNative)
+}
+
+func HasEnableBoolSumAvgSQLMode(mode string) bool {
+	return HasSQLMode(mode, SQLModeEnableBoolSumAvg)
 }
 
 func (flags SQLModeFlags) Has(flag SQLModeFlag) bool {

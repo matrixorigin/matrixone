@@ -185,7 +185,7 @@ const (
 // capabilities that can make a pipeline unsafe on an older remote worker.
 // NumericPrefix requires MORPC v30. JSONComparisonParam and
 // MixedJSONBooleanEquality require MORPC v36. StatementDigestFunction requires
-// MORPC v43. A struct makes compatibility call sites name every capability
+// MORPC v44. A struct makes compatibility call sites name every capability
 // instead of relying on positional booleans.
 type RemoteExpressionFeatures struct {
 	NumericPrefix            bool

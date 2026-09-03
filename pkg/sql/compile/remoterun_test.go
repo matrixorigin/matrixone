@@ -1040,8 +1040,8 @@ func TestPrepareRemoteRunSendingDataRejectsPrePadSpaceProtocol(t *testing.T) {
 }
 
 func TestRemoteExpressionProtocolValidation(t *testing.T) {
-	require.GreaterOrEqual(t, defines.MORPCLatestVersion, defines.MORPCVersion43,
-		"the v43 remote-expression capability must remain available after later protocol increments")
+	require.GreaterOrEqual(t, defines.MORPCLatestVersion, defines.MORPCVersion44,
+		"the v44 remote-expression capability must remain available after later protocol increments")
 
 	proc := testutil.NewProcess(t)
 	proc.Ctx = context.WithValue(proc.Ctx, defines.TenantIDKey{}, uint32(0))
@@ -1155,7 +1155,7 @@ func TestRemoteExpressionProtocolValidation(t *testing.T) {
 		rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion36)
 		require.NoError(t, validateRemoteExpressionPipelineProtocol(proc, remotePipeline))
 	})
-	t.Run("statement digest function requires v43", func(t *testing.T) {
+	t.Run("statement digest function requires v44", func(t *testing.T) {
 		remotePipeline := &pipeline.Pipeline{
 			InstructionList: []*pipeline.Instruction{{
 				ProjectList: []*planpb.Expr{statementDigest()},
@@ -1163,10 +1163,10 @@ func TestRemoteExpressionProtocolValidation(t *testing.T) {
 		}
 		rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion42)
 		err := validateRemoteExpressionPipelineProtocol(proc, remotePipeline)
-		require.ErrorContains(t, err, "STATEMENT_DIGEST remote execution requires MORPC protocol version 43")
+		require.ErrorContains(t, err, "STATEMENT_DIGEST remote execution requires MORPC protocol version 44")
 		require.True(t, moerr.IsMoErrCode(err, moerr.ErrNotSupported))
 
-		rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion43)
+		rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion44)
 		require.NoError(t, validateRemoteExpressionPipelineProtocol(proc, remotePipeline))
 	})
 
@@ -1575,6 +1575,7 @@ func Test_DMLOperatorSerializationRoundtrip(t *testing.T) {
 			Tag:                    41,
 			UpperLimit:             128,
 			MatchPrefix:            true,
+			ScalarPredicate:        true,
 			BuildExpr:              buildExpr,
 			KeyEncoding:            planpb.RuntimeFilterKeyEncoding_RUNTIME_FILTER_KEY_SERIAL_FULL_V1,
 			ProbeType:              probeType,
@@ -1608,6 +1609,7 @@ func Test_DMLOperatorSerializationRoundtrip(t *testing.T) {
 		require.Equal(t, []planpb.Type{componentType},
 			restoredOp.RuntimeFilterSpec.GetKeyComponentProbeTypes())
 		require.True(t, restoredOp.RuntimeFilterSpec.GetMatchPrefix())
+		require.True(t, restoredOp.RuntimeFilterSpec.GetScalarPredicate())
 	})
 
 	t.Run("HashBuild_LegacyRuntimeFilterHasNoImplicitContract", func(t *testing.T) {
