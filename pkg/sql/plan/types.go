@@ -550,6 +550,7 @@ type OptimizerHints struct {
 	subqueryPredicatePlanning  int
 	printShuffle               int
 	skipDedup                  int
+	outerAntiPlanning          int
 }
 
 type CTERef struct {

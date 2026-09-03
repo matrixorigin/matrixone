@@ -79,7 +79,7 @@ const (
 	MORPCVersion41     int64 = 41 // cycle-safe bounded current-role closure table function
 	MORPCVersion42     int64 = 42 // transactional SQL-task child cleanup
 	MORPCVersion43     int64 = 43 // scalar-predicate runtime-filter terminal states
-	MORPCVersion44     int64 = 44 // catalog-authenticated proxy cache reuse
+	MORPCVersion44     int64 = 44 // catalog-authenticated proxy cache reuse and validated MongoDB explicit-query scan payload
 	MORPCLatestVersion       = MORPCVersion44
 )
 
