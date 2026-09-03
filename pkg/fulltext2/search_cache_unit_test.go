@@ -18,6 +18,7 @@ import (
 	"math"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -65,6 +66,105 @@ func TestFulltext2SearchNewAndUnloaded(t *testing.T) {
 	s.Destroy()
 	require.Nil(t, s.idx)
 	require.False(t, s.loaded)
+}
+
+func TestFulltext2SearchLoad(t *testing.T) {
+	sp, mp := mockSqlProc(t)
+	cfg := testStorageCfg()
+	calls := 0
+	swapRunSql(t, func(_ *sqlexec.SqlProcess, _ string) (executor.Result, error) {
+		calls++
+		switch calls {
+		case 2, 4:
+			return executor.Result{Mp: mp}, nil // no base ids and no tail chunks
+		case 1, 3:
+			return executor.Result{Mp: mp, Batches: []*batch.Batch{int64Batch(mp, 0)}}, nil
+		case 5:
+			return executor.Result{Mp: mp, Batches: []*batch.Batch{int64Batch(mp, 11)}}, nil
+		case 6:
+			return executor.Result{Mp: mp, Batches: []*batch.Batch{int64Batch(mp, 22)}}, nil
+		default:
+			t.Fatalf("unexpected Load SQL call %d", calls)
+			return executor.Result{}, nil
+		}
+	})
+
+	s := NewFulltext2Search(cfg)
+	require.NoError(t, s.Load(sp))
+	require.True(t, s.loaded)
+	require.NotNil(t, s.idx)
+	require.True(t, s.genValid)
+	require.Equal(t, int64(11), s.loadedTs)
+	require.Equal(t, int64(22), s.loadedTail)
+	s.Destroy()
+}
+
+func TestFulltext2SearchLoadErrors(t *testing.T) {
+	t.Run("base budget", func(t *testing.T) {
+		sp, _ := mockSqlProc(t)
+		swapRunSql(t, func(_ *sqlexec.SqlProcess, _ string) (executor.Result, error) {
+			return executor.Result{}, moerr.NewInternalErrorNoCtx("base budget failed")
+		})
+
+		s := NewFulltext2Search(testStorageCfg())
+		require.ErrorContains(t, s.Load(sp), "base budget failed")
+	})
+
+	t.Run("base enumeration", func(t *testing.T) {
+		sp, mp := mockSqlProc(t)
+		calls := 0
+		swapRunSql(t, func(_ *sqlexec.SqlProcess, _ string) (executor.Result, error) {
+			calls++
+			if calls == 1 {
+				return executor.Result{Mp: mp, Batches: []*batch.Batch{int64Batch(mp, 0)}}, nil
+			}
+			return executor.Result{}, moerr.NewInternalErrorNoCtx("base enumeration failed")
+		})
+
+		s := NewFulltext2Search(testStorageCfg())
+		require.ErrorContains(t, s.Load(sp), "base enumeration failed")
+	})
+
+	t.Run("tail query", func(t *testing.T) {
+		sp, mp := mockSqlProc(t)
+		calls := 0
+		swapRunSql(t, func(_ *sqlexec.SqlProcess, _ string) (executor.Result, error) {
+			calls++
+			switch calls {
+			case 1, 3:
+				return executor.Result{Mp: mp, Batches: []*batch.Batch{int64Batch(mp, 0)}}, nil
+			case 2:
+				return executor.Result{Mp: mp}, nil // no base ids
+			default:
+				return executor.Result{}, moerr.NewInternalErrorNoCtx("tail query failed")
+			}
+		})
+
+		s := NewFulltext2Search(testStorageCfg())
+		require.ErrorContains(t, s.Load(sp), "tail query failed")
+	})
+
+	t.Run("generation capture", func(t *testing.T) {
+		sp, mp := mockSqlProc(t)
+		calls := 0
+		swapRunSql(t, func(_ *sqlexec.SqlProcess, _ string) (executor.Result, error) {
+			calls++
+			switch calls {
+			case 1, 3:
+				return executor.Result{Mp: mp, Batches: []*batch.Batch{int64Batch(mp, 0)}}, nil
+			case 2, 4:
+				return executor.Result{Mp: mp}, nil // no base ids and no tail chunks
+			default:
+				return executor.Result{}, moerr.NewInternalErrorNoCtx("generation capture failed")
+			}
+		})
+
+		s := NewFulltext2Search(testStorageCfg())
+		require.NoError(t, s.Load(sp))
+		require.True(t, s.loaded)
+		require.False(t, s.genValid)
+		s.Destroy()
+	})
 }
 
 // TestStaleGenSqls pins the cache-freshness generation queries: MAX(timestamp) over the
