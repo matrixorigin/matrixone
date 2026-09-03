@@ -126,10 +126,6 @@ func makeEvent(msg []byte, b *msgBuf) (IEvent, bool) {
 		case *tree.SetVar:
 			// This event should be sent to dst, so return false,
 			return makeSetVarEvent(sql, s), false
-		case *tree.SetRole:
-			// SET ROLE is forwarded to CN, but the resulting role is not part of
-			// the original handshake and cannot be reconstructed by ResetSession.
-			return makeIdentityChangeEvent(), false
 		case *tree.UpgradeStatement:
 			return makeUpgradeEvent(sql), true
 		default:
