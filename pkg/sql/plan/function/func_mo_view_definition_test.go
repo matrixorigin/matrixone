@@ -85,6 +85,12 @@ func TestViewDefinitionFromPersistedData(t *testing.T) {
 			ok:        true,
 		},
 		{
+			name:      "legacy COM_QUERY uses the first statement",
+			persisted: `{"Stmt":"CREATE VIEW v AS SELECT 1; SELECT 2"}`,
+			want:      "select 1",
+			ok:        true,
+		},
+		{
 			name:      "malformed JSON remains null",
 			persisted: `{`,
 		},
