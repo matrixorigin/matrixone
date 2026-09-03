@@ -3044,6 +3044,23 @@ func uint64RangeOffset(value uint64) *plan.Expr {
 	}}}
 }
 
+func unsignedRangeOffset(oid types.T, value uint64) *plan.Expr {
+	lit := &plan.Literal{}
+	switch oid {
+	case types.T_uint8:
+		lit.Value = &plan.Literal_U8Val{U8Val: uint32(value)}
+	case types.T_uint16:
+		lit.Value = &plan.Literal_U16Val{U16Val: uint32(value)}
+	case types.T_uint32:
+		lit.Value = &plan.Literal_U32Val{U32Val: uint32(value)}
+	case types.T_uint64:
+		lit.Value = &plan.Literal_U64Val{U64Val: value}
+	default:
+		panic("unsupported unsigned RANGE type")
+	}
+	return &plan.Expr{Expr: &plan.Expr_Lit{Lit: lit}}
+}
+
 func TestUint64RangeBound(t *testing.T) {
 	for _, tc := range []struct {
 		name        string
@@ -3152,6 +3169,86 @@ func TestBuildRangeIntervalUint64Boundaries(t *testing.T) {
 		require.NoError(t, err)
 		require.Equal(t, 2, start)
 		require.Equal(t, 4, end)
+	})
+}
+
+func testBuildRangeIntervalUnsignedBoundaries[T types.OrderedT](
+	t *testing.T,
+	mp *mpool.MPool,
+	oid types.T,
+	maxValue T,
+) {
+	t.Helper()
+
+	currentToFollowing := &plan.FrameClause{
+		Type:  plan.FrameClause_RANGE,
+		Start: &plan.FrameBound{Type: plan.FrameBound_CURRENT_ROW},
+		End: &plan.FrameBound{
+			Type: plan.FrameBound_FOLLOWING,
+			Val:  unsignedRangeOffset(oid, 1),
+		},
+	}
+	precedingToCurrent := &plan.FrameClause{
+		Type: plan.FrameClause_RANGE,
+		Start: &plan.FrameBound{
+			Type: plan.FrameBound_PRECEDING,
+			Val:  unsignedRangeOffset(oid, 1),
+		},
+		End: &plan.FrameBound{Type: plan.FrameBound_CURRENT_ROW},
+	}
+	zeroPreceding := &plan.FrameClause{
+		Type: plan.FrameClause_RANGE,
+		Start: &plan.FrameBound{
+			Type: plan.FrameBound_PRECEDING,
+			Val:  unsignedRangeOffset(oid, 0),
+		},
+		End: &plan.FrameBound{
+			Type: plan.FrameBound_PRECEDING,
+			Val:  unsignedRangeOffset(oid, 0),
+		},
+	}
+	check := func(t *testing.T, values []T, desc bool, row int, frame *plan.FrameClause, wantStart, wantEnd int) {
+		t.Helper()
+		vec := makeFixedVec(t, mp, oid, values)
+		defer vec.Free(mp)
+		ctr := &container{
+			orderVecs: []colexec.ExprEvalVector{{Vec: []*vector.Vector{vec}}},
+			desc:      []bool{desc},
+		}
+		start, end, err := ctr.buildRangeInterval(row, 0, len(values), frame)
+		require.NoError(t, err)
+		require.Equal(t, wantStart, start)
+		require.Equal(t, wantEnd, end)
+	}
+
+	var zeroValue T
+	asc := []T{zeroValue, maxValue}
+	desc := []T{maxValue, zeroValue}
+
+	// ASC addition overflow, subtraction underflow, and exact-zero PRECEDING
+	// retain the correct rows without wrapping or turning zero into underflow.
+	check(t, asc, false, 1, currentToFollowing, 1, 2)
+	check(t, asc, false, 0, precedingToCurrent, 0, 1)
+	check(t, asc, false, 0, zeroPreceding, 0, 1)
+
+	// DESC swaps the arithmetic direction but keeps the same frame invariant.
+	check(t, desc, true, 1, currentToFollowing, 1, 2)
+	check(t, desc, true, 0, precedingToCurrent, 0, 1)
+	check(t, desc, true, 1, zeroPreceding, 1, 2)
+}
+
+func TestBuildRangeIntervalUnsignedBoundaries(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer func() { require.Equal(t, int64(0), mp.CurrNB()) }()
+
+	t.Run("uint8", func(t *testing.T) {
+		testBuildRangeIntervalUnsignedBoundaries(t, mp, types.T_uint8, uint8(math.MaxUint8))
+	})
+	t.Run("uint16", func(t *testing.T) {
+		testBuildRangeIntervalUnsignedBoundaries(t, mp, types.T_uint16, uint16(math.MaxUint16))
+	})
+	t.Run("uint32", func(t *testing.T) {
+		testBuildRangeIntervalUnsignedBoundaries(t, mp, types.T_uint32, uint32(math.MaxUint32))
 	})
 }
 

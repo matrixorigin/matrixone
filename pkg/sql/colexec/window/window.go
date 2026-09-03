@@ -2321,14 +2321,11 @@ func searchLeftWithLocation(loc *time.Location, start, end, rowIdx int, vec *vec
 			left = genericSearchLeft(start, end-1, col, col[rowIdx], genericEqual[uint8], cmpl)
 		} else {
 			c := uint8(expr.Expr.(*plan.Expr_Lit).Lit.Value.(*plan.Literal_U8Val).U8Val)
-			if plus {
-				left = genericSearchLeft(start, end-1, col, col[rowIdx]+c, genericEqual[uint8], cmpl)
-			} else {
-				if col[rowIdx] <= c {
-					return start, nil
-				}
-				left = genericSearchLeft(start, end-1, col, col[rowIdx]-c, genericEqual[uint8], cmpl)
+			bound, aboveDomain, ok := unsignedRangeBound(col[rowIdx], c, !plus)
+			if !ok {
+				return outOfDomainRangeBoundary(start, end, aboveDomain, desc), nil
 			}
+			left = genericSearchLeft(start, end-1, col, bound, genericEqual[uint8], cmpl)
 		}
 	case types.T_uint16:
 		col := vector.MustFixedColNoTypeCheck[uint16](vec)
@@ -2340,14 +2337,11 @@ func searchLeftWithLocation(loc *time.Location, start, end, rowIdx int, vec *vec
 			left = genericSearchLeft(start, end-1, col, col[rowIdx], genericEqual[uint16], cmpl)
 		} else {
 			c := uint16(expr.Expr.(*plan.Expr_Lit).Lit.Value.(*plan.Literal_U16Val).U16Val)
-			if plus {
-				left = genericSearchLeft(start, end-1, col, col[rowIdx]+c, genericEqual[uint16], cmpl)
-			} else {
-				if col[rowIdx] <= c {
-					return start, nil
-				}
-				left = genericSearchLeft(start, end-1, col, col[rowIdx]-c, genericEqual[uint16], cmpl)
+			bound, aboveDomain, ok := unsignedRangeBound(col[rowIdx], c, !plus)
+			if !ok {
+				return outOfDomainRangeBoundary(start, end, aboveDomain, desc), nil
 			}
+			left = genericSearchLeft(start, end-1, col, bound, genericEqual[uint16], cmpl)
 		}
 	case types.T_uint32:
 		col := vector.MustFixedColNoTypeCheck[uint32](vec)
@@ -2359,14 +2353,11 @@ func searchLeftWithLocation(loc *time.Location, start, end, rowIdx int, vec *vec
 			left = genericSearchLeft(start, end-1, col, col[rowIdx], genericEqual[uint32], cmpl)
 		} else {
 			c := expr.Expr.(*plan.Expr_Lit).Lit.Value.(*plan.Literal_U32Val).U32Val
-			if plus {
-				left = genericSearchLeft(start, end-1, col, col[rowIdx]+c, genericEqual[uint32], cmpl)
-			} else {
-				if col[rowIdx] <= c {
-					return start, nil
-				}
-				left = genericSearchLeft(start, end-1, col, col[rowIdx]-c, genericEqual[uint32], cmpl)
+			bound, aboveDomain, ok := unsignedRangeBound(col[rowIdx], c, !plus)
+			if !ok {
+				return outOfDomainRangeBoundary(start, end, aboveDomain, desc), nil
 			}
+			left = genericSearchLeft(start, end-1, col, bound, genericEqual[uint32], cmpl)
 		}
 	case types.T_uint64:
 		col := vector.MustFixedColNoTypeCheck[uint64](vec)
@@ -2848,14 +2839,11 @@ func searchRightWithLocation(loc *time.Location, start, end, rowIdx int, vec *ve
 			right = genericSearchEqualRight(rowIdx, end-1, col, col[rowIdx], genericEqual[uint8])
 		} else {
 			c := uint8(expr.Expr.(*plan.Expr_Lit).Lit.Value.(*plan.Literal_U8Val).U8Val)
-			if sub {
-				if col[rowIdx] <= c {
-					return start, nil
-				}
-				right = genericSearchRight(start, end-1, col, col[rowIdx]-c, genericEqual[uint8], cmpl)
-			} else {
-				right = genericSearchRight(start, end-1, col, col[rowIdx]+c, genericEqual[uint8], cmpl)
+			bound, aboveDomain, ok := unsignedRangeBound(col[rowIdx], c, sub)
+			if !ok {
+				return outOfDomainRangeBoundary(start, end, aboveDomain, desc), nil
 			}
+			right = genericSearchRight(start, end-1, col, bound, genericEqual[uint8], cmpl)
 		}
 	case types.T_uint16:
 		col := vector.MustFixedColNoTypeCheck[uint16](vec)
@@ -2867,14 +2855,11 @@ func searchRightWithLocation(loc *time.Location, start, end, rowIdx int, vec *ve
 			right = genericSearchEqualRight(rowIdx, end-1, col, col[rowIdx], genericEqual[uint16])
 		} else {
 			c := uint16(expr.Expr.(*plan.Expr_Lit).Lit.Value.(*plan.Literal_U16Val).U16Val)
-			if sub {
-				if col[rowIdx] <= c {
-					return start, nil
-				}
-				right = genericSearchRight(start, end-1, col, col[rowIdx]-c, genericEqual[uint16], cmpl)
-			} else {
-				right = genericSearchRight(start, end-1, col, col[rowIdx]+c, genericEqual[uint16], cmpl)
+			bound, aboveDomain, ok := unsignedRangeBound(col[rowIdx], c, sub)
+			if !ok {
+				return outOfDomainRangeBoundary(start, end, aboveDomain, desc), nil
 			}
+			right = genericSearchRight(start, end-1, col, bound, genericEqual[uint16], cmpl)
 		}
 	case types.T_uint32:
 		col := vector.MustFixedColNoTypeCheck[uint32](vec)
@@ -2886,14 +2871,11 @@ func searchRightWithLocation(loc *time.Location, start, end, rowIdx int, vec *ve
 			right = genericSearchEqualRight(rowIdx, end-1, col, col[rowIdx], genericEqual[uint32])
 		} else {
 			c := expr.Expr.(*plan.Expr_Lit).Lit.Value.(*plan.Literal_U32Val).U32Val
-			if sub {
-				if col[rowIdx] <= c {
-					return start, nil
-				}
-				right = genericSearchRight(start, end-1, col, col[rowIdx]-c, genericEqual[uint32], cmpl)
-			} else {
-				right = genericSearchRight(start, end-1, col, col[rowIdx]+c, genericEqual[uint32], cmpl)
+			bound, aboveDomain, ok := unsignedRangeBound(col[rowIdx], c, sub)
+			if !ok {
+				return outOfDomainRangeBoundary(start, end, aboveDomain, desc), nil
 			}
+			right = genericSearchRight(start, end-1, col, bound, genericEqual[uint32], cmpl)
 		}
 	case types.T_uint64:
 		col := vector.MustFixedColNoTypeCheck[uint64](vec)
@@ -3132,20 +3114,28 @@ func searchRightWithLocation(loc *time.Location, start, end, rowIdx int, vec *ve
 	return right + 1, nil
 }
 
-// uint64RangeBound computes a finite RANGE search key without allowing
+type unsignedRangeInteger interface {
+	~uint8 | ~uint16 | ~uint32 | ~uint64
+}
+
+// unsignedRangeBound computes a finite RANGE search key without allowing
 // unsigned arithmetic to wrap into the opposite end of the type domain.
 // aboveDomain distinguishes addition overflow from subtraction underflow.
-func uint64RangeBound(value, offset uint64, subtract bool) (bound uint64, aboveDomain bool, ok bool) {
+func unsignedRangeBound[T unsignedRangeInteger](value, offset T, subtract bool) (bound T, aboveDomain bool, ok bool) {
 	if subtract {
 		if value < offset {
 			return 0, false, false
 		}
 		return value - offset, false, true
 	}
-	if value > math.MaxUint64-offset {
+	if value > ^T(0)-offset {
 		return 0, true, false
 	}
 	return value + offset, false, true
+}
+
+func uint64RangeBound(value, offset uint64, subtract bool) (bound uint64, aboveDomain bool, ok bool) {
+	return unsignedRangeBound(value, offset, subtract)
 }
 
 type signedRangeInteger interface {

@@ -572,6 +572,32 @@ execute prepared_range_frame using @before;
 deallocate prepare prepared_range_frame;
 drop table prepared_window_frame;
 
+-- prepared RANGE arithmetic must not wrap narrow unsigned ORDER BY values
+drop table if exists prepared_window_u8;
+create table prepared_window_u8(id tinyint unsigned primary key, n int);
+insert into prepared_window_u8 values (0,10),(250,20);
+set @range_bound = 10;
+prepare prepared_range_u8_asc_preceding from 'select id, sum(n) over (order by id range between ? preceding and current row) from prepared_window_u8 order by id';
+execute prepared_range_u8_asc_preceding using @range_bound;
+deallocate prepare prepared_range_u8_asc_preceding;
+prepare prepared_range_u8_asc_following from 'select id, sum(n) over (order by id range between current row and ? following) from prepared_window_u8 order by id';
+execute prepared_range_u8_asc_following using @range_bound;
+deallocate prepare prepared_range_u8_asc_following;
+prepare prepared_range_u8_desc_preceding from 'select id, sum(n) over (order by id desc range between ? preceding and current row) from prepared_window_u8 order by id desc';
+execute prepared_range_u8_desc_preceding using @range_bound;
+deallocate prepare prepared_range_u8_desc_preceding;
+prepare prepared_range_u8_desc_following from 'select id, sum(n) over (order by id desc range between current row and ? following) from prepared_window_u8 order by id desc';
+execute prepared_range_u8_desc_following using @range_bound;
+deallocate prepare prepared_range_u8_desc_following;
+set @range_bound = 0;
+prepare prepared_range_u8_zero_asc from 'select id, sum(n) over (order by id range between ? preceding and ? preceding) from prepared_window_u8 order by id';
+execute prepared_range_u8_zero_asc using @range_bound, @range_bound;
+deallocate prepare prepared_range_u8_zero_asc;
+prepare prepared_range_u8_zero_desc from 'select id, sum(n) over (order by id desc range between ? preceding and ? preceding) from prepared_window_u8 order by id desc';
+execute prepared_range_u8_zero_desc using @range_bound, @range_bound;
+deallocate prepare prepared_range_u8_zero_desc;
+drop table prepared_window_u8;
+
 -- @case
 -- @desc:Prepared SET statements retain literal and parameterized expressions
 -- @label:bvt
