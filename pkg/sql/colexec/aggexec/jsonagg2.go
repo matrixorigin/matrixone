@@ -16,6 +16,7 @@ package aggexec
 
 import (
 	"bytes"
+	"context"
 	"encoding/binary"
 	"encoding/json"
 	"math"
@@ -26,6 +27,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/bytejson"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/sql/jsonvalue"
 )
 
 type jsonArrayAggExec struct {
@@ -125,7 +127,7 @@ func (exec *jsonArrayAggExec) BatchFill(offset int, groups []uint64, vectors []*
 					continue
 				}
 			}
-			val, err = buildValueByteJson(vectors[0], uint64(row))
+			val, err = buildJSONArrayValueByteJson(vectors[0], uint64(row))
 			if err != nil {
 				return err
 			}
@@ -517,6 +519,17 @@ func jsonAggregateValueSize(vec *vector.Vector, row uint64) (int, error) {
 	}
 }
 
+func jsonArrayAggregateValueSize(vec *vector.Vector, row uint64) (int, error) {
+	if !isSharedJSONArrayValueType(vec.GetType().Oid) {
+		return jsonAggregateValueSize(vec, row)
+	}
+	value, err := buildJSONArrayValueByteJson(vec, row)
+	if err != nil {
+		return 0, err
+	}
+	return 1 + len(value.Data), nil
+}
+
 func jsonAggregateNumberSize(value string) (int, error) {
 	var data [8]byte
 	_, encoded, err := bytejson.AppendBinaryNumber(data[:0], json.Number(value))
@@ -675,6 +688,18 @@ func appendJSONAggregateValue(
 	}
 }
 
+func appendJSONArrayAggregateValue(dst []byte, vec *vector.Vector, row uint64) ([]byte, error) {
+	if !isSharedJSONArrayValueType(vec.GetType().Oid) {
+		return appendJSONAggregateValue(dst, vec, row)
+	}
+	value, err := buildJSONArrayValueByteJson(vec, row)
+	if err != nil {
+		return nil, err
+	}
+	dst = append(dst, byte(value.Type))
+	return append(dst, value.Data...), nil
+}
+
 func appendJSONArray[T types.ArrayElement](
 	dst []byte,
 	raw []byte,
@@ -723,7 +748,7 @@ func (exec *jsonArrayAggExec) batchFillAccounted(
 		if vectors[0].IsConst() {
 			row = 0
 		}
-		valueSize, err := jsonAggregateValueSize(vectors[0], uint64(row))
+		valueSize, err := jsonArrayAggregateValueSize(vectors[0], uint64(row))
 		if err != nil {
 			return err
 		}
@@ -739,7 +764,7 @@ func (exec *jsonArrayAggExec) batchFillAccounted(
 		payload := key[header : header+5]
 		payload[0] = 1
 		binary.NativeEndian.PutUint32(payload[1:], uint32(valueSize))
-		payload, err = appendJSONAggregateValue(payload, vectors[0], uint64(row))
+		payload, err = appendJSONArrayAggregateValue(payload, vectors[0], uint64(row))
 		if err != nil {
 			return err
 		}
@@ -1157,6 +1182,26 @@ func buildValueByteJson(vec *vector.Vector, row uint64) (bytejson.ByteJson, erro
 		return types.DecodeJson(data), nil
 	default:
 		return bytejson.ByteJson{}, moerr.NewInvalidInputNoCtxf("unsupported type for json aggregate: %v", typ.String())
+	}
+}
+
+func buildJSONArrayValueByteJson(vec *vector.Vector, row uint64) (bytejson.ByteJson, error) {
+	if !isSharedJSONArrayValueType(vec.GetType().Oid) {
+		return buildValueByteJson(vec, row)
+	}
+	value, err := jsonvalue.FromVector(context.Background(), vec, int(row), nil, nil)
+	if err != nil {
+		return bytejson.ByteJson{}, err
+	}
+	return bytejson.CreateByteJSONWithCheck(value)
+}
+
+func isSharedJSONArrayValueType(oid types.T) bool {
+	switch oid {
+	case types.T_time, types.T_datetime, types.T_year:
+		return true
+	default:
+		return false
 	}
 }
 
