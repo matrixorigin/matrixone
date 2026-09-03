@@ -399,6 +399,17 @@ func (gs *globalStats) df(term string) int {
 	}
 	d := 0
 	for si, seg := range gs.idx.segments {
+		// A loaded segment with no liveness bitmap is fully live. Its raw df is
+		// already exact, so read only the header varint at the FST offset and
+		// avoid allocating the block-directory metadata that LookupLoaded builds.
+		// Missing or malformed headers stay a miss. Segment search still performs
+		// its independent full lookup before any posting can produce a hit.
+		if seg.dict != nil && gs.idx.liveOrd[si] == nil {
+			if df, ok := seg.lookupLoadedDF(term); ok {
+				d += df
+			}
+			continue
+		}
 		if pl, ok := seg.lookup(term); ok {
 			d += gs.idx.liveTermDF(si, pl)
 		}

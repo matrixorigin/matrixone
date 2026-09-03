@@ -719,3 +719,37 @@ func (s *Segment) LookupLoaded(term string) (*termPostings, bool) {
 	}
 	return s.decodeTermEntry(int(off))
 }
+
+// lookupLoadedDF resolves an exact term on a loaded, fully-live segment and reads
+// only the document-frequency varint at the FST entry offset. The rest of the
+// directory (block max metadata and block/position ranges) is deliberately left
+// untouched: a clean segment can use its raw posting df without decoding it.
+// Loaded segment blobs are checksum-validated before they reach this path, so the
+// defensive checks here only reject a missing/out-of-range FST value, a malformed
+// first varint, or an impossible df. Dirty segments must use LookupLoaded because
+// their postings have to be streamed against the liveness bitmap.
+func (s *Segment) lookupLoadedDF(term string) (int, bool) {
+	if s.dict == nil {
+		return 0, false
+	}
+	off, ok, err := s.dict.get(term)
+	if err != nil || !ok {
+		return 0, false
+	}
+	return s.termDFAt(off)
+}
+
+// termDFAt reads the first field of one loaded posting-directory entry. It is
+// kept separate from the FST lookup so the header parse itself remains a
+// trivially allocation-free operation; the FST's byte-key conversion remains
+// unchanged until the later offset-cache stage is justified by profiling.
+func (s *Segment) termDFAt(off uint64) (int, bool) {
+	if off >= uint64(len(s.ranking)) {
+		return 0, false
+	}
+	df, n := binary.Uvarint(s.ranking[int(off):])
+	if n <= 0 || df == 0 || df > uint64(len(s.blocks)) || df > uint64(^uint(0)>>1) {
+		return 0, false
+	}
+	return int(df), true
+}
