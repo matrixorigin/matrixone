@@ -2852,9 +2852,7 @@ func (exec *CDCTaskExecutor) addExecPipelineForTable(
 	// Reader publication happens inside Run. Do not let this callback return
 	// before publication, otherwise Cancel can observe both callbackDone and an
 	// empty reader map while the newly launched reader is still starting.
-	if starter, ok := reader.(interface{ RegistrationDone() <-chan struct{} }); ok {
-		<-starter.RegistrationDone()
-	}
+	<-reader.RegistrationDone()
 
 	return
 }
