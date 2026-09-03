@@ -1514,7 +1514,7 @@ func (exec *CDCTaskExecutor) Cancel() (err error) {
 		readersStopped, readersDone = exec.stopAllReaders()
 		exec.setReaderShutdownCompletion(readersDone)
 	} else if readersDone != nil {
-		readersStopped = waitForCDCCompletion(readersDone, 10*time.Second)
+		_, readersStopped = waitForCDCCompletion(readersDone, 10*time.Second)
 
 		// let Start() go
 		select {
@@ -1668,7 +1668,7 @@ func (exec *CDCTaskExecutor) stopAllReaders() (bool, <-chan struct{}) {
 		close(readersDone)
 	}()
 
-	allStopped := waitForCDCCompletion(readersDone, 10*time.Second)
+	_, allStopped := waitForCDCCompletion(readersDone, 10*time.Second)
 	if !allStopped {
 		logutil.Warn("cdc.frontend.task.stop_reader_wait_timeout", zap.String("task-id", exec.spec.TaskId), zap.Duration("waited", 10*time.Second))
 	}
@@ -1678,20 +1678,6 @@ func (exec *CDCTaskExecutor) stopAllReaders() (bool, <-chan struct{}) {
 	})
 	logutil.Debug("cdc.frontend.task.stop_all_readers_complete", zap.String("task-id", exec.spec.TaskId), zap.Int("reader-count", len(readers)))
 	return allStopped, readersDone
-}
-
-func waitForCDCCompletion(done <-chan struct{}, timeout time.Duration) bool {
-	if done == nil {
-		return true
-	}
-	timer := time.NewTimer(timeout)
-	defer timer.Stop()
-	select {
-	case <-done:
-		return true
-	case <-timer.C:
-		return false
-	}
 }
 
 func (exec *CDCTaskExecutor) readerShutdownCompletion() <-chan struct{} {
