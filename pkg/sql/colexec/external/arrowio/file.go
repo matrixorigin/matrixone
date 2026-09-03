@@ -111,7 +111,7 @@ func openFile(
 		messageReader.Release()
 		return nil, moerr.NewInvalidInputf(ctx, "invalid Arrow IPC File schema: %v", err)
 	}
-	return &ipcRecordReader{reader: reader}, nil
+	return &ipcRecordReader{reader: reader, rangeMessageReader: messageReader}, nil
 }
 
 // FileShard is one independently decodable contiguous record-batch interval.
@@ -338,6 +338,8 @@ type rangeMessageReader struct {
 	blocks                []fileBlock
 	next                  int
 	current               *ipc.Message
+	currentAllocator      *rangeLeaseAllocator
+	generation            uint64
 	schema                *ipc.Message
 }
 
@@ -395,14 +397,47 @@ func (r *rangeMessageReader) Release() {
 	if refs != 0 {
 		return
 	}
-	if r.current != nil {
-		r.current.Release()
-		r.current = nil
-	}
+	r.releaseCurrent()
 	if r.schema != nil {
 		r.schema.Release()
 		r.schema = nil
 	}
+}
+
+// checkpoint identifies the last range generation published to Arrow-Go.
+// A failed decoder call may abort only a newer current generation.
+func (r *rangeMessageReader) checkpoint() uint64 {
+	if r == nil {
+		return 0
+	}
+	return r.generation
+}
+
+func (r *rangeMessageReader) releaseCurrent() {
+	if r == nil {
+		return
+	}
+	r.currentAllocator = nil
+	if r.current != nil {
+		r.current.Release()
+		r.current = nil
+	}
+}
+
+// abortAfter releases the current message and forcibly terminates its leased
+// range when Arrow-Go abandoned an intermediate owner during a failed decode.
+// rangeLeaseAllocator makes a later ref-count cleanup idempotent.
+func (r *rangeMessageReader) abortAfter(checkpoint uint64) {
+	if r == nil || r.generation <= checkpoint || r.currentAllocator == nil {
+		return
+	}
+	allocator := r.currentAllocator
+	r.currentAllocator = nil
+	if r.current != nil {
+		r.current.Release()
+		r.current = nil
+	}
+	allocator.release()
 }
 
 func (r *rangeMessageReader) Message() (message *ipc.Message, err error) {
@@ -412,12 +447,11 @@ func (r *rangeMessageReader) Message() (message *ipc.Message, err error) {
 			err = moerr.NewInvalidInputf(r.ctx, "invalid Arrow IPC File message: %v", recovered)
 		}
 	}()
+	// Message invalidates the preceding message even when the next read fails.
+	// Any published record has retained its own buffer references by this point.
+	r.releaseCurrent()
 	if err := r.ctx.Err(); err != nil {
 		return nil, err
-	}
-	if r.current != nil {
-		r.current.Release()
-		r.current = nil
 	}
 	if r.next == -1 {
 		r.current = r.schema
@@ -436,12 +470,15 @@ func (r *rangeMessageReader) Message() (message *ipc.Message, err error) {
 	if err != nil {
 		return nil, err
 	}
-	message, err = messageFromRangeLease(r.ctx, lease, block, r.maxDecodedRecordBytes)
+	var allocator *rangeLeaseAllocator
+	message, allocator, err = messageFromRangeLease(r.ctx, lease, block, r.maxDecodedRecordBytes)
 	if err != nil {
 		lease.Release()
 		return nil, err
 	}
 	r.current = message
+	r.currentAllocator = allocator
+	r.generation++
 	return message, nil
 }
 
@@ -457,9 +494,14 @@ func (a *rangeLeaseAllocator) Reallocate(int, []byte) []byte {
 	panic("range lease allocator cannot reallocate")
 }
 func (a *rangeLeaseAllocator) Free([]byte) {
-	if a != nil && a.lease != nil && a.released.CompareAndSwap(false, true) {
+	a.release()
+}
+
+func (a *rangeLeaseAllocator) release() {
+	// Keep lease immutable: forced cleanup can race Arrow-Go's late Free, and
+	// the successful CAS is the sole owner allowed to release it.
+	if a != nil && a.released.CompareAndSwap(false, true) && a.lease != nil {
 		a.lease.Release()
-		a.lease = nil
 	}
 }
 
@@ -468,10 +510,20 @@ func messageFromRangeLease(
 	lease fileservice.RangeLease,
 	block fileBlock,
 	maxDecodedRecordBytes int64,
-) (*ipc.Message, error) {
+) (message *ipc.Message, allocator *rangeLeaseAllocator, err error) {
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			if allocator != nil {
+				allocator.release()
+			} else {
+				lease.Release()
+			}
+			panic(recovered)
+		}
+	}()
 	bytes := lease.Bytes()
 	if int64(len(bytes)) != block.metadata+block.body || len(bytes) < 4 {
-		return nil, moerr.NewInvalidInputNoCtx("Arrow IPC File block range is truncated")
+		return nil, nil, moerr.NewInvalidInputNoCtx("Arrow IPC File block range is truncated")
 	}
 	metadataBytes := bytes[:int(block.metadata)]
 	prefix := 0
@@ -483,20 +535,21 @@ func messageFromRangeLease(
 		prefix = 4
 	}
 	if int(block.metadata) < prefix+4 {
-		return nil, moerr.NewInvalidInputNoCtx("Arrow IPC File metadata prefix is invalid")
+		return nil, nil, moerr.NewInvalidInputNoCtx("Arrow IPC File metadata prefix is invalid")
 	}
 	if _, err := inspectIPCMessageMetadata(
 		ctx, metadataBytes[prefix:], block.body, block.body,
 		bytes[int(block.metadata):], true, maxDecodedRecordBytes,
 	); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	owner := memory.NewBufferWithAllocator(bytes, &rangeLeaseAllocator{lease: lease})
+	allocator = &rangeLeaseAllocator{lease: lease}
+	owner := memory.NewBufferWithAllocator(bytes, allocator)
 	meta := memory.SliceBuffer(owner, prefix, int(block.metadata)-prefix)
 	body := memory.SliceBuffer(owner, int(block.metadata), int(block.body))
 	owner.Release()
-	message := ipc.NewMessage(meta, body)
+	message = ipc.NewMessage(meta, body)
 	meta.Release()
 	body.Release()
-	return message, nil
+	return message, allocator, nil
 }

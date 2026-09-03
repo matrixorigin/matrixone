@@ -20,6 +20,7 @@ import (
 	"encoding/binary"
 	"errors"
 	"io"
+	"sync"
 	"sync/atomic"
 	"testing"
 
@@ -122,6 +123,14 @@ type testCapacityLease struct {
 	released  atomic.Bool
 }
 
+type testRangeLease struct {
+	releases atomic.Int64
+}
+
+func (l *testRangeLease) Bytes() []byte   { return nil }
+func (l *testRangeLease) Capacity() int64 { return 0 }
+func (l *testRangeLease) Release()        { l.releases.Add(1) }
+
 type panickingAllocator struct{}
 
 func (panickingAllocator) Allocate(int) []byte           { panic("injected allocation panic") }
@@ -209,6 +218,30 @@ func TestAdmissionAllocatorFailureAndForcedCleanup(t *testing.T) {
 	})
 }
 
+func TestRangeLeaseAllocatorConcurrentForcedAndLateRelease(t *testing.T) {
+	lease := new(testRangeLease)
+	allocator := &rangeLeaseAllocator{lease: lease}
+
+	const releasers = 32
+	start := make(chan struct{})
+	var wait sync.WaitGroup
+	wait.Add(releasers)
+	for i := 0; i < releasers; i++ {
+		go func(force bool) {
+			defer wait.Done()
+			<-start
+			if force {
+				allocator.release()
+			} else {
+				allocator.Free(nil)
+			}
+		}(i%2 == 0)
+	}
+	close(start)
+	wait.Wait()
+	require.Equal(t, int64(1), lease.releases.Load())
+}
+
 func TestRangeMessageReaderRetainCannotResurrectTerminalOwner(t *testing.T) {
 	reader := new(rangeMessageReader)
 	reader.refs.Store(1)
@@ -248,6 +281,68 @@ func TestIPCFileRecordOutlivesReaderViaArrayData(t *testing.T) {
 	record.Release()
 	require.Zero(t, admission.active.Load())
 	releaseRecords(expected)
+}
+
+func TestFailedIPCFileGenerationPreservesOlderRetainedRecord(t *testing.T) {
+	payload, expected := makeIPC(t, ContainerFile)
+	defer releaseRecords(expected)
+
+	inspectionFS := writeMemoryFile(t, "arrow-generation-inspect", payload)
+	inspectionAdmission := new(testAdmission)
+	options, err := normalizeOptions(Options{Allocator: memory.NewGoAllocator()})
+	require.NoError(t, err)
+	records, _, err := readFooterBlocks(
+		context.Background(), fileservice.NewLeasedRangeReader(inspectionFS),
+		"arrow-generation-inspect", int64(len(payload)), inspectionAdmission, options,
+	)
+	require.NoError(t, err)
+	require.Len(t, records, 2)
+	require.Zero(t, inspectionAdmission.active.Load())
+
+	// The second record's String buffers are validity, offsets, and values.
+	// Keep every descriptor in bounds while making the last logical offset
+	// exceed the values buffer, so Arrow-Go fails only after ArrayData retain.
+	malformed := append([]byte(nil), payload...)
+	second := records[1]
+	record := firstIPCRecordTable(t, malformed, second)
+	buffersOffset := flatbuffers.UOffsetT(record.Offset(8))
+	require.NotZero(t, buffersOffset)
+	require.GreaterOrEqual(t, record.VectorLen(buffersOffset), 5)
+	buffers := record.Vector(buffersOffset)
+	offsetsDescriptor := buffers + flatbuffers.UOffsetT(3*16)
+	valuesDescriptor := buffers + flatbuffers.UOffsetT(4*16)
+	offsetsOffset := record.GetInt64(offsetsDescriptor)
+	offsetsLength := record.GetInt64(offsetsDescriptor + 8)
+	valuesLength := record.GetInt64(valuesDescriptor + 8)
+	require.GreaterOrEqual(t, offsetsLength, int64(12))
+	require.GreaterOrEqual(t, valuesLength, int64(0))
+	bodyStart := int(second.offset + second.metadata)
+	lastOffset := bodyStart + int(offsetsOffset) + int(offsetsLength) - 4
+	require.LessOrEqual(t, lastOffset+4, len(malformed))
+	binary.LittleEndian.PutUint32(malformed[lastOffset:], uint32(valuesLength+1))
+
+	fs := writeMemoryFile(t, "arrow-generation", malformed)
+	admission := new(testAdmission)
+	reader, err := Open(
+		context.Background(), fs, "arrow-generation", int64(len(malformed)),
+		ContainerFile, admission, Options{},
+	)
+	require.NoError(t, err)
+	require.True(t, reader.Next())
+	retained := reader.RecordBatch()
+	retained.Retain()
+	olderActive := admission.active.Load()
+	require.Positive(t, olderActive)
+
+	require.False(t, reader.Next())
+	require.Error(t, reader.Err())
+	require.Zero(t, admission.pending.Load())
+	require.Equal(t, olderActive, admission.active.Load(), "only the retained older generation may remain")
+	require.NoError(t, reader.Close())
+	require.Equal(t, olderActive, admission.active.Load())
+	require.True(t, array.RecordEqual(expected[0], retained))
+	retained.Release()
+	require.Zero(t, admission.active.Load())
 }
 
 func TestMalformedIPCRecordMetadataReleasesRangeLease(t *testing.T) {

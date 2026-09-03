@@ -63,10 +63,11 @@ type Reader interface {
 }
 
 type ipcRecordReader struct {
-	reader    *ipc.Reader
-	close     func() error
-	allocator *admissionAllocator
-	err       error
+	reader             *ipc.Reader
+	close              func() error
+	allocator          *admissionAllocator
+	rangeMessageReader *rangeMessageReader
+	err                error
 }
 
 func (r *ipcRecordReader) Schema() *arrow.Schema {
@@ -84,6 +85,10 @@ func (r *ipcRecordReader) Next() (ok bool) {
 	if r.allocator != nil {
 		checkpoint = r.allocator.checkpoint()
 	}
+	var rangeCheckpoint uint64
+	if r.rangeMessageReader != nil {
+		rangeCheckpoint = r.rangeMessageReader.checkpoint()
+	}
 	defer func() {
 		if recovered := recover(); recovered != nil {
 			if allocationErr, matched := recoveredAllocationError(recovered); matched {
@@ -99,6 +104,15 @@ func (r *ipcRecordReader) Next() (ok bool) {
 			// created by this failed Next call are unowned. Older allocations may
 			// still be retained by already-published record batches or MO vectors.
 			r.allocator.releaseAfter(checkpoint)
+		}
+		if !ok && r.rangeMessageReader != nil {
+			// An invalid uncompressed array can panic after Arrow-Go has
+			// retained ArrayData but before it publishes the array or record.
+			// Arrow-Go recovers that panic internally, so its ordinary message
+			// release cannot close the unmatched retain. Abort only a range
+			// first published by this failed Next call; older ranges may still
+			// back record batches or MO vectors retained by the caller.
+			r.rangeMessageReader.abortAfter(rangeCheckpoint)
 		}
 	}()
 	return r.reader.Next()
@@ -129,6 +143,7 @@ func (r *ipcRecordReader) Close() error {
 		r.reader.Release()
 		r.reader = nil
 	}
+	r.rangeMessageReader = nil
 	// Do not sweep the allocator here. Arrow buffers retained by a caller are
 	// allowed to outlive the reader and will free themselves through their
 	// allocator. Failed Next generations are swept at the Next boundary.
