@@ -311,8 +311,9 @@ type CDCWatermarkUpdater struct {
 	cronExecutor *tasks.CancelableJob
 
 	customized struct {
-		cronJob     func(ctx context.Context)
-		scheduleJob func(job *UpdaterJob) (err error)
+		cronJob                func(ctx context.Context)
+		scheduleJob            func(job *UpdaterJob) (err error)
+		scheduleJobWithContext func(ctx context.Context, job *UpdaterJob) (err error)
 	}
 
 	getOrAddCommittedBuffer []*UpdaterJob
@@ -379,6 +380,7 @@ func (u *CDCWatermarkUpdater) fillDefaults() {
 	}
 	if u.customized.scheduleJob == nil {
 		u.customized.scheduleJob = u.scheduleJob
+		u.customized.scheduleJobWithContext = u.scheduleJobWithContext
 	}
 	if u.opts.cronJobErrorSupressTimes == 0 {
 		u.opts.cronJobErrorSupressTimes = 50 // Reduced from 500 to 50 for more frequent error reporting
@@ -1323,7 +1325,16 @@ func (u *CDCWatermarkUpdater) shouldLogFallback(key *WatermarkKey) bool {
 
 func (u *CDCWatermarkUpdater) ForceFlush(ctx context.Context) (err error) {
 	job := NewCommittingWMJob(ctx)
-	if err = u.customized.scheduleJob(job); err != nil {
+	if u.customized.scheduleJobWithContext != nil {
+		err = u.customized.scheduleJobWithContext(ctx, job)
+	} else {
+		// Keep test and embedding overrides of the legacy scheduler working.
+		err = u.customized.scheduleJob(job)
+	}
+	if err != nil {
+		// A job which was not admitted to the queue has no consumer that can
+		// signal completion. Complete it here so callers never wait forever.
+		job.DoneWithErr(err)
 		return
 	}
 	err = job.WaitDoneContext(ctx).Err
@@ -1722,10 +1733,16 @@ func (u *CDCWatermarkUpdater) wrapCronJob(job func(ctx context.Context)) func(ct
 }
 
 func (u *CDCWatermarkUpdater) scheduleJob(job *UpdaterJob) (err error) {
-	if _, err = u.queue.Enqueue(job); err != nil {
-		job.DoneWithErr(err)
-		return
+	_, err = u.queue.Enqueue(job)
+	return
+}
+
+func (u *CDCWatermarkUpdater) scheduleJobWithContext(ctx context.Context, job *UpdaterJob) (err error) {
+	queue, ok := u.queue.(sm.ContextQueue)
+	if !ok {
+		return u.scheduleJob(job)
 	}
+	_, err = queue.EnqueueWithContext(ctx, job)
 	return
 }
 

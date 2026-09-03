@@ -1502,13 +1502,14 @@ func (exec *CDCTaskExecutor) Cancel() (err error) {
 		attempt.cancel()
 	}
 	readersStopped := true
+	var readersDone <-chan struct{}
 	if wasActive {
 		cdc.GetTableDetector(exec.cnUUID).UnRegister(exec.spec.TaskId)
 		exec.closeActiveRoutineCancel()
 
 		// Synchronously wait for all readers to stop before proceeding
 		// This ensures no goroutine leaks and no interference with new tasks
-		readersStopped = exec.stopAllReaders()
+		readersStopped, readersDone = exec.stopAllReaders()
 
 		// let Start() go
 		select {
@@ -1541,6 +1542,12 @@ func (exec *CDCTaskExecutor) Cancel() (err error) {
 		}
 		if callbacksDrained && readersStopped {
 			exec.watermarkUpdater.ForgetTaskDeleted(exec.spec.TaskId)
+		} else {
+			// The timeout above only bounds cancellation; it must not release
+			// the tombstone while an old callback or reader can still publish a
+			// watermark. Keep one completion owner until both producer classes
+			// have actually exited, then reclaim the CN-local tombstone.
+			exec.reclaimDeletedWatermark(exec.spec.TaskId, callbackDone, readersDone)
 		}
 	}
 	cancelSucceeded = true
@@ -1620,9 +1627,12 @@ func (exec *CDCTaskExecutor) logCurrentWatermarks(phase string) {
 
 // stopAllReaders stops all running readers and waits for them to exit
 // This method ensures complete cleanup before Cancel/Pause returns
-func (exec *CDCTaskExecutor) stopAllReaders() bool {
+
+func (exec *CDCTaskExecutor) stopAllReaders() (bool, <-chan struct{}) {
+	readersDone := make(chan struct{})
 	if exec.runningReaders == nil {
-		return true
+		close(readersDone)
+		return true, readersDone
 	}
 
 	logutil.Info(
@@ -1652,8 +1662,11 @@ func (exec *CDCTaskExecutor) stopAllReaders() bool {
 		return true
 	})
 
-	// Step 2: Wait for all readers to completely exit
+	// Step 2: Wait for all readers to completely exit. Keep an aggregate
+	// completion signal after the bounded wait so delayed readers can still
+	// release the deletion tombstone safely.
 	allStopped := true
+	var readerWG sync.WaitGroup
 	exec.runningReaders.Range(func(key, value interface{}) bool {
 		reader := value.(cdc.ChangeReader)
 		tableKey, _ := key.(string)
@@ -1664,7 +1677,9 @@ func (exec *CDCTaskExecutor) stopAllReaders() bool {
 			zap.String("table", tableKey),
 		)
 		done := make(chan struct{})
+		readerWG.Add(1)
 		go func() {
+			defer readerWG.Done()
 			reader.Wait()
 			close(done)
 		}()
@@ -1693,13 +1708,34 @@ func (exec *CDCTaskExecutor) stopAllReaders() bool {
 		exec.runningReaders.Delete(key)
 		return true
 	})
+	go func() {
+		readerWG.Wait()
+		close(readersDone)
+	}()
 
 	logutil.Debug(
 		"cdc.frontend.task.stop_all_readers_complete",
 		zap.String("task-id", exec.spec.TaskId),
 		zap.Int("reader-count", readerCount),
 	)
-	return allStopped
+	return allStopped, readersDone
+}
+
+func (exec *CDCTaskExecutor) reclaimDeletedWatermark(
+	taskID string,
+	callbacksDone <-chan struct{},
+	readersDone <-chan struct{},
+) {
+	if readersDone == nil {
+		readersDone = closedChan()
+	}
+	go func() {
+		<-callbacksDone
+		<-readersDone
+		if exec.watermarkUpdater != nil {
+			exec.watermarkUpdater.ForgetTaskDeleted(taskID)
+		}
+	}()
 }
 
 type removedReaderShutdown struct {
