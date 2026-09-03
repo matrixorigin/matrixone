@@ -13,7 +13,7 @@ Owner: MatrixOne query execution
 
 Owning issue: [#27586](https://github.com/matrixorigin/matrixone/issues/27586)
 
-Implementation: MatrixOne [#27599](https://github.com/matrixorigin/matrixone/pull/27599), Sirius [#6](https://github.com/matrixorigin/sirius/pull/6) plus version-1 contract fix [#9](https://github.com/matrixorigin/sirius/pull/9), sidecar [#14](https://github.com/matrixorigin/mo-sirius-sidecar/pull/14) plus version-1 contract fix [#18](https://github.com/matrixorigin/mo-sirius-sidecar/pull/18)
+Implementation: MatrixOne [#27599](https://github.com/matrixorigin/matrixone/pull/27599), Sirius [#6](https://github.com/matrixorigin/sirius/pull/6) plus version-1 contract fixes [#9](https://github.com/matrixorigin/sirius/pull/9) and [#10](https://github.com/matrixorigin/sirius/pull/10), sidecar [#14](https://github.com/matrixorigin/mo-sirius-sidecar/pull/14) plus version-1 contract fixes [#18](https://github.com/matrixorigin/mo-sirius-sidecar/pull/18) and [#19](https://github.com/matrixorigin/mo-sirius-sidecar/pull/19)
 
 ## 1. Decision
 
@@ -831,12 +831,15 @@ The delivered candidate is pinned to these immutable revisions. Final
 implementation approval remains dependent on the three-repository static/build
 evidence and the acceptance evidence in section 14. Updating any production
 revision invalidates only the evidence whose semantic inputs changed.
+The MatrixOne row names the last code-bearing head. A following record-only
+commit cannot contain its own Git object ID; the PR body pins that final exact
+head after push.
 
 | Component | PR | Candidate delivery commit | Evidence |
 | --- | --- | --- | --- |
-| MatrixOne | [#27599](https://github.com/matrixorigin/matrixone/pull/27599) | `2706ef2723` | affected Substrait, Flight, and compile tests passed; final pre-push SCA is recorded on the delivery head; [SF10 five-mode record](https://github.com/matrixorigin/matrixone/pull/27599#issuecomment-5495966844) |
-| Sirius | [#10](https://github.com/matrixorigin/sirius/pull/10) | `18de35630e50674e6913bb3359c7fc54f832889b` | retains input, pending intermediate, processing handles, and reservation attachment through failed quiescence; quarantine bookkeeping terminates rather than unwinding owners if it cannot reserve storage; the deterministic launch-then-throw/fail-synchronize oracle passed 12 assertions, all GPU task cases passed 83 assertions, executor/OOM passed 21 assertions, concurrency gates passed 8 assertions, and repository-wide pre-commit passed |
-| sidecar | [#19](https://github.com/matrixorigin/mo-sirius-sidecar/pull/19) | `a27953ea84c444ba5d046bb3cbea82d5b2722c2a` | pins the Sirius revision above on top of merged #18; protocol/admission contract suite passed 76 assertions and the linked extension built successfully |
+| MatrixOne | [#27599](https://github.com/matrixorigin/matrixone/pull/27599) | `11e45fe3d07daac32dbc87b13f223a4c1bfb1ed9` | exact code-bearing head passed MatrixOne SCA, UT, BVT, and coverage CI; affected Substrait, Flight, vector, output, compile, and frontend tests passed after the main merge; [SF10 five-mode record](https://github.com/matrixorigin/matrixone/pull/27599#issuecomment-5495966844) |
+| Sirius | [#10](https://github.com/matrixorigin/sirius/pull/10) | `b2b489494bc6213f8a89cbe0b153bb376050ed13` | retains input, pending intermediate, processing handles, and reservation attachment through failed quiescence; quarantine bookkeeping terminates rather than unwinding owners if it cannot reserve storage; the deterministic launch-then-throw/fail-synchronize oracle passed 12 assertions, all GPU task cases passed 83 assertions, executor/OOM passed 21 assertions, concurrency gates passed 8 assertions, repository-wide pre-commit passed, full stable/current-26.10-nightly extension builds passed, and filtered mark/semi/anti join regressions passed |
+| sidecar | [#19](https://github.com/matrixorigin/mo-sirius-sidecar/pull/19) | `b9e4b78011d946947ab3971add60ea6e060d3f2b` | pins the Sirius revision above on top of merged #18; protocol/admission contract suite passed 76 assertions and the linked extension built successfully |
 
 The sidecar submodule must point to the approved Sirius commit. The MatrixOne PR
 body must link this design at its approved commit and the final evidence record.
