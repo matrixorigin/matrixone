@@ -92,6 +92,7 @@ func NewQueryBuilder(queryType plan.Query_StatementType, ctx CompilerContext, is
 
 	var mysqlCompatible bool
 	var mysqlFullGroupByCompat bool
+	var boolSumAvgCompat bool
 
 	mode, err := ctx.ResolveVariable("sql_mode", true, false)
 	if err == nil {
@@ -99,6 +100,7 @@ func NewQueryBuilder(queryType plan.Query_StatementType, ctx CompilerContext, is
 			onlyFullGroupBy := mysql.HasSQLMode(modeStr, "ONLY_FULL_GROUP_BY")
 			mysqlCompatible = !onlyFullGroupBy
 			mysqlFullGroupByCompat = onlyFullGroupBy && !mysql.HasMatrixOneNativeSQLMode(modeStr)
+			boolSumAvgCompat = mysql.HasEnableBoolSumAvgSQLMode(modeStr)
 		}
 	}
 
@@ -152,6 +154,7 @@ func NewQueryBuilder(queryType plan.Query_StatementType, ctx CompilerContext, is
 		nextBindTag:              0,
 		mysqlCompatible:          mysqlCompatible,
 		mysqlFullGroupByCompat:   mysqlFullGroupByCompat,
+		boolSumAvgCompat:         boolSumAvgCompat,
 		aggSpillMem:              aggSpillMem,
 		joinSpillMem:             joinSpillMem,
 		sortSpillMem:             sortSpillMem,
