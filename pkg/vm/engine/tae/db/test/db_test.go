@@ -11564,6 +11564,196 @@ func TestFreezeTransferIncludesMergeAtUpperBound(t *testing.T) {
 	tae.CheckRowsByScan(1, true)
 }
 
+func TestConcurrentUpdateByPreviousRowIDWithFlushMerge(t *testing.T) {
+	defer testutils.AfterTest(t)()
+	testutils.EnsureNoLeak(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+
+	const (
+		workerCount       = 32
+		updatesPerWorker  = 40
+		maxAttemptsPerTxn = 500
+	)
+
+	opts := config.WithLongScanAndCKPOpts(nil)
+	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
+	defer tae.Close()
+	schema := catalog.MockSchemaAll(2, 0)
+	schema.Extra.BlockMaxRows = 4
+	schema.Extra.ObjectMaxBlocks = 2
+	tae.BindSchema(schema)
+
+	initial := catalog.MockBatch(schema, workerCount)
+	defer initial.Close()
+	workerBatches := make([]*containers.Batch, workerCount)
+	for i := range workerBatches {
+		workerBatches[i] = initial.CloneWindow(i, 1)
+		defer workerBatches[i].Close()
+	}
+	for offset := 0; offset < workerCount; offset += int(schema.Extra.BlockMaxRows * schema.Extra.ObjectMaxBlocks) {
+		window := initial.CloneWindow(offset, int(schema.Extra.BlockMaxRows*schema.Extra.ObjectMaxBlocks))
+		if offset == 0 {
+			tae.CreateRelAndAppend(window, true)
+		} else {
+			txn, rel := tae.GetRelation()
+			require.NoError(t, rel.Append(ctx, window))
+			require.NoError(t, txn.Commit(ctx))
+		}
+		window.Close()
+		tae.CompactBlocks(true)
+	}
+
+	openRelation := func() (txnif.AsyncTxn, handle.Relation, error) {
+		txn, err := tae.StartTxn(nil)
+		if err != nil {
+			return nil, nil, err
+		}
+		txn.BindAccessInfo(0, 0, 0)
+		database, err := txn.GetDatabase(testutil.DefaultTestDB)
+		if err != nil {
+			_ = txn.Rollback(context.Background())
+			return nil, nil, err
+		}
+		rel, err := database.GetRelationByName(schema.Name)
+		if err != nil {
+			_ = txn.Rollback(context.Background())
+			return nil, nil, err
+		}
+		return txn, rel, nil
+	}
+
+	var flushCount atomic.Uint64
+	var mergeCount atomic.Uint64
+	errC := make(chan error, workerCount+1)
+	stopMaintenance := make(chan struct{})
+	var maintenanceWG sync.WaitGroup
+	maintenanceWG.Add(1)
+	go func() {
+		defer maintenanceWG.Done()
+		ticker := time.NewTicker(time.Millisecond)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-stopMaintenance:
+				return
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+			}
+
+			if err := tae.DB.ForceFlush(ctx, tae.TxnMgr.Now()); err == nil {
+				flushCount.Add(1)
+			} else if moerr.IsMoErrCode(err, moerr.ErrDuplicateEntry) {
+				errC <- fmt.Errorf("background flush returned duplicate: %w", err)
+				return
+			}
+
+			txn, rel, err := openRelation()
+			if err != nil {
+				continue
+			}
+			objects := make([]*catalog.ObjectEntry, 0, 8)
+			it := rel.MakeObjectIt(false)
+			for it.Next() {
+				obj := it.GetObject().GetMeta().(*catalog.ObjectEntry)
+				if !obj.IsAppendable() {
+					objects = append(objects, obj)
+				}
+			}
+			it.Close()
+			if len(objects) < 2 {
+				_ = txn.Rollback(context.Background())
+				continue
+			}
+			objects = objects[:2]
+			task, err := jobs.NewMergeObjectsTask(nil, txn, objects, tae.Runtime, 0, false)
+			if err == nil {
+				err = task.OnExec(ctx)
+			}
+			if err == nil {
+				err = txn.Commit(ctx)
+			} else {
+				_ = txn.Rollback(context.Background())
+			}
+			if err == nil {
+				mergeCount.Add(1)
+			} else if moerr.IsMoErrCode(err, moerr.ErrDuplicateEntry) {
+				errC <- fmt.Errorf("background merge returned duplicate: %w", err)
+				return
+			}
+		}
+	}()
+
+	var workersWG sync.WaitGroup
+	workersWG.Add(workerCount)
+	for worker := 0; worker < workerCount; worker++ {
+		worker := worker
+		go func() {
+			defer workersWG.Done()
+			pk := workerBatches[worker].Vecs[schema.GetSingleSortKeyIdx()].Get(0)
+			for update := 0; update < updatesPerWorker; update++ {
+				committed := false
+				for attempt := 0; attempt < maxAttemptsPerTxn; attempt++ {
+					txn, rel, err := openRelation()
+					if err != nil {
+						errC <- fmt.Errorf("worker %d update %d open relation: %w", worker, update, err)
+						return
+					}
+					// Resolve the currently visible physical row before deleting and
+					// re-appending the same PK. A concurrent merge may transfer this
+					// tombstone away from the RowID returned here.
+					id, row, err := rel.GetByFilter(ctx, handle.NewEQFilter(pk))
+					if err == nil {
+						err = rel.RangeDelete(id, row, row, handle.DT_Normal)
+					}
+					if err == nil {
+						err = rel.Append(ctx, workerBatches[worker])
+					}
+					if err == nil {
+						err = txn.Commit(ctx)
+					} else {
+						_ = txn.Rollback(context.Background())
+					}
+					if err == nil {
+						committed = true
+						break
+					}
+					if moerr.IsMoErrCode(err, moerr.ErrDuplicateEntry) {
+						errC <- fmt.Errorf(
+							"worker %d update %d attempt %d returned duplicate: %w",
+							worker, update, attempt, err,
+						)
+						return
+					}
+					if ctx.Err() != nil {
+						errC <- fmt.Errorf("worker %d update %d: %w", worker, update, ctx.Err())
+						return
+					}
+					time.Sleep(time.Millisecond)
+				}
+				if !committed {
+					errC <- fmt.Errorf(
+						"worker %d update %d did not commit after %d attempts",
+						worker, update, maxAttemptsPerTxn,
+					)
+					return
+				}
+			}
+		}()
+	}
+	workersWG.Wait()
+	close(stopMaintenance)
+	maintenanceWG.Wait()
+	close(errC)
+	for err := range errC {
+		require.NoError(t, err)
+	}
+	require.Positive(t, flushCount.Load())
+	require.Positive(t, mergeCount.Load())
+	tae.CheckRowsByScan(workerCount, true)
+}
+
 // TestTransferDeleteVectorRealloc verifies that TransferDeletes Part 2
 // refreshes the rowids unsafe.Slice after each TransferDeleteRows call.
 //
