@@ -37,6 +37,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex"
+	vimemory "github.com/matrixorigin/matrixone/pkg/vectorindex/memory"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/sqlexec"
 	usearch "github.com/unum-cloud/usearch/golang"
 )
@@ -460,6 +461,22 @@ func (idx *HnswModel[T]) Contains(key int64) (found bool, err error) {
 	return idx.Index.Contains(uint64(key))
 }
 
+// hnswSpillDir returns where a model's local file belongs: the LOCAL fileservice volume, not
+// $TMPDIR. A model is multi-GB and the load path MMAPS it for the entry's whole cache lifetime,
+// so on a host where $TMPDIR is a tmpfs the "off-heap" index is really sitting in RAM -- the
+// memory the index cache governor budgets. The LOCAL volume is also the one provisioned for
+// exactly this, while /tmp is frequently small or slow.
+//
+// Mirrors what ivfpq/cagra FetchArtifact already does. HostSpillDir returns "" when there is no
+// LOCAL fileservice, and os.CreateTemp reads "" as $TMPDIR, so unit tests and one-shot tools keep
+// today's behaviour with no branch at the call sites.
+func hnswSpillDir(sqlproc *sqlexec.SqlProcess) string {
+	if sqlproc == nil || sqlproc.Proc == nil {
+		return ""
+	}
+	return vimemory.HostSpillDir(sqlproc.GetTopContext(), sqlproc.Proc.Base.FileService)
+}
+
 func (idx *HnswModel[T]) LoadIndexFromBuffer(
 	sqlproc *sqlexec.SqlProcess,
 	idxcfg vectorindex.IndexConfig,
@@ -489,7 +506,7 @@ func (idx *HnswModel[T]) LoadIndexFromBuffer(
 		// mmap it via View(). This keeps the index data entirely off the
 		// Go heap, eliminating GC pressure for multi-GB indexes.
 
-		fp, err = os.CreateTemp("", "hnsw")
+		fp, err = os.CreateTemp(hnswSpillDir(sqlproc), "hnsw")
 		if err != nil {
 			return err
 		}
@@ -709,7 +726,7 @@ func (idx *HnswModel[T]) LoadIndex(
 	if len(idx.Path) == 0 {
 
 		// create tempfile for writing
-		fp, err = os.CreateTemp("", "hnsw")
+		fp, err = os.CreateTemp(hnswSpillDir(sqlproc), "hnsw")
 		if err != nil {
 			return err
 		}
