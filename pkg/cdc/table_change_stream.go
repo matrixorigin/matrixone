@@ -1281,7 +1281,7 @@ func (s *TableChangeStream) processWithTxn(
 			// transaction snapshot. Wait without selecting a different epoch if the
 			// current CN has not made it visible yet: changing it would invalidate a
 			// partial target snapshot after retry.
-			logutil.Info(
+			logutil.Debug(
 				"cdc.table_stream.initial_snapshot_epoch_not_visible",
 				zap.String("table", s.tableInfo.String()),
 				zap.String("current-snapshot-ts", currentSnapshotTs.ToString()),

@@ -16,13 +16,42 @@ package compile
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
+	"strings"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/cdc"
 	"github.com/matrixorigin/matrixone/pkg/pb/task"
+	"github.com/matrixorigin/matrixone/pkg/taskservice"
 	"github.com/stretchr/testify/require"
 )
+
+type cdcRecordingSQLExecutor struct {
+	queries []string
+}
+
+func (e *cdcRecordingSQLExecutor) PrepareContext(context.Context, string) (*sql.Stmt, error) {
+	return nil, nil
+}
+
+func (e *cdcRecordingSQLExecutor) ExecContext(
+	_ context.Context, query string, _ ...interface{},
+) (sql.Result, error) {
+	e.queries = append(e.queries, query)
+	return cdcRowsAffectedResult(1), nil
+}
+
+func (e *cdcRecordingSQLExecutor) QueryContext(
+	context.Context, string, ...interface{},
+) (*sql.Rows, error) {
+	return nil, nil
+}
+
+type cdcRowsAffectedResult int64
+
+func (r cdcRowsAffectedResult) LastInsertId() (int64, error) { return 0, nil }
+func (r cdcRowsAffectedResult) RowsAffected() (int64, error) { return int64(r), nil }
 
 func TestCDCCreateTaskOptionsPreservePatternValidationError(t *testing.T) {
 	const tables = "db1.t1:db2.t1,db1.t1:db2.t2"
@@ -59,4 +88,26 @@ func TestCDCCreateTaskMetadataUsesCapabilityFence(t *testing.T) {
 		TaskId: "no-full", NoFull: true, ExtraOpts: stableOpts,
 	}).BuildTaskMetadata()
 	require.Equal(t, task.TaskCode_InitCdc, noFull.Executor)
+}
+
+func TestDeleteManyWatermarkRetainsSnapshotEpochOnRestart(t *testing.T) {
+	keys := map[taskservice.CDCTaskKey]struct{}{
+		{AccountId: 7, TaskId: "task"}: {},
+	}
+
+	restartExecutor := &cdcRecordingSQLExecutor{}
+	deleted, err := deleteManyWatermark(t.Context(), restartExecutor, keys, false)
+	require.NoError(t, err)
+	require.Equal(t, int64(1), deleted)
+	require.Len(t, restartExecutor.queries, 1)
+	require.Contains(t, restartExecutor.queries[0], "mo_cdc_watermark")
+	require.NotContains(t, restartExecutor.queries[0], "mo_cdc_snapshot")
+
+	cancelExecutor := &cdcRecordingSQLExecutor{}
+	deleted, err = deleteManyWatermark(t.Context(), cancelExecutor, keys, true)
+	require.NoError(t, err)
+	require.Equal(t, int64(1), deleted)
+	require.Len(t, cancelExecutor.queries, 2)
+	require.True(t, strings.Contains(cancelExecutor.queries[0], "mo_cdc_watermark"))
+	require.True(t, strings.Contains(cancelExecutor.queries[1], "mo_cdc_snapshot"))
 }

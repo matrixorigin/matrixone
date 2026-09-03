@@ -6156,7 +6156,7 @@ func onPreUpdateCDCTasks(
 		affectedCdcRow += int(cnt)
 
 		// Delete mo_cdc_watermark
-		if cnt, err = deleteManyWatermark(ctx, tx, keys); err != nil {
+		if cnt, err = deleteManyWatermark(ctx, tx, keys, true); err != nil {
 			return
 		}
 		affectedCdcRow += int(cnt)
@@ -6179,7 +6179,11 @@ func onPreUpdateCDCTasks(
 
 	// Restart cdc task
 	if targetTaskStatus == task.TaskStatus_RestartRequested {
-		if cnt, err = deleteManyWatermark(ctx, tx, keys); err != nil {
+		// RESTART intentionally resets the watermark but retains the immutable
+		// table-generation epoch. A bounded snapshot may already have committed
+		// target groups at that epoch, so choosing a new one would strand stale
+		// DELETE/PK-change rows.
+		if cnt, err = deleteManyWatermark(ctx, tx, keys, false); err != nil {
 			return
 		}
 		affectedCdcRow += int(cnt)
@@ -6239,6 +6243,7 @@ func deleteManyWatermark(
 	ctx context.Context,
 	tx taskservice.SqlExecutor,
 	keys map[taskservice.CDCTaskKey]struct{},
+	deleteSnapshotEpochs bool,
 ) (deletedCnt int64, err error) {
 	var (
 		cnt int64
@@ -6259,6 +6264,10 @@ func deleteManyWatermark(
 			return
 		}
 		deletedCnt += cnt
+
+		if !deleteSnapshotEpochs {
+			continue
+		}
 
 		sql = cdc.CDCSQLBuilder.DeleteSnapshotEpochSQL(key.AccountId, key.TaskId)
 		logutil.Info(

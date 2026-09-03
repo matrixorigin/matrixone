@@ -6468,6 +6468,17 @@ func TestExtractPrivilegeTipsFromTableChanges(t *testing.T) {
 	}
 }
 
+func TestCDCSystemTablesAreNotClassifiedAsClusterTables(t *testing.T) {
+	for _, tableName := range []string{
+		catalog.MO_CDC_TASK,
+		catalog.MO_CDC_WATERMARK,
+		catalog.MO_CDC_SNAPSHOT,
+	} {
+		require.Contains(t, predefinedTables, tableName)
+		require.False(t, isClusterTable(moCatalog, tableName))
+	}
+}
+
 func Test_determineDML(t *testing.T) {
 	type arg struct {
 		stmt tree.Statement

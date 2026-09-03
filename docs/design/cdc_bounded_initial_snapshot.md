@@ -106,9 +106,10 @@ configuration says split.
 | Legacy task lacks protocol marker | No new partial-commit behavior | Empty | Use one atomic target transaction |
 | New CN disappears after a bounded group; old CN polls the task | Partial snapshot `S` | Empty | Old CN cannot resolve `InitCdcStableEpoch` and does not claim; a capable CN replays `S` |
 | Wildcard task discovers a table after task creation or retention expiry | None for the new table | Empty | Persist that table generation's current snapshot and begin at that epoch, independent of task creation time |
-| Table is dropped and recreated under the same logical name | Prior generation may have completed or failed | Old logical-table watermark is replaced by detector lifecycle | Replace the retired source-table-ID epoch before publishing the new pipeline |
+| Table is dropped and recreated under the same logical name | Prior generation may have completed or failed | Old logical-table watermark is replaced by detector lifecycle | Persist a distinct epoch for the new source-table ID; retain both generation rows until terminal task cleanup so overlapping owners cannot erase either retry anchor |
 | Epoch INSERT reports an ambiguous failure | No reader has started for that generation | Empty | Retry reads the durable row first; it reuses a committed epoch or safely chooses a candidate if none committed |
-| Task is cancelled, restarted, or deleted | Existing target data follows task command semantics | Task metadata is removed/recreated as appropriate | Delete table epochs with task watermarks; periodic orphan cleanup removes rows whose task no longer exists |
+| Task is restarted | Existing target data and partial snapshot groups remain | Preserve checkpoint metadata | Retain and reuse every table-generation epoch exactly like its watermark; restart must never choose a new epoch after a partial target commit |
+| Task is cancelled or deleted | Existing target data follows task command semantics | Task metadata is removed | Delete all table-generation epochs with task watermarks; periodic orphan cleanup removes rows whose task no longer exists |
 
 The batch permit ownership chain is:
 
@@ -140,6 +141,11 @@ cancellation remain non-blocking with respect to procfs/cgroupfs access.
 - **Persist a per-group cursor:** adds source scan ordering and cursor recovery
   semantics. The implemented catalog state stores only one immutable epoch per
   active table generation and continues to rely on idempotent replay.
+- **Delete the prior generation epoch when publishing its replacement:** keeps
+  one row per logical table, but is unsafe because an overlapping old owner can
+  delete the replacement row (or vice versa). Generation rows are tiny and are
+  retained until cancel/drop, where task-wide cleanup provides the recycle
+  point without weakening retry correctness.
 - **Use a staging target table:** changes target DDL, privileges, cleanup, and
   identity semantics, and is disproportionate to the problem.
 
