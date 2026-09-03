@@ -17,6 +17,7 @@ package compile
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -632,24 +633,26 @@ func TestBinaryStringRemoteProtocolValidationAtSenderAndReceiver(t *testing.T) {
 	rt := runtime.ServiceRuntime(proc.GetService())
 	defer rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCLatestVersion)
 
-	binaryLength := &plan.Expr{
-		Typ: plan.Type{Id: int32(types.T_int64)},
-		Expr: &plan.Expr_F{F: &plan.Function{
-			Func: &plan.ObjectRef{
-				Obj:     function.EncodeOverloadID(function.LENGTH_UTF8, 0),
-				ObjName: "char_length",
-			},
-			Args: []*plan.Expr{{
-				Typ: plan.Type{Id: int32(types.T_varbinary), Charset: uint32(types.CharsetBinary)},
-				Expr: &plan.Expr_Lit{Lit: &plan.Literal{
-					Value: &plan.Literal_Sval{Sval: "\xff"},
-				}},
-			}},
-		}},
+	affectedFunctionIDs := []int32{
+		function.ORD, function.LENGTH_UTF8, function.LEFT, function.RIGHT,
+		function.SUBSTRING, function.REVERSE, function.LOWER, function.UPPER,
+		function.LTRIM, function.RTRIM, function.TRIM, function.LOCATE,
+		function.POSITION, function.INSTR, function.INSERT, function.REPLACE,
+		function.LPAD, function.RPAD, function.SUBSTRING_INDEX, function.SPLIT_PART,
+		function.REPEAT, function.LIKE, function.CONCAT, function.CONCAT_WS,
+		function.CHARSET, function.COLLATION, function.INTERNAL_CHAR_SIZE,
+		function.INTERNAL_COLUMN_CHARACTER_SET,
 	}
-	semanticPipeline := &pipeline.Pipeline{InstructionList: []*pipeline.Instruction{{
-		Op: int32(vm.Projection), ProjectList: []*plan.Expr{binaryLength},
-	}}}
+	semanticPipeline := func(functionID int32) *pipeline.Pipeline {
+		return &pipeline.Pipeline{InstructionList: []*pipeline.Instruction{{
+			Op: int32(vm.Projection), ProjectList: []*plan.Expr{{
+				Typ: plan.Type{Id: int32(types.T_int64)},
+				Expr: &plan.Expr_F{F: &plan.Function{Func: &plan.ObjectRef{
+					Obj: function.EncodeOverloadID(functionID, 0),
+				}}},
+			}},
+		}}}
+	}
 	ordinaryPipeline := &pipeline.Pipeline{InstructionList: []*pipeline.Instruction{{
 		Op: int32(vm.Projection), ProjectList: []*plan.Expr{{
 			Typ: plan.Type{Id: int32(types.T_int64)},
@@ -659,18 +662,32 @@ func TestBinaryStringRemoteProtocolValidationAtSenderAndReceiver(t *testing.T) {
 		}},
 	}}}
 
-	for _, boundary := range []string{"sender", "receiver"} {
-		t.Run(boundary, func(t *testing.T) {
-			rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion44)
-			require.ErrorContains(t,
-				validateRemoteBinaryStringPipelineProtocol(proc, semanticPipeline),
-				"require MORPC protocol version 45")
-			require.NoError(t, validateRemoteBinaryStringPipelineProtocol(proc, ordinaryPipeline))
+	for _, functionID := range affectedFunctionIDs {
+		t.Run(fmt.Sprintf("function-%d", functionID), func(t *testing.T) {
+			project := projection.NewArgument()
+			project.ProjectList = semanticPipeline(functionID).InstructionList[0].ProjectList
+			scope := &Scope{Proc: proc, RootOp: project}
 
 			rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion45)
-			require.NoError(t, validateRemoteBinaryStringPipelineProtocol(proc, semanticPipeline))
+			data, err := encodeRemoteScope(scope, proc)
+			require.NoError(t, err)
+
+			rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion44)
+			_, err = encodeRemoteScope(scope, proc)
+			require.ErrorContains(t, err, "require MORPC protocol version 45",
+				"sender must reject every changed function ID")
+			_, err = decodeScope(data, proc, true, nil)
+			require.ErrorContains(t, err, "require MORPC protocol version 45",
+				"receiver must reject every changed function ID")
+
+			rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion45)
+			decoded, err := decodeScope(data, proc, true, nil)
+			require.NoError(t, err)
+			require.NotNil(t, decoded)
 		})
 	}
+	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion44)
+	require.NoError(t, validateRemoteBinaryStringPipelineProtocol(proc, ordinaryPipeline))
 }
 
 func TestPadCharModeRemoteProtocolValidation(t *testing.T) {

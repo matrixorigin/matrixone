@@ -103,14 +103,16 @@ MySQL 会在部分 text-subject + invalid binary auxiliary coercion 上执行 ch
 
 逐行 executor 的顺序是：读取同一 logical row（const wrapper 自行映射 row 0）→ NULL/mask 判断 → 选择 subject domain → checked sizing/direct writer → append value → 批量安装 runtime domain。任何错误返回时仍由现有 FunctionResult owner 释放；不增加 unaccounted full-result buffer。
 
-`LIKE` 的 normal text fast path和 regexp cache保留；只有可能出现 binary/mixed subject 时使用无分配的 greedy byte wildcard matcher。Binary matcher按 byte解析 `%`、`_` 和现有 escape contract，不能把 value/pattern转成 rune。
+`LIKE` 的 normal text fast path和 regexp cache保留；只有可能出现 binary/mixed subject 时使用无分配的 byte wildcard matcher。Binary matcher按 byte解析 `%`、`_` 和现有 escape contract，不能把 value/pattern转成 rune。terminal suffix、纯 literal run，以及 `%` 后 `_` run + literal segment 使用线性 fast path；其余 greedy fallback具有固定的 backtracking step budget，超限返回明确错误，不能形成不受限的 value × pattern CPU 工作量。
 
 ## 6. Metadata 与 materialization closure
 
 - `CHARSET/COLLATION` 从输入 vector 的静态 `Type` 返回名称，不消费 session default，也不让 per-row runtime override改变结果。
-- frontend protocol继续从 expression/result `Type` 生成 ColumnDefinition；本次通过 resolver修正后，binary function output自然得到 collation 63 和 binary flag，text `_bin` 仍得到现有 utf8mb4_bin ID。
+- frontend protocol继续从 expression/result `Type` 生成 ColumnDefinition；本次通过 resolver修正后，binary function output自然得到 collation 63 和 binary flag，text `_bin` 仍得到现有 utf8mb4_bin ID。COM_STMT direct parameter result按 direct-result position与 packet-derived runtime type specialization，即使值为 typed NULL也保留 BLOB metadata；NULL-first、复用上一包类型和缓存命中必须等价。
 - `internal_column_character_set` 改为读取序列化 `Type.Charset`（binary OID仍权威），并让 `information_schema.columns` 对现有四种 identity 映射到上表名称。它不再把 `Scale` 当 charset。
 - CTAS继续复制 planner result type；不按 observed row 或 runtime sidecar缩窄/改域。`DESC`、information_schema 与 direct `CHARSET/COLLATION` 必须对同一静态 expression一致。
+- SQL `EXECUTE ... USING` 物化同时保留 assignment-time `SourceType` 与独立的 `RuntimeStringDomain`；typed non-NULL、typed NULL、重复执行和 prepared-plan cache复用均不得把三态 provenance压回静态域。
+- remote pipeline sender与receiver对所有已改变的 Function ID执行 MORPC v45 fail-closed barrier，包括 `POSITION`、`INTERNAL_CHAR_SIZE` 和 `INTERNAL_COLUMN_CHARACTER_SET`；catalog upgrade barrier只控制 view物化，不能代替 executor barrier。
 
 ## 7. 边界、失败与性能
 
@@ -137,11 +139,11 @@ MySQL 会在部分 text-subject + invalid binary auxiliary coercion 上执行 ch
 | length/ORD/position | focused executor UT：text/binary最近控制、empty/NULL、0/1/-1/越界、4-byte UTF-8、invalid bytes |
 | slice/reverse/case/trim | table UT：static text + runtime binary、static binary + runtime text、mixed rows、const与mask |
 | insert/pad/replace | direct-writer UT：byte/rune unit、invalid bytes、result limit与已有 #27218 width controls |
-| LIKE | matcher UT + executor mixed-row UT：`_` 的 character/byte差异、`%`、escape、invalid bytes；REGEXP测试不改 |
+| LIKE | matcher UT + executor mixed-row UT：`_` 的 character/byte差异、`%`、escape、invalid bytes、reviewer adversarial线性 benchmark和 fallback budget rejection；REGEXP测试不改 |
 | result provenance | nested consumer UT：变换结果再进 `CHAR_LENGTH`；无 metadata fast path断言不分配 sidecar |
 | CHARSET/COLLATION | static type table UT；runtime mixed override不改变名称；legacy fallback控制 |
 | information_schema/CTAS | internal metadata UT + public BVT，核对 binary/general-ci/utf8mb4-bin |
-| protocol | frontend field metadata UT；binary source-derived output为 collation 63，text `_bin` 非63 |
+| protocol | frontend field metadata UT；binary source-derived output为 collation 63，text `_bin` 非63；每个变更 Function ID 的真实 sender encode / receiver decode v44 reject与v45 accept |
 | reachable sources | public SQL覆盖 raw/_binary、BINARY/VARBINARY/BLOB、CAST/CONVERT、column、bare variable、SQL PREPARE；COM_STMT用现有 planner/frontend typed parameter fixture |
 | stability | owning package tests、normal BVT同实例两轮、`git diff --check`、mo-self-review change map |
 

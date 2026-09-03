@@ -5759,6 +5759,19 @@ func isNonNegativePreparedInteger(value any) bool {
 	return valid && !negative
 }
 
+func setPreparedRuntimeStringDomain(expr *Expr, domain types.RuntimeStringDomain) {
+	literal := expr.GetLit()
+	if literal == nil {
+		return
+	}
+	switch domain {
+	case types.RuntimeStringText:
+		literal.LiteralForm = plan.StringLiteralForm_STRING_LITERAL_TEXT
+	case types.RuntimeStringBinary:
+		literal.LiteralForm = plan.StringLiteralForm_STRING_LITERAL_BINARY_INTRODUCER
+	}
+}
+
 func replaceParamVals(
 	ctx context.Context,
 	plan0 *Plan,
@@ -5853,6 +5866,7 @@ func replaceParamValsWithSelection(
 						Typ: paramType, Expr: &plan.Expr_P{P: &plan.ParamRef{Pos: int32(i)}},
 					})
 				}
+				setPreparedRuntimeStringDomain(params[i], runtimeStringDomain)
 				continue
 			}
 			pc := &plan.Literal{IsBin: isBin}
@@ -5864,14 +5878,7 @@ func replaceParamValsWithSelection(
 				},
 			}
 		}
-		if literal := params[i].GetLit(); literal != nil {
-			switch runtimeStringDomain {
-			case types.RuntimeStringText:
-				literal.LiteralForm = plan.StringLiteralForm_STRING_LITERAL_TEXT
-			case types.RuntimeStringBinary:
-				literal.LiteralForm = plan.StringLiteralForm_STRING_LITERAL_BINARY_INTRODUCER
-			}
-		}
+		setPreparedRuntimeStringDomain(params[i], runtimeStringDomain)
 		if (numericPrefixSource || retainParamRef || directRuntimeResult) && params[i].GetLit() != nil {
 			params[i].GetLit().Src = &plan.Expr{
 				Typ: paramType, Expr: &plan.Expr_P{P: &plan.ParamRef{Pos: int32(i)}},

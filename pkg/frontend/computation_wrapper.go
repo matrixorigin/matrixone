@@ -1457,7 +1457,7 @@ func initExecuteStmtParamWithResolverInSession(
 			}
 			if directPositionIndex < len(directResultPositions) &&
 				directResultPositions[directPositionIndex] == int32(i) &&
-				kind != vector.PrepareParamNone && !prepareStmt.params.IsNull(uint64(i)) {
+				runtimeParamTypes[i].Oid != types.T_text && runtimeParamTypes[i].Oid != types.T_any {
 				runtimeDirectResultCandidate = true
 				runtimeDirectResultPositions = append(runtimeDirectResultPositions, int32(i))
 			}

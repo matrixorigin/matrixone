@@ -21,12 +21,15 @@ import (
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/stretchr/testify/require"
 )
 
@@ -1509,6 +1512,56 @@ func TestFillValuesOfParamsInPlanUsesSQLExecuteSourceTypeInPreparedResultConsume
 		require.NotNil(t, result)
 		require.Equal(t, int32(types.T_varbinary), result.Typ.Id, result.String())
 	})
+}
+
+func TestFillValuesOfParamsPreservesSQLExecuteRuntimeStringDomain(t *testing.T) {
+	prepared, err := runOneStmt(NewMockOptimizer(false), t,
+		"prepare stmt_runtime_domain from 'select char_length(?)'")
+	require.NoError(t, err)
+	original := prepared.GetDcl().GetPrepare().Plan
+
+	for _, test := range []struct {
+		name       string
+		sourceType types.Type
+		domain     types.RuntimeStringDomain
+		wantForm   planpb.StringLiteralForm
+		wantLength int64
+	}{
+		{
+			name: "static varbinary runtime text", sourceType: types.T_varbinary.ToType(),
+			domain: types.RuntimeStringText, wantForm: planpb.StringLiteralForm_STRING_LITERAL_TEXT, wantLength: 2,
+		},
+		{
+			name: "static varchar runtime binary", sourceType: types.T_varchar.ToType(),
+			domain: types.RuntimeStringBinary, wantForm: planpb.StringLiteralForm_STRING_LITERAL_BINARY_INTRODUCER,
+			wantLength: 4,
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			for execution := 0; execution < 2; execution++ {
+				filled, _, fillErr := FillValuesOfParamsInPlanWithSpecialization(
+					context.Background(), original, []any{ParamValue{
+						Value: "你a", SourceType: test.sourceType, HasSourceType: true,
+						RuntimeStringDomain: test.domain,
+					}})
+				require.NoError(t, fillErr)
+				charLength := findPlanFunctionExpr(filled, "char_length")
+				require.NotNil(t, charLength)
+				require.Len(t, charLength.GetF().Args, 1)
+				literal := charLength.GetF().Args[0].GetLit()
+				require.NotNil(t, literal)
+				require.Equal(t, test.wantForm, literal.LiteralForm)
+
+				proc := testutil.NewProc(t)
+				executor, execErr := colexec.NewExpressionExecutor(proc, charLength)
+				require.NoError(t, execErr)
+				t.Cleanup(executor.Free)
+				result, execErr := executor.Eval(proc, []*batch.Batch{batch.EmptyForConstFoldBatch}, nil)
+				require.NoError(t, execErr)
+				require.Equal(t, test.wantLength, vector.GetFixedAtNoTypeCheck[int64](result, 0))
+			}
+		})
+	}
 }
 
 func TestFillValuesOfParamsMaterializesInferredTextNumericLiteral(t *testing.T) {

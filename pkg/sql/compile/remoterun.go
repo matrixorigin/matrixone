@@ -2024,10 +2024,11 @@ func binaryStringSemanticFunction(functionID int32) bool {
 	case function.ORD, function.LENGTH_UTF8, function.LEFT, function.RIGHT,
 		function.SUBSTRING, function.REVERSE, function.LOWER, function.UPPER,
 		function.LTRIM, function.RTRIM, function.TRIM, function.LOCATE,
-		function.INSTR, function.INSERT, function.REPLACE, function.LPAD,
+		function.POSITION, function.INSTR, function.INSERT, function.REPLACE, function.LPAD,
 		function.RPAD, function.SUBSTRING_INDEX, function.SPLIT_PART,
 		function.REPEAT, function.LIKE, function.CONCAT, function.CONCAT_WS,
-		function.CHARSET, function.COLLATION:
+		function.CHARSET, function.COLLATION, function.INTERNAL_CHAR_SIZE,
+		function.INTERNAL_COLUMN_CHARACTER_SET:
 		return true
 	default:
 		return false

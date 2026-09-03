@@ -183,7 +183,7 @@ func (op *opBuiltInRegexp) likeByStringDomain(
 			if escapeEnabled && len(escapeBytes) != 1 {
 				return moerr.NewInvalidInputNoCtx("Incorrect arguments to ESCAPE")
 			}
-			matched = byteLike(pattern, value, escapeBytes, escapeEnabled)
+			matched, err = byteLike(pattern, value, escapeBytes, escapeEnabled)
 		} else {
 			if !utf8.Valid(escapeBytes) || utf8.RuneCount(escapeBytes) > 1 {
 				return moerr.NewInvalidInputNoCtx("Incorrect arguments to ESCAPE")
@@ -211,13 +211,26 @@ const (
 	byteLikeAny
 )
 
-func byteLike(pattern, value, escape []byte, escapeEnabled bool) bool {
+// Fast paths below are linear in value plus pattern size. The remaining general
+// wildcard fallback has an explicit work budget, so no accepted input can turn
+// an unbounded value-pattern product into CPU work.
+const maxByteLikeBacktrackingSteps = 16 * 1024 * 1024
+
+func byteLike(pattern, value, escape []byte, escapeEnabled bool) (bool, error) {
 	valueAt, patternAt := 0, 0
 	lastAnyPattern, lastAnyValue := -1, -1
+	backtrackingSteps := 0
 	for valueAt < len(value) {
+		if lastAnyPattern >= 0 {
+			backtrackingSteps++
+			if backtrackingSteps > maxByteLikeBacktrackingSteps {
+				return false, moerr.NewInvalidInputNoCtx(
+					"binary LIKE pattern requires too much backtracking")
+			}
+		}
 		if patternAt >= len(pattern) {
 			if lastAnyPattern < 0 {
-				return false
+				return false, nil
 			}
 			lastAnyValue++
 			valueAt = lastAnyValue
@@ -237,13 +250,27 @@ func byteLike(pattern, value, escape []byte, escapeEnabled bool) bool {
 		case kind == byteLikeAny:
 			if matched, terminal := matchTerminalByteLikeSuffix(
 				pattern, nextPattern, value, valueAt, escape, escapeEnabled); terminal {
-				return matched
+				return matched, nil
+			}
+			if skipped, literal, nextAny, ok := nextByteLikeSkippedLiteralSegment(
+				pattern, nextPattern, escape, escapeEnabled); ok && len(literal) > 0 {
+				searchAt := valueAt + skipped
+				if searchAt > len(value) {
+					return false, nil
+				}
+				index := bytes.Index(value[searchAt:], literal)
+				if index < 0 {
+					return false, nil
+				}
+				valueAt = searchAt + index + len(literal)
+				patternAt = nextAny
+				continue
 			}
 			if literal, nextAny, ok := nextRawByteLikeLiteralRun(
 				pattern, nextPattern, escape, escapeEnabled); ok && len(literal) > 0 {
 				index := bytes.Index(value[valueAt:], literal)
 				if index < 0 {
-					return false
+					return false, nil
 				}
 				valueAt += index + len(literal)
 				patternAt = nextAny
@@ -259,17 +286,17 @@ func byteLike(pattern, value, escape []byte, escapeEnabled bool) bool {
 			patternAt = lastAnyPattern
 			continue
 		default:
-			return false
+			return false, nil
 		}
 	}
 	for patternAt < len(pattern) {
 		kind, _, nextPattern := nextByteLikeToken(pattern, patternAt, escape, escapeEnabled)
 		if kind != byteLikeAny {
-			return false
+			return false, nil
 		}
 		patternAt = nextPattern
 	}
-	return true
+	return true, nil
 }
 
 func matchTerminalByteLikeSuffix(
@@ -310,6 +337,27 @@ func matchTerminalByteLikeSuffix(
 		at = next
 	}
 	return true, true
+}
+
+func nextByteLikeSkippedLiteralSegment(
+	pattern []byte,
+	at int,
+	escape []byte,
+	escapeEnabled bool,
+) (skipped int, literal []byte, nextAny int, ok bool) {
+	for at < len(pattern) {
+		kind, _, next := nextByteLikeToken(pattern, at, escape, escapeEnabled)
+		if kind != byteLikeOne {
+			break
+		}
+		skipped++
+		at = next
+	}
+	if skipped == 0 {
+		return 0, nil, 0, false
+	}
+	literal, nextAny, ok = nextRawByteLikeLiteralRun(pattern, at, escape, escapeEnabled)
+	return skipped, literal, nextAny, ok
 }
 
 func nextRawByteLikeLiteralRun(

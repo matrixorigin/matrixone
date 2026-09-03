@@ -482,6 +482,54 @@ func TestPreparedNullBlobRetainsBinaryProtocolType(t *testing.T) {
 	require.Equal(t, []int32{0}, preparedDirectResultRuntimePositions(values, []int32{0}))
 }
 
+func TestInitExecuteStmtParamSpecializesDirectTypedNullBlob(t *testing.T) {
+	ses, prepareStmt, cw, execCtx := newPreparedExecuteEnvForSQL(t, 223, "select ?")
+	defer func() {
+		cw.proc.SetPrepareParams(nil)
+		prepareStmt.Close()
+	}()
+	require.Equal(t, []int32{0}, prepareStmt.directResultParamPositions)
+	ordinaryPlan := prepareStmt.PreparePlan.GetDcl().GetPrepare().Plan
+	prepareStmt.compile = compile.NewCompile(
+		"", "", prepareStmt.Sql, "", "", nil,
+		cw.proc, prepareStmt.PrepareStmt, false, nil, time.Now())
+
+	installNullBlob := func(setPacketType bool) {
+		cw.proc.SetPrepareParams(nil)
+		if prepareStmt.params != nil {
+			prepareStmt.params.Free(cw.proc.Mp())
+		}
+		prepareStmt.params = vector.NewVec(types.T_text.ToType())
+		require.NoError(t, vector.AppendBytes(prepareStmt.params, nil, true, cw.proc.Mp()))
+		if setPacketType {
+			prepareStmt.ParamTypes = []byte{byte(defines.MYSQL_TYPE_BLOB), 0}
+		}
+	}
+	resultType := func(queryPlan *plan.Plan) plan.Type {
+		query := queryPlan.GetQuery()
+		return query.Nodes[query.Steps[len(query.Steps)-1]].ProjectList[0].Typ
+	}
+
+	installNullBlob(true)
+	retComp, runtimePlan, _, _, _, err := initExecuteStmtParam(execCtx, ses, cw, nil, prepareStmt.Name)
+	require.NoError(t, err)
+	require.Nil(t, retComp)
+	require.NotSame(t, ordinaryPlan, runtimePlan)
+	require.Equal(t, int32(types.T_blob), resultType(runtimePlan).Id)
+	require.True(t, cw.runtimeDirectResultSpecialization)
+
+	runtimeCompile := compile.NewCompile(
+		"", "", prepareStmt.Sql, "", "", nil,
+		cw.proc, prepareStmt.PrepareStmt, false, nil, time.Now())
+	require.True(t, cw.installRuntimeCacheCandidate(runtimeCompile))
+	installNullBlob(false)
+	retComp, reusedPlan, _, _, _, err := initExecuteStmtParam(execCtx, ses, cw, nil, prepareStmt.Name)
+	require.NoError(t, err)
+	require.Same(t, runtimeCompile, retComp)
+	require.Same(t, runtimePlan, reusedPlan)
+	require.Equal(t, int32(types.T_blob), resultType(reusedPlan).Id)
+}
+
 func TestInitExecuteStmtParamSetsCOMStmtBinaryStringMetadata(t *testing.T) {
 	ses, prepareStmt, cw, execCtx := newPreparedExecuteEnvForSQL(
 		t, 120, "select char_length(?), char_length(?)")

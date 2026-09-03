@@ -16,6 +16,7 @@ package function
 
 import (
 	"bytes"
+	"fmt"
 	"math"
 	"testing"
 
@@ -474,6 +475,10 @@ func TestByteLikeUsesByteWildcardsAndEscape(t *testing.T) {
 		{name: "one byte", pattern: []byte("____"), value: []byte("你a"), want: true},
 		{name: "not one rune", pattern: []byte("__"), value: []byte("你a"), want: false},
 		{name: "percent backtracks", pattern: []byte("%\xbd%a"), value: []byte("你a"), want: true},
+		{name: "skipped literal segment matches", pattern: []byte("%__b%c"), value: []byte("xxbzzc"), want: true},
+		{name: "skipped literal segment rejects suffix", pattern: []byte("%__b%c"), value: []byte("xxbzz"), want: false},
+		{name: "skipped literal ignores too-early anchor", pattern: []byte("%__b%c"), value: []byte("xbxbzc"), want: true},
+		{name: "multiple mixed segments", pattern: []byte("%__b%de_f"), value: []byte("xxbzzbdeXf"), want: true},
 		{name: "escaped underscore", pattern: []byte(`\_`), value: []byte("_"), escape: []byte{'\\'}, enabled: true, want: true},
 		{name: "escaped percent is literal", pattern: []byte(`\%`), value: []byte("x"), escape: []byte{'\\'}, enabled: true, want: false},
 		{name: "trailing escape literal", pattern: []byte(`a\`), value: []byte(`a\`), escape: []byte{'\\'}, enabled: true, want: true},
@@ -481,7 +486,9 @@ func TestByteLikeUsesByteWildcardsAndEscape(t *testing.T) {
 		{name: "empty", pattern: nil, value: nil, want: true},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			require.Equal(t, test.want, byteLike(test.pattern, test.value, test.escape, test.enabled))
+			got, err := byteLike(test.pattern, test.value, test.escape, test.enabled)
+			require.NoError(t, err)
+			require.Equal(t, test.want, got)
 		})
 	}
 }
@@ -517,6 +524,32 @@ func TestLikeEscapeValidationUsesEffectiveRowDomain(t *testing.T) {
 		"the binary row must accept one arbitrary escape byte")
 }
 
+func TestByteLikeBoundsUnoptimizedBacktracking(t *testing.T) {
+	value := bytes.Repeat([]byte{'a'}, 10_000)
+	pattern := append([]byte{'%'}, bytes.Repeat([]byte{'_'}, 5_000)...)
+	pattern = append(pattern, 'b', '_', '%', 'c')
+	matched, err := byteLike(pattern, value, nil, false)
+	require.False(t, matched)
+	require.ErrorContains(t, err, "requires too much backtracking")
+}
+
+func BenchmarkByteLikeAdversarialSkippedLiteralSegment(b *testing.B) {
+	for _, size := range []int{2_000, 4_000, 8_000} {
+		b.Run(fmt.Sprintf("n=%d", size), func(b *testing.B) {
+			value := bytes.Repeat([]byte{'a'}, size)
+			pattern := append([]byte{'%'}, bytes.Repeat([]byte{'_'}, size/2)...)
+			pattern = append(pattern, 'b', '%', 'c')
+			b.SetBytes(int64(len(value) + len(pattern)))
+			for i := 0; i < b.N; i++ {
+				matched, err := byteLike(pattern, value, nil, false)
+				if err != nil || matched {
+					b.Fatalf("unexpected result: matched=%v err=%v", matched, err)
+				}
+			}
+		})
+	}
+}
+
 func BenchmarkByteLikeAdversarialLiteralSuffix(b *testing.B) {
 	value := bytes.Repeat([]byte{'a'}, 64<<10)
 	pattern := append([]byte{'%'}, bytes.Repeat([]byte{'a'}, 64<<10)...)
@@ -524,8 +557,9 @@ func BenchmarkByteLikeAdversarialLiteralSuffix(b *testing.B) {
 	b.SetBytes(int64(len(value) + len(pattern)))
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		if byteLike(pattern, value, nil, false) {
-			b.Fatal("unexpected match")
+		matched, err := byteLike(pattern, value, nil, false)
+		if err != nil || matched {
+			b.Fatalf("unexpected result: matched=%v err=%v", matched, err)
 		}
 	}
 }
