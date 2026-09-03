@@ -7,6 +7,7 @@ on:
     paths:
       - go.mod
       - go.sum
+      - .golangci.yml
       - Makefile
       - cgo/*.c
       - cgo/*.h
@@ -16,6 +17,9 @@ on:
       - thirdparties/download
       - .github/workflows/sca-go-module-cache.yaml
   schedule:
+    # Keep the pre-existing module/native/tool caches inside the configured
+    # retention window. The expensive analysis below runs only on a cache miss,
+    # so daily keepalive no longer means daily full lint.
     - cron: "0 18 * * *"
   workflow_dispatch:
 
@@ -49,7 +53,7 @@ jobs:
         run: |
           set -euo pipefail
           make clean
-          rm -rf .sca-go-module-cache .sca-static-check-tools
+          rm -rf .sca-go-module-cache .sca-static-check-tools .sca-golangci-analysis-cache
       - name: Resolve Go module cache metadata
         id: go-module-cache-metadata
         run: |
@@ -79,6 +83,31 @@ jobs:
         with:
           path: .sca-go-module-cache
           key: ${{ steps.go-module-cache.outputs.cache-primary-key }}
+      - name: Move Go module cache out of the source tree
+        run: |
+          set -euo pipefail
+          staging_dir="$GOMODCACHE"
+          runtime_root="$(mktemp -d "${RUNNER_TEMP%/}/matrixone-go-mod.XXXXXX")"
+          runtime_dir="$runtime_root/cache"
+          if [[ -d "$staging_dir" ]]; then
+            mv "$staging_dir" "$runtime_dir"
+          else
+            mkdir "$runtime_dir"
+          fi
+          echo "GOMODCACHE=$runtime_dir" >> "$GITHUB_ENV"
+      - name: Restore golangci-lint analysis cache
+        id: golangci-analysis-cache
+        uses: matrixorigin/CI/actions/restore-sca-analysis-cache@main
+      - name: Reject unusable exact analysis cache
+        if: steps.golangci-analysis-cache.outputs.cache-exact-match == 'true' && steps.golangci-analysis-cache.outputs.cache-usable != 'true'
+        env:
+          MATCHED_KEY: ${{ steps.golangci-analysis-cache.outputs.cache-matched-key }}
+        run: |
+          set -euo pipefail
+          echo "::error::The exact golangci-lint analysis cache is unusable and immutable; delete the matched cache key or wait for the weekly generation to rotate"
+          printf '### SCA cache repair required\n\nExact key `%s` exists but contains no usable analysis files. Warming cannot replace an existing GitHub Actions cache key.\n' \
+            "${MATCHED_KEY:-unknown}" >> "$GITHUB_STEP_SUMMARY"
+          exit 1
       # Keep these metadata outputs and the key schema aligned with
       # matrixorigin/CI:.github/workflows/ci.yaml.
       - name: Resolve native cache metadata
@@ -165,3 +194,66 @@ jobs:
         with:
           path: .sca-static-check-tools
           key: ${{ steps.static-check-tool-cache.outputs.cache-primary-key }}
+      - name: Prepare SCA environment
+        run: |
+          set -euo pipefail
+          rm -rf "$GITHUB_WORKSPACE/lib"
+          cp -r thirdparties/install/lib "$GITHUB_WORKSPACE/lib"
+          runtime_dir="$(mktemp -d "${RUNNER_TEMP%/}/matrixone-sca-tools.XXXXXX")"
+          mv .sca-static-check-tools/* "$runtime_dir/"
+          rmdir .sca-static-check-tools
+          echo "$runtime_dir" >> "$GITHUB_PATH"
+      - name: Warm golangci-lint analysis cache
+        id: warm-analysis-cache
+        if: steps.golangci-analysis-cache.outputs.cache-hit != 'true'
+        run: |
+          set -euo pipefail
+          # The producer is not a validation gate: populate only the cache
+          # consumed by golangci-lint. PR SCA still runs molint, golangci-lint,
+          # and the applicable complete/incremental license checks.
+          make static-check-golangci GOLANGCI_LINT_CONCURRENCY=1
+          cache_files="$(find "$GOLANGCI_LINT_CACHE" -type f -print | wc -l | tr -d ' ')"
+          max_cache_files=200000
+          if (( cache_files == 0 )); then
+            echo "::error::golangci-lint completed without producing analysis cache files"
+            printf '### SCA cache publication failed\n\nThe analyzer produced an empty cache.\n' >> "$GITHUB_STEP_SUMMARY"
+            echo "cache-within-budget=false" >> "$GITHUB_OUTPUT"
+            exit 1
+          elif (( cache_files > max_cache_files )); then
+            echo "::error::golangci-lint cache exceeds the 200,000-file publication budget"
+            printf '### SCA cache publication failed\n\nCache files: %s\n\nBudget: %s files\n' \
+              "$cache_files" "$max_cache_files" >> "$GITHUB_STEP_SUMMARY"
+            echo "cache-within-budget=false" >> "$GITHUB_OUTPUT"
+            exit 1
+          fi
+          # GitHub accounts cache quota against the uploaded compressed
+          # archive, not filesystem blocks. golangci-lint creates tens of
+          # thousands of tiny files, so `du` can overstate quota usage by an
+          # order of magnitude and reject a healthy cache.
+          cache_archive_bytes="$(
+            tar -C "$GOLANGCI_LINT_CACHE" -cf - . | zstd -T1 -q -c | wc -c | tr -d ' '
+          )"
+          cache_archive_kib=$(((cache_archive_bytes + 1023) / 1024))
+          max_cache_kib=$((160 * 1024))
+          echo "golangci-lint cache: ${cache_files} files, estimated zstd archive $((cache_archive_kib / 1024)) MiB (limit: $((max_cache_kib / 1024)) MiB)"
+          if (( cache_archive_kib > max_cache_kib )); then
+            echo "::error::golangci-lint cache exceeds the 160 MiB compressed publication budget"
+            printf '### SCA cache publication failed\n\nEstimated zstd archive: %s MiB\n\nBudget: %s MiB\n' \
+              "$((cache_archive_kib / 1024))" "$((max_cache_kib / 1024))" >> "$GITHUB_STEP_SUMMARY"
+            echo "cache-within-budget=false" >> "$GITHUB_OUTPUT"
+            exit 1
+          fi
+          echo "cache-within-budget=true" >> "$GITHUB_OUTPUT"
+      - name: Stage golangci-lint analysis cache
+        if: steps.golangci-analysis-cache.outputs.cache-hit != 'true' && steps.warm-analysis-cache.outputs.cache-within-budget == 'true'
+        run: |
+          set -euo pipefail
+          staging_dir="$GITHUB_WORKSPACE/.sca-golangci-analysis-cache"
+          mkdir "$staging_dir"
+          mv "$GOLANGCI_LINT_CACHE" "$staging_dir/golangci-lint"
+      - name: Save golangci-lint analysis cache
+        if: steps.golangci-analysis-cache.outputs.cache-hit != 'true' && steps.warm-analysis-cache.outputs.cache-within-budget == 'true'
+        uses: actions/cache/save@0400d5f644dc74513175e3cd8d07132dd4860809 # v4.2.4
+        with:
+          path: .sca-golangci-analysis-cache
+          key: ${{ steps.golangci-analysis-cache.outputs.cache-primary-key }}
