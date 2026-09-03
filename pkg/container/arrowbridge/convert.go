@@ -92,11 +92,15 @@ func (p *Plan) Convert(
 	if record.NumRows() < 0 || record.NumRows() > int64(math.MaxInt) {
 		return nil, stats, moerr.NewInvalidInputf(ctx, "Arrow record row count %d is invalid", record.NumRows())
 	}
-	if schemaFingerprint(record.Schema()) != p.schemaFingerprint {
+	recordSchema := record.Schema()
+	if recordSchema == nil {
+		return nil, stats, moerr.NewInvalidInput(ctx, "Arrow record schema is nil")
+	}
+	if schemaFingerprint(recordSchema) != p.schemaFingerprint {
 		return nil, stats, moerr.NewInvalidInput(ctx, "Arrow record schema does not match the bound schema")
 	}
-	if record.NumCols() != int64(len(p.columns)) {
-		return nil, stats, moerr.NewInvalidInputf(ctx, "Arrow record has %d columns, expected %d", record.NumCols(), len(p.columns))
+	if err := validateRecordColumns(ctx, record, recordSchema, p.columns); err != nil {
+		return nil, stats, err
 	}
 	if options.Location == nil {
 		options.Location = time.UTC
@@ -117,9 +121,6 @@ func (p *Plan) Convert(
 			return nil, stats, err
 		}
 		column := record.Column(binding.source)
-		if column.Len() != rows {
-			return nil, stats, moerr.NewInvalidInputf(ctx, "Arrow column %q has %d rows, expected %d", binding.target.Name, column.Len(), rows)
-		}
 		if binding.target.NotNull && column.NullN() != 0 {
 			return nil, stats, moerr.NewConstraintViolationf(ctx, "Arrow column %q contains NULL for a NOT NULL target", binding.target.Name)
 		}

@@ -316,6 +316,9 @@ func (p *Plan) Fingerprint() [sha256.Size]byte {
 func schemaFingerprint(schema *arrow.Schema) [sha256.Size]byte {
 	h := sha256.New()
 	writeFingerprintString(h, "matrixone-arrow-schema-v1")
+	if schema == nil {
+		return [sha256.Size]byte{}
+	}
 	writeFingerprintUint64(h, uint64(schema.Endianness()))
 	writeFingerprintMetadata(h, schema.Metadata())
 	for _, field := range schema.Fields() {
@@ -329,6 +332,11 @@ func schemaFingerprint(schema *arrow.Schema) [sha256.Size]byte {
 func writeFingerprintField(h hash.Hash, field arrow.Field) {
 	writeFingerprintString(h, field.Name)
 	writeFingerprintBool(h, field.Nullable)
+	if field.Type == nil {
+		writeFingerprintString(h, "<nil-arrow-type>")
+		writeFingerprintMetadata(h, field.Metadata)
+		return
+	}
 	writeFingerprintString(h, field.Type.Fingerprint())
 	writeFingerprintMetadata(h, field.Metadata)
 	if nested, ok := field.Type.(arrow.NestedType); ok {

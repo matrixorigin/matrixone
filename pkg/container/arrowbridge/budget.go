@@ -39,23 +39,15 @@ func (p *Plan) MaxOutputRows(
 	if p == nil || record == nil || start < 0 || start >= record.NumRows() || maxRows <= 0 {
 		return 0, moerr.NewInvalidInput(ctx, "invalid Arrow output budget input")
 	}
-	if schemaFingerprint(record.Schema()) != p.schemaFingerprint {
+	recordSchema := record.Schema()
+	if recordSchema == nil {
+		return 0, moerr.NewInvalidInput(ctx, "Arrow record schema is nil")
+	}
+	if schemaFingerprint(recordSchema) != p.schemaFingerprint {
 		return 0, moerr.NewInvalidInput(ctx, "Arrow record schema does not match the bound schema")
 	}
-	if record.NumCols() != int64(len(p.columns)) {
-		return 0, moerr.NewInvalidInputf(ctx, "Arrow record has %d columns, expected %d", record.NumCols(), len(p.columns))
-	}
-	for _, binding := range p.columns {
-		column := record.Column(binding.source)
-		if column == nil || int64(column.Len()) != record.NumRows() {
-			actualRows := -1
-			if column != nil {
-				actualRows = column.Len()
-			}
-			return 0, moerr.NewInvalidInputf(ctx,
-				"Arrow column %q has %d rows, expected %d",
-				binding.target.Name, actualRows, record.NumRows())
-		}
+	if err := validateRecordColumns(ctx, record, recordSchema, p.columns); err != nil {
+		return 0, err
 	}
 	available := record.NumRows() - start
 	if int64(maxRows) > available {
@@ -92,6 +84,34 @@ func (p *Plan) MaxOutputRows(
 		used += rowBytes
 	}
 	return maxRows, nil
+}
+
+func validateRecordColumns(
+	ctx context.Context,
+	record arrow.RecordBatch,
+	schema *arrow.Schema,
+	columns []columnPlan,
+) error {
+	if record.NumCols() != int64(len(columns)) {
+		return moerr.NewInvalidInputf(ctx, "Arrow record has %d columns, expected %d", record.NumCols(), len(columns))
+	}
+	for _, binding := range columns {
+		column := record.Column(binding.source)
+		if column == nil {
+			return moerr.NewInvalidInputf(ctx, "Arrow column %q is nil", binding.target.Name)
+		}
+		if int64(column.Len()) != record.NumRows() {
+			return moerr.NewInvalidInputf(ctx,
+				"Arrow column %q has %d rows, expected %d",
+				binding.target.Name, column.Len(), record.NumRows())
+		}
+		if binding.source < 0 || binding.source >= schema.NumFields() || schema.Field(binding.source).Type == nil ||
+			column.DataType() == nil || column.DataType().Fingerprint() != schema.Field(binding.source).Type.Fingerprint() {
+			return moerr.NewInvalidInputf(ctx,
+				"Arrow column %q data type does not match the bound schema", binding.target.Name)
+		}
+	}
+	return nil
 }
 
 func estimateColumnRowBytes(

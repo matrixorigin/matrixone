@@ -18,6 +18,8 @@ import (
 	"context"
 	"encoding/binary"
 	"math"
+	"math/bits"
+	"unicode/utf8"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/arrowipc"
@@ -228,8 +230,17 @@ func parseArrowField(table flatTable, expected planpb.Type) (arrowField, error) 
 		if err != nil {
 			return arrowField{}, err
 		}
-		if (moType != types.T_decimal64 && moType != types.T_decimal128) || field.precision != expected.Width ||
-			field.scale != expected.Scale || field.bitWidth != 128 {
+		if moType != types.T_decimal64 && moType != types.T_decimal128 {
+			return arrowField{}, typeMismatch(typeID, moType)
+		}
+		maxPrecision := int32(38)
+		if moType == types.T_decimal64 {
+			maxPrecision = 18
+		}
+		if field.precision < 1 || field.precision > maxPrecision {
+			return arrowField{}, internalErrorf("decimal precision %d is outside [1,%d]", field.precision, maxPrecision)
+		}
+		if field.precision != expected.Width || field.scale != expected.Scale || field.bitWidth != 128 {
 			return arrowField{}, typeMismatch(typeID, moType)
 		}
 	case arrowTypeDate:
@@ -308,6 +319,22 @@ type arrowBuffer struct {
 	offset int64
 	length int64
 }
+
+type decimal128Magnitude struct {
+	low  uint64
+	high uint64
+}
+
+var decimal128PowersOfTen = func() [39]decimal128Magnitude {
+	result := [39]decimal128Magnitude{{low: 1}}
+	for index := 1; index < len(result); index++ {
+		lowHigh, low := bits.Mul64(result[index-1].low, 10)
+		highHigh, highLow := bits.Mul64(result[index-1].high, 10)
+		result[index] = decimal128Magnitude{low: low, high: lowHigh + highLow}
+		_ = highHigh // 10^38 is below 2^128; later values are not needed.
+	}
+	return result
+}()
 
 // decodeRecordBatch converts exactly one flat Arrow record batch into MO
 // vectors. The returned batch owns its memory and must be cleaned by the
@@ -484,7 +511,11 @@ func decodeColumn(vec *vector.Vector, field arrowField, node arrowNode, buffers 
 			if start != previous || end < start || end < 0 || int64(end) > int64(len(data)) {
 				return internalErrorf("UTF8 offsets are invalid")
 			}
-			if err := vector.AppendBytes(vec, data[start:end], isNull(row), mp); err != nil {
+			value := data[start:end]
+			if !isNull(row) && !utf8.Valid(value) {
+				return internalErrorf("UTF8 value at row %d is invalid", row)
+			}
+			if err := vector.AppendBytes(vec, value, isNull(row), mp); err != nil {
 				return err
 			}
 			previous = end
@@ -536,10 +567,20 @@ func decodeColumn(vec *vector.Vector, field arrowField, node arrowNode, buffers 
 				err = vector.AppendFixed(vec, math.Float64frombits(binary.LittleEndian.Uint64(values[offset:])), null, mp)
 			}
 		case arrowTypeDate:
-			err = vector.AppendFixed(vec, types.DaysFromUnixEpochToDate(int32(binary.LittleEndian.Uint32(values[offset:]))), null, mp)
+			date := types.DaysFromUnixEpochToDate(int32(binary.LittleEndian.Uint32(values[offset:])))
+			if !null {
+				year, month, day, _ := date.Calendar(true)
+				if !types.ValidDate(year, month, day) {
+					return internalErrorf("date value at row %d is outside MatrixOne range", row)
+				}
+			}
+			err = vector.AppendFixed(vec, date, null, mp)
 		case arrowTypeDecimal:
 			low := binary.LittleEndian.Uint64(values[offset:])
 			high := binary.LittleEndian.Uint64(values[offset+8:])
+			if !null && !decimal128FitsPrecision(low, high, field.precision) {
+				return internalErrorf("decimal value at row %d exceeds precision %d", row, field.precision)
+			}
 			if types.T(field.expected.Id) == types.T_decimal64 {
 				signExtension := uint64(0)
 				if low>>63 != 0 {
@@ -560,6 +601,21 @@ func decodeColumn(vec *vector.Vector, field arrowField, node arrowNode, buffers 
 		}
 	}
 	return nil
+}
+
+func decimal128FitsPrecision(low, high uint64, precision int32) bool {
+	if precision <= 0 || precision >= int32(len(decimal128PowersOfTen)) {
+		return false
+	}
+	if high>>63 != 0 {
+		low = ^low + 1
+		high = ^high
+		if low == 0 {
+			high++
+		}
+	}
+	limit := decimal128PowersOfTen[precision]
+	return high < limit.high || high == limit.high && low < limit.low
 }
 
 func bitmapBytes(rows int64) int64 {

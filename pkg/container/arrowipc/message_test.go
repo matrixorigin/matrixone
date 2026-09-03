@@ -104,6 +104,23 @@ func TestInspectMessageValidatesGeneratedSchemaBeforeConsumerPolicy(t *testing.T
 	require.ErrorContains(t, err, "root is out of bounds")
 }
 
+func TestInspectMessageRejectsInvalidBodyEnvelopeSentinel(t *testing.T) {
+	schema := arrow.NewSchema([]arrow.Field{{
+		Name: "value", Type: arrow.PrimitiveTypes.Int64,
+	}}, nil)
+	var stream bytes.Buffer
+	writer := ipc.NewWriter(&stream, ipc.WithSchema(schema))
+	require.NoError(t, writer.Close())
+	wire := firstStreamMetadata(t, stream.Bytes())
+
+	_, err := InspectMessage(context.Background(), wire, ValidationOptions{
+		MaxBodyBytes:          0,
+		BodyEnvelopeBytes:     -2,
+		MaxDecodedRecordBytes: 1,
+	})
+	require.ErrorContains(t, err, "body envelope")
+}
+
 func TestInspectMessageRejectsUnsupportedHeaderType(t *testing.T) {
 	schema := arrow.NewSchema([]arrow.Field{{
 		Name: "value", Type: arrow.PrimitiveTypes.Int64,
