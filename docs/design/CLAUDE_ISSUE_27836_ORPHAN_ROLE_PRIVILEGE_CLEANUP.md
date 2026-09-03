@@ -1,7 +1,7 @@
 # Issue #27836：历史孤儿对象权限升级清理设计
 
-- 状态：**Draft，Revision 1 已 REQUEST_CHANGES；Revision 2 等待独立设计评审**
-- 设计版本：Revision 2（2026-09-02）
+- 状态：**Draft，Revision 1 已 REQUEST_CHANGES；Revision 3 等待 admission prerequisite 完成**
+- 设计版本：Revision 3（2026-09-03）
 - Revision 1 review：`XuPeng-SH` 针对 `fb82b87a5723ccd8ac753b22461ccd36c9670e72` 提出 durable admission 与 protocol allocation blockers
 - Owning issue：<https://github.com/matrixorigin/matrixone/issues/27836>
 - Implementation PR：<https://github.com/matrixorigin/matrixone/pull/27944>
@@ -112,7 +112,7 @@ V_migration = MORPCLatestVersion(prerequisites merged into main) + 1
 
 截至 Revision 2 更新时，live allocation 已发生 drift：main 的 v43 owner 是 scalar runtime-filter；#27553 最新 head 在该基础上提出 v44；#27756 仍需 rebase 后重新分配自己的 next version。因此文档中的数字示例不能成为 allocation，只有 prerequisite merge 后 main 的实际常量链才是 source of truth。
 
-Prerequisites 是 #27553 的 payload capability 与 #27756 的 authoritative DDL visibility/admission fence均合入 `main`。本 migration 随后分配 `V_migration`。若任一 prerequisite 的版本、API 或 merge 顺序改变，本设计必须产生新 revision，并始终使用 `max(merged cumulative version)+1`。在 prerequisites 未合并前，本 PR 不得进入 implementation approval/merge。
+Prerequisites 是 #27553 的 payload capability 与 #27756 的 authoritative DDL visibility/admission fence 均合入 `main`。#27756 曾关闭且未合入，使 Revision 2 的 prerequisite 一度失效；现已重新开放，由其继续作为 durable admission owner，不能用 main 中仅面向 view metadata 的 #27430 lifecycle admission 代替。#27756 必须先关闭其 unknown-commit/post-commit visibility blocker 并合入。本 migration 随后分配 `V_migration`。若任一 prerequisite 的版本、API 或 merge 顺序改变，本设计必须产生新 revision，并始终使用 `max(merged cumulative version)+1`。在 prerequisites 未合并前，本 PR 不得进入 implementation approval/merge。
 
 `MORPCLatestVersion` 表示 binary 的 compiled maximum capability。任何 `SetProtocolVersion(V)` receiver 必须在 `V > MORPCLatestVersion` 时 fail closed；因此仅包含 prerequisites、缺少本 migration semantics 的 binary 不能谎报 `V_migration`。
 
@@ -347,7 +347,7 @@ Blast radius 以 tenant/page transaction 隔离。若发现 predicate 设计错�
 
 ### Revision 2 implementation status
 
-当前 implementation 仍使用 v43 point-in-time checks，**明确不符合 Revision 2，不能进入 implementation approval**。实现必须等待 #27553、#27756 合并到 main，随后基于 merged authoritative admission API 分配 `V_migration` 并完成上述 hardening/tests。若 prerequisite API 或版本链变化，先更新本文并重新评审，不在本 PR复制/抢先合入 #27756 的 8000+ 行 admission implementation。
+当前 implementation 仍使用 v43 point-in-time checks，**明确不符合 Revision 3，不能进入 implementation approval**。#27756 已重新开放并继续作为独立 durable admission owner；实现必须等待 #27553、#27756 合并到 main，随后基于 merged authoritative admission API 分配 `V_migration` 并完成上述 hardening/tests。若 prerequisite API 或版本链变化，先更新本文并重新评审，不在本 PR 复制 #27756 的 8000+ 行 admission implementation。
 
 ### Blocking approval
 
