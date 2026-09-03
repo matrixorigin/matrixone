@@ -290,7 +290,7 @@ internal error: table test100.table01 does not exist
 drop database if exists db08;
 create database db08;
 create table db08.table01 clone test100.table01 {snapshot = 'sp08'};
-internal error: find 0 snapshot records by name(sp08), expect only 1
+invalid input: snapshot 'sp08' not found
 drop database test101;
 drop database db08;
 drop snapshot sp08;
