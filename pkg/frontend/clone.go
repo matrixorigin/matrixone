@@ -722,6 +722,12 @@ func getOpAndToAccountId(
 ) (opAccountId, toAccountId uint32, snapshot *plan2.Snapshot, err error) {
 
 	if snapshot, err = resolveSnapshot(ses, atTsExpr); err != nil {
+		if atTsExpr != nil && plan.IsSnapshotNotFound(err) {
+			return 0, 0, nil, plan.NewSnapshotNotFoundError(
+				reqCtx,
+				atTsExpr.SnapshotName,
+			)
+		}
 		return 0, 0, nil, err
 	}
 
