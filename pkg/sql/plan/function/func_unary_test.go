@@ -28,6 +28,7 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	hll "github.com/axiomhq/hyperloglog"
 	"github.com/google/uuid"
@@ -3505,14 +3506,51 @@ func initJsonQuoteTestCase() []tcTemp {
 			info: "test json quote",
 			inputs: []FunctionTestInput{
 				NewFunctionTestInput(types.T_varchar.ToType(),
-					[]string{"key:v", "sdfsdf", ""},
-					[]bool{false, false, true}),
+					[]string{"key:v", "sdfsdf", "", "\x00\x01\x1f", "\b\f\n\r\t", "a\\\"b", "\x7f", "你好"},
+					[]bool{false, false, true, false, false, false, false, false}),
 			},
-			expect: NewFunctionTestResult(types.T_json.ToType(), false,
-				[]string{"\f\u0005key:v", "\f\u0006sdfsdf", ""},
-				[]bool{false, false, true}),
+			expect: NewFunctionTestResult(types.T_varchar.ToType(), false,
+				[]string{`"key:v"`, `"sdfsdf"`, "", `"\u0000\u0001\u001f"`, `"\b\f\n\r\t"`, `"a\\\"b"`, "\"\x7f\"", `"你好"`},
+				[]bool{false, false, true, false, false, false, false, false}),
 		},
 	}
+}
+
+func TestJsonQuoteRejectsInvalidUTF8(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	tc := NewFunctionTestCase(proc,
+		[]FunctionTestInput{
+			NewFunctionTestInput(types.T_varchar.ToType(), []string{string([]byte{0xff})}, []bool{false}),
+		},
+		NewFunctionTestResult(types.T_varchar.ToType(), false, []string{""}, []bool{false}),
+		JsonQuote)
+	s, _ := tc.Run()
+	require.False(t, s)
+}
+
+func TestJsonQuoteReturnType(t *testing.T) {
+	proc := testutil.NewProcess(t)
+
+	literal, err := GetFunctionByName(proc.Ctx, "json_quote", []types.Type{
+		types.NewWithCharset(types.T_varchar, 3, 0, types.CharsetUTF8),
+	})
+	require.NoError(t, err)
+	require.Equal(t, types.NewWithCharset(types.T_varchar, 20, 0, types.CharsetUTF8MB4Bin), literal.GetReturnType())
+
+	prepared, err := GetFunctionByName(proc.Ctx, "json_quote", []types.Type{types.T_any.ToType()})
+	require.NoError(t, err)
+	require.Equal(t, types.NewWithCharset(types.T_text, 393200, 0, types.CharsetUTF8MB4Bin), prepared.GetReturnType())
+	targets, cast := prepared.ShouldDoImplicitTypeCast()
+	require.True(t, cast)
+	require.Equal(t, []types.Type{
+		types.NewWithCharset(types.T_varchar, types.MaxVarcharLen/utf8.UTFMax, 0, types.CharsetUTF8),
+	}, targets)
+
+	boundPrepared, err := GetFunctionByName(proc.Ctx, "json_quote", []types.Type{
+		types.NewWithCharset(types.T_text, 0, 0, types.CharsetUTF8),
+	})
+	require.NoError(t, err)
+	require.Equal(t, types.NewWithCharset(types.T_text, 393200, 0, types.CharsetUTF8MB4Bin), boundPrepared.GetReturnType())
 }
 
 func TestJsonQuote(t *testing.T) {

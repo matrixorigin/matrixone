@@ -7192,7 +7192,10 @@ func quoteEnumOrSetDisplayValueAsJSON(ctx context.Context, expr *Expr) (*Expr, e
 		return nil, err
 	}
 	quoted.Typ.NotNullable = expr.Typ.NotNullable
-	return quoted, nil
+	return makePlan2CastExpr(ctx, quoted, plan.Type{
+		Id:          int32(types.T_json),
+		NotNullable: expr.Typ.NotNullable,
+	})
 }
 
 func resetDateFunctionArgs(ctx context.Context, dateExpr *Expr, intervalExpr *Expr) ([]*Expr, error) {

@@ -7,3 +7,23 @@ insert into t1 values ('a'), ('a"'), ('a"b'), (null);
 select json_quote(a) from t1;
 select json_quote('xax') from t1;
 select json_quote(null) from t1;
+
+select hex(json_quote(char(65, 0, 1, 31, 66)));
+select hex(json_quote(char(65, 127, 66)));
+select hex(json_quote('你好'));
+select char_length(json_quote('abc'));
+select concat(json_quote('abc'), 'x');
+select json_quote('abc') = '"abc"', json_quote('abc') = 'abc';
+select json_unquote(json_quote('a"b\\c'));
+
+prepare json_quote_stmt from 'select json_quote(?)';
+set @json_quote_value = 'a"b';
+execute json_quote_stmt using @json_quote_value;
+deallocate prepare json_quote_stmt;
+
+drop table if exists json_quote_ctas;
+create table json_quote_ctas as select json_quote('abc') as quoted;
+select data_type, character_maximum_length from information_schema.columns where table_schema = database() and table_name = 'json_quote_ctas' and column_name = 'quoted';
+select quoted, hex(quoted), char_length(quoted) from json_quote_ctas;
+drop table json_quote_ctas;
+drop table t1;

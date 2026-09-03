@@ -2729,6 +2729,53 @@ func TestPreparedBinaryStringResultMetadata(t *testing.T) {
 	}
 }
 
+func TestJsonQuoteBinaryProtocolMetadata(t *testing.T) {
+	ctx := context.TODO()
+	for _, test := range []struct {
+		name        string
+		sql         string
+		packetCount int
+		resultIndex int
+		typ         defines.MysqlType
+		length      uint32
+	}{
+		{
+			name:        "literal",
+			sql:         "select json_quote('abc') as result",
+			packetCount: 3,
+			resultIndex: 1,
+			typ:         defines.MYSQL_TYPE_VAR_STRING,
+			length:      80,
+		},
+		{
+			name:        "prepared parameter",
+			sql:         "select json_quote(?) as result",
+			packetCount: 5,
+			resultIndex: 3,
+			typ:         defines.MYSQL_TYPE_MEDIUM_BLOB,
+			length:      393200,
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			conn := &prepareResponseCaptureConn{}
+			proto, proc, prepareStmt := newBinaryPrepareProtocolTestCaseWithConn(t, test.sql, conn)
+			proto.capability &^= CLIENT_DEPRECATE_EOF
+			defer func() {
+				proc.SetPrepareParams(nil)
+				prepareStmt.clearBinaryParamState(proc)
+			}()
+			require.NoError(t, proto.SendPrepareResponse(ctx, prepareStmt))
+			packets := splitProtocolPackets(t, conn.writes)
+			require.Len(t, packets, test.packetCount)
+			result := parsePrepareColumnDefinition(t, packets[test.resultIndex])
+			require.Equal(t, "result", result.name)
+			require.Equal(t, test.typ, result.typ)
+			require.Equal(t, uint16(utf8mb4BinCollationID), result.charset)
+			require.Equal(t, test.length, result.length)
+		})
+	}
+}
+
 func TestPreparedExpandingTextResultMetadata(t *testing.T) {
 	ctx := context.TODO()
 	for _, test := range []struct {
