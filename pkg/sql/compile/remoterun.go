@@ -2095,6 +2095,11 @@ func validateRemoteViewDefinitionPipelineProtocol(
 	proc *process.Process,
 	p *pipeline.Pipeline,
 ) error {
+	// A current peer cannot reject this function. Avoid a reflective traversal
+	// of every ordinary remote pipeline once the negotiated capability is known.
+	if proc != nil && supportsRemoteViewDefinitionFunction(proc.GetService()) {
+		return nil
+	}
 	if p == nil || !pipelineContainsFunctionID(p, function.MO_VIEW_DEFINITION) {
 		return nil
 	}
