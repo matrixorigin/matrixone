@@ -87,6 +87,44 @@ func TestFilter(t *testing.T) {
 			wantErr: false,
 		},
 		{
+			// Remote execution replaces scalar constants with evaluated Fold
+			// values before storage pruning. Range pruning must treat that wire
+			// representation exactly like the equivalent literal predicate.
+			name: "range filter - folded equal condition",
+			filters: []*plan.Expr{
+				makeFoldEqualExprInt32(0, 1),
+			},
+			metadata: partition.PartitionMetadata{
+				Method: partition.PartitionMethod_Range,
+				Partitions: []partition.Partition{
+					{Position: 0, Expr: newTestRangeExpr("a", 0)},
+					{Position: 1, Expr: newTestRangeExpr("a", 1)},
+					{Position: 2, Expr: newTestRangeExpr("a", 2)},
+				},
+			},
+			want:    []int{1},
+			wantErr: false,
+		},
+		{
+			name: "range filter - folded disjunction",
+			filters: []*plan.Expr{
+				makeOrExpr(
+					makeFoldEqualExprInt32(0, 0),
+					makeFoldEqualExprInt32(0, 2),
+				),
+			},
+			metadata: partition.PartitionMetadata{
+				Method: partition.PartitionMethod_Range,
+				Partitions: []partition.Partition{
+					{Position: 0, Expr: newTestRangeExpr("a", 0)},
+					{Position: 1, Expr: newTestRangeExpr("a", 1)},
+					{Position: 2, Expr: newTestRangeExpr("a", 2)},
+				},
+			},
+			want:    []int{0, 2},
+			wantErr: false,
+		},
+		{
 			// a = 5
 			// a % 3
 			name: "hash filter - equal condition",
@@ -384,6 +422,17 @@ func makeEqualExprInt32(colPos int32, value int32) *plan.Expr {
 			},
 		},
 	}
+}
+
+func makeFoldEqualExprInt32(colPos int32, value int32) *plan.Expr {
+	expr := makeEqualExprInt32(colPos, value)
+	expr.GetF().Args[1].Expr = &plan.Expr_Fold{
+		Fold: &plan.FoldVal{
+			IsConst: true,
+			Data:    types.EncodeInt32(&value),
+		},
+	}
+	return expr
 }
 
 func makeInExpr(colPos int32, values []int32) *plan.Expr {

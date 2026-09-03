@@ -98,7 +98,6 @@ func hashFilterExpr(
 	expr *plan.Expr,
 	metadata partition.PartitionMetadata,
 ) ([]int, bool, error) {
-	var err error
 	exprs := make([]*plan.Expr, len(metadata.Partitions))
 	for i, pt := range metadata.Partitions {
 		// Deep copy partition expressions to avoid modifying the original expressions
@@ -157,12 +156,12 @@ func hashFilterExpr(
 			if left.Col.ColPos != colPosition {
 				return nil, false, nil
 			}
+			value, err := normalizePartitionValue(exprImpl.F.Args[1])
+			if err != nil {
+				return nil, false, err
+			}
 			for i := range exprs {
-				mustReplaceCol(exprs[i], exprImpl.F.Args[1])
-				exprs[i], err = ConvertFoldExprToNormal(exprs[i])
-				if err != nil {
-					return nil, false, err
-				}
+				mustReplaceCol(exprs[i], value)
 			}
 			targets, err := filterResult(proc, exprs, metadata)
 			if err != nil {
@@ -272,10 +271,14 @@ func rangeFilterExpr(
 			if left.Col.ColPos != colPosition {
 				return nil, false, nil
 			}
+			value, err := normalizePartitionValue(exprImpl.F.Args[1])
+			if err != nil {
+				return nil, false, err
+			}
 			for i := range exprs {
 				// a = 1 =>
 				// p1 <= 1 < p2
-				mustReplaceCol(exprs[i], exprImpl.F.Args[1])
+				mustReplaceCol(exprs[i], value)
 			}
 			targets, err := filterResult(proc, exprs, metadata)
 			if err != nil {
@@ -388,6 +391,17 @@ func filterResult(
 		}
 	}
 	return targets, nil
+}
+
+// normalizePartitionValue converts the evaluated Fold representation used by
+// remote scans before the value is substituted into partition expressions.
+// The general expression executor intentionally does not own Fold values. A
+// clone keeps this storage optimization from mutating the reusable scan filter.
+func normalizePartitionValue(value *plan.Expr) (*plan.Expr, error) {
+	if !p.HasFoldValExpr(value) {
+		return value, nil
+	}
+	return ConvertFoldExprToNormal(p.DeepCopyExpr(value))
 }
 
 // mustReplaceCol replaces column references in an expression with a given value expression.
