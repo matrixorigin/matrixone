@@ -331,8 +331,10 @@ func TestVersionedStatsPublicationLinearizesWithCatalogChange(t *testing.T) {
 			"a plan for the altered schema must not consume the old observation")
 		subscribed := false
 		e.globalStats.beforeSubscribeTable = func(pb.StatsInfoKey) { subscribed = true }
-		require.Nil(t, e.globalStats.Get(ctx, key, false),
-			"a reader without a schema version cannot safely export a bound observation")
+		require.Same(t, firstStats, e.globalStats.Get(ctx, key, false),
+			"a local diagnostic reader may inspect the published observation")
+		require.Nil(t, e.globalStats.GetForRemote(ctx, key),
+			"a remote reader cannot safely export a bound observation")
 		require.False(t, subscribed,
 			"a non-blocking incompatible read must fail before subscription or remote I/O")
 		e.globalStats.beforeSubscribeTable = nil

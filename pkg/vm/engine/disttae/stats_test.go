@@ -1954,6 +1954,8 @@ func TestMetadataRefreshClearsSchemaBoundObservationVersion(t *testing.T) {
 	require.NotContains(t, gs.mu.tableDefVersions, key,
 		"metadata-only statistics are not bound to the ANALYZE schema observation")
 	gs.mu.Unlock()
+	require.Same(t, fresh, gs.GetForRemote(context.Background(), key),
+		"unbound metadata statistics remain safe for remote export")
 }
 
 func TestStatsWaiterRejectsOldSchemaUntilReplacementPublishes(t *testing.T) {
@@ -1980,7 +1982,7 @@ func TestStatsWaiterRejectsOldSchemaUntilReplacementPublishes(t *testing.T) {
 	defer cancel()
 	go func() {
 		done <- gs.waitForStatsUpdate(
-			ctx, key, generation, &version)
+			ctx, key, generation, &version, false)
 	}()
 	select {
 	case <-waiting:
@@ -2597,7 +2599,7 @@ func TestCacheRemoteInfoIfSubscribedBroadcastsWaiters(t *testing.T) {
 			}
 		}, time.Second, 10*time.Millisecond, "waiter did not enter cond.Wait")
 
-		info := gs.cacheRemoteInfoIfSubscribed(key, ent, remoteInfo, nil)
+		info := gs.cacheRemoteInfoIfSubscribed(key, ent, remoteInfo, nil, false)
 		require.NotNil(t, info)
 		require.Equal(t, remoteInfo, info)
 
@@ -2609,6 +2611,23 @@ func TestCacheRemoteInfoIfSubscribedBroadcastsWaiters(t *testing.T) {
 				return false
 			}
 		}, time.Second, 10*time.Millisecond, "waiter was not awakened by remote cache broadcast")
+
+		// Model a local ANALYZE publication winning while a remote lookup is in
+		// flight. The response path must neither export nor overwrite the newer
+		// schema-bound observation.
+		boundInfo := plan2.NewStatsInfo()
+		boundInfo.TableCnt = 84
+		gs.mu.Lock()
+		gs.mu.statsInfoMap[key] = boundInfo
+		gs.mu.tableDefVersions[key] = 7
+		gs.mu.Unlock()
+		rejected := gs.cacheRemoteInfoIfSubscribed(
+			key, ent, remoteInfo, nil, true)
+		require.Nil(t, rejected)
+		gs.mu.Lock()
+		require.Same(t, boundInfo, gs.mu.statsInfoMap[key])
+		require.Equal(t, uint32(7), gs.mu.tableDefVersions[key])
+		gs.mu.Unlock()
 	})
 }
 

@@ -59,6 +59,7 @@ import (
 
 var _ engine.Engine = new(Engine)
 var _ engine.TableVersionedStats = new(Engine)
+var _ engine.RemoteStatsExporter = new(Engine)
 var _ engine.StatsRefresher = new(Engine)
 var _ engine.StatsRefresherWithOptions = new(Engine)
 var _ engine.LogtailReadBarrier = new(Engine)
@@ -1280,6 +1281,10 @@ func (e *Engine) UnsubscribeTable(ctx context.Context, accId, dbID, tbID uint64)
 
 func (e *Engine) Stats(ctx context.Context, key pb.StatsInfoKey, sync bool) *pb.StatsInfo {
 	return e.globalStats.Get(ctx, key, sync)
+}
+
+func (e *Engine) StatsForRemote(ctx context.Context, key pb.StatsInfoKey) *pb.StatsInfo {
+	return e.globalStats.GetForRemote(ctx, key)
 }
 
 func (e *Engine) StatsAtTableVersion(

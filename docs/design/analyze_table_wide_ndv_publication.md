@@ -50,10 +50,11 @@ ANALYZE.
 The local cache stores the table-definition version beside only those entries
 that contain a table-wide observation. Planner statistics reads carry the
 `TableDef` used by the scan, frontend session-cache entries carry the same
-version, and disttae returns a schema-bound entry only to a matching reader.
+version, and disttae returns a schema-bound entry only to a matching planner.
 This metadata is process-local: no protobuf, wire, catalog, or persisted format
-changes. A remote or otherwise unversioned reader cannot export a schema-bound
-entry and falls back to its existing local metadata refresh.
+changes. A remote reader cannot export a schema-bound entry and falls back to
+its existing local metadata refresh; local diagnostic readers may inspect the
+published process-local value without using it for a versioned plan.
 
 This adds no extra scan, storage, or network work to ANALYZE; one scalar count
 state piggybacks on the existing aggregate. It changes neither automatic
@@ -97,10 +98,10 @@ analyzed.
     construction and ANALYZE admission use the same filter-classification
     function, so adding a new tenant-filtered system table cannot silently
     create a statistics-publication gap.
-11. A schema-bound cache entry is consumable only by a plan built from the same
-    table-definition version. An unversioned reader cannot export it. A later
-    metadata-only refresh atomically replaces the entry and removes the local
-    version binding.
+11. A schema-bound cache entry is consumable by a plan only when it was built
+    from the same table-definition version. An unversioned remote reader cannot
+    export it; a local diagnostic reader may inspect it. A later metadata-only
+    refresh atomically replaces the entry and removes the local version binding.
 12. Current-table lookup treats the newest row for each table name as
     authoritative. A DROP tombstone hides historical live rows, while
     TRUNCATE exposes only the replacement table identity.

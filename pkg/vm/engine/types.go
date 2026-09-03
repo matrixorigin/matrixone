@@ -1348,6 +1348,14 @@ type TableVersionedStats interface {
 	) *pb.StatsInfo
 }
 
+// RemoteStatsExporter is an optional engine capability for serving statistics
+// to another CN. Unlike a local unversioned Stats reader, the remote caller
+// cannot prove which table-definition version it will use. Implementations
+// must therefore reject schema-bound statistics rather than serialize them.
+type RemoteStatsExporter interface {
+	StatsForRemote(ctx context.Context, key pb.StatsInfoKey) *pb.StatsInfo
+}
+
 // StatsRefreshOptions carries statistics that the statement computed from a
 // table-wide scan. Object metadata remains the source of all fields not
 // present here.

@@ -567,6 +567,7 @@ func (gs *GlobalStats) cacheRemoteInfoIfSubscribed(
 	subscribedEnt *subEntry,
 	remoteInfo *pb.StatsInfo,
 	tableDefVersion *uint32,
+	rejectBoundWithoutVersion bool,
 ) *pb.StatsInfo {
 	if subscribedEnt == nil || remoteInfo == nil {
 		return nil
@@ -583,7 +584,8 @@ func (gs *GlobalStats) cacheRemoteInfoIfSubscribed(
 	gs.mu.Lock()
 	defer gs.mu.Unlock()
 
-	info, complete, incompatible := gs.statsInfoForTableVersionLocked(key, tableDefVersion)
+	info, complete, incompatible := gs.statsInfoForTableVersionLocked(
+		key, tableDefVersion, rejectBoundWithoutVersion)
 	if complete && info != nil {
 		return info
 	}
@@ -600,7 +602,14 @@ func (gs *GlobalStats) cacheRemoteInfoIfSubscribed(
 }
 
 func (gs *GlobalStats) Get(ctx context.Context, key pb.StatsInfoKey, sync bool) *pb.StatsInfo {
-	return gs.get(ctx, key, sync, nil)
+	return gs.get(ctx, key, sync, nil, false)
+}
+
+// GetForRemote returns only statistics that are safe to serialize to a CN
+// whose table-definition version is unknown. Local unversioned readers use
+// Get and may inspect the process-local published value.
+func (gs *GlobalStats) GetForRemote(ctx context.Context, key pb.StatsInfoKey) *pb.StatsInfo {
+	return gs.get(ctx, key, false, nil, true)
 }
 
 // GetAtTableVersion returns schema-bound statistics only when they were
@@ -612,7 +621,7 @@ func (gs *GlobalStats) GetAtTableVersion(
 	sync bool,
 	tableDefVersion uint32,
 ) *pb.StatsInfo {
-	return gs.get(ctx, key, sync, &tableDefVersion)
+	return gs.get(ctx, key, sync, &tableDefVersion, false)
 }
 
 // statsInfoForTableVersionLocked distinguishes a true cache miss from a
@@ -621,14 +630,19 @@ func (gs *GlobalStats) GetAtTableVersion(
 func (gs *GlobalStats) statsInfoForTableVersionLocked(
 	key pb.StatsInfoKey,
 	tableDefVersion *uint32,
+	rejectBoundWithoutVersion bool,
 ) (info *pb.StatsInfo, complete bool, incompatible bool) {
 	info, complete = gs.mu.statsInfoMap[key]
 	if !complete {
 		return nil, false, false
 	}
-	if version, bound := gs.mu.tableDefVersions[key]; bound &&
-		(tableDefVersion == nil || version != *tableDefVersion) {
-		return nil, false, true
+	if version, bound := gs.mu.tableDefVersions[key]; bound {
+		if tableDefVersion != nil && version != *tableDefVersion {
+			return nil, false, true
+		}
+		if tableDefVersion == nil && rejectBoundWithoutVersion {
+			return nil, false, true
+		}
 	}
 	return info, true, false
 }
@@ -638,6 +652,7 @@ func (gs *GlobalStats) get(
 	key pb.StatsInfoKey,
 	sync bool,
 	tableDefVersion *uint32,
+	rejectBoundWithoutVersion bool,
 ) *pb.StatsInfo {
 	wrapkey := pb.StatsInfoKeyWithContext{
 		Ctx: ctx,
@@ -645,7 +660,8 @@ func (gs *GlobalStats) get(
 	}
 
 	gs.mu.Lock()
-	info, _, incompatible := gs.statsInfoForTableVersionLocked(key, tableDefVersion)
+	info, _, incompatible := gs.statsInfoForTableVersionLocked(
+		key, tableDefVersion, rejectBoundWithoutVersion)
 	if info != nil {
 		gs.mu.Unlock()
 		return info
@@ -717,7 +733,8 @@ func (gs *GlobalStats) get(
 			gs.beforeCacheRemoteInfo(key)
 		}
 		if info = gs.cacheRemoteInfoIfSubscribed(
-			key, subscribedEnt, remoteInfo, tableDefVersion); info != nil {
+			key, subscribedEnt, remoteInfo, tableDefVersion,
+			rejectBoundWithoutVersion); info != nil {
 			return info
 		}
 	}
@@ -727,7 +744,8 @@ func (gs *GlobalStats) get(
 	// callers. For a synchronous caller, an existing nil sentinel still admits a
 	// background retry, as before.
 	gs.mu.Lock()
-	info, _, _ = gs.statsInfoForTableVersionLocked(key, tableDefVersion)
+	info, _, _ = gs.statsInfoForTableVersionLocked(
+		key, tableDefVersion, rejectBoundWithoutVersion)
 	gs.mu.Unlock()
 	if info != nil {
 		return info
@@ -750,7 +768,8 @@ func (gs *GlobalStats) get(
 	if !gs.enqueueStatsUpdateForRecord(wrapkey, true, generation) {
 		return nil
 	}
-	return gs.waitForStatsUpdate(ctx, key, generation, tableDefVersion)
+	return gs.waitForStatsUpdate(
+		ctx, key, generation, tableDefVersion, rejectBoundWithoutVersion)
 }
 
 // waitForStatsUpdate waits on durable state, not on a Broadcast edge. The
@@ -764,6 +783,7 @@ func (gs *GlobalStats) waitForStatsUpdate(
 	key pb.StatsInfoKey,
 	generation *updateRecord,
 	tableDefVersion *uint32,
+	rejectBoundWithoutVersion bool,
 ) *pb.StatsInfo {
 	stopWake := context.AfterFunc(ctx, gs.notifyStatsWaiters)
 	defer stopWake()
@@ -772,7 +792,7 @@ func (gs *GlobalStats) waitForStatsUpdate(
 	defer gs.mu.Unlock()
 	for {
 		if info, complete, _ := gs.statsInfoForTableVersionLocked(
-			key, tableDefVersion); complete {
+			key, tableDefVersion, rejectBoundWithoutVersion); complete {
 			return info
 		}
 		if ctx.Err() != nil {
