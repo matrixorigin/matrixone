@@ -1,4 +1,4 @@
-- Status: draft — independent design approval pending
+- Status: in-progress — independently approved for the disabled, session-scoped opt-in
 - Revision: 5
 - Start Date: 2026-08-31
 - Authors: iamlinjunhong
@@ -35,8 +35,8 @@ pipeline.
 The parser records whether `PARALLEL` was specified, preserving the distinction
 between omitted and explicitly false. LOAD binding enables only omitted Parquet
 clauses after the session opts into `experimental_parquet_load_parallel`; the
-default remains disabled until independent design approval and endpoint evidence
-are available. `experimental_parquet_load_parallel_min_size` is session-only,
+default remains disabled until a later default-enable change has endpoint and
+resource evidence. `experimental_parquet_load_parallel_min_size` is session-only,
 defaults to 128 MiB, and permits a bounded canary/test threshold between 1 byte
 and 128 MiB. The resolved threshold is captured in the plan before admission.
 
@@ -146,8 +146,10 @@ scope. `TestFinishTxnRollsBackWhenRequestIsCancelled/load_data` independently
 exercises the shared frontend terminal path and proves that a canceled LOAD
 cannot commit and is rolled back exactly once. The distributed rollback case
 remains the SQL-visible zero-partial-row oracle after real fanout write work.
+Independent approval for this exact disabled opt-in design is recorded in the
+[exact-head PR review](https://github.com/matrixorigin/matrixone/pull/27903#pullrequestreview-5090744650).
 The release-default acceptance proof still requires endpoint rollout
-measurements before this RFC can move from draft to in-progress.
+measurements before a later change can enable the default.
 
 `BenchmarkParquetRangeReadAheadSequential` reports range calls per operation,
 fetched bytes per operation, peak cache bytes, and simulated range latency for
@@ -164,6 +166,5 @@ object-store observations are problem evidence, not before/after rollout proof.
 
 ## Open questions
 
-No implementation decision is deferred. Independent design approval and
-endpoint benchmark evidence are required before the disabled rollout gate can
-be enabled by default.
+No implementation decision is deferred. Endpoint benchmark evidence is required
+before a later change enables the disabled rollout gate by default.
