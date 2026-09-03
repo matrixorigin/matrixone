@@ -17,7 +17,6 @@ package sidecarflight
 import (
 	"bytes"
 	"context"
-	"encoding/binary"
 	"errors"
 	"io"
 	"sync"
@@ -158,6 +157,10 @@ func (n *NativeInput) Send(ctx context.Context, bat *batch.Batch, mp *mpool.MPoo
 	if n.finished || n.terminalErr != nil {
 		return errors.Join(internalErrorf("sidecar flight: native input is terminal"), n.terminalErr)
 	}
+	if mp == nil {
+		n.terminalErr = internalErrorf("sidecar flight: native input has no query memory pool")
+		return n.terminalErr
+	}
 	if err := n.open(ctx); err != nil {
 		if n.retired.Load() {
 			return nil
@@ -187,17 +190,24 @@ func (n *NativeInput) Send(ctx context.Context, bat *batch.Batch, mp *mpool.MPoo
 		}
 		return err
 	}
-	payload, err := bat.MarshalBinary()
+	frame, err := marshalNativeInputFrame(n.sequence+1, bat, size, mp)
 	if err != nil {
 		n.terminalErr = err
 		return err
 	}
-	return n.sendPayloadLocked(payload)
+	return n.sendFrameLocked(frame, uint64(bat.RowCount()), uint64(size), mp)
 }
 
-func (n *NativeInput) sendPayloadLocked(payload []byte) error {
+// sendFrameLocked takes ownership of frame and keeps it query-accounted until
+// the acknowledgement or a terminal send/receive outcome.
+func (n *NativeInput) sendFrameLocked(
+	frame []byte,
+	frameRows uint64,
+	payloadBytes uint64,
+	mp *mpool.MPool,
+) error {
+	defer mp.Free(frame)
 	n.sequence++
-	frame := marshalNativeBatchFrame(n.sequence, payload)
 	if err := n.stream.SendMsg(&flightData{AppMetadata: frame}); err != nil {
 		if n.retired.Load() {
 			return nil
@@ -218,8 +228,8 @@ func (n *NativeInput) sendPayloadLocked(payload []byte) error {
 		acknowledgedPrevious := ack.AcknowledgedBatches == n.sequence-1
 		expectedRows, expectedBytes := n.rows, n.bytes
 		if acknowledgedCurrent {
-			expectedRows += binary.LittleEndian.Uint64(payload[:8])
-			expectedBytes += uint64(len(payload))
+			expectedRows += frameRows
+			expectedBytes += payloadBytes
 		}
 		if !ack.Complete || ack.Ready || (!acknowledgedCurrent && !acknowledgedPrevious) ||
 			ack.Rows != expectedRows || ack.Bytes != expectedBytes {
@@ -241,8 +251,8 @@ func (n *NativeInput) sendPayloadLocked(payload []byte) error {
 		n.cancelStream()
 		return nil
 	}
-	expectedRows := n.rows + binary.LittleEndian.Uint64(payload[:8])
-	expectedBytes := n.bytes + uint64(len(payload))
+	expectedRows := n.rows + frameRows
+	expectedBytes := n.bytes + payloadBytes
 	if ack.AcknowledgedBatches != n.sequence || ack.Rows != expectedRows || ack.Bytes != expectedBytes ||
 		ack.Complete || ack.NotNeeded || ack.Ready {
 		n.terminalErr = internalErrorf("sidecar flight: invalid native input acknowledgement")
@@ -255,44 +265,43 @@ func (n *NativeInput) sendPayloadLocked(payload []byte) error {
 
 func (n *NativeInput) sendSplitLocked(source *batch.Batch, limit uint64, mp *mpool.MPool) error {
 	for start := 0; start < source.RowCount(); {
-		low, high, best := start+1, source.RowCount(), -1
-		for low <= high {
-			middle := low + (high-low)/2
-			window, err := cloneNativeWindow(source, start, middle, mp)
-			if err != nil {
-				return err
-			}
-			size, sizeErr := window.MarshalBinarySize()
-			window.Clean(mp)
-			if sizeErr != nil {
-				return sizeErr
-			}
-			if uint64(size) <= limit {
-				best = middle
-				low = middle + 1
-			} else {
-				high = middle - 1
-			}
-		}
-		if best < 0 {
-			return internalErrorf("sidecar flight: one native input row exceeds the negotiated limit")
-		}
-		window, err := cloneNativeWindow(source, start, best, mp)
+		plan, err := planNativeWindow(source, start, limit)
 		if err != nil {
 			return err
 		}
-		payload, marshalErr := window.MarshalBinary()
-		window.Clean(mp)
-		if marshalErr != nil {
-			return marshalErr
+		frame, err := func() ([]byte, error) {
+			window, cloneErr := cloneNativeWindow(source, start, plan.end, mp)
+			if cloneErr != nil {
+				return nil, cloneErr
+			}
+			defer window.Clean(mp)
+			actualBytes, sizeErr := window.MarshalBinarySize()
+			if sizeErr != nil {
+				return nil, sizeErr
+			}
+			if actualBytes != plan.payloadBytes {
+				return nil, internalErrorf(
+					"sidecar flight: native input split plan mismatch: planned=%d actual=%d",
+					plan.payloadBytes, actualBytes,
+				)
+			}
+			return marshalNativeInputFrame(n.sequence+1, window, actualBytes, mp)
+		}()
+		if err != nil {
+			return err
 		}
-		if err = n.sendPayloadLocked(payload); err != nil {
+		if err = n.sendFrameLocked(
+			frame,
+			uint64(plan.end-start),
+			uint64(plan.payloadBytes),
+			mp,
+		); err != nil {
 			return err
 		}
 		if n.retired.Load() || n.notNeeded {
 			return nil
 		}
-		start = best
+		start = plan.end
 	}
 	return nil
 }

@@ -122,16 +122,6 @@ func (s *nativeResultSchema) validateWire(wire []byte) error {
 	return nil
 }
 
-func marshalNativeBatchFrame(sequence uint64, payload []byte) []byte {
-	frame := make([]byte, nativeBatchFrameHeaderBytes+len(payload))
-	copy(frame[:4], "MOB1")
-	binary.LittleEndian.PutUint16(frame[4:6], 1)
-	binary.LittleEndian.PutUint64(frame[8:16], sequence)
-	binary.LittleEndian.PutUint64(frame[16:24], uint64(len(payload)))
-	copy(frame[nativeBatchFrameHeaderBytes:], payload)
-	return frame
-}
-
 func unmarshalNativeBatchFrame(frame []byte, maximum uint64) (uint64, []byte, error) {
 	if len(frame) < nativeBatchFrameHeaderBytes || string(frame[:4]) != "MOB1" ||
 		binary.LittleEndian.Uint16(frame[4:6]) != 1 || frame[6] != 0 || frame[7] != 0 {
