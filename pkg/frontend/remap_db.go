@@ -23,10 +23,13 @@ import (
 )
 
 type remapDbContext struct {
-	databases           map[string]string
-	lowerCaseTableNames int64
-	remapUseDatabase    bool
-	unsupported         *bool
+	databases            map[string]string
+	lowerCaseTableNames  int64
+	remapUseDatabase     bool
+	unsupported          *bool
+	collectTableName     func(*tree.TableName)
+	collectProcedureName func(*tree.ProcedureName)
+	collectFunctionName  func(*tree.UnresolvedName)
 }
 
 func (remap remapDbContext) lookup(database string) (string, bool) {
@@ -868,6 +871,9 @@ func remapDbInExpr(expr tree.Expr, remap remapDbContext) {
 	case *tree.VarExpr:
 		remapDbInExpr(e.Expr, remap)
 	case *tree.FuncExpr:
+		if name, ok := e.Func.FunctionReference.(*tree.UnresolvedName); ok && remap.collectFunctionName != nil {
+			remap.collectFunctionName(name)
+		}
 		remapDbInExprs(e.Exprs, remap)
 		remapDbInOrderBy(e.OrderBy, remap)
 		remapDbInWindowSpec(e.WindowSpec, remap)
@@ -927,6 +933,9 @@ func remapTableName(tn *tree.TableName, remap remapDbContext) {
 	if tn == nil {
 		return
 	}
+	if remap.collectTableName != nil {
+		remap.collectTableName(tn)
+	}
 	if tn.ExplicitSchema {
 		if target, ok := remap.lookup(string(tn.SchemaName)); ok {
 			tn.SchemaName = tree.Identifier(target)
@@ -938,7 +947,13 @@ func remapTableName(tn *tree.TableName, remap remapDbContext) {
 }
 
 func remapProcedureName(name *tree.ProcedureName, remap remapDbContext) {
-	if name == nil || !name.Name.ExplicitSchema {
+	if name == nil {
+		return
+	}
+	if remap.collectProcedureName != nil {
+		remap.collectProcedureName(name)
+	}
+	if !name.Name.ExplicitSchema {
 		return
 	}
 	if target, ok := remap.lookup(string(name.Name.SchemaName)); ok {

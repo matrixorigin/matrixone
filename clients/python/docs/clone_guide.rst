@@ -8,7 +8,7 @@ Overview
 
 MatrixOne's cloning system provides:
 
-* **Database Cloning**: Create complete copies of databases with all tables and data
+* **Database Cloning**: Create copies of MatrixOne-managed database tables and data
 * **Table Cloning**: Clone individual tables with or without data
 * **Schema-Only Cloning**: Clone database structure without data
 * **Selective Cloning**: Clone specific tables or schemas
@@ -154,7 +154,7 @@ Full Database Cloning
 
 .. code-block:: python
 
-   # Clone entire database with all data
+   # Clone the entire database with MatrixOne-managed data
    clone_result = clone_manager.clone_database(
        source_database="production_db",
        target_database="test_db",
@@ -179,6 +179,18 @@ Full Database Cloning
        target_server="backup-server:6001",
        include_data=True
    )
+
+External Tables and Dependent Objects
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Database cloning intentionally omits external tables because their data and
+files are managed outside MatrixOne. Views, SQL functions, and stored
+procedures that directly or transitively depend on an omitted external table
+or an omitted dependent view are omitted as well. Independent SQL routines
+are copied and rewritten for the target database. Routines whose bodies cannot
+be structurally inspected are also omitted when the source contains an omitted
+relation. Explicit single-table cloning of an external table remains
+unsupported.
 
 Schema-Only Cloning
 ~~~~~~~~~~~~~~~~~~~

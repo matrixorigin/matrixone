@@ -551,6 +551,55 @@ func TestRewriteCloneUserDefinedFunctionBodies(t *testing.T) {
 	require.Equal(t, "select count(*) from SOURCE_DB.control_t where id = $1", functions[0].body)
 }
 
+func TestFilterCloneDatabaseRoutinesSkipsUncloneableDependencies(t *testing.T) {
+	source := cloneDatabaseSource{
+		srcResolveDBName: "source_db",
+		srcTblInfos: []*tableInfo{
+			{dbName: "source_db", tblName: "ext_t", relKind: catalog.SystemExternalRel},
+		},
+		viewMap: map[string]*tableInfo{
+			genKey("source_db", "ext_v"): {
+				dbName: "source_db", tblName: "ext_v", typ: view,
+				createSql: "create view source_db.ext_v as select * from source_db.ext_t",
+			},
+		},
+		userDefinedFuncs: []userDefinedFunctionDefinition{
+			{name: "f_external", lang: "sql", body: "select count(*) from source_db.ext_t"},
+			{name: "f_transitive", lang: "sql", body: "f_external()"},
+			{name: "f_view", lang: "sql", body: "select * from source_db.ext_v"},
+			{name: "f_independent", lang: "sql", body: "1 + 1"},
+		},
+		storedProcedures: []storedProcedureDefinition{
+			{name: "p_external", lang: "sql", body: "begin select * from source_db.ext_t; end"},
+			{name: "p_transitive", lang: "sql", body: "begin call p_external(); end"},
+			{name: "p_independent", lang: "sql", body: "begin select 1; end"},
+		},
+	}
+
+	functions, procedures, err := filterCloneDatabaseRoutines(
+		context.Background(), source, 1,
+	)
+	require.NoError(t, err)
+	require.Equal(t, []string{"f_independent"}, routineNames(functions))
+	require.Equal(t, []string{"p_independent"}, procedureNames(procedures))
+}
+
+func routineNames(functions []userDefinedFunctionDefinition) []string {
+	names := make([]string, len(functions))
+	for i := range functions {
+		names[i] = functions[i].name
+	}
+	return names
+}
+
+func procedureNames(procedures []storedProcedureDefinition) []string {
+	names := make([]string, len(procedures))
+	for i := range procedures {
+		names[i] = procedures[i].name
+	}
+	return names
+}
+
 func TestCloneDatabaseSourceBranchTableCount(t *testing.T) {
 	tests := []struct {
 		name   string
@@ -678,10 +727,24 @@ func TestLockDataBranchCloneDatabaseSourcesSkipsSourcesWithoutTables(t *testing.
 	for _, source := range []cloneDatabaseSource{
 		{},
 		{srcTblInfos: []*tableInfo{{tblName: "view", typ: view}}},
-		{srcTblInfos: []*tableInfo{{tblName: "external", relKind: catalog.SystemExternalRel}}},
 	} {
 		require.NoError(t, lockDataBranchCloneDatabaseSources(ctx, nil, nil, source))
 	}
+}
+
+func TestCloneDatabaseSourceLifecycleTablesIncludeExternalDependencies(t *testing.T) {
+	source := cloneDatabaseSource{srcTblInfos: []*tableInfo{
+		{tblName: "ordinary"},
+		{tblName: "external", relKind: catalog.SystemExternalRel},
+		{tblName: "view", typ: view},
+	}}
+
+	tables := source.sourceTableInfosForLifecycle()
+	names := make([]string, len(tables))
+	for i, table := range tables {
+		names[i] = table.tblName
+	}
+	require.Equal(t, []string{"ordinary", "external"}, names)
 }
 
 func TestCloneFkTableOrder(t *testing.T) {
