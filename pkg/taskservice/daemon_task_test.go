@@ -1353,6 +1353,32 @@ func TestCancelTaskDefersFreshForeignOwnerUntilStale(t *testing.T) {
 	require.Equal(t, task.TaskStatus_Canceled, got[0].TaskStatus)
 }
 
+func TestCancelTaskRequiresDurableCleanupBeforeTerminal(t *testing.T) {
+	r, store := newDaemonHandleTestRunner(t)
+	dt := newDaemonTaskForTest(1, task.TaskStatus_CancelRequested, "old-cn")
+	dt.Metadata.Executor = task.TaskCode_InitCdc
+	dt.LastHeartbeat = time.Now().Add(-r.options.heartbeatTimeout - time.Second)
+	mustAddTestDaemonTask(t, store, 1, dt)
+
+	cleanupCalls := atomic.Int32{}
+	r.RegisterTaskCleanup(task.TaskCode_InitCdc, func(context.Context, task.Task) error {
+		if cleanupCalls.Add(1) == 1 {
+			return errors.New("transient durable cleanup failure")
+		}
+		return nil
+	})
+
+	h := newCancelTask(r, dt.ID)
+	require.ErrorContains(t, h.Handle(context.Background()), "transient durable cleanup failure")
+	got := mustGetTestDaemonTask(t, store, 1, WithTaskIDCond(EQ, dt.ID))
+	require.Equal(t, task.TaskStatus_CancelRequested, got[0].TaskStatus)
+
+	require.NoError(t, h.Handle(context.Background()))
+	got = mustGetTestDaemonTask(t, store, 1, WithTaskIDCond(EQ, dt.ID))
+	require.Equal(t, task.TaskStatus_Canceled, got[0].TaskStatus)
+	require.Equal(t, int32(2), cleanupCalls.Load())
+}
+
 func TestCancelTaskDoesNotTerminateRenewedForeignLease(t *testing.T) {
 	r, store := newDaemonHandleTestRunner(t)
 	baseService := r.service
