@@ -85,6 +85,11 @@ thirdparties/usearch-*/*
 # Source-of-truth dict lives at pkg/monlp/tokenizer/dict and stays tracked.
 /dict
 
+# Stable CI-only Go module cache. Its absolute path participates in
+# golangci-lint package cache keys, so producer and consumer jobs must not move
+# it into per-job random directories.
+.sca-go-module-cache/
+
 # bvt generate files
 test/distributed/resources/into_outfile/outfile_*.csv
 test/distributed/resources/into_outfile_2/outfile_*.csv

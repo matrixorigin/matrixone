@@ -83,18 +83,13 @@ jobs:
         with:
           path: .sca-go-module-cache
           key: ${{ steps.go-module-cache.outputs.cache-primary-key }}
-      - name: Move Go module cache out of the source tree
+      - name: Verify stable Go module cache path
         run: |
           set -euo pipefail
-          staging_dir="$GOMODCACHE"
-          runtime_root="$(mktemp -d "${RUNNER_TEMP%/}/matrixone-go-mod.XXXXXX")"
-          runtime_dir="$runtime_root/cache"
-          if [[ -d "$staging_dir" ]]; then
-            mv "$staging_dir" "$runtime_dir"
-          else
-            mkdir "$runtime_dir"
-          fi
-          echo "GOMODCACHE=$runtime_dir" >> "$GITHUB_ENV"
+          # golangci-lint includes absolute compiled-file paths in its package
+          # action IDs. Keep this path identical to the PR consumer instead of
+          # moving it into a fresh mktemp directory on every job.
+          test "$(go env GOMODCACHE)" = "$GITHUB_WORKSPACE/.sca-go-module-cache"
       - name: Restore golangci-lint analysis cache
         id: golangci-analysis-cache
         uses: matrixorigin/CI/actions/restore-sca-analysis-cache@main
