@@ -192,7 +192,7 @@ func (f *lateMaterializationBenchmarkFixture) read(late, all bool) (int, error) 
 	if late {
 		_, err := BlockDataReadWithFilter(
 			f.ctx, &f.info, f.ds, f.columns, f.colTypes, -1, timestamp.Timestamp{},
-			nil, nil, objectio.BlockReadFilter{}, fileservice.Policy(0),
+			nil, nil, objectio.BlockReadFilter{}, nil, fileservice.Policy(0),
 			"ivfflat-include-benchmark", output, cacheVectors, mp, f.fs,
 			[]int{0}, filter,
 		)
@@ -262,6 +262,47 @@ func BenchmarkBlockDataReadPersistedVectorRangeTopN(b *testing.B) {
 				"embedding-bytes/op",
 			)
 		})
+	}
+}
+
+// BenchmarkBlockDataReadPersistedFilteredVectorTopN compares the INCLUDE path
+// introduced here with the previous late-materialization fallback. Both paths
+// evaluate distance only for exact-filter survivors; the storage path avoids
+// copying those high-width embeddings out of the object cache and materializes
+// only K scalar rows.
+func BenchmarkBlockDataReadPersistedFilteredVectorTopN(b *testing.B) {
+	for _, selectEvery := range []int64{100, 2} {
+		selectivity := "1pct"
+		if selectEvery == 2 {
+			selectivity = "50pct"
+		}
+		for _, storageTopK := range []bool{false, true} {
+			path := "local"
+			materializedRows := vectorRangeTopNBenchmarkRows / int(selectEvery)
+			if storageTopK {
+				path = "storage"
+				materializedRows = 0
+			}
+			b.Run(path+"_"+selectivity, func(b *testing.B) {
+				fixture := newVectorRangeTopNBenchmarkFixture(b)
+				b.Cleanup(fixture.close)
+				if err := fixture.readFiltered(storageTopK, selectEvery); err != nil {
+					b.Fatal(err)
+				}
+				b.ReportAllocs()
+				b.ResetTimer()
+				for i := 0; i < b.N; i++ {
+					if err := fixture.readFiltered(storageTopK, selectEvery); err != nil {
+						b.Fatal(err)
+					}
+				}
+				b.StopTimer()
+				b.ReportMetric(
+					float64(materializedRows*vectorRangeTopNBenchmarkDimensions*4),
+					"embedding-bytes/op",
+				)
+			})
+		}
 	}
 }
 
@@ -344,6 +385,74 @@ func (f *vectorRangeTopNBenchmarkFixture) newTop() *objectio.IndexReaderTopOp {
 		UpperBoundType: plan.BoundType_INCLUSIVE,
 		UpperBound:     128 * 128,
 	}
+}
+
+func (f *vectorRangeTopNBenchmarkFixture) newUnboundedTop() *objectio.IndexReaderTopOp {
+	top := f.newTop()
+	top.UpperBoundType = plan.BoundType_UNBOUNDED
+	top.UpperBound = 0
+	return top
+}
+
+func (f *vectorRangeTopNBenchmarkFixture) readFiltered(storageTopK bool, selectEvery int64) (retErr error) {
+	mp := mpool.MustNewZero()
+	defer func() {
+		if bytes := mp.CurrNB(); bytes != 0 && retErr == nil {
+			retErr = moerr.NewInternalErrorNoCtxf("filtered vector benchmark mpool retained %d bytes", bytes)
+		}
+		mpool.DeleteMPool(mp)
+	}()
+	output := batch.NewWithSize(len(f.columns))
+	for pos, typ := range f.columnTypes {
+		output.Vecs[pos] = vector.NewOffHeapVecWithType(typ)
+	}
+	defer output.Clean(mp)
+	cacheVectors := containers.NewVectors(len(f.columns) + 1)
+	defer cacheVectors.Free(mp)
+
+	filter := func(bat *batch.Batch, loaded []int) (engine.ReaderFilterResult, error) {
+		ids := vector.MustFixedColWithTypeCheck[int64](bat.Vecs[0])
+		sels := make([]int64, 0, len(ids)/int(selectEvery)+1)
+		for pos, id := range ids {
+			if id%selectEvery == 0 {
+				sels = append(sels, int64(pos))
+			}
+		}
+		for _, pos := range loaded {
+			bat.Vecs[pos].Shrink(sels, false)
+		}
+		bat.SetRowCount(len(sels))
+		return engine.ReaderFilterResult{Sels: sels}, nil
+	}
+	top := f.newUnboundedTop()
+	var pushedTop *objectio.IndexReaderTopOp
+	if storageTopK {
+		pushedTop = top
+	}
+	if _, err := BlockDataReadWithFilter(
+		f.ctx, &f.info, f.ds, f.columns, f.columnTypes, 1, timestamp.Timestamp{},
+		nil, nil, objectio.BlockReadFilter{}, pushedTop, fileservice.Policy(0),
+		"ivfflat-filtered-topk-benchmark", output, cacheVectors, mp, f.fs,
+		[]int{0}, filter,
+	); err != nil {
+		return err
+	}
+	if storageTopK {
+		if output.RowCount() != vectorRangeTopNBenchmarkLimit || output.Vecs[2].Length() != 0 {
+			return moerr.NewInternalErrorNoCtxf(
+				"filtered storage Top-K returned %d rows and %d embeddings",
+				output.RowCount(), output.Vecs[2].Length())
+		}
+		return nil
+	}
+	rows, _, err := objectio.TopNVector(f.ctx, nil, output.Vecs[2], top)
+	if err != nil {
+		return err
+	}
+	if len(rows) != vectorRangeTopNBenchmarkLimit {
+		return moerr.NewInternalErrorNoCtxf("filtered local Top-K returned %d rows", len(rows))
+	}
+	return nil
 }
 
 func (f *vectorRangeTopNBenchmarkFixture) read(storageTopK bool) (retErr error) {
