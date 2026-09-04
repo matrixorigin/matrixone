@@ -404,7 +404,7 @@ func (gs *globalStats) df(term string) int {
 		// avoid allocating the block-directory metadata that LookupLoaded builds.
 		// Missing or malformed headers stay a miss. Segment search still performs
 		// its independent full lookup before any posting can produce a hit.
-		if seg.dict != nil && gs.idx.liveOrd[si] == nil {
+		if seg.dict != nil && seg.headerDFSafe && gs.idx.liveOrd[si] == nil {
 			if df, ok := seg.lookupLoadedDF(term); ok {
 				d += df
 			}
