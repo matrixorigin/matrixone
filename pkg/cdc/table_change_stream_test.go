@@ -1846,6 +1846,8 @@ func TestTableChangeStream_FullPipeline_RandomDelaysAndErrors(t *testing.T) {
 		require.False(t, tracker.NeedsRollback())
 		require.True(t, tracker.IsCompleted())
 	}
+	h.Sinker().releaseOutputs()
+	require.Zero(t, h.MP().CurrNB(), "terminal stream and sink must release all batch ownership")
 }
 
 type noopTxnOperator struct {
@@ -2263,6 +2265,7 @@ func (h *tableStreamHarness) Close() {
 		h.cancel()
 		h.stream.Close()
 		h.stream.Wait()
+		h.sinker.releaseOutputs()
 		for _, stub := range h.stubs {
 			stub.Reset()
 		}
@@ -2526,6 +2529,19 @@ func (s *tableStreamRecordingSinker) Reset() {
 	s.mu.Lock()
 	s.resetCnt++
 	s.mu.Unlock()
+}
+
+// The recording sink owns outputs just like a real sink, but retains them for
+// assertions. The harness calls this only after Run has joined, before deleting
+// the pool. Detaching the slice makes repeated teardown harmless.
+func (s *tableStreamRecordingSinker) releaseOutputs() {
+	s.mu.Lock()
+	outputs := s.sinkCalls
+	s.sinkCalls = nil
+	s.mu.Unlock()
+	for _, output := range outputs {
+		output.Close()
+	}
 }
 
 func (s *tableStreamRecordingSinker) reset() {

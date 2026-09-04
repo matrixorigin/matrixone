@@ -34,6 +34,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/cdc"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -44,6 +45,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
 	pbtxn "github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
+	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/util/fault"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	cmd_util "github.com/matrixorigin/matrixone/pkg/vm/engine/cmd_util"
@@ -4274,13 +4276,18 @@ func TestInvalidTimestamp(t *testing.T) {
 	// The recovery budget must not include cold consumer DDL. Prepare only
 	// its empty destination; the executor still has to discover the job, copy
 	// the source row and advance the watermark after the fault is removed.
+	v, ok := moruntime.ServiceRuntime("").GetGlobalVariables(moruntime.InternalSQLExecutor)
+	require.True(t, ok)
+	sqlExecutor := v.(executor.SQLExecutor)
 	for _, sql := range []string{
 		fmt.Sprintf("create database if not exists %s", iscp.TargetDbName),
 		fmt.Sprintf("create table %s.test_table_%d_%s like srcdb.src_table", iscp.TargetDbName, tableID, jobName),
 	} {
-		result, err := execSql(disttaeEngine, ctxWithTimeout, sql)
-		require.NoError(t, err)
+		// No caller-owned transaction: Exec owns commit/rollback, including
+		// SQL errors. Release any result before a fatal assertion exits.
+		result, err := sqlExecutor.Exec(ctxWithTimeout, sql, executor.Options{})
 		result.Close()
+		require.NoError(t, err)
 	}
 
 	require.True(t, fault.Enable(), "fault injection was already enabled before TestInvalidTimestamp")
@@ -4292,7 +4299,7 @@ func TestInvalidTimestamp(t *testing.T) {
 
 	txn, err = disttaeEngine.NewTxnOperator(ctx, disttaeEngine.Engine.LatestLogtailAppliedTime())
 	require.NoError(t, err)
-	ok, err := iscp.RegisterJob(
+	ok, err = iscp.RegisterJob(
 		ctx, "", txn,
 		&iscp.JobSpec{
 			ConsumerInfo: iscp.ConsumerInfo{
@@ -4327,7 +4334,25 @@ func TestInvalidTimestamp(t *testing.T) {
 		tableID,
 		jobName,
 	)
-	CheckTableData(t, disttaeEngine, ctxWithTimeout, "srcdb", "src_table", tableID, jobName)
+	// Compare both directions: watermark progress must represent copied data,
+	// not just job discovery. Let the SQL executor own these transactions too.
+	destination := fmt.Sprintf("%s.test_table_%d_%s", iscp.TargetDbName, tableID, jobName)
+	for _, sql := range []string{
+		fmt.Sprintf("select * from srcdb.src_table except select * from %s", destination),
+		fmt.Sprintf("select * from %s except select * from srcdb.src_table", destination),
+	} {
+		result, err := sqlExecutor.Exec(ctxWithTimeout, sql, executor.Options{})
+		rows := 0
+		if err == nil {
+			result.ReadRows(func(n int, _ []*vector.Vector) bool {
+				rows += n
+				return true
+			})
+		}
+		result.Close()
+		require.NoError(t, err)
+		require.Zero(t, rows, sql)
+	}
 }
 
 func TestCancelIteration1(t *testing.T) {

@@ -1254,9 +1254,11 @@ func TestProxyRetryPreservesAppliedHandoffRepresentative(t *testing.T) {
 			require.True(t, ok)
 			require.Equal(t, firstReplacementTxn, holder.TxnID)
 			proxy.mu.RLock()
-			require.Equal(t, firstReplacementTxn, proxy.mu.currentHolder[string(row)])
-			require.Empty(t, proxy.mu.pendingRemoteHolders)
+			currentHolder := append([]byte(nil), proxy.mu.currentHolder[string(row)]...)
+			pendingHolders := len(proxy.mu.pendingRemoteHolders)
 			proxy.mu.RUnlock()
+			require.Equal(t, firstReplacementTxn, currentHolder)
+			require.Zero(t, pendingHolders)
 
 			// Let the first replacement finish. The owner must now move to the
 			// still-active late sharer, rather than retaining an orphan holder.
