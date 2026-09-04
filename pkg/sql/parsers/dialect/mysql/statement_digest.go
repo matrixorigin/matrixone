@@ -80,6 +80,12 @@ func NormalizeStatementDigest(ctx context.Context, sql, sqlMode string, maxDiges
 		if typ == VALUE_ARG {
 			return "", moerr.NewParseError(ctx, "parameter markers are not permitted")
 		}
+		// The statement delimiter is accepted by the parser but is not part of
+		// MySQL's statement digest text.  Skipping it here also keeps it from
+		// consuming the max_digest_length budget.
+		if typ == ';' {
+			continue
+		}
 
 		sawStatementToken = true
 		if skipQuotedUserVarValue {

@@ -29,7 +29,7 @@ func TestNormalizeStatementDigest(t *testing.T) {
 		want string
 	}{
 		{name: "issue example", sql: "SELECT 1", want: "SELECT ?"},
-		{name: "comments and whitespace", sql: "  select 2 /* comment */ where 10=20; -- tail\n", want: "SELECT ? WHERE ? = ? ;"},
+		{name: "comments and whitespace", sql: "  select 2 /* comment */ where 10=20; -- tail\n", want: "SELECT ? WHERE ? = ?"},
 		{name: "identifiers", sql: "SELECT a + b, a - b FROM t1,t2,t3 WHERE a=c", want: "SELECT `a` + `b` , `a` - `b` FROM `t1` , `t2` , `t3` WHERE `a` = `c`"},
 		{name: "value list", sql: "SELECT 1,2,3", want: "SELECT ?, ..."},
 		{name: "row value list", sql: "INSERT INTO t VALUES (1,2),(3,4)", want: "INSERT INTO `t` VALUES (...) /* , ... */"},
@@ -79,7 +79,8 @@ func TestNormalizeStatementDigestMySQLCounterexamples(t *testing.T) {
 		{name: "scoped system variables", sql: "SELECT @@sql_mode, @@session.sql_mode, @@global.max_connections", want: "SELECT @@`sql_mode` , @@SESSION . `sql_mode` , @@GLOBAL . `max_connections`"},
 		{name: "unary chains and not2", sql: "SELECT --1, +-2, -+3, !!a, ! !a, !!!!a", want: "SELECT ?, ... , ! `a` , ! ! `a` , ! ! `a`"},
 		{name: "unary versus binary context", sql: "SELECT a=-1, (-2), 1+-3, 1=-4", want: "SELECT `a` = - ? , (?) , ? + ?, ... = - ?"},
-		{name: "trailing delimiter", sql: "SELECT 1;", want: "SELECT ? ;"},
+		{name: "trailing delimiter", sql: "SELECT 1;", want: "SELECT ?"},
+		{name: "trailing delimiter with comment", sql: "SELECT 1; /* tail */", want: "SELECT ?"},
 		{name: "keyword canonicalization", sql: "CREATE TABLE t(a INT, b INT1, c INT2, d INT3, e INT4, f MEDIUMINT, g BIGINT, h FLOAT, i DOUBLE, j CHAR(1), k VARCHAR(2))", want: "CREATE TABLE `t` ( `a` INTEGER , `b` TINYINT , `c` SMALLINT , `d` MIDDLEINT , `e` INTEGER , `f` MIDDLEINT , `g` INT8 , `h` FLOAT4 , `i` FLOAT8 , `j` CHARACTER (?) , `k` VARCHARACTER (?) )"},
 		{name: "statement keyword aliases", sql: "CREATE DATABASE d", want: "CREATE SCHEMA `d`"},
 		{name: "describe alias", sql: "DESCRIBE t", want: "EXPLAIN `t`"},
@@ -204,6 +205,11 @@ func TestNormalizeStatementDigestVariablesOperatorsAndLimit(t *testing.T) {
 	got, err = NormalizeStatementDigest(context.Background(), "SELECT a", "", 7)
 	require.NoError(t, err)
 	require.Equal(t, "SELECT `a`", got)
+
+	// A client delimiter is not emitted or counted toward max_digest_length.
+	got, err = NormalizeStatementDigest(context.Background(), "SELECT 1;", "", 4)
+	require.NoError(t, err)
+	require.Equal(t, "SELECT ?", got)
 }
 
 func BenchmarkNormalizeStatementDigest(b *testing.B) {
