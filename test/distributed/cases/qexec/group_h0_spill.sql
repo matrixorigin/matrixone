@@ -22,18 +22,18 @@ from generate_series(1, 300) g;
 -- threshold; four/three groups cross it without a large fixture.
 set @@agg_spill_mem = 2;
 select result % 4 as g, count(distinct result) as d
-from generate_series(1, 300)
+from generate_series(1, 300) g
 group by g order by g;
 
 -- A VARCHAR DISTINCT argument exercises the varlen canonical-key path. The
 -- SELECT DISTINCT subquery is an independent relational oracle for the count.
 select result % 2 as g, count(distinct concat('v', result % 17)) as d
-from generate_series(1, 300)
+from generate_series(1, 300) g
 group by g order by g;
 select g, count(*) as d
 from (
     select distinct result % 2 as g, concat('v', result % 17) as v
-    from generate_series(1, 300)
+    from generate_series(1, 300) g
 ) oracle
 group by g order by g;
 
@@ -42,14 +42,14 @@ group by g order by g;
 select result % 3 as g,
        count(distinct result % 10,
              case when result % 7 = 0 then null else result % 5 end) as d
-from generate_series(1, 300)
+from generate_series(1, 300) g
 group by g order by g;
 
 -- Ordinary aggregate state and exact-key state share one generic spill/reload
 -- lifecycle; none may be duplicated when group rows repeat across leaves.
 select result % 4 as g, count(*) as rows, sum(result) as total,
        count(distinct result % 11) as d
-from generate_series(1, 300)
+from generate_series(1, 300) g
 group by g order by g;
 
 -- A normal byte threshold is the nearest control for the debug threshold.
@@ -58,19 +58,19 @@ select count(*) from tiny_scalar;
 select count(*), count(distinct result)
 from generate_series(1, 300) g;
 select result % 4 as g, count(distinct result) as d
-from generate_series(1, 300)
+from generate_series(1, 300) g
 group by g order by g;
 select result % 2 as g, count(distinct concat('v', result % 17)) as d
-from generate_series(1, 300)
+from generate_series(1, 300) g
 group by g order by g;
 select result % 3 as g,
        count(distinct result % 10,
              case when result % 7 = 0 then null else result % 5 end) as d
-from generate_series(1, 300)
+from generate_series(1, 300) g
 group by g order by g;
 select result % 4 as g, count(*) as rows, sum(result) as total,
        count(distinct result % 11) as d
-from generate_series(1, 300)
+from generate_series(1, 300) g
 group by g order by g;
 
 set @@agg_spill_mem = 0;
