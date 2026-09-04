@@ -410,10 +410,16 @@ func (k *lockTableKeeper) doKeepRemoteLock(
 			recordRefresh(result)
 		}
 		if result.remove {
-			bind := result.bind
-			k.groupTables.removeWithFilter(func(_ uint64, v lockTable) bool {
-				return !v.getBind().Changed(bind)
-			}, closeReasonKeeperFailed)
+			// A non-retryable transport failure means the recorded owner can no
+			// longer preserve this transaction's lock contract. Detaching only the
+			// route leaves the transaction live and its remote-bind lease indexed,
+			// so the keeper retries the departed owner forever. Fence every exact
+			// consumer while removing the route; transaction cleanup remains the
+			// owner of releasing the corresponding remoteBindRef.
+			k.invalidateRemoteBind(
+				result.bind,
+				k.service.allocatorStateSnapshot(),
+			)
 		}
 	}
 

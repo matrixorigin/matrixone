@@ -76,6 +76,43 @@ type bindCursorClient struct {
 	started   chan struct{}
 }
 
+type missingOwnerKeeperClient struct {
+	bind         pb.LockTable
+	keepCalls    atomic.Int64
+	getBindCalls atomic.Int64
+}
+
+func (c *missingOwnerKeeperClient) AsyncSend(
+	_ context.Context,
+	req *pb.Request,
+) (*morpc.Future, error) {
+	defer releaseRequest(req)
+	if req.Method != pb.Method_KeepRemoteLock {
+		return nil, moerr.NewInternalErrorNoCtx("unexpected async request")
+	}
+	c.keepCalls.Add(1)
+	return nil, moerr.NewBackendCannotConnectNoCtx(
+		"lockservice service " + req.LockTable.ServiceID + " is absent from cluster inventory",
+	)
+}
+
+func (c *missingOwnerKeeperClient) Send(
+	_ context.Context,
+	req *pb.Request,
+) (*pb.Response, error) {
+	if req.Method != pb.Method_GetBind {
+		return nil, moerr.NewInternalErrorNoCtx("unexpected request")
+	}
+	c.getBindCalls.Add(1)
+	resp := acquireResponse()
+	resp.GetBind.LockTable = c.bind
+	resp.GetBind.AllocatorID = c.bind.AllocatorID
+	resp.GetBind.AllocatorVersion = c.bind.Version
+	return resp, nil
+}
+
+func (*missingOwnerKeeperClient) Close() error { return nil }
+
 func (c *bindCursorClient) AsyncSend(
 	ctx context.Context,
 	req *pb.Request,
@@ -1351,6 +1388,101 @@ func TestKeepRemoteLockBindChangedRefreshFailureInvalidatesOldBind(t *testing.T)
 			)
 		})
 	}
+}
+
+func TestKeepRemoteLockMissingOwnerFencesActiveTxn(t *testing.T) {
+	oldBind := pb.LockTable{
+		Group:       0,
+		Table:       1,
+		OriginTable: 1,
+		ServiceID:   "departed-owner",
+		Version:     1,
+		Valid:       true,
+		AllocatorID: "allocator",
+	}
+	client := &missingOwnerKeeperClient{bind: oldBind}
+	logger := getLogger("")
+	fsp := newFixedSlicePool(2)
+	svc := &service{
+		serviceID: "source",
+		fsp:       fsp,
+		logger:    logger,
+	}
+	svc.remote.client = client
+	svc.tableGroups = &lockTableHolders{
+		service: svc.serviceID,
+		logger:  logger,
+		holders: map[uint32]*lockTableHolder{},
+	}
+	svc.activeTxnHolder = newMapBasedTxnHandler(
+		svc.serviceID,
+		logger,
+		fsp,
+		func(string) (bool, error) { return true, nil },
+		func([]pb.OrphanTxn) (pb.CannotCommitResponse, error) {
+			return pb.CannotCommitResponse{}, nil
+		},
+		func(pb.WaitTxn) (bool, error) { return true, nil },
+	)
+	svc.tableGroups.set(
+		oldBind.Group,
+		oldBind.Table,
+		newRemoteLockTable(
+			svc.serviceID,
+			time.Second,
+			oldBind,
+			client,
+			svc.handleBindChanged,
+			logger,
+		),
+	)
+
+	txnID := []byte("stale-owner-txn")
+	txn := svc.activeTxnHolder.getActiveTxn(txnID, true, "")
+	txn.Lock()
+	require.NoError(t, txn.lockAdded(
+		oldBind.Group,
+		oldBind,
+		[][]byte{{1}},
+		pb.LockOptions{},
+		logger,
+	))
+	txn.Unlock()
+	svc.acquireRemoteBindRef(oldBind)
+
+	keeper := &lockTableKeeper{
+		serviceID:   svc.serviceID,
+		client:      client,
+		groupTables: svc.tableGroups,
+		service:     svc,
+	}
+	keeper.doKeepRemoteLock(context.Background(), nil, nil)
+
+	require.Equal(t, int64(1), client.keepCalls.Load())
+	require.Equal(t, int64(1), client.getBindCalls.Load())
+	txn.Lock()
+	require.True(t, txn.bindChanged,
+		"an unusable owner must fence transactions that depend on its bind")
+	txn.Unlock()
+	require.Nil(t, svc.tableGroups.get(oldBind.Group, oldBind.Table))
+	require.Equal(t, []pb.LockTable{oldBind}, svc.collectRemoteLockBinds(nil),
+		"the bind lease stays owned until transaction cleanup")
+
+	require.Equal(t, txn, svc.activeTxnHolder.deleteActiveTxn(txnID))
+	txn.Lock()
+	err := txn.close(
+		txnID,
+		timestamp.Timestamp{},
+		func(pb.LockTable) (lockTable, error) { return nil, nil },
+		logger,
+	)
+	txn.Unlock()
+	require.NoError(t, err)
+	svc.releaseTxnBindRefs([]pb.LockTable{oldBind})
+	require.Empty(t, svc.collectRemoteLockBinds(nil))
+	keeper.doKeepRemoteLock(context.Background(), nil, nil)
+	require.Equal(t, int64(1), client.keepCalls.Load(),
+		"a cleaned stale bind must not be retried by later keeper rounds")
 }
 
 func TestKeepRemoteLockFailureFetchesNewBindAndFencesActiveTxn(t *testing.T) {
