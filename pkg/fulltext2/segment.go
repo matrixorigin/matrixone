@@ -385,6 +385,11 @@ type Segment struct {
 	// alive by mmapData or GC). The build-side `terms` map is left nil.
 	dict                       *termDict
 	ranking, blocks, positions []byte
+	// headerDFSafe is set only after every FST-reachable posting directory entry has
+	// passed the same structural parser used by LookupLoaded. A corrupt entry disables
+	// the header-only DF fast path for the whole segment, preserving the old per-term
+	// safe-miss behavior without retaining O(vocabulary) validation state.
+	headerDFSafe bool
 
 	// mmapData is the shared read-only mmap of a base segment's on-disk file: the
 	// FST, the compressed docID/tf blocks, and the compressed positions section are
@@ -692,6 +697,7 @@ func (s *Segment) Free() {
 		s.mmapPath = ""
 	}
 	s.ranking, s.blocks, s.positions = nil, nil, nil
+	s.headerDFSafe = false
 }
 
 // freeSegs frees every segment's off-heap buffers (nil-safe on build-side segs).

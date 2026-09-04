@@ -77,6 +77,30 @@ func (d *termDict) get(term string) (val uint64, ok bool, err error) {
 // len returns the number of terms in the dictionary.
 func (d *termDict) len() int { return d.fst.Len() }
 
+// everyValue streams the FST values without materializing terms. It is used at
+// segment load to validate the posting entries addressed by the dictionary.
+func (d *termDict) everyValue(fn func(uint64) bool) (bool, error) {
+	if d == nil || d.fst == nil || d.len() == 0 {
+		return true, nil
+	}
+	it, ok, err := d.prefixIter("")
+	if err != nil || !ok {
+		return false, err
+	}
+	defer func() { _ = it.Close() }()
+	for {
+		_, value := it.Current()
+		if !fn(value) {
+			return false, nil
+		}
+		if err := it.Next(); err == vellum.ErrIteratorDone {
+			return true, nil
+		} else if err != nil {
+			return false, err
+		}
+	}
+}
+
 // prefixIter returns an ascending iterator over every term that begins with
 // prefix (the `word*` enumeration). An empty prefix iterates the whole dict. The
 // caller must Close the iterator. A nil iterator with ok=false means the prefix
