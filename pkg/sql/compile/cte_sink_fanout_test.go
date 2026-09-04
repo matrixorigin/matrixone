@@ -58,10 +58,15 @@ func TestMaterializedSpillBudgetUsesProcessLimits(t *testing.T) {
 
 	memory, err := budget.ReserveMemory(1)
 	require.NoError(t, err)
-	require.True(t, memory.Release())
-
 	processBudget, err := proc.GetExecutionResourceBudget()
 	require.NoError(t, err)
+	require.Equal(t, uint64(1), processBudget.Used())
+	_, cteUsed, _ := proc.GetCTEMemoryBudget().Snapshot()
+	require.Zero(t, cteUsed,
+		"non-recursive materialized spill scratch must not consume the recursive CTE quota")
+	require.True(t, memory.Release())
+	require.Zero(t, processBudget.Used())
+
 	fdLimit := processBudget.SpillFDCap()
 	require.NotZero(t, fdLimit)
 	_, err = budget.ReserveFD(fdLimit + 1)

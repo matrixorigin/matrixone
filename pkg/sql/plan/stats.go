@@ -2062,6 +2062,21 @@ func (builder *QueryBuilder) determineBuildAndProbeSide(nodeID int32, recursive 
 
 	switch node.JoinType {
 	case plan.Node_INNER, plan.Node_OUTER:
+		if node.JoinType == plan.Node_INNER {
+			leftMarked := builder.subtreeContainsCTEHashBuildScan(
+				node.Children[0], make(map[int32]bool))
+			rightMarked := builder.subtreeContainsCTEHashBuildScan(
+				node.Children[1], make(map[int32]bool))
+			if leftMarked || rightMarked {
+				// CTE drain admission marked one exact equality-hash build.
+				// Preserve it as the physical right/build child even if ordinary
+				// cardinality costing would choose the opposite orientation.
+				if leftMarked && !rightMarked {
+					node.Children[0], node.Children[1] = node.Children[1], node.Children[0]
+				}
+				break
+			}
+		}
 		// UPDATE rewrites deliberately put an unfiltered hidden index on the probe
 		// side so a selective target can publish a runtime filter before scanning
 		// the index. Cardinality alone is not sufficient for the opposite,
@@ -2109,11 +2124,11 @@ func (builder *QueryBuilder) determineBuildAndProbeSide(nodeID int32, recursive 
 		}
 
 	case plan.Node_LEFT, plan.Node_SEMI, plan.Node_ANTI, plan.Node_SINGLE:
-		// Some shared CTE readers are admitted only because an equality SEMI
-		// join must fully build their membership set. Preserve that proof: a
-		// RIGHT SEMI choice would turn the marked reader into the probe input,
+		// Some shared CTE readers are admitted only because a LEFT or equality
+		// SEMI join must fully consume their build input. Preserve that proof: a
+		// right-sided choice would turn the marked reader into the probe input,
 		// which may stop without draining it.
-		if node.JoinType == plan.Node_SEMI &&
+		if (node.JoinType == plan.Node_LEFT || node.JoinType == plan.Node_SEMI) &&
 			builder.subtreeContainsCTEHashBuildScan(node.Children[1], make(map[int32]bool)) {
 			node.IsRightJoin = false
 			break

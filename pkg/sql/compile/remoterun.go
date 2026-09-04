@@ -117,6 +117,9 @@ func encodeRemoteScope(s *Scope, proc *process.Process) ([]byte, error) {
 	if err = validateRemoteParquetWholeFileFanoutPipelineProtocol(proc, p); err != nil {
 		return nil, err
 	}
+	if err = validateRemoteGroupingSetPipelineProtocol(proc, p); err != nil {
+		return nil, err
+	}
 	return p.Marshal()
 }
 
@@ -203,6 +206,9 @@ func decodeScope(data []byte, proc *process.Process, isRemote bool, eng engine.E
 			return nil, err
 		}
 		if err = validateRemoteParquetWholeFileFanoutPipelineProtocol(proc, p); err != nil {
+			return nil, err
+		}
+		if err = validateRemoteGroupingSetPipelineProtocol(proc, p); err != nil {
 			return nil, err
 		}
 	} else if err = plan.ValidateStringLiteralFormsInOwner(p); err != nil {
@@ -2079,6 +2085,41 @@ func validateRemoteParquetWholeFileFanoutPipelineProtocol(
 	}
 	for _, child := range p.Children {
 		if err := validateRemoteParquetWholeFileFanoutPipelineProtocol(proc, child); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// validateRemoteGroupingSetPipelineProtocol is the final sender/receiver
+// compatibility fence for v46 grouping-set execution metadata. Planning can
+// happen at v46 before a cached/prepared plan is transmitted after a rollback;
+// an older receiver would silently ignore these append-only fields and execute
+// ordinary Projection/Group semantics.
+func validateRemoteGroupingSetPipelineProtocol(
+	proc *process.Process,
+	p *pipeline.Pipeline,
+) error {
+	if p == nil {
+		return nil
+	}
+	for _, instruction := range p.InstructionList {
+		if instruction == nil {
+			continue
+		}
+		agg := instruction.GetAgg()
+		requiresV46 := len(instruction.ProjectionGroupingFlags) > 0 ||
+			instruction.ProjectionGroupingSetCount != 0 ||
+			agg != nil && agg.DynamicGrouping
+		if requiresV46 &&
+			(proc == nil || !supportsRemoteGroupingSetExpansion(proc.GetService())) {
+			return moerr.NewNotSupportedNoCtx(
+				"grouping-set remote execution requires MORPC protocol version 46",
+			)
+		}
+	}
+	for _, child := range p.Children {
+		if err := validateRemoteGroupingSetPipelineProtocol(proc, child); err != nil {
 			return err
 		}
 	}

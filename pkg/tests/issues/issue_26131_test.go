@@ -105,6 +105,11 @@ func TestIssue26131Q15SharedCTEExecutesBothConsumers(t *testing.T) {
 		execSQLRequire(t, ctx, db, "create table cte_join_fact (region int, k int, raw varchar(32), payload varchar(32))")
 		execSQLRequire(t, ctx, db, "create table cte_join_d1 (k int primary key)")
 		execSQLRequire(t, ctx, db, "create table cte_join_d2 (k int primary key)")
+		execSQLRequire(t, ctx, db, "create table cte_probe_rows (k int, raw varchar(32))")
+		execSQLRequire(t, ctx, db, "create table cte_filter_risk (k int primary key, raw varchar(32))")
+		execSQLRequire(t, ctx, db, "create table cte_having_risk (k int, raw varchar(32))")
+		execSQLRequire(t, ctx, db, "create table cte_empty_dim_1 (k int primary key, flag int)")
+		execSQLRequire(t, ctx, db, "create table cte_empty_dim_2 (k int primary key, flag int)")
 		execSQLRequire(t, ctx, db, "insert into supplier values (1, 'supplier-1'), (42, 'supplier-42')")
 		// Two rows per group preserve real SUM accumulation. The shared-CTE
 		// topology is asserted from EXPLAIN below and does not depend on volume.
@@ -116,7 +121,13 @@ func TestIssue26131Q15SharedCTEExecutesBothConsumers(t *testing.T) {
 		execSQLRequire(t, ctx, db, "insert into cte_join_fact values (1, 1, '10', 'a'), (1, 9, 'bad', 'hidden'), (2, 2, '20', 'bb')")
 		execSQLRequire(t, ctx, db, "insert into cte_join_d1 values (1)")
 		execSQLRequire(t, ctx, db, "insert into cte_join_d2 values (2)")
+		execSQLRequire(t, ctx, db, "insert into cte_probe_rows select result, 'not-an-integer' from generate_series(1, 10000) g")
+		execSQLRequire(t, ctx, db, "insert into cte_filter_risk select result, if(result = 10000, 'not-an-integer', '1') from generate_series(1, 10000) g")
+		execSQLRequire(t, ctx, db, "insert into cte_having_risk select if(result = 10000, 2, 1), if(result = 10000, 'not-an-integer', '1') from generate_series(1, 10000) g")
+		execSQLRequire(t, ctx, db, "insert into cte_empty_dim_1 values (1, 1)")
+		execSQLRequire(t, ctx, db, "insert into cte_empty_dim_2 values (2, 1)")
 		execSQLRequire(t, ctx, db, "analyze table supplier, lineitem")
+		execSQLRequire(t, ctx, db, "analyze table cte_probe_rows, cte_filter_risk, cte_having_risk, cte_empty_dim_1, cte_empty_dim_2")
 
 		planText := explainSQL(t, ctx, db, "explain "+issue26131Q15)
 		require.Equal(t, 1, strings.Count(planText, ".lineitem"),
@@ -327,7 +338,82 @@ func TestIssue26131Q15SharedCTEExecutesBothConsumers(t *testing.T) {
 		require.NoError(t, tagFreePredicateRows.Err())
 		require.ElementsMatch(t, []domainResult{{sum: 0, length: 0}, {sum: 0, length: 0}},
 			tagFreePredicateResults)
+
+		const fallibleProducerPredicateQuery = `with c as (
+			select k from cte_filter_risk where cast(raw as bigint) > 0
+		)
+		(select count(*) from (select * from c) d where k = 1)
+		union all
+		(select k from c limit 0)`
+		fallibleProducerPlan := explainSQL(t, ctx, db, "explain "+fallibleProducerPredicateQuery)
+		require.NotContains(t, fallibleProducerPlan, "Sink Scan",
+			"sharing must not expand a fallible producer predicate beyond consumer row domains")
+		require.Equal(t, []int64{1},
+			queryInt64Column(t, ctx, db, fallibleProducerPredicateQuery))
+
+		const fallibleHavingQuery = `with c as (
+			select k from cte_having_risk group by k
+			having cast(max(raw) as bigint) > 0
+		)
+		(select count(*) from c where k = 1)
+		union all
+		(select k from c limit 0)`
+		fallibleHavingPlan := explainSQL(t, ctx, db, "explain "+fallibleHavingQuery)
+		require.NotContains(t, fallibleHavingPlan, "Sink Scan",
+			"sharing must not expand a fallible HAVING predicate beyond consumer group domains")
+		require.Equal(t, []int64{1}, queryInt64Column(t, ctx, db, fallibleHavingQuery))
+
+		const fallibleGroupingKeyQuery = `with c as (
+			select k from cte_having_risk group by k, cast(raw as bigint)
+		)
+		(select count(*) from c where k = 1)
+		union all
+		(select k from c limit 0)`
+		fallibleGroupingPlan := explainSQL(t, ctx, db, "explain "+fallibleGroupingKeyQuery)
+		require.NotContains(t, fallibleGroupingPlan, "Sink Scan",
+			"sharing must not expand a fallible grouping key beyond consumer row domains")
+		require.Equal(t, []int64{1}, queryInt64Column(t, ctx, db, fallibleGroupingKeyQuery))
+
+		const emptyBuildProbeQuery = `with c as (
+			select k from cte_probe_rows where cast(raw as bigint) > 0
+		)
+		select count(*) from c
+		join cte_empty_dim_1 d1 on c.k = d1.k and d1.flag = 0
+		union all
+		select count(*) from c
+		join cte_empty_dim_2 d2 on c.k = d2.k and d2.flag = 0`
+		defer func() {
+			cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cleanupCancel()
+			execSQLMaybe(t, cleanupCtx, db, "set session optimizer_hints = ''")
+		}()
+		execSQLRequire(t, ctx, db,
+			"set session optimizer_hints = 'joinOrdering=1,sharedComputation=1'")
+		legacyCounts := queryInt64Column(t, ctx, db, emptyBuildProbeQuery)
+		require.ElementsMatch(t, []int64{0, 0}, legacyCounts)
+
+		execSQLRequire(t, ctx, db, "set session optimizer_hints = 'joinOrdering=1'")
+		emptyBuildPlan := explainSQL(t, ctx, db, "explain "+emptyBuildProbeQuery)
+		require.NotContains(t, emptyBuildPlan, "Sink Scan",
+			"a fixed INNER probe is not a complete-evaluation witness")
+		require.ElementsMatch(t, legacyCounts,
+			queryInt64Column(t, ctx, db, emptyBuildProbeQuery))
 	})
+}
+
+func queryInt64Column(t *testing.T, ctx context.Context, db *sql.DB, statement string) []int64 {
+	t.Helper()
+	rows, err := db.QueryContext(ctx, statement)
+	require.NoError(t, err)
+	defer rows.Close()
+	var values []int64
+	for rows.Next() {
+		var value int64
+		require.NoError(t, rows.Scan(&value))
+		values = append(values, value)
+	}
+	require.NoError(t, rows.Err())
+	return values
 }
 
 func finalExplainPlan(planText string) string {

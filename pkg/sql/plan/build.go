@@ -65,6 +65,9 @@ func bindAndOptimizeSelectQueryWithValidatorAndCapture(
 	builder := NewQueryBuilder(stmtType, ctx, isPrepareStmt, true)
 	builder.sqlCalcFoundRows = selectHasSQLCalcFoundRows(stmt)
 	builder.persistedViewTarget = persistedViewTarget
+	builder.sessionSelectLimitMayStopEarly = sessionSelectLimitMayStopEarly(
+		ctx, stmt, isPrepareStmt,
+	)
 	bindCtx := NewBindContext(builder, nil)
 	bindCtx.restoreViewMySQLSpecialTypes = restoreViewMySQLSpecialTypes
 	if capture != nil {
@@ -107,6 +110,32 @@ func bindAndOptimizeSelectQueryWithValidatorAndCapture(
 			Query: query,
 		},
 	}, err
+}
+
+func sessionSelectLimitMayStopEarly(
+	ctx CompilerContext,
+	stmt *tree.Select,
+	isPrepareStmt bool,
+) bool {
+	if ctx == nil || stmt == nil || stmt.IsPerform || selectHasExplicitTopLevelLimit(stmt) {
+		return false
+	}
+	proc := ctx.GetProcess()
+	if proc == nil || proc.Base == nil || !proc.Base.SessionInfo.ApplySQLSelectLimit ||
+		proc.GetResolveVariableFunc() == nil {
+		return false
+	}
+	// A prepared plan resolves this dynamic session variable at every EXECUTE;
+	// even an unlimited value during PREPARE is not a proof for later runs.
+	if isPrepareStmt {
+		return true
+	}
+	value, err := ctx.ResolveVariable(SQLSelectLimitVariable, true, false)
+	if err != nil {
+		return true
+	}
+	limit, ok := value.(uint64)
+	return !ok || limit != ^uint64(0)
 }
 
 func bindAndOptimizeInsertQuery(ctx CompilerContext, stmt *tree.Insert, isPrepareStmt bool, skipStats bool) (*Plan, error) {

@@ -1519,6 +1519,65 @@ func TestDetermineBuildSidePreservesCTEHashBuildDrainProof(t *testing.T) {
 		builder.determineBuildAndProbeSide(2, false)
 		require.True(t, builder.qry.Nodes[2].IsRightJoin)
 	})
+
+	t.Run("marked LEFT build remains logical right", func(t *testing.T) {
+		builder := makeBuilder(materialized.CTEHashBuildScanOption)
+		builder.qry.Nodes[2].JoinType = planpb.Node_LEFT
+		builder.determineBuildAndProbeSide(2, false)
+		require.False(t, builder.qry.Nodes[2].IsRightJoin)
+	})
+}
+
+func TestDetermineInnerBuildSidePreservesCTEHashBuildDrainProof(t *testing.T) {
+	ctx := NewMockCompilerContext(false)
+	intType := planpb.Type{Id: int32(types.T_int64)}
+	joinCond, err := BindFuncExprImplByPlanExpr(ctx.GetContext(), "=", []*planpb.Expr{
+		GetColExpr(intType, 10, 0),
+		GetColExpr(intType, 20, 0),
+	})
+	require.NoError(t, err)
+
+	makeBuilder := func(leftOption, rightOption string) *QueryBuilder {
+		builder := NewQueryBuilder(planpb.Query_SELECT, ctx, false, true)
+		builder.qry.Nodes = []*planpb.Node{
+			{
+				NodeId: 0, NodeType: planpb.Node_SINK_SCAN,
+				BindingTags: []int32{10}, Stats: &planpb.Stats{Outcnt: 10},
+				ExtraOptions: leftOption,
+			},
+			{
+				NodeId: 1, NodeType: planpb.Node_SINK_SCAN,
+				BindingTags: []int32{20}, Stats: &planpb.Stats{Outcnt: 1000},
+				ExtraOptions: rightOption,
+			},
+			{
+				NodeId: 2, NodeType: planpb.Node_JOIN, JoinType: planpb.Node_INNER,
+				Children: []int32{0, 1}, OnList: []*planpb.Expr{joinCond},
+				Stats: &planpb.Stats{HashmapStats: &planpb.HashMapStats{}},
+			},
+		}
+		return builder
+	}
+
+	t.Run("marked logical left moves to build", func(t *testing.T) {
+		builder := makeBuilder(materialized.CTEHashBuildScanOption, "")
+		builder.determineBuildAndProbeSide(2, false)
+		require.Equal(t, []int32{1, 0}, builder.qry.Nodes[2].Children)
+	})
+
+	t.Run("marked logical right remains build", func(t *testing.T) {
+		builder := makeBuilder("", materialized.CTEHashBuildScanOption)
+		builder.determineBuildAndProbeSide(2, false)
+		require.Equal(t, []int32{0, 1}, builder.qry.Nodes[2].Children)
+	})
+
+	t.Run("marked logical right remains shuffle build", func(t *testing.T) {
+		builder := makeBuilder("", materialized.CTEHashBuildScanOption)
+		builder.qry.Nodes[2].Stats.HashmapStats.Shuffle = true
+		builder.determineBuildAndProbeSide(2, false)
+		require.Equal(t, []int32{0, 1}, builder.qry.Nodes[2].Children)
+		require.True(t, builder.qry.Nodes[2].Stats.HashmapStats.Shuffle)
+	})
 }
 
 func TestDeepCopyIndexReaderParamCopiesOrigFuncName(t *testing.T) {

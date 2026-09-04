@@ -28,10 +28,8 @@ import (
 )
 
 const groupingSetMaterializedFanoutBody = `
-select gs.k, count(*) as n
+select gs.k, count(gs.payload) as n
 from grouping_source gs
-join grouping_dim_1 d1 on gs.k = d1.k
-join grouping_dim_2 d2 on gs.k = d2.k
 group by rollup(gs.k)`
 
 func TestGroupingSetMaterializedFanoutWithLazyUnion(t *testing.T) {
@@ -55,43 +53,81 @@ func TestGroupingSetMaterializedFanoutWithLazyUnion(t *testing.T) {
 		}()
 		execSQLRequire(t, ctx, db, "create database "+database)
 		execSQLRequire(t, ctx, db, "use "+database)
-		for _, table := range []string{"grouping_source", "grouping_dim_1", "grouping_dim_2"} {
-			execSQLRequire(t, ctx, db, "create table "+table+" (k bigint primary key)")
-			execSQLRequire(t, ctx, db,
-				"insert into "+table+" select result from generate_series(1, 10000) g")
+		execSQLRequire(t, ctx, db, "create table grouping_source (k bigint primary key, payload varchar(1000))")
+		execSQLRequire(t, ctx, db,
+			"insert into grouping_source select result, repeat('x', 1000) from generate_series(1, 10000) g")
+		execSQLRequire(t, ctx, db, "create table grouping_dim_1 (k bigint primary key)")
+		execSQLRequire(t, ctx, db,
+			"insert into grouping_dim_1 select result from generate_series(1, 10000) g")
+		execSQLRequire(t, ctx, db, "create table grouping_nested (k int)")
+		execSQLRequire(t, ctx, db, "insert into grouping_nested values (1), (null)")
+		execSQLRequire(t, ctx, db, "analyze table grouping_source, grouping_dim_1")
+		execSQLRequire(t, ctx, db, "analyze table grouping_nested")
+
+		const nestedGrouping = `select d.k, count(*)
+			from (select k from grouping_nested group by rollup(k)) d
+			cross join grouping_dim_1 big
+			group by rollup(d.k)
+			order by count(*), d.k`
+		nestedPlan := explainSQL(t, ctx, db, "explain "+nestedGrouping)
+		require.NotContains(t, nestedPlan, "Sink Scan",
+			"nested grouping extensions must keep the legacy plan:\n%s", nestedPlan)
+		nestedRows, err := db.QueryContext(ctx, nestedGrouping)
+		require.NoError(t, err)
+		defer nestedRows.Close()
+		type nestedResult struct {
+			key   sql.NullInt64
+			count int64
 		}
-		execSQLRequire(t, ctx, db, "analyze table grouping_source, grouping_dim_1, grouping_dim_2")
+		var nestedResults []nestedResult
+		for nestedRows.Next() {
+			var result nestedResult
+			require.NoError(t, nestedRows.Scan(&result.key, &result.count))
+			nestedResults = append(nestedResults, result)
+		}
+		require.NoError(t, nestedRows.Err())
+		require.NoError(t, nestedRows.Close())
+		require.Equal(t, []nestedResult{
+			{key: sql.NullInt64{Int64: 1, Valid: true}, count: 10000},
+			{key: sql.NullInt64{}, count: 20000},
+			{key: sql.NullInt64{}, count: 30000},
+		}, nestedResults,
+			"an inherited rollup sentinel must not split the outer SQL NULL group")
 
 		planText := explainSQL(t, ctx, db,
-			"explain select * from ("+groupingSetMaterializedFanoutBody+") grouped limit 1 offset 1000000")
+			"explain "+groupingSetMaterializedFanoutBody)
 		require.Equal(t, 2, strings.Count(planText, "Sink Scan"),
 			"ROLLUP must use the shared two-reader fanout:\n%s", planText)
 		require.Equal(t, 1, strings.Count(planText, ".grouping_source"),
 			"the shared producer must scan the source once:\n%s", planText)
 
 		// The 10,001-row shared aggregate emits more batches than the ordinary
-		// two-reader broadcast spool can retain. OFFSET forces the first lazy
-		// UNION ALL branch to drain to EOF before the second branch starts.
+		// two-reader broadcast spool can retain. Draining the complete result
+		// forces the first lazy UNION ALL branch to reach EOF before the second
+		// branch starts.
 		drainCtx, drainCancel := context.WithTimeout(ctx, 30*time.Second)
-		rows, err := db.QueryContext(drainCtx,
-			"select * from ("+groupingSetMaterializedFanoutBody+") grouped limit 1 offset 1000000")
+		rows, err := db.QueryContext(drainCtx, groupingSetMaterializedFanoutBody)
 		require.NoError(t, err)
 		defer rows.Close()
-		require.False(t, rows.Next())
+		var key sql.NullInt64
+		var count int64
+		rowCount := 0
+		for rows.Next() {
+			require.NoError(t, rows.Scan(&key, &count))
+			rowCount++
+		}
 		require.NoError(t, rows.Err())
 		require.NoError(t, rows.Close())
+		require.Equal(t, 10001, rowCount)
 		drainCancel()
 
-		// LIMIT takes the early-stop path. Closing after its first row must release
-		// the producer and every unstarted materialized reader so the session can
-		// immediately execute another statement.
-		earlyRows, err := db.QueryContext(ctx,
-			"select * from ("+groupingSetMaterializedFanoutBody+") grouped limit 1")
+		// Closing the client after its first row takes the early-stop path and must
+		// release the producer and every unstarted materialized reader so the
+		// session can immediately execute another statement.
+		earlyRows, err := db.QueryContext(ctx, groupingSetMaterializedFanoutBody)
 		require.NoError(t, err)
 		defer earlyRows.Close()
 		require.True(t, earlyRows.Next())
-		var key sql.NullInt64
-		var count int64
 		require.NoError(t, earlyRows.Scan(&key, &count))
 		require.NoError(t, earlyRows.Close())
 		require.NoError(t, earlyRows.Err())

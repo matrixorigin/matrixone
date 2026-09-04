@@ -1389,6 +1389,78 @@ func TestParquetWholeFileFanoutRemoteProtocolValidationAtSendAndReceiveBoundarie
 	require.ErrorContains(t, err, "MORPC protocol version 45")
 }
 
+func TestGroupingSetRemoteProtocolValidationAtSendAndReceiveBoundaries(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	rt := moruntime.ServiceRuntime(proc.GetService())
+	previous, hadPrevious := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
+	t.Cleanup(func() {
+		if hadPrevious {
+			rt.SetGlobalVariables(moruntime.MOProtocolVersion, previous)
+		} else {
+			rt.CompareAndDeleteGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion45)
+		}
+	})
+
+	projectionOp := projection.NewArgument()
+	projectionOp.GroupingFlags = []bool{true, false}
+	projectionOp.GroupingSetCount = 2
+	groupOp := group.NewArgument()
+	groupOp.DynamicGrouping = true
+	mergeGroupOp := group.NewArgumentMergeGroup()
+	mergeGroupOp.GroupingAware = true
+
+	for _, test := range []struct {
+		name string
+		op   vm.Operator
+	}{
+		{name: "projection", op: projectionOp},
+		{name: "group", op: groupOp},
+		{name: "merge group", op: mergeGroupOp},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			scope := &Scope{Proc: proc, RootOp: test.op}
+			rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion46)
+			data, err := encodeRemoteScope(scope, proc)
+			require.NoError(t, err)
+
+			rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion45)
+			_, err = encodeRemoteScope(scope, proc)
+			require.ErrorContains(t, err, "MORPC protocol version 46")
+			_, err = decodeScope(data, proc, true, nil)
+			require.ErrorContains(t, err, "MORPC protocol version 46")
+		})
+	}
+}
+
+func TestGroupingSetRemoteProtocolValidationRecursesAndIgnoresLegacyGrouping(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	rt := moruntime.ServiceRuntime(proc.GetService())
+	previous, hadPrevious := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
+	t.Cleanup(func() {
+		if hadPrevious {
+			rt.SetGlobalVariables(moruntime.MOProtocolVersion, previous)
+		} else {
+			rt.CompareAndDeleteGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion46)
+		}
+	})
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion45)
+
+	legacy := &pipeline.Pipeline{InstructionList: []*pipeline.Instruction{{
+		Agg: &pipeline.Group{GroupingFlag: []bool{true, false}},
+	}}}
+	require.NoError(t, validateRemoteGroupingSetPipelineProtocol(proc, legacy))
+
+	nested := &pipeline.Pipeline{Children: []*pipeline.Pipeline{{
+		InstructionList: []*pipeline.Instruction{{ProjectionGroupingSetCount: 2}},
+	}}}
+	require.ErrorContains(t,
+		validateRemoteGroupingSetPipelineProtocol(proc, nested),
+		"MORPC protocol version 46")
+
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion46)
+	require.NoError(t, validateRemoteGroupingSetPipelineProtocol(proc, nested))
+}
+
 func TestExternalScanIcebergRuntimeRoundtrip(t *testing.T) {
 	ctx := &scopeContext{
 		id:     1,
