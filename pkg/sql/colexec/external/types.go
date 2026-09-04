@@ -78,7 +78,11 @@ type ExParamConst struct {
 	FileOffset      []int64
 	FileOffsetTotal []*pipeline.FileOffset
 	// Optional Parquet row group shards. Empty means whole-file scan.
-	ParquetRowGroupShards       []*pipeline.ParquetRowGroupShard
+	ParquetRowGroupShards []*pipeline.ParquetRowGroupShard
+	// ParquetWholeFileFanout is set only on an admitted Parquet LOAD scope
+	// created by the compiler's whole-file fanout path. It is distinct from a
+	// requested-but-serial LOAD, which must retain the regular S3 prefetch path.
+	ParquetWholeFileFanout      bool
 	IcebergDataTasks            []*pipeline.IcebergDataFileTask
 	IcebergDeleteTasks          []*pipeline.IcebergDeleteFileTask
 	IcebergColumns              []*pipeline.IcebergColumnMapping
