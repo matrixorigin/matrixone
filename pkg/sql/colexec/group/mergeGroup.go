@@ -60,6 +60,27 @@ func (mergeGroup *MergeGroup) Prepare(proc *process.Process) error {
 	mergeGroup.ctr.keyWidth = 0
 	mergeGroup.ctr.mtyp = 0
 	mergeGroup.ctr.setGroupByHashKey(mergeGroup.GroupByHashKey)
+	if mergeGroup.EmptyGroupingSet || len(mergeGroup.EmptyGroupingSetIDs) > 0 {
+		if !mergeGroup.GroupingAware || len(mergeGroup.GroupByTypes) == 0 ||
+			(mergeGroup.EmptyGroupingSet && len(mergeGroup.EmptyGroupingSetIDs) > 0) {
+			return moerr.NewInternalErrorNoCtx(
+				"invalid empty grouping-set merge metadata")
+		}
+		if len(mergeGroup.EmptyGroupingSetIDs) > 0 &&
+			(len(mergeGroup.GroupByTypes) < 2 ||
+				mergeGroup.GroupByTypes[len(mergeGroup.GroupByTypes)-1].Oid != types.T_int64) {
+			return moerr.NewInternalErrorNoCtx(
+				"invalid empty grouping-set merge metadata")
+		}
+		previous := int64(-1)
+		for _, setID := range mergeGroup.EmptyGroupingSetIDs {
+			if setID <= previous {
+				return moerr.NewInternalErrorNoCtx(
+					"empty grouping-set ids must be strictly increasing")
+			}
+			previous = setID
+		}
+	}
 
 	if mergeGroup.OpAnalyzer != nil {
 		mergeGroup.OpAnalyzer.Reset()
@@ -126,6 +147,9 @@ func (mergeGroup *MergeGroup) Call(proc *process.Process) (vm.CallResult, error)
 			if err, isCancel := vm.CancelCheck(proc); isCancel {
 				return vm.CancelResult, err
 			}
+			if err := mergeGroup.ensureRuntimeEmptyGroupingSets(); err != nil {
+				return vm.CancelResult, err
+			}
 		}
 
 		// has partial results, merge them.
@@ -177,6 +201,51 @@ func (mergeGroup *MergeGroup) Call(proc *process.Process) (vm.CallResult, error)
 		return vm.CancelResult, nil
 	}
 	return vm.CancelResult, moerr.NewInternalError(proc.Ctx, "bug: unknown merge group state")
+}
+
+// ensureRuntimeEmptyGroupingSets makes the final merge boundary the owner of
+// SQL's empty-input grouping-set semantics. Local Group or projection
+// operators normally emit a key-only partial for an all-rolled grouping set,
+// but a distributed scan can produce no partial pipeline at all. In that
+// topology the final merge must still publish one empty aggregate state for
+// every declared empty set.
+func (mergeGroup *MergeGroup) ensureRuntimeEmptyGroupingSets() error {
+	ctr := &mergeGroup.ctr
+	if (!mergeGroup.EmptyGroupingSet && len(mergeGroup.EmptyGroupingSetIDs) == 0) ||
+		ctr.mergePartialMetadataSet || len(ctr.groupByBatches) > 0 || ctr.isSpilling() {
+		return nil
+	}
+
+	ctr.groupByTypes = append(ctr.groupByTypes[:0], mergeGroup.GroupByTypes...)
+	setIDs := mergeGroup.EmptyGroupingSetIDs
+	rows := len(setIDs)
+	if mergeGroup.EmptyGroupingSet {
+		setIDs = nil
+		rows = 1
+	}
+	output, err := ctr.newRuntimeEmptyGroupingSetBatch(
+		mergeGroup.GroupByTypes, setIDs)
+	if err != nil {
+		return err
+	}
+
+	ctr.mtyp = HStr
+	ctr.groupingAware = true
+	aggs, err := ctr.makeAggList(mergeGroup.Aggs)
+	if err != nil {
+		output.Clean(ctr.mp)
+		return err
+	}
+	for _, agg := range aggs {
+		if err = agg.GroupGrow(rows); err != nil {
+			freeAggList(aggs)
+			output.Clean(ctr.mp)
+			return err
+		}
+	}
+	ctr.aggList = aggs
+	ctr.groupByBatches = append(ctr.groupByBatches, output)
+	return nil
 }
 
 func (mergeGroup *MergeGroup) buildOneBatch(proc *process.Process, bat *batch.Batch) (bool, error) {

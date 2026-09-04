@@ -2117,6 +2117,7 @@ func constructDispatch(idx int, target []*Scope, source *Scope, node *plan.Node,
 
 func constructMergeGroup(
 	node *plan.Node,
+	childNode *plan.Node,
 	aggs []aggexec.AggFuncExecExpression,
 	groupingAware bool,
 ) *group.MergeGroup {
@@ -2127,6 +2128,39 @@ func constructMergeGroup(
 	arg.Aggs = aggs
 	arg.GroupByHashKey = node.GroupByHashKey
 	arg.GroupingAware = groupingAware
+	if groupingSetCount, ok := plan2.DecodeGroupingSetExpandOption(childNode.ExtraOptions); ok {
+		groupCount := len(childNode.GroupingFlag) / groupingSetCount
+		if groupCount > 0 && len(childNode.GroupingFlag) == groupingSetCount*groupCount &&
+			len(node.GroupBy) == groupCount+1 {
+			for set := 0; set < groupingSetCount; set++ {
+				active := false
+				for key := 0; key < groupCount; key++ {
+					if childNode.GroupingFlag[set*groupCount+key] {
+						active = true
+						break
+					}
+				}
+				if !active {
+					arg.EmptyGroupingSetIDs = append(arg.EmptyGroupingSetIDs, int64(set))
+				}
+			}
+		}
+	} else if len(node.GroupingFlag) == len(node.GroupBy) && len(node.GroupBy) > 0 {
+		arg.EmptyGroupingSet = true
+		for _, active := range node.GroupingFlag {
+			if active {
+				arg.EmptyGroupingSet = false
+				break
+			}
+		}
+	}
+	if arg.EmptyGroupingSet || len(arg.EmptyGroupingSetIDs) > 0 {
+		arg.GroupByTypes = make([]types.Type, len(node.GroupBy))
+		for i, expr := range node.GroupBy {
+			arg.GroupByTypes[i] = types.NewWithCharset(
+				types.T(expr.Typ.Id), expr.Typ.Width, expr.Typ.Scale, uint8(expr.Typ.Charset))
+		}
+	}
 	return arg
 }
 

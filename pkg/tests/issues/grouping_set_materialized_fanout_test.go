@@ -63,6 +63,31 @@ func TestGroupingSetMaterializedFanoutWithLazyUnion(t *testing.T) {
 		execSQLRequire(t, ctx, db, "insert into grouping_nested values (1), (null)")
 		execSQLRequire(t, ctx, db, "analyze table grouping_source, grouping_dim_1")
 		execSQLRequire(t, ctx, db, "analyze table grouping_nested")
+		execSQLRequire(t, ctx, db, "create table grouping_empty (a int, b int, v int)")
+		execSQLRequire(t, ctx, db,
+			"insert into grouping_empty select result, result % 10, result from generate_series(1, 1000) g")
+		execSQLRequire(t, ctx, db, "delete from grouping_empty")
+
+		const emptyGrouping = `select a, b, count(*) as c, sum(v) as s, grouping(a,b) as g
+			from grouping_empty
+			group by grouping sets ((a,b),(a),())
+			order by g,a,b`
+		var emptyA, emptyB, emptySum sql.NullInt64
+		var emptyCount, emptyGroupingID int64
+		emptyRows, err := db.QueryContext(ctx, emptyGrouping)
+		require.NoError(t, err)
+		defer emptyRows.Close()
+		require.True(t, emptyRows.Next())
+		require.NoError(t, emptyRows.Scan(
+			&emptyA, &emptyB, &emptyCount, &emptySum, &emptyGroupingID))
+		require.False(t, emptyA.Valid)
+		require.False(t, emptyB.Valid)
+		require.Zero(t, emptyCount)
+		require.False(t, emptySum.Valid)
+		require.Equal(t, int64(3), emptyGroupingID)
+		require.False(t, emptyRows.Next())
+		require.NoError(t, emptyRows.Err())
+		require.NoError(t, emptyRows.Close())
 
 		const nestedGrouping = `select d.k, count(*)
 			from (select k from grouping_nested group by rollup(k)) d

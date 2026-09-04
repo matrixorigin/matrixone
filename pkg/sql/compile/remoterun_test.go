@@ -558,11 +558,32 @@ func TestRemoteRunOperatorCodecRoundTrip(t *testing.T) {
 	t.Run("MergeGroupByHashKey", func(t *testing.T) {
 		original := group.NewArgumentMergeGroup()
 		original.GroupByHashKey = []int32{1}
-		original.GroupingAware = true
 		restored := roundTrip(t, original)
 		defer restored.Release()
 		require.Equal(t, original.GroupByHashKey, restored.(*group.MergeGroup).GroupByHashKey)
+	})
+
+	t.Run("MergeGroupGroupingSetMetadata", func(t *testing.T) {
+		original := group.NewArgumentMergeGroup()
+		original.GroupingAware = true
+		original.GroupByTypes = []types.Type{types.T_varchar.ToType(), types.T_int64.ToType()}
+		original.EmptyGroupingSetIDs = []int64{1, 3}
+		restored := roundTrip(t, original)
+		defer restored.Release()
 		require.True(t, restored.(*group.MergeGroup).GroupingAware)
+		require.Equal(t, original.GroupByTypes, restored.(*group.MergeGroup).GroupByTypes)
+		require.Equal(t, original.EmptyGroupingSetIDs, restored.(*group.MergeGroup).EmptyGroupingSetIDs)
+	})
+
+	t.Run("MergeGroupLegacyEmptyGroupingSetMetadata", func(t *testing.T) {
+		original := group.NewArgumentMergeGroup()
+		original.GroupingAware = true
+		original.GroupByTypes = []types.Type{types.T_int32.ToType()}
+		original.EmptyGroupingSet = true
+		restored := roundTrip(t, original)
+		defer restored.Release()
+		require.True(t, restored.(*group.MergeGroup).EmptyGroupingSet)
+		require.Equal(t, original.GroupByTypes, restored.(*group.MergeGroup).GroupByTypes)
 	})
 
 	t.Run("SharedTableLock", func(t *testing.T) {
@@ -1408,6 +1429,10 @@ func TestGroupingSetRemoteProtocolValidationAtSendAndReceiveBoundaries(t *testin
 	groupOp.DynamicGrouping = true
 	mergeGroupOp := group.NewArgumentMergeGroup()
 	mergeGroupOp.GroupingAware = true
+	legacyEmptyMergeGroupOp := group.NewArgumentMergeGroup()
+	legacyEmptyMergeGroupOp.EmptyGroupingSet = true
+	dynamicEmptyMergeGroupOp := group.NewArgumentMergeGroup()
+	dynamicEmptyMergeGroupOp.EmptyGroupingSetIDs = []int64{1}
 
 	for _, test := range []struct {
 		name string
@@ -1416,6 +1441,8 @@ func TestGroupingSetRemoteProtocolValidationAtSendAndReceiveBoundaries(t *testin
 		{name: "projection", op: projectionOp},
 		{name: "group", op: groupOp},
 		{name: "merge group", op: mergeGroupOp},
+		{name: "legacy empty merge group", op: legacyEmptyMergeGroupOp},
+		{name: "dynamic empty merge group", op: dynamicEmptyMergeGroupOp},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			scope := &Scope{Proc: proc, RootOp: test.op}
