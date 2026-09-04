@@ -183,12 +183,22 @@ the newly analyzed columns' NDV, null count, logical size, and type. After all
 requested columns succeed, GlobalStats clones that object and replaces the
 local cache entry under the table generation captured after subscription.
 Cleanup or resubscription crossing that boundary rejects the publication.
+The completed generation carries an explicit manual-analysis marker, so both
+frontend and internal-SQL compiler caches recognize it as optimizer-usable
+without misrepresenting the metadata-derived accurate-object count.
 
 The previous cache entry is not an input to the new generation. In particular,
 unselected column maps and metadata-derived min/max or shuffle maps are not
 retained beside the new row count. Their absence invokes existing optimizer
 fallback behavior instead of presenting mixed-epoch values as one coherent
 observation.
+
+When the retained sample covers every visible row, ANALYZE also publishes exact
+min/max values for supported ordered types. A partial sample deliberately omits
+sample extrema: treating inward-biased sample bounds as the table domain would
+make tail predicates appear impossibly selective. Compatible lower and upper
+bounds on a regular index are still combined into one bounded lookup without
+requiring range metadata.
 
 This version is CN-local and memory-resident. A restart, cache refresh, or later
 automatic metadata refresh may replace it. There is no catalog schema, upgrade

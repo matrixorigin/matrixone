@@ -32,6 +32,7 @@ import (
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	analyzestats "github.com/matrixorigin/matrixone/pkg/statistics/analyze"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"go.uber.org/zap"
 )
@@ -60,6 +61,7 @@ type analyzeColumnState struct {
 	sampleNulls uint64
 	sampleBytes uint64
 	canonical   []byte
+	zoneMap     index.ZM
 }
 
 var _ engine.AnalyzableRelation = (*txnTable)(nil)
@@ -168,6 +170,7 @@ func (tbl *txnTable) AnalyzeTable(
 					types.T(column.Typ.Id), column.Typ.Width, column.Typ.Scale),
 				ndv: ndv,
 			}
+			states[i].zoneMap = index.NewZM(states[i].typ.Oid, states[i].typ.Scale)
 		}
 		passRows, passBytes, err := tbl.scanAnalyzeColumnGroup(
 			ctx, proc, selectedData, selected, states, request.Seed)
@@ -186,7 +189,8 @@ func (tbl *txnTable) AnalyzeTable(
 		}
 		result.SampleBytes += passBytes
 		if err = finalizeAnalyzeColumns(
-			stats, states, populationRows, passRows, qBlocks); err != nil {
+			stats, states, populationRows, passRows, qBlocks,
+			q.Numerator == q.Denominator); err != nil {
 			return nil, err
 		}
 	}
@@ -462,6 +466,7 @@ func (tbl *txnTable) scanAnalyzeColumnGroup(
 						}
 					}
 					if retainRow {
+						index.UpdateZM(states[columnIndex].zoneMap, raw)
 						if observeErr := states[columnIndex].ndv.ObserveSampleValue(valueHash); observeErr != nil &&
 							!errors.Is(observeErr, analyzestats.ErrAccumulatorLimit) {
 							_ = reader.Close()
@@ -500,6 +505,7 @@ func finalizeAnalyzeColumns(
 	populationRows uint64,
 	sampleRows uint64,
 	blockSample analyzestats.Fraction,
+	fullCoverage bool,
 ) error {
 	if populationRows > 0 && sampleRows == 0 {
 		return moerr.NewInternalErrorNoCtx("ANALYZE retained no visible sample rows")
@@ -529,6 +535,14 @@ func finalizeAnalyzeColumns(
 		stats.NullCntMap[state.name] = nullCount
 		stats.SizeMap[state.name] = scaleSampleRatio(state.sampleBytes, sampleRows, populationRows)
 		stats.DataTypeMap[state.name] = uint64(state.typ.Oid)
+		if fullCoverage && state.zoneMap != nil && state.zoneMap.IsInited() {
+			minValue, minOK := tryGetMinMaxValueByFloat64(state.typ, state.zoneMap.GetMinBuf())
+			maxValue, maxOK := tryGetMinMaxValueByFloat64(state.typ, state.zoneMap.GetMaxBuf())
+			if minOK && maxOK {
+				stats.MinValMap[state.name] = minValue
+				stats.MaxValMap[state.name] = maxValue
+			}
+		}
 	}
 	return nil
 }

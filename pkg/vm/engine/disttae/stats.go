@@ -1574,7 +1574,9 @@ func newAnalyzedStatsGeneration(collected *pb.StatsInfo) *pb.StatsInfo {
 	if collected == nil {
 		return nil
 	}
-	return proto.Clone(collected).(*pb.StatsInfo)
+	published := proto.Clone(collected).(*pb.StatsInfo)
+	published.ManualAnalyzed = true
+	return published
 }
 
 // publishStatsForGeneration replaces the cache only while the exact table
@@ -1654,47 +1656,59 @@ func (gs *GlobalStats) executeStatsUpdate(ctx context.Context, ps *logtailreplay
 }
 
 func getMinMaxValueByFloat64(typ types.Type, buf []byte) float64 {
+	value, ok := tryGetMinMaxValueByFloat64(typ, buf)
+	if !ok {
+		panic("unsupported type")
+	}
+	return value
+}
+
+func tryGetMinMaxValueByFloat64(typ types.Type, buf []byte) (float64, bool) {
 	switch typ.Oid {
 	case types.T_bit:
-		return float64(types.DecodeUint64(buf))
+		return float64(types.DecodeUint64(buf)), true
 	case types.T_int8:
-		return float64(types.DecodeInt8(buf))
+		return float64(types.DecodeInt8(buf)), true
 	case types.T_int16:
-		return float64(types.DecodeInt16(buf))
+		return float64(types.DecodeInt16(buf)), true
 	case types.T_int32:
-		return float64(types.DecodeInt32(buf))
+		return float64(types.DecodeInt32(buf)), true
 	case types.T_int64:
-		return float64(types.DecodeInt64(buf))
+		return float64(types.DecodeInt64(buf)), true
 	case types.T_uint8:
-		return float64(types.DecodeUint8(buf))
+		return float64(types.DecodeUint8(buf)), true
 	case types.T_uint16:
-		return float64(types.DecodeUint16(buf))
+		return float64(types.DecodeUint16(buf)), true
 	case types.T_uint32:
-		return float64(types.DecodeUint32(buf))
+		return float64(types.DecodeUint32(buf)), true
 	case types.T_uint64:
-		return float64(types.DecodeUint64(buf))
+		return float64(types.DecodeUint64(buf)), true
+	case types.T_float32:
+		return float64(types.DecodeFloat32(buf)), true
+	case types.T_float64:
+		return types.DecodeFloat64(buf), true
 	case types.T_date:
-		return float64(types.DecodeDate(buf))
+		return float64(types.DecodeDate(buf)), true
 	case types.T_time:
-		return float64(types.DecodeTime(buf))
+		return float64(types.DecodeTime(buf)), true
 	case types.T_timestamp:
-		return float64(types.DecodeTimestamp(buf))
+		return float64(types.DecodeTimestamp(buf)), true
 	case types.T_datetime:
-		return float64(types.DecodeDatetime(buf))
+		return float64(types.DecodeDatetime(buf)), true
 	case types.T_year:
-		return float64(types.DecodeMoYear(buf))
+		return float64(types.DecodeMoYear(buf)), true
+	case types.T_char, types.T_varchar, types.T_text, types.T_datalink:
+		return float64(plan2.ByteSliceToUint64(buf)), true
 	case types.T_decimal64:
 		// Fix: Use Decimal64ToFloat64 to handle negative values correctly
 		dec := types.DecodeDecimal64(buf)
-		return types.Decimal64ToFloat64(dec, typ.Scale)
+		return types.Decimal64ToFloat64(dec, typ.Scale), true
 	case types.T_decimal128:
 		// Fix: Use Decimal128ToFloat64 to handle negative values correctly
 		dec := types.DecodeDecimal128(buf)
-		return types.Decimal128ToFloat64(dec, typ.Scale)
-	//case types.T_char, types.T_varchar, types.T_text:
-	//return float64(plan2.ByteSliceToUint64(buf)), true
+		return types.Decimal128ToFloat64(dec, typ.Scale), true
 	default:
-		panic("unsupported type")
+		return 0, false
 	}
 }
 

@@ -24,6 +24,7 @@ import (
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	analyzestats "github.com/matrixorigin/matrixone/pkg/statistics/analyze"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 	"github.com/stretchr/testify/require"
 )
 
@@ -100,21 +101,37 @@ func TestFinalizeAnalyzeColumnsUsesVisiblePopulationBounds(t *testing.T) {
 	require.NoError(t, accumulator.ObserveSampleValue(a))
 	require.NoError(t, accumulator.ObserveSampleValue(a))
 	require.NoError(t, accumulator.ObserveSampleValue(b))
+	zoneMap := index.NewZM(types.T_int64, 0)
+	minValue := int64(-5)
+	maxValue := int64(12)
+	index.UpdateZM(zoneMap, types.EncodeInt64(&minValue))
+	index.UpdateZM(zoneMap, types.EncodeInt64(&maxValue))
 
 	stats := plan2.NewStatsInfo()
 	err := finalizeAnalyzeColumns(stats, []analyzeColumnState{{
 		name: "c", typ: types.T_int64.ToType(), ndv: accumulator,
-		sampleNulls: 1, sampleBytes: 24,
-	}}, 100, 4, analyzestats.MustFraction(1, 2))
+		sampleNulls: 1, sampleBytes: 24, zoneMap: zoneMap,
+	}}, 100, 4, analyzestats.MustFraction(1, 2), false)
 	require.NoError(t, err)
 	require.Equal(t, uint64(25), stats.NullCntMap["c"])
 	require.Equal(t, uint64(600), stats.SizeMap["c"])
 	require.Equal(t, float64(4), stats.NdvMap["c"])
 	require.Equal(t, uint64(types.T_int64), stats.DataTypeMap["c"])
+	require.Empty(t, stats.MinValMap, "partial sample extrema are not table bounds")
+	require.Empty(t, stats.MaxValMap, "partial sample extrema are not table bounds")
+
+	fullStats := plan2.NewStatsInfo()
+	err = finalizeAnalyzeColumns(fullStats, []analyzeColumnState{{
+		name: "c", typ: types.T_int64.ToType(), ndv: accumulator,
+		sampleNulls: 1, sampleBytes: 24, zoneMap: zoneMap,
+	}}, 100, 4, analyzestats.MustFraction(1, 2), true)
+	require.NoError(t, err)
+	require.Equal(t, float64(minValue), fullStats.MinValMap["c"])
+	require.Equal(t, float64(maxValue), fullStats.MaxValMap["c"])
 
 	err = finalizeAnalyzeColumns(plan2.NewStatsInfo(), []analyzeColumnState{{
 		name: "c", typ: types.T_int64.ToType(), ndv: analyzestats.NewNDVAccumulator(1),
-	}}, 1, 0, analyzestats.MustFraction(1, 1))
+	}}, 1, 0, analyzestats.MustFraction(1, 1), true)
 	require.Error(t, err)
 }
 
@@ -131,7 +148,7 @@ func TestFinalizeAnalyzeColumnsFailsClosedOnIncidenceOverflow(t *testing.T) {
 	stats := plan2.NewStatsInfo()
 	err := finalizeAnalyzeColumns(stats, []analyzeColumnState{{
 		name: "c", typ: types.T_int64.ToType(), ndv: accumulator,
-	}}, 10, 1, analyzestats.MustFraction(1, 2))
+	}}, 10, 1, analyzestats.MustFraction(1, 2), false)
 	require.ErrorIs(t, err, analyzestats.ErrAccumulatorLimit)
 	_, published := stats.NdvMap["c"]
 	require.False(t, published)
@@ -163,6 +180,8 @@ func TestNewAnalyzedStatsGenerationDoesNotMixEpochs(t *testing.T) {
 	src.DataTypeMap["a"] = uint64(types.T_int64)
 
 	published := newAnalyzedStatsGeneration(src)
+	require.True(t, published.ManualAnalyzed)
+	require.True(t, published.IsUsableForOptimizer())
 	require.Equal(t, float64(100), published.TableCnt)
 	require.Equal(t, int64(7), published.BlockNumber)
 	require.Equal(t, float64(40), published.NdvMap["a"])

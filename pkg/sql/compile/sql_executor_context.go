@@ -156,12 +156,11 @@ func (c *compilerContext) Stats(obj *plan.ObjectRef, snapshot *plan.Snapshot) (*
 
 	tableID := uint64(obj.Obj)
 
-	// Fast path: return cached result if visited within 3 seconds AND stats is valid
-	// Stats is valid if AccurateObjectNumber > 0 (meaning we have real data)
+	// Fast path: return a recently visited real metadata or manual-ANALYZE result.
 	if w := c.GetStatsCache().Get(tableID); w.Exists() {
 		if time.Now().Unix()-w.GetLastVisit() < 3 {
 			s := w.GetStats()
-			if s != nil && s.AccurateObjectNumber > 0 {
+			if s.IsUsableForOptimizer() {
 				return s, nil
 			}
 			// Stats is nil or empty, need to re-check
@@ -202,7 +201,7 @@ func (c *compilerContext) doStatsHeavyWork(obj *plan.ObjectRef, snapshot *plan.S
 	if err != nil {
 		return nil, err
 	}
-	if stats != nil && stats.AccurateObjectNumber > 0 {
+	if stats.IsUsableForOptimizer() {
 		return stats, nil
 	}
 	// Return nil for empty table, calcScanStats will use DefaultStats()

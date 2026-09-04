@@ -66,6 +66,7 @@ message StatsInfo {
   double TableCnt = 11;
   string TableName = 12;
   reserved 13;
+  bool ManualAnalyzed = 14;
 //  int64 TimeSecond = 13;
 }
 

@@ -28,6 +28,13 @@ type StatsInfoKeyWithContext struct {
 	Key StatsInfoKey
 }
 
+// IsUsableForOptimizer distinguishes real statistics from placeholder cache
+// entries. Metadata collection proves this with an accurate object count;
+// manual ANALYZE proves it by publishing a completed sampled-value generation.
+func (sc *StatsInfo) IsUsableForOptimizer() bool {
+	return sc != nil && (sc.AccurateObjectNumber > 0 || sc.ManualAnalyzed)
+}
+
 func (sc *StatsInfo) Merge(newInfo *StatsInfo) {
 	if sc == nil || newInfo == nil {
 		return
