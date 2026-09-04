@@ -53,6 +53,7 @@ import (
 var _ plan2.CompilerContext = &TxnCompilerContext{}
 var _ plan2.TableDefStatsCompilerContext = &TxnCompilerContext{}
 var _ plan2.ViewDependencyIdentityResolver = &TxnCompilerContext{}
+var _ plan2.SubscriptionMetadataProvider = &TxnCompilerContext{}
 
 // resolveUdfInCallerTxnKey asks ResolveUdf to use the transaction that is
 // compiling the statement. Clone restores function metadata and dependent
@@ -1345,6 +1346,216 @@ func (tcc *TxnCompilerContext) GetSubscriptionMeta(dbName string, snapshot *plan
 	bh := tcc.getOrCreateBackExec(tempCtx)
 	bh.ClearExecResultSet()
 	return getSubscriptionMeta(tempCtx, dbName, tcc.GetSession(), txn, bh)
+}
+
+// GetSubscriptionMetadata returns every active subscription schema visible to
+// the current active-role closure. Publication membership establishes which
+// publisher objects may be scanned, while this method establishes the
+// subscriber-local RBAC boundary before any publisher catalog is accessed.
+func (tcc *TxnCompilerContext) GetSubscriptionMetadata(
+	snapshot *plan2.Snapshot,
+	maxCandidates int,
+) ([]*plan2.SubscriptionMetadata, error) {
+	tempCtx := tcc.execCtx.reqCtx
+	txn := tcc.GetTxnHandler().GetTxn()
+	var bh BackgroundExec
+	if plan2.IsSnapshotValid(snapshot) && snapshot.TS.Less(txn.Txn().SnapshotTS) {
+		txn = txn.CloneSnapshotOp(*snapshot.TS)
+		if snapshot.Tenant != nil {
+			tempCtx = context.WithValue(tempCtx, defines.TenantIDKey{}, snapshot.Tenant.TenantID)
+		}
+
+		// The cached executor intentionally follows the session transaction. Use a
+		// short-lived shared executor for historical metadata so the mo_subs branch
+		// set and every catalog branch are read at the same snapshot.
+		ses := tcc.execCtx.ses
+		bh = ses.InitBackExec(txn, ses.GetDatabaseName(), fakeDataSetFetcher2)
+		if back, ok := bh.(*backExec); ok {
+			back.backSes.ReplaceDerivedStmt(true)
+		}
+		defer bh.Close()
+	} else {
+		bh = tcc.getOrCreateBackExec(tempCtx)
+	}
+
+	bh.ClearExecResultSet()
+	subInfos, err := getActiveSubInfosFromSubBounded(tempCtx, bh, maxCandidates)
+	if err != nil {
+		return nil, err
+	}
+
+	metas, err := subscriptionMetasFromSubInfos(tempCtx, subInfos)
+	if err != nil {
+		return nil, err
+	}
+	return getVisibleSubscriptionMetadata(
+		tempCtx, bh, metas, currentProtocolVersion(tcc.GetProcess()),
+	)
+}
+
+func subscriptionMetasFromSubInfos(
+	ctx context.Context,
+	subInfos []*pubsub.SubInfo,
+) ([]*plan.SubscriptionMeta, error) {
+	metas := make([]*plan.SubscriptionMeta, 0, len(subInfos))
+	for _, subInfo := range subInfos {
+		if err := context.Cause(ctx); err != nil {
+			return nil, err
+		}
+		if subInfo == nil || subInfo.Status != pubsub.SubStatusNormal || subInfo.SubName == "" {
+			continue
+		}
+		metas = append(metas, &plan.SubscriptionMeta{
+			Name:        subInfo.PubName,
+			AccountId:   subInfo.PubAccountId,
+			DbName:      subInfo.PubDbName,
+			AccountName: subInfo.PubAccountName,
+			SubName:     subInfo.SubName,
+			Tables:      subInfo.PubTables,
+		})
+	}
+	slices.SortFunc(metas, func(left, right *plan.SubscriptionMeta) int {
+		return cmp.Compare(strings.ToLower(left.SubName), strings.ToLower(right.SubName))
+	})
+	if err := context.Cause(ctx); err != nil {
+		return nil, err
+	}
+	return metas, nil
+}
+
+func getVisibleSubscriptionMetadata(
+	ctx context.Context,
+	bh BackgroundExec,
+	metas []*plan.SubscriptionMeta,
+	protocolVersion int64,
+) ([]*plan2.SubscriptionMetadata, error) {
+	if err := context.Cause(ctx); err != nil {
+		return nil, err
+	}
+	if len(metas) == 0 {
+		return nil, nil
+	}
+
+	metadataByName := make(map[string]*plan2.SubscriptionMetadata, len(metas))
+	names := make([]string, 0, len(metas))
+	for _, meta := range metas {
+		if err := context.Cause(ctx); err != nil {
+			return nil, err
+		}
+		if meta == nil || meta.SubName == "" {
+			continue
+		}
+		metadataByName[meta.SubName] = &plan2.SubscriptionMetadata{Meta: meta}
+		names = append(names, escapeSQLString(meta.SubName))
+	}
+	if len(names) == 0 {
+		return nil, nil
+	}
+
+	slices.Sort(names)
+	if err := context.Cause(ctx); err != nil {
+		return nil, err
+	}
+	visibilitySQL := subscriptionMetadataVisibilitySQL(strings.Join(names, ","), protocolVersion)
+	bh.ClearExecResultSet()
+	if err := bh.Exec(ctx, visibilitySQL); err != nil {
+		return nil, err
+	}
+	results, err := getResultSet(ctx, bh)
+	if err != nil {
+		return nil, err
+	}
+	for _, result := range results {
+		for row := uint64(0); row < result.GetRowCount(); row++ {
+			if err := context.Cause(ctx); err != nil {
+				return nil, err
+			}
+			subscriptionName, getErr := result.GetString(ctx, row, 0)
+			if getErr != nil {
+				return nil, getErr
+			}
+			metadata := metadataByName[subscriptionName]
+			if metadata == nil {
+				continue
+			}
+			allTables, getErr := result.GetInt64(ctx, row, 1)
+			if getErr != nil {
+				return nil, getErr
+			}
+			if allTables != 0 {
+				metadata.AllTablesVisible = true
+				metadata.VisibleTableIDs = nil
+				continue
+			}
+		}
+	}
+	visible := make([]*plan2.SubscriptionMetadata, 0, len(metas))
+	for _, meta := range metas {
+		if err := context.Cause(ctx); err != nil {
+			return nil, err
+		}
+		if meta == nil {
+			continue
+		}
+		metadata := metadataByName[meta.SubName]
+		if metadata == nil ||
+			(!metadata.AllTablesVisible && len(metadata.VisibleTableIDs) == 0) {
+			continue
+		}
+		slices.Sort(metadata.VisibleTableIDs)
+		metadata.VisibleTableIDs = slices.Compact(metadata.VisibleTableIDs)
+		visible = append(visible, metadata)
+	}
+	return visible, nil
+}
+
+// subscriptionMetadataVisibilitySQL mirrors the canonical
+// information_schema table visibility rules using only subscriber-local
+// objects. Subscription tables are virtual in the subscriber catalog, so the
+// supported grant surface is database/global scope; exact table grants cannot
+// be resolved there. Subscriber role IDs are never evaluated in the publisher
+// account.
+func subscriptionMetadataVisibilitySQL(subscriptionNames string, protocolVersion int64) string {
+	activeRolesSQL := "SELECT role_id FROM mo_current_roles() role_closure"
+	if protocolVersion < defines.MORPCVersion41 {
+		// Match the persisted information_schema compatibility view during a
+		// rolling deployment. The full local table-function closure is available
+		// only after every CN supports protocol v41.
+		activeRolesSQL = "SELECT current_role_id() UNION " +
+			"SELECT rg.granted_id FROM mo_catalog.mo_role_grant rg " +
+			"WHERE rg.grantee_id = current_role_id()"
+	}
+	return fmt.Sprintf(`WITH __subscription_active_roles(role_id) AS (
+    %s
+), __subscription_databases AS (
+    SELECT dat_id, datname, owner
+    FROM mo_catalog.mo_database
+    WHERE account_id = current_account_id() AND datname IN (%s)
+), __subscription_broad_visibility AS (
+    SELECT db.dat_id, db.datname
+    FROM __subscription_databases db
+    WHERE db.owner IN (SELECT role_id FROM __subscription_active_roles)
+       OR EXISTS (
+            SELECT 1
+            FROM mo_catalog.mo_role_privs rp
+            JOIN __subscription_active_roles ar ON rp.role_id = ar.role_id
+            WHERE rp.obj_type IN ('table','view') AND (
+                (rp.privilege_level = '*.*' AND rp.obj_id = 0)
+                OR (rp.privilege_level IN ('d.*','*') AND rp.obj_id = db.dat_id)
+            )
+       )
+       OR EXISTS (
+            SELECT 1
+            FROM mo_catalog.mo_role_privs rp
+            JOIN __subscription_active_roles ar ON rp.role_id = ar.role_id
+            WHERE rp.obj_type = 'database'
+              AND rp.privilege_name IN ('show tables','database all','database ownership')
+              AND ((rp.privilege_level IN ('*','*.*') AND rp.obj_id = 0)
+                   OR (rp.privilege_level = 'd' AND rp.obj_id = db.dat_id))
+       )
+)
+SELECT datname, 1 AS all_tables, 0 AS table_id
+FROM __subscription_broad_visibility`, activeRolesSQL, subscriptionNames)
 }
 
 func (tcc *TxnCompilerContext) CheckSubscriptionValid(subName, accName, pubName string) error {

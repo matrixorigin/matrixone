@@ -1182,39 +1182,15 @@ func initExecuteStmtParamWithResolverInSession(
 	if validateNamedSnapshots {
 		change = true
 	}
-	for _, obj := range preparePlan.GetSchemas() {
-		if obj.GetSubscriptionName() != "" && validateSubscriptions {
-			subscriptionChanged, err := preparedSubscriptionSchemaChanged(resolve, obj)
-			if err != nil {
-				return nil, nil, nil, "", false, err
-			}
-			if subscriptionChanged {
-				change = true
-				break
-			}
-		}
-		// A historical dependency is immutable at its captured snapshot. Newer
-		// versions of the current object must not invalidate that plan.
-		if plan2.IsSnapshotValid(obj.GetSnapshot()) {
-			continue
-		}
-		accountId := prepareSchemaAccountID(owner.GetAccountId(), obj)
-		tblKey := &cache.TableChangeQuery{
-			AccountId:    accountId,
-			DatabaseId:   uint64(obj.Db),
-			DatabaseName: obj.SchemaName,
-			Name:         obj.ObjName,
-			Version:      uint32(obj.Server),
-			TableId:      uint64(obj.Obj),
-			Ts:           prepareStmt.Ts,
-		}
-
-		if CheckTableDefChange(catalogCache, tblKey) {
-			change = true
-			break
-		}
+	rebuildEveryExecute := shouldRebuildPreparePlan(false, executionPlan)
+	schemaChanged, schemasValidated, err := validateCapturedPrepareSchemas(
+		owner.GetAccountId(), preparePlan.GetSchemas(), resolve, catalogCache,
+		prepareStmt.Ts, validateSubscriptions, rebuildEveryExecute)
+	if err != nil {
+		return nil, nil, nil, "", false, err
 	}
-	if !change && validateSubscriptions {
+	change = change || schemaChanged
+	if schemasValidated && !change && validateSubscriptions {
 		prepareStmt.preparedMetadataCheckTS = preparedMetadataTS
 	}
 
@@ -1227,11 +1203,10 @@ func initExecuteStmtParamWithResolverInSession(
 		change = true
 	}
 
-	// FK-sensitive plans also depend on the current foreign_key_checks session
-	// value, which does not invalidate prepared statements. Rebuild them for
-	// every EXECUTE so both enabled->disabled and disabled->enabled transitions
-	// observe the current setting.
-	fkSensitive := shouldRebuildPreparePlan(false, preparePlan.Plan)
+	// Some plans depend on execution-time state that schema versions do not
+	// represent. FK-sensitive plans observe the current foreign_key_checks
+	// value, while subscription metadata plans expand the current visible
+	// subscription set. Rebuild both classes on every EXECUTE.
 	modeMismatch := prepareStmt.NativeMode != currentNativeMode ||
 		prepareStmt.sqlModeFlagsSet && (prepareStmt.OnlyFullGroupBy != currentOnlyFullGroupBy ||
 			prepareStmt.BoolSumAvg != currentBoolSumAvg)
@@ -1239,7 +1214,7 @@ func initExecuteStmtParamWithResolverInSession(
 	protocolMismatch := prepareStmt.protocolVersion != 0 &&
 		prepareStmt.protocolVersion != protocolVersion
 	needRebuild := prepareStmt.needsRebuild ||
-		preparePlanNeedsRebuild(change, modeMismatch, protocolMismatch) || fkSensitive ||
+		preparePlanNeedsRebuild(change, modeMismatch, protocolMismatch) || rebuildEveryExecute ||
 		!reusablePlanGenerationSupported(cwft.proc)
 	cwft.planGenerationReused = !needRebuild
 
@@ -2112,6 +2087,58 @@ func preparedNamedSnapshotsNeedValidation(
 	return false
 }
 
+// validateCapturedPrepareSchemas checks whether a reusable prepared plan still
+// addresses the same catalog objects. Plans that are rebuilt on every EXECUTE
+// must skip this validation: their captured ObjectRefs can legitimately be
+// stale after a subscription is withdrawn, and resolving those refs before the
+// rebuild would surface an obsolete authorization error instead of planning
+// against the current visible subscription set.
+func validateCapturedPrepareSchemas(
+	currentAccountID uint32,
+	schemas []*plan.ObjectRef,
+	resolve preparedSchemaResolver,
+	catalogCache *cache.CatalogCache,
+	prepareTS timestamp.Timestamp,
+	validateSubscriptions bool,
+	rebuildEveryExecute bool,
+) (changed bool, validated bool, err error) {
+	if rebuildEveryExecute {
+		return false, false, nil
+	}
+
+	for _, obj := range schemas {
+		if obj.GetSubscriptionName() != "" && validateSubscriptions {
+			subscriptionChanged, err := preparedSubscriptionSchemaChanged(resolve, obj)
+			if err != nil {
+				return false, true, err
+			}
+			if subscriptionChanged {
+				return true, true, nil
+			}
+		}
+		// A historical dependency is immutable at its captured snapshot. Newer
+		// versions of the current object must not invalidate that plan.
+		if plan2.IsSnapshotValid(obj.GetSnapshot()) {
+			continue
+		}
+		accountID := prepareSchemaAccountID(currentAccountID, obj)
+		tblKey := &cache.TableChangeQuery{
+			AccountId:    accountID,
+			DatabaseId:   uint64(obj.Db),
+			DatabaseName: obj.SchemaName,
+			Name:         obj.ObjName,
+			Version:      uint32(obj.Server),
+			TableId:      uint64(obj.Obj),
+			Ts:           prepareTS,
+		}
+
+		if CheckTableDefChange(catalogCache, tblKey) {
+			return true, true, nil
+		}
+	}
+	return false, true, nil
+}
+
 func preparedSubscriptionSchemaChanged(resolve preparedSchemaResolver, expected *plan.ObjectRef) (bool, error) {
 	if expected.GetPubInfo() == nil {
 		return true, nil
@@ -2417,7 +2444,8 @@ func shouldRebuildPreparePlan(schemaChanged bool, p *plan.Plan) bool {
 		return schemaChanged
 	}
 	query := p.GetQuery()
-	return query != nil && query.GetHasForeignKeyAction()
+	return query != nil && (query.GetHasForeignKeyAction() ||
+		plan2.PreparedPlanDependsOnSubscriptionMetadata(p))
 }
 
 func createCompile(

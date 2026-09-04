@@ -5742,7 +5742,36 @@ func checkPrivilegeObjectTypeAndPrivilegeLevelForGrant(ctx context.Context, ses 
 		// authorization objects.
 		return 0, 0, moerr.NewInvalidInputf(ctx, "cannot grant privileges on internal relation %s", pl.TabName)
 	}
-	return checkPrivilegeObjectTypeAndPrivilegeLevelWithLock(ctx, ses, bh, ot, pl, true)
+	privLevel, objID, err := checkPrivilegeObjectTypeAndPrivilegeLevelWithLock(ctx, ses, bh, ot, pl, true)
+	if err == nil || ot != tree.OBJECT_TYPE_TABLE || !isMissingPrivilegeObjectError(err) ||
+		(pl.Level != tree.PRIVILEGE_LEVEL_TYPE_DATABASE_TABLE && pl.Level != tree.PRIVILEGE_LEVEL_TYPE_TABLE) {
+		return privLevel, objID, err
+	}
+
+	// Subscription relations are resolved from the publisher catalog at query
+	// time and deliberately have no subscriber-side mo_tables row. Therefore an
+	// exact grant cannot be represented by the current mo_role_privs object key.
+	// Diagnose this explicitly instead of reporting the published relation as a
+	// missing local table. Database-wide grants remain alias-scoped through the
+	// subscriber's local mo_database row; publication table lists provide the
+	// supported table-level boundary.
+	dbName := pl.DbName
+	if pl.Level == tree.PRIVILEGE_LEVEL_TYPE_TABLE {
+		dbName = ses.GetDatabaseName()
+	}
+	if dbName == "" {
+		return privLevel, objID, err
+	}
+	_, dbType, dbTypeErr := getDbIdAndType(ctx, bh, dbName)
+	if dbTypeErr == nil && dbType == catalog.SystemDBTypeSubscription {
+		return 0, 0, moerr.NewInvalidInputf(
+			ctx,
+			`exact table grants on subscription database "%s" are unsupported; grant on "%s.*" or narrow the publication table list instead`,
+			dbName,
+			dbName,
+		)
+	}
+	return privLevel, objID, err
 }
 
 func checkPrivilegeObjectTypeAndPrivilegeLevelWithLock(

@@ -300,6 +300,26 @@ type CompilerContext interface {
 	GetLowerCaseTableNames() int64
 }
 
+// SubscriptionMetadata carries both publication membership and the
+// subscriber-local RBAC scope that was established before the planner crosses
+// into the publisher catalog. AllTablesVisible and VisibleTableIDs are
+// mutually exclusive representations of that subscriber-side scope.
+type SubscriptionMetadata struct {
+	Meta             *SubscriptionMeta
+	AllTablesVisible bool
+	VisibleTableIDs  []uint64
+}
+
+// SubscriptionMetadataProvider enumerates the active subscriptions whose
+// metadata is visible to the current account and active role closure.
+// maxCandidates is the remaining statement admission budget. Implementations
+// must fail instead of returning a partial result when more active catalog
+// candidates exist, and must bound catalog materialization to at most
+// maxCandidates+1 rows before performing visibility expansion.
+type SubscriptionMetadataProvider interface {
+	GetSubscriptionMetadata(snapshot *Snapshot, maxCandidates int) ([]*SubscriptionMetadata, error)
+}
+
 // TableDefStatsCompilerContext is an optional extension for compiler contexts
 // that can bind a statistics read to the table definition used by the plan.
 // Implementations should reject schema-bound statistics from another table
@@ -352,6 +372,26 @@ type ViewData struct {
 type QueryBuilder struct {
 	qry     *plan.Query
 	compCtx CompilerContext
+	// queryingSubscriptionMetadata is scoped to binding one account-wide
+	// subscription metadata branch. It complements CompilerContext's publisher
+	// routing state with subscriber-local table visibility.
+	queryingSubscriptionMetadata *SubscriptionMetadata
+	// subscriptionStatisticsPublisherBranches is the statement-wide admission
+	// count for publisher STATISTICS view expansions. It is reserved before an
+	// occurrence binds either its local view or any publisher view, so an
+	// over-budget statement cannot produce a partial metadata plan.
+	subscriptionStatisticsPublisherBranches int
+	// subscriptionStatisticsPublicationTableEntries and
+	// subscriptionStatisticsPublicationTableLiteralBytes account for the
+	// per-publication IN-list literals that are expanded inside each publisher
+	// branch. Branch count alone does not bound a publication containing a large
+	// explicit table list.
+	subscriptionStatisticsPublicationTableEntries      int
+	subscriptionStatisticsPublicationTableLiteralBytes int
+	// subscriptionStatisticsMetadata caches the complete, bounded visible set
+	// per requested snapshot for this QueryBuilder. Sibling STATISTICS
+	// occurrences reuse it instead of repeating catalog and RBAC enumeration.
+	subscriptionStatisticsMetadata map[string][]*SubscriptionMetadata
 
 	ctxByNode             []*BindContext
 	windowValidationScans []*plan.Node

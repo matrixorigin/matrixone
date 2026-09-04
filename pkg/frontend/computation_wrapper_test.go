@@ -2447,6 +2447,46 @@ func TestPrepareSchemaAccountID(t *testing.T) {
 	}))
 }
 
+func TestValidateCapturedPrepareSchemasSkipsPlansRebuiltEveryExecute(t *testing.T) {
+	schemas := []*plan.ObjectRef{{
+		Server:           4,
+		Db:               2,
+		Obj:              3,
+		SchemaName:       "publisher_db",
+		ObjName:          "src",
+		SubscriptionName: "sub",
+		PubInfo:          &plan.PubInfo{TenantId: 11},
+	}}
+	metadataPlan := &plan.Plan{Plan: &plan.Plan_Query{Query: &plan.Query{Nodes: []*plan.Node{{
+		OriginViews: []string{"information_schema#statistics"},
+	}}}}}
+	rebuildEveryExecute := shouldRebuildPreparePlan(false, metadataPlan)
+	require.True(t, rebuildEveryExecute)
+
+	resolveCalls := 0
+	resolve := func(
+		_, _ string,
+		_ *plan.Snapshot,
+	) (*plan.ObjectRef, *plan.TableDef, error) {
+		resolveCalls++
+		return nil, nil, assert.AnError
+	}
+	changed, validated, err := validateCapturedPrepareSchemas(
+		7, schemas, resolve, nil, timestamp.Timestamp{}, true, rebuildEveryExecute)
+	require.NoError(t, err)
+	require.False(t, changed)
+	require.False(t, validated)
+	require.Zero(t, resolveCalls,
+		"a guaranteed rebuild must not resolve stale subscription ObjectRefs")
+
+	changed, validated, err = validateCapturedPrepareSchemas(
+		7, schemas, resolve, nil, timestamp.Timestamp{}, true, false)
+	require.ErrorIs(t, err, assert.AnError)
+	require.False(t, changed)
+	require.True(t, validated)
+	require.Equal(t, 1, resolveCalls)
+}
+
 func TestPreparedSubscriptionSchemaChanged(t *testing.T) {
 	expected := &plan.ObjectRef{
 		Server: 4, Db: 2, Obj: 3, SchemaName: "publisher_db", ObjName: "src",
