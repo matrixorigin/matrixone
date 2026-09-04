@@ -64,17 +64,6 @@ func TestV406MaintenanceCleansHistoricalOrphanObjectPrivileges(t *testing.T) {
 		}()
 
 		mustExecOrphanPrivilegeUpgradeSQL(t, ctx, conn, "set role moadmin")
-		require.NoError(t, execOrphanPrivilegeUpgradeInternalSQL(
-			ctx, sqlExecutor, "drop index idx_mo_role_privs_obj_id on mo_catalog.mo_role_privs",
-		))
-		defer func() {
-			cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 30*time.Second)
-			defer cleanupCancel()
-			if err := ensureMoRolePrivsObjectIDIndex(cleanupCtx, sqlExecutor); err != nil {
-				t.Errorf("restore mo_role_privs object ID index: %v", err)
-			}
-		}()
-		require.Zero(t, countMoRolePrivsObjectIDIndexes(t, ctx, conn))
 		mustExecOrphanPrivilegeUpgradeSQL(t, ctx, conn, "create role "+roleName)
 		mustExecOrphanPrivilegeUpgradeSQL(t, ctx, conn,
 			"grant create database on account * to "+roleName)
@@ -184,13 +173,15 @@ func TestV406MaintenanceCleansHistoricalOrphanObjectPrivileges(t *testing.T) {
 					bulkDatabaseOrphanStart+bulkDatabaseOrphanCount-1,
 				)
 		}
+		var scan v4_0_6.OrphanPrivilegeScan
 		runMaintenanceStep := func(rollback bool) (bool, error) {
 			completed := false
+			nextScan := scan
 			err := sqlExecutor.ExecTxn(ctx, func(txn executor.TxnExecutor) error {
 				txn.Use(catalog.MO_CATALOG)
 				var err error
-				completed, err = v4_0_6.MaintainOrphanObjectPrivilegesPage(
-					txn, catalog.System_Account,
+				nextScan, completed, err = v4_0_6.MaintainOrphanObjectPrivilegesPage(
+					txn, catalog.System_Account, scan,
 				)
 				if err != nil {
 					return err
@@ -200,6 +191,9 @@ func TestV406MaintenanceCleansHistoricalOrphanObjectPrivileges(t *testing.T) {
 				}
 				return nil
 			}, executor.Options{}.WithDatabase(catalog.MO_CATALOG).WithWaitCommittedLogApplied())
+			if err == nil {
+				scan = nextScan
+			}
 			return completed, err
 		}
 
@@ -208,21 +202,20 @@ func TestV406MaintenanceCleansHistoricalOrphanObjectPrivileges(t *testing.T) {
 		require.False(t, completed)
 		require.ErrorIs(t, err, errRollbackOrphanPrivilegeMaintenance)
 		require.Equal(t, initialOrphans, countOrphans(),
-			"a failed page transaction must not publish partial cleanup")
-		require.Zero(t, countMoRolePrivsObjectIDIndexes(t, ctx, conn),
-			"a failed page transaction must also roll back the catalog index")
+			"a failed page transaction must not publish data or cursor progress")
+		require.Zero(t, scan)
 
 		previousOrphans := initialOrphans
 		committedSteps := 0
 		ordinaryDropDone := false
-		for {
+		for !completed && committedSteps < 20 {
 			completed, err = runMaintenanceStep(false)
 			require.NoError(t, err)
 			committedSteps++
 			remainingOrphans := countOrphans()
 			removed := previousOrphans - remainingOrphans
 			require.LessOrEqual(t, removed, int(1000),
-				"one committed transaction must contain at most one cleanup page")
+				"one committed transaction must delete only from its bounded candidate page")
 			if committedSteps == 2 {
 				mustExecOrphanPrivilegeUpgradeSQL(t, ctx, conn,
 					"drop table "+databaseName+".drop_during_maintenance")
@@ -231,18 +224,10 @@ func TestV406MaintenanceCleansHistoricalOrphanObjectPrivileges(t *testing.T) {
 				), "ordinary DROP must remain safe while bounded maintenance is in progress")
 				ordinaryDropDone = true
 			}
-			if completed {
-				break
-			}
-			if committedSteps == 1 {
-				require.Zero(t, removed, "the first pass installs the supporting index")
-			} else {
-				require.Positive(t, removed)
-			}
 			previousOrphans = remainingOrphans
 		}
-		require.Equal(t, 4, committedSteps)
-		require.Equal(t, 1, countMoRolePrivsObjectIDIndexes(t, ctx, conn))
+		require.True(t, completed)
+		require.GreaterOrEqual(t, committedSteps, 2)
 		require.Zero(t, countOrphans())
 		require.Equal(t, liveGrantCount, countRolePrivilegesByObjectIDs(
 			t, ctx, conn, roleName, liveObjectIDs,
@@ -269,7 +254,6 @@ func TestV406MaintenanceCleansHistoricalOrphanObjectPrivileges(t *testing.T) {
 		require.NoError(t, err)
 		require.True(t, completed)
 		require.Zero(t, countOrphans())
-		require.Equal(t, 1, countMoRolePrivsObjectIDIndexes(t, ctx, conn))
 	})
 }
 
@@ -288,34 +272,57 @@ func TestV406MaintenanceIsTenantLocalAndCleansLateCreatedTenant(t *testing.T) {
 		require.NoError(t, err)
 		defer sysConn.Close()
 
-		const accountName = "orphan_privilege_maintenance_27836"
+		const (
+			accountName  = "orphan_privilege_maintenance_27836"
+			snapshotName = "orphan_privilege_maintenance_snapshot_27836"
+		)
+		_, _ = sysConn.ExecContext(ctx, "drop snapshot if exists "+snapshotName)
 		_, _ = sysConn.ExecContext(ctx, "drop account if exists "+accountName)
 		defer func() {
 			cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 30*time.Second)
 			defer cleanupCancel()
+			_, _ = sysConn.ExecContext(cleanupCtx, "drop snapshot if exists "+snapshotName)
 			_, _ = sysConn.ExecContext(cleanupCtx, "drop account if exists "+accountName)
 		}()
 
 		sqlExecutor := cn.RawService().(cnservice.Service).GetSQLExecutor()
-		clean, err := runOrphanPrivilegeMaintenancePage(ctx, sqlExecutor, catalog.System_Account)
+		var systemScan v4_0_6.OrphanPrivilegeScan
+		clean, err := runOrphanPrivilegeMaintenancePage(
+			ctx, sqlExecutor, catalog.System_Account, &systemScan)
 		require.NoError(t, err)
 		require.True(t, clean, "the initial account scan must finish before the late tenant is created")
 
-		createTenant := func() (uint32, *sql.DB, *sql.Conn) {
-			mustExecOrphanPrivilegeUpgradeSQL(t, ctx, sysConn,
-				"create account "+accountName+" ADMIN_NAME 'root' IDENTIFIED BY '111'")
-			accountID := uint32(queryOrphanPrivilegeUpgradeID(t, ctx, sysConn,
-				"select account_id from mo_catalog.mo_account where account_name = '"+accountName+"'"))
+		openTenant := func() (*sql.DB, *sql.Conn) {
 			tenantDB, err := sql.Open("mysql", fmt.Sprintf(
 				"%s#root#accountadmin:111@tcp(127.0.0.1:%d)/", accountName, port,
 			))
 			require.NoError(t, err)
 			tenantConn, err := tenantDB.Conn(ctx)
 			require.NoError(t, err)
+			return tenantDB, tenantConn
+		}
+		createTenant := func() (uint32, *sql.DB, *sql.Conn) {
+			mustExecOrphanPrivilegeUpgradeSQL(t, ctx, sysConn,
+				"create account "+accountName+" ADMIN_NAME 'root' IDENTIFIED BY '111'")
+			accountID := uint32(queryOrphanPrivilegeUpgradeID(t, ctx, sysConn,
+				"select account_id from mo_catalog.mo_account where account_name = '"+accountName+"'"))
+			tenantDB, tenantConn := openTenant()
 			return accountID, tenantDB, tenantConn
 		}
 
 		accountID, tenantDB, tenantConn := createTenant()
+
+		// The catalog must remain restorable without a maintenance-only hidden
+		// index table. This is the same-account restore shape exercised by BVT.
+		mustExecOrphanPrivilegeUpgradeSQL(t, ctx, sysConn,
+			"create snapshot "+snapshotName+" for account "+accountName)
+		require.NoError(t, tenantConn.Close())
+		require.NoError(t, tenantDB.Close())
+		mustExecOrphanPrivilegeUpgradeSQL(t, ctx, sysConn,
+			"restore account "+accountName+"{snapshot='"+snapshotName+"'}")
+		tenantDB, tenantConn = openTenant()
+		mustExecOrphanPrivilegeUpgradeSQL(t, ctx, sysConn, "drop snapshot "+snapshotName)
+
 		const (
 			orphanStart = uint64(8000000000)
 			orphanCount = uint64(1001)
@@ -331,18 +338,19 @@ func TestV406MaintenanceIsTenantLocalAndCleansLateCreatedTenant(t *testing.T) {
 		)
 		require.NoError(t, err)
 		require.Equal(t, orphanCount, seeded)
-		require.Equal(t, 1, countMoRolePrivsObjectIDIndexes(t, ctx, tenantConn))
 
 		// A pass for another account must not see or delete this tenant's rows.
-		_, err = runOrphanPrivilegeMaintenancePage(ctx, sqlExecutor, catalog.System_Account)
+		_, err = runOrphanPrivilegeMaintenancePage(
+			ctx, sqlExecutor, catalog.System_Account, &systemScan)
 		require.NoError(t, err)
 		require.Equal(t, int(orphanCount), countAllRolePrivilegesByObjectIDRange(
 			t, ctx, tenantConn, orphanStart, orphanStart+orphanCount-1,
 		))
 
 		previous := int(orphanCount)
+		var tenantScan v4_0_6.OrphanPrivilegeScan
 		for pass := 0; pass < 10; pass++ {
-			clean, err = runOrphanPrivilegeMaintenancePage(ctx, sqlExecutor, accountID)
+			clean, err = runOrphanPrivilegeMaintenancePage(ctx, sqlExecutor, accountID, &tenantScan)
 			require.NoError(t, err)
 			remaining := countAllRolePrivilegesByObjectIDRange(
 				t, ctx, tenantConn, orphanStart, orphanStart+orphanCount-1,
@@ -377,8 +385,9 @@ func TestV406MaintenanceIsTenantLocalAndCleansLateCreatedTenant(t *testing.T) {
 		require.Equal(t, uint64(1), seeded)
 
 		clean = false
+		tenantScan = v4_0_6.OrphanPrivilegeScan{}
 		for pass := 0; pass < 3 && !clean; pass++ {
-			clean, err = runOrphanPrivilegeMaintenancePage(ctx, sqlExecutor, accountID)
+			clean, err = runOrphanPrivilegeMaintenancePage(ctx, sqlExecutor, accountID, &tenantScan)
 			require.NoError(t, err)
 		}
 		require.True(t, clean)
@@ -394,14 +403,19 @@ func runOrphanPrivilegeMaintenancePage(
 	ctx context.Context,
 	sqlExecutor executor.SQLExecutor,
 	accountID uint32,
+	scan *v4_0_6.OrphanPrivilegeScan,
 ) (bool, error) {
 	clean := false
+	nextScan := *scan
 	err := sqlExecutor.ExecTxn(ctx, func(txn executor.TxnExecutor) error {
 		txn.Use(catalog.MO_CATALOG)
 		var err error
-		clean, err = v4_0_6.MaintainOrphanObjectPrivilegesPage(txn, accountID)
+		nextScan, clean, err = v4_0_6.MaintainOrphanObjectPrivilegesPage(txn, accountID, *scan)
 		return err
 	}, executor.Options{}.WithDatabase(catalog.MO_CATALOG).WithWaitCommittedLogApplied())
+	if err == nil {
+		*scan = nextScan
+	}
 	return clean, err
 }
 
@@ -485,28 +499,6 @@ func copyRolePrivilegeRangeForUpgradeTest(
 	mustExecOrphanPrivilegeUpgradeSQL(t, ctx, conn, statement)
 }
 
-func execOrphanPrivilegeUpgradeInternalSQL(
-	ctx context.Context,
-	sqlExecutor executor.SQLExecutor,
-	statement string,
-) error {
-	return execOrphanPrivilegeUpgradeInternalSQLForAccount(
-		ctx, sqlExecutor, catalog.System_Account, statement,
-	)
-}
-
-func execOrphanPrivilegeUpgradeInternalSQLForAccount(
-	ctx context.Context,
-	sqlExecutor executor.SQLExecutor,
-	accountID uint32,
-	statement string,
-) error {
-	_, err := execOrphanPrivilegeUpgradeInternalSQLForAccountAffected(
-		ctx, sqlExecutor, accountID, statement,
-	)
-	return err
-}
-
 func execOrphanPrivilegeUpgradeInternalSQLForAccountAffected(
 	ctx context.Context,
 	sqlExecutor executor.SQLExecutor,
@@ -528,53 +520,6 @@ func execOrphanPrivilegeUpgradeInternalSQLForAccountAffected(
 		return nil
 	}, executor.Options{}.WithDatabase(catalog.MO_CATALOG).WithWaitCommittedLogApplied())
 	return affectedRows, err
-}
-
-func ensureMoRolePrivsObjectIDIndex(
-	ctx context.Context,
-	sqlExecutor executor.SQLExecutor,
-) error {
-	return sqlExecutor.ExecTxn(ctx, func(txn executor.TxnExecutor) error {
-		txn.Use(catalog.MO_CATALOG)
-		exists, err := versions.CheckIndexDefinition(
-			txn,
-			catalog.System_Account,
-			catalog.MO_CATALOG,
-			"mo_role_privs",
-			"idx_mo_role_privs_obj_id",
-		)
-		if err != nil || exists {
-			return err
-		}
-		res, err := txn.Exec(
-			"create index idx_mo_role_privs_obj_id on mo_catalog.mo_role_privs(obj_id)",
-			versions.UpgradeStatementOption(catalog.System_Account),
-		)
-		if err != nil {
-			return err
-		}
-		res.Close()
-		return nil
-	}, executor.Options{}.WithDatabase(catalog.MO_CATALOG).WithWaitCommittedLogApplied())
-}
-
-func countMoRolePrivsObjectIDIndexes(
-	t *testing.T,
-	ctx context.Context,
-	conn *sql.Conn,
-) int {
-	t.Helper()
-	query := fmt.Sprintf(
-		"select count(distinct idx.name) from mo_catalog.mo_indexes idx "+
-			"join mo_catalog.mo_tables tbl on idx.table_id = tbl.rel_id "+
-			"where tbl.reldatabase = %s and tbl.relname = %s and idx.name = %s",
-		sqlquote.String(catalog.MO_CATALOG),
-		sqlquote.String("mo_role_privs"),
-		sqlquote.String("idx_mo_role_privs_obj_id"),
-	)
-	var count int
-	require.NoError(t, conn.QueryRowContext(ctx, query).Scan(&count), query)
-	return count
 }
 
 func countAllRolePrivilegesByObjectIDRange(

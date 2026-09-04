@@ -62,7 +62,6 @@ var tenantUpgEntries = []versions.UpgradeEntry{
 	upgradeInformationSchemaMetadataVisibilityView("SCHEMATA", sysview.InformationSchemaSchemataDDL),
 	upgradeInformationSchemaTablePrivileges(),
 	addIcebergCatalogIDAllocatorIndex(),
-	addMoRolePrivsObjectIDIndex(),
 }
 
 // The catalog ID allocator is storage-owned.  MatrixOne only materializes an

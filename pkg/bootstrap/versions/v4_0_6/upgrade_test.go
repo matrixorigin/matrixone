@@ -17,6 +17,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math"
 	"strings"
 	"testing"
 
@@ -38,7 +39,7 @@ import (
 )
 
 func TestUpgradeEntries(t *testing.T) {
-	require.Len(t, tenantUpgEntries, 35)
+	require.Len(t, tenantUpgEntries, 34)
 	require.Len(t, clusterUpgEntries, 7)
 	require.Equal(t, retireKafkaSinkDaemonTasks.UpgSql, clusterUpgEntries[0].UpgSql)
 	require.Equal(t, catalog.MO_VIEW_DEPENDENCIES, clusterUpgEntries[1].TableName)
@@ -276,15 +277,6 @@ func TestInformationSchemaMetadataVisibilityUpgradeChecks(t *testing.T) {
 	require.Equal(t, catalog.MO_CATALOG, allocatorIndex.Schema)
 	require.Equal(t, "mo_iceberg_catalogs", allocatorIndex.TableName)
 	require.Contains(t, strings.ToLower(allocatorIndex.UpgSql), "create index catalog_id_allocator")
-
-	rolePrivsIndex := tenantUpgEntries[34]
-	require.Equal(t, versions.ADD_INDEX, rolePrivsIndex.UpgType)
-	require.Equal(t, catalog.MO_CATALOG, rolePrivsIndex.Schema)
-	require.Equal(t, "mo_role_privs", rolePrivsIndex.TableName)
-	require.Equal(t,
-		"create index idx_mo_role_privs_obj_id on mo_catalog.mo_role_privs(obj_id)",
-		rolePrivsIndex.UpgSql,
-	)
 }
 
 func TestMoColumnsUnsignedBackfillPredicate(t *testing.T) {
@@ -393,7 +385,7 @@ func TestUserDefinedFunctionArgumentTypesBackfillRejectsOversizedSignature(t *te
 }
 
 func TestForeignKeyMetadataTenantUpgradeEntries(t *testing.T) {
-	require.Len(t, tenantUpgEntries, 35)
+	require.Len(t, tenantUpgEntries, 34)
 
 	for i, column := range []string{"referenced_index_name", "on_delete_origin", "on_update_origin"} {
 		entry := tenantUpgEntries[2+i]
@@ -1309,73 +1301,165 @@ func newLegacyForeignKeyDefinitionResultForDefinitions(t *testing.T, definitions
 func TestMaintainOrphanObjectPrivilegesPage(t *testing.T) {
 	const accountID = uint32(9)
 
-	t.Run("creates missing index before deleting", func(t *testing.T) {
-		var sqls []string
+	t.Run("candidate first classification and exact delete", func(t *testing.T) {
+		candidates := []OrphanPrivilegeKey{
+			{RoleID: 1, ObjectType: "database", ObjectID: 10, PrivilegeID: 1, PrivilegeLevel: "d"},
+			{RoleID: 1, ObjectType: "database", ObjectID: 11, PrivilegeID: 1, PrivilegeLevel: "d"},
+			{RoleID: 1, ObjectType: "table", ObjectID: 20, PrivilegeID: 2, PrivilegeLevel: "d.t"},
+			{RoleID: 1, ObjectType: "table", ObjectID: 21, PrivilegeID: 2, PrivilegeLevel: "future"},
+			{RoleID: 1, ObjectType: "view", ObjectID: 0, PrivilegeID: 3, PrivilegeLevel: "t"},
+		}
+		var candidateSQL, databaseSQL, relationSQL, deleteSQL string
 		exec := executor.NewMemTxnExecutor(func(sql string) (executor.Result, error) {
-			sqls = append(sqls, sql)
-			if strings.Contains(sql, "from `mo_catalog`.`mo_indexes`") {
+			switch {
+			case strings.Contains(sql, "order by "+orphanPrivilegeKeyColumnsDescending):
+				return newOrphanPrivilegeKeyResult(t, candidates[len(candidates)-1:]), nil
+			case strings.HasPrefix(sql, "select "+orphanPrivilegeKeyColumns+" from mo_catalog.mo_role_privs where"):
+				candidateSQL = sql
+				return newOrphanPrivilegeKeyResult(t, candidates), nil
+			case strings.HasPrefix(sql, "select dat_id from mo_catalog.mo_database"):
+				databaseSQL = sql
+				return newOrphanPrivilegeObjectIDResult(t, 10), nil
+			case strings.HasPrefix(sql, "select rel_logical_id from mo_catalog.mo_tables"):
+				relationSQL = sql
 				return executor.Result{}, nil
+			case strings.HasPrefix(sql, "delete from mo_catalog.mo_role_privs"):
+				deleteSQL = sql
+				return executor.Result{AffectedRows: 2}, nil
+			default:
+				return executor.Result{}, fmt.Errorf("unexpected sql: %s", sql)
 			}
-			if strings.HasPrefix(sql, "create index idx_mo_role_privs_obj_id") {
-				return executor.Result{}, nil
-			}
-			return executor.Result{}, fmt.Errorf("unexpected sql: %s", sql)
 		}, nil)
 
-		clean, err := MaintainOrphanObjectPrivilegesPage(exec, accountID)
+		next, complete, err := MaintainOrphanObjectPrivilegesPage(exec, accountID, OrphanPrivilegeScan{})
 		require.NoError(t, err)
-		require.False(t, clean)
-		require.Len(t, sqls, 2)
-		require.NotContains(t, strings.Join(sqls, "\n"), "delete from mo_catalog.mo_role_privs")
+		require.True(t, complete)
+		require.Zero(t, next)
+		require.Contains(t, candidateSQL, "limit 1000")
+		require.Contains(t, candidateSQL, "<= (1,'view',0,3,'t')")
+		require.Contains(t, databaseSQL, "account_id = current_account_id()")
+		require.Contains(t, databaseSQL, "dat_id in (10,11)")
+		require.Contains(t, relationSQL, "rel_logical_id in (20)")
+		require.Contains(t, deleteSQL, "(1,'database',11,1,'d')")
+		require.Contains(t, deleteSQL, "(1,'table',20,2,'d.t')")
+		require.NotContains(t, deleteSQL, "(1,'database',10,1,'d')")
+		require.NotContains(t, deleteSQL, "future")
+		require.NotContains(t, deleteSQL, "'view',0")
+		require.Contains(t, deleteSQL, "limit 1000")
 	})
 
-	for _, test := range []struct {
-		name             string
-		databaseAffected uint64
-		relationAffected uint64
-		wantRelation     bool
-		wantClean        bool
-	}{
-		{name: "full database page remains incomplete", databaseAffected: 1000},
-		{name: "partial database page remains incomplete", databaseAffected: 1},
-		{name: "full relation page remains incomplete", relationAffected: 1000, wantRelation: true},
-		{name: "partial relation page completes tenant", relationAffected: 999, wantRelation: true, wantClean: true},
-		{name: "empty tenant completes", wantRelation: true, wantClean: true},
-	} {
-		t.Run(test.name, func(t *testing.T) {
-			var databaseSQL, relationSQL string
-			exec := executor.NewMemTxnExecutor(func(sql string) (executor.Result, error) {
-				switch {
-				case strings.Contains(sql, "from `mo_catalog`.`mo_indexes`"):
-					return newProtocolVersionResultValue(t, moRolePrivsObjectIDIndexName), nil
-				case strings.Contains(sql, "mo_database d"):
-					databaseSQL = sql
-					return executor.Result{AffectedRows: test.databaseAffected}, nil
-				case strings.Contains(sql, "mo_tables t"):
-					relationSQL = sql
-					return executor.Result{AffectedRows: test.relationAffected}, nil
-				default:
-					return executor.Result{}, fmt.Errorf("unexpected sql: %s", sql)
-				}
-			}, nil)
-
-			clean, err := MaintainOrphanObjectPrivilegesPage(exec, accountID)
-			require.NoError(t, err)
-			require.Equal(t, test.wantClean, clean)
-			require.NotEmpty(t, databaseSQL)
-			require.Contains(t, databaseSQL, "obj_id != 0")
-			require.Contains(t, databaseSQL, "privilege_level in ('d.*','*')")
-			require.Contains(t, databaseSQL, "d.account_id = current_account_id()")
-			require.Contains(t, databaseSQL, "limit 1000")
-			require.Equal(t, test.wantRelation, relationSQL != "")
-			if test.wantRelation {
-				require.Contains(t, relationSQL, "privilege_level in ('d.t','t')")
-				require.Contains(t, relationSQL, "t.rel_logical_id = mo_role_privs.obj_id")
-				require.Contains(t, relationSQL, "t.account_id = current_account_id()")
-				require.Contains(t, relationSQL, "limit 1000")
+	t.Run("full page advances examined-row cursor", func(t *testing.T) {
+		candidates := make([]OrphanPrivilegeKey, orphanPrivilegePageSize)
+		liveIDs := make([]uint64, orphanPrivilegePageSize)
+		for i := range candidates {
+			candidates[i] = OrphanPrivilegeKey{
+				RoleID: 1, ObjectType: "database", ObjectID: uint64(i + 1),
+				PrivilegeID: 1, PrivilegeLevel: "d",
 			}
+			liveIDs[i] = uint64(i + 1)
+		}
+		highWater := OrphanPrivilegeKey{
+			RoleID: 2, ObjectType: "database", ObjectID: 2000, PrivilegeID: 1, PrivilegeLevel: "d",
+		}
+		initial := OrphanPrivilegeScan{
+			Initialized: true,
+			CursorValid: true,
+			Cursor: OrphanPrivilegeKey{
+				RoleID: 0, ObjectType: "", ObjectID: 0, PrivilegeID: 0, PrivilegeLevel: "",
+			},
+			HighWater: highWater,
+		}
+		var candidateSQL string
+		exec := executor.NewMemTxnExecutor(func(sql string) (executor.Result, error) {
+			switch {
+			case strings.HasPrefix(sql, "select "+orphanPrivilegeKeyColumns+" from mo_catalog.mo_role_privs where"):
+				candidateSQL = sql
+				return newOrphanPrivilegeKeyResult(t, candidates), nil
+			case strings.HasPrefix(sql, "select dat_id from mo_catalog.mo_database"):
+				return newOrphanPrivilegeObjectIDResult(t, liveIDs...), nil
+			default:
+				return executor.Result{}, fmt.Errorf("unexpected sql: %s", sql)
+			}
+		}, nil)
+
+		next, complete, err := MaintainOrphanObjectPrivilegesPage(exec, accountID, initial)
+		require.NoError(t, err)
+		require.False(t, complete)
+		require.Equal(t, candidates[len(candidates)-1], next.Cursor)
+		require.True(t, next.CursorValid)
+		require.Equal(t, highWater, next.HighWater)
+		require.Contains(t, candidateSQL, "> (0,'',0,0,'')")
+		require.Contains(t, candidateSQL, "<= (2,'database',2000,1,'d')")
+		require.Contains(t, candidateSQL, "limit 1000")
+	})
+
+	t.Run("empty table completes without delete", func(t *testing.T) {
+		exec := executor.NewMemTxnExecutor(func(sql string) (executor.Result, error) {
+			require.Contains(t, sql, "order by "+orphanPrivilegeKeyColumnsDescending+" limit 1")
+			return executor.Result{}, nil
+		}, nil)
+		next, complete, err := MaintainOrphanObjectPrivilegesPage(exec, accountID, OrphanPrivilegeScan{})
+		require.NoError(t, err)
+		require.True(t, complete)
+		require.Zero(t, next)
+	})
+
+	t.Run("rejects oversized candidate result", func(t *testing.T) {
+		keys := make([]OrphanPrivilegeKey, orphanPrivilegePageSize+1)
+		for i := range keys {
+			keys[i] = OrphanPrivilegeKey{RoleID: int32(i)}
+		}
+		exec := executor.NewMemTxnExecutor(func(sql string) (executor.Result, error) {
+			return newOrphanPrivilegeKeyResult(t, keys), nil
+		}, nil)
+		_, _, err := MaintainOrphanObjectPrivilegesPage(exec, accountID, OrphanPrivilegeScan{
+			Initialized: true,
+			HighWater:   OrphanPrivilegeKey{RoleID: math.MaxInt32},
 		})
+		require.ErrorContains(t, err, "candidate page has too many rows")
+	})
+}
+
+func newOrphanPrivilegeKeyResult(t *testing.T, keys []OrphanPrivilegeKey) executor.Result {
+	t.Helper()
+	mp := mpool.MustNewZeroNoFixed()
+	t.Cleanup(func() { mpool.DeleteMPool(mp) })
+	result := executor.NewMemResult([]types.Type{
+		types.T_int32.ToType(),
+		types.T_varchar.ToType(),
+		types.T_uint64.ToType(),
+		types.T_int32.ToType(),
+		types.T_varchar.ToType(),
+	}, mp)
+	result.NewBatchWithRowCount(len(keys))
+	roleIDs := make([]int32, len(keys))
+	objectTypes := make([]string, len(keys))
+	objectIDs := make([]uint64, len(keys))
+	privilegeIDs := make([]int32, len(keys))
+	privilegeLevels := make([]string, len(keys))
+	for i, key := range keys {
+		roleIDs[i] = key.RoleID
+		objectTypes[i] = key.ObjectType
+		objectIDs[i] = key.ObjectID
+		privilegeIDs[i] = key.PrivilegeID
+		privilegeLevels[i] = key.PrivilegeLevel
 	}
+	executor.AppendFixedRows(result, 0, roleIDs)
+	require.NoError(t, executor.AppendStringRows(result, 1, objectTypes))
+	executor.AppendFixedRows(result, 2, objectIDs)
+	executor.AppendFixedRows(result, 3, privilegeIDs)
+	require.NoError(t, executor.AppendStringRows(result, 4, privilegeLevels))
+	return result.GetResult()
+}
+
+func newOrphanPrivilegeObjectIDResult(t *testing.T, ids ...uint64) executor.Result {
+	t.Helper()
+	mp := mpool.MustNewZeroNoFixed()
+	t.Cleanup(func() { mpool.DeleteMPool(mp) })
+	result := executor.NewMemResult([]types.Type{types.T_uint64.ToType()}, mp)
+	result.NewBatchWithRowCount(len(ids))
+	executor.AppendFixedRows(result, 0, ids)
+	return result.GetResult()
 }
 
 func newShowCreateTableResult(t *testing.T, tableName, createSQL string) executor.Result {

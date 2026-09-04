@@ -152,7 +152,7 @@ type service struct {
 		finalVersionCompleted                   atomic.Bool
 		orphanPrivilegeMaintenanceWorkerRunning atomic.Bool
 		orphanPrivilegeMaintenanceRunning       atomic.Bool
-		orphanPrivilegeMaintenanceCursor        atomic.Int32
+		orphanPrivilegeMaintenanceState         orphanPrivilegeMaintenanceState
 		kek                                     string
 	}
 }
@@ -176,6 +176,7 @@ func NewService(
 		stopper: stopper.NewStopper("upgrade", stopper.WithLogger(getLogger(sid).RawLogger())),
 	}
 	s.mu.tenants = make(map[int32]bool)
+	s.upgrade.orphanPrivilegeMaintenanceState.restartSeed = newOrphanPrivilegeMaintenanceRestartSeed()
 	s.initUpgrade()
 
 	for _, opt := range opts {

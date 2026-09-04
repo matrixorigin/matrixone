@@ -23,15 +23,16 @@ import (
 
 	"github.com/stretchr/testify/require"
 
+	"github.com/matrixorigin/matrixone/pkg/bootstrap/versions/v4_0_6"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/txn/clock"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 )
 
-func TestMaintainOrphanObjectPrivilegesCursor(t *testing.T) {
+func TestMaintainOrphanObjectPrivilegesFiniteAccountRound(t *testing.T) {
 	lookup := 0
-	selectedTenant := int32(0)
+	var selected []int32
 	service := newServiceForTest(
 		"",
 		&memLocker{},
@@ -43,27 +44,34 @@ func TestMaintainOrphanObjectPrivilegesCursor(t *testing.T) {
 				lookup++
 				switch lookup {
 				case 1:
-					require.Contains(t, sql, "account_id >= 0")
-					selectedTenant = 10
+					require.Contains(t, sql, "account_id >= 10")
+					require.Contains(t, sql, "account_id <= 12")
+					selected = append(selected, 10)
 					return buildMaintenanceAccountRows(10), nil
 				case 2:
 					require.Contains(t, sql, "account_id >= 11")
-					selectedTenant = 12
+					selected = append(selected, 12)
 					return buildMaintenanceAccountRows(12), nil
 				case 3:
 					require.Contains(t, sql, "account_id >= 13")
 					return executor.Result{}, nil
+				case 4:
+					require.Contains(t, sql, "account_id >= 0")
+					require.Contains(t, sql, "account_id < 10")
+					selected = append(selected, 0)
+					return buildMaintenanceAccountRows(0), nil
+				case 5:
+					require.Contains(t, sql, "account_id >= 1")
+					selected = append(selected, 5)
+					return buildMaintenanceAccountRows(5), nil
+				case 6:
+					require.Contains(t, sql, "account_id >= 6")
+					require.Contains(t, sql, "account_id < 10")
+					return executor.Result{}, nil
 				default:
 					return executor.Result{}, fmt.Errorf("unexpected lookup %d", lookup)
 				}
-			case strings.Contains(sql, "from `mo_catalog`.`mo_indexes`"):
-				return buildMaintenanceStringRows("idx_mo_role_privs_obj_id"), nil
-			case strings.Contains(sql, "mo_database d"):
-				if selectedTenant == 12 && lookup == 2 {
-					return executor.Result{AffectedRows: 1000}, nil
-				}
-				return executor.Result{}, nil
-			case strings.Contains(sql, "mo_tables t"):
+			case strings.Contains(sql, "from mo_catalog.mo_role_privs"):
 				return executor.Result{}, nil
 			default:
 				return executor.Result{}, fmt.Errorf("unexpected sql: %s", sql)
@@ -71,30 +79,120 @@ func TestMaintainOrphanObjectPrivilegesCursor(t *testing.T) {
 		}),
 		func(s *service) {},
 	)
+	service.upgrade.orphanPrivilegeMaintenanceState = orphanPrivilegeMaintenanceState{
+		restartSeed:      1,
+		roundInitialized: true,
+		roundHighWater:   12,
+		roundStart:       10,
+		accountCursor:    10,
+	}
 
-	require.NoError(t, service.maintainOrphanObjectPrivileges(t.Context()))
-	require.Equal(t, int32(11), service.upgrade.orphanPrivilegeMaintenanceCursor.Load())
-
-	require.NoError(t, service.maintainOrphanObjectPrivileges(t.Context()))
-	require.Equal(t, int32(13), service.upgrade.orphanPrivilegeMaintenanceCursor.Load(),
-		"a full page must advance so one tenant cannot starve later accounts")
-
-	require.NoError(t, service.maintainOrphanObjectPrivileges(t.Context()))
-	require.Zero(t, service.upgrade.orphanPrivilegeMaintenanceCursor.Load(),
-		"the scan must wrap after the current account set is exhausted")
+	for range 5 {
+		require.NoError(t, service.maintainOrphanObjectPrivileges(t.Context()))
+	}
+	require.Equal(t, []int32{10, 12, 0, 5}, selected)
+	state := service.upgrade.orphanPrivilegeMaintenanceState
+	require.False(t, state.roundInitialized)
+	require.Equal(t, uint64(1), state.round)
+	require.False(t, state.tenantSelected)
 }
 
-func TestOrphanPrivilegeMaintenanceCursorRestartsAndWraps(t *testing.T) {
-	firstProcess := &service{}
-	firstProcess.upgrade.orphanPrivilegeMaintenanceCursor.Store(42)
+func TestMaintainOrphanObjectPrivilegesFinishesTenantHighWaterBeforeAdvancing(t *testing.T) {
+	lookupCount := 0
+	candidatePage := make([]v4_0_6.OrphanPrivilegeKey, 1000)
+	for i := range candidatePage {
+		candidatePage[i] = v4_0_6.OrphanPrivilegeKey{
+			RoleID: int32(i), ObjectType: "account", PrivilegeLevel: "*",
+		}
+	}
+	highWater := v4_0_6.OrphanPrivilegeKey{
+		RoleID: 2000, ObjectType: "account", PrivilegeLevel: "*",
+	}
+	candidateReads := 0
+	service := newServiceForTest(
+		"",
+		&memLocker{},
+		clock.NewHLCClock(func() int64 { return 0 }, 0),
+		nil,
+		executor.NewMemExecutor(func(sql string) (executor.Result, error) {
+			switch {
+			case strings.HasPrefix(sql, "select account_id from mo_catalog.mo_account"):
+				lookupCount++
+				return buildMaintenanceAccountRows(10), nil
+			case strings.Contains(sql, "order by role_id desc"):
+				return buildMaintenancePrivilegeRows(t, highWater), nil
+			case strings.HasPrefix(sql, "select role_id,obj_type,obj_id,privilege_id,privilege_level "):
+				candidateReads++
+				if candidateReads == 1 {
+					return buildMaintenancePrivilegeRows(t, candidatePage...), nil
+				}
+				return executor.Result{}, nil
+			default:
+				return executor.Result{}, fmt.Errorf("unexpected sql: %s", sql)
+			}
+		}),
+		func(s *service) {},
+	)
+	service.upgrade.orphanPrivilegeMaintenanceState = orphanPrivilegeMaintenanceState{
+		roundInitialized: true,
+		roundHighWater:   12,
+		roundStart:       10,
+		accountCursor:    10,
+	}
 
-	restartedProcess := &service{}
-	require.Zero(t, restartedProcess.upgrade.orphanPrivilegeMaintenanceCursor.Load(),
-		"the optimization cursor must not become persistent correctness state")
+	require.NoError(t, service.maintainOrphanObjectPrivileges(t.Context()))
+	state := service.upgrade.orphanPrivilegeMaintenanceState
+	require.True(t, state.tenantSelected)
+	require.Equal(t, int32(999), state.tenantScan.Cursor.RoleID)
+	require.Equal(t, 1, lookupCount)
 
-	const maxInt32 = int32(^uint32(0) >> 1)
-	restartedProcess.advanceOrphanPrivilegeMaintenanceCursor(maxInt32)
-	require.Zero(t, restartedProcess.upgrade.orphanPrivilegeMaintenanceCursor.Load())
+	require.NoError(t, service.maintainOrphanObjectPrivileges(t.Context()))
+	state = service.upgrade.orphanPrivilegeMaintenanceState
+	require.False(t, state.tenantSelected)
+	require.Equal(t, int32(11), state.accountCursor)
+	require.Equal(t, 1, lookupCount, "an incomplete finite tenant scan must continue without reselecting its account")
+}
+
+func TestOrphanPrivilegeMaintenanceRoundFreezesHighWater(t *testing.T) {
+	service := newServiceForTest(
+		"",
+		&memLocker{},
+		clock.NewHLCClock(func() int64 { return 0 }, 0),
+		nil,
+		executor.NewMemExecutor(func(sql string) (executor.Result, error) {
+			switch {
+			case sql == "select account_id from mo_catalog.mo_account order by account_id desc limit 1":
+				return buildMaintenanceAccountRows(12), nil
+			case strings.HasPrefix(sql, "select account_id from mo_catalog.mo_account where"):
+				require.Contains(t, sql, "account_id <= 12")
+				require.NotContains(t, sql, "20")
+				return buildMaintenanceAccountRows(12), nil
+			case strings.Contains(sql, "from mo_catalog.mo_role_privs"):
+				return executor.Result{}, nil
+			default:
+				return executor.Result{}, fmt.Errorf("unexpected sql: %s", sql)
+			}
+		}),
+		func(s *service) {},
+	)
+	service.upgrade.orphanPrivilegeMaintenanceState.restartSeed = 7
+
+	require.NoError(t, service.maintainOrphanObjectPrivileges(t.Context()))
+	state := service.upgrade.orphanPrivilegeMaintenanceState
+	require.True(t, state.roundInitialized)
+	require.Equal(t, int32(12), state.roundHighWater)
+}
+
+func TestOrphanPrivilegeMaintenanceRestartSeedAvoidsFixedZeroBias(t *testing.T) {
+	const highWater = int32(127)
+	starts := make(map[int32]struct{})
+	for seed := uint64(1); seed <= 128; seed++ {
+		starts[orphanPrivilegeMaintenanceRoundStart(seed, 0, highWater)] = struct{}{}
+	}
+	require.Greater(t, len(starts), 64)
+	_, onlyZero := starts[0]
+	require.False(t, onlyZero && len(starts) == 1)
+	require.Zero(t, orphanPrivilegeMaintenanceRoundStart(1, 0, 0))
 }
 
 func TestMaintainOrphanObjectPrivilegesAdvancesAfterTenantError(t *testing.T) {
@@ -110,13 +208,11 @@ func TestMaintainOrphanObjectPrivilegesAdvancesAfterTenantError(t *testing.T) {
 			case strings.HasPrefix(sql, "select account_id from mo_catalog.mo_account"):
 				lookupCount++
 				return buildMaintenanceAccountRows(int32(lookupCount*2 + 8)), nil
-			case strings.Contains(sql, "from `mo_catalog`.`mo_indexes`"):
+			case strings.Contains(sql, "from mo_catalog.mo_role_privs"):
 				if fail {
 					fail = false
-					return executor.Result{}, fmt.Errorf("injected index check failure")
+					return executor.Result{}, fmt.Errorf("injected candidate scan failure")
 				}
-				return buildMaintenanceStringRows("idx_mo_role_privs_obj_id"), nil
-			case strings.Contains(sql, "mo_database d"), strings.Contains(sql, "mo_tables t"):
 				return executor.Result{}, nil
 			default:
 				return executor.Result{}, fmt.Errorf("unexpected sql: %s", sql)
@@ -124,14 +220,21 @@ func TestMaintainOrphanObjectPrivilegesAdvancesAfterTenantError(t *testing.T) {
 		}),
 		func(s *service) {},
 	)
+	service.upgrade.orphanPrivilegeMaintenanceState = orphanPrivilegeMaintenanceState{
+		roundInitialized: true,
+		roundHighWater:   12,
+		roundStart:       10,
+		accountCursor:    10,
+	}
 
-	require.ErrorContains(t, service.maintainOrphanObjectPrivileges(t.Context()), "injected index check failure")
-	require.Equal(t, int32(11), service.upgrade.orphanPrivilegeMaintenanceCursor.Load(),
-		"a broken tenant must not starve all higher account IDs")
+	require.ErrorContains(t, service.maintainOrphanObjectPrivileges(t.Context()), "injected candidate scan failure")
+	state := service.upgrade.orphanPrivilegeMaintenanceState
+	require.Equal(t, int32(11), state.accountCursor,
+		"a broken tenant must not starve later accounts in the frozen round")
+	require.False(t, state.tenantSelected)
 	require.False(t, service.upgrade.orphanPrivilegeMaintenanceRunning.Load())
 
 	require.NoError(t, service.maintainOrphanObjectPrivileges(t.Context()))
-	require.Equal(t, int32(13), service.upgrade.orphanPrivilegeMaintenanceCursor.Load())
 	require.Equal(t, 2, lookupCount)
 }
 
@@ -257,9 +360,35 @@ func buildMaintenanceAccountRows(accountID int32) executor.Result {
 	return result.GetResult()
 }
 
-func buildMaintenanceStringRows(value string) executor.Result {
-	result := executor.NewMemResult([]types.Type{types.T_varchar.ToType()}, mpool.MustNewZero())
-	result.NewBatchWithRowCount(1)
-	executor.AppendStringRows(result, 0, []string{value})
+func buildMaintenancePrivilegeRows(
+	t *testing.T,
+	keys ...v4_0_6.OrphanPrivilegeKey,
+) executor.Result {
+	t.Helper()
+	result := executor.NewMemResult([]types.Type{
+		types.T_int32.ToType(),
+		types.T_varchar.ToType(),
+		types.T_uint64.ToType(),
+		types.T_int32.ToType(),
+		types.T_varchar.ToType(),
+	}, mpool.MustNewZero())
+	result.NewBatchWithRowCount(len(keys))
+	roleIDs := make([]int32, len(keys))
+	objectTypes := make([]string, len(keys))
+	objectIDs := make([]uint64, len(keys))
+	privilegeIDs := make([]int32, len(keys))
+	privilegeLevels := make([]string, len(keys))
+	for i, key := range keys {
+		roleIDs[i] = key.RoleID
+		objectTypes[i] = key.ObjectType
+		objectIDs[i] = key.ObjectID
+		privilegeIDs[i] = key.PrivilegeID
+		privilegeLevels[i] = key.PrivilegeLevel
+	}
+	executor.AppendFixedRows(result, 0, roleIDs)
+	require.NoError(t, executor.AppendStringRows(result, 1, objectTypes))
+	executor.AppendFixedRows(result, 2, objectIDs)
+	executor.AppendFixedRows(result, 3, privilegeIDs)
+	require.NoError(t, executor.AppendStringRows(result, 4, privilegeLevels))
 	return result.GetResult()
 }
