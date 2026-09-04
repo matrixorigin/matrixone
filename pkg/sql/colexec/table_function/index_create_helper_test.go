@@ -109,15 +109,3 @@ func TestFetchSrcTableRowCount(t *testing.T) {
 		require.Error(t, err)
 	})
 }
-
-// buildSnapshotTS is the version an index build reflects, recorded as metadata.build_ts. With no
-// process or no transaction there is nothing to name, and it must report unknown rather than a
-// wall-clock stand-in -- the distinction build_ts exists to make.
-func TestBuildSnapshotTSUnknownWithoutTxn(t *testing.T) {
-	require.EqualValues(t, 0, buildSnapshotTS(nil), "no process => unknown")
-
-	proc := testutil.NewProc(t)
-	t.Cleanup(proc.Free)
-	proc.Base.TxnOperator = nil
-	require.EqualValues(t, 0, buildSnapshotTS(proc), "no transaction => unknown")
-}

@@ -115,19 +115,19 @@ func TestGovernorUnsetCapChargesButDoesNotEvict(t *testing.T) {
 
 	keys := []string{"__mo_index_secondary_a", "__mo_index_secondary_b", "__mo_index_secondary_c"}
 	for _, k := range keys {
-		loadInto(t, c, sp, k, 1<<30, 0)
+		loadInto(t, c, sp, k, 1, 0)
 	}
 	for _, k := range keys {
-		require.True(t, isResident(c, k), "%q must survive: 3 GiB is far below the ceiling", k)
-		require.EqualValues(t, 1<<30, entryOf(t, c, k).hostBytes.Load(),
+		require.True(t, isResident(c, k), "%q must survive: three bytes fit the automatic budget", k)
+		require.EqualValues(t, 1, entryOf(t, c, k).hostBytes.Load(),
 			"%q is charged even with nothing configured", k)
 	}
 
 	// And the governor sees them: snapshotResidents is what every eviction pass walks.
 	list, perAccount, total := c.snapshotResidents("")
 	require.Len(t, list, len(keys), "an unconfigured cache is still enumerated")
-	require.EqualValues(t, int64(len(keys))<<30, total.host)
-	require.EqualValues(t, int64(len(keys))<<30, perAccount[1].host)
+	require.EqualValues(t, len(keys), total.host)
+	require.EqualValues(t, len(keys), perAccount[1].host)
 }
 
 // The fallback is a real, finite cap: an entry above the ceiling is still admitted (the
@@ -140,8 +140,8 @@ func TestGovernorAbsoluteCeilingIsFiniteNotUnlimited(t *testing.T) {
 	tenant, sys := c.limits(sp)
 	require.True(t, tenant.unset(), "nothing configured for the tenant")
 	require.False(t, sys.unset(), "but the CN-wide fallback is set, not unlimited")
-	require.EqualValues(t, absoluteHostCacheCeiling, sys.host)
-	require.EqualValues(t, absoluteDeviceCacheCeiling, sys.device)
+	require.EqualValues(t, c.defaultLimits().host, sys.host)
+	require.EqualValues(t, c.defaultLimits().device, sys.device)
 	require.Less(t, absoluteDeviceCacheCeiling, absoluteHostCacheCeiling,
 		"VRAM's physical maximum is far below host RAM's, so one number cannot serve both")
 }
@@ -503,8 +503,8 @@ func TestGovernorMakesRoomWhenIncomingFillsTheCap(t *testing.T) {
 
 			require.False(t, newcomer.watchAtLoad,
 				"the victim must be gone before Load, not reclaimed after it")
-			require.True(t, isResident(c, "__mo_index_secondary_newcomer"),
-				"the oversized load is never refused")
+			require.Equal(t, incoming <= 250, isResident(c, "__mo_index_secondary_newcomer"),
+				"retain an exact-fit entry; retire an oversized entry after its successful query")
 		})
 	}
 }
@@ -521,7 +521,7 @@ func TestGovernorOversizedIndexStillLoads(t *testing.T) {
 
 	loadInto(t, c, sp, "__mo_index_secondary_huge", 10_000, 0)
 	require.False(t, isResident(c, old), "everything reclaimable is reclaimed")
-	require.True(t, isResident(c, "__mo_index_secondary_huge"), "the load is never refused")
+	require.False(t, isResident(c, "__mo_index_secondary_huge"), "the successful load is retired after use")
 }
 
 // caps.less floors at zero and leaves an unset arena unlimited.
@@ -738,16 +738,15 @@ type invalidStateSearch struct {
 }
 
 func (m *invalidStateSearch) Search(*sqlexec.SqlProcess, any, vectorindex.RuntimeConfig) (any, []float64, error) {
-	if m.calls.Add(1) == 1 {
-		return nil, nil, moerr.NewInvalidStateNoCtx("txn client is in pause state")
+	if m.calls.Add(1) > 1 {
+		return nil, nil, moerr.NewInternalErrorNoCtx("unexpected backend retry")
 	}
-	return []int64{1}, []float64{2.0}, nil
+	return nil, nil, moerr.NewInvalidStateNoCtx("txn client is in pause state")
 }
 
-// An ErrInvalidState that did NOT come from eviction must not block the retry. The entry is still
-// STATUS_LOADED and in the map, so nothing will ever close its destroyed channel; an unguarded
-// wait there hangs the query goroutine forever with no cancellation.
-func TestSearchRetryDoesNotWaitWhenNothingIsBeingDestroyed(t *testing.T) {
+// A backend error is not evidence of cache eviction. Retrying a permanent error
+// spins forever; waiting for an unclaimed destruction hangs forever.
+func TestSearchReturnsBackendInvalidState(t *testing.T) {
 	c := newBoundCache(t)
 	algo := &invalidStateSearch{}
 
@@ -759,11 +758,11 @@ func TestSearchRetryDoesNotWaitWhenNothingIsBeingDestroyed(t *testing.T) {
 
 	select {
 	case err := <-done:
-		require.NoError(t, err, "the retry must reach the second, succeeding Search")
+		require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidState))
 	case <-time.After(20 * time.Second):
 		t.Fatal("Search blocked on a teardown that will never happen")
 	}
-	require.EqualValues(t, 2, algo.calls.Load())
+	require.EqualValues(t, 1, algo.calls.Load())
 }
 
 // The FIRST sys-cap read has no last-known value to fall back on: c.sysLimit.value is still

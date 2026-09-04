@@ -62,7 +62,7 @@ type cagraBuilder interface {
 	AddRow(id int64, vecBytes []byte) error
 	SetFilterColumns(colMetaJSON string)
 	AddFilterChunk(colIdx uint32, data []byte, nullBitmap []uint32, nrows uint64) error
-	ToInsertSql(ts int64, buildTS int64) ([]string, error)
+	ToInsertSql(ts int64) ([]string, error)
 	// DeviceDemand is what EACH device must hold to serve this index, valid after
 	// ToInsertSql. end() checks it against the hardware so CREATE cannot succeed
 	// for an index no query could ever load.
@@ -124,7 +124,7 @@ func (u *cagraCreateState) end(tf *TableFunction, proc *process.Process) error {
 
 	ts := time.Now().UnixMicro()
 	if u.builder != nil {
-		sqls, err = u.builder.ToInsertSql(ts, buildSnapshotTS(proc))
+		sqls, err = u.builder.ToInsertSql(ts)
 	}
 	// No builder selected → init didn't set one. Nothing to do for the cuvs
 	// side; the CDC tail (if any) below still emits.

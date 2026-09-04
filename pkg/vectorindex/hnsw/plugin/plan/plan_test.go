@@ -159,19 +159,20 @@ func TestBuildSecondaryIndexDefs_OK(t *testing.T) {
 	}
 }
 
-// The metadata table carries the provenance columns (nrow, build_ts) as int64.
-func TestBuildSecondaryIndexDefs_MetadataProvenanceColumns(t *testing.T) {
+// Keep the metadata shape compatible with existing CDC/rebuild writers.
+func TestBuildSecondaryIndexDefs_MetadataCompatibility(t *testing.T) {
 	_, tblDefs, err := Hooks{}.BuildSecondaryIndexDefs(
 		newStubCompilerContext(), indexOn("vec"), vecColMap("id", "vec"), nil, "id")
 	require.NoError(t, err)
 
+	require.Len(t, tblDefs[0].Cols, 4)
 	names := make(map[string]planpb.Type, len(tblDefs[0].Cols))
 	for _, col := range tblDefs[0].Cols {
 		names[col.Name] = col.Typ
 	}
 	for _, want := range []string{
-		catalog.Hnsw_TblCol_Metadata_Nrow,
-		catalog.Hnsw_TblCol_Metadata_Build_Ts,
+		catalog.Hnsw_TblCol_Metadata_Timestamp,
+		catalog.Hnsw_TblCol_Metadata_Filesize,
 	} {
 		typ, ok := names[want]
 		require.True(t, ok, "metadata table declares %s", want)

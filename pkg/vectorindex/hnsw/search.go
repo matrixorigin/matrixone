@@ -17,7 +17,6 @@ package hnsw
 import (
 	"context"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"math"
 	"sync"
 	"sync/atomic"
@@ -260,46 +259,11 @@ func LoadMetadata[T types.RealNumbers](sqlproc *sqlexec.SqlProcess, dbname strin
 			fs := vector.GetFixedAtWithTypeCheck[int64](fsVec, i)
 
 			idx := &HnswModel[T]{Id: id, Checksum: chksum, Timestamp: ts, FileSize: fs}
-			// nrow and build_ts were appended after the original four columns, and the
-			// metadata table is created per index at CREATE INDEX -- REINDEX rewrites its rows,
-			// not the table -- so an index created before they existed still has four. Read
-			// them only when the batch actually carries them; absent means unknown.
-			if len(bat.Vecs) > 4 {
-				idx.Nrow = vector.GetFixedAtWithTypeCheck[int64](bat.Vecs[4], i)
-			}
-			if len(bat.Vecs) > 5 {
-				idx.BuildTS = vector.GetFixedAtWithTypeCheck[int64](bat.Vecs[5], i)
-			}
 			indexes = append(indexes, idx)
 		}
 	}
 
-	var rows, newest int64
-	for _, idx := range indexes {
-		rows += idx.Nrow
-		if idx.BuildTS > newest {
-			newest = idx.BuildTS
-		}
-	}
-	logMetadataProvenance(metatbl, len(indexes), rows, newest)
-
 	return indexes, nil
-}
-
-// logMetadataProvenance reports what the metadata rows say a loaded index is: how many source
-// rows its generations cover, and the newest data version they were built from. build_ts is 0
-// for a generation written before the column existed, and for a fulltext2 MERGE, whose content
-// has no single source version -- both print as "unknown" rather than as an epoch timestamp.
-//
-// This is the read side of the provenance columns: without it nrow/build_ts are written and
-// never surfaced, and an operator asking "how far behind is this resident index?" has to query
-// the hidden metadata table by hand.
-func logMetadataProvenance(metatbl string, count int, rows, buildTS int64) {
-	if buildTS <= 0 {
-		logutil.Infof("%s: loaded %d generation(s), rows=%d, build_ts=unknown", metatbl, count, rows)
-		return
-	}
-	logutil.Infof("%s: loaded %d generation(s), rows=%d, build_ts=%d", metatbl, count, rows, buildTS)
 }
 
 // load index from database
@@ -371,66 +335,27 @@ func (s *HnswSearch[T]) Load(sqlproc *sqlexec.SqlProcess) error {
 	return nil
 }
 
-// hnswViewedBytesPerRow is the HOST cost of one row in a VIEWED (mmap'd) usearch index: the
-// per-node bookkeeping usearch keeps outside the mapping (limits_.members * sizeof(node_t)).
-//
-// Measured against usearch's own memory_usage(), which is what GetIndexSize charges once the
-// index is loaded. It is exactly linear in the row count and completely independent of
-// dimension -- at 20k rows, dim 32 and dim 512 report the identical 161,536 bytes while the
-// model file grows 8x:
-//
-//	n=5000  dim=32   file=1.4MB   viewed=41536
-//	n=5000  dim=512  file=11.0MB  viewed=41536
-//	n=20000 dim=32   file=5.5MB   viewed=161536
-//	n=20000 dim=512  file=43.9MB  viewed=161536
-//	n=50000 dim=128  file=33.0MB  viewed=401536
-//
-// The deltas are 120000/15000 and 240000/30000 -- 8.000 bytes per row, over a fixed ~1536-byte
-// per-thread-context term that is not worth modelling.
-const hnswViewedBytesPerRow = 8
-
-// GetIndexSize reports what the loaded usearch models actually keep in HOST memory, taken from
-// usearch's own accounting rather than from the model file size.
-//
-// The search path loads with View(), which MMAPS the model file, and usearch's memory_usage()
-// skips the node and vector bytes entirely for a viewed index (index.hpp: `if (!viewed_file_)`),
-// leaving the per-node bookkeeping and per-thread contexts. Measured at 20k rows / dim 128:
-// file 13.2 MB, memory_usage 161 KB -- 1.2% of the file, ~8 bytes per row. Charging FileSize
-// would therefore over-state an hnsw entry by roughly 80x and evict it against bytes that are
-// reclaimable page cache on the LOCAL fileservice volume, not heap. It would also meter hnsw on
-// a different definition of "host resident" than fulltext2, which excludes its mmap'd posting
-// blocks for exactly this reason.
-//
-// Before Load there is no index to ask, so the estimate comes from the metadata row count
-// instead: nrow * hnswViewedBytesPerRow. That lets the cache reclaim room for an hnsw load
-// ahead of it rather than only charging afterwards. FileSize is still not used as the stand-in
-// -- it over-states the host cost by ~80x, so reserving against it would evict far more than
-// the load needs.
-//
-// A generation written before the nrow column existed reports 0, and the entry is simply
-// charged after its load completes, which is where hnsw sat before this estimate existed.
-//
-// Nothing here is device resident, so the device figure is 0.
+// GetIndexSize charges usearch's own heap/native bookkeeping. The model is
+// viewed from the LOCAL fileservice, so its mmap is reclaimable page cache,
+// not the allocation reported here. Existing four-column metadata cannot
+// estimate this before Load; charge the measured cost after materialization.
+// Do not introduce a catalog migration just to estimate a cache entry.
 func (s *HnswSearch[T]) GetIndexSize() (hostBytes, deviceBytes int64) {
 	for _, idx := range s.Indexes {
-		if idx == nil {
+		if idx == nil || idx.Index == nil {
 			continue
 		}
-		if idx.Index != nil {
-			// Loaded: usearch's own figure, which excludes the mmap'd bytes.
-			if n, err := idx.Index.MemoryUsage(); err == nil {
-				hostBytes += int64(n)
-				continue
-			}
+		if n, err := idx.Index.MemoryUsage(); err == nil {
+			hostBytes += int64(n)
+		} else {
+			// If native accounting fails, do not silently charge zero.
+			hostBytes += max(idx.FileSize, 0)
 		}
-		hostBytes += idx.Nrow * hnswViewedBytesPerRow
 	}
 	return hostBytes, 0
 }
 
-// IsStale reports whether the loaded model has fallen behind the persisted index — any content
-// change (CDC append/delete rewriting a model file, REBUILD/MERGE, or an emptied model) changes the
-// checksum fingerprint / model count — for the VectorIndexCache cross-CN freshness check.
+// IsStale reports whether the loaded model has fallen behind persisted data.
 // Runs on the housekeeping goroutine via a background auto-commit txn (cnUUID/accountID captured
 // at load). A query error ⇒ (true, err): the index was likely dropped/rebuilt, so reclaim the
 // dead entry. No captured generation (capture failed at load, or no service to re-query) ⇒

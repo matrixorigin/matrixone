@@ -39,13 +39,14 @@ prepare wait_ready from @wait_sql;
 execute wait_ready;
 deallocate prepare wait_ready;
 
--- Baseline at the default ceiling, which never binds.
+-- Exact-scan control does not populate the index cache. A warm cached entry
+-- would bypass next-miss tenant policy and make the low-cap test a false positive.
 select @@global.max_index_cache_size;
-select id from t order by l2_distance(v, '[0,0,0]') asc limit 2;
+select id from t order by l2_distance(v, '[0,0,0]') asc limit 2 by rank with option 'mode=force';
 
--- Now a cap far below any index. 4096 bytes cannot hold an hnsw generation, so every load
--- charges over the cap and the governor reclaims -- on this account only.
-set global max_index_cache_size = 4096;
+-- One byte is below even this tiny native index's bookkeeping. Its first indexed
+-- query is cold, and every subsequent query must reload the retired generation.
+set global max_index_cache_size = 1;
 select @@global.max_index_cache_size;
 
 -- @session}
@@ -64,7 +65,7 @@ select id from t order by l2_distance(v, '[9,9,9]') asc limit 1;
 -- row inserted now is not in the index yet and the answer would depend on CDC timing, not on
 -- the cap. Index freshness is covered by the vector cases; this one is about the bound.
 
--- 0 resolves to the arena ceiling, not to unbounded; the answers do not change.
+-- Zero removes the tenant override; the automatic CN target still applies.
 set global max_index_cache_size = 0;
 select @@global.max_index_cache_size;
 select id from t order by l2_distance(v, '[0,0,0]') asc limit 2;

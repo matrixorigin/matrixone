@@ -121,7 +121,7 @@ func CompactSegments(sqlproc *sqlexec.SqlProcess, cfg TableConfig, capacity, pos
 		seg.Id = SubIndexId(uid, segIdx)
 		seg.Recency = recency
 		segIdx++
-		sqls, cleanup, e := seg.ToInsertSqls(sqlproc, cfg, ts, 0 /* tag=0 base */, 0 /* merged content: no single base version */)
+		sqls, cleanup, e := seg.ToInsertSqls(sqlproc, cfg, ts, 0 /* tag=0 base */)
 		if e != nil {
 			return e
 		}

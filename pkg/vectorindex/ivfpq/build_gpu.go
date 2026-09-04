@@ -227,7 +227,7 @@ func (b *IvfpqBuild[B, Q]) AddRow(id int64, vecBytes []byte) error {
 	return nil
 }
 
-func (b *IvfpqBuild[B, Q]) ToInsertSql(ts int64, buildTS int64) ([]string, error) {
+func (b *IvfpqBuild[B, Q]) ToInsertSql(ts int64) ([]string, error) {
 	if b.current != nil && b.count > 0 {
 		// VRAM for this build is claimed in C++, around the device upload itself
 		// (cagra.hpp). A Go-side claim could only wrap the whole Build() call,
@@ -255,8 +255,7 @@ func (b *IvfpqBuild[B, Q]) ToInsertSql(ts int64, buildTS int64) ([]string, error
 			return nil, err
 		}
 		sqls = append(sqls, indexsqls...)
-		metas = append(metas, fmt.Sprintf("('%s', '%s', %d, %d, %d, %d)",
-			idx.Id, idx.Checksum, ts, idx.FileSize, idx.Len, buildTS))
+		metas = append(metas, fmt.Sprintf("('%s', '%s', %d, %d)", idx.Id, idx.Checksum, ts, idx.FileSize))
 	}
 
 	metasql := fmt.Sprintf("INSERT INTO %s VALUES %s",

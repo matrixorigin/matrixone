@@ -312,10 +312,7 @@ func (h *HnswBuild[T]) addVector(key int64, vec []T) error {
 // generate SQL to update the secondary index tables
 // 1. sync the metadata table
 // 2. sync the index file to index table
-// ToInsertSql emits the index-chunk and metadata inserts. ts is the CN wall clock that orders
-// generations; buildTS is the transaction SnapshotTS (physical) the content was built from, i.e.
-// the base-table version this generation reflects.
-func (h *HnswBuild[T]) ToInsertSql(ts int64, buildTS int64) ([]string, error) {
+func (h *HnswBuild[T]) ToInsertSql(ts int64) ([]string, error) {
 
 	// Surface any worker error from the multi-threaded build. Without this a worker
 	// that failed on the last queued vector (after Add already returned nil) would be
@@ -351,8 +348,7 @@ func (h *HnswBuild[T]) ToInsertSql(ts int64, buildTS int64) ([]string, error) {
 		}
 		fs := finfo.Size()
 
-		metas = append(metas, fmt.Sprintf("('%s', '%s', %d, %d, %d, %d)",
-			idx.Id, chksum, ts, fs, idx.Len.Load(), buildTS))
+		metas = append(metas, fmt.Sprintf("('%s', '%s', %d, %d)", idx.Id, chksum, ts, fs))
 	}
 
 	metasql := fmt.Sprintf("INSERT INTO %s VALUES %s", sqlquote.QualifiedIdent(h.tblcfg.DbName, h.tblcfg.MetadataTable), strings.Join(metas, ", "))

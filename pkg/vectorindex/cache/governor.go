@@ -22,26 +22,14 @@ package cache
 //   - its value on the SYS account (id 0) caps every tenant's indexes on this CN together
 //   - its value on a tenant caps that tenant alone
 //
-// All four apply; whichever binds first evicts. 0 means "not set by an operator", not
-// "unbounded": when no cap is set anywhere the governor substitutes the arena ceiling
-// (absoluteHostCacheCeiling / absoluteDeviceCacheCeiling), so the accounting always runs and
-// every entry stays evictable. The ceilings sit above any real machine, so an unconfigured
-// deployment is not constrained by them -- what they remove is the state where the governor
-// short-circuits and residency has no bound at all.
+// All four budgets apply. Zero selects a machine-sized CN retention target;
+// zero on a tenant adds no tenant-specific restriction. Host and device bytes
+// are independent: evicting host-only data cannot relieve device pressure.
 //
-// The arenas get their OWN variables rather than sharing one number, because a CN has far more
-// RAM than VRAM: a single figure large enough to be a sane host budget would never bind on the
-// device, and one small enough to bound VRAM would cripple the host cache. They are likewise
-// never summed when charged -- evicting a host-only index to relieve device pressure would
-// free no VRAM at all.
-//
-// The bound is enforced by EVICTION, not refusal. A refusal would fail an ordinary query on a
-// cache accounting rule, and there is nothing special about a named-snapshot generation here:
-// every resident index is charged and every resident index is evictable. Eviction reuses the
-// existing claim path (beginEviction / evictEntry), which Search already retries around, so
-// reclaiming an entry under a live query is safe.
-//
-// The just-loaded entry is never the one evicted: its caller is about to search it.
+// Reclamation claims idle entries atomically and never waits for busy queries.
+// A loader keeps its entry through its first search. If reclaim cannot make
+// room, the entry is transient and retired after its readers finish. This is
+// a retention policy, not a reservation of concurrent loaders or SQL workspace.
 
 import (
 	"context"
@@ -60,42 +48,14 @@ import (
 )
 
 const (
-	// maxIndexCacheSizeVar and maxGpuIndexCacheSizeVar are the host and device byte budgets,
-	// both declared in pkg/frontend/variables.go with Scope ScopeGlobal, defaulting to the
-	// arena ceilings mirrored below.
+	// Global-scope operator overrides; zero selects automatic sizing.
 	maxIndexCacheSizeVar    = "max_index_cache_size"
 	maxGpuIndexCacheSizeVar = "max_gpu_index_cache_size"
 
-	// sysLimitTTL bounds how stale the SYS account's value may be. The read costs one
-	// auto-commit SQL and only ever runs on a cache MISS, which has just paid for a full
-	// index load, so the cadence is about bounding SET GLOBAL latency, not query cost.
+	// Catalog reads are memoized across misses and background maintenance.
 	sysLimitTTL = 15 * time.Second
 
-	// absoluteHostCacheCeiling / absoluteDeviceCacheCeiling MIRROR the defaults of
-	// max_index_cache_size / max_gpu_index_cache_size (pkg/frontend/variables.go). The
-	// variable default gives a NEW deployment a readable advertised maximum; these give the
-	// same bound to everything the default cannot reach -- an upgraded cluster whose 0 is
-	// already persisted, an explicit 0, and the sessionless load paths. Each is sized above
-	// the physical maximum of its own arena, so neither ever refuses a load a real deployment
-	// could serve:
-	//
-	//   host   -- high-end boards reach ~4 TiB and enterprise servers a few dozen TB.
-	//   device -- a single card is tens of GB; the ceiling is 8 cards pooled over NVLink,
-	//             ~1,440 GB, which is the largest single-node VRAM pool built today.
-	//
-	// They are separate because the two arenas are orders of magnitude apart: one number
-	// sized for host RAM would be meaningless as a VRAM bound.
-	//
-	// Its purpose is not to size the cache. It is to remove "unlimited" as a reachable state:
-	// with a zero cap the governor short-circuits before enforce(), so nothing is charged,
-	// nothing is enumerated, and residency is genuinely unbounded -- one resident generation
-	// per distinct snapshot timestamp, with no ceiling of any kind. With a finite ceiling the
-	// accounting always runs and the eviction path is always live, so an operator lowering
-	// SET GLOBAL max_index_cache_size gets a governed cache rather than switching one on.
-	//
-	// It does NOT make an unconfigured deployment safe on its own: a machine will exhaust its
-	// own memory long before this binds. Configuring max_index_cache_size is still what bounds
-	// a cache to a machine.
+	// Saturation guards for automatic sizing, NOT the default cache budgets.
 	absoluteHostCacheCeiling   int64 = 64 << 40   // 64 TiB
 	absoluteDeviceCacheCeiling int64 = 1440 << 30 // 1440 GiB: 8 pooled GPUs
 )
@@ -123,7 +83,8 @@ var runSysSql = sqlexec.RunSqlAutoCommit
 // known good value rather than falling open to "no limit", so a transient catalog error cannot
 // silently unbound the cache.
 type sysLimitCache struct {
-	mu sync.Mutex
+	mu     sync.Mutex
+	cnUUID string // service identity only; never retain a query/transaction/session
 	// value is the last answer, good or fallback; fetched stamps the last ATTEMPT, success or
 	// failure. Rate-limiting failures matters as much as successes: without it a catalog that
 	// is down makes every cache miss re-attempt a 10s-timeout query, twice per miss and
@@ -261,39 +222,33 @@ func (c *VectorIndexCache) chargeAndEnforce(sqlproc *sqlexec.SqlProcess, key str
 		return
 	}
 	c.enforce(entry.accountID.Load(), tenant, sys, key)
+	// The cache target cannot prevent execution of an oversized query, and a
+	// miss must not wait on a busy victim. Such an entry may serve its current
+	// readers, but must not turn temporary query memory into retained cache
+	// memory. The last search to release its read lock retires it.
+	_, perAccount, total := c.snapshotResidents("")
+	owned := perAccount[entry.accountID.Load()]
+	if exceedsCaps(owned, tenant) || exceedsCaps(total, sys) {
+		entry.retireAfterSearch.Store(true)
+	}
 }
 
-// limits returns the calling tenant's caps and the CN-wide SYS caps, host and device. A 0 from
-// either source means "not set by an operator", and when NEITHER is set the SYS pair resolves to
-// the arena ceilings below rather than to unlimited -- so an unreadable variable still yields a
-// governed cache. Unreadable never FAILS the load: the governor is a memory policy, not a
-// correctness gate, and must not fail a query because a variable could not be read.
+func exceedsCaps(used usage, limit caps) bool {
+	return (limit.host > 0 && used.host > limit.host) ||
+		(limit.device > 0 && used.device > limit.device)
+}
+
+// limits resolves tenant overrides and the independent CN-wide retention target.
+// Missing or unreadable SYS values use automatic sizing; a tenant cannot bypass
+// that target by setting a larger local limit. Catalog errors do not fail SQL.
 func (c *VectorIndexCache) limits(sqlproc *sqlexec.SqlProcess) (tenant, sys caps) {
 	tenant, sys = c.tenantCacheLimits(sqlproc), c.sysCacheLimit(sqlproc)
 
-	// Resolved PER ARENA, not per pair. enforce() skips an arena whose tenant and sys caps are
-	// both <= 0, so each arena has to reach a positive number on its own; a pair-wide test
-	// leaves `set global max_index_cache_size = 0` unbounded whenever the OTHER arena happens
-	// to be set, and since max_gpu_index_cache_size now defaults to a non-zero ceiling that is
-	// the ordinary case rather than a corner one.
-	//
-	// This covers the cases that all have to end up bounded:
-	//   * a sessionless load (idxcron, an internal rebuild), which has no resolver;
-	//   * an explicit `set global max_index_cache_size = 0`, on either arena, at either scope;
-	//   * an UPGRADED cluster, which is the case the variable default alone cannot reach --
-	//     the value is persisted in mo_mysql_compatibility_mode at bootstrap, so a cluster
-	//     created before the default changed keeps its stored 0 forever and would otherwise
-	//     stay unbounded no matter what the code default says.
-	//
-	// So 0 means "no limit I chose", not "no limit at all": the accounting always runs and
-	// every entry stays evictable. The ceiling is above any real machine, so this is
-	// indistinguishable from unlimited in practice -- what it removes is the state where the
-	// governor short-circuits and residency has no bound of any kind.
-	if tenant.host <= 0 && sys.host <= 0 {
-		sys.host = absoluteHostCacheCeiling
+	if sys.host <= 0 {
+		sys.host = c.defaultLimits().host
 	}
-	if tenant.device <= 0 && sys.device <= 0 {
-		sys.device = absoluteDeviceCacheCeiling
+	if sys.device <= 0 {
+		sys.device = c.defaultLimits().device
 	}
 	return tenant, sys
 }
@@ -409,6 +364,7 @@ func (c *VectorIndexCache) sysCacheLimit(sqlproc *sqlexec.SqlProcess) caps {
 	}
 
 	c.sysLimit.mu.Lock()
+	c.sysLimit.cnUUID = cnUUID
 	if !c.sysLimit.fetched.IsZero() && time.Since(c.sysLimit.fetched) < sysLimitTTL {
 		value := c.sysLimit.value
 		c.sysLimit.mu.Unlock()
@@ -425,11 +381,9 @@ func (c *VectorIndexCache) sysCacheLimit(sqlproc *sqlexec.SqlProcess) caps {
 	// last-known cap to use, so parking them behind a catalog that can take the full timeout
 	// buys nothing.
 	//
-	// The FIRST fetch keeps it. There is no last-known value yet -- c.sysLimit.value is the
-	// zero caps, which every reader would interpret as "unlimited" -- so releasing here would
-	// let every concurrent miss bypass the governor entirely until the query returns. That
-	// window is CN startup, when the cache is cold and loads arrive together, i.e. exactly
-	// when the cap matters most. Waiting for the real value is the lesser cost.
+	// The FIRST fetch keeps it: learn an operator's potentially smaller override
+	// before concurrent cold loads start using the automatic target. This wait is
+	// bounded by the catalog timeout below; later refreshes never park misses.
 	if !firstFetch {
 		c.sysLimit.mu.Unlock()
 	} else {
@@ -441,8 +395,7 @@ func (c *VectorIndexCache) sysCacheLimit(sqlproc *sqlexec.SqlProcess) caps {
 	res, err := runSysSql(ctx, cnUUID, catalog.System_Account, "", sysLimitSQL)
 	if err != nil {
 		// Keep the last known good value; a catalog blip must not unbound the cache. With no
-		// value ever read, that is the zero caps -- which limits() then resolves to the arena
-		// ceiling, so an unreadable catalog leaves the cache governed rather than unlimited.
+		// value ever read, limits() resolves the zero caps to automatic sizing.
 		logutil.Warnf("index cache governor: reading the sys index cache caps failed: %v", err)
 		return last
 	}
@@ -516,6 +469,10 @@ func (c *VectorIndexCache) enforce(account uint32, tenant, sys caps, protect str
 		if len(list) == 0 {
 			return
 		}
+		if (tenant.of(a) <= 0 || perAccount[account].of(a) <= tenant.of(a)) &&
+			(sys.of(a) <= 0 || total.of(a) <= sys.of(a)) {
+			continue
+		}
 		// Coldest first. ExpireAt slides forward on every search, so it is the cache's
 		// least-recently-used ordering already.
 		sort.Slice(list, func(i, j int) bool { return list[i].expireAt < list[j].expireAt })
@@ -560,27 +517,17 @@ func parseByteLimit(raw string) (int64, error) {
 // index to relieve VRAM pressure would free nothing and lose a warm index for it.
 // It returns the bytes it freed in that arena.
 func (c *VectorIndexCache) reclaim(list []resident, a arena, limit, used int64, eligible func(resident) bool) int64 {
-	// Two passes: idle victims first, then -- only if still over the limit -- the busy ones.
-	//
-	// evictEntry destroys synchronously and Destroy takes the entry's write lock, so taking a
-	// victim with a search in flight makes the cache MISS that triggered this wait for that
-	// search. Preferring an idle victim holding the same bytes removes the head-of-line stall
-	// in the common case; the second pass keeps the guarantee that a cache over its limit
-	// still shrinks when every candidate happens to be busy.
 	before := c.evictions.Load()
-	freed := c.reclaimPass(list, a, limit, used, eligible, true)
-	if used-freed > limit {
-		freed += c.reclaimPass(list, a, limit, used-freed, eligible, false)
-	}
+	freed := c.reclaimPass(list, a, limit, used, eligible)
 	if n := c.evictions.Load() - before; n > 0 {
-		logutil.Infof("index cache governor: reclaimed %d bytes from %d %s entries to stay under %d bytes",
+		logutil.Debugf("index cache governor: reclaimed %d bytes from %d %s entries to stay under %d bytes",
 			freed, n, a, limit)
 	}
 	return freed
 }
 
 func (c *VectorIndexCache) reclaimPass(
-	list []resident, a arena, limit, used int64, eligible func(resident) bool, idleOnly bool,
+	list []resident, a arena, limit, used int64, eligible func(resident) bool,
 ) int64 {
 	var freed int64
 	for i := range list {
@@ -591,9 +538,6 @@ func (c *VectorIndexCache) reclaimPass(
 		if r.size.of(a) == 0 || !eligible(r) {
 			continue
 		}
-		if idleOnly && !r.entry.idle() {
-			continue
-		}
 		reason := fmt.Sprintf("%s_cache_size_limit", a)
 		limitVar := maxIndexCacheSizeVar
 		if a == arenaDevice {
@@ -602,13 +546,13 @@ func (c *VectorIndexCache) reclaimPass(
 		// A false return means someone else already claimed the entry -- housekeeping, a
 		// stale sweep, or the other arena's pass. Its bytes are on their way back either
 		// way, but they are not ours to count.
-		if !c.evictEntry(r.key, r.entry, reason) {
+		if !c.evictIdle(r.key, r.entry, reason) {
 			continue
 		}
 		used -= r.size.of(a)
 		freed += r.size.of(a)
 		c.evictions.Add(1)
-		c.evictedBytes.Add(r.size.of(a))
+		c.evictedBytes.Add(r.size.host + r.size.device)
 		// Per-victim detail is DEBUG: two indexes alternating under a tight cap evict on
 		// every miss, and one INFO line per victim turns a steady state into a log storm.
 		// The pass logs one aggregated line instead, and the counters below are the thing
@@ -650,27 +594,23 @@ func (c *VectorIndexCache) EvictionStats() (entries int64, bytes int64) {
 	return c.evictions.Load(), c.evictedBytes.Load()
 }
 
-// enforceMemoizedCaps applies the LAST KNOWN CN-wide caps from the housekeeping ticker, so a
-// lowered SET GLOBAL takes effect on a cache that is merely warm.
-//
-// Without it the caps are consulted only on a miss, and a hot working set renews its TTL
-// indefinitely: an operator lowering max_index_cache_size on a busy CN would see nothing shrink
-// until traffic happened to miss. The 15s memo TTL does not help -- it bounds how stale the
-// VALUE is, not when it is next applied.
-//
-// Uses the memoized value only: housekeeping has no session, so it cannot read the catalog or
-// resolve a tenant's variables. That makes this the CN-wide (SYS) bound only, and only once the
-// first miss has populated it; per-tenant caps still apply at the next miss for that tenant.
-// A cache that has never been asked for a limit is left alone rather than enforced against the
-// absolute ceiling, which no housekeeping pass could usefully act on anyway.
+// enforceMemoizedCaps applies the last successfully refreshed SYS target.
+// refreshCacheLimits supplies fresh catalog values without needing a cache miss;
+// tenant-specific changes take effect on that tenant's next miss.
 func (c *VectorIndexCache) enforceMemoizedCaps() {
 	c.sysLimit.mu.Lock()
 	sys := c.sysLimit.value
 	fetched := c.sysLimit.fetched
 	c.sysLimit.mu.Unlock()
 
-	if fetched.IsZero() || sys.unset() {
+	if fetched.IsZero() {
 		return
+	}
+	if sys.host <= 0 {
+		sys.host = c.defaultLimits().host
+	}
+	if sys.device <= 0 {
+		sys.device = c.defaultLimits().device
 	}
 	// NOBODY is asking for room on a housekeeping pass, so no account should pay first.
 	// enforce()'s pay-first sub-pass filters residents on this id; passing System_Account made
@@ -681,4 +621,22 @@ func (c *VectorIndexCache) enforceMemoizedCaps() {
 	// widened pass to reclaim strictly coldest-first. enforce() protects nothing here (no key
 	// is being loaded) and skips entries already claimed for eviction.
 	c.enforce(noAskingAccount, caps{}, sys, "")
+}
+
+// refreshCacheLimits runs in the existing maintenance task. A warm cache has
+// no misses to refresh sysLimit, so replaying its stale value cannot implement
+// SET GLOBAL. Keep only the service ID and use a fresh, bounded SYS read.
+func (c *VectorIndexCache) refreshCacheLimits() {
+	c.sysLimit.mu.Lock()
+	sid := c.sysLimit.cnUUID
+	c.sysLimit.mu.Unlock()
+	if sid == "" || c.exited.Load() {
+		return
+	}
+	c.sysCacheLimit(&sqlexec.SqlProcess{SqlCtx: &sqlexec.SqlContext{
+		Ctx: context.Background(), CNUuid: sid, AccountId: catalog.System_Account,
+	}})
+	if !c.exited.Load() {
+		c.enforceMemoizedCaps()
+	}
 }

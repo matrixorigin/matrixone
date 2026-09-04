@@ -142,7 +142,7 @@ func TestGovernorResolvesEachArenaIndependently(t *testing.T) {
 	sp := govProc(t, c, 1, caps{host: 0, device: absoluteDeviceCacheCeiling},
 		caps{host: 0, device: absoluteDeviceCacheCeiling})
 	_, sys := c.limits(sp)
-	require.EqualValues(t, absoluteHostCacheCeiling, sys.host,
+	require.EqualValues(t, c.defaultLimits().host, sys.host,
 		"an explicit host 0 resolves to the host ceiling even though the device arena is set")
 	require.EqualValues(t, absoluteDeviceCacheCeiling, sys.device,
 		"and the set device arena is left alone")
@@ -151,8 +151,8 @@ func TestGovernorResolvesEachArenaIndependently(t *testing.T) {
 	sp = govProc(t, c, 1, caps{host: absoluteHostCacheCeiling, device: 0},
 		caps{host: absoluteHostCacheCeiling, device: 0})
 	_, sys = c.limits(sp)
-	require.EqualValues(t, absoluteDeviceCacheCeiling, sys.device,
-		"an explicit device 0 resolves to the device ceiling")
+	require.EqualValues(t, c.defaultLimits().device, sys.device,
+		"an explicit device 0 resolves to the automatic device budget")
 	require.EqualValues(t, absoluteHostCacheCeiling, sys.host)
 
 	// An operator-chosen value is never overwritten by a ceiling.

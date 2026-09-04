@@ -90,7 +90,7 @@ func (Hooks) BuildSecondaryIndexDefs(
 		tableDefs[0] = &plan.TableDef{
 			Name:      indexTableName,
 			TableType: catalog.Hnsw_TblType_Metadata,
-			Cols:      make([]*plan.ColDef, 6),
+			Cols:      make([]*plan.ColDef, 4),
 		}
 		indexDefs[0], err = planplugin.CreateIndexDef(ctx, indexInfo, indexTableName, catalog.Hnsw_TblType_Metadata, indexParts, false)
 		if err != nil {
@@ -131,30 +131,6 @@ func (Hooks) BuildSecondaryIndexDefs(
 		}
 		tableDefs[0].Cols[3] = &plan.ColDef{
 			Name: catalog.Hnsw_TblCol_Metadata_Filesize,
-			Alg:  plan.CompressType_Lz4,
-			Typ: plan.Type{
-				Id:    int32(types.T_int64),
-				Width: 0,
-				Scale: 0,
-			},
-			Default: &plan.Default{NullAbility: false, Expr: nil, OriginString: ""},
-		}
-
-		// Appended LAST on purpose: readers index the metadata batch positionally, so keeping
-		// 0..3 where they were means a binary that predates these columns still reads a table
-		// that has them.
-		tableDefs[0].Cols[4] = &plan.ColDef{
-			Name: catalog.Hnsw_TblCol_Metadata_Nrow,
-			Alg:  plan.CompressType_Lz4,
-			Typ: plan.Type{
-				Id:    int32(types.T_int64),
-				Width: 0,
-				Scale: 0,
-			},
-			Default: &plan.Default{NullAbility: false, Expr: nil, OriginString: ""},
-		}
-		tableDefs[0].Cols[5] = &plan.ColDef{
-			Name: catalog.Hnsw_TblCol_Metadata_Build_Ts,
 			Alg:  plan.CompressType_Lz4,
 			Typ: plan.Type{
 				Id:    int32(types.T_int64),

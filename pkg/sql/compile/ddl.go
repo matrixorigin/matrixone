@@ -3510,9 +3510,6 @@ func (s *Scope) TruncateTable(c *Compile) error {
 	if oldLogicalId != 0 {
 		createOpts = createOpts.WithKeepLogicalId(oldLogicalId)
 	}
-	// Same reason as the ALTER ... COPY replica: the recreate goes through regenerated
-	// DDL, which cannot express relkind.
-	createOpts = createOpts.WithKeepRelKind(tableDef.GetTableType())
 	if truncate.IsDelete {
 		rows, err := rel.Rows(c.proc.Ctx)
 		if err != nil {

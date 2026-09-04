@@ -70,12 +70,6 @@ type HnswModel[T types.RealNumbers] struct {
 	Timestamp int64
 	Checksum  string
 
-	// Nrow is the source rows this generation indexes and BuildTS is the transaction
-	// SnapshotTS its content was built from. Both 0 when the metadata row predates the
-	// columns -- read as unknown, never as "empty" or "built at the epoch".
-	Nrow    int64
-	BuildTS int64
-
 	// for cdc update
 	Dirty atomic.Bool
 	View  bool
@@ -200,12 +194,6 @@ func (idx *HnswModel[T]) SaveToFile() error {
 		}
 	}
 	idx.Path = ""
-
-	// Capture the vector count while the index is still alive: SaveToFile destroys the handle
-	// below, and ToInsertSql needs the count for the metadata row.
-	if n, lerr := idx.Index.Len(); lerr == nil {
-		idx.Len.Store(int64(n))
-	}
 
 	empty, err := idx.Empty()
 	if err != nil {

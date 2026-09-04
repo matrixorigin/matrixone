@@ -112,7 +112,7 @@ func TestBuildMulti(t *testing.T) {
 	fmt.Printf("Build Time %f sec\n", end.Sub(start).Seconds())
 
 	fmt.Printf("model built\n")
-	_, err = build.ToInsertSql(time.Now().UnixMicro(), 0)
+	_, err = build.ToInsertSql(time.Now().UnixMicro())
 	require.Nil(t, err)
 	indexes := build.GetIndexes()
 	require.Len(t, indexes, 2)
@@ -284,7 +284,7 @@ func runBuildSingleThread[T types.RealNumbers](t *testing.T) {
 	wg.Wait()
 
 	fmt.Printf("model built\n")
-	sqls, err := build.ToInsertSql(time.Now().UnixMicro(), 0)
+	sqls, err := build.ToInsertSql(time.Now().UnixMicro())
 	require.Nil(t, err)
 	require.Equal(t, 3, len(sqls))
 	//fmt.Println(sqls[0])
@@ -406,7 +406,7 @@ func TestBuildMultiWorker(t *testing.T) {
 		require.Nil(t, err)
 	}
 
-	sqls, err := build.ToInsertSql(time.Now().UnixMicro(), 0)
+	sqls, err := build.ToInsertSql(time.Now().UnixMicro())
 	require.Nil(t, err)
 	require.True(t, len(sqls) > 0)
 }
@@ -451,7 +451,7 @@ func TestBuildMultiWorkerLastItemError(t *testing.T) {
 	bad := make([]float32, ndim+1)
 	_ = build.Add(int64(64), bad)
 
-	_, err = build.ToInsertSql(time.Now().UnixMicro(), 0)
+	_, err = build.ToInsertSql(time.Now().UnixMicro())
 	require.NotNil(t, err, "worker error on the last queued vector must surface at finalization")
 	require.Contains(t, err.Error(), "dimension not match")
 }
@@ -494,7 +494,7 @@ func TestBuildMultiWorkerRollover(t *testing.T) {
 		require.Nil(t, build.Add(int64(i), vec))
 	}
 
-	sqls, err := build.ToInsertSql(time.Now().UnixMicro(), 0)
+	sqls, err := build.ToInsertSql(time.Now().UnixMicro())
 	require.Nil(t, err)
 	require.True(t, len(sqls) > 0)
 

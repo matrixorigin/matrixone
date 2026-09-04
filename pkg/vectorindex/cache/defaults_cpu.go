@@ -1,10 +1,12 @@
+//go:build !gpu
+
 // Copyright 2026 Matrix Origin
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
 //
-//      http://www.apache.org/licenses/LICENSE-2.0
+//     http://www.apache.org/licenses/LICENSE-2.0
 //
 // Unless required by applicable law or agreed to in writing, software
 // distributed under the License is distributed on an "AS IS" BASIS,
@@ -12,12 +14,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package v4_0_7
+package cache
 
-import "github.com/matrixorigin/matrixone/pkg/bootstrap/versions"
-
-// The index metadata provenance migration is NOT an entry: the set of tables it alters is
-// only known at runtime (one metadata table per index, per account), which a fixed UpgSql
-// cannot express. It runs from HandleTenantUpgrade, the same escape hatch v4_0_6 uses for
-// upgradeLegacyForeignKeyMetadata.
-var tenantUpgEntries = []versions.UpgradeEntry{}
+func automaticDeviceLimit() int64 { return fallbackCacheBytes }

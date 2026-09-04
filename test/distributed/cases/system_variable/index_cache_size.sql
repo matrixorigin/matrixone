@@ -1,7 +1,7 @@
 -- @suit
 
 -- @case
--- @desc:max_index_cache_size / max_gpu_index_cache_size are operator variables: GLOBAL scope only, defaulting to an arena ceiling rather than to unlimited
+-- @desc:max_index_cache_size / max_gpu_index_cache_size are operator variables: GLOBAL scope only, defaulting to automatic CN retention targets
 -- @label:bvt
 
 -- Isolated by ACCOUNT. SET GLOBAL is per-account, so a dedicated account keeps two
@@ -14,9 +14,7 @@ create account acc_idx_var admin_name 'admin' identified by '123456';
 
 -- @session:id=1&user=acc_idx_var:admin&password=123456
 
--- Defaults are the per-arena ceilings, not 0: the advertised maximum is a number an
--- operator can read, and an unconfigured deployment is charged and evictable rather than
--- unbounded. Host is far larger than device because RAM and VRAM are orders of magnitude apart.
+-- Zero selects automatic CN sizing, without adding a tenant-specific override.
 select @@global.max_index_cache_size;
 select @@global.max_gpu_index_cache_size;
 
@@ -49,8 +47,7 @@ set global max_index_cache_size = 2199023255552;
 select @@global.max_index_cache_size;
 select @@global.max_gpu_index_cache_size;
 
--- 0 is still accepted; the governor resolves it to the arena ceiling rather than to
--- genuinely unbounded, because an upgraded cluster keeps a persisted 0.
+-- Explicit zero resets the override to automatic sizing.
 set global max_index_cache_size = 0;
 select @@global.max_index_cache_size;
 set global max_gpu_index_cache_size = 0;

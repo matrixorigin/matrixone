@@ -3828,8 +3828,7 @@ var gSysVarsDefs = map[string]SystemVariable{
 	// HOST memory byte budget for the vector/fulltext index cache, read per account. The
 	// value on the SYS account (id 0) caps every tenant's resident indexes on the CN
 	// together; the value on a tenant caps that tenant alone. 0 means "not set by an
-	// operator"; the governor resolves an unset budget to the arena ceiling below, so the
-	// cache is always accounted and always evictable.
+	// operator"; an unset SYS budget selects a machine-sized retention target.
 	//
 	// Device memory has its own budget, max_gpu_index_cache_size: a CN has far more RAM than
 	// VRAM, so one number cannot express both.
@@ -3839,28 +3838,23 @@ var gSysVarsDefs = map[string]SystemVariable{
 		Dynamic:           true,
 		SetVarHintApplies: false,
 		Type:              InitSystemVariableIntType("max_index_cache_size", 0, math.MaxInt64, false),
-		// 64 TiB: above the memory of any machine a CN runs on (high-end boards reach ~4 TiB,
-		// enterprise servers a few dozen TB), so the default never refuses a load a real
-		// deployment could serve. It is not a sizing choice -- it exists so the advertised
-		// maximum is a number an operator can read. 0 is still accepted, and the governor
-		// resolves it to this same ceiling -- an upgraded cluster keeps a persisted 0, so 0
-		// cannot be allowed to mean genuinely unbounded.
-		Default: int64(64 << 40),
+		// 0 selects automatic sizing: a quarter of the CN's host/cgroup limit.
+		// Tenant values may lower that CN-wide target, never raise it.
+		Default: int64(0),
 	},
 	// DEVICE (VRAM) byte budget for the index cache, the GPU counterpart of
 	// max_index_cache_size and read per account the same way: SYS caps the CN, a tenant's
 	// value caps that tenant. Only the cuVS algorithms (cagra, ivfpq) charge against it.
-	// 0 means "not set by an operator" and resolves to the device ceiling below.
+	// An unset SYS value selects automatic device retention sizing.
 	"max_gpu_index_cache_size": {
 		Name:              "max_gpu_index_cache_size",
 		Scope:             ScopeGlobal,
 		Dynamic:           true,
 		SetVarHintApplies: false,
 		Type:              InitSystemVariableIntType("max_gpu_index_cache_size", 0, math.MaxInt64, false),
-		// 1440 GiB: eight GPUs pooled over NVLink, the largest single-node VRAM pool built
-		// today. Far below the host default because the two arenas are orders of magnitude
-		// apart -- a number sized for RAM would be meaningless as a VRAM bound.
-		Default: int64(1440 << 30),
+		// 0 selects half the physical devices' aggregate memory. Per-device
+		// allocation gates remain authoritative for placement and free memory.
+		Default: int64(0),
 	},
 	"probe_limit": {
 		Name:              "probe_limit",

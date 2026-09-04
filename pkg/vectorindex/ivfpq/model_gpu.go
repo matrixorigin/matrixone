@@ -79,12 +79,6 @@ type IvfpqModel[B, Q cuvs.VectorType] struct {
 	Timestamp int64
 	Checksum  string
 
-	// Nrow is the source rows this generation indexes and BuildTS is the transaction
-	// SnapshotTS its content was built from. Both 0 when the metadata row predates the
-	// columns -- read as unknown, never as "empty" or "built at the epoch".
-	Nrow    int64
-	BuildTS int64
-
 	Dirty bool
 	View  bool
 	Len   int64
@@ -323,10 +317,6 @@ func (idx *IvfpqModel[B, Q]) saveToFile() error {
 		}
 	}
 	idx.HostComponentBytes = packSizes.Host
-
-	// Record the vector count while the handle is still alive; ToInsertSql needs it for the
-	// metadata row and Destroy below releases the index.
-	idx.Len = int64(idx.Index.Len())
 
 	if err = idx.Index.Destroy(); err != nil {
 		logutil.Errorf("IvfpqModel.saveToFile: Destroy FAILED idx=%s (tar RETAINED at %s): %v", idx.Id, tarPath, err)
@@ -877,46 +867,10 @@ func LoadMetadata[B, Q cuvs.VectorType](sqlproc *sqlexec.SqlProcess, dbname stri
 			ts := vector.GetFixedAtWithTypeCheck[int64](tsVec, i)
 			fs := vector.GetFixedAtWithTypeCheck[int64](fsVec, i)
 			idx := &IvfpqModel[B, Q]{Id: id, Checksum: chksum, Timestamp: ts, FileSize: fs}
-			// nrow and build_ts were appended after the original four columns, and the
-			// metadata table is created per index at CREATE INDEX -- REINDEX rewrites its
-			// rows, not the table -- so an index created before they existed still has four.
-			// Read them only when the batch carries them; absent means unknown.
-			if len(bat.Vecs) > 4 {
-				idx.Nrow = vector.GetFixedAtWithTypeCheck[int64](bat.Vecs[4], i)
-			}
-			if len(bat.Vecs) > 5 {
-				idx.BuildTS = vector.GetFixedAtWithTypeCheck[int64](bat.Vecs[5], i)
-			}
 			indexes = append(indexes, idx)
 		}
 	}
-
-	var rows, newest int64
-	for _, idx := range indexes {
-		rows += idx.Nrow
-		if idx.BuildTS > newest {
-			newest = idx.BuildTS
-		}
-	}
-	logMetadataProvenance(metatbl, len(indexes), rows, newest)
-
 	return indexes, nil
-}
-
-// logMetadataProvenance reports what the metadata rows say a loaded index is: how many source
-// rows its generations cover, and the newest data version they were built from. build_ts is 0
-// for a generation written before the column existed, and for content with no single source
-// version -- both print as "unknown" rather than as an epoch timestamp.
-//
-// This is the read side of the provenance columns: without it nrow/build_ts are written and
-// never surfaced, and an operator asking "how far behind is this resident index?" has to query
-// the hidden metadata table by hand.
-func logMetadataProvenance(metatbl string, count int, rows, buildTS int64) {
-	if buildTS <= 0 {
-		logutil.Infof("%s: loaded %d generation(s), rows=%d, build_ts=unknown", metatbl, count, rows)
-		return
-	}
-	logutil.Infof("%s: loaded %d generation(s), rows=%d, build_ts=%d", metatbl, count, rows, buildTS)
 }
 
 // ToDeleteSql generates DELETE SQL for storage and metadata tables.

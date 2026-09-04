@@ -160,11 +160,9 @@ func (s *IvfpqSearch[B, Q]) SearchFloat32(proc *sqlexec.SqlProcess, query any, r
 // gate -- everything up to the first deserialize. Afterwards GetIndexSize reports the arena split
 // cuvs.MeasureTar measured, so the cache can reclaim room for this index before Load claims it.
 //
-// The gate stays HERE, interleaved with the fetch loop, rather than moving to Load: the running
-// aggregate is re-checked after each tar so a IVF-PQ index that cannot fit is refused as soon as
-// the total says so, instead of after downloading the remaining gigabytes. That early abort is
-// worth more than letting the gate see the room the governor is about to free, and it keeps the
-// gate running exactly once.
+// Only the permanent hardware-capacity gate runs here, after each artifact,
+// so impossible requests stop downloading early. The free-memory gate runs
+// in Load, after the cache has had its opportunity to reclaim idle entries.
 //
 // On refusal the deferred cleanup in admitIndexes removes the tars this call fetched. Past the
 // gate they are owned by s.Indexes, and Destroy removes them if the load is abandoned before or
@@ -194,10 +192,8 @@ func (s *IvfpqSearch[B, Q]) Load(sqlproc *sqlexec.SqlProcess) (err error) {
 			return err
 		}
 	}
-	// If any step below fails, the cache drops the entry WITHOUT calling Destroy (see
-	// VectorIndexCache.Search), and there is no finalizer, so release the sub-indexes here to
-	// avoid orphaning GPU memory and fetched tars on every failed load. Destroy is idempotent
-	// and safe on partial state.
+	// Roll back partial native state for direct Load callers as well as cache callers.
+	// Cache failure cleanup may call Destroy again; it is idempotent.
 	defer func() {
 		if err != nil {
 			s.Destroy()
@@ -269,8 +265,8 @@ func (s *IvfpqSearch[B, Q]) GetIndexSize() (hostBytes, deviceBytes int64) {
 // Counts from the POST-LOAD capture only: buildOverflow runs inside Load, so at Preload the
 // overflow does not exist and contributes 0. The steady-state charge is right and the entry
 // is evictable; makeRoom just does not reserve ahead of it, and the post-load enforce pass
-// brings the arena back under cap. Same shape as an hnsw generation whose nrow predates the
-// column.
+// reclaims idle entries or makes this entry transient. HNSW also measures native
+// memory after Load rather than adding a metadata migration for an estimate.
 //
 // To reserve ahead, size it from the tag=1 chunk frame headers (n_inserts + n_upserts, see
 // cuvs.UnframeCdcChunk) -- but do NOT add a second read of the tail: Load already reads it in

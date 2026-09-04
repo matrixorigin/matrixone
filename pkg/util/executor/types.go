@@ -104,8 +104,6 @@ type StatementOption struct {
 	disableDropAutoIncrement bool
 	keepAutoIncrement        uint64
 	keepLogicalId            uint64
-	keepRelKind              string
-	hasKeepRelKind           bool
 	disableLock              bool
 	allowMoColumnsUpdate     bool
 }

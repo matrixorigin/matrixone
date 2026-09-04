@@ -281,13 +281,3 @@ func baseElemBytes(baseOid types.T) uint64 {
 	}
 	return 4
 }
-
-// buildSnapshotTS is the transaction SnapshotTS the index content is built from -- the base-table
-// version this generation reflects. Recorded alongside the wall-clock ordering timestamp because
-// a wall clock cannot be compared against a named snapshot's TS. 0 when there is no txn.
-func buildSnapshotTS(proc *process.Process) int64 {
-	if proc == nil {
-		return 0
-	}
-	return sqlexec.NewSqlProcess(proc).BuildSnapshotTS()
-}

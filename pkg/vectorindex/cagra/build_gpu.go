@@ -243,7 +243,7 @@ func (b *CagraBuild[B, Q]) AddRow(id int64, vecBytes []byte) error {
 
 // ToInsertSql finalizes any in-progress sub-index, serializes all sub-indexes to the
 // storage table, and returns INSERT SQL statements (storage chunks + single metadata row).
-func (b *CagraBuild[B, Q]) ToInsertSql(ts int64, buildTS int64) ([]string, error) {
+func (b *CagraBuild[B, Q]) ToInsertSql(ts int64) ([]string, error) {
 	// Finalize the current sub-index if it contains vectors.
 	if b.current != nil && b.count > 0 {
 		// VRAM for this build is claimed in C++, around the device upload itself
@@ -274,8 +274,7 @@ func (b *CagraBuild[B, Q]) ToInsertSql(ts int64, buildTS int64) ([]string, error
 			return nil, err
 		}
 		sqls = append(sqls, indexsqls...)
-		metas = append(metas, fmt.Sprintf("('%s', '%s', %d, %d, %d, %d)",
-			idx.Id, idx.Checksum, ts, idx.FileSize, idx.Len, buildTS))
+		metas = append(metas, fmt.Sprintf("('%s', '%s', %d, %d)", idx.Id, idx.Checksum, ts, idx.FileSize))
 	}
 
 	metasql := fmt.Sprintf("INSERT INTO %s VALUES %s",

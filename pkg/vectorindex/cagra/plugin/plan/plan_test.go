@@ -162,11 +162,7 @@ func TestBuildSecondaryIndexDefs_OK(t *testing.T) {
 	require.Len(t, tblDefs, 2)
 	require.Equal(t, catalog.Cagra_TblType_Metadata, tblDefs[0].TableType)
 	require.Equal(t, catalog.Cagra_TblType_Storage, tblDefs[1].TableType)
-	// metadata: index_id, checksum, timestamp, filesize, then nrow and build_ts appended
-	// last so a reader that predates them keeps its positional 0..3.
-	require.Len(t, tblDefs[0].Cols, 6)
-	require.Equal(t, catalog.Cagra_TblCol_Metadata_Nrow, tblDefs[0].Cols[4].Name)
-	require.Equal(t, catalog.Cagra_TblCol_Metadata_Build_Ts, tblDefs[0].Cols[5].Name)
+	require.Len(t, tblDefs[0].Cols, 4)
 	require.Len(t, tblDefs[1].Cols, 5)
 	require.NotNil(t, tblDefs[0].Pkey)
 	require.NotNil(t, tblDefs[1].Pkey)
