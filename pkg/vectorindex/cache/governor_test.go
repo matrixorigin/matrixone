@@ -71,7 +71,7 @@ func stubSysLimit(t *testing.T, c *VectorIndexCache, value caps) {
 		return executor.Result{}, moerr.NewInternalErrorNoCtx("no catalog in unit test")
 	}
 	t.Cleanup(func() { runSysSql = orig })
-	c.sysLimit.value, c.sysLimit.fetched, c.sysLimit.valid = value, time.Now(), true
+	c.sysLimit.value, c.sysLimit.fetched = value, time.Now()
 }
 
 // loadInto puts one sized entry into the cache under key, as account would have loaded it.
@@ -598,4 +598,32 @@ func TestGovernorSizeReadsDoNotRaceEviction(t *testing.T) {
 		}(i)
 	}
 	wg.Wait()
+}
+
+// A failing SYS read is rate-limited like a successful one. Without stamping the attempt, a
+// catalog that is down would be re-queried on every cache miss -- twice per miss, each up to
+// the 10s query timeout, serialized on sysLimit.mu -- turning an outage into a per-miss stall.
+func TestGovernorSysReadFailureIsRateLimited(t *testing.T) {
+	c := newBoundCache(t)
+	calls := 0
+	withSysSql(t, c, func(context.Context, string, uint32, string, string) (executor.Result, error) {
+		calls++
+		return executor.Result{}, moerr.NewInternalErrorNoCtx("catalog down")
+	})
+
+	for i := 0; i < 5; i++ {
+		require.Equal(t, caps{}, c.sysCacheLimit(sysProc()),
+			"never having read a value is unlimited, the unconfigured behaviour")
+	}
+	require.Equal(t, 1, calls, "the failed attempt must suppress retries for sysLimitTTL")
+
+	// Past the TTL it tries again, and a recovered catalog is picked up.
+	c.sysLimit.fetched = time.Now().Add(-2 * sysLimitTTL)
+	mp := mpool.MustNewZero()
+	runSysSql = func(context.Context, string, uint32, string, string) (executor.Result, error) {
+		calls++
+		return varRows(t, mp, maxIndexCacheSizeVar, "512"), nil
+	}
+	require.Equal(t, hostCap(512), c.sysCacheLimit(sysProc()))
+	require.Equal(t, 2, calls)
 }

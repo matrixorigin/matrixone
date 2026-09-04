@@ -82,10 +82,13 @@ var runSysSql = sqlexec.RunSqlAutoCommit
 // known good value rather than falling open to "no limit", so a transient catalog error cannot
 // silently unbound the cache.
 type sysLimitCache struct {
-	mu      sync.Mutex
+	mu sync.Mutex
+	// value is the last answer, good or fallback; fetched stamps the last ATTEMPT, success or
+	// failure. Rate-limiting failures matters as much as successes: without it a catalog that
+	// is down makes every cache miss re-attempt a 10s-timeout query, twice per miss and
+	// serialized on mu, turning an outage into a per-miss stall.
 	value   caps
 	fetched time.Time
-	valid   bool
 }
 
 // caps is one budget pair: the bytes allowed in each arena, 0 meaning unlimited.
@@ -273,15 +276,21 @@ func (c *VectorIndexCache) sysCacheLimit(sqlproc *sqlexec.SqlProcess) caps {
 
 	c.sysLimit.mu.Lock()
 	defer c.sysLimit.mu.Unlock()
-	if c.sysLimit.valid && time.Since(c.sysLimit.fetched) < sysLimitTTL {
+	if !c.sysLimit.fetched.IsZero() && time.Since(c.sysLimit.fetched) < sysLimitTTL {
 		return c.sysLimit.value
 	}
+
+	// Every exit from here stamps the attempt, so a failing catalog is retried at the same
+	// cadence as a healthy one rather than on every miss.
+	c.sysLimit.fetched = time.Now()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	res, err := runSysSql(ctx, cnUUID, catalog.System_Account, "", sysLimitSQL)
 	if err != nil {
-		// Keep the last known good value; a catalog blip must not unbound the cache.
+		// Keep the last known good value; a catalog blip must not unbound the cache. With no
+		// value ever read, that is the zero caps -- unlimited, i.e. exactly the behaviour of a
+		// deployment that never configured the feature.
 		logutil.Warnf("index cache governor: reading the sys index cache caps failed: %v", err)
 		return c.sysLimit.value
 	}
@@ -306,7 +315,7 @@ func (c *VectorIndexCache) sysCacheLimit(sqlproc *sqlexec.SqlProcess) caps {
 			}
 		}
 	}
-	c.sysLimit.value, c.sysLimit.fetched, c.sysLimit.valid = value, time.Now(), true
+	c.sysLimit.value = value
 	return value
 }
 
