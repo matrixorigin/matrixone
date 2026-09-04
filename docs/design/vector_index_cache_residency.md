@@ -47,7 +47,8 @@ Non-goals:
   without inventing one.
 - **Fair-share arithmetic.** Budgets are explicit operator numbers, not computed
   splits (see §5.3).
-- **A CDC tail's data version.** Not knowable at the write site (§6.2).
+- **Versioning fulltext2/cagra/ivfpq CDC tails.** They write no metadata row at
+  all, so there is nothing to carry a version (§6.2).
 
 ## 3. Historical reads
 
@@ -189,17 +190,69 @@ deliberately distinct from the existing `timestamp` column, which is
 `time.Now()` on the CN: a skewable wall clock that only orders generations and
 cannot be compared with a snapshot's timestamp.
 
-It is recorded **only where it is knowable**. A build reads the source table
-inside its own transaction, so that transaction's `SnapshotTS` is exactly the
-version captured. A CDC-appended generation records `0`: the consumer writing the
-row cannot see the change range it applied — `iscp.DataRetriever` exposes no
-timestamps and the iteration's `[from, to]` stays upstream — and the sync
-transaction's own timestamp would say when the sync *ran*. Recording that would
-repeat the wall-clock conflation this column exists to fix, under a name implying
-otherwise.
+It is recorded **wherever the covered version is known**, which is both halves:
+
+- A **build** reads the source table inside its own transaction, so that
+  transaction's `SnapshotTS` is exactly the version captured.
+- A **CDC sync** applies a change range and rewrites the generation, so the
+  version it now covers is that range's upper bound — `DataRetriever.GetToTS()`,
+  the same `status.To` that `UpdateWatermark` persists. hnsw's consumer supplies
+  it through `HnswSync.SetBuildTS`.
+
+Neither records the writing transaction's own `SnapshotTS`, and for CDC that is a
+soundness point rather than a stylistic one: the sync transaction reads at some
+`S >= To`, and `(To, S]` can hold changes committed after the range was collected
+but never applied. Recording `S` would claim coverage the generation does not
+have — worse than recording nothing, because `build_ts` exists precisely to be
+trusted by a coverage check. `To` claims exactly what was applied.
+
+`0` remains the unknown sentinel: a generation written before the column existed,
+or by a direct non-ISCP caller with no iteration to name.
+
+**Physical only, matching how MatrixOne stores a snapshot.** The column is
+`bigint` holding `TS.Physical()`. `LogicalTime` is not stored and cannot be
+recovered from it — the HLC increments logical only while the physical clock has
+not advanced and resets it to 0 when it does (`HLCClock.now`), so the mapping is
+not injective.
+
+Nothing is lost for the comparison this column exists for. `mo_snapshots.ts` is
+itself a `bigint`, and every reconstruction of a named snapshot's timestamp is
+`timestamp.Timestamp{PhysicalTime: record.ts}` with logical left at 0. A named
+snapshot is therefore physical-only by construction, so `build_ts` carries exactly
+the fidelity MatrixOne stores a snapshot at, and the two are directly comparable.
+
+The equal-physical case resolves favourably rather than ambiguously: with a
+snapshot at `(P, 0)` and a generation at `(P, L>=0)`, `(P, 0) <= (P, L)` always
+holds, so an ordinary `snapshot_ts <= build_ts` is exact for named snapshots.
+
+Only a comparison against some OTHER timestamp — one carrying a non-zero logical,
+which a named snapshot never does — would need to be strict to stay sound. That
+case does not arise on this path.
+
+fulltext2, cagra and ivfpq write no metadata row for a CDC tail at all — tails are
+storage chunks — so for them CDC leaves the base generation's `build_ts` as it
+was, and the tail itself is unversioned. Giving those tails a version would mean
+writing metadata rows for them, which is a larger change than this design makes.
 
 `nrow` gives hnsw a pre-load estimate (§6.1) that no other source provides at the
 right granularity.
+
+**What build_ts buys.** A base generation is built by reading the source table
+inside a transaction at `SnapshotTS = X`, so its content is exactly the base data
+as of X. A snapshot taken **at X** therefore yields a base table and an index that
+provably agree — the index is covered by that snapshot in the strong sense, and
+`build_ts` is what makes X recoverable after the fact.
+
+For any later timestamp Y the agreement depends on what CDC appended in `(X, Y]`,
+and a CDC-appended generation records no coverage, so it is not checkable. In
+other words `build_ts` makes the BASE half of an index verifiable against a
+snapshot; the CDC half is not, and closing that gap means plumbing the ISCP
+iteration's upper bound through `DataRetriever` so a tail can record what it
+covers.
+
+This is the mechanism a future read-path check would rest on: given a request at
+Y, compare Y against the generations resident at Y and report — or refuse — when
+the index demonstrably predates the data the snapshot exposes.
 
 **Upgrade.** Readers tolerating the old four-column shape is not sufficient:
 a CN running this code *writes* six-value rows, so the first CDC sync or rebuild

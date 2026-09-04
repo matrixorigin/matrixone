@@ -190,3 +190,43 @@ func TestApplyScanSnapshotNilIsNoop(t *testing.T) {
 	require.Nil(t, sp.SnapshotTS)
 	require.Nil(t, sp.AccountIDOverride)
 }
+
+// BuildSnapshotTS is the version an index generation built here reflects: the transaction's
+// SnapshotTS, recorded as metadata.build_ts. It must be the TSO timestamp and not a wall clock,
+// which is the whole reason build_ts exists beside the wall-clock "timestamp" column.
+func TestBuildSnapshotTSFromProc(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	proc := testutil.NewProc(t)
+	t.Cleanup(proc.Free)
+	op := mock_frontend.NewMockTxnOperator(ctrl)
+	proc.Base.TxnOperator = op
+	op.EXPECT().Txn().Return(txn.TxnMeta{SnapshotTS: timestamp.Timestamp{PhysicalTime: 4242, LogicalTime: 7}}).AnyTimes()
+
+	sp := &SqlProcess{Proc: proc}
+	require.EqualValues(t, 4242, sp.BuildSnapshotTS(),
+		"the physical component of the txn SnapshotTS")
+}
+
+// The background / ISCP shape carries its operator on SqlCtx instead, and must work identically:
+// a CDC sync reaches the metadata writer this way.
+func TestBuildSnapshotTSFromSqlContext(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	op := mock_frontend.NewMockTxnOperator(ctrl)
+	op.EXPECT().Txn().Return(txn.TxnMeta{SnapshotTS: timestamp.Timestamp{PhysicalTime: 99}}).AnyTimes()
+
+	sp := &SqlProcess{SqlCtx: &SqlContext{TxnOperator: op}}
+	require.EqualValues(t, 99, sp.BuildSnapshotTS())
+}
+
+// No transaction to ask => unknown, which readers treat as "no provenance" rather than as a
+// generation built at the epoch.
+func TestBuildSnapshotTSUnknownWithoutTxn(t *testing.T) {
+	require.EqualValues(t, 0, (*SqlProcess)(nil).BuildSnapshotTS())
+	require.EqualValues(t, 0, (&SqlProcess{}).BuildSnapshotTS())
+	require.EqualValues(t, 0, (&SqlProcess{SqlCtx: &SqlContext{}}).BuildSnapshotTS())
+
+	proc := testutil.NewProc(t)
+	t.Cleanup(proc.Free)
+	proc.Base.TxnOperator = nil
+	require.EqualValues(t, 0, (&SqlProcess{Proc: proc}).BuildSnapshotTS())
+}

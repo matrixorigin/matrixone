@@ -113,22 +113,16 @@ const maxInsertTuples = 500
 // base (sync CREATE/REINDEX build); tag=1 is a CDC delta. sqlproc resolves the LOCAL
 // SSD spill dir (falls back to /tmp when none is attached). The returned cleanup MUST
 // run after the SQLs execute (they read the temp file at execution).
-// segmentBuildTS is the base-table version a segment's content reflects, for metadata.build_ts.
+// ToInsertSqls persists this segment. buildTS is the base-table version the segment's content
+// reflects, recorded as metadata.build_ts; 0 means unknown.
 //
-// A tag=0 BASE is built by reading the source table inside this transaction, so the txn
-// SnapshotTS is exactly that version. A tag=1 CDC TAIL is not: the meaningful value would be the
-// upper bound of the change range being applied, and the consumer never sees it --
-// iscp.DataRetriever exposes no timestamps, and the iteration's [from, to] stays upstream. The
-// sync txn's SnapshotTS would only say when the sync ran, so a tail records 0 (unknown) rather
-// than a number that looks like a data version and is not.
-func segmentBuildTS(sqlproc *sqlexec.SqlProcess, tag int) int64 {
-	if tag != 0 {
-		return 0
-	}
-	return sqlproc.BuildSnapshotTS()
-}
-
-func (s *Segment) ToInsertSqls(sqlproc *sqlexec.SqlProcess, cfg TableConfig, ts int64, tag int) (sqls []string, cleanup func(), err error) {
+// It is a parameter rather than something derived here because the two callers know different
+// things and the tag cannot tell them apart -- both write tag=0. A CREATE builds from the source
+// table inside this transaction, so its SnapshotTS is exactly the version captured. A MERGE
+// merges existing index segments and never reads the source table, so the compaction
+// transaction's SnapshotTS would claim coverage the content does not have; and since its inputs
+// include unversioned CDC tails there is no version to name, so it passes 0.
+func (s *Segment) ToInsertSqls(sqlproc *sqlexec.SqlProcess, cfg TableConfig, ts int64, tag int, buildTS int64) (sqls []string, cleanup func(), err error) {
 	buf, err := s.Serialize()
 	if err != nil {
 		return nil, nil, err
@@ -159,7 +153,7 @@ func (s *Segment) ToInsertSqls(sqlproc *sqlexec.SqlProcess, cfg TableConfig, ts 
 		catalog.FullText2Index_TblCol_Metadata_Recency, catalog.FullText2Index_TblCol_Metadata_Nrow,
 		catalog.FullText2Index_TblCol_Metadata_Build_Ts,
 		sqlquote.String(s.Id), ts, sqlquote.String(checksum), filesize, s.Recency, s.N,
-		segmentBuildTS(sqlproc, tag)))
+		buildTS))
 	sqls = append(sqls, fileChunkInsertSqls(cfg, s.Id, 0, path, 0, int(filesize), tag)...)
 	return sqls, cleanup, nil
 }

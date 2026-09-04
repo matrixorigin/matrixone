@@ -610,6 +610,15 @@ const (
 	// [from, to] stays upstream -- and the sync txn's own SnapshotTS would say when the sync ran,
 	// not which data version the generation covers.
 	//
+	// build_ts is a bigint holding TS.Physical(), which is exactly how MatrixOne itself stores
+	// a snapshot: mo_snapshots.ts is a bigint too, and a named snapshot's timestamp is always
+	// rebuilt as timestamp.Timestamp{PhysicalTime: record.ts} with logical left at 0. So the
+	// two are directly comparable, and the equal-physical case resolves favourably -- (P,0) <=
+	// (P,L) for any L -- which makes an ordinary snapshot_ts <= build_ts exact here. Logical is
+	// not recoverable from physical (the HLC resets it whenever physical advances), so a
+	// comparison against a timestamp that DOES carry a non-zero logical would have to be
+	// strict; no such comparison arises on this path.
+	//
 	// Both columns are also 0 for a generation written before they existed. Readers must
 	// therefore treat 0 as UNKNOWN, never as "empty" or "built at the epoch": the metadata table
 	// is created per index at CREATE INDEX, and REINDEX rewrites its rows rather than the table,
