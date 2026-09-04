@@ -1761,9 +1761,7 @@ func TestTableChangeStream_RollbackFailure(t *testing.T) {
 }
 
 // TestTableChangeStream_FullPipeline_RandomDelaysAndErrors verifies the entire pipeline
-// under random delays and error injections, ensuring orderliness, idempotency, and consistency.
-// This test uses pausableChangesHandle, watermarkUpdaterStub, and error injection to simulate
-// realistic failure scenarios including StaleRead, commit failures, and rollback failures.
+// with deterministic error injection, ensuring recovery and terminal cleanup.
 func TestTableChangeStream_FullPipeline_RandomDelaysAndErrors(t *testing.T) {
 	updaterStub := newWatermarkUpdaterStub()
 	noopStop := func() {}
@@ -1781,10 +1779,8 @@ func TestTableChangeStream_FullPipeline_RandomDelaysAndErrors(t *testing.T) {
 
 	// Track operation order and counts for verification
 	var (
-		collectCalls         atomic.Int32
-		staleReadInjected    atomic.Bool
-		commitFailInjected   atomic.Bool
-		rollbackFailInjected atomic.Bool
+		collectCalls      atomic.Int32
+		staleReadInjected atomic.Bool
 	)
 
 	// Inject StaleRead error on first collect, then succeed
@@ -1813,162 +1809,42 @@ func TestTableChangeStream_FullPipeline_RandomDelaysAndErrors(t *testing.T) {
 		return ts
 	})
 
-	// Inject commit failure on first commit attempt, then succeed
+	// Install both faults before Run: observing SendCommit is not a barrier
+	// preventing its cleanup from already executing SendRollback.
 	commitErr := moerr.NewInternalError(h.Context(), "commit failure")
-	h.Sinker().setCommitError(commitErr)
-	commitFailInjected.Store(true)
-
-	ar := h.NewActiveRoutine()
-	errCh, done := h.RunStreamAsync(ar)
-
-	// Wait for stale read recovery (multiple collect calls)
-	// Use longer timeout for slow CI environments, but keep frequent checks
-	// Stale read recovery may involve retry backoff: base=5ms, max=20ms, factor=2.0, maxRetries=3
-	// Worst case delay per retry cycle: ~35ms, plus processing time
-	require.Eventually(t, func() bool {
-		return collectCalls.Load() >= 2
-	}, 10*time.Second, 10*time.Millisecond, "should see stale read recovery")
-
-	// Wait for commit attempt (which will fail)
-	// Use longer timeout for slow CI environments, but keep frequent checks
-	// Calculate worst-case retry delay: base=5ms, max=20ms, factor=2.0, maxRetries=3
-	// Worst case: 5ms + 10ms + 20ms = 35ms per retry cycle, plus processing time
-	// Use 10s timeout to handle multiple retry cycles and slow CI environments
-	require.Eventually(t, func() bool {
-		ops := h.Sinker().opsSnapshot()
-		for _, op := range ops {
-			if op == "commit" {
-				return true
-			}
-		}
-		return false
-	}, 10*time.Second, 10*time.Millisecond, "should see commit attempt")
-
-	// Keep commit error and inject rollback failure (rollback happens during cleanup after commit failure)
-	// To eliminate race condition: set rollback error immediately after confirming commit attempt,
-	// then add a small synchronization delay to ensure the error is set in sinker before cleanup rollback happens.
-	// This reduces the race window to near zero.
 	rollbackErr := moerr.NewInternalError(h.Context(), "rollback failure")
+	h.Sinker().setCommitError(commitErr)
 	h.Sinker().setRollbackError(rollbackErr)
-	rollbackFailInjected.Store(true)
-	// Small synchronization delay to ensure rollback error is set before cleanup rollback happens
-	// This eliminates the race condition where rollback might occur before error is set.
-	// 50ms is sufficient for error injection to propagate, even in slow environments.
-	time.Sleep(50 * time.Millisecond)
 
-	// Wait for rollback attempt (which will fail during cleanup after commit failure)
-	// Use longer timeout for slow CI environments, but keep frequent checks
-	// Rollback happens during EnsureCleanup after commit failure, which may have retry delays
-	require.Eventually(t, func() bool {
-		ops := h.Sinker().opsSnapshot()
-		for _, op := range ops {
-			if op == "rollback" {
-				return true
-			}
-		}
-		return false
-	}, 10*time.Second, 10*time.Millisecond, "should see rollback attempt")
-
-	// Verify that rollback failure marks stream as non-retryable (system state may be inconsistent)
-	// This is the core behavior: rollback failure indicates system state may be inconsistent,
-	// so the stream should not be retryable even if the original error (commit failure) is retryable
-	// Use longer timeout for slow CI environments to ensure state propagation, but keep frequent checks
-	// State propagation may take time due to retry backoff and processing delays
-	// To make the check more stable and reduce flakiness, we verify the state is stable by checking
-	// multiple consecutive times. This ensures the state has settled after recovery path + backoff + scheduling.
-	// The state must remain non-retryable for 3 consecutive checks (30ms total) to be considered stable.
-	var stableCount int
-	const requiredStableChecks = 3 // Require 3 consecutive checks to ensure state is stable
-	require.Eventually(t, func() bool {
-		isNonRetryable := !h.Stream().GetRetryable()
-		if isNonRetryable {
-			stableCount++
-			if stableCount >= requiredStableChecks {
-				return true
-			}
-		} else {
-			// State changed or not yet stable, reset counter
-			stableCount = 0
-		}
-		return false
-	}, 10*time.Second, 10*time.Millisecond, "stream should be non-retryable after rollback failure (with stable state check)")
-
-	// Clear rollback error so stream can remain retryable after rollback failure is verified
-	// Note: The test verifies that rollback failure marks stream as non-retryable.
-	// After clearing the rollback error, the next round will succeed (rollback will succeed),
-	// and cleanupRollbackErr will not be set, so the stream will become retryable again.
-	// However, this depends on other factors (e.g., no other errors), so we don't assert it here.
-	// The core behavior (rollback failure -> non-retryable) is already verified above.
-	h.Sinker().setRollbackError(nil)
-
-	// Cancel to exit
-	h.Cancel()
-	done()
-
-	var runErr error
-	// Use longer timeout for resource cleanup in slow CI environments
-	// Cleanup may involve rollback operations and state synchronization
+	errCh, done := h.RunStreamAsync(h.NewActiveRoutine())
+	defer done()
 	select {
-	case runErr = <-errCh:
+	case runErr := <-errCh:
+		require.ErrorIs(t, runErr, commitErr)
 	case <-time.After(10 * time.Second):
-		t.Fatal("stream did not exit after cancellation")
-	}
-	// The stream may return either the commit failure error or context.Canceled
-	if runErr != nil {
-		if !errors.Is(runErr, context.Canceled) {
-			// If not canceled, it should be the commit failure error
-			require.Contains(t, runErr.Error(), "commit failure", "if not canceled, should be commit failure")
-		}
+		t.Fatal("stream did not terminate after rollback failure")
 	}
 
-	// Verify orderliness: begin should always come before commit/rollback
-	ops := h.Sinker().opsSnapshot()
-	// Track the last begin index seen so far
-	lastBeginIdx := -1
-	for i, op := range ops {
+	// Run has completed: no polling of an intermediate retryability state.
+	require.False(t, h.Stream().GetRetryable())
+	require.True(t, staleReadInjected.Load())
+	require.GreaterOrEqual(t, collectCalls.Load(), int32(2))
+	require.GreaterOrEqual(t, h.Sinker().ResetCountSnapshot(), 1)
+	require.ErrorIs(t, h.Sinker().Error(), rollbackErr)
+
+	var txnOps []string
+	for _, op := range h.Sinker().opsSnapshot() {
 		switch op {
-		case "begin":
-			lastBeginIdx = i
-		case "commit":
-			require.Greater(t, i, lastBeginIdx, "commit at index %d should come after begin", i)
-		case "rollback":
-			require.Greater(t, i, lastBeginIdx, "rollback at index %d should come after begin", i)
+		case "begin", "commit", "rollback":
+			txnOps = append(txnOps, op)
 		}
 	}
-
-	// Verify idempotency: EnsureCleanup should be idempotent
-	// Count rollbacks - should be at least one, but not excessive
-	rollbackCount := 0
-	beginCount := 0
-	for _, op := range ops {
-		if op == "rollback" {
-			rollbackCount++
-		}
-		if op == "begin" {
-			beginCount++
-		}
-	}
-	require.GreaterOrEqual(t, rollbackCount, 1, "should have at least one rollback after commit failure")
-	require.GreaterOrEqual(t, beginCount, 1, "should have at least one begin")
-
-	// Verify consistency: retryable flag and sinker reset
-	// Note: After rollback failure, stream is marked as non-retryable (system state may be inconsistent).
-	// If rollback error was cleared and next round succeeded, stream should be retryable again.
-	// However, other factors (e.g., watermark mismatch) may also affect retryability.
-	// The core behavior (rollback failure -> non-retryable) is verified earlier in the test.
-	// Here we just verify that the stream has processed the scenarios (stale read, commit failure, rollback failure).
-	require.GreaterOrEqual(t, h.Sinker().ResetCountSnapshot(), 1, "sinker should reset at least once for stale read")
-
-	// Verify all error injections occurred
-	require.True(t, staleReadInjected.Load(), "stale read should have been injected")
-	require.True(t, commitFailInjected.Load(), "commit failure should have been injected")
-	require.True(t, rollbackFailInjected.Load(), "rollback failure should have been injected")
-
-	// Verify tracker state is consistent (may be nil if cleanup completed)
+	// One transaction, one commit attempt and exactly one cleanup rollback.
+	require.Equal(t, []string{"begin", "commit", "rollback"}, txnOps)
 	tracker := h.Stream().txnManager.GetTracker()
 	if tracker != nil {
-		// After EnsureCleanup, tracker should not need rollback (even if rollback failed)
-		require.False(t, tracker.NeedsRollback(), "tracker should be marked as not needing rollback after EnsureCleanup")
+		require.False(t, tracker.NeedsRollback())
+		require.True(t, tracker.IsCompleted())
 	}
 }
 

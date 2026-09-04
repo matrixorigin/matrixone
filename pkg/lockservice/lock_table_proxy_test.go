@@ -18,6 +18,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"runtime"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -1284,8 +1285,18 @@ func TestProxyRetryPreservesAppliedHandoffRepresentative(t *testing.T) {
 			// Waiter notification is asynchronous. Give this phase its own budget
 			// so setup time or temporary runner starvation cannot consume it.
 			exclusiveCtx, exclusiveCancel := context.WithTimeout(context.Background(), 30*time.Second)
-			defer exclusiveCancel()
+			exclusiveExited := make(chan struct{})
+			defer func() {
+				exclusiveCancel()
+				select {
+				case <-exclusiveExited:
+				case <-time.After(5 * time.Second):
+					dumpProxyHandoffWait(t, owner, proxy, row)
+					t.Error("exclusive lock worker did not exit after cancellation")
+				}
+			}()
 			go func() {
+				defer close(exclusiveExited)
 				_, err := s1.Lock(exclusiveCtx, tableID, [][]byte{row}, exclusiveTxn, newTestRowExclusiveOptions())
 				exclusiveDone <- result{err: err}
 			}()
@@ -1303,13 +1314,49 @@ func TestProxyRetryPreservesAppliedHandoffRepresentative(t *testing.T) {
 			require.NoError(t, s2.Unlock(ctx, lateSharerTxn, timestamp.Timestamp{}))
 			select {
 			case r := <-exclusiveDone:
+				if r.err != nil {
+					dumpProxyHandoffWait(t, owner, proxy, row)
+				}
 				require.NoError(t, r.err)
 			case <-exclusiveCtx.Done():
+				dumpProxyHandoffWait(t, owner, proxy, row)
 				require.NoError(t, exclusiveCtx.Err())
 			}
 			require.NoError(t, s1.Unlock(ctx, exclusiveTxn, timestamp.Timestamp{}))
 		},
 	)
+}
+
+// Failure-only diagnostics must not wait on the mutex that may explain the
+// hang. Snapshots are per-lock, not an atomic view of owner and proxy together.
+func dumpProxyHandoffWait(t *testing.T, owner *localLockTable, proxy *localLockTableProxy, row []byte) {
+	t.Helper()
+	if owner.mu.TryRLock() {
+		lock, found := owner.mu.store.Get(row)
+		var state string
+		if found {
+			state = fmt.Sprintf("holders=%v", lock.holders.txns)
+			lock.waiters.iter(func(w *waiter) bool {
+				state += fmt.Sprintf(" waiter=%x status=%d notifications=%d", w.txn.TxnID, w.getStatus(), len(w.c))
+				return true
+			})
+		}
+		owner.mu.RUnlock()
+		t.Logf("handoff owner: found=%t %s", found, state)
+	} else {
+		t.Log("handoff owner mutex unavailable")
+	}
+	if proxy.mu.TryRLock() {
+		state := fmt.Sprintf("holder=%x pending=%v", proxy.mu.currentHolder[string(row)], proxy.mu.pendingRemoteHolders)
+		proxy.mu.RUnlock()
+		t.Logf("handoff proxy: %s", state)
+	} else {
+		t.Log("handoff proxy mutex unavailable")
+	}
+	t.Logf("handoff event queue: %d", len(owner.events.eventC))
+	stack := make([]byte, 2<<20)
+	n := runtime.Stack(stack, true)
+	t.Logf("handoff goroutines (truncated=%t):\n%s", n == len(stack), stack[:n])
 }
 
 func TestProxyAmbiguousDirectLockForcesTxnIDUnlock(t *testing.T) {

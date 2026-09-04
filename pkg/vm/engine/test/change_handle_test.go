@@ -4271,11 +4271,24 @@ func TestInvalidTimestamp(t *testing.T) {
 
 	require.NoError(t, txn.Commit(ctxWithTimeout))
 
+	// The recovery budget must not include cold consumer DDL. Prepare only
+	// its empty destination; the executor still has to discover the job, copy
+	// the source row and advance the watermark after the fault is removed.
+	for _, sql := range []string{
+		fmt.Sprintf("create database if not exists %s", iscp.TargetDbName),
+		fmt.Sprintf("create table %s.test_table_%d_%s like srcdb.src_table", iscp.TargetDbName, tableID, jobName),
+	} {
+		result, err := execSql(disttaeEngine, ctxWithTimeout, sql)
+		require.NoError(t, err)
+		result.Close()
+	}
+
 	require.True(t, fault.Enable(), "fault injection was already enabled before TestInvalidTimestamp")
 	t.Cleanup(func() {
 		fault.Disable()
 	})
 	invalidTimestampFault := newISCPFaultBarrier(t, ctx, "invalid timestamp")
+	defer invalidTimestampFault.Remove()
 
 	txn, err = disttaeEngine.NewTxnOperator(ctx, disttaeEngine.Engine.LatestLogtailAppliedTime())
 	require.NoError(t, err)
@@ -4314,6 +4327,7 @@ func TestInvalidTimestamp(t *testing.T) {
 		tableID,
 		jobName,
 	)
+	CheckTableData(t, disttaeEngine, ctxWithTimeout, "srcdb", "src_table", tableID, jobName)
 }
 
 func TestCancelIteration1(t *testing.T) {
