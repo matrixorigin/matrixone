@@ -204,7 +204,14 @@ func (s *IvfpqSearch[B, Q]) Load(sqlproc *sqlexec.SqlProcess) (err error) {
 		}
 	}()
 
-	// Deserialize onto the GPU. Past the gate in Preload, and past the cache's reclaim.
+	// Situational admission, HERE and not in Preload: this runs after the cache's makeRoom
+	// has evicted, so it sees the VRAM the governor just freed. Preload's gate is permanent
+	// only (can this ever fit on the hardware).
+	if err = s.deviceFitsFreeNow(cuvs.BudgetFor(s.Idxcfg.Type)); err != nil {
+		return err
+	}
+
+	// Deserialize onto the GPU. Past both gates, and past the cache's reclaim.
 	for _, idx := range s.Indexes {
 		idx.Devices = s.Devices
 		if err = idx.LoadIndex(sqlproc, s.Idxcfg, s.Tblcfg, s.ThreadsSearch, true); err != nil {
@@ -640,11 +647,20 @@ func (s *IvfpqSearch[B, Q]) admitIndexes(sqlproc *sqlexec.SqlProcess, indexes []
 		// also the complete gate; there is no separate check after the loop.
 		// Only the devices this index occupies: a SINGLE_GPU index loads onto
 		// devices[0] alone, so a busy or smaller second card must not veto it.
+		// PERMANENT gate only: can this index EVER fit on this hardware? A refusal here
+		// is final -- no amount of eviction creates VRAM the cards do not have -- so
+		// aborting mid-download is right, and it keeps the early-abort benefit that put
+		// the gate inside this loop.
+		//
+		// The SITUATIONAL free-VRAM gate is deliberately NOT here. It runs in Load, after
+		// the cache's makeRoom has had its chance to evict: asking "does it fit in free
+		// VRAM?" before eviction refuses loads that would have succeeded -- an old 6 GiB
+		// index resident, 5 GiB free, a new 6 GiB index that needs it, where evicting the
+		// old one leaves 11 GiB. See deviceFitsFreeNow.
 		participants := memory.DeviceParticipants(s.Devices,
 			s.Idxcfg.CuvsIvfpq.DistributionMode == uint16(vectorindex.DistributionMode_SINGLE_GPU))
-		if err := memory.DeviceAggregateFitsFree(
-			memory.PerDeviceDemand(participants, comps),
-			len(comps), len(indexes), budget,
+		if err := memory.DeviceAggregateFitsHardware(
+			memory.PerDeviceDemand(participants, comps), len(comps), budget,
 		); err != nil {
 			return err
 		}
@@ -654,6 +670,27 @@ func (s *IvfpqSearch[B, Q]) admitIndexes(sqlproc *sqlexec.SqlProcess, indexes []
 	admitted = true
 
 	return nil
+}
+
+// deviceFitsFreeNow is the situational half of admission: does this index fit in the VRAM that
+// is free RIGHT NOW. It runs at the top of Load -- after Preload measured and after the cache's
+// makeRoom evicted -- so it sees the room the governor just freed. admitIndexes keeps only the
+// permanent hardware gate, which no eviction can change.
+func (s *IvfpqSearch[B, Q]) deviceFitsFreeNow(budget memory.DeviceBudget) error {
+	comps := make([]map[string]int64, 0, len(s.Indexes))
+	for _, idx := range s.Indexes {
+		if idx == nil || len(idx.DeviceComponentBytes) == 0 {
+			continue
+		}
+		comps = append(comps, idx.DeviceComponentBytes)
+	}
+	if len(comps) == 0 {
+		return nil
+	}
+	participants := memory.DeviceParticipants(s.Devices,
+		s.Idxcfg.CuvsIvfpq.DistributionMode == uint16(vectorindex.DistributionMode_SINGLE_GPU))
+	return memory.DeviceAggregateFitsFree(
+		memory.PerDeviceDemand(participants, comps), len(comps), len(comps), budget)
 }
 
 // Destroy implements cache.VectorIndexSearchIf.

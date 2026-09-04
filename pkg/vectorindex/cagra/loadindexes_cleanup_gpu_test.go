@@ -39,10 +39,17 @@ import (
 // of silently comparing against zero.
 type testBudget struct {
 	rows func(dev int, perRow uint64) (int64, uint64, error)
+	// max is the permanent hardware ceiling. admitIndexes asks THIS one: its gate is
+	// "can this ever fit on the card", which no eviction can change. The situational
+	// free-VRAM question (rows) moved to Load, after the cache has evicted.
+	max uint64
 }
 
 func (b testBudget) MaxAdmissible(int) (uint64, error) {
-	return 0, moerr.NewInternalErrorNoCtx("testBudget: MaxAdmissible not configured")
+	if b.max == 0 {
+		return 0, moerr.NewInternalErrorNoCtx("testBudget: MaxAdmissible not configured")
+	}
+	return b.max, nil
 }
 
 func (b testBudget) RowsFitting(dev int, perRow uint64) (int64, uint64, error) {
@@ -191,13 +198,19 @@ func TestLoadIndexesStopsFetchingOnceOverBudget(t *testing.T) {
 	require.NoError(t, lerr)
 	require.Len(t, indexes, len(ids))
 
-	err = s.admitIndexes(sqlproc, indexes, testBudget{rows: rowsFitting})
-	require.Error(t, err, "two sub-indexes exceed the budget, so the load must be refused")
+	err = s.admitIndexes(sqlproc, indexes, testBudget{rows: rowsFitting, max: budget})
+	require.Error(t, err, "two sub-indexes exceed the card, so the load must be refused")
 	require.Contains(t, err.Error(), "at least",
 		"a refusal on a partial aggregate must not state its figure as the whole index")
-	require.Contains(t, err.Error(), "2 of 3 sub-indexes measured")
+	require.Contains(t, err.Error(), "after 2 sub-index(es)",
+		"the permanent gate names how far it got before stopping")
+	require.Contains(t, err.Error(), "could never be queried on this GPU",
+		"admitIndexes now asks the PERMANENT question; the situational one runs in Load")
 
-	// The point of the change: the third tar was never downloaded.
+	// The point of the gate living inside the fetch loop: the third tar was never
+	// downloaded. That early abort is why the PERMANENT check stayed here when the
+	// situational one moved to Load -- a hardware refusal is final, so there is nothing
+	// to gain by fetching the rest.
 	require.Equal(t, 2, fetches,
 		"admitIndexes must stop at the sub-index that broke the budget, not fetch all %d", len(ids))
 

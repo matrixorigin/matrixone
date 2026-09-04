@@ -914,5 +914,31 @@ func LoadMetadata[B, Q cuvs.VectorType](sqlproc *sqlexec.SqlProcess, dbname stri
 			indexes = append(indexes, idx)
 		}
 	}
+
+	var rows, newest int64
+	for _, idx := range indexes {
+		rows += idx.Nrow
+		if idx.BuildTS > newest {
+			newest = idx.BuildTS
+		}
+	}
+	logMetadataProvenance(metatbl, len(indexes), rows, newest)
+
 	return indexes, nil
+}
+
+// logMetadataProvenance reports what the metadata rows say a loaded index is: how many source
+// rows its generations cover, and the newest data version they were built from. build_ts is 0
+// for a generation written before the column existed, and for content with no single source
+// version -- both print as "unknown" rather than as an epoch timestamp.
+//
+// This is the read side of the provenance columns: without it nrow/build_ts are written and
+// never surfaced, and an operator asking "how far behind is this resident index?" has to query
+// the hidden metadata table by hand.
+func logMetadataProvenance(metatbl string, count int, rows, buildTS int64) {
+	if buildTS <= 0 {
+		logutil.Infof("%s: loaded %d generation(s), rows=%d, build_ts=unknown", metatbl, count, rows)
+		return
+	}
+	logutil.Infof("%s: loaded %d generation(s), rows=%d, build_ts=%d", metatbl, count, rows, buildTS)
 }
