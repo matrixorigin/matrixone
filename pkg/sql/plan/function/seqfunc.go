@@ -65,23 +65,13 @@ func Nextval(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *
 	// nextval is the real implementation of nextval function.
 	for i := uint64(0); i < uint64(length); i++ {
 		v, null := ivec.GetStrValue(i)
-		if null {
+		db, dbNull := sequenceDatabase(proc.GetSessionInfo().Database, databases, i)
+		if null || dbNull {
 			if err = rs.AppendBytes(nil, true); err != nil {
 				return
 			}
 		} else {
 			var res string
-			db := proc.GetSessionInfo().Database
-			if databases != nil {
-				database, databaseNull := databases.GetStrValue(i)
-				if databaseNull {
-					if err = rs.AppendBytes(nil, true); err != nil {
-						return
-					}
-					continue
-				}
-				db = string(database)
-			}
 			res, err = nextval(string(v), db, proc, e, txn)
 			if err == nil {
 				err = rs.AppendBytes(functionUtil.QuickStrToBytes(res), false)
@@ -96,6 +86,14 @@ func Nextval(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *
 		}
 	}
 	return nil
+}
+
+func sequenceDatabase(sessionDatabase string, databases vector.FunctionParameterWrapper[types.Varlena], row uint64) (string, bool) {
+	if databases == nil {
+		return sessionDatabase, false
+	}
+	database, null := databases.GetStrValue(row)
+	return string(database), null
 }
 
 func nextval(tblname, db string, proc *process.Process, e engine.Engine, txn client.TxnOperator) (string, error) {
@@ -293,6 +291,10 @@ func Setval(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *p
 	if len(ivecs) > 2 {
 		iscalled = vector.GenerateFunctionFixedTypeParameter[bool](ivecs[2])
 	}
+	var databases vector.FunctionParameterWrapper[types.Varlena]
+	if len(ivecs) > 3 {
+		databases = vector.GenerateFunctionStrParameter(ivecs[3])
+	}
 
 	// Txn
 	e := proc.Ctx.Value(defines.EngineKey{}).(engine.Engine)
@@ -309,14 +311,15 @@ func Setval(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *p
 		if iscalled != nil {
 			isc, iscNull = iscalled.GetValue(i)
 		}
+		db, dbNull := sequenceDatabase(proc.GetSessionInfo().Database, databases, i)
 
-		if tnNull || snNull || iscNull {
+		if tnNull || snNull || iscNull || dbNull {
 			if err = rs.AppendBytes(nil, true); err != nil {
 				return
 			}
 		} else {
 			var res string
-			res, err = setval(string(tn), string(sn), isc, proc, txn, e)
+			res, err = setval(string(tn), string(sn), isc, db, proc, txn, e)
 			if err == nil {
 				err = rs.AppendBytes(functionUtil.QuickStrToBytes(res), false)
 			}
@@ -328,8 +331,7 @@ func Setval(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *p
 	return
 }
 
-func setval(tblname, setnum string, iscalled bool, proc *process.Process, txn client.TxnOperator, e engine.Engine) (string, error) {
-	db := proc.GetSessionInfo().Database
+func setval(tblname, setnum string, iscalled bool, db string, proc *process.Process, txn client.TxnOperator, e engine.Engine) (string, error) {
 	dbHandler, err := e.Database(proc.Ctx, db, txn)
 	if err != nil {
 		return "", err
@@ -458,22 +460,12 @@ func Currval(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *
 
 	for i := uint64(0); i < uint64(length); i++ {
 		v, null := ivec.GetStrValue(i)
-		if null {
+		db, dbNull := sequenceDatabase(proc.GetSessionInfo().Database, databases, i)
+		if null || dbNull {
 			if err = rs.AppendBytes(nil, true); err != nil {
 				return
 			}
 		} else {
-			db := proc.GetSessionInfo().Database
-			if databases != nil {
-				database, databaseNull := databases.GetStrValue(i)
-				if databaseNull {
-					if err = rs.AppendBytes(nil, true); err != nil {
-						return
-					}
-					continue
-				}
-				db = string(database)
-			}
 			dbHandler, dbErr := e.Database(proc.Ctx, db, txn)
 			if dbErr != nil {
 				return dbErr
