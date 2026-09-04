@@ -30,7 +30,7 @@ select * from arrow_pattern order by id;
 create table arrow_schema_rollback(id bigint, name varchar(50));
 insert into arrow_schema_rollback values (0, 'seed');
 load data infile {'filepath'='$resources/load_data/arrow_mismatch_*.arrow', 'format'='arrow'} into table arrow_schema_rollback parallel 'true';
-not supported: Arrow field "id" (float64) to MatrixOne column "id" (BIGINT): no exact long-term conversion
+not supported: Arrow field "id" (float64) to MatrixOne column "id" (BIGINT): invalid input: no exact long-term conversion
 select * from arrow_schema_rollback order by id;
 ➤ id[-5,64,0]  ¦  name[12,50,0]  𝄀
 0  ¦  seed
