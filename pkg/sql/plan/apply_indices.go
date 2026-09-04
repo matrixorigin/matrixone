@@ -1686,9 +1686,10 @@ func canUseRegularIndexHiddenSortKey(scanNode *plan.Node, orderByCol *plan.ColRe
 // canPushCompositePrimaryKeyOrderedLimit recognizes the narrow base-table
 // shape where an ordered reader may cap each physical source before the Sort:
 // the SQL order is the table's hidden serialized composite primary key, and
-// every scan predicate is a runtime-constant bound on that same key. Such
-// predicates are evaluated by the primary-key reader before ordered truncation;
-// admitting any residual column predicate here could under-fetch valid rows.
+// every scan predicate is a folded literal bound on that same key. Literal PK
+// ranges are evaluated by the reader before ordered truncation. A merely
+// column-independent runtime expression may remain an upper-layer residual;
+// admitting it (or any column residual) could therefore under-fetch valid rows.
 func canPushCompositePrimaryKeyOrderedLimit(scanNode *plan.Node, orderByCol *plan.ColRef) bool {
 	if scanNode == nil || scanNode.TableDef == nil || scanNode.TableDef.Pkey == nil || orderByCol == nil ||
 		scanNode.IndexScanInfo.IsIndexScan || len(scanNode.BindingTags) == 0 ||
@@ -1705,8 +1706,13 @@ func canPushCompositePrimaryKeyOrderedLimit(scanNode *plan.Node, orderByCol *pla
 		fn := filter.GetF()
 		filterCol, _ := classifyRangeBound(fn)
 		bound := rangeFilterConstValue(fn)
-		if filterCol == nil || bound == nil || filterCol.RelPos != orderByCol.RelPos ||
-			filterCol.ColPos != pkPos || !regularIndexCursorTypeMatches(bound.Typ, pkType) {
+		literalBound := false
+		if bound != nil {
+			_, _, literalBound = unwrapConstLiteral(bound)
+		}
+		if filterCol == nil || bound == nil || !literalBound ||
+			filterCol.RelPos != orderByCol.RelPos || filterCol.ColPos != pkPos ||
+			!regularIndexCursorTypeMatches(bound.Typ, pkType) {
 			return false
 		}
 	}

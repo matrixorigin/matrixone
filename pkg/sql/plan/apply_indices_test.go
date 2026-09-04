@@ -6618,6 +6618,28 @@ func TestHandleMessageFromTopToScanPushesCompositePrimaryKeyOrderedLimit(t *test
 	require.Len(t, scanNode.IndexReaderParam.OrderBy, 1)
 	require.Equal(t, pkPos, scanNode.IndexReaderParam.OrderBy[0].Expr.GetCol().ColPos)
 	require.Equal(t, uint64(1000), scanNode.IndexReaderParam.Limit.GetLit().GetU64Val())
+
+	// A column-independent function is a runtime constant to the SQL executor,
+	// but it is not necessarily compiled into the storage PK filter. It must not
+	// let the reader truncate before the upper-layer residual is evaluated.
+	runtimeBound := &planpb.Expr{
+		Typ: pkType,
+		Expr: &planpb.Expr_F{F: &planpb.Function{
+			Func: &planpb.ObjectRef{ObjName: "concat"},
+			Args: []*planpb.Expr{makePlan2StringConstExprWithType("cursor", true)},
+		}},
+	}
+	runtimeFilter := &planpb.Expr{
+		Typ: planpb.Type{Id: int32(types.T_bool)},
+		Expr: &planpb.Expr_F{F: &planpb.Function{
+			Func: &planpb.ObjectRef{ObjName: ">"},
+			Args: []*planpb.Expr{DeepCopyExpr(pkExpr), runtimeBound},
+		}},
+	}
+	scanNode.FilterList = []*planpb.Expr{runtimeFilter}
+	scanNode.IndexReaderParam = nil
+	builder.handleMessageFromTopToScan(1)
+	require.Nil(t, scanNode.IndexReaderParam)
 }
 
 func TestHandleMessageFromTopToScanRejectsCompositePrimaryKeyOrderedLimitWithResidualFilter(t *testing.T) {

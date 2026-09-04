@@ -225,6 +225,23 @@ func TestV406MaintenanceCleansHistoricalOrphanObjectPrivileges(t *testing.T) {
 		require.LessOrEqual(t, orphanPrivilegeTableScanBlocks(t, cursorPlan), oneRowScanBlocks+1,
 			"physical cursor bounds must retain bounded read-block behavior; plan:\n%s", cursorPlan)
 
+		literalCursorSQL := fmt.Sprintf(
+			"select hex(__mo_cpkey_col) from mo_catalog.mo_role_privs "+
+				"where __mo_cpkey_col > unhex('%s') order by __mo_cpkey_col limit 3",
+			cursorPhysicalKey)
+		nonFoldedCursorSQL := fmt.Sprintf(
+			"select hex(__mo_cpkey_col) from mo_catalog.mo_role_privs "+
+				"where __mo_cpkey_col > unhex(concat('%s',left(current_user(),0))) "+
+				"order by __mo_cpkey_col limit 3",
+			cursorPhysicalKey)
+		nonFoldedPlan := queryOrphanPrivilegeExplainAnalyze(t, ctx, conn, nonFoldedCursorSQL)
+		require.NotContains(t, nonFoldedPlan, "Index Reader Param:",
+			"a non-folded runtime bound must be filtered before the SQL limit; plan:\n%s", nonFoldedPlan)
+		require.Equal(t,
+			queryOrphanPrivilegePhysicalKeys(t, ctx, conn, literalCursorSQL),
+			queryOrphanPrivilegePhysicalKeys(t, ctx, conn, nonFoldedCursorSQL),
+			"a runtime-constant expression must not change the ordered-limit result")
+
 		countOrphans := func() int {
 			return countRolePrivilegesByObjectIDs(t, ctx, conn, roleName, orphanIDs) +
 				countRolePrivilegesByObjectIDRange(
@@ -498,6 +515,26 @@ func orphanPrivilegeTableScanBlocks(t *testing.T, plan string) int {
 	blocks, err := strconv.Atoi(matches[1])
 	require.NoError(t, err)
 	return blocks
+}
+
+func queryOrphanPrivilegePhysicalKeys(
+	t *testing.T,
+	ctx context.Context,
+	conn *sql.Conn,
+	statement string,
+) []string {
+	t.Helper()
+	rows, err := conn.QueryContext(ctx, statement)
+	require.NoError(t, err)
+	defer rows.Close()
+	var keys []string
+	for rows.Next() {
+		var key string
+		require.NoError(t, rows.Scan(&key))
+		keys = append(keys, key)
+	}
+	require.NoError(t, rows.Err())
+	return keys
 }
 
 func queryOrphanPrivilegeExplainAnalyze(
