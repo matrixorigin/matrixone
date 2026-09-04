@@ -3582,6 +3582,42 @@ func TestJsonUnquoteRejectsInvalidFramedStringAndUTF8(t *testing.T) {
 	}
 }
 
+func TestJsonUnquoteTextTypeContract(t *testing.T) {
+	for _, input := range []types.Type{
+		types.NewWithCharset(types.T_char, 8, 0, types.CharsetUTF8MB4Bin),
+		types.NewWithCharset(types.T_varchar, 32, 0, types.CharsetUTF8),
+		types.NewWithCharset(types.T_text, 0, 0, types.CharsetUTF8),
+		types.NewWithCharset(types.T_text, types.MaxMediumTextLen, 0, types.CharsetUTF8),
+		types.NewWithCharset(types.T_text, types.MaxLongTextLen, 0, types.CharsetUTF8MB4Bin),
+	} {
+		resolved, err := GetFunctionByName(context.Background(), "json_unquote", []types.Type{input})
+		require.NoError(t, err)
+		result := resolved.GetReturnType()
+		if input.Oid == types.T_char {
+			require.Equal(t, types.T_varchar, result.Oid)
+		} else {
+			require.Equal(t, input.Oid, result.Oid)
+		}
+		require.Equal(t, input.Width, result.Width)
+		require.Equal(t, input.Charset, result.Charset)
+		_, needCast := resolved.ShouldDoImplicitTypeCast()
+		require.False(t, needCast)
+	}
+}
+
+func TestJsonUnquoteRejectsBinaryDomain(t *testing.T) {
+	inputs := []types.Type{
+		types.New(types.T_binary, 8, 0),
+		types.New(types.T_varbinary, 32, 0),
+		types.T_blob.ToType(),
+		types.NewWithCharset(types.T_varchar, 32, 0, types.CharsetBinary),
+	}
+	for _, input := range inputs {
+		_, err := GetFunctionByName(context.Background(), "json_unquote", []types.Type{input})
+		require.Error(t, err, input.String())
+	}
+}
+
 func TestJsonUnquotePreservesPayloadBoundaryQuotes(t *testing.T) {
 	values := []string{
 		"plain",
