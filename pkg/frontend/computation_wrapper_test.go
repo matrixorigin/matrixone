@@ -310,6 +310,8 @@ func newPreparedExecuteEnvForSQLWithCompilerContext(
 	preparePlan, err := buildPlan(ctx, nil, compilerContext, prepareString)
 	require.NoError(t, err)
 
+	fixedIntegerParamPositions, hasPaginationParams, hasLagLeadParams :=
+		preparedFixedIntegerParamPositions(preparePlan.GetDcl().GetPrepare().Plan)
 	prepareStmt := &PrepareStmt{
 		Name:                       stmtName,
 		Sql:                        prepareString.Sql,
@@ -317,12 +319,13 @@ func newPreparedExecuteEnvForSQLWithCompilerContext(
 		PrepareStmt:                stmts[0],
 		NativeMode:                 ses.sqlModeHasMatrixOneNative(),
 		OnlyFullGroupBy:            ses.sqlModeHasOnlyFullGroupBy(),
-		onlyFullGroupBySet:         true,
+		sqlModeFlagsSet:            true,
 		getFromSendLongData:        make(map[int]struct{}),
 		protocolVersion:            currentProtocolVersion(proc),
 		directResultParamPositions: plan2.PreparedPlanDirectResultParamPositions(preparePlan.GetDcl().GetPrepare().Plan),
-		hasPaginationParams:        plan2.PreparedPlanHasPaginationParams(preparePlan.GetDcl().GetPrepare().Plan),
-		hasLagLeadParams:           len(plan2.PreparedLagLeadParamPositions(preparePlan.GetDcl().GetPrepare().Plan)) > 0,
+		fixedIntegerParamPositions: fixedIntegerParamPositions,
+		hasPaginationParams:        hasPaginationParams,
+		hasLagLeadParams:           hasLagLeadParams,
 	}
 	prepareStmt.refreshNumericPrefixConsumer(
 		preparePlan.GetDcl().GetPrepare().Plan,
@@ -447,13 +450,37 @@ func TestPreparedParamValuesPreservesNullProtocolProvenance(t *testing.T) {
 
 func TestIssue27640InitExecuteStmtParamAcceptsODBCIntegerTextPagination(t *testing.T) {
 	for index, test := range []struct {
-		name   string
-		sql    string
-		values []string
+		name       string
+		sql        string
+		values     []string
+		mysqlTypes []defines.MysqlType
+		pagination []int32
+		prefix     []bool
 	}{
 		{name: "limit", sql: "select 1 limit ?", values: []string{"2"}},
 		{name: "limit offset", sql: "select 1 limit ? offset ?", values: []string{"2", "1"}},
 		{name: "offset", sql: "select 1 offset ?", values: []string{"1"}},
+		{
+			name: "having and limit", sql: "select sum(1) having sum(1) > ? limit ?",
+			values: []string{"0", "1"},
+			mysqlTypes: []defines.MysqlType{
+				defines.MYSQL_TYPE_BLOB,
+				defines.MYSQL_TYPE_STRING,
+			},
+			pagination: []int32{1},
+			prefix:     []bool{false, false},
+		},
+		{
+			name: "having and limit offset", sql: "select sum(1) having sum(1) > ? limit ? offset ?",
+			values: []string{"0", "1", "0"},
+			mysqlTypes: []defines.MysqlType{
+				defines.MYSQL_TYPE_BLOB,
+				defines.MYSQL_TYPE_STRING,
+				defines.MYSQL_TYPE_STRING,
+			},
+			pagination: []int32{1, 2},
+			prefix:     []bool{false, false, false},
+		},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			ses, prepareStmt, cw, execCtx := newPreparedExecuteEnvForSQL(
@@ -462,19 +489,33 @@ func TestIssue27640InitExecuteStmtParamAcceptsODBCIntegerTextPagination(t *testi
 				cw.proc.SetPrepareParams(nil)
 				prepareStmt.Close()
 			}()
+			if test.pagination != nil {
+				require.Equal(t, test.pagination, plan2.PreparedPaginationParamPositions(
+					prepareStmt.PreparePlan.GetDcl().GetPrepare().Plan))
+				require.Equal(t, test.pagination, prepareStmt.fixedIntegerParamPositions,
+					"prepared-plan installation must cache fixed integer parameter positions")
+			}
 
 			// Connector/ODBC sends integer bindings as MYSQL_TYPE_STRING in
 			// COM_STMT_EXECUTE, so reproduce that wire representation directly.
 			prepareStmt.params = vector.NewVec(types.T_text.ToType())
 			prepareStmt.ParamTypes = make([]byte, 0, len(test.values)*2)
 			wantParamVals := make([]any, 0, len(test.values))
-			for _, value := range test.values {
+			for valueIndex, value := range test.values {
 				require.NoError(t, vector.AppendBytes(
 					prepareStmt.params, []byte(value), false, cw.proc.Mp()))
+				mysqlType := defines.MYSQL_TYPE_STRING
+				if valueIndex < len(test.mysqlTypes) {
+					mysqlType = test.mysqlTypes[valueIndex]
+				}
 				prepareStmt.ParamTypes = append(prepareStmt.ParamTypes,
-					byte(defines.MYSQL_TYPE_STRING), 0)
+					byte(mysqlType), 0)
+				enableNumericPrefix := true
+				if valueIndex < len(test.prefix) {
+					enableNumericPrefix = test.prefix[valueIndex]
+				}
 				wantParamVals = append(wantParamVals, plan2.ParamValue{
-					Value: value, IsBinaryProtocol: true, EnableNumericPrefix: true,
+					Value: value, IsBinaryProtocol: true, EnableNumericPrefix: enableNumericPrefix,
 				})
 			}
 
@@ -1927,7 +1968,7 @@ func TestRuntimeSpecializationReplacementCommitsOnlyAfterCompileSuccess(t *testi
 	require.Nil(t, prepareStmt.runtimeCompile)
 }
 
-func BenchmarkInitExecuteStmtParamRepeatedDecimalSemanticCategory(b *testing.B) {
+func BenchmarkInitExecuteStmtParamRepeatedDecimalSemanticCategoryNoPagination(b *testing.B) {
 	ses, prepareStmt, cw, execCtx := newPreparedExecuteEnvForSQL(b, 207, "select ?")
 	defer func() {
 		cw.proc.SetPrepareParams(nil)
@@ -1946,7 +1987,10 @@ func BenchmarkInitExecuteStmtParamRepeatedDecimalSemanticCategory(b *testing.B) 
 	prepareStmt.PreparePlan.GetDcl().GetPrepare().Plan = manualPlan
 	prepareStmt.directResultParamPositions = plan2.PreparedPlanDirectResultParamPositions(manualPlan)
 	prepareStmt.refreshNumericPrefixConsumer(manualPlan, 1)
+	prepareStmt.refreshFixedIntegerParamPositions(manualPlan)
 	require.True(b, prepareStmt.numericPrefixConsumer)
+	require.Empty(b, prepareStmt.fixedIntegerParamPositions,
+		"the no-pagination hot path must reuse empty fixed-position metadata")
 	prepareStmt.params = vector.NewVec(types.T_text.ToType())
 	require.NoError(b, vector.AppendBytes(prepareStmt.params, []byte("9.0"), false, cw.proc.Mp()))
 	prepareStmt.ParamTypes = []byte{byte(defines.MYSQL_TYPE_NEWDECIMAL), 0}
@@ -2958,7 +3002,7 @@ func TestInitExecuteStmtParamRebuildsPreparedPlanWhenOnlyFullGroupByChanges(t *t
 	execCtx.reqCtx = defines.AttachAccountId(execCtx.reqCtx, catalog.System_Account)
 	require.NoError(t, ses.SetSessionSysVar(execCtx.reqCtx, "sql_mode", ""))
 	prepareStmt.OnlyFullGroupBy = false
-	prepareStmt.onlyFullGroupBySet = true
+	prepareStmt.sqlModeFlagsSet = true
 	originalPlan := prepareStmt.PreparePlan
 	require.NoError(t, ses.SetSessionSysVar(execCtx.reqCtx, "sql_mode", "ONLY_FULL_GROUP_BY"))
 
@@ -2969,6 +3013,39 @@ func TestInitExecuteStmtParamRebuildsPreparedPlanWhenOnlyFullGroupByChanges(t *t
 	require.NotNil(t, retStmt)
 	require.True(t, prepareStmt.OnlyFullGroupBy)
 	require.NotSame(t, originalPlan, prepareStmt.PreparePlan)
+}
+
+// ENABLE_BOOL_SUMAVG is captured at PREPARE like ONLY_FULL_GROUP_BY, so an
+// EXECUTE after the token changes rebuilds the plan under the current mode in
+// both directions.
+func TestInitExecuteStmtParamRebuildsPreparedPlanWhenBoolSumAvgChanges(t *testing.T) {
+	ses, prepareStmt, cw, execCtx := newPreparedExecuteEnv(t, 111)
+	defer prepareStmt.Close()
+
+	execCtx.reqCtx = defines.AttachAccountId(execCtx.reqCtx, catalog.System_Account)
+	require.NoError(t, ses.SetSessionSysVar(execCtx.reqCtx, "sql_mode", "ONLY_FULL_GROUP_BY"))
+	prepareStmt.OnlyFullGroupBy = true
+	prepareStmt.BoolSumAvg = false
+	prepareStmt.sqlModeFlagsSet = true
+	originalPlan := prepareStmt.PreparePlan
+	require.NoError(t, ses.SetSessionSysVar(execCtx.reqCtx, "sql_mode", "ONLY_FULL_GROUP_BY,ENABLE_BOOL_SUMAVG"))
+
+	retComp, retPlan, retStmt, _, _, err := initExecuteStmtParam(execCtx, ses, cw, nil, prepareStmt.Name)
+	require.NoError(t, err)
+	require.Nil(t, retComp)
+	require.NotNil(t, retPlan)
+	require.NotNil(t, retStmt)
+	require.True(t, prepareStmt.BoolSumAvg)
+	require.True(t, prepareStmt.OnlyFullGroupBy)
+	require.NotSame(t, originalPlan, prepareStmt.PreparePlan)
+
+	// Dropping the token rebuilds again; an unchanged mode reuses the plan.
+	rebuiltPlan := prepareStmt.PreparePlan
+	require.NoError(t, ses.SetSessionSysVar(execCtx.reqCtx, "sql_mode", "ONLY_FULL_GROUP_BY"))
+	_, _, _, _, _, err = initExecuteStmtParam(execCtx, ses, cw, nil, prepareStmt.Name)
+	require.NoError(t, err)
+	require.False(t, prepareStmt.BoolSumAvg)
+	require.NotSame(t, rebuiltPlan, prepareStmt.PreparePlan)
 }
 
 func TestInitExecuteStmtParamRebuildsPlanInvalidatedDuringRun(t *testing.T) {

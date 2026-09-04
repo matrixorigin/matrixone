@@ -78,7 +78,11 @@ type ExParamConst struct {
 	FileOffset      []int64
 	FileOffsetTotal []*pipeline.FileOffset
 	// Optional Parquet row group shards. Empty means whole-file scan.
-	ParquetRowGroupShards       []*pipeline.ParquetRowGroupShard
+	ParquetRowGroupShards []*pipeline.ParquetRowGroupShard
+	// ParquetWholeFileFanout is set only on an admitted Parquet LOAD scope
+	// created by the compiler's whole-file fanout path. It is distinct from a
+	// requested-but-serial LOAD, which must retain the regular S3 prefetch path.
+	ParquetWholeFileFanout      bool
 	IcebergDataTasks            []*pipeline.IcebergDataFileTask
 	IcebergDeleteTasks          []*pipeline.IcebergDeleteFileTask
 	IcebergColumns              []*pipeline.IcebergColumnMapping
@@ -481,6 +485,11 @@ type ParquetHandler struct {
 	pages          []parquet.Pages // cached pages iterators for each column
 	currentPage    []parquet.Page  // cached current page for each column
 	pageOffset     []int64         // current offset within each cached page
+	// dataColIndices are the physical leaf columns advanced together by page
+	// mode. budgetColIndices is the subset whose source or target is variable
+	// width and therefore participates in source-prefix sizing.
+	dataColIndices   []int
+	budgetColIndices []int
 	// Iceberg optional columns added after an older data file was written are
 	// materialized as NULL when the file has no matching field id.
 	icebergNullFill []bool

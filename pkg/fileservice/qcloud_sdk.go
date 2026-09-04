@@ -23,6 +23,7 @@ import (
 	"io"
 	"iter"
 	"net/http"
+	"net/http/httptrace"
 	"net/url"
 	"os"
 	gotrace "runtime/trace"
@@ -35,6 +36,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
+	metric "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
 	"github.com/tencentyun/cos-go-sdk-v5"
 	"go.uber.org/zap"
@@ -49,7 +51,11 @@ type QCloudSDK struct {
 	listMaxKeys          int
 }
 
-const qcloudMultipartAbortTimeout = 30 * time.Second
+const (
+	qcloudMultipartAbortTimeout    = 30 * time.Second
+	qcloudMultipartInitTimeout     = 30 * time.Second
+	qcloudMultipartInitMaxAttempts = 3
+)
 
 func NewQCloudSDK(
 	ctx context.Context,
@@ -124,9 +130,9 @@ func NewQCloudSDK(
 
 	if !args.NoBucketValidation {
 		// validate bucket
-		_, err := DoWithRetryContext(ctx, "cos bucket head", func() (*cos.Response, error) {
+		_, err := doQCloudReadWithRetry(ctx, "cos bucket head", func() (*cos.Response, error) {
 			return client.Bucket.Head(ctx, &cos.BucketHeadOptions{})
-		}, maxRetryAttemps, IsRetryableError)
+		})
 		if err != nil {
 			return nil, err
 		}
@@ -341,6 +347,98 @@ func (a *QCloudSDK) SupportsParallelMultipart() bool {
 	return true
 }
 
+func waitQCloudMultipartInitRetry(ctx context.Context, attempt int) error {
+	delay := initialRetryInterval
+	for i := 0; i < attempt && delay < maxRetryInterval; i++ {
+		delay = time.Duration(float64(delay) * retryIntervalFactor)
+	}
+	if delay > maxRetryInterval {
+		delay = maxRetryInterval
+	}
+	timer := time.NewTimer(delay)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return nil
+	}
+}
+
+func (a *QCloudSDK) initiateMultipartUpload(
+	ctx context.Context,
+	key string,
+	opt *cos.InitiateMultipartUploadOptions,
+) (*cos.InitiateMultipartUploadResult, error) {
+	ctx, cancel := context.WithTimeoutCause(ctx, qcloudMultipartInitTimeout, context.DeadlineExceeded)
+	defer cancel()
+
+	var lastErr error
+	for attempt := 0; attempt < qcloudMultipartInitMaxAttempts; attempt++ {
+		var wroteRequest atomic.Bool
+		attemptCtx := httptrace.WithClientTrace(ctx, &httptrace.ClientTrace{
+			WroteRequest: func(httptrace.WroteRequestInfo) {
+				wroteRequest.Store(true)
+			},
+		})
+
+		metric.FSMultipartInitAttemptCounter.Inc()
+		output, response, createErr := a.client.Object.InitiateMultipartUpload(attemptCtx, key, opt)
+		if createErr == nil && (output == nil || output.UploadID == "") {
+			createErr = moerr.NewInternalErrorNoCtxf("cos initiate multipart upload returned an empty upload id for key %q", key)
+		}
+		lastErr = createErr
+		if output != nil && output.UploadID != "" {
+			if ctxErr := ctx.Err(); ctxErr != nil {
+				cleanupCtx, cleanupCancel := context.WithTimeoutCause(
+					context.WithoutCancel(ctx),
+					qcloudMultipartAbortTimeout,
+					context.DeadlineExceeded,
+				)
+				defer cleanupCancel()
+				if err := a.abortMultipartUpload(cleanupCtx, key, output.UploadID); err != nil {
+					logutil.Warn("failed to clean up canceled cos multipart init", zap.Error(err))
+				} else {
+					metric.FSMultipartInitCleanupCounter.Inc()
+				}
+				return nil, ctxErr
+			}
+			if attempt > 0 || createErr != nil {
+				metric.FSMultipartInitRecoveredCounter.Inc()
+			}
+			return output, nil
+		}
+		definitiveFailure := response != nil && response.Response != nil &&
+			(response.StatusCode < http.StatusOK || response.StatusCode >= http.StatusMultipleChoices)
+		commitAmbiguous := !definitiveFailure && (response != nil || wroteRequest.Load())
+		if commitAmbiguous {
+			metric.FSMultipartInitAmbiguousCounter.Inc()
+		}
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return nil, ctxErr
+		}
+		if commitAmbiguous {
+			// Without an UploadID, no client can distinguish this request's
+			// server-side state from another CN's upload. Do not list, claim, or
+			// abort candidates here; COS bucket lifecycle must reclaim any orphan.
+			logutil.Warn("cos multipart init is commit-ambiguous; bucket lifecycle must abort incomplete uploads",
+				zap.Error(createErr))
+			return nil, createErr
+		}
+		if !IsRetryableError(createErr) || attempt+1 >= qcloudMultipartInitMaxAttempts {
+			return nil, createErr
+		}
+		// WroteRequest is emitted by net/http once writing starts, including
+		// write failures. Its absence proves this attempt never crossed the
+		// transport write boundary. A non-2xx server response also proves the
+		// attempt failed, so either outcome is safe to retry.
+		if err := waitQCloudMultipartInitRetry(ctx, attempt); err != nil {
+			return nil, err
+		}
+	}
+	return nil, lastErr
+}
+
 func (a *QCloudSDK) WriteMultipartParallel(
 	ctx context.Context,
 	key string,
@@ -430,10 +528,7 @@ func (a *QCloudSDK) WriteMultipartParallel(
 			Expires: expiresHeader,
 		},
 	}
-	// InitiateMultipartUpload creates server-side state and has no idempotency
-	// key. Any error without a usable UploadID is commit-ambiguous, so retrying
-	// could create an unreachable multipart upload that this caller cannot abort.
-	output, _, createErr := a.client.Object.InitiateMultipartUpload(ctx, key, initOpt)
+	output, createErr := a.initiateMultipartUpload(ctx, key, initOpt)
 	if createErr != nil {
 		releasePartBuffer(firstPart)
 		return createErr
@@ -726,7 +821,7 @@ func (a *QCloudSDK) listObjects(ctx context.Context, prefix string, marker strin
 		opts.MaxKeys = a.listMaxKeys
 	}
 
-	return DoWithRetryContext(
+	return doQCloudReadWithRetry(
 		ctx,
 		"s3 list objects",
 		func() (*cos.BucketGetResult, error) {
@@ -739,8 +834,6 @@ func (a *QCloudSDK) listObjects(ctx context.Context, prefix string, marker strin
 			}
 			return result, nil
 		},
-		maxRetryAttemps,
-		IsRetryableError,
 	)
 }
 
@@ -748,7 +841,7 @@ func (a *QCloudSDK) statObject(ctx context.Context, key string) (http.Header, er
 	ctx, task := gotrace.NewTask(ctx, "QCloudSDK.statObject")
 	defer task.End()
 
-	return DoWithRetryContext(
+	return doQCloudReadWithRetry(
 		ctx,
 		"s3 head object",
 		func() (http.Header, error) {
@@ -761,8 +854,6 @@ func (a *QCloudSDK) statObject(ctx context.Context, key string) (http.Header, er
 			}
 			return resp.Header, nil
 		},
-		maxRetryAttemps,
-		IsRetryableError,
 	)
 }
 
@@ -815,7 +906,7 @@ func (a *QCloudSDK) getObject(ctx context.Context, key string, min *int64, max *
 				Range: rang,
 			}
 
-			return DoWithRetryContext(
+			return doQCloudReadWithRetry(
 				ctx,
 				"s3 get object",
 				func() (io.ReadCloser, error) {
@@ -835,14 +926,52 @@ func (a *QCloudSDK) getObject(ctx context.Context, key string, min *int64, max *
 						},
 					}, nil
 				},
-				maxRetryAttemps,
-				IsRetryableError,
 			)
 
 		},
 		*min,
 		IsRetryableError,
 	)
+}
+
+// doQCloudReadWithRetry keeps cancellation recognizable across the COS SDK's
+// opaque RetryError boundary. It is limited to side-effect-free operations;
+// mutating requests need operation-specific handling for ambiguous outcomes.
+func doQCloudReadWithRetry[T any](
+	ctx context.Context,
+	what string,
+	fn func() (T, error),
+) (T, error) {
+	result, err := DoWithRetryContext(
+		ctx,
+		what,
+		fn,
+		maxRetryAttemps,
+		IsRetryableError,
+	)
+	return result, normalizeQCloudContextError(ctx, err)
+}
+
+func normalizeQCloudContextError(ctx context.Context, err error) error {
+	if err == nil || ctx == nil {
+		return err
+	}
+	contextErr := ctx.Err()
+	if contextErr == nil {
+		return err
+	}
+
+	// cos.RetryError does not implement Unwrap, so an in-flight request can
+	// lose its cancellation identity even when its only child is ctx.Err().
+	// Do not collapse mixed or unrelated storage errors.
+	retryErr, ok := err.(*cos.RetryError)
+	if !ok ||
+		len(retryErr.Errs) != 1 ||
+		!errors.Is(retryErr.Errs[0], contextErr) {
+		return err
+	}
+
+	return contextErr
 }
 
 func (a *QCloudSDK) deleteObject(ctx context.Context, key string) (bool, error) {

@@ -245,12 +245,12 @@ func getValidIndexes(tableDef *plan.TableDef) (indexes []*plan.IndexDef, hasIrre
 	return
 }
 
-// isModernMaintainedIrregularAlgo reports whether an irregular index algo has full
-// synchronous modern maintenance (both insert and delete sub-plans). IVF, fulltext,
-// and MASTER qualify (the master index table has an independent __mo_index_pri_col
-// origin-pk column, so delete joins on origin pk — same pattern as fulltext joins on
-// doc_id). HNSW/CAGRA/IVF-PQ are maintained asynchronously by cron (idxcron, off the
-// base-table CDC) and need no inline sub-plan.
+// isModernMaintainedIrregularAlgo reports whether an irregular index algorithm has
+// the modern maintenance plumbing (both insert and delete sub-plans). IVF,
+// fulltext, and MASTER qualify (the master index table has an independent
+// __mo_index_pri_col origin-pk column, so delete joins on origin pk — same pattern
+// as fulltext joins on doc_id). Per-index async parameters are filtered later by
+// splitIrregularIndexesByUpdatedColumns before an ODKU-only inline branch is built.
 func isModernMaintainedIrregularAlgo(algo string) bool {
 	return catalog.IsIvfIndexAlgo(algo) || catalog.IsFullTextIndexAlgo(algo) ||
 		catalog.IsMasterIndexAlgo(algo)
@@ -272,6 +272,72 @@ func getIrregularIndexes(tableDef *plan.TableDef) []*plan.IndexDef {
 		}
 	}
 	return irregular
+}
+
+// splitIrregularIndexesByUpdatedColumns partitions complete logical indexes,
+// not individual physical IndexDefs. A multi-column fulltext index and a
+// multi-table vector index are represented by several definitions with one
+// IndexName; if any definition references a possibly updated column, every
+// definition in that logical index must follow the delete-and-rebuild path.
+// Logical indexes maintained asynchronously by CDC are omitted from both
+// results; their leaf builders deliberately emit no inline maintenance plan.
+func splitIrregularIndexesByUpdatedColumns(
+	tableDef *plan.TableDef,
+	indexes []*plan.IndexDef,
+	updateExprs map[string]*plan.Expr,
+) (affected, insertOnly []*plan.IndexDef, err error) {
+	if len(indexes) == 0 {
+		return nil, nil, nil
+	}
+
+	groupKey := func(indexdef *plan.IndexDef) string {
+		if indexdef.IndexName != "" {
+			return strings.ToLower(indexdef.IndexName)
+		}
+		// IndexName is expected for user indexes. Keep malformed/legacy metadata
+		// isolated by its physical identity instead of grouping every empty name.
+		return strings.ToLower(indexdef.IndexAlgo + "\x00" + indexdef.IndexTableName)
+	}
+
+	affectedGroups := make(map[string]bool, len(indexes))
+	updatedCols := make(map[string]struct{}, len(updateExprs))
+	for colName := range updateExprs {
+		updatedCols[colName] = struct{}{}
+	}
+	asyncGroups := make(map[string]bool, len(indexes))
+	for _, indexdef := range indexes {
+		async, asyncErr := indexplugin.IsAsync(indexdef.IndexAlgo, indexdef.IndexAlgoParams)
+		if asyncErr != nil {
+			return nil, nil, asyncErr
+		}
+		if async {
+			asyncGroups[groupKey(indexdef)] = true
+		}
+	}
+	syncIndexes := make([]*plan.IndexDef, 0, len(indexes))
+	for _, indexdef := range indexes {
+		if asyncGroups[groupKey(indexdef)] {
+			continue
+		}
+		syncIndexes = append(syncIndexes, indexdef)
+		key := groupKey(indexdef)
+		affected, affectedErr := irregularIndexAffectedByUpdatedColumnNames(tableDef, indexdef, updatedCols)
+		if affectedErr != nil {
+			return nil, nil, affectedErr
+		}
+		if affected {
+			affectedGroups[key] = true
+		}
+	}
+
+	for _, indexdef := range syncIndexes {
+		if affectedGroups[groupKey(indexdef)] {
+			affected = append(affected, indexdef)
+		} else {
+			insertOnly = append(insertOnly, indexdef)
+		}
+	}
+	return affected, insertOnly, nil
 }
 
 // appendIrregularMaintSource materializes the modern new-row image (the projList2
@@ -423,12 +489,16 @@ func (builder *QueryBuilder) appendTaggedSinkScan(bindCtx *BindContext, sourceSt
 //
 //   - the main plan (the idxNeedUpdate joins + MULTI_UPDATE that follow) keeps
 //     reading finalProjTag refs via a sink-scan that reuses the same tag;
-//   - both the insert maintenance (new entries) and the delete maintenance (drop
-//     the old entries of the conflicting rows) read the same materialized step.
-//     Its leading columns are the base table columns in tableDef.Cols order (minus
-//     Row_ID), the layout the leaf builders index by PK / indexed-column position.
-//     The PK is immutable under ODKU, so deleting by the final-image PK removes
-//     exactly the stale entries and is a no-op for non-conflicting rows.
+//   - affected indexes use that materialized step for both deleting conflicting
+//     rows' old entries and inserting the final image;
+//   - unaffected indexes use a shared derivative step filtered by old Row_ID IS
+//     NULL, so only genuinely new rows reach their insert maintenance.
+//
+// Both steps keep the same projection layout. Their leading columns are the base
+// table columns in tableDef.Cols order (minus Row_ID), the layout the leaf builders
+// index by PK / indexed-column position. For affected indexes, the PK is immutable
+// under ODKU, so deleting by the final-image PK removes exactly the stale entries
+// and is a no-op for non-conflicting rows.
 //
 // It records the maintenance context on the builder and returns the main-plan
 // sink-scan the caller must continue from.
@@ -436,7 +506,8 @@ func (builder *QueryBuilder) appendOnDupIrregularMaintSource(
 	bindCtx *BindContext,
 	finalProjNodeID, finalProjTag, deletePkPos int32, deletePkTyp plan.Type,
 	targetRowNumberPos, targetActivePos int32,
-	irregularIndexes []*plan.IndexDef,
+	irregularIndexes, insertOnlyIndexes []*plan.IndexDef,
+	newRowMarkerPos int32,
 	tableDef *plan.TableDef,
 	objRef *plan.ObjectRef,
 ) (int32, error) {
@@ -458,6 +529,33 @@ func (builder *QueryBuilder) appendOnDupIrregularMaintSource(
 		maintStep = builder.appendStep(selectedSinkID)
 	}
 
+	insertOnlyStep := int32(-1)
+	if len(insertOnlyIndexes) > 0 {
+		newRowsScanID := builder.appendTaggedSinkScan(bindCtx, maintStep, finalProjTag)
+		newRowsScan := builder.qry.Nodes[newRowsScanID]
+		if newRowMarkerPos < 0 || int(newRowMarkerPos) >= len(newRowsScan.ProjectList) {
+			return 0, moerr.NewInternalError(builder.GetContext(),
+				"ON DUPLICATE KEY UPDATE cannot locate the old-row marker for irregular index maintenance")
+		}
+		oldRowMarker := &plan.Expr{
+			Typ: newRowsScan.ProjectList[newRowMarkerPos].Typ,
+			Expr: &plan.Expr_Col{Col: &plan.ColRef{
+				RelPos: finalProjTag,
+				ColPos: newRowMarkerPos,
+			}},
+		}
+		isNewRow, err := BindFuncExprImplByPlanExpr(
+			builder.GetContext(), "isnull", []*plan.Expr{oldRowMarker})
+		if err != nil {
+			return 0, err
+		}
+		newRowsID := builder.appendNode(&plan.Node{
+			NodeType: plan.Node_FILTER, Children: []int32{newRowsScanID}, FilterList: []*plan.Expr{isNewRow},
+		}, bindCtx)
+		newRowsSinkID := appendSinkNodeWithTag(builder, bindCtx, newRowsID, finalProjTag)
+		insertOnlyStep = builder.appendStep(newRowsSinkID)
+	}
+
 	maintTableDef := *tableDef
 	maintTableDef.Indexes = irregularIndexes
 	builder.irregularMaintSourceStep = maintStep
@@ -465,6 +563,8 @@ func (builder *QueryBuilder) appendOnDupIrregularMaintSource(
 	builder.irregularMaintDeletePkPos = deletePkPos
 	builder.irregularMaintDeletePkTyp = deletePkTyp
 	builder.irregularMaintIndexes = irregularIndexes
+	builder.irregularMaintInsertOnlySourceStep = insertOnlyStep
+	builder.irregularMaintInsertOnlyIndexes = insertOnlyIndexes
 	builder.irregularMaintTableDef = &maintTableDef
 	builder.irregularMaintObjRef = objRef
 
@@ -479,14 +579,10 @@ func (builder *QueryBuilder) appendOnDupIrregularMaintSource(
 // fulltext). The caller is responsible for the subsequent reduceSinkSinkScanNodes
 // + tempOptimizeForDML post-processing.
 func (builder *QueryBuilder) buildIrregularIndexMaintenance(bindCtx *BindContext) error {
-	tableDef := builder.irregularMaintTableDef
-	objRef := builder.irregularMaintObjRef
-	sourceStep := builder.irregularMaintSourceStep
-
 	// ON DUPLICATE KEY UPDATE: drop the conflicting rows' old entries first, before
 	// re-inserting the final-image entries, so a deletion keyed by the (immutable)
 	// PK does not remove the freshly inserted ones.
-	if builder.irregularMaintDeleteStep >= 0 {
+	if builder.irregularMaintDeleteStep >= 0 && len(builder.irregularMaintIndexes) > 0 {
 		if err := builder.buildIrregularIndexDeleteMaintenance(bindCtx); err != nil {
 			return err
 		}
@@ -494,6 +590,39 @@ func (builder *QueryBuilder) buildIrregularIndexMaintenance(bindCtx *BindContext
 	if builder.irregularMaintSkipInsert {
 		return nil
 	}
+	if len(builder.irregularMaintIndexes) > 0 {
+		if err := builder.buildIrregularIndexInsertMaintenance(
+			bindCtx,
+			builder.irregularMaintSourceStep,
+			builder.irregularMaintTableDef,
+		); err != nil {
+			return err
+		}
+	}
+	if len(builder.irregularMaintInsertOnlyIndexes) > 0 {
+		if builder.irregularMaintInsertOnlySourceStep < 0 {
+			return moerr.NewInternalError(builder.GetContext(),
+				"missing new-row source for insert-only irregular index maintenance")
+		}
+		insertOnlyTableDef := *builder.irregularMaintTableDef
+		insertOnlyTableDef.Indexes = builder.irregularMaintInsertOnlyIndexes
+		if err := builder.buildIrregularIndexInsertMaintenance(
+			bindCtx,
+			builder.irregularMaintInsertOnlySourceStep,
+			&insertOnlyTableDef,
+		); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (builder *QueryBuilder) buildIrregularIndexInsertMaintenance(
+	bindCtx *BindContext,
+	sourceStep int32,
+	tableDef *plan.TableDef,
+) error {
+	objRef := builder.irregularMaintObjRef
 
 	// During a copy-based ALTER TABLE, an irregular index whose columns are not
 	// affected by the change is shallow-cloned into the new table (see
@@ -900,7 +1029,7 @@ func (builder *QueryBuilder) buildIrregularMasterDeleteByPk(bindCtx *BindContext
 // path uses (reduceSinkSinkScanNodes + tempOptimizeForDML). It is a no-op when the
 // table has no irregular indexes. Shared by the modern INSERT and LOAD paths.
 func (builder *QueryBuilder) finishIrregularIndexMaintenance(query *plan.Query, bindCtx *BindContext) error {
-	if len(builder.irregularMaintIndexes) == 0 && len(builder.irregularUpdateMaints) == 0 {
+	if len(builder.irregularMaintIndexes) == 0 && len(builder.irregularMaintInsertOnlyIndexes) == 0 && len(builder.irregularUpdateMaints) == 0 {
 		return nil
 	}
 	if len(builder.irregularUpdateMaints) > 0 {
@@ -910,13 +1039,15 @@ func (builder *QueryBuilder) finishIrregularIndexMaintenance(query *plan.Query, 
 			builder.irregularMaintDeletePkPos = maint.deletePkPos
 			builder.irregularMaintDeletePkTyp = maint.deletePkTyp
 			builder.irregularMaintIndexes = maint.indexes
+			builder.irregularMaintInsertOnlySourceStep = maint.insertOnlySourceStep
+			builder.irregularMaintInsertOnlyIndexes = maint.insertOnlyIndexes
 			builder.irregularMaintTableDef = maint.tableDef
 			builder.irregularMaintObjRef = maint.objRef
 			if err := builder.buildIrregularIndexMaintenance(bindCtx); err != nil {
 				return err
 			}
 		}
-	} else if len(builder.irregularMaintIndexes) > 0 {
+	} else if len(builder.irregularMaintIndexes) > 0 || len(builder.irregularMaintInsertOnlyIndexes) > 0 {
 		if err := builder.buildIrregularIndexMaintenance(bindCtx); err != nil {
 			return err
 		}
@@ -1744,6 +1875,61 @@ func (builder *QueryBuilder) appendInsertIgnoreMultiDedup(
 	return lastNodeID, outputTag, arbiterNode, nil
 }
 
+// collectGeneratedColumnDependents returns the set of columns that may change
+// when any column in seed is assigned during ODKU. Generated columns are
+// expanded to a fixed point so a generated column can depend on another
+// generated column. The returned names are canonical table column names.
+func collectGeneratedColumnDependents(ctx context.Context, tableDef *plan.TableDef, seed map[string]struct{}) (map[string]struct{}, error) {
+	possiblyChanged := make(map[string]struct{}, len(seed))
+	for name := range seed {
+		resolved := catalog.ResolveAlias(name)
+		colIdx, ok := tableDef.Name2ColIndex[resolved]
+		if !ok || colIdx < 0 || int(colIdx) >= len(tableDef.Cols) {
+			return nil, moerr.NewInternalErrorf(ctx,
+				"cannot resolve generated column dependency seed %q", name)
+		}
+		possiblyChanged[tableDef.Cols[colIdx].Name] = struct{}{}
+	}
+
+	for {
+		expanded := false
+		for _, col := range tableDef.Cols {
+			if col.GeneratedCol == nil {
+				continue
+			}
+			references := collectRefColPos(col.GeneratedCol.Expr)
+			for _, pos := range references {
+				if pos < 0 || int(pos) >= len(tableDef.Cols) {
+					return nil, moerr.NewInternalErrorf(ctx,
+						"invalid generated column reference position %d for column %q", pos, col.Name)
+				}
+			}
+			if _, alreadyChanged := possiblyChanged[col.Name]; alreadyChanged {
+				continue
+			}
+			for _, pos := range references {
+				if _, sourceChanged := possiblyChanged[tableDef.Cols[pos].Name]; sourceChanged {
+					possiblyChanged[col.Name] = struct{}{}
+					expanded = true
+					break
+				}
+			}
+		}
+		if !expanded {
+			return possiblyChanged, nil
+		}
+	}
+}
+
+func columnPossiblyChanged(tableDef *plan.TableDef, possiblyChanged map[string]struct{}, name string) bool {
+	resolved := catalog.ResolveAlias(name)
+	if colIdx, ok := tableDef.Name2ColIndex[resolved]; ok && colIdx >= 0 && int(colIdx) < len(tableDef.Cols) {
+		resolved = tableDef.Cols[colIdx].Name
+	}
+	_, ok := possiblyChanged[resolved]
+	return ok
+}
+
 func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 	bindCtx *BindContext,
 	dmlCtx *DMLContext,
@@ -1801,6 +1987,7 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 	selectTag := selectNode.BindingTags[0]
 	scanTag := builder.genNewBindTag()
 	updateExprs := make(map[string]*plan.Expr)
+	possiblyChangedCols := make(map[string]struct{})
 	autoUpdateCols := make(map[string]bool)
 	allExplicitAssignmentsSkipped := false
 
@@ -1904,6 +2091,20 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 			updateExprs[colName] = updateExpr
 		}
 
+		// Keep the dependency set separate from updateExprs: updateExprs is the
+		// final row image and receives every generated expression below, while
+		// possiblyChangedCols describes which keys may need maintenance.
+		seedCols := make(map[string]struct{}, len(updateExprs))
+		for colName := range updateExprs {
+			seedCols[colName] = struct{}{}
+		}
+		possiblyChangedCols, err = collectGeneratedColumnDependents(
+			builder.GetContext(), tableDef, seedCols,
+		)
+		if err != nil {
+			return 0, err
+		}
+
 		// Recompute generated columns from the final updated row image, so
 		// ON DUPLICATE KEY UPDATE stays consistent with regular UPDATE behavior.
 		finalRowExprs := make([]*plan.Expr, len(tableDef.Cols))
@@ -1938,12 +2139,7 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 	}
 
 	for _, part := range tableDef.Pkey.Names {
-		if _, ok := updateExprs[part]; ok {
-			// Generated columns are auto-recomputed, not explicitly updated by the user.
-			// Allow them in PK even though they appear in updateExprs.
-			if idx, exists := tableDef.Name2ColIndex[part]; exists && tableDef.Cols[idx].GeneratedCol != nil {
-				continue
-			}
+		if columnPossiblyChanged(tableDef, possiblyChangedCols, part) {
 			return 0, moerr.NewUnsupportedDML(builder.GetContext(), "update primary key on duplicate")
 		}
 	}
@@ -2035,12 +2231,7 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 	idxNeedUpdate := make([]bool, len(tableDef.Indexes))
 	for i, idxDef := range tableDef.Indexes {
 		for _, part := range idxDef.Parts {
-			resolved := catalog.ResolveAlias(part)
-			if _, ok := updateExprs[resolved]; ok {
-				// Skip generated columns in unique key check (auto-recomputed, not user-set)
-				if idx, exists := tableDef.Name2ColIndex[resolved]; exists && tableDef.Cols[idx].GeneratedCol != nil {
-					continue
-				}
+			if columnPossiblyChanged(tableDef, possiblyChangedCols, part) {
 				if idxDef.Unique {
 					return 0, moerr.NewUnsupportedDML(builder.GetContext(), "update unique key on duplicate")
 				} else {
@@ -2123,9 +2314,10 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 		}
 		if len(idxDef.Parts) == 1 && len(prefixLengths) == 0 {
 			var ok bool
-			pkIdxInBat, ok = colName2Idx[tableDef.Name+"."+idxDef.Parts[0]]
+			partName := catalog.ResolveAlias(idxDef.Parts[0])
+			pkIdxInBat, ok = colName2Idx[tableDef.Name+"."+partName]
 			if !ok {
-				return 0, moerr.NewInternalErrorf(builder.GetContext(), "bind insert err, can not find colName = %s", idxDef.Parts[0])
+				return 0, moerr.NewInternalErrorf(builder.GetContext(), "bind insert err, can not find colName = %s", partName)
 			}
 		} else {
 			lockColName := idxDef.IndexTableName + "." + catalog.IndexTableIndexColName
@@ -2607,31 +2799,22 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 		// generated value would defeat the no-op guard even when the user's
 		// explicit update changed nothing. A generated column whose source is a
 		// user-updated column is still caught by that source column's own <=>.
-		noopSkipCols := make(map[string]bool, len(autoUpdateCols))
+		noopSkipSeeds := make(map[string]struct{}, len(autoUpdateCols))
 		for name := range autoUpdateCols {
-			noopSkipCols[name] = true
+			noopSkipSeeds[name] = struct{}{}
 		}
-		for changed := true; changed; {
-			changed = false
-			for _, col := range tableDef.Cols {
-				if col.GeneratedCol == nil || noopSkipCols[col.Name] {
-					continue
-				}
-				for _, pos := range collectRefColPos(col.GeneratedCol.Expr) {
-					if int(pos) < len(tableDef.Cols) && noopSkipCols[tableDef.Cols[pos].Name] {
-						noopSkipCols[col.Name] = true
-						changed = true
-						break
-					}
-				}
-			}
+		noopSkipCols, err := collectGeneratedColumnDependents(
+			builder.GetContext(), tableDef, noopSkipSeeds,
+		)
+		if err != nil {
+			return 0, err
 		}
 		var allColsEqual *plan.Expr
 		for i, col := range tableDef.Cols {
 			if col.Name == catalog.Row_ID || col.Hidden {
 				continue
 			}
-			if noopSkipCols[col.Name] {
+			if _, skipped := noopSkipCols[col.Name]; skipped {
 				continue
 			}
 			// Only compare columns the update actually writes. A column absent from
@@ -2979,14 +3162,25 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 				selectNode = builder.qry.Nodes[lastNodeID]
 			}
 		}
-		if len(irregularIndexes) > 0 {
+		if onDupAction == plan.Node_UPDATE && len(irregularIndexes) > 0 {
 			// ODKU cannot change the PK, so the stale entries are keyed by the same
 			// PK the final image carries at its natural position.
 			odkuPkPos, odkuPkTyp := getPkPos(tableDef, false)
+			affectedIrregularIndexes, insertOnlyIrregularIndexes, err :=
+				splitIrregularIndexesByUpdatedColumns(tableDef, irregularIndexes, updateExprs)
+			if err != nil {
+				return 0, err
+			}
+			oldRowIDRef, ok := delColName2Idx[tableDef.Name+"."+catalog.Row_ID]
+			if !ok {
+				return 0, moerr.NewInternalError(builder.GetContext(),
+					"ON DUPLICATE KEY UPDATE cannot locate the old row id for irregular index maintenance")
+			}
 			lastNodeID, err = builder.appendOnDupIrregularMaintSource(
 				bindCtx, lastNodeID, finalProjTag, int32(odkuPkPos), odkuPkTyp,
 				-1, -1,
-				irregularIndexes, tableDef, dmlCtx.objRefs[0])
+				affectedIrregularIndexes, insertOnlyIrregularIndexes, oldRowIDRef[1],
+				tableDef, dmlCtx.objRefs[0])
 			if err != nil {
 				return 0, err
 			}

@@ -28,6 +28,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/models"
 	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace/statistic"
+	"github.com/matrixorigin/matrixone/pkg/vectorindex"
 )
 
 const (
@@ -149,22 +150,125 @@ func explainPlanTree(qry *plan.Query, ctx context.Context, buffer *ExplainDataBu
 		return err
 	}
 
-	if len(qry.BackgroundQueries) == 0 {
+	rounds, backgroundQueries := splitIvfSearchDiagnostics(qry.BackgroundQueries)
+	if options.Analyze && len(rounds) > 0 {
+		explainIvfSearchDiagnostics(rounds, buffer, options.Verbose)
+	}
+	if len(backgroundQueries) == 0 {
 		return nil
 	}
 
 	if !options.Verbose {
-		if len(qry.BackgroundQueries) <= maxDefaultExpandedBackgroundQueries {
-			return explainVerboseBackgroundQueries(qry.BackgroundQueries, ctx, buffer, options)
+		if len(backgroundQueries) <= maxDefaultExpandedBackgroundQueries {
+			return explainVerboseBackgroundQueries(backgroundQueries, ctx, buffer, options)
 		}
-		summary := summarizeBackgroundQueries(qry)
+		summary := summarizeBackgroundQueries(&plan.Query{BackgroundQueries: backgroundQueries})
 		if summary != "" {
 			buffer.PushNewLine(summary, false, 0)
 		}
 		return nil
 	}
 
-	return explainVerboseBackgroundQueries(qry.BackgroundQueries, ctx, buffer, options)
+	return explainVerboseBackgroundQueries(backgroundQueries, ctx, buffer, options)
+}
+
+func splitIvfSearchDiagnostics(backgroundQueries []*plan.Query) (
+	[]vectorindex.IvfSearchRoundDiagnostic,
+	[]*plan.Query,
+) {
+	rounds := make([]vectorindex.IvfSearchRoundDiagnostic, 0, len(backgroundQueries))
+	remaining := make([]*plan.Query, 0, len(backgroundQueries))
+	for _, query := range backgroundQueries {
+		if diagnostic, ok := vectorindex.DecodeIvfSearchRoundDiagnostic(query); ok {
+			rounds = append(rounds, diagnostic)
+			continue
+		}
+		remaining = append(remaining, query)
+	}
+	return rounds, remaining
+}
+
+func explainIvfSearchDiagnostics(
+	rounds []vectorindex.IvfSearchRoundDiagnostic,
+	buffer *ExplainDataBuffer,
+	verbose bool,
+) {
+	if len(rounds) == 0 {
+		return
+	}
+	if verbose {
+		prefix := min(len(rounds), maxVerboseBackgroundQueryPrefix)
+		suffixStart := prefix
+		if len(rounds) > maxVerboseBackgroundQueryPrefix+maxVerboseBackgroundQuerySuffix {
+			suffixStart = len(rounds) - maxVerboseBackgroundQuerySuffix
+		}
+		for _, round := range rounds[:prefix] {
+			buffer.PushNewLine(formatIvfSearchRound(round), false, 0)
+		}
+		if suffixStart > prefix {
+			buffer.PushNewLine(fmt.Sprintf(
+				"Vector Index Search Rounds: skipped %d middle round(s)", suffixStart-prefix), false, 0)
+			for _, round := range rounds[suffixStart:] {
+				buffer.PushNewLine(formatIvfSearchRound(round), false, 0)
+			}
+		} else {
+			for _, round := range rounds[prefix:] {
+				buffer.PushNewLine(formatIvfSearchRound(round), false, 0)
+			}
+		}
+	}
+	buffer.PushNewLine(summarizeIvfSearchDiagnostics(rounds), false, 0)
+}
+
+func formatIvfSearchRound(round vectorindex.IvfSearchRoundDiagnostic) string {
+	return fmt.Sprintf(
+		"Vector Index Search Round %d: bucket_window=%d:%d row_limit=%d output_rows=%d exhausted=%t",
+		round.Round,
+		round.BucketOffset,
+		round.BucketOffset+round.BucketCount,
+		round.RowLimit,
+		round.OutputRows,
+		round.Exhausted,
+	)
+}
+
+func summarizeIvfSearchDiagnostics(rounds []vectorindex.IvfSearchRoundDiagnostic) string {
+	windows := make([]string, 0, len(rounds))
+	limits := make([]string, 0, len(rounds))
+	searchCount := 0
+	emptyRounds := 0
+	var bucketsSearched uint64
+	for _, round := range rounds {
+		if round.Round == 1 {
+			searchCount++
+		}
+		if round.OutputRows == 0 {
+			emptyRounds++
+		}
+		bucketsSearched += round.BucketCount
+		windows = append(windows, fmt.Sprintf("%d:%d", round.BucketOffset, round.BucketOffset+round.BucketCount))
+		limits = append(limits, strconv.FormatUint(round.RowLimit, 10))
+	}
+	return fmt.Sprintf(
+		"Vector Index Search Summary: search_count=%d round_count=%d buckets_searched=%d bucket_windows=%s row_limits=%s empty_rounds=%d",
+		searchCount,
+		len(rounds),
+		bucketsSearched,
+		truncateDiagnosticList(windows),
+		truncateDiagnosticList(limits),
+		emptyRounds,
+	)
+}
+
+func truncateDiagnosticList(items []string) string {
+	if len(items) <= maxVerboseBackgroundQueryPrefix+maxVerboseBackgroundQuerySuffix {
+		return strings.Join(items, ", ")
+	}
+	visible := append([]string{}, items[:maxVerboseBackgroundQueryPrefix]...)
+	visible = append(visible, fmt.Sprintf("...(%d skipped)...",
+		len(items)-maxVerboseBackgroundQueryPrefix-maxVerboseBackgroundQuerySuffix))
+	visible = append(visible, items[len(items)-maxVerboseBackgroundQuerySuffix:]...)
+	return strings.Join(visible, ", ")
 }
 
 func explainVerboseBackgroundQueries(backgroundQueries []*plan.Query, ctx context.Context, buffer *ExplainDataBuffer, options *ExplainOptions) error {

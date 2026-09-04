@@ -33,6 +33,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/util/sysview"
 )
 
@@ -106,6 +107,81 @@ func TestGeneratedCloneRestoreSnapshotTS(t *testing.T) {
 			require.Equal(t, test.want, generatedCloneRestoreSnapshotTS(ses, 42))
 		})
 	}
+}
+
+type cloneSnapshotResolutionCompilerContext struct {
+	*plan2.MockCompilerContext
+	ctx        context.Context
+	resolveErr error
+}
+
+func (c *cloneSnapshotResolutionCompilerContext) GetContext() context.Context {
+	return c.ctx
+}
+
+func (c *cloneSnapshotResolutionCompilerContext) GetSnapshot() *plan2.Snapshot {
+	return nil
+}
+
+func (c *cloneSnapshotResolutionCompilerContext) ResolveSnapshotWithSnapshotName(string) (*plan2.Snapshot, error) {
+	return nil, c.resolveErr
+}
+
+func TestGetOpAndToAccountIDNormalizesMissingNamedSnapshot(t *testing.T) {
+	const snapshotName = "missing_snapshot"
+	ctx := context.Background()
+
+	resolverContext := &cloneSnapshotResolutionCompilerContext{
+		MockCompilerContext: plan2.NewMockCompilerContext(false),
+		ctx:                 ctx,
+		resolveErr:          moerr.NewInternalErrorf(ctx, "find 0 snapshot records by name(%s), expect only 1", snapshotName),
+	}
+	atTsExpr := &tree.AtTimeStamp{
+		Type:         tree.ATTIMESTAMPSNAPSHOT,
+		SnapshotName: snapshotName,
+		Expr:         tree.NewNumVal(snapshotName, snapshotName, false, tree.P_char),
+	}
+	_, resolveErr := plan2.NewQueryBuilder(
+		plan.Query_INSERT, resolverContext, false, true,
+	).ResolveTsHint(atTsExpr)
+	require.Error(t, resolveErr)
+	require.True(t, plan2.IsSnapshotNotFound(resolveErr))
+
+	originalResolver := resolveSnapshotForClone
+	resolveSnapshotForClone = func(*Session, *tree.AtTimeStamp) (*plan2.Snapshot, error) {
+		return nil, resolveErr
+	}
+	t.Cleanup(func() {
+		resolveSnapshotForClone = originalResolver
+	})
+
+	_, _, snapshot, err := getOpAndToAccountId(ctx, nil, nil, nil, atTsExpr)
+	require.Nil(t, snapshot)
+	require.EqualError(t, err, "invalid input: snapshot 'missing_snapshot' not found")
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidInput))
+	require.NotContains(t, err.Error(), "internal error")
+	require.NotContains(t, err.Error(), "snapshot records")
+}
+
+func TestGetOpAndToAccountIDPropagatesOtherSnapshotErrors(t *testing.T) {
+	ctx := context.Background()
+	wantErr := moerr.NewInternalError(ctx, "snapshot catalog unavailable")
+	atTsExpr := &tree.AtTimeStamp{
+		Type:         tree.ATTIMESTAMPSNAPSHOT,
+		SnapshotName: "snapshot",
+	}
+
+	originalResolver := resolveSnapshotForClone
+	resolveSnapshotForClone = func(*Session, *tree.AtTimeStamp) (*plan2.Snapshot, error) {
+		return nil, wantErr
+	}
+	t.Cleanup(func() {
+		resolveSnapshotForClone = originalResolver
+	})
+
+	_, _, snapshot, err := getOpAndToAccountId(ctx, nil, nil, nil, atTsExpr)
+	require.Nil(t, snapshot)
+	require.ErrorIs(t, err, wantErr)
 }
 
 func TestCloneForeignKeyChecksRestoresMigrationReplayability(t *testing.T) {
