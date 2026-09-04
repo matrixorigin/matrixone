@@ -202,6 +202,32 @@ func TestStatementDigestTextMixedSourcesStayUndisclosed(t *testing.T) {
 	require.Equal(t, uint16(moerr.ER_UNDISCLOSED_PARSE_ERROR_IN_DIGEST_FN), moerr.DowncastError(err).MySQLCode())
 }
 
+func TestStatementDigestTextSelectListSkipsMaskedBinaryRow(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	input := vector.NewVec(types.T_varchar.ToType())
+	defer input.Free(proc.Mp())
+	require.NoError(t, vector.AppendBytes(input, []byte("SELECT 1"), false, proc.Mp()))
+	require.NoError(t, vector.AppendBytes(input, []byte{0xff, 0x00}, false, proc.Mp()))
+	require.NoError(t, input.SetStringSourcesWithMP([]types.StringSource{
+		types.StringSourceLiteral,
+		types.StringSourceExpression,
+	}, proc.Mp()))
+	require.NoError(t, input.SetIsBinaryStringAt(1, true, proc.Mp()))
+
+	result := vector.NewFunctionResultWrapper(types.T_text.ToType(), proc.Mp())
+	defer result.Free()
+	require.NoError(t, result.PreExtendAndReset(2))
+	require.NoError(t, StatementDigestText(
+		[]*vector.Vector{input}, result, proc, 2,
+		&FunctionSelectList{AnyNull: true, SelectList: []bool{true, false}},
+	))
+
+	got := result.GetResultVector()
+	require.False(t, got.IsNull(0))
+	require.Equal(t, "SELECT ?", got.GetStringAt(0))
+	require.True(t, got.IsNull(1))
+}
+
 func TestStatementDigestTextOverloadsAndCharset(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	for _, oid := range []types.T{
