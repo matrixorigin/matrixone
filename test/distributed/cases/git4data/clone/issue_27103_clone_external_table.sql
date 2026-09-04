@@ -10,15 +10,15 @@ drop database if exists issue_27103_snapshot_src;
 drop database if exists issue_27103_snapshot_dst;
 drop database if exists issue_27103_external_only_src;
 drop database if exists issue_27103_external_only_dst;
--- @wait_expect(0, 30)
+-- @wait_expect(1, 30)
 select count(*) as stale_objects from mo_catalog.mo_database
 where datname in ('issue_27103_live_src', 'issue_27103_live_dst',
                   'issue_27103_snapshot_src', 'issue_27103_snapshot_dst',
                   'issue_27103_external_only_src', 'issue_27103_external_only_dst');
--- @wait_expect(0, 30)
+-- @wait_expect(1, 30)
 select count(*) as stale_snapshots from mo_catalog.mo_snapshots
 where sname = 'issue_27103_snapshot';
--- @wait_expect(0, 30)
+-- @wait_expect(1, 30)
 select count(*) as stale_accounts from mo_catalog.mo_account
 where account_name = 'issue_27103_branch_acc';
 
