@@ -809,6 +809,7 @@ func (u *CDCWatermarkUpdater) constructBatchUpdateWMSQL(
 	keys map[WatermarkKey]types.TS,
 ) (commitSql string) {
 	var values string
+	var taskPredicates []string
 	i := 0
 	for key, wm := range keys {
 		if i > 0 {
@@ -822,12 +823,15 @@ func (u *CDCWatermarkUpdater) constructBatchUpdateWMSQL(
 			escapeSQLString(key.TableName),
 			escapeSQLString(wm.ToString()),
 		)
+		taskPredicates = append(taskPredicates, fmt.Sprintf(
+			"(account_id = %d AND task_id = '%s')",
+			key.AccountId, escapeSQLString(key.TaskId)))
 		i++
 	}
 	if i == 0 {
 		return ""
 	}
-	commitSql = CDCSQLBuilder.GuardedWatermarkUpdateSQL(values)
+	commitSql = CDCSQLBuilder.GuardedWatermarkUpdateSQL(values, strings.Join(taskPredicates, " OR "))
 	return
 }
 
@@ -835,6 +839,7 @@ func (u *CDCWatermarkUpdater) constructBatchUpdateWMErrMsgSQL(
 	jobs []*UpdaterJob,
 ) (commitSql string) {
 	var values string
+	var taskPredicates []string
 	for i, job := range jobs {
 		if i > 0 {
 			values += " UNION ALL "
@@ -847,8 +852,11 @@ func (u *CDCWatermarkUpdater) constructBatchUpdateWMErrMsgSQL(
 			escapeSQLString(job.Key.TableName),
 			escapeSQLString(job.ErrMsg), // only update the err_msg
 		)
+		taskPredicates = append(taskPredicates, fmt.Sprintf(
+			"(account_id = %d AND task_id = '%s')",
+			job.Key.AccountId, escapeSQLString(job.Key.TaskId)))
 	}
-	commitSql = CDCSQLBuilder.GuardedWatermarkErrorUpdateSQL(values)
+	commitSql = CDCSQLBuilder.GuardedWatermarkErrorUpdateSQL(values, strings.Join(taskPredicates, " OR "))
 	return
 }
 
@@ -903,6 +911,7 @@ func (u *CDCWatermarkUpdater) constructAddWMSQL(
 	jobs []*UpdaterJob,
 ) (addSql string) {
 	var values string
+	var taskPredicates []string
 	for i, job := range jobs {
 		if i > 0 {
 			values += " UNION ALL "
@@ -916,8 +925,11 @@ func (u *CDCWatermarkUpdater) constructAddWMSQL(
 			escapeSQLString(job.Watermark.ToString()),
 			"",
 		)
+		taskPredicates = append(taskPredicates, fmt.Sprintf(
+			"(account_id = %d AND task_id = '%s')",
+			job.Key.AccountId, escapeSQLString(job.Key.TaskId)))
 	}
-	addSql = CDCSQLBuilder.GuardedWatermarkInsertSQL(values)
+	addSql = CDCSQLBuilder.GuardedWatermarkInsertSQL(values, strings.Join(taskPredicates, " OR "))
 	return
 }
 

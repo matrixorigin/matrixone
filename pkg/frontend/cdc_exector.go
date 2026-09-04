@@ -2613,7 +2613,11 @@ func (exec *CDCTaskExecutor) failTaskForPermanentTableError(ctx context.Context,
 
 	cdc.GetTableDetector(exec.cnUUID).UnRegister(exec.spec.TaskId)
 	exec.closeActiveRoutineCancel()
-	exec.stopAllReaders()
+	// Keep the completion owner even when a permanent table error leaves a
+	// reader unwinding past the bounded wait.  A later DROP may observe
+	// StateFailed and otherwise assume that no reader survived this path.
+	_, readersDone := exec.stopAllReaders()
+	exec.setReaderShutdownCompletion(readersDone)
 	if exec.holdCh != nil {
 		select {
 		case exec.holdCh <- 1:

@@ -1337,7 +1337,8 @@ func TestCDCWatermarkUpdater_constructAddWMSQL(t *testing.T) {
 		Watermark: ts3,
 	})
 	realSql := u.constructAddWMSQL(keys)
-	assert.Contains(t, realSql, "INNER JOIN `mo_catalog`.`mo_cdc_task`")
+	assert.Contains(t, realSql, "INNER JOIN (SELECT account_id, task_id FROM `mo_catalog`.`mo_cdc_task`")
+	assert.Contains(t, realSql, "FOR UPDATE)")
 	assert.Contains(t, realSql, "SELECT 1 AS account_id, 'test' AS task_id, 'db1' AS db_name")
 	assert.Contains(t, realSql, "SELECT 2 AS account_id, 'test' AS task_id, 'db2' AS db_name")
 	assert.Contains(t, realSql, "SELECT 3 AS account_id, 'test' AS task_id, 'db3' AS db_name")
@@ -1372,7 +1373,8 @@ func TestCDCWatermarkUpdater_constructBatchUpdateWMSQL(t *testing.T) {
 	ts3 := types.BuildTS(3, 1)
 	keys[*key3] = ts3
 	realSql := u.constructBatchUpdateWMSQL(keys)
-	assert.Contains(t, realSql, "INNER JOIN `mo_catalog`.`mo_cdc_task`")
+	assert.Contains(t, realSql, "INNER JOIN (SELECT account_id, task_id FROM `mo_catalog`.`mo_cdc_task`")
+	assert.Contains(t, realSql, "FOR UPDATE)")
 	assert.Contains(t, realSql, "ON DUPLICATE KEY UPDATE watermark = VALUES(watermark)")
 	assert.Contains(t, realSql, "SELECT 1 AS account_id")
 	assert.Contains(t, realSql, "SELECT 2 AS account_id")
@@ -1409,7 +1411,8 @@ func TestCDCWatermarkUpdater_constructBatchUpdateWMErrMsgSQL(t *testing.T) {
 		ErrMsg:    "",
 	})
 	realSql := u.constructBatchUpdateWMErrMsgSQL(jobs)
-	assert.Contains(t, realSql, "INNER JOIN `mo_catalog`.`mo_cdc_task`")
+	assert.Contains(t, realSql, "INNER JOIN (SELECT account_id, task_id FROM `mo_catalog`.`mo_cdc_task`")
+	assert.Contains(t, realSql, "FOR UPDATE)")
 	assert.Contains(t, realSql, "ON DUPLICATE KEY UPDATE err_msg = VALUES(err_msg)")
 	assert.Contains(t, realSql, "SELECT 1 AS account_id")
 	assert.Contains(t, realSql, "SELECT 2 AS account_id")
