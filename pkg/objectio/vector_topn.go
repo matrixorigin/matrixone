@@ -71,16 +71,14 @@ func TopNVector(
 		}
 	}
 
-	nullsBm := vecCol.GetNulls()
-	selectRows = slices.DeleteFunc(selectRows, func(row int64) bool {
-		return row < 0 || row >= int64(vecCol.Length()) || nullsBm.Contains(uint64(row))
-	})
-
-	searchResults := make([]vectorindex.SearchResult, 0, len(selectRows))
 	topLimit, err := vectorTopLimit(ctx, orderByLimit.Limit)
 	if err != nil {
 		return nil, nil, err
 	}
+	// Most rows cannot survive a bounded TopN. Avoid reserving result memory
+	// proportional to the filtered input, especially for wide INCLUDE scans.
+	searchResults := make([]vectorindex.SearchResult, 0, min(len(selectRows), topLimit))
+	nullsBm := vecCol.GetNulls()
 	rangeActive := orderByLimit.LowerBoundType != plan.BoundType_UNBOUNDED ||
 		orderByLimit.UpperBoundType != plan.BoundType_UNBOUNDED
 	if orderByLimit.LowerBoundType != plan.BoundType_UNBOUNDED && math.IsNaN(orderByLimit.LowerBound) ||
@@ -114,6 +112,11 @@ func TopNVector(
 	}
 
 	for _, row := range selectRows {
+		// Do not compact selectRows in place: callers may still need the physical
+		// row mapping after TopN returns.
+		if row < 0 || row >= int64(vecCol.Length()) || nullsBm.Contains(uint64(row)) {
+			continue
+		}
 		dist64, err := distOf(vecCol.GetBytesAt(int(row)))
 		if err != nil {
 			return nil, nil, err

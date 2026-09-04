@@ -916,6 +916,31 @@ func blockDataReadWithFilter(
 		return err
 	}
 	cacheVectors.Free(mp)
+	if storageSelectRows != nil && len(storageSelectRows) > 0 &&
+		!info.IsAppendable() && orderByLimit != nil && !orderByLimit.OrderedLimit {
+		topColPos := int(orderByLimit.ColPos)
+		if topColPos >= 0 && topColPos < len(columns) &&
+			topColPos != phyAddrColumnPos &&
+			!slices.Contains(earlyColumns, phyAddrColumnPos) &&
+			!slices.Contains(earlyColumns, topColPos) {
+			return blockDataReadWithSelectedFilterTopK(
+				ctx,
+				info,
+				columns,
+				colTypes,
+				phyAddrColumnPos,
+				storageSelectRows,
+				policy,
+				outputBat,
+				mp,
+				fs,
+				earlyColumns,
+				applyFilter,
+				orderByLimit,
+				preFilterRows,
+			)
+		}
+	}
 
 	var (
 		deleteMask       objectio.Bitmap
@@ -1138,6 +1163,169 @@ func blockDataReadWithFilter(
 				pos,
 				outputBat.Vecs[pos].Length(),
 				outputBat.RowCount(),
+			)
+		}
+	}
+	return nil
+}
+
+// blockDataReadWithSelectedFilterTopK handles the IVFFLAT INCLUDE path after
+// its centroid-prefix lookup has already produced physical rows and applied
+// tombstones. Reading the residual-filter columns and embedding in one scoped
+// ObjectIO request avoids opening and pinning the same block twice. The wide
+// embedding remains cache-backed; only exact-filter survivors are scored and
+// only bounded winners have their scalar columns materialized.
+func blockDataReadWithSelectedFilterTopK(
+	ctx context.Context,
+	info *objectio.BlockInfo,
+	columns []uint16,
+	colTypes []types.Type,
+	phyAddrColumnPos int,
+	storageSelectRows []int64,
+	policy fileservice.Policy,
+	outputBat *batch.Batch,
+	mp *mpool.MPool,
+	fs fileservice.FileService,
+	earlyColumns []int,
+	applyFilter engine.ReaderFilter,
+	orderByLimit *objectio.IndexReaderTopOp,
+	preFilterRows *int,
+) error {
+	topColPos := int(orderByLimit.ColPos)
+	filterColumns := make([]uint16, len(earlyColumns))
+	filterTypes := make([]types.Type, len(earlyColumns))
+	filterDestinations := make([]*vector.Vector, len(earlyColumns))
+	for i, pos := range earlyColumns {
+		filterColumns[i] = columns[pos]
+		filterTypes[i] = colTypes[pos]
+		filterDestinations[i] = outputBat.Vecs[pos]
+	}
+	lateColumns := columnPositionsComplement(earlyColumns, len(columns))
+	lateColumns = slices.DeleteFunc(lateColumns, func(pos int) bool { return pos == topColPos })
+	deferredColumns := make([]uint16, 0, len(lateColumns))
+	deferredTypes := make([]types.Type, 0, len(lateColumns))
+	deferredDestinations := make([]*vector.Vector, 0, len(lateColumns))
+	for _, pos := range lateColumns {
+		if pos == phyAddrColumnPos {
+			continue
+		}
+		deferredColumns = append(deferredColumns, columns[pos])
+		deferredTypes = append(deferredTypes, colTypes[pos])
+		deferredDestinations = append(deferredDestinations, outputBat.Vecs[pos])
+	}
+
+	var (
+		filterResult         engine.ReaderFilterResult
+		selectedPhysicalRows []int64
+		pooledPhysicalRows   []int64
+		filteredRowCount     int
+	)
+	topRows, dists, _, err := ioutil.LoadColumnsDataIntoAndTopN(
+		ctx,
+		filterColumns,
+		filterTypes,
+		fs,
+		info.MetaLocation(),
+		filterDestinations,
+		storageSelectRows,
+		columns[topColPos],
+		colTypes[topColPos],
+		deferredColumns,
+		deferredTypes,
+		deferredDestinations,
+		func() ([]int64, error) {
+			liveRows := len(storageSelectRows)
+			outputBat.SetRowCount(liveRows)
+			for _, pos := range earlyColumns {
+				if outputBat.Vecs[pos].Length() != liveRows {
+					return nil, moerr.NewInvalidInputNoCtxf(
+						"early column %d has %d rows before filtering, expected %d",
+						pos, outputBat.Vecs[pos].Length(), liveRows,
+					)
+				}
+			}
+			if preFilterRows != nil {
+				*preFilterRows = liveRows
+			}
+
+			var filterErr error
+			filterResult, filterErr = applyFilter(outputBat, earlyColumns)
+			if filterErr != nil {
+				return nil, filterErr
+			}
+			if filterErr = validateReaderFilterResult(
+				filterResult, liveRows, outputBat.RowCount(),
+			); filterErr != nil {
+				return nil, filterErr
+			}
+			filteredRowCount = outputBat.RowCount()
+			for _, pos := range earlyColumns {
+				if outputBat.Vecs[pos].Length() != filteredRowCount {
+					return nil, moerr.NewInvalidInputNoCtxf(
+						"residual filter left early column %d with %d rows for batch row count %d",
+						pos, outputBat.Vecs[pos].Length(), filteredRowCount,
+					)
+				}
+			}
+			if filteredRowCount == 0 {
+				selectedPhysicalRows = []int64{}
+				return selectedPhysicalRows, nil
+			}
+			if filterResult.All {
+				selectedPhysicalRows = storageSelectRows
+				return selectedPhysicalRows, nil
+			}
+
+			pooledPhysicalRows = vector.GetSels()
+			for _, row := range filterResult.Sels {
+				pooledPhysicalRows = append(pooledPhysicalRows, storageSelectRows[row])
+			}
+			selectedPhysicalRows = pooledPhysicalRows
+			return selectedPhysicalRows, nil
+		},
+		orderByLimit,
+		mp,
+		policy,
+	)
+	if pooledPhysicalRows != nil {
+		defer vector.PutSels(pooledPhysicalRows)
+	}
+	if err != nil {
+		return err
+	}
+	if filteredRowCount == 0 {
+		return nil
+	}
+
+	winnerPositions, err := positionsOfSelectedRows(selectedPhysicalRows, topRows)
+	if err != nil {
+		return err
+	}
+	for _, pos := range earlyColumns {
+		if len(winnerPositions) == 0 {
+			outputBat.Vecs[pos].CleanOnlyData()
+			continue
+		}
+		outputBat.Vecs[pos].Shrink(winnerPositions, false)
+	}
+	outputBat.SetRowCount(len(topRows))
+	outputBat.Vecs[topColPos].CleanOnlyData()
+	if err = appendVectorTopNDistances(outputBat, len(columns), dists, mp); err != nil {
+		return err
+	}
+
+	if phyAddrColumnPos >= 0 {
+		if err = buildRowidColumn(
+			info, outputBat.Vecs[phyAddrColumnPos], topRows, mp,
+		); err != nil {
+			return err
+		}
+	}
+	for _, pos := range lateColumns {
+		if outputBat.Vecs[pos].Length() != outputBat.RowCount() {
+			return moerr.NewInvalidInputNoCtxf(
+				"late column %d has %d rows for batch row count %d",
+				pos, outputBat.Vecs[pos].Length(), outputBat.RowCount(),
 			)
 		}
 	}

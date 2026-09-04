@@ -276,23 +276,34 @@ func BenchmarkBlockDataReadPersistedFilteredVectorTopN(b *testing.B) {
 		if selectEvery == 2 {
 			selectivity = "50pct"
 		}
-		for _, storageTopK := range []bool{false, true} {
-			path := "local"
+		for _, benchmark := range []struct {
+			path             string
+			storageTopK      bool
+			storageSelection bool
+		}{
+			{path: "local"},
+			{path: "storage", storageTopK: true},
+			{path: "storage_prefilter", storageTopK: true, storageSelection: true},
+		} {
+			path := benchmark.path
 			materializedRows := vectorRangeTopNBenchmarkRows / int(selectEvery)
-			if storageTopK {
-				path = "storage"
+			if benchmark.storageTopK {
 				materializedRows = 0
 			}
 			b.Run(path+"_"+selectivity, func(b *testing.B) {
 				fixture := newVectorRangeTopNBenchmarkFixture(b)
 				b.Cleanup(fixture.close)
-				if err := fixture.readFiltered(storageTopK, selectEvery); err != nil {
+				if err := fixture.readFiltered(
+					benchmark.storageTopK, benchmark.storageSelection, selectEvery,
+				); err != nil {
 					b.Fatal(err)
 				}
 				b.ReportAllocs()
 				b.ResetTimer()
 				for i := 0; i < b.N; i++ {
-					if err := fixture.readFiltered(storageTopK, selectEvery); err != nil {
+					if err := fixture.readFiltered(
+						benchmark.storageTopK, benchmark.storageSelection, selectEvery,
+					); err != nil {
 						b.Fatal(err)
 					}
 				}
@@ -313,6 +324,7 @@ type vectorRangeTopNBenchmarkFixture struct {
 	columns     []uint16
 	columnTypes []types.Type
 	ds          engine.DataSource
+	storageRows []int64
 }
 
 func newVectorRangeTopNBenchmarkFixture(b *testing.B) *vectorRangeTopNBenchmarkFixture {
@@ -361,6 +373,10 @@ func newVectorRangeTopNBenchmarkFixture(b *testing.B) *vectorRangeTopNBenchmarkF
 	}
 	mpool.DeleteMPool(mp)
 
+	storageRows := make([]int64, vectorRangeTopNBenchmarkRows)
+	for i := range storageRows {
+		storageRows[i] = int64(i)
+	}
 	return &vectorRangeTopNBenchmarkFixture{
 		ctx:         ctx,
 		fs:          fs,
@@ -368,6 +384,7 @@ func newVectorRangeTopNBenchmarkFixture(b *testing.B) *vectorRangeTopNBenchmarkF
 		columns:     []uint16{0, objectio.SEQNUM_ROWID, 1},
 		columnTypes: []types.Type{types.T_int64.ToType(), objectio.RowidType, vectorType},
 		ds:          &blockReadTestDataSource{},
+		storageRows: storageRows,
 	}
 }
 
@@ -394,7 +411,11 @@ func (f *vectorRangeTopNBenchmarkFixture) newUnboundedTop() *objectio.IndexReade
 	return top
 }
 
-func (f *vectorRangeTopNBenchmarkFixture) readFiltered(storageTopK bool, selectEvery int64) (retErr error) {
+func (f *vectorRangeTopNBenchmarkFixture) readFiltered(
+	storageTopK bool,
+	storageSelection bool,
+	selectEvery int64,
+) (retErr error) {
 	mp := mpool.MustNewZero()
 	defer func() {
 		if bytes := mp.CurrNB(); bytes != 0 && retErr == nil {
@@ -429,13 +450,23 @@ func (f *vectorRangeTopNBenchmarkFixture) readFiltered(storageTopK bool, selectE
 	if storageTopK {
 		pushedTop = top
 	}
-	if _, err := BlockDataReadWithFilter(
-		f.ctx, &f.info, f.ds, f.columns, f.columnTypes, 1, timestamp.Timestamp{},
-		nil, nil, objectio.BlockReadFilter{}, pushedTop, fileservice.Policy(0),
-		"ivfflat-filtered-topk-benchmark", output, cacheVectors, mp, f.fs,
-		[]int{0}, filter,
-	); err != nil {
-		return err
+	if storageSelection {
+		if err := blockDataReadWithFilter(
+			f.ctx, &f.info, nil, f.columns, f.columnTypes, 1, types.TS{},
+			f.storageRows, fileservice.Policy(0), output, cacheVectors, mp, f.fs,
+			[]int{0}, filter, pushedTop, nil,
+		); err != nil {
+			return err
+		}
+	} else {
+		if _, err := BlockDataReadWithFilter(
+			f.ctx, &f.info, f.ds, f.columns, f.columnTypes, 1, timestamp.Timestamp{},
+			nil, nil, objectio.BlockReadFilter{}, pushedTop, fileservice.Policy(0),
+			"ivfflat-filtered-topk-benchmark", output, cacheVectors, mp, f.fs,
+			[]int{0}, filter,
+		); err != nil {
+			return err
+		}
 	}
 	if storageTopK {
 		if output.RowCount() != vectorRangeTopNBenchmarkLimit || output.Vecs[2].Length() != 0 {
