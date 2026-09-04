@@ -22,6 +22,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/internal/materialized"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/stretchr/testify/require"
 )
@@ -85,6 +86,7 @@ func TestGroupingSetInputSharingProtocolGate(t *testing.T) {
 	require.Equal(t, 1, shared.expandProjects)
 	require.Equal(t, 1, shared.aggregatesOnExpand)
 	require.Equal(t, 3, shared.sinkScans)
+	require.Equal(t, 1, shared.materializedSinks)
 	require.Equal(t, []bool{true, true, true, false, false, false}, shared.flags)
 	require.True(t, shared.hasEmptyRowMarker)
 
@@ -141,6 +143,7 @@ type groupingSetShape struct {
 	expandProjects     int
 	aggregatesOnExpand int
 	sinkScans          int
+	materializedSinks  int
 	flags              []bool
 	hasEmptyRowMarker  bool
 }
@@ -167,6 +170,10 @@ func reachableGroupingSetShape(query *planpb.Query) groupingSetShape {
 			}
 		case planpb.Node_SINK_SCAN:
 			shape.sinkScans++
+		case planpb.Node_SINK:
+			if node.ExtraOptions == materialized.CTESinkOption {
+				shape.materializedSinks++
+			}
 		case planpb.Node_PROJECT:
 			if _, ok := DecodeGroupingSetExpandOption(node.ExtraOptions); ok {
 				shape.expandProjects++

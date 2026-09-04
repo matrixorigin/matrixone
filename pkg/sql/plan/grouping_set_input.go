@@ -23,6 +23,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/internal/materialized"
 )
 
 const groupingSetExpandOptionPrefix = "grouping_set_expand:"
@@ -95,12 +96,14 @@ func (builder *QueryBuilder) sharePendingGroupingSetInputs(rootID int32) int32 {
 //
 //	common input -> vector-level grouping-set expand
 //	             -> one aggregate keyed by (groups, set id)
-//	             -> small streamed fanout to branch projects
+//	             -> bounded materialized fanout to branch projects
 //
 // The rewrite is deliberately fail-closed. The internal UNION marker proves a
 // common FROM/WHERE AST; typed aggregate shape, determinism, full-drain AGG
 // consumers, and a conservative cost comparison prove that sharing is safe and
-// useful. No detailed input is materialized.
+// useful. Only the reduced aggregate output is materialized; detailed input is
+// never retained. Independent readers prevent a lazy UNION ALL branch from
+// backpressuring the producer while another branch is still draining.
 func (builder *QueryBuilder) shareGroupingSetInput(nodes []int32, contexts []*BindContext) bool {
 	if len(nodes) < 2 || len(nodes) != len(contexts) {
 		return false
@@ -259,6 +262,7 @@ func (builder *QueryBuilder) shareGroupingSetInput(nodes []int32, contexts []*Bi
 		BindingTags: []int32{sharedOutputTag},
 	}, branches[0].ctx)
 	sinkID := appendSinkNodeWithTag(builder, branches[0].ctx, sharedOutputID, sharedOutputTag)
+	builder.qry.Nodes[sinkID].ExtraOptions = materialized.CTESinkOption
 	sourceStep := builder.appendStep(sinkID)
 
 	for i := range branches {
