@@ -294,6 +294,10 @@ type ArrowLoadParameters struct {
 	Enabled            bool `toml:"enabled" user_setting:"advanced"`
 	S3Enabled          bool `toml:"s3-enabled" user_setting:"advanced"`
 	DistributedEnabled bool `toml:"distributed-enabled" user_setting:"advanced"`
+	// ForceMaterialize disables the Arrow-to-MO borrow path without disabling
+	// Arrow LOAD itself. It is a rollout diagnostic and emergency fallback, not
+	// the normal execution policy, so its zero value keeps borrowing enabled.
+	ForceMaterialize bool `toml:"force-materialize" user_setting:"advanced"`
 }
 
 // NewMongoDBParameters returns MongoDB parameters with defaults that must be

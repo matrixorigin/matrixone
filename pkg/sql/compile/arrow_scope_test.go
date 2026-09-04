@@ -110,6 +110,14 @@ func TestArrowLoadRolloutGateFailsClosedAndSerializesWhenDistributedOff(t *testi
 
 	frontend.ArrowLoad.DistributedEnabled = true
 	require.Same(t, param, arrowParamForRollout(param, frontend.ArrowLoad))
+
+	frontend.ArrowLoad.ForceMaterialize = true
+	materialized := arrowParamForRollout(param, frontend.ArrowLoad)
+	require.NotSame(t, param, materialized)
+	require.False(t, param.ArrowForceMaterialize,
+		"rollout fallback must not mutate the reusable parser parameter")
+	require.True(t, materialized.Parallel)
+	require.True(t, materialized.ArrowForceMaterialize)
 }
 
 func TestArrowCompileRuntimeRemapsFileIndicesPerScope(t *testing.T) {

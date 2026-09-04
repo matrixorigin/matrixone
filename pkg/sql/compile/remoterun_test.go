@@ -1774,6 +1774,7 @@ func TestExternalScanArrowRuntimeRoundtrip(t *testing.T) {
 	op := external.NewArgument().WithEs(&external.ExternalParam{
 		ExParamConst: external.ExParamConst{
 			ArrowExecutionScope:        pipeline.ArrowExecutionScope_ArrowLoadData,
+			ArrowForceMaterialize:      true,
 			ArrowObjectIdentities:      identities,
 			ArrowRecordBatchShards:     shards,
 			ArrowSchemaFingerprint:     fingerprint,
@@ -1788,6 +1789,7 @@ func TestExternalScanArrowRuntimeRoundtrip(t *testing.T) {
 	_, instruction, err := convertToPipelineInstruction(op, proc, ctx, 1)
 	require.NoError(t, err)
 	require.Equal(t, pipeline.ArrowExecutionScope_ArrowLoadData, instruction.ExternalScan.ArrowExecutionScope)
+	require.True(t, instruction.ExternalScan.ArrowForceMaterialize)
 	require.Equal(t, identities, instruction.ExternalScan.ArrowObjectIdentities)
 	require.Equal(t, shards, instruction.ExternalScan.ArrowRecordBatchShards)
 	require.Equal(t, fingerprint, instruction.ExternalScan.ArrowSchemaFingerprint)
@@ -1802,6 +1804,7 @@ func TestExternalScanArrowRuntimeRoundtrip(t *testing.T) {
 	require.NoError(t, err)
 	restoredExternal := restored.(*external.External)
 	require.Equal(t, pipeline.ArrowExecutionScope_ArrowLoadData, restoredExternal.Es.ArrowExecutionScope)
+	require.True(t, restoredExternal.Es.ArrowForceMaterialize)
 	require.Equal(t, identities, restoredExternal.Es.ArrowObjectIdentities)
 	require.Equal(t, shards, restoredExternal.Es.ArrowRecordBatchShards)
 	require.Equal(t, fingerprint, restoredExternal.Es.ArrowSchemaFingerprint)

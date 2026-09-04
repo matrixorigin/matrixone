@@ -77,6 +77,9 @@ type ExParamConst struct {
 	ArrowRecordBatchShards     []*pipeline.ArrowRecordBatchShard
 	ArrowSchemaFingerprint     []byte
 	ArrowConversionPlanVersion uint32
+	// ArrowForceMaterialize is the compile-time rollout snapshot propagated to
+	// every local or remote External scope. It is not a per-batch heuristic.
+	ArrowForceMaterialize bool
 
 	// letter case: origin
 	Attrs           []plan.ExternAttr

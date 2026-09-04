@@ -85,11 +85,11 @@ func (external *External) Prepare(proc *process.Process) error {
 	if param == nil {
 		return moerr.NewInvalidInput(proc.Ctx, "external parameter is missing")
 	}
-	if param.Fileparam == nil {
-		return moerr.NewInvalidInput(proc.Ctx, "external file parameter is missing")
-	}
 	if err := validateParquetWholeFileFanoutProtocol(proc, param); err != nil {
 		return err
+	}
+	if param.Fileparam == nil {
+		return moerr.NewInvalidInput(proc.Ctx, "external file parameter is missing")
 	}
 	if proc.GetLim().MaxMsgSize == 0 {
 		param.maxBatchSize = uint64(morpc.GetMessageSize())

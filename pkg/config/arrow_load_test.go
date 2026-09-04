@@ -33,9 +33,10 @@ func TestArrowLoadRolloutGatesDefaultOffAndDecodeIndependently(t *testing.T) {
 enabled = true
 s3-enabled = true
 distributed-enabled = false
+force-materialize = true
 `, &decoded)
 	require.NoError(t, err)
 	require.Equal(t, ArrowLoadParameters{
-		Enabled: true, S3Enabled: true, DistributedEnabled: false,
+		Enabled: true, S3Enabled: true, DistributedEnabled: false, ForceMaterialize: true,
 	}, decoded.ArrowLoad)
 }

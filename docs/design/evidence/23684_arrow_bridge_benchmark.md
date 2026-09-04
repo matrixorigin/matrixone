@@ -1,8 +1,9 @@
 # #23684 Arrow bridge A/B benchmark
 
-This benchmark compares identical Arrow records with ordinary borrow policy and
-`ForceMaterialize=true`. It is a bridge-level attribution test, not a cloud or
-end-to-end LOAD release benchmark.
+This record compares identical Arrow records with ordinary borrow policy and
+`ForceMaterialize=true`. It contains both a bridge-level attribution benchmark
+and a local end-to-end SQL LOAD benchmark; neither is a cloud-provider or
+deployment acceptance benchmark.
 
 Command, run on 2026-09-03 on Darwin/arm64 Apple M4:
 
@@ -28,10 +29,36 @@ same logical payload in either mode, while ownership changes from borrowed to
 copied. The short-string/temporal case correctly reports no eligible bytes and
 therefore no artificial zero-copy win.
 
-## Remaining release evidence
+## End-to-end LOAD A/B
 
-Representative end-to-end datasets must still measure complete LOAD latency,
-CPU, allocations, object-store requests/bytes, cache hit and pin behavior,
-pipeline copies, memory high-water, cancellation cleanup, and ordinary
-Parquet/INSERT controls on the exact candidate build. Deployment owners must
-set acceptance thresholds before enabling the feature by default.
+The same candidate binary was also exercised through the MySQL frontend,
+parser/planner, External reader, conversion, transaction commit, storage, and
+result acknowledgement. Each sample loaded 100,000 rows; table truncation was
+outside the timer. The benchmark asserts the expected borrowed/copy counters so
+the two modes cannot silently collapse to the same policy.
+
+```text
+.agents/skills/mo-dev/scripts/mo-cgo-test -p=1 -run '^$' \
+  -bench '^BenchmarkArrowLoadEndToEndMaterializeAB$' -benchmem \
+  -benchtime=3x -count=3 -timeout=2400s ./pkg/tests/arrowload
+```
+
+| Mode | ns/op, three runs | rows/s, three runs | B/op | allocs/op |
+| --- | --- | --- | --- | --- |
+| borrow | 99,915,126 / 110,736,000 / 77,651,930 | 1,000,849 / 903,049 / 1,287,798 | 18,472,338 / 21,284,285 / 16,848,141 | 149,529 / 220,473 / 139,554 |
+| materialize | 86,487,403 / 99,493,569 / 94,644,931 | 1,156,238 / 1,005,090 / 1,056,581 | 16,791,154 / 16,896,400 / 16,789,093 | 139,463 / 139,928 / 139,789 |
+
+On the final rebased candidate, the median forced-materialize run was 5.3%
+faster and delivered 5.6% more rows/s than the median borrow run. Both modes
+showed substantial run-to-run noise, including one borrow sample with elevated
+allocation counts, so this result proves the two policies execute and remain
+within the local reference gate; it does not prove a repeatable performance win
+for either policy. Materialize remains a correctness diagnostic and emergency
+fallback because it deliberately gives up eligible zero-copy ownership.
+
+## Remaining deployment evidence
+
+The local A/B does not replace provider-specific object-store measurements,
+ordinary Parquet/INSERT controls on customer data, cache/pin pressure testing,
+or production CPU/RSS profiles. Deployment owners must run those controls on
+the exact release artifact before enabling S3 or distributed execution.

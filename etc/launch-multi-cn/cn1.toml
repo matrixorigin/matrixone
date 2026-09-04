@@ -50,6 +50,7 @@ port = 16001
 enabled = true
 s3-enabled = false
 distributed-enabled = true
+force-materialize = false
 
 [cn.frontend.iceberg]
 enable = true

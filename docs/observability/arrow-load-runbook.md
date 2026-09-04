@@ -15,6 +15,7 @@ A release or deployment profile should begin with:
 enabled = false
 s3-enabled = false
 distributed-enabled = false
+force-materialize = false
 ```
 
 Repository development/BVT launch profiles may explicitly enable local and
@@ -32,6 +33,13 @@ execution. During rollback, stop admitting new Arrow statements by disabling
 `enabled`; allow already admitted statements to drain or cancel them through
 the normal query lifecycle. Do not switch an executing statement to a
 different object generation or conversion policy.
+
+`force-materialize=true` leaves Arrow LOAD enabled but disables borrowed Arrow
+backing for statements compiled after the setting is applied. Use it to isolate
+ownership/pinning incidents or as a temporary rollback from the borrow path.
+The compile snapshot is carried to remote scopes, so a statement never mixes
+borrow and forced-materialize policy. Restart or otherwise reload every CN with
+the same setting before using this control in a distributed cluster.
 
 ## Metrics
 
@@ -84,6 +92,22 @@ histogram_quantile(
 
 Thresholds belong to deployment owners and must be derived from representative
 workloads. This repository does not hard-code cluster-specific alert values.
+
+For a local canary/release rehearsal, use these reference gates until deployment
+owners replace them with workload-specific values:
+
+- zero partial commits, successful statements with internal errors, leaked
+  allocation-account bytes, or pinned bytes that fail to return to baseline;
+- `internal` errors page on the first occurrence; `resource_exhausted` and
+  `object_changed` warn on any new rate and page when sustained for 5 minutes;
+- Arrow p99 may not regress more than 20% and throughput may not fall below 90%
+  of the accepted control for the same data, topology, cache state, and binary;
+- after the last Arrow statement terminates, pinned bytes must return to the
+  pre-run baseline within 60 seconds.
+
+These are rollout acceptance gates, not universal production SLOs. Compare
+against ordinary LOAD/INSERT and the forced-materialize control before advancing
+local file, S3/stage, and distributed stages.
 
 ## Triage
 

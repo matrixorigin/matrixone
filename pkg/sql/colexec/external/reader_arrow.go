@@ -189,6 +189,7 @@ type ArrowReader struct {
 	rowOffset             int64
 	admission             fileservice.RangeReadAdmission
 	allocation            *vector.AllocationAccountSelection
+	forceMaterialize      bool
 	conversionFingerprint [sha256.Size]byte
 	fingerprintSet        bool
 }
@@ -233,6 +234,7 @@ func NewArrowReader(
 	}
 	return &ArrowReader{
 		param: param, admission: meteredArrowRangeAdmission{inner: admission}, allocation: allocation,
+		forceMaterialize: param.ArrowForceMaterialize,
 	}, nil
 }
 
@@ -498,7 +500,7 @@ func (r *ArrowReader) ReadBatch(
 	}
 	convertStart := time.Now()
 	converted, stats, err := r.plan.Convert(ctx, view, proc.Mp(), arrowbridge.ConvertOptions{
-		Location: location, Allocation: r.allocation,
+		Location: location, Allocation: r.allocation, ForceMaterialize: r.forceMaterialize,
 	})
 	observeArrowPhase(convertStart, "convert", err)
 	if err != nil {

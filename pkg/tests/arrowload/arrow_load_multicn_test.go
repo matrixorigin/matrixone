@@ -27,9 +27,10 @@ import (
 
 // TestArrowLoadMultiCN covers two public-path cases that need more than one CN:
 // distributed record-batch fan-out correctness and cancelling a LOAD with KILL
-// QUERY. It uses its own dedicated 2-CN cluster, so nothing here shares state,
-// config, or lifecycle with the 1-CN suite. CN shutdown, rolling binaries, and
-// cross-node cancellation faults remain separate release tests.
+// QUERY. Both cancellation statements request distributed record-batch fanout,
+// so their coordinator cancellation must propagate to worker scopes on the
+// second CN. Worker shutdown runs last because it intentionally removes that CN
+// from the fixture.
 func TestArrowLoadMultiCN(t *testing.T) {
 	c := startArrowLoadCluster(t, 2, true /*enabled*/, true /*s3Enabled*/, true /*distributedEnabled*/)
 	db := openArrowLoadDB(t, c, 0)
@@ -40,6 +41,7 @@ func TestArrowLoadMultiCN(t *testing.T) {
 	t.Run("DistributedRecordBatchFanout", func(t *testing.T) { testArrowMultiCNFanout(t, db, path, ddl) })
 	t.Run("CancelMidLoad", func(t *testing.T) { testArrowCancelMidLoad(t, c, path, ddl) })
 	t.Run("ClientContextCancel", func(t *testing.T) { testArrowClientContextCancel(t, c, path, ddl) })
+	t.Run("WorkerCNShutdown", func(t *testing.T) { testArrowWorkerCNShutdown(t, c, path, ddl) })
 }
 
 // testArrowMultiCNFanout loads the "large" multi-record-batch fixture with
@@ -88,7 +90,7 @@ func testArrowCancelMidLoad(t *testing.T, c embed.Cluster, path, ddl string) {
 	loadErrCh := make(chan error, 1)
 	go func() {
 		_, execErr := conn.ExecContext(ctx, fmt.Sprintf(
-			"load data infile {'filepath'='%s','format'='arrow'} into table cancel_mid_load", path))
+			"load data infile {'filepath'='%s','format'='arrow'} into table cancel_mid_load parallel 'true'", path))
 		loadErrCh <- execErr
 	}()
 
@@ -136,7 +138,7 @@ func testArrowClientContextCancel(t *testing.T, c embed.Cluster, path, ddl strin
 	loadErrCh := make(chan error, 1)
 	go func() {
 		_, execErr := conn.ExecContext(loadCtx, fmt.Sprintf(
-			"load data infile {'filepath'='%s','format'='arrow'} into table client_cancel_load", path))
+			"load data infile {'filepath'='%s','format'='arrow'} into table client_cancel_load parallel 'true'", path))
 		loadErrCh <- execErr
 	}()
 
@@ -152,4 +154,64 @@ func testArrowClientContextCancel(t *testing.T, c embed.Cluster, path, ddl strin
 	verifyDB := openArrowLoadDB(t, c, 0)
 	require.Equal(t, int64(0), queryCount(t, verifyDB, "select count(*) from arrow_multicn.client_cancel_load"),
 		"client cancellation must not leave partially committed rows")
+}
+
+// testArrowWorkerCNShutdown closes the second CN only after a distributed LOAD
+// is visible on the coordinator. CN shutdown may either drain its already
+// admitted worker scope or cancel the statement, but the transaction boundary
+// permits only the complete fixture or zero rows. A partial row count would mean
+// service teardown published an incomplete LOAD.
+func testArrowWorkerCNShutdown(t *testing.T, c embed.Cluster, path, ddl string) {
+	loaderDB := openArrowLoadDB(t, c, 0)
+	observerDB := openArrowLoadDB(t, c, 0)
+	ctx := context.Background()
+	conn, err := loaderDB.Conn(ctx)
+	require.NoError(t, err)
+	defer conn.Close()
+	_, err = conn.ExecContext(ctx, "use arrow_multicn")
+	require.NoError(t, err)
+	_, err = conn.ExecContext(ctx, "drop table if exists worker_shutdown_load")
+	require.NoError(t, err)
+	_, err = conn.ExecContext(ctx, fmt.Sprintf("create table worker_shutdown_load(%s)", ddl))
+	require.NoError(t, err)
+
+	var connID int64
+	require.NoError(t, conn.QueryRowContext(ctx, "select connection_id()").Scan(&connID))
+	loadErrCh := make(chan error, 1)
+	go func() {
+		_, execErr := conn.ExecContext(ctx, fmt.Sprintf(
+			"load data infile {'filepath'='%s','format'='arrow'} into table worker_shutdown_load parallel 'true'", path))
+		loadErrCh <- execErr
+	}()
+	waitUntilStatementRunning(t, observerDB, connID, "load data", 30*time.Second)
+
+	worker, err := c.GetCNService(1)
+	require.NoError(t, err)
+	closeErrCh := make(chan error, 1)
+	go func() { closeErrCh <- worker.Close() }()
+	select {
+	case err := <-closeErrCh:
+		require.NoError(t, err)
+	case <-time.After(60 * time.Second):
+		t.Fatal("timed out waiting for the worker CN to drain and stop")
+	}
+
+	var loadErr error
+	select {
+	case loadErr = <-loadErrCh:
+	// Worker loss is detected by the cluster's own bounded liveness checks,
+	// which can take about 30 seconds. Keep this outer deadline comfortably
+	// above that boundary, especially under -race; it guards against a true
+	// non-terminating LOAD rather than racing the expected failure detector.
+	case <-time.After(90 * time.Second):
+		t.Fatal("timed out waiting for LOAD after worker CN shutdown")
+	}
+	verifyDB := openArrowLoadDB(t, c, 0)
+	rows := queryCount(t, verifyDB, "select count(*) from arrow_multicn.worker_shutdown_load")
+	if loadErr == nil {
+		require.Equal(t, int64(largeFixtureRows), rows,
+			"a drained LOAD must publish the complete fixture")
+	} else {
+		require.Zero(t, rows, "a canceled LOAD must publish no rows")
+	}
 }
