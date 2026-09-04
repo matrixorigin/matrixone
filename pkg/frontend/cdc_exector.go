@@ -132,6 +132,33 @@ func CDCTaskExecutorFactory(
 	}
 }
 
+// CDCTaskWatermarkCleanupFactory provides taskservice with a durable cleanup
+// owner for stale CDC cancellation. It is intentionally independent of a
+// local CDCTaskExecutor so another CN can finish cleanup after owner loss.
+func CDCTaskWatermarkCleanupFactory(
+	cnUUID string,
+	sqlExecutorFactory func() ie.InternalExecutor,
+) taskservice.TaskCleanupExecutor {
+	return func(ctx context.Context, spec task.Task) error {
+		detailsProvider, ok := spec.(interface{ GetDetails() *task.Details })
+		if !ok || detailsProvider.GetDetails() == nil {
+			return moerr.NewInternalError(ctx, "invalid CDC task details")
+		}
+		cdcDetails, ok := detailsProvider.GetDetails().Details.(*task.Details_CreateCdc)
+		if !ok || cdcDetails == nil || cdcDetails.CreateCdc == nil ||
+			len(cdcDetails.CreateCdc.Accounts) == 0 {
+			return moerr.NewInternalError(ctx, "invalid CDC task cleanup details")
+		}
+		details := cdcDetails.CreateCdc
+		updater := cdc.GetCDCWatermarkUpdater(cnUUID, sqlExecutorFactory())
+		return updater.DeleteTaskWatermarks(
+			ctx,
+			uint64(details.Accounts[0].GetId()),
+			details.TaskId,
+		)
+	}
+}
+
 type CDCTaskExecutor struct {
 	sync.Mutex
 

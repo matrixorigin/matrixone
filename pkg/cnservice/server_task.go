@@ -283,6 +283,11 @@ func (s *service) startTaskRunnerLocked() {
 	)
 
 	s.registerExecutorsLocked()
+	taskservice.RegisterTaskCleanup(
+		s.task.runner,
+		task.TaskCode_InitCdc,
+		frontend.CDCTaskWatermarkCleanupFactory(s.cfg.UUID, ieFactory),
+	)
 	if err := s.task.runner.Start(); err != nil {
 		s.logger.Error("start task runner failed",
 			zap.Error(err))

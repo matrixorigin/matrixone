@@ -157,6 +157,10 @@ type taskRunner struct {
 		sync.RWMutex
 		m map[task.TaskCode]TaskExecutor
 	}
+	cleanups struct {
+		sync.RWMutex
+		m map[task.TaskCode]TaskCleanupExecutor
+	}
 
 	runningTasks struct {
 		sync.RWMutex
@@ -214,6 +218,7 @@ func NewTaskRunner(runnerID string, service TaskService, claimFn func(string) bo
 		canClaimDaemonTask: claimFn,
 	}
 	r.executors.m = make(map[task.TaskCode]TaskExecutor)
+	r.cleanups.m = make(map[task.TaskCode]TaskCleanupExecutor)
 	for _, opt := range opts {
 		opt(r)
 	}
@@ -333,6 +338,30 @@ func (r *taskRunner) GetExecutor(code task.TaskCode) TaskExecutor {
 	}
 
 	return nil
+}
+
+func (r *taskRunner) RegisterTaskCleanup(code task.TaskCode, cleanup TaskCleanupExecutor) {
+	r.cleanups.Lock()
+	defer r.cleanups.Unlock()
+	if _, ok := r.cleanups.m[code]; !ok {
+		r.cleanups.m[code] = cleanup
+	}
+}
+
+func (r *taskRunner) GetTaskCleanup(code task.TaskCode) TaskCleanupExecutor {
+	r.cleanups.RLock()
+	defer r.cleanups.RUnlock()
+	return r.cleanups.m[code]
+}
+
+// RegisterTaskCleanup installs an optional durable cleanup owner without
+// expanding the TaskRunner interface used by external/mock implementations.
+func RegisterTaskCleanup(runner TaskRunner, code task.TaskCode, cleanup TaskCleanupExecutor) {
+	if registrar, ok := runner.(interface {
+		RegisterTaskCleanup(task.TaskCode, TaskCleanupExecutor)
+	}); ok {
+		registrar.RegisterTaskCleanup(code, cleanup)
+	}
 }
 
 func (r *taskRunner) Attach(ctx context.Context, taskID uint64, routine ActiveRoutine) error {
