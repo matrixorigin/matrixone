@@ -23,6 +23,7 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/util"
 	"github.com/matrixorigin/matrixone/pkg/cuvs"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/cachegen"
@@ -247,7 +248,38 @@ func (s *IvfpqSearch[B, Q]) GetIndexSize() (hostBytes, deviceBytes int64) {
 			deviceBytes += sz
 		}
 	}
+	deviceBytes += s.overflowDeviceBytes()
 	return hostBytes, deviceBytes
+}
+
+// overflowDeviceBytes is the CDC overflow's device footprint: a cuVS brute-force index over
+// the tag=1 vectors, resident for the cache entry's whole lifetime like the built sub-indexes.
+// Omitting it charged 0/0 to an index whose rows all arrived by CDC, and an entry measuring 0
+// is skipped by snapshotResidents -- so it held VRAM the governor never saw and never
+// reclaimed. The element type mirrors buildOverflow: the index storage Q when cuVS brute
+// force can store it, else the base B.
+//
+// Counts from the POST-LOAD capture only: buildOverflow runs inside Load, so at Preload the
+// overflow does not exist and contributes 0. The steady-state charge is right and the entry
+// is evictable; makeRoom just does not reserve ahead of it, and the post-load enforce pass
+// brings the arena back under cap. Same shape as an hnsw generation whose nrow predates the
+// column.
+//
+// To reserve ahead, size it from the tag=1 chunk frame headers (n_inserts + n_upserts, see
+// cuvs.UnframeCdcChunk) -- but do NOT add a second read of the tail: Load already reads it in
+// full via loadCdcTail, so a Preload counter must either hand that read down to Load or scan
+// only the 28-byte frame prefixes. Reading the tail twice per cache miss costs more than the
+// reservation is worth.
+func (s *IvfpqSearch[B, Q]) overflowDeviceBytes() int64 {
+	if s.Overflow == nil {
+		return 0
+	}
+	elem := int64(util.UnsafeSizeOf[B]())
+	switch cuvs.GetQuantization[Q]() {
+	case cuvs.F32, cuvs.F16:
+		elem = int64(util.UnsafeSizeOf[Q]())
+	}
+	return int64(s.Overflow.Len()) * int64(s.Idxcfg.CuvsIvfpq.Dimensions) * elem
 }
 
 // IsStale reports whether the loaded index has fallen behind the persisted one (REBUILD bumps

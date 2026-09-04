@@ -511,7 +511,7 @@ func (idx *CagraModel[B, Q]) FetchArtifact(sqlproc *sqlexec.SqlProcess, tblcfg v
 	// with no branch here.
 	spillDir := idx.TmpDir
 	if spillDir == "" && sqlproc != nil && sqlproc.Proc != nil {
-		spillDir = vimemory.HostSpillDir(sqlproc.GetTopContext(), sqlproc.Proc.Base.FileService)
+		spillDir = vimemory.HostSpillDir(sqlproc.GetTopContext(), sqlproc.Proc.Base.FileService, sqlproc.GetService())
 	}
 	fp, err = os.CreateTemp(spillDir, "cagra")
 	if err != nil {

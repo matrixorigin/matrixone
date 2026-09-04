@@ -507,7 +507,7 @@ func hnswSpillDir(sqlproc *sqlexec.SqlProcess) string {
 		// and hand it to NewHnswSync -- see pkg/iscp, which does the same for fulltext2.
 		return ""
 	}
-	return vimemory.HostSpillDir(sqlproc.GetTopContext(), sqlproc.Proc.Base.FileService)
+	return vimemory.HostSpillDir(sqlproc.GetTopContext(), sqlproc.Proc.Base.FileService, sqlproc.GetService())
 }
 
 func (idx *HnswModel[T]) LoadIndexFromBuffer(
@@ -534,11 +534,16 @@ func (idx *HnswModel[T]) LoadIndexFromBuffer(
 	}
 	idx.View = true
 
+	// ownsTempFile records that THIS call created the spill file, so only a file we
+	// created is unlinked after the mapping is established. A caller-supplied Path is
+	// left alone.
+	ownsTempFile := false
 	if len(idx.Path) == 0 {
 		// Stream index chunks from DB into a temp file, then let usearch
 		// mmap it via View(). This keeps the index data entirely off the
 		// Go heap, eliminating GC pressure for multi-GB indexes.
 
+		ownsTempFile = true
 		fp, err = os.CreateTemp(idx.spillDir(sqlproc), "hnsw")
 		if err != nil {
 			return err
@@ -651,10 +656,27 @@ func (idx *HnswModel[T]) LoadIndexFromBuffer(
 	}
 
 	// View() mmaps the file — data stays off Go heap, OS can page out
-	// under memory pressure. File must remain until Destroy().
+	// under memory pressure.
 	err = usearchidx.View(idx.Path)
 	if err != nil {
 		return err
+	}
+
+	// Unlink the spill file now that it is mapped. unlink() drops the directory entry,
+	// not the inode: usearch holds the mapping (mmap MAP_SHARED, PROT_READ) and its own
+	// descriptor open until Destroy(), so reads keep faulting in from the still-live
+	// inode and the blocks are released only when that mapping goes away -- including on
+	// a crash, via process teardown. Without this a killed CN leaves a full-size model
+	// behind in the LOCAL fileservice volume with nothing to ever collect it.
+	//
+	// Only a file this call created is unlinked; Path is cleared so Destroy skips the
+	// remove and a later reload recreates its own temp file.
+	if ownsTempFile {
+		if rerr := os.Remove(idx.Path); rerr != nil && !os.IsNotExist(rerr) {
+			logutil.Warnf("HnswModel.LoadIndexFromBuffer: unlink spill file %s: %v", idx.Path, rerr)
+		} else {
+			idx.Path = ""
+		}
 	}
 
 	// always get the number of item and capacity when model loaded.

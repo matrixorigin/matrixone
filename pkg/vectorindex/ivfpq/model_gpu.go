@@ -506,7 +506,7 @@ func (idx *IvfpqModel[B, Q]) FetchArtifact(sqlproc *sqlexec.SqlProcess, tblcfg v
 	// with no branch here.
 	spillDir := idx.TmpDir
 	if spillDir == "" && sqlproc != nil && sqlproc.Proc != nil {
-		spillDir = vimemory.HostSpillDir(sqlproc.GetTopContext(), sqlproc.Proc.Base.FileService)
+		spillDir = vimemory.HostSpillDir(sqlproc.GetTopContext(), sqlproc.Proc.Base.FileService, sqlproc.GetService())
 	}
 	fp, err = os.CreateTemp(spillDir, "ivfpq")
 	if err != nil {
@@ -877,6 +877,16 @@ func LoadMetadata[B, Q cuvs.VectorType](sqlproc *sqlexec.SqlProcess, dbname stri
 			ts := vector.GetFixedAtWithTypeCheck[int64](tsVec, i)
 			fs := vector.GetFixedAtWithTypeCheck[int64](fsVec, i)
 			idx := &IvfpqModel[B, Q]{Id: id, Checksum: chksum, Timestamp: ts, FileSize: fs}
+			// nrow and build_ts were appended after the original four columns, and the
+			// metadata table is created per index at CREATE INDEX -- REINDEX rewrites its
+			// rows, not the table -- so an index created before they existed still has four.
+			// Read them only when the batch carries them; absent means unknown.
+			if len(bat.Vecs) > 4 {
+				idx.Nrow = vector.GetFixedAtWithTypeCheck[int64](bat.Vecs[4], i)
+			}
+			if len(bat.Vecs) > 5 {
+				idx.BuildTS = vector.GetFixedAtWithTypeCheck[int64](bat.Vecs[5], i)
+			}
 			indexes = append(indexes, idx)
 		}
 	}

@@ -106,18 +106,23 @@ func (c caps) of(a arena) int64 {
 
 func (c caps) unset() bool { return c.host <= 0 && c.device <= 0 }
 
-// less returns the caps with incoming subtracted from each set arena, floored at 0. An unset
-// (0) arena stays unset: unlimited minus anything is still unlimited. A floor of 0 means an
-// index larger than the whole budget empties what it can and then loads anyway -- refusing it
-// would fail a query on an accounting rule, and its own memory gate is the thing that decides
-// whether it physically fits.
+// less returns the caps with incoming subtracted from each set arena. An unset (0) arena stays
+// unset: unlimited minus anything is still unlimited.
+//
+// A set arena floors at 1, NOT at 0, because 0 is the unset sentinel everywhere else in the
+// governor -- enforce skips an arena whose cap is <= 0. Flooring at 0 would therefore turn
+// "this index alone fills the budget" into "this arena is unlimited" and reclaim nothing, which
+// is the one case the pre-load pass exists for. A floor of 1 keeps the arena bound, so an index
+// at or over the whole budget empties what it can and then loads anyway -- refusing it would
+// fail a query on an accounting rule, and its own memory gate is what decides whether it
+// physically fits.
 func (c caps) less(incoming caps) caps {
 	out := c
 	if out.host > 0 {
-		out.host = max(out.host-incoming.host, 0)
+		out.host = max(out.host-incoming.host, 1)
 	}
 	if out.device > 0 {
-		out.device = max(out.device-incoming.device, 0)
+		out.device = max(out.device-incoming.device, 1)
 	}
 	return out
 }
@@ -275,15 +280,21 @@ func (c *VectorIndexCache) sysCacheLimit(sqlproc *sqlexec.SqlProcess) caps {
 	}
 
 	c.sysLimit.mu.Lock()
-	defer c.sysLimit.mu.Unlock()
 	if !c.sysLimit.fetched.IsZero() && time.Since(c.sysLimit.fetched) < sysLimitTTL {
-		return c.sysLimit.value
+		value := c.sysLimit.value
+		c.sysLimit.mu.Unlock()
+		return value
 	}
-
-	// Every exit from here stamps the attempt, so a failing catalog is retried at the same
-	// cadence as a healthy one rather than on every miss.
+	// Stamp the attempt and claim the refresh before releasing, so a failing catalog is
+	// retried at the same cadence as a healthy one rather than on every miss, and only one
+	// caller queries per window.
 	c.sysLimit.fetched = time.Now()
+	last := c.sysLimit.value
+	c.sysLimit.mu.Unlock()
 
+	// The catalog read runs WITHOUT the lock. Holding it across a query that can take the
+	// full timeout would park every concurrent cache miss behind an unreachable catalog for
+	// up to that long, even though each of them has a perfectly good last-known value to use.
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	res, err := runSysSql(ctx, cnUUID, catalog.System_Account, "", sysLimitSQL)
@@ -292,7 +303,7 @@ func (c *VectorIndexCache) sysCacheLimit(sqlproc *sqlexec.SqlProcess) caps {
 		// value ever read, that is the zero caps -- unlimited, i.e. exactly the behaviour of a
 		// deployment that never configured the feature.
 		logutil.Warnf("index cache governor: reading the sys index cache caps failed: %v", err)
-		return c.sysLimit.value
+		return last
 	}
 	defer res.Close()
 
@@ -315,7 +326,9 @@ func (c *VectorIndexCache) sysCacheLimit(sqlproc *sqlexec.SqlProcess) caps {
 			}
 		}
 	}
+	c.sysLimit.mu.Lock()
 	c.sysLimit.value = value
+	c.sysLimit.mu.Unlock()
 	return value
 }
 

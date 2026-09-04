@@ -621,7 +621,7 @@ func (u *ivfpqCreateState) start(tf *TableFunction, proc *process.Process, nthRo
 		// than /tmp: each tar is a whole sub-index, so a large build writes GB
 		// through it, and LOCAL is the provisioned data volume. "" when no LOCAL
 		// fileservice is attached, which os.MkdirTemp reads as $TMPDIR.
-		spillDir := vimemory.HostSpillDir(proc.Ctx, proc.Base.FileService)
+		spillDir := vimemory.HostSpillDir(proc.Ctx, proc.Base.FileService, proc.GetService())
 		if spillDir == "" {
 			logutil.Infof("IVFPQ create: no LOCAL fileservice; index tars will use $TMPDIR")
 		}

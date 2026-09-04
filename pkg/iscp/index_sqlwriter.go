@@ -550,7 +550,7 @@ func (w *HnswSqlWriter[T]) NewSync(sqlproc *sqlexec.SqlProcess) (*hnsw.HnswSync[
 	// spillDir=="" (no LOCAL attached / executor not found) falls back to $TMPDIR, unchanged.
 	var spillDir string
 	if exec, ok := GetExecutorRuntime(sqlproc.GetService()); ok {
-		spillDir = memory.HostSpillDir(sqlproc.GetContext(), exec.rootFS)
+		spillDir = memory.HostSpillDir(sqlproc.GetContext(), exec.rootFS, sqlproc.GetService())
 	}
 	return hnsw.NewHnswSync[T](sqlproc, w.meta.DbName, w.meta.Table, w.info.IndexName, w.indexdef, w.meta.VecType, w.meta.Dimension, spillDir)
 }

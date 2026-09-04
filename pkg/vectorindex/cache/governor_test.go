@@ -19,6 +19,7 @@ package cache
 
 import (
 	"context"
+	"fmt"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -456,6 +457,32 @@ func TestGovernorMakesRoomBeforeLoadNotAfter(t *testing.T) {
 	require.True(t, isResident(c, "__mo_index_secondary_newcomer"))
 }
 
+// The pre-load pass also empties when the incoming index is at or over the whole cap. That is
+// the case caps.less reduces to nothing, and flooring the reduced cap at 0 would have made
+// enforce read the arena as unlimited and reclaim nothing -- leaving peak residency at the
+// victim plus the whole newcomer, which is exactly what makeRoom exists to avoid.
+func TestGovernorMakesRoomWhenIncomingFillsTheCap(t *testing.T) {
+	for _, incoming := range []int64{250, 300, 10_000} {
+		t.Run(fmt.Sprintf("incoming=%d", incoming), func(t *testing.T) {
+			c := newBoundCache(t)
+			sp := govProc(t, c, 1, hostCap(250), caps{})
+
+			victim := "__mo_index_secondary_victim"
+			loadInto(t, c, sp, victim, 200, 0)
+			entryOf(t, c, victim).ExpireAt.Store(1)
+
+			newcomer := &observeAtLoad{countingSearch: countingSearch{host: incoming}, c: c, watch: victim}
+			_, _, err := c.Search(sp, "__mo_index_secondary_newcomer", newcomer, nil, vectorindex.RuntimeConfig{})
+			require.NoError(t, err)
+
+			require.False(t, newcomer.watchAtLoad,
+				"the victim must be gone before Load, not reclaimed after it")
+			require.True(t, isResident(c, "__mo_index_secondary_newcomer"),
+				"the oversized load is never refused")
+		})
+	}
+}
+
 // An index larger than the whole budget still loads: the governor empties what it can and gets
 // out of the way rather than failing a query on an accounting rule.
 func TestGovernorOversizedIndexStillLoads(t *testing.T) {
@@ -474,7 +501,8 @@ func TestGovernorOversizedIndexStillLoads(t *testing.T) {
 // caps.less floors at zero and leaves an unset arena unlimited.
 func TestCapsLess(t *testing.T) {
 	require.Equal(t, caps{host: 50}, caps{host: 250}.less(caps{host: 200}))
-	require.Equal(t, caps{host: 0}, caps{host: 250}.less(caps{host: 10_000}), "floored, not negative")
+	require.Equal(t, caps{host: 1}, caps{host: 250}.less(caps{host: 10_000}),
+		"a set arena floors at 1, never at the 0 that means unlimited")
 	require.Equal(t, caps{}, caps{}.less(caps{host: 99}), "unlimited minus anything is unlimited")
 	require.Equal(t, caps{device: 5}, caps{device: 20}.less(caps{host: 99, device: 15}),
 		"each arena is reduced by its own incoming bytes")

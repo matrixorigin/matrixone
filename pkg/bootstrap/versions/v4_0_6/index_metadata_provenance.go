@@ -20,6 +20,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/bootstrap/versions"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/sqlquote"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 )
@@ -58,7 +59,7 @@ func indexMetadataProvenanceColumns(tblType string) []string {
 func listIndexMetadataTables(txn executor.TxnExecutor, accountId uint32) ([][3]string, error) {
 	quoted := make([]string, 0, len(indexMetadataProvenanceTypes))
 	for _, t := range indexMetadataProvenanceTypes {
-		quoted = append(quoted, "'"+t+"'")
+		quoted = append(quoted, sqlquote.String(t))
 	}
 	sql := fmt.Sprintf(
 		"select distinct t.reldatabase, i.index_table_name, i.algo_table_type "+
@@ -87,8 +88,8 @@ func listIndexMetadataTables(txn executor.TxnExecutor, accountId uint32) ([][3]s
 // hasColumn reports whether db.tbl already has the named column.
 func hasIndexMetadataColumn(txn executor.TxnExecutor, accountId uint32, db, tbl, col string) (bool, error) {
 	sql := fmt.Sprintf(
-		"select count(*) from %s.mo_columns where att_database = '%s' and att_relname = '%s' and attname = '%s'",
-		catalog.MO_CATALOG, db, tbl, col)
+		"select count(*) from %s.mo_columns where att_database = %s and att_relname = %s and attname = %s",
+		catalog.MO_CATALOG, sqlquote.String(db), sqlquote.String(tbl), sqlquote.String(col))
 	res, err := txn.Exec(sql, versions.UpgradeStatementOption(accountId))
 	if err != nil {
 		return false, err
@@ -129,7 +130,8 @@ func upgradeIndexMetadataProvenance(_ context.Context, tenantID int32, txn execu
 			if has {
 				continue
 			}
-			alter := fmt.Sprintf("alter table `%s`.`%s` add column %s bigint not null default 0", db, tbl, col)
+			alter := fmt.Sprintf("alter table %s add column %s bigint not null default 0",
+				sqlquote.QualifiedIdent(db, tbl), sqlquote.Ident(col))
 			res, err := txn.Exec(alter, versions.UpgradeStatementOption(accountId))
 			if err != nil {
 				return err
