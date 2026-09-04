@@ -12,7 +12,7 @@
 not the original CREATE statement. New views persist a parser-derived definition
 and legacy rows are read through `mo_view_definition`. The function is a new
 distributed plan function (ID 578), so the catalog contract is fenced by MORPC
-v46.
+v47.
 
 ## Problem and invariant
 
@@ -33,17 +33,17 @@ stored statement using its persisted SQL mode and identifier-case settings.
 This bounded, side-effect-free fallback avoids a second SQL regexp lexer and
 does not depend on background recovery.
 
-MORPC v46 is allocated as `MORPCLatestVersion + 1` from official main v45,
-which is already assigned to bounded Parquet whole-file fanout. It is specific
-to this function and
-the persisted VIEWS definition. The v4.0.6 VIEWS upgrade waits for common v46.
-New tenant initialization at v45 or below installs the predecessor VIEWS DDL,
-which has no function reference; v46 installs the new DDL. Pipeline preparation,
-remote marshal, and remote unmarshal reject a pipeline containing function ID
-578 below v46. The receiver check protects stale prepared work as well as normal
-sender dispatch. Before admitting any v45-or-earlier CN during rollback,
+MORPC v47 is allocated as `MORPCLatestVersion + 1` from official main v46,
+which is already assigned to subscription-aware information-schema metadata
+table functions. It is specific to this function and the persisted VIEWS
+definition. The v4.0.6 VIEWS upgrade waits for common v47. New tenant
+initialization at v46 or below installs the predecessor VIEWS DDL, which has no
+function reference; v47 installs the new DDL. Pipeline preparation, remote
+marshal, and remote unmarshal reject a pipeline containing function ID 578
+below v47. The receiver check protects stale prepared work as well as normal
+sender dispatch. Before admitting any v46-or-earlier CN during rollback,
 operators must restore `InformationSchemaViewsLegacyDDL` and wait for that
-catalog change to converge; merely draining v46-dependent requests is not
+catalog change to converge; merely draining v47-dependent requests is not
 sufficient because the new persisted view text references the function. The
 new JSON fields are additive and old binaries keep treating them as unknown.
 
@@ -53,7 +53,7 @@ Keeping raw SQL regexp extraction was rejected because it repeatedly diverged
 from the SQL lexer for comments and quoted strings. Eagerly rewriting every
 legacy row was rejected because the existing recovery lifecycle is deliberately
 inactive and a metadata read must not perform unbounded catalog writes. Allowing
-the DDL before v46 was rejected because an old CN cannot bind function ID 578.
+the DDL before v47 was rejected because an old CN cannot bind function ID 578.
 
 ## Bounds, security, and operations
 
@@ -68,10 +68,10 @@ NotSupported error rather than returning wrong metadata.
 
 Focused parser/function tests cover current and legacy definitions, quoted and
 commented inputs, malformed rows, frozen wildcard expansion, and CHECK OPTION.
-Protocol tests cover the v45 predecessor rejection and v46 acceptance at
-prepare, sender, and receiver boundaries. System-view tests prove v45 tenant
-initialization uses the predecessor DDL and v46 uses the parser-derived DDL;
-upgrade tests prove the VIEWS entry requires v46. The predecessor-init test is
+Protocol tests cover the v46 predecessor rejection and v47 acceptance at
+prepare, sender, and receiver boundaries. System-view tests prove v46 tenant
+initialization uses the predecessor DDL and v47 uses the parser-derived DDL;
+upgrade tests prove the VIEWS entry requires v47. The predecessor-init test is
 also the rollback guard: it proves that the restoration target has no function
 reference before an older CN is admitted.
 
