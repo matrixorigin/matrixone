@@ -2109,7 +2109,7 @@ func TestCompileHashPartitionGatedByProtocolVersion(t *testing.T) {
 	rt := runtime.ServiceRuntime(c.proc.GetService())
 	defer rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCLatestVersion)
 
-	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion45)
+	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion46)
 	require.False(t, c.supportsRemoteHashPartition())
 	node := &plan.Node{
 		NodeType:           plan.Node_PARTITION,
@@ -2123,7 +2123,7 @@ func TestCompileHashPartitionGatedByProtocolVersion(t *testing.T) {
 	require.Equal(t, plan.Node_PARTITION_ALGORITHM_SORT, legacy[0].RootOp.(*partitionop.Partition).Algorithm)
 	require.IsType(t, &orderop.Order{}, legacy[0].PreScopes[0].RootOp.GetOperatorBase().GetChildren(0))
 
-	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion46)
+	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion47)
 	require.True(t, c.supportsRemoteHashPartition())
 }
 

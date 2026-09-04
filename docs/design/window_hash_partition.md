@@ -81,7 +81,7 @@ field on plan `Node`, pipeline `Instruction`, and execution `Partition`.
 - compile gates HASH on the cluster protocol version. During a rolling upgrade,
   it restores both the prerequisite local sorts and coordinator SORT algorithm;
   HASH is never sent to a CN that can ignore the new field.
-- this revision assigns the capability to `MORPCVersion46`; v45 is the immediate
+- this revision assigns the capability to `MORPCVersion47`; v46 is the immediate
   predecessor and therefore retains the legacy SORT topology.
 
 The field is copied by plan deep-copy, operator duplication, and remote pipeline
