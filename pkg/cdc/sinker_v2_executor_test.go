@@ -24,6 +24,7 @@ import (
 	"net"
 	"strconv"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -267,6 +268,148 @@ func TestExecutor_BeginTx(t *testing.T) {
 		assert.Contains(t, err.Error(), "already active")
 		assert.NotNil(t, executor.tx, "First transaction should still be active")
 	})
+}
+
+func TestExecutorTargetOwnershipLock(t *testing.T) {
+	t.Run("pins target session through transaction and release", func(t *testing.T) {
+		db, mock, err := sqlmock.New()
+		require.NoError(t, err)
+		executor := &Executor{conn: db}
+
+		mock.ExpectQuery("SELECT GET_LOCK").
+			WithArgs(sqlmock.AnyArg(), targetLockPollSeconds).
+			WillReturnRows(sqlmock.NewRows([]string{"acquired"}).AddRow(1))
+		checks := 0
+		require.NoError(t, executor.AcquireTargetLock(
+			context.Background(),
+			"account/task/db/table",
+			func(context.Context) error { checks++; return nil },
+		))
+		require.Equal(t, 2, checks)
+		require.NotNil(t, executor.targetLockConn)
+
+		mock.ExpectBegin()
+		require.NoError(t, executor.BeginTx(context.Background()))
+		mock.ExpectCommit()
+		require.NoError(t, executor.CommitTx(context.Background()))
+
+		mock.ExpectQuery("SELECT RELEASE_LOCK").
+			WithArgs(sqlmock.AnyArg()).
+			WillReturnRows(sqlmock.NewRows([]string{"released"}).AddRow(1))
+		mock.ExpectClose()
+		require.NoError(t, executor.Close())
+		require.NoError(t, mock.ExpectationsWereMet())
+	})
+
+	t.Run("stale waiter releases lock before target work", func(t *testing.T) {
+		db, mock, err := sqlmock.New()
+		require.NoError(t, err)
+		executor := &Executor{conn: db}
+
+		mock.ExpectQuery("SELECT GET_LOCK").
+			WithArgs(sqlmock.AnyArg(), targetLockPollSeconds).
+			WillReturnRows(sqlmock.NewRows([]string{"acquired"}).AddRow(1))
+		mock.ExpectQuery("SELECT RELEASE_LOCK").
+			WithArgs(sqlmock.AnyArg()).
+			WillReturnRows(sqlmock.NewRows([]string{"released"}).AddRow(1))
+		mock.ExpectClose()
+		checks := 0
+		err = executor.AcquireTargetLock(
+			context.Background(),
+			"account/task/db/table",
+			func(ctx context.Context) error {
+				checks++
+				if checks == 2 {
+					return moerr.NewInvalidTask(ctx, "old-owner", 1)
+				}
+				return nil
+			},
+		)
+		require.Error(t, err)
+		require.Nil(t, executor.targetLockConn)
+		require.NoError(t, executor.Close())
+		require.NoError(t, mock.ExpectationsWereMet())
+	})
+}
+
+func TestTargetOwnershipSerializesBlockedOldCommitAndTakeover(t *testing.T) {
+	oldDB, oldMock, err := sqlmock.New()
+	require.NoError(t, err)
+	oldExec := &Executor{conn: oldDB}
+	newDB, newMock, err := sqlmock.New()
+	require.NoError(t, err)
+	newExec := &Executor{conn: newDB}
+
+	oldMock.ExpectQuery("SELECT GET_LOCK").
+		WithArgs(sqlmock.AnyArg(), targetLockPollSeconds).
+		WillReturnRows(sqlmock.NewRows([]string{"acquired"}).AddRow(1))
+	require.NoError(t, oldExec.AcquireTargetLock(
+		context.Background(), "same-task-table", func(context.Context) error { return nil }))
+	oldMock.ExpectBegin()
+	require.NoError(t, oldExec.BeginTx(context.Background()))
+	oldMock.ExpectExec("fakeSql").WillReturnResult(sqlmock.NewResult(0, 1))
+	require.NoError(t, oldExec.ExecSQL(
+		context.Background(), nil, []byte("     REPLACE old-generation"), false))
+
+	// The replacement first observes the target lock as busy. Its second poll
+	// is released only after the old COMMIT has terminated and the old pinned
+	// session has released ownership.
+	newMock.ExpectQuery("SELECT GET_LOCK").
+		WithArgs(sqlmock.AnyArg(), targetLockPollSeconds).
+		WillReturnRows(sqlmock.NewRows([]string{"acquired"}).AddRow(0))
+	newMock.ExpectQuery("SELECT GET_LOCK").
+		WithArgs(sqlmock.AnyArg(), targetLockPollSeconds).
+		WillReturnRows(sqlmock.NewRows([]string{"acquired"}).AddRow(1))
+	newWaiting := make(chan struct{})
+	oldReleased := make(chan struct{})
+	var newFenceCalls atomic.Int32
+	newAcquireDone := make(chan error, 1)
+	go func() {
+		newAcquireDone <- newExec.AcquireTargetLock(
+			context.Background(),
+			"same-task-table",
+			func(context.Context) error {
+				if newFenceCalls.Add(1) == 2 {
+					close(newWaiting)
+					<-oldReleased
+				}
+				return nil
+			},
+		)
+	}()
+	<-newWaiting
+
+	target := map[string]struct{}{}
+	oldMock.ExpectCommit()
+	require.NoError(t, oldExec.CommitTx(context.Background()))
+	target["retired-key"] = struct{}{}
+	oldMock.ExpectQuery("SELECT RELEASE_LOCK").
+		WithArgs(sqlmock.AnyArg()).
+		WillReturnRows(sqlmock.NewRows([]string{"released"}).AddRow(1))
+	oldMock.ExpectClose()
+	require.NoError(t, oldExec.Close())
+	close(oldReleased)
+	require.NoError(t, <-newAcquireDone)
+
+	// The replacement is necessarily last at the target boundary, so its
+	// stable-epoch replay/reset determines the exact final key set.
+	newMock.ExpectBegin()
+	require.NoError(t, newExec.BeginTx(context.Background()))
+	newMock.ExpectExec("fakeSql").WillReturnResult(sqlmock.NewResult(0, 1))
+	require.NoError(t, newExec.ExecSQL(
+		context.Background(), nil, []byte("     REPLACE replacement-generation"), false))
+	newMock.ExpectCommit()
+	require.NoError(t, newExec.CommitTx(context.Background()))
+	target = map[string]struct{}{"replacement-key": {}}
+	newMock.ExpectQuery("SELECT RELEASE_LOCK").
+		WithArgs(sqlmock.AnyArg()).
+		WillReturnRows(sqlmock.NewRows([]string{"released"}).AddRow(1))
+	newMock.ExpectClose()
+	require.NoError(t, newExec.Close())
+
+	require.Equal(t, map[string]struct{}{"replacement-key": {}}, target)
+	require.NoError(t, oldMock.ExpectationsWereMet())
+	require.NoError(t, newMock.ExpectationsWereMet())
 }
 
 func TestExecutor_CommitTx(t *testing.T) {

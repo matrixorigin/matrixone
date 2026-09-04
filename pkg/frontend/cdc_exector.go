@@ -141,8 +141,9 @@ func CDCTaskExecutorFactory(
 type CDCTaskExecutor struct {
 	sync.Mutex
 
-	logger *zap.Logger
-	ie     ie.InternalExecutor
+	logger  *zap.Logger
+	claimMu sync.RWMutex
+	ie      ie.InternalExecutor
 
 	cnUUID      string
 	claimTask   *task.DaemonTask
@@ -621,12 +622,27 @@ func NewCDCTaskExecutor(
 // executor factory. Taskservice matches runner and the last-run claim
 // generation, so a superseded executor fails closed before durable output.
 func (exec *CDCTaskExecutor) fenceDaemonClaim(ctx context.Context) error {
-	if exec.claimTask == nil || exec.taskService == nil {
+	exec.claimMu.RLock()
+	if exec.claimTask == nil {
+		exec.claimMu.RUnlock()
+		return nil
+	}
+	claim := *exec.claimTask
+	exec.claimMu.RUnlock()
+	if exec.taskService == nil {
 		return nil
 	}
 	fenceCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
-	return exec.taskService.HeartbeatDaemonTask(fenceCtx, *exec.claimTask)
+	return exec.taskService.HeartbeatDaemonTask(fenceCtx, claim)
+}
+
+// UpdateDaemonTaskClaim advances the exact token used by target and watermark
+// fences after taskservice has durably installed a Resume/Restart generation.
+func (exec *CDCTaskExecutor) UpdateDaemonTaskClaim(claim task.DaemonTask) {
+	exec.claimMu.Lock()
+	exec.claimTask = &claim
+	exec.claimMu.Unlock()
 }
 
 func (exec *CDCTaskExecutor) Start(rootCtx context.Context) (err error) {

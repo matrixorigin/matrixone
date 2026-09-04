@@ -47,11 +47,15 @@ The implementation must maintain all of these invariants:
    executor code that old CNs do not register, so an old CN cannot claim a task
    after bounded groups have committed. Unmarked legacy tasks retain the atomic
    path; the implementation never guesses an epoch for a partial legacy task.
-8. **Claim ownership is fenced:** every target commit and watermark publication
-   renews the exact persisted `(task_runner, last_run)` daemon claim. A prior
-   owner cannot renew that claim or publish durable output after takeover.
-   The claim travels with asynchronously buffered watermarks and is rechecked
-   by the final SQL writer, not only by the reader goroutine.
+8. **Claim ownership is fenced across both systems:** every target commit and
+   watermark publication renews the exact persisted `(task_runner, last_run)`
+   daemon claim. Each target table also has one MySQL-compatible user lock,
+   held by a pinned target session for the pipeline lifetime. DDL and data
+   transactions use that session. A replacement must acquire the same lock and
+   then revalidate its daemon claim before target work, so target effects from
+   different owners are serialized even when a COMMIT outlives the 30-second
+   taskservice lease. The claim travels with asynchronously buffered
+   watermarks and is rechecked by the final SQL writer.
 9. **Logical generation changes are durable:** an epoch for a different source
    table ID is durable evidence that a fresh owner must reset the target before
    replaying the newly discovered generation.
@@ -59,6 +63,10 @@ The implementation must maintain all of these invariants:
 Claim validation is bounded to five seconds and is also performed immediately
 before target initialization DDL, including the generation-change DROP/CREATE.
 Legacy atomic tasks do not pay this additional control-plane round trip.
+Failure to renew a stable task's periodic runner heartbeat cancels its local
+generation. The pinned target lock remains held until any already-running SQL
+returns and cleanup closes the session; this is the serialization point that
+prevents a replacement from completing ahead of an ambiguous old operation.
 
 ## Protocol
 
@@ -93,7 +101,9 @@ For a marked task with `InitSnapshotSplitTxn=true` and an empty watermark:
 2. Wait until the current transaction snapshot is at least persisted `S`. This
    avoids reading a future timestamp after restart or under clock skew.
 3. Open source changes at exactly `S` (capped by an explicit `EndTs`).
-4. Begin a target transaction and stream snapshot batches into it.
+4. Acquire the per-task/table target ownership lock, revalidate the daemon
+   claim, then run initialization DDL and every target transaction on that
+   pinned session.
 5. Before adding a batch that would cross either group limit, validate and renew
    the exact daemon claim, commit the current group without updating the
    watermark, then begin a new target transaction.
@@ -124,7 +134,9 @@ configuration says split.
 | Wildcard task discovers a table after task creation or retention expiry | None for the new table | Empty | Persist that table generation's current snapshot and begin at that epoch, independent of task creation time |
 | Table is dropped and recreated under the same logical name | Prior generation may have completed or failed | Old logical-table watermark is replaced by detector lifecycle | Persist a distinct epoch for the new source-table ID; retain both generation rows until terminal task cleanup so overlapping owners cannot erase either retry anchor |
 | Fresh owner discovers a recreated table after an old generation partially committed | Rows from the retired generation may exist | Empty | The retired durable epoch forces DROP/recreate before the new generation is replayed |
-| Old owner resumes after a capable owner takes over | New owner may already have completed | Empty or advanced | Runner/last-run claim renewal fails before target commit or watermark publication; the old owner fails closed |
+| Old owner is blocked in target COMMIT when another CN claims its expired taskservice lease | Old transaction may be ambiguous | Empty or advanced | The replacement waits on the target ownership lock. The old generation is canceled on heartbeat failure, retains the lock until its in-flight SQL terminates, and cannot publish a watermark. The replacement then acquires the lock, revalidates its newer claim, and replays to exact state. |
+| Old owner waits for the target lock while a replacement completes | Replacement target state | Empty or advanced | After acquiring the released lock, the old owner revalidates its obsolete daemon claim, releases the lock, and performs no target operation. |
+| Resume or Restart advances `last_run` on the same runner | Existing target state | Preserved | Persist the new token while the request status remains retry-owned, publish it to both runner heartbeat and executor fences, then admit replacement work and publish Running with the same token. |
 | Epoch INSERT reports an ambiguous failure | No reader has started for that generation | Empty | Immediately reread the durable row; reuse it if committed, otherwise classify the failure as retryable so the detector attempts the claim again |
 | Task is restarted | Existing target data and partial snapshot groups remain | Preserve checkpoint metadata | Retain and reuse every table-generation epoch exactly like its watermark; restart must never choose a new epoch after a partial target commit |
 | Task is cancelled or deleted | Existing target data follows task command semantics | Task metadata is removed | Delete all table-generation epochs with task watermarks; periodic orphan cleanup removes rows whose task no longer exists |
@@ -182,8 +194,11 @@ Deterministic tests must prove:
   executor and converges exactly after a capable-CN handoff;
 - partial old generation, CN exit, source recreation, and fresh capable-owner
   discovery forces target reset and converges to the new generation;
-- after owner B takes over and completes, resumed owner A cannot commit target
-  data or regress the watermark;
+- synchronized A-blocked/B-claim/A-completes handoff proves B cannot enter the
+  target boundary until A releases it, B's replay is the final exact target
+  state, and A cannot regress the watermark;
+- Resume and Restart both publish their new claim to subsequent runner
+  heartbeat plus target/watermark fences before replacement work is admitted;
 - ambiguous epoch INSERT tests cover both committed-response-lost and
   definitely-not-committed outcomes;
 - a wildcard task that discovers a table after the task epoch is outside

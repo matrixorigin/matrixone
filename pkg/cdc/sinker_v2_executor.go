@@ -16,8 +16,10 @@ package cdc
 
 import (
 	"context"
+	"crypto/sha256"
 	"database/sql"
 	"database/sql/driver"
+	"encoding/hex"
 	"errors"
 	"math"
 	"net"
@@ -145,6 +147,12 @@ type Executor struct {
 	conn *sql.DB
 	tx   *sql.Tx
 
+	// targetLockConn owns a target-side advisory lock for one CDC task/table.
+	// Every fenced DDL and transaction uses this pinned session, so losing the
+	// connection releases the lock and also makes the old executor fail closed.
+	targetLockConn *sql.Conn
+	targetLockName string
+
 	// Connection info (for reconnection)
 	user, password string
 	ip             string
@@ -225,7 +233,13 @@ func (e *Executor) BeginTx(ctx context.Context) error {
 
 	e.resetRecordedTxn()
 
-	tx, err := e.conn.BeginTx(ctx, nil)
+	var tx *sql.Tx
+	var err error
+	if e.targetLockConn != nil {
+		tx, err = e.targetLockConn.BeginTx(ctx, nil)
+	} else {
+		tx, err = e.conn.BeginTx(ctx, nil)
+	}
 	if err != nil {
 		return err
 	}
@@ -301,9 +315,11 @@ func (e *Executor) ExecSQL(
 
 		var err error
 		if e.tx != nil {
-			_, err = e.tx.Exec(v2FakeSql, reuseQueryArg)
+			_, err = e.tx.ExecContext(ctx, v2FakeSql, reuseQueryArg)
+		} else if e.targetLockConn != nil {
+			_, err = e.targetLockConn.ExecContext(ctx, v2FakeSql, reuseQueryArg)
 		} else {
-			_, err = e.conn.Exec(v2FakeSql, reuseQueryArg)
+			_, err = e.conn.ExecContext(ctx, v2FakeSql, reuseQueryArg)
 		}
 
 		if err != nil {
@@ -535,28 +551,133 @@ func (e *Executor) HasActiveTx() bool {
 	return e.tx != nil
 }
 
+const targetLockPollSeconds = 1
+
+// AcquireTargetLock establishes the target-side ownership linearization point
+// for one CDC task/table. A replacement owner cannot execute DDL or begin a
+// transaction until the prior owner's pinned target session releases this
+// lock. After acquisition we revalidate the taskservice claim, closing the
+// inverse race where an old owner waits behind and wakes after its replacement.
+func (e *Executor) AcquireTargetLock(
+	ctx context.Context,
+	identity string,
+	ownerFence func(context.Context) error,
+) error {
+	if ownerFence == nil {
+		return nil
+	}
+	if e.targetLockConn != nil {
+		return moerr.NewInternalError(ctx, "target ownership lock already acquired")
+	}
+	if err := e.ensureConnection(ctx); err != nil {
+		return err
+	}
+
+	sum := sha256.Sum256([]byte(identity))
+	// MySQL-compatible user lock names are limited to 64 bytes.
+	lockName := "mo_cdc_" + hex.EncodeToString(sum[:])[:57]
+	lockConn, err := e.conn.Conn(ctx)
+	if err != nil {
+		return err
+	}
+	releaseOnError := true
+	defer func() {
+		if releaseOnError {
+			// GET_LOCK can have an ambiguous response. Best-effort release on
+			// the same pinned session before returning it to database/sql; if
+			// the session was lost, the server already released the lock.
+			releaseCtx, cancel := context.WithTimeout(context.Background(), time.Second)
+			var ignored sql.NullInt64
+			_ = lockConn.QueryRowContext(
+				releaseCtx,
+				"SELECT RELEASE_LOCK(?)",
+				lockName,
+			).Scan(&ignored)
+			cancel()
+			_ = lockConn.Close()
+		}
+	}()
+
+	for {
+		if err = ownerFence(ctx); err != nil {
+			return err
+		}
+		var acquired sql.NullInt64
+		if err = lockConn.QueryRowContext(
+			ctx,
+			"SELECT GET_LOCK(?, ?)",
+			lockName,
+			targetLockPollSeconds,
+		).Scan(&acquired); err != nil {
+			return err
+		}
+		if acquired.Valid && acquired.Int64 == 1 {
+			break
+		}
+	}
+
+	e.targetLockConn = lockConn
+	e.targetLockName = lockName
+	releaseOnError = false
+	if err = ownerFence(ctx); err != nil {
+		return errors.Join(err, e.releaseTargetLock())
+	}
+	return nil
+}
+
+func (e *Executor) releaseTargetLock() error {
+	if e.targetLockConn == nil {
+		return nil
+	}
+	lockConn := e.targetLockConn
+	lockName := e.targetLockName
+	e.targetLockConn = nil
+	e.targetLockName = ""
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	var released sql.NullInt64
+	releaseErr := lockConn.QueryRowContext(
+		ctx,
+		"SELECT RELEASE_LOCK(?)",
+		lockName,
+	).Scan(&released)
+	closeErr := lockConn.Close()
+	// NULL means the pinned connection was already lost; the server releases
+	// session locks on disconnect, so there is no remaining ownership to leak.
+	if releaseErr == nil && released.Valid && released.Int64 != 1 {
+		releaseErr = moerr.NewInternalErrorNoCtx("target ownership lock was not held by its executor")
+	}
+	return errors.Join(releaseErr, closeErr)
+}
+
 // Close closes the database connection and rolls back any active transaction
 func (e *Executor) Close() error {
+	var result error
 	// Rollback any active transaction
 	if e.tx != nil {
-		_ = e.tx.Rollback()
+		result = errors.Join(result, e.tx.Rollback())
 		e.tx = nil
 	}
+	result = errors.Join(result, e.releaseTargetLock())
 
 	// Close connection
 	if e.conn != nil {
 		err := e.conn.Close()
 		e.conn = nil
-		return err
+		result = errors.Join(result, err)
 	}
 
 	e.debugTxnRecorder.txnSQL = nil
-	return nil
+	return result
 }
 
 // retryWithBackoff retries a function with exponential backoff
 // ensureConnection makes sure executor has an active DB connection.
 func (e *Executor) ensureConnection(ctx context.Context) error {
+	if e.targetLockConn != nil {
+		return nil
+	}
 	if e.conn != nil {
 		return nil
 	}

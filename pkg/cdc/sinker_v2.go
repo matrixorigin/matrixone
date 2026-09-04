@@ -158,6 +158,32 @@ func createMysqlSinker2(
 
 	// 3. Execute DDL initialization (same as old version)
 	ctx := context.Background()
+	targetOwnerFence := ownerFence
+	if ownerFence != nil {
+		targetOwnerFence = func(fenceCtx context.Context) error {
+			if ar != nil {
+				select {
+				case <-ar.Pause:
+					return moerr.NewInternalError(fenceCtx, "task paused while waiting for target ownership")
+				case <-ar.Cancel:
+					return moerr.NewInternalError(fenceCtx, "task cancelled while waiting for target ownership")
+				default:
+				}
+			}
+			return ownerFence(fenceCtx)
+		}
+		lockIdentity := fmt.Sprintf(
+			"%d\x00%s\x00%s\x00%s",
+			accountId,
+			taskId,
+			dbTblInfo.SinkDbName,
+			dbTblInfo.SinkTblName,
+		)
+		if err = executor.AcquireTargetLock(ctx, lockIdentity, targetOwnerFence); err != nil {
+			executor.Close()
+			return nil, err
+		}
+	}
 
 	// Helper function to add padding
 	addPadding := func(sql string) []byte {
@@ -167,8 +193,8 @@ func createMysqlSinker2(
 
 	// CREATE DATABASE
 	createDbSQL := fmt.Sprintf("CREATE DATABASE IF NOT EXISTS `%s`", dbTblInfo.SinkDbName)
-	if ownerFence != nil {
-		if err = ownerFence(ctx); err != nil {
+	if targetOwnerFence != nil {
+		if err = targetOwnerFence(ctx); err != nil {
 			executor.Close()
 			return nil, err
 		}
@@ -181,8 +207,8 @@ func createMysqlSinker2(
 
 	// USE DATABASE
 	useDbSQL := fmt.Sprintf("USE `%s`", dbTblInfo.SinkDbName)
-	if ownerFence != nil {
-		if err = ownerFence(ctx); err != nil {
+	if targetOwnerFence != nil {
+		if err = targetOwnerFence(ctx); err != nil {
 			executor.Close()
 			return nil, err
 		}
@@ -196,8 +222,8 @@ func createMysqlSinker2(
 	// DROP TABLE if table ID changed (truncate scenario)
 	if dbTblInfo.IdChanged {
 		dropTableSQL := fmt.Sprintf("DROP TABLE IF EXISTS `%s`", dbTblInfo.SinkTblName)
-		if ownerFence != nil {
-			if err = ownerFence(ctx); err != nil {
+		if targetOwnerFence != nil {
+			if err = targetOwnerFence(ctx); err != nil {
 				executor.Close()
 				return nil, err
 			}
@@ -236,8 +262,8 @@ func createMysqlSinker2(
 		createSql = strings.Replace(createSql, "CREATE TABLE", "CREATE TABLE IF NOT EXISTS", 1)
 	}
 
-	if ownerFence != nil {
-		if err = ownerFence(ctx); err != nil {
+	if targetOwnerFence != nil {
+		if err = targetOwnerFence(ctx); err != nil {
 			executor.Close()
 			return nil, err
 		}
