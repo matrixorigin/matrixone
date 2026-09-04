@@ -3021,13 +3021,25 @@ func TestLargeUpdateTableLockRequiresUnrestrictedSingleTarget(t *testing.T) {
 			wantTableLock: false,
 		},
 		{
-			name:    "incomplete float keyspace stays row scoped",
-			sql:     "UPDATE NATION SET N_NAME = 'updated'",
-			maxRows: 1,
+			name:          "float64 full keyspace can use table lock",
+			sql:           "UPDATE NATION SET N_NAME = 'updated'",
+			maxRows:       1,
+			wantTableLock: true,
 			prepare: func(mock *MockOptimizer) {
 				tableDef := mock.ctxt.tables["nation"]
 				pkPos := tableDef.Name2ColIndex[tableDef.Pkey.PkeyColName]
 				tableDef.Cols[pkPos].Typ = plan.Type{Id: int32(types.T_float64)}
+			},
+		},
+		{
+			name:          "float32 full keyspace can use table lock",
+			sql:           "UPDATE NATION SET N_NAME = 'updated'",
+			maxRows:       1,
+			wantTableLock: true,
+			prepare: func(mock *MockOptimizer) {
+				tableDef := mock.ctxt.tables["nation"]
+				pkPos := tableDef.Name2ColIndex[tableDef.Pkey.PkeyColName]
+				tableDef.Cols[pkPos].Typ = plan.Type{Id: int32(types.T_float32)}
 			},
 		},
 		{
@@ -3151,8 +3163,9 @@ func TestLargeUnrestrictedIndexedUpdateLocksEveryWrittenNamespace(t *testing.T) 
 
 func TestLargeSharedLockTargetsKeepBoundedFallback(t *testing.T) {
 	tests := []struct {
-		name string
-		sql  string
+		name    string
+		sql     string
+		prepare func(*MockOptimizer)
 	}{
 		{
 			name: "select for share",
@@ -3166,11 +3179,32 @@ func TestLargeSharedLockTargetsKeepBoundedFallback(t *testing.T) {
 			name: "foreign key validation",
 			sql:  "INSERT INTO replace_fk_c VALUES (10, 1), (11, 1)",
 		},
+		{
+			name: "float32 select for share",
+			sql:  "SELECT N_NATIONKEY FROM NATION FOR SHARE",
+			prepare: func(mock *MockOptimizer) {
+				tableDef := mock.ctxt.tables["nation"]
+				pkPos := tableDef.Name2ColIndex[tableDef.Pkey.PkeyColName]
+				tableDef.Cols[pkPos].Typ = plan.Type{Id: int32(types.T_float32)}
+			},
+		},
+		{
+			name: "float64 lock in share mode",
+			sql:  "SELECT N_NATIONKEY FROM NATION LOCK IN SHARE MODE",
+			prepare: func(mock *MockOptimizer) {
+				tableDef := mock.ctxt.tables["nation"]
+				pkPos := tableDef.Name2ColIndex[tableDef.Pkey.PkeyColName]
+				tableDef.Cols[pkPos].Typ = plan.Type{Id: int32(types.T_float64)}
+			},
+		},
 	}
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			mock := NewMockOptimizer(true)
+			if test.prepare != nil {
+				test.prepare(mock)
+			}
 			proc := testutil.NewProc(t)
 			lockService := mock_lock.NewMockLockService(gomock.NewController(t))
 			lockService.EXPECT().GetConfig().Return(lockservice.Config{
@@ -3309,6 +3343,287 @@ func TestInsertIntoMarkedTemporaryTableUsesModernPath(t *testing.T) {
 				"temporary-table %s should stay on the modern insert path", test.name)
 		})
 	}
+}
+
+const clusterGeneratedInsertTable = "cluster_generated_insert"
+
+func addClusterGeneratedInsertTableForTest(mock *MockOptimizer) {
+	intType := plan.Type{Id: int32(types.T_int32)}
+	accountType := plan.Type{Id: int32(types.T_uint32), NotNullable: true}
+	cols := []*plan.ColDef{
+		{ColId: 0, Name: "id", OriginName: "id", Typ: intType, NotNull: true,
+			Default: &plan.Default{NullAbility: false}},
+		{ColId: 1, Name: "base_value", OriginName: "base_value", Typ: intType,
+			Default: &plan.Default{NullAbility: true}},
+		{ColId: 2, Name: "stored_value", OriginName: "stored_value", Typ: intType,
+			Default: &plan.Default{NullAbility: true}, GeneratedCol: &plan.GeneratedCol{
+				Expr: &plan.Expr{Typ: intType, Expr: &plan.Expr_Col{Col: &plan.ColRef{
+					RelPos: 0, ColPos: 1, Name: "base_value",
+				}}},
+				IsStored: true,
+			}},
+		{ColId: 3, Name: "virtual_value", OriginName: "virtual_value", Typ: intType,
+			Default: &plan.Default{NullAbility: true}, GeneratedCol: &plan.GeneratedCol{
+				Expr: &plan.Expr{Typ: intType, Expr: &plan.Expr_Col{Col: &plan.ColRef{
+					RelPos: 0, ColPos: 1, Name: "base_value",
+				}}},
+				IsStored: false,
+			}},
+		{ColId: 4, Name: "account_id", OriginName: "account_id", Typ: accountType, NotNull: true,
+			Default: &plan.Default{NullAbility: false, Expr: makePlan2Uint32ConstExprWithType(catalog.System_Account)}},
+	}
+	compPkey := MakeHiddenColDefByName(catalog.CPrimaryKeyColName)
+	compPkey.ColId = 5
+	compPkey.OriginName = catalog.CPrimaryKeyColName
+	compPkey.Primary = true
+	rowID := MakeRowIdColDef()
+	rowID.ColId = 6
+	rowID.OriginName = catalog.Row_ID
+	cols = append(cols, compPkey, rowID)
+
+	name2ColIndex := make(map[string]int32, len(cols))
+	for i, col := range cols {
+		name2ColIndex[col.Name] = int32(i)
+	}
+	tableDef := &plan.TableDef{
+		TableType:     catalog.SystemClusterRel,
+		TblId:         27923,
+		Name:          clusterGeneratedInsertTable,
+		Cols:          cols,
+		Name2ColIndex: name2ColIndex,
+		Pkey: &plan.PrimaryKeyDef{
+			Names:       []string{"id", "account_id"},
+			Cols:        []uint64{0, 4},
+			PkeyColName: catalog.CPrimaryKeyColName,
+			CompPkeyCol: compPkey,
+		},
+	}
+	mock.ctxt.objects[clusterGeneratedInsertTable] = &plan.ObjectRef{
+		SchemaName: "tpch", ObjName: clusterGeneratedInsertTable, Obj: 27923,
+	}
+	mock.ctxt.tables[clusterGeneratedInsertTable] = tableDef
+	mock.ctxt.id2name[tableDef.TblId] = clusterGeneratedInsertTable
+	mock.ctxt.pks[clusterGeneratedInsertTable] = []int{0, 4}
+}
+
+func exprContainsTypedNull(expr *plan.Expr) bool {
+	if expr == nil {
+		return false
+	}
+	if lit := expr.GetLit(); lit != nil {
+		return lit.Isnull
+	}
+	if f := expr.GetF(); f != nil {
+		for _, arg := range f.Args {
+			if exprContainsTypedNull(arg) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func exprContainsIntegerLiteral(expr *plan.Expr, want int64) bool {
+	if expr == nil {
+		return false
+	}
+	if lit := expr.GetLit(); lit != nil && !lit.Isnull {
+		switch value := lit.Value.(type) {
+		case *plan.Literal_I32Val:
+			return int64(value.I32Val) == want
+		case *plan.Literal_I64Val:
+			return value.I64Val == want
+		case *plan.Literal_U32Val:
+			return int64(value.U32Val) == want
+		case *plan.Literal_U64Val:
+			return value.U64Val <= uint64(^uint64(0)>>1) && int64(value.U64Val) == want
+		}
+	}
+	if f := expr.GetF(); f != nil {
+		for _, arg := range f.Args {
+			if exprContainsIntegerLiteral(arg, want) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func requireModernClusterInsertPlan(
+	t *testing.T,
+	query *plan.Query,
+	wantAccountID *int64,
+	wantIgnoreDedup bool,
+) {
+	t.Helper()
+
+	var multiUpdate *plan.Node
+	hasIgnoreDedup := false
+	for _, node := range query.Nodes {
+		require.NotEqual(t, plan.Node_INSERT, node.NodeType,
+			"cluster-table writes must not fall back to the legacy INSERT path")
+		if node.NodeType == plan.Node_MULTI_UPDATE {
+			multiUpdate = node
+		}
+		if node.NodeType == plan.Node_JOIN && node.JoinType == plan.Node_DEDUP &&
+			node.OnDuplicateAction == plan.Node_IGNORE {
+			hasIgnoreDedup = true
+		}
+	}
+	require.NotNil(t, multiUpdate)
+	if wantIgnoreDedup {
+		require.True(t, hasIgnoreDedup)
+	}
+
+	var tableCtx *plan.UpdateCtx
+	for _, updateCtx := range multiUpdate.UpdateCtxList {
+		if updateCtx.TableDef != nil && updateCtx.TableDef.Name == clusterGeneratedInsertTable {
+			tableCtx = updateCtx
+			break
+		}
+	}
+	require.NotNil(t, tableCtx)
+
+	var preInsert *plan.Node
+	for _, node := range query.Nodes {
+		if node.NodeType == plan.Node_PRE_INSERT && node.PreInsertCtx != nil &&
+			node.PreInsertCtx.TableDef.GetName() == clusterGeneratedInsertTable {
+			preInsert = node
+			break
+		}
+	}
+	require.NotNil(t, preInsert)
+	require.Len(t, preInsert.Children, 1)
+	rowImage := query.Nodes[preInsert.Children[0]]
+
+	writeExpr := func(colName string) *plan.Expr {
+		colPos, ok := tableCtx.TableDef.Name2ColIndex[colName]
+		require.True(t, ok)
+		require.Less(t, int(colPos), len(tableCtx.InsertCols))
+		ref := tableCtx.InsertCols[colPos]
+		require.Equal(t, colPos, ref.ColPos)
+		require.Less(t, int(colPos), len(rowImage.ProjectList))
+		return rowImage.ProjectList[colPos]
+	}
+
+	for _, generated := range []struct {
+		name     string
+		isStored bool
+	}{
+		{name: "stored_value", isStored: true},
+		{name: "virtual_value", isStored: false},
+	} {
+		col := tableCtx.TableDef.Cols[tableCtx.TableDef.Name2ColIndex[generated.name]]
+		require.NotNil(t, col.GeneratedCol)
+		require.Equal(t, generated.isStored, col.GeneratedCol.IsStored)
+		require.False(t, exprContainsTypedNull(writeExpr(generated.name)),
+			"generated column %s must not reach the physical write as a typed NULL", generated.name)
+	}
+
+	if wantAccountID != nil {
+		accountExpr := writeExpr("account_id")
+		require.True(t, exprContainsIntegerLiteral(accountExpr, *wantAccountID),
+			"account_id must remain in its target column position: %s", accountExpr.String())
+	}
+
+	compPkeyExpr := preInsert.PreInsertCtx.CompPkeyExpr
+	require.NotNil(t, compPkeyExpr)
+	require.Equal(t, "serial", compPkeyExpr.GetF().GetFunc().GetObjName())
+	require.Len(t, compPkeyExpr.GetF().Args, 2)
+	require.Equal(t, int32(0), compPkeyExpr.GetF().Args[0].GetCol().ColPos)
+	require.Equal(t, int32(4), compPkeyExpr.GetF().Args[1].GetCol().ColPos)
+}
+
+func TestClusterTableInsertUsesModernPath(t *testing.T) {
+	tests := []struct {
+		name            string
+		sql             string
+		prepared        bool
+		wantAccountID   int64
+		wantIgnoreDedup bool
+	}{
+		{
+			name: "values",
+			sql:  "insert into cluster_generated_insert (id, base_value) values (1, 4)",
+		},
+		{
+			name:          "insert select with explicit account",
+			sql:           "insert into cluster_generated_insert (id, base_value, account_id) select 2, 6, 17",
+			wantAccountID: 17,
+		},
+		{
+			name:     "prepared values",
+			sql:      "prepare cluster_insert from 'insert into cluster_generated_insert (id, base_value) values (?, ?)'",
+			prepared: true,
+		},
+		{
+			name:            "insert ignore",
+			sql:             "insert ignore into cluster_generated_insert (id, base_value) values (1, 4)",
+			wantIgnoreDedup: true,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			mock := NewMockOptimizer(true)
+			addClusterGeneratedInsertTableForTest(mock)
+
+			logicPlan, err := runOneStmt(mock, t, test.sql)
+			require.NoError(t, err)
+			query := logicPlan.GetQuery()
+			if test.prepared {
+				prepare := logicPlan.GetDcl().GetPrepare()
+				require.NotNil(t, prepare)
+				query = prepare.Plan.GetQuery()
+			}
+			require.NotNil(t, query)
+			wantAccountID := test.wantAccountID
+			requireModernClusterInsertPlan(t, query, &wantAccountID, test.wantIgnoreDedup)
+		})
+	}
+}
+
+func TestClusterTableInsertRejectsUnsupportedSyntax(t *testing.T) {
+	tests := []struct {
+		name    string
+		sql     string
+		wantErr string
+	}{
+		{
+			name:    "overwrite",
+			sql:     "insert overwrite cluster_generated_insert (id, base_value) values (1, 4)",
+			wantErr: "not supported: INSERT OVERWRITE currently supports Iceberg table mappings",
+		},
+		{
+			name:    "partition values",
+			sql:     "insert into cluster_generated_insert partition(p = 1) (id, base_value) values (1, 4)",
+			wantErr: "not supported: INSERT PARTITION value syntax currently supports Iceberg INSERT OVERWRITE only",
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			mock := NewMockOptimizer(true)
+			addClusterGeneratedInsertTableForTest(mock)
+
+			_, err := runOneStmt(mock, t, test.sql)
+			require.EqualError(t, err, test.wantErr)
+		})
+	}
+}
+
+func TestClusterTableLoadUsesModernPath(t *testing.T) {
+	mock := NewMockOptimizer(true)
+	addClusterGeneratedInsertTableForTest(mock)
+
+	logicPlan, err := runOneStmt(mock, t,
+		"load data inline format='csv', data='1,4,0' into table cluster_generated_insert fields terminated by ',' "+
+			"(id, base_value, account_id)")
+	require.NoError(t, err)
+	query := logicPlan.GetQuery()
+	require.NotNil(t, query)
+	require.True(t, query.LoadTag)
+	requireModernClusterInsertPlan(t, query, nil, false)
 }
 
 func TestInsertIgnoreIntoInternalIndexTableRemainsUnsupported(t *testing.T) {
