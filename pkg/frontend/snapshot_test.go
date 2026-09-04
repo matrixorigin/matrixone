@@ -1019,26 +1019,155 @@ func TestRecreateTableReferencedByForeignKey(t *testing.T) {
 			require.Equal(t, []string{masterSQL}, bh.executedSQLs)
 		})
 	}
+
+	t.Run("propagates foreign key lookup errors", func(t *testing.T) {
+		bh := &backgroundExecTest{}
+		bh.init()
+		wantErr := errors.New("check foreign key failed")
+		bh.sql2err[masterSQL] = wantErr
+
+		err := recreateTable(ctx, "", bh, "snapshot", tblInfo, uint32(sysAccountID), 100, false)
+		require.ErrorIs(t, err, wantErr)
+		require.Equal(t, []string{masterSQL}, bh.executedSQLs)
+	})
 }
 
-func TestValidateRestoreTableTargetRejectsReferencedTable(t *testing.T) {
+func TestValidateRestoreTableTarget(t *testing.T) {
 	ctx := context.Background()
-	bh := &backgroundExecTest{}
-	bh.init()
 	masterSQL := fmt.Sprintf(
 		checkTableIsMasterFormat,
 		quoteSQLStringLiteral("db1"),
 		quoteSQLStringLiteral("parent"),
 	)
-	bh.sql2result[masterSQL] = newMrsForRestoreStringRows(
-		[]string{"db_name"},
-		[][]interface{}{{"db1"}},
+
+	t.Run("rejects referenced table", func(t *testing.T) {
+		bh := &backgroundExecTest{}
+		bh.init()
+		bh.sql2result[masterSQL] = newMrsForRestoreStringRows(
+			[]string{"db_name"},
+			[][]interface{}{{"db1"}},
+		)
+
+		err := validateRestoreTableTarget(ctx, "", bh, "snapshot", "db1", "parent", uint32(sysAccountID))
+		require.EqualError(t, err, "not supported: can not restore table 'db1.parent' referenced by some foreign key constraint")
+		require.Equal(t, []string{masterSQL}, bh.executedSQLs)
+		require.Equal(t, []uint32{uint32(sysAccountID)}, bh.executionAccountIDs)
+	})
+
+	t.Run("allows table without foreign key dependents", func(t *testing.T) {
+		bh := &backgroundExecTest{}
+		bh.init()
+		bh.sql2result[masterSQL] = newMrsForRestoreStringRows([]string{"db_name"}, nil)
+
+		err := validateRestoreTableTarget(ctx, "", bh, "snapshot", "db1", "parent", uint32(sysAccountID))
+		require.NoError(t, err)
+		require.Equal(t, []string{masterSQL}, bh.executedSQLs)
+		require.Equal(t, []uint32{uint32(sysAccountID)}, bh.executionAccountIDs)
+	})
+
+	t.Run("propagates foreign key lookup errors", func(t *testing.T) {
+		bh := &backgroundExecTest{}
+		bh.init()
+		wantErr := errors.New("check foreign key failed")
+		bh.sql2err[masterSQL] = wantErr
+
+		err := validateRestoreTableTarget(ctx, "", bh, "snapshot", "db1", "parent", uint32(sysAccountID))
+		require.ErrorIs(t, err, wantErr)
+		require.Equal(t, []string{masterSQL}, bh.executedSQLs)
+		require.Equal(t, []uint32{uint32(sysAccountID)}, bh.executionAccountIDs)
+	})
+}
+
+func TestRestoreTablesWithFkRejectsReferencedTable(t *testing.T) {
+	ctx := defines.AttachAccountId(context.Background(), uint32(sysAccountID))
+	tblInfo := &tableInfo{
+		dbName:  "db1",
+		tblName: "parent",
+		relKind: catalog.SystemOrdinaryRel,
+	}
+	key := genKey(tblInfo.dbName, tblInfo.tblName)
+	masterSQL := fmt.Sprintf(
+		checkTableIsMasterFormat,
+		quoteSQLStringLiteral(tblInfo.dbName),
+		quoteSQLStringLiteral(tblInfo.tblName),
 	)
 
-	err := validateRestoreTableTarget(ctx, "", bh, "snapshot", "db1", "parent", uint32(sysAccountID))
+	bh := &backgroundExecTest{}
+	bh.init()
+	bh.sql2result[masterSQL] = newMrsForRestoreStringRows(
+		[]string{"db_name"},
+		[][]interface{}{{tblInfo.dbName}},
+	)
+
+	err := restoreTablesWithFk(
+		ctx,
+		"",
+		bh,
+		"snapshot",
+		[]string{key},
+		map[string]*tableInfo{key: tblInfo},
+		uint32(sysAccountID),
+		100,
+		true,
+	)
 	require.EqualError(t, err, "not supported: can not restore table 'db1.parent' referenced by some foreign key constraint")
 	require.Equal(t, []string{masterSQL}, bh.executedSQLs)
-	require.Equal(t, []uint32{uint32(sysAccountID)}, bh.executionAccountIDs)
+}
+
+func TestRestoreTableRejectsReferencedTableBeforeMutation(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	ses := newTestSession(t, ctrl)
+	t.Cleanup(ses.Close)
+
+	bh := &backgroundExecTest{}
+	bh.init()
+	const (
+		snapshotName = "snapshot"
+		dbName       = "db1"
+		tblName      = "parent"
+	)
+	snapshotSQL := fmt.Sprintf("%s where sname = '%s'", getSnapshotFormat, snapshotName)
+	masterSQL := fmt.Sprintf(
+		checkTableIsMasterFormat,
+		quoteSQLStringLiteral(dbName),
+		quoteSQLStringLiteral(tblName),
+	)
+	bh.sql2result[snapshotSQL] = newMrsForSnapshotRecord(
+		"snapshot-id",
+		snapshotName,
+		100,
+		tree.SNAPSHOTLEVELTABLE.String(),
+		sysAccountName,
+		dbName,
+		tblName,
+		0,
+	)
+	bh.sql2result[masterSQL] = newMrsForRestoreStringRows(
+		[]string{"db_name"},
+		[][]interface{}{{dbName}},
+	)
+
+	oldNewBackgroundExec := NewBackgroundExec
+	t.Cleanup(func() { NewBackgroundExec = oldNewBackgroundExec })
+	NewBackgroundExec = func(_ context.Context, _ FeSession, _ ...*BackgroundExecOption) BackgroundExec {
+		return bh
+	}
+
+	_, err := doRestoreSnapshot(context.Background(), ses, &tree.RestoreSnapShot{
+		Level:        tree.RESTORELEVELTABLE,
+		AccountName:  sysAccountName,
+		DatabaseName: dbName,
+		TableName:    tblName,
+		SnapShotName: snapshotName,
+	})
+	require.EqualError(t, err, "not supported: can not restore table 'db1.parent' referenced by some foreign key constraint")
+	require.Equal(t, []string{
+		"begin;",
+		catalog.ViewMetadataLifecycleGateSQL,
+		snapshotSQL,
+		masterSQL,
+		"rollback;",
+	}, bh.executedSQLs)
 }
 
 func TestBuildTableInfoListSQLEscapesLiterals(t *testing.T) {
