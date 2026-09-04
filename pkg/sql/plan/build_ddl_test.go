@@ -1438,10 +1438,22 @@ func TestIsMaterializedViewTableDefUsesPersistedCreateSQL(t *testing.T) {
 	require.True(t, IsMaterializedViewTableDef(&plan.TableDef{
 		Props: []*plan.PropertyDef{{Key: "mv_materialized", Value: "true"}},
 	}))
-	require.True(t, IsMaterializedViewTableDef(&plan.TableDef{
+	require.False(t, IsMaterializedViewTableDef(&plan.TableDef{
 		Defs: []*plan.TableDef_DefType{{Def: &plan.TableDef_DefType_Properties{
 			Properties: &plan.PropertiesDef{Properties: []*plan.Property{{
 				Key: catalog.SystemRelAttr_Comment, Value: materializedViewMarkerComment,
+			}}},
+		}}},
+	}))
+	require.False(t, IsMaterializedViewTableDef(&plan.TableDef{
+		Createsql: "CREATE TABLE ordinary (note VARCHAR(64) COMMENT 'mv_materialized')",
+	}))
+	require.False(t, IsMaterializedViewTableDef(&plan.TableDef{
+		Createsql: "CREATE TABLE ordinary (id INT)",
+		Defs: []*plan.TableDef_DefType{{Def: &plan.TableDef_DefType_Properties{
+			Properties: &plan.PropertiesDef{Properties: []*plan.Property{{
+				Key:   catalog.SystemRelAttr_CreateSQL,
+				Value: "CREATE TABLE ordinary (note VARCHAR(64) COMMENT 'mv_materialized')",
 			}}},
 		}}},
 	}))

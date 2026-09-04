@@ -1841,22 +1841,15 @@ func IsMaterializedViewTableDef(def *plan.TableDef) bool {
 	if def.GetTableType() == catalog.SystemMaterializedRel {
 		return true
 	}
-	// Materialized views are stored as ordinary physical relations. The
-	// planner may omit hidden-column comments when rebinding user DML, while
-	// the persisted CREATE SQL remains available on every catalog reload.
-	if strings.HasPrefix(strings.ToLower(strings.TrimSpace(def.Createsql)), "create materialized view") {
-		return true
-	}
-	if strings.Contains(def.Createsql, "mv_materialized") {
+	// Materialized views are stored as ordinary physical relations. Accept the
+	// persisted CREATE SQL only after parsing it as an exact CREATE MATERIALIZED
+	// VIEW statement; a substring match would misclassify ordinary tables whose
+	// names or comments happen to contain the marker text.
+	if isExactMaterializedViewCreateSQL(def.GetCreatesql()) {
 		return true
 	}
 	for _, prop := range def.GetProps() {
 		if prop.GetKey() == "mv_materialized" && prop.GetValue() == "true" {
-			return true
-		}
-	}
-	for _, col := range def.GetCols() {
-		if col.GetComment() == materializedViewMarkerComment {
 			return true
 		}
 	}
@@ -1869,15 +1862,25 @@ func IsMaterializedViewTableDef(def *plan.TableDef) bool {
 			if prop.GetKey() == "mv_materialized" && prop.GetValue() == "true" {
 				return true
 			}
-			if prop.GetKey() == catalog.SystemRelAttr_Comment && prop.GetValue() == materializedViewMarkerComment {
-				return true
-			}
-			if prop.GetKey() == catalog.SystemRelAttr_CreateSQL && strings.Contains(prop.GetValue(), "mv_materialized") {
+			if prop.GetKey() == catalog.SystemRelAttr_CreateSQL && isExactMaterializedViewCreateSQL(prop.GetValue()) {
 				return true
 			}
 		}
 	}
 	return false
+}
+
+func isExactMaterializedViewCreateSQL(sql string) bool {
+	if strings.TrimSpace(sql) == "" {
+		return false
+	}
+	stmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL, sql, 1)
+	if err != nil {
+		return false
+	}
+	defer stmt.Free()
+	create, ok := stmt.(*tree.CreateView)
+	return ok && create.Materialized
 }
 
 // IsMaterializedViewStateTableDef identifies a consumer-owned auxiliary
