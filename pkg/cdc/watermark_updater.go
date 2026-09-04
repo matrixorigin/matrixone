@@ -1494,18 +1494,18 @@ func (u *CDCWatermarkUpdater) GetWatermarkProgress(
 func parseWatermarkTS(value string) (types.TS, error) {
 	physicalString, logicalString, ok := strings.Cut(value, "-")
 	if !ok || physicalString == "" || logicalString == "" || strings.Contains(logicalString, "-") {
-		return types.TS{}, fmt.Errorf("expected physical-logical")
+		return types.TS{}, moerr.NewInternalErrorNoCtx("expected physical-logical")
 	}
 	physical, err := strconv.ParseInt(physicalString, 10, 64)
 	if err != nil {
-		return types.TS{}, fmt.Errorf("invalid physical component: %w", err)
+		return types.TS{}, moerr.NewInternalErrorNoCtxf("invalid physical component: %v", err)
 	}
 	if physical < 0 {
-		return types.TS{}, fmt.Errorf("physical component must be non-negative")
+		return types.TS{}, moerr.NewInternalErrorNoCtx("physical component must be non-negative")
 	}
 	logical, err := strconv.ParseUint(logicalString, 10, 32)
 	if err != nil {
-		return types.TS{}, fmt.Errorf("invalid logical component: %w", err)
+		return types.TS{}, moerr.NewInternalErrorNoCtxf("invalid logical component: %v", err)
 	}
 	return types.BuildTS(physical, uint32(logical)), nil
 }
