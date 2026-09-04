@@ -20,8 +20,13 @@ package table_function
 import (
 	"testing"
 
+	"github.com/golang/mock/gomock"
+
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
+	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/stretchr/testify/require"
 )
@@ -49,25 +54,82 @@ func TestFulltextSQLProcessNoSnapshotLeavesTSNil(t *testing.T) {
 		"an unsnapshotted MATCH must leave the read at the current txn")
 }
 
-// The snapshot TS and the publisher identity override coexist on the same SqlProcess.
-func TestFulltextSQLProcessSnapshotComposesWithPublisherIdentity(t *testing.T) {
-	proc := testutil.NewProc(t)
+// A subscribed table read at a named snapshot resolves under the PUBLISHER, not under the
+// snapshot's tenant. The two identities disagree here and both used to be written into
+// AccountIDOverride, so whichever setter ran last won -- a silent dependency on the order of
+// two adjacent lines. The mocked txn is what makes this reachable: ApplyScanSnapshot binds a
+// tenant only when EffectiveSnapshotTS reports a historical read, and testutil.NewProc has no
+// TxnOperator, so a test without one exercises the early return and cannot tell the orders
+// apart.
+func TestFulltextSQLProcessPublisherOutranksSnapshotTenant(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
 	t.Cleanup(proc.Free)
 
+	// The read txn is NEWER than the snapshot, so the snapshot TS is genuinely historical.
+	txnOp := mock_frontend.NewMockTxnOperator(ctrl)
+	txnOp.EXPECT().Txn().Return(txn.TxnMeta{
+		SnapshotTS: timestamp.Timestamp{PhysicalTime: 1800000000},
+	}).AnyTimes()
+	proc.Base.TxnOperator = txnOp
+
+	const publisher = uint32(42)
+	const snapshotTenant = uint32(7)
+	pub := publisher
 	ts := timestamp.Timestamp{PhysicalTime: 1700000000, LogicalTime: 7}
-	acct := uint32(42)
 	u := &fulltextState{
-		scanSnapshot:     &plan.Snapshot{TS: &ts},
-		publisherAccount: &acct,
+		scanSnapshot: &plan.Snapshot{
+			TS:     &ts,
+			Tenant: &plan.SnapshotTenant{TenantID: snapshotTenant},
+		},
+		publisherAccount: &pub,
 		publisherDB:      "pub_db",
 	}
 
 	sp := u.sqlProcess(proc)
-	require.NotNil(t, sp.SnapshotTS)
+
+	require.NotNil(t, sp.SnapshotTS, "the read stays historical")
 	require.Equal(t, ts.PhysicalTime, sp.SnapshotTS.PhysicalTime)
+	require.NotNil(t, sp.EffectiveSnapshotTS(), "and the tenant branch was actually reached")
+
+	// Both identities are recorded, neither clobbers the other.
 	require.NotNil(t, sp.AccountIDOverride)
-	require.Equal(t, acct, *sp.AccountIDOverride)
+	require.Equal(t, publisher, *sp.AccountIDOverride)
+	require.NotNil(t, sp.SnapshotAccountID)
+	require.Equal(t, snapshotTenant, *sp.SnapshotAccountID)
+
+	// And the account the index-table SQL actually runs as is the publisher, which is where
+	// those tables live -- matching the base-table scan's own PubInfo-over-snapshot precedence.
+	got, err := sp.EffectiveAccountID()
+	require.NoError(t, err)
+	require.Equal(t, publisher, got, "the publisher owns the index tables, not the snapshot tenant")
 	require.Equal(t, "pub_db", sp.DatabaseOverride)
+}
+
+// With no publisher, the snapshot's tenant is what the read resolves under -- the cross-account
+// case ApplyScanSnapshot exists for.
+func TestFulltextSQLProcessSnapshotTenantAppliesWithoutAPublisher(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	t.Cleanup(proc.Free)
+
+	txnOp := mock_frontend.NewMockTxnOperator(ctrl)
+	txnOp.EXPECT().Txn().Return(txn.TxnMeta{
+		SnapshotTS: timestamp.Timestamp{PhysicalTime: 1800000000},
+	}).AnyTimes()
+	proc.Base.TxnOperator = txnOp
+
+	ts := timestamp.Timestamp{PhysicalTime: 1700000000, LogicalTime: 7}
+	u := &fulltextState{scanSnapshot: &plan.Snapshot{
+		TS:     &ts,
+		Tenant: &plan.SnapshotTenant{TenantID: 7},
+	}}
+
+	sp := u.sqlProcess(proc)
+	require.Nil(t, sp.AccountIDOverride, "nothing published, so no execution identity")
+	got, err := sp.EffectiveAccountID()
+	require.NoError(t, err)
+	require.EqualValues(t, 7, got, "the snapshot's owning tenant still binds")
 }
 
 // resetRowState clears the snapshot.

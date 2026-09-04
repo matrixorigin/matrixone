@@ -132,6 +132,9 @@ func (u *fulltextState) sqlProcess(proc *process.Process) *sqlexec.SqlProcess {
 		sqlProc.WithExecutionIdentity(*u.publisherAccount, u.publisherDB)
 	}
 	// Named-snapshot read TS + owning tenant; nil leaves the read at the current txn (#27941).
+	// Order-independent: the two identities land in separate fields and SqlProcess resolves the
+	// precedence at use (see resolveAccountID), so a subscribed table read at a snapshot
+	// resolves under the PUBLISHER either way.
 	sqlProc.ApplyScanSnapshot(u.scanSnapshot)
 	return sqlProc
 }

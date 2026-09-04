@@ -107,6 +107,13 @@ type SqlProcess struct {
 	AccountIDOverride *uint32
 	DatabaseOverride  string
 
+	// The named snapshot's owning tenant, bound by ApplyScanSnapshot. Kept SEPARATE from
+	// AccountIDOverride rather than written into it: both answer "which account do the
+	// index-table reads resolve under", they can disagree, and a shared field makes the
+	// answer depend on which setter ran last. resolveAccountID states the precedence once,
+	// so no call order can change it.
+	SnapshotAccountID *uint32
+
 	// Optional named-snapshot read timestamp. When set (and historical), the
 	// internal SQL runs against a txn cloned at this TS, so index-table reads
 	// return the snapshot's historical state instead of the current one
@@ -190,7 +197,7 @@ func (s *SqlProcess) ApplyScanSnapshot(snap *plan.Snapshot) *timestamp.Timestamp
 	}
 	if snap.Tenant != nil {
 		id := snap.Tenant.TenantID
-		s.AccountIDOverride = &id
+		s.SnapshotAccountID = &id
 	}
 	return ets
 }
@@ -220,6 +227,30 @@ func (s *SqlProcess) WithExecutionIdentity(accountID uint32, database string) *S
 	return s
 }
 
+// resolveAccountID is the ONE place the account an internal read resolves under is decided.
+//
+// Precedence, highest first:
+//
+//  1. AccountIDOverride -- a trusted execution identity from the planner. For a SUBSCRIBED
+//     table this is the PUBLISHER, which owns both the base table and its index tables.
+//  2. SnapshotAccountID -- the named snapshot's owning tenant.
+//  3. nil -- the caller's own account, read from the process context.
+//
+// The publisher outranks the snapshot because it is the account the index tables actually
+// live in. A snapshot's tenant is only the same account by coincidence: planSnapshotFromRecord
+// sets it to the snapshotted account for an ACCOUNT-level snapshot, to the CALLER's account
+// for a database- or table-level one, and to 0 for a cluster-level one -- none of which owns a
+// subscribed table's indexes. This mirrors the engine's own base-table scan, which binds
+// ScanSnapshot.Tenant and then lets PubInfo override it
+// (Compile.getCompileTableScanDataSourceTxn), so the index SQL resolves as the same account as
+// the scan it belongs to.
+func (s *SqlProcess) resolveAccountID() *uint32 {
+	if s.AccountIDOverride != nil {
+		return s.AccountIDOverride
+	}
+	return s.SnapshotAccountID
+}
+
 // EffectiveAccountID is the account this SqlProcess actually EXECUTES as: the snapshot's
 // owning tenant when ApplyScanSnapshot bound one, else the caller's own account.
 //
@@ -232,15 +263,15 @@ func (s *SqlProcess) EffectiveAccountID() (uint32, error) {
 	if s == nil {
 		return 0, moerr.NewInternalErrorNoCtx("nil SqlProcess")
 	}
-	if s.AccountIDOverride != nil {
-		return *s.AccountIDOverride, nil
+	if id := s.resolveAccountID(); id != nil {
+		return *id, nil
 	}
 	return s.GetAccountID()
 }
 
 func (s *SqlProcess) executionAccountID(defaultAccountID uint32) uint32 {
-	if s.AccountIDOverride != nil {
-		return *s.AccountIDOverride
+	if id := s.resolveAccountID(); id != nil {
+		return *id
 	}
 	return defaultAccountID
 }
@@ -253,16 +284,16 @@ func (s *SqlProcess) executionDatabase(defaultDatabase string) string {
 }
 
 func (s *SqlProcess) executionContext(ctx context.Context) context.Context {
-	if s.AccountIDOverride != nil {
-		return defines.AttachAccountId(ctx, *s.AccountIDOverride)
+	if id := s.resolveAccountID(); id != nil {
+		return defines.AttachAccountId(ctx, *id)
 	}
 	return ctx
 }
 
 func (s *SqlProcess) executionStatementOption() executor.StatementOption {
 	option := executor.StatementOption{}.WithDisableLog()
-	if s.AccountIDOverride != nil {
-		option = option.WithAccountID(*s.AccountIDOverride)
+	if id := s.resolveAccountID(); id != nil {
+		option = option.WithAccountID(*id)
 	}
 	return option
 }

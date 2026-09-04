@@ -144,9 +144,12 @@ func TestApplyScanSnapshotBindsTenantAndTS(t *testing.T) {
 
 	require.NotNil(t, ets, "a TS older than the current txn is a historical read")
 	require.Equal(t, snapshotTS, *ets)
-	require.NotNil(t, sp.AccountIDOverride, "the snapshot's owning tenant must be bound")
-	require.EqualValues(t, 42, *sp.AccountIDOverride,
+	require.NotNil(t, sp.SnapshotAccountID, "the snapshot's owning tenant must be bound")
+	require.EqualValues(t, 42, *sp.SnapshotAccountID,
 		"the snapshot's account, not the calling session's")
+	got, err := sp.EffectiveAccountID()
+	require.NoError(t, err)
+	require.EqualValues(t, 42, got, "and with no publisher it is what the read resolves under")
 }
 
 // A snapshot that is not historical relative to this txn binds nothing: the read is an ordinary
@@ -166,7 +169,7 @@ func TestApplyScanSnapshotNonHistoricalBindsNothing(t *testing.T) {
 		TS:     &notHistorical,
 		Tenant: &plan.SnapshotTenant{TenantID: 42},
 	}))
-	require.Nil(t, sp.AccountIDOverride, "no time travel => no tenant rebinding")
+	require.Nil(t, sp.SnapshotAccountID, "no time travel => no tenant rebinding")
 }
 
 // A snapshot with no Tenant (cluster level) time-travels without rebinding the account.
@@ -181,13 +184,14 @@ func TestApplyScanSnapshotWithoutTenantOnlyBindsTS(t *testing.T) {
 	snapshotTS := timestamp.Timestamp{PhysicalTime: 8}
 	sp := &SqlProcess{Proc: proc}
 	require.NotNil(t, sp.ApplyScanSnapshot(&plan.Snapshot{TS: &snapshotTS}))
-	require.Nil(t, sp.AccountIDOverride)
+	require.Nil(t, sp.SnapshotAccountID)
 }
 
 func TestApplyScanSnapshotNilIsNoop(t *testing.T) {
 	sp := &SqlProcess{}
 	require.Nil(t, sp.ApplyScanSnapshot(nil))
 	require.Nil(t, sp.SnapshotTS)
+	require.Nil(t, sp.SnapshotAccountID)
 	require.Nil(t, sp.AccountIDOverride)
 }
 
