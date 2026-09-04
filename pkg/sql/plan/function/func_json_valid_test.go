@@ -106,6 +106,7 @@ func TestJsonLength(t *testing.T) {
 		s, info := fcTC.Run()
 		require.True(t, s, info)
 	})
+
 }
 
 func TestJsonKeys(t *testing.T) {
@@ -1079,6 +1080,25 @@ func TestJsonValue(t *testing.T) {
 		fcTC := NewFunctionTestCase(proc, tc.inputs, tc.expect, JsonValue)
 		s, info := fcTC.Run()
 		require.True(t, s, info)
+	})
+
+	t.Run("invalid document and path return errors", func(t *testing.T) {
+		for _, inputs := range [][]FunctionTestInput{
+			{
+				NewFunctionTestInput(types.T_varchar.ToType(), []string{`not json`}, []bool{false}),
+				NewFunctionTestInput(types.T_varchar.ToType(), []string{`$.a`}, []bool{false}),
+			},
+			{
+				NewFunctionTestInput(types.T_varchar.ToType(), []string{`{"a":1}`}, []bool{false}),
+				NewFunctionTestInput(types.T_varchar.ToType(), []string{`$[`}, []bool{false}),
+			},
+		} {
+			tc := NewFunctionTestCase(proc, inputs,
+				NewFunctionTestResult(types.T_varchar.ToType(), false, []string{""}, []bool{false}),
+				JsonValue)
+			s, _ := tc.Run()
+			require.False(t, s)
+		}
 	})
 }
 
