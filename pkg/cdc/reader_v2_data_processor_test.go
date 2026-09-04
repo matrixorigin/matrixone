@@ -161,6 +161,13 @@ func (s *transactionalSnapshotSinker) durableKeys() map[int32]struct{} {
 	return cloneSnapshotKeys(s.durable)
 }
 
+func (s *transactionalSnapshotSinker) resetTarget() {
+	s.mu.Lock()
+	s.durable = make(map[int32]struct{})
+	s.staged = nil
+	s.mu.Unlock()
+}
+
 type slowDataProcessorSinker struct {
 	*dataProcessorRecordingSinker
 	delay time.Duration
@@ -636,6 +643,65 @@ func TestLateDiscoveredTableStableEpochRestartConverges(t *testing.T) {
 	watermark, err = retryWatermark.GetFromCache(ctx, key)
 	require.NoError(t, err)
 	require.Equal(t, tailTo, watermark)
+}
+
+func TestRecreatedTableFreshOwnerResetsRetiredGeneration(t *testing.T) {
+	ctx := context.Background()
+	epochExecutor := newSnapshotEpochTestExecutor()
+	epochUpdater := NewCDCWatermarkUpdater(t.Name(), epochExecutor)
+	key := &WatermarkKey{AccountId: 1, TaskId: "task1", DBName: "db1", TableName: "table1"}
+
+	gen11Epoch, reset, err := epochUpdater.GetOrCreateInitialSnapshotEpochForGeneration(
+		ctx, key, 11, types.BuildTS(100, 1))
+	require.NoError(t, err)
+	require.False(t, reset)
+
+	mp, err := mpool.NewMPool("recreated_table_generation", 0, mpool.NoFixed)
+	require.NoError(t, err)
+	t.Cleanup(func() { mpool.DeleteMPool(mp) })
+	packerPool := fileservice.NewPool(
+		128,
+		func() *types.Packer { return types.NewPacker() },
+		func(packer *types.Packer) { packer.Reset() },
+		func(*types.Packer) {},
+	)
+	sinker := newTransactionalSnapshotSinker()
+	gen11Watermark := newMockWatermarkUpdater()
+	gen11Txn := NewTransactionManager(sinker, gen11Watermark, 1, "task1", "db1", "table1")
+	gen11 := NewDataProcessor(sinker, gen11Txn, mp, packerPool, 1, 0, 1, 0, true, 1, "task1", "db1", "table1")
+	gen11.SetTransactionRange(types.TS{}, gen11Epoch)
+	for value := int32(1); value <= 9; value++ {
+		require.NoError(t, gen11.ProcessChange(ctx, &ChangeData{
+			Type: ChangeTypeSnapshot, InsertBatch: buildBatch(t, mp, []int32{value}, gen11Epoch),
+		}))
+	}
+	require.Len(t, sinker.durableKeys(), initialSnapshotTxnBatchLimit)
+	require.False(t, gen11Watermark.updateCalled)
+
+	// The first CN disappears and the logical source table is recreated. A
+	// fresh detector has no IdChanged memory, so only the retired durable epoch
+	// can require the target reset.
+	freshUpdater := NewCDCWatermarkUpdater(t.Name()+"-fresh", epochExecutor)
+	gen12Epoch, reset, err := freshUpdater.GetOrCreateInitialSnapshotEpochForGeneration(
+		ctx, key, 12, types.BuildTS(200, 1))
+	require.NoError(t, err)
+	require.True(t, reset)
+	if reset {
+		sinker.resetTarget()
+	}
+
+	gen12Watermark := newMockWatermarkUpdater()
+	gen12Txn := NewTransactionManager(sinker, gen12Watermark, 1, "task1", "db1", "table1")
+	gen12 := NewDataProcessor(sinker, gen12Txn, mp, packerPool, 1, 0, 1, 0, true, 1, "task1", "db1", "table1")
+	gen12.SetTransactionRange(types.TS{}, gen12Epoch)
+	require.NoError(t, gen12.ProcessChange(ctx, &ChangeData{
+		Type: ChangeTypeSnapshot, InsertBatch: buildBatch(t, mp, []int32{20, 30}, gen12Epoch),
+	}))
+	require.NoError(t, gen12.ProcessChange(ctx, &ChangeData{Type: ChangeTypeNoMoreData}))
+	require.Equal(t, map[int32]struct{}{20: {}, 30: {}}, sinker.durableKeys())
+	watermark, err := gen12Watermark.GetFromCache(ctx, key)
+	require.NoError(t, err)
+	require.Equal(t, gen12Epoch, watermark)
 }
 
 func TestDataProcessor_SnapshotGroupBoundaries(t *testing.T) {
