@@ -18,6 +18,7 @@ drop account acc1;
 -- issue 27759: subscription index metadata must use the publisher catalog
 drop publication if exists idx_meta_pub;
 drop publication if exists idx_meta_pub_b;
+drop publication if exists idx_meta_pub_visible;
 drop database if exists idx_meta_src;
 drop database if exists idx_meta_src_b;
 drop account if exists idx_meta_sub;
@@ -35,6 +36,10 @@ create table idx_meta_src.visible_t(
 create table idx_meta_src.unpublished_t(id int primary key);
 create table idx_meta_src.secret_t(id int primary key, v int, key idx_secret_v(v));
 create publication idx_meta_pub database idx_meta_src table visible_t,secret_t account idx_meta_sub, idx_meta_other;
+-- A publication narrowed to one table is the supported table-level security
+-- boundary for a subscription. Exact GRANT targets are not subscriber-local
+-- authorization objects.
+create publication idx_meta_pub_visible database idx_meta_src table visible_t account idx_meta_sub;
 create database idx_meta_src_b;
 create table idx_meta_src_b.second_t(id int primary key);
 create publication idx_meta_pub_b database idx_meta_src_b table second_t account idx_meta_sub, idx_meta_other;
@@ -48,6 +53,7 @@ create database idx_meta_sub_db from sys publication idx_meta_pub;
 select count(*) as ordinary_cache_first_subscription_rows
 from information_schema.statistics where table_name = 'visible_t';
 create database idx_meta_sub_b from sys publication idx_meta_pub_b;
+create database idx_meta_visible_only from sys publication idx_meta_pub_visible;
 
 -- A publication authorizes the cross-account catalog scan but does not bypass
 -- the subscriber user's RBAC. A connect-only role must not discover published
@@ -65,10 +71,24 @@ select count(*) as connect_only_secret_index_rows
 from information_schema.statistics where table_name = 'secret_t';
 -- @session
 -- @session:id=2&user=idx_meta_sub:admin&password=111
+-- @regex("exact table grants on subscription database .* are unsupported",true)
+grant select on table idx_meta_sub_db.visible_t to idx_meta_visible_parent_role;
+select count(*) as rejected_exact_grant_rows
+from mo_catalog.mo_role_privs
+where role_name = 'idx_meta_visible_parent_role'
+  and privilege_name = 'select'
+  and privilege_level in ('d.t', 't');
+grant select on table idx_meta_visible_only.* to idx_meta_visible_parent_role;
 grant select on table idx_meta_sub_db.* to idx_meta_visible_parent_role;
 grant idx_meta_visible_parent_role to idx_meta_connect_only_role;
 -- @session
 -- @session:id=5&user=idx_meta_sub:idx_meta_connect_only:idx_meta_connect_only_role&password=111
+select count(*) as publication_scoped_visible_index_rows
+from information_schema.statistics
+where table_schema = 'idx_meta_visible_only' and table_name = 'visible_t';
+select count(*) as publication_scoped_secret_index_rows
+from information_schema.statistics
+where table_schema = 'idx_meta_visible_only' and table_name = 'secret_t';
 select count(*) as granted_visible_index_rows
 from information_schema.statistics where table_name = 'visible_t';
 select count(*) as granted_secret_index_rows
@@ -222,11 +242,13 @@ drop snapshot idx_meta_without_sub_b;
 drop user idx_meta_connect_only;
 drop role idx_meta_connect_only_role, idx_meta_visible_parent_role;
 drop database idx_meta_sub_db;
+drop database idx_meta_visible_only;
 drop database idx_meta_local;
 -- @session
 
 drop publication idx_meta_pub;
 drop publication idx_meta_pub_b;
+drop publication idx_meta_pub_visible;
 drop database idx_meta_src;
 drop database idx_meta_src_b;
 drop account idx_meta_sub;

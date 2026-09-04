@@ -9244,6 +9244,82 @@ func TestGrantPrivilegeLocksObjectLifecycle(t *testing.T) {
 		require.Empty(t, bh.executedSQLs)
 	})
 
+	for _, testCase := range []struct {
+		name  string
+		level tree.PrivilegeLevel
+	}{
+		{
+			name: "qualified exact subscription table grant is rejected explicitly",
+			level: tree.PrivilegeLevel{
+				Level: tree.PRIVILEGE_LEVEL_TYPE_DATABASE_TABLE, DbName: "d", TabName: "published_t",
+			},
+		},
+		{
+			name: "current database exact subscription table grant is rejected explicitly",
+			level: tree.PrivilegeLevel{
+				Level: tree.PRIVILEGE_LEVEL_TYPE_TABLE, TabName: "published_t",
+			},
+		},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			bh := &backgroundExecTest{}
+			bh.init()
+			bh.sql2result[lockedDatabaseSQL("d")] = newMrsForCheckDatabase([][]interface{}{{int64(11)}})
+			bh.sql2result[lockedTableSQL("published_t")] = newMrsForCheckDatabaseTable(nil)
+
+			dbTypeSQL, err := getSqlForGetDbIdAndType(ctx, "d", true, uint64(sysAccountID))
+			require.NoError(t, err)
+			dbTypeResult := &MysqlResultSet{}
+			for _, name := range []string{"dat_id", "dat_type"} {
+				col := &MysqlColumn{}
+				col.SetName(name)
+				dbTypeResult.AddColumn(col)
+			}
+			dbTypeResult.AddRow([]interface{}{uint64(11), catalog.SystemDBTypeSubscription})
+			bh.sql2result[dbTypeSQL] = dbTypeResult
+
+			_, _, err = checkPrivilegeObjectTypeAndPrivilegeLevelForGrant(
+				ctx, ses, bh, tree.OBJECT_TYPE_TABLE, testCase.level)
+			require.ErrorContains(t, err, `exact table grants on subscription database "d" are unsupported`)
+			require.ErrorContains(t, err, `grant on "d.*" or narrow the publication table list instead`)
+			require.Equal(t, []string{
+				lockedDatabaseSQL("d"),
+				lockedTableSQL("published_t"),
+				dbTypeSQL,
+			}, bh.executedSQLs)
+		})
+	}
+
+	t.Run("missing table in ordinary database keeps missing-table diagnosis", func(t *testing.T) {
+		bh := &backgroundExecTest{}
+		bh.init()
+		bh.sql2result[lockedDatabaseSQL("d")] = newMrsForCheckDatabase([][]interface{}{{int64(11)}})
+		bh.sql2result[lockedTableSQL("missing_t")] = newMrsForCheckDatabaseTable(nil)
+
+		dbTypeSQL, err := getSqlForGetDbIdAndType(ctx, "d", true, uint64(sysAccountID))
+		require.NoError(t, err)
+		dbTypeResult := &MysqlResultSet{}
+		for _, name := range []string{"dat_id", "dat_type"} {
+			col := &MysqlColumn{}
+			col.SetName(name)
+			dbTypeResult.AddColumn(col)
+		}
+		dbTypeResult.AddRow([]interface{}{uint64(11), ""})
+		bh.sql2result[dbTypeSQL] = dbTypeResult
+
+		_, _, err = checkPrivilegeObjectTypeAndPrivilegeLevelForGrant(
+			ctx,
+			ses,
+			bh,
+			tree.OBJECT_TYPE_TABLE,
+			tree.PrivilegeLevel{
+				Level: tree.PRIVILEGE_LEVEL_TYPE_DATABASE_TABLE, DbName: "d", TabName: "missing_t",
+			},
+		)
+		require.ErrorContains(t, err, `there is no table "missing_t" in database "d"`)
+		require.NotContains(t, err.Error(), "subscription database")
+	})
+
 	t.Run("lock failure prevents privilege mutation", func(t *testing.T) {
 		bh := &backgroundExecTest{}
 		bh.init()
