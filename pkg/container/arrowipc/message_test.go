@@ -212,6 +212,52 @@ func TestInspectMessageRejectsUnalignedBufferOffset(t *testing.T) {
 	require.ErrorContains(t, err, "unaligned buffer offset")
 }
 
+func TestInspectMessageRejectsOverlappingBufferRanges(t *testing.T) {
+	schema := arrow.NewSchema([]arrow.Field{
+		{Name: "left", Type: arrow.PrimitiveTypes.Int64},
+		{Name: "right", Type: arrow.PrimitiveTypes.Int64},
+	}, nil)
+	var stream bytes.Buffer
+	writer := ipc.NewWriter(&stream, ipc.WithSchema(schema))
+	alloc := memory.NewGoAllocator()
+	left := array.NewInt64Builder(alloc)
+	left.Append(1)
+	right := array.NewInt64Builder(alloc)
+	right.Append(2)
+	record := array.NewRecordBatch(schema, []arrow.Array{left.NewArray(), right.NewArray()}, 1)
+	left.Release()
+	right.Release()
+	require.NoError(t, writer.Write(record))
+	record.Release()
+	require.NoError(t, writer.Close())
+	metadata := streamMetadataAt(t, stream.Bytes(), 1)
+
+	root := binary.LittleEndian.Uint32(metadata)
+	messageTable := flatbuffers.Table{Bytes: metadata, Pos: flatbuffers.UOffsetT(root)}
+	headerOffset := flatbuffers.UOffsetT(messageTable.Offset(8))
+	require.NotZero(t, headerOffset)
+	var recordTable flatbuffers.Table
+	messageTable.Union(&recordTable, headerOffset)
+	buffersOffset := flatbuffers.UOffsetT(recordTable.Offset(8))
+	require.NotZero(t, buffersOffset)
+	bufferPos := recordTable.Vector(buffersOffset)
+	firstOffset := binary.LittleEndian.Uint64(recordTable.Bytes[bufferPos+16:])
+	firstLength := binary.LittleEndian.Uint64(recordTable.Bytes[bufferPos+24:])
+	require.Greater(t, firstLength, uint64(0))
+	// Point the second non-empty logical buffer at the first buffer. Both
+	// ranges remain aligned and in bounds, but they no longer describe the
+	// serialized RecordBatch layout.
+	binary.LittleEndian.PutUint64(recordTable.Bytes[bufferPos+48:], firstOffset)
+
+	bodyLength := ipcflatbuf.GetRootAsMessage(metadata).BodyLength()
+	_, err := InspectMessage(context.Background(), metadata, ValidationOptions{
+		MaxBodyBytes:          bodyLength,
+		BodyEnvelopeBytes:     bodyLength,
+		MaxDecodedRecordBytes: 1,
+	})
+	require.ErrorContains(t, err, "overlaps buffer")
+}
+
 func firstStreamMetadata(t *testing.T, stream []byte) []byte {
 	return streamMetadataAt(t, stream, 0)
 }
