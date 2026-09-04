@@ -401,8 +401,6 @@ func TestJsonSchemaMySQLDraft4Dialect(t *testing.T) {
 		`{"type":"integer","minimum":5}`,
 		`{"type":"object","properties":{"format":{"type":"string"}}}`,
 		`{"enum":[{"format":"email","exclusiveMinimum":5}]}`,
-		`{"if":{"$ref":"https://example.invalid/schema"}}`,
-		`{"$defs":{"ignored":{"$ref":"file:///tmp/schema.json"}}}`,
 	}
 	documents := []string{
 		`2`,
@@ -419,8 +417,6 @@ func TestJsonSchemaMySQLDraft4Dialect(t *testing.T) {
 		`5`,
 		`{"format":1}`,
 		`{"format":"email","exclusiveMinimum":5}`,
-		`1`,
-		`1`,
 	}
 	want := []bool{
 		true,
@@ -436,8 +432,6 @@ func TestJsonSchemaMySQLDraft4Dialect(t *testing.T) {
 		false,
 		true,
 		false,
-		true,
-		true,
 		true,
 	}
 
@@ -681,18 +675,18 @@ func TestJsonSchemaRefKeywordDetection(t *testing.T) {
 		require.True(t, s, info)
 	})
 
-	t.Run("enum value with ref key is allowed", func(t *testing.T) {
+	t.Run("non-string ref values in literals are allowed", func(t *testing.T) {
 		tc := tcTemp{
-			info: "json_schema_valid enum ref value",
+			info: "json_schema_valid non-string literal ref values",
 			inputs: []FunctionTestInput{
 				NewFunctionTestInput(types.T_varchar.ToType(),
-					[]string{`{"enum":[{"$ref":"literal"}]}`},
-					[]bool{false}),
+					[]string{`{"enum":[{"$ref":1}]}`, `{"unknown":{"$ref":false}}`},
+					[]bool{false, false}),
 				NewFunctionTestInput(types.T_varchar.ToType(),
-					[]string{`{"$ref":"literal"}`},
-					[]bool{false}),
+					[]string{`{"$ref":1}`, `1`},
+					[]bool{false, false}),
 			},
-			expect: NewFunctionTestResult(types.T_bool.ToType(), false, []bool{true}, []bool{false}),
+			expect: NewFunctionTestResult(types.T_bool.ToType(), false, []bool{true, true}, []bool{false, false}),
 		}
 		fcTC := NewFunctionTestCase(proc, tc.inputs, tc.expect, JsonSchemaValid)
 		s, info := fcTC.Run()
@@ -718,7 +712,7 @@ func TestJsonSchemaRefKeywordDetection(t *testing.T) {
 	})
 }
 
-func TestJsonSchemaInvalidCombinatorRefPrecedence(t *testing.T) {
+func TestJsonSchemaStringRefDetection(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	functions := []struct {
 		name    string
@@ -728,16 +722,29 @@ func TestJsonSchemaInvalidCombinatorRefPrecedence(t *testing.T) {
 		{name: "json_schema_valid", retType: types.T_bool.ToType(), fn: JsonSchemaValid},
 		{name: "json_schema_validation_report", retType: types.T_json.ToType(), fn: JsonSchemaValidationReport},
 	}
+	schemas := []struct {
+		name   string
+		schema string
+	}{
+		{name: "allOf invalid object", schema: `{"allOf":{"$ref":"https://example.invalid/schema"}}`},
+		{name: "anyOf invalid object", schema: `{"anyOf":{"$ref":"https://example.invalid/schema"}}`},
+		{name: "oneOf invalid object", schema: `{"oneOf":{"$ref":"https://example.invalid/schema"}}`},
+		{name: "if ignored keyword", schema: `{"if":{"$ref":"https://example.invalid/schema"}}`},
+		{name: "$defs ignored keyword", schema: `{"$defs":{"ignored":{"$ref":"file:///tmp/schema.json"}}}`},
+		{name: "enum literal", schema: `{"enum":[{"$ref":"literal"}]}`},
+		{name: "const literal", schema: `{"const":{"$ref":"literal"}}`},
+		{name: "default literal", schema: `{"default":{"$ref":"literal"}}`},
+		{name: "unknown keyword", schema: `{"unknown":{"$ref":"literal"}}`},
+	}
 
 	for _, function := range functions {
-		for _, keyword := range []string{"allOf", "anyOf", "oneOf"} {
+		for _, schemaCase := range schemas {
 			for _, constant := range []bool{false, true} {
-				name := fmt.Sprintf("%s/%s/constant=%t", function.name, keyword, constant)
+				name := fmt.Sprintf("%s/%s/constant=%t", function.name, schemaCase.name, constant)
 				t.Run(name, func(t *testing.T) {
-					schema := fmt.Sprintf(`{"%s":{"$ref":"https://example.invalid/schema"}}`, keyword)
-					schemaInput := NewFunctionTestInput(types.T_varchar.ToType(), []string{schema}, []bool{false})
+					schemaInput := NewFunctionTestInput(types.T_varchar.ToType(), []string{schemaCase.schema}, []bool{false})
 					if constant {
-						schemaInput = NewFunctionTestConstInput(types.T_varchar.ToType(), []string{schema}, []bool{false})
+						schemaInput = NewFunctionTestConstInput(types.T_varchar.ToType(), []string{schemaCase.schema}, []bool{false})
 					}
 					tc := NewFunctionTestCase(proc,
 						[]FunctionTestInput{

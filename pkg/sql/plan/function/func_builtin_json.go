@@ -3050,6 +3050,9 @@ func compileMySQLDraft4Schema(ctx context.Context, fnName string, schemaBJ bytej
 		return nil, moerr.NewInvalidArg(ctx, fnName, err.Error())
 	}
 
+	if mysqlSchemaHasStringRef(schema) {
+		return nil, moerr.NewNotSupportedf(ctx, "%s: $ref is not supported", fnName)
+	}
 	normalizeMySQLDraft4Schema(schema)
 	if mysqlDraft4SchemaHasRef(schema) {
 		return nil, moerr.NewNotSupportedf(ctx, "%s: $ref is not supported", fnName)
@@ -3068,6 +3071,27 @@ func compileMySQLDraft4Schema(ctx context.Context, fnName string, schemaBJ bytej
 		return nil, moerr.NewInvalidArg(ctx, fnName, err.Error())
 	}
 	return compiled, nil
+}
+
+func mysqlSchemaHasStringRef(value any) bool {
+	switch value := value.(type) {
+	case map[string]any:
+		if _, ok := value["$ref"].(string); ok {
+			return true
+		}
+		for _, child := range value {
+			if mysqlSchemaHasStringRef(child) {
+				return true
+			}
+		}
+	case []any:
+		for _, child := range value {
+			if mysqlSchemaHasStringRef(child) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func normalizeMySQLDraft4Schema(schema any) {

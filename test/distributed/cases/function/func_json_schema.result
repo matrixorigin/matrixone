@@ -145,6 +145,15 @@ select json_schema_valid('{"allOf":{"$ref":"https://example.invalid/schema"}}', 
 not supported: json_schema_valid: $ref is not supported
 select json_schema_validation_report('{"allOf":{"$ref":"https://example.invalid/schema"}}', '1');
 not supported: json_schema_validation_report: $ref is not supported
+select json_schema_valid('{"if":{"$ref":"https://example.invalid/schema"}}', '1');
+not supported: json_schema_valid: $ref is not supported
+select json_schema_validation_report('{"$defs":{"ignored":{"$ref":"file:///tmp/schema.json"}}}', '1');
+not supported: json_schema_validation_report: $ref is not supported
+select json_schema_valid('{"enum":[{"$ref":"literal"}]}', '{"$ref":"literal"}');
+not supported: json_schema_valid: $ref is not supported
+select json_schema_valid('{"enum":[{"$ref":1}]}', '{"$ref":1}');
+json_schema_valid({"enum":[{"$ref":1}]}, {"$ref":1})
+1
 drop table if exists json_schema_draft4_rows;
 create table json_schema_draft4_rows (id int primary key, s varchar(1024), d json);
 insert into json_schema_draft4_rows values (1, '{"format":"email"}', '"not-an-email"'), (2, '{"type":"integer","minimum":5}', '2');
