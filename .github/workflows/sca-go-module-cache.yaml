@@ -53,7 +53,7 @@ jobs:
         run: |
           set -euo pipefail
           make clean
-          rm -rf .sca-go-module-cache .sca-static-check-tools .sca-golangci-analysis-cache
+          rm -rf .sca-go-module-cache .sca-static-check-tools .sca-golangci-analysis-cache .sca-onnx-runtime
       - name: Resolve Go module cache metadata
         id: go-module-cache-metadata
         run: |
@@ -125,6 +125,27 @@ jobs:
             cgo/libmo.a
             cgo/libmo.so
           key: matrixone-sca-native-v2-${{ runner.os }}-${{ runner.arch }}-${{ steps.native-cache-metadata.outputs.compiler }}-${{ steps.native-cache-metadata.outputs.cxx-compiler }}-${{ steps.native-cache-metadata.outputs.cmake }}-${{ hashFiles('Makefile', 'cgo/*.c', 'cgo/*.h', 'cgo/Makefile', 'thirdparties/Makefile', 'thirdparties/*.tar.gz', 'thirdparties/download') }}
+      - name: Restore ONNX Runtime fallback
+        id: onnx-cache
+        uses: actions/cache/restore@0400d5f644dc74513175e3cd8d07132dd4860809 # v4.2.4
+        with:
+          # Keep a small fallback separate from the much larger native archive.
+          # Shanghai runners can often restore this archive even when a large
+          # cache transfer is reset, avoiding a second raw GitHub dependency.
+          path: .sca-onnx-runtime
+          key: matrixone-sca-onnx-v1-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('thirdparties/Makefile', 'thirdparties/download') }}
+      - name: Verify restored ONNX Runtime fallback
+        if: steps.onnx-cache.outputs.cache-hit == 'true'
+        run: |
+          set -euo pipefail
+          mapfile -t onnx_files < <(find .sca-onnx-runtime -maxdepth 1 -type f -name 'onnxruntime*.so' -print)
+          if [[ "${#onnx_files[@]}" -ne 1 ]] || \
+            [[ ! -f .sca-onnx-runtime/SHA256SUMS ]] || \
+            ! (cd .sca-onnx-runtime && sha256sum --check --strict SHA256SUMS); then
+            echo "::error::The exact ONNX Runtime fallback cache is incomplete or corrupt and cannot be replaced in place"
+            printf '### SCA cache repair required\n\nDelete the exact ONNX Runtime fallback cache key so the trusted producer can publish it again.\n' >> "$GITHUB_STEP_SUMMARY"
+            exit 1
+          fi
       - name: Build native SCA prerequisites
         if: steps.native-cache.outputs.cache-hit != 'true'
         run: |
@@ -132,7 +153,11 @@ jobs:
           # Top-level cgo is the single complete-generation owner and already
           # builds/stages thirdparties. A standalone pre-build has no complete
           # provenance stamp and would be conservatively deleted and repeated.
-          make cgo
+          if [[ "${{ steps.onnx-cache.outputs.cache-hit }}" == "true" ]]; then
+            make ONNX_PREBUILT_DIR="$GITHUB_WORKSPACE/.sca-onnx-runtime" cgo
+          else
+            make cgo
+          fi
           test -f thirdparties/install/include/xxhash.h
           test -f thirdparties/install/include/usearch.h
           test -f cgo/libmo.so
@@ -146,6 +171,25 @@ jobs:
           find thirdparties/install/lib -maxdepth 1 -type f -name 'onnxruntime*.so' -print -quit | grep -q .
           test -f cgo/libmo.a
           test -f cgo/libmo.so
+      - name: Stage ONNX Runtime fallback
+        if: steps.onnx-cache.outputs.cache-hit != 'true'
+        run: |
+          set -euo pipefail
+          mapfile -t onnx_files < <(find thirdparties/install/lib -maxdepth 1 -type f -name 'onnxruntime*.so' -print)
+          test "${#onnx_files[@]}" -eq 1
+          rm -rf .sca-onnx-runtime
+          mkdir .sca-onnx-runtime
+          cp "${onnx_files[0]}" .sca-onnx-runtime/
+          (
+            cd .sca-onnx-runtime
+            sha256sum onnxruntime*.so > SHA256SUMS
+          )
+      - name: Save ONNX Runtime fallback
+        if: steps.onnx-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@0400d5f644dc74513175e3cd8d07132dd4860809 # v4.2.4
+        with:
+          path: .sca-onnx-runtime
+          key: ${{ steps.onnx-cache.outputs.cache-primary-key }}
       - name: Save native SCA prerequisites
         if: steps.native-cache.outputs.cache-hit != 'true'
         uses: actions/cache/save@0400d5f644dc74513175e3cd8d07132dd4860809 # v4.2.4
@@ -192,6 +236,7 @@ jobs:
       - name: Prepare SCA environment
         run: |
           set -euo pipefail
+          rm -rf .sca-onnx-runtime
           rm -rf "$GITHUB_WORKSPACE/lib"
           cp -r thirdparties/install/lib "$GITHUB_WORKSPACE/lib"
           runtime_dir="$(mktemp -d "${RUNNER_TEMP%/}/matrixone-sca-tools.XXXXXX")"

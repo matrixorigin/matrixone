@@ -90,6 +90,9 @@ thirdparties/usearch-*/*
 # it into per-job random directories.
 /.sca-go-module-cache/
 
+# Small CI-only fallback staged by the trusted SCA cache producer.
+/.sca-onnx-runtime/
+
 # bvt generate files
 test/distributed/resources/into_outfile/outfile_*.csv
 test/distributed/resources/into_outfile_2/outfile_*.csv
