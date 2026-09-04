@@ -53,6 +53,7 @@ jobs:
         id: analysis-cache-compression
         run: |
           set -euo pipefail
+          compression_probe=matrixone-sca-cache-compression-probe
           if command -v zstd >/dev/null 2>&1; then
             # actions/cache selects zstd when this command is present, then
             # invokes zstdmt to create and unzstd to restore the archive.
@@ -71,11 +72,19 @@ jobs:
               echo "::error::Incomplete zstd installation; missing: ${missing_helpers[*]}"
               exit 1
             fi
+            if ! round_trip="$(
+              printf '%s' "$compression_probe" | zstdmt -q -c | unzstd -q -c
+            )" || [[ "$round_trip" != "$compression_probe" ]]; then
+              echo "::error::zstd compression round-trip failed"
+              exit 1
+            fi
             compression_method=zstd
           elif command -v gzip >/dev/null 2>&1; then
             # This is the supported actions/cache fallback when zstd is absent.
-            if ! gzip --version >/dev/null 2>&1; then
-              echo "::error::gzip is present but unusable"
+            if ! round_trip="$(
+              printf '%s' "$compression_probe" | gzip -c | gzip -dc
+            )" || [[ "$round_trip" != "$compression_probe" ]]; then
+              echo "::error::gzip compression round-trip failed"
               exit 1
             fi
             compression_method=gzip
