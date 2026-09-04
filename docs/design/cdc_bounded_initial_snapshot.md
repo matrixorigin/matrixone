@@ -1,8 +1,10 @@
 # Bounded and retry-safe CDC initial snapshots
 
-Status: implementation design under review for MatrixOne PR #27939. This
-document describes the protocol implemented by the PR. Independent design
-approval is still required by the repository's R3 process.
+Status: implementation design under review for MatrixOne PR #27939. The
+implemented protocol below has an unresolved daemon-completion ownership
+defect at `64a946ca54858db0d4d5c378f5e93450ded20e82`. The pending correction
+section is a design proposal, not implemented or validated behavior.
+Independent design approval is still required by the repository's R3 process.
 
 ## Scope
 
@@ -270,6 +272,106 @@ that wakes later validates its obsolete claim and releases without target work.
 The lock serializes generations of the same CDC task/table. It does not prevent
 an operator from configuring a different CDC task to write the same physical
 target; cross-task target ownership is outside this PR.
+
+## Pending correction: generation-owned daemon completion
+
+This correction belongs to #27863 / PR #27939. It addresses the deterministic
+counterexample in [review 5117936681](https://github.com/matrixorigin/matrixone/pull/27939#pullrequestreview-5117936681).
+Normal and race runs of the review-only reproducer both failed at the revision
+named above; neither the earlier 55 validation nor existing takeover tests
+exercise completion of the old startup after replacement publication.
+
+### Root cause and required contract
+
+A task ID identifies a durable task, and a runner identifies a CN. Neither
+identifies one execution: the same CN can reacquire the same task after another
+owner. The execution identity is the immutable claim
+`C = (task_id, task_runner, last_run)`. Local registration additionally has an
+object identity `L`; Resume/Restart can reuse `L` while changing `C`.
+
+Heartbeat-loss handling already removes an old registration without joining
+its startup. The old startup can later return an error. Its completion writes
+a whole daemon row using only status/runner guards and removes the local entry
+by task ID. This can rewind a new claim, erase its heartbeat registration, or
+release a replacement as if its startup had failed. Requesting cancellation
+does not revoke the old callback's references or prove its completion.
+
+The correction must enforce these invariants across the whole lifecycle:
+
+1. Capture `C` when work is admitted. Deferred completion must not obtain its
+   identity by rereading a mutable `daemonTask` or a newly queried catalog row.
+2. Durable completion matches the originating `C` and the expected control
+   status in the same SQL mutation. A prior successful ownership SELECT is not
+   sufficient. Zero matched rows means superseded work, not a new task failure.
+3. Updates have explicit field ownership. Error reporting changes error payload
+   and update time, not runner, heartbeat, or last-run. Restart-claim release
+   may clear runner/heartbeat and restore RestartRequested only under the
+   originating-claim CAS; it must not rewind last-run or unrelated metadata.
+4. Local detach and associated pause/control bookkeeping match both `L` and
+   `C`. Checking only the pointer misses same-object reuse; checking only the
+   task ID deletes another object. Validation and removal are atomic relative
+   to local claim publication, including the durable-CAS/local-publication gap.
+5. Attach and initial factory admission preserve the originating identity.
+   Reading current task configuration must not authorize an old factory to
+   borrow a replacement's claim or attach its routine to the replacement.
+6. Losing shared ownership does not suppress cleanup of resources exclusively
+   owned by the old execution. Conversely, cleanup must not clear replacement
+   lifecycle state. Successful CDC startup completion retains the existing
+   intentional registration behavior.
+
+### Correction scope and alternatives
+
+The selected direction is claim-scoped, field-specific mutations plus
+generation-conditional local registration changes. Reuse the existing
+microsecond claim token and matched-row semantics; no new catalog table,
+timestamp format, target lock, or row-processing work is needed. Apply the same
+contract to normal startup failure, fresh restart takeover failure, and
+Resume/Restart completion. Preserve the public legacy CDC behavior and audit
+shared non-CDC callers before changing an internal taskservice API.
+
+Rejected alternatives:
+
+- Pointer-conditional map removal alone leaves both durable ABA and
+  same-object generation reuse unprotected.
+- A local mutex alone cannot exclude other CNs, and a check followed by an
+  unfenced SQL write still has a takeover window.
+- Waiting for all old work before allowing takeover makes recovery depend on
+  the failed owner; timeout is not proof that old callbacks disappeared.
+- Whole-row writeback with only a claim predicate still rewinds a concurrent
+  heartbeat within the same claim. Field ownership is required as well.
+
+The implementation plan must resolve the exact admission/completion lock order
+before approval: neither cancellation nor heartbeat may wait behind downstream
+startup I/O, and a lifecycle operation must not join a worker whose completion
+needs a lock held by that operation. This remains a design-review item; the
+document does not assert that the current locks already satisfy it.
+
+### Acceptance map for the correction
+
+| Boundary | Required oracle |
+| --- | --- |
+| Normal start and fresh restart, old completion after same-CN ABA | replacement claim/status/heartbeat survive; replacement heartbeat succeeds |
+| Same object with a newer Resume/Restart claim | old callback cannot adopt the newer token or remove its registration |
+| Attach before/after supersession | only the originally admitted routine can publish into its own registration |
+| Concurrent heartbeat and error reporting within one claim | error updates preserve the newer heartbeat and unrelated metadata |
+| Current-owner success/failure and duplicate completion | intended status/retry outcome; one effective local cleanup owner |
+| PAUSE/CANCEL/Resume/Restart superseding a delayed callback | newer durable control request and its retry ownership survive |
+| SQL error, cancellation, and ambiguous completion result | no unfenced fallback or lease revival; bounded retry/cleanup ownership |
+| Claim admission between durable CAS and local publication | no false removal and no wait cycle between admission and completion |
+
+Extend the existing taskservice lifecycle fixtures with one row and barrier
+controlled callbacks, and reuse the embedded SQL claim test for real storage
+predicates and field preservation. Run focused tests, adaptive focused race
+repetitions, affected owning packages, and frontend consumer tests. On 55,
+validate the corrected service's stable snapshot, pause/resume/restart, and
+post-restart incremental progress with small exact source/target comparisons.
+Use deterministic injection for ABA; do not manufacture it by timing sleeps.
+
+No throughput gain is claimed for this correction. The performance constraint
+is no added per-row/per-batch work and no new polling loop, retained completion
+history, or blocking control-path dependency. The exact design revision and
+accountable independent approval must be recorded before implementing and
+delivering this correction; the whole PR's design gate remains open.
 
 ## Ownership and wait analysis
 
