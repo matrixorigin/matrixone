@@ -71,6 +71,10 @@ func IsSnapshotNotFound(err error) bool {
 	return errors.As(err, &target)
 }
 
+func NewSnapshotNotFoundError(ctx context.Context, snapshotName string) error {
+	return moerr.NewInvalidInputf(ctx, "snapshot '%s' not found", snapshotName)
+}
+
 func NewQueryBuilder(queryType plan.Query_StatementType, ctx CompilerContext, isPrepareStatement bool, skipStats bool) *QueryBuilder {
 	//
 	// There is a class of variables that controls SQL behavior.  To add such a variable, first
@@ -12010,64 +12014,15 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, t
 				currentAccountID = uint32(sub.AccountId)
 				builder.qry.Nodes[nodeID].NotCacheable = true
 			}
-			if currentAccountID != catalog.System_Account {
-				// add account filter for system table scan
-				if dbName == catalog.MO_CATALOG && tableName == catalog.MO_DATABASE {
-					modatabaseFilter := util.BuildMoDataBaseFilter(uint64(currentAccountID))
-					ctx.binder = NewWhereBinder(builder, ctx)
-					accountFilterExprs, err := splitAndBindCondition(modatabaseFilter, NoAlias, ctx)
-					if err != nil {
-						return 0, err
-					}
-					builder.qry.Nodes[nodeID].FilterList = accountFilterExprs
-				} else if dbName == catalog.MO_SYSTEM_METRICS && (tableName == catalog.MO_METRIC || tableName == catalog.MO_SQL_STMT_CU) {
-					motablesFilter := util.BuildSysMetricFilter(uint64(currentAccountID))
-					ctx.binder = NewWhereBinder(builder, ctx)
-					accountFilterExprs, err := splitAndBindCondition(motablesFilter, NoAlias, ctx)
-					if err != nil {
-						return 0, err
-					}
-					builder.qry.Nodes[nodeID].FilterList = accountFilterExprs
-				} else if dbName == catalog.MO_SYSTEM && tableName == catalog.MO_STATEMENT {
-					motablesFilter := util.BuildSysStatementInfoFilter(uint64(currentAccountID))
-					ctx.binder = NewWhereBinder(builder, ctx)
-					accountFilterExprs, err := splitAndBindCondition(motablesFilter, NoAlias, ctx)
-					if err != nil {
-						return 0, err
-					}
-					builder.qry.Nodes[nodeID].FilterList = accountFilterExprs
-				} else if dbName == catalog.MO_CATALOG && tableName == catalog.MO_TABLES {
-					motablesFilter := util.BuildMoTablesFilter(uint64(currentAccountID))
-					ctx.binder = NewWhereBinder(builder, ctx)
-					accountFilterExprs, err := splitAndBindCondition(motablesFilter, NoAlias, ctx)
-					if err != nil {
-						return 0, err
-					}
-					builder.qry.Nodes[nodeID].FilterList = accountFilterExprs
-				} else if dbName == catalog.MO_CATALOG && tableName == catalog.MO_COLUMNS {
-					moColumnsFilter := util.BuildMoColumnsFilter(uint64(currentAccountID))
-					ctx.binder = NewWhereBinder(builder, ctx)
-					accountFilterExprs, err := splitAndBindCondition(moColumnsFilter, NoAlias, ctx)
-					if err != nil {
-						return 0, err
-					}
-					builder.qry.Nodes[nodeID].FilterList = accountFilterExprs
-				} else if util.TableIsClusterTable(midNode.GetTableDef().GetTableType()) {
-					ctx.binder = NewWhereBinder(builder, ctx)
-					left := tree.NewUnresolvedColName(util.GetClusterTableAttributeName())
-					right := tree.NewNumVal(uint64(currentAccountID), strconv.Itoa(int(currentAccountID)), false, tree.P_uint64)
-					//account_id = the accountId of the non-sys account
-					accountFilter := &tree.ComparisonExpr{
-						Op:    tree.EQUAL,
-						Left:  left,
-						Right: right,
-					}
-					accountFilterExprs, err := splitAndBindCondition(accountFilter, NoAlias, ctx)
-					if err != nil {
-						return 0, err
-					}
-					builder.qry.Nodes[nodeID].FilterList = accountFilterExprs
+			if accountFilter := util.BuildTableScanAccountFilter(
+				currentAccountID, dbName, tableName, midNode.GetTableDef().GetTableType(),
+			); accountFilter != nil {
+				ctx.binder = NewWhereBinder(builder, ctx)
+				accountFilterExprs, err := splitAndBindCondition(accountFilter, NoAlias, ctx)
+				if err != nil {
+					return 0, err
 				}
+				builder.qry.Nodes[nodeID].FilterList = accountFilterExprs
 			}
 		}
 		return

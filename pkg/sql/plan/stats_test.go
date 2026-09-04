@@ -28,6 +28,59 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestStatsInfoUsableWithoutPersistedObjects(t *testing.T) {
+	for _, test := range []struct {
+		name  string
+		stats *pb.StatsInfo
+		want  bool
+	}{
+		{name: "missing"},
+		{name: "empty", stats: &pb.StatsInfo{}},
+		{name: "negative table count", stats: &pb.StatsInfo{TableCnt: -1}},
+		{name: "nan table count", stats: &pb.StatsInfo{TableCnt: math.NaN()}},
+		{name: "infinite table count", stats: &pb.StatsInfo{TableCnt: math.Inf(1)}},
+		{name: "persisted object with nan table count", stats: &pb.StatsInfo{
+			AccurateObjectNumber: 1, TableCnt: math.NaN(),
+		}},
+		{name: "completed empty table", stats: &pb.StatsInfo{TableName: "events"}, want: true},
+		{name: "persisted objects", stats: &pb.StatsInfo{AccurateObjectNumber: 1}, want: true},
+		{name: "committed rows before flush", stats: &pb.StatsInfo{TableCnt: 1}, want: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			require.Equal(t, test.want, StatsInfoUsable(test.stats))
+		})
+	}
+}
+
+type tableDefStatsTestCompilerContext struct {
+	*MockCompilerContext
+	stats       *pb.StatsInfo
+	gotTableDef *planpb.TableDef
+}
+
+func (c *tableDefStatsTestCompilerContext) StatsWithTableDef(
+	_ *planpb.ObjectRef,
+	tableDef *planpb.TableDef,
+	_ *Snapshot,
+) (*pb.StatsInfo, error) {
+	c.gotTableDef = tableDef
+	return c.stats, nil
+}
+
+func TestStatsForTableDefUsesVersionAwareCompilerContext(t *testing.T) {
+	tableDef := &planpb.TableDef{TblId: 42, Version: 7}
+	want := &pb.StatsInfo{TableCnt: 42}
+	ctx := &tableDefStatsTestCompilerContext{
+		MockCompilerContext: &MockCompilerContext{},
+		stats:               want,
+	}
+
+	got, err := statsForTableDef(ctx, &planpb.ObjectRef{Obj: 42}, tableDef, nil)
+	require.NoError(t, err)
+	require.Same(t, want, got)
+	require.Same(t, tableDef, ctx.gotTableDef)
+}
+
 func TestCalcBlockSelectivityUsingShuffleRangeBareColumn(t *testing.T) {
 	t.Run("bare column uses the generic overlap estimate", func(t *testing.T) {
 		expr := &planpb.Expr{

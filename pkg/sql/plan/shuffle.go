@@ -418,7 +418,7 @@ func reusableShuffleChild(
 		return nil, false
 	}
 	child := builder.qry.Nodes[childID]
-	if reusableJoinShuffleChild(col, child, builder, afterRemap) {
+	if reusableJoinShuffleChild(col, node, child, builder, afterRemap) {
 		return child, true
 	}
 	if child == nil || child.NodeType != plan.Node_AGG || child.Stats == nil ||
@@ -454,25 +454,37 @@ func reusableShuffleChild(
 	return child, true
 }
 
-// reusableJoinShuffleChild proves distribution lineage through a join whose
-// output preserves its logical left rows. A shuffled join remains partitioned
-// by its left equality key, so a following join on that exact output key can
-// reuse the distribution instead of falling back to a broadcast build.
+// reusableJoinShuffleChild proves both distribution lineage through a join and
+// that the resulting ownership scope satisfies the consumer. A shuffled join
+// remains partitioned by its logical-left equality key. Hybrid shuffle owns
+// that key only within each CN: another join can reuse it because its build side
+// is sent to every CN's matching bucket, but an aggregate needs one owner for
+// the key across the whole cluster.
 //
 // Keep this deliberately narrower than general equivalence propagation:
 // right/full preserving joins, expressions, and keys projected from the build
 // side fail closed because unmatched rows do not preserve those properties.
 func reusableJoinShuffleChild(
 	col *plan.ColRef,
+	consumer *plan.Node,
 	child *plan.Node,
 	builder *QueryBuilder,
 	afterRemap bool,
 ) bool {
-	if col == nil || child == nil || builder == nil || builder.qry == nil ||
-		builder.outerAntiPlanningDisabled() ||
+	if col == nil || consumer == nil || child == nil || builder == nil || builder.qry == nil ||
 		child.NodeType != plan.Node_JOIN || child.IsRightJoin ||
 		child.Stats == nil || child.Stats.HashmapStats == nil ||
 		!child.Stats.HashmapStats.Shuffle {
+		return false
+	}
+	// Join-chain lineage reuse belongs to the outer/ANTI rollout cohort.
+	// Aggregate reuse predates that cohort and keeps its established rollback
+	// behavior, subject to the stricter ownership check below.
+	if consumer.NodeType == plan.Node_JOIN && builder.outerAntiPlanningDisabled() {
+		return false
+	}
+	if consumer.NodeType == plan.Node_AGG &&
+		child.Stats.HashmapStats.ShuffleTypeForMultiCN == plan.ShuffleTypeForMultiCN_Hybrid {
 		return false
 	}
 	switch child.JoinType {
@@ -1365,26 +1377,6 @@ func determineShuffleForGroupBy(node *plan.Node, builder *QueryBuilder) {
 		}
 	}
 
-	//shuffle join-> shuffle group ,if they use the same hask key, the group can reuse the shuffle method
-	if child.NodeType == plan.Node_JOIN {
-		if node.Stats.HashmapStats.Shuffle && child.Stats.HashmapStats.Shuffle {
-			// shuffle group can reuse shuffle join
-			if node.Stats.HashmapStats.ShuffleType == child.Stats.HashmapStats.ShuffleType && node.Stats.HashmapStats.ShuffleTypeForMultiCN == child.Stats.HashmapStats.ShuffleTypeForMultiCN {
-				groupHashCol, _ := GetHashColumn(node.GroupBy[node.Stats.HashmapStats.ShuffleColIdx])
-				switch exprImpl := child.OnList[child.Stats.HashmapStats.ShuffleColIdx].Expr.(type) {
-				case *plan.Expr_F:
-					for _, arg := range exprImpl.F.Args {
-						joinHashCol, _ := GetHashColumn(arg)
-						if joinHashCol != nil && groupHashCol != nil && groupHashCol.RelPos == joinHashCol.RelPos && groupHashCol.ColPos == joinHashCol.ColPos {
-							node.Stats.HashmapStats.ShuffleMethod = plan.ShuffleMethod_Reuse
-							return
-						}
-					}
-				}
-			}
-		}
-	}
-
 }
 
 func countDistinctStateNDV(node *plan.Node, builder *QueryBuilder) float64 {
@@ -1581,7 +1573,11 @@ func determineShuffleMethod2(nodeID, parentID int32, builder *QueryBuilder) {
 
 	if node.NodeType == plan.Node_JOIN && node.Stats.HashmapStats.ShuffleTypeForMultiCN == plan.ShuffleTypeForMultiCN_Hybrid {
 		if parent.NodeType == plan.Node_AGG && parent.Stats.HashmapStats.ShuffleMethod == plan.ShuffleMethod_Reuse {
-			return
+			// Hybrid keeps the probe key local to each CN. It can feed another
+			// hybrid join, but a grouped aggregate needs one cluster-global owner
+			// for every key. Normalize stale or future invalid reuse decisions.
+			parent.Stats.HashmapStats.ShuffleMethod = plan.ShuffleMethod_Normal
+			parent.Stats.HashmapStats.ShuffleTypeForMultiCN = plan.ShuffleTypeForMultiCN_Simple
 		}
 		if node.Stats.HashmapStats.HashmapSize <= threshHoldForHybirdShuffle {
 			node.Stats.HashmapStats.Shuffle = false
