@@ -324,6 +324,11 @@ type CDCWatermarkUpdater struct {
 	cacheUncommitted map[WatermarkKey]types.TS // Write buffer, not yet persisted
 	cacheCommitting  map[WatermarkKey]types.TS // Being persisted to database
 	cacheCommitted   map[WatermarkKey]types.TS // Synchronized with database
+	// Stable-epoch updates carry the exact owner claim all the way to the
+	// asynchronous durable writer. This prevents a value buffered by a stale CN
+	// from being persisted after another owner takes over.
+	cacheUncommittedFence map[WatermarkKey]func(context.Context) error
+	cacheCommittingFence  map[WatermarkKey]func(context.Context) error
 
 	// Error metadata cache (similar to watermark cache)
 	// Cached in memory to avoid synchronous SQL queries in RecordError()
@@ -375,14 +380,16 @@ func NewCDCWatermarkUpdater(
 	opts ...UpdateOption,
 ) *CDCWatermarkUpdater {
 	u := &CDCWatermarkUpdater{
-		ie:                  ie,
-		cacheUncommitted:    make(map[WatermarkKey]types.TS),
-		cacheCommitting:     make(map[WatermarkKey]types.TS),
-		cacheCommitted:      make(map[WatermarkKey]types.TS),
-		errorMetadataCache:  make(map[WatermarkKey]*ErrorMetadata), // Initialize error cache
-		commitFailureCount:  make(map[WatermarkKey]uint32),
-		commitCircuitOpen:   make(map[WatermarkKey]time.Time),
-		previousErrorLabels: make(map[string]bool),
+		ie:                    ie,
+		cacheUncommitted:      make(map[WatermarkKey]types.TS),
+		cacheCommitting:       make(map[WatermarkKey]types.TS),
+		cacheCommitted:        make(map[WatermarkKey]types.TS),
+		cacheUncommittedFence: make(map[WatermarkKey]func(context.Context) error),
+		cacheCommittingFence:  make(map[WatermarkKey]func(context.Context) error),
+		errorMetadataCache:    make(map[WatermarkKey]*ErrorMetadata), // Initialize error cache
+		commitFailureCount:    make(map[WatermarkKey]uint32),
+		commitCircuitOpen:     make(map[WatermarkKey]time.Time),
+		previousErrorLabels:   make(map[string]bool),
 
 		getOrAddCommittedBuffer: make([]*UpdaterJob, 0, 100),
 		addCommittedBuffer:      make([]*UpdaterJob, 0, 100),
@@ -513,6 +520,8 @@ func (u *CDCWatermarkUpdater) onJobs(jobs ...any) {
 			}
 			delete(u.cacheUncommitted, *job.Key)
 			delete(u.cacheCommitting, *job.Key)
+			delete(u.cacheUncommittedFence, *job.Key)
+			delete(u.cacheCommittingFence, *job.Key)
 			delete(u.errorMetadataCache, *job.Key)
 			if openedAt, opened := u.commitCircuitOpen[*job.Key]; opened {
 				if time.Since(openedAt) < watermarkCircuitBreakPeriod {
@@ -721,7 +730,35 @@ func (u *CDCWatermarkUpdater) persistBatchUpdateWM() (errMsg string, err error) 
 			)
 		}
 		u.cacheCommitting[key] = watermark
+		if fence, ok := u.cacheUncommittedFence[key]; ok {
+			u.cacheCommittingFence[key] = fence
+		} else {
+			delete(u.cacheCommittingFence, key)
+		}
 		delete(u.cacheUncommitted, key)
+		delete(u.cacheUncommittedFence, key)
+	}
+	fences := make(map[WatermarkKey]func(context.Context) error, len(u.cacheCommittingFence))
+	for key, fence := range u.cacheCommittingFence {
+		fences[key] = fence
+	}
+	u.Unlock()
+
+	staleKeys := make([]WatermarkKey, 0)
+	for key, fence := range fences {
+		if fenceErr := fence(context.Background()); fenceErr != nil {
+			staleKeys = append(staleKeys, key)
+			logutil.Warn(
+				"cdc.watermark.commit.stale_owner_dropped",
+				zap.String("key", key.String()),
+				zap.Error(fenceErr),
+			)
+		}
+	}
+	u.Lock()
+	for _, key := range staleKeys {
+		delete(u.cacheCommitting, key)
+		delete(u.cacheCommittingFence, key)
 	}
 	committingCount := len(u.cacheCommitting)
 	commitSQLs := u.constructBatchUpdateWMSQLs(u.cacheCommitting)
@@ -761,6 +798,9 @@ func (u *CDCWatermarkUpdater) persistBatchUpdateWM() (errMsg string, err error) 
 				// keep newer watermark
 			} else {
 				u.cacheUncommitted[key] = watermark
+				if fence, ok := u.cacheCommittingFence[key]; ok {
+					u.cacheUncommittedFence[key] = fence
+				}
 			}
 			retry := u.commitFailureCount[key] + 1
 			u.commitFailureCount[key] = retry
@@ -797,6 +837,7 @@ func (u *CDCWatermarkUpdater) persistBatchUpdateWM() (errMsg string, err error) 
 	// clear the committing cache
 	for key := range u.cacheCommitting {
 		delete(u.cacheCommitting, key)
+		delete(u.cacheCommittingFence, key)
 	}
 	return
 }
@@ -1427,6 +1468,17 @@ func (u *CDCWatermarkUpdater) UpdateWatermarkErrMsg(
 // - Caller ensures data is committed BEFORE calling this method
 // - Even if this buffer operation "fails" (system crash), watermark stays behind (safe)
 // - Returning errors would complicate caller logic without improving consistency
+type watermarkOwnerFenceContextKey struct{}
+
+// WithWatermarkOwnerFence binds the exact daemon claim to an asynchronous
+// watermark update. The final SQL writer rechecks this same closure.
+func WithWatermarkOwnerFence(ctx context.Context, fence func(context.Context) error) context.Context {
+	if fence == nil {
+		return ctx
+	}
+	return context.WithValue(ctx, watermarkOwnerFenceContextKey{}, fence)
+}
+
 func (u *CDCWatermarkUpdater) UpdateWatermarkOnly(
 	ctx context.Context,
 	key *WatermarkKey,
@@ -1458,6 +1510,11 @@ func (u *CDCWatermarkUpdater) UpdateWatermarkOnly(
 
 	oldWatermark, hasOld := u.cacheUncommitted[*key]
 	u.cacheUncommitted[*key] = *watermark
+	if fence, ok := ctx.Value(watermarkOwnerFenceContextKey{}).(func(context.Context) error); ok {
+		u.cacheUncommittedFence[*key] = fence
+	} else {
+		delete(u.cacheUncommittedFence, *key)
+	}
 
 	// Record metrics: watermark update counter
 	tableLabel := key.String()
@@ -1514,6 +1571,8 @@ func (u *CDCWatermarkUpdater) removeCachedWMSynchronously(key *WatermarkKey, log
 	}
 	delete(u.cacheUncommitted, *key)
 	delete(u.cacheCommitting, *key)
+	delete(u.cacheUncommittedFence, *key)
+	delete(u.cacheCommittingFence, *key)
 	delete(u.errorMetadataCache, *key)
 	if openedAt, opened := u.commitCircuitOpen[*key]; opened {
 		if time.Since(openedAt) < watermarkCircuitBreakPeriod {
@@ -1953,6 +2012,8 @@ func (u *CDCWatermarkUpdater) wrapCronJob(job func(ctx context.Context)) func(ct
 					delete(u.cacheCommitted, key)
 					delete(u.cacheUncommitted, key)
 					delete(u.cacheCommitting, key)
+					delete(u.cacheUncommittedFence, key)
+					delete(u.cacheCommittingFence, key)
 					delete(u.errorMetadataCache, key)
 
 					// Clean up circuit breaker related caches
@@ -2201,7 +2262,13 @@ func (u *CDCWatermarkUpdater) cronRun(ctx context.Context) {
 	// move all watermarks from uncommitted to committing
 	for key, watermark := range u.cacheUncommitted {
 		u.cacheCommitting[key] = watermark
+		if fence, ok := u.cacheUncommittedFence[key]; ok {
+			u.cacheCommittingFence[key] = fence
+		} else {
+			delete(u.cacheCommittingFence, key)
+		}
 		delete(u.cacheUncommitted, key)
+		delete(u.cacheUncommittedFence, key)
 	}
 	u.Unlock()
 

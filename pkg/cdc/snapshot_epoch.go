@@ -16,6 +16,7 @@ package cdc
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strconv"
 	"strings"
@@ -30,6 +31,22 @@ import (
 
 const snapshotEpochPersistenceTimeout = 20 * time.Second
 
+// RetryableSnapshotEpochError means no durable epoch was visible after an
+// ambiguous catalog write. Retrying is safe: a successful but delayed INSERT
+// is discovered by the read-before-write path, while an uncommitted INSERT
+// simply attempts the same claim again.
+type RetryableSnapshotEpochError struct {
+	err error
+}
+
+func (e *RetryableSnapshotEpochError) Error() string { return e.err.Error() }
+func (e *RetryableSnapshotEpochError) Unwrap() error { return e.err }
+
+func IsRetryableSnapshotEpochError(err error) bool {
+	var retryable *RetryableSnapshotEpochError
+	return errors.As(err, &retryable)
+}
+
 // GetOrCreateInitialSnapshotEpoch returns the durable epoch for one source
 // table generation. It must complete before a reader may make a partial target
 // commit. Reusing the same source table ID preserves the old epoch across
@@ -42,16 +59,36 @@ func (u *CDCWatermarkUpdater) GetOrCreateInitialSnapshotEpoch(
 	sourceTableID uint64,
 	candidate types.TS,
 ) (types.TS, error) {
+	epoch, _, err := u.GetOrCreateInitialSnapshotEpochForGeneration(ctx, key, sourceTableID, candidate)
+	return epoch, err
+}
+
+// GetOrCreateInitialSnapshotEpochForGeneration also reports whether a durable
+// epoch exists for an older incarnation of the same logical table. Since every
+// bounded target commit is preceded by epoch persistence, that fact is the
+// durable signal that a fresh owner must reset the target before replaying the
+// new generation.
+func (u *CDCWatermarkUpdater) GetOrCreateInitialSnapshotEpochForGeneration(
+	ctx context.Context,
+	key *WatermarkKey,
+	sourceTableID uint64,
+	candidate types.TS,
+) (types.TS, bool, error) {
 	if sourceTableID == 0 || candidate.IsEmpty() || !candidate.Valid() {
-		return types.TS{}, moerr.NewInternalErrorf(
+		return types.TS{}, false, moerr.NewInternalErrorf(
 			ctx, "invalid CDC snapshot epoch candidate %s for source table %d",
 			candidate.ToString(), sourceTableID)
 	}
 
 	if epoch, ok, err := u.readInitialSnapshotEpoch(ctx, key, sourceTableID); err != nil {
-		return types.TS{}, err
+		return types.TS{}, false, err
 	} else if ok {
-		return epoch, nil
+		changed, err := u.hasOtherInitialSnapshotGeneration(ctx, key, sourceTableID)
+		return epoch, changed, err
+	}
+	changed, err := u.hasOtherInitialSnapshotGeneration(ctx, key, sourceTableID)
+	if err != nil {
+		return types.TS{}, false, err
 	}
 
 	persistCtx, cancel := context.WithTimeoutCause(
@@ -66,21 +103,41 @@ func (u *CDCWatermarkUpdater) GetOrCreateInitialSnapshotEpoch(
 		CDCSQLBuilder.InsertSnapshotEpochSQL(key, sourceTableID, candidate),
 		ie.SessionOverrideOptions{},
 	); err != nil {
-		// The INSERT result can be ambiguous. A retry first reads the durable row
-		// and therefore cannot select another epoch after a successful commit.
-		return types.TS{}, err
+		// The INSERT result can be ambiguous. Resolve a committed-but-lost
+		// response immediately; otherwise explicitly ask the detector to retry.
+		if epoch, ok, readErr := u.readInitialSnapshotEpoch(ctx, key, sourceTableID); readErr == nil && ok {
+			return epoch, changed, nil
+		} else if readErr != nil {
+			return types.TS{}, false, &RetryableSnapshotEpochError{err: errors.Join(err, readErr)}
+		}
+		return types.TS{}, false, &RetryableSnapshotEpochError{err: err}
 	}
 
 	epoch, ok, err := u.readInitialSnapshotEpoch(ctx, key, sourceTableID)
 	if err != nil {
-		return types.TS{}, err
+		return types.TS{}, false, err
 	}
 	if !ok {
-		return types.TS{}, moerr.NewInternalErrorf(
+		return types.TS{}, false, &RetryableSnapshotEpochError{err: moerr.NewInternalErrorf(
 			ctx, "CDC snapshot epoch was not durable for %s generation %d",
-			key.String(), sourceTableID)
+			key.String(), sourceTableID)}
 	}
-	return epoch, nil
+	return epoch, changed, nil
+}
+
+func (u *CDCWatermarkUpdater) hasOtherInitialSnapshotGeneration(
+	ctx context.Context,
+	key *WatermarkKey,
+	sourceTableID uint64,
+) (bool, error) {
+	readCtx, cancel := context.WithTimeoutCause(ctx, snapshotEpochPersistenceTimeout, moerr.CauseWatermarkRead)
+	defer cancel()
+	readCtx = defines.AttachAccountId(readCtx, catalog.System_Account)
+	res := u.ie.Query(readCtx, CDCSQLBuilder.HasOtherSnapshotGenerationSQL(key, sourceTableID), ie.SessionOverrideOptions{})
+	if err := res.Error(); err != nil {
+		return false, err
+	}
+	return res.RowCount() > 0, nil
 }
 
 func (u *CDCWatermarkUpdater) readInitialSnapshotEpoch(
@@ -139,6 +196,10 @@ func parseInitialSnapshotEpoch(value string) (types.TS, error) {
 
 func (b cdcSQLBuilder) GetSnapshotEpochSQL(key *WatermarkKey, sourceTableID uint64) string {
 	return fmt.Sprintf("SELECT snapshot_epoch FROM `mo_catalog`.`mo_cdc_snapshot` WHERE account_id = %d AND task_id = '%s' AND db_name = '%s' AND table_name = '%s' AND source_table_id = %d", key.AccountId, escapeSQLString(key.TaskId), escapeSQLString(key.DBName), escapeSQLString(key.TableName), sourceTableID)
+}
+
+func (b cdcSQLBuilder) HasOtherSnapshotGenerationSQL(key *WatermarkKey, sourceTableID uint64) string {
+	return fmt.Sprintf("SELECT source_table_id FROM `mo_catalog`.`mo_cdc_snapshot` WHERE account_id = %d AND task_id = '%s' AND db_name = '%s' AND table_name = '%s' AND source_table_id <> %d LIMIT 1", key.AccountId, escapeSQLString(key.TaskId), escapeSQLString(key.DBName), escapeSQLString(key.TableName), sourceTableID)
 }
 
 func (b cdcSQLBuilder) InsertSnapshotEpochSQL(key *WatermarkKey, sourceTableID uint64, epoch types.TS) string {

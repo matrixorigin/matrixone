@@ -467,8 +467,11 @@ func (dp *DataProcessor) processNoMoreData(ctx context.Context) error {
 			zap.String("to-ts", dp.toTs.ToString()),
 		)
 
+		if err := dp.txnManager.checkOwnerFence(ctx); err != nil {
+			return err
+		}
 		if err := dp.txnManager.watermarkUpdater.UpdateWatermarkOnly(
-			ctx,
+			WithWatermarkOwnerFence(ctx, dp.txnManager.ownerFence),
 			dp.txnManager.watermarkKey,
 			&dp.toTs,
 		); err != nil {

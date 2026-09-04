@@ -41,7 +41,14 @@ var NewSinker = func(
 		return NewConsoleSinker(dbTblInfo, watermarkUpdater), nil
 	}
 
-	// Use the new v2 architecture
+	if ownerFence := dbTblInfo.OwnerFence(); ownerFence != nil {
+		return createMysqlSinker2(
+			sinkUri, accountId, taskId, dbTblInfo, watermarkUpdater, tableDef,
+			retryTimes, retryDuration, ar, maxSqlLength, sendSqlTimeout, ownerFence,
+		)
+	}
+
+	// Retain the mockable entry point for legacy callers and unit tests.
 	return CreateMysqlSinker2(
 		sinkUri,
 		accountId,

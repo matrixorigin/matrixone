@@ -107,6 +107,9 @@ func CDCTaskExecutorFactory(
 			txnEngine,
 			CDCExeutorAllocator,
 		)
+		claimTask := tasks[0]
+		exec.claimTask = &claimTask
+		exec.taskService = ts
 		// Restart timeout persistence is a control-plane path. It must use a
 		// fresh executor so it cannot queue behind the serialized executor held
 		// by the Start attempt that just timed out.
@@ -142,6 +145,8 @@ type CDCTaskExecutor struct {
 	ie     ie.InternalExecutor
 
 	cnUUID      string
+	claimTask   *task.DaemonTask
+	taskService taskservice.TaskService
 	cnTxnClient client.TxnClient
 	cnEngine    engine.Engine
 	fileService fileservice.FileService
@@ -610,6 +615,18 @@ func NewCDCTaskExecutor(
 	}
 	task.startFunc = task.Start
 	return task
+}
+
+// fenceDaemonClaim renews the exact daemon-task claim captured by the
+// executor factory. Taskservice matches runner and the last-run claim
+// generation, so a superseded executor fails closed before durable output.
+func (exec *CDCTaskExecutor) fenceDaemonClaim(ctx context.Context) error {
+	if exec.claimTask == nil || exec.taskService == nil {
+		return nil
+	}
+	fenceCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	return exec.taskService.HeartbeatDaemonTask(fenceCtx, *exec.claimTask)
 }
 
 func (exec *CDCTaskExecutor) Start(rootCtx context.Context) (err error) {
@@ -2593,7 +2610,7 @@ func (exec *CDCTaskExecutor) handleNewTablesForGeneration(
 					TableName: newTableInfo.SourceTblName,
 				}
 				errorCtx := &cdc.ErrorContext{
-					IsRetryable: false, // Pipeline creation errors are not retryable by default
+					IsRetryable: cdc.IsRetryableSnapshotEpochError(err),
 				}
 				if updateErr := exec.watermarkUpdater.UpdateWatermarkErrMsg(ctx, &watermarkKey, err.Error(), errorCtx); updateErr != nil {
 					logutil.Warn(
@@ -2881,6 +2898,10 @@ func (exec *CDCTaskExecutor) addExecPipelineForTable(
 		TableName: info.SourceTblName,
 	}
 	var initialSnapshotEpoch types.TS
+	var ownerFence func(context.Context) error
+	if exec.stableInitialSnapshot {
+		ownerFence = exec.fenceDaemonClaim
+	}
 	if watermark, err = exec.watermarkUpdater.GetOrAddCommitted(
 		ctx,
 		&watermarkKey,
@@ -2889,8 +2910,12 @@ func (exec *CDCTaskExecutor) addExecPipelineForTable(
 		return err
 	}
 	if exec.stableInitialSnapshot && watermark.IsEmpty() && !exec.noFull && exec.startTs.IsEmpty() {
+		if err = ownerFence(ctx); err != nil {
+			return err
+		}
 		candidate := types.TimestampToTS(txnOp.SnapshotTS())
-		initialSnapshotEpoch, err = exec.watermarkUpdater.GetOrCreateInitialSnapshotEpoch(
+		var generationChanged bool
+		initialSnapshotEpoch, generationChanged, err = exec.watermarkUpdater.GetOrCreateInitialSnapshotEpochForGeneration(
 			ctx,
 			&watermarkKey,
 			info.SourceTblId,
@@ -2899,6 +2924,7 @@ func (exec *CDCTaskExecutor) addExecPipelineForTable(
 		if err != nil {
 			return err
 		}
+		info.IdChanged = info.IdChanged || generationChanged
 	}
 
 	// Note: Do NOT clear err_msg here
@@ -2918,6 +2944,7 @@ func (exec *CDCTaskExecutor) addExecPipelineForTable(
 	if routine == nil {
 		return moerr.NewInternalErrorNoCtx("CDC active routine is not initialized")
 	}
+	info.SetOwnerFence(ownerFence)
 
 	// step 2. new sinker
 	sinker, err := cdc.NewSinker(
@@ -2933,6 +2960,7 @@ func (exec *CDCTaskExecutor) addExecPipelineForTable(
 		uint64(exec.additionalConfig[cdc.CDCTaskExtraOptions_MaxSqlLength].(float64)),
 		exec.additionalConfig[cdc.CDCTaskExtraOptions_SendSqlTimeout].(string),
 	)
+	info.SetOwnerFence(nil)
 	if err != nil {
 		return err
 	}
@@ -2966,6 +2994,7 @@ func (exec *CDCTaskExecutor) addExecPipelineForTable(
 		frequency,
 		cdc.WithInitialSnapshotLimiter(exec.initialSnapshotLimiter),
 		cdc.WithInitialSnapshotEpoch(initialSnapshotEpoch),
+		cdc.WithOwnerFence(ownerFence),
 	)
 
 	// step 4. start goroutines (sinker first, then reader)

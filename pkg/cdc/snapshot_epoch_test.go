@@ -16,12 +16,14 @@ package cdc
 
 import (
 	"context"
+	"errors"
 	"regexp"
 	"strconv"
 	"strings"
 	"sync"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	ie "github.com/matrixorigin/matrixone/pkg/util/internalExecutor"
 	"github.com/stretchr/testify/require"
@@ -32,11 +34,14 @@ type snapshotEpochTestExecutor struct {
 	epochs            map[uint64]string
 	waitForTwoInserts chan struct{}
 	barrierOnce       sync.Once
+	insertErr         error
+	commitOnInsertErr bool
 }
 
 var (
 	snapshotEpochSelectID = regexp.MustCompile("source_table_id = ([0-9]+)$")
 	snapshotEpochDeleteID = regexp.MustCompile("source_table_id <> ([0-9]+)$")
+	snapshotEpochOtherID  = regexp.MustCompile("source_table_id <> ([0-9]+) LIMIT 1$")
 	snapshotEpochInsert   = regexp.MustCompile(
 		"VALUES \\([0-9]+, '[^']*', '[^']*', '[^']*', ([0-9]+), '([^']+)'\\)(?: ON DUPLICATE KEY UPDATE.*)?$")
 )
@@ -78,14 +83,20 @@ func (e *snapshotEpochTestExecutor) Exec(
 			return err
 		}
 		e.mu.Lock()
+		if e.insertErr != nil && !e.commitOnInsertErr {
+			err := e.insertErr
+			e.mu.Unlock()
+			return err
+		}
 		if _, ok := e.epochs[tableID]; !ok {
 			e.epochs[tableID] = match[2]
 		}
 		if e.waitForTwoInserts != nil && len(e.epochs) == 2 {
 			e.barrierOnce.Do(func() { close(e.waitForTwoInserts) })
 		}
+		err = e.insertErr
 		e.mu.Unlock()
-		return nil
+		return err
 	default:
 		return strconv.ErrSyntax
 	}
@@ -96,6 +107,20 @@ func (e *snapshotEpochTestExecutor) Query(
 	sql string,
 	_ ie.SessionOverrideOptions,
 ) ie.InternalExecResult {
+	if match := snapshotEpochOtherID.FindStringSubmatch(sql); len(match) == 2 {
+		tableID, err := strconv.ParseUint(match[1], 10, 64)
+		if err != nil {
+			return &InternalExecResultForTest{err: err}
+		}
+		e.mu.Lock()
+		defer e.mu.Unlock()
+		for existingID := range e.epochs {
+			if existingID != tableID {
+				return &InternalExecResultForTest{resultSet: &MysqlResultSetForTest{Data: [][]interface{}{{existingID}}}}
+			}
+		}
+		return &InternalExecResultForTest{resultSet: &MysqlResultSetForTest{}}
+	}
 	match := snapshotEpochSelectID.FindStringSubmatch(sql)
 	if len(match) != 2 {
 		return &InternalExecResultForTest{err: strconv.ErrSyntax}
@@ -139,9 +164,10 @@ func TestInitialSnapshotEpochPersistsPerTableGeneration(t *testing.T) {
 	later := types.BuildTS(900, 8)
 
 	updater := NewCDCWatermarkUpdater(t.Name(), executor)
-	epoch, err := updater.GetOrCreateInitialSnapshotEpoch(
+	epoch, changed, err := updater.GetOrCreateInitialSnapshotEpochForGeneration(
 		context.Background(), key, 11, first)
 	require.NoError(t, err)
+	require.False(t, changed)
 	require.Equal(t, first, epoch)
 	stored, ok := executor.epoch(11)
 	require.True(t, ok)
@@ -150,9 +176,10 @@ func TestInitialSnapshotEpochPersistsPerTableGeneration(t *testing.T) {
 	// A restart after an intermediate target commit must not select the newer
 	// candidate. A new updater models the new executor process with no cache.
 	restarted := NewCDCWatermarkUpdater(t.Name()+"-restart", executor)
-	epoch, err = restarted.GetOrCreateInitialSnapshotEpoch(
+	epoch, changed, err = restarted.GetOrCreateInitialSnapshotEpochForGeneration(
 		context.Background(), key, 11, later)
 	require.NoError(t, err)
+	require.False(t, changed)
 	require.Equal(t, first, epoch)
 	stored, ok = executor.epoch(11)
 	require.True(t, ok)
@@ -161,9 +188,10 @@ func TestInitialSnapshotEpochPersistsPerTableGeneration(t *testing.T) {
 	// Recreating or truncating the table changes its source ID. The retired
 	// generation remains as an immutable retry anchor while the new generation
 	// receives a fresh epoch. Task cancellation/drop cleans up both rows.
-	epoch, err = restarted.GetOrCreateInitialSnapshotEpoch(
+	epoch, changed, err = restarted.GetOrCreateInitialSnapshotEpochForGeneration(
 		context.Background(), key, 12, later)
 	require.NoError(t, err)
+	require.True(t, changed, "a fresh owner must reset target rows from the retired generation")
 	require.Equal(t, later, epoch)
 	stored, ok = executor.epoch(12)
 	require.True(t, ok)
@@ -171,6 +199,30 @@ func TestInitialSnapshotEpochPersistsPerTableGeneration(t *testing.T) {
 	stored, ok = executor.epoch(11)
 	require.True(t, ok)
 	require.Equal(t, first.ToString(), stored)
+}
+
+func TestInitialSnapshotEpochAmbiguousInsertRecovery(t *testing.T) {
+	key := &WatermarkKey{AccountId: 7, TaskId: "task", DBName: "db", TableName: "tbl"}
+	candidate := types.BuildTS(100, 3)
+
+	t.Run("committed response lost", func(t *testing.T) {
+		executor := newSnapshotEpochTestExecutor()
+		executor.insertErr = errors.New("connection lost")
+		executor.commitOnInsertErr = true
+		updater := NewCDCWatermarkUpdater(t.Name(), executor)
+		epoch, err := updater.GetOrCreateInitialSnapshotEpoch(context.Background(), key, 11, candidate)
+		require.NoError(t, err)
+		require.Equal(t, candidate, epoch)
+	})
+
+	t.Run("not committed remains retryable", func(t *testing.T) {
+		executor := newSnapshotEpochTestExecutor()
+		executor.insertErr = errors.New("write rejected")
+		updater := NewCDCWatermarkUpdater(t.Name(), executor)
+		_, err := updater.GetOrCreateInitialSnapshotEpoch(context.Background(), key, 11, candidate)
+		require.Error(t, err)
+		require.True(t, IsRetryableSnapshotEpochError(err))
+	})
 }
 
 func TestInitialSnapshotEpochOverlappingGenerationsDoNotEraseRetryAnchors(t *testing.T) {
@@ -233,4 +285,23 @@ func TestSnapshotEpochSQLUsesEscapedKeys(t *testing.T) {
 	require.Contains(t, sql, "table_name = 't''bl'")
 	require.Contains(t, CDCSQLBuilder.InsertSnapshotEpochSQL(key, 9, types.BuildTS(10, 1)), "ON DUPLICATE KEY UPDATE snapshot_epoch = snapshot_epoch")
 	require.Contains(t, CDCSQLBuilder.DeleteOrphanSnapshotEpochSQL(), "LEFT JOIN `mo_catalog`.`mo_cdc_task`")
+}
+
+func TestBufferedWatermarkFromSupersededOwnerIsDropped(t *testing.T) {
+	executor := newSnapshotEpochTestExecutor()
+	updater := NewCDCWatermarkUpdater(t.Name(), executor)
+	key := &WatermarkKey{AccountId: 7, TaskId: "task", DBName: "db", TableName: "tbl"}
+	watermark := types.BuildTS(200, 1)
+	fenceChecks := 0
+	ctx := WithWatermarkOwnerFence(context.Background(), func(ctx context.Context) error {
+		fenceChecks++
+		return moerr.NewInvalidTask(ctx, "old-cn", 1)
+	})
+	require.NoError(t, updater.UpdateWatermarkOnly(ctx, key, &watermark))
+	updater.committingBuffer = append(updater.committingBuffer, NewCommittingWMJob(context.Background()))
+	_, err := updater.execBatchUpdateWM()
+	require.NoError(t, err)
+	require.Equal(t, 1, fenceChecks)
+	_, exists := updater.cacheCommitted[*key]
+	require.False(t, exists)
 }

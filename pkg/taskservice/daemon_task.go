@@ -1230,6 +1230,10 @@ func (r *taskRunner) startDaemonTask(ctx context.Context, dt *daemonTask, restar
 	t.TaskRunner = r.runnerID
 	t.TaskStatus = task.TaskStatus_Running
 	nowTime := time.Now()
+	// LastRun is the durable claim generation used to fence stale daemon
+	// owners. Keep it strictly monotonic even if this runner's wall clock moved
+	// backwards. MO timestamps preserve microseconds in sys_daemon_task.
+	nowTime = nextDaemonClaimTime(t.LastRun, nowTime)
 	t.UpdateAt = nowTime
 	t.LastRun = nowTime
 
@@ -1266,6 +1270,13 @@ func (r *taskRunner) startDaemonTask(ctx context.Context, dt *daemonTask, restar
 	dt.task = t
 	r.addDaemonTask(dt)
 	return true, nil
+}
+
+func nextDaemonClaimTime(previous, now time.Time) time.Time {
+	if now.After(previous) {
+		return now
+	}
+	return previous.Add(time.Microsecond)
 }
 
 func (r *taskRunner) setDaemonTaskError(ctx context.Context, dt *daemonTask, errMsg error) {

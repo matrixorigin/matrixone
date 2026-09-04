@@ -563,6 +563,10 @@ func (s *memTaskStorage) HeartbeatDaemonTask(ctx context.Context, tasks []task.D
 	n := 0
 	for _, t := range tasks {
 		if current, ok := s.daemonTasks[t.ID]; ok {
+			if current.TaskRunner != t.TaskRunner ||
+				!current.LastRun.Equal(t.LastRun) {
+				continue
+			}
 			n++
 			current.LastHeartbeat = t.LastHeartbeat
 			s.daemonTasks[t.ID] = current

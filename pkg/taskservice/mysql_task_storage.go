@@ -154,7 +154,7 @@ var (
 		"update_at=?, " +
 		"end_at=? where task_id=?"
 
-	heartbeatDaemonTask = "update sys_daemon_task set last_heartbeat=? where task_id=?"
+	heartbeatDaemonTask = "update sys_daemon_task set last_heartbeat=? where task_id=? and task_runner=? and last_run=?"
 
 	deleteDaemonTask = "delete from sys_daemon_task where 1=1"
 
@@ -1901,6 +1901,8 @@ func (m *mysqlTaskStorage) HeartbeatDaemonTask(ctx context.Context, tasks []task
 			exec, err := tx.ExecContext(ctx, heartbeatDaemonTask,
 				lastHeartbeat,
 				t.ID,
+				t.TaskRunner,
+				t.LastRun,
 			)
 			if err != nil {
 				return err

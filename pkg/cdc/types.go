@@ -335,6 +335,18 @@ type DbTableInfo struct {
 	SinkTblName string
 
 	IdChanged bool
+
+	// ownerFence is execution-local and deliberately excluded from Clone and
+	// all persisted table metadata. It protects target initialization DDL.
+	ownerFence func(context.Context) error
+}
+
+func (info *DbTableInfo) SetOwnerFence(fence func(context.Context) error) {
+	info.ownerFence = fence
+}
+
+func (info *DbTableInfo) OwnerFence() func(context.Context) error {
+	return info.ownerFence
 }
 
 func (info DbTableInfo) String() string {

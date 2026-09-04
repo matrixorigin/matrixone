@@ -41,6 +41,7 @@ type TransactionManager struct {
 	sinker           Sinker
 	watermarkUpdater WatermarkUpdater
 	watermarkKey     *WatermarkKey
+	ownerFence       func(context.Context) error
 
 	// Protects tracker and transactional state transitions
 	mu sync.Mutex
@@ -53,6 +54,19 @@ type TransactionManager struct {
 	taskId    string
 	dbName    string
 	tableName string
+}
+
+// SetOwnerFence installs the durable daemon-claim check used by stable-epoch
+// tasks. Legacy/direct users leave it nil.
+func (tm *TransactionManager) SetOwnerFence(fence func(context.Context) error) {
+	tm.ownerFence = fence
+}
+
+func (tm *TransactionManager) checkOwnerFence(ctx context.Context) error {
+	if tm.ownerFence == nil {
+		return nil
+	}
+	return tm.ownerFence(ctx)
 }
 
 // NewTransactionManager creates a new transaction manager
@@ -203,6 +217,12 @@ func (tm *TransactionManager) commitLocked(ctx context.Context, updateWatermark 
 		zap.String("to-ts", toTs.ToString()),
 	)
 
+	// Renew and validate the exact daemon-task claim immediately before the
+	// irreversible target commit. A stale owner must fail here after takeover.
+	if err := tm.checkOwnerFence(ctx); err != nil {
+		return err
+	}
+
 	// Step 1: Send COMMIT to sinker
 	tm.sinker.SendCommit()
 	// Send dummy to ensure COMMIT is sent
@@ -223,11 +243,16 @@ func (tm *TransactionManager) commitLocked(ctx context.Context, updateWatermark 
 	}
 
 	if updateWatermark {
+		// Revalidate after the target commit as well. If ownership changed while
+		// the commit was in flight, leaving the watermark behind is retry-safe.
+		if err := tm.checkOwnerFence(ctx); err != nil {
+			return err
+		}
 		// Step 2: Update watermark (persistent proof of success). This MUST
 		// happen before marking the tracker as committed. Intermediate snapshot
 		// groups deliberately skip this step.
 		if err := tm.watermarkUpdater.UpdateWatermarkOnly(
-			ctx,
+			WithWatermarkOwnerFence(ctx, tm.ownerFence),
 			tm.watermarkKey,
 			&toTs,
 		); err != nil {

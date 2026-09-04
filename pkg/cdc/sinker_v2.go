@@ -118,6 +118,26 @@ var CreateMysqlSinker2 = func(
 	maxSqlLength uint64,
 	sendSqlTimeout string,
 ) (Sinker, error) {
+	return createMysqlSinker2(
+		sinkUri, accountId, taskId, dbTblInfo, watermarkUpdater, tableDef,
+		retryTimes, retryDuration, ar, maxSqlLength, sendSqlTimeout, nil,
+	)
+}
+
+func createMysqlSinker2(
+	sinkUri UriInfo,
+	accountId uint64,
+	taskId string,
+	dbTblInfo *DbTableInfo,
+	watermarkUpdater *CDCWatermarkUpdater,
+	tableDef *plan.TableDef,
+	retryTimes int,
+	retryDuration time.Duration,
+	ar *ActiveRoutine,
+	maxSqlLength uint64,
+	sendSqlTimeout string,
+	ownerFence func(context.Context) error,
+) (Sinker, error) {
 	// 1. Determine if we need to record transactions for debugging
 	var doRecord bool
 	if tableDef != nil {
@@ -147,6 +167,12 @@ var CreateMysqlSinker2 = func(
 
 	// CREATE DATABASE
 	createDbSQL := fmt.Sprintf("CREATE DATABASE IF NOT EXISTS `%s`", dbTblInfo.SinkDbName)
+	if ownerFence != nil {
+		if err = ownerFence(ctx); err != nil {
+			executor.Close()
+			return nil, err
+		}
+	}
 	err = executor.ExecSQL(ctx, ar, addPadding(createDbSQL), false)
 	if err != nil {
 		executor.Close()
@@ -155,6 +181,12 @@ var CreateMysqlSinker2 = func(
 
 	// USE DATABASE
 	useDbSQL := fmt.Sprintf("USE `%s`", dbTblInfo.SinkDbName)
+	if ownerFence != nil {
+		if err = ownerFence(ctx); err != nil {
+			executor.Close()
+			return nil, err
+		}
+	}
 	err = executor.ExecSQL(ctx, ar, addPadding(useDbSQL), false)
 	if err != nil {
 		executor.Close()
@@ -164,6 +196,12 @@ var CreateMysqlSinker2 = func(
 	// DROP TABLE if table ID changed (truncate scenario)
 	if dbTblInfo.IdChanged {
 		dropTableSQL := fmt.Sprintf("DROP TABLE IF EXISTS `%s`", dbTblInfo.SinkTblName)
+		if ownerFence != nil {
+			if err = ownerFence(ctx); err != nil {
+				executor.Close()
+				return nil, err
+			}
+		}
 		err = executor.ExecSQL(ctx, ar, addPadding(dropTableSQL), false)
 		if err != nil {
 			executor.Close()
@@ -198,6 +236,12 @@ var CreateMysqlSinker2 = func(
 		createSql = strings.Replace(createSql, "CREATE TABLE", "CREATE TABLE IF NOT EXISTS", 1)
 	}
 
+	if ownerFence != nil {
+		if err = ownerFence(ctx); err != nil {
+			executor.Close()
+			return nil, err
+		}
+	}
 	err = executor.ExecSQL(ctx, ar, addPadding(createSql), false)
 	if err != nil {
 		executor.Close()

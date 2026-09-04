@@ -47,6 +47,18 @@ The implementation must maintain all of these invariants:
    executor code that old CNs do not register, so an old CN cannot claim a task
    after bounded groups have committed. Unmarked legacy tasks retain the atomic
    path; the implementation never guesses an epoch for a partial legacy task.
+8. **Claim ownership is fenced:** every target commit and watermark publication
+   renews the exact persisted `(task_runner, last_run)` daemon claim. A prior
+   owner cannot renew that claim or publish durable output after takeover.
+   The claim travels with asynchronously buffered watermarks and is rechecked
+   by the final SQL writer, not only by the reader goroutine.
+9. **Logical generation changes are durable:** an epoch for a different source
+   table ID is durable evidence that a fresh owner must reset the target before
+   replaying the newly discovered generation.
+
+Claim validation is bounded to five seconds and is also performed immediately
+before target initialization DDL, including the generation-change DROP/CREATE.
+Legacy atomic tasks do not pay this additional control-plane round trip.
 
 ## Protocol
 
@@ -67,8 +79,10 @@ at the time that table generation is discovered, not `task_create_time`.
 `mo_catalog.mo_cdc_snapshot` stores it under
 `(account_id, task_id, db_name, table_name, source_table_id)`. A restart of the
 same source table ID reuses the persisted value even if the new transaction has
-a later snapshot. A recreated source table has a new ID, so the retired logical-
-table row is replaced with a fresh epoch before the new pipeline is published.
+a later snapshot. A recreated source table has a new ID, so a fresh epoch is
+stored alongside the retired generation before the new pipeline is published.
+Finding the retired epoch forces target reset even when a fresh owner has no
+detector memory.
 This permits wildcard/database tasks to discover tables long after task creation
 without reading before the table existed or outside retained history.
 
@@ -80,10 +94,12 @@ For a marked task with `InitSnapshotSplitTxn=true` and an empty watermark:
    avoids reading a future timestamp after restart or under clock skew.
 3. Open source changes at exactly `S` (capped by an explicit `EndTs`).
 4. Begin a target transaction and stream snapshot batches into it.
-5. Before adding a batch that would cross either group limit, commit the current
-   group without updating the watermark, then begin a new target transaction.
+5. Before adding a batch that would cross either group limit, validate and renew
+   the exact daemon claim, commit the current group without updating the
+   watermark, then begin a new target transaction.
 6. On `NoMoreData`, commit the final group and update the watermark to `S`. For
-   an empty table, update only the watermark.
+   an empty table, update only the watermark. Revalidate the claim before both
+   the target commit and watermark publication.
 7. Subsequent rounds use the ordinary dynamic transaction snapshot and process
    the incremental interval after `S`.
 
@@ -107,7 +123,9 @@ configuration says split.
 | New CN disappears after a bounded group; old CN polls the task | Partial snapshot `S` | Empty | Old CN cannot resolve `InitCdcStableEpoch` and does not claim; a capable CN replays `S` |
 | Wildcard task discovers a table after task creation or retention expiry | None for the new table | Empty | Persist that table generation's current snapshot and begin at that epoch, independent of task creation time |
 | Table is dropped and recreated under the same logical name | Prior generation may have completed or failed | Old logical-table watermark is replaced by detector lifecycle | Persist a distinct epoch for the new source-table ID; retain both generation rows until terminal task cleanup so overlapping owners cannot erase either retry anchor |
-| Epoch INSERT reports an ambiguous failure | No reader has started for that generation | Empty | Retry reads the durable row first; it reuses a committed epoch or safely chooses a candidate if none committed |
+| Fresh owner discovers a recreated table after an old generation partially committed | Rows from the retired generation may exist | Empty | The retired durable epoch forces DROP/recreate before the new generation is replayed |
+| Old owner resumes after a capable owner takes over | New owner may already have completed | Empty or advanced | Runner/last-run claim renewal fails before target commit or watermark publication; the old owner fails closed |
+| Epoch INSERT reports an ambiguous failure | No reader has started for that generation | Empty | Immediately reread the durable row; reuse it if committed, otherwise classify the failure as retryable so the detector attempts the claim again |
 | Task is restarted | Existing target data and partial snapshot groups remain | Preserve checkpoint metadata | Retain and reuse every table-generation epoch exactly like its watermark; restart must never choose a new epoch after a partial target commit |
 | Task is cancelled or deleted | Existing target data follows task command semantics | Task metadata is removed | Delete all table-generation epochs with task watermarks; periodic orphan cleanup removes rows whose task no longer exists |
 
@@ -162,6 +180,12 @@ Deterministic tests must prove:
 - legacy tasks use the atomic compatibility path;
 - new-CN partial commit plus DELETE/PK change cannot be claimed by a legacy
   executor and converges exactly after a capable-CN handoff;
+- partial old generation, CN exit, source recreation, and fresh capable-owner
+  discovery forces target reset and converges to the new generation;
+- after owner B takes over and completes, resumed owner A cannot commit target
+  data or regress the watermark;
+- ambiguous epoch INSERT tests cover both committed-response-lost and
+  definitely-not-committed outcomes;
 - a wildcard task that discovers a table after the task epoch is outside
   retention selects a current table-generation epoch, reuses it after an
   intermediate commit and restart, applies DELETE/PK-change tail mutations,

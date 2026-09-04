@@ -176,6 +176,7 @@ type tableChangeStreamOptions struct {
 	retryBackoffFactor        float64       // Factor for exponential backoff
 	initialSnapshotLimiter    *InitialSnapshotLimiter
 	initialSnapshotEpoch      types.TS
+	ownerFence                func(context.Context) error
 }
 
 const (
@@ -261,6 +262,14 @@ func WithInitialSnapshotEpoch(epoch types.TS) TableChangeStreamOption {
 	}
 }
 
+// WithOwnerFence checks that this stream still owns the exact daemon-task
+// claim before target commits and watermark publication.
+func WithOwnerFence(fence func(context.Context) error) TableChangeStreamOption {
+	return func(opts *tableChangeStreamOptions) {
+		opts.ownerFence = fence
+	}
+}
+
 // NewTableChangeStream creates a new table change stream
 var NewTableChangeStream = func(
 	cnTxnClient client.TxnClient,
@@ -310,6 +319,7 @@ var NewTableChangeStream = func(
 		tableInfo.SourceDbName,
 		tableInfo.SourceTblName,
 	)
+	txnManager.SetOwnerFence(opts.ownerFence)
 
 	// Calculate column indices
 	// batch columns layout:

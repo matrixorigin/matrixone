@@ -386,6 +386,41 @@ func TestTransactionManager_CommitTransactionWithoutWatermark(t *testing.T) {
 	require.Error(t, err)
 }
 
+func TestTransactionManagerOwnerFence(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("takeover before commit blocks target", func(t *testing.T) {
+		sinker := &mockSinker{}
+		updater := newMockWatermarkUpdater()
+		tm := NewTransactionManager(sinker, updater, 1, "task1", "db1", "table1")
+		tm.SetOwnerFence(func(fenceCtx context.Context) error {
+			return moerr.NewInvalidTask(fenceCtx, "old-owner", 1)
+		})
+		require.NoError(t, tm.BeginTransaction(ctx, types.TS{}, types.BuildTS(2, 0)))
+		require.Error(t, tm.CommitTransaction(ctx))
+		require.False(t, sinker.commitCalled)
+		require.False(t, updater.updateCalled)
+	})
+
+	t.Run("takeover during commit blocks watermark", func(t *testing.T) {
+		sinker := &mockSinker{}
+		updater := newMockWatermarkUpdater()
+		tm := NewTransactionManager(sinker, updater, 1, "task1", "db1", "table1")
+		checks := 0
+		tm.SetOwnerFence(func(fenceCtx context.Context) error {
+			checks++
+			if checks == 2 {
+				return moerr.NewInvalidTask(fenceCtx, "old-owner", 1)
+			}
+			return nil
+		})
+		require.NoError(t, tm.BeginTransaction(ctx, types.TS{}, types.BuildTS(2, 0)))
+		require.Error(t, tm.CommitTransaction(ctx))
+		require.True(t, sinker.commitCalled)
+		require.False(t, updater.updateCalled)
+	})
+}
+
 func TestTransactionManager_CommitTransaction_WithoutBegin(t *testing.T) {
 	ctx := context.Background()
 	sinker := &mockSinker{}
