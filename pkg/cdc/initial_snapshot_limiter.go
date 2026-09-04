@@ -34,8 +34,9 @@ const (
 type memoryAvailableFunc func() (uint64, bool)
 
 // InitialSnapshotLimiter adapts the number of retained snapshot batches to
-// cgroup-aware memory headroom. It keeps a hard upper bound and falls back to
-// the historical concurrency when memory availability cannot be measured.
+// cgroup-aware memory headroom. It keeps a hard concurrency bound and falls
+// back to the historical concurrency when memory cannot be measured. Memory
+// admission is estimate-based because the next engine batch size is unknown.
 type InitialSnapshotLimiter struct {
 	mu sync.Mutex
 
@@ -89,9 +90,9 @@ func (l *InitialSnapshotLimiter) concurrencyLocked(available uint64, measured bo
 		return min(max(l.fallbackConcurrency, l.minConcurrency), l.maxConcurrency)
 	}
 
-	// Spend at most one quarter of current cgroup/host headroom on retained CDC
-	// snapshot batches. The estimate starts conservatively and learns from the
-	// batches actually returned by the engine.
+	// Derive the concurrency target so estimated retained CDC snapshot batches
+	// use at most one quarter of current cgroup/host headroom. This is not a byte
+	// reservation: one indivisible engine batch can exceed the estimate.
 	concurrency := available / initialSnapshotMemoryFraction / l.batchBytesEstimate
 	if concurrency <= uint64(l.minConcurrency) {
 		return l.minConcurrency

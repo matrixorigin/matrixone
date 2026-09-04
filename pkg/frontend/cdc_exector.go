@@ -107,9 +107,8 @@ func CDCTaskExecutorFactory(
 			txnEngine,
 			CDCExeutorAllocator,
 		)
-		claimTask := tasks[0]
-		exec.claimTask = &claimTask
 		exec.taskService = ts
+		exec.UpdateDaemonTaskClaim(tasks[0])
 		// Restart timeout persistence is a control-plane path. It must use a
 		// fresh executor so it cannot queue behind the serialized executor held
 		// by the Start attempt that just timed out.
@@ -147,6 +146,7 @@ type CDCTaskExecutor struct {
 
 	cnUUID      string
 	claimTask   *task.DaemonTask
+	claimFence  *cdc.OwnerFence
 	taskService taskservice.TaskService
 	cnTxnClient client.TxnClient
 	cnEngine    engine.Engine
@@ -618,30 +618,57 @@ func NewCDCTaskExecutor(
 	return task
 }
 
-// fenceDaemonClaim renews the exact daemon-task claim captured by the
-// executor factory. Taskservice matches runner and the last-run claim
-// generation, so a superseded executor fails closed before durable output.
-func (exec *CDCTaskExecutor) fenceDaemonClaim(ctx context.Context) error {
+// currentDaemonClaimFence returns the immutable claim generation installed by
+// taskservice. Existing table streams retain the old object when Resume or
+// Restart publishes a replacement claim, so stale work cannot borrow the new
+// generation's identity.
+func (exec *CDCTaskExecutor) currentDaemonClaimFence() *cdc.OwnerFence {
 	exec.claimMu.RLock()
-	if exec.claimTask == nil {
-		exec.claimMu.RUnlock()
-		return nil
+	defer exec.claimMu.RUnlock()
+	return exec.claimFence
+}
+
+func classifyStableSnapshotRestart(
+	watermark types.TS,
+	state cdc.InitialSnapshotEpochState,
+) (incomplete, resetTarget, metadataMissing bool) {
+	metadataMissing = state.Created && !state.HasOtherGeneration && !watermark.IsEmpty()
+	incomplete = watermark.IsEmpty() || watermark.LT(&state.Epoch) ||
+		(state.Created && state.HasOtherGeneration)
+	resetTarget = incomplete && state.HasOtherGeneration
+	return
+}
+
+func capInitialSnapshotEpoch(candidate, end types.TS) types.TS {
+	if !end.IsEmpty() && candidate.GT(&end) {
+		return end
 	}
-	claim := *exec.claimTask
-	exec.claimMu.RUnlock()
-	if exec.taskService == nil {
-		return nil
-	}
-	fenceCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
-	defer cancel()
-	return exec.taskService.HeartbeatDaemonTask(fenceCtx, claim)
+	return candidate
 }
 
 // UpdateDaemonTaskClaim advances the exact token used by target and watermark
 // fences after taskservice has durably installed a Resume/Restart generation.
 func (exec *CDCTaskExecutor) UpdateDaemonTaskClaim(claim task.DaemonTask) {
 	exec.claimMu.Lock()
-	exec.claimTask = &claim
+	if exec.claimTask != nil &&
+		exec.claimTask.ID == claim.ID &&
+		exec.claimTask.TaskRunner == claim.TaskRunner &&
+		exec.claimTask.LastRun.Equal(claim.LastRun) {
+		exec.claimMu.Unlock()
+		return
+	}
+	claimCopy := claim
+	service := exec.taskService
+	var fence *cdc.OwnerFence
+	if service != nil {
+		fence = cdc.NewOwnerFenceForGeneration(claimCopy.LastRun, func(ctx context.Context) error {
+			fenceCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+			defer cancel()
+			return service.HeartbeatDaemonTask(fenceCtx, claimCopy)
+		})
+	}
+	exec.claimTask = &claimCopy
+	exec.claimFence = fence
 	exec.claimMu.Unlock()
 }
 
@@ -2914,9 +2941,12 @@ func (exec *CDCTaskExecutor) addExecPipelineForTable(
 		TableName: info.SourceTblName,
 	}
 	var initialSnapshotEpoch types.TS
-	var ownerFence func(context.Context) error
+	var ownerFence *cdc.OwnerFence
 	if exec.stableInitialSnapshot {
-		ownerFence = exec.fenceDaemonClaim
+		ownerFence = exec.currentDaemonClaimFence()
+		if ownerFence == nil {
+			return moerr.NewInternalErrorNoCtx("stable CDC executor has no daemon claim fence")
+		}
 	}
 	if watermark, err = exec.watermarkUpdater.GetOrAddCommitted(
 		ctx,
@@ -2925,13 +2955,17 @@ func (exec *CDCTaskExecutor) addExecPipelineForTable(
 	); err != nil {
 		return err
 	}
-	if exec.stableInitialSnapshot && watermark.IsEmpty() && !exec.noFull && exec.startTs.IsEmpty() {
-		if err = ownerFence(ctx); err != nil {
+	if exec.stableInitialSnapshot && !exec.noFull && exec.startTs.IsEmpty() {
+		if err = ownerFence.Check(ctx); err != nil {
 			return err
 		}
 		candidate := types.TimestampToTS(txnOp.SnapshotTS())
-		var generationChanged bool
-		initialSnapshotEpoch, generationChanged, err = exec.watermarkUpdater.GetOrCreateInitialSnapshotEpochForGeneration(
+		// Persist the actual bounded snapshot endpoint. Persisting a later
+		// transaction timestamp and only capping it inside the reader would make
+		// a completed EndTs task look permanently pre-epoch after restart.
+		candidate = capInitialSnapshotEpoch(candidate, exec.endTs)
+		var epochState cdc.InitialSnapshotEpochState
+		epochState, err = exec.watermarkUpdater.GetOrCreateInitialSnapshotEpochState(
 			ctx,
 			&watermarkKey,
 			info.SourceTblId,
@@ -2940,7 +2974,30 @@ func (exec *CDCTaskExecutor) addExecPipelineForTable(
 		if err != nil {
 			return err
 		}
-		info.IdChanged = info.IdChanged || generationChanged
+		initialSnapshotEpoch = epochState.Epoch
+
+		// A stable task can only have a non-empty watermark after its epoch
+		// metadata was durable. Missing metadata without an older generation is
+		// corruption/manual deletion; choosing a fresh epoch would strand target
+		// rows from an unknown source image.
+		incomplete, resetTarget, metadataMissing := classifyStableSnapshotRestart(watermark, epochState)
+		if metadataMissing {
+			return moerr.NewInternalErrorf(
+				ctx,
+				"CDC stable snapshot metadata is missing for %s generation %d with watermark %s",
+				watermarkKey.String(), info.SourceTblId, watermark.ToString(),
+			)
+		}
+
+		// Empty or pre-epoch progress means the initial snapshot is incomplete.
+		// If another table ID exists, reset the target under the ownership lock;
+		// otherwise retain partial same-epoch target groups for idempotent replay.
+		if incomplete {
+			if resetTarget {
+				info.IdChanged = true
+			}
+			watermark = types.TS{}
+		}
 	}
 
 	// Note: Do NOT clear err_msg here

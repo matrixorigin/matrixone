@@ -59,6 +59,48 @@ type WatermarkUpdater interface {
 	GetCommitFailureCount(key *WatermarkKey) uint32
 }
 
+// OwnerFence represents one immutable daemon-task claim generation. The
+// pointer identity is intentionally stable: all table pipelines created by the
+// same executor generation share it, which lets the asynchronous watermark
+// writer validate that claim once per task generation instead of once per
+// table.
+type OwnerFence struct {
+	check      func(context.Context) error
+	generation time.Time
+}
+
+func NewOwnerFence(check func(context.Context) error) *OwnerFence {
+	return NewOwnerFenceForGeneration(time.Time{}, check)
+}
+
+func NewOwnerFenceForGeneration(
+	generation time.Time,
+	check func(context.Context) error,
+) *OwnerFence {
+	if check == nil {
+		return nil
+	}
+	return &OwnerFence{check: check, generation: generation}
+}
+
+func (f *OwnerFence) Check(ctx context.Context) error {
+	if f == nil || f.check == nil {
+		return nil
+	}
+	return f.check(ctx)
+}
+
+func (f *OwnerFence) supersedes(other *OwnerFence) bool {
+	if f == nil || f == other {
+		return false
+	}
+	if f.generation.IsZero() || other == nil || other.generation.IsZero() {
+		// Legacy tests/callers have no rank; retain last-update behavior.
+		return true
+	}
+	return f.generation.After(other.generation)
+}
+
 const (
 	CDCSourceUriPrefix = "mysql://"
 	CDCSinkUriPrefix   = "mysql://"
@@ -338,14 +380,14 @@ type DbTableInfo struct {
 
 	// ownerFence is execution-local and deliberately excluded from Clone and
 	// all persisted table metadata. It protects target initialization DDL.
-	ownerFence func(context.Context) error
+	ownerFence *OwnerFence
 }
 
-func (info *DbTableInfo) SetOwnerFence(fence func(context.Context) error) {
+func (info *DbTableInfo) SetOwnerFence(fence *OwnerFence) {
 	info.ownerFence = fence
 }
 
-func (info *DbTableInfo) OwnerFence() func(context.Context) error {
+func (info *DbTableInfo) OwnerFence() *OwnerFence {
 	return info.ownerFence
 }
 

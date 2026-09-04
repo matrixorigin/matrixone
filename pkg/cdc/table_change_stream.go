@@ -176,7 +176,7 @@ type tableChangeStreamOptions struct {
 	retryBackoffFactor        float64       // Factor for exponential backoff
 	initialSnapshotLimiter    *InitialSnapshotLimiter
 	initialSnapshotEpoch      types.TS
-	ownerFence                func(context.Context) error
+	ownerFence                *OwnerFence
 }
 
 const (
@@ -245,8 +245,8 @@ func WithRetryBackoff(base, max time.Duration, factor float64) TableChangeStream
 	}
 }
 
-// WithInitialSnapshotLimiter shares a task-level in-flight batch limit across
-// table streams. It applies only to the first successful full-sync round.
+// WithInitialSnapshotLimiter shares a CN-level in-flight batch limit across
+// task/table streams. It applies only to the first successful full-sync round.
 func WithInitialSnapshotLimiter(limiter *InitialSnapshotLimiter) TableChangeStreamOption {
 	return func(opts *tableChangeStreamOptions) {
 		opts.initialSnapshotLimiter = limiter
@@ -264,7 +264,7 @@ func WithInitialSnapshotEpoch(epoch types.TS) TableChangeStreamOption {
 
 // WithOwnerFence checks that this stream still owns the exact daemon-task
 // claim before target commits and watermark publication.
-func WithOwnerFence(fence func(context.Context) error) TableChangeStreamOption {
+func WithOwnerFence(fence *OwnerFence) TableChangeStreamOption {
 	return func(opts *tableChangeStreamOptions) {
 		opts.ownerFence = fence
 	}

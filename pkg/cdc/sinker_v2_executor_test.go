@@ -271,7 +271,7 @@ func TestExecutor_BeginTx(t *testing.T) {
 }
 
 func TestExecutorTargetOwnershipLock(t *testing.T) {
-	t.Run("pins target session through transaction and release", func(t *testing.T) {
+	t.Run("releases completed effect and reacquires for the next transaction", func(t *testing.T) {
 		db, mock, err := sqlmock.New()
 		require.NoError(t, err)
 		executor := &Executor{conn: db}
@@ -296,6 +296,21 @@ func TestExecutorTargetOwnershipLock(t *testing.T) {
 		mock.ExpectQuery("SELECT RELEASE_LOCK").
 			WithArgs(sqlmock.AnyArg()).
 			WillReturnRows(sqlmock.NewRows([]string{"released"}).AddRow(1))
+		require.NoError(t, executor.ReleaseTargetLock())
+		require.Nil(t, executor.targetLockConn)
+
+		mock.ExpectQuery("SELECT GET_LOCK").
+			WithArgs(sqlmock.AnyArg(), targetLockPollSeconds).
+			WillReturnRows(sqlmock.NewRows([]string{"acquired"}).AddRow(1))
+		mock.ExpectBegin()
+		require.NoError(t, executor.BeginTx(context.Background()))
+		mock.ExpectRollback()
+		mock.ExpectQuery("SELECT RELEASE_LOCK").
+			WithArgs(sqlmock.AnyArg()).
+			WillReturnRows(sqlmock.NewRows([]string{"released"}).AddRow(1))
+		require.NoError(t, executor.RollbackTx(context.Background()))
+		require.Equal(t, 4, checks)
+
 		mock.ExpectClose()
 		require.NoError(t, executor.Close())
 		require.NoError(t, mock.ExpectationsWereMet())
@@ -386,8 +401,7 @@ func TestTargetOwnershipSerializesBlockedOldCommitAndTakeover(t *testing.T) {
 	oldMock.ExpectQuery("SELECT RELEASE_LOCK").
 		WithArgs(sqlmock.AnyArg()).
 		WillReturnRows(sqlmock.NewRows([]string{"released"}).AddRow(1))
-	oldMock.ExpectClose()
-	require.NoError(t, oldExec.Close())
+	require.NoError(t, oldExec.ReleaseTargetLock())
 	close(oldReleased)
 	require.NoError(t, <-newAcquireDone)
 
@@ -404,6 +418,9 @@ func TestTargetOwnershipSerializesBlockedOldCommitAndTakeover(t *testing.T) {
 	newMock.ExpectQuery("SELECT RELEASE_LOCK").
 		WithArgs(sqlmock.AnyArg()).
 		WillReturnRows(sqlmock.NewRows([]string{"released"}).AddRow(1))
+	require.NoError(t, newExec.ReleaseTargetLock())
+	oldMock.ExpectClose()
+	require.NoError(t, oldExec.Close())
 	newMock.ExpectClose()
 	require.NoError(t, newExec.Close())
 

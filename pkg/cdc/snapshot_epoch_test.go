@@ -22,6 +22,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -201,6 +202,27 @@ func TestInitialSnapshotEpochPersistsPerTableGeneration(t *testing.T) {
 	require.Equal(t, first.ToString(), stored)
 }
 
+func TestInitialSnapshotEpochStateDistinguishesCreateFromRestart(t *testing.T) {
+	executor := newSnapshotEpochTestExecutor()
+	updater := NewCDCWatermarkUpdater(t.Name(), executor)
+	key := &WatermarkKey{AccountId: 7, TaskId: "task", DBName: "db", TableName: "tbl"}
+	candidate := types.BuildTS(100, 3)
+
+	state, err := updater.GetOrCreateInitialSnapshotEpochState(
+		context.Background(), key, 11, candidate)
+	require.NoError(t, err)
+	require.True(t, state.Created)
+	require.False(t, state.HasOtherGeneration)
+	require.Equal(t, candidate, state.Epoch)
+
+	state, err = updater.GetOrCreateInitialSnapshotEpochState(
+		context.Background(), key, 11, types.BuildTS(900, 8))
+	require.NoError(t, err)
+	require.False(t, state.Created)
+	require.False(t, state.HasOtherGeneration)
+	require.Equal(t, candidate, state.Epoch)
+}
+
 func TestInitialSnapshotEpochAmbiguousInsertRecovery(t *testing.T) {
 	key := &WatermarkKey{AccountId: 7, TaskId: "task", DBName: "db", TableName: "tbl"}
 	candidate := types.BuildTS(100, 3)
@@ -210,9 +232,10 @@ func TestInitialSnapshotEpochAmbiguousInsertRecovery(t *testing.T) {
 		executor.insertErr = errors.New("connection lost")
 		executor.commitOnInsertErr = true
 		updater := NewCDCWatermarkUpdater(t.Name(), executor)
-		epoch, err := updater.GetOrCreateInitialSnapshotEpoch(context.Background(), key, 11, candidate)
+		state, err := updater.GetOrCreateInitialSnapshotEpochState(context.Background(), key, 11, candidate)
 		require.NoError(t, err)
-		require.Equal(t, candidate, epoch)
+		require.True(t, state.Created)
+		require.Equal(t, candidate, state.Epoch)
 	})
 
 	t.Run("not committed remains retryable", func(t *testing.T) {
@@ -232,8 +255,9 @@ func TestInitialSnapshotEpochOverlappingGenerationsDoNotEraseRetryAnchors(t *tes
 	key := &WatermarkKey{AccountId: 7, TaskId: "task", DBName: "db", TableName: "tbl"}
 
 	type result struct {
-		epoch types.TS
-		err   error
+		epoch   types.TS
+		changed bool
+		err     error
 	}
 	results := make(chan result, 2)
 	for tableID, candidate := range map[uint64]types.TS{
@@ -241,9 +265,9 @@ func TestInitialSnapshotEpochOverlappingGenerationsDoNotEraseRetryAnchors(t *tes
 		12: types.BuildTS(900, 8),
 	} {
 		go func() {
-			epoch, err := updater.GetOrCreateInitialSnapshotEpoch(
+			epoch, changed, err := updater.GetOrCreateInitialSnapshotEpochForGeneration(
 				context.Background(), key, tableID, candidate)
-			results <- result{epoch: epoch, err: err}
+			results <- result{epoch: epoch, changed: changed, err: err}
 		}()
 	}
 
@@ -251,6 +275,7 @@ func TestInitialSnapshotEpochOverlappingGenerationsDoNotEraseRetryAnchors(t *tes
 	for range 2 {
 		result := <-results
 		require.NoError(t, result.err)
+		require.True(t, result.changed)
 		seen[result.epoch.ToString()] = struct{}{}
 	}
 	require.Contains(t, seen, types.BuildTS(100, 3).ToString())
@@ -293,10 +318,10 @@ func TestBufferedWatermarkFromSupersededOwnerIsDropped(t *testing.T) {
 	key := &WatermarkKey{AccountId: 7, TaskId: "task", DBName: "db", TableName: "tbl"}
 	watermark := types.BuildTS(200, 1)
 	fenceChecks := 0
-	ctx := WithWatermarkOwnerFence(context.Background(), func(ctx context.Context) error {
+	ctx := WithWatermarkOwnerFence(context.Background(), NewOwnerFence(func(ctx context.Context) error {
 		fenceChecks++
 		return moerr.NewInvalidTask(ctx, "old-cn", 1)
-	})
+	}))
 	require.NoError(t, updater.UpdateWatermarkOnly(ctx, key, &watermark))
 	updater.committingBuffer = append(updater.committingBuffer, NewCommittingWMJob(context.Background()))
 	_, err := updater.execBatchUpdateWM()
@@ -304,4 +329,46 @@ func TestBufferedWatermarkFromSupersededOwnerIsDropped(t *testing.T) {
 	require.Equal(t, 1, fenceChecks)
 	_, exists := updater.cacheCommitted[*key]
 	require.False(t, exists)
+}
+
+func TestBufferedWatermarksValidateSharedOwnerOnce(t *testing.T) {
+	executor := newSnapshotEpochTestExecutor()
+	updater := NewCDCWatermarkUpdater(t.Name(), executor)
+	watermark := types.BuildTS(200, 1)
+	fenceChecks := 0
+	fence := NewOwnerFence(func(ctx context.Context) error {
+		fenceChecks++
+		return moerr.NewInvalidTask(ctx, "old-cn", 1)
+	})
+
+	for _, table := range []string{"t1", "t2"} {
+		key := &WatermarkKey{AccountId: 7, TaskId: "task", DBName: "db", TableName: table}
+		require.NoError(t, updater.UpdateWatermarkOnly(
+			WithWatermarkOwnerFence(context.Background(), fence), key, &watermark))
+	}
+	updater.committingBuffer = append(updater.committingBuffer, NewCommittingWMJob(context.Background()))
+	_, err := updater.execBatchUpdateWM()
+	require.NoError(t, err)
+	require.Equal(t, 1, fenceChecks)
+	require.Empty(t, updater.cacheCommitted)
+}
+
+func TestBufferedWatermarkKeepsNewestClaimForEqualTimestamp(t *testing.T) {
+	updater := NewCDCWatermarkUpdater(t.Name(), newSnapshotEpochTestExecutor())
+	key := &WatermarkKey{AccountId: 7, TaskId: "task", DBName: "db", TableName: "tbl"}
+	watermark := types.BuildTS(200, 1)
+	oldFence := NewOwnerFenceForGeneration(time.Unix(100, 0), func(context.Context) error { return nil })
+	newFence := NewOwnerFenceForGeneration(time.Unix(200, 0), func(context.Context) error { return nil })
+
+	require.NoError(t, updater.UpdateWatermarkOnly(
+		WithWatermarkOwnerFence(context.Background(), oldFence), key, &watermark))
+	require.NoError(t, updater.UpdateWatermarkOnly(
+		WithWatermarkOwnerFence(context.Background(), newFence), key, &watermark))
+	require.Same(t, newFence, updater.cacheUncommittedFence[*key])
+
+	// A late callback from the old in-process generation must not replace the
+	// newer fence for the same idempotent watermark.
+	require.NoError(t, updater.UpdateWatermarkOnly(
+		WithWatermarkOwnerFence(context.Background(), oldFence), key, &watermark))
+	require.Same(t, newFence, updater.cacheUncommittedFence[*key])
 }

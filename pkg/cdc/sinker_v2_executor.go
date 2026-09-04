@@ -148,10 +148,12 @@ type Executor struct {
 	tx   *sql.Tx
 
 	// targetLockConn owns a target-side advisory lock for one CDC task/table.
-	// Every fenced DDL and transaction uses this pinned session, so losing the
-	// connection releases the lock and also makes the old executor fail closed.
-	targetLockConn *sql.Conn
-	targetLockName string
+	// Each DDL/transaction effect interval releases it when complete. This keeps
+	// a takeover from waiting forever behind an idle or partitioned old owner.
+	targetLockConn     *sql.Conn
+	targetLockName     string
+	targetLockIdentity string
+	targetOwnerFence   func(context.Context) error
 
 	// Connection info (for reconnection)
 	user, password string
@@ -230,6 +232,11 @@ func (e *Executor) BeginTx(ctx context.Context) error {
 	if err := e.ensureConnection(ctx); err != nil {
 		return err
 	}
+	if e.targetOwnerFence != nil && e.targetLockConn == nil {
+		if err := e.AcquireTargetLock(ctx, e.targetLockIdentity, e.targetOwnerFence); err != nil {
+			return err
+		}
+	}
 
 	e.resetRecordedTxn()
 
@@ -241,7 +248,7 @@ func (e *Executor) BeginTx(ctx context.Context) error {
 		tx, err = e.conn.BeginTx(ctx, nil)
 	}
 	if err != nil {
-		return err
+		return joinErrorsPreservingSingle(err, e.releaseTargetLock())
 	}
 
 	e.tx = tx
@@ -260,6 +267,9 @@ func (e *Executor) CommitTx(ctx context.Context) error {
 	err := e.tx.Commit()
 	e.tx = nil // Always clear, even on error
 	e.resetRecordedTxn()
+	if err != nil {
+		return joinErrorsPreservingSingle(err, e.releaseTargetLock())
+	}
 	return err
 }
 
@@ -269,13 +279,13 @@ func (e *Executor) CommitTx(ctx context.Context) error {
 // Always sets e.tx to nil after rollback (successful or not)
 func (e *Executor) RollbackTx(ctx context.Context) error {
 	if e.tx == nil {
-		return nil // Idempotent
+		return e.releaseTargetLock()
 	}
 
 	err := e.tx.Rollback()
 	e.tx = nil // Always clear, even on error
 	e.resetRecordedTxn()
-	return err
+	return joinErrorsPreservingSingle(err, e.releaseTargetLock())
 }
 
 // ExecSQL executes a SQL statement
@@ -566,9 +576,17 @@ func (e *Executor) AcquireTargetLock(
 	if ownerFence == nil {
 		return nil
 	}
-	if e.targetLockConn != nil {
-		return moerr.NewInternalError(ctx, "target ownership lock already acquired")
+	if identity == "" {
+		return moerr.NewInternalError(ctx, "target ownership lock identity is empty")
 	}
+	if e.targetLockConn != nil {
+		if e.targetLockIdentity == identity {
+			return nil
+		}
+		return moerr.NewInternalError(ctx, "a different target ownership lock is already acquired")
+	}
+	e.targetLockIdentity = identity
+	e.targetOwnerFence = ownerFence
 	if err := e.ensureConnection(ctx); err != nil {
 		return err
 	}
@@ -620,7 +638,7 @@ func (e *Executor) AcquireTargetLock(
 	e.targetLockName = lockName
 	releaseOnError = false
 	if err = ownerFence(ctx); err != nil {
-		return errors.Join(err, e.releaseTargetLock())
+		return joinErrorsPreservingSingle(err, e.releaseTargetLock())
 	}
 	return nil
 }
@@ -648,7 +666,16 @@ func (e *Executor) releaseTargetLock() error {
 	if releaseErr == nil && released.Valid && released.Int64 != 1 {
 		releaseErr = moerr.NewInternalErrorNoCtx("target ownership lock was not held by its executor")
 	}
-	return errors.Join(releaseErr, closeErr)
+	return joinErrorsPreservingSingle(releaseErr, closeErr)
+}
+
+// ReleaseTargetLock ends one externally visible effect interval while keeping
+// the immutable lock identity configured for the next transaction.
+func (e *Executor) ReleaseTargetLock() error {
+	if e.tx != nil {
+		return moerr.NewInternalErrorNoCtx("cannot release target ownership lock with an active transaction")
+	}
+	return e.releaseTargetLock()
 }
 
 // Close closes the database connection and rolls back any active transaction

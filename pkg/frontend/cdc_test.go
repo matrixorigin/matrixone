@@ -134,7 +134,7 @@ func Test_newCdcSqlFormat(t *testing.T) {
 	assert.Equal(t, wantSql, sql)
 
 	sql2 := cdc.CDCSQLBuilder.GetTaskSQL(3, id.String())
-	wantSql2 := "SELECT sink_uri, sink_type, sink_password, tables, filters, start_ts, end_ts, no_full, additional_config, task_create_time FROM mo_catalog.mo_cdc_task WHERE account_id = 3 AND task_id = \"019111fd-aed1-70c0-8760-9abadd8f0f4a\""
+	wantSql2 := "SELECT sink_uri, sink_type, sink_password, tables, filters, start_ts, end_ts, no_full, additional_config FROM mo_catalog.mo_cdc_task WHERE account_id = 3 AND task_id = \"019111fd-aed1-70c0-8760-9abadd8f0f4a\""
 	assert.Equal(t, wantSql2, sql2)
 
 	sql3 := cdc.CDCSQLBuilder.DeleteWatermarkSQL(13, "task1")
@@ -557,12 +557,100 @@ type testTaskData struct {
 var _ taskservice.TaskService = new(testTaskService)
 
 type testTaskService struct {
-	data       []testTaskData
-	db         *sql.DB
-	dTask      []task.DaemonTask
-	curDTaskId int
-	taskKeyMap map[taskservice.CDCTaskKey]struct{}
-	sqlExec    taskservice.SqlExecutor
+	data                  []testTaskData
+	db                    *sql.DB
+	dTask                 []task.DaemonTask
+	curDTaskId            int
+	taskKeyMap            map[taskservice.CDCTaskKey]struct{}
+	sqlExec               taskservice.SqlExecutor
+	heartbeatDaemonTaskFn func(context.Context, task.DaemonTask) error
+}
+
+func TestDaemonClaimFenceIsImmutableAcrossGenerationUpdate(t *testing.T) {
+	var (
+		mu   sync.Mutex
+		seen []time.Time
+	)
+	service := &testTaskService{
+		heartbeatDaemonTaskFn: func(_ context.Context, claim task.DaemonTask) error {
+			mu.Lock()
+			seen = append(seen, claim.LastRun)
+			mu.Unlock()
+			return nil
+		},
+	}
+	exec := &CDCTaskExecutor{taskService: service}
+	first := task.DaemonTask{LastRun: time.Unix(100, 0)}
+	second := task.DaemonTask{LastRun: time.Unix(200, 0)}
+
+	exec.UpdateDaemonTaskClaim(first)
+	firstFence := exec.currentDaemonClaimFence()
+	exec.UpdateDaemonTaskClaim(second)
+	secondFence := exec.currentDaemonClaimFence()
+	second.TaskStatus = task.TaskStatus_Running
+	exec.UpdateDaemonTaskClaim(second)
+
+	require.NotSame(t, firstFence, secondFence)
+	require.Same(t, secondFence, exec.currentDaemonClaimFence())
+	require.NoError(t, firstFence.Check(context.Background()))
+	require.NoError(t, secondFence.Check(context.Background()))
+	require.Equal(t, []time.Time{first.LastRun, second.LastRun}, seen)
+}
+
+func TestClassifyStableSnapshotRestart(t *testing.T) {
+	epoch := types.BuildTS(200, 1)
+	tests := []struct {
+		name            string
+		watermark       types.TS
+		state           cdc.InitialSnapshotEpochState
+		incomplete      bool
+		resetTarget     bool
+		metadataMissing bool
+	}{
+		{
+			name:       "same generation partial snapshot",
+			watermark:  types.BuildTS(100, 1),
+			state:      cdc.InitialSnapshotEpochState{Epoch: epoch},
+			incomplete: true,
+		},
+		{
+			name:      "recreated table before first completed snapshot",
+			watermark: types.BuildTS(100, 1),
+			state: cdc.InitialSnapshotEpochState{
+				Epoch: epoch, HasOtherGeneration: true, Created: true,
+			},
+			incomplete: true, resetTarget: true,
+		},
+		{
+			name:      "recreated generation already complete",
+			watermark: types.BuildTS(300, 1),
+			state: cdc.InitialSnapshotEpochState{
+				Epoch: epoch, HasOtherGeneration: true,
+			},
+		},
+		{
+			name:            "nonempty watermark with newly reconstructed metadata",
+			watermark:       types.BuildTS(300, 1),
+			state:           cdc.InitialSnapshotEpochState{Epoch: epoch, Created: true},
+			metadataMissing: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			incomplete, resetTarget, metadataMissing := classifyStableSnapshotRestart(tt.watermark, tt.state)
+			require.Equal(t, tt.incomplete, incomplete)
+			require.Equal(t, tt.resetTarget, resetTarget)
+			require.Equal(t, tt.metadataMissing, metadataMissing)
+		})
+	}
+}
+
+func TestCapInitialSnapshotEpoch(t *testing.T) {
+	candidate := types.BuildTS(200, 1)
+	require.Equal(t, candidate, capInitialSnapshotEpoch(candidate, types.TS{}))
+	require.Equal(t, candidate, capInitialSnapshotEpoch(candidate, types.BuildTS(300, 1)))
+	require.Equal(t, types.BuildTS(100, 1), capInitialSnapshotEpoch(candidate, types.BuildTS(100, 1)))
 }
 
 func (ts *testTaskService) TruncateCompletedTasks(ctx context.Context) error {
@@ -664,7 +752,9 @@ func (ts *testTaskService) UpdateDaemonTaskStatus(
 }
 
 func (ts *testTaskService) HeartbeatDaemonTask(ctx context.Context, task task.DaemonTask) error {
-	//TODO implement me
+	if ts.heartbeatDaemonTaskFn != nil {
+		return ts.heartbeatDaemonTaskFn(ctx, task)
+	}
 	panic("implement me")
 }
 
@@ -748,7 +838,6 @@ func (tie *testIE) Query(ctx context.Context, s string, options ie.SessionOverri
 			endTs := ""
 			noFull := ""
 			additionalConfig := ""
-			taskCreateTime := ""
 			err = rows.Scan(
 				&sinkUri,
 				&sinkType,
@@ -758,8 +847,7 @@ func (tie *testIE) Query(ctx context.Context, s string, options ie.SessionOverri
 				&startTs,
 				&endTs,
 				&noFull,
-				&additionalConfig,
-				&taskCreateTime)
+				&additionalConfig)
 			if err != nil {
 				panic(err)
 			}
@@ -772,7 +860,6 @@ func (tie *testIE) Query(ctx context.Context, s string, options ie.SessionOverri
 			rowValues = append(rowValues, endTs)
 			rowValues = append(rowValues, noFull)
 			rowValues = append(rowValues, additionalConfig)
-			rowValues = append(rowValues, taskCreateTime)
 		} else if idx == mSqlIdx2 {
 			dbId := uint64(0)
 			tableId := uint64(0)
@@ -1137,7 +1224,7 @@ func TestRegisterCdcExecutor(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	assert.NoError(t, err)
 	/////////mock sql result
-	sql1 := `SELECT sink_uri, sink_type, sink_password, tables, filters, start_ts, end_ts, no_full, additional_config, task_create_time FROM mo_catalog.mo_cdc_task WHERE account_id = 0 AND task_id = "00000000-0000-0000-0000-000000000000"`
+	sql1 := `SELECT sink_uri, sink_type, sink_password, tables, filters, start_ts, end_ts, no_full, additional_config FROM mo_catalog.mo_cdc_task WHERE account_id = 0 AND task_id = "00000000-0000-0000-0000-000000000000"`
 	mock.ExpectQuery(sql1).WillReturnRows(sqlmock.NewRows(
 		[]string{
 			"sink_uri",
@@ -1149,7 +1236,6 @@ func TestRegisterCdcExecutor(t *testing.T) {
 			"end_ts",
 			"no_full",
 			"additional_config",
-			"task_create_time",
 		},
 	).AddRow(
 		sinkUri,
@@ -1165,7 +1251,6 @@ func TestRegisterCdcExecutor(t *testing.T) {
 			cdc.CDCTaskExtraOptions_SendSqlTimeout, cdc.CDCDefaultSendSqlTimeout,
 			cdc.CDCTaskExtraOptions_MaxSqlLength, cdc.CDCDefaultTaskExtra_MaxSQLLen,
 		),
-		"",
 	))
 
 	sql7 := "UPDATE `mo_catalog`.`mo_cdc_task` SET state = 'running', err_msg = '' WHERE 1=1 AND account_id = 0 AND task_id = '00000000-0000-0000-0000-000000000000' AND state = 'running'"
@@ -3625,7 +3710,7 @@ func TestCdcTask_retrieveCdcTask(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	assert.NoError(t, err)
 
-	sqlx := "SELECT sink_uri, sink_type, sink_password, tables, filters, start_ts, end_ts, no_full, additional_config, task_create_time FROM mo_catalog.mo_cdc_task WHERE account_id = .* AND task_id =.*"
+	sqlx := "SELECT sink_uri, sink_type, sink_password, tables, filters, start_ts, end_ts, no_full, additional_config FROM mo_catalog.mo_cdc_task WHERE account_id = .* AND task_id =.*"
 	sinkUri, err := cdc.JsonEncode(&cdc.UriInfo{
 		User: "root",
 		Ip:   "127.0.0.1",
@@ -3660,7 +3745,6 @@ func TestCdcTask_retrieveCdcTask(t *testing.T) {
 			"end_ts",
 			"no_full",
 			"additional_config",
-			"task_create_time",
 		},
 	).AddRow(
 		sinkUri,
@@ -3676,7 +3760,6 @@ func TestCdcTask_retrieveCdcTask(t *testing.T) {
 			cdc.CDCTaskExtraOptions_InitialSnapshotProtocol,
 			cdc.CDCInitialSnapshotProtocolStableEpoch,
 		),
-		"2026-09-02 12:34:56",
 	),
 	)
 

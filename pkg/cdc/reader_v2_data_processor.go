@@ -467,9 +467,6 @@ func (dp *DataProcessor) processNoMoreData(ctx context.Context) error {
 			zap.String("to-ts", dp.toTs.ToString()),
 		)
 
-		if err := dp.txnManager.checkOwnerFence(ctx); err != nil {
-			return err
-		}
 		if err := dp.txnManager.watermarkUpdater.UpdateWatermarkOnly(
 			WithWatermarkOwnerFence(ctx, dp.txnManager.ownerFence),
 			dp.txnManager.watermarkKey,
@@ -484,7 +481,7 @@ func (dp *DataProcessor) processNoMoreData(ctx context.Context) error {
 				zap.String("to-ts", dp.toTs.ToString()),
 				zap.Error(err),
 			)
-			// Note: UpdateWatermarkOnly always returns nil, but we log it anyway
+			return err
 		}
 	}
 

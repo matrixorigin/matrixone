@@ -33,8 +33,10 @@ type mockSinker struct {
 	commitCalled   bool
 	rollbackCalled bool
 	dummyCalled    bool
+	releaseCalled  bool
 	clearCalled    bool
 	err            error
+	releaseErr     error
 	rollbackErr    error // Error to return when SendRollback is called
 }
 
@@ -61,6 +63,11 @@ func (m *mockSinker) SendDummy() {
 	m.dummyCalled = true
 }
 
+func (m *mockSinker) releaseTargetOwnership() error {
+	m.releaseCalled = true
+	return m.releaseErr
+}
+
 func (m *mockSinker) Error() error {
 	return m.err
 }
@@ -77,8 +84,10 @@ func (m *mockSinker) reset() {
 	m.commitCalled = false
 	m.rollbackCalled = false
 	m.dummyCalled = false
+	m.releaseCalled = false
 	m.clearCalled = false
 	m.err = nil
+	m.releaseErr = nil
 	m.rollbackErr = nil
 }
 
@@ -358,6 +367,7 @@ func TestTransactionManager_CommitTransaction(t *testing.T) {
 	assert.True(t, sinker.commitCalled)
 	assert.True(t, sinker.dummyCalled)
 	assert.True(t, updater.updateCalled)
+	assert.True(t, sinker.releaseCalled)
 	// Note: tracker is set to nil after successful commit, so we can't check its state
 	// The commit success is verified by checking external effects (sinker, watermark)
 
@@ -381,9 +391,26 @@ func TestTransactionManager_CommitTransactionWithoutWatermark(t *testing.T) {
 	assert.True(t, sinker.commitCalled)
 	assert.True(t, sinker.dummyCalled)
 	assert.False(t, updater.updateCalled)
+	assert.True(t, sinker.releaseCalled)
 	assert.Nil(t, tm.GetTracker())
 	_, err := updater.GetFromCache(ctx, tm.watermarkKey)
 	require.Error(t, err)
+}
+
+func TestTransactionManager_CommitPropagatesTargetReleaseFailure(t *testing.T) {
+	ctx := context.Background()
+	releaseErr := moerr.NewInternalError(ctx, "release target ownership")
+	sinker := &mockSinker{releaseErr: releaseErr}
+	tm := NewTransactionManager(
+		sinker, newMockWatermarkUpdater(), 1, "task1", "db1", "table1")
+
+	require.NoError(t, tm.BeginTransaction(ctx, types.TS{}, types.BuildTS(2, 0)))
+	err := tm.CommitTransactionWithoutWatermark(ctx)
+	require.ErrorIs(t, err, releaseErr)
+	require.True(t, sinker.commitCalled)
+	require.True(t, sinker.releaseCalled)
+	require.NotNil(t, tm.GetTracker())
+	require.True(t, tm.GetTracker().NeedsRollback())
 }
 
 func TestTransactionManagerOwnerFence(t *testing.T) {
@@ -393,9 +420,9 @@ func TestTransactionManagerOwnerFence(t *testing.T) {
 		sinker := &mockSinker{}
 		updater := newMockWatermarkUpdater()
 		tm := NewTransactionManager(sinker, updater, 1, "task1", "db1", "table1")
-		tm.SetOwnerFence(func(fenceCtx context.Context) error {
+		tm.SetOwnerFence(NewOwnerFence(func(fenceCtx context.Context) error {
 			return moerr.NewInvalidTask(fenceCtx, "old-owner", 1)
-		})
+		}))
 		require.NoError(t, tm.BeginTransaction(ctx, types.TS{}, types.BuildTS(2, 0)))
 		require.Error(t, tm.CommitTransaction(ctx))
 		require.False(t, sinker.commitCalled)
@@ -407,17 +434,18 @@ func TestTransactionManagerOwnerFence(t *testing.T) {
 		updater := newMockWatermarkUpdater()
 		tm := NewTransactionManager(sinker, updater, 1, "task1", "db1", "table1")
 		checks := 0
-		tm.SetOwnerFence(func(fenceCtx context.Context) error {
+		tm.SetOwnerFence(NewOwnerFence(func(fenceCtx context.Context) error {
 			checks++
 			if checks == 2 {
 				return moerr.NewInvalidTask(fenceCtx, "old-owner", 1)
 			}
 			return nil
-		})
+		}))
 		require.NoError(t, tm.BeginTransaction(ctx, types.TS{}, types.BuildTS(2, 0)))
 		require.Error(t, tm.CommitTransaction(ctx))
 		require.True(t, sinker.commitCalled)
 		require.False(t, updater.updateCalled)
+		require.True(t, sinker.releaseCalled)
 	})
 }
 
@@ -455,6 +483,7 @@ func TestTransactionManager_CommitTransaction_WithError(t *testing.T) {
 
 	assert.Error(t, err)
 	assert.True(t, sinker.commitCalled)
+	assert.True(t, sinker.releaseCalled)
 	assert.False(t, tm.tracker.hasCommitted)
 	assert.True(t, tm.tracker.NeedsRollback())
 }

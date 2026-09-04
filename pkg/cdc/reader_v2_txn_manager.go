@@ -16,6 +16,7 @@ package cdc
 
 import (
 	"context"
+	"errors"
 	"sync"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -41,7 +42,7 @@ type TransactionManager struct {
 	sinker           Sinker
 	watermarkUpdater WatermarkUpdater
 	watermarkKey     *WatermarkKey
-	ownerFence       func(context.Context) error
+	ownerFence       *OwnerFence
 
 	// Protects tracker and transactional state transitions
 	mu sync.Mutex
@@ -56,17 +57,39 @@ type TransactionManager struct {
 	tableName string
 }
 
+type targetOwnershipReleaser interface {
+	releaseTargetOwnership() error
+}
+
+// joinErrorsPreservingSingle preserves a lone error's concrete identity. Some
+// callers classify moerr values by concrete type; errors.Join(err, nil) would
+// unnecessarily replace that value with a joinError. If both operations fail,
+// retain both causes for diagnosis.
+func joinErrorsPreservingSingle(first, second error) error {
+	if first == nil {
+		return second
+	}
+	if second == nil {
+		return first
+	}
+	return errors.Join(first, second)
+}
+
+func (tm *TransactionManager) releaseTargetOwnership() error {
+	if releaser, ok := tm.sinker.(targetOwnershipReleaser); ok {
+		return releaser.releaseTargetOwnership()
+	}
+	return nil
+}
+
 // SetOwnerFence installs the durable daemon-claim check used by stable-epoch
 // tasks. Legacy/direct users leave it nil.
-func (tm *TransactionManager) SetOwnerFence(fence func(context.Context) error) {
+func (tm *TransactionManager) SetOwnerFence(fence *OwnerFence) {
 	tm.ownerFence = fence
 }
 
 func (tm *TransactionManager) checkOwnerFence(ctx context.Context) error {
-	if tm.ownerFence == nil {
-		return nil
-	}
-	return tm.ownerFence(ctx)
+	return tm.ownerFence.Check(ctx)
 }
 
 // NewTransactionManager creates a new transaction manager
@@ -144,7 +167,7 @@ func (tm *TransactionManager) BeginTransaction(ctx context.Context, fromTs, toTs
 			zap.String("table", tm.tableName),
 			zap.Error(err),
 		)
-		return err
+		return joinErrorsPreservingSingle(err, tm.releaseTargetOwnership())
 	}
 
 	// Mark as begun
@@ -220,7 +243,7 @@ func (tm *TransactionManager) commitLocked(ctx context.Context, updateWatermark 
 	// Renew and validate the exact daemon-task claim immediately before the
 	// irreversible target commit. A stale owner must fail here after takeover.
 	if err := tm.checkOwnerFence(ctx); err != nil {
-		return err
+		return joinErrorsPreservingSingle(err, tm.releaseTargetOwnership())
 	}
 
 	// Step 1: Send COMMIT to sinker
@@ -239,14 +262,18 @@ func (tm *TransactionManager) commitLocked(ctx context.Context, updateWatermark 
 			zap.String("to-ts", toTs.ToString()),
 			zap.Error(err),
 		)
-		return err
+		// Commit failures can be ambiguous, but the executor has already
+		// detached the sql.Tx. Do not retain the task/table advisory lock while
+		// this pipeline waits for cleanup or retry; a replacement owner must be
+		// able to reacquire it and replay from the durable watermark.
+		return joinErrorsPreservingSingle(err, tm.releaseTargetOwnership())
 	}
 
 	if updateWatermark {
 		// Revalidate after the target commit as well. If ownership changed while
 		// the commit was in flight, leaving the watermark behind is retry-safe.
 		if err := tm.checkOwnerFence(ctx); err != nil {
-			return err
+			return joinErrorsPreservingSingle(err, tm.releaseTargetOwnership())
 		}
 		// Step 2: Update watermark (persistent proof of success). This MUST
 		// happen before marking the tracker as committed. Intermediate snapshot
@@ -265,9 +292,16 @@ func (tm *TransactionManager) commitLocked(ctx context.Context, updateWatermark 
 				zap.String("to-ts", toTs.ToString()),
 				zap.Error(err),
 			)
-			// UpdateWatermarkOnly is currently eventual and always returns nil,
-			// but retain the branch for interface implementations and monitoring.
+			return joinErrorsPreservingSingle(err, tm.releaseTargetOwnership())
 		}
+	}
+
+	// The target lock protects externally visible effects, not pipeline idle
+	// time. Release it after every committed transaction, including an
+	// intermediate initial-snapshot group. A replacement can then make
+	// progress if this owner stalls while collecting the next group.
+	if err := tm.releaseTargetOwnership(); err != nil {
+		return err
 	}
 
 	// Step 3: Mark tracker as committed (memory state sync)

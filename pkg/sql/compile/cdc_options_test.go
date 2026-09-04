@@ -23,6 +23,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/cdc"
 	"github.com/matrixorigin/matrixone/pkg/pb/task"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/taskservice"
 	"github.com/stretchr/testify/require"
 )
@@ -110,4 +111,13 @@ func TestDeleteManyWatermarkRetainsSnapshotEpochOnRestart(t *testing.T) {
 	require.Len(t, cancelExecutor.queries, 2)
 	require.True(t, strings.Contains(cancelExecutor.queries[0], "mo_cdc_watermark"))
 	require.True(t, strings.Contains(cancelExecutor.queries[1], "mo_cdc_snapshot"))
+}
+
+func TestCDCStableWatermarkUpsertParses(t *testing.T) {
+	sql := cdc.CDCSQLBuilder.OnDuplicateUpdateMonotonicWatermarkSQL(
+		"(1, 'task', 'db', 'tbl', '100-2')",
+	)
+	statements, err := mysql.Parse(context.Background(), sql, 1)
+	require.NoError(t, err)
+	require.Len(t, statements, 1)
 }

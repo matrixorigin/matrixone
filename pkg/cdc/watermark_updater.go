@@ -327,8 +327,8 @@ type CDCWatermarkUpdater struct {
 	// Stable-epoch updates carry the exact owner claim all the way to the
 	// asynchronous durable writer. This prevents a value buffered by a stale CN
 	// from being persisted after another owner takes over.
-	cacheUncommittedFence map[WatermarkKey]func(context.Context) error
-	cacheCommittingFence  map[WatermarkKey]func(context.Context) error
+	cacheUncommittedFence map[WatermarkKey]*OwnerFence
+	cacheCommittingFence  map[WatermarkKey]*OwnerFence
 
 	// Error metadata cache (similar to watermark cache)
 	// Cached in memory to avoid synchronous SQL queries in RecordError()
@@ -384,8 +384,8 @@ func NewCDCWatermarkUpdater(
 		cacheUncommitted:      make(map[WatermarkKey]types.TS),
 		cacheCommitting:       make(map[WatermarkKey]types.TS),
 		cacheCommitted:        make(map[WatermarkKey]types.TS),
-		cacheUncommittedFence: make(map[WatermarkKey]func(context.Context) error),
-		cacheCommittingFence:  make(map[WatermarkKey]func(context.Context) error),
+		cacheUncommittedFence: make(map[WatermarkKey]*OwnerFence),
+		cacheCommittingFence:  make(map[WatermarkKey]*OwnerFence),
 		errorMetadataCache:    make(map[WatermarkKey]*ErrorMetadata), // Initialize error cache
 		commitFailureCount:    make(map[WatermarkKey]uint32),
 		commitCircuitOpen:     make(map[WatermarkKey]time.Time),
@@ -738,19 +738,23 @@ func (u *CDCWatermarkUpdater) persistBatchUpdateWM() (errMsg string, err error) 
 		delete(u.cacheUncommitted, key)
 		delete(u.cacheUncommittedFence, key)
 	}
-	fences := make(map[WatermarkKey]func(context.Context) error, len(u.cacheCommittingFence))
+	// Pipelines from one daemon generation share one immutable OwnerFence.
+	// Validate it once per generation rather than issuing one taskservice write
+	// per table on every watermark flush.
+	fencedKeys := make(map[*OwnerFence][]WatermarkKey, len(u.cacheCommittingFence))
 	for key, fence := range u.cacheCommittingFence {
-		fences[key] = fence
+		fencedKeys[fence] = append(fencedKeys[fence], key)
 	}
 	u.Unlock()
 
 	staleKeys := make([]WatermarkKey, 0)
-	for key, fence := range fences {
-		if fenceErr := fence(context.Background()); fenceErr != nil {
-			staleKeys = append(staleKeys, key)
+	for fence, keys := range fencedKeys {
+		if fenceErr := fence.Check(context.Background()); fenceErr != nil {
+			staleKeys = append(staleKeys, keys...)
 			logutil.Warn(
 				"cdc.watermark.commit.stale_owner_dropped",
-				zap.String("key", key.String()),
+				zap.String("task-id", keys[0].TaskId),
+				zap.Int("table-count", len(keys)),
 				zap.Error(fenceErr),
 			)
 		}
@@ -761,7 +765,17 @@ func (u *CDCWatermarkUpdater) persistBatchUpdateWM() (errMsg string, err error) 
 		delete(u.cacheCommittingFence, key)
 	}
 	committingCount := len(u.cacheCommitting)
-	commitSQLs := u.constructBatchUpdateWMSQLs(u.cacheCommitting)
+	legacyWatermarks := make(map[WatermarkKey]types.TS)
+	stableWatermarks := make(map[WatermarkKey]types.TS)
+	for key, watermark := range u.cacheCommitting {
+		if _, fenced := u.cacheCommittingFence[key]; fenced {
+			stableWatermarks[key] = watermark
+		} else {
+			legacyWatermarks[key] = watermark
+		}
+	}
+	commitSQLs := u.constructBatchUpdateWMSQLs(legacyWatermarks)
+	commitSQLs = append(commitSQLs, u.constructBatchUpdateMonotonicWMSQLs(stableWatermarks)...)
 	u.Unlock()
 
 	if committingCount == 0 {
@@ -1099,6 +1113,22 @@ func (u *CDCWatermarkUpdater) constructBatchUpdateWMSQLs(
 		})
 	}
 	return buildGuardedWatermarkSQLBatches(rows, watermarkUpdateRowSQL, CDCSQLBuilder.GuardedWatermarkUpdateSQL)
+}
+
+func (u *CDCWatermarkUpdater) constructBatchUpdateMonotonicWMSQLs(
+	keys map[WatermarkKey]types.TS,
+) []string {
+	rows := make([]guardedWatermarkRow, 0, len(keys))
+	for key, wm := range keys {
+		rows = append(rows, guardedWatermarkRow{
+			accountID: key.AccountId,
+			taskID:    key.TaskId,
+			dbName:    key.DBName,
+			tableName: key.TableName,
+			value:     wm.ToString(),
+		})
+	}
+	return buildGuardedWatermarkSQLBatches(rows, watermarkUpdateRowSQL, CDCSQLBuilder.GuardedMonotonicWatermarkUpdateSQL)
 }
 
 func (u *CDCWatermarkUpdater) constructBatchUpdateWMErrMsgSQLs(
@@ -1472,7 +1502,7 @@ type watermarkOwnerFenceContextKey struct{}
 
 // WithWatermarkOwnerFence binds the exact daemon claim to an asynchronous
 // watermark update. The final SQL writer rechecks this same closure.
-func WithWatermarkOwnerFence(ctx context.Context, fence func(context.Context) error) context.Context {
+func WithWatermarkOwnerFence(ctx context.Context, fence *OwnerFence) context.Context {
 	if fence == nil {
 		return ctx
 	}
@@ -1507,11 +1537,15 @@ func (u *CDCWatermarkUpdater) UpdateWatermarkOnly(
 	if _, deleted := u.deletedTasks.Load(key.TaskId); deleted {
 		return nil
 	}
+	incomingFence, fenced := ctx.Value(watermarkOwnerFenceContextKey{}).(*OwnerFence)
+	if fenced && incomingFence != nil && !u.shouldBufferStableWatermarkLocked(*key, *watermark, incomingFence) {
+		return nil
+	}
 
 	oldWatermark, hasOld := u.cacheUncommitted[*key]
 	u.cacheUncommitted[*key] = *watermark
-	if fence, ok := ctx.Value(watermarkOwnerFenceContextKey{}).(func(context.Context) error); ok {
-		u.cacheUncommittedFence[*key] = fence
+	if fenced && incomingFence != nil {
+		u.cacheUncommittedFence[*key] = incomingFence
 	} else {
 		delete(u.cacheUncommittedFence, *key)
 	}
@@ -1534,6 +1568,33 @@ func (u *CDCWatermarkUpdater) UpdateWatermarkOnly(
 	)
 
 	return nil
+}
+
+func (u *CDCWatermarkUpdater) shouldBufferStableWatermarkLocked(
+	key WatermarkKey,
+	watermark types.TS,
+	fence *OwnerFence,
+) bool {
+	if current, ok := u.cacheCommitted[key]; ok && current.GE(&watermark) {
+		return false
+	}
+	if current, ok := u.cacheCommitting[key]; ok {
+		if current.GT(&watermark) {
+			return false
+		}
+		if current.Equal(&watermark) && !fence.supersedes(u.cacheCommittingFence[key]) {
+			return false
+		}
+	}
+	if current, ok := u.cacheUncommitted[key]; ok {
+		if current.GT(&watermark) {
+			return false
+		}
+		if current.Equal(&watermark) && !fence.supersedes(u.cacheUncommittedFence[key]) {
+			return false
+		}
+	}
+	return true
 }
 
 func (u *CDCWatermarkUpdater) RemoveCachedWM(

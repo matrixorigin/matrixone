@@ -80,8 +80,7 @@ const (
 		`start_ts, ` +
 		`end_ts, ` +
 		`no_full, ` +
-		`additional_config, ` +
-		`task_create_time ` +
+		`additional_config ` +
 		`FROM ` +
 		`mo_catalog.mo_cdc_task ` +
 		`WHERE ` +
@@ -219,6 +218,24 @@ const (
 		"VALUES %s " +
 		"ON DUPLICATE KEY UPDATE watermark = VALUES(watermark)"
 
+	// Stable-epoch tasks never intentionally rewind a watermark. The durable
+	// max closes the cross-CN window where an old owner passes its claim check,
+	// stalls in SQL, and resumes after a replacement has already persisted a
+	// newer watermark. Legacy tasks retain the replace form above because their
+	// stale-read recovery can intentionally reset a watermark.
+	CDCOnDuplicateUpdateMonotonicWatermarkTemplate = "INSERT INTO " +
+		"`mo_catalog`.`mo_cdc_watermark` " +
+		"(account_id, task_id, db_name, table_name, watermark) " +
+		"VALUES %s " +
+		"ON DUPLICATE KEY UPDATE watermark = CASE WHEN " +
+		"CAST(SUBSTRING_INDEX(VALUES(watermark), '-', 1) AS BIGINT) > " +
+		"CAST(SUBSTRING_INDEX(watermark, '-', 1) AS BIGINT) OR (" +
+		"CAST(SUBSTRING_INDEX(VALUES(watermark), '-', 1) AS BIGINT) = " +
+		"CAST(SUBSTRING_INDEX(watermark, '-', 1) AS BIGINT) AND " +
+		"CAST(SUBSTRING_INDEX(VALUES(watermark), '-', -1) AS BIGINT) > " +
+		"CAST(SUBSTRING_INDEX(watermark, '-', -1) AS BIGINT)) " +
+		"THEN VALUES(watermark) ELSE watermark END"
+
 	CDCOnDuplicateUpdateWatermarkErrMsgTemplate = "INSERT INTO " +
 		"`mo_catalog`.`mo_cdc_watermark` " +
 		"(account_id, task_id, db_name, table_name, err_msg) " +
@@ -246,6 +263,22 @@ const (
 		"INNER JOIN (SELECT account_id, task_id FROM `mo_catalog`.`mo_cdc_task` WHERE %s FOR UPDATE) AS t " +
 		"ON t.account_id = v.account_id AND t.task_id = v.task_id " +
 		"ON DUPLICATE KEY UPDATE watermark = VALUES(watermark)"
+
+	CDCGuardedMonotonicWatermarkUpdateTemplate = "INSERT INTO " +
+		"`mo_catalog`.`mo_cdc_watermark` " +
+		"(account_id, task_id, db_name, table_name, watermark) " +
+		"SELECT v.account_id, v.task_id, v.db_name, v.table_name, v.watermark " +
+		"FROM ( %s ) AS v " +
+		"INNER JOIN (SELECT account_id, task_id FROM `mo_catalog`.`mo_cdc_task` WHERE %s FOR UPDATE) AS t " +
+		"ON t.account_id = v.account_id AND t.task_id = v.task_id " +
+		"ON DUPLICATE KEY UPDATE watermark = CASE WHEN " +
+		"CAST(SUBSTRING_INDEX(VALUES(watermark), '-', 1) AS BIGINT) > " +
+		"CAST(SUBSTRING_INDEX(watermark, '-', 1) AS BIGINT) OR (" +
+		"CAST(SUBSTRING_INDEX(VALUES(watermark), '-', 1) AS BIGINT) = " +
+		"CAST(SUBSTRING_INDEX(watermark, '-', 1) AS BIGINT) AND " +
+		"CAST(SUBSTRING_INDEX(VALUES(watermark), '-', -1) AS BIGINT) > " +
+		"CAST(SUBSTRING_INDEX(watermark, '-', -1) AS BIGINT)) " +
+		"THEN VALUES(watermark) ELSE watermark END"
 
 	CDCGuardedWatermarkErrorUpdateTemplate = "INSERT INTO " +
 		"`mo_catalog`.`mo_cdc_watermark` " +
@@ -988,6 +1021,12 @@ func (b cdcSQLBuilder) OnDuplicateUpdateWatermarkSQL(
 	)
 }
 
+func (b cdcSQLBuilder) OnDuplicateUpdateMonotonicWatermarkSQL(
+	values string,
+) string {
+	return fmt.Sprintf(CDCOnDuplicateUpdateMonotonicWatermarkTemplate, values)
+}
+
 func (b cdcSQLBuilder) OnDuplicateUpdateWatermarkErrMsgSQL(
 	values string,
 ) string {
@@ -1003,6 +1042,10 @@ func (b cdcSQLBuilder) GuardedWatermarkInsertSQL(selectValues, taskPredicate str
 
 func (b cdcSQLBuilder) GuardedWatermarkUpdateSQL(selectValues, taskPredicate string) string {
 	return fmt.Sprintf(CDCGuardedWatermarkUpdateTemplate, selectValues, taskPredicate)
+}
+
+func (b cdcSQLBuilder) GuardedMonotonicWatermarkUpdateSQL(selectValues, taskPredicate string) string {
+	return fmt.Sprintf(CDCGuardedMonotonicWatermarkUpdateTemplate, selectValues, taskPredicate)
 }
 
 func (b cdcSQLBuilder) GuardedWatermarkErrorUpdateSQL(selectValues, taskPredicate string) string {

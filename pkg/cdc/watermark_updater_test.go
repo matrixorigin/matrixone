@@ -48,6 +48,7 @@ type retryableMockExecutor struct {
 	failOnCall    int
 	execCalls     int
 	lastSQL       string
+	sqls          []string
 }
 
 type delayedWatermarkBatchExecutor struct {
@@ -75,6 +76,7 @@ func (m *retryableMockExecutor) Exec(_ context.Context, sql string, _ ie.Session
 	defer m.mu.Unlock()
 	m.execCalls++
 	m.lastSQL = sql
+	m.sqls = append(m.sqls, sql)
 	if m.failOnCall == m.execCalls {
 		return moerr.NewInternalErrorNoCtx("mock exec failure")
 	}
@@ -1502,6 +1504,34 @@ func TestCDCWatermarkUpdater_constructBatchUpdateWMSQL(t *testing.T) {
 	assert.Contains(t, realSql, "SELECT 1 AS account_id")
 	assert.Contains(t, realSql, "SELECT 2, 'test', 'db2', 't2', '2-1'")
 	assert.Contains(t, realSql, "SELECT 3, 'test', 'db3', 't3', '3-1'")
+}
+
+func TestCDCWatermarkUpdaterPartitionsStableMonotonicWatermarks(t *testing.T) {
+	exec := &retryableMockExecutor{}
+	updater := NewCDCWatermarkUpdater(t.Name(), exec)
+	legacyKey := &WatermarkKey{AccountId: 1, TaskId: "legacy", DBName: "db", TableName: "t1"}
+	stableKey := &WatermarkKey{AccountId: 1, TaskId: "stable", DBName: "db", TableName: "t2"}
+	watermark := types.BuildTS(100, 2)
+	require.NoError(t, updater.UpdateWatermarkOnly(context.Background(), legacyKey, &watermark))
+	require.NoError(t, updater.UpdateWatermarkOnly(
+		WithWatermarkOwnerFence(context.Background(), NewOwnerFence(func(context.Context) error { return nil })),
+		stableKey,
+		&watermark,
+	))
+
+	updater.committingBuffer = append(updater.committingBuffer, NewCommittingWMJob(context.Background()))
+	_, err := updater.execBatchUpdateWM()
+	require.NoError(t, err)
+	require.Equal(t, 2, exec.execCalls)
+	require.Len(t, exec.sqls, 2)
+	if strings.Contains(exec.sqls[0], "CASE WHEN") {
+		exec.sqls[0], exec.sqls[1] = exec.sqls[1], exec.sqls[0]
+	}
+	require.NotContains(t, exec.sqls[0], "CASE WHEN")
+	require.Contains(t, exec.sqls[0], "'legacy'")
+	require.Contains(t, exec.sqls[1], "CASE WHEN")
+	require.Contains(t, exec.sqls[1], "SUBSTRING_INDEX")
+	require.Contains(t, exec.sqls[1], "'stable'")
 }
 
 func TestCDCWatermarkUpdater_constructBatchUpdateWMErrMsgSQL(t *testing.T) {

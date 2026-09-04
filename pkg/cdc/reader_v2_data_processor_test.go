@@ -1069,11 +1069,17 @@ func TestDataProcessor_NoMoreData_HeartbeatUpdatesWatermark(t *testing.T) {
 	to := types.BuildTS(2, 0)
 	h.dp.SetTransactionRange(from, to)
 	h.txnMgr.Reset()
+	fenceChecks := 0
+	h.txnMgr.SetOwnerFence(NewOwnerFence(func(context.Context) error {
+		fenceChecks++
+		return nil
+	}))
 
 	err := h.dp.ProcessChange(ctx, &ChangeData{Type: ChangeTypeNoMoreData})
 	require.NoError(t, err)
 
 	assert.True(t, h.update.updateCalled)
+	assert.Zero(t, fenceChecks, "an empty round has no synchronous target effect to fence")
 
 	calls := h.sinker.sinkCallsSnapshot()
 	require.Len(t, calls, 1)

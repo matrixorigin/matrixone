@@ -136,7 +136,7 @@ func createMysqlSinker2(
 	ar *ActiveRoutine,
 	maxSqlLength uint64,
 	sendSqlTimeout string,
-	ownerFence func(context.Context) error,
+	ownerFence *OwnerFence,
 ) (Sinker, error) {
 	// 1. Determine if we need to record transactions for debugging
 	var doRecord bool
@@ -158,7 +158,7 @@ func createMysqlSinker2(
 
 	// 3. Execute DDL initialization (same as old version)
 	ctx := context.Background()
-	targetOwnerFence := ownerFence
+	var targetOwnerFence func(context.Context) error
 	if ownerFence != nil {
 		targetOwnerFence = func(fenceCtx context.Context) error {
 			if ar != nil {
@@ -170,7 +170,7 @@ func createMysqlSinker2(
 				default:
 				}
 			}
-			return ownerFence(fenceCtx)
+			return ownerFence.Check(fenceCtx)
 		}
 		lockIdentity := fmt.Sprintf(
 			"%d\x00%s\x00%s\x00%s",
@@ -272,6 +272,12 @@ func createMysqlSinker2(
 	if err != nil {
 		executor.Close()
 		return nil, err
+	}
+	if targetOwnerFence != nil {
+		if err = executor.ReleaseTargetLock(); err != nil {
+			executor.Close()
+			return nil, err
+		}
 	}
 
 	// 4. Create SQL Statement Builder
@@ -984,6 +990,13 @@ func (s *mysqlSinker2) SendRollback() {
 // and allows the producer to check for errors via Error()
 func (s *mysqlSinker2) SendDummy() {
 	s.sendCommand(NewDummyCommand())
+}
+
+// releaseTargetOwnership ends the current effect interval after the consumer
+// has synchronously completed COMMIT and the producer has accepted the related
+// watermark. The next BEGIN reacquires and revalidates the same target lock.
+func (s *mysqlSinker2) releaseTargetOwnership() error {
+	return s.executor.ReleaseTargetLock()
 }
 
 // Error returns the current error state

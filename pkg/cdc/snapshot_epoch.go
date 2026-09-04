@@ -39,6 +39,16 @@ type RetryableSnapshotEpochError struct {
 	err error
 }
 
+// InitialSnapshotEpochState describes the durable source generation selected
+// for one logical CDC table. Created is needed by restart admission: a stable
+// task with an existing watermark but no epoch row has lost protocol metadata
+// and must not silently guess that the current source generation is safe.
+type InitialSnapshotEpochState struct {
+	Epoch              types.TS
+	HasOtherGeneration bool
+	Created            bool
+}
+
 func (e *RetryableSnapshotEpochError) Error() string { return e.err.Error() }
 func (e *RetryableSnapshotEpochError) Unwrap() error { return e.err }
 
@@ -74,21 +84,34 @@ func (u *CDCWatermarkUpdater) GetOrCreateInitialSnapshotEpochForGeneration(
 	sourceTableID uint64,
 	candidate types.TS,
 ) (types.TS, bool, error) {
+	state, err := u.GetOrCreateInitialSnapshotEpochState(ctx, key, sourceTableID, candidate)
+	return state.Epoch, state.HasOtherGeneration, err
+}
+
+// GetOrCreateInitialSnapshotEpochState persists or loads the exact table
+// generation epoch and reports whether this call created it. Callers must use
+// this on every stable-task pipeline start, not only while the watermark is
+// empty: the epoch also makes stale-history recovery and table recreation safe
+// after a process restart.
+func (u *CDCWatermarkUpdater) GetOrCreateInitialSnapshotEpochState(
+	ctx context.Context,
+	key *WatermarkKey,
+	sourceTableID uint64,
+	candidate types.TS,
+) (InitialSnapshotEpochState, error) {
 	if sourceTableID == 0 || candidate.IsEmpty() || !candidate.Valid() {
-		return types.TS{}, false, moerr.NewInternalErrorf(
+		return InitialSnapshotEpochState{}, moerr.NewInternalErrorf(
 			ctx, "invalid CDC snapshot epoch candidate %s for source table %d",
 			candidate.ToString(), sourceTableID)
 	}
 
 	if epoch, ok, err := u.readInitialSnapshotEpoch(ctx, key, sourceTableID); err != nil {
-		return types.TS{}, false, err
+		return InitialSnapshotEpochState{}, err
 	} else if ok {
 		changed, err := u.hasOtherInitialSnapshotGeneration(ctx, key, sourceTableID)
-		return epoch, changed, err
-	}
-	changed, err := u.hasOtherInitialSnapshotGeneration(ctx, key, sourceTableID)
-	if err != nil {
-		return types.TS{}, false, err
+		return InitialSnapshotEpochState{
+			Epoch: epoch, HasOtherGeneration: changed,
+		}, err
 	}
 
 	persistCtx, cancel := context.WithTimeoutCause(
@@ -106,23 +129,29 @@ func (u *CDCWatermarkUpdater) GetOrCreateInitialSnapshotEpochForGeneration(
 		// The INSERT result can be ambiguous. Resolve a committed-but-lost
 		// response immediately; otherwise explicitly ask the detector to retry.
 		if epoch, ok, readErr := u.readInitialSnapshotEpoch(ctx, key, sourceTableID); readErr == nil && ok {
-			return epoch, changed, nil
+			changed, changedErr := u.hasOtherInitialSnapshotGeneration(ctx, key, sourceTableID)
+			return InitialSnapshotEpochState{
+				Epoch: epoch, HasOtherGeneration: changed, Created: true,
+			}, changedErr
 		} else if readErr != nil {
-			return types.TS{}, false, &RetryableSnapshotEpochError{err: errors.Join(err, readErr)}
+			return InitialSnapshotEpochState{}, &RetryableSnapshotEpochError{err: errors.Join(err, readErr)}
 		}
-		return types.TS{}, false, &RetryableSnapshotEpochError{err: err}
+		return InitialSnapshotEpochState{}, &RetryableSnapshotEpochError{err: err}
 	}
 
 	epoch, ok, err := u.readInitialSnapshotEpoch(ctx, key, sourceTableID)
 	if err != nil {
-		return types.TS{}, false, err
+		return InitialSnapshotEpochState{}, err
 	}
 	if !ok {
-		return types.TS{}, false, &RetryableSnapshotEpochError{err: moerr.NewInternalErrorf(
+		return InitialSnapshotEpochState{}, &RetryableSnapshotEpochError{err: moerr.NewInternalErrorf(
 			ctx, "CDC snapshot epoch was not durable for %s generation %d",
 			key.String(), sourceTableID)}
 	}
-	return epoch, changed, nil
+	changed, err := u.hasOtherInitialSnapshotGeneration(ctx, key, sourceTableID)
+	return InitialSnapshotEpochState{
+		Epoch: epoch, HasOtherGeneration: changed, Created: true,
+	}, err
 }
 
 func (u *CDCWatermarkUpdater) hasOtherInitialSnapshotGeneration(
