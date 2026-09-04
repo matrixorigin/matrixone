@@ -1013,14 +1013,7 @@ func (ag *aggState) insertArgValueWithInserter(
 	// let's not do that for now, until the profiling shows this is a bottleneck.
 	it := ag.argSkl.NewIter(nil, nil)
 	for ok, k, oldValue := it.First(); ok; ok, k, oldValue = it.Next() {
-		if ag.allocation != nil {
-			if err := newArgSkl.AddWithPlan(
-				k, oldValue, arenaskl.MakeAddPlan(k)); err != nil {
-				it.Close()
-				mp.Free(argBuf)
-				return err
-			}
-		} else if err := newArgSkl.Add(k, oldValue); err != nil {
+		if err := newArgSkl.Add(k, oldValue); err != nil {
 			it.Close()
 			mp.Free(argBuf)
 			return err

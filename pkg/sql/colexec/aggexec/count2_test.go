@@ -887,7 +887,7 @@ func TestCountDistinctUnmarshalAcrossAccountedArenaGrowth(t *testing.T) {
 				finishTestAggregateAllocation(t, registry, account)
 				require.Zero(t, mp.CurrNB())
 			}()
-			require.NoError(t, source.GroupGrow(1))
+			require.NoError(t, source.GroupGrow(2))
 
 			input := vector.NewVec(tc.typ)
 			defer func() {
@@ -901,7 +901,7 @@ func TestCountDistinctUnmarshalAcrossAccountedArenaGrowth(t *testing.T) {
 			}
 			groups := make([]uint64, hashmap.UnitLimit)
 			for row := range groups {
-				groups[row] = 1
+				groups[row] = uint64(row%2 + 1)
 			}
 			for offset := 0; offset < input.Length(); offset += hashmap.UnitLimit {
 				workGroups := groups[:min(hashmap.UnitLimit, input.Length()-offset)]
@@ -916,21 +916,24 @@ func TestCountDistinctUnmarshalAcrossAccountedArenaGrowth(t *testing.T) {
 
 			var encoded bytes.Buffer
 			require.NoError(t, source.SaveIntermediateResult(
-				1, [][]uint8{{1}}, &encoded))
+				2, [][]uint8{{1, 1}}, &encoded))
 			require.NoError(t, target.UnmarshalFromReader(
 				bytes.NewReader(encoded.Bytes()), mp))
 			targetBase := target.(aggregateBaseCarrier).aggregateBase()
 			require.Greater(t, len(targetBase.state[0].argbuf), kAggArgArenaSize,
 				"the round trip must cross the initial arena and exercise relocation")
 
-			// Existing values must still deduplicate after relocation, while a new
-			// key must remain insertable through the cursor reset at the growth boundary.
+			// Growth while restoring the second group relocates the first group's
+			// nodes too. Both ranges must still deduplicate existing values, and both
+			// insertion cursors must accept a new boundary key afterwards.
 			followup := vector.NewVec(tc.typ)
 			defer followup.Free(mp)
-			for _, value := range []int{0, tc.distinctRows - 1, tc.distinctRows} {
+			for _, value := range []int{
+				0, tc.distinctRows - 1, tc.distinctRows, tc.distinctRows + 1,
+			} {
 				require.NoError(t, tc.appendValue(followup, value, mp))
 			}
-			followupGroups := []uint64{1, 1, 1}
+			followupGroups := []uint64{1, 2, 1, 2}
 			require.NoError(t,
 				target.(BatchCapacityPreflight).PreflightBatchFill(
 					0, followupGroups, []*vector.Vector{followup}))
@@ -941,8 +944,11 @@ func TestCountDistinctUnmarshalAcrossAccountedArenaGrowth(t *testing.T) {
 			require.NoError(t, err)
 			require.Len(t, results, 1)
 			defer results[0].Free(mp)
-			require.Equal(t, int64(tc.distinctRows+1),
-				vector.GetFixedAtNoTypeCheck[int64](results[0], 0))
+			require.Equal(t, 2, results[0].Length())
+			for group := range 2 {
+				require.Equal(t, int64(tc.distinctRows/2+1),
+					vector.GetFixedAtNoTypeCheck[int64](results[0], group))
+			}
 		})
 	}
 }
