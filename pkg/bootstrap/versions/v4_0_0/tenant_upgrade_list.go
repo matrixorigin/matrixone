@@ -19,6 +19,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/bootstrap/versions"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/frontend"
 	"github.com/matrixorigin/matrixone/pkg/partitionservice"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
@@ -89,10 +90,11 @@ var upg_alter_mo_snapshots = versions.UpgradeEntry{
 }
 
 var upg_information_schema_columns = versions.UpgradeEntry{
-	Schema:    sysview.InformationDBConst,
-	TableName: "COLUMNS",
-	UpgType:   versions.MODIFY_VIEW,
-	UpgSql:    sysview.InformationSchemaColumnsDDL,
+	Schema:                  sysview.InformationDBConst,
+	TableName:               "COLUMNS",
+	UpgType:                 versions.MODIFY_VIEW,
+	UpgSql:                  sysview.InformationSchemaColumnsDDL,
+	RequiredProtocolVersion: defines.MORPCVersion46,
 	CheckFunc: func(txn executor.TxnExecutor, accountId uint32) (bool, error) {
 		exists, viewDef, err := versions.CheckViewDefinition(txn, accountId, sysview.InformationDBConst, "COLUMNS")
 		if err != nil {
@@ -110,10 +112,11 @@ var upg_information_schema_columns = versions.UpgradeEntry{
 // Keep a follow-up MODIFY_VIEW entry so existing 4.0.0 tenants rerun the
 // refreshed COLUMNS definition when only the view text changes.
 var upg_information_schema_columns_geometry_srid = versions.UpgradeEntry{
-	Schema:    sysview.InformationDBConst,
-	TableName: "COLUMNS",
-	UpgType:   versions.MODIFY_VIEW,
-	UpgSql:    sysview.InformationSchemaColumnsDDL,
+	Schema:                  sysview.InformationDBConst,
+	TableName:               "COLUMNS",
+	UpgType:                 versions.MODIFY_VIEW,
+	UpgSql:                  sysview.InformationSchemaColumnsDDL,
+	RequiredProtocolVersion: defines.MORPCVersion46,
 	CheckFunc: func(txn executor.TxnExecutor, accountId uint32) (bool, error) {
 		exists, viewDef, err := versions.CheckViewDefinition(txn, accountId, sysview.InformationDBConst, "COLUMNS")
 		if err != nil {
@@ -135,10 +138,11 @@ var upg_information_schema_columns_geometry_srid = versions.UpgradeEntry{
 // Adding this entry bumps the v4.0.0 VersionOffset so the refreshed view text
 // is reapplied even when the server version itself does not change.
 var upg_information_schema_columns_srs_id_from_type = versions.UpgradeEntry{
-	Schema:    sysview.InformationDBConst,
-	TableName: "COLUMNS",
-	UpgType:   versions.MODIFY_VIEW,
-	UpgSql:    sysview.InformationSchemaColumnsDDL,
+	Schema:                  sysview.InformationDBConst,
+	TableName:               "COLUMNS",
+	UpgType:                 versions.MODIFY_VIEW,
+	UpgSql:                  sysview.InformationSchemaColumnsDDL,
+	RequiredProtocolVersion: defines.MORPCVersion46,
 	CheckFunc: func(txn executor.TxnExecutor, accountId uint32) (bool, error) {
 		exists, viewDef, err := versions.CheckViewDefinition(txn, accountId, sysview.InformationDBConst, "COLUMNS")
 		if err != nil {
