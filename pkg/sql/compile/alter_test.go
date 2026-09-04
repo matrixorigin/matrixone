@@ -285,6 +285,37 @@ func TestValidateAlterDataBranchLineageTxn(t *testing.T) {
 	}
 }
 
+func TestPrepareAlterDataBranchLineageRejectsLiveBranchTxnWithStatement(t *testing.T) {
+	const (
+		oldTableID    = uint64(42)
+		parentTableID = uint64(41)
+		database      = "test"
+		table         = "dept"
+	)
+	ctrl := gomock.NewController(t)
+	spyExec := &alterCopyInsertSpyExecutor{results: make(map[string]executor.Result)}
+	c := newAlterCopyPrecheckCompile(t, ctrl, spyExec)
+	txnOp := mock_frontend.NewMockTxnOperator(ctrl)
+	txnOp.EXPECT().TxnOptions().Return(txn.TxnOptions{ByBegin: true, Autocommit: true})
+	txnOp.EXPECT().Txn().Return(txn.TxnMeta{})
+	c.proc.Base.TxnOperator = txnOp
+
+	participationSQL := alterDataBranchParticipationSQL(oldTableID)
+	metadataSQL := "select table_id, p_table_id, clone_ts, creator, level, table_deleted from mo_catalog.mo_branch_metadata"
+	spyExec.results[participationSQL] = newAlterCopyFixedResult(
+		t, c.proc.Mp(), types.T_int32.ToType(), []int32{1},
+	)
+	spyExec.results[metadataSQL] = newAlterLineageMetadataResult(
+		t, c.proc.Mp(), []uint64{oldTableID}, []uint64{parentTableID}, []int64{100},
+		[]uint64{uint64(catalog.System_Account)}, []string{"table"}, []bool{false},
+	)
+
+	lineagePlan, err := c.prepareAlterDataBranchLineage(oldTableID, database, table, "TRUNCATE")
+	require.ErrorContains(t, err, "TRUNCATE on a data-branch lineage is not supported inside an explicit transaction")
+	require.False(t, lineagePlan.enabled)
+	require.Equal(t, []string{participationSQL, metadataSQL}, spyExec.executedSQLs)
+}
+
 func TestPrepareAlterDataBranchLineageAllowsHistoricalSourceTxn(t *testing.T) {
 	const (
 		oldTableID = uint64(42)
