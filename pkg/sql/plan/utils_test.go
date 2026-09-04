@@ -92,7 +92,9 @@ func TestPreparedJSONComparisonParamPositionsIncludesMemberOfLeftParam(t *testin
 			Args: []*plan.Expr{param, right},
 		}},
 	}
-	preparePlan := &plan.Plan{Query: &plan.Query{Nodes: []*plan.Node{{ProjectList: []*plan.Expr{memberOf}}}}}
+	preparePlan := &plan.Plan{Plan: &plan.Plan_Query{Query: &plan.Query{
+		Nodes: []*plan.Node{{ProjectList: []*plan.Expr{memberOf}}},
+	}}}
 	require.Equal(t, []int32{3}, PreparedJSONComparisonParamPositions(preparePlan))
 }
 

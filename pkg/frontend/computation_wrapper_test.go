@@ -323,6 +323,8 @@ func newPreparedExecuteEnvForSQLWithCompilerContext(
 		getFromSendLongData:        make(map[int]struct{}),
 		protocolVersion:            currentProtocolVersion(proc),
 		directResultParamPositions: plan2.PreparedPlanDirectResultParamPositions(preparePlan.GetDcl().GetPrepare().Plan),
+		jsonComparisonParamPositions: plan2.PreparedJSONComparisonParamPositions(
+			preparePlan.GetDcl().GetPrepare().Plan),
 		fixedIntegerParamPositions: fixedIntegerParamPositions,
 		hasPaginationParams:        hasPaginationParams,
 		hasLagLeadParams:           hasLagLeadParams,
@@ -421,6 +423,61 @@ func TestInitExecuteStmtParamPreservesBinaryFlagPerUserVariable(t *testing.T) {
 	require.False(t, cw.proc.GetPrepareParamIsBin(0), "binary metadata must not leak into the next execution")
 	cw.proc.GetPrepareParams().Free(cw.proc.Mp())
 	cw.proc.SetPrepareParams(nil)
+}
+
+func TestInitExecuteStmtParamUsesBinaryMemberOfTypeAndFilter(t *testing.T) {
+	const query = `select 1 where ? member of ('[0.10000000149011612]')`
+	ses, prepareStmt, cw, execCtx := newPreparedExecuteEnvForSQL(t, 118, query)
+	defer prepareStmt.Close()
+
+	// Use the same packet decoder as COM_STMT_EXECUTE, then pass its output
+	// through the production execute-time parameter setup.  No test-only
+	// PrepareParamKind or concrete type is installed by hand.
+	setSessionAlloc("", NewLeakCheckAllocator())
+	ioses, err := NewIOSession(&testConn{}, getPu(""), "")
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = ioses.Close() })
+	proto := NewMysqlClientProtocol("", 0, ioses, 1024, getPu("").SV)
+	proto.SetSession(ses)
+	require.NoError(t, proto.ParseExecuteData(
+		execCtx.reqCtx, cw.proc, prepareStmt, buildFloat32ExecutePacket(float32(0.1)), 0))
+
+	retComp, runtimePlan, stmt, _, owned, err := initExecuteStmtParam(
+		execCtx, ses, cw, nil, prepareStmt.Name)
+	if owned && stmt != nil {
+		defer stmt.Free()
+	}
+	require.NoError(t, err)
+	require.Nil(t, retComp)
+	require.Equal(t, types.T_float32, cw.proc.GetPrepareParamType(0))
+	require.Equal(t, vector.PrepareParamFloat, cw.proc.GetPrepareParamKind(0))
+	require.Equal(t, []int32{0}, prepareStmt.jsonComparisonParamPositions)
+
+	var predicate *plan.Expr
+	for _, node := range runtimePlan.GetQuery().Nodes {
+		for _, candidate := range node.FilterList {
+			if candidate.GetF() != nil &&
+				candidate.GetF().Func.GetObjName() == "cast" {
+				require.GreaterOrEqual(t, len(candidate.GetF().Args), 1)
+				require.NotNil(t, candidate.GetF().Args[0].GetF())
+				require.Equal(t, "member of", candidate.GetF().Args[0].GetF().Func.GetObjName())
+				predicate = candidate
+				break
+			}
+		}
+		if predicate != nil {
+			break
+		}
+	}
+	require.NotNil(t, predicate, "prepared MEMBER OF must remain a production filter predicate")
+
+	executor, err := colexec.NewExpressionExecutor(cw.proc, predicate)
+	require.NoError(t, err)
+	defer executor.Free()
+	result, err := executor.Eval(cw.proc, []*batch.Batch{batch.EmptyForConstFoldBatch}, nil)
+	require.NoError(t, err)
+	require.Equal(t, types.T_bool, result.GetType().Oid)
+	require.True(t, vector.GetFixedAtNoTypeCheck[bool](result, 0))
 }
 
 func TestPreparedParamValuesPreservesNullProtocolProvenance(t *testing.T) {

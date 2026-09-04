@@ -3093,8 +3093,10 @@ func TestParseExecuteDataMemberOfBinaryFloat32PreservesConcreteType(t *testing.T
 		buildFloat32ExecutePacket(float32(0.1)), 0))
 	require.Equal(t, []byte{byte(defines.MYSQL_TYPE_FLOAT), 0}, prepareStmt.ParamTypes)
 	require.Equal(t, "0.1", prepareStmt.params.GetStringAt(0))
-	require.Equal(t, types.T_float32,
-		binaryProtocolPrepareParamType(defines.MYSQL_TYPE_FLOAT, false, prepareStmt.params.GetRawBytesAt(0)))
+	runtimeType, ok := binaryProtocolPrepareParamType(
+		defines.MYSQL_TYPE_FLOAT, false, prepareStmt.params.GetRawBytesAt(0))
+	require.True(t, ok)
+	require.Equal(t, types.T_float32, runtimeType.Oid)
 
 	preparedPlan := prepareStmt.PreparePlan.GetDcl().GetPrepare().Plan
 	require.Equal(t, []int32{0}, plan.PreparedJSONComparisonParamPositions(preparedPlan))

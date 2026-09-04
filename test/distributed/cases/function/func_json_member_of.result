@@ -45,6 +45,9 @@ select 1 member ('[1]'), 1 member of ('[2]');
 select 1 + 1 member of ('[2]') and 3 member of ('[3]');
 ➤ 1 + 1 member of ([2]) and 3 member of ([3])[-7,1,0]  𝄀
 1
+select 2 as value, 2 member of ('[2]') as is_member where 2 member of ('[2]');
+➤ value[4,32,0]  ¦  is_member[-5,64,0]  𝄀
+2  ¦  1
 drop table if exists member;
 create table member (member int);
 insert into member values (1);
