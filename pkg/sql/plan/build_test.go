@@ -3021,13 +3021,25 @@ func TestLargeUpdateTableLockRequiresUnrestrictedSingleTarget(t *testing.T) {
 			wantTableLock: false,
 		},
 		{
-			name:    "incomplete float keyspace stays row scoped",
-			sql:     "UPDATE NATION SET N_NAME = 'updated'",
-			maxRows: 1,
+			name:          "float64 full keyspace can use table lock",
+			sql:           "UPDATE NATION SET N_NAME = 'updated'",
+			maxRows:       1,
+			wantTableLock: true,
 			prepare: func(mock *MockOptimizer) {
 				tableDef := mock.ctxt.tables["nation"]
 				pkPos := tableDef.Name2ColIndex[tableDef.Pkey.PkeyColName]
 				tableDef.Cols[pkPos].Typ = plan.Type{Id: int32(types.T_float64)}
+			},
+		},
+		{
+			name:          "float32 full keyspace can use table lock",
+			sql:           "UPDATE NATION SET N_NAME = 'updated'",
+			maxRows:       1,
+			wantTableLock: true,
+			prepare: func(mock *MockOptimizer) {
+				tableDef := mock.ctxt.tables["nation"]
+				pkPos := tableDef.Name2ColIndex[tableDef.Pkey.PkeyColName]
+				tableDef.Cols[pkPos].Typ = plan.Type{Id: int32(types.T_float32)}
 			},
 		},
 		{
@@ -3151,8 +3163,9 @@ func TestLargeUnrestrictedIndexedUpdateLocksEveryWrittenNamespace(t *testing.T) 
 
 func TestLargeSharedLockTargetsKeepBoundedFallback(t *testing.T) {
 	tests := []struct {
-		name string
-		sql  string
+		name    string
+		sql     string
+		prepare func(*MockOptimizer)
 	}{
 		{
 			name: "select for share",
@@ -3166,11 +3179,32 @@ func TestLargeSharedLockTargetsKeepBoundedFallback(t *testing.T) {
 			name: "foreign key validation",
 			sql:  "INSERT INTO replace_fk_c VALUES (10, 1), (11, 1)",
 		},
+		{
+			name: "float32 select for share",
+			sql:  "SELECT N_NATIONKEY FROM NATION FOR SHARE",
+			prepare: func(mock *MockOptimizer) {
+				tableDef := mock.ctxt.tables["nation"]
+				pkPos := tableDef.Name2ColIndex[tableDef.Pkey.PkeyColName]
+				tableDef.Cols[pkPos].Typ = plan.Type{Id: int32(types.T_float32)}
+			},
+		},
+		{
+			name: "float64 lock in share mode",
+			sql:  "SELECT N_NATIONKEY FROM NATION LOCK IN SHARE MODE",
+			prepare: func(mock *MockOptimizer) {
+				tableDef := mock.ctxt.tables["nation"]
+				pkPos := tableDef.Name2ColIndex[tableDef.Pkey.PkeyColName]
+				tableDef.Cols[pkPos].Typ = plan.Type{Id: int32(types.T_float64)}
+			},
+		},
 	}
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			mock := NewMockOptimizer(true)
+			if test.prepare != nil {
+				test.prepare(mock)
+			}
 			proc := testutil.NewProc(t)
 			lockService := mock_lock.NewMockLockService(gomock.NewController(t))
 			lockService.EXPECT().GetConfig().Return(lockservice.Config{
