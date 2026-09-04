@@ -743,6 +743,71 @@ func TestBlockDataReadWithFilterAppliesVectorTopKAfterResidual(t *testing.T) {
 	require.Equal(t, "payload-5", output.Vecs[2].GetStringAt(1))
 	require.Equal(t, []float64{1, 4}, vector.MustFixedColWithTypeCheck[float64](output.Vecs[3]))
 
+	// A storage predicate (the centroid-prefix lookup for IVFFLAT) supplies
+	// physical block rows before the residual INCLUDE filter. This exercises
+	// the fused filter-column/vector-column ObjectIO read.
+	output.CleanOnlyData()
+	top = &objectio.IndexReaderTopOp{
+		ColPos: 1, Limit: 2, Typ: types.T_array_float32,
+		NumVec: types.ArrayToBytes([]float32{0, 0}), MetricType: metric.Metric_L2sqDistance,
+	}
+	preFilterRows = 0
+	err = blockDataReadWithFilter(
+		ctx, &info, nil,
+		[]uint16{0, 1, 2}, colTypes, -1, types.TS{},
+		[]int64{1, 2, 4, 5, 7}, fileservice.Policy(0), output,
+		cacheVectors, queryMP, fs, []int{0},
+		func(bat *batch.Batch, _ []int) (engine.ReaderFilterResult, error) {
+			ids := vector.MustFixedColWithTypeCheck[int32](bat.Vecs[0])
+			sels := make([]int64, 0, len(ids))
+			for pos, id := range ids {
+				if id >= 2 && id <= 5 {
+					sels = append(sels, int64(pos))
+				}
+			}
+			bat.Vecs[0].Shrink(sels, false)
+			bat.SetRowCount(len(sels))
+			return engine.ReaderFilterResult{Sels: sels}, nil
+		},
+		top, &preFilterRows,
+	)
+	require.NoError(t, err)
+	require.Equal(t, 5, preFilterRows)
+	require.Equal(t, 2, output.RowCount())
+	require.Equal(t, []int32{2, 5}, vector.MustFixedColWithTypeCheck[int32](output.Vecs[0]))
+	require.Zero(t, output.Vecs[1].Length())
+	require.Equal(t, "payload-2", output.Vecs[2].GetStringAt(0))
+	require.Equal(t, "payload-5", output.Vecs[2].GetStringAt(1))
+	require.Equal(t, []float64{1, 4}, vector.MustFixedColWithTypeCheck[float64](output.Vecs[3]))
+
+	// Keep storage-selected rows non-empty while the residual predicate rejects
+	// all of them. The fused read must distinguish an empty result from nil,
+	// which means "score every storage-selected row" to TopNVector.
+	output.CleanOnlyData()
+	top = &objectio.IndexReaderTopOp{
+		ColPos: 1, Limit: 2, Typ: types.T_array_float32,
+		NumVec: types.ArrayToBytes([]float32{0, 0}), MetricType: metric.Metric_L2sqDistance,
+	}
+	preFilterRows = 0
+	err = blockDataReadWithFilter(
+		ctx, &info, nil,
+		[]uint16{0, 1, 2}, colTypes, -1, types.TS{},
+		[]int64{1, 2, 4, 5, 7}, fileservice.Policy(0), output,
+		cacheVectors, queryMP, fs, []int{0},
+		func(bat *batch.Batch, _ []int) (engine.ReaderFilterResult, error) {
+			bat.Vecs[0].CleanOnlyData()
+			bat.SetRowCount(0)
+			return engine.ReaderFilterResult{Sels: []int64{}}, nil
+		},
+		top, &preFilterRows,
+	)
+	require.NoError(t, err)
+	require.Equal(t, 5, preFilterRows)
+	require.True(t, output.IsEmpty())
+	for _, vec := range output.Vecs {
+		require.Zero(t, vec.Length())
+	}
+
 	output.CleanOnlyData()
 	top = &objectio.IndexReaderTopOp{
 		ColPos: 1, Limit: 2, Typ: types.T_array_float32,

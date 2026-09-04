@@ -75,3 +75,27 @@ func TestTopNVectorNaNRangeSelectsNothing(t *testing.T) {
 	require.Empty(t, distances)
 	require.Empty(t, top.DistHeap)
 }
+
+func TestTopNVectorDoesNotMutateSelectedRows(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+	entries := vector.NewVec(types.New(types.T_array_float32, 1, 0))
+	defer entries.Free(mp)
+	require.NoError(t, vector.AppendArray(entries, []float32{1}, false, mp))
+	require.NoError(t, vector.AppendArray(entries, []float32(nil), true, mp))
+	require.NoError(t, vector.AppendArray(entries, []float32{2}, false, mp))
+
+	selected := []int64{-1, 0, 3, 1, 2}
+	wantSelected := append([]int64(nil), selected...)
+	top := &IndexReaderTopOp{
+		Typ:        types.T_array_float32,
+		MetricType: metric.Metric_L2sqDistance,
+		NumVec:     types.ArrayToBytes([]float32{0}),
+		Limit:      2,
+	}
+	rows, distances, err := TopNVector(context.Background(), selected, entries, top)
+	require.NoError(t, err)
+	require.Equal(t, []int64{0, 2}, rows)
+	require.Equal(t, []float64{1, 4}, distances)
+	require.Equal(t, wantSelected, selected)
+}
