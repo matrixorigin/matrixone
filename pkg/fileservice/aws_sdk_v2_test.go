@@ -46,6 +46,12 @@ func TestAwsSDKv2ConditionalObjectIdentityReads(t *testing.T) {
 			w.WriteHeader(http.StatusOK)
 			return
 		}
+		if r.URL.Query().Get("versionId") == "gone" {
+			w.Header().Set("Content-Type", "application/xml")
+			w.WriteHeader(http.StatusNotFound)
+			_, _ = io.WriteString(w, awsS3ErrorXML("NoSuchVersion", "planned version was deleted"))
+			return
+		}
 		if r.URL.Query().Get("versionId") == "stale" || r.Header.Get("If-Match") == `"stale"` {
 			w.Header().Set("Content-Type", "application/xml")
 			w.WriteHeader(http.StatusPreconditionFailed)
@@ -95,6 +101,11 @@ func TestAwsSDKv2ConditionalObjectIdentityReads(t *testing.T) {
 	stale.VersionID = ""
 	stale.ETag = `"stale"`
 	_, err = sdk.ReadObjectWithIdentity(context.Background(), "object", &min, &max, stale)
+	require.ErrorIs(t, err, ErrObjectChanged)
+
+	gone := identity
+	gone.VersionID = "gone"
+	_, err = sdk.ReadObjectWithIdentity(context.Background(), "object", &min, &max, gone)
 	require.ErrorIs(t, err, ErrObjectChanged)
 }
 
