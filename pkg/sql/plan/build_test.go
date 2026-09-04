@@ -3549,6 +3549,35 @@ func TestClusterTableInsertUsesModernPath(t *testing.T) {
 	}
 }
 
+func TestClusterTableInsertRejectsUnsupportedSyntax(t *testing.T) {
+	tests := []struct {
+		name    string
+		sql     string
+		wantErr string
+	}{
+		{
+			name:    "overwrite",
+			sql:     "insert overwrite cluster_generated_insert (id, base_value) values (1, 4)",
+			wantErr: "not supported: INSERT OVERWRITE currently supports Iceberg table mappings",
+		},
+		{
+			name:    "partition values",
+			sql:     "insert into cluster_generated_insert partition(p = 1) (id, base_value) values (1, 4)",
+			wantErr: "not supported: INSERT PARTITION value syntax currently supports Iceberg INSERT OVERWRITE only",
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			mock := NewMockOptimizer(true)
+			addClusterGeneratedInsertTableForTest(mock)
+
+			_, err := runOneStmt(mock, t, test.sql)
+			require.EqualError(t, err, test.wantErr)
+		})
+	}
+}
+
 func TestClusterTableLoadUsesModernPath(t *testing.T) {
 	mock := NewMockOptimizer(true)
 	addClusterGeneratedInsertTableForTest(mock)

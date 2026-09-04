@@ -304,6 +304,8 @@ constraint ck_cluster_generated_base check (base_value > 0),
 primary key(id, account_id)
 );
 
+insert overwrite cluster_table_generated_insert (id, base_value) values (99, 99);
+insert into cluster_table_generated_insert partition(p = 1) (id, base_value) values (99, 99);
 insert into cluster_table_generated_insert (id, base_value) values (1, 4);
 insert into cluster_table_generated_insert (id, base_value, account_id) select 2, 6, 0;
 prepare cluster_generated_insert_stmt from 'insert into cluster_table_generated_insert (id, base_value) values (?, ?)';

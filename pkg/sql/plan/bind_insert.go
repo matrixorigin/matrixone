@@ -99,6 +99,14 @@ func (builder *QueryBuilder) bindInsert(stmt *tree.Insert, bindCtx *BindContext)
 	// createQuery from the materialized new-row image. HNSW/CAGRA/IVF-PQ are cron-
 	// maintained and ride the modern path with no inline sub-plan.
 	tableDef := dmlCtx.tableDefs[0]
+	if tableDef.TableType == catalog.SystemClusterRel {
+		if stmt.Overwrite {
+			return 0, moerr.NewNotSupported(builder.GetContext(), "INSERT OVERWRITE currently supports Iceberg table mappings")
+		}
+		if len(stmt.PartitionValues) > 0 {
+			return 0, moerr.NewNotSupported(builder.GetContext(), "INSERT PARTITION value syntax currently supports Iceberg INSERT OVERWRITE only")
+		}
+	}
 	if err := validateTableRegularIndexPrefixMetadata(tableDef); err != nil {
 		return 0, err
 	}
