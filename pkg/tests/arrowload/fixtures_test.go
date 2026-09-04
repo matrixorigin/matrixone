@@ -239,8 +239,9 @@ func fixtureTimestampDict(t *testing.T, dir, filename, container string, rows []
 
 // --- representative schema 3: long binary payloads --------------------------------
 
-// binaryRow is one logical row of the long-binary fixture. Target table:
-// `id BIGINT NOT NULL, payload VARBINARY(200)`.
+// binaryRow is one logical row of the long-binary fixture. The same source is
+// loaded into VARBINARY(200) and BINARY(200) targets so the public-path test
+// distinguishes preserved source length from fixed-width zero padding.
 type binaryRow struct {
 	id      int64
 	payload []byte

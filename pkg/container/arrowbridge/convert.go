@@ -453,7 +453,11 @@ func convertVarlen(
 	if err != nil {
 		return nil, ConvertStats{}, err
 	}
-	var avoided, inlineCopied int64
+	var (
+		avoided           int64
+		inlineCopied      int64
+		fixedBinaryPadRow bool
+	)
 	for row := 0; row < column.Len(); row++ {
 		if err = checkConvertContext(ctx, row); err != nil {
 			return nil, ConvertStats{}, err
@@ -468,6 +472,7 @@ func convertVarlen(
 		if err = validateVarlenValue(ctx, row, value, view.text, target); err != nil {
 			return nil, ConvertStats{}, err
 		}
+		fixedBinaryPadRow = fixedBinaryPadRow || requiresFixedBinaryPadding(target, value)
 		if len(value) > types.VarlenaInlineSize {
 			avoided += int64(len(value))
 		} else {
@@ -476,9 +481,13 @@ func convertVarlen(
 	}
 	// Short MO varlena values must remain canonical inline descriptors. Borrowing
 	// only the long values keeps that invariant while still avoiding their copy.
-	if forceMaterialize || avoided == 0 {
+	// BINARY(N) assignment stores exactly N bytes, so any short value forces an
+	// owned, zero-padded image for the entire column.
+	if forceMaterialize || avoided == 0 || fixedBinaryPadRow {
 		vec, stats, err := materializeVarlen(ctx, column, target, view, mp, selection)
-		stats.EligiblePayloadBytes = avoided
+		if !fixedBinaryPadRow {
+			stats.EligiblePayloadBytes = avoided
+		}
 		return vec, stats, err
 	}
 	// Admission follows physical retained capacity, while this policy compares
@@ -662,6 +671,38 @@ func validateVarlenValue(
 	return nil
 }
 
+func requiresFixedBinaryPadding(target types.Type, value []byte) bool {
+	return target.Oid == types.T_binary && target.Width > 0 && len(value) < int(target.Width)
+}
+
+// appendLoadVarlenValue applies storage semantics normally supplied by the
+// DML assignment cast. Arrow LOAD emits target-typed vectors directly, so
+// fixed BINARY padding has to happen at this bridge boundary.
+func appendLoadVarlenValue(
+	vec *vector.Vector,
+	value []byte,
+	isNull bool,
+	target types.Type,
+	mp *mpool.MPool,
+) (int64, error) {
+	if isNull || !requiresFixedBinaryPadding(target, value) {
+		if err := vector.AppendBytes(vec, value, isNull, mp); err != nil {
+			return 0, err
+		}
+		if isNull {
+			return 0, nil
+		}
+		return int64(len(value)), nil
+	}
+	stored := int(target.Width)
+	err := vector.AppendBytesWithWriter(vec, stored, mp, func(dst []byte) error {
+		copy(dst, value)
+		clear(dst[len(value):])
+		return nil
+	})
+	return int64(stored), err
+}
+
 func materializeVarlen(
 	ctx context.Context,
 	column arrow.Array,
@@ -683,13 +724,14 @@ func materializeVarlen(
 			}
 		}
 		value := view.value(row)
-		if err := vector.AppendBytes(vec, value, column.IsNull(row), mp); err != nil {
+		stored, err := appendLoadVarlenValue(
+			vec, value, column.IsNull(row), target, mp,
+		)
+		if err != nil {
 			vec.Free(mp)
 			return nil, ConvertStats{}, err
 		}
-		if !column.IsNull(row) {
-			copied += int64(len(value))
-		}
+		copied += stored
 	}
 	return vec, ConvertStats{MaterializedPayloadBytes: copied, MaterializedColumns: 1}, nil
 }
@@ -1177,13 +1219,7 @@ func appendDictionaryValue(
 				return 0, err
 			}
 		}
-		if err := vector.AppendBytes(vec, value, isNull, mp); err != nil {
-			return 0, err
-		}
-		if isNull {
-			return 0, nil
-		}
-		return int64(len(value)), nil
+		return appendLoadVarlenValue(vec, value, isNull, target, mp)
 	}
 	if isNull {
 		return 0, appendDictionaryNull(vec, target, mp)
