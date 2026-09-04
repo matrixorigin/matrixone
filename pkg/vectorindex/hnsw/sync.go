@@ -627,7 +627,13 @@ func (s *HnswSync[T]) nextTimestamp() int64 {
 func (s *HnswSync[T]) Save(sqlproc *sqlexec.SqlProcess) error {
 	// save to files and then save to database
 	s.ts = s.nextTimestamp()
-	sqls, err := s.ToSql(s.ts)
+	// build_ts stays 0 (unknown) for a CDC-written generation. The meaningful value would be
+	// the upper bound of the change range this sync applied, and the consumer never sees it:
+	// iscp.DataRetriever exposes only Next/UpdateWatermark/DataType/AccountID/TableID, and the
+	// iteration's [from, to] stays upstream. The sync transaction's own SnapshotTS says when
+	// the sync RAN, not which data version the generation covers -- recording that would repeat
+	// exactly the wall-clock conflation build_ts exists to fix.
+	sqls, err := s.ToSql(s.ts, 0)
 	if err != nil {
 		return err
 	}
@@ -746,7 +752,9 @@ func (s *HnswSync[T]) getLastModelAndIncrForSync(sqlproc *sqlexec.SqlProcess, ma
 // generate SQL to update the secondary index tables
 // 1. sync the metadata table
 // 2. sync the index file to index table
-func (s *HnswSync[T]) ToSql(ts int64) ([]string, error) {
+// ToSql emits the CDC sync's inserts. ts orders the generations (wall clock); buildTS is the
+// transaction SnapshotTS the content reflects.
+func (s *HnswSync[T]) ToSql(ts int64, buildTS int64) ([]string, error) {
 
 	if len(s.indexes) == 0 {
 		return []string{}, nil
@@ -795,7 +803,8 @@ func (s *HnswSync[T]) ToSql(ts int64) ([]string, error) {
 		}
 		fs := finfo.Size()
 
-		metas = append(metas, fmt.Sprintf("('%s', '%s', %d, %d)", idx.Id, chksum, ts, fs))
+		metas = append(metas, fmt.Sprintf("('%s', '%s', %d, %d, %d, %d)",
+			idx.Id, chksum, ts, fs, idx.Len.Load(), buildTS))
 		ts++
 	}
 

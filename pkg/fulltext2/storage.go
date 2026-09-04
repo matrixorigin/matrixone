@@ -113,6 +113,21 @@ const maxInsertTuples = 500
 // base (sync CREATE/REINDEX build); tag=1 is a CDC delta. sqlproc resolves the LOCAL
 // SSD spill dir (falls back to /tmp when none is attached). The returned cleanup MUST
 // run after the SQLs execute (they read the temp file at execution).
+// segmentBuildTS is the base-table version a segment's content reflects, for metadata.build_ts.
+//
+// A tag=0 BASE is built by reading the source table inside this transaction, so the txn
+// SnapshotTS is exactly that version. A tag=1 CDC TAIL is not: the meaningful value would be the
+// upper bound of the change range being applied, and the consumer never sees it --
+// iscp.DataRetriever exposes no timestamps, and the iteration's [from, to] stays upstream. The
+// sync txn's SnapshotTS would only say when the sync ran, so a tail records 0 (unknown) rather
+// than a number that looks like a data version and is not.
+func segmentBuildTS(sqlproc *sqlexec.SqlProcess, tag int) int64 {
+	if tag != 0 {
+		return 0
+	}
+	return sqlproc.BuildSnapshotTS()
+}
+
 func (s *Segment) ToInsertSqls(sqlproc *sqlexec.SqlProcess, cfg TableConfig, ts int64, tag int) (sqls []string, cleanup func(), err error) {
 	buf, err := s.Serialize()
 	if err != nil {
@@ -137,12 +152,14 @@ func (s *Segment) ToInsertSqls(sqlproc *sqlexec.SqlProcess, cfg TableConfig, ts 
 	}
 
 	metaTbl := sqlquote.QualifiedIdent(cfg.DbName, cfg.MetadataTable)
-	sqls = append(sqls, fmt.Sprintf("INSERT INTO %s (%s, %s, %s, %s, %s, %s) VALUES (%s, %d, %s, %d, %d, %d)",
+	sqls = append(sqls, fmt.Sprintf("INSERT INTO %s (%s, %s, %s, %s, %s, %s, %s) VALUES (%s, %d, %s, %d, %d, %d, %d)",
 		metaTbl,
 		catalog.FullText2Index_TblCol_Metadata_Index_Id, catalog.FullText2Index_TblCol_Metadata_Timestamp,
 		catalog.FullText2Index_TblCol_Metadata_Checksum, catalog.FullText2Index_TblCol_Metadata_Filesize,
 		catalog.FullText2Index_TblCol_Metadata_Recency, catalog.FullText2Index_TblCol_Metadata_Nrow,
-		sqlquote.String(s.Id), ts, sqlquote.String(checksum), filesize, s.Recency, s.N))
+		catalog.FullText2Index_TblCol_Metadata_Build_Ts,
+		sqlquote.String(s.Id), ts, sqlquote.String(checksum), filesize, s.Recency, s.N,
+		segmentBuildTS(sqlproc, tag)))
 	sqls = append(sqls, fileChunkInsertSqls(cfg, s.Id, 0, path, 0, int(filesize), tag)...)
 	return sqls, cleanup, nil
 }

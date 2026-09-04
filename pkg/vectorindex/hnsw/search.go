@@ -259,6 +259,16 @@ func LoadMetadata[T types.RealNumbers](sqlproc *sqlexec.SqlProcess, dbname strin
 			fs := vector.GetFixedAtWithTypeCheck[int64](fsVec, i)
 
 			idx := &HnswModel[T]{Id: id, Checksum: chksum, Timestamp: ts, FileSize: fs}
+			// nrow and build_ts were appended after the original four columns, and the
+			// metadata table is created per index at CREATE INDEX -- REINDEX rewrites its rows,
+			// not the table -- so an index created before they existed still has four. Read
+			// them only when the batch actually carries them; absent means unknown.
+			if len(bat.Vecs) > 4 {
+				idx.Nrow = vector.GetFixedAtWithTypeCheck[int64](bat.Vecs[4], i)
+			}
+			if len(bat.Vecs) > 5 {
+				idx.BuildTS = vector.GetFixedAtWithTypeCheck[int64](bat.Vecs[5], i)
+			}
 			indexes = append(indexes, idx)
 		}
 	}

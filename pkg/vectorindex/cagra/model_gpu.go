@@ -83,6 +83,12 @@ type CagraModel[B, Q cuvs.VectorType] struct {
 	Timestamp int64
 	Checksum  string
 
+	// Nrow is the source rows this generation indexes and BuildTS is the transaction
+	// SnapshotTS its content was built from. Both 0 when the metadata row predates the
+	// columns -- read as unknown, never as "empty" or "built at the epoch".
+	Nrow    int64
+	BuildTS int64
+
 	// CDC / sync tracking
 	Dirty bool
 	View  bool
@@ -327,6 +333,10 @@ func (idx *CagraModel[B, Q]) saveToFile() error {
 		}
 	}
 	idx.HostComponentBytes = packSizes.Host
+
+	// Record the vector count while the handle is still alive; ToInsertSql needs it for the
+	// metadata row and Destroy below releases the index.
+	idx.Len = int64(idx.Index.Len())
 
 	// Free GPU memory — the index is now persisted on disk.
 	if err = idx.Index.Destroy(); err != nil {
@@ -891,6 +901,16 @@ func LoadMetadata[B, Q cuvs.VectorType](sqlproc *sqlexec.SqlProcess, dbname stri
 			ts := vector.GetFixedAtWithTypeCheck[int64](tsVec, i)
 			fs := vector.GetFixedAtWithTypeCheck[int64](fsVec, i)
 			idx := &CagraModel[B, Q]{Id: id, Checksum: chksum, Timestamp: ts, FileSize: fs}
+			// nrow and build_ts were appended after the original four columns, and the
+			// metadata table is created per index at CREATE INDEX -- REINDEX rewrites its
+			// rows, not the table -- so an index created before they existed still has four.
+			// Read them only when the batch carries them; absent means unknown.
+			if len(bat.Vecs) > 4 {
+				idx.Nrow = vector.GetFixedAtWithTypeCheck[int64](bat.Vecs[4], i)
+			}
+			if len(bat.Vecs) > 5 {
+				idx.BuildTS = vector.GetFixedAtWithTypeCheck[int64](bat.Vecs[5], i)
+			}
 			indexes = append(indexes, idx)
 		}
 	}

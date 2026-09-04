@@ -79,6 +79,12 @@ type IvfpqModel[B, Q cuvs.VectorType] struct {
 	Timestamp int64
 	Checksum  string
 
+	// Nrow is the source rows this generation indexes and BuildTS is the transaction
+	// SnapshotTS its content was built from. Both 0 when the metadata row predates the
+	// columns -- read as unknown, never as "empty" or "built at the epoch".
+	Nrow    int64
+	BuildTS int64
+
 	Dirty bool
 	View  bool
 	Len   int64
@@ -317,6 +323,10 @@ func (idx *IvfpqModel[B, Q]) saveToFile() error {
 		}
 	}
 	idx.HostComponentBytes = packSizes.Host
+
+	// Record the vector count while the handle is still alive; ToInsertSql needs it for the
+	// metadata row and Destroy below releases the index.
+	idx.Len = int64(idx.Index.Len())
 
 	if err = idx.Index.Destroy(); err != nil {
 		logutil.Errorf("IvfpqModel.saveToFile: Destroy FAILED idx=%s (tar RETAINED at %s): %v", idx.Id, tarPath, err)

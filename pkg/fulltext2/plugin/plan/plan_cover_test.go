@@ -308,11 +308,13 @@ func TestBuildFullTextIndexDefs_OK(t *testing.T) {
 	require.Equal(t, []string{"body"}, idxDefs[0].Parts)
 	require.NotEmpty(t, idxDefs[0].IndexAlgoParams)
 
-	// storage table: 4 declared cols + hidden composite pk; metadata: 6 cols.
+	// storage table: 4 declared cols + hidden composite pk; metadata: 7 cols
+	// (build_ts appended last, after the pre-existing nrow).
 	require.Equal(t, catalog.FullText2Index_TblType_Storage, tblDefs[0].TableType)
 	require.Equal(t, catalog.FullText2Index_TblType_Metadata, tblDefs[1].TableType)
 	require.Len(t, tblDefs[0].Cols, 5)
-	require.Len(t, tblDefs[1].Cols, 6)
+	require.Len(t, tblDefs[1].Cols, 7)
+	require.Equal(t, catalog.FullText2Index_TblCol_Metadata_Build_Ts, tblDefs[1].Cols[6].Name)
 	require.NotNil(t, tblDefs[0].Pkey)
 	require.NotNil(t, tblDefs[1].Pkey)
 }
@@ -364,7 +366,8 @@ func TestBuildFullTextIndexDefs_IncludeOK(t *testing.T) {
 
 	// Hidden tables are unchanged (no per-include SQL column).
 	require.Len(t, tblDefs[0].Cols, 5)
-	require.Len(t, tblDefs[1].Cols, 6)
+	require.Len(t, tblDefs[1].Cols, 7)
+	require.Equal(t, catalog.FullText2Index_TblCol_Metadata_Build_Ts, tblDefs[1].Cols[6].Name)
 }
 
 // TestBuildFullTextIndexDefs_IncludeUnsupportedType: an INCLUDE column of a type outside

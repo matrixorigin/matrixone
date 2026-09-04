@@ -137,6 +137,31 @@ func (s *SqlProcess) EffectiveSnapshotTS() *timestamp.Timestamp {
 	return s.SnapshotTS
 }
 
+// BuildSnapshotTS returns the transaction SnapshotTS (physical) this process reads at -- the
+// base-table version an index generation built here reflects, recorded in the metadata's build_ts.
+//
+// It is deliberately NOT the wall clock the metadata's "timestamp" column carries: that one only
+// orders generations, is skewable across CNs, and cannot be compared against a named snapshot's
+// TS to decide whether a generation actually covers the data a {snapshot = ...} read wants.
+//
+// 0 when there is no transaction to ask, which readers treat as unknown.
+func (s *SqlProcess) BuildSnapshotTS() int64 {
+	if s == nil {
+		return 0
+	}
+	var op client.TxnOperator
+	switch {
+	case s.Proc != nil:
+		op = s.Proc.GetTxnOperator()
+	case s.SqlCtx != nil:
+		op = s.SqlCtx.TxnOperator
+	}
+	if op == nil {
+		return 0
+	}
+	return op.Txn().SnapshotTS.PhysicalTime
+}
+
 // ApplyScanSnapshot threads a planner-resolved named snapshot onto this SqlProcess and returns
 // the effective historical read timestamp, or nil when the snapshot is not historical relative
 // to the current txn -- in which case nothing is bound and the read proceeds as an ordinary

@@ -594,12 +594,33 @@ const (
 	FullText2Index_TblCol_Storage_Data     = "data"
 	FullText2Index_TblCol_Storage_Tag      = "tag"
 
+	// nrow is the number of source rows this generation indexes, and build_ts is the
+	// TRANSACTION SnapshotTS (physical) its content was built from -- the version of the base
+	// table it reflects.
+	//
+	// build_ts is deliberately distinct from the "timestamp" column, which is a CN wall clock
+	// (time.Now) used only to order generations: a wall clock is skewable and is not comparable
+	// to a named snapshot's TS, so it cannot answer whether a generation actually covers the
+	// data a {snapshot = ...} read is asking for.
+	//
+	// build_ts is recorded only where it is genuinely knowable: a BUILD reads the source table
+	// inside its transaction, so that txn's SnapshotTS is exactly the version it captured. A
+	// CDC-appended generation records 0, because the consumer writing the row cannot see the
+	// change range it applied -- iscp.DataRetriever exposes no timestamps and the iteration's
+	// [from, to] stays upstream -- and the sync txn's own SnapshotTS would say when the sync ran,
+	// not which data version the generation covers.
+	//
+	// Both columns are also 0 for a generation written before they existed. Readers must
+	// therefore treat 0 as UNKNOWN, never as "empty" or "built at the epoch": the metadata table
+	// is created per index at CREATE INDEX, and REINDEX rewrites its rows rather than the table,
+	// so a pre-existing index keeps the old shape until something explicitly alters it.
 	FullText2Index_TblCol_Metadata_Index_Id  = "index_id"
 	FullText2Index_TblCol_Metadata_Timestamp = "timestamp"
 	FullText2Index_TblCol_Metadata_Checksum  = "checksum"
 	FullText2Index_TblCol_Metadata_Filesize  = "filesize"
 	FullText2Index_TblCol_Metadata_Recency   = "recency"
 	FullText2Index_TblCol_Metadata_Nrow      = "nrow"
+	FullText2Index_TblCol_Metadata_Build_Ts  = "build_ts"
 
 	// fulltext2_search TVF RESERVED output-column names. Unlike FullTextIndex_TabCol_Id
 	// ("doc_id", a PHYSICAL classic-index column), these are plan-level output ALIASES of
@@ -629,6 +650,8 @@ const (
 	Hnsw_TblCol_Metadata_Timestamp = "timestamp"
 	Hnsw_TblCol_Metadata_Checksum  = "checksum"
 	Hnsw_TblCol_Metadata_Filesize  = "filesize"
+	Hnsw_TblCol_Metadata_Nrow      = "nrow"
+	Hnsw_TblCol_Metadata_Build_Ts  = "build_ts"
 
 	/************ Cagra Index *************/
 
@@ -648,6 +671,8 @@ const (
 	Cagra_TblCol_Metadata_Timestamp = "timestamp"
 	Cagra_TblCol_Metadata_Checksum  = "checksum"
 	Cagra_TblCol_Metadata_Filesize  = "filesize"
+	Cagra_TblCol_Metadata_Nrow      = "nrow"
+	Cagra_TblCol_Metadata_Build_Ts  = "build_ts"
 
 	/************ IVF-PQ Index *************/
 
@@ -667,6 +692,8 @@ const (
 	Ivfpq_TblCol_Metadata_Timestamp = "timestamp"
 	Ivfpq_TblCol_Metadata_Checksum  = "checksum"
 	Ivfpq_TblCol_Metadata_Filesize  = "filesize"
+	Ivfpq_TblCol_Metadata_Nrow      = "nrow"
+	Ivfpq_TblCol_Metadata_Build_Ts  = "build_ts"
 
 	/************ 5. Logical ID Index (mo_tables) ************/
 
