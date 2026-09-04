@@ -18,9 +18,10 @@ import (
 	"bytes"
 	"container/heap"
 	"encoding/binary"
-	"errors"
 	"math"
 	"sort"
+
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 )
 
 const (
@@ -36,9 +37,9 @@ const (
 )
 
 var (
-	ErrFrequencyConfig   = errors.New("analyze: invalid frequency collector configuration")
-	ErrFrequencyOverflow = errors.New("analyze: frequency counter overflow")
-	ErrReservoirState    = errors.New("analyze: incompatible occurrence reservoir item")
+	ErrFrequencyConfig   = moerr.NewInvalidInputNoCtx("analyze: invalid frequency collector configuration")
+	ErrFrequencyOverflow = moerr.NewInternalErrorNoCtx("analyze: frequency counter overflow")
+	ErrReservoirState    = moerr.NewInvalidStateNoCtx("analyze: incompatible occurrence reservoir item")
 )
 
 type CountMin struct {

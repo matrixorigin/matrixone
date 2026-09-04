@@ -17,7 +17,6 @@ package disttae
 import (
 	"context"
 	"errors"
-	"fmt"
 	"math"
 	"strings"
 
@@ -487,14 +486,14 @@ func finalizeAnalyzeColumns(
 	}
 	for i := range states {
 		state := &states[i]
-		if state.ndv.IncidenceStateError() != nil {
-			return fmt.Errorf("ANALYZE column %s: %w", state.name, state.ndv.IncidenceStateError())
+		if incidenceErr := state.ndv.IncidenceStateError(); incidenceErr != nil {
+			return incidenceErr
 		}
 		nullCount := scaleSampleRatio(state.sampleNulls, sampleRows, populationRows)
 		populationNonNull := populationRows - min(nullCount, populationRows)
 		estimate, err := state.ndv.Estimate(float64(populationNonNull), blockSample)
 		if err != nil {
-			return fmt.Errorf("ANALYZE column %s NDV: %w", state.name, err)
+			return err
 		}
 		logutil.Info("manual-analyze-column-stats",
 			zap.String("column", state.name),

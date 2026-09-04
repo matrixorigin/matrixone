@@ -22,10 +22,11 @@ import (
 	"bytes"
 	"crypto/sha256"
 	"encoding/binary"
-	"errors"
 	"math"
 	"math/big"
 	"sort"
+
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 )
 
 const (
@@ -39,8 +40,8 @@ const (
 )
 
 var (
-	ErrInvalidPopulation = errors.New("analyze: invalid population")
-	ErrSampleBudget      = errors.New("analyze: sample budget cannot cover one block per stratum")
+	ErrInvalidPopulation = moerr.NewInvalidInputNoCtx("analyze: invalid population")
+	ErrSampleBudget      = moerr.NewInvalidInputNoCtx("analyze: sample budget cannot cover one block per stratum")
 )
 
 // Fraction is an exact probability in [0, 1].

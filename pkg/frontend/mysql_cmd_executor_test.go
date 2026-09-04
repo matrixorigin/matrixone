@@ -6111,16 +6111,6 @@ func makeAnalyzeCountResult(name string, value uint64) *MysqlResultSet {
 	return mrs
 }
 
-func requireAnalyzeCountValue(t *testing.T, ctx context.Context, result ExecResult, expected uint64) {
-	t.Helper()
-	mrs := result.(*MysqlResultSet)
-	require.Equal(t, uint64(1), mrs.GetColumnCount())
-	require.Equal(t, uint64(1), mrs.GetRowCount())
-	value, err := mrs.GetValue(ctx, 0, 0)
-	require.NoError(t, err)
-	require.EqualValues(t, expected, value)
-}
-
 func Test_convert_type(t *testing.T) {
 	ctx := context.TODO()
 	convey.Convey("type conversion", t, func() {

@@ -15,13 +15,14 @@
 package analyze
 
 import (
-	"errors"
 	"math"
+
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 )
 
 const SampledNDVAlgorithmV2 = "NDV_COLLAPSED_BLOCK_DUJ1_V2"
 
-var ErrInvalidNDVInput = errors.New("analyze: invalid sampled NDV input")
+var ErrInvalidNDVInput = moerr.NewInvalidInputNoCtx("analyze: invalid sampled NDV input")
 
 // SampledNDVInput is the complete scalar state consumed by the version-two
 // sampled estimator. All counts describe non-null values.

@@ -17,13 +17,14 @@ package analyze
 import (
 	"crypto/sha256"
 	"encoding/binary"
-	"errors"
 	"math"
+
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 )
 
 var (
-	ErrAccumulatorLimit = errors.New("analyze: NDV accumulator distinct-value limit exceeded")
-	ErrAccumulatorState = errors.New("analyze: incompatible NDV accumulator state")
+	ErrAccumulatorLimit = moerr.NewInternalErrorNoCtx("analyze: NDV accumulator distinct-value limit exceeded")
+	ErrAccumulatorState = moerr.NewInvalidStateNoCtx("analyze: incompatible NDV accumulator state")
 )
 
 type ValueHash [16]byte
