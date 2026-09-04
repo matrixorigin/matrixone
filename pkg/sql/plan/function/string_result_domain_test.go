@@ -17,6 +17,7 @@ package function
 import (
 	"math"
 	"testing"
+	"unicode/utf8"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
@@ -415,6 +416,16 @@ func TestPadResultByteLengthEnforcesEncodedBudget(t *testing.T) {
 
 	_, rejected = padResultByteLength("a", int64(types.MaxVarcharLen)+1, "", int64(types.MaxVarcharLen))
 	require.True(t, rejected)
+
+	utf8mb4MaxCharacters := int64(types.MaxBlobLen / utf8.UTFMax)
+	length, rejected = padResultByteLength("a", utf8mb4MaxCharacters, "", int64(types.MaxBlobLen))
+	require.False(t, rejected)
+	require.Zero(t, length)
+	_, rejected = padResultByteLength("a", utf8mb4MaxCharacters+1, "", int64(types.MaxBlobLen))
+	require.True(t, rejected)
+
+	legacy := types.NewWithCharset(types.T_text, 0, 0, types.CharsetLegacy)
+	require.Equal(t, int64(types.MaxBlobLen/3), maxPadTextResultCharacters(&legacy, int64(types.MaxBlobLen)))
 }
 
 func TestExpandingTextResultsUseTextCapacity(t *testing.T) {

@@ -1627,7 +1627,16 @@ func builtInCurrentUserName(_ []*vector.Vector, result vector.FunctionResultWrap
 }
 
 func padResultByteLength(src string, tgtLen int64, pad string, maxBytes int64) (int, bool) {
-	if tgtLen < 0 || tgtLen > int64(^uint(0)>>1) || tgtLen > maxBytes {
+	return padResultByteLengthWithCharacterLimit(src, tgtLen, pad, maxBytes, maxBytes/utf8.UTFMax)
+}
+
+func padResultByteLengthWithCharacterLimit(
+	src string,
+	tgtLen int64,
+	pad string,
+	maxBytes, maxCharacters int64,
+) (int, bool) {
+	if tgtLen < 0 || tgtLen > int64(^uint(0)>>1) || tgtLen > maxCharacters {
 		return 0, true
 	}
 	srcRunes, padRunes := utf8.RuneCountInString(src), utf8.RuneCountInString(pad)
@@ -1711,6 +1720,14 @@ func writePadResult(dst []byte, src string, target int, pad string, left bool) {
 	}
 }
 
+func maxPadTextResultCharacters(sourceType *types.Type, maxBytes int64) int64 {
+	maxBytesPerCharacter := int64(utf8.UTFMax)
+	if sourceType.Charset == types.CharsetLegacy {
+		maxBytesPerCharacter = 3
+	}
+	return maxBytes / maxBytesPerCharacter
+}
+
 func maxStringFunctionResultLength(result vector.FunctionResultWrapper) int64 {
 	switch result.GetResultVector().GetType().Oid {
 	case types.T_blob, types.T_text:
@@ -1782,6 +1799,7 @@ func builtInPad(
 	p3 := vector.GenerateFunctionStrParameter(parameters[2])
 	rs := vector.MustFunctionResult[types.Varlena](result)
 	maxResultLen := maxStringFunctionResultLength(result)
+	maxTextCharacters := maxPadTextResultCharacters(parameters[0].GetType(), maxResultLen)
 	uniformBinary, perRow := stringDomainMode(parameters[0])
 
 	for row := uint64(0); row < uint64(length); row++ {
@@ -1806,7 +1824,8 @@ func builtInPad(
 		if binary {
 			resultBytes, shouldNull = padBinaryResultByteLength(source, target, pad, maxResultLen)
 		} else {
-			resultBytes, shouldNull = padResultByteLength(string(source), target, string(pad), maxResultLen)
+			resultBytes, shouldNull = padResultByteLengthWithCharacterLimit(
+				string(source), target, string(pad), maxResultLen, maxTextCharacters)
 		}
 		if shouldNull {
 			if err := rs.AppendBytes(nil, true); err != nil {

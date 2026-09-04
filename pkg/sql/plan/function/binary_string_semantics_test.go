@@ -20,6 +20,7 @@ import (
 	"fmt"
 	"math"
 	"testing"
+	"unicode/utf8"
 
 	"github.com/stretchr/testify/require"
 
@@ -472,9 +473,16 @@ func TestPadWithEmptyPadReturnsNonNullEmptyOrTruncatedValue(t *testing.T) {
 		name       string
 		typ        types.Type
 		resultType types.Type
+		maxTarget  int64
 	}{
-		{name: "text", typ: types.T_varchar.ToType(), resultType: types.T_text.ToType()},
-		{name: "binary", typ: types.T_varbinary.ToType(), resultType: types.T_blob.ToType()},
+		{
+			name: "text", typ: types.T_varchar.ToType(), resultType: types.T_text.ToType(),
+			maxTarget: int64(types.MaxBlobLen / utf8.UTFMax),
+		},
+		{
+			name: "binary", typ: types.T_varbinary.ToType(), resultType: types.T_blob.ToType(),
+			maxTarget: int64(types.MaxBlobLen),
+		},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			for _, fn := range []struct {
@@ -486,14 +494,14 @@ func TestPadWithEmptyPadReturnsNonNullEmptyOrTruncatedValue(t *testing.T) {
 			} {
 				t.Run(fn.name, func(t *testing.T) {
 					proc := testutil.NewProcess(t)
-					source := makeBinaryStringTestInput(
-						t, proc, test.typ, [][]byte{[]byte("abc"), []byte("abc"), []byte("a")}, nil)
+					source := makeBinaryStringTestInput(t, proc, test.typ,
+						[][]byte{[]byte("abc"), []byte("abc"), []byte("a"), []byte("a")}, nil)
 					defer source.Free(proc.Mp())
-					target := makeBinaryStringInt64Input(
-						t, proc, []int64{5, 2, int64(types.MaxBlobLen) + 1})
+					target := makeBinaryStringInt64Input(t, proc,
+						[]int64{5, 2, test.maxTarget, test.maxTarget + 1})
 					defer target.Free(proc.Mp())
-					pad := makeBinaryStringTestInput(
-						t, proc, test.typ, [][]byte{make([]byte, 0), make([]byte, 0), make([]byte, 0)}, nil)
+					pad := makeBinaryStringTestInput(t, proc, test.typ,
+						[][]byte{make([]byte, 0), make([]byte, 0), make([]byte, 0), make([]byte, 0)}, nil)
 					defer pad.Free(proc.Mp())
 
 					result := runBinaryStringBytesFn(t, proc, fn.fn, test.resultType, source, target, pad)
@@ -503,7 +511,9 @@ func TestPadWithEmptyPadReturnsNonNullEmptyOrTruncatedValue(t *testing.T) {
 					require.Empty(t, resultVector.GetBytesAt(0))
 					require.False(t, resultVector.IsNull(1))
 					require.Equal(t, []byte("ab"), resultVector.GetBytesAt(1))
-					require.True(t, resultVector.IsNull(2))
+					require.False(t, resultVector.IsNull(2))
+					require.Empty(t, resultVector.GetBytesAt(2))
+					require.True(t, resultVector.IsNull(3))
 				})
 			}
 		})
@@ -740,8 +750,8 @@ func TestByteLikeConstantPatternCompilesOnceForMultipleRows(t *testing.T) {
 	beforeAllocs := mp.Stats().NumAlloc.Load()
 	require.NoError(t, newOpBuiltInRegexp().likeFn(
 		[]*vector.Vector{values, patterns}, result, proc, rows, nil))
-	require.Equal(t, int64(1), mp.Stats().NumAlloc.Load()-beforeAllocs,
-		"a constant pattern must allocate one reusable compiled buffer for the whole batch")
+	require.Equal(t, int64(2), mp.Stats().NumAlloc.Load()-beforeAllocs,
+		"a constant pattern must allocate one compiled buffer and one reusable sparse-literal buffer")
 	for _, matched := range vector.MustFixedColNoTypeCheck[bool](result.GetResultVector()) {
 		require.True(t, matched)
 	}
@@ -759,6 +769,86 @@ func TestCompiledByteLikePatternReusesRowScratch(t *testing.T) {
 		require.Same(t, storage, &compiled.storage[0])
 		require.Equal(t, allocated, mp.CurrNB())
 	}
+}
+
+type byteLikeCancelAfterChecksContext struct {
+	context.Context
+	remaining int
+	canceled  bool
+	done      chan struct{}
+}
+
+func newByteLikeCancelAfterChecksContext(checks int) *byteLikeCancelAfterChecksContext {
+	return &byteLikeCancelAfterChecksContext{
+		Context:   context.Background(),
+		remaining: checks,
+		done:      make(chan struct{}),
+	}
+}
+
+func (ctx *byteLikeCancelAfterChecksContext) Done() <-chan struct{} {
+	return ctx.done
+}
+
+func (ctx *byteLikeCancelAfterChecksContext) Err() error {
+	if ctx.canceled {
+		return context.Canceled
+	}
+	ctx.remaining--
+	if ctx.remaining <= 0 {
+		ctx.canceled = true
+		close(ctx.done)
+		return context.Canceled
+	}
+	return nil
+}
+
+func distinctByteLikeLiterals(count int) []byte {
+	literals := make([]byte, 0, count)
+	for value := 0; value < 255 && len(literals) < count; value++ {
+		if byte(value) == '_' || byte(value) == '%' || byte(value) == '\\' {
+			continue
+		}
+		literals = append(literals, byte(value))
+	}
+	if len(literals) != count {
+		panic("too many byte LIKE segments")
+	}
+	return literals
+}
+
+func makeDirectMultiSegmentByteLike(segmentCount, segmentLength int) (value, pattern []byte) {
+	literals := distinctByteLikeLiterals(segmentCount)
+	futureLength := 0
+	blocks := make([][]byte, segmentCount)
+	segments := make([][]byte, segmentCount)
+	for index := segmentCount - 1; index >= 0; index-- {
+		literal := literals[index]
+		candidateFailures := 16*futureLength/segmentLength + 16
+		if candidateFailures >= segmentLength/2 {
+			panic("candidate region overlaps segment middle")
+		}
+		segment := bytes.Repeat([]byte{'_'}, segmentLength)
+		segment[0] = literal
+		segment[segmentLength/2] = literal
+		segment[segmentLength-1] = literal
+		block := bytes.Repeat([]byte{255}, segmentLength+candidateFailures)
+		for candidate := 0; candidate <= candidateFailures; candidate++ {
+			block[candidate] = literal
+			block[segmentLength-1+candidate] = literal
+		}
+		block[segmentLength/2+candidateFailures] = literal
+		segments[index] = segment
+		blocks[index] = block
+		futureLength += len(block)
+	}
+	pattern = append(pattern, '%')
+	for index := range segments {
+		pattern = append(pattern, segments[index]...)
+		pattern = append(pattern, '%')
+		value = append(value, blocks[index]...)
+	}
+	return value, pattern
 }
 
 func makeSingleCandidateByteLike(segmentLength int) (value, pattern []byte) {
@@ -813,6 +903,65 @@ func TestByteLikeSingleCandidateStaysOnDirectPath(t *testing.T) {
 	}
 }
 
+func TestByteLikeGlobalDirectBudgetBoundsMultiSegmentVerification(t *testing.T) {
+	value, pattern := makeDirectMultiSegmentByteLike(16, 4_096)
+	mp := mpool.MustNewZero()
+	compiled, err := compileByteLikePattern(pattern, []byte{'\\'}, true, mp)
+	require.NoError(t, err)
+	defer compiled.free()
+	matched, err := compiled.match(value)
+	require.NoError(t, err)
+	require.True(t, matched)
+	require.Empty(t, compiled.convolutionScratch)
+	require.LessOrEqual(t, cap(compiled.literalPositionScratch), 16,
+		"sparse literal verification must avoid scanning each long '_' run per candidate")
+
+	forcedPattern := []byte("a_a")
+	forcedValue := []byte("aaa")
+	forced, err := compileByteLikePattern(forcedPattern, nil, false, mp)
+	require.NoError(t, err)
+	defer forced.free()
+	frequency := [256]int{'a': 3}
+	exhaustedBudget := byteLikeDirectVerificationBudget{}
+	matchedAt, err := forced.findSegment(
+		0, len(forcedPattern), forcedValue, 0, len(forcedValue), &frequency, &exhaustedBudget)
+	require.NoError(t, err)
+	require.Zero(t, matchedAt)
+	require.NotEmpty(t, forced.convolutionScratch,
+		"an exhausted match-wide budget must switch the unresolved candidate to convolution")
+
+	const segmentCount = 252
+	const segmentLength = 262_000
+	futureLength := 0
+	directVerificationWork := uint64(0)
+	for index := segmentCount - 1; index >= 0; index-- {
+		candidateFailures := 16*futureLength/segmentLength + 16
+		directVerificationWork += uint64(candidateFailures) * uint64(segmentLength)
+		futureLength += segmentLength + candidateFailures
+	}
+	patternLength := segmentCount*segmentLength + segmentCount + 1
+	budget := newByteLikeDirectVerificationBudget(futureLength, patternLength)
+	require.LessOrEqual(t, futureLength, types.MaxBlobLen)
+	require.LessOrEqual(t, patternLength, types.MaxBlobLen)
+	require.Greater(t, directVerificationWork, budget.remaining)
+}
+
+func TestByteLikeDirectVerificationHonorsMidMatchCancellation(t *testing.T) {
+	value, pattern := makeDirectMultiSegmentByteLike(32, 8_192)
+	mp := mpool.MustNewZero()
+	compiled, err := compileByteLikePattern(pattern, []byte{'\\'}, true, mp)
+	require.NoError(t, err)
+	defer compiled.free()
+	cancelContext := newByteLikeCancelAfterChecksContext(50)
+	compiled.ctx = cancelContext
+
+	_, err = compiled.match(value)
+	require.ErrorIs(t, err, context.Canceled)
+	require.True(t, cancelContext.canceled)
+	require.Empty(t, compiled.convolutionScratch,
+		"cancellation must be observed while the matcher is still on the direct path")
+}
+
 func makeEqualFrequencyByteLikeAdversary(size int) (value, pattern []byte) {
 	value = append(bytes.Repeat([]byte{'a'}, size), bytes.Repeat([]byte{'b'}, size+1)...)
 	value = append(value, bytes.Repeat([]byte{'a'}, size)...)
@@ -824,7 +973,17 @@ func makeEqualFrequencyByteLikeAdversary(size int) (value, pattern []byte) {
 	return value, pattern
 }
 
-func TestByteLikeConvolutionHandlesEqualFrequencyAdversary(t *testing.T) {
+func makeDenseConvolutionByteLike(size int) (value, pattern []byte) {
+	value = bytes.Repeat([]byte{'a'}, size*3)
+	pattern = append(pattern, '%')
+	for i := 0; i < size; i++ {
+		pattern = append(pattern, 'a', '_')
+	}
+	pattern = append(pattern, '%')
+	return value, pattern
+}
+
+func TestByteLikeSparseEqualFrequencyAdversary(t *testing.T) {
 	observedMaxTerm := uint64(0)
 	for encodedPattern := int64(1); encodedPattern <= 256; encodedPattern++ {
 		for encodedValue := int64(1); encodedValue <= 256; encodedValue++ {
@@ -848,18 +1007,20 @@ func TestByteLikeConvolutionHandlesEqualFrequencyAdversary(t *testing.T) {
 	matched, err := compiled.match(value)
 	require.NoError(t, err)
 	require.False(t, matched)
-	require.NotEmpty(t, compiled.convolutionScratch)
+	require.Empty(t, compiled.convolutionScratch)
+	require.NotEmpty(t, compiled.literalPositionScratch)
 
-	scratch := &compiled.convolutionScratch[0]
+	scratch := &compiled.literalPositionScratch[0]
 	allocated := mp.CurrNB()
 	require.NoError(t, compiled.reset(pattern, nil, false))
 	matched, err = compiled.match(bytes.Repeat([]byte{'a'}, size*3+1))
 	require.NoError(t, err)
 	require.True(t, matched)
-	require.Same(t, scratch, &compiled.convolutionScratch[0])
+	require.Same(t, scratch, &compiled.literalPositionScratch[0])
 	require.Equal(t, allocated, mp.CurrNB())
 	compiled.free()
 	require.Nil(t, compiled.convolutionScratch)
+	require.Nil(t, compiled.literalPositionScratch)
 	require.Zero(t, mp.CurrNB())
 }
 
@@ -933,7 +1094,7 @@ func TestByteLikeConvolutionAllocationFailureDoesNotLeak(t *testing.T) {
 	limited, err := mpool.NewMPool("byte-like-convolution-limit", 1<<20, mpool.NoFixed)
 	require.NoError(t, err)
 	const size = 16_000
-	value, pattern := makeEqualFrequencyByteLikeAdversary(size)
+	value, pattern := makeDenseConvolutionByteLike(size)
 
 	_, err = byteLike(pattern, value, nil, false, limited)
 	require.Error(t, err)
@@ -953,11 +1114,28 @@ func TestByteLikeConvolutionAllocationFailureDoesNotLeak(t *testing.T) {
 	err = newOpBuiltInRegexp().likeFn([]*vector.Vector{values, patterns}, result, limitedProc, 1, nil)
 	require.Error(t, err)
 	require.Zero(t, limited.CurrNB())
+
+	sparseLimited, err := mpool.NewMPool("byte-like-sparse-limit", 2_400<<10, mpool.NoFixed)
+	require.NoError(t, err)
+	const sparseSegmentLength = 1 << 20
+	sparsePattern := make([]byte, sparseSegmentLength+2)
+	sparsePattern[0], sparsePattern[len(sparsePattern)-1] = '%', '%'
+	for at := 1; at < len(sparsePattern)-1; at++ {
+		if (at-1)%8 == 0 {
+			sparsePattern[at] = 'a'
+		} else {
+			sparsePattern[at] = '_'
+		}
+	}
+	_, err = byteLike(
+		sparsePattern, bytes.Repeat([]byte{'a'}, sparseSegmentLength+1), nil, false, sparseLimited)
+	require.Error(t, err)
+	require.Zero(t, sparseLimited.CurrNB())
 }
 
 func TestByteLikeConstantPatternReusesConvolutionScratchAcrossRows(t *testing.T) {
 	const rows = 8
-	value, pattern := makeEqualFrequencyByteLikeAdversary(1_000)
+	value, pattern := makeDenseConvolutionByteLike(1_000)
 	proc := testutil.NewProcess(t)
 	mp := proc.Mp()
 	values, err := vector.NewConstBytes(types.T_varbinary.ToType(), value, rows, mp)
@@ -978,7 +1156,41 @@ func TestByteLikeConstantPatternReusesConvolutionScratchAcrossRows(t *testing.T)
 		"one compiled-pattern allocation and one reusable convolution allocation are expected")
 	require.Equal(t, beforeBytes, mp.CurrNB())
 	for _, matched := range vector.MustFixedColNoTypeCheck[bool](result.GetResultVector()) {
-		require.False(t, matched)
+		require.True(t, matched)
+	}
+}
+
+func BenchmarkByteLikeDirectMultiSegment(b *testing.B) {
+	for _, test := range []struct {
+		segments int
+		length   int
+	}{
+		{segments: 16, length: 4_096},
+		{segments: 32, length: 8_192},
+		{segments: 64, length: 16_384},
+		{segments: 96, length: 32_768},
+	} {
+		b.Run(fmt.Sprintf("segments=%d/length=%d", test.segments, test.length), func(b *testing.B) {
+			value, pattern := makeDirectMultiSegmentByteLike(test.segments, test.length)
+			compiled, err := compileByteLikePattern(pattern, []byte{'\\'}, true, mpool.MustNewZero())
+			if err != nil {
+				b.Fatal(err)
+			}
+			defer compiled.free()
+			matched, err := compiled.match(value)
+			if err != nil || !matched {
+				b.Fatalf("warm-up match failed: matched=%v err=%v", matched, err)
+			}
+			b.SetBytes(int64(len(value) + len(pattern)))
+			b.ReportAllocs()
+			b.ResetTimer()
+			for i := 0; i < b.N; i++ {
+				matched, matchErr := compiled.match(value)
+				if matchErr != nil || !matched {
+					b.Fatalf("match failed: matched=%v err=%v", matched, matchErr)
+				}
+			}
+		})
 	}
 }
 
@@ -1014,7 +1226,7 @@ func BenchmarkByteLikeSingleCandidate(b *testing.B) {
 func BenchmarkByteLikeEqualFrequencyAdversary(b *testing.B) {
 	for _, size := range []int{1_000, 2_000, 4_000, 8_000, 16_000, 32_000} {
 		b.Run(fmt.Sprintf("L=%d", size), func(b *testing.B) {
-			value, pattern := makeEqualFrequencyByteLikeAdversary(size)
+			value, pattern := makeDenseConvolutionByteLike(size)
 			compiled, err := compileByteLikePattern(pattern, nil, false, mpool.MustNewZero())
 			if err != nil {
 				b.Fatal(err)
@@ -1031,8 +1243,8 @@ func BenchmarkByteLikeEqualFrequencyAdversary(b *testing.B) {
 				if matchErr != nil {
 					b.Fatal(matchErr)
 				}
-				if matched {
-					b.Fatal("unexpected match")
+				if !matched {
+					b.Fatal("expected match")
 				}
 			}
 		})
