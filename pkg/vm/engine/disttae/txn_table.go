@@ -258,13 +258,17 @@ func (tbl *txnTable) Stats(ctx context.Context, sync bool) (*pb.StatsInfo, error
 		strings.ToUpper(tbl.relKind) == "V" {
 		return nil, nil
 	}
-	return tbl.getEngine().Stats(ctx, pb.StatsInfoKey{
+	key := pb.StatsInfoKey{
 		AccId:      tbl.accountId,
 		DatabaseID: tbl.db.databaseId,
 		TableID:    tbl.tableId,
 		TableName:  tbl.tableName,
 		DbName:     tbl.db.databaseName,
-	}, sync), nil
+	}
+	if versioned, ok := tbl.getEngine().(engine.TableVersionedStats); ok {
+		return versioned.StatsAtTableVersion(ctx, key, sync, tbl.version), nil
+	}
+	return tbl.getEngine().Stats(ctx, key, sync), nil
 }
 
 func (tbl *txnTable) Rows(ctx context.Context) (uint64, error) {
