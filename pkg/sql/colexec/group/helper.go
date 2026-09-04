@@ -698,8 +698,16 @@ func (ctr *container) computeBucketIndex(hashCodes []uint64, myLv uint64) {
 	// 32-bit hash values). Different levels use different multipliers so groups
 	// landing in the same bucket at level N get split at level N+1.
 	mult := uint64(0x9e3779b97f4a7c15) + myLv*2
+	bucketCount := len(ctr.currentSpillBkt)
+	if bucketCount == 0 {
+		bucketCount = ctr.spillPartitionCount()
+	}
+	maskBits := uint(spillMaskBits)
+	if bucketCount == spillDistinctNumBuckets {
+		maskBits = spillDistinctMaskBits
+	}
 	for i := range hashCodes {
-		hashCodes[i] = (hashCodes[i] * mult) >> (64 - spillMaskBits)
+		hashCodes[i] = (hashCodes[i] * mult) >> (64 - maskBits)
 	}
 }
 
@@ -921,7 +929,7 @@ func (ctr *container) spillDataToDisk(proc *process.Process, opAnalyzer process.
 
 		logutil.Infof("spilling data to disk, level %d, parent file %s", myLv, parentName)
 		// Create bucket objects; files are created lazily on first write.
-		ctr.currentSpillBkt = make([]*spillBucket, spillNumBuckets)
+		ctr.currentSpillBkt = make([]*spillBucket, ctr.spillPartitionCount())
 		for i := range ctr.currentSpillBkt {
 			ctr.currentSpillBkt[i] = &spillBucket{
 				lv:   myLv,
@@ -1013,6 +1021,7 @@ func (ctr *container) spillDataToDisk(proc *process.Process, opAnalyzer process.
 	}
 
 	hcOffset := 0
+	bucketCount := len(ctr.currentSpillBkt)
 	for nthBatch, gb := range ctr.groupByBatches {
 		if err, canceled := vm.CancelCheck(proc); canceled {
 			return 0, 0, err
@@ -1033,18 +1042,18 @@ func (ctr *container) spillDataToDisk(proc *process.Process, opAnalyzer process.
 
 		// Partition the batch in two linear passes. Only the counts/cursors are
 		// fixed-size; row ids occupy exactly O(rc) accounted recovery scratch.
-		var bucketCounts [spillNumBuckets]int
-		var bucketOffsets [spillNumBuckets + 1]int
-		var bucketCursors [spillNumBuckets]int
+		var bucketCounts [spillMaxNumBuckets]int
+		var bucketOffsets [spillMaxNumBuckets + 1]int
+		var bucketCursors [spillMaxNumBuckets]int
 		for _, hash := range batchHC {
-			bucketCounts[int(hash&(spillNumBuckets-1))]++
+			bucketCounts[int(hash&uint64(bucketCount-1))]++
 		}
-		for bucket, count := range bucketCounts {
+		for bucket, count := range bucketCounts[:bucketCount] {
 			bucketOffsets[bucket+1] = bucketOffsets[bucket] + count
 			bucketCursors[bucket] = bucketOffsets[bucket]
 		}
 		for row, hash := range batchHC {
-			bucket := int(hash & (spillNumBuckets - 1))
+			bucket := int(hash & uint64(bucketCount-1))
 			ctr.spillBucketRows[bucketCursors[bucket]] = int32(row)
 			bucketCursors[bucket]++
 		}
@@ -1067,7 +1076,7 @@ func (ctr *container) spillDataToDisk(proc *process.Process, opAnalyzer process.
 			}
 			return nil
 		}
-		for bucket, selected := range bucketCounts {
+		for bucket, selected := range bucketCounts[:bucketCount] {
 			if selected > 0 {
 				end := bucketOffsets[bucket+1]
 				for start := bucketOffsets[bucket]; start < end; start += hashmap.UnitLimit {
