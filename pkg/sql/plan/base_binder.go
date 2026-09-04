@@ -6864,19 +6864,28 @@ func padSpaceValueArgumentIndexes(name string, argsLength int) []int {
 
 func appendPadSpaceComparisonCastIfNeeded(ctx context.Context, expr *Expr) (*Expr, error) {
 	argType := makeTypeByPlan2Expr(expr)
+	if (argType.Oid == types.T_varchar || argType.Oid == types.T_text) &&
+		hasPadSpaceStringProvenance(expr) && !isCastOverload(expr, 2) {
+		return appendComparisonCastBeforeExpr(ctx, expr, makePlan2Type(&argType))
+	}
+	return expr, nil
+}
+
+// appendPadSpaceWindowKeyCastIfNeeded canonicalizes direct CHAR window keys
+// into the same PAD SPACE comparison domain as promoted string keys. Ordinary
+// predicates deliberately keep their existing CHAR comparison binding so that
+// optimizer key recognition is unchanged outside window planning.
+func appendPadSpaceWindowKeyCastIfNeeded(ctx context.Context, expr *Expr) (*Expr, error) {
 	if isCastOverload(expr, 2) {
 		return expr, nil
 	}
+	argType := makeTypeByPlan2Expr(expr)
 	if argType.Oid == types.T_char {
 		targetType := argType
 		targetType.Oid = types.T_varchar
 		return appendComparisonCastBeforeExpr(ctx, expr, makePlan2Type(&targetType))
 	}
-	if (argType.Oid == types.T_varchar || argType.Oid == types.T_text) &&
-		hasPadSpaceStringProvenance(expr) {
-		return appendComparisonCastBeforeExpr(ctx, expr, makePlan2Type(&argType))
-	}
-	return expr, nil
+	return appendPadSpaceComparisonCastIfNeeded(ctx, expr)
 }
 
 func isCastOverload(expr *Expr, overloadID int32) bool {
