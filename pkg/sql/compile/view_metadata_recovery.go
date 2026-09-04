@@ -102,7 +102,15 @@ func RequireViewMetadataRevalidation(ctx context.Context, sqlExecutor executor.S
 		if err != nil {
 			return err
 		}
+		gatePresent := false
+		result.ReadRows(func(rows int, _ []*vector.Vector) bool {
+			gatePresent = rows > 0
+			return !gatePresent
+		})
 		result.Close()
+		if !gatePresent {
+			return moerr.NewNoSuchTable(ctx, catalog.MO_CATALOG, catalog.MO_VIEW_REFRESH)
+		}
 		if _, active, seedErr := seedViewMetadataRevalidationPage(txn); seedErr != nil || active {
 			return seedErr
 		}

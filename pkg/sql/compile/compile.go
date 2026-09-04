@@ -137,7 +137,7 @@ func NewCompile(
 	c.db = db
 	c.tenant = tenant
 	c.uid = uid
-	c.sql = sql
+	c.sql = sqlmongodb.RedactSQLForDiagnostics(sql)
 	c.proc.SetMessageBoard(c.MessageBoard)
 	c.stmt = stmt
 	c.addr = addr
@@ -283,7 +283,7 @@ func (c *Compile) Reset(proc *process.Process, startAt time.Time, fill func(*bat
 	c.captureStringShuffleHashAlgorithm()
 
 	c.fill = fill
-	c.sql = sql
+	c.sql = sqlmongodb.RedactSQLForDiagnostics(sql)
 	c.affectRows.Store(0)
 	// Reset reuses an existing logical/physical generation. Reused generations
 	// are deliberately ineligible for LOAD unique-index promotion.
@@ -2647,10 +2647,13 @@ func (c *Compile) compileExternScanWithPlanNodeID(node *plan.Node, planNodeID in
 
 	if node.ExternScan != nil && node.ExternScan.Type == int32(plan.ExternType_MONGODB_TB) {
 		// Hydration resolves execution-time catalog state and prunes the source
-		// mapping to the physical projection.  Keep that mutation isolated even
+		// mapping to the physical projection. Keep that mutation isolated even
 		// when this helper is called outside compilePlanScope, because a prepared
 		// execution may otherwise hand us its cached logical plan directly.
 		executionNode := plan2.DeepCopyNode(node)
+		if err := c.configureMongoUserQuery(executionNode); err != nil {
+			return nil, err
+		}
 		if err := c.hydrateMongoScan(executionNode); err != nil {
 			return nil, err
 		}
@@ -2728,6 +2731,13 @@ func (c *Compile) compileExternScanWithPlanNodeID(node *plan.Node, planNodeID in
 	if param.ExternType == int32(plan.ExternType_LOAD) &&
 		param.Format == tree.PARQUET &&
 		param.Parallel {
+		// A file is already the smallest independently executable unit when
+		// the matched files fill every available load scope.  Do not pay one
+		// serial footer round trip per file merely to discover that row-group
+		// fanout cannot add useful execution parallelism.
+		if c.parquetLoadFileFanoutSaturates(param, len(fileList)) {
+			return c.compileExternScanParquetLoadFileFanout(node, param, fileList, fileSize, strictSqlMode)
+		}
 		rowGroups, footerStats, err := c.readLoadParquetRowGroupMetadata(node, param, fileList, fileSize)
 		if err != nil {
 			return nil, err
@@ -2953,6 +2963,120 @@ func (c *Compile) constructMongoScanScope() *Scope {
 	return scope
 }
 
+// configureMongoUserQuery extracts at most one explicit __mo_query value from
+// the compile-owned node. The text is parsed and reduced to validated BSON
+// before it enters the execution plan. Query-level predicates are evaluated
+// against that one candidate and removed; every ordinary predicate remains an
+// MO residual.
+func (c *Compile) configureMongoUserQuery(node *plan.Node) error {
+	if node == nil || node.ExternScan == nil || node.ExternScan.MongodbScan == nil {
+		return moerr.NewInvalidInput(c.proc.Ctx, "MongoDB external table is missing scan metadata")
+	}
+	scan := node.ExternScan.MongodbScan
+	queryList, err := external.DeriveForeignQueryList(c.proc.Ctx, node, c.proc)
+	if err != nil {
+		return err
+	}
+	if len(queryList) > 1 {
+		return moerr.NewNotSupported(c.proc.Ctx, "MongoDB MVP accepts exactly one __mo_query value")
+	}
+	if len(queryList) == 0 {
+		if mongoQueryColumnUsed(node, node.FilterList) {
+			return moerr.NewNotSupported(c.proc.Ctx, "MongoDB MVP requires __mo_query = <constant>")
+		}
+		scan.IncludeQueryColumn = mongoQueryColumnUsed(node, node.ProjectList)
+		if mongoScanUsesV44Payload(scan) && !supportsRemoteMongoUserQuery(c.proc.GetService()) {
+			return moerr.NewNotSupported(
+				c.proc.Ctx,
+				"MongoDB query semantics require MORPC protocol version 44",
+			)
+		}
+		return nil
+	}
+
+	queryList, _, residual, err := external.FilterFileList(
+		c.proc.Ctx, node, c.proc, queryList, []int64{-1})
+	if err != nil {
+		return err
+	}
+	node.FilterList = residual
+	scan.IncludeQueryColumn = mongoQueryColumnUsed(node, node.FilterList) ||
+		mongoQueryColumnUsed(node, node.ProjectList)
+	if len(queryList) == 0 {
+		scan.EmptyResult = true
+		if !supportsRemoteMongoUserQuery(c.proc.GetService()) {
+			return moerr.NewNotSupported(
+				c.proc.Ctx,
+				"MongoDB query semantics require MORPC protocol version 44",
+			)
+		}
+		return nil
+	}
+	if len(queryList) != 1 {
+		return moerr.NewNotSupported(c.proc.Ctx, "MongoDB MVP accepts exactly one __mo_query value")
+	}
+	query, err := sqlmongodb.ParseUserQuery(c.proc.Ctx, queryList[0])
+	if err != nil {
+		return err
+	}
+	if !supportsRemoteMongoUserQuery(c.proc.GetService()) {
+		return moerr.NewNotSupported(
+			c.proc.Ctx,
+			"MongoDB explicit queries require MORPC protocol version 44",
+		)
+	}
+	// The planner retains the selector as a local filter around an opaque
+	// aggregation pipeline. Keep the hidden carrier available even when it is
+	// not selected so that filter evaluates against the same canonical source
+	// value the scan used; otherwise a three-column pipeline batch can reach a
+	// four-column selector and panic.
+	if query.Kind == sqlmongodb.UserQueryPipeline {
+		scan.IncludeQueryColumn = true
+	}
+	return sqlmongodb.ApplyUserQueryToPlan(c.proc.Ctx, query, scan)
+}
+
+func mongoQueryColumnUsed(node *plan.Node, expressions []*plan.Expr) bool {
+	if node == nil || node.TableDef == nil {
+		return false
+	}
+	usesQueryColumn := func(expr *plan.Expr) bool {
+		var visit func(*plan.Expr) bool
+		visit = func(current *plan.Expr) bool {
+			if current == nil {
+				return false
+			}
+			if col := current.GetCol(); col != nil {
+				position := int(col.ColPos)
+				return position >= 0 && position < len(node.TableDef.Cols) &&
+					catalog.IsForeignQueryCol(node.TableDef.Cols[position].Name, node.TableDef.Cols[position].ColId)
+			}
+			if functionExpr := current.GetF(); functionExpr != nil {
+				for _, arg := range functionExpr.Args {
+					if visit(arg) {
+						return true
+					}
+				}
+			}
+			if list := current.GetList(); list != nil {
+				for _, item := range list.List {
+					if visit(item) {
+						return true
+					}
+				}
+			}
+			return false
+		}
+		return visit(expr)
+	}
+	for _, expr := range expressions {
+		if usesQueryColumn(expr) {
+			return true
+		}
+	}
+	return false
+}
+
 func (c *Compile) hydrateMongoScan(node *plan.Node) error {
 	if node == nil || node.ExternScan == nil || node.ExternScan.MongodbScan == nil {
 		return moerr.NewInvalidInput(c.proc.Ctx, "MongoDB external table is missing scan metadata")
@@ -3005,7 +3129,12 @@ func (c *Compile) hydrateMongoScan(node *plan.Node) error {
 			parseErr = moerr.NewInvalidInput(c.proc.Ctx, "MongoDB table mapping changed during planning; retry the statement")
 			return false
 		}
-		columns, parseErr = projectedMongoColumns(c.proc.Ctx, columns, node.TableDef)
+		columns, parseErr = projectedMongoColumns(
+			c.proc.Ctx,
+			columns,
+			node.TableDef,
+			scan.IncludeQueryColumn || scan.EmptyResult || scan.UserQueryKind != int32(sqlmongodb.UserQueryInvalid),
+		)
 		if parseErr != nil {
 			return false
 		}
@@ -3030,21 +3159,35 @@ func (c *Compile) hydrateMongoScan(node *plan.Node) error {
 	if scan.MaxParallelism != 1 {
 		return moerr.NewNotSupported(c.proc.Ctx, "MongoDB MVP requires max_parallelism=1")
 	}
-	scan.PushedPredicate, scan.ResidualFilterDigest = sqlmongodb.PushdownPlanFilters(c.proc.Ctx, node.FilterList, scan.Columns)
+	pushed, residualDigest := sqlmongodb.PushdownPlanFilters(c.proc.Ctx, node.FilterList, scan.Columns)
+	if scan.UserQueryKind == int32(sqlmongodb.UserQueryPipeline) {
+		// Ordinary MO predicates refer to the pipeline output. Moving them ahead
+		// of an opaque user pipeline can change its meaning, so they remain local.
+		pushed = nil
+	}
+	scan.PushedPredicate, scan.ResidualFilterDigest = pushed, residualDigest
 	return nil
 }
 
-func projectedMongoColumns(ctx context.Context, columns []sqlmongodb.ColumnMapping, tableDef *plan.TableDef) ([]sqlmongodb.ColumnMapping, error) {
+func projectedMongoColumns(
+	ctx context.Context,
+	columns []sqlmongodb.ColumnMapping,
+	tableDef *plan.TableDef,
+	allowEmpty bool,
+) ([]sqlmongodb.ColumnMapping, error) {
 	if tableDef == nil {
 		return nil, moerr.NewInternalError(ctx, "MongoDB external scan is missing its table definition")
 	}
 	names := make([]string, 0, len(tableDef.Cols))
 	for _, column := range tableDef.Cols {
-		if column != nil && !column.Hidden {
+		if column != nil && !column.Hidden && !catalog.IsForeignQueryCol(column.Name, column.ColId) {
 			names = append(names, column.Name)
 		}
 	}
 	if len(names) == 0 {
+		if allowEmpty {
+			return nil, nil
+		}
 		return nil, moerr.NewInternalError(ctx, "MongoDB external scan has no retained mapped columns")
 	}
 	return sqlmongodb.ProjectColumnsByName(ctx, columns, names)
@@ -3184,6 +3327,12 @@ type parquetRowGroupScopeShard struct {
 	originalToLocal map[int32]int32
 }
 
+type parquetRowGroupSegment struct {
+	fileIndex int32
+	rowGroups []parquetRowGroupMeta
+	load      int64
+}
+
 type icebergDataFileScopeShard struct {
 	node      engine.Node
 	fileList  []string
@@ -3205,14 +3354,14 @@ type icebergExternalScanRuntime struct {
 }
 
 func (c *Compile) compileExternScanHiveFileFanout(node *plan.Node, param *tree.ExternParam, fileList []string, fileSize []int64, strictSqlMode bool) ([]*Scope, error) {
-	return c.compileExternScanWholeFileFanout(node, param, fileList, fileSize, strictSqlMode)
+	return c.compileExternScanWholeFileFanout(node, param, fileList, fileSize, strictSqlMode, false)
 }
 
 func (c *Compile) compileExternScanParquetLoadFileFanout(node *plan.Node, param *tree.ExternParam, fileList []string, fileSize []int64, strictSqlMode bool) ([]*Scope, error) {
-	return c.compileExternScanWholeFileFanout(node, param, fileList, fileSize, strictSqlMode)
+	return c.compileExternScanWholeFileFanout(node, param, fileList, fileSize, strictSqlMode, true)
 }
 
-func (c *Compile) compileExternScanWholeFileFanout(node *plan.Node, param *tree.ExternParam, fileList []string, fileSize []int64, strictSqlMode bool) ([]*Scope, error) {
+func (c *Compile) compileExternScanWholeFileFanout(node *plan.Node, param *tree.ExternParam, fileList []string, fileSize []int64, strictSqlMode bool, parquetWholeFileFanout bool) ([]*Scope, error) {
 	nodes := c.getHiveFileFanoutNodes(param, len(fileList))
 	shards := splitHiveFileShards(fileList, fileSize, nodes)
 	if len(shards) <= 1 {
@@ -3243,6 +3392,7 @@ func (c *Compile) compileExternScanWholeFileFanout(node *plan.Node, param *tree.
 			makeWholeFileOffsets(len(shard.fileList)),
 			strictSqlMode,
 		)
+		op.Es.ParquetWholeFileFanout = parquetWholeFileFanout
 		op.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
 		scope.setRootOperator(op)
 		ss = append(ss, scope)
@@ -3390,7 +3540,10 @@ func (c *Compile) readLoadParquetRowGroupMetadata(
 		}
 		stats.Bytes += size
 
-		f, err := parquet.OpenFile(reader, size)
+		// Planning only needs the schema, row count, and row-group boundaries.
+		// Loading page indexes and bloom-filter headers here is unused work, and
+		// row-group fanout would repeat it in every execution scope.
+		f, err := openParquetLoadMetadataFile(reader, size)
 		if footerReader != nil {
 			stats.ReadCalls += footerReader.readCalls
 			stats.ReadBytes += footerReader.readBytes
@@ -3420,6 +3573,13 @@ func (c *Compile) readLoadParquetRowGroupMetadata(
 	}
 	stats.Duration = time.Since(start)
 	return metas, stats, nil
+}
+
+func openParquetLoadMetadataFile(reader io.ReaderAt, size int64) (*parquet.File, error) {
+	return parquet.OpenFile(reader, size,
+		parquet.SkipPageIndex(true),
+		parquet.SkipBloomFilters(true),
+	)
 }
 
 func validateEmptyParquetLoadFile(ctx context.Context, node *plan.Node, param *tree.ExternParam, f *parquet.File) error {
@@ -3526,6 +3686,36 @@ func parquetRowGroupFileCount(rowGroups []parquetRowGroupMeta) int {
 		files[meta.fileIndex] = struct{}{}
 	}
 	return len(files)
+}
+
+// parquetLoadFileFanoutSaturates reports whether whole-file fanout can fill
+// every bounded execution scope.  It deliberately uses the uncapped execution
+// DOP rather than getHiveFileFanoutNodes(fileCount): the latter is capped by
+// fileCount and therefore cannot tell whether additional row-group scopes
+// would be useful.
+func (c *Compile) parquetLoadFileFanoutSaturates(param *tree.ExternParam, fileCount int) bool {
+	return fileCount > 1 && fileCount >= c.parquetLoadFileFanoutDOP(param)
+}
+
+func (c *Compile) parquetLoadFileFanoutDOP(param *tree.ExternParam) int {
+	stageNodes := c.queryWorkerStageNodes()
+	if param != nil && param.ScanType == tree.S3 && len(stageNodes) > 0 {
+		dop := 0
+		for _, node := range stageNodes {
+			mcpu := node.Mcpu
+			if mcpu <= 0 {
+				mcpu = 1
+			}
+			dop += min(mcpu, external.S3ParallelMaxnum)
+		}
+		if dop > 0 {
+			return dop
+		}
+	}
+	if c.ncpu > 0 {
+		return c.ncpu
+	}
+	return 1
 }
 
 func (c *Compile) getHiveFileFanoutNodes(param *tree.ExternParam, fileCount int) []engine.Node {
@@ -3876,24 +4066,8 @@ func splitParquetRowGroupShards(
 		shards[i].originalToLocal = make(map[int32]int32)
 	}
 
-	indices := make([]int, len(rowGroups))
-	for i := range indices {
-		indices[i] = i
-	}
-	slices.SortStableFunc(indices, func(a, b int) int {
-		left := rowGroups[a]
-		right := rowGroups[b]
-		if c := cmp.Compare(parquetRowGroupLoad(right), parquetRowGroupLoad(left)); c != 0 {
-			return c
-		}
-		if c := cmp.Compare(left.fileIndex, right.fileIndex); c != 0 {
-			return c
-		}
-		return cmp.Compare(left.rowGroupIndex, right.rowGroupIndex)
-	})
-
-	for _, rowGroupIdx := range indices {
-		meta := rowGroups[rowGroupIdx]
+	rowGroupsByFile := make(map[int32][]parquetRowGroupMeta)
+	for _, meta := range rowGroups {
 		if meta.fileIndex < 0 || int(meta.fileIndex) >= len(fileList) {
 			return nil, moerr.NewInternalErrorNoCtxf(
 				"invalid parquet row group file index %d for %d files",
@@ -3906,6 +4080,34 @@ func splitParquetRowGroupShards(
 				meta.rowGroupIndex, meta.fileIndex,
 			)
 		}
+		rowGroupsByFile[meta.fileIndex] = append(rowGroupsByFile[meta.fileIndex], meta)
+	}
+
+	fileIndexes := make([]int32, 0, len(rowGroupsByFile))
+	for fileIndex := range rowGroupsByFile {
+		fileIndexes = append(fileIndexes, fileIndex)
+	}
+	slices.Sort(fileIndexes)
+	segments := make([]parquetRowGroupSegment, 0, shardCount)
+	for _, fileIndex := range fileIndexes {
+		fileRowGroups := rowGroupsByFile[fileIndex]
+		slices.SortStableFunc(fileRowGroups, func(left, right parquetRowGroupMeta) int {
+			return cmp.Compare(left.rowGroupIndex, right.rowGroupIndex)
+		})
+		segments = append(segments, splitContiguousParquetRowGroups(
+			fileIndex, fileRowGroups, min(shardCount, len(fileRowGroups)))...)
+	}
+	slices.SortStableFunc(segments, func(left, right parquetRowGroupSegment) int {
+		if c := cmp.Compare(right.load, left.load); c != 0 {
+			return c
+		}
+		if c := cmp.Compare(left.fileIndex, right.fileIndex); c != 0 {
+			return c
+		}
+		return cmp.Compare(left.rowGroups[0].rowGroupIndex, right.rowGroups[0].rowGroupIndex)
+	})
+
+	for _, segment := range segments {
 
 		shardIdx := 0
 		for i := 1; i < shardCount; i++ {
@@ -3915,15 +4117,17 @@ func splitParquetRowGroupShards(
 			}
 		}
 
-		localFileIndex := appendParquetShardFile(&shards[shardIdx], fileList, fileSize, meta.fileIndex)
-		shards[shardIdx].rowGroupShards = append(shards[shardIdx].rowGroupShards, &pipeline.ParquetRowGroupShard{
-			FileIndex:     localFileIndex,
-			RowGroupStart: meta.rowGroupIndex,
-			RowGroupEnd:   meta.rowGroupIndex + 1,
-			NumRows:       meta.numRows,
-			Bytes:         meta.bytes,
-		})
-		loads[shardIdx] += parquetRowGroupLoad(meta)
+		localFileIndex := appendParquetShardFile(&shards[shardIdx], fileList, fileSize, segment.fileIndex)
+		for _, meta := range segment.rowGroups {
+			shards[shardIdx].rowGroupShards = append(shards[shardIdx].rowGroupShards, &pipeline.ParquetRowGroupShard{
+				FileIndex:     localFileIndex,
+				RowGroupStart: meta.rowGroupIndex,
+				RowGroupEnd:   meta.rowGroupIndex + 1,
+				NumRows:       meta.numRows,
+				Bytes:         meta.bytes,
+			})
+		}
+		loads[shardIdx] = addParquetLoad(loads[shardIdx], segment.load)
 	}
 
 	nonEmpty := shards[:0]
@@ -3942,6 +4146,77 @@ func splitParquetRowGroupShards(
 		nonEmpty = append(nonEmpty, shard)
 	}
 	return nonEmpty, nil
+}
+
+func splitContiguousParquetRowGroups(
+	fileIndex int32,
+	rowGroups []parquetRowGroupMeta,
+	partCount int,
+) []parquetRowGroupSegment {
+	if len(rowGroups) == 0 || partCount <= 0 {
+		return nil
+	}
+	partCount = min(partCount, len(rowGroups))
+	remainingLoad := int64(0)
+	for _, meta := range rowGroups {
+		remainingLoad = addParquetLoad(remainingLoad, parquetRowGroupLoad(meta))
+	}
+
+	segments := make([]parquetRowGroupSegment, 0, partCount)
+	start := 0
+	for part := 0; part < partCount; part++ {
+		partsLeft := partCount - part
+		if partsLeft == 1 {
+			segments = append(segments, makeParquetRowGroupSegment(fileIndex, rowGroups[start:]))
+			break
+		}
+
+		target := remainingLoad / int64(partsLeft)
+		if remainingLoad%int64(partsLeft) != 0 {
+			target++
+		}
+		endLimit := len(rowGroups) - (partsLeft - 1)
+		end := start
+		load := int64(0)
+		for end < endLimit {
+			nextLoad := addParquetLoad(load, parquetRowGroupLoad(rowGroups[end]))
+			if end > start && parquetLoadDistance(load, target) <= parquetLoadDistance(nextLoad, target) {
+				break
+			}
+			load = nextLoad
+			end++
+		}
+		if end == start {
+			end++
+		}
+		segment := makeParquetRowGroupSegment(fileIndex, rowGroups[start:end])
+		segments = append(segments, segment)
+		remainingLoad -= min(remainingLoad, segment.load)
+		start = end
+	}
+	return segments
+}
+
+func makeParquetRowGroupSegment(fileIndex int32, rowGroups []parquetRowGroupMeta) parquetRowGroupSegment {
+	segment := parquetRowGroupSegment{fileIndex: fileIndex, rowGroups: rowGroups}
+	for _, meta := range rowGroups {
+		segment.load = addParquetLoad(segment.load, parquetRowGroupLoad(meta))
+	}
+	return segment
+}
+
+func addParquetLoad(left, right int64) int64 {
+	if right > math.MaxInt64-left {
+		return math.MaxInt64
+	}
+	return left + right
+}
+
+func parquetLoadDistance(left, right int64) int64 {
+	if left >= right {
+		return left - right
+	}
+	return right - left
 }
 
 func appendParquetShardFile(shard *parquetRowGroupScopeShard, fileList []string, fileSize []int64, originalFileIndex int32) int32 {
@@ -6692,6 +6967,30 @@ func supportsRemoteAsofJoin(service string) bool {
 	return ok && protocolVersion >= defines.MORPCVersion27
 }
 
+// supportsRemoteMongoUserQuery guards the MongoScan payload that carries
+// validated BSON. An older CN would ignore these protobuf fields and silently
+// execute the legacy unfiltered Find path, so explicit queries must wait until
+// deployment has raised the cluster's oldest-live protocol version.
+func supportsRemoteMongoUserQuery(service string) bool {
+	rt := moruntime.ServiceRuntime(service)
+	if rt == nil {
+		return false
+	}
+	version, ok := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
+	if !ok {
+		return false
+	}
+	protocolVersion, ok := version.(int64)
+	return ok && protocolVersion >= defines.MORPCVersion44
+}
+
+// mongoScanUsesV44Payload reports whether a scan uses any field introduced by
+// the MongoDB query protocol. Older receivers ignore all three fields, so each
+// one must be rejected during a mixed-version rollout.
+func mongoScanUsesV44Payload(scan *plan.MongoScan) bool {
+	return scan != nil && (scan.UserQueryKind != 0 || scan.IncludeQueryColumn || scan.EmptyResult)
+}
+
 func supportsRemoteTargetAwareUpdate(service string) bool {
 	rt := moruntime.ServiceRuntime(service)
 	if rt == nil {
@@ -6794,6 +7093,19 @@ func supportsRemotePadSpaceSemantics(service string) bool {
 	}
 	protocolVersion, ok := version.(int64)
 	return ok && protocolVersion >= defines.MORPCVersion40
+}
+
+func supportsRemoteParquetWholeFileFanout(service string) bool {
+	rt := moruntime.ServiceRuntime(service)
+	if rt == nil {
+		return false
+	}
+	version, ok := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
+	if !ok {
+		return false
+	}
+	protocolVersion, ok := version.(int64)
+	return ok && protocolVersion >= defines.MORPCVersion45
 }
 
 func (c *Compile) canCompileShuffleGroup(node *plan.Node) bool {
@@ -8875,7 +9187,7 @@ func (c *Compile) fatalLog(retry int, err error) {
 }
 
 func (c *Compile) SetOriginSQL(sql string) {
-	c.originSQL = sql
+	c.originSQL = sqlmongodb.RedactSQLForDiagnostics(sql)
 }
 
 // SetResourceAttemptOwnerEligible marks this Compile as the top-level

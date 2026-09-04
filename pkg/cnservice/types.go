@@ -780,6 +780,11 @@ type service struct {
 	// viewMetadataReady latches exact final catalog readiness after the
 	// bootstrap service is retired. Readiness is monotonic for one CN process.
 	viewMetadataReady atomic.Bool
+
+	bootstrapUpgradeContext      context.Context
+	bootstrapUpgradeResult       chan error
+	bootstrapUpgradeStartupReady chan struct{}
+	bootstrapUpgradeReadyOnce    sync.Once
 	// beforeBootstrapClose is a deterministic test barrier.
 	beforeBootstrapClose func()
 	incrservice          incrservice.AutoIncrementService
@@ -798,6 +803,8 @@ type service struct {
 	lastCommandHash                 [32]byte
 	legacyDedupeArmed               bool
 	viewMetadataAdmissionGeneration uint64
+	viewMetadataAdmissionMu         sync.Mutex
+	viewMetadataAdmissionMuWaiters  atomic.Int32
 	viewMetadataAdmission           atomic.Pointer[logservicepb.ViewMetadataAdmission]
 	viewMetadataCatalogFencedEpoch  atomic.Uint64
 	viewMetadataRevalidatedEpoch    atomic.Uint64
@@ -811,6 +818,10 @@ type service struct {
 	viewMetadataAuthorityMu         sync.Mutex
 	viewMetadataAuthorityTimer      *time.Timer
 	viewMetadataAuthorityVersion    uint64
+
+	viewMetadataCatalogFenceStartupWaiting atomic.Bool
+	// beforeViewMetadataAdmissionHandoff is a deterministic test barrier.
+	beforeViewMetadataAdmissionHandoff func()
 	// viewMetadataCloseFn is a deterministic test hook for the asynchronous
 	// close request issued after synchronous ingress revocation.
 	viewMetadataCloseFn func() error

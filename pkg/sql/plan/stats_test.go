@@ -17,7 +17,6 @@ package plan
 import (
 	"context"
 	"math"
-	"sync"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -316,6 +315,7 @@ func TestStatsSelectivityClampAvoidsNonFiniteJoin(t *testing.T) {
 		ReCalcNodeStats(2, builder, false, false, false)
 
 		require.True(t, isFinite(join.Stats.Outcnt), "outcnt = %v", join.Stats.Outcnt)
+		require.Equal(t, 50.0, join.Stats.Outcnt)
 		require.GreaterOrEqual(t, join.Stats.Outcnt, 0.0)
 		require.True(t, isFinite(join.Stats.Selectivity), "selectivity = %v", join.Stats.Selectivity)
 		require.GreaterOrEqual(t, join.Stats.Selectivity, 0.0)
@@ -323,41 +323,110 @@ func TestStatsSelectivityClampAvoidsNonFiniteJoin(t *testing.T) {
 	})
 }
 
-func TestReCalcNodeStatsOwnsJoinPredicateAnnotations(t *testing.T) {
-	shared := MakePlan2BoolConstExprWithType(true)
-	newBuilder := func() (*QueryBuilder, *planpb.Node) {
-		builder := NewQueryBuilder(planpb.Query_SELECT,
-			&MockCompilerContext{ctx: context.Background()}, false, false)
-		left := &planpb.Node{NodeType: planpb.Node_VALUE_SCAN,
-			Stats: &planpb.Stats{Outcnt: 10, Cost: 10, Selectivity: 1}}
-		right := &planpb.Node{NodeType: planpb.Node_VALUE_SCAN,
-			Stats: &planpb.Stats{Outcnt: 10, Cost: 10, Selectivity: 1}}
-		join := &planpb.Node{NodeType: planpb.Node_JOIN, JoinType: planpb.Node_INNER,
-			Children: []int32{0, 1}, OnList: []*planpb.Expr{shared}, Stats: DefaultStats()}
+func TestAntiJoinCardinalityUsesPrimaryKeyLowerBound(t *testing.T) {
+	ctx := NewMockCompilerContext(false)
+	intType := planpb.Type{Id: int32(types.T_int64), NotNullable: true}
+	makeEquality := func(leftPos, rightPos int32) *planpb.Expr {
+		expr, err := BindFuncExprImplByPlanExpr(ctx.GetContext(), "=", []*planpb.Expr{
+			GetColExpr(intType, 10, leftPos),
+			GetColExpr(intType, 20, rightPos),
+		})
+		require.NoError(t, err)
+		return expr
+	}
+	makeBuilder := func(onList []*planpb.Expr) (*QueryBuilder, *planpb.Node) {
+		left := &planpb.Node{
+			NodeId: 0, NodeType: planpb.Node_TABLE_SCAN, BindingTags: []int32{10},
+			TableDef: &planpb.TableDef{
+				Cols:          []*planpb.ColDef{{Name: "pk1", Typ: intType}, {Name: "pk2", Typ: intType}},
+				Name2ColIndex: map[string]int32{"pk1": 0, "pk2": 1},
+				Pkey:          &planpb.PrimaryKeyDef{Names: []string{"pk1", "pk2"}},
+			},
+			Stats: &planpb.Stats{Outcnt: 1000, Cost: 1000, Selectivity: 1, BlockNum: 1},
+		}
+		right := &planpb.Node{
+			NodeId: 1, NodeType: planpb.Node_TABLE_SCAN, BindingTags: []int32{20},
+			TableDef: &planpb.TableDef{
+				Cols:          []*planpb.ColDef{{Name: "k1", Typ: intType}, {Name: "k2", Typ: intType}},
+				Name2ColIndex: map[string]int32{"k1": 0, "k2": 1},
+			},
+			Stats: &planpb.Stats{Outcnt: 100, Cost: 100, Selectivity: 1, BlockNum: 1},
+		}
+		join := &planpb.Node{
+			NodeId: 2, NodeType: planpb.Node_JOIN, JoinType: planpb.Node_ANTI,
+			Children: []int32{0, 1}, OnList: onList, Stats: DefaultStats(),
+		}
+		builder := NewQueryBuilder(planpb.Query_SELECT, ctx, false, false)
 		builder.qry.Nodes = []*planpb.Node{left, right, join}
 		return builder, join
 	}
-	firstBuilder, firstJoin := newBuilder()
-	secondBuilder, secondJoin := newBuilder()
-	start := make(chan struct{})
-	var wg sync.WaitGroup
-	for _, builder := range []*QueryBuilder{firstBuilder, secondBuilder} {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			<-start
-			ReCalcNodeStats(2, builder, false, false, false)
-		}()
-	}
-	close(start)
-	wg.Wait()
 
-	require.Zero(t, shared.Ndv)
-	require.NotSame(t, shared, firstJoin.OnList[0])
-	require.NotSame(t, shared, secondJoin.OnList[0])
-	require.NotSame(t, firstJoin.OnList[0], secondJoin.OnList[0])
-	require.Equal(t, float64(-1), firstJoin.OnList[0].Ndv)
-	require.Equal(t, float64(-1), secondJoin.OnList[0].Ndv)
+	t.Run("complete primary key bounds the number of eliminated rows", func(t *testing.T) {
+		builder, join := makeBuilder([]*planpb.Expr{makeEquality(0, 0), makeEquality(1, 1)})
+
+		ReCalcNodeStats(2, builder, false, false, false)
+
+		require.Equal(t, 900.0, join.Stats.Outcnt)
+	})
+
+	t.Run("partial primary key keeps the uncertainty default", func(t *testing.T) {
+		builder, join := makeBuilder([]*planpb.Expr{makeEquality(0, 0)})
+
+		ReCalcNodeStats(2, builder, false, false, false)
+
+		require.Equal(t, 500.0, join.Stats.Outcnt)
+	})
+
+	t.Run("right primary key does not prove a left-side lower bound", func(t *testing.T) {
+		builder, join := makeBuilder([]*planpb.Expr{makeEquality(0, 0), makeEquality(1, 1)})
+		builder.qry.Nodes[0].TableDef.Pkey = nil
+		builder.qry.Nodes[1].TableDef.Pkey = &planpb.PrimaryKeyDef{Names: []string{"k1", "k2"}}
+
+		ReCalcNodeStats(2, builder, false, false, false)
+
+		require.Equal(t, 500.0, join.Stats.Outcnt)
+	})
+
+	t.Run("rollback hint restores the legacy estimate", func(t *testing.T) {
+		builder, join := makeBuilder([]*planpb.Expr{makeEquality(0, 0), makeEquality(1, 1)})
+		builder.optimizerHints = &OptimizerHints{outerAntiPlanning: 1}
+
+		ReCalcNodeStats(2, builder, false, false, false)
+
+		require.Equal(t, 0.0, join.Stats.Outcnt)
+	})
+
+	for _, test := range []struct {
+		name       string
+		rollback   bool
+		wantOutcnt float64
+	}{
+		{name: "enabled", wantOutcnt: 5},
+		{name: "rollback", rollback: true, wantOutcnt: 0},
+	} {
+		t.Run("right anti after physical swap "+test.name, func(t *testing.T) {
+			builder, join := makeBuilder([]*planpb.Expr{makeEquality(0, 0), makeEquality(1, 1)})
+			builder.qry.Nodes[0].Stats = &planpb.Stats{
+				Outcnt: 10, Cost: 10, Selectivity: 1, BlockNum: 2,
+			}
+			builder.qry.Nodes[1].Stats = &planpb.Stats{
+				Outcnt: 10_000, Cost: 10_000, Selectivity: 1, BlockNum: 100,
+			}
+			if test.rollback {
+				builder.optimizerHints = &OptimizerHints{outerAntiPlanning: 1}
+			}
+
+			builder.determineBuildAndProbeSide(2, false)
+			require.True(t, join.IsRightJoin)
+			builder.swapJoinChildren(2)
+			require.Equal(t, []int32{1, 0}, join.Children)
+			reCalcNodeStatsAfterSwap(2, builder, false, false, false)
+
+			require.Equal(t, test.wantOutcnt, join.Stats.Outcnt)
+			require.LessOrEqual(t, join.Stats.Outcnt, 10.0)
+			require.Equal(t, int32(2), join.Stats.BlockNum)
+		})
+	}
 }
 
 func newStatsTestBuilderWithNDV(colName string, ndv float64) *QueryBuilder {

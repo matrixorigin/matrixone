@@ -73,6 +73,7 @@ func (builder *QueryBuilder) bindExternalScan(
 	if err := validateLoadParquetOptions(stmt.Param, ctx); err != nil {
 		return -1, nil, err
 	}
+	defaultParquetLoadParallel(stmt.Param, ctx)
 
 	tableDef := DeepCopyTableDef(dmlCtx.tableDefs[0], true)
 	objRef := dmlCtx.objRefs[0]
@@ -160,11 +161,7 @@ func (builder *QueryBuilder) bindExternalScan(
 		}
 		stmt.Param.FileStartOff = offset
 	}
-	stmt.Param.ParallelLoadRequested = stmt.Param.ParallelLoadRequested || stmt.Param.Parallel
-
-	if stmt.Param.FileSize-offset < int64(LoadParallelMinSize) {
-		stmt.Param.Parallel = false
-	}
+	applyLoadParallelAdmission(stmt.Param, offset)
 
 	stmt.Param.Tail.ColumnList = nil
 	if stmt.Param.ScanType != tree.INLINE {

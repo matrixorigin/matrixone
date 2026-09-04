@@ -474,13 +474,14 @@ func (s *service) Start() (err error) {
 	}
 
 	// Admission authorizes local initialization; it does not make this CN
-	// routable. Publish ingress readiness only after every remote entry point is
-	// listening. A failed heartbeat leaves the CN safely pending and the normal
-	// heartbeat loop will retry without tearing down already-live listeners.
-	if err = s.checkViewMetadataGenerationRevoked(); err != nil {
+	// routable. Revalidate after every remote entry point is listening, then
+	// linearize authoritative snapshot validation and ingress publication with
+	// heartbeat snapshot storage. Keep the automatic upgrade owner alive until
+	// this final handoff closes.
+	if err = s.waitForViewMetadataIngressAdmission(); err != nil {
 		return err
 	}
-	s.viewMetadataIngressReady.Store(true)
+	s.completeBootstrapUpgradeStartupWait()
 	if err = s.checkViewMetadataGenerationRevoked(); err != nil {
 		return err
 	}
@@ -1348,24 +1349,60 @@ func (s *service) bootstrap() error {
 	trace.GetService(s.cfg.UUID).EnableFlush()
 
 	if s.cfg.AutomaticUpgrade {
-		return s.stopper.RunTask(func(ctx context.Context) {
+		s.bootstrapUpgradeResult = make(chan error, 1)
+		s.bootstrapUpgradeStartupReady = make(chan struct{})
+		started := make(chan struct{})
+		if err := s.stopper.RunTask(func(taskCtx context.Context) {
+			ctx, cancel := context.WithTimeoutCause(taskCtx, time.Minute*120, moerr.CauseBootstrap2)
+			s.bootstrapUpgradeContext = ctx
+			close(started)
+			defer cancel()
+
 			s.bootstrapMu.RLock()
 			defer s.bootstrapMu.RUnlock()
+			var err error
 			if s.bootstrapService == nil {
-				return
+				err = moerr.NewInternalErrorNoCtx("bootstrap service closed during automatic upgrade")
+			} else {
+				err = s.bootstrapService.BootstrapUpgrade(ctx)
 			}
-			ctx, cancel := context.WithTimeoutCause(ctx, time.Minute*120, moerr.CauseBootstrap2)
-			defer cancel()
-			if err := s.bootstrapService.BootstrapUpgrade(ctx); err != nil {
-				if err != context.Canceled {
-					err = moerr.AttachCause(ctx, err)
-					runtime.DefaultRuntime().Logger().Error("bootstrap system automatic upgrade failed by: ", zap.Error(err))
-					//panic(err)
+			if err == nil {
+				select {
+				case <-s.bootstrapUpgradeStartupReady:
+				case <-ctx.Done():
+					err = ctx.Err()
 				}
 			}
-		})
+			if err != nil {
+				err = moerr.AttachCause(ctx, err)
+				if !errors.Is(err, context.Canceled) {
+					runtime.DefaultRuntime().Logger().Error(
+						"bootstrap system automatic upgrade failed by: ", zap.Error(err))
+				}
+			}
+			// Serialize terminal-result publication with admission acceptance so
+			// startup cannot commit a success after an already-completed failure.
+			s.lockViewMetadataAdmission()
+			s.bootstrapUpgradeResult <- err
+			s.viewMetadataAdmissionMu.Unlock()
+		}); err != nil {
+			return err
+		}
+		// Publish the owner context before admission starts using it. The task
+		// signals before taking bootstrapMu because bootstrap currently owns the
+		// write lock until this method returns.
+		<-started
 	}
 	return nil
+}
+
+func (s *service) completeBootstrapUpgradeStartupWait() {
+	if s.bootstrapUpgradeStartupReady == nil {
+		return
+	}
+	s.bootstrapUpgradeReadyOnce.Do(func() {
+		close(s.bootstrapUpgradeStartupReady)
+	})
 }
 
 // handleBootstrapErr preserves the bootstrap context cause and returns the

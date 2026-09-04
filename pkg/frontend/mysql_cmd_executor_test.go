@@ -152,6 +152,24 @@ func TestDoComQueryParseErrorReplacesPreviousDiagnostics(t *testing.T) {
 	require.NotContains(t, info.msgs, "stale diagnostic marker")
 }
 
+func TestDoComQueryParseErrorRedactsMongoDBSelector(t *testing.T) {
+	ctx := defines.AttachAccountId(context.Background(), catalog.System_Account)
+	ctrl := gomock.NewController(t)
+	ses := newTestSession(t, ctrl)
+	defer ses.Close()
+	execCtx := newTestExecCtx(ctx, ctrl)
+	execCtx.ses = ses
+
+	sql := `select * from mongo_events where __mo_query = '{"filter":{"password":"super-secret-value"}}`
+	err := doComQuery(ses, execCtx, &UserInput{sql: sql})
+	require.Error(t, err)
+	assertMongoDBSelectorIsRedacted(t, ses.GetSqlOfStmt())
+	assertMongoDBSelectorIsAbsent(t, err.Error())
+	redactedErr := redactStatementErrorForLogging(err, sql).Error()
+	require.Contains(t, redactedErr, "<redacted MongoDB __mo_query statement>")
+	assertMongoDBSelectorIsAbsent(t, redactedErr)
+}
+
 func TestDoComQueryPrepareMultiReplacesPreviousDiagnostics(t *testing.T) {
 	ctx := defines.AttachAccountId(context.Background(), catalog.System_Account)
 	ctrl := gomock.NewController(t)
@@ -1541,6 +1559,53 @@ func TestRecordStatementResetsDivByZeroErrorMode(t *testing.T) {
 	require.Equal(t, int32(-1), atomic.LoadInt32(&proc.Base.DivByZeroErrorMode))
 	require.Equal(t, "Insert", ses.GetStmtType())
 	require.Equal(t, tree.QueryTypeDML, ses.GetQueryType())
+}
+
+func TestRecordStatementRedactsMongoDBPreparedExpansion(t *testing.T) {
+	ctx := context.Background()
+	sv := &config.FrontendParameters{}
+	sv.SetDefaultValues()
+	setPu("", config.NewParameterUnit(sv, nil, nil, nil))
+
+	for _, test := range []struct {
+		name   string
+		binary bool
+	}{
+		{name: "execute using"},
+		{name: "binary execute", binary: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			ctrl := gomock.NewController(t)
+			ses := NewSession(ctx, "", &testMysqlWriter{}, nil)
+			proc := ses.GetProc()
+			const preparedName = "mongo_query"
+			require.NoError(t, ses.SetPrepareStmt(ctx, preparedName, &PrepareStmt{
+				Name: preparedName,
+				Sql:  `select * from mongo_events where __mo_query = '{"pipeline":[{"$match":{"api_key":"super-secret-value"}}]}'`,
+			}))
+
+			cw := mock_frontend.NewMockComputationWrapper(ctrl)
+			cw.EXPECT().GetUUID().Return(make([]byte, 16))
+			cw.EXPECT().GetAst().Return(&tree.Execute{Name: preparedName})
+			cw.EXPECT().BinaryExecute().Return(test.binary, preparedName)
+			_, err := RecordStatement(ctx, ses, proc, cw, time.Now(), "execute mongo_query", constant.ExternSql, true)
+			require.NoError(t, err)
+			assertMongoDBSelectorIsRedacted(t, ses.GetSqlOfStmt())
+		})
+	}
+}
+
+func assertMongoDBSelectorIsRedacted(t *testing.T, text string) {
+	t.Helper()
+	require.Equal(t, "<redacted MongoDB __mo_query statement>", text)
+	assertMongoDBSelectorIsAbsent(t, text)
+}
+
+func assertMongoDBSelectorIsAbsent(t *testing.T, text string) {
+	t.Helper()
+	require.NotContains(t, text, "api_key")
+	require.NotContains(t, text, "password")
+	require.NotContains(t, text, "super-secret-value")
 }
 
 func TestRecordStatementSkippedInternalEmptyDoesNotOpenMemoryEpoch(t *testing.T) {

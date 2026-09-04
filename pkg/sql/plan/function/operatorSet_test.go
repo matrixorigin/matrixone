@@ -824,6 +824,34 @@ func Test_CaseCheck_MixedStringNumeric(t *testing.T) {
 	require.Equal(t, int32(types.MaxVarBinaryLen), result.finalType[2].Width)
 }
 
+func TestCaseCheckAcceptsImplicitBooleanConditions(t *testing.T) {
+	for _, test := range []struct {
+		name      string
+		condition types.Type
+	}{
+		{name: "null", condition: types.T_any.ToType()},
+		{name: "float", condition: types.T_float64.ToType()},
+		{name: "string", condition: types.T_varchar.ToType()},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			result := caseCheck(nil, []types.Type{
+				test.condition,
+				types.T_varchar.ToType(),
+				types.T_varchar.ToType(),
+			})
+			require.Equal(t, succeedWithCast, result.status)
+			require.Equal(t, types.T_bool, result.finalType[0].Oid)
+		})
+	}
+
+	result := caseCheck(nil, []types.Type{
+		types.T_date.ToType(),
+		types.T_varchar.ToType(),
+		types.T_varchar.ToType(),
+	})
+	require.Equal(t, failedFunctionParametersWrong, result.status)
+}
+
 func TestSignedUnsignedIntegerCommonTypeWithNull(t *testing.T) {
 	for _, test := range []struct {
 		name   string

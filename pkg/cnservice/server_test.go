@@ -472,13 +472,14 @@ func (c *testMessageCache) Close() {
 var _ bootstrap.Service = new(testBootService)
 
 type testBootService struct {
-	choice         int
-	closeCount     int
-	closeErr       error
-	bootstrapErr   error
-	bootstrapCount atomic.Int32
-	bootstrapHook  func()
-	maybeUpgrade   func()
+	choice               int
+	closeCount           int
+	closeErr             error
+	bootstrapErr         error
+	bootstrapCount       atomic.Int32
+	bootstrapHook        func()
+	bootstrapUpgradeHook func(context.Context) error
+	maybeUpgrade         func()
 }
 
 func (boot *testBootService) Bootstrap(ctx context.Context) error {
@@ -490,8 +491,10 @@ func (boot *testBootService) Bootstrap(ctx context.Context) error {
 }
 
 func (boot *testBootService) BootstrapUpgrade(ctx context.Context) error {
-	//TODO implement me
-	panic("implement me")
+	if boot.bootstrapUpgradeHook != nil {
+		return boot.bootstrapUpgradeHook(ctx)
+	}
+	return nil
 }
 
 func (boot *testBootService) MaybeUpgradeTenant(ctx context.Context, tenantFetchFunc func() (int32, string, error), txnOp client.TxnOperator) (bool, error) {

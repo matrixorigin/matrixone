@@ -738,18 +738,15 @@ func (svst SystemVariableSetType) bits2string(bits uint64) (string, error) {
 			if !ok {
 				return "", errorValueIsInvalid
 			}
-			bld.WriteString(v)
-			if i != 0 {
+			if bld.Len() > 0 {
 				bld.WriteByte(',')
 			}
+			bld.WriteString(v)
 		}
 	}
 
 	bldString := bld.String()
-	if len(bldString) == 0 {
-		return bldString, nil
-	}
-	return bldString[:len(bldString)-1], nil
+	return bldString, nil
 }
 
 func (svst SystemVariableSetType) string2bits(s string) (uint64, error) {
@@ -3747,6 +3744,22 @@ var gSysVarsDefs = map[string]SystemVariable{
 		SetVarHintApplies: false,
 		Type:              InitSystemVariableBoolType("experimental_ivf_index"),
 		Default:           int8(0),
+	},
+	"experimental_parquet_load_parallel": {
+		Name:              "experimental_parquet_load_parallel",
+		Scope:             ScopeSession,
+		Dynamic:           true,
+		SetVarHintApplies: false,
+		Type:              InitSystemVariableBoolType("experimental_parquet_load_parallel"),
+		Default:           int8(0),
+	},
+	"experimental_parquet_load_parallel_min_size": {
+		Name:              "experimental_parquet_load_parallel_min_size",
+		Scope:             ScopeSession,
+		Dynamic:           true,
+		SetVarHintApplies: false,
+		Type:              InitSystemVariableIntType("experimental_parquet_load_parallel_min_size", 1, 128*1024*1024, false),
+		Default:           int64(128 * 1024 * 1024),
 	},
 	"ivf_threads_build": {
 		Name:              "ivf_threads_build",
