@@ -1378,7 +1378,11 @@ func (exec *CDCTaskExecutor) Pause() error {
 
 		// Synchronously wait for all readers to stop before proceeding
 		// This ensures no goroutine leaks and clean pause state
-		exec.stopAllReaders()
+		_, readersDone := exec.stopAllReaders()
+		// Pause may time out while a reader is still unwinding. Preserve the
+		// completion owner so a later DROP can wait for that reader before it
+		// releases the terminal watermark fence.
+		exec.setReaderShutdownCompletion(readersDone)
 
 		// Note: task was marked as paused earlier (before ClosePause) to maximize blocking window
 		// This may cause some watermark updates during stopAllReaders to be blocked,
@@ -1714,8 +1718,23 @@ func (exec *CDCTaskExecutor) readerShutdownCompletion() <-chan struct{} {
 }
 
 func (exec *CDCTaskExecutor) setReaderShutdownCompletion(done <-chan struct{}) {
+	if done == nil {
+		return
+	}
 	exec.readerShutdownMu.Lock()
-	exec.readerShutdownDone = done
+	previous := exec.readerShutdownDone
+	if previous == nil || previous == done {
+		exec.readerShutdownDone = done
+		exec.readerShutdownMu.Unlock()
+		return
+	}
+	combined := make(chan struct{})
+	go func() {
+		<-previous
+		<-done
+		close(combined)
+	}()
+	exec.readerShutdownDone = combined
 	exec.readerShutdownMu.Unlock()
 }
 

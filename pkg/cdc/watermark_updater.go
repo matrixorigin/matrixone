@@ -812,10 +812,10 @@ func (u *CDCWatermarkUpdater) constructBatchUpdateWMSQL(
 	i := 0
 	for key, wm := range keys {
 		if i > 0 {
-			values += ","
+			values += " UNION ALL "
 		}
 		values += fmt.Sprintf(
-			"(%d, '%s', '%s', '%s', '%s')",
+			"SELECT %d AS account_id, '%s' AS task_id, '%s' AS db_name, '%s' AS table_name, '%s' AS watermark",
 			key.AccountId,
 			escapeSQLString(key.TaskId),
 			escapeSQLString(key.DBName),
@@ -827,7 +827,7 @@ func (u *CDCWatermarkUpdater) constructBatchUpdateWMSQL(
 	if i == 0 {
 		return ""
 	}
-	commitSql = CDCSQLBuilder.OnDuplicateUpdateWatermarkSQL(values)
+	commitSql = CDCSQLBuilder.GuardedWatermarkUpdateSQL(values)
 	return
 }
 
@@ -837,10 +837,10 @@ func (u *CDCWatermarkUpdater) constructBatchUpdateWMErrMsgSQL(
 	var values string
 	for i, job := range jobs {
 		if i > 0 {
-			values += ","
+			values += " UNION ALL "
 		}
 		values += fmt.Sprintf(
-			"(%d, '%s', '%s', '%s', '%s')",
+			"SELECT %d AS account_id, '%s' AS task_id, '%s' AS db_name, '%s' AS table_name, '%s' AS err_msg",
 			job.Key.AccountId,
 			escapeSQLString(job.Key.TaskId),
 			escapeSQLString(job.Key.DBName),
@@ -848,7 +848,7 @@ func (u *CDCWatermarkUpdater) constructBatchUpdateWMErrMsgSQL(
 			escapeSQLString(job.ErrMsg), // only update the err_msg
 		)
 	}
-	commitSql = CDCSQLBuilder.OnDuplicateUpdateWatermarkErrMsgSQL(values)
+	commitSql = CDCSQLBuilder.GuardedWatermarkErrorUpdateSQL(values)
 	return
 }
 
@@ -905,10 +905,10 @@ func (u *CDCWatermarkUpdater) constructAddWMSQL(
 	var values string
 	for i, job := range jobs {
 		if i > 0 {
-			values += ","
+			values += " UNION ALL "
 		}
 		values += fmt.Sprintf(
-			"(%d, '%s', '%s', '%s', '%s', '%s')",
+			"SELECT %d AS account_id, '%s' AS task_id, '%s' AS db_name, '%s' AS table_name, '%s' AS watermark, '%s' AS err_msg",
 			job.Key.AccountId,
 			escapeSQLString(job.Key.TaskId),
 			escapeSQLString(job.Key.DBName),
@@ -917,7 +917,7 @@ func (u *CDCWatermarkUpdater) constructAddWMSQL(
 			"",
 		)
 	}
-	addSql = CDCSQLBuilder.InsertWatermarkWithValuesSQL(values)
+	addSql = CDCSQLBuilder.GuardedWatermarkInsertSQL(values)
 	return
 }
 

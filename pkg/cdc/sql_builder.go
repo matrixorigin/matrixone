@@ -224,6 +224,36 @@ const (
 		"VALUES %s " +
 		"ON DUPLICATE KEY UPDATE err_msg = VALUES(err_msg)"
 
+	// Guarded watermark writes only select rows whose CDC task still exists.
+	// DROP removes mo_cdc_task before the daemon task reaches terminal state;
+	// keeping this predicate in the same INSERT statement fences producers on
+	// every CN instead of relying on a process-local tombstone.
+	CDCGuardedWatermarkInsertTemplate = "INSERT INTO " +
+		"`mo_catalog`.`mo_cdc_watermark` " +
+		"(account_id, task_id, db_name, table_name, watermark, err_msg) " +
+		"SELECT v.account_id, v.task_id, v.db_name, v.table_name, v.watermark, v.err_msg " +
+		"FROM ( %s ) AS v " +
+		"INNER JOIN `mo_catalog`.`mo_cdc_task` AS t " +
+		"ON t.account_id = v.account_id AND t.task_id = v.task_id"
+
+	CDCGuardedWatermarkUpdateTemplate = "INSERT INTO " +
+		"`mo_catalog`.`mo_cdc_watermark` " +
+		"(account_id, task_id, db_name, table_name, watermark) " +
+		"SELECT v.account_id, v.task_id, v.db_name, v.table_name, v.watermark " +
+		"FROM ( %s ) AS v " +
+		"INNER JOIN `mo_catalog`.`mo_cdc_task` AS t " +
+		"ON t.account_id = v.account_id AND t.task_id = v.task_id " +
+		"ON DUPLICATE KEY UPDATE watermark = VALUES(watermark)"
+
+	CDCGuardedWatermarkErrorUpdateTemplate = "INSERT INTO " +
+		"`mo_catalog`.`mo_cdc_watermark` " +
+		"(account_id, task_id, db_name, table_name, err_msg) " +
+		"SELECT v.account_id, v.task_id, v.db_name, v.table_name, v.err_msg " +
+		"FROM ( %s ) AS v " +
+		"INNER JOIN `mo_catalog`.`mo_cdc_task` AS t " +
+		"ON t.account_id = v.account_id AND t.task_id = v.task_id " +
+		"ON DUPLICATE KEY UPDATE err_msg = VALUES(err_msg)"
+
 	CDCUpdateWatermarkSqlTemplate = "UPDATE " +
 		"`mo_catalog`.`mo_cdc_watermark` " +
 		"SET watermark='%s' " +
@@ -958,6 +988,18 @@ func (b cdcSQLBuilder) OnDuplicateUpdateWatermarkErrMsgSQL(
 		CDCSQLTemplates[CDCOnDuplicateUpdateWatermarkErrMsgTemplate_Idx].SQL,
 		values,
 	)
+}
+
+func (b cdcSQLBuilder) GuardedWatermarkInsertSQL(selectValues string) string {
+	return fmt.Sprintf(CDCGuardedWatermarkInsertTemplate, selectValues)
+}
+
+func (b cdcSQLBuilder) GuardedWatermarkUpdateSQL(selectValues string) string {
+	return fmt.Sprintf(CDCGuardedWatermarkUpdateTemplate, selectValues)
+}
+
+func (b cdcSQLBuilder) GuardedWatermarkErrorUpdateSQL(selectValues string) string {
+	return fmt.Sprintf(CDCGuardedWatermarkErrorUpdateTemplate, selectValues)
 }
 
 // ------------------------------------------------------------------------------------------------
