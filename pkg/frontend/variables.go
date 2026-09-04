@@ -3838,7 +3838,13 @@ var gSysVarsDefs = map[string]SystemVariable{
 		Dynamic:           true,
 		SetVarHintApplies: false,
 		Type:              InitSystemVariableIntType("max_index_cache_size", 0, math.MaxInt64, false),
-		Default:           int64(0),
+		// 64 TiB: above the memory of any machine a CN runs on (high-end boards reach ~4 TiB,
+		// enterprise servers a few dozen TB), so the default never refuses a load a real
+		// deployment could serve. It is not a sizing choice -- it exists so the advertised
+		// maximum is a number an operator can read. 0 is still accepted, and the governor
+		// resolves it to this same ceiling -- an upgraded cluster keeps a persisted 0, so 0
+		// cannot be allowed to mean genuinely unbounded.
+		Default: int64(64 << 40),
 	},
 	// DEVICE (VRAM) byte budget for the index cache, the GPU counterpart of
 	// max_index_cache_size and read per account the same way: SYS caps the CN, a tenant's
@@ -3850,7 +3856,10 @@ var gSysVarsDefs = map[string]SystemVariable{
 		Dynamic:           true,
 		SetVarHintApplies: false,
 		Type:              InitSystemVariableIntType("max_gpu_index_cache_size", 0, math.MaxInt64, false),
-		Default:           int64(0),
+		// 1440 GiB: eight GPUs pooled over NVLink, the largest single-node VRAM pool built
+		// today. Far below the host default because the two arenas are orders of magnitude
+		// apart -- a number sized for RAM would be meaningless as a VRAM bound.
+		Default: int64(1440 << 30),
 	},
 	"probe_limit": {
 		Name:              "probe_limit",

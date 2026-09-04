@@ -279,6 +279,24 @@ func (s *VectorIndexSearch) awaitDestroyed() {
 	<-s.destroyed
 }
 
+// idle reports whether the entry's lock is free RIGHT NOW, i.e. no search is in flight on it.
+//
+// The governor uses this to choose a victim it can destroy without waiting: evictEntry calls
+// Destroy synchronously, and Destroy takes the write lock, so evicting an entry with a
+// long-running search parks the CACHE MISS that triggered the eviction behind that search.
+// A busy entry is skipped in favour of an idle one holding the same bytes.
+//
+// Inherently a hint: a search can start between this returning true and Destroy locking. That
+// is fine for a policy choice -- being wrong costs the wait it would have cost anyway, and the
+// reclaim pass falls back to allowing busy victims rather than failing to free anything.
+func (s *VectorIndexSearch) idle() bool {
+	if !s.Mutex.TryLock() {
+		return false
+	}
+	s.Mutex.Unlock()
+	return true
+}
+
 func (s *VectorIndexSearch) Destroy() {
 	s.DestroyWithReason("")
 }
@@ -534,6 +552,9 @@ type VectorIndexCache struct {
 	hkTicks        int         // HouseKeeping tick counter, gates the IsStale sweep cadence
 	staleChecking  atomic.Bool // single-flight guard for the async freshness sweep
 	sysLimit       sysLimitCache
+	acctLimits     sync.Map     // accountID -> acctLimitEntry, for cross-account snapshot reads
+	evictions      atomic.Int64 // governor evictions since start, for EvictionStats
+	evictedBytes   atomic.Int64
 }
 
 func NewVectorIndexCache() *VectorIndexCache {
@@ -648,6 +669,7 @@ func (c *VectorIndexCache) HouseKeeping() {
 			logutil.Debugf("[veccache] evicted expired/stale index %s from cache", entry.key)
 		}
 	}
+	c.enforceMemoizedCaps()
 	runLifecycleHooks(false)
 }
 

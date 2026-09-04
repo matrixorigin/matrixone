@@ -220,6 +220,24 @@ func (s *SqlProcess) WithExecutionIdentity(accountID uint32, database string) *S
 	return s
 }
 
+// EffectiveAccountID is the account this SqlProcess actually EXECUTES as: the snapshot's
+// owning tenant when ApplyScanSnapshot bound one, else the caller's own account.
+//
+// GetAccountID reads the original process context and therefore answers "who asked", which is
+// the wrong owner for a cross-account snapshot read: SYS reading tenant 42's index runs its
+// index-table SQL as 42 (executionContext / executionStatementOption both honour the override),
+// so anything attributing the resulting resident state -- the cache's byte governor -- must
+// attribute it to 42 as well, not to 0.
+func (s *SqlProcess) EffectiveAccountID() (uint32, error) {
+	if s == nil {
+		return 0, moerr.NewInternalErrorNoCtx("nil SqlProcess")
+	}
+	if s.AccountIDOverride != nil {
+		return *s.AccountIDOverride, nil
+	}
+	return s.GetAccountID()
+}
+
 func (s *SqlProcess) executionAccountID(defaultAccountID uint32) uint32 {
 	if s.AccountIDOverride != nil {
 		return *s.AccountIDOverride

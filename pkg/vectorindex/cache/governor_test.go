@@ -105,8 +105,11 @@ func TestGovernorChargesLoadedEntry(t *testing.T) {
 	require.EqualValues(t, 7, entry.accountID.Load())
 }
 
-// Both caps unset is the default, and it evicts nothing however much is resident.
-func TestGovernorUnsetCapNeverEvicts(t *testing.T) {
+// Nothing configured falls back to absoluteCacheCeiling, not to "unlimited". At realistic
+// sizes the ceiling does not bind, so an unconfigured deployment still evicts nothing --
+// but the entries are CHARGED and enumerable rather than invisible, which is what makes a
+// later SET GLOBAL govern an already-warm cache instead of switching accounting on.
+func TestGovernorUnsetCapChargesButDoesNotEvict(t *testing.T) {
 	c := newBoundCache(t)
 	sp := govProc(t, c, 1, caps{}, caps{})
 
@@ -115,8 +118,32 @@ func TestGovernorUnsetCapNeverEvicts(t *testing.T) {
 		loadInto(t, c, sp, k, 1<<30, 0)
 	}
 	for _, k := range keys {
-		require.True(t, isResident(c, k), "%q must survive: max_index_cache_size defaults to unlimited", k)
+		require.True(t, isResident(c, k), "%q must survive: 3 GiB is far below the ceiling", k)
+		require.EqualValues(t, 1<<30, entryOf(t, c, k).hostBytes.Load(),
+			"%q is charged even with nothing configured", k)
 	}
+
+	// And the governor sees them: snapshotResidents is what every eviction pass walks.
+	list, perAccount, total := c.snapshotResidents("")
+	require.Len(t, list, len(keys), "an unconfigured cache is still enumerated")
+	require.EqualValues(t, int64(len(keys))<<30, total.host)
+	require.EqualValues(t, int64(len(keys))<<30, perAccount[1].host)
+}
+
+// The fallback is a real, finite cap: an entry above the ceiling is still admitted (the
+// governor never fails a query on an accounting rule) but the pass runs rather than being
+// skipped, so colder entries are reclaimed.
+func TestGovernorAbsoluteCeilingIsFiniteNotUnlimited(t *testing.T) {
+	c := newBoundCache(t)
+	sp := govProc(t, c, 1, caps{}, caps{})
+
+	tenant, sys := c.limits(sp)
+	require.True(t, tenant.unset(), "nothing configured for the tenant")
+	require.False(t, sys.unset(), "but the CN-wide fallback is set, not unlimited")
+	require.EqualValues(t, absoluteHostCacheCeiling, sys.host)
+	require.EqualValues(t, absoluteDeviceCacheCeiling, sys.device)
+	require.Less(t, absoluteDeviceCacheCeiling, absoluteHostCacheCeiling,
+		"VRAM's physical maximum is far below host RAM's, so one number cannot serve both")
 }
 
 // Over the tenant cap, the coldest entry of that tenant is reclaimed and the entry that was
@@ -253,16 +280,16 @@ func TestGovernorUnreadableLimitIsUnlimited(t *testing.T) {
 			return nil, moerr.NewInternalErrorNoCtx("boom")
 		},
 	}}
-	require.Equal(t, caps{}, tenantCacheLimits(boom), "resolver error")
+	require.Equal(t, caps{}, newBoundCache(t).tenantCacheLimits(boom), "resolver error")
 
 	wrong := &sqlexec.SqlProcess{SqlCtx: &sqlexec.SqlContext{
 		Ctx: context.Background(), CNUuid: "gov-test-cn", AccountId: 1,
 		ResolveVariableFunc: func(string, bool, bool) (interface{}, error) { return "not an int", nil },
 	}}
-	require.Equal(t, caps{}, tenantCacheLimits(wrong), "wrong type")
+	require.Equal(t, caps{}, newBoundCache(t).tenantCacheLimits(wrong), "wrong type")
 
-	require.Equal(t, caps{}, tenantCacheLimits(nil), "no session")
-	require.Equal(t, caps{}, tenantCacheLimits(&sqlexec.SqlProcess{}), "no proc or sqlctx")
+	require.Equal(t, caps{}, newBoundCache(t).tenantCacheLimits(nil), "no session")
+	require.Equal(t, caps{}, newBoundCache(t).tenantCacheLimits(&sqlexec.SqlProcess{}), "no proc or sqlctx")
 }
 
 // A failed SYS read keeps the last known good cap rather than falling open to unlimited.

@@ -93,9 +93,38 @@ as a historical one.
 
 ### 5.1 Budgets
 
-Two `ScopeGlobal` variables, both defaulting to `0` = unlimited, so an
-unconfigured deployment behaves exactly as before and pays nothing — with every
-budget unset the governor returns before it walks the cache.
+Two `ScopeGlobal` variables. They do **not** default to `0`/unlimited: each
+defaults to a ceiling for its own arena — 64 TiB host, 1440 GiB device (eight
+GPUs pooled over NVLink, the largest single-node VRAM pool built today). Each is
+above the physical maximum of its arena, so neither ever refuses a load a real
+deployment could serve; they are separate because the two arenas are orders of
+magnitude apart.
+
+The ceiling lives in the variable's **default**, so
+`select @@global.max_index_cache_size` shows the advertised maximum on a new
+deployment. That alone is not enough: the value is persisted in
+`mo_mysql_compatibility_mode` at bootstrap, so a cluster created before the
+default changed keeps its stored `0` no matter what the code says. The governor
+therefore resolves `0` to the same ceiling on every path — an upgraded cluster,
+an explicit `set global … = 0`, and the sessionless loads (idxcron, internal
+rebuilds) that have no resolver at all.
+
+So `0` means "no limit I chose", not "no limit at all". The ceiling is above any
+real machine, so this is indistinguishable from unlimited in practice; what it
+removes is the state where the governor short-circuits and residency has no bound
+of any kind.
+
+The ceiling is not a sizing decision — it exists to remove *unlimited* as a
+reachable state. With a zero cap the governor returned before `enforce()`, so
+nothing was charged, nothing was enumerated, and residency was genuinely
+unbounded: one resident generation per distinct snapshot timestamp with no
+ceiling of any kind. With a finite ceiling the accounting always runs and the
+eviction path is always live, so lowering `SET GLOBAL` later *governs a warm
+cache* instead of switching accounting on.
+
+It does not make an unconfigured deployment memory-safe on its own: a machine
+exhausts its own memory long before 64 TiB binds. Configuring
+`max_index_cache_size` is still what bounds a cache to a machine.
 
 | variable | arena |
 |---|---|
@@ -120,7 +149,20 @@ for the calling tenant; it is read from the catalog as the SYS account on a
 
 The memo stamps every attempt, success or failure. Without that, a catalog outage
 defeats it entirely: each cache miss re-attempts a 10s-timeout query, twice per
-miss, serialized on one mutex.
+miss, serialized on one mutex. The lock is released across the query on a
+*refresh* — every waiter already has a last-known value — but held for the
+**first** fetch, where there is none: releasing it there would hand concurrent
+misses the zero caps, which read as unlimited, and bypass the governor for the
+whole first query at exactly the moment the cache is cold.
+
+Ownership follows the **executing** account, not the calling one. A cross-account
+snapshot read runs its index-table SQL as the snapshot's tenant
+(`ApplyScanSnapshot` binds both the timestamp and the owning tenant), so the
+resident entry is charged to that tenant and governed by *that* tenant's cap. The
+caller's session resolver cannot answer for another account, so the owning
+tenant's value is read from the catalog and memoized per account. Charging the
+caller instead would let a SYS session make tenant data resident under a budget
+the tenant never set.
 
 ### 5.3 Eviction, not refusal
 
@@ -140,6 +182,34 @@ LRU ordering), with two refinements:
 Usage is recomputed from the cache on each pass rather than tracked in a counter,
 which removes a whole class of leak bugs, and is re-snapshotted per arena so one
 arena's evictions are not double-counted by the next.
+
+A third refinement is about *who waits*. `evictEntry` destroys synchronously and
+`Destroy` takes the entry's write lock, so taking a victim with a search in
+flight parks the cache **miss** that triggered the eviction behind that search.
+Reclaim therefore runs two passes: idle victims first (`TryLock` as a hint), then
+busy ones only if the arena is still over its limit. The second pass keeps the
+guarantee that a cache over its cap still shrinks when every candidate is busy;
+the first removes the head-of-line stall in the common case, where another victim
+holds the same bytes and is not in use.
+
+### 5.4 When a cap takes effect, and what it logs
+
+Caps are consulted on a miss, and also from the housekeeping ticker. Miss-only
+enforcement is not enough on its own: a hot working set renews its TTL
+indefinitely, so an operator lowering `max_index_cache_size` on a busy CN would
+see nothing shrink until traffic happened to miss. The 15s memo bounds how stale
+the *value* is, not when it is next *applied*.
+
+Housekeeping applies the memoized **CN-wide** value only — it has no session, so
+it can neither read the catalog nor resolve a tenant's variables, and it does
+nothing until a first miss has populated the memo. Per-tenant caps still take
+effect at that tenant's next miss.
+
+Per-victim eviction detail is logged at DEBUG, not INFO. Two indexes alternating
+under a tight cap evict on every miss, and one INFO line per victim turns a
+steady state into a log storm. Each reclaim pass logs one aggregated line
+instead, and `EvictionStats()` exposes cumulative entries and bytes — the
+counters are the thing to alert on.
 
 ## 6. Sizing
 
