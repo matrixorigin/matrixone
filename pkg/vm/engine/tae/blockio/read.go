@@ -916,7 +916,7 @@ func blockDataReadWithFilter(
 		return err
 	}
 	cacheVectors.Free(mp)
-	if storageSelectRows != nil && len(storageSelectRows) > 0 &&
+	if len(storageSelectRows) > 0 &&
 		!info.IsAppendable() && orderByLimit != nil && !orderByLimit.OrderedLimit {
 		topColPos := int(orderByLimit.ColPos)
 		if topColPos >= 0 && topColPos < len(columns) &&
