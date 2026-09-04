@@ -21,6 +21,7 @@ import (
 	"fmt"
 	"math"
 	"math/big"
+	"sync"
 	"testing"
 	"time"
 
@@ -28,9 +29,11 @@ import (
 	"iter"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	icebergio "github.com/matrixorigin/matrixone/pkg/iceberg/io"
 	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
@@ -1950,7 +1953,9 @@ func TestParquetTimestampLogicalMissingUnit(t *testing.T) {
 
 // fakeFS is a minimal ETL-compatible FileService for testing fsReaderAt.
 type fakeFS struct {
-	b []byte
+	b           []byte
+	readErr     error
+	readLatency time.Duration
 
 	lastPolicy          fileservice.Policy
 	lastOffset          int64
@@ -1965,6 +1970,12 @@ func (f *fakeFS) Write(ctx context.Context, v fileservice.IOVector) error { retu
 func (f *fakeFS) Read(ctx context.Context, v *fileservice.IOVector) error {
 	if len(v.Entries) == 0 {
 		return moerr.NewInternalError(ctx, "empty entries")
+	}
+	if f.readErr != nil {
+		return f.readErr
+	}
+	if f.readLatency > 0 {
+		time.Sleep(f.readLatency)
 	}
 	e := &v.Entries[0]
 	f.lastPolicy = v.Policy
@@ -2839,12 +2850,38 @@ func TestParquet_openFile_localNYI(t *testing.T) {
 }
 
 func TestParquetShouldPrefetchS3Parquet(t *testing.T) {
-	require.True(t, shouldPrefetchS3Parquet(tree.S3, true, maxParquetS3PrefetchSize, false))
-	require.False(t, shouldPrefetchS3Parquet(tree.S3, true, maxParquetS3PrefetchSize+1, false))
-	require.False(t, shouldPrefetchS3Parquet(tree.S3, false, maxParquetS3PrefetchSize, false))
-	require.False(t, shouldPrefetchS3Parquet(tree.INFILE, true, maxParquetS3PrefetchSize, false))
-	require.False(t, shouldPrefetchS3Parquet(tree.S3, true, -1, false))
-	require.False(t, shouldPrefetchS3Parquet(tree.S3, true, 80*1024*1024, true))
+	require.True(t, shouldPrefetchS3Parquet(tree.S3, true, maxParquetS3PrefetchSize, false, false))
+	require.False(t, shouldPrefetchS3Parquet(tree.S3, true, maxParquetS3PrefetchSize+1, false, false))
+	require.False(t, shouldPrefetchS3Parquet(tree.S3, false, maxParquetS3PrefetchSize, false, false))
+	require.False(t, shouldPrefetchS3Parquet(tree.INFILE, true, maxParquetS3PrefetchSize, false, false))
+	require.False(t, shouldPrefetchS3Parquet(tree.S3, true, -1, false, false))
+	require.False(t, shouldPrefetchS3Parquet(tree.S3, true, 80*1024*1024, true, false))
+	// A whole-file fanout can run up to the bounded execution DOP concurrently.
+	// It must use direct ReaderAt reads rather than retain one complete object
+	// per active scope.
+	require.False(t, shouldPrefetchS3Parquet(tree.S3, true, maxParquetS3PrefetchSize, false, true))
+}
+
+func TestParquetWholeFileFanoutPrepareRequiresCompatibleProtocol(t *testing.T) {
+	proc := testutil.NewProc(t)
+	rt := moruntime.ServiceRuntime(proc.GetService())
+	previous, hadPrevious := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
+	t.Cleanup(func() {
+		if hadPrevious {
+			rt.SetGlobalVariables(moruntime.MOProtocolVersion, previous)
+		} else {
+			rt.CompareAndDeleteGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion44)
+		}
+	})
+
+	external := NewArgument().WithEs(&ExternalParam{ExParamConst: ExParamConst{ParquetWholeFileFanout: true}})
+	proc.Ctx = context.WithValue(proc.Ctx, defines.RemoteRunContext{}, true)
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion44)
+	err := external.Prepare(proc)
+	require.ErrorContains(t, err, "MORPC protocol version 45")
+
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion45)
+	require.NoError(t, validateParquetWholeFileFanoutProtocol(proc, external.Es))
 }
 
 func TestParquet_prepare_missingColumn(t *testing.T) {
@@ -3861,16 +3898,140 @@ func Test_fsReaderAt_ReadAt(t *testing.T) {
 	require.Equal(t, int64(5), param.takeParquetProfile().BytesRead)
 }
 
+func TestParquetRangeReadAheadCoalescesSequentialReads(t *testing.T) {
+	data := make([]byte, 2*parquetRangeReadAheadMaxBytes)
+	fs := &fakeFS{b: data}
+	reader := &parquetRangeReadAheadReaderAt{
+		reader:   &fsReaderAt{fs: fs, readPath: "fake:sequential.parquet", ctx: context.Background()},
+		fileSize: int64(len(data)),
+	}
+
+	const requestSize = 64 * 1024
+	for off := int64(0); off < 8*requestSize; off += requestSize {
+		buf := make([]byte, requestSize)
+		n, err := reader.ReadAt(buf, off)
+		require.NoError(t, err)
+		require.Equal(t, len(buf), n)
+	}
+
+	require.Equal(t, int64(2), fs.readCount)
+	require.Equal(t, int64(8*requestSize), fs.simulatedRemoteRead)
+	require.LessOrEqual(t, int64(cap(reader.window)), parquetRangeReadAheadMaxBytes)
+}
+
+func TestParquetRangeReadAheadBoundsSparseAmplification(t *testing.T) {
+	data := make([]byte, 8*parquetRangeReadAheadMaxBytes)
+	fs := &fakeFS{b: data}
+	reader := &parquetRangeReadAheadReaderAt{
+		reader:   &fsReaderAt{fs: fs, readPath: "fake:sparse.parquet", ctx: context.Background()},
+		fileSize: int64(len(data)),
+	}
+
+	const requestSize = 64 * 1024
+	const requestCount = 4
+	for i := int64(0); i < requestCount; i++ {
+		buf := make([]byte, requestSize)
+		_, err := reader.ReadAt(buf, i*parquetRangeReadAheadMaxBytes)
+		require.NoError(t, err)
+	}
+
+	requested := int64(requestCount * requestSize)
+	require.Equal(t, int64(requestCount), fs.readCount)
+	require.LessOrEqual(t, fs.simulatedRemoteRead, requested*parquetRangeReadAheadAmplification)
+	require.LessOrEqual(t, int64(cap(reader.window)), parquetRangeReadAheadMaxBytes)
+}
+
+func TestParquetRangeReadAheadPropagatesErrors(t *testing.T) {
+	data := make([]byte, parquetRangeReadAheadMaxBytes)
+	fs := &fakeFS{b: data, readErr: context.Canceled}
+	reader := &parquetRangeReadAheadReaderAt{
+		reader:   &fsReaderAt{fs: fs, readPath: "fake:canceled.parquet", ctx: context.Background()},
+		fileSize: int64(len(data)),
+	}
+
+	buf := make([]byte, 64*1024)
+	n, err := reader.ReadAt(buf, 0)
+	require.Zero(t, n)
+	require.ErrorIs(t, err, context.Canceled)
+	require.Empty(t, reader.window)
+}
+
+func TestParquetRangeReadAheadConcurrentReaderAt(t *testing.T) {
+	data := make([]byte, 2*parquetRangeReadAheadMaxBytes)
+	for i := range data {
+		data[i] = byte(i % 251)
+	}
+	fs := &fakeFS{b: data}
+	reader := &parquetRangeReadAheadReaderAt{
+		reader:   &fsReaderAt{fs: fs, readPath: "fake:concurrent.parquet", ctx: context.Background()},
+		fileSize: int64(len(data)),
+	}
+
+	const readers = 16
+	const requestSize = 64 * 1024
+	errs := make(chan error, readers)
+	var wg sync.WaitGroup
+	for i := 0; i < readers; i++ {
+		wg.Add(1)
+		go func(index int) {
+			defer wg.Done()
+			off := int64(index * requestSize)
+			buf := make([]byte, requestSize)
+			n, err := reader.ReadAt(buf, off)
+			if err == nil && n != len(buf) {
+				err = fmt.Errorf("read %d bytes, expected %d", n, len(buf))
+			}
+			if err == nil && !bytes.Equal(buf, data[off:off+requestSize]) {
+				err = fmt.Errorf("data mismatch at offset %d", off)
+			}
+			errs <- err
+		}(i)
+	}
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		require.NoError(t, err)
+	}
+	require.LessOrEqual(t, int64(cap(reader.window)), parquetRangeReadAheadMaxBytes)
+}
+
+func TestShouldReadAheadParquetRangesIsLoadOnly(t *testing.T) {
+	newParam := func(scanType int, externType plan.ExternType, withShards, wholeFileFanout bool) *ExternalParam {
+		param := &ExternalParam{ExParamConst: ExParamConst{
+			ParquetWholeFileFanout: wholeFileFanout,
+			Extern: &tree.ExternParam{
+				ExParamConst: tree.ExParamConst{ScanType: scanType, Format: tree.PARQUET},
+				ExParam:      tree.ExParam{ExternType: int32(externType)},
+			},
+		}}
+		if withShards {
+			param.ParquetRowGroupShards = []*pipeline.ParquetRowGroupShard{{RowGroupEnd: 1}}
+		}
+		return param
+	}
+
+	require.True(t, shouldReadAheadParquetRanges(newParam(tree.S3, plan.ExternType_LOAD, true, false)))
+	require.True(t, shouldReadAheadParquetRanges(newParam(tree.S3, plan.ExternType_LOAD, false, true)))
+	require.False(t, shouldReadAheadParquetRanges(newParam(tree.S3, plan.ExternType_EXTERNAL_TB, true, false)))
+	require.False(t, shouldReadAheadParquetRanges(newParam(tree.INFILE, plan.ExternType_LOAD, true, false)))
+	require.False(t, shouldReadAheadParquetRanges(newParam(tree.S3, plan.ExternType_LOAD, false, false)))
+}
+
 func TestParquetS3ReadAmplificationRepro(t *testing.T) {
 	var buf bytes.Buffer
 	schema := parquet.NewSchema("x", parquet.Group{
 		"id":      parquet.Leaf(parquet.Int64Type),
 		"payload": parquet.String(),
 	})
-	w := parquet.NewWriter(&buf, schema)
-	rows := make([]parquet.Row, 256)
+	w := parquet.NewWriter(&buf, schema, parquet.MaxRowsPerRowGroup(16))
+	rows := make([]parquet.Row, 4096)
 	for i := range rows {
-		payload := bytes.Repeat([]byte{byte('a' + i%26)}, 256)
+		payload := make([]byte, 256)
+		state := uint32(i + 1)
+		for j := range payload {
+			state = state*1664525 + 1013904223
+			payload[j] = byte(state >> 24)
+		}
 		rows[i] = parquet.Row{
 			parquet.Int64Value(int64(i)).Level(0, 0, 0),
 			parquet.ByteArrayValue(payload).Level(0, 0, 1),
@@ -3880,31 +4041,92 @@ func TestParquetS3ReadAmplificationRepro(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, w.Close())
 
-	fs := &fakeFS{b: buf.Bytes()}
-	f, err := parquet.OpenFile(&fsReaderAt{fs: fs, readPath: "fake:payload.parquet", ctx: context.Background()}, int64(buf.Len()))
-	require.NoError(t, err)
-
-	pages := f.Root().Column("payload").Pages()
-	defer func() {
-		require.NoError(t, pages.Close())
-	}()
-	pageCount := 0
-	for {
-		_, err := pages.ReadPage()
-		if errors.Is(err, io.EOF) {
-			break
-		}
+	readPayloadPages := func(reader io.ReaderAt) int {
+		f, err := parquet.OpenFile(reader, int64(buf.Len()))
 		require.NoError(t, err)
-		pageCount++
+		require.Greater(t, len(f.RowGroups()), 100)
+		pages := f.Root().Column("payload").Pages()
+		defer func() {
+			require.NoError(t, pages.Close())
+		}()
+		pageCount := 0
+		for {
+			_, err := pages.ReadPage()
+			if errors.Is(err, io.EOF) {
+				break
+			}
+			require.NoError(t, err)
+			pageCount++
+		}
+		return pageCount
 	}
-	require.Positive(t, pageCount)
-	require.GreaterOrEqual(t, fs.readCount, int64(3), "expect multiple small ReadAt calls")
-	require.Positive(t, fs.logicalRead)
-	require.Equal(t, fs.logicalRead, fs.simulatedRemoteRead)
-	require.LessOrEqual(t, fs.simulatedRemoteRead, int64(buf.Len()),
-		"simulated remote read should not exceed file size; got amplification ratio = %v",
-		float64(fs.simulatedRemoteRead)/float64(buf.Len()))
-	require.Equal(t, fileservice.Policy(fileservice.SkipFullFilePreloads), fs.lastPolicy)
+
+	rawFS := &fakeFS{b: buf.Bytes()}
+	rawPages := readPayloadPages(&fsReaderAt{
+		fs: rawFS, readPath: "fake:payload.parquet", ctx: context.Background(),
+	})
+	require.Positive(t, rawPages)
+	require.GreaterOrEqual(t, rawFS.readCount, int64(3), "expect multiple small ReadAt calls")
+	require.Equal(t, rawFS.logicalRead, rawFS.simulatedRemoteRead)
+
+	coalescedFS := &fakeFS{b: buf.Bytes()}
+	coalescedReader := &parquetRangeReadAheadReaderAt{
+		reader: &fsReaderAt{
+			fs: coalescedFS, readPath: "fake:payload.parquet", ctx: context.Background(),
+		},
+		fileSize: int64(buf.Len()),
+	}
+	coalescedPages := readPayloadPages(coalescedReader)
+	require.Equal(t, rawPages, coalescedPages)
+	require.Less(t, coalescedFS.readCount, rawFS.readCount)
+	require.LessOrEqual(t, coalescedFS.simulatedRemoteRead,
+		rawFS.logicalRead*parquetRangeReadAheadAmplification)
+	require.LessOrEqual(t, int64(cap(coalescedReader.window)), parquetRangeReadAheadMaxBytes)
+	require.Equal(t, fileservice.Policy(fileservice.SkipFullFilePreloads), coalescedFS.lastPolicy)
+}
+
+func BenchmarkParquetRangeReadAheadSequential(b *testing.B) {
+	data := make([]byte, 8*parquetRangeReadAheadMaxBytes)
+	const requestSize = 64 * 1024
+	const simulatedRangeLatency = 100 * time.Microsecond
+	for _, test := range []struct {
+		name      string
+		readAhead bool
+	}{
+		{name: "direct"},
+		{name: "read_ahead", readAhead: true},
+	} {
+		b.Run(test.name, func(b *testing.B) {
+			fs := &fakeFS{b: data, readLatency: simulatedRangeLatency}
+			b.SetBytes(int64(len(data)))
+			b.ReportAllocs()
+			var peakCacheBytes int
+			b.ResetTimer()
+			for i := 0; i < b.N; i++ {
+				base := &fsReaderAt{fs: fs, readPath: "fake:benchmark.parquet", ctx: context.Background()}
+				var reader io.ReaderAt = base
+				var readAheadReader *parquetRangeReadAheadReaderAt
+				if test.readAhead {
+					readAheadReader = &parquetRangeReadAheadReaderAt{reader: base, fileSize: int64(len(data))}
+					reader = readAheadReader
+				}
+				for off := int64(0); off < int64(len(data)); off += requestSize {
+					buf := make([]byte, requestSize)
+					if _, err := reader.ReadAt(buf, off); err != nil {
+						b.Fatal(err)
+					}
+				}
+				if readAheadReader != nil {
+					peakCacheBytes = max(peakCacheBytes, cap(readAheadReader.window))
+				}
+			}
+			b.StopTimer()
+			b.ReportMetric(float64(fs.readCount)/float64(b.N), "range_calls/op")
+			b.ReportMetric(float64(fs.simulatedRemoteRead)/float64(b.N), "fetched_bytes/op")
+			b.ReportMetric(float64(peakCacheBytes), "peak_cache_bytes")
+			b.ReportMetric(float64(simulatedRangeLatency), "range_latency_ns")
+		})
+	}
 }
 
 func Test_copyPageToVecMap_NullsHandled(t *testing.T) {
@@ -4409,4 +4631,72 @@ func TestParquet_getParquetExpectedColCnt(t *testing.T) {
 		},
 	}
 	require.Equal(t, 2, getParquetExpectedColCnt(param2))
+}
+
+type parquetLoadIndexFixture struct {
+	Value int64 `parquet:"value"`
+}
+
+type parquetReadRange struct {
+	offset int64
+	length int
+}
+
+type parquetTrackingReaderAt struct {
+	reader *bytes.Reader
+	reads  []parquetReadRange
+}
+
+func (r *parquetTrackingReaderAt) ReadAt(p []byte, offset int64) (int, error) {
+	r.reads = append(r.reads, parquetReadRange{offset: offset, length: len(p)})
+	return r.reader.ReadAt(p, offset)
+}
+
+func (r *parquetTrackingReaderAt) readsOffset(offset int64) bool {
+	for _, read := range r.reads {
+		if read.offset <= offset && offset < read.offset+int64(read.length) {
+			return true
+		}
+	}
+	return false
+}
+
+func TestParquetLoadFanoutSkipsUnusedIndexSections(t *testing.T) {
+	var data bytes.Buffer
+	writer := parquet.NewGenericWriter[parquetLoadIndexFixture](
+		&data,
+		parquet.MaxRowsPerRowGroup(1),
+		parquet.DataPageStatistics(true),
+		parquet.BloomFilters(parquet.SplitBlockFilter(10, "value")),
+	)
+	_, err := writer.Write([]parquetLoadIndexFixture{{Value: 1}, {Value: 2}, {Value: 3}})
+	require.NoError(t, err)
+	require.NoError(t, writer.Close())
+
+	metadataFile, err := parquet.OpenFile(bytes.NewReader(data.Bytes()), int64(data.Len()))
+	require.NoError(t, err)
+	chunk := metadataFile.Metadata().RowGroups[0].Columns[0]
+	require.Positive(t, chunk.ColumnIndexOffset)
+	require.Positive(t, chunk.OffsetIndexOffset)
+	require.Positive(t, chunk.MetaData.BloomFilterOffset)
+
+	defaultReader := &parquetTrackingReaderAt{reader: bytes.NewReader(data.Bytes())}
+	_, err = parquet.OpenFile(defaultReader, int64(data.Len()))
+	require.NoError(t, err)
+	require.True(t, defaultReader.readsOffset(chunk.ColumnIndexOffset))
+	require.True(t, defaultReader.readsOffset(chunk.OffsetIndexOffset))
+	require.True(t, defaultReader.readsOffset(chunk.MetaData.BloomFilterOffset))
+
+	param := &ExternalParam{ExParamConst: ExParamConst{
+		ParquetRowGroupShards: []*pipeline.ParquetRowGroupShard{{FileIndex: 0, RowGroupStart: 0, RowGroupEnd: 1}},
+	}}
+	for range 3 { // One planning open plus two fanout scopes must not reread either section.
+		reader := &parquetTrackingReaderAt{reader: bytes.NewReader(data.Bytes())}
+		file, err := parquet.OpenFile(reader, int64(data.Len()), parquetLoadFileOptions(param)...)
+		require.NoError(t, err)
+		require.Len(t, file.RowGroups(), 3)
+		require.False(t, reader.readsOffset(chunk.ColumnIndexOffset))
+		require.False(t, reader.readsOffset(chunk.OffsetIndexOffset))
+		require.False(t, reader.readsOffset(chunk.MetaData.BloomFilterOffset))
+	}
 }
