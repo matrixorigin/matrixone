@@ -85,9 +85,11 @@ select statement_digest_text('SELECT ?');
 Could not parse argument to digest function: "SQL parser error: parameter markers are not permitted".
 select statement_digest_text(statement_digest_text('SELECT 1, 2, 3'));
 Could not parse argument to digest function.
-select statement_digest_text(_binary'SELECT 1');
+select statement_digest_text(_binary'SELECT 1') as binary_digest;
+binary_digest
 SELECT ?
-select statement_digest_text(cast('SELECT 1' as binary));
+select statement_digest_text(cast('SELECT 1' as binary)) as binary_digest;
+binary_digest
 SELECT ?
 set @old_sql_mode = @@sql_mode;
 set sql_mode='ANSI_QUOTES';
