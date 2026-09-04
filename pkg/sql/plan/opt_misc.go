@@ -1843,6 +1843,14 @@ func singleRowCastIsTotal(source, target plan.Type) bool {
 		target.Width >= source.Width {
 		return true
 	}
+	// Comparison key casts may trim trailing spaces before entering a
+	// VARCHAR/TEXT domain; trimming cannot make a non-shrinking cast reject.
+	if (targetID == types.T_varchar || targetID == types.T_text) &&
+		(sourceID == types.T_char || sourceID == types.T_varchar || sourceID == types.T_text) &&
+		source.Charset == target.Charset && source.Width > 0 &&
+		target.Width >= source.Width {
+		return true
+	}
 	if sourceID.IsDecimal() {
 		if !validDecimalPlanType(source) {
 			return false

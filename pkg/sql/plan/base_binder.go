@@ -6864,8 +6864,16 @@ func padSpaceValueArgumentIndexes(name string, argsLength int) []int {
 
 func appendPadSpaceComparisonCastIfNeeded(ctx context.Context, expr *Expr) (*Expr, error) {
 	argType := makeTypeByPlan2Expr(expr)
+	if isCastOverload(expr, 2) {
+		return expr, nil
+	}
+	if argType.Oid == types.T_char {
+		targetType := argType
+		targetType.Oid = types.T_varchar
+		return appendComparisonCastBeforeExpr(ctx, expr, makePlan2Type(&targetType))
+	}
 	if (argType.Oid == types.T_varchar || argType.Oid == types.T_text) &&
-		hasPadSpaceStringProvenance(expr) && !isCastOverload(expr, 2) {
+		hasPadSpaceStringProvenance(expr) {
 		return appendComparisonCastBeforeExpr(ctx, expr, makePlan2Type(&argType))
 	}
 	return expr, nil
