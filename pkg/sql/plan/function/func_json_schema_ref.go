@@ -324,6 +324,9 @@ func mysqlScanSchemaStringRefs(ctx context.Context, index *mysqlJSONSchemaIndex)
 		if !ok {
 			continue
 		}
+		if index.nodes[pointer].baseExternal {
+			return nil, errors.New(mysqlJSONSchemaExternalRefReason)
+		}
 		ref, err := mysqlResolveLocalSchemaRef(index, stringValue)
 		if err != nil {
 			if errors.Is(err, errMySQLJSONSchemaExternalRef) {
