@@ -70,40 +70,10 @@ func handleAnalyzeStatsStmt(ses *Session, execCtx *ExecCtx, stmt *tree.AnalyzeSt
 	ses.SetMysqlResultSet(mrs)
 	addAnalyzeResultColumns(mrs)
 	for _, table := range tables {
-		tableKey := optimizerStatsTableKey{
-			accountID: table.key.AccId,
-			tableID:   table.key.TableID,
-		}
-		release, err := acquireOptimizerStatsPublisher(
-			table.ctx, ses.GetService(), tableKey)
+		result, err := analyzeBoundTable(ses, stmt.FullScan, table, publisher)
 		if err != nil {
 			return err
 		}
-		seed := sha256.Sum256([]byte(fmt.Sprintf(
-			"manual-analyze-v1/%d/%d/%d", table.key.AccId, table.key.DatabaseID, table.key.TableID)))
-		result, err := table.relation.AnalyzeTable(table.ctx, engine.AnalyzeTableRequest{
-			Process:  ses.proc,
-			Columns:  identifiersToStrings(table.columns),
-			FullScan: stmt.FullScan,
-			Seed:     seed,
-		})
-		if err != nil {
-			release()
-			return err
-		}
-		if result == nil || result.Stats == nil {
-			release()
-			return moerr.NewInternalErrorNoCtxf(
-				"ANALYZE TABLE did not collect statistics for %s.%s",
-				table.key.DbName, table.key.TableName)
-		}
-		if err = publishCollectedAnalyzeStats(
-			ses, table.ctx, table.key, table.tableDefVersion,
-			result.Stats, publisher); err != nil {
-			release()
-			return err
-		}
-		release()
 		mrs.AddRow([]any{
 			table.key.DbName + "." + table.key.TableName,
 			result.Mode,
@@ -123,6 +93,47 @@ func handleAnalyzeStatsStmt(ses *Session, execCtx *ExecCtx, stmt *tree.AnalyzeSt
 	}
 	execCtx.results = []ExecResult{mrs}
 	return nil
+}
+
+func analyzeBoundTable(
+	ses *Session,
+	fullScan bool,
+	table boundAnalyzeTable,
+	publisher engine.AnalyzedStatsPublisher,
+) (*engine.AnalyzeTableResult, error) {
+	tableKey := optimizerStatsTableKey{
+		accountID: table.key.AccId,
+		tableID:   table.key.TableID,
+	}
+	release, err := acquireOptimizerStatsPublisher(
+		table.ctx, ses.GetService(), tableKey)
+	if err != nil {
+		return nil, err
+	}
+	defer release()
+
+	seed := sha256.Sum256([]byte(fmt.Sprintf(
+		"manual-analyze-v1/%d/%d/%d", table.key.AccId, table.key.DatabaseID, table.key.TableID)))
+	result, err := table.relation.AnalyzeTable(table.ctx, engine.AnalyzeTableRequest{
+		Process:  ses.proc,
+		Columns:  identifiersToStrings(table.columns),
+		FullScan: fullScan,
+		Seed:     seed,
+	})
+	if err != nil {
+		return nil, err
+	}
+	if result == nil || result.Stats == nil {
+		return nil, moerr.NewInternalErrorNoCtxf(
+			"ANALYZE TABLE did not collect statistics for %s.%s",
+			table.key.DbName, table.key.TableName)
+	}
+	if err = publishCollectedAnalyzeStats(
+		ses, table.ctx, table.key, table.tableDefVersion,
+		result.Stats, publisher); err != nil {
+		return nil, err
+	}
+	return result, nil
 }
 
 func bindAnalyzeTables(

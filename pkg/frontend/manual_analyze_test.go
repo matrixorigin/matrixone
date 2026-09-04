@@ -15,12 +15,26 @@
 package frontend
 
 import (
+	"context"
 	"testing"
+	"time"
 
+	"github.com/golang/mock/gomock"
 	"github.com/matrixorigin/matrixone/pkg/defines"
+	pbstats "github.com/matrixorigin/matrixone/pkg/pb/statsinfo"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/stretchr/testify/require"
 )
+
+type panickingAnalyzableRelation struct{}
+
+func (panickingAnalyzableRelation) AnalyzeTable(
+	context.Context,
+	engine.AnalyzeTableRequest,
+) (*engine.AnalyzeTableResult, error) {
+	panic("analyze panic")
+}
 
 func TestBuildAnalyzeAuthorizationProbeQuotesIdentifiers(t *testing.T) {
 	probe := buildAnalyzeAuthorizationProbe(
@@ -40,4 +54,29 @@ func TestAddAnalyzeResultColumns(t *testing.T) {
 	column, err = mrs.GetColumn(t.Context(), 4)
 	require.NoError(t, err)
 	require.Equal(t, defines.MYSQL_TYPE_LONGLONG, column.ColumnType())
+}
+
+func TestAnalyzeBoundTableReleasesPublisherAdmissionOnPanic(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	ses, _ := newAnalyzeHandlerTestSession(t, ctrl)
+	isolateOptimizerStatsTest(t, ses)
+	table := boundAnalyzeTable{
+		ctx:      t.Context(),
+		relation: panickingAnalyzableRelation{},
+		key:      pbstats.StatsInfoKey{AccId: 1, TableID: 42},
+	}
+
+	require.PanicsWithValue(t, "analyze panic", func() {
+		_, _ = analyzeBoundTable(ses, false, table, nil)
+	})
+
+	ctx, cancel := context.WithTimeout(t.Context(), time.Second)
+	defer cancel()
+	release, err := acquireOptimizerStatsPublisher(
+		ctx,
+		ses.GetService(),
+		optimizerStatsTableKey{accountID: table.key.AccId, tableID: table.key.TableID},
+	)
+	require.NoError(t, err)
+	release()
 }
