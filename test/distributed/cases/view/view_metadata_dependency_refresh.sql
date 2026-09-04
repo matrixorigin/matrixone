@@ -206,7 +206,7 @@ CREATE SNAPSHOT view_metadata_orphan_snapshot FOR ACCOUNT;
 DROP VIEW view_metadata_orphan_restore.target_view;
 CREATE VIEW view_metadata_orphan_restore.target_view AS
 SELECT a FROM view_metadata_orphan_restore.source_table;
-CREATE TABLE orphan_relation_before_restore AS
+CREATE TABLE view_metadata_refresh.orphan_relation_before_restore AS
 SELECT rel_id FROM mo_catalog.mo_tables
 WHERE reldatabase = 'view_metadata_orphan_restore' AND relname = 'target_view';
 RESTORE DATABASE view_metadata_orphan_restore{SNAPSHOT='view_metadata_orphan_snapshot'};
@@ -216,12 +216,12 @@ ON r.account_id = t.account_id AND r.target_relation_id = t.rel_id
 WHERE t.reldatabase = 'view_metadata_orphan_restore' AND t.relname = 'target_view'
 AND r.status = 'CURRENT' AND r.target_generation = r.completed_generation;
 SELECT count(*) = 0 AS old_refresh_identity_removed
-FROM mo_catalog.mo_view_refresh r JOIN orphan_relation_before_restore old
+FROM mo_catalog.mo_view_refresh r JOIN view_metadata_refresh.orphan_relation_before_restore old
 ON r.target_relation_id = old.rel_id;
 SELECT count(*) = 0 AS old_dependency_identity_removed
-FROM mo_catalog.mo_view_dependencies d JOIN orphan_relation_before_restore old
+FROM mo_catalog.mo_view_dependencies d JOIN view_metadata_refresh.orphan_relation_before_restore old
 ON d.target_relation_id = old.rel_id;
-DROP TABLE orphan_relation_before_restore;
+DROP TABLE view_metadata_refresh.orphan_relation_before_restore;
 DROP SNAPSHOT view_metadata_orphan_snapshot;
 DROP DATABASE view_metadata_orphan_restore;
 
