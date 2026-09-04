@@ -359,9 +359,10 @@ budget for the current UNION implementation:
   provider call with only the statement budget then remaining;
 - cancellation is checked while decoding subscription rows, converting and
   sorting metadata, constructing and consuming the subscriber-local visibility
-  query, filtering the enumerated set, and before every publisher view bind. A
-  canceled statement therefore does not continue doing unbounded metadata work
-  or consuming the remaining branch budget;
+  query, normalizing publication table lists, filtering the enumerated set,
+  and before every publisher view bind. A canceled statement therefore does
+  not continue doing unbounded metadata work or consuming the remaining branch
+  budget;
 - raising the 256-branch limit requires a follow-up runtime metadata operator
   or equivalent shared representation plus new capacity evidence.
 

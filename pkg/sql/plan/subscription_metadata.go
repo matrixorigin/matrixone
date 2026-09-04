@@ -161,8 +161,16 @@ func (builder *QueryBuilder) visibleSubscriptionMetadata(
 		if err := builder.checkPlanningCanceled(); err != nil {
 			return nil, err
 		}
-		if subscription == nil ||
-			!validSubscriptionPublicationScope(subscription.Meta) ||
+		if subscription == nil {
+			continue
+		}
+		validScope, scopeErr := validSubscriptionPublicationScopeWithCheck(
+			subscription.Meta, lowerCaseTableNames, builder.checkPlanningCanceled,
+		)
+		if scopeErr != nil {
+			return nil, scopeErr
+		}
+		if !validScope ||
 			(!subscription.AllTablesVisible && len(subscription.VisibleTableIDs) == 0) {
 			continue
 		}
@@ -565,14 +573,25 @@ func subscriptionPublicationTableScope(
 // publisher-side authorization predicates. Empty database/table scope must
 // never degrade into an unfiltered cross-account catalog scan.
 func validSubscriptionPublicationScope(meta *SubscriptionMeta) bool {
+	valid, _ := validSubscriptionPublicationScopeWithCheck(meta, 1, nil)
+	return valid
+}
+
+func validSubscriptionPublicationScopeWithCheck(
+	meta *SubscriptionMeta,
+	lowerCaseTableNames int64,
+	checkCanceled func() error,
+) (bool, error) {
 	if meta == nil || meta.SubName == "" || meta.DbName == "" || meta.Tables == "" {
-		return false
+		return false, nil
 	}
 	if meta.Tables == "*" {
-		return true
+		return true, nil
 	}
-	scope, err := subscriptionPublicationTableScope(meta.Tables, 1, nil)
-	return err == nil && len(scope.tableNames) > 0
+	scope, err := subscriptionPublicationTableScope(
+		meta.Tables, lowerCaseTableNames, checkCanceled,
+	)
+	return err == nil && len(scope.tableNames) > 0, err
 }
 
 func falseSubscriptionMetadataFilter() tree.Expr {

@@ -682,6 +682,55 @@ func TestSubscriptionStatisticsPublicationTableBudget(t *testing.T) {
 		require.ErrorContains(t, err, "publication table expansion exceeds planning budget of 1048576 encoded table-name bytes")
 		require.Zero(t, ctx.publisherBindCount)
 	})
+
+	t.Run("failed admission neither caches nor charges a retried snapshot", func(t *testing.T) {
+		_, ctx := newSubscriptionMetadataTestOptimizer()
+		ctx.metadata = []*SubscriptionMetadata{{Meta: &SubscriptionMeta{
+			AccountId: 0, DbName: "tpch", SubName: "table_budget",
+			Tables: subscriptionMetadataTestTableList(maxSubscriptionStatisticsPublicationTableEntries + 1),
+		}, AllTablesVisible: true}}
+		builder := NewQueryBuilder(plan.Query_SELECT, ctx, false, false)
+
+		_, err := builder.visibleSubscriptionMetadata(nil)
+		require.ErrorContains(t, err, "publication table expansion exceeds planning budget")
+		require.Zero(t, builder.subscriptionStatisticsPublisherBranches)
+		require.Zero(t, builder.subscriptionStatisticsPublicationTableEntries)
+		require.NotContains(t, builder.subscriptionStatisticsMetadata, "")
+
+		ctx.metadata[0].Meta.Tables = "nation"
+		visible, err := builder.visibleSubscriptionMetadata(nil)
+		require.NoError(t, err)
+		require.Len(t, visible, 1)
+		require.Equal(t, 2, ctx.metadataCalls,
+			"a rejected fresh result must not become a cached partial result")
+		require.Equal(t, 1, builder.subscriptionStatisticsPublisherBranches)
+		require.Equal(t, 1, builder.subscriptionStatisticsPublicationTableEntries)
+	})
+
+	t.Run("cached admission failure does not partially consume budget", func(t *testing.T) {
+		_, ctx := newSubscriptionMetadataTestOptimizer()
+		ctx.metadata = []*SubscriptionMetadata{{Meta: &SubscriptionMeta{
+			AccountId: 0, DbName: "tpch", SubName: "table_budget",
+			Tables: subscriptionMetadataTestTableList(maxSubscriptionStatisticsPublicationTableEntries / 2),
+		}, AllTablesVisible: true}}
+		builder := NewQueryBuilder(plan.Query_SELECT, ctx, false, false)
+
+		_, err := builder.visibleSubscriptionMetadata(nil)
+		require.NoError(t, err)
+		_, err = builder.visibleSubscriptionMetadata(nil)
+		require.NoError(t, err)
+		branchesBefore := builder.subscriptionStatisticsPublisherBranches
+		entriesBefore := builder.subscriptionStatisticsPublicationTableEntries
+		bytesBefore := builder.subscriptionStatisticsPublicationTableLiteralBytes
+
+		_, err = builder.visibleSubscriptionMetadata(nil)
+		require.ErrorContains(t, err, "publication table expansion exceeds planning budget")
+		require.Equal(t, branchesBefore, builder.subscriptionStatisticsPublisherBranches)
+		require.Equal(t, entriesBefore, builder.subscriptionStatisticsPublicationTableEntries)
+		require.Equal(t, bytesBefore, builder.subscriptionStatisticsPublicationTableLiteralBytes)
+		require.Equal(t, 1, ctx.metadataCalls,
+			"the same snapshot must retain its complete cached enumeration")
+	})
 }
 
 func TestSubscriptionPublicationTableScopeIsDeterministicAndCancelable(t *testing.T) {
@@ -689,6 +738,9 @@ func TestSubscriptionPublicationTableScopeIsDeterministicAndCancelable(t *testin
 	require.NoError(t, err)
 	require.Equal(t, []string{"alpha", "beta"}, scope.tableNames)
 	require.Equal(t, len("alpha")+2+len("beta")+2, scope.literalBytes)
+	escaped, err := subscriptionPublicationTableScope("a'\\", 1, nil)
+	require.NoError(t, err)
+	require.Equal(t, len("a'\\")+2+2, escaped.literalBytes)
 	caseInsensitive, err := subscriptionPublicationTableScope("Table,table", 1, nil)
 	require.NoError(t, err)
 	require.Equal(t, []string{"Table"}, caseInsensitive.tableNames)
@@ -707,6 +759,12 @@ func TestSubscriptionPublicationTableScopeIsDeterministicAndCancelable(t *testin
 	})
 	require.ErrorIs(t, err, wantErr)
 	require.Equal(t, 3, checks)
+
+	valid, err := validSubscriptionPublicationScopeWithCheck(&SubscriptionMeta{
+		SubName: "sub", DbName: "pub", Tables: "t1,t2,t3",
+	}, 1, func() error { return wantErr })
+	require.ErrorIs(t, err, wantErr)
+	require.False(t, valid)
 }
 
 func subscriptionMetadataTestTableList(count int) string {
