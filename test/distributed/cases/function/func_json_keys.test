@@ -16,6 +16,15 @@ select json_keys('{"a": [1,2,3]}', '$.a');
 -- path not matching → null
 select json_keys('{"a": 1}', '$.b');
 
+-- wildcard and range paths → error
+select json_keys('{"a": 1}', '$.*');
+select json_keys('{"a": 1}', '$[*]');
+select json_keys('{"a": {"x": 1}}', '$**.x');
+select json_keys('[{"a": 1}, {"b": 2}]', '$[0 to 1]');
+
+-- quoted wildcard is a literal key
+select json_keys('{"*": {"x": 1}}', '$."*"');
+
 -- null arguments
 select json_keys(null);
 select json_keys('{"a":1}', null);

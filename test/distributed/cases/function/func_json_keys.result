@@ -28,6 +28,17 @@ null
 select json_keys('{"a": 1}', '$.b');
 json_keys({"a": 1}, $.b)
 null
+select json_keys('{"a": 1}', '$.*');
+In this situation, path expressions may not contain the * and ** tokens or an array range.
+select json_keys('{"a": 1}', '$[*]');
+In this situation, path expressions may not contain the * and ** tokens or an array range.
+select json_keys('{"a": {"x": 1}}', '$**.x');
+In this situation, path expressions may not contain the * and ** tokens or an array range.
+select json_keys('[{"a": 1}, {"b": 2}]', '$[0 to 1]');
+In this situation, path expressions may not contain the * and ** tokens or an array range.
+select json_keys('{"*": {"x": 1}}', '$."*"');
+json_keys({"*": {"x": 1}}, $."*")
+["x"]
 select json_keys(null);
 json_keys(null)
 null

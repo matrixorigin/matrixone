@@ -177,6 +177,147 @@ func TestJsonKeys(t *testing.T) {
 			}, nil)
 		require.Equal(t, `[["a", "b"]]`, jsonVectorRowString(t, composed, 0))
 	})
+
+	t.Run("simple path returns object keys", func(t *testing.T) {
+		vec := runJsonFunctionWithSelectList(t, proc,
+			[]FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(),
+					[]string{`{"a":{"x":1}}`}, []bool{false}),
+				NewFunctionTestInput(types.T_varchar.ToType(),
+					[]string{`$.a`}, []bool{false}),
+			},
+			types.T_json.ToType(), JsonKeys, nil)
+		require.Equal(t, `["x"]`, jsonVectorRowString(t, vec, 0))
+	})
+
+	t.Run("literal wildcard key remains simple", func(t *testing.T) {
+		vec := runJsonFunctionWithSelectList(t, proc,
+			[]FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(),
+					[]string{`{"*":{"x":1}}`}, []bool{false}),
+				NewFunctionTestInput(types.T_varchar.ToType(),
+					[]string{"$.\"*\""}, []bool{false}),
+			},
+			types.T_json.ToType(), JsonKeys, nil)
+		require.Equal(t, `["x"]`, jsonVectorRowString(t, vec, 0))
+	})
+
+	t.Run("path controls preserve existing semantics", func(t *testing.T) {
+		fcTC := NewFunctionTestCase(proc,
+			[]FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(),
+					[]string{
+						`{"a":{"x":1}}`,
+						`{"a":{"x":1}}`,
+						`{"a":{}}`,
+						`{"a":1}`,
+						`{"a":[1]}`,
+						``,
+						`{"a":{"x":1}}`,
+					},
+					[]bool{false, false, false, false, false, true, false}),
+				NewFunctionTestInput(types.T_varchar.ToType(),
+					[]string{`$`, `$.a`, `$.a`, `$.b`, `$.a`, `$.a`, ``},
+					[]bool{false, false, false, false, false, false, true}),
+			},
+			NewFunctionTestResult(types.T_json.ToType(), false,
+				[]string{
+					mustJsonBinaryString(t, `["a"]`),
+					mustJsonBinaryString(t, `["x"]`),
+					mustJsonBinaryString(t, `[]`),
+					``, ``, ``, ``,
+				},
+				[]bool{false, false, false, true, true, true, true}),
+			JsonKeys)
+		s, info := fcTC.Run()
+		require.True(t, s, info)
+	})
+
+	t.Run("rejects non-simple paths", func(t *testing.T) {
+		paths := []struct {
+			name string
+			path string
+		}{
+			{name: "key wildcard", path: `$.*`},
+			{name: "array wildcard", path: `$[*]`},
+			{name: "double wildcard", path: `$**.x`},
+			{name: "array range", path: `$[0 to 1]`},
+		}
+
+		for _, path := range paths {
+			t.Run(path.name, func(t *testing.T) {
+				for _, doc := range []struct {
+					name  string
+					typ   types.Type
+					value string
+				}{
+					{name: "varchar", typ: types.T_varchar.ToType(), value: `{"a":{"x":1}}`},
+					{name: "json", typ: types.T_json.ToType(), value: mustJsonBinaryString(t, `{"a":{"x":1}}`)},
+				} {
+					t.Run(doc.name, func(t *testing.T) {
+						for _, pathInput := range []struct {
+							name    string
+							newPath func(types.Type, any, []bool) FunctionTestInput
+						}{
+							{name: "row path", newPath: NewFunctionTestInput},
+							{name: "const path", newPath: NewFunctionTestConstInput},
+						} {
+							t.Run(pathInput.name, func(t *testing.T) {
+								fcTC := NewFunctionTestCase(proc,
+									[]FunctionTestInput{
+										NewFunctionTestInput(doc.typ, []string{doc.value}, []bool{false}),
+										pathInput.newPath(types.T_varchar.ToType(), []string{path.path}, []bool{false}),
+									},
+									NewFunctionTestResult(types.T_json.ToType(), false, nil, nil),
+									JsonKeys)
+								require.NoError(t, fcTC.result.PreExtendAndReset(fcTC.fnLength))
+								_, err := fcTC.DebugRun()
+								require.Error(t, err)
+								var moErr *moerr.Error
+								require.ErrorAs(t, err, &moErr)
+								require.Equal(t, moerr.ErrInvalidJSONPathWildcard, moErr.ErrorCode())
+								require.Equal(t, uint16(moerr.ER_INVALID_JSON_PATH_WILDCARD), moErr.MySQLCode())
+								require.Equal(t, "42000", moErr.SqlState())
+							})
+						}
+					})
+				}
+			})
+		}
+	})
+
+	t.Run("masked wildcard path is not evaluated", func(t *testing.T) {
+		fcTC := NewFunctionTestCase(proc,
+			[]FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(),
+					[]string{`{"a":1}`, `{"b":2}`}, []bool{false, false}),
+				NewFunctionTestInput(types.T_varchar.ToType(),
+					[]string{`$`, `$.*`}, []bool{false, false}),
+			},
+			NewFunctionTestResult(types.T_json.ToType(), false,
+				[]string{mustJsonBinaryString(t, `["a"]`), ``}, []bool{false, true}),
+			JsonKeys).WithSelectList(&FunctionSelectList{
+			AnyNull:    true,
+			SelectList: []bool{true, false},
+		})
+		s, info := fcTC.Run()
+		require.True(t, s, info)
+	})
+
+	t.Run("invalid JSON takes precedence over wildcard path", func(t *testing.T) {
+		fcTC := NewFunctionTestCase(proc,
+			[]FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(), []string{`not json`}, []bool{false}),
+				NewFunctionTestInput(types.T_varchar.ToType(), []string{`$.*`}, []bool{false}),
+			},
+			NewFunctionTestResult(types.T_json.ToType(), false, nil, nil), JsonKeys)
+		require.NoError(t, fcTC.result.PreExtendAndReset(fcTC.fnLength))
+		_, err := fcTC.DebugRun()
+		require.Error(t, err)
+		var moErr *moerr.Error
+		require.ErrorAs(t, err, &moErr)
+		require.Equal(t, moerr.ErrInvalidArg, moErr.ErrorCode())
+	})
 }
 
 func TestJsonPretty(t *testing.T) {

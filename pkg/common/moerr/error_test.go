@@ -134,6 +134,22 @@ func TestInvalidGroupFuncUseMySQLError(t *testing.T) {
 	require.Equal(t, "Invalid use of group function", err.Error())
 }
 
+func TestNewInvalidJSONPathWildcard(t *testing.T) {
+	err := NewInvalidJSONPathWildcard(context.Background())
+	require.Equal(t, ErrInvalidJSONPathWildcard, err.ErrorCode())
+	require.Equal(t, ER_INVALID_JSON_PATH_WILDCARD, err.MySQLCode())
+	require.Equal(t, "42000", err.SqlState())
+	require.Equal(t,
+		"In this situation, path expressions may not contain the * and ** tokens or an array range.",
+		err.Error())
+
+	data, marshalErr := err.MarshalBinary()
+	require.NoError(t, marshalErr)
+	decoded := new(Error)
+	require.NoError(t, decoded.UnmarshalBinary(data))
+	require.Equal(t, err, decoded)
+}
+
 func TestViewSelectTmpTableMySQLError(t *testing.T) {
 	err := NewViewSelectTmpTable(context.Background(), "temp_for_view")
 	require.Equal(t, ErrViewSelectTmpTable, err.ErrorCode())
