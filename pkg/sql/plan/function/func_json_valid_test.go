@@ -1042,6 +1042,7 @@ func TestJsonSchemaReferenceDepthAndCancellation(t *testing.T) {
 	require.NoError(t, err)
 	_, err = compileMySQLDraft4Schema(context.Background(), "json_schema_valid", schema)
 	require.Error(t, err)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidArg), err)
 	require.Contains(t, err.Error(), mysqlJSONSchemaDepthReason)
 
 	cancelled, cancel := context.WithCancel(context.Background())

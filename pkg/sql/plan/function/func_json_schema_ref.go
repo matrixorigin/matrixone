@@ -103,7 +103,7 @@ type mysqlEffectiveSchemaPending struct {
 func mysqlAnalyzeDraft4Schema(ctx context.Context, fnName string, schema any) error {
 	index, err := mysqlIndexSchemaJSON(ctx, schema)
 	if err != nil {
-		return err
+		return mysqlSchemaRefError(ctx, fnName, err)
 	}
 	refs, err := mysqlScanSchemaStringRefs(ctx, index)
 	if err != nil {
