@@ -127,6 +127,9 @@ func encodeRemoteScope(s *Scope, proc *process.Process) ([]byte, error) {
 	if err = validateRemoteODKUAffectedRowsPipelineProtocol(proc, p); err != nil {
 		return nil, err
 	}
+	if err = validateRemoteArrowLoadPipelineProtocol(proc, p); err != nil {
+		return nil, err
+	}
 	return p.Marshal()
 }
 
@@ -222,6 +225,9 @@ func decodeScope(data []byte, proc *process.Process, isRemote bool, eng engine.E
 			return nil, err
 		}
 		if err = validateRemoteDistributedOrderedTopPipelineProtocol(proc, p); err != nil {
+			return nil, err
+		}
+		if err = validateRemoteArrowLoadPipelineProtocol(proc, p); err != nil {
 			return nil, err
 		}
 	} else if err = plan.ValidateStringLiteralFormsInOwner(p); err != nil {
@@ -2384,6 +2390,31 @@ func validateRemoteGroupingSetPipelineProtocol(
 	}
 	for _, child := range p.Children {
 		if err := validateRemoteGroupingSetPipelineProtocol(proc, child); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// validateRemoteArrowLoadPipelineProtocol prevents receivers from silently
+// ignoring Arrow-specific ExternalScan fields during a mixed-version rollout.
+func validateRemoteArrowLoadPipelineProtocol(proc *process.Process, p *pipeline.Pipeline) error {
+	if p == nil {
+		return nil
+	}
+	for _, instruction := range p.InstructionList {
+		scan := instruction.GetExternalScan()
+		if scan == nil || scan.ArrowExecutionScope != pipeline.ArrowExecutionScope_ArrowLoadData {
+			continue
+		}
+		if proc == nil || !supportsRemoteArrowLoadPipeline(proc.GetService()) {
+			return moerr.NewNotSupportedNoCtx(
+				"Arrow LOAD remote execution requires MORPC protocol version 53",
+			)
+		}
+	}
+	for _, child := range p.Children {
+		if err := validateRemoteArrowLoadPipelineProtocol(proc, child); err != nil {
 			return err
 		}
 	}

@@ -1737,7 +1737,7 @@ func TestGroupingSetRemoteProtocolValidationRecursesAndIgnoresLegacyGrouping(t *
 		if hadPrevious {
 			rt.SetGlobalVariables(moruntime.MOProtocolVersion, previous)
 		} else {
-			rt.CompareAndDeleteGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion49)
+			rt.CompareAndDeleteGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion52)
 		}
 	})
 	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion48)
@@ -1756,6 +1756,35 @@ func TestGroupingSetRemoteProtocolValidationRecursesAndIgnoresLegacyGrouping(t *
 
 	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion49)
 	require.NoError(t, validateRemoteGroupingSetPipelineProtocol(proc, nested))
+}
+
+func TestArrowLoadRemoteProtocolValidationAtSendAndReceiveBoundaries(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	rt := moruntime.ServiceRuntime(proc.GetService())
+	previous, hadPrevious := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
+	t.Cleanup(func() {
+		if hadPrevious {
+			rt.SetGlobalVariables(moruntime.MOProtocolVersion, previous)
+		} else {
+			rt.CompareAndDeleteGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion49)
+		}
+	})
+
+	scope := &Scope{Proc: proc, RootOp: external.NewArgument().WithEs(
+		&external.ExternalParam{
+			ExParamConst: external.ExParamConst{ArrowExecutionScope: pipeline.ArrowExecutionScope_ArrowLoadData},
+			ExParam:      external.ExParam{Fileparam: &external.ExFileparam{}, Filter: &external.FilterParam{}},
+		},
+	)}
+
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion53)
+	data, err := encodeRemoteScope(scope, proc)
+	require.NoError(t, err)
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion52)
+	_, err = encodeRemoteScope(scope, proc)
+	require.ErrorContains(t, err, "MORPC protocol version 53")
+	_, err = decodeScope(data, proc, true, nil)
+	require.ErrorContains(t, err, "MORPC protocol version 53")
 }
 
 func TestExternalScanArrowRuntimeRoundtrip(t *testing.T) {

@@ -7871,6 +7871,15 @@ func supportsDistributedOrderedTop(service string) bool {
 	if rt == nil {
 		return false
 	}
+	protocolVersion, ok := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
+	return ok && protocolVersion >= defines.MORPCVersion53
+}
+
+func supportsRemoteArrowLoadPipeline(service string) bool {
+	rt := moruntime.ServiceRuntime(service)
+	if rt == nil {
+		return false
+	}
 	version, ok := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
 	if !ok {
 		return false
