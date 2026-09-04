@@ -1683,6 +1683,17 @@ func (exec *CDCTaskExecutor) initiateReaderShutdown() (<-chan struct{}, int) {
 		readers = append(readers, shutdownEntry{key: key.(string), reader: value.(cdc.ChangeReader)})
 		return true
 	})
+	// Atomically transfer only the captured instances from map ownership to the
+	// completion channel below. A later publication at the same key survives the
+	// compare, while a repeated cleanup cannot launch another Close/Wait pair for
+	// an already-owned reader.
+	for _, entry := range readers {
+		exec.runningReaders.CompareAndDelete(entry.key, entry.reader)
+	}
+	if len(readers) == 0 {
+		close(readersDone)
+		return exec.setReaderShutdownCompletion(readersDone), 0
+	}
 
 	var readerWG sync.WaitGroup
 	readerWG.Add(len(readers))
@@ -1694,11 +1705,6 @@ func (exec *CDCTaskExecutor) initiateReaderShutdown() (<-chan struct{}, int) {
 			entry.reader.Close()
 			logutil.Debug("cdc.frontend.task.stop_reader_close_done", zap.String("task-id", exec.spec.TaskId), zap.String("table", entry.key), zap.Duration("cost", time.Since(closeStart)))
 			entry.reader.Wait()
-			// Remove only the reader instance captured by this shutdown. A callback
-			// that publishes after the snapshot must remain visible to the lifecycle
-			// owner's final scan; an unconditional later Range/Delete can otherwise
-			// hide that live reader without ever closing it.
-			exec.runningReaders.CompareAndDelete(entry.key, entry.reader)
 		}(entry)
 	}
 	go func() {

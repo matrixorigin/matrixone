@@ -3412,12 +3412,15 @@ func TestCdcTaskReaderShutdownDoesNotHideLaterPublication(t *testing.T) {
 	allDone, count := executor.initiateReaderShutdown()
 	require.Equal(t, 1, count)
 	require.Eventually(t, func() bool { return oldCloseCalls.Load() == 1 }, time.Second, time.Millisecond)
+	repeatedDone, repeatedCount := executor.initiateReaderShutdown()
+	require.Zero(t, repeatedCount)
+	require.Equal(t, allDone, repeatedDone)
+	require.False(t, completionReady(repeatedDone))
+	require.Equal(t, int32(1), oldCloseCalls.Load())
 
-	// Model the production handoff: the old stream removes itself during cleanup,
-	// then a callback admitted before the lifecycle fence publishes the successor
+	// Model a callback admitted before the lifecycle fence publishing a successor
 	// after the first reader snapshot. Completion of the older reader must not
 	// delete this newer instance from the shared ownership map.
-	require.True(t, executor.runningReaders.CompareAndDelete("db.table", oldReader))
 	_, loaded := executor.runningReaders.LoadOrStore("db.table", lateReader)
 	require.False(t, loaded)
 	close(oldReaderDone)

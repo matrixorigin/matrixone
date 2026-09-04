@@ -80,11 +80,12 @@ tombstone before it waits. It then:
    takes a final reader snapshot after all callbacks exit, covering readers
    published after the first snapshot.
 
-Reader shutdown removes only the exact instances captured by its snapshot, and
-only after their `Wait` has completed. It never performs a later blind map
-clear: a reader published by an already-admitted callback between the snapshot
-and cleanup must remain visible to the final scan rather than being detached
-without receiving `Close`.
+Reader shutdown atomically detaches only the exact instances captured by its
+snapshot and transfers their ownership to one aggregate completion channel. It
+never performs a later blind map clear: a reader published by an
+already-admitted callback after the snapshot remains visible to the final scan,
+while a repeated cleanup cannot start duplicate waiters for an already-owned
+reader.
 
 The flush job is completed only after the queue callback has finished all of
 its persistence phases. This matters because the queue may coalesce an
@@ -158,8 +159,8 @@ be overwritten by an old failure path.
 - Focused race tests cover callback/reader cancellation and updater lifecycle.
 - A deterministic same-batch test blocks an admitted error-watermark UPSERT and
   proves that the terminal flush barrier cannot complete ahead of it.
-- A deterministic reader-publication test replaces a captured reader while its
-  shutdown is blocked and proves that exact-instance cleanup cannot hide or
-  close the later publication.
+- A deterministic reader-publication test publishes a successor while captured
+  shutdown is blocked and proves that exact-instance cleanup neither hides the
+  successor nor creates duplicate waiters on retry.
 - The guarded construction benchmark records allocations and latency at 1,000
   and 5,000 tables to prevent reintroducing quadratic concatenation.
