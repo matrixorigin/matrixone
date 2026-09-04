@@ -456,11 +456,54 @@ func TestBinaryStringBoundaryHelpers(t *testing.T) {
 
 	_, rejected := padBinaryResultByteLength([]byte("a"), -1, []byte("x"), 8)
 	require.True(t, rejected)
-	_, rejected = padBinaryResultByteLength([]byte("a"), 2, nil, 8)
-	require.True(t, rejected)
-	length, rejected := padBinaryResultByteLength([]byte("abc"), 2, nil, 8)
+	length, rejected := padBinaryResultByteLength([]byte("a"), 2, nil, 8)
+	require.False(t, rejected)
+	require.Zero(t, length)
+	length, rejected = padBinaryResultByteLength([]byte("abc"), 2, nil, 8)
 	require.False(t, rejected)
 	require.Equal(t, 2, length)
+	length, rejected = padBinaryResultByteLength([]byte("a"), 9, nil, 8)
+	require.False(t, rejected)
+	require.Zero(t, length)
+}
+
+func TestPadWithEmptyPadReturnsNonNullEmptyOrTruncatedValue(t *testing.T) {
+	for _, test := range []struct {
+		name       string
+		typ        types.Type
+		resultType types.Type
+	}{
+		{name: "text", typ: types.T_varchar.ToType(), resultType: types.T_text.ToType()},
+		{name: "binary", typ: types.T_varbinary.ToType(), resultType: types.T_blob.ToType()},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			for _, fn := range []struct {
+				name string
+				fn   binaryStringTestFn
+			}{
+				{name: "lpad", fn: builtInLpad},
+				{name: "rpad", fn: builtInRpad},
+			} {
+				t.Run(fn.name, func(t *testing.T) {
+					proc := testutil.NewProcess(t)
+					source := makeBinaryStringTestInput(t, proc, test.typ, [][]byte{[]byte("abc"), []byte("abc")}, nil)
+					defer source.Free(proc.Mp())
+					target := makeBinaryStringInt64Input(t, proc, []int64{5, 2})
+					defer target.Free(proc.Mp())
+					pad := makeBinaryStringTestInput(t, proc, test.typ, [][]byte{make([]byte, 0), make([]byte, 0)}, nil)
+					defer pad.Free(proc.Mp())
+
+					result := runBinaryStringBytesFn(t, proc, fn.fn, test.resultType, source, target, pad)
+					defer result.Free()
+					resultVector := result.GetResultVector()
+					require.False(t, resultVector.IsNull(0))
+					require.Empty(t, resultVector.GetBytesAt(0))
+					require.False(t, resultVector.IsNull(1))
+					require.Equal(t, []byte("ab"), resultVector.GetBytesAt(1))
+				})
+			}
+		})
+	}
 }
 
 func TestByteLikeUsesByteWildcardsAndEscape(t *testing.T) {
@@ -584,6 +627,31 @@ func TestByteLikeMatchesDynamicProgrammingOracle(t *testing.T) {
 			require.Equalf(t, reference(pattern, value), got, "pattern=%q value=%q", pattern, value)
 		}
 	}
+
+	for _, pattern := range generate([]byte{'a', 'b', '_'}, 4) {
+		if len(pattern) == 0 {
+			continue
+		}
+		compiled, err := compileByteLikePattern(pattern, nil, false, mp)
+		require.NoError(t, err)
+		for _, value := range generate([]byte{'a', 'b'}, 5) {
+			if len(value) < len(pattern) {
+				continue
+			}
+			want := -1
+			for at := 0; at+len(pattern) <= len(value); at++ {
+				if reference(pattern, value[at:at+len(pattern)]) {
+					want = at
+					break
+				}
+			}
+			got, used, err := compiled.findSegmentByConvolution(0, len(pattern), value, 0, len(value))
+			require.NoError(t, err)
+			require.True(t, used)
+			require.Equalf(t, want, got, "convolution pattern=%q value=%q", pattern, value)
+		}
+		compiled.free()
+	}
 }
 
 func TestByteLikeSegmentMatcherFindsLateValidAlignment(t *testing.T) {
@@ -689,6 +757,164 @@ func TestCompiledByteLikePatternReusesRowScratch(t *testing.T) {
 	}
 }
 
+func makeEqualFrequencyByteLikeAdversary(size int) (value, pattern []byte) {
+	value = append(bytes.Repeat([]byte{'a'}, size), bytes.Repeat([]byte{'b'}, size+1)...)
+	value = append(value, bytes.Repeat([]byte{'a'}, size)...)
+	pattern = []byte{'%', 'a'}
+	pattern = append(pattern, bytes.Repeat([]byte{'_'}, size-1)...)
+	pattern = append(pattern, 'a')
+	pattern = append(pattern, bytes.Repeat([]byte{'_'}, size-1)...)
+	pattern = append(pattern, 'a', '%')
+	return value, pattern
+}
+
+func TestByteLikeConvolutionHandlesEqualFrequencyAdversary(t *testing.T) {
+	maxMismatch := byteLikeMaxExactConvolutionSegment * 255 * 255
+	modulusProduct := byteLikeNTTModuli[0].modulus * byteLikeNTTModuli[1].modulus
+	require.Less(t, maxMismatch, modulusProduct)
+
+	const size = 1_000
+	value, pattern := makeEqualFrequencyByteLikeAdversary(size)
+	mp := mpool.MustNewZero()
+	compiled, err := compileByteLikePattern(pattern, nil, false, mp)
+	require.NoError(t, err)
+	defer compiled.free()
+
+	matched, err := compiled.match(value)
+	require.NoError(t, err)
+	require.False(t, matched)
+	require.NotEmpty(t, compiled.convolutionScratch)
+
+	scratch := &compiled.convolutionScratch[0]
+	allocated := mp.CurrNB()
+	require.NoError(t, compiled.reset(pattern, nil, false))
+	matched, err = compiled.match(bytes.Repeat([]byte{'a'}, size*3+1))
+	require.NoError(t, err)
+	require.True(t, matched)
+	require.Same(t, scratch, &compiled.convolutionScratch[0])
+	require.Equal(t, allocated, mp.CurrNB())
+	compiled.free()
+	require.Nil(t, compiled.convolutionScratch)
+	require.Zero(t, mp.CurrNB())
+}
+
+func TestByteLikeConvolutionUsesSegmentSizedBlocks(t *testing.T) {
+	const segmentLength = 1_000
+	pattern := append([]byte{'a'}, bytes.Repeat([]byte{'_'}, segmentLength-2)...)
+	pattern = append(pattern, 'b')
+	value := bytes.Repeat([]byte{'a'}, 20_000)
+
+	mp := mpool.MustNewZero()
+	compiled, err := compileByteLikePattern(pattern, nil, false, mp)
+	require.NoError(t, err)
+	defer compiled.free()
+	matchedAt, used, err := compiled.findSegmentByConvolution(0, len(pattern), value, 0, len(value))
+	require.NoError(t, err)
+	require.True(t, used)
+	require.Equal(t, -1, matchedAt)
+	require.Less(t, cap(compiled.convolutionScratch), 100_000,
+		"scratch must follow one segment-sized block, not the full remaining value")
+}
+
+func TestByteLikeConvolutionUsesBothModuliForExactResult(t *testing.T) {
+	// 2013265921 = 30961 * 255^2 + 164^2. The mismatch sum is zero
+	// under the first modulus, so rejecting this candidate exercises the
+	// second modulus rather than treating the first residue as a match.
+	pattern := bytes.Repeat([]byte{255}, 30_961)
+	pattern = append(pattern, 164)
+	value := make([]byte, len(pattern))
+
+	mp := mpool.MustNewZero()
+	compiled, err := compileByteLikePattern(pattern, nil, false, mp)
+	require.NoError(t, err)
+	defer compiled.free()
+	matchedAt, used, err := compiled.findSegmentByConvolution(0, len(pattern), value, 0, len(value))
+	require.NoError(t, err)
+	require.True(t, used)
+	require.Equal(t, -1, matchedAt)
+}
+
+func TestByteLikeConvolutionAllocationFailureDoesNotLeak(t *testing.T) {
+	limited, err := mpool.NewMPool("byte-like-convolution-limit", 1<<20, mpool.NoFixed)
+	require.NoError(t, err)
+	const size = 16_000
+	value, pattern := makeEqualFrequencyByteLikeAdversary(size)
+
+	_, err = byteLike(pattern, value, nil, false, limited)
+	require.Error(t, err)
+	require.Zero(t, limited.CurrNB())
+
+	inputMP := mpool.MustNewZero()
+	values, err := vector.NewConstBytes(types.T_varbinary.ToType(), value, 1, inputMP)
+	require.NoError(t, err)
+	defer values.Free(inputMP)
+	patterns, err := vector.NewConstBytes(types.T_varbinary.ToType(), pattern, 1, inputMP)
+	require.NoError(t, err)
+	defer patterns.Free(inputMP)
+	result := vector.NewFunctionResultWrapper(types.T_bool.ToType(), inputMP)
+	defer result.Free()
+	require.NoError(t, result.PreExtendAndReset(1))
+	limitedProc := testutil.NewProcessWithMPool(t, "byte-like-convolution-limit", limited)
+	err = newOpBuiltInRegexp().likeFn([]*vector.Vector{values, patterns}, result, limitedProc, 1, nil)
+	require.Error(t, err)
+	require.Zero(t, limited.CurrNB())
+}
+
+func TestByteLikeConstantPatternReusesConvolutionScratchAcrossRows(t *testing.T) {
+	const rows = 8
+	value, pattern := makeEqualFrequencyByteLikeAdversary(1_000)
+	proc := testutil.NewProcess(t)
+	mp := proc.Mp()
+	values, err := vector.NewConstBytes(types.T_varbinary.ToType(), value, rows, mp)
+	require.NoError(t, err)
+	defer values.Free(mp)
+	patterns, err := vector.NewConstBytes(types.T_varbinary.ToType(), pattern, rows, mp)
+	require.NoError(t, err)
+	defer patterns.Free(mp)
+	result := vector.NewFunctionResultWrapper(types.T_bool.ToType(), mp)
+	defer result.Free()
+	require.NoError(t, result.PreExtendAndReset(rows))
+
+	beforeBytes := mp.CurrNB()
+	beforeAllocs := mp.Stats().NumAlloc.Load()
+	require.NoError(t, newOpBuiltInRegexp().likeFn(
+		[]*vector.Vector{values, patterns}, result, proc, rows, nil))
+	require.Equal(t, int64(2), mp.Stats().NumAlloc.Load()-beforeAllocs,
+		"one compiled-pattern allocation and one reusable convolution allocation are expected")
+	require.Equal(t, beforeBytes, mp.CurrNB())
+	for _, matched := range vector.MustFixedColNoTypeCheck[bool](result.GetResultVector()) {
+		require.False(t, matched)
+	}
+}
+
+func BenchmarkByteLikeEqualFrequencyAdversary(b *testing.B) {
+	for _, size := range []int{1_000, 2_000, 4_000, 8_000, 16_000, 32_000} {
+		b.Run(fmt.Sprintf("L=%d", size), func(b *testing.B) {
+			value, pattern := makeEqualFrequencyByteLikeAdversary(size)
+			compiled, err := compileByteLikePattern(pattern, nil, false, mpool.MustNewZero())
+			if err != nil {
+				b.Fatal(err)
+			}
+			defer compiled.free()
+			if _, err = compiled.match(value); err != nil {
+				b.Fatal(err)
+			}
+			b.SetBytes(int64(len(value) + len(pattern)))
+			b.ReportAllocs()
+			b.ResetTimer()
+			for i := 0; i < b.N; i++ {
+				matched, matchErr := compiled.match(value)
+				if matchErr != nil {
+					b.Fatal(matchErr)
+				}
+				if matched {
+					b.Fatal("unexpected match")
+				}
+			}
+		})
+	}
+}
+
 func BenchmarkByteLikeRepeatedAnchorRejection(b *testing.B) {
 	for _, size := range []int{2_000, 4_000, 8_000, 16_000, 32_000, 64_000} {
 		b.Run(fmt.Sprintf("n=%d", size), func(b *testing.B) {
@@ -704,7 +930,11 @@ func BenchmarkByteLikeRepeatedAnchorRejection(b *testing.B) {
 			b.SetBytes(int64(len(value) + len(pattern)))
 			b.ResetTimer()
 			for i := 0; i < b.N; i++ {
-				if compiled.match(value) {
+				matched, matchErr := compiled.match(value)
+				if matchErr != nil {
+					b.Fatal(matchErr)
+				}
+				if matched {
 					b.Fatal("unexpected match")
 				}
 			}
@@ -726,7 +956,11 @@ func BenchmarkByteLikeSegmentLateAlignment(b *testing.B) {
 			b.SetBytes(int64(len(value) + len(pattern)))
 			b.ResetTimer()
 			for i := 0; i < b.N; i++ {
-				if !compiled.match(value) {
+				matched, matchErr := compiled.match(value)
+				if matchErr != nil {
+					b.Fatal(matchErr)
+				}
+				if !matched {
 					b.Fatal("expected match")
 				}
 			}
@@ -748,7 +982,11 @@ func BenchmarkByteLikeAdversarialSkippedLiteralSegment(b *testing.B) {
 			b.SetBytes(int64(len(value) + len(pattern)))
 			b.ResetTimer()
 			for i := 0; i < b.N; i++ {
-				if compiled.match(value) {
+				matched, matchErr := compiled.match(value)
+				if matchErr != nil {
+					b.Fatal(matchErr)
+				}
+				if matched {
 					b.Fatal("unexpected match")
 				}
 			}
@@ -768,7 +1006,11 @@ func BenchmarkByteLikeAdversarialLiteralSuffix(b *testing.B) {
 	b.SetBytes(int64(len(value) + len(pattern)))
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		if compiled.match(value) {
+		matched, matchErr := compiled.match(value)
+		if matchErr != nil {
+			b.Fatal(matchErr)
+		}
+		if matched {
 			b.Fatal("unexpected match")
 		}
 	}

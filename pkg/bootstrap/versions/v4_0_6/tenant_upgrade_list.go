@@ -391,7 +391,7 @@ func upgradeInformationSchemaColumnsBinaryStrings() versions.UpgradeEntry {
 		PreSql:                  "DROP VIEW IF EXISTS information_schema.COLUMNS;",
 		UpgSql:                  sysview.InformationSchemaColumnsDDL,
 		CheckFunc:               checkViewDefinition("COLUMNS", sysview.InformationSchemaColumnsDDL),
-		RequiredProtocolVersion: defines.MORPCVersion47,
+		RequiredProtocolVersion: defines.MORPCVersion46,
 	}
 }
 
@@ -405,7 +405,7 @@ func refreshInformationSchemaCharacterSetsUTF8Maxlen() versions.UpgradeEntry {
 		CheckFunc: func(txn executor.TxnExecutor, accountID uint32) (bool, error) {
 			return versions.CheckTableDataExist(txn, accountID, informationSchemaCharacterSetsCheckSQL())
 		},
-		RequiredProtocolVersion: defines.MORPCVersion47,
+		RequiredProtocolVersion: defines.MORPCVersion46,
 	}
 }
 

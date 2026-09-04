@@ -1639,7 +1639,7 @@ func padResultByteLength(src string, tgtLen int64, pad string, maxBytes int64) (
 	case target == srcRunes:
 		bytes = int64(len(src))
 	case padRunes == 0:
-		return 0, true
+		return 0, false
 	default:
 		srcBytes := int64(len(src))
 		padBytes := int64(len(pad))
@@ -1829,10 +1829,13 @@ func builtInPad(
 }
 
 func padBinaryResultByteLength(source []byte, target int64, pad []byte, maxBytes int64) (int, bool) {
-	if target < 0 || target > maxBytes {
+	if target < 0 || target > int64(^uint(0)>>1) {
 		return 0, true
 	}
 	if target > int64(len(source)) && len(pad) == 0 {
+		return 0, false
+	}
+	if target > maxBytes {
 		return 0, true
 	}
 	return int(target), false

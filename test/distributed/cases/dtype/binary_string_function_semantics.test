@@ -21,6 +21,10 @@ select hex(reverse('你a')), hex(reverse(X'e4bda061')),
 select hex(insert('你a', 2, 1, X'78')), hex(insert(X'e4bda061', 2, 1, 'x')),
        hex(lpad('你a', 3, X'e5a5bd')), hex(lpad(X'e4bda061', 3, '好')),
        hex(rpad('你', 2, X'78')), hex(rpad(X'e4bda0', 2, 'x'));
+select hex(lpad('abc', 5, '')), hex(rpad('abc', 5, '')),
+       hex(lpad(X'616263', 5, X'')), hex(rpad(X'616263', 5, X'')),
+       hex(lpad('abc', 2, '')), hex(rpad('abc', 2, '')),
+       hex(lpad(X'616263', 2, X'')), hex(rpad(X'616263', 2, X''));
 select locate(X'bd', '你a'), locate(X'bd', X'e4bda061'),
        instr('你a', X'bd'), instr(X'e4bda061', X'bd'),
        '你a' like '____', X'e4bda061' like '____';
@@ -125,6 +129,12 @@ deallocate prepare typed_binary_null_stmt;
 select concat(repeat(_binary 'a', 8998), _binary 'bxc')
        like concat(_binary '%', repeat(_binary '_', 5000), _binary 'b_%c')
        as late_binary_like;
+
+-- Equal-frequency anchors with long '_' gaps must not cause candidate-by-segment rescans.
+select concat(repeat(_binary 'a', 1000), repeat(_binary 'b', 1001), repeat(_binary 'a', 1000))
+       like concat(_binary '%a', repeat(_binary '_', 999), _binary 'a',
+                   repeat(_binary '_', 999), _binary 'a%')
+       as equal_frequency_binary_like;
 
 create table binary_function_ctas as
 select left(bin, 1) as binary_left,

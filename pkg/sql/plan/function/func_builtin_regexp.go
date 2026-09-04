@@ -196,7 +196,7 @@ func (op *opBuiltInRegexp) likeByStringDomain(
 				}
 				compiledPatternReady = true
 			}
-			matched = compiledPattern.match(value)
+			matched, err = compiledPattern.match(value)
 		} else {
 			if !utf8.Valid(escapeBytes) || utf8.RuneCount(escapeBytes) > 1 {
 				return moerr.NewInvalidInputNoCtx("Incorrect arguments to ESCAPE")
@@ -225,10 +225,11 @@ const (
 )
 
 type compiledByteLikePattern struct {
-	storage  []byte
-	kinds    []byte
-	literals []byte
-	mp       *mpool.MPool
+	storage            []byte
+	kinds              []byte
+	literals           []byte
+	convolutionScratch []byte
+	mp                 *mpool.MPool
 }
 
 func compileByteLikePattern(
@@ -306,32 +307,40 @@ func byteLike(
 		return false, err
 	}
 	defer compiled.free()
-	return compiled.match(value), nil
+	return compiled.match(value)
 }
 
 func (compiled *compiledByteLikePattern) free() {
-	if compiled != nil && compiled.storage != nil {
+	if compiled == nil {
+		return
+	}
+	if compiled.storage != nil {
 		compiled.mp.Free(compiled.storage)
 		compiled.storage = nil
 		compiled.kinds = nil
 		compiled.literals = nil
 	}
+	if compiled.convolutionScratch != nil {
+		compiled.mp.Free(compiled.convolutionScratch)
+		compiled.convolutionScratch = nil
+	}
 }
 
-func (compiled *compiledByteLikePattern) match(value []byte) bool {
+func (compiled *compiledByteLikePattern) match(value []byte) (bool, error) {
 	if len(compiled.kinds) == 0 {
-		return len(value) == 0
+		return len(value) == 0, nil
 	}
 	firstAny := slices.Index(compiled.kinds, byteLikeAny)
 	if firstAny < 0 {
-		return len(value) == len(compiled.kinds) && compiled.matchSegmentAt(0, len(compiled.kinds), value, 0)
+		return len(value) == len(compiled.kinds) &&
+			compiled.matchSegmentAt(0, len(compiled.kinds), value, 0), nil
 	}
 
 	cursor := 0
 	segmentAt := 0
 	if firstAny > 0 {
 		if len(value) < firstAny || !compiled.matchSegmentAt(0, firstAny, value, 0) {
-			return false
+			return false, nil
 		}
 		cursor = firstAny
 		segmentAt = firstAny
@@ -350,11 +359,11 @@ func (compiled *compiledByteLikePattern) match(value []byte) bool {
 		suffixAt = lastAny + 1
 		suffixLength := len(compiled.kinds) - suffixAt
 		if suffixLength > len(value)-cursor {
-			return false
+			return false, nil
 		}
 		searchLimit = len(value) - suffixLength
 		if !compiled.matchSegmentAt(suffixAt, len(compiled.kinds), value, searchLimit) {
-			return false
+			return false, nil
 		}
 	}
 
@@ -369,10 +378,13 @@ func (compiled *compiledByteLikePattern) match(value []byte) bool {
 		} else {
 			segmentEnd += segmentAt
 		}
-		matchAt := compiled.findSegment(
+		matchAt, err := compiled.findSegment(
 			segmentAt, segmentEnd, value, cursor, searchLimit, &literalFrequency)
+		if err != nil {
+			return false, err
+		}
 		if matchAt < 0 {
-			return false
+			return false, nil
 		}
 		cursor = matchAt + segmentEnd - segmentAt
 		segmentAt = segmentEnd
@@ -380,7 +392,7 @@ func (compiled *compiledByteLikePattern) match(value []byte) bool {
 			segmentAt++
 		}
 	}
-	return cursor <= searchLimit
+	return cursor <= searchLimit, nil
 }
 
 func (compiled *compiledByteLikePattern) matchSegmentAt(start, end int, value []byte, valueAt int) bool {
@@ -405,14 +417,21 @@ func (compiled *compiledByteLikePattern) findSegment(
 	value []byte,
 	from, limit int,
 	literalFrequency *[256]int,
-) int {
+) (int, error) {
 	segmentLength := end - start
 	if segmentLength > limit-from {
-		return -1
+		return -1, nil
 	}
-	anchorStart, anchorEnd := compiled.rarestLiteralRun(start, end, literalFrequency)
+	anchorStart, anchorEnd, anchorFrequency := compiled.rarestLiteralRun(start, end, literalFrequency)
 	if anchorStart == anchorEnd {
-		return from
+		return from, nil
+	}
+	if slices.Contains(compiled.kinds[start:end], byteLikeOne) &&
+		byteLikeVerificationWorkExceedsLimit(anchorFrequency, segmentLength) {
+		matchAt, used, err := compiled.findSegmentByConvolution(start, end, value, from, limit)
+		if used {
+			return matchAt, err
+		}
 	}
 	anchor := compiled.literals[anchorStart:anchorEnd]
 	anchorOffset := anchorStart - start
@@ -421,23 +440,28 @@ func (compiled *compiledByteLikePattern) findSegment(
 	for searchAt <= lastAnchorAt {
 		found := bytes.Index(value[searchAt:lastAnchorAt+len(anchor)], anchor)
 		if found < 0 {
-			return -1
+			return -1, nil
 		}
 		candidate := searchAt + found - anchorOffset
 		if compiled.matchSegmentAt(start, end, value, candidate) {
-			return candidate
+			return candidate, nil
 		}
 		searchAt += found + 1
 	}
-	return -1
+	return -1, nil
+}
+
+func byteLikeVerificationWorkExceedsLimit(candidateUpperBound, segmentLength int) bool {
+	return segmentLength > 0 &&
+		candidateUpperBound > byteLikeAnchorVerificationWorkLimit/segmentLength
 }
 
 func (compiled *compiledByteLikePattern) rarestLiteralRun(
 	start, end int,
 	literalFrequency *[256]int,
-) (bestStart, bestEnd int) {
+) (bestStart, bestEnd, bestFrequency int) {
 	maxInt := int(^uint(0) >> 1)
-	bestFrequency := maxInt
+	bestFrequency = maxInt
 	for at := start; at < end; {
 		if compiled.kinds[at] != byteLikeLiteral {
 			at++
@@ -457,7 +481,7 @@ func (compiled *compiledByteLikePattern) rarestLiteralRun(
 			bestFrequency = runFrequency
 		}
 	}
-	return bestStart, bestEnd
+	return bestStart, bestEnd, bestFrequency
 }
 
 func nextByteLikeToken(pattern []byte, at int, escape []byte, escapeEnabled bool) (kind byte, literal []byte, next int) {

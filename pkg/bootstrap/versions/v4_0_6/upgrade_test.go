@@ -215,12 +215,12 @@ func TestUpgradeEntries(t *testing.T) {
 	require.Equal(t, "COLUMNS", columnsBinaryStrings.TableName)
 	require.Equal(t, versions.MODIFY_VIEW, columnsBinaryStrings.UpgType)
 	require.Equal(t, sysview.InformationSchemaColumnsDDL, columnsBinaryStrings.UpgSql)
-	require.Equal(t, int64(defines.MORPCVersion47), columnsBinaryStrings.RequiredProtocolVersion)
+	require.Equal(t, int64(defines.MORPCVersion46), columnsBinaryStrings.RequiredProtocolVersion)
 	characterSetsUTF8Maxlen := tenantUpgEntries[len(tenantUpgEntries)-1]
 	require.Equal(t, "CHARACTER_SETS", characterSetsUTF8Maxlen.TableName)
 	require.Equal(t, versions.MODIFY_METADATA, characterSetsUTF8Maxlen.UpgType)
 	require.Equal(t, sysview.InformationSchemaCharacterSetsData, characterSetsUTF8Maxlen.UpgSql)
-	require.Equal(t, int64(defines.MORPCVersion47), characterSetsUTF8Maxlen.RequiredProtocolVersion)
+	require.Equal(t, int64(defines.MORPCVersion46), characterSetsUTF8Maxlen.RequiredProtocolVersion)
 }
 
 func TestInformationSchemaMetadataVisibilityUpgradeChecks(t *testing.T) {

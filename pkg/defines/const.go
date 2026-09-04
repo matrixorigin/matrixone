@@ -81,9 +81,8 @@ const (
 	MORPCVersion43     int64 = 43 // scalar-predicate runtime-filter terminal states
 	MORPCVersion44     int64 = 44 // validated MongoDB explicit-query scan payload
 	MORPCVersion45     int64 = 45 // bounded Parquet whole-file fanout payload
-	MORPCVersion46     int64 = 46 // reserved by concurrent subscription metadata work (#27942)
-	MORPCVersion47     int64 = 47 // binary-string function semantics and runtime-domain metadata
-	MORPCLatestVersion       = MORPCVersion47
+	MORPCVersion46     int64 = 46 // binary-string function semantics and runtime-domain metadata
+	MORPCLatestVersion       = MORPCVersion46
 )
 
 // DefaultLockWaitTimeoutSeconds is shared by the frontend default and by

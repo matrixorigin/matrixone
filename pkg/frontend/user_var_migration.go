@@ -84,10 +84,10 @@ func (ses *Session) snapshotUserDefinedVars(ctx context.Context) ([]*query.Migra
 				ctx, "invalid runtime string domain for user variable %q", name)
 		}
 		if variable.RuntimeStringDomain != types.RuntimeStringInherit &&
-			currentProtocolVersion(ses.proc) < defines.MORPCVersion47 {
+			currentProtocolVersion(ses.proc) < defines.MORPCVersion46 {
 			return nil, moerr.NewNotSupportedf(
 				ctx, "user-variable runtime string domains require MORPC protocol version %d",
-				defines.MORPCVersion47)
+				defines.MORPCVersion46)
 		}
 		value, err := encodeUserDefinedVarValue(ctx, variable.Value, variable.IsBin)
 		if err != nil {

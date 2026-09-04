@@ -103,7 +103,7 @@ MySQL 会在部分 text-subject + invalid binary auxiliary coercion 上执行 ch
 
 逐行 executor 的顺序是：读取同一 logical row（const wrapper 自行映射 row 0）→ NULL/mask 判断 → 选择 subject domain → checked sizing/direct writer → append value → 批量安装 runtime domain。任何错误返回时仍由现有 FunctionResult owner 释放；不增加 unaccounted full-result buffer。
 
-`LIKE` 的 normal text fast path和 regexp cache保留；只有可能出现 binary/mixed subject 时使用 byte wildcard matcher。Binary matcher按 byte解析 `%`、`_` 和现有 escape contract，不能把 value/pattern转成 rune。pattern先编译为紧凑 token stream，再按 `%` 分成固定长度 segment；prefix/suffix锚定，中间 segment根据当前 value byte frequency选择最稀有 literal run作为 Two-Way search anchor，从单调 value cursor寻找最早合法 alignment，并从 segment两端验证约束，不再让常见但无判别力的 anchor触发整段重复扫描，也不执行 value × patternWords NFA。constant pattern每 batch只编译一次，dynamic row复用同一 scratch容量。编译存储固定为至多 `2 * normalizedPatternTokens`，由 process MPool off-heap申请并传播 admission failure；不存在 distinct-byte倍增或逐行 Go heap masks。性能保护不得把合法 LIKE结果转换成 SQL error。
+`LIKE` 的 normal text fast path和 regexp cache保留；只有可能出现 binary/mixed subject 时使用 byte wildcard matcher。Binary matcher按 byte解析 `%`、`_` 和现有 escape contract，不能把 value/pattern转成 rune。pattern先编译为紧凑 token stream，再按 `%` 分成固定长度 segment；prefix/suffix锚定。中间 segment的低工作量路径使用最稀有 literal run作为 Two-Way anchor，但 `candidateUpperBound * segmentLength` 固定限制为 `1M` 次验证工作；超过界限且含 `_` 时改用两模 NTT wildcard convolution。对最高64MiB segment，两个模数乘积严格大于非负 mismatch polynomial上界，因此结果确定且精确，不是概率 hash。Convolution每次最多处理一个 segment长度的 candidate block；失败 block消费互不重叠的 value range，每个 segment至多一个最终 block，因此完整 matcher为 `O((value+pattern) log pattern)`，不再存在可达的 `value * segment` 路径。constant pattern每 batch只编译一次，dynamic row复用 compiled storage；NTT scratch也在 batch内复用。compiled token storage至多 `2 * normalizedPatternTokens`，convolution scratch为 `O(nextPow2(segment))`；两者都由 process MPool off-heap申请，admission failure原样传播，且不存在 distinct-byte倍增或逐行 Go heap masks。性能保护不得把合法 LIKE结果转换成 SQL error。
 
 ## 6. Metadata 与 materialization closure
 
@@ -112,7 +112,7 @@ MySQL 会在部分 text-subject + invalid binary auxiliary coercion 上执行 ch
 - `internal_column_character_set` 改为读取序列化 `Type.Charset`（binary OID仍权威），并让 `information_schema.columns` 对现有四种 identity 映射到上表名称。它不再把 `Scale` 当 charset。
 - CTAS继续复制 planner result type；不按 observed row 或 runtime sidecar缩窄/改域。`DESC`、information_schema 与 direct `CHARSET/COLLATION` 必须对同一静态 expression一致。
 - SQL `EXECUTE ... USING` 物化同时保留 assignment-time `SourceType` 与独立的 `RuntimeStringDomain`；typed non-NULL、typed NULL、重复执行和 prepared-plan cache复用均不得把三态 provenance压回静态域。
-- remote pipeline sender与receiver对所有已改变的 Function ID执行 MORPC v47 fail-closed barrier，包括 `POSITION`、`INTERNAL_CHAR_SIZE` 和 `INTERNAL_COLUMN_CHARACTER_SET`；v45已由主干 Parquet fanout占用，v46由并发 PR #27942保留；catalog upgrade barrier只控制 view物化，不能代替 executor barrier。
+- remote pipeline sender与receiver对所有已改变的 Function ID执行 MORPC v46 fail-closed barrier，包括 `POSITION`、`INTERNAL_CHAR_SIZE` 和 `INTERNAL_COLUMN_CHARACTER_SET`；v45已由主干 Parquet fanout占用，本 PR必须连续发布 v46完整 capability，不能越过尚未合并的并发能力；catalog upgrade barrier只控制 view物化，不能代替 executor barrier。
 
 ## 7. 边界、失败与性能
 
@@ -138,12 +138,12 @@ MySQL 会在部分 text-subject + invalid binary auxiliary coercion 上执行 ch
 | resolver不擦除 binary family；auxiliary不切域 | return/type-checker table UT：source text/binary × needle/replacement/pad text/binary |
 | length/ORD/position | focused executor UT：text/binary最近控制、empty/NULL、0/1/-1/越界、4-byte UTF-8、invalid bytes |
 | slice/reverse/case/trim | table UT：static text + runtime binary、static binary + runtime text、mixed rows、const与mask |
-| insert/pad/replace | direct-writer UT：byte/rune unit、invalid bytes、result limit与已有 #27218 width controls |
-| LIKE | matcher UT + executor mixed-row UT：`_` 的 character/byte差异、`%`、escape、invalid bytes、独立 DP exhaustive oracle、late valid alignment segment UT/BVT、64KB constant-pattern多行复用、MPool failure与规模 benchmark；REGEXP测试不改 |
+| insert/pad/replace | direct-writer UT：byte/rune unit、invalid bytes、result limit、空 pad扩展返回非 NULL空串、空 pad截断与已有 #27218 width controls |
+| LIKE | matcher UT + executor mixed-row UT：`_` 的 character/byte差异、`%`、escape、invalid bytes、独立 DP exhaustive oracle与 convolution oracle、dual-modulus collision、late valid alignment/equal-frequency adversary UT+BVT、constant-pattern多行 scratch复用、MPool failure/no-leak与1K–32K scaling benchmark；REGEXP测试不改 |
 | result provenance | nested consumer UT：变换结果再进 `CHAR_LENGTH`；无 metadata fast path断言不分配 sidecar |
 | CHARSET/COLLATION | static type table UT；runtime mixed override不改变名称；legacy fallback控制 |
 | information_schema/CTAS | internal metadata UT + public BVT，核对 binary/general-ci/utf8mb4-bin |
-| protocol | frontend field metadata UT；binary source-derived output为 collation 63，text `_bin` 非63；每个变更 Function ID 的真实 sender encode / receiver decode v46 reject与v47 accept |
+| protocol | frontend field metadata UT；binary source-derived output为 collation 63，text `_bin` 非63；每个变更 Function ID 的真实 sender encode / receiver decode v45 reject与v46 accept |
 | reachable sources | public SQL覆盖 raw/_binary、BINARY/VARBINARY/BLOB、CAST/CONVERT、column、bare variable、SQL PREPARE；COM_STMT用现有 planner/frontend typed parameter fixture |
 | stability | owning package tests、normal BVT同实例两轮、`git diff --check`、mo-self-review change map |
 

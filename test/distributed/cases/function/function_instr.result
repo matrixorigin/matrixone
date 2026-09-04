@@ -290,12 +290,12 @@ null
 abcab0
 SELECT RPAD(INSTR(str2, 3), 5, '') FROM instr_02;
 rpad(instr(str2, 3), 5, )
-null
-null
-null
-null
-null
-null
+
+
+
+
+
+
 SELECT INSTR(substring(str2, 1, 6), 'cd') FROM instr_02 WHERE id = 5;
 instr(substring(str2, 1, 6), cd)
 3

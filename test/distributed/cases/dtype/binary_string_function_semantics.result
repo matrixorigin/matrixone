@@ -20,6 +20,12 @@ hex(lpad('你a', 3, X'e5a5bd')), hex(lpad(X'e4bda061', 3, '好')),
 hex(rpad('你', 2, X'78')), hex(rpad(X'e4bda0', 2, 'x'));
 ➤ hex(insert(你a, 2, 1, 0x78))[12,65535,0]  ¦  hex(insert(0xe4bda061, 2, 1, x))[12,65535,0]  ¦  hex(lpad(你a, 3, 0xe5a5bd))[12,65535,0]  ¦  hex(lpad(0xe4bda061, 3, 好))[12,65535,0]  ¦  hex(rpad(你, 2, 0x78))[12,65535,0]  ¦  hex(rpad(0xe4bda0, 2, x))[12,65535,0]  𝄀
 E4BDA078  ¦  E478A061  ¦  E5A5BDE4BDA061  ¦  E4BDA0  ¦  E4BDA078  ¦  E4BD
+select hex(lpad('abc', 5, '')), hex(rpad('abc', 5, '')),
+hex(lpad(X'616263', 5, X'')), hex(rpad(X'616263', 5, X'')),
+hex(lpad('abc', 2, '')), hex(rpad('abc', 2, '')),
+hex(lpad(X'616263', 2, X'')), hex(rpad(X'616263', 2, X''));
+➤ hex(lpad(abc, 5, ))[12,65535,0]  ¦  hex(rpad(abc, 5, ))[12,65535,0]  ¦  hex(lpad(0x616263, 5, 0x))[12,65535,0]  ¦  hex(rpad(0x616263, 5, 0x))[12,65535,0]  ¦  hex(lpad(abc, 2, ))[12,65535,0]  ¦  hex(rpad(abc, 2, ))[12,65535,0]  ¦  hex(lpad(0x616263, 2, 0x))[12,65535,0]  ¦  hex(rpad(0x616263, 2, 0x))[12,65535,0]  𝄀
+  ¦    ¦    ¦    ¦  6162  ¦  6162  ¦  6162  ¦  6162
 select locate(X'bd', '你a'), locate(X'bd', X'e4bda061'),
 instr('你a', X'bd'), instr(X'e4bda061', X'bd'),
 '你a' like '____', X'e4bda061' like '____';
@@ -160,6 +166,12 @@ like concat(_binary '%', repeat(_binary '_', 5000), _binary 'b_%c')
 as late_binary_like;
 ➤ late_binary_like[-7,1,0]  𝄀
 1
+select concat(repeat(_binary 'a', 1000), repeat(_binary 'b', 1001), repeat(_binary 'a', 1000))
+like concat(_binary '%a', repeat(_binary '_', 999), _binary 'a',
+repeat(_binary '_', 999), _binary 'a%')
+as equal_frequency_binary_like;
+➤ equal_frequency_binary_like[-7,1,0]  𝄀
+0
 create table binary_function_ctas as
 select left(bin, 1) as binary_left,
 lower(bin) as binary_lower,
