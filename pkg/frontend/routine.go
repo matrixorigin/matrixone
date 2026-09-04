@@ -988,7 +988,8 @@ func (rt *Routine) refreshSessionAuthWithContext(
 	// initializes system variables exactly as a fresh login does.
 	protocol.SetSalt(append([]byte(nil), req.Salt...))
 	if err := protocol.authenticateUser(operationCtx, change.authResponse); err != nil {
-		resp.AuthenticationFailed = needConvertedToAccessDeniedError(strings.ToLower(err.Error()))
+		resp.AuthenticationFailed = isAuthenticationRejected(err) ||
+			needConvertedToAccessDeniedError(strings.ToLower(err.Error()))
 		return err
 	}
 	authString := append([]byte(nil), protocol.GetAuthString()...)
