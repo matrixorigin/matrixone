@@ -101,7 +101,15 @@ func RequireViewMetadataRevalidation(ctx context.Context, sqlExecutor executor.S
 		if err != nil {
 			return err
 		}
+		gatePresent := false
+		result.ReadRows(func(rows int, _ []*vector.Vector) bool {
+			gatePresent = rows > 0
+			return !gatePresent
+		})
 		result.Close()
+		if !gatePresent {
+			return moerr.NewNoSuchTable(ctx, catalog.MO_CATALOG, catalog.MO_VIEW_REFRESH)
+		}
 		if _, active, seedErr := seedViewMetadataRevalidationPage(txn); seedErr != nil || active {
 			return seedErr
 		}
@@ -1311,11 +1319,13 @@ func (c *Compile) enqueueCurrentDependentViews(mutation viewRelationMutation) er
 }
 
 func (c *Compile) enqueueViewsAfterDatabaseRemoval(
+	databaseName string,
 	accountID uint32,
 	databaseID uint64,
 	generation uint64,
 ) error {
-	if c.proc.GetSessionInfo().IsRestore && !restoreInvalidatesViewMetadata(c.proc.Ctx) {
+	if needSkipDbs[databaseName] ||
+		(c.proc.GetSessionInfo().IsRestore && !restoreInvalidatesViewMetadata(c.proc.Ctx)) {
 		return nil
 	}
 	available, err := c.viewMetadataRefreshAvailable()

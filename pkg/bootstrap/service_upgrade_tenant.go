@@ -141,10 +141,11 @@ func shouldRunTenantUpgrade(createVersion string, upgrade versions.VersionUpgrad
 		versions.Compare(upgrade.FromVersion, upgrade.ToVersion) == 0
 }
 
-// asyncUpgradeTenantTask is a task to execute the tenant upgrade logic in
-// parallel based on the grouped tenant batch.
-func (s *service) asyncUpgradeTenantTask(ctx context.Context) {
-	fn := func() (bool, error) {
+// newTenantUpgradePass returns one transactional tenant-upgrade pass. Keeping
+// the pass independent from the periodic task makes completion observable
+// without coupling callers (or tests) to the task's wall clock.
+func (s *service) newTenantUpgradePass(ctx context.Context) func() (bool, error) {
+	return func() (bool, error) {
 		ctx, cancel := context.WithTimeoutCause(ctx, time.Hour*24, moerr.CauseAsyncUpgradeTenantTask)
 		defer cancel()
 
@@ -337,7 +338,12 @@ func (s *service) asyncUpgradeTenantTask(ctx context.Context) {
 		}
 		return hasUpgradeTenants, nil
 	}
+}
 
+// asyncUpgradeTenantTask is a task to execute the tenant upgrade logic in
+// parallel based on the grouped tenant batch.
+func (s *service) asyncUpgradeTenantTask(ctx context.Context) {
+	fn := s.newTenantUpgradePass(ctx)
 	timer := time.NewTimer(s.upgrade.checkUpgradeTenantDuration)
 	defer timer.Stop()
 

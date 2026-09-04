@@ -39,7 +39,7 @@ var tenantUpgEntries = []versions.UpgradeEntry{
 func upgradeInformationSchemaView(viewName, viewDDL string) versions.UpgradeEntry {
 	requiredProtocol := int64(0)
 	if viewName == "TABLES" || viewName == "COLUMNS" {
-		requiredProtocol = defines.MORPCVersion43
+		requiredProtocol = defines.MORPCVersion46
 	}
 	return versions.UpgradeEntry{
 		Schema:                  sysview.InformationDBConst,

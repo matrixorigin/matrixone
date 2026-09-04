@@ -49,7 +49,7 @@ func Test_Upgrade(t *testing.T) {
 					result := executor.NewMemResult([]types.Type{types.T_varchar.ToType()}, mp)
 					result.NewBatchWithRowCount(1)
 					assert.NoError(t, executor.AppendStringRows(result, 0,
-						[]string{`{"method":"GETPROTOCOLVERSION","result":"cn-a:43"}`}))
+						[]string{`{"method":"GETPROTOCOLVERSION","result":"cn-a:46"}`}))
 					return result.GetResult(), nil
 				}
 				return executor.Result{}, nil

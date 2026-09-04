@@ -211,31 +211,8 @@ func informationSchemaMetadataVisibilityCTEWithActiveRoles(activeRolesSQL string
 		"OR (db.account_id = 0 AND db.datname = 'mo_catalog')) "
 }
 
-// informationSchemaSubscriptionMetadataVisibilityCTE extends the local table
-// authorization input for TABLES. Publisher rows are already rewritten to
-// subscriber identity by the private table function, then pass through the
-// same active-role predicate as local catalog rows. COLUMNS applies the same
-// predicate directly to its colocated column/table function output so only one
-// cross-account producer runs in that statement.
-func informationSchemaSubscriptionMetadataVisibilityCTE() string {
-	return "WITH __mo_active_roles(role_id) AS (" +
-		"SELECT role_id FROM mo_current_roles() role_closure), " +
-		"__mo_all_tables(account_id, rel_id, relname, reldatabase, reldatabase_id, relkind, rel_createsql, " +
-		"created_time, partitioned, rel_comment, extra_info, rel_logical_id, owner, is_subscription) AS (" +
-		"SELECT tbl.account_id, tbl.rel_id, tbl.relname, tbl.reldatabase, tbl.reldatabase_id, tbl.relkind, " +
-		"tbl.rel_createsql, tbl.created_time, tbl.partitioned, tbl.rel_comment, tbl.extra_info, " +
-		"tbl.rel_logical_id, tbl.owner, false FROM mo_catalog.mo_tables tbl " +
-		"WHERE tbl.account_id = current_account_id() UNION ALL " +
-		"SELECT subscription_tables.account_id, subscription_tables.rel_id, subscription_tables.relname, " +
-		"subscription_tables.reldatabase, subscription_tables.reldatabase_id, subscription_tables.relkind, " +
-		"subscription_tables.rel_createsql, subscription_tables.created_time, subscription_tables.partitioned, " +
-		"subscription_tables.rel_comment, subscription_tables.extra_info, subscription_tables.rel_logical_id, " +
-		"subscription_tables.owner, true FROM mo_subscription_tables() subscription_tables), " +
-		"__mo_visible_tables AS (" +
-		"SELECT tbl.account_id, tbl.rel_id, tbl.relname, tbl.reldatabase, tbl.reldatabase_id, tbl.relkind, " +
-		"tbl.rel_createsql, tbl.created_time, tbl.partitioned, tbl.rel_comment, tbl.extra_info, " +
-		"tbl.rel_logical_id, tbl.owner, tbl.is_subscription FROM __mo_all_tables tbl " +
-		"WHERE tbl.account_id = current_account_id() AND (" +
+func informationSchemaSubscriptionTableAuthorizationPredicate() string {
+	return "(" +
 		"tbl.reldatabase IN ('mo_catalog','information_schema','mysql','system','system_metrics','mo_task','mo_debug') " +
 		"OR tbl.owner IN (SELECT role_id FROM __mo_active_roles) " +
 		"OR EXISTS (SELECT 1 FROM mo_catalog.mo_database db JOIN __mo_active_roles ar ON db.owner = ar.role_id " +
@@ -247,32 +224,12 @@ func informationSchemaSubscriptionMetadataVisibilityCTE() string {
 		"OR (rp.privilege_level IN ('d.t','t') AND rp.obj_id = tbl.rel_logical_id))) " +
 		"OR (rp.obj_type = 'database' AND rp.privilege_name IN ('show tables','database all','database ownership') AND (" +
 		"(rp.privilege_level IN ('*','*.*') AND rp.obj_id = 0) " +
-		"OR (rp.privilege_level = 'd' AND rp.obj_id = tbl.reldatabase_id)))))), " +
-		"__mo_visible_databases AS (" +
-		"SELECT db.account_id, db.dat_id, db.datname, db.owner FROM mo_catalog.mo_database db " +
-		"WHERE (db.account_id = current_account_id() AND (" +
-		"db.datname IN ('mo_catalog','information_schema','mysql','system','system_metrics','mo_task','mo_debug') " +
-		"OR db.owner IN (SELECT role_id FROM __mo_active_roles) " +
-		"OR EXISTS (SELECT 1 FROM __mo_visible_tables tbl WHERE tbl.reldatabase_id = db.dat_id) " +
-		"OR EXISTS (SELECT 1 FROM mo_catalog.mo_role_privs rp JOIN __mo_active_roles ar ON rp.role_id = ar.role_id " +
-		"WHERE rp.obj_type = 'account' AND rp.privilege_name IN ('show databases','account all') " +
-		"AND rp.privilege_level = '*' AND rp.obj_id = 0) " +
-		"OR EXISTS (SELECT 1 FROM mo_catalog.mo_role_privs rp JOIN __mo_active_roles ar ON rp.role_id = ar.role_id " +
-		"WHERE rp.obj_type = 'database' AND rp.privilege_name IN ('show tables','database all','database ownership') AND (" +
-		"(rp.privilege_level IN ('*','*.*') AND rp.obj_id = 0) " +
-		"OR (rp.privilege_level = 'd' AND rp.obj_id = db.dat_id))))) " +
-		"OR (db.account_id = 0 AND db.datname = 'mo_catalog')) "
+		"OR (rp.privilege_level = 'd' AND rp.obj_id = tbl.reldatabase_id)))))"
 }
 
 func informationSchemaSubscriptionTablesDDL() string {
 	prefix := "CREATE VIEW information_schema.TABLES AS " + informationSchemaMetadataVisibilityCTE()
 	localSelect := strings.TrimPrefix(InformationSchemaTablesV41DDL, prefix)
-	localSelect = strings.Replace(
-		localSelect,
-		"WHERE tbl.account_id = current_account_id() and",
-		"WHERE NOT tbl.is_subscription AND tbl.account_id = current_account_id() and",
-		1,
-	)
 	subscriptionSelect := strings.Replace(
 		localSelect,
 		"if(relkind = 'v', NULL, internal_auto_increment(reldatabase, relname)) AS `AUTO_INCREMENT`,",
@@ -281,12 +238,18 @@ func informationSchemaSubscriptionTablesDDL() string {
 	)
 	subscriptionSelect = strings.Replace(
 		subscriptionSelect,
-		"WHERE NOT tbl.is_subscription AND",
-		"WHERE tbl.is_subscription AND",
+		"FROM __mo_visible_tables tbl ",
+		"FROM mo_subscription_tables() tbl ",
 		1,
 	)
-	return "CREATE VIEW information_schema.TABLES AS " +
-		informationSchemaSubscriptionMetadataVisibilityCTE() + localSelect + " UNION ALL " + subscriptionSelect
+	subscriptionSelect = strings.Replace(
+		subscriptionSelect,
+		"WHERE tbl.account_id = current_account_id() and",
+		"WHERE tbl.account_id = current_account_id() AND "+
+			informationSchemaSubscriptionTableAuthorizationPredicate()+" and",
+		1,
+	)
+	return prefix + localSelect + " UNION ALL " + subscriptionSelect
 }
 
 func informationSchemaColumnsLocalFromSQL() string {
@@ -410,8 +373,8 @@ var (
 		"internal_numeric_precision(mc.atttyp) AS NUMERIC_PRECISION,"+
 		"internal_numeric_scale(mc.atttyp) AS NUMERIC_SCALE,"+
 		"internal_datetime_scale(mc.atttyp) AS DATETIME_PRECISION,"+
-		"(case internal_column_character_set(mc.atttyp) WHEN 0 then 'utf8' WHEN 1 then 'utf8' else NULL end) AS CHARACTER_SET_NAME,"+
-		"(case internal_column_character_set(mc.atttyp) WHEN 0 then 'utf8_bin' WHEN 1 then 'utf8_bin' else NULL end) AS COLLATION_NAME,"+
+		"(case internal_column_character_set(mc.atttyp) WHEN 0 then 'utf8' WHEN 1 then 'utf8' WHEN 2 then 'binary' else NULL end) AS CHARACTER_SET_NAME,"+
+		"(case internal_column_character_set(mc.atttyp) WHEN 0 then 'utf8_bin' WHEN 1 then 'utf8_bin' WHEN 2 then 'binary' else NULL end) AS COLLATION_NAME,"+
 		"(case when length(mc.attr_enum) > 0 then mo_show_visible_bin_enum(mc.atttyp, mc.attr_enum) else mo_show_visible_bin(mc.atttyp,3) end) as COLUMN_TYPE,"+
 		"case when mc.att_constraint_type = 'p' or mk.key_priority = 3 then 'PRI' when mk.key_priority = 2 then 'UNI' when mk.key_priority = 1 then 'MUL' else '' end as COLUMN_KEY,"+
 		"cast(case when mc.att_is_auto_increment = 1 then 'auto_increment' when mc.attr_has_generated = 1 then ifnull(mo_show_visible_bin(mc.attr_generated, 6), '') else '' end as varchar(24)) as EXTRA,"+
@@ -752,14 +715,51 @@ var (
 		"`IS_GRANTABLE` varchar(3) NOT NULL DEFAULT ''" +
 		")"
 
-	InformationSchemaTablePrivilegesDDL = "CREATE TABLE information_schema.`TABLE_PRIVILEGES` (" +
-		"`GRANTEE` varchar(292) NOT NULL DEFAULT ''," +
-		"`TABLE_CATALOG` varchar(512) NOT NULL DEFAULT ''," +
-		"`TABLE_SCHEMA` varchar(64) NOT NULL DEFAULT ''," +
-		"`TABLE_NAME` varchar(64) NOT NULL DEFAULT ''," +
-		"`PRIVILEGE_TYPE` varchar(64) NOT NULL DEFAULT ''," +
-		"`IS_GRANTABLE` varchar(3) NOT NULL DEFAULT ''" +
-		")"
+	InformationSchemaTablePrivilegesDDL = "CREATE VIEW information_schema.`TABLE_PRIVILEGES` AS " +
+		informationSchemaMetadataVisibilityCTE() +
+		", __mo_can_inspect_all_table_grants AS (" +
+		"SELECT 1 FROM mo_catalog.mo_role_privs inspect_priv " +
+		"JOIN __mo_active_roles inspect_role ON inspect_priv.role_id = inspect_role.role_id " +
+		"WHERE inspect_priv.obj_type = 'account' AND inspect_priv.obj_id = 0 " +
+		"AND inspect_priv.privilege_level = '*' " +
+		"AND inspect_priv.privilege_name IN ('manage grants','account all','account ownership') LIMIT 1" +
+		"), __mo_authorized_table_grants AS (" +
+		"SELECT grant_priv.role_id, grant_priv.obj_id, grant_priv.privilege_name, grant_priv.with_grant_option " +
+		"FROM mo_catalog.mo_role_privs grant_priv " +
+		"JOIN __mo_active_roles grant_role ON grant_priv.role_id = grant_role.role_id " +
+		"WHERE grant_priv.obj_type IN ('table','view') AND grant_priv.privilege_level IN ('d.t','t') " +
+		"UNION ALL " +
+		"SELECT grant_priv.role_id, grant_priv.obj_id, grant_priv.privilege_name, grant_priv.with_grant_option " +
+		"FROM mo_catalog.mo_role_privs grant_priv " +
+		"WHERE EXISTS (SELECT 1 FROM __mo_can_inspect_all_table_grants) " +
+		"AND grant_priv.role_id NOT IN (SELECT role_id FROM __mo_active_roles) " +
+		"AND grant_priv.obj_type IN ('table','view') AND grant_priv.privilege_level IN ('d.t','t')" +
+		"), __mo_concrete_table_privileges(privilege_type) AS (" +
+		"SELECT 'SELECT' UNION ALL SELECT 'INSERT' UNION ALL SELECT 'UPDATE' UNION ALL SELECT 'TRUNCATE' " +
+		"UNION ALL SELECT 'DELETE' UNION ALL SELECT 'REFERENCE' UNION ALL SELECT 'INDEX' UNION ALL SELECT 'VALUES'" +
+		"), __mo_expanded_table_grant_rows AS (" +
+		"SELECT grant_priv.role_id, grant_priv.obj_id, upper(grant_priv.privilege_name) AS privilege_type, " +
+		"grant_priv.with_grant_option FROM __mo_authorized_table_grants grant_priv " +
+		"WHERE grant_priv.privilege_name <> 'table all' " +
+		"UNION ALL " +
+		"SELECT grant_priv.role_id, grant_priv.obj_id, concrete_priv.privilege_type, grant_priv.with_grant_option " +
+		"FROM __mo_authorized_table_grants grant_priv CROSS JOIN __mo_concrete_table_privileges concrete_priv " +
+		"WHERE grant_priv.privilege_name = 'table all'" +
+		"), __mo_expanded_table_grants AS (" +
+		"SELECT role_id, obj_id, privilege_type, " +
+		"max(cast(with_grant_option AS int)) = 1 AS with_grant_option " +
+		"FROM __mo_expanded_table_grant_rows GROUP BY role_id, obj_id, privilege_type" +
+		") SELECT " +
+		"CAST(coalesce(granted_role.role_name, '') AS varchar(292)) AS `GRANTEE`," +
+		"CAST('def' AS varchar(512)) AS `TABLE_CATALOG`," +
+		"CAST(coalesce(tbl.reldatabase, '') AS varchar(64)) AS `TABLE_SCHEMA`," +
+		"CAST(coalesce(tbl.relname, '') AS varchar(64)) AS `TABLE_NAME`," +
+		"CAST(coalesce(grant_priv.privilege_type, '') AS varchar(64)) AS `PRIVILEGE_TYPE`," +
+		"CAST(coalesce(case when grant_priv.with_grant_option then 'YES' else 'NO' end, '') AS varchar(3)) AS `IS_GRANTABLE` " +
+		"FROM __mo_expanded_table_grants grant_priv " +
+		"JOIN mo_catalog.mo_role granted_role ON grant_priv.role_id = granted_role.role_id " +
+		"JOIN __mo_visible_tables tbl ON grant_priv.obj_id = tbl.rel_logical_id " +
+		"WHERE tbl.account_id = current_account_id()"
 
 	InformationSchemaColumnPrivilegesDDL = "CREATE TABLE information_schema.`COLUMN_PRIVILEGES` (" +
 		"`GRANTEE` varchar(292) NOT NULL DEFAULT ''," +

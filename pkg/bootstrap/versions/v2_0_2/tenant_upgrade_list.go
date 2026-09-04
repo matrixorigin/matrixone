@@ -33,7 +33,7 @@ var upg_information_schema_tables = versions.UpgradeEntry{
 	TableName:               "TABLES",
 	UpgType:                 versions.MODIFY_VIEW,
 	UpgSql:                  sysview.InformationSchemaTablesDDL,
-	RequiredProtocolVersion: defines.MORPCVersion43,
+	RequiredProtocolVersion: defines.MORPCVersion46,
 	CheckFunc: func(txn executor.TxnExecutor, accountId uint32) (bool, error) {
 		exists, viewDef, err := versions.CheckViewDefinition(txn, accountId, sysview.InformationDBConst, "TABLES")
 		if err != nil {
@@ -53,7 +53,7 @@ var upg_information_schema_columns = versions.UpgradeEntry{
 	TableName:               "COLUMNS",
 	UpgType:                 versions.MODIFY_VIEW,
 	UpgSql:                  sysview.InformationSchemaColumnsDDL,
-	RequiredProtocolVersion: defines.MORPCVersion43,
+	RequiredProtocolVersion: defines.MORPCVersion46,
 	CheckFunc: func(txn executor.TxnExecutor, accountId uint32) (bool, error) {
 		exists, viewDef, err := versions.CheckViewDefinition(txn, accountId, sysview.InformationDBConst, "COLUMNS")
 		if err != nil {

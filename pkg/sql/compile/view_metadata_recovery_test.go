@@ -91,6 +91,12 @@ func (e *viewMetadataCleanupRecordingExecutor) ExecTxn(
 	}, nil))
 }
 
+func viewMetadataLifecycleGateTestResult() executor.Result {
+	result := executor.NewMemResult(nil, nil)
+	result.NewBatchWithRowCount(1)
+	return result.GetResult()
+}
+
 type deadlineCheckingSQLExecutor struct {
 	t             *testing.T
 	expectedError error
@@ -659,7 +665,7 @@ func TestEnabledLifecycleRemovalAndCleanupPaths(t *testing.T) {
 	require.Contains(t, exec.sqls[0], "not ((a.account_id=7 and a.target_database_id=11")
 
 	exec.sqls = nil
-	require.NoError(t, c.deleteDroppedViewMetadata(13))
+	require.NoError(t, c.deleteDroppedViewMetadata("source_db", 13))
 	require.Len(t, exec.sqls, 3)
 	require.Equal(t, catalog.ViewMetadataLifecycleGateSQL, exec.sqls[0])
 	require.Contains(t, exec.sqls[1], "account_id=7 and target_relation_id=13")
@@ -673,7 +679,7 @@ func TestEnabledLifecycleRemovalAndCleanupPaths(t *testing.T) {
 	require.Contains(t, exec.sqls[2], "target_database_id=11 or target_database_name='source''db'")
 
 	exec.sqls = nil
-	require.NoError(t, c.enqueueViewsAfterDatabaseRemoval(7, 11, 31))
+	require.NoError(t, c.enqueueViewsAfterDatabaseRemoval("source_db", 7, 11, 31))
 	require.Len(t, exec.sqls, 1)
 	require.Contains(t, exec.sqls[0], "d.source_account_id=7 and d.source_database_id=11")
 }
@@ -1028,6 +1034,71 @@ func TestMarkSynchronousViewRefreshInvalidUsesGenerationFence(t *testing.T) {
 	require.Contains(t, exec.sqls[0], "account_id=7 and target_relation_id=11 and target_generation=13")
 }
 
+func TestViewMetadataLifecycleSkipsInternalDatabasesBeforeCatalogProbe(t *testing.T) {
+	tests := []struct {
+		name string
+		run  func(*Compile, string) error
+	}{
+		{
+			name: "persist dependencies",
+			run: func(c *Compile, databaseName string) error {
+				return c.persistViewDependencies(nil, databaseName, nil)
+			},
+		},
+		{
+			name: "refresh after mutation",
+			run: func(c *Compile, databaseName string) error {
+				return c.refreshViewsAfterRelationMutation(databaseName, "relation", 0, 0)
+			},
+		},
+		{
+			name: "enqueue after relation removal",
+			run: func(c *Compile, databaseName string) error {
+				return c.enqueueViewsAfterRelationRemoval(databaseName, "relation", 1, 2, 3)
+			},
+		},
+		{
+			name: "delete dropped view metadata",
+			run: func(c *Compile, databaseName string) error {
+				return c.deleteDroppedViewMetadata(databaseName, 2)
+			},
+		},
+		{
+			name: "delete dropped database metadata",
+			run: func(c *Compile, databaseName string) error {
+				return c.deleteDroppedDatabaseViewMetadata(0, 1, databaseName)
+			},
+		},
+		{
+			name: "enqueue after database removal",
+			run: func(c *Compile, databaseName string) error {
+				return c.enqueueViewsAfterDatabaseRemoval(databaseName, 0, 1, 2)
+			},
+		},
+	}
+
+	for databaseName := range needSkipDbs {
+		for _, test := range tests {
+			t.Run(databaseName+"/"+test.name, func(t *testing.T) {
+				proc := testutil.NewProcess(t)
+				exec := &viewMetadataCleanupRecordingExecutor{}
+				installUnavailableViewMetadataTestExecutor(t, proc, exec)
+				require.NoError(t, test.run(&Compile{proc: proc, pn: &planpb.Plan{}}, databaseName))
+				require.Empty(t, exec.sqls)
+			})
+		}
+	}
+
+	t.Run("user database still probes lifecycle", func(t *testing.T) {
+		proc := testutil.NewProcess(t)
+		exec := &viewMetadataCleanupRecordingExecutor{}
+		installUnavailableViewMetadataTestExecutor(t, proc, exec)
+		require.NoError(t, (&Compile{proc: proc, pn: &planpb.Plan{}}).
+			refreshViewsAfterRelationMutation("user_db", "relation", 0, 0))
+		require.Equal(t, viewMetadataRequireRevalidationSQL(), exec.sqls)
+	})
+}
+
 func TestViewMetadataLifecycleSkipsRestoreCatalogDDL(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	proc.GetSessionInfo().IsRestore = true
@@ -1035,7 +1106,7 @@ func TestViewMetadataLifecycleSkipsRestoreCatalogDDL(t *testing.T) {
 	require.NoError(t, c.persistViewDependencies(nil, "db", nil))
 	require.NoError(t, c.refreshViewsAfterRelationMutation("db", "t", 0, 0))
 	require.NoError(t, c.enqueueViewsAfterRelationRemoval("db", "t", 0, 0, 0))
-	require.NoError(t, c.deleteDroppedViewMetadata(1))
+	require.NoError(t, c.deleteDroppedViewMetadata("db", 1))
 	require.NoError(t, c.deleteDroppedDatabaseViewMetadata(0, 1, "db"))
 }
 
@@ -1122,9 +1193,9 @@ func TestViewMetadataLifecycleBeforeCapabilityActivation(t *testing.T) {
 			func(c *Compile) error { return c.persistViewDependencies(nil, "db", nil) },
 			func(c *Compile) error { return c.refreshViewsAfterRelationMutation("db", "t", 0, 0) },
 			func(c *Compile) error { return c.enqueueViewsAfterRelationRemoval("db", "t", 0, 0, 0) },
-			func(c *Compile) error { return c.deleteDroppedViewMetadata(1) },
+			func(c *Compile) error { return c.deleteDroppedViewMetadata("db", 1) },
 			func(c *Compile) error { return c.deleteDroppedDatabaseViewMetadata(0, 1, "db") },
-			func(c *Compile) error { return c.enqueueViewsAfterDatabaseRemoval(0, 1, 1) },
+			func(c *Compile) error { return c.enqueueViewsAfterDatabaseRemoval("db", 0, 1, 1) },
 		} {
 			proc := testutil.NewProcess(t)
 			exec := &viewMetadataCleanupRecordingExecutor{failures: map[int]error{
@@ -1163,7 +1234,7 @@ func TestViewMetadataCleanupLocksLifecycleGateBeforeRows(t *testing.T) {
 	}{
 		{
 			name: "view",
-			run:  func(c *Compile) error { return c.deleteDroppedViewMetadata(11) },
+			run:  func(c *Compile) error { return c.deleteDroppedViewMetadata("db", 11) },
 		},
 		{
 			name: "database",
@@ -1643,7 +1714,7 @@ func TestViewMetadataRevalidationActivationIsPersistedAndIdempotent(t *testing.T
 		return result.GetResult()
 	}
 	exec := &viewMetadataCleanupRecordingExecutor{results: []executor.Result{
-		{}, {}, {}, {}, markerResult(), {}, markerResult(), {},
+		viewMetadataLifecycleGateTestResult(), {}, {}, {}, markerResult(), {}, markerResult(), {},
 	}}
 	require.NoError(t, RequireViewMetadataRevalidation(context.Background(), exec))
 	require.NoError(t, StartViewMetadataRevalidation(context.Background(), exec, "worker"))
@@ -1713,7 +1784,9 @@ func TestRequireViewMetadataRevalidationFastReturnsWhenAlreadyRequired(t *testin
 	require.NoError(t, executor.AppendStringRows(current, 1,
 		[]string{catalog.ViewRefreshStatusRevalidateRequired}))
 	require.NoError(t, executor.AppendFixedRows(current, 2, []uint64{7}))
-	exec := &viewMetadataCleanupRecordingExecutor{results: []executor.Result{{}, current.GetResult()}}
+	exec := &viewMetadataCleanupRecordingExecutor{results: []executor.Result{
+		viewMetadataLifecycleGateTestResult(), current.GetResult(),
+	}}
 	require.NoError(t, RequireViewMetadataRevalidation(context.Background(), exec))
 	require.Len(t, exec.sqls, 2)
 	require.Equal(t, catalog.ViewMetadataLifecycleGateSQL, exec.sqls[0])
@@ -1831,23 +1904,40 @@ func TestSeedViewMetadataRevalidationPageRejectsInvalidAccountPage(t *testing.T)
 	}
 }
 
+func TestRequireViewMetadataRevalidationRejectsMissingRefreshGate(t *testing.T) {
+	exec := &viewMetadataCleanupRecordingExecutor{}
+	err := RequireViewMetadataRevalidation(context.Background(), exec)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrNoSuchTable))
+	require.Len(t, exec.sqls, 1)
+	require.Equal(t, catalog.ViewMetadataLifecycleGateSQL, exec.sqls[0])
+}
+
 func TestViewMetadataRevalidationActivationPropagatesCatalogErrors(t *testing.T) {
 	testErr := moerr.NewInternalErrorNoCtx("catalog unavailable")
+	gateResult := func() []executor.Result {
+		return []executor.Result{viewMetadataLifecycleGateTestResult()}
+	}
 
 	t.Run("required sentinel insert", func(t *testing.T) {
-		exec := &viewMetadataCleanupRecordingExecutor{failures: map[int]error{2: testErr}}
+		exec := &viewMetadataCleanupRecordingExecutor{
+			results: gateResult(), failures: map[int]error{2: testErr},
+		}
 		require.ErrorIs(t, RequireViewMetadataRevalidation(context.Background(), exec), testErr)
 		require.Len(t, exec.sqls, 2)
 	})
 
 	t.Run("required marker transition", func(t *testing.T) {
-		exec := &viewMetadataCleanupRecordingExecutor{failures: map[int]error{3: testErr}}
+		exec := &viewMetadataCleanupRecordingExecutor{
+			results: gateResult(), failures: map[int]error{3: testErr},
+		}
 		require.ErrorIs(t, RequireViewMetadataRevalidation(context.Background(), exec), testErr)
 		require.Len(t, exec.sqls, 3)
 	})
 
 	t.Run("required marker cursor", func(t *testing.T) {
-		exec := &viewMetadataCleanupRecordingExecutor{failures: map[int]error{4: testErr}}
+		exec := &viewMetadataCleanupRecordingExecutor{
+			results: gateResult(), failures: map[int]error{4: testErr},
+		}
 		require.ErrorIs(t, RequireViewMetadataRevalidation(context.Background(), exec), testErr)
 		require.Len(t, exec.sqls, 4)
 	})
@@ -1969,7 +2059,7 @@ func TestViewMetadataCleanupPropagatesLifecycleAndRowErrors(t *testing.T) {
 		name string
 		run  func(*Compile) error
 	}{
-		{"view", func(c *Compile) error { return c.deleteDroppedViewMetadata(11) }},
+		{"view", func(c *Compile) error { return c.deleteDroppedViewMetadata("db", 11) }},
 		{"database", func(c *Compile) error { return c.deleteDroppedDatabaseViewMetadata(0, 7, "db") }},
 	}
 	for _, tc := range tests {

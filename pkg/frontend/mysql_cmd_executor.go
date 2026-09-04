@@ -62,6 +62,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/compile"
 	"github.com/matrixorigin/matrixone/pkg/sql/models"
+	sqlmongodb "github.com/matrixorigin/matrixone/pkg/sql/mongodb"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
@@ -201,8 +202,10 @@ var RecordStatement = func(ctx context.Context, ses *Session, proc *process.Proc
 	if cw != nil {
 		copy(stmID[:], cw.GetUUID())
 		statement = cw.GetAst()
-		envStmt = redactStatementTextForLogging(statement, envStmt)
+	}
+	envStmt = redactStatementTextForLogging(statement, envStmt)
 
+	if cw != nil {
 		ses.ast = statement
 		binExec, prepareName := cw.BinaryExecute()
 		execSql := makeExecuteSql(ctx, ses, statement, binExec, prepareName)
@@ -226,6 +229,11 @@ var RecordStatement = func(ctx context.Context, ses *Session, proc *process.Proc
 		stmID = uuid.UUID(u)
 		text = commonutil.Abbreviate(envStmt, int(getPu(ses.GetService()).SV.LengthOfQueryPrinted))
 	}
+	// A prepared execution adds its prepared SQL and parameter values after
+	// envStmt has been redacted. Redact the completed diagnostic payload too:
+	// this is the final boundary before either session state or statement
+	// telemetry can retain it.
+	text = redactStatementTextForLogging(nil, text)
 	ses.SetStmtId(stmID)
 	stmtTyp := getStatementType(statement).GetStatementType()
 	queryTyp := getStatementType(statement).GetQueryType()
@@ -343,6 +351,17 @@ var RecordStatement = func(ctx context.Context, ses *Session, proc *process.Proc
 }
 
 func redactStatementTextForLogging(statement tree.Statement, text string) string {
+	// __mo_query is a user-supplied MongoDB filter or pipeline. It is valid in
+	// ordinary SELECT statements, whose AST formatting deliberately preserves
+	// string literals, so neither the default branch nor a re-rendered AST is a
+	// safe diagnostic representation. This is the last common boundary before
+	// session state and statement telemetry retain the SQL text. Redact the
+	// whole statement rather than trying to recognize one SQL expression shape:
+	// invalid, nested, or future selector forms must not become a logging leak.
+	if diagnostic := sqlmongodb.RedactSQLForDiagnostics(text); diagnostic != text {
+		return diagnostic
+	}
+
 	switch stmt := statement.(type) {
 	case *tree.CreateIcebergCatalog, *tree.AlterIcebergCatalog,
 		*tree.CreateMongoDBConnection, *tree.AlterMongoDBConnection:
@@ -360,6 +379,15 @@ func redactStatementTextForLogging(statement tree.Statement, text string) string
 	default:
 		return text
 	}
+}
+
+// redactStatementErrorForLogging replaces a parser echo of __mo_query before it
+// reaches a client, statement telemetry, or the terminal statement logger.
+func redactStatementErrorForLogging(err error, text string) error {
+	if err == nil || sqlmongodb.RedactSQLForDiagnostics(text) == text {
+		return err
+	}
+	return moerr.NewParseErrorNoCtx("parse error in <redacted MongoDB __mo_query statement>")
 }
 
 func isIgnoreStatement(statement tree.Statement) bool {
@@ -2466,7 +2494,7 @@ func writeExplainResult(
 				sqlMode = &prepared.schedulingSQLMode
 			}
 		}
-		schedulingPreview := previewQuerySchedulingWithSQLMode(
+		schedulingPreview := previewQueryScheduling(
 			reqCtx, ses, exPlan.GetQuery(), txnHaveDDL, rawSQL, sqlMode)
 		appendSchedulingExplain(buffer, schedulingPreview)
 	}
@@ -2493,24 +2521,12 @@ func writeExplainResult(
 	return trySaveQueryResult(reqCtx, ses, mrs)
 }
 
+// previewQueryScheduling owns the production best-effort latency policy: the
+// preview runs under its own schedulingPreviewTimeout so a slow or blocked
+// engine cannot delay the EXPLAIN response. A nil sqlMode means "use the
+// session's current mode". Callers that need to observe the scheduling
+// decision itself use previewQuerySchedulingInContext below.
 func previewQueryScheduling(
-	ctx context.Context,
-	ses *Session,
-	query *plan.Query,
-	txnHaveDDL bool,
-	statementSQL ...string,
-) schedule.Trace {
-	rawSQL := ""
-	if ses != nil {
-		rawSQL = ses.GetSql()
-	}
-	if len(statementSQL) > 0 {
-		rawSQL = statementSQL[0]
-	}
-	return previewQuerySchedulingWithSQLMode(ctx, ses, query, txnHaveDDL, rawSQL, nil)
-}
-
-func previewQuerySchedulingWithSQLMode(
 	ctx context.Context,
 	ses *Session,
 	query *plan.Query,
@@ -2523,9 +2539,24 @@ func previewQuerySchedulingWithSQLMode(
 	}
 	previewCtx, cancel := context.WithTimeout(ctx, schedulingPreviewTimeout)
 	defer cancel()
+	return previewQuerySchedulingInContext(previewCtx, ses, query, txnHaveDDL, rawSQL, sqlMode)
+}
+
+// previewQuerySchedulingInContext computes a preview under the caller-owned
+// context. The frontend wrapper above owns the best-effort latency policy;
+// callers that need to observe the scheduling decision itself can provide a
+// lifecycle context without racing that decision against an unrelated clock.
+func previewQuerySchedulingInContext(
+	ctx context.Context,
+	ses *Session,
+	query *plan.Query,
+	txnHaveDDL bool,
+	rawSQL string,
+	sqlMode *string,
+) schedule.Trace {
 	if ses == nil {
 		return compile.PreviewQueryScheduling(compile.SchedulingPreviewRequest{
-			Context: previewCtx,
+			Context: ctx,
 			Query:   query,
 		})
 	}
@@ -2538,7 +2569,7 @@ func previewQuerySchedulingWithSQLMode(
 		intent = querySchedulingIntentForStatementWithSQLMode(ses, rawSQL, *sqlMode)
 	}
 	return compile.PreviewQueryScheduling(compile.SchedulingPreviewRequest{
-		Context:    previewCtx,
+		Context:    ctx,
 		Query:      query,
 		Engine:     ses.GetTxnHandler().GetStorage(),
 		Process:    ses.GetProc(),
@@ -2878,23 +2909,24 @@ func createPrepareStmtInSession(
 		}
 	}
 
+	fixedIntegerParamPositions, hasPaginationParams, hasLagLeadParams :=
+		preparedFixedIntegerParamPositions(prepareControl.Plan)
 	prepareStmt := &PrepareStmt{
-		Name:               preparePlan.GetDcl().GetPrepare().GetName(),
-		Sql:                originSQL,
-		compile:            comp,
-		PreparePlan:        preparePlan,
-		PrepareStmt:        saveStmt,
-		NativeMode:         owner.sqlModeHasMatrixOneNative(),
-		OnlyFullGroupBy:    owner.sqlModeHasOnlyFullGroupBy(),
-		onlyFullGroupBySet: true,
-		remapDb:            maps.Clone(execCtx.remapDb),
-		defaultDatabase:    executionSes.GetTxnCompileCtx().GetDatabase(),
-		tempTableVersion:   owner.GetTempTableVersion(),
-		ddlVersion:         owner.getDDLVersion(),
-		cloneSQL:           cloneSQL,
-		protocolVersion:    protocolVersion,
-		numericPrefixConsumer: preparedPlanHasNumericPrefixConsumer(
-			prepareControl.Plan, len(prepareControl.ParamTypes)),
+		Name:             preparePlan.GetDcl().GetPrepare().GetName(),
+		Sql:              originSQL,
+		compile:          comp,
+		PreparePlan:      preparePlan,
+		PrepareStmt:      saveStmt,
+		NativeMode:       owner.sqlModeHasMatrixOneNative(),
+		OnlyFullGroupBy:  owner.sqlModeHasOnlyFullGroupBy(),
+		BoolSumAvg:       owner.sqlModeHasEnableBoolSumAvg(),
+		sqlModeFlagsSet:  true,
+		remapDb:          maps.Clone(execCtx.remapDb),
+		defaultDatabase:  executionSes.GetTxnCompileCtx().GetDatabase(),
+		tempTableVersion: owner.GetTempTableVersion(),
+		ddlVersion:       owner.getDDLVersion(),
+		cloneSQL:         cloneSQL,
+		protocolVersion:  protocolVersion,
 		numericOverloadParamPositions: plan2.PreparedPlanNumericFallbackParamPositions(
 			prepareControl.Plan),
 		directResultParamPositions: plan2.PreparedPlanDirectResultParamPositions(
@@ -2902,11 +2934,14 @@ func createPrepareStmtInSession(
 		directResultParamPositionsSet: true,
 		jsonComparisonParamPositions: plan2.PreparedJSONComparisonParamPositions(
 			prepareControl.Plan),
-		hasPaginationParams: plan2.PreparedPlanHasPaginationParams(prepareControl.Plan),
-		hasLagLeadParams:    len(plan2.PreparedLagLeadParamPositions(prepareControl.Plan)) > 0,
-		getFromSendLongData: make(map[int]struct{}),
-		schedulingSQLMode:   schedulingSQLMode,
+		fixedIntegerParamPositions: fixedIntegerParamPositions,
+		hasPaginationParams:        hasPaginationParams,
+		hasLagLeadParams:           hasLagLeadParams,
+		getFromSendLongData:        make(map[int]struct{}),
+		schedulingSQLMode:          schedulingSQLMode,
 	}
+	prepareStmt.refreshNumericPrefixConsumer(
+		prepareControl.Plan, len(prepareControl.ParamTypes))
 	prepareStmt.directResultParamPositions = plan2.PreparedPlanDirectResultParamPositions(prepareControl.Plan)
 	prepareStmt.directResultParamPositionsSet = true
 
@@ -5739,6 +5774,7 @@ func doComQuery(ses *Session, execCtx *ExecCtx, input *UserInput) (retErr error)
 			ses.resetDiagnostics()
 		}
 		statsInfo.ParseStage.ParseDuration = time.Since(beginInstant)
+		diagnosticErr := redactStatementErrorForLogging(parseErr, errorInput.getSql())
 		var recordErr error
 		execCtx.reqCtx, recordErr = RecordParseErrorStatement(
 			execCtx.reqCtx,
@@ -5747,15 +5783,20 @@ func doComQuery(ses *Session, execCtx *ExecCtx, input *UserInput) (retErr error)
 			beginInstant,
 			parsers.HandleSqlForRecord(errorInput.getSql()),
 			errorInput.getSqlSourceTypes(),
-			parseErr,
+			diagnosticErr,
 		)
 		if recordErr != nil {
 			return recordErr
 		}
-		if _, ok := parseErr.(*moerr.Error); !ok {
+		if sqlmongodb.RedactSQLForDiagnostics(errorInput.getSql()) != errorInput.getSql() {
+			parseErr = diagnosticErr
+		} else if _, ok := parseErr.(*moerr.Error); !ok {
 			parseErr = moerr.NewParseError(execCtx.reqCtx, parseErr.Error())
 		}
-		logStatementStringStatus(execCtx.reqCtx, ses, errorInput.getSql(), fail, parseErr)
+		// Keep the terminal error log on the same diagnostic boundary as
+		// RecordParseErrorStatement. Parse failures have no AST, so use the raw
+		// text scanner and never pass the original selector to the logger.
+		logStatementStringStatus(execCtx.reqCtx, ses, redactStatementTextForLogging(nil, errorInput.getSql()), fail, diagnosticErr)
 		return parseErr
 	}
 

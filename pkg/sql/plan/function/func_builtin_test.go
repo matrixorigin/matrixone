@@ -24,6 +24,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/require"
 
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -170,6 +171,11 @@ func TestBuiltInInternalCharMetadataUsesEncodedWidth(t *testing.T) {
 			name:   "maximum octet length",
 			fn:     builtInInternalCharSize,
 			values: []int64{32, 512, types.MaxStringSize, types.MaxTinyTextLen, 8, 128, 0, 0},
+		},
+		{
+			name:   "character set domain",
+			fn:     builtInInternalCharacterSet,
+			values: []int64{0, 0, 0, 0, 2, 2, 2, 0},
 		},
 	} {
 		t.Run(test.name, func(t *testing.T) {
@@ -1076,6 +1082,22 @@ func Test_BuiltIn_Repeat(t *testing.T) {
 	}
 
 	{
+		const resultLength = 70000
+		tc := tcTemp{
+			info: "repeat permits a result above the VARBINARY limit after BLOB promotion",
+			inputs: []FunctionTestInput{
+				NewFunctionTestConstInput(types.T_varchar.ToType(), []string{"x"}, nil),
+				NewFunctionTestConstInput(types.T_int64.ToType(), []int64{resultLength}, nil),
+			},
+			expect: NewFunctionTestResult(types.T_blob.ToType(), false,
+				[]string{strings.Repeat("x", resultLength)}, nil),
+		}
+		tcc := NewFunctionTestCase(proc, tc.inputs, tc.expect, builtInRepeat)
+		succeed, info := tcc.Run()
+		require.True(t, succeed, tc.info, info)
+	}
+
+	{
 		tc := tcTemp{
 			info: "test repeat(null, num) with num = -1, 0, 1, 3, null, 1000000000000",
 			inputs: []FunctionTestInput{
@@ -1091,6 +1113,157 @@ func Test_BuiltIn_Repeat(t *testing.T) {
 		succeed, info := tcc.Run()
 		require.True(t, succeed, tc.info, info)
 	}
+}
+
+func TestPadRejectsAccountedAllocationBeforeBuildingResult(t *testing.T) {
+	for name, fn := range map[string]executeLogicOfOverload{"lpad": builtInLpad, "rpad": builtInRpad} {
+		t.Run(name, func(t *testing.T) {
+			mp, err := mpool.NewMPool("pad-allocation-rejection", 1<<20, mpool.NoFixed)
+			require.NoError(t, err)
+			proc := testutil.NewProcessWithMPool(t, "", mp)
+			tc := NewFunctionTestCase(proc, []FunctionTestInput{
+				NewFunctionTestConstInput(types.T_blob.ToType(), []string{"x"}, nil),
+				NewFunctionTestConstInput(types.T_int64.ToType(), []int64{500000}, nil),
+				NewFunctionTestConstInput(types.T_blob.ToType(), []string{"😀"}, nil),
+			}, NewFunctionTestResult(types.T_blob.ToType(), true, nil, nil), fEvalFn(fn))
+			ok, info := tc.Run()
+			require.True(t, ok, info)
+		})
+	}
+}
+
+func TestPadAndInsertSizingMatchesRuntimePaths(t *testing.T) {
+	invalid := string([]byte{0xff})
+	size, null := padResultByteLength(invalid, 1, invalid, int64(types.MaxBlobLen))
+	require.False(t, null)
+	require.Equal(t, 1, size, "the exact-source path preserves invalid UTF-8 bytes")
+
+	source := []byte("source")
+	size, _, _, raw := insertResultLayout(source, 0, 100, []byte("x"))
+	require.True(t, raw)
+	require.Equal(t, len(source), size)
+	size, start, end, raw := insertResultLayout(source, 1, math.MaxInt64, []byte("x"))
+	require.False(t, raw)
+	require.Equal(t, 1, size)
+	require.Equal(t, 0, start)
+	require.Equal(t, len(source), end)
+}
+
+func TestTextReplaceAndInsertKeepLargeLegalResults(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	source := strings.Repeat("a", 40000)
+
+	replaceCase := NewFunctionTestCase(proc, []FunctionTestInput{
+		NewFunctionTestConstInput(types.T_text.ToType(), []string{source}, nil),
+		NewFunctionTestConstInput(types.T_varchar.ToType(), []string{"a"}, nil),
+		NewFunctionTestConstInput(types.T_varchar.ToType(), []string{"bb"}, nil),
+	}, NewFunctionTestResult(types.T_text.ToType(), false, []string{strings.Repeat("bb", 40000)}, nil), fEvalFn(Replace))
+	ok, info := replaceCase.Run()
+	require.True(t, ok, info)
+
+	insertCase := NewFunctionTestCase(proc, []FunctionTestInput{
+		NewFunctionTestConstInput(types.T_text.ToType(), []string{source}, nil),
+		NewFunctionTestConstInput(types.T_int64.ToType(), []int64{1}, nil),
+		NewFunctionTestConstInput(types.T_int64.ToType(), []int64{0}, nil),
+		NewFunctionTestConstInput(types.T_varchar.ToType(), []string{strings.Repeat("b", 30000)}, nil),
+	}, NewFunctionTestResult(types.T_text.ToType(), false, []string{strings.Repeat("b", 30000) + source}, nil), fEvalFn(Insert))
+	ok, info = insertCase.Run()
+	require.True(t, ok, info)
+}
+
+func TestTextResultCapacityUsesResultDomain(t *testing.T) {
+	proc := testutil.NewProcess(t)
+
+	repeatCase := NewFunctionTestCase(proc, []FunctionTestInput{
+		NewFunctionTestConstInput(types.New(types.T_varchar, 1, 0), []string{"b"}, nil),
+		NewFunctionTestConstInput(types.T_int64.ToType(), []int64{65536}, nil),
+	}, NewFunctionTestResult(types.T_text.ToType(), false, []string{strings.Repeat("b", 65536)}, nil), fEvalFn(builtInRepeat))
+	ok, info := repeatCase.Run()
+	require.True(t, ok, info)
+
+	source := strings.Repeat("a", 40000)
+	replaceCase := NewFunctionTestCase(proc, []FunctionTestInput{
+		NewFunctionTestConstInput(types.New(types.T_varchar, 40000, 0), []string{source}, nil),
+		NewFunctionTestConstInput(types.New(types.T_varchar, 1, 0), []string{"a"}, nil),
+		NewFunctionTestConstInput(types.New(types.T_varchar, 2, 0), []string{"bb"}, nil),
+	}, NewFunctionTestResult(types.T_text.ToType(), false, []string{strings.Repeat("bb", 40000)}, nil), fEvalFn(Replace))
+	ok, info = replaceCase.Run()
+	require.True(t, ok, info)
+
+	multibyteRepeat := NewFunctionTestCase(proc, []FunctionTestInput{
+		NewFunctionTestConstInput(types.New(types.T_varchar, 1, 0), []string{"😀"}, nil),
+		NewFunctionTestConstInput(types.T_int64.ToType(), []int64{20000}, nil),
+	}, NewFunctionTestResult(types.New(types.T_varchar, 20000, 0), false, []string{strings.Repeat("😀", 20000)}, nil),
+		fEvalFn(builtInRepeat))
+	ok, info = multibyteRepeat.Run()
+	require.True(t, ok, info)
+
+	for name, fn := range map[string]func([]*vector.Vector, vector.FunctionResultWrapper, *process.Process, int, *FunctionSelectList) error{
+		"lower": builtInToLower,
+		"upper": builtInToUpper,
+	} {
+		t.Run(name, func(t *testing.T) {
+			input, expected := strings.Repeat("A", 70000), strings.Repeat("a", 70000)
+			if name == "upper" {
+				input, expected = expected, input
+			}
+			fcTC := NewFunctionTestCase(proc, []FunctionTestInput{
+				NewFunctionTestConstInput(types.T_text.ToType(), []string{input}, nil),
+			}, NewFunctionTestResult(types.T_text.ToType(), false, []string{expected}, nil), fEvalFn(fn))
+			ok, info := fcTC.Run()
+			require.True(t, ok, info)
+
+			inputRune, expectedRune := "Ⱥ", "ⱥ"
+			if name == "upper" {
+				inputRune, expectedRune = "ȿ", "Ȿ"
+			}
+			boundedText := types.T_text.ToType()
+			boundedText.Width = 255
+			boundedResult := types.New(types.T_varchar, 255, 0)
+			fcTC = NewFunctionTestCase(proc, []FunctionTestInput{
+				NewFunctionTestConstInput(boundedText, []string{strings.Repeat(inputRune, 127)}, nil),
+			}, NewFunctionTestResult(boundedResult, false, []string{strings.Repeat(expectedRune, 127)}, nil), fEvalFn(fn))
+			ok, info = fcTC.Run()
+			require.True(t, ok, info)
+		})
+	}
+}
+
+func TestExpandingFunctionsRejectMPoolBeforeBuildingResult(t *testing.T) {
+	size, ok := exportSetResultByteLength(^uint64(0), []byte("x"), nil, nil, 64, types.MaxBlobLen)
+	require.True(t, ok)
+	require.Equal(t, 64, size)
+
+	mp, err := mpool.NewMPool("expanding-allocation-rejection", 1<<20, mpool.NoFixed)
+	require.NoError(t, err)
+	proc := testutil.NewProcessWithMPool(t, "", mp)
+	tc := NewFunctionTestCase(proc, []FunctionTestInput{
+		NewFunctionTestConstInput(types.T_blob.ToType(), []string{strings.Repeat("a", 2000)}, nil),
+		NewFunctionTestConstInput(types.T_blob.ToType(), []string{"a"}, nil),
+		NewFunctionTestConstInput(types.T_blob.ToType(), []string{strings.Repeat("b", 2000)}, nil),
+	}, NewFunctionTestResult(types.T_blob.ToType(), true, nil, nil), fEvalFn(Replace))
+	ok, info := tc.Run()
+	require.True(t, ok, info)
+
+	tc = NewFunctionTestCase(proc, []FunctionTestInput{
+		NewFunctionTestConstInput(types.T_int64.ToType(), []int64{-1}, nil),
+		NewFunctionTestConstInput(types.T_blob.ToType(), []string{"x"}, nil),
+		NewFunctionTestConstInput(types.T_blob.ToType(), []string{""}, nil),
+		NewFunctionTestConstInput(types.T_blob.ToType(), []string{""}, nil),
+		NewFunctionTestConstInput(types.T_int64.ToType(), []int64{64}, nil),
+	}, NewFunctionTestResult(types.T_blob.ToType(), false, []string{strings.Repeat("x", 64)}, nil), fEvalFn(ExportSet))
+	ok, info = tc.Run()
+	require.True(t, ok, info)
+
+	tc = NewFunctionTestCase(proc, []FunctionTestInput{
+		NewFunctionTestConstInput(types.T_int64.ToType(), []int64{-1}, nil),
+		NewFunctionTestConstInput(types.T_blob.ToType(), []string{strings.Repeat("a", 20000)}, nil),
+		NewFunctionTestConstInput(types.T_blob.ToType(), []string{""}, nil),
+		NewFunctionTestConstInput(types.T_blob.ToType(), []string{""}, nil),
+		NewFunctionTestConstInput(types.T_int64.ToType(), []int64{64}, nil),
+	}, NewFunctionTestResult(types.T_blob.ToType(), true, nil, nil), fEvalFn(ExportSet))
+	ok, info = tc.Run()
+	require.True(t, ok, info)
 }
 
 func Test_BuiltIn_Serial(t *testing.T) {

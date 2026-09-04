@@ -147,15 +147,15 @@ func requireSubscriptionMetadataProtocol(ctx context.Context, proc *process.Proc
 	if rt == nil {
 		return moerr.NewNotSupported(
 			ctx,
-			"subscription information-schema metadata requires all CNs to support protocol version 43",
+			"subscription information-schema metadata requires all CNs to support protocol version 46",
 		)
 	}
 	value, ok := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
 	version, valid := value.(int64)
-	if !ok || !valid || version < defines.MORPCVersion43 {
+	if !ok || !valid || version < defines.MORPCVersion46 {
 		return moerr.NewNotSupported(
 			ctx,
-			"subscription information-schema metadata requires all CNs to support protocol version 43",
+			"subscription information-schema metadata requires all CNs to support protocol version 46",
 		)
 	}
 	return nil

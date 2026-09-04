@@ -22,7 +22,6 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/buffer"
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	commonutil "github.com/matrixorigin/matrixone/pkg/common/util"
@@ -659,7 +658,7 @@ func publishInternalExecutorStreamResult(
 		return nil
 	case <-procCtx.Done():
 		result.Close()
-		return moerr.NewInternalError(procCtx, "context cancelled")
+		return context.Cause(procCtx)
 	case <-execCtx.Done():
 		result.Close()
 		return execCtx.Err()

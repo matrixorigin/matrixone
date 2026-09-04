@@ -38,6 +38,19 @@ func TestBuildSubscriptionMetadataPersistedSystemViews(t *testing.T) {
 	}
 }
 
+func TestBuildSubscriptionTablesUsesOneReachableProducer(t *testing.T) {
+	logicPlan, err := runOneStmt(
+		NewMockOptimizer(false),
+		t,
+		"SELECT * FROM information_schema.TABLES",
+	)
+	require.NoError(t, err)
+	query := logicPlan.GetQuery()
+	require.NotNil(t, query)
+	require.Equal(t, 1, countReachableTableFunction(query, subscriptionTablesFunctionName))
+	require.Equal(t, 1, countReachableTableFunction(query, "mo_current_roles"))
+}
+
 func TestBuildSubscriptionMetadataProtocolAndViewGate(t *testing.T) {
 	mock := NewMockOptimizer(false)
 	builder := NewQueryBuilder(planpb.Query_SELECT, mock.CurrentContext(), false, true)
@@ -56,11 +69,11 @@ func TestBuildSubscriptionMetadataProtocolAndViewGate(t *testing.T) {
 	tablesCtx := NewBindContext(builder, nil)
 	tablesCtx.viewChain = []string{objectkey.Encode("information_schema", "TABLES")}
 
-	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion42)
+	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion45)
 	_, err := builder.buildSubscriptionTables(tableFunction, tablesCtx, nil, nil)
-	require.ErrorContains(t, err, "protocol version 43")
+	require.ErrorContains(t, err, "protocol version 46")
 
-	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion43)
+	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion46)
 	nodeID, err := builder.buildSubscriptionTables(tableFunction, tablesCtx, nil, nil)
 	require.NoError(t, err)
 	node := builder.qry.Nodes[nodeID]

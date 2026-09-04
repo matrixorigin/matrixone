@@ -125,7 +125,7 @@ Returned rows are rewritten to the subscriber account, local subscription alias,
 
 ### 5.3 View composition and authorization
 
-`TABLES` uses a private `__mo_all_tables` CTE containing current-account local rows plus `mo_subscription_tables()` rows and an internal source marker, followed by the existing `__mo_visible_tables` active-role predicate. Its final projection is split into local and subscription branches: only the local branch evaluates `internal_auto_increment` against a local physical relation, while the subscription branch returns zero, matching the existing subscription `SHOW TABLE STATUS` behavior. This split does not depend on conditional-expression lazy evaluation and prevents a rewritten subscriber alias from being used for physical relation lookup. `COLUMNS` retains the existing local visible-table CTE and local `mo_columns` branch, then combines it with a `mo_subscription_columns()` branch using `UNION ALL`. The subscription function colocates each column with rewritten table authorization fields, so that branch applies the same active-role ownership/grant predicate and temporary-object predicate directly without concurrently running `mo_subscription_tables()` in the same transaction. The local branch retains its existing key-index join, while the subscription branch consumes the publisher-computed key priority. Hidden/internal/temporary object filters, type decoding, generated/default expressions, and `COLUMN_KEY` mapping remain equivalent across both branches.
+`TABLES` keeps the existing local `__mo_visible_tables` CTE and local final projection. A separate subscription projection reads `mo_subscription_tables()` exactly once and applies the same active-role ownership/grant and object filters directly; it does not place the subscription function inside a CTE referenced by both final branches. Only the local projection evaluates `internal_auto_increment` against a local physical relation, while the subscription projection returns zero, matching the existing subscription `SHOW TABLE STATUS` behavior. This split prevents both repeated producer binding and rewritten subscriber-alias physical lookup. `COLUMNS` likewise retains the existing local visible-table CTE and local `mo_columns` branch, then combines it with a single `mo_subscription_columns()` branch using `UNION ALL`. The subscription function colocates each column with rewritten table authorization fields, so that branch applies the same active-role ownership/grant predicate and temporary-object predicate directly. The local branch retains its existing key-index join, while the subscription branch consumes the publisher-computed key priority. Hidden/internal/temporary object filters, type decoding, generated/default expressions, and `COLUMN_KEY` mapping remain equivalent across both branches.
 
 The subscription-aware CTEs are used only by `TABLES` and `COLUMNS`. The shared version 2 CTEs for other protected views remain local-only, preventing unrelated scans and accidental name-based joins to publisher metadata.
 
@@ -172,33 +172,33 @@ Sink/source cleanup, cancellation wakeups, memory admission, and spill lifecycle
 
 ## 7. Bootstrap and rolling-upgrade contract
 
-`mo_current_roles()` and the version 2 protected views are a cumulative CN capability identified by `MORPCVersion41`. Subscription metadata functions and the version 3 `TABLES` / `COLUMNS` definitions use the next available cumulative capability, `MORPCVersion43`; `MORPCVersion42` is already assigned to transactional SQL-task child cleanup on the reviewed `mo/main` baseline.
+`mo_current_roles()` and the version 2 protected views are a cumulative CN capability identified by `MORPCVersion41`. On the merged `mo/main` baseline `bf63172c0691e917ed2613c2d3a2d3d76a7f682e`, v42 is transactional SQL-task child cleanup, v43 is scalar-predicate runtime-filter terminal state, v44 is validated MongoDB explicit-query scan payload, and v45 is bounded Parquet whole-file fanout. Subscription metadata functions and the version 3 `TABLES` / `COLUMNS` definitions therefore use the next available cumulative capability, `MORPCVersion46`.
 
-The capability numbers are not independently negotiable feature bits. Before merge, the implementation must merge latest `mo/main` and verify that v43 remains the next unique cumulative version. If another capability lands first, this document and every producer/consumer gate must be revised together.
+The capability numbers are not independently negotiable feature bits. Before merge, the implementation must merge latest `mo/main` and verify that v46 remains the next unique cumulative version. If another capability lands first, this document and every producer/consumer gate must be revised together.
 
 Gated consumers are:
 
 - planner admission for `mo_current_roles()` at v41;
-- planner admission for both subscription metadata functions at v43;
-- tenant bootstrap selection among pre-v41, v41-v42, and v43 definitions;
+- planner admission for both subscription metadata functions at v46;
+- tenant bootstrap selection among pre-v41, v41-v45, and v46 definitions;
 - every tenant upgrade entry that can persist the latest `TABLES` or `COLUMNS` DDL;
 - same-version v4.0.6 definition reconciliation;
 - protocol tests and user-visible compatibility errors.
 
-Subscription-aware views may be installed only when every participating CN reports at least v43. Bootstrap below v41 uses the prior role compatibility definitions; bootstrap at v41-v42 uses the current active-role/local-catalog definitions; bootstrap at v43 or later uses subscription-aware definitions. This preserves local metadata availability during mixed-version operation without allowing an old CN to receive an unknown function scan.
+Subscription-aware views may be installed only when every participating CN reports at least v46. Bootstrap below v41 uses the prior role compatibility definitions; bootstrap at v41-v45 uses the current active-role/local-catalog definitions; bootstrap at v46 or later uses subscription-aware definitions. This preserves local metadata availability during mixed-version operation without allowing an old CN to receive an unknown function scan.
 
 ### Upgrade
 
-1. deploy binaries that understand v43 while the common protocol remains below it;
-2. retain v41-v42 local-catalog definitions during the mixed-version phase;
-3. once every CN advertises v43, same-version tenant upgrades install the subscription-aware `TABLES` / `COLUMNS` definitions;
+1. deploy binaries that understand v46 while the common protocol remains below it;
+2. retain v41-v45 local-catalog definitions during the mixed-version phase;
+3. once every CN advertises v46, same-version tenant upgrades install the subscription-aware `TABLES` / `COLUMNS` definitions;
 4. new plans may then contain the subscription metadata scans.
 
-All historical and current upgrade entries that reference the mutable latest `InformationSchemaTablesDDL` or `InformationSchemaColumnsDDL` constants must use the v43 protocol barrier. Their complete-definition checks remain idempotent, so an existing v41 definition is refreshed after common v43 while an already-current definition is left unchanged.
+All historical and current upgrade entries that reference the mutable latest `InformationSchemaTablesDDL` or `InformationSchemaColumnsDDL` constants must use the v46 protocol barrier. Their complete-definition checks remain idempotent, so an existing v41 definition is refreshed after common v46 while an already-current definition is left unchanged.
 
 ### Downgrade and rollback
 
-Do not lower the common protocol below v43 while subscription-aware view definitions remain installed. Operational rollback must first restore the v41 local-catalog `TABLES` / `COLUMNS` definitions, then remove v43-only participants. A rollback below v41 must additionally restore the original role compatibility definitions. No publication, subscription, role, grant, table, or column data migration is introduced, so rollback changes only view definitions and binary capability.
+Do not lower the common protocol below v46 while subscription-aware view definitions remain installed. Operational rollback must first restore the v41 local-catalog `TABLES` / `COLUMNS` definitions, then remove v46-only participants. A rollback below v41 must additionally restore the original role compatibility definitions. No publication, subscription, role, grant, table, or column data migration is introduced, so rollback changes only view definitions and binary capability.
 
 A restarted old CN cannot safely join a cluster whose common protocol and persisted views require a newer capability; normal protocol admission must reject or hold that state rather than treating the old CN as capable.
 
@@ -262,8 +262,8 @@ Rejected. An arbitrary surrounding join/scan can be unbounded and may have early
 | Candidate page, result channel, output batch, and producer count bounds | table-function boundary tests and ownership review |
 | Success/error/malformed/cancel/limit/reset/free close results and join producer | injected lifecycle UT, focused race stress, and unhappy-path audit |
 | Publication add/remove/drop and aliases over the same publisher objects update at statement time | public SQL BVT without plan invalidation hooks |
-| v41-v42 definitions omit subscription functions; v43 definitions include only affected views | sysview/bootstrap protocol tests |
-| Every persisted latest TABLES/COLUMNS writer waits for common v43 | upgrade inventory tests and definition-check tests |
+| v41-v45 definitions omit subscription functions; v46 definitions include only affected views | sysview/bootstrap protocol tests |
+| Every persisted latest TABLES/COLUMNS writer waits for common v46 | upgrade inventory tests and definition-check tests |
 | Original issue succeeds on a clean single-CN instance three consecutive times | exact-head runtime reproduction with recorded output hash |
 
 Acceptance requires all focused owning-package tests, affected BVT, race tests on lifecycle/planner/protocol paths, `go vet` for affected packages, `git diff --check`, `unhappy-path-audit`, and `mo-self-review` to pass. Structural tests prove private admission and DDL placement; public SQL tests independently prove reachability and authorization.
@@ -274,7 +274,7 @@ Primary risks are privilege overexposure, hidden authorized objects, stale activ
 
 No new metric or background health signal is introduced. Failures surface as normal query/bootstrap errors with the required protocol version. Operators can diagnose rollout state through existing common-protocol reporting, tenant-upgrade logs, and ordinary query errors. The implementation must not log publication table lists or cross-tenant metadata at per-row cardinality.
 
-Rollout is contained by the common-protocol gate: v41-v42 local definitions remain active until all CNs are capable. If correctness or scale evidence regresses, rollback restores those definitions before withdrawing v43-capable binaries.
+Rollout is contained by the common-protocol gate: v41-v45 local definitions remain active until all CNs are capable. If correctness or scale evidence regresses, rollback restores those definitions before withdrawing v46-capable binaries.
 
 ## 12. Decision log
 
@@ -288,9 +288,9 @@ Rollout is contained by the common-protocol gate: v41-v42 local definitions rema
 - Subscription metadata uses the subscriber alias/local database identity and the current publication scope; no persistent mirror is added.
 - Cross-account execution is private to exact system-view lineage and has no user-supplied identity inputs.
 - Candidate discovery is keyset-paged at 64; each function owns one producer, eight result envelopes, one current result, and an 8,192-row output batch.
-- `TABLES` / `COLUMNS` use v43 while other version 2 protected views remain at v41.
+- `TABLES` / `COLUMNS` use v46 while other version 2 protected views remain at v41.
 - `TABLES` evaluates `internal_auto_increment` only in its local-row projection; subscription rows return zero without resolving the rewritten alias as a local relation.
-- All persisted writers of the mutable latest TABLES/COLUMNS DDL share the v43 barrier.
+- All persisted writers of the mutable latest TABLES/COLUMNS DDL share the v46 barrier.
 
 ## 13. Open decisions
 
@@ -303,7 +303,7 @@ Change scope: issue #27794 subscription metadata bridge plus the existing inform
 Trigger: authorization/tenant-isolation boundary; cumulative protocol and persisted-view upgrade contract; cross-package goroutine/channel lifecycle; metadata hot path
 Design: docs/design/CLAUDE_INFORMATION_SCHEMA_METADATA_VISIBILITY.md, version 3, decision set reviewed before implementation on 2026-09-01
 Blocking findings: none
-Decision log: preserve existing active-role predicate; use private runtime streaming bridge; live publication catalogs are authoritative; no persistent mirror/cache; v43 three-tier compatibility
+Decision log: preserve existing active-role predicate; use private runtime streaming bridge; live publication catalogs are authoritative; no persistent mirror/cache; v46 three-tier compatibility
 Decision: PASS (user approved the recorded implementation plan with “go ahead” before product/test changes)
 Implementation deviations: none; any change to identity, private admission, protocol, or lifecycle requires re-review
 ```

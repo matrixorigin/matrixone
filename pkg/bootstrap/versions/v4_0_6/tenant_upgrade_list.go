@@ -60,12 +60,30 @@ var tenantUpgEntries = []versions.UpgradeEntry{
 	upgradeInformationSchemaMetadataVisibilityView("VIEWS", sysview.InformationSchemaViewsDDL),
 	upgradeInformationSchemaMetadataVisibilityView("PARTITIONS", sysview.InformationSchemaPartitionsDDL),
 	upgradeInformationSchemaMetadataVisibilityView("SCHEMATA", sysview.InformationSchemaSchemataDDL),
+	upgradeInformationSchemaTablePrivileges(),
+	addIcebergCatalogIDAllocatorIndex(),
+}
+
+// The catalog ID allocator is storage-owned.  MatrixOne only materializes an
+// auto-increment allocator when the column is a leading index part; the
+// account-first primary key is retained for account-local lookups, while this
+// narrow secondary index supplies that allocator contract.
+func addIcebergCatalogIDAllocatorIndex() versions.UpgradeEntry {
+	return versions.UpgradeEntry{
+		Schema:    catalog.MO_CATALOG,
+		TableName: "mo_iceberg_catalogs",
+		UpgType:   versions.ADD_INDEX,
+		UpgSql:    "create index catalog_id_allocator on mo_catalog.mo_iceberg_catalogs(catalog_id)",
+		CheckFunc: func(txn executor.TxnExecutor, accountID uint32) (bool, error) {
+			return versions.CheckIndexDefinition(txn, accountID, catalog.MO_CATALOG, "mo_iceberg_catalogs", "catalog_id_allocator")
+		},
+	}
 }
 
 func upgradeInformationSchemaMetadataVisibilityView(viewName, viewDDL string) versions.UpgradeEntry {
 	requiredProtocol := defines.MORPCVersion41
 	if viewName == "TABLES" || viewName == "COLUMNS" {
-		requiredProtocol = defines.MORPCVersion43
+		requiredProtocol = defines.MORPCVersion46
 	}
 	return versions.UpgradeEntry{
 		Schema:                  sysview.InformationDBConst,
@@ -86,6 +104,25 @@ func upgradeInformationSchemaMetadataVisibilityTableConstraints() versions.Upgra
 func upgradeInformationSchemaMetadataVisibilityCheckConstraints() versions.UpgradeEntry {
 	return upgradeInformationSchemaMetadataVisibilityView(
 		"CHECK_CONSTRAINTS", sysview.InformationSchemaCheckConstraintsDDL)
+}
+
+// upgradeInformationSchemaTablePrivileges converges the legacy empty base
+// table, a stale view, or an absent object to the canonical derived view.
+func upgradeInformationSchemaTablePrivileges() versions.UpgradeEntry {
+	const (
+		viewName        = "TABLE_PRIVILEGES"
+		catalogViewName = "table_privileges"
+	)
+	return versions.UpgradeEntry{
+		Schema:                  sysview.InformationDBConst,
+		TableName:               viewName,
+		UpgType:                 versions.MODIFY_VIEW,
+		UpgSql:                  fmt.Sprintf("DROP VIEW IF EXISTS %s.%s;", sysview.InformationDBConst, viewName),
+		CheckFunc:               checkViewDefinition(catalogViewName, sysview.InformationSchemaTablePrivilegesDDL),
+		RequiredProtocolVersion: defines.MORPCVersion41,
+		PreSql:                  fmt.Sprintf("DROP TABLE IF EXISTS %s.%s;", sysview.InformationDBConst, viewName),
+		PostSql:                 sysview.InformationSchemaTablePrivilegesDDL,
+	}
 }
 
 const moColumnsUnsignedMismatchPredicate = "account_id = current_account_id() " +
@@ -116,7 +153,7 @@ func upgradeInformationSchemaColumns() versions.UpgradeEntry {
 		TableName:               "COLUMNS",
 		UpgType:                 versions.MODIFY_VIEW,
 		UpgSql:                  sysview.InformationSchemaColumnsDDL,
-		RequiredProtocolVersion: defines.MORPCVersion43,
+		RequiredProtocolVersion: defines.MORPCVersion46,
 		CheckFunc: func(txn executor.TxnExecutor, accountID uint32) (bool, error) {
 			exists, viewDef, err := versions.CheckViewDefinition(txn, accountID, sysview.InformationDBConst, "COLUMNS")
 			if err != nil {
