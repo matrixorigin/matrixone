@@ -148,6 +148,11 @@ message Group {
   // Grouping sentinels are supplied by input vectors and may change between
   // batches, rather than being described by one static grouping_flag.
   bool dynamic_grouping = 13;
+  // MERGE_GROUP only: dynamic grouping-set ids that own an empty aggregate
+  // row when the distributed input produces no partial pipeline.
+  repeated int64 empty_grouping_set_ids = 14;
+  // MERGE_GROUP only: the legacy/static all-rolled branch owns one empty row.
+  bool empty_grouping_set = 15;
 }
 
 message Insert {

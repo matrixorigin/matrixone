@@ -917,6 +917,14 @@ type MergeGroup struct {
 	// partial's data. Dynamic grouping streams can legally alternate partials
 	// with and without an actual rollup sentinel.
 	GroupingAware bool
+	// EmptyGroupingSet declares that a legacy/static all-rolled branch must
+	// produce one row even when no partial reaches this final merge boundary.
+	EmptyGroupingSet bool
+	// EmptyGroupingSetIDs declares the corresponding dynamic grouping-set rows.
+	EmptyGroupingSetIDs []int64
+	// GroupByTypes makes those rows constructible when no partial supplies
+	// runtime vector types.
+	GroupByTypes []types.Type
 
 	PartialResults     []any
 	PartialResultTypes []types.T

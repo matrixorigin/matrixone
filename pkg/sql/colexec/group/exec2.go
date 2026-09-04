@@ -390,6 +390,9 @@ func (group *Group) Call(proc *process.Process) (vm.CallResult, error) {
 			if err, isCancel = vm.CancelCheck(proc); isCancel {
 				return vm.CancelResult, err
 			}
+			if err = group.ensureRuntimeEmptyGroupingSet(); err != nil {
+				return vm.CancelResult, err
+			}
 		}
 
 		// spilling -- spill whatever left in memory, and load first spilled bucket.
@@ -433,6 +436,49 @@ func (group *Group) Call(proc *process.Process) (vm.CallResult, error) {
 
 	err = moerr.NewInternalError(proc.Ctx, "bug: unknown group state")
 	return vm.CancelResult, err
+}
+
+// ensureRuntimeEmptyGroupingSet preserves the one-row identity of a legacy
+// all-rolled grouping-set branch. It applies to both final and partial Group:
+// partial empty states merge idempotently, while a single-stage Group emits
+// the SQL result directly.
+func (group *Group) ensureRuntimeEmptyGroupingSet() error {
+	if group.DynamicGrouping || len(group.GroupBy) == 0 ||
+		len(group.GroupingFlag) != len(group.GroupBy) ||
+		len(group.ctr.groupByBatches) > 0 || group.ctr.isSpilling() {
+		return nil
+	}
+	for _, active := range group.GroupingFlag {
+		if active {
+			return nil
+		}
+	}
+
+	groupTypes := group.ctr.groupByEvaluate.Typ
+	if len(groupTypes) != len(group.GroupBy) {
+		return moerr.NewInternalErrorNoCtx(
+			"invalid empty grouping-set group metadata")
+	}
+	output, err := group.ctr.newRuntimeEmptyGroupingSetBatch(groupTypes, nil)
+	if err != nil {
+		return err
+	}
+	if len(group.ctr.aggList) != len(group.Aggs) {
+		group.ctr.aggList, err = group.ctr.makeAggList(group.Aggs)
+		if err != nil {
+			output.Clean(group.ctr.mp)
+			return err
+		}
+	}
+	for _, agg := range group.ctr.aggList {
+		if err = agg.GroupGrow(1); err != nil {
+			output.Clean(group.ctr.mp)
+			return err
+		}
+	}
+	group.ctr.groupByTypes = append(group.ctr.groupByTypes[:0], groupTypes...)
+	group.ctr.groupByBatches = append(group.ctr.groupByBatches, output)
+	return nil
 }
 
 func (group *Group) buildOneBatch(proc *process.Process, bat *batch.Batch) (bool, error) {

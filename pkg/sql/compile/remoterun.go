@@ -809,10 +809,13 @@ func convertToPipelineInstruction(op vm.Operator, proc *process.Process, ctx *sc
 			return ctxId, nil, err
 		}
 		in.Agg = &pipeline.Group{
-			SpillMem:        t.SpillMem,
-			Aggs:            convertToPipelineAggregates(t.Aggs),
-			GroupByHashKey:  t.GroupByHashKey,
-			DynamicGrouping: t.GroupingAware,
+			SpillMem:            t.SpillMem,
+			Aggs:                convertToPipelineAggregates(t.Aggs),
+			GroupByHashKey:      t.GroupByHashKey,
+			DynamicGrouping:     t.GroupingAware,
+			Types:               convertToPlanTypes(t.GroupByTypes),
+			EmptyGroupingSetIds: t.EmptyGroupingSetIDs,
+			EmptyGroupingSet:    t.EmptyGroupingSet,
 		}
 		in.ProjectList = t.ProjectList
 		EncodeMergeGroup(t, in.Agg)
@@ -1420,6 +1423,9 @@ func convertToVmOperator(opr *pipeline.Instruction, ctx *scopeContext, eng engin
 		arg.Aggs = convertToAggregates(t.Aggs)
 		arg.GroupByHashKey = t.GroupByHashKey
 		arg.GroupingAware = t.DynamicGrouping
+		arg.GroupByTypes = convertToTypes(t.Types)
+		arg.EmptyGroupingSetIDs = t.EmptyGroupingSetIds
+		arg.EmptyGroupingSet = t.EmptyGroupingSet
 		arg.ProjectList = opr.ProjectList
 		op = arg
 		DecodeMergeGroup(op.(*group.MergeGroup), opr.Agg)
@@ -2110,7 +2116,8 @@ func validateRemoteGroupingSetPipelineProtocol(
 		agg := instruction.GetAgg()
 		requiresV46 := len(instruction.ProjectionGroupingFlags) > 0 ||
 			instruction.ProjectionGroupingSetCount != 0 ||
-			agg != nil && agg.DynamicGrouping
+			agg != nil && (agg.DynamicGrouping || agg.EmptyGroupingSet ||
+				len(agg.EmptyGroupingSetIds) > 0)
 		if requiresV46 &&
 			(proc == nil || !supportsRemoteGroupingSetExpansion(proc.GetService())) {
 			return moerr.NewNotSupportedNoCtx(
