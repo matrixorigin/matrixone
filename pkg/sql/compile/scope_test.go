@@ -1892,6 +1892,62 @@ func TestReadLoadParquetRowGroupMetadataLocalFile(t *testing.T) {
 	}
 }
 
+type parquetMetadataIndexFixture struct {
+	Value int64 `parquet:"value"`
+}
+
+type parquetMetadataReadRange struct {
+	offset int64
+	length int
+}
+
+type parquetMetadataTrackingReaderAt struct {
+	reader *bytes.Reader
+	reads  []parquetMetadataReadRange
+}
+
+func (r *parquetMetadataTrackingReaderAt) ReadAt(p []byte, offset int64) (int, error) {
+	r.reads = append(r.reads, parquetMetadataReadRange{offset: offset, length: len(p)})
+	return r.reader.ReadAt(p, offset)
+}
+
+func (r *parquetMetadataTrackingReaderAt) readsOffset(offset int64) bool {
+	for _, read := range r.reads {
+		if read.offset <= offset && offset < read.offset+int64(read.length) {
+			return true
+		}
+	}
+	return false
+}
+
+func TestReadLoadParquetRowGroupMetadataSkipsUnusedIndexSections(t *testing.T) {
+	var data bytes.Buffer
+	writer := parquet.NewGenericWriter[parquetMetadataIndexFixture](
+		&data,
+		parquet.MaxRowsPerRowGroup(1),
+		parquet.DataPageStatistics(true),
+		parquet.BloomFilters(parquet.SplitBlockFilter(10, "value")),
+	)
+	_, err := writer.Write([]parquetMetadataIndexFixture{{Value: 1}, {Value: 2}, {Value: 3}})
+	require.NoError(t, err)
+	require.NoError(t, writer.Close())
+
+	metadataFile, err := parquet.OpenFile(bytes.NewReader(data.Bytes()), int64(data.Len()))
+	require.NoError(t, err)
+	chunk := metadataFile.Metadata().RowGroups[0].Columns[0]
+	require.Positive(t, chunk.ColumnIndexOffset)
+	require.Positive(t, chunk.OffsetIndexOffset)
+	require.Positive(t, chunk.MetaData.BloomFilterOffset)
+
+	reader := &parquetMetadataTrackingReaderAt{reader: bytes.NewReader(data.Bytes())}
+	file, err := openParquetLoadMetadataFile(reader, int64(data.Len()))
+	require.NoError(t, err)
+	require.Len(t, file.RowGroups(), 3)
+	require.False(t, reader.readsOffset(chunk.ColumnIndexOffset))
+	require.False(t, reader.readsOffset(chunk.OffsetIndexOffset))
+	require.False(t, reader.readsOffset(chunk.MetaData.BloomFilterOffset))
+}
+
 func TestCompileExternScanParquetLoadUsesRowGroupMetadata(t *testing.T) {
 	testCompile := NewMockCompile(t)
 	testCompile.addr = "cn1:6001"

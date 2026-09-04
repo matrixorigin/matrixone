@@ -245,8 +245,21 @@ func (h *ParquetHandler) openFile(param *ExternalParam, prefetchS3 bool) error {
 		}
 	}
 	var err error
-	h.file, err = parquet.OpenFile(r, fileSize)
+	h.file, err = parquet.OpenFile(r, fileSize, parquetLoadFileOptions(param)...)
 	return moerr.ConvertGoError(param.Ctx, err)
+}
+
+// parquetLoadFileOptions omits file-wide indexes in fanout scopes. They are
+// not consumed by LOAD's row-group selection or decoding, and opening them in
+// every scope multiplies otherwise unused object-store range reads.
+func parquetLoadFileOptions(param *ExternalParam) []parquet.FileOption {
+	if param == nil || (len(param.ParquetRowGroupShards) == 0 && !param.ParquetWholeFileFanout) {
+		return nil
+	}
+	return []parquet.FileOption{
+		parquet.SkipPageIndex(true),
+		parquet.SkipBloomFilters(true),
+	}
 }
 
 func parquetFileServiceForCurrentFile(param *ExternalParam) (fileservice.ETLFileService, string, error) {

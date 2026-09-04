@@ -4632,3 +4632,71 @@ func TestParquet_getParquetExpectedColCnt(t *testing.T) {
 	}
 	require.Equal(t, 2, getParquetExpectedColCnt(param2))
 }
+
+type parquetLoadIndexFixture struct {
+	Value int64 `parquet:"value"`
+}
+
+type parquetReadRange struct {
+	offset int64
+	length int
+}
+
+type parquetTrackingReaderAt struct {
+	reader *bytes.Reader
+	reads  []parquetReadRange
+}
+
+func (r *parquetTrackingReaderAt) ReadAt(p []byte, offset int64) (int, error) {
+	r.reads = append(r.reads, parquetReadRange{offset: offset, length: len(p)})
+	return r.reader.ReadAt(p, offset)
+}
+
+func (r *parquetTrackingReaderAt) readsOffset(offset int64) bool {
+	for _, read := range r.reads {
+		if read.offset <= offset && offset < read.offset+int64(read.length) {
+			return true
+		}
+	}
+	return false
+}
+
+func TestParquetLoadFanoutSkipsUnusedIndexSections(t *testing.T) {
+	var data bytes.Buffer
+	writer := parquet.NewGenericWriter[parquetLoadIndexFixture](
+		&data,
+		parquet.MaxRowsPerRowGroup(1),
+		parquet.DataPageStatistics(true),
+		parquet.BloomFilters(parquet.SplitBlockFilter(10, "value")),
+	)
+	_, err := writer.Write([]parquetLoadIndexFixture{{Value: 1}, {Value: 2}, {Value: 3}})
+	require.NoError(t, err)
+	require.NoError(t, writer.Close())
+
+	metadataFile, err := parquet.OpenFile(bytes.NewReader(data.Bytes()), int64(data.Len()))
+	require.NoError(t, err)
+	chunk := metadataFile.Metadata().RowGroups[0].Columns[0]
+	require.Positive(t, chunk.ColumnIndexOffset)
+	require.Positive(t, chunk.OffsetIndexOffset)
+	require.Positive(t, chunk.MetaData.BloomFilterOffset)
+
+	defaultReader := &parquetTrackingReaderAt{reader: bytes.NewReader(data.Bytes())}
+	_, err = parquet.OpenFile(defaultReader, int64(data.Len()))
+	require.NoError(t, err)
+	require.True(t, defaultReader.readsOffset(chunk.ColumnIndexOffset))
+	require.True(t, defaultReader.readsOffset(chunk.OffsetIndexOffset))
+	require.True(t, defaultReader.readsOffset(chunk.MetaData.BloomFilterOffset))
+
+	param := &ExternalParam{ExParamConst: ExParamConst{
+		ParquetRowGroupShards: []*pipeline.ParquetRowGroupShard{{FileIndex: 0, RowGroupStart: 0, RowGroupEnd: 1}},
+	}}
+	for range 3 { // One planning open plus two fanout scopes must not reread either section.
+		reader := &parquetTrackingReaderAt{reader: bytes.NewReader(data.Bytes())}
+		file, err := parquet.OpenFile(reader, int64(data.Len()), parquetLoadFileOptions(param)...)
+		require.NoError(t, err)
+		require.Len(t, file.RowGroups(), 3)
+		require.False(t, reader.readsOffset(chunk.ColumnIndexOffset))
+		require.False(t, reader.readsOffset(chunk.OffsetIndexOffset))
+		require.False(t, reader.readsOffset(chunk.MetaData.BloomFilterOffset))
+	}
+}

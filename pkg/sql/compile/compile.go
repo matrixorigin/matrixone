@@ -3540,7 +3540,10 @@ func (c *Compile) readLoadParquetRowGroupMetadata(
 		}
 		stats.Bytes += size
 
-		f, err := parquet.OpenFile(reader, size)
+		// Planning only needs the schema, row count, and row-group boundaries.
+		// Loading page indexes and bloom-filter headers here is unused work, and
+		// row-group fanout would repeat it in every execution scope.
+		f, err := openParquetLoadMetadataFile(reader, size)
 		if footerReader != nil {
 			stats.ReadCalls += footerReader.readCalls
 			stats.ReadBytes += footerReader.readBytes
@@ -3570,6 +3573,13 @@ func (c *Compile) readLoadParquetRowGroupMetadata(
 	}
 	stats.Duration = time.Since(start)
 	return metas, stats, nil
+}
+
+func openParquetLoadMetadataFile(reader io.ReaderAt, size int64) (*parquet.File, error) {
+	return parquet.OpenFile(reader, size,
+		parquet.SkipPageIndex(true),
+		parquet.SkipBloomFilters(true),
+	)
 }
 
 func validateEmptyParquetLoadFile(ctx context.Context, node *plan.Node, param *tree.ExternParam, f *parquet.File) error {
