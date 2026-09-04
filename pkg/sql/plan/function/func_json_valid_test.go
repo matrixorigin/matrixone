@@ -851,6 +851,11 @@ func TestJsonSchemaLocalReferenceErrors(t *testing.T) {
 	}{
 		{name: "external http", schema: `{"$ref":"https://example.invalid/schema"}`, code: moerr.ErrNotSupported, reason: mysqlJSONSchemaExternalRefReason},
 		{name: "external file", schema: `{"$ref":"file:///tmp/schema.json"}`, code: moerr.ErrNotSupported, reason: mysqlJSONSchemaExternalRefReason},
+		{name: "external relative path", schema: `{"$ref":"schema.json"}`, code: moerr.ErrNotSupported, reason: mysqlJSONSchemaExternalRefReason},
+		{name: "external absolute path", schema: `{"$ref":"/tmp/schema.json"}`, code: moerr.ErrNotSupported, reason: mysqlJSONSchemaExternalRefReason},
+		{name: "external scheme relative", schema: `{"$ref":"//example.invalid/schema"}`, code: moerr.ErrNotSupported, reason: mysqlJSONSchemaExternalRefReason},
+		{name: "external urn", schema: `{"$ref":"urn:example:schema"}`, code: moerr.ErrNotSupported, reason: mysqlJSONSchemaExternalRefReason},
+		{name: "external query", schema: `{"$ref":"https://example.invalid/schema?x=1"}`, code: moerr.ErrNotSupported, reason: mysqlJSONSchemaExternalRefReason},
 		{name: "anchor", schema: `{"$ref":"#anchor"}`, code: moerr.ErrNotSupported, reason: mysqlJSONSchemaExternalRefReason},
 		{name: "empty", schema: `{"$ref":""}`, code: moerr.ErrNotSupported, reason: mysqlJSONSchemaExternalRefReason},
 		{name: "bad percent", schema: `{"$ref":"#/%ZZ"}`, code: moerr.ErrInvalidArg, reason: mysqlJSONSchemaRefSyntaxReason},
@@ -858,10 +863,14 @@ func TestJsonSchemaLocalReferenceErrors(t *testing.T) {
 		{name: "missing target", schema: `{"$ref":"#/definitions/missing","definitions":{}}`, code: moerr.ErrInvalidArg, reason: mysqlJSONSchemaRefTargetReason},
 		{name: "non-string", schema: `{"$ref":1}`, code: moerr.ErrInvalidArg, reason: mysqlJSONSchemaRefStringReason},
 		{name: "array leading zero", schema: `{"$ref":"#/definitions/choices/01","definitions":{"choices":[{}]}}`, code: moerr.ErrInvalidArg, reason: mysqlJSONSchemaRefSyntaxReason},
+		{name: "array negative index", schema: `{"$ref":"#/$defs/choices/-1","$defs":{"choices":[{}]}}`, code: moerr.ErrInvalidArg, reason: mysqlJSONSchemaRefSyntaxReason},
+		{name: "array plus index", schema: `{"$ref":"#/$defs/choices/+1","$defs":{"choices":[{},{}]}}`, code: moerr.ErrInvalidArg, reason: mysqlJSONSchemaRefSyntaxReason},
 		{name: "array out of bounds", schema: `{"$ref":"#/$defs/choices/2","$defs":{"choices":[{}]}}`, code: moerr.ErrInvalidArg, reason: mysqlJSONSchemaRefTargetReason},
 		{name: "external base", schema: `{"id":"https://example.invalid/root.json","$ref":"#/definitions/value","definitions":{"value":{"type":"integer"}}}`, code: moerr.ErrNotSupported, reason: mysqlJSONSchemaExternalRefReason},
 		{name: "external base in target", schema: `{"properties":{"value":{"$ref":"#/$defs/value"}},"$defs":{"value":{"id":"https://example.invalid/value.json","$ref":"#/definitions/integer"}},"definitions":{"integer":{"type":"integer"}}}`, code: moerr.ErrNotSupported, reason: mysqlJSONSchemaExternalRefReason},
 		{name: "direct cycle", schema: `{"$ref":"#/definitions/node","definitions":{"node":{"$ref":"#/definitions/node"}}}`, code: moerr.ErrInvalidArg, reason: mysqlJSONSchemaRefCycleReason},
+		{name: "indirect cycle", schema: `{"$ref":"#/$defs/a","$defs":{"a":{"$ref":"#/$defs/b"},"b":{"$ref":"#/$defs/a"}}}`, code: moerr.ErrInvalidArg, reason: mysqlJSONSchemaRefCycleReason},
+		{name: "instance recursive cycle", schema: `{"properties":{"child":{"$ref":"#/$defs/node"}},"$defs":{"node":{"type":"object","properties":{"child":{"$ref":"#/$defs/node"}}}}}`, code: moerr.ErrInvalidArg, reason: mysqlJSONSchemaRefCycleReason},
 		{name: "invalid combinator local", schema: `{"allOf":{"$ref":"#/definitions/value"},"definitions":{"value":{"type":"integer"}}}`, code: moerr.ErrInvalidArg, reason: "of an array"},
 		{name: "invalid combinator external precedence", schema: `{"allOf":{"$ref":"https://example.invalid/schema"}}`, code: moerr.ErrNotSupported, reason: mysqlJSONSchemaExternalRefReason},
 	}
@@ -983,6 +992,19 @@ func TestJsonSchemaExternalReferenceDoesNotPerformNetworkIO(t *testing.T) {
 	require.Equal(t, 0, requests)
 }
 
+type cancelAfterErrContext struct {
+	context.Context
+	calls int
+}
+
+func (c *cancelAfterErrContext) Err() error {
+	c.calls++
+	if c.calls > 3 {
+		return context.Canceled
+	}
+	return nil
+}
+
 func TestJsonSchemaReferenceDepthAndCancellation(t *testing.T) {
 	deep := `{"type":"object"}`
 	for i := 0; i < mysqlJSONSchemaMaxDepth-1; i++ {
@@ -1005,6 +1027,39 @@ func TestJsonSchemaReferenceDepthAndCancellation(t *testing.T) {
 	require.NoError(t, err)
 	_, err = compileMySQLDraft4Schema(cancelled, "json_schema_valid", schema)
 	require.ErrorIs(t, err, context.Canceled)
+
+	var manyProperties map[string]any
+	manyProperties = make(map[string]any, 128)
+	for i := 0; i < 128; i++ {
+		manyProperties[fmt.Sprintf("p%d", i)] = map[string]any{"type": "integer"}
+	}
+	cancelDuringPreflight := &cancelAfterErrContext{Context: context.Background()}
+	manySchemaBytes, marshalErr := json.Marshal(map[string]any{"properties": manyProperties})
+	require.NoError(t, marshalErr)
+	manySchema, parseErr := types.ParseSliceToByteJson(manySchemaBytes)
+	require.NoError(t, parseErr)
+	_, err = compileMySQLDraft4Schema(cancelDuringPreflight, "json_schema_valid", manySchema)
+	require.ErrorIs(t, err, context.Canceled)
+}
+
+func TestJsonSchemaExpansionDepthBoundaries(t *testing.T) {
+	for _, edgeCount := range []int{mysqlJSONSchemaMaxDepth - 2, mysqlJSONSchemaMaxDepth - 1, mysqlJSONSchemaMaxDepth} {
+		index := &mysqlJSONSchemaIndex{nodes: make(map[string]*mysqlJSONSchemaNode)}
+		for i := 0; i <= edgeCount; i++ {
+			pointer := fmt.Sprintf("#/%d", i)
+			index.nodes[pointer] = &mysqlJSONSchemaNode{value: map[string]any{}}
+			if i < edgeCount {
+				index.nodes[pointer].edges = []string{fmt.Sprintf("#/%d", i+1)}
+			}
+		}
+		index.nodes["#"] = index.nodes["#/0"]
+		err := mysqlValidateSchemaRefGraph(context.Background(), index)
+		if edgeCount <= mysqlJSONSchemaMaxDepth-1 {
+			require.NoError(t, err)
+		} else {
+			require.EqualError(t, err, mysqlJSONSchemaExpansionReason)
+		}
+	}
 }
 
 func TestJsonSchemaPreflightVisitCounts(t *testing.T) {
