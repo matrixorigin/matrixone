@@ -44,3 +44,25 @@ func TestSequenceDatabase(t *testing.T) {
 	require.Empty(t, database)
 	require.True(t, null)
 }
+
+func TestSequenceHiddenOverloadExecutors(t *testing.T) {
+	for _, test := range []struct {
+		name       string
+		functionID int
+		overloadID int
+		args       []types.T
+	}{
+		{name: "nextval", functionID: NEXTVAL, overloadID: 1, args: []types.T{types.T_varchar, types.T_varchar}},
+		{name: "setval", functionID: SETVAL, overloadID: 2, args: []types.T{types.T_varchar, types.T_varchar, types.T_bool, types.T_varchar}},
+		{name: "currval", functionID: CURRVAL, overloadID: 1, args: []types.T{types.T_varchar, types.T_varchar}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			fn := allSupportedFunctions[test.functionID]
+			require.Equal(t, test.functionID, fn.functionId)
+			require.Greater(t, len(fn.Overloads), test.overloadID)
+			overload := fn.Overloads[test.overloadID]
+			require.Equal(t, test.args, overload.args)
+			require.NotNil(t, overload.newOp())
+		})
+	}
+}
