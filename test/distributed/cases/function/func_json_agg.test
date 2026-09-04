@@ -19,6 +19,36 @@ DROP TABLE t_dup;
 
 DROP TABLE t3;
 
+# Conventional numeric key expressions are implicitly cast to VARCHAR.
+CREATE TABLE t_obj_numeric(
+    row_id INT,
+    signed_key BIGINT,
+    unsigned_key BIGINT UNSIGNED,
+    float_key FLOAT,
+    decimal_key DECIMAL(12,2),
+    value VARCHAR(20)
+);
+INSERT INTO t_obj_numeric VALUES
+(1, -7, 18446744073709551615, 1.25, 12.30, 'first'),
+(2, 7, 2, 2.50, 0.10, 'last');
+SELECT JSON_OBJECTAGG(CAST(1 AS SIGNED), value) AS signed_literal FROM t_obj_numeric WHERE row_id = 1;
+SELECT JSON_OBJECTAGG(signed_key, value) AS signed_key_object FROM t_obj_numeric WHERE row_id = 1;
+SELECT JSON_OBJECTAGG(unsigned_key, value) AS unsigned_key_object FROM t_obj_numeric WHERE row_id = 1;
+SELECT JSON_OBJECTAGG(float_key, value) AS float_key_object FROM t_obj_numeric WHERE row_id = 1;
+SELECT JSON_OBJECTAGG(decimal_key, value) AS decimal_key_object FROM t_obj_numeric WHERE row_id = 1;
+SELECT JSON_OBJECTAGG(row_id, value) AS integer_key_object, JSON_OBJECTAGG(row_id + 1, value) AS expression_key_object FROM t_obj_numeric WHERE row_id = 1;
+SELECT JSON_OBJECTAGG(row_id, value) AS implicit_object, JSON_OBJECTAGG(CAST(row_id AS CHAR), value) AS explicit_object FROM t_obj_numeric WHERE row_id = 1;
+SELECT JSON_OBJECTAGG(signed_key, value) AS duplicate_numeric FROM (SELECT CAST(1 AS SIGNED) AS signed_key, value FROM t_obj_numeric ORDER BY row_id) AS ordered_numeric;
+SET @json_objectagg_key = '-19';
+PREPARE json_objectagg_signed_key FROM 'SELECT JSON_OBJECTAGG(CAST(? AS SIGNED), value) AS prepared_signed FROM t_obj_numeric WHERE row_id = 1';
+EXECUTE json_objectagg_signed_key USING @json_objectagg_key;
+DEALLOCATE PREPARE json_objectagg_signed_key;
+PREPARE json_objectagg_any_key FROM 'SELECT JSON_OBJECTAGG(?, value) AS prepared_any FROM t_obj_numeric WHERE row_id = 1';
+EXECUTE json_objectagg_any_key USING @json_objectagg_key;
+DEALLOCATE PREPARE json_objectagg_any_key;
+SELECT JSON_OBJECTAGG(CAST(NULL AS SIGNED), value) AS null_key FROM t_obj_numeric WHERE row_id = 1;
+DROP TABLE t_obj_numeric;
+
 # Larger array and object aggregation coverage
 CREATE TABLE t_arr_ext(g INT, pos INT, v INT);
 INSERT INTO t_arr_ext VALUES

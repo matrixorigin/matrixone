@@ -274,10 +274,12 @@ var supportedAggInNewFramework = []FuncNew{
 			}
 			key := inputs[0]
 			val := inputs[1]
-			if key.Oid == types.T_any {
+			switch {
+			case key.Oid == types.T_any:
 				key = types.T_varchar.ToType()
-			}
-			if !key.Oid.IsMySQLString() {
+			case key.IsNumeric() && key.Oid != types.T_bit:
+				key = types.T_varchar.ToType()
+			case !key.Oid.IsMySQLString():
 				return newCheckResultWithFailure(failedAggParametersWrong)
 			}
 			switch val.Oid {

@@ -27,6 +27,35 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestJSONObjectAggNumericKeyResolution(t *testing.T) {
+	ctx := context.Background()
+	valueType := types.T_varchar.ToType()
+
+	for _, keyType := range []types.Type{
+		types.T_int8.ToType(),
+		types.T_int16.ToType(),
+		types.T_int32.ToType(),
+		types.T_int64.ToType(),
+		types.T_uint8.ToType(),
+		types.T_uint16.ToType(),
+		types.T_uint32.ToType(),
+		types.T_uint64.ToType(),
+		types.T_float32.ToType(),
+		types.T_float64.ToType(),
+		types.New(types.T_decimal64, 18, 4),
+		types.New(types.T_decimal128, 38, 6),
+		types.New(types.T_decimal256, 76, 8),
+	} {
+		t.Run(keyType.Oid.String(), func(t *testing.T) {
+			resolved, err := GetFunctionByName(ctx, "json_objectagg", []types.Type{keyType, valueType})
+			require.NoError(t, err)
+			targets, shouldCast := resolved.ShouldDoImplicitTypeCast()
+			require.True(t, shouldCast)
+			require.Equal(t, []types.Type{types.T_varchar.ToType(), valueType}, targets)
+		})
+	}
+}
+
 func TestMySQLNumericAggTypeCheck(t *testing.T) {
 	for _, name := range []string{"var_pop", "var_samp", "stddev_pop", "stddev_samp"} {
 		t.Run(name, func(t *testing.T) {
@@ -194,4 +223,60 @@ func TestMySQLNumericAggTypeCheckRejectsAndHandlesSpecialTypes(t *testing.T) {
 
 	result = mysqlNumericAggTypeCheck([]types.Type{types.T_bool.ToType()})
 	require.Equal(t, failedAggParametersWrong, result.status)
+}
+
+func TestJSONObjectAggKeyTypeBoundaries(t *testing.T) {
+	ctx := context.Background()
+	valueType := types.T_varchar.ToType()
+
+	t.Run("any becomes varchar", func(t *testing.T) {
+		resolved, err := GetFunctionByName(ctx, "json_objectagg", []types.Type{types.T_any.ToType(), valueType})
+		require.NoError(t, err)
+		targets, shouldCast := resolved.ShouldDoImplicitTypeCast()
+		require.True(t, shouldCast)
+		require.Equal(t, []types.Type{valueType, valueType}, targets)
+	})
+
+	for _, keyType := range []types.Type{
+		types.T_char.ToType(),
+		types.T_varchar.ToType(),
+		types.T_text.ToType(),
+		types.T_binary.ToType(),
+		types.T_varbinary.ToType(),
+		types.T_blob.ToType(),
+	} {
+		t.Run("string/"+keyType.Oid.String(), func(t *testing.T) {
+			resolved, err := GetFunctionByName(ctx, "json_objectagg", []types.Type{keyType, valueType})
+			require.NoError(t, err)
+			targets, shouldCast := resolved.ShouldDoImplicitTypeCast()
+			require.True(t, shouldCast)
+			require.Equal(t, keyType, targets[0])
+			require.Equal(t, valueType, targets[1])
+		})
+	}
+
+	for _, keyType := range []types.Type{
+		types.T_bit.ToType(),
+		types.T_year.ToType(),
+		types.T_datetime.ToType(),
+		types.T_json.ToType(),
+		types.T_uuid.ToType(),
+	} {
+		t.Run("rejected/"+keyType.Oid.String(), func(t *testing.T) {
+			_, err := GetFunctionByName(ctx, "json_objectagg", []types.Type{keyType, valueType})
+			require.Error(t, err)
+		})
+	}
+
+	for _, valueType := range []types.Type{
+		types.T_binary.ToType(),
+		types.T_varbinary.ToType(),
+		types.T_blob.ToType(),
+	} {
+		_, err := GetFunctionByName(ctx, "json_objectagg", []types.Type{types.T_int64.ToType(), valueType})
+		require.Error(t, err)
+	}
+
+	_, err := GetFunctionByName(ctx, "json_objectagg", []types.Type{types.T_int64.ToType()})
+	require.Error(t, err)
 }
