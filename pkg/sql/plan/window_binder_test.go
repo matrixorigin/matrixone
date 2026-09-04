@@ -741,6 +741,71 @@ func TestBuildPlanNamedWindows(t *testing.T) {
 	})
 }
 
+func TestBuildPlanDefaultValueWindowFrames(t *testing.T) {
+	tests := []struct {
+		name         string
+		sql          string
+		frameType    planpb.FrameClause_FrameType
+		endType      planpb.FrameBound_BoundType
+		endUnbounded bool
+	}{
+		{
+			name:      "first value uses ordered default frame",
+			sql:       "select first_value(n_nationkey) over (order by n_regionkey) from nation",
+			frameType: planpb.FrameClause_RANGE,
+			endType:   planpb.FrameBound_CURRENT_ROW,
+		},
+		{
+			name:      "last value uses ordered default frame",
+			sql:       "select last_value(n_nationkey) over (order by n_regionkey) from nation",
+			frameType: planpb.FrameClause_RANGE,
+			endType:   planpb.FrameBound_CURRENT_ROW,
+		},
+		{
+			name:      "nth value uses ordered default frame",
+			sql:       "select nth_value(n_nationkey, 2) over (order by n_regionkey) from nation",
+			frameType: planpb.FrameClause_RANGE,
+			endType:   planpb.FrameBound_CURRENT_ROW,
+		},
+		{
+			name:         "lag remains frame independent",
+			sql:          "select lag(n_nationkey) over (order by n_regionkey) from nation",
+			frameType:    planpb.FrameClause_ROWS,
+			endType:      planpb.FrameBound_FOLLOWING,
+			endUnbounded: true,
+		},
+		{
+			name:         "lead remains frame independent",
+			sql:          "select lead(n_nationkey) over (order by n_regionkey) from nation",
+			frameType:    planpb.FrameClause_ROWS,
+			endType:      planpb.FrameBound_FOLLOWING,
+			endUnbounded: true,
+		},
+		{
+			name: "explicit full frame is preserved",
+			sql: `select last_value(n_nationkey) over (
+				order by n_regionkey rows between unbounded preceding and unbounded following
+			) from nation`,
+			frameType:    planpb.FrameClause_ROWS,
+			endType:      planpb.FrameBound_FOLLOWING,
+			endUnbounded: true,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			queryPlan, err := buildNamedWindowPlan(t, tc.sql)
+			require.NoError(t, err)
+			window := firstWindowSpec(t, queryPlan)
+			require.Equal(t, tc.frameType, window.Frame.Type)
+			require.Equal(t, planpb.FrameBound_PRECEDING, window.Frame.Start.Type)
+			require.True(t, window.Frame.Start.UnBounded)
+			require.Equal(t, tc.endType, window.Frame.End.Type)
+			require.Equal(t, tc.endUnbounded, window.Frame.End.UnBounded)
+		})
+	}
+}
+
 func TestPreparedNamedWindowParameterMetadata(t *testing.T) {
 	tests := []struct {
 		name string
