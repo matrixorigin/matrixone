@@ -4874,7 +4874,14 @@ func bindFuncExprImplByPlanExpr(
 	var argsCastType []types.Type
 
 	// get function definition
-	fGet, err := function.GetFunctionByName(ctx, name, argsType)
+	lookupTypes := argsType
+	if name == "json_quote" && len(args) == 1 && args[0].GetP() != nil {
+		// ParamRef, unlike a real TEXT column, is an unresolved prepared marker.
+		// Resolve it through JSON_QUOTE's bounded parameter contract so the
+		// input cast and result metadata remain safe and stable at PREPARE time.
+		lookupTypes = []types.Type{types.T_any.ToType()}
+	}
+	fGet, err := function.GetFunctionByName(ctx, name, lookupTypes)
 	if err != nil {
 		if name == "between" {
 			leftFn, err := BindFuncExprImplByPlanExpr(ctx, ">=", []*plan.Expr{DeepCopyExpr(args[0]), args[1]})

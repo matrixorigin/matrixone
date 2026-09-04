@@ -31,6 +31,8 @@ import (
 
 func jsonQuoteTypeMatch(overloads []overload, inputs []types.Type) checkResult {
 	if len(inputs) == 1 && inputs[0].Oid == types.T_any {
+		// T_any is the unresolved prepared-parameter marker. Give only that
+		// representation a bounded cast; ordinary TEXT keeps its unknown bound.
 		parameterType := types.NewWithCharset(
 			types.T_varchar, types.MaxVarcharLen/utf8.UTFMax, 0, types.CharsetUTF8)
 		return newCheckResultWithCast(0, []types.Type{parameterType})
@@ -46,15 +48,7 @@ func jsonQuoteReturnType(parameters []types.Type) types.Type {
 		return result
 	}
 
-	source := parameters[0]
-	if source.Oid == types.T_text && source.Width == 0 {
-		// Prepared markers are represented as unbounded TEXT while the statement
-		// is bound. Use the protocol's maximum VARCHAR character capacity so
-		// JSON_QUOTE(?) exposes stable MySQL-compatible result metadata.
-		source = types.NewWithCharset(
-			types.T_varchar, types.MaxVarcharLen/utf8.UTFMax, 0, source.Charset)
-	}
-	bound := declaredTextCharacterBound(source)
+	bound := declaredTextCharacterBound(parameters[0])
 	bound = addStringResultBounds(multiplyStringResultBound(bound, 6), stringResultBound{bytes: 2})
 	if bound.unknown {
 		result := types.T_text.ToType()

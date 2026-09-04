@@ -66,4 +66,20 @@ select quoted, hex(quoted), char_length(quoted) from json_quote_ctas;
 ➤ quoted[12,20,0]  ¦  hex(quoted)[12,65535,0]  ¦  char_length(quoted)[-5,64,0]  𝄀
 "abc"  ¦  2261626322  ¦  5
 drop table json_quote_ctas;
+drop table if exists json_quote_text_ctas;
+drop table if exists json_quote_text_source;
+create table json_quote_text_source (v text);
+insert into json_quote_text_source values (repeat(char(1), 65535));
+select length(v), length(json_quote(v)), hex(left(json_quote(v), 7)), hex(right(json_quote(v), 7)) from json_quote_text_source;
+➤ length(v)[-5,64,0]  ¦  length(json_quote(v))[-5,64,0]  ¦  hex(left(json_quote(v), 7))[12,65535,0]  ¦  hex(right(json_quote(v), 7))[12,65535,0]  𝄀
+65535  ¦  393212  ¦  225C7530303031  ¦  5C753030303122
+create table json_quote_text_ctas as select json_quote(v) as quoted from json_quote_text_source;
+select data_type, character_maximum_length from information_schema.columns where table_schema = database() and table_name = 'json_quote_text_ctas' and column_name = 'quoted';
+➤ data_type[12,65535,0]  ¦  character_maximum_length[-5,64,0]  𝄀
+text  ¦  2147483647
+select length(quoted), hex(left(quoted, 7)), hex(right(quoted, 7)) from json_quote_text_ctas;
+➤ length(quoted)[-5,64,0]  ¦  hex(left(quoted, 7))[12,65535,0]  ¦  hex(right(quoted, 7))[12,65535,0]  𝄀
+393212  ¦  225C7530303031  ¦  5C753030303122
+drop table json_quote_text_ctas;
+drop table json_quote_text_source;
 drop table t1;

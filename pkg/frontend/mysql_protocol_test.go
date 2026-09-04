@@ -2738,6 +2738,7 @@ func TestJsonQuoteBinaryProtocolMetadata(t *testing.T) {
 		resultIndex int
 		typ         defines.MysqlType
 		length      uint32
+		compilerCtx plan.CompilerContext
 	}{
 		{
 			name:        "literal",
@@ -2755,10 +2756,24 @@ func TestJsonQuoteBinaryProtocolMetadata(t *testing.T) {
 			typ:         defines.MYSQL_TYPE_MEDIUM_BLOB,
 			length:      393200,
 		},
+		{
+			name:        "text column",
+			sql:         "select json_quote(rel_createsql) as result from mo_catalog.mo_tables",
+			packetCount: 3,
+			resultIndex: 1,
+			typ:         defines.MYSQL_TYPE_LONG_BLOB,
+			length:      uint32(types.MaxLongTextLen),
+			compilerCtx: plan.NewMockCompilerContext(false),
+		},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			conn := &prepareResponseCaptureConn{}
-			proto, proc, prepareStmt := newBinaryPrepareProtocolTestCaseWithConn(t, test.sql, conn)
+			compilerCtx := test.compilerCtx
+			if compilerCtx == nil {
+				compilerCtx = plan.NewEmptyCompilerContext()
+			}
+			proto, proc, prepareStmt := newBinaryPrepareProtocolTestCaseWithConnAndContext(
+				t, test.sql, conn, compilerCtx)
 			proto.capability &^= CLIENT_DEPRECATE_EOF
 			defer func() {
 				proc.SetPrepareParams(nil)
@@ -2939,6 +2954,12 @@ func newBinaryPrepareProtocolTestCase(t *testing.T, sql string) (*MysqlProtocolI
 }
 
 func newBinaryPrepareProtocolTestCaseWithConn(t *testing.T, sql string, conn net.Conn) (*MysqlProtocolImpl, *process.Process, *PrepareStmt) {
+	return newBinaryPrepareProtocolTestCaseWithConnAndContext(t, sql, conn, plan.NewEmptyCompilerContext())
+}
+
+func newBinaryPrepareProtocolTestCaseWithConnAndContext(
+	t *testing.T, sql string, conn net.Conn, compCtx plan.CompilerContext,
+) (*MysqlProtocolImpl, *process.Process, *PrepareStmt) {
 	t.Helper()
 	ctx := context.TODO()
 	sv, err := getSystemVariables("test/system_vars_config.toml")
@@ -2960,7 +2981,6 @@ func newBinaryPrepareProtocolTestCaseWithConn(t *testing.T, sql string, conn net
 	st := tree.NewPrepareString(tree.Identifier(getPrepareStmtName(1)), sql)
 	stmts, err := mysql.Parse(ctx, st.Sql, 1)
 	require.NoError(t, err)
-	compCtx := plan.NewEmptyCompilerContext()
 	preparePlan, err := buildPlan(ctx, nil, compCtx, st)
 	require.NoError(t, err)
 

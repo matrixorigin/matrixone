@@ -3546,11 +3546,11 @@ func TestJsonQuoteReturnType(t *testing.T) {
 		types.NewWithCharset(types.T_varchar, types.MaxVarcharLen/utf8.UTFMax, 0, types.CharsetUTF8),
 	}, targets)
 
-	boundPrepared, err := GetFunctionByName(proc.Ctx, "json_quote", []types.Type{
+	unboundedText, err := GetFunctionByName(proc.Ctx, "json_quote", []types.Type{
 		types.NewWithCharset(types.T_text, 0, 0, types.CharsetUTF8),
 	})
 	require.NoError(t, err)
-	require.Equal(t, types.NewWithCharset(types.T_text, 393200, 0, types.CharsetUTF8MB4Bin), boundPrepared.GetReturnType())
+	require.Equal(t, types.NewWithCharset(types.T_text, types.MaxLongTextLen, 0, types.CharsetUTF8MB4Bin), unboundedText.GetReturnType())
 }
 
 func TestJsonQuote(t *testing.T) {
