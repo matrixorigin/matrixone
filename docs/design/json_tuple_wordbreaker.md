@@ -515,8 +515,8 @@ the watermark against the snapshot lowered by a delay:
     covered  ⟺  watermark >= snapshot - delay
 
 `delay` is the `fulltext_index_scan_watermark_delay` session variable (seconds),
-default `DefaultSyncTaskInterval + DefaultIndexFlushWatermarkInterval` (the ISCP
-poll tick plus the index watermark-flush interval). `QueryBuilder.indexCoversSnapshot`
+default `2 * (DefaultSyncTaskInterval + DefaultIndexFlushWatermarkInterval)` (twice
+the ISCP poll tick plus the index watermark-flush interval). `QueryBuilder.indexCoversSnapshot`
 reads the variable and lowers the snapshot before calling `CoversSnapshot`, which
 does the `watermark >= (lowered snapshot)` comparison. `delay = 0` restores the
 strict gate; a larger value tolerates a longer maintenance lag. The original

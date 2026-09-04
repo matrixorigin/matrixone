@@ -16,6 +16,9 @@ execute wait_ftj;
 ➤ ready[-7,1,0]  𝄀
 1
 deallocate prepare wait_ftj;
+select unix_timestamp(now(6)) - cast(substring_index(watermark, '-', 1) as unsigned)/1000000000 < @@fulltext_index_scan_watermark_delay as ready from mo_catalog.mo_iscp_log where job_name = 'index_ftj' and drop_at is null and table_id in (select rel_id from mo_catalog.mo_tables where reldatabase = database() and relname = 't') limit 1;
+➤ ready[-7,1,0]  𝄀
+1
 explain select id from t where json_extract_string(j,'$.foo') = 'needle';
 -- @regex("Table Function on fulltext2_search", true)
 ➤ TP QUERY PLAN[12,-1,0]  𝄀

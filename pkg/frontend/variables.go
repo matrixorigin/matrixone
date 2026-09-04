@@ -3878,14 +3878,14 @@ var gSysVarsDefs = map[string]SystemVariable{
 		Default:           int8(0),
 	},
 	// max watermark lag (seconds) allowed for the fulltext2 json_extract index
-	// probe; default = ISCP sync tick + index-flush interval.
+	// probe; default = 2 * (ISCP sync tick + index-flush interval).
 	"fulltext_index_scan_watermark_delay": {
 		Name:              "fulltext_index_scan_watermark_delay",
 		Scope:             ScopeBoth,
 		Dynamic:           true,
 		SetVarHintApplies: false,
 		Type:              InitSystemVariableIntType("fulltext_index_scan_watermark_delay", 0, 86400, false),
-		Default:           int64((iscp.DefaultSyncTaskInterval + iscp.DefaultIndexFlushWatermarkInterval) / time.Second),
+		Default:           int64(2 * (iscp.DefaultSyncTaskInterval + iscp.DefaultIndexFlushWatermarkInterval) / time.Second),
 	},
 	"ft_relevancy_algorithm": {
 		Name:              fulltext.FulltextRelevancyAlgo,

@@ -1,21 +1,8 @@
--- Regression for #27926: the fulltext2 json_extract index probe must actually
--- FIRE on an ordinary CURRENT read. Before the fix the coverage gate could never
--- open for a current read against an always-async json index, so the plan
--- silently fell back to Table Scan + Filter:
---   (1) the mo_iscp_log coverage lookup ran under the canceled planning context
---       (proc.Ctx) and errored with "context canceled" -> fail-closed; and
---   (2) it demanded the watermark reach wall-clock now, which an async watermark
---       (it chases the clock with a built-in lag) can never satisfy.
--- The probe is a superset prefilter with the original predicate retained, so the
--- rows were always correct -- which is exactly why the equivalence-only test in
--- cases/fulltext2/fulltext2_json_probe.sql never caught this. This case asserts
--- the PLAN.
---
--- The index is created FIRST and rows are written AFTER (the issue's exact
--- scenario), so the writes travel the ISCP CDC tail. fulltext2 is always-async,
--- so that tail is polled before the plan is asserted (a fixed sleep would be
--- flaky). Once the tail lands the watermark is live and within the coverage
--- staleness window, so the probe fires.
+-- #27926: assert the fulltext2 json_extract probe appears in the plan of a
+-- current read. Index created first, rows written after (via the CDC tail).
+-- The plan is asserted only after the ISCP watermark is within
+-- fulltext_index_scan_watermark_delay of now, so coverage holds deterministically
+-- at the default delay regardless of cross-CN watermark lag.
 set experimental_fulltext2_index = 1;
 drop database if exists ft2_json_probe_plan;
 create database ft2_json_probe_plan;
@@ -29,16 +16,20 @@ insert into t values
  (3, '{"foo":"needle"}'),
  (4, '{"n":42}');
 
--- Wait for the CDC tail so the ISCP watermark is live and non-empty (coverage
--- requires a live job with a watermark). The tail chunk and the watermark are
--- written in the same ISCP transaction, so a visible cdc_tail chunk proves the
--- watermark has advanced.
+-- Wait for the CDC tail so a live job with a watermark exists. The tail chunk and
+-- the watermark are written in the same ISCP transaction, so a visible cdc_tail
+-- chunk proves the watermark has advanced.
 set @ftj = (select index_table_name from mo_catalog.mo_indexes where name = 'ftj' and algo_table_type = 'ftv2_index' and table_id in (select rel_id from mo_catalog.mo_tables where reldatabase = database() and relname = 't') limit 1);
 set @wait_ftj_sql = concat('select coalesce(max(chunk_id), -1) >= 0 as ready from `', database(), '`.`', @ftj, '` where index_id = ''cdc_tail'' and tag = 1');
 prepare wait_ftj from @wait_ftj_sql;
 -- @wait_expect(2, 120)
 execute wait_ftj;
 deallocate prepare wait_ftj;
+
+-- Wait until the watermark is within the current delay of now, so the coverage
+-- gate is satisfied and the probe fires deterministically.
+-- @wait_expect(2, 120)
+select unix_timestamp(now(6)) - cast(substring_index(watermark, '-', 1) as unsigned)/1000000000 < @@fulltext_index_scan_watermark_delay as ready from mo_catalog.mo_iscp_log where job_name = 'index_ftj' and drop_at is null and table_id in (select rel_id from mo_catalog.mo_tables where reldatabase = database() and relname = 't') limit 1;
 
 -- The plan MUST now contain the fulltext2_search probe (the fix). The original
 -- json_extract predicate stays above it as a retained Filter Cond.
