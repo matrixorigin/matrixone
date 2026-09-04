@@ -12050,7 +12050,11 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, t
 				}
 			}
 			if currentAccountID == catalog.System_Account && dbName == catalog.MO_CATALOG && tableName == catalog.MO_TABLES {
-				if subFilter := builder.currentSubscriptionMoTablesFilter(); subFilter != nil {
+				subFilter, filterErr := builder.currentSubscriptionMoTablesFilter()
+				if filterErr != nil {
+					return 0, filterErr
+				}
+				if subFilter != nil {
 					ctx.binder = NewWhereBinder(builder, ctx)
 					publicationFilterExprs, err := splitAndBindCondition(subFilter, NoAlias, ctx)
 					if err != nil {
@@ -12087,7 +12091,11 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, t
 					builder.qry.Nodes[nodeID].FilterList = accountFilterExprs
 				} else if dbName == catalog.MO_CATALOG && tableName == catalog.MO_TABLES {
 					motablesFilter := util.BuildMoTablesFilter(uint64(currentAccountID))
-					if subFilter := builder.currentSubscriptionMoTablesFilter(); subFilter != nil {
+					subFilter, filterErr := builder.currentSubscriptionMoTablesFilter()
+					if filterErr != nil {
+						return 0, filterErr
+					}
+					if subFilter != nil {
 						motablesFilter = tree.NewAndExpr(motablesFilter, subFilter)
 					}
 					ctx.binder = NewWhereBinder(builder, ctx)

@@ -2414,12 +2414,17 @@ func genPubTablesStr(ctx context.Context, bh BackgroundExec, dbName string, tabl
 	}
 
 	tablesNames := make([]string, 0, len(table))
+	seenTables := make(map[string]struct{}, len(table))
 	for _, tableName := range table {
 		tblName := string(tableName.ObjectName)
 		if !tablesInDb[tblName] {
 			err = moerr.NewInternalErrorf(ctx, "table '%s' not exists", tblName)
 			return
 		}
+		if _, duplicate := seenTables[tblName]; duplicate {
+			continue
+		}
+		seenTables[tblName] = struct{}{}
 		tablesNames = append(tablesNames, tblName)
 	}
 	slices.Sort(tablesNames)

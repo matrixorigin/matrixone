@@ -630,6 +630,96 @@ func TestSubscriptionStatisticsBudgetDoesNotLeakAcrossBuilds(t *testing.T) {
 		"the statement-wide budget must be fresh for each independent build")
 }
 
+func TestSubscriptionStatisticsPublicationTableBudget(t *testing.T) {
+	build := func(t *testing.T, tables, sql string) (*Plan, error, *subscriptionMetadataTestContext) {
+		t.Helper()
+		_, ctx := newSubscriptionMetadataTestOptimizer()
+		ctx.metadata = []*SubscriptionMetadata{{Meta: &SubscriptionMeta{
+			AccountId: 0, DbName: "tpch", SubName: "table_budget", Tables: tables,
+		}, AllTablesVisible: true}}
+		statements, err := mysql.Parse(context.Background(), sql, 1)
+		require.NoError(t, err)
+		require.Len(t, statements, 1)
+		defer statements[0].Free()
+		plan, err := BuildPlan(ctx, statements[0], false)
+		return plan, err, ctx
+	}
+
+	t.Run("deduplicates persisted table names before expansion", func(t *testing.T) {
+		plan, err, ctx := build(t,
+			strings.TrimSuffix(strings.Repeat("nation,", maxSubscriptionStatisticsPublicationTableEntries+1), ","),
+			"select count(*) from information_schema.statistics")
+		require.NoError(t, err)
+		require.Equal(t, 1, ctx.publisherBindCount)
+		require.Equal(t, map[string]int{"table_budget": 1},
+			statisticsPublisherScanCounts(plan.GetQuery()))
+	})
+
+	t.Run("rejects too many explicit table entries before binding", func(t *testing.T) {
+		_, err, ctx := build(t,
+			subscriptionMetadataTestTableList(maxSubscriptionStatisticsPublicationTableEntries+1),
+			"select count(*) from information_schema.statistics")
+		require.ErrorContains(t, err, "publication table expansion exceeds planning budget of 4096 table entries")
+		require.Zero(t, ctx.publisherBindCount)
+	})
+
+	t.Run("charges every statistics occurrence", func(t *testing.T) {
+		_, err, ctx := build(t,
+			subscriptionMetadataTestTableList(1025),
+			"select count(*) from information_schema.statistics a "+
+				"join information_schema.statistics b on a.table_name = b.table_name "+
+				"join information_schema.statistics c on b.table_name = c.table_name "+
+				"join information_schema.statistics d on c.table_name = d.table_name")
+		require.ErrorContains(t, err, "publication table expansion exceeds planning budget of 4096 table entries")
+		require.Equal(t, 3, ctx.publisherBindCount,
+			"the over-budget occurrence must fail before its publisher branch is bound")
+	})
+
+	t.Run("rejects oversized encoded table names before binding", func(t *testing.T) {
+		_, err, ctx := build(t,
+			strings.Repeat("t", maxSubscriptionStatisticsPublicationTableLiteralBytes),
+			"select count(*) from information_schema.statistics")
+		require.ErrorContains(t, err, "publication table expansion exceeds planning budget of 1048576 encoded table-name bytes")
+		require.Zero(t, ctx.publisherBindCount)
+	})
+}
+
+func TestSubscriptionPublicationTableScopeIsDeterministicAndCancelable(t *testing.T) {
+	scope, err := subscriptionPublicationTableScope(" beta,alpha,beta, alpha ", 1, nil)
+	require.NoError(t, err)
+	require.Equal(t, []string{"alpha", "beta"}, scope.tableNames)
+	require.Equal(t, len("alpha")+2+len("beta")+2, scope.literalBytes)
+	caseInsensitive, err := subscriptionPublicationTableScope("Table,table", 1, nil)
+	require.NoError(t, err)
+	require.Equal(t, []string{"Table"}, caseInsensitive.tableNames)
+	caseSensitive, err := subscriptionPublicationTableScope("Table,table", 0, nil)
+	require.NoError(t, err)
+	require.Equal(t, []string{"Table", "table"}, caseSensitive.tableNames)
+
+	wantErr := errors.New("stop publication table list processing")
+	checks := 0
+	_, err = subscriptionPublicationTableScope("t1,t2,t3,t4", 1, func() error {
+		checks++
+		if checks == 3 {
+			return wantErr
+		}
+		return nil
+	})
+	require.ErrorIs(t, err, wantErr)
+	require.Equal(t, 3, checks)
+}
+
+func subscriptionMetadataTestTableList(count int) string {
+	var tables strings.Builder
+	for i := 0; i < count; i++ {
+		if i > 0 {
+			tables.WriteByte(',')
+		}
+		fmt.Fprintf(&tables, "t_%d", i)
+	}
+	return tables.String()
+}
+
 func TestSubscriptionStatisticsRejectsPublisherExpansionOverBudget(t *testing.T) {
 	t.Run("single occurrence", func(t *testing.T) {
 		_, ctx := newSubscriptionMetadataTestOptimizer()
@@ -913,14 +1003,14 @@ func TestSubscriptionMoTablesFilterIntersectsPublicationAndSubscriberRBAC(t *tes
 		Meta: meta, VisibleTableIDs: []uint64{42, 7, 42, 0},
 	}), dialect.MYSQL)
 	require.Contains(t, partial, "reldatabase = publisher_db")
-	require.Contains(t, partial, "relname in (published_t, other_t)")
+	require.Contains(t, partial, "relname in (other_t, published_t)")
 	require.Contains(t, partial, "rel_logical_id in (7, 42)")
 
 	all := tree.String(subscriptionMoTablesFilter(&SubscriptionMetadata{
 		Meta: meta, AllTablesVisible: true,
 	}), dialect.MYSQL)
 	require.NotContains(t, all, "rel_logical_id")
-	require.Contains(t, all, "relname in (published_t, other_t)")
+	require.Contains(t, all, "relname in (other_t, published_t)")
 
 	none := tree.String(subscriptionMoTablesFilter(&SubscriptionMetadata{Meta: meta}), dialect.MYSQL)
 	require.Contains(t, none, "reldatabase = __mo_invalid_subscription_scope__")
@@ -941,9 +1031,11 @@ func TestSubscriptionMoTablesFilterIntersectsPublicationAndSubscriberRBAC(t *tes
 	_, ctx := newSubscriptionMetadataTestOptimizer()
 	ctx.SetQueryingSubscription(meta)
 	builder := NewQueryBuilder(plan.Query_SELECT, ctx, false, true)
-	direct := tree.String(builder.currentSubscriptionMoTablesFilter(), dialect.MYSQL)
+	directFilter, err := builder.currentSubscriptionMoTablesFilter()
+	require.NoError(t, err)
+	direct := tree.String(directFilter, dialect.MYSQL)
 	require.Contains(t, direct, "reldatabase = publisher_db")
-	require.Contains(t, direct, "relname in (published_t, other_t)")
+	require.Contains(t, direct, "relname in (other_t, published_t)")
 	require.NotContains(t, direct, "rel_logical_id")
 }
 

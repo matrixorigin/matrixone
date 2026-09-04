@@ -368,6 +368,13 @@ type QueryBuilder struct {
 	// occurrence binds either its local view or any publisher view, so an
 	// over-budget statement cannot produce a partial metadata plan.
 	subscriptionStatisticsPublisherBranches int
+	// subscriptionStatisticsPublicationTableEntries and
+	// subscriptionStatisticsPublicationTableLiteralBytes account for the
+	// per-publication IN-list literals that are expanded inside each publisher
+	// branch. Branch count alone does not bound a publication containing a large
+	// explicit table list.
+	subscriptionStatisticsPublicationTableEntries      int
+	subscriptionStatisticsPublicationTableLiteralBytes int
 	// subscriptionStatisticsMetadata caches the complete, bounded visible set
 	// per requested snapshot for this QueryBuilder. Sibling STATISTICS
 	// occurrences reuse it instead of repeating catalog and RBAC enumeration.

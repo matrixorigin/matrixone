@@ -4,8 +4,8 @@
 - Owning issue: [#27759](https://github.com/matrixorigin/matrixone/issues/27759)
 - Implementation PR: [#27778](https://github.com/matrixorigin/matrixone/pull/27778)
 - Related local-visibility design: [Information Schema Metadata Visibility and Active-Role Closure](CLAUDE_INFORMATION_SCHEMA_METADATA_VISIBILITY.md)
-- Version: 5
-- Last updated: 2026-09-02
+- Version: 6
+- Last updated: 2026-09-04
 
 ## 1. Problem and evidence
 
@@ -338,6 +338,16 @@ budget for the current UNION implementation:
   active catalog candidates exceed the remaining budget even if subscriber
   RBAC would later hide enough candidates; it never selects an arbitrary
   visible prefix;
+- explicit publication table lists have a second statement-wide admission
+  budget: at most 4,096 distinct table literals and at most 1 MiB of encoded
+  table-name payload across all publisher branches. The budget is charged for
+  every logical `STATISTICS` occurrence, before its local or publisher view is
+  bound. This bounds both the `IN (...)` AST nodes and their string payload;
+  a request above either limit fails planning rather than emitting a partial
+  metadata source;
+- CREATE/ALTER publication canonicalizes an explicit table list by sorting and
+  removing duplicate table names. The planner repeats this normalization for
+  old persisted rows, so historical duplicate lists cannot amplify a plan;
 - only after that candidate-count admission succeeds, legacy rows missing
   publisher IDs perform `mo_account` identity resolution. Distinct publisher
   names are sorted and queried in batches of at most 64, each with an
@@ -386,7 +396,9 @@ different snapshots do not share results or reset the remaining statement
 budget. Pre-canceled and mid-expansion tests preserve the cancellation cause.
 Further counterexamples verify that rejected/duplicate metadata does not
 consume the budget, identifier case modes are applied at the exact boundary,
-and the budget does not leak across independent or prepared plan builds. CI
+and the budget does not leak across independent or prepared plan builds. Table
+scope counterexamples verify duplicate elimination, entry and byte limits, and
+multi-occurrence charging before publisher binding. CI
 executes the functional publication/subscription matrix against real catalogs;
 timing remains observed through existing statement and subscription duration
 metrics.
@@ -492,6 +504,8 @@ without introducing cross-statement freshness or invalidation state.
 | Same-snapshot occurrences reuse enumeration; different snapshots remain isolated | snapshot-keyed planner cache counterexample |
 | The 257th publisher branch fails before publisher binding | over-budget planner counterexample |
 | Rejected and duplicate metadata does not consume the branch budget | exact-boundary planner counterexample |
+| Duplicate publication table names are persisted and expanded once | frontend normalization and planner scope tests |
+| Explicit publication table entries and literal bytes are statement-bounded | entry-count, byte-count, and multi-occurrence planner counterexamples |
 | Identifier modes apply consistently at the exact branch boundary | mode 0/1/2 planner counterexamples |
 | Independent builds receive independent statement-wide budgets | repeated-build planner counterexample |
 | Cancellation stops row decoding, visibility enumeration, and publisher binding | deterministic frontend and planner counterexamples |
@@ -541,6 +555,10 @@ branch/cardinality observability before raising the budget.
   publisher view expansions. Sixty-four active subscriptions across four
   `STATISTICS` occurrences is the validated boundary; the 257th branch fails
   closed without returning partial metadata.
+- Explicit publication table lists have independent statement-wide limits of
+  4,096 distinct table literals and 1 MiB of encoded literal payload. The
+  limits are charged per logical `STATISTICS` occurrence before view binding;
+  duplicate persisted table names are normalized and charged once per branch.
 - Provider enumeration is admitted before materialization with an active
   catalog-candidate `LIMIT remaining+1`. Overflow fails closed before RBAC SQL;
   successful results are cached only for the same snapshot in the same plan
@@ -560,7 +578,7 @@ To be completed by an authorized reviewer:
 ```text
 Change scope: cross-account subscription index metadata routing
 Trigger: authorization/tenant boundary; account-wide semantics; snapshot and cache lifecycle; planner amplification
-Design: docs/design/CLAUDE_INFORMATION_SCHEMA_SUBSCRIPTION_METADATA_ROUTING.md, version 5, <reviewed commit>
+Design: docs/design/CLAUDE_INFORMATION_SCHEMA_SUBSCRIPTION_METADATA_ROUTING.md, version 6, <reviewed commit>
 Blocking findings: <none or findings>
 Decision log: <accepted tradeoffs and resolved questions>
 Decision: PASS | REQUEST_CHANGES

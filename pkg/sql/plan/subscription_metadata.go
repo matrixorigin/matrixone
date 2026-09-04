@@ -34,6 +34,14 @@ const (
 	// statement-wide and counts only publisher views; the local view is always
 	// retained. Exceeding it fails planning instead of truncating metadata.
 	maxSubscriptionStatisticsPublisherBranches = 256
+	// maxSubscriptionStatisticsPublicationTableEntries bounds the total number
+	// of explicit publication table literals expanded by one statement. It is
+	// intentionally statement-wide because the same visible subscriptions are
+	// expanded again for every logical STATISTICS occurrence.
+	maxSubscriptionStatisticsPublicationTableEntries = 4096
+	// maxSubscriptionStatisticsPublicationTableLiteralBytes bounds the encoded
+	// string-literal payload that accompanies the explicit table entries.
+	maxSubscriptionStatisticsPublicationTableLiteralBytes = 1 << 20
 )
 
 // PreparedPlanDependsOnSubscriptionMetadata reports whether a prepared plan
@@ -128,10 +136,9 @@ func (builder *QueryBuilder) visibleSubscriptionMetadata(
 	}
 	visible, cached := builder.subscriptionStatisticsMetadata[snapshotKey]
 	if cached {
-		if len(visible) > remaining {
-			return nil, subscriptionStatisticsBudgetError(builder.GetContext())
+		if err := builder.reserveSubscriptionStatisticsBudget(visible); err != nil {
+			return nil, err
 		}
-		builder.subscriptionStatisticsPublisherBranches += len(visible)
 		return visible, nil
 	}
 
@@ -184,9 +191,54 @@ func (builder *QueryBuilder) visibleSubscriptionMetadata(
 	if builder.subscriptionStatisticsMetadata == nil {
 		builder.subscriptionStatisticsMetadata = make(map[string][]*SubscriptionMetadata)
 	}
+	if err := builder.reserveSubscriptionStatisticsBudget(visible); err != nil {
+		return nil, err
+	}
 	builder.subscriptionStatisticsMetadata[snapshotKey] = visible
-	builder.subscriptionStatisticsPublisherBranches += len(visible)
 	return visible, nil
+}
+
+// reserveSubscriptionStatisticsBudget admits one logical STATISTICS
+// occurrence before any publisher view is bound. Alongside publisher branches,
+// it accounts for explicit publication-table literals, which each become a
+// plan expression in the publisher mo_tables filter.
+func (builder *QueryBuilder) reserveSubscriptionStatisticsBudget(
+	subscriptions []*SubscriptionMetadata,
+) error {
+	entries := 0
+	literalBytes := 0
+	for _, subscription := range subscriptions {
+		if err := builder.checkPlanningCanceled(); err != nil {
+			return err
+		}
+		if subscription == nil || subscription.Meta == nil {
+			continue
+		}
+		scope, err := subscriptionPublicationTableScope(
+			subscription.Meta.Tables, builder.compCtx.GetLowerCaseTableNames(), builder.checkPlanningCanceled,
+		)
+		if err != nil {
+			return err
+		}
+		entries += len(scope.tableNames)
+		literalBytes += scope.literalBytes
+	}
+	if builder.subscriptionStatisticsPublisherBranches+len(subscriptions) >
+		maxSubscriptionStatisticsPublisherBranches {
+		return subscriptionStatisticsBudgetError(builder.GetContext())
+	}
+	if builder.subscriptionStatisticsPublicationTableEntries+entries >
+		maxSubscriptionStatisticsPublicationTableEntries {
+		return subscriptionStatisticsPublicationTableEntriesBudgetError(builder.GetContext())
+	}
+	if builder.subscriptionStatisticsPublicationTableLiteralBytes+literalBytes >
+		maxSubscriptionStatisticsPublicationTableLiteralBytes {
+		return subscriptionStatisticsPublicationTableBytesBudgetError(builder.GetContext())
+	}
+	builder.subscriptionStatisticsPublisherBranches += len(subscriptions)
+	builder.subscriptionStatisticsPublicationTableEntries += entries
+	builder.subscriptionStatisticsPublicationTableLiteralBytes += literalBytes
+	return nil
 }
 
 func subscriptionMetadataSnapshotKey(snapshot *Snapshot) (string, error) {
@@ -205,6 +257,22 @@ func subscriptionStatisticsBudgetError(ctx context.Context) error {
 		ctx,
 		"information_schema.statistics publisher expansion exceeds planning budget of %d branches; reduce visible subscriptions or STATISTICS occurrences",
 		maxSubscriptionStatisticsPublisherBranches,
+	)
+}
+
+func subscriptionStatisticsPublicationTableEntriesBudgetError(ctx context.Context) error {
+	return moerr.NewInvalidInputf(
+		ctx,
+		"information_schema.statistics publication table expansion exceeds planning budget of %d table entries; reduce published tables or STATISTICS occurrences",
+		maxSubscriptionStatisticsPublicationTableEntries,
+	)
+}
+
+func subscriptionStatisticsPublicationTableBytesBudgetError(ctx context.Context) error {
+	return moerr.NewInvalidInputf(
+		ctx,
+		"information_schema.statistics publication table expansion exceeds planning budget of %d encoded table-name bytes; reduce published tables or STATISTICS occurrences",
+		maxSubscriptionStatisticsPublicationTableLiteralBytes,
 	)
 }
 
@@ -381,11 +449,20 @@ func rewriteSubscriptionStatisticsOutput(
 }
 
 func subscriptionMoTablesFilter(subscription *SubscriptionMetadata) tree.Expr {
+	filter, _ := subscriptionMoTablesFilterWithCheck(subscription, 1, nil)
+	return filter
+}
+
+func subscriptionMoTablesFilterWithCheck(
+	subscription *SubscriptionMetadata,
+	lowerCaseTableNames int64,
+	checkCanceled func() error,
+) (tree.Expr, error) {
 	if subscription == nil {
-		return nil
+		return nil, nil
 	}
 	if !validSubscriptionPublicationScope(subscription.Meta) {
-		return falseSubscriptionMetadataFilter()
+		return falseSubscriptionMetadataFilter(), nil
 	}
 	meta := subscription.Meta
 	var filter tree.Expr = tree.NewComparisonExpr(
@@ -394,16 +471,18 @@ func subscriptionMoTablesFilter(subscription *SubscriptionMetadata) tree.Expr {
 		tree.NewNumVal(meta.DbName, meta.DbName, false, tree.P_char),
 	)
 	if meta.Tables != "*" {
-		tableNames := strings.Split(meta.Tables, ",")
-		values := make(tree.Exprs, 0, len(tableNames))
-		for _, tableName := range tableNames {
-			tableName = strings.TrimSpace(tableName)
-			if tableName != "" {
-				values = append(values, tree.NewNumVal(tableName, tableName, false, tree.P_char))
-			}
+		scope, err := subscriptionPublicationTableScope(
+			meta.Tables, lowerCaseTableNames, checkCanceled,
+		)
+		if err != nil {
+			return nil, err
 		}
-		if len(values) == 0 {
-			return falseSubscriptionMetadataFilter()
+		if len(scope.tableNames) == 0 {
+			return falseSubscriptionMetadataFilter(), nil
+		}
+		values := make(tree.Exprs, 0, len(scope.tableNames))
+		for _, tableName := range scope.tableNames {
+			values = append(values, tree.NewNumVal(tableName, tableName, false, tree.P_char))
 		}
 		filter = tree.NewAndExpr(filter, tree.NewComparisonExpr(
 			tree.IN,
@@ -413,7 +492,7 @@ func subscriptionMoTablesFilter(subscription *SubscriptionMetadata) tree.Expr {
 	}
 
 	if subscription.AllTablesVisible {
-		return filter
+		return filter, nil
 	}
 	visibleIDs := append([]uint64(nil), subscription.VisibleTableIDs...)
 	sort.Slice(visibleIDs, func(i, j int) bool { return visibleIDs[i] < visibleIDs[j] })
@@ -429,13 +508,57 @@ func subscriptionMoTablesFilter(subscription *SubscriptionMetadata) tree.Expr {
 		))
 	}
 	if len(values) == 0 {
-		return falseSubscriptionMetadataFilter()
+		return falseSubscriptionMetadataFilter(), nil
 	}
 	return tree.NewAndExpr(filter, tree.NewComparisonExpr(
 		tree.IN,
 		tree.NewUnresolvedColName("rel_logical_id"),
 		tree.NewTuple(values),
-	))
+	)), nil
+}
+
+type subscriptionPublicationScope struct {
+	tableNames   []string
+	literalBytes int
+}
+
+// subscriptionPublicationTableScope normalizes persisted explicit publication
+// lists before they are expanded into AST literals. Old catalog rows can still
+// contain duplicate entries, so this must not rely solely on CREATE/ALTER
+// normalization. The literal-byte cost includes SQL quoting and escaping.
+func subscriptionPublicationTableScope(
+	tables string,
+	lowerCaseTableNames int64,
+	checkCanceled func() error,
+) (subscriptionPublicationScope, error) {
+	if tables == "*" {
+		return subscriptionPublicationScope{}, nil
+	}
+	scope := subscriptionPublicationScope{}
+	seen := make(map[string]struct{})
+	for _, tableName := range strings.Split(tables, ",") {
+		if checkCanceled != nil {
+			if err := checkCanceled(); err != nil {
+				return subscriptionPublicationScope{}, err
+			}
+		}
+		tableName = strings.TrimSpace(tableName)
+		if tableName == "" {
+			continue
+		}
+		nameKey := subscriptionMetadataNameKey(tableName, lowerCaseTableNames)
+		if _, duplicate := seen[nameKey]; duplicate {
+			continue
+		}
+		seen[nameKey] = struct{}{}
+		scope.tableNames = append(scope.tableNames, tableName)
+		// Two quote bytes plus one escape byte for each embedded quote or
+		// backslash mirrors the SQL-literal payload without a renderer.
+		scope.literalBytes += len(tableName) + 2 + strings.Count(tableName, "'") +
+			strings.Count(tableName, "\\")
+	}
+	sort.Strings(scope.tableNames)
+	return scope, nil
 }
 
 // validSubscriptionPublicationScope validates the catalog fields that become
@@ -448,12 +571,8 @@ func validSubscriptionPublicationScope(meta *SubscriptionMeta) bool {
 	if meta.Tables == "*" {
 		return true
 	}
-	for _, tableName := range strings.Split(meta.Tables, ",") {
-		if strings.TrimSpace(tableName) != "" {
-			return true
-		}
-	}
-	return false
+	scope, err := subscriptionPublicationTableScope(meta.Tables, 1, nil)
+	return err == nil && len(scope.tableNames) > 0
 }
 
 func falseSubscriptionMetadataFilter() tree.Expr {
@@ -474,16 +593,18 @@ func falseSubscriptionMetadataFilter() tree.Expr {
 // and account-wide metadata binding separate. Direct statements have already
 // passed normal frontend privilege checks and need only publication scope;
 // STATISTICS branches additionally carry subscriber-local table visibility.
-func (builder *QueryBuilder) currentSubscriptionMoTablesFilter() tree.Expr {
+func (builder *QueryBuilder) currentSubscriptionMoTablesFilter() (tree.Expr, error) {
 	if builder.queryingSubscriptionMetadata != nil {
-		return subscriptionMoTablesFilter(builder.queryingSubscriptionMetadata)
+		return subscriptionMoTablesFilterWithCheck(
+			builder.queryingSubscriptionMetadata, builder.compCtx.GetLowerCaseTableNames(), builder.checkPlanningCanceled,
+		)
 	}
 	meta := builder.compCtx.GetQueryingSubscription()
 	if meta == nil {
-		return nil
+		return nil, nil
 	}
-	return subscriptionMoTablesFilter(&SubscriptionMetadata{
+	return subscriptionMoTablesFilterWithCheck(&SubscriptionMetadata{
 		Meta:             meta,
 		AllTablesVisible: true,
-	})
+	}, builder.compCtx.GetLowerCaseTableNames(), builder.checkPlanningCanceled)
 }
