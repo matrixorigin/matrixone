@@ -3,22 +3,12 @@ drop database if exists ft2_json_probe_plan;
 create database ft2_json_probe_plan;
 use ft2_json_probe_plan;
 create table t (id bigint primary key, j json);
-create fulltext2 index ftj on t(j) with parser json;
 insert into t values
 (1, '{"foo":"needle"}'),
 (2, '{"foo":"hay"}'),
 (3, '{"foo":"needle"}'),
 (4, '{"n":42}');
-set @ftj = (select index_table_name from mo_catalog.mo_indexes where name = 'ftj' and algo_table_type = 'ftv2_index' and table_id in (select rel_id from mo_catalog.mo_tables where reldatabase = database() and relname = 't') limit 1);
-set @wait_ftj_sql = concat('select coalesce(max(chunk_id), -1) >= 0 as ready from `', database(), '`.`', @ftj, '` where index_id = ''cdc_tail'' and tag = 1');
-prepare wait_ftj from @wait_ftj_sql;
-execute wait_ftj;
-➤ ready[-7,1,0]  𝄀
-1
-deallocate prepare wait_ftj;
-select unix_timestamp(now(6)) - cast(substring_index(watermark, '-', 1) as unsigned)/1000000000 < @@fulltext_index_scan_watermark_delay as ready from mo_catalog.mo_iscp_log where job_name = 'index_ftj' and drop_at is null and table_id in (select rel_id from mo_catalog.mo_tables where reldatabase = database() and relname = 't') limit 1;
-➤ ready[-7,1,0]  𝄀
-1
+create fulltext2 index ftj on t(j) with parser json;
 explain select id from t where json_extract_string(j,'$.foo') = 'needle';
 -- @regex("Table Function on fulltext2_search", true)
 ➤ TP QUERY PLAN[12,-1,0]  𝄀
