@@ -2326,6 +2326,36 @@ func TestBuildCreateViewPreservesNullableExistsHeading(t *testing.T) {
 	require.Equal(t, wantHeading, regeneratedAgain.TableDef.GetCols()[0].GetName())
 }
 
+func TestBuildCreateViewFallsBackFromOverlongQualifiedHeading(t *testing.T) {
+	const rootSQL = "create view v as select (1, 2, 'a') in " +
+		"(select a, b, c from t1 where a is not null)"
+	base := NewMockCompilerContext(false)
+	base.tables["t1"] = &plan.TableDef{
+		Name: "t1",
+		Cols: []*plan.ColDef{
+			{Name: "a", Typ: plan.Type{Id: int32(types.T_int64)}},
+			{Name: "b", Typ: plan.Type{Id: int32(types.T_int64)}},
+			{Name: "c", Typ: plan.Type{Id: int32(types.T_varchar)}},
+		},
+	}
+	base.objects["t1"] = &plan.ObjectRef{SchemaName: "tpch", ObjName: "t1"}
+	ctx := &rootSQLCompilerContext{MockCompilerContext: base, rootSQL: rootSQL}
+	stmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL, rootSQL, 1)
+	require.NoError(t, err)
+	defer stmt.Free()
+
+	p, err := BuildPlan(ctx, stmt, false)
+	require.NoError(t, err)
+	cols := p.GetDdl().GetCreateView().GetTableDef().GetCols()
+	require.Len(t, cols, 1)
+	wantHeading := "(1, 2, a) in (select a, b, c from t1 where a is not null)"
+	require.Equal(t, wantHeading, cols[0].GetName())
+
+	regenerated, err := RegenerateViewDefinition(base, p.GetDdl().GetCreateView().GetTableDef().GetViewSql().GetView())
+	require.NoError(t, err)
+	require.Equal(t, wantHeading, regenerated.TableDef.GetCols()[0].GetName())
+}
+
 func TestBuildCreateViewConsumesOutputColumnDefaultProvenance(t *testing.T) {
 	tests := []struct {
 		name         string
