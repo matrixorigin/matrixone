@@ -4875,11 +4875,20 @@ func bindFuncExprImplByPlanExpr(
 
 	// get function definition
 	lookupTypes := argsType
-	if name == "json_quote" && len(args) == 1 && args[0].GetP() != nil {
-		// ParamRef, unlike a real TEXT column, is an unresolved prepared marker.
-		// Resolve it through JSON_QUOTE's bounded parameter contract so the
-		// input cast and result metadata remain safe and stable at PREPARE time.
-		lookupTypes = []types.Type{types.T_any.ToType()}
+	if name == "json_quote" && len(args) == 1 {
+		switch {
+		case args[0].GetP() != nil:
+			// PREPARE metadata uses MySQL's maximum VARCHAR character bound. This
+			// synthetic lookup type must not become an execution cast: the direct
+			// ParamRef lets execute-time rebinding consume the complete value.
+			lookupTypes = []types.Type{types.NewWithCharset(
+				types.T_varchar, types.MaxVarcharLen/utf8.UTFMax, 0, types.CharsetUTF8)}
+		case isNullExpr(args[0]):
+			// A static NULL has zero input characters, so JSON_QUOTE adds only the
+			// two framing quotes to its nullable result bound.
+			lookupTypes = []types.Type{types.NewWithCharset(
+				types.T_varchar, 0, 0, types.CharsetUTF8)}
+		}
 	}
 	fGet, err := function.GetFunctionByName(ctx, name, lookupTypes)
 	if err != nil {

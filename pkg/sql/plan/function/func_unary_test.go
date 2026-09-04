@@ -28,7 +28,6 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
-	"unicode/utf8"
 
 	hll "github.com/axiomhq/hyperloglog"
 	"github.com/google/uuid"
@@ -3537,14 +3536,8 @@ func TestJsonQuoteReturnType(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, types.NewWithCharset(types.T_varchar, 20, 0, types.CharsetUTF8MB4Bin), literal.GetReturnType())
 
-	prepared, err := GetFunctionByName(proc.Ctx, "json_quote", []types.Type{types.T_any.ToType()})
-	require.NoError(t, err)
-	require.Equal(t, types.NewWithCharset(types.T_text, 393200, 0, types.CharsetUTF8MB4Bin), prepared.GetReturnType())
-	targets, cast := prepared.ShouldDoImplicitTypeCast()
-	require.True(t, cast)
-	require.Equal(t, []types.Type{
-		types.NewWithCharset(types.T_varchar, types.MaxVarcharLen/utf8.UTFMax, 0, types.CharsetUTF8),
-	}, targets)
+	_, err = GetFunctionByName(proc.Ctx, "json_quote", []types.Type{types.T_any.ToType()})
+	require.Error(t, err, "T_any cannot identify either a prepared parameter or SQL NULL")
 
 	unboundedText, err := GetFunctionByName(proc.Ctx, "json_quote", []types.Type{
 		types.NewWithCharset(types.T_text, 0, 0, types.CharsetUTF8),

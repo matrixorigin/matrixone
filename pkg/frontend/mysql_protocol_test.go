@@ -2757,6 +2757,14 @@ func TestJsonQuoteBinaryProtocolMetadata(t *testing.T) {
 			length:      393200,
 		},
 		{
+			name:        "null literal",
+			sql:         "select json_quote(null) as result",
+			packetCount: 3,
+			resultIndex: 1,
+			typ:         defines.MYSQL_TYPE_VAR_STRING,
+			length:      8,
+		},
+		{
 			name:        "text column",
 			sql:         "select json_quote(rel_createsql) as result from mo_catalog.mo_tables",
 			packetCount: 3,

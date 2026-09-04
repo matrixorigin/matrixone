@@ -31,11 +31,10 @@ import (
 
 func jsonQuoteTypeMatch(overloads []overload, inputs []types.Type) checkResult {
 	if len(inputs) == 1 && inputs[0].Oid == types.T_any {
-		// T_any is the unresolved prepared-parameter marker. Give only that
-		// representation a bounded cast; ordinary TEXT keeps its unknown bound.
-		parameterType := types.NewWithCharset(
-			types.T_varchar, types.MaxVarcharLen/utf8.UTFMax, 0, types.CharsetUTF8)
-		return newCheckResultWithCast(0, []types.Type{parameterType})
+		// T_any does not carry enough identity to distinguish a prepared marker
+		// from a SQL NULL. The binder resolves those expressions with explicit
+		// metadata-only lookup types before they reach the function registry.
+		return newCheckResultWithFailure(failedFunctionParametersWrong)
 	}
 	return stringDomainFixedTypeMatch(overloads, inputs)
 }

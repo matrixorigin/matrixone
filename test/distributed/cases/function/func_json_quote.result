@@ -8,7 +8,7 @@ select json_quote('a"b');
 ➤ json_quote(a"b)[12,20,0]  𝄀
 "a\"b"
 select json_quote(null);
-➤ json_quote(null)[-1,98300,0]  𝄀
+➤ json_quote(null)[12,8,0]  𝄀
 null
 create table t1 (a varchar(10));
 insert into t1 values ('a'), ('a"'), ('a"b'), (null);
@@ -25,7 +25,7 @@ select json_quote('xax') from t1;
 "xax"  𝄀
 "xax"
 select json_quote(null) from t1;
-➤ json_quote(null)[-1,98300,0]  𝄀
+➤ json_quote(null)[12,8,0]  𝄀
 null  𝄀
 null  𝄀
 null  𝄀
@@ -57,6 +57,20 @@ execute json_quote_stmt using @json_quote_value;
 ➤ json_quote(?)[-1,98300,0]  𝄀
 "a\"b"
 deallocate prepare json_quote_stmt;
+prepare json_quote_length_stmt from 'select length(json_quote(?))';
+set @json_quote_value = repeat('a', 16383);
+execute json_quote_length_stmt using @json_quote_value;
+➤ length(json_quote(?))[-5,64,0]  𝄀
+16385
+set @json_quote_value = repeat('a', 16384);
+execute json_quote_length_stmt using @json_quote_value;
+➤ length(json_quote(?))[-5,64,0]  𝄀
+16386
+set @json_quote_value = repeat(char(1), 16384);
+execute json_quote_length_stmt using @json_quote_value;
+➤ length(json_quote(?))[-5,64,0]  𝄀
+98306
+deallocate prepare json_quote_length_stmt;
 drop table if exists json_quote_ctas;
 create table json_quote_ctas as select json_quote('abc') as quoted;
 select data_type, character_maximum_length from information_schema.columns where table_schema = database() and table_name = 'json_quote_ctas' and column_name = 'quoted';
@@ -66,6 +80,15 @@ select quoted, hex(quoted), char_length(quoted) from json_quote_ctas;
 ➤ quoted[12,20,0]  ¦  hex(quoted)[12,65535,0]  ¦  char_length(quoted)[-5,64,0]  𝄀
 "abc"  ¦  2261626322  ¦  5
 drop table json_quote_ctas;
+drop table if exists json_quote_null_ctas;
+create table json_quote_null_ctas as select json_quote(null) as quoted;
+select data_type, character_maximum_length from information_schema.columns where table_schema = database() and table_name = 'json_quote_null_ctas' and column_name = 'quoted';
+➤ data_type[12,65535,0]  ¦  character_maximum_length[-5,64,0]  𝄀
+varchar  ¦  2
+select quoted from json_quote_null_ctas;
+➤ quoted[12,8,0]  𝄀
+null
+drop table json_quote_null_ctas;
 drop table if exists json_quote_text_ctas;
 drop table if exists json_quote_text_source;
 create table json_quote_text_source (v text);
