@@ -1,4 +1,6 @@
-drop table if exists window_char_pad_space;
+drop database if exists window_char_pad_space_28023;
+create database window_char_pad_space_28023;
+use window_char_pad_space_28023;
 create table window_char_pad_space (id int primary key, ch char(8), v int);
 insert into window_char_pad_space values (1, 'a', 10), (2, 'a  ', 20), (3, 'b', 30);
 select count(*) as group_count from (select ch from window_char_pad_space group by ch) g;
@@ -22,4 +24,4 @@ from window_char_pad_space order by id;
 1  ¦  2  ¦  1  ¦  30  𝄀
 2  ¦  2  ¦  1  ¦  30  𝄀
 3  ¦  1  ¦  3  ¦  60
-drop table if exists window_char_pad_space;
+drop database if exists window_char_pad_space_28023;
