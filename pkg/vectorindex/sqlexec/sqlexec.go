@@ -137,6 +137,39 @@ func (s *SqlProcess) EffectiveSnapshotTS() *timestamp.Timestamp {
 	return s.SnapshotTS
 }
 
+// ApplyScanSnapshot threads a planner-resolved named snapshot onto this SqlProcess and returns
+// the effective historical read timestamp, or nil when the snapshot is not historical relative
+// to the current txn -- in which case nothing is bound and the read proceeds as an ordinary
+// current-state read.
+//
+// It carries BOTH halves of the snapshot identity, which is the reason this is one helper rather
+// than a field assignment at each call site: the timestamp, so index-table reads run on a txn
+// cloned at it, and the snapshot's owning TENANT, so those reads resolve under the account that
+// owns the data. Binding the timestamp alone is a correctness bug for a cross-account snapshot:
+// an account-level snapshot carries Tenant.TenantID = the snapshot's account (see
+// planSnapshotFromRecord), so a sys session reading acc1's snapshot would scan the base table as
+// acc1 while resolving __mo_index_secondary_... as account 0 -- table-not-found, or silently
+// empty results. The compile layer binds the same pair under the same condition; see the
+// ScanSnapshot branch in Compile's table-scan path.
+//
+// snap comes from the PLANNER (plan.TableFunction.ScanSnapshot), never from a table-function
+// argument, which is what makes setting the trusted AccountIDOverride here legitimate.
+func (s *SqlProcess) ApplyScanSnapshot(snap *plan.Snapshot) *timestamp.Timestamp {
+	if snap == nil {
+		return nil
+	}
+	s.SnapshotTS = snap.TS
+	ets := s.EffectiveSnapshotTS()
+	if ets == nil {
+		return nil
+	}
+	if snap.Tenant != nil {
+		id := snap.Tenant.TenantID
+		s.AccountIDOverride = &id
+	}
+	return ets
+}
+
 // txnForRun returns the txn operator the internal SQL should run under: a clone
 // pinned at the historical snapshot TS when EffectiveSnapshotTS reports one, else
 // the process's current txn.

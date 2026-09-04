@@ -19,6 +19,7 @@ import (
 
 	"github.com/golang/mock/gomock"
 	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
@@ -120,4 +121,72 @@ func TestEffectiveSnapshotTSHistoricalReturnsTheTS(t *testing.T) {
 	snapshotTS := timestamp.Timestamp{PhysicalTime: 8, LogicalTime: 3}
 	sp := &SqlProcess{Proc: proc, SnapshotTS: &snapshotTS}
 	require.Same(t, &snapshotTS, sp.EffectiveSnapshotTS())
+}
+
+// ApplyScanSnapshot binds BOTH halves of a named snapshot's identity. Threading only the
+// timestamp is a cross-account correctness bug: an account-level snapshot carries the owning
+// account in Tenant, so without the override the index-table SQL would resolve under the
+// CALLING account while the base scan reads the snapshot's account.
+func TestApplyScanSnapshotBindsTenantAndTS(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	proc := testutil.NewProc(t)
+	t.Cleanup(proc.Free)
+	original := mock_frontend.NewMockTxnOperator(ctrl)
+	proc.Base.TxnOperator = original
+	original.EXPECT().Txn().Return(txn.TxnMeta{SnapshotTS: timestamp.Timestamp{PhysicalTime: 10}}).AnyTimes()
+
+	snapshotTS := timestamp.Timestamp{PhysicalTime: 8} // < current (10) => historical
+	sp := &SqlProcess{Proc: proc}
+	ets := sp.ApplyScanSnapshot(&plan.Snapshot{
+		TS:     &snapshotTS,
+		Tenant: &plan.SnapshotTenant{TenantName: "acc1", TenantID: 42},
+	})
+
+	require.NotNil(t, ets, "a TS older than the current txn is a historical read")
+	require.Equal(t, snapshotTS, *ets)
+	require.NotNil(t, sp.AccountIDOverride, "the snapshot's owning tenant must be bound")
+	require.EqualValues(t, 42, *sp.AccountIDOverride,
+		"the snapshot's account, not the calling session's")
+}
+
+// A snapshot that is not historical relative to this txn binds nothing: the read is an ordinary
+// current-state read as the calling account, matching the compile layer, which rebinds the
+// tenant only inside the same condition that clones the txn.
+func TestApplyScanSnapshotNonHistoricalBindsNothing(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	proc := testutil.NewProc(t)
+	t.Cleanup(proc.Free)
+	original := mock_frontend.NewMockTxnOperator(ctrl)
+	proc.Base.TxnOperator = original
+	original.EXPECT().Txn().Return(txn.TxnMeta{SnapshotTS: timestamp.Timestamp{PhysicalTime: 10}}).AnyTimes()
+
+	notHistorical := timestamp.Timestamp{PhysicalTime: 20} // >= current
+	sp := &SqlProcess{Proc: proc}
+	require.Nil(t, sp.ApplyScanSnapshot(&plan.Snapshot{
+		TS:     &notHistorical,
+		Tenant: &plan.SnapshotTenant{TenantID: 42},
+	}))
+	require.Nil(t, sp.AccountIDOverride, "no time travel => no tenant rebinding")
+}
+
+// A snapshot with no Tenant (cluster level) time-travels without rebinding the account.
+func TestApplyScanSnapshotWithoutTenantOnlyBindsTS(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	proc := testutil.NewProc(t)
+	t.Cleanup(proc.Free)
+	original := mock_frontend.NewMockTxnOperator(ctrl)
+	proc.Base.TxnOperator = original
+	original.EXPECT().Txn().Return(txn.TxnMeta{SnapshotTS: timestamp.Timestamp{PhysicalTime: 10}}).AnyTimes()
+
+	snapshotTS := timestamp.Timestamp{PhysicalTime: 8}
+	sp := &SqlProcess{Proc: proc}
+	require.NotNil(t, sp.ApplyScanSnapshot(&plan.Snapshot{TS: &snapshotTS}))
+	require.Nil(t, sp.AccountIDOverride)
+}
+
+func TestApplyScanSnapshotNilIsNoop(t *testing.T) {
+	sp := &SqlProcess{}
+	require.Nil(t, sp.ApplyScanSnapshot(nil))
+	require.Nil(t, sp.SnapshotTS)
+	require.Nil(t, sp.AccountIDOverride)
 }

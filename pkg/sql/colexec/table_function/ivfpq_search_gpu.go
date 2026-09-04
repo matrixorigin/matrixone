@@ -358,11 +358,8 @@ func ivfpqRunSearchQuery(proc *process.Process, u *ivfpqSearchState, fa any) (er
 	// separate cache entry from the current one.
 	sp := sqlexec.NewSqlProcess(proc)
 	cacheKey := u.tblcfg.IndexTable
-	if u.scanSnapshot != nil {
-		sp.SnapshotTS = u.scanSnapshot.TS
-		if ets := sp.EffectiveSnapshotTS(); ets != nil {
-			cacheKey = veccache.SnapshotKey(u.tblcfg.IndexTable, *ets)
-		}
+	if ets := sp.ApplyScanSnapshot(u.scanSnapshot); ets != nil {
+		cacheKey = veccache.SnapshotKey(u.tblcfg.IndexTable, *ets)
 	}
 	var keys any
 	keys, u.distances, err = veccache.Cache.Search(sp, cacheKey, algo, fa, rt)

@@ -409,11 +409,8 @@ func (u *fulltext2SearchState) start(tf *TableFunction, proc *process.Process, n
 	// separate cache entry from the current one. EffectiveSnapshotTS is nil for a
 	// non-historical TS, leaving the key and the read unchanged.
 	cacheKey := u.tblcfg.IndexTable
-	if tf.ScanSnapshot != nil {
-		sp.SnapshotTS = tf.ScanSnapshot.TS
-		if ets := sp.EffectiveSnapshotTS(); ets != nil {
-			cacheKey = veccache.SnapshotKey(u.tblcfg.IndexTable, *ets)
-		}
+	if ets := sp.ApplyScanSnapshot(tf.ScanSnapshot); ets != nil {
+		cacheKey = veccache.SnapshotKey(u.tblcfg.IndexTable, *ets)
 	}
 
 	// mode (argVecs[2], a query const): boolean → operator query, else NL phrase.

@@ -131,10 +131,8 @@ func (u *fulltextState) sqlProcess(proc *process.Process) *sqlexec.SqlProcess {
 	if u.publisherAccount != nil {
 		sqlProc.WithExecutionIdentity(*u.publisherAccount, u.publisherDB)
 	}
-	// Named-snapshot read TS; nil leaves the read at the current txn (#27941).
-	if u.scanSnapshot != nil {
-		sqlProc.SnapshotTS = u.scanSnapshot.TS
-	}
+	// Named-snapshot read TS + owning tenant; nil leaves the read at the current txn (#27941).
+	sqlProc.ApplyScanSnapshot(u.scanSnapshot)
 	return sqlProc
 }
 
