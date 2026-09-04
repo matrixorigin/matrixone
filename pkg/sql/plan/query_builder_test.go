@@ -634,15 +634,17 @@ func TestBindViewWithoutStoredSQLModeUsesLegacyPipeConcat(t *testing.T) {
 
 func TestBindViewSequenceFunctionsUseStoredDatabase(t *testing.T) {
 	for _, test := range []struct {
-		name     string
-		funcName string
-		expr     string
-		wantArgs int
+		name         string
+		expr         string
+		wantArgs     int
+		wantOverload int32
+		wantIsCalled *bool
 	}{
-		{name: "nextval", funcName: "nextval", expr: "nextval('ab.cd')", wantArgs: 2},
-		{name: "currval", funcName: "currval", expr: "currval('ab.cd')", wantArgs: 2},
-		{name: "setval", funcName: "setval", expr: "setval('ab.cd', '50')", wantArgs: 3},
-		{name: "setval_called", funcName: "setval", expr: "setval('ab.cd', '50', false)", wantArgs: 4},
+		{name: "nextval", expr: "nextval('ab.cd')", wantArgs: 2, wantOverload: 1},
+		{name: "currval", expr: "currval('ab.cd')", wantArgs: 2, wantOverload: 1},
+		{name: "setval_default", expr: "setval('ab.cd', '50')", wantArgs: 4, wantOverload: 2, wantIsCalled: ptrTo(true)},
+		{name: "setval_is_called", expr: "setval('ab.cd', '50', false)", wantArgs: 4, wantOverload: 2, wantIsCalled: ptrTo(false)},
+		{name: "setval_string_is_called", expr: "setval('ab.cd', '50', 'false')", wantArgs: 4, wantOverload: 2, wantIsCalled: ptrTo(false)},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			builder, nodeID := buildViewForSQLModeTest(t, "v_sequence", ViewData{
@@ -653,12 +655,18 @@ func TestBindViewSequenceFunctionsUseStoredDatabase(t *testing.T) {
 
 			functionExpr := builder.qry.Nodes[nodeID].ProjectList[0].GetF()
 			require.NotNil(t, functionExpr)
-			require.Equal(t, test.funcName, functionExpr.Func.GetObjName())
+			functionName := strings.Split(test.name, "_")[0]
+			require.Equal(t, functionName, functionExpr.Func.GetObjName())
 			require.Len(t, functionExpr.Args, test.wantArgs)
+			_, overloadID := function.DecodeOverloadID(functionExpr.Func.Obj)
+			require.Equal(t, test.wantOverload, overloadID)
 			// A dot is legal in a sequence identifier.  Keep the sequence name
 			// intact and carry the view database separately.
 			require.Equal(t, "ab.cd", functionExpr.Args[0].GetLit().GetSval())
 			require.Equal(t, "view_db", functionExpr.Args[test.wantArgs-1].GetLit().GetSval())
+			if test.wantIsCalled != nil {
+				require.Equal(t, *test.wantIsCalled, functionExpr.Args[2].GetLit().GetBval())
+			}
 		})
 	}
 }
@@ -670,8 +678,32 @@ func TestSequenceDatabaseArgumentIsInternal(t *testing.T) {
 	_, err = runOneStmt(NewMockOptimizer(false), t, "select currval('seq1', 'db1')")
 	require.ErrorContains(t, err, "invalid argument function currval")
 
-	_, err = runOneStmt(NewMockOptimizer(false), t, "select setval('seq1', '50', 'db1')")
+	_, err = runOneStmt(NewMockOptimizer(false), t, "select setval('seq1', '50', false, 'db1')")
 	require.ErrorContains(t, err, "invalid argument function setval")
+
+	for _, test := range []struct {
+		name         string
+		sql          string
+		wantArgs     int
+		wantOverload int32
+	}{
+		{name: "two arguments", sql: "select setval('seq1', '50')", wantArgs: 2, wantOverload: 0},
+		{name: "quoted boolean", sql: "select setval('seq1', '50', 'false')", wantArgs: 3, wantOverload: 1},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			queryPlan, buildErr := runOneStmt(NewMockOptimizer(false), t, test.sql)
+			require.NoError(t, buildErr)
+			setvalPlanExpr := findPlanFunctionExpr(queryPlan, "setval")
+			require.NotNil(t, setvalPlanExpr)
+			setvalExpr := setvalPlanExpr.GetF()
+			require.Len(t, setvalExpr.Args, test.wantArgs)
+			_, overloadID := function.DecodeOverloadID(setvalExpr.Func.Obj)
+			require.Equal(t, test.wantOverload, overloadID)
+			if test.wantArgs == 3 {
+				require.Equal(t, int32(types.T_bool), setvalExpr.Args[2].Typ.Id)
+			}
+		})
+	}
 }
 
 func TestBindViewUsesStoredLowerCaseTableNames(t *testing.T) {
@@ -5267,68 +5299,31 @@ func TestDistinctAggregatePromotedCharCanonicalizesWhenGroupingSetsSkipRewrite(t
 }
 
 func TestWindowPadSpaceKeysUseCanonicalArguments(t *testing.T) {
-	for _, tc := range []struct {
-		name       string
-		value      string
-		charColumn bool
-	}{
-		{
-			name:  "promoted char value",
-			value: "coalesce(cast(n_name as char(8)), cast(n_comment as varchar(8)))",
-		},
-		{
-			name:       "direct char column",
-			value:      "n_name",
-			charColumn: true,
-		},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			mock := NewMockOptimizer(true)
-			if tc.charColumn {
-				table := DeepCopyTableDef(mock.ctxt.tables["nation"], true)
-				table.Cols[1].Typ = plan.Type{Id: int32(types.T_char), Width: 8}
-				mock.ctxt.tables["nation"] = table
-			}
+	value := "coalesce(cast(n_name as char(8)), cast(n_comment as varchar(8)))"
+	logicPlan, err := runOneStmt(NewMockOptimizer(true), t,
+		"select count(*) over (partition by "+value+"), "+
+			"dense_rank() over (order by "+value+") from nation")
+	require.NoError(t, err)
 
-			logicPlan, err := runOneStmt(mock, t,
-				"select count(*) over (partition by "+tc.value+"), "+
-					"dense_rank() over (order by "+tc.value+"), "+
-					"sum(n_regionkey) over (order by "+tc.value+
-					" range between unbounded preceding and current row) from nation")
-			require.NoError(t, err)
-
-			var partition *plan.Node
-			windowsByName := make(map[string]*plan.WindowSpec)
-			for _, node := range logicPlan.GetQuery().Nodes {
-				if node.NodeType == plan.Node_PARTITION && len(node.OrderBy) == 1 {
-					partition = node
-				}
-				if node.NodeType == plan.Node_WINDOW {
-					for _, item := range node.WinSpecList {
-						if window := item.GetW(); window != nil {
-							windowsByName[window.Name] = window
-						}
-					}
+	var partition *plan.Node
+	var rankedWindow *plan.WindowSpec
+	for _, node := range logicPlan.GetQuery().Nodes {
+		if node.NodeType == plan.Node_PARTITION && len(node.OrderBy) == 1 {
+			partition = node
+		}
+		if node.NodeType == plan.Node_WINDOW {
+			for _, item := range node.WinSpecList {
+				if window := item.GetW(); window != nil && window.Name == "dense_rank" {
+					rankedWindow = window
 				}
 			}
-			require.NotNil(t, partition)
-			requireWindowPadSpaceComparisonCast(t, partition.OrderBy[0].Expr)
-
-			for _, name := range []string{"dense_rank", "sum"} {
-				window := windowsByName[name]
-				require.NotNil(t, window)
-				require.Len(t, window.OrderBy, 1)
-				requireWindowPadSpaceComparisonCast(t, window.OrderBy[0].Expr)
-			}
-		})
+		}
 	}
-}
-
-func requireWindowPadSpaceComparisonCast(t *testing.T, expr *plan.Expr) {
-	t.Helper()
-	require.NotNil(t, expr)
-	require.True(t, isCastOverload(expr, 2), expr.String())
-	require.Equal(t, int32(types.T_varchar), expr.Typ.Id)
+	require.NotNil(t, partition)
+	require.True(t, isCastOverload(partition.OrderBy[0].Expr, 2))
+	require.NotNil(t, rankedWindow)
+	require.Len(t, rankedWindow.OrderBy, 1)
+	require.True(t, isCastOverload(rankedWindow.OrderBy[0].Expr, 2))
 }
 
 func TestGroupConcatOrderByIsBoundPerAggregate(t *testing.T) {

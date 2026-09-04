@@ -3535,20 +3535,11 @@ func (b *baseBinder) bindFuncExprImplByAstExpr(name string, astArgs []tree.Expr,
 	// the view was created, not in the caller's current database.  BindContext
 	// carries that database only while a view body is being expanded, so retain
 	// it as an internal trailing argument in the executable expression.
-	if isSequenceNameFunction(name) {
+	if minArgs, maxArgs, isSequence := sequenceFunctionPublicArity(name); isSequence {
 		// Keep the internal database argument out of the SQL surface.  The
 		// public sequence functions continue to accept only their documented
-		// arities. SETVAL has both a two- and a three-argument public form.
-		validArity := len(args) == 1
-		if strings.EqualFold(name, "setval") {
-			validArity = len(args) == 2 || len(args) == 3
-			// The three-argument all-string overload is reserved for the
-			// trailing database argument added while expanding a view.
-			if len(args) == 3 && makeTypeByPlan2Expr(args[2]).Oid != types.T_bool {
-				validArity = false
-			}
-		}
-		if !validArity {
+		// arities.
+		if len(args) < minArgs || len(args) > maxArgs {
 			argTypes := make([]types.Type, len(args))
 			for i := range args {
 				argTypes[i] = makeTypeByPlan2Expr(args[i])
@@ -3556,6 +3547,13 @@ func (b *baseBinder) bindFuncExprImplByAstExpr(name string, astArgs []tree.Expr,
 			return nil, moerr.NewInvalidArg(b.GetContext(), fmt.Sprintf("function %s", name), argTypes)
 		}
 		if b.ctx != nil && b.ctx.defaultDatabase != "" {
+			// Normalize SETVAL's optional is_called argument before appending the
+			// database.  A single four-argument internal overload avoids a
+			// three-varchar overload that would steal public calls such as
+			// SETVAL('seq', '50', 'false') from the boolean overload.
+			if strings.EqualFold(name, "setval") && len(args) == 2 {
+				args = append(args, makePlan2BoolConstExprWithType(true))
+			}
 			args = append(args, makePlan2StringConstExprWithType(b.ctx.defaultDatabase))
 		}
 	}
@@ -3675,12 +3673,14 @@ func (b *baseBinder) bindFuncExprImplByAstExpr(name string, astArgs []tree.Expr,
 	return bindFuncExprImplUdf(b, name, udf, astArgs, args, depth)
 }
 
-func isSequenceNameFunction(name string) bool {
+func sequenceFunctionPublicArity(name string) (minArgs, maxArgs int, ok bool) {
 	switch strings.ToLower(name) {
-	case "nextval", "currval", "setval":
-		return true
+	case "nextval", "currval":
+		return 1, 1, true
+	case "setval":
+		return 2, 3, true
 	default:
-		return false
+		return 0, 0, false
 	}
 }
 
@@ -6907,23 +6907,6 @@ func appendPadSpaceComparisonCastIfNeeded(ctx context.Context, expr *Expr) (*Exp
 		return appendComparisonCastBeforeExpr(ctx, expr, makePlan2Type(&argType))
 	}
 	return expr, nil
-}
-
-// appendPadSpaceWindowKeyCastIfNeeded canonicalizes direct CHAR window keys
-// into the same PAD SPACE comparison domain as promoted string keys. Ordinary
-// predicates deliberately keep their existing CHAR comparison binding so that
-// optimizer key recognition is unchanged outside window planning.
-func appendPadSpaceWindowKeyCastIfNeeded(ctx context.Context, expr *Expr) (*Expr, error) {
-	if isCastOverload(expr, 2) {
-		return expr, nil
-	}
-	argType := makeTypeByPlan2Expr(expr)
-	if argType.Oid == types.T_char {
-		targetType := argType
-		targetType.Oid = types.T_varchar
-		return appendComparisonCastBeforeExpr(ctx, expr, makePlan2Type(&targetType))
-	}
-	return appendPadSpaceComparisonCastIfNeeded(ctx, expr)
 }
 
 func isCastOverload(expr *Expr, overloadID int32) bool {
