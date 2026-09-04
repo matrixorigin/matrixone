@@ -696,6 +696,41 @@ type countingReader struct {
 	closeErr     error
 }
 
+type filteredTopKCountingReader struct {
+	*countingReader
+	topKApplied bool
+}
+
+func (r *filteredTopKCountingReader) ReadWithFilterAndTopK(
+	ctx context.Context,
+	cols []string,
+	earlyColumns []int,
+	filter engine.ReaderFilter,
+	indexParam *plan.IndexReaderParam,
+	mp *mpool.MPool,
+	outBatch *batch.Batch,
+) (bool, bool, error) {
+	isEnd, err := r.Read(ctx, cols, nil, mp, outBatch)
+	return isEnd, r.topKApplied, err
+}
+
+type lateMaterializedCountingReader struct {
+	*countingReader
+	filterCalls int
+}
+
+func (r *lateMaterializedCountingReader) ReadWithFilter(
+	ctx context.Context,
+	cols []string,
+	earlyColumns []int,
+	filter engine.ReaderFilter,
+	mp *mpool.MPool,
+	outBatch *batch.Batch,
+) (bool, error) {
+	r.filterCalls++
+	return r.Read(ctx, cols, nil, mp, outBatch)
+}
+
 func (r *countingReader) Read(_ context.Context, _ []string, _ *plan.Expr, _ *mpool.MPool, _ *batch.Batch) (bool, error) {
 	if r.readErr != nil && int(atomic.LoadInt32(&r.emit)) >= r.readErrAfter {
 		return false, r.readErr
@@ -715,6 +750,77 @@ func (r *countingReader) SetIndexParam(*plan.IndexReaderParam) {}
 func (r *countingReader) SetFilterZM(objectio.ZoneMap)         {}
 
 var _ engine.Reader = (*countingReader)(nil)
+
+func TestMergeReaderReadWithFilterAndTopKDelegatesAndFallsBack(t *testing.T) {
+	filter := func(*batch.Batch, []int) (engine.ReaderFilterResult, error) {
+		return engine.ReaderFilterResult{}, nil
+	}
+
+	t.Run("filtered topk reader", func(t *testing.T) {
+		var closeCount int32
+		child := &filteredTopKCountingReader{
+			countingReader: &countingReader{rows: 1, closeCount: &closeCount},
+			topKApplied:    true,
+		}
+		reader := NewMergeReader([]engine.Reader{child})
+
+		isEnd, topKApplied, err := reader.ReadWithFilterAndTopK(
+			context.Background(), nil, nil, filter, nil, nil, batch.New(nil),
+		)
+		require.NoError(t, err)
+		require.False(t, isEnd)
+		require.True(t, topKApplied)
+
+		isEnd, topKApplied, err = reader.ReadWithFilterAndTopK(
+			context.Background(), nil, nil, filter, nil, nil, batch.New(nil),
+		)
+		require.NoError(t, err)
+		require.True(t, isEnd)
+		require.False(t, topKApplied)
+		require.Equal(t, int32(1), atomic.LoadInt32(&closeCount))
+	})
+
+	t.Run("late materialization reader", func(t *testing.T) {
+		var closeCount int32
+		child := &lateMaterializedCountingReader{
+			countingReader: &countingReader{rows: 1, closeCount: &closeCount},
+		}
+		reader := NewMergeReader([]engine.Reader{child})
+		isEnd, topKApplied, err := reader.ReadWithFilterAndTopK(
+			context.Background(), nil, nil, filter, nil, nil, batch.New(nil),
+		)
+		require.NoError(t, err)
+		require.False(t, isEnd)
+		require.False(t, topKApplied)
+		require.Equal(t, 1, child.filterCalls)
+	})
+
+	t.Run("plain reader", func(t *testing.T) {
+		var closeCount int32
+		child := &countingReader{rows: 1, closeCount: &closeCount}
+		reader := NewMergeReader([]engine.Reader{child})
+		isEnd, topKApplied, err := reader.ReadWithFilterAndTopK(
+			context.Background(), nil, nil, filter, nil, nil, batch.New(nil),
+		)
+		require.NoError(t, err)
+		require.False(t, isEnd)
+		require.False(t, topKApplied)
+	})
+
+	t.Run("topk reader error closes child", func(t *testing.T) {
+		var closeCount int32
+		readErr := errors.New("topk reader failure")
+		child := &filteredTopKCountingReader{
+			countingReader: &countingReader{readErr: readErr, closeCount: &closeCount},
+		}
+		reader := NewMergeReader([]engine.Reader{child})
+		_, _, err := reader.ReadWithFilterAndTopK(
+			context.Background(), nil, nil, filter, nil, nil, batch.New(nil),
+		)
+		require.ErrorIs(t, err, readErr)
+		require.Equal(t, int32(1), atomic.LoadInt32(&closeCount))
+	})
+}
 
 func TestMergeReaderClosesEachChildOnExhaustion(t *testing.T) {
 	var closed int32
