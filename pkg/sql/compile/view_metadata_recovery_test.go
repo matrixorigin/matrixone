@@ -91,6 +91,12 @@ func (e *viewMetadataCleanupRecordingExecutor) ExecTxn(
 	}, nil))
 }
 
+func viewMetadataLifecycleGateTestResult() executor.Result {
+	result := executor.NewMemResult(nil, nil)
+	result.NewBatchWithRowCount(1)
+	return result.GetResult()
+}
+
 type deadlineCheckingSQLExecutor struct {
 	t             *testing.T
 	expectedError error
@@ -1708,7 +1714,7 @@ func TestViewMetadataRevalidationActivationIsPersistedAndIdempotent(t *testing.T
 		return result.GetResult()
 	}
 	exec := &viewMetadataCleanupRecordingExecutor{results: []executor.Result{
-		{}, {}, {}, {}, markerResult(), {}, markerResult(), {},
+		viewMetadataLifecycleGateTestResult(), {}, {}, {}, markerResult(), {}, markerResult(), {},
 	}}
 	require.NoError(t, RequireViewMetadataRevalidation(context.Background(), exec))
 	require.NoError(t, StartViewMetadataRevalidation(context.Background(), exec, "worker"))
@@ -1778,7 +1784,9 @@ func TestRequireViewMetadataRevalidationFastReturnsWhenAlreadyRequired(t *testin
 	require.NoError(t, executor.AppendStringRows(current, 1,
 		[]string{catalog.ViewRefreshStatusRevalidateRequired}))
 	require.NoError(t, executor.AppendFixedRows(current, 2, []uint64{7}))
-	exec := &viewMetadataCleanupRecordingExecutor{results: []executor.Result{{}, current.GetResult()}}
+	exec := &viewMetadataCleanupRecordingExecutor{results: []executor.Result{
+		viewMetadataLifecycleGateTestResult(), current.GetResult(),
+	}}
 	require.NoError(t, RequireViewMetadataRevalidation(context.Background(), exec))
 	require.Len(t, exec.sqls, 2)
 	require.Equal(t, catalog.ViewMetadataLifecycleGateSQL, exec.sqls[0])
@@ -1896,23 +1904,40 @@ func TestSeedViewMetadataRevalidationPageRejectsInvalidAccountPage(t *testing.T)
 	}
 }
 
+func TestRequireViewMetadataRevalidationRejectsMissingRefreshGate(t *testing.T) {
+	exec := &viewMetadataCleanupRecordingExecutor{}
+	err := RequireViewMetadataRevalidation(context.Background(), exec)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrNoSuchTable))
+	require.Len(t, exec.sqls, 1)
+	require.Equal(t, catalog.ViewMetadataLifecycleGateSQL, exec.sqls[0])
+}
+
 func TestViewMetadataRevalidationActivationPropagatesCatalogErrors(t *testing.T) {
 	testErr := moerr.NewInternalErrorNoCtx("catalog unavailable")
+	gateResult := func() []executor.Result {
+		return []executor.Result{viewMetadataLifecycleGateTestResult()}
+	}
 
 	t.Run("required sentinel insert", func(t *testing.T) {
-		exec := &viewMetadataCleanupRecordingExecutor{failures: map[int]error{2: testErr}}
+		exec := &viewMetadataCleanupRecordingExecutor{
+			results: gateResult(), failures: map[int]error{2: testErr},
+		}
 		require.ErrorIs(t, RequireViewMetadataRevalidation(context.Background(), exec), testErr)
 		require.Len(t, exec.sqls, 2)
 	})
 
 	t.Run("required marker transition", func(t *testing.T) {
-		exec := &viewMetadataCleanupRecordingExecutor{failures: map[int]error{3: testErr}}
+		exec := &viewMetadataCleanupRecordingExecutor{
+			results: gateResult(), failures: map[int]error{3: testErr},
+		}
 		require.ErrorIs(t, RequireViewMetadataRevalidation(context.Background(), exec), testErr)
 		require.Len(t, exec.sqls, 3)
 	})
 
 	t.Run("required marker cursor", func(t *testing.T) {
-		exec := &viewMetadataCleanupRecordingExecutor{failures: map[int]error{4: testErr}}
+		exec := &viewMetadataCleanupRecordingExecutor{
+			results: gateResult(), failures: map[int]error{4: testErr},
+		}
 		require.ErrorIs(t, RequireViewMetadataRevalidation(context.Background(), exec), testErr)
 		require.Len(t, exec.sqls, 4)
 	})

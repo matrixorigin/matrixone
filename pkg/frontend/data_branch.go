@@ -1428,6 +1428,13 @@ func reconcileDataBranchEndpointSchema(
 			}
 		}
 	}
+	writableIdxes := tables.def.writableIdxes
+	if len(tables.def.tarOnlyIdxes) > 0 {
+		writableIdxes = tables.def.commonWritableIdxes
+	}
+	tables.def.indexedSpecialUpdateIdxes = dataBranchIndexedSpecialUpdateColIdxes(
+		*tables, baseDef, writableIdxes,
+	)
 	return nil
 }
 

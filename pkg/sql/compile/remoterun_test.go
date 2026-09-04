@@ -85,6 +85,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/table_function"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/top"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/value_scan"
+	sqlmongodb "github.com/matrixorigin/matrixone/pkg/sql/mongodb"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 	planfunction "github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
@@ -1040,8 +1041,8 @@ func TestPrepareRemoteRunSendingDataRejectsPrePadSpaceProtocol(t *testing.T) {
 }
 
 func TestRemoteExpressionProtocolValidation(t *testing.T) {
-	require.GreaterOrEqual(t, defines.MORPCLatestVersion, defines.MORPCVersion44,
-		"the v44 remote-expression capability must remain available after later protocol increments")
+	require.GreaterOrEqual(t, defines.MORPCLatestVersion, defines.MORPCVersion45,
+		"the v45 remote-expression capability must remain available after later protocol increments")
 
 	proc := testutil.NewProcess(t)
 	proc.Ctx = context.WithValue(proc.Ctx, defines.TenantIDKey{}, uint32(0))
@@ -1155,7 +1156,7 @@ func TestRemoteExpressionProtocolValidation(t *testing.T) {
 		rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion36)
 		require.NoError(t, validateRemoteExpressionPipelineProtocol(proc, remotePipeline))
 	})
-	t.Run("statement digest function requires v44", func(t *testing.T) {
+	t.Run("statement digest function requires v45", func(t *testing.T) {
 		remotePipeline := &pipeline.Pipeline{
 			InstructionList: []*pipeline.Instruction{{
 				ProjectList: []*planpb.Expr{statementDigest()},
@@ -1163,10 +1164,10 @@ func TestRemoteExpressionProtocolValidation(t *testing.T) {
 		}
 		rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion42)
 		err := validateRemoteExpressionPipelineProtocol(proc, remotePipeline)
-		require.ErrorContains(t, err, "STATEMENT_DIGEST remote execution requires MORPC protocol version 44")
+		require.ErrorContains(t, err, "STATEMENT_DIGEST remote execution requires MORPC protocol version 45")
 		require.True(t, moerr.IsMoErrCode(err, moerr.ErrNotSupported))
 
-		rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion44)
+		rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion45)
 		require.NoError(t, validateRemoteExpressionPipelineProtocol(proc, remotePipeline))
 	})
 
@@ -4934,12 +4935,16 @@ func TestMongoScanPipelineRoundTripContainsNoCredential(t *testing.T) {
 		regs:  make(map[*process.WaitRegister]int32),
 	}
 	ctx.root = ctx
+	querySource := `{"filter":{"meta.pump":"pump-1"}}`
+	query, err := sqlmongodb.ParseUserQuery(t.Context(), querySource)
+	require.NoError(t, err)
 	spec := &planpb.MongoScan{
 		TableId: 33, MappingId: 11, MappingVersion: 4, ConnectionId: 22, ConnectionVersion: 3,
 		Database: "telemetry", Collection: "raw", MaxParallelism: 1,
 		Columns:         []*planpb.MongoColumnMapping{{Name: "pump", Path: "meta.pump", MoType: planpb.Type{Id: int32(types.T_varchar)}}},
 		PushedPredicate: &planpb.MongoPredicate{Op: planpb.MongoPredicateOp_MONGO_PREDICATE_EQUAL, Path: "meta.pump", ValueBson: []byte{3, 0, 0, 0, 10, 0}},
 	}
+	require.NoError(t, sqlmongodb.ApplyUserQueryToPlan(t.Context(), query, spec))
 	original := mongoscan.NewArgument().WithScan(spec)
 	defer original.Release()
 
@@ -4950,6 +4955,7 @@ func TestMongoScanPipelineRoundTripContainsNoCredential(t *testing.T) {
 	for _, forbidden := range []string{"mongodb://", "secret://", "username", "password", "credential", "token"} {
 		require.False(t, bytes.Contains(bytes.ToLower(wire), []byte(forbidden)))
 	}
+	require.False(t, bytes.Contains(wire, []byte(querySource)), "raw __mo_query text must not be transported")
 
 	decoded := new(pipeline.Instruction)
 	require.NoError(t, decoded.Unmarshal(wire))
@@ -4958,6 +4964,46 @@ func TestMongoScanPipelineRoundTripContainsNoCredential(t *testing.T) {
 	restored := restoredOperator.(*mongoscan.MongoScan)
 	defer restored.Release()
 	require.Equal(t, spec, restored.Scan)
+}
+
+func TestMongoScanRemoteProtocolValidationAtSendAndReceiveBoundaries(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	rt := moruntime.ServiceRuntime(proc.GetService())
+	previous, hadPrevious := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
+	t.Cleanup(func() {
+		if hadPrevious {
+			rt.SetGlobalVariables(moruntime.MOProtocolVersion, previous)
+		} else {
+			rt.CompareAndDeleteGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion39)
+		}
+	})
+
+	query, err := sqlmongodb.ParseUserQuery(t.Context(), `{"filter":{"value":1}}`)
+	require.NoError(t, err)
+	explicitQuery := &planpb.MongoScan{MaxParallelism: 1}
+	require.NoError(t, sqlmongodb.ApplyUserQueryToPlan(t.Context(), query, explicitQuery))
+
+	for name, spec := range map[string]*planpb.MongoScan{
+		"explicit query":       explicitQuery,
+		"query column carrier": {MaxParallelism: 1, IncludeQueryColumn: true},
+		"pruned empty result":  {MaxParallelism: 1, EmptyResult: true},
+	} {
+		t.Run(name, func(t *testing.T) {
+			scope := &Scope{Proc: proc, RootOp: mongoscan.NewArgument().WithScan(spec)}
+
+			// A statement can compile while v44 is live, then encounter a rollback
+			// before remote encoding. The sender must not serialize a payload that an
+			// older receiver would silently interpret as a legacy Find.
+			rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion44)
+			data, err := encodeRemoteScope(scope, proc)
+			require.NoError(t, err)
+			rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion43)
+			_, err = encodeRemoteScope(scope, proc)
+			require.ErrorContains(t, err, "MORPC protocol version 44")
+			_, err = decodeScope(data, proc, true, nil)
+			require.ErrorContains(t, err, "MORPC protocol version 44")
+		})
+	}
 }
 
 func TestPartitionTopNPipelineRoundTrip(t *testing.T) {

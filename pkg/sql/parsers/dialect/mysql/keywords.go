@@ -449,6 +449,7 @@ func init() {
 		"replicas":                   REPLICAS,
 		"replication":                REPLICATION,
 		"require":                    REQUIRE,
+		"respect":                    RESPECT,
 		"resignal":                   UNUSED,
 		"restrict":                   RESTRICT,
 		"resume":                     RESUME,

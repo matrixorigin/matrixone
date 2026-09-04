@@ -2543,16 +2543,22 @@ func (ses *Session) AuthenticateUser(ctx context.Context, userInput string, dbNa
 	ses.UpdateDebugString()
 
 	ses.Debugf(ctx, "check special user")
-	// check the special user for initialization
-	if isSpecial, pwdBytes, specialAccount := isSpecialUser(tenant.GetUser()); isSpecial && specialAccount.IsMoAdminRole() {
+	isSpecial, pwdBytes, specialAccount := isSpecialUser(tenant.GetUser())
+	isBootstrapSpecial := isSpecial && specialAccount.IsMoAdminRole()
+	// Internal special users bootstrap the service before catalog access is
+	// available. External special users are normal client connections and must
+	// observe the same fresh catalog boundary as every other public session.
+	if !isBootstrapSpecial || !ses.isInternal {
+		if err = ses.prepareAuthenticationSnapshot(ctx); err != nil {
+			return nil, err
+		}
+	}
+	if isBootstrapSpecial {
 		ses.SetTenantInfo(specialAccount)
 		if len(ses.requestLabel) == 0 {
 			ses.requestLabel = db_holder.GetLabelSelector()
 		}
 		return GetPassWord(HashPassWordWithByte(pwdBytes))
-	}
-	if err = ses.prepareAuthenticationSnapshot(ctx); err != nil {
-		return nil, err
 	}
 
 	bh := ses.GetBackgroundExec(ctx, &BackgroundExecOption{

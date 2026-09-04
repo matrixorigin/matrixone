@@ -846,15 +846,18 @@ func TestProjectedMongoColumnsUsesExternalScanLayout(t *testing.T) {
 		{Name: "pump"},
 		{Name: "__mo_hidden", Hidden: true},
 	}}
-	projected, err := projectedMongoColumns(t.Context(), columns, tableDef)
+	projected, err := projectedMongoColumns(t.Context(), columns, tableDef, false)
 	require.NoError(t, err)
 	require.Equal(t, []sqlmongodb.ColumnMapping{columns[2], columns[1]}, projected)
 
-	_, err = projectedMongoColumns(t.Context(), columns, &plan.TableDef{Cols: []*plan.ColDef{{Name: "missing"}}})
+	_, err = projectedMongoColumns(t.Context(), columns, &plan.TableDef{Cols: []*plan.ColDef{{Name: "missing"}}}, false)
 	require.Error(t, err)
-	_, err = projectedMongoColumns(t.Context(), columns, nil)
+	_, err = projectedMongoColumns(t.Context(), columns, nil, false)
 	require.Error(t, err)
-	_, err = projectedMongoColumns(t.Context(), columns, &plan.TableDef{Cols: []*plan.ColDef{{Name: "hidden", Hidden: true}}})
+	queryOnly, err := projectedMongoColumns(t.Context(), columns, &plan.TableDef{Cols: []*plan.ColDef{{Name: "hidden", Hidden: true}}}, true)
+	require.NoError(t, err)
+	require.Empty(t, queryOnly)
+	_, err = projectedMongoColumns(t.Context(), columns, &plan.TableDef{Cols: []*plan.ColDef{{Name: "hidden", Hidden: true}}}, false)
 	require.Error(t, err)
 }
 

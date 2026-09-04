@@ -16,6 +16,8 @@ package logservicedriver
 
 import (
 	"context"
+	"errors"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -31,7 +33,8 @@ import (
 )
 
 const (
-	MaxReadBatchSize = mpool.MB * 64
+	MaxReadBatchSize          = mpool.MB * 64
+	defaultDriverCloseTimeout = 4 * time.Minute
 )
 
 type replayState struct {
@@ -82,14 +85,23 @@ type LogServiceDriver struct {
 
 	commitLoop      sm.Queue
 	commitWaitQueue chan any
+	pendingWait     atomic.Int64
+	pendingMu       sync.Mutex
+	pendingZero     chan struct{}
 	waitCommitLoop  *sm.Loop
 	postCommitQueue chan any
 	truncateQueue   sm.Queue
 
 	ctx    context.Context
 	cancel context.CancelFunc
+	closeC chan struct{}
 
-	workers *ants.Pool
+	workers   *ants.Pool
+	closeOnce sync.Once
+	closeErr  error
+
+	closeTimeout    time.Duration
+	onAppendFailure func(error)
 }
 
 func NewLogServiceDriver(cfg *Config) *LogServiceDriver {
@@ -98,9 +110,11 @@ func NewLogServiceDriver(cfg *Config) *LogServiceDriver {
 	// and we hope the task will crash all the tn service if append failed.
 	// so, set panic to pool.options.PanicHandler here, or it will only crash
 	// the goroutine the append task belongs to.
-	pool, _ := ants.NewPool(cfg.ClientMaxCount, ants.WithPanicHandler(func(v interface{}) {
-		panic(v)
-	}))
+	pool, _ := ants.NewPool(cfg.ClientMaxCount,
+		ants.WithNonblocking(true),
+		ants.WithPanicHandler(func(v interface{}) {
+			panic(v)
+		}))
 
 	d := &LogServiceDriver{
 		clientPool:          newClientPool(cfg),
@@ -109,7 +123,17 @@ func NewLogServiceDriver(cfg *Config) *LogServiceDriver {
 		commitWaitQueue:     make(chan any, 10000),
 		postCommitQueue:     make(chan any, 10000),
 		workers:             pool,
+		closeC:              make(chan struct{}),
+		closeTimeout:        defaultDriverCloseTimeout,
+		onAppendFailure: func(err error) {
+			logutil.Fatal(
+				"Wal-Cannot-Append",
+				zap.Error(err),
+			)
+		},
 	}
+	d.pendingZero = make(chan struct{})
+	close(d.pendingZero)
 
 	d.config = *cfg
 	d.ctx, d.cancel = context.WithCancel(context.Background())
@@ -132,16 +156,100 @@ func (d *LogServiceDriver) GetMaxClient() int {
 }
 
 func (d *LogServiceDriver) Close() error {
-	d.cancel()
-	d.commitLoop.Stop()
-	d.waitCommitLoop.Stop()
-	// Flush pending truncation requests while the client pool is still usable.
-	d.truncateQueue.Stop()
-	d.clientPool.Close()
-	close(d.commitWaitQueue)
-	close(d.postCommitQueue)
-	d.workers.Release()
-	return nil
+	d.closeOnce.Do(func() {
+		close(d.closeC)
+		// The deadline covers intake, worker submission and waiter delivery.  In
+		// particular, it must begin before SafeQueue.Stop: a callback may be
+		// waiting to submit to a saturated worker pool.
+		closeTimeout := d.closeTimeout
+		if closeTimeout <= 0 {
+			closeTimeout = defaultDriverCloseTimeout
+		}
+		deadline := time.Now().Add(closeTimeout)
+		// Stop intake first. safeQueue.Stop waits for the callback currently
+		// assembling committers, so no new waiter can be added below.
+		stopped := make(chan struct{})
+		go func() {
+			d.commitLoop.Stop()
+			close(stopped)
+		}()
+		stopTimer := time.NewTimer(time.Until(deadline))
+		select {
+		case <-stopped:
+			if !stopTimer.Stop() {
+				select {
+				case <-stopTimer.C:
+				default:
+				}
+			}
+		case <-stopTimer.C:
+			d.closeErr = moerr.NewInternalErrorNoCtx("log service driver commit intake stop timeout")
+			return
+		}
+		// If a worker cannot finish, its committer still owns the durability
+		// outcome; do not close its client or synchronously wait past the
+		// deadline. The caller must fail-stop and let recovery resolve the
+		// unknown commit.
+		remaining := time.Until(deadline)
+		if remaining <= 0 {
+			d.closeErr = moerr.NewInternalErrorNoCtx("log service driver close deadline expired")
+			return
+		}
+		if err := d.workers.ReleaseTimeout(remaining); err != nil {
+			d.closeErr = errors.Join(d.closeErr, err)
+			return
+		}
+
+		// Keep the wait loop alive until every accepted committer has delivered
+		// its terminal notification. This preserves the accepted-entry ownership
+		// contract during a normal driver shutdown.
+		d.pendingMu.Lock()
+		pendingZero := d.pendingZero
+		d.pendingMu.Unlock()
+		waitTimer := time.NewTimer(time.Until(deadline))
+		select {
+		case <-pendingZero:
+			if !waitTimer.Stop() {
+				select {
+				case <-waitTimer.C:
+				default:
+				}
+			}
+		case <-waitTimer.C:
+			d.closeErr = moerr.NewInternalErrorNoCtx("log service driver commit wait drain timeout")
+			return
+		}
+		if d.pendingWait.Load() != 0 {
+			d.closeErr = moerr.NewInternalErrorNoCtx("log service driver commit wait drain timeout")
+			return
+		}
+		d.waitCommitLoop.Stop()
+		// Flush pending truncation requests while the client pool is still usable.
+		d.truncateQueue.Stop()
+		d.clientPool.Close()
+		d.cancel()
+		close(d.commitWaitQueue)
+		close(d.postCommitQueue)
+	})
+	return d.closeErr
+}
+
+func (d *LogServiceDriver) addPendingWait() {
+	d.pendingMu.Lock()
+	if d.pendingWait.Load() == 0 {
+		d.pendingZero = make(chan struct{})
+	}
+	d.pendingWait.Add(1)
+	d.pendingMu.Unlock()
+}
+
+func (d *LogServiceDriver) donePendingWait() {
+	d.pendingMu.Lock()
+	remaining := d.pendingWait.Add(-1)
+	if remaining == 0 {
+		close(d.pendingZero)
+	}
+	d.pendingMu.Unlock()
 }
 
 func (d *LogServiceDriver) Replay(

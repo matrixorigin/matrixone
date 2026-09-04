@@ -383,6 +383,25 @@ func TestStatementDigestHonorsMaxDigestLength(t *testing.T) {
 		if name == "sql_mode" {
 			return "", nil
 		}
+		return uint64(32), nil
+	})
+	maxLength, err = statementDigestMaxLength(proc)
+	require.NoError(t, err)
+	require.Equal(t, 32, maxLength)
+
+	proc.SetResolveVariableFunc(func(name string, _, _ bool) (any, error) {
+		if name == "sql_mode" {
+			return "", nil
+		}
+		return uint64(1048577), nil
+	})
+	_, err = statementDigestMaxLength(proc)
+	require.EqualError(t, err, "internal error: max_digest_length is out of range: 1048577")
+
+	proc.SetResolveVariableFunc(func(name string, _, _ bool) (any, error) {
+		if name == "sql_mode" {
+			return "", nil
+		}
 		return int64(1048577), nil
 	})
 	_, err = statementDigestMaxLength(proc)
