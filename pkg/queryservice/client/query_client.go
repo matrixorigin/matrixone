@@ -51,7 +51,7 @@ var methodVersions = map[pb.CmdMethod]int64{
 	pb.CmdMethod_ResetSession:             defines.MORPCVersion1,
 	// Cache reuse must revalidate against a CN that understands the refresh
 	// request; older protocol versions fail closed and route a fresh backend.
-	pb.CmdMethod_RefreshSessionAuth:      defines.MORPCVersion45,
+	pb.CmdMethod_RefreshSessionAuth:      defines.MORPCVersion46,
 	pb.CmdMethod_GOMAXPROCS:              defines.MORPCVersion3,
 	pb.CmdMethod_GOMEMLIMIT:              defines.MORPCVersion3,
 	pb.CmdMethod_FileServiceCache:        defines.MORPCVersion3,
