@@ -88,7 +88,7 @@ thirdparties/usearch-*/*
 # Stable CI-only Go module cache. Its absolute path participates in
 # golangci-lint package cache keys, so producer and consumer jobs must not move
 # it into per-job random directories.
-.sca-go-module-cache/
+/.sca-go-module-cache/
 
 # bvt generate files
 test/distributed/resources/into_outfile/outfile_*.csv
