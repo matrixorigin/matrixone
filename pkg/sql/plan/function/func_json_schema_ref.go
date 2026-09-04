@@ -523,9 +523,7 @@ func mysqlScanEffectiveSchemaRefs(ctx context.Context, fnName string, index *mys
 			}
 		}
 
-		for _, child := range mysqlEffectiveSchemaChildren(item.pointer, object) {
-			stack = append(stack, child)
-		}
+		stack = append(stack, mysqlEffectiveSchemaChildren(item.pointer, object)...)
 	}
 	return effectiveTargets, nil
 }
