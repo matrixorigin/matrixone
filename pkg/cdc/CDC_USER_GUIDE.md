@@ -1145,7 +1145,7 @@ Use curly braces `{}` to specify options. Options are comma-separated key-value 
 | `NoFull` | boolean | `false` | Skip initial snapshot, sync incremental only |
 | `MaxSqlLength` | integer | 4194304 (4MB) | Maximum SQL statement size in bytes |
 | `SendSqlTimeout` | duration | `10m` | Timeout for sending SQL to target |
-| `InitSnapshotSplitTxn` | boolean | `true` | Split a large initial snapshot into bounded transactions (at most 8 engine batches or 512 MiB each). The final group publishes the watermark; retries reuse a durable per-table-generation source epoch. |
+| `InitSnapshotSplitTxn` | boolean | `true` | Split a large initial snapshot into transactions of at most 8 engine batches. 512 MiB is the grouping threshold; one indivisible engine batch may exceed it. The final group publishes the watermark; retries reuse a durable per-table-generation source epoch. |
 | `Frequency` | duration | `200ms` | Polling frequency for change detection |
 
 **Option Syntax**:
@@ -2983,8 +2983,10 @@ Split large initial snapshots into multiple transactions.
 **Default**: `true`
 
 **Impact**:
-- `true`: Uses retry-safe bounded target transactions (up to eight engine
-  batches or 512 MiB of measured batch allocations per transaction). All
+- `true`: Uses retry-safe grouped target transactions (up to eight engine
+  batches, with a 512 MiB measured-allocation grouping threshold). One
+  indivisible engine batch may exceed 512 MiB, so the current V1 implementation
+  does not treat that threshold as an absolute byte cap. All
   retries read the task's stable initial snapshot timestamp, and the watermark
   advances only after the complete snapshot succeeds.
 - `false`: Uses one atomic target transaction for the complete initial
@@ -3008,6 +3010,9 @@ Split large initial snapshots into multiple transactions.
   implemented, use atomic mode for wildcard mappings that may discover a
   recreated table or for configurations where another CDC task could map to the
   same physical target table.
+- Until the proposed V2 quota-enforced 1 GiB single-batch limit is implemented,
+  size source engine batches and CN memory so one indivisible batch cannot
+  exhaust the CN; 512 MiB alone is only a transaction-grouping threshold.
 
 MatrixOne backup/restore and PITR do not rewind an external target. The current
 implementation does not yet provide the proposed rebuild fence/API. After a

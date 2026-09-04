@@ -42,11 +42,16 @@ The implementation must maintain all of these invariants:
 4. **Ordered catch-up:** source mutations after `S` are processed only by the
    incremental interval `(S, next]`, after the initial watermark is published.
 5. **Bounded target work:** a split target transaction contains at most eight
-   engine batches and at most 512 MiB of measured batch allocations. One engine
-   batch is the unavoidable minimum unit.
-6. **Bounded CN retention:** admission happens before `collector.Next`, one
-   newly admitted batch must be measured before another unknown batch is
-   admitted, and a permit is released exactly once by the terminal owner.
+   engine batches. Its measured bytes are at most
+   `max(512 MiB, largest_single_batch_bytes)`: 512 MiB is the grouping threshold,
+   not an exception-free upper bound. V2 additionally enforces a 1 GiB hard
+   allocation limit for one engine batch, so the absolute transaction bound is
+   1 GiB. A row that cannot fit in that budget fails closed before target work.
+6. **Bounded CN retention:** admission reserves a cgroup-aware byte budget
+   before `collector.Next`; the collector's quota rejects allocation beyond
+   that reservation. Total admitted reservations stay within one quarter of
+   currently available memory, and a permit is released exactly once by the
+   terminal owner.
 7. **Compatibility is fail-safe:** each persisted protocol revision uses a
    distinct daemon executor code. The generation/reservation protocol below
    uses `InitCdcStableEpochV2`; CNs that register only legacy or current
@@ -70,15 +75,19 @@ The implementation must maintain all of these invariants:
    generation-qualified watermark are persisted. Every old pipeline fails a
    generation check before DDL, DML, watermark publication, or epoch
    compaction, even when it shares the task's `(task_runner, last_run)` claim.
-10. **One task owns one target:** a physical target table may be owned by at
-    most one non-terminal CDC task. Explicit table mappings reserve their
+10. **One task owns one target:** once the V2 feature gate is enabled, a physical
+    target table may be owned by at most one non-terminal CDC task of any
+    protocol generation. Explicit table mappings reserve their
     targets in the task-creation transaction. Wildcard/database mappings reserve
     each target atomically at discovery, before epoch persistence or pipeline
     publication. Duplicate reservations fail closed. Resume, restart, and
     recovery revalidate the reservation before acquiring the target-side lock.
     The lock is the runtime backstop for aliases and overlapping owners, not a
-    substitute for durable uniqueness. Ownership is released only after all
-    target writers stop; a later owner must reset the released target.
+    substitute for durable uniqueness. Legacy/V1 tasks are inventoried and
+    fenced before V2 admission as described below; they cannot bypass this
+    invariant merely because they do not understand V2 metadata. Ownership is
+    released only after all target writers stop; every new owner treats an
+    existing target as contaminated and must durably complete a reset.
 11. **Restore and PITR are fail-closed:** MatrixOne catalog recovery cannot
     restore an external target to the same point in time. Restored CDC tasks
     therefore persist `REBUILD_REQUIRED` before normal scheduling can resume.
@@ -123,6 +132,29 @@ inability to obtain a stable target server ID requires reset-and-rebuild; it
 cannot be upgraded in place. The task changes its marker and executor code only
 in the transaction that seals all V2 metadata. A crash before that commit
 remains paused V1; a crash after it is claimable only by V2 CNs.
+
+Legacy atomic and V1 tasks require a compatibility fence before the V2 feature
+gate can open. During a quiesced upgrade phase, new legacy/V1 task creation is
+disabled and the migrator inventories every non-terminal old task. Exact table
+mappings receive exact physical-target compatibility reservations. A database
+or wildcard mapping receives a target-server/database scope reservation that
+covers future discoveries; an account-wide mapping receives a target-server
+scope reservation. If the stable target server identity or conservative scope
+cannot be resolved, V2 remains disabled for that endpoint/account compatibility
+domain; if the domain itself cannot be bounded, the cluster-wide V2 gate stays
+closed. Pre-existing overlap between old tasks must be resolved before the gate
+can open.
+
+`mo_catalog.mo_cdc_target_namespace` has one row per stable target server. Every
+exact reservation and compatibility-scope change locks that row in its catalog
+transaction, then checks all intersecting exact and scoped claims. This
+serialization closes the race between V2 table discovery and compatibility
+backfill. A legacy/V1 task may either pause, join all writers, and migrate by
+the procedure above, or continue under its old executor while its compatibility
+reservation rejects overlapping V2 create, discovery, resume, and recovery.
+Terminal cleanup removes the compatibility reservation only after every old
+writer has stopped. Once the gate is open, no new legacy/V1 task can be created
+or restarted without first migrating to V2.
 
 Each marked table pipeline synchronously obtains its own stable epoch and
 generation token before it starts a reader or sinker. The epoch is the current
@@ -219,6 +251,18 @@ watermark:
    dynamic transaction snapshot, and process the incremental interval after
    `S`.
 
+Before each `collector.Next`, V2 reserves
+`min(1 GiB, floor(cgroup_aware_available_memory / 4) - already_reserved_bytes)`.
+No collector call starts without a positive reservation. The reader builds the
+batch in a quota-enforced allocator and returns a retryable resource error
+instead of exceeding the reservation; a single row/value larger than 1 GiB
+returns a non-retryable, actionable row-too-large error. After observing the
+actual batch size, unused bytes are returned before another waiter is admitted.
+The grouping algorithm commits a non-empty group before adding a batch that
+would cross 512 MiB or eight batches, but accepts one indivisible batch into an
+empty group. Consequently
+`group_bytes <= max(512 MiB, largest_single_batch_bytes) <= 1 GiB`.
+
 `InitSnapshotSplitTxn=false` remains a single atomic target transaction. A task
 without the internal marker also uses that conservative path even if its old
 configuration says split.
@@ -231,10 +275,13 @@ the unique physical-target key
 `(target_server_id VARBINARY(32), sink_database_key VARBINARY(256),
 sink_table_key VARBINARY(256))`. It also stores `account_id BIGINT UNSIGNED`,
 `task_id UUID`, logical source identity, `reservation_token UUID`,
-`state VARCHAR(32)`, and `updated_at TIMESTAMP`. The service performs global
+`state VARCHAR(32)`, `reset_required BOOL`, `reset_token UUID`, and
+`updated_at TIMESTAMP`. The service performs global
 uniqueness checks; tenant sessions cannot read or mutate other ownership rows.
-States are `RESERVED`, `ACTIVE`, `RELEASING`, and `TOMBSTONED`. A conflict never
-degrades to an unlocked or shared target.
+States are `RESERVED`, `RESETTING`, `ACTIVE`, `RELEASING`, and `TOMBSTONED`. A
+conflict never degrades to an unlocked or shared target. Absence is not evidence
+that an external table is clean: every new ownership token starts with
+`reset_required=true` whether it replaces a tombstone or creates an absent row.
 
 The target adapter canonicalizes identity before reservation:
 
@@ -248,6 +295,15 @@ The target adapter canonicalizes identity before reservation:
   `lower_case_table_names` behavior. Case-sensitive targets retain exact bytes;
   case-insensitive targets store the target-normalized form.
 
+`mo_catalog.mo_cdc_compat_target_scope` stores the backfilled old-task fences:
+`target_server_id`, `scope_kind` (`SERVER`, `DATABASE`, or `TABLE`), normalized
+optional database/table keys, `task_id`, protocol version, state, and update
+time. Scope intersection is hierarchical: a server claim intersects every key
+on that server, a database claim intersects all its tables, and a table claim
+intersects its exact key. All scope and exact-reservation transactions lock the
+same `mo_cdc_target_namespace` server row before checking intersection, so a
+wildcard discovery cannot race compatibility backfill or release.
+
 Explicit table mappings acquire all reservations in the `CREATE CDC`
 transaction; partial acquisition rolls back the task. Wildcard/database tasks
 cannot reserve future tables at creation. At discovery they first resolve the
@@ -258,13 +314,23 @@ resolved by rereading the same reservation/generation tokens, never by choosing
 new ones. Conflict moves the task to a non-retryable error until ownership is
 released; it never skips the table silently.
 
-`RESERVED` is retry-owned by its exact task/generation token and becomes
-`ACTIVE` when the pipeline is published. Terminal cleanup first moves it to
-`RELEASING`, stops and joins every writer, then writes `TOMBSTONED`. A new task
-may replace a tombstone only while holding the target-side table lock and must
-reset the target before publishing its generation. Tombstones are retained for
-at least the task lease plus maximum target SQL timeout, then garbage-collected;
-there is at most one ownership row per physical target.
+`RESERVED` is retry-owned by its exact task/generation token. Before publishing
+a pipeline, its owner acquires the physical target lock, rechecks the claim,
+reservation, and generation, and CASes to `RESETTING(reset_token)`. Reset is
+idempotent DROP/CREATE (or an adapter operation with equivalent empty-table
+postcondition). After verifying the empty target, the same token CASes back to
+`RESERVED(reset_required=false)`; only that state may become `ACTIVE`. A crash
+before reset repeats it, a crash after reset but before the CAS repeats it, and
+a crash after the CAS safely resumes publication without selecting new tokens.
+
+Terminal cleanup first moves any `RESERVED`, `RESETTING`, or `ACTIVE`
+reservation to `RELEASING`, stops and joins every writer/reset operation, then
+writes `TOMBSTONED`. A new task
+may replace a tombstone only by allocating a new reset-required token. Tombstones
+are retained for at least the task lease plus maximum target SQL timeout, then
+may be garbage-collected because the Absent transition also requires reset;
+there is at most one ownership row per physical target. Garbage collection
+never removes the reset obligation.
 
 The target-side lock name is derived from the stable server-scoped database and
 table keys and excludes account/task/generation IDs. It serializes claim and
@@ -274,17 +340,19 @@ reservation and table-generation tokens before DDL or DML.
 
 | From | Event | Guard / atomic operation | To |
 | --- | --- | --- | --- |
-| Absent | explicit task creation | insert all target keys in the CREATE transaction | `RESERVED` |
-| Absent | wildcard discovery | insert reservation together with generation/epoch | `RESERVED` |
-| `RESERVED(token)` | publish pipeline | same task and generation token | `ACTIVE(token)` |
+| Absent | explicit task creation | insert all target keys with `reset_required=true` in the CREATE transaction | `RESERVED(new)` |
+| Absent | wildcard discovery | insert reset-required reservation together with generation/epoch | `RESERVED(new)` |
+| `RESERVED(token, reset=true)` | begin reset | target lock plus exact claim/reservation/generation checks; persist `reset_token` | `RESETTING(token)` |
+| `RESETTING(token)` | reset verified | idempotent empty-target postcondition and exact-token CAS | `RESERVED(token, reset=false)` |
+| `RESERVED(token, reset=false)` | publish pipeline | same task and generation token | `ACTIVE(token)` |
 | `RESERVED(token)` | crash/retry | reread and resume only the same token | `RESERVED(token)` |
-| `ACTIVE(token)` | cancel/drop | CAS after preventing new writers | `RELEASING(token)` |
+| `RESERVED`, `RESETTING`, or `ACTIVE` | cancel/drop | exact-token CAS after preventing new work | `RELEASING(token)` |
 | `RELEASING(token)` | all writers joined | exact token and no live target session | `TOMBSTONED(token)` |
-| `TOMBSTONED(old)` | new task reuse | target lock held; allocate new token and require target reset | `RESERVED(new)` |
+| `TOMBSTONED(old)` | new task reuse | allocate a new token with durable reset obligation | `RESERVED(new, reset=true)` |
 
 Split mode deliberately exposes committed snapshot groups to ordinary target
 queries before readiness is published. Partial visibility is part of the public
-split-mode contract, not an atomic snapshot guarantee. V1 has no target-local
+split-mode contract, not an atomic snapshot guarantee. V2 has no target-local
 readiness marker: readiness requires an `ACTIVE` source-side generation row and
 a non-empty `mo_cdc_watermark` with the same source table ID and generation
 token. Operators must not release the target to consumers until both match. A
@@ -329,7 +397,7 @@ The crash-safe ordering is:
 5. The rebuild executor reacquires every target reservation/lock, atomically
    replaces old watermark/epoch metadata with a new `INITIALIZING(G, S)` while
    scheduling remains disabled, drops and recreates the target, and replays the
-   complete snapshot. V1 supports reset-and-rebuild only; there is no ambiguous
+   complete snapshot. V2 supports reset-and-rebuild only; there is no ambiguous
    "fully reconcile" shortcut.
 6. After the final target commit, one MatrixOne transaction publishes the
    generation-qualified watermark, changes the generation to `ACTIVE`, and
@@ -379,11 +447,15 @@ not silently permit unbounded generation churn.
 | Pause or stream close | Earlier committed groups only | Empty | Release batch permit; roll back current group; retain epoch for same-generation retry |
 | Cancel or drop during initial snapshot | Earlier committed groups may remain externally visible | Task metadata is terminal or removed | Stop all writers before releasing ownership; classify the target as contaminated and require reset before reuse |
 | Legacy task lacks protocol marker | No new partial-commit behavior | Empty | Use one atomic target transaction |
+| Running legacy/V1 task overlaps a proposed V2 target | Existing old-task target effects | Existing old-task progress | Compatibility scope blocks V2 create/discovery/resume; migrate or terminate and join the old task first |
+| Compatibility inventory cannot resolve a stable target identity or scope | Possibly overlapping legacy target effects | Unchanged | Keep the V2 feature gate disabled for that target server; never infer absence of overlap |
 | Owner disappears after a bounded group; an older-protocol CN polls the task | Partial snapshot `S` | Empty | The CN cannot resolve the task's versioned executor and does not claim; a protocol-capable CN replays `S` |
 | Wildcard task discovers a table after task creation or retention expiry | None for the new table | Empty | Persist that table generation's current snapshot and begin at that epoch, independent of task creation time |
 | Table is dropped and recreated under the same logical name | Prior generation may have completed or failed | Retired watermark is immediately not ready | CAS the durable active generation to `INITIALIZING(G2, S2)`, cancel/join G1, then reset and replay under the target lock with G2 checks |
 | Old table pipeline wakes after its replacement completes in the same task run | Replacement target state | G2 is active and ready | G1 may acquire the lock, but its generation CAS fails before DDL/DML/watermark/compaction; it exits without effects |
 | Wildcard discovery maps to an already-owned target | Existing owner's target state | Unchanged | Atomically reject reservation before epoch persistence or pipeline publication; the target-side lock independently covers endpoint aliases |
+| New reservation is created after tombstone GC | Target may contain retired-owner rows | Empty for new generation | Absent creates `reset_required=true`; reset under the target lock before pipeline publication |
+| Crash before, during, or immediately after target reset | Unknown or empty target | Empty | Durable `reset_token` remains incomplete; reacquire the lock and repeat the idempotent reset before clearing `reset_required` |
 | Old owner is blocked in target COMMIT when another CN claims its expired taskservice lease | Old transaction may be ambiguous | Empty or advanced | The replacement waits on the target ownership lock. After its heartbeat receives the explicit supersession fence, the old generation is removed from local heartbeat ownership and canceled, retains the lock until its in-flight SQL terminates, and cannot publish a watermark. The replacement then acquires the lock, revalidates its newer claim, and replays to exact state. |
 | Old owner waits for the target lock while a replacement completes | Replacement target state | Empty or advanced | After acquiring the released lock, the old owner revalidates its obsolete daemon claim, releases the lock, and performs no target operation. |
 | Resume or Restart advances `last_run` on the same runner | Existing target state | Preserved | Persist the new token while the request status remains retry-owned, publish it to both runner heartbeat and executor fences, then admit replacement work and publish Running with the same token. |
@@ -407,14 +479,19 @@ or a transaction lock.
 
 For `N` snapshot batches, the historical implementation issued approximately
 `N` target commits. The bounded protocol issues `ceil(N/8)` commits unless the
-512 MiB byte limit produces smaller groups. Compared with the unbounded atomic
+512 MiB grouping threshold produces smaller groups. One indivisible batch may
+exceed that threshold, but V2's quota-enforced 1 GiB single-batch limit makes
+1 GiB the absolute group bound. Compared with the unbounded atomic
 implementation, it caps target transaction amplification; compared with the
 historical per-batch path, it reduces commit round trips by up to eight times.
 
-The CN limiter remains adaptive from one to eight in-flight batches and uses at
-most one quarter of cgroup-aware available memory according to its measured
-batch estimate. Memory discovery is outside the limiter mutex so release and
-cancellation remain non-blocking with respect to procfs/cgroupfs access.
+The CN limiter remains adaptive from one to eight in-flight batches and reserves
+at most one quarter of cgroup-aware available memory before allocation. Each
+collector is quota-bound to its reservation, including the first unknown batch;
+measurement returns unused capacity rather than retroactively accounting an
+already oversized allocation. Memory discovery is outside the limiter mutex so
+release and cancellation remain non-blocking with respect to procfs/cgroupfs
+access.
 
 ## Alternatives rejected
 
@@ -441,7 +518,13 @@ cancellation remain non-blocking with respect to procfs/cgroupfs access.
   task-local ownership. Both a durable uniqueness reservation and a target-side
   lock whose name excludes task ID are required. Explicit mappings reserve at
   task creation; wildcard/database mappings reserve at discovery.
-- MatrixOne restore/PITR never implies rollback of an external target. V1 marks
+- V2 admission includes old protocols: a quiesced inventory installs exact or
+  conservative compatibility-scope fences for every legacy/V1 task before the
+  feature gate opens. Unresolvable identity or overlap keeps V2 disabled.
+- Ownership absence never proves target cleanliness. Every new reservation
+  durably requires an idempotent reset, so tombstone GC cannot erase the reset
+  obligation and a crash cannot publish a pipeline between reset and evidence.
+- MatrixOne restore/PITR never implies rollback of an external target. V2 marks
   affected generations `REBUILD_REQUIRED` behind non-restored scheduler fences;
   only `RESUME CDC TASK <name> 'rebuild'` can run reset-and-rebuild.
 - Retired epochs are kept only through generation reset and completion, then
@@ -465,6 +548,9 @@ implemented. As of parent implementation head `ceedc8463`:
 | V2 protocol marker/executor code and crash-safe V1 migration | Required; not implemented |
 | Generation-qualified active state, watermark/readiness, and old-pipeline fence | Required; not implemented |
 | Durable target reservation, wildcard discovery CAS, canonical server/table identity | Required; not implemented |
+| Legacy/V1 compatibility-scope inventory, namespace serialization, and V2 feature gate | Required; not implemented |
+| Durable reset-required/token state and idempotent reset completion | Required; not implemented |
+| Quota-enforced 1 GiB single-batch allocation limit | Required; not implemented |
 | Non-restored restore fence, `REBUILD_REQUIRED`, and rebuild executor/API | Required; not implemented |
 | Safe retired-epoch compaction and operational bounds | Required; not implemented |
 
@@ -478,12 +564,18 @@ the conservative atomic path for every uncovered lifecycle.
 Deterministic tests must prove:
 
 - stable-epoch selection, end-time capping, and clock-skew waiting;
-- the eight-batch and byte group boundaries;
+- the eight-batch boundary, 512 MiB grouping threshold, formal
+  `max(512 MiB, largest batch)` relation, and quota-enforced 1 GiB single-batch
+  rejection without exceeding the CN reservation;
 - no watermark update for intermediate commits;
 - replay after partial commit plus source DELETE/PK-change converges after tail;
 - commit/begin/read errors roll back only the active group and remain retryable;
 - stale stable snapshots fail closed;
 - legacy tasks use the atomic compatibility path;
+- a running explicit legacy/V1 task and a wildcard legacy/V1 scope both block
+  an overlapping V2 create/discovery/resume before target work; compatibility
+  backfill racing discovery is serialized, and unresolved identity keeps the
+  feature gate closed;
 - legacy/V1 CNs cannot claim V2 tasks; V1 migration seeds only fully provable
   active generations and otherwise requires rebuild, with crashes on both sides
   of the marker transaction remaining safely claimable;
@@ -518,6 +610,9 @@ Deterministic tests must prove:
 - two wildcard tasks discovering the same target concurrently have exactly one
   reservation winner before epoch persistence/pipeline publication; ambiguous
   reservation commit reuses its token;
+- Absent and tombstoned ownership both create a reset-required token; crashes
+  before reset, during reset, and after reset-before-CAS repeat idempotently,
+  and tombstone GC never permits publication without verified reset;
 - endpoint canonicalization covers DNS case/trailing dots, IPv4/IPv6 spelling,
   omitted/default ports, credential/query differences, server aliases, and each
   `lower_case_table_names` mode;
