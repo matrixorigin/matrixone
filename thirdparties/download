@@ -32,6 +32,7 @@ connect_timeout=${MO_DOWNLOAD_CONNECT_TIMEOUT_SECONDS:-15}
 max_time=${MO_DOWNLOAD_MAX_TIME_SECONDS:-120}
 max_bytes=${MO_DOWNLOAD_MAX_BYTES:-134217728}
 retry_delay=${MO_DOWNLOAD_RETRY_DELAY_SECONDS:-1}
+retry_rounds=${MO_DOWNLOAD_RETRY_ROUNDS:-2}
 curl_bin=${MO_DOWNLOAD_CURL_BIN:-curl}
 
 case "$url" in
@@ -67,6 +68,8 @@ case "$retry_delay" in
 		exit 2
 		;;
 esac
+
+require_positive_integer MO_DOWNLOAD_RETRY_ROUNDS "$retry_rounds"
 
 case "$expected_sha256" in
 	*[!0-9a-fA-F]*)
@@ -178,16 +181,30 @@ if "$curl_bin" --disable --help all 2>/dev/null \
 	| grep -q -- '--retry-all-errors'; then
 	retry_count=$((attempts - 1))
 	retry_max_time=$((max_time * attempts))
-	echo "downloading dependency (up to $attempts attempts)"
-	if run_curl \
-		--retry "$retry_count" --retry-all-errors \
-		--retry-max-time "$retry_max_time"; then
-		:
-	else
-		status=$?
-		echo "dependency download failed with curl exit code $status" >&2
-		exit 1
-	fi
+	round=1
+	while :; do
+		echo "downloading dependency (up to $attempts attempts; curl retry round $round/$retry_rounds)"
+		if run_curl \
+			--retry "$retry_count" --retry-all-errors \
+			--retry-max-time "$retry_max_time"; then
+			break
+		else
+			status=$?
+		fi
+		# curl (28) covers connection and TLS-handshake timeouts. Some curl
+		# builds can exhaust their internal retry budget early for that class of
+		# failure, so start one bounded fresh round with a new connection.
+		if [ "$status" -ne 28 ] || [ "$round" -ge "$retry_rounds" ]; then
+			echo "dependency download failed with curl exit code $status" >&2
+			exit 1
+		fi
+		echo "curl timeout exhausted retry round $round/$retry_rounds; retrying with a fresh connection" >&2
+		: > "$tmp"
+		if [ "$retry_delay" -gt 0 ]; then
+			sleep "$retry_delay"
+		fi
+		round=$((round + 1))
+	done
 else
 	attempt=1
 	while :; do

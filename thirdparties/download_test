@@ -77,6 +77,9 @@ mock_curl() {
 		transport-once:1 | always-fail:*)
 			exit 56
 			;;
+		tls-timeout-once:1 | always-timeout:*)
+			exit 28
+			;;
 		always-corrupt:*)
 			printf 'corrupt response\n' > "$output"
 			;;
@@ -304,6 +307,29 @@ fi
 assert_count 1
 assert_retry_contract
 cmp "$MO_DOWNLOAD_MOCK_STATE/original" "$MO_DOWNLOAD_MOCK_STATE/result" || fail "failed download replaced existing destination"
+assert_no_temp_files "$MO_DOWNLOAD_MOCK_STATE"
+
+new_case native-tls-timeout-retry
+MO_DOWNLOAD_MOCK_MODE=tls-timeout-once
+export MO_DOWNLOAD_MOCK_MODE
+"$download_script" https://example.invalid/dependency "$expected_sha256" "$MO_DOWNLOAD_MOCK_STATE/result"
+assert_count 2
+assert_retry_contract
+cmp "$fixture" "$MO_DOWNLOAD_MOCK_STATE/result" || fail "TLS timeout retry installed wrong content"
+assert_publicly_readable "$MO_DOWNLOAD_MOCK_STATE/result"
+assert_no_temp_files "$MO_DOWNLOAD_MOCK_STATE"
+
+new_case native-tls-timeout-exhausted
+printf 'previous invalid dependency\n' > "$MO_DOWNLOAD_MOCK_STATE/result"
+cp "$MO_DOWNLOAD_MOCK_STATE/result" "$MO_DOWNLOAD_MOCK_STATE/original"
+MO_DOWNLOAD_MOCK_MODE=always-timeout
+export MO_DOWNLOAD_MOCK_MODE
+if "$download_script" https://example.invalid/dependency "$expected_sha256" "$MO_DOWNLOAD_MOCK_STATE/result"; then
+	fail "persistent TLS timeout unexpectedly succeeded"
+fi
+assert_count 2
+assert_retry_contract
+cmp "$MO_DOWNLOAD_MOCK_STATE/original" "$MO_DOWNLOAD_MOCK_STATE/result" || fail "TLS timeout replaced existing destination"
 assert_no_temp_files "$MO_DOWNLOAD_MOCK_STATE"
 
 new_case byte-limit
