@@ -160,6 +160,7 @@ func runIssue27947FloatLockScenario(
 			}()
 			rows, err := holder.QueryContext(ctx, "select marker from "+qualified+" for share")
 			require.NoError(t, err)
+			defer rows.Close()
 			rowCount := 0
 			for rows.Next() {
 				var marker int
