@@ -692,16 +692,6 @@ func (t *cancelTask) Handle(ctx context.Context) error {
 		return nil
 	}
 
-	// Complete the irreversible lifecycle cleanup before publishing Canceled.
-	// If the runner dies between these operations, a replacement runner can
-	// still observe CancelRequested and retry the cleanup. Publishing the
-	// terminal state first would make that recovery path invisible forever.
-	if activeRoutine != nil {
-		if err := activeRoutine.Cancel(); err != nil {
-			return err
-		}
-	}
-
 	conditions := []Condition{
 		WithTaskStatusCond(task.TaskStatus_CancelRequested),
 		WithTaskRunnerCond(EQ, tk.TaskRunner),
@@ -725,6 +715,35 @@ func (t *cancelTask) Handle(ctx context.Context) error {
 	}
 	if updated != 1 {
 		return nil
+	}
+	if activeRoutine != nil {
+		if err := activeRoutine.Cancel(); err != nil {
+			// The durable status was claimed before invoking the local
+			// lifecycle owner. Put it back into the retryable state when cleanup
+			// fails; otherwise a transient DELETE failure can strand durable CDC
+			// metadata behind a terminal Canceled row.
+			restoreCtx, restoreCancel := context.WithTimeoutCause(
+				context.Background(),
+				time.Second*5,
+				moerr.CauseCancelTaskHandle,
+			)
+			updated, restoreErr := t.runner.service.UpdateDaemonTaskStatus(
+				restoreCtx,
+				tk.ID,
+				task.TaskStatus_CancelRequested,
+				now,
+				now,
+				WithTaskStatusCond(task.TaskStatus_Canceled),
+			)
+			restoreCancel()
+			if restoreErr == nil && updated != 1 {
+				restoreErr = moerr.NewInternalErrorNoCtx("cancel cleanup failed to restore CancelRequested status")
+			}
+			if restoreErr != nil {
+				return moerr.AttachCause(restoreCtx, errors.Join(err, restoreErr))
+			}
+			return err
+		}
 	}
 	return nil
 }

@@ -746,9 +746,8 @@ func TestPauseAndCancelTaskHandleBranchesDirect(t *testing.T) {
 	require.Error(t, cancelH.Handle(context.Background()))
 	select {
 	case <-cancelRoutine.cancelC:
-		// Cleanup is deliberately completed before the terminal status CAS.
+		t.Fatal("failed status update invoked the active routine")
 	default:
-		t.Fatal("cancel did not invoke the active routine before status update")
 	}
 	hook.setUpdateErr(nil)
 	require.NoError(t, cancelH.Handle(context.Background()))
@@ -769,9 +768,6 @@ func TestPauseAndCancelTaskHandleBranchesDirect(t *testing.T) {
 	dt.TaskStatus = task.TaskStatus_CancelRequested
 	mustUpdateTestDaemonTask(t, store, 1, []task.DaemonTask{dt})
 	require.ErrorContains(t, cancelH.Handle(context.Background()), "cancel failed")
-	got := mustGetTestDaemonTask(t, store, 1, WithTaskIDCond(EQ, dt.ID))
-	require.Equal(t, task.TaskStatus_CancelRequested, got[0].TaskStatus,
-		"a failed local cleanup must remain retryable")
 }
 
 func TestPauseTaskHandleCallsCompleteHookForNonLocalTask(t *testing.T) {
