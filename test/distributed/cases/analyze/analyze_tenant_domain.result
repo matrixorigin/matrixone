@@ -19,24 +19,22 @@ update analyze_stats_domain_guard
 set account_id = (select account_id from mo_account where account_name = 'analyze_stats_tenant_b')
 where v in (3, 4);
 analyze table analyze_stats_domain_guard(v);
-approx_count_distinct(v)
-5
+table_name    mode    coverage    columns_analyzed    population_rows    population_exact    sample_rows    sample_blocks    sample_bytes    status    message
+mo_catalog.analyze_stats_domain_guard    AUTO    SNAPSHOT_VISIBLE_V1    1    5    1    5    1    140    OK    q=1/1
 select table_cnt, json_extract(ndv_map, '$.v') as v_ndv
 from table_stats('mo_catalog.analyze_stats_domain_guard', 'get', 'normal') g;
 table_cnt	v_ndv
 5	5
 use mo_catalog;
 analyze table analyze_stats_domain_guard(v);
-approx_count_distinct(v)
-2
+not supported: ANALYZE TABLE cannot publish statistics for an account-filtered table
 select table_cnt, json_extract(ndv_map, '$.v') as v_ndv
 from table_stats('mo_catalog.analyze_stats_domain_guard', 'get', 'normal') g;
 table_cnt	v_ndv
 5	5
 use mo_catalog;
 analyze table analyze_stats_domain_guard(v);
-approx_count_distinct(v)
-2
+not supported: ANALYZE TABLE cannot publish statistics for an account-filtered table
 select table_cnt, json_extract(ndv_map, '$.v') as v_ndv
 from table_stats('mo_catalog.analyze_stats_domain_guard', 'get', 'normal') g;
 table_cnt	v_ndv

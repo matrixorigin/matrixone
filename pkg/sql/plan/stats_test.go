@@ -505,6 +505,38 @@ func newStatsTestBuilderWithNDV(colName string, ndv float64) *QueryBuilder {
 	return builder
 }
 
+func TestMissingColumnMapsUseUnknownStatsFallbacks(t *testing.T) {
+	builder := newStatsTestBuilderWithNDV("d", 10)
+	wrapper := builder.compCtx.GetStatsCache().Get(1)
+	stats := wrapper.GetStats()
+	delete(stats.NdvMap, "d")
+	col := &planpb.ColRef{RelPos: 0, ColPos: 0, Name: "d"}
+	expr := &planpb.Expr{Expr: &planpb.Expr_Col{Col: col}}
+
+	require.Equal(t, float64(-1), builder.getColNdv(col))
+	require.Equal(t, 0.1, getNullSelectivity(expr, builder, true))
+	require.Equal(t, 0.9, getNullSelectivity(expr, builder, false))
+}
+
+func TestCompleteStatsSizeMapRejectsPartialGenerations(t *testing.T) {
+	tableDef := &planpb.TableDef{Cols: []*planpb.ColDef{
+		{Name: "a"}, {Name: "b"}, {Name: "__hidden", Hidden: true},
+	}}
+	stats := NewStatsInfo()
+	stats.SizeMap["a"] = 10
+	_, complete := completeStatsSizeMap(stats, tableDef)
+	require.False(t, complete)
+
+	stats.SizeMap["b"] = 20
+	total, complete := completeStatsSizeMap(stats, tableDef)
+	require.True(t, complete)
+	require.Equal(t, uint64(30), total)
+
+	stats.SizeMap["a"] = math.MaxUint64
+	_, complete = completeStatsSizeMap(stats, tableDef)
+	require.False(t, complete)
+}
+
 func TestPrimaryKeyStatsShortcutsRequireSQLEqualityCompatibleKey(t *testing.T) {
 	tests := []struct {
 		name         string
