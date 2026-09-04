@@ -747,6 +747,8 @@ func convertToPipelineInstruction(op vm.Operator, proc *process.Process, ctx *sc
 		in.Limit = t.Limit
 		in.PartitionByCount = t.PartitionByCount
 		in.PartitionTopNPreReduce = t.PreReduce
+		in.PartitionAlgorithm = t.Algorithm
+		in.SpillMem = t.SpillMem
 	case *product.Product:
 		relList, colList := getRelColList(t.Result)
 		in.Product = &pipeline.Product{
@@ -1331,6 +1333,8 @@ func convertToVmOperator(opr *pipeline.Instruction, ctx *scopeContext, eng engin
 		arg.Limit = opr.Limit
 		arg.PartitionByCount = opr.PartitionByCount
 		arg.PreReduce = opr.PartitionTopNPreReduce
+		arg.Algorithm = opr.PartitionAlgorithm
+		arg.SpillMem = opr.SpillMem
 		op = arg
 	case vm.Product:
 		t := opr.GetProduct()
