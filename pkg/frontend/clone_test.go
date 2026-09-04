@@ -1301,19 +1301,44 @@ func Test_rewriteCloneCreateSQL_QuotesSystemViewIdentifiers(t *testing.T) {
 	require.NoError(t, err)
 }
 
-func Test_rewriteCloneCreateSQL_RoundTripsInformationSchemaTables(t *testing.T) {
-	got, err := rewriteCloneCreateSQL(
-		sysview.InformationSchemaTablesDDL,
-		"information_schema",
-		"information_schema_new",
-		1,
-	)
-	require.NoError(t, err)
-	require.NotContains(t, got, " reg_match ")
-	require.Contains(t, got, "regexp_like(")
+func Test_rewriteCloneCreateSQL_UsesLocalOnlyInformationSchemaMetadataViews(t *testing.T) {
+	for _, tc := range []struct {
+		name              string
+		ddl               string
+		privateFunction   string
+		localCatalogToken string
+	}{
+		{
+			name:              "tables",
+			ddl:               sysview.InformationSchemaTablesDDL,
+			privateFunction:   "mo_subscription_tables()",
+			localCatalogToken: "from `__mo_visible_tables` as `tbl`",
+		},
+		{
+			name:              "columns",
+			ddl:               sysview.InformationSchemaColumnsDDL,
+			privateFunction:   "mo_subscription_columns()",
+			localCatalogToken: "from `mo_catalog`.`mo_columns` as `mc`",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := rewriteCloneCreateSQL(
+				tc.ddl,
+				"information_schema",
+				"information_schema_new",
+				1,
+			)
+			require.NoError(t, err)
+			require.Contains(t, got, "create view `information_schema_new`")
+			require.Contains(t, got, tc.localCatalogToken)
+			require.NotContains(t, got, tc.privateFunction)
+			require.NotContains(t, got, " reg_match ")
+			require.Contains(t, got, "regexp_like(")
 
-	_, err = rewriteCloneCreateSQL(got, "information_schema_new", "information_schema_next", 1)
-	require.NoError(t, err)
+			_, err = rewriteCloneCreateSQL(got, "information_schema_new", "information_schema_next", 1)
+			require.NoError(t, err)
+		})
+	}
 }
 
 func Test_rewriteCloneCreateSQL_PreservesCaseSensitiveIdentifiers(t *testing.T) {

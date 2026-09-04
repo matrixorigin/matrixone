@@ -99,6 +99,14 @@ func (builder *QueryBuilder) bindInsert(stmt *tree.Insert, bindCtx *BindContext)
 	// createQuery from the materialized new-row image. HNSW/CAGRA/IVF-PQ are cron-
 	// maintained and ride the modern path with no inline sub-plan.
 	tableDef := dmlCtx.tableDefs[0]
+	if tableDef.TableType == catalog.SystemClusterRel {
+		if stmt.Overwrite {
+			return 0, moerr.NewNotSupported(builder.GetContext(), "INSERT OVERWRITE currently supports Iceberg table mappings")
+		}
+		if len(stmt.PartitionValues) > 0 {
+			return 0, moerr.NewNotSupported(builder.GetContext(), "INSERT PARTITION value syntax currently supports Iceberg INSERT OVERWRITE only")
+		}
+	}
 	if err := validateTableRegularIndexPrefixMetadata(tableDef); err != nil {
 		return 0, err
 	}
@@ -1875,6 +1883,61 @@ func (builder *QueryBuilder) appendInsertIgnoreMultiDedup(
 	return lastNodeID, outputTag, arbiterNode, nil
 }
 
+// collectGeneratedColumnDependents returns the set of columns that may change
+// when any column in seed is assigned during ODKU. Generated columns are
+// expanded to a fixed point so a generated column can depend on another
+// generated column. The returned names are canonical table column names.
+func collectGeneratedColumnDependents(ctx context.Context, tableDef *plan.TableDef, seed map[string]struct{}) (map[string]struct{}, error) {
+	possiblyChanged := make(map[string]struct{}, len(seed))
+	for name := range seed {
+		resolved := catalog.ResolveAlias(name)
+		colIdx, ok := tableDef.Name2ColIndex[resolved]
+		if !ok || colIdx < 0 || int(colIdx) >= len(tableDef.Cols) {
+			return nil, moerr.NewInternalErrorf(ctx,
+				"cannot resolve generated column dependency seed %q", name)
+		}
+		possiblyChanged[tableDef.Cols[colIdx].Name] = struct{}{}
+	}
+
+	for {
+		expanded := false
+		for _, col := range tableDef.Cols {
+			if col.GeneratedCol == nil {
+				continue
+			}
+			references := collectRefColPos(col.GeneratedCol.Expr)
+			for _, pos := range references {
+				if pos < 0 || int(pos) >= len(tableDef.Cols) {
+					return nil, moerr.NewInternalErrorf(ctx,
+						"invalid generated column reference position %d for column %q", pos, col.Name)
+				}
+			}
+			if _, alreadyChanged := possiblyChanged[col.Name]; alreadyChanged {
+				continue
+			}
+			for _, pos := range references {
+				if _, sourceChanged := possiblyChanged[tableDef.Cols[pos].Name]; sourceChanged {
+					possiblyChanged[col.Name] = struct{}{}
+					expanded = true
+					break
+				}
+			}
+		}
+		if !expanded {
+			return possiblyChanged, nil
+		}
+	}
+}
+
+func columnPossiblyChanged(tableDef *plan.TableDef, possiblyChanged map[string]struct{}, name string) bool {
+	resolved := catalog.ResolveAlias(name)
+	if colIdx, ok := tableDef.Name2ColIndex[resolved]; ok && colIdx >= 0 && int(colIdx) < len(tableDef.Cols) {
+		resolved = tableDef.Cols[colIdx].Name
+	}
+	_, ok := possiblyChanged[resolved]
+	return ok
+}
+
 func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 	bindCtx *BindContext,
 	dmlCtx *DMLContext,
@@ -1909,13 +1972,15 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 	// legacy ODKU operator used to handle. The legacy ODKU operator has been removed,
 	// so let such an ODKU through to the modern dedup+multi-update path: the metadata
 	// table is a normal real-PK table that the modern path handles correctly.
-	// Temporary tables are ordinary user DML targets even though their durable
-	// relkind is distinct; accept either the catalog marker or the session-scoped
-	// resolution bit without admitting any of the internal index table types.
+	// Cluster and temporary tables are ordinary user DML targets even though their
+	// durable relkind is distinct; accept their catalog markers (or the temporary
+	// table's session-scoped resolution bit) without admitting any of the internal
+	// index table types.
 	isOnDupUpdate := len(astUpdateExprs) > 0 &&
 		!(len(astUpdateExprs) == 1 && astUpdateExprs[0] == nil)
 	isRegularDMLTarget := tableDef.TableType == catalog.SystemOrdinaryRel ||
 		tableDef.TableType == catalog.SystemIndexRel ||
+		tableDef.TableType == catalog.SystemClusterRel ||
 		tableDef.TableType == catalog.SystemTemporaryTable ||
 		tableDef.IsTemporary
 	if !isOnDupUpdate &&
@@ -1932,6 +1997,7 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 	selectTag := selectNode.BindingTags[0]
 	scanTag := builder.genNewBindTag()
 	updateExprs := make(map[string]*plan.Expr)
+	possiblyChangedCols := make(map[string]struct{})
 	autoUpdateCols := make(map[string]bool)
 	allExplicitAssignmentsSkipped := false
 
@@ -2035,6 +2101,20 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 			updateExprs[colName] = updateExpr
 		}
 
+		// Keep the dependency set separate from updateExprs: updateExprs is the
+		// final row image and receives every generated expression below, while
+		// possiblyChangedCols describes which keys may need maintenance.
+		seedCols := make(map[string]struct{}, len(updateExprs))
+		for colName := range updateExprs {
+			seedCols[colName] = struct{}{}
+		}
+		possiblyChangedCols, err = collectGeneratedColumnDependents(
+			builder.GetContext(), tableDef, seedCols,
+		)
+		if err != nil {
+			return 0, err
+		}
+
 		// Recompute generated columns from the final updated row image, so
 		// ON DUPLICATE KEY UPDATE stays consistent with regular UPDATE behavior.
 		finalRowExprs := make([]*plan.Expr, len(tableDef.Cols))
@@ -2069,12 +2149,7 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 	}
 
 	for _, part := range tableDef.Pkey.Names {
-		if _, ok := updateExprs[part]; ok {
-			// Generated columns are auto-recomputed, not explicitly updated by the user.
-			// Allow them in PK even though they appear in updateExprs.
-			if idx, exists := tableDef.Name2ColIndex[part]; exists && tableDef.Cols[idx].GeneratedCol != nil {
-				continue
-			}
+		if columnPossiblyChanged(tableDef, possiblyChangedCols, part) {
 			return 0, moerr.NewUnsupportedDML(builder.GetContext(), "update primary key on duplicate")
 		}
 	}
@@ -2166,12 +2241,7 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 	idxNeedUpdate := make([]bool, len(tableDef.Indexes))
 	for i, idxDef := range tableDef.Indexes {
 		for _, part := range idxDef.Parts {
-			resolved := catalog.ResolveAlias(part)
-			if _, ok := updateExprs[resolved]; ok {
-				// Skip generated columns in unique key check (auto-recomputed, not user-set)
-				if idx, exists := tableDef.Name2ColIndex[resolved]; exists && tableDef.Cols[idx].GeneratedCol != nil {
-					continue
-				}
+			if columnPossiblyChanged(tableDef, possiblyChangedCols, part) {
 				if idxDef.Unique {
 					return 0, moerr.NewUnsupportedDML(builder.GetContext(), "update unique key on duplicate")
 				} else {
@@ -2254,9 +2324,10 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 		}
 		if len(idxDef.Parts) == 1 && len(prefixLengths) == 0 {
 			var ok bool
-			pkIdxInBat, ok = colName2Idx[tableDef.Name+"."+idxDef.Parts[0]]
+			partName := catalog.ResolveAlias(idxDef.Parts[0])
+			pkIdxInBat, ok = colName2Idx[tableDef.Name+"."+partName]
 			if !ok {
-				return 0, moerr.NewInternalErrorf(builder.GetContext(), "bind insert err, can not find colName = %s", idxDef.Parts[0])
+				return 0, moerr.NewInternalErrorf(builder.GetContext(), "bind insert err, can not find colName = %s", partName)
 			}
 		} else {
 			lockColName := idxDef.IndexTableName + "." + catalog.IndexTableIndexColName
@@ -2738,31 +2809,22 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 		// generated value would defeat the no-op guard even when the user's
 		// explicit update changed nothing. A generated column whose source is a
 		// user-updated column is still caught by that source column's own <=>.
-		noopSkipCols := make(map[string]bool, len(autoUpdateCols))
+		noopSkipSeeds := make(map[string]struct{}, len(autoUpdateCols))
 		for name := range autoUpdateCols {
-			noopSkipCols[name] = true
+			noopSkipSeeds[name] = struct{}{}
 		}
-		for changed := true; changed; {
-			changed = false
-			for _, col := range tableDef.Cols {
-				if col.GeneratedCol == nil || noopSkipCols[col.Name] {
-					continue
-				}
-				for _, pos := range collectRefColPos(col.GeneratedCol.Expr) {
-					if int(pos) < len(tableDef.Cols) && noopSkipCols[tableDef.Cols[pos].Name] {
-						noopSkipCols[col.Name] = true
-						changed = true
-						break
-					}
-				}
-			}
+		noopSkipCols, err := collectGeneratedColumnDependents(
+			builder.GetContext(), tableDef, noopSkipSeeds,
+		)
+		if err != nil {
+			return 0, err
 		}
 		var allColsEqual *plan.Expr
 		for i, col := range tableDef.Cols {
 			if col.Name == catalog.Row_ID || col.Hidden {
 				continue
 			}
-			if noopSkipCols[col.Name] {
+			if _, skipped := noopSkipCols[col.Name]; skipped {
 				continue
 			}
 			// Only compare columns the update actually writes. A column absent from
