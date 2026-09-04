@@ -242,7 +242,28 @@ func TestInitInformationSchemaSysTablesForProtocol(t *testing.T) {
 		})
 	}
 
-	latest := InitInformationSchemaSysTablesForProtocol(defines.MORPCVersion41)
+	for _, protocol := range []int64{
+		defines.MORPCVersion41,
+		defines.MORPCVersion42,
+		defines.MORPCVersion43,
+		defines.MORPCVersion44,
+		defines.MORPCVersion45,
+	} {
+		t.Run(fmt.Sprintf("local-catalog-v%d", protocol), func(t *testing.T) {
+			localCatalog := InitInformationSchemaSysTablesForProtocol(protocol)
+			assert.Len(t, localCatalog, len(InitInformationSchemaSysTables))
+			assert.Contains(t, localCatalog, InformationSchemaTablesV41DDL)
+			assert.Contains(t, localCatalog, InformationSchemaColumnsV41DDL)
+			assert.NotContains(t, strings.Join(localCatalog, "\n"), "mo_subscription_tables()")
+			assert.NotContains(t, strings.Join(localCatalog, "\n"), "mo_subscription_columns()")
+			assert.Contains(t, strings.Join(localCatalog, "\n"), "mo_current_roles()")
+			for _, sql := range localCatalog {
+				assertInformationSchemaInitSQLParses(t, sql)
+			}
+		})
+	}
+
+	latest := InitInformationSchemaSysTablesForProtocol(defines.MORPCVersion46)
 	assert.Equal(t, InitInformationSchemaSysTables, latest)
 }
 
@@ -268,12 +289,45 @@ func TestInformationSchemaColumnsDDL_UsesConnectorCompatibleDataType(t *testing.
 	assert.Contains(t, InformationSchemaColumnsDDL, "else split_part(mo_show_visible_bin(mc.atttyp,2), ' ', 1) end) end) as DATA_TYPE")
 }
 
+func TestInformationSchemaSubscriptionMetadataDDL(t *testing.T) {
+	assert.Contains(t, InformationSchemaTablesDDL, "FROM mo_subscription_tables()")
+	assert.NotContains(t, InformationSchemaTablesV41DDL, "mo_subscription_tables()")
+	assert.Equal(t, 1, strings.Count(InformationSchemaTablesV41DDL, "internal_auto_increment("))
+	assert.NotContains(t, InformationSchemaColumnsDDL, "mo_subscription_tables()")
+	assert.Contains(t, InformationSchemaColumnsDDL, "from mo_subscription_columns() mc")
+	assert.NotContains(t, InformationSchemaColumnsV41DDL, "mo_subscription_tables()")
+	assert.NotContains(t, InformationSchemaColumnsV41DDL, "mo_subscription_columns()")
+	assert.Contains(t, InformationSchemaTablesDDL, "FROM __mo_visible_tables tbl")
+	assert.Contains(t, InformationSchemaTablesDDL, "FROM mo_subscription_tables() tbl")
+	assert.Contains(t, InformationSchemaTablesDDL, "tbl.owner IN (SELECT role_id FROM __mo_active_roles)")
+	assert.Contains(t, InformationSchemaTablesDDL, "rp.obj_id = tbl.rel_logical_id")
+	assert.Equal(t, 1, strings.Count(InformationSchemaTablesDDL, "mo_subscription_tables()"))
+	assert.Equal(t, 1, strings.Count(InformationSchemaTablesDDL, "internal_auto_increment("))
+	assert.Contains(t, InformationSchemaTablesDDL,
+		"if(relkind = 'v', NULL, cast(0 as bigint unsigned)) AS `AUTO_INCREMENT`")
+	assert.Contains(t, InformationSchemaColumnsDDL, "UNION ALL select 'def' as TABLE_CATALOG")
+	assert.Contains(t, InformationSchemaColumnsDDL, "mc.table_owner IN (SELECT role_id FROM __mo_active_roles)")
+	assert.Contains(t, InformationSchemaColumnsDDL, "rp.obj_id = mc.rel_logical_id")
+
+	for _, ddl := range []string{
+		InformationSchemaTablesDDL,
+		InformationSchemaColumnsDDL,
+		InformationSchemaTablesV41DDL,
+		InformationSchemaColumnsV41DDL,
+	} {
+		assertInformationSchemaInitSQLParses(t, ddl)
+	}
+}
+
 func TestInformationSchemaColumnsDDL_HidesInternalColumns(t *testing.T) {
 	assert.Contains(t, InformationSchemaColumnsDDL, "mc.att_is_hidden = 0")
 	assert.Contains(t, InformationSchemaColumnsDDL, "not startswith(mc.att_relname, '"+catalog.IndexTableNamePrefix+"')")
 	assert.Contains(t, InformationSchemaColumnsDDL, "mk.key_priority = 3 then 'PRI'")
 	assert.Contains(t, InformationSchemaColumnsDDL, "when mk.key_priority = 2 then 'UNI'")
 	assert.Contains(t, InformationSchemaColumnsDDL, "when mk.key_priority = 1 then 'MUL'")
+	assert.Contains(t, InformationSchemaColumnsDDL, "mc.key_priority = 3 then 'PRI'")
+	assert.Contains(t, InformationSchemaColumnsDDL, "when mc.key_priority = 2 then 'UNI'")
+	assert.Contains(t, InformationSchemaColumnsDDL, "when mc.key_priority = 1 then 'MUL'")
 	assert.Contains(t, InformationSchemaColumnsDDL, "ki.ordinal_position = 1")
 	assert.Contains(t, InformationSchemaColumnsDDL, "ki.type = 'PRIMARY'")
 	assert.Contains(t, InformationSchemaColumnsDDL, "kp.part_count = 1")
