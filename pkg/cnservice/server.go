@@ -85,6 +85,7 @@ const (
 	rssCacheAdmissionPressureTTL = 2 * time.Minute
 	rssCachePressureTargetOwner  = "cn-rss"
 	bootstrapRetryInterval       = 100 * time.Millisecond
+	txnTraceDirectoryKeyPrefix   = "cn-"
 )
 
 var (
@@ -1411,7 +1412,13 @@ func resolveTxnTraceDataPath(rootDir, serviceID string) (string, error) {
 	if rootDir == "" {
 		return "", nil
 	}
-	return filepath.Join(rootDir, serviceID), nil
+	return filepath.Join(rootDir, txnTraceDirectoryKey(serviceID)), nil
+}
+
+func txnTraceDirectoryKey(serviceID string) string {
+	// A lowercase lossless encoding keeps byte-distinct service IDs in distinct
+	// directories on filesystems that fold case or normalize Unicode names.
+	return txnTraceDirectoryKeyPrefix + hex.EncodeToString([]byte(serviceID))
 }
 
 func (s *service) initTxnTraceService() {

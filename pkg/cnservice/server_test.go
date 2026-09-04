@@ -16,6 +16,7 @@ package cnservice
 
 import (
 	"context"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"net"
@@ -767,7 +768,7 @@ func TestInitTxnTraceServiceUsesCNOwnedDirectory(t *testing.T) {
 					require.FileExists(t, marker)
 				}
 
-				dir := filepath.Join(root, id)
+				dir := filepath.Join(root, "cn-"+hex.EncodeToString([]byte(id)))
 				require.DirExists(t, dir)
 				marker := filepath.Join(dir, fmt.Sprintf("owner-%d", i))
 				require.NoError(t, os.WriteFile(marker, []byte(id), 0644))
@@ -779,7 +780,78 @@ func TestInitTxnTraceServiceUsesCNOwnedDirectory(t *testing.T) {
 			require.FileExists(t, markers[0])
 			require.NoFileExists(t, markers[1])
 			require.FileExists(t, markers[2])
-			require.DirExists(t, filepath.Join(root, ids[1]))
+			require.DirExists(t, filepath.Join(root, "cn-"+hex.EncodeToString([]byte(ids[1]))))
+		})
+	}
+}
+
+func TestInitTxnTraceServiceUsesFilesystemDistinctDirectoryKeys(t *testing.T) {
+	testCases := []struct {
+		name string
+		ids  []string
+	}{
+		{
+			name: "case variants",
+			ids:  []string{"trace-dir-cn-alias", "TRACE-DIR-CN-ALIAS"},
+		},
+		{
+			name: "unicode normalization variants",
+			ids:  []string{"trace-dir-cn-caf\u00e9", "trace-dir-cn-cafe\u0301"},
+		},
+	}
+
+	for _, testCase := range testCases {
+		t.Run(testCase.name, func(t *testing.T) {
+			root := t.TempDir()
+			services := make([]*service, 0, len(testCase.ids))
+			paths := make([]string, 0, len(testCase.ids))
+			marker := ""
+
+			for i, id := range testCase.ids {
+				path, err := resolveTxnTraceDataPath(root, id)
+				require.NoError(t, err)
+				require.Equal(
+					t,
+					filepath.Join(root, "cn-"+hex.EncodeToString([]byte(id))),
+					path,
+				)
+				paths = append(paths, path)
+
+				moruntime.SetupServiceBasedRuntime(id, moruntime.DefaultRuntime())
+				cfg := &Config{UUID: id}
+				cfg.Txn.Trace.BufferSize = 8
+				s := &service{cfg: cfg}
+				s.options.traceDataPath = root
+				s.initTxnTraceService()
+				services = append(services, s)
+
+				if i == 0 {
+					marker = filepath.Join(path, "owner")
+					require.NoError(t, os.WriteFile(marker, []byte(id), 0644))
+				} else {
+					require.FileExists(t, marker)
+				}
+			}
+			t.Cleanup(func() {
+				for _, s := range services {
+					require.NoError(t, s.closeTxnTraceService())
+				}
+			})
+
+			require.NotEqual(t, paths[0], paths[1])
+
+			require.NoError(t, services[1].closeTxnTraceService())
+			services = services[:1]
+			moruntime.SetupServiceBasedRuntime(testCase.ids[1], moruntime.DefaultRuntime())
+			cfg := &Config{UUID: testCase.ids[1]}
+			cfg.Txn.Trace.BufferSize = 8
+			s := &service{cfg: cfg}
+			s.options.traceDataPath = root
+			s.initTxnTraceService()
+			services = append(services, s)
+
+			require.FileExists(t, marker)
+			require.DirExists(t, paths[1])
 		})
 	}
 }
@@ -801,7 +873,7 @@ func TestInitTxnTraceServiceFailurePreservesSiblingDirectory(t *testing.T) {
 
 	first := newService("trace-dir-cn-a")
 	first.initTxnTraceService()
-	marker := filepath.Join(root, first.cfg.UUID, "owner")
+	marker := filepath.Join(root, "cn-"+hex.EncodeToString([]byte(first.cfg.UUID)), "owner")
 	require.NoError(t, os.WriteFile(marker, []byte(first.cfg.UUID), 0644))
 
 	require.NoError(t, os.Chmod(root, 0555))
