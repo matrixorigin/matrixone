@@ -145,12 +145,15 @@ type service struct {
 	}
 
 	upgrade struct {
-		upgradeTenantBatch         int
-		checkUpgradeDuration       time.Duration
-		checkUpgradeTenantDuration time.Duration
-		upgradeTenantTasks         int
-		finalVersionCompleted      atomic.Bool
-		kek                        string
+		upgradeTenantBatch                      int
+		checkUpgradeDuration                    time.Duration
+		checkUpgradeTenantDuration              time.Duration
+		upgradeTenantTasks                      int
+		finalVersionCompleted                   atomic.Bool
+		orphanPrivilegeMaintenanceWorkerRunning atomic.Bool
+		orphanPrivilegeMaintenanceRunning       atomic.Bool
+		orphanPrivilegeMaintenanceCursor        atomic.Int32
+		kek                                     string
 	}
 }
 

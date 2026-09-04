@@ -38,7 +38,7 @@ import (
 )
 
 func TestUpgradeEntries(t *testing.T) {
-	require.Len(t, tenantUpgEntries, 34)
+	require.Len(t, tenantUpgEntries, 35)
 	require.Len(t, clusterUpgEntries, 7)
 	require.Equal(t, retireKafkaSinkDaemonTasks.UpgSql, clusterUpgEntries[0].UpgSql)
 	require.Equal(t, catalog.MO_VIEW_DEPENDENCIES, clusterUpgEntries[1].TableName)
@@ -276,6 +276,15 @@ func TestInformationSchemaMetadataVisibilityUpgradeChecks(t *testing.T) {
 	require.Equal(t, catalog.MO_CATALOG, allocatorIndex.Schema)
 	require.Equal(t, "mo_iceberg_catalogs", allocatorIndex.TableName)
 	require.Contains(t, strings.ToLower(allocatorIndex.UpgSql), "create index catalog_id_allocator")
+
+	rolePrivsIndex := tenantUpgEntries[34]
+	require.Equal(t, versions.ADD_INDEX, rolePrivsIndex.UpgType)
+	require.Equal(t, catalog.MO_CATALOG, rolePrivsIndex.Schema)
+	require.Equal(t, "mo_role_privs", rolePrivsIndex.TableName)
+	require.Equal(t,
+		"create index idx_mo_role_privs_obj_id on mo_catalog.mo_role_privs(obj_id)",
+		rolePrivsIndex.UpgSql,
+	)
 }
 
 func TestMoColumnsUnsignedBackfillPredicate(t *testing.T) {
@@ -384,7 +393,7 @@ func TestUserDefinedFunctionArgumentTypesBackfillRejectsOversizedSignature(t *te
 }
 
 func TestForeignKeyMetadataTenantUpgradeEntries(t *testing.T) {
-	require.Len(t, tenantUpgEntries, 34)
+	require.Len(t, tenantUpgEntries, 35)
 
 	for i, column := range []string{"referenced_index_name", "on_delete_origin", "on_update_origin"} {
 		entry := tenantUpgEntries[2+i]
@@ -1295,6 +1304,78 @@ func newLegacyForeignKeyDefinitionResultForDefinitions(t *testing.T, definitions
 		}
 	}
 	return result.GetResult()
+}
+
+func TestMaintainOrphanObjectPrivilegesPage(t *testing.T) {
+	const accountID = uint32(9)
+
+	t.Run("creates missing index before deleting", func(t *testing.T) {
+		var sqls []string
+		exec := executor.NewMemTxnExecutor(func(sql string) (executor.Result, error) {
+			sqls = append(sqls, sql)
+			if strings.Contains(sql, "from `mo_catalog`.`mo_indexes`") {
+				return executor.Result{}, nil
+			}
+			if strings.HasPrefix(sql, "create index idx_mo_role_privs_obj_id") {
+				return executor.Result{}, nil
+			}
+			return executor.Result{}, fmt.Errorf("unexpected sql: %s", sql)
+		}, nil)
+
+		clean, err := MaintainOrphanObjectPrivilegesPage(exec, accountID)
+		require.NoError(t, err)
+		require.False(t, clean)
+		require.Len(t, sqls, 2)
+		require.NotContains(t, strings.Join(sqls, "\n"), "delete from mo_catalog.mo_role_privs")
+	})
+
+	for _, test := range []struct {
+		name             string
+		databaseAffected uint64
+		relationAffected uint64
+		wantRelation     bool
+		wantClean        bool
+	}{
+		{name: "full database page remains incomplete", databaseAffected: 1000},
+		{name: "partial database page remains incomplete", databaseAffected: 1},
+		{name: "full relation page remains incomplete", relationAffected: 1000, wantRelation: true},
+		{name: "partial relation page completes tenant", relationAffected: 999, wantRelation: true, wantClean: true},
+		{name: "empty tenant completes", wantRelation: true, wantClean: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			var databaseSQL, relationSQL string
+			exec := executor.NewMemTxnExecutor(func(sql string) (executor.Result, error) {
+				switch {
+				case strings.Contains(sql, "from `mo_catalog`.`mo_indexes`"):
+					return newProtocolVersionResultValue(t, moRolePrivsObjectIDIndexName), nil
+				case strings.Contains(sql, "mo_database d"):
+					databaseSQL = sql
+					return executor.Result{AffectedRows: test.databaseAffected}, nil
+				case strings.Contains(sql, "mo_tables t"):
+					relationSQL = sql
+					return executor.Result{AffectedRows: test.relationAffected}, nil
+				default:
+					return executor.Result{}, fmt.Errorf("unexpected sql: %s", sql)
+				}
+			}, nil)
+
+			clean, err := MaintainOrphanObjectPrivilegesPage(exec, accountID)
+			require.NoError(t, err)
+			require.Equal(t, test.wantClean, clean)
+			require.NotEmpty(t, databaseSQL)
+			require.Contains(t, databaseSQL, "obj_id != 0")
+			require.Contains(t, databaseSQL, "privilege_level in ('d.*','*')")
+			require.Contains(t, databaseSQL, "d.account_id = current_account_id()")
+			require.Contains(t, databaseSQL, "limit 1000")
+			require.Equal(t, test.wantRelation, relationSQL != "")
+			if test.wantRelation {
+				require.Contains(t, relationSQL, "privilege_level in ('d.t','t')")
+				require.Contains(t, relationSQL, "t.rel_logical_id = mo_role_privs.obj_id")
+				require.Contains(t, relationSQL, "t.account_id = current_account_id()")
+				require.Contains(t, relationSQL, "limit 1000")
+			}
+		})
+	}
 }
 
 func newShowCreateTableResult(t *testing.T, tableName, createSQL string) executor.Result {

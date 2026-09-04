@@ -94,7 +94,8 @@ var (
 				operation_user_id int unsigned,
 				granted_time timestamp,
 				with_grant_option bool,
-				primary key(role_id, obj_type, obj_id, privilege_id, privilege_level)
+				primary key(role_id, obj_type, obj_id, privilege_id, privilege_level),
+				key idx_mo_role_privs_obj_id(obj_id)
 			)`
 
 	MoCatalogMoUserDefinedFunctionDDL = fmt.Sprintf(`create table mo_catalog.mo_user_defined_function (
