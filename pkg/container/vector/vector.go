@@ -4433,8 +4433,8 @@ func (v *Vector) MarshalBinaryWithBuffer(buf *bytes.Buffer) error {
 	return v.MarshalBinaryTo(buf)
 }
 
-// MarshalBinaryPlan is a validated, allocation-free snapshot of one Vector's
-// wire lengths. It lets batch writers size once and encode once.
+// MarshalBinaryPlan is a validated snapshot of one Vector's wire layout. It
+// lets batch writers size once and encode once.
 type MarshalBinaryPlan struct {
 	vector          *Vector
 	size            int
@@ -4442,6 +4442,8 @@ type MarshalBinaryPlan struct {
 	areaLength      uint32
 	nullLength      uint32
 	canonicalVarlen bool
+	canonicalOffset []uint32
+	canonicalFirst  []bool
 }
 
 func (p MarshalBinaryPlan) Size() int {
@@ -4478,6 +4480,13 @@ func (v *Vector) PrepareMarshalBinary() (MarshalBinaryPlan, error) {
 	}
 	areaLength := uint64(len(v.area))
 	canonicalVarlen := isVarlenaMarshalType(v.typ.Oid) && dataLength > 0
+	if dataLength > uint64(len(v.data)) {
+		return MarshalBinaryPlan{}, moerr.NewInvalidInputNoCtx(
+			"vector data is shorter than its marshal length",
+		)
+	}
+	var canonicalOffset []uint32
+	var canonicalFirst []bool
 	if canonicalVarlen {
 		if dataLength%types.VarlenaSize != 0 {
 			return MarshalBinaryPlan{}, moerr.NewInvalidInputNoCtx(
@@ -4491,6 +4500,10 @@ func (v *Vector) PrepareMarshalBinary() (MarshalBinaryPlan, error) {
 				"varlen vector descriptor count does not match marshal length",
 			)
 		}
+		canonicalOffset = make([]uint32, len(descriptors))
+		canonicalFirst = make([]bool, len(descriptors))
+		type areaSpan struct{ offset, length uint32 }
+		seen := make(map[areaSpan]uint32, len(descriptors))
 		for index := range descriptors {
 			if v.IsNull(uint64(index)) || descriptors[index].IsSmall() {
 				continue
@@ -4502,11 +4515,19 @@ func (v *Vector) PrepareMarshalBinary() (MarshalBinaryPlan, error) {
 					"varlen vector descriptor is outside its area",
 				)
 			}
+			span := areaSpan{offset: offset, length: length}
+			if compactOffset, ok := seen[span]; ok {
+				canonicalOffset[index] = compactOffset
+				continue
+			}
 			if uint64(length) > maxWireBuffer-areaLength {
 				return MarshalBinaryPlan{}, moerr.NewInvalidInputNoCtx(
 					"canonical varlen area exceeds marshal format",
 				)
 			}
+			canonicalOffset[index] = uint32(areaLength)
+			canonicalFirst[index] = true
+			seen[span] = uint32(areaLength)
 			areaLength += uint64(length)
 		}
 	}
@@ -4516,11 +4537,6 @@ func (v *Vector) PrepareMarshalBinary() (MarshalBinaryPlan, error) {
 		nullLength > maxWireBuffer {
 		return MarshalBinaryPlan{}, moerr.NewInvalidInputNoCtx(
 			"vector buffer exceeds marshal format",
-		)
-	}
-	if dataLength > uint64(len(v.data)) {
-		return MarshalBinaryPlan{}, moerr.NewInvalidInputNoCtx(
-			"vector data is shorter than its marshal length",
 		)
 	}
 	total := uint64(1+types.TSize+4+4+4+4+1) +
@@ -4537,6 +4553,8 @@ func (v *Vector) PrepareMarshalBinary() (MarshalBinaryPlan, error) {
 		areaLength:      uint32(areaLength),
 		nullLength:      uint32(nullLength),
 		canonicalVarlen: canonicalVarlen,
+		canonicalOffset: canonicalOffset,
+		canonicalFirst:  canonicalFirst,
 	}, nil
 }
 
@@ -4586,15 +4604,13 @@ func (p MarshalBinaryPlan) MarshalTo(w io.Writer) error {
 	}
 	if p.dataLength > 0 {
 		if p.canonicalVarlen {
-			var compactOffset uint32
 			for index, descriptor := range MustFixedColNoTypeCheck[types.Varlena](v) {
 				canonical := descriptor
 				if v.IsNull(uint64(index)) {
 					canonical = types.Varlena{}
 				} else if !descriptor.IsSmall() {
 					_, length := descriptor.OffsetLen()
-					canonical.SetOffsetLen(compactOffset, length)
-					compactOffset += length
+					canonical.SetOffsetLen(p.canonicalOffset[index], length)
 				}
 				bytes := unsafe.Slice((*byte)(unsafe.Pointer(&canonical)), types.VarlenaSize)
 				if err := writeVectorMarshalBytes(w, bytes); err != nil {
@@ -4614,7 +4630,7 @@ func (p MarshalBinaryPlan) MarshalTo(w io.Writer) error {
 	if p.areaLength > 0 {
 		if p.canonicalVarlen {
 			for index, descriptor := range MustFixedColNoTypeCheck[types.Varlena](v) {
-				if v.IsNull(uint64(index)) || descriptor.IsSmall() {
+				if v.IsNull(uint64(index)) || descriptor.IsSmall() || !p.canonicalFirst[index] {
 					continue
 				}
 				offset, length := descriptor.OffsetLen()

@@ -131,11 +131,6 @@ func queryCount(t testing.TB, db *sql.DB, query string, args ...any) int64 {
 	return n
 }
 
-func queryConnectionID(t testing.TB, db *sql.DB) int64 {
-	t.Helper()
-	return queryCount(t, db, "select connection_id()")
-}
-
 // waitUntilStatementRunning polls information_schema.processlist from a second
 // connection until the target connection's current statement text contains needle,
 // proving the statement is actually mid-execution before the caller acts on it (e.g.

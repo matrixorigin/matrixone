@@ -35,6 +35,13 @@ linters:
             - $all
             - '!$test'
             - '!pkg/iceberg/adapter/iceberggo/**/*.go'
+            # Arrow IPC is isolated to the ingestion bridge and its external
+            # scan reader. Keep the dependency out of all other production
+            # packages, including the Iceberg-facing layers.
+            - '!pkg/container/arrowbridge/**/*.go'
+            - '!pkg/sql/colexec/external/arrowio/**/*.go'
+            - '!pkg/sql/colexec/external/reader_arrow.go'
+            - '!pkg/sql/compile/compile.go'
           deny:
             - pkg: github.com/apache/iceberg-go
               desc: Iceberg dependency must stay behind pkg/iceberg/adapter/iceberggo
