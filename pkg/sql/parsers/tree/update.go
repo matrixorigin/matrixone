@@ -259,10 +259,14 @@ type ExParamConst struct {
 	// ArrowMatchByPosition is planner-derived from an explicit LOAD column
 	// list. It is inert unless the compile-only Arrow execution scope is set.
 	ArrowMatchByPosition bool
-	Option               []string
-	Data                 string
-	Tail                 *TailParameter
-	StageName            Identifier
+	// ArrowForceMaterialize is a compile-time snapshot of the CN rollout
+	// setting. Keeping it with the external-scan payload makes local and remote
+	// scopes use one conversion policy for the whole statement generation.
+	ArrowForceMaterialize bool
+	Option                []string
+	Data                  string
+	Tail                  *TailParameter
+	StageName             Identifier
 
 	HivePartitioning      bool
 	HivePartitionCols     []string

@@ -35,18 +35,35 @@ import (
 // sequential calls across this package's tests never trip the "accidental second
 // embedded test cluster" exclusivity guard, and the feature never leaks into any
 // other package's shared cluster or the default etc/launch* BVT configuration.
-func startArrowLoadCluster(t *testing.T, cnCount int, enabled, s3Enabled, distributedEnabled bool) embed.Cluster {
+type arrowLoadClusterOptions struct {
+	cnCount            int
+	enabled            bool
+	s3Enabled          bool
+	distributedEnabled bool
+	forceMaterialize   bool
+}
+
+func startArrowLoadCluster(t testing.TB, cnCount int, enabled, s3Enabled, distributedEnabled bool) embed.Cluster {
+	t.Helper()
+	return startArrowLoadClusterWithOptions(t, arrowLoadClusterOptions{
+		cnCount: cnCount, enabled: enabled, s3Enabled: s3Enabled,
+		distributedEnabled: distributedEnabled,
+	})
+}
+
+func startArrowLoadClusterWithOptions(t testing.TB, options arrowLoadClusterOptions) embed.Cluster {
 	t.Helper()
 	c, err := embed.StartTestCluster(
-		embed.WithCNCount(cnCount),
+		embed.WithCNCount(options.cnCount),
 		embed.WithPreStart(func(svc embed.ServiceOperator) {
 			if svc.ServiceType() != metadata.ServiceType_CN {
 				return
 			}
 			svc.Adjust(func(cfg *embed.ServiceConfig) {
-				cfg.CN.Frontend.ArrowLoad.Enabled = enabled
-				cfg.CN.Frontend.ArrowLoad.S3Enabled = s3Enabled
-				cfg.CN.Frontend.ArrowLoad.DistributedEnabled = distributedEnabled
+				cfg.CN.Frontend.ArrowLoad.Enabled = options.enabled
+				cfg.CN.Frontend.ArrowLoad.S3Enabled = options.s3Enabled
+				cfg.CN.Frontend.ArrowLoad.DistributedEnabled = options.distributedEnabled
+				cfg.CN.Frontend.ArrowLoad.ForceMaterialize = options.forceMaterialize
 			})
 		}),
 	)
@@ -57,11 +74,29 @@ func startArrowLoadCluster(t *testing.T, cnCount int, enabled, s3Enabled, distri
 	return c
 }
 
+// adjustArrowLoadCluster changes only the next CN generation's rollout
+// settings. Callers close the current generation before adjustment and restart
+// afterward, so an admitted statement always keeps the policy snapshot carried
+// in its compiled external-scan payload.
+func adjustArrowLoadCluster(c embed.Cluster, options arrowLoadClusterOptions) {
+	c.ForeachServices(func(svc embed.ServiceOperator) bool {
+		if svc.ServiceType() == metadata.ServiceType_CN {
+			svc.Adjust(func(cfg *embed.ServiceConfig) {
+				cfg.CN.Frontend.ArrowLoad.Enabled = options.enabled
+				cfg.CN.Frontend.ArrowLoad.S3Enabled = options.s3Enabled
+				cfg.CN.Frontend.ArrowLoad.DistributedEnabled = options.distributedEnabled
+				cfg.CN.Frontend.ArrowLoad.ForceMaterialize = options.forceMaterialize
+			})
+		}
+		return true
+	})
+}
+
 // openArrowLoadDB opens a real MySQL-protocol connection (not the internal SQL
 // executor) against the given CN, so statements run through the same frontend path
 // a real client would use. This is required for KILL QUERY, multi-session isolation, and
 // SHOW-PROCESSLIST-style observation to mean anything.
-func openArrowLoadDB(t *testing.T, c embed.Cluster, cnIndex int) *sql.DB {
+func openArrowLoadDB(t testing.TB, c embed.Cluster, cnIndex int) *sql.DB {
 	t.Helper()
 	cn, err := c.GetCNService(cnIndex)
 	require.NoError(t, err)
@@ -75,20 +110,20 @@ func openArrowLoadDB(t *testing.T, c embed.Cluster, cnIndex int) *sql.DB {
 	return db
 }
 
-func mustExec(t *testing.T, db *sql.DB, stmt string, args ...any) {
+func mustExec(t testing.TB, db *sql.DB, stmt string, args ...any) {
 	t.Helper()
 	_, err := db.Exec(stmt, args...)
 	require.NoError(t, err, stmt)
 }
 
-func queryCount(t *testing.T, db *sql.DB, query string, args ...any) int64 {
+func queryCount(t testing.TB, db *sql.DB, query string, args ...any) int64 {
 	t.Helper()
 	var n int64
 	require.NoError(t, db.QueryRow(query, args...).Scan(&n), query)
 	return n
 }
 
-func queryConnectionID(t *testing.T, db *sql.DB) int64 {
+func queryConnectionID(t testing.TB, db *sql.DB) int64 {
 	t.Helper()
 	return queryCount(t, db, "select connection_id()")
 }
@@ -99,7 +134,7 @@ func queryConnectionID(t *testing.T, db *sql.DB) int64 {
 // issues KILL QUERY). This is a deterministic synchronization point, not a
 // fixed-duration sleep: it returns as soon as the condition holds, and fails the
 // test if it never does within deadline.
-func waitUntilStatementRunning(t *testing.T, observer *sql.DB, connID int64, needle string, deadline time.Duration) {
+func waitUntilStatementRunning(t testing.TB, observer *sql.DB, connID int64, needle string, deadline time.Duration) {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), deadline)
 	defer cancel()

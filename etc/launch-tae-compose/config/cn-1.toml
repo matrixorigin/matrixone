@@ -62,6 +62,7 @@ proxy-enabled = true
 enabled = true
 s3-enabled = false
 distributed-enabled = true
+force-materialize = false
 
 [cn.frontend.iceberg]
 enable = true

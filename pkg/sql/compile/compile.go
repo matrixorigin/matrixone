@@ -2425,13 +2425,22 @@ func arrowParamForRollout(
 	param *tree.ExternParam,
 	settings config.ArrowLoadParameters,
 ) *tree.ExternParam {
-	if param == nil || !param.Parallel || settings.DistributedEnabled {
+	if param == nil {
 		return param
 	}
-	serial := new(tree.ExternParam)
-	*serial = *param
-	serial.Parallel = false
-	return serial
+	// Rollout settings are sampled once while the statement is compiled. A
+	// private copy prevents a service-level change, or another compile using the
+	// parser-owned value, from changing policy halfway through one generation.
+	parallel := param.Parallel && settings.DistributedEnabled
+	if parallel == param.Parallel &&
+		settings.ForceMaterialize == param.ArrowForceMaterialize {
+		return param
+	}
+	rollout := new(tree.ExternParam)
+	*rollout = *param
+	rollout.Parallel = parallel
+	rollout.ArrowForceMaterialize = settings.ForceMaterialize
+	return rollout
 }
 
 func (c *Compile) getExternalFileListAndSize(node *plan.Node, param *tree.ExternParam) (fileList []string, fileSize []int64, err error) {

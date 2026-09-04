@@ -49,7 +49,7 @@ const (
 // tests) pass the same dir to each fixture call; single-file tests just pass a
 // fresh t.TempDir().
 func writeArrowFile(
-	t *testing.T,
+	t testing.TB,
 	dir, filename, container string,
 	schema *arrow.Schema,
 	emit func(alloc memory.Allocator, write func(arrow.RecordBatch) error),
@@ -378,7 +378,7 @@ const (
 // spread across largeFixtureBatches record batches, giving both the multi-CN
 // parallel-shard test and the cancel-mid-LOAD test enough real decode/insert work to
 // observe or interrupt without relying on a sleep.
-func fixtureLarge(t *testing.T) (path string, schemaDDL string) {
+func fixtureLarge(t testing.TB) (path string, schemaDDL string) {
 	t.Helper()
 	schema := arrow.NewSchema([]arrow.Field{
 		{Name: "id", Type: arrow.PrimitiveTypes.Int64, Nullable: false},

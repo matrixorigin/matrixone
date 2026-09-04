@@ -513,6 +513,9 @@ message ExternalScan {
   repeated ArrowRecordBatchShard arrow_record_batch_shards = 30;
   bytes arrow_schema_fingerprint = 31;
   uint32 arrow_conversion_plan_version = 32;
+  // Compile-time policy snapshot. Older CNs ignore this additive field and
+  // still reject Arrow format before execution, so mixed versions fail closed.
+  bool arrow_force_materialize = 33;
 }
 
 message TableScan {

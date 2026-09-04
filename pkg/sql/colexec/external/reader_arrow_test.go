@@ -121,6 +121,54 @@ func TestExternalArrowLoadFileAndStream(t *testing.T) {
 	}
 }
 
+func TestExternalArrowForceMaterialize(t *testing.T) {
+	borrowedBefore := promtestutil.ToFloat64(
+		metric.ArrowLoadPayloadBytesCounter.WithLabelValues("borrowed"),
+	)
+	copyBefore := promtestutil.ToFloat64(
+		metric.ArrowLoadCopyBytesCounter.WithLabelValues("arrow_to_mo"),
+	)
+	fileBytes := makeExternalArrowIPC(t, tree.ARROW_CONTAINER_FILE)
+	fs, err := fileservice.NewMemoryFS("etl", fileservice.DisabledCacheConfig, nil)
+	require.NoError(t, err)
+	path := "etl:force-materialize.arrow"
+	require.NoError(t, fs.Write(context.Background(), fileservice.IOVector{
+		FilePath: path,
+		Entries:  []fileservice.IOEntry{{Offset: 0, Size: int64(len(fileBytes)), Data: fileBytes}},
+	}))
+
+	registry, err := mpool.NewAllocationAccountRegistry(1, 128)
+	require.NoError(t, err)
+	account, err := registry.Open(64 << 20)
+	require.NoError(t, err)
+	proc := testutil.NewProc(t)
+	param := externalArrowParam(fs, path, int64(len(fileBytes)), tree.ARROW_CONTAINER_FILE)
+	param.ArrowForceMaterialize = true
+	arg := NewArgument().WithEs(param)
+	require.NoError(t, arg.SetAllocationAccount(account))
+	require.NoError(t, arg.Prepare(proc))
+
+	result, err := arg.Call(proc)
+	require.NoError(t, err)
+	require.Equal(t, vm.ExecNext, result.Status)
+	require.False(t, result.Batch.Vecs[0].HasBorrowedBacking())
+	require.False(t, result.Batch.Vecs[1].HasBorrowedBacking())
+	require.Equal(t, borrowedBefore, promtestutil.ToFloat64(
+		metric.ArrowLoadPayloadBytesCounter.WithLabelValues("borrowed"),
+	))
+	require.Greater(t, promtestutil.ToFloat64(
+		metric.ArrowLoadCopyBytesCounter.WithLabelValues("arrow_to_mo"),
+	), copyBefore)
+
+	arg.Free(proc, false, nil)
+	require.Zero(t, account.Snapshot().Used)
+	require.NoError(t, arg.ClearAllocationAccount(account))
+	arg.Release()
+	account.Seal()
+	_, err = registry.Finalize(account)
+	require.NoError(t, err)
+}
+
 func TestArrowLoadErrorCategory(t *testing.T) {
 	tests := []struct {
 		err      error

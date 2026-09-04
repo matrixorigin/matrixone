@@ -25,6 +25,8 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/embed"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
+	"github.com/matrixorigin/matrixone/pkg/util/fault"
 	"github.com/stretchr/testify/require"
 )
 
@@ -55,12 +57,43 @@ func TestArrowLoadBVT(t *testing.T) {
 	t.Run("ExplicitTransactionVisibility", func(t *testing.T) { testArrowExplicitTransaction(t, c) })
 	t.Run("TwoSessionIsolation", func(t *testing.T) { testArrowTwoSessionIsolation(t, c) })
 	t.Run("DifferentialVsInsert", func(t *testing.T) { testArrowDifferentialVsInsert(t, db) })
+	t.Run("CommitPhaseFailureRollback", func(t *testing.T) { testArrowCommitPhaseFailureRollback(t, db) })
 	t.Run("LocalMinIO", func(t *testing.T) { testArrowLoadLocalMinIO(t, db) })
 
 	// Restart is deliberately last: it destroys every existing SQL connection
 	// while preserving the cluster data directory. No later subtest may depend on
 	// the original CN generation.
 	t.Run("ClusterRestartPersistence", func(t *testing.T) { testArrowClusterRestart(t, c, db) })
+}
+
+// testArrowCommitPhaseFailureRollback injects the transaction failure after
+// workspace batches have been dumped but before commit becomes visible. That is
+// later than reader/conversion failures, so this test closes the statement-level
+// atomicity contract at the actual commit boundary and then proves the same
+// source can be retried after the injection is removed.
+func testArrowCommitPhaseFailureRollback(t *testing.T, db *sql.DB) {
+	path := fixtureIDName(t, t.TempDir(), "commit-failure.arrow", containerFile,
+		[][]idNameRow{{{id: 1, name: "loaded"}}})
+	mustExec(t, db, "drop table if exists commit_failure_rollback")
+	mustExec(t, db, "create table commit_failure_rollback(id bigint not null, name varchar(50))")
+	mustExec(t, db, "insert into commit_failure_rollback values (0, 'seed')")
+
+	fault.Enable()
+	defer fault.Disable()
+	removeFailure, err := objectio.SimpleInject(objectio.FJ_CNCommitAfterWorkspaceDumpFailed)
+	require.NoError(t, err)
+	defer removeFailure()
+
+	_, err = db.Exec(fmt.Sprintf(
+		"load data infile {'filepath'='%s','format'='arrow'} into table commit_failure_rollback", path))
+	require.ErrorContains(t, err, "injected commit failure after workspace dump")
+	removeFailure()
+	require.Equal(t, int64(1), queryCount(t, db, "select count(*) from commit_failure_rollback"),
+		"a failed commit must not expose any Arrow rows")
+
+	mustExec(t, db, fmt.Sprintf(
+		"load data infile {'filepath'='%s','format'='arrow'} into table commit_failure_rollback", path))
+	require.Equal(t, int64(2), queryCount(t, db, "select count(*) from commit_failure_rollback"))
 }
 
 // TestArrowLoadGateDisabled proves the primary rollout gate fails closed: with
