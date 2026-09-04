@@ -352,6 +352,19 @@ func foreachIncrementalObject(
 	from, to types.TS,
 	fn func(*catalog.ObjectEntry) error,
 ) error {
+	appendCommittedBefore := func(obj *catalog.ObjectEntry) bool {
+		if !obj.IsAppendable() {
+			return false
+		}
+		objData := obj.GetObjectData()
+		if objData == nil {
+			return false
+		}
+		// A sealed aobject publishes this bound only after every attached
+		// AppendNode has committed or rolled back. Since PrepareTS <= CommitTS,
+		// maxCommitTS < from proves that it cannot contribute to [from, to].
+		return objData.CoarseCheckAllRowsCommittedBefore(from)
+	}
 	visitCreateGroup := func(group catalog.ObjectListGroup, appendable bool) error {
 		// An appendable object created before from can still contain an append
 		// prepared in [from, to]. Do not use the lower CreatedAt bound to
@@ -361,6 +374,9 @@ func foreachIncrementalObject(
 		visitEntry := func(obj *catalog.ObjectEntry) bool {
 			if obj.CreatedAt.GT(&to) {
 				return false
+			}
+			if appendCommittedBefore(obj) {
+				return true
 			}
 			// A create-only group contains serving C entries without a D
 			// counterpart. With CreatedAt <= to established above,
@@ -389,6 +405,9 @@ func foreachIncrementalObject(
 				return true
 			}
 			if !obj.VisibleByTS(to) {
+				return true
+			}
+			if appendCommittedBefore(obj) {
 				return true
 			}
 			err = fn(obj)

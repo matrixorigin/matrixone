@@ -78,7 +78,8 @@ func (appender *objectAppender) PrepareAppend(
 	start := appender.obj.reserved.Load()
 	left := appender.obj.meta.Load().GetSchema().Extra.BlockMaxRows - start
 	if left == 0 {
-		// n = rows
+		appender.obj.frozen.Store(true)
+		appender.obj.appendMVCC.SealLocked()
 		return
 	}
 	if rows > left {
@@ -93,7 +94,15 @@ func (appender *objectAppender) PrepareAppend(
 	if isMergeCompact {
 		node.SetIsMergeCompact()
 	}
-	appender.obj.reserved.Store(start + n)
+	reserved := start + n
+	appender.obj.reserved.Store(reserved)
+	if reserved == appender.obj.meta.Load().GetSchema().Extra.BlockMaxRows {
+		// The caller holds freezelock while allocating rows. Seal under the
+		// same MVCC write lock as the final AppendNode insertion, so no later
+		// allocator can race final max-commit publication.
+		appender.obj.frozen.Store(true)
+		appender.obj.appendMVCC.SealLocked()
+	}
 	return
 }
 

@@ -175,6 +175,48 @@ func TestGetActiveRow(t *testing.T) {
 	require.ErrorIs(t, mnode.checkConflictLocked(nil)(1), index.ErrNotFound)
 }
 
+func TestPrepareAppendSealsFullObjectAndPublishesCommitBound(t *testing.T) {
+	schema := catalog.MockSchema(1, 0)
+	schema.Extra.BlockMaxRows = 2
+	c := catalog.MockCatalog(nil)
+	defer c.Close()
+	db, err := c.CreateDBEntry("db", "", "", nil)
+	require.NoError(t, err)
+	table, err := db.CreateTableEntry(schema, nil, nil)
+	require.NoError(t, err)
+	noid := objectio.NewObjectid()
+	stats := objectio.NewObjectStatsWithObjectID(&noid, true, false, false)
+	entry, err := table.CreateObject(nil, &objectio.CreateObjOpt{Stats: stats}, nil)
+	require.NoError(t, err)
+	obj := newAObject(entry, nil, false)
+	appender := newAppender(obj)
+	txn := &txnbase.Txn{
+		TxnCtx: txnbase.NewTxnCtx(
+			common.NewTxnIDAllocator().Alloc(),
+			types.BuildTS(1, 0),
+			types.TS{},
+		),
+	}
+
+	appender.LockFreeze()
+	appendNode, created, rows, err := appender.PrepareAppend(false, 2, txn)
+	appender.UnlockFreeze()
+	require.NoError(t, err)
+	require.True(t, created)
+	require.Equal(t, uint32(2), rows)
+	require.True(t, obj.IsAppendFrozen())
+	_, finalized := obj.GetAppendMaxCommitTS()
+	require.False(t, finalized)
+
+	txn.CommitTS = types.BuildTS(5, 0)
+	require.NoError(t, appendNode.ApplyCommit(txn.ID))
+	maxCommit, finalized := obj.GetAppendMaxCommitTS()
+	require.True(t, finalized)
+	require.Equal(t, types.BuildTS(5, 0), maxCommit)
+	require.False(t, obj.CoarseCheckAllRowsCommittedBefore(types.BuildTS(5, 0)))
+	require.True(t, obj.CoarseCheckAllRowsCommittedBefore(types.BuildTS(6, 0)))
+}
+
 func TestWaitAppendCommittingBeforeSkipsSameTxn(t *testing.T) {
 	defer testutils.AfterTest(t)()
 	schema := catalog.MockSchema(1, 0)

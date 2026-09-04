@@ -51,6 +51,9 @@ func newAObject(
 	obj := &aobject{}
 	obj.baseObject = newBaseObject(obj, meta, rt)
 	if meta.IsForcePNode() || obj.meta.Load().HasDropCommitted() {
+		// A recovered persisted object does not carry the complete in-memory
+		// AppendNode history. Its max commit bound must remain unknown.
+		obj.appendMVCC.MarkAppendHistoryIncomplete()
 		pnode := newPersistedNode(obj.baseObject)
 		node := NewNode(pnode)
 		node.Ref()
@@ -69,6 +72,20 @@ func newAObject(
 
 func (obj *aobject) FreezeAppend() {
 	obj.frozen.Store(true)
+}
+
+// SealAppend permanently closes the object's AppendNode set. Unlike the
+// legacy FreezeAppend flag, sealing also enables a stable max-commit
+// timestamp once all already attached append transactions finish.
+func (obj *aobject) SealAppend() {
+	obj.freezelock.Lock()
+	defer obj.freezelock.Unlock()
+	obj.frozen.Store(true)
+	obj.appendMVCC.Seal()
+}
+
+func (obj *aobject) GetAppendMaxCommitTS() (types.TS, bool) {
+	return obj.appendMVCC.GetMaxCommitTS()
 }
 
 func (obj *aobject) IsAppendFrozen() bool {
@@ -93,7 +110,7 @@ func (obj *aobject) PrepareCompactInfo() (result bool, reason string) {
 		reason = fmt.Sprintf("entering refcount %d", n)
 		return
 	}
-	obj.FreezeAppend()
+	obj.SealAppend()
 	if !obj.meta.Load().PrepareCompact() || !obj.appendMVCC.PrepareCompact() {
 		if !obj.meta.Load().PrepareCompact() {
 			reason = "meta preparecomp false"
@@ -121,9 +138,7 @@ func (obj *aobject) PrepareCompact() bool {
 		return false
 	}
 	// see more notes in flushtabletail.go
-	obj.freezelock.Lock()
-	obj.FreezeAppend()
-	obj.freezelock.Unlock()
+	obj.SealAppend()
 
 	droppedCommitted := obj.meta.Load().HasDropCommitted()
 
@@ -162,23 +177,8 @@ func (obj *aobject) Pin() *common.PinnedItem[*aobject] {
 // create ts and less than the block's delete ts
 // it is a coarse-grained check
 func (obj *aobject) CoarseCheckAllRowsCommittedBefore(ts types.TS) bool {
-	// if the block is not frozen, always return false
-	if !obj.IsAppendFrozen() {
-		return false
-	}
-
-	node := obj.PinNode()
-	defer node.Unref()
-
-	// if the block is in memory, check with the in-memory node
-	// it is a fine-grained check if the block is in memory
-	if !node.IsPersisted() {
-		return node.MustMNode().allRowsCommittedBefore(ts)
-	}
-
-	// always return false for if the block is persisted
-	// it is a coarse-grained check
-	return false
+	maxCommit, finalized := obj.GetAppendMaxCommitTS()
+	return finalized && maxCommit.LT(&ts)
 }
 
 func (obj *aobject) GetDuplicatedRows(

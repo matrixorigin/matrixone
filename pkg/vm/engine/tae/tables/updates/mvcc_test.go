@@ -103,6 +103,64 @@ func TestMutationControllerAppend(t *testing.T) {
 	t.Logf("%s -- %d ops", time.Since(st), len(queries))
 }
 
+func TestSealedAppendMVCCPublishesMaxCommitAfterAllTransactionsFinish(t *testing.T) {
+	schema := catalog.MockSchema(1, 0)
+	c := catalog.MockCatalog(nil)
+	defer c.Close()
+	db, err := c.CreateDBEntry("db", "", "", nil)
+	require.NoError(t, err)
+	table, err := db.CreateTableEntry(schema, nil, nil)
+	require.NoError(t, err)
+	noid := objectio.NewObjectid()
+	stats := objectio.NewObjectStatsWithObjectID(&noid, true, false, false)
+	obj, err := table.CreateObject(nil, &objectio.CreateObjOpt{Stats: stats}, nil)
+	require.NoError(t, err)
+	h := NewAppendMVCCHandle(obj)
+
+	txn1, txn2, txn3 := mockTxn(), mockTxn(), mockTxn()
+	n1, _ := h.AddAppendNodeLocked(txn1, 0, 1)
+	n2, _ := h.AddAppendNodeLocked(txn2, 1, 2)
+	n3, _ := h.AddAppendNodeLocked(txn3, 2, 3)
+	h.Seal()
+	_, finalized := h.GetMaxCommitTS()
+	require.False(t, finalized)
+	require.Panics(t, func() { h.AddAppendNodeLocked(mockTxn(), 3, 4) })
+
+	txn2.CommitTS = types.BuildTS(9, 0)
+	require.NoError(t, n2.ApplyCommit(txn2.ID))
+	_, finalized = h.GetMaxCommitTS()
+	require.False(t, finalized)
+
+	// The highest-timestamp transaction aborts and must not contribute to the
+	// stable maximum.
+	txn3.CommitTS = types.BuildTS(11, 0)
+	require.NoError(t, n3.ApplyRollback())
+	_, finalized = h.GetMaxCommitTS()
+	require.False(t, finalized)
+
+	txn1.CommitTS = types.BuildTS(7, 0)
+	require.NoError(t, n1.ApplyCommit(txn1.ID))
+	maxCommit, finalized := h.GetMaxCommitTS()
+	require.True(t, finalized)
+	require.Equal(t, types.BuildTS(9, 0), maxCommit)
+}
+
+func TestSealedEmptyAppendMVCCIsImmediatelyFinalized(t *testing.T) {
+	h := NewAppendMVCCHandle(nil)
+	h.Seal()
+	maxCommit, finalized := h.GetMaxCommitTS()
+	require.True(t, finalized)
+	require.True(t, maxCommit.IsEmpty())
+}
+
+func TestSealedAppendMVCCHistoryIncompleteHasNoCommitBound(t *testing.T) {
+	h := NewAppendMVCCHandle(nil)
+	h.MarkAppendHistoryIncomplete()
+	h.Seal()
+	_, finalized := h.GetMaxCommitTS()
+	require.False(t, finalized)
+}
+
 // AppendNode Start Prepare End Aborted
 // a1 1,1,1 false
 // a2 1,3,5 false
