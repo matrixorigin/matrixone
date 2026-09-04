@@ -828,6 +828,99 @@ func TestBitXorWindowSpec(t *testing.T) {
 	require.Equal(t, "bit_xor", identifier.ColName())
 }
 
+func TestValueWindowDefaultModifiers(t *testing.T) {
+	testCases := []struct {
+		name      string
+		sql       string
+		canonical string
+	}{
+		{
+			name:      "LAG RESPECT NULLS",
+			sql:       "select lag(v) respect nulls over (order by id) from t",
+			canonical: "select lag(v) over (order by id) from t",
+		},
+		{
+			name:      "LAG with offset RESPECT NULLS",
+			sql:       "select lag(v, 2) respect nulls over (order by id) from t",
+			canonical: "select lag(v, 2) over (order by id) from t",
+		},
+		{
+			name:      "LAG with offset and default RESPECT NULLS",
+			sql:       "select lag(v, 2, 0) respect nulls over (order by id) from t",
+			canonical: "select lag(v, 2, 0) over (order by id) from t",
+		},
+		{
+			name:      "LEAD RESPECT NULLS",
+			sql:       "select lead(v) respect nulls over (order by id) from t",
+			canonical: "select lead(v) over (order by id) from t",
+		},
+		{
+			name:      "LEAD with offset RESPECT NULLS",
+			sql:       "select lead(v, 2) respect nulls over (order by id) from t",
+			canonical: "select lead(v, 2) over (order by id) from t",
+		},
+		{
+			name:      "LEAD with offset and default RESPECT NULLS",
+			sql:       "select lead(v, 2, 0) respect nulls over (order by id) from t",
+			canonical: "select lead(v, 2, 0) over (order by id) from t",
+		},
+		{
+			name:      "FIRST_VALUE RESPECT NULLS",
+			sql:       "select first_value(v) respect nulls over (order by id) from t",
+			canonical: "select first_value(v) over (order by id) from t",
+		},
+		{
+			name:      "LAST_VALUE RESPECT NULLS",
+			sql:       "select last_value(v) respect nulls over (order by id) from t",
+			canonical: "select last_value(v) over (order by id) from t",
+		},
+		{
+			name:      "NTH_VALUE RESPECT NULLS",
+			sql:       "select nth_value(v, 2) respect nulls over (order by id) from t",
+			canonical: "select nth_value(v, 2) over (order by id) from t",
+		},
+		{
+			name:      "NTH_VALUE FROM FIRST",
+			sql:       "select nth_value(v, 2) from first over (order by id) from t",
+			canonical: "select nth_value(v, 2) over (order by id) from t",
+		},
+		{
+			name:      "NTH_VALUE FROM FIRST RESPECT NULLS",
+			sql:       "select nth_value(v, 2) from first respect nulls over (order by id) from t",
+			canonical: "select nth_value(v, 2) over (order by id) from t",
+		},
+		{
+			name:      "RESPECT remains a non-reserved identifier",
+			sql:       "select respect from t",
+			canonical: "select respect from t",
+		},
+		{
+			name:      "RESPECT remains a generic function name",
+			sql:       "select respect()",
+			canonical: "select respect()",
+		},
+	}
+
+	for _, testCase := range testCases {
+		t.Run(testCase.name, func(t *testing.T) {
+			stmt, err := ParseOne(context.Background(), testCase.sql, 1)
+			require.NoError(t, err)
+			defer stmt.Free()
+			require.Equal(t, testCase.canonical, tree.String(stmt, dialect.MYSQL))
+		})
+	}
+
+	for _, sql := range []string{
+		"select lag(v) ignore nulls over (order by id) from t",
+		"select nth_value(v, 2) from last over (order by id) from t",
+	} {
+		t.Run("reject "+sql, func(t *testing.T) {
+			_, err := ParseOne(context.Background(), sql, 1)
+			require.Error(t, err)
+		})
+	}
+}
+
 func TestNamedWindowClause(t *testing.T) {
 	sql := "select sum(v) over win, rank() over (base_win order by v) from t " +
 		"window win as (partition by g order by v), base_win as (partition by g)"
