@@ -67,7 +67,8 @@ func TestIssue27666CDCWatermarkWriteSerializesWithDrop(t *testing.T) {
 		for _, tc := range testCases {
 			t.Run(tc.name, func(t *testing.T) {
 				cleanupCDCFixture(t, ctx, dropExec, tc.taskID)
-				defer cleanupCDCFixture(t, context.Background(), dropExec, tc.taskID)
+				// Transaction cleanups registered below run first, including on FailNow.
+				t.Cleanup(func() { cleanupCDCFixture(t, context.Background(), dropExec, tc.taskID) })
 				require.NoError(t, execInternalSQL(ctx, dropExec, fmt.Sprintf(
 					"insert into mo_catalog.mo_cdc_task (account_id, task_id, task_name, source_uri, sink_uri, tables, task_create_time, state) "+
 						"values (0, '%s', '%s', 'source', 'sink', 'db.table', now(), 'running')",
@@ -82,11 +83,7 @@ func TestIssue27666CDCWatermarkWriteSerializesWithDrop(t *testing.T) {
 					),
 					fmt.Sprintf("(account_id = 0 AND task_id = '%s')", tc.taskID),
 				)
-				if tc.writerFirst {
-					testCDCWriterWinsDropRace(t, ctx, c, writerExec, dropExec, taskTableID, tc.taskID, writerSQL)
-				} else {
-					testCDCDropWinsWriterRace(t, ctx, c, dropExec, writerExec, taskTableID, tc.taskID, writerSQL)
-				}
+				testCDCWatermarkDropRace(t, ctx, c, dropExec, writerExec, taskTableID, tc.taskID, writerSQL, tc.writerFirst)
 
 				var taskCount, watermarkCount int
 				require.NoError(t, queryDB.QueryRowContext(ctx,
@@ -102,126 +99,108 @@ func TestIssue27666CDCWatermarkWriteSerializesWithDrop(t *testing.T) {
 	})
 }
 
-func testCDCDropWinsWriterRace(
+func testCDCWatermarkDropRace(
 	t *testing.T,
 	ctx context.Context,
 	c embed.Cluster,
 	dropExec, writerExec executor.SQLExecutor,
 	taskTableID uint64,
 	taskID, writerSQL string,
+	writerFirst bool,
 ) {
 	t.Helper()
-	holderReady := make(chan error, 1)
+	holderExec, contenderExec := dropExec, writerExec
+	holderSQL := []string{
+		fmt.Sprintf("delete from mo_catalog.mo_cdc_task where account_id = 0 and task_id = '%s'", taskID),
+		fmt.Sprintf("delete from mo_catalog.mo_cdc_watermark where account_id = 0 and task_id = '%s'", taskID),
+	}
+	contenderSQL := []string{writerSQL}
+	if writerFirst {
+		holderExec, contenderExec = contenderExec, holderExec
+		holderSQL, contenderSQL = contenderSQL, holderSQL
+	}
+
 	releaseHolder := make(chan struct{})
-	holderDone := make(chan error, 1)
+	holder := startCDCRaceTxn(t, ctx, holderExec, releaseHolder, holderSQL...)
+	require.NoError(t, holder.waitReady(ctx))
+	contender := startCDCRaceTxn(t, ctx, contenderExec, nil, contenderSQL...)
+	require.Eventually(t, func() bool {
+		return clusterHasLockWaiter(c, taskTableID)
+	}, 30*time.Second, 10*time.Millisecond,
+		"contender did not wait for the holder's task-row lock")
+
+	close(releaseHolder)
+	finishCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+	require.NoError(t, holder.wait(finishCtx))
+	require.NoError(t, contender.wait(finishCtx))
+}
+
+// cdcRaceTxn publishes readiness only after all statements succeed, and completion
+// on every ExecTxn return, including errors before the callback is entered.
+// Closing done publishes err and lets both the assertion and cleanup join it.
+type cdcRaceTxn struct {
+	ready chan struct{}
+	done  chan struct{}
+	err   error
+}
+
+func startCDCRaceTxn(t *testing.T, parent context.Context, sqlExec executor.SQLExecutor, release <-chan struct{}, statements ...string) *cdcRaceTxn {
+	t.Helper()
+	ctx, cancel := context.WithCancel(parent)
+	run := &cdcRaceTxn{ready: make(chan struct{}), done: make(chan struct{})}
+	// Register before launching work: even a failed readiness assertion must
+	// cancel and join the transaction before the fixture's catalog cleanup.
+	t.Cleanup(func() {
+		cancel()
+		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cleanupCancel()
+		select {
+		case <-run.done:
+		case <-cleanupCtx.Done():
+			t.Error("CDC race transaction did not stop after cancellation")
+		}
+	})
 	go func() {
-		holderDone <- dropExec.ExecTxn(ctx, func(txn executor.TxnExecutor) error {
-			if err := execInternalTxnSQL(txn, fmt.Sprintf(
-				"delete from mo_catalog.mo_cdc_task where account_id = 0 and task_id = '%s'", taskID)); err != nil {
-				holderReady <- err
-				return err
+		defer close(run.done)
+		run.err = sqlExec.ExecTxn(ctx, func(txn executor.TxnExecutor) error {
+			for _, statement := range statements {
+				if err := execInternalTxnSQL(txn, statement); err != nil {
+					return err
+				}
 			}
-			if err := execInternalTxnSQL(txn, fmt.Sprintf(
-				"delete from mo_catalog.mo_cdc_watermark where account_id = 0 and task_id = '%s'", taskID)); err != nil {
-				holderReady <- err
-				return err
+			close(run.ready)
+			if release == nil {
+				return nil
 			}
-			holderReady <- nil
 			select {
-			case <-releaseHolder:
+			case <-release:
 				return nil
 			case <-ctx.Done():
 				return ctx.Err()
 			}
 		}, executor.Options{}.WithAccountID(0))
 	}()
-	require.NoError(t, <-holderReady)
-	holderReleased := false
-	defer func() {
-		if !holderReleased {
-			close(releaseHolder)
-		}
-	}()
+	return run
+}
 
-	writerDone := make(chan error, 1)
-	go func() {
-		writerDone <- execInternalSQL(ctx, writerExec, writerSQL)
-	}()
-	require.Eventually(t, func() bool {
-		return clusterHasLockWaiter(c, taskTableID)
-	}, 30*time.Second, 10*time.Millisecond,
-		"guarded watermark writer did not wait for the task-row delete")
-
-	close(releaseHolder)
-	holderReleased = true
-	require.NoError(t, <-holderDone)
+func (r *cdcRaceTxn) waitReady(ctx context.Context) error {
 	select {
-	case writerErr := <-writerDone:
-		require.NoError(t, writerErr)
-	case <-time.After(30 * time.Second):
-		t.Fatal("guarded watermark writer did not finish after DROP committed")
+	case <-r.ready:
+		return nil
+	case <-r.done:
+		return r.err
+	case <-ctx.Done():
+		return ctx.Err()
 	}
 }
 
-func testCDCWriterWinsDropRace(
-	t *testing.T,
-	ctx context.Context,
-	c embed.Cluster,
-	writerExec, dropExec executor.SQLExecutor,
-	taskTableID uint64,
-	taskID, writerSQL string,
-) {
-	t.Helper()
-	holderReady := make(chan error, 1)
-	releaseHolder := make(chan struct{})
-	holderDone := make(chan error, 1)
-	go func() {
-		holderDone <- writerExec.ExecTxn(ctx, func(txn executor.TxnExecutor) error {
-			if err := execInternalTxnSQL(txn, writerSQL); err != nil {
-				holderReady <- err
-				return err
-			}
-			holderReady <- nil
-			select {
-			case <-releaseHolder:
-				return nil
-			case <-ctx.Done():
-				return ctx.Err()
-			}
-		}, executor.Options{}.WithAccountID(0))
-	}()
-	require.NoError(t, <-holderReady)
-	holderReleased := false
-	defer func() {
-		if !holderReleased {
-			close(releaseHolder)
-		}
-	}()
-
-	dropDone := make(chan error, 1)
-	go func() {
-		dropDone <- dropExec.ExecTxn(ctx, func(txn executor.TxnExecutor) error {
-			if err := execInternalTxnSQL(txn, fmt.Sprintf(
-				"delete from mo_catalog.mo_cdc_task where account_id = 0 and task_id = '%s'", taskID)); err != nil {
-				return err
-			}
-			return execInternalTxnSQL(txn, fmt.Sprintf(
-				"delete from mo_catalog.mo_cdc_watermark where account_id = 0 and task_id = '%s'", taskID))
-		}, executor.Options{}.WithAccountID(0))
-	}()
-	require.Eventually(t, func() bool {
-		return clusterHasLockWaiter(c, taskTableID)
-	}, 30*time.Second, 10*time.Millisecond,
-		"DROP did not wait for the guarded watermark writer's task-row lock")
-
-	close(releaseHolder)
-	holderReleased = true
-	require.NoError(t, <-holderDone)
+func (r *cdcRaceTxn) wait(ctx context.Context) error {
 	select {
-	case dropErr := <-dropDone:
-		require.NoError(t, dropErr)
-	case <-time.After(30 * time.Second):
-		t.Fatal("DROP did not finish after the guarded writer committed")
+	case <-r.done:
+		return r.err
+	case <-ctx.Done():
+		return ctx.Err()
 	}
 }
 

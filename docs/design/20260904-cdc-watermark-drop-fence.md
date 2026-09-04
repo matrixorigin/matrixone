@@ -156,6 +156,12 @@ be overwritten by an old failure path.
   the real catalog and forces both lock orderings. It observes an actual task
   table lock waiter before releasing the winner and asserts that both task and
   watermark counts are zero afterward.
+- Both lock orderings share one test-only transaction lifecycle: readiness is
+  separate from terminal completion, and waits observe startup errors and
+  cancellation. Cleanup cancels and joins the transactions before catalog
+  teardown, even when an assertion aborts the scenario. Lightweight injected
+  executors cover pre-callback, statement, and commit failures, cancellation,
+  expired wait contexts, and cleanup ordering without starting another cluster.
 - Focused race tests cover callback/reader cancellation and updater lifecycle.
 - A deterministic same-batch test blocks an admitted error-watermark UPSERT and
   proves that the terminal flush barrier cannot complete ahead of it.
