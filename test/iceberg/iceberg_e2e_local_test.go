@@ -1395,6 +1395,27 @@ func TestLocalE2EAppendReadAndTimeTravelCaseReportsInsertFailure(t *testing.T) {
 	}
 }
 
+func TestLocalE2EEmptyStringReadCase(t *testing.T) {
+	db, mock := newLocalE2ESQLMock(t)
+	defer db.Close()
+
+	mock.ExpectExec("INSERT INTO").WillReturnResult(sqlmock.NewResult(0, 3))
+	mock.ExpectQuery("COUNT\\(NULLIF\\(region,''\\)\\)").
+		WillReturnRows(sqlmock.NewRows([]string{"count", "count_region", "count_nonempty"}).AddRow(int64(3), int64(2), int64(1)))
+	mock.ExpectQuery("region = ''").
+		WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(int64(1)))
+	mock.ExpectQuery("region = '中文'").
+		WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(int64(1)))
+
+	result := (&caseRunner{cfg: localE2ETestConfig(), db: db}).emptyStringReadCase(context.Background())
+	if result.Status != "passed" {
+		t.Fatalf("empty string case failed: %+v", result)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("unmet expectations: %v", err)
+	}
+}
+
 func TestLocalE2ESnapshotHelpersAgainstREST(t *testing.T) {
 	cfg := localE2ETestConfig()
 	cfg.CatalogURI = newSnapshotRESTServer(t).URL + "/iceberg"
