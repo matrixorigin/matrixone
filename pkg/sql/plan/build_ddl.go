@@ -1652,7 +1652,8 @@ func buildCreateView(stmt *tree.CreateView, ctx CompilerContext) (*Plan, error) 
 			}
 		}
 		if stmt.RefreshMethod == tree.MaterializedViewRefreshFast && incrementalSpec == "" {
-			return nil, moerr.NewNotSupported(ctx.GetContext(), "materialized view FAST or INCREMENTAL refresh requires a supported incremental aggregate or UNION ALL query")
+			reason := materializedViewIncrementalUnsupportedReason(stmt.AsSource)
+			return nil, moerr.NewNotSupportedf(ctx.GetContext(), "materialized view FAST or INCREMENTAL refresh is not supported: %s", reason)
 		}
 		if primaryKeys := materializedViewIncrementalPrimaryKey(incrementalSpec); len(primaryKeys) > 0 {
 			for _, col := range createView.TableDef.Cols {
@@ -1977,6 +1978,7 @@ type materializedViewIncrementalDescription struct {
 	SourceAlias    string                                 `json:"source_alias"`
 	SourceColumns  []string                               `json:"source_columns"`
 	Filter         string                                 `json:"filter,omitempty"`
+	Having         string                                 `json:"having,omitempty"`
 	Groups         []materializedViewIncrementalGroup     `json:"groups"`
 	Aggregates     []materializedViewIncrementalAggregate `json:"aggregates"`
 	GroupKeyColumn string                                 `json:"group_key_column,omitempty"`

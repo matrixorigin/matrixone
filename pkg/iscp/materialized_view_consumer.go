@@ -76,6 +76,7 @@ type incrementalDescription struct {
 	SourceAlias    string                 `json:"source_alias"`
 	SourceColumns  []string               `json:"source_columns"`
 	Filter         string                 `json:"filter,omitempty"`
+	Having         string                 `json:"having,omitempty"`
 	Groups         []incrementalGroup     `json:"groups"`
 	Aggregates     []incrementalAggregate `json:"aggregates"`
 	GroupKeyColumn string                 `json:"group_key_column,omitempty"`

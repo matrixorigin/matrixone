@@ -98,7 +98,7 @@ func buildMaterializedViewIncrementalBranchPlan(
 	stateTable ...string,
 ) (string, []*ColDef, string) {
 	clause, ok := stmt.Select.(*tree.SelectClause)
-	if !ok || clause.Having != nil ||
+	if !ok ||
 		clause.From == nil || len(clause.From.Tables) != 1 || len(clause.Exprs) != len(outputCols) {
 		return "", nil, ""
 	}
@@ -170,6 +170,14 @@ func buildMaterializedViewIncrementalBranchPlan(
 		}
 		spec.Filter = materializedViewIncrementalExprSQL(clause.Where.Expr)
 	}
+	if clause.Having != nil {
+		// HAVING is maintained by rebuilding only the affected groups at the
+		// iteration boundary. Keep the original expression in the spec so the
+		// refresh SQL evaluates it with the normal planner semantics.
+		spec.Having = materializedViewIncrementalExprSQL(clause.Having.Expr)
+		spec.Strategy = "hybrid-affected-group"
+		needsAuxiliaryState = true
+	}
 
 	stateCols := []*ColDef{materializedViewStateColumn(spec.RowCountColumn, Type{Id: int32(types.T_int64)}, false)}
 	stateExprs := []string{"count(*)"}
@@ -199,10 +207,13 @@ func buildMaterializedViewIncrementalBranchPlan(
 		}
 		agg := materializedViewIncrementalAggregate{Kind: name, OutputColumn: outputName}
 		if fn.Type == tree.FUNC_TYPE_DISTINCT {
-			if name != "count" || len(fn.Exprs) != 1 || !materializedViewIncrementalScalarSupported(fn.Exprs[0]) || !collector.collect(fn.Exprs[0]) {
+			if (name != "count" && name != "sum" && name != "avg") || len(fn.Exprs) != 1 || !materializedViewIncrementalScalarSupported(fn.Exprs[0]) || !collector.collect(fn.Exprs[0]) {
 				return "", nil, ""
 			}
-			agg.Kind = "count_distinct"
+			agg.Kind = name + "_distinct"
+			if name == "count" {
+				agg.Kind = "count_distinct"
+			}
 			agg.StateIndex = len(spec.Aggregates) + 1
 			agg.InputExpression = materializedViewIncrementalExprSQL(fn.Exprs[0])
 			spec.Strategy = "hybrid-state"
@@ -222,6 +233,14 @@ func buildMaterializedViewIncrementalBranchPlan(
 			// The visible value is initialized by the normal snapshot query. Tail
 			// maintenance stores exact value multiplicities in the auxiliary state
 			// table and updates this column only on 0<->1 transitions.
+		} else if agg.Kind == "sum_distinct" || agg.Kind == "avg_distinct" {
+			agg.StateSumColumn = materializedViewUniqueStateColumn(outputCols, fmt.Sprintf("__mo_mv_distinct_sum_%d", i))
+			agg.StateCountColumn = materializedViewUniqueStateColumn(outputCols, fmt.Sprintf("__mo_mv_distinct_count_%d", i))
+			stateCols = append(stateCols,
+				materializedViewStateColumn(agg.StateSumColumn, outputCols[i].Typ, true),
+				materializedViewStateColumn(agg.StateCountColumn, Type{Id: int32(types.T_int64)}, false))
+			stateExprs = append(stateExprs,
+				name+"(DISTINCT "+agg.InputExpression+")", "count(DISTINCT "+agg.InputExpression+")")
 		} else if name == "avg" {
 			agg.StateSumColumn = materializedViewUniqueStateColumn(outputCols, fmt.Sprintf("__mo_mv_avg_sum_%d", i))
 			agg.StateCountColumn = materializedViewUniqueStateColumn(outputCols, fmt.Sprintf("__mo_mv_avg_count_%d", i))
@@ -313,6 +332,58 @@ func materializedViewUnionAllClauses(stmt tree.SelectStatement) ([]*tree.SelectC
 	default:
 		return nil, false
 	}
+}
+
+// materializedViewIncrementalUnsupportedReason provides a stable diagnostic
+// for FAST admission failures.  The planner still owns the final eligibility
+// decision; this helper only explains the first construct that makes the
+// definition ineligible.
+func materializedViewIncrementalUnsupportedReason(stmt *tree.Select) string {
+	if stmt == nil {
+		return "MV_FAST_INVALID_DEFINITION"
+	}
+	if stmt.With != nil {
+		return "MV_FAST_UNSUPPORTED_CTE"
+	}
+	if stmt.Limit != nil {
+		return "MV_FAST_UNSUPPORTED_LIMIT"
+	}
+	if stmt.RankOption != nil {
+		return "MV_FAST_UNSUPPORTED_TOP_K"
+	}
+	if _, ok := materializedViewUnionAllClauses(stmt.Select); !ok {
+		if _, union := stmt.Select.(*tree.UnionClause); union {
+			return "MV_FAST_UNSUPPORTED_SET_OPERATION"
+		}
+		return "MV_FAST_UNSUPPORTED_QUERY_SHAPE"
+	}
+	clause, ok := stmt.Select.(*tree.SelectClause)
+	if !ok {
+		return "MV_FAST_UNSUPPORTED_QUERY_SHAPE"
+	}
+	if len(clause.From.Tables) != 1 {
+		return "MV_FAST_UNSUPPORTED_JOIN_OR_MULTIPLE_SOURCES"
+	}
+	if clause.GroupBy != nil && (clause.GroupBy.Cube || clause.GroupBy.Rollup || clause.GroupBy.GroupingSets || clause.GroupBy.Apart) {
+		return "MV_FAST_UNSUPPORTED_GROUPING_SET"
+	}
+	if clause.Where != nil && !materializedViewIncrementalScalarSupported(clause.Where.Expr) {
+		return "MV_FAST_UNSUPPORTED_FILTER_EXPRESSION"
+	}
+	for _, expr := range clause.Exprs {
+		fn, isFunc := expr.Expr.(*tree.FuncExpr)
+		if !isFunc {
+			continue
+		}
+		name := materializedViewIncrementalFunctionName(fn)
+		if fn.Type == tree.FUNC_TYPE_DISTINCT && name != "count" && name != "sum" && name != "avg" {
+			return "MV_FAST_UNSUPPORTED_DISTINCT_AGGREGATE"
+		}
+		if name != "count" && name != "sum" && name != "avg" && name != "min" && name != "max" {
+			return "MV_FAST_UNSUPPORTED_AGGREGATE"
+		}
+	}
+	return "MV_FAST_UNSUPPORTED_EXPRESSION_OR_GROUPING"
 }
 
 func materializedViewStateColumnsCompatible(left, right []*ColDef) bool {

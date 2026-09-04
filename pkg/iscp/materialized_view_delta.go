@@ -163,6 +163,10 @@ func validateIncrementalDescription(desc *incrementalDescription, nested bool) e
 			if desc.Version < 2 || desc.StateTable == "" || agg.InputExpression == "" || agg.StateIndex <= 0 {
 				return moerr.NewInternalErrorNoCtx("incremental COUNT(DISTINCT) requires versioned auxiliary state")
 			}
+		case "sum_distinct", "avg_distinct":
+			if desc.Version < 2 || desc.StateTable == "" || agg.InputExpression == "" || agg.StateIndex <= 0 || agg.StateSumColumn == "" || agg.StateCountColumn == "" {
+				return moerr.NewInternalErrorNoCtxf("incremental %s(DISTINCT) requires versioned auxiliary state", strings.ToUpper(strings.TrimSuffix(agg.Kind, "_distinct")))
+			}
 		default:
 			return moerr.NewInternalErrorNoCtxf("incremental aggregate %q is not supported", agg.Kind)
 		}
@@ -567,6 +571,8 @@ func materializedViewDeltaUpsertSets(desc *incrementalDescription) []string {
 		case "count_distinct":
 			// Exact distinct transitions are applied against the auxiliary state
 			// after the ordinary row-count delta has materialized missing groups.
+		case "sum_distinct", "avg_distinct":
+			// Exact distinct transitions are applied against the auxiliary state.
 		}
 	}
 	rowCount := sqlquote.Ident(desc.RowCountColumn)
@@ -602,7 +608,7 @@ func materializedViewHasDistinctState(desc *incrementalDescription) bool {
 	}
 	for _, leaf := range materializedViewLeafDescriptions(desc) {
 		for _, agg := range leaf.Aggregates {
-			if agg.Kind == "count_distinct" {
+			if agg.Kind == "count_distinct" || agg.Kind == "sum_distinct" || agg.Kind == "avg_distinct" {
 				return true
 			}
 		}
@@ -619,6 +625,9 @@ func materializedViewNeedsAffectedGroups(desc *incrementalDescription) bool {
 			if agg.Kind == "min" || agg.Kind == "max" || agg.Kind == "count_distinct" {
 				return true
 			}
+		}
+		if leaf.Having != "" {
+			return true
 		}
 	}
 	return false
@@ -707,7 +716,7 @@ func recordMaterializedViewAffectedGroups(
 			break
 		}
 	}
-	if !hasDelete {
+	if !hasDelete && desc.Having == "" {
 		return nil
 	}
 	sourceCTE, err := materializedViewDeltaSourceCTE(ctx, desc, sourceTypes, rows)
@@ -719,6 +728,11 @@ func recordMaterializedViewAffectedGroups(
 		groups[i] = desc.Groups[i].Expression
 	}
 	where := "__mo_sign < 0"
+	if desc.Having != "" {
+		// HAVING can change visibility in either direction, so every affected
+		// group must be rebuilt at the iteration boundary.
+		where = "1 = 1"
+	}
 	if desc.Filter != "" {
 		where += " AND (" + desc.Filter + ")"
 	}
@@ -789,10 +803,11 @@ func materializedViewDistinctDeltaCTE(
 	}
 	groupKey := materializedViewGroupKeySQL(desc, groups)
 	cte := fmt.Sprintf(
-		"WITH %s, distinct_delta AS (SELECT %d AS aggregate_index, CAST(serial_full(%s) AS VARBINARY(65535)) AS group_key, CAST(serial_full(%s) AS VARBINARY(65535)) AS value_key, sum(__mo_sign) AS ref_delta FROM src AS %s WHERE %s GROUP BY %s,%s)",
+		"WITH %s, distinct_delta AS (SELECT %d AS aggregate_index, CAST(serial_full(%s) AS VARBINARY(65535)) AS group_key, CAST(serial_full(%s) AS VARBINARY(65535)) AS value_key, min(%s) AS value_value, sum(__mo_sign) AS ref_delta FROM src AS %s WHERE %s GROUP BY %s,%s)",
 		sourceCTE,
 		agg.StateIndex,
 		strings.Join(groupKey, ","),
+		agg.InputExpression,
 		agg.InputExpression,
 		sqlquote.Ident(desc.SourceAlias),
 		where,
@@ -841,10 +856,18 @@ func materializedViewDistinctDeltaStatements(
 	agg incrementalAggregate,
 	cte, state, target string,
 ) []string {
+	visibleDelta := fmt.Sprintf("SELECT d.group_key, sum(CASE WHEN coalesce(s.ref_count,0) = 0 AND d.ref_delta > 0 THEN 1 WHEN coalesce(s.ref_count,0) > 0 AND coalesce(s.ref_count,0) + d.ref_delta <= 0 THEN -1 ELSE 0 END) AS value_delta, sum(CASE WHEN coalesce(s.ref_count,0) = 0 AND d.ref_delta > 0 THEN d.value_value WHEN coalesce(s.ref_count,0) > 0 AND coalesce(s.ref_count,0) + d.ref_delta <= 0 THEN -d.value_value ELSE 0 END) AS value_sum_delta FROM distinct_delta AS d LEFT JOIN %s AS s ON s.aggregate_index = d.aggregate_index AND s.group_key = d.group_key AND s.value_key = d.value_key GROUP BY d.group_key", state)
+	var update string
+	switch agg.Kind {
+	case "count_distinct":
+		update = fmt.Sprintf("%s UPDATE %s AS t JOIN visible_delta AS d ON t.%s = d.group_key SET t.%s = t.%s + d.value_delta", "%s, visible_delta AS ("+visibleDelta+")", target, sqlquote.Ident(desc.GroupKeyColumn), sqlquote.Ident(agg.OutputColumn), sqlquote.Ident(agg.OutputColumn))
+	case "sum_distinct":
+		update = fmt.Sprintf("%s UPDATE %s AS t JOIN visible_delta AS d ON t.%s = d.group_key SET t.%s = CASE WHEN t.%s + d.value_delta = 0 THEN NULL ELSE coalesce(t.%s,0) + d.value_sum_delta END, t.%s = coalesce(t.%s,0) + d.value_sum_delta, t.%s = t.%s + d.value_delta", "%s, visible_delta AS ("+visibleDelta+")", target, sqlquote.Ident(desc.GroupKeyColumn), sqlquote.Ident(agg.OutputColumn), sqlquote.Ident(agg.StateCountColumn), sqlquote.Ident(agg.StateSumColumn), sqlquote.Ident(agg.StateSumColumn), sqlquote.Ident(agg.StateSumColumn), sqlquote.Ident(agg.StateCountColumn), sqlquote.Ident(agg.StateCountColumn))
+	case "avg_distinct":
+		update = fmt.Sprintf("%s UPDATE %s AS t JOIN visible_delta AS d ON t.%s = d.group_key SET t.%s = CASE WHEN t.%s + d.value_delta = 0 THEN NULL ELSE (coalesce(t.%s,0) + d.value_sum_delta) / (t.%s + d.value_delta) END, t.%s = coalesce(t.%s,0) + d.value_sum_delta, t.%s = t.%s + d.value_delta", "%s, visible_delta AS ("+visibleDelta+")", target, sqlquote.Ident(desc.GroupKeyColumn), sqlquote.Ident(agg.OutputColumn), sqlquote.Ident(agg.StateCountColumn), sqlquote.Ident(agg.StateSumColumn), sqlquote.Ident(agg.StateCountColumn), sqlquote.Ident(agg.StateSumColumn), sqlquote.Ident(agg.StateSumColumn), sqlquote.Ident(agg.StateCountColumn), sqlquote.Ident(agg.StateCountColumn))
+	}
 	return []string{
-		fmt.Sprintf(
-			"%s, visible_delta AS (SELECT d.group_key, sum(CASE WHEN coalesce(s.ref_count,0) = 0 AND d.ref_delta > 0 THEN 1 WHEN coalesce(s.ref_count,0) > 0 AND coalesce(s.ref_count,0) + d.ref_delta <= 0 THEN -1 ELSE 0 END) AS value_delta FROM distinct_delta AS d LEFT JOIN %s AS s ON s.aggregate_index = d.aggregate_index AND s.group_key = d.group_key AND s.value_key = d.value_key GROUP BY d.group_key) UPDATE %s AS t JOIN visible_delta AS d ON t.%s = d.group_key SET t.%s = t.%s + d.value_delta",
-			cte, state, target, sqlquote.Ident(desc.GroupKeyColumn), sqlquote.Ident(agg.OutputColumn), sqlquote.Ident(agg.OutputColumn)),
+		fmt.Sprintf(update, cte),
 		fmt.Sprintf(
 			"%s UPDATE %s AS s JOIN distinct_delta AS d ON s.aggregate_index = d.aggregate_index AND s.group_key = d.group_key AND s.value_key = d.value_key SET s.ref_count = s.ref_count + d.ref_delta",
 			cte, state),
