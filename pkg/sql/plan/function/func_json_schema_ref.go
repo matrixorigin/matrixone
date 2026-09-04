@@ -42,7 +42,6 @@ const (
 var (
 	errMySQLJSONSchemaExternalLoad error = mysqlJSONSchemaSentinel("external JSON Schema reference loading is disabled")
 	errMySQLJSONSchemaExternalRef  error = mysqlJSONSchemaSentinel(mysqlJSONSchemaExternalRefReason)
-	errMySQLJSONSchemaRefString    error = mysqlJSONSchemaSentinel(mysqlJSONSchemaRefStringReason)
 	errMySQLJSONSchemaRefSyntax    error = mysqlJSONSchemaSentinel(mysqlJSONSchemaRefSyntaxReason)
 	errMySQLJSONSchemaRefTarget    error = mysqlJSONSchemaSentinel(mysqlJSONSchemaRefTargetReason)
 	errMySQLJSONSchemaRefCycle     error = mysqlJSONSchemaSentinel(mysqlJSONSchemaRefCycleReason)
