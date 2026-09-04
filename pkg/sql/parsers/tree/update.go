@@ -276,7 +276,9 @@ type ExParam struct {
 	Ctx                   context.Context
 	Local                 bool
 	Parallel              bool
+	ParallelSpecified     bool
 	ParallelLoadRequested bool
+	ParallelLoadMinSize   int64
 	Strict                bool
 }
 
@@ -341,7 +343,13 @@ func (node *Load) Format(ctx *FmtCtx) {
 		} else {
 			if len(node.Param.Option) == 0 {
 				ctx.WriteString(" infile ")
-				ctx.WriteString(node.Param.Filepath)
+				ctx.WriteString("'")
+				if ctx.NoBackslashEscape() {
+					ctx.WriteString(strings.ReplaceAll(node.Param.Filepath, "'", "''"))
+				} else {
+					ctx.WriteString(strings.ReplaceAll(FormatString(node.Param.Filepath), "'", "''"))
+				}
+				ctx.WriteString("'")
 			} else {
 				if node.Param.ScanType == S3 {
 					ctx.WriteString(" url s3option ")
@@ -404,11 +412,21 @@ func (node *Load) Format(ctx *FmtCtx) {
 		ctx.WriteString(" set ")
 		node.Param.Tail.Assignments.Format(ctx)
 	}
-	if node.Param.Parallel {
-		ctx.WriteString(" parallel true ")
+	if node.Param.Parallel || node.Param.ParallelSpecified {
+		ctx.WriteString(" parallel ")
+		ctx.WriteByte('\'')
+		ctx.WriteString(strconv.FormatBool(node.Param.Parallel))
+		ctx.WriteByte('\'')
+		ctx.WriteByte(' ')
 		if node.Param.Strict {
-			ctx.WriteString("strict true ")
+			ctx.WriteString("strict 'true' ")
+			return
 		}
+	}
+	// STRICT defaults to true when omitted. Only false needs spelling out to
+	// preserve the parsed statement when formatting it back into SQL.
+	if !node.Param.Strict {
+		ctx.WriteString(" strict 'false'")
 	}
 }
 

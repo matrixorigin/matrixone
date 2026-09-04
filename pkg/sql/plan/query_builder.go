@@ -71,6 +71,10 @@ func IsSnapshotNotFound(err error) bool {
 	return errors.As(err, &target)
 }
 
+func NewSnapshotNotFoundError(ctx context.Context, snapshotName string) error {
+	return moerr.NewInvalidInputf(ctx, "snapshot '%s' not found", snapshotName)
+}
+
 func NewQueryBuilder(queryType plan.Query_StatementType, ctx CompilerContext, isPrepareStatement bool, skipStats bool) *QueryBuilder {
 	//
 	// There is a class of variables that controls SQL behavior.  To add such a variable, first

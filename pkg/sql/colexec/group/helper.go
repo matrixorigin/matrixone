@@ -659,6 +659,10 @@ func (ctr *container) computeBucketIndex(hashCodes []uint64, myLv uint64) {
 	}
 }
 
+func canRepartitionGroupSpill(parent *spillBucket) bool {
+	return parent == nil || parent.lv < spillMaxPass
+}
+
 func (ctr *container) openSpillBucket(
 	proc *process.Process,
 	spillfs fileservice.MutableFileService,
@@ -856,15 +860,10 @@ func (ctr *container) spillDataToDisk(proc *process.Process, opAnalyzer process.
 
 	// if current spill bucket is not created, create a new one.
 	if ctr.currentSpillBkt == nil {
-		// A max-depth partition that is still over pressure cannot make progress.
-		// Returning a controlled error is safer than silently retaining it beyond
-		// the statement's hard allocation account.
-		if parentLv >= spillMaxPass {
-			if ctr.allocationAccount != nil {
-				return 0, 0, moerr.NewInternalErrorNoCtx(
-					"group spill cannot make progress at maximum partition depth",
-				)
-			}
+		// The local spill threshold is only a policy hint. At maximum depth,
+		// callers may finish a terminal leaf as long as every physical allocation
+		// continues to pass the independent statement account.
+		if !canRepartitionGroupSpill(parentBkt) {
 			return 0, 0, nil
 		}
 
@@ -1279,6 +1278,12 @@ func (ctr *container) retrySpillReloadRecord(
 	if ctr.hr.IsEmpty() || ctr.hr.Hash.GroupCount() == 0 {
 		return false, cause
 	}
+	// A capacity rejection, unlike the local spill threshold, proves that the
+	// current terminal work set cannot grow safely. Preserve the original
+	// requested/used/limit error once no further partition can release it.
+	if !canRepartitionGroupSpill(bkt) {
+		return false, cause
+	}
 
 	// prepareSpillReloadRecord has not mutated the hash table. Drop only its
 	// incoming staging, externalize the resident prefix, and replay the record
@@ -1502,7 +1507,7 @@ reloadLoop:
 		observeHashGrowth(opStats, "GroupHashReload", hashBytesBefore, ctr.hr.Hash.Size())
 		hashMergeNanos += time.Since(mergeStart).Nanoseconds()
 
-		if ctr.needSpill(opAnalyzer) {
+		if ctr.needSpill(opAnalyzer) && canRepartitionGroupSpill(bkt) {
 			ctr.freeSpillReloadStaging()
 			if bytes, rows, err := ctr.spillDataToDisk(proc, opAnalyzer, bkt); err != nil {
 				return false, err
