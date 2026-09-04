@@ -85,7 +85,11 @@ func arrowLoadUsesS3(param *tree.ExternParam) bool {
 	switch strings.ToLower(parsed.Service) {
 	case "s3", "s3-no-key", "s3-opts", "opts", "options", "minio":
 		return true
-	default:
-		return false
 	}
+	// A configured FileService can be named freely (for example, "archive")
+	// while still being backed by S3. Resolve that service, including SubPath
+	// wrappers, so the object-storage rollout gate cannot be bypassed by an
+	// alias. An empty service is intentionally local in GetForETL.
+	return parsed.Service != "" &&
+		fileservice.IsS3BackedFileService(param.FileService, param.Filepath)
 }
