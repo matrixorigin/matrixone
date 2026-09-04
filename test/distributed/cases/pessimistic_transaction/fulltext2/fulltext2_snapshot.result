@@ -12,12 +12,12 @@ and table_id in (select rel_id from mo_catalog.mo_tables where reldatabase = dat
 limit 1
 );
 set @wait_base_sql = concat(
-'select coalesce(max(chunk_id), -1) >= 0 as ready from `', database(), '`.`', @ft2_index,
-'` where index_id = ''cdc_tail'' and tag = 1');
+'select count(*) > 0 as ready from `', database(), '`.`', @ft2_index,
+'` where tag = 0');
 prepare wait_base from @wait_base_sql;
 execute wait_base;
 ➤ ready[-7,1,0]  𝄀
-0
+1
 deallocate prepare wait_base;
 set @capture_sql = concat(
 'select coalesce(max(chunk_id), -1) into @tail_baseline from `', database(), '`.`', @ft2_index,

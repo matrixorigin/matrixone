@@ -25,9 +25,14 @@ set @ft2_index = (
 
 -- Wait for the base index to sync the historic rows BEFORE the snapshot, so the
 -- snapshot captures a populated (not lagging) index; then capture the tail baseline.
+-- Poll the BASE chunk (tag = 0), not cdc_tail: the initial build of an index over an
+-- already-populated table writes one tag=0 row and NO tail, so a cdc_tail predicate here
+-- can never become true and is either a no-op (if it expects the not-ready answer) or a
+-- guaranteed timeout. cdc_tail only appears once later DML flows through CDC, which is
+-- what wait_upd below polls for.
 set @wait_base_sql = concat(
-    'select coalesce(max(chunk_id), -1) >= 0 as ready from `', database(), '`.`', @ft2_index,
-    '` where index_id = ''cdc_tail'' and tag = 1');
+    'select count(*) > 0 as ready from `', database(), '`.`', @ft2_index,
+    '` where tag = 0');
 prepare wait_base from @wait_base_sql;
 -- @wait_expect(1, 120)
 execute wait_base;
