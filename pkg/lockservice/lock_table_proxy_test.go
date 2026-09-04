@@ -1280,10 +1280,7 @@ func TestProxyRetryPreservesAppliedHandoffRepresentative(t *testing.T) {
 				txn:  pb.WaitTxn{TxnID: []byte("owner-waiter"), CreatedOn: s1.serviceID},
 			})
 
-			type result struct {
-				err error
-			}
-			exclusiveDone := make(chan result, 1)
+			exclusiveDone := make(chan error, 1)
 			// Waiter notification is asynchronous. Give this phase its own budget
 			// so setup time or temporary runner starvation cannot consume it.
 			exclusiveCtx, exclusiveCancel := context.WithTimeout(context.Background(), 30*time.Second)
@@ -1300,33 +1297,99 @@ func TestProxyRetryPreservesAppliedHandoffRepresentative(t *testing.T) {
 			go func() {
 				defer close(exclusiveExited)
 				_, err := s1.Lock(exclusiveCtx, tableID, [][]byte{row}, exclusiveTxn, newTestRowExclusiveOptions())
-				exclusiveDone <- result{err: err}
+				exclusiveDone <- err
 			}()
 			waitWaiters(t, s1, tableID, row, 1)
 			require.Never(t, func() bool {
 				select {
-				case r := <-exclusiveDone:
-					require.NoError(t, r.err)
+				case err := <-exclusiveDone:
+					require.NoError(t, err)
 					return true
 				default:
 					return false
 				}
 			}, 100*time.Millisecond, time.Millisecond)
 
-			require.NoError(t, s2.Unlock(ctx, lateSharerTxn, timestamp.Timestamp{}))
-			select {
-			case r := <-exclusiveDone:
-				if r.err != nil {
-					dumpProxyHandoffWait(t, owner, proxy, row)
-				}
-				require.NoError(t, r.err)
-			case <-exclusiveCtx.Done():
+			// These are separate RPC/cleanup phases, not extensions of the
+			// exclusive acquisition budget. Do not reuse setup's aging context.
+			releaseCtx, releaseCancel := context.WithTimeout(context.Background(), 5*time.Second)
+			err = s2.Unlock(releaseCtx, lateSharerTxn, timestamp.Timestamp{})
+			releaseCancel()
+			require.NoError(t, err)
+			err = waitProxyLockResult(exclusiveCtx, exclusiveDone)
+			if err != nil {
 				dumpProxyHandoffWait(t, owner, proxy, row)
-				require.NoError(t, exclusiveCtx.Err())
 			}
-			require.NoError(t, s1.Unlock(ctx, exclusiveTxn, timestamp.Timestamp{}))
+			require.NoError(t, err)
+			cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 5*time.Second)
+			err = s1.Unlock(cleanupCtx, exclusiveTxn, timestamp.Timestamp{})
+			cleanupCancel()
+			require.NoError(t, err)
 		},
 	)
+}
+
+// A completed result is authoritative even if the test goroutine resumes after
+// its hang guard expired. The deadline branch only rechecks; it never waits for
+// additional work or suppresses an actual Lock error.
+func waitProxyLockResult(ctx context.Context, done <-chan error) error {
+	var err error
+	var ok bool
+	select {
+	case err, ok = <-done:
+	case <-ctx.Done():
+		select {
+		case err, ok = <-done:
+		default:
+			return ctx.Err()
+		}
+	}
+	if !ok {
+		return errors.New("lock result channel closed without a result")
+	}
+	return err
+}
+
+func TestWaitProxyLockResult(t *testing.T) {
+	lockErr := errors.New("lock failed")
+	for _, tc := range []struct {
+		name    string
+		expired bool
+		send    bool
+		closed  bool
+		result  error
+		want    error
+	}{
+		{name: "success", send: true},
+		{name: "lock error", send: true, result: lockErr, want: lockErr},
+		{name: "success and deadline ready", expired: true, send: true},
+		{name: "lock error and deadline ready", expired: true, send: true, result: lockErr, want: lockErr},
+		{name: "deadline without result", expired: true, want: context.DeadlineExceeded},
+		{name: "closed without result", closed: true},
+		{name: "closed without result and deadline ready", expired: true, closed: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := context.Background()
+			if tc.expired {
+				var cancel context.CancelFunc
+				ctx, cancel = context.WithDeadline(ctx, time.Time{})
+				defer cancel()
+			}
+			done := make(chan error, 1)
+			if tc.send {
+				done <- tc.result
+			}
+			if tc.closed {
+				close(done)
+			}
+			err := waitProxyLockResult(ctx, done)
+			if tc.closed {
+				require.EqualError(t, err, "lock result channel closed without a result")
+			} else {
+				require.ErrorIs(t, err, tc.want)
+			}
+		})
+	}
 }
 
 // Failure-only diagnostics must not wait on the mutex that may explain the
