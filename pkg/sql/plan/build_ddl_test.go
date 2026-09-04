@@ -3034,6 +3034,35 @@ func TestBuildCTASNarrowsKnownExpandingStringResults(t *testing.T) {
 	}
 }
 
+func TestBuildCTASPreservesJsonUnquoteTextBounds(t *testing.T) {
+	const sql = `create table json_unquote_copy as select
+		json_unquote(json_text) as plain_text,
+		json_unquote(json_mediumtext) as plain_mediumtext,
+		json_unquote(json_longtext) as plain_longtext
+		from nation`
+	ctx := NewMockCompilerContext(false)
+	ctx.tables["nation"].Cols = append(ctx.tables["nation"].Cols,
+		&plan.ColDef{Name: "json_text", Typ: plan.Type{Id: int32(types.T_text), Charset: uint32(types.CharsetUTF8)}},
+		&plan.ColDef{Name: "json_mediumtext", Typ: plan.Type{Id: int32(types.T_text), Width: types.MaxMediumTextLen, Charset: uint32(types.CharsetUTF8)}},
+		&plan.ColDef{Name: "json_longtext", Typ: plan.Type{Id: int32(types.T_text), Width: types.MaxLongTextLen, Charset: uint32(types.CharsetUTF8MB4Bin)}},
+	)
+	stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, sql, 1)
+	require.NoError(t, err)
+	defer stmt.Free()
+
+	p, err := BuildPlan(ctx, stmt, false)
+	require.NoError(t, err)
+	cols := p.GetDdl().GetCreateTable().GetTableDef().GetCols()
+	require.GreaterOrEqual(t, len(cols), 3)
+	for i, width := range []int32{0, types.MaxMediumTextLen, types.MaxLongTextLen} {
+		require.Equal(t, int32(types.T_text), cols[i].Typ.Id)
+		require.Equal(t, width, cols[i].Typ.Width)
+	}
+	require.Equal(t, uint32(types.CharsetUTF8), cols[0].Typ.Charset)
+	require.Equal(t, uint32(types.CharsetUTF8), cols[1].Typ.Charset)
+	require.Equal(t, uint32(types.CharsetUTF8MB4Bin), cols[2].Typ.Charset)
+}
+
 func TestBuildCTASPreservesFormattedScalarBounds(t *testing.T) {
 	const sql = `create table formatted_bounds as select
 		convert(cast(-0.99 as decimal(2,2)) using binary) decimal_binary,

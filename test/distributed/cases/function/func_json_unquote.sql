@@ -43,3 +43,17 @@ select json_unquote(json_extract(json_array(cast('11:11:11' as time)), '$[0]'));
 select json_unquote(json_extract(json_array(cast('2021-02-01 11:11:11' as datetime)), '$[0]'));
 drop table t2;
 drop table t1;
+
+create table json_unquote_text_types (c char(8), v varchar(32), t text, mt mediumtext, lt longtext, b binary(8), vb varbinary(8), bl blob);
+insert into json_unquote_text_types values ('plain', 'plain', 'plain', repeat('a', 70000), repeat('b', 70000), 'plain', 'plain', 'plain');
+select json_unquote(c), json_unquote(v), json_unquote(t) from json_unquote_text_types;
+select json_unquote(mt), json_unquote(lt) from json_unquote_text_types where false;
+select length(json_unquote(mt)), length(json_unquote(lt)) from json_unquote_text_types;
+create table json_unquote_text_ctas as select json_unquote(mt) as mt, json_unquote(lt) as lt from json_unquote_text_types;
+select column_name, data_type, character_maximum_length from information_schema.columns where table_schema = database() and table_name = 'json_unquote_text_ctas' order by ordinal_position;
+select length(mt), length(lt) from json_unquote_text_ctas;
+select json_unquote(b) from json_unquote_text_types;
+select json_unquote(vb) from json_unquote_text_types;
+select json_unquote(bl) from json_unquote_text_types;
+drop table json_unquote_text_ctas;
+drop table json_unquote_text_types;
