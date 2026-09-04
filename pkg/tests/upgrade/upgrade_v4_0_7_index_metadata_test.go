@@ -22,7 +22,7 @@ import (
 	"time"
 
 	_ "github.com/go-sql-driver/mysql"
-	"github.com/matrixorigin/matrixone/pkg/bootstrap/versions/v4_0_6"
+	"github.com/matrixorigin/matrixone/pkg/bootstrap/versions/v4_0_7"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/embed"
 	"github.com/matrixorigin/matrixone/pkg/tests/testutils"
@@ -37,7 +37,7 @@ import (
 // upgrade against a real cluster: build a legacy-shaped metadata table by dropping the columns,
 // run the tenant upgrade, and require that the columns are back AND that a metadata write of the
 // current shape succeeds.
-func TestV406UpgradeAddsIndexMetadataProvenanceColumns(t *testing.T) {
+func TestV407UpgradeAddsIndexMetadataProvenanceColumns(t *testing.T) {
 	embed.RunSingleCNBaseClusterTests(t, func(cluster embed.Cluster) {
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
 		defer cancel()
@@ -102,7 +102,7 @@ func TestV406UpgradeAddsIndexMetadataProvenanceColumns(t *testing.T) {
 			"insert into `%s`.`%s` values ('probe', 'chk', 1, 2, 3, 4)", dbName, metaTable))
 		require.Error(t, err, "six values into a legacy four-column metadata table must fail")
 
-		runV406TenantUpgrade(t, ctx, cn)
+		runV407TenantUpgrade(t, ctx, cn)
 
 		require.True(t, hasColumn(catalog.Hnsw_TblCol_Metadata_Nrow), "upgrade restores nrow")
 		require.True(t, hasColumn(catalog.Hnsw_TblCol_Metadata_Build_Ts), "upgrade restores build_ts")
@@ -111,21 +111,22 @@ func TestV406UpgradeAddsIndexMetadataProvenanceColumns(t *testing.T) {
 		exec("insert into `%s`.`%s` values ('probe', 'chk', 1, 2, 3, 4)", dbName, metaTable)
 
 		// Idempotent: a second run is a no-op, not an error.
-		runV406TenantUpgrade(t, ctx, cn)
+		runV407TenantUpgrade(t, ctx, cn)
 		require.True(t, hasColumn(catalog.Hnsw_TblCol_Metadata_Build_Ts))
 
 		exec("drop database if exists %s", dbName)
 	})
 }
 
-// runV406TenantUpgrade drives the real v4_0_6 tenant upgrade through its public entry point, so
-// the migration is exercised exactly as bootstrap runs it rather than through a stub.
-func runV406TenantUpgrade(t *testing.T, ctx context.Context, cn embed.ServiceOperator) {
+// runV407TenantUpgrade drives the real v4_0_7 tenant upgrade through its public entry point, so
+// the migration is exercised exactly as bootstrap runs it rather than through a stub. The
+// migration lives in 4.0.7 because a cluster already at 4.0.6 never re-runs the 4.0.6 handler.
+func runV407TenantUpgrade(t *testing.T, ctx context.Context, cn embed.ServiceOperator) {
 	t.Helper()
 	sqlExecutor := testutils.GetSQLExecutor(cn)
 	require.NotNil(t, sqlExecutor)
 	require.NoError(t, sqlExecutor.ExecTxn(ctx, func(txn executor.TxnExecutor) error {
-		return v4_0_6.Handler.HandleTenantUpgrade(ctx, int32(catalog.System_Account), txn)
+		return v4_0_7.Handler.HandleTenantUpgrade(ctx, int32(catalog.System_Account), txn)
 	}, executor.Options{}.
 		WithDatabase(catalog.MO_CATALOG).
 		WithAccountID(catalog.System_Account).
@@ -142,7 +143,7 @@ func runV406TenantUpgrade(t *testing.T, ctx context.Context, cn embed.ServiceOpe
 // The unit tests pin the mechanism (the option carries a kind, alter.go sets it,
 // buildCreateTable adopts it). This pins the OUTCOME: run the real migration against a real
 // cluster and require the kind to survive it.
-func TestV406UpgradeKeepsIndexMetadataHidden(t *testing.T) {
+func TestV407UpgradeKeepsIndexMetadataHidden(t *testing.T) {
 	embed.RunSingleCNBaseClusterTests(t, func(cluster embed.Cluster) {
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
 		defer cancel()
@@ -217,7 +218,7 @@ func TestV406UpgradeKeepsIndexMetadataHidden(t *testing.T) {
 		exec("alter table `%s`.`%s` drop column %s", dbName, metaTable, catalog.Hnsw_TblCol_Metadata_Nrow)
 		require.Equal(t, before, relKind(), "DROP COLUMN's rebuild must keep the kind too")
 
-		runV406TenantUpgrade(t, ctx, cn)
+		runV407TenantUpgrade(t, ctx, cn)
 
 		require.Equal(t, before, relKind(),
 			"the migration's ALTER must not change the table's kind; losing it un-hides the "+

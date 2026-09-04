@@ -73,9 +73,6 @@ func (v *versionHandle) HandleTenantUpgrade(ctx context.Context, tenantID int32,
 	if err := upgradeLegacyForeignKeyMetadata(ctx, tenantID, txn); err != nil {
 		return err
 	}
-	if err := upgradeIndexMetadataProvenance(ctx, tenantID, txn); err != nil {
-		return err
-	}
 	getLogger(txn.Txn().TxnOptions().CN).Info("tenant upgrade success", zap.Int32("tenantId", tenantID), zap.String("toVersion", v.metadata.Version))
 	return nil
 }
