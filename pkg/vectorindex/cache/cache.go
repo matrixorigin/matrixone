@@ -151,8 +151,12 @@ type VectorIndexSearchIf interface {
 	// no entry lock is held -- the cache calls Preload and Load as separate locked sections
 	// and does its bookkeeping in the gap between them.
 	//
-	// Preload must be safe to call exactly once before Load, and must leave nothing resident
-	// that Destroy would not release: a load can be abandoned between the two.
+	// Two obligations. It must leave nothing resident that Destroy would not release, because
+	// a load can be abandoned between Preload and Load. And it must be safe to call AGAIN on
+	// the same object after a completed Destroy: Search/SearchInto re-wrap the caller's algo on
+	// every retry attempt, so an entry that was evicted mid-load comes back here. The retry
+	// paths wait on awaitDestroyed first, so an implementation may assume the previous
+	// teardown finished -- but not that it never ran.
 	Preload(*sqlexec.SqlProcess) error
 	Load(*sqlexec.SqlProcess) error
 	// GetIndexSize reports the bytes this index holds resident after a successful Load, for

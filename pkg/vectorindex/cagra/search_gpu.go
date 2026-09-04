@@ -561,14 +561,14 @@ func (s *CagraSearch[B, Q]) admitIndexes(sqlproc *sqlexec.SqlProcess, indexes []
 	// the quantizer, the bitset -- none of which reach the GPU, and CREATE would
 	// then commit artifacts refused here at every free level.
 
-	// Tars this call fetched, and only those. Until the load loop below takes
-	// them over -- LoadIndex removes each one in view mode once Unpack has read
-	// it, and Destroy removes it on a failed load -- nothing else will: Load
-	// returns before it assigns s.Indexes or arms its deferred Destroy, so an
-	// early return from here is the end of the line. While the download lived
-	// inside LoadIndex its own defer covered this; now that it is hoisted out,
-	// a refusal from the aggregate gate would otherwise leak the whole
-	// multi-gigabyte download on every retried query.
+	// Tars this call fetched, and only those. Until Preload takes them over --
+	// it assigns s.Indexes only after this returns cleanly, and from there
+	// LoadIndex removes each one in view mode once Unpack has read it, while
+	// Destroy removes any that are left -- nothing else will: an early return
+	// from here happens before s.Indexes is assigned, so it is the end of the
+	// line. While the download lived inside LoadIndex its own defer covered
+	// this; now that it is hoisted out, a refusal from the aggregate gate would
+	// otherwise leak the whole multi-gigabyte download on every retried query.
 	var fetchedHere []*CagraModel[B, Q]
 	admitted := false
 	defer func() {
