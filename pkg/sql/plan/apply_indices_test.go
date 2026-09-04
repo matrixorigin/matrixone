@@ -6636,10 +6636,27 @@ func TestHandleMessageFromTopToScanPushesCompositePrimaryKeyOrderedLimit(t *test
 			Args: []*planpb.Expr{DeepCopyExpr(pkExpr), runtimeBound},
 		}},
 	}
-	scanNode.FilterList = []*planpb.Expr{runtimeFilter}
-	scanNode.IndexReaderParam = nil
-	builder.handleMessageFromTopToScan(1)
-	require.Nil(t, scanNode.IndexReaderParam)
+	rejectBuilder := NewQueryBuilder(planpb.Query_SELECT, NewMockCompilerContext(true), false, true)
+	rejectScanNode := &planpb.Node{
+		NodeType:    planpb.Node_TABLE_SCAN,
+		NodeId:      0,
+		BindingTags: []int32{tag},
+		TableDef:    scanNode.TableDef,
+		FilterList:  []*planpb.Expr{runtimeFilter},
+	}
+	rejectSortNode := &planpb.Node{
+		NodeType: planpb.Node_SORT,
+		NodeId:   1,
+		Children: []int32{0},
+		OrderBy:  []*planpb.OrderBySpec{{Expr: DeepCopyExpr(pkExpr)}},
+		Limit:    makePlan2Uint64ConstExprWithType(1000),
+	}
+	rejectBuilder.qry.Nodes = []*planpb.Node{rejectScanNode, rejectSortNode}
+
+	rejectBuilder.handleMessageFromTopToScan(1)
+
+	require.Len(t, rejectScanNode.OrderBy, 1)
+	require.Nil(t, rejectScanNode.IndexReaderParam)
 }
 
 func TestHandleMessageFromTopToScanRejectsCompositePrimaryKeyOrderedLimitWithResidualFilter(t *testing.T) {
