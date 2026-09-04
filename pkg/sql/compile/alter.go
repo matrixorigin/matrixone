@@ -1254,6 +1254,12 @@ func (s *Scope) alterTableCopy(c *Compile, cleanup *alterAutoIncrementResetClean
 	if oldLogicalId != 0 {
 		createTmpOpts = createTmpOpts.WithKeepLogicalId(oldLogicalId)
 	}
+	// The replica is created from regenerated DDL, which cannot express relkind, so
+	// buildCreateTable would derive one from the replica's name. Carry the original's
+	// kind across instead: for a hidden index table that kind is the only thing keeping
+	// it out of the relkind-keyed filters (snapshot/PITR restore, CLONE), and losing it
+	// silently promotes the table to an ordinary one.
+	createTmpOpts = createTmpOpts.WithKeepRelKind(qry.GetTableDef().GetTableType())
 	err = c.runSqlWithOptions(qry.CreateTmpTableSql, createTmpOpts)
 	if err != nil {
 		c.proc.Error(c.proc.Ctx, "Create copy table for alter table",

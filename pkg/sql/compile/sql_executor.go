@@ -362,6 +362,12 @@ func (exec *txnExecutor) Exec(
 			logicalId)
 	}
 
+	if kind, ok := statementOption.KeepRelKind(); ok {
+		exec.ctx = context.WithValue(exec.ctx,
+			defines.RelKindKey{},
+			kind)
+	}
+
 	// Keep historical behavior for internal SQL: bypass frontend privilege checks.
 	// Some callers (e.g. CTAS follow-up SQL) opt in to real auth via context flag.
 	if !needInternalExecutorPrivilegeCheck(exec.ctx) {
