@@ -356,15 +356,24 @@ func (c *VectorIndexCache) snapshotResidents(protect string) (list []resident, p
 // enforce evicts coldest-first until the charging account is under its own cap and the CN is
 // under the SYS cap, in both arenas. protect is the key just loaded, never a victim.
 func (c *VectorIndexCache) enforce(account uint32, tenant, sys caps, protect string) {
-	list, perAccount, total := c.snapshotResidents(protect)
-	if len(list) == 0 {
-		return
-	}
-	// Coldest first. ExpireAt slides forward on every search, so it is the cache's
-	// least-recently-used ordering already.
-	sort.Slice(list, func(i, j int) bool { return list[i].expireAt < list[j].expireAt })
-
 	for _, a := range []arena{arenaHost, arenaDevice} {
+		if tenant.of(a) <= 0 && sys.of(a) <= 0 {
+			continue
+		}
+		// Re-snapshot per arena rather than reusing one pre-pass. An entry evicted by the
+		// PREVIOUS arena is gone, but it still carries bytes in this one, and reclaim gives
+		// it no credit here: evictEntry returns false for an entry already claimed, so the
+		// loop skips it without decrementing. A shared snapshot therefore over-states this
+		// arena's usage by exactly the bytes the other arena just freed, and evicts a warm
+		// index to make room that is already free.
+		list, perAccount, total := c.snapshotResidents(protect)
+		if len(list) == 0 {
+			return
+		}
+		// Coldest first. ExpireAt slides forward on every search, so it is the cache's
+		// least-recently-used ordering already.
+		sort.Slice(list, func(i, j int) bool { return list[i].expireAt < list[j].expireAt })
+
 		var freed int64
 		if tenantLimit := tenant.of(a); tenantLimit > 0 {
 			freed = c.reclaim(list, a, tenantLimit, perAccount[account].of(a), func(r resident) bool {

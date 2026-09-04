@@ -85,9 +85,12 @@ type Fulltext2Search struct {
 	genValid   bool
 
 	// preloadNdoc is the base doc count read by Preload, so GetIndexSize can report what the
-	// following Load will cost before any base is mapped. Superseded by the loaded segments
-	// once Load succeeds.
+	// following Load will cost before any base is mapped, and so Load can run the heap-budget
+	// check without repeating the aggregate. Superseded by the loaded segments once Load
+	// succeeds. preloaded distinguishes "Preload ran and counted zero docs" from "Preload
+	// never ran" -- a caller may reach Load directly.
 	preloadNdoc int64
+	preloaded   bool
 }
 
 var _ veccache.VectorIndexSearchIf = (*Fulltext2Search)(nil)
@@ -110,7 +113,7 @@ func (s *Fulltext2Search) Preload(sqlproc *sqlexec.SqlProcess) error {
 	if err != nil {
 		return err
 	}
-	s.preloadNdoc = ndoc
+	s.preloadNdoc, s.preloaded = ndoc, true
 	return nil
 }
 
@@ -119,7 +122,13 @@ func (s *Fulltext2Search) Load(sqlproc *sqlexec.SqlProcess) error {
 	// budget, rather than OOM-killing the CN (which takes down every query on the node).
 	// This guard is on Load, NOT LoadAllBases, so CompactSegments (MERGE) — the remedy —
 	// stays exempt and can still load the bases to reclaim dead docs.
-	if err := checkBaseLoadBudget(sqlproc, s.cfg); err != nil {
+	// Reuse Preload's count when it ran: checkBaseLoadBudget would otherwise repeat the
+	// SUM(nrow) aggregate that Preload already paid for, on every cache miss.
+	if s.preloaded {
+		if err := checkBaseLoadBudgetFor(sqlproc, s.cfg, s.preloadNdoc); err != nil {
+			return err
+		}
+	} else if err := checkBaseLoadBudget(sqlproc, s.cfg); err != nil {
 		return err
 	}
 	bases, err := LoadAllBases(sqlproc, s.cfg)

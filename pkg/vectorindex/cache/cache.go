@@ -777,9 +777,17 @@ func (c *VectorIndexCache) Search(sqlproc *sqlexec.SqlProcess, key string, newal
 		keys, distances, err = algo.Search(sqlproc, newalgo, query, rt)
 		if err != nil {
 			if moerr.IsMoErrCode(err, moerr.ErrInvalidState) {
-				// index destroyed by Remove() or HouseKeeping.  Retry -- but not before
-				// this wrapper has finished with the algo the next attempt reuses.
-				algo.awaitDestroyed()
+				// index destroyed by Remove() or HouseKeeping.  Retry -- but not before this
+				// wrapper has finished with the algo the next attempt reuses.
+				//
+				// Only wait when a teardown was actually CLAIMED. ErrInvalidState is not
+				// exclusive to eviction: an internal SQL under Algo.Search can surface one of
+				// its own (a paused txn client, a remote-run failure), and then this entry is
+				// still STATUS_LOADED and in the map, so nothing will ever close destroyed and
+				// an unguarded wait would block the query goroutine forever.
+				if algo.evicting.Load() {
+					algo.awaitDestroyed()
+				}
 				continue
 			}
 			return nil, nil, err
@@ -847,9 +855,13 @@ func (c *VectorIndexCache) SearchInto(sqlproc *sqlexec.SqlProcess, key string, n
 		err := algo.SearchInto(sqlproc, query, rt, out)
 		if err != nil {
 			if moerr.IsMoErrCode(err, moerr.ErrInvalidState) {
-				// index destroyed by Remove()/HouseKeeping — wait for the teardown to
-				// release the algo this loop reuses, then retry
-				algo.awaitDestroyed()
+				// index destroyed by Remove()/HouseKeeping — wait for the teardown to release
+				// the algo this loop reuses, then retry. Guarded on evicting for the same
+				// reason as Search: an ErrInvalidState raised inside Algo.SearchInto itself
+				// leaves nobody to close destroyed.
+				if algo.evicting.Load() {
+					algo.awaitDestroyed()
+				}
 				continue
 			}
 			return err
@@ -872,6 +884,32 @@ func (c *VectorIndexCache) Remove(key string) {
 // The empty reason preserves the historical behavior for all other algorithms.
 func (c *VectorIndexCache) RemoveWithReason(key, reason string) {
 	c.evictEntry(key, nil, reason)
+	// Also drop this index's named-snapshot generations. They are keyed
+	// "<index table>@<physical>-<logical>", which no exact-key evict matches, and the
+	// staleness sweep deliberately skips them (a snapshot generation is immutable, so it is
+	// never "stale"). Without this a DROP INDEX / DROP TABLE / DROP DATABASE leaves every
+	// historical generation of the dropped index resident until its TTL expires -- pinning
+	// VRAM for the cuVS algorithms, and charging bytes to max_index_cache_size for an index
+	// that no longer exists. Callers invalidate by index table name, so doing it here fixes
+	// every one of them rather than asking each algorithm's DDL hook to remember.
+	if !IsSnapshotKey(key) {
+		c.removeSnapshotGenerations(key, reason)
+	}
+}
+
+// removeSnapshotGenerations evicts every named-snapshot generation of one index table.
+func (c *VectorIndexCache) removeSnapshotGenerations(indexTable, reason string) {
+	prefix := indexTable + snapshotKeySep
+	var keys []string
+	c.IndexMap.Range(func(key, _ any) bool {
+		if k, ok := key.(string); ok && strings.HasPrefix(k, prefix) {
+			keys = append(keys, k)
+		}
+		return true
+	})
+	for _, k := range keys {
+		c.evictEntry(k, nil, reason)
+	}
 }
 
 // RemovePrefix removes every cached index whose key starts with prefix.

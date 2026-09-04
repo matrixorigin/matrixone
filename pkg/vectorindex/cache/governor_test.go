@@ -20,6 +20,7 @@ package cache
 import (
 	"context"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -626,4 +627,87 @@ func TestGovernorSysReadFailureIsRateLimited(t *testing.T) {
 	}
 	require.Equal(t, hostCap(512), c.sysCacheLimit(sysProc()))
 	require.Equal(t, 2, calls)
+}
+
+// One arena's evictions must not be charged to the next. With a shared pre-pass snapshot the
+// device pass still counted bytes the host pass had already freed -- and got no credit when it
+// reached those entries, because evictEntry refuses an entry already claimed -- so it evicted a
+// warm index for room that was free.
+func TestGovernorArenaPassesDoNotDoubleCountFreedBytes(t *testing.T) {
+	c := newBoundCache(t)
+	// Host cap 10000 binds (12000 resident); device cap 4000 does NOT once the host pass has
+	// evicted A (3000 device left, under 4000).
+	sp := govProc(t, c, 1, caps{host: 10000, device: 4000}, caps{})
+
+	a := "__mo_index_secondary_arena_a"
+	b := "__mo_index_secondary_arena_b"
+	loadInto(t, c, sp, a, 6000, 3000)
+	entryOf(t, c, a).ExpireAt.Store(1) // coldest, so the host pass takes it
+	loadInto(t, c, sp, b, 6000, 3000)
+
+	require.False(t, isResident(c, a), "the host pass evicts the coldest entry to meet 10000")
+	require.True(t, isResident(c, b),
+		"after A is gone only 3000 device bytes remain, under the 4000 device cap: B must survive")
+}
+
+// A DROP releases the index's named-snapshot generations too. They are keyed <table>@<ts>, which
+// no exact-key Remove matches, and the staleness sweep skips them -- so before this they stayed
+// resident (pinning VRAM for the cuVS algorithms) until their TTL ran out.
+func TestRemoveAlsoDropsSnapshotGenerations(t *testing.T) {
+	c := newBoundCache(t)
+	const tbl = "__mo_index_secondary_dropme"
+	other := "__mo_index_secondary_keepme"
+
+	require.NoError(t, searchAt(c, tbl, &countingSearch{host: 10}))
+	snapA := SnapshotKey(tbl, snapshotTS(100))
+	snapB := SnapshotKey(tbl, snapshotTS(200))
+	require.NoError(t, searchAt(c, snapA, &countingSearch{host: 10}))
+	require.NoError(t, searchAt(c, snapB, &countingSearch{host: 10}))
+	require.NoError(t, searchAt(c, other, &countingSearch{host: 10}))
+	require.NoError(t, searchAt(c, SnapshotKey(other, snapshotTS(100)), &countingSearch{host: 10}))
+
+	c.Remove(tbl)
+
+	require.False(t, isResident(c, tbl), "the current generation goes")
+	require.False(t, isResident(c, snapA), "and every snapshot generation of the same index")
+	require.False(t, isResident(c, snapB))
+	require.True(t, isResident(c, other), "another index is untouched")
+	require.True(t, isResident(c, SnapshotKey(other, snapshotTS(100))),
+		"including its snapshot generations -- the prefix must not over-match")
+}
+
+// invalidStateSearch fails Search with ErrInvalidState from INSIDE the algorithm, the way a
+// paused txn client or a failed remote run does -- not because the entry was evicted.
+type invalidStateSearch struct {
+	countingSearch
+	calls atomic.Int64
+}
+
+func (m *invalidStateSearch) Search(*sqlexec.SqlProcess, any, vectorindex.RuntimeConfig) (any, []float64, error) {
+	if m.calls.Add(1) == 1 {
+		return nil, nil, moerr.NewInvalidStateNoCtx("txn client is in pause state")
+	}
+	return []int64{1}, []float64{2.0}, nil
+}
+
+// An ErrInvalidState that did NOT come from eviction must not block the retry. The entry is still
+// STATUS_LOADED and in the map, so nothing will ever close its destroyed channel; an unguarded
+// wait there hangs the query goroutine forever with no cancellation.
+func TestSearchRetryDoesNotWaitWhenNothingIsBeingDestroyed(t *testing.T) {
+	c := newBoundCache(t)
+	algo := &invalidStateSearch{}
+
+	done := make(chan error, 1)
+	go func() {
+		_, _, err := c.Search(nil, "__mo_index_secondary_notevicted", algo, nil, vectorindex.RuntimeConfig{})
+		done <- err
+	}()
+
+	select {
+	case err := <-done:
+		require.NoError(t, err, "the retry must reach the second, succeeding Search")
+	case <-time.After(20 * time.Second):
+		t.Fatal("Search blocked on a teardown that will never happen")
+	}
+	require.EqualValues(t, 2, algo.calls.Load())
 }
