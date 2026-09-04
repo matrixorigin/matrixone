@@ -6624,7 +6624,7 @@ var supportedStringBuiltIns = []FuncNew{
 		functionId: SHA2,
 		class:      plan.Function_STRICT,
 		layout:     STANDARD_FUNCTION,
-		checkFn:    fixedTypeMatch,
+		checkFn:    stringDomainFixedTypeMatch,
 
 		Overloads: []overload{
 			{
