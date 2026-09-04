@@ -27,6 +27,8 @@ const SQLModeMatrixOneNative = "MATRIXONE_NATIVE"
 // MySQL's is the default, this enables a behavior MO does not have by default.
 const SQLModeEnableBoolSumAvg = "ENABLE_BOOL_SUMAVG"
 
+const SQLModeNoUnsignedSubtraction = "NO_UNSIGNED_SUBTRACTION"
+
 const (
 	sqlModeANSIQuotes         = "ANSI_QUOTES"
 	sqlModePipesAsConcat      = "PIPES_AS_CONCAT"
