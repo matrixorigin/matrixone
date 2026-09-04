@@ -1450,6 +1450,10 @@ func TestIsMaterializedViewTableDefUsesPersistedCreateSQL(t *testing.T) {
 	}))
 	require.False(t, IsMaterializedViewTableDef(&plan.TableDef{
 		Createsql: "CREATE TABLE ordinary (id INT)",
+		Cols:      []*plan.ColDef{{Name: "note", Comment: "mv_materialized"}},
+	}))
+	require.False(t, IsMaterializedViewTableDef(&plan.TableDef{
+		Createsql: "CREATE TABLE ordinary (id INT)",
 		Defs: []*plan.TableDef_DefType{{Def: &plan.TableDef_DefType_Properties{
 			Properties: &plan.PropertiesDef{Properties: []*plan.Property{{
 				Key:   catalog.SystemRelAttr_CreateSQL,
