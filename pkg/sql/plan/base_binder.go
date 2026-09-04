@@ -3530,6 +3530,25 @@ func (b *baseBinder) bindFuncExprImplByAstExpr(name string, astArgs []tree.Expr,
 	if coerceErr != nil {
 		return nil, coerceErr
 	}
+	// Sequence functions resolve their relation at execution time.  A view,
+	// however, must resolve unqualified object names in the database in which
+	// the view was created, not in the caller's current database.  BindContext
+	// carries that database only while a view body is being expanded, so retain
+	// it as an internal trailing argument in the executable expression.
+	if isSequenceNameFunction(name) {
+		// Keep the internal database argument out of the SQL surface.  The
+		// public sequence functions continue to accept exactly one argument.
+		if len(args) != 1 {
+			argTypes := make([]types.Type, len(args))
+			for i := range args {
+				argTypes[i] = makeTypeByPlan2Expr(args[i])
+			}
+			return nil, moerr.NewInvalidArg(b.GetContext(), fmt.Sprintf("function %s", name), argTypes)
+		}
+		if b.ctx != nil && b.ctx.defaultDatabase != "" {
+			args = append(args, makePlan2StringConstExprWithType(b.ctx.defaultDatabase))
+		}
+	}
 	if (name == "in" || name == "not_in") && len(args) == 2 &&
 		containsVolatileFunction(args[0]) && b.ctx != nil {
 		b.markVolatileInLeft(args[0])
@@ -3644,6 +3663,15 @@ func (b *baseBinder) bindFuncExprImplByAstExpr(name string, astArgs []tree.Expr,
 	}
 
 	return bindFuncExprImplUdf(b, name, udf, astArgs, args, depth)
+}
+
+func isSequenceNameFunction(name string) bool {
+	switch strings.ToLower(name) {
+	case "nextval", "currval":
+		return true
+	default:
+		return false
+	}
 }
 
 func markPreparedResultCastsProvisional(
