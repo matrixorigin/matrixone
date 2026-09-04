@@ -251,8 +251,9 @@ func (s *SqlProcess) resolveAccountID() *uint32 {
 	return s.SnapshotAccountID
 }
 
-// EffectiveAccountID is the account this SqlProcess actually EXECUTES as: the snapshot's
-// owning tenant when ApplyScanSnapshot bound one, else the caller's own account.
+// EffectiveAccountID is the account this SqlProcess actually EXECUTES as, per resolveAccountID:
+// the publisher when a subscribed table bound an execution identity, else the snapshot's owning
+// tenant when ApplyScanSnapshot bound one, else the caller's own account.
 //
 // GetAccountID reads the original process context and therefore answers "who asked", which is
 // the wrong owner for a cross-account snapshot read: SYS reading tenant 42's index runs its
