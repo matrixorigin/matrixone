@@ -2991,6 +2991,29 @@ Split large initial snapshots into multiple transactions.
   snapshot. This avoids partial target visibility but may consume substantially
   more target transaction memory, locks, and commit time for large tables.
 
+**Partial-visibility and readiness contract**:
+
+- With `true`, each bounded group commits independently. Ordinary target queries
+  can therefore see an incomplete, progressively growing initial snapshot.
+- The target database has no local CDC-ready marker. Do not release a mapped
+  table to consumers until `SHOW CDC TASK <task_name>` reports a non-empty
+  per-table watermark for the current table generation and no table error.
+- Consumers that cannot be gated by source-side CDC status, or that require the
+  initial table to become visible atomically, must set
+  `InitSnapshotSplitTxn=false`.
+- Pausing retains the stable epoch and can resume the same snapshot. Dropping or
+  cancelling a task during initial sync can leave committed partial rows in the
+  target; reset the target before reusing it for another CDC task.
+- Until generation-qualified readiness and target ownership reservations are
+  implemented, use atomic mode for wildcard mappings that may discover a
+  recreated table or for configurations where another CDC task could map to the
+  same physical target table.
+
+MatrixOne backup/restore and PITR do not rewind an external target. The current
+implementation does not yet provide the proposed rebuild fence/API. After a
+restore, do not resume a split-snapshot task against the existing target; reset
+the target and recreate the CDC task.
+
 Source changes that happen while the initial snapshot is running are applied by
 the incremental phase after the stable snapshot watermark. If that historical
 snapshot has expired from source retention, CDC fails closed instead of silently
