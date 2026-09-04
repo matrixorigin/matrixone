@@ -2989,6 +2989,76 @@ func TestVolatileStringAssignmentCastReset(t *testing.T) {
 	}
 }
 
+func TestPreparedIntegerStringNumericCastFolding(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	defer proc.Free()
+	proc.SetBaseProcessRunningStatus(true)
+
+	sourceType := types.T_text.ToType()
+	targetType := types.T_int32.ToType()
+	fn, err := function.GetFunctionByName(proc.Ctx, "cast", []types.Type{sourceType, targetType})
+	require.NoError(t, err)
+
+	newExecutor := func() *FunctionExpressionExecutor {
+		expr := &plan.Expr{
+			Typ: plan.Type{Id: int32(targetType.Oid), Width: targetType.Width, Scale: targetType.Scale},
+			Expr: &plan.Expr_F{F: &plan.Function{
+				Func: &plan.ObjectRef{Obj: fn.GetEncodedOverloadID(), ObjName: "cast"},
+				Args: []*plan.Expr{
+					{
+						Typ:  plan.Type{Id: int32(sourceType.Oid), Width: sourceType.Width, Scale: sourceType.Scale},
+						Expr: &plan.Expr_P{P: &plan.ParamRef{Pos: 0}},
+					},
+					{
+						Typ:  plan.Type{Id: int32(targetType.Oid), Width: targetType.Width, Scale: targetType.Scale},
+						Expr: &plan.Expr_T{T: &plan.TargetType{}},
+					},
+				},
+			}},
+		}
+		executor, err := NewExpressionExecutor(proc, expr)
+		require.NoError(t, err)
+		return executor.(*FunctionExpressionExecutor)
+	}
+
+	eval := func(executor *FunctionExpressionExecutor, value string, kind vector.PrepareParamKind) *vector.Vector {
+		params := vector.NewVec(sourceType)
+		require.NoError(t, vector.AppendBytes(params, []byte(value), false, proc.Mp()))
+		proc.SetPrepareParamsWithMeta(params, nil, []vector.PrepareParamKind{kind})
+		result, err := executor.Eval(proc, nil, nil)
+		require.NoError(t, err)
+		proc.SetPrepareParams(nil)
+		params.Free(proc.Mp())
+		return result
+	}
+
+	t.Run("integer provenance folds", func(t *testing.T) {
+		executor := newExecutor()
+		defer executor.Free()
+
+		result := eval(executor, "42", vector.PrepareParamInteger)
+		require.True(t, executor.folded.canFold)
+		require.True(t, result.IsConst())
+		require.Equal(t, int32(42), vector.GetFixedAtNoTypeCheck[int32](result, 0))
+
+		executor.ResetForNextQuery()
+		result = eval(executor, "43", vector.PrepareParamInteger)
+		require.True(t, executor.folded.canFold)
+		require.True(t, result.IsConst())
+		require.Equal(t, int32(43), vector.GetFixedAtNoTypeCheck[int32](result, 0))
+	})
+
+	t.Run("ordinary text does not fold", func(t *testing.T) {
+		executor := newExecutor()
+		defer executor.Free()
+
+		result := eval(executor, "42", vector.PrepareParamNone)
+		require.False(t, executor.folded.canFold)
+		require.False(t, result.IsConst())
+		require.Equal(t, int32(42), vector.GetFixedAtNoTypeCheck[int32](result, 0))
+	})
+}
+
 func TestParamExpressionExecutorDoesNotCacheLookupFailure(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	defer proc.Free()
