@@ -335,14 +335,30 @@ func (s *HnswSearch[T]) Load(sqlproc *sqlexec.SqlProcess) error {
 	return nil
 }
 
-// GetIndexSize reports the usearch models this search holds resident, as the sum of their
-// metadata FileSize: a loaded usearch index is the model file's contents in host memory, so
-// the persisted size is the resident size. Nothing here is device resident, so the device
-// figure is 0.
+// GetIndexSize reports what the loaded usearch models actually keep in HOST memory, taken from
+// usearch's own accounting rather than from the model file size.
+//
+// The search path loads with View(), which MMAPS the model file, and usearch's memory_usage()
+// skips the node and vector bytes entirely for a viewed index (index.hpp: `if (!viewed_file_)`),
+// leaving the per-node bookkeeping and per-thread contexts. Measured at 20k rows / dim 128:
+// file 13.2 MB, memory_usage 161 KB -- 1.2% of the file, ~8 bytes per row. Charging FileSize
+// would therefore over-state an hnsw entry by roughly 80x and evict it against bytes that are
+// reclaimable page cache on the LOCAL fileservice volume, not heap. It would also meter hnsw on
+// a different definition of "host resident" than fulltext2, which excludes its mmap'd posting
+// blocks for exactly this reason.
+//
+// Before Load the models carry metadata only, so there is no index to ask and this reports 0:
+// the governor reclaims for hnsw after the fact, as it does for ivfflat. FileSize is not used
+// as a pre-load stand-in precisely because of the 80x gap.
+//
+// Nothing here is device resident, so the device figure is 0.
 func (s *HnswSearch[T]) GetIndexSize() (hostBytes, deviceBytes int64) {
 	for _, idx := range s.Indexes {
-		if idx != nil {
-			hostBytes += idx.FileSize
+		if idx == nil || idx.Index == nil {
+			continue
+		}
+		if n, err := idx.Index.MemoryUsage(); err == nil {
+			hostBytes += int64(n)
 		}
 	}
 	return hostBytes, 0
