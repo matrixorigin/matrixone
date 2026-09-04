@@ -363,7 +363,12 @@ func (ag *aggState) readStateArg(mp *mpool.MPool, i int32, r io.Reader, info *ag
 			keySize = kAggArgPrefixSz + kAggArgOrdinalSz + fixedLen
 		}
 	}
-
+	// writeStateArg emits non-order-preserving arguments in skiplist key order.
+	// Keep the insertion cursor across that ordered stream so rebuilding a large
+	// partial DISTINCT state does not search the skiplist from the root for every
+	// argument. Inserter revalidates its cached splice if it sees an older or
+	// non-canonical wire stream.
+	var inserter arenaskl.Inserter
 	for ui := uint32(0); ui < ag.argCnt[i]; ui++ {
 		if !info.usesOpaqueArgEncoding() && info.argTypes[0].IsFixedLen() {
 			kbuf, err := ag.resizeArgScratch(mp, keySize)
@@ -379,7 +384,7 @@ func (ag *aggState) readStateArg(mp *mpool.MPool, i int32, r io.Reader, info *ag
 				binary.BigEndian.PutUint32(ordinal[:], ui)
 				err = ag.insertArgValue(mp, kbuf, ordinal[:])
 			} else {
-				err = ag.insertArg(mp, kbuf)
+				err = ag.insertArgValueWithInserter(mp, kbuf, nil, &inserter)
 			}
 			if err != nil {
 				return err
@@ -405,7 +410,7 @@ func (ag *aggState) readStateArg(mp *mpool.MPool, i int32, r io.Reader, info *ag
 				binary.BigEndian.PutUint32(ordinal[:], ui)
 				err = ag.insertArgValue(mp, kbuf, ordinal[:])
 			} else {
-				err = ag.insertArg(mp, kbuf)
+				err = ag.insertArgValueWithInserter(mp, kbuf, nil, &inserter)
 			}
 			if err != nil {
 				return err
@@ -928,21 +933,23 @@ func (ag *aggState) insertArgValueWithInserter(
 		return err
 	}
 
-	add := func(list *arenaskl.Skiplist, key []byte) error {
+	var plan arenaskl.AddPlan
+	if ag.allocation != nil {
+		plan = arenaskl.MakeAddPlan(kbuf)
+	}
+	add := func(list *arenaskl.Skiplist) error {
 		if ag.allocation != nil {
-			plan := arenaskl.MakeAddPlan(key)
 			if inserter != nil {
-				return inserter.AddWithPlan(list, key, value, plan)
+				return inserter.AddWithPlan(list, kbuf, value, plan)
 			}
-			return list.AddWithPlan(key, value, plan)
+			return list.AddWithPlan(kbuf, value, plan)
 		}
 		if inserter != nil {
-			return inserter.Add(list, key, value)
+			return inserter.Add(list, kbuf, value)
 		}
-		return list.Add(key, value)
+		return list.Add(kbuf, value)
 	}
 	if ag.allocation != nil {
-		plan := arenaskl.MakeAddPlan(kbuf)
 		consumed, _, ok := plan.ArenaFootprint(
 			uint32(len(kbuf)), uint32(len(value)))
 		if !ok {
@@ -953,9 +960,23 @@ func (ag *aggState) insertArgValueWithInserter(
 		if used <= math.MaxUint64-consumed &&
 			used+consumed <= math.MaxUint64-trailing &&
 			used+consumed+trailing <= uint64(ag.argSkl.Arena().Capacity()) {
-			return add(ag.argSkl, kbuf)
+			return add(ag.argSkl)
 		}
-	} else if err := add(ag.argSkl, kbuf); err != arenaskl.ErrArenaFull {
+		// The accounted execution path can grow the arena geometrically and
+		// relocate its offset-based nodes as one buffer. This keeps cumulative
+		// growth work linear instead of rebuilding the whole skiplist for every
+		// 512 KiB increment.
+		if err := ag.preflightArgumentCapacity(
+			mp, consumed+trailing, 0); err != nil {
+			return err
+		}
+		if inserter != nil {
+			// GrowArena relocates the backing buffer, so cached node pointers no
+			// longer refer to the current arena.
+			*inserter = arenaskl.Inserter{}
+		}
+		return add(ag.argSkl)
+	} else if err := add(ag.argSkl); err != arenaskl.ErrArenaFull {
 		return err
 	}
 
@@ -964,18 +985,6 @@ func (ag *aggState) insertArgValueWithInserter(
 	// e.g. a multi-column distinct key concatenating several large string args —
 	// grow by enough to fit it, otherwise the retry below would still ErrArenaFull.
 	grow := uint64(kAggArgArenaSize)
-	if ag.boundedArgumentGrowth {
-		grow = 64 * 1024
-	}
-	if ag.allocation != nil {
-		plan := arenaskl.MakeAddPlan(kbuf)
-		consumed, _, ok := plan.ArenaFootprint(
-			uint32(len(kbuf)), uint32(len(value)))
-		if !ok || consumed > math.MaxUint64-arenaskl.MaxNodeTrailingSize() {
-			return mpool.ErrAllocationAllocatorLimit
-		}
-		nodeSize = consumed + arenaskl.MaxNodeTrailingSize()
-	}
 	if nodeSize > grow {
 		grow = nodeSize
 	}
@@ -1015,7 +1024,7 @@ func (ag *aggState) insertArgValueWithInserter(
 	if inserter != nil {
 		*inserter = arenaskl.Inserter{}
 	}
-	if err = add(newArgSkl, kbuf); err != nil {
+	if err = add(newArgSkl); err != nil {
 		mp.Free(argBuf)
 		return err
 	}
