@@ -226,7 +226,7 @@ func (b *Builder) prepareBuild() string {
 	return b.brief()
 }
 
-func (b *Builder) selectRemoveTarget() (string, error) {
+func (b *Builder) selectRetainedVotingTarget() (string, error) {
 	var targets []string
 	for target, replicaID := range b.targetPeers {
 		if originReplicaID, ok := b.originPeers[target]; ok && originReplicaID == replicaID {
@@ -234,7 +234,7 @@ func (b *Builder) selectRemoveTarget() (string, error) {
 		}
 	}
 	if len(targets) == 0 {
-		return "", moerr.NewInternalErrorNoCtx("cannot build remove step without a retained voting peer")
+		return "", moerr.NewInternalErrorNoCtx("cannot build operator step without a retained voting peer")
 	}
 	slices.Sort(targets)
 	return targets[0], nil
@@ -242,7 +242,7 @@ func (b *Builder) selectRemoveTarget() (string, error) {
 
 func (b *Builder) buildToRemoveSteps() error {
 	for len(b.toRemove) > 0 {
-		target, err := b.selectRemoveTarget()
+		target, err := b.selectRetainedVotingTarget()
 		if err != nil {
 			return err
 		}
@@ -258,7 +258,7 @@ func (b *Builder) buildToRemoveSteps() error {
 
 func (b *Builder) buildToRemoveNonVotingSteps() error {
 	for len(b.toRemoveNonVoting) > 0 {
-		target, err := b.selectRemoveTarget()
+		target, err := b.selectRetainedVotingTarget()
 		if err != nil {
 			return err
 		}
@@ -272,17 +272,15 @@ func (b *Builder) buildToRemoveNonVotingSteps() error {
 	return nil
 }
 
-func (b *Builder) buildToAddSteps() *Builder {
+func (b *Builder) buildToAddSteps() error {
 	for len(b.toAdd) > 0 {
-		var targets []string
-		for target := range b.originPeers {
-			targets = append(targets, target)
+		target, err := b.selectRetainedVotingTarget()
+		if err != nil {
+			return err
 		}
-		slices.Sort(targets)
-
 		uuid, replicaID := b.toAdd.Get()
 		b.steps = append(b.steps, AddLogService{
-			Target: targets[0],
+			Target: target,
 			Replica: Replica{
 				UUID:      uuid,
 				ShardID:   b.shardID,
@@ -292,20 +290,18 @@ func (b *Builder) buildToAddSteps() *Builder {
 		})
 		delete(b.toAdd, uuid)
 	}
-	return b
+	return nil
 }
 
-func (b *Builder) buildToAddNonVotingSteps() *Builder {
+func (b *Builder) buildToAddNonVotingSteps() error {
 	for len(b.toAddNonVoting) > 0 {
-		var targets []string
-		for target := range b.originPeers {
-			targets = append(targets, target)
+		target, err := b.selectRetainedVotingTarget()
+		if err != nil {
+			return err
 		}
-		slices.Sort(targets)
-
 		uuid, replicaID := b.toAddNonVoting.Get()
 		b.steps = append(b.steps, AddNonVotingLogService{
-			Target: targets[0],
+			Target: target,
 			Replica: Replica{
 				UUID:      uuid,
 				ShardID:   b.shardID,
@@ -315,18 +311,22 @@ func (b *Builder) buildToAddNonVotingSteps() *Builder {
 		})
 		delete(b.toAddNonVoting, uuid)
 	}
-	return b
+	return nil
 }
 
 func (b *Builder) buildSteps() error {
 	if err := b.buildToRemoveSteps(); err != nil {
 		return err
 	}
-	b.buildToAddSteps()
+	if err := b.buildToAddSteps(); err != nil {
+		return err
+	}
 	if err := b.buildToRemoveNonVotingSteps(); err != nil {
 		return err
 	}
-	b.buildToAddNonVotingSteps()
+	if err := b.buildToAddNonVotingSteps(); err != nil {
+		return err
+	}
 	if len(b.steps) == 0 {
 		return moerr.NewInternalErrorNoCtx("no operator step is built")
 	}

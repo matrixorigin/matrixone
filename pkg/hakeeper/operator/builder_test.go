@@ -225,7 +225,15 @@ func TestRemoveNonVotingBuild(t *testing.T) {
 	}, build.steps[0])
 }
 
-func TestRemoveBuildTargetSelection(t *testing.T) {
+func TestBuildTargetSelection(t *testing.T) {
+	assertCommandTargets := func(t *testing.T, op *Operator, expected []string) {
+		t.Helper()
+		require.Len(t, op.steps, len(expected))
+		for i, step := range op.steps {
+			assert.Equal(t, expected[i], generateScheduleCommand(step).UUID)
+		}
+	}
+
 	t.Run("last voting replica has no safe target", func(t *testing.T) {
 		logShard := logservice.LogShardInfo{
 			ShardID:  1,
@@ -250,22 +258,84 @@ func TestRemoveBuildTargetSelection(t *testing.T) {
 		assert.Nil(t, op)
 	})
 
-	t.Run("mixed change targets an existing retained peer", func(t *testing.T) {
+	t.Run("mixed voting change targets the retained peer for every step", func(t *testing.T) {
 		logShard := logservice.LogShardInfo{
 			ShardID:  1,
-			Replicas: map[uint64]string{1: "b", 2: "c"},
+			Replicas: map[uint64]string{1: "a", 2: "c"},
 			Epoch:    1,
 		}
 
 		op, err := NewBuilder("", logShard).
-			RemovePeer("c").
-			AddPeer("a", 3).
+			RemovePeer("a").
+			AddPeer("b", 3).
 			Build()
 		require.NoError(t, err)
-		require.Len(t, op.steps, 2)
-		step, ok := op.steps[0].(RemoveLogService)
-		require.True(t, ok)
-		assert.Equal(t, "b", step.Target)
-		assert.Equal(t, "b", generateScheduleCommand(step).UUID)
+		assert.Equal(t, []OpStep{
+			RemoveLogService{
+				Target:  "c",
+				Replica: Replica{UUID: "a", ShardID: 1, ReplicaID: 1, Epoch: 1},
+			},
+			AddLogService{
+				Target:  "c",
+				Replica: Replica{UUID: "b", ShardID: 1, ReplicaID: 3, Epoch: 1},
+			},
+		}, op.steps)
+		assertCommandTargets(t, op, []string{"c", "c"})
+	})
+
+	t.Run("mixed non-voting add targets the retained peer for every step", func(t *testing.T) {
+		logShard := logservice.LogShardInfo{
+			ShardID:  1,
+			Replicas: map[uint64]string{1: "a", 2: "c"},
+			Epoch:    1,
+		}
+
+		op, err := NewBuilder("", logShard).
+			RemovePeer("a").
+			AddNonVotingPeer("b", 3).
+			Build()
+		require.NoError(t, err)
+		assert.Equal(t, []OpStep{
+			RemoveLogService{
+				Target:  "c",
+				Replica: Replica{UUID: "a", ShardID: 1, ReplicaID: 1, Epoch: 1},
+			},
+			AddNonVotingLogService{
+				Target:  "c",
+				Replica: Replica{UUID: "b", ShardID: 1, ReplicaID: 3, Epoch: 1},
+			},
+		}, op.steps)
+		assertCommandTargets(t, op, []string{"c", "c"})
+	})
+
+	t.Run("mixed change with only a newly added voting peer has no safe target", func(t *testing.T) {
+		logShard := logservice.LogShardInfo{
+			ShardID:  1,
+			Replicas: map[uint64]string{1: "a"},
+			Epoch:    1,
+		}
+
+		op, err := NewBuilder("", logShard).
+			RemovePeer("a").
+			AddPeer("b", 2).
+			Build()
+		require.ErrorContains(t, err, "without a retained voting peer")
+		assert.Nil(t, op)
+	})
+
+	t.Run("voting add without an existing voting peer has no safe target", func(t *testing.T) {
+		logShard := logservice.LogShardInfo{ShardID: 1, Epoch: 1}
+
+		op, err := NewBuilder("", logShard).AddPeer("a", 1).Build()
+		require.ErrorContains(t, err, "without a retained voting peer")
+		assert.Nil(t, op)
+	})
+
+	t.Run("non-voting add without an existing voting peer has no safe target", func(t *testing.T) {
+		logShard := logservice.LogShardInfo{ShardID: 1, Epoch: 1}
+
+		op, err := NewBuilder("", logShard).AddNonVotingPeer("a", 1).Build()
+		require.ErrorContains(t, err, "without a retained voting peer")
+		assert.Nil(t, op)
 	})
 }
