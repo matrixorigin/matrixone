@@ -196,7 +196,7 @@ func TestSharedIterationFanoutRoutesOverlappingSourceSets(t *testing.T) {
 			bat.Vecs[0] = vector.NewVec(types.T_TS.ToType())
 			bat.Vecs[1] = vector.NewVec(types.T_Rowid.ToType())
 			var block types.Blockid
-			require.NoError(t, vector.AppendFixed(bat.Vecs[0], types.BuildTS(sourceID, 0), false, mp))
+			require.NoError(t, vector.AppendFixed(bat.Vecs[0], types.BuildTS(int64(sourceID), 0), false, mp))
 			require.NoError(t, vector.AppendFixed(bat.Vecs[1], types.NewRowid(&block, uint32(sourceID)), false, mp))
 			bat.SetRowCount(1)
 			return bat, nil, engine.ChangesHandle_Tail_done, nil
