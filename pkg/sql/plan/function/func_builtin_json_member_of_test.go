@@ -20,6 +20,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/container/bytejson"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
@@ -74,6 +75,45 @@ func TestJSONMemberOfPreparedScalarKinds(t *testing.T) {
 		vector.PrepareParamBoolean,
 		vector.PrepareParamNone,
 	})
+	succeed, message := testCase.Run()
+	require.True(t, succeed, message)
+}
+
+func TestJSONMemberOfPreparedConcreteFloat32PreservesWireValue(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	testCase := NewFunctionTestCase(
+		proc,
+		[]FunctionTestInput{
+			NewFunctionTestInput(types.T_text.ToType(), []string{"0.1"}, nil),
+			NewFunctionTestConstInput(types.T_varchar.ToType(), []string{"[0.10000000149011612]"}, nil),
+		},
+		NewFunctionTestResult(types.T_int64.ToType(), false, []int64{1}, nil),
+		jsonMemberOf,
+	)
+	testCase.parameters[0].SetPrepareParamKind(vector.PrepareParamFloat)
+	testCase.parameters[0].SetPrepareParamType(types.T_float32)
+	succeed, message := testCase.Run()
+	require.True(t, succeed, message)
+}
+
+func TestJSONMemberOfPreparedBinaryStringKeepsOpaqueDomain(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	raw := string([]byte{0, 1, 2})
+	array, err := bytejson.CreateByteJSON([]any{newTypedByteJson(bytejson.TpCodeOpaque, raw)})
+	require.NoError(t, err)
+	encoded, err := array.Marshal()
+	require.NoError(t, err)
+
+	testCase := NewFunctionTestCase(
+		proc,
+		[]FunctionTestInput{
+			NewFunctionTestInput(types.T_text.ToType(), []string{raw}, nil),
+			NewFunctionTestConstInput(types.T_json.ToType(), []string{string(encoded)}, nil),
+		},
+		NewFunctionTestResult(types.T_int64.ToType(), false, []int64{1}, nil),
+		jsonMemberOf,
+	)
+	testCase.parameters[0].SetIsBinaryString(true)
 	succeed, message := testCase.Run()
 	require.True(t, succeed, message)
 }
@@ -159,4 +199,7 @@ func TestJSONMemberOfFunctionRegistration(t *testing.T) {
 
 	_, err = GetFunctionByName(ctx, "member of", []types.Type{types.T_int64.ToType(), types.T_bool.ToType()})
 	require.EqualError(t, err, "Invalid data type for JSON data in argument 2 to function member of; a JSON string or JSON type is required.")
+
+	_, err = GetFunctionByName(ctx, "member of", []types.Type{types.T_array_float32.ToType(), types.T_varchar.ToType()})
+	require.Error(t, err, "native SQL vectors must not be accepted as MEMBER OF left operands")
 }

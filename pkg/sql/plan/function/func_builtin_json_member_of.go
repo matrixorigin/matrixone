@@ -15,19 +15,31 @@
 package function
 
 import (
+	"context"
+
 	"github.com/matrixorigin/matrixone/pkg/container/bytejson"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-const jsonMemberOfFunctionName = "member of"
+const (
+	JsonMemberOfFunctionName = "member of"
+	jsonMemberOfFunctionName = JsonMemberOfFunctionName
+)
+
+// MEMBER OF accepts SQL scalar values and JSON documents.  Native vector
+// values are SQL arrays, not JSON arrays, and MySQL rejects them as operands
+// instead of implicitly converting them to a JSON document.
+func jsonMemberOfLeftSupportsType(oid types.T) bool {
+	return jsonConstructorSupportsType(oid) && !oid.IsArrayRelate()
+}
 
 // jsonMemberOfCheckFn keeps the left operand typed so SQL strings remain JSON
 // strings, while the right operand follows the JSON document rules used by
 // JSON_OVERLAPS.
 func jsonMemberOfCheckFn(_ []overload, inputs []types.Type) checkResult {
-	if len(inputs) != 2 || !jsonConstructorSupportsType(inputs[0].Oid) {
+	if len(inputs) != 2 || !jsonMemberOfLeftSupportsType(inputs[0].Oid) {
 		return newCheckResultWithFailure(failedFunctionParametersWrong)
 	}
 
@@ -76,7 +88,25 @@ func (operand *jsonMemberOfValueOperand) documentAt(row uint64, proc *process.Pr
 		return bytejson.Null, true, nil
 	}
 
-	elem, err := (&opBuiltInJsonArray{}).convertToAny(proc, operand.parameter, int(row))
+	var (
+		elem any
+		err  error
+	)
+	if operand.parameter.GetType().Oid.IsMySQLString() {
+		ctx := context.Background()
+		if proc != nil && proc.Ctx != nil {
+			ctx = proc.Ctx
+		}
+		elem, err = PreparedJSONScalarValue(
+			ctx,
+			operand.parameter.GetBytesAt(int(row)),
+			operand.parameter.GetPrepareParamKindAt(int(row)),
+			operand.parameter.GetPrepareParamType(),
+			operand.parameter.GetIsBinaryStringAt(int(row)),
+		)
+	} else {
+		elem, err = (&opBuiltInJsonArray{}).convertToAny(proc, operand.parameter, int(row))
+	}
 	if err == nil {
 		operand.document, err = bytejson.CreateByteJSON(elem)
 		if err == nil && operand.parameter.GetType().Oid == types.T_json {

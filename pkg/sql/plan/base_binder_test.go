@@ -1375,6 +1375,18 @@ func TestBindFuncExprImplByPlanExpr_JsonComparisonWithDynamicParam(t *testing.T)
 		require.NotNil(t, paramArg.GetP())
 	})
 
+	t.Run("member of preserves the direct prepared parameter type", func(t *testing.T) {
+		result, err := BindFuncExprImplByPlanExpr(ctx, "member of", []*plan.Expr{
+			makeParamExpr(0), makePlan2StringConstExprWithType("[1]"),
+		})
+		require.NoError(t, err)
+		require.Equal(t, int32(types.T_int64), result.Typ.Id)
+		require.Len(t, result.GetF().Args, 2)
+		paramArg := requireExactJSONParam(t, result.GetF().Args[0], function.JsonComparisonParamFunctionName)
+		require.Equal(t, int32(types.T_text), paramArg.Typ.Id)
+		require.NotNil(t, paramArg.GetP())
+	})
+
 	for _, operator := range []string{"<=>", "!="} {
 		t.Run(operator+" preserves dynamic parameter type", func(t *testing.T) {
 			args := []*plan.Expr{makeJsonExpr(), makeParamExpr(0)}

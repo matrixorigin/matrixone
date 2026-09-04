@@ -38,6 +38,115 @@ const (
 	JsonComparisonParamFunctionName = "__mo_json_comparison_param"
 )
 
+// PreparedJSONScalarValue converts the text transport used by a prepared
+// parameter into the JSON scalar represented by its runtime SQL type.  The
+// concrete type is deliberately kept separate from PrepareParamKind: the
+// latter describes a broad conversion category, while (for example) FLOAT
+// and DOUBLE have different wire precision.
+func PreparedJSONScalarValue(
+	ctx context.Context,
+	value []byte,
+	kind vector.PrepareParamKind,
+	paramType types.T,
+	binaryString bool,
+) (any, error) {
+	if binaryString || paramType == types.T_binary ||
+		paramType == types.T_varbinary || paramType == types.T_blob {
+		return newTypedByteJson(bytejson.TpCodeOpaque, string(value)), nil
+	}
+	if paramType != types.T_any {
+		scalar, err := preparedTextToJSONValueWithType(ctx, string(value), paramType)
+		if err != nil {
+			return nil, err
+		}
+		return scalar, nil
+	}
+	if kind != vector.PrepareParamNone {
+		return preparedTextToJSONValue(ctx, string(value), kind)
+	}
+	return string(value), nil
+}
+
+// preparedTextToJSONValueWithType decodes the textual representation retained
+// by the binary prepared-parameter vector using the concrete protocol type.
+// In particular, parsing FLOAT with a 32-bit target and widening the resulting
+// float32 preserves the value that was actually carried on the wire.
+func preparedTextToJSONValueWithType(
+	ctx context.Context,
+	value string,
+	paramType types.T,
+) (any, error) {
+	parseSigned := func(bitSize int) (int64, error) {
+		parsed, err := strconv.ParseInt(value, 10, bitSize)
+		if err != nil {
+			return 0, moerr.NewInvalidInputf(
+				ctx, "invalid prepared %s JSON value %q", paramType.String(), value)
+		}
+		return parsed, nil
+	}
+	parseUnsigned := func(bitSize int) (uint64, error) {
+		parsed, err := strconv.ParseUint(value, 10, bitSize)
+		if err != nil {
+			return 0, moerr.NewInvalidInputf(
+				ctx, "invalid prepared %s JSON value %q", paramType.String(), value)
+		}
+		return parsed, nil
+	}
+	parseFloat := func(bitSize int) (bytejson.ByteJson, error) {
+		parsed, err := strconv.ParseFloat(value, bitSize)
+		if err != nil {
+			return bytejson.ByteJson{}, moerr.NewInvalidInputf(
+				ctx, "invalid prepared %s JSON value %q", paramType.String(), value)
+		}
+		if bitSize == 32 {
+			parsed = float64(float32(parsed))
+		}
+		return finiteFloatToJSON(parsed, ctx)
+	}
+
+	switch paramType {
+	case types.T_int8:
+		return parseSigned(8)
+	case types.T_int16:
+		return parseSigned(16)
+	case types.T_int32:
+		return parseSigned(32)
+	case types.T_int64:
+		return parseSigned(64)
+	case types.T_uint8:
+		return parseUnsigned(8)
+	case types.T_uint16:
+		return parseUnsigned(16)
+	case types.T_uint32:
+		return parseUnsigned(32)
+	case types.T_uint64:
+		return parseUnsigned(64)
+	case types.T_float32:
+		return parseFloat(32)
+	case types.T_float64:
+		return parseFloat(64)
+	case types.T_decimal64, types.T_decimal128, types.T_decimal256:
+		if len(value) == 0 || !json.Valid([]byte(value)) ||
+			(value[0] != '-' && (value[0] < '0' || value[0] > '9')) {
+			return nil, moerr.NewInvalidInputf(
+				ctx, "invalid prepared %s JSON value %q", paramType.String(), value)
+		}
+		return newTypedByteJson(bytejson.TpCodeDecimal, value), nil
+	case types.T_bool:
+		parsed, err := strconv.ParseBool(value)
+		if err != nil {
+			return nil, moerr.NewInvalidInputf(
+				ctx, "invalid prepared %s JSON value %q", paramType.String(), value)
+		}
+		return parsed, nil
+	case types.T_char, types.T_varchar, types.T_text:
+		return value, nil
+	default:
+		return nil, moerr.NewInternalErrorf(
+			ctx, "unsupported prepared parameter type %s", paramType.String())
+	}
+}
+
 // normalizeJsonComparisonParam preserves the runtime scalar category of a
 // prepared parameter before a JSON equality comparison. Prepared parameters
 // use TEXT as their transport type; treating that transport type as the SQL
@@ -75,7 +184,8 @@ func normalizeJsonComparisonParam(
 				return err
 			}
 		} else {
-			encoded, err := encodeJsonComparisonParam(proc.Ctx, value, kind)
+			encoded, err := encodeJsonComparisonParamWithMetadata(
+				proc.Ctx, value, kind, paramType, parameters[0].GetIsBinaryStringAt(0))
 			if err != nil {
 				return err
 			}
@@ -122,7 +232,8 @@ func normalizeJsonComparisonParam(
 			kinds[i] = kind
 		}
 
-		encoded, err := encodeJsonComparisonParam(proc.Ctx, value, kind)
+		encoded, err := encodeJsonComparisonParamWithMetadata(
+			proc.Ctx, value, kind, paramType, parameters[0].GetIsBinaryStringAt(int(i)))
 		if err != nil {
 			return err
 		}
@@ -149,13 +260,19 @@ func encodeJsonComparisonParam(
 	value []byte,
 	kind vector.PrepareParamKind,
 ) ([]byte, error) {
-	var scalar any = string(value)
-	if kind != vector.PrepareParamNone {
-		var err error
-		scalar, err = preparedTextToJSONValue(ctx, string(value), kind)
-		if err != nil {
-			return nil, err
-		}
+	return encodeJsonComparisonParamWithMetadata(ctx, value, kind, types.T_any, false)
+}
+
+func encodeJsonComparisonParamWithMetadata(
+	ctx context.Context,
+	value []byte,
+	kind vector.PrepareParamKind,
+	paramType types.T,
+	binaryString bool,
+) ([]byte, error) {
+	scalar, err := PreparedJSONScalarValue(ctx, value, kind, paramType, binaryString)
+	if err != nil {
+		return nil, err
 	}
 	jsonValue, err := bytejson.CreateByteJSON(scalar)
 	if err != nil {

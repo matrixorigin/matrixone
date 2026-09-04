@@ -3075,6 +3075,48 @@ func TestParseExecuteDataPreparedJSONDecimalComparisonIsExact(t *testing.T) {
 		"COM_STMT_EXECUTE DECIMAL must not round adjacent exact values through FLOAT64")
 }
 
+func TestParseExecuteDataMemberOfBinaryFloat32PreservesConcreteType(t *testing.T) {
+	const query = `select ? member of ('[0.10000000149011612]')`
+	ctx := context.Background()
+	proto, proc, prepareStmt := newBinaryPrepareProtocolTestCase(t, query)
+	defer func() {
+		proc.SetPrepareParams(nil)
+		prepareStmt.clearBinaryParamState(proc)
+	}()
+
+	// This is the binary COM_STMT_EXECUTE shape emitted for MYSQL_TYPE_FLOAT:
+	// no cursor, iteration-count 1, one non-NULL parameter, and a 4-byte
+	// IEEE-754 payload.  The parser stores the payload in the text transport
+	// vector, while ParamTypes retains the concrete wire domain.
+	require.NoError(t, proto.ParseExecuteData(
+		ctx, proc, prepareStmt,
+		buildFloat32ExecutePacket(float32(0.1)), 0))
+	require.Equal(t, []byte{byte(defines.MYSQL_TYPE_FLOAT), 0}, prepareStmt.ParamTypes)
+	require.Equal(t, "0.1", prepareStmt.params.GetStringAt(0))
+	require.Equal(t, types.T_float32,
+		binaryProtocolPrepareParamType(defines.MYSQL_TYPE_FLOAT, false, prepareStmt.params.GetRawBytesAt(0)))
+
+	preparedPlan := prepareStmt.PreparePlan.GetDcl().GetPrepare().Plan
+	require.Equal(t, []int32{0}, plan.PreparedJSONComparisonParamPositions(preparedPlan))
+	proc.SetPrepareParamsWithTypedMeta(
+		prepareStmt.params,
+		nil,
+		[]vector.PrepareParamKind{vector.PrepareParamFloat},
+		[]types.T{types.T_float32},
+	)
+
+	queryPlan := preparedPlan.GetQuery()
+	projectNode := queryPlan.Nodes[queryPlan.Steps[len(queryPlan.Steps)-1]]
+	require.Len(t, projectNode.ProjectList, 1)
+	executor, err := colexec.NewExpressionExecutor(proc, projectNode.ProjectList[0])
+	require.NoError(t, err)
+	defer executor.Free()
+	result, err := executor.Eval(proc, []*batch.Batch{batch.EmptyForConstFoldBatch}, nil)
+	require.NoError(t, err)
+	require.Equal(t, types.T_int64, result.GetType().Oid)
+	require.Equal(t, int64(1), vector.GetFixedAtNoTypeCheck[int64](result, 0))
+}
+
 func TestParseExecuteDataDecimalRebindsPreparedAbsExactly(t *testing.T) {
 	const value = "12345678901234567890123456789012345.6789"
 	ctx := context.TODO()
@@ -3156,6 +3198,14 @@ func buildStringExecutePacket(proto *MysqlProtocolImpl, tp defines.MysqlType, pa
 	copy(data, []byte{0, 0, 0, 0, 0, 0, 1, byte(tp), 0})
 	pos := proto.writeStringLenEnc(data, 9, payload)
 	return data[:pos]
+}
+
+func buildFloat32ExecutePacket(value float32) []byte {
+	data := make([]byte, 13)
+	// flag, iteration-count=1, null bitmap, new-params-bound, type, value
+	copy(data, []byte{0, 1, 0, 0, 0, 0, 1, byte(defines.MYSQL_TYPE_FLOAT), 0})
+	binary.LittleEndian.PutUint32(data[9:], math.Float32bits(value))
+	return data
 }
 
 func buildLongLongExecutePacket(value uint64, unsigned bool) []byte {

@@ -4388,6 +4388,11 @@ func bindFuncExprImplByPlanExpr(
 	if err := normalizeTimeStringComparisonArgs(ctx, name, args); err != nil {
 		return nil, err
 	}
+	if name == "member of" {
+		if err := adjustJsonDynamicParamType(ctx, name, args); err != nil {
+			return nil, err
+		}
+	}
 
 	switch name {
 	case "and", "or", "not", "xor":
@@ -6487,6 +6492,17 @@ func adjustJsonDynamicParamType(ctx context.Context, name string, args []*Expr) 
 		paramFunction = function.JsonOrderingParamFunctionName
 	case "=", "<=>", "<>", "!=":
 		paramFunction = function.JsonComparisonParamFunctionName
+	case "member of":
+		// The left side of MEMBER OF is a scalar JSON value, while the
+		// right side is a JSON document carried by a string or JSON column.
+		// Normalize a direct prepared marker on the left so its binary
+		// protocol type remains available at execution time.
+		if len(args) == 2 && isDirectDynamicParam(args[0]) {
+			var err error
+			args[0], err = BindFuncExprImplByPlanExpr(ctx, function.JsonComparisonParamFunctionName, []*Expr{args[0]})
+			return err
+		}
+		return nil
 	default:
 		return nil
 	}
