@@ -51,8 +51,8 @@ select statement_digest_text('SELECT ?');
 -- Runtime/expression provenance and binary charset inputs must not expose
 -- parser details or reinterpret bytes as UTF-8.
 select statement_digest_text(statement_digest_text('SELECT 1, 2, 3'));
-select statement_digest_text(_binary'SELECT 1');
-select statement_digest_text(cast('SELECT 1' as binary));
+select statement_digest_text(_binary'SELECT 1') as binary_digest;
+select statement_digest_text(cast('SELECT 1' as binary)) as binary_digest;
 set @old_sql_mode = @@sql_mode;
 set sql_mode='ANSI_QUOTES';
 select statement_digest_text('SELECT @"odd name"') as digest;
