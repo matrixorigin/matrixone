@@ -153,13 +153,7 @@ func TestResolveAnalyzeColumnsRejectsMissingAndDuplicate(t *testing.T) {
 	require.Error(t, err)
 }
 
-func TestMergeAnalyzedStatsPreservesUnselectedFallbacks(t *testing.T) {
-	dst := plan2.NewStatsInfo()
-	dst.TableCnt = 10
-	dst.NdvMap["a"] = 4
-	dst.NdvMap["b"] = 8
-	dst.MinValMap["a"] = 1
-	dst.MaxValMap["a"] = 9
+func TestNewAnalyzedStatsGenerationDoesNotMixEpochs(t *testing.T) {
 	src := plan2.NewStatsInfo()
 	src.TableCnt = 100
 	src.BlockNumber = 7
@@ -167,11 +161,27 @@ func TestMergeAnalyzedStatsPreservesUnselectedFallbacks(t *testing.T) {
 	src.NullCntMap["a"] = 2
 	src.SizeMap["a"] = 800
 	src.DataTypeMap["a"] = uint64(types.T_int64)
-	mergeAnalyzedStats(dst, src)
-	require.Equal(t, float64(100), dst.TableCnt)
-	require.Equal(t, int64(7), dst.BlockNumber)
-	require.Equal(t, float64(40), dst.NdvMap["a"])
-	require.Equal(t, float64(8), dst.NdvMap["b"])
-	require.Equal(t, float64(1), dst.MinValMap["a"])
-	require.Equal(t, float64(9), dst.MaxValMap["a"])
+
+	published := newAnalyzedStatsGeneration(src)
+	require.Equal(t, float64(100), published.TableCnt)
+	require.Equal(t, int64(7), published.BlockNumber)
+	require.Equal(t, float64(40), published.NdvMap["a"])
+	require.NotContains(t, published.NdvMap, "b")
+	require.Empty(t, published.MinValMap)
+	require.Empty(t, published.MaxValMap)
+
+	src.NdvMap["a"] = 1
+	require.Equal(t, float64(40), published.NdvMap["a"], "published generation must own its maps")
+}
+
+func TestAnalyzeValueWidthIncludesOnlyOutOfLinePayload(t *testing.T) {
+	varlen := types.T_varchar.ToType()
+	require.Equal(t, uint64(types.VarlenaSize), analyzeValueWidth(varlen, []byte("short"), false))
+	require.Equal(t, uint64(types.VarlenaSize), analyzeValueWidth(
+		varlen, make([]byte, types.VarlenaInlineSize), false))
+	require.Equal(t, uint64(types.VarlenaSize+types.VarlenaInlineSize+1), analyzeValueWidth(
+		varlen, make([]byte, types.VarlenaInlineSize+1), false))
+	require.Equal(t, uint64(types.VarlenaSize), analyzeValueWidth(
+		varlen, make([]byte, types.VarlenaInlineSize+1), true))
+	require.Equal(t, uint64(8), analyzeValueWidth(types.T_int64.ToType(), make([]byte, 8), false))
 }

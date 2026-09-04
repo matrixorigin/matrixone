@@ -16,6 +16,7 @@ package analyze
 
 import (
 	"crypto/sha256"
+	"encoding/binary"
 	"math"
 	"testing"
 
@@ -221,17 +222,6 @@ func TestCollapsedNDVStaysBoundedAcrossPhysicalLayouts(t *testing.T) {
 	}
 }
 
-func TestDeleteOneFoldInterval(t *testing.T) {
-	interval, ok := DeleteOneFoldInterval(100, 60, 140, []float64{90, 95, 105, 110})
-	require.True(t, ok)
-	require.Greater(t, interval.StandardError, 0.0)
-	require.GreaterOrEqual(t, interval.Lower, 60.0)
-	require.LessOrEqual(t, interval.Upper, 140.0)
-
-	_, ok = DeleteOneFoldInterval(100, 60, 140, []float64{100})
-	require.False(t, ok)
-}
-
 func TestNDVAccumulatorSeparatesRowsAndBlockPresence(t *testing.T) {
 	a := NewNDVAccumulator(16)
 	one := HashValue([]byte("one"))
@@ -252,6 +242,30 @@ func TestNDVAccumulatorSeparatesRowsAndBlockPresence(t *testing.T) {
 	require.Equal(t, float64(3), estimate.ObservedLower)
 	require.True(t, estimate.HasCollapsedDuj1)
 	require.Equal(t, float64(4), estimate.Point)
+}
+
+func TestFullScanNDVAccumulatorIsBoundedAndMergeable(t *testing.T) {
+	const distinct = 100_000
+	left := NewFullScanNDVAccumulator()
+	right := NewFullScanNDVAccumulator()
+	for block, accumulator := range []*NDVAccumulator{left, right} {
+		require.NoError(t, accumulator.BeginIncidenceBlock())
+		for i := block; i < distinct; i += 2 {
+			var encoded [8]byte
+			binary.BigEndian.PutUint64(encoded[:], uint64(i))
+			value := HashValue(encoded[:])
+			require.NoError(t, accumulator.ObserveIncidenceValue(value))
+			require.NoError(t, accumulator.ObserveSampleValue(value))
+		}
+		require.NoError(t, accumulator.EndIncidenceBlock())
+	}
+	require.NoError(t, left.Merge(right))
+	estimate, err := left.Estimate(distinct, MustFraction(1, 1))
+	require.NoError(t, err)
+	require.Equal(t, FullScanNDVAlgorithmV1, estimate.Algorithm)
+	require.InDelta(t, float64(distinct), estimate.Point, float64(distinct)*0.03)
+	require.Equal(t, float64(distinct), estimate.RelationalUpper)
+	require.Zero(t, estimate.ObservedLower)
 }
 
 func TestNDVAccumulatorIncidenceOverflowFailsClosed(t *testing.T) {

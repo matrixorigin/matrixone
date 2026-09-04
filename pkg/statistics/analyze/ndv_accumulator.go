@@ -19,6 +19,7 @@ import (
 	"encoding/binary"
 	"math"
 
+	hll "github.com/axiomhq/hyperloglog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 )
 
@@ -57,6 +58,7 @@ func HashTypedValue(typeID uint32, width, scale int32, canonicalValue []byte) Va
 // rather than partially published.
 type NDVAccumulator struct {
 	maxValues uint64
+	fullScan  *hll.Sketch
 
 	sampleRows uint64
 	rowCounts  map[ValueHash]uint64
@@ -77,8 +79,23 @@ func NewNDVAccumulator(maxValues uint64) *NDVAccumulator {
 	}
 }
 
+// NewFullScanNDVAccumulator keeps FULLSCAN coverage independent of table
+// cardinality. FULLSCAN means that every visible value is observed; the NDV
+// result remains an approximate, fixed-memory HLL estimate.
+func NewFullScanNDVAccumulator() *NDVAccumulator {
+	return &NDVAccumulator{fullScan: hll.NewNoSparse()}
+}
+
 func (a *NDVAccumulator) ObserveSampleValue(value ValueHash) error {
-	if a == nil || a.maxValues == 0 {
+	if a == nil {
+		return ErrAccumulatorLimit
+	}
+	if a.fullScan != nil {
+		a.sampleRows++
+		a.fullScan.Insert(value[:])
+		return nil
+	}
+	if a.maxValues == 0 {
 		return ErrAccumulatorLimit
 	}
 	a.sampleRows++
@@ -111,6 +128,9 @@ func (a *NDVAccumulator) BeginIncidenceBlock() error {
 		return ErrAccumulatorState
 	}
 	a.blockOpen = true
+	if a.fullScan != nil {
+		return nil
+	}
 	if a.incidenceErr == nil {
 		if a.blockValues == nil {
 			a.blockValues = make(map[ValueHash]struct{})
@@ -127,6 +147,9 @@ func (a *NDVAccumulator) ObserveIncidenceValue(value ValueHash) error {
 	}
 	if a.incidenceErr != nil {
 		return a.incidenceErr
+	}
+	if a.fullScan != nil {
+		return nil
 	}
 	if _, exists := a.blockValues[value]; exists {
 		return nil
@@ -147,6 +170,9 @@ func (a *NDVAccumulator) EndIncidenceBlock() error {
 	}
 	a.blockOpen = false
 	a.incidenceBlocks++
+	if a.fullScan != nil {
+		return nil
+	}
 	if a.incidenceErr != nil {
 		return a.incidenceErr
 	}
@@ -168,7 +194,9 @@ func (a *NDVAccumulator) EndIncidenceBlock() error {
 }
 
 func (a *NDVAccumulator) Merge(other *NDVAccumulator) error {
-	if a == nil || other == nil || a.blockOpen || other.blockOpen || a.maxValues != other.maxValues {
+	if a == nil || other == nil || a.blockOpen || other.blockOpen ||
+		(a.fullScan == nil) != (other.fullScan == nil) ||
+		(a.fullScan == nil && a.maxValues != other.maxValues) {
 		return ErrAccumulatorState
 	}
 	if math.MaxUint64-a.sampleRows < other.sampleRows || math.MaxUint64-a.incidenceBlocks < other.incidenceBlocks {
@@ -176,6 +204,12 @@ func (a *NDVAccumulator) Merge(other *NDVAccumulator) error {
 	}
 	a.sampleRows += other.sampleRows
 	a.incidenceBlocks += other.incidenceBlocks
+	if a.fullScan != nil {
+		if err := a.fullScan.Merge(other.fullScan); err != nil {
+			return ErrAccumulatorState
+		}
+		return nil
+	}
 	a.rowErr = mergeValueCounts(a.rowCounts, a.maxValues, a.rowErr, other.rowCounts, other.rowErr)
 	if a.rowErr != nil {
 		clear(a.rowCounts)
@@ -223,6 +257,18 @@ func (a *NDVAccumulator) Estimate(
 ) (NDVEstimate, error) {
 	if a == nil || a.blockOpen {
 		return NDVEstimate{}, ErrAccumulatorState
+	}
+	if !finiteNonNegative(populationNonNull) {
+		return NDVEstimate{}, ErrInvalidNDVInput
+	}
+	if a.fullScan != nil {
+		population := math.Max(populationNonNull, 0)
+		point := math.Min(float64(a.fullScan.Estimate()), population)
+		return NDVEstimate{
+			Algorithm:       FullScanNDVAlgorithmV1,
+			Point:           point,
+			RelationalUpper: population,
+		}, nil
 	}
 	if a.incidenceErr != nil {
 		return NDVEstimate{}, a.incidenceErr

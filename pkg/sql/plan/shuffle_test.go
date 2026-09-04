@@ -3042,6 +3042,13 @@ func TestGetRangeShuffleIndexForZM(t *testing.T) {
 	})
 }
 
+func TestDetermineShuffleTypeFallsBackWhenRangeStatsAreAbsent(t *testing.T) {
+	builder := newStatsTestBuilderWithNDV("d", 1_000)
+	node := &plan.Node{NodeType: plan.Node_PROJECT, Stats: DefaultStats()}
+	determineShuffleType(&plan.ColRef{RelPos: 0, ColPos: 0, Name: "d"}, node, builder)
+	require.Equal(t, plan.ShuffleType_Hash, node.Stats.HashmapStats.ShuffleType)
+}
+
 func TestShuffleByZonemap(t *testing.T) {
 	node := &plan.Node{
 		Stats: DefaultStats(),

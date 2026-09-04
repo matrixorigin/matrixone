@@ -21,6 +21,7 @@ import (
 	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/hashmap/keycodec"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -58,6 +59,7 @@ type analyzeColumnState struct {
 	ndv         *analyzestats.NDVAccumulator
 	sampleNulls uint64
 	sampleBytes uint64
+	canonical   []byte
 }
 
 var _ engine.AnalyzableRelation = (*txnTable)(nil)
@@ -156,11 +158,15 @@ func (tbl *txnTable) AnalyzeTable(
 		last := min(first+columnsPerPass, len(columns))
 		states := make([]analyzeColumnState, last-first)
 		for i, column := range columns[first:last] {
+			ndv := analyzestats.NewNDVAccumulator(request.MaxDistinctValues)
+			if request.FullScan {
+				ndv = analyzestats.NewFullScanNDVAccumulator()
+			}
 			states[i] = analyzeColumnState{
 				name: column.Name,
 				typ: types.New(
 					types.T(column.Typ.Id), column.Typ.Width, column.Typ.Scale),
-				ndv: analyzestats.NewNDVAccumulator(request.MaxDistinctValues),
+				ndv: ndv,
 			}
 		}
 		passRows, passBytes, err := tbl.scanAnalyzeColumnGroup(
@@ -416,31 +422,37 @@ func (tbl *txnTable) scanAnalyzeColumnGroup(
 					retainedRows++
 				}
 				for columnIndex := range states {
+					valueVector := data.Vecs[columnIndex]
+					isNull := valueVector.IsNull(uint64(row))
+					var raw []byte
+					if !isNull {
+						raw = valueVector.GetRawBytesAt(row)
+					}
 					if retainRow {
 						// StatsInfo.SizeMap is consumed as the uncompressed
-						// vector footprint (ObjectMeta OriginSize), not as the
-						// payload length of non-null values. Every row owns one
-						// fixed-width slot, including null and varlen slots.
-						originWidth := uint64(states[columnIndex].typ.TypeSize())
+						// vector footprint: every row owns one fixed-width slot,
+						// and non-inline varlen payloads occupy the vector area.
+						originWidth := analyzeValueWidth(states[columnIndex].typ, raw, isNull)
 						if math.MaxUint64-states[columnIndex].sampleBytes < originWidth {
 							_ = reader.Close()
 							return 0, 0, moerr.NewInternalErrorNoCtx("ANALYZE logical byte counter overflow")
 						}
 						states[columnIndex].sampleBytes += originWidth
 					}
-					valueVector := data.Vecs[columnIndex]
-					if valueVector.IsNull(uint64(row)) {
+					if isNull {
 						if retainRow {
 							states[columnIndex].sampleNulls++
 						}
 						continue
 					}
-					raw := valueVector.GetRawBytesAt(row)
+					canonical, reusable := keycodec.CanonicalBytesAt(
+						valueVector, row, states[columnIndex].canonical[:0])
+					states[columnIndex].canonical = reusable
 					valueHash := analyzestats.HashTypedValue(
 						uint32(states[columnIndex].typ.Oid),
 						states[columnIndex].typ.Width,
 						states[columnIndex].typ.Scale,
-						raw,
+						canonical,
 					)
 					if incidence {
 						if observeErr := states[columnIndex].ndv.ObserveIncidenceValue(valueHash); observeErr != nil &&
@@ -472,6 +484,14 @@ func (tbl *txnTable) scanAnalyzeColumnGroup(
 		}
 	}
 	return retainedRows, readBytes, nil
+}
+
+func analyzeValueWidth(typ types.Type, raw []byte, isNull bool) uint64 {
+	width := uint64(typ.TypeSize())
+	if !isNull && typ.IsVarlen() && len(raw) > types.VarlenaInlineSize {
+		width += uint64(len(raw))
+	}
+	return width
 }
 
 func finalizeAnalyzeColumns(

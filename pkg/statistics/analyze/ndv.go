@@ -20,7 +20,10 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 )
 
-const SampledNDVAlgorithmV2 = "NDV_COLLAPSED_BLOCK_DUJ1_V2"
+const (
+	SampledNDVAlgorithmV2  = "NDV_COLLAPSED_BLOCK_DUJ1_V2"
+	FullScanNDVAlgorithmV1 = "NDV_FULLSCAN_HLL_P14_V1"
+)
 
 var ErrInvalidNDVInput = moerr.NewInvalidInputNoCtx("analyze: invalid sampled NDV input")
 
@@ -126,41 +129,4 @@ func EstimateSampledNDV(input SampledNDVInput) (NDVEstimate, error) {
 
 func finiteNonNegative(value float64) bool {
 	return !math.IsNaN(value) && !math.IsInf(value, 0) && value >= 0
-}
-
-type Interval struct {
-	Lower         float64
-	Upper         float64
-	StandardError float64
-}
-
-// DeleteOneFoldInterval computes the empirical delete-one-cluster jackknife
-// interval used by sampled statistics. It is a stability measurement, not a
-// distribution-independent confidence guarantee.
-func DeleteOneFoldInterval(point, lower, upper float64, replicates []float64) (Interval, bool) {
-	if len(replicates) < 2 || !finiteNonNegative(point) || !finiteNonNegative(lower) ||
-		!finiteNonNegative(upper) || lower > point || point > upper {
-		return Interval{}, false
-	}
-	mean := 0.0
-	for _, replicate := range replicates {
-		if !finiteNonNegative(replicate) {
-			return Interval{}, false
-		}
-		mean += replicate
-	}
-	mean /= float64(len(replicates))
-	varianceSum := 0.0
-	for _, replicate := range replicates {
-		delta := replicate - mean
-		varianceSum += delta * delta
-	}
-	g := float64(len(replicates))
-	standardError := math.Sqrt((g - 1) / g * varianceSum)
-	interval := Interval{
-		Lower:         math.Max(lower, point-1.96*standardError),
-		Upper:         math.Min(upper, point+1.96*standardError),
-		StandardError: standardError,
-	}
-	return interval, true
 }

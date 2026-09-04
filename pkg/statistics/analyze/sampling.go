@@ -36,7 +36,6 @@ const (
 	domainBlockSelection = "analyze/block/v1"
 	domainIncidenceBlock = "analyze/incidence-block/v1"
 	domainRowSelection   = "analyze/row/v1"
-	domainVarianceFold   = "analyze/variance-fold/v1"
 )
 
 var (
@@ -416,17 +415,15 @@ func BelowThreshold(hash, threshold [16]byte, all bool) bool {
 }
 
 func RetainRow(seed [32]byte, rowIdentity []byte, threshold [16]byte, all bool) bool {
-	return BelowThreshold(hash128(seed, domainRowSelection, rowIdentity), threshold, all)
+	if all {
+		return true
+	}
+	return BelowThreshold(hash128(seed, domainRowSelection, rowIdentity), threshold, false)
 }
 
 func RetainIncidenceBlock(seed [32]byte, blockIdentity []byte, threshold [16]byte, all bool) bool {
-	return BelowThreshold(hash128(seed, domainIncidenceBlock, blockIdentity), threshold, all)
-}
-
-func VarianceFold(seed [32]byte, identity []byte, folds uint8) uint8 {
-	if folds == 0 {
-		panic(ErrInvalidPopulation)
+	if all {
+		return true
 	}
-	hash := hash128(seed, domainVarianceFold, identity)
-	return uint8(binary.BigEndian.Uint64(hash[:8]) % uint64(folds))
+	return BelowThreshold(hash128(seed, domainIncidenceBlock, blockIdentity), threshold, false)
 }
