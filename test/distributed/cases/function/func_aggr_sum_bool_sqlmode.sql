@@ -8,6 +8,10 @@ use bool_sumavg_sqlmode;
 create table t (i int, j int);
 insert into t values (0, 0), (1, 1), (2, 2);
 
+-- BVT reuses connections between case files. Re-enter DEFAULT so these
+-- assertions prove the product default rather than a preceding case's setting.
+set session sql_mode = default;
+
 -- the mode is on by default, including the JSON expression from issue #28078
 select @@sql_mode;
 select sum(i<>0) from t;

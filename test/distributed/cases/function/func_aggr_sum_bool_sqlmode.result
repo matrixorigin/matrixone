@@ -3,6 +3,7 @@ create database bool_sumavg_sqlmode;
 use bool_sumavg_sqlmode;
 create table t (i int, j int);
 insert into t values (0, 0), (1, 1), (2, 2);
+set session sql_mode = default;
 select @@sql_mode;
 @@sql_mode
 ERROR_FOR_DIVISION_BY_ZERO,NO_ENGINE_SUBSTITUTION,NO_ZERO_DATE,NO_ZERO_IN_DATE,ONLY_FULL_GROUP_BY,STRICT_TRANS_TABLES,ENABLE_BOOL_SUMAVG
