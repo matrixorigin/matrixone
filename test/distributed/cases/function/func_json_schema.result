@@ -141,16 +141,34 @@ json_schema_valid({"exclusiveMinimum":5}, 6)
 select json_schema_valid('{"$schema":"http://json-schema.org/draft-07/schema#","const":1}', '2');
 json_schema_valid({"$schema":"http://json-schema.org/draft-07/schema#","const":1}, 2)
 1
+select json_schema_valid('{"properties":{"id":{"$ref":"#/definitions/id"}},"definitions":{"id":{"type":"integer"}}}', '{"id":3}');
+json_schema_valid({"properties":{"id":{"$ref":"#/definitions/id"}},"definitions":{"id":{"type":"integer"}}}, {"id":3})
+1
+select json_schema_valid('{"properties":{"id":{"$ref":"#/definitions/id"}},"definitions":{"id":{"type":"integer"}}}', '{"id":"bad"}');
+json_schema_valid({"properties":{"id":{"$ref":"#/definitions/id"}},"definitions":{"id":{"type":"integer"}}}, {"id":"bad"})
+0
+select json_schema_valid('{"properties":{"id":{"$ref":"#/$defs/id"}},"$defs":{"id":{"type":"integer"}}}', '{"id":3}');
+json_schema_valid({"properties":{"id":{"$ref":"#/$defs/id"}},"$defs":{"id":{"type":"integer"}}}, {"id":3})
+1
+select json_schema_validation_report('{"properties":{"id":{"$ref":"#/$defs/id"}},"$defs":{"id":{"type":"integer"}}}', '{"id":"bad"}');
+json_schema_validation_report({"properties":{"id":{"$ref":"#/$defs/id"}},"$defs":{"id":{"type":"integer"}}}, {"id":"bad"})
+{"document-location": "$.id", "reason": "Invalid type. Expected: integer, given: string", "schema-failed-keyword": "type", "schema-location": "#/type", "valid": false}
+select json_schema_valid('{"$ref":"https://example.invalid/schema"}', '1');
+not supported: json_schema_valid: only local JSON Schema $ref values "#" and "#/..." are supported
+select json_schema_valid('{"$ref":"#/definitions/node","definitions":{"node":{"$ref":"#/definitions/node"}}}', '1');
+invalid argument json_schema_valid, bad value cyclic local JSON Schema $ref is not allowed
 select json_schema_valid('{"allOf":{"$ref":"https://example.invalid/schema"}}', '1');
-not supported: json_schema_valid: $ref is not supported
+not supported: json_schema_valid: only local JSON Schema $ref values "#" and "#/..." are supported
 select json_schema_validation_report('{"allOf":{"$ref":"https://example.invalid/schema"}}', '1');
-not supported: json_schema_validation_report: $ref is not supported
+not supported: json_schema_validation_report: only local JSON Schema $ref values "#" and "#/..." are supported
+select json_schema_valid('{"properties":{"$ref":"https://example.invalid/schema"}}', '1');
+not supported: json_schema_valid: only local JSON Schema $ref values "#" and "#/..." are supported
 select json_schema_valid('{"if":{"$ref":"https://example.invalid/schema"}}', '1');
-not supported: json_schema_valid: $ref is not supported
+not supported: json_schema_valid: only local JSON Schema $ref values "#" and "#/..." are supported
 select json_schema_validation_report('{"$defs":{"ignored":{"$ref":"file:///tmp/schema.json"}}}', '1');
-not supported: json_schema_validation_report: $ref is not supported
+not supported: json_schema_validation_report: only local JSON Schema $ref values "#" and "#/..." are supported
 select json_schema_valid('{"enum":[{"$ref":"literal"}]}', '{"$ref":"literal"}');
-not supported: json_schema_valid: $ref is not supported
+not supported: json_schema_valid: only local JSON Schema $ref values "#" and "#/..." are supported
 select json_schema_valid('{"enum":[{"$ref":1}]}', '{"$ref":1}');
 json_schema_valid({"enum":[{"$ref":1}]}, {"$ref":1})
 1

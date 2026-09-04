@@ -19,6 +19,7 @@ import (
 	"context"
 	"encoding/binary"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strconv"
 	"strings"
@@ -2859,6 +2860,9 @@ func prettyPrintScalar(w *bytes.Buffer, bj bytejson.ByteJson) error {
 
 // JSON_SCHEMA_VALID
 func JsonSchemaValid(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	if err := proc.Ctx.Err(); err != nil {
+		return err
+	}
 	result.UseOptFunctionParamFrame(2)
 	rs := vector.MustFunctionResult[bool](result)
 	p1 := vector.OptGetBytesParamFromWrapper(rs, 0, ivecs[0])
@@ -2894,7 +2898,7 @@ func JsonSchemaValid(ivecs []*vector.Vector, result vector.FunctionResultWrapper
 		}
 		schemaBJ, err := parseSchemaJSON(schemaBytes, schemaIsStr)
 		if err != nil {
-			return moerr.NewInvalidArg(proc.Ctx, "json_schema_valid", "invalid schema JSON")
+			return jsonSchemaParseError(proc.Ctx, "json_schema_valid", err, "invalid schema JSON")
 		}
 		compiled, err = compileMySQLDraft4Schema(proc.Ctx, "json_schema_valid", schemaBJ)
 		if err != nil {
@@ -2903,6 +2907,9 @@ func JsonSchemaValid(ivecs []*vector.Vector, result vector.FunctionResultWrapper
 	}
 
 	for i := uint64(0); i < uint64(length); i++ {
+		if err := proc.Ctx.Err(); err != nil {
+			return err
+		}
 		if selectList.Contains(i) {
 			rs.AppendMustNull()
 			continue
@@ -2932,6 +2939,9 @@ func JsonSchemaValid(ivecs []*vector.Vector, result vector.FunctionResultWrapper
 
 // JSON_SCHEMA_VALIDATION_REPORT
 func JsonSchemaValidationReport(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	if err := proc.Ctx.Err(); err != nil {
+		return err
+	}
 	result.UseOptFunctionParamFrame(2)
 	rs := vector.MustFunctionResult[types.Varlena](result)
 	p1 := vector.OptGetBytesParamFromWrapper(rs, 0, ivecs[0])
@@ -2965,7 +2975,7 @@ func JsonSchemaValidationReport(ivecs []*vector.Vector, result vector.FunctionRe
 		}
 		schemaBJ, err := parseSchemaJSON(schemaBytes, schemaIsStr)
 		if err != nil {
-			return moerr.NewInvalidArg(proc.Ctx, "json_schema_validation_report", "invalid schema JSON")
+			return jsonSchemaParseError(proc.Ctx, "json_schema_validation_report", err, "invalid schema JSON")
 		}
 		compiled, err = compileMySQLDraft4Schema(proc.Ctx, "json_schema_validation_report", schemaBJ)
 		if err != nil {
@@ -2974,6 +2984,9 @@ func JsonSchemaValidationReport(ivecs []*vector.Vector, result vector.FunctionRe
 	}
 
 	for i := uint64(0); i < uint64(length); i++ {
+		if err := proc.Ctx.Err(); err != nil {
+			return err
+		}
 		if selectList.Contains(i) {
 			rs.AppendMustNullForBytesResult()
 			continue
@@ -3022,9 +3035,23 @@ func buildSchemaValidationReport(result *gojsonschema.Result) (bytejson.ByteJson
 // parseSchemaJSON parses the schema bytes into a ByteJson.
 func parseSchemaJSON(raw []byte, isStr bool) (bytejson.ByteJson, error) {
 	if isStr {
-		return types.ParseSliceToByteJson(raw)
+		return types.ParseSliceToByteJsonWithDepthLimit(raw, bytejson.JSONDocumentMaxNestingDepth)
 	}
-	return types.DecodeJson(raw), nil
+	document := types.DecodeJson(raw)
+	if err := bytejson.ValidateJSONDocumentDepth(document); err != nil {
+		return document, err
+	}
+	return document, nil
+}
+
+func jsonSchemaParseError(ctx context.Context, fnName string, err error, invalidReason string) error {
+	if ctxErr := ctx.Err(); ctxErr != nil {
+		return ctxErr
+	}
+	if bytejson.IsJSONDocumentDepthError(err) {
+		return moerr.NewInvalidArg(ctx, fnName, mysqlJSONSchemaDepthReason)
+	}
+	return moerr.NewInvalidArg(ctx, fnName, invalidReason)
 }
 
 func validateSchemaObject(ctx context.Context, fnName string, schemaBJ bytejson.ByteJson) error {
@@ -3035,6 +3062,9 @@ func validateSchemaObject(ctx context.Context, fnName string, schemaBJ bytejson.
 }
 
 func compileMySQLDraft4Schema(ctx context.Context, fnName string, schemaBJ bytejson.ByteJson) (*gojsonschema.Schema, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	if err := validateSchemaObject(ctx, fnName, schemaBJ); err != nil {
 		return nil, err
 	}
@@ -3050,48 +3080,30 @@ func compileMySQLDraft4Schema(ctx context.Context, fnName string, schemaBJ bytej
 		return nil, moerr.NewInvalidArg(ctx, fnName, err.Error())
 	}
 
-	if mysqlSchemaHasStringRef(schema) {
-		return nil, moerr.NewNotSupportedf(ctx, "%s: $ref is not supported", fnName)
+	if err := mysqlAnalyzeDraft4Schema(ctx, fnName, schema); err != nil {
+		return nil, err
 	}
 	normalizeMySQLDraft4Schema(schema)
-	if mysqlDraft4SchemaHasRef(schema) {
-		return nil, moerr.NewNotSupportedf(ctx, "%s: $ref is not supported", fnName)
-	}
-	schemaJSON, err = json.Marshal(schema)
-	if err != nil {
-		return nil, moerr.NewInvalidArg(ctx, fnName, err.Error())
-	}
 
 	loader := gojsonschema.NewSchemaLoader()
 	loader.AutoDetect = false
 	loader.Validate = false
 	loader.Draft = gojsonschema.Draft4
-	compiled, err := loader.Compile(gojsonschema.NewBytesLoader(schemaJSON))
+	rootLoader := &mysqlDraft4RootLoader{
+		JSONLoader: gojsonschema.NewRawLoader(schema),
+		factory:    &mysqlDraft4DenyFactory{},
+	}
+	compiled, err := loader.Compile(rootLoader)
 	if err != nil {
+		if errors.Is(err, errMySQLJSONSchemaExternalLoad) {
+			return nil, moerr.NewNotSupportedf(ctx, "%s: %s", fnName, mysqlJSONSchemaExternalRefReason)
+		}
 		return nil, moerr.NewInvalidArg(ctx, fnName, err.Error())
 	}
-	return compiled, nil
-}
-
-func mysqlSchemaHasStringRef(value any) bool {
-	switch value := value.(type) {
-	case map[string]any:
-		if _, ok := value["$ref"].(string); ok {
-			return true
-		}
-		for _, child := range value {
-			if mysqlSchemaHasStringRef(child) {
-				return true
-			}
-		}
-	case []any:
-		for _, child := range value {
-			if mysqlSchemaHasStringRef(child) {
-				return true
-			}
-		}
+	if err := ctx.Err(); err != nil {
+		return nil, err
 	}
-	return false
+	return compiled, nil
 }
 
 func normalizeMySQLDraft4Schema(schema any) {
@@ -3146,65 +3158,6 @@ func normalizeMySQLDraft4SchemaOrArray(value any) {
 	normalizeMySQLDraft4Schema(value)
 }
 
-func mysqlDraft4SchemaHasRef(schema any) bool {
-	obj, ok := schema.(map[string]any)
-	if !ok {
-		return false
-	}
-	if _, ok := obj["$ref"]; ok {
-		return true
-	}
-
-	for _, key := range []string{"properties", "patternProperties", "definitions"} {
-		if mysqlDraft4NamedSchemasHaveRef(obj[key]) {
-			return true
-		}
-	}
-	if dependencies, ok := obj["dependencies"].(map[string]any); ok {
-		for _, dependency := range dependencies {
-			if mysqlDraft4SchemaHasRef(dependency) {
-				return true
-			}
-		}
-	}
-	for _, key := range []string{"additionalItems", "additionalProperties", "not"} {
-		if mysqlDraft4SchemaHasRef(obj[key]) {
-			return true
-		}
-	}
-	for _, key := range []string{"allOf", "anyOf", "oneOf", "items"} {
-		if mysqlDraft4SchemaOrArrayHasRef(obj[key]) {
-			return true
-		}
-	}
-	return false
-}
-
-func mysqlDraft4NamedSchemasHaveRef(value any) bool {
-	named, ok := value.(map[string]any)
-	if !ok {
-		return false
-	}
-	for _, schema := range named {
-		if mysqlDraft4SchemaHasRef(schema) {
-			return true
-		}
-	}
-	return false
-}
-
-func mysqlDraft4SchemaOrArrayHasRef(value any) bool {
-	if schemas, ok := value.([]any); ok {
-		for _, schema := range schemas {
-			if mysqlDraft4SchemaHasRef(schema) {
-				return true
-			}
-		}
-		return false
-	}
-	return mysqlDraft4SchemaHasRef(value)
-}
-
 func hasEvaluableJsonSchemaDoc(p vector.FunctionParameterWrapper[types.Varlena], length int, selectList *FunctionSelectList) bool {
 	for i := uint64(0); i < uint64(length); i++ {
 		if selectList.Contains(i) {
@@ -3222,24 +3175,39 @@ func hasEvaluableJsonSchemaDoc(p vector.FunctionParameterWrapper[types.Varlena],
 // If compiled is non-nil, the pre-compiled schema is reused; otherwise the
 // schema is parsed and validated per-row.
 func doJsonSchemaValidateCached(p1, p2 vector.FunctionParameterWrapper[types.Varlena], row uint64, schemaIsStr, docIsStr bool, boolResult bool, proc *process.Process, compiled *gojsonschema.Schema, fnName string) (interface{}, error) {
+	if err := proc.Ctx.Err(); err != nil {
+		return nil, err
+	}
 	docBytes, _ := p2.GetStrValue(row)
 
 	var docJSON []byte
 	if docIsStr {
-		docBJ, err := types.ParseSliceToByteJson(docBytes)
+		docBJ, err := types.ParseSliceToByteJsonWithDepthLimit(docBytes, bytejson.JSONDocumentMaxNestingDepth)
 		if err != nil {
-			return nil, moerr.NewInvalidArg(proc.Ctx, fnName, "invalid document JSON")
+			return nil, jsonSchemaParseError(proc.Ctx, fnName, err, "invalid document JSON")
 		}
 		docJSON, _ = docBJ.MarshalJSON()
 	} else {
 		docBJ := types.DecodeJson(docBytes)
+		if err := bytejson.ValidateJSONDocumentDepth(docBJ); err != nil {
+			return nil, jsonSchemaParseError(proc.Ctx, fnName, err, "invalid document JSON")
+		}
 		docJSON, _ = docBJ.MarshalJSON()
+	}
+	if err := proc.Ctx.Err(); err != nil {
+		return nil, err
 	}
 
 	if compiled != nil {
 		result, err := compiled.Validate(gojsonschema.NewBytesLoader(docJSON))
 		if err != nil {
+			if ctxErr := proc.Ctx.Err(); ctxErr != nil {
+				return nil, ctxErr
+			}
 			return nil, moerr.NewInvalidArg(proc.Ctx, fnName, err.Error())
+		}
+		if err := proc.Ctx.Err(); err != nil {
+			return nil, err
 		}
 		if boolResult {
 			return result.Valid(), nil
@@ -3254,7 +3222,7 @@ func doJsonSchemaValidateCached(p1, p2 vector.FunctionParameterWrapper[types.Var
 	schemaBytes, _ := p1.GetStrValue(row)
 	schemaBJ, err := parseSchemaJSON(schemaBytes, schemaIsStr)
 	if err != nil {
-		return nil, moerr.NewInvalidArg(proc.Ctx, fnName, "invalid schema JSON")
+		return nil, jsonSchemaParseError(proc.Ctx, fnName, err, "invalid schema JSON")
 	}
 	compiled, err = compileMySQLDraft4Schema(proc.Ctx, fnName, schemaBJ)
 	if err != nil {
@@ -3263,7 +3231,13 @@ func doJsonSchemaValidateCached(p1, p2 vector.FunctionParameterWrapper[types.Var
 	dl := gojsonschema.NewBytesLoader(docJSON)
 	validationResult, err := compiled.Validate(dl)
 	if err != nil {
+		if ctxErr := proc.Ctx.Err(); ctxErr != nil {
+			return nil, ctxErr
+		}
 		return nil, moerr.NewInvalidArg(proc.Ctx, fnName, err.Error())
+	}
+	if err := proc.Ctx.Err(); err != nil {
+		return nil, err
 	}
 	if boolResult {
 		return validationResult.Valid(), nil

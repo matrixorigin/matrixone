@@ -97,9 +97,18 @@ select json_schema_valid('{"exclusiveMinimum":5}', '5');
 select json_schema_valid('{"exclusiveMinimum":5}', '6');
 select json_schema_valid('{"$schema":"http://json-schema.org/draft-07/schema#","const":1}', '2');
 
+-- PR B internal local JSON Pointer references
+select json_schema_valid('{"properties":{"id":{"$ref":"#/definitions/id"}},"definitions":{"id":{"type":"integer"}}}', '{"id":3}');
+select json_schema_valid('{"properties":{"id":{"$ref":"#/definitions/id"}},"definitions":{"id":{"type":"integer"}}}', '{"id":"bad"}');
+select json_schema_valid('{"properties":{"id":{"$ref":"#/$defs/id"}},"$defs":{"id":{"type":"integer"}}}', '{"id":3}');
+select json_schema_validation_report('{"properties":{"id":{"$ref":"#/$defs/id"}},"$defs":{"id":{"type":"integer"}}}', '{"id":"bad"}');
+select json_schema_valid('{"$ref":"https://example.invalid/schema"}', '1');
+select json_schema_valid('{"$ref":"#/definitions/node","definitions":{"node":{"$ref":"#/definitions/node"}}}', '1');
+
 -- MySQL checks recognized combinator references before validating the container shape
 select json_schema_valid('{"allOf":{"$ref":"https://example.invalid/schema"}}', '1');
 select json_schema_validation_report('{"allOf":{"$ref":"https://example.invalid/schema"}}', '1');
+select json_schema_valid('{"properties":{"$ref":"https://example.invalid/schema"}}', '1');
 
 -- MySQL discovers string $ref values throughout the complete JSON tree
 select json_schema_valid('{"if":{"$ref":"https://example.invalid/schema"}}', '1');
