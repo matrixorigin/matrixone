@@ -242,11 +242,12 @@ func TestAlterDataBranchLineageMetadata(t *testing.T) {
 }
 
 func TestValidateAlterDataBranchLineageTxn(t *testing.T) {
-	require.NoError(t, validateAlterDataBranchLineageTxn(false, true, true))
-	require.NoError(t, validateAlterDataBranchLineageTxn(false, true, false))
+	require.NoError(t, validateAlterDataBranchLineageTxn("ALTER", false, true, true))
+	require.NoError(t, validateAlterDataBranchLineageTxn("ALTER", false, true, false))
 
 	for _, tc := range []struct {
 		name        string
+		statement   string
 		byBegin     bool
 		autocommit  bool
 		pessimistic bool
@@ -254,6 +255,7 @@ func TestValidateAlterDataBranchLineageTxn(t *testing.T) {
 	}{
 		{
 			name:        "explicit begin",
+			statement:   "ALTER",
 			byBegin:     true,
 			autocommit:  true,
 			pessimistic: true,
@@ -261,13 +263,22 @@ func TestValidateAlterDataBranchLineageTxn(t *testing.T) {
 		},
 		{
 			name:        "autocommit disabled",
+			statement:   "ALTER",
 			autocommit:  false,
 			pessimistic: true,
 			want:        "not supported inside an explicit transaction",
 		},
+		{
+			name:        "truncate explicit begin identifies statement",
+			statement:   "TRUNCATE",
+			byBegin:     true,
+			autocommit:  true,
+			pessimistic: true,
+			want:        "TRUNCATE on a data-branch lineage is not supported inside an explicit transaction",
+		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			err := validateAlterDataBranchLineageTxn(tc.byBegin, tc.autocommit, tc.pessimistic)
+			err := validateAlterDataBranchLineageTxn(tc.statement, tc.byBegin, tc.autocommit, tc.pessimistic)
 			require.Error(t, err)
 			require.Contains(t, err.Error(), tc.want)
 		})
@@ -308,7 +319,7 @@ func TestPrepareAlterDataBranchLineageAllowsHistoricalSourceTxn(t *testing.T) {
 				t, c.proc.Mp(), types.T_int32.ToType(), []int32{1},
 			)
 
-			lineagePlan, err := c.prepareAlterDataBranchLineage(oldTableID, database, table)
+			lineagePlan, err := c.prepareAlterDataBranchLineage(oldTableID, database, table, "ALTER")
 			require.NoError(t, err)
 			require.True(t, lineagePlan.enabled)
 			require.True(t, lineagePlan.preserveHistoricalSource)
@@ -366,7 +377,7 @@ func TestPrepareAlterDataBranchLineageAllowsHistoricalOnlyGenerationInExplicitTx
 		t, c.proc.Mp(), nil, nil, nil, nil, nil, nil, nil,
 	)
 
-	lineagePlan, err := c.prepareAlterDataBranchLineage(oldTableID, database, table)
+	lineagePlan, err := c.prepareAlterDataBranchLineage(oldTableID, database, table, "ALTER")
 	require.NoError(t, err)
 	require.True(t, lineagePlan.enabled)
 	require.False(t, lineagePlan.preserveHistoricalSource)
