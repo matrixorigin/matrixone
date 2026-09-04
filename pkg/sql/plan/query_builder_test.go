@@ -5225,31 +5225,68 @@ func TestDistinctAggregatePromotedCharCanonicalizesWhenGroupingSetsSkipRewrite(t
 }
 
 func TestWindowPadSpaceKeysUseCanonicalArguments(t *testing.T) {
-	value := "coalesce(cast(n_name as char(8)), cast(n_comment as varchar(8)))"
-	logicPlan, err := runOneStmt(NewMockOptimizer(true), t,
-		"select count(*) over (partition by "+value+"), "+
-			"dense_rank() over (order by "+value+") from nation")
-	require.NoError(t, err)
+	for _, tc := range []struct {
+		name       string
+		value      string
+		charColumn bool
+	}{
+		{
+			name:  "promoted char value",
+			value: "coalesce(cast(n_name as char(8)), cast(n_comment as varchar(8)))",
+		},
+		{
+			name:       "direct char column",
+			value:      "n_name",
+			charColumn: true,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			mock := NewMockOptimizer(true)
+			if tc.charColumn {
+				table := DeepCopyTableDef(mock.ctxt.tables["nation"], true)
+				table.Cols[1].Typ = plan.Type{Id: int32(types.T_char), Width: 8}
+				mock.ctxt.tables["nation"] = table
+			}
 
-	var partition *plan.Node
-	var rankedWindow *plan.WindowSpec
-	for _, node := range logicPlan.GetQuery().Nodes {
-		if node.NodeType == plan.Node_PARTITION && len(node.OrderBy) == 1 {
-			partition = node
-		}
-		if node.NodeType == plan.Node_WINDOW {
-			for _, item := range node.WinSpecList {
-				if window := item.GetW(); window != nil && window.Name == "dense_rank" {
-					rankedWindow = window
+			logicPlan, err := runOneStmt(mock, t,
+				"select count(*) over (partition by "+tc.value+"), "+
+					"dense_rank() over (order by "+tc.value+"), "+
+					"sum(n_regionkey) over (order by "+tc.value+
+					" range between unbounded preceding and current row) from nation")
+			require.NoError(t, err)
+
+			var partition *plan.Node
+			windowsByName := make(map[string]*plan.WindowSpec)
+			for _, node := range logicPlan.GetQuery().Nodes {
+				if node.NodeType == plan.Node_PARTITION && len(node.OrderBy) == 1 {
+					partition = node
+				}
+				if node.NodeType == plan.Node_WINDOW {
+					for _, item := range node.WinSpecList {
+						if window := item.GetW(); window != nil {
+							windowsByName[window.Name] = window
+						}
+					}
 				}
 			}
-		}
+			require.NotNil(t, partition)
+			requireWindowPadSpaceComparisonCast(t, partition.OrderBy[0].Expr)
+
+			for _, name := range []string{"dense_rank", "sum"} {
+				window := windowsByName[name]
+				require.NotNil(t, window)
+				require.Len(t, window.OrderBy, 1)
+				requireWindowPadSpaceComparisonCast(t, window.OrderBy[0].Expr)
+			}
+		})
 	}
-	require.NotNil(t, partition)
-	require.True(t, isCastOverload(partition.OrderBy[0].Expr, 2))
-	require.NotNil(t, rankedWindow)
-	require.Len(t, rankedWindow.OrderBy, 1)
-	require.True(t, isCastOverload(rankedWindow.OrderBy[0].Expr, 2))
+}
+
+func requireWindowPadSpaceComparisonCast(t *testing.T, expr *plan.Expr) {
+	t.Helper()
+	require.NotNil(t, expr)
+	require.True(t, isCastOverload(expr, 2), expr.String())
+	require.Equal(t, int32(types.T_varchar), expr.Typ.Id)
 }
 
 func TestGroupConcatOrderByIsBoundPerAggregate(t *testing.T) {
