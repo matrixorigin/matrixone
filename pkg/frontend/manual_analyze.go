@@ -24,14 +24,16 @@ import (
 	pbstats "github.com/matrixorigin/matrixone/pkg/pb/statsinfo"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+	"github.com/matrixorigin/matrixone/pkg/sql/util"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 )
 
 type boundAnalyzeTable struct {
-	ctx      context.Context
-	columns  tree.IdentifierList
-	relation engine.AnalyzableRelation
-	key      pbstats.StatsInfoKey
+	ctx             context.Context
+	columns         tree.IdentifierList
+	relation        engine.AnalyzableRelation
+	key             pbstats.StatsInfoKey
+	tableDefVersion uint32
 }
 
 func handleAnalyzeStatsStmt(ses *Session, execCtx *ExecCtx, stmt *tree.AnalyzeStmt) error {
@@ -96,7 +98,8 @@ func handleAnalyzeStatsStmt(ses *Session, execCtx *ExecCtx, stmt *tree.AnalyzeSt
 				table.key.DbName, table.key.TableName)
 		}
 		if err = publishCollectedAnalyzeStats(
-			ses, table.ctx, table.key, result.Stats, publisher); err != nil {
+			ses, table.ctx, table.key, table.tableDefVersion,
+			result.Stats, publisher); err != nil {
 			release()
 			return err
 		}
@@ -166,6 +169,12 @@ func bindAnalyzeTables(
 			return nil, moerr.NewNotSupported(execCtx.reqCtx,
 				"ANALYZE TABLE supports only owned physical tables")
 		}
+		if util.BuildTableScanAccountFilter(
+			ses.GetAccountId(), obj.SchemaName, obj.ObjName, tableDef.TableType,
+		) != nil {
+			return nil, moerr.NewNotSupported(execCtx.reqCtx,
+				"ANALYZE TABLE cannot publish statistics for an account-filtered table")
+		}
 		physicalCtx, relation, err := tcc.getRelation(dbName, string(entry.Table.Name()), nil, nil)
 		if err != nil {
 			return nil, err
@@ -195,6 +204,7 @@ func bindAnalyzeTables(
 		seen[identity] = struct{}{}
 		tables = append(tables, boundAnalyzeTable{
 			ctx: physicalCtx, columns: columns, relation: analyzer,
+			tableDefVersion: tableDef.Version,
 			key: pbstats.StatsInfoKey{
 				AccId: accountID, DatabaseID: databaseID, TableID: uint64(obj.Obj),
 				DbName: obj.SchemaName, TableName: obj.ObjName,
@@ -208,11 +218,13 @@ func publishCollectedAnalyzeStats(
 	ses *Session,
 	ctx context.Context,
 	key pbstats.StatsInfoKey,
+	tableDefVersion uint32,
 	stats *pbstats.StatsInfo,
 	publisher engine.AnalyzedStatsPublisher,
 ) error {
 	tableKey := optimizerStatsTableKey{accountID: key.AccId, tableID: key.TableID}
-	published, err := publisher.PublishAnalyzedStats(ctx, key, stats)
+	published, err := publisher.PublishAnalyzedStats(
+		ctx, key, tableDefVersion, stats)
 	if err != nil {
 		return err
 	}
@@ -221,7 +233,8 @@ func publishCollectedAnalyzeStats(
 			"ANALYZE TABLE did not publish statistics for %s.%s", key.DbName, key.TableName)
 	}
 	version := advanceOptimizerStatsVersion(ses.GetService(), tableKey)
-	ses.cachePublishedStats(tableKey, version, published)
+	ses.cachePublishedStatsForTableDefVersion(
+		tableKey, version, &tableDefVersion, published)
 	return nil
 }
 

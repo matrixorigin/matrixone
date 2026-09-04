@@ -180,8 +180,6 @@ func TestNewAnalyzedStatsGenerationDoesNotMixEpochs(t *testing.T) {
 	src.DataTypeMap["a"] = uint64(types.T_int64)
 
 	published := newAnalyzedStatsGeneration(src)
-	require.True(t, published.ManualAnalyzed)
-	require.True(t, published.IsUsableForOptimizer())
 	require.Equal(t, float64(100), published.TableCnt)
 	require.Equal(t, int64(7), published.BlockNumber)
 	require.Equal(t, float64(40), published.NdvMap["a"])

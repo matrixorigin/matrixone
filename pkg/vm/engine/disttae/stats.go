@@ -24,6 +24,7 @@ import (
 	"time"
 
 	"github.com/gogo/protobuf/proto"
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
@@ -41,6 +42,7 @@ import (
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace/statistic"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/logtailreplay"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 	"go.uber.org/zap"
@@ -269,6 +271,12 @@ type GlobalStats struct {
 
 		// statsInfoMap is the real stats info data.
 		statsInfoMap map[pb.StatsInfoKey]*pb.StatsInfo
+
+		// tableDefVersions is present only for statistics that contain a
+		// table-wide observation bound to one schema definition. It has the
+		// same owner and lifetime as statsInfoMap. Metadata-only and remote
+		// statistics remain unbound for wire compatibility.
+		tableDefVersions map[pb.StatsInfoKey]uint32
 	}
 
 	// updateWorkerFactor is the times of CPU number of this node
@@ -293,6 +301,11 @@ type GlobalStats struct {
 	// with gs.mu held immediately before cond.Wait atomically releases it.
 	beforeStatsWait func(pb.StatsInfoKey, *updateRecord)
 
+	// beforeVersionedStatsPublish is for deterministic schema-publication
+	// tests only. It runs after schema validation while the catalog table-change
+	// read lock is still held and before the statistics cache swap.
+	beforeVersionedStatsPublish func(pb.StatsInfoKey, uint32)
+
 	// afterAutomaticUpdateStarted is for deterministic producer-cancellation
 	// tests only. It runs after worker admission and before refresh admission.
 	afterAutomaticUpdateStarted func(pb.StatsInfoKey, *updateRecord)
@@ -311,6 +324,7 @@ func NewGlobalStats(
 	}
 	s.updatingMu.updating = make(map[pb.StatsInfoKey]*updateRecord)
 	s.mu.statsInfoMap = make(map[pb.StatsInfoKey]*pb.StatsInfo)
+	s.mu.tableDefVersions = make(map[pb.StatsInfoKey]uint32)
 	s.mu.cond = sync.NewCond(&s.mu)
 	// One lifecycle callback wakes every current waiter when update workers
 	// stop. Register it once per GlobalStats rather than once per cache miss.
@@ -452,6 +466,7 @@ func (gs *GlobalStats) RemoveTid(tableID uint64) {
 	for key := range gs.mu.statsInfoMap {
 		if key.TableID == tableID {
 			delete(gs.mu.statsInfoMap, key)
+			delete(gs.mu.tableDefVersions, key)
 		}
 	}
 	for key := range gs.updatingMu.updating {
@@ -552,6 +567,8 @@ func (gs *GlobalStats) cacheRemoteInfoIfSubscribed(
 	key pb.StatsInfoKey,
 	subscribedEnt *subEntry,
 	remoteInfo *pb.StatsInfo,
+	tableDefVersion *uint32,
+	rejectBoundWithoutVersion bool,
 ) *pb.StatsInfo {
 	if subscribedEnt == nil || remoteInfo == nil {
 		return nil
@@ -568,12 +585,17 @@ func (gs *GlobalStats) cacheRemoteInfoIfSubscribed(
 	gs.mu.Lock()
 	defer gs.mu.Unlock()
 
-	info, ok := gs.mu.statsInfoMap[key]
-	if ok && info != nil {
+	info, complete, incompatible := gs.statsInfoForTableVersionLocked(
+		key, tableDefVersion, rejectBoundWithoutVersion)
+	if complete && info != nil {
 		return info
+	}
+	if incompatible {
+		return nil
 	}
 
 	gs.mu.statsInfoMap[key] = remoteInfo
+	delete(gs.mu.tableDefVersions, key)
 	if gs.mu.cond != nil {
 		gs.mu.cond.Broadcast()
 	}
@@ -581,18 +603,77 @@ func (gs *GlobalStats) cacheRemoteInfoIfSubscribed(
 }
 
 func (gs *GlobalStats) Get(ctx context.Context, key pb.StatsInfoKey, sync bool) *pb.StatsInfo {
+	return gs.get(ctx, key, sync, nil, false)
+}
+
+// GetForRemote returns only statistics that are safe to serialize to a CN
+// whose table-definition version is unknown. Local unversioned readers use
+// Get and may inspect the process-local published value.
+func (gs *GlobalStats) GetForRemote(ctx context.Context, key pb.StatsInfoKey) *pb.StatsInfo {
+	return gs.get(ctx, key, false, nil, true)
+}
+
+// GetAtTableVersion returns schema-bound statistics only when they were
+// observed from the table definition used by the caller's plan. Unbound
+// metadata statistics retain the legacy behavior.
+func (gs *GlobalStats) GetAtTableVersion(
+	ctx context.Context,
+	key pb.StatsInfoKey,
+	sync bool,
+	tableDefVersion uint32,
+) *pb.StatsInfo {
+	return gs.get(ctx, key, sync, &tableDefVersion, false)
+}
+
+// statsInfoForTableVersionLocked distinguishes a true cache miss from a
+// schema-bound entry that this reader must not consume. A mismatched entry is
+// retained because an older snapshot reader may still match it.
+func (gs *GlobalStats) statsInfoForTableVersionLocked(
+	key pb.StatsInfoKey,
+	tableDefVersion *uint32,
+	rejectBoundWithoutVersion bool,
+) (info *pb.StatsInfo, complete bool, incompatible bool) {
+	info, complete = gs.mu.statsInfoMap[key]
+	if !complete {
+		return nil, false, false
+	}
+	if version, bound := gs.mu.tableDefVersions[key]; bound {
+		if tableDefVersion != nil && version != *tableDefVersion {
+			return nil, false, true
+		}
+		if tableDefVersion == nil && rejectBoundWithoutVersion {
+			return nil, false, true
+		}
+	}
+	return info, true, false
+}
+
+func (gs *GlobalStats) get(
+	ctx context.Context,
+	key pb.StatsInfoKey,
+	sync bool,
+	tableDefVersion *uint32,
+	rejectBoundWithoutVersion bool,
+) *pb.StatsInfo {
 	wrapkey := pb.StatsInfoKeyWithContext{
 		Ctx: ctx,
 		Key: key,
 	}
 
 	gs.mu.Lock()
-	info, ok := gs.mu.statsInfoMap[key]
-	if ok && info != nil {
+	info, _, incompatible := gs.statsInfoForTableVersionLocked(
+		key, tableDefVersion, rejectBoundWithoutVersion)
+	if info != nil {
 		gs.mu.Unlock()
 		return info
 	}
 	gs.mu.Unlock()
+	if incompatible && !sync {
+		// Non-blocking callers (notably remote CN exports) cannot establish a
+		// replacement observation. Fail closed without subscribing or exporting
+		// statistics whose schema version they cannot prove.
+		return nil
+	}
 
 	// after checking first potential patched cache
 	// we check the approx to avoid taking a place in statInfo map
@@ -625,7 +706,7 @@ func (gs *GlobalStats) Get(ctx context.Context, key pb.StatsInfoKey, sync bool) 
 		return nil
 	}
 	var remoteInfo *pb.StatsInfo
-	if _, ok = ctx.Value(perfcounter.CalcTableStatsKey{}).(bool); ok {
+	if _, ok := ctx.Value(perfcounter.CalcTableStatsKey{}).(bool); ok {
 		stats := statistic.StatsInfoFromContext(ctx)
 		start := time.Now()
 		defer func() {
@@ -634,14 +715,32 @@ func (gs *GlobalStats) Get(ctx context.Context, key pb.StatsInfoKey, sync bool) 
 	}
 
 	// Get stats info from remote node.
-	if gs.KeyRouter != nil && gs.engine.qc != nil {
+	if !incompatible && gs.KeyRouter != nil && gs.engine.qc != nil {
 		client := gs.engine.qc
-		target := gs.KeyRouter.Target(key)
+		// Gossip advertises statistics ownership by the stable physical table
+		// identity only. Names and account context are needed by the stats
+		// producer, but including them in the exact router-map lookup would not
+		// match the advertised key and would silently disable remote reuse.
+		routingKey := pb.StatsInfoKey{
+			DatabaseID: key.DatabaseID,
+			TableID:    key.TableID,
+		}
+		target := gs.KeyRouter.Target(routingKey)
 		if len(target) != 0 {
-			resp, err := client.SendMessage(ctx, target, client.NewRequest(query.CmdMethod_GetStatsInfo))
+			req := client.NewRequest(query.CmdMethod_GetStatsInfo)
+			req.GetStatsInfoRequest = &query.GetStatsInfoRequest{
+				StatsInfoKey: &key,
+			}
+			resp, err := client.SendMessage(ctx, target, req)
 			if err != nil || resp == nil {
-				logutil.Errorf("failed to send request to %s, err: %v, resp: %v", "", err, resp)
-			} else if resp.GetStatsInfoResponse != nil {
+				logutil.Errorf("failed to send request to %s, err: %v, resp: %v", target, err, resp)
+			} else if resp.GetStatsInfoResponse == nil || resp.GetStatsInfoResponse.StatsInfo == nil {
+				// A remote miss may fall back to a synchronous local build. Return
+				// the empty pooled response before that potentially long wait.
+				client.Release(resp)
+			} else {
+				// Keep a response that owns usable stats alive until the stats have
+				// been copied into the local cache (or rejected by the lifetime gate).
 				defer client.Release(resp)
 				remoteInfo = resp.GetStatsInfoResponse.StatsInfo
 			}
@@ -652,7 +751,9 @@ func (gs *GlobalStats) Get(ctx context.Context, key pb.StatsInfoKey, sync bool) 
 		if gs.beforeCacheRemoteInfo != nil {
 			gs.beforeCacheRemoteInfo(key)
 		}
-		if info = gs.cacheRemoteInfoIfSubscribed(key, subscribedEnt, remoteInfo); info != nil {
+		if info = gs.cacheRemoteInfoIfSubscribed(
+			key, subscribedEnt, remoteInfo, tableDefVersion,
+			rejectBoundWithoutVersion); info != nil {
 			return info
 		}
 	}
@@ -662,7 +763,8 @@ func (gs *GlobalStats) Get(ctx context.Context, key pb.StatsInfoKey, sync bool) 
 	// callers. For a synchronous caller, an existing nil sentinel still admits a
 	// background retry, as before.
 	gs.mu.Lock()
-	info = gs.mu.statsInfoMap[key]
+	info, _, _ = gs.statsInfoForTableVersionLocked(
+		key, tableDefVersion, rejectBoundWithoutVersion)
 	gs.mu.Unlock()
 	if info != nil {
 		return info
@@ -685,7 +787,8 @@ func (gs *GlobalStats) Get(ctx context.Context, key pb.StatsInfoKey, sync bool) 
 	if !gs.enqueueStatsUpdateForRecord(wrapkey, true, generation) {
 		return nil
 	}
-	return gs.waitForStatsUpdate(ctx, key, generation)
+	return gs.waitForStatsUpdate(
+		ctx, key, generation, tableDefVersion, rejectBoundWithoutVersion)
 }
 
 // waitForStatsUpdate waits on durable state, not on a Broadcast edge. The
@@ -698,6 +801,8 @@ func (gs *GlobalStats) waitForStatsUpdate(
 	ctx context.Context,
 	key pb.StatsInfoKey,
 	generation *updateRecord,
+	tableDefVersion *uint32,
+	rejectBoundWithoutVersion bool,
 ) *pb.StatsInfo {
 	stopWake := context.AfterFunc(ctx, gs.notifyStatsWaiters)
 	defer stopWake()
@@ -705,7 +810,8 @@ func (gs *GlobalStats) waitForStatsUpdate(
 	gs.mu.Lock()
 	defer gs.mu.Unlock()
 	for {
-		if info, complete := gs.mu.statsInfoMap[key]; complete {
+		if info, complete, _ := gs.statsInfoForTableVersionLocked(
+			key, tableDefVersion, rejectBoundWithoutVersion); complete {
 			return info
 		}
 		if ctx.Err() != nil {
@@ -1290,6 +1396,7 @@ func (gs *GlobalStats) completeAutomaticStatsCacheUpdate(
 	}
 	if updated {
 		gs.mu.statsInfoMap[key] = stats
+		delete(gs.mu.tableDefVersions, key)
 		gs.broadcastStats(key)
 	} else if _, ok := gs.mu.statsInfoMap[key]; !ok {
 		gs.mu.statsInfoMap[key] = nil
@@ -1406,7 +1513,7 @@ func (gs *GlobalStats) completeAutomaticStatsRefresh(
 
 // RefreshWithMode triggers a stats refresh with the specified sampling mode
 func (gs *GlobalStats) RefreshWithMode(ctx context.Context, key pb.StatsInfoKey, samplingMode string) error {
-	_, err := gs.refreshStatsWithMode(ctx, key, samplingMode)
+	_, err := gs.refreshStatsWithMode(ctx, key, samplingMode, engine.StatsRefreshOptions{})
 	return err
 }
 
@@ -1418,6 +1525,7 @@ func (gs *GlobalStats) refreshStatsWithMode(
 	ctx context.Context,
 	key pb.StatsInfoKey,
 	samplingMode string,
+	options engine.StatsRefreshOptions,
 ) (*pb.StatsInfo, error) {
 	release, err := gs.acquireStatsRefresh(ctx, key)
 	if err != nil {
@@ -1495,8 +1603,24 @@ func (gs *GlobalStats) refreshStatsWithMode(
 	if cause := gs.statsRefreshCancellationCause(ctx); cause != nil {
 		return nil, cause
 	}
+	// Validate the observation against the schema snapshot that owned the
+	// collection. Publication below validates that same version again while
+	// holding the catalog change lock through the cache swap.
+	if err := applyStatsRefreshOptions(stats, table.TableDef, options); err != nil {
+		return nil, err
+	}
 
-	if !gs.publishStatsForGeneration(key, generation, stats) {
+	published := false
+	if options.TableRowCount != nil || len(options.ColumnNDVs) > 0 {
+		published, err = gs.publishStatsForGenerationAtTableVersion(
+			ctx, key, generation, stats, *options.TableDefVersion)
+	} else {
+		published, err = gs.publishStatsForGeneration(ctx, key, generation, stats)
+	}
+	if err != nil {
+		return nil, err
+	}
+	if !published {
 		if cause := gs.statsRefreshCancellationCause(ctx); cause != nil {
 			return nil, cause
 		}
@@ -1518,6 +1642,7 @@ func (gs *GlobalStats) refreshStatsWithMode(
 func (gs *GlobalStats) publishAnalyzedStats(
 	ctx context.Context,
 	key pb.StatsInfoKey,
+	tableDefVersion uint32,
 	collected *pb.StatsInfo,
 ) (*pb.StatsInfo, error) {
 	if collected == nil {
@@ -1558,7 +1683,12 @@ func (gs *GlobalStats) publishAnalyzedStats(
 	if cause := gs.statsRefreshCancellationCause(ctx); cause != nil {
 		return nil, cause
 	}
-	if !gs.publishStatsForGeneration(key, generation, published) {
+	publishedOK, err := gs.publishStatsForGenerationAtTableVersion(
+		ctx, key, generation, published, tableDefVersion)
+	if err != nil {
+		return nil, err
+	}
+	if !publishedOK {
 		if cause := gs.statsRefreshCancellationCause(ctx); cause != nil {
 			return nil, cause
 		}
@@ -1574,41 +1704,215 @@ func newAnalyzedStatsGeneration(collected *pb.StatsInfo) *pb.StatsInfo {
 	if collected == nil {
 		return nil
 	}
-	published := proto.Clone(collected).(*pb.StatsInfo)
-	published.ManualAnalyzed = true
-	return published
+	return proto.Clone(collected).(*pb.StatsInfo)
+}
+
+func applyStatsRefreshOptions(
+	stats *pb.StatsInfo,
+	tableDef *plan2.TableDef,
+	options engine.StatsRefreshOptions,
+) error {
+	if options.TableRowCount == nil && len(options.ColumnNDVs) == 0 {
+		return nil
+	}
+	if stats == nil || tableDef == nil {
+		return moerr.NewInternalErrorNoCtx("cannot apply statistics refresh options without table statistics")
+	}
+	if options.TableDefVersion == nil {
+		return moerr.NewInternalErrorNoCtx(
+			"cannot apply a table-wide statistics observation without its schema version")
+	}
+	if *options.TableDefVersion != tableDef.Version {
+		return moerr.NewInternalErrorNoCtxf(
+			"cannot apply statistics observation from table schema version %d to current version %d for table %q",
+			*options.TableDefVersion, tableDef.Version, tableDef.Name)
+	}
+	knownColumns := make(map[string]struct{}, len(tableDef.Cols))
+	for _, col := range tableDef.Cols {
+		if col == nil {
+			return moerr.NewInternalErrorNoCtxf(
+				"cannot apply statistics observation to table %q with an invalid column definition", tableDef.Name)
+		}
+		knownColumns[col.Name] = struct{}{}
+	}
+	rowCount := stats.TableCnt
+	if options.TableRowCount != nil {
+		rowCount = *options.TableRowCount
+	}
+	if math.IsNaN(rowCount) || math.IsInf(rowCount, 0) || rowCount < 0 ||
+		math.Trunc(rowCount) != rowCount || rowCount >= math.Exp2(64) {
+		return moerr.NewInternalErrorNoCtxf(
+			"invalid row count %v for table %q", rowCount, tableDef.Name)
+	}
+	for column, ndv := range options.ColumnNDVs {
+		if _, ok := knownColumns[column]; !ok {
+			return moerr.NewInternalErrorNoCtxf(
+				"cannot apply NDV for unknown column %q in table %q", column, tableDef.Name)
+		}
+		if math.IsNaN(ndv) || math.IsInf(ndv, 0) || ndv < 0 {
+			return moerr.NewInternalErrorNoCtxf(
+				"invalid NDV %v for column %q in table %q", ndv, column, tableDef.Name)
+		}
+	}
+	if stats.NdvMap == nil {
+		stats.NdvMap = make(map[string]float64, len(options.ColumnNDVs)+1)
+	}
+	stats.TableName = tableDef.Name
+	stats.TableCnt = rowCount
+	if _, hasFakePrimaryKey := knownColumns[catalog.FakePrimaryKeyColName]; options.TableRowCount != nil && hasFakePrimaryKey {
+		stats.NdvMap[catalog.FakePrimaryKeyColName] = rowCount
+	}
+	for column, ndv := range options.ColumnNDVs {
+		stats.NdvMap[column] = min(ndv, rowCount)
+	}
+	if options.TableRowCount != nil {
+		// A partial ANALYZE intentionally retains unselected estimates, but no
+		// distinct or NULL count may exceed the now-exact table cardinality.
+		for column, ndv := range stats.NdvMap {
+			if ndv > rowCount {
+				stats.NdvMap[column] = rowCount
+			}
+		}
+		for column, nullCount := range stats.NullCntMap {
+			if float64(nullCount) > rowCount {
+				stats.NullCntMap[column] = uint64(rowCount)
+			}
+		}
+	}
+	return nil
 }
 
 // publishStatsForGeneration replaces the cache only while the exact table
-// lifetime captured by the refresh remains current. The gs.mu -> updatingMu
-// order matches RemoveTid, making validation and publication atomic with
-// respect to cleanup. A late explicit refresh therefore cannot resurrect an
-// unsubscribed table or publish into a replacement generation.
+// lifetime captured by the refresh remains current and neither the request nor
+// GlobalStats owner has been canceled. The gs.mu -> updatingMu order matches
+// RemoveTid, making validation and publication atomic with respect to cleanup.
+// A late explicit refresh therefore cannot resurrect an unsubscribed table,
+// publish into a replacement generation, or commit after observing
+// cancellation.
 func (gs *GlobalStats) publishStatsForGeneration(
+	ctx context.Context,
 	key pb.StatsInfoKey,
 	generation *updateRecord,
 	stats *pb.StatsInfo,
-) bool {
-	if generation == nil || stats == nil {
-		return false
-	}
+) (bool, error) {
 	gs.mu.Lock()
 	defer gs.mu.Unlock()
-	if gs.ctx != nil && context.Cause(gs.ctx) != nil {
-		return false
+	published, err := gs.publishStatsForGenerationLocked(ctx, key, generation, stats)
+	if published {
+		gs.broadcastStats(key)
 	}
-	if !gs.statsUpdateGenerationActive(key, generation) {
-		if gs.mu.cond != nil {
-			gs.mu.cond.Broadcast()
-		}
-		return false
-	}
-	gs.mu.statsInfoMap[key] = stats
-	gs.broadcastStats(key)
 	if gs.mu.cond != nil {
 		gs.mu.cond.Broadcast()
 	}
-	return true
+	return published, err
+}
+
+// publishStatsForGenerationLocked performs the final cancellation/generation
+// checks and bounded cache swap. The caller owns gs.mu, so this check-and-swap
+// is the publication linearization point. Cancellation observed here wins and
+// returns its original cause; cancellation that becomes visible after this
+// point races after a completed publication. The caller is responsible for
+// wakeup and gossip after any outer catalog critical section has ended.
+func (gs *GlobalStats) publishStatsForGenerationLocked(
+	ctx context.Context,
+	key pb.StatsInfoKey,
+	generation *updateRecord,
+	stats *pb.StatsInfo,
+) (bool, error) {
+	if generation == nil || stats == nil {
+		return false, nil
+	}
+	generationActive := gs.statsUpdateGenerationActive(key, generation)
+	// Generation validation is the last operation that can wait on another
+	// application lock. Check cancellation after it so a request canceled while
+	// waiting for updatingMu cannot cross the cache-swap commit point.
+	if cause := gs.statsRefreshCancellationCause(ctx); cause != nil {
+		return false, cause
+	}
+	if !generationActive {
+		return false, nil
+	}
+	gs.mu.statsInfoMap[key] = stats
+	delete(gs.mu.tableDefVersions, key)
+	return true, nil
+}
+
+// publishStatsForGenerationAtTableVersion makes schema validation and stats
+// publication atomic with catalog table changes. If publication wins the
+// catalog lock it linearizes before ALTER; if ALTER wins, the old observation
+// is rejected and can never be published into the new schema. Request and
+// owner cancellation use the same final check-and-swap linearization point.
+func (gs *GlobalStats) publishStatsForGenerationAtTableVersion(
+	ctx context.Context,
+	key pb.StatsInfoKey,
+	generation *updateRecord,
+	stats *pb.StatsInfo,
+	expectedVersion uint32,
+) (bool, error) {
+	if gs.engine == nil {
+		return false, moerr.NewInternalErrorNoCtx("cannot validate table schema without an engine")
+	}
+	cc := gs.engine.GetLatestCatalogCache()
+	if cc == nil {
+		return false, moerr.NewInternalErrorNoCtx("cannot validate table schema without a catalog cache")
+	}
+
+	published := false
+	var publicationErr error
+	statsLocked := false
+	actualVersion, found, matched := cc.WithTableVersion(
+		key.AccId, key.DatabaseID, key.TableID, expectedVersion,
+		func() {
+			if gs.beforeVersionedStatsPublish != nil {
+				gs.beforeVersionedStatsPublish(key, expectedVersion)
+			}
+			gs.mu.Lock()
+			statsLocked = true
+			published, publicationErr = gs.publishStatsForGenerationLocked(
+				ctx, key, generation, stats)
+			if published {
+				if gs.mu.tableDefVersions == nil {
+					gs.mu.tableDefVersions = make(map[pb.StatsInfoKey]uint32)
+				}
+				gs.mu.tableDefVersions[key] = expectedVersion
+			}
+		},
+	)
+	if statsLocked {
+		// The cache swap above was protected by the catalog lock. Release that
+		// lock before gossip, while retaining gs.mu so cleanup cannot remove
+		// the entry between publication and notification.
+		if published {
+			gs.broadcastStats(key)
+		}
+		if gs.mu.cond != nil {
+			gs.mu.cond.Broadcast()
+		}
+		gs.mu.Unlock()
+	}
+	if publicationErr != nil {
+		return false, publicationErr
+	}
+	// WithTableVersion does not invoke the callback when the table disappeared
+	// or its schema already changed. Preserve cancellation as the public result
+	// when it became durable while this request was waiting for the catalog
+	// fence; a successful publication must not be reclassified after its commit
+	// point.
+	if !published {
+		if cause := gs.statsRefreshCancellationCause(ctx); cause != nil {
+			return false, cause
+		}
+	}
+	if !found {
+		return false, moerr.NewInternalErrorNoCtxf(
+			"table %d no longer exists while publishing statistics", key.TableID)
+	}
+	if !matched {
+		return false, moerr.NewInternalErrorNoCtxf(
+			"cannot publish statistics observation from table schema version %d to current version %d for table %d",
+			expectedVersion, actualVersion, key.TableID)
+	}
+	return published, nil
 }
 
 func (gs *GlobalStats) executeStatsUpdate(ctx context.Context, ps *logtailreplay.PartitionState, key pb.StatsInfoKey, stats *pb.StatsInfo) (bool, float64) {

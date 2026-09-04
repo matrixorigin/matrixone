@@ -5140,13 +5140,14 @@ func TestHandleAnalyzeStmtAlwaysUsesStatisticsCollector(t *testing.T) {
 type analyzedStatsPublisherFunc func(
 	context.Context,
 	pbstats.StatsInfoKey,
+	uint32,
 	*pbstats.StatsInfo,
 ) (*pbstats.StatsInfo, error)
 
 func (f analyzedStatsPublisherFunc) PublishAnalyzedStats(
-	ctx context.Context, key pbstats.StatsInfoKey, stats *pbstats.StatsInfo,
+	ctx context.Context, key pbstats.StatsInfoKey, tableDefVersion uint32, stats *pbstats.StatsInfo,
 ) (*pbstats.StatsInfo, error) {
-	return f(ctx, key, stats)
+	return f(ctx, key, tableDefVersion, stats)
 }
 
 func TestAnalyzeTableOwnsPersistentStats(t *testing.T) {
@@ -5424,19 +5425,23 @@ func TestPublishCollectedAnalyzeStatsDefinesCacheBoundary(t *testing.T) {
 	freshStats := plan.NewStatsInfo()
 	freshStats.AccurateObjectNumber = 8
 	freshStats.NdvMap["url"] = 1_000_000
+	tableDefVersion := uint32(7)
 	var gotKey pbstats.StatsInfoKey
+	var gotTableDefVersion uint32
 	publisher := analyzedStatsPublisherFunc(func(
-		_ context.Context, key pbstats.StatsInfoKey, stats *pbstats.StatsInfo,
+		_ context.Context, key pbstats.StatsInfoKey, version uint32, stats *pbstats.StatsInfo,
 	) (*pbstats.StatsInfo, error) {
 		gotKey = key
+		gotTableDefVersion = version
 		require.Same(t, freshStats, stats)
 		return freshStats, nil
 	})
 
 	require.NoError(t, publishCollectedAnalyzeStats(
-		ses, execCtx.reqCtx, key, freshStats, publisher))
+		ses, execCtx.reqCtx, key, tableDefVersion, freshStats, publisher))
 	require.Equal(t, key, gotKey)
-	cache, _ := ses.getStatsCacheWithVersion(physicalKey)
+	require.Equal(t, tableDefVersion, gotTableDefVersion)
+	cache, _ := ses.getStatsCacheForTableDefVersion(physicalKey, &tableDefVersion)
 	wrapper := cache.Get(tableID)
 	require.Same(t, freshStats, wrapper.GetStats())
 	otherSes.cachePlanWithStatsVersions("compiled before analyze completed",
@@ -5454,14 +5459,15 @@ func TestPublishCollectedAnalyzeStatsDefinesCacheBoundary(t *testing.T) {
 		"a stats read started before publication must not repopulate the table entry")
 	require.False(t, crossAccountSes.cacheStatsIfCurrent(physicalKey, crossAccountOldVersion, oldStats),
 		"a cross-account stats read must not repopulate the old physical generation")
-	otherCache, currentVersion := otherSes.getStatsCacheWithVersion(otherSes.optimizerStatsKey(tableID))
+	otherCache, currentVersion := otherSes.getStatsCacheForTableDefVersion(
+		otherSes.optimizerStatsKey(tableID), &tableDefVersion)
 	otherWrapper := otherCache.Get(tableID)
 	require.False(t, otherWrapper.Exists())
 	otherTableWrapper := otherCache.Get(otherTableID)
 	require.Same(t, otherStats, otherTableWrapper.GetStats(),
 		"invalidating one table must retain unrelated statistics")
-	require.True(t, otherSes.cacheStatsIfCurrent(
-		otherSes.optimizerStatsKey(tableID), currentVersion, freshStats))
+	require.True(t, otherSes.cacheStatsForTableDefVersionIfCurrent(
+		otherSes.optimizerStatsKey(tableID), currentVersion, &tableDefVersion, freshStats))
 	currentWrapper := otherCache.Get(tableID)
 	require.Same(t, freshStats, currentWrapper.GetStats())
 }
@@ -5479,12 +5485,12 @@ func TestPublishCollectedAnalyzeStatsDoesNotExposeFailure(t *testing.T) {
 	cacheOptimizerPlanForTest(ses, "select url from events", tableID)
 	wantErr := moerr.NewInternalError(execCtx.reqCtx, "publication failed")
 	publisher := analyzedStatsPublisherFunc(func(
-		context.Context, pbstats.StatsInfoKey, *pbstats.StatsInfo,
+		context.Context, pbstats.StatsInfoKey, uint32, *pbstats.StatsInfo,
 	) (*pbstats.StatsInfo, error) {
 		return nil, wantErr
 	})
 
-	err := publishCollectedAnalyzeStats(ses, execCtx.reqCtx, key, plan.NewStatsInfo(), publisher)
+	err := publishCollectedAnalyzeStats(ses, execCtx.reqCtx, key, 7, plan.NewStatsInfo(), publisher)
 	require.ErrorIs(t, err, wantErr)
 	cache, _ := ses.getStatsCacheWithVersion(ses.optimizerStatsKey(tableID))
 	wrapper := cache.Get(tableID)
@@ -5493,9 +5499,9 @@ func TestPublishCollectedAnalyzeStatsDoesNotExposeFailure(t *testing.T) {
 
 	freshStats := plan.NewStatsInfo()
 	require.NoError(t, publishCollectedAnalyzeStats(
-		ses, execCtx.reqCtx, key, freshStats,
+		ses, execCtx.reqCtx, key, 7, freshStats,
 		analyzedStatsPublisherFunc(func(
-			context.Context, pbstats.StatsInfoKey, *pbstats.StatsInfo,
+			context.Context, pbstats.StatsInfoKey, uint32, *pbstats.StatsInfo,
 		) (*pbstats.StatsInfo, error) {
 			return freshStats, nil
 		})), "a failed publication must leave the cache replaceable")
@@ -5515,12 +5521,12 @@ func TestPublishCollectedAnalyzeStatsRejectsMissingResult(t *testing.T) {
 	version := currentOptimizerStatsVersion(ses.GetService(), ses.optimizerStatsKey(tableID))
 	clock := currentOptimizerStatsClock(ses.GetService())
 	publisher := analyzedStatsPublisherFunc(func(
-		context.Context, pbstats.StatsInfoKey, *pbstats.StatsInfo,
+		context.Context, pbstats.StatsInfoKey, uint32, *pbstats.StatsInfo,
 	) (*pbstats.StatsInfo, error) {
 		return nil, nil
 	})
 
-	err := publishCollectedAnalyzeStats(ses, execCtx.reqCtx, key, plan.NewStatsInfo(), publisher)
+	err := publishCollectedAnalyzeStats(ses, execCtx.reqCtx, key, 7, plan.NewStatsInfo(), publisher)
 	require.Error(t, err)
 	require.Equal(t, version,
 		currentOptimizerStatsVersion(ses.GetService(), ses.optimizerStatsKey(tableID)))

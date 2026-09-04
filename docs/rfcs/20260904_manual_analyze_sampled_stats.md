@@ -181,11 +181,14 @@ partial states of different types cannot be merged accidentally.
 Collection constructs a fresh `StatsInfo` with the exact table row count and
 the newly analyzed columns' NDV, null count, logical size, and type. After all
 requested columns succeed, GlobalStats clones that object and replaces the
-local cache entry under the table generation captured after subscription.
-Cleanup or resubscription crossing that boundary rejects the publication.
-The completed generation carries an explicit manual-analysis marker, so both
-frontend and internal-SQL compiler caches recognize it as optimizer-usable
-without misrepresenting the metadata-derived accurate-object count.
+local cache entry under the table generation captured after subscription and
+the schema version used to bind the analyzed relation. Cleanup, resubscription,
+or ALTER crossing either boundary rejects the publication. The schema check and
+cache swap share the catalog change lock, and the frontend session cache records
+the same version.
+The completed generation carries its table identity and observed row count, so
+the shared optimizer validity check recognizes it without misrepresenting the
+metadata-derived accurate-object count.
 
 The previous cache entry is not an input to the new generation. In particular,
 unselected column maps and metadata-derived min/max or shuffle maps are not
@@ -203,6 +206,10 @@ requiring range metadata.
 This version is CN-local and memory-resident. A restart, cache refresh, or later
 automatic metadata refresh may replace it. There is no catalog schema, upgrade
 step, backup/restore behavior, or mixed-version persistent format in this PR.
+A schema-bound entry is not exported over the existing unversioned CN stats
+wire contract. ANALYZE is rejected when the caller's table scan has an implicit
+account filter, because that subset cannot replace statistics for the shared
+physical table.
 A future durable provider must add explicit table/snapshot identity, atomic
 catalog publication, cache invalidation, and compatibility handling rather than
 silently extending this cache record.

@@ -1334,12 +1334,67 @@ type Engine interface {
 	LatestLogtailAppliedTime() timestamp.Timestamp
 }
 
+// TableVersionedStats is an optional engine capability for readers that know
+// the table definition used by their plan. Implementations must not return
+// schema-bound statistics collected for another definition version. It is
+// optional so engines and mocks that expose only metadata-derived statistics
+// keep the existing Engine contract.
+type TableVersionedStats interface {
+	StatsAtTableVersion(
+		ctx context.Context,
+		key pb.StatsInfoKey,
+		sync bool,
+		tableDefVersion uint32,
+	) *pb.StatsInfo
+}
+
+// RemoteStatsExporter is an optional engine capability for serving statistics
+// to another CN. Unlike a local unversioned Stats reader, the remote caller
+// cannot prove which table-definition version it will use. Implementations
+// must therefore reject schema-bound statistics rather than serialize them.
+type RemoteStatsExporter interface {
+	StatsForRemote(ctx context.Context, key pb.StatsInfoKey) *pb.StatsInfo
+}
+
+// StatsRefreshOptions carries statistics that the statement computed from a
+// table-wide scan. Object metadata remains the source of all fields not
+// present here.
+type StatsRefreshOptions struct {
+	// TableDefVersion is the schema version that owned the table-wide
+	// observation. It is required whenever TableRowCount or ColumnNDVs carries
+	// an observation. The engine rejects it if the current physical table has
+	// crossed a schema boundary, preventing an old column value from being
+	// applied to a dropped-and-recreated column with the same name.
+	TableDefVersion *uint32
+
+	// TableRowCount is the exact row count observed by the same table-wide scan
+	// as ColumnNDVs. Nil leaves the object-metadata estimate unchanged.
+	TableRowCount *float64
+
+	// ColumnNDVs maps canonical column names to table-wide approximate distinct
+	// counts. The engine validates the names and values, caps them at the
+	// effective table row count, and applies them before publishing the new
+	// statistics object.
+	ColumnNDVs map[string]float64
+}
+
 // StatsRefresher is an optional engine capability for statements that define
 // a synchronous statistics-publication boundary, such as ANALYZE TABLE.
 // Implementations must not return until Stats() can observe the returned
 // statistics on the local engine instance.
 type StatsRefresher interface {
 	RefreshTableStats(ctx context.Context, key pb.StatsInfoKey) (*pb.StatsInfo, error)
+}
+
+// StatsRefresherWithOptions extends StatsRefresher without breaking engines
+// that implement the original synchronous refresh capability.
+type StatsRefresherWithOptions interface {
+	StatsRefresher
+	RefreshTableStatsWithOptions(
+		ctx context.Context,
+		key pb.StatsInfoKey,
+		options StatsRefreshOptions,
+	) (*pb.StatsInfo, error)
 }
 
 // AnalyzeTableRequest is the storage-facing contract for a manual ANALYZE
@@ -1387,6 +1442,7 @@ type AnalyzedStatsPublisher interface {
 	PublishAnalyzedStats(
 		ctx context.Context,
 		key pb.StatsInfoKey,
+		tableDefVersion uint32,
 		stats *pb.StatsInfo,
 	) (*pb.StatsInfo, error)
 }

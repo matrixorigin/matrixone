@@ -95,6 +95,13 @@ func GetFunctionIsWinValueFunByName(name string) bool {
 	return f.isWindowValue()
 }
 
+// GetFunctionIgnoresWindowFrameByName reports whether a window function
+// operates on partition-relative row positions instead of the current frame.
+func GetFunctionIgnoresWindowFrameByName(name string) bool {
+	fid, exists := getFunctionIdByNameWithoutErr(name)
+	return exists && (fid == LAG || fid == LEAD)
+}
+
 func GetFunctionIsVolatileOrRealTimeRelatedByName(name string) bool {
 	fid, exists := getFunctionIdByNameWithoutErr(name)
 	if !exists {

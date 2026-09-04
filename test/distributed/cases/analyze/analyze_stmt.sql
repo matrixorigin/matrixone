@@ -31,6 +31,10 @@ insert into quoted_cols values (1, 2, 3), (2, 3, 4);
 
 -- AUTO returns one maintenance-summary row and publishes sampled statistics
 analyze table t_analyze_01(a, b);
+select table_cnt,
+json_extract(ndv_map, '$.a') as a_ndv,
+json_extract(ndv_map, '$.b') as b_ndv
+from table_stats('db_analyze_stmt.t_analyze_01', 'get', 'normal') g;
 
 -- ANALYZE TABLE without column list (issue #23122 core case)
 analyze table t_analyze_01;

@@ -27,6 +27,12 @@ insert into quoted_cols values (1, 2, 3), (2, 3, 4);
 analyze table t_analyze_01(a, b);
 table_name    mode    coverage    columns_analyzed    population_rows    population_exact    sample_rows    sample_blocks    sample_bytes    status    message
 db_analyze_stmt.t_analyze_01    AUTO    SNAPSHOT_VISIBLE_V1    2    4    1    4    1    304    OK    q=1/1
+select table_cnt,
+json_extract(ndv_map, '$.a') as a_ndv,
+json_extract(ndv_map, '$.b') as b_ndv
+from table_stats('db_analyze_stmt.t_analyze_01', 'get', 'normal') g;
+table_cnt    a_ndv    b_ndv
+4    2    3
 analyze table t_analyze_01;
 table_name    mode    coverage    columns_analyzed    population_rows    population_exact    sample_rows    sample_blocks    sample_bytes    status    message
 db_analyze_stmt.t_analyze_01    AUTO    SNAPSHOT_VISIBLE_V1    2    4    1    4    1    304    OK    q=1/1
