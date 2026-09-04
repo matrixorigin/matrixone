@@ -508,6 +508,11 @@ func mysqlScanEffectiveSchemaRefs(ctx context.Context, fnName string, index *mys
 			// already inspected them for external references and budgets.
 			continue
 		}
+		for _, key := range []string{"allOf", "anyOf", "oneOf"} {
+			if schemas, ok := object[key].([]any); ok && len(schemas) == 0 {
+				return nil, moerr.NewInvalidArg(ctx, fnName, key+" must contain at least one schema")
+			}
+		}
 
 		for _, child := range mysqlEffectiveSchemaChildren(item.pointer, object) {
 			stack = append(stack, child)

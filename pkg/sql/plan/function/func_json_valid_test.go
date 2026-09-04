@@ -872,6 +872,9 @@ func TestJsonSchemaLocalReferenceErrors(t *testing.T) {
 		{name: "direct cycle", schema: `{"$ref":"#/definitions/node","definitions":{"node":{"$ref":"#/definitions/node"}}}`, code: moerr.ErrInvalidArg, reason: mysqlJSONSchemaRefCycleReason},
 		{name: "indirect cycle", schema: `{"$ref":"#/$defs/a","$defs":{"a":{"$ref":"#/$defs/b"},"b":{"$ref":"#/$defs/a"}}}`, code: moerr.ErrInvalidArg, reason: mysqlJSONSchemaRefCycleReason},
 		{name: "instance recursive cycle", schema: `{"properties":{"child":{"$ref":"#/$defs/node"}},"$defs":{"node":{"type":"object","properties":{"child":{"$ref":"#/$defs/node"}}}}}`, code: moerr.ErrInvalidArg, reason: mysqlJSONSchemaRefCycleReason},
+		{name: "empty allOf", schema: `{"allOf":[]}`, code: moerr.ErrInvalidArg, reason: "allOf must contain at least one schema"},
+		{name: "empty anyOf", schema: `{"anyOf":[]}`, code: moerr.ErrInvalidArg, reason: "anyOf must contain at least one schema"},
+		{name: "empty oneOf", schema: `{"oneOf":[]}`, code: moerr.ErrInvalidArg, reason: "oneOf must contain at least one schema"},
 		{name: "invalid combinator local", schema: `{"allOf":{"$ref":"#/definitions/value"},"definitions":{"value":{"type":"integer"}}}`, code: moerr.ErrInvalidArg, reason: "of an array"},
 		{name: "invalid combinator external precedence", schema: `{"allOf":{"$ref":"https://example.invalid/schema"}}`, code: moerr.ErrNotSupported, reason: mysqlJSONSchemaExternalRefReason},
 	}
@@ -902,6 +905,25 @@ func TestJsonSchemaLocalReferenceLiteralAndSibling(t *testing.T) {
 			require.True(t, result.Valid())
 		} else {
 			require.False(t, result.Valid())
+		}
+	}
+}
+
+func TestJsonSchemaDraft4CombinatorCardinality(t *testing.T) {
+	for _, schemaText := range []string{
+		`{"enum":[{"allOf":[]}]}`,
+		`{"$ref":"#/definitions/value","allOf":[],"definitions":{"value":{"type":"integer"}}}`,
+	} {
+		schema, err := types.ParseStringToByteJson(schemaText)
+		require.NoError(t, err)
+		compiled, err := compileMySQLDraft4Schema(context.Background(), "json_schema_valid", schema)
+		require.NoError(t, err)
+		result, err := compiled.Validate(gojsonschema.NewStringLoader(`1`))
+		require.NoError(t, err)
+		if strings.Contains(schemaText, `"enum"`) {
+			require.False(t, result.Valid())
+		} else {
+			require.True(t, result.Valid())
 		}
 	}
 }
