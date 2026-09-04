@@ -570,6 +570,78 @@ func TestVarlenPinAmplificationMaterializes(t *testing.T) {
 	alloc.AssertSize(t, 0)
 }
 
+func TestFixedBinaryConversionPadsToDeclaredWidth(t *testing.T) {
+	for _, forceMaterialize := range []bool{false, true} {
+		t.Run(map[bool]string{false: "normal", true: "forced-materialize"}[forceMaterialize], func(t *testing.T) {
+			alloc := memory.NewCheckedAllocator(memory.NewGoAllocator())
+			builder := array.NewBinaryBuilder(alloc, arrow.BinaryTypes.Binary)
+			value := []byte("payload-longer-than-inline")
+			builder.Append(value)
+			arr := builder.NewArray()
+			builder.Release()
+			schema := arrow.NewSchema([]arrow.Field{{Name: "b", Type: arrow.BinaryTypes.Binary}}, nil)
+			record := array.NewRecordBatch(schema, []arrow.Array{arr}, 1)
+			target := types.New(types.T_binary, int32(len(value)+3), 0)
+			plan, err := BindLoad(context.Background(), schema,
+				[]TargetColumn{{Name: "b", Type: target}}, MatchByName)
+			require.NoError(t, err)
+			mp := mpool.MustNewZero()
+
+			bat, _, err := plan.Convert(context.Background(), record, mp, ConvertOptions{
+				ForceMaterialize:    forceMaterialize,
+				MaxPinAmplification: 100,
+			})
+			require.NoError(t, err)
+			expected := append(append([]byte(nil), value...), 0, 0, 0)
+			require.Equal(t, expected, bat.Vecs[0].GetBytesAt(0))
+			require.False(t, bat.Vecs[0].HasBorrowedBacking(),
+				"padding requires an owned MatrixOne value")
+
+			bat.Clean(mp)
+			record.Release()
+			arr.Release()
+			require.Zero(t, mp.CurrNB())
+			alloc.AssertSize(t, 0)
+		})
+	}
+
+	t.Run("dictionary", func(t *testing.T) {
+		alloc := memory.NewCheckedAllocator(memory.NewGoAllocator())
+		indicesBuilder := array.NewInt8Builder(alloc)
+		indicesBuilder.Append(0)
+		indices := indicesBuilder.NewArray()
+		indicesBuilder.Release()
+		valuesBuilder := array.NewBinaryBuilder(alloc, arrow.BinaryTypes.Binary)
+		valuesBuilder.Append([]byte("ab"))
+		values := valuesBuilder.NewArray()
+		valuesBuilder.Release()
+		dictionaryType := &arrow.DictionaryType{
+			IndexType: arrow.PrimitiveTypes.Int8,
+			ValueType: arrow.BinaryTypes.Binary,
+		}
+		dictionary := array.NewDictionaryArray(dictionaryType, indices, values)
+		schema := arrow.NewSchema([]arrow.Field{{Name: "b", Type: dictionaryType}}, nil)
+		record := array.NewRecordBatch(schema, []arrow.Array{dictionary}, 1)
+		plan, err := BindLoad(context.Background(), schema, []TargetColumn{{
+			Name: "b", Type: types.New(types.T_binary, 4, 0),
+		}}, MatchByName)
+		require.NoError(t, err)
+		mp := mpool.MustNewZero()
+
+		bat, _, err := plan.Convert(context.Background(), record, mp, ConvertOptions{})
+		require.NoError(t, err)
+		require.Equal(t, []byte{'a', 'b', 0, 0}, bat.Vecs[0].GetBytesAt(0))
+
+		bat.Clean(mp)
+		record.Release()
+		dictionary.Release()
+		indices.Release()
+		values.Release()
+		require.Zero(t, mp.CurrNB())
+		alloc.AssertSize(t, 0)
+	})
+}
+
 func TestForceMaterializeBorrowEligibleColumns(t *testing.T) {
 	alloc := memory.NewCheckedAllocator(memory.NewGoAllocator())
 	ints := array.NewInt64Builder(alloc)

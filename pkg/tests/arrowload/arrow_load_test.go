@@ -230,7 +230,9 @@ func testArrowTypeMatrixTimestampDict(t *testing.T, db *sql.DB) {
 
 func testArrowTypeMatrixLongBinary(t *testing.T, db *sql.DB) {
 	mustExec(t, db, "drop table if exists bin_matrix")
+	mustExec(t, db, "drop table if exists fixed_bin_matrix")
 	mustExec(t, db, "create table bin_matrix(id bigint not null, payload varbinary(200))")
+	mustExec(t, db, "create table fixed_bin_matrix(id bigint not null, payload binary(200))")
 	longA := strings.Repeat("A", 40)
 	longB := strings.Repeat("B", 64)
 	rows := []binaryRow{
@@ -240,14 +242,26 @@ func testArrowTypeMatrixLongBinary(t *testing.T, db *sql.DB) {
 	for _, container := range []string{containerFile, containerStream} {
 		t.Run(container, func(t *testing.T) {
 			mustExec(t, db, "truncate table bin_matrix")
+			mustExec(t, db, "truncate table fixed_bin_matrix")
 			path := fixtureLongBinary(t, t.TempDir(), "bin_"+container+".arrow", container, rows)
 			mustExec(t, db, fmt.Sprintf(
 				"load data infile {'filepath'='%s','format'='arrow'} into table bin_matrix", path))
+			mustExec(t, db, fmt.Sprintf(
+				"load data infile {'filepath'='%s','format'='arrow'} into table fixed_bin_matrix", path))
 			require.Equal(t, int64(2), queryCount(t, db, "select count(*) from bin_matrix"))
 			require.Equal(t, int64(1), queryCount(t, db,
 				fmt.Sprintf("select count(*) from bin_matrix where id=1 and payload='%s'", longA)))
 			require.Equal(t, int64(1), queryCount(t, db,
 				fmt.Sprintf("select count(*) from bin_matrix where id=2 and payload='%s'", longB)))
+			for _, row := range rows {
+				var stored []byte
+				require.NoError(t, db.QueryRow(
+					"select payload from fixed_bin_matrix where id = ?", row.id,
+				).Scan(&stored))
+				require.Len(t, stored, 200)
+				require.Equal(t, row.payload, stored[:len(row.payload)])
+				require.Equal(t, make([]byte, 200-len(row.payload)), stored[len(row.payload):])
+			}
 		})
 	}
 }
