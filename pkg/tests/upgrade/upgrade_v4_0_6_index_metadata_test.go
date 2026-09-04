@@ -131,3 +131,100 @@ func runV406TenantUpgrade(t *testing.T, ctx context.Context, cn embed.ServiceOpe
 		WithAccountID(catalog.System_Account).
 		WithWaitCommittedLogApplied()))
 }
+
+// The migration widens the metadata table with ALTER TABLE ADD COLUMN, which MO resolves to
+// AlterTable_COPY: the table is rebuilt from constructCreateTableSQL, and that generator cannot
+// express relkind. For an index metadata table relkind is the ONLY thing keeping it out of the
+// relkind-keyed filters -- buildTableInfoListWhereClause hides it with `relkind not in (...)`
+// and applies its __mo_index_% name fallback only inside mo_catalog -- so losing it makes the
+// table visible to snapshot restore, PITR restore and CLONE as if it were a user table.
+//
+// The unit tests pin the mechanism (the option carries a kind, alter.go sets it,
+// buildCreateTable adopts it). This pins the OUTCOME: run the real migration against a real
+// cluster and require the kind to survive it.
+func TestV406UpgradeKeepsIndexMetadataHidden(t *testing.T) {
+	embed.RunSingleCNBaseClusterTests(t, func(cluster embed.Cluster) {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+		defer cancel()
+
+		cn, err := cluster.GetCNService(0)
+		require.NoError(t, err)
+		port := cn.GetServiceConfig().CN.Frontend.Port
+		db, err := sql.Open("mysql", fmt.Sprintf("dump:111@tcp(127.0.0.1:%d)/", port))
+		require.NoError(t, err)
+		defer db.Close()
+
+		conn, err := db.Conn(ctx)
+		require.NoError(t, err)
+		defer conn.Close()
+
+		const dbName = "idx_meta_hidden_upgrade"
+		exec := func(q string, args ...any) {
+			t.Helper()
+			_, err := conn.ExecContext(ctx, fmt.Sprintf(q, args...))
+			require.NoError(t, err, q)
+		}
+
+		exec("set experimental_hnsw_index = 1")
+		exec("drop database if exists %s", dbName)
+		exec("create database %s", dbName)
+		exec("use %s", dbName)
+		exec("create table t(id bigint primary key, v vecf32(3))")
+		exec("insert into t values (1,'[1,2,3]'),(2,'[4,5,6]')")
+		exec("create index idx using hnsw on t(v) op_type 'vector_l2_ops'")
+
+		var metaTable string
+		require.NoError(t, conn.QueryRowContext(ctx, fmt.Sprintf(
+			"select index_table_name from %s.mo_indexes where algo_table_type = '%s' "+
+				"and table_id in (select rel_id from %s.mo_tables where reldatabase = '%s' and relname = 't')",
+			catalog.MO_CATALOG, catalog.Hnsw_TblType_Metadata, catalog.MO_CATALOG, dbName)).Scan(&metaTable))
+		require.NotEmpty(t, metaTable)
+
+		relKind := func() string {
+			t.Helper()
+			var k string
+			require.NoError(t, conn.QueryRowContext(ctx, fmt.Sprintf(
+				"select relkind from %s.mo_tables where reldatabase = '%s' and relname = '%s'",
+				catalog.MO_CATALOG, dbName, metaTable)).Scan(&k))
+			return k
+		}
+		// hiddenByRelKind reproduces the predicate the restore/CLONE table listing uses
+		// (pkg/frontend/snapshot.go buildTableInfoListWhereClause): a hidden index table must
+		// NOT appear among the tables that listing would carry.
+		hiddenByRelKind := func() bool {
+			t.Helper()
+			var n int
+			require.NoError(t, conn.QueryRowContext(ctx, fmt.Sprintf(
+				"select count(*) from %s.mo_tables where reldatabase = '%s' and relname = '%s' "+
+					"and relkind not in ('%s','%s','%s','%s','%s')",
+				catalog.MO_CATALOG, dbName, metaTable,
+				catalog.SystemIndexRel,
+				catalog.Hnsw_TblType_Metadata, catalog.Cagra_TblType_Metadata,
+				catalog.Ivfpq_TblType_Metadata, catalog.FullText2Index_TblType_Metadata)).Scan(&n))
+			return n == 0
+		}
+
+		before := relKind()
+		require.Equal(t, catalog.Hnsw_TblType_Metadata, before,
+			"a fresh hnsw metadata table carries its algorithm's kind")
+		require.True(t, hiddenByRelKind(), "and is excluded from the restore/CLONE listing")
+
+		// Legacy shape, so the upgrade actually has work to do and really runs the ALTER.
+		// DROP COLUMN is itself an AlterTable_COPY, so this also covers the rebuild in the
+		// other direction; asserting here rather than only at the end localises a failure to
+		// the operation that caused it.
+		exec("alter table `%s`.`%s` drop column %s", dbName, metaTable, catalog.Hnsw_TblCol_Metadata_Build_Ts)
+		exec("alter table `%s`.`%s` drop column %s", dbName, metaTable, catalog.Hnsw_TblCol_Metadata_Nrow)
+		require.Equal(t, before, relKind(), "DROP COLUMN's rebuild must keep the kind too")
+
+		runV406TenantUpgrade(t, ctx, cn)
+
+		require.Equal(t, before, relKind(),
+			"the migration's ALTER must not change the table's kind; losing it un-hides the "+
+				"table from snapshot restore, PITR restore and CLONE")
+		require.True(t, hiddenByRelKind(),
+			"and it stays out of the listing those paths build")
+
+		exec("drop database if exists %s", dbName)
+	})
+}
