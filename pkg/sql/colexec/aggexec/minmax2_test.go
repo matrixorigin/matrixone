@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"encoding/binary"
 	"fmt"
+	"math"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -98,6 +99,51 @@ func TestJsonMinMaxUsesJsonComparisonOrder(t *testing.T) {
 			})
 		}
 	}
+}
+
+func TestJsonMaxNonFiniteMergeUsesFallbackOrder(t *testing.T) {
+	values := []bytejson.ByteJson{
+		minMaxFloatJSON(math.Float64bits(math.NaN())),
+		minMaxFloatJSON(0x7ff8000000000001),
+		minMaxFloatJSON(0xfff8000000000001),
+	}
+	want := values[0]
+	for _, value := range values[1:] {
+		if bytes.Compare(want.Data, value.Data) < 0 {
+			want = value
+		}
+	}
+
+	for _, partitions := range [][][]bytejson.ByteJson{
+		{{values[0]}, {values[1], values[2]}},
+		{{values[2]}, {values[0], values[1]}},
+	} {
+		mp := mpool.MustNewZero()
+		left := makeMinMaxExec(mp, AggIdOfMax, false, types.T_json.ToType())
+		right := makeMinMaxExec(mp, AggIdOfMax, false, types.T_json.ToType())
+		require.NoError(t, left.GroupGrow(1))
+		require.NoError(t, right.GroupGrow(1))
+		leftInput := newMinMaxJSONVector(t, mp, partitions[0])
+		rightInput := newMinMaxJSONVector(t, mp, partitions[1])
+		require.NoError(t, left.BulkFill(0, []*vector.Vector{leftInput}))
+		require.NoError(t, right.BulkFill(0, []*vector.Vector{rightInput}))
+		require.NoError(t, left.Merge(right, 0, 0))
+		result, err := left.Flush()
+		require.NoError(t, err)
+		require.Equal(t, want, types.DecodeJson(result[0].GetBytesAt(0)))
+		result[0].Free(mp)
+		leftInput.Free(mp)
+		rightInput.Free(mp)
+		left.Free()
+		right.Free()
+		require.Zero(t, mp.CurrNB())
+	}
+}
+
+func minMaxFloatJSON(bits uint64) bytejson.ByteJson {
+	data := make([]byte, 8)
+	binary.LittleEndian.PutUint64(data, bits)
+	return bytejson.ByteJson{Type: bytejson.TpCodeFloat64, Data: data}
 }
 
 func mustParseMinMaxJSON(t *testing.T, input string) bytejson.ByteJson {

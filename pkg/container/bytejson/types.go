@@ -18,6 +18,8 @@ import (
 	"bytes"
 	"encoding/binary"
 	"math"
+
+	"github.com/matrixorigin/matrixone/pkg/internal/bytejsonvalidate"
 )
 
 type subPathType byte
@@ -300,99 +302,15 @@ func byteJsonTypeRank(value ByteJson) (jsonTypeRank, bool) {
 }
 
 func isValidByteJsonStringEncoding(data []byte) bool {
-	payloadLength, prefixLength := binary.Uvarint(data)
-	return prefixLength > 0 && payloadLength == uint64(len(data)-prefixLength)
-}
-
-func isValidByteJsonContainerHeader(value ByteJson) bool {
-	if len(value.Data) < headerSize {
-		return false
-	}
-	count := uint64(endian.Uint32(value.Data))
-	tableEntrySize := uint64(valEntrySize)
-	if value.Type == TpCodeObject {
-		tableEntrySize += uint64(keyEntrySize)
-	}
-	minimumSize := uint64(headerSize) + count*tableEntrySize
-	documentSize := uint64(endian.Uint32(value.Data[docSizeOff:]))
-	return minimumSize <= documentSize && documentSize == uint64(len(value.Data))
+	_, ok := bytejsonvalidate.UvarintPayload(data)
+	return ok
 }
 
 func isValidByteJsonContainer(value ByteJson) bool {
-	if !isValidByteJsonContainerHeader(value) {
-		return false
-	}
-
-	count := uint64(endian.Uint32(value.Data))
-	keyTableSize := uint64(0)
-	if value.Type == TpCodeObject {
-		keyTableSize = count * uint64(keyEntrySize)
-	}
-	valueTableStart := uint64(headerSize) + keyTableSize
-	payloadStart := valueTableStart + count*uint64(valEntrySize)
-	documentSize := uint64(len(value.Data))
-
-	if value.Type == TpCodeObject {
-		for i := uint64(0); i < count; i++ {
-			entryOffset := uint64(headerSize) + i*uint64(keyEntrySize)
-			keyOffset := uint64(endian.Uint32(value.Data[entryOffset:]))
-			keyLength := uint64(endian.Uint16(value.Data[entryOffset+keyOriginOff:]))
-			if keyOffset < payloadStart || keyOffset > documentSize || keyLength > documentSize-keyOffset {
-				return false
-			}
-		}
-	}
-
-	for i := uint64(0); i < count; i++ {
-		entryOffset := valueTableStart + i*uint64(valEntrySize)
-		childType := TpCode(value.Data[entryOffset])
-		var child ByteJson
-		if childType == TpCodeLiteral {
-			child = ByteJson{Type: childType, Data: value.Data[entryOffset+valTypeSize : entryOffset+valTypeSize+1]}
-		} else {
-			childOffset := uint64(endian.Uint32(value.Data[entryOffset+valTypeSize:]))
-			if childOffset < payloadStart || childOffset >= documentSize {
-				return false
-			}
-			childData, ok := byteJsonChildData(childType, value.Data[childOffset:])
-			if !ok {
-				return false
-			}
-			child = ByteJson{Type: childType, Data: childData}
-		}
-		if _, ok := byteJsonTypeRank(child); !ok {
-			return false
-		}
-	}
-	return true
-}
-
-func byteJsonChildData(tp TpCode, data []byte) ([]byte, bool) {
-	switch tp {
-	case TpCodeInt64, TpCodeUint64, TpCodeFloat64:
-		if len(data) < numberSize {
-			return nil, false
-		}
-		return data[:numberSize], true
-	case TpCodeString, TpCodeDecimal, TpCodeDate, TpCodeTime, TpCodeDatetime,
-		TpCodeBlob, TpCodeOpaque, TpCodeBit:
-		payloadLength, prefixLength := binary.Uvarint(data)
-		if prefixLength <= 0 || payloadLength > uint64(len(data)-prefixLength) {
-			return nil, false
-		}
-		return data[:uint64(prefixLength)+payloadLength], true
-	case TpCodeObject, TpCodeArray:
-		if len(data) < headerSize {
-			return nil, false
-		}
-		documentSize := uint64(endian.Uint32(data[docSizeOff:]))
-		if documentSize < headerSize || documentSize > uint64(len(data)) {
-			return nil, false
-		}
-		return data[:documentSize], true
-	default:
-		return nil, false
-	}
+	return bytejsonvalidate.Container(value.Type, value.Data, func(tp byte, data []byte) bool {
+		_, ok := byteJsonTypeRank(ByteJson{Type: TpCode(tp), Data: data})
+		return ok
+	})
 }
 
 func compareByteJsonContainer(left, right ByteJson, rank jsonTypeRank) (cmp int) {
@@ -450,10 +368,8 @@ func isByteJsonNumeric(tp TpCode) bool {
 // ParseNumeric. It lets a constant operand pay exact normalization once per
 // batch instead of once per compared row.
 type ParsedNumeric struct {
-	key         numericKey
-	nonFinite   float64
-	isNonFinite bool
-	valid       bool
+	key   numericKey
+	valid bool
 }
 
 // ParseNumeric validates and normalizes one ByteJSON numeric scalar without
@@ -461,14 +377,6 @@ type ParsedNumeric struct {
 func ParseNumeric(value ByteJson) (ParsedNumeric, bool) {
 	if !isValidNumericEncoding(value) {
 		return ParsedNumeric{}, false
-	}
-	if value.Type == TpCodeFloat64 {
-		floating := value.GetFloat64()
-		if math.IsNaN(floating) || math.IsInf(floating, 0) {
-			return ParsedNumeric{
-				nonFinite: floating, isNonFinite: true, valid: true,
-			}, true
-		}
 	}
 	key, ok := numericKeyFromByteJSON(value)
 	if !ok {
@@ -483,21 +391,6 @@ func ParseNumeric(value ByteJson) (ParsedNumeric, bool) {
 func CompareParsedNumeric(left, right ParsedNumeric) (comparison int, ok bool) {
 	if !left.valid || !right.valid {
 		return 0, false
-	}
-	if left.isNonFinite && right.isNonFinite {
-		return compareFloat64(left.nonFinite, right.nonFinite), true
-	}
-	if left.isNonFinite {
-		if math.IsInf(left.nonFinite, -1) {
-			return -1, true
-		}
-		return 1, true
-	}
-	if right.isNonFinite {
-		if math.IsInf(right.nonFinite, -1) {
-			return 1, true
-		}
-		return -1, true
 	}
 	return compareNumericKeys(&left.key, &right.key), true
 }
@@ -523,14 +416,16 @@ func CompareNumeric(left, right ByteJson) (comparison int, ok bool) {
 
 func isValidNumericEncoding(value ByteJson) bool {
 	switch value.Type {
-	case TpCodeInt64, TpCodeUint64, TpCodeFloat64:
-		return len(value.Data) == 8
-	case TpCodeDecimal:
-		if len(value.Data) == 0 {
+	case TpCodeInt64, TpCodeUint64:
+		return len(value.Data) == numberSize
+	case TpCodeFloat64:
+		if len(value.Data) != numberSize {
 			return false
 		}
-		payloadLength, prefixLength := binary.Uvarint(value.Data)
-		return prefixLength > 0 && payloadLength == uint64(len(value.Data)-prefixLength)
+		floating := value.GetFloat64()
+		return !math.IsNaN(floating) && !math.IsInf(floating, 0)
+	case TpCodeDecimal:
+		return isValidByteJsonStringEncoding(value.Data)
 	default:
 		return false
 	}
@@ -573,9 +468,6 @@ func compareByteJsonNumeric(left, right ByteJson) int {
 }
 
 func compareByteJsonNumericExact(left, right ByteJson) int {
-	if cmp, handled := compareNonFiniteNumeric(left, right); handled {
-		return cmp
-	}
 	leftKey, leftOK := numericKeyFromByteJSON(left)
 	rightKey, rightOK := numericKeyFromByteJSON(right)
 	if leftOK && rightOK {

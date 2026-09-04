@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"encoding/base64"
 	"encoding/binary"
+	"math"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -138,6 +139,8 @@ func TestCompareByteJsonMalformedValuesUseGlobalFallbackDomain(t *testing.T) {
 		makeBinaryJson(TpCodeBlob, []byte("not-base64")),
 		makeBinaryJson(TpCodeBlob, []byte(persistedBitPrefix+"not-base64")),
 		{Type: TpCodeLiteral, Data: []byte{LiteralNull, 0xff}},
+		makeFloatJSONFromBits(math.Float64bits(math.NaN())),
+		{Type: TpCodeString, Data: []byte{0x80, 0}},
 	}
 
 	for _, left := range valid {
@@ -167,6 +170,52 @@ func TestCompareByteJsonRejectsOversizedLiteral(t *testing.T) {
 	oversized := ByteJson{Type: TpCodeLiteral, Data: []byte{LiteralNull, 0xff}}
 	require.NotZero(t, CompareByteJson(makeJson(t, "null"), oversized))
 	require.Zero(t, CompareByteJson(oversized, oversized))
+}
+
+func TestCompareByteJsonRejectsNonFiniteNumbers(t *testing.T) {
+	values := []ByteJson{
+		makeFloatJSONFromBits(math.Float64bits(math.NaN())),
+		makeFloatJSONFromBits(0x7ff8000000000001),
+		makeFloatJSONFromBits(0xfff8000000000001),
+		makeFloatJSONFromBits(math.Float64bits(math.Inf(1))),
+		makeFloatJSONFromBits(math.Float64bits(math.Inf(-1))),
+	}
+	valid := makeBinaryJson(TpCodeOpaque, []byte{0xff})
+
+	for i := range values {
+		require.Zero(t, CompareByteJson(values[i], values[i]), "reflexivity for value %d", i)
+		require.Less(t, CompareByteJson(valid, values[i]), 0,
+			"non-finite value %d must use the malformed fallback domain", i)
+		for j := range values {
+			leftRight := compareSign(CompareByteJson(values[i], values[j]))
+			rightLeft := compareSign(CompareByteJson(values[j], values[i]))
+			require.Equal(t, -leftRight, rightLeft, "antisymmetry for (%d, %d)", i, j)
+		}
+	}
+}
+
+func TestCompareByteJsonRejectsNonMinimalUvarints(t *testing.T) {
+	for _, tp := range []TpCode{TpCodeString, TpCodeDate, TpCodeTime, TpCodeDatetime} {
+		minimal := ByteJson{Type: tp, Data: []byte{0}}
+		nonMinimal := ByteJson{Type: tp, Data: []byte{0x80, 0}}
+		require.NotZero(t, CompareByteJson(minimal, nonMinimal), "type %d", tp)
+		require.Zero(t, CompareByteJson(nonMinimal, nonMinimal), "type %d", tp)
+	}
+	minimalDecimal := ByteJson{Type: TpCodeDecimal, Data: []byte{1, '1'}}
+	nonMinimalDecimal := ByteJson{Type: TpCodeDecimal, Data: []byte{0x81, 0, '1'}}
+	require.NotZero(t, CompareByteJson(minimalDecimal, nonMinimalDecimal))
+
+	minimalNested, err := CreateByteJSON([]any{ByteJson{Type: TpCodeString, Data: []byte{0}}})
+	require.NoError(t, err)
+	nonMinimalNested, err := CreateByteJSON([]any{ByteJson{Type: TpCodeString, Data: []byte{0x80, 0}}})
+	require.NoError(t, err)
+	require.NotZero(t, CompareByteJson(minimalNested, nonMinimalNested))
+}
+
+func makeFloatJSONFromBits(bits uint64) ByteJson {
+	data := make([]byte, numberSize)
+	endian.PutUint64(data, bits)
+	return ByteJson{Type: TpCodeFloat64, Data: data}
 }
 
 func TestCompareByteJsonOpaqueBinaryUsesRawBytes(t *testing.T) {

@@ -25,6 +25,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/bytejson"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/internal/bytejsonvalidate"
 )
 
 // ValidVectors verifies that each vector covers the requested logical rows.
@@ -204,11 +205,17 @@ func CanonicalFloat64Bytes(value float64) [8]byte {
 // CanonicalJSONSize returns the exact resident key size for one binary JSON
 // value. Arrays and objects are walked recursively because scalar JSON
 // equality also identifies numeric forms below the root.
+const canonicalJSONMalformedMarker byte = 0
+
 func CanonicalJSONSize(value []byte) int {
 	if len(value) == 0 {
 		return 0
 	}
-	return canonicalByteJSONSize(types.DecodeJson(value))
+	decoded := types.DecodeJson(value)
+	if !canonicalByteJSONValid(decoded) {
+		return 1 + len(value)
+	}
+	return canonicalByteJSONSize(decoded)
 }
 
 func canonicalByteJSONSize(value bytejson.ByteJson) int {
@@ -246,7 +253,37 @@ func AppendCanonicalJSON(dst, value []byte) []byte {
 	if len(value) == 0 {
 		return dst
 	}
-	return appendCanonicalByteJSON(dst, types.DecodeJson(value))
+	decoded := types.DecodeJson(value)
+	if !canonicalByteJSONValid(decoded) {
+		dst = append(dst, canonicalJSONMalformedMarker)
+		return append(dst, value...)
+	}
+	return appendCanonicalByteJSON(dst, decoded)
+}
+
+func canonicalByteJSONValid(value bytejson.ByteJson) bool {
+	switch value.Type {
+	case bytejson.TpCodeLiteral:
+		return len(value.Data) == 1 &&
+			(value.Data[0] == bytejson.LiteralNull ||
+				value.Data[0] == bytejson.LiteralTrue ||
+				value.Data[0] == bytejson.LiteralFalse)
+	case bytejson.TpCodeInt64, bytejson.TpCodeUint64, bytejson.TpCodeFloat64, bytejson.TpCodeDecimal:
+		_, ok := bytejson.CanonicalNumberSize(value)
+		return ok
+	case bytejson.TpCodeString, bytejson.TpCodeDate, bytejson.TpCodeTime, bytejson.TpCodeDatetime:
+		_, ok := bytejsonvalidate.UvarintPayload(value.Data)
+		return ok
+	case bytejson.TpCodeBlob, bytejson.TpCodeOpaque, bytejson.TpCodeBit:
+		_, ok := bytejson.CanonicalBinarySize(value)
+		return ok
+	case bytejson.TpCodeArray, bytejson.TpCodeObject:
+		return bytejsonvalidate.Container(value.Type, value.Data, func(tp byte, data []byte) bool {
+			return canonicalByteJSONValid(bytejson.ByteJson{Type: bytejson.TpCode(tp), Data: data})
+		})
+	default:
+		return false
+	}
 }
 
 func appendCanonicalByteJSON(dst []byte, value bytejson.ByteJson) []byte {
