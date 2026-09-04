@@ -247,6 +247,19 @@ func resolveS3CopySource(fs FileService, filePath string) (*S3FS, string, error)
 	}
 }
 
+// IsS3BackedFileService reports whether filePath resolves to an S3FS through
+// the supplied FileService. Callers that enforce storage-specific policy must
+// resolve FileServices and SubPath wrappers instead of relying on the visible
+// service name: deployments may give an S3-backed service an arbitrary name.
+// Resolution is metadata-only and never opens the object store.
+func IsS3BackedFileService(fs FileService, filePath string) bool {
+	if fs == nil {
+		return false
+	}
+	s3, _, err := resolveS3CopySource(fs, filePath)
+	return err == nil && s3 != nil
+}
+
 func (s *S3FS) AllocateCacheData(ctx context.Context, size int) fscache.Data {
 	if s.memCache != nil {
 		return s.memCache.AllocateCacheData(ctx, size)
