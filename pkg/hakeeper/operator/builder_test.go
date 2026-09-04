@@ -25,6 +25,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/pb/logservice"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestAddReplica(t *testing.T) {
@@ -222,4 +223,49 @@ func TestRemoveNonVotingBuild(t *testing.T) {
 			Epoch:     1,
 		},
 	}, build.steps[0])
+}
+
+func TestRemoveBuildTargetSelection(t *testing.T) {
+	t.Run("last voting replica has no safe target", func(t *testing.T) {
+		logShard := logservice.LogShardInfo{
+			ShardID:  1,
+			Replicas: map[uint64]string{1: "a"},
+			Epoch:    1,
+		}
+
+		op, err := NewBuilder("", logShard).RemovePeer("a").Build()
+		require.ErrorContains(t, err, "without a retained voting peer")
+		assert.Nil(t, op)
+	})
+
+	t.Run("non-voting replica has no safe target without voting peers", func(t *testing.T) {
+		logShard := logservice.LogShardInfo{
+			ShardID:           1,
+			NonVotingReplicas: map[uint64]string{2: "b"},
+			Epoch:             1,
+		}
+
+		op, err := NewBuilder("", logShard).RemoveNonVotingPeer("b").Build()
+		require.ErrorContains(t, err, "without a retained voting peer")
+		assert.Nil(t, op)
+	})
+
+	t.Run("mixed change targets an existing retained peer", func(t *testing.T) {
+		logShard := logservice.LogShardInfo{
+			ShardID:  1,
+			Replicas: map[uint64]string{1: "b", 2: "c"},
+			Epoch:    1,
+		}
+
+		op, err := NewBuilder("", logShard).
+			RemovePeer("c").
+			AddPeer("a", 3).
+			Build()
+		require.NoError(t, err)
+		require.Len(t, op.steps, 2)
+		step, ok := op.steps[0].(RemoveLogService)
+		require.True(t, ok)
+		assert.Equal(t, "b", step.Target)
+		assert.Equal(t, "b", generateScheduleCommand(step).UUID)
+	})
 }

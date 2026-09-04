@@ -226,40 +226,50 @@ func (b *Builder) prepareBuild() string {
 	return b.brief()
 }
 
-func (b *Builder) buildToRemoveSteps() *Builder {
-	for len(b.toRemove) > 0 {
-		var targets []string
-		for target := range b.targetPeers {
+func (b *Builder) selectRemoveTarget() (string, error) {
+	var targets []string
+	for target, replicaID := range b.targetPeers {
+		if originReplicaID, ok := b.originPeers[target]; ok && originReplicaID == replicaID {
 			targets = append(targets, target)
 		}
-		slices.Sort(targets)
+	}
+	if len(targets) == 0 {
+		return "", moerr.NewInternalErrorNoCtx("cannot build remove step without a retained voting peer")
+	}
+	slices.Sort(targets)
+	return targets[0], nil
+}
 
+func (b *Builder) buildToRemoveSteps() error {
+	for len(b.toRemove) > 0 {
+		target, err := b.selectRemoveTarget()
+		if err != nil {
+			return err
+		}
 		uuid, replicaID := b.toRemove.Get()
 		b.steps = append(b.steps, RemoveLogService{
-			Target:  targets[0],
+			Target:  target,
 			Replica: Replica{uuid, b.shardID, replicaID, b.epoch},
 		})
 		delete(b.toRemove, uuid)
 	}
-	return b
+	return nil
 }
 
-func (b *Builder) buildToRemoveNonVotingSteps() *Builder {
+func (b *Builder) buildToRemoveNonVotingSteps() error {
 	for len(b.toRemoveNonVoting) > 0 {
-		var targets []string
-		for target := range b.targetPeers {
-			targets = append(targets, target)
+		target, err := b.selectRemoveTarget()
+		if err != nil {
+			return err
 		}
-		slices.Sort(targets)
-
 		uuid, replicaID := b.toRemoveNonVoting.Get()
 		b.steps = append(b.steps, RemoveNonVotingLogService{
-			Target:  targets[0],
+			Target:  target,
 			Replica: Replica{uuid, b.shardID, replicaID, b.epoch},
 		})
 		delete(b.toRemoveNonVoting, uuid)
 	}
-	return b
+	return nil
 }
 
 func (b *Builder) buildToAddSteps() *Builder {
@@ -309,10 +319,14 @@ func (b *Builder) buildToAddNonVotingSteps() *Builder {
 }
 
 func (b *Builder) buildSteps() error {
-	b.buildToRemoveSteps().
-		buildToAddSteps().
-		buildToRemoveNonVotingSteps().
-		buildToAddNonVotingSteps()
+	if err := b.buildToRemoveSteps(); err != nil {
+		return err
+	}
+	b.buildToAddSteps()
+	if err := b.buildToRemoveNonVotingSteps(); err != nil {
+		return err
+	}
+	b.buildToAddNonVotingSteps()
 	if len(b.steps) == 0 {
 		return moerr.NewInternalErrorNoCtx("no operator step is built")
 	}
