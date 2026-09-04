@@ -710,6 +710,24 @@ func TestJsonSchemaRefKeywordDetection(t *testing.T) {
 		s, info := fcTC.Run()
 		require.True(t, s, info)
 	})
+
+	t.Run("non-string ref at schema position is rejected", func(t *testing.T) {
+		tc := tcTemp{
+			info: "json_schema_valid non-string schema ref",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(),
+					[]string{`{"properties":{"a":{"$ref":1}}}`},
+					[]bool{false}),
+				NewFunctionTestInput(types.T_varchar.ToType(),
+					[]string{`{"a":1}`},
+					[]bool{false}),
+			},
+			expect: NewFunctionTestResult(types.T_bool.ToType(), true, []bool{false}, []bool{false}),
+		}
+		fcTC := NewFunctionTestCase(proc, tc.inputs, tc.expect, JsonSchemaValid)
+		s, info := fcTC.Run()
+		require.True(t, s, info)
+	})
 }
 
 func TestJsonSchemaStringRefDetection(t *testing.T) {
