@@ -500,6 +500,7 @@ message ExternalScan {
   plan.DataStreamScan datastream_scan = 24;
   plan.ForeignScan foreign_scan = 25;
   plan.KafkaScan kafka_scan = 26;
+  bool parquet_whole_file_fanout = 27;
 }
 
 message TableScan {

@@ -1307,6 +1307,70 @@ func TestExternalScanParquetRowGroupShardsRoundtrip(t *testing.T) {
 	require.True(t, restoredExternal.Es.StrictSqlMode)
 }
 
+func TestExternalScanParquetWholeFileFanoutRoundtrip(t *testing.T) {
+	ctx := &scopeContext{
+		id:     1,
+		root:   &scopeContext{},
+		parent: &scopeContext{},
+	}
+	proc := &process.Process{}
+	proc.Base = &process.BaseProcess{}
+
+	op := external.NewArgument().WithEs(
+		&external.ExternalParam{
+			ExParamConst: external.ExParamConst{
+				FileList:               []string{"s3://bucket/part.parquet"},
+				FileSize:               []int64{8192},
+				FileOffsetTotal:        []*pipeline.FileOffset{{Offset: []int64{0, -1}}},
+				ParquetWholeFileFanout: true,
+			},
+			ExParam: external.ExParam{
+				Fileparam: &external.ExFileparam{},
+				Filter:    &external.FilterParam{},
+			},
+		},
+	)
+
+	_, pipeInstr, err := convertToPipelineInstruction(op, proc, ctx, 1)
+	require.NoError(t, err)
+	require.True(t, pipeInstr.ExternalScan.ParquetWholeFileFanout)
+
+	restored, err := convertToVmOperator(pipeInstr, ctx, nil)
+	require.NoError(t, err)
+	restoredExternal := restored.(*external.External)
+	require.True(t, restoredExternal.Es.ParquetWholeFileFanout)
+	require.Empty(t, restoredExternal.Es.ParquetRowGroupShards)
+}
+
+func TestParquetWholeFileFanoutRemoteProtocolValidationAtSendAndReceiveBoundaries(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	rt := moruntime.ServiceRuntime(proc.GetService())
+	previous, hadPrevious := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
+	t.Cleanup(func() {
+		if hadPrevious {
+			rt.SetGlobalVariables(moruntime.MOProtocolVersion, previous)
+		} else {
+			rt.CompareAndDeleteGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion44)
+		}
+	})
+
+	scope := &Scope{Proc: proc, RootOp: external.NewArgument().WithEs(
+		&external.ExternalParam{
+			ExParamConst: external.ExParamConst{ParquetWholeFileFanout: true},
+			ExParam:      external.ExParam{Fileparam: &external.ExFileparam{}, Filter: &external.FilterParam{}},
+		},
+	)}
+
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion45)
+	data, err := encodeRemoteScope(scope, proc)
+	require.NoError(t, err)
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion44)
+	_, err = encodeRemoteScope(scope, proc)
+	require.ErrorContains(t, err, "MORPC protocol version 45")
+	_, err = decodeScope(data, proc, true, nil)
+	require.ErrorContains(t, err, "MORPC protocol version 45")
+}
+
 func TestExternalScanIcebergRuntimeRoundtrip(t *testing.T) {
 	ctx := &scopeContext{
 		id:     1,
