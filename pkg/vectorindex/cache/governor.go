@@ -285,16 +285,28 @@ func (c *VectorIndexCache) sysCacheLimit(sqlproc *sqlexec.SqlProcess) caps {
 		c.sysLimit.mu.Unlock()
 		return value
 	}
-	// Stamp the attempt and claim the refresh before releasing, so a failing catalog is
-	// retried at the same cadence as a healthy one rather than on every miss, and only one
-	// caller queries per window.
+	// Stamp the attempt and claim the refresh, so a failing catalog is retried at the same
+	// cadence as a healthy one rather than on every miss, and only one caller queries per
+	// window.
+	firstFetch := c.sysLimit.fetched.IsZero()
 	c.sysLimit.fetched = time.Now()
 	last := c.sysLimit.value
-	c.sysLimit.mu.Unlock()
 
-	// The catalog read runs WITHOUT the lock. Holding it across a query that can take the
-	// full timeout would park every concurrent cache miss behind an unreachable catalog for
-	// up to that long, even though each of them has a perfectly good last-known value to use.
+	// A REFRESH releases the lock across the query: every concurrent miss already has a
+	// last-known cap to use, so parking them behind a catalog that can take the full timeout
+	// buys nothing.
+	//
+	// The FIRST fetch keeps it. There is no last-known value yet -- c.sysLimit.value is the
+	// zero caps, which every reader would interpret as "unlimited" -- so releasing here would
+	// let every concurrent miss bypass the governor entirely until the query returns. That
+	// window is CN startup, when the cache is cold and loads arrive together, i.e. exactly
+	// when the cap matters most. Waiting for the real value is the lesser cost.
+	if !firstFetch {
+		c.sysLimit.mu.Unlock()
+	} else {
+		defer c.sysLimit.mu.Unlock()
+	}
+
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	res, err := runSysSql(ctx, cnUUID, catalog.System_Account, "", sysLimitSQL)
@@ -326,9 +338,13 @@ func (c *VectorIndexCache) sysCacheLimit(sqlproc *sqlexec.SqlProcess) caps {
 			}
 		}
 	}
-	c.sysLimit.mu.Lock()
-	c.sysLimit.value = value
-	c.sysLimit.mu.Unlock()
+	if firstFetch {
+		c.sysLimit.value = value // still holding the lock
+	} else {
+		c.sysLimit.mu.Lock()
+		c.sysLimit.value = value
+		c.sysLimit.mu.Unlock()
+	}
 	return value
 }
 

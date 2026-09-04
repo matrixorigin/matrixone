@@ -114,12 +114,13 @@ func TestBuildCreateTableKeepsCarriedRelKind(t *testing.T) {
 
 // --- ALTER TABLE -----------------------------------------------------------
 
-// ALTER TABLE ... ADD COLUMN is resolved to COPY, which rebuilds the table from
-// constructCreateTableSQL. That regenerated DDL cannot express relkind, so the replica would
-// take the kind buildCreateTable derives from its name. These pin the two halves of the fix:
-// the original's kind is present on the plan for alter.go to carry, and the generated DDL is
-// indeed missing it -- which is why carrying it is necessary at all.
-func TestAlterTableAddColumnCarriesRelKind(t *testing.T) {
+// ALTER TABLE ... ADD COLUMN resolves to COPY, which rebuilds the table from
+// constructCreateTableSQL. This pins the PRECONDITIONS of the fix, not the fix: the original
+// kind is present on the plan for alter.go to read, and the generated DDL does not carry it.
+// It passes with the fix reverted, by design -- the carrying itself is asserted by
+// TestAlterCopyCreateOptionsCarriesRelKind (compile) and its adoption by
+// TestBuildCreateTableKeepsCarriedRelKind (below).
+func TestAlterTableAddColumnCopyCannotExpressRelKind(t *testing.T) {
 	for _, kind := range []string{
 		catalog.Hnsw_TblType_Metadata,
 		catalog.Cagra_TblType_Metadata,
@@ -152,8 +153,8 @@ func TestAlterTableAddColumnCarriesRelKind(t *testing.T) {
 	}
 }
 
-// An ordinary table is unaffected: its kind is carried too, and it is the same "r" the
-// replica's name would have derived anyway, so behaviour is unchanged.
+// An ordinary table's kind is on the plan too, and it is the same "r" the replica's name
+// would have derived anyway, so carrying it changes nothing for ordinary tables.
 func TestAlterTableAddColumnOrdinaryTableKeepsOrdinaryKind(t *testing.T) {
 	mock := NewMockOptimizer(false)
 	mock.ctxt.tables["t1"].TableType = catalog.SystemOrdinaryRel

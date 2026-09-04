@@ -739,3 +739,82 @@ func TestSearchRetryDoesNotWaitWhenNothingIsBeingDestroyed(t *testing.T) {
 	}
 	require.EqualValues(t, 2, algo.calls.Load())
 }
+
+// The FIRST sys-cap read has no last-known value to fall back on: c.sysLimit.value is still
+// the zero caps, which every reader interprets as unlimited. A concurrent miss arriving while
+// that first query is in flight must therefore WAIT for the real cap rather than be told the
+// governor is unconfigured -- otherwise the whole window (up to the query timeout, at CN
+// startup, with a cold cache) runs with makeRoom and chargeAndEnforce both short-circuited.
+func TestGovernorFirstSysReadBlocksConcurrentReaders(t *testing.T) {
+	c := newBoundCache(t)
+	mp := mpool.MustNewZero()
+
+	release := make(chan struct{})
+	entered := make(chan struct{})
+	var calls atomic.Int32
+
+	withSysSql(t, c, func(context.Context, string, uint32, string, string) (executor.Result, error) {
+		if calls.Add(1) == 1 {
+			close(entered)
+			<-release // hold the first read open until the second caller is parked
+		}
+		return varRows(t, mp, maxIndexCacheSizeVar, "512"), nil
+	})
+
+	firstDone := make(chan caps, 1)
+	go func() { firstDone <- c.sysCacheLimit(sysProc()) }()
+	<-entered // the first read is now in flight, holding the claim
+
+	secondDone := make(chan caps, 1)
+	go func() { secondDone <- c.sysCacheLimit(sysProc()) }()
+
+	// The second caller must not have answered yet: an answer here could only be the zero
+	// caps, i.e. "unlimited".
+	select {
+	case got := <-secondDone:
+		t.Fatalf("a concurrent reader answered %v during the first fetch instead of waiting", got)
+	case <-time.After(50 * time.Millisecond):
+	}
+
+	close(release)
+	require.Equal(t, hostCap(512), <-firstDone)
+	require.Equal(t, hostCap(512), <-secondDone, "the waiter gets the real cap, never unlimited")
+}
+
+// A REFRESH does have a last-known value, so it must NOT block: the point of releasing the
+// lock around the query is that an unreachable catalog cannot stall every cache miss.
+func TestGovernorSysRefreshServesLastKnownWithoutBlocking(t *testing.T) {
+	c := newBoundCache(t)
+	mp := mpool.MustNewZero()
+
+	release := make(chan struct{})
+	entered := make(chan struct{})
+	var calls atomic.Int32
+
+	withSysSql(t, c, func(context.Context, string, uint32, string, string) (executor.Result, error) {
+		if calls.Add(1) == 2 {
+			close(entered)
+			<-release
+		}
+		return varRows(t, mp, maxIndexCacheSizeVar, "512"), nil
+	})
+
+	// First read completes and establishes the known cap.
+	require.Equal(t, hostCap(512), c.sysCacheLimit(sysProc()))
+
+	// Age it out so the next call refreshes, and hold that refresh open.
+	c.sysLimit.fetched = time.Now().Add(-2 * sysLimitTTL)
+	go func() { c.sysCacheLimit(sysProc()) }()
+	<-entered
+
+	// A concurrent reader is served the last-known cap immediately.
+	done := make(chan caps, 1)
+	go func() { done <- c.sysCacheLimit(sysProc()) }()
+	select {
+	case got := <-done:
+		require.Equal(t, hostCap(512), got, "served from the memo, not blocked on the refresh")
+	case <-time.After(2 * time.Second):
+		t.Fatal("a refresh must not park readers that already have a value")
+	}
+	close(release)
+}

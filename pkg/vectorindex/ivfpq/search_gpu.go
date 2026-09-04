@@ -498,6 +498,14 @@ func buildOverflowBF[B, OB cuvs.VectorType, Q cuvs.VectorType](
 				return nil, err
 			}
 		}
+		// The Go-side copies are dead once the rows are in the device index: every reader
+		// of them is in this loop. Release them here instead of holding
+		// rows * dim * sizeof(B) of heap for the cache entry's whole lifetime -- the model
+		// pointers live until Destroy, and GetIndexSize does not count these bytes, so they
+		// would be host memory the governor never sees. OverflowPkids is kept: it is
+		// 8 bytes/row against the vectors' dim * sizeof(B), and it names the rows in logs.
+		m.OverflowVecs = nil
+		m.OverflowIncludeBytes = nil
 	}
 	if err = bf.Build(); err != nil {
 		bf.Destroy()
