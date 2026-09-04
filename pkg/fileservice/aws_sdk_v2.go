@@ -23,6 +23,7 @@ import (
 	"io"
 	"iter"
 	"math"
+	nethttp "net/http"
 	"net/url"
 	gotrace "runtime/trace"
 	"slices"
@@ -364,8 +365,11 @@ func (a *AwsSDKv2) ReadObjectWithIdentity(
 	}
 	r, err := a.getObject(ctx, min, max, params)
 	if err != nil {
-		return nil, mapAWSConditionalReadError(a.mapError(err, key))
+		// Preserve the conditional-read contract before the ordinary S3 mapper
+		// turns a deleted planned version into a generic file-not-found error.
+		return nil, a.mapError(mapAWSConditionalReadError(err), key)
 	}
+	r = mapReadCloserErrors(r, mapAWSConditionalReadError)
 	if max == nil {
 		return r, nil
 	}
@@ -378,7 +382,8 @@ func (a *AwsSDKv2) ReadObjectWithIdentity(
 func mapAWSConditionalReadError(err error) error {
 	var responseError *http.ResponseError
 	if errors.As(err, &responseError) && responseError.Response != nil &&
-		responseError.Response.StatusCode == 412 {
+		(responseError.Response.StatusCode == nethttp.StatusNotFound ||
+			responseError.Response.StatusCode == nethttp.StatusPreconditionFailed) {
 		return fmt.Errorf("%w: conditional S3 read failed", ErrObjectChanged)
 	}
 	return err

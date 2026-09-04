@@ -282,6 +282,7 @@ func (a *AliyunSDK) ReadObjectWithIdentity(
 	if err != nil {
 		return nil, mapAliyunConditionalReadError(err)
 	}
+	r = mapReadCloserErrors(r, mapAliyunConditionalReadError)
 	if max == nil {
 		return r, nil
 	}
@@ -290,7 +291,9 @@ func (a *AliyunSDK) ReadObjectWithIdentity(
 
 func mapAliyunConditionalReadError(err error) error {
 	var serviceError oss.ServiceError
-	if errors.As(err, &serviceError) && serviceError.StatusCode == http.StatusPreconditionFailed {
+	if errors.As(err, &serviceError) &&
+		(serviceError.StatusCode == http.StatusNotFound ||
+			serviceError.StatusCode == http.StatusPreconditionFailed) {
 		return fmt.Errorf("%w: conditional OSS read failed", ErrObjectChanged)
 	}
 	return err

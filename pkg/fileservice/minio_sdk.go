@@ -360,6 +360,7 @@ func (a *MinioSDK) ReadObjectWithIdentity(
 		r.Close()
 		return nil, mapMinioConditionalReadError(err)
 	}
+	r = mapReadCloserErrors(r, mapMinioConditionalReadError)
 	if max == nil {
 		return r, nil
 	}
@@ -368,7 +369,7 @@ func (a *MinioSDK) ReadObjectWithIdentity(
 
 func mapMinioConditionalReadError(err error) error {
 	response := minio.ToErrorResponse(err)
-	if response.StatusCode == http.StatusPreconditionFailed {
+	if response.StatusCode == http.StatusNotFound || response.StatusCode == http.StatusPreconditionFailed {
 		return fmt.Errorf("%w: conditional S3-compatible read failed", ErrObjectChanged)
 	}
 	return err

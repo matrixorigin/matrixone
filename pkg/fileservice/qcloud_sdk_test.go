@@ -161,6 +161,12 @@ func TestQCloudSDKConditionalObjectIdentityReads(t *testing.T) {
 	var requests []*http.Request
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		requests = append(requests, r.Clone(context.Background()))
+		if r.URL.Query().Get("versionId") == "gone" {
+			w.Header().Set("Content-Type", "application/xml")
+			w.WriteHeader(http.StatusNotFound)
+			_, _ = io.WriteString(w, `<Error><Code>NoSuchVersion</Code><Message>planned version was deleted</Message></Error>`)
+			return
+		}
 		if r.URL.Query().Get("versionId") == "stale" || r.Header.Get("If-Match") == `"stale"` {
 			w.Header().Set("Content-Type", "application/xml")
 			w.WriteHeader(http.StatusPreconditionFailed)
@@ -221,6 +227,11 @@ func TestQCloudSDKConditionalObjectIdentityReads(t *testing.T) {
 	stale.VersionID = ""
 	stale.ETag = `"stale"`
 	_, err = sdk.ReadObjectWithIdentity(context.Background(), "object", &min, &max, stale)
+	require.ErrorIs(t, err, ErrObjectChanged)
+
+	gone := identity
+	gone.VersionID = "gone"
+	_, err = sdk.ReadObjectWithIdentity(context.Background(), "object", &min, &max, gone)
 	require.ErrorIs(t, err, ErrObjectChanged)
 }
 

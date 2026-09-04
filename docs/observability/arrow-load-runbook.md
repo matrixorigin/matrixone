@@ -114,8 +114,10 @@ local file, S3/stage, and distributed stages.
 1. Check the error category and the failing phase; retain the query/trace ID
    from normal logs, not a source path metric label.
 2. For `object_changed`, verify object-store versioning and whether a producer
-   overwrote a key between planning and execution. The statement must retry as
-   a whole against a newly planned object set.
+   overwrote or deleted a key, or deleted the planned version, between planning
+   and execution. Conditional `404`/`NoSuchVersion` and precondition failures
+   are both classified here. The statement must retry as a whole against a
+   newly planned object set.
 3. For `resource_exhausted`, compare retained capacity with borrowed payload,
    copy ratio, statement memory, and FileService cache pressure.
 4. For stalled cancellation, verify no new rows are published and pinned bytes

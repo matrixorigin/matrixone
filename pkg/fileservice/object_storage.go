@@ -208,6 +208,35 @@ type objectStorageIdentityReader interface {
 	) (io.ReadCloser, error)
 }
 
+// mappedErrorReadCloser keeps provider error normalization outside the
+// retryable reader. A conditional GET may succeed initially and then reopen
+// after a transport failure; errors from that later reopen are returned by
+// Read rather than by the constructor and must obey the same public contract.
+type mappedErrorReadCloser struct {
+	io.ReadCloser
+	mapError func(error) error
+}
+
+func (r *mappedErrorReadCloser) Read(buffer []byte) (int, error) {
+	n, err := r.ReadCloser.Read(buffer)
+	if err != nil {
+		err = r.mapError(err)
+	}
+	return n, err
+}
+
+func (r *mappedErrorReadCloser) Close() error {
+	err := r.ReadCloser.Close()
+	if err != nil {
+		err = r.mapError(err)
+	}
+	return err
+}
+
+func mapReadCloserErrors(reader io.ReadCloser, mapError func(error) error) io.ReadCloser {
+	return &mappedErrorReadCloser{ReadCloser: reader, mapError: mapError}
+}
+
 // objectStorageCopier is implemented by object-store SDK adapters that can
 // ask the provider to copy an object without downloading it through CN.
 type objectStorageCopier interface {

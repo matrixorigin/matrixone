@@ -292,6 +292,7 @@ func (a *QCloudSDK) ReadObjectWithIdentity(
 	if err != nil {
 		return nil, mapQCloudConditionalReadError(err)
 	}
+	r = mapReadCloserErrors(r, mapQCloudConditionalReadError)
 	if max == nil {
 		return r, nil
 	}
@@ -301,7 +302,8 @@ func (a *QCloudSDK) ReadObjectWithIdentity(
 func mapQCloudConditionalReadError(err error) error {
 	var response *cos.ErrorResponse
 	if errors.As(err, &response) && response.Response != nil &&
-		response.Response.StatusCode == http.StatusPreconditionFailed {
+		(response.Response.StatusCode == http.StatusNotFound ||
+			response.Response.StatusCode == http.StatusPreconditionFailed) {
 		return fmt.Errorf("%w: conditional COS read failed", ErrObjectChanged)
 	}
 	return err
