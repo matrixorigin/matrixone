@@ -612,6 +612,7 @@ func TestLifecyclePublishesClaimBeforeReplacementAndHeartbeat(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			r, store := newDaemonHandleTestRunner(t)
 			initial := newDaemonTaskForTest(1, test.status, r.runnerID)
+			initial.Metadata.Executor = task.TaskCode_InitCdcStableEpoch
 			initial.LastRun = time.Now().Add(-time.Minute)
 			initial.LastHeartbeat = initial.LastRun
 			mustAddTestDaemonTask(t, store, 1, initial)
@@ -629,17 +630,35 @@ func TestLifecyclePublishesClaimBeforeReplacementAndHeartbeat(t *testing.T) {
 			local.activeRoutine.Store(&routine)
 			r.addDaemonTask(local)
 
+			// Force a heartbeat after the durable CAS but before publishClaim.
+			// The old local snapshot must not cancel admission in this gap.
+			hook := &serviceWithDaemonHook{TaskService: r.service}
+			r.service = hook
+			hook.setUpdateFn(func(ctx context.Context, tasks []task.DaemonTask, conds ...Condition) (int, error) {
+				n, err := hook.TaskService.UpdateDaemonTask(ctx, tasks, conds...)
+				if n == 1 && err == nil {
+					queries := hook.queryCalls.Load()
+					require.NoError(t, test.run(tracker, r, local))
+					require.Equal(t, queries, hook.queryCalls.Load(), "duplicate admission must not wait or republish a claim")
+					r.doSendHeartbeat(ctx)
+					require.True(t, r.exists(initial.ID))
+					require.False(t, local.claimLost.Load())
+				}
+				return n, err
+			})
 			require.NoError(t, test.run(tracker, r, local))
+			require.False(t, r.relinquishDaemonClaim(local, initial), "late heartbeat must not cancel the replacement on the same pointer")
 			stored := mustGetTestDaemonTask(t, store, 1, WithTaskIDCond(EQ, initial.ID))[0]
 			require.Equal(t, task.TaskStatus_Running, stored.TaskStatus)
 			require.Equal(t, stored.LastRun, tracker.latestClaim().LastRun)
 			require.Equal(t, stored.LastRun, local.taskSnapshot().LastRun)
 
-			beforeHeartbeat := stored.LastHeartbeat
-			time.Sleep(time.Millisecond)
 			r.doSendHeartbeat(context.Background())
 			stored = mustGetTestDaemonTask(t, store, 1, WithTaskIDCond(EQ, initial.ID))[0]
-			require.True(t, stored.LastHeartbeat.After(beforeHeartbeat))
+			require.True(t, r.exists(initial.ID))
+			require.True(t, r.relinquishDaemonClaim(local, stored))
+			require.NoError(t, test.run(tracker, r, local))
+			require.True(t, local.claimLost.Load(), "a lost claim cannot readmit its cancelled routine")
 		})
 	}
 }

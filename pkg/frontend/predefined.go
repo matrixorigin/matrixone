@@ -625,7 +625,7 @@ var (
 			create_at                   timestamp not null,
 			update_at                   timestamp not null,
 				end_at                      timestamp,
-				last_run                    timestamp,
+				last_run                    timestamp(6),
 				details                     blob)`,
 		catalog.MOTaskDB)
 

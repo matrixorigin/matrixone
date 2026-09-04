@@ -302,7 +302,15 @@ type mysqlTaskStorage struct {
 }
 
 func newMysqlTaskStorage(dsn string) (TaskStorage, error) {
-	db, err := sql.Open("mysql", dsn)
+	config, err := mysql.ParseDSN(dsn)
+	if err != nil {
+		return nil, err
+	}
+	// Task updates are compare-and-swap operations: success means the owner
+	// predicate matched, not that a stored value changed. In particular, two
+	// heartbeats in one timestamp tick must not report a lost daemon claim.
+	config.ClientFoundRows = true
+	db, err := sql.Open("mysql", config.FormatDSN())
 	if err != nil {
 		return nil, err
 	}

@@ -54,6 +54,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/taskservice"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
+	"github.com/matrixorigin/matrixone/pkg/util/errutil"
 	ie "github.com/matrixorigin/matrixone/pkg/util/internalExecutor"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
@@ -2633,6 +2634,15 @@ func TestCdcTask_Resume(t *testing.T) {
 }
 
 func TestCdcTask_Restart(t *testing.T) {
+	var timeoutReports atomic.Int32
+	previousReporter := errutil.GetReportErrorFunc()
+	errutil.SetErrorReporter(func(ctx context.Context, err error, depth int) {
+		if strings.Contains(err.Error(), "CDC restart startup timed out") {
+			timeoutReports.Add(1)
+		}
+		previousReporter(ctx, err, depth)
+	})
+	t.Cleanup(func() { errutil.SetErrorReporter(previousReporter) })
 	u, _ := cdc.InitCDCWatermarkUpdaterForTest(t)
 	u.Start()
 	defer u.Stop()
@@ -2658,9 +2668,7 @@ func TestCdcTask_Restart(t *testing.T) {
 
 	err := cdcTask.Restart()
 	assert.NoErrorf(t, err, "Restart()")
-
-	// Wait a bit for the goroutine to start
-	time.Sleep(10 * time.Millisecond)
+	require.Zero(t, timeoutReports.Load(), "successful restart must not report a timeout")
 }
 
 func TestCdcTask_Pause(t *testing.T) {

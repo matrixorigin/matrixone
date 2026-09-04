@@ -780,6 +780,9 @@ func TestDaemonTaskInSqlMock(t *testing.T) {
 }
 
 func TestNewMysqlTaskStorage(t *testing.T) {
+	invalid, err := newMysqlTaskStorage("root@tcp(localhost)/mo_task?parseTime=invalid")
+	require.Error(t, err)
+	require.Nil(t, invalid)
 	store, err := newMysqlTaskStorage("root:111@tcp(127.0.0.1:3306)/mo_task")
 	require.NoError(t, err)
 	require.NotNil(t, store)

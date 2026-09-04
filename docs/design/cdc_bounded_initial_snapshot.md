@@ -222,10 +222,23 @@ captures the same object. Publishing a later claim replaces only the pointer
 used by future pipelines; existing pipelines retain the old token and fail the
 next durable check.
 
+The durable column is `timestamp(6)`, and token generation truncates the clock
+to microseconds before applying the strictly-monotonic increment. Both fresh
+bootstrap and the protocol-gated catalog upgrade install that precision. The
+taskservice SQL connection uses matched-row semantics (`CLIENT_FOUND_ROWS`):
+an identical heartbeat still proves ownership, while a different runner or
+generation matches zero rows. No extra read or retry is needed per fence.
+
 Claim checks use a five-second timeout. A transient periodic-heartbeat storage
 or network error is not proof of supersession; the runner keeps the generation
 and retries. Only explicit `ErrInvalidTask` removes and cancels that exact local
 generation.
+
+Local Resume/Restart admission and claim-loss publication share a nonblocking
+gate. A heartbeat cannot cancel the old in-memory claim while its replacement
+is between durable CAS and local publication; it retries on the next tick.
+After publication, the failed heartbeat token must still equal the local token
+before removal. A relinquished local routine cannot admit another generation.
 
 The same distinction is preserved below taskservice. `ErrInvalidTask` is
 wrapped as an owner-lost control result; transaction cleanup still runs, but the
@@ -364,6 +377,13 @@ Deterministic tests must cover:
 - no watermark for intermediate commits and final-only publication;
 - partial commit plus source DELETE/PK change converging after replay and tail;
 - claim-token immutability across Resume/Restart;
+- real SQL claim round trips, duplicate heartbeat ownership, microsecond-apart
+  replacement fencing, and monotonic generation across clock rollback;
+- old heartbeat responses during the durable/local publication gap and after
+  publication, duplicate local admission, and admission after ownership loss;
+- idempotent claim-precision upgrades and task-index checks against relation
+  definitions (task tables intentionally have no `mo_indexes` mirror rows);
+- successful restart emits no timeout report; actual timeout retains its error;
 - shared-fence watermark validation and stale buffered watermark rejection;
 - restart with a non-empty watermark reloading the durable epoch, recreated-ID
   reset classification, first collection from an empty generation-local

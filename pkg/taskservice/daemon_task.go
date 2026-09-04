@@ -236,6 +236,13 @@ func newResumeTask(r *taskRunner, t *daemonTask) *resumeTask {
 }
 
 func (t *resumeTask) Handle(ctx context.Context) error {
+	if !t.task.claimLifecycle.TryLock() {
+		return nil // The durable request remains retry-owned.
+	}
+	defer t.task.claimLifecycle.Unlock()
+	if t.task.claimLost.Load() {
+		return nil
+	}
 	handleCtx, cancel := context.WithTimeoutCause(ctx, time.Second*5, moerr.CauseResumeTaskHandle)
 	defer cancel()
 	tasks, err := t.runner.service.QueryDaemonTask(handleCtx, WithTaskIDCond(EQ, t.task.taskSnapshot().ID))
@@ -357,6 +364,13 @@ func newRestartTask(r *taskRunner, t *daemonTask) *restartTask {
 }
 
 func (t *restartTask) Handle(ctx context.Context) error {
+	if !t.task.claimLifecycle.TryLock() {
+		return nil // The durable request remains retry-owned.
+	}
+	defer t.task.claimLifecycle.Unlock()
+	if t.task.claimLost.Load() {
+		return nil
+	}
 	handleCtx, cancel := context.WithTimeoutCause(ctx, time.Second*5, moerr.CauseRestartTaskHandle)
 	defer cancel()
 	tasks, err := t.runner.service.QueryDaemonTask(handleCtx, WithTaskIDCond(EQ, t.task.taskSnapshot().ID))
@@ -791,10 +805,14 @@ type DaemonTaskClaimUpdater interface {
 }
 
 type daemonTask struct {
-	taskMu    sync.RWMutex
-	task      task.DaemonTask
-	executor  TaskExecutor
-	claimLost atomic.Bool
+	// Serializes local claim admission with ownership-loss publication, including
+	// the gap between the durable CAS and publishClaim. Heartbeats never wait
+	// behind startup or its downstream I/O: a busy lifecycle is checked next tick.
+	claimLifecycle sync.Mutex
+	taskMu         sync.RWMutex
+	task           task.DaemonTask
+	executor       TaskExecutor
+	claimLost      atomic.Bool
 	// activeRoutine is the go-routine runs in background to execute
 	// the daemon task.
 	activeRoutine atomic.Pointer[ActiveRoutine]
@@ -1296,13 +1314,10 @@ func (r *taskRunner) doSendHeartbeat(ctx context.Context) {
 			// must stop.
 			if claim.Metadata.Executor == task.TaskCode_InitCdcStableEpoch &&
 				moerr.IsMoErrCode(err, moerr.ErrInvalidTask) &&
-				dt.claimLost.CompareAndSwap(false, true) {
+				r.relinquishDaemonClaim(dt, claim) {
 				// Relinquish heartbeat ownership before cancellation. Pointer-aware
 				// removal prevents an old heartbeat snapshot from deleting a newer
 				// local generation for the same task ID.
-				if !r.removeDaemonTaskIf(claim.ID, dt) {
-					continue
-				}
 				ar := dt.activeRoutine.Load()
 				if ar != nil && *ar != nil {
 					active := *ar
@@ -1324,6 +1339,21 @@ func (r *taskRunner) doSendHeartbeat(ctx context.Context) {
 			}
 		}
 	}
+}
+
+func (r *taskRunner) relinquishDaemonClaim(dt *daemonTask, failed task.DaemonTask) bool {
+	if !dt.claimLifecycle.TryLock() {
+		return false
+	}
+	defer dt.claimLifecycle.Unlock()
+	current := dt.taskSnapshot()
+	if current.TaskRunner != failed.TaskRunner || !current.LastRun.Equal(failed.LastRun) {
+		return false // The failed heartbeat belongs to a superseded local claim.
+	}
+	if !dt.claimLost.CompareAndSwap(false, true) {
+		return false
+	}
+	return r.removeDaemonTaskIf(failed.ID, dt)
 }
 
 func (r *taskRunner) startDaemonTask(ctx context.Context, dt *daemonTask, restartClaim bool) (bool, error) {
@@ -1378,10 +1408,13 @@ func (r *taskRunner) startDaemonTask(ctx context.Context, dt *daemonTask, restar
 }
 
 func nextDaemonClaimTime(previous, now time.Time) time.Time {
+	// The durable token is timestamp(6). Canonicalize before comparing so two
+	// nanosecond clock samples cannot collapse onto the same stored generation.
+	now = now.Truncate(time.Microsecond)
 	if now.After(previous) {
 		return now
 	}
-	return previous.Add(time.Microsecond)
+	return previous.Truncate(time.Microsecond).Add(time.Microsecond)
 }
 
 func (r *taskRunner) setDaemonTaskError(ctx context.Context, dt *daemonTask, errMsg error) {

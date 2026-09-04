@@ -62,3 +62,18 @@ func TestNextDaemonClaimTimeIsMonotonicAcrossClockRollback(t *testing.T) {
 	require.True(t, next.After(previous))
 	require.Equal(t, previous.Add(time.Microsecond), next)
 }
+
+func TestNextDaemonClaimTimeSurvivesSQLPrecision(t *testing.T) {
+	previous := time.Unix(200, 123456000)
+	for _, now := range []time.Time{
+		previous.Add(-time.Second), previous, previous.Add(time.Nanosecond),
+		previous.Add(999 * time.Nanosecond), previous.Add(time.Second + 999*time.Nanosecond),
+	} {
+		next := nextDaemonClaimTime(previous, now)
+		require.True(t, next.After(previous))
+		require.Equal(t, next.Truncate(time.Microsecond), next)
+	}
+	// Legacy in-memory claims may still carry nanoseconds during transition.
+	next := nextDaemonClaimTime(previous.Add(999*time.Nanosecond), previous)
+	require.Equal(t, previous.Add(time.Microsecond), next)
+}

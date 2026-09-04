@@ -1398,6 +1398,9 @@ func (exec *CDCTaskExecutor) Restart() error {
 	if exec.callbackGeneration.Add(1) != generation+1 {
 		attempt.timeoutFence.Store(0)
 	}
+	// Constructing a moerr reports it. Only emit timeout evidence after the
+	// timeout has actually won, never during a successful restart.
+	startupTimeoutErr := moerr.NewInternalErrorNoCtx("CDC restart startup timed out")
 	_ = exec.stateMachine.SetFailed(startupTimeoutErr.Error())
 	exec.recordRestartTimeoutAsync(attempt, startupTimeoutErr)
 	return startupTimeoutErr
