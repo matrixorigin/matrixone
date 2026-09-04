@@ -76,6 +76,49 @@ type bindCursorClient struct {
 	started   chan struct{}
 }
 
+type missingOwnerKeeperClient struct {
+	bind             pb.LockTable
+	missingService   string
+	missingKeepCalls atomic.Int64
+	otherKeepCalls   atomic.Int64
+	getBindCalls     atomic.Int64
+}
+
+func (c *missingOwnerKeeperClient) AsyncSend(
+	_ context.Context,
+	req *pb.Request,
+) (*morpc.Future, error) {
+	defer releaseRequest(req)
+	if req.Method != pb.Method_KeepRemoteLock {
+		return nil, moerr.NewInternalErrorNoCtx("unexpected async request")
+	}
+	if req.LockTable.ServiceID == c.missingService {
+		c.missingKeepCalls.Add(1)
+		return nil, moerr.NewBackendCannotConnectNoCtx(
+			"lockservice service " + req.LockTable.ServiceID + " is absent from cluster inventory",
+		)
+	}
+	c.otherKeepCalls.Add(1)
+	return nil, morpc.ErrBackendCreateTimeout
+}
+
+func (c *missingOwnerKeeperClient) Send(
+	_ context.Context,
+	req *pb.Request,
+) (*pb.Response, error) {
+	if req.Method != pb.Method_GetBind {
+		return nil, moerr.NewInternalErrorNoCtx("unexpected request")
+	}
+	c.getBindCalls.Add(1)
+	resp := acquireResponse()
+	resp.GetBind.LockTable = c.bind
+	resp.GetBind.AllocatorID = c.bind.AllocatorID
+	resp.GetBind.AllocatorVersion = c.bind.Version
+	return resp, nil
+}
+
+func (*missingOwnerKeeperClient) Close() error { return nil }
+
 func (c *bindCursorClient) AsyncSend(
 	ctx context.Context,
 	req *pb.Request,
@@ -1349,6 +1392,221 @@ func TestKeepRemoteLockBindChangedRefreshFailureInvalidatesOldBind(t *testing.T)
 					closeTxn(unrelatedTxnID, unrelatedTxn)
 				},
 			)
+		})
+	}
+}
+
+func TestKeepRemoteLockMissingOwnerFencesActiveTxn(t *testing.T) {
+	testCases := []struct {
+		name              string
+		removeOldRoute    bool
+		replaceRoute      func(pb.LockTable) pb.LockTable
+		addReplacementTxn bool
+		addIntentTxn      bool
+	}{
+		{name: "route present"},
+		{name: "route absent", removeOldRoute: true, addIntentTxn: true},
+		{
+			name:           "route replaced by new generation",
+			removeOldRoute: true,
+			replaceRoute: func(bind pb.LockTable) pb.LockTable {
+				bind.ServiceID = "healthy-owner"
+				bind.Version++
+				return bind
+			},
+			addReplacementTxn: true,
+		},
+		{
+			name:           "route replaced by Changed-compatible non-exact bind",
+			removeOldRoute: true,
+			replaceRoute: func(bind pb.LockTable) pb.LockTable {
+				// Changed deliberately ignores routing metadata. Exact stale-bind
+				// invalidation must still preserve this independently published route.
+				bind.OriginTable++
+				return bind
+			},
+		},
+	}
+	for _, test := range testCases {
+		t.Run(test.name, func(t *testing.T) {
+			oldBind := pb.LockTable{
+				Group:       0,
+				Table:       1,
+				OriginTable: 1,
+				ServiceID:   "departed-owner",
+				Version:     1,
+				Valid:       true,
+				AllocatorID: "allocator",
+			}
+			newBind := oldBind
+			if test.replaceRoute != nil {
+				newBind = test.replaceRoute(newBind)
+			}
+			client := &missingOwnerKeeperClient{
+				bind:           oldBind,
+				missingService: oldBind.ServiceID,
+			}
+			logger := getLogger("")
+			fsp := newFixedSlicePool(4)
+			svc := &service{
+				serviceID: "source",
+				fsp:       fsp,
+				logger:    logger,
+			}
+			svc.remote.client = client
+			svc.tableGroups = &lockTableHolders{
+				service: svc.serviceID,
+				logger:  logger,
+				holders: map[uint32]*lockTableHolder{},
+			}
+			svc.activeTxnHolder = newMapBasedTxnHandler(
+				svc.serviceID,
+				logger,
+				fsp,
+				func(string) (bool, error) { return true, nil },
+				func([]pb.OrphanTxn) (pb.CannotCommitResponse, error) {
+					return pb.CannotCommitResponse{}, nil
+				},
+				func(pb.WaitTxn) (bool, error) { return true, nil },
+			)
+			newTable := func(bind pb.LockTable) lockTable {
+				return newRemoteLockTable(
+					svc.serviceID,
+					time.Second,
+					bind,
+					client,
+					svc.handleBindChanged,
+					logger,
+				)
+			}
+			svc.tableGroups.set(oldBind.Group, oldBind.Table, newTable(oldBind))
+
+			addTxn := func(txnID []byte, bind pb.LockTable) *activeTxn {
+				txn := svc.activeTxnHolder.getActiveTxn(txnID, true, "")
+				txn.Lock()
+				require.NoError(t, txn.lockAdded(
+					bind.Group,
+					bind,
+					[][]byte{{1}},
+					pb.LockOptions{},
+					logger,
+				))
+				txn.Unlock()
+				svc.acquireRemoteBindRef(bind)
+				return txn
+			}
+			closeTxn := func(txnID []byte, txn *activeTxn, bind pb.LockTable) {
+				require.Equal(t, txn, svc.activeTxnHolder.deleteActiveTxn(txnID))
+				txn.Lock()
+				err := txn.close(
+					txnID,
+					timestamp.Timestamp{},
+					func(pb.LockTable) (lockTable, error) { return nil, nil },
+					logger,
+				)
+				txn.Unlock()
+				require.NoError(t, err)
+				svc.releaseTxnBindRefs([]pb.LockTable{bind})
+			}
+
+			oldTxnID := []byte("stale-owner-txn")
+			oldTxn := addTxn(oldTxnID, oldBind)
+			var intentTxnID []byte
+			var intentTxn *activeTxn
+			var intentCtx context.Context
+			var finishIntent func()
+			if test.addIntentTxn {
+				intentTxnID = []byte("stale-owner-intent-txn")
+				intentTxn = svc.activeTxnHolder.getActiveTxn(intentTxnID, true, "")
+				intentTxn.Lock()
+				require.True(t, intentTxn.lockTableBindTouched(oldBind))
+				intentCtx, finishIntent = intentTxn.beginLockOpLocked(context.Background())
+				intentTxn.Unlock()
+				svc.acquireRemoteBindRef(oldBind)
+			}
+			if test.removeOldRoute {
+				removed, err := svc.CloseRemoteLockTable(
+					oldBind.Group, oldBind.Table, oldBind.Version)
+				require.NoError(t, err)
+				require.True(t, removed)
+			}
+			var newTxnID []byte
+			var newTxn *activeTxn
+			if test.replaceRoute != nil {
+				client.bind = newBind
+				svc.tableGroups.set(newBind.Group, newBind.Table, newTable(newBind))
+			}
+			if test.addReplacementTxn {
+				newTxnID = []byte("new-generation-txn")
+				newTxn = addTxn(newTxnID, newBind)
+			}
+
+			keeper := &lockTableKeeper{
+				serviceID:   svc.serviceID,
+				client:      client,
+				groupTables: svc.tableGroups,
+				service:     svc,
+			}
+			keeper.doKeepRemoteLock(context.Background(), nil, nil)
+
+			require.Equal(t, int64(1), client.missingKeepCalls.Load())
+			oldTxn.Lock()
+			require.True(t, oldTxn.bindChanged,
+				"an unusable owner must fence exact dependent transactions even after route removal")
+			oldTxn.Unlock()
+			if test.addIntentTxn {
+				intentTxn.Lock()
+				require.True(t, intentTxn.bindChanged,
+					"an in-flight lock intent must be fenced before it can publish the stale bind")
+				intentTxn.Unlock()
+				select {
+				case <-intentCtx.Done():
+					require.ErrorIs(t, intentCtx.Err(), context.Canceled)
+				case <-time.After(time.Second):
+					t.Fatal("in-flight stale-bind operation was not canceled")
+				}
+				finishIntent()
+			}
+			if test.addReplacementTxn {
+				require.Equal(t, int64(1), client.otherKeepCalls.Load())
+				require.Equal(t, int64(2), client.getBindCalls.Load())
+				newTxn.Lock()
+				require.False(t, newTxn.bindChanged,
+					"invalidating an old bind must not fence a replacement generation")
+				newTxn.Unlock()
+			} else {
+				require.Equal(t, int64(0), client.otherKeepCalls.Load())
+				require.Equal(t, int64(1), client.getBindCalls.Load())
+			}
+			if test.replaceRoute != nil {
+				current := svc.tableGroups.get(newBind.Group, newBind.Table)
+				require.NotNil(t, current)
+				require.Equal(t, newBind, current.getBind())
+			} else {
+				require.Nil(t, svc.tableGroups.get(oldBind.Group, oldBind.Table))
+			}
+			expectedBinds := []pb.LockTable{oldBind}
+			if test.addReplacementTxn {
+				expectedBinds = append(expectedBinds, newBind)
+			}
+			require.ElementsMatch(t, expectedBinds, svc.collectRemoteLockBinds(nil),
+				"bind leases stay owned until their transactions clean up")
+
+			closeTxn(oldTxnID, oldTxn, oldBind)
+			if test.addIntentTxn {
+				closeTxn(intentTxnID, intentTxn, oldBind)
+			}
+			keeper.doKeepRemoteLock(context.Background(), nil, nil)
+			require.Equal(t, int64(1), client.missingKeepCalls.Load(),
+				"a cleaned stale bind must not be retried by later keeper rounds")
+			if test.addReplacementTxn {
+				require.Equal(t, int64(2), client.otherKeepCalls.Load())
+				newTxn.Lock()
+				require.False(t, newTxn.bindChanged)
+				newTxn.Unlock()
+				closeTxn(newTxnID, newTxn, newBind)
+			}
+			require.Empty(t, svc.collectRemoteLockBinds(nil))
 		})
 	}
 }
