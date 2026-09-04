@@ -846,42 +846,72 @@ func writeQuotedSQLString(builder *strings.Builder, value string) {
 	builder.WriteByte('\'')
 }
 
-func writeWatermarkRowPrefix(builder *strings.Builder, row guardedWatermarkRow) {
+func writeWatermarkRowPrefix(builder *strings.Builder, row guardedWatermarkRow, withAliases bool) {
 	builder.WriteString("SELECT ")
 	builder.WriteString(strconv.FormatUint(row.accountID, 10))
-	builder.WriteString(" AS account_id, ")
+	if withAliases {
+		builder.WriteString(" AS account_id, ")
+		writeQuotedSQLString(builder, row.taskID)
+		builder.WriteString(" AS task_id, ")
+		writeQuotedSQLString(builder, row.dbName)
+		builder.WriteString(" AS db_name, ")
+		writeQuotedSQLString(builder, row.tableName)
+		builder.WriteString(" AS table_name, ")
+		return
+	}
+	builder.WriteString(", ")
 	writeQuotedSQLString(builder, row.taskID)
-	builder.WriteString(" AS task_id, ")
+	builder.WriteString(", ")
 	writeQuotedSQLString(builder, row.dbName)
-	builder.WriteString(" AS db_name, ")
+	builder.WriteString(", ")
 	writeQuotedSQLString(builder, row.tableName)
-	builder.WriteString(" AS table_name, ")
+	builder.WriteString(", ")
 }
 
-func watermarkUpdateRowSQL(row guardedWatermarkRow) string {
+func watermarkUpdateRowSQL(row guardedWatermarkRow, withAliases bool) string {
 	var builder strings.Builder
-	builder.Grow(128 + len(row.taskID) + len(row.dbName) + len(row.tableName) + len(row.value))
-	writeWatermarkRowPrefix(&builder, row)
+	overhead := 32
+	if withAliases {
+		overhead = 128
+	}
+	builder.Grow(overhead + len(row.taskID) + len(row.dbName) + len(row.tableName) + len(row.value))
+	writeWatermarkRowPrefix(&builder, row, withAliases)
 	writeQuotedSQLString(&builder, row.value)
-	builder.WriteString(" AS watermark")
+	if withAliases {
+		builder.WriteString(" AS watermark")
+	}
 	return builder.String()
 }
 
-func watermarkErrorRowSQL(row guardedWatermarkRow) string {
+func watermarkErrorRowSQL(row guardedWatermarkRow, withAliases bool) string {
 	var builder strings.Builder
-	builder.Grow(128 + len(row.taskID) + len(row.dbName) + len(row.tableName) + len(row.value))
-	writeWatermarkRowPrefix(&builder, row)
+	overhead := 32
+	if withAliases {
+		overhead = 128
+	}
+	builder.Grow(overhead + len(row.taskID) + len(row.dbName) + len(row.tableName) + len(row.value))
+	writeWatermarkRowPrefix(&builder, row, withAliases)
 	writeQuotedSQLString(&builder, row.value)
-	builder.WriteString(" AS err_msg")
+	if withAliases {
+		builder.WriteString(" AS err_msg")
+	}
 	return builder.String()
 }
 
-func watermarkInsertRowSQL(row guardedWatermarkRow) string {
+func watermarkInsertRowSQL(row guardedWatermarkRow, withAliases bool) string {
 	var builder strings.Builder
-	builder.Grow(144 + len(row.taskID) + len(row.dbName) + len(row.tableName) + len(row.value))
-	writeWatermarkRowPrefix(&builder, row)
+	overhead := 40
+	if withAliases {
+		overhead = 144
+	}
+	builder.Grow(overhead + len(row.taskID) + len(row.dbName) + len(row.tableName) + len(row.value))
+	writeWatermarkRowPrefix(&builder, row, withAliases)
 	writeQuotedSQLString(&builder, row.value)
-	builder.WriteString(" AS watermark, '' AS err_msg")
+	if withAliases {
+		builder.WriteString(" AS watermark, '' AS err_msg")
+	} else {
+		builder.WriteString(", ''")
+	}
 	return builder.String()
 }
 
@@ -898,7 +928,7 @@ func watermarkTaskPredicate(row guardedWatermarkRow) string {
 
 func buildGuardedWatermarkSQLBatches(
 	rows []guardedWatermarkRow,
-	rowSQL func(guardedWatermarkRow) string,
+	rowSQL func(guardedWatermarkRow, bool) string,
 	wrap func(string, string) string,
 ) []string {
 	if len(rows) == 0 {
@@ -922,7 +952,7 @@ func buildGuardedWatermarkSQLBatches(
 	}
 
 	for _, row := range rows {
-		value := rowSQL(row)
+		value := rowSQL(row, rowCount == 0)
 		task := watermarkTaskKey{accountID: row.accountID, taskID: row.taskID}
 		predicate := ""
 		if _, ok := seenTasks[task]; !ok {
@@ -940,6 +970,7 @@ func buildGuardedWatermarkSQLBatches(
 		}
 		if rowCount > 0 && (rowCount >= watermarkWriteMaxRows || projectedBytes > watermarkWriteMaxSQLBytes) {
 			flush()
+			value = rowSQL(row, true)
 			predicate = watermarkTaskPredicate(row)
 		}
 		if rowCount > 0 {

@@ -74,7 +74,12 @@ func TestIssue27666CDCWatermarkWriteSerializesWithDrop(t *testing.T) {
 					tc.taskID, tc.taskName)))
 
 				writerSQL := cdc.CDCSQLBuilder.GuardedWatermarkInsertSQL(
-					fmt.Sprintf("SELECT 0 AS account_id, '%s' AS task_id, 'db' AS db_name, 'table' AS table_name, '1-1' AS watermark, '' AS err_msg", tc.taskID),
+					fmt.Sprintf(
+						"SELECT 0 AS account_id, '%s' AS task_id, 'db' AS db_name, 'table-1' AS table_name, '1-1' AS watermark, '' AS err_msg "+
+							"UNION ALL SELECT 0, '%s', 'db', 'table-2', '1-1', ''",
+						tc.taskID,
+						tc.taskID,
+					),
 					fmt.Sprintf("(account_id = 0 AND task_id = '%s')", tc.taskID),
 				)
 				if tc.writerFirst {

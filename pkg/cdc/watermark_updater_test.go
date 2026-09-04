@@ -1383,8 +1383,8 @@ func TestCDCWatermarkUpdater_constructAddWMSQL(t *testing.T) {
 	assert.Contains(t, realSql, "INNER JOIN (SELECT account_id, task_id FROM `mo_catalog`.`mo_cdc_task`")
 	assert.Contains(t, realSql, "FOR UPDATE)")
 	assert.Contains(t, realSql, "SELECT 1 AS account_id, 'test' AS task_id, 'db1' AS db_name")
-	assert.Contains(t, realSql, "SELECT 2 AS account_id, 'test' AS task_id, 'db2' AS db_name")
-	assert.Contains(t, realSql, "SELECT 3 AS account_id, 'test' AS task_id, 'db3' AS db_name")
+	assert.Contains(t, realSql, "SELECT 2, 'test', 'db2', 't2', '2-1', ''")
+	assert.Contains(t, realSql, "SELECT 3, 'test', 'db3', 't3', '3-1', ''")
 }
 
 func TestCDCWatermarkUpdater_constructBatchUpdateWMSQL(t *testing.T) {
@@ -1422,8 +1422,8 @@ func TestCDCWatermarkUpdater_constructBatchUpdateWMSQL(t *testing.T) {
 	assert.Contains(t, realSql, "FOR UPDATE)")
 	assert.Contains(t, realSql, "ON DUPLICATE KEY UPDATE watermark = VALUES(watermark)")
 	assert.Contains(t, realSql, "SELECT 1 AS account_id")
-	assert.Contains(t, realSql, "SELECT 2 AS account_id")
-	assert.Contains(t, realSql, "SELECT 3 AS account_id")
+	assert.Contains(t, realSql, "SELECT 2, 'test', 'db2', 't2', '2-1'")
+	assert.Contains(t, realSql, "SELECT 3, 'test', 'db3', 't3', '3-1'")
 }
 
 func TestCDCWatermarkUpdater_constructBatchUpdateWMErrMsgSQL(t *testing.T) {
@@ -1462,7 +1462,7 @@ func TestCDCWatermarkUpdater_constructBatchUpdateWMErrMsgSQL(t *testing.T) {
 	assert.Contains(t, realSql, "FOR UPDATE)")
 	assert.Contains(t, realSql, "ON DUPLICATE KEY UPDATE err_msg = VALUES(err_msg)")
 	assert.Contains(t, realSql, "SELECT 1 AS account_id")
-	assert.Contains(t, realSql, "SELECT 2 AS account_id")
+	assert.Contains(t, realSql, "SELECT 2, 'test', 'db2', 't2', ''")
 }
 
 func TestCDCWatermarkUpdater_GuardedWatermarkSQLIsBoundedAndDeterministic(t *testing.T) {
@@ -1480,7 +1480,7 @@ func TestCDCWatermarkUpdater_GuardedWatermarkSQLIsBoundedAndDeterministic(t *tes
 	sqls := u.constructBatchUpdateWMSQLs(keys)
 	require.Len(t, sqls, 6)
 	for _, sql := range sqls {
-		rows := strings.Count(sql, " AS account_id")
+		rows := strings.Count(sql, " UNION ALL ") + 1
 		require.LessOrEqual(t, rows, watermarkWriteMaxRows)
 		require.LessOrEqual(t, len(sql), watermarkWriteMaxSQLBytes)
 		require.Equal(t, 1, strings.Count(sql,
@@ -1556,6 +1556,17 @@ func BenchmarkCDCWatermarkUpdaterConstructGuardedBatch(b *testing.B) {
 			for i := 0; i < b.N; i++ {
 				_ = u.constructBatchUpdateWMSQLs(keys)
 			}
+			b.StopTimer()
+			sqls := u.constructBatchUpdateWMSQLs(keys)
+			totalBytes := 0
+			maxBytes := 0
+			for _, sql := range sqls {
+				totalBytes += len(sql)
+				maxBytes = max(maxBytes, len(sql))
+			}
+			b.ReportMetric(float64(len(sqls)), "batches")
+			b.ReportMetric(float64(maxBytes), "max-SQL-B")
+			b.ReportMetric(float64(totalBytes), "total-SQL-B")
 		})
 	}
 }

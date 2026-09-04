@@ -3379,6 +3379,53 @@ func TestCdcTaskStopAllReadersRetainsEarlierIncompleteOwner(t *testing.T) {
 	}, time.Second, time.Millisecond)
 }
 
+func TestCdcTaskReclaimDeletedWatermarkStopsReaderPublishedAfterFirstSnapshot(t *testing.T) {
+	updater := cdc.NewCDCWatermarkUpdater(t.Name(), nil)
+	const taskID = "task-late-reader-reclaim"
+	updater.MarkTaskDeleted(taskID)
+
+	var closeCalls atomic.Int32
+	var waitCalls atomic.Int32
+	callbacksDone := make(chan struct{})
+	earlierReadersDone := closedChan()
+	executor := &CDCTaskExecutor{
+		watermarkUpdater: updater,
+		spec: &task.CreateCdcDetails{
+			TaskId: taskID,
+		},
+		runningReaders: &sync.Map{},
+	}
+	executor.reclaimDeletedWatermark(taskID, callbacksDone, earlierReadersDone)
+	key := &cdc.WatermarkKey{AccountId: 1, TaskId: taskID, DBName: "db", TableName: "table"}
+	watermark := types.BuildTS(1, 1)
+	require.NoError(t, updater.UpdateWatermarkOnly(context.Background(), key, &watermark))
+	_, err := updater.GetFromCache(context.Background(), key)
+	require.ErrorIs(t, err, cdc.ErrNoWatermarkFound)
+
+	// A callback admitted before the generation fence publishes only after
+	// Cancel's bounded first snapshot. Closing callbacksDone models the real
+	// RegistrationDone -> callback completion ordering.
+	executor.runningReaders.Store("db.table", &mockChangeReader{
+		info:       &cdc.DbTableInfo{SourceDbName: "db", SourceTblName: "table"},
+		closeCalls: &closeCalls,
+		waitCalls:  &waitCalls,
+	})
+	close(callbacksDone)
+
+	require.Eventually(t, func() bool {
+		if closeCalls.Load() != 1 || waitCalls.Load() != 1 {
+			return false
+		}
+		if updateErr := updater.UpdateWatermarkOnly(context.Background(), key, &watermark); updateErr != nil {
+			return false
+		}
+		_, cacheErr := updater.GetFromCache(context.Background(), key)
+		return cacheErr == nil
+	}, time.Second, time.Millisecond)
+	_, exists := executor.runningReaders.Load("db.table")
+	require.False(t, exists)
+}
+
 func TestCdcTask_retrieveCdcTask(t *testing.T) {
 	fault.EnableDomain(fault.DomainFrontend)
 	type fields struct {
