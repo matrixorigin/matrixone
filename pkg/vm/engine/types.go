@@ -871,7 +871,12 @@ type Tombstoner interface {
 	MarshalBinaryWithBuffer(w *bytes.Buffer) error
 	UnmarshalBinary(buf []byte) error
 
-	PrefetchTombstones(srvId string, fs fileservice.FileService, bid []objectio.Blockid)
+	PrefetchTombstones(
+		ctx context.Context,
+		srvId string,
+		fs fileservice.FileService,
+		bid []objectio.Blockid,
+	)
 
 	// it applies the block related in-memory tombstones to the rowsOffset
 	// `bid` is the block id

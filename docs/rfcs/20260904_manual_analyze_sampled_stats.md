@@ -134,6 +134,17 @@ feeds the COLLAPSE estimator. In-memory rows use the same final inclusion
 fractions; persisted tombstones are attached to readers so only snapshot-visible
 values contribute.
 
+AUTO scopes tombstone materialization to the selected persisted block IDs.
+In-memory Rowid deletes are retained only on an exact block match. Persisted
+tombstone objects and blocks are retained or prefetched only when their Rowid
+zone maps may cover a selected block; missing or legacy zone maps fail open so
+this pruning can introduce false positives but never hide a visible delete.
+Consequently retained tombstone memory and tombstone data I/O are proportional
+to deletes that may affect the sample, rather than to the table's complete
+delete history. Enumerating visible tombstone object metadata is still part of
+the inventory. FULLSCAN keeps the unscoped behavior because every persisted
+block is admitted.
+
 The inventory itself uses the existing relation range API and is not a claim
 that metadata enumeration is free. This version bounds sampled data reads, not
 the size of the storage engine's range list.

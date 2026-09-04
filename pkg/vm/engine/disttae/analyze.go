@@ -124,10 +124,20 @@ func (tbl *txnTable) AnalyzeTable(
 	}
 
 	selectedData := ranges.BuildEmptyRelData(len(selected))
+	selectedBlocks := make([]objectio.Blockid, 0, len(selected))
 	for i := range selected {
 		selectedData.AppendBlockInfo(&selected[i].block)
+		if !selected[i].block.IsMemBlk() {
+			selectedBlocks = append(selectedBlocks, selected[i].block.BlockID)
+		}
 	}
-	tombstones, err := tbl.CollectTombstones(ctx, 0, engine.Policy_CollectAllTombstones)
+	var tombstones engine.Tombstoner
+	if request.FullScan {
+		tombstones, err = tbl.CollectTombstones(ctx, 0, engine.Policy_CollectAllTombstones)
+	} else {
+		tombstones, err = tbl.collectTombstones(
+			ctx, 0, engine.Policy_CollectAllTombstones, selectedBlocks)
+	}
 	if err != nil {
 		return nil, err
 	}
