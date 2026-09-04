@@ -354,14 +354,19 @@ func (ag *aggState) readStateArg(mp *mpool.MPool, i int32, r io.Reader, info *ag
 	}
 	// Read directly into reusable, allocation-accounted key scratch. The
 	// skiplist copies each key into its own arena before the next iteration.
-	var keySize int
-	if !info.usesOpaqueArgEncoding() {
+	opaqueArg := info.usesOpaqueArgEncoding()
+	var fixedKey []byte
+	if !opaqueArg {
 		fixedLen := int(info.argTypes[0].GetSize())
-		if info.isDistinct {
-			keySize = kAggArgPrefixSz + fixedLen
-		} else {
-			keySize = kAggArgPrefixSz + kAggArgOrdinalSz + fixedLen
+		keySize := kAggArgPrefixSz + fixedLen
+		if !info.isDistinct {
+			keySize += kAggArgOrdinalSz
 		}
+		fixedKey, err = ag.resizeArgScratch(mp, keySize)
+		if err != nil {
+			return err
+		}
+		binary.BigEndian.PutUint16(fixedKey[:kAggArgPrefixSz], uint16(i))
 	}
 	// writeStateArg emits non-order-preserving arguments in skiplist key order.
 	// Keep the insertion cursor across that ordered stream so rebuilding a large
@@ -370,21 +375,16 @@ func (ag *aggState) readStateArg(mp *mpool.MPool, i int32, r io.Reader, info *ag
 	// non-canonical wire stream.
 	var inserter arenaskl.Inserter
 	for ui := uint32(0); ui < ag.argCnt[i]; ui++ {
-		if !info.usesOpaqueArgEncoding() && info.argTypes[0].IsFixedLen() {
-			kbuf, err := ag.resizeArgScratch(mp, keySize)
-			if err != nil {
-				return err
-			}
-			binary.BigEndian.PutUint16(kbuf[:kAggArgPrefixSz], uint16(i))
-			if _, err = io.ReadFull(r, kbuf[kAggArgPrefixSz:]); err != nil {
+		if !opaqueArg {
+			if _, err = io.ReadFull(r, fixedKey[kAggArgPrefixSz:]); err != nil {
 				return err
 			}
 			if info.preserveDistinctInputOrder {
 				var ordinal [kAggArgOrdinalSz]byte
 				binary.BigEndian.PutUint32(ordinal[:], ui)
-				err = ag.insertArgValue(mp, kbuf, ordinal[:])
+				err = ag.insertArgValue(mp, fixedKey, ordinal[:])
 			} else {
-				err = ag.insertArgValueWithInserter(mp, kbuf, nil, &inserter)
+				err = ag.insertArgValueWithInserter(mp, fixedKey, nil, &inserter)
 			}
 			if err != nil {
 				return err
@@ -927,56 +927,59 @@ func (ag *aggState) insertArgValueWithInserter(
 	if ag.argSkl == nil {
 		return moerr.NewInternalErrorNoCtx("argSkl is not initialized")
 	}
-	nodeSize, err := aggregateArgumentNodeSize(
-		uint64(len(kbuf)), uint64(len(value)))
-	if err != nil {
-		return err
-	}
-
-	var plan arenaskl.AddPlan
 	if ag.allocation != nil {
-		plan = arenaskl.MakeAddPlan(kbuf)
-	}
-	add := func(list *arenaskl.Skiplist) error {
-		if ag.allocation != nil {
-			if inserter != nil {
-				return inserter.AddWithPlan(list, kbuf, value, plan)
-			}
-			return list.AddWithPlan(kbuf, value, plan)
-		}
-		if inserter != nil {
-			return inserter.Add(list, kbuf, value)
-		}
-		return list.Add(kbuf, value)
-	}
-	if ag.allocation != nil {
-		consumed, _, ok := plan.ArenaFootprint(
-			uint32(len(kbuf)), uint32(len(value)))
-		if !ok {
+		if uint64(len(kbuf)) > math.MaxUint32 ||
+			uint64(len(value)) > math.MaxUint32 {
 			return mpool.ErrAllocationAllocatorLimit
 		}
-		used := uint64(ag.argSkl.Arena().Size())
-		trailing := arenaskl.MaxNodeTrailingSize()
-		if used <= math.MaxUint64-consumed &&
-			used+consumed <= math.MaxUint64-trailing &&
-			used+consumed+trailing <= uint64(ag.argSkl.Arena().Capacity()) {
-			return add(ag.argSkl)
+		plan := arenaskl.MakeAddPlan(kbuf)
+		consumed, trailing, ok := plan.ArenaFootprint(
+			uint32(len(kbuf)), uint32(len(value)))
+		if !ok || consumed > math.MaxUint64-trailing {
+			return mpool.ErrAllocationAllocatorLimit
 		}
-		// The accounted execution path can grow the arena geometrically and
-		// relocate its offset-based nodes as one buffer. This keeps cumulative
-		// growth work linear instead of rebuilding the whole skiplist for every
-		// 512 KiB increment.
-		if err := ag.preflightArgumentCapacity(
-			mp, consumed+trailing, 0); err != nil {
+		required := consumed + trailing
+		used := uint64(ag.argSkl.Arena().Size())
+		if used <= math.MaxUint64-required &&
+			used+required <= uint64(ag.argSkl.Arena().Capacity()) {
+			if inserter != nil {
+				return inserter.AddWithPlan(ag.argSkl, kbuf, value, plan)
+			}
+			return ag.argSkl.AddWithPlan(kbuf, value, plan)
+		}
+		// Admission deliberately reserves no capacity for a DISTINCT key that is
+		// already present. Confirm that case before growing; doing this only at a
+		// capacity boundary keeps the common new-key path to one skiplist search.
+		if ag.argSkl.Contains(kbuf) {
+			return arenaskl.ErrRecordExists
+		}
+		// Relocate the offset-based nodes as one buffer under the state's selected
+		// growth policy. Ordinary recovery grows geometrically; bounded DISTINCT
+		// work sets retain their smaller increments without rebuilding every node.
+		if err := ag.preflightArgumentCapacity(mp, required, 0); err != nil {
 			return err
 		}
 		if inserter != nil {
 			// GrowArena relocates the backing buffer, so cached node pointers no
 			// longer refer to the current arena.
 			*inserter = arenaskl.Inserter{}
+			return inserter.AddWithPlan(ag.argSkl, kbuf, value, plan)
 		}
-		return add(ag.argSkl)
-	} else if err := add(ag.argSkl); err != arenaskl.ErrArenaFull {
+		return ag.argSkl.AddWithPlan(kbuf, value, plan)
+	}
+
+	nodeSize, err := aggregateArgumentNodeSize(
+		uint64(len(kbuf)), uint64(len(value)))
+	if err != nil {
+		return err
+	}
+	add := func(list *arenaskl.Skiplist) error {
+		if inserter != nil {
+			return inserter.Add(list, kbuf, value)
+		}
+		return list.Add(kbuf, value)
+	}
+	if err := add(ag.argSkl); err != arenaskl.ErrArenaFull {
 		return err
 	}
 
@@ -985,6 +988,9 @@ func (ag *aggState) insertArgValueWithInserter(
 	// e.g. a multi-column distinct key concatenating several large string args —
 	// grow by enough to fit it, otherwise the retry below would still ErrArenaFull.
 	grow := uint64(kAggArgArenaSize)
+	if ag.boundedArgumentGrowth {
+		grow = 64 * 1024
+	}
 	if nodeSize > grow {
 		grow = nodeSize
 	}

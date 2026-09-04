@@ -17,6 +17,7 @@ package aggexec
 import (
 	"bytes"
 	"math"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -837,71 +838,111 @@ func testAggExec(t *testing.T,
 }
 
 func TestCountDistinctUnmarshalAcrossAccountedArenaGrowth(t *testing.T) {
-	const distinctRows = 20_000
-
-	mp := mpool.MustNewZero()
-	registry, account, allocation := newTestAggregateAllocation(t)
-	makeExec := func() AggFuncExec {
-		exec := newCountColumnExec(
-			mp, AggIdOfCountColumn, true, []types.Type{types.T_int64.ToType()})
-		require.NoError(t, exec.(AllocationAccountOwner).SetAllocationAccount(allocation))
-		return exec
+	varlenPrefix := strings.Repeat("x", 512)
+	tests := []struct {
+		name         string
+		typ          types.Type
+		distinctRows int
+		appendValue  func(*vector.Vector, int, *mpool.MPool) error
+	}{
+		{
+			name:         "fixed-width",
+			typ:          types.T_int64.ToType(),
+			distinctRows: 20_000,
+			appendValue: func(vec *vector.Vector, value int, mp *mpool.MPool) error {
+				return vector.AppendFixed(vec, int64(value), false, mp)
+			},
+		},
+		{
+			name:         "opaque-varlen",
+			typ:          types.T_varchar.ToType(),
+			distinctRows: 1_100,
+			appendValue: func(vec *vector.Vector, value int, mp *mpool.MPool) error {
+				key := varlenPrefix + strconv.Itoa(value)
+				return vector.AppendBytes(vec, []byte(key), false, mp)
+			},
+		},
 	}
-	source := makeExec()
-	target := makeExec()
-	require.NoError(t, source.GroupGrow(1))
 
-	input := vector.NewVec(types.T_int64.ToType())
-	for row := 0; row < 2*distinctRows; row++ {
-		require.NoError(t,
-			vector.AppendFixed(input, int64(row%distinctRows), false, mp))
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			mp := mpool.MustNewZero()
+			registry, account, allocation := newTestAggregateAllocation(t)
+			makeExec := func() AggFuncExec {
+				exec := newCountColumnExec(
+					mp, AggIdOfCountColumn, true, []types.Type{tc.typ})
+				require.NoError(t,
+					exec.(AllocationAccountOwner).SetAllocationAccount(allocation))
+				return exec
+			}
+			source := makeExec()
+			target := makeExec()
+			defer func() {
+				source.Free()
+				target.Free()
+				require.NoError(t,
+					source.(AllocationAccountOwner).ClearAllocationAccount(allocation))
+				require.NoError(t,
+					target.(AllocationAccountOwner).ClearAllocationAccount(allocation))
+				finishTestAggregateAllocation(t, registry, account)
+				require.Zero(t, mp.CurrNB())
+			}()
+			require.NoError(t, source.GroupGrow(1))
+
+			input := vector.NewVec(tc.typ)
+			defer func() {
+				if input != nil {
+					input.Free(mp)
+				}
+			}()
+			for row := 0; row < 2*tc.distinctRows; row++ {
+				require.NoError(t,
+					tc.appendValue(input, row%tc.distinctRows, mp))
+			}
+			groups := make([]uint64, hashmap.UnitLimit)
+			for row := range groups {
+				groups[row] = 1
+			}
+			for offset := 0; offset < input.Length(); offset += hashmap.UnitLimit {
+				workGroups := groups[:min(hashmap.UnitLimit, input.Length()-offset)]
+				require.NoError(t,
+					source.(BatchCapacityPreflight).PreflightBatchFill(
+						offset, workGroups, []*vector.Vector{input}))
+				require.NoError(t, source.BatchFill(
+					offset, workGroups, []*vector.Vector{input}))
+			}
+			input.Free(mp)
+			input = nil
+
+			var encoded bytes.Buffer
+			require.NoError(t, source.SaveIntermediateResult(
+				1, [][]uint8{{1}}, &encoded))
+			require.NoError(t, target.UnmarshalFromReader(
+				bytes.NewReader(encoded.Bytes()), mp))
+			targetBase := target.(aggregateBaseCarrier).aggregateBase()
+			require.Greater(t, len(targetBase.state[0].argbuf), kAggArgArenaSize,
+				"the round trip must cross the initial arena and exercise relocation")
+
+			// Existing values must still deduplicate after relocation, while a new
+			// key must remain insertable through the cursor reset at the growth boundary.
+			followup := vector.NewVec(tc.typ)
+			defer followup.Free(mp)
+			for _, value := range []int{0, tc.distinctRows - 1, tc.distinctRows} {
+				require.NoError(t, tc.appendValue(followup, value, mp))
+			}
+			followupGroups := []uint64{1, 1, 1}
+			require.NoError(t,
+				target.(BatchCapacityPreflight).PreflightBatchFill(
+					0, followupGroups, []*vector.Vector{followup}))
+			require.NoError(t, target.BatchFill(
+				0, followupGroups, []*vector.Vector{followup}))
+
+			results, err := target.Flush()
+			require.NoError(t, err)
+			require.Len(t, results, 1)
+			defer results[0].Free(mp)
+			require.Equal(t, int64(tc.distinctRows+1),
+				vector.GetFixedAtNoTypeCheck[int64](results[0], 0))
+		})
 	}
-	groups := make([]uint64, hashmap.UnitLimit)
-	for row := range groups {
-		groups[row] = 1
-	}
-	for offset := 0; offset < input.Length(); offset += hashmap.UnitLimit {
-		workGroups := groups[:min(hashmap.UnitLimit, input.Length()-offset)]
-		require.NoError(t, source.(BatchCapacityPreflight).PreflightBatchFill(
-			offset, workGroups, []*vector.Vector{input}))
-		require.NoError(t, source.BatchFill(
-			offset, workGroups, []*vector.Vector{input}))
-	}
-	input.Free(mp)
-
-	var encoded bytes.Buffer
-	require.NoError(t, source.SaveIntermediateResult(
-		1, [][]uint8{{1}}, &encoded))
-	require.NoError(t, target.UnmarshalFromReader(
-		bytes.NewReader(encoded.Bytes()), mp))
-	targetBase := target.(aggregateBaseCarrier).aggregateBase()
-	require.Greater(t, len(targetBase.state[0].argbuf), kAggArgArenaSize,
-		"the round trip must cross the initial arena and exercise relocation")
-
-	// Existing values must still deduplicate after relocation, while a new key
-	// must remain insertable through the cursor reset at the growth boundary.
-	followup := vector.NewVec(types.T_int64.ToType())
-	for _, value := range []int64{0, distinctRows - 1, distinctRows} {
-		require.NoError(t, vector.AppendFixed(followup, value, false, mp))
-	}
-	followupGroups := []uint64{1, 1, 1}
-	require.NoError(t, target.(BatchCapacityPreflight).PreflightBatchFill(
-		0, followupGroups, []*vector.Vector{followup}))
-	require.NoError(t, target.BatchFill(
-		0, followupGroups, []*vector.Vector{followup}))
-	followup.Free(mp)
-
-	results, err := target.Flush()
-	require.NoError(t, err)
-	require.Len(t, results, 1)
-	require.Equal(t, int64(distinctRows+1),
-		vector.GetFixedAtNoTypeCheck[int64](results[0], 0))
-	results[0].Free(mp)
-
-	source.Free()
-	target.Free()
-	require.NoError(t, source.(AllocationAccountOwner).ClearAllocationAccount(allocation))
-	require.NoError(t, target.(AllocationAccountOwner).ClearAllocationAccount(allocation))
-	finishTestAggregateAllocation(t, registry, account)
-	require.Zero(t, mp.CurrNB())
 }
