@@ -452,6 +452,11 @@ type QueryBuilder struct {
 	// sqlCalcFoundRows disables limit pushdown that would otherwise stop a
 	// source before the complete result count can be observed.
 	sqlCalcFoundRows bool
+	// sessionSelectLimitMayStopEarly records a finite ordinary
+	// sql_select_limit or a dynamic prepared one. Such a top-level cap is
+	// materialized only after optimization and therefore cannot appear in the
+	// logical drain-witness walk.
+	sessionSelectLimitMayStopEarly bool
 
 	// optimizationHistory records key optimization steps for debugging remap errors
 	// Only records when optimizations actually change the plan structure
@@ -461,6 +466,12 @@ type QueryBuilder struct {
 	// common input can be shared after CTE reuse has established any nested
 	// producer boundaries.
 	groupingSetCandidates []groupingSetCandidate
+	// sharedMaterializationMemoryBytes and sharedMaterializationSpillBytes are
+	// the conservative cumulative reservations made by planner-introduced CTE
+	// and grouping-set sources. They prevent individually valid rewrites from
+	// jointly exceeding explicit statement caps.
+	sharedMaterializationMemoryBytes float64
+	sharedMaterializationSpillBytes  float64
 
 	// Irregular index (IVF/fulltext) synchronous maintenance for the modern DML
 	// path. The modern dedup+MULTI_UPDATE handles the base table and regular

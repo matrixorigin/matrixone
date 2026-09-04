@@ -16,9 +16,11 @@ package plan
 
 import (
 	"bytes"
+	"math"
 	"strconv"
 	"strings"
 
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
@@ -26,7 +28,16 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/internal/materialized"
 )
 
-const groupingSetExpandOptionPrefix = "grouping_set_expand:"
+const (
+	groupingSetExpandOptionPrefix = "grouping_set_expand:"
+	// This is a planner ceiling, not an execution allowance. The bounded
+	// materialized source still charges every spill byte and file descriptor to
+	// the statement/CN owner before writing.
+	groupingSetEstimatedSpillBytesLimit = float64(8 * mpool.GB)
+	// Require a twofold modeled advantage because row counts and producer costs
+	// are estimates while the output write and every branch scan are certain.
+	groupingSetCostSafetyFactor = float64(2)
+)
 
 // DecodeGroupingSetExpandOption exposes planner-owned expand metadata to the
 // compiler without adding SQL-visible syntax or a new logical node kind.
@@ -58,7 +69,7 @@ func (builder *QueryBuilder) registerGroupingSetInput(nodes []int32, contexts []
 }
 
 func (builder *QueryBuilder) sharePendingGroupingSetInputs(rootID int32) int32 {
-	if builder.sharedComputationDisabled() {
+	if builder.sharedComputationDisabled() || builder.sessionSelectLimitMayStopEarly {
 		return rootID
 	}
 	proc := builder.compCtx.GetProcess()
@@ -70,6 +81,7 @@ func (builder *QueryBuilder) sharePendingGroupingSetInputs(rootID int32) int32 {
 	if !ok || protocolVersion < defines.MORPCVersion43 {
 		return rootID
 	}
+	parents := builder.groupingSetConsumerParents()
 	for _, candidate := range builder.groupingSetCandidates {
 		reachable := make(map[int32]bool)
 		builder.collectCTEParents(rootID, make(map[int32][]int32), reachable)
@@ -83,11 +95,61 @@ func (builder *QueryBuilder) sharePendingGroupingSetInputs(rootID int32) int32 {
 				break
 			}
 		}
-		if allReachable {
-			builder.shareGroupingSetInput(candidate.nodes, candidate.contexts)
+		if allReachable && !builder.groupingSetCandidateHasGroupingAncestor(candidate, parents) {
+			builder.shareGroupingSetInput(rootID, candidate.nodes, candidate.contexts)
 		}
 	}
 	return rootID
+}
+
+// groupingSetConsumerParents describes both ordinary child consumers and
+// materialized-source consumers. It is captured before any grouping candidate
+// is rewritten so nested candidates cannot disappear behind a newly inserted
+// SINK_SCAN edge while admission is in progress.
+func (builder *QueryBuilder) groupingSetConsumerParents() map[int32][]int32 {
+	parents := make(map[int32][]int32)
+	for parentID, node := range builder.qry.Nodes {
+		if node == nil {
+			continue
+		}
+		for _, childID := range node.Children {
+			parents[childID] = append(parents[childID], int32(parentID))
+		}
+		for _, sourceStep := range node.SourceStep {
+			if sourceStep >= 0 && int(sourceStep) < len(builder.qry.Steps) {
+				sourceRootID := builder.qry.Steps[sourceStep]
+				parents[sourceRootID] = append(parents[sourceRootID], int32(parentID))
+			}
+		}
+	}
+	return parents
+}
+
+func (builder *QueryBuilder) groupingSetCandidateHasGroupingAncestor(
+	candidate groupingSetCandidate,
+	parents map[int32][]int32,
+) bool {
+	queue := append([]int32(nil), candidate.nodes...)
+	seen := make(map[int32]bool, len(queue))
+	for len(queue) > 0 {
+		nodeID := queue[0]
+		queue = queue[1:]
+		if seen[nodeID] {
+			continue
+		}
+		seen[nodeID] = true
+		for _, parentID := range parents[nodeID] {
+			if parentID < 0 || int(parentID) >= len(builder.qry.Nodes) || builder.qry.Nodes[parentID] == nil {
+				return true
+			}
+			parent := builder.qry.Nodes[parentID]
+			if parent.NodeType == planpb.Node_AGG && len(parent.GroupingFlag) > 0 {
+				return true
+			}
+			queue = append(queue, parentID)
+		}
+	}
+	return false
 }
 
 // shareGroupingSetInput replaces the independently bound aggregate branches of
@@ -99,12 +161,16 @@ func (builder *QueryBuilder) sharePendingGroupingSetInputs(rootID int32) int32 {
 //	             -> bounded materialized fanout to branch projects
 //
 // The rewrite is deliberately fail-closed. The internal UNION marker proves a
-// common FROM/WHERE AST; typed aggregate shape, determinism, full-drain AGG
-// consumers, and a conservative cost comparison prove that sharing is safe and
+// common FROM/WHERE AST; typed aggregate shape, determinism, bounded output,
+// and a conservative byte-work comparison prove that sharing is safe and
 // useful. Only the reduced aggregate output is materialized; detailed input is
 // never retained. Independent readers prevent a lazy UNION ALL branch from
 // backpressuring the producer while another branch is still draining.
-func (builder *QueryBuilder) shareGroupingSetInput(nodes []int32, contexts []*BindContext) bool {
+func (builder *QueryBuilder) shareGroupingSetInput(
+	rootID int32,
+	nodes []int32,
+	contexts []*BindContext,
+) bool {
 	if len(nodes) < 2 || len(nodes) != len(contexts) {
 		return false
 	}
@@ -135,17 +201,45 @@ func (builder *QueryBuilder) shareGroupingSetInput(nodes []int32, contexts []*Bi
 			return false
 		}
 	}
+	// The shared producer is an eager query step. Prove that the legacy plan
+	// already had to consume at least one complete grouping branch; otherwise
+	// an outer LIMIT or a conditionally skipped join/APPLY input could make work
+	// (and errors) observable that the lazy UNION ALL never reached. Reuse the
+	// same path proof as shared CTEs and preserve any join build-side contract
+	// on the replacement scan below.
+	drainOccurrences := make([]cteOccurrence, len(branches))
+	for i := range branches {
+		drainOccurrences[i] = cteOccurrence{rootID: branches[i].rootID}
+	}
+	hashBuildBranches, hasDrainWitness := builder.cteConsumerDrainRequirements(
+		rootID, drainOccurrences,
+	)
+	if !hasDrainWitness {
+		return false
+	}
 	if !builder.subtreeIsDeterministic(first.Children[0], make(map[int32]bool), true) {
 		return false
 	}
 	for _, expr := range first.GroupBy {
-		if expr == nil || !exprCanRemoveProject(expr) {
+		if expr == nil || !exprCanRemoveProject(expr) ||
+			!builder.cteExprIsTotal(
+				first.Children[0], expr, branches[0].ctx, make(map[[2]int32]bool),
+			) {
 			return false
 		}
 	}
 	for _, agg := range first.AggList {
 		fn := agg.GetF()
 		if fn == nil || fn.AggConfigType != planpb.AggregateConfigType_AGG_CONFIG_NONE || len(fn.AggConfig) != 0 {
+			return false
+		}
+		// A legacy grouping branch may leave some grouping expressions inactive,
+		// and an outer consumer may stop before other branches. Dynamic expansion
+		// evaluates every key and aggregate for every set, so only expressions
+		// proved total may cross that evaluation-domain boundary.
+		if !builder.cteAggregateIsTotal(
+			first.Children[0], agg, branches[0].ctx, make(map[[2]int32]bool),
+		) {
 			return false
 		}
 		for _, arg := range fn.Args {
@@ -155,36 +249,10 @@ func (builder *QueryBuilder) shareGroupingSetInput(nodes []int32, contexts []*Bi
 		}
 	}
 
-	// The old plan repeats the producer once per branch. The new streamed
-	// fanout repeats only aggregate output. Unknown or non-beneficial estimates
-	// retain the historical plan.
-	producerID := first.Children[0]
-	ReCalcNodeStats(producerID, builder, true, false, true)
-	producerCost := builder.cteProducerCost(producerID, make(map[int32]bool))
-	totalAggregateRows := float64(0)
-	for i := range branches {
-		ReCalcNodeStats(branches[i].aggID, builder, true, false, true)
-		stats := branches[i].agg.Stats
-		if stats == nil || !finitePositive(stats.Outcnt) {
-			return false
-		}
-		totalAggregateRows += stats.Outcnt
-	}
-	if !finitePositive(producerCost) || !finitePositive(totalAggregateRows) ||
-		producerCost <= totalAggregateRows {
-		return false
-	}
-
-	// Validate every branch path before mutating the plan.
-	for i := range branches {
-		if builder.countReachableNode(branches[i].rootID, branches[i].aggID, make(map[int32]bool)) != 1 ||
-			!builder.groupingBranchExpressionsRewritable(branches[i].rootID, branches[i].aggID, branches[i].agg) {
-			return false
-		}
-	}
-
-	inputTag := builder.genNewBindTag()
-	inputProject := make([]*planpb.Expr, 0, groupCount+aggCount+1)
+	// Build the exact value schemas used by the shared aggregate before changing
+	// the plan. Declared variable-width capacities are deliberately included:
+	// an unknown or unbounded materialized row keeps the historical plan.
+	inputProject := make([]*planpb.Expr, 0, groupCount+aggCount+2)
 	for groupPos, group := range first.GroupBy {
 		group = DeepCopyExpr(group)
 		for _, branch := range branches {
@@ -202,6 +270,78 @@ func (builder *QueryBuilder) shareGroupingSetInput(nodes []int32, contexts []*Bi
 			inputProject = append(inputProject, DeepCopyExpr(arg))
 		}
 	}
+	inputTypes := make([]planpb.Type, len(inputProject))
+	for i := range inputProject {
+		inputTypes[i] = inputProject[i].Typ
+	}
+	outputTypes := make([]planpb.Type, 0, groupCount+aggCount+1)
+	for i := 0; i < groupCount; i++ {
+		outputTypes = append(outputTypes, inputProject[i].Typ)
+	}
+	for _, agg := range first.AggList {
+		outputTypes = append(outputTypes, agg.Typ)
+	}
+	outputTypes = append(outputTypes,
+		planpb.Type{Id: int32(types.T_int64), NotNullable: true})
+	inputRowSize, inputSizeKnown := materializedDeclaredRowSize(inputTypes)
+	outputRowSize, outputSizeKnown := materializedDeclaredRowSize(outputTypes)
+	if !inputSizeKnown || !outputSizeKnown {
+		return false
+	}
+
+	// The old plan repeats the producer once per branch. The new plan runs it
+	// once, then writes the complete aggregate output once and makes every
+	// branch scan that complete output. Compare byte-work, branch count and the
+	// bounded-spill ceiling; unknown or marginal estimates fail closed.
+	producerID := first.Children[0]
+	// A grouping sentinel belongs to the grouping extension that created it.
+	// Legacy outer aggregates intentionally hash an inherited sentinel like SQL
+	// NULL when the corresponding outer key is active. Dynamic grouping must
+	// distinguish its own sentinel from SQL NULL, so feeding it an inherited
+	// sentinel would split one SQL NULL group into two. Until relational
+	// boundaries normalize grouping provenance, keep the legacy plan whenever a
+	// producer can expose one. Follow materialized source steps as well as child
+	// edges because an already-shared inner grouping set lives behind SINK_SCAN.
+	if builder.subtreeMayExposeGroupingSentinel(producerID, make(map[int32]bool)) {
+		return false
+	}
+	ReCalcNodeStats(producerID, builder, true, false, true)
+	producerCost := builder.cteProducerCost(producerID, make(map[int32]bool))
+	totalAggregateRows := float64(0)
+	for i := range branches {
+		ReCalcNodeStats(branches[i].aggID, builder, true, false, true)
+		stats := branches[i].agg.Stats
+		if stats == nil || !finitePositive(stats.Outcnt) {
+			return false
+		}
+		totalAggregateRows += stats.Outcnt
+	}
+	if !groupingSetSharingFitsCostAndStorage(
+		producerCost,
+		inputRowSize,
+		totalAggregateRows,
+		outputRowSize,
+		len(branches),
+	) {
+		return false
+	}
+
+	// Validate every branch path before mutating the plan.
+	for i := range branches {
+		if builder.countReachableNode(branches[i].rootID, branches[i].aggID, make(map[int32]bool)) != 1 ||
+			!builder.groupingBranchExpressionsRewritable(branches[i].rootID, branches[i].aggID, branches[i].agg) {
+			return false
+		}
+	}
+	if !builder.reserveSharedMaterialization(
+		totalAggregateRows*outputRowSize,
+		totalAggregateRows,
+		outputTypes,
+	) {
+		return false
+	}
+
+	inputTag := builder.genNewBindTag()
 	// The penultimate column is an execution-only marker. Normal expanded rows
 	// carry false; on runtime-empty input the projection emits one true row for
 	// each empty grouping set. Group inserts that row's key but skips aggregate
@@ -280,6 +420,9 @@ func (builder *QueryBuilder) shareGroupingSetInput(nodes []int32, contexts []*Bi
 			BindingTags: []int32{scanTag},
 			TableDef:    &planpb.TableDef{Name: "__mo_grouping_sets", Cols: cols},
 		}, branches[i].ctx)
+		if hashBuildBranches[branches[i].rootID] {
+			builder.qry.Nodes[scanID].ExtraOptions = materialized.CTEHashBuildScanOption
+		}
 		setID := groupingSetCol(sharedOutput[len(sharedOutput)-1].Typ, scanTag, int32(len(sharedOutput)-1))
 		matches, err := BindFuncExprImplByPlanExpr(builder.GetContext(), "=", []*planpb.Expr{
 			setID, MakePlan2Int64ConstExprWithType(int64(i)),
@@ -297,6 +440,114 @@ func (builder *QueryBuilder) shareGroupingSetInput(nodes []int32, contexts []*Bi
 			branches[i].agg, scanTag, groupCount)
 	}
 	return true
+}
+
+func (builder *QueryBuilder) subtreeMayExposeGroupingSentinel(nodeID int32, seen map[int32]bool) bool {
+	if nodeID < 0 || int(nodeID) >= len(builder.qry.Nodes) {
+		return true
+	}
+	if seen[nodeID] {
+		return false
+	}
+	seen[nodeID] = true
+	node := builder.qry.Nodes[nodeID]
+	if node == nil {
+		return true
+	}
+	if node.NodeType == planpb.Node_AGG && hasInactiveGroupingColumn(node.GroupingFlag) {
+		return true
+	}
+	if node.NodeType == planpb.Node_PROJECT {
+		if _, expandsGroupingSets := DecodeGroupingSetExpandOption(node.ExtraOptions); expandsGroupingSets &&
+			hasInactiveGroupingColumn(node.GroupingFlag) {
+			return true
+		}
+	}
+	for _, childID := range node.Children {
+		if builder.subtreeMayExposeGroupingSentinel(childID, seen) {
+			return true
+		}
+	}
+	for _, sourceStep := range node.SourceStep {
+		if sourceStep < 0 || int(sourceStep) >= len(builder.qry.Steps) ||
+			builder.subtreeMayExposeGroupingSentinel(builder.qry.Steps[sourceStep], seen) {
+			return true
+		}
+	}
+	return false
+}
+
+// materializedDeclaredRowSize returns a conservative retained-byte estimate for
+// a materialized row. Fixed-width values use their vector element width;
+// variable-width values include both the Varlena cell and declared payload
+// capacity. Missing capacities and unsupported/future types fail closed.
+func materializedDeclaredRowSize(rowTypes []planpb.Type) (float64, bool) {
+	if len(rowTypes) == 0 {
+		return 0, false
+	}
+	rowSize := float64(0)
+	for _, typ := range rowTypes {
+		if typ.Id < 0 || typ.Id > int32(^uint8(0)) {
+			return 0, false
+		}
+		oid := types.T(typ.Id)
+		valueSize, fixed := fixedTypeRetainedBytes(oid)
+		if !fixed {
+			if typ.Width <= 0 {
+				return 0, false
+			}
+			payloadSize := float64(typ.Width)
+			switch oid {
+			case types.T_char, types.T_varchar:
+				// SQL width counts characters; UTF-8 can retain four bytes per
+				// declared character.
+				payloadSize *= 4
+			case types.T_array_float32, types.T_array_float64,
+				types.T_array_bf16, types.T_array_float16,
+				types.T_array_int8, types.T_array_uint8:
+				payloadSize *= float64(types.New(oid, typ.Width, typ.Scale).GetArrayElementSize())
+			case types.T_json, types.T_blob, types.T_text,
+				types.T_binary, types.T_varbinary, types.T_datalink,
+				types.T_geometry, types.T_geometry32:
+			default:
+				return 0, false
+			}
+			valueSize = float64(types.VarlenaSize) + payloadSize
+		}
+		if !typ.NotNullable {
+			valueSize++
+		}
+		if !finitePositive(valueSize) || rowSize > math.MaxFloat64-valueSize {
+			return 0, false
+		}
+		rowSize += valueSize
+	}
+	return rowSize, finitePositive(rowSize)
+}
+
+func groupingSetSharingFitsCostAndStorage(
+	producerCost float64,
+	inputRowSize float64,
+	materializedRows float64,
+	outputRowSize float64,
+	branchCount int,
+) bool {
+	if branchCount < 2 || !finitePositive(producerCost) ||
+		!finitePositive(inputRowSize) || !finitePositive(materializedRows) ||
+		!finitePositive(outputRowSize) ||
+		outputRowSize > float64(materialized.MaxSpillBatchBytes)/2 {
+		return false
+	}
+	materializedBytes := materializedRows * outputRowSize
+	if !finitePositive(materializedBytes) ||
+		materializedBytes > groupingSetEstimatedSpillBytesLimit {
+		return false
+	}
+	savedProducerWork := producerCost * inputRowSize * float64(branchCount-1)
+	materializedTraffic := materializedBytes * float64(branchCount+1) *
+		groupingSetCostSafetyFactor
+	return finitePositive(savedProducerWork) && finitePositive(materializedTraffic) &&
+		savedProducerWork > materializedTraffic
 }
 
 func groupingSetCol(typ planpb.Type, tag, pos int32) *planpb.Expr {

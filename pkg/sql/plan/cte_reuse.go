@@ -42,7 +42,8 @@ const (
 // producer step and one SINK_SCAN per consumer. All uncertain shapes keep the
 // historical inline behavior.
 func (builder *QueryBuilder) reuseMultiReferenceCTEs(rootID int32) int32 {
-	if builder.isForUpdate || builder.sharedComputationDisabled() {
+	if builder.isForUpdate || builder.sharedComputationDisabled() ||
+		builder.sessionSelectLimitMayStopEarly {
 		return rootID
 	}
 
@@ -91,20 +92,26 @@ func (builder *QueryBuilder) reusableCTEProducer(
 	}
 	if allOccurrencesAreCurrentRoleClosures {
 		// This exemption is deliberately limited to the one-column closure
-		// primitive itself. mo_current_roles computes its complete fixed-width
-		// batch before producing any row, so LIMIT and SEMI/ANTI consumers cannot
-		// save its internal SQL work. A scan, join, filter, aggregate, variable-
-		// width projection, or any other surrounding operation must use the
-		// ordinary full-drain, memory, and profitability guards below.
+		// primitive itself plus direct identity projections. mo_current_roles
+		// computes its complete fixed-width batch before producing any row, so
+		// LIMIT and SEMI/ANTI consumers cannot save its internal SQL work. A
+		// computed projection, scan, join, filter, aggregate, or any other
+		// surrounding operation must use the ordinary full-drain, memory, and
+		// profitability guards below.
 		return first.rootID, nil, builder.cteOccurrencesReachable(rootID, cteRef.occurrences)
 	}
-	hashBuildOccurrences, fullyDrained := builder.cteConsumerDrainRequirements(rootID, cteRef.occurrences)
-	if !fullyDrained {
+	hashBuildOccurrences, hasDrainWitness := builder.cteConsumerDrainRequirements(rootID, cteRef.occurrences)
+	if !hasDrainWitness {
 		return 0, nil, false
 	}
 	producerRootID := first.rootID
 	sharedPredicate, predicateAware, rowDomainExact := builder.cteSharedConsumerPredicate(
 		rootID, cteRef.occurrences)
+	if !rowDomainExact && !builder.cteProducerEvaluationIsTotal(
+		first.rootID, first.rootID, first.ctx, make(map[int32]bool),
+	) {
+		return 0, nil, false
+	}
 	if !builder.cteOutputDemandPreservesEvaluation(
 		rootID, cteRef.occurrences, rowDomainExact,
 	) {
@@ -149,12 +156,172 @@ func (builder *QueryBuilder) reusableCTEProducer(
 		discardProducerFilter()
 		return 0, nil, false
 	}
+	estimatedMaterializedBytes, _, estimateKnown := cteEstimatedMaterializedBytes(
+		storageStats, storageTypes,
+	)
+	if !estimateKnown {
+		discardProducerFilter()
+		return 0, nil, false
+	}
 
 	if !cteReuseIsProfitable(producerCost, stats.Outcnt, refCount) {
 		discardProducerFilter()
 		return 0, nil, false
 	}
+	if !builder.reserveSharedMaterialization(
+		estimatedMaterializedBytes,
+		storageStats.Outcnt,
+		storageTypes,
+	) {
+		discardProducerFilter()
+		return 0, nil, false
+	}
 	return producerRootID, hashBuildOccurrences, true
+}
+
+// cteProducerEvaluationIsTotal closes the evaluation-domain gap left when no
+// exact union of consumer predicates can be pushed into the shared producer.
+// Inlining may push an individual consumer predicate through projections and
+// aggregates, avoiding any producer expression on excluded rows. Eager
+// materialization cannot preserve that behavior unless every expression in
+// the producer is proved total and side-effect free. This deliberately checks
+// more than the final demanded columns: grouping keys, HAVING, join conditions
+// and intermediate expressions can all have a smaller legacy row domain.
+func (builder *QueryBuilder) cteProducerEvaluationIsTotal(
+	rootID, nodeID int32,
+	ctx *BindContext,
+	seen map[int32]bool,
+) bool {
+	if nodeID < 0 || int(nodeID) >= len(builder.qry.Nodes) || seen[nodeID] {
+		return nodeID >= 0 && int(nodeID) < len(builder.qry.Nodes)
+	}
+	seen[nodeID] = true
+	node := builder.qry.Nodes[nodeID]
+	if node == nil || !areTruncationSafePredicates(node.FilterList) ||
+		!areTruncationSafePredicates(node.OnList) ||
+		!areTruncationSafePredicates(node.BlockFilterList) {
+		return false
+	}
+	if node.NodeType == planpb.Node_SINK_SCAN {
+		// A previously admitted materialized producer is an optimization
+		// boundary: outer predicates cannot be pushed back through its source.
+		return len(node.SourceStep) == 1
+	}
+	for _, exprList := range [][]*planpb.Expr{
+		node.ProjectList,
+		node.GroupBy,
+		node.WinSpecList,
+		node.TimeWindowPartitionBy,
+		node.TblFuncExprList,
+		node.FillVal,
+		node.OnUpdateExprs,
+		node.PhysicalEqualityKeyList,
+	} {
+		for _, expr := range exprList {
+			if !builder.cteExprIsTotal(rootID, expr, ctx, make(map[[2]int32]bool)) {
+				return false
+			}
+		}
+	}
+	for _, agg := range node.AggList {
+		if !builder.cteAggregateIsTotal(rootID, agg, ctx, make(map[[2]int32]bool)) {
+			return false
+		}
+	}
+	for _, orderBy := range node.OrderBy {
+		if orderBy == nil ||
+			!builder.cteExprIsTotal(rootID, orderBy.Expr, ctx, make(map[[2]int32]bool)) {
+			return false
+		}
+	}
+	for _, expr := range []*planpb.Expr{
+		node.Limit,
+		node.Offset,
+		node.Interval,
+		node.Sliding,
+		node.Timestamp,
+		node.WEnd,
+		node.GapFillStart,
+		node.GapFillEnd,
+	} {
+		if expr != nil &&
+			!builder.cteExprIsTotal(rootID, expr, ctx, make(map[[2]int32]bool)) {
+			return false
+		}
+	}
+	if node.RowsetData != nil {
+		for _, col := range node.RowsetData.Cols {
+			if col == nil {
+				return false
+			}
+			for _, data := range col.Data {
+				if data == nil ||
+					!builder.cteExprIsTotal(rootID, data.Expr, ctx, make(map[[2]int32]bool)) {
+					return false
+				}
+			}
+		}
+	}
+	if node.IndexReaderParam != nil {
+		for _, orderBy := range node.IndexReaderParam.OrderBy {
+			if orderBy == nil || !builder.cteExprIsTotal(
+				rootID, orderBy.Expr, ctx, make(map[[2]int32]bool),
+			) {
+				return false
+			}
+		}
+		for _, expr := range []*planpb.Expr{
+			node.IndexReaderParam.Limit,
+			distRangeLowerBound(node.IndexReaderParam.DistRange),
+			distRangeUpperBound(node.IndexReaderParam.DistRange),
+		} {
+			if expr != nil && !builder.cteExprIsTotal(rootID, expr, ctx, make(map[[2]int32]bool)) {
+				return false
+			}
+		}
+	}
+	if node.VectorIndexScan != nil {
+		for _, expr := range append([]*planpb.Expr{
+			node.VectorIndexScan.QueryVector,
+			node.VectorIndexScan.CandidateLimit,
+			node.VectorIndexScan.FirstRoundLimit,
+			distRangeLowerBound(node.VectorIndexScan.DistanceRange),
+			distRangeUpperBound(node.VectorIndexScan.DistanceRange),
+		}, node.VectorIndexScan.PreFilters...) {
+			if expr != nil && !builder.cteExprIsTotal(rootID, expr, ctx, make(map[[2]int32]bool)) {
+				return false
+			}
+		}
+	}
+	if node.DedupJoinCtx != nil {
+		for _, expr := range node.DedupJoinCtx.UpdateColExprList {
+			if !builder.cteExprIsTotal(rootID, expr, ctx, make(map[[2]int32]bool)) {
+				return false
+			}
+		}
+	}
+	for _, specs := range [][]*planpb.RuntimeFilterSpec{
+		node.RuntimeFilterProbeList,
+		node.RuntimeFilterBuildList,
+	} {
+		for _, spec := range specs {
+			if spec == nil ||
+				spec.Expr != nil && !builder.cteExprIsTotal(
+					rootID, spec.Expr, ctx, make(map[[2]int32]bool),
+				) ||
+				spec.BuildExpr != nil && !builder.cteExprIsTotal(
+					rootID, spec.BuildExpr, ctx, make(map[[2]int32]bool),
+				) {
+				return false
+			}
+		}
+	}
+	for _, childID := range node.Children {
+		if !builder.cteProducerEvaluationIsTotal(rootID, childID, ctx, seen) {
+			return false
+		}
+	}
+	return true
 }
 
 // cteStorageOutputTypes mirrors the final SINK/SINK_SCAN column pruning when
@@ -423,6 +590,7 @@ func countCTEConsumerNodeColRefs(node *planpb.Node, colRefCnt map[[2]int32]int) 
 		node.BlockFilterList,
 		node.FillVal,
 		node.OnUpdateExprs,
+		node.PhysicalEqualityKeyList,
 	} {
 		increaseRefCntForExprList(exprList, 1, colRefCnt)
 	}
@@ -438,10 +606,67 @@ func countCTEConsumerNodeColRefs(node *planpb.Node, colRefCnt map[[2]int32]int) 
 		node.Sliding,
 		node.Timestamp,
 		node.WEnd,
+		node.GapFillStart,
+		node.GapFillEnd,
 	} {
 		if expr != nil {
 			increaseRefCnt(expr, 1, colRefCnt)
 		}
+	}
+	for _, specs := range [][]*planpb.RuntimeFilterSpec{
+		node.RuntimeFilterProbeList,
+		node.RuntimeFilterBuildList,
+	} {
+		for _, spec := range specs {
+			if spec != nil {
+				increaseCTERefCnt(spec.Expr, colRefCnt)
+				increaseCTERefCnt(spec.BuildExpr, colRefCnt)
+			}
+		}
+	}
+	if node.RowsetData != nil {
+		for _, col := range node.RowsetData.Cols {
+			if col == nil {
+				continue
+			}
+			for _, data := range col.Data {
+				if data != nil {
+					increaseRefCnt(data.Expr, 1, colRefCnt)
+				}
+			}
+		}
+	}
+	if node.IndexReaderParam != nil {
+		increaseCTERefCnt(node.IndexReaderParam.Limit, colRefCnt)
+		increaseCTERefCnt(distRangeLowerBound(node.IndexReaderParam.DistRange), colRefCnt)
+		increaseCTERefCnt(distRangeUpperBound(node.IndexReaderParam.DistRange), colRefCnt)
+		for _, orderBy := range node.IndexReaderParam.OrderBy {
+			if orderBy != nil {
+				increaseRefCnt(orderBy.Expr, 1, colRefCnt)
+			}
+		}
+	}
+	if node.VectorIndexScan != nil {
+		increaseCTERefCnt(node.VectorIndexScan.QueryVector, colRefCnt)
+		increaseCTERefCnt(node.VectorIndexScan.CandidateLimit, colRefCnt)
+		increaseCTERefCnt(node.VectorIndexScan.FirstRoundLimit, colRefCnt)
+		increaseCTERefCnt(distRangeLowerBound(node.VectorIndexScan.DistanceRange), colRefCnt)
+		increaseCTERefCnt(distRangeUpperBound(node.VectorIndexScan.DistanceRange), colRefCnt)
+		increaseRefCntForExprList(node.VectorIndexScan.PreFilters, 1, colRefCnt)
+	}
+	if node.DedupJoinCtx != nil {
+		increaseRefCntForExprList(node.DedupJoinCtx.UpdateColExprList, 1, colRefCnt)
+	}
+	for _, target := range node.LockTargets {
+		if target != nil {
+			increaseCTERefCnt(target.LockRows, colRefCnt)
+		}
+	}
+}
+
+func increaseCTERefCnt(expr *planpb.Expr, colRefCnt map[[2]int32]int) {
+	if expr != nil {
+		increaseRefCnt(expr, 1, colRefCnt)
 	}
 }
 
@@ -465,14 +690,30 @@ func fixedOutputRowSize(outputTypes []planpb.Type) (float64, bool) {
 }
 
 func cteReuseFitsStorage(stats *planpb.Stats, outputTypes []planpb.Type, spillEligible bool) bool {
-	if stats == nil || !finitePositive(stats.Outcnt) || !finitePositive(stats.Rowsize) {
+	estimatedBytes, fixedWidth, ok := cteEstimatedMaterializedBytes(stats, outputTypes)
+	if !ok {
 		return false
 	}
-	estimatedBytes := stats.Outcnt * stats.Rowsize
-	if !finitePositive(estimatedBytes) {
-		return false
+	if fixedWidth && estimatedBytes <= cteReuseEstimatedMaterializedBytesLimit {
+		return true
 	}
+	declaredRowSize, sizeKnown := materializedDeclaredRowSize(outputTypes)
+	return spillEligible && sizeKnown &&
+		declaredRowSize <= float64(materialized.MaxSpillBatchBytes)/2 &&
+		estimatedBytes <= cteReuseEstimatedSpillBytesLimit
+}
 
+func cteEstimatedMaterializedBytes(
+	stats *planpb.Stats,
+	outputTypes []planpb.Type,
+) (float64, bool, bool) {
+	if stats == nil || !finitePositive(stats.Outcnt) || !finitePositive(stats.Rowsize) {
+		return 0, false, false
+	}
+	declaredRowSize, sizeKnown := materializedDeclaredRowSize(outputTypes)
+	if !sizeKnown {
+		return 0, false, false
+	}
 	fixedWidth := true
 	for i := range outputTypes {
 		if !types.T(outputTypes[i].Id).IsFixedLen() {
@@ -480,10 +721,82 @@ func cteReuseFitsStorage(stats *planpb.Stats, outputTypes []planpb.Type, spillEl
 			break
 		}
 	}
-	if fixedWidth && estimatedBytes <= cteReuseEstimatedMaterializedBytesLimit {
-		return true
+	estimatedRowSize := math.Max(stats.Rowsize, declaredRowSize)
+	estimatedBytes := stats.Outcnt * estimatedRowSize
+	return estimatedBytes, fixedWidth, finitePositive(estimatedBytes)
+}
+
+const (
+	// A spill record contains an eight-byte record frame, the grouping codec's
+	// payload frame, and the stable batch header. The transient parameter and
+	// grouping-provenance trailers are charged at their largest one-row
+	// representation because execution may legally emit one row per batch.
+	sharedMaterializationSpillRecordFixedBytes    = 1 + 8 + 8 + 8 + 4*5 + 4 + 4 + 8 + 4 + 4
+	sharedMaterializationSpillVectorFixedBytes    = 4 + 1 + types.TSize + 4*4 + 1 + 4
+	sharedMaterializationSpillVectorMetadataBytes = 2 * (1 + 4 + 1)
+	sharedMaterializationSpillNullableBytes       = 24 + 8
+	sharedMaterializationSpillGroupingBytes       = 24 + 8
+)
+
+func estimatedSharedMaterializationSpillBytes(
+	materializedBytes, estimatedRows float64,
+	outputTypes []planpb.Type,
+) (float64, bool) {
+	if !finitePositive(materializedBytes) || !finitePositive(estimatedRows) || len(outputTypes) == 0 {
+		return 0, false
 	}
-	return spillEligible && estimatedBytes <= cteReuseEstimatedSpillBytesLimit
+	recordOverhead := float64(sharedMaterializationSpillRecordFixedBytes)
+	for i := range outputTypes {
+		recordOverhead += float64(sharedMaterializationSpillVectorFixedBytes +
+			sharedMaterializationSpillVectorMetadataBytes +
+			sharedMaterializationSpillGroupingBytes)
+		if !outputTypes[i].NotNullable {
+			// A one-row bitmap occupies one word plus its wire framing.
+			recordOverhead += float64(sharedMaterializationSpillNullableBytes)
+		}
+	}
+	// Batch cardinality is an execution property, not a planner invariant. Use
+	// the legal worst case of one spill record per estimated row so framing and
+	// vector metadata cannot make an otherwise exact spill cap fail.
+	spillBytes := materializedBytes + math.Ceil(estimatedRows)*recordOverhead
+	return spillBytes, finitePositive(spillBytes)
+}
+
+func (builder *QueryBuilder) reserveSharedMaterialization(
+	materializedBytes, estimatedRows float64,
+	outputTypes []planpb.Type,
+) bool {
+	spillBytes, spillEstimateKnown := estimatedSharedMaterializationSpillBytes(
+		materializedBytes, estimatedRows, outputTypes,
+	)
+	if !spillEstimateKnown {
+		return false
+	}
+	memoryBytes := math.Min(materializedBytes, float64(materialized.MaxSourceRetainedBytes))
+	memoryLimit := math.MaxFloat64
+	// Charge every source against spill as well as retained memory. Even a
+	// byte-small source spills after the bounded in-memory batch-count limit,
+	// and batch count is not a hard planner proof from estimated rows.
+	spillLimit := cteReuseEstimatedSpillBytesLimit
+	if builder.compCtx != nil {
+		if proc := builder.compCtx.GetProcess(); proc != nil && proc.Base != nil {
+			if proc.Base.Lim.Size > 0 {
+				memoryLimit = float64(proc.Base.Lim.Size)
+			}
+			if proc.Base.Lim.SpillSize > 0 {
+				spillLimit = math.Min(spillLimit, float64(proc.Base.Lim.SpillSize))
+			}
+		}
+	}
+	if !finitePositive(memoryLimit) ||
+		builder.sharedMaterializationMemoryBytes > memoryLimit-memoryBytes ||
+		!finitePositive(spillLimit) ||
+		builder.sharedMaterializationSpillBytes > spillLimit-spillBytes {
+		return false
+	}
+	builder.sharedMaterializationMemoryBytes += memoryBytes
+	builder.sharedMaterializationSpillBytes += spillBytes
+	return true
 }
 
 func finitePositive(value float64) bool {
@@ -582,9 +895,12 @@ func (builder *QueryBuilder) cteSubtreeIsCurrentRoleClosure(
 			len(node.OrderBy) == 0 && len(node.RuntimeFilterProbeList) == 0 &&
 			len(node.RuntimeFilterBuildList) == 0
 	}
-	return node.NodeType == planpb.Node_PROJECT && len(node.Children) == 1 &&
-		len(node.ProjectList) == 1 && node.ProjectList[0].Typ.Id == int32(types.T_int64) &&
-		len(node.FilterList) == 0 && node.Limit == nil && node.Offset == nil &&
+	if node.NodeType != planpb.Node_PROJECT || len(node.Children) != 1 ||
+		len(node.ProjectList) != 1 || node.ProjectList[0].Typ.Id != int32(types.T_int64) ||
+		node.ProjectList[0].GetCol() == nil || node.ProjectList[0].GetCol().ColPos != 0 {
+		return false
+	}
+	return len(node.FilterList) == 0 && node.Limit == nil && node.Offset == nil &&
 		len(node.OrderBy) == 0 && len(node.RuntimeFilterProbeList) == 0 &&
 		len(node.RuntimeFilterBuildList) == 0 &&
 		builder.cteSubtreeIsCurrentRoleClosure(node.Children[0], seen)
@@ -596,6 +912,20 @@ func (builder *QueryBuilder) cteSubtreeIsDeterministic(nodeID int32, seen map[in
 	// producer so an outer CTE can still be shared instead of forcing a choice
 	// between inner and outer reuse.
 	return builder.subtreeIsDeterministic(nodeID, seen, true)
+}
+
+func distRangeLowerBound(distRange *planpb.DistRange) *planpb.Expr {
+	if distRange == nil {
+		return nil
+	}
+	return distRange.LowerBound
+}
+
+func distRangeUpperBound(distRange *planpb.DistRange) *planpb.Expr {
+	if distRange == nil {
+		return nil
+	}
+	return distRange.UpperBound
 }
 
 func (builder *QueryBuilder) subtreeIsDeterministic(nodeID int32, seen map[int32]bool, allowMaterializedSink bool) bool {
@@ -642,6 +972,7 @@ func (builder *QueryBuilder) subtreeIsDeterministic(nodeID int32, seen map[int32
 		node.BlockFilterList,
 		node.FillVal,
 		node.OnUpdateExprs,
+		node.PhysicalEqualityKeyList,
 	}
 	for _, exprList := range exprLists {
 		for _, expr := range exprList {
@@ -662,9 +993,59 @@ func (builder *QueryBuilder) subtreeIsDeterministic(nodeID int32, seen map[int32
 		node.Sliding,
 		node.Timestamp,
 		node.WEnd,
+		node.GapFillStart,
+		node.GapFillEnd,
 	} {
 		if expr != nil && !exprCanRemoveProject(expr) {
 			return false
+		}
+	}
+	if node.RowsetData != nil {
+		for _, col := range node.RowsetData.Cols {
+			if col == nil {
+				return false
+			}
+			for _, data := range col.Data {
+				if data == nil || data.Expr == nil || !exprCanRemoveProject(data.Expr) {
+					return false
+				}
+			}
+		}
+	}
+	if node.IndexReaderParam != nil {
+		for _, orderBy := range node.IndexReaderParam.OrderBy {
+			if orderBy == nil || orderBy.Expr == nil || !exprCanRemoveProject(orderBy.Expr) {
+				return false
+			}
+		}
+		for _, expr := range []*planpb.Expr{
+			node.IndexReaderParam.Limit,
+			distRangeLowerBound(node.IndexReaderParam.DistRange),
+			distRangeUpperBound(node.IndexReaderParam.DistRange),
+		} {
+			if expr != nil && !exprCanRemoveProject(expr) {
+				return false
+			}
+		}
+	}
+	if node.VectorIndexScan != nil {
+		for _, expr := range append([]*planpb.Expr{
+			node.VectorIndexScan.QueryVector,
+			node.VectorIndexScan.CandidateLimit,
+			node.VectorIndexScan.FirstRoundLimit,
+			distRangeLowerBound(node.VectorIndexScan.DistanceRange),
+			distRangeUpperBound(node.VectorIndexScan.DistanceRange),
+		}, node.VectorIndexScan.PreFilters...) {
+			if expr != nil && !exprCanRemoveProject(expr) {
+				return false
+			}
+		}
+	}
+	if node.DedupJoinCtx != nil {
+		for _, expr := range node.DedupJoinCtx.UpdateColExprList {
+			if expr == nil || !exprCanRemoveProject(expr) {
+				return false
+			}
 		}
 	}
 	for _, filterList := range [][]*planpb.RuntimeFilterSpec{
@@ -712,16 +1093,19 @@ func (builder *QueryBuilder) cteOccurrencesReachable(rootID int32, occurrences [
 	return true
 }
 
-func (builder *QueryBuilder) cteConsumersFullyDrain(rootID int32, occurrences []cteOccurrence) bool {
+func (builder *QueryBuilder) cteHasDrainWitness(rootID int32, occurrences []cteOccurrence) bool {
 	_, ok := builder.cteConsumerDrainRequirements(rootID, occurrences)
 	return ok
 }
 
-// cteConsumerDrainRequirements proves that every reader consumes the complete
-// materialized stream. A logical right input of an equality SEMI join is a
-// full-drain boundary because hash build must consume the complete membership
-// set. The returned occurrences must retain that physical build-side contract
-// through later join costing.
+// cteConsumerDrainRequirements proves that at least one legacy occurrence must
+// evaluate the complete producer. That witness makes eager materialization
+// preserve the producer's error/evaluation domain; other readers may stop
+// early because the bounded materialized source supports independent release.
+// A witness behind a join must be on the exact logical build path of every join
+// ancestor: an empty hash build can skip its entire probe subtree, even when
+// that subtree contains an aggregate or sort. The returned witness occurrences
+// must retain their physical build-side contract through later join costing.
 func (builder *QueryBuilder) cteConsumerDrainRequirements(
 	rootID int32,
 	occurrences []cteOccurrence,
@@ -730,6 +1114,8 @@ func (builder *QueryBuilder) cteConsumerDrainRequirements(
 	reachable := make(map[int32]bool)
 	builder.collectCTEParents(rootID, parents, reachable)
 	hashBuildOccurrences := make(map[int32]bool)
+	requiredBuildChildByJoin := make(map[int32]int32)
+	hasDrainWitness := false
 
 	for _, occurrence := range occurrences {
 		// replaceCTEOccurrences rewrites only the tree below rootID. An
@@ -741,14 +1127,16 @@ func (builder *QueryBuilder) cteConsumerDrainRequirements(
 			return nil, false
 		}
 		type consumerPath struct {
-			nodeID  int32
-			childID int32
-			drained bool
+			nodeID            int32
+			childID           int32
+			requiresHashBuild bool
 		}
 		queue := make([]consumerPath, 0, len(parents[occurrence.rootID]))
 		for _, nodeID := range parents[occurrence.rootID] {
 			queue = append(queue, consumerPath{nodeID: nodeID, childID: occurrence.rootID})
 		}
+		witnessWithoutHashBuild := len(queue) == 0
+		witnessWithHashBuild := false
 		seen := make(map[consumerPath]bool)
 		for len(queue) > 0 {
 			path := queue[0]
@@ -758,48 +1146,143 @@ func (builder *QueryBuilder) cteConsumerDrainRequirements(
 			}
 			seen[path] = true
 			node := builder.qry.Nodes[path.nodeID]
-			if node.NodeType == planpb.Node_AGG || node.NodeType == planpb.Node_SORT ||
-				node.NodeType == planpb.Node_DISTINCT || node.NodeType == planpb.Node_WINDOW {
-				path.drained = true
+			// LIMIT can stop the subtree before it completes. Only a positive
+			// literal limit on a proven blocking operator is a witness: LIMIT 0 is
+			// compiled without its input steps, and a dynamic limit may be zero at
+			// execution time. OFFSET alone does not shorten a fully consumed stream.
+			if node.Limit != nil && !cteLimitPreservesFullInput(node) {
+				continue
 			}
-			// LIMIT/OFFSET can stop a consumer early only before an operator that
-			// must read its complete input. A Top-N SORT or an aggregate still
-			// drains its CTE input even when its own output is limited.
-			if !path.drained && (node.Limit != nil || node.Offset != nil) {
-				return nil, false
+			// APPLY may skip its right input when the left side is empty. Block
+			// sampling can terminate successfully after a subset of its input.
+			// Neither node can carry a complete-evaluation witness upward.
+			if node.NodeType == planpb.Node_APPLY || node.NodeType == planpb.Node_SAMPLE {
+				continue
 			}
-			if !path.drained && node.NodeType == planpb.Node_APPLY {
-				return nil, false
-			}
-			if !path.drained && node.NodeType == planpb.Node_JOIN {
+			if node.NodeType == planpb.Node_JOIN {
 				switch node.JoinType {
+				case planpb.Node_INNER:
+					// A non-shuffle INNER hash join can stop before reading its
+					// probe input when the build is empty. Default costing may put
+					// either logical child on build, so reserve this exact child and
+					// preserve it with the marker below. A fixed join-order hint
+					// forbids that physical move and therefore accepts only the
+					// already-right child.
+					if len(node.Children) != 2 || !builder.IsEquiJoin(node) ||
+						path.childID != node.Children[0] && path.childID != node.Children[1] {
+						continue
+					}
+					if path.childID == node.Children[0] && builder.optimizerHints != nil &&
+						builder.optimizerHints.joinOrdering != 0 {
+						continue
+					}
+					// Existing runtime-filter dependencies and a direct function-scan
+					// build both pin logical child 1. determineBuildAndProbeSide returns
+					// before ordinary costing for these shapes, so logical child 0
+					// cannot be promised as the later physical build.
+					if path.childID == node.Children[0] &&
+						(len(node.RuntimeFilterBuildList) != 0 ||
+							builder.qry.Nodes[node.Children[1]].NodeType == planpb.Node_FUNCTION_SCAN) {
+						continue
+					}
+					siblingID := node.Children[0]
+					if path.childID == siblingID {
+						siblingID = node.Children[1]
+					}
+					if builder.subtreeContainsCTEHashBuildScan(siblingID, make(map[int32]bool)) {
+						continue
+					}
+					if requiredChild, exists := requiredBuildChildByJoin[path.nodeID]; exists && requiredChild != path.childID {
+						continue
+					}
+					requiredBuildChildByJoin[path.nodeID] = path.childID
+					path.requiresHashBuild = true
+				case planpb.Node_LEFT:
+					// LEFT hash/loop joins consume the complete logical right build
+					// before probing. Preserve the non-right physical orientation;
+					// the nullable/probe side can never establish this witness.
+					if node.IsRightJoin || len(node.Children) != 2 ||
+						path.childID != node.Children[1] ||
+						builder.subtreeContainsCTEHashBuildScan(node.Children[0], make(map[int32]bool)) {
+						continue
+					}
+					if requiredChild, exists := requiredBuildChildByJoin[path.nodeID]; exists && requiredChild != path.childID {
+						continue
+					}
+					requiredBuildChildByJoin[path.nodeID] = path.childID
+					path.requiresHashBuild = true
 				case planpb.Node_SEMI:
 					if node.IsRightJoin || len(node.Children) != 2 ||
-						path.childID != node.Children[1] || !builder.IsEquiJoin(node) {
-						return nil, false
+						path.childID != node.Children[1] ||
+						builder.subtreeContainsCTEHashBuildScan(node.Children[0], make(map[int32]bool)) ||
+						!builder.IsEquiJoin(node) {
+						continue
 					}
-					path.drained = true
-					hashBuildOccurrences[occurrence.rootID] = true
+					if requiredChild, exists := requiredBuildChildByJoin[path.nodeID]; exists && requiredChild != path.childID {
+						continue
+					}
+					requiredBuildChildByJoin[path.nodeID] = path.childID
+					path.requiresHashBuild = true
 				case planpb.Node_MARK:
 					if node.IsRightJoin || len(node.Children) != 2 ||
 						path.childID != node.Children[1] ||
+						builder.subtreeContainsCTEHashBuildScan(node.Children[0], make(map[int32]bool)) ||
 						!builder.cteMarkJoinBecomesHashSemi(path.nodeID, parents) {
-						return nil, false
+						continue
 					}
-					path.drained = true
-					hashBuildOccurrences[occurrence.rootID] = true
-				case planpb.Node_ANTI, planpb.Node_SINGLE:
-					return nil, false
+					if requiredChild, exists := requiredBuildChildByJoin[path.nodeID]; exists && requiredChild != path.childID {
+						continue
+					}
+					requiredBuildChildByJoin[path.nodeID] = path.childID
+					path.requiresHashBuild = true
+				default:
+					// CROSS, outer, probe-sensitive and unknown join shapes do not
+					// prove that this exact input is consumed completely.
+					continue
 				}
 			}
-			for _, parentID := range parents[path.nodeID] {
+			parentIDs := parents[path.nodeID]
+			if len(parentIDs) == 0 {
+				if path.requiresHashBuild {
+					witnessWithHashBuild = true
+				} else {
+					witnessWithoutHashBuild = true
+				}
+				continue
+			}
+			for _, parentID := range parentIDs {
 				queue = append(queue, consumerPath{
-					nodeID: parentID, childID: path.nodeID, drained: path.drained,
+					nodeID: parentID, childID: path.nodeID,
+					requiresHashBuild: path.requiresHashBuild,
 				})
 			}
 		}
+		if witnessWithoutHashBuild || witnessWithHashBuild {
+			hasDrainWitness = true
+			if !witnessWithoutHashBuild && witnessWithHashBuild {
+				hashBuildOccurrences[occurrence.rootID] = true
+			}
+		}
 	}
-	return hashBuildOccurrences, true
+	return hashBuildOccurrences, hasDrainWitness
+}
+
+func cteLimitPreservesFullInput(node *planpb.Node) bool {
+	if node == nil || node.Limit == nil {
+		return true
+	}
+	// Hash aggregation and sort cannot produce even their first row before
+	// consuming the complete input. DISTINCT and WINDOW are deliberately not
+	// included: their implementations may emit before reaching end-of-input.
+	if node.NodeType != planpb.Node_AGG && node.NodeType != planpb.Node_SORT {
+		return false
+	}
+	literal := node.Limit.GetLit()
+	if literal == nil || literal.Isnull {
+		return false
+	}
+	value, ok := literal.Value.(*planpb.Literal_U64Val)
+	return ok && value.U64Val > 0
 }
 
 // cteMarkJoinBecomesHashSemi recognizes the binder shape for a positive
@@ -1074,6 +1557,7 @@ func (builder *QueryBuilder) cteOccurrenceLocalPredicates(
 		switch node.NodeType {
 		case planpb.Node_FILTER:
 			if node.FilterIsBarrier || node.Limit != nil || node.Offset != nil {
+				domainComplete = false
 				continue
 			}
 			candidates = node.FilterList
@@ -1087,7 +1571,21 @@ func (builder *QueryBuilder) cteOccurrenceLocalPredicates(
 			}
 			candidates = append(candidates, node.OnList...)
 			candidates = append(candidates, node.FilterList...)
+		case planpb.Node_AGG, planpb.Node_SORT:
+			// These nodes establish the complete input evaluation domain before
+			// an ancestor can reduce their output. A local LIMIT/OFFSET has already
+			// made the proof inexact above.
+			continue
 		default:
+			// Keep walking through projection and other binding boundaries. We do
+			// not copy predicates across them without an explicit tag inversion,
+			// but an outer FILTER/JOIN/LIMIT must still make the row-domain proof
+			// inexact instead of disguising this occurrence as unfiltered.
+			if len(node.FilterList) != 0 || node.NodeType == planpb.Node_APPLY ||
+				node.NodeType == planpb.Node_SAMPLE {
+				domainComplete = false
+			}
+			queue = append(queue, parents[nodeID]...)
 			continue
 		}
 
