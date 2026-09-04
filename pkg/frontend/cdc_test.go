@@ -3379,6 +3379,17 @@ func TestCdcTaskStopAllReadersRetainsEarlierIncompleteOwner(t *testing.T) {
 	}, time.Second, time.Millisecond)
 }
 
+func TestCdcTaskStopAllReadersReportsImmediateCompletion(t *testing.T) {
+	executor := &CDCTaskExecutor{
+		spec:           &task.CreateCdcDetails{TaskId: "task-no-readers"},
+		runningReaders: &sync.Map{},
+	}
+
+	allStopped, allDone := executor.stopAllReaders()
+	require.True(t, allStopped)
+	require.True(t, completionReady(allDone))
+}
+
 func TestCdcTaskRecoveryRejectsIncompletePreviousReaderGeneration(t *testing.T) {
 	for _, tc := range []struct {
 		name   string
@@ -3413,6 +3424,10 @@ func TestCdcTaskRecoveryRejectsIncompletePreviousReaderGeneration(t *testing.T) 
 
 func TestCdcTaskRestartCallbackDrainTimeoutRestoresRetryableState(t *testing.T) {
 	callbackDone := make(chan struct{})
+	readerDone := make(chan struct{})
+	var releaseReaderOnce sync.Once
+	releaseReader := func() { releaseReaderOnce.Do(func() { close(readerDone) }) }
+	t.Cleanup(releaseReader)
 	executor := &CDCTaskExecutor{
 		activeRoutine: cdc.NewCdcActiveRoutine(),
 		cnUUID:        "test-cn",
@@ -3420,12 +3435,17 @@ func TestCdcTaskRestartCallbackDrainTimeoutRestoresRetryableState(t *testing.T) 
 			TaskId:   "task-restart-callback-timeout",
 			TaskName: "task-restart-callback-timeout",
 		},
+		runningReaders:        &sync.Map{},
 		stateMachine:          NewExecutorStateMachine(),
 		holdCh:                make(chan int, 1),
 		callbackDone:          callbackDone,
 		callbackCount:         1,
 		restartStartupTimeout: 20 * time.Millisecond,
 	}
+	executor.runningReaders.Store("db.table", &mockChangeReader{
+		info:   &cdc.DbTableInfo{SourceDbName: "db", SourceTblName: "table"},
+		waitCh: readerDone,
+	})
 	require.NoError(t, executor.stateMachine.Transition(TransitionStart))
 	require.NoError(t, executor.stateMachine.Transition(TransitionStartSuccess))
 
@@ -3435,6 +3455,14 @@ func TestCdcTaskRestartCallbackDrainTimeoutRestoresRetryableState(t *testing.T) 
 	require.True(t, executor.stateMachine.CanTransition(TransitionRestart),
 		"the durable restart retry owner must be able to retry locally")
 	close(callbackDone)
+
+	err = executor.Restart()
+	require.ErrorContains(t, err, "previous CDC reader generation is still stopping")
+	require.Equal(t, StateFailed, executor.stateMachine.State())
+	releaseReader()
+	require.Eventually(t, func() bool {
+		return completionReady(executor.readerShutdownCompletion())
+	}, time.Second, time.Millisecond)
 }
 
 func TestCdcTaskReclaimDeletedWatermarkStopsReaderPublishedAfterFirstSnapshot(t *testing.T) {

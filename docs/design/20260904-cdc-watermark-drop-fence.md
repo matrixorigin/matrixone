@@ -93,7 +93,10 @@ completion owner remains open; they must not remove the pause fence or publish
 a replacement generation beside an old reader. A Restart callback-drain timeout
 fences the timed-out generation and restores local `Failed`, matching the
 durable `RestartRequested` retry owner instead of stranding the executor in
-`Starting`.
+`Starting`. That timeout path immediately signals and registers completion for
+all visible readers but does not add the normal synchronous reader wait after
+the restart deadline has already expired; the next retry observes the retained
+completion owner.
 
 Callback admission, count changes, completion-channel rotation, and channel
 closure all occur under `callbackMu`. This prevents a zero-to-new-generation
