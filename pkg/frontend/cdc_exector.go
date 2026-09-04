@@ -1694,6 +1694,11 @@ func (exec *CDCTaskExecutor) initiateReaderShutdown() (<-chan struct{}, int) {
 			entry.reader.Close()
 			logutil.Debug("cdc.frontend.task.stop_reader_close_done", zap.String("task-id", exec.spec.TaskId), zap.String("table", entry.key), zap.Duration("cost", time.Since(closeStart)))
 			entry.reader.Wait()
+			// Remove only the reader instance captured by this shutdown. A callback
+			// that publishes after the snapshot must remain visible to the lifecycle
+			// owner's final scan; an unconditional later Range/Delete can otherwise
+			// hide that live reader without ever closing it.
+			exec.runningReaders.CompareAndDelete(entry.key, entry.reader)
 		}(entry)
 	}
 	go func() {
@@ -1701,10 +1706,6 @@ func (exec *CDCTaskExecutor) initiateReaderShutdown() (<-chan struct{}, int) {
 		close(readersDone)
 	}()
 
-	exec.runningReaders.Range(func(key, value interface{}) bool {
-		exec.runningReaders.Delete(key)
-		return true
-	})
 	return exec.setReaderShutdownCompletion(readersDone), len(readers)
 }
 

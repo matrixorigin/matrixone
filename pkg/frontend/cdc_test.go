@@ -3390,6 +3390,52 @@ func TestCdcTaskStopAllReadersReportsImmediateCompletion(t *testing.T) {
 	require.True(t, completionReady(allDone))
 }
 
+func TestCdcTaskReaderShutdownDoesNotHideLaterPublication(t *testing.T) {
+	oldReaderDone := make(chan struct{})
+	var oldCloseCalls atomic.Int32
+	var lateCloseCalls atomic.Int32
+	executor := &CDCTaskExecutor{
+		spec:           &task.CreateCdcDetails{TaskId: "task-reader-publication-race"},
+		runningReaders: &sync.Map{},
+	}
+	oldReader := &mockChangeReader{
+		info:       &cdc.DbTableInfo{SourceDbName: "db", SourceTblName: "table"},
+		waitCh:     oldReaderDone,
+		closeCalls: &oldCloseCalls,
+	}
+	lateReader := &mockChangeReader{
+		info:       &cdc.DbTableInfo{SourceDbName: "db", SourceTblName: "table"},
+		closeCalls: &lateCloseCalls,
+	}
+	executor.runningReaders.Store("db.table", oldReader)
+
+	allDone, count := executor.initiateReaderShutdown()
+	require.Equal(t, 1, count)
+	require.Eventually(t, func() bool { return oldCloseCalls.Load() == 1 }, time.Second, time.Millisecond)
+
+	// Model the production handoff: the old stream removes itself during cleanup,
+	// then a callback admitted before the lifecycle fence publishes the successor
+	// after the first reader snapshot. Completion of the older reader must not
+	// delete this newer instance from the shared ownership map.
+	require.True(t, executor.runningReaders.CompareAndDelete("db.table", oldReader))
+	_, loaded := executor.runningReaders.LoadOrStore("db.table", lateReader)
+	require.False(t, loaded)
+	close(oldReaderDone)
+	require.Eventually(t, func() bool { return completionReady(allDone) }, time.Second, time.Millisecond)
+
+	actual, ok := executor.runningReaders.Load("db.table")
+	require.True(t, ok)
+	require.Same(t, lateReader, actual)
+	require.Zero(t, lateCloseCalls.Load())
+
+	allStopped, lateDone := executor.stopAllReaders()
+	require.True(t, allStopped)
+	require.True(t, completionReady(lateDone))
+	require.Equal(t, int32(1), lateCloseCalls.Load())
+	_, ok = executor.runningReaders.Load("db.table")
+	require.False(t, ok)
+}
+
 func TestCdcTaskRecoveryRejectsIncompletePreviousReaderGeneration(t *testing.T) {
 	for _, tc := range []struct {
 		name   string
