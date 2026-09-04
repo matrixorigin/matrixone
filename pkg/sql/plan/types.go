@@ -300,6 +300,19 @@ type CompilerContext interface {
 	GetLowerCaseTableNames() int64
 }
 
+// TableDefStatsCompilerContext is an optional extension for compiler contexts
+// that can bind a statistics read to the table definition used by the plan.
+// Implementations should reject schema-bound statistics from another table
+// definition version. Keeping this separate from CompilerContext preserves
+// compatibility with lightweight and external planner contexts.
+type TableDefStatsCompilerContext interface {
+	StatsWithTableDef(
+		obj *ObjectRef,
+		tableDef *TableDef,
+		snapshot *Snapshot,
+	) (*pb.StatsInfo, error)
+}
+
 // UserVariableTypeResolver is an optional extension implemented by session
 // compiler contexts. User variables are stored as text on the frontend wire
 // path, but their assignment type is part of the statement contract used by
