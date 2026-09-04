@@ -19,12 +19,15 @@ import (
 	"context"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -67,6 +70,34 @@ type WatermarkUpdater interface {
 type OwnerFence struct {
 	check      func(context.Context) error
 	generation time.Time
+	sequence   uint64
+}
+
+var ownerFenceSequence atomic.Uint64
+
+// OwnerFenceLostError is a lifecycle result, not a table-data failure. It
+// means this execution generation is obsolete and must stop without publishing
+// its error into shared CDC table metadata.
+type OwnerFenceLostError struct{ err error }
+
+func (e *OwnerFenceLostError) Error() string { return e.err.Error() }
+func (e *OwnerFenceLostError) Unwrap() error { return e.err }
+
+// RetryableOwnerFenceError means ownership could not be verified because the
+// fencing backend failed. It does not prove supersession and may be retried.
+type RetryableOwnerFenceError struct{ err error }
+
+func (e *RetryableOwnerFenceError) Error() string { return e.err.Error() }
+func (e *RetryableOwnerFenceError) Unwrap() error { return e.err }
+
+func IsOwnerFenceLostError(err error) bool {
+	var target *OwnerFenceLostError
+	return errors.As(err, &target)
+}
+
+func IsRetryableOwnerFenceError(err error) bool {
+	var target *RetryableOwnerFenceError
+	return errors.As(err, &target)
 }
 
 func NewOwnerFence(check func(context.Context) error) *OwnerFence {
@@ -80,23 +111,51 @@ func NewOwnerFenceForGeneration(
 	if check == nil {
 		return nil
 	}
-	return &OwnerFence{check: check, generation: generation}
+	return &OwnerFence{
+		check:      check,
+		generation: generation,
+		sequence:   ownerFenceSequence.Add(1),
+	}
 }
 
 func (f *OwnerFence) Check(ctx context.Context) error {
 	if f == nil || f.check == nil {
 		return nil
 	}
-	return f.check(ctx)
+	err := f.check(ctx)
+	if err == nil || IsOwnerFenceLostError(err) || IsRetryableOwnerFenceError(err) {
+		return err
+	}
+	if errors.Is(err, context.Canceled) {
+		return err
+	}
+	var moError *moerr.Error
+	if errors.As(err, &moError) && moerr.IsMoErrCode(moError, moerr.ErrInvalidTask) {
+		return &OwnerFenceLostError{err: err}
+	}
+	return &RetryableOwnerFenceError{err: err}
 }
 
 func (f *OwnerFence) supersedes(other *OwnerFence) bool {
 	if f == nil || f == other {
 		return false
 	}
-	if f.generation.IsZero() || other == nil || other.generation.IsZero() {
-		// Legacy tests/callers have no rank; retain last-update behavior.
+	if other == nil {
 		return true
+	}
+	if f.generation.IsZero() || other.generation.IsZero() {
+		if f.generation.IsZero() != other.generation.IsZero() {
+			return !f.generation.IsZero()
+		}
+		// Unranked legacy callers still receive a strict local publication order.
+		return f.sequence > other.sequence
+	}
+	if f.generation.Equal(other.generation) {
+		// LastRun is the durable rank, but two distinct claims can share its
+		// timestamp granularity. Creation order is a sufficient tie-breaker for
+		// caches inside this process; cross-process safety comes from the owner
+		// check and generation-aware SQL.
+		return f.sequence > other.sequence
 	}
 	return f.generation.After(other.generation)
 }

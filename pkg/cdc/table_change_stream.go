@@ -176,6 +176,7 @@ type tableChangeStreamOptions struct {
 	retryBackoffFactor        float64       // Factor for exponential backoff
 	initialSnapshotLimiter    *InitialSnapshotLimiter
 	initialSnapshotEpoch      types.TS
+	initialSnapshotPending    *bool
 	ownerFence                *OwnerFence
 }
 
@@ -262,6 +263,16 @@ func WithInitialSnapshotEpoch(epoch types.TS) TableChangeStreamOption {
 	}
 }
 
+// WithInitialSnapshotPending supplies the durable startup classification. It
+// prevents completed streams from entering the CN-global initial-snapshot
+// limiter and makes an incomplete recreated generation read from an empty,
+// generation-local position instead of the retired generation's timestamp.
+func WithInitialSnapshotPending(pending bool) TableChangeStreamOption {
+	return func(opts *tableChangeStreamOptions) {
+		opts.initialSnapshotPending = &pending
+	}
+}
+
 // WithOwnerFence checks that this stream still owns the exact daemon-task
 // claim before target commits and watermark publication.
 func WithOwnerFence(fence *OwnerFence) TableChangeStreamOption {
@@ -320,6 +331,12 @@ var NewTableChangeStream = func(
 		tableInfo.SourceTblName,
 	)
 	txnManager.SetOwnerFence(opts.ownerFence)
+	if opts.ownerFence != nil {
+		// Generation ordering is part of the owner-fenced watermark protocol,
+		// independent of whether this particular stream needs a split initial
+		// snapshot. This also covers stable tasks with an explicit startTs.
+		txnManager.SetWatermarkGeneration(tableInfo.SourceTblId)
+	}
 
 	// Calculate column indices
 	// batch columns layout:
@@ -339,7 +356,6 @@ var NewTableChangeStream = func(
 	// epoch. Legacy tasks lack the protocol marker and stay atomic.
 	retrySafeSnapshotSplit := initSnapshotSplitTxn &&
 		!noFull && startTs.IsEmpty() && !opts.initialSnapshotEpoch.IsEmpty()
-
 	// Create data processor
 	dataProcessor := NewDataProcessor(
 		sinker,
@@ -408,7 +424,11 @@ var NewTableChangeStream = func(
 		retryBackoffMax:    opts.retryBackoffMax,
 		retryBackoffFactor: opts.retryBackoffFactor,
 	}
-	stream.initialSyncPending.Store(!noFull)
+	initialSnapshotPending := !noFull
+	if opts.initialSnapshotPending != nil {
+		initialSnapshotPending = *opts.initialSnapshotPending
+	}
+	stream.initialSyncPending.Store(initialSnapshotPending)
 	tableLabel := progressTracker.tableKey()
 	v2.CdcTableStuckGauge.WithLabelValues(tableLabel).Set(0)
 	v2.CdcTableLastActivityTimestamp.WithLabelValues(tableLabel).Set(float64(time.Now().Unix()))
@@ -723,7 +743,7 @@ func (s *TableChangeStream) cleanup(ctx context.Context) {
 	retryable := s.retryable
 	s.stateMu.Unlock()
 
-	if lastError != nil {
+	if lastError != nil && !IsOwnerFenceLostError(lastError) {
 		errorCtx := &ErrorContext{
 			IsRetryable:     retryable,
 			IsPauseOrCancel: IsPauseOrCancelError(lastError.Error()),
@@ -1034,6 +1054,12 @@ func (s *TableChangeStream) determineRetryable(err error) bool {
 	if err == nil {
 		return false
 	}
+	if IsRetryableOwnerFenceError(err) {
+		return true
+	}
+	if IsOwnerFenceLostError(err) {
+		return false
+	}
 
 	errMsg := err.Error()
 
@@ -1124,6 +1150,12 @@ func (s *TableChangeStream) determineRetryable(err error) bool {
 func (s *TableChangeStream) classifyErrorType(err error) string {
 	if err == nil {
 		return ""
+	}
+	if IsOwnerFenceLostError(err) {
+		return "owner_lost"
+	}
+	if IsRetryableOwnerFenceError(err) {
+		return "owner_check"
 	}
 
 	errMsg := err.Error()
@@ -1260,6 +1292,12 @@ func (s *TableChangeStream) processWithTxn(
 	fromTs, err := s.watermarkUpdater.GetFromCache(ctx, s.watermarkKey)
 	if err != nil {
 		return err
+	}
+	if s.initSnapshotSplitTxn && s.initialSyncPending.Load() {
+		// The cached value may belong to a retired source table ID. The durable
+		// frontend classification is authoritative until this generation has
+		// published its first complete snapshot watermark.
+		fromTs = types.TS{}
 	}
 
 	// Check if reached end time

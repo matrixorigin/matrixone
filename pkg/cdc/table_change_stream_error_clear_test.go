@@ -20,6 +20,7 @@ import (
 	"sync/atomic"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -281,6 +282,35 @@ func TestClearErrorOnFirstSuccess(t *testing.T) {
 		assert.Equal(t, 2, updater.getClearErrorCallCount(), "New reader instance should clear error on its first success")
 		assert.True(t, stream2.hasSucceeded.Load())
 	})
+}
+
+func TestTableChangeStreamCleanupDoesNotPersistOwnerLoss(t *testing.T) {
+	updater := newMockWatermarkUpdaterWithTracking()
+	key := &WatermarkKey{AccountId: 1, TaskId: "task1", DBName: "db1", TableName: "t1"}
+	updater.watermarks[updater.keyString(key)] = types.BuildTS(10, 0)
+	fence := NewOwnerFence(func(ctx context.Context) error {
+		return moerr.NewInvalidTask(ctx, "old-owner", 1)
+	})
+	ownerErr := fence.Check(context.Background())
+	require.True(t, IsOwnerFenceLostError(ownerErr))
+
+	stream := &TableChangeStream{
+		accountId:        1,
+		taskId:           "task1",
+		tableInfo:        &DbTableInfo{SourceDbName: "db1", SourceTblName: "t1", SourceTblId: 1},
+		sinker:           newTableStreamRecordingSinker(),
+		watermarkUpdater: updater,
+		watermarkKey:     key,
+		runningReaders:   &sync.Map{},
+		runningReaderKey: "db1.t1",
+		lastError:        ownerErr,
+	}
+	stream.wg.Add(1)
+	stream.cleanup(context.Background())
+
+	updater.mu.Lock()
+	defer updater.mu.Unlock()
+	require.Empty(t, updater.errorCalls, "obsolete owner must not poison shared table err_msg")
 }
 
 // TestHasSucceededAtomicBehavior verifies atomic.Bool behavior

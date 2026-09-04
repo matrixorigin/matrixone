@@ -276,6 +276,7 @@ var (
 				db_name varchar(256),
 				table_name varchar(256),
     			watermark varchar(128),			
+				source_table_id bigint unsigned not null default 0,
 				err_msg varchar(256),
     			primary key(account_id,task_id,db_name,table_name)
 			)`

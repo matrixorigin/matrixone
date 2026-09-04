@@ -40,12 +40,15 @@ type RetryableSnapshotEpochError struct {
 }
 
 // InitialSnapshotEpochState describes the durable source generation selected
-// for one logical CDC table. Created is needed by restart admission: a stable
-// task with an existing watermark but no epoch row has lost protocol metadata
-// and must not silently guess that the current source generation is safe.
+// for one logical CDC table. HasNewerGeneration distinguishes a retired epoch
+// from a stale source-catalog view. Created is needed by restart admission: a
+// stable task with an existing watermark but no epoch row has lost protocol
+// metadata and must not silently guess that the current source generation is
+// safe.
 type InitialSnapshotEpochState struct {
 	Epoch              types.TS
 	HasOtherGeneration bool
+	HasNewerGeneration bool
 	Created            bool
 }
 
@@ -57,12 +60,27 @@ func IsRetryableSnapshotEpochError(err error) bool {
 	return errors.As(err, &retryable)
 }
 
+func NewRetryableSnapshotEpochError(err error) error {
+	if err == nil || IsRetryableSnapshotEpochError(err) {
+		return err
+	}
+	return &RetryableSnapshotEpochError{err: err}
+}
+
+func classifySnapshotEpochBackendError(err error) error {
+	if err == nil || IsRetryableSnapshotEpochError(err) || errors.Is(err, context.Canceled) {
+		return err
+	}
+	return NewRetryableSnapshotEpochError(err)
+}
+
 // GetOrCreateInitialSnapshotEpoch returns the durable epoch for one source
 // table generation. It must complete before a reader may make a partial target
 // commit. Reusing the same source table ID preserves the old epoch across
-// retries. Different source table IDs are intentionally retained side by side:
-// an old owner can overlap a replacement owner, so neither generation may
-// delete the other's retry anchor. Terminal task cleanup removes all epochs.
+// retries. Different source table IDs are retained until the newer generation
+// has successfully reset target state. At that point the newer owner may
+// delete only lower table IDs; a delayed old owner can therefore never delete
+// a replacement's retry anchor.
 func (u *CDCWatermarkUpdater) GetOrCreateInitialSnapshotEpoch(
 	ctx context.Context,
 	key *WatermarkKey,
@@ -74,10 +92,8 @@ func (u *CDCWatermarkUpdater) GetOrCreateInitialSnapshotEpoch(
 }
 
 // GetOrCreateInitialSnapshotEpochForGeneration also reports whether a durable
-// epoch exists for an older incarnation of the same logical table. Since every
-// bounded target commit is preceded by epoch persistence, that fact is the
-// durable signal that a fresh owner must reset the target before replaying the
-// new generation.
+// epoch exists for another incarnation of the same logical table. Callers that
+// must distinguish retired from newer generations use the state-returning API.
 func (u *CDCWatermarkUpdater) GetOrCreateInitialSnapshotEpochForGeneration(
 	ctx context.Context,
 	key *WatermarkKey,
@@ -108,10 +124,28 @@ func (u *CDCWatermarkUpdater) GetOrCreateInitialSnapshotEpochState(
 	if epoch, ok, err := u.readInitialSnapshotEpoch(ctx, key, sourceTableID); err != nil {
 		return InitialSnapshotEpochState{}, err
 	} else if ok {
-		changed, err := u.hasOtherInitialSnapshotGeneration(ctx, key, sourceTableID)
+		otherGeneration, changed, err := u.highestOtherInitialSnapshotGeneration(
+			ctx, key, sourceTableID)
 		return InitialSnapshotEpochState{
-			Epoch: epoch, HasOtherGeneration: changed,
+			Epoch:              epoch,
+			HasOtherGeneration: changed,
+			HasNewerGeneration: changed && otherGeneration > sourceTableID,
 		}, err
+	}
+
+	// Do not manufacture a retry anchor for a catalog view that is already
+	// known to be stale. The post-insert check below is still required for a
+	// concurrent newer claim between this preflight and the INSERT.
+	if otherGeneration, changed, err := u.highestOtherInitialSnapshotGeneration(
+		ctx, key, sourceTableID); err != nil {
+		return InitialSnapshotEpochState{}, err
+	} else if changed && otherGeneration > sourceTableID {
+		return InitialSnapshotEpochState{}, NewRetryableSnapshotEpochError(
+			moerr.NewInternalErrorf(
+				ctx,
+				"CDC source table generation %d is older than durable snapshot generation %d for %s",
+				sourceTableID, otherGeneration, key.String(),
+			))
 	}
 
 	persistCtx, cancel := context.WithTimeoutCause(
@@ -129,14 +163,19 @@ func (u *CDCWatermarkUpdater) GetOrCreateInitialSnapshotEpochState(
 		// The INSERT result can be ambiguous. Resolve a committed-but-lost
 		// response immediately; otherwise explicitly ask the detector to retry.
 		if epoch, ok, readErr := u.readInitialSnapshotEpoch(ctx, key, sourceTableID); readErr == nil && ok {
-			changed, changedErr := u.hasOtherInitialSnapshotGeneration(ctx, key, sourceTableID)
+			otherGeneration, changed, changedErr := u.highestOtherInitialSnapshotGeneration(
+				ctx, key, sourceTableID)
 			return InitialSnapshotEpochState{
-				Epoch: epoch, HasOtherGeneration: changed, Created: true,
+				Epoch:              epoch,
+				HasOtherGeneration: changed,
+				HasNewerGeneration: changed && otherGeneration > sourceTableID,
+				Created:            true,
 			}, changedErr
 		} else if readErr != nil {
-			return InitialSnapshotEpochState{}, &RetryableSnapshotEpochError{err: errors.Join(err, readErr)}
+			return InitialSnapshotEpochState{}, classifySnapshotEpochBackendError(
+				errors.Join(err, readErr))
 		}
-		return InitialSnapshotEpochState{}, &RetryableSnapshotEpochError{err: err}
+		return InitialSnapshotEpochState{}, classifySnapshotEpochBackendError(err)
 	}
 
 	epoch, ok, err := u.readInitialSnapshotEpoch(ctx, key, sourceTableID)
@@ -148,25 +187,74 @@ func (u *CDCWatermarkUpdater) GetOrCreateInitialSnapshotEpochState(
 			ctx, "CDC snapshot epoch was not durable for %s generation %d",
 			key.String(), sourceTableID)}
 	}
-	changed, err := u.hasOtherInitialSnapshotGeneration(ctx, key, sourceTableID)
+	otherGeneration, changed, err := u.highestOtherInitialSnapshotGeneration(
+		ctx, key, sourceTableID)
 	return InitialSnapshotEpochState{
-		Epoch: epoch, HasOtherGeneration: changed, Created: true,
+		Epoch:              epoch,
+		HasOtherGeneration: changed,
+		HasNewerGeneration: changed && otherGeneration > sourceTableID,
+		Created:            true,
 	}, err
 }
 
-func (u *CDCWatermarkUpdater) hasOtherInitialSnapshotGeneration(
+func (u *CDCWatermarkUpdater) highestOtherInitialSnapshotGeneration(
 	ctx context.Context,
 	key *WatermarkKey,
 	sourceTableID uint64,
-) (bool, error) {
+) (uint64, bool, error) {
 	readCtx, cancel := context.WithTimeoutCause(ctx, snapshotEpochPersistenceTimeout, moerr.CauseWatermarkRead)
 	defer cancel()
 	readCtx = defines.AttachAccountId(readCtx, catalog.System_Account)
-	res := u.ie.Query(readCtx, CDCSQLBuilder.HasOtherSnapshotGenerationSQL(key, sourceTableID), ie.SessionOverrideOptions{})
+	res := u.ie.Query(
+		readCtx,
+		CDCSQLBuilder.GetHighestOtherSnapshotGenerationSQL(key, sourceTableID),
+		ie.SessionOverrideOptions{},
+	)
 	if err := res.Error(); err != nil {
-		return false, err
+		return 0, false, classifySnapshotEpochBackendError(err)
 	}
-	return res.RowCount() > 0, nil
+	if res.RowCount() == 0 {
+		return 0, false, nil
+	}
+	if res.RowCount() != 1 {
+		return 0, false, moerr.NewInternalErrorf(
+			ctx, "duplicate highest CDC snapshot generation result for %s", key.String())
+	}
+	otherGeneration, err := res.GetUint64(readCtx, 0, 0)
+	if err != nil {
+		return 0, false, err
+	}
+	return otherGeneration, true, nil
+}
+
+// DeleteInitialSnapshotGenerationsBefore compacts retired retry anchors after
+// target initialization for sourceTableID has completed. MatrixOne table IDs
+// are monotonic, so the one-way predicate is the generation fence: stale owner
+// G can delete rows below G, but never G+1 or any later replacement.
+//
+// The operation is idempotent. An ambiguous result is returned as retryable;
+// the next pipeline attempt can safely issue the same DELETE again.
+func (u *CDCWatermarkUpdater) DeleteInitialSnapshotGenerationsBefore(
+	ctx context.Context,
+	key *WatermarkKey,
+	sourceTableID uint64,
+) error {
+	if sourceTableID == 0 {
+		return moerr.NewInternalErrorf(ctx, "invalid CDC source table generation %d", sourceTableID)
+	}
+
+	deleteCtx, cancel := context.WithTimeoutCause(
+		ctx, snapshotEpochPersistenceTimeout, moerr.CauseWatermarkUpdate)
+	defer cancel()
+	deleteCtx = defines.AttachAccountId(deleteCtx, catalog.System_Account)
+	if err := u.ie.Exec(
+		deleteCtx,
+		CDCSQLBuilder.DeleteSnapshotEpochGenerationsBeforeSQL(key, sourceTableID),
+		ie.SessionOverrideOptions{},
+	); err != nil {
+		return classifySnapshotEpochBackendError(err)
+	}
+	return nil
 }
 
 func (u *CDCWatermarkUpdater) readInitialSnapshotEpoch(
@@ -184,7 +272,7 @@ func (u *CDCWatermarkUpdater) readInitialSnapshotEpoch(
 		ie.SessionOverrideOptions{},
 	)
 	if err := res.Error(); err != nil {
-		return types.TS{}, false, err
+		return types.TS{}, false, classifySnapshotEpochBackendError(err)
 	}
 	if res.RowCount() == 0 {
 		return types.TS{}, false, nil
@@ -227,12 +315,19 @@ func (b cdcSQLBuilder) GetSnapshotEpochSQL(key *WatermarkKey, sourceTableID uint
 	return fmt.Sprintf("SELECT snapshot_epoch FROM `mo_catalog`.`mo_cdc_snapshot` WHERE account_id = %d AND task_id = '%s' AND db_name = '%s' AND table_name = '%s' AND source_table_id = %d", key.AccountId, escapeSQLString(key.TaskId), escapeSQLString(key.DBName), escapeSQLString(key.TableName), sourceTableID)
 }
 
-func (b cdcSQLBuilder) HasOtherSnapshotGenerationSQL(key *WatermarkKey, sourceTableID uint64) string {
-	return fmt.Sprintf("SELECT source_table_id FROM `mo_catalog`.`mo_cdc_snapshot` WHERE account_id = %d AND task_id = '%s' AND db_name = '%s' AND table_name = '%s' AND source_table_id <> %d LIMIT 1", key.AccountId, escapeSQLString(key.TaskId), escapeSQLString(key.DBName), escapeSQLString(key.TableName), sourceTableID)
+func (b cdcSQLBuilder) GetHighestOtherSnapshotGenerationSQL(key *WatermarkKey, sourceTableID uint64) string {
+	return fmt.Sprintf("SELECT source_table_id FROM `mo_catalog`.`mo_cdc_snapshot` WHERE account_id = %d AND task_id = '%s' AND db_name = '%s' AND table_name = '%s' AND source_table_id <> %d ORDER BY source_table_id DESC LIMIT 1", key.AccountId, escapeSQLString(key.TaskId), escapeSQLString(key.DBName), escapeSQLString(key.TableName), sourceTableID)
 }
 
 func (b cdcSQLBuilder) InsertSnapshotEpochSQL(key *WatermarkKey, sourceTableID uint64, epoch types.TS) string {
 	return fmt.Sprintf("INSERT INTO `mo_catalog`.`mo_cdc_snapshot` (account_id, task_id, db_name, table_name, source_table_id, snapshot_epoch) VALUES (%d, '%s', '%s', '%s', %d, '%s') ON DUPLICATE KEY UPDATE snapshot_epoch = snapshot_epoch", key.AccountId, escapeSQLString(key.TaskId), escapeSQLString(key.DBName), escapeSQLString(key.TableName), sourceTableID, epoch.ToString())
+}
+
+func (b cdcSQLBuilder) DeleteSnapshotEpochGenerationsBeforeSQL(
+	key *WatermarkKey,
+	sourceTableID uint64,
+) string {
+	return fmt.Sprintf("DELETE FROM `mo_catalog`.`mo_cdc_snapshot` WHERE account_id = %d AND task_id = '%s' AND db_name = '%s' AND table_name = '%s' AND source_table_id < %d", key.AccountId, escapeSQLString(key.TaskId), escapeSQLString(key.DBName), escapeSQLString(key.TableName), sourceTableID)
 }
 
 func (b cdcSQLBuilder) DeleteSnapshotEpochSQL(accountID uint64, taskID string) string {

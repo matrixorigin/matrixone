@@ -3569,6 +3569,7 @@ Stores per-table watermarks and errors.
 | `db_name` | varchar(256) | Database name |
 | `table_name` | varchar(256) | Table name |
 | `watermark` | varchar(128) | Last synchronized timestamp |
+| `source_table_id` | bigint unsigned | Physical source-table generation that produced the watermark (`0` for legacy tasks) |
 | `err_msg` | varchar(256) | Per-table error message |
 
 ### mo_catalog.mo_cdc_snapshot

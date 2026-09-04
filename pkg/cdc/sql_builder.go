@@ -153,6 +153,7 @@ const (
 	// Watermark Related SQL
 	CDCInsertWatermarkSqlTemplate = "INSERT INTO " +
 		"`mo_catalog`.`mo_cdc_watermark` " +
+		"(account_id, task_id, db_name, table_name, watermark, err_msg) " +
 		"VALUES %s"
 
 	CDCDeleteWatermarkSqlTemplate = "DELETE FROM " +
@@ -225,16 +226,20 @@ const (
 	// stale-read recovery can intentionally reset a watermark.
 	CDCOnDuplicateUpdateMonotonicWatermarkTemplate = "INSERT INTO " +
 		"`mo_catalog`.`mo_cdc_watermark` " +
-		"(account_id, task_id, db_name, table_name, watermark) " +
+		"(account_id, task_id, db_name, table_name, watermark, source_table_id) " +
 		"VALUES %s " +
 		"ON DUPLICATE KEY UPDATE watermark = CASE WHEN " +
+		"VALUES(source_table_id) > source_table_id OR (" +
+		"VALUES(source_table_id) = source_table_id AND (" +
 		"CAST(SUBSTRING_INDEX(VALUES(watermark), '-', 1) AS BIGINT) > " +
 		"CAST(SUBSTRING_INDEX(watermark, '-', 1) AS BIGINT) OR (" +
 		"CAST(SUBSTRING_INDEX(VALUES(watermark), '-', 1) AS BIGINT) = " +
 		"CAST(SUBSTRING_INDEX(watermark, '-', 1) AS BIGINT) AND " +
 		"CAST(SUBSTRING_INDEX(VALUES(watermark), '-', -1) AS BIGINT) > " +
-		"CAST(SUBSTRING_INDEX(watermark, '-', -1) AS BIGINT)) " +
-		"THEN VALUES(watermark) ELSE watermark END"
+		"CAST(SUBSTRING_INDEX(watermark, '-', -1) AS BIGINT)))) " +
+		"THEN VALUES(watermark) ELSE watermark END, " +
+		"source_table_id = CASE WHEN VALUES(source_table_id) > source_table_id " +
+		"THEN VALUES(source_table_id) ELSE source_table_id END"
 
 	CDCOnDuplicateUpdateWatermarkErrMsgTemplate = "INSERT INTO " +
 		"`mo_catalog`.`mo_cdc_watermark` " +
@@ -266,19 +271,23 @@ const (
 
 	CDCGuardedMonotonicWatermarkUpdateTemplate = "INSERT INTO " +
 		"`mo_catalog`.`mo_cdc_watermark` " +
-		"(account_id, task_id, db_name, table_name, watermark) " +
-		"SELECT v.account_id, v.task_id, v.db_name, v.table_name, v.watermark " +
+		"(account_id, task_id, db_name, table_name, watermark, source_table_id) " +
+		"SELECT v.account_id, v.task_id, v.db_name, v.table_name, v.watermark, v.source_table_id " +
 		"FROM ( %s ) AS v " +
 		"INNER JOIN (SELECT account_id, task_id FROM `mo_catalog`.`mo_cdc_task` WHERE %s FOR UPDATE) AS t " +
 		"ON t.account_id = v.account_id AND t.task_id = v.task_id " +
 		"ON DUPLICATE KEY UPDATE watermark = CASE WHEN " +
+		"VALUES(source_table_id) > source_table_id OR (" +
+		"VALUES(source_table_id) = source_table_id AND (" +
 		"CAST(SUBSTRING_INDEX(VALUES(watermark), '-', 1) AS BIGINT) > " +
 		"CAST(SUBSTRING_INDEX(watermark, '-', 1) AS BIGINT) OR (" +
 		"CAST(SUBSTRING_INDEX(VALUES(watermark), '-', 1) AS BIGINT) = " +
 		"CAST(SUBSTRING_INDEX(watermark, '-', 1) AS BIGINT) AND " +
 		"CAST(SUBSTRING_INDEX(VALUES(watermark), '-', -1) AS BIGINT) > " +
-		"CAST(SUBSTRING_INDEX(watermark, '-', -1) AS BIGINT)) " +
-		"THEN VALUES(watermark) ELSE watermark END"
+		"CAST(SUBSTRING_INDEX(watermark, '-', -1) AS BIGINT)))) " +
+		"THEN VALUES(watermark) ELSE watermark END, " +
+		"source_table_id = CASE WHEN VALUES(source_table_id) > source_table_id " +
+		"THEN VALUES(source_table_id) ELSE source_table_id END"
 
 	CDCGuardedWatermarkErrorUpdateTemplate = "INSERT INTO " +
 		"`mo_catalog`.`mo_cdc_watermark` " +
@@ -879,6 +888,16 @@ func (b cdcSQLBuilder) DeleteWatermarkSQL(
 		CDCSQLTemplates[CDCDeleteWatermarkSqlTemplate_Idx].SQL,
 		accountId,
 		taskId,
+	)
+}
+
+func (b cdcSQLBuilder) GetWatermarkProgressSQL(key *WatermarkKey) string {
+	return fmt.Sprintf(
+		"SELECT watermark, source_table_id FROM `mo_catalog`.`mo_cdc_watermark` WHERE account_id = %d AND task_id = '%s' AND db_name = '%s' AND table_name = '%s'",
+		key.AccountId,
+		escapeSQLString(key.TaskId),
+		escapeSQLString(key.DBName),
+		escapeSQLString(key.TableName),
 	)
 }
 

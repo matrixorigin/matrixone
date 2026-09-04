@@ -468,7 +468,8 @@ func (dp *DataProcessor) processNoMoreData(ctx context.Context) error {
 		)
 
 		if err := dp.txnManager.watermarkUpdater.UpdateWatermarkOnly(
-			WithWatermarkOwnerFence(ctx, dp.txnManager.ownerFence),
+			WithWatermarkOwnerFence(
+				ctx, dp.txnManager.ownerFence, dp.txnManager.watermarkGeneration),
 			dp.txnManager.watermarkKey,
 			&dp.toTs,
 		); err != nil {

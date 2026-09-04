@@ -630,13 +630,30 @@ func (exec *CDCTaskExecutor) currentDaemonClaimFence() *cdc.OwnerFence {
 
 func classifyStableSnapshotRestart(
 	watermark types.TS,
+	watermarkGeneration uint64,
+	sourceTableID uint64,
 	state cdc.InitialSnapshotEpochState,
-) (incomplete, resetTarget, metadataMissing bool) {
-	metadataMissing = state.Created && !state.HasOtherGeneration && !watermark.IsEmpty()
-	incomplete = watermark.IsEmpty() || watermark.LT(&state.Epoch) ||
-		(state.Created && state.HasOtherGeneration)
-	resetTarget = incomplete && state.HasOtherGeneration
+) (incomplete, resetTarget, metadataMissing, generationAhead bool) {
+	hasProgress := !watermark.IsEmpty()
+	generationAhead = watermarkGeneration > sourceTableID || state.HasNewerGeneration
+	sameGeneration := watermarkGeneration == sourceTableID
+	// A same-generation watermark cannot exist before its immutable epoch. A
+	// non-empty generation-zero watermark with no retired epoch is likewise not
+	// attributable to this stable protocol and must fail closed.
+	metadataMissing = state.Created && hasProgress &&
+		(sameGeneration || (watermarkGeneration == 0 && !state.HasOtherGeneration))
+	incomplete = !sameGeneration || watermark.LT(&state.Epoch)
+	resetTarget = incomplete && (state.HasOtherGeneration ||
+		(hasProgress && watermarkGeneration > 0 && watermarkGeneration < sourceTableID))
 	return
+}
+
+func shouldCompactStableSnapshotEpochs(
+	targetWillReset bool,
+	incomplete bool,
+	hasOtherGeneration bool,
+) bool {
+	return targetWillReset || (!incomplete && hasOtherGeneration)
 }
 
 func capInitialSnapshotEpoch(candidate, end types.TS) types.TS {
@@ -2644,7 +2661,13 @@ func (exec *CDCTaskExecutor) handleNewTablesForGeneration(
 				zap.String("table", key),
 				zap.Error(err),
 			)
-			// Persist error to database for this table
+			// Ownership loss is a control-plane result for this obsolete executor.
+			// Do not poison shared table metadata that belongs to the new owner.
+			if cdc.IsOwnerFenceLostError(err) {
+				return err
+			}
+			// Persist data/setup errors, and retain transient fence/epoch backend
+			// failures as retryable rather than permanently failing the table.
 			if exec.watermarkUpdater != nil {
 				watermarkKey := cdc.WatermarkKey{
 					AccountId: uint64(exec.spec.Accounts[0].GetId()),
@@ -2653,7 +2676,8 @@ func (exec *CDCTaskExecutor) handleNewTablesForGeneration(
 					TableName: newTableInfo.SourceTblName,
 				}
 				errorCtx := &cdc.ErrorContext{
-					IsRetryable: cdc.IsRetryableSnapshotEpochError(err),
+					IsRetryable: cdc.IsRetryableSnapshotEpochError(err) ||
+						cdc.IsRetryableOwnerFenceError(err),
 				}
 				if updateErr := exec.watermarkUpdater.UpdateWatermarkErrMsg(ctx, &watermarkKey, err.Error(), errorCtx); updateErr != nil {
 					logutil.Warn(
@@ -2941,6 +2965,8 @@ func (exec *CDCTaskExecutor) addExecPipelineForTable(
 		TableName: info.SourceTblName,
 	}
 	var initialSnapshotEpoch types.TS
+	var initialSnapshotPending bool
+	var compactSnapshotEpochs bool
 	var ownerFence *cdc.OwnerFence
 	if exec.stableInitialSnapshot {
 		ownerFence = exec.currentDaemonClaimFence()
@@ -2955,8 +2981,14 @@ func (exec *CDCTaskExecutor) addExecPipelineForTable(
 	); err != nil {
 		return err
 	}
+	initialSnapshotPending = !exec.noFull && exec.startTs.IsEmpty() && watermark.IsEmpty()
 	if exec.stableInitialSnapshot && !exec.noFull && exec.startTs.IsEmpty() {
 		if err = ownerFence.Check(ctx); err != nil {
+			return err
+		}
+		var watermarkGeneration uint64
+		watermark, watermarkGeneration, err = exec.watermarkUpdater.GetWatermarkProgress(ctx, &watermarkKey)
+		if err != nil {
 			return err
 		}
 		candidate := types.TimestampToTS(txnOp.SnapshotTS())
@@ -2980,7 +3012,16 @@ func (exec *CDCTaskExecutor) addExecPipelineForTable(
 		// metadata was durable. Missing metadata without an older generation is
 		// corruption/manual deletion; choosing a fresh epoch would strand target
 		// rows from an unknown source image.
-		incomplete, resetTarget, metadataMissing := classifyStableSnapshotRestart(watermark, epochState)
+		incomplete, resetTarget, metadataMissing, generationAhead := classifyStableSnapshotRestart(
+			watermark, watermarkGeneration, info.SourceTblId, epochState)
+		if generationAhead {
+			return cdc.NewRetryableSnapshotEpochError(moerr.NewInternalErrorf(
+				ctx,
+				"CDC source table generation %d is older than durable CDC metadata for %s (watermark generation %d, newer snapshot generation present: %t)",
+				info.SourceTblId, watermarkKey.String(), watermarkGeneration,
+				epochState.HasNewerGeneration,
+			))
+		}
 		if metadataMissing {
 			return moerr.NewInternalErrorf(
 				ctx,
@@ -2992,12 +3033,16 @@ func (exec *CDCTaskExecutor) addExecPipelineForTable(
 		// Empty or pre-epoch progress means the initial snapshot is incomplete.
 		// If another table ID exists, reset the target under the ownership lock;
 		// otherwise retain partial same-epoch target groups for idempotent replay.
-		if incomplete {
-			if resetTarget {
-				info.IdChanged = true
-			}
-			watermark = types.TS{}
+		initialSnapshotPending = incomplete
+		if resetTarget {
+			info.IdChanged = true
 		}
+		// NewSinker clears IdChanged after a successful target reset, so capture
+		// cleanup intent before handing it the mutable table descriptor. A
+		// completed current generation may also compact a retired row left by a
+		// crash after target commit but before metadata cleanup.
+		compactSnapshotEpochs = shouldCompactStableSnapshotEpochs(
+			info.IdChanged, incomplete, epochState.HasOtherGeneration)
 	}
 
 	// Note: Do NOT clear err_msg here
@@ -3037,6 +3082,21 @@ func (exec *CDCTaskExecutor) addExecPipelineForTable(
 	if err != nil {
 		return err
 	}
+	if exec.stableInitialSnapshot && compactSnapshotEpochs {
+		if err = ownerFence.Check(ctx); err != nil {
+			sinker.Close()
+			return err
+		}
+		if err = exec.watermarkUpdater.DeleteInitialSnapshotGenerationsBefore(
+			ctx, &watermarkKey, info.SourceTblId); err != nil {
+			sinker.Close()
+			return err
+		}
+		if err = ownerFence.Check(ctx); err != nil {
+			sinker.Close()
+			return err
+		}
+	}
 
 	// step 3. new reader (using V2 tableChangeStream)
 	frequencyStr := exec.additionalConfig[cdc.CDCTaskExtraOptions_Frequency].(string)
@@ -3067,6 +3127,7 @@ func (exec *CDCTaskExecutor) addExecPipelineForTable(
 		frequency,
 		cdc.WithInitialSnapshotLimiter(exec.initialSnapshotLimiter),
 		cdc.WithInitialSnapshotEpoch(initialSnapshotEpoch),
+		cdc.WithInitialSnapshotPending(initialSnapshotPending),
 		cdc.WithOwnerFence(ownerFence),
 	)
 

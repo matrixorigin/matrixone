@@ -24,6 +24,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -64,6 +65,9 @@ type mysqlSinker2 struct {
 	accountId uint64
 	taskId    string
 	dbTblInfo *DbTableInfo
+	// Non-zero only for stable-epoch tasks. It makes watermark validation use
+	// the same generation-first ordering as the async writer.
+	watermarkGeneration uint64
 
 	// Dependencies
 	watermarkUpdater *CDCWatermarkUpdater
@@ -303,6 +307,9 @@ func createMysqlSinker2(
 		builder,
 		ar,
 	)
+	if ownerFence != nil {
+		sinker.watermarkGeneration = dbTblInfo.SourceTblId
+	}
 
 	// Note: Run() will be started by the caller (e.g., cdc_executor.go)
 	// This maintains compatibility with the old mysqlSinker pattern
@@ -893,7 +900,7 @@ func (s *mysqlSinker2) Sink(ctx context.Context, data *DecoderOutput) {
 		TableName: s.dbTblInfo.SourceTblName,
 	}
 
-	watermark, err := s.watermarkUpdater.GetFromCache(ctx, &key)
+	watermark, watermarkGeneration, err := s.watermarkUpdater.GetFromCacheWithGeneration(ctx, &key)
 	if err != nil {
 		logutil.Error("cdc.mysql_sinker2.get_watermark_failed",
 			zap.String("table", s.dbTblInfo.String()),
@@ -903,11 +910,14 @@ func (s *mysqlSinker2) Sink(ctx context.Context, data *DecoderOutput) {
 		return
 	}
 
-	if data.toTs.LT(&watermark) {
+	if isWatermarkAheadOfOutput(
+		watermark, watermarkGeneration, data.toTs, s.watermarkGeneration) {
 		logutil.Error("cdc.mysql_sinker2.unexpected_watermark",
 			zap.String("table", s.dbTblInfo.String()),
 			zap.String("toTs", data.toTs.ToString()),
-			zap.String("watermark", watermark.ToString()))
+			zap.String("watermark", watermark.ToString()),
+			zap.Uint64("source-table-id", s.watermarkGeneration),
+			zap.Uint64("watermark-source-table-id", watermarkGeneration))
 		err := moerr.NewInternalError(ctx, "unexpected watermark")
 		s.SetError(err)
 		return
@@ -942,6 +952,16 @@ func (s *mysqlSinker2) Sink(ctx context.Context, data *DecoderOutput) {
 	}
 
 	s.sendCommand(cmd)
+}
+
+func isWatermarkAheadOfOutput(
+	watermark types.TS,
+	watermarkGeneration uint64,
+	outputTS types.TS,
+	outputGeneration uint64,
+) bool {
+	return watermarkGeneration > outputGeneration ||
+		(watermarkGeneration == outputGeneration && outputTS.LT(&watermark))
 }
 
 // sendCommand sends a command to the consumer goroutine
@@ -1019,8 +1039,11 @@ func (s *mysqlSinker2) SetError(err error) {
 		return
 	}
 
-	// Convert to moerr.Error if needed
-	if _, ok := err.(*moerr.Error); !ok {
+	// Preserve typed owner-fence wrappers: stream lifecycle and retry policy
+	// depend on their identity, and converting them to a plain moerr would turn
+	// supersession into shared table failure metadata.
+	if _, ok := err.(*moerr.Error); !ok &&
+		!IsOwnerFenceLostError(err) && !IsRetryableOwnerFenceError(err) {
 		err = moerr.ConvertGoError(context.Background(), err)
 	}
 

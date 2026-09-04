@@ -39,10 +39,11 @@ import (
 //     the private rollbackLocked instead of the public RollbackTransaction to avoid
 //     re-entrant locking and potential deadlocks.
 type TransactionManager struct {
-	sinker           Sinker
-	watermarkUpdater WatermarkUpdater
-	watermarkKey     *WatermarkKey
-	ownerFence       *OwnerFence
+	sinker              Sinker
+	watermarkUpdater    WatermarkUpdater
+	watermarkKey        *WatermarkKey
+	ownerFence          *OwnerFence
+	watermarkGeneration uint64
 
 	// Protects tracker and transactional state transitions
 	mu sync.Mutex
@@ -86,6 +87,12 @@ func (tm *TransactionManager) releaseTargetOwnership() error {
 // tasks. Legacy/direct users leave it nil.
 func (tm *TransactionManager) SetOwnerFence(fence *OwnerFence) {
 	tm.ownerFence = fence
+}
+
+// SetWatermarkGeneration binds stable progress to the source table incarnation
+// that produced it. Legacy callers leave generation zero.
+func (tm *TransactionManager) SetWatermarkGeneration(sourceTableID uint64) {
+	tm.watermarkGeneration = sourceTableID
 }
 
 func (tm *TransactionManager) checkOwnerFence(ctx context.Context) error {
@@ -279,7 +286,7 @@ func (tm *TransactionManager) commitLocked(ctx context.Context, updateWatermark 
 		// happen before marking the tracker as committed. Intermediate snapshot
 		// groups deliberately skip this step.
 		if err := tm.watermarkUpdater.UpdateWatermarkOnly(
-			WithWatermarkOwnerFence(ctx, tm.ownerFence),
+			WithWatermarkOwnerFence(ctx, tm.ownerFence, tm.watermarkGeneration),
 			tm.watermarkKey,
 			&toTs,
 		); err != nil {

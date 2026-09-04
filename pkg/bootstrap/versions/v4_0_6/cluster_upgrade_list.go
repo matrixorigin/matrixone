@@ -38,6 +38,23 @@ var clusterUpgEntries = []versions.UpgradeEntry{
 	addAsyncTaskParentIndex,
 	cleanupLegacyOrphanSQLTaskChildren,
 	createMoCdcSnapshot,
+	addCdcWatermarkSourceTableID,
+}
+
+var addCdcWatermarkSourceTableID = versions.UpgradeEntry{
+	Schema:    catalog.MO_CATALOG,
+	TableName: catalog.MO_CDC_WATERMARK,
+	UpgType:   versions.ADD_COLUMN,
+	UpgSql: "alter table mo_catalog.mo_cdc_watermark " +
+		"add column source_table_id bigint unsigned not null default 0 after watermark",
+	CheckFunc: func(txn executor.TxnExecutor, accountID uint32) (bool, error) {
+		column, err := versions.CheckTableColumn(
+			txn, accountID, catalog.MO_CATALOG, catalog.MO_CDC_WATERMARK, "source_table_id")
+		return column.IsExits, err
+	},
+	// Older CNs insert six positional values into mo_cdc_watermark. Delay the
+	// seventh column until every CN writer uses an explicit column list.
+	RequiredProtocolVersion: defines.MORPCVersion48,
 }
 
 var createMoCdcSnapshot = newCatalogTable(

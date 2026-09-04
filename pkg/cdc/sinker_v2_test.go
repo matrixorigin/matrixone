@@ -79,6 +79,26 @@ func TestMysqlSinker2_ErrorHandling(t *testing.T) {
 		sinker.SetError(nil)
 		assert.Nil(t, sinker.Error())
 	})
+
+	t.Run("PreserveOwnerFenceClassification", func(t *testing.T) {
+		sinker := &mysqlSinker2{}
+		fence := NewOwnerFence(func(ctx context.Context) error {
+			return moerr.NewInvalidTask(ctx, "old-owner", 1)
+		})
+		sinker.SetError(fence.Check(context.Background()))
+		require.True(t, IsOwnerFenceLostError(sinker.Error()))
+	})
+}
+
+func TestWatermarkValidationUsesGenerationBeforeTimestamp(t *testing.T) {
+	highOld := types.BuildTS(1000, 0)
+	lowNew := types.BuildTS(100, 0)
+	require.False(t, isWatermarkAheadOfOutput(highOld, 11, lowNew, 12),
+		"retired generation timestamp must not reject a new full snapshot")
+	require.True(t, isWatermarkAheadOfOutput(lowNew, 12, highOld, 11),
+		"an obsolete pipeline must reject progress from a newer generation")
+	require.True(t, isWatermarkAheadOfOutput(highOld, 12, lowNew, 12),
+		"timestamp order remains monotonic within one generation")
 }
 
 func TestMysqlSinker2_TransactionLifecycle(t *testing.T) {

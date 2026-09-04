@@ -285,6 +285,22 @@ func TestTableChangeStream_InitialSnapshotBatchLimiterSkippedAfterFirstSync(t *t
 	require.Nil(t, permit)
 }
 
+func TestTableChangeStream_OwnerFencedProgressAlwaysBindsSourceGeneration(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+
+	stream := createTestStream(
+		mp,
+		&DbTableInfo{SourceDbName: "db", SourceTblName: "explicit_start", SourceTblId: 77},
+		WithOwnerFence(NewOwnerFence(func(context.Context) error { return nil })),
+	)
+	defer stream.Close()
+
+	require.False(t, stream.initSnapshotSplitTxn,
+		"the counterexample intentionally does not use a split initial snapshot")
+	require.Equal(t, uint64(77), stream.txnManager.watermarkGeneration)
+}
+
 func TestTableChangeStream_HandleSnapshotNoProgress_WarningAndReset(t *testing.T) {
 	mp := mpool.MustNewZero()
 	defer mpool.DeleteMPool(mp)
@@ -2004,17 +2020,18 @@ func (n *noopTxnOperator) Delete(key string) {}
 // tableStreamHarnessConfig captures the configurable parts of the test harness
 // so individual test cases can focus on behavior rather than boilerplate setup.
 type tableStreamHarnessConfig struct {
-	initSnapshotSplitTxn bool
-	initialSnapshotEpoch types.TS
-	noFull               bool
-	startTs              types.TS
-	endTs                types.TS
-	frequency            time.Duration
-	tableDef             *plan.TableDef
-	tableInfo            *DbTableInfo
-	watermarkUpdater     WatermarkUpdater
-	updaterStop          func()
-	runningReaders       *sync.Map
+	initSnapshotSplitTxn   bool
+	initialSnapshotEpoch   types.TS
+	initialSnapshotPending *bool
+	noFull                 bool
+	startTs                types.TS
+	endTs                  types.TS
+	frequency              time.Duration
+	tableDef               *plan.TableDef
+	tableInfo              *DbTableInfo
+	watermarkUpdater       WatermarkUpdater
+	updaterStop            func()
+	runningReaders         *sync.Map
 	// Retry configuration for testing (use shorter delays to speed up tests)
 	retryOptions []TableChangeStreamOption
 }
@@ -2081,6 +2098,12 @@ func withHarnessFrequency(freq time.Duration) tableStreamHarnessOption {
 func withHarnessInitialSnapshotEpoch(ts types.TS) tableStreamHarnessOption {
 	return func(cfg *tableStreamHarnessConfig) {
 		cfg.initialSnapshotEpoch = ts
+	}
+}
+
+func withHarnessInitialSnapshotPending(pending bool) tableStreamHarnessOption {
+	return func(cfg *tableStreamHarnessConfig) {
+		cfg.initialSnapshotPending = &pending
 	}
 }
 
@@ -2183,6 +2206,9 @@ func newTableStreamHarness(t *testing.T, opts ...tableStreamHarnessOption) *tabl
 	}
 	if !cfg.initialSnapshotEpoch.IsEmpty() {
 		retryOptions = append(retryOptions, WithInitialSnapshotEpoch(cfg.initialSnapshotEpoch))
+	}
+	if cfg.initialSnapshotPending != nil {
+		retryOptions = append(retryOptions, WithInitialSnapshotPending(*cfg.initialSnapshotPending))
 	}
 
 	stream := NewTableChangeStream(
@@ -2422,6 +2448,65 @@ func TestTableChangeStream_StableInitialSnapshotEpochAndTailBoundary(t *testing.
 	assert.Equal(t, epoch, calls[0].to)
 	assert.Equal(t, epoch, calls[1].from)
 	assert.Equal(t, types.BuildTS(120, 0), calls[1].to)
+}
+
+func TestTableChangeStream_RecreatedGenerationStartsFromEmptyPosition(t *testing.T) {
+	updater := newWatermarkUpdaterStub()
+	epoch := types.BuildTS(80, 0)
+	key := (&WatermarkKey{AccountId: 1, TaskId: "task1", DBName: "db1", TableName: "t1"})
+	updater.watermarks[updater.keyString(key)] = types.BuildTS(70, 0)
+	h := newTableStreamHarness(
+		t,
+		withHarnessInitSnapshotSplitTxn(true),
+		withHarnessInitialSnapshotEpoch(epoch),
+		withHarnessInitialSnapshotPending(true),
+		withHarnessWatermarkUpdater(updater, nil),
+	)
+	h.Stream().start.Done()
+
+	require.NoError(t, h.Stream().processOneRound(h.Context(), h.NewActiveRoutine()))
+	calls := h.CollectCallsSnapshot()
+	require.Len(t, calls, 1)
+	require.True(t, calls[0].from.IsEmpty(), "retired generation watermark must not skip the new full snapshot")
+	require.Equal(t, epoch, calls[0].to)
+}
+
+func TestTableChangeStream_CompletedRestartsBypassSharedSnapshotLimiter(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+	limiter := newInitialSnapshotLimiter(1, 1, 1, 100, func() (uint64, bool) {
+		return 400, true
+	})
+
+	for _, table := range []string{"t1", "t2", "t3"} {
+		stream := createTestStream(
+			mp,
+			&DbTableInfo{SourceDbName: "db", SourceTblName: table, SourceTblId: 10},
+			WithInitialSnapshotLimiter(limiter),
+			WithInitialSnapshotPending(false),
+		)
+		permit, err := stream.acquireInitialSnapshotPermit(context.Background())
+		require.NoError(t, err)
+		require.Nil(t, permit)
+		stream.Close()
+	}
+
+	limiter.mu.Lock()
+	require.Zero(t, limiter.inFlight)
+	require.Zero(t, limiter.nextTicket, "completed restart must not enter global FIFO admission")
+	limiter.mu.Unlock()
+
+	pending := createTestStream(
+		mp,
+		&DbTableInfo{SourceDbName: "db", SourceTblName: "pending", SourceTblId: 11},
+		WithInitialSnapshotLimiter(limiter),
+		WithInitialSnapshotPending(true),
+	)
+	permit, err := pending.acquireInitialSnapshotPermit(context.Background())
+	require.NoError(t, err)
+	require.NotNil(t, permit)
+	permit.Release()
+	pending.Close()
 }
 
 func TestTableChangeStream_StableInitialSnapshotEpochHonorsEndTs(t *testing.T) {

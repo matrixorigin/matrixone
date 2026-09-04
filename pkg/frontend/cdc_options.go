@@ -26,6 +26,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/cdc"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/task"
 	"github.com/matrixorigin/matrixone/pkg/taskservice"
 )
@@ -242,6 +243,11 @@ func (opts *CDCCreateTaskOptions) ValidateAndFill(
 	// an initial snapshot.
 	if !opts.NoFull {
 		cdc.FinalizeInitialSnapshotOptions(extraOpts)
+		_, stable := extraOpts[cdc.CDCTaskExtraOptions_InitialSnapshotProtocol]
+		if err = validateStableInitialSnapshotProtocol(
+			ctx, stable, currentProtocolVersion(ses.proc)); err != nil {
+			return
+		}
 	}
 
 	var extraOptsBytes []byte
@@ -252,6 +258,21 @@ func (opts *CDCCreateTaskOptions) ValidateAndFill(
 	opts.ExtraOpts = string(extraOptsBytes)
 
 	return
+}
+
+func validateStableInitialSnapshotProtocol(
+	ctx context.Context,
+	stable bool,
+	protocolVersion int64,
+) error {
+	if !stable || protocolVersion >= defines.MORPCVersion48 {
+		return nil
+	}
+	return moerr.NewNotSupportedf(
+		ctx,
+		"bounded CDC initial snapshots require all CNs to support protocol version %d",
+		defines.MORPCVersion48,
+	)
 }
 
 func (opts *CDCCreateTaskOptions) BuildTaskMetadata() task.TaskMetadata {

@@ -40,7 +40,7 @@ import (
 
 func TestUpgradeEntries(t *testing.T) {
 	require.Len(t, tenantUpgEntries, 34)
-	require.Len(t, clusterUpgEntries, 8)
+	require.Len(t, clusterUpgEntries, 9)
 	require.Equal(t, retireKafkaSinkDaemonTasks.UpgSql, clusterUpgEntries[0].UpgSql)
 	require.Equal(t, catalog.MO_VIEW_DEPENDENCIES, clusterUpgEntries[1].TableName)
 	require.Equal(t, catalog.MO_VIEW_REFRESH, clusterUpgEntries[2].TableName)
@@ -70,6 +70,10 @@ func TestUpgradeEntries(t *testing.T) {
 	require.Equal(t, catalog.MO_CDC_SNAPSHOT, clusterUpgEntries[7].TableName)
 	require.Equal(t, versions.CREATE_NEW_TABLE, clusterUpgEntries[7].UpgType)
 	require.Equal(t, frontend.MoCatalogMoCdcSnapshotDDL, clusterUpgEntries[7].UpgSql)
+	require.Equal(t, catalog.MO_CDC_WATERMARK, clusterUpgEntries[8].TableName)
+	require.Equal(t, versions.ADD_COLUMN, clusterUpgEntries[8].UpgType)
+	require.Contains(t, clusterUpgEntries[8].UpgSql, "source_table_id bigint unsigned not null default 0")
+	require.Equal(t, int64(defines.MORPCVersion48), clusterUpgEntries[8].RequiredProtocolVersion)
 	require.Equal(t, mongodb.TableConnections, tenantUpgEntries[0].TableName)
 	require.Equal(t, mongodb.TableMappings, tenantUpgEntries[1].TableName)
 	for _, entry := range tenantUpgEntries[:2] {
@@ -225,6 +229,53 @@ func TestUpgradeEntries(t *testing.T) {
 	require.Contains(t, strings.ToLower(tablePrivileges.UpgSql),
 		"drop view if exists information_schema.table_privileges")
 	require.Equal(t, sysview.InformationSchemaTablePrivilegesDDL, tablePrivileges.PostSql)
+}
+
+func TestAddCdcWatermarkSourceTableIDWaitsForCompatibleWriters(t *testing.T) {
+	entry := addCdcWatermarkSourceTableID
+	entry.CheckFunc = func(executor.TxnExecutor, uint32) (bool, error) {
+		return false, nil
+	}
+
+	tests := []struct {
+		name            string
+		protocols       string
+		wantErr         bool
+		wantAlterColumn bool
+	}{
+		{
+			name:      "one old CN blocks positional-insert schema change",
+			protocols: `{"method":"GETPROTOCOLVERSION","result":"cn-a:48,cn-b:47"}`,
+			wantErr:   true,
+		},
+		{
+			name:            "all CNs support explicit-column inserts",
+			protocols:       `{"method":"GETPROTOCOLVERSION","result":"cn-a:48,cn-b:48"}`,
+			wantAlterColumn: true,
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			altered := false
+			txn := newVersionTxnExecutor(t, func(sql string) (executor.Result, error) {
+				switch sql {
+				case "SELECT mo_ctl('cn', 'GetProtocolVersion', '')":
+					return newProtocolVersionResultValue(t, test.protocols), nil
+				case entry.UpgSql:
+					altered = true
+				}
+				return executor.Result{}, nil
+			})
+
+			err := entry.Upgrade(txn, catalog.System_Account)
+			if test.wantErr {
+				require.ErrorContains(t, err, "cn-b")
+			} else {
+				require.NoError(t, err)
+			}
+			require.Equal(t, test.wantAlterColumn, altered)
+		})
+	}
 }
 
 func TestInformationSchemaMetadataVisibilityUpgradeChecks(t *testing.T) {
@@ -863,7 +914,11 @@ func TestVersionHandleLifecycleWithNoLegacyDefinitions(t *testing.T) {
 		txnExecutor := newVersionTxnExecutor(t, func(sql string) (executor.Result, error) {
 			if strings.Contains(strings.ToLower(sql), "getprotocolversion") {
 				return newProtocolVersionResultValue(t,
-					`{"method":"GETPROTOCOLVERSION","result":"cn-a:42,cn-b:42"}`), nil
+					fmt.Sprintf(
+						`{"method":"GETPROTOCOLVERSION","result":"cn-a:%d,cn-b:%d"}`,
+						defines.MORPCLatestVersion,
+						defines.MORPCLatestVersion,
+					)), nil
 			}
 			executed = append(executed, sql)
 			return executor.Result{}, nil
