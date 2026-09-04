@@ -4632,19 +4632,20 @@ func (c *Compile) compileVectorIndexScan(node *plan.Node) ([]*Scope, error) {
 	if c.execType == plan2.ExecTypeAP_MULTICN && len(c.cnList) > 1 &&
 		(workspace == nil || workspace.Readonly()) &&
 		(node.Stats == nil || !node.Stats.ForceOneCN) {
+		parallelism := vectorIndexScanParallelism(node, c.cnList, c.ncpu)
 		nodes = make(engine.Nodes, len(c.cnList))
 		for i := range c.cnList {
 			nodes[i] = engine.Node{
 				Id:    c.cnList[i].Id,
 				Addr:  c.cnList[i].Addr,
-				Mcpu:  1,
+				Mcpu:  parallelism,
 				CNCNT: int32(len(c.cnList)),
 				CNIDX: int32(i),
 			}
 		}
 	} else {
 		local := getEngineNode(c)
-		local.Mcpu = 1
+		local.Mcpu = vectorIndexScanParallelism(node, engine.Nodes{local}, c.ncpu)
 		local.CNCNT = 1
 		local.CNIDX = 0
 		nodes = engine.Nodes{local}
@@ -4652,10 +4653,6 @@ func (c *Compile) compileVectorIndexScan(node *plan.Node) ([]*Scope, error) {
 	currentFirstFlag := c.anal.isFirst
 	ss := make([]*Scope, 0, len(nodes))
 	for i := range nodes {
-		// One adaptive reader owns one centroid cursor and one bounded top-k.
-		// Parallelism is expressed by independent CN partitions, not duplicate
-		// readers over the same partition.
-		nodes[i].Mcpu = 1
 		nodeCopy := plan2.DeepCopyNode(node)
 		s := newScope(Remote)
 		s.NodeInfo = nodes[i]
@@ -4672,6 +4669,25 @@ func (c *Compile) compileVectorIndexScan(node *plan.Node) ([]*Scope, error) {
 	}
 	c.anal.isFirst = false
 	return ss, nil
+}
+
+func vectorIndexScanParallelism(node *plan.Node, nodes engine.Nodes, _ int) int {
+	parallelism := 1
+	if node != nil && node.Stats != nil && node.Stats.Dop > 0 {
+		parallelism = int(node.Stats.Dop)
+	}
+	if node != nil && node.GetVectorIndexScan().GetBucketExpandStep() > 0 {
+		parallelism = 1
+	}
+	if parallelism <= 0 {
+		parallelism = 1
+	}
+	for _, worker := range nodes {
+		if capacity := normalizeMcpu(worker.Mcpu); capacity < parallelism {
+			parallelism = capacity
+		}
+	}
+	return max(1, parallelism)
 }
 
 func (c *Compile) getCompileTableScanDataSourceTxn(s *Scope) (client.TxnOperator, context.Context, error) {

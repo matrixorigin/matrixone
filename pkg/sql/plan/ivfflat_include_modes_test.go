@@ -451,6 +451,7 @@ func TestApplyIndicesForSortUsingIvfflat_IncludeModePartialPushdownKeepsResidual
 	assert.Zero(t, tableFuncNode.VectorIndexScan.BucketExpandStep)
 	require.Len(t, tableFuncNode.RuntimeFilterProbeList, 1)
 	require.True(t, tableFuncNode.RuntimeFilterProbeList[0].UseMembershipFilter)
+	require.True(t, tableFuncNode.RuntimeFilterProbeList[0].RequiredVectorSearchDomain)
 	require.True(t, tableFuncNode.Stats.GetForceOneCN())
 	for _, node := range builder.qry.Nodes {
 		if node != nil && len(node.RuntimeFilterBuildList) > 0 {
@@ -494,6 +495,7 @@ func TestApplyIndicesForSortUsingIvfflat_IncludeModeResidualOnlyUsesSingleRoundP
 	require.Zero(t, tableFuncNode.VectorIndexScan.FirstRoundLimit)
 	require.Len(t, tableFuncNode.RuntimeFilterProbeList, 1)
 	require.True(t, tableFuncNode.RuntimeFilterProbeList[0].UseMembershipFilter)
+	require.True(t, tableFuncNode.RuntimeFilterProbeList[0].RequiredVectorSearchDomain)
 	require.True(t, tableFuncNode.Stats.GetForceOneCN())
 	require.Len(t, scanNode.FilterList, 1)
 	require.Equal(t, "note", scanNode.FilterList[0].GetF().Args[0].GetCol().Name)
@@ -576,6 +578,7 @@ func TestApplyIndicesForSortUsingIvfflat_PreModeDoesNotAutoUseIncludePushdown(t 
 	require.True(t, tableFuncNode.VectorIndexScan.GetPostFilterOverFetch())
 	require.Empty(t, tableFuncNode.VectorIndexScan.PreFilters)
 	require.Len(t, tableFuncNode.RuntimeFilterProbeList, 1)
+	require.True(t, tableFuncNode.RuntimeFilterProbeList[0].RequiredVectorSearchDomain)
 	require.True(t, tableFuncNode.Stats.GetForceOneCN())
 }
 
@@ -655,6 +658,7 @@ func TestApplyIndicesForSortUsingIvfflat_PreModeWithFiltersUsesCandidateWindow(t
 	require.True(t, tableFuncNode.VectorIndexScan.GetPostFilterOverFetch())
 	require.Empty(t, tableFuncNode.VectorIndexScan.PreFilters)
 	require.Len(t, tableFuncNode.RuntimeFilterProbeList, 1)
+	require.True(t, tableFuncNode.RuntimeFilterProbeList[0].RequiredVectorSearchDomain)
 	require.True(t, tableFuncNode.Stats.GetForceOneCN())
 }
 

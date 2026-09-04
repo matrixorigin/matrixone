@@ -57,9 +57,9 @@ type Request struct {
 	Identity                  ScanIdentity
 }
 
-// Hooks builds the reader for one vector-index scan execution generation.
-// The returned reader owns all per-search child readers and must release them
-// from Close on success, error, cancellation, and prepared-plan reuse.
+// Hooks builds the readers for one vector-index scan execution generation.
+// Readers must own disjoint physical shards; returning duplicate readers over
+// one partition is invalid.  Every returned reader owns its terminal cleanup.
 type Hooks interface {
-	NewReader(proc *process.Process, spec *plan.VectorIndexScan, req Request) (engine.Reader, error)
+	NewReaders(proc *process.Process, spec *plan.VectorIndexScan, req Request, parallelism int) ([]engine.Reader, error)
 }

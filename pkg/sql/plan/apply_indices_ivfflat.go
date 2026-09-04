@@ -964,10 +964,14 @@ func (builder *QueryBuilder) applyIndicesForSortUsingIvfflat(nodeID int32, vecCt
 		}
 		probeSpec := MakeRuntimeFilter(rfTag, false, 0, probeExpr, false)
 		probeSpec.UseMembershipFilter = true
+		requiredDomain := candidateNodeID == tableFuncNodeID
+		buildSpec.RequiredVectorSearchDomain = requiredDomain
+		probeSpec.RequiredVectorSearchDomain = requiredDomain
 		tableFuncNode.RuntimeFilterProbeList = []*plan.RuntimeFilterSpec{probeSpec}
-		// Runtime-filter messages only travel within one CN message board. Keep
-		// this outer join tree on the current CN; the background entries query can
-		// still distribute the serialized membership payload across CNs.
+		// A required PRE domain is complete only on the coordinator message board.
+		// Keep its scan on that CN until representative multi-CN performance and
+		// memory evidence justifies a separate distributed rollout. Local reader
+		// DOP still partitions the admitted domain into disjoint storage shards.
 		tableFuncNode.Stats.ForceOneCN = true
 
 		// The original scan was guarded during the recursive planner pass so the vector rewrite

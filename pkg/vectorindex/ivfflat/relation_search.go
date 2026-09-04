@@ -114,8 +114,13 @@ func (idx *IvfflatSearchIndex[T]) scanEntries(
 		// range pruning and block reads enforce it before their distance heap.
 		cpkeyPos := int32(len(columns))
 		columns = append(columns, catalog.CPrimaryKeyColName)
-		filter, err = ivfCentroidPrefixFilter(
-			sqlproc.GetContext(), sqlproc.Proc.Mp(), version, centroidIDs, cpkeyPos)
+		if len(centroidIDs) == 0 {
+			filter, err = ivfVersionPrefixFilter(
+				sqlproc.GetContext(), sqlproc.Proc.Mp(), version, cpkeyPos)
+		} else {
+			filter, err = ivfCentroidPrefixFilter(
+				sqlproc.GetContext(), sqlproc.Proc.Mp(), version, centroidIDs, cpkeyPos)
+		}
 		if err != nil {
 			return executor.Result{}, err
 		}
@@ -173,11 +178,8 @@ func (idx *IvfflatSearchIndex[T]) scanEntries(
 		blockFilters = []*plan.Expr{filter}
 	}
 	filterHint := engine.FilterHint{}
-	if storageTopK && sqlproc.IvfHasMembershipFilter {
-		// Preserve the bounded-recall PRE policy: readers rank each bounded
-		// centroid candidate set first, then apply membership. The exact SEMI
-		// join in the outer plan remains the final SQL predicate check.
-		filterHint.MembershipFilterBytes = sqlproc.IvfMembershipFilter
+	if storageTopK && sqlproc.IvfMembershipFilterObject != nil {
+		filterHint.BF = sqlproc.IvfMembershipFilterObject.Share()
 	}
 	res, err := sqlproc.RelationScanner.ScanRelation(sqlexec.RelationScanRequest{
 		Schema:            tblcfg.DbName,
@@ -270,16 +272,21 @@ func canUseStorageTopK(
 	limit uint,
 	rangeSupported bool,
 ) bool {
-	// Storage vector Top-N currently ranks only ascending distances. Membership
-	// alone may be applied after the bounded Top-K as the documented approximate
-	// PRE policy. Ordinary user predicates remain filter-first. Distance ranges
-	// are safe only after storageDistanceRange has translated them into the
-	// stored metric domain; objectio applies those bounds before heap admission.
-	if sqlproc == nil || !rangeSupported || len(centroidIDs) == 0 || len(filters) != 0 || limit == 0 ||
+	// Storage vector Top-N currently ranks only ascending distances. An exact
+	// membership object is safe because FilterHint.BF is intersected into the
+	// block PK selectRows before the vector heap sees them. Approximate domains
+	// and ordinary residual predicates retain the local filter-first path.
+	// Distance ranges are safe only after storageDistanceRange translates them
+	// into the stored metric domain.
+	if sqlproc == nil || !rangeSupported || len(filters) != 0 || limit == 0 ||
 		ivfOrderFlag(sqlproc.IndexReaderParam)&plan.OrderBySpec_DESC != 0 {
 		return false
 	}
-	if sqlproc.IvfHasMembershipFilter && len(sqlproc.IvfMembershipFilter) == 0 {
+	if len(centroidIDs) == 0 && !sqlproc.IvfHasMembershipFilter {
+		return false
+	}
+	if sqlproc.IvfHasMembershipFilter &&
+		(sqlproc.IvfMembershipFilterObject == nil || !sqlproc.IvfMembershipFilterObject.Exact()) {
 		return false
 	}
 	return true
@@ -418,6 +425,41 @@ func ivfCentroidPrefixFilter(
 	return ivfFuncExpr(ctx, function.PrefixInFunctionName, left, right)
 }
 
+func ivfVersionPrefixFilter(
+	ctx context.Context,
+	mp *mpool.MPool,
+	version int64,
+	cpkeyPos int32,
+) (*plan.Expr, error) {
+	versionVec, err := vector.NewConstFixed(types.T_int64.ToType(), version, 1, mp)
+	if err != nil {
+		return nil, err
+	}
+	defer versionVec.Free(mp)
+	encoder, err := function.NewSerialValueEncoder(versionVec)
+	if err != nil {
+		return nil, err
+	}
+	packer := types.NewPacker()
+	defer packer.Close()
+	encoder(versionVec, 0, packer)
+	cpkeyType := plan.Type{
+		Id:      int32(types.T_varchar),
+		Width:   types.MaxVarcharLen,
+		Charset: uint32(types.CharsetBinary),
+	}
+	left := &plan.Expr{
+		Typ: cpkeyType,
+		Expr: &plan.Expr_Col{Col: &plan.ColRef{
+			Name:   catalog.CPrimaryKeyColName,
+			ColPos: cpkeyPos,
+		}},
+	}
+	right := ivfStringExpr(string(packer.Bytes()))
+	right.Typ = cpkeyType
+	return ivfFuncExpr(ctx, function.PrefixEqualFunctionName, left, right)
+}
+
 func entryScanColumns(includeColumns []string) []string {
 	columns := []string{
 		catalog.SystemSI_IVFFLAT_TblCol_Entries_version,
@@ -448,8 +490,11 @@ func ivfRuntimeMembershipExpr(ctx context.Context, data []byte, left *plan.Expr)
 	right := &plan.Expr{
 		Typ: left.Typ,
 		Expr: &plan.Expr_Vec{Vec: &plan.LiteralVec{
-			Len:  int32(keyVec.Length()),
-			Data: append([]byte(nil), data...),
+			Len: int32(keyVec.Length()),
+			// The request owns this immutable payload for the reader generation.
+			// Local DOP readers deliberately share it instead of copying the whole
+			// exact domain once per shard.
+			Data: data,
 		}},
 	}
 	return ivfFuncExpr(ctx, function.InFunctionName, left, right)

@@ -1514,6 +1514,10 @@ message RuntimeFilterSpec {
   // exactly one row; multiple rows must fail open so the SINGLE operator can
   // enforce cardinality at its original logical scope.
   bool scalar_predicate = 11;
+  // The unique-key payload is a mandatory IVFFlat PRE search domain.  PASS is
+  // not a valid terminal value.  Every CN that owns a VECTOR_INDEX_SCAN shard
+  // builds the domain from its complete local broadcast-build stream.
+  bool required_vector_search_domain = 12;
 }
 
 message IdList {

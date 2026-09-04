@@ -150,14 +150,15 @@ func TestDeepCopyPreInsertCtxPreservesTargetSelector(t *testing.T) {
 
 func TestDeepCopyRuntimeFilterSpecPreservesPayloadContract(t *testing.T) {
 	source := &planpb.RuntimeFilterSpec{
-		Tag:                 7,
-		MatchPrefix:         true,
-		UpperLimit:          11,
-		BuildExpr:           MakePlan2Int64ConstExprWithType(1),
-		NotOnPk:             true,
-		UseMembershipFilter: true,
-		ScalarPredicate:     true,
-		KeyEncoding:         planpb.RuntimeFilterKeyEncoding_RUNTIME_FILTER_KEY_FLOAT_ZERO_CLOSED_V1,
+		RequiredVectorSearchDomain: true,
+		ScalarPredicate:            true,
+		Tag:                        7,
+		MatchPrefix:                true,
+		UpperLimit:                 11,
+		BuildExpr:                  MakePlan2Int64ConstExprWithType(1),
+		NotOnPk:                    true,
+		UseMembershipFilter:        true,
+		KeyEncoding:                planpb.RuntimeFilterKeyEncoding_RUNTIME_FILTER_KEY_FLOAT_ZERO_CLOSED_V1,
 		ProbeType: &planpb.Type{
 			Id:         4,
 			Width:      18,
@@ -171,6 +172,7 @@ func TestDeepCopyRuntimeFilterSpecPreservesPayloadContract(t *testing.T) {
 	}
 
 	cloned := DeepCopyRuntimeFilterSpec(source)
+	require.True(t, cloned.RequiredVectorSearchDomain)
 
 	require.Equal(t, source.Tag, cloned.Tag)
 	require.Equal(t, source.MatchPrefix, cloned.MatchPrefix)

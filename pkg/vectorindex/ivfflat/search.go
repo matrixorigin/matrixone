@@ -325,6 +325,9 @@ func (idx *IvfflatSearchIndex[T]) getBloomFilter(sqlproc *sqlexec.SqlProcess) (e
 	if sqlproc == nil || sqlproc.Proc == nil {
 		return
 	}
+	if sqlproc.IvfMembershipFilterObject != nil && sqlproc.IvfMembershipFilterObject.Valid() {
+		return nil
+	}
 
 	if len(sqlproc.IvfRuntimeFilterData) == 0 {
 		if len(sqlproc.RuntimeFilterSpecs) == 0 {
@@ -397,8 +400,8 @@ func (idx *IvfflatSearchIndex[T]) getBloomFilter(sqlproc *sqlexec.SqlProcess) (e
 
 // exactRelationMembershipScan preserves the legacy PRE policy for small key
 // sets, where scanning every centroid and filtering before Top-K is bounded and
-// avoids under-filling selective queries. Larger sets use the approximate,
-// nprobe-bounded storage Top-K path.
+// avoids under-filling selective queries. Larger sets retain IVF's nprobe
+// boundary but still apply exact membership before the local Top-K heap.
 func exactRelationMembershipScan(sqlproc *sqlexec.SqlProcess) (exact, empty bool, err error) {
 	if sqlproc == nil || sqlproc.RelationScanner == nil || !sqlproc.IvfHasMembershipFilter {
 		return false, false, nil
@@ -730,11 +733,13 @@ func (idx *IvfflatSearchIndex[T]) Search(
 	if sqlproc != nil {
 		prevRuntimeFilterData := sqlproc.IvfRuntimeFilterData
 		prevMembershipFilter := sqlproc.IvfMembershipFilter
+		prevMembershipFilterObject := sqlproc.IvfMembershipFilterObject
 		prevExactPkFilter := sqlproc.ExactPkFilter
 		sqlproc.IvfRuntimeFilterData = rt.RuntimeFilterData
 		defer func() {
 			sqlproc.IvfRuntimeFilterData = prevRuntimeFilterData
 			sqlproc.IvfMembershipFilter = prevMembershipFilter
+			sqlproc.IvfMembershipFilterObject = prevMembershipFilterObject
 			sqlproc.ExactPkFilter = prevExactPkFilter
 		}()
 	}
@@ -751,11 +756,14 @@ func (idx *IvfflatSearchIndex[T]) Search(
 		if cursor == nil {
 			cursor = &vectorindex.IvfSearchCursor{}
 		}
-		if len(cursor.RankedCentroidIDs) == 0 {
+		if len(cursor.RankedCentroidIDs) == 0 && !rt.IvfRoutePrepared {
 			cursor.RankedCentroidIDs, err = idx.rankCentroids(sqlproc, query, idxcfg)
 			if err != nil {
 				return nil, nil, err
 			}
+		}
+		if rt.IvfPrepareRouteOnly {
+			return []any{}, []float64{}, nil
 		}
 
 		activeCentroidIDs := buildActiveCentroidIDs(cursor, rt.Probe)
@@ -792,7 +800,7 @@ func (idx *IvfflatSearchIndex[T]) Search(
 			// an absent filter and scan the index unrestricted.
 			return []any{}, []float64{}, nil
 		}
-		if !directExactMembership {
+		if !directExactMembership && (sqlproc == nil || sqlproc.RelationScanner == nil) {
 			if err = idx.getBloomFilter(sqlproc); err != nil {
 				return nil, nil, err
 			}

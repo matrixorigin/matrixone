@@ -38,6 +38,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
@@ -67,6 +68,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/readutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/message"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
@@ -2744,6 +2746,38 @@ func TestBuildScanParallelRunSetsOrderByOnParallelReaders(t *testing.T) {
 	}
 }
 
+func TestBuildScanParallelRunKeepsReaderCountForEmptyVectorDomain(t *testing.T) {
+	c := NewMockCompile(t)
+	board := message.NewMessageBoard()
+	defer board.Reset()
+	c.proc.SetMessageBoard(board)
+	spec := &plan.RuntimeFilterSpec{
+		Tag:                        1090,
+		UseMembershipFilter:        true,
+		RequiredVectorSearchDomain: true,
+	}
+	scope := generateScopeWithRootOperator(c.proc, []vm.OpType{vm.TableScan})
+	scope.NodeInfo = engine.Node{Mcpu: 3}
+	scope.DataSource = &Source{
+		node: &plan.Node{
+			NodeType:        plan.Node_VECTOR_INDEX_SCAN,
+			VectorIndexScan: &plan.VectorIndexScan{},
+		},
+		RuntimeFilterSpecs: []*plan.RuntimeFilterSpec{spec},
+	}
+	message.SendMessage(message.RuntimeFilterMessage{
+		Tag: spec.Tag,
+		Typ: message.RuntimeFilter_DROP,
+	}, board)
+
+	mergeScope, err := buildScanParallelRun(scope, c)
+	require.NoError(t, err)
+	require.Len(t, mergeScope.PreScopes, 3)
+	for _, child := range mergeScope.PreScopes {
+		require.IsType(t, new(readutil.EmptyReader), child.DataSource.R)
+	}
+}
+
 func TestRuntimeFilterResultKeepsItsOriginatingSpec(t *testing.T) {
 	probeType := plan.Type{Id: int32(types.T_int64), NotNullable: true}
 
@@ -2822,17 +2856,28 @@ func TestWaitForRuntimeFiltersPreservesUniqueJoinKeyPayloadForVectorScan(t *test
 	board := message.NewMessageBoard()
 	defer board.Reset()
 	proc.SetMessageBoard(board)
-	spec := &plan.RuntimeFilterSpec{Tag: 109, UseMembershipFilter: true}
+	spec := &plan.RuntimeFilterSpec{
+		Tag:                        109,
+		UseMembershipFilter:        true,
+		RequiredVectorSearchDomain: true,
+	}
 	scope := &Scope{
 		Proc: proc,
 		DataSource: &Source{
 			RuntimeFilterSpecs: []*plan.RuntimeFilterSpec{spec},
 		},
 	}
-	payload := []byte{1, 3, 5, 7}
+	payloadVector := vector.NewVec(types.T_int64.ToType())
+	defer payloadVector.Free(proc.Mp())
+	require.NoError(t, vector.AppendFixedList(
+		payloadVector, []int64{1, 3, 5, 7}, nil, proc.Mp()))
+	payload, err := payloadVector.MarshalBinary()
+	require.NoError(t, err)
+	spec.Expr = &plan.Expr{Typ: plan.Type{Id: int32(types.T_int64)}}
 	message.SendMessage(message.RuntimeFilterMessage{
 		Tag:  spec.Tag,
 		Typ:  message.RuntimeFilter_UNIQUEJOINKEYS,
+		Card: int32(payloadVector.Length()),
 		Data: payload,
 	}, board)
 
@@ -2843,6 +2888,61 @@ func TestWaitForRuntimeFiltersPreservesUniqueJoinKeyPayloadForVectorScan(t *test
 	require.Same(t, spec, filters[0].spec)
 	require.Nil(t, filters[0].expr)
 	require.Equal(t, payload, filters[0].data)
+}
+
+func TestWaitForRuntimeFiltersRejectsPassForRequiredVectorDomain(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	board := message.NewMessageBoard()
+	defer board.Reset()
+	proc.SetMessageBoard(board)
+	spec := &plan.RuntimeFilterSpec{
+		Tag:                        110,
+		UseMembershipFilter:        true,
+		RequiredVectorSearchDomain: true,
+	}
+	scope := &Scope{
+		Proc: proc,
+		DataSource: &Source{
+			RuntimeFilterSpecs: []*plan.RuntimeFilterSpec{spec},
+		},
+	}
+	message.SendMessage(message.RuntimeFilterMessage{
+		Tag: spec.Tag,
+		Typ: message.RuntimeFilter_PASS,
+	}, board)
+
+	filters, empty, err := scope.waitForRuntimeFilters(&Compile{proc: proc})
+	require.ErrorContains(t, err, "required vector search domain is unavailable")
+	require.False(t, empty)
+	require.Empty(t, filters)
+}
+
+func TestWaitForRuntimeFiltersRejectsMalformedRequiredVectorDomain(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	board := message.NewMessageBoard()
+	defer board.Reset()
+	proc.SetMessageBoard(board)
+	spec := &plan.RuntimeFilterSpec{
+		Tag:                        111,
+		UseMembershipFilter:        true,
+		RequiredVectorSearchDomain: true,
+	}
+	scope := &Scope{
+		Proc: proc,
+		DataSource: &Source{
+			RuntimeFilterSpecs: []*plan.RuntimeFilterSpec{spec},
+		},
+	}
+	message.SendMessage(message.RuntimeFilterMessage{
+		Tag:  spec.Tag,
+		Typ:  message.RuntimeFilter_UNIQUEJOINKEYS,
+		Card: 1,
+	}, board)
+
+	filters, empty, err := scope.waitForRuntimeFilters(&Compile{proc: proc})
+	require.ErrorContains(t, err, "required vector search domain is malformed")
+	require.False(t, empty)
+	require.Empty(t, filters)
 }
 
 func TestVectorScanMembershipFilterExtractsInPayload(t *testing.T) {
