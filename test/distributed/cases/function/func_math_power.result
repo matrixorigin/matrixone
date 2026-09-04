@@ -19,16 +19,36 @@ result5
 SELECT POWER(4, 0.5) AS result6;
 result6
 2.0
-SELECT POW(-2, 0.5);
-Data truncation: data out of range: data type float64, DOUBLE value is out of range in 'pow(-2,0.5)'
+SELECT POWER(-1, 0.5);
+POWER(-1, 0.5)
+null
 SELECT POWER(0, -1);
-Data truncation: data out of range: data type float64, DOUBLE value is out of range in 'pow(0,-1)'
+POWER(0, -1)
+null
+SELECT POWER(10, 400);
+POWER(10, 400)
+null
+SELECT POW(-1, 0.5) IS NULL, POWER(-1, 0.5) IS NULL;
+POW(-1, 0.5) is null    POWER(-1, 0.5) is null
+1    1
 SELECT IF(0, POW(-2, 0.5), 1);
 IF(0, POW(-2, 0.5), 1)
 1.0
 SELECT CASE WHEN 0 THEN POWER(0, -1) ELSE 1 END;
 case when 0 then POWER(0, -1) else 1 end
 1.0
+DROP TABLE IF EXISTS t_issue28137_power;
+CREATE TABLE t_issue28137_power(id INT, b DOUBLE, e DOUBLE);
+INSERT INTO t_issue28137_power VALUES (1, 2, 3), (2, -1, 0.5), (3, 0, -1), (4, 10, 400), (5, NULL, 2), (6, 4, 0.5);
+SELECT id, POWER(b, e) IS NULL FROM t_issue28137_power ORDER BY id;
+id    POWER(b, e) is null
+1    0
+2    1
+3    1
+4    1
+5    1
+6    0
+DROP TABLE t_issue28137_power;
 SELECT POW(2, 3) = POWER(2, 3) AS same_result;
 same_result
 1
