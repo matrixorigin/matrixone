@@ -781,7 +781,10 @@ var MinMaxSupportedTypes = []types.T{
 	types.T_binary, types.T_varbinary,
 }
 
-var minMaxAggSupportedTypes = append([]types.T{types.T_json}, MinMaxSupportedTypes...)
+var minMaxAggSupportedTypes = append(
+	append([]types.T(nil), MinMaxSupportedTypes...),
+	types.T_json,
+)
 
 var AnyValueSupportedTypes = []types.T{
 	types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64,

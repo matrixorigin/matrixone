@@ -219,26 +219,15 @@ const (
 )
 
 func CompareByteJson(left, right ByteJson) int {
-	leftBinary := isByteJsonBinary(left.Type)
-	rightBinary := isByteJsonBinary(right.Type)
-	if leftBinary && rightBinary {
-		if !isValidByteJsonStringEncoding(left.Data) || !isValidByteJsonStringEncoding(right.Data) {
-			return compareByteJsonFallback(left, right)
-		}
-		if cmp, ok := CompareBinaryJSON(left, right); ok {
-			return cmp
-		}
-	}
-	if isByteJsonNumeric(left.Type) && isByteJsonNumeric(right.Type) {
-		if cmp, ok := CompareNumeric(left, right); ok {
-			return cmp
-		}
-		return compareByteJsonFallback(left, right)
-	}
-
 	leftRank, leftKnown := byteJsonTypeRank(left)
 	rightRank, rightKnown := byteJsonTypeRank(right)
 	if !leftKnown || !rightKnown {
+		if leftKnown {
+			return -1
+		}
+		if rightKnown {
+			return 1
+		}
 		return compareByteJsonFallback(left, right)
 	}
 	if leftRank != rightRank {
@@ -249,12 +238,16 @@ func CompareByteJson(left, right ByteJson) int {
 	switch leftRank {
 	case jsonRankNull:
 		return 0
+	case jsonRankNumber:
+		cmp, _ = CompareNumeric(left, right)
 	case jsonRankBoolean:
 		return compareInt64(int64(booleanLiteralOrder(left.Data[0])), int64(booleanLiteralOrder(right.Data[0])))
 	case jsonRankString, jsonRankDate, jsonRankTime, jsonRankDatetime:
 		cmp = bytes.Compare(left.GetString(), right.GetString())
 	case jsonRankArray, jsonRankObject:
 		return compareByteJsonContainer(left, right, leftRank)
+	case jsonRankBit, jsonRankBlob:
+		cmp, _ = CompareBinaryJSON(left, right)
 	default:
 		return compareByteJsonFallback(left, right)
 	}
@@ -264,7 +257,7 @@ func CompareByteJson(left, right ByteJson) int {
 func byteJsonTypeRank(value ByteJson) (jsonTypeRank, bool) {
 	switch value.Type {
 	case TpCodeLiteral:
-		if len(value.Data) == 0 {
+		if len(value.Data) != 1 {
 			return jsonRankUnknown, false
 		}
 		switch value.Data[0] {
@@ -275,39 +268,35 @@ func byteJsonTypeRank(value ByteJson) (jsonTypeRank, bool) {
 		default:
 			return jsonRankUnknown, false
 		}
-	case TpCodeInt64, TpCodeUint64, TpCodeFloat64, TpCodeDecimal:
+	case TpCodeInt64, TpCodeUint64, TpCodeFloat64:
 		return jsonRankNumber, isValidNumericEncoding(value)
+	case TpCodeDecimal:
+		_, ok := ParseNumeric(value)
+		return jsonRankNumber, ok
 	case TpCodeString:
 		return jsonRankString, isValidByteJsonStringEncoding(value.Data)
 	case TpCodeObject:
-		return jsonRankObject, isValidByteJsonContainerHeader(value)
+		return jsonRankObject, isValidByteJsonContainer(value)
 	case TpCodeArray:
-		return jsonRankArray, isValidByteJsonContainerHeader(value)
+		return jsonRankArray, isValidByteJsonContainer(value)
 	case TpCodeDate:
 		return jsonRankDate, isValidByteJsonStringEncoding(value.Data)
 	case TpCodeTime:
 		return jsonRankTime, isValidByteJsonStringEncoding(value.Data)
 	case TpCodeDatetime:
 		return jsonRankDatetime, isValidByteJsonStringEncoding(value.Data)
-	case TpCodeBit:
-		return jsonRankBit, isValidByteJsonStringEncoding(value.Data)
-	case TpCodeBlob:
-		if !isValidByteJsonStringEncoding(value.Data) {
+	case TpCodeBlob, TpCodeOpaque, TpCodeBit:
+		binaryValue, ok := binaryJSONValue(value)
+		if !ok {
 			return jsonRankUnknown, false
 		}
-		if _, ok := value.persistedBitPayload(); ok {
+		if binaryValue.subtype == binaryJSONBit {
 			return jsonRankBit, true
 		}
 		return jsonRankBlob, true
-	case TpCodeOpaque:
-		return jsonRankBlob, isValidByteJsonStringEncoding(value.Data)
 	default:
 		return jsonRankUnknown, false
 	}
-}
-
-func isByteJsonBinary(tp TpCode) bool {
-	return tp == TpCodeBlob || tp == TpCodeOpaque || tp == TpCodeBit
 }
 
 func isValidByteJsonStringEncoding(data []byte) bool {
@@ -326,16 +315,87 @@ func isValidByteJsonContainerHeader(value ByteJson) bool {
 	}
 	minimumSize := uint64(headerSize) + count*tableEntrySize
 	documentSize := uint64(endian.Uint32(value.Data[docSizeOff:]))
-	return minimumSize <= documentSize && documentSize <= uint64(len(value.Data))
+	return minimumSize <= documentSize && documentSize == uint64(len(value.Data))
+}
+
+func isValidByteJsonContainer(value ByteJson) bool {
+	if !isValidByteJsonContainerHeader(value) {
+		return false
+	}
+
+	count := uint64(endian.Uint32(value.Data))
+	keyTableSize := uint64(0)
+	if value.Type == TpCodeObject {
+		keyTableSize = count * uint64(keyEntrySize)
+	}
+	valueTableStart := uint64(headerSize) + keyTableSize
+	payloadStart := valueTableStart + count*uint64(valEntrySize)
+	documentSize := uint64(len(value.Data))
+
+	if value.Type == TpCodeObject {
+		for i := uint64(0); i < count; i++ {
+			entryOffset := uint64(headerSize) + i*uint64(keyEntrySize)
+			keyOffset := uint64(endian.Uint32(value.Data[entryOffset:]))
+			keyLength := uint64(endian.Uint16(value.Data[entryOffset+keyOriginOff:]))
+			if keyOffset < payloadStart || keyOffset > documentSize || keyLength > documentSize-keyOffset {
+				return false
+			}
+		}
+	}
+
+	for i := uint64(0); i < count; i++ {
+		entryOffset := valueTableStart + i*uint64(valEntrySize)
+		childType := TpCode(value.Data[entryOffset])
+		var child ByteJson
+		if childType == TpCodeLiteral {
+			child = ByteJson{Type: childType, Data: value.Data[entryOffset+valTypeSize : entryOffset+valTypeSize+1]}
+		} else {
+			childOffset := uint64(endian.Uint32(value.Data[entryOffset+valTypeSize:]))
+			if childOffset < payloadStart || childOffset >= documentSize {
+				return false
+			}
+			childData, ok := byteJsonChildData(childType, value.Data[childOffset:])
+			if !ok {
+				return false
+			}
+			child = ByteJson{Type: childType, Data: childData}
+		}
+		if _, ok := byteJsonTypeRank(child); !ok {
+			return false
+		}
+	}
+	return true
+}
+
+func byteJsonChildData(tp TpCode, data []byte) ([]byte, bool) {
+	switch tp {
+	case TpCodeInt64, TpCodeUint64, TpCodeFloat64:
+		if len(data) < numberSize {
+			return nil, false
+		}
+		return data[:numberSize], true
+	case TpCodeString, TpCodeDecimal, TpCodeDate, TpCodeTime, TpCodeDatetime,
+		TpCodeBlob, TpCodeOpaque, TpCodeBit:
+		payloadLength, prefixLength := binary.Uvarint(data)
+		if prefixLength <= 0 || payloadLength > uint64(len(data)-prefixLength) {
+			return nil, false
+		}
+		return data[:uint64(prefixLength)+payloadLength], true
+	case TpCodeObject, TpCodeArray:
+		if len(data) < headerSize {
+			return nil, false
+		}
+		documentSize := uint64(endian.Uint32(data[docSizeOff:]))
+		if documentSize < headerSize || documentSize > uint64(len(data)) {
+			return nil, false
+		}
+		return data[:documentSize], true
+	default:
+		return nil, false
+	}
 }
 
 func compareByteJsonContainer(left, right ByteJson, rank jsonTypeRank) (cmp int) {
-	defer func() {
-		if recover() != nil {
-			cmp = compareByteJsonFallback(left, right)
-		}
-	}()
-
 	leftCnt := left.GetElemCnt()
 	rightCnt := right.GetElemCnt()
 	if rank == jsonRankArray {

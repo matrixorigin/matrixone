@@ -115,12 +115,58 @@ func TestCompareByteJsonMalformedEncodingHasDeterministicFallback(t *testing.T) 
 		{Type: TpCodeBlob, Data: []byte{0x02, 0x01}},
 	}
 	for _, value := range values {
-		right := ByteJson{Type: value.Type, Data: append(bytes.Clone(value.Data), 0xff)}
+		right := ByteJson{Type: value.Type, Data: append(bytes.Clone(value.Data), 0xfe, 0xff)}
 		require.NotPanics(t, func() {
 			require.Less(t, CompareByteJson(value, right), 0)
 			require.Greater(t, CompareByteJson(right, value), 0)
 		})
 	}
+}
+
+func TestCompareByteJsonMalformedValuesUseGlobalFallbackDomain(t *testing.T) {
+	malformedNested := makeJson(t, `[[]]`)
+	endian.PutUint32(malformedNested.Data[headerSize+valTypeSize:], 0)
+	valid := []ByteJson{
+		makeJson(t, `""`),
+		makeJson(t, `{}`),
+		makeBinaryJson(TpCodeBlob, []byte("AQ==")),
+		makeBinaryJson(TpCodeOpaque, []byte{0x01}),
+	}
+	malformed := []ByteJson{
+		{Type: TpCodeArray, Data: []byte{0x01}},
+		malformedNested,
+		makeBinaryJson(TpCodeBlob, []byte("not-base64")),
+		makeBinaryJson(TpCodeBlob, []byte(persistedBitPrefix+"not-base64")),
+		{Type: TpCodeLiteral, Data: []byte{LiteralNull, 0xff}},
+	}
+
+	for _, left := range valid {
+		for _, right := range malformed {
+			require.Less(t, CompareByteJson(left, right), 0)
+			require.Greater(t, CompareByteJson(right, left), 0)
+		}
+	}
+
+	values := append(append([]ByteJson{}, valid...), malformed...)
+	for i := range values {
+		for j := range values {
+			leftRight := compareSign(CompareByteJson(values[i], values[j]))
+			rightLeft := compareSign(CompareByteJson(values[j], values[i]))
+			require.Equal(t, -leftRight, rightLeft, "antisymmetry for (%d, %d)", i, j)
+			for k := range values {
+				if CompareByteJson(values[i], values[j]) < 0 && CompareByteJson(values[j], values[k]) < 0 {
+					require.Less(t, CompareByteJson(values[i], values[k]), 0,
+						"transitivity for (%d, %d, %d)", i, j, k)
+				}
+			}
+		}
+	}
+}
+
+func TestCompareByteJsonRejectsOversizedLiteral(t *testing.T) {
+	oversized := ByteJson{Type: TpCodeLiteral, Data: []byte{LiteralNull, 0xff}}
+	require.NotZero(t, CompareByteJson(makeJson(t, "null"), oversized))
+	require.Zero(t, CompareByteJson(oversized, oversized))
 }
 
 func TestCompareByteJsonOpaqueBinaryUsesRawBytes(t *testing.T) {

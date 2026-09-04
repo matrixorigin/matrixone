@@ -285,6 +285,17 @@ func TestCanonicalJSONMatchesScalarEquality(t *testing.T) {
 	}
 }
 
+func TestCanonicalJSONRejectsOversizedLiteralEquality(t *testing.T) {
+	valid := mustEncodeJSON(t, "null")
+	oversized := mustEncodeByteJSON(t, bytejson.ByteJson{
+		Type: bytejson.TpCodeLiteral,
+		Data: []byte{bytejson.LiteralNull, 0xff},
+	})
+
+	require.NotZero(t, bytejson.CompareByteJson(types.DecodeJson(valid), types.DecodeJson(oversized)))
+	require.NotEqual(t, AppendCanonicalJSON(nil, valid), AppendCanonicalJSON(nil, oversized))
+}
+
 func TestCanonicalVecF32Contract(t *testing.T) {
 	negativeZero := float32(math.Copysign(0, -1))
 	positive := types.ArrayToBytes([]float32{1, 0, 3})
