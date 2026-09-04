@@ -261,6 +261,19 @@ type lastHeartbeatCond struct {
 	hb int64
 }
 
+type lastRunCond struct{ value time.Time }
+
+func (c *lastRunCond) eval(v any) bool {
+	t, ok := v.(time.Time)
+	return ok && t.Equal(c.value)
+}
+
+func (c *lastRunCond) sql() string {
+	// Bind time.Time through the same driver location/precision rules as the
+	// claim writer. Formatting a timestamp literal here can change its timezone.
+	return "last_run <=> ?"
+}
+
 func (c *lastHeartbeatCond) eval(v any) bool {
 	hb, ok := v.(int64)
 	if !ok {
@@ -463,6 +476,7 @@ const (
 	CondSQLTaskRunStatus
 	CondSQLTaskTriggerType
 	CondSQLTaskRunner
+	CondLastRun
 )
 
 var (
@@ -485,6 +499,7 @@ var (
 		CondAccountID:     {},
 		CondAccount:       {},
 		CondLastHeartbeat: {},
+		CondLastRun:       {},
 	}
 )
 
@@ -583,6 +598,11 @@ func WithLastHeartbeat(op Op, value int64) Condition {
 	}
 }
 
+// WithLastRun fences a daemon mutation to its exact persisted claim generation.
+func WithLastRun(value time.Time) Condition {
+	return func(c *conditions) { (*c)[CondLastRun] = &lastRunCond{value: value} }
+}
+
 func WithCronTaskId(op Op, value uint64) Condition {
 	return func(c *conditions) {
 		(*c)[CondCronTaskId] = &cronTaskIDCond{op: op, cronTaskID: value}
@@ -671,6 +691,10 @@ type TaskService interface {
 	QueryDaemonTask(ctx context.Context, conds ...Condition) ([]task.DaemonTask, error)
 	// UpdateDaemonTask updates the daemon task record.
 	UpdateDaemonTask(ctx context.Context, tasks []task.DaemonTask, cond ...Condition) (int, error)
+	// UpdateDaemonTaskError changes only details/update_at for a matching Running
+	// claim. release also clears its lease and restores RestartRequested. It never
+	// rewrites last_run or unrelated metadata; zero means the claim was superseded.
+	UpdateDaemonTaskError(ctx context.Context, claim task.DaemonTask, release bool) (int, error)
 	// UpdateDaemonTaskStatus updates only status-owned fields. In particular, it
 	// preserves the runner lease (TaskRunner and LastHeartbeat) while applying
 	// the supplied compare-and-swap conditions.
@@ -779,6 +803,7 @@ type TaskStorage interface {
 	AddDaemonTask(ctx context.Context, tasks ...task.DaemonTask) (int, error)
 	// UpdateDaemonTask updates daemon tasks and returns number of successful updated.
 	UpdateDaemonTask(ctx context.Context, tasks []task.DaemonTask, conds ...Condition) (int, error)
+	UpdateDaemonTaskError(ctx context.Context, claim task.DaemonTask, release bool) (int, error)
 	// UpdateDaemonTaskStatus updates only task_status, update_at and end_at.
 	UpdateDaemonTaskStatus(
 		ctx context.Context,

@@ -342,6 +342,11 @@ func (r *taskRunner) Attach(ctx context.Context, taskID uint64, routine ActiveRo
 	if !ok {
 		return moerr.NewErrTaskNotFound(ctx, taskID)
 	}
+	if origin, bound := ctx.Value(daemonAttachmentContextKey{}).(daemonAttachment); bound {
+		if t != origin.owner || t.claimLost.Load() || !sameDaemonClaim(t.taskSnapshot(), origin.claim) {
+			return moerr.NewInvalidTask(ctx, origin.claim.TaskRunner, taskID)
+		}
+	}
 	t.activeRoutine.Store(&routine)
 	return nil
 }

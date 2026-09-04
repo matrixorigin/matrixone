@@ -810,6 +810,10 @@ func (ts *testTaskService) UpdateDaemonTask(ctx context.Context, tasks []task.Da
 	panic("implement me")
 }
 
+func (ts *testTaskService) UpdateDaemonTaskError(context.Context, task.DaemonTask, bool) (int, error) {
+	panic("unexpected UpdateDaemonTaskError")
+}
+
 func (ts *testTaskService) UpdateDaemonTaskStatus(
 	ctx context.Context,
 	taskID uint64,
@@ -1445,6 +1449,34 @@ func TestRegisterCdcExecutor(t *testing.T) {
 				tt.args.cnTxnClient,
 				tt.args.cnEngine,
 				tt.args.cnEngMp)
+		})
+	}
+}
+
+func TestCDCFactoryRejectsSupersededClaim(t *testing.T) {
+	claim := task.DaemonTask{ID: 1, TaskRunner: "cn1", LastRun: time.Now()}
+	for _, change := range []string{"generation", "owner", "wrong-local-CN"} {
+		t.Run(change, func(t *testing.T) {
+			current := claim
+			cn := "cn1"
+			switch change {
+			case "generation":
+				current.LastRun = current.LastRun.Add(time.Microsecond)
+			case "owner":
+				current.TaskRunner = "cn2"
+			case "wrong-local-CN":
+				cn = "cn2"
+			}
+			ts := &testTaskService{dTask: []task.DaemonTask{current}}
+			factory := CDCTaskExecutorFactory(nil, func() ie.InternalExecutor {
+				t.Fatal("obsolete factory must not initialize resources")
+				return nil
+			}, func(context.Context, uint64, taskservice.ActiveRoutine) error {
+				t.Fatal("obsolete factory must not attach")
+				return nil
+			}, cn, ts, nil, nil, nil)
+			err := factory(context.Background(), &claim)
+			require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidTask))
 		})
 	}
 }

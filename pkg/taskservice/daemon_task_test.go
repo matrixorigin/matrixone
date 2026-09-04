@@ -143,6 +143,7 @@ type serviceWithDaemonHook struct {
 	updateErr      error
 	heartbeatErr   error
 	updateFn       func(context.Context, []task.DaemonTask, ...Condition) (int, error)
+	updateErrorFn  func(context.Context, task.DaemonTask, bool) (int, error)
 	updateStatusFn func(context.Context, uint64, task.TaskStatus, time.Time, time.Time, ...Condition) (int, error)
 	queryCalls     atomic.Int64
 }
@@ -183,6 +184,25 @@ func (s *serviceWithDaemonHook) UpdateDaemonTask(ctx context.Context, tasks []ta
 		return 0, updateErr
 	}
 	return s.TaskService.UpdateDaemonTask(ctx, tasks, conds...)
+}
+
+func (s *serviceWithDaemonHook) UpdateDaemonTaskError(ctx context.Context, claim task.DaemonTask, release bool) (int, error) {
+	s.mu.RLock()
+	fn, err := s.updateErrorFn, s.updateErr
+	s.mu.RUnlock()
+	if fn != nil {
+		return fn(ctx, claim, release)
+	}
+	if err != nil {
+		return 0, err
+	}
+	return s.TaskService.UpdateDaemonTaskError(ctx, claim, release)
+}
+
+func (s *serviceWithDaemonHook) setUpdateErrorFn(fn func(context.Context, task.DaemonTask, bool) (int, error)) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.updateErrorFn = fn
 }
 
 func (s *serviceWithDaemonHook) UpdateDaemonTaskStatus(
@@ -381,9 +401,9 @@ func TestStartTaskHandleBranches(t *testing.T) {
 
 	// run executor and hit setDaemonTaskError branch
 	errorPersisted := make(chan struct{})
-	hook.setUpdateFn(func(ctx context.Context, tasks []task.DaemonTask, conds ...Condition) (int, error) {
-		updated, err := hook.TaskService.UpdateDaemonTask(ctx, tasks, conds...)
-		if err == nil && len(tasks) == 1 && tasks[0].Details.Error == "executor failed" {
+	hook.setUpdateErrorFn(func(ctx context.Context, claim task.DaemonTask, release bool) (int, error) {
+		updated, err := hook.TaskService.UpdateDaemonTaskError(ctx, claim, release)
+		if err == nil && claim.Details.Error == "executor failed" {
 			close(errorPersisted)
 		}
 		return updated, err
@@ -399,7 +419,7 @@ func TestStartTaskHandleBranches(t *testing.T) {
 	})
 	require.NoError(t, start3.Handle(context.Background()))
 	<-errorPersisted
-	hook.setUpdateFn(nil)
+	hook.setUpdateErrorFn(nil)
 	stored = mustGetTestDaemonTask(t, store, 1, WithTaskIDCond(EQ, dt3.ID))
 	require.Equal(t, task.TaskStatus_Running, stored[0].TaskStatus)
 	require.Equal(t, "executor failed", stored[0].Details.Error)
@@ -888,7 +908,7 @@ func TestRestartStartFailureDoesNotReleaseSupersedingControlRequest(t *testing.T
 	mustUpdateTestDaemonTask(t, store, 1, []task.DaemonTask{superseding})
 
 	r.releaseRestartClaim(
-		&daemonTask{task: claimed},
+		claimed,
 		errors.New("catalog transition unavailable"),
 	)
 	got := mustGetTestDaemonTask(t, store, 1, WithTaskIDCond(EQ, claimed.ID))
@@ -1261,7 +1281,7 @@ func TestSetDaemonTaskError(t *testing.T) {
 		dt := newDaemonTaskForTest(1, task.TaskStatus_Running, r.runnerID)
 		mustAddTestDaemonTask(t, store, 1, dt)
 
-		r.setDaemonTaskError(context.Background(), &daemonTask{task: dt}, errors.New("mock daemon error"))
+		r.setDaemonTaskError(context.Background(), dt, errors.New("mock daemon error"))
 		tasks := mustGetTestDaemonTask(t, store, 1, WithTaskIDCond(EQ, 1))
 		require.Len(t, tasks, 1)
 		require.Equal(t, "mock daemon error", tasks[0].Details.Error)
@@ -1288,7 +1308,7 @@ func TestSetDaemonTaskErrorDoesNotOverwriteSupersedingStateOrOwner(t *testing.T)
 			superseding.TaskStatus = test.status
 			superseding.TaskRunner = test.runner
 			mustUpdateTestDaemonTask(t, store, 1, []task.DaemonTask{superseding})
-			r.setDaemonTaskError(context.Background(), &daemonTask{task: claimed}, errors.New("late start error"))
+			r.setDaemonTaskError(context.Background(), claimed, errors.New("late start error"))
 
 			got := mustGetTestDaemonTask(t, store, 1, WithTaskIDCond(EQ, claimed.ID))
 			require.Equal(t, test.status, got[0].TaskStatus)

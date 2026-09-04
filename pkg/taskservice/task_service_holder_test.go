@@ -536,6 +536,16 @@ func TestRefreshTaskStoragePingHeartbeatAndUpdateCdc(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, 1, affected)
 
+	dt.Details = &task.Details{Error: "failed startup"}
+	affected, err = s.UpdateDaemonTaskError(ctx, dt, false)
+	require.NoError(t, err)
+	require.Equal(t, 1, affected)
+	stored, err := s.QueryDaemonTask(ctx, WithTaskIDCond(EQ, dt.ID))
+	require.NoError(t, err)
+	require.Len(t, stored, 1)
+	require.Equal(t, dt.Details.Error, stored[0].Details.Error)
+	require.Equal(t, dt.LastHeartbeat, stored[0].LastHeartbeat)
+
 	affected, err = s.UpdateCDCTask(ctx, task.TaskStatus_Canceled, nil)
 	require.NoError(t, err)
 	require.Equal(t, 0, affected)
@@ -577,6 +587,8 @@ func TestRefreshTaskStorageErrNotReadyBranches(t *testing.T) {
 	_, err = s.AddDaemonTask(ctx, newTestDaemonTask(1, "d1"))
 	require.ErrorIs(t, err, ErrNotReady)
 	_, err = s.UpdateDaemonTask(ctx, []task.DaemonTask{newTestDaemonTask(1, "d2")})
+	require.ErrorIs(t, err, ErrNotReady)
+	_, err = s.UpdateDaemonTaskError(ctx, newTestDaemonTask(1, "d2"), false)
 	require.ErrorIs(t, err, ErrNotReady)
 	_, err = s.DeleteDaemonTask(ctx)
 	require.ErrorIs(t, err, ErrNotReady)

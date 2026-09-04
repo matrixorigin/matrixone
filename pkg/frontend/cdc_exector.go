@@ -92,6 +92,11 @@ func CDCTaskExecutorFactory(
 		if len(tasks) != 1 {
 			return moerr.NewInternalErrorf(ctx, "invalid tasks count %d", len(tasks))
 		}
+		claim, ok := spec.(*task.DaemonTask)
+		if !ok || claim.TaskRunner != cnUUID || tasks[0].TaskRunner != claim.TaskRunner ||
+			!tasks[0].LastRun.Equal(claim.LastRun) {
+			return moerr.NewInvalidTask(ctx, cnUUID, spec.GetID())
+		}
 		details, ok := tasks[0].Details.Details.(*task.Details_CreateCdc)
 		if !ok {
 			return moerr.NewInternalError(ctx, "invalid details type")
@@ -108,7 +113,7 @@ func CDCTaskExecutorFactory(
 			CDCExeutorAllocator,
 		)
 		exec.taskService = ts
-		exec.UpdateDaemonTaskClaim(tasks[0])
+		exec.UpdateDaemonTaskClaim(*claim)
 		// Restart timeout persistence is a control-plane path. It must use a
 		// fresh executor so it cannot queue behind the serialized executor held
 		// by the Start attempt that just timed out.
@@ -130,7 +135,9 @@ func CDCTaskExecutorFactory(
 			return err
 		}
 		if err = exec.Start(ctx); err != nil {
-			exec.cancelLifecycleContext()
+			// Attach transferred lifetime ownership to taskservice. Start's done
+			// notification may already have admitted a same-object replacement;
+			// only generation-fenced runner completion may cancel that lifetime.
 			return err
 		}
 		return nil

@@ -1645,7 +1645,9 @@ func (m *mysqlTaskStorage) UpdateDaemonTask(ctx context.Context, tasks []task.Da
 }
 
 func (m *mysqlTaskStorage) RunUpdateDaemonTask(ctx context.Context, tasks []task.DaemonTask, db SqlExecutor, condition ...Condition) (int, error) {
-	updateSql := updateDaemonTask + buildDaemonTaskWhereClause(newConditions(condition...))
+	c := newConditions(condition...)
+	where, bound := buildDaemonTaskWhereClauseWithArgs(c)
+	updateSql := updateDaemonTask + where
 	n := 0
 	for _, t := range tasks {
 		err := func() error {
@@ -1675,7 +1677,7 @@ func (m *mysqlTaskStorage) RunUpdateDaemonTask(ctx context.Context, tasks []task
 				lastRun = t.LastRun
 			}
 
-			exec, err := db.ExecContext(ctx, updateSql,
+			args := []any{
 				t.Metadata.Executor,
 				t.Metadata.Context,
 				string(j),
@@ -1688,7 +1690,8 @@ func (m *mysqlTaskStorage) RunUpdateDaemonTask(ctx context.Context, tasks []task
 				lastRun,
 				details,
 				t.ID,
-			)
+			}
+			exec, err := db.ExecContext(ctx, updateSql, append(args, bound...)...)
 			if err != nil {
 				return err
 			}
@@ -1704,6 +1707,40 @@ func (m *mysqlTaskStorage) RunUpdateDaemonTask(ctx context.Context, tasks []task
 		}
 	}
 	return n, nil
+}
+
+func (m *mysqlTaskStorage) UpdateDaemonTaskError(ctx context.Context, claim task.DaemonTask, release bool) (int, error) {
+	if taskFrameworkDisabled() {
+		return 0, nil
+	}
+	return m.runUpdateDaemonTaskError(ctx, m.db, claim, release)
+}
+
+func (m *mysqlTaskStorage) runUpdateDaemonTaskError(ctx context.Context, db SqlExecutor, claim task.DaemonTask, release bool) (int, error) {
+	var details any
+	if claim.Details != nil {
+		encoded, err := claim.Details.Marshal()
+		if err != nil {
+			return 0, err
+		}
+		details = encoded
+	}
+	query := "update sys_daemon_task set details=?, update_at=?"
+	if release {
+		query += fmt.Sprintf(", task_status=%d, task_runner='', last_heartbeat=NULL", task.TaskStatus_RestartRequested)
+	}
+	query += " where task_id=? and task_status=? and task_runner=? and last_run <=> ?"
+	var lastRun any
+	if !claim.LastRun.IsZero() {
+		lastRun = claim.LastRun
+	}
+	result, err := db.ExecContext(ctx, query, details, claim.UpdateAt, claim.ID,
+		task.TaskStatus_Running, claim.TaskRunner, lastRun)
+	if err != nil {
+		return 0, err
+	}
+	n, err := result.RowsAffected()
+	return int(n), err
 }
 
 func (m *mysqlTaskStorage) UpdateDaemonTaskStatus(
@@ -1737,8 +1774,10 @@ func (m *mysqlTaskStorage) RunUpdateDaemonTaskStatus(
 	db SqlExecutor,
 	conditions ...Condition,
 ) (int, error) {
-	updateSQL := updateDaemonTaskStatus + buildDaemonTaskWhereClause(newConditions(conditions...))
-	exec, err := db.ExecContext(ctx, updateSQL, status, updateAt, nullTime(endAt), taskID)
+	where, bound := buildDaemonTaskWhereClauseWithArgs(newConditions(conditions...))
+	updateSQL := updateDaemonTaskStatus + where
+	args := append([]any{status, updateAt, nullTime(endAt), taskID}, bound...)
+	exec, err := db.ExecContext(ctx, updateSQL, args...)
 	if err != nil {
 		return 0, err
 	}
@@ -1759,8 +1798,9 @@ func (m *mysqlTaskStorage) DeleteDaemonTask(ctx context.Context, condition ...Co
 
 func (m *mysqlTaskStorage) RunDeleteDaemonTask(ctx context.Context, db SqlExecutor, condition ...Condition) (int, error) {
 	c := newConditions(condition...)
-	deleteSql := deleteDaemonTask + buildDaemonTaskWhereClause(c)
-	exec, err := db.ExecContext(ctx, deleteSql)
+	where, bound := buildDaemonTaskWhereClauseWithArgs(c)
+	deleteSql := deleteDaemonTask + where
+	exec, err := db.ExecContext(ctx, deleteSql, bound...)
 	if err != nil {
 		return 0, err
 	}
@@ -1782,14 +1822,15 @@ func (m *mysqlTaskStorage) QueryDaemonTask(ctx context.Context, condition ...Con
 func (m *mysqlTaskStorage) RunQueryDaemonTask(ctx context.Context, db SqlExecutor, condition ...Condition) ([]task.DaemonTask, error) {
 
 	c := newConditions(condition...)
+	where, bound := buildDaemonTaskWhereClauseWithArgs(c)
 	query := selectDaemonTask +
-		buildDaemonTaskWhereClause(c) +
+		where +
 		buildOrderByClause(c) +
 		buildLimitClause(c)
 
 	labels := buildLabels(c)
 
-	rows, err := db.QueryContext(ctx, query)
+	rows, err := db.QueryContext(ctx, query, bound...)
 	if err != nil {
 		return nil, err
 	}
@@ -2105,14 +2146,23 @@ func (m *mysqlTaskStorage) UpdateCDCTask(
 }
 
 func buildDaemonTaskWhereClause(c *conditions) string {
+	clause, _ := buildDaemonTaskWhereClauseWithArgs(c)
+	return clause
+}
+
+func buildDaemonTaskWhereClauseWithArgs(c *conditions) (string, []any) {
 	var clauseBuilder strings.Builder
+	var args []any
 
 	for cond := range daemonWhereConditionCodes {
 		if cond, ok := (*c)[cond]; ok {
 			clauseBuilder.WriteString(" AND ")
 			clauseBuilder.WriteString(cond.sql())
+			if claim, ok := cond.(*lastRunCond); ok {
+				args = append(args, nullTime(claim.value))
+			}
 		}
 	}
 
-	return clauseBuilder.String()
+	return clauseBuilder.String(), args
 }

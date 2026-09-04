@@ -376,6 +376,21 @@ func (mr *MockTaskServiceMockRecorder) UpdateDaemonTask(ctx, tasks any, cond ...
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "UpdateDaemonTask", reflect.TypeOf((*MockTaskService)(nil).UpdateDaemonTask), varargs...)
 }
 
+// UpdateDaemonTaskError mocks base method.
+func (m *MockTaskService) UpdateDaemonTaskError(ctx context.Context, claim task.DaemonTask, release bool) (int, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "UpdateDaemonTaskError", ctx, claim, release)
+	ret0, _ := ret[0].(int)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// UpdateDaemonTaskError indicates an expected call of UpdateDaemonTaskError.
+func (mr *MockTaskServiceMockRecorder) UpdateDaemonTaskError(ctx, claim, release any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "UpdateDaemonTaskError", reflect.TypeOf((*MockTaskService)(nil).UpdateDaemonTaskError), ctx, claim, release)
+}
+
 // UpdateDaemonTaskStatus mocks base method.
 func (m *MockTaskService) UpdateDaemonTaskStatus(ctx context.Context, taskID uint64, status task.TaskStatus, updateAt, endAt time.Time, cond ...taskservice.Condition) (int, error) {
 	m.ctrl.T.Helper()
@@ -939,6 +954,21 @@ func (mr *MockTaskStorageMockRecorder) UpdateDaemonTask(ctx, tasks any, conds ..
 	mr.mock.ctrl.T.Helper()
 	varargs := append([]any{ctx, tasks}, conds...)
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "UpdateDaemonTask", reflect.TypeOf((*MockTaskStorage)(nil).UpdateDaemonTask), varargs...)
+}
+
+// UpdateDaemonTaskError mocks base method.
+func (m *MockTaskStorage) UpdateDaemonTaskError(ctx context.Context, claim task.DaemonTask, release bool) (int, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "UpdateDaemonTaskError", ctx, claim, release)
+	ret0, _ := ret[0].(int)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// UpdateDaemonTaskError indicates an expected call of UpdateDaemonTaskError.
+func (mr *MockTaskStorageMockRecorder) UpdateDaemonTaskError(ctx, claim, release any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "UpdateDaemonTaskError", reflect.TypeOf((*MockTaskStorage)(nil).UpdateDaemonTaskError), ctx, claim, release)
 }
 
 // UpdateDaemonTaskStatus mocks base method.

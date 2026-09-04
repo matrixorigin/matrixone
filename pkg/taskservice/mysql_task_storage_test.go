@@ -35,6 +35,73 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/util/json"
 )
 
+func TestDaemonTaskErrorSQLPreservesLease(t *testing.T) {
+	for _, release := range []bool{false, true} {
+		for _, outcome := range []string{"matched", "superseded", "exec-error", "result-error", "null-claim"} {
+			name := "record/" + outcome
+			if release {
+				name = "release/" + outcome
+			}
+			t.Run(name, func(t *testing.T) {
+				db, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherEqual))
+				require.NoError(t, err)
+				defer db.Close()
+				claim := newDaemonTaskForTest(1, task.TaskStatus_Running, "r1")
+				claim.LastRun = time.Now().UTC().Truncate(time.Microsecond)
+				var token any = claim.LastRun
+				if outcome == "null-claim" {
+					claim.LastRun = time.Time{}
+					token = nil
+				}
+				details, err := claim.Details.Marshal()
+				require.NoError(t, err)
+				query := "update sys_daemon_task set details=?, update_at=?"
+				if release {
+					query += fmt.Sprintf(", task_status=%d, task_runner='', last_heartbeat=NULL", task.TaskStatus_RestartRequested)
+				}
+				query += " where task_id=? and task_status=? and task_runner=? and last_run <=> ?"
+				expect := mock.ExpectExec(query).WithArgs(details, claim.UpdateAt, claim.ID, task.TaskStatus_Running, "r1", token)
+				want := 1
+				switch outcome {
+				case "superseded":
+					want = 0
+					expect.WillReturnResult(sqlmock.NewResult(0, 0))
+				case "exec-error":
+					expect.WillReturnError(errors.New("storage unavailable"))
+				case "result-error":
+					expect.WillReturnResult(sqlmock.NewErrorResult(errors.New("unknown result")))
+				default:
+					expect.WillReturnResult(sqlmock.NewResult(0, 1))
+				}
+				storage := &mysqlTaskStorage{db: db}
+				n, err := storage.UpdateDaemonTaskError(context.Background(), claim, release)
+				if outcome == "exec-error" || outcome == "result-error" {
+					require.Error(t, err)
+				} else {
+					require.NoError(t, err)
+					require.Equal(t, want, n)
+				}
+				require.NoError(t, mock.ExpectationsWereMet())
+			})
+		}
+	}
+}
+
+func TestLastRunConditionPrecision(t *testing.T) {
+	value := time.Date(2026, 9, 5, 8, 0, 0, 123456000, time.FixedZone("UTC+8", 8*3600))
+	c := &lastRunCond{value: value}
+	require.Equal(t, "last_run <=> ?", c.sql())
+	require.True(t, c.eval(value.UTC()))
+	require.False(t, c.eval(value.Add(time.Microsecond)))
+	require.False(t, c.eval("invalid"))
+	require.Equal(t, "last_run <=> ?", (&lastRunCond{}).sql())
+	clause, bound := buildDaemonTaskWhereClauseWithArgs(newConditions(WithLastRun(value)))
+	require.Equal(t, " AND "+c.sql(), clause)
+	require.Equal(t, []any{value}, bound)
+	_, bound = buildDaemonTaskWhereClauseWithArgs(newConditions(WithLastRun(time.Time{})))
+	require.Equal(t, []any{nil}, bound)
+}
+
 func TestBuildWhereClause(t *testing.T) {
 	cases := []struct {
 		condition conditions

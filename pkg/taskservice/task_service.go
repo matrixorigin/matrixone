@@ -286,6 +286,10 @@ func (s *taskService) UpdateDaemonTask(ctx context.Context, tasks []task.DaemonT
 	return s.store.UpdateDaemonTask(ctx, tasks, conds...)
 }
 
+func (s *taskService) UpdateDaemonTaskError(ctx context.Context, claim task.DaemonTask, release bool) (int, error) {
+	return s.store.UpdateDaemonTaskError(ctx, claim, release)
+}
+
 func (s *taskService) UpdateDaemonTaskStatus(
 	ctx context.Context,
 	taskID uint64,

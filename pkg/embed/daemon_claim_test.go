@@ -98,5 +98,64 @@ func TestDaemonClaimSQLRoundTrip(t *testing.T) {
 			require.NoError(t, err)
 			require.Zero(t, n)
 		})
+		t.Run("completion predicates and field ownership", func(t *testing.T) {
+			for _, release := range []bool{false, true} {
+				current := claim
+				current.TaskStatus = task.TaskStatus_Running
+				current.LastHeartbeat = time.Now().UTC().Truncate(time.Second)
+				current.LastRun = claim.LastRun.Add(2 * time.Microsecond)
+				n, err := storage.UpdateDaemonTask(ctx, []task.DaemonTask{current}, cond)
+				require.NoError(t, err)
+				require.Equal(t, 1, n)
+				// All storage consumers must carry the bound claim argument,
+				// including readers/deleters and whole-row claim admission.
+				matching, err := storage.QueryDaemonTask(ctx, cond, taskservice.WithLastRun(current.LastRun))
+				require.NoError(t, err)
+				require.Len(t, matching, 1)
+				obsolete, err := storage.QueryDaemonTask(ctx, cond, taskservice.WithLastRun(claim.LastRun))
+				require.NoError(t, err)
+				require.Empty(t, obsolete)
+				n, err = storage.DeleteDaemonTask(ctx, cond, taskservice.WithLastRun(claim.LastRun))
+				require.NoError(t, err)
+				require.Zero(t, n)
+				n, err = storage.UpdateDaemonTask(ctx, []task.DaemonTask{current}, cond,
+					taskservice.WithLastRun(current.LastRun))
+				require.NoError(t, err)
+				require.Equal(t, 1, n)
+				stale := claim
+				stale.TaskStatus = task.TaskStatus_Running
+				stale.Details = &task.Details{Account: "sys", Error: "obsolete failure"}
+				n, err = service.UpdateDaemonTaskError(ctx, stale, release)
+				require.NoError(t, err)
+				require.Zero(t, n)
+				n, err = service.UpdateDaemonTaskStatus(ctx, current.ID, task.TaskStatus_Paused,
+					time.Now(), time.Time{}, taskservice.WithLastRun(stale.LastRun))
+				require.NoError(t, err)
+				require.Zero(t, n)
+				completed := current
+				completed.LastHeartbeat = claim.LastHeartbeat // deliberately stale input
+				completed.Details = &task.Details{Account: "sys", Error: "current failure"}
+				n, err = service.UpdateDaemonTaskError(ctx, completed, release)
+				require.NoError(t, err)
+				require.Equal(t, 1, n)
+				got, err := storage.QueryDaemonTask(ctx, cond)
+				require.NoError(t, err)
+				require.Len(t, got, 1)
+				require.True(t, current.LastRun.Equal(got[0].LastRun))
+				require.Equal(t, "current failure", got[0].Details.Error)
+				if release {
+					require.Empty(t, got[0].TaskRunner)
+					require.True(t, got[0].LastHeartbeat.IsZero())
+					require.Equal(t, task.TaskStatus_RestartRequested, got[0].TaskStatus)
+				} else {
+					require.Equal(t, current.TaskRunner, got[0].TaskRunner)
+					require.True(t, current.LastHeartbeat.Equal(got[0].LastHeartbeat))
+					n, err = service.UpdateDaemonTaskStatus(ctx, current.ID, task.TaskStatus_Paused,
+						time.Now(), time.Time{}, taskservice.WithLastRun(current.LastRun))
+					require.NoError(t, err)
+					require.Equal(t, 1, n)
+				}
+			}
+		})
 	})
 }

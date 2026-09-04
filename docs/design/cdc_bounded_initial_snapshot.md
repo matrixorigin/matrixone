@@ -1,9 +1,9 @@
 # Bounded and retry-safe CDC initial snapshots
 
 Status: implementation design under review for MatrixOne PR #27939. The
-implemented protocol below has an unresolved daemon-completion ownership
-defect at `64a946ca54858db0d4d5c378f5e93450ded20e82`. The pending correction
-section is a design proposal, not implemented or validated behavior.
+daemon-completion ownership defect demonstrated at
+`64a946ca54858db0d4d5c378f5e93450ded20e82` is corrected by the generation-owned
+completion implementation and regression tests described below.
 Independent design approval is still required by the repository's R3 process.
 
 ## Scope
@@ -273,7 +273,7 @@ The lock serializes generations of the same CDC task/table. It does not prevent
 an operator from configuring a different CDC task to write the same physical
 target; cross-task target ownership is outside this PR.
 
-## Pending correction: generation-owned daemon completion
+## Correction: generation-owned daemon completion
 
 This correction belongs to #27863 / PR #27939. It addresses the deterministic
 counterexample in [review 5117936681](https://github.com/matrixorigin/matrixone/pull/27939#pullrequestreview-5117936681).
@@ -296,7 +296,7 @@ by task ID. This can rewind a new claim, erase its heartbeat registration, or
 release a replacement as if its startup had failed. Requesting cancellation
 does not revoke the old callback's references or prove its completion.
 
-The correction must enforce these invariants across the whole lifecycle:
+The correction enforces these invariants across the whole lifecycle:
 
 1. Capture `C` when work is admitted. Deferred completion must not obtain its
    identity by rereading a mutable `daemonTask` or a newly queried catalog row.
@@ -321,7 +321,7 @@ The correction must enforce these invariants across the whole lifecycle:
 
 ### Correction scope and alternatives
 
-The selected direction is claim-scoped, field-specific mutations plus
+The implementation uses claim-scoped, field-specific mutations plus
 generation-conditional local registration changes. Reuse the existing
 microsecond claim token and matched-row semantics; no new catalog table,
 timestamp format, target lock, or row-processing work is needed. Apply the same
@@ -340,11 +340,34 @@ Rejected alternatives:
 - Whole-row writeback with only a claim predicate still rewinds a concurrent
   heartbeat within the same claim. Field ownership is required as well.
 
-The implementation plan must resolve the exact admission/completion lock order
-before approval: neither cancellation nor heartbeat may wait behind downstream
-startup I/O, and a lifecycle operation must not join a worker whose completion
-needs a lock held by that operation. This remains a design-review item; the
-document does not assert that the current locks already satisfy it.
+`UpdateDaemonTaskError` updates only details/update time for an exact Running
+claim. Its release form additionally clears the lease and restores
+RestartRequested. Pause/Cancel/Resume/Restart status completion uses the narrow
+status API with the expected status, runner, and LastRun, preserving a heartbeat
+renewed during the local operation. Claim admission also compares the observed
+LastRun before advancing it. Timestamp predicates bind `time.Time` parameters
+through the same driver as claim writes: formatting an SQL literal independently
+can mismatch a DSN using `loc=Local`, even when memory tests pass.
+
+Local completion holds `claimLifecycle` while checking its immutable origin
+and conditionally removing its exact registration. Resume/Restart admission and
+heartbeat-loss handling use TryLock, leaving the durable request/heartbeat
+retry-owned while completion runs. The completion defer executes only after the
+factory returns, which is after `Start` closes its attempt's done notification.
+Resume/Restart joins that attempt, not the task-runner wrapper's completion
+defer; there is no reverse join edge. No map/task-state mutex is held across
+completion SQL, whose context is bounded to five seconds. Map removal keeps
+the map lock through pause-bookkeeping cleanup, preventing a replacement from
+being inserted between those two local effects.
+
+The factory validates its original claim before creating resources, and Attach
+checks that claim and the original registration. Before Attach, the factory owns
+lifetime cleanup; afterward, the runner does. In particular, a failed old
+`Start` must not cancel the shared executor lifetime after a same-object Resume
+has admitted a replacement. A superseded completion CAS retains the routine for
+the newer control request. A backend error is not proof of supersession: the
+failed current execution is canceled and detached, without an unfenced write or
+continued renewal of a failed owner.
 
 ### Acceptance map for the correction
 
@@ -359,19 +382,67 @@ document does not assert that the current locks already satisfy it.
 | SQL error, cancellation, and ambiguous completion result | no unfenced fallback or lease revival; bounded retry/cleanup ownership |
 | Claim admission between durable CAS and local publication | no false removal and no wait cycle between admission and completion |
 
-Extend the existing taskservice lifecycle fixtures with one row and barrier
-controlled callbacks, and reuse the embedded SQL claim test for real storage
-predicates and field preservation. Run focused tests, adaptive focused race
-repetitions, affected owning packages, and frontend consumer tests. On 55,
-validate the corrected service's stable snapshot, pause/resume/restart, and
-post-restart incremental progress with small exact source/target comparisons.
-Use deterministic injection for ABA; do not manufacture it by timing sleeps.
+The regression suite extends existing one-row lifecycle fixtures with barriers:
+
+- `TestDaemonStartupCompletionFencesReplacement`: normal/fresh restart crossed
+  with same-CN ABA and same-object Resume; joins the delayed completion and
+  checks the entire replacement row, registration, and heartbeat authority.
+- `TestDaemonCompletionStorageFieldOwnership`: current/stale/missing claims,
+  foreign owners, newer control status, preserved heartbeats, and duplicate
+  release; SQL errors and affected-row errors are covered by
+  `TestDaemonTaskErrorSQLPreservesLease`.
+- `TestDaemonCompletionCleanupOwnership`: successful startup, current failure,
+  backend timeout, superseding control request, and duplicate callback cleanup.
+- `TestDaemonAttachFencesOrigin` and `TestCDCFactoryRejectsSupersededClaim`:
+  obsolete factories cannot attach to or adopt a replacement.
+- `TestLifecycleCompletionPreservesClaimAndHeartbeat` and
+  `TestControlStatusCompletionFencesClaim`: all four local control completions
+  preserve concurrent heartbeats and reject newer claims.
+- `TestDaemonClaimSQLRoundTrip`: reuses the embedded single-CN cluster and one
+  row to check real SQL microsecond precision, parameter encoding, unchanged
+  matched rows, conditional error/status writes, and all claim-condition
+  consumers. No independent cluster or volume fixture is added.
+
+The focused concurrency cases use measured adaptive race repetition (100 runs
+per fast case, in separate focused invocations); owning taskservice/frontend
+packages also run in race mode. Real SQL and consumer package checks complement
+memory tests. The 55 test uses a locally built service on NVMe and exact small
+source/target comparisons for upgrade, snapshot, PK update/delete/insert,
+pause/resume, repeated restart, rejected unreachable sink, and process restart.
+ABA ordering is proved with deterministic injection, not claimed from live
+single-CN SQL timing or from a throughput benchmark.
+
+| Audit | Closure |
+| --- | --- |
+| Q1: ownership | Original claim owns deferred writes; original registration owns detach; Attach transfers lifetime cleanup to generation-checked runner completion. |
+| Q2: waits | Start's done precedes wrapper completion; local admission never joins that wrapper; heartbeat/control admission uses TryLock; completion SQL has a deadline. |
+| Q3: growth | No new queue, goroutine, polling loop, or retained callback history; one completion per existing admitted startup. |
+
+Validation of this correction (2026-09-05):
+
+- CGo wrapper, `-count=1 -timeout=240s -coverprofile=...`, owning/consumer
+  packages: taskservice 25.350s (90.3%), frontend 12.004s (65.3%), cnservice
+  8.544s (64.1%), embed 44.309s (84.9%). The added refreshable-storage assertions
+  also passed separately (0.051s); no production code changed afterward.
+- Owning race packages: taskservice 28.039s, frontend 28.537s; taskservice
+  rerun after the final cleanup/storage tests passed in 27.122s. Six focused
+  generation/lifecycle cases each passed 100 race repetitions.
+- 55: `make -j12` passed; SHA-256 of all eight changed production files matched
+  the local correction. Existing 10-row task, new 3-row snapshot, mutations,
+  pause/resume, two restarts, and unreachable-sink rejection passed. Restarting
+  the same service/data preserved six rows and replicated a seventh newly
+  inserted row, with zero durable table errors. This is single-CN, same-service
+  MatrixOne source/sink validation, not a multi-CN or external-MySQL claim.
+- Remote evidence is retained under
+  `/mnt/nvme/xupeng/mo-cdc-validation/completion-{build,verify,after-restart}.log`.
+  The owned validation service was stopped; NVMe retained about 120 GiB free.
 
 No throughput gain is claimed for this correction. The performance constraint
 is no added per-row/per-batch work and no new polling loop, retained completion
-history, or blocking control-path dependency. The exact design revision and
-accountable independent approval must be recorded before implementing and
-delivering this correction; the whole PR's design gate remains open.
+history, or blocking control-path dependency. This correction restores the
+existing claim-ownership contract without a new catalog schema or persisted
+protocol. Delivery of the requested bug fix is not independent approval of the
+whole stable-epoch feature; the whole PR's design/merge gate remains open.
 
 ## Ownership and wait analysis
 

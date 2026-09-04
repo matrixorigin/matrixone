@@ -480,6 +480,30 @@ func (s *memTaskStorage) UpdateDaemonTask(ctx context.Context, tasks []task.Daem
 	return n, nil
 }
 
+func (s *memTaskStorage) UpdateDaemonTaskError(ctx context.Context, claim task.DaemonTask, release bool) (int, error) {
+	if err := ctx.Err(); err != nil {
+		return 0, err
+	}
+	if s.preUpdate != nil {
+		s.preUpdate()
+	}
+	s.Lock()
+	defer s.Unlock()
+	current, ok := s.daemonTasks[claim.ID]
+	if !ok || current.TaskStatus != task.TaskStatus_Running || !sameDaemonClaim(current, claim) {
+		return 0, nil
+	}
+	current.Details = cloneDaemonTaskDetails(claim.Details)
+	current.UpdateAt = claim.UpdateAt
+	if release {
+		current.TaskStatus = task.TaskStatus_RestartRequested
+		current.TaskRunner = ""
+		current.LastHeartbeat = time.Time{}
+	}
+	s.daemonTasks[claim.ID] = current
+	return 1, nil
+}
+
 func (s *memTaskStorage) UpdateDaemonTaskStatus(
 	ctx context.Context,
 	taskID uint64,
@@ -671,6 +695,12 @@ func (s *memTaskStorage) filterDaemonTask(c *conditions, task task.DaemonTask) b
 
 	if cond, e := (*c)[CondLastHeartbeat]; e {
 		ok = cond.eval(task.LastHeartbeat.UnixNano())
+	}
+	if !ok {
+		return false
+	}
+	if cond, e := (*c)[CondLastRun]; e {
+		ok = cond.eval(task.LastRun)
 	}
 	return ok
 }

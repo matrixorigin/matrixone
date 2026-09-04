@@ -261,6 +261,10 @@ func (ts *testTS) UpdateDaemonTask(ctx context.Context, tasks []task.DaemonTask,
 	panic("implement me")
 }
 
+func (ts *testTS) UpdateDaemonTaskError(context.Context, task.DaemonTask, bool) (int, error) {
+	panic("unexpected UpdateDaemonTaskError")
+}
+
 func (ts *testTS) UpdateDaemonTaskStatus(
 	ctx context.Context,
 	taskID uint64,
