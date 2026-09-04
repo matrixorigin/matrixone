@@ -230,6 +230,55 @@ func TestArrowSchemaRejectsDecimal64PrecisionOverflow(t *testing.T) {
 	require.ErrorContains(t, err, "precision")
 }
 
+func TestArrowIPCRejectsStringValueOutsideExpectedWidth(t *testing.T) {
+	schemaWire := mustHex(t, fixtureSchemaHex)
+	header := mustHex(t, fixtureHeaderHex)
+	body := mustHex(t, fixtureBodyHex)
+	expected, headings := fixtureOutputShape()
+	expected[7] = planpb.Type{Id: int32(types.T_varchar), Width: 1}
+	schema, err := ParseSchema(schemaWire, expected, headings)
+	require.NoError(t, err)
+
+	mp := mpool.MustNewZero()
+	decoded, err := schema.decodeRecordBatch(header, body, 1<<20, mp)
+	if decoded != nil {
+		decoded.Clean(mp)
+	}
+	require.ErrorContains(t, err, "width")
+	require.Zero(t, mp.CurrNB())
+}
+
+func TestArrowIPCRejectsValidityBitmapWithZeroDeclaredNulls(t *testing.T) {
+	schemaWire := mustHex(t, fixtureSchemaHex)
+	header := mustHex(t, fixtureHeaderHex)
+	body := mustHex(t, fixtureBodyHex)
+	expected, headings := fixtureOutputShape()
+	schema, err := ParseSchema(schemaWire, expected, headings)
+	require.NoError(t, err)
+
+	metadata, err := ipcMetadata(header)
+	require.NoError(t, err)
+	message, err := rootTable(metadata)
+	require.NoError(t, err)
+	record, ok, err := message.tableField(2)
+	require.NoError(t, err)
+	require.True(t, ok)
+	nodeBytes, nodeCount, err := record.structVector(1, 16)
+	require.NoError(t, err)
+	require.Positive(t, nodeCount)
+	// The fixture's first validity bitmap marks its second row NULL. Clearing
+	// the matching field-node count creates inconsistent Arrow metadata.
+	binary.LittleEndian.PutUint64(nodeBytes[8:], 0)
+
+	mp := mpool.MustNewZero()
+	decoded, err := schema.decodeRecordBatch(header, body, 1<<20, mp)
+	if decoded != nil {
+		decoded.Clean(mp)
+	}
+	require.ErrorContains(t, err, "validity bitmap")
+	require.Zero(t, mp.CurrNB())
+}
+
 func TestArrowIPCRejectsInvalidUTF8Value(t *testing.T) {
 	schemaWire := mustHex(t, fixtureSchemaHex)
 	header := mustHex(t, fixtureHeaderHex)

@@ -110,6 +110,9 @@ func validateRecordColumns(
 			return moerr.NewInvalidInputf(ctx,
 				"Arrow column %q data type does not match the bound schema", binding.target.Name)
 		}
+		if _, err := validateArrowArrayValidity(ctx, column); err != nil {
+			return err
+		}
 	}
 	return nil
 }
@@ -152,14 +155,14 @@ func estimateColumnRowBytes(
 		if dictionary.Dictionary().IsNull(index) {
 			return uint64(fixed), nil
 		}
-		length, err := varlenValueLength(dictionary.Dictionary(), index)
+		length, err := varlenValueLength(ctx, dictionary.Dictionary(), index)
 		if err != nil {
 			return 0, err
 		}
 		return checkedRowBytes(ctx, fixed, length)
 	}
 
-	length, err := varlenValueLength(column, row)
+	length, err := varlenValueLength(ctx, column, row)
 	if err != nil {
 		return 0, err
 	}
@@ -175,7 +178,13 @@ func checkedRowBytes(ctx context.Context, fixed int, variable int) (uint64, erro
 	return uint64(fixed) + uint64(variable), nil
 }
 
-func varlenValueLength(values arrow.Array, row int) (int, error) {
+func varlenValueLength(ctx context.Context, values arrow.Array, row int) (length int, err error) {
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			length = 0
+			err = moerr.NewInvalidInputf(ctx, "invalid Arrow varlen value at row %d: %v", row, recovered)
+		}
+	}()
 	switch typed := values.(type) {
 	case *array.String:
 		return len(typed.Value(row)), nil

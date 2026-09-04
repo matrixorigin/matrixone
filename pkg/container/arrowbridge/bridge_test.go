@@ -680,6 +680,120 @@ func TestVarlenRejectsInvalidUTF8AndLength(t *testing.T) {
 	}
 }
 
+func TestVarlenRejectsNegativeOffsetsWithoutPanicking(t *testing.T) {
+	alloc := memory.NewCheckedAllocator(memory.NewGoAllocator())
+	offsets := memory.NewBufferBytes(arrow.Int32Traits.CastToBytes([]int32{-1, 0}))
+	values := memory.NewBufferBytes([]byte{'x'})
+	data := array.NewData(arrow.BinaryTypes.String, 1, []*memory.Buffer{nil, offsets, values}, nil, 0, 0)
+	valuesArray := array.NewStringData(data)
+	schema := arrow.NewSchema([]arrow.Field{{Name: "s", Type: arrow.BinaryTypes.String}}, nil)
+	record := array.NewRecordBatch(schema, []arrow.Array{valuesArray}, 1)
+	plan, err := Bind(context.Background(), schema, []TargetColumn{{Name: "s", Type: types.T_varchar.ToType()}}, MatchByName)
+	require.NoError(t, err)
+	mp := mpool.MustNewZero()
+
+	var rows int
+	require.NotPanics(t, func() {
+		rows, err = plan.MaxOutputRows(context.Background(), record, 0, 1, 1<<20)
+	})
+	require.Error(t, err)
+	require.Zero(t, rows)
+
+	var converted *batch.Batch
+	require.NotPanics(t, func() {
+		converted, _, err = plan.Convert(context.Background(), record, mp, ConvertOptions{})
+	})
+	require.Error(t, err)
+	require.Nil(t, converted)
+	require.Zero(t, mp.CurrNB())
+
+	record.Release()
+	valuesArray.Release()
+	offsets.Release()
+	values.Release()
+	data.Release()
+	alloc.AssertSize(t, 0)
+}
+
+func TestRejectsMismatchedArrowNullCount(t *testing.T) {
+	alloc := memory.NewCheckedAllocator(memory.NewGoAllocator())
+	validity := memory.NewBufferBytes([]byte{0xff})
+	values := memory.NewBufferBytes(arrow.Int64Traits.CastToBytes([]int64{7}))
+	data := array.NewData(arrow.PrimitiveTypes.Int64, 1, []*memory.Buffer{validity, values}, nil, 1, 0)
+	valuesArray := array.NewInt64Data(data)
+	schema := arrow.NewSchema([]arrow.Field{{Name: "v", Type: arrow.PrimitiveTypes.Int64, Nullable: true}}, nil)
+	record := array.NewRecordBatch(schema, []arrow.Array{valuesArray}, 1)
+	plan, err := Bind(context.Background(), schema, []TargetColumn{{Name: "v", Type: types.T_int64.ToType()}}, MatchByName)
+	require.NoError(t, err)
+	mp := mpool.MustNewZero()
+
+	converted, _, err := plan.Convert(context.Background(), record, mp, ConvertOptions{})
+	require.ErrorContains(t, err, "validity bitmap")
+	require.Nil(t, converted)
+	require.Zero(t, mp.CurrNB())
+
+	record.Release()
+	valuesArray.Release()
+	validity.Release()
+	values.Release()
+	data.Release()
+	alloc.AssertSize(t, 0)
+}
+
+func TestNullArrowColumnConvertsWithoutValidityBuffer(t *testing.T) {
+	alloc := memory.NewCheckedAllocator(memory.NewGoAllocator())
+	values := array.NewNull(2)
+	schema := arrow.NewSchema([]arrow.Field{{Name: "v", Type: arrow.Null}}, nil)
+	record := array.NewRecordBatch(schema, []arrow.Array{values}, 2)
+	plan, err := Bind(context.Background(), schema, []TargetColumn{{Name: "v", Type: types.T_varchar.ToType()}}, MatchByName)
+	require.NoError(t, err)
+	mp := mpool.MustNewZero()
+
+	converted, _, err := plan.Convert(context.Background(), record, mp, ConvertOptions{})
+	require.NoError(t, err)
+	require.Equal(t, 2, converted.RowCount())
+	require.True(t, converted.Vecs[0].IsNull(0))
+	require.True(t, converted.Vecs[0].IsNull(1))
+
+	converted.Clean(mp)
+	record.Release()
+	values.Release()
+	require.Zero(t, mp.CurrNB())
+	alloc.AssertSize(t, 0)
+}
+
+func TestDictionaryRejectsMalformedIndicesWithoutPanicking(t *testing.T) {
+	alloc := memory.NewCheckedAllocator(memory.NewGoAllocator())
+	valueBuilder := array.NewInt64Builder(alloc)
+	valueBuilder.Append(7)
+	values := valueBuilder.NewArray()
+	valueBuilder.Release()
+	indicesData := array.NewData(arrow.PrimitiveTypes.Int8, 1, []*memory.Buffer{nil, nil}, nil, 0, 0)
+	indices := array.NewInt8Data(indicesData)
+	dictType := &arrow.DictionaryType{IndexType: arrow.PrimitiveTypes.Int8, ValueType: arrow.PrimitiveTypes.Int64}
+	dictionary := array.NewDictionaryArray(dictType, indices, values)
+	indices.Release()
+	values.Release()
+	schema := arrow.NewSchema([]arrow.Field{{Name: "v", Type: dictType}}, nil)
+	record := array.NewRecordBatch(schema, []arrow.Array{dictionary}, 1)
+	plan, err := Bind(context.Background(), schema, []TargetColumn{{Name: "v", Type: types.T_int64.ToType()}}, MatchByName)
+	require.NoError(t, err)
+	mp := mpool.MustNewZero()
+
+	var converted *batch.Batch
+	require.NotPanics(t, func() {
+		converted, _, err = plan.Convert(context.Background(), record, mp, ConvertOptions{})
+	})
+	require.Error(t, err)
+	require.Nil(t, converted)
+	require.Zero(t, mp.CurrNB())
+
+	record.Release()
+	dictionary.Release()
+	indicesData.Release()
+	alloc.AssertSize(t, 0)
+}
+
 func TestVarlenIgnoresUnobservableNullPayload(t *testing.T) {
 	alloc := memory.NewCheckedAllocator(memory.NewGoAllocator())
 	builder := array.NewStringBuilder(alloc)

@@ -21,6 +21,7 @@ import (
 	"context"
 	"encoding/binary"
 	"math"
+	"sort"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/arrowipc/ipcflatbuf"
@@ -266,6 +267,7 @@ func validateRecordBatchMetadata(
 	// Buffer ranges are checked with subtraction to avoid offset+length overflow.
 	// When compressed, the first eight bytes are an Arrow decoded-size prefix;
 	// the aggregate decoded budget is enforced before decompression.
+	ranges := make([]arrowBufferRange, 0, bufferCount)
 	var buffer ipcflatbuf.Buffer
 	var decodedBytes int64
 	for index := 0; index < bufferCount; index++ {
@@ -281,6 +283,9 @@ func validateRecordBatchMetadata(
 		if offset%8 != 0 {
 			return moerr.NewInvalidInputf(ctx,
 				"Arrow IPC buffer %d has unaligned buffer offset %d", index, offset)
+		}
+		if length > 0 {
+			ranges = append(ranges, arrowBufferRange{index: index, offset: offset, length: length})
 		}
 		if !options.ValidateBody {
 			continue
@@ -308,6 +313,16 @@ func validateRecordBatchMetadata(
 		}
 		decodedBytes += decodedLength
 	}
+	sort.Slice(ranges, func(i, j int) bool {
+		return ranges[i].offset < ranges[j].offset
+	})
+	for index := 1; index < len(ranges); index++ {
+		previous, current := ranges[index-1], ranges[index]
+		if current.offset < previous.offset+previous.length {
+			return moerr.NewInvalidInputf(ctx,
+				"Arrow IPC buffer %d overlaps buffer %d", current.index, previous.index)
+		}
+	}
 
 	variadicCount := record.VariadicBufferCountsLength()
 	if variadicCount < 0 || variadicCount > metadataBytes/8 {
@@ -325,4 +340,10 @@ func validateRecordBatchMetadata(
 		variadicBuffers += count
 	}
 	return nil
+}
+
+type arrowBufferRange struct {
+	index  int
+	offset int64
+	length int64
 }

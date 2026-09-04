@@ -121,7 +121,11 @@ func (p *Plan) Convert(
 			return nil, stats, err
 		}
 		column := record.Column(binding.source)
-		if binding.target.NotNull && column.NullN() != 0 {
+		nullCount, validityErr := validateArrowArrayValidity(ctx, column)
+		if validityErr != nil {
+			return nil, stats, validityErr
+		}
+		if binding.target.NotNull && nullCount != 0 {
 			return nil, stats, moerr.NewConstraintViolationf(ctx, "Arrow column %q contains NULL for a NOT NULL target", binding.target.Name)
 		}
 
@@ -130,12 +134,12 @@ func (p *Plan) Convert(
 		switch binding.kind {
 		case conversionBorrowFixed:
 			vec, columnStats, err = convertFixed(
-				ctx, column, binding.target.Type, mp, options.Allocation, options.ForceMaterialize,
+				ctx, column, binding.target.Type, mp, options.Allocation, options.ForceMaterialize, nullCount,
 			)
 		case conversionBorrowVarlen:
 			vec, columnStats, err = convertVarlen(
 				ctx, column, binding.target.Type, mp, options.MaxPinAmplification,
-				options.Allocation, options.ForceMaterialize,
+				options.Allocation, options.ForceMaterialize, nullCount,
 			)
 		default:
 			vec, columnStats, err = materializeConverted(ctx, column, binding, mp, options.Location, options.Allocation)
@@ -157,6 +161,102 @@ func (p *Plan) Convert(
 	return bat, stats, nil
 }
 
+func validateArrowArrayValidity(ctx context.Context, column arrow.Array) (int, error) {
+	if column == nil || column.Data() == nil {
+		return 0, moerr.NewInvalidInput(ctx, "Arrow column has no array data")
+	}
+	data := column.Data()
+	rows := data.Len()
+	nullCount := data.NullN()
+	if rows < 0 || nullCount < array.UnknownNullCount || nullCount > rows {
+		return 0, moerr.NewInvalidInput(ctx, "Arrow column has invalid null metadata")
+	}
+	if data.DataType() != nil && data.DataType().ID() == arrow.NULL {
+		if nullCount >= 0 && nullCount != rows {
+			return 0, moerr.NewInvalidInput(ctx, "Arrow NULL array has invalid null metadata")
+		}
+		return rows, nil
+	}
+	actualNulls := 0
+	buffers := data.Buffers()
+	if len(buffers) == 0 || buffers[0] == nil {
+		if nullCount > 0 {
+			return 0, moerr.NewInvalidInput(ctx, "Arrow column declares NULLs without a validity buffer")
+		}
+	} else if rows > 0 {
+		bitOffset := data.Offset()
+		if bitOffset < 0 || int64(bitOffset) > math.MaxInt64-int64(rows) {
+			return 0, moerr.NewInvalidInput(ctx, "Arrow validity bit offset overflows")
+		}
+		lastBit := int64(bitOffset) + int64(rows)
+		if lastBit > math.MaxInt64-7 {
+			return 0, moerr.NewInvalidInput(ctx, "Arrow validity bitmap length overflows")
+		}
+		requiredBytes := (lastBit + 7) / 8
+		validity := buffers[0].Bytes()
+		if requiredBytes > int64(len(validity)) {
+			return 0, moerr.NewInvalidInput(ctx, "Arrow validity buffer is too short")
+		}
+		for row := 0; row < rows; row++ {
+			bit := int64(bitOffset) + int64(row)
+			if validity[bit>>3]&(1<<uint(bit&7)) == 0 {
+				actualNulls++
+			}
+		}
+	}
+	if nullCount >= 0 && actualNulls != nullCount {
+		return 0, moerr.NewInvalidInputf(ctx,
+			"Arrow validity bitmap has %d NULLs; metadata declares %d", actualNulls, nullCount)
+	}
+	if dictionary, ok := column.(*array.Dictionary); ok {
+		values := dictionary.Dictionary()
+		if values == nil {
+			return 0, moerr.NewInvalidInput(ctx, "Arrow dictionary has no values array")
+		}
+		if err := validateDictionaryIndices(ctx, dictionary, values.Len()); err != nil {
+			return 0, err
+		}
+		if _, err := validateArrowArrayValidity(ctx, values); err != nil {
+			return 0, err
+		}
+		switch values.(type) {
+		case *array.String, *array.LargeString, *array.Binary, *array.LargeBinary, *array.FixedSizeBinary:
+			if _, err := inspectVarlen(ctx, values); err != nil {
+				return 0, err
+			}
+		}
+	}
+	return actualNulls, nil
+}
+
+func validateDictionaryIndices(
+	ctx context.Context,
+	dictionary *array.Dictionary,
+	dictionaryLength int,
+) (err error) {
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			err = moerr.NewInvalidInputf(ctx, "invalid Arrow dictionary index array: %v", recovered)
+		}
+	}()
+	indices := dictionary.Indices()
+	if indices == nil || indices.Data() == nil {
+		return moerr.NewInvalidInput(ctx, "Arrow dictionary indices are missing")
+	}
+	if indices.Len() != dictionary.Len() {
+		return moerr.NewInvalidInput(ctx, "Arrow dictionary indices length does not match the dictionary array")
+	}
+	for row := 0; row < dictionary.Len(); row++ {
+		if dictionary.IsNull(row) {
+			continue
+		}
+		if _, err := checkedDictionaryIndex(ctx, dictionary, row, dictionaryLength); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func convertFixed(
 	ctx context.Context,
 	column arrow.Array,
@@ -164,6 +264,7 @@ func convertFixed(
 	mp *mpool.MPool,
 	selection *vector.AllocationAccountSelection,
 	forceMaterialize bool,
+	nullCount int,
 ) (*vector.Vector, ConvertStats, error) {
 	var stats ConvertStats
 	if column.DataType().ID() == arrow.TIME64 {
@@ -240,7 +341,7 @@ func convertFixed(
 	if err != nil {
 		return nil, stats, err
 	}
-	if err = installBorrowedValidity(column, vec, mp); err != nil {
+	if err = installBorrowedValidity(column, vec, mp, nullCount); err != nil {
 		vec.Free(mp)
 		return nil, stats, err
 	}
@@ -303,8 +404,8 @@ func newArrayDataLease(
 	return lease, nil
 }
 
-func installBorrowedValidity(column arrow.Array, vec *vector.Vector, mp *mpool.MPool) error {
-	if column.NullN() == 0 {
+func installBorrowedValidity(column arrow.Array, vec *vector.Vector, mp *mpool.MPool, nullCount int) error {
+	if nullCount == 0 {
 		return nil
 	}
 	// MO nulls use an inverted bitmap. Reserve the possible legacy-materialized
@@ -323,7 +424,7 @@ func installBorrowedValidity(column arrow.Array, vec *vector.Vector, mp *mpool.M
 	if err != nil {
 		return err
 	}
-	err = vec.GetNulls().InstallBorrowedValidity(validity, data.Offset(), column.Len(), column.NullN(), lease)
+	err = vec.GetNulls().InstallBorrowedValidity(validity, data.Offset(), column.Len(), nullCount, lease)
 	lease.Release()
 	return err
 }
@@ -346,6 +447,7 @@ func convertVarlen(
 	maxPinAmplification float64,
 	selection *vector.AllocationAccountSelection,
 	forceMaterialize bool,
+	nullCount int,
 ) (*vector.Vector, ConvertStats, error) {
 	view, err := inspectVarlen(ctx, column)
 	if err != nil {
@@ -431,7 +533,7 @@ func convertVarlen(
 		vec.Free(mp)
 		return nil, ConvertStats{}, err
 	}
-	if err = installBorrowedValidity(column, vec, mp); err != nil {
+	if err = installBorrowedValidity(column, vec, mp, nullCount); err != nil {
 		vec.Free(mp)
 		return nil, ConvertStats{}, err
 	}
@@ -444,8 +546,16 @@ func convertVarlen(
 	}, nil
 }
 
-func inspectVarlen(ctx context.Context, column arrow.Array) (varlenView, error) {
-	var view varlenView
+func inspectVarlen(ctx context.Context, column arrow.Array) (view varlenView, err error) {
+	// Arrow-Go constructors validate only part of the offset contract. Keep
+	// their slice-based accessors behind this trust boundary so a malformed
+	// in-process array is reported as invalid input instead of panicking.
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			view = varlenView{}
+			err = moerr.NewInvalidInputf(ctx, "invalid Arrow varlen array: %v", recovered)
+		}
+	}()
 	data := column.Data()
 	buffers := data.Buffers()
 	if len(buffers) < 2 {

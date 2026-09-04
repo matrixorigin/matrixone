@@ -476,20 +476,16 @@ func decodeColumn(vec *vector.Vector, field arrowField, node arrowNode, buffers 
 		return internalErrorf("required field contains nulls")
 	}
 	validity := sliceBuffer(body, buffers[0])
-	if node.nullCount == 0 {
-		if len(validity) != 0 && int64(len(validity)) < bitmapBytes(node.length) {
-			return internalErrorf("validity buffer is too short")
-		}
-	} else if int64(len(validity)) < bitmapBytes(node.length) {
+	if (node.nullCount != 0 || len(validity) != 0) && int64(len(validity)) < bitmapBytes(node.length) {
 		return internalErrorf("validity buffer is too short")
 	}
 	isNull := func(row int64) bool {
 		return node.nullCount != 0 && validity[row>>3]&(1<<uint(row&7)) == 0
 	}
-	if node.nullCount != 0 {
+	if len(validity) != 0 {
 		actualNulls := int64(0)
 		for row := int64(0); row < node.length; row++ {
-			if isNull(row) {
+			if validity[row>>3]&(1<<uint(row&7)) == 0 {
 				actualNulls++
 			}
 		}
@@ -514,6 +510,9 @@ func decodeColumn(vec *vector.Vector, field arrowField, node arrowNode, buffers 
 			value := data[start:end]
 			if !isNull(row) && !utf8.Valid(value) {
 				return internalErrorf("UTF8 value at row %d is invalid", row)
+			}
+			if !isNull(row) && field.expected.Width > 0 && int64(utf8.RuneCount(value)) > int64(field.expected.Width) {
+				return internalErrorf("UTF8 value at row %d exceeds width %d", row, field.expected.Width)
 			}
 			if err := vector.AppendBytes(vec, value, isNull(row), mp); err != nil {
 				return err
