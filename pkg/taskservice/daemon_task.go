@@ -669,29 +669,6 @@ func (t *cancelTask) Handle(ctx context.Context) error {
 		return nil
 	}
 
-	// A stale owner may be handled by a CN which has no local activeRoutine.
-	// For CDC, durable watermark deletion is the terminal-status prerequisite;
-	// otherwise this handler would publish Canceled and lose the only owner
-	// capable of removing the matching durable watermark rows.
-	cleanup := t.runner.GetTaskCleanup(tk.Metadata.Executor)
-	if activeRoutine == nil && !hasLocalTask && cleanup != nil {
-		cleanupCtx, cleanupCancel := context.WithTimeoutCause(
-			context.Background(),
-			30*time.Second,
-			moerr.CauseCancelTaskHandle,
-		)
-		cleanupErr := cleanup(cleanupCtx, &tk)
-		cleanupCancel()
-		if cleanupErr != nil {
-			return moerr.AttachCause(cleanupCtx, cleanupErr)
-		}
-	}
-	if activeRoutine == nil && !hasLocalTask &&
-		tk.Metadata.Executor == task.TaskCode_InitCdc && cleanup == nil {
-		// Fail closed for CDC when no durable cleanup owner is registered.
-		return nil
-	}
-
 	conditions := []Condition{
 		WithTaskStatusCond(task.TaskStatus_CancelRequested),
 		WithTaskRunnerCond(EQ, tk.TaskRunner),
@@ -727,13 +704,15 @@ func (t *cancelTask) Handle(ctx context.Context) error {
 				time.Second*5,
 				moerr.CauseCancelTaskHandle,
 			)
+			restoreNow := time.Now()
 			updated, restoreErr := t.runner.service.UpdateDaemonTaskStatus(
 				restoreCtx,
 				tk.ID,
 				task.TaskStatus_CancelRequested,
-				now,
-				now,
+				restoreNow,
+				restoreNow,
 				WithTaskStatusCond(task.TaskStatus_Canceled),
+				WithTaskRunnerCond(EQ, tk.TaskRunner),
 			)
 			restoreCancel()
 			if restoreErr == nil && updated != 1 {

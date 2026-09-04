@@ -94,6 +94,7 @@ func (r *mockErrActiveRoutine) Restart() error { return r.restartErr }
 
 type mockFuncActiveRoutine struct {
 	resume  func() error
+	cancel  func() error
 	restart func() error
 }
 
@@ -104,7 +105,12 @@ func (r *mockFuncActiveRoutine) Resume() error {
 	}
 	return r.resume()
 }
-func (r *mockFuncActiveRoutine) Cancel() error { return nil }
+func (r *mockFuncActiveRoutine) Cancel() error {
+	if r.cancel == nil {
+		return nil
+	}
+	return r.cancel()
+}
 func (r *mockFuncActiveRoutine) Restart() error {
 	if r.restart == nil {
 		return nil
@@ -1353,30 +1359,44 @@ func TestCancelTaskDefersFreshForeignOwnerUntilStale(t *testing.T) {
 	require.Equal(t, task.TaskStatus_Canceled, got[0].TaskStatus)
 }
 
-func TestCancelTaskRequiresDurableCleanupBeforeTerminal(t *testing.T) {
+func TestCancelTaskRestoresRetryableStateAfterLocalCancelFailure(t *testing.T) {
 	r, store := newDaemonHandleTestRunner(t)
-	dt := newDaemonTaskForTest(1, task.TaskStatus_CancelRequested, "old-cn")
-	dt.Metadata.Executor = task.TaskCode_InitCdc
-	dt.LastHeartbeat = time.Now().Add(-r.options.heartbeatTimeout - time.Second)
+	dt := newDaemonTaskForTest(1, task.TaskStatus_CancelRequested, r.runnerID)
 	mustAddTestDaemonTask(t, store, 1, dt)
 
-	cleanupCalls := atomic.Int32{}
-	r.RegisterTaskCleanup(task.TaskCode_InitCdc, func(context.Context, task.Task) error {
-		if cleanupCalls.Add(1) == 1 {
-			return errors.New("transient durable cleanup failure")
-		}
-		return nil
-	})
+	routine := ActiveRoutine(&mockErrActiveRoutine{cancelErr: errors.New("transient cancel failure")})
+	taskRef := &daemonTask{task: dt}
+	taskRef.activeRoutine.Store(&routine)
+	r.addDaemonTask(taskRef)
 
-	h := newCancelTask(r, dt.ID)
-	require.ErrorContains(t, h.Handle(context.Background()), "transient durable cleanup failure")
+	require.ErrorContains(t, newCancelTask(r, dt.ID).Handle(context.Background()), "transient cancel failure")
 	got := mustGetTestDaemonTask(t, store, 1, WithTaskIDCond(EQ, dt.ID))
 	require.Equal(t, task.TaskStatus_CancelRequested, got[0].TaskStatus)
+	require.Equal(t, r.runnerID, got[0].TaskRunner)
+}
 
-	require.NoError(t, h.Handle(context.Background()))
-	got = mustGetTestDaemonTask(t, store, 1, WithTaskIDCond(EQ, dt.ID))
-	require.Equal(t, task.TaskStatus_Canceled, got[0].TaskStatus)
-	require.Equal(t, int32(2), cleanupCalls.Load())
+func TestCancelTaskFailureDoesNotOverwriteSupersedingOwner(t *testing.T) {
+	r, store := newDaemonHandleTestRunner(t)
+	dt := newDaemonTaskForTest(1, task.TaskStatus_CancelRequested, r.runnerID)
+	mustAddTestDaemonTask(t, store, 1, dt)
+
+	routine := ActiveRoutine(&mockFuncActiveRoutine{cancel: func() error {
+		current := mustGetTestDaemonTask(t, store, 1, WithTaskIDCond(EQ, dt.ID))
+		current[0].TaskRunner = "new-owner"
+		current[0].TaskStatus = task.TaskStatus_RestartRequested
+		mustUpdateTestDaemonTask(t, store, 1, current)
+		return errors.New("old owner cancel failed")
+	}})
+	taskRef := &daemonTask{task: dt}
+	taskRef.activeRoutine.Store(&routine)
+	r.addDaemonTask(taskRef)
+
+	err := newCancelTask(r, dt.ID).Handle(context.Background())
+	require.ErrorContains(t, err, "old owner cancel failed")
+	require.ErrorContains(t, err, "restore CancelRequested")
+	got := mustGetTestDaemonTask(t, store, 1, WithTaskIDCond(EQ, dt.ID))
+	require.Equal(t, task.TaskStatus_RestartRequested, got[0].TaskStatus)
+	require.Equal(t, "new-owner", got[0].TaskRunner)
 }
 
 func TestCancelTaskDoesNotTerminateRenewedForeignLease(t *testing.T) {

@@ -730,11 +730,6 @@ type TaskService interface {
 // otherwise it means that the task is rescheduled, the task may be completed or not.
 type TaskExecutor func(ctx context.Context, task task.Task) error
 
-// TaskCleanupExecutor owns durable cleanup for a task after its original
-// runner is lost. It must be idempotent because multiple stale runners may
-// observe the same expired lease before one publishes the terminal status.
-type TaskCleanupExecutor func(ctx context.Context, task task.Task) error
-
 // TaskRunner each runner can execute multiple task concurrently
 type TaskRunner interface {
 	// ID returns the TaskRunner ID

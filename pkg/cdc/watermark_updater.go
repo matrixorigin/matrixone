@@ -61,10 +61,13 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
+	"unicode/utf8"
 
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -92,6 +95,12 @@ const (
 	watermarkCommitMaxRetries   = 3
 	watermarkCircuitBreakPeriod = 30 * time.Second
 	fallbackLogThrottleWindow   = time.Second
+	// Guarded writes are parsed and planned as INSERT ... SELECT statements.
+	// Bound both cardinality and statement size so a many-table CDC task cannot
+	// turn one three-second flush into a large allocation or planner spike.
+	watermarkWriteMaxRows     = 200
+	watermarkWriteMaxSQLBytes = 256 << 10
+	watermarkWriteSQLOverhead = 512
 )
 
 var cdcWatermarkUpdater atomic.Pointer[CDCWatermarkUpdater]
@@ -649,7 +658,7 @@ func (u *CDCWatermarkUpdater) execReadWM() (errMsg string, err error) {
 	return
 }
 
-// execBatchUpdateWM persists buffered watermarks to database in a single batch operation.
+// execBatchUpdateWM persists buffered watermarks to database in bounded batch operations.
 //
 // Process Flow:
 // 1. Move watermarks: cacheUncommitted -> cacheCommitting
@@ -696,23 +705,25 @@ func (u *CDCWatermarkUpdater) execBatchUpdateWM() (errMsg string, err error) {
 		delete(u.cacheUncommitted, key)
 	}
 	committingCount := len(u.cacheCommitting)
-	commitSql := u.constructBatchUpdateWMSQL(u.cacheCommitting)
+	commitSQLs := u.constructBatchUpdateWMSQLs(u.cacheCommitting)
 	u.Unlock()
 
 	if committingCount == 0 {
 		if skippedDueToCircuit {
 			err = moerr.NewInternalErrorNoCtx("watermark commit skipped due to circuit breaker")
 		}
-	} else if commitSql != "" {
+	} else if len(commitSQLs) > 0 {
 		ctx, cancel := context.WithTimeoutCause(context.Background(), 20*time.Second, moerr.CauseWatermarkUpdate)
 		defer cancel()
 		ctx = defines.AttachAccountId(ctx, catalog.System_Account)
 		startTime := time.Now()
-		u.persistMu.Lock()
-		err = u.ie.Exec(ctx, commitSql, ie.SessionOverrideOptions{})
-		u.persistMu.Unlock()
+		failedBatch, batchErr := u.execWatermarkSQLBatches(ctx, commitSQLs)
+		err = batchErr
 		duration := time.Since(startTime)
 		v2.CdcWatermarkCommitDuration.Observe(duration.Seconds())
+		if err != nil {
+			errMsg = watermarkBatchError("commit", failedBatch, commitSQLs)
+		}
 	}
 
 	u.Lock()
@@ -720,9 +731,7 @@ func (u *CDCWatermarkUpdater) execBatchUpdateWM() (errMsg string, err error) {
 
 	if err != nil {
 		reason := "sql"
-		if commitSql != "" {
-			errMsg = fmt.Sprintf("commit sql \"%s\" failed", commitSql)
-		} else {
+		if errMsg == "" {
 			errMsg = err.Error()
 			reason = "circuit_skip"
 		}
@@ -787,13 +796,11 @@ func (u *CDCWatermarkUpdater) execBatchUpdateWMErrMsg() (errMsg string, err erro
 	}
 	ctx, cancel := context.WithTimeoutCause(context.Background(), 20*time.Second, moerr.CauseWatermarkUpdateErrMsg)
 	defer cancel()
-	errMsgSql := u.constructBatchUpdateWMErrMsgSQL(u.committingErrMsgBuffer)
+	errMsgSQLs := u.constructBatchUpdateWMErrMsgSQLs(u.committingErrMsgBuffer)
 	ctx = defines.AttachAccountId(ctx, catalog.System_Account)
-	u.persistMu.Lock()
-	err = u.ie.Exec(ctx, errMsgSql, ie.SessionOverrideOptions{})
-	u.persistMu.Unlock()
+	failedBatch, err := u.execWatermarkSQLBatches(ctx, errMsgSQLs)
 	if err != nil {
-		errMsg = fmt.Sprintf("update err_msg sql \"%s\" failed", errMsgSql)
+		errMsg = watermarkBatchError("update err_msg", failedBatch, errMsgSQLs)
 	}
 	u.Lock()
 	defer u.Unlock()
@@ -805,59 +812,218 @@ func (u *CDCWatermarkUpdater) execBatchUpdateWMErrMsg() (errMsg string, err erro
 	return
 }
 
-func (u *CDCWatermarkUpdater) constructBatchUpdateWMSQL(
-	keys map[WatermarkKey]types.TS,
-) (commitSql string) {
-	var values string
-	var taskPredicates []string
-	i := 0
-	for key, wm := range keys {
-		if i > 0 {
-			values += " UNION ALL "
-		}
-		values += fmt.Sprintf(
-			"SELECT %d AS account_id, '%s' AS task_id, '%s' AS db_name, '%s' AS table_name, '%s' AS watermark",
-			key.AccountId,
-			escapeSQLString(key.TaskId),
-			escapeSQLString(key.DBName),
-			escapeSQLString(key.TableName),
-			escapeSQLString(wm.ToString()),
-		)
-		taskPredicates = append(taskPredicates, fmt.Sprintf(
-			"(account_id = %d AND task_id = '%s')",
-			key.AccountId, escapeSQLString(key.TaskId)))
-		i++
-	}
-	if i == 0 {
-		return ""
-	}
-	commitSql = CDCSQLBuilder.GuardedWatermarkUpdateSQL(values, strings.Join(taskPredicates, " OR "))
-	return
+type guardedWatermarkRow struct {
+	accountID uint64
+	taskID    string
+	dbName    string
+	tableName string
+	value     string
 }
 
-func (u *CDCWatermarkUpdater) constructBatchUpdateWMErrMsgSQL(
-	jobs []*UpdaterJob,
-) (commitSql string) {
-	var values string
-	var taskPredicates []string
-	for i, job := range jobs {
-		if i > 0 {
-			values += " UNION ALL "
+type watermarkTaskKey struct {
+	accountID uint64
+	taskID    string
+}
+
+func sortGuardedWatermarkRows(rows []guardedWatermarkRow) {
+	sort.Slice(rows, func(i, j int) bool {
+		if rows[i].accountID != rows[j].accountID {
+			return rows[i].accountID < rows[j].accountID
 		}
-		values += fmt.Sprintf(
-			"SELECT %d AS account_id, '%s' AS task_id, '%s' AS db_name, '%s' AS table_name, '%s' AS err_msg",
-			job.Key.AccountId,
-			escapeSQLString(job.Key.TaskId),
-			escapeSQLString(job.Key.DBName),
-			escapeSQLString(job.Key.TableName),
-			escapeSQLString(job.ErrMsg), // only update the err_msg
-		)
-		taskPredicates = append(taskPredicates, fmt.Sprintf(
-			"(account_id = %d AND task_id = '%s')",
-			job.Key.AccountId, escapeSQLString(job.Key.TaskId)))
+		if rows[i].taskID != rows[j].taskID {
+			return rows[i].taskID < rows[j].taskID
+		}
+		if rows[i].dbName != rows[j].dbName {
+			return rows[i].dbName < rows[j].dbName
+		}
+		return rows[i].tableName < rows[j].tableName
+	})
+}
+
+func writeQuotedSQLString(builder *strings.Builder, value string) {
+	builder.WriteByte('\'')
+	builder.WriteString(escapeSQLString(value))
+	builder.WriteByte('\'')
+}
+
+func writeWatermarkRowPrefix(builder *strings.Builder, row guardedWatermarkRow) {
+	builder.WriteString("SELECT ")
+	builder.WriteString(strconv.FormatUint(row.accountID, 10))
+	builder.WriteString(" AS account_id, ")
+	writeQuotedSQLString(builder, row.taskID)
+	builder.WriteString(" AS task_id, ")
+	writeQuotedSQLString(builder, row.dbName)
+	builder.WriteString(" AS db_name, ")
+	writeQuotedSQLString(builder, row.tableName)
+	builder.WriteString(" AS table_name, ")
+}
+
+func watermarkUpdateRowSQL(row guardedWatermarkRow) string {
+	var builder strings.Builder
+	builder.Grow(128 + len(row.taskID) + len(row.dbName) + len(row.tableName) + len(row.value))
+	writeWatermarkRowPrefix(&builder, row)
+	writeQuotedSQLString(&builder, row.value)
+	builder.WriteString(" AS watermark")
+	return builder.String()
+}
+
+func watermarkErrorRowSQL(row guardedWatermarkRow) string {
+	var builder strings.Builder
+	builder.Grow(128 + len(row.taskID) + len(row.dbName) + len(row.tableName) + len(row.value))
+	writeWatermarkRowPrefix(&builder, row)
+	writeQuotedSQLString(&builder, row.value)
+	builder.WriteString(" AS err_msg")
+	return builder.String()
+}
+
+func watermarkInsertRowSQL(row guardedWatermarkRow) string {
+	var builder strings.Builder
+	builder.Grow(144 + len(row.taskID) + len(row.dbName) + len(row.tableName) + len(row.value))
+	writeWatermarkRowPrefix(&builder, row)
+	writeQuotedSQLString(&builder, row.value)
+	builder.WriteString(" AS watermark, '' AS err_msg")
+	return builder.String()
+}
+
+func watermarkTaskPredicate(row guardedWatermarkRow) string {
+	var builder strings.Builder
+	builder.Grow(48 + len(row.taskID))
+	builder.WriteString("(account_id = ")
+	builder.WriteString(strconv.FormatUint(row.accountID, 10))
+	builder.WriteString(" AND task_id = ")
+	writeQuotedSQLString(&builder, row.taskID)
+	builder.WriteByte(')')
+	return builder.String()
+}
+
+func buildGuardedWatermarkSQLBatches(
+	rows []guardedWatermarkRow,
+	rowSQL func(guardedWatermarkRow) string,
+	wrap func(string, string) string,
+) []string {
+	if len(rows) == 0 {
+		return nil
 	}
-	commitSql = CDCSQLBuilder.GuardedWatermarkErrorUpdateSQL(values, strings.Join(taskPredicates, " OR "))
-	return
+	sortGuardedWatermarkRows(rows)
+	batches := make([]string, 0, (len(rows)+watermarkWriteMaxRows-1)/watermarkWriteMaxRows)
+	seenTasks := make(map[watermarkTaskKey]struct{})
+	var values, predicates strings.Builder
+	rowCount := 0
+
+	flush := func() {
+		if rowCount == 0 {
+			return
+		}
+		batches = append(batches, wrap(values.String(), predicates.String()))
+		values.Reset()
+		predicates.Reset()
+		clear(seenTasks)
+		rowCount = 0
+	}
+
+	for _, row := range rows {
+		value := rowSQL(row)
+		task := watermarkTaskKey{accountID: row.accountID, taskID: row.taskID}
+		predicate := ""
+		if _, ok := seenTasks[task]; !ok {
+			predicate = watermarkTaskPredicate(row)
+		}
+		projectedBytes := watermarkWriteSQLOverhead + values.Len() + predicates.Len() + len(value)
+		if rowCount > 0 {
+			projectedBytes += len(" UNION ALL ")
+		}
+		if predicate != "" {
+			projectedBytes += len(predicate)
+			if predicates.Len() > 0 {
+				projectedBytes += len(" OR ")
+			}
+		}
+		if rowCount > 0 && (rowCount >= watermarkWriteMaxRows || projectedBytes > watermarkWriteMaxSQLBytes) {
+			flush()
+			predicate = watermarkTaskPredicate(row)
+		}
+		if rowCount > 0 {
+			values.WriteString(" UNION ALL ")
+		}
+		values.WriteString(value)
+		if predicate != "" {
+			if predicates.Len() > 0 {
+				predicates.WriteString(" OR ")
+			}
+			predicates.WriteString(predicate)
+			seenTasks[task] = struct{}{}
+		}
+		rowCount++
+	}
+	flush()
+	return batches
+}
+
+func (u *CDCWatermarkUpdater) execWatermarkSQLBatches(
+	ctx context.Context,
+	sqls []string,
+) (failedBatch int, err error) {
+	u.persistMu.Lock()
+	defer u.persistMu.Unlock()
+	for i, sql := range sqls {
+		if err = u.ie.Exec(ctx, sql, ie.SessionOverrideOptions{}); err != nil {
+			return i, err
+		}
+	}
+	return -1, nil
+}
+
+func watermarkBatchError(operation string, failedBatch int, sqls []string) string {
+	if failedBatch < 0 || failedBatch >= len(sqls) {
+		return fmt.Sprintf("%s watermark batch failed", operation)
+	}
+	return fmt.Sprintf(
+		"%s watermark batch %d/%d (%d bytes) failed",
+		operation,
+		failedBatch+1,
+		len(sqls),
+		len(sqls[failedBatch]),
+	)
+}
+
+func truncateUTF8Runes(value string, maxRunes int) string {
+	if maxRunes < 0 || len(value) <= maxRunes || utf8.RuneCountInString(value) <= maxRunes {
+		return value
+	}
+	runes := []rune(value)
+	return string(runes[:maxRunes])
+}
+
+func (u *CDCWatermarkUpdater) constructBatchUpdateWMSQLs(
+	keys map[WatermarkKey]types.TS,
+) []string {
+	rows := make([]guardedWatermarkRow, 0, len(keys))
+	for key, wm := range keys {
+		rows = append(rows, guardedWatermarkRow{
+			accountID: key.AccountId,
+			taskID:    key.TaskId,
+			dbName:    key.DBName,
+			tableName: key.TableName,
+			value:     wm.ToString(),
+		})
+	}
+	return buildGuardedWatermarkSQLBatches(rows, watermarkUpdateRowSQL, CDCSQLBuilder.GuardedWatermarkUpdateSQL)
+}
+
+func (u *CDCWatermarkUpdater) constructBatchUpdateWMErrMsgSQLs(
+	jobs []*UpdaterJob,
+) []string {
+	rows := make([]guardedWatermarkRow, 0, len(jobs))
+	for _, job := range jobs {
+		rows = append(rows, guardedWatermarkRow{
+			accountID: job.Key.AccountId,
+			taskID:    job.Key.TaskId,
+			dbName:    job.Key.DBName,
+			tableName: job.Key.TableName,
+			value:     job.ErrMsg,
+		})
+	}
+	return buildGuardedWatermarkSQLBatches(rows, watermarkErrorRowSQL, CDCSQLBuilder.GuardedWatermarkErrorUpdateSQL)
 }
 
 func (u *CDCWatermarkUpdater) execAddWM() (errMsg string, err error) {
@@ -878,13 +1044,11 @@ func (u *CDCWatermarkUpdater) execAddWM() (errMsg string, err error) {
 	}
 	ctx, cancel := context.WithTimeoutCause(context.Background(), 20*time.Second, moerr.CauseWatermarkAdd)
 	defer cancel()
-	addSql := u.constructAddWMSQL(u.addCommittedBuffer)
+	addSQLs := u.constructAddWMSQLs(u.addCommittedBuffer)
 	ctx = defines.AttachAccountId(ctx, catalog.System_Account)
-	u.persistMu.Lock()
-	err = u.ie.Exec(ctx, addSql, ie.SessionOverrideOptions{})
-	u.persistMu.Unlock()
+	failedBatch, err := u.execWatermarkSQLBatches(ctx, addSQLs)
 	if err != nil {
-		errMsg = fmt.Sprintf("add sql \"%s\" failed", addSql)
+		errMsg = watermarkBatchError("add", failedBatch, addSQLs)
 		return
 	}
 	u.Lock()
@@ -907,30 +1071,20 @@ func (u *CDCWatermarkUpdater) execAddWM() (errMsg string, err error) {
 	return
 }
 
-func (u *CDCWatermarkUpdater) constructAddWMSQL(
+func (u *CDCWatermarkUpdater) constructAddWMSQLs(
 	jobs []*UpdaterJob,
-) (addSql string) {
-	var values string
-	var taskPredicates []string
-	for i, job := range jobs {
-		if i > 0 {
-			values += " UNION ALL "
-		}
-		values += fmt.Sprintf(
-			"SELECT %d AS account_id, '%s' AS task_id, '%s' AS db_name, '%s' AS table_name, '%s' AS watermark, '%s' AS err_msg",
-			job.Key.AccountId,
-			escapeSQLString(job.Key.TaskId),
-			escapeSQLString(job.Key.DBName),
-			escapeSQLString(job.Key.TableName),
-			escapeSQLString(job.Watermark.ToString()),
-			"",
-		)
-		taskPredicates = append(taskPredicates, fmt.Sprintf(
-			"(account_id = %d AND task_id = '%s')",
-			job.Key.AccountId, escapeSQLString(job.Key.TaskId)))
+) []string {
+	rows := make([]guardedWatermarkRow, 0, len(jobs))
+	for _, job := range jobs {
+		rows = append(rows, guardedWatermarkRow{
+			accountID: job.Key.AccountId,
+			taskID:    job.Key.TaskId,
+			dbName:    job.Key.DBName,
+			tableName: job.Key.TableName,
+			value:     job.Watermark.ToString(),
+		})
 	}
-	addSql = CDCSQLBuilder.GuardedWatermarkInsertSQL(values, strings.Join(taskPredicates, " OR "))
-	return
+	return buildGuardedWatermarkSQLBatches(rows, watermarkInsertRowSQL, CDCSQLBuilder.GuardedWatermarkInsertSQL)
 }
 
 func (u *CDCWatermarkUpdater) constructReadWMSQL(
@@ -1121,6 +1275,10 @@ func (u *CDCWatermarkUpdater) UpdateWatermarkErrMsg(
 		Timestamp:   time.Now(),
 	}
 	newMetadata := BuildErrorMetadata(oldMetadataCopy, record)
+	// Keep the in-memory diagnostic bounded by the same catalog contract as
+	// mo_cdc_watermark.err_msg. This prevents an upstream error containing a
+	// large payload from defeating the guarded statement-size bound.
+	newMetadata.Message = truncateUTF8Runes(newMetadata.Message, CDCWatermarkErrMsgMaxLen)
 
 	// 6. Check if exceeded max retry count
 	if newMetadata.IsRetryable && newMetadata.RetryCount > MaxRetryCount {
@@ -1161,7 +1319,7 @@ func (u *CDCWatermarkUpdater) UpdateWatermarkErrMsg(
 	u.Unlock()
 
 	// 8. Format and persist (async via job queue)
-	formattedMsg := FormatErrorMetadata(newMetadata)
+	formattedMsg := truncateUTF8Runes(FormatErrorMetadata(newMetadata), CDCWatermarkErrMsgMaxLen)
 	logutil.Info(
 		"cdc.watermark.update_errmsg_persist",
 		zap.String("key", key.String()),
@@ -1391,9 +1549,9 @@ func (u *CDCWatermarkUpdater) DeleteTaskWatermarks(
 	accountID uint64,
 	taskID string,
 ) error {
-	// This is the linearization point for terminal cleanup. The tombstone is
-	// never removed: a reader that outlives Cancel must not be able to recreate
-	// the durable row.
+	// This is the linearization point for terminal cleanup. The lifecycle owner
+	// retains the tombstone until every callback and reader has exited; failures
+	// deliberately keep it installed so a late writer cannot recreate the row.
 	u.MarkTaskDeleted(taskID)
 	flushErr := u.ForceFlush(ctx)
 	if flushErr != nil {
@@ -1500,12 +1658,19 @@ func (u *CDCWatermarkUpdater) MarkTaskDeleted(taskID string) {
 // succeeded. Keeping the proof at the caller prevents late readers from
 // recreating a deleted row.
 func (u *CDCWatermarkUpdater) ForgetTaskDeleted(taskID string) {
+	u.Lock()
+	defer u.Unlock()
 	u.deletedTasks.Delete(taskID)
 }
 
 // MarkTaskPaused marks a task as paused to block watermark updates
 // This is called when a task is being paused to prevent race conditions
 func (u *CDCWatermarkUpdater) MarkTaskPaused(taskId string) {
+	u.Lock()
+	defer u.Unlock()
+	if _, deleted := u.deletedTasks.Load(taskId); deleted {
+		return
+	}
 	u.pausedTasks.Store(taskId, time.Now())
 	logutil.Info(
 		"cdc.watermark.task_marked_paused",

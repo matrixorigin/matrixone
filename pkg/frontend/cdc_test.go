@@ -3239,9 +3239,20 @@ func TestCdcTaskCancelDrainsInFlightTableCallback(t *testing.T) {
 	require.NoError(t, executor.stateMachine.Transition(TransitionStart))
 	require.NoError(t, executor.stateMachine.Transition(TransitionStartSuccess))
 
-	// Model a callback that already passed its generation check and owns the
-	// callback read lock while it publishes its reader/watermark.
-	executor.callbackMu.RLock()
+	// Hold the production publication lock so the real callback can complete
+	// admission but cannot reach its second generation check.
+	executor.Lock()
+	callbackDone := make(chan error, 1)
+	go func() {
+		callbackDone <- executor.handleNewTablesForGeneration(
+			executor.callbackGeneration.Load(), nil)
+	}()
+	require.Eventually(t, func() bool {
+		executor.callbackMu.Lock()
+		defer executor.callbackMu.Unlock()
+		return executor.callbackCount == 1
+	}, time.Second, time.Millisecond)
+
 	cancelDone := make(chan error, 1)
 	go func() {
 		cancelDone <- executor.Cancel()
@@ -3255,9 +3266,117 @@ func TestCdcTaskCancelDrainsInFlightTableCallback(t *testing.T) {
 	default:
 	}
 
-	executor.callbackMu.RUnlock()
+	executor.Unlock()
+	require.NoError(t, <-callbackDone)
 	require.NoError(t, <-cancelDone)
 	require.Equal(t, StateCancelled, executor.stateMachine.State())
+}
+
+func TestCdcTaskPauseDrainsInFlightTableCallback(t *testing.T) {
+	executor := &CDCTaskExecutor{
+		activeRoutine:  cdc.NewCdcActiveRoutine(),
+		cnUUID:         "test-cn",
+		runningReaders: &sync.Map{},
+		spec: &task.CreateCdcDetails{
+			TaskId:   "task-pause-callback-drain",
+			TaskName: "task-pause-callback-drain",
+			Accounts: []*task.Account{{Id: 1}},
+		},
+		stateMachine: NewExecutorStateMachine(),
+		holdCh:       make(chan int, 1),
+	}
+	require.NoError(t, executor.stateMachine.Transition(TransitionStart))
+	require.NoError(t, executor.stateMachine.Transition(TransitionStartSuccess))
+
+	// Hold the publication lock after admission. Pause must not take its reader
+	// snapshot, publish Paused, or release the old generation until this real
+	// callback has observed the generation fence and exited.
+	executor.Lock()
+	callbackDone := make(chan error, 1)
+	go func() {
+		callbackDone <- executor.handleNewTablesForGeneration(
+			executor.callbackGeneration.Load(), nil)
+	}()
+	require.Eventually(t, func() bool {
+		executor.callbackMu.Lock()
+		defer executor.callbackMu.Unlock()
+		return executor.callbackCount == 1
+	}, time.Second, time.Millisecond)
+
+	pauseDone := make(chan error, 1)
+	go func() {
+		pauseDone <- executor.Pause()
+	}()
+	require.Eventually(t, func() bool {
+		return executor.callbackGeneration.Load() == 1 &&
+			executor.stateMachine.State() == StatePausing
+	}, time.Second, time.Millisecond)
+	select {
+	case err := <-pauseDone:
+		require.Failf(t, "Pause returned before callback drain", "err: %v", err)
+	default:
+	}
+
+	executor.Unlock()
+	require.NoError(t, <-callbackDone)
+	require.NoError(t, <-pauseDone)
+	require.Equal(t, StatePaused, executor.stateMachine.State())
+}
+
+func TestCdcTaskCancelFromPausingStillStopsReaders(t *testing.T) {
+	var closeCalls atomic.Int32
+	var waitCalls atomic.Int32
+	executor := &CDCTaskExecutor{
+		activeRoutine: cdc.NewCdcActiveRoutine(),
+		cnUUID:        "test-cn",
+		spec: &task.CreateCdcDetails{
+			TaskId:   "task-cancel-pausing-reader",
+			TaskName: "task-cancel-pausing-reader",
+			Accounts: []*task.Account{{Id: 1}},
+		},
+		runningReaders: &sync.Map{},
+		stateMachine:   NewExecutorStateMachine(),
+		holdCh:         make(chan int, 1),
+	}
+	executor.runningReaders.Store("db.table", &mockChangeReader{
+		info:       &cdc.DbTableInfo{SourceDbName: "db", SourceTblName: "table"},
+		closeCalls: &closeCalls,
+		waitCalls:  &waitCalls,
+	})
+	require.NoError(t, executor.stateMachine.Transition(TransitionStart))
+	require.NoError(t, executor.stateMachine.Transition(TransitionStartSuccess))
+	require.NoError(t, executor.stateMachine.Transition(TransitionPause))
+
+	require.NoError(t, executor.Cancel())
+	require.Equal(t, StateCancelled, executor.stateMachine.State())
+	require.Equal(t, int32(1), closeCalls.Load())
+	require.Equal(t, int32(1), waitCalls.Load())
+	_, exists := executor.runningReaders.Load("db.table")
+	require.False(t, exists)
+}
+
+func TestCdcTaskStopAllReadersRetainsEarlierIncompleteOwner(t *testing.T) {
+	previous := make(chan struct{})
+	executor := &CDCTaskExecutor{
+		spec: &task.CreateCdcDetails{
+			TaskId: "task-reader-owner",
+		},
+		runningReaders: &sync.Map{},
+	}
+	executor.setReaderShutdownCompletion(previous)
+
+	allStopped, allDone := executor.stopAllReaders()
+	require.False(t, allStopped)
+	select {
+	case <-allDone:
+		t.Fatal("a later empty snapshot must not hide an earlier reader still stopping")
+	default:
+	}
+
+	close(previous)
+	require.Eventually(t, func() bool {
+		return completionReady(allDone)
+	}, time.Second, time.Millisecond)
 }
 
 func TestCdcTask_retrieveCdcTask(t *testing.T) {
