@@ -456,6 +456,9 @@ func (s *subscriptionMetadataState) readStreamResult(proc *process.Process) erro
 					}
 				default:
 				}
+				if err := subscriptionMetadataCallerCancellation(proc); err != nil {
+					return err
+				}
 				return nil
 			}
 			s.currentResult = &result
@@ -463,9 +466,16 @@ func (s *subscriptionMetadataState) readStreamResult(proc *process.Process) erro
 			s.currentRowOffset = 0
 			return nil
 		case <-proc.Ctx.Done():
-			return moerr.NewInternalError(proc.Ctx, "subscription metadata query cancelled")
+			return subscriptionMetadataCallerCancellation(proc)
 		}
 	}
+}
+
+func subscriptionMetadataCallerCancellation(proc *process.Process) error {
+	if cause := context.Cause(proc.Ctx); cause != nil {
+		return cause
+	}
+	return proc.Ctx.Err()
 }
 
 func (s *subscriptionMetadataState) closeCurrentResult() {

@@ -324,6 +324,26 @@ func TestSubscriptionMetadataStateProjectionAndLimit(t *testing.T) {
 	state.free(nil, proc, false, nil)
 }
 
+func TestSubscriptionMetadataClosedStreamPreservesCallerCancellation(t *testing.T) {
+	proc := testutil.NewProc(t)
+	ctx, cancel := context.WithCancel(proc.Ctx)
+	proc.Ctx = ctx
+	cancel()
+
+	streamCh := make(chan executor.Result)
+	close(streamCh)
+	state := &subscriptionMetadataState{
+		streamCh: streamCh,
+		errCh:    make(chan error, 1),
+	}
+
+	for i := 0; i < 100; i++ {
+		err := state.readStreamResult(proc)
+		require.ErrorIsf(t, err, context.Canceled,
+			"iteration %d reported caller cancellation as clean EOF", i)
+	}
+}
+
 func TestSubscriptionMetadataStateMalformedResultClosesResources(t *testing.T) {
 	proc := testutil.NewProc(t)
 	internalMP := mpool.MustNewZero()
