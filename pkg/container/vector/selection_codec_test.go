@@ -28,6 +28,33 @@ type selectedRowsOneShotShortWriter struct {
 	short bool
 }
 
+type selectedRowsFastBuffer struct {
+	bytes.Buffer
+	fastCalls int
+	short     bool
+}
+
+func (w *selectedRowsFastBuffer) WriteSelectedFixedRows(
+	data []byte,
+	width int,
+	rows []int32,
+) (int, error) {
+	w.fastCalls++
+	written := 0
+	for _, selected := range rows {
+		row := int(selected)
+		n, err := w.Buffer.Write(data[row*width : (row+1)*width])
+		written += n
+		if err != nil {
+			return written, err
+		}
+	}
+	if w.short && written > 0 {
+		return written - 1, nil
+	}
+	return written, nil
+}
+
 func (w *selectedRowsOneShotShortWriter) Write(value []byte) (int, error) {
 	if !w.short && len(value) != 0 {
 		w.short = true
@@ -54,12 +81,111 @@ func TestSelectedFlagsCodecResetsEachStreamingPass(t *testing.T) {
 	written, err := source.MarshalSelectedFlagsTo(&encoded, flags)
 	require.NoError(t, err)
 	require.Equal(t, 3, written)
+	require.Equal(t, 4+1+4+3*types.T_int64.TypeLen(), encoded.Len())
 
 	destination := NewOffHeapVecWithType(types.T_int64.ToType())
 	defer destination.Free(mp)
 	require.NoError(t, destination.UnmarshalSelectedRowsFrom(&encoded, 3, mp))
 	require.Equal(t, []int64{7, 1792, 2093},
 		MustFixedColWithTypeCheck[int64](destination))
+	require.Zero(t, encoded.Len())
+}
+
+func TestSelectedRowsCodecPreservesFixedWidthMetadata(t *testing.T) {
+	mp := mpool.MustNewZero()
+	source := NewVec(types.T_int64.ToType())
+	destination := NewOffHeapVecWithType(types.T_int64.ToType())
+	t.Cleanup(func() {
+		destination.Free(mp)
+		source.Free(mp)
+		require.Zero(t, mp.CurrNB())
+	})
+	require.NoError(t, AppendFixedList(source, []int64{10, 20, 30, 40}, nil, mp))
+	source.SetNull(1)
+	source.GetGrouping().Add(1, 3)
+	require.NoError(t, source.SetPrepareParamKindsWithMP([]PrepareParamKind{
+		PrepareParamInteger, PrepareParamDecimal, PrepareParamNone, PrepareParamBoolean,
+	}, mp))
+
+	var encoded bytes.Buffer
+	require.NoError(t, source.MarshalSelectedRowsTo(&encoded, []int32{3, 1, 0}))
+	require.NoError(t, destination.UnmarshalSelectedRowsFrom(&encoded, 3, mp))
+	require.Equal(t, []int64{40, 0, 10}, MustFixedColWithTypeCheck[int64](destination))
+	require.True(t, destination.IsNull(1))
+	require.True(t, destination.GetGrouping().Contains(0))
+	require.True(t, destination.GetGrouping().Contains(1))
+	require.False(t, destination.GetGrouping().Contains(2))
+	require.Equal(t, PrepareParamBoolean, destination.GetPrepareParamKindAt(0))
+	require.Equal(t, PrepareParamNone, destination.GetPrepareParamKindAt(1))
+	require.Equal(t, PrepareParamInteger, destination.GetPrepareParamKindAt(2))
+	require.Zero(t, encoded.Len())
+}
+
+func TestSelectedRowsCodecFixedWidthWriterFastPathMatchesWire(t *testing.T) {
+	mp := mpool.MustNewZero()
+	source := NewVec(types.T_int64.ToType())
+	t.Cleanup(func() {
+		source.Free(mp)
+		require.Zero(t, mp.CurrNB())
+	})
+	values := make([]int64, 257)
+	for i := range values {
+		values[i] = int64(i*17 - 3)
+	}
+	require.NoError(t, AppendFixedList(source, values, nil, mp))
+	rows := []int32{256, 0, 129, 7}
+
+	var reference bytes.Buffer
+	require.NoError(t, source.MarshalSelectedRowsTo(&reference, rows))
+	fast := &selectedRowsFastBuffer{}
+	require.NoError(t, source.MarshalSelectedRowsTo(fast, rows))
+	require.Equal(t, 1, fast.fastCalls)
+	require.Equal(t, reference.Bytes(), fast.Bytes())
+
+	fast.Reset()
+	fast.fastCalls = 0
+	source.SetNull(7)
+	require.NoError(t, source.MarshalSelectedRowsTo(fast, rows))
+	require.Zero(t, fast.fastCalls, "row metadata requires the reference writer path")
+
+	constant, err := NewConstFixed(types.T_int64.ToType(), int64(41), 4, mp)
+	require.NoError(t, err)
+	defer constant.Free(mp)
+	fast.Reset()
+	fast.fastCalls = 0
+	require.NoError(t, constant.MarshalSelectedRowsTo(fast, []int32{3, 1}))
+	require.Zero(t, fast.fastCalls, "constant vectors broadcast one physical value")
+
+	fast.Reset()
+	fast.fastCalls = 0
+	source.GetNulls().Del(7)
+	fast.short = true
+	require.ErrorIs(t, source.MarshalSelectedRowsTo(fast, rows), io.ErrShortWrite)
+	require.Equal(t, 1, fast.fastCalls)
+}
+
+func TestSelectedRowsCodecFixedWidthEmptyAndAllNull(t *testing.T) {
+	mp := mpool.MustNewZero()
+	source := NewVec(types.T_int64.ToType())
+	destination := NewOffHeapVecWithType(types.T_int64.ToType())
+	t.Cleanup(func() {
+		destination.Free(mp)
+		source.Free(mp)
+		require.Zero(t, mp.CurrNB())
+	})
+
+	var encoded bytes.Buffer
+	require.NoError(t, source.MarshalSelectedRowsTo(&encoded, nil))
+	require.Equal(t, 4+1+4, encoded.Len())
+	require.NoError(t, destination.UnmarshalSelectedRowsFrom(&encoded, 0, mp))
+	require.Zero(t, destination.Length())
+	require.Zero(t, encoded.Len())
+
+	require.NoError(t, AppendFixedList(source, []int64{10, 20}, []bool{true, true}, mp))
+	require.NoError(t, source.MarshalSelectedRowsTo(&encoded, []int32{1, 0}))
+	require.NoError(t, destination.UnmarshalSelectedRowsFrom(&encoded, 2, mp))
+	require.True(t, destination.IsNull(0))
+	require.True(t, destination.IsNull(1))
 	require.Zero(t, encoded.Len())
 }
 
@@ -148,6 +274,55 @@ func BenchmarkSelectedRowsCodecAvoidsSparseFlagScans(b *testing.B) {
 				b.Fatal(err)
 			}
 		}
+	})
+}
+
+func BenchmarkSelectedRowsFixedWidth(b *testing.B) {
+	mp := mpool.MustNewZero()
+	source := NewVec(types.T_int64.ToType())
+	values := make([]int64, 8192)
+	rows := make([]int32, 0, len(values)/2)
+	for i := range values {
+		values[i] = int64(i * 7)
+		if i%2 == 0 {
+			rows = append(rows, int32(i))
+		}
+	}
+	require.NoError(b, AppendFixedList(source, values, nil, mp))
+	var encoded bytes.Buffer
+	require.NoError(b, source.MarshalSelectedRowsTo(&encoded, rows))
+	payload := bytes.Clone(encoded.Bytes())
+	b.Cleanup(func() {
+		source.Free(mp)
+		require.Zero(b, mp.CurrNB())
+	})
+
+	b.Run("encode", func(b *testing.B) {
+		var output bytes.Buffer
+		output.Grow(len(payload))
+		b.ReportAllocs()
+		b.SetBytes(int64(len(rows) * source.GetType().TypeSize()))
+		for b.Loop() {
+			output.Reset()
+			if err := source.MarshalSelectedRowsTo(&output, rows); err != nil {
+				b.Fatal(err)
+			}
+		}
+		b.ReportMetric(float64(output.Len()), "encoded-B")
+	})
+	b.Run("decode", func(b *testing.B) {
+		destination := NewOffHeapVecWithType(types.T_int64.ToType())
+		defer destination.Free(mp)
+		reader := bytes.NewReader(payload)
+		b.ReportAllocs()
+		b.SetBytes(int64(len(rows) * source.GetType().TypeSize()))
+		for b.Loop() {
+			reader.Reset(payload)
+			if err := destination.UnmarshalSelectedRowsFrom(reader, len(rows), mp); err != nil {
+				b.Fatal(err)
+			}
+		}
+		b.ReportMetric(float64(len(payload)), "encoded-B")
 	})
 }
 
@@ -252,9 +427,9 @@ func TestSelectedRowsCodecRejectsInvalidOrTruncatedRecords(t *testing.T) {
 	defer destination.Free(mp)
 	var nilVector *Vector
 	require.Error(t, nilVector.MarshalSelectedRowsTo(io.Discard, nil))
-	require.Error(t, destination.marshalSelectedRowsTo(nil, 0, func(int) int { return 0 }))
+	require.Error(t, destination.marshalSelectedRowsTo(nil, 0, nil, func(int) int { return 0 }))
 	require.Error(t, destination.marshalSelectedRowsTo(
-		io.Discard, -1, func(int) int { return 0 }))
+		io.Discard, -1, nil, func(int) int { return 0 }))
 	require.Error(t, destination.MarshalSelectedRowsTo(io.Discard, []int32{0}))
 	require.Error(t, nilVector.UnmarshalSelectedRowsFrom(bytes.NewReader(nil), 0, mp))
 	require.Error(t, destination.UnmarshalSelectedRowsFrom(nil, 0, mp))
@@ -323,6 +498,7 @@ func TestSelectedRowsCodecRejectsInvalidMetadataBeforePublishingRows(t *testing.
 			payload: func(buf *bytes.Buffer) {
 				require.NoError(t, types.WriteInt32(buf, 1))
 				require.NoError(t, buf.WriteByte(selectedRowsHasNull))
+				require.NoError(t, types.WriteInt32(buf, int32(types.T_int64.TypeLen())))
 				require.NoError(t, buf.WriteByte(selectedRowsHasGrouping))
 			},
 			want: "row metadata",
@@ -332,6 +508,7 @@ func TestSelectedRowsCodecRejectsInvalidMetadataBeforePublishingRows(t *testing.
 			payload: func(buf *bytes.Buffer) {
 				require.NoError(t, types.WriteInt32(buf, 1))
 				require.NoError(t, buf.WriteByte(selectedRowsHasNull))
+				require.NoError(t, types.WriteInt32(buf, int32(types.T_int64.TypeLen())))
 				require.NoError(t, buf.WriteByte(selectedRowsRowBinary))
 			},
 			want: "row metadata",
@@ -343,6 +520,7 @@ func TestSelectedRowsCodecRejectsInvalidMetadataBeforePublishingRows(t *testing.
 				require.NoError(t, buf.WriteByte(
 					selectedRowsHasNull|
 						selectedRowsBinaryRows<<selectedRowsBinaryShift))
+				require.NoError(t, types.WriteInt32(buf, int32(types.T_int64.TypeLen())))
 				require.NoError(t, buf.WriteByte(
 					selectedRowsHasNull|selectedRowsRowBinary))
 			},
@@ -354,9 +532,18 @@ func TestSelectedRowsCodecRejectsInvalidMetadataBeforePublishingRows(t *testing.
 				require.NoError(t, types.WriteInt32(buf, 1))
 				require.NoError(t, buf.WriteByte(0))
 				require.NoError(t, types.WriteInt32(buf, 4))
-				require.NoError(t, writeVectorMarshalBytes(buf, make([]byte, 4)))
 			},
 			want: "value size",
+		},
+		{
+			name: "truncated-fixed-width-value",
+			payload: func(buf *bytes.Buffer) {
+				require.NoError(t, types.WriteInt32(buf, 1))
+				require.NoError(t, buf.WriteByte(0))
+				require.NoError(t, types.WriteInt32(buf, int32(types.T_int64.TypeLen())))
+				require.NoError(t, writeVectorMarshalBytes(buf, make([]byte, 7)))
+			},
+			want: "EOF",
 		},
 	}
 	for _, tc := range tests {
