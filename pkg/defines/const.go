@@ -82,7 +82,8 @@ const (
 	MORPCVersion44     int64 = 44 // validated MongoDB explicit-query scan payload
 	MORPCVersion45     int64 = 45 // bounded Parquet whole-file fanout payload
 	MORPCVersion46     int64 = 46 // subscription-aware information-schema metadata table functions
-	MORPCLatestVersion       = MORPCVersion46
+	MORPCVersion47     int64 = 47 // ordinary window hash partition pipeline algorithm
+	MORPCLatestVersion       = MORPCVersion47
 )
 
 // DefaultLockWaitTimeoutSeconds is shared by the frontend default and by
