@@ -294,7 +294,7 @@ func mapAliyunConditionalReadError(err error) error {
 	if errors.As(err, &serviceError) &&
 		(serviceError.StatusCode == http.StatusNotFound ||
 			serviceError.StatusCode == http.StatusPreconditionFailed) {
-		return fmt.Errorf("%w: conditional OSS read failed", ErrObjectChanged)
+		return errors.Join(ErrObjectChanged, moerr.NewInternalErrorNoCtx("conditional OSS read failed"))
 	}
 	return err
 }

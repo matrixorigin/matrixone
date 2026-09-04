@@ -17,7 +17,6 @@ package arrowio
 import (
 	"context"
 	"encoding/binary"
-	"fmt"
 	"io"
 	"math"
 	"sort"
@@ -130,7 +129,7 @@ func selectFileShardBlocks(
 ) ([]fileBlock, error) {
 	start, end := int(shard.RecordBatchStart), int(shard.RecordBatchEnd)
 	if start < 0 || start >= end || end > len(records) {
-		return nil, fmt.Errorf("record interval [%d,%d) is outside [0,%d)", start, end, len(records))
+		return nil, moerr.NewInvalidInputNoCtxf("record interval [%d,%d) is outside [0,%d)", start, end, len(records))
 	}
 	lastRecordOffset := records[end-1].offset
 	expectedDictionaries := make([]int32, 0, len(dictionaries))
@@ -140,13 +139,13 @@ func selectFileShardBlocks(
 		}
 	}
 	if len(shard.RequiredDictionaryBlockIndices) != len(expectedDictionaries) {
-		return nil, fmt.Errorf("dictionary closure has %d blocks, expected %d",
+		return nil, moerr.NewInvalidInputNoCtxf("dictionary closure has %d blocks, expected %d",
 			len(shard.RequiredDictionaryBlockIndices), len(expectedDictionaries))
 	}
 	selectedDictionaries := make([]fileBlock, 0, len(expectedDictionaries))
 	for index, expected := range expectedDictionaries {
 		if shard.RequiredDictionaryBlockIndices[index] != expected {
-			return nil, fmt.Errorf("dictionary closure index %d is %d, expected %d",
+			return nil, moerr.NewInvalidInputNoCtxf("dictionary closure index %d is %d, expected %d",
 				index, shard.RequiredDictionaryBlockIndices[index], expected)
 		}
 		selectedDictionaries = append(selectedDictionaries, dictionaries[expected])
@@ -237,7 +236,7 @@ func mergeFileBlocks(records, dictionaries []fileBlock) ([]fileBlock, error) {
 	previousEnd := int64(len(ipc.Magic))
 	for i, block := range blocks {
 		if block.offset < previousEnd {
-			return nil, fmt.Errorf("block %d overlaps the previous block", i)
+			return nil, moerr.NewInvalidInputNoCtxf("block %d overlaps the previous block", i)
 		}
 		previousEnd = block.offset + block.metadata + block.body
 	}
@@ -258,7 +257,7 @@ func flatbufferBlocks(
 	for i := 0; i < count; i++ {
 		var metadataBlock ipcflatbuf.Block
 		if !read(&metadataBlock, i) {
-			return nil, fmt.Errorf("block %d is missing", i)
+			return nil, moerr.NewInvalidInputNoCtxf("block %d is missing", i)
 		}
 		block := fileBlock{
 			offset:   metadataBlock.Offset(),
@@ -269,7 +268,7 @@ func flatbufferBlocks(
 			block.body < 0 || block.body%8 != 0 || block.metadata > options.MaxMetadataBytes ||
 			block.body > options.MaxBodyBytes || block.metadata > math.MaxInt64-block.body ||
 			block.offset > footerStart || block.metadata+block.body > footerStart-block.offset {
-			return nil, fmt.Errorf("block %d has invalid offset or length", i)
+			return nil, moerr.NewInvalidInputNoCtxf("block %d has invalid offset or length", i)
 		}
 		previousEnd = block.offset + block.metadata + block.body
 		blocks[i] = block

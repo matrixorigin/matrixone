@@ -30,7 +30,7 @@ import (
 // ErrObjectChanged is returned when a conditional object read can no longer
 // address the identity fixed by planning. Callers must fail the whole
 // statement; retrying without the same identity could combine object versions.
-var ErrObjectChanged = errors.New("fileservice: object changed")
+var ErrObjectChanged = moerr.NewInternalErrorNoCtx("fileservice: object changed")
 
 // ObjectIdentity is a format-neutral immutable object reference. VersionID is
 // preferred when the backend exposes versioning; otherwise ETag is required

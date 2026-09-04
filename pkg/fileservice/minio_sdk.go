@@ -17,7 +17,7 @@ package fileservice
 import (
 	"bytes"
 	"context"
-	"fmt"
+	"errors"
 	"io"
 	"iter"
 	"net/http"
@@ -370,7 +370,7 @@ func (a *MinioSDK) ReadObjectWithIdentity(
 func mapMinioConditionalReadError(err error) error {
 	response := minio.ToErrorResponse(err)
 	if response.StatusCode == http.StatusNotFound || response.StatusCode == http.StatusPreconditionFailed {
-		return fmt.Errorf("%w: conditional S3-compatible read failed", ErrObjectChanged)
+		return errors.Join(ErrObjectChanged, moerr.NewInternalErrorNoCtx("conditional S3-compatible read failed"))
 	}
 	return err
 }

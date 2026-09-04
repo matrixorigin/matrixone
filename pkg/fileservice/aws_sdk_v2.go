@@ -384,7 +384,7 @@ func mapAWSConditionalReadError(err error) error {
 	if errors.As(err, &responseError) && responseError.Response != nil &&
 		(responseError.Response.StatusCode == nethttp.StatusNotFound ||
 			responseError.Response.StatusCode == nethttp.StatusPreconditionFailed) {
-		return fmt.Errorf("%w: conditional S3 read failed", ErrObjectChanged)
+		return errors.Join(ErrObjectChanged, moerr.NewInternalErrorNoCtx("conditional S3 read failed"))
 	}
 	return err
 }
