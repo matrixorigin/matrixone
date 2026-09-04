@@ -3,7 +3,7 @@
 - Status: mandatory design review pending (stateful cache/concurrency lifecycle)
 - Tracking issue: [matrixorigin/matrixone#27728](https://github.com/matrixorigin/matrixone/issues/27728)
 - Implementation PR: [matrixorigin/matrixone#27758](https://github.com/matrixorigin/matrixone/pull/27758)
-- Last updated: 2026-08-28
+- Last updated: 2026-09-04
 
 ## 1. Problem and evidence
 
@@ -325,7 +325,12 @@ ignored cancellation and returned `nil`. The enclosing refresh applies the same
 owner-lifecycle predicate at admission and cache publication, including the
 zero-object path that does not traverse objects at all. A successful refresh
 linearizes at the final lifecycle and generation checks performed while the
-publication lock is held.
+publication lock is held. The request and engine-owner cancellation predicates
+are checked in that same critical section immediately before the cache swap,
+with no intervening blocking operation. Cancellation observed there wins and
+leaves the last-good cache and frontend generation unchanged. If the cache swap
+wins first, the publication is complete and a later cancellation does not roll
+it back.
 
 Cancellation and deadline errors remain cancellation/deadline errors at the
 public refresh boundary. Other object/metadata failures may be wrapped with
@@ -451,6 +456,7 @@ checks on affected plan-cache hits.
 | physical account/view/temporary/transaction rules | focused frontend table-driven UT and ANALYZE BVT |
 | system account plus two tenant subsets cannot cross-publish cluster-table statistics | multi-session ANALYZE BVT |
 | validate-V1/ALTER-V2/publication cannot publish a stale observation | catalog lock and barrier-based engine UT |
+| cancellation at the final publication fence preserves last-good stats and its schema binding | publication phase-barrier UT |
 | no-dependency and 1/4/16-dependency cache-hit cost | allocation/latency benchmarks |
 | SQL-visible existing-session plan changes after ANALYZE | recorded real-service validation and explain-plan assertion |
 

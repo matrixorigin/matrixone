@@ -1612,12 +1612,12 @@ func (gs *GlobalStats) refreshStatsWithMode(
 	published := false
 	if options.TableRowCount != nil || len(options.ColumnNDVs) > 0 {
 		published, err = gs.publishStatsForGenerationAtTableVersion(
-			key, generation, stats, *options.TableDefVersion)
-		if err != nil {
-			return nil, err
-		}
+			ctx, key, generation, stats, *options.TableDefVersion)
 	} else {
-		published = gs.publishStatsForGeneration(key, generation, stats)
+		published, err = gs.publishStatsForGeneration(ctx, key, generation, stats)
+	}
+	if err != nil {
+		return nil, err
 	}
 	if !published {
 		if cause := gs.statsRefreshCancellationCause(ctx); cause != nil {
@@ -1710,54 +1710,67 @@ func applyStatsRefreshOptions(
 }
 
 // publishStatsForGeneration replaces the cache only while the exact table
-// lifetime captured by the refresh remains current. The gs.mu -> updatingMu
-// order matches RemoveTid, making validation and publication atomic with
-// respect to cleanup. A late explicit refresh therefore cannot resurrect an
-// unsubscribed table or publish into a replacement generation.
+// lifetime captured by the refresh remains current and neither the request nor
+// GlobalStats owner has been canceled. The gs.mu -> updatingMu order matches
+// RemoveTid, making validation and publication atomic with respect to cleanup.
+// A late explicit refresh therefore cannot resurrect an unsubscribed table,
+// publish into a replacement generation, or commit after observing
+// cancellation.
 func (gs *GlobalStats) publishStatsForGeneration(
+	ctx context.Context,
 	key pb.StatsInfoKey,
 	generation *updateRecord,
 	stats *pb.StatsInfo,
-) bool {
+) (bool, error) {
 	gs.mu.Lock()
 	defer gs.mu.Unlock()
-	published := gs.publishStatsForGenerationLocked(key, generation, stats)
+	published, err := gs.publishStatsForGenerationLocked(ctx, key, generation, stats)
 	if published {
 		gs.broadcastStats(key)
 	}
 	if gs.mu.cond != nil {
 		gs.mu.cond.Broadcast()
 	}
-	return published
+	return published, err
 }
 
-// publishStatsForGenerationLocked performs only the bounded cache swap. The
-// caller owns gs.mu and is responsible for wakeup and gossip after any outer
-// catalog critical section has ended.
+// publishStatsForGenerationLocked performs the final cancellation/generation
+// checks and bounded cache swap. The caller owns gs.mu, so this check-and-swap
+// is the publication linearization point. Cancellation observed here wins and
+// returns its original cause; cancellation that becomes visible after this
+// point races after a completed publication. The caller is responsible for
+// wakeup and gossip after any outer catalog critical section has ended.
 func (gs *GlobalStats) publishStatsForGenerationLocked(
+	ctx context.Context,
 	key pb.StatsInfoKey,
 	generation *updateRecord,
 	stats *pb.StatsInfo,
-) bool {
+) (bool, error) {
 	if generation == nil || stats == nil {
-		return false
+		return false, nil
 	}
-	if gs.ctx != nil && context.Cause(gs.ctx) != nil {
-		return false
+	generationActive := gs.statsUpdateGenerationActive(key, generation)
+	// Generation validation is the last operation that can wait on another
+	// application lock. Check cancellation after it so a request canceled while
+	// waiting for updatingMu cannot cross the cache-swap commit point.
+	if cause := gs.statsRefreshCancellationCause(ctx); cause != nil {
+		return false, cause
 	}
-	if !gs.statsUpdateGenerationActive(key, generation) {
-		return false
+	if !generationActive {
+		return false, nil
 	}
 	gs.mu.statsInfoMap[key] = stats
 	delete(gs.mu.tableDefVersions, key)
-	return true
+	return true, nil
 }
 
 // publishStatsForGenerationAtTableVersion makes schema validation and stats
 // publication atomic with catalog table changes. If publication wins the
 // catalog lock it linearizes before ALTER; if ALTER wins, the old observation
-// is rejected and can never be published into the new schema.
+// is rejected and can never be published into the new schema. Request and
+// owner cancellation use the same final check-and-swap linearization point.
 func (gs *GlobalStats) publishStatsForGenerationAtTableVersion(
+	ctx context.Context,
 	key pb.StatsInfoKey,
 	generation *updateRecord,
 	stats *pb.StatsInfo,
@@ -1772,6 +1785,7 @@ func (gs *GlobalStats) publishStatsForGenerationAtTableVersion(
 	}
 
 	published := false
+	var publicationErr error
 	statsLocked := false
 	actualVersion, found, matched := cc.WithTableVersion(
 		key.AccId, key.DatabaseID, key.TableID, expectedVersion,
@@ -1781,7 +1795,8 @@ func (gs *GlobalStats) publishStatsForGenerationAtTableVersion(
 			}
 			gs.mu.Lock()
 			statsLocked = true
-			published = gs.publishStatsForGenerationLocked(key, generation, stats)
+			published, publicationErr = gs.publishStatsForGenerationLocked(
+				ctx, key, generation, stats)
 			if published {
 				if gs.mu.tableDefVersions == nil {
 					gs.mu.tableDefVersions = make(map[pb.StatsInfoKey]uint32)
@@ -1801,6 +1816,19 @@ func (gs *GlobalStats) publishStatsForGenerationAtTableVersion(
 			gs.mu.cond.Broadcast()
 		}
 		gs.mu.Unlock()
+	}
+	if publicationErr != nil {
+		return false, publicationErr
+	}
+	// WithTableVersion does not invoke the callback when the table disappeared
+	// or its schema already changed. Preserve cancellation as the public result
+	// when it became durable while this request was waiting for the catalog
+	// fence; a successful publication must not be reclassified after its commit
+	// point.
+	if !published {
+		if cause := gs.statsRefreshCancellationCause(ctx); cause != nil {
+			return false, cause
+		}
 	}
 	if !found {
 		return false, moerr.NewInternalErrorNoCtxf(

@@ -138,7 +138,11 @@ publications. Disttae applies the options while holding the exact refresh
 generation's admission token and publishes only if the subscription lifetime
 is still current. Cancellation, subscription replacement, object-read failure,
 or validation failure leaves the previous cache value and plan generation
-unchanged.
+unchanged. The final request/owner cancellation check and cache swap execute as
+one bounded critical section after schema validation, with no intervening wait:
+cancellation visible at that point wins and preserves the last-good value and
+schema binding; a cache swap that wins first is already committed and is not
+rolled back by later cancellation.
 
 Later automatic refreshes may replace an explicitly analyzed NDV after table
 metadata changes. Retaining a table-wide NDV across arbitrary UPDATE/DELETE and
@@ -165,7 +169,8 @@ The acceptance matrix covers:
   replacement both before and after publication, unversioned remote reads,
   complete remote request encoding, physical-key routing, empty-response release,
   DROP tombstones, TRUNCATE replacement identities, malformed result shape,
-  cancellation, refresh failure, and subscription cleanup races;
+  cancellation at the final publication fence, refresh failure, and
+  subscription cleanup races;
 - multiple tables in one ANALYZE statement and unrelated-table parallelism;
 - pre-existing user transactions, snapshots, views, temporary tables,
   publications, legacy refresh implementations, database remaps, and

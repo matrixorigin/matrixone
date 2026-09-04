@@ -5749,6 +5749,9 @@ func TestPublishAnalyzeTableStatsDoesNotExposeFailedRefresh(t *testing.T) {
 	oldStats := plan.NewStatsInfo()
 	cacheOptimizerStatsForTest(t, ses, tableID, oldStats)
 	cacheOptimizerPlanForTest(ses, "select url from events", tableID)
+	physicalKey := ses.optimizerStatsKey(tableID)
+	version := currentOptimizerStatsVersion(ses.GetService(), physicalKey)
+	clock := currentOptimizerStatsClock(ses.GetService())
 	wantErr := moerr.NewInternalError(execCtx.reqCtx, "refresh failed")
 	refresher := analyzeStatsRefresherFunc(func(context.Context, pbstats.StatsInfoKey, engine.StatsRefreshOptions) (*pbstats.StatsInfo, error) {
 		return nil, wantErr
@@ -5756,6 +5759,8 @@ func TestPublishAnalyzeTableStatsDoesNotExposeFailedRefresh(t *testing.T) {
 
 	err := publishAnalyzeTableStats(ses, execCtx.reqCtx, key, engine.StatsRefreshOptions{}, refresher)
 	require.ErrorIs(t, err, wantErr)
+	require.Equal(t, version, currentOptimizerStatsVersion(ses.GetService(), physicalKey))
+	require.Equal(t, clock, currentOptimizerStatsClock(ses.GetService()))
 	cache, _ := ses.getStatsCacheWithVersion(ses.optimizerStatsKey(tableID))
 	wrapper := cache.Get(tableID)
 	require.Same(t, oldStats, wrapper.GetStats())

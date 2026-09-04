@@ -226,13 +226,13 @@ func TestApplyStatsRefreshOptions(t *testing.T) {
 func TestVersionedStatsPublicationLinearizesWithCatalogChange(t *testing.T) {
 	keyWithoutOwner := pb.StatsInfoKey{DatabaseID: 1, TableID: 2}
 	published, err := (&GlobalStats{}).publishStatsForGenerationAtTableVersion(
-		keyWithoutOwner, nil, nil, 0,
+		context.Background(), keyWithoutOwner, nil, nil, 0,
 	)
 	require.ErrorContains(t, err, "without an engine")
 	require.False(t, published)
 
 	published, err = (&GlobalStats{engine: &Engine{}}).publishStatsForGenerationAtTableVersion(
-		keyWithoutOwner, nil, nil, 0,
+		context.Background(), keyWithoutOwner, nil, nil, 0,
 	)
 	require.ErrorContains(t, err, "without a catalog cache")
 	require.False(t, published)
@@ -283,7 +283,7 @@ func TestVersionedStatsPublicationLinearizesWithCatalogChange(t *testing.T) {
 		publishDone := make(chan publishResult, 1)
 		go func() {
 			published, err := e.globalStats.publishStatsForGenerationAtTableVersion(
-				key, generation, firstStats, 0,
+				context.Background(), key, generation, firstStats, 0,
 			)
 			publishDone <- publishResult{published: published, err: err}
 		}()
@@ -317,7 +317,7 @@ func TestVersionedStatsPublicationLinearizesWithCatalogChange(t *testing.T) {
 
 		staleStats := &pb.StatsInfo{TableCnt: 99}
 		published, err := e.globalStats.publishStatsForGenerationAtTableVersion(
-			key, generation, staleStats, 0,
+			context.Background(), key, generation, staleStats, 0,
 		)
 		require.ErrorContains(t, err, "current version 1")
 		require.False(t, published)
@@ -342,20 +342,20 @@ func TestVersionedStatsPublicationLinearizesWithCatalogChange(t *testing.T) {
 		missingKey := key
 		missingKey.TableID++
 		published, err = e.globalStats.publishStatsForGenerationAtTableVersion(
-			missingKey, generation, staleStats, 0,
+			context.Background(), missingKey, generation, staleStats, 0,
 		)
 		require.ErrorContains(t, err, "no longer exists")
 		require.False(t, published)
 
 		published, err = e.globalStats.publishStatsForGenerationAtTableVersion(
-			key, nil, nil, 1,
+			context.Background(), key, nil, nil, 1,
 		)
 		require.NoError(t, err)
 		require.False(t, published)
 
 		secondStats := &pb.StatsInfo{TableCnt: 20}
 		published, err = e.globalStats.publishStatsForGenerationAtTableVersion(
-			key, generation, secondStats, 1,
+			context.Background(), key, generation, secondStats, 1,
 		)
 		require.NoError(t, err)
 		require.True(t, published)
@@ -363,6 +363,56 @@ func TestVersionedStatsPublicationLinearizesWithCatalogChange(t *testing.T) {
 			e.globalStats.GetAtTableVersion(ctx, key, false, 1))
 		require.Nil(t, e.globalStats.GetAtTableVersion(ctx, key, false, 0),
 			"an old snapshot must not consume the replacement observation")
+
+		t.Run("cancellation at final publication fence", func(t *testing.T) {
+			requestCtx, cancelRequest := context.WithCancelCause(context.Background())
+			defer cancelRequest(nil)
+			wantCancellation := errors.New("cancel statistics publication")
+			publicationReached := make(chan validationPoint, 1)
+			allowPublication := make(chan struct{})
+			var releasePublicationOnce sync.Once
+			releasePublication := func() {
+				releasePublicationOnce.Do(func() { close(allowPublication) })
+			}
+			t.Cleanup(releasePublication)
+			e.globalStats.beforeVersionedStatsPublish = func(gotKey pb.StatsInfoKey, version uint32) {
+				publicationReached <- validationPoint{key: gotKey, version: version}
+				<-allowPublication
+			}
+			canceledStats := &pb.StatsInfo{TableCnt: 30}
+			canceledPublishDone := make(chan publishResult, 1)
+			go func() {
+				published, err := e.globalStats.publishStatsForGenerationAtTableVersion(
+					requestCtx, key, generation, canceledStats, 1,
+				)
+				canceledPublishDone <- publishResult{published: published, err: err}
+			}()
+			var cancellationPoint validationPoint
+			select {
+			case cancellationPoint = <-publicationReached:
+			case <-time.After(5 * time.Second):
+				t.Fatal("statistics publication did not reach the final version fence")
+			}
+			require.Equal(t, key, cancellationPoint.key)
+			require.Equal(t, uint32(1), cancellationPoint.version)
+			cancelRequest(wantCancellation)
+			releasePublication()
+			var canceledResult publishResult
+			select {
+			case canceledResult = <-canceledPublishDone:
+			case <-time.After(5 * time.Second):
+				t.Fatal("canceled statistics publication did not finish")
+			}
+			require.ErrorIs(t, canceledResult.err, wantCancellation)
+			require.False(t, canceledResult.published)
+			e.globalStats.beforeVersionedStatsPublish = nil
+			e.globalStats.mu.Lock()
+			require.Same(t, secondStats, e.globalStats.mu.statsInfoMap[key],
+				"cancellation before the final cache swap must preserve last-good statistics")
+			require.Equal(t, uint32(1), e.globalStats.mu.tableDefVersions[key],
+				"cancellation before the final cache swap must preserve the schema binding")
+			e.globalStats.mu.Unlock()
+		})
 	})
 }
 

@@ -1891,8 +1891,10 @@ func TestRemoveTid(t *testing.T) {
 		gs.RemoveTid(key.TableID)
 		gs.coordinateStatsUpdateJob(job)
 		gs.markAutomaticUpdateComplete(key, job.expectedRecord, true, 1, 1)
-		assert.False(t, gs.publishStatsForGeneration(
-			key, job.expectedRecord, plan2.NewStatsInfo()))
+		published, err := gs.publishStatsForGeneration(
+			context.Background(), key, job.expectedRecord, plan2.NewStatsInfo())
+		require.NoError(t, err)
+		assert.False(t, published)
 
 		gs.mu.Lock()
 		_, cached := gs.mu.statsInfoMap[key]
@@ -1904,12 +1906,17 @@ func TestRemoveTid(t *testing.T) {
 		assert.False(t, scheduled, "old work must not recreate scheduling metadata")
 
 		replacement := gs.currentOrCreateUpdateRecord(key)
-		assert.False(t, gs.publishStatsForGeneration(
-			key, job.expectedRecord, plan2.NewStatsInfo()),
+		published, err = gs.publishStatsForGeneration(
+			context.Background(), key, job.expectedRecord, plan2.NewStatsInfo())
+		require.NoError(t, err)
+		assert.False(t, published,
 			"old explicit work must not publish into a replacement lifetime")
 		fresh := plan2.NewStatsInfo()
 		fresh.TableCnt = 42
-		require.True(t, gs.publishStatsForGeneration(key, replacement, fresh))
+		published, err = gs.publishStatsForGeneration(
+			context.Background(), key, replacement, fresh)
+		require.NoError(t, err)
+		require.True(t, published)
 		gs.mu.Lock()
 		assert.Same(t, fresh, gs.mu.statsInfoMap[key])
 		gs.mu.Unlock()
@@ -1976,7 +1983,10 @@ func TestStatsPublicationRejectsStoppedOwnerLifecycle(t *testing.T) {
 	releases := 0
 	gs.completeAutomaticStatsRefresh(
 		key, generation, fresh, true, 42, 1, func() { releases++ })
-	require.False(t, gs.publishStatsForGeneration(key, generation, fresh))
+	published, err := gs.publishStatsForGeneration(
+		context.Background(), key, generation, fresh)
+	require.ErrorIs(t, err, context.Canceled)
+	require.False(t, published)
 	require.Equal(t, 1, releases)
 
 	gs.mu.Lock()
