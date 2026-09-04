@@ -94,7 +94,7 @@ var supportedAggInNewFramework = []FuncNew{
 		class:      plan.Function_AGG,
 		layout:     STANDARD_FUNCTION,
 		checkFn: func(overloads []overload, inputs []types.Type) checkResult {
-			return fixedUnaryAggTypeCheck(inputs, minMaxAggSupportedTypes)
+			return fixedUnaryAggTypeCheck(inputs, MinMaxSupportedTypes)
 		},
 
 		Overloads: []overload{
@@ -112,7 +112,7 @@ var supportedAggInNewFramework = []FuncNew{
 		class:      plan.Function_AGG,
 		layout:     STANDARD_FUNCTION,
 		checkFn: func(overloads []overload, inputs []types.Type) checkResult {
-			return fixedUnaryAggTypeCheck(inputs, minMaxAggSupportedTypes)
+			return fixedUnaryAggTypeCheck(inputs, MinMaxSupportedTypes)
 		},
 
 		Overloads: []overload{
@@ -780,11 +780,6 @@ var MinMaxSupportedTypes = []types.T{
 	types.T_uuid,
 	types.T_binary, types.T_varbinary,
 }
-
-var minMaxAggSupportedTypes = append(
-	append([]types.T(nil), MinMaxSupportedTypes...),
-	types.T_json,
-)
 
 var AnyValueSupportedTypes = []types.T{
 	types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64,

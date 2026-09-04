@@ -82,23 +82,14 @@ func TestAggregateExecutorIDs(t *testing.T) {
 	}
 }
 
-func TestMinMaxAcceptJSONAndPreserveUntypedNullDefault(t *testing.T) {
+func TestMinMaxRejectJSON(t *testing.T) {
 	for _, name := range []string{"min", "max"} {
-		jsonResolved, err := GetFunctionByName(
+		_, err := GetFunctionByName(
 			context.Background(),
 			name,
 			[]types.Type{types.T_json.ToType()},
 		)
-		require.NoError(t, err, name)
-		require.Equal(t, types.T_json, jsonResolved.GetReturnType().Oid, name)
-
-		nullResolved, err := GetFunctionByName(
-			context.Background(),
-			name,
-			[]types.Type{types.T_any.ToType()},
-		)
-		require.NoError(t, err, name)
-		require.Equal(t, types.T_uint8, nullResolved.GetReturnType().Oid, name)
+		require.Error(t, err, name)
 	}
 }
 

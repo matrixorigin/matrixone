@@ -344,8 +344,5 @@ rank_no    label
 2    number
 1    json-null
 0    sql-null
-select json_type(min(j)) as min_type, json_type(max(j)) as max_type from json_order_values;
-min_type    max_type
-NULL    BLOB
 drop table json_order_values;
 drop database if exists test;
