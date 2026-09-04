@@ -49,16 +49,32 @@ The implementation must maintain all of these invariants:
    path; the implementation never guesses an epoch for a partial legacy task.
 8. **Claim ownership is fenced across both systems:** every target commit and
    watermark publication renews the exact persisted `(task_runner, last_run)`
-   daemon claim. Each target table also has one MySQL-compatible user lock,
-   held by a pinned target session for the pipeline lifetime. DDL and data
-   transactions use that session. A replacement must acquire the same lock and
-   then revalidate its daemon claim before target work, so target effects from
-   different owners are serialized even when a COMMIT outlives the 30-second
+   daemon claim. Each physical target `(target server, sink database, sink
+   table)` has one MySQL-compatible user lock, held by a pinned target session
+   for the pipeline lifetime. The lock name intentionally excludes the CDC
+   task ID. DDL and data transactions use that session. A replacement claim
+   generation or a different task mapped to the same target must acquire the
+   same lock and then validate its ownership before target work, so target
+   effects are serialized even when a COMMIT outlives the 30-second
    taskservice lease. The claim travels with asynchronously buffered
    watermarks and is rechecked by the final SQL writer.
 9. **Logical generation changes are durable:** an epoch for a different source
    table ID is durable evidence that a fresh owner must reset the target before
    replaying the newly discovered generation.
+10. **One task owns one target:** a physical target table may be owned by at
+    most one non-terminal CDC task. Task creation durably reserves the
+    canonical target endpoint/database/table tuple; duplicate reservations are
+    rejected. Resume, restart, and recovery revalidate that reservation before
+    acquiring the target-side lock. The target-side lock is the runtime
+    backstop for aliases and overlapping owners, not a substitute for the
+    durable uniqueness check. Ownership is released only after terminal task
+    cleanup has stopped all target writers. A new task taking over a released
+    target must reset or reconcile it before its first snapshot.
+11. **Restore and PITR are fail-closed:** MatrixOne catalog recovery cannot
+    restore an external target to the same point in time. Restored CDC tasks
+    therefore enter `rebuild-required` and cannot resume from restored epochs
+    or watermarks. An operator must reset or reconcile the target and start a
+    new initial-snapshot generation before the task becomes runnable.
 
 Claim validation is bounded to five seconds and is also performed immediately
 before target initialization DDL, including the generation-change DROP/CREATE.
@@ -105,7 +121,7 @@ For a marked task with `InitSnapshotSplitTxn=true` and an empty watermark:
 2. Wait until the current transaction snapshot is at least persisted `S`. This
    avoids reading a future timestamp after restart or under clock skew.
 3. Open source changes at exactly `S` (capped by an explicit `EndTs`).
-4. Acquire the per-task/table target ownership lock, revalidate the daemon
+4. Acquire the target-server/database/table ownership lock, revalidate the daemon
    claim, then run initialization DDL and every target transaction on that
    pinned session.
 5. Before adding a batch that would cross either group limit, validate and renew
@@ -121,6 +137,62 @@ For a marked task with `InitSnapshotSplitTxn=true` and an empty watermark:
 without the internal marker also uses that conservative path even if its old
 configuration says split.
 
+### Target ownership and partial visibility
+
+The per-target lock and durable reservation have different roles. The durable
+reservation rejects two CDC tasks configured for the same canonical target.
+The target-side lock serializes claim-generation handoff and protects against
+endpoint aliases or a stale process that passed creation-time validation. Lock
+acquisition has a bounded timeout and conflicts fail closed before DDL or DML;
+they never fall back to an unlocked target session.
+
+Split mode deliberately exposes committed snapshot groups to ordinary target
+queries before the initial watermark is published. Partial visibility is part
+of the public split-mode contract, not an atomic snapshot guarantee. V1 has no
+target-local readiness marker: readiness is the non-empty source-side
+`mo_cdc_watermark` for that table generation. Operators must not release the
+target to consumers until that watermark is present. A consumer that cannot
+consult or be gated by this source-side signal, or that requires all rows to
+appear atomically, must use `InitSnapshotSplitTxn=false`.
+
+Cancel or drop during the initial snapshot may leave committed partial groups
+in the external target. Once task metadata is removed those rows have no
+target-local readiness signal and the target is considered contaminated. It
+must be reset or reconciled before reuse; a later CDC task is never allowed to
+adopt it and continue with a newly selected epoch.
+
+### Restore and PITR
+
+Backup/restore and PITR cover MatrixOne catalog data but not an independently
+managed MySQL target. Restoring `mo_cdc_snapshot` is necessary for catalog
+consistency but is not proof that target rows belong to the restored epoch.
+The restore finalization path must mark every restored CDC task
+`rebuild-required` before task scheduling is enabled. Such a task is ineligible
+for daemon claim, heartbeat renewal, target DDL/DML, and watermark publication.
+
+Recovery requires an explicit rebuild operation that obtains the exclusive
+target reservation and target-side lock, resets or fully reconciles the target,
+discards restored snapshot/watermark state, and durably creates a new table
+generation before enabling execution. A plain Resume or Restart cannot clear
+`rebuild-required`. If restore provenance is missing or ambiguous, scheduling
+fails closed rather than selecting a new epoch against existing target rows.
+
+### Epoch retention and compaction
+
+Epoch rows are retained while a generation is partial and while a replacement
+generation may need proof that the target contains retired rows. After the
+replacement generation has reset the target, completed its initial snapshot,
+and durably published a non-empty watermark, the target lock plus daemon claim
+fence prove that a retired owner can no longer commit. Retired epochs may then
+be deleted; the active generation's epoch remains until terminal task cleanup.
+
+The steady-state bound is one epoch row per active logical table. A generation
+transition may temporarily retain the active and retired rows. More than two
+rows for one logical table, or total rows above `active tables + transitions`,
+is an operational invariant violation: emit a metric/alert, stop admitting
+another generation for that table, and retry compaction. Cleanup failure must
+not silently permit unbounded generation churn.
+
 ## Failure and lifecycle analysis
 
 | Event | Durable target state | Watermark | Recovery |
@@ -132,17 +204,21 @@ configuration says split.
 | Target commit succeeds, watermark persistence lags | Complete snapshot `S` | Empty or stale | Replay `S`; eventual watermark update converges |
 | Source DELETE or PK change during retry | Snapshot state at `S` | Empty | Replay `S`, then apply mutation in `(S, next]` |
 | Stable epoch or later incremental history is no longer readable | Partial or caught-up target state may exist | Empty or non-empty | Fail closed; never reset to a different full-snapshot epoch silently |
-| Pause, cancel, or stream close | Earlier committed groups only | Empty | Release batch permit; roll back current group |
+| Pause or stream close | Earlier committed groups only | Empty | Release batch permit; roll back current group; retain epoch for same-generation retry |
+| Cancel or drop during initial snapshot | Earlier committed groups may remain externally visible | Task metadata is terminal or removed | Stop all writers before releasing ownership; classify the target as contaminated and require reset/reconciliation before reuse |
 | Legacy task lacks protocol marker | No new partial-commit behavior | Empty | Use one atomic target transaction |
 | New CN disappears after a bounded group; old CN polls the task | Partial snapshot `S` | Empty | Old CN cannot resolve `InitCdcStableEpoch` and does not claim; a capable CN replays `S` |
 | Wildcard task discovers a table after task creation or retention expiry | None for the new table | Empty | Persist that table generation's current snapshot and begin at that epoch, independent of task creation time |
-| Table is dropped and recreated under the same logical name | Prior generation may have completed or failed | Old logical-table watermark is replaced by detector lifecycle | Persist a distinct epoch for the new source-table ID; retain both generation rows until terminal task cleanup so overlapping owners cannot erase either retry anchor |
+| Table is dropped and recreated under the same logical name | Prior generation may have completed or failed | Old logical-table watermark is replaced by detector lifecycle | Persist a distinct epoch for the new source-table ID; retain both rows through reset and initial-snapshot completion, then compact the retired row |
 | Fresh owner discovers a recreated table after an old generation partially committed | Rows from the retired generation may exist | Empty | The retired durable epoch forces DROP/recreate before the new generation is replayed |
+| A second task maps to an already-owned target table | Existing owner's target state | Unchanged | Reject the duplicate durable reservation; the target-side table lock independently prevents target work through aliases |
 | Old owner is blocked in target COMMIT when another CN claims its expired taskservice lease | Old transaction may be ambiguous | Empty or advanced | The replacement waits on the target ownership lock. After its heartbeat receives the explicit supersession fence, the old generation is removed from local heartbeat ownership and canceled, retains the lock until its in-flight SQL terminates, and cannot publish a watermark. The replacement then acquires the lock, revalidates its newer claim, and replays to exact state. |
 | Old owner waits for the target lock while a replacement completes | Replacement target state | Empty or advanced | After acquiring the released lock, the old owner revalidates its obsolete daemon claim, releases the lock, and performs no target operation. |
 | Resume or Restart advances `last_run` on the same runner | Existing target state | Preserved | Persist the new token while the request status remains retry-owned, publish it to both runner heartbeat and executor fences, then admit replacement work and publish Running with the same token. |
 | Epoch INSERT reports an ambiguous failure | No reader has started for that generation | Empty | Immediately reread the durable row; reuse it if committed, otherwise classify the failure as retryable so the detector attempts the claim again |
 | Task is restarted | Existing target data and partial snapshot groups remain | Preserve checkpoint metadata | Retain and reuse every table-generation epoch exactly like its watermark; restart must never choose a new epoch after a partial target commit |
+| MatrixOne is restored or rewound while the external target remains at a later point | Target rows may correspond to epochs absent from the restored catalog | Restored or missing | Mark task `rebuild-required`; prohibit Resume/Restart and all target effects until explicit target reset/reconciliation creates a new generation |
+| Replacement generation completes and publishes its watermark | Exact replacement snapshot plus caught-up tail | Non-empty | Compact retired epoch rows while retaining the active generation; alert and stop further generation admission if compaction cannot maintain the bound |
 | Task is cancelled or deleted | Existing target data follows task command semantics | Task metadata is removed | Delete all table-generation epochs with task watermarks; periodic orphan cleanup removes rows whose task no longer exists |
 
 The batch permit ownership chain is:
@@ -175,13 +251,28 @@ cancellation remain non-blocking with respect to procfs/cgroupfs access.
 - **Persist a per-group cursor:** adds source scan ordering and cursor recovery
   semantics. The implemented catalog state stores only one immutable epoch per
   active table generation and continues to rely on idempotent replay.
-- **Delete the prior generation epoch when publishing its replacement:** keeps
-  one row per logical table, but is unsafe because an overlapping old owner can
-  delete the replacement row (or vice versa). Generation rows are tiny and are
-  retained until cancel/drop, where task-wide cleanup provides the recycle
-  point without weakening retry correctness.
+- **Delete the prior generation epoch as soon as its replacement is
+  published:** unsafe because an overlapping old owner can delete the
+  replacement row (or vice versa). Compaction is delayed until the replacement
+  has reset the target, completed its initial snapshot, and published progress.
 - **Use a staging target table:** changes target DDL, privileges, cleanup, and
   identity semantics, and is disproportionate to the problem.
+
+## Decision log
+
+- Target ownership is physical target-server/database/table ownership, not
+  task-local ownership. Both a durable uniqueness reservation and a target-side
+  lock whose name excludes task ID are required.
+- MatrixOne restore/PITR never implies rollback of an external target. V1 marks
+  restored CDC tasks `rebuild-required`; automatic continuation is rejected.
+- Retired epochs are kept only through generation reset and completion, then
+  compacted to a steady-state single row per logical table.
+- Split mode exposes partial target contents and has only a source-side
+  readiness signal. Workloads requiring target-local or atomic readiness use
+  atomic mode.
+- The `e0c092ef` issue-scale run remains historical evidence. Acceptance of the
+  final protocol requires an exact merge-candidate-head run after every
+  semantic protocol change.
 
 ## Validation contract
 
@@ -212,15 +303,31 @@ Deterministic tests must prove:
   retention selects a current table-generation epoch, reuses it after an
   intermediate commit and restart, applies DELETE/PK-change tail mutations,
   reaches exact target equality, and advances a live watermark;
+- two tasks configured for the same physical target cannot both pass creation,
+  resume/recovery admission, or the target-side lock, including endpoint aliases;
+- restore/PITR marks CDC tasks `rebuild-required`, rejects Resume/Restart and
+  target effects, and permits execution only after target reset/reconciliation;
+- repeated source recreation compacts completed retired epochs to the stated
+  per-logical-table bound and cleanup failure blocks additional churn;
+- split-mode queries can observe partial groups, readiness remains false until
+  the final watermark, and atomic mode exposes no partial initial snapshot;
 - limiter FIFO, cancellation, exact-once release, and race behavior.
 
 Unit tests validate protocol correctness and resource bounds without weakening
 coverage or substituting sleeps for synchronization. The issue-scale TPCC case
 is the end-to-end performance acceptance test.
 
-### Issue #27863 acceptance result
+Before merge, the exact merge-candidate head must rerun the issue-scale
+snapshot and record final source/target equality, partial-commit CN takeover,
+a target COMMIT held longer than the taskservice lease, transient heartbeat
+failure and recovery, and source recreation with target reset. Results from an
+older implementation are historical evidence only and cannot satisfy this
+gate.
 
-The terminal issue-scale run completed on the exact implementation head
+### Historical Issue #27863 result
+
+The following terminal issue-scale run completed on the then-current
+implementation head
 `e0c092ef38c1aa1afb21d46a075e148b1410e91c` on 2026-09-02. It used a freshly
 built `mo-service`, a fresh data directory, and ten TPCC tables on the same
 source and MatrixOne target endpoints. The task reached terminal initial-
@@ -253,3 +360,5 @@ a source DELETE and primary-key change before resume. It converged to 2,999,794
 rows; the source-minus-target and target-minus-source primary-key differences
 were both empty. This exercises partial commit, same-epoch replay, and tail
 catch-up through a real `mo-service` rather than only the deterministic unit
+tests. It predates the final ownership, restore, compaction, and heartbeat
+protocol and is not final-head acceptance evidence.
