@@ -281,9 +281,17 @@ only on the right, a computed key, or propagated uniqueness does not qualify.
 ### Shuffle lineage
 
 An exact left distribution may survive a left-preserving join only when the
-next join uses the same bare left key. The proof follows explicit column
+next consumer uses the same bare left key. The proof follows explicit column
 lineage after final remapping. Right/build lineage, changed or computed keys,
 ambiguous projections, and RIGHT/FULL joins force the existing reshuffle.
+
+Distribution scope is part of that proof. A simple multi-CN shuffle gives one
+cluster-global owner for each key and may be reused by an aggregate on the same
+key. A hybrid join keeps probe rows partitioned only within their originating
+CN; another hybrid join may reuse that local partition because its build side
+is delivered to every CN's matching bucket, but an aggregate must reshuffle to
+establish cluster-global key ownership. Exact key lineage alone never upgrades
+local ownership to global ownership.
 
 ## Compatibility and security
 
