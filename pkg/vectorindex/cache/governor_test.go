@@ -415,12 +415,11 @@ func TestGovernorSysReadDrivesEviction(t *testing.T) {
 // is called, so the ORDER of reclaim vs load is observable rather than inferred.
 type observeAtLoad struct {
 	countingSearch
-	c            *VectorIndexCache
-	watch        string
-	watchAtLoad  bool
-	preloadRan   bool
-	loadRan      bool
-	sizeAtReload int64
+	c           *VectorIndexCache
+	watch       string
+	watchAtLoad bool
+	preloadRan  bool
+	loadRan     bool
 }
 
 func (m *observeAtLoad) Preload(*sqlexec.SqlProcess) error {

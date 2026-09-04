@@ -135,15 +135,3 @@ func TestSnapshotKeyRoundTrip(t *testing.T) {
 	require.NotEqual(t, key, SnapshotKey(boundIdxTable, timestamp.Timestamp{PhysicalTime: 17, LogicalTime: 4}),
 		"the logical clock must be part of the identity")
 }
-
-// residentSnapshots counts snapshot keys in the cache.
-func residentSnapshots(c *VectorIndexCache) int {
-	n := 0
-	c.IndexMap.Range(func(key, _ any) bool {
-		if k, ok := key.(string); ok && IsSnapshotKey(k) {
-			n++
-		}
-		return true
-	})
-	return n
-}
