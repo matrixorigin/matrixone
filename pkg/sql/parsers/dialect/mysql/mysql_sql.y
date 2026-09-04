@@ -932,10 +932,11 @@ func makeWindowSpec(refName *tree.CStr, partitionBy tree.Exprs, orderBy tree.Ord
 %type <startWithOption> start_with_opt
 %type <cycleOption> alter_cycle_opt
 %type <alterTypeOption> alter_as_datatype_opt
-
 %type <lengthOpt> length_opt length_option_opt length timestamp_option_opt
 %type <lengthScaleOpt> float_length_opt decimal_length_opt
-%type <unsignedOpt> unsigned_opt header_opt parallel_opt strict_opt
+%type <unsignedOpt> unsigned_opt header_opt
+%type <int64Val> parallel_opt
+%type <unsignedOpt> strict_opt
 %type <zeroFillOpt> zero_fill_opt
 %type <boolVal> global_scope exists_opt temporary_opt cycle_opt drop_table_opt rollup_opt
 %type <item> pwd_expire clear_pwd_opt
@@ -952,7 +953,6 @@ func makeWindowSpec(refName *tree.CStr, partitionBy tree.Exprs, orderBy tree.Ord
 %type <str> std_dev_pop extended_opt
 %type <expr> expr_or_default
 %type <exprs> data_values data_opt row_value
-
 %type <boolVal> local_opt
 %type <duplicateKey> duplicate_opt
 %type <fields> load_fields field_item export_fields
@@ -1976,7 +1976,7 @@ load_data_stmt:
             Table: $8,
         }
         $$.(*tree.Load).Param.Tail = $9
-        $$.(*tree.Load).Param.Parallel = $10
+		setLoadParallelOption($$.(*tree.Load).Param, $10)
         $$.(*tree.Load).Param.Strict = $11
     }
 
@@ -2041,15 +2041,15 @@ load_set_item:
 
 parallel_opt:
     {
-        $$ = false
+		$$ = -1
     }
 |   PARALLEL STRING
     {
         str := strings.ToLower($2)
         if str == "true" {
-            $$ = true
+			$$ = 1
         } else if str == "false" {
-            $$ = false
+			$$ = 0
         } else {
             yylex.Error("error strict flag")
             goto ret1

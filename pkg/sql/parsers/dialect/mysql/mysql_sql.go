@@ -15409,7 +15409,7 @@ yydefault:
 				Table:             yyDollar[8].tableNameUnion(),
 			}
 			yyLOCAL.(*tree.Load).Param.Tail = yyDollar[9].tailParamUnion()
-			yyLOCAL.(*tree.Load).Param.Parallel = yyDollar[10].unsignedOptUnion()
+			setLoadParallelOption(yyLOCAL.(*tree.Load).Param, yyDollar[10].int64ValUnion())
 			yyLOCAL.(*tree.Load).Param.Strict = yyDollar[11].unsignedOptUnion()
 		}
 		yyVAL.union = yyLOCAL
@@ -15503,22 +15503,22 @@ yydefault:
 		yyVAL.union = yyLOCAL
 	case 166:
 		yyDollar = yyS[yypt-0 : yypt+1]
-		var yyLOCAL bool
+		var yyLOCAL int64
 //line mysql_sql.y:2043
 		{
-			yyLOCAL = false
+			yyLOCAL = -1
 		}
 		yyVAL.union = yyLOCAL
 	case 167:
 		yyDollar = yyS[yypt-2 : yypt+1]
-		var yyLOCAL bool
+		var yyLOCAL int64
 //line mysql_sql.y:2047
 		{
 			str := strings.ToLower(yyDollar[2].str)
 			if str == "true" {
-				yyLOCAL = true
+				yyLOCAL = 1
 			} else if str == "false" {
-				yyLOCAL = false
+				yyLOCAL = 0
 			} else {
 				yylex.Error("error strict flag")
 				goto ret1
