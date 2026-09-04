@@ -30,6 +30,7 @@ mock_curl() {
 	retry_count=
 	retry_max_time=
 	retry_all_errors=0
+	request_url=
 	while [ "$#" -gt 0 ]; do
 		case "$1" in
 			--output)
@@ -52,6 +53,7 @@ mock_curl() {
 				shift 2
 				;;
 			*)
+				request_url=$1
 				shift
 				;;
 		esac
@@ -65,6 +67,7 @@ mock_curl() {
 	printf '%s\n' "$retry_count" > "$MO_DOWNLOAD_MOCK_STATE/retry-count"
 	printf '%s\n' "$retry_max_time" > "$MO_DOWNLOAD_MOCK_STATE/retry-max-time"
 	printf '%s\n' "$retry_all_errors" > "$MO_DOWNLOAD_MOCK_STATE/retry-all-errors"
+	printf '%s\n' "$request_url" > "$MO_DOWNLOAD_MOCK_STATE/request-url"
 
 	count=0
 	if [ -f "$MO_DOWNLOAD_MOCK_STATE/count" ]; then
@@ -72,6 +75,10 @@ mock_curl() {
 	fi
 	count=$((count + 1))
 	printf '%s\n' "$count" > "$MO_DOWNLOAD_MOCK_STATE/count"
+	if [ "$MO_DOWNLOAD_MOCK_MODE" = timeout-primary-only ] && \
+		[ "$request_url" = "$MO_DOWNLOAD_MOCK_PRIMARY_URL" ]; then
+		exit 28
+	fi
 
 	case "$MO_DOWNLOAD_MOCK_MODE:$count" in
 		transport-once:1 | always-fail:*)
@@ -154,6 +161,12 @@ assert_retry_contract() {
 	[ "$retry_all_errors" -eq 1 ] || fail "curl retry-all-errors is missing"
 }
 
+assert_requested_url() {
+	expected=$1
+	IFS= read -r actual < "$MO_DOWNLOAD_MOCK_STATE/request-url"
+	[ "$actual" = "$expected" ] || fail "expected request URL $expected, got $actual"
+}
+
 assert_legacy_retry_contract() {
 	IFS= read -r retry_count < "$MO_DOWNLOAD_MOCK_STATE/retry-count"
 	IFS= read -r retry_max_time < "$MO_DOWNLOAD_MOCK_STATE/retry-max-time"
@@ -227,6 +240,13 @@ MO_DOWNLOAD_MOCK_MODE=success
 export MO_DOWNLOAD_MOCK_MODE
 if "$download_script" http://example.invalid/dependency "$expected_sha256" "$MO_DOWNLOAD_MOCK_STATE/result"; then
 	fail "insecure dependency URL unexpectedly succeeded"
+fi
+assert_count 0
+
+new_case insecure-fallback-url
+if MO_DOWNLOAD_FALLBACK_URL=http://fallback.example.invalid/dependency \
+	"$download_script" https://example.invalid/dependency "$expected_sha256" "$MO_DOWNLOAD_MOCK_STATE/result"; then
+	fail "insecure fallback dependency URL unexpectedly succeeded"
 fi
 assert_count 0
 
@@ -331,6 +351,52 @@ assert_count 2
 assert_retry_contract
 cmp "$MO_DOWNLOAD_MOCK_STATE/original" "$MO_DOWNLOAD_MOCK_STATE/result" || fail "TLS timeout replaced existing destination"
 assert_no_temp_files "$MO_DOWNLOAD_MOCK_STATE"
+
+new_case fallback-after-primary-timeout
+primary_url=https://primary.example.invalid/dependency
+fallback_url=https://fallback.example.invalid/dependency
+MO_DOWNLOAD_MOCK_PRIMARY_URL=$primary_url
+MO_DOWNLOAD_MOCK_MODE=timeout-primary-only
+export MO_DOWNLOAD_MOCK_PRIMARY_URL MO_DOWNLOAD_MOCK_MODE
+MO_DOWNLOAD_FALLBACK_URL=$fallback_url "$download_script" "$primary_url" "$expected_sha256" "$MO_DOWNLOAD_MOCK_STATE/result"
+assert_count 3
+assert_retry_contract
+assert_requested_url "$fallback_url"
+cmp "$fixture" "$MO_DOWNLOAD_MOCK_STATE/result" || fail "fallback download installed wrong content"
+assert_publicly_readable "$MO_DOWNLOAD_MOCK_STATE/result"
+assert_no_temp_files "$MO_DOWNLOAD_MOCK_STATE"
+
+new_case fallback-checksum-mismatch
+printf 'previous invalid dependency\n' > "$MO_DOWNLOAD_MOCK_STATE/result"
+cp "$MO_DOWNLOAD_MOCK_STATE/result" "$MO_DOWNLOAD_MOCK_STATE/original"
+MO_DOWNLOAD_MOCK_MODE=timeout-primary-only
+export MO_DOWNLOAD_MOCK_MODE
+bad_sha256=0000000000000000000000000000000000000000000000000000000000000000
+if MO_DOWNLOAD_FALLBACK_URL=$fallback_url \
+	"$download_script" "$primary_url" "$bad_sha256" "$MO_DOWNLOAD_MOCK_STATE/result"; then
+	fail "checksum-mismatched fallback unexpectedly succeeded"
+fi
+assert_count 3
+assert_retry_contract
+assert_requested_url "$fallback_url"
+cmp "$MO_DOWNLOAD_MOCK_STATE/original" "$MO_DOWNLOAD_MOCK_STATE/result" || fail "checksum-mismatched fallback replaced existing destination"
+assert_no_temp_files "$MO_DOWNLOAD_MOCK_STATE"
+unset bad_sha256
+
+new_case fallback-timeout-exhausted
+printf 'previous invalid dependency\n' > "$MO_DOWNLOAD_MOCK_STATE/result"
+cp "$MO_DOWNLOAD_MOCK_STATE/result" "$MO_DOWNLOAD_MOCK_STATE/original"
+MO_DOWNLOAD_MOCK_MODE=always-timeout
+export MO_DOWNLOAD_MOCK_MODE
+MO_DOWNLOAD_FALLBACK_URL=https://fallback.example.invalid/dependency \
+	"$download_script" https://primary.example.invalid/dependency "$expected_sha256" "$MO_DOWNLOAD_MOCK_STATE/result" || status=$?
+[ "${status:-0}" -ne 0 ] || fail "fallback timeout unexpectedly succeeded"
+assert_count 4
+assert_retry_contract
+assert_requested_url https://fallback.example.invalid/dependency
+cmp "$MO_DOWNLOAD_MOCK_STATE/original" "$MO_DOWNLOAD_MOCK_STATE/result" || fail "fallback timeout replaced existing destination"
+assert_no_temp_files "$MO_DOWNLOAD_MOCK_STATE"
+unset status
 
 new_case byte-limit
 MO_DOWNLOAD_MOCK_MODE=success
