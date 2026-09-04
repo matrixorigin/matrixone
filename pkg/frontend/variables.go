@@ -3827,8 +3827,9 @@ var gSysVarsDefs = map[string]SystemVariable{
 	},
 	// HOST memory byte budget for the vector/fulltext index cache, read per account. The
 	// value on the SYS account (id 0) caps every tenant's resident indexes on the CN
-	// together; the value on a tenant caps that tenant alone. 0 means no limit, which is the
-	// default, so an unconfigured deployment behaves exactly as before.
+	// together; the value on a tenant caps that tenant alone. 0 means "not set by an
+	// operator"; the governor resolves an unset budget to the arena ceiling below, so the
+	// cache is always accounted and always evictable.
 	//
 	// Device memory has its own budget, max_gpu_index_cache_size: a CN has far more RAM than
 	// VRAM, so one number cannot express both.
@@ -3849,7 +3850,7 @@ var gSysVarsDefs = map[string]SystemVariable{
 	// DEVICE (VRAM) byte budget for the index cache, the GPU counterpart of
 	// max_index_cache_size and read per account the same way: SYS caps the CN, a tenant's
 	// value caps that tenant. Only the cuVS algorithms (cagra, ivfpq) charge against it.
-	// 0 means no limit.
+	// 0 means "not set by an operator" and resolves to the device ceiling below.
 	"max_gpu_index_cache_size": {
 		Name:              "max_gpu_index_cache_size",
 		Scope:             ScopeGlobal,

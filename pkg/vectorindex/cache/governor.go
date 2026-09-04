@@ -22,9 +22,12 @@ package cache
 //   - its value on the SYS account (id 0) caps every tenant's indexes on this CN together
 //   - its value on a tenant caps that tenant alone
 //
-// All four apply; whichever binds first evicts. 0 means no limit and is the default, so an
-// unconfigured deployment pays nothing: with every limit 0 the governor returns before it
-// walks the map.
+// All four apply; whichever binds first evicts. 0 means "not set by an operator", not
+// "unbounded": when no cap is set anywhere the governor substitutes the arena ceiling
+// (absoluteHostCacheCeiling / absoluteDeviceCacheCeiling), so the accounting always runs and
+// every entry stays evictable. The ceilings sit above any real machine, so an unconfigured
+// deployment is not constrained by them -- what they remove is the state where the governor
+// short-circuits and residency has no bound at all.
 //
 // The arenas get their OWN variables rather than sharing one number, because a CN has far more
 // RAM than VRAM: a single figure large enough to be a sane host budget would never bind on the
@@ -260,27 +263,37 @@ func (c *VectorIndexCache) chargeAndEnforce(sqlproc *sqlexec.SqlProcess, key str
 	c.enforce(entry.accountID.Load(), tenant, sys, key)
 }
 
-// limits returns the calling tenant's caps and the CN-wide SYS caps, host and device, 0 meaning
-// unlimited. Unreadable resolves to unlimited: the governor is a memory policy, not a
-// correctness gate, and must never fail a query because a variable could not be read.
+// limits returns the calling tenant's caps and the CN-wide SYS caps, host and device. A 0 from
+// either source means "not set by an operator", and when NEITHER is set the SYS pair resolves to
+// the arena ceilings below rather than to unlimited -- so an unreadable variable still yields a
+// governed cache. Unreadable never FAILS the load: the governor is a memory policy, not a
+// correctness gate, and must not fail a query because a variable could not be read.
 func (c *VectorIndexCache) limits(sqlproc *sqlexec.SqlProcess) (tenant, sys caps) {
 	tenant, sys = c.tenantCacheLimits(sqlproc), c.sysCacheLimit(sqlproc)
-	if tenant.unset() && sys.unset() {
-		// No operator-chosen limit anywhere -> the arena ceiling, never "unlimited".
-		//
-		// This covers three cases that all have to end up bounded:
-		//   * a sessionless load (idxcron, an internal rebuild), which has no resolver;
-		//   * an explicit `set global max_index_cache_size = 0`;
-		//   * an UPGRADED cluster, which is the case the variable default alone cannot
-		//     reach -- the value is persisted in mo_mysql_compatibility_mode at bootstrap,
-		//     so a cluster created before the default changed keeps its stored 0 forever
-		//     and would otherwise stay unbounded no matter what the code default says.
-		//
-		// So 0 means "no limit I chose", not "no limit at all": the accounting always runs
-		// and every entry stays evictable. The ceiling is above any real machine, so this is
-		// indistinguishable from unlimited in practice -- what it removes is the state where
-		// the governor short-circuits and residency has no bound of any kind.
-		sys = caps{host: absoluteHostCacheCeiling, device: absoluteDeviceCacheCeiling}
+
+	// Resolved PER ARENA, not per pair. enforce() skips an arena whose tenant and sys caps are
+	// both <= 0, so each arena has to reach a positive number on its own; a pair-wide test
+	// leaves `set global max_index_cache_size = 0` unbounded whenever the OTHER arena happens
+	// to be set, and since max_gpu_index_cache_size now defaults to a non-zero ceiling that is
+	// the ordinary case rather than a corner one.
+	//
+	// This covers the cases that all have to end up bounded:
+	//   * a sessionless load (idxcron, an internal rebuild), which has no resolver;
+	//   * an explicit `set global max_index_cache_size = 0`, on either arena, at either scope;
+	//   * an UPGRADED cluster, which is the case the variable default alone cannot reach --
+	//     the value is persisted in mo_mysql_compatibility_mode at bootstrap, so a cluster
+	//     created before the default changed keeps its stored 0 forever and would otherwise
+	//     stay unbounded no matter what the code default says.
+	//
+	// So 0 means "no limit I chose", not "no limit at all": the accounting always runs and
+	// every entry stays evictable. The ceiling is above any real machine, so this is
+	// indistinguishable from unlimited in practice -- what it removes is the state where the
+	// governor short-circuits and residency has no bound of any kind.
+	if tenant.host <= 0 && sys.host <= 0 {
+		sys.host = absoluteHostCacheCeiling
+	}
+	if tenant.device <= 0 && sys.device <= 0 {
+		sys.device = absoluteDeviceCacheCeiling
 	}
 	return tenant, sys
 }
@@ -300,11 +313,13 @@ func (c *VectorIndexCache) accountCacheLimit(sqlproc *sqlexec.SqlProcess, accoun
 		return caps{}
 	}
 
+	var last caps
 	if v, ok := c.acctLimits.Load(accountID); ok {
 		e := v.(acctLimitEntry)
 		if time.Since(e.fetched) < sysLimitTTL {
 			return e.value
 		}
+		last = e.value
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -312,10 +327,13 @@ func (c *VectorIndexCache) accountCacheLimit(sqlproc *sqlexec.SqlProcess, accoun
 	res, err := runSysSql(ctx, cnUUID, accountID, "", accountLimitSQL(accountID))
 	if err != nil {
 		logutil.Warnf("index cache governor: reading account %d cache caps failed: %v", accountID, err)
-		// Stamp the failure so an unreachable catalog is retried at the TTL cadence rather
-		// than on every miss, same reason as the SYS read.
-		c.acctLimits.Store(accountID, acctLimitEntry{fetched: time.Now()})
-		return caps{}
+		// KEEP the last known good value, like the SYS read does: returning caps{} here would
+		// let a transient catalog error silently unbound a tenant that HAS a cap, for as long
+		// as the catalog stays unreachable (every window would re-stamp the zero). Only the
+		// attempt time is refreshed, so an unreachable catalog is retried at the TTL cadence
+		// rather than on every miss.
+		c.acctLimits.Store(accountID, acctLimitEntry{value: last, fetched: time.Now()})
+		return last
 	}
 	defer res.Close()
 
@@ -423,8 +441,8 @@ func (c *VectorIndexCache) sysCacheLimit(sqlproc *sqlexec.SqlProcess) caps {
 	res, err := runSysSql(ctx, cnUUID, catalog.System_Account, "", sysLimitSQL)
 	if err != nil {
 		// Keep the last known good value; a catalog blip must not unbound the cache. With no
-		// value ever read, that is the zero caps -- unlimited, i.e. exactly the behaviour of a
-		// deployment that never configured the feature.
+		// value ever read, that is the zero caps -- which limits() then resolves to the arena
+		// ceiling, so an unreadable catalog leaves the cache governed rather than unlimited.
 		logutil.Warnf("index cache governor: reading the sys index cache caps failed: %v", err)
 		return last
 	}
@@ -477,6 +495,12 @@ func (c *VectorIndexCache) snapshotResidents(protect string) (list []resident, p
 
 // enforce evicts coldest-first until the charging account is under its own cap and the CN is
 // under the SYS cap, in both arenas. protect is the key just loaded, never a victim.
+// noAskingAccount is the account id enforce() is given when no load triggered the pass, so its
+// "the account asking for room pays first" sub-pass matches no resident and coldest-first
+// ordering applies to the whole cache. Real account ids are small and dense; this one cannot
+// collide with one.
+const noAskingAccount = ^uint32(0)
+
 func (c *VectorIndexCache) enforce(account uint32, tenant, sys caps, protect string) {
 	for _, a := range []arena{arenaHost, arenaDevice} {
 		if tenant.of(a) <= 0 && sys.of(a) <= 0 {
@@ -648,7 +672,13 @@ func (c *VectorIndexCache) enforceMemoizedCaps() {
 	if fetched.IsZero() || sys.unset() {
 		return
 	}
-	// account 0 is the charging account only for entries with no tenant; enforce() protects
-	// nothing here (no key is being loaded) and skips entries already claimed for eviction.
-	c.enforce(catalog.System_Account, caps{}, sys, "")
+	// NOBODY is asking for room on a housekeeping pass, so no account should pay first.
+	// enforce()'s pay-first sub-pass filters residents on this id; passing System_Account made
+	// account-0 entries (a sys session's, and every sessionless idxcron load, which is charged
+	// there) the only ones a binding CN-wide cap ever reclaimed, however warm, while a colder
+	// tenant's entries survived -- inverting the coldest-first ordering housekeeping exists to
+	// apply. A sentinel no resident can carry makes that sub-pass a no-op and leaves the
+	// widened pass to reclaim strictly coldest-first. enforce() protects nothing here (no key
+	// is being loaded) and skips entries already claimed for eviction.
+	c.enforce(noAskingAccount, caps{}, sys, "")
 }
