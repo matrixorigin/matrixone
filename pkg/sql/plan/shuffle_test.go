@@ -1121,6 +1121,19 @@ func TestDetermineShuffleForJoinReusesLeftKeyThroughJoinChain(t *testing.T) {
 		require.Equal(t, plan.ShuffleType_Range, parent.Stats.HashmapStats.ShuffleType)
 	})
 
+	t.Run("following join may reuse hybrid local ownership", func(t *testing.T) {
+		builder, parent := makeChildJoin(plan.Node_LEFT)
+		builder.qry.Nodes[2].Stats.HashmapStats.ShuffleTypeForMultiCN =
+			plan.ShuffleTypeForMultiCN_Hybrid
+
+		determineShuffleForJoin(parent, builder)
+
+		require.True(t, parent.Stats.HashmapStats.Shuffle)
+		require.Equal(t, plan.ShuffleMethod_Reuse, parent.Stats.HashmapStats.ShuffleMethod)
+		require.Equal(t, plan.ShuffleTypeForMultiCN_Hybrid,
+			parent.Stats.HashmapStats.ShuffleTypeForMultiCN)
+	})
+
 	t.Run("full join does not preserve one side as a distribution key", func(t *testing.T) {
 		builder, parent := makeChildJoin(plan.Node_OUTER)
 
@@ -1173,11 +1186,161 @@ func TestReusableJoinShuffleChildAfterRemap(t *testing.T) {
 		makeShuffleJoinTestChild(10, 1),
 		makeShuffleJoinTestChild(20, 1),
 	}}}
+	consumer := &plan.Node{NodeType: plan.Node_JOIN}
 
 	require.True(t, reusableJoinShuffleChild(
-		&plan.ColRef{RelPos: 0, ColPos: 0}, child, builder, true))
+		&plan.ColRef{RelPos: 0, ColPos: 0}, consumer, child, builder, true))
 	require.False(t, reusableJoinShuffleChild(
-		&plan.ColRef{RelPos: 0, ColPos: 1}, child, builder, true))
+		&plan.ColRef{RelPos: 0, ColPos: 1}, consumer, child, builder, true))
+}
+
+func TestDetermineShuffleForGroupByRequiresGlobalJoinOwnership(t *testing.T) {
+	tests := []struct {
+		name        string
+		multiCN     plan.ShuffleTypeForMultiCN
+		groupRel    int32
+		rollback    bool
+		wantMethod  plan.ShuffleMethod
+		wantMultiCN plan.ShuffleTypeForMultiCN
+	}{
+		{
+			name:        "hybrid left key is only locally partitioned",
+			multiCN:     plan.ShuffleTypeForMultiCN_Hybrid,
+			groupRel:    10,
+			wantMethod:  plan.ShuffleMethod_Normal,
+			wantMultiCN: plan.ShuffleTypeForMultiCN_Simple,
+		},
+		{
+			name:        "simple left key has global ownership",
+			multiCN:     plan.ShuffleTypeForMultiCN_Simple,
+			groupRel:    10,
+			wantMethod:  plan.ShuffleMethod_Reuse,
+			wantMultiCN: plan.ShuffleTypeForMultiCN_Simple,
+		},
+		{
+			name:        "rollback keeps established global aggregate reuse",
+			multiCN:     plan.ShuffleTypeForMultiCN_Simple,
+			groupRel:    10,
+			rollback:    true,
+			wantMethod:  plan.ShuffleMethod_Reuse,
+			wantMultiCN: plan.ShuffleTypeForMultiCN_Simple,
+		},
+		{
+			name:        "nullable build key does not preserve ownership",
+			multiCN:     plan.ShuffleTypeForMultiCN_Simple,
+			groupRel:    20,
+			wantMethod:  plan.ShuffleMethod_Normal,
+			wantMultiCN: plan.ShuffleTypeForMultiCN_Simple,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			left := makeShuffleJoinTestChild(10, 10_000_000)
+			right := makeShuffleJoinTestChild(20, 3_000_000)
+			childJoin := &plan.Node{
+				NodeId:   2,
+				NodeType: plan.Node_JOIN,
+				JoinType: plan.Node_LEFT,
+				Children: []int32{0, 1},
+				OnList: []*plan.Expr{
+					makeShuffleJoinEquality(t, types.T_int64, 100_000, 10, 20, 0),
+				},
+				Stats: &plan.Stats{
+					Outcnt:      10_000_000,
+					Selectivity: 1,
+					HashmapStats: &plan.HashMapStats{
+						Shuffle:               true,
+						ShuffleColIdx:         0,
+						ShuffleType:           plan.ShuffleType_Hash,
+						ShuffleTypeForMultiCN: tt.multiCN,
+					},
+				},
+			}
+			agg := &plan.Node{
+				NodeId:   3,
+				NodeType: plan.Node_AGG,
+				Children: []int32{2},
+				GroupBy: []*plan.Expr{{
+					Typ:  plan.Type{Id: int32(types.T_int64)},
+					Ndv:  100_000,
+					Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: tt.groupRel, ColPos: 0}},
+				}},
+				Stats: &plan.Stats{
+					Outcnt:      10_000_000,
+					Selectivity: 1,
+					HashmapStats: &plan.HashMapStats{
+						HashmapSize: 3_000_000,
+					},
+				},
+			}
+			builder := &QueryBuilder{qry: &plan.Query{Nodes: []*plan.Node{
+				left, right, childJoin, agg,
+			}}}
+			if tt.rollback {
+				builder.optimizerHints = &OptimizerHints{outerAntiPlanning: 1}
+			}
+
+			determineShuffleForGroupBy(agg, builder)
+
+			require.True(t, agg.Stats.HashmapStats.Shuffle)
+			require.Equal(t, tt.wantMethod, agg.Stats.HashmapStats.ShuffleMethod)
+			require.Equal(t, tt.wantMultiCN, agg.Stats.HashmapStats.ShuffleTypeForMultiCN)
+		})
+	}
+}
+
+func TestDetermineShuffleMethod2RejectsHybridAggregateReuse(t *testing.T) {
+	tests := []struct {
+		name            string
+		hashmapSize     float64
+		wantJoinShuffle bool
+	}{
+		{
+			name:            "small build also drops the unnecessary hybrid join",
+			hashmapSize:     threshHoldForHybirdShuffle,
+			wantJoinShuffle: false,
+		},
+		{
+			name:            "large build keeps the hybrid join but globally repartitions the aggregate",
+			hashmapSize:     threshHoldForHybirdShuffle + 1,
+			wantJoinShuffle: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			childJoin := &plan.Node{
+				NodeId:   0,
+				NodeType: plan.Node_JOIN,
+				Stats: &plan.Stats{HashmapStats: &plan.HashMapStats{
+					Shuffle:               true,
+					ShuffleType:           plan.ShuffleType_Range,
+					ShuffleTypeForMultiCN: plan.ShuffleTypeForMultiCN_Hybrid,
+					HashmapSize:           tt.hashmapSize,
+				}},
+			}
+			agg := &plan.Node{
+				NodeId:   1,
+				NodeType: plan.Node_AGG,
+				Children: []int32{0},
+				Stats: &plan.Stats{HashmapStats: &plan.HashMapStats{
+					Shuffle:               true,
+					ShuffleType:           plan.ShuffleType_Range,
+					ShuffleTypeForMultiCN: plan.ShuffleTypeForMultiCN_Hybrid,
+					ShuffleMethod:         plan.ShuffleMethod_Reuse,
+				}},
+			}
+			builder := &QueryBuilder{qry: &plan.Query{Nodes: []*plan.Node{childJoin, agg}}}
+
+			determineShuffleMethod2(agg.NodeId, -1, builder)
+
+			require.Equal(t, tt.wantJoinShuffle, childJoin.Stats.HashmapStats.Shuffle)
+			require.Equal(t, plan.ShuffleMethod_Normal, agg.Stats.HashmapStats.ShuffleMethod)
+			require.Equal(t, plan.ShuffleTypeForMultiCN_Simple,
+				agg.Stats.HashmapStats.ShuffleTypeForMultiCN)
+		})
+	}
 }
 
 func TestDetermineShuffleForJoinReuseMatchesChildPartition(t *testing.T) {
