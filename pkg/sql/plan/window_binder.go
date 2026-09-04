@@ -37,7 +37,7 @@ type windowFuncExprBinder interface {
 	BindExpr(tree.Expr, int32, bool) (*plan.Expr, error)
 	bindFuncExprImplByAstExpr(string, []tree.Expr, int32) (*plan.Expr, error)
 	bindPreparedNumericFuncExpr(string, []tree.Expr, int32) (*plan.Expr, error)
-	bindPreparedRowsFrameBound(tree.Expr) (*plan.Expr, error)
+	bindPreparedWindowFrameBound(tree.Expr, *plan.Type) (*plan.Expr, error)
 	makeFrameConstValue(tree.Expr, *plan.Type) (*plan.Expr, error)
 	GetContext() context.Context
 }
@@ -861,7 +861,7 @@ func bindWindowSpec(
 		// Partition membership is an equality boundary.  Normalize only the
 		// key expression so value-returning window functions still expose the
 		// original padded representation.
-		expr, err = appendPadSpaceComparisonCastIfNeeded(b.GetContext(), expr)
+		expr, err = appendPadSpaceWindowKeyCastIfNeeded(b.GetContext(), expr)
 		if err != nil {
 			return nil, err
 		}
@@ -899,7 +899,7 @@ func bindWindowSpec(
 			// Window peer groups and rank ordering use this expression as a key.
 			// Apply the same semantic key normalization after any storage-order
 			// rewrite, without touching the window function result itself.
-			expr, err = appendPadSpaceComparisonCastIfNeeded(b.GetContext(), expr)
+			expr, err = appendPadSpaceWindowKeyCastIfNeeded(b.GetContext(), expr)
 			if err != nil {
 				return nil, err
 			}
@@ -979,13 +979,14 @@ func bindWindowSpec(
 		return nil, moerr.NewNotSupported(b.GetContext(), "prepared parameter markers in interval window frames")
 	}
 	if ws.Frame.Type == tree.Range &&
-		(isWindowFrameParam(ws.Frame.Start.Expr) || isWindowFrameParam(ws.Frame.End.Expr)) {
-		return nil, moerr.NewNotSupported(b.GetContext(), "prepared parameter markers in RANGE window frames")
+		(isWindowFrameParam(ws.Frame.Start.Expr) || isWindowFrameParam(ws.Frame.End.Expr)) &&
+		(typ == nil || !types.Type{Oid: types.T(typ.Id)}.IsNumeric()) {
+		return nil, moerr.NewParseError(b.GetContext(), "Window '<unnamed window>' with a parameterized RANGE frame requires a numeric ORDER BY expression")
 	}
 	var err error
 	if ws.Frame.Start.Expr != nil {
 		if isWindowFrameParam(ws.Frame.Start.Expr) {
-			w.Frame.Start.Val, err = b.bindPreparedRowsFrameBound(ws.Frame.Start.Expr)
+			w.Frame.Start.Val, err = b.bindPreparedWindowFrameBound(ws.Frame.Start.Expr, typ)
 		} else {
 			w.Frame.Start.Val, err = b.makeFrameConstValue(ws.Frame.Start.Expr, typ)
 		}
@@ -998,7 +999,7 @@ func bindWindowSpec(
 	}
 	if ws.Frame.End.Expr != nil {
 		if isWindowFrameParam(ws.Frame.End.Expr) {
-			w.Frame.End.Val, err = b.bindPreparedRowsFrameBound(ws.Frame.End.Expr)
+			w.Frame.End.Val, err = b.bindPreparedWindowFrameBound(ws.Frame.End.Expr, typ)
 		} else {
 			w.Frame.End.Val, err = b.makeFrameConstValue(ws.Frame.End.Expr, typ)
 		}
@@ -1178,16 +1179,18 @@ func hasWindowFrameParamInOrderBy(orderBy tree.OrderBy) bool {
 	return false
 }
 
-func (b *baseBinder) bindPreparedRowsFrameBound(expr tree.Expr) (*plan.Expr, error) {
+func (b *baseBinder) bindPreparedWindowFrameBound(expr tree.Expr, typ *plan.Type) (*plan.Expr, error) {
 	if b.builder == nil || !b.builder.isPrepareStatement {
 		return nil, moerr.NewInvalidInput(b.GetContext(), "only prepare statement can use ? expr")
+	}
+	if typ == nil {
+		return nil, moerr.NewInvalidInput(b.GetContext(), "window frame bound parameter requires a target type")
 	}
 	bound, err := b.impl.BindExpr(expr, 0, true)
 	if err != nil {
 		return nil, err
 	}
-	typ := types.T_uint64.ToType()
-	return appendCastBeforeExpr(b.GetContext(), bound, makePlan2Type(&typ))
+	return appendCastBeforeExpr(b.GetContext(), bound, *typ)
 }
 
 func buildWindowColRefExpr(ctx *BindContext, typ plan.Type, colPos int32) *plan.Expr {

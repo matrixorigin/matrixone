@@ -26,6 +26,7 @@ import (
 	"time"
 
 	"github.com/lni/goutils/leaktest"
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -38,6 +39,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/logtailreplay"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/readutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
@@ -1060,6 +1062,37 @@ func TestCollectAndCalculateStatsRejectsStoppedExecutorOnZeroObjectFastPath(t *t
 	_, err := CollectAndCalculateStats(context.Background(), req, ex)
 	require.ErrorIs(t, err, context.Canceled,
 		"the zero-object fast path must not bypass executor lifecycle failure")
+}
+
+func TestCollectAndCalculateStatsAcceptsTableWideObservationWithoutObjects(t *testing.T) {
+	tableDef := &plan2.TableDef{
+		Name:    "events",
+		Version: 7,
+		Cols: []*plan2.ColDef{
+			{Name: "url"},
+			{Name: catalog.Row_ID},
+		},
+	}
+	stats := plan2.NewStatsInfo()
+	req := &updateStatsRequest{
+		statsInfo:       stats,
+		tableDef:        tableDef,
+		approxObjectNum: 0,
+	}
+
+	ratio, err := CollectAndCalculateStats(context.Background(), req, nil)
+	require.NoError(t, err)
+	require.Equal(t, 1.0, ratio)
+	rowCount := float64(42)
+	require.NoError(t, applyStatsRefreshOptions(stats, tableDef, engine.StatsRefreshOptions{
+		TableDefVersion: &tableDef.Version,
+		TableRowCount:   &rowCount,
+		ColumnNDVs:      map[string]float64{"url": 40},
+	}))
+	require.Zero(t, stats.AccurateObjectNumber)
+	require.Equal(t, rowCount, stats.TableCnt)
+	require.Equal(t, float64(40), stats.NdvMap["url"])
+	require.True(t, plan2.StatsInfoUsable(stats))
 }
 
 func TestCollectAndCalculateStatsDoesNotApplyFailedObjectScan(t *testing.T) {

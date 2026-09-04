@@ -50,6 +50,31 @@ const highNDVcolumnThreshHold = 0.95
 const statsCacheInitSize = 128
 const statsCacheMaxSize = 8192
 
+// StatsInfoUsable reports whether a statistics object contains a real table
+// cardinality observation. Persisted-object statistics use
+// AccurateObjectNumber; an explicit table-wide scan can also observe committed
+// rows before the first object is flushed. A successfully completed observation
+// carries TableName, which distinguishes an exact empty table from an
+// uninitialized zero-valued StatsInfo.
+func StatsInfoUsable(stats *pb.StatsInfo) bool {
+	if stats == nil || math.IsNaN(stats.TableCnt) || math.IsInf(stats.TableCnt, 0) || stats.TableCnt < 0 {
+		return false
+	}
+	return stats.AccurateObjectNumber > 0 || stats.TableCnt > 0 || stats.TableName != ""
+}
+
+func statsForTableDef(
+	ctx CompilerContext,
+	obj *plan.ObjectRef,
+	tableDef *plan.TableDef,
+	snapshot *plan.Snapshot,
+) (*pb.StatsInfo, error) {
+	if versioned, ok := ctx.(TableDefStatsCompilerContext); ok {
+		return versioned.StatsWithTableDef(obj, tableDef, snapshot)
+	}
+	return ctx.Stats(obj, snapshot)
+}
+
 // RowSizeThreshold Regardless of the table,
 // the minimum row size is 100.
 // However, due to inaccurate statistical information,
@@ -1832,7 +1857,8 @@ func calcScanStats(node *plan.Node, builder *QueryBuilder) *plan.Stats {
 		scanSnapshot = node.ScanSnapshot
 	}
 
-	s, err := builder.compCtx.Stats(node.ObjRef, scanSnapshot)
+	s, err := statsForTableDef(
+		builder.compCtx, node.ObjRef, node.TableDef, scanSnapshot)
 	if err != nil || s == nil {
 		return DefaultStats()
 	}

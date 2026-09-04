@@ -71,6 +71,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/explain"
 	planfunction "github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/sql/schedule"
+	sqlutil "github.com/matrixorigin/matrixone/pkg/sql/util"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	txnTrace "github.com/matrixorigin/matrixone/pkg/txn/trace"
 	"github.com/matrixorigin/matrixone/pkg/util"
@@ -2110,11 +2111,18 @@ func handleAnalyzeStmt(ses *Session, execCtx *ExecCtx, stmt *tree.AnalyzeStmt) e
 		}
 		sql := buildAnalyzeDerivedSQL(entry, cols)
 		sql = inheritAnalyzeRewriteHint(execCtx.sqlOfStmt, sql)
+		observationCanBePublished := analyzeDerivedStatsCanPublishObservation(sql)
 		result, err := executeAnalyzeDerivedQuery(ses, execCtx, sql)
 		if err != nil {
 			return err
 		}
-		if err := refreshAnalyzeTableStats(ses, execCtx, entry); err != nil {
+		observation, err := consumeAnalyzeDerivedResult(execCtx.reqCtx, result, len(cols))
+		if err != nil {
+			return err
+		}
+		if err := refreshAnalyzeTableStats(
+			ses, execCtx, entry, cols, observation, observationCanBePublished,
+		); err != nil {
 			return err
 		}
 		results = append(results, result)
@@ -2123,7 +2131,14 @@ func handleAnalyzeStmt(ses *Session, execCtx *ExecCtx, stmt *tree.AnalyzeStmt) e
 	return nil
 }
 
-func refreshAnalyzeTableStats(ses *Session, execCtx *ExecCtx, entry *tree.AnalyzeTableEntry) error {
+func refreshAnalyzeTableStats(
+	ses *Session,
+	execCtx *ExecCtx,
+	entry *tree.AnalyzeTableEntry,
+	cols tree.IdentifierList,
+	observation analyzeStatsObservation,
+	observationCanBePublished bool,
+) error {
 	// The derived ANALYZE query observes the transaction workspace. The engine
 	// statistics cache is process-global and observes only committed catalog and
 	// object state, so publishing while a user transaction was already active
@@ -2162,6 +2177,25 @@ func refreshAnalyzeTableStats(ses *Session, execCtx *ExecCtx, entry *tree.Analyz
 	if obj.PubInfo != nil || !analyzeTableOwnsPersistentStats(tableDef) {
 		return nil
 	}
+	// A global physical-table key may only receive an observation over that
+	// table's complete row domain. Non-system tenants see account-filtered
+	// subsets of cluster and selected system tables; publishing those counts or
+	// NDVs would corrupt the shared optimizer statistics for every tenant.
+	if !analyzeStatsObservationCoversPhysicalTable(
+		ses.GetAccountId(), obj.SchemaName, obj.ObjName, tableDef.TableType,
+	) {
+		// The derived result remains valid for the tenant, but even a metadata-
+		// only refresh would mutate the shared physical-table cache from a
+		// statement whose authorization domain is only a tenant subset.
+		return nil
+	}
+	refreshOptions := engine.StatsRefreshOptions{}
+	if observationCanBePublished {
+		refreshOptions, err = analyzeStatsRefreshOptions(ctx, tableDef, cols, observation)
+		if err != nil {
+			return err
+		}
+	}
 
 	accountID := tcc.resolvePhysicalObjectAccount(obj, tableDef, nil)
 	databaseID := tableDef.DbId
@@ -2178,7 +2212,197 @@ func refreshAnalyzeTableStats(ses *Session, execCtx *ExecCtx, entry *tree.Analyz
 		DbName:     obj.SchemaName,
 		TableName:  obj.ObjName,
 	}
-	return publishAnalyzeTableStats(ses, ctx, key, refresher)
+	return publishAnalyzeTableStats(ses, ctx, key, refreshOptions, refresher)
+}
+
+func analyzeStatsObservationCoversPhysicalTable(
+	accountID uint32,
+	databaseName string,
+	tableName string,
+	tableType string,
+) bool {
+	return sqlutil.BuildTableScanAccountFilter(
+		accountID, databaseName, tableName, tableType,
+	) == nil
+}
+
+type analyzeStatsObservation struct {
+	tableRowCount float64
+	columnNDVs    []float64
+}
+
+func consumeAnalyzeDerivedResult(
+	ctx context.Context,
+	result *MysqlResultSet,
+	columnCount int,
+) (analyzeStatsObservation, error) {
+	expectedColumns := uint64(columnCount + 1)
+	if result == nil || result.GetRowCount() != 1 || result.GetColumnCount() != expectedColumns ||
+		len(result.Data) != 1 || len(result.Data[0]) != int(expectedColumns) {
+		return analyzeStatsObservation{}, moerr.NewInternalErrorf(
+			ctx,
+			"ANALYZE TABLE returned an invalid statistics result shape: got %d rows and %d columns, expected 1 row and %d columns",
+			analyzeResultRowCount(result), analyzeResultColumnCount(result), expectedColumns,
+		)
+	}
+	observation := analyzeStatsObservation{columnNDVs: make([]float64, columnCount)}
+	for i := range columnCount {
+		ndv, err := analyzeUnsignedIntegerResult(
+			ctx, result, uint64(i), fmt.Sprintf("NDV for column position %d", i))
+		if err != nil {
+			return analyzeStatsObservation{}, err
+		}
+		observation.columnNDVs[i] = float64(ndv)
+	}
+	rowCountColumn := uint64(columnCount)
+	rowCount, err := analyzeUnsignedIntegerResult(ctx, result, rowCountColumn, "row count")
+	if err != nil {
+		return analyzeStatsObservation{}, err
+	}
+	observation.tableRowCount = float64(rowCount)
+
+	// count(*) is an internal consistency input. Preserve ANALYZE's existing
+	// SQL-visible result shape by removing it before response handling.
+	result.Columns = result.Columns[:columnCount]
+	result.Data[0] = result.Data[0][:columnCount]
+	return observation, nil
+}
+
+func analyzeUnsignedIntegerResult(
+	ctx context.Context,
+	result *MysqlResultSet,
+	column uint64,
+	label string,
+) (uint64, error) {
+	value, err := result.GetValue(ctx, 0, column)
+	if err != nil {
+		return 0, err
+	}
+	invalid := func() (uint64, error) {
+		return 0, moerr.NewInternalErrorf(
+			ctx, "ANALYZE TABLE returned invalid %s: expected a non-negative integer, got %v", label, value)
+	}
+	switch v := value.(type) {
+	case uint8:
+		return uint64(v), nil
+	case uint16:
+		return uint64(v), nil
+	case uint32:
+		return uint64(v), nil
+	case uint64:
+		return v, nil
+	case uint:
+		return uint64(v), nil
+	case int8:
+		if v < 0 {
+			return invalid()
+		}
+		return uint64(v), nil
+	case int16:
+		if v < 0 {
+			return invalid()
+		}
+		return uint64(v), nil
+	case int32:
+		if v < 0 {
+			return invalid()
+		}
+		return uint64(v), nil
+	case int64:
+		if v < 0 {
+			return invalid()
+		}
+		return uint64(v), nil
+	case int:
+		if v < 0 {
+			return invalid()
+		}
+		return uint64(v), nil
+	case float32:
+		asFloat64 := float64(v)
+		if asFloat64 < 0 || math.IsNaN(asFloat64) || math.IsInf(asFloat64, 0) ||
+			math.Trunc(asFloat64) != asFloat64 || asFloat64 >= math.Exp2(64) {
+			return invalid()
+		}
+		return uint64(asFloat64), nil
+	case float64:
+		if v < 0 || math.IsNaN(v) || math.IsInf(v, 0) ||
+			math.Trunc(v) != v || v >= math.Exp2(64) {
+			return invalid()
+		}
+		return uint64(v), nil
+	case string:
+		parsed, parseErr := strconv.ParseUint(v, 10, 64)
+		if parseErr != nil {
+			return invalid()
+		}
+		return parsed, nil
+	case []byte:
+		parsed, parseErr := strconv.ParseUint(string(v), 10, 64)
+		if parseErr != nil {
+			return invalid()
+		}
+		return parsed, nil
+	default:
+		return invalid()
+	}
+}
+
+func analyzeStatsRefreshOptions(
+	ctx context.Context,
+	tableDef *plan.TableDef,
+	cols tree.IdentifierList,
+	observation analyzeStatsObservation,
+) (engine.StatsRefreshOptions, error) {
+	if len(observation.columnNDVs) != len(cols) {
+		return engine.StatsRefreshOptions{}, moerr.NewInternalErrorf(
+			ctx,
+			"ANALYZE TABLE produced %d NDVs for %d columns",
+			len(observation.columnNDVs), len(cols),
+		)
+	}
+	ndvs := make(map[string]float64, len(cols))
+	for i, ident := range cols {
+		column, ok := canonicalAnalyzeColumnName(tableDef, string(ident))
+		if !ok {
+			return engine.StatsRefreshOptions{}, moerr.NewInternalErrorf(
+				ctx, "ANALYZE TABLE returned NDV for unknown column %q", ident)
+		}
+		ndvs[column] = observation.columnNDVs[i]
+	}
+	rowCount := observation.tableRowCount
+	tableDefVersion := tableDef.Version
+	return engine.StatsRefreshOptions{
+		TableDefVersion: &tableDefVersion,
+		TableRowCount:   &rowCount,
+		ColumnNDVs:      ndvs,
+	}, nil
+}
+
+func canonicalAnalyzeColumnName(tableDef *plan.TableDef, requested string) (string, bool) {
+	for _, col := range tableDef.Cols {
+		if col == nil {
+			continue
+		}
+		if strings.EqualFold(requested, col.Name) || strings.EqualFold(requested, col.GetOriginCaseName()) {
+			return col.Name, true
+		}
+	}
+	return "", false
+}
+
+func analyzeResultRowCount(result *MysqlResultSet) uint64 {
+	if result == nil {
+		return 0
+	}
+	return result.GetRowCount()
+}
+
+func analyzeResultColumnCount(result *MysqlResultSet) uint64 {
+	if result == nil {
+		return 0
+	}
+	return result.GetColumnCount()
 }
 
 func analyzeStatsPublicationAllowed(execCtx *ExecCtx) bool {
@@ -2208,6 +2432,7 @@ func publishAnalyzeTableStats(
 	ses *Session,
 	ctx context.Context,
 	key pbstats.StatsInfoKey,
+	options engine.StatsRefreshOptions,
 	refresher engine.StatsRefresher,
 ) error {
 	tableKey := optimizerStatsTableKey{accountID: key.AccId, tableID: key.TableID}
@@ -2217,7 +2442,12 @@ func publishAnalyzeTableStats(
 	}
 	defer release()
 
-	stats, err := refresher.RefreshTableStats(ctx, key)
+	var stats *pbstats.StatsInfo
+	if withOptions, ok := refresher.(engine.StatsRefresherWithOptions); ok {
+		stats, err = withOptions.RefreshTableStatsWithOptions(ctx, key, options)
+	} else {
+		stats, err = refresher.RefreshTableStats(ctx, key)
+	}
 	if err != nil {
 		return err
 	}
@@ -2229,7 +2459,8 @@ func publishAnalyzeTableStats(
 	// this table's version invalidates only dependent session entries; unrelated
 	// table statistics and plans remain reusable.
 	version := advanceOptimizerStatsVersion(ses.GetService(), tableKey)
-	ses.cachePublishedStats(tableKey, version, stats)
+	ses.cachePublishedStatsForTableDefVersion(
+		tableKey, version, options.TableDefVersion, stats)
 	return nil
 }
 
@@ -2239,6 +2470,24 @@ func inheritAnalyzeRewriteHint(outerSQL, derivedSQL string) string {
 		return derivedSQL
 	}
 	return "/*+" + content + "*/ " + derivedSQL
+}
+
+func analyzeDerivedStatsCanPublishObservation(sql string) bool {
+	content, ok := leadingHintContent(sql)
+	if !ok {
+		return true
+	}
+	content = strings.TrimSpace(content)
+	if !strings.HasPrefix(content, "{") {
+		return true
+	}
+	var payload struct {
+		Rewrites map[string]json.RawMessage `json:"rewrites"`
+	}
+	if err := json.Unmarshal([]byte(content), &payload); err != nil {
+		return false
+	}
+	return len(payload.Rewrites) == 0
 }
 
 func executeAnalyzeDerivedQuery(ses *Session, outerExecCtx *ExecCtx, sql string) (*MysqlResultSet, error) {
@@ -2352,6 +2601,10 @@ func buildAnalyzeDerivedSQL(entry *tree.AnalyzeTableEntry, cols tree.IdentifierL
 		ctx.WriteIdentifier(ident)
 		ctx.WriteByte(')')
 	}
+	if len(cols) > 0 {
+		ctx.WriteByte(',')
+	}
+	ctx.WriteString("count(*)")
 	ctx.WriteString(" from ")
 	entry.Table.Format(ctx)
 	return ctx.String()
