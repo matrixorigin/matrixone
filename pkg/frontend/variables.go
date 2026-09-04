@@ -33,6 +33,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fulltext"
 	"github.com/matrixorigin/matrixone/pkg/fulltext2"
+	"github.com/matrixorigin/matrixone/pkg/iscp"
 	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/util/gpumode"
 )
@@ -3875,6 +3876,16 @@ var gSysVarsDefs = map[string]SystemVariable{
 		SetVarHintApplies: false,
 		Type:              InitSystemVariableBoolType("experimental_fulltext2_index"),
 		Default:           int8(0),
+	},
+	// max watermark lag (seconds) allowed for the fulltext2 json_extract index
+	// probe; default = ISCP sync tick + index-flush interval.
+	"fulltext_index_scan_watermark_delay": {
+		Name:              "fulltext_index_scan_watermark_delay",
+		Scope:             ScopeBoth,
+		Dynamic:           true,
+		SetVarHintApplies: false,
+		Type:              InitSystemVariableIntType("fulltext_index_scan_watermark_delay", 0, 86400, false),
+		Default:           int64((iscp.DefaultSyncTaskInterval + iscp.DefaultIndexFlushWatermarkInterval) / time.Second),
 	},
 	"ft_relevancy_algorithm": {
 		Name:              fulltext.FulltextRelevancyAlgo,

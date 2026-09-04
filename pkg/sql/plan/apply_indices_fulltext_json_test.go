@@ -26,7 +26,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
-	veccache "github.com/matrixorigin/matrixone/pkg/vectorindex/cache"
 	"github.com/stretchr/testify/require"
 )
 
@@ -70,34 +69,20 @@ func jpExtractFloat(col int32, path string) *plan.Expr {
 	return jpCallExpr("json_extract_float64", jpColExpr(col), jpStrLit(path))
 }
 
-// TestAsyncCoverageBar pins the coverage relaxation behind #27926: the read
-// snapshot is lowered by 2*VectorIndexCacheTTL, so a healthy-but-lagging async
-// index counts as covering a current read and ONLY a watermark further behind
-// than that window falls back to the retained-predicate scan.
+// asyncCoverageBar lowers the snapshot by delay; underflow clamps to the snapshot.
 func TestAsyncCoverageBar(t *testing.T) {
-	// a realistic current-read snapshot (~ns since epoch); logical is preserved.
 	nowNanos := int64(1_700_000_000_000_000_000)
 	ts := types.BuildTS(nowNanos, 7)
+	delay := 15 * time.Second
 
-	bar := asyncCoverageBar(ts)
-	require.Equal(t, nowNanos-int64(2*veccache.VectorIndexCacheTTL), bar.Physical(),
-		"bar must be the snapshot lowered by exactly 2*VectorIndexCacheTTL")
-	require.Equal(t, uint32(7), bar.Logical(), "logical part is preserved")
+	bar := asyncCoverageBar(ts, delay)
+	require.Equal(t, nowNanos-int64(delay), bar.Physical())
+	require.Equal(t, uint32(7), bar.Logical())
 
-	// A healthy watermark (normal ISCP lag ~15s) clears the relaxed bar => covered.
-	healthy := types.BuildTS(nowNanos-int64(15*time.Second), 0)
-	require.False(t, healthy.LT(&bar), "a ~15s-lagging watermark must count as covering")
+	require.Equal(t, ts, asyncCoverageBar(ts, 0))
 
-	// A watermark just inside the window still covers; just outside falls back.
-	insideWindow := types.BuildTS(nowNanos-int64(2*veccache.VectorIndexCacheTTL)+int64(time.Second), 0)
-	require.False(t, insideWindow.LT(&bar), "watermark inside the staleness window covers")
-	outsideWindow := types.BuildTS(nowNanos-int64(2*veccache.VectorIndexCacheTTL)-int64(time.Second), 0)
-	require.True(t, outsideWindow.LT(&bar), "watermark older than the window falls back")
-
-	// Underflow guard: a tiny synthetic TS (older than the window) clamps to itself,
-	// so the strict check is preserved rather than wrapping negative.
 	tiny := types.BuildTS(10, 3)
-	require.Equal(t, tiny, asyncCoverageBar(tiny), "underflow clamps to the original TS")
+	require.Equal(t, tiny, asyncCoverageBar(tiny, delay))
 }
 
 // TestIndexCoversSnapshotReachesCoverageHook drives the async-coverage POSITIVE
