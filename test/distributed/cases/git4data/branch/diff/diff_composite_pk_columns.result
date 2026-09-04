@@ -1,0 +1,77 @@
+drop database if exists issue_25244_diff_columns_pk;
+create database issue_25244_diff_columns_pk;
+use issue_25244_diff_columns_pk;
+create table base (
+org_id int,
+event_id int,
+val int,
+note varchar(64),
+primary key (org_id, event_id)
+);
+insert into base values
+(1, 1, 10, 'seed'),
+(1, 2, 20, 'seed'),
+(2, 1, 30, 'seed'),
+(2, 2, 40, 'seed');
+data branch create table target from base;
+update target
+set val = val + 9, note = 'upd'
+where org_id = 1 and event_id = 1;
+data branch diff target against base columns (val);
+➤ diff target against base[12,0,0]  ¦  flag[12,0,0]  ¦  org_id[4,32,0]  ¦  event_id[4,32,0]  ¦  val[4,32,0]  𝄀
+target  ¦  UPDATE  ¦  1  ¦  1  ¦  19
+data branch diff target against base columns (note, event_id, note);
+➤ diff target against base[12,0,0]  ¦  flag[12,0,0]  ¦  org_id[4,32,0]  ¦  event_id[4,32,0]  ¦  note[12,64,0]  𝄀
+target  ¦  UPDATE  ¦  1  ¦  1  ¦  upd
+delete from target where org_id = 2 and event_id = 2;
+insert into target values (3, 3, 50, 'new');
+data branch diff target against base columns (note) output limit 1;
+➤ diff target against base[12,0,0]  ¦  flag[12,0,0]  ¦  org_id[4,32,0]  ¦  event_id[4,32,0]  ¦  note[12,64,0]  𝄀
+target  ¦  UPDATE  ¦  1  ¦  1  ¦  upd
+data branch diff target against base columns (note);
+➤ diff target against base[12,0,0]  ¦  flag[12,0,0]  ¦  org_id[4,32,0]  ¦  event_id[4,32,0]  ¦  note[12,64,0]  𝄀
+target  ¦  UPDATE  ¦  1  ¦  1  ¦  upd  𝄀
+target  ¦  DELETE  ¦  2  ¦  2  ¦  seed  𝄀
+target  ¦  INSERT  ¦  3  ¦  3  ¦  new
+create table unrelated_base (
+org_id int,
+event_id int,
+note varchar(64),
+primary key (org_id, event_id)
+);
+create table unrelated_target (
+org_id int,
+event_id int,
+note varchar(64),
+primary key (org_id, event_id)
+);
+insert into unrelated_base values (8, 1, 'keep'), (8, 2, 'delete');
+insert into unrelated_target values (8, 1, 'keep'), (8, 2, 'delete');
+delete from unrelated_target where org_id = 8 and event_id = 2;
+data branch diff unrelated_target against unrelated_base columns (note);
+➤ diff unrelated_target against unrelated_base[12,0,0]  ¦  flag[12,0,0]  ¦  org_id[4,32,0]  ¦  event_id[4,32,0]  ¦  note[12,64,0]  𝄀
+unrelated_base  ¦  INSERT  ¦  8  ¦  2  ¦  delete
+data branch diff target against base columns (note) output as diff_as;
+➤ TABLE CREATED[12,0,0]  𝄀
+`issue_25244_diff_columns_pk`.`diff_as`
+show create table diff_as;
+➤ Table[12,7,0]  ¦  Create Table[12,205,0]  𝄀
+diff_as  ¦  CREATE TABLE `diff_as` (
+  `__mo_diff_source` varchar(255) DEFAULT NULL,
+  `__mo_diff_flag` varchar(16) DEFAULT NULL,
+  `org_id` int NOT NULL,
+  `event_id` int NOT NULL,
+  `note` varchar(64) DEFAULT NULL
+)
+select __mo_diff_source, __mo_diff_flag, org_id, event_id, note
+from diff_as order by org_id, event_id;
+➤ __mo_diff_source[12,255,0]  ¦  __mo_diff_flag[12,16,0]  ¦  org_id[4,32,0]  ¦  event_id[4,32,0]  ¦  note[12,64,0]  𝄀
+target  ¦  UPDATE  ¦  1  ¦  1  ¦  upd  𝄀
+target  ¦  DELETE  ¦  2  ¦  2  ¦  seed  𝄀
+target  ¦  INSERT  ¦  3  ¦  3  ¦  new
+drop table diff_as;
+drop table unrelated_target;
+drop table unrelated_base;
+drop table target;
+drop table base;
+drop database issue_25244_diff_columns_pk;
