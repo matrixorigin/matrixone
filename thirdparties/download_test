@@ -160,6 +160,13 @@ assert_legacy_retry_contract() {
 	[ "$retry_all_errors" -eq 0 ] || fail "legacy curl unexpectedly received --retry-all-errors"
 }
 
+assert_default_retry_contract() {
+	IFS= read -r retry_count < "$MO_DOWNLOAD_MOCK_STATE/retry-count"
+	IFS= read -r retry_max_time < "$MO_DOWNLOAD_MOCK_STATE/retry-max-time"
+	[ "$retry_count" -eq 5 ] || fail "default curl retry count is $retry_count"
+	[ "$retry_max_time" -eq 6 ] || fail "default curl retry time is $retry_max_time"
+}
+
 assert_no_temp_files() {
 	case_dir=$1
 	[ -z "$(find "$case_dir" -name '*.download.*' -print -quit)" ] || fail "temporary download was not cleaned up"
@@ -259,6 +266,16 @@ assert_retry_contract
 cmp "$fixture" "$MO_DOWNLOAD_MOCK_STATE/result" || fail "fresh download installed wrong content"
 assert_publicly_readable "$MO_DOWNLOAD_MOCK_STATE/result"
 assert_no_temp_files "$MO_DOWNLOAD_MOCK_STATE"
+
+new_case default-retry-budget
+unset MO_DOWNLOAD_ATTEMPTS
+MO_DOWNLOAD_MOCK_MODE=success
+export MO_DOWNLOAD_MOCK_MODE
+"$download_script" https://example.invalid/dependency "$expected_sha256" "$MO_DOWNLOAD_MOCK_STATE/result"
+assert_count 1
+assert_default_retry_contract
+MO_DOWNLOAD_ATTEMPTS=3
+export MO_DOWNLOAD_ATTEMPTS
 
 new_case checksum-failure
 MO_DOWNLOAD_MOCK_MODE=always-corrupt
