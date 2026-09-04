@@ -3005,7 +3005,8 @@ Split large initial snapshots into multiple transactions.
   `InitSnapshotSplitTxn=false`.
 - Pausing retains the stable epoch and can resume the same snapshot. Dropping or
   cancelling a task during initial sync can leave committed partial rows in the
-  target; reset the target before reusing it for another CDC task.
+  target; the proposed V2 ownership protocol records it as contaminated and
+  requires a confirmed reset plus full snapshot before reuse.
 - Until generation-qualified readiness and target ownership reservations are
   implemented, use atomic mode for wildcard mappings that may discover a
   recreated table or for configurations where another CDC task could map to the
@@ -3014,10 +3015,45 @@ Split large initial snapshots into multiple transactions.
   size source engine batches and CN memory so one indivisible batch cannot
   exhaust the CN; 512 MiB alone is only a transaction-grouping threshold.
 
+**Proposed V2 target-onboarding contract (not yet implemented)**:
+
+- The safe default is create-only. If an unregistered physical target table
+  already exists, CDC performs no DROP or DML and reports `TARGET_EXISTS`.
+- Resetting an existing target requires an explicit per-target destructive
+  confirmation and a complete initial snapshot. It is invalid with
+  `NoFull=true`.
+- With `NoFull=true`, an existing target can only be explicitly adopted. The
+  operator must attest that its data/schema equal the source at a supplied
+  baseline timestamp; CDC starts incremental processing strictly after that
+  baseline. The baseline must equal the effective `StartTs`, remain retained by
+  the source, and precede `EndTs` when one is configured. A known retired CDC
+  target cannot be adopted.
+- Wildcard discovery never inherits a task-wide destructive confirmation. Each
+  existing target enters `TARGET_APPROVAL_REQUIRED` until an exact-target reset
+  or adoption is confirmed.
+- Approval is two-step: previewing the exact target returns a short-lived token
+  bound to its canonical identity and schema fingerprint; the subsequent
+  reset/adopt command consumes that token once. Drift requires a new preview.
+
+V2 target locks are effect-scoped. A table holds a pinned target connection only
+while executing target DDL/DML and publishing its related progress, then releases
+it. The proposed defaults cap pinned sessions at 64 per CN and 16 per target
+server globally across CNs, and page wildcard work beyond the bounded ready
+queue. A batch that no
+eligible CN can reserve enters `BATCH_RESOURCE_BLOCKED` instead of retrying
+forever; capacity must change before an explicit Resume.
+
 MatrixOne backup/restore and PITR do not rewind an external target. The current
 implementation does not yet provide the proposed rebuild fence/API. After a
 restore, do not resume a split-snapshot task against the existing target; reset
 the target and recreate the CDC task.
+
+Under the proposed V2 protocol, physical target ownership, namespace and
+compatibility reservations, target-session permits, tombstones/reset tokens,
+and restore fences are monotonically versioned global control state.
+Tenant/database/table
+PITR never rewinds their versioned current state, and a restored task cannot
+reclaim a target currently owned by another task or account.
 
 Source changes that happen while the initial snapshot is running are applied by
 the incremental phase after the stable snapshot watermark. If that historical
