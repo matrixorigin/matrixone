@@ -15,9 +15,9 @@ package v4_0_6
 
 import (
 	"context"
+	"encoding/hex"
 	"errors"
 	"fmt"
-	"math"
 	"strings"
 	"testing"
 
@@ -1312,9 +1312,9 @@ func TestMaintainOrphanObjectPrivilegesPage(t *testing.T) {
 		var candidateSQL, databaseSQL, relationSQL, deleteSQL string
 		exec := executor.NewMemTxnExecutor(func(sql string) (executor.Result, error) {
 			switch {
-			case strings.Contains(sql, "order by "+orphanPrivilegeKeyColumnsDescending):
+			case strings.Contains(sql, "order by "+orphanPrivilegePhysicalKeyColumn+" desc"):
 				return newOrphanPrivilegeKeyResult(t, candidates[len(candidates)-1:]), nil
-			case strings.HasPrefix(sql, "select "+orphanPrivilegeKeyColumns+" from mo_catalog.mo_role_privs where"):
+			case strings.HasPrefix(sql, "select "+orphanPrivilegeCandidateColumns+" from mo_catalog.mo_role_privs where"):
 				candidateSQL = sql
 				return newOrphanPrivilegeKeyResult(t, candidates), nil
 			case strings.HasPrefix(sql, "select dat_id from mo_catalog.mo_database"):
@@ -1335,8 +1335,10 @@ func TestMaintainOrphanObjectPrivilegesPage(t *testing.T) {
 		require.NoError(t, err)
 		require.True(t, complete)
 		require.Zero(t, next)
-		require.Contains(t, candidateSQL, "limit 1000")
-		require.Contains(t, candidateSQL, "<= (1,'view',0,3,'t')")
+		require.Contains(t, candidateSQL, "order by __mo_cpkey_col limit 1000")
+		require.Contains(t, candidateSQL,
+			"__mo_cpkey_col <= unhex('"+orphanPrivilegePhysicalKey(candidates[len(candidates)-1])+"')")
+		require.NotContains(t, candidateSQL, "order by "+orphanPrivilegeKeyColumns)
 		require.Contains(t, databaseSQL, "account_id = current_account_id()")
 		require.Contains(t, databaseSQL, "dat_id in (10,11)")
 		require.Contains(t, relationSQL, "rel_logical_id in (20)")
@@ -1348,7 +1350,7 @@ func TestMaintainOrphanObjectPrivilegesPage(t *testing.T) {
 		require.Contains(t, deleteSQL, "limit 1000")
 	})
 
-	t.Run("full page advances examined-row cursor", func(t *testing.T) {
+	t.Run("full page advances examined physical cursor", func(t *testing.T) {
 		candidates := make([]OrphanPrivilegeKey, orphanPrivilegePageSize)
 		liveIDs := make([]uint64, orphanPrivilegePageSize)
 		for i := range candidates {
@@ -1361,18 +1363,17 @@ func TestMaintainOrphanObjectPrivilegesPage(t *testing.T) {
 		highWater := OrphanPrivilegeKey{
 			RoleID: 2, ObjectType: "database", ObjectID: 2000, PrivilegeID: 1, PrivilegeLevel: "d",
 		}
+		cursor := OrphanPrivilegeKey{RoleID: 0}
 		initial := OrphanPrivilegeScan{
 			Initialized: true,
 			CursorValid: true,
-			Cursor: OrphanPrivilegeKey{
-				RoleID: 0, ObjectType: "", ObjectID: 0, PrivilegeID: 0, PrivilegeLevel: "",
-			},
-			HighWater: highWater,
+			Cursor:      orphanPrivilegePhysicalKey(cursor),
+			HighWater:   orphanPrivilegePhysicalKey(highWater),
 		}
 		var candidateSQL string
 		exec := executor.NewMemTxnExecutor(func(sql string) (executor.Result, error) {
 			switch {
-			case strings.HasPrefix(sql, "select "+orphanPrivilegeKeyColumns+" from mo_catalog.mo_role_privs where"):
+			case strings.HasPrefix(sql, "select "+orphanPrivilegeCandidateColumns+" from mo_catalog.mo_role_privs where"):
 				candidateSQL = sql
 				return newOrphanPrivilegeKeyResult(t, candidates), nil
 			case strings.HasPrefix(sql, "select dat_id from mo_catalog.mo_database"):
@@ -1385,17 +1386,59 @@ func TestMaintainOrphanObjectPrivilegesPage(t *testing.T) {
 		next, complete, err := MaintainOrphanObjectPrivilegesPage(exec, accountID, initial)
 		require.NoError(t, err)
 		require.False(t, complete)
-		require.Equal(t, candidates[len(candidates)-1], next.Cursor)
+		require.Equal(t, orphanPrivilegePhysicalKey(candidates[len(candidates)-1]), next.Cursor)
 		require.True(t, next.CursorValid)
-		require.Equal(t, highWater, next.HighWater)
-		require.Contains(t, candidateSQL, "> (0,'',0,0,'')")
-		require.Contains(t, candidateSQL, "<= (2,'database',2000,1,'d')")
-		require.Contains(t, candidateSQL, "limit 1000")
+		require.Equal(t, orphanPrivilegePhysicalKey(highWater), next.HighWater)
+		require.Contains(t, candidateSQL, "__mo_cpkey_col > unhex('"+orphanPrivilegePhysicalKey(cursor)+"')")
+		require.Contains(t, candidateSQL, "__mo_cpkey_col <= unhex('"+orphanPrivilegePhysicalKey(highWater)+"')")
+		require.Contains(t, candidateSQL, "order by __mo_cpkey_col limit 1000")
+	})
+
+	t.Run("ring scans randomized suffix before wrapping to prefix", func(t *testing.T) {
+		orphan := OrphanPrivilegeKey{
+			RoleID: 2, ObjectType: "database", ObjectID: 2001, PrivilegeID: 1, PrivilegeLevel: "d",
+		}
+		prefix := OrphanPrivilegeKey{RoleID: 1, ObjectType: "account", PrivilegeLevel: "*"}
+		start := orphanPrivilegePhysicalKey(orphan)
+		reads := 0
+		var statements []string
+		exec := executor.NewMemTxnExecutor(func(sql string) (executor.Result, error) {
+			statements = append(statements, sql)
+			switch {
+			case strings.Contains(sql, "order by "+orphanPrivilegePhysicalKeyColumn+" desc"):
+				return newOrphanPrivilegeKeyResult(t, []OrphanPrivilegeKey{orphan}), nil
+			case strings.HasPrefix(sql, "select "+orphanPrivilegeCandidateColumns):
+				reads++
+				if reads == 1 {
+					return newOrphanPrivilegeKeyResult(t, []OrphanPrivilegeKey{orphan}), nil
+				}
+				return newOrphanPrivilegeKeyResult(t, []OrphanPrivilegeKey{prefix}), nil
+			case strings.HasPrefix(sql, "select dat_id from mo_catalog.mo_database"):
+				return executor.Result{}, nil
+			case strings.HasPrefix(sql, "delete from mo_catalog.mo_role_privs"):
+				return executor.Result{AffectedRows: 1}, nil
+			default:
+				return executor.Result{}, fmt.Errorf("unexpected sql: %s", sql)
+			}
+		}, nil)
+
+		next, complete, err := MaintainOrphanObjectPrivilegesPage(exec, accountID, OrphanPrivilegeScan{Start: start})
+		require.NoError(t, err)
+		require.False(t, complete)
+		require.True(t, next.Wrapped)
+		require.False(t, next.CursorValid)
+		require.Contains(t, statements[1], "__mo_cpkey_col >= unhex('"+start+"')")
+
+		next, complete, err = MaintainOrphanObjectPrivilegesPage(exec, accountID, next)
+		require.NoError(t, err)
+		require.True(t, complete)
+		require.Zero(t, next)
+		require.Contains(t, statements[len(statements)-1], "__mo_cpkey_col < unhex('"+start+"')")
 	})
 
 	t.Run("empty table completes without delete", func(t *testing.T) {
 		exec := executor.NewMemTxnExecutor(func(sql string) (executor.Result, error) {
-			require.Contains(t, sql, "order by "+orphanPrivilegeKeyColumnsDescending+" limit 1")
+			require.Contains(t, sql, "order by "+orphanPrivilegePhysicalKeyColumn+" desc limit 1")
 			return executor.Result{}, nil
 		}, nil)
 		next, complete, err := MaintainOrphanObjectPrivilegesPage(exec, accountID, OrphanPrivilegeScan{})
@@ -1414,9 +1457,14 @@ func TestMaintainOrphanObjectPrivilegesPage(t *testing.T) {
 		}, nil)
 		_, _, err := MaintainOrphanObjectPrivilegesPage(exec, accountID, OrphanPrivilegeScan{
 			Initialized: true,
-			HighWater:   OrphanPrivilegeKey{RoleID: math.MaxInt32},
+			HighWater:   orphanPrivilegePhysicalKey(OrphanPrivilegeKey{RoleID: 2000}),
 		})
 		require.ErrorContains(t, err, "candidate page has too many rows")
+	})
+
+	t.Run("rejects malformed physical cursor", func(t *testing.T) {
+		_, _, err := MaintainOrphanObjectPrivilegesPage(nil, accountID, OrphanPrivilegeScan{Start: "not-hex"})
+		require.ErrorContains(t, err, "invalid orphan privilege physical key")
 	})
 }
 
@@ -1430,6 +1478,7 @@ func newOrphanPrivilegeKeyResult(t *testing.T, keys []OrphanPrivilegeKey) execut
 		types.T_uint64.ToType(),
 		types.T_int32.ToType(),
 		types.T_varchar.ToType(),
+		types.T_varchar.ToType(),
 	}, mp)
 	result.NewBatchWithRowCount(len(keys))
 	roleIDs := make([]int32, len(keys))
@@ -1437,19 +1486,36 @@ func newOrphanPrivilegeKeyResult(t *testing.T, keys []OrphanPrivilegeKey) execut
 	objectIDs := make([]uint64, len(keys))
 	privilegeIDs := make([]int32, len(keys))
 	privilegeLevels := make([]string, len(keys))
+	physicalKeys := make([]string, len(keys))
 	for i, key := range keys {
 		roleIDs[i] = key.RoleID
 		objectTypes[i] = key.ObjectType
 		objectIDs[i] = key.ObjectID
 		privilegeIDs[i] = key.PrivilegeID
 		privilegeLevels[i] = key.PrivilegeLevel
+		physicalKeys[i] = orphanPrivilegePhysicalKey(key)
 	}
 	executor.AppendFixedRows(result, 0, roleIDs)
 	require.NoError(t, executor.AppendStringRows(result, 1, objectTypes))
 	executor.AppendFixedRows(result, 2, objectIDs)
 	executor.AppendFixedRows(result, 3, privilegeIDs)
 	require.NoError(t, executor.AppendStringRows(result, 4, privilegeLevels))
+	require.NoError(t, executor.AppendStringRows(result, 5, physicalKeys))
 	return result.GetResult()
+}
+
+func orphanPrivilegePhysicalKey(key OrphanPrivilegeKey) string {
+	var buffer [OrphanPrivilegePhysicalKeyMaxSize]byte
+	packer := types.NewPackerWithFixedBuffer(buffer[:])
+	packer.EncodeInt32(key.RoleID)
+	packer.EncodeStringType([]byte(key.ObjectType))
+	packer.EncodeUint64(key.ObjectID)
+	packer.EncodeInt32(key.PrivilegeID)
+	packer.EncodeStringType([]byte(key.PrivilegeLevel))
+	if packer.Err() != nil {
+		panic(packer.Err())
+	}
+	return hex.EncodeToString(packer.GetBuf())
 }
 
 func newOrphanPrivilegeObjectIDResult(t *testing.T, ids ...uint64) executor.Result {

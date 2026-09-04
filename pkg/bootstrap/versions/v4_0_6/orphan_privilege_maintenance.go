@@ -15,6 +15,7 @@
 package v4_0_6
 
 import (
+	"encoding/hex"
 	"fmt"
 	"strings"
 
@@ -27,9 +28,13 @@ import (
 const orphanPrivilegePageSize = 1000
 
 const (
-	orphanPrivilegeKeyColumns           = "role_id,obj_type,obj_id,privilege_id,privilege_level"
-	orphanPrivilegeKeyColumnsDescending = "role_id desc,obj_type desc,obj_id desc," +
-		"privilege_id desc,privilege_level desc"
+	orphanPrivilegeKeyColumns        = "role_id,obj_type,obj_id,privilege_id,privilege_level"
+	orphanPrivilegePhysicalKeyColumn = "__mo_cpkey_col"
+	orphanPrivilegeCandidateColumns  = orphanPrivilegeKeyColumns + ",hex(" + orphanPrivilegePhysicalKeyColumn + ")"
+
+	// OrphanPrivilegePhysicalKeyMaxSize is the maximum serial() encoding size
+	// of the five mo_role_privs primary-key columns.
+	OrphanPrivilegePhysicalKeyMaxSize = 956
 )
 
 // OrphanPrivilegeKey is the stable mo_role_privs primary key used by the
@@ -42,14 +47,22 @@ type OrphanPrivilegeKey struct {
 	PrivilegeLevel string
 }
 
-// OrphanPrivilegeScan is process-local progress for one finite scan. HighWater
-// freezes the set visible at scan start; Cursor always identifies the last row
-// examined, whether that row was deleted or preserved.
+// OrphanPrivilegeScan is process-local progress for one finite physical-key
+// ring scan. HighWater freezes the set visible at scan start. Start chooses the
+// first ring segment after a process restart. Cursor always identifies the last
+// physical key examined, whether that row was deleted or preserved.
 type OrphanPrivilegeScan struct {
 	Initialized bool
+	Wrapped     bool
 	CursorValid bool
-	Cursor      OrphanPrivilegeKey
-	HighWater   OrphanPrivilegeKey
+	Start       string
+	Cursor      string
+	HighWater   string
+}
+
+type orphanPrivilegeCandidate struct {
+	OrphanPrivilegeKey
+	physicalKey string
 }
 
 type orphanPrivilegeKind uint8
@@ -61,9 +74,11 @@ const (
 )
 
 // MaintainOrphanObjectPrivilegesPage examines at most orphanPrivilegePageSize
-// rows from a stable primary-key range and deletes only confirmed orphans from
-// that candidate set. It has no durable completion marker: callers start a new
-// frozen scan after completion so mixed-version writers remain repairable.
+// rows from a stable physical-primary-key range and deletes only confirmed
+// orphans from that candidate set. It has no durable completion marker: callers
+// start a new frozen ring after completion so mixed-version writers remain
+// repairable. Start must be a hex-encoded physical-key threshold; an empty Start
+// scans from the physical minimum without a wrap segment.
 func MaintainOrphanObjectPrivilegesPage(
 	txn executor.TxnExecutor,
 	accountID uint32,
@@ -71,6 +86,9 @@ func MaintainOrphanObjectPrivilegesPage(
 ) (next OrphanPrivilegeScan, scanComplete bool, err error) {
 	option := executor.StatementOption{}.WithAccountID(accountID)
 	next = scan
+	if err := validateOrphanPrivilegePhysicalKey(next.Start); err != nil {
+		return scan, false, err
+	}
 	if !next.Initialized {
 		highWater, found, err := loadOrphanPrivilegeHighWater(txn, option)
 		if err != nil {
@@ -80,12 +98,23 @@ func MaintainOrphanObjectPrivilegesPage(
 			return OrphanPrivilegeScan{}, true, nil
 		}
 		next.Initialized = true
-		next.HighWater = highWater
+		next.HighWater = highWater.physicalKey
 	}
 
 	candidates, err := loadOrphanPrivilegeCandidates(txn, option, next)
 	if err != nil {
 		return scan, false, err
+	}
+	if len(candidates) == 0 && !next.Wrapped && next.Start != "" {
+		// The randomized threshold can sort above HighWater. Wrap immediately;
+		// the empty suffix did not inspect a privilege candidate.
+		next.Wrapped = true
+		next.CursorValid = false
+		next.Cursor = ""
+		candidates, err = loadOrphanPrivilegeCandidates(txn, option, next)
+		if err != nil {
+			return scan, false, err
+		}
 	}
 	if len(candidates) == 0 {
 		return OrphanPrivilegeScan{}, true, nil
@@ -104,14 +133,14 @@ func MaintainOrphanObjectPrivilegesPage(
 
 	orphans := make([]OrphanPrivilegeKey, 0, len(candidates))
 	for _, candidate := range candidates {
-		switch classifyOrphanPrivilege(candidate) {
+		switch classifyOrphanPrivilege(candidate.OrphanPrivilegeKey) {
 		case orphanPrivilegeDatabase:
 			if _, live := liveDatabaseIDs[candidate.ObjectID]; !live {
-				orphans = append(orphans, candidate)
+				orphans = append(orphans, candidate.OrphanPrivilegeKey)
 			}
 		case orphanPrivilegeRelation:
 			if _, live := liveRelationIDs[candidate.ObjectID]; !live {
-				orphans = append(orphans, candidate)
+				orphans = append(orphans, candidate.OrphanPrivilegeKey)
 			}
 		}
 	}
@@ -128,11 +157,18 @@ func MaintainOrphanObjectPrivilegesPage(
 		}
 	}
 
-	last := candidates[len(candidates)-1]
-	if len(candidates) < orphanPrivilegePageSize || last == next.HighWater {
+	lastPhysicalKey := candidates[len(candidates)-1].physicalKey
+	segmentComplete := len(candidates) < orphanPrivilegePageSize || lastPhysicalKey == next.HighWater
+	if segmentComplete {
+		if !next.Wrapped && next.Start != "" {
+			next.Wrapped = true
+			next.CursorValid = false
+			next.Cursor = ""
+			return next, false, nil
+		}
 		return OrphanPrivilegeScan{}, true, nil
 	}
-	next.Cursor = last
+	next.Cursor = lastPhysicalKey
 	next.CursorValid = true
 	return next, false, nil
 }
@@ -140,22 +176,22 @@ func MaintainOrphanObjectPrivilegesPage(
 func loadOrphanPrivilegeHighWater(
 	txn executor.TxnExecutor,
 	option executor.StatementOption,
-) (OrphanPrivilegeKey, bool, error) {
+) (orphanPrivilegeCandidate, bool, error) {
 	res, err := txn.Exec(
-		"select "+orphanPrivilegeKeyColumns+" from mo_catalog.mo_role_privs order by "+
-			orphanPrivilegeKeyColumnsDescending+" limit 1",
+		"select "+orphanPrivilegeCandidateColumns+" from mo_catalog.mo_role_privs order by "+
+			orphanPrivilegePhysicalKeyColumn+" desc limit 1",
 		option,
 	)
 	if err != nil {
-		return OrphanPrivilegeKey{}, false, err
+		return orphanPrivilegeCandidate{}, false, err
 	}
 	defer res.Close()
-	rows, err := decodeOrphanPrivilegeKeys(res, 1)
+	rows, err := decodeOrphanPrivilegeCandidates(res, 1)
 	if err != nil {
-		return OrphanPrivilegeKey{}, false, err
+		return orphanPrivilegeCandidate{}, false, err
 	}
 	if len(rows) == 0 {
-		return OrphanPrivilegeKey{}, false, nil
+		return orphanPrivilegeCandidate{}, false, nil
 	}
 	return rows[0], true, nil
 }
@@ -164,24 +200,64 @@ func loadOrphanPrivilegeCandidates(
 	txn executor.TxnExecutor,
 	option executor.StatementOption,
 	scan OrphanPrivilegeScan,
-) ([]OrphanPrivilegeKey, error) {
-	where := fmt.Sprintf("(%s) <= %s", orphanPrivilegeKeyColumns, orphanPrivilegeKeyTuple(scan.HighWater))
+) ([]orphanPrivilegeCandidate, error) {
+	highWater, err := orphanPrivilegePhysicalKeySQL(scan.HighWater)
+	if err != nil {
+		return nil, err
+	}
+	where := orphanPrivilegePhysicalKeyColumn + " <= " + highWater
+	if scan.Wrapped {
+		start, err := orphanPrivilegePhysicalKeySQL(scan.Start)
+		if err != nil {
+			return nil, err
+		}
+		where += " and " + orphanPrivilegePhysicalKeyColumn + " < " + start
+	} else if scan.Start != "" {
+		start, err := orphanPrivilegePhysicalKeySQL(scan.Start)
+		if err != nil {
+			return nil, err
+		}
+		where += " and " + orphanPrivilegePhysicalKeyColumn + " >= " + start
+	}
 	if scan.CursorValid {
-		where = fmt.Sprintf("(%s) > %s and %s", orphanPrivilegeKeyColumns, orphanPrivilegeKeyTuple(scan.Cursor), where)
+		cursor, err := orphanPrivilegePhysicalKeySQL(scan.Cursor)
+		if err != nil {
+			return nil, err
+		}
+		where += " and " + orphanPrivilegePhysicalKeyColumn + " > " + cursor
 	}
 	res, err := txn.Exec(fmt.Sprintf(
 		"select %s from mo_catalog.mo_role_privs where %s order by %s limit %d",
-		orphanPrivilegeKeyColumns, where, orphanPrivilegeKeyColumns, orphanPrivilegePageSize,
+		orphanPrivilegeCandidateColumns, where, orphanPrivilegePhysicalKeyColumn, orphanPrivilegePageSize,
 	), option)
 	if err != nil {
 		return nil, err
 	}
 	defer res.Close()
-	return decodeOrphanPrivilegeKeys(res, orphanPrivilegePageSize)
+	return decodeOrphanPrivilegeCandidates(res, orphanPrivilegePageSize)
 }
 
-func decodeOrphanPrivilegeKeys(res executor.Result, limit int) ([]OrphanPrivilegeKey, error) {
-	keys := make([]OrphanPrivilegeKey, 0, limit)
+func orphanPrivilegePhysicalKeySQL(value string) (string, error) {
+	if err := validateOrphanPrivilegePhysicalKey(value); err != nil {
+		return "", err
+	}
+	return "unhex('" + value + "')", nil
+}
+
+func validateOrphanPrivilegePhysicalKey(value string) error {
+	if len(value) > OrphanPrivilegePhysicalKeyMaxSize*2 {
+		return moerr.NewInternalErrorNoCtxf(
+			"orphan privilege physical key is %d bytes, maximum is %d",
+			len(value)/2, OrphanPrivilegePhysicalKeyMaxSize)
+	}
+	if _, err := hex.DecodeString(value); err != nil {
+		return moerr.NewInternalErrorNoCtxf("invalid orphan privilege physical key: %v", err)
+	}
+	return nil
+}
+
+func decodeOrphanPrivilegeCandidates(res executor.Result, limit int) ([]orphanPrivilegeCandidate, error) {
+	keys := make([]orphanPrivilegeCandidate, 0, limit)
 	var decodeErr error
 	res.ReadRows(func(rows int, columns []*vector.Vector) bool {
 		if rows == 0 {
@@ -193,9 +269,9 @@ func decodeOrphanPrivilegeKeys(res executor.Result, limit int) ([]OrphanPrivileg
 				rows, len(keys), limit)
 			return false
 		}
-		if len(columns) != 5 {
+		if len(columns) != 6 {
 			decodeErr = moerr.NewInternalErrorNoCtxf(
-				"orphan privilege candidate page returned %d columns, expected 5", len(columns))
+				"orphan privilege candidate page returned %d columns, expected 6", len(columns))
 			return false
 		}
 		for row := 0; row < rows; row++ {
@@ -206,12 +282,20 @@ func decodeOrphanPrivilegeKeys(res executor.Result, limit int) ([]OrphanPrivileg
 					return false
 				}
 			}
-			keys = append(keys, OrphanPrivilegeKey{
-				RoleID:         vector.GetFixedAtWithTypeCheck[int32](columns[0], row),
-				ObjectType:     columns[1].GetStringAt(row),
-				ObjectID:       vector.GetFixedAtWithTypeCheck[uint64](columns[2], row),
-				PrivilegeID:    vector.GetFixedAtWithTypeCheck[int32](columns[3], row),
-				PrivilegeLevel: columns[4].GetStringAt(row),
+			physicalKey := columns[5].GetStringAt(row)
+			if err := validateOrphanPrivilegePhysicalKey(physicalKey); err != nil {
+				decodeErr = err
+				return false
+			}
+			keys = append(keys, orphanPrivilegeCandidate{
+				OrphanPrivilegeKey: OrphanPrivilegeKey{
+					RoleID:         vector.GetFixedAtWithTypeCheck[int32](columns[0], row),
+					ObjectType:     columns[1].GetStringAt(row),
+					ObjectID:       vector.GetFixedAtWithTypeCheck[uint64](columns[2], row),
+					PrivilegeID:    vector.GetFixedAtWithTypeCheck[int32](columns[3], row),
+					PrivilegeLevel: columns[4].GetStringAt(row),
+				},
+				physicalKey: physicalKey,
 			})
 		}
 		return true
@@ -219,11 +303,11 @@ func decodeOrphanPrivilegeKeys(res executor.Result, limit int) ([]OrphanPrivileg
 	return keys, decodeErr
 }
 
-func candidateObjectIDs(candidates []OrphanPrivilegeKey, kind orphanPrivilegeKind) []uint64 {
+func candidateObjectIDs(candidates []orphanPrivilegeCandidate, kind orphanPrivilegeKind) []uint64 {
 	seen := make(map[uint64]struct{}, len(candidates))
 	ids := make([]uint64, 0, len(candidates))
 	for _, candidate := range candidates {
-		if classifyOrphanPrivilege(candidate) != kind {
+		if classifyOrphanPrivilege(candidate.OrphanPrivilegeKey) != kind {
 			continue
 		}
 		if _, ok := seen[candidate.ObjectID]; ok {

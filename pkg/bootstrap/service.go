@@ -153,6 +153,7 @@ type service struct {
 		orphanPrivilegeMaintenanceWorkerRunning atomic.Bool
 		orphanPrivilegeMaintenanceRunning       atomic.Bool
 		orphanPrivilegeMaintenanceState         orphanPrivilegeMaintenanceState
+		orphanPrivilegeMaintenanceStart         func() string
 		kek                                     string
 	}
 }

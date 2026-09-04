@@ -16,6 +16,7 @@ package bootstrap
 
 import (
 	"context"
+	"encoding/hex"
 	"fmt"
 	"strings"
 	"testing"
@@ -79,6 +80,7 @@ func TestMaintainOrphanObjectPrivilegesFiniteAccountRound(t *testing.T) {
 		}),
 		func(s *service) {},
 	)
+	service.upgrade.orphanPrivilegeMaintenanceStart = func() string { return "0102" }
 	service.upgrade.orphanPrivilegeMaintenanceState = orphanPrivilegeMaintenanceState{
 		restartSeed:      1,
 		roundInitialized: true,
@@ -119,9 +121,10 @@ func TestMaintainOrphanObjectPrivilegesFinishesTenantHighWaterBeforeAdvancing(t 
 			case strings.HasPrefix(sql, "select account_id from mo_catalog.mo_account"):
 				lookupCount++
 				return buildMaintenanceAccountRows(10), nil
-			case strings.Contains(sql, "order by role_id desc"):
+			case strings.Contains(sql, "order by __mo_cpkey_col desc"):
 				return buildMaintenancePrivilegeRows(t, highWater), nil
-			case strings.HasPrefix(sql, "select role_id,obj_type,obj_id,privilege_id,privilege_level "):
+			case strings.HasPrefix(sql,
+				"select role_id,obj_type,obj_id,privilege_id,privilege_level,hex(__mo_cpkey_col) "):
 				candidateReads++
 				if candidateReads == 1 {
 					return buildMaintenancePrivilegeRows(t, candidatePage...), nil
@@ -143,7 +146,7 @@ func TestMaintainOrphanObjectPrivilegesFinishesTenantHighWaterBeforeAdvancing(t 
 	require.NoError(t, service.maintainOrphanObjectPrivileges(t.Context()))
 	state := service.upgrade.orphanPrivilegeMaintenanceState
 	require.True(t, state.tenantSelected)
-	require.Equal(t, int32(999), state.tenantScan.Cursor.RoleID)
+	require.Equal(t, maintenancePhysicalKey(candidatePage[len(candidatePage)-1]), state.tenantScan.Cursor)
 	require.Equal(t, 1, lookupCount)
 
 	require.NoError(t, service.maintainOrphanObjectPrivileges(t.Context()))
@@ -193,6 +196,81 @@ func TestOrphanPrivilegeMaintenanceRestartSeedAvoidsFixedZeroBias(t *testing.T) 
 	_, onlyZero := starts[0]
 	require.False(t, onlyZero && len(starts) == 1)
 	require.Zero(t, orphanPrivilegeMaintenanceRoundStart(1, 0, 0))
+}
+
+func TestMaintainOrphanObjectPrivilegesRestartCanReachOrphanAfterLivePrefix(t *testing.T) {
+	const tenantID = int32(10)
+	live := make([]v4_0_6.OrphanPrivilegeKey, 1000)
+	liveIDs := make([]uint64, len(live))
+	for i := range live {
+		live[i] = v4_0_6.OrphanPrivilegeKey{
+			RoleID:         1,
+			ObjectType:     "database",
+			ObjectID:       uint64(i + 1),
+			PrivilegeID:    1,
+			PrivilegeLevel: "d",
+		}
+		liveIDs[i] = live[i].ObjectID
+	}
+	orphan := v4_0_6.OrphanPrivilegeKey{
+		RoleID:         2,
+		ObjectType:     "database",
+		ObjectID:       2000,
+		PrivilegeID:    1,
+		PrivilegeLevel: "d",
+	}
+	orphanPhysicalKey := maintenancePhysicalKey(orphan)
+	orphanDeleted := false
+	newRestartedService := func(start string) *service {
+		s := newServiceForTest(
+			"",
+			&memLocker{},
+			clock.NewHLCClock(func() int64 { return 0 }, 0),
+			nil,
+			executor.NewMemExecutor(func(sql string) (executor.Result, error) {
+				switch {
+				case sql == "select account_id from mo_catalog.mo_account order by account_id desc limit 1":
+					return buildMaintenanceAccountRows(tenantID), nil
+				case strings.HasPrefix(sql, "select account_id from mo_catalog.mo_account where"):
+					return buildMaintenanceAccountRows(tenantID), nil
+				case strings.Contains(sql, "order by __mo_cpkey_col desc"):
+					return buildMaintenancePrivilegeRows(t, orphan), nil
+				case strings.HasPrefix(sql,
+					"select role_id,obj_type,obj_id,privilege_id,privilege_level,hex(__mo_cpkey_col) "):
+					if strings.Contains(sql, ">= unhex('"+orphanPhysicalKey+"')") {
+						if orphanDeleted {
+							return executor.Result{}, nil
+						}
+						return buildMaintenancePrivilegeRows(t, orphan), nil
+					}
+					return buildMaintenancePrivilegeRows(t, live...), nil
+				case strings.HasPrefix(sql, "select dat_id from mo_catalog.mo_database"):
+					return buildMaintenanceObjectIDRows(liveIDs...), nil
+				case strings.HasPrefix(sql, "delete from mo_catalog.mo_role_privs"):
+					require.Contains(t, sql, "(2,'database',2000,1,'d')")
+					orphanDeleted = true
+					return executor.Result{AffectedRows: 1}, nil
+				default:
+					return executor.Result{}, fmt.Errorf("unexpected sql: %s", sql)
+				}
+			}),
+			func(s *service) {},
+		)
+		s.upgrade.orphanPrivilegeMaintenanceStart = func() string { return start }
+		return s
+	}
+
+	firstProcess := newRestartedService("")
+	require.NoError(t, firstProcess.maintainOrphanObjectPrivileges(t.Context()))
+	require.False(t, orphanDeleted)
+	require.True(t, firstProcess.upgrade.orphanPrivilegeMaintenanceState.tenantSelected)
+
+	// Drop every process-local field after one live page. A fresh process whose
+	// random ring starts at the tail must reach the orphan immediately instead
+	// of deterministically replaying the live prefix.
+	secondProcess := newRestartedService(orphanPhysicalKey)
+	require.NoError(t, secondProcess.maintainOrphanObjectPrivileges(t.Context()))
+	require.True(t, orphanDeleted)
 }
 
 func TestMaintainOrphanObjectPrivilegesAdvancesAfterTenantError(t *testing.T) {
@@ -353,6 +431,13 @@ func TestMaintainOrphanObjectPrivilegesSkipsConcurrentLocalPass(t *testing.T) {
 	require.NoError(t, service.maintainOrphanObjectPrivileges(t.Context()))
 }
 
+func buildMaintenanceObjectIDRows(ids ...uint64) executor.Result {
+	result := executor.NewMemResult([]types.Type{types.T_uint64.ToType()}, mpool.MustNewZero())
+	result.NewBatchWithRowCount(len(ids))
+	executor.AppendFixedRows(result, 0, ids)
+	return result.GetResult()
+}
+
 func buildMaintenanceAccountRows(accountID int32) executor.Result {
 	result := executor.NewMemResult([]types.Type{types.T_int32.ToType()}, mpool.MustNewZero())
 	result.NewBatchWithRowCount(1)
@@ -371,6 +456,7 @@ func buildMaintenancePrivilegeRows(
 		types.T_uint64.ToType(),
 		types.T_int32.ToType(),
 		types.T_varchar.ToType(),
+		types.T_varchar.ToType(),
 	}, mpool.MustNewZero())
 	result.NewBatchWithRowCount(len(keys))
 	roleIDs := make([]int32, len(keys))
@@ -378,17 +464,34 @@ func buildMaintenancePrivilegeRows(
 	objectIDs := make([]uint64, len(keys))
 	privilegeIDs := make([]int32, len(keys))
 	privilegeLevels := make([]string, len(keys))
+	physicalKeys := make([]string, len(keys))
 	for i, key := range keys {
 		roleIDs[i] = key.RoleID
 		objectTypes[i] = key.ObjectType
 		objectIDs[i] = key.ObjectID
 		privilegeIDs[i] = key.PrivilegeID
 		privilegeLevels[i] = key.PrivilegeLevel
+		physicalKeys[i] = maintenancePhysicalKey(key)
 	}
 	executor.AppendFixedRows(result, 0, roleIDs)
 	require.NoError(t, executor.AppendStringRows(result, 1, objectTypes))
 	executor.AppendFixedRows(result, 2, objectIDs)
 	executor.AppendFixedRows(result, 3, privilegeIDs)
 	require.NoError(t, executor.AppendStringRows(result, 4, privilegeLevels))
+	require.NoError(t, executor.AppendStringRows(result, 5, physicalKeys))
 	return result.GetResult()
+}
+
+func maintenancePhysicalKey(key v4_0_6.OrphanPrivilegeKey) string {
+	var buffer [v4_0_6.OrphanPrivilegePhysicalKeyMaxSize]byte
+	packer := types.NewPackerWithFixedBuffer(buffer[:])
+	packer.EncodeInt32(key.RoleID)
+	packer.EncodeStringType([]byte(key.ObjectType))
+	packer.EncodeUint64(key.ObjectID)
+	packer.EncodeInt32(key.PrivilegeID)
+	packer.EncodeStringType([]byte(key.PrivilegeLevel))
+	if packer.Err() != nil {
+		panic(packer.Err())
+	}
+	return hex.EncodeToString(packer.GetBuf())
 }

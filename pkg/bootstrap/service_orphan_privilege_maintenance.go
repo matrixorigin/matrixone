@@ -18,6 +18,7 @@ import (
 	"context"
 	cryptorand "crypto/rand"
 	"encoding/binary"
+	"encoding/hex"
 	"fmt"
 	"math"
 	"time"
@@ -25,17 +26,18 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/bootstrap/versions/v4_0_6"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 )
 
-// orphanPrivilegeMaintenanceState is intentionally process-local. A round
-// freezes account IDs at roundHighWater and walks the ring from roundStart back
-// to (but not including) roundStart, so account creation cannot extend a live
-// round. A fresh process chooses an independent start; even if every process is
-// restarted before finishing a round, each existing account has a non-zero,
-// uniformly bounded probability of being selected first and is therefore
-// visited with probability one across repeated restarts.
+// orphanPrivilegeMaintenanceState is intentionally process-local. An account
+// round freezes account IDs at roundHighWater and walks the ring from roundStart
+// back to (but not including) roundStart, so account creation cannot extend a
+// live round. Every selected tenant independently walks a frozen physical-key
+// ring. Fresh processes choose independent account and physical-key starts, so
+// repeated restarts cannot deterministically strand either a tenant or a
+// privilege-key suffix.
 type orphanPrivilegeMaintenanceState struct {
 	restartSeed uint64
 	round       uint64
@@ -59,6 +61,80 @@ func newOrphanPrivilegeMaintenanceRestartSeed() uint64 {
 	// Entropy failure must not restore the old deterministic "always start at
 	// zero" behavior. Wall time is only a degraded seed, not correctness state.
 	return uint64(time.Now().UnixNano())
+}
+
+func newOrphanPrivilegeMaintenancePhysicalStart() string {
+	// The current mo_role_privs composite key has an exact serial() upper bound
+	// of 956 bytes: int32(6) + varchar(16)(131) + uint64(10) + int32(6) +
+	// varchar(100)(803). Half of starts use a valid, magnitude-distributed key
+	// shape so ordinary small role/object IDs are reached efficiently. The raw
+	// half chooses every length in [0,956] and every byte with non-zero
+	// probability, giving every possible physical key a non-zero,
+	// table-size-independent chance to be the next ring threshold after restart.
+	var seedBytes [8]byte
+	seed := uint64(time.Now().UnixNano())
+	if _, err := cryptorand.Read(seedBytes[:]); err == nil {
+		seed = binary.LittleEndian.Uint64(seedBytes[:])
+	}
+	if seed&1 == 0 {
+		return structuredOrphanPrivilegeMaintenancePhysicalStart(seed)
+	}
+	length := int(seed % (v4_0_6.OrphanPrivilegePhysicalKeyMaxSize + 1))
+	value := make([]byte, length)
+	if _, err := cryptorand.Read(value); err != nil {
+		// Keep the degraded path non-constant if the host entropy source fails.
+		// It remains bounded; uninterrupted scans still deterministically close
+		// their physical-key ring.
+		for i := 0; i < len(value); i += 8 {
+			mixed := nextOrphanPrivilegeMaintenanceRandom(&seed)
+			for j := 0; j < 8 && i+j < len(value); j++ {
+				value[i+j] = byte(mixed >> (8 * j))
+			}
+		}
+	}
+	return hex.EncodeToString(value)
+}
+
+func structuredOrphanPrivilegeMaintenancePhysicalStart(seed uint64) string {
+	objectTypes := [...]string{"account", "database", "table", "view"}
+	privilegeLevels := [...]string{"", "*", "*.*", "d", "d.*", "d.t", "t"}
+	roleID := int32(orphanPrivilegeMaintenanceMagnitude(&seed, 31))
+	objectType := objectTypes[nextOrphanPrivilegeMaintenanceRandom(&seed)%uint64(len(objectTypes))]
+	objectID := orphanPrivilegeMaintenanceMagnitude(&seed, 64)
+	privilegeID := int32(orphanPrivilegeMaintenanceMagnitude(&seed, 31))
+	privilegeLevel := privilegeLevels[nextOrphanPrivilegeMaintenanceRandom(&seed)%uint64(len(privilegeLevels))]
+
+	var buffer [v4_0_6.OrphanPrivilegePhysicalKeyMaxSize]byte
+	packer := types.NewPackerWithFixedBuffer(buffer[:])
+	packer.EncodeInt32(roleID)
+	packer.EncodeStringType([]byte(objectType))
+	packer.EncodeUint64(objectID)
+	packer.EncodeInt32(privilegeID)
+	packer.EncodeStringType([]byte(privilegeLevel))
+	if packer.Err() != nil {
+		return ""
+	}
+	return hex.EncodeToString(packer.GetBuf())
+}
+
+func orphanPrivilegeMaintenanceMagnitude(seed *uint64, bits uint64) uint64 {
+	width := nextOrphanPrivilegeMaintenanceRandom(seed) % (bits + 1)
+	value := nextOrphanPrivilegeMaintenanceRandom(seed)
+	if width == 64 {
+		return value
+	}
+	if width == 0 {
+		return 0
+	}
+	return value & (uint64(1)<<width - 1)
+}
+
+func nextOrphanPrivilegeMaintenanceRandom(seed *uint64) uint64 {
+	*seed += 0x9e3779b97f4a7c15
+	value := *seed
+	value = (value ^ (value >> 30)) * 0xbf58476d1ce4e5b9
+	value = (value ^ (value >> 27)) * 0x94d049bb133111eb
+	return value ^ (value >> 31)
 }
 
 func orphanPrivilegeMaintenanceRoundStart(seed, round uint64, highWater int32) int32 {
@@ -182,7 +258,15 @@ func (s *service) selectNextOrphanPrivilegeMaintenanceTenant(ctx context.Context
 	if err != nil {
 		return false, err
 	}
-	// Publish lookup progress only after its transaction committed.
+	if found {
+		start := newOrphanPrivilegeMaintenancePhysicalStart()
+		if s.upgrade.orphanPrivilegeMaintenanceStart != nil {
+			start = s.upgrade.orphanPrivilegeMaintenanceStart()
+		}
+		next.tenantScan.Start = start
+	}
+	// Publish lookup and randomized tenant-ring progress only after the account
+	// transaction committed.
 	s.upgrade.orphanPrivilegeMaintenanceState = next
 	return found, nil
 }

@@ -19,6 +19,9 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"regexp"
+	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -121,7 +124,7 @@ func TestV406MaintenanceCleansHistoricalOrphanObjectPrivileges(t *testing.T) {
 			maxObjectID + 1000005,
 		}
 		malformedControlID := maxObjectID + 1000006
-		const bulkDatabaseOrphanCount = uint64(1001)
+		const bulkDatabaseOrphanCount = uint64(10036)
 		bulkDatabaseOrphanStart := maxObjectID + 2000000
 
 		copyRolePrivilegeRangeForUpgradeTest(
@@ -166,6 +169,62 @@ func TestV406MaintenanceCleansHistoricalOrphanObjectPrivileges(t *testing.T) {
 			t, ctx, conn, roleName, []uint64{malformedControlID},
 		))
 
+		var highWaterPhysicalKey string
+		require.NoError(t, conn.QueryRowContext(ctx,
+			"select hex(__mo_cpkey_col) from mo_catalog.mo_role_privs "+
+				"order by __mo_cpkey_col desc limit 1",
+		).Scan(&highWaterPhysicalKey))
+		highWaterPlan := queryOrphanPrivilegeExplainAnalyze(t, ctx, conn,
+			"select role_id,obj_type,obj_id,privilege_id,privilege_level,hex(__mo_cpkey_col) "+
+				"from mo_catalog.mo_role_privs order by __mo_cpkey_col desc limit 1")
+		physicalPlan := func(limit int) string {
+			return queryOrphanPrivilegeExplainAnalyze(t, ctx, conn, fmt.Sprintf(
+				"select role_id,obj_type,obj_id,privilege_id,privilege_level,hex(__mo_cpkey_col) "+
+					"from mo_catalog.mo_role_privs where __mo_cpkey_col <= unhex('%s') "+
+					"order by __mo_cpkey_col limit %d", highWaterPhysicalKey, limit))
+		}
+		oneRowPlan := physicalPlan(1)
+		pagePlan := physicalPlan(1000)
+		oneRowScanInput := orphanPrivilegeTableScanInputRows(t, oneRowPlan)
+		pageScanInput := orphanPrivilegeTableScanInputRows(t, pagePlan)
+		oneRowScanBlocks := orphanPrivilegeTableScanBlocks(t, oneRowPlan)
+		pageScanBlocks := orphanPrivilegeTableScanBlocks(t, pagePlan)
+		require.Contains(t, highWaterPlan, "Index Reader Param:")
+		require.Contains(t, highWaterPlan, "Limit: 1")
+		require.LessOrEqual(t, orphanPrivilegeTableScanInputRows(t, highWaterPlan), oneRowScanInput,
+			"descending high-water discovery must retain one-row physical pushdown; plan:\n%s", highWaterPlan)
+		require.LessOrEqual(t, orphanPrivilegeTableScanBlocks(t, highWaterPlan), oneRowScanBlocks,
+			"descending high-water discovery must retain bounded read-block behavior; plan:\n%s", highWaterPlan)
+		require.Contains(t, oneRowPlan, "Index Reader Param:")
+		require.Contains(t, oneRowPlan, "Limit: 1")
+		require.Contains(t, pagePlan, "Index Reader Param:")
+		require.Contains(t, pagePlan, "Limit: 1000")
+		require.LessOrEqual(t, pageScanInput, oneRowScanInput+1000,
+			"the 1,000-row physical limit may add at most one bounded reader page over the live-row baseline; plan:\n%s",
+			pagePlan)
+		require.Less(t, pageScanInput, int(bulkDatabaseOrphanCount),
+			"the candidate scan must not read the complete 10,036-row object; plan:\n%s", pagePlan)
+		require.LessOrEqual(t, pageScanBlocks, oneRowScanBlocks+1,
+			"the 1,000-row physical limit must keep the read-block count near the one-row baseline; plan:\n%s",
+			pagePlan)
+
+		var cursorPhysicalKey string
+		require.NoError(t, conn.QueryRowContext(ctx,
+			fmt.Sprintf("select hex(__mo_cpkey_col) from mo_catalog.mo_role_privs "+
+				"where obj_id = %d limit 1", bulkDatabaseOrphanStart+500),
+		).Scan(&cursorPhysicalKey))
+		cursorPlan := queryOrphanPrivilegeExplainAnalyze(t, ctx, conn, fmt.Sprintf(
+			"select role_id,obj_type,obj_id,privilege_id,privilege_level,hex(__mo_cpkey_col) "+
+				"from mo_catalog.mo_role_privs where __mo_cpkey_col > unhex('%s') "+
+				"and __mo_cpkey_col <= unhex('%s') order by __mo_cpkey_col limit 1000",
+			cursorPhysicalKey, highWaterPhysicalKey))
+		require.Contains(t, cursorPlan, "Index Reader Param:")
+		require.Contains(t, cursorPlan, "Limit: 1000")
+		require.LessOrEqual(t, orphanPrivilegeTableScanInputRows(t, cursorPlan), oneRowScanInput+1000,
+			"physical cursor bounds must retain ordered-limit pushdown; plan:\n%s", cursorPlan)
+		require.LessOrEqual(t, orphanPrivilegeTableScanBlocks(t, cursorPlan), oneRowScanBlocks+1,
+			"physical cursor bounds must retain bounded read-block behavior; plan:\n%s", cursorPlan)
+
 		countOrphans := func() int {
 			return countRolePrivilegesByObjectIDs(t, ctx, conn, roleName, orphanIDs) +
 				countRolePrivilegesByObjectIDRange(
@@ -208,7 +267,7 @@ func TestV406MaintenanceCleansHistoricalOrphanObjectPrivileges(t *testing.T) {
 		previousOrphans := initialOrphans
 		committedSteps := 0
 		ordinaryDropDone := false
-		for !completed && committedSteps < 20 {
+		for !completed && committedSteps < 30 {
 			completed, err = runMaintenanceStep(false)
 			require.NoError(t, err)
 			committedSteps++
@@ -417,6 +476,48 @@ func runOrphanPrivilegeMaintenancePage(
 		*scan = nextScan
 	}
 	return clean, err
+}
+
+func orphanPrivilegeTableScanInputRows(t *testing.T, plan string) int {
+	t.Helper()
+	matches := regexp.MustCompile(
+		`(?s)Table Scan on mo_catalog\.mo_role_privs\s+Analyze:.*?inputRows=([0-9]+)`,
+	).FindStringSubmatch(plan)
+	require.Len(t, matches, 2, "missing mo_role_privs Table Scan metrics in plan:\n%s", plan)
+	rows, err := strconv.Atoi(matches[1])
+	require.NoError(t, err)
+	return rows
+}
+
+func orphanPrivilegeTableScanBlocks(t *testing.T, plan string) int {
+	t.Helper()
+	matches := regexp.MustCompile(
+		`(?s)Table Scan on mo_catalog\.mo_role_privs\s+Analyze:.*?inputBlocks=([0-9]+)`,
+	).FindStringSubmatch(plan)
+	require.Len(t, matches, 2, "missing mo_role_privs Table Scan block metrics in plan:\n%s", plan)
+	blocks, err := strconv.Atoi(matches[1])
+	require.NoError(t, err)
+	return blocks
+}
+
+func queryOrphanPrivilegeExplainAnalyze(
+	t *testing.T,
+	ctx context.Context,
+	conn *sql.Conn,
+	statement string,
+) string {
+	t.Helper()
+	rows, err := conn.QueryContext(ctx, "explain analyze "+statement)
+	require.NoError(t, err)
+	defer rows.Close()
+	var lines []string
+	for rows.Next() {
+		var line string
+		require.NoError(t, rows.Scan(&line))
+		lines = append(lines, line)
+	}
+	require.NoError(t, rows.Err())
+	return strings.Join(lines, "\n")
 }
 
 func mustExecOrphanPrivilegeUpgradeSQL(
