@@ -345,6 +345,24 @@ func (s *HnswSearch[T]) Load(sqlproc *sqlexec.SqlProcess) error {
 	return nil
 }
 
+// hnswViewedBytesPerRow is the HOST cost of one row in a VIEWED (mmap'd) usearch index: the
+// per-node bookkeeping usearch keeps outside the mapping (limits_.members * sizeof(node_t)).
+//
+// Measured against usearch's own memory_usage(), which is what GetIndexSize charges once the
+// index is loaded. It is exactly linear in the row count and completely independent of
+// dimension -- at 20k rows, dim 32 and dim 512 report the identical 161,536 bytes while the
+// model file grows 8x:
+//
+//	n=5000  dim=32   file=1.4MB   viewed=41536
+//	n=5000  dim=512  file=11.0MB  viewed=41536
+//	n=20000 dim=32   file=5.5MB   viewed=161536
+//	n=20000 dim=512  file=43.9MB  viewed=161536
+//	n=50000 dim=128  file=33.0MB  viewed=401536
+//
+// The deltas are 120000/15000 and 240000/30000 -- 8.000 bytes per row, over a fixed ~1536-byte
+// per-thread-context term that is not worth modelling.
+const hnswViewedBytesPerRow = 8
+
 // GetIndexSize reports what the loaded usearch models actually keep in HOST memory, taken from
 // usearch's own accounting rather than from the model file size.
 //
@@ -357,19 +375,29 @@ func (s *HnswSearch[T]) Load(sqlproc *sqlexec.SqlProcess) error {
 // a different definition of "host resident" than fulltext2, which excludes its mmap'd posting
 // blocks for exactly this reason.
 //
-// Before Load the models carry metadata only, so there is no index to ask and this reports 0:
-// the governor reclaims for hnsw after the fact, as it does for ivfflat. FileSize is not used
-// as a pre-load stand-in precisely because of the 80x gap.
+// Before Load there is no index to ask, so the estimate comes from the metadata row count
+// instead: nrow * hnswViewedBytesPerRow. That lets the cache reclaim room for an hnsw load
+// ahead of it rather than only charging afterwards. FileSize is still not used as the stand-in
+// -- it over-states the host cost by ~80x, so reserving against it would evict far more than
+// the load needs.
+//
+// A generation written before the nrow column existed reports 0, and the entry is simply
+// charged after its load completes, which is where hnsw sat before this estimate existed.
 //
 // Nothing here is device resident, so the device figure is 0.
 func (s *HnswSearch[T]) GetIndexSize() (hostBytes, deviceBytes int64) {
 	for _, idx := range s.Indexes {
-		if idx == nil || idx.Index == nil {
+		if idx == nil {
 			continue
 		}
-		if n, err := idx.Index.MemoryUsage(); err == nil {
-			hostBytes += int64(n)
+		if idx.Index != nil {
+			// Loaded: usearch's own figure, which excludes the mmap'd bytes.
+			if n, err := idx.Index.MemoryUsage(); err == nil {
+				hostBytes += int64(n)
+				continue
+			}
 		}
+		hostBytes += idx.Nrow * hnswViewedBytesPerRow
 	}
 	return hostBytes, 0
 }

@@ -530,3 +530,28 @@ func TestQueryHnswGenerationReadError(t *testing.T) {
 func TestSearchIntoUnsupported(t *testing.T) {
 	require.ErrorContains(t, (&HnswSearch[float32]{}).SearchInto(nil, nil, vectorindex.RuntimeConfig{}, nil), "not supported")
 }
+
+// Before Load the models carry metadata only, so GetIndexSize estimates from nrow rather than
+// reporting 0 -- that estimate is what lets the cache reclaim room for an hnsw load ahead of it.
+// The per-row constant is measured against usearch's own memory_usage(); see
+// hnswViewedBytesPerRow.
+func TestGetIndexSizeEstimatesFromNrowBeforeLoad(t *testing.T) {
+	s := &HnswSearch[float32]{Indexes: []*HnswModel[float32]{
+		{Id: "a", Nrow: 20000},
+		{Id: "b", Nrow: 5000},
+	}}
+	host, device := s.GetIndexSize()
+	require.EqualValues(t, 25000*hnswViewedBytesPerRow, host,
+		"pre-load cost is the row count, not the model file size")
+	require.EqualValues(t, 0, device, "hnsw is never device resident")
+}
+
+// A generation written before the nrow column existed reports 0, and the entry is charged after
+// its load instead. It must not fall back to FileSize, which over-states the host cost ~80x.
+func TestGetIndexSizeUnknownNrowEstimatesZero(t *testing.T) {
+	s := &HnswSearch[float32]{Indexes: []*HnswModel[float32]{
+		{Id: "legacy", Nrow: 0, FileSize: 13 << 20},
+	}}
+	host, _ := s.GetIndexSize()
+	require.EqualValues(t, 0, host, "unknown row count must not be replaced by FileSize")
+}
