@@ -22,6 +22,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/bytejson"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -715,6 +716,44 @@ func TestJsonSchemaRefKeywordDetection(t *testing.T) {
 		s, info := fcTC.Run()
 		require.True(t, s, info)
 	})
+}
+
+func TestJsonSchemaInvalidCombinatorRefPrecedence(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	functions := []struct {
+		name    string
+		retType types.Type
+		fn      fEvalFn
+	}{
+		{name: "json_schema_valid", retType: types.T_bool.ToType(), fn: JsonSchemaValid},
+		{name: "json_schema_validation_report", retType: types.T_json.ToType(), fn: JsonSchemaValidationReport},
+	}
+
+	for _, function := range functions {
+		for _, keyword := range []string{"allOf", "anyOf", "oneOf"} {
+			for _, constant := range []bool{false, true} {
+				name := fmt.Sprintf("%s/%s/constant=%t", function.name, keyword, constant)
+				t.Run(name, func(t *testing.T) {
+					schema := fmt.Sprintf(`{"%s":{"$ref":"https://example.invalid/schema"}}`, keyword)
+					schemaInput := NewFunctionTestInput(types.T_varchar.ToType(), []string{schema}, []bool{false})
+					if constant {
+						schemaInput = NewFunctionTestConstInput(types.T_varchar.ToType(), []string{schema}, []bool{false})
+					}
+					tc := NewFunctionTestCase(proc,
+						[]FunctionTestInput{
+							schemaInput,
+							NewFunctionTestInput(types.T_varchar.ToType(), []string{`1`}, []bool{false}),
+						},
+						NewFunctionTestResult(function.retType, false, nil, nil), function.fn)
+					require.NoError(t, tc.result.PreExtendAndReset(tc.fnLength))
+					err := tc.fn(tc.parameters, tc.result, tc.proc, tc.fnLength, nil)
+					require.Error(t, err)
+					require.True(t, moerr.IsMoErrCode(err, moerr.ErrNotSupported), err)
+					require.Contains(t, err.Error(), "$ref is not supported")
+				})
+			}
+		}
+	}
 }
 
 func TestJsonConstructorTypeChecking(t *testing.T) {

@@ -97,6 +97,10 @@ select json_schema_valid('{"exclusiveMinimum":5}', '5');
 select json_schema_valid('{"exclusiveMinimum":5}', '6');
 select json_schema_valid('{"$schema":"http://json-schema.org/draft-07/schema#","const":1}', '2');
 
+-- MySQL checks recognized combinator references before validating the container shape
+select json_schema_valid('{"allOf":{"$ref":"https://example.invalid/schema"}}', '1');
+select json_schema_validation_report('{"allOf":{"$ref":"https://example.invalid/schema"}}', '1');
+
 drop table if exists json_schema_draft4_rows;
 create table json_schema_draft4_rows (id int primary key, s varchar(1024), d json);
 insert into json_schema_draft4_rows values (1, '{"format":"email"}', '"not-an-email"'), (2, '{"type":"integer","minimum":5}', '2');
