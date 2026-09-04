@@ -1,0 +1,55 @@
+drop account if exists acc_idx_cap;
+create account acc_idx_cap admin_name 'admin' identified by '123456';
+set experimental_hnsw_index = 1;
+drop database if exists idx_cap_db;
+create database idx_cap_db;
+use idx_cap_db;
+create table t(id bigint primary key, v vecf32(3));
+insert into t values (1,'[0,0,0]'), (2,'[1,1,1]'), (3,'[9,9,9]');
+create index h using hnsw on t(v) op_type 'vector_l2_ops';
+set @meta = (select index_table_name from mo_catalog.mo_indexes
+where name = 'h' and algo = 'hnsw' and algo_table_type = 'hnsw_meta'
+and table_id in (select rel_id from mo_catalog.mo_tables where reldatabase = database() and relname = 't')
+limit 1);
+set @wait_sql = concat('select count(*) >= 1 as ready from `', database(), '`.`', @meta, '`');
+prepare wait_ready from @wait_sql;
+execute wait_ready;
+➤ ready[-7,1,0]  𝄀
+1
+deallocate prepare wait_ready;
+select @@global.max_index_cache_size;
+➤ @@global.max_index_cache_size[-1,16383,0]  𝄀
+70368744177664
+select id from t order by l2_distance(v, '[0,0,0]') asc limit 2;
+➤ id[-5,64,0]  𝄀
+1  𝄀
+2
+set global max_index_cache_size = 4096;
+select @@global.max_index_cache_size;
+➤ @@global.max_index_cache_size[-1,16383,0]  𝄀
+4096
+use idx_cap_db;
+select @@global.max_index_cache_size;
+➤ @@global.max_index_cache_size[-1,16383,0]  𝄀
+4096
+select id from t order by l2_distance(v, '[0,0,0]') asc limit 2;
+➤ id[-5,64,0]  𝄀
+1  𝄀
+2
+select id from t order by l2_distance(v, '[0,0,0]') asc limit 2;
+➤ id[-5,64,0]  𝄀
+1  𝄀
+2
+select id from t order by l2_distance(v, '[9,9,9]') asc limit 1;
+➤ id[-5,64,0]  𝄀
+3
+set global max_index_cache_size = 0;
+select @@global.max_index_cache_size;
+➤ @@global.max_index_cache_size[-1,16383,0]  𝄀
+0
+select id from t order by l2_distance(v, '[0,0,0]') asc limit 2;
+➤ id[-5,64,0]  𝄀
+1  𝄀
+2
+drop database if exists idx_cap_db;
+drop account if exists acc_idx_cap;
