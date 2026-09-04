@@ -5284,6 +5284,7 @@ func TestWindowPadSpaceKeysUseCanonicalArguments(t *testing.T) {
 
 func requireWindowPadSpaceComparisonCast(t *testing.T, expr *plan.Expr) {
 	t.Helper()
+	require.NotNil(t, expr)
 	require.True(t, isCastOverload(expr, 2), expr.String())
 	require.Equal(t, int32(types.T_varchar), expr.Typ.Id)
 }
