@@ -266,11 +266,10 @@ func BlockDataRead(
 }
 
 // BlockDataReadWithFilter applies a residual filter after materializing only
-// earlyColumns, then reads the other columns for the surviving rows. It is
-// intentionally limited to scans without storage TopN; callers must use the
-// eager BlockDataRead path when orderByLimit is active. preFilterRows is the
-// live row count after storage visibility and tombstones but before the
-// residual filter.
+// earlyColumns, then reads the other columns for the surviving rows. Optional
+// vector TopN runs after that exact filter and materializes only its bounded
+// winners. preFilterRows is the live row count after storage visibility and
+// tombstones but before the residual filter.
 func BlockDataReadWithFilter(
 	ctx context.Context,
 	info *objectio.BlockInfo,
@@ -282,6 +281,7 @@ func BlockDataReadWithFilter(
 	filterSeqnums []uint16,
 	filterColTypes []types.Type,
 	filter objectio.BlockReadFilter,
+	orderByLimit *objectio.IndexReaderTopOp,
 	policy fileservice.Policy,
 	tableName string,
 	bat *batch.Batch,
@@ -308,7 +308,7 @@ func BlockDataReadWithFilter(
 		filterSeqnums,
 		filterColTypes,
 		filter,
-		nil,
+		orderByLimit,
 		policy,
 		tableName,
 		bat,
@@ -417,6 +417,7 @@ func blockDataRead(
 			fs,
 			earlyColumns,
 			applyFilter,
+			orderByLimit,
 			preFilterRows,
 		)
 	}
@@ -908,6 +909,7 @@ func blockDataReadWithFilter(
 	fs fileservice.FileService,
 	earlyColumns []int,
 	applyFilter engine.ReaderFilter,
+	orderByLimit *objectio.IndexReaderTopOp,
 	preFilterRows *int,
 ) (err error) {
 	if err = validateLateMaterializationOutput(columns, colTypes, outputBat); err != nil {
@@ -1064,6 +1066,53 @@ func blockDataReadWithFilter(
 	}
 
 	lateColumns := columnPositionsComplement(earlyColumns, len(columns))
+	materializeRows := selectedPhysicalRows
+	if orderByLimit != nil {
+		if orderByLimit.OrderedLimit {
+			return moerr.NewInvalidInputNoCtx("filtered block Top-K requires a vector order expression")
+		}
+		topColPos := int(orderByLimit.ColPos)
+		if topColPos < 0 || topColPos >= len(columns) || topColPos == phyAddrColumnPos {
+			return moerr.NewInvalidInputNoCtxf(
+				"filtered vector topn column position %d is invalid for %d block columns",
+				topColPos,
+				len(columns),
+			)
+		}
+
+		topRows, dists, _, topErr := ioutil.LoadColumnDataByTopN(
+			ctx,
+			columns[topColPos],
+			colTypes[topColPos],
+			fs,
+			info.MetaLocation(),
+			slices.Clone(selectedPhysicalRows),
+			orderByLimit,
+			mp,
+			policy,
+		)
+		if topErr != nil {
+			return topErr
+		}
+		winnerPositions, mapErr := positionsOfSelectedRows(selectedPhysicalRows, topRows)
+		if mapErr != nil {
+			return mapErr
+		}
+		for _, pos := range earlyColumns {
+			if pos == topColPos || len(winnerPositions) == 0 {
+				outputBat.Vecs[pos].CleanOnlyData()
+				continue
+			}
+			outputBat.Vecs[pos].Shrink(winnerPositions, false)
+		}
+		outputBat.SetRowCount(len(topRows))
+		materializeRows = topRows
+		lateColumns = slices.DeleteFunc(lateColumns, func(pos int) bool { return pos == topColPos })
+		outputBat.Vecs[topColPos].CleanOnlyData()
+		if err = appendVectorTopNDistances(outputBat, len(columns), dists, mp); err != nil {
+			return err
+		}
+	}
 	ignoredMask, readErr := materializeBlockColumnsAtPositions(
 		ctx,
 		info,
@@ -1071,7 +1120,7 @@ func blockDataReadWithFilter(
 		colTypes,
 		phyAddrColumnPos,
 		lateColumns,
-		selectedPhysicalRows,
+		materializeRows,
 		nil,
 		policy,
 		outputBat,
@@ -1093,6 +1142,40 @@ func blockDataReadWithFilter(
 		}
 	}
 	return nil
+}
+
+func positionsOfSelectedRows(selectedRows, subsetRows []int64) ([]int64, error) {
+	positions := make([]int64, 0, len(subsetRows))
+	next := 0
+	for _, row := range subsetRows {
+		for next < len(selectedRows) && selectedRows[next] < row {
+			next++
+		}
+		if next >= len(selectedRows) || selectedRows[next] != row {
+			return nil, moerr.NewInvalidStateNoCtxf(
+				"vector Top-K row %d is not present in the filtered row set", row)
+		}
+		positions = append(positions, int64(next))
+		next++
+	}
+	return positions, nil
+}
+
+func appendVectorTopNDistances(
+	outputBat *batch.Batch,
+	columnCount int,
+	dists []float64,
+	mp *mpool.MPool,
+) error {
+	var distVec *vector.Vector
+	if len(outputBat.Vecs) == columnCount {
+		distVec = vector.NewVec(types.T_float64.ToType())
+		outputBat.Vecs = append(outputBat.Vecs, distVec)
+	} else {
+		distVec = outputBat.Vecs[columnCount]
+		distVec.CleanOnlyData()
+	}
+	return vector.AppendFixedList(distVec, dists, nil, mp)
 }
 
 // BlockDataReadInner only read data,don't apply deletes.
