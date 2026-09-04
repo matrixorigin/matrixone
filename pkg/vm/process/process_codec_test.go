@@ -95,6 +95,8 @@ func newCodecTestProcess(t *testing.T) (*Process, client.TxnOperator) {
 		SessionId:                           uuid.MustParse("11111111-2222-3333-4444-555555555555"),
 		ExplicitZeroTemporalCastReturnsNull: true,
 		SqlMode:                             "STRICT_TRANS_TABLES",
+		MaxDigestLength:                     16,
+		MaxDigestLengthSet:                  true,
 	}
 	sp := NewStmtProfile(uuid.MustParse("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"), uuid.MustParse("bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"))
 	sp.SetTxnId([]byte("txn-profile-123456"))
@@ -150,6 +152,8 @@ func TestProcessCodecHelpers(t *testing.T) {
 			MatrixoneNativeMode:                 true,
 			ExplicitZeroTemporalCastReturnsNull: true,
 			SqlMode:                             "STRICT_ALL_TABLES",
+			MaxDigestLength:                     0,
+			MaxDigestLengthSet:                  true,
 		})
 		require.NoError(t, err)
 		require.Equal(t, "u", info.User)
@@ -158,11 +162,48 @@ func TestProcessCodecHelpers(t *testing.T) {
 		require.True(t, info.LockWaitTimeoutSet)
 		require.True(t, info.ExplicitZeroTemporalCastReturnsNull)
 		require.Equal(t, "STRICT_ALL_TABLES", info.SqlMode)
+		require.Zero(t, info.MaxDigestLength)
+		require.True(t, info.MaxDigestLengthSet)
 		require.Equal(t, "UTC", info.TimeZone.String())
 
 		info, err = ConvertToProcessSessionInfo(pipeline.SessionInfo{TimeZone: []byte("bad")})
 		require.NoError(t, err)
 		require.Nil(t, info.TimeZone)
+	})
+
+	t.Run("max digest length resolution", func(t *testing.T) {
+		value, set := resolveMaxDigestLength(nil)
+		require.Zero(t, value)
+		require.False(t, set)
+
+		proc := &Process{Base: &BaseProcess{IsFrontend: true}}
+		proc.SetResolveVariableFunc(func(name string, system, global bool) (interface{}, error) {
+			require.Equal(t, "max_digest_length", name)
+			require.True(t, system)
+			require.True(t, global)
+			return int64(16), nil
+		})
+		value, set = resolveMaxDigestLength(proc)
+		require.Equal(t, int64(16), value)
+		require.True(t, set)
+
+		proc.Base.IsFrontend = false
+		proc.Base.SessionInfo.MaxDigestLength = 0
+		proc.Base.SessionInfo.MaxDigestLengthSet = true
+		proc.SetResolveVariableFunc(func(string, bool, bool) (interface{}, error) {
+			return defaultMaxDigestLength, nil
+		})
+		value, set = resolveMaxDigestLength(proc)
+		require.Zero(t, value, "an explicit zero snapshot must survive a second CN forward")
+		require.True(t, set)
+
+		proc.Base.SessionInfo.MaxDigestLengthSet = false
+		proc.SetResolveVariableFunc(func(string, bool, bool) (interface{}, error) {
+			return "invalid", nil
+		})
+		value, set = resolveMaxDigestLength(proc)
+		require.Zero(t, value)
+		require.False(t, set)
 	})
 
 	t.Run("lock wait timeout resolution", func(t *testing.T) {
@@ -594,6 +635,8 @@ func TestBuildProcessInfoAndMockProcessInfoWithPro(t *testing.T) {
 	require.True(t, info.SessionInfo.MatrixoneNativeMode)
 	require.True(t, info.SessionInfo.ExplicitZeroTemporalCastReturnsNull)
 	require.Equal(t, "STRICT_TRANS_TABLES", info.SessionInfo.SqlMode)
+	require.Equal(t, int64(16), info.SessionInfo.MaxDigestLength)
+	require.True(t, info.SessionInfo.MaxDigestLengthSet)
 	require.True(t, info.SessionInfo.LockWaitTimeoutSet)
 	require.Equal(t, pipeline.SessionLoggerInfo_Warn, info.SessionLogger.LogLevel)
 
@@ -741,6 +784,8 @@ func TestCodecServiceEncodeDecodeAndLookup(t *testing.T) {
 	require.Equal(t, info.SessionInfo.MatrixoneNativeMode, decodedProc.Base.SessionInfo.MatrixOneNativeMode)
 	require.True(t, decodedProc.Base.SessionInfo.ExplicitZeroTemporalCastReturnsNull)
 	require.Equal(t, info.SessionInfo.SqlMode, decodedProc.Base.SessionInfo.SqlMode)
+	require.Equal(t, info.SessionInfo.MaxDigestLength, decodedProc.Base.SessionInfo.MaxDigestLength)
+	require.Equal(t, info.SessionInfo.MaxDigestLengthSet, decodedProc.Base.SessionInfo.MaxDigestLengthSet)
 	require.Equal(t, info.SessionInfo.LockWaitTimeoutSet, decodedProc.Base.SessionInfo.LockWaitTimeoutSet)
 	require.NotNil(t, decodedProc.GetPrepareParams())
 	require.Equal(t, 2, decodedProc.GetPrepareParams().Length())

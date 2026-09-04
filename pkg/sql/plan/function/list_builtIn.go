@@ -6648,6 +6648,71 @@ var supportedStringBuiltIns = []FuncNew{
 			},
 		},
 	},
+
+	// function `statement_digest`
+	{
+		functionId: STATEMENT_DIGEST,
+		class:      plan.Function_STRICT,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    fixedTypeMatch,
+
+		Overloads: []overload{
+			{
+				overloadId:      0,
+				args:            []types.T{types.T_varchar},
+				retType:         statementDigestReturnType,
+				realTimeRelated: true,
+				newOp: func() executeLogicOfOverload {
+					return StatementDigest
+				},
+			},
+			{
+				overloadId:      1,
+				args:            []types.T{types.T_text},
+				retType:         statementDigestReturnType,
+				realTimeRelated: true,
+				newOp: func() executeLogicOfOverload {
+					return StatementDigest
+				},
+			},
+			{
+				overloadId:      2,
+				args:            []types.T{types.T_blob},
+				retType:         statementDigestReturnType,
+				realTimeRelated: true,
+				newOp: func() executeLogicOfOverload {
+					return StatementDigest
+				},
+			},
+			{
+				overloadId:      3,
+				args:            []types.T{types.T_char},
+				retType:         statementDigestReturnType,
+				realTimeRelated: true,
+				newOp: func() executeLogicOfOverload {
+					return StatementDigest
+				},
+			},
+			{
+				overloadId:      4,
+				args:            []types.T{types.T_binary},
+				retType:         statementDigestReturnType,
+				realTimeRelated: true,
+				newOp: func() executeLogicOfOverload {
+					return StatementDigest
+				},
+			},
+			{
+				overloadId:      5,
+				args:            []types.T{types.T_varbinary},
+				retType:         statementDigestReturnType,
+				realTimeRelated: true,
+				newOp: func() executeLogicOfOverload {
+					return StatementDigest
+				},
+			},
+		},
+	},
 }
 
 var supportedArrayOperations = []FuncNew{
