@@ -1416,6 +1416,43 @@ func TestLocalE2EEmptyStringReadCase(t *testing.T) {
 	}
 }
 
+func TestLocalE2EEmptyStringReadCaseFailures(t *testing.T) {
+	t.Run("insert fails", func(t *testing.T) {
+		db, mock := newLocalE2ESQLMock(t)
+		defer db.Close()
+		mock.ExpectExec("INSERT INTO").WillReturnError(errors.New("write unavailable"))
+		result := (&caseRunner{cfg: localE2ETestConfig(), db: db}).emptyStringReadCase(context.Background())
+		if result.Status != "failed" || !strings.Contains(result.Error, "write unavailable") {
+			t.Fatalf("expected insert failure, got %+v", result)
+		}
+	})
+
+	t.Run("query fails", func(t *testing.T) {
+		db, mock := newLocalE2ESQLMock(t)
+		defer db.Close()
+		mock.ExpectExec("INSERT INTO").WillReturnResult(sqlmock.NewResult(0, 3))
+		mock.ExpectQuery("COUNT\\(NULLIF\\(region,''\\)\\)").WillReturnError(errors.New("catalog offline"))
+		result := (&caseRunner{cfg: localE2ETestConfig(), db: db}).emptyStringReadCase(context.Background())
+		if result.Status != "failed" || !strings.Contains(result.Error, "catalog offline") {
+			t.Fatalf("expected query failure, got %+v", result)
+		}
+	})
+
+	t.Run("result mismatches", func(t *testing.T) {
+		db, mock := newLocalE2ESQLMock(t)
+		defer db.Close()
+		mock.ExpectExec("INSERT INTO").WillReturnResult(sqlmock.NewResult(0, 3))
+		mock.ExpectQuery("COUNT\\(NULLIF\\(region,''\\)\\)").
+			WillReturnRows(sqlmock.NewRows([]string{"count", "count_region", "count_nonempty"}).AddRow(int64(3), int64(2), int64(0)))
+		mock.ExpectQuery("region = ''").WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(int64(1)))
+		mock.ExpectQuery("region = '中文'").WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(int64(1)))
+		result := (&caseRunner{cfg: localE2ETestConfig(), db: db}).emptyStringReadCase(context.Background())
+		if result.Status != "failed" || !strings.Contains(result.Error, "result mismatch") {
+			t.Fatalf("expected mismatch failure, got %+v", result)
+		}
+	})
+}
+
 func TestLocalE2ESnapshotHelpersAgainstREST(t *testing.T) {
 	cfg := localE2ETestConfig()
 	cfg.CatalogURI = newSnapshotRESTServer(t).URL + "/iceberg"
