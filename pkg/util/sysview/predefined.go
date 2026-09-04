@@ -233,7 +233,7 @@ func informationSchemaSubscriptionTablesDDL() string {
 	subscriptionSelect := strings.Replace(
 		localSelect,
 		"if(relkind = 'v', NULL, internal_auto_increment(reldatabase, relname)) AS `AUTO_INCREMENT`,",
-		"if(relkind = 'v', NULL, 0) AS `AUTO_INCREMENT`,",
+		"if(relkind = 'v', NULL, cast(0 as bigint unsigned)) AS `AUTO_INCREMENT`,",
 		1,
 	)
 	subscriptionSelect = strings.Replace(

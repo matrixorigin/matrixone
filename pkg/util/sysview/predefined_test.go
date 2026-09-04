@@ -303,7 +303,8 @@ func TestInformationSchemaSubscriptionMetadataDDL(t *testing.T) {
 	assert.Contains(t, InformationSchemaTablesDDL, "rp.obj_id = tbl.rel_logical_id")
 	assert.Equal(t, 1, strings.Count(InformationSchemaTablesDDL, "mo_subscription_tables()"))
 	assert.Equal(t, 1, strings.Count(InformationSchemaTablesDDL, "internal_auto_increment("))
-	assert.Contains(t, InformationSchemaTablesDDL, "if(relkind = 'v', NULL, 0) AS `AUTO_INCREMENT`")
+	assert.Contains(t, InformationSchemaTablesDDL,
+		"if(relkind = 'v', NULL, cast(0 as bigint unsigned)) AS `AUTO_INCREMENT`")
 	assert.Contains(t, InformationSchemaColumnsDDL, "UNION ALL select 'def' as TABLE_CATALOG")
 	assert.Contains(t, InformationSchemaColumnsDDL, "mc.table_owner IN (SELECT role_id FROM __mo_active_roles)")
 	assert.Contains(t, InformationSchemaColumnsDDL, "rp.obj_id = mc.rel_logical_id")
