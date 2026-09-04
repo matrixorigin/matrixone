@@ -364,8 +364,28 @@ The factory validates its original claim before creating resources, and Attach
 checks that claim and the original registration. Before Attach, the factory owns
 lifetime cleanup; afterward, the runner does. In particular, a failed old
 `Start` must not cancel the shared executor lifetime after a same-object Resume
-has admitted a replacement. A superseded completion CAS retains the routine for
-the newer control request. A backend error is not proof of supersession: the
+has admitted a replacement. A superseded completion CAS retains an **attached**
+routine for the newer control request. It must not retain a registration whose
+factory already failed before Attach: that registration can never acquire a
+routine, yet would keep renewing the lease and strand all control requests.
+Completion seals that original local claim with `claimLost` and conditionally
+detaches it, leaving the entire superseding durable row unchanged. Queued
+Resume/Restart callbacks cannot reopen the retired object. The dispatcher can
+then finalize pause/cancel or admit a fresh recovery after the existing lease
+expires; this does not add a lease-release write or weaken takeover predicates.
+Before factory completion, a missing routine still represents pending admission
+and is retained. Factory completion itself supplies the phase boundary, so no
+additional lifecycle state or background worker is required.
+
+An attached executor whose startup failed must also remain controllable:
+`Failed -> Pausing -> Paused` is valid, alongside its existing Resume/Restart/
+Cancel transitions. Failed is not proof of finished cleanup; Pause closes and
+joins residual readers, fences delayed callbacks, and preserves the normal
+watermark-flush barrier. Repeated Pause performs no second cleanup. Failed-state
+metrics are retired on the first transition, and the paused gauge advances only
+after successful pause completion (including a retry from Pausing).
+
+A backend error is not proof of supersession: the
 failed current execution is canceled and detached, without an unfenced write or
 continued renewal of a failed owner.
 
@@ -379,6 +399,7 @@ continued renewal of a failed owner.
 | Concurrent heartbeat and error reporting within one claim | error updates preserve the newer heartbeat and unrelated metadata |
 | Current-owner success/failure and duplicate completion | intended status/retry outcome; one effective local cleanup owner |
 | PAUSE/CANCEL/Resume/Restart superseding a delayed callback | newer durable control request and its retry ownership survive |
+| Factory fails before Attach while a control request supersedes it | no dead-owner renewal; unchanged durable request; dispatcher reaches terminal status or attaches a fresh owner |
 | SQL error, cancellation, and ambiguous completion result | no unfenced fallback or lease revival; bounded retry/cleanup ownership |
 | Claim admission between durable CAS and local publication | no false removal and no wait cycle between admission and completion |
 
@@ -393,6 +414,19 @@ The regression suite extends existing one-row lifecycle fixtures with barriers:
   `TestDaemonTaskErrorSQLPreservesLease`.
 - `TestDaemonCompletionCleanupOwnership`: successful startup, current failure,
   backend timeout, superseding control request, and duplicate callback cleanup.
+- `TestDaemonPreAttachFailureRecoversControlRequests`: legacy/stable CDC crossed
+  with normal/fresh-restart admission and all four control requests (16 cases).
+  Verifies pending-admission retention, terminal factory cleanup, stopped
+  heartbeat renewal, unchanged durable request, rejection of old Attach/queued
+  callbacks, real dispatcher recovery, and duplicate completion after recovery.
+  One stored row and explicit lease-expiry input suffice; no sleeps, service,
+  additional production hook, or volume fixture is needed.
+- `TestCdcTask_Pause` covers running and failed attached executors, including
+  residual-reader Close/Wait exactly once, callback fencing, and duplicate
+  Pause. It reuses a one-reader mock and a buffered notification without the
+  former notification-draining goroutine. State-machine tests additionally
+  prove Failed -> Pause -> Resume -> Running; existing tests cover starting,
+  already-paused, and failed watermark-flush/retry paths.
 - `TestDaemonAttachFencesOrigin` and `TestCDCFactoryRejectsSupersededClaim`:
   obsolete factories cannot attach to or adopt a replacement.
 - `TestLifecycleCompletionPreservesClaimAndHeartbeat` and
@@ -443,6 +477,19 @@ history, or blocking control-path dependency. This correction restores the
 existing claim-ownership contract without a new catalog schema or persisted
 protocol. Delivery of the requested bug fix is not independent approval of the
 whole stable-epoch feature; the whole PR's design/merge gate remains open.
+
+The follow-up pre-Attach/Failed-state control recovery correction was validated
+against PR head `8d031b3cd5517d1367c2e59be1c24a3aa353fc78`: the original eight
+review-only failures became green, and the committed recovery matrix covers 16
+cases across both CDC executor codes. Normal owning-package tests passed
+(taskservice 25.512s, 90.8% coverage; frontend 12.883s, 65.3%); owning race tests
+passed (27.023s and 24.527s). Four taskservice lifecycle tests and the frontend
+Pause test each passed 100 focused race repetitions. Scoped golangci-lint found
+zero new issues. Both focused suites also passed under race on 55 with matching
+production/test source hashes. Those 55 runs were deterministic package tests,
+not a new service/BVT or throughput run; they created no service or persistent
+test data. Logs are `pre-attach-fix-tests.log` and `failed-pause-fix-tests.log`
+under the existing remote evidence directory above.
 
 ## Ownership and wait analysis
 

@@ -2704,28 +2704,39 @@ func TestCdcTask_Restart(t *testing.T) {
 }
 
 func TestCdcTask_Pause(t *testing.T) {
-	// Note: GetTableDetector is already stubbed globally in init()
-	holdCh := make(chan int, 1)
-	go func() {
-		<-holdCh
-	}()
-
-	executor := &CDCTaskExecutor{
-		activeRoutine:  cdc.NewCdcActiveRoutine(),
-		cnUUID:         "test-cn",
-		runningReaders: &sync.Map{},
-		spec: &task.CreateCdcDetails{
-			TaskId:   "task1",
-			TaskName: "task1",
-		},
-		stateMachine: NewExecutorStateMachine(),
-		holdCh:       holdCh,
+	for _, failed := range []bool{false, true} {
+		name := "running"
+		if failed {
+			name = "failed"
+		}
+		t.Run(name, func(t *testing.T) {
+			executor := &CDCTaskExecutor{
+				activeRoutine:  cdc.NewCdcActiveRoutine(),
+				cnUUID:         "test-cn",
+				runningReaders: &sync.Map{},
+				spec: &task.CreateCdcDetails{
+					TaskId:   "task1",
+					TaskName: "task1",
+				},
+				stateMachine: NewExecutorStateMachine(),
+				holdCh:       make(chan int, 1),
+			}
+			require.NoError(t, executor.stateMachine.Transition(TransitionStart))
+			require.NoError(t, executor.stateMachine.Transition(TransitionStartSuccess))
+			if failed {
+				require.NoError(t, executor.stateMachine.SetFailed("startup or table failure"))
+			}
+			var closeCalls, waitCalls atomic.Int32
+			executor.runningReaders.Store("db.table", &mockChangeReader{closeCalls: &closeCalls, waitCalls: &waitCalls})
+			oldGeneration := executor.callbackGeneration.Load()
+			require.NoError(t, executor.Pause())
+			require.NoError(t, executor.Pause())
+			require.Equal(t, StatePaused, executor.stateMachine.State())
+			require.Equal(t, int32(1), closeCalls.Load())
+			require.Equal(t, int32(1), waitCalls.Load())
+			require.Equal(t, oldGeneration+1, executor.callbackGeneration.Load())
+		})
 	}
-	// Transition to Running state
-	_ = executor.stateMachine.Transition(TransitionStart)
-	_ = executor.stateMachine.Transition(TransitionStartSuccess)
-	err := executor.Pause()
-	assert.NoErrorf(t, err, "Pause()")
 }
 
 func TestCdcTask_PauseAlreadyPausedIsIdempotent(t *testing.T) {

@@ -1271,8 +1271,6 @@ func (exec *CDCTaskExecutor) Restart() error {
 		exec.recordRestartTimeoutAsync(nil, drainTimeoutErr)
 		return drainTimeoutErr
 	}
-	startupTimeoutErr := moerr.NewInternalErrorNoCtx("CDC restart startup timed out")
-
 	// A Start owns mutable executor resources until it exits. Do not publish a
 	// replacement while a previous Start can still run its deferred cleanup.
 	// This is intentionally stronger than a generation check: generation fences
@@ -1429,7 +1427,9 @@ func (exec *CDCTaskExecutor) Pause() error {
 
 	// Check if running before state transition
 	wasRunning := state == StateRunning || state == StateStarting
-	needsProducerDrain := wasRunning || state == StatePausing
+	// Failed startup/table callbacks can still own readers while unwinding,
+	// and a retry already in Pausing must finish the same drain.
+	needsProducerDrain := wasRunning || state == StatePausing || state == StateFailed
 
 	// Transition to Pausing state
 	if state != StatePausing {
@@ -1441,6 +1441,7 @@ func (exec *CDCTaskExecutor) Pause() error {
 		// unwind. Fence it before pause completion so it cannot revive the task
 		// after this pause wins the lifecycle transition.
 		exec.callbackGeneration.Add(1)
+		exec.recordLeavingFailedMetrics(state, StatePausing)
 	}
 	exec.cancelCallbackContextLocked()
 	callbackDone := exec.callbackDone
@@ -1530,9 +1531,9 @@ func (exec *CDCTaskExecutor) Pause() error {
 
 	if wasRunning {
 		v2.CdcTaskTotalGauge.WithLabelValues("running").Dec()
-		v2.CdcTaskTotalGauge.WithLabelValues("paused").Inc()
 		v2.CdcTaskStateChangeCounter.WithLabelValues("running", "paused").Inc()
 	}
+	v2.CdcTaskTotalGauge.WithLabelValues("paused").Inc()
 
 	logutil.Info(
 		"cdc.frontend.task.pause_success",

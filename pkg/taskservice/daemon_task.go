@@ -225,7 +225,15 @@ func (r *taskRunner) completeDaemonTask(ctx context.Context, dt *daemonTask, cla
 			superseded = r.setDaemonTaskError(ctx, claim, execErr)
 		}
 		if superseded {
-			return
+			if ar := dt.activeRoutine.Load(); ar != nil && *ar != nil {
+				return
+			}
+			// The factory has returned, so a missing routine is no longer an
+			// in-progress Attach. Retaining it would renew a dead execution while
+			// every control handler waits for a routine that can never arrive.
+			// Preserve the durable request, but retire this exact registration
+			// and fence queued local admission before allowing lease recovery.
+			dt.claimLost.Store(true)
 		}
 		// Successful Attach transfers the executor lifetime to this runner.
 		// Only the still-current completion may cancel it; the old factory must

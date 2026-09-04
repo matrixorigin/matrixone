@@ -219,6 +219,104 @@ func TestDaemonCompletionCleanupOwnership(t *testing.T) {
 	}
 }
 
+// One row, explicit factory completion and explicit lease expiry distinguish
+// admission still in progress from admission that can never Attach. Exercise
+// the real dispatcher afterward: removal alone is not the recovery oracle.
+func TestDaemonPreAttachFailureRecoversControlRequests(t *testing.T) {
+	for _, code := range []task.TaskCode{task.TaskCode_InitCdc, task.TaskCode_InitCdcStableEpoch} {
+		for _, restart := range []bool{false, true} {
+			for _, status := range []task.TaskStatus{task.TaskStatus_PauseRequested, task.TaskStatus_CancelRequested,
+				task.TaskStatus_ResumeRequested, task.TaskStatus_RestartRequested} {
+				name := "start/" + status.String()
+				if restart {
+					name = "restart/" + status.String()
+				}
+				name = code.String() + "/" + name
+				t.Run(name, func(t *testing.T) {
+					r, store := newDaemonHandleTestRunner(t)
+					defer r.stopper.Stop()
+					ctx := context.Background()
+					initial := newDaemonTaskForTest(1, task.TaskStatus_Created, "")
+					initial.Metadata.Executor = code
+					initial.TaskType = task.TaskType_CreateCdc
+					initial.LastHeartbeat = time.Now().Add(-time.Minute)
+					if restart {
+						initial.TaskStatus = task.TaskStatus_RestartRequested
+					}
+					mustAddTestDaemonTask(t, store, 1, initial)
+					local := &daemonTask{task: initial}
+					ok, err := r.startDaemonTask(ctx, local, restart)
+					require.NoError(t, err)
+					require.True(t, ok)
+					claim := local.taskSnapshot()
+					requested := claim
+					requested.TaskStatus = status
+					mustUpdateTestDaemonTask(t, store, 1, []task.DaemonTask{requested})
+					if status == task.TaskStatus_CancelRequested {
+						// Before factory completion, a missing routine is legitimately
+						// still attaching and must not be prematurely retired.
+						require.NoError(t, newCancelTask(r, claim.ID).Handle(ctx))
+						require.True(t, r.exists(claim.ID))
+						require.Equal(t, requested, mustGetTestDaemonTask(t, store, 1)[0])
+					}
+					failure := errors.New("factory query failed before Attach")
+					r.completeDaemonTask(ctx, local, claim, restart, failure)
+					require.False(t, r.exists(claim.ID))
+					require.True(t, local.claimLost.Load())
+					r.doSendHeartbeat(ctx)
+					require.Equal(t, requested, mustGetTestDaemonTask(t, store, 1)[0], "completion must preserve the new request and stop renewal")
+					// Queued callbacks cannot reopen the retired object.
+					require.NoError(t, newResumeTask(r, local).Handle(ctx))
+					require.NoError(t, newRestartTask(r, local).Handle(ctx))
+					attachCtx := context.WithValue(ctx, daemonAttachmentContextKey{}, daemonAttachment{owner: local, claim: claim})
+					require.Error(t, r.Attach(attachCtx, claim.ID, newMockActiveRoutine()))
+					require.Equal(t, requested, mustGetTestDaemonTask(t, store, 1)[0])
+
+					// Recovery uses the existing lease timeout; inject expiry rather
+					// than sleeping or weakening production lease predicates.
+					requested.LastHeartbeat = time.Now().Add(-r.options.heartbeatTimeout - time.Second)
+					mustUpdateTestDaemonTask(t, store, 1, []task.DaemonTask{requested})
+					attached := make(chan error, 1)
+					r.RegisterExecutor(initial.Metadata.Executor, func(execCtx context.Context, spec task.Task) error {
+						err := r.Attach(execCtx, spec.GetID(), newMockActiveRoutine())
+						attached <- err
+						return err
+					})
+					r.dispatchTaskHandle(ctx)
+					require.Len(t, r.pendingTaskHandle, 1)
+					require.NoError(t, (<-r.pendingTaskHandle).Handle(ctx))
+					want := task.TaskStatus_Running
+					switch status {
+					case task.TaskStatus_PauseRequested:
+						want = task.TaskStatus_Paused
+					case task.TaskStatus_CancelRequested:
+						want = task.TaskStatus_Canceled
+					default:
+						select {
+						case err := <-attached:
+							require.NoError(t, err)
+						case <-time.After(5 * time.Second):
+							t.Fatal("replacement did not attach")
+						}
+						r.stopper.Stop() // join replacement startup before final assertions
+					}
+					got := mustGetTestDaemonTask(t, store, 1)[0]
+					require.Equal(t, want, got.TaskStatus)
+					r.completeDaemonTask(ctx, local, claim, restart, failure)
+					require.Equal(t, got, mustGetTestDaemonTask(t, store, 1)[0], "duplicate old completion must not disturb recovery")
+					if want == task.TaskStatus_Running {
+						replacement, exists := r.getDaemonTask(claim.ID)
+						require.True(t, exists)
+						require.NotSame(t, local, replacement)
+						require.True(t, got.LastRun.After(claim.LastRun))
+						require.NoError(t, r.service.HeartbeatDaemonTask(ctx, got))
+					}
+				})
+			}
+		}
+	}
+}
+
 func TestDaemonAttachFencesOrigin(t *testing.T) {
 	r, _ := newDaemonHandleTestRunner(t)
 	claim := newDaemonTaskForTest(1, task.TaskStatus_Running, r.runnerID)

@@ -51,6 +51,11 @@ func TestExecutorStateMachine_ValidTransitions(t *testing.T) {
 			finalState:  StatePaused,
 		},
 		{
+			name:        "Pause and resume from Failed",
+			transitions: []Transition{TransitionStart, TransitionStartFail, TransitionPause, TransitionPauseComplete, TransitionResume, TransitionStartSuccess},
+			finalState:  StateRunning,
+		},
+		{
 			name:        "Resume flow",
 			transitions: []Transition{TransitionStart, TransitionStartSuccess, TransitionPause, TransitionPauseComplete, TransitionResume, TransitionStartSuccess},
 			finalState:  StateRunning,
