@@ -267,6 +267,42 @@ func TestTableEntryDoesNotShareInitIterations(t *testing.T) {
 	require.ElementsMatch(t, []string{"index_ft", "index_hv"}, iters[0].jobNames)
 }
 
+func TestTableEntryDoesNotShareIterationBeyondSourceLimit(t *testing.T) {
+	table := NewTableEntry(nil, 1, 2, 3, "db", "table")
+	firstSources := make([]TableInfo, MaxSourceTables)
+	for i := range firstSources {
+		firstSources[i] = TableInfo{DBID: 1, TableID: uint64(i + 1)}
+	}
+	secondSources := []TableInfo{
+		firstSources[MaxSourceTables-1],
+		{DBID: 1, TableID: MaxSourceTables + 1},
+	}
+	watermark := types.BuildTS(10, 0)
+	specs := []*JobSpec{
+		{
+			ConsumerInfo: ConsumerInfo{SrcTables: firstSources},
+			TriggerSpec:  TriggerSpec{JobType: TriggerType_Default},
+		},
+		{
+			ConsumerInfo: ConsumerInfo{SrcTables: secondSources},
+			TriggerSpec:  TriggerSpec{JobType: TriggerType_Default},
+		},
+	}
+	for i, spec := range specs {
+		name := fmt.Sprintf("mv_%d", i)
+		table.jobs[JobKey{JobName: name, JobID: uint64(i + 1)}] = NewJobEntry(
+			table, name, spec, uint64(i+1), watermark, ISCPJobState_Completed, 0,
+		)
+	}
+
+	iters, _ := table.getCandidate()
+	require.Len(t, iters, 2)
+	for _, iter := range iters {
+		require.Len(t, iter.jobNames, 1)
+		require.LessOrEqual(t, len(iter.sourceTables), MaxSourceTables)
+	}
+}
+
 func TestPublishRebuiltStateReplacesAbandonedGeneration(t *testing.T) {
 	exec := &ISCPTaskExecutor{tables: newISCPTableTree()}
 	oldTable := NewTableEntry(exec, 1, 2, 3, "db", "table")

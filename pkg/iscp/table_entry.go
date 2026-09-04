@@ -226,6 +226,12 @@ func (t *TableEntry) getCandidate() (iter []*IterationContext, minFromTS types.T
 		if share {
 			for _, iter := range shareableIterations {
 				if iter.fromTS.EQ(&from) && iter.toTS.EQ(&to) {
+					if sourceTablesUnionSize(iter.sourceTables, sinker.sourceTables) > MaxSourceTables {
+						// Keep the jobs in separate iterations.  Sharing an iteration
+						// with an oversized source union would make collection fail
+						// before any stream is opened, permanently stalling both jobs.
+						continue
+					}
 					iter.jobNames = append(iter.jobNames, sinker.jobName)
 					iter.jobIDs = append(iter.jobIDs, sinker.jobID)
 					iter.lsn = append(iter.lsn, sinker.currentLSN+1)
@@ -265,6 +271,17 @@ func (t *TableEntry) getCandidate() (iter []*IterationContext, minFromTS types.T
 		}
 	}
 	return iterations, minFromTS
+}
+
+func sourceTablesUnionSize(left, right []TableInfo) int {
+	seen := make(map[[2]uint64]struct{}, len(left)+len(right))
+	for _, source := range left {
+		seen[[2]uint64{source.DBID, source.TableID}] = struct{}{}
+	}
+	for _, source := range right {
+		seen[[2]uint64{source.DBID, source.TableID}] = struct{}{}
+	}
+	return len(seen)
 }
 
 // markIterationPending records ownership only after a worker accepts the

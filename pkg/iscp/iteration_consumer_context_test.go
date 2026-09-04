@@ -106,6 +106,25 @@ type batchAttrsIterationConsumer struct {
 	attrs []string
 }
 
+type sourceIDsIterationConsumer struct {
+	sourceIDs chan uint64
+}
+
+func (c *sourceIDsIterationConsumer) Consume(_ context.Context, data DataRetriever) error {
+	for {
+		d := data.Next()
+		if d.SourceTableID != 0 {
+			c.sourceIDs <- d.SourceTableID
+		}
+		done := d.noMoreData
+		err := d.err
+		d.Done()
+		if err != nil || done {
+			return err
+		}
+	}
+}
+
 func (c *batchAttrsIterationConsumer) Consume(_ context.Context, data DataRetriever) error {
 	for {
 		d := data.Next()
@@ -160,6 +179,69 @@ func TestSharedIterationRoutesEachSourceOnlyToOwningJob(t *testing.T) {
 	require.True(t, consumerAcceptsSource(jobSpecs, 1, 10))
 	require.False(t, consumerAcceptsSource(jobSpecs, 1, 20))
 	require.True(t, consumerAcceptsSource(jobSpecs, 1, 30))
+}
+
+func TestSharedIterationFanoutRoutesOverlappingSourceSets(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+
+	makeChanges := func(sourceID uint64) *iterationChangesHandle {
+		sent := false
+		return &iterationChangesHandle{next: func(context.Context, *mpool.MPool) (*batch.Batch, *batch.Batch, engine.ChangesHandle_Hint, error) {
+			if sent {
+				return nil, nil, engine.ChangesHandle_Tail_done, nil
+			}
+			sent = true
+			bat := batch.NewWithSize(2)
+			bat.Vecs[0] = vector.NewVec(types.T_TS.ToType())
+			bat.Vecs[1] = vector.NewVec(types.T_Rowid.ToType())
+			var block types.Blockid
+			require.NoError(t, vector.AppendFixed(bat.Vecs[0], types.BuildTS(sourceID, 0), false, mp))
+			require.NoError(t, vector.AppendFixed(bat.Vecs[1], types.NewRowid(&block, uint32(sourceID)), false, mp))
+			bat.SetRowCount(1)
+			return bat, nil, engine.ChangesHandle_Tail_done, nil
+		}}
+	}
+
+	iterCtx := &IterationContext{
+		accountID: 1,
+		tableID:   2,
+		jobNames:  []string{"mv_ab", "mv_ac"},
+		jobIDs:    []uint64{1, 2},
+		lsn:       []uint64{1, 2},
+	}
+	jobSpecs := []*JobSpec{
+		{ConsumerInfo: ConsumerInfo{SrcTables: []TableInfo{{TableID: 10}, {TableID: 20}}}},
+		{ConsumerInfo: ConsumerInfo{SrcTables: []TableInfo{{TableID: 10}, {TableID: 30}}}},
+	}
+	consumers := []*sourceIDsIterationConsumer{
+		{sourceIDs: make(chan uint64, 4)},
+		{sourceIDs: make(chan uint64, 4)},
+	}
+	streams := []iterationSourceChanges{
+		{tableID: 10, changes: makeChanges(10)},
+		{tableID: 20, changes: makeChanges(20)},
+		{tableID: 30, changes: makeChanges(30)},
+	}
+	packer := types.NewPacker()
+	defer packer.Close()
+
+	runISCPTaskIterationConsumers(
+		context.Background(), nil, iterCtx, streams,
+		[]Consumer{consumers[0], consumers[1]},
+		[]*JobStatus{{}, {}}, nil, ISCPDataType_Tail,
+		packer, mp, 0, 1, 0, 1, false, jobSpecs,
+	)
+
+	var got0, got1 []uint64
+	for len(consumers[0].sourceIDs) > 0 {
+		got0 = append(got0, <-consumers[0].sourceIDs)
+	}
+	for len(consumers[1].sourceIDs) > 0 {
+		got1 = append(got1, <-consumers[1].sourceIDs)
+	}
+	require.ElementsMatch(t, []uint64{10, 20}, got0)
+	require.ElementsMatch(t, []uint64{10, 30}, got1)
 }
 
 func runIterationConsumersForTest(
