@@ -238,6 +238,12 @@ func (s *serviceWithDaemonHook) setUpdateStatusFn(
 	s.updateStatusFn = fn
 }
 
+func (s *serviceWithDaemonHook) setHeartbeatErr(err error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.heartbeatErr = err
+}
+
 func TestDaemonTaskPollResumesAfterTaskFrameworkReenabled(t *testing.T) {
 	wasDisabled := taskFrameworkDisabled()
 	DebugCtlTaskFramework(true)
@@ -638,47 +644,89 @@ func TestLifecyclePublishesClaimBeforeReplacementAndHeartbeat(t *testing.T) {
 	}
 }
 
-func TestStableCDCLosesTargetOwnershipAfterHeartbeatFailure(t *testing.T) {
+func TestStableCDCHeartbeatFailureRecoveryAndSupersession(t *testing.T) {
+	r, store := newDaemonHandleTestRunner(t)
+	hook := &serviceWithDaemonHook{TaskService: r.service}
+	r.service = hook
+
+	claim := newDaemonTaskForTest(1, task.TaskStatus_Running, r.runnerID)
+	claim.Metadata.Executor = task.TaskCode_InitCdcStableEpoch
+	claim.LastRun = time.Now().Add(-time.Minute)
+	claim.LastHeartbeat = claim.LastRun
+	mustAddTestDaemonTask(t, store, 1, claim)
+
+	routine := newMockActiveRoutine()
+	active := ActiveRoutine(routine)
+	local := &daemonTask{task: claim}
+	local.activeRoutine.Store(&active)
+	r.addDaemonTask(local)
+
+	// A transient storage/network error is not ownership loss. The local
+	// generation stays registered and a recovered heartbeat renews its lease.
+	hook.setHeartbeatErr(errors.New("temporary taskservice failure"))
+	r.doSendHeartbeat(context.Background())
+	select {
+	case <-routine.cancelC:
+		t.Fatal("transient heartbeat failure cancelled the current generation")
+	default:
+	}
+	require.True(t, r.exists(claim.ID))
+
+	hook.setHeartbeatErr(nil)
+	r.doSendHeartbeat(context.Background())
+	stored := mustGetTestDaemonTask(t, store, 1, WithTaskIDCond(EQ, claim.ID))[0]
+	require.True(t, stored.LastHeartbeat.After(claim.LastHeartbeat))
+	require.True(t, r.exists(claim.ID))
+
+	// A different durable generation makes the old heartbeat return
+	// ErrInvalidTask. The old entry is removed before cancellation so it cannot
+	// keep the replacement lease alive or prevent a later local takeover.
+	superseding := stored
+	superseding.TaskRunner = "r2"
+	superseding.LastRun = nextDaemonClaimTime(stored.LastRun, time.Now())
+	superseding.LastHeartbeat = time.Now()
+	mustUpdateTestDaemonTask(t, store, 1, []task.DaemonTask{superseding})
+	r.doSendHeartbeat(context.Background())
+	select {
+	case <-routine.cancelC:
+	case <-time.After(time.Second):
+		t.Fatal("superseded stable CDC generation was not cancelled")
+	}
+	require.False(t, r.exists(claim.ID))
+
+	// Once the replacement lease becomes stale, normal startup can claim it and
+	// publish a new local heartbeat owner for the same task ID.
+	superseding.LastHeartbeat = time.Now().Add(-r.options.heartbeatTimeout - time.Second)
+	mustUpdateTestDaemonTask(t, store, 1, []task.DaemonTask{superseding})
+	replacement := &daemonTask{task: superseding}
+	started, err := r.startDaemonTask(context.Background(), replacement, false)
+	require.NoError(t, err)
+	require.True(t, started)
+	published, ok := r.getDaemonTask(claim.ID)
+	require.True(t, ok)
+	require.Same(t, replacement, published)
+}
+
+func TestLegacyCDCHeartbeatFailureDoesNotCancel(t *testing.T) {
 	r, _ := newDaemonHandleTestRunner(t)
 	hook := &serviceWithDaemonHook{
 		TaskService:  r.service,
 		heartbeatErr: errors.New("taskservice partition"),
 	}
 	r.service = hook
+	dt := newDaemonTaskForTest(1, task.TaskStatus_Running, r.runnerID)
+	dt.Metadata.Executor = task.TaskCode_InitCdc
+	routine := newMockActiveRoutine()
+	active := ActiveRoutine(routine)
+	local := &daemonTask{task: dt}
+	local.activeRoutine.Store(&active)
+	r.addDaemonTask(local)
 
-	tests := []struct {
-		name       string
-		executor   task.TaskCode
-		wantCancel bool
-	}{
-		{"stable epoch", task.TaskCode_InitCdcStableEpoch, true},
-		{"legacy atomic", task.TaskCode_InitCdc, false},
-	}
-	for i, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			dt := newDaemonTaskForTest(uint64(i+1), task.TaskStatus_Running, r.runnerID)
-			dt.Metadata.Executor = test.executor
-			routine := newMockActiveRoutine()
-			active := ActiveRoutine(routine)
-			local := &daemonTask{task: dt}
-			local.activeRoutine.Store(&active)
-			r.addDaemonTask(local)
-
-			r.doSendHeartbeat(context.Background())
-			if test.wantCancel {
-				select {
-				case <-routine.cancelC:
-				case <-time.After(time.Second):
-					t.Fatal("stable CDC cancellation was not scheduled")
-				}
-			} else {
-				select {
-				case <-routine.cancelC:
-					t.Fatal("legacy CDC was cancelled by the stable ownership policy")
-				case <-time.After(10 * time.Millisecond):
-				}
-			}
-		})
+	r.doSendHeartbeat(context.Background())
+	select {
+	case <-routine.cancelC:
+		t.Fatal("legacy CDC was cancelled by the stable ownership policy")
+	default:
 	}
 }
 

@@ -1289,13 +1289,20 @@ func (r *taskRunner) doSendHeartbeat(ctx context.Context) {
 			r.logger.Error("task heartbeat failed",
 				zap.Uint64("task ID", claim.ID),
 				zap.Error(err))
-			// A stable-epoch CDC owner holds a target-side advisory lock. If it
-			// can no longer renew the control-plane claim, stop its local
-			// generation so a replacement is guaranteed to acquire that lock.
-			// Cancel is idempotent and does not wait for target I/O; a blocked
-			// operation retains the lock until it returns, serializing takeover.
+			// Storage and network failures are not proof that ownership was lost.
+			// Keep the current generation live and retry its heartbeat on the next
+			// tick. ErrInvalidTask is the explicit taskservice fence: the durable
+			// claim no longer matches this runner/generation and local target work
+			// must stop.
 			if claim.Metadata.Executor == task.TaskCode_InitCdcStableEpoch &&
+				moerr.IsMoErrCode(err, moerr.ErrInvalidTask) &&
 				dt.claimLost.CompareAndSwap(false, true) {
+				// Relinquish heartbeat ownership before cancellation. Pointer-aware
+				// removal prevents an old heartbeat snapshot from deleting a newer
+				// local generation for the same task ID.
+				if !r.removeDaemonTaskIf(claim.ID, dt) {
+					continue
+				}
 				ar := dt.activeRoutine.Load()
 				if ar != nil && *ar != nil {
 					active := *ar
@@ -1309,7 +1316,6 @@ func (r *taskRunner) doSendHeartbeat(ctx context.Context) {
 							}
 						},
 					); scheduleErr != nil {
-						dt.claimLost.Store(false)
 						r.logger.Error("failed to schedule CDC stop after heartbeat failure",
 							zap.Uint64("task ID", claim.ID),
 							zap.Error(scheduleErr))
@@ -1491,6 +1497,22 @@ func (r *taskRunner) removeDaemonTask(id uint64) {
 	r.daemonTasks.Lock()
 	defer r.daemonTasks.Unlock()
 	delete(r.daemonTasks.m, id)
+}
+
+// removeDaemonTaskIf relinquishes heartbeat ownership only when expected is
+// still the locally published generation. A stale cleanup must not remove a
+// replacement generation that reused the same durable task ID.
+func (r *taskRunner) removeDaemonTaskIf(id uint64, expected *daemonTask) bool {
+	r.daemonTasks.Lock()
+	current, ok := r.daemonTasks.m[id]
+	if !ok || current != expected {
+		r.daemonTasks.Unlock()
+		return false
+	}
+	delete(r.daemonTasks.m, id)
+	r.daemonTasks.Unlock()
+	r.clearPauseTaskCompleted(id)
+	return true
 }
 
 func (r *taskRunner) exists(id uint64) bool {

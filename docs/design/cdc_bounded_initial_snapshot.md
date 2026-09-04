@@ -1,7 +1,7 @@
 # Bounded and retry-safe CDC initial snapshots
 
-Status: proposed design for MatrixOne PR #27939; independent design approval
-for the current revision is pending.
+Status: independently approved design for MatrixOne PR #27939. The approval was
+recorded outside GitHub; this document records the accepted protocol revision.
 
 ## Problem
 
@@ -63,10 +63,14 @@ The implementation must maintain all of these invariants:
 Claim validation is bounded to five seconds and is also performed immediately
 before target initialization DDL, including the generation-change DROP/CREATE.
 Legacy atomic tasks do not pay this additional control-plane round trip.
-Failure to renew a stable task's periodic runner heartbeat cancels its local
-generation. The pinned target lock remains held until any already-running SQL
-returns and cleanup closes the session; this is the serialization point that
-prevents a replacement from completing ahead of an ambiguous old operation.
+A transient periodic-heartbeat storage or network error does not prove claim
+loss: the runner retains the local generation and retries on the next tick. An
+explicit `ErrInvalidTask` proves that the durable `(task_runner, last_run)` claim
+was superseded; the runner first removes that exact local generation from
+heartbeat ownership, then cancels it asynchronously. The pinned target lock
+remains held until any already-running SQL returns and cleanup closes the
+session; this is the serialization point that prevents a replacement from
+completing ahead of an ambiguous old operation.
 
 ## Protocol
 
@@ -134,7 +138,7 @@ configuration says split.
 | Wildcard task discovers a table after task creation or retention expiry | None for the new table | Empty | Persist that table generation's current snapshot and begin at that epoch, independent of task creation time |
 | Table is dropped and recreated under the same logical name | Prior generation may have completed or failed | Old logical-table watermark is replaced by detector lifecycle | Persist a distinct epoch for the new source-table ID; retain both generation rows until terminal task cleanup so overlapping owners cannot erase either retry anchor |
 | Fresh owner discovers a recreated table after an old generation partially committed | Rows from the retired generation may exist | Empty | The retired durable epoch forces DROP/recreate before the new generation is replayed |
-| Old owner is blocked in target COMMIT when another CN claims its expired taskservice lease | Old transaction may be ambiguous | Empty or advanced | The replacement waits on the target ownership lock. The old generation is canceled on heartbeat failure, retains the lock until its in-flight SQL terminates, and cannot publish a watermark. The replacement then acquires the lock, revalidates its newer claim, and replays to exact state. |
+| Old owner is blocked in target COMMIT when another CN claims its expired taskservice lease | Old transaction may be ambiguous | Empty or advanced | The replacement waits on the target ownership lock. After its heartbeat receives the explicit supersession fence, the old generation is removed from local heartbeat ownership and canceled, retains the lock until its in-flight SQL terminates, and cannot publish a watermark. The replacement then acquires the lock, revalidates its newer claim, and replays to exact state. |
 | Old owner waits for the target lock while a replacement completes | Replacement target state | Empty or advanced | After acquiring the released lock, the old owner revalidates its obsolete daemon claim, releases the lock, and performs no target operation. |
 | Resume or Restart advances `last_run` on the same runner | Existing target state | Preserved | Persist the new token while the request status remains retry-owned, publish it to both runner heartbeat and executor fences, then admit replacement work and publish Running with the same token. |
 | Epoch INSERT reports an ambiguous failure | No reader has started for that generation | Empty | Immediately reread the durable row; reuse it if committed, otherwise classify the failure as retryable so the detector attempts the claim again |
@@ -199,6 +203,9 @@ Deterministic tests must prove:
   state, and A cannot regress the watermark;
 - Resume and Restart both publish their new claim to subsequent runner
   heartbeat plus target/watermark fences before replacement work is admitted;
+- one transient heartbeat error followed by recovery retains and renews the
+  live generation, while explicit supersession removes and cancels the old
+  owner and permits replacement startup after lease expiry;
 - ambiguous epoch INSERT tests cover both committed-response-lost and
   definitely-not-committed outcomes;
 - a wildcard task that discovers a table after the task epoch is outside
