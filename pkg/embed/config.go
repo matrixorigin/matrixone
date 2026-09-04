@@ -151,6 +151,7 @@ func newServiceConfig() ServiceConfig {
 			Frontend: config.FrontendParameters{
 				KeyEncryptionKey: "JlxRbXjFGnCsvbsFQSJFvhMhDLaAXq5y",
 				MongoDB:          *config.NewMongoDBParameters(),
+				ArrowLoad:        *config.NewArrowLoadParameters(),
 			},
 		},
 	}

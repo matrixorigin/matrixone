@@ -32,14 +32,15 @@ import (
 
 // TestArrowLoadBVT is the embedded public-path BVT suite for `LOAD DATA ...
 // format='arrow'` (issue #23684, design doc sections 14 and 18). It runs every
-// subtest against one dedicated 1-CN cluster with all three rollout gates
-// enabled and uses the real MySQL protocol rather than the internal executor.
+// subtest against one dedicated 1-CN cluster without Arrow-specific settings
+// and uses the real MySQL protocol rather than the internal executor. The local,
+// stage, MinIO, File, and Stream cases therefore prove default availability.
 // It proves type-matrix correctness, option/DDL rejection, multi-object
 // atomicity, explicit transactions, cross-session visibility, and local gate
 // behavior. Standard distributed CI, mixed binaries, and real cloud providers
 // remain separate release evidence.
 func TestArrowLoadBVT(t *testing.T) {
-	c := startArrowLoadCluster(t, 1, true /*enabled*/, true /*s3Enabled*/, true /*distributedEnabled*/)
+	c := startArrowLoadClusterWithDefaults(t, 1)
 	db := openArrowLoadDB(t, c, 0)
 	mustExec(t, db, "create database if not exists arrow_bvt")
 	mustExec(t, db, "use arrow_bvt")
@@ -117,11 +118,10 @@ func testArrowCommitPhaseFailureRollback(t *testing.T, db *sql.DB) {
 	require.Equal(t, int64(2), queryCount(t, db, "select count(*) from commit_failure_rollback"))
 }
 
-// TestArrowLoadGateDisabled proves the primary rollout gate fails closed: with
-// `cn.frontend.arrow-load.enabled=false` (the documented default), any Arrow LOAD
-// must be rejected before touching the file at all. This checks the client-visible
-// fail-closed contract used during rollback, but it does not replace a true
-// mixed-binary-version rehearsal.
+// TestArrowLoadGateDisabled proves the explicit rollback switch fails closed:
+// with `cn.frontend.arrow-load.enabled=false`, any Arrow LOAD must be rejected
+// before touching the file at all. This checks the client-visible opt-out
+// contract, but it does not replace a true mixed-binary-version rehearsal.
 func TestArrowLoadGateDisabled(t *testing.T) {
 	c := startArrowLoadCluster(t, 1, false, false, false)
 	db := openArrowLoadDB(t, c, 0)

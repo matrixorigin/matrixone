@@ -1,6 +1,6 @@
 # #23684 Arrow LOAD release-readiness evidence
 
-Review date: 2026-09-04. Rebased base: `up/main@bf63172c06`. This record covers
+Review date: 2026-09-04. Rebased base: `up/main@494e6a7723`. This record covers
 the local release rehearsal; it does not claim cloud-provider or human-owner
 approval.
 
@@ -10,7 +10,8 @@ approval.
 | --- | --- | --- |
 | F-031 through F-040 | fixed, tested, committed in the branch history | complete |
 | Rebase | branch rebased onto the stated `up/main` base | recheck immediately before delivery |
-| Mixed-version/drain/flag rollback | real old/new CN binaries exercised; embedded drain/restart test passed | local complete |
+| Default availability and flag rollback | no-config 1-CN/2-CN BVT plus explicit disable/drain/restart coverage | local complete |
+| Mixed-version upgrade | earlier default-off rehearsal is superseded by the default-on product policy | rerun required for the release artifact |
 | Commit failure/CN shutdown/cross-node cancel | deterministic fault injection and 2-CN BVT passed | local complete |
 | Aggregate pin quota/range planner/deployment stress | deliberately deferred | blocker for S3/distributed production |
 | Real AWS/OSS/COS | delegated to provider test owners | external blocker |
@@ -18,18 +19,20 @@ approval.
 | Arrow-Go supply chain | license/SBOM/size/platform/CVE review recorded | security and packaging blockers remain |
 | Formal owner approval | packet below prepared | pending human approval |
 
-## Mixed-version rehearsal
+## Default-on and mixed-version status
 
-Two separately built binaries shared one LOG/TN pair and two CN slots:
+The current product policy intentionally supersedes the earlier fail-closed
+rehearsal: a candidate CN using an existing configuration with no Arrow section
+now enables local, S3/stage, and distributed Arrow LOAD. `TestArrowLoadBVT` and
+`TestArrowLoadMultiCN` start dedicated clusters without injecting Arrow settings;
+their File, Stream, local stage, local MinIO, and multi-CN fanout cases prove that
+the public SQL paths are available by default.
 
-1. `up/main` CN1 rejected `format='arrow'` as unsupported before file I/O.
-2. Candidate CN2 using the old configuration, which has no Arrow section,
-   rejected the same missing path as disabled by configuration.
-3. CN1 was replaced by the candidate while retaining the old configuration;
-   it remained disabled, proving the zero-value upgrade state is fail-closed.
-4. Both CNs were restarted with explicit local/distributed gates enabled. A
-   File LOAD committed 3 rows and a `parallel 'true'` pattern LOAD committed 2
-   rows. Services then shut down cleanly.
+The earlier two-binary rehearsal remains evidence that the old binary rejects
+Arrow syntax, but its candidate-default assertions no longer describe this
+revision. The exact release artifact must repeat the mixed-version upgrade test
+with the new default-on policy, including routing a parallel statement while an
+old CN is present and documenting the supported upgrade order.
 
 `TestArrowLoadRolloutRollbackDrain` separately stops a cluster only after an
 active large LOAD is visible. On restart with every gate disabled, the table is
@@ -86,8 +89,10 @@ any accepted exception. Author self-review cannot substitute for these entries.
 
 ## Release decision
 
-The LOAD-only local-file path is suitable for a gated canary after all owner and
-security requirements are satisfied. S3 and distributed production enablement
-remain blocked by the deferred aggregate pin quota/range-planner pressure work,
-real-provider testing, deployment A/B, exact Linux artifacts, and formal owner
-approval. The feature must remain default-off.
+Arrow LOAD is default-on by product policy; operators do not need configuration
+for local, S3/stage, or distributed use. The explicit enable settings remain kill
+switches for deployments that have not accepted the corresponding operational
+risk. Deferred aggregate pin quota/range-planner pressure work, real-provider
+testing, deployment A/B, exact Linux artifacts, mixed-version rerun, and formal
+owner approval remain release-readiness gaps and must not be inferred complete
+from the default setting.

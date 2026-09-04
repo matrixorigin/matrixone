@@ -287,9 +287,19 @@ type MongoDBParameters struct {
 	enableDefaulted  bool
 }
 
-// ArrowLoadParameters are rollout gates for the LOAD-only Arrow IPC surface.
-// Every gate defaults off so a mixed-version cluster cannot start producing
-// Arrow pipeline metadata before all CNs have been upgraded deliberately.
+const (
+	arrowLoadEnabledConfigured uint8 = 1 << iota
+	arrowLoadS3EnabledConfigured
+	arrowLoadDistributedEnabledConfigured
+)
+
+// ArrowLoadParameters controls the LOAD-only Arrow IPC surface. Local files,
+// S3-backed sources, and distributed execution are available by default; the
+// three enable fields remain explicit kill switches for deployment rollback.
+//
+// configuredFields distinguishes an omitted TOML key from an explicit false.
+// defaultsApplied makes repeated service validation idempotent, so a later
+// programmatic false is not silently changed back to true.
 type ArrowLoadParameters struct {
 	Enabled            bool `toml:"enabled" user_setting:"advanced"`
 	S3Enabled          bool `toml:"s3-enabled" user_setting:"advanced"`
@@ -298,6 +308,81 @@ type ArrowLoadParameters struct {
 	// Arrow LOAD itself. It is a rollout diagnostic and emergency fallback, not
 	// the normal execution policy, so its zero value keeps borrowing enabled.
 	ForceMaterialize bool `toml:"force-materialize" user_setting:"advanced"`
+
+	configuredFields uint8
+	defaultsApplied  bool
+}
+
+// NewArrowLoadParameters returns the default-on Arrow LOAD settings. Callers
+// that adjust a programmatic service configuration should start from this value
+// so an explicit false survives later validation and defaulting passes.
+func NewArrowLoadParameters() *ArrowLoadParameters {
+	parameters := &ArrowLoadParameters{}
+	parameters.SetDefaultValues()
+	return parameters
+}
+
+// UnmarshalTOML records explicit opt-outs while preserving defaults for omitted
+// keys. BurntSushi TOML matches field names case-insensitively, so conflicting
+// case variants are rejected instead of making the selected value ambiguous.
+func (parameters *ArrowLoadParameters) UnmarshalTOML(value interface{}) error {
+	table, ok := value.(map[string]interface{})
+	if !ok {
+		return moerr.NewBadConfigNoCtx("arrow-load configuration must be a TOML table")
+	}
+
+	var configured uint8
+	for key := range table {
+		var field uint8
+		var name string
+		switch {
+		case strings.EqualFold(key, "enabled"):
+			field, name = arrowLoadEnabledConfigured, "enabled"
+		case strings.EqualFold(key, "s3-enabled"):
+			field, name = arrowLoadS3EnabledConfigured, "s3-enabled"
+		case strings.EqualFold(key, "distributed-enabled"):
+			field, name = arrowLoadDistributedEnabledConfigured, "distributed-enabled"
+		default:
+			continue
+		}
+		if configured&field != 0 {
+			return moerr.NewBadConfigNoCtxf(
+				"arrow-load configuration contains conflicting %s keys", name,
+			)
+		}
+		configured |= field
+	}
+
+	var encoded bytes.Buffer
+	if err := btoml.NewEncoder(&encoded).Encode(table); err != nil {
+		return err
+	}
+	type plainArrowLoadParameters ArrowLoadParameters
+	decoded := plainArrowLoadParameters(*parameters)
+	if _, err := btoml.Decode(encoded.String(), &decoded); err != nil {
+		return err
+	}
+	*parameters = ArrowLoadParameters(decoded)
+	parameters.configuredFields |= configured
+	return nil
+}
+
+// SetDefaultValues enables every supported Arrow LOAD source and execution
+// mode unless the corresponding TOML key was explicitly configured.
+func (parameters *ArrowLoadParameters) SetDefaultValues() {
+	if parameters.defaultsApplied {
+		return
+	}
+	if parameters.configuredFields&arrowLoadEnabledConfigured == 0 {
+		parameters.Enabled = true
+	}
+	if parameters.configuredFields&arrowLoadS3EnabledConfigured == 0 {
+		parameters.S3Enabled = true
+	}
+	if parameters.configuredFields&arrowLoadDistributedEnabledConfigured == 0 {
+		parameters.DistributedEnabled = true
+	}
+	parameters.defaultsApplied = true
 }
 
 // NewMongoDBParameters returns MongoDB parameters with defaults that must be
@@ -835,6 +920,7 @@ func (fp *FrontendParameters) SetDefaultValues() {
 
 	fp.Iceberg.SetDefaultValues()
 	fp.MongoDB.SetDefaultValues()
+	fp.ArrowLoad.SetDefaultValues()
 }
 
 func (fp *FrontendParameters) SetMaxMessageSize(size uint64) {

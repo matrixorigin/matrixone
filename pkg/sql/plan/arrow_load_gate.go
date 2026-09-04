@@ -26,9 +26,10 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-// RequireArrowLoadEnabled checks the LOAD-only Arrow rollout gates. Planner
-// callers use it before probing source objects; compile calls it again as a
-// defense-in-depth check before constructing execution scopes.
+// RequireArrowLoadEnabled checks the LOAD-only Arrow kill switches. Arrow LOAD
+// is available by default, but planner callers still check explicit deployment
+// opt-outs before probing source objects; compile checks again before building
+// execution scopes so a rejected source cannot enter the pipeline.
 func RequireArrowLoadEnabled(
 	proc *process.Process,
 	param *tree.ExternParam,
@@ -88,7 +89,7 @@ func arrowLoadUsesS3(param *tree.ExternParam) bool {
 	}
 	// A configured FileService can be named freely (for example, "archive")
 	// while still being backed by S3. Resolve that service, including SubPath
-	// wrappers, so the object-storage rollout gate cannot be bypassed by an
+	// wrappers, so the object-storage kill switch cannot be bypassed by an
 	// alias. An empty service is intentionally local in GetForETL.
 	return parsed.Service != "" &&
 		fileservice.IsS3BackedFileService(param.FileService, param.Filepath)

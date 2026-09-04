@@ -45,14 +45,6 @@ type = "distributed-tae"
 port = 16001
 proxy-enabled = true
 
-# Development/BVT opt-in. The compiled zero-value default remains disabled;
-# object-storage access stays behind its separate gate.
-[cn.frontend.arrow-load]
-enabled = true
-s3-enabled = false
-distributed-enabled = true
-force-materialize = false
-
 [cn.frontend.iceberg]
 enable = true
 enable-write = true
