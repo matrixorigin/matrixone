@@ -86,9 +86,9 @@ Could not parse argument to digest function: "SQL parser error: parameter marker
 select statement_digest_text(statement_digest_text('SELECT 1, 2, 3'));
 Could not parse argument to digest function.
 select statement_digest_text(_binary'SELECT 1');
-Could not parse argument to digest function.
+SELECT ?
 select statement_digest_text(cast('SELECT 1' as binary));
-Could not parse argument to digest function.
+SELECT ?
 set @old_sql_mode = @@sql_mode;
 set sql_mode='ANSI_QUOTES';
 select statement_digest_text('SELECT @"odd name"') as digest;

@@ -62,7 +62,7 @@ func TestStatementDigestTextErrors(t *testing.T) {
 	proc.SetPrepareParams(constInput)
 	_, err = RunFunctionDirectly(proc, fn.GetEncodedOverloadID(), []*vector.Vector{constInput}, 1)
 	require.Error(t, err)
-	require.Equal(t, uint16(moerr.ER_UNDISCLOSED_PARSE_ERROR_IN_DIGEST_FN), moerr.DowncastError(err).MySQLCode())
+	require.Equal(t, uint16(moerr.ER_PARSE_ERROR_IN_DIGEST_FN), moerr.DowncastError(err).MySQLCode())
 	proc.SetPrepareParams(nil)
 
 	dynamicInput := vector.NewVec(types.T_varchar.ToType())
@@ -83,7 +83,7 @@ func TestStatementDigestTextIsRuntimeDependent(t *testing.T) {
 	require.True(t, ov.IsRealTimeRelated())
 }
 
-func TestStatementDigestTextRejectsBinaryCharset(t *testing.T) {
+func TestStatementDigestTextBinaryCompatibility(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	nullInput := vector.NewConstNull(types.T_blob.ToType(), 1, proc.Mp())
 	fn, err := GetFunctionByName(proc.Ctx, "statement_digest_text", []types.Type{types.T_blob.ToType()})
@@ -94,21 +94,37 @@ func TestStatementDigestTextRejectsBinaryCharset(t *testing.T) {
 	require.True(t, nullResult.IsNull(0))
 	nullResult.Free(proc.Mp())
 
-	for _, oid := range []types.T{
-		types.T_binary, types.T_varbinary, types.T_blob,
-		types.T_geometry, types.T_geometry32,
-	} {
+	for _, oid := range []types.T{types.T_binary, types.T_varbinary, types.T_blob} {
 		t.Run(oid.String(), func(t *testing.T) {
-			for _, value := range [][]byte{[]byte("SELECT 1"), {0xff, 0x00, 0xc3, 0x28}} {
-				input, err := vector.NewConstBytes(oid.ToType(), value, 1, proc.Mp())
-				require.NoError(t, err)
-				fn, err := GetFunctionByName(proc.Ctx, "statement_digest_text", []types.Type{oid.ToType()})
-				require.NoError(t, err)
-				_, err = RunFunctionDirectly(proc, fn.GetEncodedOverloadID(), []*vector.Vector{input}, 1)
-				input.Free(proc.Mp())
-				require.Error(t, err)
-				require.Equal(t, uint16(moerr.ER_UNDISCLOSED_PARSE_ERROR_IN_DIGEST_FN), moerr.DowncastError(err).MySQLCode())
-			}
+			fn, err := GetFunctionByName(proc.Ctx, "statement_digest_text", []types.Type{oid.ToType()})
+			require.NoError(t, err)
+			valid, err := vector.NewConstBytes(oid.ToType(), []byte("SELECT 1"), 1, proc.Mp())
+			require.NoError(t, err)
+			result, err := RunFunctionDirectly(proc, fn.GetEncodedOverloadID(), []*vector.Vector{valid}, 1)
+			valid.Free(proc.Mp())
+			require.NoError(t, err)
+			require.Equal(t, "SELECT ?", result.GetStringAt(0))
+			result.Free(proc.Mp())
+
+			invalid, err := vector.NewConstBytes(oid.ToType(), []byte{0xff, 0x00, 0xc3, 0x28}, 1, proc.Mp())
+			require.NoError(t, err)
+			_, err = RunFunctionDirectly(proc, fn.GetEncodedOverloadID(), []*vector.Vector{invalid}, 1)
+			invalid.Free(proc.Mp())
+			require.Error(t, err)
+			require.Equal(t, uint16(moerr.ER_UNDISCLOSED_PARSE_ERROR_IN_DIGEST_FN), moerr.DowncastError(err).MySQLCode())
+		})
+	}
+
+	for _, oid := range []types.T{types.T_geometry, types.T_geometry32} {
+		t.Run(oid.String(), func(t *testing.T) {
+			input, err := vector.NewConstBytes(oid.ToType(), []byte("SELECT 1"), 1, proc.Mp())
+			require.NoError(t, err)
+			fn, err := GetFunctionByName(proc.Ctx, "statement_digest_text", []types.Type{oid.ToType()})
+			require.NoError(t, err)
+			_, err = RunFunctionDirectly(proc, fn.GetEncodedOverloadID(), []*vector.Vector{input}, 1)
+			input.Free(proc.Mp())
+			require.Error(t, err)
+			require.Equal(t, uint16(moerr.ER_UNDISCLOSED_PARSE_ERROR_IN_DIGEST_FN), moerr.DowncastError(err).MySQLCode())
 		})
 	}
 
@@ -118,7 +134,34 @@ func TestStatementDigestTextRejectsBinaryCharset(t *testing.T) {
 	textInput.SetIsBinaryString(true)
 	binaryFn, err := GetFunctionByName(proc.Ctx, "statement_digest_text", []types.Type{types.T_varchar.ToType()})
 	require.NoError(t, err)
-	_, err = RunFunctionDirectly(proc, binaryFn.GetEncodedOverloadID(), []*vector.Vector{textInput}, 1)
+	textResult, err := RunFunctionDirectly(proc, binaryFn.GetEncodedOverloadID(), []*vector.Vector{textInput}, 1)
+	require.NoError(t, err)
+	require.Equal(t, "SELECT ?", textResult.GetStringAt(0))
+	textResult.Free(proc.Mp())
+}
+
+func TestStatementDigestTextPreparedParamProvenance(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	fn, err := GetFunctionByName(proc.Ctx, "statement_digest_text", []types.Type{types.T_varchar.ToType()})
+	require.NoError(t, err)
+
+	literal, err := vector.NewConstBytes(types.T_varchar.ToType(), []byte("SELECT ?"), 1, proc.Mp())
+	require.NoError(t, err)
+	defer literal.Free(proc.Mp())
+	require.NoError(t, literal.SetStringSource(types.StringSourceLiteral))
+	// A separate marker in the prepared statement must not hide diagnostics
+	// for this literal digest argument.
+	proc.SetPrepareParams(literal)
+	_, err = RunFunctionDirectly(proc, fn.GetEncodedOverloadID(), []*vector.Vector{literal}, 1)
+	require.Error(t, err)
+	require.Equal(t, uint16(moerr.ER_PARSE_ERROR_IN_DIGEST_FN), moerr.DowncastError(err).MySQLCode())
+	proc.SetPrepareParams(nil)
+
+	marker, err := vector.NewConstBytes(types.T_varchar.ToType(), []byte("SELECT ?"), 1, proc.Mp())
+	require.NoError(t, err)
+	defer marker.Free(proc.Mp())
+	require.NoError(t, marker.SetStringSource(types.StringSourceSQLPrepare))
+	_, err = RunFunctionDirectly(proc, fn.GetEncodedOverloadID(), []*vector.Vector{marker}, 1)
 	require.Error(t, err)
 	require.Equal(t, uint16(moerr.ER_UNDISCLOSED_PARSE_ERROR_IN_DIGEST_FN), moerr.DowncastError(err).MySQLCode())
 }

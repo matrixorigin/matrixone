@@ -41,9 +41,9 @@ func StatementDigestText(
 	// constant vector is not sufficient: it can be the result of a folded
 	// expression, a cast, a subquery, or a prepared parameter.  String-source
 	// provenance is retained by the binder/executor for exactly this boundary.
-	discloseParseError := statementDigestTextAllLiteralInputs(parameters[0], length, selectList) &&
-		(proc == nil || proc.Base == nil || proc.GetPrepareParams() == nil)
-	if statementDigestTextHasBinaryInput(parameters[0], length, selectList) {
+	binaryInput := statementDigestTextHasBinaryInput(parameters[0], length, selectList)
+	discloseParseError := statementDigestTextAllLiteralInputs(parameters[0], length, selectList) && !binaryInput
+	if statementDigestTextHasGeometryInput(parameters[0], length, selectList) {
 		return moerr.NewUndisclosedParseErrorInDigestFunction(ctx)
 	}
 
@@ -94,12 +94,36 @@ func statementDigestTextAllLiteralInputs(
 	return seen
 }
 
-// statementDigestTextHasBinaryInput rejects binary charset values before the
-// bytes are interpreted as SQL text.  The vector metadata supports both
-// statically binary OIDs (BINARY/VARBINARY/BLOB) and row-level binary
-// introducers flowing through a text-shaped common type.  NULL rows retain
-// normal strict-function NULL semantics and are intentionally ignored.
+// statementDigestTextHasBinaryInput reports binary provenance so malformed
+// bytes cannot disclose parser details. Binary values are still passed to the
+// normal parser: MySQL accepts binary-typed input when its bytes form valid SQL.
 func statementDigestTextHasBinaryInput(
+	parameter *vector.Vector,
+	length int,
+	selectList *FunctionSelectList,
+) bool {
+	if parameter == nil || length <= 0 {
+		return false
+	}
+	for row := 0; row < length; row++ {
+		if selectList != nil && selectList.Contains(uint64(row)) {
+			continue
+		}
+		physicalRow := row
+		if parameter.IsConst() {
+			physicalRow = 0
+		}
+		if parameter.IsNull(uint64(physicalRow)) {
+			continue
+		}
+		if parameter.GetIsBinaryStringAt(physicalRow) {
+			return true
+		}
+	}
+	return false
+}
+
+func statementDigestTextHasGeometryInput(
 	parameter *vector.Vector,
 	length int,
 	selectList *FunctionSelectList,
@@ -120,9 +144,6 @@ func statementDigestTextHasBinaryInput(
 		}
 		switch parameter.GetType().Oid {
 		case types.T_geometry, types.T_geometry32:
-			return true
-		}
-		if parameter.GetIsBinaryStringAt(physicalRow) {
 			return true
 		}
 	}
