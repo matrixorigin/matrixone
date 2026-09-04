@@ -158,6 +158,8 @@ select * from TimeOff;
 select * from PerformanceReviews;
 
 
+-- A table referenced by foreign keys has an explicit restore limitation.
+-- @regex("not supported: can not restore table .* referenced by some foreign key constraint",true)
 restore table Company.Departments{snapshot="sys_sp"};
 select * from Departments;
 select * from Employees;

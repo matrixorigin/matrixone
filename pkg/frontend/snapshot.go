@@ -826,6 +826,12 @@ func doRestoreSnapshot(ctx context.Context, ses *Session, stmt *tree.RestoreSnap
 		return
 	}
 
+	if stmt.Level == tree.RESTORELEVELTABLE {
+		if err = validateRestoreTableTarget(ctx, ses.GetService(), bh, snapshotName, dbName, tblName, toAccountId); err != nil {
+			return stats, err
+		}
+	}
+
 	// drop foreign key related tables first
 	if err = deleteCurFkTables(ctx, ses.GetService(), bh, dbName, tblName, toAccountId); err != nil {
 		return
@@ -918,7 +924,11 @@ func doRestoreSnapshot(ctx context.Context, ses *Session, stmt *tree.RestoreSnap
 	}
 
 	if len(fkTableMap) > 0 {
-		if err = restoreTablesWithFk(ctx, ses.GetService(), bh, snapshotName, sortedFkTbls, fkTableMap, toAccountId, snapshot.ts); err != nil {
+		if err = restoreTablesWithFk(
+			ctx, ses.GetService(), bh, snapshotName, sortedFkTbls,
+			fkTableMap, toAccountId, snapshot.ts,
+			stmt.Level == tree.RESTORELEVELTABLE,
+		); err != nil {
 			return
 		}
 	}
@@ -1443,7 +1453,7 @@ func restoreToDatabaseOrTable(
 			return
 		}
 
-		if err = recreateTable(ctx, sid, bh, snapshotName, tblInfo, toAccountId, snapshotTs); err != nil {
+		if err = recreateTable(ctx, sid, bh, snapshotName, tblInfo, toAccountId, snapshotTs, restoreToTbl); err != nil {
 			return
 		}
 	}
@@ -1495,7 +1505,7 @@ func restoreSystemDatabase(
 			return
 		}
 
-		if err = recreateTable(ctx, sid, bh, snapshotName, tblInfo, toAccountId, snapshotTs); err != nil {
+		if err = recreateTable(ctx, sid, bh, snapshotName, tblInfo, toAccountId, snapshotTs, false); err != nil {
 			return
 		}
 	}
@@ -1572,7 +1582,8 @@ func restoreTablesWithFk(
 	sortedFkTbls []string,
 	fkTableMap map[string]*tableInfo,
 	toAccountId uint32,
-	snapshotTs int64) (err error) {
+	snapshotTs int64,
+	rejectMasterTable bool) (err error) {
 	getLogger(sid).Debug(fmt.Sprintf("[%s] start to drop fk related tables", snapshotName))
 
 	// recreate tables as topo order
@@ -1581,7 +1592,7 @@ func restoreTablesWithFk(
 		// e.g. t1.pk <- t2.fk, we only want to restore t2, fkTableMap[t1.key] is nil, ignore t1
 		if tblInfo := fkTableMap[key]; tblInfo != nil {
 			getLogger(sid).Debug(fmt.Sprintf("[%s] start to restore table with fk: %v, restore timestamp: %d", snapshotName, tblInfo.tblName, snapshotTs))
-			if err = recreateTable(ctx, sid, bh, snapshotName, tblInfo, toAccountId, snapshotTs); err != nil {
+			if err = recreateTable(ctx, sid, bh, snapshotName, tblInfo, toAccountId, snapshotTs, rejectMasterTable); err != nil {
 				return
 			}
 		}
@@ -1846,6 +1857,7 @@ func recreateTable(
 	tblInfo *tableInfo,
 	toAccountId uint32,
 	snapshotTs int64,
+	rejectMasterTable bool,
 ) (err error) {
 	if isExternalTable(tblInfo) {
 		return newExternalTableRestoreError(ctx, tblInfo, "snapshot")
@@ -1893,9 +1905,14 @@ func recreateTable(
 
 	ctx = defines.AttachAccountId(ctx, toAccountId)
 
-	var isMasterTable bool
-	isMasterTable, err = checkTableIsMaster(ctx, sid, bh, snapshotName, tblInfo.dbName, tblInfo.tblName)
+	isMasterTable, err := checkTableIsMaster(ctx, sid, bh, snapshotName, tblInfo.dbName, tblInfo.tblName)
+	if err != nil {
+		return err
+	}
 	if isMasterTable {
+		if rejectMasterTable {
+			return newRestoreTableForeignKeyError(ctx, tblInfo.dbName, tblInfo.tblName)
+		}
 		// skip restore the table which is master table
 		getLogger(sid).Debug(fmt.Sprintf("[%s] skip restore master table: %v.%v", snapshotName, tblInfo.dbName, tblInfo.tblName))
 		return
@@ -1984,6 +2001,30 @@ func isExternalTable(tblInfo *tableInfo) bool {
 
 func shouldSkipRestoreTableInBulk(tblInfo *tableInfo) bool {
 	return isExternalTable(tblInfo)
+}
+
+func validateRestoreTableTarget(
+	ctx context.Context,
+	sid string,
+	bh BackgroundExec,
+	snapshotName string,
+	dbName string,
+	tblName string,
+	toAccountId uint32,
+) error {
+	toCtx := defines.AttachAccountId(ctx, toAccountId)
+	isMasterTable, err := checkTableIsMaster(toCtx, sid, bh, snapshotName, dbName, tblName)
+	if err != nil {
+		return err
+	}
+	if isMasterTable {
+		return newRestoreTableForeignKeyError(ctx, dbName, tblName)
+	}
+	return nil
+}
+
+func newRestoreTableForeignKeyError(ctx context.Context, dbName, tblName string) error {
+	return moerr.NewNotSupportedf(ctx, "can not restore table '%s.%s' referenced by some foreign key constraint", dbName, tblName)
 }
 
 func newExternalTableRestoreError(ctx context.Context, tblInfo *tableInfo, source string) error {

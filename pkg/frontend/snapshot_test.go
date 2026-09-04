@@ -406,7 +406,7 @@ func TestSequenceRestoreEntryPoints(t *testing.T) {
 			currentKind: catalog.SystemOrdinaryRel,
 			wantDropSQL: "drop table if exists `db1`.`seq1`",
 			run: func(bh BackgroundExec) error {
-				return recreateTable(accountCtx, "", bh, "snapshot1", sequence, 10, snapshotTS)
+				return recreateTable(accountCtx, "", bh, "snapshot1", sequence, 10, snapshotTS, false)
 			},
 		},
 		{
@@ -451,7 +451,7 @@ func TestSequenceRestoreEntryPoints(t *testing.T) {
 		bh := &backgroundExecTest{}
 		bh.init()
 
-		err := recreateTable(context.Background(), "", bh, "snapshot1", sequence, 10, snapshotTS)
+		err := recreateTable(context.Background(), "", bh, "snapshot1", sequence, 10, snapshotTS, false)
 		require.Error(t, err)
 		require.Empty(t, bh.executedSQLs)
 
@@ -959,7 +959,7 @@ func TestRestoreExternalTableDefensiveCloneGuards(t *testing.T) {
 
 		bh := &backgroundExecTest{}
 		bh.init()
-		err := recreateTable(ctx, "", bh, "sp_ext", tblInfo, uint32(sysAccountID), 100)
+		err := recreateTable(ctx, "", bh, "sp_ext", tblInfo, uint32(sysAccountID), 100, false)
 		convey.So(err, convey.ShouldNotBeNil)
 		convey.So(err.Error(), convey.ShouldContainSubstring, "external table db1.hive_ext cannot be restored from snapshot")
 		convey.So(len(bh.executedSQLs), convey.ShouldEqual, 0)
@@ -978,6 +978,67 @@ func TestRestoreExternalTableDefensiveCloneGuards(t *testing.T) {
 		convey.So(err.Error(), convey.ShouldContainSubstring, "external table db1.hive_ext cannot be restored from snapshot")
 		convey.So(len(bh.executedSQLs), convey.ShouldEqual, 0)
 	})
+}
+
+func TestRecreateTableReferencedByForeignKey(t *testing.T) {
+	ctx := defines.AttachAccountId(context.Background(), uint32(sysAccountID))
+	tblInfo := &tableInfo{
+		dbName:    "db1",
+		tblName:   "parent",
+		relKind:   catalog.SystemOrdinaryRel,
+		createSql: "create table `db1`.`parent` (`id` int primary key)",
+	}
+	masterSQL := fmt.Sprintf(
+		checkTableIsMasterFormat,
+		quoteSQLStringLiteral(tblInfo.dbName),
+		quoteSQLStringLiteral(tblInfo.tblName),
+	)
+
+	for _, tc := range []struct {
+		name              string
+		rejectMasterTable bool
+		wantErr           bool
+	}{
+		{name: "explicit table restore rejects the referenced table", rejectMasterTable: true, wantErr: true},
+		{name: "bulk restore keeps skipping the referenced table", rejectMasterTable: false, wantErr: false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			bh := &backgroundExecTest{}
+			bh.init()
+			bh.sql2result[masterSQL] = newMrsForRestoreStringRows(
+				[]string{"db_name"},
+				[][]interface{}{{"db1"}},
+			)
+
+			err := recreateTable(ctx, "", bh, "snapshot", tblInfo, uint32(sysAccountID), 100, tc.rejectMasterTable)
+			if tc.wantErr {
+				require.EqualError(t, err, "not supported: can not restore table 'db1.parent' referenced by some foreign key constraint")
+			} else {
+				require.NoError(t, err)
+			}
+			require.Equal(t, []string{masterSQL}, bh.executedSQLs)
+		})
+	}
+}
+
+func TestValidateRestoreTableTargetRejectsReferencedTable(t *testing.T) {
+	ctx := context.Background()
+	bh := &backgroundExecTest{}
+	bh.init()
+	masterSQL := fmt.Sprintf(
+		checkTableIsMasterFormat,
+		quoteSQLStringLiteral("db1"),
+		quoteSQLStringLiteral("parent"),
+	)
+	bh.sql2result[masterSQL] = newMrsForRestoreStringRows(
+		[]string{"db_name"},
+		[][]interface{}{{"db1"}},
+	)
+
+	err := validateRestoreTableTarget(ctx, "", bh, "snapshot", "db1", "parent", uint32(sysAccountID))
+	require.EqualError(t, err, "not supported: can not restore table 'db1.parent' referenced by some foreign key constraint")
+	require.Equal(t, []string{masterSQL}, bh.executedSQLs)
+	require.Equal(t, []uint32{uint32(sysAccountID)}, bh.executionAccountIDs)
 }
 
 func TestBuildTableInfoListSQLEscapesLiterals(t *testing.T) {
@@ -1217,7 +1278,7 @@ func TestRecreateUserDefinedFunctionCatalogPreservesCurrentSchema(t *testing.T) 
 		bh := &backgroundExecTest{}
 		bh.init()
 		ctx := defines.AttachAccountId(t.Context(), sourceAccount)
-		require.NoError(t, recreateTable(ctx, "", bh, snapshotName, udfTable, sourceAccount, snapshotTS))
+		require.NoError(t, recreateTable(ctx, "", bh, snapshotName, udfTable, sourceAccount, snapshotTS, false))
 		require.Equal(t, []string{
 			dropTableIfExistsSQL(moCatalog, udfTable.tblName),
 			MoCatalogMoUserDefinedFunctionDDL,
@@ -1232,7 +1293,7 @@ func TestRecreateUserDefinedFunctionCatalogPreservesCurrentSchema(t *testing.T) 
 		bh := &backgroundExecTest{}
 		bh.init()
 		ctx := defines.AttachAccountId(t.Context(), sourceAccount)
-		require.NoError(t, recreateTable(ctx, "", bh, snapshotName, udfTable, targetAccount, snapshotTS))
+		require.NoError(t, recreateTable(ctx, "", bh, snapshotName, udfTable, targetAccount, snapshotTS, false))
 		require.Equal(t,
 			"insert into `mo_catalog`.`mo_user_defined_function` ("+userDefinedFunctionCatalogColumns+
 				") select "+userDefinedFunctionCatalogSourceColumns+
