@@ -159,20 +159,30 @@ func mockTableColPos(t *testing.T, tableDef *planpb.TableDef, name string) int32
 	return -1
 }
 
-func TestCollectGeneratedColumnDependentsIncludesOnUpdateDependents(t *testing.T) {
-	mock := NewMockOptimizer(true)
+func configureMockOnUpdateGeneratedUniqueIndex(t *testing.T, mock *MockOptimizer) {
+	t.Helper()
 	base := mock.ctxt.tables["t_on_update_gen"]
-	base.Name2ColIndex = make(map[string]int32, len(base.Cols))
-	for i, col := range base.Cols {
-		base.Name2ColIndex[col.Name] = int32(i)
-	}
+	require.NotNil(t, base)
+	generatedCol := base.Cols[mockTableColPos(t, base, "g")]
+	indexTableName := catalog.SecondaryIndexTableNamePrefix + "odku-on-update-generated-g"
+	base.Indexes = []*planpb.IndexDef{{
+		IndexName:      "uk_on_update_generated_g",
+		Parts:          []string{catalog.CreateAlias("g")},
+		Unique:         true,
+		IndexTableName: indexTableName,
+		TableExist:     true,
+	}}
+	registerMockGeneratedIndexTable(t, mock, base, indexTableName, generatedCol)
+}
 
-	possiblyChanged, err := collectGeneratedColumnDependents(
-		context.Background(), base, map[string]struct{}{"updated_at": {}},
-	)
-	require.NoError(t, err)
-	require.Contains(t, possiblyChanged, "updated_at")
-	require.Contains(t, possiblyChanged, "g")
+func TestInsertOnDupOnUpdateGeneratedUniqueKeyRejected(t *testing.T) {
+	mock := NewMockOptimizer(true)
+	configureMockOnUpdateGeneratedUniqueIndex(t, mock)
+
+	_, err := runOneStmt(mock, t,
+		"insert into constraint_test.t_on_update_gen (id, val) values (1, 2) "+
+			"on duplicate key update val = values(val)")
+	require.ErrorContains(t, err, "unsupported DML: update unique key on duplicate")
 }
 
 func configureMockGeneratedIndex(t *testing.T, mock *MockOptimizer, unique bool) string {

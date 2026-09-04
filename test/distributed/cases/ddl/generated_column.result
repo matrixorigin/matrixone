@@ -424,4 +424,8 @@ select id, generated_key from t44_odku_generated_index force index (idx_generate
 ➤ id[4,32,0]  ¦  generated_key[4,32,0]  𝄀
 1  ¦  4  𝄀
 2  ¦  4
+select id, generated_key from t44_odku_generated_index force index for order by (idx_generated_key) order by generated_key, id;
+➤ id[4,32,0]  ¦  generated_key[4,32,0]  𝄀
+1  ¦  4  𝄀
+2  ¦  4
 drop database test_generated_col;

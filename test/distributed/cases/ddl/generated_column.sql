@@ -411,6 +411,8 @@ insert into t44_odku_generated_index (id, source, payload) values (1, 1, 10), (2
 insert into t44_odku_generated_index (id, source, payload) values (1, 2, 11) on duplicate key update source = values(source);
 select id, generated_key from t44_odku_generated_index force index (idx_generated_key) where generated_key = 2;
 select id, generated_key from t44_odku_generated_index force index (idx_generated_key) where generated_key = 4 order by id;
+-- A predicate-free forced index scan exposes a stale hidden key as a duplicate base row.
+select id, generated_key from t44_odku_generated_index force index for order by (idx_generated_key) order by generated_key, id;
 
 -- ============================================================
 -- 46. Cleanup
