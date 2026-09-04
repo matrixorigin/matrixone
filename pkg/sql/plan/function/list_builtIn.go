@@ -14657,6 +14657,30 @@ var supportedOthersBuiltIns = []FuncNew{
 					return Setval
 				},
 			},
+			{
+				overloadId:      2,
+				args:            []types.T{types.T_varchar, types.T_varchar, types.T_varchar},
+				volatile:        true,
+				realTimeRelated: true,
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_varchar.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return Setval
+				},
+			},
+			{
+				overloadId:      3,
+				args:            []types.T{types.T_varchar, types.T_varchar, types.T_bool, types.T_varchar},
+				volatile:        true,
+				realTimeRelated: true,
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_varchar.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return Setval
+				},
+			},
 		},
 	},
 	// function `currval`

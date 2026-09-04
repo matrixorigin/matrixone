@@ -635,11 +635,14 @@ func TestBindViewWithoutStoredSQLModeUsesLegacyPipeConcat(t *testing.T) {
 func TestBindViewSequenceFunctionsUseStoredDatabase(t *testing.T) {
 	for _, test := range []struct {
 		name     string
+		funcName string
 		expr     string
 		wantArgs int
 	}{
-		{name: "nextval", expr: "nextval('ab.cd')", wantArgs: 2},
-		{name: "currval", expr: "currval('ab.cd')", wantArgs: 2},
+		{name: "nextval", funcName: "nextval", expr: "nextval('ab.cd')", wantArgs: 2},
+		{name: "currval", funcName: "currval", expr: "currval('ab.cd')", wantArgs: 2},
+		{name: "setval", funcName: "setval", expr: "setval('ab.cd', '50')", wantArgs: 3},
+		{name: "setval_called", funcName: "setval", expr: "setval('ab.cd', '50', false)", wantArgs: 4},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			builder, nodeID := buildViewForSQLModeTest(t, "v_sequence", ViewData{
@@ -650,7 +653,7 @@ func TestBindViewSequenceFunctionsUseStoredDatabase(t *testing.T) {
 
 			functionExpr := builder.qry.Nodes[nodeID].ProjectList[0].GetF()
 			require.NotNil(t, functionExpr)
-			require.Equal(t, test.name, functionExpr.Func.GetObjName())
+			require.Equal(t, test.funcName, functionExpr.Func.GetObjName())
 			require.Len(t, functionExpr.Args, test.wantArgs)
 			// A dot is legal in a sequence identifier.  Keep the sequence name
 			// intact and carry the view database separately.
@@ -666,6 +669,9 @@ func TestSequenceDatabaseArgumentIsInternal(t *testing.T) {
 
 	_, err = runOneStmt(NewMockOptimizer(false), t, "select currval('seq1', 'db1')")
 	require.ErrorContains(t, err, "invalid argument function currval")
+
+	_, err = runOneStmt(NewMockOptimizer(false), t, "select setval('seq1', '50', 'db1')")
+	require.ErrorContains(t, err, "invalid argument function setval")
 }
 
 func TestBindViewUsesStoredLowerCaseTableNames(t *testing.T) {

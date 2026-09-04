@@ -289,9 +289,15 @@ func Setval(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *p
 	rs := vector.MustFunctionResult[types.Varlena](result)
 	tblnames := vector.GenerateFunctionStrParameter(ivecs[0])
 	setnums := vector.GenerateFunctionStrParameter(ivecs[1])
+	var databases vector.FunctionParameterWrapper[types.Varlena]
 	var iscalled vector.FunctionParameterWrapper[bool]
-	if len(ivecs) > 2 {
+	if len(ivecs) > 2 && ivecs[2].GetType().Oid == types.T_varchar {
+		databases = vector.GenerateFunctionStrParameter(ivecs[2])
+	} else if len(ivecs) > 2 {
 		iscalled = vector.GenerateFunctionFixedTypeParameter[bool](ivecs[2])
+	}
+	if len(ivecs) > 3 {
+		databases = vector.GenerateFunctionStrParameter(ivecs[3])
 	}
 
 	// Txn
@@ -316,7 +322,18 @@ func Setval(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *p
 			}
 		} else {
 			var res string
-			res, err = setval(string(tn), string(sn), isc, proc, txn, e)
+			db := proc.GetSessionInfo().Database
+			if databases != nil {
+				database, databaseNull := databases.GetStrValue(i)
+				if databaseNull {
+					if err = rs.AppendBytes(nil, true); err != nil {
+						return
+					}
+					continue
+				}
+				db = string(database)
+			}
+			res, err = setval(string(tn), string(sn), isc, db, proc, txn, e)
 			if err == nil {
 				err = rs.AppendBytes(functionUtil.QuickStrToBytes(res), false)
 			}
@@ -328,8 +345,7 @@ func Setval(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *p
 	return
 }
 
-func setval(tblname, setnum string, iscalled bool, proc *process.Process, txn client.TxnOperator, e engine.Engine) (string, error) {
-	db := proc.GetSessionInfo().Database
+func setval(tblname, setnum string, iscalled bool, db string, proc *process.Process, txn client.TxnOperator, e engine.Engine) (string, error) {
 	dbHandler, err := e.Database(proc.Ctx, db, txn)
 	if err != nil {
 		return "", err

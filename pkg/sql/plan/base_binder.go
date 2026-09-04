@@ -2838,17 +2838,6 @@ func (b *baseBinder) bindFuncExpr(astExpr *tree.FuncExpr, depth int32, isRoot bo
 		return nil, moerr.NewNYIf(b.GetContext(), "function expr '%v'", astExpr)
 	}
 	funcName := funcRef.ColName()
-	// NEXTVAL resolves its sequence at execution time. Preserve the database
-	// scope in the plan so an expanded view keeps using the view owner's
-	// database instead of the caller's current database.
-	if strings.EqualFold(funcName, "nextval") && b.ctx != nil && b.ctx.defaultDatabase != "" && len(astExpr.Exprs) == 1 {
-		if arg, ok := astExpr.Exprs[0].(*tree.NumVal); ok && arg.ValType == tree.P_char && !strings.Contains(arg.String(), ".") {
-			qualified := b.ctx.defaultDatabase + "." + arg.String()
-			copyExpr := *astExpr
-			copyExpr.Exprs = []tree.Expr{tree.NewNumVal(qualified, qualified, false, tree.P_char)}
-			astExpr = &copyExpr
-		}
-	}
 	if strings.EqualFold(funcName, "grouping") {
 		return b.bindGroupingFuncExpr(astExpr)
 	}
@@ -3548,8 +3537,18 @@ func (b *baseBinder) bindFuncExprImplByAstExpr(name string, astArgs []tree.Expr,
 	// it as an internal trailing argument in the executable expression.
 	if isSequenceNameFunction(name) {
 		// Keep the internal database argument out of the SQL surface.  The
-		// public sequence functions continue to accept exactly one argument.
-		if len(args) != 1 {
+		// public sequence functions continue to accept only their documented
+		// arities. SETVAL has both a two- and a three-argument public form.
+		validArity := len(args) == 1
+		if strings.EqualFold(name, "setval") {
+			validArity = len(args) == 2 || len(args) == 3
+			// The three-argument all-string overload is reserved for the
+			// trailing database argument added while expanding a view.
+			if len(args) == 3 && makeTypeByPlan2Expr(args[2]).Oid != types.T_bool {
+				validArity = false
+			}
+		}
+		if !validArity {
 			argTypes := make([]types.Type, len(args))
 			for i := range args {
 				argTypes[i] = makeTypeByPlan2Expr(args[i])
@@ -3678,7 +3677,7 @@ func (b *baseBinder) bindFuncExprImplByAstExpr(name string, astArgs []tree.Expr,
 
 func isSequenceNameFunction(name string) bool {
 	switch strings.ToLower(name) {
-	case "nextval", "currval":
+	case "nextval", "currval", "setval":
 		return true
 	default:
 		return false
