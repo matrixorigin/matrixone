@@ -15,6 +15,7 @@
 package aggexec
 
 import (
+	"math"
 	"slices"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -155,7 +156,8 @@ func (exec *countStarExec) Flush() ([]*vector.Vector, error) {
 
 type countColumnExec struct {
 	aggExec
-	extra int64
+	extra                 int64
+	distinctContributions []*vector.Vector
 }
 
 func (exec *countColumnExec) Fill(groupIndex int, row int, vectors []*vector.Vector) error {
@@ -302,6 +304,16 @@ func (exec *countColumnExec) Flush() (_ []*vector.Vector, retErr error) {
 			vals := vector.MustFixedColNoTypeCheck[int64](vecs[i])
 			for j := range vals {
 				vals[j] += int64(exec.state[i].argCnt[j])
+				if i < len(exec.distinctContributions) &&
+					exec.distinctContributions[i] != nil {
+					contributions := vector.MustFixedColNoTypeCheck[int64](
+						exec.distinctContributions[i])
+					if contributions[j] > math.MaxInt64-vals[j] {
+						return nil, moerr.NewInternalErrorNoCtx(
+							"count distinct result overflow")
+					}
+					vals[j] += contributions[j]
+				}
 			}
 		}
 	} else {
@@ -319,6 +331,20 @@ func (exec *countColumnExec) Flush() (_ []*vector.Vector, retErr error) {
 		}
 	}
 	return vecs, nil
+}
+
+func (exec *countColumnExec) Free() {
+	if exec == nil {
+		return
+	}
+	for i := range exec.distinctContributions {
+		if exec.distinctContributions[i] != nil {
+			exec.distinctContributions[i].Free(exec.mp)
+			exec.distinctContributions[i] = nil
+		}
+	}
+	exec.distinctContributions = nil
+	exec.aggExec.Free()
 }
 
 func makeCount(

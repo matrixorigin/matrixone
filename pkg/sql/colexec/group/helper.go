@@ -895,6 +895,14 @@ func (ctr *container) spillDataToDisk(proc *process.Process, opAnalyzer process.
 	if err, canceled := vm.CancelCheck(proc); canceled {
 		return 0, 0, err
 	}
+	// Once exact-key spill owns any COUNT(DISTINCT) state, no generic group
+	// record may reintroduce a complete hot-group argument set. Drain the current
+	// resident work set before every root or recursive group-spill write.
+	if ctr.distinctSpill != nil && !ctr.distinctContributionsPrepared {
+		if _, err := ctr.drainExactCountDistinct(proc, opAnalyzer); err != nil {
+			return 0, 0, err
+		}
+	}
 	if ctr.recoveryCapacity != nil && opAnalyzer != nil {
 		reserved, _ := ctr.recoveryCapacity.Snapshot()
 		opAnalyzer.GetOpStats().SetMaxExtraStat(
@@ -931,10 +939,21 @@ func (ctr *container) spillDataToDisk(proc *process.Process, opAnalyzer process.
 		// Create bucket objects; files are created lazily on first write.
 		ctr.currentSpillBkt = make([]*spillBucket, ctr.spillPartitionCount())
 		for i := range ctr.currentSpillBkt {
-			ctr.currentSpillBkt[i] = &spillBucket{
+			child := &spillBucket{
 				lv:   myLv,
 				name: fmt.Sprintf("%s_%d", parentName, i),
 			}
+			if parentBkt != nil {
+				child.path = parentBkt.path
+				child.pathLen = parentBkt.pathLen
+			}
+			if child.pathLen >= len(child.path) {
+				return 0, 0, moerr.NewInternalErrorNoCtx(
+					"group spill path exceeds maximum depth")
+			}
+			child.path[child.pathLen] = uint8(i)
+			child.pathLen++
+			ctr.currentSpillBkt[i] = child
 		}
 	}
 
@@ -1591,6 +1610,11 @@ reloadLoop:
 		}
 		return ctr.loadSpilledData(proc, opAnalyzer, aggExprs)
 	}
+	if ctr.distinctContributionsPrepared {
+		if err := ctr.applyDistinctContributions(proc, bkt); err != nil {
+			return false, err
+		}
+	}
 
 	return true, nil
 }
@@ -1667,6 +1691,7 @@ func (ctr *container) outputOneBatchFinal(proc *process.Process, opAnalyzer proc
 	if loaded {
 		return ctr.outputOneBatchFinal(proc, opAnalyzer, aggExprs)
 	}
+	ctr.finishDistinctContributions()
 	if err := ctr.releaseFinalRecoveryCapacity(); err != nil {
 		return vm.CancelResult, err
 	}
