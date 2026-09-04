@@ -55,6 +55,12 @@ type AppendMVCCHandle struct {
 	*sync.RWMutex
 	writerGate priorityWriterGate
 	meta       *catalog.ObjectEntry
+	// sealed is protected by RWMutex. Once set, the handle must never accept
+	// another AppendNode. finalizedCommit is published only after every node
+	// present at sealing has reached commit or rollback.
+	sealed                bool
+	appendHistoryComplete bool
+	finalizedCommit       atomic.Pointer[appendFinalizedCommit]
 	// appends is ordered by (prepare TS, physical start row). Active nodes use
 	// UncommitTS and therefore stay at the end until their txn is prepared.
 	appends *txnbase.MVCCSlice[*AppendNode]
@@ -67,6 +73,10 @@ type AppendMVCCHandle struct {
 	// AppendNode's transaction timestamps are updated in place.
 	prepareTree    atomic.Pointer[AppendPrepareSnapshot]
 	appendListener func(txnif.AppendNode) error
+}
+
+type appendFinalizedCommit struct {
+	max types.TS
 }
 
 // AppendPrepareSnapshot is an immutable view of the append PrepareTS index.
@@ -109,10 +119,11 @@ func appendPrepareEntryFromNode(node *AppendNode) appendPrepareEntry {
 
 func NewAppendMVCCHandle(meta *catalog.ObjectEntry) *AppendMVCCHandle {
 	node := &AppendMVCCHandle{
-		RWMutex: &sync.RWMutex{},
-		meta:    meta,
-		appends: txnbase.NewMVCCSlice(NewEmptyAppendNode, CompareAppendNode),
-		rows:    make([]*AppendNode, 0),
+		RWMutex:               &sync.RWMutex{},
+		meta:                  meta,
+		appendHistoryComplete: true,
+		appends:               txnbase.NewMVCCSlice(NewEmptyAppendNode, CompareAppendNode),
+		rows:                  make([]*AppendNode, 0),
 	}
 	node.prepareTree.Store(&AppendPrepareSnapshot{tree: newAppendPrepareTree()})
 	node.writerGate.init()
@@ -156,9 +167,65 @@ func (n *AppendMVCCHandle) UnlockForAppend() {
 func (n *AppendMVCCHandle) ReleaseAppends() {
 	n.Lock()
 	defer n.Unlock()
+	if n.finalizedCommit.Load() == nil {
+		n.appendHistoryComplete = false
+	}
 	n.appends = nil
 	n.rows = nil
 	n.prepareTree.Store(nil)
+}
+
+// MarkAppendHistoryIncomplete disables max-commit publication for an object
+// reconstructed without its complete AppendNode history. This is expected
+// after restart because the optimization state is deliberately not persisted.
+func (n *AppendMVCCHandle) MarkAppendHistoryIncomplete() {
+	n.LockForAppend()
+	defer n.UnlockForAppend()
+	n.appendHistoryComplete = false
+}
+
+// SealLocked permanently closes the AppendNode set and tries to publish its
+// maximum committed timestamp. It must be called while holding the handle's
+// write lock. Publication is deferred while any transaction is still active.
+func (n *AppendMVCCHandle) SealLocked() {
+	n.sealed = true
+	n.tryFinalizeCommitLocked()
+}
+
+// Seal permanently closes the AppendNode set. It never waits for an append
+// transaction; the last ApplyCommit or ApplyRollback completes publication.
+func (n *AppendMVCCHandle) Seal() {
+	n.LockForAppend()
+	defer n.UnlockForAppend()
+	n.SealLocked()
+}
+
+func (n *AppendMVCCHandle) tryFinalizeCommitLocked() {
+	if !n.sealed || !n.appendHistoryComplete || n.finalizedCommit.Load() != nil || n.appends == nil {
+		return
+	}
+	maxCommit := types.TS{}
+	for _, node := range n.rows {
+		if !node.IsCommitted() {
+			return
+		}
+		commitTS := node.GetCommitTS()
+		if !node.IsAborted() && commitTS.GT(&maxCommit) {
+			maxCommit = commitTS
+		}
+	}
+	n.finalizedCommit.Store(&appendFinalizedCommit{max: maxCommit})
+}
+
+// GetMaxCommitTS returns a stable maximum only after the AppendNode set is
+// sealed and all of its transactions have reached a terminal state. Aborted
+// nodes do not contribute to the maximum.
+func (n *AppendMVCCHandle) GetMaxCommitTS() (types.TS, bool) {
+	state := n.finalizedCommit.Load()
+	if state == nil {
+		return types.TS{}, false
+	}
+	return state.max, true
 }
 
 func compareAppendPrepare(a, b *AppendNode) int {
@@ -469,6 +536,9 @@ func (n *AppendMVCCHandle) CollectUncommittedANodesPreparedBeforeLocked(
 }
 
 func (n *AppendMVCCHandle) OnReplayAppendNode(an *AppendNode) {
+	if n.sealed {
+		panic("cannot replay append node into sealed append MVCC")
+	}
 	an.mvcc = n
 	n.insertPrepareLocked(an)
 	n.insertRowLocked(an)
@@ -480,6 +550,9 @@ func (n *AppendMVCCHandle) AddAppendNodeLocked(
 	startRow uint32,
 	maxRow uint32,
 ) (an *AppendNode, created bool) {
+	if n.sealed {
+		panic("cannot add append node to sealed append MVCC")
+	}
 	var last *AppendNode
 	if len(n.rows) != 0 {
 		last = n.rows[len(n.rows)-1]

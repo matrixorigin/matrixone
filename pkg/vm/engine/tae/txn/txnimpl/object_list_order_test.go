@@ -18,7 +18,10 @@ import (
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables/updates"
 	"github.com/stretchr/testify/require"
 )
 
@@ -82,4 +85,52 @@ func TestForeachIncrementalObjectDropStartsAfterFrom(t *testing.T) {
 	// DeletedAt == from is excluded; DeletedAt < to is no longer visible at to;
 	// the scan continues through the group and keeps entries deleted at/after to.
 	require.Equal(t, []types.TS{types.BuildTS(4, 0), types.BuildTS(5, 0)}, deletedAt)
+}
+
+func TestForeachIncrementalObjectSkipsFinalizedOldAppendableObject(t *testing.T) {
+	factory := tables.NewDataFactory(nil, "")
+	cata := catalog.MockCatalog(factory)
+	defer cata.Close()
+	db, err := cata.CreateDBEntry("db", "", "", nil)
+	require.NoError(t, err)
+	table, err := db.CreateTableEntry(catalog.MockSchema(1, 0), nil, nil)
+	require.NoError(t, err)
+	createObject := func(createdAt types.TS) *catalog.ObjectEntry {
+		id := objectio.NewObjectid()
+		stats := objectio.NewObjectStatsWithObjectID(&id, true, false, false)
+		entry, createErr := table.CreateCommittedObject(
+			createdAt,
+			&objectio.CreateObjOpt{Stats: stats},
+			factory.MakeObjectFactory(),
+		)
+		require.NoError(t, createErr)
+		return entry
+	}
+
+	old := createObject(types.BuildTS(1, 0))
+	old.GetObjectData().(interface{ SealAppend() }).SealAppend()
+
+	equal := createObject(types.BuildTS(2, 0))
+	require.NoError(t, equal.GetObjectData().OnReplayAppend(
+		updates.MockAppendNode(types.BuildTS(4, 0), 0, 1, nil),
+	))
+	equal.GetObjectData().(interface{ SealAppend() }).SealAppend()
+
+	createObject(types.BuildTS(3, 0))
+
+	var visited []int64
+	err = foreachIncrementalObject(
+		table.MakeDataObjectSnapshot(),
+		types.BuildTS(4, 0),
+		types.BuildTS(6, 0),
+		func(entry *catalog.ObjectEntry) error {
+			visited = append(visited, entry.CreatedAt.Physical())
+			return nil
+		},
+	)
+	require.NoError(t, err)
+	// The empty finalized object has maxCommitTS=0 and is skipped. The object
+	// whose max equals from is retained because the optimization is strict <.
+	// An object that has not been sealed/finalized is always retained.
+	require.Equal(t, []int64{2, 3}, visited)
 }

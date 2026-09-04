@@ -84,9 +84,10 @@ type Object interface {
 	// check if all rows are committed before ts
 	// NOTE: here we assume that the object is visible to the ts
 	// if the object is an appendable object:
-	// 1. if the object is not frozen, return false
-	// 2. if the object is frozen and in-memory, check with the max ts committed
-	// 3. if the object is persisted, return false
+	// 1. if its AppendNode set is not permanently sealed, return false
+	// 2. if any attached append transaction is unfinished, return false
+	// 3. otherwise compare the stable max commit ts with ts; the in-memory
+	//    bound remains valid if the object is subsequently persisted
 	// if the object is not an appendable object:
 	// only check with the created ts
 	CoarseCheckAllRowsCommittedBefore(ts types.TS) bool

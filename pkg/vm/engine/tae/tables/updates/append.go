@@ -143,6 +143,7 @@ func (node *AppendNode) ApplyCommit(id string) error {
 		panic("AppendNode | ApplyCommit | LogicErr")
 	}
 	node.TxnMVCCNode.ApplyCommit(id)
+	defer node.mvcc.tryFinalizeCommitLocked()
 	listener := node.mvcc.GetAppendListener()
 	var err error
 	if listener != nil {
@@ -155,6 +156,7 @@ func (node *AppendNode) ApplyRollback() (err error) {
 	node.mvcc.LockForCommit()
 	defer node.mvcc.UnlockForCommit()
 	_, err = node.TxnMVCCNode.ApplyRollback()
+	node.mvcc.tryFinalizeCommitLocked()
 	return
 }
 
