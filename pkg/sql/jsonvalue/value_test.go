@@ -80,6 +80,11 @@ func TestFromVectorMySQLConstructorTypes(t *testing.T) {
 			wantJSON: `"2024-02-03 04:05:06.123456"`, wantType: "DATETIME",
 		},
 		{
+			name: "timestamp default timezone", typ: types.New(types.T_timestamp, 0, 0),
+			append:   func(v *vector.Vector, mp *mpool.MPool) error { return vector.AppendFixed(v, timestamp0, false, mp) },
+			wantJSON: `"` + timestamp0.String2(time.Local, 6) + `"`, wantType: "DATETIME",
+		},
+		{
 			name: "year", typ: types.T_year.ToType(),
 			append: func(v *vector.Vector, mp *mpool.MPool) error {
 				return vector.AppendFixed(v, types.MoYear(2024), false, mp)
@@ -149,10 +154,23 @@ func TestFromVectorGeometryAndNull(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, bytejson.TpCodeObject, bj.Type)
 
+	_, err = FromVector(context.Background(), geometry, 0, time.UTC, nil)
+	require.ErrorContains(t, err, "geometry JSON conversion is unavailable")
+
 	nulls := vector.NewVec(types.T_year.ToType())
 	require.NoError(t, vector.AppendFixed(nulls, types.MoYear(0), true, mp))
 	defer nulls.Free(mp)
 	value, err = FromVector(context.Background(), nulls, 0, time.UTC, nil)
 	require.NoError(t, err)
 	require.Nil(t, value)
+}
+
+func TestFromVectorRejectsInvalidBitWidth(t *testing.T) {
+	mp := mpool.MustNewZero()
+	v := vector.NewVec(types.New(types.T_bit, 65, 0))
+	require.NoError(t, vector.AppendFixed(v, uint64(1), false, mp))
+	defer v.Free(mp)
+
+	_, err := FromVector(nil, v, 0, time.UTC, nil)
+	require.ErrorContains(t, err, "cannot cast BIT(65) to json")
 }
