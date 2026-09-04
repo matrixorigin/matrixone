@@ -77,15 +77,25 @@ func TestArrowLoadRolloutGateFailsClosedAndSerializesWhenDistributedOff(t *testi
 	require.ErrorContains(t, err, "configuration is unavailable")
 
 	frontend := &config.FrontendParameters{}
+	frontend.SetDefaultValues()
 	compile.proc.Ctx = context.WithValue(
 		context.Background(), config.ParameterUnitKey,
 		config.NewParameterUnit(frontend, nil, nil, nil),
 	)
+	settings, err := compile.requireArrowLoadEnabled(param)
+	require.NoError(t, err)
+	require.True(t, settings.Enabled)
+	require.True(t, settings.S3Enabled)
+	require.True(t, settings.DistributedEnabled)
+	require.Same(t, param, arrowParamForRollout(param, settings))
+
+	frontend.ArrowLoad.Enabled = false
 	_, err = compile.requireArrowLoadEnabled(param)
 	require.ErrorContains(t, err, "disabled by configuration")
-
 	frontend.ArrowLoad.Enabled = true
-	settings, err := compile.requireArrowLoadEnabled(param)
+
+	frontend.ArrowLoad.DistributedEnabled = false
+	settings, err = compile.requireArrowLoadEnabled(param)
 	require.NoError(t, err)
 	serial := arrowParamForRollout(param, settings)
 	require.NotSame(t, param, serial)
@@ -95,6 +105,7 @@ func TestArrowLoadRolloutGateFailsClosedAndSerializesWhenDistributedOff(t *testi
 	s3 := new(tree.ExternParam)
 	*s3 = *param
 	s3.ScanType = tree.S3
+	frontend.ArrowLoad.S3Enabled = false
 	_, err = compile.requireArrowLoadEnabled(s3)
 	require.ErrorContains(t, err, "S3 or stage")
 	dynamicMinIO := new(tree.ExternParam)

@@ -28,19 +28,17 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// startArrowLoadCluster starts a dedicated, non-shared embedded cluster with the
-// `cn.frontend.arrow-load` rollout gates set as requested, closing it when the test
-// completes. Every call here gets its own cluster and its own process-local state
-// (unlike pkg/embed's package-level basicClusterState/singleCNClusterState), so
-// sequential calls across this package's tests never trip the "accidental second
-// embedded test cluster" exclusivity guard, and the feature never leaks into any
-// other package's shared cluster or the default etc/launch* BVT configuration.
+// Arrow LOAD tests use dedicated, non-shared embedded clusters and close them at
+// cleanup. This keeps process-local metrics and lifecycle state out of pkg/embed's
+// package-level shared clusters. Most public-path tests use the ordinary default
+// configuration; focused rollback tests explicitly override the kill switches.
 type arrowLoadClusterOptions struct {
 	cnCount            int
 	enabled            bool
 	s3Enabled          bool
 	distributedEnabled bool
 	forceMaterialize   bool
+	useDefaults        bool
 }
 
 func startArrowLoadCluster(t testing.TB, cnCount int, enabled, s3Enabled, distributedEnabled bool) embed.Cluster {
@@ -51,11 +49,20 @@ func startArrowLoadCluster(t testing.TB, cnCount int, enabled, s3Enabled, distri
 	})
 }
 
+// startArrowLoadClusterWithDefaults deliberately installs no Arrow-specific
+// configuration. Tests using it prove the product defaults exposed to users.
+func startArrowLoadClusterWithDefaults(t testing.TB, cnCount int) embed.Cluster {
+	t.Helper()
+	return startArrowLoadClusterWithOptions(t, arrowLoadClusterOptions{
+		cnCount: cnCount, useDefaults: true,
+	})
+}
+
 func startArrowLoadClusterWithOptions(t testing.TB, options arrowLoadClusterOptions) embed.Cluster {
 	t.Helper()
-	c, err := embed.StartTestCluster(
-		embed.WithCNCount(options.cnCount),
-		embed.WithPreStart(func(svc embed.ServiceOperator) {
+	clusterOptions := []embed.Option{embed.WithCNCount(options.cnCount)}
+	if !options.useDefaults {
+		clusterOptions = append(clusterOptions, embed.WithPreStart(func(svc embed.ServiceOperator) {
 			if svc.ServiceType() != metadata.ServiceType_CN {
 				return
 			}
@@ -65,8 +72,9 @@ func startArrowLoadClusterWithOptions(t testing.TB, options arrowLoadClusterOpti
 				cfg.CN.Frontend.ArrowLoad.DistributedEnabled = options.distributedEnabled
 				cfg.CN.Frontend.ArrowLoad.ForceMaterialize = options.forceMaterialize
 			})
-		}),
-	)
+		}))
+	}
+	c, err := embed.StartTestCluster(clusterOptions...)
 	require.NoError(t, err)
 	t.Cleanup(func() {
 		require.NoError(t, c.Close())

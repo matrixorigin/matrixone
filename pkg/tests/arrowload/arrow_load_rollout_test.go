@@ -26,12 +26,13 @@ import (
 )
 
 // TestArrowLoadRolloutRollbackDrain exercises the operational transition, not
-// just static gate values. It stops a cluster while an Arrow statement is
-// admitted, restarts with every Arrow gate disabled, and finally rolls forward
-// with distributed execution disabled. Shutdown may finish the admitted
-// transaction or cancel it; either result must be atomic and bounded.
+// just static gate values. It starts from the default-on policy, stops a cluster
+// while an Arrow statement is admitted, restarts with every Arrow gate disabled,
+// and finally rolls forward with distributed execution disabled. Shutdown may
+// finish the admitted transaction or cancel it; either result must be atomic
+// and bounded.
 func TestArrowLoadRolloutRollbackDrain(t *testing.T) {
-	c := startArrowLoadCluster(t, 1, true, true, true)
+	c := startArrowLoadClusterWithDefaults(t, 1)
 	db := openArrowLoadDB(t, c, 0)
 	mustExec(t, db, "create database if not exists arrow_rollout")
 	mustExec(t, db, "use arrow_rollout")

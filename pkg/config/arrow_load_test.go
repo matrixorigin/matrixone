@@ -21,22 +21,77 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestArrowLoadRolloutGatesDefaultOffAndDecodeIndependently(t *testing.T) {
+func TestArrowLoadDefaultsAndProgrammaticOptOut(t *testing.T) {
 	var frontend FrontendParameters
 	frontend.SetDefaultValues()
-	require.Equal(t, ArrowLoadParameters{}, frontend.ArrowLoad)
+	require.True(t, frontend.ArrowLoad.Enabled)
+	require.True(t, frontend.ArrowLoad.S3Enabled)
+	require.True(t, frontend.ArrowLoad.DistributedEnabled)
+	require.False(t, frontend.ArrowLoad.ForceMaterialize)
 
+	parameters := NewArrowLoadParameters()
+	parameters.Enabled = false
+	parameters.S3Enabled = false
+	parameters.DistributedEnabled = false
+	parameters.SetDefaultValues()
+	require.False(t, parameters.Enabled)
+	require.False(t, parameters.S3Enabled)
+	require.False(t, parameters.DistributedEnabled)
+}
+
+func TestArrowLoadTOMLDefaultsAndExplicitOptOut(t *testing.T) {
+	for _, test := range []struct {
+		name               string
+		input              string
+		enabled            bool
+		s3Enabled          bool
+		distributedEnabled bool
+		forceMaterialize   bool
+	}{
+		{name: "section omitted", enabled: true, s3Enabled: true, distributedEnabled: true},
+		{
+			name: "enable fields omitted", input: "[arrow-load]\nforce-materialize = true\n",
+			enabled: true, s3Enabled: true, distributedEnabled: true, forceMaterialize: true,
+		},
+		{
+			name: "explicit opt out", input: `[arrow-load]
+enabled = false
+s3-enabled = false
+distributed-enabled = false
+`,
+		},
+		{
+			name: "one case-insensitive opt out", input: "[arrow-load]\nS3-ENABLED = false\n",
+			enabled: true, distributedEnabled: true,
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			decoded := struct {
+				ArrowLoad ArrowLoadParameters `toml:"arrow-load"`
+			}{ArrowLoad: *NewArrowLoadParameters()}
+			_, err := toml.Decode(test.input, &decoded)
+			require.NoError(t, err)
+			decoded.ArrowLoad.SetDefaultValues()
+
+			require.Equal(t, test.enabled, decoded.ArrowLoad.Enabled)
+			require.Equal(t, test.s3Enabled, decoded.ArrowLoad.S3Enabled)
+			require.Equal(t, test.distributedEnabled, decoded.ArrowLoad.DistributedEnabled)
+			require.Equal(t, test.forceMaterialize, decoded.ArrowLoad.ForceMaterialize)
+
+			// Service validation may apply defaults more than once. An explicit
+			// false must remain an opt-out on every later pass.
+			decoded.ArrowLoad.SetDefaultValues()
+			require.Equal(t, test.enabled, decoded.ArrowLoad.Enabled)
+			require.Equal(t, test.s3Enabled, decoded.ArrowLoad.S3Enabled)
+			require.Equal(t, test.distributedEnabled, decoded.ArrowLoad.DistributedEnabled)
+		})
+	}
+}
+
+func TestArrowLoadRejectsConflictingGateKeys(t *testing.T) {
 	var decoded struct {
 		ArrowLoad ArrowLoadParameters `toml:"arrow-load"`
 	}
-	_, err := toml.Decode(`[arrow-load]
-enabled = true
-s3-enabled = true
-distributed-enabled = false
-force-materialize = true
-`, &decoded)
-	require.NoError(t, err)
-	require.Equal(t, ArrowLoadParameters{
-		Enabled: true, S3Enabled: true, DistributedEnabled: false, ForceMaterialize: true,
-	}, decoded.ArrowLoad)
+	_, err := toml.Decode("[arrow-load]\nenabled = false\nENABLED = true\n", &decoded)
+	require.ErrorContains(t, err, "conflicting enabled keys")
 }

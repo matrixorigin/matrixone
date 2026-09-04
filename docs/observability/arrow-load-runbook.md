@@ -5,22 +5,27 @@ Do not create a dedicated Arrow dashboard. Put storage/range panels in the
 existing FileService view and conversion/publication panels in the existing
 Pipeline view when dashboard integration is deployed.
 
-## Rollout controls
+## Availability and rollback controls
 
-The zero-value CN frontend settings are fail-closed and default to disabled.
-A release or deployment profile should begin with:
+Arrow IPC File, Arrow IPC Stream, S3/stage sources, and distributed execution
+are enabled by default. A CN needs no `[cn.frontend.arrow-load]` section for
+ordinary Arrow LOAD use.
+
+The settings remain available as deployment kill switches. Specify only the
+rollback needed for an incident; for example, this configuration stops new
+Arrow statements while leaving the implementation installed:
 
 ```toml
 [cn.frontend.arrow-load]
 enabled = false
-s3-enabled = false
-distributed-enabled = false
-force-materialize = false
 ```
 
-Repository development/BVT launch profiles may explicitly enable local and
-distributed Arrow LOAD so the SQL case is runnable. That test opt-in does not
-change the zero-value production default or enable the separate S3 gate.
+`s3-enabled=false` rejects direct S3-compatible and S3-backed stage sources
+while retaining local Arrow LOAD. `distributed-enabled=false` makes a requested
+parallel Arrow LOAD execute serially. `force-materialize=true` retains Arrow
+LOAD but disables the borrowed Arrow backing optimization. Omitted enable fields
+default to `true`; explicit `false` values survive repeated configuration
+validation and service restart.
 
 The current implementation charges every raw range, cache pin, and decoded
 Arrow allocation to the shared statement account and limits each cache pin to
@@ -28,11 +33,11 @@ Arrow allocation to the shared statement account and limits each cache pin to
 still a release blocker. `mo_arrow_load_pinned_bytes` observes process usage; it
 is not an admission controller and must not be treated as that missing quota.
 
-Enable local File/Stream LOAD first, then object storage, then distributed
-execution. During rollback, stop admitting new Arrow statements by disabling
-`enabled`; allow already admitted statements to drain or cancel them through
-the normal query lifecycle. Do not switch an executing statement to a
-different object generation or conversion policy.
+Deployments that have not accepted a source or execution mode may opt out before
+starting CNs. During rollback, stop admitting new Arrow statements by disabling
+`enabled`; allow already admitted statements to drain or cancel them through the
+normal query lifecycle. Do not switch an executing statement to a different
+object generation or conversion policy.
 
 `force-materialize=true` leaves Arrow LOAD enabled but disables borrowed Arrow
 backing for statements compiled after the setting is applied. Use it to isolate

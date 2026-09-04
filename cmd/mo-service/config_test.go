@@ -386,6 +386,45 @@ func TestMongoDBEnablementConfigDefaults(t *testing.T) {
 	}
 }
 
+func TestArrowLoadConfigDefaults(t *testing.T) {
+	for _, test := range []struct {
+		name               string
+		input              string
+		enabled            bool
+		s3Enabled          bool
+		distributedEnabled bool
+	}{
+		{name: "omitted", enabled: true, s3Enabled: true, distributedEnabled: true},
+		{
+			name: "S3 opt out", input: "[cn.frontend.arrow-load]\ns3-enabled = false\n",
+			enabled: true, distributedEnabled: true,
+		},
+		{
+			name: "all opt out", input: `[cn.frontend.arrow-load]
+enabled = false
+s3-enabled = false
+distributed-enabled = false
+`,
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			cfg := NewConfig()
+			require.NoError(t, parseFromString(test.input, cfg))
+			require.NoError(t, cfg.setDefaultValue())
+			require.Equal(t, test.enabled, cfg.CN.Frontend.ArrowLoad.Enabled)
+			require.Equal(t, test.s3Enabled, cfg.CN.Frontend.ArrowLoad.S3Enabled)
+			require.Equal(t, test.distributedEnabled, cfg.CN.Frontend.ArrowLoad.DistributedEnabled)
+
+			// CN construction validates the frontend configuration again. Keep
+			// every explicit rollback value stable across that second pass.
+			cfg.CN.SetDefaultValue()
+			require.Equal(t, test.enabled, cfg.CN.Frontend.ArrowLoad.Enabled)
+			require.Equal(t, test.s3Enabled, cfg.CN.Frontend.ArrowLoad.S3Enabled)
+			require.Equal(t, test.distributedEnabled, cfg.CN.Frontend.ArrowLoad.DistributedEnabled)
+		})
+	}
+}
+
 func TestClockOffsetBoundRetainedWhenMonitoringDisabled(t *testing.T) {
 	validators := []struct {
 		name string
