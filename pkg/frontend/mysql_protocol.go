@@ -533,6 +533,14 @@ func (mp *MysqlProtocolImpl) GetCapability() uint32 {
 	return mp.capability
 }
 
+// GetCollationID returns the negotiated client collation. The value is part
+// of the immutable protocol shape of a cached backend connection.
+func (mp *MysqlProtocolImpl) GetCollationID() int {
+	mp.m.Lock()
+	defer mp.m.Unlock()
+	return mp.collationID
+}
+
 func (mp *MysqlProtocolImpl) SetCapability(cap uint32) {
 	mp.m.Lock()
 	defer mp.m.Unlock()

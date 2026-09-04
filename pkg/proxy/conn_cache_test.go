@@ -24,6 +24,7 @@ import (
 	"net"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -403,6 +404,243 @@ func TestConnCache(t *testing.T) {
 	})
 }
 
+func TestConnCacheRejectsDifferentPrincipal(t *testing.T) {
+	runTestWithNewConnCacheWithAuthConstructor(t, nil, func(cc ConnCache) {
+		c1, _ := net.Pipe()
+		backend := newMockServerConn(c1)
+		backend.setCN(&CNServer{uuid: "cn-1"})
+		identity := cacheReuseIdentity{
+			tenant:      "tenant-a",
+			username:    "cached-user",
+			role:        "role-a",
+			originIP:    "127.0.0.1",
+			capability:  frontend.CLIENT_PROTOCOL_41,
+			collationID: 45,
+		}
+		identityCache := cc.(identityConnCache)
+		require.True(t, identityCache.PushWithIdentity("tenant-a", backend, identity))
+
+		client := clientInfo{labelInfo: labelInfo{Tenant: "tenant-a"}, username: "other-user"}
+		require.Nil(t, identityCache.PopWithIdentity(
+			"tenant-a", 1, nil, nil, client,
+			cacheReuseIdentity{
+				tenant:      "tenant-a",
+				username:    client.username,
+				role:        "role-a",
+				originIP:    "127.0.0.1",
+				capability:  frontend.CLIENT_PROTOCOL_41,
+				collationID: 45,
+			},
+		))
+		require.Equal(t, 1, cc.Count())
+	})
+}
+
+func TestConnCacheSelectsCompatibleGenerationWithinBucket(t *testing.T) {
+	runTestWithNewConnCacheWithAuthConstructor(t, nil, func(cc ConnCache) {
+		identityCache := cc.(identityConnCache)
+		firstLocal, firstPeer := net.Pipe()
+		defer firstPeer.Close()
+		secondLocal, secondPeer := net.Pipe()
+		defer secondPeer.Close()
+		first := newMockServerConn(firstLocal)
+		second := newMockServerConn(secondLocal)
+		firstIdentity := cacheReuseIdentity{
+			tenant:      "tenant-a",
+			username:    "first",
+			role:        "role-a",
+			originIP:    "127.0.0.1",
+			capability:  frontend.CLIENT_PROTOCOL_41,
+			collationID: 45,
+		}
+		secondIdentity := firstIdentity
+		secondIdentity.username = "second"
+		require.True(t, identityCache.PushWithIdentity("tenant-a", first, firstIdentity))
+		require.True(t, identityCache.PushWithIdentity("tenant-a", second, secondIdentity))
+
+		reused := identityCache.PopWithIdentity(
+			"tenant-a", 2, nil, nil,
+			clientInfo{labelInfo: labelInfo{Tenant: "tenant-a"}, username: "second"},
+			secondIdentity,
+		)
+		require.Same(t, second, reused)
+		require.Equal(t, 1, cc.Count())
+
+		incompatible := firstIdentity
+		incompatible.capability++
+		require.Nil(t, identityCache.PopWithIdentity(
+			"tenant-a", 3, nil, nil,
+			clientInfo{labelInfo: labelInfo{Tenant: "tenant-a"}, username: "first"},
+			incompatible,
+		))
+		require.Equal(t, 1, cc.Count())
+		incompatible = firstIdentity
+		incompatible.collationID++
+		require.Nil(t, identityCache.PopWithIdentity(
+			"tenant-a", 3, nil, nil,
+			clientInfo{labelInfo: labelInfo{Tenant: "tenant-a"}, username: "first"},
+			incompatible,
+		))
+		require.Equal(t, 1, cc.Count())
+
+		require.Same(t, first, identityCache.PopWithIdentity(
+			"tenant-a", 4, nil, nil,
+			clientInfo{labelInfo: labelInfo{Tenant: "tenant-a"}, username: "first"},
+			firstIdentity,
+		))
+	})
+}
+
+func TestConnCacheRefreshesAuthenticationBeforeReuse(t *testing.T) {
+	var (
+		seenClient clientInfo
+		seenSalt   []byte
+		seenAuth   []byte
+		calls      atomic.Int64
+		gotAuth    string
+	)
+	cache := newConnCache(
+		context.Background(), "", runtime.DefaultRuntime().Logger(),
+		withResetSessionFunc(func(ServerConn) ([]byte, error) { return nil, nil }),
+		withAuthConstructor(func(auth []byte) Authenticator {
+			gotAuth = string(auth)
+			return newMockGoodAuthenticator()
+		}),
+		withRefreshSessionAuthFunc(func(_ context.Context, _ ServerConn, client clientInfo, salt, auth []byte) ([]byte, error) {
+			seenClient = client
+			seenSalt = append([]byte(nil), salt...)
+			seenAuth = append([]byte(nil), auth...)
+			calls.Add(1)
+			return []byte("fresh-auth"), nil
+		}),
+	)
+	defer cache.Close()
+
+	local, peer := net.Pipe()
+	defer peer.Close()
+	backend := newMockServerConn(local)
+	identity := cacheReuseIdentity{
+		tenant:      "tenant-a",
+		username:    "dump",
+		originIP:    "127.0.0.1",
+		capability:  frontend.CLIENT_PROTOCOL_41,
+		collationID: 45,
+	}
+	require.True(t, cache.(identityConnCache).PushWithIdentity("tenant-a", backend, identity))
+
+	client := clientInfo{
+		labelInfo:  labelInfo{Tenant: "tenant-a"},
+		username:   "dump",
+		userInput:  "tenant-a:dump",
+		database:   "db_a",
+		originIP:   net.ParseIP("127.0.0.1"),
+		originPort: 3307,
+	}
+	reused := cache.(identityConnCache).PopWithIdentity(
+		"tenant-a", 7, []byte("salt"), []byte("response"), client, identity)
+	require.Same(t, backend, reused)
+	require.Equal(t, int64(1), calls.Load())
+	require.Equal(t, client.userInput, seenClient.userInput)
+	require.Equal(t, client.database, seenClient.database)
+	require.Equal(t, "127.0.0.1:3307", seenClient.clientAddress())
+	require.Equal(t, []byte("salt"), seenSalt)
+	require.Equal(t, []byte("response"), seenAuth)
+	require.Equal(t, "fresh-auth", gotAuth)
+	require.NoError(t, reused.Close())
+}
+
+func TestConnCacheRefreshAuthenticationFailureDiscardsGeneration(t *testing.T) {
+	cache := newConnCache(
+		context.Background(), "", runtime.DefaultRuntime().Logger(),
+		withResetSessionFunc(func(ServerConn) ([]byte, error) { return nil, nil }),
+		withAuthConstructor(nil),
+		withRefreshSessionAuthFunc(func(context.Context, ServerConn, clientInfo, []byte, []byte) ([]byte, error) {
+			return nil, fmt.Errorf("credentials are no longer valid")
+		}),
+	)
+	defer cache.Close()
+
+	local, peer := net.Pipe()
+	defer peer.Close()
+	backend := newMockServerConn(local)
+	identity := cacheReuseIdentity{tenant: "tenant-a", username: "dump"}
+	require.True(t, cache.(identityConnCache).PushWithIdentity("tenant-a", backend, identity))
+
+	client := clientInfo{labelInfo: labelInfo{Tenant: "tenant-a"}, username: "dump"}
+	require.Nil(t, cache.(identityConnCache).PopWithIdentity(
+		"tenant-a", 7, nil, nil, client, identity))
+	require.Zero(t, cache.Count())
+}
+
+func TestConnCacheRefreshAuthenticationRejectionStopsCompatibleScan(t *testing.T) {
+	var calls atomic.Int64
+	cache := newConnCache(
+		context.Background(), "", runtime.DefaultRuntime().Logger(),
+		withResetSessionFunc(func(ServerConn) ([]byte, error) { return nil, nil }),
+		withAuthConstructor(nil),
+		withRefreshSessionAuthFunc(func(context.Context, ServerConn, clientInfo, []byte, []byte) ([]byte, error) {
+			calls.Add(1)
+			return nil, &cacheAuthRejectedError{cause: fmt.Errorf("check password failed")}
+		}),
+	)
+	defer cache.Close()
+
+	identity := cacheReuseIdentity{tenant: "tenant-a", username: "dump"}
+	for range 2 {
+		local, peer := net.Pipe()
+		defer peer.Close()
+		require.True(t, cache.(identityConnCache).PushWithIdentity(
+			"tenant-a", newMockServerConn(local), identity))
+	}
+
+	sc, err := cache.(*connCache).PopContextWithIdentityError(
+		context.Background(),
+		"tenant-a", 7, nil, nil,
+		clientInfo{labelInfo: labelInfo{Tenant: "tenant-a"}, username: "dump"}, identity,
+	)
+	require.Nil(t, sc)
+	require.ErrorContains(t, err, "check password failed")
+	require.Equal(t, codeAuthFailed, getErrorCode(err))
+	require.Equal(t, int64(1), calls.Load(),
+		"one client login must cause at most one catalog authentication attempt")
+	require.Equal(t, 1, cache.Count(),
+		"a terminal authentication rejection must not drain other compatible entries")
+}
+
+func TestConnCacheReapsExpiredIncompatibleEntriesBeforeLookup(t *testing.T) {
+	cache := newConnCache(
+		context.Background(), "", runtime.DefaultRuntime().Logger(),
+		withResetSessionFunc(func(ServerConn) ([]byte, error) { return nil, nil }),
+		withAuthConstructor(nil),
+		withMaxNumTotal(1),
+		withMaxNumPerTenant(1),
+		withConnTimeout(0),
+	)
+	defer cache.Close()
+
+	cachedLocal, cachedPeer := net.Pipe()
+	defer cachedPeer.Close()
+	cached := newMockServerConn(cachedLocal)
+	cachedIdentity := cacheReuseIdentity{tenant: "tenant-a", username: "cached"}
+	require.True(t, cache.(identityConnCache).PushWithIdentity(
+		"tenant-a", cached, cachedIdentity))
+
+	require.Nil(t, cache.(identityConnCache).PopWithIdentity(
+		"tenant-a", 7, nil, nil,
+		clientInfo{labelInfo: labelInfo{Tenant: "tenant-a"}, username: "other"},
+		cacheReuseIdentity{tenant: "tenant-a", username: "other"},
+	))
+	require.Zero(t, cache.Count(),
+		"an expired incompatible entry must not retain cache capacity")
+
+	freshLocal, freshPeer := net.Pipe()
+	defer freshPeer.Close()
+	require.True(t, cache.(identityConnCache).PushWithIdentity(
+		"tenant-a", newMockServerConn(freshLocal),
+		cacheReuseIdentity{tenant: "tenant-a", username: "other"}))
+	require.Equal(t, 1, cache.Count())
+}
+
 func TestConnCachePopClearsReadDeadlineAfterConnectionID(t *testing.T) {
 	runTestWithNewConnCacheWithAuthConstructor(t, nil, func(cc ConnCache) {
 		local, remote := net.Pipe()
@@ -723,7 +961,8 @@ func TestPreparedShortConnectionQuitPublishesReusableBackend(t *testing.T) {
 
 		// Pop is the next client's login/SET CONNECTION ID boundary. The same
 		// backend must remain usable for a prepared statement and a query.
-		reused := cache.Pop("tenant-a", 99, nil, nil, clientInfo{})
+		reused := cache.(identityConnCache).PopWithIdentity(
+			"tenant-a", 99, nil, nil, clientInfo{}, client.cacheReuseIdentity())
 		require.Same(t, backend, reused)
 		ok, err := reused.ExecStmt(internalStmt{cmdType: cmdQuery, s: "prepare p from 'select 1'"}, nil)
 		require.NoError(t, err)
@@ -782,15 +1021,6 @@ type preparedCacheTestRouter struct {
 	sc           ServerConn
 	onConnect    func()
 	connectCount int
-}
-
-type preparedCacheTestAuthenticator struct {
-	checks *int
-}
-
-func (a *preparedCacheTestAuthenticator) Authenticate(_, _ []byte) bool {
-	(*a.checks)++
-	return true
 }
 
 func (r *preparedCacheTestRouter) Route(
@@ -860,7 +1090,13 @@ func TestPreparedShortConnectionQuitProductionPath(t *testing.T) {
 	var backendDatabase string
 	var backendPrepared *frontend.PrepareStmt
 	var backendPrepareSQL string
-	runTestWithQueryServiceResetHandler(t, cn, func(ctx context.Context, req *query.Request, resp *query.Response, _ *morpc.Buffer) error {
+	var refreshChecks atomic.Int64
+	refreshRequests := make(chan struct {
+		userInput string
+		database  string
+		address   string
+	}, 128)
+	runTestWithQueryServiceHandlersAndRefresh(t, cn, nil, func(ctx context.Context, req *query.Request, resp *query.Response, _ *morpc.Buffer) error {
 		if req.ResetSessionRequest == nil {
 			return fmt.Errorf("missing ResetSession request")
 		}
@@ -879,10 +1115,28 @@ func TestPreparedShortConnectionQuitProductionPath(t *testing.T) {
 		resetEvents <- snapshot
 		resp.ResetSessionResponse = &query.ResetSessionResponse{Success: true}
 		return nil
+	}, func(ctx context.Context, req *query.Request, resp *query.Response, _ *morpc.Buffer) error {
+		if req.RefreshSessionAuthRequest == nil || req.RefreshSessionAuthRequest.UserInput == "" {
+			return fmt.Errorf("refresh request did not carry the handshake principal")
+		}
+		refreshChecks.Add(1)
+		refreshRequests <- struct {
+			userInput string
+			database  string
+			address   string
+		}{
+			userInput: req.RefreshSessionAuthRequest.UserInput,
+			database:  req.RefreshSessionAuthRequest.Database,
+			address:   req.RefreshSessionAuthRequest.ClientAddress,
+		}
+		resp.RefreshSessionAuthResponse = &query.RefreshSessionAuthResponse{
+			AuthString: []byte("auth"),
+			Success:    true,
+		}
+		return nil
 	}, func(cc *clientConn, _ string) {
 		ctx, cancel := context.WithCancel(context.Background())
 		defer cancel()
-		authChecks := 0
 
 		cache := newConnCache(
 			ctx,
@@ -890,9 +1144,6 @@ func TestPreparedShortConnectionQuitProductionPath(t *testing.T) {
 			runtime.DefaultRuntime().Logger(),
 			withMOCluster(cc.moCluster),
 			withQueryClient(cc.queryClient),
-			withAuthConstructor(func([]byte) Authenticator {
-				return &preparedCacheTestAuthenticator{checks: &authChecks}
-			}),
 		)
 		defer cache.Close()
 
@@ -1098,6 +1349,12 @@ func TestPreparedShortConnectionQuitProductionPath(t *testing.T) {
 			client.connCache = cache
 			client.router = router
 			client.clientInfo.hash = LabelHash("tenant-a")
+			client.clientInfo.Tenant = "tenant-a"
+			client.clientInfo.username = "dump"
+			client.clientInfo.userInput = "tenant-a:dump"
+			client.clientInfo.originIP = net.ParseIP("127.0.0.1")
+			client.clientInfo.originPort = 3307
+			client.mysqlProto.SetUserName(client.clientInfo.userInput)
 
 			clientProxy, clientRemote := net.Pipe()
 			client.conn.UseConn(clientProxy)
@@ -1291,8 +1548,21 @@ func TestPreparedShortConnectionQuitProductionPath(t *testing.T) {
 		}
 		require.Equal(t, 1, router.connectCount,
 			"all later client generations must reuse the single backend connection")
-		require.Equal(t, generations-1, authChecks,
-			"every cached login must pass the cache authentication gate")
+		require.Equal(t, int64(generations-1), refreshChecks.Load(),
+			"every cached login must revalidate against the CN catalog")
+		for generation := 1; generation < generations; generation++ {
+			request := <-refreshRequests
+			require.Equal(t, "tenant-a:dump", request.userInput)
+			database := "db_a"
+			if generation&1 == 1 {
+				database = "db_b"
+			}
+			if generation == generations-1 {
+				database = ""
+			}
+			require.Equal(t, database, request.database)
+			require.Equal(t, "127.0.0.1:3307", request.address)
+		}
 		require.Empty(t, resetEvents, "all reset events must be consumed by their originating generation")
 
 		require.NoError(t, cache.Close())

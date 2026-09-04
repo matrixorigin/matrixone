@@ -16,6 +16,7 @@ package proxy
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sync"
 	"time"
@@ -60,8 +61,20 @@ type EntryOperation interface {
 	peek(store *cacheStore) *serverConnAuth
 }
 
+// compatibleEntryOperation is an internal extension used by the production
+// cache. Keeping it separate preserves the existing EntryOperation contract
+// for in-package strategies and test doubles.
+type compatibleEntryOperation interface {
+	EntryOperation
+	// popCompatible removes the oldest entry with the same immutable client and
+	// protocol identity as identity. The cache lock is held by the caller.
+	popCompatible(store *cacheStore, identity cacheReuseIdentity, postPop func()) *serverConnAuth
+}
+
 // entryOpFIFO is the first-in-first-out operator of the connection entry.
 type entryOpFIFO struct{}
+
+var _ compatibleEntryOperation = (*entryOpFIFO)(nil)
 
 // push implements the EntryOperation interface.
 func (o *entryOpFIFO) push(store *cacheStore, conn *serverConnAuth, postPush func()) {
@@ -85,6 +98,32 @@ func (o *entryOpFIFO) pop(store *cacheStore, postPop func()) *serverConnAuth {
 		postPop()
 	}
 	return sc
+}
+
+// popCompatible implements the FIFO operator while retaining entries that
+// belong to another client identity. A bucket is bounded by the per-tenant
+// cache limit, so this scan cannot grow with the number of client connections.
+func (o *entryOpFIFO) popCompatible(
+	store *cacheStore,
+	identity cacheReuseIdentity,
+	postPop func(),
+) *serverConnAuth {
+	if store == nil {
+		return nil
+	}
+	for i, sc := range store.connections {
+		if sc == nil || sc.identity != identity {
+			continue
+		}
+		copy(store.connections[i:], store.connections[i+1:])
+		store.connections[len(store.connections)-1] = nil
+		store.connections = store.connections[:len(store.connections)-1]
+		if postPop != nil {
+			postPop()
+		}
+		return sc
+	}
+	return nil
 }
 
 // peek implements the EntryOperation interface.
@@ -133,7 +172,38 @@ func (a *pwdAuthenticator) Authenticate(salt, authResp []byte) bool {
 type serverConnAuth struct {
 	ServerConn
 	Authenticator
+	identity  cacheReuseIdentity
 	closeOnce sync.Once
+}
+
+type cacheAuthRejectedError struct {
+	cause error
+}
+
+func (e *cacheAuthRejectedError) Error() string {
+	return e.cause.Error()
+}
+
+func (e *cacheAuthRejectedError) Unwrap() error {
+	return e.cause
+}
+
+func isCacheAuthRejected(err error) bool {
+	var rejected *cacheAuthRejectedError
+	return errors.As(err, &rejected)
+}
+
+// cacheReuseIdentity describes state that is fixed by the client handshake or
+// by a session command that makes the backend generation unsafe to cache.
+// Database and password material are deliberately excluded: ResetSession and
+// the normal login authentication path handle those independently.
+type cacheReuseIdentity struct {
+	tenant      Tenant
+	username    string
+	role        string
+	originIP    string
+	capability  uint32
+	collationID int
 }
 
 // newServerConnAuth creates a new server connection entry with authenticator.
@@ -200,6 +270,31 @@ type contextConnCache interface {
 	PopContext(context.Context, cacheKey, uint32, []byte, []byte, clientInfo) ServerConn
 }
 
+// identityConnCache is implemented by the production cache. The legacy
+// ConnCache methods remain available to lightweight internal callers and test
+// doubles; client connections use these methods whenever the cache supports
+// identity-aware reuse.
+type identityConnCache interface {
+	PushWithIdentity(cacheKey, ServerConn, cacheReuseIdentity) bool
+	PopWithIdentity(cacheKey, uint32, []byte, []byte, clientInfo, cacheReuseIdentity) ServerConn
+}
+
+type identityContextConnCache interface {
+	PopContextWithIdentity(context.Context, cacheKey, uint32, []byte, []byte, clientInfo, cacheReuseIdentity) ServerConn
+}
+
+type identityContextConnCacheWithError interface {
+	PopContextWithIdentityError(context.Context, cacheKey, uint32, []byte, []byte, clientInfo, cacheReuseIdentity) (ServerConn, error)
+}
+
+var (
+	_ ConnCache                         = (*connCache)(nil)
+	_ contextConnCache                  = (*connCache)(nil)
+	_ identityConnCache                 = (*connCache)(nil)
+	_ identityContextConnCache          = (*connCache)(nil)
+	_ identityContextConnCacheWithError = (*connCache)(nil)
+)
+
 // the main cache struct.
 type connCache struct {
 	ctx    context.Context
@@ -235,6 +330,12 @@ type connCache struct {
 	// for a fresh client login. If it returns false, the cached connection is
 	// discarded before any SET CONNECTION ID or auth work is attempted.
 	canReuseCN func(*CNServer, clientInfo) bool
+	// counterSet counts cache identity compatibility outcomes. It is optional
+	// for standalone cache tests.
+	counterSet *counterSet
+	// refreshSessionAuthFunc is a test seam for the production catalog auth
+	// freshness check. A non-nil queryClient always uses the CN RPC path.
+	refreshSessionAuthFunc func(context.Context, ServerConn, clientInfo, []byte, []byte) ([]byte, error)
 }
 
 // connCacheOption is the option for connCache.
@@ -289,9 +390,25 @@ func withQueryClient(qc client.QueryClient) connCacheOption {
 	}
 }
 
+// withRefreshSessionAuthFunc exercises the authentication freshness boundary
+// in focused cache tests without requiring a full CN query service.
+func withRefreshSessionAuthFunc(
+	f func(context.Context, ServerConn, clientInfo, []byte, []byte) ([]byte, error),
+) connCacheOption {
+	return func(c *connCache) {
+		c.refreshSessionAuthFunc = f
+	}
+}
+
 func withCanReuseCN(f func(*CNServer, clientInfo) bool) connCacheOption {
 	return func(c *connCache) {
 		c.canReuseCN = f
+	}
+}
+
+func withCounterSet(cs *counterSet) connCacheOption {
+	return func(c *connCache) {
+		c.counterSet = cs
 	}
 }
 
@@ -352,6 +469,65 @@ func (c *connCache) resetSession(sc ServerConn) ([]byte, error) {
 	return resp.ResetSessionResponse.AuthString, nil
 }
 
+// refreshSessionAuth revalidates a cached backend against the current CN
+// catalog. ResetSession's password snapshot is intentionally insufficient:
+// password rotation, role grants and implicit default-role resolution can all
+// change while an entry is idle. A failed refresh makes this generation
+// unusable and lets the caller establish a fresh authenticated backend.
+func (c *connCache) refreshSessionAuth(
+	ctx context.Context,
+	sc ServerConn,
+	client clientInfo,
+	salt []byte,
+	authResp []byte,
+) ([]byte, error) {
+	if c.refreshSessionAuthFunc != nil {
+		return c.refreshSessionAuthFunc(ctx, sc, client, salt, authResp)
+	}
+	if c.queryClient == nil {
+		// Standalone cache users and legacy test doubles have no CN query service.
+		// The production handler always wires queryClient when cache reuse is on.
+		return nil, nil
+	}
+	addr := getQueryAddress(c.moCluster, sc.RawConn().RemoteAddr().String())
+	if addr == "" {
+		return nil, moerr.NewInternalErrorf(ctx,
+			"failed to get query service address for cached auth, conn ID: %d", sc.ConnID())
+	}
+	req := c.queryClient.NewRequest(query.CmdMethod_RefreshSessionAuth)
+	req.RefreshSessionAuthRequest = &query.RefreshSessionAuthRequest{
+		ConnID:        sc.ConnID(),
+		UserInput:     client.authUserInput(),
+		Database:      client.database,
+		AuthResponse:  append([]byte(nil), authResp...),
+		Salt:          append([]byte(nil), salt...),
+		ClientAddress: client.clientAddress(),
+	}
+	resp, err := c.queryClient.SendMessage(ctx, addr, req)
+	if resp != nil {
+		defer c.queryClient.Release(resp)
+	}
+	if err != nil {
+		err = moerr.AttachCause(ctx, err)
+		if resp != nil && resp.RefreshSessionAuthResponse != nil &&
+			resp.RefreshSessionAuthResponse.AuthenticationFailed {
+			return nil, &cacheAuthRejectedError{cause: err}
+		}
+		return nil, err
+	}
+	if resp == nil || resp.RefreshSessionAuthResponse == nil ||
+		!resp.RefreshSessionAuthResponse.Success {
+		err = moerr.NewInternalErrorf(ctx,
+			"cached session authentication failed, conn ID: %d", sc.ConnID())
+		if resp != nil && resp.RefreshSessionAuthResponse != nil &&
+			resp.RefreshSessionAuthResponse.AuthenticationFailed {
+			return nil, &cacheAuthRejectedError{cause: err}
+		}
+		return nil, err
+	}
+	return append([]byte(nil), resp.RefreshSessionAuthResponse.AuthString...), nil
+}
+
 // canPushLocked reports whether sc can be added to key. c.mu must be held.
 // Push checks this both before and after resetSession because the network call
 // deliberately runs without the cache mutex.
@@ -368,6 +544,33 @@ func (c *connCache) canPushLocked(key cacheKey, sc ServerConn) bool {
 
 // Push implements the ConnCache interface.
 func (c *connCache) Push(key cacheKey, sc ServerConn) bool {
+	return c.PushWithIdentity(key, sc, cacheReuseIdentity{})
+}
+
+// PushWithIdentity publishes a backend together with the immutable client and
+// protocol identity that made the generation safe to reuse.
+func (c *connCache) PushWithIdentity(
+	key cacheKey,
+	sc ServerConn,
+	identity cacheReuseIdentity,
+) bool {
+	c.mu.Lock()
+	if c.mu.closed {
+		c.mu.Unlock()
+		return false
+	}
+	if _, ok := c.mu.allConns[sc]; ok {
+		c.mu.Unlock()
+		return false
+	}
+	needsReap := len(c.mu.allConns) >= c.maxNumTotal
+	if store := c.mu.cache[key]; store != nil && len(store.connections) >= c.maxNumPerTenant {
+		needsReap = true
+	}
+	c.mu.Unlock()
+	if needsReap {
+		c.reapExpiredConnections(nil)
+	}
 	c.mu.Lock()
 	if !c.canPushLocked(key, sc) {
 		c.mu.Unlock()
@@ -389,7 +592,23 @@ func (c *connCache) Push(key cacheKey, sc ServerConn) bool {
 	} else {
 		scWithAuth = newServerConnAuth(sc, nil)
 	}
+	scWithAuth.identity = identity
 
+	c.mu.Lock()
+	needsReap = !c.mu.closed
+	if _, ok := c.mu.allConns[sc]; ok {
+		needsReap = false
+	}
+	if needsReap {
+		needsReap = len(c.mu.allConns) >= c.maxNumTotal
+		if store := c.mu.cache[key]; store != nil && len(store.connections) >= c.maxNumPerTenant {
+			needsReap = true
+		}
+	}
+	c.mu.Unlock()
+	if needsReap {
+		c.reapExpiredConnections(nil)
+	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if !c.canPushLocked(key, sc) {
@@ -423,13 +642,63 @@ func (c *connCache) closeCachedConnection(sc *serverConnAuth) {
 	c.mu.Unlock()
 }
 
+// reapExpiredConnections removes expired entries from the selected bucket, or
+// from every bucket when key is nil. It detaches ownership under the cache lock
+// and closes the physical connections only after unlocking. The global scan is
+// used only when Push reaches a capacity boundary; Pop scans its lookup bucket.
+func (c *connCache) reapExpiredConnections(key *cacheKey) {
+	now := time.Now()
+	c.mu.Lock()
+	if c.mu.closed {
+		c.mu.Unlock()
+		return
+	}
+	var expired []*serverConnAuth
+	reapStore := func(store *cacheStore) {
+		if store == nil {
+			return
+		}
+		live := store.connections[:0]
+		for _, sc := range store.connections {
+			if sc == nil {
+				continue
+			}
+			if now.Sub(sc.CreateTime()) >= c.connTimeout {
+				delete(c.mu.allConns, sc.ServerConn)
+				expired = append(expired, sc)
+				continue
+			}
+			live = append(live, sc)
+		}
+		store.connections = live
+	}
+	if key != nil {
+		reapStore(c.mu.cache[*key])
+		if store := c.mu.cache[*key]; store != nil && len(store.connections) == 0 {
+			delete(c.mu.cache, *key)
+		}
+	} else {
+		for key, store := range c.mu.cache {
+			reapStore(store)
+			if store == nil || len(store.connections) == 0 {
+				delete(c.mu.cache, key)
+			}
+		}
+	}
+	c.mu.Unlock()
+
+	for _, sc := range expired {
+		c.closeCachedConnection(sc)
+	}
+}
+
 // Pop implements the ConnCache interface.
 func (c *connCache) Pop(
 	key cacheKey, connID uint32, salt []byte, authResp []byte, client clientInfo,
 ) ServerConn {
 	ctx, cancel := context.WithTimeout(context.Background(), defaultTransferTimeout)
 	defer cancel()
-	return c.PopContext(ctx, key, connID, salt, authResp, client)
+	return c.PopContextWithIdentity(ctx, key, connID, salt, authResp, client, cacheReuseIdentity{})
 }
 
 func (c *connCache) PopContext(
@@ -440,12 +709,57 @@ func (c *connCache) PopContext(
 	authResp []byte,
 	client clientInfo,
 ) ServerConn {
+	return c.PopContextWithIdentity(ctx, key, connID, salt, authResp, client, cacheReuseIdentity{})
+}
+
+// PopWithIdentity implements identity-aware reuse for callers that do not
+// carry a context. It preserves the historical timeout and cancellation
+// behavior of Pop.
+func (c *connCache) PopWithIdentity(
+	key cacheKey,
+	connID uint32,
+	salt []byte,
+	authResp []byte,
+	client clientInfo,
+	identity cacheReuseIdentity,
+) ServerConn {
+	ctx, cancel := context.WithTimeout(context.Background(), defaultTransferTimeout)
+	defer cancel()
+	return c.PopContextWithIdentity(ctx, key, connID, salt, authResp, client, identity)
+}
+
+func (c *connCache) PopContextWithIdentity(
+	ctx context.Context,
+	key cacheKey,
+	connID uint32,
+	salt []byte,
+	authResp []byte,
+	client clientInfo,
+	identity cacheReuseIdentity,
+) ServerConn {
+	sc, _ := c.PopContextWithIdentityError(ctx, key, connID, salt, authResp, client, identity)
+	return sc
+}
+
+func (c *connCache) PopContextWithIdentityError(
+	ctx context.Context,
+	key cacheKey,
+	connID uint32,
+	salt []byte,
+	authResp []byte,
+	client clientInfo,
+	identity cacheReuseIdentity,
+) (ServerConn, error) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
+	if operationContextCause(ctx) != nil {
+		return nil, nil
+	}
+	c.reapExpiredConnections(&key)
 	for {
 		if operationContextCause(ctx) != nil {
-			return nil
+			return nil, nil
 		}
 		// Reserve one available connection by removing it from the store. Keep
 		// it in allConns until it is handed to the caller so Close can terminate
@@ -453,13 +767,26 @@ func (c *connCache) PopContext(
 		c.mu.Lock()
 		if c.mu.closed {
 			c.mu.Unlock()
-			return nil
+			return nil, nil
 		}
 		store := c.mu.cache[key]
-		sc := connOperator[c.opStrategy].pop(store, nil)
+		hadEntries := store != nil && store.count() > 0
+		operator := connOperator[c.opStrategy]
+		compatible, ok := operator.(compatibleEntryOperation)
+		if !ok {
+			c.mu.Unlock()
+			return nil, nil
+		}
+		sc := compatible.popCompatible(store, identity, nil)
 		c.mu.Unlock()
 		if sc == nil {
-			return nil
+			if hadEntries && c.counterSet != nil {
+				c.counterSet.connCacheCompatibilityMiss.Add(1)
+			}
+			return nil, nil
+		}
+		if c.counterSet != nil {
+			c.counterSet.connCacheCompatibilityHit.Add(1)
 		}
 
 		// Push is initiated by the originating tunnel's event handler. The cache
@@ -468,7 +795,7 @@ func (c *connCache) PopContext(
 		// against the backend until the old generation has released it.
 		if err := waitServerConnCacheReuseReady(ctx, sc.ServerConn); err != nil {
 			c.closeCachedConnection(sc)
-			return nil
+			return nil, nil
 		}
 
 		// Before using a cached connection for a fresh login, ensure its CN is
@@ -490,6 +817,26 @@ func (c *connCache) PopContext(
 
 		// Check if the connection is expired.
 		if time.Since(sc.CreateTime()) < c.connTimeout {
+			freshlyAuthenticated := false
+			if c.queryClient != nil || c.refreshSessionAuthFunc != nil {
+				// A cached AuthString is only a local optimization. Reauthenticate
+				// through CN before touching the reusable generation so current
+				// password, role grants and implicit default-role resolution are
+				// observed from the catalog.
+				freshAuthString, err := c.refreshSessionAuth(
+					ctx, sc.ServerConn, client, salt, authResp)
+				if err != nil {
+					c.closeCachedConnection(sc)
+					if isCacheAuthRejected(err) {
+						return nil, withCode(err, codeAuthFailed)
+					}
+					continue
+				}
+				freshlyAuthenticated = true
+				if len(freshAuthString) > 0 && c.authConstructor != nil {
+					sc.Authenticator = c.authConstructor(freshAuthString)
+				}
+			}
 			ok, err := execStmtWithContext(ctx, sc, internalStmt{
 				cmdType: cmdQuery,
 				s:       fmt.Sprintf(setConnectionIDSQL, connID),
@@ -523,7 +870,7 @@ func (c *connCache) PopContext(
 			}
 
 			// Before use the connection, we have to check the authentication.
-			if sc.Authenticator != nil && !sc.Authenticate(salt, authResp) {
+			if !freshlyAuthenticated && sc.Authenticator != nil && !sc.Authenticate(salt, authResp) {
 				c.logger.Error("authenticate failed",
 					zap.String("hash key", string(key)),
 					zap.Uint32("conn ID", connID),
@@ -535,7 +882,7 @@ func (c *connCache) PopContext(
 				c.mu.Lock()
 				if c.mu.closed {
 					c.mu.Unlock()
-					return nil
+					return nil, nil
 				}
 				store = c.mu.cache[key]
 				if store == nil {
@@ -545,11 +892,11 @@ func (c *connCache) PopContext(
 				if len(store.connections) < c.maxNumPerTenant {
 					connOperator[c.opStrategy].push(store, sc, nil)
 					c.mu.Unlock()
-					return nil
+					return nil, nil
 				}
 				c.mu.Unlock()
 				c.closeCachedConnection(sc)
-				return nil
+				return nil, nil
 			}
 
 			// Transfer ownership to the caller. If Close linearized first, it
@@ -557,11 +904,11 @@ func (c *connCache) PopContext(
 			c.mu.Lock()
 			if c.mu.closed {
 				c.mu.Unlock()
-				return nil
+				return nil, nil
 			}
 			delete(c.mu.allConns, sc.ServerConn)
 			c.mu.Unlock()
-			return sc.ServerConn
+			return sc.ServerConn, nil
 		} else {
 			c.closeCachedConnection(sc)
 		}

@@ -18,6 +18,7 @@ import (
 	"context"
 	"strings"
 
+	"github.com/matrixorigin/matrixone/pkg/frontend"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
@@ -37,6 +38,8 @@ func (t eventType) String() string {
 		return "Quit"
 	case TypeUpgrade:
 		return "Upgrade"
+	case TypeIdentityChange:
+		return "IdentityChange"
 	}
 	return "Unknown"
 }
@@ -50,6 +53,9 @@ const (
 	TypeQuit eventType = 3
 	// TypeUpgrade indicates the "upgrade account all" statement.
 	TypeUpgrade eventType = 4
+	// TypeIdentityChange indicates a statement that changes the authenticated
+	// principal of the backend session and therefore disables cache publication.
+	TypeIdentityChange eventType = 5
 )
 
 // IEvent is the event interface.
@@ -102,6 +108,15 @@ func makeEvent(msg []byte, b *msgBuf) (IEvent, bool) {
 		if err != nil {
 			return nil, false
 		}
+		// A multi-statement packet is forwarded as one request, so inspect every
+		// statement before deciding whether the generation may be cached. Any
+		// administrative statement can change the authenticated principal or its
+		// grants, even when a later statement fails.
+		for _, stmt := range stmts {
+			if frontend.IsAdministrativeStatement(stmt) {
+				return makeIdentityChangeEvent(), false
+			}
+		}
 		if len(stmts) != 1 {
 			return nil, false
 		}
@@ -123,6 +138,18 @@ func makeEvent(msg []byte, b *msgBuf) (IEvent, bool) {
 		return makeQuitEvent(), true
 	}
 	return nil, false
+}
+
+type identityChangeEvent struct {
+	baseEvent
+}
+
+func makeIdentityChangeEvent() IEvent {
+	e := &identityChangeEvent{
+		baseEvent: baseEvent{waitC: make(chan struct{})},
+	}
+	e.typ = TypeIdentityChange
+	return e
 }
 
 // killEvent is the event that "kill query" or "kill connection" statement is captured.

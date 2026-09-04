@@ -40,6 +40,8 @@ func TestEventTypeDesc(t *testing.T) {
 	assert.Equal(t, "Quit", e1.String())
 	e1 = TypeUpgrade
 	assert.Equal(t, "Upgrade", e1.String())
+	e1 = TypeIdentityChange
+	assert.Equal(t, "IdentityChange", e1.String())
 }
 
 func TestMakeEvent(t *testing.T) {
@@ -147,6 +149,24 @@ func TestMakeEvent(t *testing.T) {
 		e, r = makeEvent(makeSimplePacket(stmt), nil)
 		require.NotNil(t, e)
 		require.True(t, r)
+	})
+
+	t.Run("set role", func(t *testing.T) {
+		e, r = makeEvent(makeSimplePacket("set role analyst"), nil)
+		require.IsType(t, &identityChangeEvent{}, e)
+		require.False(t, r)
+	})
+
+	t.Run("multi statement identity change", func(t *testing.T) {
+		for _, sql := range []string{
+			"set role analyst; select 1",
+			"select 1; set role analyst",
+			"set role analyst; select invalid",
+		} {
+			e, r = makeEvent(makeSimplePacket(sql), nil)
+			require.IsType(t, &identityChangeEvent{}, e, sql)
+			require.False(t, r, sql)
+		}
 	})
 }
 
