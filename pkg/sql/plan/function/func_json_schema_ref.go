@@ -39,7 +39,22 @@ const (
 	mysqlJSONSchemaExpansionReason   = "JSON Schema expansion depth exceeds 100"
 )
 
-var errMySQLJSONSchemaExternalLoad = errors.New("external JSON Schema reference loading is disabled")
+var (
+	errMySQLJSONSchemaExternalLoad error = mysqlJSONSchemaSentinel("external JSON Schema reference loading is disabled")
+	errMySQLJSONSchemaExternalRef  error = mysqlJSONSchemaSentinel(mysqlJSONSchemaExternalRefReason)
+	errMySQLJSONSchemaRefString    error = mysqlJSONSchemaSentinel(mysqlJSONSchemaRefStringReason)
+	errMySQLJSONSchemaRefSyntax    error = mysqlJSONSchemaSentinel(mysqlJSONSchemaRefSyntaxReason)
+	errMySQLJSONSchemaRefTarget    error = mysqlJSONSchemaSentinel(mysqlJSONSchemaRefTargetReason)
+	errMySQLJSONSchemaRefCycle     error = mysqlJSONSchemaSentinel(mysqlJSONSchemaRefCycleReason)
+	errMySQLJSONSchemaDepth        error = mysqlJSONSchemaSentinel(mysqlJSONSchemaDepthReason)
+	errMySQLJSONSchemaExpansion    error = mysqlJSONSchemaSentinel(mysqlJSONSchemaExpansionReason)
+)
+
+type mysqlJSONSchemaSentinel string
+
+func (e mysqlJSONSchemaSentinel) Error() string {
+	return string(e)
+}
 
 // mysqlDraft4RootLoader keeps gojsonschema's raw loader for the in-memory
 // document, while replacing its factory so a missed external reference can
@@ -165,7 +180,7 @@ func mysqlIndexSchemaJSON(ctx context.Context, schema any) (*mysqlJSONSchemaInde
 		item := stack[last]
 		stack = stack[:last]
 		if item.depth > mysqlJSONSchemaMaxDepth {
-			return nil, errors.New(mysqlJSONSchemaDepthReason)
+			return nil, errMySQLJSONSchemaDepth
 		}
 		baseExternal := item.baseExternal
 		if object, ok := item.value.(map[string]any); ok {
@@ -325,12 +340,12 @@ func mysqlScanSchemaStringRefs(ctx context.Context, index *mysqlJSONSchemaIndex)
 			continue
 		}
 		if index.nodes[pointer].baseExternal {
-			return nil, errors.New(mysqlJSONSchemaExternalRefReason)
+			return nil, errMySQLJSONSchemaExternalRef
 		}
 		ref, err := mysqlResolveLocalSchemaRef(index, stringValue)
 		if err != nil {
 			if errors.Is(err, errMySQLJSONSchemaExternalRef) {
-				return nil, errors.New(mysqlJSONSchemaExternalRefReason)
+				return nil, errMySQLJSONSchemaExternalRef
 			}
 			if errors.Is(err, errMySQLJSONSchemaRefTarget) {
 				missing = true
@@ -342,18 +357,13 @@ func mysqlScanSchemaStringRefs(ctx context.Context, index *mysqlJSONSchemaIndex)
 		refs[pointer] = ref
 	}
 	if malformed {
-		return nil, errors.New(mysqlJSONSchemaRefSyntaxReason)
+		return nil, errMySQLJSONSchemaRefSyntax
 	}
 	if missing {
-		return nil, errors.New(mysqlJSONSchemaRefTargetReason)
+		return nil, errMySQLJSONSchemaRefTarget
 	}
 	return refs, nil
 }
-
-var (
-	errMySQLJSONSchemaExternalRef = errors.New(mysqlJSONSchemaExternalRefReason)
-	errMySQLJSONSchemaRefTarget   = errors.New(mysqlJSONSchemaRefTargetReason)
-)
 
 func mysqlResolveLocalSchemaRef(index *mysqlJSONSchemaIndex, raw string) (mysqlJSONSchemaRef, error) {
 	if raw == "#" {
@@ -364,14 +374,14 @@ func mysqlResolveLocalSchemaRef(index *mysqlJSONSchemaIndex, raw string) (mysqlJ
 	}
 	decoded, err := mysqlStrictPercentDecode(raw[1:])
 	if err != nil || !strings.HasPrefix(decoded, "/") {
-		return mysqlJSONSchemaRef{}, errors.New(mysqlJSONSchemaRefSyntaxReason)
+		return mysqlJSONSchemaRef{}, errMySQLJSONSchemaRefSyntax
 	}
 	rawTokens := strings.Split(decoded[1:], "/")
 	tokens := make([]string, len(rawTokens))
 	for i, token := range rawTokens {
 		tokens[i], err = mysqlDecodeJSONPointerToken(token)
 		if err != nil {
-			return mysqlJSONSchemaRef{}, errors.New(mysqlJSONSchemaRefSyntaxReason)
+			return mysqlJSONSchemaRef{}, errMySQLJSONSchemaRefSyntax
 		}
 	}
 
@@ -392,7 +402,7 @@ func mysqlResolveLocalSchemaRef(index *mysqlJSONSchemaIndex, raw string) (mysqlJ
 			_ = child
 		case []any:
 			if !mysqlValidJSONPointerArrayIndex(token) {
-				return mysqlJSONSchemaRef{}, errors.New(mysqlJSONSchemaRefSyntaxReason)
+				return mysqlJSONSchemaRef{}, errMySQLJSONSchemaRefSyntax
 			}
 			position, parseErr := strconv.ParseUint(token, 10, 64)
 			if parseErr != nil || position >= uint64(len(value)) {
@@ -413,13 +423,13 @@ func mysqlStrictPercentDecode(value string) (string, error) {
 			continue
 		}
 		if i+2 >= len(value) || !mysqlHex(value[i+1]) || !mysqlHex(value[i+2]) {
-			return "", errors.New(mysqlJSONSchemaRefSyntaxReason)
+			return "", errMySQLJSONSchemaRefSyntax
 		}
 		i += 2
 	}
 	decoded, err := url.PathUnescape(value)
 	if err != nil || !utf8.ValidString(decoded) {
-		return "", errors.New(mysqlJSONSchemaRefSyntaxReason)
+		return "", errMySQLJSONSchemaRefSyntax
 	}
 	return decoded, nil
 }
@@ -436,7 +446,7 @@ func mysqlDecodeJSONPointerToken(token string) (string, error) {
 			continue
 		}
 		if i+1 >= len(token) || (token[i+1] != '0' && token[i+1] != '1') {
-			return "", errors.New(mysqlJSONSchemaRefSyntaxReason)
+			return "", errMySQLJSONSchemaRefSyntax
 		}
 		if token[i+1] == '0' {
 			builder.WriteByte('~')
@@ -624,7 +634,7 @@ func mysqlValidateSchemaRefGraph(ctx context.Context, index *mysqlJSONSchemaInde
 					colors[target] = 1
 					stack = append(stack, frame{pointer: target})
 				case 1:
-					return errors.New(mysqlJSONSchemaRefCycleReason)
+					return errMySQLJSONSchemaRefCycle
 				case 2:
 					if candidate := memo[target] + 1; candidate > current.longest {
 						current.longest = candidate
@@ -644,7 +654,7 @@ func mysqlValidateSchemaRefGraph(ctx context.Context, index *mysqlJSONSchemaInde
 		}
 	}
 	if memo["#"]+1 > mysqlJSONSchemaMaxDepth {
-		return errors.New(mysqlJSONSchemaExpansionReason)
+		return errMySQLJSONSchemaExpansion
 	}
 	return nil
 }
