@@ -548,11 +548,18 @@ func (w *HnswSqlWriter[T]) NewSync(sqlproc *sqlexec.SqlProcess) (*hnsw.HnswSync[
 	// tmpfs it is charged to RAM. A CDC sync runs on a SqlContext with no process.Process, so
 	// the FileService has to come from the ISCP executor, which publishes the CN root FS.
 	// spillDir=="" (no LOCAL attached / executor not found) falls back to $TMPDIR, unchanged.
-	var spillDir string
-	if exec, ok := GetExecutorRuntime(sqlproc.GetService()); ok {
-		spillDir = memory.HostSpillDir(sqlproc.GetContext(), exec.rootFS, sqlproc.GetService())
+	return hnsw.NewHnswSync[T](sqlproc, w.meta.DbName, w.meta.Table, w.info.IndexName, w.indexdef, w.meta.VecType, w.meta.Dimension, resolveHostSpillDir(sqlproc))
+}
+
+// resolveHostSpillDir answers where this sync's model files go. Split out of NewSync so the
+// routing is observable on its own: NewSync's other failure modes are raised before the spill
+// dir is ever used, so a test driving NewSync cannot tell a resolved path from an empty one.
+func resolveHostSpillDir(sqlproc *sqlexec.SqlProcess) string {
+	exec, ok := GetExecutorRuntime(sqlproc.GetService())
+	if !ok {
+		return ""
 	}
-	return hnsw.NewHnswSync[T](sqlproc, w.meta.DbName, w.meta.Table, w.info.IndexName, w.indexdef, w.meta.VecType, w.meta.Dimension, spillDir)
+	return memory.HostSpillDir(sqlproc.GetContext(), exec.rootFS, sqlproc.GetService())
 }
 
 // Implementation of Ivfflat Sql writer

@@ -28,14 +28,21 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/task"
 )
 
-// A plugin is reachable by the action token its SyncDescriptor declares; an unknown
-// action resolves to nothing.
-func TestFindReindexAlgo(t *testing.T) {
+// Registered from init(), not from the test body. indexplugin.Register panics on a duplicate
+// algo key and the registry has no Unregister -- registering inside the test made `-count=2`
+// (and any -race rerun or flake-retry harness, which reruns in the same process) panic the
+// whole package on the second pass. init() runs once per process however many times the tests
+// do, which is also the contract Register documents for itself.
+func init() {
 	indexplugin.Register(&mockReindexAlgoPlugin{
 		algo: "findreindexalgo_test",
 		desc: catalogplugin.SyncDescriptor{IdxcronAction: "findreindexalgo_test_action"},
 	})
+}
 
+// A plugin is reachable by the action token its SyncDescriptor declares; an unknown
+// action resolves to nothing.
+func TestFindReindexAlgo(t *testing.T) {
 	got, ok := findReindexAlgo("findreindexalgo_test_action")
 	require.True(t, ok)
 	require.Equal(t, "findreindexalgo_test", got.Algo())

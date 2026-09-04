@@ -21,6 +21,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/util/executor"
+	"github.com/matrixorigin/matrixone/pkg/vectorindex/sqlexec"
 	"github.com/stretchr/testify/require"
 )
 
@@ -51,21 +53,23 @@ func metaBatch(t *testing.T, mp *mpool.MPool, withProvenance bool, nrow, buildTS
 	return bat
 }
 
-// readMetaRow mirrors LoadMetadata's per-row decode, including the guards that let a metadata
-// table predating the appended columns still load.
-func readMetaRow(bat *batch.Batch) *HnswModel[float32] {
-	i := 0
-	idx := &HnswModel[float32]{
-		Id:       bat.Vecs[0].GetStringAt(i),
-		Checksum: bat.Vecs[1].GetStringAt(i),
+// loadMetaFrom drives the REAL LoadMetadata over a stubbed catalog read. Decoding a private
+// copy of the loop instead would leave search.go's own Vecs[4]/Vecs[5] reads executed by no
+// test: every other hnsw mock builds a four-column batch, so swapping the two indices there
+// would keep the suite green while Nrow silently became a build timestamp -- and GetIndexSize
+// estimates the pre-load cost as Nrow*8, so the governor would reclaim against ~1.4e16 bytes
+// and evict the whole host cache on every hnsw miss. cagra and ivfpq feed 6-, 5- and 4-column
+// batches through their real LoadMetadata; this is the hnsw equivalent.
+func loadMetaFrom(t *testing.T, bat *batch.Batch, mp *mpool.MPool) []*HnswModel[float32] {
+	t.Helper()
+	old := runSql
+	t.Cleanup(func() { runSql = old })
+	runSql = func(_ *sqlexec.SqlProcess, _ string) (executor.Result, error) {
+		return executor.Result{Mp: mp, Batches: []*batch.Batch{bat}}, nil
 	}
-	if len(bat.Vecs) > 4 {
-		idx.Nrow = vector.GetFixedAtWithTypeCheck[int64](bat.Vecs[4], i)
-	}
-	if len(bat.Vecs) > 5 {
-		idx.BuildTS = vector.GetFixedAtWithTypeCheck[int64](bat.Vecs[5], i)
-	}
-	return idx
+	idxs, err := LoadMetadata[float32](nil, "db", "meta")
+	require.NoError(t, err)
+	return idxs
 }
 
 // An index created before nrow/build_ts existed still has a four-column metadata table -- the
@@ -74,14 +78,17 @@ func readMetaRow(bat *batch.Batch) *HnswModel[float32] {
 func TestLoadMetadataToleratesLegacyFourColumnShape(t *testing.T) {
 	mp := mpool.MustNewZero()
 
-	legacy := readMetaRow(metaBatch(t, mp, false, 0, 0))
-	require.EqualValues(t, 0, legacy.Nrow, "unknown, not zero rows")
-	require.EqualValues(t, 0, legacy.BuildTS, "unknown, not the epoch")
-	require.Equal(t, "m0", legacy.Id, "the original columns still decode")
+	legacy := loadMetaFrom(t, metaBatch(t, mp, false, 0, 0), mp)
+	require.Len(t, legacy, 1)
+	require.EqualValues(t, 0, legacy[0].Nrow, "unknown, not zero rows")
+	require.EqualValues(t, 0, legacy[0].BuildTS, "unknown, not the epoch")
+	require.Equal(t, "m0", legacy[0].Id, "the original columns still decode")
+	require.EqualValues(t, 2222, legacy[0].FileSize, "and so does the rest of the legacy shape")
 
-	current := readMetaRow(metaBatch(t, mp, true, 4321, 999888777))
-	require.EqualValues(t, 4321, current.Nrow)
-	require.EqualValues(t, 999888777, current.BuildTS)
+	current := loadMetaFrom(t, metaBatch(t, mp, true, 4321, 999888777), mp)
+	require.Len(t, current, 1)
+	require.EqualValues(t, 4321, current[0].Nrow, "nrow comes from Vecs[4], not Vecs[5]")
+	require.EqualValues(t, 999888777, current[0].BuildTS, "build_ts from Vecs[5], not Vecs[4]")
 }
 
 // The sync records the version supplied by the ISCP consumer -- the applied change range's upper

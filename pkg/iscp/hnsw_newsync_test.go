@@ -16,11 +16,13 @@ package iscp
 
 import (
 	"context"
+	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/require"
 
-	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/sqlexec"
 )
 
@@ -33,32 +35,29 @@ func TestHnswSqlWriterNewSync_SpillDirResolution(t *testing.T) {
 	sqlproc := &sqlexec.SqlProcess{SqlCtx: &sqlexec.SqlContext{Ctx: context.Background()}}
 	service := sqlproc.GetService()
 
-	for _, c := range []struct {
-		name             string
-		registerExecutor bool
-	}{
-		{"no executor registered", false},
-		{"executor with no local fileservice", true},
-	} {
-		t.Run(c.name, func(t *testing.T) {
-			if c.registerExecutor {
-				iscpExecutors.Store(service, &ISCPTaskExecutor{})
-				t.Cleanup(func() { iscpExecutors.Delete(service) })
-			}
-			_, ok := GetExecutorRuntime(service)
-			require.Equal(t, c.registerExecutor, ok)
+	// No executor: nothing publishes a root FS, so the sync falls back to $TMPDIR.
+	_, ok := GetExecutorRuntime(service)
+	require.False(t, ok)
+	require.Empty(t, resolveHostSpillDir(sqlproc), "no executor means no LOCAL route")
 
-			tabledef := newTestTableDef("pk", types.T_int64, "vec", types.T_array_float32, 3)
-			w, err := NewHnswSqlWriter("hnsw", newTestJobID(), newTestConsumerInfo(), tabledef, tabledef.Indexes)
-			require.NoError(t, err)
-			hw := w.(*HnswSqlWriter[float32])
+	// An executor with no LOCAL fileservice attached is the same fallback, not a crash.
+	iscpExecutors.Store(service, &ISCPTaskExecutor{})
+	require.Empty(t, resolveHostSpillDir(sqlproc), "an executor with a nil rootFS still falls back")
+	iscpExecutors.Delete(service)
 
-			// HNSW indexes exactly one column; two parts is refused before any SQL.
-			hw.indexdef[0].Parts = []string{"vec", "vec2"}
+	// The case the routing exists for: a LOCAL fileservice is attached, so the multi-GB model
+	// lands under it instead of a possibly-tmpfs $TMPDIR. Asserting only that NewSync fails --
+	// which it does on the malformed index def, before the spill dir is read -- would stay green
+	// with the whole GetExecutorRuntime block deleted.
+	root := t.TempDir()
+	local, err := fileservice.NewLocalFS(context.Background(),
+		defines.LocalFileServiceName, root, fileservice.DisabledCacheConfig, nil)
+	require.NoError(t, err)
+	iscpExecutors.Store(service, &ISCPTaskExecutor{rootFS: local})
+	t.Cleanup(func() { iscpExecutors.Delete(service) })
 
-			_, err = hw.NewSync(sqlproc)
-			require.Error(t, err)
-			require.Contains(t, err.Error(), "index parts")
-		})
-	}
+	dir := resolveHostSpillDir(sqlproc)
+	require.NotEmpty(t, dir, "an attached LOCAL fileservice must produce a spill dir")
+	require.True(t, strings.HasPrefix(dir, root),
+		"and it must sit under the LOCAL root, not $TMPDIR: got %q, root %q", dir, root)
 }
