@@ -23,6 +23,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
@@ -433,6 +434,12 @@ func TestMultiInsertRejectsUnsupportedTargets(t *testing.T) {
 		require.Error(t, err, test.sql)
 		require.Contains(t, err.Error(), test.msg, test.sql)
 	}
+
+	clusterMock := NewMockOptimizer(true)
+	clusterMock.ctxt.tables["t2"].TableType = catalog.SystemClusterRel
+	_, err := runOneStmt(clusterMock, t,
+		"insert all into t2 (a, b) values (deptno, dname) select deptno, dname from dept")
+	require.ErrorContains(t, err, "multi-table INSERT into cluster table 't2'")
 }
 
 func TestMultiInsertSameTableMergesIntoOneWritePipeline(t *testing.T) {

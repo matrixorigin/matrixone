@@ -38,16 +38,17 @@ func TestSQLModeEnableBoolSumAvgContract(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, mysqlparser.SQLModeEnableBoolSumAvg, converted)
 
-	// Off by default: MO's strict typing is the correct behavior and this only
-	// relaxes it on request.
+	// MySQL-compatible BOOL aggregation is the product default. Removing the
+	// token remains an explicit opt-out for callers that need strict typing.
 	defaultMode, ok := sysVar.Default.(string)
 	require.True(t, ok)
-	require.False(t, mysqlparser.HasEnableBoolSumAvgSQLMode(defaultMode),
-		"sql_mode default must not enable bool SUM/AVG")
+	require.True(t, mysqlparser.HasEnableBoolSumAvgSQLMode(defaultMode),
+		"sql_mode default must enable bool SUM/AVG")
 
 	// It composes with the modes a session already has rather than replacing
 	// them, which is the reason for putting it in sql_mode at all.
-	combined := defaultMode + "," + mysqlparser.SQLModeEnableBoolSumAvg
+	strictMode := strings.ReplaceAll(defaultMode, ","+mysqlparser.SQLModeEnableBoolSumAvg, "")
+	combined := strictMode + "," + mysqlparser.SQLModeEnableBoolSumAvg
 	normalized, err := sysVar.Type.Convert(combined)
 	require.NoError(t, err)
 	normalizedMode, ok := normalized.(string)
