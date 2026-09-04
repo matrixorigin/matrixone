@@ -438,6 +438,7 @@ func dupOperatorWithContext(sourceOp vm.Operator, index int, maxParallel int, du
 					FileSize:               t.Es.FileSize,
 					FileOffsetTotal:        t.Es.FileOffsetTotal,
 					ParquetRowGroupShards:  t.Es.ParquetRowGroupShards,
+					ParquetWholeFileFanout: t.Es.ParquetWholeFileFanout,
 					Extern:                 t.Es.Extern,
 					StrictSqlMode:          t.Es.StrictSqlMode,
 					ParallelLoad:           t.Es.ParallelLoad,
