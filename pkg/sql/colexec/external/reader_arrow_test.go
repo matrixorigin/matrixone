@@ -521,6 +521,63 @@ func TestBuildArrowTargetsUsesPhysicalColumnTypeAcrossGeneratedGap(t *testing.T)
 	require.ErrorContains(t, err, "index 3")
 }
 
+func TestBuildArrowTargetsPreservesExplicitExternalFieldOrder(t *testing.T) {
+	attrs := []plan.ExternAttr{
+		{ColName: "a", ColIndex: 0, ColFieldIndex: 1},
+		{ColName: "b", ColIndex: 1, ColFieldIndex: 0},
+	}
+	cols := []*plan.ColDef{
+		{Name: "a", Typ: plan.Type{Id: int32(types.T_int64)}},
+		{Name: "b", Typ: plan.Type{Id: int32(types.T_int64)}},
+	}
+	targets, err := BuildArrowTargets(context.Background(), attrs, cols)
+	require.NoError(t, err)
+	require.Equal(t, "b", targets[0].Name)
+	require.Equal(t, 1, targets[0].MOIndex)
+	require.Equal(t, "a", targets[1].Name)
+	require.Equal(t, 0, targets[1].MOIndex)
+
+	schema := arrow.NewSchema([]arrow.Field{
+		{Name: "source_first", Type: arrow.PrimitiveTypes.Int64},
+		{Name: "source_second", Type: arrow.PrimitiveTypes.Int64},
+	}, nil)
+	conversion, err := arrowbridge.BindLoad(
+		context.Background(), schema, targets, arrowbridge.MatchByPosition,
+	)
+	require.NoError(t, err)
+	allocator := memory.NewGoAllocator()
+	firstBuilder := array.NewInt64Builder(allocator)
+	firstBuilder.Append(11)
+	first := firstBuilder.NewArray()
+	firstBuilder.Release()
+	defer first.Release()
+	secondBuilder := array.NewInt64Builder(allocator)
+	secondBuilder.Append(22)
+	second := secondBuilder.NewArray()
+	secondBuilder.Release()
+	defer second.Release()
+	record := array.NewRecordBatch(schema, []arrow.Array{first, second}, 1)
+	defer record.Release()
+	mp := mpool.MustNewZero()
+	converted, _, err := conversion.Convert(context.Background(), record, mp, arrowbridge.ConvertOptions{})
+	require.NoError(t, err)
+	require.Equal(t, []int64{22}, vector.MustFixedColNoTypeCheck[int64](converted.Vecs[0]))
+	require.Equal(t, []int64{11}, vector.MustFixedColNoTypeCheck[int64](converted.Vecs[1]))
+	converted.Clean(mp)
+	require.Zero(t, mp.CurrNB())
+
+	_, err = BuildArrowTargets(context.Background(), []plan.ExternAttr{
+		{ColIndex: 0, ColFieldIndex: 1},
+		{ColIndex: 1, ColFieldIndex: 1},
+	}, cols)
+	require.ErrorContains(t, err, "source field index 1 is duplicated")
+	_, err = BuildArrowTargets(context.Background(), []plan.ExternAttr{
+		{ColIndex: 0, ColFieldIndex: 2},
+		{ColIndex: 1, ColFieldIndex: 0},
+	}, cols)
+	require.ErrorContains(t, err, "source field index 2 is invalid")
+}
+
 func TestExternalArrowFileRecordBatchShard(t *testing.T) {
 	payload := makeExternalArrowIPC(t, tree.ARROW_CONTAINER_FILE)
 	fs, err := fileservice.NewMemoryFS("etl", fileservice.DisabledCacheConfig, nil)
@@ -784,8 +841,8 @@ func externalArrowParam(fs fileservice.FileService, path string, size int64, con
 			ArrowExecutionScope:        pipeline.ArrowExecutionScope_ArrowLoadData,
 			ArrowConversionPlanVersion: arrowbridge.ConversionPlanVersion,
 			Attrs: []plan.ExternAttr{
-				{ColName: "id", ColIndex: 0},
-				{ColName: "name", ColIndex: 1},
+				{ColName: "id", ColIndex: 0, ColFieldIndex: 0},
+				{ColName: "name", ColIndex: 1, ColFieldIndex: 1},
 			},
 			Cols: []*plan.ColDef{
 				{Name: "id", Typ: plan.Type{Id: int32(types.T_int64), NotNullable: true}},

@@ -323,6 +323,31 @@ func fixtureIDName(t *testing.T, dir, filename, container string, batches [][]id
 	})
 }
 
+func fixtureInt64Pair(
+	t *testing.T,
+	dir, filename, container string,
+	first, second []int64,
+) string {
+	t.Helper()
+	require.Len(t, second, len(first))
+	schema := arrow.NewSchema([]arrow.Field{
+		{Name: "source_first", Type: arrow.PrimitiveTypes.Int64},
+		{Name: "source_second", Type: arrow.PrimitiveTypes.Int64},
+	}, nil)
+	return writeArrowFile(t, dir, filename, container, schema, func(
+		alloc memory.Allocator,
+		write func(arrow.RecordBatch) error,
+	) {
+		builder := array.NewRecordBuilder(alloc, schema)
+		builder.Field(0).(*array.Int64Builder).AppendValues(first, nil)
+		builder.Field(1).(*array.Int64Builder).AppendValues(second, nil)
+		record := builder.NewRecordBatch()
+		require.NoError(t, write(record))
+		record.Release()
+		builder.Release()
+	})
+}
+
 // fixtureIDNameMismatchedIDType writes the same logical (id, name) shape but with
 // `id` typed as float64 instead of int64, so pairing this file with one produced by
 // fixtureIDName in the same multi-object LOAD trips the cross-object schema

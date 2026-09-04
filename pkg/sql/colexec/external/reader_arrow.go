@@ -677,20 +677,33 @@ func arrowContainer(value string) (arrowio.Container, error) {
 }
 
 // BuildArrowTargets builds the exact table-side conversion contract shared by
-// compile-time fingerprinting and execution-time binding.
+// compile-time fingerprinting and execution-time binding. The returned slice
+// follows external source-field order because positional Arrow binding consumes
+// targets in that order. MOIndex preserves the table/output position so an
+// explicit LOAD column list such as (b, a) still writes the converted vectors to
+// their physical destinations.
 func BuildArrowTargets(
 	ctx context.Context,
 	attrs []plan2.ExternAttr,
 	cols []*plan2.ColDef,
 ) ([]arrowbridge.TargetColumn, error) {
 	targets := make([]arrowbridge.TargetColumn, len(attrs))
+	seenSourceFields := make([]bool, len(attrs))
 	for outputIndex, attr := range attrs {
 		colIndex := int(attr.ColIndex)
 		if colIndex < 0 || colIndex >= len(cols) || cols[colIndex] == nil {
 			return nil, moerr.NewInvalidInputf(ctx, "Arrow target column index %d is invalid", colIndex)
 		}
+		sourceIndex := int(attr.ColFieldIndex)
+		if sourceIndex < 0 || sourceIndex >= len(attrs) {
+			return nil, moerr.NewInvalidInputf(ctx, "Arrow source field index %d is invalid", sourceIndex)
+		}
+		if seenSourceFields[sourceIndex] {
+			return nil, moerr.NewInvalidInputf(ctx, "Arrow source field index %d is duplicated", sourceIndex)
+		}
+		seenSourceFields[sourceIndex] = true
 		col := cols[colIndex]
-		targets[outputIndex] = arrowbridge.TargetColumn{
+		targets[sourceIndex] = arrowbridge.TargetColumn{
 			Name:     col.Name,
 			Type:     makeType(&col.Typ, false),
 			NotNull:  col.Typ.NotNullable,

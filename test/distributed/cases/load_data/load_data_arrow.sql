@@ -7,6 +7,11 @@ create table arrow_file(id bigint, name varchar(50));
 load data infile {'filepath'='$resources/load_data/arrow_file.arrow', 'format'='arrow', 'arrow_container'='file'} into table arrow_file;
 select * from arrow_file order by id;
 
+-- Explicit LOAD columns map source order independently of physical table order.
+create table arrow_column_order(name varchar(50), id bigint);
+load data infile {'filepath'='$resources/load_data/arrow_file.arrow', 'format'='arrow'} into table arrow_column_order(id, name);
+select id, name from arrow_column_order order by id;
+
 -- Arrow IPC Stream is supported for one serial source.
 create table arrow_stream(id bigint, name varchar(50));
 load data infile {'filepath'='$resources/load_data/arrow_stream.arrow', 'format'='arrow', 'arrow_container'='stream'} into table arrow_stream;

@@ -8,6 +8,13 @@ select * from arrow_file order by id;
 1  ¦  alpha  𝄀
 2  ¦  beta  𝄀
 3  ¦  null
+create table arrow_column_order(name varchar(50), id bigint);
+load data infile {'filepath'='$resources/load_data/arrow_file.arrow', 'format'='arrow'} into table arrow_column_order(id, name);
+select id, name from arrow_column_order order by id;
+➤ id[-5,64,0]  ¦  name[12,50,0]  𝄀
+1  ¦  alpha  𝄀
+2  ¦  beta  𝄀
+3  ¦  null
 create table arrow_stream(id bigint, name varchar(50));
 load data infile {'filepath'='$resources/load_data/arrow_stream.arrow', 'format'='arrow', 'arrow_container'='stream'} into table arrow_stream;
 select * from arrow_stream order by id;

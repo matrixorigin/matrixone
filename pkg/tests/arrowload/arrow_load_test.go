@@ -47,6 +47,7 @@ func TestArrowLoadBVT(t *testing.T) {
 	t.Run("TypeMatrixNumeric", func(t *testing.T) { testArrowTypeMatrixNumeric(t, db) })
 	t.Run("TypeMatrixTimestampDict", func(t *testing.T) { testArrowTypeMatrixTimestampDict(t, db) })
 	t.Run("TypeMatrixLongBinary", func(t *testing.T) { testArrowTypeMatrixLongBinary(t, db) })
+	t.Run("ExplicitColumnOrder", func(t *testing.T) { testArrowExplicitColumnOrder(t, db) })
 	t.Run("ArrowContainerSemantics", func(t *testing.T) { testArrowContainerSemantics(t, db) })
 	t.Run("NegativeOptionValidation", func(t *testing.T) { testArrowNegativeOptions(t, db) })
 	t.Run("DDLRejects", func(t *testing.T) { testArrowDDLRejects(t, db) })
@@ -64,6 +65,26 @@ func TestArrowLoadBVT(t *testing.T) {
 	// while preserving the cluster data directory. No later subtest may depend on
 	// the original CN generation.
 	t.Run("ClusterRestartPersistence", func(t *testing.T) { testArrowClusterRestart(t, c, db) })
+}
+
+func testArrowExplicitColumnOrder(t *testing.T, db *sql.DB) {
+	mustExec(t, db, "drop table if exists explicit_column_order")
+	mustExec(t, db, "create table explicit_column_order(a bigint, b bigint)")
+	for _, container := range []string{containerFile, containerStream} {
+		t.Run(container, func(t *testing.T) {
+			mustExec(t, db, "truncate table explicit_column_order")
+			path := fixtureInt64Pair(
+				t, t.TempDir(), "explicit_"+container+".arrow", container,
+				[]int64{11, 12}, []int64{21, 22},
+			)
+			mustExec(t, db, fmt.Sprintf(
+				"load data infile {'filepath'='%s','format'='arrow'} into table explicit_column_order (b,a)",
+				path,
+			))
+			require.Equal(t, int64(2), queryCount(t, db,
+				"select count(*) from explicit_column_order where (a=21 and b=11) or (a=22 and b=12)"))
+		})
+	}
 }
 
 // testArrowCommitPhaseFailureRollback injects the transaction failure after
