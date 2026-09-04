@@ -16,6 +16,7 @@ package function
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 	"regexp"
 	"slices"
@@ -166,7 +167,7 @@ func (op *opBuiltInRegexp) likeByStringDomain(
 	patterns := vector.GenerateFunctionStrParameter(parameters[1])
 	rs := vector.MustFunctionResult[bool](result)
 	constantPattern := parameters[1].IsConst()
-	compiledPattern := &compiledByteLikePattern{mp: proc.Mp()}
+	compiledPattern := &compiledByteLikePattern{mp: proc.Mp(), ctx: proc.Ctx}
 	compiledPatternReady := false
 	defer compiledPattern.free()
 	for row := uint64(0); row < uint64(length); row++ {
@@ -230,6 +231,7 @@ type compiledByteLikePattern struct {
 	literals           []byte
 	convolutionScratch []byte
 	mp                 *mpool.MPool
+	ctx                context.Context
 }
 
 func compileByteLikePattern(
@@ -426,8 +428,10 @@ func (compiled *compiledByteLikePattern) findSegment(
 	if anchorStart == anchorEnd {
 		return from, nil
 	}
+	valueLength := limit - from
+	candidateCount := valueLength - segmentLength + 1
 	if slices.Contains(compiled.kinds[start:end], byteLikeOne) &&
-		byteLikeVerificationWorkExceedsLimit(anchorFrequency, segmentLength) {
+		byteLikeShouldUseConvolution(anchorFrequency, candidateCount, segmentLength, valueLength) {
 		matchAt, used, err := compiled.findSegmentByConvolution(start, end, value, from, limit)
 		if used {
 			return matchAt, err
@@ -451,9 +455,19 @@ func (compiled *compiledByteLikePattern) findSegment(
 	return -1, nil
 }
 
-func byteLikeVerificationWorkExceedsLimit(candidateUpperBound, segmentLength int) bool {
-	return segmentLength > 0 &&
-		candidateUpperBound > byteLikeAnchorVerificationWorkLimit/segmentLength
+func byteLikeShouldUseConvolution(
+	anchorFrequency, candidateCount, segmentLength, valueLength int,
+) bool {
+	candidateUpperBound := min(anchorFrequency, candidateCount)
+	if candidateUpperBound <= 0 || segmentLength <= 0 || valueLength <= 0 {
+		return false
+	}
+	linearBaseline := uint64(valueLength) + uint64(segmentLength)
+	if linearBaseline > ^uint64(0)/byteLikeConvolutionRelativeWorkFactor {
+		return false
+	}
+	scaledLinearBaseline := linearBaseline * byteLikeConvolutionRelativeWorkFactor
+	return uint64(candidateUpperBound) > scaledLinearBaseline/uint64(segmentLength)
 }
 
 func (compiled *compiledByteLikePattern) rarestLiteralRun(

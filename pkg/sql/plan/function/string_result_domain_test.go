@@ -413,9 +413,8 @@ func TestPadResultByteLengthEnforcesEncodedBudget(t *testing.T) {
 	require.False(t, rejected)
 	require.Equal(t, 2, length)
 
-	length, rejected = padResultByteLength("a", int64(types.MaxVarcharLen)+1, "", int64(types.MaxVarcharLen))
-	require.False(t, rejected)
-	require.Zero(t, length)
+	_, rejected = padResultByteLength("a", int64(types.MaxVarcharLen)+1, "", int64(types.MaxVarcharLen))
+	require.True(t, rejected)
 }
 
 func TestExpandingTextResultsUseTextCapacity(t *testing.T) {

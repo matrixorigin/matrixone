@@ -1627,7 +1627,7 @@ func builtInCurrentUserName(_ []*vector.Vector, result vector.FunctionResultWrap
 }
 
 func padResultByteLength(src string, tgtLen int64, pad string, maxBytes int64) (int, bool) {
-	if tgtLen < 0 || tgtLen > int64(^uint(0)>>1) {
+	if tgtLen < 0 || tgtLen > int64(^uint(0)>>1) || tgtLen > maxBytes {
 		return 0, true
 	}
 	srcRunes, padRunes := utf8.RuneCountInString(src), utf8.RuneCountInString(pad)
@@ -1829,14 +1829,11 @@ func builtInPad(
 }
 
 func padBinaryResultByteLength(source []byte, target int64, pad []byte, maxBytes int64) (int, bool) {
-	if target < 0 || target > int64(^uint(0)>>1) {
+	if target < 0 || target > int64(^uint(0)>>1) || target > maxBytes {
 		return 0, true
 	}
 	if target > int64(len(source)) && len(pad) == 0 {
 		return 0, false
-	}
-	if target > maxBytes {
-		return 0, true
 	}
 	return int(target), false
 }

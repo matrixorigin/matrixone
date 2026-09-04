@@ -16,17 +16,25 @@ package function
 
 import "unsafe"
 
-// Small candidate sets stay on the allocation-free anchor path. Above this
-// bound, exact wildcard convolution prevents candidate-count * segment-length
-// behavior. The bound is work, rather than an input-size cutoff, so the anchor
-// path itself has a fixed worst-case amount of verification.
-const byteLikeAnchorVerificationWorkLimit = 1 << 20
+// Direct verification is substantially cheaper per operation than a modular
+// butterfly. Convolution is only useful when its candidate-by-segment upper
+// bound is superlinear by a meaningful factor relative to reading the value
+// and segment once. In particular, one or a few legal alignments always stay
+// on the allocation-free direct path, regardless of segment size.
+const (
+	byteLikeConvolutionRelativeWorkFactor uint64 = 64
+	byteLikeMaxMismatchTerm               uint64 = 636284160
+)
 
-const byteLikeMaxNTTLength = 1 << 27
+const (
+	byteLikeMaxNTTLength              = 1 << 27
+	byteLikeCancellationCheckInterval = 1 << 16
+)
 
-// Both primes support power-of-two transforms through 2^27. Their product is
-// larger than the maximum non-negative mismatch sum for a 64 MiB segment, so
-// zero under both moduli is an exact result, not a probabilistic fingerprint.
+// Both primes support power-of-two transforms through 2^27. For encoded bytes
+// p,x in [1,256], each mismatch term p*x*(p-x)^2 is at most byteLikeMaxMismatchTerm.
+// Their product is larger than 64 MiB times that bound, so zero under both
+// moduli is an exact result, not a probabilistic fingerprint.
 var byteLikeNTTModuli = [...]struct {
 	modulus       uint64
 	primitiveRoot uint64
@@ -73,6 +81,9 @@ func (compiled *compiledByteLikePattern) findSegmentConvolutionBlock(
 	value []byte,
 	from, limit int,
 ) (int, bool, error) {
+	if err := compiled.byteLikeCancellationError(); err != nil {
+		return -1, true, err
+	}
 	segmentLength := end - start
 	valueLength := limit - from
 	candidateCount := valueLength - segmentLength + 1
@@ -106,23 +117,41 @@ func (compiled *compiledByteLikePattern) findSegmentConvolutionBlock(
 		for term := 0; term < 3; term++ {
 			clear(a)
 			clear(b)
-			fillByteLikeConvolutionTerm(
-				a, b, compiled, start, end, value[from:limit], term, parameters.modulus)
-			byteLikeNTT(a, false, parameters.modulus, parameters.primitiveRoot)
-			byteLikeNTT(b, false, parameters.modulus, parameters.primitiveRoot)
+			if err := compiled.fillByteLikeConvolutionTerm(
+				a, b, start, end, value[from:limit], term, parameters.modulus); err != nil {
+				return -1, true, err
+			}
+			if err := compiled.byteLikeNTT(a, false, parameters.modulus, parameters.primitiveRoot); err != nil {
+				return -1, true, err
+			}
+			if err := compiled.byteLikeNTT(b, false, parameters.modulus, parameters.primitiveRoot); err != nil {
+				return -1, true, err
+			}
 			coefficient := uint64(1)
 			if term == 1 {
 				coefficient = parameters.modulus - 2
 			}
 			for i := range sum {
+				if i&(byteLikeCancellationCheckInterval-1) == 0 {
+					if err := compiled.byteLikeCancellationError(); err != nil {
+						return -1, true, err
+					}
+				}
 				product := uint64(a[i]) * uint64(b[i]) % parameters.modulus
 				sum[i] = uint32((uint64(sum[i]) + coefficient*product) % parameters.modulus)
 			}
 		}
-		byteLikeNTT(sum, true, parameters.modulus, parameters.primitiveRoot)
+		if err := compiled.byteLikeNTT(sum, true, parameters.modulus, parameters.primitiveRoot); err != nil {
+			return -1, true, err
+		}
 
 		anyZero := false
 		for candidate := 0; candidate < candidateCount; candidate++ {
+			if candidate&(byteLikeCancellationCheckInterval-1) == 0 {
+				if err := compiled.byteLikeCancellationError(); err != nil {
+					return -1, true, err
+				}
+			}
 			mismatch := sum[segmentLength-1+candidate]
 			if modulusIndex == 0 {
 				if mismatch == 0 {
@@ -144,17 +173,21 @@ func byteLikeUint32Scratch(storage []byte, length int) []uint32 {
 	return unsafe.Slice((*uint32)(unsafe.Pointer(unsafe.SliceData(storage))), length)
 }
 
-func fillByteLikeConvolutionTerm(
+func (compiled *compiledByteLikePattern) fillByteLikeConvolutionTerm(
 	patternValues, textValues []uint32,
-	compiled *compiledByteLikePattern,
 	start, end int,
 	value []byte,
 	term int,
 	modulus uint64,
-) {
+) error {
 	patternPower := 3 - term
 	textPower := term + 1
 	for patternAt := start; patternAt < end; patternAt++ {
+		if (patternAt-start)&(byteLikeCancellationCheckInterval-1) == 0 {
+			if err := compiled.byteLikeCancellationError(); err != nil {
+				return err
+			}
+		}
 		if compiled.kinds[patternAt] != byteLikeLiteral {
 			continue
 		}
@@ -162,9 +195,15 @@ func fillByteLikeConvolutionTerm(
 		patternValues[end-1-patternAt] = uint32(byteLikeSmallPower(encoded, patternPower) % modulus)
 	}
 	for valueAt, literal := range value {
+		if valueAt&(byteLikeCancellationCheckInterval-1) == 0 {
+			if err := compiled.byteLikeCancellationError(); err != nil {
+				return err
+			}
+		}
 		encoded := uint64(literal) + 1
 		textValues[valueAt] = uint32(byteLikeSmallPower(encoded, textPower) % modulus)
 	}
+	return nil
 }
 
 func byteLikeSmallPower(value uint64, power int) uint64 {
@@ -175,8 +214,17 @@ func byteLikeSmallPower(value uint64, power int) uint64 {
 	return result
 }
 
-func byteLikeNTT(values []uint32, inverse bool, modulus, primitiveRoot uint64) {
+func (compiled *compiledByteLikePattern) byteLikeNTT(
+	values []uint32,
+	inverse bool,
+	modulus, primitiveRoot uint64,
+) error {
 	for i, j := 1, 0; i < len(values); i++ {
+		if i&(byteLikeCancellationCheckInterval-1) == 0 {
+			if err := compiled.byteLikeCancellationError(); err != nil {
+				return err
+			}
+		}
 		bit := len(values) >> 1
 		for ; j&bit != 0; bit >>= 1 {
 			j ^= bit
@@ -196,6 +244,11 @@ func byteLikeNTT(values []uint32, inverse bool, modulus, primitiveRoot uint64) {
 		for block := 0; block < len(values); block += width {
 			factor := uint64(1)
 			for offset := 0; offset < half; offset++ {
+				if (block+offset)&(byteLikeCancellationCheckInterval-1) == 0 {
+					if err := compiled.byteLikeCancellationError(); err != nil {
+						return err
+					}
+				}
 				left := uint64(values[block+offset])
 				right := uint64(values[block+offset+half]) * factor % modulus
 				sum := left + right
@@ -215,9 +268,22 @@ func byteLikeNTT(values []uint32, inverse bool, modulus, primitiveRoot uint64) {
 	if inverse {
 		inverseLength := byteLikeModPow(uint64(len(values)), modulus-2, modulus)
 		for i := range values {
+			if i&(byteLikeCancellationCheckInterval-1) == 0 {
+				if err := compiled.byteLikeCancellationError(); err != nil {
+					return err
+				}
+			}
 			values[i] = uint32(uint64(values[i]) * inverseLength % modulus)
 		}
 	}
+	return nil
+}
+
+func (compiled *compiledByteLikePattern) byteLikeCancellationError() error {
+	if compiled.ctx == nil {
+		return nil
+	}
+	return compiled.ctx.Err()
 }
 
 func byteLikeModPow(base, exponent, modulus uint64) uint64 {

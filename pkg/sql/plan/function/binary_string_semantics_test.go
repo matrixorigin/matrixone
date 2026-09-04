@@ -16,6 +16,7 @@ package function
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 	"math"
 	"testing"
@@ -462,9 +463,8 @@ func TestBinaryStringBoundaryHelpers(t *testing.T) {
 	length, rejected = padBinaryResultByteLength([]byte("abc"), 2, nil, 8)
 	require.False(t, rejected)
 	require.Equal(t, 2, length)
-	length, rejected = padBinaryResultByteLength([]byte("a"), 9, nil, 8)
-	require.False(t, rejected)
-	require.Zero(t, length)
+	_, rejected = padBinaryResultByteLength([]byte("a"), 9, nil, 8)
+	require.True(t, rejected)
 }
 
 func TestPadWithEmptyPadReturnsNonNullEmptyOrTruncatedValue(t *testing.T) {
@@ -486,11 +486,14 @@ func TestPadWithEmptyPadReturnsNonNullEmptyOrTruncatedValue(t *testing.T) {
 			} {
 				t.Run(fn.name, func(t *testing.T) {
 					proc := testutil.NewProcess(t)
-					source := makeBinaryStringTestInput(t, proc, test.typ, [][]byte{[]byte("abc"), []byte("abc")}, nil)
+					source := makeBinaryStringTestInput(
+						t, proc, test.typ, [][]byte{[]byte("abc"), []byte("abc"), []byte("a")}, nil)
 					defer source.Free(proc.Mp())
-					target := makeBinaryStringInt64Input(t, proc, []int64{5, 2})
+					target := makeBinaryStringInt64Input(
+						t, proc, []int64{5, 2, int64(types.MaxBlobLen) + 1})
 					defer target.Free(proc.Mp())
-					pad := makeBinaryStringTestInput(t, proc, test.typ, [][]byte{make([]byte, 0), make([]byte, 0)}, nil)
+					pad := makeBinaryStringTestInput(
+						t, proc, test.typ, [][]byte{make([]byte, 0), make([]byte, 0), make([]byte, 0)}, nil)
 					defer pad.Free(proc.Mp())
 
 					result := runBinaryStringBytesFn(t, proc, fn.fn, test.resultType, source, target, pad)
@@ -500,6 +503,7 @@ func TestPadWithEmptyPadReturnsNonNullEmptyOrTruncatedValue(t *testing.T) {
 					require.Empty(t, resultVector.GetBytesAt(0))
 					require.False(t, resultVector.IsNull(1))
 					require.Equal(t, []byte("ab"), resultVector.GetBytesAt(1))
+					require.True(t, resultVector.IsNull(2))
 				})
 			}
 		})
@@ -757,6 +761,58 @@ func TestCompiledByteLikePatternReusesRowScratch(t *testing.T) {
 	}
 }
 
+func makeSingleCandidateByteLike(segmentLength int) (value, pattern []byte) {
+	value = bytes.Repeat([]byte{'a'}, segmentLength)
+	pattern = []byte{'%', 'a'}
+	pattern = append(pattern, bytes.Repeat([]byte{'_'}, segmentLength-2)...)
+	pattern = append(pattern, 'a', '%')
+	return value, pattern
+}
+
+func TestByteLikeSingleCandidateStaysOnDirectPath(t *testing.T) {
+	require.False(t, byteLikeShouldUseConvolution(
+		types.MaxBlobLen, 1, types.MaxBlobLen, types.MaxBlobLen))
+	maxInt := int(^uint(0) >> 1)
+	require.False(t, byteLikeShouldUseConvolution(1, 1, maxInt, maxInt),
+		"an overflowing scaled baseline must conservatively keep the direct path")
+
+	const segmentLength = (64 << 10) - 3
+	value, pattern := makeSingleCandidateByteLike(segmentLength)
+	mp := mpool.MustNewZero()
+	compiled, err := compileByteLikePattern(pattern, nil, false, mp)
+	require.NoError(t, err)
+	matched, err := compiled.match(value)
+	require.NoError(t, err)
+	require.True(t, matched)
+	require.Empty(t, compiled.convolutionScratch)
+	compiled.free()
+	require.Zero(t, mp.CurrNB())
+
+	const rows = 8
+	proc := testutil.NewProcess(t)
+	mp = proc.Mp()
+	values, err := vector.NewConstBytes(types.T_varbinary.ToType(), value, rows, mp)
+	require.NoError(t, err)
+	defer values.Free(mp)
+	patterns, err := vector.NewConstBytes(types.T_varbinary.ToType(), pattern, rows, mp)
+	require.NoError(t, err)
+	defer patterns.Free(mp)
+	result := vector.NewFunctionResultWrapper(types.T_bool.ToType(), mp)
+	defer result.Free()
+	require.NoError(t, result.PreExtendAndReset(rows))
+
+	beforeBytes := mp.CurrNB()
+	beforeAllocs := mp.Stats().NumAlloc.Load()
+	require.NoError(t, newOpBuiltInRegexp().likeFn(
+		[]*vector.Vector{values, patterns}, result, proc, rows, nil))
+	require.Equal(t, int64(1), mp.Stats().NumAlloc.Load()-beforeAllocs,
+		"a single-candidate constant pattern must only allocate its compiled token storage")
+	require.Equal(t, beforeBytes, mp.CurrNB())
+	for _, rowMatched := range vector.MustFixedColNoTypeCheck[bool](result.GetResultVector()) {
+		require.True(t, rowMatched)
+	}
+}
+
 func makeEqualFrequencyByteLikeAdversary(size int) (value, pattern []byte) {
 	value = append(bytes.Repeat([]byte{'a'}, size), bytes.Repeat([]byte{'b'}, size+1)...)
 	value = append(value, bytes.Repeat([]byte{'a'}, size)...)
@@ -769,7 +825,16 @@ func makeEqualFrequencyByteLikeAdversary(size int) (value, pattern []byte) {
 }
 
 func TestByteLikeConvolutionHandlesEqualFrequencyAdversary(t *testing.T) {
-	maxMismatch := byteLikeMaxExactConvolutionSegment * 255 * 255
+	observedMaxTerm := uint64(0)
+	for encodedPattern := int64(1); encodedPattern <= 256; encodedPattern++ {
+		for encodedValue := int64(1); encodedValue <= 256; encodedValue++ {
+			difference := encodedPattern - encodedValue
+			term := uint64(encodedPattern * encodedValue * difference * difference)
+			observedMaxTerm = max(observedMaxTerm, term)
+		}
+	}
+	require.Equal(t, byteLikeMaxMismatchTerm, observedMaxTerm)
+	maxMismatch := byteLikeMaxExactConvolutionSegment * observedMaxTerm
 	modulusProduct := byteLikeNTTModuli[0].modulus * byteLikeNTTModuli[1].modulus
 	require.Less(t, maxMismatch, modulusProduct)
 
@@ -817,12 +882,19 @@ func TestByteLikeConvolutionUsesSegmentSizedBlocks(t *testing.T) {
 }
 
 func TestByteLikeConvolutionUsesBothModuliForExactResult(t *testing.T) {
-	// 2013265921 = 30961 * 255^2 + 164^2. The mismatch sum is zero
-	// under the first modulus, so rejecting this candidate exercises the
-	// second modulus rather than treating the first residue as a match.
-	pattern := bytes.Repeat([]byte{255}, 30_961)
-	pattern = append(pattern, 164)
-	value := make([]byte, len(pattern))
+	pattern := append(bytes.Repeat([]byte{244}, 8), 157)
+	value := append(bytes.Repeat([]byte{56}, 8), 78)
+	mismatch := uint64(0)
+	for i := range pattern {
+		encodedPattern := int64(pattern[i]) + 1
+		encodedValue := int64(value[i]) + 1
+		difference := encodedPattern - encodedValue
+		mismatch += uint64(encodedPattern * encodedValue * difference * difference)
+	}
+	firstModulus := byteLikeNTTModuli[0].modulus
+	require.Equal(t, 2*firstModulus, mismatch)
+	require.Zero(t, mismatch%firstModulus)
+	require.NotZero(t, mismatch%byteLikeNTTModuli[1].modulus)
 
 	mp := mpool.MustNewZero()
 	compiled, err := compileByteLikePattern(pattern, nil, false, mp)
@@ -831,7 +903,30 @@ func TestByteLikeConvolutionUsesBothModuliForExactResult(t *testing.T) {
 	matchedAt, used, err := compiled.findSegmentByConvolution(0, len(pattern), value, 0, len(value))
 	require.NoError(t, err)
 	require.True(t, used)
-	require.Equal(t, -1, matchedAt)
+	require.Equal(t, -1, matchedAt,
+		"a zero residue under the first modulus must still be rejected by the second modulus")
+}
+
+func TestByteLikeConvolutionHonorsCancellation(t *testing.T) {
+	value, pattern := makeEqualFrequencyByteLikeAdversary(1_000)
+	mp := mpool.MustNewZero()
+	compiled, err := compileByteLikePattern(pattern, nil, false, mp)
+	require.NoError(t, err)
+	defer compiled.free()
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	compiled.ctx = ctx
+
+	_, err = compiled.match(value)
+	require.ErrorIs(t, err, context.Canceled)
+	require.Empty(t, compiled.convolutionScratch)
+
+	a, b := make([]uint32, 1), make([]uint32, 1)
+	err = compiled.fillByteLikeConvolutionTerm(a, b, 0, 1, []byte{'a'}, 0, byteLikeNTTModuli[0].modulus)
+	require.ErrorIs(t, err, context.Canceled)
+	err = compiled.byteLikeNTT(make([]uint32, 2), false,
+		byteLikeNTTModuli[0].modulus, byteLikeNTTModuli[0].primitiveRoot)
+	require.ErrorIs(t, err, context.Canceled)
 }
 
 func TestByteLikeConvolutionAllocationFailureDoesNotLeak(t *testing.T) {
@@ -884,6 +979,35 @@ func TestByteLikeConstantPatternReusesConvolutionScratchAcrossRows(t *testing.T)
 	require.Equal(t, beforeBytes, mp.CurrNB())
 	for _, matched := range vector.MustFixedColNoTypeCheck[bool](result.GetResultVector()) {
 		require.False(t, matched)
+	}
+}
+
+func BenchmarkByteLikeSingleCandidate(b *testing.B) {
+	for _, segmentLength := range []int{(64 << 10) - 3, 1 << 20, types.MaxBlobLen - 3} {
+		b.Run(fmt.Sprintf("segment=%d", segmentLength), func(b *testing.B) {
+			value, pattern := makeSingleCandidateByteLike(segmentLength)
+			compiled, err := compileByteLikePattern(pattern, nil, false, mpool.MustNewZero())
+			if err != nil {
+				b.Fatal(err)
+			}
+			defer compiled.free()
+			matched, err := compiled.match(value)
+			if err != nil || !matched {
+				b.Fatalf("warm-up match failed: matched=%v err=%v", matched, err)
+			}
+			if len(compiled.convolutionScratch) != 0 {
+				b.Fatal("single-candidate match allocated convolution scratch")
+			}
+			b.SetBytes(int64(len(value) + len(pattern)))
+			b.ReportAllocs()
+			b.ResetTimer()
+			for i := 0; i < b.N; i++ {
+				matched, matchErr := compiled.match(value)
+				if matchErr != nil || !matched {
+					b.Fatalf("match failed: matched=%v err=%v", matched, matchErr)
+				}
+			}
+		})
 	}
 }
 
