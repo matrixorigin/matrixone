@@ -72,12 +72,18 @@ func (h *tableHandle) GetAppender() (appender data.ObjectAppender, err error) {
 
 	dropped := h.object.meta.Load().HasDropCommitted()
 	if !h.appender.IsAppendable() || !h.object.IsAppendable() || dropped {
+		// A rejected candidate will not receive more normal appends. Seal it
+		// eagerly so its final append commit bound can become available while
+		// outstanding transactions finish.
+		h.object.SealAppend()
 		return h.ThrowAppenderAndErr()
 	}
 	h.object.Ref()
 	// Similar to optimistic locking
 	dropped = h.object.meta.Load().HasDropCommitted()
 	if !h.appender.IsAppendable() || !h.object.IsAppendable() || dropped {
+		// Seal while the validation reference still guarantees object lifetime.
+		h.object.SealAppend()
 		h.object.Unref()
 		return h.ThrowAppenderAndErr()
 	}
