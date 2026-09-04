@@ -922,6 +922,9 @@ func (exec *CDCTaskExecutor) Resume() error {
 	}
 
 	stateBeforeResume := exec.stateMachine.State()
+	if !exec.previousReaderGenerationStoppedLocked(stateBeforeResume) {
+		return moerr.NewInternalErrorNoCtx("cannot resume: previous CDC reader generation is still stopping")
+	}
 	// Paused and table-error Failed executions both resume from their recorded
 	// watermarks. Other failure recovery remains the explicit RESTART command.
 	if err := exec.stateMachine.Transition(TransitionResume); err != nil {
@@ -1128,6 +1131,10 @@ func (exec *CDCTaskExecutor) Restart() error {
 	exec.callbackMu.Lock()
 
 	stateBeforeRestart := exec.stateMachine.State()
+	if !exec.previousReaderGenerationStoppedLocked(stateBeforeRestart) {
+		exec.callbackMu.Unlock()
+		return moerr.NewInternalErrorNoCtx("cannot restart: previous CDC reader generation is still stopping")
+	}
 	shouldStopOldExecution := stateBeforeRestart == StateRunning || stateBeforeRestart == StateStarting
 	shouldClearTableErrors := stateBeforeRestart == StateFailed || stateBeforeRestart == StatePaused
 
@@ -1158,7 +1165,21 @@ func (exec *CDCTaskExecutor) Restart() error {
 	exec.callbackMu.Unlock()
 	defer exec.removeRestartWaiter(generation)
 	if _, timedOut := waitForCDCCompletion(callbackDone, timeout); timedOut {
-		return moerr.NewInternalErrorNoCtx("CDC restart timed out waiting for table detector callbacks")
+		drainTimeoutErr := moerr.NewInternalErrorNoCtx("CDC restart timed out waiting for table detector callbacks")
+		// TransitionRestartBegin has already published local Starting. Fence the
+		// timed-out generation and restore a retryable Failed state; otherwise the
+		// durable RestartRequested owner retries into an in-memory state from
+		// which TransitionRestart is impossible.
+		exec.callbackGeneration.Add(1)
+		cdc.GetTableDetector(exec.cnUUID).UnRegister(exec.spec.TaskId)
+		exec.closeActiveRoutineCancel()
+		select {
+		case exec.holdCh <- 1:
+		default:
+		}
+		_ = exec.stateMachine.SetFailed(drainTimeoutErr.Error())
+		exec.recordRestartTimeoutAsync(nil, drainTimeoutErr)
+		return drainTimeoutErr
 	}
 	startupTimeoutErr := moerr.NewInternalErrorNoCtx("CDC restart startup timed out")
 
@@ -1701,6 +1722,21 @@ func completionReady(done <-chan struct{}) bool {
 	}
 }
 
+// previousReaderGenerationStoppedLocked prevents Pause/Failed recovery from
+// reopening watermark admission while a callback or reader from that terminal
+// generation still owns work. Callers hold callbackMu, which seals callback
+// admission while this readiness snapshot is evaluated.
+func (exec *CDCTaskExecutor) previousReaderGenerationStoppedLocked(state ExecutorState) bool {
+	if state != StatePaused && state != StateFailed {
+		return true
+	}
+	if exec.callbackDone != nil && !completionReady(exec.callbackDone) {
+		return false
+	}
+	readersDone := exec.readerShutdownCompletion()
+	return readersDone == nil || completionReady(readersDone)
+}
+
 func (exec *CDCTaskExecutor) readerShutdownCompletion() <-chan struct{} {
 	exec.readerShutdownMu.Lock()
 	defer exec.readerShutdownMu.Unlock()
@@ -1717,6 +1753,19 @@ func (exec *CDCTaskExecutor) setReaderShutdownCompletion(done <-chan struct{}) <
 		exec.readerShutdownDone = done
 		exec.readerShutdownMu.Unlock()
 		return done
+	}
+	// Do not grow one waiter goroutine per repeated cleanup retry when either
+	// side of the aggregate is already complete. This is especially important
+	// after a timed-out reader has been removed from runningReaders and a later
+	// retry takes an empty snapshot.
+	if completionReady(previous) {
+		exec.readerShutdownDone = done
+		exec.readerShutdownMu.Unlock()
+		return done
+	}
+	if completionReady(done) {
+		exec.readerShutdownMu.Unlock()
+		return previous
 	}
 	combined := make(chan struct{})
 	go func() {

@@ -572,10 +572,19 @@ func (u *CDCWatermarkUpdater) onJobs(jobs ...any) {
 	}
 
 	// batch update watermarks records in the `mo_cdc_watermark` table
-	if errMsg, err = u.execBatchUpdateWM(); err != nil {
+	if errMsg, err = u.persistBatchUpdateWM(); err != nil {
 		return
 	}
-	errMsg, err = u.execBatchUpdateWMErrMsg()
+	if errMsg, err = u.execBatchUpdateWMErrMsg(); err != nil {
+		return
+	}
+
+	// A committing job is also the queue barrier used by terminal task
+	// deletion. safeQueue may deliver later job types in the same callback
+	// batch, so completing it in execBatchUpdateWM would let DELETE race ahead
+	// of an already-admitted error-watermark UPSERT. Publish barrier completion
+	// only after every persistence phase in this callback has finished.
+	u.completeCommittingJobs(nil)
 }
 
 func (u *CDCWatermarkUpdater) execReadWM() (errMsg string, err error) {
@@ -667,6 +676,16 @@ func (u *CDCWatermarkUpdater) execReadWM() (errMsg string, err error) {
 // 4. On success: Move cacheCommitting -> cacheCommitted
 // 5. On failure: Return watermarks to cacheUncommitted for retry (with circuit breaker)
 func (u *CDCWatermarkUpdater) execBatchUpdateWM() (errMsg string, err error) {
+	errMsg, err = u.persistBatchUpdateWM()
+	u.completeCommittingJobs(err)
+	return
+}
+
+// persistBatchUpdateWM performs the watermark persistence phase without
+// publishing completion for committing jobs. onJobs uses this split so its
+// committing jobs remain full-callback queue barriers; focused helpers and
+// tests use execBatchUpdateWM to retain the historical completion contract.
+func (u *CDCWatermarkUpdater) persistBatchUpdateWM() (errMsg string, err error) {
 	if len(u.committingBuffer) == 0 {
 		return "", nil
 	}
@@ -775,19 +794,19 @@ func (u *CDCWatermarkUpdater) execBatchUpdateWM() (errMsg string, err error) {
 		}
 	}
 
-	// notify committing jobs that the watermarks are committed and
-	// clear the committing buffer
-	for i, job := range u.committingBuffer {
-		job.DoneWithErr(err)
-		u.committingBuffer[i] = nil
-	}
-	u.committingBuffer = u.committingBuffer[:0]
-
 	// clear the committing cache
 	for key := range u.cacheCommitting {
 		delete(u.cacheCommitting, key)
 	}
 	return
+}
+
+func (u *CDCWatermarkUpdater) completeCommittingJobs(err error) {
+	for i, job := range u.committingBuffer {
+		job.DoneWithErr(err)
+		u.committingBuffer[i] = nil
+	}
+	u.committingBuffer = u.committingBuffer[:0]
 }
 
 func (u *CDCWatermarkUpdater) execBatchUpdateWMErrMsg() (errMsg string, err error) {
@@ -1324,6 +1343,7 @@ func (u *CDCWatermarkUpdater) UpdateWatermarkErrMsg(
 		newMetadata.Message = fmt.Sprintf("max retry exceeded (%d): %s",
 			newMetadata.RetryCount, newMetadata.Message)
 	}
+	newMetadata.Message = truncateUTF8Runes(newMetadata.Message, CDCWatermarkErrMsgMaxLen)
 
 	// 6.5. Update metric if non-retryable error
 	if !newMetadata.IsRetryable {

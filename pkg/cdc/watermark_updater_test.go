@@ -60,6 +60,12 @@ type delayedWatermarkBatchExecutor struct {
 	deleteCalls    int
 }
 
+type blockingErrorWatermarkExecutor struct {
+	writeStarted chan struct{}
+	releaseWrite chan struct{}
+	startOnce    sync.Once
+}
+
 type failAddWatermarkExecutor struct {
 	insertErr error
 }
@@ -116,6 +122,28 @@ func (m *delayedWatermarkBatchExecutor) Query(
 }
 
 func (m *delayedWatermarkBatchExecutor) ApplySessionOverride(_ ie.SessionOverrideOptions) {}
+
+func (m *blockingErrorWatermarkExecutor) Exec(
+	_ context.Context,
+	sql string,
+	_ ie.SessionOverrideOptions,
+) error {
+	if strings.Contains(sql, "ON DUPLICATE KEY UPDATE err_msg") {
+		m.startOnce.Do(func() { close(m.writeStarted) })
+		<-m.releaseWrite
+	}
+	return nil
+}
+
+func (m *blockingErrorWatermarkExecutor) Query(
+	_ context.Context,
+	_ string,
+	_ ie.SessionOverrideOptions,
+) ie.InternalExecResult {
+	return &InternalExecResultForTest{}
+}
+
+func (m *blockingErrorWatermarkExecutor) ApplySessionOverride(_ ie.SessionOverrideOptions) {}
 
 func (m *failAddWatermarkExecutor) Exec(_ context.Context, sql string, _ ie.SessionOverrideOptions) error {
 	if strings.HasPrefix(sql, "INSERT INTO `mo_catalog`.`mo_cdc_watermark`") {
@@ -514,6 +542,56 @@ func TestWatermarkUpdater_ForceFlushHonorsContext(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("ForceFlush did not honor canceled context")
 	}
+}
+
+func TestWatermarkUpdater_ForceFlushWaitsForSameBatchErrorWrite(t *testing.T) {
+	exec := &blockingErrorWatermarkExecutor{
+		writeStarted: make(chan struct{}),
+		releaseWrite: make(chan struct{}),
+	}
+	updater := NewCDCWatermarkUpdater(t.Name(), exec)
+	key := WatermarkKey{
+		AccountId: 1,
+		TaskId:    "task",
+		DBName:    "db",
+		TableName: "table",
+	}
+	updater.cacheCommitted[key] = types.BuildTS(1, 1)
+	errorJob := NewUpdateWMErrMsgJob(context.Background(), &key, "old error")
+	barrierJob := NewCommittingWMJob(context.Background())
+	batchDone := make(chan struct{})
+	writeReleased := false
+	defer func() {
+		if !writeReleased {
+			close(exec.releaseWrite)
+		}
+	}()
+	go func() {
+		updater.onJobs(errorJob, barrierJob)
+		close(batchDone)
+	}()
+
+	select {
+	case <-exec.writeStarted:
+	case <-time.After(time.Second):
+		t.Fatal("same-batch error watermark write did not start")
+	}
+
+	waitCtx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	result := barrierJob.WaitDoneContext(waitCtx)
+	cancel()
+	require.ErrorIs(t, result.Err, context.DeadlineExceeded,
+		"the deletion barrier must not complete before a same-batch writer")
+
+	close(exec.releaseWrite)
+	writeReleased = true
+	select {
+	case <-batchDone:
+	case <-time.After(time.Second):
+		t.Fatal("watermark batch did not finish after releasing the writer")
+	}
+	require.NoError(t, barrierJob.GetResult().Err)
+	require.NoError(t, errorJob.GetResult().Err)
 }
 
 func TestWatermarkUpdater_CommitCircuitBreaker(t *testing.T) {
@@ -1518,23 +1596,37 @@ func TestCDCWatermarkUpdater_GuardedWatermarkSQLSplitsOnBytes(t *testing.T) {
 }
 
 func TestCDCWatermarkUpdater_ErrorMessageRespectsCatalogBound(t *testing.T) {
-	var persisted string
-	u := NewCDCWatermarkUpdater(t.Name(), newWmMockSQLExecutor(),
-		WithCustomizedScheduleJob(func(job *UpdaterJob) error {
-			persisted = job.ErrMsg
-			job.DoneWithResult(nil)
-			return nil
-		}))
+	executor := &retryableMockExecutor{}
+	u := NewCDCWatermarkUpdater(t.Name(), executor, WithCronJobInterval(time.Hour))
+	u.Start()
+	defer u.Stop()
 	key := &WatermarkKey{AccountId: 1, TaskId: "task", DBName: "db", TableName: "table"}
-	err := u.UpdateWatermarkErrMsg(
-		context.Background(),
-		key,
-		strings.Repeat("界", CDCWatermarkErrMsgMaxLen+100),
-		&ErrorContext{IsRetryable: false},
-	)
+	u.cacheCommitted[*key] = types.BuildTS(1, 1)
+	longMessage := strings.Repeat("界", CDCWatermarkErrMsgMaxLen+100)
+	for range MaxRetryCount + 1 {
+		require.NoError(t, u.UpdateWatermarkErrMsg(
+			context.Background(),
+			key,
+			longMessage,
+			&ErrorContext{IsRetryable: true},
+		))
+	}
+	flushCtx, cancel := context.WithTimeout(context.Background(), time.Second)
+	require.NoError(t, u.ForceFlush(flushCtx))
+	cancel()
+
+	executor.mu.Lock()
+	persistedSQL := executor.lastSQL
+	executor.mu.Unlock()
+	parsed, err := ParseInsert(persistedSQL)
 	require.NoError(t, err)
+	require.Len(t, parsed.rows, 1)
+	require.Len(t, parsed.rows[0], 5)
+	persisted := parsed.rows[0][4]
 	require.True(t, utf8.ValidString(persisted))
 	require.LessOrEqual(t, utf8.RuneCountInString(persisted), CDCWatermarkErrMsgMaxLen)
+	require.False(t, u.errorMetadataCache[*key].IsRetryable)
+	require.Contains(t, u.errorMetadataCache[*key].Message, "max retry exceeded")
 	require.LessOrEqual(t, utf8.RuneCountInString(u.errorMetadataCache[*key].Message), CDCWatermarkErrMsgMaxLen)
 }
 

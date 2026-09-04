@@ -26,7 +26,7 @@ frontend executing DROP may be different CNs.
 | Local callback generation | `CDCTaskExecutor.callbackMu` and generation | every admitted callback exits |
 | Local reader generation | reader shutdown completion channel | every captured reader exits |
 | Local terminal tombstone | shared updater on the owner CN | callback and reader completions close |
-| Buffered watermark jobs | shared updater queue | terminal delete drains or cancels every matching job |
+| Buffered watermark jobs | shared updater queue | terminal delete observes completion of every persistence phase in the admitted queue batch |
 
 The task row is the single durable authority. The local tombstone is not a
 distributed deletion record and therefore must have a bounded, explicit local
@@ -80,9 +80,20 @@ tombstone before it waits. It then:
    takes a final reader snapshot after all callbacks exit, covering readers
    published after the first snapshot.
 
+The flush job is completed only after the queue callback has finished all of
+its persistence phases. This matters because the queue may coalesce an
+error-watermark UPSERT and the flush barrier into one callback: completing the
+barrier after the normal watermark phase but before the error phase would let
+the final DELETE overtake that older UPSERT.
+
 Pause and permanent-table-error paths also retain reader completion ownership,
 so a later DROP from `Paused` or `Failed` cannot release the tombstone while an
-old reader is still alive.
+old reader is still alive. Resume and Restart also reject recovery while that
+completion owner remains open; they must not remove the pause fence or publish
+a replacement generation beside an old reader. A Restart callback-drain timeout
+fences the timed-out generation and restores local `Failed`, matching the
+durable `RestartRequested` retry owner instead of stranding the executor in
+`Starting`.
 
 Callback admission, count changes, completion-channel rotation, and channel
 closure all occur under `callbackMu`. This prevents a zero-to-new-generation
@@ -125,8 +136,9 @@ be overwritten by an old failure path.
 
 - Unit tests cover running, paused, failed, timeout, retry, delete failure,
   callback admission/drain for both Pause and Cancel, aggregate reader-drain
-  ownership, Cancel from Pausing, cache cleanup, and superseding owner or state
-  paths.
+  ownership, Resume/Restart rejection while an old reader still owns work,
+  Restart callback-drain timeout recovery, Cancel from Pausing, cache cleanup,
+  and superseding owner or state paths.
 - SQL construction tests cover escaping, deterministic ordering, predicate
   deduplication, row bounds, and byte bounds for insert, watermark update, and
   error update forms.
@@ -135,5 +147,7 @@ be overwritten by an old failure path.
   table lock waiter before releasing the winner and asserts that both task and
   watermark counts are zero afterward.
 - Focused race tests cover callback/reader cancellation and updater lifecycle.
+- A deterministic same-batch test blocks an admitted error-watermark UPSERT and
+  proves that the terminal flush barrier cannot complete ahead of it.
 - The guarded construction benchmark records allocations and latency at 1,000
   and 5,000 tables to prevent reintroducing quadratic concatenation.

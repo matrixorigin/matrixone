@@ -3379,6 +3379,64 @@ func TestCdcTaskStopAllReadersRetainsEarlierIncompleteOwner(t *testing.T) {
 	}, time.Second, time.Millisecond)
 }
 
+func TestCdcTaskRecoveryRejectsIncompletePreviousReaderGeneration(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		action func(*CDCTaskExecutor) error
+	}{
+		{name: "resume", action: func(exec *CDCTaskExecutor) error { return exec.Resume() }},
+		{name: "restart", action: func(exec *CDCTaskExecutor) error { return exec.Restart() }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			readerDone := make(chan struct{})
+			executor := &CDCTaskExecutor{
+				spec: &task.CreateCdcDetails{
+					TaskId:   "task-incomplete-reader-generation",
+					TaskName: "task-incomplete-reader-generation",
+					Accounts: []*task.Account{{Id: 1}},
+				},
+				stateMachine: NewExecutorStateMachine(),
+			}
+			require.NoError(t, executor.stateMachine.Transition(TransitionStart))
+			require.NoError(t, executor.stateMachine.Transition(TransitionStartSuccess))
+			require.NoError(t, executor.stateMachine.Transition(TransitionPause))
+			require.NoError(t, executor.stateMachine.Transition(TransitionPauseComplete))
+			executor.setReaderShutdownCompletion(readerDone)
+
+			err := tc.action(executor)
+			require.ErrorContains(t, err, "previous CDC reader generation is still stopping")
+			require.Equal(t, StatePaused, executor.stateMachine.State())
+			close(readerDone)
+		})
+	}
+}
+
+func TestCdcTaskRestartCallbackDrainTimeoutRestoresRetryableState(t *testing.T) {
+	callbackDone := make(chan struct{})
+	executor := &CDCTaskExecutor{
+		activeRoutine: cdc.NewCdcActiveRoutine(),
+		cnUUID:        "test-cn",
+		spec: &task.CreateCdcDetails{
+			TaskId:   "task-restart-callback-timeout",
+			TaskName: "task-restart-callback-timeout",
+		},
+		stateMachine:          NewExecutorStateMachine(),
+		holdCh:                make(chan int, 1),
+		callbackDone:          callbackDone,
+		callbackCount:         1,
+		restartStartupTimeout: 20 * time.Millisecond,
+	}
+	require.NoError(t, executor.stateMachine.Transition(TransitionStart))
+	require.NoError(t, executor.stateMachine.Transition(TransitionStartSuccess))
+
+	err := executor.Restart()
+	require.ErrorContains(t, err, "timed out waiting for table detector callbacks")
+	require.Equal(t, StateFailed, executor.stateMachine.State())
+	require.True(t, executor.stateMachine.CanTransition(TransitionRestart),
+		"the durable restart retry owner must be able to retry locally")
+	close(callbackDone)
+}
+
 func TestCdcTaskReclaimDeletedWatermarkStopsReaderPublishedAfterFirstSnapshot(t *testing.T) {
 	updater := cdc.NewCDCWatermarkUpdater(t.Name(), nil)
 	const taskID = "task-late-reader-reclaim"
