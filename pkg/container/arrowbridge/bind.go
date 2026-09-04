@@ -18,7 +18,6 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/binary"
-	"fmt"
 	"hash"
 	"sort"
 	"strings"
@@ -426,16 +425,16 @@ func selectLoadConversion(source arrow.DataType, target types.Type) (conversionK
 	if source.ID() == arrow.DICTIONARY {
 		dictionary, ok := source.(*arrow.DictionaryType)
 		if !ok || dictionary.IndexType == nil || dictionary.ValueType == nil {
-			return 0, fmt.Errorf("invalid Arrow dictionary type")
+			return 0, moerr.NewInvalidInputNoCtx("invalid Arrow dictionary type")
 		}
 		switch dictionary.IndexType.ID() {
 		case arrow.INT8, arrow.INT16, arrow.INT32, arrow.INT64,
 			arrow.UINT8, arrow.UINT16, arrow.UINT32, arrow.UINT64:
 		default:
-			return 0, fmt.Errorf("dictionary index type %s is not an integer", dictionary.IndexType)
+			return 0, moerr.NewInvalidInputNoCtxf("dictionary index type %s is not an integer", dictionary.IndexType)
 		}
 		if dictionary.ValueType.ID() == arrow.DICTIONARY {
-			return 0, fmt.Errorf("nested Arrow dictionaries are not supported")
+			return 0, moerr.NewInvalidInputNoCtx("nested Arrow dictionaries are not supported")
 		}
 		if _, err := selectLoadConversion(dictionary.ValueType, target); err != nil {
 			return 0, err
@@ -481,7 +480,7 @@ func selectLoadConversion(source arrow.DataType, target types.Type) (conversionK
 	if isCheckedWidening(source.ID(), target.Oid) {
 		return conversionMaterializeWiden, nil
 	}
-	return 0, fmt.Errorf("no exact long-term conversion")
+	return 0, moerr.NewInvalidInputNoCtx("no exact long-term conversion")
 }
 
 func isCheckedWidening(source arrow.Type, target types.T) bool {

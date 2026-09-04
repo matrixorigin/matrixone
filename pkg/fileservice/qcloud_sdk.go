@@ -304,7 +304,7 @@ func mapQCloudConditionalReadError(err error) error {
 	if errors.As(err, &response) && response.Response != nil &&
 		(response.Response.StatusCode == http.StatusNotFound ||
 			response.Response.StatusCode == http.StatusPreconditionFailed) {
-		return fmt.Errorf("%w: conditional COS read failed", ErrObjectChanged)
+		return errors.Join(ErrObjectChanged, moerr.NewInternalErrorNoCtx("conditional COS read failed"))
 	}
 	return err
 }

@@ -19,7 +19,6 @@ import (
 	"context"
 	"crypto/sha256"
 	"errors"
-	"fmt"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -441,8 +440,8 @@ func arrowObjectIdentity(
 			return nil, err
 		}
 		if identity.Size != size {
-			return nil, fmt.Errorf("%w: Arrow object size changed from %d to %d",
-				fileservice.ErrObjectChanged, identity.Size, size)
+			return nil, errors.Join(fileservice.ErrObjectChanged,
+				moerr.NewInternalErrorNoCtxf("Arrow object size changed from %d to %d", identity.Size, size))
 		}
 		return identity, nil
 	}
@@ -458,8 +457,8 @@ func arrowObjectIdentity(
 		return nil, err
 	}
 	if identity.Size != size {
-		return nil, fmt.Errorf("%w: Arrow object size changed from %d to %d",
-			fileservice.ErrObjectChanged, size, identity.Size)
+		return nil, errors.Join(fileservice.ErrObjectChanged,
+			moerr.NewInternalErrorNoCtxf("Arrow object size changed from %d to %d", size, identity.Size))
 	}
 	return &identity, nil
 }
@@ -716,11 +715,11 @@ func BuildArrowTargets(
 
 func replaceArrowBatch(dst, src *batch.Batch, mp *mpool.MPool) error {
 	if dst == nil || src == nil || len(dst.Vecs) != len(src.Vecs) {
-		return fmt.Errorf("Arrow conversion produced an incompatible MatrixOne batch")
+		return moerr.NewInternalErrorNoCtx("Arrow conversion produced an incompatible MatrixOne batch")
 	}
 	for i := range src.Vecs {
 		if src.Vecs[i] == nil {
-			return fmt.Errorf("Arrow conversion produced a nil vector at column %d", i)
+			return moerr.NewInternalErrorNoCtxf("Arrow conversion produced a nil vector at column %d", i)
 		}
 		if dst.Vecs[i] != nil {
 			dst.Vecs[i].Free(mp)

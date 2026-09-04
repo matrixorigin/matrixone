@@ -3556,8 +3556,9 @@ func (c *Compile) planArrowCompileRuntime(
 				return nil, err
 			}
 			if identity.Size != fileSize[fileIndex] {
-				return nil, fmt.Errorf("%w: Arrow object %d size changed from %d to %d",
-					fileservice.ErrObjectChanged, fileIndex, fileSize[fileIndex], identity.Size)
+				return nil, errors.Join(fileservice.ErrObjectChanged,
+					moerr.NewInternalErrorNoCtxf("Arrow object %d size changed from %d to %d",
+						fileIndex, fileSize[fileIndex], identity.Size))
 			}
 			lastModified := int64(0)
 			if !identity.LastModified.IsZero() {
