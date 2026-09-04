@@ -510,7 +510,7 @@ func lockDataBranchCloneDatabaseSources(
 		return tables[i].tblName < tables[j].tblName
 	})
 	for _, table := range tables {
-		if table.typ == view {
+		if table.typ == view || shouldSkipRestoreTableInBulk(table) {
 			continue
 		}
 		if err := lockDataBranchCloneSource(
@@ -551,7 +551,7 @@ func forEachCloneDatabaseSourceTable(
 	fn func(*tableInfo) error,
 ) error {
 	for _, table := range source.srcTblInfos {
-		if table.typ == view {
+		if table.typ == view || shouldSkipRestoreTableInBulk(table) {
 			continue
 		}
 		if err := fn(table); err != nil {
@@ -1298,7 +1298,7 @@ func handleCloneDatabaseWithSource(
 			continue
 		}
 
-		if srcTbl.typ == view || isSequence(srcTbl) {
+		if srcTbl.typ == view || isSequence(srcTbl) || shouldSkipRestoreTableInBulk(srcTbl) {
 			continue
 		}
 
@@ -1313,6 +1313,9 @@ func handleCloneDatabaseWithSource(
 	// clone foreign key related table
 	for _, key := range source.sortedFkTbls {
 		if tblInfo := source.fkTableMap[key]; tblInfo != nil {
+			if shouldSkipRestoreTableInBulk(tblInfo) {
+				continue
+			}
 			if err = cloneTable(
 				stmt.DstDatabase.String(), tblInfo.tblName,
 				stmt.SrcDatabase.String(), tblInfo.tblName,

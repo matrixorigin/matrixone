@@ -25,6 +25,7 @@ import (
 	"github.com/prashantv/gostub"
 	"github.com/stretchr/testify/require"
 
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/frontend/databranchutils"
@@ -624,6 +625,7 @@ func TestTimestampDataBranchDatabaseRevalidatesEveryTableAfterAllLocks(t *testin
 		source := cloneDatabaseSource{srcTblInfos: []*tableInfo{
 			{dbName: "db", tblName: "t1"},
 			{dbName: "db", tblName: "v", typ: view},
+			{dbName: "db", tblName: "external", relKind: catalog.SystemExternalRel},
 			{dbName: "db", tblName: "t2"},
 		}}
 		done <- forEachCloneDatabaseSourceTable(source, func(table *tableInfo) error {

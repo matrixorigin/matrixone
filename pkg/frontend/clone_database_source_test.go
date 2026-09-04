@@ -565,6 +565,7 @@ func TestCloneDatabaseSourceBranchTableCount(t *testing.T) {
 			name: "mixed objects count only receipt-backed tables",
 			tables: []*tableInfo{
 				{tblName: "regular"},
+				{tblName: "external", relKind: catalog.SystemExternalRel},
 				{tblName: "sequence", relKind: catalog.SystemSequenceRel},
 				{tblName: "view", typ: view},
 			},
@@ -677,6 +678,7 @@ func TestLockDataBranchCloneDatabaseSourcesSkipsSourcesWithoutTables(t *testing.
 	for _, source := range []cloneDatabaseSource{
 		{},
 		{srcTblInfos: []*tableInfo{{tblName: "view", typ: view}}},
+		{srcTblInfos: []*tableInfo{{tblName: "external", relKind: catalog.SystemExternalRel}}},
 	} {
 		require.NoError(t, lockDataBranchCloneDatabaseSources(ctx, nil, nil, source))
 	}
