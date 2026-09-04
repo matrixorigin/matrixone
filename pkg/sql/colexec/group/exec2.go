@@ -40,13 +40,28 @@ const (
 	// we use this size as pre-allocated size for hash table.
 	aggHtPreAllocSize = 1024
 
-	// spill parameters.
-	spillNumBuckets = 32
-	spillMaskBits   = 5 // log2(spillNumBuckets)
-	spillMaxPass    = 3
-	spillIOBufSize  = 1024 * 1024 // 1 MiB read-ahead buffer for spill file reads
-	spillWrBufSize  = 64 * 1024   // 64 KiB bounded buffer per open spill bucket
+	// Aggregate spill keeps the historical fanout: aggregate state makes each
+	// record relatively expensive, while partial aggregation usually keeps a
+	// first-level bucket below the resident capacity. DISTINCT has no aggregate
+	// state and can retain almost every input row, so use a wider first pass to
+	// avoid rewriting every bucket at the next level. Its optional per-bucket
+	// writer buffers remain bounded to at most 4 MiB in total.
+	spillNumBuckets         = 32
+	spillMaskBits           = 5 // log2(spillNumBuckets)
+	spillDistinctNumBuckets = 64
+	spillDistinctMaskBits   = 6 // log2(spillDistinctNumBuckets)
+	spillMaxNumBuckets      = spillDistinctNumBuckets
+	spillMaxPass            = 3
+	spillIOBufSize          = 1024 * 1024 // 1 MiB read-ahead buffer for spill file reads
+	spillWrBufSize          = 64 * 1024   // 64 KiB bounded buffer per open spill bucket
 )
+
+func (ctr *container) spillPartitionCount() int {
+	if len(ctr.aggList) == 0 {
+		return spillDistinctNumBuckets
+	}
+	return spillNumBuckets
+}
 
 func hasInactiveGroupingColumn(flags []bool) bool {
 	for _, flag := range flags {

@@ -1025,11 +1025,20 @@ func (ses *Session) optimizerStatsKey(tableID uint64) optimizerStatsTableKey {
 }
 
 type optimizerStatsCacheTag struct {
-	key     optimizerStatsTableKey
-	version uint64
+	key               optimizerStatsTableKey
+	version           uint64
+	tableDefVersion   uint32
+	tableVersionBound bool
 }
 
 func (ses *Session) getStatsCacheWithVersion(key optimizerStatsTableKey) (*plan2.StatsCache, uint64) {
+	return ses.getStatsCacheForTableDefVersion(key, nil)
+}
+
+func (ses *Session) getStatsCacheForTableDefVersion(
+	key optimizerStatsTableKey,
+	tableDefVersion *uint32,
+) (*plan2.StatsCache, uint64) {
 	ses.statsCacheMu.Lock()
 	defer ses.statsCacheMu.Unlock()
 	ses.initStatsCacheLocked()
@@ -1043,7 +1052,10 @@ func (ses *Session) getStatsCacheWithVersion(key optimizerStatsTableKey) (*plan2
 		// generation. Once any publication has happened, an untagged entry is
 		// conservatively stale.
 		ses.statsCacheVersions[key.tableID] = optimizerStatsCacheTag{key: key, version: version}
-	} else if tag.key != key || tag.version != version {
+	} else if tag.key != key || tag.version != version ||
+		(tag.tableVersionBound &&
+			(tableDefVersion == nil || tag.tableDefVersion != *tableDefVersion)) ||
+		(tableDefVersion != nil && !tag.tableVersionBound) {
 		ses.statsCache.Delete(key.tableID)
 		delete(ses.statsCacheVersions, key.tableID)
 	}
@@ -1055,6 +1067,15 @@ func (ses *Session) cacheStatsIfCurrent(
 	version uint64,
 	stats *pbstats.StatsInfo,
 ) bool {
+	return ses.cacheStatsForTableDefVersionIfCurrent(key, version, nil, stats)
+}
+
+func (ses *Session) cacheStatsForTableDefVersionIfCurrent(
+	key optimizerStatsTableKey,
+	version uint64,
+	tableDefVersion *uint32,
+	stats *pbstats.StatsInfo,
+) bool {
 	ses.statsCacheMu.Lock()
 	defer ses.statsCacheMu.Unlock()
 	if currentOptimizerStatsVersion(ses.GetService(), key) != version {
@@ -1064,13 +1085,19 @@ func (ses *Session) cacheStatsIfCurrent(
 	if ses.statsCache.SetAndReportReset(key.tableID, stats) {
 		clear(ses.statsCacheVersions)
 	}
-	ses.statsCacheVersions[key.tableID] = optimizerStatsCacheTag{key: key, version: version}
+	tag := optimizerStatsCacheTag{key: key, version: version}
+	if tableDefVersion != nil {
+		tag.tableDefVersion = *tableDefVersion
+		tag.tableVersionBound = true
+	}
+	ses.statsCacheVersions[key.tableID] = tag
 	return true
 }
 
-func (ses *Session) cachePublishedStats(
+func (ses *Session) cachePublishedStatsForTableDefVersion(
 	key optimizerStatsTableKey,
 	version uint64,
+	tableDefVersion *uint32,
 	stats *pbstats.StatsInfo,
 ) {
 	ses.statsCacheMu.Lock()
@@ -1079,7 +1106,12 @@ func (ses *Session) cachePublishedStats(
 	if ses.statsCache.SetAndReportReset(key.tableID, stats) {
 		clear(ses.statsCacheVersions)
 	}
-	ses.statsCacheVersions[key.tableID] = optimizerStatsCacheTag{key: key, version: version}
+	tag := optimizerStatsCacheTag{key: key, version: version}
+	if tableDefVersion != nil {
+		tag.tableDefVersion = *tableDefVersion
+		tag.tableVersionBound = true
+	}
+	ses.statsCacheVersions[key.tableID] = tag
 }
 
 func (ses *Session) initStatsCacheLocked() {
