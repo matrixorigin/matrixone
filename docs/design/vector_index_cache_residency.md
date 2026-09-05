@@ -28,8 +28,10 @@ The contract this design implements:
    share one load.
 3. **Bounded residency.** Resident index bytes are bounded by an operator-set
    budget, per tenant and CN-wide, without failing ordinary queries.
-4. **No silent unbounding.** A budget that cannot be read falls back to a defined
-   value; an outage does not quietly disable the bound.
+4. **No silent unbounding.** An unset budget is derived from the machine, and a
+   capacity that cannot be read is an *error* rather than an invented number
+   (§5.1); a catalog outage keeps the last known cap. Nothing quietly disables
+   the bound.
 5. **Provenance.** A generation records the base-table version it was built from,
    so "does this index actually cover the snapshot I asked for" is answerable.
 
