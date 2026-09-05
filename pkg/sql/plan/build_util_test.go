@@ -936,6 +936,27 @@ func TestBuildGeneratedExprUsesStrictForCharVarchar(t *testing.T) {
 	require.Equal(t, "cast", genInt.Expr.GetF().GetFunc().GetObjName())
 }
 
+func TestBuildGeneratedExprRejectsStatementDigestText(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	stmt, err := mysql.ParseOne(context.Background(),
+		"create table t (g text generated always as (statement_digest_text('SELECT ?')) stored)", 1)
+	require.NoError(t, err)
+	createTable, ok := stmt.(*tree.CreateTable)
+	require.True(t, ok)
+
+	var genCol *tree.ColumnTableDef
+	for _, def := range createTable.Defs {
+		if cd, ok := def.(*tree.ColumnTableDef); ok && cd.Name.ColNameOrigin() == "g" {
+			genCol = cd
+		}
+	}
+	require.NotNil(t, genCol)
+
+	_, err = buildGeneratedExpr(genCol, plan.Type{Id: int32(types.T_text)}, nil, proc)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "non-deterministic function 'statement_digest_text'")
+}
+
 func TestApplyGeneratedColumnAssignmentCastCompatibility(t *testing.T) {
 	builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true), false, true)
 	proc := builder.compCtx.GetProcess()
