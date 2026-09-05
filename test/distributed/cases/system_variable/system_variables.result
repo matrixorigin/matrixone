@@ -258,7 +258,7 @@ table_catalog  ¦  VARCHAR(3)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
 table_schema  ¦  VARCHAR(5000)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 table_name  ¦  VARCHAR(5000)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 view_definition  ¦  TEXT(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-check_option  ¦  VARCHAR(4)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
+check_option  ¦  VARCHAR(9)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
 is_updatable  ¦  VARCHAR(3)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
 definer  ¦  VARCHAR(401)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 security_type  ¦  VARCHAR(7)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀

@@ -13700,6 +13700,29 @@ var supportedOthersBuiltIns = []FuncNew{
 		},
 	},
 
+	// function `mo_view_definition`
+	// Used only by information_schema.VIEWS to provide a parser-aware read path
+	// for legacy ViewData rows that predate the frozen definition field.
+	{
+		functionId: MO_VIEW_DEFINITION,
+		class:      plan.Function_INTERNAL | plan.Function_STRICT,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    fixedTypeMatch,
+
+		Overloads: []overload{
+			{
+				overloadId: 0,
+				args:       []types.T{types.T_varchar},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_text.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return builtInViewDefinition
+				},
+			},
+		},
+	},
+
 	// function `internal_char_length`
 	{
 		functionId: INTERNAL_CHAR_LENGTH,

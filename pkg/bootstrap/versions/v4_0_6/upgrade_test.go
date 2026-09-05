@@ -164,7 +164,10 @@ func TestUpgradeEntries(t *testing.T) {
 		"drop view if exists information_schema.statistics")
 	for _, entry := range tenantUpgEntries {
 		ddl := entry.UpgSql + entry.PostSql
-		if strings.Contains(ddl, "mo_subscription_tables()") ||
+		if entry.TableName == "VIEWS" {
+			require.Equal(t, int64(defines.MORPCVersion48), entry.RequiredProtocolVersion,
+				"view upgrade %s must wait for mo_view_definition", entry.TableName)
+		} else if strings.Contains(ddl, "mo_subscription_tables()") ||
 			strings.Contains(ddl, "mo_subscription_columns()") {
 			require.Equal(t, int64(defines.MORPCVersion46), entry.RequiredProtocolVersion,
 				"view upgrade %s must wait for subscription metadata functions", entry.TableName)
@@ -205,6 +208,8 @@ func TestUpgradeEntries(t *testing.T) {
 		expectedProtocol := int64(defines.MORPCVersion41)
 		if view.name == "TABLES" || view.name == "COLUMNS" {
 			expectedProtocol = defines.MORPCVersion46
+		} else if view.name == "VIEWS" {
+			expectedProtocol = defines.MORPCVersion48
 		}
 		require.Equal(t, expectedProtocol, entry.RequiredProtocolVersion)
 		require.Contains(t, strings.ToLower(entry.PreSql),
@@ -221,6 +226,24 @@ func TestUpgradeEntries(t *testing.T) {
 	require.Contains(t, strings.ToLower(tablePrivileges.UpgSql),
 		"drop view if exists information_schema.table_privileges")
 	require.Equal(t, sysview.InformationSchemaTablePrivilegesDDL, tablePrivileges.PostSql)
+}
+
+func TestInformationSchemaViewsUpgradeUsesLegacyDefinitionCompatibility(t *testing.T) {
+	// A pre-upgrade viewdef has Stmt but no parser-derived definition. The
+	// MODIFY_VIEW entry must keep the public metadata contract available through
+	// the parser-aware compatibility function instead of returning NULL while the
+	// separate lifecycle recovery remains inactive.
+	var viewsEntry *versions.UpgradeEntry
+	for i := range tenantUpgEntries {
+		if tenantUpgEntries[i].TableName == "VIEWS" {
+			viewsEntry = &tenantUpgEntries[i]
+			break
+		}
+	}
+	require.NotNil(t, viewsEntry)
+	require.Equal(t, versions.MODIFY_VIEW, viewsEntry.UpgType)
+	require.Contains(t, viewsEntry.UpgSql, "mo_view_definition(tbl.viewdef)")
+	require.NotContains(t, viewsEntry.UpgSql, "json_extract_string(tbl.viewdef, '$.definition')")
 }
 
 func TestInformationSchemaMetadataVisibilityUpgradeChecks(t *testing.T) {

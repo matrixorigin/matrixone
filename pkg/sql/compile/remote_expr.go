@@ -540,6 +540,79 @@ func pipelineContainsPadSpaceCast(p *pipeline.Pipeline) bool {
 	return containsPadSpaceCastInValue(reflect.ValueOf(p), nil)
 }
 
+func pipelineContainsFunctionID(p *pipeline.Pipeline, functionID int32) bool {
+	return containsFunctionIDInValue(reflect.ValueOf(p), nil, functionID)
+}
+
+func containsFunctionIDInExpr(expr *plan.Expr, seen map[uintptr]struct{}, functionID int32) bool {
+	if expr == nil {
+		return false
+	}
+	if fn := expr.GetF(); fn != nil && fn.Func != nil {
+		id, _ := function.DecodeOverloadID(fn.Func.Obj)
+		if id == functionID {
+			return true
+		}
+	}
+	return containsFunctionIDInValue(reflect.ValueOf(expr.Expr), seen, functionID)
+}
+
+func containsFunctionIDInValue(v reflect.Value, seen map[uintptr]struct{}, functionID int32) bool {
+	if !v.IsValid() {
+		return false
+	}
+	if v.Kind() == reflect.Interface {
+		if v.IsNil() {
+			return false
+		}
+		return containsFunctionIDInValue(v.Elem(), seen, functionID)
+	}
+	if v.Kind() == reflect.Pointer {
+		if v.IsNil() {
+			return false
+		}
+		if v.Type() == planExprPtrType {
+			return containsFunctionIDInExpr(v.Interface().(*plan.Expr), seen, functionID)
+		}
+		if seen == nil {
+			seen = make(map[uintptr]struct{})
+		}
+		ptr := v.Pointer()
+		if _, ok := seen[ptr]; ok {
+			return false
+		}
+		seen[ptr] = struct{}{}
+		return containsFunctionIDInValue(v.Elem(), seen, functionID)
+	}
+
+	switch v.Kind() {
+	case reflect.Slice, reflect.Array:
+		for i := 0; i < v.Len(); i++ {
+			if containsFunctionIDInValue(v.Index(i), seen, functionID) {
+				return true
+			}
+		}
+	case reflect.Map:
+		iter := v.MapRange()
+		for iter.Next() {
+			if containsFunctionIDInValue(iter.Key(), seen, functionID) ||
+				containsFunctionIDInValue(iter.Value(), seen, functionID) {
+				return true
+			}
+		}
+	case reflect.Struct:
+		for i := 0; i < v.NumField(); i++ {
+			if !v.Type().Field(i).IsExported() {
+				continue
+			}
+			if containsFunctionIDInValue(v.Field(i), seen, functionID) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 func containsPadSpaceCastInExpr(expr *plan.Expr, seen map[uintptr]struct{}) bool {
 	if expr == nil {
 		return false

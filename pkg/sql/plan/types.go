@@ -342,6 +342,8 @@ type BaseOptimizer struct {
 
 type ViewData struct {
 	Stmt                string
+	Definition          string `json:"definition,omitempty"`
+	CheckOption         string `json:"check_option,omitempty"`
 	DefaultDatabase     string
 	SQLMode             *string          `json:"sql_mode,omitempty"`
 	SecurityType        string           `json:"security_type,omitempty"`

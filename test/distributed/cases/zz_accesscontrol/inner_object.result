@@ -333,8 +333,8 @@ ac_db  ¦  ac_t1
 select count(*),table_name from information_schema.tables group by table_name having count(*) >1;
 ➤ count(*)[-5,64,0]  ¦  table_name[12,-1,0]
 select * from information_schema.views where table_name='ac_v1';
-➤ TABLE_CATALOG[12,2,0]  ¦  TABLE_SCHEMA[12,3750,0]  ¦  TABLE_NAME[12,3750,0]  ¦  VIEW_DEFINITION[12,0,0]  ¦  CHECK_OPTION[12,3,0]  ¦  IS_UPDATABLE[12,2,0]  ¦  DEFINER[12,49151,0]  ¦  SECURITY_TYPE[12,5,0]  ¦  CHARACTER_SET_CLIENT[12,5,0]  ¦  COLLATION_CONNECTION[12,13,0]  𝄀
-def  ¦  ac_db  ¦  ac_v1  ¦  create view `ac_db`.`ac_v1` as select `ac_t1`.`c1` as `c1` from `ac_db`.`ac_t1`  ¦  NONE  ¦  YES  ¦  admin@localhost  ¦  DEFINER  ¦  utf8mb4  ¦  utf8mb4_general_ci
+➤ TABLE_CATALOG[12,3,0]  ¦  TABLE_SCHEMA[12,5000,0]  ¦  TABLE_NAME[12,5000,0]  ¦  VIEW_DEFINITION[-1,16383,0]  ¦  CHECK_OPTION[12,9,0]  ¦  IS_UPDATABLE[12,3,0]  ¦  DEFINER[12,65535,0]  ¦  SECURITY_TYPE[12,7,0]  ¦  CHARACTER_SET_CLIENT[12,7,0]  ¦  COLLATION_CONNECTION[12,18,0]  𝄀
+def  ¦  ac_db  ¦  ac_v1  ¦  select `ac_t1`.`c1` as `c1` from `ac_db`.`ac_t1`  ¦  NONE  ¦  NO  ¦  admin@localhost  ¦  DEFINER  ¦  utf8mb4  ¦  utf8mb4_general_ci
 select * from information_schema.views where table_name='sys_v1';
 ➤ TABLE_CATALOG[12,2,0]  ¦  TABLE_SCHEMA[12,3750,0]  ¦  TABLE_NAME[12,3750,0]  ¦  VIEW_DEFINITION[12,0,0]  ¦  CHECK_OPTION[12,3,0]  ¦  IS_UPDATABLE[12,2,0]  ¦  DEFINER[12,49151,0]  ¦  SECURITY_TYPE[12,5,0]  ¦  CHARACTER_SET_CLIENT[12,5,0]  ¦  COLLATION_CONNECTION[12,13,0]
 select count(*),table_name from information_schema.views group by table_name having count(*)>1;
@@ -367,8 +367,8 @@ select table_schema,table_name from information_schema.tables where table_name='
 select count(*),table_name from information_schema.tables group by table_name having count(*) >1;
 ➤ count(*)[-5,64,0]  ¦  table_name[12,-1,0]
 select * from information_schema.views where table_name='sys_v1';
-➤ TABLE_CATALOG[12,2,0]  ¦  TABLE_SCHEMA[12,3750,0]  ¦  TABLE_NAME[12,3750,0]  ¦  VIEW_DEFINITION[12,0,0]  ¦  CHECK_OPTION[12,3,0]  ¦  IS_UPDATABLE[12,2,0]  ¦  DEFINER[12,49151,0]  ¦  SECURITY_TYPE[12,5,0]  ¦  CHARACTER_SET_CLIENT[12,5,0]  ¦  COLLATION_CONNECTION[12,13,0]  𝄀
-def  ¦  sys_db1  ¦  sys_v1  ¦  create view `sys_db1`.`sys_v1` as select `sys_t1`.`c1` as `c1` from `sys_db1`.`sys_t1`  ¦  NONE  ¦  YES  ¦  dump@localhost  ¦  DEFINER  ¦  utf8mb4  ¦  utf8mb4_general_ci
+➤ TABLE_CATALOG[12,3,0]  ¦  TABLE_SCHEMA[12,5000,0]  ¦  TABLE_NAME[12,5000,0]  ¦  VIEW_DEFINITION[-1,16383,0]  ¦  CHECK_OPTION[12,9,0]  ¦  IS_UPDATABLE[12,3,0]  ¦  DEFINER[12,65535,0]  ¦  SECURITY_TYPE[12,7,0]  ¦  CHARACTER_SET_CLIENT[12,7,0]  ¦  COLLATION_CONNECTION[12,18,0]  𝄀
+def  ¦  sys_db1  ¦  sys_v1  ¦  select `sys_t1`.`c1` as `c1` from `sys_db1`.`sys_t1`  ¦  NONE  ¦  NO  ¦  dump@localhost  ¦  DEFINER  ¦  utf8mb4  ¦  utf8mb4_general_ci
 select * from information_schema.views where table_name='ac_v1';
 ➤ TABLE_CATALOG[12,2,0]  ¦  TABLE_SCHEMA[12,3750,0]  ¦  TABLE_NAME[12,3750,0]  ¦  VIEW_DEFINITION[12,0,0]  ¦  CHECK_OPTION[12,3,0]  ¦  IS_UPDATABLE[12,2,0]  ¦  DEFINER[12,49151,0]  ¦  SECURITY_TYPE[12,5,0]  ¦  CHARACTER_SET_CLIENT[12,5,0]  ¦  COLLATION_CONNECTION[12,13,0]
 select count(*),table_name from information_schema.views group by table_name having count(*)>1;
