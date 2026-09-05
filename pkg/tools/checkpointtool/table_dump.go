@@ -1209,11 +1209,15 @@ func functionalGeneratedExpressionsFromMoColumns(view *LogicalTableView, tableID
 		if hasGeneratedCol >= len(row) || generatedCol >= len(row) || !isTruthyCatalogValue(row[hasGeneratedCol]) {
 			return nil, moerr.NewInternalErrorf(context.Background(), "hidden functional-index column %q has no generated metadata", name)
 		}
-		expr, _ := decodeMoColumnGenerated(row[generatedCol])
-		if strings.TrimSpace(expr) == "" {
+		expr, stored := decodeMoColumnGenerated(row[generatedCol])
+		if stored || strings.TrimSpace(expr) == "" {
 			return nil, moerr.NewInternalErrorf(context.Background(), "hidden functional-index column %q has corrupt generated metadata", name)
 		}
-		result[name] = strings.TrimSpace(expr)
+		expr = strings.TrimSpace(expr)
+		if previous, exists := result[name]; exists && previous != expr {
+			return nil, moerr.NewInternalErrorf(context.Background(), "hidden functional-index column %q has inconsistent generated metadata", name)
+		}
+		result[name] = expr
 	}
 	return result, nil
 }
@@ -4504,6 +4508,7 @@ func buildCreateIndexStatementsFromMoIndexesWithGenerated(
 	tableIDStr := strconv.FormatUint(tableID, 10)
 	matchedRows := 0
 	hiddenRows := 0
+	usedGenerated := make(map[string]bool)
 	dataOffset := logicalViewDataOffset(view)
 	for _, row := range view.Rows {
 		if len(row) < dataOffset {
@@ -4553,6 +4558,10 @@ func buildCreateIndexStatementsFromMoIndexesWithGenerated(
 		}
 		isHiddenFunctional := isReservedFunctional
 		if isHiddenFunctional {
+			if len(info.columns) > 0 || info.functionalExpression != "" {
+				return nil, moerr.NewInternalErrorf(context.Background(),
+					"functional index %q has mixed or repeated hidden key parts", name)
+			}
 			expression := strings.TrimSpace(generated[colName])
 			if expression == "" {
 				return nil, moerr.NewInternalErrorf(context.Background(),
@@ -4564,10 +4573,15 @@ func buildCreateIndexStatementsFromMoIndexesWithGenerated(
 					"functional index %q has inconsistent generated metadata", name)
 			}
 			info.functionalExpression = expression
+			usedGenerated[colName] = true
 			continue
 		}
 		if colName == "" || catalog.IsAlias(colName) {
 			continue
+		}
+		if info.functionalExpression != "" {
+			return nil, moerr.NewInternalErrorf(context.Background(),
+				"functional index %q has mixed functional and ordinary key parts", name)
 		}
 		ordinal := len(info.columns) + 1
 		if ordinalCol >= 0 && ordinalCol < len(dataRow) {
@@ -4577,6 +4591,12 @@ func buildCreateIndexStatementsFromMoIndexesWithGenerated(
 		}
 		if existing, ok := info.columns[colName]; !ok || ordinal < existing.ordinal {
 			info.columns[colName] = indexDDLColumn{name: colName, ordinal: ordinal}
+		}
+	}
+	for name := range generated {
+		if !usedGenerated[name] {
+			return nil, moerr.NewInternalErrorf(context.Background(),
+				"hidden functional-index column %q has no matching index metadata", name)
 		}
 	}
 

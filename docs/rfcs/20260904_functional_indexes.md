@@ -110,8 +110,8 @@ disabled for functional indexes in the first release. Missing or malformed
 metadata fails closed to a normal table scan.
 
 Functional-index creation is gated on the cluster's oldest-live protocol
-capability. The implementation reserves the next available MORPC capability
-(version 46 at the start of this work) so a mixed-version CN cannot publish
+capability. The implementation reserves MORPC capability version 48 (the
+current main already uses 46 and 47) so a mixed-version CN cannot publish
 metadata it cannot render or safely alter.
 
 ### DDL foundation from #28052

@@ -338,7 +338,8 @@ func isFunctionalIndexDef(tableDef *TableDef, indexDef *plan.IndexDef) bool {
 	name := catalog.ResolveAlias(indexDef.Parts[0])
 	col := FindColumn(tableDef.Cols, name)
 	return col != nil && col.Hidden && catalog.IsFunctionalIndexColumnName(col.Name) &&
-		col.GeneratedCol != nil && col.GeneratedCol.Expr != nil && strings.TrimSpace(col.GeneratedCol.OriginString) != ""
+		col.GeneratedCol != nil && !col.GeneratedCol.IsStored &&
+		col.GeneratedCol.Expr != nil && strings.TrimSpace(col.GeneratedCol.OriginString) != ""
 }
 
 func functionalIndexOrigin(tableDef *TableDef, indexDef *plan.IndexDef) (string, bool) {
@@ -435,6 +436,18 @@ func validateFunctionalIndexMetadata(ctx context.Context, tableDef *TableDef) er
 	if tableDef == nil {
 		return nil
 	}
+	functionalColumns := make(map[string]struct{})
+	for _, col := range tableDef.Cols {
+		if col == nil || !catalog.IsFunctionalIndexColumnName(col.Name) {
+			continue
+		}
+		if !col.Hidden || col.GeneratedCol == nil || col.GeneratedCol.IsStored ||
+			col.GeneratedCol.Expr == nil || strings.TrimSpace(col.GeneratedCol.OriginString) == "" {
+			return moerr.NewInternalError(ctx, "functional index has incomplete generated-column metadata")
+		}
+		functionalColumns[col.Name] = struct{}{}
+	}
+	functionalRefs := make(map[string]int)
 	for _, indexDef := range tableDef.Indexes {
 		if !hasFunctionalIndexColumnPart(indexDef) {
 			continue
@@ -444,6 +457,12 @@ func validateFunctionalIndexMetadata(ctx context.Context, tableDef *TableDef) er
 		}
 		if _, ok := functionalIndexOrigin(tableDef, indexDef); !ok {
 			return moerr.NewInternalError(ctx, "functional index has incomplete generated-column metadata")
+		}
+		functionalRefs[catalog.ResolveAlias(indexDef.Parts[0])]++
+	}
+	for name := range functionalColumns {
+		if functionalRefs[name] != 1 {
+			return moerr.NewInternalError(ctx, "functional index has orphaned hidden generated-column metadata")
 		}
 	}
 	return nil
