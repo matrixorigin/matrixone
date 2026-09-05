@@ -117,3 +117,20 @@ select REGEXP_SUBSTR(',GHI,G;KL/MN?OPQR.STU-_+=VWXYZabcdefghigklmnopqrstuvwxy', 
 select REGEXP_SUBSTR(col1,',',1) from big_data_test.table_basic_for_load_100M;
 select REGEXP_SUBSTR(col1,'a',1) from big_data_test.table_basic_for_load_100M;
 drop database big_data_test;
+
+# Positional arguments and returned offsets are one-based character positions,
+# not byte offsets, for UTF-8 strings.
+SELECT REGEXP_INSTR('甲😀乙😀丙', '😀') AS first_start,
+       REGEXP_INSTR('甲😀乙😀丙', '😀', 1, 2, 0) AS second_start,
+       REGEXP_INSTR('甲😀乙😀丙', '😀', 1, 2, 1) AS second_end,
+       REGEXP_INSTR('甲😀乙😀丙', '😀', 3, 1, 0) AS from_third;
+SELECT REGEXP_SUBSTR('甲😀乙😀丙', '😀', 3, 1) AS second_emoji,
+       REGEXP_REPLACE('甲😀乙😀丙', '😀', 'X', 3, 1) AS replace_one,
+       REGEXP_REPLACE('甲😀乙😀丙', '😀', 'X', 3, 0) AS replace_all_from_pos;
+
+DROP TABLE IF EXISTS t_regexp_utf8;
+CREATE TABLE t_regexp_utf8(id INT PRIMARY KEY, s VARCHAR(40));
+INSERT INTO t_regexp_utf8 VALUES (1, '甲😀乙😀丙'), (2, 'ASCII');
+SELECT id, REGEXP_INSTR(s, '😀', 3, 1, 0) AS pos FROM t_regexp_utf8 ORDER BY id;
+SELECT id, REGEXP_REPLACE(s, '😀', 'X', 3, 0) AS replaced FROM t_regexp_utf8 ORDER BY id;
+DROP TABLE t_regexp_utf8;

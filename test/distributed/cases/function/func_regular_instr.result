@@ -230,3 +230,26 @@ regexp_substr(col1, a, 1)
 a
 a
 drop database big_data_test;
+SELECT REGEXP_INSTR('甲😀乙😀丙', '😀') AS first_start,
+       REGEXP_INSTR('甲😀乙😀丙', '😀', 1, 2, 0) AS second_start,
+       REGEXP_INSTR('甲😀乙😀丙', '😀', 1, 2, 1) AS second_end,
+       REGEXP_INSTR('甲😀乙😀丙', '😀', 3, 1, 0) AS from_third;
+first_start    second_start    second_end    from_third
+2    4    5    4
+SELECT REGEXP_SUBSTR('甲😀乙😀丙', '😀', 3, 1) AS second_emoji,
+       REGEXP_REPLACE('甲😀乙😀丙', '😀', 'X', 3, 1) AS replace_one,
+       REGEXP_REPLACE('甲😀乙😀丙', '😀', 'X', 3, 0) AS replace_all_from_pos;
+second_emoji    replace_one    replace_all_from_pos
+😀    甲😀乙X丙    甲😀乙X丙
+DROP TABLE IF EXISTS t_regexp_utf8;
+CREATE TABLE t_regexp_utf8(id INT PRIMARY KEY, s VARCHAR(40));
+INSERT INTO t_regexp_utf8 VALUES (1, '甲😀乙😀丙'), (2, 'ASCII');
+SELECT id, REGEXP_INSTR(s, '😀', 3, 1, 0) AS pos FROM t_regexp_utf8 ORDER BY id;
+id    pos
+1    4
+2    0
+SELECT id, REGEXP_REPLACE(s, '😀', 'X', 3, 0) AS replaced FROM t_regexp_utf8 ORDER BY id;
+id    replaced
+1    甲😀乙X丙
+2    ASCII
+DROP TABLE t_regexp_utf8;

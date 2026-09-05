@@ -67,6 +67,49 @@ func Test_BuiltIn_RegularInstr(t *testing.T) {
 	require.True(t, err != nil)
 }
 
+func Test_BuiltIn_RegexpMultibytePositions(t *testing.T) {
+	op := newOpBuiltInRegexp()
+	const subject = "甲😀乙😀丙"
+
+	for _, tc := range []struct {
+		pos        int64
+		occurrence int64
+		retOption  int8
+		want       int64
+	}{
+		{pos: 1, occurrence: 1, retOption: 0, want: 2},
+		{pos: 1, occurrence: 1, retOption: 1, want: 3},
+		{pos: 1, occurrence: 2, retOption: 0, want: 4},
+		{pos: 1, occurrence: 2, retOption: 1, want: 5},
+		{pos: 3, occurrence: 1, retOption: 0, want: 4},
+	} {
+		got, err := op.regMap.regularInstr("😀", subject, tc.pos, tc.occurrence, tc.retOption)
+		require.NoError(t, err, tc)
+		require.Equal(t, tc.want, got, tc)
+	}
+
+	match, got, err := op.regMap.regularSubstr("😀", subject, 3, 1)
+	require.NoError(t, err)
+	require.True(t, match)
+	require.Equal(t, "😀", got)
+
+	got, err = op.regMap.regularReplace("😀", subject, "X", 3, 1)
+	require.NoError(t, err)
+	require.Equal(t, "甲😀乙X丙", got)
+	got, err = op.regMap.regularReplace("😀", subject, "X", 3, 0)
+	require.NoError(t, err)
+	require.Equal(t, "甲😀乙X丙", got)
+
+	for _, pos := range []int64{0, 6} {
+		_, err = op.regMap.regularInstr("😀", subject, pos, 1, 0)
+		require.Error(t, err, pos)
+		_, _, err = op.regMap.regularSubstr("😀", subject, pos, 1)
+		require.Error(t, err, pos)
+		_, err = op.regMap.regularReplace("😀", subject, "X", pos, 1)
+		require.Error(t, err, pos)
+	}
+}
+
 func Test_BuiltIn_RegexpEmptySubject(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	op := newOpBuiltInRegexp()
@@ -760,7 +803,7 @@ func Test_BuiltIn_RegularReplace(t *testing.T) {
 		{pat: "[0-9]", str: "abcdefg123456ABC", repl: "", pos: 4, ocr: 0, expected: "abcdefgABC"},
 		{pat: "[0-9]", str: "abcDEfg123456ABC", repl: "", pos: 4, ocr: 0, expected: "abcDEfgABC"},
 		{pat: "[0-9]", str: "abcDEfg123456ABC", repl: "", pos: 7, ocr: 0, expected: "abcDEfgABC"},
-		{pat: "[0-9]", str: "abcDefg123456ABC", repl: "", pos: 10, ocr: 0, expected: "abcDefgABC"},
+		{pat: "[0-9]", str: "abcDefg123456ABC", repl: "", pos: 10, ocr: 0, expected: "abcDefg12ABC"},
 	}
 
 	for i, c := range cs {

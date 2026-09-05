@@ -136,3 +136,17 @@ SELECT id, BIT_COUNT(i), BIT_COUNT(u), BIT_COUNT(s), BIT_COUNT(b) FROM t_bit_cou
 # hex: b values = row1 0x0040; row2 0x00ff; row3 NULL; row4 0x0040
 SELECT id FROM t_bit_count WHERE BIT_COUNT(b) = 1 ORDER BY id;
 DROP TABLE t_bit_count;
+
+# Nonbinary strings use MySQL's numeric-prefix coercion instead of exposing a
+# parser error. Binary strings and Decimal paths above remain independent.
+SELECT BIT_COUNT('abc') AS nonnumeric,
+       BIT_COUNT('12x') AS numeric_prefix,
+       BIT_COUNT('1.9') AS decimal_prefix,
+       BIT_COUNT('-12x') AS negative_prefix,
+       BIT_COUNT('+x') AS sign_without_digits;
+
+DROP TABLE IF EXISTS t_bit_count_coercion;
+CREATE TABLE t_bit_count_coercion(id INT PRIMARY KEY, v VARCHAR(20));
+INSERT INTO t_bit_count_coercion VALUES (1, 'abc'), (2, '12x'), (3, ''), (4, NULL);
+SELECT id, BIT_COUNT(v) AS bits FROM t_bit_count_coercion ORDER BY id;
+DROP TABLE t_bit_count_coercion;

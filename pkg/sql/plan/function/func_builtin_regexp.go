@@ -776,8 +776,9 @@ func (rs *regexpSet) regularMatchForLikeOpWithEscape(
 // return Nth (N = occurrence here) of match result
 func (rs *regexpSet) regularSubstr(pat string, str string, pos, occurrence int64) (match bool, substr string, err error) {
 	// check position
-	if regexpSearchPositionOutOfBounds(str, pos) {
-		return false, "", moerr.NewInvalidInputNoCtxf("regexp_substr: Index out of bounds in regular expression search. Search start position: %d, Search string length: %d", pos, len(str))
+	startByte, ok := regexpSearchStartByte(str, pos)
+	if !ok {
+		return false, "", moerr.NewInvalidInputNoCtxf("regexp_substr: Index out of bounds in regular expression search. Search start position: %d, Search string length: %d", pos, utf8.RuneCountInString(str))
 	}
 	// check occurrence
 	if occurrence < 1 {
@@ -789,7 +790,7 @@ func (rs *regexpSet) regularSubstr(pat string, str string, pos, occurrence int64
 	}
 
 	// match and return
-	matches := reg.FindAllString(str[pos-1:], -1)
+	matches := reg.FindAllString(str[startByte:], -1)
 	if l := int64(len(matches)); l < occurrence {
 		return false, "", nil
 	}
@@ -798,8 +799,9 @@ func (rs *regexpSet) regularSubstr(pat string, str string, pos, occurrence int64
 
 func (rs *regexpSet) regularReplace(pat string, str string, repl string, pos, occurrence int64) (r string, err error) {
 	// check position
-	if pos < 1 || pos > int64(len(str)) {
-		return "", moerr.NewInvalidInputNoCtxf("regexp_replace: Index out of bounds in regular expression search. Search start position: %d, Search string length: %d", pos, len(str))
+	startByte, ok := regexpSearchStartByte(str, pos)
+	if !ok {
+		return "", moerr.NewInvalidInputNoCtxf("regexp_replace: Index out of bounds in regular expression search. Search start position: %d, Search string length: %d", pos, utf8.RuneCountInString(str))
 	}
 	// check occurrence
 	if occurrence < 0 {
@@ -812,38 +814,42 @@ func (rs *regexpSet) regularReplace(pat string, str string, repl string, pos, oc
 		return "", moerr.NewInvalidArgNoCtx("regexp_replace have invalid regexp pattern arg", pat)
 	}
 
-	//match result indexs
+	// Preserve the existing fast path for the common default position. It also
+	// keeps Go's handling of zero-width matches identical to the legacy code.
+	if occurrence == 0 && startByte == 0 {
+		return reg.ReplaceAllLiteralString(str, repl), nil
+	}
+
+	// Find byte offsets once, then select matches whose start is at or after the
+	// requested character position. Go's regexp package reports byte offsets;
+	// the SQL position is converted only at this boundary.
 	matchRes := reg.FindAllStringIndex(str, -1)
-	if matchRes == nil {
-		return str, nil
-	} //find the match position
-	index := 0
-	for int64(matchRes[index][0]) < pos-1 {
-		index++
-		if index == len(matchRes) {
-			return str, nil
+	selected := matchRes[:0]
+	for _, match := range matchRes {
+		if match[0] >= startByte {
+			selected = append(selected, match)
 		}
 	}
-	matchRes = matchRes[index:]
-	if int64(len(matchRes)) < occurrence {
+	if len(selected) == 0 {
+		return str, nil
+	}
+	if occurrence > 0 && int64(len(selected)) < occurrence {
 		return str, nil
 	}
 	if occurrence == 0 {
-		return reg.ReplaceAllLiteralString(str, repl), nil
-	} else if occurrence == int64(len(matchRes)) {
-		// the string won't be replaced
-		notRepl := str[:matchRes[occurrence-1][0]]
-		// the string will be replaced
-		replace := str[matchRes[occurrence-1][0]:]
-		return notRepl + reg.ReplaceAllLiteralString(replace, repl), nil
-	} else {
-		// the string won't be replaced
-		notRepl := str[:matchRes[occurrence-1][0]]
-		// the string will be replaced
-		replace := str[matchRes[occurrence-1][0]:matchRes[occurrence][0]]
-		left := str[matchRes[occurrence][0]:]
-		return notRepl + reg.ReplaceAllLiteralString(replace, repl) + left, nil
+		var b strings.Builder
+		b.Grow(len(str))
+		last := 0
+		for _, match := range selected {
+			b.WriteString(str[last:match[0]])
+			b.WriteString(repl)
+			last = match[1]
+		}
+		b.WriteString(str[last:])
+		return b.String(), nil
 	}
+	match := selected[occurrence-1]
+	return str[:match[0]] + repl + str[match[1]:], nil
 }
 
 // regularInstr return an index indicating the starting or ending position of the match.
@@ -851,8 +857,9 @@ func (rs *regexpSet) regularReplace(pat string, str string, repl string, pos, oc
 // return 0 if match failed.
 func (rs *regexpSet) regularInstr(pat string, str string, pos, occurrence int64, retOption int8) (index int64, err error) {
 	// check position
-	if regexpSearchPositionOutOfBounds(str, pos) {
-		return 0, moerr.NewInvalidInputNoCtxf("regexp_instr: Index out of bounds in regular expression search. Search start position: %d, Search string length: %d", pos, len(str))
+	startByte, ok := regexpSearchStartByte(str, pos)
+	if !ok {
+		return 0, moerr.NewInvalidInputNoCtxf("regexp_instr: Index out of bounds in regular expression search. Search start position: %d, Search string length: %d", pos, utf8.RuneCountInString(str))
 	}
 	// check occurrence
 	if occurrence < 1 {
@@ -869,16 +876,49 @@ func (rs *regexpSet) regularInstr(pat string, str string, pos, occurrence int64,
 		return 0, moerr.NewInvalidArgNoCtx("regexp_instr have invalid regexp pattern arg", pat)
 	}
 
-	matches := reg.FindAllStringIndex(str[pos-1:], -1)
+	matches := reg.FindAllStringIndex(str[startByte:], -1)
 	if int64(len(matches)) < occurrence {
 		return 0, nil
 	}
-	return int64(matches[occurrence-1][retOption]) + pos, nil
+	matchOffset := startByte + matches[occurrence-1][retOption]
+	return regexpByteOffsetToCharPos(str, matchOffset), nil
 }
 
-func regexpSearchPositionOutOfBounds(str string, pos int64) bool {
-	// Position 1 is the sole valid search start for an empty subject.
-	return pos < 1 || (pos > int64(len(str)) && !(len(str) == 0 && pos == 1))
+// regexpSearchStartByte converts a one-based SQL character position to the
+// byte offset used by Go's UTF-8 regexp implementation. The scan stops as
+// soon as the requested character is found, so the common position-1 path is
+// constant time. Invalid UTF-8 bytes are treated as one-character units,
+// matching utf8.RuneCountInString.
+func regexpSearchStartByte(str string, pos int64) (int, bool) {
+	if pos < 1 {
+		return 0, false
+	}
+	if pos <= 1 {
+		return 0, true
+	}
+	target := pos - 1
+	seen := int64(0)
+	for offset := range str {
+		if seen == target {
+			return offset, true
+		}
+		seen++
+	}
+	return 0, false
+}
+
+// regexpByteOffsetToCharPos converts a regexp byte offset to the one-based
+// character position exposed by SQL. regexp match boundaries are rune
+// boundaries, so counting runes in the prefix is sufficient and preserves the
+// end position convention (one past the final matched character).
+func regexpByteOffsetToCharPos(str string, offset int) int64 {
+	if offset <= 0 {
+		return 1
+	}
+	if offset > len(str) {
+		offset = len(str)
+	}
+	return int64(utf8.RuneCountInString(str[:offset])) + 1
 }
 
 func (rs *regexpSet) regularLike(pat string, str string, matchType string) (bool, error) {

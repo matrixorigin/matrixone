@@ -63,12 +63,22 @@ func TestBitCountString(t *testing.T) {
 	require.True(t, ok, info)
 }
 
-func TestBitCountStringInvalidFormat(t *testing.T) {
-	_, err := bitCountFromMysqlIntegerString("123abc")
-	require.Error(t, err)
-
-	_, err = bitCountFromMysqlIntegerString("1.9")
-	require.Error(t, err)
+func TestBitCountStringNumericPrefixCoercion(t *testing.T) {
+	for _, tc := range []struct {
+		input string
+		want  uint64
+	}{
+		{input: "abc", want: 0},
+		{input: "12x", want: 2},
+		{input: "123abc", want: 6},
+		{input: "1.9", want: 1},
+		{input: "+x", want: 0},
+		{input: "-12x", want: 61},
+	} {
+		got, err := bitCountFromMysqlIntegerString(tc.input)
+		require.NoError(t, err, tc.input)
+		require.Equal(t, tc.want, got, tc.input)
+	}
 }
 
 func TestBitCountFloat(t *testing.T) {

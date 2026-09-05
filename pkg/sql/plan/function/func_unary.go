@@ -439,7 +439,8 @@ func AsciiString(ivecs []*vector.Vector, result vector.FunctionResultWrapper, pr
 
 // OrdString calculates the ORD value for a string
 // For single-byte characters: returns the byte value (same as ASCII)
-// For multibyte characters: returns (byte1) + (byte2 * 256) + (byte3 * 256²) + ...
+// For multibyte characters, bytes are combined from left to right, matching
+// MySQL's ORD() semantics: byte1*256^(n-1) + ... + byten.
 func OrdString(val []byte) int64 {
 	if len(val) == 0 {
 		return 0
@@ -456,11 +457,11 @@ func OrdString(val []byte) int64 {
 		return int64(val[0])
 	}
 
-	// For multibyte characters, calculate using the formula:
-	// (byte1) + (byte2 * 256) + (byte3 * 256²) + ...
+	// For multibyte characters, append each byte in network order. This also
+	// avoids a shift-width special case and keeps the single-byte fast path.
 	var result int64
 	for i := 0; i < runeSize && i < len(val); i++ {
-		result += int64(val[i]) * int64(1<<(8*i)) // 256^i = 2^(8*i)
+		result = (result << 8) | int64(val[i])
 	}
 
 	return result
@@ -592,26 +593,54 @@ func bitCountFromMysqlIntegerString(s string) (uint64, error) {
 		return 0, nil
 	}
 
-	if strings.HasPrefix(s, "-") {
-		val, err := strconv.ParseInt(s, 10, 64)
-		if err != nil {
-			if errors.Is(err, strconv.ErrRange) {
-				return bitCountFromUint64(minInt64BitPattern), nil
-			}
-			return 0, err
-		}
-		return bitCountFromUint64(uint64(val)), nil
+	negative := false
+	start := 0
+	switch s[0] {
+	case '-':
+		negative = true
+		start = 1
+	case '+':
+		start = 1
 	}
 
-	s = strings.TrimPrefix(s, "+")
-	val, err := strconv.ParseUint(s, 10, 64)
-	if err != nil {
-		if errors.Is(err, strconv.ErrRange) {
-			return bitCountFromUint64(math.MaxUint64), nil
+	// MySQL converts a nonbinary string to an integer by consuming the leading
+	// decimal digit run. It returns zero for a string with no digits rather than
+	// surfacing the parser's syntax error (for example, 'abc' or '+x').
+	var magnitude uint64
+	hasDigits := false
+	overflow := false
+	for ; start < len(s); start++ {
+		c := s[start]
+		if c < '0' || c > '9' {
+			break
 		}
-		return 0, err
+		hasDigits = true
+		digit := uint64(c - '0')
+		if magnitude > (math.MaxUint64-digit)/10 {
+			overflow = true
+			// Keep scanning only to consume the same prefix. The result is already
+			// known to be saturated, so avoid wrapping the accumulator.
+			continue
+		}
+		if !overflow {
+			magnitude = magnitude*10 + digit
+		}
 	}
-	return bitCountFromUint64(val), nil
+	if !hasDigits {
+		return 0, nil
+	}
+	if negative {
+		// String-to-integer conversion saturates negative overflow at the
+		// signed BIGINT minimum, whose two's-complement pattern has one bit.
+		if overflow || magnitude >= uint64(math.MaxInt64)+1 {
+			return bitCountFromUint64(minInt64BitPattern), nil
+		}
+		return bitCountFromUint64(uint64(-int64(magnitude))), nil
+	}
+	if overflow {
+		return bitCountFromUint64(math.MaxUint64), nil
+	}
+	return bitCountFromUint64(magnitude), nil
 }
 
 func bitCountFromDecimalIntegerString(s string) (uint64, error) {
