@@ -26,11 +26,57 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
-	"github.com/matrixorigin/matrixone/pkg/vectorindex"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/metric"
 )
 
 const maxVectorTopLimit = uint64(^uint(0) >> 1)
+
+// vectorTopResult keeps the row paired with its distance. ordinal preserves
+// the input-row order expected by the block materializer after heap operations.
+type vectorTopResult struct {
+	row      int64
+	distance float64
+	ordinal  int
+}
+
+// vectorTopResultHeap is a max heap. Keeping only its smallest K entries makes
+// the per-block candidate state bounded even when every successive distance
+// displaces the previous global heap maximum.
+type vectorTopResultHeap []vectorTopResult
+
+func (h vectorTopResultHeap) Len() int { return len(h) }
+
+func (h vectorTopResultHeap) Less(i, j int) bool {
+	if h[i].distance == h[j].distance {
+		return h[i].ordinal > h[j].ordinal
+	}
+	return h[i].distance > h[j].distance
+}
+
+func (h vectorTopResultHeap) Swap(i, j int) { h[i], h[j] = h[j], h[i] }
+
+func (h *vectorTopResultHeap) Push(x any) {
+	*h = append(*h, x.(vectorTopResult))
+}
+
+func (h *vectorTopResultHeap) Pop() any {
+	old := *h
+	n := len(old)
+	item := old[n-1]
+	*h = old[:n-1]
+	return item
+}
+
+func retainVectorTopResult(results *vectorTopResultHeap, limit int, result vectorTopResult) {
+	if results.Len() < limit {
+		heap.Push(results, result)
+		return
+	}
+	if result.distance < (*results)[0].distance {
+		(*results)[0] = result
+		heap.Fix(results, 0)
+	}
+}
 
 func vectorTopLimit(ctx context.Context, limit uint64) (int, error) {
 	if limit == 0 {
@@ -75,9 +121,10 @@ func TopNVector(
 	if err != nil {
 		return nil, nil, err
 	}
-	// Most rows cannot survive a bounded TopN. Avoid reserving result memory
-	// proportional to the filtered input, especially for wide INCLUDE scans.
-	searchResults := make([]vectorindex.SearchResult, 0, min(len(selectRows), topLimit))
+	// Keep row/distance pairs in a second bounded heap. DistHeap contains only
+	// distances because it is shared by block reads; recording every accepted
+	// candidate here would grow to O(N) for descending input.
+	searchResults := make(vectorTopResultHeap, 0, min(len(selectRows), topLimit))
 	nullsBm := vecCol.GetNulls()
 	rangeActive := orderByLimit.LowerBoundType != plan.BoundType_UNBOUNDED ||
 		orderByLimit.UpperBoundType != plan.BoundType_UNBOUNDED
@@ -111,7 +158,7 @@ func TopNVector(
 		return nil, nil, err
 	}
 
-	for _, row := range selectRows {
+	for ordinal, row := range selectRows {
 		// Do not compact selectRows in place: callers may still need the physical
 		// row mapping after TopN returns.
 		if row < 0 || row >= int64(vecCol.Length()) || nullsBm.Contains(uint64(row)) {
@@ -155,24 +202,27 @@ func TopNVector(
 			heap.Push(&orderByLimit.DistHeap, dist64)
 		}
 
-		searchResults = append(searchResults, vectorindex.SearchResult{
-			Id:       row,
-			Distance: dist64,
+		retainVectorTopResult(&searchResults, topLimit, vectorTopResult{
+			row: row, distance: dist64, ordinal: ordinal,
 		})
 	}
 
 	if len(orderByLimit.DistHeap) == 0 {
 		return []int64{}, []float64{}, nil
 	}
-	searchResults = slices.DeleteFunc(searchResults, func(res vectorindex.SearchResult) bool {
-		return res.Distance > orderByLimit.DistHeap[0]
+	cutoff := orderByLimit.DistHeap[0]
+	searchResults = slices.DeleteFunc(searchResults, func(res vectorTopResult) bool {
+		return res.distance > cutoff
+	})
+	slices.SortFunc(searchResults, func(left, right vectorTopResult) int {
+		return left.ordinal - right.ordinal
 	})
 
 	sels := make([]int64, len(searchResults))
 	dists := make([]float64, len(searchResults))
 	for i, res := range searchResults {
-		sels[i] = res.Id
-		dists[i] = res.Distance
+		sels[i] = res.row
+		dists[i] = res.distance
 	}
 	return sels, dists, nil
 }
