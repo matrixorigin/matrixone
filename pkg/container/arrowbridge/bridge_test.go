@@ -57,6 +57,439 @@ func TestBindByNameAndPosition(t *testing.T) {
 	require.Equal(t, []string{"first", "second"}, positionPlan.attrs)
 }
 
+func TestAppendDictionaryNullSupportsEveryTargetStorageClass(t *testing.T) {
+	// Dictionary NULLs bypass their physical Arrow value type. Exercise every
+	// MatrixOne storage representation so a nullable dictionary remains a
+	// logical NULL regardless of the target column type.
+	for _, oid := range []types.T{
+		types.T_varchar,
+		types.T_bool, types.T_bit,
+		types.T_int8, types.T_int16, types.T_int32, types.T_int64,
+		types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64,
+		types.T_float32, types.T_float64,
+		types.T_year, types.T_enum,
+		types.T_decimal64, types.T_decimal128, types.T_decimal256,
+		types.T_uuid, types.T_TS, types.T_Rowid, types.T_Blockid,
+		types.T_date, types.T_time, types.T_datetime, types.T_timestamp,
+	} {
+		t.Run(oid.String(), func(t *testing.T) {
+			mp := mpool.MustNewZero()
+			vec := vector.NewVec(oid.ToType())
+			require.NoError(t, appendDictionaryNull(vec, oid.ToType(), mp))
+			require.Equal(t, 1, vec.Length())
+			require.True(t, vec.IsNull(0))
+			vec.Free(mp)
+			require.Equal(t, int64(0), mp.CurrNB())
+		})
+	}
+}
+
+func TestCheckedDictionaryIndexAcceptsEveryArrowIndexWidth(t *testing.T) {
+	tests := []struct {
+		name  string
+		build func(memory.Allocator) arrow.Array
+	}{
+		{"int8", func(alloc memory.Allocator) arrow.Array {
+			b := array.NewInt8Builder(alloc)
+			defer b.Release()
+			b.Append(0)
+			return b.NewArray()
+		}},
+		{"int16", func(alloc memory.Allocator) arrow.Array {
+			b := array.NewInt16Builder(alloc)
+			defer b.Release()
+			b.Append(0)
+			return b.NewArray()
+		}},
+		{"int32", func(alloc memory.Allocator) arrow.Array {
+			b := array.NewInt32Builder(alloc)
+			defer b.Release()
+			b.Append(0)
+			return b.NewArray()
+		}},
+		{"int64", func(alloc memory.Allocator) arrow.Array {
+			b := array.NewInt64Builder(alloc)
+			defer b.Release()
+			b.Append(0)
+			return b.NewArray()
+		}},
+		{"uint8", func(alloc memory.Allocator) arrow.Array {
+			b := array.NewUint8Builder(alloc)
+			defer b.Release()
+			b.Append(0)
+			return b.NewArray()
+		}},
+		{"uint16", func(alloc memory.Allocator) arrow.Array {
+			b := array.NewUint16Builder(alloc)
+			defer b.Release()
+			b.Append(0)
+			return b.NewArray()
+		}},
+		{"uint32", func(alloc memory.Allocator) arrow.Array {
+			b := array.NewUint32Builder(alloc)
+			defer b.Release()
+			b.Append(0)
+			return b.NewArray()
+		}},
+		{"uint64", func(alloc memory.Allocator) arrow.Array {
+			b := array.NewUint64Builder(alloc)
+			defer b.Release()
+			b.Append(0)
+			return b.NewArray()
+		}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			alloc := memory.NewCheckedAllocator(memory.NewGoAllocator())
+			indices := test.build(alloc)
+			valuesBuilder := array.NewInt64Builder(alloc)
+			valuesBuilder.Append(7)
+			values := valuesBuilder.NewArray()
+			valuesBuilder.Release()
+			dictionaryType := &arrow.DictionaryType{IndexType: indices.DataType(), ValueType: values.DataType()}
+			dictionary := array.NewDictionaryArray(dictionaryType, indices, values)
+
+			index, err := checkedDictionaryIndex(context.Background(), dictionary, 0, values.Len())
+			require.NoError(t, err)
+			require.Equal(t, 0, index)
+
+			dictionary.Release()
+			indices.Release()
+			values.Release()
+			alloc.AssertSize(t, 0)
+		})
+	}
+}
+
+func TestCheckedDictionaryIndexRejectsNegativeAndOverflowedValues(t *testing.T) {
+	tests := []struct {
+		name  string
+		build func(memory.Allocator) arrow.Array
+		err   string
+	}{
+		{"negative", func(alloc memory.Allocator) arrow.Array {
+			b := array.NewInt8Builder(alloc)
+			defer b.Release()
+			b.Append(-1)
+			return b.NewArray()
+		}, "outside"},
+		{"overflow", func(alloc memory.Allocator) arrow.Array {
+			b := array.NewUint64Builder(alloc)
+			defer b.Release()
+			b.Append(^uint64(0))
+			return b.NewArray()
+		}, "overflows"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			alloc := memory.NewCheckedAllocator(memory.NewGoAllocator())
+			indices := test.build(alloc)
+			valuesBuilder := array.NewInt64Builder(alloc)
+			valuesBuilder.Append(7)
+			values := valuesBuilder.NewArray()
+			valuesBuilder.Release()
+			dictionaryType := &arrow.DictionaryType{IndexType: indices.DataType(), ValueType: values.DataType()}
+			dictionary := array.NewDictionaryArray(dictionaryType, indices, values)
+
+			_, err := checkedDictionaryIndex(context.Background(), dictionary, 0, values.Len())
+			require.ErrorContains(t, err, test.err)
+
+			dictionary.Release()
+			indices.Release()
+			values.Release()
+			alloc.AssertSize(t, 0)
+		})
+	}
+}
+
+func TestAppendDictionaryNullRejectsUnknownTarget(t *testing.T) {
+	vec := new(vector.Vector)
+	require.ErrorContains(t, appendDictionaryNull(vec, types.T_any.ToType(), mpool.MustNewZero()), "unknown")
+}
+
+func TestAppendDictionaryValuePreservesPrimitiveArrowValues(t *testing.T) {
+	tests := []struct {
+		name   string
+		target types.T
+		build  func(memory.Allocator) arrow.Array
+	}{
+		{"int8", types.T_int8, func(alloc memory.Allocator) arrow.Array {
+			b := array.NewInt8Builder(alloc)
+			defer b.Release()
+			b.Append(7)
+			return b.NewArray()
+		}},
+		{"int16", types.T_int16, func(alloc memory.Allocator) arrow.Array {
+			b := array.NewInt16Builder(alloc)
+			defer b.Release()
+			b.Append(7)
+			return b.NewArray()
+		}},
+		{"int32", types.T_int32, func(alloc memory.Allocator) arrow.Array {
+			b := array.NewInt32Builder(alloc)
+			defer b.Release()
+			b.Append(7)
+			return b.NewArray()
+		}},
+		{"int64", types.T_int64, func(alloc memory.Allocator) arrow.Array {
+			b := array.NewInt64Builder(alloc)
+			defer b.Release()
+			b.Append(7)
+			return b.NewArray()
+		}},
+		{"uint8", types.T_uint8, func(alloc memory.Allocator) arrow.Array {
+			b := array.NewUint8Builder(alloc)
+			defer b.Release()
+			b.Append(7)
+			return b.NewArray()
+		}},
+		{"uint16", types.T_uint16, func(alloc memory.Allocator) arrow.Array {
+			b := array.NewUint16Builder(alloc)
+			defer b.Release()
+			b.Append(7)
+			return b.NewArray()
+		}},
+		{"uint32", types.T_uint32, func(alloc memory.Allocator) arrow.Array {
+			b := array.NewUint32Builder(alloc)
+			defer b.Release()
+			b.Append(7)
+			return b.NewArray()
+		}},
+		{"uint64", types.T_uint64, func(alloc memory.Allocator) arrow.Array {
+			b := array.NewUint64Builder(alloc)
+			defer b.Release()
+			b.Append(7)
+			return b.NewArray()
+		}},
+		{"float32", types.T_float32, func(alloc memory.Allocator) arrow.Array {
+			b := array.NewFloat32Builder(alloc)
+			defer b.Release()
+			b.Append(7)
+			return b.NewArray()
+		}},
+		{"float64", types.T_float64, func(alloc memory.Allocator) arrow.Array {
+			b := array.NewFloat64Builder(alloc)
+			defer b.Release()
+			b.Append(7)
+			return b.NewArray()
+		}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			alloc := memory.NewCheckedAllocator(memory.NewGoAllocator())
+			values := test.build(alloc)
+			mp := mpool.MustNewZero()
+			vec := vector.NewVec(test.target.ToType())
+
+			copied, err := appendDictionaryValue(context.Background(), vec, values, conversionMaterializeBool, 0, 0, false, test.target.ToType(), mp, time.UTC)
+			require.NoError(t, err)
+			require.Zero(t, copied)
+			require.Equal(t, 1, vec.Length())
+
+			vec.Free(mp)
+			values.Release()
+			require.Zero(t, mp.CurrNB())
+			alloc.AssertSize(t, 0)
+		})
+	}
+}
+
+func TestAppendDictionaryValuePreservesVariableWidthArrowValues(t *testing.T) {
+	tests := []struct {
+		name  string
+		build func(memory.Allocator) arrow.Array
+	}{
+		{"string", func(alloc memory.Allocator) arrow.Array {
+			b := array.NewStringBuilder(alloc)
+			defer b.Release()
+			b.Append("value")
+			return b.NewArray()
+		}},
+		{"large_string", func(alloc memory.Allocator) arrow.Array {
+			b := array.NewLargeStringBuilder(alloc)
+			defer b.Release()
+			b.Append("value")
+			return b.NewArray()
+		}},
+		{"binary", func(alloc memory.Allocator) arrow.Array {
+			b := array.NewBinaryBuilder(alloc, arrow.BinaryTypes.Binary)
+			defer b.Release()
+			b.Append([]byte("value"))
+			return b.NewArray()
+		}},
+		{"large_binary", func(alloc memory.Allocator) arrow.Array {
+			b := array.NewBinaryBuilder(alloc, arrow.BinaryTypes.LargeBinary)
+			defer b.Release()
+			b.Append([]byte("value"))
+			return b.NewArray()
+		}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			alloc := memory.NewCheckedAllocator(memory.NewGoAllocator())
+			values := test.build(alloc)
+			mp := mpool.MustNewZero()
+			target := types.New(types.T_varchar, 16, 0)
+			vec := vector.NewVec(target)
+
+			_, err := appendDictionaryValue(context.Background(), vec, values, conversionBorrowVarlen, 0, 0, false, target, mp, time.UTC)
+			require.NoError(t, err)
+			require.Equal(t, 1, vec.Length())
+
+			vec.Free(mp)
+			values.Release()
+			require.Zero(t, mp.CurrNB())
+			alloc.AssertSize(t, 0)
+		})
+	}
+}
+
+func TestArrowTemporalHelpersRejectOutOfRangeValues(t *testing.T) {
+	maxInt64 := int64(^uint64(0) >> 1)
+	_, err := timestampToMicros(maxInt64, arrow.Second)
+	require.Error(t, err)
+	_, err = timestampToMicros(maxInt64, arrow.Millisecond)
+	require.Error(t, err)
+	_, err = arrowMicrosToTimestamp(maxSupportedUnixMicros+1, true, time.UTC)
+	require.Error(t, err)
+	_, err = arrowMicrosToDatetime(maxSupportedUnixMicros+1, true, time.UTC)
+	require.Error(t, err)
+}
+
+func TestAppendDictionaryValueConvertsDateAndTimeValues(t *testing.T) {
+	tests := []struct {
+		name   string
+		target types.T
+		build  func(memory.Allocator) arrow.Array
+	}{
+		{"date32_to_date", types.T_date, func(alloc memory.Allocator) arrow.Array {
+			b := array.NewDate32Builder(alloc)
+			defer b.Release()
+			b.Append(0)
+			return b.NewArray()
+		}},
+		{"date32_to_datetime", types.T_datetime, func(alloc memory.Allocator) arrow.Array {
+			b := array.NewDate32Builder(alloc)
+			defer b.Release()
+			b.Append(0)
+			return b.NewArray()
+		}},
+		{"date64_to_date", types.T_date, func(alloc memory.Allocator) arrow.Array {
+			b := array.NewDate64Builder(alloc)
+			defer b.Release()
+			b.Append(0)
+			return b.NewArray()
+		}},
+		{"date64_to_datetime", types.T_datetime, func(alloc memory.Allocator) arrow.Array {
+			b := array.NewDate64Builder(alloc)
+			defer b.Release()
+			b.Append(0)
+			return b.NewArray()
+		}},
+		{"time64", types.T_time, func(alloc memory.Allocator) arrow.Array {
+			b := array.NewTime64Builder(alloc, &arrow.Time64Type{Unit: arrow.Microsecond})
+			defer b.Release()
+			b.Append(1)
+			return b.NewArray()
+		}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			alloc := memory.NewCheckedAllocator(memory.NewGoAllocator())
+			values := test.build(alloc)
+			mp := mpool.MustNewZero()
+			vec := vector.NewVec(test.target.ToType())
+
+			copied, err := appendDictionaryValue(context.Background(), vec, values, conversionMaterializeBool, 0, 0, false, test.target.ToType(), mp, time.UTC)
+			require.NoError(t, err)
+			require.Zero(t, copied)
+			require.Equal(t, 1, vec.Length())
+
+			vec.Free(mp)
+			values.Release()
+			require.Zero(t, mp.CurrNB())
+			alloc.AssertSize(t, 0)
+		})
+	}
+}
+
+func TestAppendDictionaryValueHandlesDecimalAndRejectsInvalidTemporalValues(t *testing.T) {
+	t.Run("decimal", func(t *testing.T) {
+		alloc := memory.NewCheckedAllocator(memory.NewGoAllocator())
+		decimalType := &arrow.Decimal128Type{Precision: 18, Scale: 2}
+		builder := array.NewDecimal128Builder(alloc, decimalType)
+		builder.Append(decimal128.FromBigInt(big.NewInt(7)))
+		values := builder.NewArray()
+		builder.Release()
+		mp := mpool.MustNewZero()
+		target := types.New(types.T_decimal128, 18, 2)
+		vec := vector.NewVec(target)
+
+		copied, err := appendDictionaryValue(context.Background(), vec, values, conversionMaterializeBool, 0, 0, false, target, mp, time.UTC)
+		require.NoError(t, err)
+		require.Zero(t, copied)
+		require.Equal(t, 1, vec.Length())
+
+		vec.Free(mp)
+		values.Release()
+		require.Zero(t, mp.CurrNB())
+		alloc.AssertSize(t, 0)
+	})
+
+	for _, test := range []struct {
+		name   string
+		target types.T
+		build  func(memory.Allocator) arrow.Array
+		err    string
+	}{
+		{"fractional_date64", types.T_date, func(alloc memory.Allocator) arrow.Array {
+			b := array.NewDate64Builder(alloc)
+			defer b.Release()
+			b.Append(1)
+			return b.NewArray()
+		}, "integral"},
+		{"out_of_range_time64", types.T_time, func(alloc memory.Allocator) arrow.Array {
+			b := array.NewTime64Builder(alloc, &arrow.Time64Type{Unit: arrow.Microsecond})
+			defer b.Release()
+			b.Append(-1)
+			return b.NewArray()
+		}, "outside"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			alloc := memory.NewCheckedAllocator(memory.NewGoAllocator())
+			values := test.build(alloc)
+			mp := mpool.MustNewZero()
+			vec := vector.NewVec(test.target.ToType())
+
+			_, err := appendDictionaryValue(context.Background(), vec, values, conversionMaterializeBool, 0, 0, false, test.target.ToType(), mp, time.UTC)
+			require.ErrorContains(t, err, test.err)
+
+			vec.Free(mp)
+			values.Release()
+			require.Zero(t, mp.CurrNB())
+			alloc.AssertSize(t, 0)
+		})
+	}
+
+	t.Run("unsupported_value_type", func(t *testing.T) {
+		alloc := memory.NewCheckedAllocator(memory.NewGoAllocator())
+		builder := array.NewDurationBuilder(alloc, &arrow.DurationType{Unit: arrow.Microsecond})
+		builder.Append(1)
+		values := builder.NewArray()
+		builder.Release()
+		mp := mpool.MustNewZero()
+		vec := vector.NewVec(types.T_int64.ToType())
+
+		_, err := appendDictionaryValue(context.Background(), vec, values, conversionMaterializeBool, 0, 0, false, types.T_int64.ToType(), mp, time.UTC)
+		require.ErrorContains(t, err, "invalid Arrow dictionary values")
+
+		vec.Free(mp)
+		values.Release()
+		require.Zero(t, mp.CurrNB())
+		alloc.AssertSize(t, 0)
+	})
+}
+
 func TestPlanFingerprintCoversSchemaMetadataAndConversionContract(t *testing.T) {
 	ctx := context.Background()
 	fieldMetadata := arrow.NewMetadata([]string{"field-key"}, []string{"field-value"})
