@@ -351,7 +351,9 @@ func (c *Compile) Run(_ uint64) (queryResult *util2.RunResult, err error) {
 	queryResult = &util2.RunResult{}
 	v2.TxnStatementTotalCounter.Inc()
 	if c.siriusRead != nil {
-		err = c.runSiriusRead(execTopContext)
+		err = c.runSiriusRead(execTopContext, func(snapshot mpool.AllocationAccountTerminalSnapshot) {
+			resourceRecorder.recordAllocationAccountTerminal(snapshot)
+		})
 		return queryResult, err
 	}
 	attemptStart := time.Now()

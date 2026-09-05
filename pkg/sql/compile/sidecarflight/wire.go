@@ -104,16 +104,28 @@ func (m *flightData) String() string {
 }
 func (*flightData) ProtoMessage() {}
 
+type flightPutResult struct {
+	AppMetadata []byte `protobuf:"bytes,1,opt,name=app_metadata,json=appMetadata,proto3"`
+}
+
+func (m *flightPutResult) Reset() { *m = flightPutResult{} }
+func (m *flightPutResult) String() string {
+	return fmt.Sprintf("FlightPutResult{%d bytes}", len(m.AppMetadata))
+}
+func (*flightPutResult) ProtoMessage() {}
+
 type executeSubstraitRequest struct {
-	ProtocolVersion  uint32  `protobuf:"varint,1,opt,name=protocol_version,json=protocolVersion,proto3"`
-	SubstraitVersion string  `protobuf:"bytes,2,opt,name=substrait_version,json=substraitVersion,proto3"`
-	CapabilityHash   []byte  `protobuf:"bytes,3,opt,name=capability_hash,json=capabilityHash,proto3"`
-	MaxBatchBytes    uint64  `protobuf:"varint,4,opt,name=max_batch_bytes,json=maxBatchBytes,proto3"`
-	DeadlineUnixMS   uint64  `protobuf:"varint,5,opt,name=deadline_unix_ms,json=deadlineUnixMs,proto3"`
-	Plan             []byte  `protobuf:"bytes,6,opt,name=plan,proto3"`
-	QueryID          []byte  `protobuf:"bytes,7,opt,name=query_id,json=queryId,proto3"`
-	IdempotencyKey   []byte  `protobuf:"bytes,8,opt,name=idempotency_key,json=idempotencyKey,proto3"`
-	AccountID        *uint64 `protobuf:"varint,9,opt,name=account_id,json=accountId,proto3,oneof"`
+	ProtocolVersion    uint32  `protobuf:"varint,1,opt,name=protocol_version,json=protocolVersion,proto3"`
+	SubstraitVersion   string  `protobuf:"bytes,2,opt,name=substrait_version,json=substraitVersion,proto3"`
+	CapabilityHash     []byte  `protobuf:"bytes,3,opt,name=capability_hash,json=capabilityHash,proto3"`
+	MaxBatchBytes      uint64  `protobuf:"varint,4,opt,name=max_batch_bytes,json=maxBatchBytes,proto3"`
+	DeadlineUnixMS     uint64  `protobuf:"varint,5,opt,name=deadline_unix_ms,json=deadlineUnixMs,proto3"`
+	Plan               []byte  `protobuf:"bytes,6,opt,name=plan,proto3"`
+	QueryID            []byte  `protobuf:"bytes,7,opt,name=query_id,json=queryId,proto3"`
+	IdempotencyKey     []byte  `protobuf:"bytes,8,opt,name=idempotency_key,json=idempotencyKey,proto3"`
+	AccountID          *uint64 `protobuf:"varint,9,opt,name=account_id,json=accountId,proto3,oneof"`
+	MaxInputBatchBytes uint64  `protobuf:"varint,10,opt,name=max_input_batch_bytes,json=maxInputBatchBytes,proto3"`
+	ResultSchema       []byte  `protobuf:"bytes,11,opt,name=result_schema,json=resultSchema,proto3"`
 }
 
 func (m *executeSubstraitRequest) Reset() { *m = executeSubstraitRequest{} }
@@ -132,3 +144,29 @@ func (m *cancelExecutionRequest) String() string {
 	return fmt.Sprintf("CancelExecutionRequest{%d,%d bytes}", len(m.Ticket), len(m.IdempotencyKey))
 }
 func (*cancelExecutionRequest) ProtoMessage() {}
+
+type uploadInputRequest struct {
+	Ticket    []byte `protobuf:"bytes,1,opt,name=ticket,proto3"`
+	StreamRef []byte `protobuf:"bytes,2,opt,name=stream_ref,json=streamRef,proto3"`
+}
+
+func (m *uploadInputRequest) Reset() { *m = uploadInputRequest{} }
+func (m *uploadInputRequest) String() string {
+	return fmt.Sprintf("UploadInputRequest{%d,%d bytes}", len(m.Ticket), len(m.StreamRef))
+}
+func (*uploadInputRequest) ProtoMessage() {}
+
+type uploadInputAck struct {
+	AcknowledgedBatches uint64 `protobuf:"varint,1,opt,name=acknowledged_batches,json=acknowledgedBatches,proto3"`
+	Rows                uint64 `protobuf:"varint,2,opt,name=rows,proto3"`
+	Bytes               uint64 `protobuf:"varint,3,opt,name=bytes,proto3"`
+	Complete            bool   `protobuf:"varint,4,opt,name=complete,proto3"`
+	NotNeeded           bool   `protobuf:"varint,5,opt,name=not_needed,json=notNeeded,proto3"`
+	Ready               bool   `protobuf:"varint,6,opt,name=ready,proto3"`
+}
+
+func (m *uploadInputAck) Reset() { *m = uploadInputAck{} }
+func (m *uploadInputAck) String() string {
+	return fmt.Sprintf("UploadInputAck{%d,%t,%t,%t}", m.AcknowledgedBatches, m.Complete, m.NotNeeded, m.Ready)
+}
+func (*uploadInputAck) ProtoMessage() {}

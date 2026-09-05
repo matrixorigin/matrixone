@@ -62,6 +62,139 @@ func TestExportBuildSupportedSubset(t *testing.T) {
 	require.Equal(t, TaeReadTypeURL, p.Relations[0].GetRoot().Input.GetFilter().Input.GetRead().GetExtensionTable().Detail.TypeUrl)
 }
 
+func TestBuildStreamReadReplacesTheCompleteScanNode(t *testing.T) {
+	q := scanQuery()
+	q.Nodes[0].FilterList = []*planpb.Expr{fn(">", boolType(), col(0), i64(7))}
+	q.Nodes[0].ProjectList = []*planpb.Expr{col(0)}
+	q.Nodes[0].Limit = i64(10)
+	candidate, err := Export(q)
+	require.NoError(t, err)
+	reads := candidate.Reads()
+	require.Len(t, reads, 1)
+	require.Equal(t, []string{"col_0"}, reads[0].StreamNames)
+	digest := sha256.Sum256(reads[0].StreamSchema)
+	wire, err := MarshalStreamRead(&StreamRead{
+		ProtocolVersion: StreamReadProtocolVersion,
+		StreamRef:       bytes.Repeat([]byte{1}, 32), QueryID: bytes.Repeat([]byte{2}, 16),
+		SnapshotTS: bytes.Repeat([]byte{3}, 12), SchemaDigest: digest[:],
+		CapabilityHash: CapabilityHash[:], ExpiresAtUnixMS: 2000,
+	})
+	require.NoError(t, err)
+	_, err = candidate.BuildWithBindings(map[int32]ReadBinding{0: {
+		TypeURL: StreamReadTypeURL, Value: wire, Schema: append(append([]byte(nil), reads[0].StreamSchema...), 0),
+	}})
+	require.ErrorContains(t, err, "stream schema differs")
+	built, err := candidate.BuildWithBindings(map[int32]ReadBinding{0: {
+		TypeURL: StreamReadTypeURL, Value: wire, Schema: reads[0].StreamSchema,
+	}})
+	require.NoError(t, err)
+	var plan spb.Plan
+	require.NoError(t, proto.Unmarshal(built, &plan))
+	require.Equal(t, []string{StreamReadTypeURL}, plan.ExpectedTypeUrls)
+	read := plan.Relations[0].GetRoot().Input.GetRead()
+	require.NotNil(t, read)
+	require.Equal(t, StreamReadTypeURL, read.GetExtensionTable().Detail.TypeUrl)
+	require.Equal(t, []string{"col_0"}, read.BaseSchema.Names)
+}
+
+func TestStreamReadValidationRejectsEveryInvalidIdentityClass(t *testing.T) {
+	valid := func() *StreamRead {
+		return &StreamRead{
+			ProtocolVersion: StreamReadProtocolVersion,
+			StreamRef:       bytes.Repeat([]byte{1}, 32),
+			QueryID:         bytes.Repeat([]byte{2}, 16),
+			SnapshotTS:      bytes.Repeat([]byte{3}, 12),
+			SchemaDigest:    bytes.Repeat([]byte{4}, sha256.Size),
+			CapabilityHash:  append([]byte(nil), CapabilityHash[:]...),
+			ExpiresAtUnixMS: 2000,
+		}
+	}
+	require.ErrorContains(t, (*StreamRead)(nil).Validate(1000), "protocol")
+	_, err := MarshalStreamRead(nil)
+	require.ErrorContains(t, err, "protocol")
+
+	for _, tc := range []struct {
+		name      string
+		configure func(*StreamRead)
+		want      string
+	}{
+		{name: "version", configure: func(r *StreamRead) { r.ProtocolVersion++ }, want: "protocol"},
+		{name: "features", configure: func(r *StreamRead) { r.FeatureBits = 1 }, want: "protocol"},
+		{name: "stream identity", configure: func(r *StreamRead) { r.StreamRef = r.StreamRef[:31] }, want: "identity"},
+		{name: "query identity", configure: func(r *StreamRead) { r.QueryID = r.QueryID[:15] }, want: "identity"},
+		{name: "snapshot", configure: func(r *StreamRead) { r.SnapshotTS = r.SnapshotTS[:11] }, want: "identity"},
+		{name: "schema digest", configure: func(r *StreamRead) { r.SchemaDigest = r.SchemaDigest[:31] }, want: "identity"},
+		{name: "capability length", configure: func(r *StreamRead) { r.CapabilityHash = r.CapabilityHash[:31] }, want: "identity"},
+		{name: "expired", configure: func(r *StreamRead) { r.ExpiresAtUnixMS = 1000 }, want: "expired"},
+		{name: "expiry overflow", configure: func(r *StreamRead) { r.ExpiresAtUnixMS = maxTaeReadExpiryUnixMS + 1 }, want: "expired"},
+		{name: "capability mismatch", configure: func(r *StreamRead) { r.CapabilityHash[0] ^= 1 }, want: "expired"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			streamRead := valid()
+			tc.configure(streamRead)
+			require.ErrorContains(t, streamRead.Validate(1000), tc.want)
+		})
+	}
+}
+
+func TestNativeInputTypeRejectsSemanticOnlyUint32Mapping(t *testing.T) {
+	uint32Type := planpb.Type{Id: int32(types.T_uint32)}
+	semantic, err := substraitType(&uint32Type)
+	require.NoError(t, err)
+	require.NotNil(t, semantic.GetI64(), "uint32 results still use signed i64 transport")
+
+	_, err = nativeInputType(&uint32Type)
+	require.True(t, IsNotEligible(err))
+	require.ErrorContains(t, err, "unsupported native input type INT UNSIGNED")
+	_, err = nativeInputType(nil)
+	require.ErrorContains(t, err, "missing native input type")
+
+	for _, typ := range []planpb.Type{
+		{Id: int32(types.T_bool)},
+		{Id: int32(types.T_int8)}, {Id: int32(types.T_int16)},
+		{Id: int32(types.T_int32)}, {Id: int32(types.T_int64)},
+		{Id: int32(types.T_float32)}, {Id: int32(types.T_float64)},
+		{Id: int32(types.T_char), Width: 8}, {Id: int32(types.T_varchar), Width: 32},
+		{Id: int32(types.T_decimal64), Width: 18, Scale: 2},
+		{Id: int32(types.T_decimal128), Width: 38, Scale: 4},
+		{Id: int32(types.T_date)},
+	} {
+		_, err = nativeInputType(&typ)
+		require.NoError(t, err, types.T(typ.Id).String())
+	}
+	for _, typ := range []planpb.Type{
+		{Id: int32(types.T_decimal64), Width: 19, Scale: 2},
+		{Id: int32(types.T_decimal128), Width: 18, Scale: 2},
+	} {
+		_, err = nativeInputType(&typ)
+		require.True(t, IsNotEligible(err))
+		require.ErrorContains(t, err, "does not match decimal")
+	}
+}
+
+func TestUint32CandidateKeepsDirectTaeReadAndRejectsOnlyStreamRead(t *testing.T) {
+	query := scanQuery()
+	query.Nodes[0].TableDef.Cols[0].Typ = planpb.Type{Id: int32(types.T_uint32)}
+
+	candidate, err := Export(query)
+	require.NoError(t, err)
+	direct, err := candidate.Build(map[int32][]byte{0: {1}})
+	require.NoError(t, err)
+	var exported spb.Plan
+	require.NoError(t, proto.Unmarshal(direct, &exported))
+	require.NotNil(t, exported.Relations[0].GetRoot().Input.GetRead().BaseSchema.Struct.Types[0].GetI64(),
+		"the direct TaeRead contract keeps the intentional uint32-to-i64 widening")
+
+	_, err = candidate.StreamReads()
+	require.True(t, IsNotEligible(err))
+	require.ErrorContains(t, err, "unsupported native input type INT UNSIGNED")
+	_, err = candidate.BuildWithBindings(map[int32]ReadBinding{0: {
+		TypeURL: StreamReadTypeURL, Value: []byte{1},
+	}})
+	require.True(t, IsNotEligible(err))
+	require.ErrorContains(t, err, "unsupported native input type INT UNSIGNED")
+}
+
 func TestExportRejectsFullOuterBeforeSnapshotAccess(t *testing.T) {
 	q := scanQuery()
 	q.Nodes = append(q.Nodes, &planpb.Node{NodeId: 1, NodeType: planpb.Node_JOIN, JoinType: planpb.Node_OUTER, Children: []int32{0, 0}})
@@ -156,6 +289,7 @@ func TestSharedScanNodeProducesOneAdmissionRead(t *testing.T) {
 	candidate, err := Export(q)
 	require.NoError(t, err)
 	require.Len(t, candidate.Reads(), 1)
+	require.Equal(t, uint32(2), candidate.Reads()[0].Occurrences)
 }
 
 func TestProjectEmitsOnlyMOProjectColumns(t *testing.T) {
@@ -433,7 +567,17 @@ func TestBoundInt64SumIsAdvertisedWithDecimalResult(t *testing.T) {
 }
 
 func TestCapabilityHashMatchesSidecarContract(t *testing.T) {
-	require.Equal(t, "6f788b3d6665ecdd1ac734043fb757968893f14fd7d197fabcfa287764ee6bad", hex.EncodeToString(CapabilityHash[:]))
+	for _, identity := range []string{
+		`"stream_input_host_accounting":"pre-admitted-execution-v2"`,
+		`"gpu_fatal_recovery":"process-fail-stop-v1"`,
+		`"gpu_partition_concurrency":"same-stage-reentrant-v1"`,
+	} {
+		require.Contains(t, CapabilityDocument, identity)
+		withoutIdentity := strings.Replace(CapabilityDocument, identity+",", "", 1)
+		require.NotEqual(t, sha256.Sum256([]byte(withoutIdentity)), CapabilityHash,
+			"a peer missing %s must fail exact capability negotiation", identity)
+	}
+	require.Equal(t, "32f14380770bf4016cbf1b0f564e4423421f6b86779018e9dfcb7aba94f67ea7", hex.EncodeToString(CapabilityHash[:]))
 }
 
 func TestBoundDecimalUnaryMinusLowersToSubtractFromTypedZero(t *testing.T) {
@@ -468,6 +612,15 @@ func TestBoundDecimalUnaryMinusLowersToSubtractFromTypedZero(t *testing.T) {
 	require.Equal(t, "subtract", scalarFunctionName(plan, subtract.FunctionReference))
 	require.Len(t, subtract.Arguments, 2)
 	require.NotNil(t, subtract.Arguments[0].GetValue().GetLiteral().GetDecimal())
+}
+
+func TestCharSubstringResultUsesTPCHStringFamily(t *testing.T) {
+	charType := planpb.Type{Id: int32(types.T_char), Width: 15}
+	integerType := planpb.Type{Id: int32(types.T_int64), NotNullable: true}
+	args := []*planpb.Expr{{Typ: charType}, {Typ: integerType}, {Typ: integerType}}
+	// CHAR is intentionally transported as Substrait string/VARCHAR and
+	// restored to the negotiated MatrixOne physical result type.
+	require.NoError(t, validateScalarSignature("substring", &charType, args))
 }
 
 func TestFetchAcceptsBoundUint64AndPreservesAbsentCount(t *testing.T) {

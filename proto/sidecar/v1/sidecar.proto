@@ -23,6 +23,44 @@ message ExecuteSubstraitRequest {
   uint64 max_batch_bytes = 4;
   uint64 deadline_unix_ms = 5;
   bytes plan = 6;
+  bytes query_id = 7;
+  bytes idempotency_key = 8;
+  optional uint64 account_id = 9;
+  uint64 max_input_batch_bytes = 10;
+  bytes result_schema = 11;
+}
+
+message NativeResultSchema {
+  uint32 version = 1;
+  repeated NativeResultColumn columns = 2;
+}
+
+message NativeResultColumn {
+  string name = 1;
+  uint32 oid = 2;
+  int32 width = 3;
+  int32 scale = 4;
+  uint32 charset = 5;
+  bool not_nullable = 6;
+}
+
+message UploadInputRequest {
+  bytes ticket = 1;
+  bytes stream_ref = 2;
+}
+
+message UploadInputAck {
+  uint64 acknowledged_batches = 1;
+  uint64 rows = 2;
+  uint64 bytes = 3;
+  bool complete = 4;
+  bool not_needed = 5;
+  bool ready = 6;
+}
+
+message CancelExecutionRequest {
+  bytes ticket = 1;
+  bytes idempotency_key = 2;
 }
 
 message ResolveTaeReadRequest {

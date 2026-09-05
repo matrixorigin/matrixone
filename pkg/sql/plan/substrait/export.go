@@ -18,9 +18,11 @@
 package substrait
 
 import (
+	"bytes"
 	"context"
 	"encoding/binary"
 	"math"
+	"strconv"
 	"strings"
 	"sync"
 
@@ -37,9 +39,10 @@ import (
 )
 
 const (
-	Version        = "0.78.0"
-	TaeReadTypeURL = "type.googleapis.com/matrixone.sirius.v1.TaeRead"
-	MaxPlanBytes   = 16 << 20
+	Version           = "0.78.0"
+	TaeReadTypeURL    = "type.googleapis.com/matrixone.sirius.v1.TaeRead"
+	StreamReadTypeURL = "type.googleapis.com/matrixone.sirius.v1.StreamRead"
+	MaxPlanBytes      = 16 << 20
 	// Bound the materialization of optimizer-folded IN lists before allocating
 	// one Substrait expression per member.
 	maxLiteralVectorValues = 1 << 16
@@ -57,6 +60,9 @@ type Candidate struct {
 // Read identifies one physical table scan which needs a TaeRead lease.
 type Read struct {
 	NodeID int32
+	// Occurrences counts references to this scan node in the exported relation
+	// graph. One-pass StreamRead inputs reject values other than one.
+	Occurrences uint32
 	// AccountID is bound by Admit immediately before snapshot preparation;
 	// logical export deliberately leaves it unset.
 	AccountID     uint64
@@ -65,6 +71,12 @@ type Read struct {
 	SchemaVersion uint32
 	Columns       []ColumnMapping
 	Schema        []byte // deterministic Substrait NamedStruct bytes
+	StreamSchema  []byte
+	StreamNames   []string
+	// streamErr records a physical MO input type which the native StreamRead
+	// wire cannot represent. It must not make the semantic TaeRead candidate
+	// ineligible: direct TAE decoding has its own, wider type contract.
+	streamErr error
 }
 
 // ColumnMapping binds one exported ordinal to the physical TAE column used at
@@ -79,9 +91,26 @@ func (c *Candidate) Reads() []Read {
 	result := append([]Read(nil), c.reads...)
 	for i := range result {
 		result[i].Schema = append([]byte(nil), result[i].Schema...)
+		result[i].StreamSchema = append([]byte(nil), result[i].StreamSchema...)
+		result[i].StreamNames = append([]string(nil), result[i].StreamNames...)
 		result[i].Columns = append([]ColumnMapping(nil), result[i].Columns...)
 	}
 	return result
+}
+
+// StreamReads returns the validated one-pass native input contract. A plan can
+// remain eligible for direct TaeRead while being ineligible for StreamRead
+// when its semantic Substrait type is wider than its unchanged MO vector type.
+func (c *Candidate) StreamReads() ([]Read, error) {
+	if c == nil {
+		return nil, moerr.NewInternalErrorNoCtx("substrait: nil candidate")
+	}
+	for _, read := range c.reads {
+		if read.streamErr != nil {
+			return nil, read.streamErr
+		}
+	}
+	return c.Reads(), nil
 }
 
 // OutputTypes returns the MatrixOne result contract corresponding to the
@@ -150,10 +179,41 @@ func Export(q *planpb.Query) (*Candidate, error) {
 
 // Build binds admitted TaeRead messages to every scan and serializes the plan.
 func (c *Candidate) Build(readValues map[int32][]byte) ([]byte, error) {
+	bindings := make(map[int32]ReadBinding, len(readValues))
+	for nodeID, value := range readValues {
+		bindings[nodeID] = ReadBinding{TypeURL: TaeReadTypeURL, Value: value}
+	}
+	return c.BuildWithBindings(bindings)
+}
+
+type ReadBinding struct {
+	TypeURL string
+	Value   []byte
+	Schema  []byte
+}
+
+func (c *Candidate) BuildWithBindings(bindings map[int32]ReadBinding) ([]byte, error) {
 	if c == nil {
 		return nil, moerr.NewInternalErrorNoCtxf("substrait: nil candidate")
 	}
-	e := exporter{query: c.query, readValues: readValues}
+	if len(bindings) != len(c.reads) {
+		return nil, moerr.NewInternalErrorNoCtx("substrait: plan has no admitted TaeRead or StreamRead for every scan")
+	}
+	for _, read := range c.reads {
+		binding, ok := bindings[read.NodeID]
+		if !ok {
+			return nil, moerr.NewInternalErrorNoCtxf("substrait: node %d has no admitted TaeRead or StreamRead", read.NodeID)
+		}
+		if binding.TypeURL == StreamReadTypeURL {
+			if read.streamErr != nil {
+				return nil, read.streamErr
+			}
+			if !bytes.Equal(binding.Schema, read.StreamSchema) {
+				return nil, moerr.NewInternalErrorNoCtxf("substrait: node %d stream schema differs from the validated scan", read.NodeID)
+			}
+		}
+	}
+	e := exporter{query: c.query, readValues: make(map[int32][]byte), readBindings: bindings, streamReads: make(map[int32]bool), expectedTypeURLs: make(map[string]bool)}
 	relations := make([]*spb.PlanRel, 0, len(c.query.Steps))
 	for step, rootID := range c.query.Steps {
 		e.stepOrdinal = int32(step)
@@ -167,10 +227,16 @@ func (c *Candidate) Build(readValues map[int32][]byte) ([]byte, error) {
 			relations = append(relations, &spb.PlanRel{RelType: &spb.PlanRel_Root{Root: &spb.RelRoot{Input: relation, Names: append([]string(nil), c.headings...)}}})
 		}
 	}
+	expected := make([]string, 0, 2)
+	for _, typeURL := range []string{TaeReadTypeURL, StreamReadTypeURL} {
+		if e.expectedTypeURLs[typeURL] {
+			expected = append(expected, typeURL)
+		}
+	}
 	p := &spb.Plan{
 		Version:          &spb.Version{MajorNumber: 0, MinorNumber: 78, PatchNumber: 0, Producer: "matrixone"},
 		Relations:        relations,
-		ExpectedTypeUrls: []string{TaeReadTypeURL},
+		ExpectedTypeUrls: expected,
 		Extensions:       e.extensions(),
 	}
 	b, err := proto.MarshalOptions{Deterministic: true}.Marshal(p)
@@ -184,14 +250,17 @@ func (c *Candidate) Build(readValues map[int32][]byte) ([]byte, error) {
 }
 
 type exporter struct {
-	query        *planpb.Query
-	readValues   map[int32][]byte
-	reads        []Read
-	functions    map[string]uint32
-	validateOnly bool
-	visiting     map[int32]bool
-	readSeen     map[int32]bool
-	stepOrdinal  int32
+	query            *planpb.Query
+	readValues       map[int32][]byte
+	readBindings     map[int32]ReadBinding
+	streamReads      map[int32]bool
+	expectedTypeURLs map[string]bool
+	reads            []Read
+	functions        map[string]uint32
+	validateOnly     bool
+	visiting         map[int32]bool
+	readIndexes      map[int32]int
+	stepOrdinal      int32
 }
 
 func (e *exporter) node(id int32) (*spb.Rel, error) {
@@ -256,6 +325,9 @@ func (e *exporter) node(id int32) (*spb.Rel, error) {
 	}
 	if err != nil {
 		return nil, err
+	}
+	if n.NodeType == planpb.Node_TABLE_SCAN && e.streamReads[n.NodeId] {
+		return rel, nil
 	}
 	return e.fetch(rel, n)
 }
@@ -596,20 +668,63 @@ func (e *exporter) read(n *planpb.Node) (*spb.Rel, error) {
 		return nil, err
 	}
 	if e.validateOnly {
-		if e.readSeen == nil {
-			e.readSeen = make(map[int32]bool)
+		if e.readIndexes == nil {
+			e.readIndexes = make(map[int32]int)
 		}
-		if !e.readSeen[n.NodeId] {
-			e.readSeen[n.NodeId] = true
+		if index, seen := e.readIndexes[n.NodeId]; seen {
+			e.reads[index].Occurrences++
+		} else {
+			streamTypes, typeErr := e.outputTypes(n.NodeId)
+			if typeErr != nil {
+				return nil, typeErr
+			}
+			streamSchema, streamNames, streamErr := namedStructFromTypes(streamTypes)
+			var streamSchemaBytes []byte
+			if streamErr == nil {
+				streamSchemaBytes, streamErr = proto.MarshalOptions{Deterministic: true}.Marshal(streamSchema)
+			}
+			if streamErr != nil && !IsNotEligible(streamErr) {
+				return nil, streamErr
+			}
+			e.readIndexes[n.NodeId] = len(e.reads)
 			e.reads = append(e.reads, Read{
 				NodeID:        n.NodeId,
+				Occurrences:   1,
 				DatabaseID:    n.TableDef.DbId,
 				TableID:       n.TableDef.TblId,
 				SchemaVersion: n.TableDef.Version,
 				Columns:       columns,
 				Schema:        schemaBytes,
+				StreamSchema:  streamSchemaBytes,
+				StreamNames:   streamNames,
+				streamErr:     streamErr,
 			})
 		}
+	}
+	if !e.validateOnly && e.readBindings != nil {
+		binding, ok := e.readBindings[n.NodeId]
+		if !ok || len(binding.Value) == 0 {
+			return nil, moerr.NewInternalErrorNoCtxf("substrait: node %d has no admitted TaeRead or StreamRead", n.NodeId)
+		}
+		if binding.TypeURL == StreamReadTypeURL {
+			var streamSchema spb.NamedStruct
+			if len(binding.Schema) == 0 || proto.Unmarshal(binding.Schema, &streamSchema) != nil {
+				return nil, moerr.NewInternalErrorNoCtxf("substrait: node %d has an invalid stream schema", n.NodeId)
+			}
+			e.streamReads[n.NodeId] = true
+			e.expectedTypeURLs[StreamReadTypeURL] = true
+			return &spb.Rel{RelType: &spb.Rel_Read{Read: &spb.ReadRel{
+				BaseSchema: &streamSchema,
+				ReadType: &spb.ReadRel_ExtensionTable_{ExtensionTable: &spb.ReadRel_ExtensionTable{
+					Detail: &anypb.Any{TypeUrl: StreamReadTypeURL, Value: binding.Value},
+				}},
+			}}}, nil
+		}
+		if binding.TypeURL != TaeReadTypeURL {
+			return nil, moerr.NewInternalErrorNoCtxf("substrait: node %d has an unsupported read binding", n.NodeId)
+		}
+		e.expectedTypeURLs[TaeReadTypeURL] = true
+		e.readValues[n.NodeId] = binding.Value
 	}
 	value := e.readValues[n.NodeId]
 	if !e.validateOnly && len(value) == 0 {
@@ -1196,6 +1311,64 @@ func namedStruct(t *planpb.TableDef) (*spb.NamedStruct, error) {
 		return nil, moerr.NewInternalErrorNoCtxf("substrait: table %q has no exportable columns", t.Name)
 	}
 	return &spb.NamedStruct{Names: names, Struct: &spb.Type_Struct{Types: fields, Nullability: spb.Type_NULLABILITY_REQUIRED}}, nil
+}
+
+func namedStructFromTypes(typesIn []planpb.Type) (*spb.NamedStruct, []string, error) {
+	if len(typesIn) == 0 {
+		return nil, nil, moerr.NewInternalErrorNoCtx("substrait: streamed read has no columns")
+	}
+	names := make([]string, len(typesIn))
+	fields := make([]*spb.Type, len(typesIn))
+	for i := range typesIn {
+		names[i] = "col_" + strconv.Itoa(i)
+		field, err := nativeInputType(&typesIn[i])
+		if err != nil {
+			return nil, nil, err
+		}
+		fields[i] = field
+	}
+	return &spb.NamedStruct{Names: append([]string(nil), names...), Struct: &spb.Type_Struct{
+		Types: fields, Nullability: spb.Type_NULLABILITY_REQUIRED,
+	}}, names, nil
+}
+
+// nativeInputType is the StreamRead physical MO input contract, not the semantic
+// Substrait result contract. Keep the allow-list explicit: substraitType may
+// map a logical result to a wider signed type (currently uint32 to i64), while
+// StreamRead sends the original MO vector without conversion. Direct TaeRead
+// keeps using substraitType because Sirius performs its own physical decoding.
+func nativeInputType(t *planpb.Type) (*spb.Type, error) {
+	if t == nil {
+		return nil, moerr.NewInternalErrorNoCtx("substrait: missing native input type")
+	}
+	switch types.T(t.Id) {
+	case types.T_bool,
+		types.T_int8, types.T_int16, types.T_int32, types.T_int64,
+		types.T_float32, types.T_float64,
+		types.T_char, types.T_varchar,
+		types.T_date:
+		return substraitType(t)
+	case types.T_decimal64, types.T_decimal128:
+		field, err := substraitType(t)
+		if err != nil {
+			return nil, err
+		}
+		if (types.T(t.Id) == types.T_decimal64 && t.Width > 18) ||
+			(types.T(t.Id) == types.T_decimal128 && t.Width <= 18) {
+			return nil, notEligiblef(
+				EligibilityType,
+				"native input type %s does not match decimal(%d,%d)",
+				types.T(t.Id).String(), t.Width, t.Scale,
+			)
+		}
+		return field, nil
+	default:
+		return nil, notEligiblef(
+			EligibilityType,
+			"unsupported native input type %s",
+			types.T(t.Id).String(),
+		)
+	}
 }
 
 func columnMapping(t *planpb.TableDef) ([]ColumnMapping, error) {
@@ -1906,7 +2079,7 @@ func validateScalarSignature(name string, out *planpb.Type, args []*planpb.Expr)
 			return notEligiblef(EligibilityExpression, "unsupported %s signature", name)
 		}
 	case "substring":
-		if types.T(out.Id) != types.T_varchar || len(args) != 3 || !isTPCHStringType(types.T(args[0].Typ.Id)) || types.T(args[1].Typ.Id) != types.T_int64 || types.T(args[2].Typ.Id) != types.T_int64 {
+		if !isTPCHStringType(types.T(out.Id)) || len(args) != 3 || !isTPCHStringType(types.T(args[0].Typ.Id)) || types.T(args[1].Typ.Id) != types.T_int64 || types.T(args[2].Typ.Id) != types.T_int64 {
 			return notEligiblef(EligibilityExpression, "unsupported substring signature")
 		}
 	}

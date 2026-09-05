@@ -2535,6 +2535,9 @@ func compileStatementContexts(
 ) (requestCtx, compileCtx context.Context) {
 	requestCtx = perfcounter.AttachCompilePlanMarkKey(ctx, crs)
 	if siriusStatementSelected(sql, stmt) {
+		if strings.HasPrefix(strings.ToUpper(strings.TrimSpace(sql)), sidecarStreamHintPrefix) {
+			return requestCtx, compile.WithSiriusStreamOffload(requestCtx)
+		}
 		return requestCtx, compile.WithSiriusOffload(requestCtx)
 	}
 	return requestCtx, requestCtx
