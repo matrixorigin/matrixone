@@ -14904,7 +14904,7 @@ decimal_type:
         	yylex.Error("For float(M,D), double(M,D) or decimal(M,D), M must be >= D (column 'a'))")
         	goto ret1
         }
-        if $2.DisplayWith >= 24 {
+        if $2.DisplayWith > 24 {
             $$ = &tree.T{
             	InternalType: tree.InternalType{
             		Family: tree.FloatFamily,

@@ -33409,7 +33409,7 @@ yydefault:
 				yylex.Error("For float(M,D), double(M,D) or decimal(M,D), M must be >= D (column 'a'))")
 				goto ret1
 			}
-			if yyDollar[2].lengthScaleOptUnion().DisplayWith >= 24 {
+			if yyDollar[2].lengthScaleOptUnion().DisplayWith > 24 {
 				yyLOCAL = &tree.T{
 					InternalType: tree.InternalType{
 						Family:       tree.FloatFamily,

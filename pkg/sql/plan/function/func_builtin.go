@@ -744,15 +744,13 @@ func internalNumericPrecision(typ types.Type) (int64, bool) {
 	case types.T_uint32:
 		// MEDIUMINT UNSIGNED is represented as T_uint32 with a 24-bit width.
 		if typ.Width == 24 {
-			return 8, true
+			return 7, true
 		}
 		return 10, true
 	case types.T_int64:
 		return 19, true
 	case types.T_uint64:
 		return 20, true
-	case types.T_year:
-		return 4, true
 	case types.T_bit:
 		// BIT defaults to BIT(1) when no length is supplied.
 		if typ.Width > 0 {
@@ -845,8 +843,7 @@ func internalNumericScale(typ types.Type) (int64, bool) {
 		types.T_int8, types.T_uint8,
 		types.T_int16, types.T_uint16,
 		types.T_int32, types.T_uint32,
-		types.T_int64, types.T_uint64,
-		types.T_year:
+		types.T_int64, types.T_uint64:
 		return 0, true
 	case types.T_decimal64, types.T_decimal128, types.T_decimal256:
 		scale := typ.Scale
