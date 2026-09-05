@@ -923,14 +923,14 @@ func (rs *regexpSet) regularSubstrWithMode(pat string, str string, pos, occurren
 		return false, "", err
 	}
 
-	matches, err := rs.regexpMatchesAtOrAfter(reg, pat, str, startByte, subjectIsBinary, regexpOccurrenceLimit(occurrence))
+	selected, found, err := rs.regexpNthMatchAtOrAfter(
+		reg, pat, str, startByte, subjectIsBinary, occurrence)
 	if err != nil {
 		return false, "", err
 	}
-	if l := int64(len(matches)); l < occurrence {
+	if !found {
 		return false, "", nil
 	}
-	selected := matches[occurrence-1]
 	return true, str[selected[0]:selected[1]], nil
 }
 
@@ -963,30 +963,17 @@ func (rs *regexpSet) regularReplaceWithMode(pat string, str string, repl string,
 		return decodeBinaryRegexpBytes(reg.ReplaceAllLiteralString(encodedSubject, encodedReplacement)), nil
 	}
 
-	limit := regexpOccurrenceLimit(occurrence)
-	selected, err := rs.regexpMatchesAtOrAfter(reg, pat, str, startByte, subjectIsBinary, limit)
+	if occurrence == 0 {
+		return rs.regexpReplaceAllAtOrAfter(reg, pat, str, repl, startByte, subjectIsBinary)
+	}
+	match, found, err := rs.regexpNthMatchAtOrAfter(
+		reg, pat, str, startByte, subjectIsBinary, occurrence)
 	if err != nil {
 		return "", err
 	}
-	if len(selected) == 0 {
+	if !found {
 		return str, nil
 	}
-	if occurrence > 0 && int64(len(selected)) < occurrence {
-		return str, nil
-	}
-	if occurrence == 0 {
-		var b strings.Builder
-		b.Grow(len(str))
-		last := 0
-		for _, match := range selected {
-			b.WriteString(str[last:match[0]])
-			b.WriteString(repl)
-			last = match[1]
-		}
-		b.WriteString(str[last:])
-		return b.String(), nil
-	}
-	match := selected[occurrence-1]
 	return str[:match[0]] + repl + str[match[1]:], nil
 }
 
@@ -1018,14 +1005,15 @@ func (rs *regexpSet) regularInstrWithMode(pat string, str string, pos, occurrenc
 		return 0, moerr.NewInvalidArgNoCtx("regexp_instr have invalid regexp pattern arg", pat)
 	}
 
-	matches, err := rs.regexpMatchesAtOrAfter(reg, pat, str, startByte, subjectIsBinary, regexpOccurrenceLimit(occurrence))
+	match, found, err := rs.regexpNthMatchAtOrAfter(
+		reg, pat, str, startByte, subjectIsBinary, occurrence)
 	if err != nil {
 		return 0, err
 	}
-	if int64(len(matches)) < occurrence {
+	if !found {
 		return 0, nil
 	}
-	matchOffset := matches[occurrence-1][retOption]
+	matchOffset := match[retOption]
 	return regexpByteOffsetToPosition(str, matchOffset, subjectIsBinary), nil
 }
 
@@ -1081,66 +1069,122 @@ func regexpSubjectLength(str string, subjectIsBinary bool) int64 {
 	return int64(utf8.RuneCountInString(str))
 }
 
-func regexpOccurrenceLimit(occurrence int64) int {
-	maxInt := int64(^uint(0) >> 1)
-	if occurrence <= 0 || occurrence > maxInt {
-		return -1
-	}
-	return int(occurrence)
-}
-
-// regexpMatchesAtOrAfter preserves the standard full-subject match sequence
-// unless a discarded match crosses or abuts the requested boundary. Such a
-// match can suppress a valid alternative at or after startByte, so that rare
-// path is rebuilt with a position-aware iterator.
-func (rs *regexpSet) regexpMatchesAtOrAfter(reg *regexp.Regexp, pat, str string, startByte int, subjectIsBinary bool, limit int) ([][]int, error) {
+// regexpNthMatchAtOrAfter preserves full-subject anchor and boundary semantics
+// while retaining only the requested match. Work remains proportional to the
+// requested occurrence, but memory is constant and the discarded prefix is
+// never materialized.
+func (rs *regexpSet) regexpNthMatchAtOrAfter(
+	reg *regexp.Regexp,
+	pat, str string,
+	startByte int,
+	subjectIsBinary bool,
+	occurrence int64,
+) ([2]int, bool, error) {
 	searchSubject := str
 	searchStart := startByte
 	if subjectIsBinary {
 		searchSubject, searchStart = encodeBinaryRegexpBytes(str, startByte)
 	}
-	findLimit := -1
-	if searchStart == 0 {
-		findLimit = limit
-	}
-	all := reg.FindAllStringIndex(searchSubject, findLimit)
-	first := 0
-	for first < len(all) && all[first][0] < searchStart {
-		first++
-	}
-	if searchStart == 0 || first == 0 || all[first-1][1] < searchStart {
-		return decodeBinaryRegexpMatches(searchSubject, all[first:], subjectIsBinary), nil
-	}
 
-	matches := make([][]int, 0, len(all)-first+1)
-	nextStart := searchStart
+	selected := [2]int{}
+	visited := int64(0)
+	err := rs.regexpVisitAtOrAfter(reg, pat, searchSubject, searchStart, subjectIsBinary, occurrence,
+		func(start, end int) {
+			selected = [2]int{start, end}
+			visited++
+		})
+	if err != nil {
+		return [2]int{}, false, err
+	}
+	if visited < occurrence {
+		return [2]int{}, false, nil
+	}
+	if subjectIsBinary {
+		selected = decodeBinaryRegexpMatch(searchSubject, selected)
+	}
+	return selected, true, nil
+}
+
+// regexpVisitAtOrAfter walks non-overlapping matches without retaining them.
+// str and startByte are already in the regexp engine's representation: ordinary
+// UTF-8 for text, or one encoded rune per source byte for binary strings.
+func (rs *regexpSet) regexpVisitAtOrAfter(
+	reg *regexp.Regexp,
+	pat, str string,
+	startByte int,
+	subjectIsBinary bool,
+	limit int64,
+	visit func(start, end int),
+) error {
+	visited := int64(0)
+	nextStart := startByte
 	previousEnd := -1
-	for nextStart <= len(searchSubject) {
-		match, err := rs.regexpFindAtOrAfter(reg, pat, searchSubject, nextStart, subjectIsBinary)
+	for nextStart <= len(str) {
+		start, end, found, err := rs.regexpFindAtOrAfter(reg, pat, str, nextStart, subjectIsBinary)
 		if err != nil {
-			return nil, err
+			return err
 		}
-		if match == nil {
+		if !found {
 			break
 		}
-		if match[0] == match[1] && match[0] == previousEnd {
+		if start == end && start == previousEnd {
 			// Match Go's FindAll convention: ignore an empty match directly
 			// abutting the preceding match, then make one unit of progress.
-			nextStart = regexpAdvancePosition(searchSubject, match[0])
+			nextStart = regexpAdvancePosition(str, start)
 			continue
 		}
-		matches = append(matches, match)
-		if limit > 0 && len(matches) >= limit {
+		visit(start, end)
+		visited++
+		if limit > 0 && visited >= limit {
 			break
 		}
-		previousEnd = match[1]
-		if match[0] == match[1] {
-			nextStart = regexpAdvancePosition(searchSubject, match[1])
+		previousEnd = end
+		if start == end {
+			nextStart = regexpAdvancePosition(str, end)
 		} else {
-			nextStart = match[1]
+			nextStart = end
 		}
 	}
-	return decodeBinaryRegexpMatches(searchSubject, matches, subjectIsBinary), nil
+	return nil
+}
+
+func (rs *regexpSet) regexpReplaceAllAtOrAfter(
+	reg *regexp.Regexp,
+	pat, str, repl string,
+	startByte int,
+	subjectIsBinary bool,
+) (string, error) {
+	searchSubject := str
+	searchStart := startByte
+	replacement := repl
+	if subjectIsBinary {
+		searchSubject, searchStart = encodeBinaryRegexpBytes(str, startByte)
+		replacement, _ = encodeBinaryRegexpBytes(repl, 0)
+	}
+
+	var b strings.Builder
+	b.Grow(len(searchSubject))
+	last := 0
+	matched := false
+	err := rs.regexpVisitAtOrAfter(reg, pat, searchSubject, searchStart, subjectIsBinary, 0,
+		func(start, end int) {
+			matched = true
+			b.WriteString(searchSubject[last:start])
+			b.WriteString(replacement)
+			last = end
+		})
+	if err != nil {
+		return "", err
+	}
+	if !matched {
+		return str, nil
+	}
+	b.WriteString(searchSubject[last:])
+	result := b.String()
+	if subjectIsBinary {
+		result = decodeBinaryRegexpBytes(result)
+	}
+	return result, nil
 }
 
 // regexpFindAtOrAfter supplies the context that slicing at startByte would
@@ -1148,12 +1192,16 @@ func (rs *regexpSet) regexpMatchesAtOrAfter(reg *regexp.Regexp, pat, str string,
 // searches for the original pattern. This keeps ^, multiline ^, and word
 // boundaries relative to the original subject while excluding matches before
 // startByte. The wrapped matcher is cached with the ordinary pattern matchers.
-func (rs *regexpSet) regexpFindAtOrAfter(reg *regexp.Regexp, pat, str string, startByte int, subjectIsBinary bool) ([]int, error) {
+func (rs *regexpSet) regexpFindAtOrAfter(reg *regexp.Regexp, pat, str string, startByte int, subjectIsBinary bool) (start, end int, found bool, err error) {
 	if startByte <= 0 {
-		return reg.FindStringIndex(str), nil
+		indices := reg.FindStringIndex(str)
+		if indices == nil {
+			return 0, 0, false, nil
+		}
+		return indices[0], indices[1], true, nil
 	}
 	if startByte > len(str) {
-		return nil, nil
+		return 0, 0, false, nil
 	}
 
 	_, size := utf8.DecodeLastRuneInString(str[:startByte])
@@ -1163,13 +1211,13 @@ func (rs *regexpSet) regexpFindAtOrAfter(reg *regexp.Regexp, pat, str string, st
 	}
 	wrapped, err := rs.getRegularMatcherWithMode("^(?s:.)(?s:.*?)("+pat+")", subjectIsBinary)
 	if err != nil {
-		return nil, err
+		return 0, 0, false, err
 	}
 	indices := wrapped.FindStringSubmatchIndex(str[contextStart:])
 	if len(indices) < 4 || indices[2] < 0 {
-		return nil, nil
+		return 0, 0, false, nil
 	}
-	return []int{contextStart + indices[2], contextStart + indices[3]}, nil
+	return contextStart + indices[2], contextStart + indices[3], true, nil
 }
 
 func regexpAdvancePosition(str string, offset int) int {
@@ -1224,27 +1272,9 @@ func isASCIIBytes(value string) bool {
 	return true
 }
 
-func decodeBinaryRegexpMatches(encoded string, matches [][]int, binary bool) [][]int {
-	if !binary || len(matches) == 0 {
-		return matches
-	}
-	decoded := make([][]int, len(matches))
-	encodedOffset, byteOffset := 0, 0
-	for i, match := range matches {
-		for encodedOffset < match[0] {
-			_, size := utf8.DecodeRuneInString(encoded[encodedOffset:])
-			encodedOffset += size
-			byteOffset++
-		}
-		start := byteOffset
-		for encodedOffset < match[1] {
-			_, size := utf8.DecodeRuneInString(encoded[encodedOffset:])
-			encodedOffset += size
-			byteOffset++
-		}
-		decoded[i] = []int{start, byteOffset}
-	}
-	return decoded
+func decodeBinaryRegexpMatch(encoded string, match [2]int) [2]int {
+	start := utf8.RuneCountInString(encoded[:match[0]])
+	return [2]int{start, start + utf8.RuneCountInString(encoded[match[0]:match[1]])}
 }
 
 func decodeBinaryRegexpBytes(encoded string) string {

@@ -138,6 +138,60 @@ func Test_BuiltIn_RegexpReplaceStartsAtRequestedPosition(t *testing.T) {
 	}
 }
 
+func Test_BuiltIn_RegexpPositiveOccurrenceReturnsOnlyRequestedMatch(t *testing.T) {
+	op := newOpBuiltInRegexp()
+	const subject = "aaaaaaaaaaaaaaaa"
+
+	for _, binary := range []bool{false, true} {
+		reg, err := op.regMap.getRegularMatcherWithMode("a", binary)
+		require.NoError(t, err)
+		match, found, err := op.regMap.regexpNthMatchAtOrAfter(reg, "a", subject, 12, binary, 1)
+		require.NoError(t, err)
+		require.True(t, found)
+		require.Equal(t, [2]int{12, 13}, match,
+			"only the requested match is retained, binary=%v", binary)
+	}
+
+	got, err := op.regMap.regularReplace("a", subject, "X", 13, 0)
+	require.NoError(t, err)
+	require.Equal(t, "aaaaaaaaaaaaXXXX", got)
+}
+
+func Test_BuiltIn_RegexpStartAwareIteratorMatchesFreshSearchForContextFreePatterns(t *testing.T) {
+	op := newOpBuiltInRegexp()
+	const subject = "aba中a"
+	for _, pattern := range []string{"a", "a+", "a*", ".", "中|b", "[ab]+"} {
+		reg, err := op.regMap.getRegularMatcher(pattern)
+		require.NoError(t, err)
+		for _, start := range []int{0, 1, 2, 3, 6} {
+			for _, limit := range []int{1, 2, -1} {
+				expected := reg.FindAllStringIndex(subject[start:], limit)
+				for i := range expected {
+					expected[i][0] += start
+					expected[i][1] += start
+				}
+				actual := make([][]int, 0, len(expected))
+				visitLimit := int64(limit)
+				if limit < 0 {
+					visitLimit = 0
+				}
+				err := op.regMap.regexpVisitAtOrAfter(
+					reg, pattern, subject, start, false, visitLimit,
+					func(matchStart, matchEnd int) {
+						actual = append(actual, []int{matchStart, matchEnd})
+					})
+				require.NoError(t, err)
+				require.Len(t, actual, len(expected),
+					"pattern=%q start=%d limit=%d", pattern, start, limit)
+				for i := range expected {
+					require.Equal(t, expected[i], actual[i],
+						"pattern=%q start=%d limit=%d match=%d", pattern, start, limit, i)
+				}
+			}
+		}
+	}
+}
+
 func Test_BuiltIn_RegexpBinaryPositions(t *testing.T) {
 	for _, oid := range []types.T{types.T_binary, types.T_varbinary, types.T_blob} {
 		t.Run(oid.String(), func(t *testing.T) {
@@ -402,6 +456,39 @@ func BenchmarkRegexpReplaceModes(b *testing.B) {
 			b.ReportAllocs()
 			for i := 0; i < b.N; i++ {
 				if _, err := op.regMap.regularReplaceWithMode(".", tc.value, "X", 1, 0, tc.binary); err != nil {
+					b.Fatal(err)
+				}
+			}
+		})
+	}
+}
+
+func BenchmarkRegexpPositionNearEndDenseMatches(b *testing.B) {
+	const size = 1 << 20
+	subject := strings.Repeat("a", size)
+	position := int64(size - 7)
+	for _, tc := range []struct {
+		name       string
+		binary     bool
+		replaceAll bool
+	}{
+		{name: "instr_text"},
+		{name: "instr_binary_ascii", binary: true},
+		{name: "replace_all_text", replaceAll: true},
+	} {
+		b.Run(tc.name, func(b *testing.B) {
+			op := newOpBuiltInRegexp()
+			b.ReportAllocs()
+			for i := 0; i < b.N; i++ {
+				if tc.replaceAll {
+					if _, err := op.regMap.regularReplaceWithMode(
+						"a", subject, "X", position, 0, tc.binary); err != nil {
+						b.Fatal(err)
+					}
+					continue
+				}
+				if _, err := op.regMap.regularInstrWithMode(
+					"a", subject, position, 1, 0, tc.binary); err != nil {
 					b.Fatal(err)
 				}
 			}
