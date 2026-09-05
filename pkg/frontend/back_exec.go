@@ -41,6 +41,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/schedule"
 	"github.com/matrixorigin/matrixone/pkg/util"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
 	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace"
@@ -409,6 +410,12 @@ func doComQueryInBack(
 		StorageEngine: pu.StorageEngine,
 		Buf:           backSes.buf,
 	}
+	// Seed the child process before planning. Internal SQL can be generated
+	// while the first back-session compile is being built, before
+	// Compile.SetQuerySchedulingIntent runs. Keep both parts of the parent
+	// snapshot independent of the mutable backSession maps.
+	proc.Base.SessionInfo.CNLabels = maps.Clone(backSes.label)
+	proc.Base.SessionInfo.QuerySchedulingIntent = querySchedulingIntent(backSes)
 	proc.SetAffectedRows(backSes.lastAffectedRows)
 	bindBackExecSession(proc, backSes)
 	proc.SetStmtProfile(&backSes.stmtProfile)
@@ -1023,7 +1030,13 @@ func getResultSet(ctx context.Context, bh BackgroundExec) ([]ExecResult, error) 
 
 type backSession struct {
 	feSessionImpl
-	parentBackSession               *backSession
+	parentBackSession *backSession
+	// routingIntent is the immutable statement-owned scheduling snapshot. A
+	// back session has no process of its own, so it must keep the snapshot here
+	// until doComQueryInBack seeds the child process. In particular, this keeps
+	// strict-pool and worker-cap policy out of generated child SQL text.
+	routingIntent                   schedule.SchedulingIntent
+	hasRoutingIntent                bool
 	effectiveMatrixOneNativeMode    bool
 	hasEffectiveMatrixOneNativeMode bool
 	forcePessimisticRC              bool
@@ -1063,11 +1076,26 @@ func (backSes *backSession) initFeSes(
 	backSes.resultBatches = nil
 	backSes.derivedStmt = false
 	backSes.label = maps.Clone(ses.getCNLabels())
+	backSes.routingIntent = schedule.SchedulingIntent{}
+	backSes.hasRoutingIntent = false
 	backSes.timeZone = ses.GetTimeZone()
 	backSes.respr = defResper
 	backSes.service = ses.GetService()
 	if parent, ok := ses.(*backSession); ok {
 		backSes.parentBackSession = parent
+		if parent.hasRoutingIntent {
+			backSes.routingIntent = parent.routingIntent
+			backSes.hasRoutingIntent = true
+		}
+	} else if parent, ok := ses.(*Session); ok && parent.GetQueryInProgress() {
+		// The client process is rebuilt at every statement boundary and carries
+		// the current effective snapshot. Only copy it while that statement is
+		// active; otherwise a later background task could borrow a stale hint
+		// from the previous client statement.
+		if proc := parent.GetProc(); proc != nil && proc.Base != nil {
+			backSes.routingIntent = proc.GetSessionInfo().QuerySchedulingIntent
+			backSes.hasRoutingIntent = true
+		}
 	}
 	return backSes
 }
@@ -1098,7 +1126,17 @@ func (backSes *backSession) InitBackExec(txnOp TxnOperator, db string, callBack 
 	} else if backSes.upstream != nil {
 		// XXXSP
 		// If we have an upstream, use it.
-		return backSes.upstream.InitBackExec(nil, db, callBack, opts...)
+		be := backSes.upstream.InitBackExec(nil, db, callBack, opts...)
+		// The nil-txn path deliberately delegates construction to the root
+		// session. Preserve the statement-owned routing snapshot on the
+		// delegated back session as well; otherwise nested internal SQL would
+		// silently fall back to the root session's labels and scheduling vars.
+		if nested, ok := be.(*backExec); ok && nested.backSes != nil {
+			nested.backSes.label = maps.Clone(backSes.label)
+			nested.backSes.routingIntent = backSes.routingIntent
+			nested.backSes.hasRoutingIntent = backSes.hasRoutingIntent
+		}
+		return be
 	} else {
 		panic("backSession does not support non-txn-shared backExec recursively")
 	}
@@ -1355,8 +1393,16 @@ func (backSes *backSession) GetSessionSysVar(name string) (interface{}, error) {
 		return int64(1), nil
 	case "sql_mode":
 		return "", nil
+	case queryMaxWorkers, queryPoolStrict:
+		if backSes.upstream != nil {
+			return backSes.upstream.GetSessionSysVar(name)
+		}
+		return nil, nil
 	case "foreign_key_checks", "mo_table_stats.force_update", "mo_table_stats.use_old_impl", "mo_table_stats.reset_update_time":
-		return backSes.upstream.GetSessionSysVar(name)
+		if backSes.upstream != nil {
+			return backSes.upstream.GetSessionSysVar(name)
+		}
+		return nil, nil
 	}
 	return nil, nil
 }

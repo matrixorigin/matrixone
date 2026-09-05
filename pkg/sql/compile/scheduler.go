@@ -565,6 +565,14 @@ func currentCNWorkerFromCandidates(
 }
 
 func (c *Compile) decideQueryPlacement() (schedule.QueryDecision, error) {
+	// Publish the fully materialized policy before candidate discovery. A
+	// frontend background executor can be created by code reached from the
+	// discovery/resolution path, and it must inherit the same worker-set
+	// snapshot rather than reconstructing it from generated SQL.
+	intent := c.effectiveQuerySchedulingIntent()
+	if c.proc != nil && c.proc.Base != nil {
+		c.proc.Base.SessionInfo.QuerySchedulingIntent = intent
+	}
 	decision, failureCategory, err := c.evaluateQueryPlacement(
 		c.querySchedulingContext(),
 		queryCandidateModeExecution,
