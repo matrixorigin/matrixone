@@ -147,8 +147,9 @@ func TestGovernorUnconfiguredBudgetsAShareOfTheMachine(t *testing.T) {
 	c := newBoundCache(t)
 	sp := govProc(t, c, 1, caps{}, caps{})
 
-	tenant, sys, lerr := c.limits(sp)
-	require.NoError(t, lerr)
+	tenant, sys, serrs := c.limits(sp)
+	require.NoError(t, serrs.host)
+	require.NoError(t, serrs.device)
 	require.True(t, tenant.unset(), "nothing configured for the tenant")
 	require.False(t, sys.unset(), "but the CN-wide budget is set, not unlimited")
 	auto, hostErr, devErr := c.defaultLimits()
@@ -730,8 +731,10 @@ func TestGovernorArenaPassesDoNotDoubleCountFreedBytes(t *testing.T) {
 
 // A DROP releases the index's named-snapshot generations too. They are keyed <table>@<ts>, which
 // no exact-key Remove matches, and the staleness sweep skips them -- so before this they stayed
-// resident (pinning VRAM for the cuVS algorithms) until their TTL ran out.
-func TestRemoveAlsoDropsSnapshotGenerations(t *testing.T) {
+// resident (pinning VRAM for the cuVS algorithms) until their TTL ran out. Which generations an
+// APPEND keeps is TestRemoveKeepsSnapshotGenerationsAndDDLClearsThem; this one pins that the
+// prefix does not over-match into a neighbouring index.
+func TestDropAlsoDropsSnapshotGenerations(t *testing.T) {
 	c := newBoundCache(t)
 	const tbl = "__mo_index_secondary_dropme"
 	other := "__mo_index_secondary_keepme"
@@ -744,7 +747,7 @@ func TestRemoveAlsoDropsSnapshotGenerations(t *testing.T) {
 	require.NoError(t, searchAt(c, other, &countingSearch{host: 10}))
 	require.NoError(t, searchAt(c, SnapshotKey(other, snapshotTS(100)), &countingSearch{host: 10}))
 
-	c.Remove(tbl)
+	c.RemoveAllGenerations(tbl, "ddl")
 
 	require.False(t, isResident(c, tbl), "the current generation goes")
 	require.False(t, isResident(c, snapA), "and every snapshot generation of the same index")
@@ -768,9 +771,10 @@ func (m *invalidStateSearch) Search(*sqlexec.SqlProcess, any, vectorindex.Runtim
 	return []int64{1}, []float64{2.0}, nil
 }
 
-// An ErrInvalidState that did NOT come from eviction must not block the retry. The entry is still
-// STATUS_LOADED and in the map, so nothing will ever close its destroyed channel; an unguarded
-// wait there hangs the query goroutine forever with no cancellation.
+// An ErrInvalidState that did NOT come from eviction is the ALGORITHM's own error. It must
+// neither block on a teardown that will never happen -- the entry is still STATUS_LOADED and in
+// the map, so nothing will ever close its destroyed channel -- nor be retried: the retry
+// re-invokes the same backend with nothing changed. It is returned to the caller.
 func TestSearchRetryDoesNotWaitWhenNothingIsBeingDestroyed(t *testing.T) {
 	c := newBoundCache(t)
 	algo := &invalidStateSearch{}
@@ -783,11 +787,12 @@ func TestSearchRetryDoesNotWaitWhenNothingIsBeingDestroyed(t *testing.T) {
 
 	select {
 	case err := <-done:
-		require.NoError(t, err, "the retry must reach the second, succeeding Search")
+		require.Error(t, err, "the backend's own error reaches the caller")
+		require.Contains(t, err.Error(), "txn client is in pause state")
 	case <-time.After(20 * time.Second):
 		t.Fatal("Search blocked on a teardown that will never happen")
 	}
-	require.EqualValues(t, 2, algo.calls.Load())
+	require.EqualValues(t, 1, algo.calls.Load(), "and the backend is called once, not spun on")
 }
 
 // The FIRST sys-cap read has no last-known value to fall back on: c.sysLimit.value is still

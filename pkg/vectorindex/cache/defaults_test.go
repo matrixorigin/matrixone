@@ -93,8 +93,9 @@ func TestTenantOverrideCannotBypassAutomaticCNLimit(t *testing.T) {
 	require.NoError(t, err)
 
 	sp := govProc(t, c, 1, caps{host: defaults.host * 2, device: defaults.device * 2}, caps{})
-	tenant, sys, err := c.limits(sp)
-	require.NoError(t, err)
+	tenant, sys, serrs := c.limits(sp)
+	require.NoError(t, serrs.host)
+	require.NoError(t, serrs.device)
 	require.Equal(t, defaults, sys, "the CN budget ignores what the tenant asked for")
 	require.Greater(t, tenant.host, sys.host)
 }

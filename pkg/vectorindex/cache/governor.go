@@ -155,6 +155,31 @@ func (c caps) less(incoming caps) caps {
 	return out
 }
 
+// incomingOf picks one arena's bytes out of a not-yet-built caps pair.
+func incomingOf(host, device int64, a arena) int64 {
+	if a == arenaHost {
+		return host
+	}
+	return device
+}
+
+// sizingErrs carries a sizing failure PER ARENA, so admission can ignore one for an arena this
+// arrival does not use. A GPU that cannot be queried must not refuse an hnsw load on a CN whose
+// RAM is perfectly well known -- and with the GPU cap unset, eagerly returning the device error
+// did exactly that: a failing CUDA probe took the whole CN out of service for host-only indexes.
+type sizingErrs struct {
+	host   error
+	device error
+}
+
+// of returns the sizing failure for one arena, or nil.
+func (e sizingErrs) of(a arena) error {
+	if a == arenaHost {
+		return e.host
+	}
+	return e.device
+}
+
 // arena names the two budgets, kept apart because RAM and VRAM are not interchangeable.
 type arena int
 
@@ -183,6 +208,51 @@ func (u usage) of(a arena) int64 {
 	return u.device
 }
 
+// arrival is a load that has PASSED admission but is not resident yet: its entry is in the map
+// with a size published by Preload, but Status is not STATUS_LOADED, so snapshotResidents does
+// not see it. Without this record concurrent cold misses are invisible to each other -- every
+// one of N simultaneous arrivals reads an empty arena, takes the sole-occupant bypass meant for
+// a genuinely lone index, and admits. N indexes then land on a budget sized for one.
+//
+// seq orders them. An arrival counts only the arrivals AHEAD of it, which is what makes the
+// outcome first-come-first-served rather than mutual refusal: if two arrivals each counted the
+// other, two loads that fit one at a time would refuse each other and neither would run. The
+// earliest gets the room; the ones behind it get the overload error and can retry.
+type arrival struct {
+	seq     uint64
+	account uint32
+	size    caps
+}
+
+// reserve records an arrival and returns the release to call once it is resident or has failed.
+// Release is idempotent.
+func (c *VectorIndexCache) reserve(key string, account uint32, size caps) (*arrival, func()) {
+	a := &arrival{seq: c.arrivalSeq.Add(1), account: account, size: size}
+	c.inflight.Store(key, a)
+	return a, func() {
+		c.inflight.CompareAndDelete(key, a)
+	}
+}
+
+// pendingAhead sums the arrivals that reserved BEFORE this one, per account and in total.
+func (c *VectorIndexCache) pendingAhead(self *arrival) (perAccount map[uint32]usage, total usage) {
+	perAccount = make(map[uint32]usage)
+	c.inflight.Range(func(_, value any) bool {
+		other, ok := value.(*arrival)
+		if !ok || other == self || other.seq >= self.seq {
+			return true
+		}
+		acc := perAccount[other.account]
+		acc.host += other.size.host
+		acc.device += other.size.device
+		perAccount[other.account] = acc
+		total.host += other.size.host
+		total.device += other.size.device
+		return true
+	})
+	return perAccount, total
+}
+
 // resident is one evictable entry, carrying what the governor needs to choose a victim
 // without holding anything: its key, its cost, and its coldness.
 type resident struct {
@@ -204,12 +274,12 @@ type resident struct {
 // gone, and could veto a load that in fact fits.
 //
 // Called with NO entry lock held -- see VectorIndexSearch.Preload for why that matters.
-func (c *VectorIndexCache) makeRoom(sqlproc *sqlexec.SqlProcess, key string, entry *VectorIndexSearch) error {
+func (c *VectorIndexCache) makeRoom(sqlproc *sqlexec.SqlProcess, key string, entry *VectorIndexSearch) (func(), error) {
 	// Preload published its estimate to these atomics under the entry lock; never call
 	// GetIndexSize from here, where no lock is held and Destroy may be nilling algo state.
 	host, device := entry.hostBytes.Load(), entry.deviceBytes.Load()
 	if host <= 0 && device <= 0 {
-		return nil
+		return func() {}, nil
 	}
 	// The account that OWNS the bytes, not the one that asked: a cross-account snapshot read
 	// executes as the snapshot's tenant, so the resident entry belongs to that tenant's budget.
@@ -219,18 +289,26 @@ func (c *VectorIndexCache) makeRoom(sqlproc *sqlexec.SqlProcess, key string, ent
 			account = a
 		}
 	}
-	tenant, sys, lerr := c.limits(sqlproc)
-	if lerr != nil {
-		// Cannot size the cache, so cannot decide whether this arrival fits. Refuse rather than
-		// admit it blind -- the error names the variable to set.
-		return lerr
+	tenant, sys, sizeErrs := c.limits(sqlproc)
+	// A sizing failure only blocks an arena this arrival OCCUPIES. A host-only index does not
+	// care that the GPU could not be counted, and refusing it for that reason takes a CN with
+	// perfectly good RAM sizing out of service for hnsw and fulltext2.
+	for _, a := range []arena{arenaHost, arenaDevice} {
+		if incomingOf(host, device, a) > 0 {
+			if serr := sizeErrs.of(a); serr != nil {
+				return nil, serr
+			}
+		}
 	}
 	if tenant.unset() && sys.unset() {
-		return nil
+		return func() {}, nil
 	}
 	// Reclaim against caps reduced by what is about to arrive, so the room freed is room the
 	// incoming index can actually occupy.
 	incoming := caps{host: host, device: device}
+	// Claim a place in line BEFORE reclaiming, so a load that starts while this one is still
+	// evicting cannot read the arena as empty and slip past the sole-occupant bypass.
+	self, release := c.reserve(key, account, incoming)
 	c.enforce(account, tenant.less(incoming), sys.less(incoming), key)
 
 	// ADMISSION CONTROL. The reclaim above took every IDLE entry it could; if the arrival still
@@ -241,10 +319,11 @@ func (c *VectorIndexCache) makeRoom(sqlproc *sqlexec.SqlProcess, key string, ent
 	//
 	// The check is deliberately AFTER the reclaim: a cache merely full of cold entries admits
 	// the newcomer normally. Only genuine overload -- nothing idle left to give -- refuses.
-	if over := c.overBudget(account, tenant, sys, key, incoming); over != nil {
-		return over
+	if over := c.overBudget(account, tenant, sys, key, incoming, self); over != nil {
+		release()
+		return nil, over
 	}
-	return nil
+	return release, nil
 }
 
 // overBudget reports why an arrival cannot be seated, or nil when it can.
@@ -263,8 +342,21 @@ func (c *VectorIndexCache) makeRoom(sqlproc *sqlexec.SqlProcess, key string, ent
 // indexes stay resident TOGETHER. Without this an operator's index would become unloadable the
 // moment it outgrew a number derived from the machine, which is a capacity limit dressed up as
 // a cache policy.
-func (c *VectorIndexCache) overBudget(account uint32, tenant, sys caps, key string, incoming caps) error {
+func (c *VectorIndexCache) overBudget(account uint32, tenant, sys caps, key string, incoming caps, self *arrival) error {
 	_, perAccount, total := c.snapshotResidents(key)
+	// Arrivals ahead in line hold room that is spoken for but not yet occupied; counting them
+	// is what stops N concurrent cold misses from each admitting against an empty arena.
+	if self != nil {
+		pendingAcct, pendingTotal := c.pendingAhead(self)
+		for acct, u := range pendingAcct {
+			cur := perAccount[acct]
+			cur.host += u.host
+			cur.device += u.device
+			perAccount[acct] = cur
+		}
+		total.host += pendingTotal.host
+		total.device += pendingTotal.device
+	}
 	for _, a := range []arena{arenaHost, arenaDevice} {
 		want := incoming.of(a)
 		if want <= 0 {
@@ -306,12 +398,12 @@ func (c *VectorIndexCache) chargeAndEnforce(sqlproc *sqlexec.SqlProcess, key str
 	// idxcron's background work already reports (idxcron/cmd.go builds its SqlContext with
 	// catalog.System_Account). Leaving it unattributed would exempt it from every cap.
 
-	tenant, sys, lerr := c.limits(sqlproc)
-	if lerr != nil {
-		// The load already happened; failing here would not un-spend it. Enforcement is simply
-		// not possible until the operator sets a budget, which the error names.
-		logutil.Warnf("[veccache] cannot enforce the cache budget: %v", lerr)
-		return
+	tenant, sys, sizeErrs := c.limits(sqlproc)
+	if sizeErrs.host != nil || sizeErrs.device != nil {
+		// The load already happened; failing here would not un-spend it. Enforcement of an
+		// unsized arena is simply not possible until the operator sets a budget.
+		logutil.Warnf("[veccache] cannot enforce the cache budget (host=%v device=%v)",
+			sizeErrs.host, sizeErrs.device)
 	}
 	if tenant.unset() && sys.unset() {
 		return
@@ -324,8 +416,8 @@ func (c *VectorIndexCache) chargeAndEnforce(sqlproc *sqlexec.SqlProcess, key str
 // the arena ceilings below rather than to unlimited -- so an unreadable variable still yields a
 // governed cache. Unreadable never FAILS the load: the governor is a memory policy, not a
 // correctness gate, and must not fail a query because a variable could not be read.
-func (c *VectorIndexCache) limits(sqlproc *sqlexec.SqlProcess) (tenant, sys caps, err error) {
-	tenant, sys = c.tenantCacheLimits(sqlproc), c.sysCacheLimit(sqlproc)
+func (c *VectorIndexCache) limits(sqlproc *sqlexec.SqlProcess) (caps, caps, sizingErrs) {
+	tenant, sys := c.tenantCacheLimits(sqlproc), c.sysCacheLimit(sqlproc)
 
 	// Resolved PER ARENA, not per pair. enforce() skips an arena whose tenant and sys caps are
 	// both <= 0, so each arena has to reach a positive number on its own; a pair-wide test
@@ -360,22 +452,25 @@ func (c *VectorIndexCache) limits(sqlproc *sqlexec.SqlProcess) (tenant, sys caps
 	// that cannot be queried says nothing about host memory, and joining them would refuse every
 	// hnsw and fulltext2 load on a CN whose RAM is perfectly well known.
 	if sys.host > 0 && sys.device > 0 {
-		return tenant, sys, nil
+		return tenant, sys, sizingErrs{}
 	}
 	auto, hostErr, deviceErr := c.defaultLimits()
+	var errs sizingErrs
 	if sys.host <= 0 {
 		if hostErr != nil {
-			return tenant, sys, hostErr
+			errs.host = hostErr
+		} else {
+			sys.host = auto.host
 		}
-		sys.host = auto.host
 	}
 	if sys.device <= 0 {
 		if deviceErr != nil {
-			return tenant, sys, deviceErr
+			errs.device = deviceErr
+		} else {
+			sys.device = auto.device
 		}
-		sys.device = auto.device
 	}
-	return tenant, sys, nil
+	return tenant, sys, errs
 }
 
 // accountCacheLimit reads ONE account's caps from the catalog, memoized per account for
@@ -653,16 +748,41 @@ func (c *VectorIndexCache) reclaim(list []resident, a arena, limit, used int64, 
 	// and took busy ones. That kept the cache under its limit at the cost of killing live
 	// queries for an arrival, which is the wrong trade for a server.
 	before := c.evictions.Load()
-	freed := c.reclaimPass(list, a, limit, used, eligible, true)
+	freed := c.reclaimPass(list, a, limit, used, eligible)
 	if n := c.evictions.Load() - before; n > 0 {
-		logutil.Infof("index cache governor: reclaimed %d bytes from %d idle %s entries to stay under %d bytes",
-			freed, n, a, limit)
+		c.logReclaim(a, freed, n, limit)
 	}
 	return freed
 }
 
+// evictionLogInterval bounds how often an eviction reaches the INFO log.
+const evictionLogInterval = 10 * time.Second
+
+// logReclaim reports a pass that freed something. Every pass goes to DEBUG; INFO gets at most
+// one line per arena per evictionLogInterval, carrying the totals since start rather than this
+// pass alone.
+//
+// A cap that binds evicts on EVERY miss -- two indexes alternating under a tight budget do it
+// forever -- so a line per pass turns an ordinary steady state into a log storm that buries
+// whatever else is being diagnosed. The rate-limited line keeps the condition visible; the
+// numbers to alert on are the EvictionStats counters, which lose nothing to sampling.
+func (c *VectorIndexCache) logReclaim(a arena, freed, entries, limit int64) {
+	logutil.Debugf("index cache governor: reclaimed %d bytes from %d idle %s entries to stay under %d bytes",
+		freed, entries, a, limit)
+
+	now := time.Now().UnixNano()
+	last := c.lastEvictLog[a].Load()
+	if now-last < int64(evictionLogInterval) || !c.lastEvictLog[a].CompareAndSwap(last, now) {
+		return
+	}
+	total, bytes := c.EvictionStats()
+	logutil.Infof("index cache governor: reclaiming %s to stay under %d bytes (%d bytes from %d entries this pass; "+
+		"%d entries / %d bytes since start; at most one line per %s)",
+		a, limit, freed, entries, total, bytes, evictionLogInterval)
+}
+
 func (c *VectorIndexCache) reclaimPass(
-	list []resident, a arena, limit, used int64, eligible func(resident) bool, idleOnly bool,
+	list []resident, a arena, limit, used int64, eligible func(resident) bool,
 ) int64 {
 	var freed int64
 	for i := range list {
@@ -673,18 +793,15 @@ func (c *VectorIndexCache) reclaimPass(
 		if r.size.of(a) == 0 || !eligible(r) {
 			continue
 		}
-		if idleOnly && !r.entry.idle() {
-			continue
-		}
 		reason := fmt.Sprintf("%s_cache_size_limit", a)
 		limitVar := maxIndexCacheSizeVar
 		if a == arenaDevice {
 			limitVar = maxGpuIndexCacheSizeVar
 		}
-		// A false return means someone else already claimed the entry -- housekeeping, a
-		// stale sweep, or the other arena's pass. Its bytes are on their way back either
-		// way, but they are not ours to count.
-		if !c.evictEntry(r.key, r.entry, reason) {
+		// A false return means the entry was busy, or someone else already claimed it --
+		// housekeeping, a stale sweep, or the other arena's pass. Either way its bytes are
+		// not ours to count.
+		if !c.evictIdleEntry(r.key, r.entry, reason) {
 			continue
 		}
 		used -= r.size.of(a)

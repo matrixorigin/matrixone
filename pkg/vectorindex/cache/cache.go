@@ -76,6 +76,18 @@ func (e retryableLoadError) Unwrap() error {
 	return e.cause
 }
 
+// errIndexDestroyed is the CACHE's own "this entry is gone, retry" signal, and the only thing
+// the search retry loop reacts to. It is compared by IDENTITY, never by error code.
+//
+// The distinction is load-bearing. moerr.ErrInvalidState is a public code an ALGORITHM may
+// raise for its own reasons -- a paused txn client, a failed remote run -- and those are
+// permanent for this attempt. Retrying on the code meant a resident entry whose backend kept
+// failing was re-invoked forever: `loaded` stays true, the entry stays STATUS_LOADED and in the
+// map, so nothing ever changes and the loop spins. Gating on this sentinel keeps the retry to
+// the case it exists for -- the cache itself tore the entry down underneath the caller -- and
+// lets every backend error propagate on the first attempt.
+var errIndexDestroyed = moerr.NewInvalidStateNoCtx("Index destroyed")
+
 // NewRetryableLoadError marks a cache-internal load outcome that can be retried
 // after the exact failed entry is destroyed. Ordinary algorithm load errors,
 // including moerr.ErrInvalidState, must not use this marker.
@@ -316,22 +328,26 @@ func (s *VectorIndexSearch) awaitDestroyed(ctx context.Context) error {
 	}
 }
 
-// idle reports whether the entry's lock is free RIGHT NOW, i.e. no search is in flight on it.
+// tryClaimIdle takes the entry's search lock IF no search is in flight, and KEEPS it. The
+// caller owns the entry from here until it calls destroyClaimed or releaseClaim -- no search
+// can start in between, so the decision "this one is idle" is still true when the destroy runs.
 //
-// The governor uses this to choose a victim it can destroy without waiting: evictEntry calls
-// Destroy synchronously, and Destroy takes the write lock, so evicting an entry with a
-// long-running search parks the CACHE MISS that triggered the eviction behind that search.
-// A busy entry is skipped in favour of an idle one holding the same bytes.
+// The governor needs a victim it can destroy without waiting: destroy takes the same lock, so
+// taking a busy entry parks the CACHE MISS that triggered the eviction behind somebody else's
+// search. It used to ask with a TryLock/Unlock pair and then destroy later, which answered a
+// question about the past: a search starting in that window turned the "free" victim into
+// exactly the blocking destroy the check existed to avoid, and with no busy fallback left the
+// pass had already committed to this victim. Claiming and holding closes that window.
 //
-// Inherently a hint: a search can start between this returning true and Destroy locking. That
-// is fine for a policy choice -- being wrong costs the wait it would have cost anyway, and the
-// reclaim pass falls back to allowing busy victims rather than failing to free anything.
-func (s *VectorIndexSearch) idle() bool {
-	if !s.Mutex.TryLock() {
-		return false
-	}
+// Returns false when a search holds the lock; the caller moves on to the next candidate.
+func (s *VectorIndexSearch) tryClaimIdle() bool {
+	return s.Mutex.TryLock()
+}
+
+// releaseClaim drops a claim taken by tryClaimIdle without destroying the entry, for when a
+// later check (the map CAS, the eviction flag) rules the victim out.
+func (s *VectorIndexSearch) releaseClaim() {
 	s.Mutex.Unlock()
-	return true
 }
 
 func (s *VectorIndexSearch) Destroy() {
@@ -360,6 +376,20 @@ func (s *VectorIndexSearch) beginEviction(recheckTTL bool) bool {
 		}
 	}
 	return s.evicting.CompareAndSwap(false, true)
+}
+
+// destroyClaimed destroys an entry whose search lock the caller ALREADY holds via
+// tryClaimIdle, and releases it. Same work as DestroyWithReason, minus the acquire it would
+// deadlock on.
+func (s *VectorIndexSearch) destroyClaimed(reason string) {
+	defer func() {
+		s.Mutex.Unlock()
+		s.Cond.Broadcast()
+	}()
+	s.notifyCacheInvalidated(reason)
+	s.Algo.Destroy()
+	s.Status.Store(STATUS_DESTROYED)
+	s.markDestroyed()
 }
 
 func (s *VectorIndexSearch) DestroyWithReason(reason string) {
@@ -404,7 +434,7 @@ func (s *VectorIndexSearch) Preload(sqlproc *sqlexec.SqlProcess) error {
 	s.Mutex.Lock()
 	defer s.Mutex.Unlock()
 	if s.evicting.Load() {
-		return moerr.NewInvalidStateNoCtx("Index destroyed")
+		return errIndexDestroyed
 	}
 	if err := s.Algo.Preload(sqlproc); err != nil {
 		return err
@@ -430,7 +460,7 @@ func (s *VectorIndexSearch) Load(sqlproc *sqlexec.SqlProcess) error {
 		s.Cond.Broadcast()
 	}()
 	if s.evicting.Load() {
-		return moerr.NewInvalidStateNoCtx("Index destroyed")
+		return errIndexDestroyed
 	}
 
 	err := s.Algo.Load(sqlproc)
@@ -515,7 +545,7 @@ func (s *VectorIndexSearch) Search(sqlproc *sqlexec.SqlProcess, newalgo VectorIn
 		s.loadWaiters.Add(-1)
 	}
 	if s.evicting.Load() {
-		return nil, nil, moerr.NewInvalidStateNoCtx("Index destroyed")
+		return nil, nil, errIndexDestroyed
 	}
 	for s.Status.Load() == 0 {
 		s.loadWaiters.Add(1)
@@ -527,7 +557,7 @@ func (s *VectorIndexSearch) Search(sqlproc *sqlexec.SqlProcess, newalgo VectorIn
 	status := s.Status.Load()
 	if status >= STATUS_DESTROYED {
 		if status == STATUS_DESTROYED {
-			return nil, nil, moerr.NewInvalidStateNoCtx("Index destroyed")
+			return nil, nil, errIndexDestroyed
 		} else {
 			return nil, nil, moerr.NewInternalErrorNoCtx("Load index error")
 		}
@@ -538,7 +568,7 @@ func (s *VectorIndexSearch) Search(sqlproc *sqlexec.SqlProcess, newalgo VectorIn
 	// here. Search is therefore pure-read under the shared read lock — no mutation of the
 	// cached algo, so concurrent searches on one entry cannot race on its config.
 	if !s.extendForSearch() {
-		return nil, nil, moerr.NewInvalidStateNoCtx("Index destroyed")
+		return nil, nil, errIndexDestroyed
 	}
 	return s.Algo.Search(sqlproc, query, rt)
 }
@@ -556,7 +586,7 @@ func (s *VectorIndexSearch) SearchInto(sqlproc *sqlexec.SqlProcess, query any, r
 		s.loadWaiters.Add(-1)
 	}
 	if s.evicting.Load() {
-		return moerr.NewInvalidStateNoCtx("Index destroyed")
+		return errIndexDestroyed
 	}
 	for s.Status.Load() == 0 {
 		s.loadWaiters.Add(1)
@@ -566,12 +596,12 @@ func (s *VectorIndexSearch) SearchInto(sqlproc *sqlexec.SqlProcess, query any, r
 	status := s.Status.Load()
 	if status >= STATUS_DESTROYED {
 		if status == STATUS_DESTROYED {
-			return moerr.NewInvalidStateNoCtx("Index destroyed")
+			return errIndexDestroyed
 		}
 		return moerr.NewInternalErrorNoCtx("Load index error")
 	}
 	if !s.extendForSearch() {
-		return moerr.NewInvalidStateNoCtx("Index destroyed")
+		return errIndexDestroyed
 	}
 	return s.Algo.SearchInto(sqlproc, query, rt, out)
 }
@@ -592,6 +622,13 @@ type VectorIndexCache struct {
 	acctLimits     sync.Map     // accountID -> acctLimitEntry, for cross-account snapshot reads
 	evictions      atomic.Int64 // governor evictions since start, for EvictionStats
 	evictedBytes   atomic.Int64
+
+	// Wall-clock of the last eviction summary line, per arena; see logReclaim.
+	lastEvictLog [2]atomic.Int64
+
+	// Loads that have passed admission but are not resident yet. See arrival.
+	inflight   sync.Map // key -> *arrival
+	arrivalSeq atomic.Uint64
 
 	// The automatic per-arena budget, derived once from this machine's capacity. Computed
 	// lazily because it probes the host and the GPUs; see defaults.go.
@@ -655,27 +692,64 @@ func (c *VectorIndexCache) Once() {
 }
 
 func (c *VectorIndexCache) evictEntry(key string, expected *VectorIndexSearch, reason string) bool {
-	value, loaded := c.IndexMap.Load(key)
-	if !loaded {
-		return false
-	}
-	algo, ok := value.(*VectorIndexSearch)
-	if !ok || (expected != nil && algo != expected) || !algo.beginEviction(reason == "ttl_expired") {
-		return false
-	}
-	value, loaded = c.IndexMap.Load(key)
-	if !loaded || value != algo {
-		return false
-	}
-	// Publish the invalidation while the old entry still occupies the key. A
-	// replacement can only be inserted after CompareAndDelete, so it cannot
-	// observe a later generation bump from the old entry's blocked destroy.
-	algo.notifyCacheInvalidated(reason)
-	if !c.IndexMap.CompareAndDelete(key, algo) {
+	algo, ok := c.claimForEviction(key, expected, reason)
+	if !ok {
 		return false
 	}
 	algo.Destroy()
 	return true
+}
+
+// afterIdleClaim runs, when set, in the instant between deciding a victim is idle and
+// destroying it -- the window a check-then-destroy leaves open. Nil in production; a test sets
+// it to land a search there.
+var afterIdleClaim func(key string)
+
+// evictIdleEntry evicts key ONLY if no search is in flight on it, and holds that claim through
+// removal and destroy so the entry cannot become busy in between. Returns false if a search
+// holds it, or if it lost the same races evictEntry can lose.
+func (c *VectorIndexCache) evictIdleEntry(key string, expected *VectorIndexSearch, reason string) bool {
+	if expected == nil {
+		return false
+	}
+	if !expected.tryClaimIdle() {
+		return false
+	}
+	if afterIdleClaim != nil {
+		afterIdleClaim(key)
+	}
+	algo, ok := c.claimForEviction(key, expected, reason)
+	if !ok {
+		expected.releaseClaim()
+		return false
+	}
+	algo.destroyClaimed(reason)
+	return true
+}
+
+// claimForEviction wins the right to destroy key's entry: it must still be the expected entry,
+// must not already be evicting, and must survive removal from the map. It publishes the
+// invalidation while the old entry still occupies the key -- a replacement can only be inserted
+// after CompareAndDelete, so it cannot observe a later generation bump from the old entry's
+// blocked destroy.
+func (c *VectorIndexCache) claimForEviction(key string, expected *VectorIndexSearch, reason string) (*VectorIndexSearch, bool) {
+	value, loaded := c.IndexMap.Load(key)
+	if !loaded {
+		return nil, false
+	}
+	algo, ok := value.(*VectorIndexSearch)
+	if !ok || (expected != nil && algo != expected) || !algo.beginEviction(reason == "ttl_expired") {
+		return nil, false
+	}
+	value, loaded = c.IndexMap.Load(key)
+	if !loaded || value != algo {
+		return nil, false
+	}
+	algo.notifyCacheInvalidated(reason)
+	if !c.IndexMap.CompareAndDelete(key, algo) {
+		return nil, false
+	}
+	return algo, true
 }
 
 func (c *VectorIndexCache) discardFailedLoad(key string, algo *VectorIndexSearch) {
@@ -820,7 +894,8 @@ func (c *VectorIndexCache) Search(sqlproc *sqlexec.SqlProcess, key string, newal
 			// Overload: nothing idle left to reclaim, and live queries are not preempted
 			// for an arrival. Refuse before Load allocates anything, tearing this entry
 			// down exactly as a failed load would.
-			if rerr := c.makeRoom(sqlproc, key, algo); rerr != nil {
+			release, rerr := c.makeRoom(sqlproc, key, algo)
+			if rerr != nil {
 				if c.IndexMap.CompareAndDelete(key, algo) {
 					algo.destroyFailedLoad()
 				}
@@ -828,7 +903,13 @@ func (c *VectorIndexCache) Search(sqlproc *sqlexec.SqlProcess, key string, newal
 			}
 			// Remove only this exact failed entry, then destroy it without a
 			// key-wide invalidation hook; the loader owns reusable-state rollback.
-			err := algo.Load(sqlproc)
+			// The admission reservation is released on EVERY exit from Load --
+			// success, any failure branch below, or a panic -- because one left
+			// behind holds budget for a load that is not coming.
+			err := func() error {
+				defer release()
+				return algo.Load(sqlproc)
+			}()
 			if err != nil {
 				if algo.evicting.Load() {
 					// Another goroutine is tearing this wrapper down, and the next
@@ -858,15 +939,12 @@ func (c *VectorIndexCache) Search(sqlproc *sqlexec.SqlProcess, key string, newal
 		}
 		keys, distances, err = algo.Search(sqlproc, newalgo, query, rt)
 		if err != nil {
-			if moerr.IsMoErrCode(err, moerr.ErrInvalidState) {
-				// index destroyed by Remove() or HouseKeeping.  Retry -- but not before this
-				// wrapper has finished with the algo the next attempt reuses.
-				//
-				// Only wait when a teardown was actually CLAIMED. ErrInvalidState is not
-				// exclusive to eviction: an internal SQL under Algo.Search can surface one of
-				// its own (a paused txn client, a remote-run failure), and then this entry is
-				// still STATUS_LOADED and in the map, so nothing will ever close destroyed and
-				// an unguarded wait would block the query goroutine forever.
+			if errors.Is(err, errIndexDestroyed) {
+				// The CACHE tore this entry down underneath us -- retry. Gated on the private
+				// sentinel, never on moerr.ErrInvalidState: that code is also raised by an
+				// ALGORITHM for its own reasons, and retrying those spun forever because the
+				// resident entry stayed STATUS_LOADED and in the map, so the next attempt
+				// re-invoked the same failing backend with nothing changed.
 				// Only the LOADER waits: `loaded` means the entry was already resident and
 				// wraps another caller's algo, whose teardown touches nothing of ours, so
 				// waiting would park this query behind a stranger's in-flight search.
@@ -926,13 +1004,19 @@ func (c *VectorIndexCache) SearchInto(sqlproc *sqlexec.SqlProcess, key string, n
 				return perr
 			}
 			// See Search: refuse rather than preempt a live query.
-			if rerr := c.makeRoom(sqlproc, key, algo); rerr != nil {
+			release, rerr := c.makeRoom(sqlproc, key, algo)
+			if rerr != nil {
 				if c.IndexMap.CompareAndDelete(key, algo) {
 					algo.destroyFailedLoad()
 				}
 				return rerr
 			}
-			if err := algo.Load(sqlproc); err != nil {
+			// Released on every exit from Load; see Search.
+			lerr := func() error {
+				defer release()
+				return algo.Load(sqlproc)
+			}()
+			if err := lerr; err != nil {
 				if algo.evicting.Load() {
 					// Another goroutine is tearing this wrapper down, and the next
 					// attempt re-wraps the SAME algo -- wait for it to let go first.
@@ -961,11 +1045,9 @@ func (c *VectorIndexCache) SearchInto(sqlproc *sqlexec.SqlProcess, key string, n
 		}
 		err := algo.SearchInto(sqlproc, query, rt, out)
 		if err != nil {
-			if moerr.IsMoErrCode(err, moerr.ErrInvalidState) {
-				// index destroyed by Remove()/HouseKeeping — wait for the teardown to release
-				// the algo this loop reuses, then retry. Guarded on evicting for the same
-				// reason as Search: an ErrInvalidState raised inside Algo.SearchInto itself
-				// leaves nobody to close destroyed.
+			if errors.Is(err, errIndexDestroyed) {
+				// See Search: the private sentinel only. An ErrInvalidState from
+				// Algo.SearchInto itself is the algorithm's own error and is terminal.
 				// See Search: only the loader waits.
 				if !loaded && algo.evicting.Load() {
 					if werr := algo.awaitDestroyed(searchCtx(sqlproc)); werr != nil {
@@ -998,14 +1080,25 @@ func (c *VectorIndexCache) Remove(key string) {
 // The empty reason preserves the historical behavior for all other algorithms.
 func (c *VectorIndexCache) RemoveWithReason(key, reason string) {
 	c.evictEntry(key, nil, reason)
-	// Also drop this index's named-snapshot generations. They are keyed
-	// "<index table>@<physical>-<logical>", which no exact-key evict matches, and the
-	// staleness sweep deliberately skips them (a snapshot generation is immutable, so it is
-	// never "stale"). Without this a DROP INDEX / DROP TABLE / DROP DATABASE leaves every
-	// historical generation of the dropped index resident until its TTL expires -- pinning
-	// VRAM for the cuVS algorithms, and charging bytes to max_index_cache_size for an index
-	// that no longer exists. Callers invalidate by index table name, so doing it here fixes
-	// every one of them rather than asking each algorithm's DDL hook to remember.
+}
+
+// RemoveAllGenerations drops the index's CURRENT entry and every named-snapshot generation of
+// it. For DDL only -- CREATE, DROP INDEX, DROP TABLE, DROP DATABASE -- where the index table
+// itself is going away or being rebuilt, so its history is no longer readable.
+//
+// Snapshot generations are keyed "<index table>@<physical>-<logical>", which no exact-key evict
+// matches, and the staleness sweep deliberately skips them (a snapshot generation is immutable,
+// so it is never "stale"). Without this a drop leaves every historical generation resident until
+// its TTL expires -- pinning VRAM for the cuVS algorithms, and charging bytes to
+// max_index_cache_size for an index that no longer exists.
+//
+// It is deliberately NOT what Remove does. Remove is called on every ordinary CDC/ISCP append
+// (see each algorithm's sync.go), and an append does not invalidate a snapshot: the generation
+// is a read AT A PAST TIMESTAMP, whose contents the new rows cannot change. Clearing history
+// from the append path threw away every snapshot generation on every flush, so a workload that
+// both writes and reads snapshots reloaded them continuously.
+func (c *VectorIndexCache) RemoveAllGenerations(key, reason string) {
+	c.RemoveWithReason(key, reason)
 	if !IsSnapshotKey(key) {
 		c.removeSnapshotGenerations(key, reason)
 	}
