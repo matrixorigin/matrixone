@@ -343,7 +343,7 @@ func createPublication(ctx context.Context, bh BackgroundExec, cp *tree.CreatePu
 				return
 			}
 		}
-		if dbType != "" { //TODO: check the dat_type
+		if !isUserDatabaseType(dbType) {
 			return moerr.NewInternalErrorf(ctx, "database '%s' is not a user database", cp.Database)
 		}
 	} else {
@@ -554,7 +554,7 @@ func doAlterPublication(ctx context.Context, ses *Session, ap *tree.AlterPublica
 		if dbId, dbType, err = getDbIdAndType(ctx, bh, dbName); err != nil {
 			return err
 		}
-		if dbType != "" { //TODO: check the dat_type
+		if !isUserDatabaseType(dbType) {
 			return moerr.NewInternalErrorf(ctx, "database '%s' is not a user database", dbName)
 		}
 	}
@@ -646,6 +646,10 @@ func doAlterPublication(ctx context.Context, ses *Session, ap *tree.AlterPublica
 	}
 
 	return
+}
+
+func isUserDatabaseType(databaseType string) bool {
+	return databaseType == "" || databaseType == catalog.SystemDBTypeDataBranch
 }
 
 func doDropPublication(ctx context.Context, ses *Session, dp *tree.DropPublication) (err error) {
