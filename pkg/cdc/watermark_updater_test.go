@@ -24,6 +24,7 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -44,8 +45,25 @@ type wmMockSQLExecutor struct {
 type retryableMockExecutor struct {
 	mu            sync.Mutex
 	failRemaining int
+	failOnCall    int
 	execCalls     int
 	lastSQL       string
+}
+
+type delayedWatermarkBatchExecutor struct {
+	mu             sync.Mutex
+	queryStarted   chan struct{}
+	releaseQuery   chan struct{}
+	queryStartOnce sync.Once
+	rowExists      bool
+	errMsgWrites   int
+	deleteCalls    int
+}
+
+type blockingErrorWatermarkExecutor struct {
+	writeStarted chan struct{}
+	releaseWrite chan struct{}
+	startOnce    sync.Once
 }
 
 type failAddWatermarkExecutor struct {
@@ -57,6 +75,9 @@ func (m *retryableMockExecutor) Exec(_ context.Context, sql string, _ ie.Session
 	defer m.mu.Unlock()
 	m.execCalls++
 	m.lastSQL = sql
+	if m.failOnCall == m.execCalls {
+		return moerr.NewInternalErrorNoCtx("mock exec failure")
+	}
 	if m.failRemaining > 0 {
 		m.failRemaining--
 		return moerr.NewInternalErrorNoCtx("mock exec failure")
@@ -69,6 +90,60 @@ func (m *retryableMockExecutor) Query(_ context.Context, _ string, _ ie.SessionO
 }
 
 func (m *retryableMockExecutor) ApplySessionOverride(_ ie.SessionOverrideOptions) {}
+
+func (m *delayedWatermarkBatchExecutor) Exec(
+	_ context.Context,
+	sql string,
+	_ ie.SessionOverrideOptions,
+) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	switch {
+	case strings.HasPrefix(sql, "DELETE FROM `mo_catalog`.`mo_cdc_watermark`"):
+		m.rowExists = false
+		m.deleteCalls++
+	case strings.Contains(sql, "ON DUPLICATE KEY UPDATE err_msg"):
+		m.rowExists = true
+		m.errMsgWrites++
+	}
+	return nil
+}
+
+func (m *delayedWatermarkBatchExecutor) Query(
+	_ context.Context,
+	_ string,
+	_ ie.SessionOverrideOptions,
+) ie.InternalExecResult {
+	m.queryStartOnce.Do(func() { close(m.queryStarted) })
+	<-m.releaseQuery
+	return &InternalExecResultForTest{
+		resultSet: &MysqlResultSetForTest{Data: [][]interface{}{}},
+	}
+}
+
+func (m *delayedWatermarkBatchExecutor) ApplySessionOverride(_ ie.SessionOverrideOptions) {}
+
+func (m *blockingErrorWatermarkExecutor) Exec(
+	_ context.Context,
+	sql string,
+	_ ie.SessionOverrideOptions,
+) error {
+	if strings.Contains(sql, "ON DUPLICATE KEY UPDATE err_msg") {
+		m.startOnce.Do(func() { close(m.writeStarted) })
+		<-m.releaseWrite
+	}
+	return nil
+}
+
+func (m *blockingErrorWatermarkExecutor) Query(
+	_ context.Context,
+	_ string,
+	_ ie.SessionOverrideOptions,
+) ie.InternalExecResult {
+	return &InternalExecResultForTest{}
+}
+
+func (m *blockingErrorWatermarkExecutor) ApplySessionOverride(_ ie.SessionOverrideOptions) {}
 
 func (m *failAddWatermarkExecutor) Exec(_ context.Context, sql string, _ ie.SessionOverrideOptions) error {
 	if strings.HasPrefix(sql, "INSERT INTO `mo_catalog`.`mo_cdc_watermark`") {
@@ -190,7 +265,7 @@ func TestWatermarkUpdater_CommitRetrySuccess(t *testing.T) {
 
 	errMsg, err := updater.execBatchUpdateWM()
 	require.Error(t, err)
-	require.Contains(t, errMsg, "commit sql")
+	require.Contains(t, errMsg, "commit watermark batch")
 	require.Contains(t, updater.cacheUncommitted, key)
 	require.Equal(t, uint32(1), updater.commitFailureCount[key])
 	_, opened := updater.commitCircuitOpen[key]
@@ -213,6 +288,310 @@ func TestWatermarkUpdater_CommitRetrySuccess(t *testing.T) {
 	require.False(t, ok)
 	_, ok = updater.commitCircuitOpen[key]
 	require.False(t, ok)
+}
+
+func TestWatermarkUpdater_BoundedBatchPartialFailureRetriesWithoutRegression(t *testing.T) {
+	exec := &retryableMockExecutor{failOnCall: 2}
+	updater := NewCDCWatermarkUpdater(t.Name(), exec)
+	keys := make([]WatermarkKey, watermarkWriteMaxRows+1)
+	updater.Lock()
+	for i := range keys {
+		keys[i] = WatermarkKey{
+			AccountId: 1,
+			TaskId:    "task",
+			DBName:    "db",
+			TableName: fmt.Sprintf("table-%03d", i),
+		}
+		updater.cacheUncommitted[keys[i]] = types.BuildTS(int64(i+1), 1)
+	}
+	updater.Unlock()
+	updater.committingBuffer = append(updater.committingBuffer, NewCommittingWMJob(context.Background()))
+
+	errMsg, err := updater.execBatchUpdateWM()
+	require.Error(t, err)
+	require.Contains(t, errMsg, "batch 2/2")
+	require.Equal(t, 2, exec.execCalls)
+	require.Len(t, updater.cacheUncommitted, len(keys))
+	require.Empty(t, updater.cacheCommitting)
+
+	newest := types.BuildTS(10_000, 1)
+	updater.Lock()
+	updater.cacheUncommitted[keys[0]] = newest
+	updater.Unlock()
+	updater.committingBuffer = append(updater.committingBuffer, NewCommittingWMJob(context.Background()))
+	errMsg, err = updater.execBatchUpdateWM()
+	require.NoError(t, err)
+	require.Empty(t, errMsg)
+	require.Equal(t, newest, updater.cacheCommitted[keys[0]])
+	require.Empty(t, updater.cacheUncommitted)
+}
+
+func TestWatermarkUpdater_DeleteTaskWatermarksDrainsAndFencesCache(t *testing.T) {
+	exec := &retryableMockExecutor{}
+	updater := NewCDCWatermarkUpdater("delete-task", exec)
+	updater.Start()
+	defer updater.Stop()
+
+	ctx := context.Background()
+	taskKey := WatermarkKey{
+		AccountId: 1,
+		TaskId:    "dropped-task",
+		DBName:    "db",
+		TableName: "dropped-table",
+	}
+	otherKey := WatermarkKey{
+		AccountId: 1,
+		TaskId:    "running-task",
+		DBName:    "db",
+		TableName: "running-table",
+	}
+	taskTS := types.BuildTS(10, 1)
+	otherTS := types.BuildTS(20, 1)
+	require.NoError(t, updater.UpdateWatermarkOnly(ctx, &taskKey, &taskTS))
+	require.NoError(t, updater.UpdateWatermarkOnly(ctx, &otherKey, &otherTS))
+
+	require.NoError(t, updater.DeleteTaskWatermarks(ctx, taskKey.AccountId, taskKey.TaskId))
+
+	updater.RLock()
+	_, taskUncommitted := updater.cacheUncommitted[taskKey]
+	_, taskCommitting := updater.cacheCommitting[taskKey]
+	_, taskCommitted := updater.cacheCommitted[taskKey]
+	otherCommitted, otherExists := updater.cacheCommitted[otherKey]
+	updater.RUnlock()
+	require.False(t, taskUncommitted)
+	require.False(t, taskCommitting)
+	require.False(t, taskCommitted)
+	require.True(t, otherExists)
+	require.Equal(t, otherTS, otherCommitted)
+
+	exec.mu.Lock()
+	require.Equal(t, CDCSQLBuilder.DeleteWatermarkSQL(taskKey.AccountId, taskKey.TaskId), exec.lastSQL)
+	require.GreaterOrEqual(t, exec.execCalls, 2)
+	exec.mu.Unlock()
+}
+
+func TestWatermarkUpdater_DeleteTaskWatermarksRetriesAfterFlushFailure(t *testing.T) {
+	exec := &retryableMockExecutor{failRemaining: 1}
+	updater := NewCDCWatermarkUpdater("delete-task-flush-failure", exec)
+	updater.Start()
+	defer updater.Stop()
+
+	ctx := context.Background()
+	key := WatermarkKey{
+		AccountId: 2,
+		TaskId:    "dropped-task",
+		DBName:    "db",
+		TableName: "table",
+	}
+	ts := types.BuildTS(30, 1)
+	require.NoError(t, updater.UpdateWatermarkOnly(ctx, &key, &ts))
+
+	require.Error(t, updater.DeleteTaskWatermarks(ctx, key.AccountId, key.TaskId))
+
+	updater.RLock()
+	_, uncommittedAfterFailure := updater.cacheUncommitted[key]
+	updater.RUnlock()
+	require.True(t, uncommittedAfterFailure)
+
+	exec.mu.Lock()
+	require.NotEqual(t, CDCSQLBuilder.DeleteWatermarkSQL(key.AccountId, key.TaskId), exec.lastSQL)
+	require.Equal(t, 1, exec.execCalls)
+	exec.mu.Unlock()
+
+	require.NoError(t, updater.DeleteTaskWatermarks(ctx, key.AccountId, key.TaskId))
+
+	updater.RLock()
+	_, uncommitted := updater.cacheUncommitted[key]
+	_, committing := updater.cacheCommitting[key]
+	_, committed := updater.cacheCommitted[key]
+	updater.RUnlock()
+	require.False(t, uncommitted)
+	require.False(t, committing)
+	require.False(t, committed)
+
+	exec.mu.Lock()
+	require.Equal(t, CDCSQLBuilder.DeleteWatermarkSQL(key.AccountId, key.TaskId), exec.lastSQL)
+	require.Equal(t, 3, exec.execCalls)
+	exec.mu.Unlock()
+}
+
+func TestWatermarkUpdater_DeleteTaskWatermarksFlushTimeoutKeepsDeleteAuthoritative(t *testing.T) {
+	exec := &delayedWatermarkBatchExecutor{
+		queryStarted: make(chan struct{}),
+		releaseQuery: make(chan struct{}),
+	}
+	// Model a barrier admitted behind the blocked onJobs batch. It cannot
+	// complete before the caller's cleanup deadline.
+	updater := NewCDCWatermarkUpdater(
+		"delete-task-delayed-batch",
+		exec,
+		WithCustomizedScheduleJob(func(_ *UpdaterJob) error { return nil }),
+	)
+	key := WatermarkKey{
+		AccountId: 4,
+		TaskId:    "dropped-task",
+		DBName:    "db",
+		TableName: "table",
+	}
+	watermark := types.BuildTS(50, 1)
+	readJob := NewGetOrAddCommittedWMJob(context.Background(), &key, &watermark)
+	errMsgJob := NewUpdateWMErrMsgJob(context.Background(), &key, "delayed error")
+	batchDone := make(chan struct{})
+	go func() {
+		updater.onJobs(readJob, errMsgJob)
+		close(batchDone)
+	}()
+
+	select {
+	case <-exec.queryStarted:
+	case <-time.After(time.Second):
+		require.FailNow(t, "watermark read batch did not block")
+	}
+
+	cleanupCtx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	err := updater.DeleteTaskWatermarks(cleanupCtx, key.AccountId, key.TaskId)
+	cancel()
+	require.ErrorIs(t, err, context.DeadlineExceeded)
+
+	exec.mu.Lock()
+	require.Equal(t, 0, exec.deleteCalls)
+	require.False(t, exec.rowExists)
+	exec.mu.Unlock()
+
+	// The already-admitted err_msg writer is allowed to finish while the
+	// tombstone rejects new work. Since no DELETE was reported successful yet,
+	// the lifecycle owner can retry and make deletion terminal afterward.
+	close(exec.releaseQuery)
+	select {
+	case <-batchDone:
+	case <-time.After(time.Second):
+		require.FailNow(t, "delayed watermark batch did not finish")
+	}
+	exec.mu.Lock()
+	require.Equal(t, 1, exec.errMsgWrites)
+	require.True(t, exec.rowExists)
+	exec.mu.Unlock()
+
+	updater.customized.scheduleJob = func(job *UpdaterJob) error {
+		updater.onJobs(job)
+		return nil
+	}
+	require.NoError(t, updater.DeleteTaskWatermarks(context.Background(), key.AccountId, key.TaskId))
+
+	exec.mu.Lock()
+	require.Equal(t, 1, exec.deleteCalls)
+	require.False(t, exec.rowExists)
+	exec.mu.Unlock()
+}
+
+func TestWatermarkUpdater_DeleteTaskWatermarksReturnsDeleteFailureAndKeepsTombstone(t *testing.T) {
+	// The flush is the first persistence call; fail the following terminal
+	// DELETE specifically so this test remains distinct from flush failures.
+	exec := &retryableMockExecutor{failOnCall: 2}
+	updater := NewCDCWatermarkUpdater("delete-task-retry", exec, WithCronJobInterval(time.Hour))
+	updater.Start()
+	defer updater.Stop()
+
+	ctx := context.Background()
+	key := WatermarkKey{AccountId: 3, TaskId: "dropped-task", DBName: "db", TableName: "table"}
+	ts := types.BuildTS(40, 1)
+	require.NoError(t, updater.UpdateWatermarkOnly(ctx, &key, &ts))
+	require.Error(t, updater.DeleteTaskWatermarks(ctx, key.AccountId, key.TaskId))
+
+	// The tombstone must reject a late producer even when the lifecycle owner
+	// receives the terminal DELETE failure and is responsible for retrying.
+	require.NoError(t, updater.UpdateWatermarkOnly(ctx, &key, &ts))
+	updater.RLock()
+	_, cached := updater.cacheUncommitted[key]
+	updater.RUnlock()
+	require.False(t, cached)
+
+	exec.mu.Lock()
+	require.Equal(t, 2, exec.execCalls)
+	require.Equal(t, CDCSQLBuilder.DeleteWatermarkSQL(key.AccountId, key.TaskId), exec.lastSQL)
+	exec.mu.Unlock()
+}
+
+func TestWatermarkUpdater_GetOrAddCommittedRejectsDeletedTask(t *testing.T) {
+	exec := &retryableMockExecutor{}
+	updater := NewCDCWatermarkUpdater("get-or-add-deleted", exec)
+	updater.Start()
+	defer updater.Stop()
+	key := &WatermarkKey{AccountId: 4, TaskId: "deleted-task", DBName: "db", TableName: "table"}
+	updater.MarkTaskDeleted(key.TaskId)
+	ts := types.BuildTS(50, 1)
+	ret, err := updater.GetOrAddCommitted(context.Background(), key, &ts)
+	require.NoError(t, err)
+	require.True(t, ret.IsEmpty())
+	exec.mu.Lock()
+	require.Empty(t, exec.lastSQL)
+	exec.mu.Unlock()
+}
+
+func TestWatermarkUpdater_ForceFlushHonorsContext(t *testing.T) {
+	updater := NewCDCWatermarkUpdater("force-flush-context", nil)
+	updater.customized.scheduleJob = func(*UpdaterJob) error { return nil }
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	done := make(chan error, 1)
+	go func() { done <- updater.ForceFlush(ctx) }()
+	select {
+	case err := <-done:
+		require.ErrorIs(t, err, context.Canceled)
+	case <-time.After(time.Second):
+		t.Fatal("ForceFlush did not honor canceled context")
+	}
+}
+
+func TestWatermarkUpdater_ForceFlushWaitsForSameBatchErrorWrite(t *testing.T) {
+	exec := &blockingErrorWatermarkExecutor{
+		writeStarted: make(chan struct{}),
+		releaseWrite: make(chan struct{}),
+	}
+	updater := NewCDCWatermarkUpdater(t.Name(), exec)
+	key := WatermarkKey{
+		AccountId: 1,
+		TaskId:    "task",
+		DBName:    "db",
+		TableName: "table",
+	}
+	updater.cacheCommitted[key] = types.BuildTS(1, 1)
+	errorJob := NewUpdateWMErrMsgJob(context.Background(), &key, "old error")
+	barrierJob := NewCommittingWMJob(context.Background())
+	batchDone := make(chan struct{})
+	writeReleased := false
+	defer func() {
+		if !writeReleased {
+			close(exec.releaseWrite)
+		}
+	}()
+	go func() {
+		updater.onJobs(errorJob, barrierJob)
+		close(batchDone)
+	}()
+
+	select {
+	case <-exec.writeStarted:
+	case <-time.After(time.Second):
+		t.Fatal("same-batch error watermark write did not start")
+	}
+
+	waitCtx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	result := barrierJob.WaitDoneContext(waitCtx)
+	cancel()
+	require.ErrorIs(t, result.Err, context.DeadlineExceeded,
+		"the deletion barrier must not complete before a same-batch writer")
+
+	close(exec.releaseWrite)
+	writeReleased = true
+	select {
+	case <-batchDone:
+	case <-time.After(time.Second):
+		t.Fatal("watermark batch did not finish after releasing the writer")
+	}
+	require.NoError(t, barrierJob.GetResult().Err)
+	require.NoError(t, errorJob.GetResult().Err)
 }
 
 func TestWatermarkUpdater_CommitCircuitBreaker(t *testing.T) {
@@ -700,7 +1079,9 @@ func TestWatermarkUpdater_MockSQLExecutor(t *testing.T) {
 		},
 		Watermark: types.BuildTS(2, 1),
 	})
-	insertSql := u.constructAddWMSQL(jobs)
+	insertSqls := u.constructAddWMSQLs(jobs)
+	require.Len(t, insertSqls, 1)
+	insertSql := insertSqls[0]
 	t.Logf("insertSql: %s", insertSql)
 
 	err = executor.Exec(context.Background(), insertSql, ie.SessionOverrideOptions{})
@@ -759,7 +1140,9 @@ func TestWatermarkUpdater_MockSQLExecutor(t *testing.T) {
 	keys2[*jobs[0].Key] = jobs[0].Watermark
 	keys2[*jobs[1].Key] = jobs[1].Watermark
 
-	insertUpdateSql := u.constructBatchUpdateWMSQL(keys2)
+	insertUpdateSqls := u.constructBatchUpdateWMSQLs(keys2)
+	require.Len(t, insertUpdateSqls, 1)
+	insertUpdateSql := insertUpdateSqls[0]
 	t.Logf("insertUpdateSql: %s", insertUpdateSql)
 	err = executor.Exec(context.Background(), insertUpdateSql, ie.SessionOverrideOptions{})
 	assert.NoError(t, err)
@@ -1072,14 +1455,14 @@ func TestCDCWatermarkUpdater_constructAddWMSQL(t *testing.T) {
 		Key:       key3,
 		Watermark: ts3,
 	})
-	realSql := u.constructAddWMSQL(keys)
-	expectedSql := "INSERT INTO `mo_catalog`.`mo_cdc_watermark` " +
-		"VALUES " +
-		"(1, 'test', 'db1', 't1', '1-1', '')," +
-		"(2, 'test', 'db2', 't2', '2-1', '')," +
-		"(3, 'test', 'db3', 't3', '3-1', '')"
-
-	assert.Equal(t, expectedSql, realSql)
+	sqls := u.constructAddWMSQLs(keys)
+	require.Len(t, sqls, 1)
+	realSql := sqls[0]
+	assert.Contains(t, realSql, "INNER JOIN (SELECT account_id, task_id FROM `mo_catalog`.`mo_cdc_task`")
+	assert.Contains(t, realSql, "FOR UPDATE)")
+	assert.Contains(t, realSql, "SELECT 1 AS account_id, 'test' AS task_id, 'db1' AS db_name")
+	assert.Contains(t, realSql, "SELECT 2, 'test', 'db2', 't2', '2-1', ''")
+	assert.Contains(t, realSql, "SELECT 3, 'test', 'db3', 't3', '3-1', ''")
 }
 
 func TestCDCWatermarkUpdater_constructBatchUpdateWMSQL(t *testing.T) {
@@ -1110,52 +1493,15 @@ func TestCDCWatermarkUpdater_constructBatchUpdateWMSQL(t *testing.T) {
 	key3.TableName = "t3"
 	ts3 := types.BuildTS(3, 1)
 	keys[*key3] = ts3
-	expectedSql1 := "INSERT INTO `mo_catalog`.`mo_cdc_watermark` " +
-		"(account_id, task_id, db_name, table_name, watermark) VALUES " +
-		"(1, 'test', 'db1', 't1', '1-1')," +
-		"(2, 'test', 'db2', 't2', '2-1')," +
-		"(3, 'test', 'db3', 't3', '3-1') " +
-		"ON DUPLICATE KEY UPDATE watermark = VALUES(watermark)"
-	expectedSql2 := "INSERT INTO `mo_catalog`.`mo_cdc_watermark` " +
-		"(account_id, task_id, db_name, table_name, watermark) VALUES " +
-		"(3, 'test', 'db3', 't3', '3-1')," +
-		"(2, 'test', 'db2', 't2', '2-1')," +
-		"(1, 'test', 'db1', 't1', '1-1') " +
-		"ON DUPLICATE KEY UPDATE watermark = VALUES(watermark)"
-	expectedSql3 := "INSERT INTO `mo_catalog`.`mo_cdc_watermark` " +
-		"(account_id, task_id, db_name, table_name, watermark) VALUES " +
-		"(3, 'test', 'db3', 't3', '3-1')," +
-		"(1, 'test', 'db1', 't1', '1-1')," +
-		"(2, 'test', 'db2', 't2', '2-1') " +
-		"ON DUPLICATE KEY UPDATE watermark = VALUES(watermark)"
-	expectedSql4 := "INSERT INTO `mo_catalog`.`mo_cdc_watermark` " +
-		"(account_id, task_id, db_name, table_name, watermark) VALUES " +
-		"(2, 'test', 'db2', 't2', '2-1')," +
-		"(3, 'test', 'db3', 't3', '3-1')," +
-		"(1, 'test', 'db1', 't1', '1-1') " +
-		"ON DUPLICATE KEY UPDATE watermark = VALUES(watermark)"
-	expectedSql5 := "INSERT INTO `mo_catalog`.`mo_cdc_watermark` " +
-		"(account_id, task_id, db_name, table_name, watermark) VALUES " +
-		"(2, 'test', 'db2', 't2', '2-1')," +
-		"(1, 'test', 'db1', 't1', '1-1')," +
-		"(3, 'test', 'db3', 't3', '3-1') " +
-		"ON DUPLICATE KEY UPDATE watermark = VALUES(watermark)"
-	expectedSql6 := "INSERT INTO `mo_catalog`.`mo_cdc_watermark` " +
-		"(account_id, task_id, db_name, table_name, watermark) VALUES " +
-		"(1, 'test', 'db1', 't1', '1-1')," +
-		"(2, 'test', 'db2', 't2', '2-1')," +
-		"(3, 'test', 'db3', 't3', '3-1') " +
-		"ON DUPLICATE KEY UPDATE watermark = VALUES(watermark)"
-	realSql := u.constructBatchUpdateWMSQL(keys)
-	assert.True(
-		t,
-		expectedSql1 == realSql ||
-			expectedSql2 == realSql ||
-			expectedSql3 == realSql ||
-			expectedSql4 == realSql ||
-			expectedSql5 == realSql ||
-			expectedSql6 == realSql,
-	)
+	sqls := u.constructBatchUpdateWMSQLs(keys)
+	require.Len(t, sqls, 1)
+	realSql := sqls[0]
+	assert.Contains(t, realSql, "INNER JOIN (SELECT account_id, task_id FROM `mo_catalog`.`mo_cdc_task`")
+	assert.Contains(t, realSql, "FOR UPDATE)")
+	assert.Contains(t, realSql, "ON DUPLICATE KEY UPDATE watermark = VALUES(watermark)")
+	assert.Contains(t, realSql, "SELECT 1 AS account_id")
+	assert.Contains(t, realSql, "SELECT 2, 'test', 'db2', 't2', '2-1'")
+	assert.Contains(t, realSql, "SELECT 3, 'test', 'db3', 't3', '3-1'")
 }
 
 func TestCDCWatermarkUpdater_constructBatchUpdateWMErrMsgSQL(t *testing.T) {
@@ -1187,13 +1533,134 @@ func TestCDCWatermarkUpdater_constructBatchUpdateWMErrMsgSQL(t *testing.T) {
 		Watermark: ts2,
 		ErrMsg:    "",
 	})
-	realSql := u.constructBatchUpdateWMErrMsgSQL(jobs)
-	expectedSql := "INSERT INTO `mo_catalog`.`mo_cdc_watermark` " +
-		"(account_id, task_id, db_name, table_name, err_msg) VALUES " +
-		"(1, 'test', 'db1', 't1', 'err1')," +
-		"(2, 'test', 'db2', 't2', '') " +
-		"ON DUPLICATE KEY UPDATE err_msg = VALUES(err_msg)"
-	assert.Equal(t, expectedSql, realSql)
+	sqls := u.constructBatchUpdateWMErrMsgSQLs(jobs)
+	require.Len(t, sqls, 1)
+	realSql := sqls[0]
+	assert.Contains(t, realSql, "INNER JOIN (SELECT account_id, task_id FROM `mo_catalog`.`mo_cdc_task`")
+	assert.Contains(t, realSql, "FOR UPDATE)")
+	assert.Contains(t, realSql, "ON DUPLICATE KEY UPDATE err_msg = VALUES(err_msg)")
+	assert.Contains(t, realSql, "SELECT 1 AS account_id")
+	assert.Contains(t, realSql, "SELECT 2, 'test', 'db2', 't2', ''")
+}
+
+func TestCDCWatermarkUpdater_GuardedWatermarkSQLIsBoundedAndDeterministic(t *testing.T) {
+	u := NewCDCWatermarkUpdater(t.Name(), newWmMockSQLExecutor())
+	keys := make(map[WatermarkKey]types.TS, 1001)
+	for i := 1000; i >= 0; i-- {
+		keys[WatermarkKey{
+			AccountId: 7,
+			TaskId:    "same-task",
+			DBName:    fmt.Sprintf("db-%04d", i%17),
+			TableName: fmt.Sprintf("table-%04d", i),
+		}] = types.BuildTS(int64(i+1), 1)
+	}
+
+	sqls := u.constructBatchUpdateWMSQLs(keys)
+	require.Len(t, sqls, 6)
+	for _, sql := range sqls {
+		rows := strings.Count(sql, " UNION ALL ") + 1
+		require.LessOrEqual(t, rows, watermarkWriteMaxRows)
+		require.LessOrEqual(t, len(sql), watermarkWriteMaxSQLBytes)
+		require.Equal(t, 1, strings.Count(sql,
+			"(account_id = 7 AND task_id = 'same-task')"))
+		require.Contains(t, sql, "FOR UPDATE")
+	}
+
+	// Map iteration order must not make SQL text or lock acquisition order vary.
+	require.Equal(t, sqls, u.constructBatchUpdateWMSQLs(keys))
+}
+
+func TestCDCWatermarkUpdater_GuardedWatermarkSQLSplitsOnBytes(t *testing.T) {
+	rows := make([]guardedWatermarkRow, 0, 4)
+	for i := 0; i < 4; i++ {
+		rows = append(rows, guardedWatermarkRow{
+			accountID: 9,
+			taskID:    "large-error-task",
+			dbName:    "db",
+			tableName: fmt.Sprintf("table-%d", i),
+			value:     strings.Repeat("x", watermarkWriteMaxSQLBytes/3),
+		})
+	}
+
+	sqls := buildGuardedWatermarkSQLBatches(
+		rows,
+		watermarkErrorRowSQL,
+		CDCSQLBuilder.GuardedWatermarkErrorUpdateSQL,
+	)
+	require.Len(t, sqls, 2)
+	for _, sql := range sqls {
+		require.LessOrEqual(t, len(sql), watermarkWriteMaxSQLBytes)
+		require.Equal(t, 1, strings.Count(sql,
+			"(account_id = 9 AND task_id = 'large-error-task')"))
+	}
+}
+
+func TestCDCWatermarkUpdater_ErrorMessageRespectsCatalogBound(t *testing.T) {
+	executor := &retryableMockExecutor{}
+	u := NewCDCWatermarkUpdater(t.Name(), executor, WithCronJobInterval(time.Hour))
+	u.Start()
+	defer u.Stop()
+	key := &WatermarkKey{AccountId: 1, TaskId: "task", DBName: "db", TableName: "table"}
+	u.cacheCommitted[*key] = types.BuildTS(1, 1)
+	longMessage := strings.Repeat("界", CDCWatermarkErrMsgMaxLen+100)
+	for range MaxRetryCount + 1 {
+		require.NoError(t, u.UpdateWatermarkErrMsg(
+			context.Background(),
+			key,
+			longMessage,
+			&ErrorContext{IsRetryable: true},
+		))
+	}
+	flushCtx, cancel := context.WithTimeout(context.Background(), time.Second)
+	require.NoError(t, u.ForceFlush(flushCtx))
+	cancel()
+
+	executor.mu.Lock()
+	persistedSQL := executor.lastSQL
+	executor.mu.Unlock()
+	parsed, err := ParseInsert(persistedSQL)
+	require.NoError(t, err)
+	require.Len(t, parsed.rows, 1)
+	require.Len(t, parsed.rows[0], 5)
+	persisted := parsed.rows[0][4]
+	require.True(t, utf8.ValidString(persisted))
+	require.LessOrEqual(t, utf8.RuneCountInString(persisted), CDCWatermarkErrMsgMaxLen)
+	require.False(t, u.errorMetadataCache[*key].IsRetryable)
+	require.Contains(t, u.errorMetadataCache[*key].Message, "max retry exceeded")
+	require.LessOrEqual(t, utf8.RuneCountInString(u.errorMetadataCache[*key].Message), CDCWatermarkErrMsgMaxLen)
+}
+
+func BenchmarkCDCWatermarkUpdaterConstructGuardedBatch(b *testing.B) {
+	for _, count := range []int{1000, 5000} {
+		b.Run(fmt.Sprintf("tables-%d", count), func(b *testing.B) {
+			u := NewCDCWatermarkUpdater(b.Name(), newWmMockSQLExecutor())
+			keys := make(map[WatermarkKey]types.TS, count)
+			for i := 0; i < count; i++ {
+				keys[WatermarkKey{
+					AccountId: 1,
+					TaskId:    "benchmark-task",
+					DBName:    "benchmark-db",
+					TableName: fmt.Sprintf("table-%05d", i),
+				}] = types.BuildTS(int64(i+1), 1)
+			}
+			b.ReportAllocs()
+			b.ResetTimer()
+			for i := 0; i < b.N; i++ {
+				_ = u.constructBatchUpdateWMSQLs(keys)
+			}
+			b.StopTimer()
+			sqls := u.constructBatchUpdateWMSQLs(keys)
+			totalBytes := 0
+			maxBytes := 0
+			for _, sql := range sqls {
+				totalBytes += len(sql)
+				maxBytes = max(maxBytes, len(sql))
+			}
+			b.ReportMetric(float64(len(sqls)), "batches")
+			b.ReportMetric(float64(maxBytes), "max-SQL-B")
+			b.ReportMetric(float64(totalBytes), "total-SQL-B")
+		})
+	}
 }
 
 func TestCDCWatermarkUpdater_execBatchUpdateWMErrMsg(t *testing.T) {
@@ -1606,6 +2073,19 @@ func TestCDCWatermarkUpdater_MarkUnmarkTaskPaused(t *testing.T) {
 
 	updater.UnmarkTaskPaused(taskId)
 	_, paused = updater.pausedTasks.Load(taskId)
+	require.False(t, paused)
+}
+
+func TestCDCWatermarkUpdater_DeletedTaskDominatesConcurrentPause(t *testing.T) {
+	updater, _ := InitCDCWatermarkUpdaterForTest(t)
+	taskID := "test-task-deleted-before-pause"
+
+	updater.MarkTaskDeleted(taskID)
+	updater.MarkTaskPaused(taskID)
+
+	_, deleted := updater.deletedTasks.Load(taskID)
+	require.True(t, deleted)
+	_, paused := updater.pausedTasks.Load(taskID)
 	require.False(t, paused)
 }
 

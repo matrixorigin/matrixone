@@ -1310,6 +1310,18 @@ func (e *Engine) RefreshTableStatsWithOptions(
 	return refreshTableStats(ctx, key, options, e.globalStats)
 }
 
+// PublishAnalyzedStats installs one successfully collected manual generation.
+// Collection and publication are separate so failed scans never expose a
+// partially populated statistics object.
+func (e *Engine) PublishAnalyzedStats(
+	ctx context.Context,
+	key pb.StatsInfoKey,
+	tableDefVersion uint32,
+	stats *pb.StatsInfo,
+) (*pb.StatsInfo, error) {
+	return e.globalStats.publishAnalyzedStats(ctx, key, tableDefVersion, stats)
+}
+
 type optimizerStatsStore interface {
 	refreshStatsWithMode(
 		context.Context,

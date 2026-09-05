@@ -78,6 +78,8 @@ type TableChangeStream struct {
 	start            sync.WaitGroup
 	runCancel        context.CancelFunc
 	cancelOnce       sync.Once
+	registered       chan struct{}
+	registerOnce     sync.Once
 
 	// Configuration
 	initSnapshotSplitTxn   bool
@@ -339,6 +341,7 @@ var NewTableChangeStream = func(
 		endTs:                     endTs,
 		noFull:                    noFull,
 		initialSnapshotLimiter:    opts.initialSnapshotLimiter,
+		registered:                make(chan struct{}),
 		insTsColIdx:               insTsColIdx,
 		insCompositedPkColIdx:     insCompositedPkColIdx,
 		delTsColIdx:               delTsColIdx,
@@ -364,6 +367,9 @@ var NewTableChangeStream = func(
 
 // Run starts the change stream
 func (s *TableChangeStream) Run(ctx context.Context, ar *ActiveRoutine) {
+	if s.registered == nil {
+		s.registered = make(chan struct{})
+	}
 	streamCtx, cancel := context.WithCancel(ctx)
 	s.runCancel = cancel
 
@@ -372,6 +378,7 @@ func (s *TableChangeStream) Run(ctx context.Context, ar *ActiveRoutine) {
 
 	// 1. Check for duplicate readers
 	if _, loaded := s.runningReaders.LoadOrStore(s.runningReaderKey, s); loaded {
+		s.registerOnce.Do(func() { close(s.registered) })
 		logutil.Warn(
 			"cdc.table_stream.duplicate_running",
 			zap.String("table", s.tableInfo.String()),
@@ -382,6 +389,7 @@ func (s *TableChangeStream) Run(ctx context.Context, ar *ActiveRoutine) {
 		s.Close()
 		return
 	}
+	s.registerOnce.Do(func() { close(s.registered) })
 
 	logutil.Info(
 		"cdc.table_stream.start",
@@ -600,6 +608,13 @@ func (s *TableChangeStream) Run(ctx context.Context, ar *ActiveRoutine) {
 		)
 		s.progressTracker.SetState("idle")
 	}
+}
+
+// RegistrationDone reports when Run has published this stream (or rejected it
+// as a duplicate) in runningReaders. CDC task callbacks use this as their
+// publication barrier before they are allowed to complete.
+func (s *TableChangeStream) RegistrationDone() <-chan struct{} {
+	return s.registered
 }
 
 // cleanup performs cleanup when the stream stops

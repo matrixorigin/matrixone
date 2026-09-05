@@ -2356,6 +2356,12 @@ func TestCCPRGC(t *testing.T) {
 	require.NoError(t, err)
 	err = exec_sql(disttaeEngine, systemCtx, frontend.MoCatalogFeatureRegistryInitData)
 	require.NoError(t, err)
+	err = exec_sql(disttaeEngine, systemCtx, frontend.MoCatalogMoSnapshotsDDL)
+	require.NoError(t, err)
+	err = exec_sql(disttaeEngine, systemCtx, frontend.MoCatalogMoPitrDDL)
+	require.NoError(t, err)
+	err = exec_sql(disttaeEngine, systemCtx, frontend.MoCatalogBranchMetadataDDL)
+	require.NoError(t, err)
 
 	// Create mo_ccpr_log table using system account context
 	err = exec_sql(disttaeEngine, systemCtx, frontend.MoCatalogMoCcprLogDDL)

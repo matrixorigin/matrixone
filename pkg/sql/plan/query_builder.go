@@ -3753,6 +3753,7 @@ func (builder *QueryBuilder) createQuery() (*Query, error) {
 		builder.pushdownVectorIndexTopToTableScan(rootID)
 		builder.removeSimpleProjections(rootID, plan.Node_UNKNOWN, false, colRefCnt)
 		reCalcNodeStatsAfterSwap(rootID, builder, true, false, false)
+		builder.determineWindowPartitionAlgorithms(rootID)
 		builder.deduplicateBlockFilters(rootID)
 		builder.forceJoinOnOneCN(rootID, false)
 		// after this ,never call ReCalcNodeStats again !!!

@@ -511,6 +511,7 @@ func (c *Compile) clear() {
 	c.ignorePublish = false
 	c.adjustTableExtraFunc = nil
 	c.disableDropAutoIncrement = false
+	c.skipDataBranchReclaim = false
 	c.keepAutoIncrement = 0
 	c.disableLock = false
 	c.icebergScanPlanner = nil
@@ -6259,6 +6260,14 @@ func (c *Compile) compilePartition(node *plan.Node, ss []*Scope) []*Scope {
 		c.anal.isFirst = false
 		return []*Scope{rs}
 	}
+	if node.PartitionAlgorithm == plan.Node_PARTITION_ALGORITHM_HASH && c.supportsRemoteHashPartition() {
+		rs := c.newMergeScope(ss)
+		arg := constructPartition(node)
+		arg.SetAnalyzeControl(c.anal.curNodeIdx, c.anal.isFirst)
+		rs.setRootOperator(arg)
+		c.anal.isFirst = false
+		return []*Scope{rs}
+	}
 
 	currentFirstFlag := c.anal.isFirst
 	for i := range ss {
@@ -6276,6 +6285,12 @@ func (c *Compile) compilePartition(node *plan.Node, ss []*Scope) []*Scope {
 
 	currentFirstFlag = c.anal.isFirst
 	arg := constructPartition(node)
+	if node.PartitionAlgorithm == plan.Node_PARTITION_ALGORITHM_HASH {
+		// A mixed-version cluster cannot understand the HASH pipeline field.
+		// Keep both its prerequisite local orders and its coordinator algorithm
+		// on the legacy path.
+		arg.Algorithm = plan.Node_PARTITION_ALGORITHM_SORT
+	}
 	if node.PartitionByCount > 0 {
 		arg.OrderBySpecs = node.OrderBy[:node.PartitionByCount]
 		arg.Limit = nil
@@ -6945,6 +6960,16 @@ func (c *Compile) supportsRemotePartitionTopN() bool {
 	}
 	protocolVersion, ok := version.(int64)
 	return ok && protocolVersion >= defines.MORPCVersion19
+}
+
+func (c *Compile) supportsRemoteHashPartition() bool {
+	version, ok := moruntime.ServiceRuntime(c.proc.GetService()).
+		GetGlobalVariables(moruntime.MOProtocolVersion)
+	if !ok {
+		return false
+	}
+	protocolVersion, ok := version.(int64)
+	return ok && protocolVersion >= defines.MORPCVersion47
 }
 
 func supportsRemoteTextCollationAggregates(service string) bool {
