@@ -148,6 +148,9 @@ func TestBuiltInInternalCharMetadataUsesEncodedWidth(t *testing.T) {
 		types.New(types.T_binary, 8, 0),
 		types.New(types.T_varbinary, 128, 0),
 		types.New(types.T_blob, 0, 0),
+		types.NewWithCharset(types.T_varchar, 16, 0, types.CharsetUTF8MB4Bin),
+		types.NewWithCharset(types.T_varchar, 16, 0, types.CharsetBinary),
+		types.NewWithCharset(types.T_varchar, 16, 0, types.CharsetLegacy),
 		types.T_int32.ToType(),
 	}
 	encoded := make([]string, len(typesToEncode))
@@ -165,17 +168,17 @@ func TestBuiltInInternalCharMetadataUsesEncodedWidth(t *testing.T) {
 		{
 			name:   "maximum character length",
 			fn:     builtInInternalCharLength,
-			values: []int64{8, 128, types.MaxStringSize, types.MaxTinyTextLen, 8, 128, 0, 0},
+			values: []int64{8, 128, types.MaxStringSize, types.MaxTinyTextLen, 8, 128, 0, 16, 16, 16, 0},
 		},
 		{
 			name:   "maximum octet length",
 			fn:     builtInInternalCharSize,
-			values: []int64{32, 512, types.MaxStringSize, types.MaxTinyTextLen, 8, 128, 0, 0},
+			values: []int64{32, 512, types.MaxStringSize, types.MaxTinyTextLen, 8, 128, 0, 64, 16, 48, 0},
 		},
 		{
 			name:   "character set domain",
 			fn:     builtInInternalCharacterSet,
-			values: []int64{0, 0, 0, 0, 2, 2, 2, 0},
+			values: []int64{3, 3, 3, 3, 2, 2, 2, 1, 2, 0, 0},
 		},
 	} {
 		t.Run(test.name, func(t *testing.T) {
@@ -188,7 +191,7 @@ func TestBuiltInInternalCharMetadataUsesEncodedWidth(t *testing.T) {
 					types.T_int64.ToType(),
 					false,
 					test.values,
-					[]bool{false, false, false, false, false, false, false, true},
+					[]bool{false, false, false, false, false, false, false, false, false, false, true},
 				),
 				test.fn,
 			)
@@ -1122,10 +1125,10 @@ func TestPadRejectsAccountedAllocationBeforeBuildingResult(t *testing.T) {
 			require.NoError(t, err)
 			proc := testutil.NewProcessWithMPool(t, "", mp)
 			tc := NewFunctionTestCase(proc, []FunctionTestInput{
-				NewFunctionTestConstInput(types.T_blob.ToType(), []string{"x"}, nil),
-				NewFunctionTestConstInput(types.T_int64.ToType(), []int64{500000}, nil),
-				NewFunctionTestConstInput(types.T_blob.ToType(), []string{"😀"}, nil),
-			}, NewFunctionTestResult(types.T_blob.ToType(), true, nil, nil), fEvalFn(fn))
+				NewFunctionTestConstInput(types.T_text.ToType(), []string{"x"}, nil),
+				NewFunctionTestConstInput(types.T_int64.ToType(), []int64{300000}, nil),
+				NewFunctionTestConstInput(types.T_text.ToType(), []string{"😀"}, nil),
+			}, NewFunctionTestResult(types.T_text.ToType(), true, nil, nil), fEvalFn(fn))
 			ok, info := tc.Run()
 			require.True(t, ok, info)
 		})

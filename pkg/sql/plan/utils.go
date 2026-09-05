@@ -3945,15 +3945,8 @@ func preparedComparisonTypeIsNumeric(typ types.T) bool {
 }
 
 func (rule *preparedRuntimeTextComparisonScanRule) paramTypeIsText(position int) bool {
-	if position < 0 || position >= len(rule.runtimeParamTypes) {
-		return false
-	}
-	switch rule.runtimeParamTypes[position].Oid {
-	case types.T_char, types.T_varchar, types.T_text:
-		return true
-	default:
-		return false
-	}
+	return position >= 0 && position < len(rule.runtimeParamTypes) &&
+		rule.runtimeParamTypes[position].Oid.IsMySQLString()
 }
 
 func (rule *preparedRuntimeSpecializationScanRule) MatchNode(_ *Node) bool {
@@ -4186,6 +4179,12 @@ func preparedRuntimeSpecializationFunction(name string) bool {
 	switch name {
 	case "ntile", "sleep",
 		"date_add", "date_sub", "adddate", "subdate", "timestampadd", "timestampdiff",
+		"ord", "char_length", "character_length",
+		"left", "right", "substring", "substr", "mid", "reverse",
+		"lower", "lcase", "upper", "ucase", "trim", "ltrim", "rtrim",
+		"locate", "instr", "position", "insert", "replace", "lpad", "rpad",
+		"substring_index", "split_part", "repeat", "concat", "concat_ws",
+		"charset", "collation",
 		"=", "<=>", "!=", "<>", "<", "<=", ">", ">=",
 		"like", "ilike", "regexp", "not_regexp", "between", "not_between",
 		"in", "not_in", "partition_in":
@@ -4759,8 +4758,9 @@ type ParamValue struct {
 	// through a text vector, and their source type is used only after an
 	// arithmetic consumer establishes a numeric domain. Comparisons keep their
 	// existing common-type and numeric-prefix contracts.
-	SourceType    types.Type
-	HasSourceType bool
+	SourceType          types.Type
+	HasSourceType       bool
+	RuntimeStringDomain types.RuntimeStringDomain
 	// RuntimeType is the type advertised by the binary-protocol parameter
 	// binding.  Prepared plans deliberately keep parameter markers as TEXT
 	// while they are cached, so the execute-time copy can use this optional
@@ -5759,6 +5759,19 @@ func isNonNegativePreparedInteger(value any) bool {
 	return valid && !negative
 }
 
+func setPreparedRuntimeStringDomain(expr *Expr, domain types.RuntimeStringDomain) {
+	literal := expr.GetLit()
+	if literal == nil {
+		return
+	}
+	switch domain {
+	case types.RuntimeStringText:
+		literal.LiteralForm = plan.StringLiteralForm_STRING_LITERAL_TEXT
+	case types.RuntimeStringBinary:
+		literal.LiteralForm = plan.StringLiteralForm_STRING_LITERAL_BINARY_INTRODUCER
+	}
+}
+
 func replaceParamVals(
 	ctx context.Context,
 	plan0 *Plan,
@@ -5790,6 +5803,7 @@ func replaceParamValsWithSelection(
 		hasRuntimeType := false
 		numericPrefixSource := false
 		retainParamRef := false
+		runtimeStringDomain := types.RuntimeStringInherit
 		if param, ok := val.(ParamValue); ok {
 			val = param.Value
 			if param.MaterializedValue != "" {
@@ -5800,6 +5814,15 @@ func replaceParamValsWithSelection(
 			hasRuntimeType = param.HasRuntimeType
 			numericPrefixSource = param.EnableNumericPrefix
 			retainParamRef = param.RetainParamRef
+			runtimeStringDomain = param.RuntimeStringDomain
+			if !param.IsBinaryProtocol && param.HasSourceType &&
+				types.StaticStringDomain(param.SourceType) != types.StringDomainNone {
+				// SQL EXECUTE USING owns an assignment-time string type. Rebind
+				// domain-sensitive functions with that type instead of flattening a
+				// BINARY/VARBINARY/BLOB variable into the TEXT transport vector.
+				runtimeType = param.SourceType
+				hasRuntimeType = true
+			}
 			if param.HasSourceType && param.Value != nil {
 				sqlExecuteStringBackedParams[i] = isStringBackedType(param.SourceType)
 				sqlExecuteNumericParams[i], err = preparedSQLExecuteNumericParamExpr(
@@ -5843,6 +5866,7 @@ func replaceParamValsWithSelection(
 						Typ: paramType, Expr: &plan.Expr_P{P: &plan.ParamRef{Pos: int32(i)}},
 					})
 				}
+				setPreparedRuntimeStringDomain(params[i], runtimeStringDomain)
 				continue
 			}
 			pc := &plan.Literal{IsBin: isBin}
@@ -5854,6 +5878,7 @@ func replaceParamValsWithSelection(
 				},
 			}
 		}
+		setPreparedRuntimeStringDomain(params[i], runtimeStringDomain)
 		if (numericPrefixSource || retainParamRef || directRuntimeResult) && params[i].GetLit() != nil {
 			params[i].GetLit().Src = &plan.Expr{
 				Typ: paramType, Expr: &plan.Expr_P{P: &plan.ParamRef{Pos: int32(i)}},

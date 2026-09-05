@@ -563,7 +563,7 @@ var supportedOperators = []FuncNew{
 		functionId: LIKE,
 		class:      plan.Function_STRICT,
 		layout:     BINARY_LOGICAL_OPERATOR,
-		checkFn:    fixedTypeMatch,
+		checkFn:    stringDomainFixedTypeMatch,
 
 		Overloads: []overload{
 			{

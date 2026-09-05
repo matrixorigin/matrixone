@@ -24,6 +24,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/bytejson"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/query"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
@@ -78,16 +79,27 @@ func (ses *Session) snapshotUserDefinedVars(ctx context.Context) ([]*query.Migra
 		if variable == nil {
 			return nil, moerr.NewInternalErrorf(ctx, "cannot migrate nil user variable %q", name)
 		}
+		if !variable.RuntimeStringDomain.Valid() {
+			return nil, moerr.NewInternalErrorf(
+				ctx, "invalid runtime string domain for user variable %q", name)
+		}
+		if variable.RuntimeStringDomain != types.RuntimeStringInherit &&
+			currentProtocolVersion(ses.proc) < defines.MORPCVersion48 {
+			return nil, moerr.NewNotSupportedf(
+				ctx, "user-variable runtime string domains require MORPC protocol version %d",
+				defines.MORPCVersion48)
+		}
 		value, err := encodeUserDefinedVarValue(ctx, variable.Value, variable.IsBin)
 		if err != nil {
 			return nil, err
 		}
 		item := &query.MigrateUserDefinedVar{
-			Name:             name,
-			Value:            value,
-			Sql:              variable.Sql,
-			IsBin:            variable.IsBin,
-			PrepareParamKind: uint32(variable.PrepareParamKind),
+			Name:                name,
+			Value:               value,
+			Sql:                 variable.Sql,
+			IsBin:               variable.IsBin,
+			PrepareParamKind:    uint32(variable.PrepareParamKind),
+			RuntimeStringDomain: uint32(variable.RuntimeStringDomain),
 			Type: &plan.Type{
 				Id:          variable.Type.Id,
 				NotNullable: variable.Type.NotNullable,
@@ -203,6 +215,10 @@ func decodeUserDefinedVars(
 		if item.PrepareParamKind > uint32(vector.PrepareParamBoolean) {
 			return nil, moerr.NewInternalErrorf(ctx, "invalid prepare parameter kind for user variable %q", name)
 		}
+		runtimeDomain := types.RuntimeStringDomain(item.RuntimeStringDomain)
+		if !runtimeDomain.Valid() {
+			return nil, moerr.NewInternalErrorf(ctx, "invalid runtime string domain for user variable %q", name)
+		}
 		value, err := decodeUserDefinedVarValue(ctx, item.Value)
 		if err != nil {
 			return nil, err
@@ -215,12 +231,13 @@ func decodeUserDefinedVars(
 			typ = inferUserDefinedVarType(value)
 		}
 		result[name] = &UserDefinedVar{
-			Value:            value,
-			Sql:              item.Sql,
-			IsBin:            item.IsBin,
-			Type:             typ,
-			PrepareParamKind: vector.PrepareParamKind(item.PrepareParamKind),
-			Replayable:       replayable,
+			Value:               value,
+			Sql:                 item.Sql,
+			IsBin:               item.IsBin,
+			Type:                typ,
+			PrepareParamKind:    vector.PrepareParamKind(item.PrepareParamKind),
+			RuntimeStringDomain: runtimeDomain,
+			Replayable:          replayable,
 		}
 	}
 	return result, nil

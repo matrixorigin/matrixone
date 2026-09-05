@@ -111,6 +111,9 @@ func caseConversionReturnType(parameters []types.Type) types.Type {
 		return types.T_varchar.ToType()
 	}
 	source := parameters[0]
+	if types.StaticStringDomain(source) == types.StringDomainBinary {
+		return binaryStringResultType(declaredStringByteBound(source))
+	}
 	switch source.Oid {
 	case types.T_char, types.T_varchar:
 		return textStringResultType(declaredTextCharacterBound(source), source.Charset)
@@ -134,40 +137,28 @@ func replacementStringReturnType(parameters []types.Type) types.Type {
 	if len(parameters) < 3 {
 		return types.T_varchar.ToType()
 	}
-	binary := types.StaticStringDomain(parameters[0]) == types.StringDomainBinary ||
-		types.StaticStringDomain(parameters[2]) == types.StringDomainBinary
 	boundFor := declaredTextCharacterBound
-	if binary {
+	if types.StaticStringDomain(parameters[0]) == types.StringDomainBinary {
 		boundFor = declaredStringByteBound
 	}
 	source := boundFor(parameters[0])
 	replacement := boundFor(parameters[2])
 	if replacement.unknown || source.unknown {
-		return stringResultTypeForDomains(parameters, []int{0, 2}, unknownStringResultBound())
+		return stringResultTypeForDomain(parameters, 0, unknownStringResultBound())
 	}
 	factor := max(uint64(1), replacement.bytes)
-	return stringResultTypeForDomains(parameters, []int{0, 2}, multiplyStringResultBound(source, factor))
+	return stringResultTypeForDomain(parameters, 0, multiplyStringResultBound(source, factor))
 }
 
 func insertStringReturnType(parameters []types.Type) types.Type {
 	if len(parameters) < 4 {
 		return types.T_varchar.ToType()
 	}
-	binary := types.StaticStringDomain(parameters[0]) == types.StringDomainBinary ||
-		types.StaticStringDomain(parameters[3]) == types.StringDomainBinary
 	boundFor := declaredTextCharacterBound
-	if binary {
+	if types.StaticStringDomain(parameters[0]) == types.StringDomainBinary {
 		boundFor = declaredStringByteBound
-		sourceBound := boundFor(parameters[0])
-		if types.StaticStringDomain(parameters[0]) == types.StringDomainBinary {
-			// The current rune-position kernel re-encodes every invalid binary
-			// source byte as the three-byte UTF-8 RuneError.
-			sourceBound = multiplyStringResultBound(sourceBound, 3)
-		}
-		return stringResultTypeForDomains(parameters, []int{0, 3},
-			addStringResultBounds(sourceBound, boundFor(parameters[3])))
 	}
-	return stringResultTypeForDomains(parameters, []int{0, 3},
+	return stringResultTypeForDomain(parameters, 0,
 		addStringResultBounds(boundFor(parameters[0]), boundFor(parameters[3])))
 }
 
@@ -552,7 +543,7 @@ var supportedStringBuiltIns = []FuncNew{
 		functionId: ORD,
 		class:      plan.Function_STRICT,
 		layout:     STANDARD_FUNCTION,
-		checkFn:    fixedTypeMatch,
+		checkFn:    stringDomainFixedTypeMatch,
 
 		Overloads: []overload{
 			{
@@ -593,7 +584,7 @@ var supportedStringBuiltIns = []FuncNew{
 		functionId: BIT_LENGTH,
 		class:      plan.Function_STRICT,
 		layout:     STANDARD_FUNCTION,
-		checkFn:    fixedTypeMatch,
+		checkFn:    stringDomainFixedTypeMatch,
 
 		Overloads: []overload{
 			{
@@ -1114,7 +1105,7 @@ var supportedStringBuiltIns = []FuncNew{
 		functionId: INSTR,
 		class:      plan.Function_STRICT,
 		layout:     STANDARD_FUNCTION,
-		checkFn:    fixedTypeMatch,
+		checkFn:    stringDomainFixedTypeMatch,
 
 		Overloads: []overload{
 			{
@@ -2626,7 +2617,7 @@ var supportedStringBuiltIns = []FuncNew{
 		functionId: LEFT,
 		class:      plan.Function_STRICT,
 		layout:     STANDARD_FUNCTION,
-		checkFn:    collatedTextFixedTypeMatch,
+		checkFn:    stringDomainFixedTypeMatch,
 
 		Overloads: []overload{
 			{
@@ -2657,7 +2648,7 @@ var supportedStringBuiltIns = []FuncNew{
 		functionId: RIGHT,
 		class:      plan.Function_STRICT,
 		layout:     STANDARD_FUNCTION,
-		checkFn:    collatedTextFixedTypeMatch,
+		checkFn:    stringDomainFixedTypeMatch,
 
 		Overloads: []overload{
 			{
@@ -2688,7 +2679,7 @@ var supportedStringBuiltIns = []FuncNew{
 		functionId: LENGTH,
 		class:      plan.Function_STRICT,
 		layout:     STANDARD_FUNCTION,
-		checkFn:    fixedTypeMatch,
+		checkFn:    stringDomainFixedTypeMatch,
 
 		Overloads: []overload{
 			{
@@ -2739,7 +2730,7 @@ var supportedStringBuiltIns = []FuncNew{
 		functionId: LENGTH_UTF8,
 		class:      plan.Function_STRICT,
 		layout:     STANDARD_FUNCTION,
-		checkFn:    fixedTypeMatch,
+		checkFn:    stringDomainFixedTypeMatch,
 
 		Overloads: []overload{
 			{
@@ -2817,7 +2808,7 @@ var supportedStringBuiltIns = []FuncNew{
 				overloadId: 0,
 				args:       []types.T{types.T_varchar, types.T_int64, types.T_varchar},
 				retType: func(parameters []types.Type) types.Type {
-					return stringResultTypeForDomains(parameters, []int{0, 2}, unknownStringResultBound())
+					return expandingStringReturnType(parameters, 0)
 				},
 				newOp: func() executeLogicOfOverload {
 					return builtInLpad
@@ -2851,7 +2842,7 @@ var supportedStringBuiltIns = []FuncNew{
 		functionId: LTRIM,
 		class:      plan.Function_STRICT,
 		layout:     STANDARD_FUNCTION,
-		checkFn:    collatedTextFixedTypeMatch,
+		checkFn:    stringDomainFixedTypeMatch,
 
 		Overloads: []overload{
 			{
@@ -3163,7 +3154,7 @@ var supportedStringBuiltIns = []FuncNew{
 		functionId: REVERSE,
 		class:      plan.Function_STRICT,
 		layout:     STANDARD_FUNCTION,
-		checkFn:    collatedTextFixedTypeMatch,
+		checkFn:    stringDomainFixedTypeMatch,
 
 		Overloads: []overload{
 			{
@@ -3211,7 +3202,7 @@ var supportedStringBuiltIns = []FuncNew{
 				overloadId: 0,
 				args:       []types.T{types.T_varchar, types.T_int64, types.T_varchar},
 				retType: func(parameters []types.Type) types.Type {
-					return stringResultTypeForDomains(parameters, []int{0, 2}, unknownStringResultBound())
+					return expandingStringReturnType(parameters, 0)
 				},
 				newOp: func() executeLogicOfOverload {
 					return builtInRpad
@@ -3245,7 +3236,7 @@ var supportedStringBuiltIns = []FuncNew{
 		functionId: RTRIM,
 		class:      plan.Function_STRICT,
 		layout:     STANDARD_FUNCTION,
-		checkFn:    collatedTextFixedTypeMatch,
+		checkFn:    stringDomainFixedTypeMatch,
 
 		Overloads: []overload{
 			{
@@ -3382,7 +3373,7 @@ var supportedStringBuiltIns = []FuncNew{
 		functionId: SPLIT_PART,
 		class:      plan.Function_STRICT,
 		layout:     STANDARD_FUNCTION,
-		checkFn:    collatedTextFixedTypeMatch,
+		checkFn:    stringDomainFixedTypeMatch,
 
 		Overloads: []overload{
 			{
@@ -4004,7 +3995,7 @@ var supportedStringBuiltIns = []FuncNew{
 		functionId: SUBSTRING,
 		class:      plan.Function_STRICT,
 		layout:     STANDARD_FUNCTION,
-		checkFn:    collatedTextFixedTypeMatch,
+		checkFn:    stringDomainFixedTypeMatch,
 
 		Overloads: []overload{
 			{
@@ -4085,7 +4076,7 @@ var supportedStringBuiltIns = []FuncNew{
 		functionId: SUBSTRING_INDEX,
 		class:      plan.Function_STRICT,
 		layout:     STANDARD_FUNCTION,
-		checkFn:    collatedTextFixedTypeMatch, // TODO:
+		checkFn:    stringDomainFixedTypeMatch,
 
 		Overloads: []overload{
 			{
@@ -4350,7 +4341,7 @@ var supportedStringBuiltIns = []FuncNew{
 		functionId: TRIM,
 		class:      plan.Function_STRICT,
 		layout:     STANDARD_FUNCTION,
-		checkFn:    collatedTextFixedTypeMatch,
+		checkFn:    stringDomainFixedTypeMatch,
 
 		Overloads: []overload{
 			{
@@ -4371,7 +4362,7 @@ var supportedStringBuiltIns = []FuncNew{
 		functionId: LOWER,
 		class:      plan.Function_STRICT,
 		layout:     STANDARD_FUNCTION,
-		checkFn:    collatedTextFixedTypeMatch,
+		checkFn:    stringDomainFixedTypeMatch,
 
 		Overloads: []overload{
 			{
@@ -4392,7 +4383,7 @@ var supportedStringBuiltIns = []FuncNew{
 		functionId: UPPER,
 		class:      plan.Function_STRICT,
 		layout:     STANDARD_FUNCTION,
-		checkFn:    collatedTextFixedTypeMatch,
+		checkFn:    stringDomainFixedTypeMatch,
 
 		Overloads: []overload{
 			{
@@ -4413,7 +4404,7 @@ var supportedStringBuiltIns = []FuncNew{
 		functionId: LOCATE,
 		class:      plan.Function_STRICT,
 		layout:     STANDARD_FUNCTION,
-		checkFn:    fixedTypeMatch,
+		checkFn:    stringDomainFixedTypeMatch,
 
 		Overloads: []overload{
 			{
@@ -4465,7 +4456,7 @@ var supportedStringBuiltIns = []FuncNew{
 		functionId: POSITION,
 		class:      plan.Function_STRICT,
 		layout:     POSITION_FUNCTION,
-		checkFn:    fixedTypeMatch,
+		checkFn:    stringDomainFixedTypeMatch,
 
 		Overloads: []overload{
 			{
@@ -12848,16 +12839,14 @@ var supportedOthersBuiltIns = []FuncNew{
 	// function `charset`
 	{
 		functionId: CHARSET,
-		class:      plan.Function_STRICT,
+		class:      plan.Function_PRODUCE_NO_NULL,
 		layout:     STANDARD_FUNCTION,
-		checkFn:    fixedTypeMatch,
+		checkFn:    charsetAndCollationTypeMatch,
 
 		Overloads: []overload{
 			{
-				overloadId:      0,
-				args:            []types.T{types.T_varchar},
-				volatile:        true,
-				realTimeRelated: true,
+				overloadId: 0,
+				args:       []types.T{types.T_any},
 				retType: func(parameters []types.Type) types.Type {
 					return types.T_varchar.ToType()
 				},
@@ -12871,16 +12860,14 @@ var supportedOthersBuiltIns = []FuncNew{
 	// function `collation`
 	{
 		functionId: COLLATION,
-		class:      plan.Function_STRICT,
+		class:      plan.Function_PRODUCE_NO_NULL,
 		layout:     STANDARD_FUNCTION,
-		checkFn:    fixedTypeMatch,
+		checkFn:    charsetAndCollationTypeMatch,
 
 		Overloads: []overload{
 			{
-				overloadId:      0,
-				args:            []types.T{types.T_varchar},
-				volatile:        true,
-				realTimeRelated: true,
+				overloadId: 0,
+				args:       []types.T{types.T_any},
 				retType: func(parameters []types.Type) types.Type {
 					return types.T_varchar.ToType()
 				},

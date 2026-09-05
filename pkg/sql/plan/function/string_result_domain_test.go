@@ -16,6 +16,7 @@ package function
 
 import (
 	"math"
+	"strings"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -226,12 +227,14 @@ func TestExpandingReplacementAndInsertBounds(t *testing.T) {
 
 	inserted := insertStringReturnType([]types.Type{varbinary(1), types.T_int64.ToType(), types.T_int64.ToType(), varbinary(1)})
 	require.Equal(t, types.T_varbinary, inserted.Oid)
-	require.Equal(t, int32(4), inserted.Width)
+	require.Equal(t, int32(2), inserted.Width)
 
 	binaryReplacement := replacementStringReturnType([]types.Type{varchar(2), varchar(1), varbinary(1)})
-	require.Equal(t, types.T_varbinary, binaryReplacement.Oid)
+	require.Equal(t, types.T_varchar, binaryReplacement.Oid)
+	require.Equal(t, types.CharsetUTF8, binaryReplacement.Charset)
 	binaryInsertion := insertStringReturnType([]types.Type{varchar(1), types.T_int64.ToType(), types.T_int64.ToType(), varbinary(1)})
-	require.Equal(t, types.T_varbinary, binaryInsertion.Oid)
+	require.Equal(t, types.T_varchar, binaryInsertion.Oid)
+	require.Equal(t, types.CharsetUTF8, binaryInsertion.Charset)
 }
 
 func TestStringConsumersPreserveTextAndBoundedWidths(t *testing.T) {
@@ -239,9 +242,10 @@ func TestStringConsumersPreserveTextAndBoundedWidths(t *testing.T) {
 	binaryReverse, err := GetFunctionByName(proc.Ctx, "reverse", []types.Type{types.New(types.T_varbinary, 1, 0)})
 	require.NoError(t, err)
 	casts, needCast := binaryReverse.ShouldDoImplicitTypeCast()
-	require.True(t, needCast)
-	require.Equal(t, types.T_blob, casts[0].Oid)
-	require.Equal(t, types.T_blob, binaryReverse.GetReturnType().Oid)
+	require.False(t, needCast)
+	require.Empty(t, casts)
+	require.Equal(t, types.T_varbinary, binaryReverse.GetReturnType().Oid)
+	require.Equal(t, int32(1), binaryReverse.GetReturnType().Width)
 
 	blobReverse, err := GetFunctionByName(proc.Ctx, "reverse", []types.Type{types.T_blob.ToType()})
 	require.NoError(t, err)
@@ -405,10 +409,42 @@ func TestPadResultByteLengthEnforcesEncodedBudget(t *testing.T) {
 	length, rejected = padResultByteLength("a", 2, "", int64(types.MaxVarcharLen))
 	require.False(t, rejected)
 	require.Zero(t, length)
-	dst := make([]byte, length)
-	require.NotPanics(t, func() { writePadResult(dst, "a", 2, "", true) })
-	require.Empty(t, dst)
-	require.NotPanics(t, func() { writePadResult(dst, "a", 2, "", false) })
+
+	length, rejected = padResultByteLength("abc", 2, "", int64(types.MaxVarcharLen))
+	require.False(t, rejected)
+	require.Equal(t, 2, length)
+
+	_, rejected = padResultByteLength("a", int64(types.MaxVarcharLen)+1, "", int64(types.MaxVarcharLen))
+	require.True(t, rejected)
+
+	const utf8mb4Boundary = int64(16_777_216)
+	length, rejected = padResultByteLength("a", utf8mb4Boundary, "a", int64(types.MaxBlobLen))
+	require.False(t, rejected)
+	require.Equal(t, int(utf8mb4Boundary), length)
+	_, rejected = padResultByteLength("a", utf8mb4Boundary+1, "a", int64(types.MaxBlobLen))
+	require.True(t, rejected)
+	_, rejected = padResultByteLength("a", utf8mb4Boundary+1, "", int64(types.MaxBlobLen))
+	require.True(t, rejected)
+	length, rejected = padResultByteLength(strings.Repeat("a", 100), utf8mb4Boundary+1, "", int64(types.MaxBlobLen))
+	require.False(t, rejected)
+	require.Zero(t, length)
+
+	longSource := strings.Repeat("a", 17_000_000)
+	length, rejected = padResultByteLength(longSource, utf8mb4Boundary+1, "", int64(types.MaxBlobLen))
+	require.False(t, rejected)
+	require.Equal(t, int(utf8mb4Boundary+1), length)
+
+	const utf8mb3Boundary = int64(22_369_622)
+	length, rejected = padResultByteLengthWithCharacterWidth(
+		"a", utf8mb3Boundary, "a", int64(types.MaxBlobLen), 3)
+	require.False(t, rejected)
+	require.Equal(t, int(utf8mb3Boundary), length)
+	_, rejected = padResultByteLengthWithCharacterWidth(
+		"a", utf8mb3Boundary+1, "a", int64(types.MaxBlobLen), 3)
+	require.True(t, rejected)
+
+	legacy := types.NewWithCharset(types.T_text, 0, 0, types.CharsetLegacy)
+	require.Equal(t, 3, maxPadTextCharacterWidth(&legacy))
 }
 
 func TestExpandingTextResultsUseTextCapacity(t *testing.T) {

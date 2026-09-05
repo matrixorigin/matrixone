@@ -417,6 +417,7 @@ func doComQueryInBack(
 		proc.SetResolveVariableFunc(process.SystemCTEResolver(backSes.txnCompileCtx.ResolveVariable))
 	}
 	proc.SetResolveVariableIsBinFunc(backSes.txnCompileCtx.ResolveVariableIsBin)
+	proc.SetResolveVariableStringDomainFunc(backSes.txnCompileCtx.ResolveVariableStringDomain)
 	proc.SetResolveVariablePrepareParamKindFunc(backSes.txnCompileCtx.ResolveVariablePrepareParamKind)
 	// backExec.Exec and ExecRestore reject multi-statement SQL before reaching
 	// this path, so one snapshot here covers the complete background statement.

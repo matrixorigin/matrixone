@@ -236,8 +236,8 @@ character_octet_length  ¦  BIGINT(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 numeric_precision  ¦  BIGINT(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 numeric_scale  ¦  BIGINT(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 datetime_precision  ¦  BIGINT(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-character_set_name  ¦  VARCHAR(6)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-collation_name  ¦  VARCHAR(8)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+character_set_name  ¦  VARCHAR(7)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+collation_name  ¦  VARCHAR(18)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 column_type  ¦  VARCHAR(65535)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 column_key  ¦  VARCHAR(3)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 extra  ¦  VARCHAR(24)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
@@ -321,7 +321,7 @@ MAXLEN  ¦  INT UNSIGNED(32)  ¦  YES  ¦    ¦  null  ¦    ¦
 select character_set_name, description, maxlen from character_sets limit 5;
 ➤ character_set_name[12,64,0]  ¦  description[12,2048,0]  ¦  maxlen[4,32,0]  𝄀
 binary  ¦  Binary pseudo charset  ¦  1  𝄀
-utf8  ¦  UTF-8 Unicode  ¦  4  𝄀
+utf8  ¦  UTF-8 Unicode  ¦  3  𝄀
 utf8mb4  ¦  UTF-8 Unicode  ¦  4
 desc triggers;
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀

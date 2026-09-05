@@ -622,6 +622,7 @@ message MigrateUserDefinedVar {
   bool IsBin = 4;
   uint32 PrepareParamKind = 5;
   plan.Type Type = 6;
+  uint32 RuntimeStringDomain = 7;
 }
 
 message UserLevelLock {

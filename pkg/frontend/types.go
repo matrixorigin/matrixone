@@ -361,6 +361,7 @@ type PrepareStmt struct {
 	hasPaginationParams        bool
 	hasLagLeadParams           bool
 	paramKinds                 []vector.PrepareParamKind
+	paramBinaryStrings         []bool
 	paramMetadata              []bool
 	// jsonComparisonParamPositions is computed once per prepared-plan
 	// generation. Only these parameters need an exact SQL type in Process

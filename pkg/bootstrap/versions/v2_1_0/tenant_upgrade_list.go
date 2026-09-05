@@ -32,7 +32,7 @@ var upg_information_schema_columns = versions.UpgradeEntry{
 	TableName:               "COLUMNS",
 	UpgType:                 versions.MODIFY_VIEW,
 	UpgSql:                  sysview.InformationSchemaColumnsDDL,
-	RequiredProtocolVersion: defines.MORPCVersion46,
+	RequiredProtocolVersion: defines.MORPCVersion48,
 	CheckFunc: func(txn executor.TxnExecutor, accountId uint32) (bool, error) {
 		exists, viewDef, err := versions.CheckViewDefinition(txn, accountId, sysview.InformationDBConst, "COLUMNS")
 		if err != nil {

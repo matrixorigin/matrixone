@@ -254,6 +254,10 @@ func TestInitInformationSchemaSysTablesForProtocol(t *testing.T) {
 			assert.Len(t, localCatalog, len(InitInformationSchemaSysTables))
 			assert.Contains(t, localCatalog, InformationSchemaTablesV41DDL)
 			assert.Contains(t, localCatalog, InformationSchemaColumnsV41DDL)
+			assert.Contains(t, InformationSchemaColumnsV41DDL, "WHEN 1 then 'utf8' WHEN 2 then 'binary'")
+			assert.Contains(t, InformationSchemaColumnsV41DDL, "WHEN 3 then 'utf8'")
+			assert.Contains(t, InformationSchemaColumnsV41DDL, "WHEN 3 then 'utf8_bin'")
+			assert.NotContains(t, InformationSchemaColumnsV41DDL, "WHEN 3 then 'utf8mb4'")
 			assert.NotContains(t, strings.Join(localCatalog, "\n"), "mo_subscription_tables()")
 			assert.NotContains(t, strings.Join(localCatalog, "\n"), "mo_subscription_columns()")
 			assert.Contains(t, strings.Join(localCatalog, "\n"), "mo_current_roles()")
@@ -263,8 +267,27 @@ func TestInitInformationSchemaSysTablesForProtocol(t *testing.T) {
 		})
 	}
 
-	latest := InitInformationSchemaSysTablesForProtocol(defines.MORPCVersion46)
+	for _, protocol := range []int64{defines.MORPCVersion46, defines.MORPCVersion47} {
+		t.Run(fmt.Sprintf("subscription-legacy-identity-v%d", protocol), func(t *testing.T) {
+			subscriptionLegacyIdentity := InitInformationSchemaSysTablesForProtocol(protocol)
+			assert.Len(t, subscriptionLegacyIdentity, len(InitInformationSchemaSysTables))
+			assert.Contains(t, subscriptionLegacyIdentity, InformationSchemaTablesDDL)
+			assert.Contains(t, subscriptionLegacyIdentity, InformationSchemaColumnsV46DDL)
+			joined := strings.Join(subscriptionLegacyIdentity, "\n")
+			assert.Contains(t, joined, "mo_subscription_tables()")
+			assert.Contains(t, joined, "mo_subscription_columns()")
+			assert.Contains(t, joined, "WHEN 3 then 'utf8'")
+			assert.Contains(t, joined, "WHEN 3 then 'utf8_bin'")
+			assert.NotContains(t, joined, "WHEN 3 then 'utf8mb4'")
+			for _, sql := range subscriptionLegacyIdentity {
+				assertInformationSchemaInitSQLParses(t, sql)
+			}
+		})
+	}
+
+	latest := InitInformationSchemaSysTablesForProtocol(defines.MORPCVersion48)
 	assert.Equal(t, InitInformationSchemaSysTables, latest)
+	assert.Contains(t, strings.Join(latest, "\n"), "WHEN 3 then 'utf8mb4'")
 }
 
 func assertInformationSchemaInitSQLParses(t *testing.T, sql string) {
@@ -409,10 +432,25 @@ func TestInformationSchemaCheckConstraintsDDL(t *testing.T) {
 	}
 }
 
+func TestInformationSchemaColumnsUsesTypeCharsetIdentity(t *testing.T) {
+	for _, expected := range []string{
+		"WHEN 0 then 'utf8'",
+		"WHEN 1 then 'utf8mb4'",
+		"WHEN 2 then 'binary'",
+		"WHEN 3 then 'utf8mb4'",
+		"WHEN 0 then 'utf8_general_ci'",
+		"WHEN 1 then 'utf8mb4_bin'",
+		"WHEN 2 then 'binary'",
+		"WHEN 3 then 'utf8mb4_general_ci'",
+	} {
+		assert.Contains(t, InformationSchemaColumnsDDL, expected)
+	}
+}
+
 func TestInformationSchemaCharacterSetsData(t *testing.T) {
 	for _, expected := range []string{
 		"('binary','binary','Binary pseudo charset',1)",
-		"('utf8','utf8_general_ci','UTF-8 Unicode',4)",
+		"('utf8','utf8_general_ci','UTF-8 Unicode',3)",
 		"('utf8mb4','utf8mb4_general_ci','UTF-8 Unicode',4)",
 	} {
 		assert.Contains(t, InformationSchemaCharacterSetsData, expected)

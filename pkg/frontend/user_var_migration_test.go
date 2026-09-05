@@ -23,10 +23,12 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/bytejson"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/query"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
@@ -121,6 +123,32 @@ func TestUserDefinedVarMigrationPreservesType(t *testing.T) {
 	restored, err := decodeUserDefinedVars(context.Background(), snapshot, false)
 	require.NoError(t, err)
 	require.Equal(t, typ, restored["amount"].Type)
+}
+
+func TestUserDefinedVarMigrationPreservesRuntimeStringDomain(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+	ses := newTestSession(t, ctrl)
+	rt := runtime.ServiceRuntime(ses.service)
+	defer rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCLatestVersion)
+
+	typ := plan.Type{Id: int32(types.T_varbinary), Charset: uint32(types.CharsetBinary)}
+	require.NoError(t, ses.setUserDefinedVarWithTypeAndKindAndReplayability(
+		"text_override", "你", "", false, typ, vector.PrepareParamNone,
+		false, types.RuntimeStringText))
+
+	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion47)
+	_, err := ses.snapshotUserDefinedVars(context.Background())
+	require.ErrorContains(t, err, "require MORPC protocol version 48")
+
+	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion48)
+	snapshot, err := ses.snapshotUserDefinedVars(context.Background())
+	require.NoError(t, err)
+	require.Equal(t, uint32(types.RuntimeStringText), snapshot[0].RuntimeStringDomain)
+	restored, err := decodeUserDefinedVars(context.Background(), snapshot, false)
+	require.NoError(t, err)
+	require.Equal(t, types.RuntimeStringText, restored["text_override"].RuntimeStringDomain)
+	require.Equal(t, typ, restored["text_override"].Type)
 }
 
 func TestUserDefinedVarMigrationRoundTripsJSON(t *testing.T) {

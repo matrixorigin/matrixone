@@ -16,8 +16,10 @@ package function
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 	"regexp"
+	"slices"
 	"strings"
 	"unicode"
 	"unicode/utf8"
@@ -25,6 +27,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/util"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -54,6 +57,13 @@ func newOpBuiltInRegexp() *opBuiltInRegexp {
 func (op *opBuiltInRegexp) likeFn(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	if len(parameters) == 3 {
 		return op.likeFnWithEscape(parameters, result, proc, length, selectList, false)
+	}
+
+	uniformBinary, perRow := stringDomainMode(parameters[0])
+	if uniformBinary || perRow {
+		return op.likeByStringDomain(
+			parameters, result, proc, length, selectList, uniformBinary, perRow,
+			[]byte{byte(DefaultEscapeChar)}, true)
 	}
 
 	p1 := vector.GenerateFunctionStrParameter(parameters[0])
@@ -120,24 +130,595 @@ func (op *opBuiltInRegexp) likeFnWithEscape(
 		escapeIsNull = isNull
 	}
 
-	escapeEnabled := false
-	var escape rune
-	if !escapeIsNull {
-		if !utf8.Valid(escapeBytes) || utf8.RuneCount(escapeBytes) > 1 {
-			return moerr.NewInvalidInputNoCtx("Incorrect arguments to ESCAPE")
-		}
-		if len(escapeBytes) == 0 && likeNoBackslashEscapes(proc) {
-			return moerr.NewInvalidInputNoCtx("Incorrect arguments to ESCAPE")
-		}
+	escapeEnabled := !escapeIsNull && len(escapeBytes) != 0
+	if !escapeIsNull && len(escapeBytes) == 0 && likeNoBackslashEscapes(proc) {
+		return moerr.NewInvalidInputNoCtx("Incorrect arguments to ESCAPE")
+	}
 
-		escapeEnabled = len(escapeBytes) != 0
-		if escapeEnabled {
-			escape, _ = utf8.DecodeRune(escapeBytes)
-		}
+	uniformBinary, perRow := stringDomainMode(parameters[0])
+	if !caseInsensitive && (uniformBinary || perRow) {
+		return op.likeByStringDomain(
+			parameters[:2], result, proc, length, selectList, uniformBinary, perRow,
+			escapeBytes, escapeEnabled)
+	}
+	if !escapeIsNull && (!utf8.Valid(escapeBytes) || utf8.RuneCount(escapeBytes) > 1) {
+		return moerr.NewInvalidInputNoCtx("Incorrect arguments to ESCAPE")
+	}
+	var escape rune
+	if escapeEnabled {
+		escape, _ = utf8.DecodeRune(escapeBytes)
 	}
 	return opBinaryBytesBytesToFixedWithErrorCheck[bool](parameters[:2], result, proc, length, func(value, pattern []byte) (bool, error) {
 		return op.regMap.regularMatchForLikeOpWithEscape(pattern, value, escape, escapeEnabled, caseInsensitive)
 	}, selectList)
+}
+
+func (op *opBuiltInRegexp) likeByStringDomain(
+	parameters []*vector.Vector,
+	result vector.FunctionResultWrapper,
+	proc *process.Process,
+	length int,
+	selectList *FunctionSelectList,
+	uniformBinary, perRow bool,
+	escapeBytes []byte,
+	escapeEnabled bool,
+) error {
+	values := vector.GenerateFunctionStrParameter(parameters[0])
+	patterns := vector.GenerateFunctionStrParameter(parameters[1])
+	rs := vector.MustFunctionResult[bool](result)
+	constantPattern := parameters[1].IsConst()
+	compiledPattern := &compiledByteLikePattern{mp: proc.Mp(), ctx: proc.Ctx}
+	compiledPatternReady := false
+	defer compiledPattern.free()
+	for row := uint64(0); row < uint64(length); row++ {
+		if functionRowSkipped(selectList, row) {
+			if err := rs.Append(false, true); err != nil {
+				return err
+			}
+			continue
+		}
+		value, valueNull := values.GetStrValue(row)
+		pattern, patternNull := patterns.GetStrValue(row)
+		if valueNull || patternNull {
+			if err := rs.Append(false, true); err != nil {
+				return err
+			}
+			continue
+		}
+		var matched bool
+		var err error
+		if binaryStringAt(parameters[0], int(row), uniformBinary, perRow) {
+			if escapeEnabled && len(escapeBytes) != 1 {
+				return moerr.NewInvalidInputNoCtx("Incorrect arguments to ESCAPE")
+			}
+			if !constantPattern || !compiledPatternReady {
+				if err = compiledPattern.reset(pattern, escapeBytes, escapeEnabled); err != nil {
+					return err
+				}
+				compiledPatternReady = true
+			}
+			matched, err = compiledPattern.match(value)
+		} else {
+			if !utf8.Valid(escapeBytes) || utf8.RuneCount(escapeBytes) > 1 {
+				return moerr.NewInvalidInputNoCtx("Incorrect arguments to ESCAPE")
+			}
+			var escapeRune rune
+			if escapeEnabled {
+				escapeRune, _ = utf8.DecodeRune(escapeBytes)
+			}
+			matched, err = op.regMap.regularMatchForLikeOpWithEscape(
+				pattern, value, escapeRune, escapeEnabled, false)
+		}
+		if err != nil {
+			return err
+		}
+		if err = rs.Append(matched, false); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+const (
+	byteLikeLiteral byte = iota
+	byteLikeOne
+	byteLikeAny
+)
+
+type compiledByteLikePattern struct {
+	storage                []byte
+	kinds                  []byte
+	literals               []byte
+	convolutionScratch     []byte
+	literalPositionScratch []byte
+	mp                     *mpool.MPool
+	ctx                    context.Context
+}
+
+type byteLikeDirectVerificationBudget struct {
+	remaining uint64
+}
+
+func newByteLikeDirectVerificationBudget(valueLength, patternLength int) byteLikeDirectVerificationBudget {
+	linearBaseline := uint64(valueLength) + uint64(patternLength)
+	if linearBaseline > ^uint64(0)/byteLikeConvolutionRelativeWorkFactor {
+		return byteLikeDirectVerificationBudget{remaining: ^uint64(0)}
+	}
+	return byteLikeDirectVerificationBudget{
+		remaining: linearBaseline * byteLikeConvolutionRelativeWorkFactor,
+	}
+}
+
+func (budget *byteLikeDirectVerificationBudget) consume(work uint64) bool {
+	if budget == nil {
+		return true
+	}
+	if work > budget.remaining {
+		budget.remaining = 0
+		return false
+	}
+	budget.remaining -= work
+	return true
+}
+
+func compileByteLikePattern(
+	pattern, escape []byte,
+	escapeEnabled bool,
+	mp *mpool.MPool,
+) (*compiledByteLikePattern, error) {
+	compiled := &compiledByteLikePattern{mp: mp}
+	if err := compiled.reset(pattern, escape, escapeEnabled); err != nil {
+		compiled.free()
+		return nil, err
+	}
+	return compiled, nil
+}
+
+func (compiled *compiledByteLikePattern) reset(
+	pattern, escape []byte,
+	escapeEnabled bool,
+) error {
+	tokenCount := 0
+	previousAny := false
+	for at := 0; at < len(pattern); {
+		if at&(byteLikeCancellationCheckInterval-1) == 0 {
+			if err := compiled.byteLikeCancellationError(); err != nil {
+				return err
+			}
+		}
+		kind, literal, next := nextByteLikeToken(pattern, at, escape, escapeEnabled)
+		if kind != byteLikeAny || !previousAny {
+			if kind == byteLikeLiteral {
+				tokenCount += len(literal)
+			} else {
+				tokenCount++
+			}
+		}
+		previousAny = kind == byteLikeAny
+		at = next
+	}
+	storageSize := tokenCount * 2
+	if cap(compiled.storage) < storageSize {
+		storage, err := compiled.mp.Grow(compiled.storage, storageSize, true)
+		if err != nil {
+			return err
+		}
+		compiled.storage = storage
+	}
+	compiled.storage = compiled.storage[:storageSize]
+	compiled.kinds = compiled.storage[:tokenCount]
+	compiled.literals = compiled.storage[tokenCount:]
+
+	position := 0
+	previousAny = false
+	for at := 0; at < len(pattern); {
+		if at&(byteLikeCancellationCheckInterval-1) == 0 {
+			if err := compiled.byteLikeCancellationError(); err != nil {
+				return err
+			}
+		}
+		kind, literal, next := nextByteLikeToken(pattern, at, escape, escapeEnabled)
+		if kind != byteLikeAny || !previousAny {
+			if kind == byteLikeLiteral {
+				for _, b := range literal {
+					compiled.kinds[position] = byteLikeLiteral
+					compiled.literals[position] = b
+					position++
+				}
+			} else {
+				compiled.kinds[position] = kind
+				position++
+			}
+		}
+		previousAny = kind == byteLikeAny
+		at = next
+	}
+	return nil
+}
+
+func byteLike(
+	pattern, value, escape []byte,
+	escapeEnabled bool,
+	mp *mpool.MPool,
+) (bool, error) {
+	compiled, err := compileByteLikePattern(pattern, escape, escapeEnabled, mp)
+	if err != nil {
+		return false, err
+	}
+	defer compiled.free()
+	return compiled.match(value)
+}
+
+func (compiled *compiledByteLikePattern) free() {
+	if compiled == nil {
+		return
+	}
+	if compiled.storage != nil {
+		compiled.mp.Free(compiled.storage)
+		compiled.storage = nil
+		compiled.kinds = nil
+		compiled.literals = nil
+	}
+	if compiled.convolutionScratch != nil {
+		compiled.mp.Free(compiled.convolutionScratch)
+		compiled.convolutionScratch = nil
+	}
+	if compiled.literalPositionScratch != nil {
+		compiled.mp.Free(compiled.literalPositionScratch)
+		compiled.literalPositionScratch = nil
+	}
+}
+
+func (compiled *compiledByteLikePattern) match(value []byte) (bool, error) {
+	if len(compiled.kinds) == 0 {
+		return len(value) == 0, nil
+	}
+	directBudget := newByteLikeDirectVerificationBudget(len(value), len(compiled.kinds))
+	firstAny := slices.Index(compiled.kinds, byteLikeAny)
+	if firstAny < 0 {
+		if len(value) != len(compiled.kinds) {
+			return false, nil
+		}
+		matched, _, err := compiled.matchSegmentAt(0, len(compiled.kinds), value, 0, &directBudget)
+		return matched, err
+	}
+
+	cursor := 0
+	segmentAt := 0
+	if firstAny > 0 {
+		if len(value) < firstAny {
+			return false, nil
+		}
+		matched, _, err := compiled.matchSegmentAt(0, firstAny, value, 0, nil)
+		if err != nil || !matched {
+			return false, err
+		}
+		cursor = firstAny
+		segmentAt = firstAny
+	}
+	for segmentAt < len(compiled.kinds) && compiled.kinds[segmentAt] == byteLikeAny {
+		segmentAt++
+	}
+
+	lastAny := len(compiled.kinds) - 1
+	for compiled.kinds[lastAny] != byteLikeAny {
+		lastAny--
+	}
+	suffixAt := len(compiled.kinds)
+	searchLimit := len(value)
+	if lastAny < len(compiled.kinds)-1 {
+		suffixAt = lastAny + 1
+		suffixLength := len(compiled.kinds) - suffixAt
+		if suffixLength > len(value)-cursor {
+			return false, nil
+		}
+		searchLimit = len(value) - suffixLength
+		matched, _, err := compiled.matchSegmentAt(suffixAt, len(compiled.kinds), value, searchLimit, nil)
+		if err != nil || !matched {
+			return false, err
+		}
+	}
+
+	var literalFrequency [256]int
+	for at, b := range value[cursor:searchLimit] {
+		if at&(byteLikeCancellationCheckInterval-1) == 0 {
+			if err := compiled.byteLikeCancellationError(); err != nil {
+				return false, err
+			}
+		}
+		literalFrequency[b]++
+	}
+	for segmentAt < suffixAt {
+		segmentEnd := slices.Index(compiled.kinds[segmentAt:suffixAt], byteLikeAny)
+		if segmentEnd < 0 {
+			segmentEnd = suffixAt
+		} else {
+			segmentEnd += segmentAt
+		}
+		matchAt, err := compiled.findSegment(
+			segmentAt, segmentEnd, value, cursor, searchLimit, &literalFrequency, &directBudget)
+		if err != nil {
+			return false, err
+		}
+		if matchAt < 0 {
+			return false, nil
+		}
+		nextCursor := matchAt + segmentEnd - segmentAt
+		// Keep frequencies exact for the next segment's [cursor, searchLimit) range.
+		// Across the complete match each value byte is removed at most once.
+		for at := cursor; at < nextCursor; at++ {
+			if (at-cursor)&(byteLikeCancellationCheckInterval-1) == 0 {
+				if err := compiled.byteLikeCancellationError(); err != nil {
+					return false, err
+				}
+			}
+			literalFrequency[value[at]]--
+		}
+		cursor = nextCursor
+		segmentAt = segmentEnd
+		for segmentAt < suffixAt && compiled.kinds[segmentAt] == byteLikeAny {
+			segmentAt++
+		}
+	}
+	return cursor <= searchLimit, nil
+}
+
+func (compiled *compiledByteLikePattern) matchSegmentAt(
+	start, end int,
+	value []byte,
+	valueAt int,
+	directBudget *byteLikeDirectVerificationBudget,
+) (matched, budgetExhausted bool, err error) {
+	if end-start > len(value)-valueAt {
+		return false, false, nil
+	}
+	for left, right, iteration := start, end-1, 0; left <= right; left, right, iteration = left+1, right-1, iteration+1 {
+		if iteration&(byteLikeCancellationCheckInterval-1) == 0 {
+			if err = compiled.byteLikeCancellationError(); err != nil {
+				return false, false, err
+			}
+		}
+		work := uint64(2)
+		if left == right {
+			work = 1
+		}
+		if !directBudget.consume(work) {
+			return false, true, nil
+		}
+		if compiled.kinds[left] == byteLikeLiteral &&
+			compiled.literals[left] != value[valueAt+left-start] {
+			return false, false, nil
+		}
+		if right != left && compiled.kinds[right] == byteLikeLiteral &&
+			compiled.literals[right] != value[valueAt+right-start] {
+			return false, false, nil
+		}
+	}
+	return true, false, nil
+}
+
+func (compiled *compiledByteLikePattern) prepareByteLikeLiteralPositions(
+	start, end, literalCount int,
+) ([]uint32, error) {
+	requiredBytes := literalCount * 4
+	if cap(compiled.literalPositionScratch) < requiredBytes {
+		storage, err := compiled.mp.Grow(compiled.literalPositionScratch, requiredBytes, true)
+		if err != nil {
+			return nil, err
+		}
+		compiled.literalPositionScratch = storage
+	}
+	compiled.literalPositionScratch = compiled.literalPositionScratch[:requiredBytes]
+	positions := byteLikeUint32Scratch(compiled.literalPositionScratch, literalCount)
+	positionAt := 0
+	for patternAt := start; patternAt < end; patternAt++ {
+		if (patternAt-start)&(byteLikeCancellationCheckInterval-1) == 0 {
+			if err := compiled.byteLikeCancellationError(); err != nil {
+				return nil, err
+			}
+		}
+		if compiled.kinds[patternAt] == byteLikeLiteral {
+			positions[positionAt] = uint32(patternAt - start)
+			positionAt++
+		}
+	}
+	return positions, nil
+}
+
+func (compiled *compiledByteLikePattern) matchLiteralPositionsAt(
+	segmentStart int,
+	value []byte,
+	valueAt int,
+	positions []uint32,
+	directBudget *byteLikeDirectVerificationBudget,
+) (matched, budgetExhausted bool, err error) {
+	for positionAt, position := range positions {
+		if positionAt&(byteLikeCancellationCheckInterval-1) == 0 {
+			if err = compiled.byteLikeCancellationError(); err != nil {
+				return false, false, err
+			}
+		}
+		if !directBudget.consume(1) {
+			return false, true, nil
+		}
+		patternAt := segmentStart + int(position)
+		if compiled.literals[patternAt] != value[valueAt+int(position)] {
+			return false, false, nil
+		}
+	}
+	return true, false, nil
+}
+
+func (compiled *compiledByteLikePattern) findSegment(
+	start, end int,
+	value []byte,
+	from, limit int,
+	literalFrequency *[256]int,
+	directBudget *byteLikeDirectVerificationBudget,
+) (int, error) {
+	segmentLength := end - start
+	if segmentLength > limit-from {
+		return -1, nil
+	}
+	anchorStart, anchorEnd, anchorFrequency, literalCount, err :=
+		compiled.rarestLiteralRun(start, end, literalFrequency)
+	if err != nil {
+		return -1, err
+	}
+	if anchorStart == anchorEnd {
+		return from, nil
+	}
+	if anchorFrequency == 0 {
+		return -1, nil
+	}
+	valueLength := limit - from
+	candidateCount := valueLength - segmentLength + 1
+	segmentHasOne := slices.Contains(compiled.kinds[start:end], byteLikeOne)
+	var literalPositions []uint32
+	verificationWidth := segmentLength
+	if segmentHasOne && candidateCount > 1 && literalCount <= segmentLength/8 {
+		literalPositions, err = compiled.prepareByteLikeLiteralPositions(start, end, literalCount)
+		if err != nil {
+			return -1, err
+		}
+		verificationWidth = literalCount
+	}
+	if segmentHasOne &&
+		byteLikeShouldUseConvolution(anchorFrequency, candidateCount, verificationWidth, valueLength) {
+		matchAt, used, err := compiled.findSegmentByConvolution(start, end, value, from, limit)
+		if used {
+			return matchAt, err
+		}
+	}
+	anchor := compiled.literals[anchorStart:anchorEnd]
+	anchorOffset := anchorStart - start
+	searchAt := from + anchorOffset
+	lastAnchorAt := limit - segmentLength + anchorOffset
+	for searchIteration := 0; searchAt <= lastAnchorAt; searchIteration++ {
+		if searchIteration&(byteLikeCancellationCheckInterval-1) == 0 {
+			if err := compiled.byteLikeCancellationError(); err != nil {
+				return -1, err
+			}
+		}
+		found := bytes.Index(value[searchAt:lastAnchorAt+len(anchor)], anchor)
+		if err := compiled.byteLikeCancellationError(); err != nil {
+			return -1, err
+		}
+		if found < 0 {
+			return -1, nil
+		}
+		candidate := searchAt + found - anchorOffset
+		if !segmentHasOne {
+			return candidate, nil
+		}
+		var matched, budgetExhausted bool
+		if literalPositions != nil {
+			matched, budgetExhausted, err = compiled.matchLiteralPositionsAt(
+				start, value, candidate, literalPositions, directBudget)
+		} else {
+			matched, budgetExhausted, err = compiled.matchSegmentAt(
+				start, end, value, candidate, directBudget)
+		}
+		if err != nil {
+			return -1, err
+		}
+		if budgetExhausted {
+			matchAt, used, convolutionErr := compiled.findSegmentByConvolution(
+				start, end, value, candidate, limit)
+			if used {
+				return matchAt, convolutionErr
+			}
+			if literalPositions != nil {
+				matched, _, err = compiled.matchLiteralPositionsAt(start, value, candidate, literalPositions, nil)
+			} else {
+				matched, _, err = compiled.matchSegmentAt(start, end, value, candidate, nil)
+			}
+			if err != nil {
+				return -1, err
+			}
+		}
+		if matched {
+			return candidate, nil
+		}
+		searchAt += found + 1
+	}
+	return -1, nil
+}
+
+func byteLikeShouldUseConvolution(
+	anchorFrequency, candidateCount, segmentLength, valueLength int,
+) bool {
+	candidateUpperBound := min(anchorFrequency, candidateCount)
+	if candidateUpperBound <= 0 || segmentLength <= 0 || valueLength <= 0 {
+		return false
+	}
+	linearBaseline := uint64(valueLength) + uint64(segmentLength)
+	if linearBaseline > ^uint64(0)/byteLikeConvolutionRelativeWorkFactor {
+		return false
+	}
+	scaledLinearBaseline := linearBaseline * byteLikeConvolutionRelativeWorkFactor
+	return uint64(candidateUpperBound) > scaledLinearBaseline/uint64(segmentLength)
+}
+
+func (compiled *compiledByteLikePattern) rarestLiteralRun(
+	start, end int,
+	literalFrequency *[256]int,
+) (bestStart, bestEnd, bestFrequency, literalCount int, err error) {
+	maxInt := int(^uint(0) >> 1)
+	bestFrequency = maxInt
+	for at := start; at < end; {
+		if (at-start)&(byteLikeCancellationCheckInterval-1) == 0 {
+			if err = compiled.byteLikeCancellationError(); err != nil {
+				return 0, 0, 0, 0, err
+			}
+		}
+		if compiled.kinds[at] != byteLikeLiteral {
+			at++
+			continue
+		}
+		runStart := at
+		runFrequency := maxInt
+		for at < end && compiled.kinds[at] == byteLikeLiteral {
+			if (at-start)&(byteLikeCancellationCheckInterval-1) == 0 {
+				if err = compiled.byteLikeCancellationError(); err != nil {
+					return 0, 0, 0, 0, err
+				}
+			}
+			if literalFrequency[compiled.literals[at]] < runFrequency {
+				runFrequency = literalFrequency[compiled.literals[at]]
+			}
+			literalCount++
+			at++
+		}
+		if runFrequency < bestFrequency ||
+			(runFrequency == bestFrequency && at-runStart >= bestEnd-bestStart) {
+			bestStart, bestEnd = runStart, at
+			bestFrequency = runFrequency
+		}
+	}
+	return bestStart, bestEnd, bestFrequency, literalCount, nil
+}
+
+func nextByteLikeToken(pattern []byte, at int, escape []byte, escapeEnabled bool) (kind byte, literal []byte, next int) {
+	if at >= len(pattern) {
+		return byteLikeLiteral, nil, at
+	}
+	if escapeEnabled && len(escape) > 0 && len(escape) <= len(pattern)-at &&
+		bytes.Equal(pattern[at:at+len(escape)], escape) {
+		next = at + len(escape)
+		if next >= len(pattern) {
+			return byteLikeLiteral, pattern[at:next], next
+		}
+		return byteLikeLiteral, pattern[next : next+1], next + 1
+	}
+	switch pattern[at] {
+	case '_':
+		return byteLikeOne, nil, at + 1
+	case '%':
+		return byteLikeAny, nil, at + 1
+	default:
+		return byteLikeLiteral, pattern[at : at+1], at + 1
+	}
 }
 
 func likeNoBackslashEscapes(proc *process.Process) bool {

@@ -613,9 +613,17 @@ func (ses *Session) setUserDefinedVarWithTypeAndKindAndReplayability(
 	typ plan.Type,
 	kind vector.PrepareParamKind,
 	replayable bool,
+	runtimeDomains ...types.RuntimeStringDomain,
 ) error {
 	if typ.Id == 0 {
 		typ = inferUserDefinedVarType(value)
+	}
+	runtimeDomain := types.RuntimeStringInherit
+	if len(runtimeDomains) > 0 {
+		runtimeDomain = runtimeDomains[0]
+		if !runtimeDomain.Valid() {
+			return moerr.NewInvalidInputNoCtxf("invalid user-variable runtime string domain %d", runtimeDomain)
+		}
 	}
 	ses.mu.Lock()
 	key := strings.ToLower(name)
@@ -623,12 +631,13 @@ func (ses *Session) setUserDefinedVarWithTypeAndKindAndReplayability(
 		replayable = false
 	}
 	ses.userDefinedVars[key] = &UserDefinedVar{
-		Value:            value,
-		Sql:              sql,
-		IsBin:            isBin,
-		Type:             typ,
-		PrepareParamKind: kind,
-		Replayable:       replayable,
+		Value:               value,
+		Sql:                 sql,
+		IsBin:               isBin,
+		Type:                typ,
+		PrepareParamKind:    kind,
+		RuntimeStringDomain: runtimeDomain,
+		Replayable:          replayable,
 	}
 	ses.mu.Unlock()
 	// User-variable references are typed at bind time. A later assignment can

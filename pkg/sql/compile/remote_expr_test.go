@@ -17,6 +17,7 @@ package compile
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -625,6 +626,109 @@ func TestPadSpaceRemoteProtocolValidation(t *testing.T) {
 	}}}
 	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion20)
 	require.NoError(t, validateRemotePadSpacePipelineProtocol(proc, ordinary))
+}
+
+func TestBinaryStringRemoteProtocolValidationAtSenderAndReceiver(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	rt := runtime.ServiceRuntime(proc.GetService())
+	defer rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCLatestVersion)
+
+	affectedFunctionIDs := []int32{
+		function.ORD, function.LENGTH_UTF8, function.LEFT, function.RIGHT,
+		function.SUBSTRING, function.REVERSE, function.LOWER, function.UPPER,
+		function.LTRIM, function.RTRIM, function.TRIM, function.LOCATE,
+		function.POSITION, function.INSTR, function.INSERT, function.REPLACE,
+		function.LPAD, function.RPAD, function.SUBSTRING_INDEX, function.SPLIT_PART,
+		function.REPEAT, function.LIKE, function.CONCAT, function.CONCAT_WS,
+		function.CHARSET, function.COLLATION, function.INTERNAL_CHAR_SIZE,
+		function.INTERNAL_COLUMN_CHARACTER_SET,
+	}
+	semanticPipeline := func(functionID int32) *pipeline.Pipeline {
+		return &pipeline.Pipeline{InstructionList: []*pipeline.Instruction{{
+			Op: int32(vm.Projection), ProjectList: []*plan.Expr{{
+				Typ: plan.Type{Id: int32(types.T_int64)},
+				Expr: &plan.Expr_F{F: &plan.Function{Func: &plan.ObjectRef{
+					Obj: function.EncodeOverloadID(functionID, 0),
+				}}},
+			}},
+		}}}
+	}
+	ordinaryPipeline := &pipeline.Pipeline{InstructionList: []*pipeline.Instruction{{
+		Op: int32(vm.Projection), ProjectList: []*plan.Expr{{
+			Typ: plan.Type{Id: int32(types.T_int64)},
+			Expr: &plan.Expr_Lit{Lit: &plan.Literal{
+				Value: &plan.Literal_I64Val{I64Val: 1},
+			}},
+		}},
+	}}}
+
+	for _, functionID := range affectedFunctionIDs {
+		t.Run(fmt.Sprintf("function-%d", functionID), func(t *testing.T) {
+			project := projection.NewArgument()
+			project.ProjectList = semanticPipeline(functionID).InstructionList[0].ProjectList
+			scope := &Scope{Proc: proc, RootOp: project}
+
+			rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion48)
+			data, err := encodeRemoteScope(scope, proc)
+			require.NoError(t, err)
+
+			rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion47)
+			_, err = encodeRemoteScope(scope, proc)
+			require.ErrorContains(t, err, "require MORPC protocol version 48",
+				"sender must reject every changed function ID")
+			_, err = decodeScope(data, proc, true, nil)
+			require.ErrorContains(t, err, "require MORPC protocol version 48",
+				"receiver must reject every changed function ID")
+
+			rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion48)
+			decoded, err := decodeScope(data, proc, true, nil)
+			require.NoError(t, err)
+			require.NotNil(t, decoded)
+		})
+	}
+	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion47)
+	require.NoError(t, validateRemoteBinaryStringPipelineProtocol(proc, ordinaryPipeline))
+}
+
+func TestBinaryStringRemoteProtocolV48FastPathDoesNotScanPipeline(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	rt := runtime.ServiceRuntime(proc.GetService())
+	defer rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCLatestVersion)
+	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion48)
+
+	wide := &pipeline.Pipeline{InstructionList: []*pipeline.Instruction{{
+		Op: int32(vm.Projection), ProjectList: make([]*plan.Expr, 1_000),
+	}}}
+	for i := range wide.InstructionList[0].ProjectList {
+		wide.InstructionList[0].ProjectList[i] = &plan.Expr{
+			Typ: plan.Type{Id: int32(types.T_int64)},
+			Expr: &plan.Expr_Lit{Lit: &plan.Literal{
+				Value: &plan.Literal_I64Val{I64Val: int64(i)},
+			}},
+		}
+	}
+	var validationErr error
+	allocations := testing.AllocsPerRun(100, func() {
+		validationErr = validateRemoteBinaryStringPipelineProtocol(proc, wide)
+	})
+	require.NoError(t, validationErr)
+	require.Zero(t, allocations)
+}
+
+func BenchmarkBinaryStringRemoteProtocolV48FastPath(b *testing.B) {
+	proc := testutil.NewProcess(b)
+	runtime.ServiceRuntime(proc.GetService()).SetGlobalVariables(
+		runtime.MOProtocolVersion, defines.MORPCVersion48)
+	wide := &pipeline.Pipeline{InstructionList: []*pipeline.Instruction{{
+		Op: int32(vm.Projection), ProjectList: make([]*plan.Expr, 1_000),
+	}}}
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		if err := validateRemoteBinaryStringPipelineProtocol(proc, wide); err != nil {
+			b.Fatal(err)
+		}
+	}
 }
 
 func TestPadCharModeRemoteProtocolValidation(t *testing.T) {

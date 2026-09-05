@@ -224,13 +224,6 @@ func stringDomainFixedTypeMatch(overloads []overload, inputs []types.Type) check
 	return stringDomainFixedTypeMatchIf(overloads, inputs, func(oid types.T) bool { return oid.IsMySQLString() })
 }
 
-// collatedTextFixedTypeMatch preserves CHAR/VARCHAR/TEXT metadata, but leaves
-// binary families on ordinary overload casts until their rune-based consumers
-// have byte-preserving kernels.
-func collatedTextFixedTypeMatch(overloads []overload, inputs []types.Type) checkResult {
-	return stringDomainFixedTypeMatchIf(overloads, inputs, isCollatedTextType)
-}
-
 func stringDomainFixedTypeMatchIf(overloads []overload, inputs []types.Type, preserve func(types.T) bool) checkResult {
 	// Never let an earlier castable overload shadow an exact overload.
 	for overloadIndex, ov := range overloads {

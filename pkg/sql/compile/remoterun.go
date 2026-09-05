@@ -79,6 +79,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/unionall"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/value_scan"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/readutil"
@@ -92,6 +93,9 @@ func encodeScope(s *Scope) ([]byte, error) {
 		return nil, err
 	}
 	if err = validateRemotePadSpacePipelineProtocol(s.Proc, p); err != nil {
+		return nil, err
+	}
+	if err = validateRemoteBinaryStringPipelineProtocol(s.Proc, p); err != nil {
 		return nil, err
 	}
 	return p.Marshal()
@@ -115,6 +119,9 @@ func encodeRemoteScope(s *Scope, proc *process.Process) ([]byte, error) {
 		return nil, err
 	}
 	if err = validateRemoteParquetWholeFileFanoutPipelineProtocol(proc, p); err != nil {
+		return nil, err
+	}
+	if err = validateRemoteBinaryStringPipelineProtocol(proc, p); err != nil {
 		return nil, err
 	}
 	return p.Marshal()
@@ -203,6 +210,9 @@ func decodeScope(data []byte, proc *process.Process, isRemote bool, eng engine.E
 			return nil, err
 		}
 		if err = validateRemoteParquetWholeFileFanoutPipelineProtocol(proc, p); err != nil {
+			return nil, err
+		}
+		if err = validateRemoteBinaryStringPipelineProtocol(proc, p); err != nil {
 			return nil, err
 		}
 	} else if err = plan.ValidateStringLiteralFormsInOwner(p); err != nil {
@@ -2019,6 +2029,44 @@ func validateRemoteUpdateChangedRowsPipelineProtocol(
 		}
 	}
 	return nil
+}
+
+func binaryStringSemanticFunction(functionID int32) bool {
+	switch functionID {
+	case function.ORD, function.LENGTH_UTF8, function.LEFT, function.RIGHT,
+		function.SUBSTRING, function.REVERSE, function.LOWER, function.UPPER,
+		function.LTRIM, function.RTRIM, function.TRIM, function.LOCATE,
+		function.POSITION, function.INSTR, function.INSERT, function.REPLACE, function.LPAD,
+		function.RPAD, function.SUBSTRING_INDEX, function.SPLIT_PART,
+		function.REPEAT, function.LIKE, function.CONCAT, function.CONCAT_WS,
+		function.CHARSET, function.COLLATION, function.INTERNAL_CHAR_SIZE,
+		function.INTERNAL_COLUMN_CHARACTER_SET:
+		return true
+	default:
+		return false
+	}
+}
+
+func validateRemoteBinaryStringPipelineProtocol(
+	proc *process.Process,
+	p *pipeline.Pipeline,
+) error {
+	if proc != nil {
+		value, ok := moruntime.ServiceRuntime(proc.GetService()).
+			GetGlobalVariables(moruntime.MOProtocolVersion)
+		version, versionOK := value.(int64)
+		if ok && versionOK && version >= defines.MORPCVersion48 {
+			return nil
+		}
+	}
+	if p == nil || !pipelineContainsFunction(p, func(functionID, _ int32) bool {
+		return binaryStringSemanticFunction(functionID)
+	}) {
+		return nil
+	}
+	return moerr.NewNotSupportedNoCtxf(
+		"binary string function semantics require MORPC protocol version %d",
+		defines.MORPCVersion48)
 }
 
 func validateRemotePadSpacePipelineProtocol(

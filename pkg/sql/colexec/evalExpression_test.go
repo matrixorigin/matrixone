@@ -1398,6 +1398,41 @@ func TestVarExpressionExecutor(t *testing.T) {
 	require.Equal(t, int64(67890), vector.MustFixedColNoTypeCheck[int64](vec)[0])
 }
 
+func TestVarExpressionExecutorPreservesBinaryStringMetadataOnReuse(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	value := "\xe4\xbd\xa0"
+	runtimeDomain := types.RuntimeStringBinary
+	proc.SetResolveVariableFunc(func(string, bool, bool) (interface{}, error) {
+		return value, nil
+	})
+	proc.SetResolveVariableStringDomainFunc(func(string, bool, bool) (types.RuntimeStringDomain, error) {
+		return runtimeDomain, nil
+	})
+
+	executor, err := NewExpressionExecutor(proc, &plan.Expr{
+		Expr: &plan.Expr_V{V: &plan.VarRef{Name: "domain_var"}},
+		Typ:  plan.Type{Id: int32(types.T_varchar)},
+	})
+	require.NoError(t, err)
+	t.Cleanup(executor.Free)
+
+	input := batch.New(nil)
+	input.SetRowCount(2)
+	vec, err := executor.Eval(proc, []*batch.Batch{input}, nil)
+	require.NoError(t, err)
+	require.True(t, vec.GetBinaryStringMetadataAt(0))
+	require.True(t, vec.GetBinaryStringMetadataAt(1))
+	require.Equal(t, types.StringSourceUserVariable, vec.GetStringSourceAt(0))
+
+	runtimeDomain = types.RuntimeStringText
+	value = "text"
+	vec, err = executor.Eval(proc, []*batch.Batch{input}, nil)
+	require.NoError(t, err)
+	require.Equal(t, types.RuntimeStringText, vec.GetRuntimeStringDomainAt(0),
+		"a reused variable vector must replace the preceding binary override")
+	require.Equal(t, "text", vec.GetStringAt(1))
+}
+
 func TestParamExpressionExecutorMatchesBatchRowCount(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	params := vector.NewVec(types.T_varchar.ToType())

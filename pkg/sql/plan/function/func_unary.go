@@ -437,39 +437,33 @@ func AsciiString(ivecs []*vector.Vector, result vector.FunctionResultWrapper, pr
 	}, selectList)
 }
 
-// OrdString calculates the ORD value for a string
-// For single-byte characters: returns the byte value (same as ASCII)
-// For multibyte characters: returns (byte1) + (byte2 * 256) + (byte3 * 256²) + ...
+// OrdString calculates MySQL ORD for the first text character. The bytes of
+// that character's encoding form one big-endian integer.
 func OrdString(val []byte) int64 {
 	if len(val) == 0 {
 		return 0
 	}
-
-	// Get the first character (rune) to determine its byte size
 	_, runeSize := utf8.DecodeRune(val)
-	if runeSize == 0 {
+	if runeSize <= 0 || runeSize > len(val) {
 		return 0
 	}
-
-	// If it's a single-byte character (ASCII), return the byte value
-	if runeSize == 1 {
-		return int64(val[0])
-	}
-
-	// For multibyte characters, calculate using the formula:
-	// (byte1) + (byte2 * 256) + (byte3 * 256²) + ...
 	var result int64
-	for i := 0; i < runeSize && i < len(val); i++ {
-		result += int64(val[i]) * int64(1<<(8*i)) // 256^i = 2^(8*i)
+	for i := 0; i < runeSize; i++ {
+		result = result<<8 | int64(val[i])
 	}
-
 	return result
 }
 
+func ordBinaryString(val []byte) int64 {
+	if len(val) == 0 {
+		return 0
+	}
+	return int64(val[0])
+}
+
 func Ord(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) (err error) {
-	return opUnaryBytesToFixed[int64](ivecs, result, proc, length, func(v []byte) int64 {
-		return OrdString(v)
-	}, selectList)
+	return opUnaryBytesToFixedByStringDomain[int64](
+		ivecs, result, proc, length, OrdString, ordBinaryString, selectList)
 }
 
 var (
@@ -6362,18 +6356,35 @@ func Binary(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *p
 	return opUnaryBytesToBytes(ivecs, result, proc, length, doBinary, selectList)
 }
 
-func Charset(_ []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
-	r := proc.GetSessionInfo().GetCharset()
-	return opNoneParamToBytes(result, proc, length, func() []byte {
-		return functionUtil.QuickStrToBytes(r)
-	})
+func Charset(parameters []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int, selectList *FunctionSelectList) error {
+	charset, _ := stringCharsetAndCollationName(*parameters[0].GetType())
+	return appendStringMetadataName(result, functionUtil.QuickStrToBytes(charset), length, selectList)
 }
 
-func Collation(_ []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
-	r := proc.GetSessionInfo().GetCollation()
-	return opNoneParamToBytes(result, proc, length, func() []byte {
-		return functionUtil.QuickStrToBytes(r)
-	})
+func Collation(parameters []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int, selectList *FunctionSelectList) error {
+	_, collation := stringCharsetAndCollationName(*parameters[0].GetType())
+	return appendStringMetadataName(result, functionUtil.QuickStrToBytes(collation), length, selectList)
+}
+
+func appendStringMetadataName(
+	result vector.FunctionResultWrapper,
+	name []byte,
+	length int,
+	selectList *FunctionSelectList,
+) error {
+	rs := vector.MustFunctionResult[types.Varlena](result)
+	for row := uint64(0); row < uint64(length); row++ {
+		if functionRowSkipped(selectList, row) {
+			if err := rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
+			continue
+		}
+		if err := rs.AppendBytes(name, false); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func ConnectionID(_ []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
@@ -7637,7 +7648,8 @@ func strLength(xs string) int64 {
 }
 
 func LengthUTF8(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
-	return opUnaryBytesToFixed[uint64](ivecs, result, proc, length, strLengthUTF8, selectList)
+	return opUnaryBytesToFixedByStringDomain[uint64](
+		ivecs, result, proc, length, strLengthUTF8, strLengthBinary, selectList)
 }
 
 func strLengthUTF8(xs []byte) uint64 {
@@ -7651,7 +7663,8 @@ func LengthBinary(
 	length int,
 	selectList *FunctionSelectList,
 ) error {
-	return opUnaryBytesToFixed[uint64](ivecs, result, proc, length, strLengthBinary, selectList)
+	return opUnaryBytesToFixedByStringDomain[uint64](
+		ivecs, result, proc, length, strLengthUTF8, strLengthBinary, selectList)
 }
 
 func strLengthBinary(xs []byte) uint64 {
@@ -7659,23 +7672,49 @@ func strLengthBinary(xs []byte) uint64 {
 }
 
 func Ltrim(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
-	return opUnaryStrToStr(ivecs, result, proc, length, ltrim, selectList)
-}
-
-func ltrim(xs string) string {
-	return strings.TrimLeft(xs, " ")
+	trim := func(value []byte) []byte { return bytes.TrimLeft(value, " ") }
+	return opUnaryBytesToBytesByStringDomain(ivecs, result, proc, length, trim, trim, selectList)
 }
 
 func Rtrim(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
-	return opUnaryStrToStr(ivecs, result, proc, length, rtrim, selectList)
-}
-
-func rtrim(xs string) string {
-	return strings.TrimRight(xs, " ")
+	trim := func(value []byte) []byte { return bytes.TrimRight(value, " ") }
+	return opUnaryBytesToBytesByStringDomain(ivecs, result, proc, length, trim, trim, selectList)
 }
 
 func Reverse(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
-	return opUnaryStrToStr(ivecs, result, proc, length, reverse, selectList)
+	input := vector.GenerateFunctionStrParameter(ivecs[0])
+	rs := vector.MustFunctionResult[types.Varlena](result)
+	uniformBinary, perRow := stringDomainMode(ivecs[0])
+	for row := uint64(0); row < uint64(length); row++ {
+		if functionRowSkipped(selectList, row) {
+			if err := rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
+			continue
+		}
+		value, isNull := input.GetStrValue(row)
+		if isNull {
+			if err := rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
+			continue
+		}
+		if binaryStringAt(ivecs[0], int(row), uniformBinary, perRow) {
+			if err := rs.AppendBytesWithWriter(len(value), func(dst []byte) error {
+				for i := range value {
+					dst[len(value)-1-i] = value[i]
+				}
+				return nil
+			}); err != nil {
+				return err
+			}
+			continue
+		}
+		if err := rs.AppendBytes([]byte(reverse(string(value))), false); err != nil {
+			return err
+		}
+	}
+	return setSelectedStringResultDomain(ivecs[0], result, proc)
 }
 
 func reverse(str string) string {

@@ -19,111 +19,139 @@ import (
 	"strings"
 	"unicode/utf8"
 
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/sql/plan/function/functionUtil"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
 // LOCATE(substr, str)
-func buildInLocate2Args(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+func buildInLocate2Args(parameters []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int, selectList *FunctionSelectList) error {
 	rs := vector.MustFunctionResult[int64](result)
 	substrVs := vector.GenerateFunctionStrParameter(parameters[0])
 	strVs := vector.GenerateFunctionStrParameter(parameters[1])
+	uniformBinary, perRow := stringDomainMode(parameters[1])
+	caseInsensitive := parameters[1].GetType().Charset == types.CharsetUTF8
 
-	for i := uint64(0); i < uint64(length); i++ {
-		substr, null1 := substrVs.GetStrValue(i)
-		str, null2 := strVs.GetStrValue(i)
-
+	for row := uint64(0); row < uint64(length); row++ {
+		if functionRowSkipped(selectList, row) {
+			if err := rs.Append(0, true); err != nil {
+				return err
+			}
+			continue
+		}
+		substr, null1 := substrVs.GetStrValue(row)
+		str, null2 := strVs.GetStrValue(row)
 		if null1 || null2 {
 			if err := rs.Append(0, true); err != nil {
 				return err
 			}
-		} else {
-			pos := Locate2Args(functionUtil.QuickBytesToStr(bytes.ToUpper(str)), functionUtil.QuickBytesToStr(bytes.ToUpper(substr)))
-			rs.AppendMustValue(pos)
+			continue
 		}
+		binary := binaryStringAt(parameters[1], int(row), uniformBinary, perRow)
+		rs.AppendMustValue(locateString(substr, str, 1, binary, caseInsensitive))
 	}
 	return nil
 }
 
-// LOCATE(substr, str, [position])
-func buildInLocate3Args(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+// LOCATE(substr, str, position)
+func buildInLocate3Args(parameters []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int, selectList *FunctionSelectList) error {
 	rs := vector.MustFunctionResult[int64](result)
 	substrVs := vector.GenerateFunctionStrParameter(parameters[0])
 	strVs := vector.GenerateFunctionStrParameter(parameters[1])
 	posVs := vector.GenerateFunctionFixedTypeParameter[int64](parameters[2])
+	uniformBinary, perRow := stringDomainMode(parameters[1])
+	caseInsensitive := parameters[1].GetType().Charset == types.CharsetUTF8
 
-	for i := uint64(0); i < uint64(length); i++ {
-		substr, null1 := substrVs.GetStrValue(i)
-		str, null2 := strVs.GetStrValue(i)
-		position, null3 := posVs.GetValue(i)
-
+	for row := uint64(0); row < uint64(length); row++ {
+		if functionRowSkipped(selectList, row) {
+			if err := rs.Append(0, true); err != nil {
+				return err
+			}
+			continue
+		}
+		substr, null1 := substrVs.GetStrValue(row)
+		str, null2 := strVs.GetStrValue(row)
+		position, null3 := posVs.GetValue(row)
 		if null1 || null2 || null3 {
 			if err := rs.Append(0, true); err != nil {
 				return err
 			}
-		} else {
-			pos := Locate3Args(functionUtil.QuickBytesToStr(bytes.ToUpper(str)), functionUtil.QuickBytesToStr(bytes.ToUpper(substr)), position)
-			rs.AppendMustValue(pos)
+			continue
 		}
+		binary := binaryStringAt(parameters[1], int(row), uniformBinary, perRow)
+		rs.AppendMustValue(locateString(substr, str, position, binary, caseInsensitive))
 	}
 	return nil
 }
 
-// evalate LOCATE(substr, str)
-func Locate2Args(str string, subStr string) int64 {
-	subStrLen := len(subStr)
-	if subStrLen == 0 {
-		return 1
-	}
-	ret, idx := 0, strings.Index(str, subStr)
-	if idx >= 0 {
-		prefix := str[:idx]
-		prefixLen := utf8.RuneCountInString(prefix)
-		ret = prefixLen + 1
-	}
-	//if idx != -1 {
-	//	ret = idx + 1
-	//}
-
-	return int64(ret)
-}
-
-// evalate LOCATE(substr, str, pos)
-func Locate3Args(str string, subStr string, pos int64) int64 {
-	// Transfer the argument which starts from 1 to real index which starts from 0.
-	pos--
-	subStrLen := len(subStr)
-	if pos < 0 || pos > int64(len(str)-subStrLen) {
+func locateString(needle, haystack []byte, position int64, binary, caseInsensitive bool) int64 {
+	if position < 1 {
 		return 0
-	} else if subStrLen == 0 {
-		return pos + 1
+	}
+	if binary {
+		start := position - 1
+		if start > int64(len(haystack)) {
+			return 0
+		}
+		if len(needle) == 0 {
+			return position
+		}
+		idx := bytes.Index(haystack[int(start):], needle)
+		if idx < 0 {
+			return 0
+		}
+		return position + int64(idx)
 	}
 
-	slice := getSubstring(str, int(pos))
-
-	idx := strings.Index(slice, subStr)
-	if idx >= 0 {
-		prefix := slice[:idx]
-		prefixLen := utf8.RuneCountInString(prefix)
-		return pos + int64(prefixLen) + 1
+	str, substr := string(haystack), string(needle)
+	if caseInsensitive {
+		str, substr = strings.ToUpper(str), strings.ToUpper(substr)
 	}
-
-	return 0
+	start, ok := runeByteOffset(str, position-1)
+	if !ok {
+		return 0
+	}
+	if len(substr) == 0 {
+		return position
+	}
+	idx := strings.Index(str[start:], substr)
+	if idx < 0 {
+		return 0
+	}
+	return position + int64(utf8.RuneCountInString(str[start:start+idx]))
 }
 
-// getSubstring Used to obtain the starting position of a substring in characters.
-// takes two parameters: str is the target string, and start is the starting position (in characters) of the substring to be obtained.
+func runeByteOffset(value string, runeIndex int64) (int, bool) {
+	if runeIndex < 0 {
+		return 0, false
+	}
+	offset := 0
+	for index := int64(0); index < runeIndex; index++ {
+		if offset >= len(value) {
+			return 0, false
+		}
+		_, size := utf8.DecodeRuneInString(value[offset:])
+		offset += size
+	}
+	return offset, true
+}
+
+// Locate2Args is retained for direct callers and follows the existing text
+// general-ci approximation.
+func Locate2Args(str string, subStr string) int64 {
+	return locateString([]byte(subStr), []byte(str), 1, false, false)
+}
+
+// Locate3Args is retained for direct callers and uses character positions.
+func Locate3Args(str string, subStr string, pos int64) int64 {
+	return locateString([]byte(subStr), []byte(str), pos, false, false)
+}
+
+// getSubstring returns a suffix whose start is measured in characters.
 func getSubstring(str string, start int) string {
-	if start >= utf8.RuneCountInString(str) {
+	offset, ok := runeByteOffset(str, int64(start))
+	if !ok {
 		return ""
 	}
-
-	byteOffset := 0
-	for i := 0; i < start; i++ {
-		_, size := utf8.DecodeRuneInString(str[byteOffset:])
-		byteOffset += size
-	}
-
-	return str[byteOffset:]
+	return str[offset:]
 }
