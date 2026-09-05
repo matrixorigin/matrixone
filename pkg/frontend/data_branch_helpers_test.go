@@ -195,6 +195,16 @@ func TestDataBranchTempSQLNeedsBackExec(t *testing.T) {
 			want: true,
 		},
 		{
+			name: "update temp table",
+			sql:  "insert into `db1`.`__mo_diff_upd_x` values (1, 'new', 1)",
+			want: true,
+		},
+		{
+			name: "main table update reads temp table",
+			sql:  "update `db1`.`base` as branch_apply_base join `db1`.`__mo_diff_upd_x` as branch_apply_stage on branch_apply_base.`id` = branch_apply_stage.`branch_apply_key_0` set branch_apply_base.`name` = branch_apply_stage.`name`",
+			want: true,
+		},
+		{
 			name: "unknown temp table statement stays conservative",
 			sql:  "select * from test.__mo_diff_ins_merge_1",
 			want: true,
