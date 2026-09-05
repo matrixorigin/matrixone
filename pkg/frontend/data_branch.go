@@ -632,6 +632,9 @@ func dataBranchCreateDatabase(
 		execCtx.reqCtx, tree.CloneLevelCtxKey{}, tree.NormalCloneLevelDatabase,
 	)
 	execCtx.reqCtx = context.WithValue(execCtx.reqCtx, dataBranchCloneLockCtxKey{}, true)
+	execCtx.reqCtx = context.WithValue(
+		execCtx.reqCtx, defines.DatTypKey{}, catalog.SystemDBTypeDataBranch,
+	)
 
 	if !skipDataBranchPrivilegeCheck(ses) {
 		if authStats, err = authenticateDataBranchCreateDatabase(execCtx.reqCtx, ses, stmt); err != nil {

@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"github.com/golang/mock/gomock"
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/cdc"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/prashantv/gostub"
@@ -33,6 +34,13 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 )
+
+func TestIsUserDatabaseType(t *testing.T) {
+	require.True(t, isUserDatabaseType(""))
+	require.True(t, isUserDatabaseType(catalog.SystemDBTypeDataBranch))
+	require.False(t, isUserDatabaseType(catalog.SystemDBTypeSubscription))
+	require.False(t, isUserDatabaseType("unknown"))
+}
 
 func Test_doCreatePublication(t *testing.T) {
 	mockedAccountsResults := func(ctrl *gomock.Controller) []interface{} {
@@ -56,7 +64,7 @@ func Test_doCreatePublication(t *testing.T) {
 		er := mock_frontend.NewMockExecResult(ctrl)
 		er.EXPECT().GetRowCount().Return(uint64(1)).AnyTimes()
 		er.EXPECT().GetUint64(gomock.Any(), uint64(0), uint64(0)).Return(uint64(0), nil).AnyTimes()
-		er.EXPECT().GetString(gomock.Any(), uint64(0), uint64(1)).Return("", nil).AnyTimes()
+		er.EXPECT().GetString(gomock.Any(), uint64(0), uint64(1)).Return(catalog.SystemDBTypeDataBranch, nil).AnyTimes()
 		return []interface{}{er}
 	}
 
@@ -221,7 +229,7 @@ func Test_doAlterPublication(t *testing.T) {
 		er := mock_frontend.NewMockExecResult(ctrl)
 		er.EXPECT().GetRowCount().Return(uint64(1)).AnyTimes()
 		er.EXPECT().GetUint64(gomock.Any(), uint64(0), uint64(0)).Return(uint64(0), nil).AnyTimes()
-		er.EXPECT().GetString(gomock.Any(), uint64(0), uint64(1)).Return("", nil).AnyTimes()
+		er.EXPECT().GetString(gomock.Any(), uint64(0), uint64(1)).Return(catalog.SystemDBTypeDataBranch, nil).AnyTimes()
 		return []interface{}{er}
 	}
 

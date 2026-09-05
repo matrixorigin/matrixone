@@ -98,7 +98,9 @@ func (s *Scope) CreateDatabase(c *Compile) error {
 	}
 
 	ctx = context.WithValue(ctx, defines.SqlKey{}, createDatabase.GetSql())
-	datType := ""
+	// Internal database creators can attach a categorical type to the CREATE
+	// itself so the catalog row is atomic with the database definition.
+	datType, _ := ctx.Value(defines.DatTypKey{}).(string)
 	// handle sub
 	if subOption := createDatabase.SubscriptionOption; subOption != nil {
 		datType = catalog.SystemDBTypeSubscription

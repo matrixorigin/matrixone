@@ -460,11 +460,13 @@ func TestCreateDatabaseAffectedRowsReflectPhysicalCreation(t *testing.T) {
 		name         string
 		existing     bool
 		ifNotExists  bool
+		databaseType string
 		createErr    error
 		wantErr      bool
 		wantAffected uint64
 	}{
 		{name: "physical creation", wantAffected: 1},
+		{name: "internal database type", databaseType: catalog.SystemDBTypeDataBranch, wantAffected: 1},
 		{name: "if not exists no-op", existing: true, ifNotExists: true},
 		{name: "strict duplicate", existing: true, wantErr: true},
 		{name: "create failure", createErr: createErr, wantErr: true},
@@ -480,11 +482,19 @@ func TestCreateDatabaseAffectedRowsReflectPhysicalCreation(t *testing.T) {
 				eng.EXPECT().Database(gomock.Any(), "db1", gomock.Any()).Return(
 					nil, moerr.NewBadDB(context.Background(), "db1"),
 				)
-				eng.EXPECT().Create(gomock.Any(), "db1", gomock.Any()).Return(tc.createErr)
+				eng.EXPECT().Create(gomock.Any(), "db1", gomock.Any()).DoAndReturn(
+					func(ctx context.Context, _ string, _ client.TxnOperator) error {
+						require.Equal(t, tc.databaseType, ctx.Value(defines.DatTypKey{}))
+						return tc.createErr
+					},
+				)
 			}
 
 			proc := testutil.NewProcess(t)
 			ctx := defines.AttachAccountId(context.Background(), sysAccountId)
+			if tc.databaseType != "" {
+				ctx = context.WithValue(ctx, defines.DatTypKey{}, tc.databaseType)
+			}
 			proc.Ctx = ctx
 			proc.ReplaceTopCtx(ctx)
 			c := &Compile{e: eng, proc: proc, affectRows: new(atomic.Uint64)}
