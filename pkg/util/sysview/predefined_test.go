@@ -255,6 +255,8 @@ func TestInitInformationSchemaSysTablesForProtocol(t *testing.T) {
 			assert.Contains(t, localCatalog, InformationSchemaTablesV41DDL)
 			assert.Contains(t, localCatalog, InformationSchemaColumnsV41DDL)
 			assert.Contains(t, InformationSchemaColumnsV41DDL, "WHEN 1 then 'utf8' WHEN 2 then 'binary'")
+			assert.Contains(t, InformationSchemaColumnsV41DDL, "WHEN 3 then 'utf8'")
+			assert.Contains(t, InformationSchemaColumnsV41DDL, "WHEN 3 then 'utf8_bin'")
 			assert.NotContains(t, InformationSchemaColumnsV41DDL, "WHEN 3 then 'utf8mb4'")
 			assert.NotContains(t, strings.Join(localCatalog, "\n"), "mo_subscription_tables()")
 			assert.NotContains(t, strings.Join(localCatalog, "\n"), "mo_subscription_columns()")
@@ -274,6 +276,8 @@ func TestInitInformationSchemaSysTablesForProtocol(t *testing.T) {
 			joined := strings.Join(subscriptionLegacyIdentity, "\n")
 			assert.Contains(t, joined, "mo_subscription_tables()")
 			assert.Contains(t, joined, "mo_subscription_columns()")
+			assert.Contains(t, joined, "WHEN 3 then 'utf8'")
+			assert.Contains(t, joined, "WHEN 3 then 'utf8_bin'")
 			assert.NotContains(t, joined, "WHEN 3 then 'utf8mb4'")
 			for _, sql := range subscriptionLegacyIdentity {
 				assertInformationSchemaInitSQLParses(t, sql)

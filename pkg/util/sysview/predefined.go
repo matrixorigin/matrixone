@@ -281,9 +281,9 @@ func informationSchemaSubscriptionColumnAuthorizationPredicate() string {
 
 func informationSchemaColumnsV48DDL() string {
 	return strings.NewReplacer(
-		"(case internal_column_character_set(mc.atttyp) WHEN 0 then 'utf8' WHEN 1 then 'utf8' WHEN 2 then 'binary' else NULL end) AS CHARACTER_SET_NAME,",
+		"(case internal_column_character_set(mc.atttyp) WHEN 0 then 'utf8' WHEN 1 then 'utf8' WHEN 2 then 'binary' WHEN 3 then 'utf8' else NULL end) AS CHARACTER_SET_NAME,",
 		"(case internal_column_character_set(mc.atttyp) WHEN 0 then 'utf8' WHEN 1 then 'utf8mb4' WHEN 2 then 'binary' WHEN 3 then 'utf8mb4' else NULL end) AS CHARACTER_SET_NAME,",
-		"(case internal_column_character_set(mc.atttyp) WHEN 0 then 'utf8_bin' WHEN 1 then 'utf8_bin' WHEN 2 then 'binary' else NULL end) AS COLLATION_NAME,",
+		"(case internal_column_character_set(mc.atttyp) WHEN 0 then 'utf8_bin' WHEN 1 then 'utf8_bin' WHEN 2 then 'binary' WHEN 3 then 'utf8_bin' else NULL end) AS COLLATION_NAME,",
 		"(case internal_column_character_set(mc.atttyp) WHEN 0 then 'utf8_general_ci' WHEN 1 then 'utf8mb4_bin' WHEN 2 then 'binary' WHEN 3 then 'utf8mb4_general_ci' else NULL end) AS COLLATION_NAME,",
 	).Replace(InformationSchemaColumnsV46DDL)
 }
@@ -382,8 +382,8 @@ var (
 		"internal_numeric_precision(mc.atttyp) AS NUMERIC_PRECISION,"+
 		"internal_numeric_scale(mc.atttyp) AS NUMERIC_SCALE,"+
 		"internal_datetime_scale(mc.atttyp) AS DATETIME_PRECISION,"+
-		"(case internal_column_character_set(mc.atttyp) WHEN 0 then 'utf8' WHEN 1 then 'utf8' WHEN 2 then 'binary' else NULL end) AS CHARACTER_SET_NAME,"+
-		"(case internal_column_character_set(mc.atttyp) WHEN 0 then 'utf8_bin' WHEN 1 then 'utf8_bin' WHEN 2 then 'binary' else NULL end) AS COLLATION_NAME,"+
+		"(case internal_column_character_set(mc.atttyp) WHEN 0 then 'utf8' WHEN 1 then 'utf8' WHEN 2 then 'binary' WHEN 3 then 'utf8' else NULL end) AS CHARACTER_SET_NAME,"+
+		"(case internal_column_character_set(mc.atttyp) WHEN 0 then 'utf8_bin' WHEN 1 then 'utf8_bin' WHEN 2 then 'binary' WHEN 3 then 'utf8_bin' else NULL end) AS COLLATION_NAME,"+
 		"(case when length(mc.attr_enum) > 0 then mo_show_visible_bin_enum(mc.atttyp, mc.attr_enum) else mo_show_visible_bin(mc.atttyp,3) end) as COLUMN_TYPE,"+
 		"case when mc.att_constraint_type = 'p' or mk.key_priority = 3 then 'PRI' when mk.key_priority = 2 then 'UNI' when mk.key_priority = 1 then 'MUL' else '' end as COLUMN_KEY,"+
 		"cast(case when mc.att_is_auto_increment = 1 then 'auto_increment' when mc.attr_has_generated = 1 then ifnull(mo_show_visible_bin(mc.attr_generated, 6), '') else '' end as varchar(24)) as EXTRA,"+

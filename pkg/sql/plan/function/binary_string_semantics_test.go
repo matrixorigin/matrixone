@@ -855,6 +855,62 @@ func makeDirectMultiSegmentByteLike(segmentCount, segmentLength int) (value, pat
 	return value, pattern
 }
 
+// makeDenseDirectMultiSegmentByteLike gives each segment a low-frequency leading
+// anchor, a dense literal run, and many candidates that fail only at a middle
+// literal before one candidate succeeds. Each segment stays below the local
+// convolution threshold, while their combined direct work exceeds one shared
+// match budget.
+func makeDenseDirectMultiSegmentByteLike(segmentCount, segmentLength int) (value, pattern []byte) {
+	literals := distinctByteLikeLiterals(segmentCount * 2)
+	const denseLiteral = byte(254)
+	futureLength := 0
+	blocks := make([][]byte, segmentCount)
+	segments := make([][]byte, segmentCount)
+	for index := segmentCount - 1; index >= 0; index-- {
+		anchor, lateLiteral := literals[index*2], literals[index*2+1]
+		candidateFailures := 16*futureLength/segmentLength + 16
+		denseStart := segmentLength / 4
+		denseLength := segmentLength/8 + 1
+		latePosition := segmentLength / 2
+		noiseStart := segmentLength * 3 / 4
+		if candidateFailures >= segmentLength/8 {
+			panic("candidate region overlaps dense verification regions")
+		}
+
+		segment := bytes.Repeat([]byte{'_'}, segmentLength)
+		segment[0] = anchor
+		for at := denseStart; at < denseStart+denseLength; at++ {
+			segment[at] = denseLiteral
+		}
+		segment[latePosition] = lateLiteral
+
+		block := bytes.Repeat([]byte{255}, segmentLength+candidateFailures)
+		for at := 0; at <= candidateFailures; at++ {
+			block[at] = anchor
+		}
+		for at := denseStart; at < denseStart+denseLength+candidateFailures; at++ {
+			block[at] = denseLiteral
+		}
+		block[candidateFailures+latePosition] = lateLiteral
+		// Keep lateLiteral slightly more frequent than anchor so the leading
+		// anchor remains the rarest run selected for candidate enumeration.
+		for at := noiseStart; at < noiseStart+candidateFailures+2; at++ {
+			block[at] = lateLiteral
+		}
+		segments[index] = segment
+		blocks[index] = block
+		futureLength += len(block)
+	}
+
+	pattern = append(pattern, '%')
+	for index := range segments {
+		pattern = append(pattern, segments[index]...)
+		pattern = append(pattern, '%')
+		value = append(value, blocks[index]...)
+	}
+	return value, pattern
+}
+
 func makeSingleCandidateByteLike(segmentLength int) (value, pattern []byte) {
 	value = bytes.Repeat([]byte{'a'}, segmentLength)
 	pattern = []byte{'%', 'a'}
@@ -948,6 +1004,29 @@ func TestByteLikeGlobalDirectBudgetBoundsMultiSegmentVerification(t *testing.T) 
 	require.LessOrEqual(t, futureLength, types.MaxBlobLen)
 	require.LessOrEqual(t, patternLength, types.MaxBlobLen)
 	require.Greater(t, directVerificationWork, budget.remaining)
+
+	const denseSegmentCount, denseSegmentLength = 32, 8_192
+	denseValue, densePattern := makeDenseDirectMultiSegmentByteLike(denseSegmentCount, denseSegmentLength)
+	localCursor := 0
+	for segment := 0; segment < denseSegmentCount; segment++ {
+		anchor := densePattern[1+segment*(denseSegmentLength+1)]
+		valueLength := len(denseValue) - localCursor
+		anchorFrequency := bytes.Count(denseValue[localCursor:], []byte{anchor})
+		require.False(t, byteLikeShouldUseConvolution(
+			anchorFrequency, valueLength-denseSegmentLength+1, denseSegmentLength, valueLength),
+			"segment %d must remain under its local convolution threshold", segment)
+		localCursor += denseSegmentLength + anchorFrequency - 1
+	}
+	require.Equal(t, len(denseValue), localCursor)
+
+	denseCompiled, err := compileByteLikePattern(densePattern, nil, false, mp)
+	require.NoError(t, err)
+	defer denseCompiled.free()
+	matched, err = denseCompiled.match(denseValue)
+	require.NoError(t, err)
+	require.True(t, matched)
+	require.NotEmpty(t, denseCompiled.convolutionScratch,
+		"the real match path must switch to convolution after sharing and exhausting its direct budget")
 }
 
 func TestByteLikeAnchorSearchChecksCancellationAfterIndex(t *testing.T) {
@@ -973,6 +1052,19 @@ func TestByteLikeAnchorSearchChecksCancellationAfterIndex(t *testing.T) {
 			require.True(t, cancelContext.canceled)
 		})
 	}
+}
+
+func TestByteLikeFrequencyDecrementHonorsCancellation(t *testing.T) {
+	mp := mpool.MustNewZero()
+	compiled, err := compileByteLikePattern([]byte("%a%"), nil, false, mp)
+	require.NoError(t, err)
+	defer compiled.free()
+	cancelContext := newByteLikeCancelAfterChecksContext(6)
+	compiled.ctx = cancelContext
+
+	_, err = compiled.match([]byte("ab"))
+	require.ErrorIs(t, err, context.Canceled)
+	require.True(t, cancelContext.canceled)
 }
 
 func TestByteLikeDirectVerificationHonorsMidMatchCancellation(t *testing.T) {
@@ -1167,6 +1259,23 @@ func TestByteLikeConvolutionAllocationFailureDoesNotLeak(t *testing.T) {
 	require.False(t, matched)
 	require.Zero(t, sparseLimited.CurrNB(),
 		"an absent anchor must reject before allocating sparse literal-position scratch")
+
+	consumedAnchorPattern := make([]byte, sparseSegmentLength+5)
+	consumedAnchorPattern[0], consumedAnchorPattern[1], consumedAnchorPattern[2] = '%', 'a', '%'
+	for at := 3; at < len(consumedAnchorPattern)-1; at++ {
+		if (at-3)%8 == 0 {
+			consumedAnchorPattern[at] = 'a'
+		} else {
+			consumedAnchorPattern[at] = '_'
+		}
+	}
+	consumedAnchorPattern[len(consumedAnchorPattern)-1] = '%'
+	consumedAnchorValue := append([]byte{'a'}, bytes.Repeat([]byte{'b'}, sparseSegmentLength+1)...)
+	matched, err = byteLike(consumedAnchorPattern, consumedAnchorValue, nil, false, sparseLimited)
+	require.NoError(t, err)
+	require.False(t, matched)
+	require.Zero(t, sparseLimited.CurrNB(),
+		"an anchor consumed by an earlier segment must reject before allocating later sparse scratch")
 }
 
 func TestByteLikeConstantPatternReusesConvolutionScratchAcrossRows(t *testing.T) {

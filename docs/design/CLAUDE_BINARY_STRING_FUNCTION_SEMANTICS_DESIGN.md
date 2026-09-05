@@ -112,7 +112,7 @@ MySQL 会在部分 text-subject + invalid binary auxiliary coercion 上执行 ch
 - `internal_column_character_set` 改为读取序列化 `Type.Charset`（binary OID仍权威），并让 `information_schema.columns` 对现有四种 identity 映射到上表名称。它不再把 `Scale` 当 charset。
 - CTAS继续复制 planner result type；不按 observed row 或 runtime sidecar缩窄/改域。`DESC`、information_schema 与 direct `CHARSET/COLLATION` 必须对同一静态 expression一致。
 - SQL `EXECUTE ... USING` 物化同时保留 assignment-time `SourceType` 与独立的 `RuntimeStringDomain`；typed non-NULL、typed NULL、重复执行和 prepared-plan cache复用均不得把三态 provenance压回静态域。
-- remote pipeline sender与receiver对所有已改变的 Function ID执行 MORPC v48 fail-closed barrier，包括 `POSITION`、`INTERNAL_CHAR_SIZE` 和 `INTERNAL_COLUMN_CHARACTER_SET`；主干v46已用于subscription-aware information-schema metadata，v47已用于window hash partition，本 PR连续发布v48完整capability；catalog upgrade barrier只控制view物化，不能代替executor barrier。新租户初始化同样必须分层：v41使用local COLUMNS+旧identity，v46/v47使用subscription COLUMNS+旧identity，只有v48使用subscription COLUMNS+新identity。
+- remote pipeline sender与receiver对所有已改变的 Function ID执行 MORPC v48 fail-closed barrier，包括 `POSITION`、`INTERNAL_CHAR_SIZE` 和 `INTERNAL_COLUMN_CHARACTER_SET`；主干v46已用于subscription-aware information-schema metadata，v47已用于window hash partition，本 PR连续发布v48完整capability；catalog upgrade barrier只控制view物化，不能代替executor barrier。新租户初始化同样必须分层：v41使用local COLUMNS+兼容identity映射，v46/v47使用subscription COLUMNS+兼容identity映射，只有v48使用subscription COLUMNS+新identity映射；兼容DDL仍须把新CN可能返回的identity 3降级展示为旧`utf8`/`utf8_bin`，避免滚动升级期间落入NULL。
 
 ## 7. 边界、失败与性能
 
