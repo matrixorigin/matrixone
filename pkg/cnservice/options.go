@@ -59,6 +59,8 @@ func WithBootstrapOptions(options ...bootstrap.Option) Option {
 	}
 }
 
+// WithTxnTraceData sets the root directory for transaction trace data. Each CN
+// stores its trace data in a child directory keyed by its service UUID.
 func WithTxnTraceData(traceDataPath string) Option {
 	return func(s *service) {
 		s.options.traceDataPath = traceDataPath

@@ -18,6 +18,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -138,7 +139,7 @@ func newViewMetadataAdmissionStartService(
 	discoveryTimeout time.Duration,
 ) *service {
 	t.Helper()
-	serviceID := t.Name()
+	serviceID := strings.ReplaceAll(t.Name(), "/", "-")
 	runtime.SetupServiceBasedRuntime(serviceID, runtime.DefaultRuntime())
 	cfg := &Config{UUID: serviceID, AutomaticUpgrade: true}
 	cfg.HAKeeper.DiscoveryTimeout.Duration = discoveryTimeout
