@@ -1683,6 +1683,42 @@ func canUseRegularIndexHiddenSortKey(scanNode *plan.Node, orderByCol *plan.ColRe
 	return isRegularIndexFullPrefixEquality(scanNode.FilterList[0], numKeyParts)
 }
 
+// canPushCompositePrimaryKeyOrderedLimit recognizes the narrow base-table
+// shape where an ordered reader may cap each physical source before the Sort:
+// the SQL order is the table's hidden serialized composite primary key, and
+// every scan predicate is a folded literal bound on that same key. Literal PK
+// ranges are evaluated by the reader before ordered truncation. A merely
+// column-independent runtime expression may remain an upper-layer residual;
+// admitting it (or any column residual) could therefore under-fetch valid rows.
+func canPushCompositePrimaryKeyOrderedLimit(scanNode *plan.Node, orderByCol *plan.ColRef) bool {
+	if scanNode == nil || scanNode.TableDef == nil || scanNode.TableDef.Pkey == nil || orderByCol == nil ||
+		scanNode.IndexScanInfo.IsIndexScan || len(scanNode.BindingTags) == 0 ||
+		scanNode.TableDef.Pkey.PkeyColName != catalog.CPrimaryKeyColName {
+		return false
+	}
+	pkPos, ok := scanNode.TableDef.Name2ColIndex[catalog.CPrimaryKeyColName]
+	if !ok || orderByCol.RelPos != scanNode.BindingTags[0] || orderByCol.ColPos != pkPos ||
+		pkPos < 0 || int(pkPos) >= len(scanNode.TableDef.Cols) {
+		return false
+	}
+	pkType := scanNode.TableDef.Cols[pkPos].Typ
+	for _, filter := range scanNode.FilterList {
+		fn := filter.GetF()
+		filterCol, _ := classifyRangeBound(fn)
+		bound := rangeFilterConstValue(fn)
+		literalBound := false
+		if bound != nil {
+			_, _, literalBound = unwrapConstLiteral(bound)
+		}
+		if filterCol == nil || bound == nil || !literalBound ||
+			filterCol.RelPos != orderByCol.RelPos || filterCol.ColPos != pkPos ||
+			!regularIndexCursorTypeMatches(bound.Typ, pkType) {
+			return false
+		}
+	}
+	return true
+}
+
 func canPushRegularIndexOrderedLimit(scanNode *plan.Node) bool {
 	if scanNode == nil || len(scanNode.IndexScanInfo.Parts) < 2 || len(scanNode.FilterList) != 1 {
 		return false

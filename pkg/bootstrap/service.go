@@ -145,12 +145,16 @@ type service struct {
 	}
 
 	upgrade struct {
-		upgradeTenantBatch         int
-		checkUpgradeDuration       time.Duration
-		checkUpgradeTenantDuration time.Duration
-		upgradeTenantTasks         int
-		finalVersionCompleted      atomic.Bool
-		kek                        string
+		upgradeTenantBatch                      int
+		checkUpgradeDuration                    time.Duration
+		checkUpgradeTenantDuration              time.Duration
+		upgradeTenantTasks                      int
+		finalVersionCompleted                   atomic.Bool
+		orphanPrivilegeMaintenanceWorkerRunning atomic.Bool
+		orphanPrivilegeMaintenanceRunning       atomic.Bool
+		orphanPrivilegeMaintenanceState         orphanPrivilegeMaintenanceState
+		orphanPrivilegeMaintenanceStart         func() string
+		kek                                     string
 	}
 }
 
@@ -173,6 +177,7 @@ func NewService(
 		stopper: stopper.NewStopper("upgrade", stopper.WithLogger(getLogger(sid).RawLogger())),
 	}
 	s.mu.tenants = make(map[int32]bool)
+	s.upgrade.orphanPrivilegeMaintenanceState.restartSeed = newOrphanPrivilegeMaintenanceRestartSeed()
 	s.initUpgrade()
 
 	for _, opt := range opts {
