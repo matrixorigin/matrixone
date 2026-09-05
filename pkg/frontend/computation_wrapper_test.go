@@ -351,22 +351,30 @@ func newPreparedExecuteEnvForSQLWithCompilerContext(
 	ses.GetTxnCompileCtx().SetExecCtx(execCtx)
 	proc.SetResolveVariableFunc(ses.txnCompileCtx.ResolveVariable)
 	proc.SetResolveVariableIsBinFunc(ses.txnCompileCtx.ResolveVariableIsBin)
+	proc.SetResolveVariableBinaryStringFunc(ses.txnCompileCtx.ResolveVariableBinaryString)
 	proc.SetResolveVariablePrepareParamKindFunc(ses.txnCompileCtx.ResolveVariablePrepareParamKind)
 	return ses, prepareStmt, cw, execCtx
 }
 
-func TestInitExecuteStmtParamPreservesBinaryFlagPerUserVariable(t *testing.T) {
+func TestInitExecuteStmtParamPreservesStringDomainsPerUserVariable(t *testing.T) {
 	ses, prepareStmt, cw, execCtx := newPreparedExecuteEnvForSQL(t, 102, "select ?, ?")
 	defer prepareStmt.Close()
 
-	require.NoError(t, ses.setUserDefinedVar("binary_param", "AB\x00\x00", "", true))
+	require.NoError(t, ses.setUserDefinedVarWithType(
+		"binary_param", "AB\x00\x00", "", false, plan.Type{Id: int32(types.T_varbinary)}))
 	require.NoError(t, ses.SetUserDefinedVar("text_param", "text", ""))
 	isBin, err := ses.txnCompileCtx.ResolveVariableIsBin("binary_param", false, false)
 	require.NoError(t, err)
-	require.True(t, isBin)
+	require.False(t, isBin)
 	isBin, err = ses.txnCompileCtx.ResolveVariableIsBin("text_param", false, false)
 	require.NoError(t, err)
 	require.False(t, isBin)
+	isBinaryString, err := ses.txnCompileCtx.ResolveVariableBinaryString("binary_param", false, false)
+	require.NoError(t, err)
+	require.True(t, isBinaryString)
+	isBinaryString, err = ses.txnCompileCtx.ResolveVariableBinaryString("text_param", false, false)
+	require.NoError(t, err)
+	require.False(t, isBinaryString)
 	isBin, err = ses.txnCompileCtx.ResolveVariableIsBin("system_var", true, false)
 	require.NoError(t, err)
 	require.False(t, isBin)
@@ -393,10 +401,12 @@ func TestInitExecuteStmtParamPreservesBinaryFlagPerUserVariable(t *testing.T) {
 
 	_, _, _, _, _, err = initExecuteStmtParam(execCtx, ses, cw, execPlan, "")
 	require.NoError(t, err)
-	require.True(t, cw.proc.GetPrepareParamIsBin(0))
+	require.False(t, cw.proc.GetPrepareParamIsBin(0))
 	require.False(t, cw.proc.GetPrepareParamIsBin(1))
+	require.True(t, cw.proc.GetPrepareParamIsBinaryString(0))
+	require.False(t, cw.proc.GetPrepareParamIsBinaryString(1))
 	require.Equal(t, plan2.ParamValue{
-		Value: "AB\x00\x00", IsBin: true, EnableNumericPrefix: true,
+		Value: "AB\x00\x00", IsBin: false, EnableNumericPrefix: true,
 		SourceType: types.T_varbinary.ToType(), HasSourceType: true,
 	}, cw.paramVals[0])
 	require.Equal(t, plan2.ParamValue{
@@ -412,6 +422,7 @@ func TestInitExecuteStmtParamPreservesBinaryFlagPerUserVariable(t *testing.T) {
 	require.Zero(t, params.Length(), "the previous owned params must be released on successful replacement")
 	require.Nil(t, params.GetData())
 	require.False(t, cw.proc.GetPrepareParamIsBin(0))
+	require.False(t, cw.proc.GetPrepareParamIsBinaryString(0))
 	require.Equal(t, "now-text", cw.proc.GetPrepareParams().GetStringAt(0))
 	require.Equal(t, types.StringSourceSQLPrepare, cw.proc.GetPrepareParams().GetStringSourceAt(0))
 
@@ -420,8 +431,49 @@ func TestInitExecuteStmtParamPreservesBinaryFlagPerUserVariable(t *testing.T) {
 	require.Zero(t, current.Length())
 	require.Nil(t, current.GetData())
 	require.False(t, cw.proc.GetPrepareParamIsBin(0), "binary metadata must not leak into the next execution")
+	require.False(t, cw.proc.GetPrepareParamIsBinaryString(0), "binary-string metadata must not leak into the next execution")
 	cw.proc.GetPrepareParams().Free(cw.proc.Mp())
 	cw.proc.SetPrepareParams(nil)
+}
+
+func TestBinaryProtocolPreparedParamRebindsStringDomain(t *testing.T) {
+	ses, prepareStmt, cw, execCtx := newPreparedExecuteEnvForSQL(t, 103, "select ?")
+	defer func() {
+		cw.proc.SetPrepareParams(nil)
+		prepareStmt.Close()
+	}()
+
+	install := func(mysqlType defines.MysqlType) *vector.Vector {
+		params := vector.NewVec(types.T_text.ToType())
+		require.NoError(t, vector.AppendBytes(params, []byte("中中"), false, cw.proc.Mp()))
+		prepareStmt.params = params
+		prepareStmt.ParamTypes = []byte{byte(mysqlType), 0}
+		return params
+	}
+
+	previous := install(defines.MYSQL_TYPE_BLOB)
+	_, _, _, _, _, err := initExecuteStmtParam(execCtx, ses, cw, nil, prepareStmt.Name)
+	require.NoError(t, err)
+	require.True(t, cw.proc.GetPrepareParamIsBinaryString(0))
+
+	cw.proc.SetPrepareParams(nil)
+	current := install(defines.MYSQL_TYPE_VAR_STRING)
+	previous.Free(cw.proc.Mp())
+	_, _, _, _, _, err = initExecuteStmtParam(execCtx, ses, cw, nil, prepareStmt.Name)
+	require.NoError(t, err)
+	require.False(t, cw.proc.GetPrepareParamIsBinaryString(0),
+		"a text rebind must clear the previous binary domain")
+
+	cw.proc.SetPrepareParams(nil)
+	next := install(defines.MYSQL_TYPE_LONG_BLOB)
+	current.Free(cw.proc.Mp())
+	_, _, _, _, _, err = initExecuteStmtParam(execCtx, ses, cw, nil, prepareStmt.Name)
+	require.NoError(t, err)
+	require.True(t, cw.proc.GetPrepareParamIsBinaryString(0),
+		"a later binary rebind must not reuse the text domain")
+	cw.proc.SetPrepareParams(nil)
+	next.Free(cw.proc.Mp())
+	prepareStmt.params = nil
 }
 
 func TestPreparedParamValuesPreservesNullProtocolProvenance(t *testing.T) {
@@ -2146,7 +2198,7 @@ func TestInitExecuteStmtParamFreesParamsOnResolveError(t *testing.T) {
 			{Expr: &plan.Expr_V{V: &plan.VarRef{Name: "second"}}},
 		},
 	}
-	params, _, _, _, _, err := buildExecuteUserParams(cw.proc, execPlan.Args, nil)
+	params, _, _, _, _, _, err := buildExecuteUserParams(cw.proc, execPlan.Args, nil)
 	require.ErrorIs(t, err, assert.AnError)
 	require.Zero(t, params.Length())
 	require.Nil(t, params.GetData())
@@ -2214,7 +2266,7 @@ func TestBuildExecuteUserParamsPreservesBoundConcreteTypes(t *testing.T) {
 		wantTypes = append(wantTypes, test.typ)
 	}
 
-	params, _, _, paramKinds, paramTypes, err := buildExecuteUserParams(
+	params, _, _, _, paramKinds, paramTypes, err := buildExecuteUserParams(
 		cw.proc, args, typedPositions)
 	require.NoError(t, err)
 	defer params.Free(cw.proc.Mp())
@@ -2235,7 +2287,7 @@ func TestBuildExecuteUserParamsRejectsBoundTypeKindMismatch(t *testing.T) {
 	require.NoError(t, ses.setUserDefinedVarWithKind(
 		"mismatched", int8(1), "", false, vector.PrepareParamFloat))
 
-	params, _, _, _, _, err := buildExecuteUserParams(cw.proc, []*plan.Expr{{
+	params, _, _, _, _, _, err := buildExecuteUserParams(cw.proc, []*plan.Expr{{
 		Typ:  plan.Type{Id: int32(types.T_int8)},
 		Expr: &plan.Expr_V{V: &plan.VarRef{Name: "mismatched"}},
 	}}, []int32{0})
@@ -2335,7 +2387,7 @@ func TestBuildExecuteUserParamsHonorsStoredProcedureScope(t *testing.T) {
 		{Expr: &plan.Expr_V{V: &plan.VarRef{Name: "local_shadow"}}},
 		{Expr: &plan.Expr_V{V: &plan.VarRef{Name: "session_only"}}},
 	}
-	params, paramVals, paramIsBin, paramKinds, paramTypes, err := buildExecuteUserParams(
+	params, paramVals, paramIsBin, _, paramKinds, paramTypes, err := buildExecuteUserParams(
 		cw.proc, args, []int32{0, 1, 2})
 	require.NoError(t, err)
 	defer params.Free(cw.proc.Mp())
@@ -2391,7 +2443,7 @@ func TestBuildExecuteUserParamsRetainsExecuteArgumentSourceType(t *testing.T) {
 			Expr: &plan.Expr_V{V: &plan.VarRef{Name: "runtime_binary"}},
 		},
 	}
-	params, paramVals, _, _, _, err := buildExecuteUserParams(cw.proc, args, nil)
+	params, paramVals, _, _, _, _, err := buildExecuteUserParams(cw.proc, args, nil)
 	require.NoError(t, err)
 	defer params.Free(cw.proc.Mp())
 

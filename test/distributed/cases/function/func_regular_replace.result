@@ -56,10 +56,10 @@ insert into t1 values(7 , 'Dog Cat Dog Cat Cat Dog Cat Dog Cat Cat');
 insert into t1 values(8 , 'Dog Cat Dog Cat Cat Dog Cat Dog Cat Cat');
 SELECT a, REGEXP_REPLACE(b, 'Cat', 'pig', 3) from t1;
 a    regexp_replace(b, Cat, pig, 3)
-1    pig Dog pig Dog pig pig Dog pig Dog pig
-2    pig Dog pig Dog pig pig Dog pig Dog pig
-3    pig Dog pig Dog pig pig Dog pig Dog pig
-4    pig Dog pig Dog pig pig Dog pig Dog pig
+1    Cat Dog pig Dog pig pig Dog pig Dog pig
+2    Cat Dog pig Dog pig pig Dog pig Dog pig
+3    Cat Dog pig Dog pig pig Dog pig Dog pig
+4    Cat Dog pig Dog pig pig Dog pig Dog pig
 5    Dog pig Dog pig pig Dog pig Dog pig pig
 6    Dog pig Dog pig pig Dog pig Dog pig pig
 7    Dog pig Dog pig pig Dog pig Dog pig pig
@@ -92,3 +92,13 @@ INSERT INTO t VALUES ('XV*XZ', 'PP-ZZ-DXA'), ('aa bbb cc ddd', 'k ii lll oooo');
 SELECT REGEXP_REPLACE(str1, '*', 'i'), REGEXP_REPLACE(str2,'hav','hiv') FROM t;
 invalid argument regexp_replace have invalid regexp pattern arg, bad value [*]
 drop table t;
+SELECT REGEXP_REPLACE('aaa', 'aa', 'X', 2, 1) AS overlap_one,
+REGEXP_REPLACE('aaa', 'aa', 'X', 2, 0) AS overlap_all,
+REGEXP_REPLACE('abc', '^', 'X', 2, 0) AS anchored,
+HEX(REGEXP_REPLACE('a\nb', '(?m)a|$', 'X', 2, 1)) AS zero_width_at_pos;
+overlap_one    overlap_all    anchored    zero_width_at_pos
+aX    aX    abc    61580A62
+SELECT HEX(REGEXP_REPLACE(CAST(_binary'中中' AS BINARY(6)), CAST(_binary'中' AS BINARY(3)), _binary'X', 2, 1)) AS binary_replace,
+HEX(REGEXP_REPLACE(CAST(_binary'中中' AS VARBINARY(6)), CAST(_binary'中' AS VARBINARY(3)), _binary'X', 2, 1)) AS varbinary_replace;
+binary_replace    varbinary_replace
+E4B8AD58    E4B8AD58

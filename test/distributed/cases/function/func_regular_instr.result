@@ -230,3 +230,60 @@ regexp_substr(col1, a, 1)
 a
 a
 drop database big_data_test;
+SELECT REGEXP_INSTR('甲😀乙😀丙', '😀') AS first_start,
+REGEXP_INSTR('甲😀乙😀丙', '😀', 1, 2, 0) AS second_start,
+REGEXP_INSTR('甲😀乙😀丙', '😀', 1, 2, 1) AS second_end,
+REGEXP_INSTR('甲😀乙😀丙', '😀', 3, 1, 0) AS from_third;
+first_start    second_start    second_end    from_third
+2    4    5    4
+SELECT REGEXP_SUBSTR('甲😀乙😀丙', '😀', 3, 1) AS second_emoji,
+REGEXP_REPLACE('甲😀乙😀丙', '😀', 'X', 3, 1) AS replace_one,
+REGEXP_REPLACE('甲😀乙😀丙', '😀', 'X', 3, 0) AS replace_all_from_pos;
+second_emoji    replace_one    replace_all_from_pos
+😀    甲😀乙X丙    甲😀乙X丙
+DROP DATABASE IF EXISTS regexp_utf8_test;
+CREATE DATABASE regexp_utf8_test;
+USE regexp_utf8_test;
+DROP TABLE IF EXISTS t_regexp_utf8;
+CREATE TABLE t_regexp_utf8(id INT PRIMARY KEY, s VARCHAR(40), vb VARBINARY(6), bl BLOB);
+INSERT INTO t_regexp_utf8 VALUES
+(1, '甲😀乙😀丙', _binary'中中', _binary'中中'),
+(2, 'ASCII', _binary'ASCII', _binary'ASCII');
+SELECT id, REGEXP_INSTR(s, '😀', 3, 1, 0) AS pos FROM t_regexp_utf8 ORDER BY id;
+id    pos
+1    4
+2    0
+SELECT id, REGEXP_REPLACE(s, '😀', 'X', 3, 0) AS replaced FROM t_regexp_utf8 ORDER BY id;
+id    replaced
+1    甲😀乙X丙
+2    ASCII
+SELECT ORD(vb) AS vb_ord, ORD(bl) AS blob_ord,
+REGEXP_INSTR(vb, CAST(_binary'中' AS VARBINARY(3)), 2) AS vb_pos,
+REGEXP_INSTR(bl, CAST(_binary'中' AS BINARY(3)), 2) AS blob_pos,
+HEX(REGEXP_SUBSTR(bl, CAST(_binary'中' AS BINARY(3)), 2)) AS blob_substr,
+HEX(REGEXP_REPLACE(bl, CAST(_binary'中' AS BINARY(3)), _binary'X', 2, 1)) AS blob_replace
+FROM t_regexp_utf8 WHERE id = 1;
+vb_ord    blob_ord    vb_pos    blob_pos    blob_substr    blob_replace
+228    228    4    4    E4B8AD    E4B8AD58
+PREPARE regexp_domain_rebind FROM
+'SELECT ORD(?), REGEXP_INSTR(?, CAST(_binary''中'' AS VARBINARY(3)), 2), ORD(REGEXP_SUBSTR(?, CAST(_binary''中'' AS VARBINARY(3)), 2))';
+SET @regexp_subject = CAST(_binary'中中' AS VARBINARY(6));
+EXECUTE regexp_domain_rebind USING @regexp_subject, @regexp_subject, @regexp_subject;
+ord(?)    regexp_instr(?, cast(_binary'中' as varbinary(3)), 2)    ord(regexp_substr(?, cast(_binary'中' as varbinary(3)), 2))
+228    4    228
+SET @regexp_subject = '中中';
+EXECUTE regexp_domain_rebind USING @regexp_subject, @regexp_subject, @regexp_subject;
+ord(?)    regexp_instr(?, cast(_binary'中' as varbinary(3)), 2)    ord(regexp_substr(?, cast(_binary'中' as varbinary(3)), 2))
+14989485    2    14989485
+SET @regexp_subject = CAST(_binary'中中' AS BLOB);
+EXECUTE regexp_domain_rebind USING @regexp_subject, @regexp_subject, @regexp_subject;
+ord(?)    regexp_instr(?, cast(_binary'中' as varbinary(3)), 2)    ord(regexp_substr(?, cast(_binary'中' as varbinary(3)), 2))
+228    4    228
+DEALLOCATE PREPARE regexp_domain_rebind;
+DROP TABLE t_regexp_utf8;
+DROP DATABASE regexp_utf8_test;
+SELECT REGEXP_INSTR(CAST(_binary'中中' AS BINARY(6)), CAST(_binary'中' AS BINARY(3)), 2) AS binary_pos,
+REGEXP_INSTR(CAST(_binary'中中' AS VARBINARY(6)), CAST(_binary'中' AS VARBINARY(3)), 2) AS varbinary_pos,
+REGEXP_INSTR(CAST(_binary'中中' AS VARBINARY(6)), CAST(_binary'中' AS VARBINARY(3)), 2, 1, 1) AS varbinary_end;
+binary_pos    varbinary_pos    varbinary_end
+4    4    7

@@ -50,3 +50,14 @@ INSERT INTO t VALUES ('W * P', 'W + Z - O'), ('have has having', 'do does doing'
 INSERT INTO t VALUES ('XV*XZ', 'PP-ZZ-DXA'), ('aa bbb cc ddd', 'k ii lll oooo');
 SELECT REGEXP_REPLACE(str1, '*', 'i'), REGEXP_REPLACE(str2,'hav','hiv') FROM t;
 drop table t;
+
+# A match discarded before pos must not suppress a valid match beginning at
+# pos. Anchors keep their original-subject context.
+SELECT REGEXP_REPLACE('aaa', 'aa', 'X', 2, 1) AS overlap_one,
+       REGEXP_REPLACE('aaa', 'aa', 'X', 2, 0) AS overlap_all,
+       REGEXP_REPLACE('abc', '^', 'X', 2, 0) AS anchored,
+       HEX(REGEXP_REPLACE('a\nb', '(?m)a|$', 'X', 2, 1)) AS zero_width_at_pos;
+
+# Binary subjects interpret pos as a byte offset.
+SELECT HEX(REGEXP_REPLACE(CAST(_binary'中中' AS BINARY(6)), CAST(_binary'中' AS BINARY(3)), _binary'X', 2, 1)) AS binary_replace,
+       HEX(REGEXP_REPLACE(CAST(_binary'中中' AS VARBINARY(6)), CAST(_binary'中' AS VARBINARY(3)), _binary'X', 2, 1)) AS varbinary_replace;
