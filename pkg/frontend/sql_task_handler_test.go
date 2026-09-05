@@ -27,7 +27,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	querypb "github.com/matrixorigin/matrixone/pkg/pb/query"
 	taskpb "github.com/matrixorigin/matrixone/pkg/pb/task"
-	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
@@ -413,7 +412,9 @@ func TestHandleSQLTaskMutationsSyncCommitTimestamp(t *testing.T) {
 	}()
 
 	mockQC := newMockQueryClient()
+	mockTC := &mockTxnClient{}
 	ses.proc.Base.QueryClient = mockQC
+	ses.proc.Base.TxnClient = mockTC
 
 	mockMC := &mockMOCluster{
 		cnServices: []metadata.CNService{
@@ -437,34 +438,22 @@ func TestHandleSQLTaskMutationsSyncCommitTimestamp(t *testing.T) {
 		Name:    tree.Identifier("task_sync_commit"),
 		SQLBody: "",
 	}))
-	require.Equal(t, 6, mockQC.sendCalls)
-	require.Equal(t, 6, mockQC.releaseCalls)
-	require.Equal(t, []querypb.CmdMethod{
-		querypb.CmdMethod_GetCommit,
-		querypb.CmdMethod_GetCommit,
-		querypb.CmdMethod_GetCommit,
-		querypb.CmdMethod_SyncCommit,
-		querypb.CmdMethod_SyncCommit,
-		querypb.CmdMethod_SyncCommit,
-	}, mockQC.requests)
-	require.Equal(t, []timestamp.Timestamp{ts2, ts2, ts2}, mockQC.syncTS)
+	require.True(t, mockTC.syncCalled)
+	require.Equal(t, ts2, mockTC.syncCalledWith)
+	require.Equal(t, 3, mockQC.sendCalls)
+	require.Equal(t, 3, mockQC.releaseCalls)
 
+	mockTC.syncCalled = false
+	mockTC.syncCalledWith = newTestTimestamp(0, 0)
 	mockQC.sendCalls = 0
 	mockQC.releaseCalls = 0
 	mockQC.newReqCalls = 0
-	mockQC.requests = nil
-	mockQC.syncTS = nil
 
 	require.NoError(t, handleExecuteSQLTask(ctx, ses, &tree.ExecuteSQLTask{Name: tree.Identifier("task_sync_commit")}))
-	require.Equal(t, 6, mockQC.sendCalls)
-	require.Equal(t, 6, mockQC.releaseCalls)
-	for _, method := range mockQC.requests[:3] {
-		require.Equal(t, querypb.CmdMethod_GetCommit, method)
-	}
-	for _, method := range mockQC.requests[3:] {
-		require.Equal(t, querypb.CmdMethod_SyncCommit, method)
-	}
-	require.Equal(t, []timestamp.Timestamp{ts2, ts2, ts2}, mockQC.syncTS)
+	require.True(t, mockTC.syncCalled)
+	require.Equal(t, ts2, mockTC.syncCalledWith)
+	require.Equal(t, 3, mockQC.sendCalls)
+	require.Equal(t, 3, mockQC.releaseCalls)
 }
 
 func TestExecInFrontendSQLTaskStatements(t *testing.T) {
