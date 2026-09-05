@@ -8,7 +8,7 @@
 
 合入单元：一个原子实现 PR。本文各能力 gate 不会作为多个产品阶段分别合入。
 
-最后更新：2026-09-02
+最后更新：2026-09-05
 
 本文定义 PR #27615 已实现范围的契约和不变量。当前支持范围严格限定为下文明确
 准入的聚合与 UNION ALL 子集；标记为范围外的能力属于未来设计修订，不由当前实现
@@ -177,6 +177,9 @@ MV 必须是顶层 select，包含 1～16 个直接、持久化的普通基表�
 - 代数 delta：`COUNT(*)`、`COUNT(expr)`、`SUM(expr)`、`AVG(expr)`；
 - 仅重算受影响分组的 `MIN(expr)`、`MAX(expr)`；
 - 通过持久 value multiplicity 状态实现精确 `COUNT(DISTINCT expr)`；
+- 维护 group state 上的 `HAVING`，包括可见分组 false→true 和 true→false 转换；
+- 通过持久 value multiplicity 以及 distinct sum/count state 实现精确
+  `SUM(DISTINCT expr)`、`AVG(DISTINCT expr)`；
 - insert、delete、update tail。
 
 每个 group 表达式必须在输出中恰好出现一次。增量标量表达式白名单包含列引用、
@@ -194,7 +197,6 @@ MV 必须是顶层 select，包含 1～16 个直接、持久化的普通基表�
 仍需完成的代码和状态契约：
 
 - `HAVING`；
-- `SUM(DISTINCT)`、`AVG(DISTINCT)`；
 - `UNION DISTINCT`、`INTERSECT`、`EXCEPT`、分支内部嵌套集合操作，或输出/聚合
   状态 shape 不兼容的 `UNION ALL`；
 - JOIN、CTE、子查询、窗口、`ORDER BY ... LIMIT`、ROLLUP、CUBE、GROUPING SETS、
@@ -671,9 +673,10 @@ operator graph。当前 flat aggregate list 只是临时分支状态，不是独
   multiplicity，再按 SQL set predicate 决定可见性；state 与 distinct input rows
   数量成正比。
 
-当前分支 baseline 已实现顶层兼容 UNION ALL；同一 PR 中紧接着必须完成 HAVING、
-SUM/AVG DISTINCT 和 construct-specific FAST error。在这些代码完成前，不兼容但通过
-source admission 的定义只有 FORCE 能选择完整刷新。
+当前分支 baseline 已实现顶层兼容 UNION ALL、HAVING 和精确 SUM/AVG DISTINCT。
+稳定的 construct-specific FAST reason code 以及更广泛的 operator graph 能力仍属于
+未来工作；超出当前增量子集但通过 source admission 的定义由 FORCE/COMPLETE 选择完整
+刷新。
 
 ### 12.2 增量 JOIN
 

@@ -3,13 +3,31 @@ create database bool_sumavg_sqlmode;
 use bool_sumavg_sqlmode;
 create table t (i int, j int);
 insert into t values (0, 0), (1, 1), (2, 2);
+set session sql_mode = default;
 select @@sql_mode;
 @@sql_mode
-ERROR_FOR_DIVISION_BY_ZERO,NO_ENGINE_SUBSTITUTION,NO_ZERO_DATE,NO_ZERO_IN_DATE,ONLY_FULL_GROUP_BY,STRICT_TRANS_TABLES
+ERROR_FOR_DIVISION_BY_ZERO,NO_ENGINE_SUBSTITUTION,NO_ZERO_DATE,NO_ZERO_IN_DATE,ONLY_FULL_GROUP_BY,STRICT_TRANS_TABLES,ENABLE_BOOL_SUMAVG
 select sum(i<>0) from t;
-invalid argument aggregate function sum, bad value [BOOL]
+sum(i != 0)
+2
 select avg(i<>0) from t;
-invalid argument aggregate function avg, bad value [BOOL]
+avg(i != 0)
+0.6666666666666666
+select sum(json_unquote(json_extract(cast('{"code":"v1"}' as json), '$.code')) = 'v1');
+sum(json_unquote(json_extract(cast({"code":"v1"} as json), $.code)) = v1)
+1
+use bool_sumavg_sqlmode;
+select sum(json_unquote(json_extract(cast('{"code":"v1"}' as json), '$.code')) = 'v1');
+sum(json_unquote(json_extract(cast({"code":"v1"} as json), $.code)) = v1)
+1
+set session sql_mode = 'ONLY_FULL_GROUP_BY,STRICT_TRANS_TABLES';
+select sum(json_unquote(json_extract(cast('{"code":"v1"}' as json), '$.code')) = 'v1');
+sum(json_unquote(json_extract(cast({"code":"v1"} as json), $.code)) = v1)
+1
+set session sql_mode = default;
+select sum(json_unquote(json_extract(cast('{"code":"v1"}' as json), '$.code')) = 'v1');
+sum(json_unquote(json_extract(cast({"code":"v1"} as json), $.code)) = v1)
+1
 set session sql_mode = 'ONLY_FULL_GROUP_BY,STRICT_TRANS_TABLES,ENABLE_BOOL_SUMAVG';
 select @@sql_mode;
 @@sql_mode
@@ -30,7 +48,7 @@ drop table if exists ctas_types;
 create table ctas_types as select sum(i<>0) as s, avg(i<>0) as a from t;
 select column_name, data_type from information_schema.columns where table_schema = 'bool_sumavg_sqlmode' and table_name = 'ctas_types' order by column_name;
 column_name    data_type
-a    double
+a    decimal
 s    bigint
 select * from ctas_types;
 s    a
@@ -118,5 +136,5 @@ execute relaxed_stmt;
 sum(i != 0)
 2
 deallocate prepare relaxed_stmt;
-set session sql_mode = 'ERROR_FOR_DIVISION_BY_ZERO,NO_ENGINE_SUBSTITUTION,NO_ZERO_DATE,NO_ZERO_IN_DATE,ONLY_FULL_GROUP_BY,STRICT_TRANS_TABLES';
+set session sql_mode = default;
 drop database bool_sumavg_sqlmode;

@@ -40,6 +40,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergetop"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/multi_update"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/order"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/partition"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/preinsert"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/rightdedupjoin"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/shuffle"
@@ -462,6 +463,22 @@ func TestDupOperatorPartitionMultiUpdate(t *testing.T) {
 	}
 }
 
+func TestPartitionConstructionAndDuplicationPreserveHashConfiguration(t *testing.T) {
+	node := &plan.Node{
+		PartitionAlgorithm: plan.Node_PARTITION_ALGORITHM_HASH,
+		SpillMem:           4096,
+		OrderBy:            []*plan.OrderBySpec{{Flag: plan.OrderBySpec_DESC}},
+	}
+	op := constructPartition(node)
+	require.Equal(t, node.PartitionAlgorithm, op.Algorithm)
+	require.Equal(t, node.SpillMem, op.SpillMem)
+
+	duplicated := dupOperator(op, 0, 1).(*partition.Partition)
+	defer duplicated.Release()
+	require.Equal(t, op.Algorithm, duplicated.Algorithm)
+	require.Equal(t, op.SpillMem, duplicated.SpillMem)
+}
+
 func TestHasPartitionedUpdateTargetChecksEveryMainContext(t *testing.T) {
 	contexts := []*plan.UpdateCtx{
 		{TableDef: &plan.TableDef{TblId: 1}},
@@ -846,15 +863,18 @@ func TestProjectedMongoColumnsUsesExternalScanLayout(t *testing.T) {
 		{Name: "pump"},
 		{Name: "__mo_hidden", Hidden: true},
 	}}
-	projected, err := projectedMongoColumns(t.Context(), columns, tableDef)
+	projected, err := projectedMongoColumns(t.Context(), columns, tableDef, false)
 	require.NoError(t, err)
 	require.Equal(t, []sqlmongodb.ColumnMapping{columns[2], columns[1]}, projected)
 
-	_, err = projectedMongoColumns(t.Context(), columns, &plan.TableDef{Cols: []*plan.ColDef{{Name: "missing"}}})
+	_, err = projectedMongoColumns(t.Context(), columns, &plan.TableDef{Cols: []*plan.ColDef{{Name: "missing"}}}, false)
 	require.Error(t, err)
-	_, err = projectedMongoColumns(t.Context(), columns, nil)
+	_, err = projectedMongoColumns(t.Context(), columns, nil, false)
 	require.Error(t, err)
-	_, err = projectedMongoColumns(t.Context(), columns, &plan.TableDef{Cols: []*plan.ColDef{{Name: "hidden", Hidden: true}}})
+	queryOnly, err := projectedMongoColumns(t.Context(), columns, &plan.TableDef{Cols: []*plan.ColDef{{Name: "hidden", Hidden: true}}}, true)
+	require.NoError(t, err)
+	require.Empty(t, queryOnly)
+	_, err = projectedMongoColumns(t.Context(), columns, &plan.TableDef{Cols: []*plan.ColDef{{Name: "hidden", Hidden: true}}}, false)
 	require.Error(t, err)
 }
 

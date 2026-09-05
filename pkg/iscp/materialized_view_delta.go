@@ -292,7 +292,6 @@ func (c *MaterializedViewConsumer) consumeIncremental(ctx context.Context, r Dat
 					); err != nil {
 						return err
 					}
-					break
 				}
 			}
 			return r.UpdateWatermark(refreshCtx, sqlctx.GetService(), sqlctx.Txn())
@@ -835,7 +834,7 @@ func applyMaterializedViewDistinctDeltas(
 	state := sqlquote.QualifiedIdent(info.DBName, desc.StateTable)
 	target := sqlquote.QualifiedIdent(info.DBName, info.TableName)
 	for _, agg := range desc.Aggregates {
-		if agg.Kind != "count_distinct" {
+		if agg.Kind != "count_distinct" && agg.Kind != "sum_distinct" && agg.Kind != "avg_distinct" {
 			continue
 		}
 		cte, err := materializedViewDistinctDeltaCTE(ctx, desc, agg, sourceTypes, rows)
@@ -856,7 +855,11 @@ func materializedViewDistinctDeltaStatements(
 	agg incrementalAggregate,
 	cte, state, target string,
 ) []string {
-	visibleDelta := fmt.Sprintf("SELECT d.group_key, sum(CASE WHEN coalesce(s.ref_count,0) = 0 AND d.ref_delta > 0 THEN 1 WHEN coalesce(s.ref_count,0) > 0 AND coalesce(s.ref_count,0) + d.ref_delta <= 0 THEN -1 ELSE 0 END) AS value_delta, sum(CASE WHEN coalesce(s.ref_count,0) = 0 AND d.ref_delta > 0 THEN d.value_value WHEN coalesce(s.ref_count,0) > 0 AND coalesce(s.ref_count,0) + d.ref_delta <= 0 THEN -d.value_value ELSE 0 END) AS value_sum_delta FROM distinct_delta AS d LEFT JOIN %s AS s ON s.aggregate_index = d.aggregate_index AND s.group_key = d.group_key AND s.value_key = d.value_key GROUP BY d.group_key", state)
+	visibleDelta := "SELECT d.group_key, sum(CASE WHEN coalesce(s.ref_count,0) = 0 AND d.ref_delta > 0 THEN 1 WHEN coalesce(s.ref_count,0) > 0 AND coalesce(s.ref_count,0) + d.ref_delta <= 0 THEN -1 ELSE 0 END) AS value_delta"
+	if agg.Kind == "sum_distinct" || agg.Kind == "avg_distinct" {
+		visibleDelta += ", sum(CASE WHEN coalesce(s.ref_count,0) = 0 AND d.ref_delta > 0 THEN d.value_value WHEN coalesce(s.ref_count,0) > 0 AND coalesce(s.ref_count,0) + d.ref_delta <= 0 THEN -d.value_value ELSE 0 END) AS value_sum_delta"
+	}
+	visibleDelta += fmt.Sprintf(" FROM distinct_delta AS d LEFT JOIN %s AS s ON s.aggregate_index = d.aggregate_index AND s.group_key = d.group_key AND s.value_key = d.value_key GROUP BY d.group_key", state)
 	var update string
 	switch agg.Kind {
 	case "count_distinct":
@@ -899,7 +902,7 @@ func rebuildMaterializedViewDistinctState(
 			groups[i] = leaf.Groups[i].Expression
 		}
 		for _, agg := range leaf.Aggregates {
-			if agg.Kind != "count_distinct" {
+			if agg.Kind != "count_distinct" && agg.Kind != "sum_distinct" && agg.Kind != "avg_distinct" {
 				continue
 			}
 			where := fmt.Sprintf("(%s) IS NOT NULL", agg.InputExpression)
@@ -1176,6 +1179,14 @@ func materializedViewDeltaInsertProjection(desc *incrementalDescription, deltaAl
 			values = append(values, sumDelta)
 		case "count_distinct":
 			values = append(values, "CAST(0 AS BIGINT)")
+		case "sum_distinct", "avg_distinct":
+			// The exact visible delta is applied after the ordinary group
+			// upsert. New groups therefore start with neutral hidden state;
+			// applying the 0-to-1 transitions below initializes the output
+			// without double-counting the batch.
+			values = append(values, "NULL")
+			columns = append(columns, sqlquote.Ident(agg.StateSumColumn), sqlquote.Ident(agg.StateCountColumn))
+			values = append(values, "NULL", "CAST(0 AS BIGINT)")
 		}
 	}
 	columns = append(columns, sqlquote.Ident(desc.RowCountColumn))

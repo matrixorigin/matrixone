@@ -415,9 +415,34 @@ func TestMaterializedViewAdvancedDeltaSQLIsReparseable(t *testing.T) {
 
 	distinctCTE, err := materializedViewDistinctDeltaCTE(t.Context(), desc, desc.Aggregates[2], typesByColumn, rows)
 	require.NoError(t, err)
-	statements := append([]string{upsert}, materializedViewDistinctDeltaStatements(
+	distinctStatements := materializedViewDistinctDeltaStatements(
 		desc, desc.Aggregates[2], distinctCTE,
-		sqlquote.QualifiedIdent("obs", "__state"), sqlquote.QualifiedIdent("obs", "mv"))...)
+		sqlquote.QualifiedIdent("obs", "__state"), sqlquote.QualifiedIdent("obs", "mv"))
+	require.NotContains(t, strings.Join(distinctStatements, "\n"), "value_sum_delta")
+	statements := append([]string{upsert}, distinctStatements...)
+	for _, kind := range []string{"sum_distinct", "avg_distinct"} {
+		distinctDesc := *desc
+		distinctDesc.Aggregates = []incrementalAggregate{{
+			Kind: kind, InputExpression: "e.duration", OutputColumn: "distinct_value",
+			StateIndex: 1, StateSumColumn: "__distinct_sum", StateCountColumn: "__distinct_count",
+		}}
+		distinctDesc.StateColumns = []string{"__row_count", "__group_key", "__distinct_sum", "__distinct_count"}
+		distinctCTE, err := materializedViewDistinctDeltaCTE(t.Context(), &distinctDesc, distinctDesc.Aggregates[0], typesByColumn, rows)
+		require.NoError(t, err)
+		distinctStatements := materializedViewDistinctDeltaStatements(
+			&distinctDesc, distinctDesc.Aggregates[0], distinctCTE,
+			sqlquote.QualifiedIdent("obs", "__state"), sqlquote.QualifiedIdent("obs", "mv"))
+		require.Contains(t, strings.Join(distinctStatements, "\n"), "value_sum_delta")
+		columns, values := materializedViewDeltaInsertProjection(&distinctDesc, "d")
+		require.Equal(t, len(columns), len(values))
+		upsert := fmt.Sprintf("%s INSERT INTO %s (%s) SELECT %s FROM delta AS d ON DUPLICATE KEY UPDATE %s",
+			cte, sqlquote.QualifiedIdent("obs", "mv"), strings.Join(columns, ","), strings.Join(values, ","), strings.Join(materializedViewDeltaUpsertSets(&distinctDesc), ","))
+		for _, sql := range append([]string{upsert}, distinctStatements...) {
+			stmt, parseErr := parsers.ParseOne(t.Context(), dialect.MYSQL, sql, 1)
+			require.NoError(t, parseErr, sql)
+			stmt.Free()
+		}
+	}
 	statements = append(statements,
 		"CREATE TABLE IF NOT EXISTS `obs`.`__state` (aggregate_index INT NOT NULL, group_key VARBINARY(65535) NOT NULL, value_key VARBINARY(65535) NOT NULL, ref_count BIGINT NOT NULL, PRIMARY KEY (aggregate_index, group_key, value_key)) COMMENT = 'matrixone materialized view state'",
 		"DELETE t FROM `obs`.`mv` AS t JOIN `obs`.`__state` AS s ON t.`__group_key` = s.group_key WHERE s.aggregate_index = 0",

@@ -636,9 +636,9 @@ create table string05 as select trim(col1), ltrim(col1), rtrim(col1) from string
 show create table string05;
 ➤ Table[12,-1,0]  ¦  Create Table[12,-1,0]  𝄀
 string05  ¦  CREATE TABLE `string05` (
-  `trim(col1)` varchar(65535) DEFAULT NULL,
-  `ltrim(col1)` varchar(65535) DEFAULT NULL,
-  `rtrim(col1)` varchar(65535) DEFAULT NULL
+  `trim(col1)` varchar(40) DEFAULT NULL,
+  `ltrim(col1)` varchar(40) DEFAULT NULL,
+  `rtrim(col1)` varchar(40) DEFAULT NULL
 )
 select * from string05;
 ➤ trim(col1)[12,-1,0]  ¦  ltrim(col1)[12,-1,0]  ¦  rtrim(col1)[12,-1,0]  𝄀
@@ -688,8 +688,8 @@ create table string09 as select substring(col1, 3, 4), reverse(col2) from string
 show create table string09;
 ➤ Table[12,-1,0]  ¦  Create Table[12,-1,0]  𝄀
 string09  ¦  CREATE TABLE `string09` (
-  `substring(col1, 3, 4)` varchar(65535) DEFAULT NULL,
-  `reverse(col2)` varchar(65535) DEFAULT NULL
+  `substring(col1, 3, 4)` varchar(40) DEFAULT NULL,
+  `reverse(col2)` varchar(1) DEFAULT NULL
 )
 select * from string09;
 ➤ substring(col1, 3, 4)[12,-1,0]  ¦  reverse(col2)[12,-1,0]  𝄀
@@ -2065,15 +2065,15 @@ create table agg01 as select avg(col1) as avgCol, sum(col2) as sumcol, count(col
 show create table agg01;
 ➤ Table[12,-1,0]  ¦  Create Table[12,-1,0]  𝄀
 agg01  ¦  CREATE TABLE `agg01` (
-  `avgcol` double DEFAULT NULL,
+  `avgcol` decimal(14,4) DEFAULT NULL,
   `sumcol` decimal(38,0) DEFAULT NULL,
   `countcol` bigint NOT NULL DEFAULT 0,
   `maxcol` double DEFAULT NULL,
   `mincol` double DEFAULT NULL
 )
 select * from agg01;
-➤ avgcol[8,54,0]  ¦  sumcol[3,38,0]  ¦  countcol[-5,64,0]  ¦  maxcol[8,54,0]  ¦  mincol[8,54,0]  𝄀
-7571.333333333333  ¦  10424  ¦  3  ¦  10.0  ¦  -9392032.0
+➤ avgcol[3,14,4]  ¦  sumcol[3,38,0]  ¦  countcol[-5,64,0]  ¦  maxcol[8,54,0]  ¦  mincol[8,54,0]  𝄀
+7571.3333  ¦  10424  ¦  3  ¦  10.0  ¦  -9392032.0
 drop table agg01;
 drop table math01;
 drop database db8;

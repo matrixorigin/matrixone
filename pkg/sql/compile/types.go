@@ -410,6 +410,7 @@ type Compile struct {
 
 	adjustTableExtraFunc     func(*api.SchemaExtra) error
 	disableDropAutoIncrement bool
+	skipDataBranchReclaim    bool
 	keepAutoIncrement        uint64
 	ignorePublish            bool
 	ignoreCheckExperimental  bool

@@ -105,14 +105,14 @@ func TestPrimaryKeyGroupEliminationRequiresExactSingleRowAggregateLaw(t *testing
 		wantAgg bool
 	}{
 		{
-			name:    "wide decimal avg falls back",
+			name:    "wide decimal avg remains eligible after promotion",
 			sql:     "select empno, avg(cast(sal as decimal(38,10))) from constraint_test.emp group by empno limit 10",
-			wantAgg: true,
+			wantAgg: false,
 		},
 		{
-			name:    "mixed aggregate falls back atomically",
+			name:    "mixed aggregate remains eligible after promotion",
 			sql:     "select empno, count(*), avg(cast(sal as decimal(38,10))) from constraint_test.emp group by empno limit 10",
-			wantAgg: true,
+			wantAgg: false,
 		},
 		{
 			name:    "safe decimal avg remains eligible",
@@ -388,6 +388,7 @@ func TestSingleRowSumOrAvgCastIsExact(t *testing.T) {
 		{"float avg signed zero", "avg", planpb.Type{Id: int32(types.T_float64)}, planpb.Type{Id: int32(types.T_float64)}, false},
 		{"decimal64 widened", "avg", decimal(types.T_decimal64, 18, 0), decimal(types.T_decimal128, 38, 6), true},
 		{"decimal128 loses integer digits", "avg", decimal(types.T_decimal128, 38, 10), decimal(types.T_decimal128, 38, 12), false},
+		{"decimal128 promotes without losing integer digits", "avg", decimal(types.T_decimal128, 38, 10), decimal(types.T_decimal256, 42, 14), true},
 		{"decimal128 exact boundary", "avg", decimal(types.T_decimal128, 37, 11), decimal(types.T_decimal128, 38, 12), true},
 		{"decimal256 loses integer digits", "avg", decimal(types.T_decimal256, 65, 0), decimal(types.T_decimal256, 65, 6), false},
 		{"decimal256 exact boundary", "avg", decimal(types.T_decimal256, 65, 12), decimal(types.T_decimal256, 65, 12), true},
@@ -410,6 +411,9 @@ func TestSingleRowCastIsTotal(t *testing.T) {
 	typ := func(oid types.T) planpb.Type {
 		return planpb.Type{Id: int32(oid)}
 	}
+	stringType := func(oid types.T, width int32, charset uint32) planpb.Type {
+		return planpb.Type{Id: int32(oid), Width: width, Charset: charset}
+	}
 	decimal := func(oid types.T, width, scale int32) planpb.Type {
 		return planpb.Type{Id: int32(oid), Width: width, Scale: scale}
 	}
@@ -428,6 +432,12 @@ func TestSingleRowCastIsTotal(t *testing.T) {
 		{"malformed decimal source", decimal(types.T_decimal64, 19, 2), typ(types.T_float64), false},
 		{"malformed decimal target", decimal(types.T_decimal64, 7, 2), decimal(types.T_decimal64, 19, 2), false},
 		{"same malformed decimal", decimal(types.T_decimal64, 19, 2), decimal(types.T_decimal64, 19, 2), false},
+		{"varchar to wider char", stringType(types.T_varchar, 17, uint32(types.CharsetUTF8)), stringType(types.T_char, 25, uint32(types.CharsetUTF8)), true},
+		{"char widening", stringType(types.T_char, 10, uint32(types.CharsetUTF8)), stringType(types.T_char, 25, uint32(types.CharsetUTF8)), true},
+		{"varchar to narrower char", stringType(types.T_varchar, 25, uint32(types.CharsetUTF8)), stringType(types.T_char, 10, uint32(types.CharsetUTF8)), false},
+		{"unbounded varchar to char", stringType(types.T_varchar, 0, uint32(types.CharsetUTF8)), stringType(types.T_char, 25, uint32(types.CharsetUTF8)), false},
+		{"varchar to char charset change", stringType(types.T_varchar, 17, uint32(types.CharsetUTF8MB4Bin)), stringType(types.T_char, 25, uint32(types.CharsetUTF8)), false},
+		{"text to char", stringType(types.T_text, 17, uint32(types.CharsetUTF8)), stringType(types.T_char, 25, uint32(types.CharsetUTF8)), false},
 		{"text to integer", typ(types.T_varchar), typ(types.T_int64), false},
 		{"float widening", typ(types.T_float32), typ(types.T_float64), true},
 		{"float narrowing", typ(types.T_float64), typ(types.T_float32), false},

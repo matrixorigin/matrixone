@@ -3530,6 +3530,13 @@ func (b *baseBinder) bindFuncExprImplByAstExpr(name string, astArgs []tree.Expr,
 	if coerceErr != nil {
 		return nil, coerceErr
 	}
+	if name == "avg" && len(astArgs) == 1 && len(args) == 1 {
+		// MySQL derives AVG's exact result from an integer literal/constant
+		// expression's decimal precision, not from the physical BIGINT container
+		// used for untyped literals. Columns and explicit integer casts deliberately
+		// keep their full declared domains.
+		b.setAvgIntegerLiteralPrecision(astArgs[0], args[0])
+	}
 	if (name == "in" || name == "not_in") && len(args) == 2 &&
 		containsVolatileFunction(args[0]) && b.ctx != nil {
 		b.markVolatileInLeft(args[0])
@@ -3644,6 +3651,83 @@ func (b *baseBinder) bindFuncExprImplByAstExpr(name string, astArgs []tree.Expr,
 	}
 
 	return bindFuncExprImplUdf(b, name, udf, astArgs, args, depth)
+}
+
+func (b *baseBinder) setAvgIntegerLiteralPrecision(astExpr tree.Expr, arg *plan.Expr) {
+	typ := makeTypeByPlan2Expr(arg)
+	if !typ.Oid.IsInteger() {
+		return
+	}
+	precision, ok := avgIntegerConstantPrecision(astExpr)
+	if !ok || precision <= 0 {
+		return
+	}
+	arg.Typ.Width = precision
+	// Integer casts use Scale == -1 to carry physical bit width. Mark the
+	// literal-derived precision as decimal metadata so AvgReturnType does
+	// not reinterpret it as a cast domain.
+	arg.Typ.Scale = 0
+}
+
+// AVG adds four fractional digits to an exact integer argument. Keep the
+// precision recorded for a constant expression bounded to the largest input
+// precision that can produce the public Decimal256(65,4) result. The executor
+// applies the same cap; without it a long multiplication/addition chain could
+// overflow int32 while constructing planner metadata.
+const maxAvgIntegerExpressionPrecision int32 = 65 - 4
+
+func capAvgIntegerExpressionPrecision(precision int32) int32 {
+	if precision > maxAvgIntegerExpressionPrecision {
+		return maxAvgIntegerExpressionPrecision
+	}
+	return precision
+}
+
+func addAvgIntegerExpressionPrecision(left, right int32) int32 {
+	if left >= maxAvgIntegerExpressionPrecision || right >= maxAvgIntegerExpressionPrecision ||
+		left > maxAvgIntegerExpressionPrecision-right {
+		return maxAvgIntegerExpressionPrecision
+	}
+	return left + right
+}
+
+func avgIntegerConstantPrecision(astExpr tree.Expr) (int32, bool) {
+	switch expr := astExpr.(type) {
+	case *tree.ParenExpr:
+		return avgIntegerConstantPrecision(expr.Expr)
+	case *tree.UnaryExpr:
+		if expr.Op != tree.UNARY_PLUS && expr.Op != tree.UNARY_MINUS {
+			return 0, false
+		}
+		return avgIntegerConstantPrecision(expr.Expr)
+	case *tree.NumVal:
+		if expr.ValType != tree.P_int64 && expr.ValType != tree.P_uint64 {
+			return 0, false
+		}
+		literal := strings.TrimLeft(expr.String(), "+-")
+		if len(literal) > int(maxAvgIntegerExpressionPrecision) {
+			return maxAvgIntegerExpressionPrecision, true
+		}
+		return int32(len(literal)), true
+	case *tree.BinaryExpr:
+		left, leftOK := avgIntegerConstantPrecision(expr.Left)
+		right, rightOK := avgIntegerConstantPrecision(expr.Right)
+		if !leftOK || !rightOK {
+			return 0, false
+		}
+		switch expr.Op {
+		case tree.MULTI:
+			return addAvgIntegerExpressionPrecision(left, right), true
+		case tree.PLUS, tree.MINUS:
+			return capAvgIntegerExpressionPrecision(max(left, right) + 1), true
+		case tree.MOD:
+			return min(left, right), true
+		default:
+			return 0, false
+		}
+	default:
+		return 0, false
+	}
 }
 
 func markPreparedResultCastsProvisional(
@@ -4547,7 +4631,7 @@ func bindFuncExprImplByPlanExpr(
 		} else if args[0].Typ.Id == int32(types.T_interval) && args[1].Typ.Id == int32(types.T_int64) && intervalUnitIsDayOrLarger(args[0]) {
 			name = "date_add"
 			args, err = resetDateFunctionArgs(ctx, args[1], args[0])
-		} else if args[0].Typ.Id == int32(types.T_varchar) && args[1].Typ.Id == int32(types.T_varchar) {
+		} else if isCollatedTextPlanType(args[0]) && isCollatedTextPlanType(args[1]) {
 			name = "concat"
 		}
 		if err != nil {
@@ -4916,6 +5000,13 @@ func bindFuncExprImplByPlanExpr(
 	funcID = fGet.GetEncodedOverloadID()
 	returnType = fGet.GetReturnType()
 	argsCastType, _ = fGet.ShouldDoImplicitTypeCast()
+	// CONVERT's executor consumes a VARCHAR cast, but its declared result bound
+	// belongs to the pre-cast source type. Derive metadata before inserting the
+	// execution cast so fixed numeric/temporal/UUID widths are not replaced by
+	// VARCHAR(65535) and spuriously promoted to BLOB.
+	if name == "convert" {
+		returnType = function.ConvertReturnTypeForBinder(argsType)
+	}
 	adjustControlFlowMetadata(name, args, argsType, &returnType, argsCastType)
 
 	// Optimization: avoid casting columns in comparisons to preserve index usage
@@ -5228,6 +5319,12 @@ func bindFuncExprImplByPlanExpr(
 			}
 		}
 
+	case "repeat":
+		refineRepeatLiteralReturnType(args, &returnType)
+
+	case "lpad", "rpad":
+		refinePadLiteralReturnType(args, &returnType)
+
 	case "python_user_defined_function":
 		size := (argsLength - 2) / 2
 		args = args[:size+1]
@@ -5316,6 +5413,151 @@ func bindFuncExprImplByPlanExpr(
 		},
 		Typ: Typ,
 	}, nil
+}
+
+func isCollatedTextPlanType(expr *plan.Expr) bool {
+	if expr == nil {
+		return false
+	}
+	switch types.T(expr.Typ.Id) {
+	case types.T_char, types.T_varchar, types.T_text:
+		return true
+	default:
+		return false
+	}
+}
+
+func refineRepeatLiteralReturnType(args []*plan.Expr, returnType *types.Type) {
+	if len(args) != 2 {
+		return
+	}
+	countLiteral := args[1].GetLit()
+	if countLiteral == nil {
+		return
+	}
+	count, ok := literalSignedValue(countLiteral)
+	if !ok || count < 0 {
+		return
+	}
+	binary := returnType.Charset == types.CharsetBinary
+	sourceWidth, known := stringExprBound(args[0], binary)
+	if !known {
+		return
+	}
+	if sourceWidth != 0 && uint64(count) > math.MaxUint64/sourceWidth {
+		return
+	}
+	refineKnownStringResultType(returnType, sourceWidth*uint64(count), binary)
+}
+
+func refinePadLiteralReturnType(args []*plan.Expr, returnType *types.Type) {
+	if len(args) != 3 {
+		return
+	}
+	targetLiteral := args[1].GetLit()
+	if targetLiteral == nil {
+		return
+	}
+	target, ok := literalSignedValue(targetLiteral)
+	if !ok || target < 0 {
+		return
+	}
+	if returnType.Charset != types.CharsetBinary {
+		refineKnownStringResultType(returnType, uint64(target), false)
+		return
+	}
+	sourceRuneBytes, sourceKnown := binaryExprMaxRuntimeRuneBytes(args[0])
+	padRuneBytes, padKnown := binaryExprMaxRuntimeRuneBytes(args[2])
+	if !sourceKnown || !padKnown {
+		return
+	}
+	maxRuneBytes := max(sourceRuneBytes, padRuneBytes)
+	if maxRuneBytes != 0 && uint64(target) > math.MaxUint64/maxRuneBytes {
+		return
+	}
+	refineKnownStringResultType(returnType, uint64(target)*maxRuneBytes, true)
+}
+
+func binaryExprMaxRuntimeRuneBytes(expr *plan.Expr) (uint64, bool) {
+	if lit := expr.GetLit(); lit != nil && !lit.Isnull {
+		if value, ok := lit.GetValue().(*plan.Literal_Sval); ok {
+			var bound uint64
+			for input := value.Sval; len(input) > 0; {
+				r, size := utf8.DecodeRuneInString(input)
+				encoded := uint64(size)
+				if r == utf8.RuneError && size == 1 {
+					encoded = uint64(utf8.RuneLen(utf8.RuneError))
+				}
+				bound = max(bound, encoded)
+				input = input[size:]
+			}
+			return bound, true
+		}
+	}
+	if expr.Typ.Width <= 0 || types.T(expr.Typ.Id) == types.T_blob {
+		// PAD's target is a character count. Every runtime rune occupies at most
+		// UTFMax encoded bytes even when the source declaration itself is
+		// unbounded, so a constant target still gives a finite payload bound.
+		return uint64(utf8.UTFMax), true
+	}
+	if oid := types.T(expr.Typ.Id); oid == types.T_char || oid == types.T_varchar {
+		// Binary-charset CHAR/VARCHAR width remains a character count.
+		return uint64(utf8.UTFMax), true
+	}
+	// Native binary widths count bytes. Invalid UTF-8 bytes become the
+	// three-byte RuneError; valid UTF-8 can consume up to four source bytes.
+	return min(max(uint64(expr.Typ.Width), uint64(utf8.RuneLen(utf8.RuneError))), uint64(utf8.UTFMax)), true
+}
+
+func stringExprBound(expr *plan.Expr, binary bool) (uint64, bool) {
+	if binary {
+		return binaryExprByteBound(expr)
+	}
+	if lit := expr.GetLit(); lit != nil && !lit.Isnull {
+		if value, ok := lit.GetValue().(*plan.Literal_Sval); ok {
+			return uint64(utf8.RuneCountInString(value.Sval)), true
+		}
+	}
+	if expr.Typ.Width > 0 && types.T(expr.Typ.Id) != types.T_text {
+		return uint64(expr.Typ.Width), true
+	}
+	return 0, false
+}
+
+func binaryExprByteBound(expr *plan.Expr) (uint64, bool) {
+	if lit := expr.GetLit(); lit != nil && !lit.Isnull {
+		if value, ok := lit.GetValue().(*plan.Literal_Sval); ok {
+			return uint64(len(value.Sval)), true
+		}
+	}
+	width := expr.Typ.Width
+	if width > 0 && types.T(expr.Typ.Id) != types.T_blob {
+		if oid := types.T(expr.Typ.Id); oid == types.T_char || oid == types.T_varchar {
+			if uint64(width) > math.MaxUint64/uint64(utf8.UTFMax) {
+				return 0, false
+			}
+			return uint64(width) * uint64(utf8.UTFMax), true
+		}
+		return uint64(width), true
+	}
+	return 0, false
+}
+
+func refineKnownStringResultType(returnType *types.Type, width uint64, binary bool) {
+	if binary {
+		if width <= uint64(types.MaxVarBinaryLen) {
+			*returnType = types.T_varbinary.ToType()
+			returnType.Width = int32(width)
+			returnType.Charset = types.CharsetBinary
+		}
+		return
+	}
+	if width <= uint64(types.MaxVarcharLen) {
+		charset := returnType.Charset
+		*returnType = types.T_varchar.ToType()
+		returnType.Width = int32(width)
+		returnType.Charset = charset
+	}
 }
 
 func bindConvertUsingCharset(ctx context.Context, args []*plan.Expr) error {
@@ -6711,6 +6953,23 @@ func appendPadSpaceComparisonCastIfNeeded(ctx context.Context, expr *Expr) (*Exp
 		return appendComparisonCastBeforeExpr(ctx, expr, makePlan2Type(&argType))
 	}
 	return expr, nil
+}
+
+// appendPadSpaceWindowKeyCastIfNeeded canonicalizes direct CHAR window keys
+// into the same PAD SPACE comparison domain as promoted string keys. Ordinary
+// predicates deliberately keep their existing CHAR comparison binding so that
+// optimizer key recognition is unchanged outside window planning.
+func appendPadSpaceWindowKeyCastIfNeeded(ctx context.Context, expr *Expr) (*Expr, error) {
+	if isCastOverload(expr, 2) {
+		return expr, nil
+	}
+	argType := makeTypeByPlan2Expr(expr)
+	if argType.Oid == types.T_char {
+		targetType := argType
+		targetType.Oid = types.T_varchar
+		return appendComparisonCastBeforeExpr(ctx, expr, makePlan2Type(&targetType))
+	}
+	return appendPadSpaceComparisonCastIfNeeded(ctx, expr)
 }
 
 func isCastOverload(expr *Expr, overloadID int32) bool {

@@ -9,7 +9,7 @@ Implementation PR: https://github.com/matrixorigin/matrixone/pull/27615
 Merge unit: one atomic implementation PR. None of the capability gates in this
 document will be merged as separately released product stages.
 
-Last updated: 2026-09-02
+Last updated: 2026-09-05
 
 This document defines the contract and invariants implemented by PR #27615.
 The supported scope is the explicitly admitted aggregate and UNION ALL subset;
@@ -205,6 +205,10 @@ aggregate branches with compatible output and hidden-state schemas. It accepts:
 - `COUNT(*)`, `COUNT(expr)`, `SUM(expr)`, and `AVG(expr)` by algebraic delta;
 - `MIN(expr)` and `MAX(expr)` by recomputing only affected groups;
 - exact `COUNT(DISTINCT expr)` using persistent value-multiplicity state;
+- `HAVING` over the maintained group state, including visible-group
+  false-to-true and true-to-false transitions;
+- exact `SUM(DISTINCT expr)` and `AVG(DISTINCT expr)` using persistent
+  value-multiplicity state plus distinct sum/count state;
 - two to sixteen compatible `UNION ALL` branches. A stable branch ID is included
   in the hidden group identity, so equal visible rows from different branches
   remain distinct. One physical source is subscribed once and its deltas are
@@ -221,8 +225,6 @@ expression nodes do not produce an incremental specification.
 The following are **not incrementally supported by this implementation** and
 remain out of scope until a future design revision:
 
-- `HAVING`;
-- `SUM(DISTINCT)` and `AVG(DISTINCT)`;
 - `UNION DISTINCT`, `INTERSECT`, `EXCEPT`, nested set operations inside a
   branch, or `UNION ALL` branches whose output/aggregate-state shapes differ;
 - JOIN, CTE, subquery, window, `ORDER BY ... LIMIT`, ROLLUP, CUBE, GROUPING
@@ -754,11 +756,11 @@ state and is not a separately supported generation.
   full-row type-preserving key and can consume state proportional to distinct
   input rows.
 
-Top-level compatible UNION ALL is present in the current branch baseline. The
-remaining immediate work in this same PR is HAVING and SUM/AVG DISTINCT,
-together with stable construct-specific FAST errors; until that code is
-complete, FORCE alone may select complete refresh for an admitted definition
-outside the current incremental subset.
+Top-level compatible UNION ALL, HAVING, and exact SUM/AVG DISTINCT are
+implemented in the current branch baseline. Stable construct-specific FAST
+reason codes and the broader operator-graph families remain future work; an
+admitted definition outside the current incremental subset uses complete
+refresh under FORCE/COMPLETE.
 
 ### 12.2 Incremental JOIN
 

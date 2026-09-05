@@ -90,18 +90,17 @@ func (jobEntry *JobEntry) update(
 	watermark types.TS,
 	state int8,
 	dropAt types.Timestamp,
-) {
-	jobEntry.jobSpec = &jobSpec.TriggerSpec
-	jobEntry.sourceTables = append([]TableInfo(nil), jobSpec.ConsumerInfo.SourceTableInfos()...)
-	jobEntry.dropAt = dropAt
-	if jobEntry.state == ISCPJobState_Error {
-		return
+) error {
+	applyMetadata := func() {
+		jobEntry.jobSpec = &jobSpec.TriggerSpec
+		jobEntry.sourceTables = append([]TableInfo(nil), jobSpec.ConsumerInfo.SourceTableInfos()...)
+		jobEntry.dropAt = dropAt
 	}
-	// Stage is monotonic within one job generation. In particular, InitSQL
-	// completion can persist Init -> Running without changing the job LSN or
-	// iteration state, so retain that transition independently of progress.
-	if jobEntry.stage < jobStatus.Stage {
-		jobEntry.stage = jobStatus.Stage
+	if jobEntry.state == ISCPJobState_Error {
+		// Lifecycle progress is terminal, but drop/recreate log records still need
+		// to update the metadata used by GC and generation management.
+		applyMetadata()
+		return nil
 	}
 	// Running/Pending is an admission state, not durable progress.  A job
 	// that is still Completed in this executor generation has no worker that
@@ -110,8 +109,10 @@ func (jobEntry *JobEntry) update(
 	// repeatedly demote the job and strand its initial snapshot.
 	if jobEntry.state == ISCPJobState_Completed &&
 		(state == ISCPJobState_Pending || state == ISCPJobState_Running) {
-		return
+		applyMetadata()
+		return nil
 	}
+	nextStage := max(jobEntry.stage, jobStatus.Stage)
 	needApply := false
 	if jobEntry.currentLSN < jobStatus.LSN {
 		needApply = true
@@ -121,9 +122,19 @@ func (jobEntry *JobEntry) update(
 	}
 	if needApply {
 		if jobEntry.watermark.GT(&watermark) {
+			// The durable row is already terminal, so no second conditional write is
+			// needed (and job_state != Error would reject it). Accept the terminal
+			// version without moving the last known-good watermark backwards.
+			if state == ISCPJobState_Error {
+				applyMetadata()
+				jobEntry.stage = nextStage
+				jobEntry.currentLSN = jobStatus.LSN
+				jobEntry.state = ISCPJobState_Error
+				return nil
+			}
 			errMsg := fmt.Sprintf("watermark %v > %v, current state %d, incoming state %d, job %d-%v-%d",
-				watermark.ToString(), jobEntry.watermark.ToString(), jobEntry.state, state, jobEntry.tableInfo.tableID, jobEntry.jobName, jobEntry.jobID)
-			FlushPermanentErrorMessage(
+				jobEntry.watermark.ToString(), watermark.ToString(), jobEntry.state, state, jobEntry.tableInfo.tableID, jobEntry.jobName, jobEntry.jobID)
+			err := FlushPermanentErrorMessage(
 				ctx,
 				jobEntry.tableInfo.exec.cnUUID,
 				jobEntry.tableInfo.exec.txnEngine,
@@ -136,14 +147,30 @@ func (jobEntry *JobEntry) update(
 				[]*JobStatus{jobStatus},
 				types.MaxTs(),
 				errMsg,
-				[]uint64{jobEntry.currentLSN},
+				// The regressing row is already durable. Fence that exact version;
+				// using the older in-memory LSN can never match it.
+				[]uint64{jobStatus.LSN},
 			)
+			if err != nil {
+				return err
+			}
+			// Preserve the last known-good watermark. Only the LSN and terminal
+			// state advance to reflect the durable fence.
+			applyMetadata()
+			jobEntry.stage = nextStage
+			jobEntry.currentLSN = jobStatus.LSN
+			jobEntry.state = ISCPJobState_Error
+			return nil
 		}
 		jobEntry.currentLSN = jobStatus.LSN
 		jobEntry.persistedWatermark = watermark
 		jobEntry.watermark = watermark
 		jobEntry.state = state
 	}
+	// Job metadata and Stage can change without a progress/state transition.
+	applyMetadata()
+	jobEntry.stage = nextStage
+	return nil
 }
 
 func (jobEntry *JobEntry) IsInitedAndFinished() bool {
@@ -153,13 +180,13 @@ func (jobEntry *JobEntry) IsInitedAndFinished() bool {
 func (jobEntry *JobEntry) UpdateWatermark(
 	from, to types.TS,
 	watermarkFlushThreshold time.Duration,
-) {
+) error {
 	if from.GE(&to) {
-		return
+		return nil
 	}
 	expectedFrom := jobEntry.watermark.Next()
 	if !expectedFrom.EQ(&from) {
-		FlushPermanentErrorMessage(
+		err := FlushPermanentErrorMessage(
 			jobEntry.tableInfo.exec.ctx,
 			jobEntry.tableInfo.exec.cnUUID,
 			jobEntry.tableInfo.exec.txnEngine,
@@ -169,13 +196,21 @@ func (jobEntry *JobEntry) UpdateWatermark(
 			[]string{jobEntry.jobName},
 			[]uint64{jobEntry.jobID},
 			[]uint64{jobEntry.currentLSN},
-			[]*JobStatus{{}},
+			[]*JobStatus{{Stage: jobEntry.stage}},
 			types.MaxTs(),
 			fmt.Sprintf("update watermark failed, from %v, current %v", from.ToString(), expectedFrom.ToString()),
 			[]uint64{jobEntry.currentLSN},
 		)
+		if err != nil {
+			return err
+		}
+		// The catalog is now durably terminal. Reflect that state locally and do
+		// not move progress across the discontinuity that caused the fence.
+		jobEntry.state = ISCPJobState_Error
+		return nil
 	}
 	jobEntry.watermark = to
+	return nil
 }
 
 // flushThreshold is how far the in-memory watermark must run ahead of the
@@ -205,18 +240,16 @@ func (jobEntry *JobEntry) tryFlushWatermark(
 		return
 	}
 	needFlush = true
-	emptyStatus := &JobStatus{LSN: jobEntry.currentLSN + 1}
-	statusJson, err := MarshalJobStatus(emptyStatus)
-	if err != nil {
-		return
-	}
-	sql := cdc.CDCSQLBuilder.ISCPLogUpdateResultSQL(
+	// Advancing a watermark is a progress update, not a lifecycle transition.
+	// Update LSN in place so Stage and any future status fields survive.
+	sql := cdc.CDCSQLBuilder.ISCPLogAdvanceWatermarkSQL(
 		jobEntry.tableInfo.accountID,
 		jobEntry.tableInfo.tableID,
 		jobEntry.jobName,
 		jobEntry.jobID,
 		jobEntry.watermark,
-		statusJson,
+		jobEntry.currentLSN+1,
+		jobEntry.stage,
 		ISCPJobState_Completed,
 		jobEntry.currentLSN,
 	)
@@ -240,8 +273,13 @@ func (jobEntry *JobEntry) tryFlushWatermark(
 		)
 		return
 	}
+	defer result.Close()
+	if result.AffectedRows != 1 {
+		err = newISCPStatusCASLostError(
+			"iscp flush watermark", jobEntry.jobName, jobEntry.jobID, result.AffectedRows)
+		return
+	}
 	jobEntry.state = ISCPJobState_Pending
-	result.Close()
 	jobEntry.persistedWatermark = jobEntry.watermark
 	return
 }

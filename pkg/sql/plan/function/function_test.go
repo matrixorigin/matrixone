@@ -15,6 +15,7 @@
 package function
 
 import (
+	"context"
 	"fmt"
 	"testing"
 	"time"
@@ -461,6 +462,30 @@ func Test_GetFunctionByName(t *testing.T) {
 	}
 }
 
+func TestGetFunctionByNameWithoutError(t *testing.T) {
+	args := []types.Type{types.T_int8.ToType(), types.T_int16.ToType()}
+
+	want, err := GetFunctionByName(context.Background(), "+", args)
+	require.NoError(t, err)
+
+	got, ok := GetFunctionByNameWithoutError("+", args)
+	require.True(t, ok)
+	require.Equal(t, want.fid, got.fid)
+	require.Equal(t, want.overloadId, got.overloadId)
+	require.Equal(t, want.retType, got.retType)
+	require.Equal(t, want.needCast, got.needCast)
+	require.Equal(t, want.targetTypes, got.targetTypes)
+
+	_, ok = GetFunctionByNameWithoutError("date_trunc", []types.Type{
+		types.T_varchar.ToType(),
+		types.T_varchar.ToType(),
+	})
+	require.False(t, ok)
+
+	_, ok = GetFunctionByNameWithoutError("function_does_not_exist", nil)
+	require.False(t, ok)
+}
+
 func TestMakeTimeReturnScale(t *testing.T) {
 	proc := testutil.NewProcess(t)
 
@@ -672,28 +697,28 @@ func TestConcatFunctionsPreserveStringCollation(t *testing.T) {
 			name:        "concat keeps legacy byte ordering",
 			function:    "concat",
 			inputs:      []types.Type{general, legacy},
-			wantOID:     types.T_varchar,
+			wantOID:     types.T_text,
 			wantCharset: types.CharsetLegacy,
 		},
 		{
 			name:        "concat keeps utf8mb4 bin",
 			function:    "concat",
 			inputs:      []types.Type{general, utf8mb4Bin},
-			wantOID:     types.T_varchar,
+			wantOID:     types.T_text,
 			wantCharset: types.CharsetUTF8MB4Bin,
 		},
 		{
 			name:        "concat ws keeps utf8mb4 bin",
 			function:    "concat_ws",
 			inputs:      []types.Type{general, utf8mb4Bin, utf8mb4Bin},
-			wantOID:     types.T_varchar,
+			wantOID:     types.T_text,
 			wantCharset: types.CharsetUTF8MB4Bin,
 		},
 		{
 			name:        "opaque binary dominates utf8mb4 bin",
 			function:    "concat",
 			inputs:      []types.Type{utf8mb4Bin, opaqueBinary},
-			wantOID:     types.T_varchar,
+			wantOID:     types.T_varbinary,
 			wantCharset: types.CharsetBinary,
 		},
 		{
@@ -1108,6 +1133,15 @@ func TestGetFunctionByNameAESDecryptReturnsBlob(t *testing.T) {
 func TestGetFunctionIsWinfunByName(t *testing.T) {
 	assert.Equal(t, true, GetFunctionIsWinFunByName("rank"))
 	assert.Equal(t, false, GetFunctionIsWinFunByName("floor"))
+}
+
+func TestGetFunctionIgnoresWindowFrameByName(t *testing.T) {
+	assert.True(t, GetFunctionIgnoresWindowFrameByName("lag"))
+	assert.True(t, GetFunctionIgnoresWindowFrameByName("lead"))
+	assert.False(t, GetFunctionIgnoresWindowFrameByName("first_value"))
+	assert.False(t, GetFunctionIgnoresWindowFrameByName("last_value"))
+	assert.False(t, GetFunctionIgnoresWindowFrameByName("nth_value"))
+	assert.False(t, GetFunctionIgnoresWindowFrameByName("not_a_function"))
 }
 
 func TestGetFunctionIsVolatileOrRealTimeRelatedByName(t *testing.T) {

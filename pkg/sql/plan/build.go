@@ -42,7 +42,7 @@ func bindAndOptimizeSelectQueryWithValidator(
 	validate func(*Query) error,
 ) (*Plan, error) {
 	return bindAndOptimizeSelectQueryWithValidatorAndCapture(
-		stmtType, ctx, stmt, isPrepareStmt, skipStats, validate, nil, false,
+		stmtType, ctx, stmt, isPrepareStmt, skipStats, validate, nil, false, "",
 	)
 }
 
@@ -55,6 +55,7 @@ func bindAndOptimizeSelectQueryWithValidatorAndCapture(
 	validate func(*Query) error,
 	capture func(*BindContext),
 	restoreViewMySQLSpecialTypes bool,
+	persistedViewTarget string,
 ) (*Plan, error) {
 	start := time.Now()
 	defer func() {
@@ -63,6 +64,7 @@ func bindAndOptimizeSelectQueryWithValidatorAndCapture(
 
 	builder := NewQueryBuilder(stmtType, ctx, isPrepareStmt, true)
 	builder.sqlCalcFoundRows = selectHasSQLCalcFoundRows(stmt)
+	builder.persistedViewTarget = persistedViewTarget
 	bindCtx := NewBindContext(builder, nil)
 	bindCtx.restoreViewMySQLSpecialTypes = restoreViewMySQLSpecialTypes
 	if capture != nil {

@@ -50,6 +50,31 @@ const highNDVcolumnThreshHold = 0.95
 const statsCacheInitSize = 128
 const statsCacheMaxSize = 8192
 
+// StatsInfoUsable reports whether a statistics object contains a real table
+// cardinality observation. Persisted-object statistics use
+// AccurateObjectNumber; an explicit table-wide scan can also observe committed
+// rows before the first object is flushed. A successfully completed observation
+// carries TableName, which distinguishes an exact empty table from an
+// uninitialized zero-valued StatsInfo.
+func StatsInfoUsable(stats *pb.StatsInfo) bool {
+	if stats == nil || math.IsNaN(stats.TableCnt) || math.IsInf(stats.TableCnt, 0) || stats.TableCnt < 0 {
+		return false
+	}
+	return stats.AccurateObjectNumber > 0 || stats.TableCnt > 0 || stats.TableName != ""
+}
+
+func statsForTableDef(
+	ctx CompilerContext,
+	obj *plan.ObjectRef,
+	tableDef *plan.TableDef,
+	snapshot *plan.Snapshot,
+) (*pb.StatsInfo, error) {
+	if versioned, ok := ctx.(TableDefStatsCompilerContext); ok {
+		return versioned.StatsWithTableDef(obj, tableDef, snapshot)
+	}
+	return ctx.Stats(obj, snapshot)
+}
+
 // RowSizeThreshold Regardless of the table,
 // the minimum row size is 100.
 // However, due to inaccurate statistical information,
@@ -527,7 +552,11 @@ func (builder *QueryBuilder) getColNdv(col *plan.ColRef) float64 {
 	if w == nil || w.GetStats() == nil {
 		return -1
 	}
-	return w.GetStats().NdvMap[col.Name]
+	ndv, exists := w.GetStats().NdvMap[col.Name]
+	if !exists {
+		return -1
+	}
+	return ndv
 }
 
 //func (builder *QueryBuilder) getColOverlap(col *plan.ColRef) float64 {
@@ -547,7 +576,11 @@ func getNullSelectivity(arg *plan.Expr, builder *QueryBuilder, isnull bool) floa
 			break
 		}
 		s := w.GetStats()
-		nullCnt := float64(s.NullCntMap[col.Name])
+		nullCount, exists := s.NullCntMap[col.Name]
+		if !exists {
+			break
+		}
+		nullCnt := float64(nullCount)
 		if isnull {
 			return safeRatio(nullCnt, s.TableCnt, 0.1)
 		} else {
@@ -894,7 +927,13 @@ func estimateNonEqualitySelectivity(expr *plan.Expr, funcName string, builder *Q
 	}
 	s := w.GetStats()
 	if colRef != nil && len(literals) > 0 {
-		typ := types.T(s.DataTypeMap[colRef.Name])
+		typeID, hasType := s.DataTypeMap[colRef.Name]
+		minVal, hasMin := s.MinValMap[colRef.Name]
+		maxVal, hasMax := s.MaxValMap[colRef.Name]
+		if !hasType || !hasMin || !hasMax {
+			return 0.1
+		}
+		typ := types.T(typeID)
 
 		switch colFnName {
 		case "":
@@ -902,16 +941,16 @@ func estimateNonEqualitySelectivity(expr *plan.Expr, funcName string, builder *Q
 			// Decimal literals store internal scaled values, need proper conversion
 			if typ == types.T_decimal64 || typ == types.T_decimal128 {
 				return calcSelectivityByMinMaxForDecimal(
-					funcName, s.MinValMap[colRef.Name], s.MaxValMap[colRef.Name], expr)
+					funcName, minVal, maxVal, expr)
 			}
 			return calcSelectivityByMinMax(
-				funcName, s.MinValMap[colRef.Name], s.MaxValMap[colRef.Name], typ, literals)
+				funcName, minVal, maxVal, typ, literals)
 		case "year":
 			switch typ {
 			case types.T_date:
-				minVal := types.Date(s.MinValMap[colRef.Name])
-				maxVal := types.Date(s.MaxValMap[colRef.Name])
-				return calcSelectivityByMinMax(funcName, float64(minVal.Year()), float64(maxVal.Year()), litType, literals)
+				minDate := types.Date(minVal)
+				maxDate := types.Date(maxVal)
+				return calcSelectivityByMinMax(funcName, float64(minDate.Year()), float64(maxDate.Year()), litType, literals)
 			case types.T_datetime:
 				// TODO
 			}
@@ -1224,7 +1263,12 @@ func ReCalcNodeStats(nodeID int32, builder *QueryBuilder, recursive bool, leafNo
 			node.Stats.BlockNum = leftStats.BlockNum
 
 		case plan.Node_ANTI:
-			node.Stats.Outcnt = leftStats.Outcnt * (1 - rightSelectivity) * 0.5
+			if builder.outerAntiPlanningDisabled() {
+				node.Stats.Outcnt = leftStats.Outcnt * (1 - rightSelectivity) * 0.5
+			} else {
+				node.Stats.Outcnt = estimateAntiJoinOutcnt(
+					node, builder, node.Children[0], node.Children[1], leftStats, rightStats)
+			}
 			node.Stats.Cost = leftStats.Cost + rightStats.Cost
 			node.Stats.HashmapStats.HashmapSize = rightStats.Outcnt
 			node.Stats.Selectivity = selectivity_out
@@ -1463,17 +1507,118 @@ func reCalcNodeStatsAfterSwap(nodeID int32, builder *QueryBuilder, recursive boo
 	}
 
 	ReCalcNodeStats(nodeID, builder, false, leafNode, needResetHashMapStats)
-	if node.NodeType != plan.Node_JOIN || node.JoinType != plan.Node_SINGLE || !node.IsRightJoin {
+	if node.NodeType != plan.Node_JOIN || !node.IsRightJoin {
 		return
 	}
 
 	preservedStats := builder.qry.Nodes[node.Children[1]].Stats
-	node.Stats.Outcnt = preservedStats.Outcnt
-	node.Stats.BlockNum = preservedStats.BlockNum
-	node.Stats.Selectivity = preservedStats.Selectivity
+	switch node.JoinType {
+	case plan.Node_SINGLE:
+		node.Stats.Outcnt = preservedStats.Outcnt
+		node.Stats.BlockNum = preservedStats.BlockNum
+		node.Stats.Selectivity = preservedStats.Selectivity
+	case plan.Node_ANTI:
+		matchingStats := builder.qry.Nodes[node.Children[0]].Stats
+		if builder.outerAntiPlanningDisabled() {
+			matchingSelectivity := clampSelectivity(matchingStats.Selectivity, 1)
+			node.Stats.Outcnt = preservedStats.Outcnt * (1 - matchingSelectivity) * 0.5
+		} else {
+			node.Stats.Outcnt = estimateAntiJoinOutcnt(
+				node, builder, node.Children[1], node.Children[0], preservedStats, matchingStats)
+		}
+		node.Stats.BlockNum = preservedStats.BlockNum
+	default:
+		return
+	}
 	if node.Limit != nil {
 		applyLimitToStats(node.Stats, node.Limit, builder)
 	}
+}
+
+// estimateAntiJoinOutcnt estimates how many logical-left rows survive an ANTI
+// join. Child selectivity describes filtering within that child; it is not the
+// probability that a left join key is present on the right. In the absence of
+// key-overlap statistics, keep the uncertainty-neutral 50% estimate.
+//
+// A primary key on the left gives us a stronger structural bound: each right
+// input row can eliminate at most one left row. Apply that invariant to the
+// estimated input cardinalities without requiring key-overlap statistics.
+func estimateAntiJoinOutcnt(
+	node *plan.Node,
+	builder *QueryBuilder,
+	leftNodeID int32,
+	rightNodeID int32,
+	leftStats *Stats,
+	rightStats *Stats,
+) float64 {
+	leftRows := math.Max(0, finiteOr(leftStats.Outcnt, 0))
+	rightRows := math.Max(0, finiteOr(rightStats.Outcnt, 0))
+	outcnt := leftRows * 0.5
+	if antiJoinLeftKeysArePrimaryKey(node, builder, leftNodeID, rightNodeID) {
+		outcnt = math.Max(outcnt, leftRows-rightRows)
+	}
+	return math.Min(leftRows, math.Max(0, outcnt))
+}
+
+// antiJoinLeftKeysArePrimaryKey deliberately proves only the base-table case.
+// Joins and aggregates can duplicate rows, so primary-key provenance through
+// those operators requires a separate uniqueness property rather than a tag
+// match alone.
+func antiJoinLeftKeysArePrimaryKey(
+	node *plan.Node,
+	builder *QueryBuilder,
+	leftNodeID int32,
+	rightNodeID int32,
+) bool {
+	if node == nil || builder == nil || builder.qry == nil || len(node.Children) != 2 {
+		return false
+	}
+	left := builder.qry.Nodes[leftNodeID]
+	if left == nil || left.NodeType != plan.Node_TABLE_SCAN || left.TableDef == nil ||
+		left.TableDef.Pkey == nil || len(left.TableDef.Pkey.Names) == 0 ||
+		len(left.BindingTags) != 1 {
+		return false
+	}
+	for _, name := range left.TableDef.Pkey.Names {
+		if _, ok := left.TableDef.Name2ColIndex[name]; !ok {
+			return false
+		}
+	}
+
+	leftTags := map[int32]bool{left.BindingTags[0]: true}
+	rightTags := make(map[int32]bool)
+	for _, tag := range builder.enumerateTags(rightNodeID) {
+		rightTags[tag] = true
+	}
+
+	leftKeyCols := make([]int32, 0, len(left.TableDef.Pkey.Names))
+	for _, condition := range node.OnList {
+		fn := condition.GetF()
+		if fn == nil || len(fn.Args) != 2 || !IsEqualFunc(fn.Func.GetObj()) {
+			continue
+		}
+		first, second := fn.Args[0].GetCol(), fn.Args[1].GetCol()
+		switch {
+		case first != nil && second != nil && leftTags[first.RelPos] && rightTags[second.RelPos]:
+			leftKeyCols = append(leftKeyCols, first.ColPos)
+		case first != nil && second != nil && rightTags[first.RelPos] && leftTags[second.RelPos]:
+			leftKeyCols = append(leftKeyCols, second.ColPos)
+		}
+	}
+	for _, name := range left.TableDef.Pkey.Names {
+		pkCol := left.TableDef.Name2ColIndex[name]
+		matched := false
+		for _, keyCol := range leftKeyCols {
+			if keyCol == pkCol {
+				matched = true
+				break
+			}
+		}
+		if !matched {
+			return false
+		}
+	}
+	return true
 }
 
 func applyLimitToStats(stats *Stats, limit *plan.Expr, builder *QueryBuilder) {
@@ -1726,7 +1871,8 @@ func calcScanStats(node *plan.Node, builder *QueryBuilder) *plan.Stats {
 		scanSnapshot = node.ScanSnapshot
 	}
 
-	s, err := builder.compCtx.Stats(node.ObjRef, scanSnapshot)
+	s, err := statsForTableDef(
+		builder.compCtx, node.ObjRef, node.TableDef, scanSnapshot)
 	if err != nil || s == nil {
 		return DefaultStats()
 	}
@@ -1780,21 +1926,14 @@ func calcScanStats(node *plan.Node, builder *QueryBuilder) *plan.Stats {
 	stats.BlockNum = int32(float64(s.BlockNumber)*blockSel) + 1
 	// estimate average row size from collected table stats: sum(SizeMap)/TableCnt
 	// SizeMap stores approximate persisted bytes per column (using OriginSize); divide by total rows to get bytes/row
-	var totalSize uint64
-	{
-		for _, v := range s.SizeMap {
-			totalSize += v
-		}
-		if stats.TableCnt > 0 && totalSize > 0 {
-			stats.Rowsize = float64(totalSize) / stats.TableCnt
-		} else {
-			// Fallback: use table definition to estimate row size when SizeMap is empty or TableCnt is 0
-			if node.TableDef != nil {
-				stats.Rowsize = GetRowSizeFromTableDef(node.TableDef, true) * 0.8
-			} else {
-				stats.Rowsize = 0
-			}
-		}
+	if totalSize, complete := completeStatsSizeMap(s, node.TableDef); stats.TableCnt > 0 && totalSize > 0 && complete {
+		stats.Rowsize = float64(totalSize) / stats.TableCnt
+	} else if node.TableDef != nil {
+		// A partial ANALYZE generation intentionally omits unselected columns.
+		// Never mistake that subset for the complete physical row width.
+		stats.Rowsize = GetRowSizeFromTableDef(node.TableDef, true) * 0.8
+	} else {
+		stats.Rowsize = 0
 	}
 
 	return stats
@@ -1950,15 +2089,12 @@ func (builder *QueryBuilder) determineBuildAndProbeSide(nodeID int32, recursive 
 			w1 := builder.getStatsInfoByTableID(leftChild.TableDef.TblId)
 			w2 := builder.getStatsInfoByTableID(rightChild.TableDef.TblId)
 			if w1 != nil && w2 != nil && w1.GetStats() != nil && w2.GetStats() != nil {
-				var t1size, t2size uint64
-				for _, v := range w1.GetStats().SizeMap {
-					t1size += v
+				t1size, complete1 := completeStatsSizeMap(w1.GetStats(), leftChild.TableDef)
+				t2size, complete2 := completeStatsSizeMap(w2.GetStats(), rightChild.TableDef)
+				if complete1 && complete2 && t1size > 0 && t2size > 0 {
+					factor1 = math.Pow(float64(t1size), 0.1)
+					factor2 = math.Pow(float64(t2size), 0.1)
 				}
-				factor1 = math.Pow(float64(t1size), 0.1)
-				for _, v := range w2.GetStats().SizeMap {
-					t2size += v
-				}
-				factor2 = math.Pow(float64(t2size), 0.1)
 			}
 		}
 		if leftChild.Stats.Outcnt*factor1 < rightChild.Stats.Outcnt*factor2 {
@@ -1998,6 +2134,24 @@ func (builder *QueryBuilder) determineBuildAndProbeSide(nodeID int32, recursive 
 		builder.hasRecursiveScan(builder.qry.Nodes[node.Children[1]]) {
 		node.Children[0], node.Children[1] = node.Children[1], node.Children[0]
 	}
+}
+
+func completeStatsSizeMap(stats *pb.StatsInfo, tableDef *plan.TableDef) (uint64, bool) {
+	if stats == nil || tableDef == nil {
+		return 0, false
+	}
+	var total uint64
+	for _, col := range tableDef.Cols {
+		if col == nil || col.Hidden {
+			continue
+		}
+		value, exists := stats.SizeMap[col.Name]
+		if !exists || math.MaxUint64-total < value {
+			return 0, false
+		}
+		total += value
+	}
+	return total, true
 }
 
 // preferDominatingSecondaryIndexBuild decides whether child 0 should be swapped

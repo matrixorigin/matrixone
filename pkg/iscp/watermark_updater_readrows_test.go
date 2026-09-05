@@ -221,6 +221,33 @@ func newMaterializedViewJobsResult(
 	return memRes.GetResult(), mp
 }
 
+func TestUnregisterJobsByDBNameEscapesDatabaseLiteral(t *testing.T) {
+	oldExecWithResult := ExecWithResult
+	defer func() {
+		ExecWithResult = oldExecWithResult
+	}()
+
+	mp := mpool.MustNewZero()
+	memResult := executor.NewMemResult([]types.Type{types.T_uint64.ToType()}, mp)
+	defer func() {
+		require.Equal(t, int64(0), mp.CurrNB())
+		mpool.DeleteMPool(mp)
+	}()
+
+	var capturedSQL string
+	ExecWithResult = func(_ context.Context, sql string, _ string, _ client.TxnOperator) (executor.Result, error) {
+		capturedSQL = sql
+		return memResult.GetResult(), nil
+	}
+
+	ctx := context.WithValue(context.Background(), defines.TenantIDKey{}, uint32(7))
+	err := unregisterJobsByDBName(ctx, "", nil, `db_'name\path`)
+
+	require.NoError(t, err)
+	require.Contains(t, capturedSQL, "account_id = 7")
+	require.Contains(t, capturedSQL, `reldatabase = 'db_''name\\path'`)
+}
+
 func newTableIDResult(t *testing.T, tableIDBatches, dbIDBatches [][]uint64) (executor.Result, *mpool.MPool) {
 	t.Helper()
 	require.Len(t, tableIDBatches, len(dbIDBatches))

@@ -85,6 +85,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/table_function"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/top"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/value_scan"
+	sqlmongodb "github.com/matrixorigin/matrixone/pkg/sql/mongodb"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 	planfunction "github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
@@ -1306,6 +1307,70 @@ func TestExternalScanParquetRowGroupShardsRoundtrip(t *testing.T) {
 	require.True(t, restoredExternal.Es.StrictSqlMode)
 }
 
+func TestExternalScanParquetWholeFileFanoutRoundtrip(t *testing.T) {
+	ctx := &scopeContext{
+		id:     1,
+		root:   &scopeContext{},
+		parent: &scopeContext{},
+	}
+	proc := &process.Process{}
+	proc.Base = &process.BaseProcess{}
+
+	op := external.NewArgument().WithEs(
+		&external.ExternalParam{
+			ExParamConst: external.ExParamConst{
+				FileList:               []string{"s3://bucket/part.parquet"},
+				FileSize:               []int64{8192},
+				FileOffsetTotal:        []*pipeline.FileOffset{{Offset: []int64{0, -1}}},
+				ParquetWholeFileFanout: true,
+			},
+			ExParam: external.ExParam{
+				Fileparam: &external.ExFileparam{},
+				Filter:    &external.FilterParam{},
+			},
+		},
+	)
+
+	_, pipeInstr, err := convertToPipelineInstruction(op, proc, ctx, 1)
+	require.NoError(t, err)
+	require.True(t, pipeInstr.ExternalScan.ParquetWholeFileFanout)
+
+	restored, err := convertToVmOperator(pipeInstr, ctx, nil)
+	require.NoError(t, err)
+	restoredExternal := restored.(*external.External)
+	require.True(t, restoredExternal.Es.ParquetWholeFileFanout)
+	require.Empty(t, restoredExternal.Es.ParquetRowGroupShards)
+}
+
+func TestParquetWholeFileFanoutRemoteProtocolValidationAtSendAndReceiveBoundaries(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	rt := moruntime.ServiceRuntime(proc.GetService())
+	previous, hadPrevious := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
+	t.Cleanup(func() {
+		if hadPrevious {
+			rt.SetGlobalVariables(moruntime.MOProtocolVersion, previous)
+		} else {
+			rt.CompareAndDeleteGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion44)
+		}
+	})
+
+	scope := &Scope{Proc: proc, RootOp: external.NewArgument().WithEs(
+		&external.ExternalParam{
+			ExParamConst: external.ExParamConst{ParquetWholeFileFanout: true},
+			ExParam:      external.ExParam{Fileparam: &external.ExFileparam{}, Filter: &external.FilterParam{}},
+		},
+	)}
+
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion45)
+	data, err := encodeRemoteScope(scope, proc)
+	require.NoError(t, err)
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion44)
+	_, err = encodeRemoteScope(scope, proc)
+	require.ErrorContains(t, err, "MORPC protocol version 45")
+	_, err = decodeScope(data, proc, true, nil)
+	require.ErrorContains(t, err, "MORPC protocol version 45")
+}
+
 func TestExternalScanIcebergRuntimeRoundtrip(t *testing.T) {
 	ctx := &scopeContext{
 		id:     1,
@@ -1932,6 +1997,30 @@ func Test_DMLOperatorSerializationRoundtrip(t *testing.T) {
 		require.Equal(t, int64(4096), restoredOp.SpillThreshold)
 		require.Len(t, restoredOp.OrderBySpecs, 1)
 		require.Equal(t, planpb.OrderBySpec_DESC, restoredOp.OrderBySpecs[0].Flag)
+	})
+
+	t.Run("HashPartition_AlgorithmAndSpillThreshold", func(t *testing.T) {
+		op := &partition.Partition{
+			Algorithm: planpb.Node_PARTITION_ALGORITHM_HASH,
+			SpillMem:  8192,
+			OrderBySpecs: []*planpb.OrderBySpec{{
+				Expr: &planpb.Expr{Typ: planpb.Type{Id: int32(types.T_int64)}},
+			}},
+		}
+		_, pipeInstr, err := convertToPipelineInstruction(op, proc, ctx, 1)
+		require.NoError(t, err)
+		require.Equal(t, planpb.Node_PARTITION_ALGORITHM_HASH, pipeInstr.PartitionAlgorithm)
+		require.Equal(t, int64(8192), pipeInstr.SpillMem)
+
+		wireBytes, err := pipeInstr.Marshal()
+		require.NoError(t, err)
+		wireInstr := new(pipeline.Instruction)
+		require.NoError(t, wireInstr.Unmarshal(wireBytes))
+		restored, err := convertToVmOperator(wireInstr, ctx, nil)
+		require.NoError(t, err)
+		restoredPartition := restored.(*partition.Partition)
+		require.Equal(t, planpb.Node_PARTITION_ALGORITHM_HASH, restoredPartition.Algorithm)
+		require.Equal(t, int64(8192), restoredPartition.SpillMem)
 	})
 
 	t.Run("HashBuild_SpillThreshold", func(t *testing.T) {
@@ -4909,12 +4998,16 @@ func TestMongoScanPipelineRoundTripContainsNoCredential(t *testing.T) {
 		regs:  make(map[*process.WaitRegister]int32),
 	}
 	ctx.root = ctx
+	querySource := `{"filter":{"meta.pump":"pump-1"}}`
+	query, err := sqlmongodb.ParseUserQuery(t.Context(), querySource)
+	require.NoError(t, err)
 	spec := &planpb.MongoScan{
 		TableId: 33, MappingId: 11, MappingVersion: 4, ConnectionId: 22, ConnectionVersion: 3,
 		Database: "telemetry", Collection: "raw", MaxParallelism: 1,
 		Columns:         []*planpb.MongoColumnMapping{{Name: "pump", Path: "meta.pump", MoType: planpb.Type{Id: int32(types.T_varchar)}}},
 		PushedPredicate: &planpb.MongoPredicate{Op: planpb.MongoPredicateOp_MONGO_PREDICATE_EQUAL, Path: "meta.pump", ValueBson: []byte{3, 0, 0, 0, 10, 0}},
 	}
+	require.NoError(t, sqlmongodb.ApplyUserQueryToPlan(t.Context(), query, spec))
 	original := mongoscan.NewArgument().WithScan(spec)
 	defer original.Release()
 
@@ -4925,6 +5018,7 @@ func TestMongoScanPipelineRoundTripContainsNoCredential(t *testing.T) {
 	for _, forbidden := range []string{"mongodb://", "secret://", "username", "password", "credential", "token"} {
 		require.False(t, bytes.Contains(bytes.ToLower(wire), []byte(forbidden)))
 	}
+	require.False(t, bytes.Contains(wire, []byte(querySource)), "raw __mo_query text must not be transported")
 
 	decoded := new(pipeline.Instruction)
 	require.NoError(t, decoded.Unmarshal(wire))
@@ -4933,6 +5027,46 @@ func TestMongoScanPipelineRoundTripContainsNoCredential(t *testing.T) {
 	restored := restoredOperator.(*mongoscan.MongoScan)
 	defer restored.Release()
 	require.Equal(t, spec, restored.Scan)
+}
+
+func TestMongoScanRemoteProtocolValidationAtSendAndReceiveBoundaries(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	rt := moruntime.ServiceRuntime(proc.GetService())
+	previous, hadPrevious := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
+	t.Cleanup(func() {
+		if hadPrevious {
+			rt.SetGlobalVariables(moruntime.MOProtocolVersion, previous)
+		} else {
+			rt.CompareAndDeleteGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion39)
+		}
+	})
+
+	query, err := sqlmongodb.ParseUserQuery(t.Context(), `{"filter":{"value":1}}`)
+	require.NoError(t, err)
+	explicitQuery := &planpb.MongoScan{MaxParallelism: 1}
+	require.NoError(t, sqlmongodb.ApplyUserQueryToPlan(t.Context(), query, explicitQuery))
+
+	for name, spec := range map[string]*planpb.MongoScan{
+		"explicit query":       explicitQuery,
+		"query column carrier": {MaxParallelism: 1, IncludeQueryColumn: true},
+		"pruned empty result":  {MaxParallelism: 1, EmptyResult: true},
+	} {
+		t.Run(name, func(t *testing.T) {
+			scope := &Scope{Proc: proc, RootOp: mongoscan.NewArgument().WithScan(spec)}
+
+			// A statement can compile while v44 is live, then encounter a rollback
+			// before remote encoding. The sender must not serialize a payload that an
+			// older receiver would silently interpret as a legacy Find.
+			rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion44)
+			data, err := encodeRemoteScope(scope, proc)
+			require.NoError(t, err)
+			rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion43)
+			_, err = encodeRemoteScope(scope, proc)
+			require.ErrorContains(t, err, "MORPC protocol version 44")
+			_, err = decodeScope(data, proc, true, nil)
+			require.ErrorContains(t, err, "MORPC protocol version 44")
+		})
+	}
 }
 
 func TestPartitionTopNPipelineRoundTrip(t *testing.T) {

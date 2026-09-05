@@ -475,7 +475,8 @@ func TestExecutor_execWithRetry_CircuitBreakerOpens(t *testing.T) {
 	}
 	executor.initRetryPolicy()
 	executor.circuitBreaker.maxFailures = 1
-	executor.circuitBreaker.coolDown = 50 * time.Millisecond
+	// Keep the closed-to-open assertion independent of scheduler pauses.
+	executor.circuitBreaker.coolDown = time.Hour
 
 	v2.CdcSinkerRetryCounter.Reset()
 	v2.CdcSinkerCircuitStateGauge.Reset()
@@ -501,7 +502,9 @@ func TestExecutor_execWithRetry_CircuitBreakerOpens(t *testing.T) {
 	require.Contains(t, err.Error(), "circuit breaker open")
 
 	// After cooldown, circuit should half-open and allow attempts
-	time.Sleep(60 * time.Millisecond)
+	executor.circuitBreaker.mu.Lock()
+	executor.circuitBreaker.openedAt = time.Now().Add(-executor.circuitBreaker.coolDown)
+	executor.circuitBreaker.mu.Unlock()
 	require.False(t, executor.circuitBreaker.IsOpen())
 	executor.circuitBreaker.maxFailures = 2
 	attempts = 0

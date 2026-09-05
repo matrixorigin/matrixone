@@ -188,6 +188,8 @@ func (r *DataRetrieverImpl) UpdateWatermark(ctx context.Context,
 		r.jobID,
 		r.status.To,
 		statusJson,
+		r.status.Stage,
+		r.status.LifecycleVersion,
 		ISCPJobState_Completed,
 		r.status.LSN,
 	)
@@ -196,6 +198,10 @@ func (r *DataRetrieverImpl) UpdateWatermark(ctx context.Context,
 		return err
 	}
 	defer res.Close()
+	if res.AffectedRows != 1 {
+		return newISCPStatusCASLostError(
+			"iscp update watermark", r.jobName, r.jobID, res.AffectedRows)
+	}
 	return nil
 }
 

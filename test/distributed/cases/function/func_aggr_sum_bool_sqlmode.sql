@@ -1,17 +1,35 @@
--- issue #27981: sum/avg over a BOOL argument under the ENABLE_BOOL_SUMAVG
+-- issue #27981, #28078: sum/avg over a BOOL argument under ENABLE_BOOL_SUMAVG
 -- sql_mode. MySQL has no BOOL type, so a predicate there is an integer 0/1 and
 -- SUM/AVG over one is ordinary numeric aggregation. MO types the predicate as
--- BOOL and rejects it. ENABLE_BOOL_SUMAVG opts in to the MySQL reading.
+-- BOOL. ENABLE_BOOL_SUMAVG selects the MySQL reading and is enabled by default.
 drop database if exists bool_sumavg_sqlmode;
 create database bool_sumavg_sqlmode;
 use bool_sumavg_sqlmode;
 create table t (i int, j int);
 insert into t values (0, 0), (1, 1), (2, 2);
 
--- the mode is off by default and the strict typing is unchanged
+-- BVT reuses connections between case files. Re-enter DEFAULT so these
+-- assertions prove the product default rather than a preceding case's setting.
+set session sql_mode = default;
+
+-- the mode is on by default, including the JSON expression from issue #28078
 select @@sql_mode;
 select sum(i<>0) from t;
 select avg(i<>0) from t;
+select sum(json_unquote(json_extract(cast('{"code":"v1"}' as json), '$.code')) = 'v1');
+
+-- one session opting out must neither alter a second session's default nor
+-- prevent DEFAULT from restoring the compatibility behavior in the first.
+-- @session:id=1{
+use bool_sumavg_sqlmode;
+select sum(json_unquote(json_extract(cast('{"code":"v1"}' as json), '$.code')) = 'v1');
+-- @session}
+set session sql_mode = 'ONLY_FULL_GROUP_BY,STRICT_TRANS_TABLES';
+-- @session:id=1{
+select sum(json_unquote(json_extract(cast('{"code":"v1"}' as json), '$.code')) = 'v1');
+-- @session}
+set session sql_mode = default;
+select sum(json_unquote(json_extract(cast('{"code":"v1"}' as json), '$.code')) = 'v1');
 
 -- the mode composes with the modes the session already carries
 set session sql_mode = 'ONLY_FULL_GROUP_BY,STRICT_TRANS_TABLES,ENABLE_BOOL_SUMAVG';
@@ -23,7 +41,8 @@ select sum(cast(i<>0 as tinyint)) from t;
 select avg(i<>0) from t;
 select avg(cast(i<>0 as tinyint)) from t;
 
--- sum(bool) -> bigint and avg(bool) -> double, matching MO's own sum(tinyint)
+-- sum(bool) -> bigint and avg(bool) -> decimal, matching the exact numeric
+-- AVG contract for the coerced TINYINT argument.
 drop table if exists ctas_types;
 create table ctas_types as select sum(i<>0) as s, avg(i<>0) as a from t;
 select column_name, data_type from information_schema.columns where table_schema = 'bool_sumavg_sqlmode' and table_name = 'ctas_types' order by column_name;
@@ -92,6 +111,6 @@ deallocate prepare relaxed_stmt;
 -- restore the session default. mo-tester reuses one connection across case
 -- files, so a case that changes sql_mode must reset it or the next case sees
 -- the leftover value.
-set session sql_mode = 'ERROR_FOR_DIVISION_BY_ZERO,NO_ENGINE_SUBSTITUTION,NO_ZERO_DATE,NO_ZERO_IN_DATE,ONLY_FULL_GROUP_BY,STRICT_TRANS_TABLES';
+set session sql_mode = default;
 
 drop database bool_sumavg_sqlmode;

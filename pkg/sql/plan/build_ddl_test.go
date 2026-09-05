@@ -1622,8 +1622,8 @@ func TestBuildMaterializedViewRefreshModes(t *testing.T) {
 	_, err = runOneStmt(mock, t, tooManyBranches)
 	require.ErrorContains(t, err, "supports at most 16 direct UNION ALL branches, got 17")
 
-	_, err = runOneStmt(mock, t, "create materialized view mv_bad refresh fast as select n_regionkey, count(*) c from nation group by n_regionkey having count(*) > 1")
-	require.ErrorContains(t, err, "requires a supported incremental aggregate or UNION ALL query")
+	_, err = runOneStmt(mock, t, "create materialized view mv_bad refresh fast as select n_regionkey, count(*) c from nation group by n_regionkey limit 1")
+	require.ErrorContains(t, err, "MV_FAST_UNSUPPORTED_LIMIT")
 
 	completePlan, err := runOneStmt(mock, t, "create materialized view mv_complete refresh complete on change as select n_regionkey, count(*) c from nation group by n_regionkey")
 	require.NoError(t, err)
@@ -1669,8 +1669,10 @@ func TestMaterializedViewIncrementalSpecRequiresCompleteSemantics(t *testing.T) 
 		{name: "time bucket avg conditional", query: "select service, date_trunc('minute', event_ts) minute, count(*) requests, sum(case when status >= 500 then 1 else 0 end) errors, avg(duration) avg_duration from events where region = 'us' group by service, date_trunc('minute', event_ts)", outputs: []string{"service", "minute", "requests", "errors", "avg_duration"}, eligible: true},
 		{name: "min max", query: "select service, min(duration) min_duration, max(duration) max_duration from events group by service", outputs: []string{"service", "min_duration", "max_duration"}, eligible: true},
 		{name: "count distinct", query: "select service, count(distinct trace_id) traces from events group by service", outputs: []string{"service", "traces"}, eligible: true},
+		{name: "sum distinct", query: "select service, sum(distinct bytes) bytes_sum from events group by service", outputs: []string{"service", "bytes_sum"}, eligible: true},
+		{name: "avg distinct", query: "select service, avg(distinct bytes) bytes_avg from events group by service", outputs: []string{"service", "bytes_avg"}, eligible: true},
 		{name: "select distinct rows", query: "select distinct service, region from events", outputs: []string{"service", "region"}, eligible: true},
-		{name: "having", query: "select service, count(*) requests, sum(bytes) bytes_sum from events group by service having count(*) > 1", outputs: []string{"service", "requests", "bytes_sum"}},
+		{name: "having", query: "select service, count(*) requests, sum(bytes) bytes_sum from events group by service having count(*) > 1", outputs: []string{"service", "requests", "bytes_sum"}, eligible: true},
 		{name: "distinct select", query: "select distinct service, count(*) requests, sum(bytes) bytes_sum from events group by service", outputs: []string{"service", "requests", "bytes_sum"}},
 		{name: "limit", query: "select service, count(*) requests, sum(bytes) bytes_sum from events group by service limit 1", outputs: []string{"service", "requests", "bytes_sum"}},
 	} {
@@ -1714,6 +1716,18 @@ func TestMaterializedViewIncrementalSpecRequiresCompleteSemantics(t *testing.T) 
 				require.Equal(t, "__state", desc.StateTable)
 				require.Equal(t, "count_distinct", desc.Aggregates[0].Kind)
 				require.Positive(t, desc.Aggregates[0].StateIndex)
+			}
+			if tc.name == "sum distinct" || tc.name == "avg distinct" {
+				require.Equal(t, "__state", desc.StateTable)
+				require.Equal(t, tc.name[:3]+"_distinct", desc.Aggregates[0].Kind)
+				require.NotEmpty(t, desc.Aggregates[0].StateSumColumn)
+				require.NotEmpty(t, desc.Aggregates[0].StateCountColumn)
+				require.Positive(t, desc.Aggregates[0].StateIndex)
+			}
+			if tc.name == "having" {
+				require.Equal(t, "hybrid-affected-group", desc.Strategy)
+				require.Equal(t, "count(*) > 1", desc.Having)
+				require.Equal(t, "__state", desc.StateTable)
 			}
 			if tc.name == "select distinct rows" {
 				require.Empty(t, desc.StateTable)
@@ -3373,6 +3387,92 @@ func TestBuildCTASPreservesMySQLSpecialColumnTypes(t *testing.T) {
 	require.True(t, isSetPlanType(&cols[1].Typ))
 	require.Equal(t, "red,green,blue", cols[1].Typ.GetEnumvalues())
 	require.Equal(t, int32(types.T_varchar), cols[2].Typ.GetId())
+}
+
+func TestBuildCTASPreservesLosslessBinaryResultDomains(t *testing.T) {
+	const sql = `create table copied as select
+		convert(cast(1 as signed) using binary) converted,
+		char(65, 66) default_char,
+		char(65 using utf8mb4) text_char,
+		repeat(X'61', 70000) repeated,
+		concat(cast(X'61' as binary(65535)), X'62') concatenated,
+		replace(cast(repeat('a', 40000) as text), 'a', 'bb') expanded_text`
+	stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, sql, 1)
+	require.NoError(t, err)
+	defer stmt.Free()
+
+	p, err := BuildPlan(NewMockCompilerContext(false), stmt, false)
+	require.NoError(t, err)
+	cols := p.GetDdl().GetCreateTable().GetTableDef().GetCols()
+	require.GreaterOrEqual(t, len(cols), 6)
+
+	require.Equal(t, int32(types.T_varbinary), cols[0].Typ.Id)
+	require.Equal(t, int32(20), cols[0].Typ.Width)
+	require.Equal(t, uint32(types.CharsetBinary), cols[0].Typ.Charset)
+	require.Equal(t, int32(types.T_varbinary), cols[1].Typ.Id)
+	require.Equal(t, int32(8), cols[1].Typ.Width)
+	require.Equal(t, int32(types.T_varchar), cols[2].Typ.Id)
+	require.Equal(t, int32(types.T_blob), cols[3].Typ.Id)
+	require.Equal(t, int32(types.T_blob), cols[4].Typ.Id)
+	require.Equal(t, int32(types.T_text), cols[5].Typ.Id)
+}
+
+func TestBuildCTASNarrowsKnownExpandingStringResults(t *testing.T) {
+	const sql = `create table bounded as select
+		repeat('a', 2) repeated,
+		lpad('a', 2, 'b') left_padded,
+		rpad('a', 2, 'b') right_padded,
+		replace('a', 'a', 'b') replaced,
+		insert('a', 1, 0, 'b') inserted,
+		replace(X'61', X'61', X'62') binary_replaced,
+		insert(X'61', 1, 0, X'62') binary_inserted,
+		reverse(space(500) + space(600)) reversed_text,
+		reverse('123' + space(1) + '456') chained_text,
+		repeat(coalesce(X'F09F9880', X'61'), 2) binary_charset_repeated,
+		lpad(coalesce(X'F09F9880', X'61'), 2, X'62') binary_charset_padded`
+	stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, sql, 1)
+	require.NoError(t, err)
+	defer stmt.Free()
+
+	p, err := BuildPlan(NewMockCompilerContext(false), stmt, false)
+	require.NoError(t, err)
+	cols := p.GetDdl().GetCreateTable().GetTableDef().GetCols()
+	require.GreaterOrEqual(t, len(cols), 11)
+	for _, index := range []int{0, 1, 2, 3, 4} {
+		require.Equal(t, int32(types.T_varchar), cols[index].Typ.Id, cols[index].Name)
+		require.LessOrEqual(t, cols[index].Typ.Width, int32(types.MaxVarcharLen), cols[index].Name)
+	}
+	for _, index := range []int{5, 6} {
+		require.Equal(t, int32(types.T_varbinary), cols[index].Typ.Id, cols[index].Name)
+		require.LessOrEqual(t, cols[index].Typ.Width, int32(types.MaxVarBinaryLen), cols[index].Name)
+	}
+	require.Equal(t, int32(types.T_text), cols[7].Typ.Id)
+	require.Equal(t, int32(types.T_text), cols[8].Typ.Id)
+	for _, index := range []int{9, 10} {
+		require.Equal(t, int32(types.T_varbinary), cols[index].Typ.Id)
+		require.Equal(t, int32(8), cols[index].Typ.Width)
+	}
+}
+
+func TestBuildCTASPreservesFormattedScalarBounds(t *testing.T) {
+	const sql = `create table formatted_bounds as select
+		convert(cast(-0.99 as decimal(2,2)) using binary) decimal_binary,
+		concat(cast(1 as signed), cast(2 as signed)) concatenated,
+		quote(cast(1 as signed)) quoted`
+	stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, sql, 1)
+	require.NoError(t, err)
+	defer stmt.Free()
+
+	p, err := BuildPlan(NewMockCompilerContext(false), stmt, false)
+	require.NoError(t, err)
+	cols := p.GetDdl().GetCreateTable().GetTableDef().GetCols()
+	require.GreaterOrEqual(t, len(cols), 3)
+	require.Equal(t, int32(types.T_varbinary), cols[0].Typ.Id)
+	require.Equal(t, int32(5), cols[0].Typ.Width)
+	require.Equal(t, int32(types.T_varchar), cols[1].Typ.Id)
+	require.Equal(t, int32(40), cols[1].Typ.Width)
+	require.Equal(t, int32(types.T_varchar), cols[2].Typ.Id)
+	require.Equal(t, int32(42), cols[2].Typ.Width)
 }
 
 func TestViewRebindPreservesMySQLSpecialColumnSemantics(t *testing.T) {
