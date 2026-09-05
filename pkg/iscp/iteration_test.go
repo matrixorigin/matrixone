@@ -459,6 +459,7 @@ func TestFlushStatusErrorsOnZeroAffectedRows(t *testing.T) {
 		0,
 	)
 	require.Error(t, err)
+	require.ErrorIs(t, err, errISCPStatusCASLost)
 	require.False(t, isPermanentError(err))
 	require.Contains(t, err.Error(), "affected 0 rows")
 }

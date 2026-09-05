@@ -487,7 +487,7 @@ func (exec *ISCPTaskExecutor) run(ctx context.Context, worker Worker) {
 			if err == nil {
 				exec.iscpLogWm = to
 			}
-			if err != nil && moerr.IsMoErrCode(err, moerr.ErrStaleRead) {
+			if shouldReplayISCPLog(err) {
 				err = exec.replay(ctx)
 			}
 			if err != nil {
@@ -607,6 +607,11 @@ func (exec *ISCPTaskExecutor) run(ctx context.Context, worker Worker) {
 			exec.GCInMemoryJob(exec.option.GCTTL)
 		}
 	}
+}
+
+func shouldReplayISCPLog(err error) bool {
+	return err != nil &&
+		(moerr.IsMoErrCode(err, moerr.ErrStaleRead) || errors.Is(err, errISCPStatusCASLost))
 }
 
 // For UT
@@ -791,7 +796,7 @@ func (exec *ISCPTaskExecutor) applyISCPLogWithRel(ctx context.Context, rel engin
 			if !dropAtVector.IsNull(uint64(job.offset)) {
 				dropAt = dropAts[job.offset]
 			}
-			exec.addOrUpdateJob(
+			err = exec.addOrUpdateJob(
 				accountIDs[job.offset],
 				tableIDs[job.offset],
 				jobNameVector.GetStringAt(job.offset),
@@ -803,6 +808,9 @@ func (exec *ISCPTaskExecutor) applyISCPLogWithRel(ctx context.Context, rel engin
 				dropAt,
 				notPrint,
 			)
+			if err != nil {
+				return
+			}
 		}
 	}
 
@@ -1097,7 +1105,10 @@ func (exec *ISCPTaskExecutor) addOrUpdateJobWithPersistedState(
 		)
 		exec.setTable(table)
 	}
-	newCreate = table.AddOrUpdateSinker(exec.ctx, jobName, jobSpec, jobStatus, jobID, watermark, state, dropAt)
+	newCreate, err = table.AddOrUpdateSinker(exec.ctx, jobName, jobSpec, jobStatus, jobID, watermark, state, dropAt)
+	if err != nil {
+		return err
+	}
 	if dropAt != 0 {
 		exec.RemoveJobFence(fenceKey)
 	}

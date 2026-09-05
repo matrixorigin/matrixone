@@ -60,7 +60,7 @@ func (t *TableEntry) AddOrUpdateSinker(
 	watermark types.TS,
 	state int8,
 	dropAt types.Timestamp,
-) (newCreate bool) {
+) (newCreate bool, err error) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	key := JobKey{
@@ -77,7 +77,7 @@ func (t *TableEntry) AddOrUpdateSinker(
 	if jobEntry.jobID > jobID {
 		return
 	}
-	jobEntry.update(ctx, jobSpec, jobStatus, watermark, state, dropAt)
+	err = jobEntry.update(ctx, jobSpec, jobStatus, watermark, state, dropAt)
 	return
 }
 

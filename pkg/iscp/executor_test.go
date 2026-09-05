@@ -465,6 +465,164 @@ func TestUpdateWatermarkDiscontinuityKeepsLocalStateWhenFenceFails(t *testing.T)
 	require.True(t, job.watermark.EQ(&before))
 }
 
+func TestJobEntryUpdateFencesDurableWatermarkRegression(t *testing.T) {
+	oldFlush := FlushJobStatusOnIterationState
+	t.Cleanup(func() { FlushJobStatusOnIterationState = oldFlush })
+
+	exec := &ISCPTaskExecutor{ctx: context.Background()}
+	table := NewTableEntry(exec, 1, 2, 3, "db", "table")
+	job := NewJobEntryWithStatus(
+		table,
+		"index_idx",
+		&JobSpec{},
+		&JobStatus{LSN: 5, Stage: JobStage_Running},
+		1,
+		types.BuildTS(20, 0),
+		ISCPJobState_Completed,
+		0,
+	)
+	beforeWatermark := job.watermark
+	beforePersisted := job.persistedWatermark
+	incomingStatus := &JobStatus{LSN: 6, Stage: JobStage_Running}
+
+	FlushJobStatusOnIterationState = func(
+		_ context.Context,
+		_ string,
+		_ engine.Engine,
+		_ client.TxnClient,
+		_ uint32,
+		_ uint64,
+		_ []string,
+		_ []uint64,
+		lsns []uint64,
+		statuses []*JobStatus,
+		_ types.TS,
+		state int8,
+		prevLSN []uint64,
+	) error {
+		require.Equal(t, []uint64{6}, lsns)
+		require.Equal(t, []uint64{6}, prevLSN)
+		require.Equal(t, ISCPJobState_Error, state)
+		require.Equal(t, PermanentErrorThreshold, statuses[0].ErrorCode)
+		return nil
+	}
+
+	err := job.update(
+		context.Background(),
+		&JobSpec{},
+		incomingStatus,
+		types.BuildTS(10, 0),
+		ISCPJobState_Completed,
+		0,
+	)
+
+	require.NoError(t, err)
+	require.Equal(t, uint64(6), job.currentLSN)
+	require.Equal(t, ISCPJobState_Error, job.state)
+	require.True(t, job.watermark.EQ(&beforeWatermark))
+	require.True(t, job.persistedWatermark.EQ(&beforePersisted))
+}
+
+func TestJobEntryUpdateKeepsLocalStateWhenRegressionFenceFails(t *testing.T) {
+	oldFlush := FlushJobStatusOnIterationState
+	t.Cleanup(func() { FlushJobStatusOnIterationState = oldFlush })
+
+	exec := &ISCPTaskExecutor{ctx: context.Background()}
+	table := NewTableEntry(exec, 1, 2, 3, "db", "table")
+	originalSpec := &JobSpec{TriggerSpec: TriggerSpec{JobType: TriggerType_Default}}
+	job := NewJobEntryWithStatus(
+		table,
+		"index_idx",
+		originalSpec,
+		&JobStatus{LSN: 5, Stage: JobStage_Running},
+		1,
+		types.BuildTS(20, 0),
+		ISCPJobState_Completed,
+		0,
+	)
+	table.jobs[JobKey{JobName: job.jobName, JobID: job.jobID}] = job
+	beforeSpec := job.jobSpec
+	beforeWatermark := job.watermark
+	beforePersisted := job.persistedWatermark
+	wantErr := errors.New("terminal fence failed")
+	FlushJobStatusOnIterationState = func(
+		context.Context, string, engine.Engine, client.TxnClient,
+		uint32, uint64, []string, []uint64, []uint64, []*JobStatus,
+		types.TS, int8, []uint64,
+	) error {
+		return wantErr
+	}
+
+	_, err := table.AddOrUpdateSinker(
+		context.Background(),
+		job.jobName,
+		&JobSpec{TriggerSpec: TriggerSpec{JobType: TriggerType_Timed}},
+		&JobStatus{LSN: 6, Stage: JobStage_Running},
+		job.jobID,
+		types.BuildTS(10, 0),
+		ISCPJobState_Completed,
+		types.Timestamp(123),
+	)
+
+	require.ErrorIs(t, err, wantErr)
+	require.Equal(t, uint64(5), job.currentLSN)
+	require.Equal(t, ISCPJobState_Completed, job.state)
+	require.True(t, job.watermark.EQ(&beforeWatermark))
+	require.True(t, job.persistedWatermark.EQ(&beforePersisted))
+	require.Same(t, beforeSpec, job.jobSpec)
+	require.Zero(t, job.dropAt)
+}
+
+func TestJobEntryUpdateAcceptsDurableErrorWithoutRefencing(t *testing.T) {
+	oldFlush := FlushJobStatusOnIterationState
+	t.Cleanup(func() { FlushJobStatusOnIterationState = oldFlush })
+
+	exec := &ISCPTaskExecutor{ctx: context.Background()}
+	table := NewTableEntry(exec, 1, 2, 3, "db", "table")
+	job := NewJobEntryWithStatus(
+		table,
+		"index_idx",
+		&JobSpec{},
+		&JobStatus{LSN: 5, Stage: JobStage_Running},
+		1,
+		types.BuildTS(20, 0),
+		ISCPJobState_Completed,
+		0,
+	)
+	beforeWatermark := job.watermark
+	beforePersisted := job.persistedWatermark
+	FlushJobStatusOnIterationState = func(
+		context.Context, string, engine.Engine, client.TxnClient,
+		uint32, uint64, []string, []uint64, []uint64, []*JobStatus,
+		types.TS, int8, []uint64,
+	) error {
+		t.Fatal("an already durable Error must not be fenced again")
+		return nil
+	}
+
+	err := job.update(
+		context.Background(),
+		&JobSpec{},
+		&JobStatus{LSN: 6, Stage: JobStage_Running, ErrorCode: PermanentErrorThreshold},
+		types.BuildTS(10, 0),
+		ISCPJobState_Error,
+		0,
+	)
+
+	require.NoError(t, err)
+	require.Equal(t, uint64(6), job.currentLSN)
+	require.Equal(t, ISCPJobState_Error, job.state)
+	require.True(t, job.watermark.EQ(&beforeWatermark))
+	require.True(t, job.persistedWatermark.EQ(&beforePersisted))
+}
+
+func TestShouldReplayISCPLogOnStatusCASLoss(t *testing.T) {
+	require.False(t, shouldReplayISCPLog(nil))
+	require.False(t, shouldReplayISCPLog(errors.New("temporary SQL failure")))
+	require.True(t, shouldReplayISCPLog(
+		newISCPStatusCASLostError("test", "job", 1, 0)))
+}
+
 func TestFlushPermanentErrorMessagePopulatesDefaultStatus(t *testing.T) {
 	oldFlush := FlushJobStatusOnIterationState
 	t.Cleanup(func() { FlushJobStatusOnIterationState = oldFlush })
@@ -562,6 +720,7 @@ func TestTryFlushWatermarkRejectsLostCAS(t *testing.T) {
 
 	flushed, err := job.tryFlushWatermark(context.Background(), nil, 0)
 	require.Error(t, err)
+	require.ErrorIs(t, err, errISCPStatusCASLost)
 	require.True(t, flushed)
 	require.Equal(t, ISCPJobState_Completed, job.state)
 	require.True(t, job.persistedWatermark.EQ(&persistedBefore))

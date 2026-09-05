@@ -870,6 +870,7 @@ func TestDataRetrieverUpdateWatermarkTailRejectsLostCAS(t *testing.T) {
 	err := retriever.UpdateWatermark(context.Background(), "cn", nil)
 
 	require.Error(t, err)
+	require.ErrorIs(t, err, errISCPStatusCASLost)
 	require.Contains(t, err.Error(), "affected 0 rows")
 }
 

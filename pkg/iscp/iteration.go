@@ -697,8 +697,7 @@ func FlushStatus(
 	}
 	defer result.Close()
 	if result.AffectedRows != 1 {
-		return moerr.NewInternalErrorNoCtxf("iscp flush status: update affected %d rows for job %s (id=%d), expected 1",
-			result.AffectedRows, jobName, jobID)
+		return newISCPStatusCASLostError("iscp flush status", jobName, jobID, result.AffectedRows)
 	}
 	return
 }
@@ -820,6 +819,19 @@ func (permanentError) Error() string {
 }
 
 var errPermanent error = permanentError{}
+
+var errISCPStatusCASLost = errors.New("iscp status compare-and-swap lost")
+
+func newISCPStatusCASLostError(operation, jobName string, jobID, affectedRows uint64) error {
+	return fmt.Errorf(
+		"%w: %s affected %d rows for job %s (id=%d), expected 1",
+		errISCPStatusCASLost,
+		operation,
+		affectedRows,
+		jobName,
+		jobID,
+	)
+}
 
 func FlushPermanentErrorMessage(
 	ctx context.Context,

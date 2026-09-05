@@ -22,7 +22,6 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/cdc"
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
@@ -192,12 +191,8 @@ func (r *DataRetrieverImpl) UpdateWatermark(ctx context.Context,
 	}
 	defer res.Close()
 	if res.AffectedRows != 1 {
-		return moerr.NewInternalErrorNoCtxf(
-			"iscp update watermark: update affected %d rows for job %s (id=%d), expected 1",
-			res.AffectedRows,
-			r.jobName,
-			r.jobID,
-		)
+		return newISCPStatusCASLostError(
+			"iscp update watermark", r.jobName, r.jobID, res.AffectedRows)
 	}
 	return nil
 }
