@@ -18,11 +18,26 @@ import (
 	"math"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/stretchr/testify/require"
 )
+
+func TestBitwiseAggregateRejectsOversizedBinaryOperand(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer func() { require.Zero(t, mp.CurrNB()) }()
+
+	for _, aggID := range []int64{AggIdOfBitAnd, AggIdOfBitOr, AggIdOfBitXor} {
+		exec, ok, err := makeSpecialAggExec(mp, aggID, false, false, false,
+			types.New(types.T_varbinary, MaxBitwiseAggregateOperandBytes+1, 0))
+		require.True(t, ok)
+		require.Nil(t, exec)
+		require.Error(t, err)
+		require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidBitwiseAggregateOperandsSize))
+	}
+}
 
 // makeBitAggExec creates a bit aggregate exec directly without going through
 // the function registry (which is not set up in unit tests).

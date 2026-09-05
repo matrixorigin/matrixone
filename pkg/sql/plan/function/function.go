@@ -192,6 +192,9 @@ func GetFunctionByName(ctx context.Context, name string, args []types.Type) (r F
 	case failedAggParametersWrong:
 		err = moerr.NewInvalidArg(ctx, fmt.Sprintf("aggregate function %s", name), args)
 
+	case failedBitwiseAggregateOperandsSize:
+		err = moerr.NewInvalidBitwiseAggregateOperandsSize(ctx)
+
 	case failedTooManyFunctionMatched:
 		err = moerr.NewInvalidArg(ctx, fmt.Sprintf("too many overloads matched %s", name), args)
 	}
@@ -672,11 +675,12 @@ func (fn *FuncNew) testFlag(funcFlag plan.Function_FuncFlag) bool {
 type overloadCheckSituation int
 
 const (
-	succeedMatched                overloadCheckSituation = 0
-	succeedWithCast               overloadCheckSituation = -1
-	failedFunctionParametersWrong overloadCheckSituation = -2
-	failedAggParametersWrong      overloadCheckSituation = -3
-	failedTooManyFunctionMatched  overloadCheckSituation = -4
+	succeedMatched                     overloadCheckSituation = 0
+	succeedWithCast                    overloadCheckSituation = -1
+	failedFunctionParametersWrong      overloadCheckSituation = -2
+	failedAggParametersWrong           overloadCheckSituation = -3
+	failedTooManyFunctionMatched       overloadCheckSituation = -4
+	failedBitwiseAggregateOperandsSize overloadCheckSituation = -5
 )
 
 type checkResult struct {
