@@ -78,7 +78,7 @@ func (builder *QueryBuilder) sharePendingGroupingSetInputs(rootID int32) int32 {
 	}
 	version, _ := runtime.ServiceRuntime(proc.GetService()).GetGlobalVariables(runtime.MOProtocolVersion)
 	protocolVersion, ok := version.(int64)
-	if !ok || protocolVersion < defines.MORPCVersion43 {
+	if !ok || protocolVersion < defines.MORPCVersion48 {
 		return rootID
 	}
 	parents := builder.groupingSetConsumerParents()

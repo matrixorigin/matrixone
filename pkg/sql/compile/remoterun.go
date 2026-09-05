@@ -2098,8 +2098,8 @@ func validateRemoteParquetWholeFileFanoutPipelineProtocol(
 }
 
 // validateRemoteGroupingSetPipelineProtocol is the final sender/receiver
-// compatibility fence for v46 grouping-set execution metadata. Planning can
-// happen at v46 before a cached/prepared plan is transmitted after a rollback;
+// compatibility fence for v48 grouping-set execution metadata. Planning can
+// happen at v48 before a cached/prepared plan is transmitted after a rollback;
 // an older receiver would silently ignore these append-only fields and execute
 // ordinary Projection/Group semantics.
 func validateRemoteGroupingSetPipelineProtocol(
@@ -2114,14 +2114,14 @@ func validateRemoteGroupingSetPipelineProtocol(
 			continue
 		}
 		agg := instruction.GetAgg()
-		requiresV46 := len(instruction.ProjectionGroupingFlags) > 0 ||
+		requiresV48 := len(instruction.ProjectionGroupingFlags) > 0 ||
 			instruction.ProjectionGroupingSetCount != 0 ||
 			agg != nil && (agg.DynamicGrouping || agg.EmptyGroupingSet ||
 				len(agg.EmptyGroupingSetIds) > 0)
-		if requiresV46 &&
+		if requiresV48 &&
 			(proc == nil || !supportsRemoteGroupingSetExpansion(proc.GetService())) {
 			return moerr.NewNotSupportedNoCtx(
-				"grouping-set remote execution requires MORPC protocol version 46",
+				"grouping-set remote execution requires MORPC protocol version 48",
 			)
 		}
 	}

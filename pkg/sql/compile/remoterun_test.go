@@ -1446,15 +1446,15 @@ func TestGroupingSetRemoteProtocolValidationAtSendAndReceiveBoundaries(t *testin
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			scope := &Scope{Proc: proc, RootOp: test.op}
-			rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion46)
+			rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion48)
 			data, err := encodeRemoteScope(scope, proc)
 			require.NoError(t, err)
 
-			rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion45)
+			rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion47)
 			_, err = encodeRemoteScope(scope, proc)
-			require.ErrorContains(t, err, "MORPC protocol version 46")
+			require.ErrorContains(t, err, "MORPC protocol version 48")
 			_, err = decodeScope(data, proc, true, nil)
-			require.ErrorContains(t, err, "MORPC protocol version 46")
+			require.ErrorContains(t, err, "MORPC protocol version 48")
 		})
 	}
 }
@@ -1467,10 +1467,10 @@ func TestGroupingSetRemoteProtocolValidationRecursesAndIgnoresLegacyGrouping(t *
 		if hadPrevious {
 			rt.SetGlobalVariables(moruntime.MOProtocolVersion, previous)
 		} else {
-			rt.CompareAndDeleteGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion46)
+			rt.CompareAndDeleteGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion48)
 		}
 	})
-	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion45)
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion47)
 
 	legacy := &pipeline.Pipeline{InstructionList: []*pipeline.Instruction{{
 		Agg: &pipeline.Group{GroupingFlag: []bool{true, false}},
@@ -1482,9 +1482,9 @@ func TestGroupingSetRemoteProtocolValidationRecursesAndIgnoresLegacyGrouping(t *
 	}}}
 	require.ErrorContains(t,
 		validateRemoteGroupingSetPipelineProtocol(proc, nested),
-		"MORPC protocol version 46")
+		"MORPC protocol version 48")
 
-	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion46)
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion48)
 	require.NoError(t, validateRemoteGroupingSetPipelineProtocol(proc, nested))
 }
 

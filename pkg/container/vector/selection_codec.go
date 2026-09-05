@@ -80,7 +80,7 @@ func (v *Vector) MarshalRowRangeTo(w io.Writer, start, end int) error {
 	if v == nil || start < 0 || end < start || end > v.Length() {
 		return moerr.NewInvalidInputNoCtx("invalid selected vector row range")
 	}
-	return v.marshalSelectedRowsTo(w, end-start, func(i int) int {
+	return v.marshalSelectedRowsTo(w, end-start, nil, func(i int) int {
 		return start + i
 	})
 }

@@ -46,7 +46,7 @@ func useLegacyGroupingSetPlan(t *testing.T, mock *MockOptimizer) {
 			rt.SetGlobalVariables("optimizer_hints", "")
 		}
 	})
-	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion42)
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion47)
 }
 
 func TestGroupingSetInputSharingProtocolGate(t *testing.T) {
@@ -83,11 +83,11 @@ func TestGroupingSetInputSharingProtocolGate(t *testing.T) {
 		return built.GetQuery()
 	}
 
-	legacy := reachableGroupingSetShape(build(defines.MORPCVersion42))
+	legacy := reachableGroupingSetShape(build(defines.MORPCVersion47))
 	require.Equal(t, 3, legacy.tableScans)
 	require.Zero(t, legacy.expandProjects)
 
-	shared := reachableGroupingSetShape(build(defines.MORPCVersion43))
+	shared := reachableGroupingSetShape(build(defines.MORPCVersion48))
 	require.Equal(t, 1, shared.tableScans)
 	require.Equal(t, 1, shared.aggregates)
 	require.Equal(t, 1, shared.expandProjects)
@@ -98,7 +98,7 @@ func TestGroupingSetInputSharingProtocolGate(t *testing.T) {
 	require.True(t, shared.hasEmptyRowMarker)
 
 	rt.SetGlobalVariables("optimizer_hints", "sharedComputation=1")
-	rolledBack := reachableGroupingSetShape(build(defines.MORPCVersion43))
+	rolledBack := reachableGroupingSetShape(build(defines.MORPCVersion48))
 	require.Equal(t, 3, rolledBack.tableScans)
 	require.Zero(t, rolledBack.expandProjects)
 }
@@ -128,7 +128,7 @@ func TestGroupingSetInputSharingRejectsInheritedGroupingSentinel(t *testing.T) {
 			rt.SetGlobalVariables("optimizer_hints", "")
 		}
 	})
-	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion46)
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion48)
 	rt.SetGlobalVariables("optimizer_hints", "")
 
 	stmt, err := mysql.ParseOne(context.Background(), sql, 1)
@@ -170,7 +170,7 @@ func TestGroupingSetInputSharingRequiresLegacyDrainWitness(t *testing.T) {
 			rt.SetGlobalVariables("optimizer_hints", "")
 		}
 	})
-	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion46)
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion48)
 	rt.SetGlobalVariables("optimizer_hints", "")
 
 	stmt, err := mysql.ParseOne(context.Background(), sql, 1)
