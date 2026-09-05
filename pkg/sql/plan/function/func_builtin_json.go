@@ -3425,9 +3425,101 @@ func bestEffortSchemaLocation(err gojsonschema.ResultError) string {
 	return "#/" + keyword
 }
 
-// JSON_VALUE(json_doc, path) → VARCHAR
-// Equivalent to JSON_UNQUOTE(JSON_EXTRACT(json_doc, path)).
-func JsonValue(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+func schemaHasRefKeyword(bj bytejson.ByteJson) bool {
+	return schemaHasRefKeywordInSchema(bj)
+}
+
+func schemaHasRefKeywordInSchema(bj bytejson.ByteJson) bool {
+	if bj.Type != bytejson.TpCodeObject {
+		return false
+	}
+	cnt := bj.GetElemCnt()
+	for i := 0; i < cnt; i++ {
+		key := string(bj.GetObjectKey(i))
+		val := bj.GetObjectVal(i)
+		if key == "$ref" {
+			return true
+		}
+		if schemaKeywordContainsNamedSchemas(key) {
+			if schemaHasRefKeywordInNamedSchemas(val) {
+				return true
+			}
+			continue
+		}
+		if schemaKeywordContainsSchema(key) {
+			if schemaHasRefKeywordInSchema(val) {
+				return true
+			}
+			continue
+		}
+		if schemaKeywordContainsSchemaOrSchemaArray(key) {
+			if schemaHasRefKeywordInSchemaOrSchemaArray(val) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func schemaKeywordContainsNamedSchemas(key string) bool {
+	switch key {
+	case "properties", "patternProperties", "$defs", "definitions", "dependentSchemas", "dependencies":
+		return true
+	default:
+		return false
+	}
+}
+
+func schemaKeywordContainsSchema(key string) bool {
+	switch key {
+	case "additionalItems", "additionalProperties", "contains", "else", "if", "not", "propertyNames", "then", "unevaluatedItems", "unevaluatedProperties":
+		return true
+	default:
+		return false
+	}
+}
+
+func schemaKeywordContainsSchemaOrSchemaArray(key string) bool {
+	switch key {
+	case "allOf", "anyOf", "items", "oneOf", "prefixItems":
+		return true
+	default:
+		return false
+	}
+}
+
+func schemaHasRefKeywordInNamedSchemas(bj bytejson.ByteJson) bool {
+	if bj.Type != bytejson.TpCodeObject {
+		return false
+	}
+	cnt := bj.GetElemCnt()
+	for i := 0; i < cnt; i++ {
+		if schemaHasRefKeywordInSchema(bj.GetObjectVal(i)) {
+			return true
+		}
+	}
+	return false
+}
+
+func schemaHasRefKeywordInSchemaOrSchemaArray(bj bytejson.ByteJson) bool {
+	switch bj.Type {
+	case bytejson.TpCodeObject:
+		return schemaHasRefKeywordInSchema(bj)
+	case bytejson.TpCodeArray:
+		cnt := bj.GetElemCnt()
+		for i := 0; i < cnt; i++ {
+			if schemaHasRefKeywordInSchema(bj.GetArrayElem(i)) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// jsonValueLegacy evaluates the two-argument form retained in persisted plans
+// created before RETURNING/ON EMPTY/ON ERROR were lowered to the internal
+// seven-argument overload.
+func jsonValueLegacy(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	result.UseOptFunctionParamFrame(2)
 	rs := vector.MustFunctionResult[types.Varlena](result)
 	p1 := vector.OptGetBytesParamFromWrapper(rs, 0, ivecs[0])
@@ -3464,7 +3556,7 @@ func JsonValue(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc
 		if isStr {
 			bj, err = types.ParseSliceToByteJson(jsonBytes)
 		} else {
-			bj = types.DecodeJson(jsonBytes)
+			bj, err = decodeJSONValueStored(jsonBytes)
 		}
 		if err != nil {
 			return moerr.NewInvalidArg(proc.Ctx, "json_value", "invalid JSON document")

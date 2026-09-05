@@ -1,73 +1,139 @@
 select json_value('{"fname": "Joe", "lname": "Palmer"}', '$.fname');
-json_value({"fname": "Joe", "lname": "Palmer"}, $.fname)
+json_value({"fname": "Joe", "lname": "Palmer"}, $.fname returning char(512))
 Joe
 select json_value('{"fname": "Joe", "lname": "Palmer"}', '$.lname');
-json_value({"fname": "Joe", "lname": "Palmer"}, $.lname)
+json_value({"fname": "Joe", "lname": "Palmer"}, $.lname returning char(512))
 Palmer
+select json_value('{"a":[12]}', '$.a');
+json_value({"a":[12]}, $.a returning char(512))
+[12]
+select json_value('{"a":{"k":1}}', '$.a');
+json_value({"a":{"k":1}}, $.a returning char(512))
+{"k": 1}
+select json_value('{}', '$.missing' default 'empty' on empty);
+json_value({}, $.missing returning char(512) default 'empty' on empty)
+empty
+select json_value('{"a":"bad"}', '$.a' returning unsigned default 7 on error);
+json_value({"a":"bad"}, $.a returning unsigned default 7 on error)
+7
+select json_value('{"a":1,"b":2}', '$.*' returning unsigned default 7 on error);
+json_value({"a":1,"b":2}, $.* returning unsigned default 7 on error)
+7
+select json_value('{"a":[12]}', '$.a' returning json);
+json_value({"a":[12]}, $.a returning json)
+[12]
+select json_value('{"a":"long"}', '$.a' returning char(4) default 'fallback' on error);
+json_value({"a":"long"}, $.a returning char(4) default 'fallback' on error)
+fallback
+select json_value(null, '$.a' default 'empty' on empty);
+json_value(null, $.a returning char(512) default 'empty' on empty)
+null
+prepare json_value_stmt from 'select json_value(?, ''$.a'' returning unsigned default 7 on error)';
+set @json_value_doc = '{"a":"bad"}';
+execute json_value_stmt using @json_value_doc;
+json_value(?, $.a returning unsigned default 7 on error)
+7
+deallocate prepare json_value_stmt;
+drop table if exists json_value_ctas;
+create table json_value_ctas as select json_value('{"a":[12]}', '$.a') as extracted;
+select extracted from json_value_ctas;
+extracted
+[12]
+drop table json_value_ctas;
+drop table if exists json_value_generated;
+create table json_value_generated (
+    id int primary key,
+    doc json,
+    extracted varchar(512) generated always as (json_value(doc, '$.a')) stored,
+    key extracted_idx (extracted)
+);
+insert into json_value_generated(id, doc) values
+    (1, '{"a":[12]}'), (2, '{"a":{"k":1}}'), (3, '{"a":"scalar"}');
+select id, extracted from json_value_generated order by id;
+id    extracted
+1     [12]
+2     {"k": 1}
+3     scalar
+select id, extracted from json_value_generated force index(extracted_idx) where extracted = '[12]';
+id    extracted
+1     [12]
+select id, extracted from json_value_generated force index(extracted_idx) where extracted = '{"k": 1}';
+id    extracted
+2     {"k": 1}
+update json_value_generated set doc = '{"a":[99]}' where id = 3;
+select id, extracted from json_value_generated order by id;
+id    extracted
+1     [12]
+2     {"k": 1}
+3     [99]
+select id, extracted from json_value_generated force index(extracted_idx) where extracted = '[99]';
+id    extracted
+3     [99]
+drop table json_value_generated;
 select json_value('{"item": "shoes", "price": "49.95"}', '$.price');
-json_value({"item": "shoes", "price": "49.95"}, $.price)
+json_value({"item": "shoes", "price": "49.95"}, $.price returning char(512))
 49.95
 select json_value('{"a": {"b": [1,2,3]}}', '$.a.b[1]');
-json_value({"a": {"b": [1,2,3]}}, $.a.b[1])
+json_value({"a": {"b": [1,2,3]}}, $.a.b[1] returning char(512))
 2
 select json_value('{"active": true}', '$.active');
-json_value({"active": true}, $.active)
+json_value({"active": true}, $.active returning char(512))
 true
 select json_value('{"x": null}', '$.x');
-json_value({"x": null}, $.x)
+json_value({"x": null}, $.x returning char(512))
 null
 select json_value('{"a": 1}', '$.missing');
-json_value({"a": 1}, $.missing)
+json_value({"a": 1}, $.missing returning char(512))
 null
 select json_value(null, '$.a');
-json_value(null, $.a)
+json_value(null, $.a returning char(512))
 null
 select json_value('{"a": 1}', null);
-json_value({"a": 1}, null)
+json_value({"a": 1}, null returning char(512))
 null
 drop table if exists t1;
 create table t1 (a varchar(200));
 insert into t1 values ('{"name":"Alice","age":30}'), ('{"name":"Bob","age":25}'), (null);
 select json_value(a, '$.name') from t1;
-json_value(a, $.name)
+json_value(a, $.name returning char(512))
 Alice
 Bob
 null
 select json_value(a, '$.age') from t1;
-json_value(a, $.age)
+json_value(a, $.age returning char(512))
 30
 25
 null
 drop table t1;
 select json_value(cast('{"a": 1, "b": 2}' as json), '$.a');
-json_value(cast({"a": 1, "b": 2} as json), $.a)
+json_value(cast({"a": 1, "b": 2} as json), $.a returning char(512))
 1
 select json_value(cast('{"a": 1, "b": 2}' as json), '$.b');
-json_value(cast({"a": 1, "b": 2} as json), $.b)
+json_value(cast({"a": 1, "b": 2} as json), $.b returning char(512))
 2
 select json_value(cast('[1,2,{"x":3}]' as json), '$[2].x');
-json_value(cast([1,2,{"x":3}] as json), $[2].x)
+json_value(cast([1,2,{"x":3}] as json), $[2].x returning char(512))
 3
 select json_value(json_object('k1', 'v1', 'k2', 42), '$.k1');
-json_value(json_object(k1, v1, k2, 42), $.k1)
+json_value(json_object(k1, v1, k2, 42), $.k1 returning char(512))
 v1
 select json_value(json_object('k1', 'v1', 'k2', 42), '$.k2');
-json_value(json_object(k1, v1, k2, 42), $.k2)
+json_value(json_object(k1, v1, k2, 42), $.k2 returning char(512))
 42
 select json_value(json_array(1, 2, 3), '$[0]');
-json_value(json_array(1, 2, 3), $[0])
+json_value(json_array(1, 2, 3), $[0] returning char(512))
 1
 select json_value(json_array(1, 2, 3), '$[2]');
-json_value(json_array(1, 2, 3), $[2])
+json_value(json_array(1, 2, 3), $[2] returning char(512))
 3
 select json_value('{"a":1,"b":2}', '$.*');
-json_value({"a":1,"b":2}, $.*)
+json_value({"a":1,"b":2}, $.* returning char(512))
 null
 select json_value('{"a":1,"b":2}', '$[*]');
-json_value({"a":1,"b":2}, $[*])
+json_value({"a":1,"b":2}, $[*] returning char(512))
 null
 select json_value('{"a":1,"b":2}', '$**.a');
-json_value({"a":1,"b":2}, $**.a)
+json_value({"a":1,"b":2}, $**.a returning char(512))
 1
 select json_value('{"x":[12],"o":{"k":1},"s":12}', '$.x');
 json_value({"x":[12],"o":{"k":1},"s":12}, $.x)

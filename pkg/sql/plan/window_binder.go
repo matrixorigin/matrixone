@@ -111,12 +111,53 @@ func semanticAstKey(astExpr tree.Expr) string {
 }
 
 func semanticNodeKey(node tree.NodeFormatter) string {
+	if expr, ok := node.(tree.Expr); ok {
+		node = normalizeJSONValueSemantics(expr)
+	}
 	display := tree.String(node, dialect.MYSQL)
 	identity := tree.StringWithOpts(node, dialect.MYSQL, tree.WithParamExprOffset())
 	if identity == display {
 		return display
 	}
 	return identity + "\x00" + display
+}
+
+type jsonValueSemanticNormalizer struct{}
+
+func (jsonValueSemanticNormalizer) Enter(expr tree.Expr) (tree.Expr, bool) {
+	if fn, ok := expr.(*tree.FuncExpr); ok && fn.JsonValue != nil {
+		spec := fn.JsonValue.SemanticNormalized()
+		fn.JsonValue = &spec
+	}
+	return expr, false
+}
+
+func (jsonValueSemanticNormalizer) Exit(expr tree.Expr) (tree.Expr, bool) {
+	return expr, true
+}
+
+// normalizeJSONValueSemantics works on a clone so formatting used for
+// expression identity never changes the AST that will later be rebound or
+// shown to the user. Some legacy expression nodes do not implement Accept;
+// keep the original in that case and let their existing identity path stand.
+func normalizeJSONValueSemantics(astExpr tree.Expr) (normalized tree.Expr) {
+	if astExpr == nil {
+		return nil
+	}
+	normalized = astExpr
+	defer func() {
+		if recover() != nil {
+			normalized = astExpr
+		}
+	}()
+	clone := cloneTreeExpr(astExpr)
+	if clone == nil {
+		return astExpr
+	}
+	if visited, ok := clone.Accept(jsonValueSemanticNormalizer{}); ok && visited != nil {
+		return visited
+	}
+	return clone
 }
 
 func semanticAstDisplayName(key string) string {

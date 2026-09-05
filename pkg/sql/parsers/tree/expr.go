@@ -963,6 +963,10 @@ type FuncExpr struct {
 	Type     FuncType
 	Exprs    Exprs
 
+	// JsonValue carries the structured clauses for JSON_VALUE. Exprs always
+	// contains the document and path expressions in that order.
+	JsonValue *JsonValueSpec
+
 	//specify the type of aggregation.
 	AggType AggType
 
@@ -976,6 +980,10 @@ type FuncExpr struct {
 }
 
 func (node *FuncExpr) Format(ctx *FmtCtx) {
+	if node.JsonValue != nil {
+		formatJsonValueExpr(ctx, node)
+		return
+	}
 	funcName := ""
 	if node.FuncName != nil {
 		funcName = node.FuncName.Origin()
@@ -1158,6 +1166,18 @@ func (node *FuncExpr) Accept(v Visitor) (Expr, bool) {
 			return node, false
 		}
 		node.Exprs[i] = tmpNode
+	}
+	if node.JsonValue != nil {
+		for _, response := range []*JsonValueResponse{&node.JsonValue.OnEmpty, &node.JsonValue.OnError} {
+			if response.Default == nil {
+				continue
+			}
+			tmpNode, ok := response.Default.Accept(v)
+			if !ok {
+				return node, false
+			}
+			response.Default = tmpNode
+		}
 	}
 	for _, order := range node.OrderBy {
 		if order == nil || order.Expr == nil {

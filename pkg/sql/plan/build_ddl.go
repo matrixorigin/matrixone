@@ -341,6 +341,13 @@ func genViewTableDef(
 		viewSql = stableViewSQL
 		persistedCreateSQL = stableViewSQL
 	}
+	if normalizedViewSQL, rewritten := normalizeJSONValueViewSQL(ctx, viewSql); rewritten {
+		// JSON_VALUE's omitted RETURNING clause has a public VARCHAR(512)
+		// contract. Persist the formatter's canonical spelling so SHOW CREATE
+		// and a later view rebind expose the same type contract.
+		viewSql = normalizedViewSQL
+		persistedCreateSQL = normalizedViewSQL
+	}
 
 	lowerCaseTableNames := ctx.GetLowerCaseTableNames()
 	viewData, err := json.Marshal(ViewData{
@@ -376,6 +383,43 @@ func genViewTableDef(
 	})
 
 	return &tableDef, nil
+}
+
+// normalizeJSONValueViewSQL canonicalizes a view definition only when it uses
+// JSON_VALUE. Older view definitions retain their original SQL text; a view
+// containing JSON_VALUE is reparsed with the same SQL mode and formatted from
+// the AST so an omitted RETURNING clause is persisted as RETURNING CHAR(512).
+func normalizeJSONValueViewSQL(ctx CompilerContext, viewSQL string) (string, bool) {
+	if ctx == nil || viewSQL == "" || !strings.Contains(strings.ToLower(viewSQL), "json_value") {
+		return viewSQL, false
+	}
+	parserSQLMode := ""
+	if sqlMode := parserSQLModeFromContext(ctx); sqlMode != nil {
+		parserSQLMode = *sqlMode
+	}
+	stmts, err := mysql.ParseWithSQLMode(ctx.GetContext(), viewSQL, ctx.GetLowerCaseTableNames(), parserSQLMode)
+	if err != nil || len(stmts) != 1 {
+		return viewSQL, false
+	}
+	defer func() {
+		for _, statement := range stmts {
+			statement.Free()
+		}
+	}()
+
+	switch viewStmt := stmts[0].(type) {
+	case *tree.CreateView:
+		return formatStableViewSQL(viewStmt), true
+	case *tree.AlterView:
+		createStmt := &tree.CreateView{
+			Name:     viewStmt.Name,
+			ColNames: viewStmt.ColNames,
+			AsSource: viewStmt.AsSource,
+		}
+		return formatStableViewSQL(createStmt), true
+	default:
+		return viewSQL, false
+	}
 }
 
 func stableViewSQLWithExpandedStars(

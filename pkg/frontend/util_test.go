@@ -1854,6 +1854,15 @@ func Test_setMysqlColumnTypeMetadataDecimalLength(t *testing.T) {
 	}
 }
 
+func TestJSONValueDefaultProtocolMetadata(t *testing.T) {
+	col := new(MysqlColumn)
+	typ := types.NewWithCharset(types.T_varchar, 512, 0, types.CharsetUTF8MB4Bin)
+	require.NoError(t, setMysqlColumnTypeInfo(context.Background(), typ, col))
+	require.Equal(t, defines.MYSQL_TYPE_VAR_STRING, col.ColumnType())
+	require.Equal(t, uint16(utf8mb4BinCollationID), col.Charset())
+	require.Equal(t, uint32(2048), col.Length())
+}
+
 func TestColDef2MysqlColumnStringMetadata(t *testing.T) {
 	cases := []struct {
 		name      string
