@@ -1394,6 +1394,70 @@ func TestMaintainOrphanObjectPrivilegesPage(t *testing.T) {
 		require.Contains(t, candidateSQL, "order by __mo_cpkey_col limit 1000")
 	})
 
+	t.Run("inserts ahead of cursor can extend the high-water-bounded scan", func(t *testing.T) {
+		highWater := OrphanPrivilegeKey{
+			RoleID: 2, ObjectType: "account", ObjectID: 0, PrivilegeID: 1, PrivilegeLevel: "*",
+		}
+		var scan OrphanPrivilegeScan
+		page := 0
+		highWaterReads := 0
+		var liveIDs []uint64
+		exec := executor.NewMemTxnExecutor(func(sql string) (executor.Result, error) {
+			switch {
+			case strings.Contains(sql, "order by "+orphanPrivilegePhysicalKeyColumn+" desc"):
+				highWaterReads++
+				return newOrphanPrivilegeKeyResult(t, []OrphanPrivilegeKey{highWater}), nil
+			case strings.HasPrefix(sql, "select "+orphanPrivilegeCandidateColumns):
+				page++
+				if page > 3 {
+					return newOrphanPrivilegeKeyResult(t, []OrphanPrivilegeKey{highWater}), nil
+				}
+				// Model a fresh transaction snapshot receiving another full page
+				// strictly after the committed cursor but below the fixed key bound.
+				candidates := make([]OrphanPrivilegeKey, orphanPrivilegePageSize)
+				liveIDs = make([]uint64, orphanPrivilegePageSize)
+				for i := range candidates {
+					objectID := uint64((page-1)*orphanPrivilegePageSize + i + 1)
+					candidates[i] = OrphanPrivilegeKey{
+						RoleID: 1, ObjectType: "database", ObjectID: objectID,
+						PrivilegeID: 1, PrivilegeLevel: "d",
+					}
+					liveIDs[i] = objectID
+				}
+				firstKey := orphanPrivilegePhysicalKey(candidates[0])
+				lastKey := orphanPrivilegePhysicalKey(candidates[len(candidates)-1])
+				require.True(t, scan.Cursor == "" || firstKey > scan.Cursor,
+					"each new snapshot page must be strictly ahead of the committed cursor")
+				require.Less(t, strings.Compare(lastKey, orphanPrivilegePhysicalKey(highWater)), 0,
+					"the injected page must remain below the fixed high-water")
+				return newOrphanPrivilegeKeyResult(t, candidates), nil
+			case strings.HasPrefix(sql, "select dat_id from mo_catalog.mo_database"):
+				return newOrphanPrivilegeObjectIDResult(t, liveIDs...), nil
+			default:
+				return executor.Result{}, fmt.Errorf("unexpected sql: %s", sql)
+			}
+		}, nil)
+
+		for i := 0; i < 3; i++ {
+			next, complete, err := MaintainOrphanObjectPrivilegesPage(exec, accountID, scan)
+			require.NoError(t, err)
+			require.False(t, complete,
+				"a fresh full page ahead of the cursor can keep this tenant selected")
+			require.Equal(t, orphanPrivilegePhysicalKey(highWater), next.HighWater)
+			require.NotEqual(t, scan.Cursor, next.Cursor)
+			scan = next
+		}
+		require.Equal(t, 1, highWaterReads,
+			"later page snapshots must reuse the key bound without reloading its snapshot")
+
+		// Once inserts within the remaining key range stop, the fixed high-water
+		// is reached and the same process-local traversal can complete.
+		next, complete, err := MaintainOrphanObjectPrivilegesPage(exec, accountID, scan)
+		require.NoError(t, err)
+		require.True(t, complete)
+		require.Zero(t, next)
+	})
+
 	t.Run("ring scans randomized suffix before wrapping to prefix", func(t *testing.T) {
 		orphan := OrphanPrivilegeKey{
 			RoleID: 2, ObjectType: "database", ObjectID: 2001, PrivilegeID: 1, PrivilegeLevel: "d",

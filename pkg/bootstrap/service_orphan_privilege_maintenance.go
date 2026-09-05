@@ -34,10 +34,10 @@ import (
 // orphanPrivilegeMaintenanceState is intentionally process-local. An account
 // round freezes account IDs at roundHighWater and walks the ring from roundStart
 // back to (but not including) roundStart, so account creation cannot extend a
-// live round. Every selected tenant independently walks a frozen physical-key
-// ring. Fresh processes choose independent account and physical-key starts, so
-// repeated restarts cannot deterministically strand either a tenant or a
-// privilege-key suffix.
+// live round. Every selected tenant independently walks a high-water-bounded
+// physical-key ring across page snapshots. Fresh processes choose independent
+// account and physical-key starts to avoid a fixed restart bias; they do not
+// provide a finite restart-count or sustained-write completion guarantee.
 type orphanPrivilegeMaintenanceState struct {
 	restartSeed uint64
 	round       uint64

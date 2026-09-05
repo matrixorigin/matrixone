@@ -47,10 +47,11 @@ type OrphanPrivilegeKey struct {
 	PrivilegeLevel string
 }
 
-// OrphanPrivilegeScan is process-local progress for one finite physical-key
-// ring scan. HighWater freezes the set visible at scan start. Start chooses the
-// first ring segment after a process restart. Cursor always identifies the last
-// physical key examined, whether that row was deleted or preserved.
+// OrphanPrivilegeScan is process-local progress for one high-water-bounded
+// physical-key ring. HighWater fixes the upper key boundary, not a snapshot:
+// each page transaction can observe new rows inserted ahead of Cursor. Start
+// chooses the first ring segment after a process restart. Cursor identifies the
+// last physical key examined, whether that row was deleted or preserved.
 type OrphanPrivilegeScan struct {
 	Initialized bool
 	Wrapped     bool
@@ -76,9 +77,9 @@ const (
 // MaintainOrphanObjectPrivilegesPage examines at most orphanPrivilegePageSize
 // rows from a stable physical-primary-key range and deletes only confirmed
 // orphans from that candidate set. It has no durable completion marker: callers
-// start a new frozen ring after completion so mixed-version writers remain
-// repairable. Start must be a hex-encoded physical-key threshold; an empty Start
-// scans from the physical minimum without a wrap segment.
+// start a new high-water-bounded ring after completion so mixed-version writers
+// remain repairable. Start must be a hex-encoded physical-key threshold; an
+// empty Start scans from the physical minimum without a wrap segment.
 func MaintainOrphanObjectPrivilegesPage(
 	txn executor.TxnExecutor,
 	accountID uint32,
