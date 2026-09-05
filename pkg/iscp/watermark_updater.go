@@ -25,6 +25,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/cdc"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
+	"github.com/matrixorigin/matrixone/pkg/common/sqlquote"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
@@ -164,7 +165,11 @@ func unregisterJobsByDBName(
 	if tenantId, err = defines.GetAccountId(ctx); err != nil {
 		return
 	}
-	getTIDsSql := fmt.Sprintf("SELECT rel_id from mo_catalog.mo_tables where account_id = %d and reldatabase = '%s'", tenantId, dbName)
+	getTIDsSql := fmt.Sprintf(
+		"SELECT rel_id from mo_catalog.mo_tables where account_id = %d and reldatabase = %s",
+		tenantId,
+		sqlquote.String(dbName),
+	)
 	result, err := ExecWithResult(ctxWithSysAccount, getTIDsSql, cnUUID, txn)
 	if err != nil {
 		return

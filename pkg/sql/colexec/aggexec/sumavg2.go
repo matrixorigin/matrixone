@@ -15,6 +15,7 @@
 package aggexec
 
 import (
+	"math/bits"
 	"slices"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -32,41 +33,99 @@ import (
 //
 
 func AvgReturnType(typs []types.Type) types.Type {
-	switch typs[0].Oid {
-	case types.T_int64, types.T_uint64:
-		//matrixone does define the default digits before. just let it same mysql now.
-		//4 digits.
-		return types.New(types.T_decimal128, 38, 4)
+	typ := typs[0]
+	switch typ.Oid {
+	case types.T_int8, types.T_uint8, types.T_int16, types.T_uint16,
+		types.T_int32, types.T_uint32, types.T_int64, types.T_uint64, types.T_year:
+		return avgIntegerReturnType(typ)
 	case types.T_decimal64:
-		s := int32(12)
-		if s < typs[0].Scale {
-			s = typs[0].Scale
-		}
-		if s > typs[0].Scale+6 {
-			s = typs[0].Scale + 6
-		}
-		return types.New(types.T_decimal128, 38, s)
+		return types.New(types.T_decimal128, typ.Width+4, avgDecimalScale(typ.Scale))
 	case types.T_decimal128:
-		s := int32(12)
-		if s < typs[0].Scale {
-			s = typs[0].Scale
+		precision := typ.Width + 4
+		if precision <= maxDecimal128Precision {
+			return types.New(types.T_decimal128, precision, avgDecimalScale(typ.Scale))
 		}
-		if s > typs[0].Scale+6 {
-			s = typs[0].Scale + 6
+		precision = min(precision, maxAvgDecimalPrecision)
+		scale := avgDecimalScale(typ.Scale)
+		if precision < scale {
+			precision = scale
 		}
-		return types.New(types.T_decimal128, 38, s)
+		return types.New(types.T_decimal256, precision, scale)
 	case types.T_decimal256:
-		s := int32(12)
-		if s < typs[0].Scale {
-			s = typs[0].Scale
+		precision := min(typ.Width+4, maxAvgDecimalPrecision)
+		scale := avgDecimalScale(typ.Scale)
+		if precision < scale {
+			precision = scale
 		}
-		if s > typs[0].Scale+6 {
-			s = typs[0].Scale + 6
-		}
-		return types.New(types.T_decimal256, 65, s)
+		return types.New(types.T_decimal256, precision, scale)
 	default:
 		return types.T_float64.ToType()
 	}
+}
+
+const (
+	maxDecimal128Precision  int32 = 38
+	maxAvgDecimalPrecision  int32 = 65
+	avgResultScaleIncrement int32 = 4
+	maxAvgIntegerPrecision        = maxAvgDecimalPrecision - avgResultScaleIncrement
+)
+
+// avgIntegerReturnType keeps the planner-visible AVG type valid even when the
+// binder records precision for a constant integer expression. Decimal128 can
+// expose at most 38 digits; wider expressions promote to Decimal256, whose
+// public AVG precision is capped at 65 digits.
+func avgIntegerReturnType(typ types.Type) types.Type {
+	precision := avgIntegerPrecision(typ)
+	if precision <= maxDecimal128Precision-avgResultScaleIncrement {
+		return types.New(types.T_decimal128, precision+avgResultScaleIncrement, avgResultScaleIncrement)
+	}
+	if precision >= maxAvgIntegerPrecision {
+		return types.New(types.T_decimal256, maxAvgDecimalPrecision, avgResultScaleIncrement)
+	}
+	return types.New(types.T_decimal256, precision+avgResultScaleIncrement, avgResultScaleIncrement)
+}
+
+// Integer Type.Width is normally zero (the storage width is carried by Size),
+// but the planner fills it with an expression's decimal precision for an AVG
+// constant expression. Explicit integer casts carry a bit width and Scale ==
+// -1; those must fall back to the complete integer domain. Keeping expression
+// precision on the argument type makes all executor construction paths agree.
+func avgIntegerPrecision(typ types.Type) int32 {
+	if typ.Width > 0 && typ.Scale >= 0 {
+		return typ.Width
+	}
+	switch typ.Oid {
+	case types.T_int8, types.T_uint8:
+		return 3
+	case types.T_int16, types.T_uint16:
+		return 5
+	case types.T_int32, types.T_uint32:
+		return 10
+	case types.T_int64:
+		return 19
+	case types.T_uint64:
+		return 20
+	case types.T_year:
+		return 4
+	default:
+		return 0
+	}
+}
+
+const maxAvgDecimalScale int32 = 38
+
+func avgDecimalScale(inputScale int32) int32 {
+	resultScale := inputScale + 4
+	if resultScale > maxAvgDecimalScale {
+		resultScale = maxAvgDecimalScale
+	}
+	// Never silently discard fractional digits from a valid input type. The
+	// Decimal256 result can retain scale 38 even when the usual +4 increment
+	// would exceed the supported public scale.
+	if resultScale < inputScale {
+		resultScale = inputScale
+	}
+	return resultScale
 }
 
 func SumReturnType(typs []types.Type) types.Type {
@@ -118,9 +177,10 @@ func windowRowIsNull(vec *vector.Vector, row int) bool {
 	return vec.IsNull(uint64(row))
 }
 
-type sumAvgExec[T float64 | int64 | uint64, A types.Ints | types.UInts | types.Floats] struct {
+type sumAvgExec[T float64 | int64 | uint64, A types.Ints | types.UInts | types.Floats | types.MoYear] struct {
 	aggExec
 	isSum              bool
+	exactAvg           bool
 	ofCheck            func(T, T, T) error
 	windowNonNullCount int64
 }
@@ -132,7 +192,7 @@ func (exec *sumAvgExec[T, A]) Fill(groupIndex int, row int, vectors []*vector.Ve
 }
 
 func (exec *sumAvgExec[T, A]) windowSlidingSupported() bool {
-	if !exec.isSum || exec.IsDistinct() {
+	if exec.IsDistinct() {
 		return false
 	}
 	// Floating subtraction can change results for infinities and accumulate
@@ -146,12 +206,26 @@ func (exec *sumAvgExec[T, A]) windowSlidingSupported() bool {
 }
 
 func (exec *sumAvgExec[T, A]) addWindowRow(row int, vectors []*vector.Vector) error {
-	if err := exec.Fill(0, row, vectors); err != nil {
+	vec := vectors[0]
+	if windowRowIsNull(vec, row) {
+		return nil
+	}
+	if vec.IsConst() {
+		row = 0
+	}
+	value := T(vector.MustFixedColNoTypeCheck[A](vec)[row])
+	sums := chunkArr[T](exec.state[0].vecs[0])
+	result := sums[0] + value
+	if err := exec.ofCheck(sums[0], value, result); err != nil {
 		return err
 	}
-	if !windowRowIsNull(vectors[0], row) {
-		exec.windowNonNullCount++
+	sums[0] = result
+	if exec.isSum {
+		exec.state[0].vecs[0].UnsetNull(0)
+	} else {
+		vector.MustFixedColNoTypeCheck[int64](exec.state[0].vecs[1])[0]++
 	}
+	exec.windowNonNullCount++
 	return nil
 }
 
@@ -161,7 +235,7 @@ func (exec *sumAvgExec[T, A]) removeWindowRow(row int, vectors []*vector.Vector)
 		return nil
 	}
 	if exec.windowNonNullCount <= 0 {
-		return moerr.NewInternalErrorNoCtx("sliding SUM state is empty")
+		return moerr.NewInternalErrorNoCtx("sliding SUM/AVG state is empty")
 	}
 	if vec.IsConst() {
 		row = 0
@@ -170,9 +244,18 @@ func (exec *sumAvgExec[T, A]) removeWindowRow(row int, vectors []*vector.Vector)
 	sums := chunkArr[T](exec.state[0].vecs[0])
 	sums[0] -= value
 	exec.windowNonNullCount--
+	if !exec.isSum {
+		counts := vector.MustFixedColNoTypeCheck[int64](exec.state[0].vecs[1])
+		if counts[0] <= 0 {
+			return moerr.NewInternalErrorNoCtx("sliding AVG count state is empty")
+		}
+		counts[0]--
+	}
 	if exec.windowNonNullCount == 0 {
 		sums[0] = 0
-		exec.state[0].vecs[0].SetNull(0)
+		if exec.isSum {
+			exec.state[0].vecs[0].SetNull(0)
+		}
 	}
 	return nil
 }
@@ -573,6 +656,10 @@ func (exec *sumAvgExec[T, A]) SetExtraInformation(partialResult any, _ int) erro
 }
 
 func (exec *sumAvgExec[T, A]) Flush() (_ []*vector.Vector, retErr error) {
+	if exec.exactAvg {
+		return exec.flushExactAvg()
+	}
+
 	resultType := exec.aggInfo.retType
 	vecs := make([]*vector.Vector, len(exec.state))
 	defer func() {
@@ -680,12 +767,285 @@ func (exec *sumAvgExec[T, A]) Flush() (_ []*vector.Vector, retErr error) {
 	return vecs, nil
 }
 
+func decimal128FromNativeSum[T float64 | int64 | uint64](sum T) types.Decimal128 {
+	switch value := any(sum).(type) {
+	case int64:
+		return types.Decimal128FromInt64(value)
+	case uint64:
+		return types.Decimal128{B0_63: value}
+	default:
+		panic(moerr.NewInternalErrorNoCtxf("unsupported native AVG sum type %T", sum))
+	}
+}
+
+func decimal256FromNativeSum[T float64 | int64 | uint64](sum T) types.Decimal256 {
+	switch value := any(sum).(type) {
+	case int64:
+		return types.Decimal256FromInt64(value)
+	case uint64:
+		return types.Decimal256{B0_63: value}
+	default:
+		panic(moerr.NewInternalErrorNoCtxf("unsupported native AVG sum type %T", sum))
+	}
+}
+
+// decimal128NativeIntegerAvg handles the usual native-integer AVG result
+// scale without going through Decimal128.Scale/Mul128. The result scale for
+// native integer AVG is four, so a single machine-word multiply followed by
+// Div128 is both exact and materially cheaper than the general decimal path.
+// An overflow asks the caller to retry through the Decimal256-capable path.
+func decimal128NativeIntegerAvg[T float64 | int64 | uint64](sum T, count int64, resultScale int32) (types.Decimal128, error) {
+	if count <= 0 {
+		return types.Decimal128{}, moerr.NewInvalidInputNoCtxf("Decimal128 Div by Zero")
+	}
+	if resultScale < 0 || resultScale >= int32(len(types.Pow10)) {
+		return types.Decimal128{}, moerr.NewInternalErrorNoCtxf("invalid native AVG result scale %d", resultScale)
+	}
+
+	var magnitude uint64
+	negative := false
+	switch value := any(sum).(type) {
+	case int64:
+		negative = value < 0
+		if negative {
+			magnitude = uint64(-(value + 1)) + 1
+		} else {
+			magnitude = uint64(value)
+		}
+	case uint64:
+		magnitude = value
+	default:
+		return types.Decimal128{}, moerr.NewInternalErrorNoCtxf("unsupported native AVG sum type %T", sum)
+	}
+
+	hi, lo := bits.Mul64(magnitude, types.Pow10[resultScale])
+	if hi>>63 != 0 {
+		return types.Decimal128{}, moerr.NewInvalidInputNoCtxf("Decimal128 scale overflow")
+	}
+	var avg types.Decimal128
+	if hi == 0 {
+		// Most INT32 groups fit in one word after scaling. Use the same
+		// half-up rule as Div128 without constructing a multi-word divisor.
+		divisor := uint64(count)
+		quotient, remainder := bits.Div64(0, lo, divisor)
+		if remainder >= (divisor+1)/2 {
+			quotient++
+		}
+		avg = types.Decimal128{B0_63: quotient}
+	} else {
+		var err error
+		avg, err = (types.Decimal128{B0_63: lo, B64_127: hi}).Div128(types.Decimal128FromInt64(count))
+		if err != nil {
+			return types.Decimal128{}, err
+		}
+	}
+	if negative {
+		avg = avg.Minus()
+	}
+	return avg, nil
+}
+
+// flushExactAvg converts the native integer accumulator to the declared
+// Decimal128/Decimal256 result only once per group. Row and batch filling stay
+// on the compact integer path, which is important for the common INT AVG
+// workload while still producing exact, scale-aware results.
+func (exec *sumAvgExec[T, A]) flushExactAvg() (_ []*vector.Vector, retErr error) {
+	resultType := exec.aggInfo.retType
+	vecs := make([]*vector.Vector, len(exec.state))
+	defer func() {
+		if retErr != nil {
+			for _, vec := range vecs {
+				if vec != nil {
+					vec.Free(exec.mp)
+				}
+			}
+		}
+	}()
+
+	if exec.IsDistinct() {
+		for i := range vecs {
+			var err error
+			vecs[i], err = exec.allocation.newVector(resultType)
+			if err != nil {
+				return nil, err
+			}
+			if err = vecs[i].PreExtend(int(exec.state[i].length), exec.mp); err != nil {
+				return nil, err
+			}
+			for j := 0; j < int(exec.state[i].length); j++ {
+				count := exec.state[i].argCnt[j]
+				if count == 0 {
+					if err = vector.AppendNull(vecs[i], exec.mp); err != nil {
+						return nil, err
+					}
+					continue
+				}
+				var sum T
+				xcnt := 0
+				err = exec.state[i].iter(uint16(j), func(k []byte) error {
+					ptr := util.UnsafeFromBytes[A](k[kAggArgPrefixSz:])
+					value := T(*ptr)
+					result := sum + value
+					if err := exec.ofCheck(sum, value, result); err != nil {
+						return err
+					}
+					sum = result
+					xcnt++
+					return nil
+				})
+				if err != nil {
+					return nil, err
+				}
+				if int(count) != xcnt {
+					panic(moerr.NewInternalErrorNoCtxf("invalid count: %d for y: %d, expected: %d", xcnt, j, count))
+				}
+				var avg any
+				if resultType.Oid == types.T_decimal256 {
+					avg, err = decAvg[types.Decimal256](
+						decimal256FromNativeSum(sum), int64(count), 0, resultType)
+				} else {
+					var avg128 types.Decimal128
+					avg128, err = decimal128NativeIntegerAvg(sum, int64(count), resultType.Scale)
+					if err != nil {
+						avg128, err = decAvg[types.Decimal128](
+							decimal128FromNativeSum(sum), int64(count), 0, resultType)
+					}
+					avg = avg128
+				}
+				if err != nil {
+					return nil, err
+				}
+				if err = appendNativeAvgResult(vecs[i], avg, exec.mp); err != nil {
+					return nil, err
+				}
+			}
+		}
+	} else {
+		for i := range vecs {
+			sumVec := exec.state[i].vecs[0]
+			sums := vector.MustFixedColNoTypeCheck[T](sumVec)
+			cntVec := exec.state[i].vecs[1]
+			cnts := vector.MustFixedColNoTypeCheck[int64](cntVec)
+
+			var err error
+			vecs[i], err = exec.allocation.newVector(resultType)
+			if err != nil {
+				return nil, err
+			}
+			if err = vecs[i].PreExtend(int(exec.state[i].length), exec.mp); err != nil {
+				return nil, err
+			}
+			// Build the whole fixed-width result in one append so the common
+			// non-DISTINCT path does not pay per-group vector metadata/allocation
+			// overhead. Wide integer constant expressions use Decimal256 here;
+			// their native accumulator is still kept on the compact integer path.
+			if resultType.Oid == types.T_decimal128 {
+				values := make([]types.Decimal128, exec.state[i].length)
+				nulls := make([]bool, exec.state[i].length)
+				for j, count := range cnts {
+					if count == 0 {
+						nulls[j] = true
+						continue
+					}
+					avg, avgErr := decimal128NativeIntegerAvg(sums[j], count, resultType.Scale)
+					if avgErr != nil {
+						avg, avgErr = decAvg(decimal128FromNativeSum(sums[j]), count, 0, resultType)
+					}
+					if avgErr != nil {
+						return nil, avgErr
+					}
+					values[j] = avg
+				}
+				if err = vector.AppendFixedList(vecs[i], values, nulls, exec.mp); err != nil {
+					return nil, err
+				}
+				sumVec.Free(exec.mp)
+				cntVec.Free(exec.mp)
+				exec.state[i].vecs[0] = nil
+				exec.state[i].vecs[1] = nil
+				exec.state[i].length = 0
+				exec.state[i].capacity = 0
+				continue
+			}
+			if resultType.Oid == types.T_decimal256 {
+				values := make([]types.Decimal256, exec.state[i].length)
+				nulls := make([]bool, exec.state[i].length)
+				for j, count := range cnts {
+					if count == 0 {
+						nulls[j] = true
+						continue
+					}
+					values[j], err = decAvg[types.Decimal256](
+						decimal256FromNativeSum(sums[j]), count, 0, resultType)
+					if err != nil {
+						return nil, err
+					}
+				}
+				if err = vector.AppendFixedList(vecs[i], values, nulls, exec.mp); err != nil {
+					return nil, err
+				}
+				sumVec.Free(exec.mp)
+				cntVec.Free(exec.mp)
+				exec.state[i].vecs[0] = nil
+				exec.state[i].vecs[1] = nil
+				exec.state[i].length = 0
+				exec.state[i].capacity = 0
+				continue
+			}
+			for j, count := range cnts {
+				if count == 0 {
+					err = vector.AppendNull(vecs[i], exec.mp)
+				} else {
+					var avg any
+					avg, err = decAvg[types.Decimal128](
+						decimal128FromNativeSum(sums[j]), count, 0, resultType)
+					if err == nil {
+						err = appendNativeAvgResult(vecs[i], avg, exec.mp)
+					}
+				}
+				if err != nil {
+					return nil, err
+				}
+			}
+			sumVec.Free(exec.mp)
+			cntVec.Free(exec.mp)
+			exec.state[i].vecs[0] = nil
+			exec.state[i].vecs[1] = nil
+			exec.state[i].length = 0
+			exec.state[i].capacity = 0
+		}
+	}
+	return vecs, nil
+}
+
+func appendNativeAvgResult(vec *vector.Vector, value any, mp *mpool.MPool) error {
+	switch value := value.(type) {
+	case types.Decimal128:
+		return vector.AppendFixed(vec, value, false, mp)
+	case types.Decimal256:
+		return vector.AppendFixed(vec, value, false, mp)
+	default:
+		return moerr.NewInternalErrorNoCtxf("unsupported native AVG result type %T", value)
+	}
+}
+
 type sumAvgDecimalArg interface {
 	int64 | uint64 | types.Decimal64 | types.Decimal128 | types.Decimal256
 }
 
 type sumAvgDecimalState interface {
 	types.Decimal128 | types.Decimal256
+}
+
+func sumAvgDecimalStateType[S sumAvgDecimalState](scale int32) types.Type {
+	var state S
+	switch any(state).(type) {
+	case types.Decimal128:
+		return types.New(types.T_decimal128, 38, scale)
+	case types.Decimal256:
+		return types.New(types.T_decimal256, 65, scale)
+	}
+	panic("unreachable")
 }
 
 func decimalStateFromArg[A sumAvgDecimalArg, S sumAvgDecimalState](v A, argScale int32) S {
@@ -766,16 +1126,30 @@ func (exec *sumAvgDecExec[A, S]) Fill(groupIndex int, row int, vectors []*vector
 }
 
 func (exec *sumAvgDecExec[A, S]) windowSlidingSupported() bool {
-	return exec.isSum && !exec.IsDistinct() && exec.localAddSafe
+	return !exec.IsDistinct() && exec.localAddSafe
 }
 
 func (exec *sumAvgDecExec[A, S]) addWindowRow(row int, vectors []*vector.Vector) error {
-	if err := exec.Fill(0, row, vectors); err != nil {
+	vec := vectors[0]
+	if windowRowIsNull(vec, row) {
+		return nil
+	}
+	if vec.IsConst() {
+		row = 0
+	}
+	value := decimalStateFromArg[A, S](
+		vector.MustFixedColNoTypeCheck[A](vec)[row], exec.aggInfo.argTypes[0].Scale)
+	sums := chunkArr[S](exec.state[0].vecs[0])
+	var err error
+	if sums[0], err = decimalStateAdd(sums[0], value); err != nil {
 		return err
 	}
-	if !windowRowIsNull(vectors[0], row) {
-		exec.windowNonNullCount++
+	if exec.isSum {
+		exec.state[0].vecs[0].UnsetNull(0)
+	} else {
+		vector.MustFixedColNoTypeCheck[int64](exec.state[0].vecs[1])[0]++
 	}
+	exec.windowNonNullCount++
 	return nil
 }
 
@@ -785,7 +1159,7 @@ func (exec *sumAvgDecExec[A, S]) removeWindowRow(row int, vectors []*vector.Vect
 		return nil
 	}
 	if exec.windowNonNullCount <= 0 {
-		return moerr.NewInternalErrorNoCtx("sliding SUM state is empty")
+		return moerr.NewInternalErrorNoCtx("sliding SUM/AVG state is empty")
 	}
 	if vec.IsConst() {
 		row = 0
@@ -795,10 +1169,19 @@ func (exec *sumAvgDecExec[A, S]) removeWindowRow(row int, vectors []*vector.Vect
 	sums := chunkArr[S](exec.state[0].vecs[0])
 	sums[0] = decimalStateAddUnchecked(sums[0], decimalStateMinus(value))
 	exec.windowNonNullCount--
+	if !exec.isSum {
+		counts := vector.MustFixedColNoTypeCheck[int64](exec.state[0].vecs[1])
+		if counts[0] <= 0 {
+			return moerr.NewInternalErrorNoCtx("sliding AVG count state is empty")
+		}
+		counts[0]--
+	}
 	if exec.windowNonNullCount == 0 {
 		var zero S
 		sums[0] = zero
-		exec.state[0].vecs[0].SetNull(0)
+		if exec.isSum {
+			exec.state[0].vecs[0].SetNull(0)
+		}
 	}
 	return nil
 }
@@ -1247,6 +1630,85 @@ func decimal256FitsPrecision(value types.Decimal256, width int32) bool {
 	return value.Less(limit)
 }
 
+func decimal256AvgAtScale(value types.Decimal256, count int64, argScale, resultScale int32) (types.Decimal256, error) {
+	if count <= 0 {
+		return value, moerr.NewInvalidInputNoCtxf("Decimal256 Div by Zero")
+	}
+	if resultScale < argScale {
+		return value, moerr.NewInternalErrorNoCtxf(
+			"decimal avg result scale %d is below input scale %d", resultScale, argScale)
+	}
+	if value.Sign() {
+		value = value.Minus()
+	}
+	var err error
+	if value, err = value.Scale(resultScale - argScale); err != nil {
+		return value, err
+	}
+	value, err = value.Div256(types.Decimal256FromInt64(count))
+	if err != nil {
+		return value, err
+	}
+	// Div256 operates on magnitudes. Restore the sign after the one and only
+	// division/rounding step so negative AVG values use the same half-up rule.
+	// The sign was stripped above, so this branch is intentionally based on the
+	// original value captured before scaling.
+	return value, nil
+}
+
+func decimal256AvgAtScaleSigned(value types.Decimal256, count int64, argScale, resultScale int32) (types.Decimal256, error) {
+	negative := value.Sign()
+	avg, err := decimal256AvgAtScale(value, count, argScale, resultScale)
+	if err != nil {
+		return avg, err
+	}
+	if negative {
+		avg = avg.Minus()
+	}
+	return avg, nil
+}
+
+func decimal128FromDecimal256(value types.Decimal256) (types.Decimal128, bool) {
+	if value.Sign() {
+		if value.B128_191 != ^uint64(0) || value.B192_255 != ^uint64(0) || value.B64_127>>63 != 1 {
+			return types.Decimal128{}, false
+		}
+	} else if value.B128_191 != 0 || value.B192_255 != 0 || value.B64_127>>63 != 0 {
+		return types.Decimal128{}, false
+	}
+	return types.Decimal128{B0_63: value.B0_63, B64_127: value.B64_127}, true
+}
+
+// decimal128AvgAtScaleSigned keeps the common exact AVG path in Decimal128.
+// Scaling the numerator before division makes Div128 perform the only
+// rounding step at the declared result scale. The caller can fall back to
+// Decimal256 when the scaled numerator does not fit in 128 bits.
+func decimal128AvgAtScaleSigned(value types.Decimal128, count int64, argScale, resultScale int32) (types.Decimal128, error) {
+	if count <= 0 {
+		return value, moerr.NewInvalidInputNoCtxf("Decimal128 Div by Zero")
+	}
+	if resultScale < argScale {
+		return value, moerr.NewInternalErrorNoCtxf(
+			"decimal avg result scale %d is below input scale %d", resultScale, argScale)
+	}
+	negative := value.Sign()
+	if negative {
+		value = value.Minus()
+	}
+	scaled, err := value.Scale(resultScale - argScale)
+	if err != nil {
+		return value, err
+	}
+	avg, err := scaled.Div128(types.Decimal128FromInt64(count))
+	if err != nil {
+		return value, err
+	}
+	if negative {
+		avg = avg.Minus()
+	}
+	return avg, nil
+}
+
 func decAvg[S sumAvgDecimalState](sum S, count int64, argScale int32, resultType types.Type) (S, error) {
 	var zero S
 	switch value := any(sum).(type) {
@@ -1256,14 +1718,24 @@ func decAvg[S sumAvgDecimalState](sum S, count int64, argScale int32, resultType
 			resultType.Scale < 0 || resultType.Scale > resultType.Width {
 			return zero, moerr.NewInternalErrorNoCtxf("invalid decimal avg result type %s", resultType.String())
 		}
-		cnt128 := types.Decimal128FromInt64(count)
-		avg, scale, err := value.Div(cnt128, argScale, 0)
-		if err != nil {
-			return zero, err
+		if avg, err := decimal128AvgAtScaleSigned(value, count, argScale, resultType.Scale); err == nil {
+			if !decimal128FitsPrecision(avg, resultType.Width) {
+				return zero, moerr.NewInvalidInputNoCtxf(
+					"%s beyond the range, can't be converted to Decimal128(%d,%d).",
+					avg.Format(resultType.Scale), resultType.Width, resultType.Scale)
+			}
+			return any(avg).(S), nil
 		}
-		avg, err = avg.Scale(resultType.Scale - scale)
+		avgWide, err := decimal256AvgAtScaleSigned(
+			types.Decimal256FromDecimal128(value), count, argScale, resultType.Scale)
 		if err != nil {
-			return zero, err
+			return zero, moerr.NewInvalidInputNoCtxf(
+				"Decimal128 Div overflow: %s/%d", value.Format(argScale), count)
+		}
+		avg, ok := decimal128FromDecimal256(avgWide)
+		if !ok {
+			return zero, moerr.NewInvalidInputNoCtxf(
+				"Decimal128 Div overflow: %s/%d", value.Format(argScale), count)
 		}
 		if !decimal128FitsPrecision(avg, resultType.Width) {
 			return zero, moerr.NewInvalidInputNoCtxf(
@@ -1277,14 +1749,10 @@ func decAvg[S sumAvgDecimalState](sum S, count int64, argScale int32, resultType
 			resultType.Scale < 0 || resultType.Scale > resultType.Width {
 			return zero, moerr.NewInternalErrorNoCtxf("invalid decimal avg result type %s", resultType.String())
 		}
-		cnt256 := types.Decimal256FromInt64(count)
-		avg, scale, err := value.Div(cnt256, argScale, 0)
+		avg, err := decimal256AvgAtScaleSigned(value, count, argScale, resultType.Scale)
 		if err != nil {
-			return zero, err
-		}
-		avg, err = avg.Scale(resultType.Scale - scale)
-		if err != nil {
-			return zero, err
+			return zero, moerr.NewInvalidInputNoCtxf(
+				"Decimal256 Div overflow: %s/%d", value.Format(argScale), count)
 		}
 		if !decimal256FitsPrecision(avg, resultType.Width) {
 			return zero, moerr.NewInvalidInputNoCtxf(
@@ -1415,8 +1883,7 @@ func (exec *sumAvgDecExec[A, S]) Flush() (_ []*vector.Vector, retErr error) {
 				exec.state[i].vecs[1] = nil
 			}
 
-			// Fix resulit scale
-			sumVec.GetType().Scale = resultType.Scale
+			*sumVec.GetType() = resultType
 
 			// transfer sumVec
 			vecs[i] = sumVec
@@ -1439,10 +1906,13 @@ func makeSumAvgExec(
 	case types.T_int16:
 		return newSumAvgExec[int64, int16](mp, int64OfCheck, isSum, aggID, isDistinct, param)
 	case types.T_year:
-		return newSumAvgExec[int64, int16](mp, int64OfCheck, isSum, aggID, isDistinct, param)
+		return newSumAvgExec[int64, types.MoYear](mp, int64OfCheck, isSum, aggID, isDistinct, param)
 	case types.T_int32:
 		return newSumAvgExec[int64, int32](mp, int64OfCheck, isSum, aggID, isDistinct, param)
 	case types.T_int64:
+		if !isSum && AvgReturnType([]types.Type{param}).Oid == types.T_decimal256 {
+			return newSumAvgDecExec[int64, types.Decimal256](mp, isSum, aggID, isDistinct, param)
+		}
 		return newSumAvgDecExec[int64, types.Decimal128](mp, isSum, aggID, isDistinct, param)
 	case types.T_uint8:
 		return newSumAvgExec[uint64, uint8](mp, uint64OfCheck, isSum, aggID, isDistinct, param)
@@ -1451,6 +1921,9 @@ func makeSumAvgExec(
 	case types.T_uint32:
 		return newSumAvgExec[uint64, uint32](mp, uint64OfCheck, isSum, aggID, isDistinct, param)
 	case types.T_uint64:
+		if !isSum && AvgReturnType([]types.Type{param}).Oid == types.T_decimal256 {
+			return newSumAvgDecExec[uint64, types.Decimal256](mp, isSum, aggID, isDistinct, param)
+		}
 		return newSumAvgDecExec[uint64, types.Decimal128](mp, isSum, aggID, isDistinct, param)
 	case types.T_bit:
 		return newSumAvgExec[uint64, uint64](mp, uint64OfCheck, isSum, aggID, isDistinct, param)
@@ -1461,6 +1934,9 @@ func makeSumAvgExec(
 	case types.T_decimal64:
 		return newSumDecimal64FastExec(mp, isSum, aggID, isDistinct, param)
 	case types.T_decimal128:
+		if !isSum && AvgReturnType([]types.Type{param}).Oid == types.T_decimal256 {
+			return newSumAvgDecExec[types.Decimal128, types.Decimal256](mp, isSum, aggID, isDistinct, param)
+		}
 		return newSumDecimal128FastExec(mp, isSum, aggID, isDistinct, param)
 	case types.T_decimal256:
 		return newSumAvgDecExec[types.Decimal256, types.Decimal256](mp, isSum, aggID, isDistinct, param)
@@ -1469,7 +1945,7 @@ func makeSumAvgExec(
 	}
 }
 
-func newSumAvgExec[T float64 | int64 | uint64, A types.Ints | types.UInts | types.Floats](mp *mpool.MPool, ofCheck func(T, T, T) error, isSum bool, aggID int64, isDistinct bool, param types.Type) AggFuncExec {
+func newSumAvgExec[T float64 | int64 | uint64, A types.Ints | types.UInts | types.Floats | types.MoYear](mp *mpool.MPool, ofCheck func(T, T, T) error, isSum bool, aggID int64, isDistinct bool, param types.Type) AggFuncExec {
 	var exec sumAvgExec[T, A]
 	exec.mp = mp
 	exec.isSum = isSum
@@ -1481,6 +1957,7 @@ func newSumAvgExec[T float64 | int64 | uint64, A types.Ints | types.UInts | type
 		rt = sumTyp
 	} else {
 		rt = avgTyp
+		exec.exactAvg = rt.Oid == types.T_decimal128 || rt.Oid == types.T_decimal256
 	}
 	exec.aggInfo = aggInfo{
 		aggId:      aggID,
@@ -1540,7 +2017,10 @@ func newSumAvgDecExec[A sumAvgDecimalArg, S sumAvgDecimalState](mp *mpool.MPool,
 	if isSum {
 		exec.aggInfo.stateTypes = []types.Type{sumTyp}
 	} else {
-		exec.aggInfo.stateTypes = []types.Type{sumTyp, types.T_int64.ToType()}
+		exec.aggInfo.stateTypes = []types.Type{
+			sumAvgDecimalStateType[S](sumAvgDecimalArgScale(param)),
+			types.T_int64.ToType(),
+		}
 	}
 
 	return &exec

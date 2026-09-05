@@ -18,8 +18,7 @@ import (
 	"context"
 	"sort"
 
-	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
-
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -27,6 +26,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	p "github.com/matrixorigin/matrixone/pkg/sql/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -98,13 +98,6 @@ func hashFilterExpr(
 	expr *plan.Expr,
 	metadata partition.PartitionMetadata,
 ) ([]int, bool, error) {
-	var err error
-	exprs := make([]*plan.Expr, len(metadata.Partitions))
-	for i, pt := range metadata.Partitions {
-		// Deep copy partition expressions to avoid modifying the original expressions
-		// when replacing column references with actual filter values
-		exprs[i] = p.DeepCopyExpr(pt.Expr)
-	}
 	switch exprImpl := expr.Expr.(type) {
 	case *plan.Expr_F:
 		switch exprImpl.F.Func.ObjName {
@@ -157,12 +150,18 @@ func hashFilterExpr(
 			if left.Col.ColPos != colPosition {
 				return nil, false, nil
 			}
+			value, canPrune := normalizePartitionValue(exprImpl.F.Args[1])
+			if !canPrune {
+				return nil, false, nil
+			}
+			exprs := make([]*plan.Expr, len(metadata.Partitions))
+			for i, pt := range metadata.Partitions {
+				// Deep copy partition expressions to avoid modifying the original expressions
+				// when replacing column references with actual filter values.
+				exprs[i] = p.DeepCopyExpr(pt.Expr)
+			}
 			for i := range exprs {
-				mustReplaceCol(exprs[i], exprImpl.F.Args[1])
-				exprs[i], err = ConvertFoldExprToNormal(exprs[i])
-				if err != nil {
-					return nil, false, err
-				}
+				mustReplaceCol(exprs[i], value)
 			}
 			targets, err := filterResult(proc, exprs, metadata)
 			if err != nil {
@@ -217,12 +216,6 @@ func rangeFilterExpr(
 	expr *plan.Expr,
 	metadata partition.PartitionMetadata,
 ) ([]int, bool, error) {
-	exprs := make([]*plan.Expr, len(metadata.Partitions))
-	for i, pt := range metadata.Partitions {
-		// Deep copy partition expressions to avoid modifying the original expressions
-		// when replacing column references with actual filter values
-		exprs[i] = p.DeepCopyExpr(pt.Expr)
-	}
 	switch exprImpl := expr.Expr.(type) {
 	case *plan.Expr_F:
 		switch exprImpl.F.Func.ObjName {
@@ -272,10 +265,20 @@ func rangeFilterExpr(
 			if left.Col.ColPos != colPosition {
 				return nil, false, nil
 			}
+			value, canPrune := normalizePartitionValue(exprImpl.F.Args[1])
+			if !canPrune {
+				return nil, false, nil
+			}
+			exprs := make([]*plan.Expr, len(metadata.Partitions))
+			for i, pt := range metadata.Partitions {
+				// Deep copy partition expressions to avoid modifying the original expressions
+				// when replacing column references with actual filter values.
+				exprs[i] = p.DeepCopyExpr(pt.Expr)
+			}
 			for i := range exprs {
 				// a = 1 =>
 				// p1 <= 1 < p2
-				mustReplaceCol(exprs[i], exprImpl.F.Args[1])
+				mustReplaceCol(exprs[i], value)
 			}
 			targets, err := filterResult(proc, exprs, metadata)
 			if err != nil {
@@ -388,6 +391,18 @@ func filterResult(
 		}
 	}
 	return targets, nil
+}
+
+// normalizePartitionValue converts the evaluated Fold representation used by
+// remote scans before the value is substituted into partition expressions.
+// The general expression executor intentionally does not own Fold values. A
+// clone keeps this storage optimization from mutating the reusable scan filter.
+// False means that pruning must conservatively scan every partition.
+func normalizePartitionValue(value *plan.Expr) (*plan.Expr, bool) {
+	if !p.HasFoldValExpr(value) {
+		return value, true
+	}
+	return convertFoldExprToNormal(p.DeepCopyExpr(value))
 }
 
 // mustReplaceCol replaces column references in an expression with a given value expression.
@@ -542,9 +557,9 @@ func listFilterExpr(
 	metadata partition.PartitionMetadata,
 ) ([]int, bool, error) {
 	expr = p.DeepCopyExpr(expr)
-	expr, err := ConvertFoldExprToNormal(expr)
-	if err != nil {
-		return nil, false, err
+	expr, canPrune := convertFoldExprToNormal(expr)
+	if !canPrune {
+		return nil, false, nil
 	}
 	return listFilterExprNormalized(proc, colPosition, expr, metadata)
 }
@@ -703,32 +718,52 @@ func appendCastBeforeExpr(ctx context.Context, expr *plan.Expr, typ plan.Type) (
 	}, nil
 }
 
-// ConvertFoldExprToNormal converts a folded expression to its normal form.
-// Handles both constant and vector expressions, converting them to their literal representations.
-func ConvertFoldExprToNormal(expr *plan.Expr) (*plan.Expr, error) {
+// convertFoldExprToNormal converts Fold values into expressions owned by the
+// general expression executor. The boolean is false when a Fold value cannot
+// be represented losslessly. Partition pruning is optional, so callers must
+// fail open instead of evaluating a partial or ambiguous conversion.
+func convertFoldExprToNormal(expr *plan.Expr) (*plan.Expr, bool) {
 	switch ef := expr.Expr.(type) {
 	case *plan.Expr_Fold:
+		if ef.Fold == nil {
+			return nil, false
+		}
 		if ef.Fold.IsConst {
-			c, err := getConstantFromBytes(ef.Fold.Data, expr.Typ)
-			if err != nil {
-				return expr, err
+			c, ok := getConstantFromBytes(ef.Fold.Data, expr.Typ)
+			if !ok {
+				return nil, false
 			}
 			return &plan.Expr{
 				Typ: expr.Typ,
 				Expr: &plan.Expr_Lit{
 					Lit: c,
 				},
-			}, nil
+			}, true
 		} else {
-			vec := vector.NewVec(types.T(expr.Typ.Id).ToType())
+			vec := vector.NewVec(types.T_any.ToType())
 			err := vec.UnmarshalBinary(ef.Fold.Data)
 			if err != nil {
-				return nil, err
+				return nil, false
+			}
+			vecType := vec.GetType()
+			if int32(vecType.Oid) != expr.Typ.Id || vecType.Scale != expr.Typ.Scale ||
+				(expr.Typ.Width != 0 && vecType.Width != expr.Typ.Width) ||
+				(expr.Typ.Charset != 0 && uint32(vecType.Charset) != expr.Typ.Charset) {
+				return nil, false
+			}
+			// InplaceSortAndCompact's ordinary value-only path does not move the
+			// null bitmap with the reordered payload. A nullable Fold could
+			// therefore turn {1, NULL} into {0, NULL} and make pruning omit the
+			// partition that contains 1. Nullable predicates retain their SQL
+			// residual filter, so failing open is both safe and cheaper than
+			// materializing a null-aware copy solely for optional pruning.
+			if vec.IsConstNull() || vec.GetNulls().Any() {
+				return nil, false
 			}
 			vec.InplaceSortAndCompact()
 			data, err := vec.MarshalBinary()
 			if err != nil {
-				return nil, err
+				return nil, false
 			}
 			return &plan.Expr{
 				Typ: expr.Typ,
@@ -738,126 +773,172 @@ func ConvertFoldExprToNormal(expr *plan.Expr) (*plan.Expr, error) {
 						Data: data,
 					},
 				},
-			}, nil
+			}, true
 		}
 
 	case *plan.Expr_F:
 		for i := range ef.F.Args {
-			newExpr, err := ConvertFoldExprToNormal(ef.F.Args[i])
-			if err != nil {
-				return nil, err
+			newExpr, ok := convertFoldExprToNormal(ef.F.Args[i])
+			if !ok {
+				return nil, false
 			}
 			ef.F.Args[i] = newExpr
 		}
-		return expr, nil
+		return expr, true
 
 	default:
-		return expr, nil
+		return expr, true
 	}
 }
 
-// getConstantFromBytes extracts a constant value from binary data.
-// Converts the binary data to a literal value based on the specified type.
-func getConstantFromBytes(data []byte, typ plan.Type) (*plan.Literal, error) {
-	if len(data) == 0 {
-		return nil, nil
+// ConvertFoldExprToNormal preserves the package's strict conversion API for
+// callers that require a normal expression. Partition-pruning callers use the
+// boolean form above because an unrepresentable optimization input is a safe
+// reason to scan all partitions, not a query error.
+func ConvertFoldExprToNormal(expr *plan.Expr) (*plan.Expr, error) {
+	normalized, ok := convertFoldExprToNormal(expr)
+	if !ok {
+		return nil, moerr.NewInvalidInputNoCtx("fold expression cannot be converted losslessly")
+	}
+	return normalized, nil
+}
+
+// getConstantFromBytes decodes the scalar encoding produced by
+// plan.getConstantBytes. A nil payload means SQL NULL or a scalar family the
+// producer could not encode; it never means an empty string. A non-nil empty
+// payload is a valid empty variable-length value. Fixed-width decoders use
+// unsafe loads, so validate the exact producer width before calling them.
+func getConstantFromBytes(data []byte, typ plan.Type) (*plan.Literal, bool) {
+	if data == nil {
+		return nil, false
 	}
 
-	switch types.T(typ.Id) {
+	oid := types.T(typ.Id)
+	switch oid {
+	case types.T_varchar, types.T_char, types.T_binary, types.T_varbinary,
+		types.T_text, types.T_blob, types.T_datalink:
+		return &plan.Literal{
+			Value: &plan.Literal_Sval{Sval: string(data)},
+		}, true
+	}
+
+	switch oid {
+	case types.T_bool, types.T_bit,
+		types.T_int8, types.T_int16, types.T_int32, types.T_int64,
+		types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64,
+		types.T_float32, types.T_float64,
+		types.T_date, types.T_time, types.T_datetime, types.T_timestamp,
+		types.T_decimal64, types.T_decimal128:
+		// These are the fixed-width scalar families represented by plan.Literal.
+	default:
+		return nil, false
+	}
+	if len(data) != oid.TypeLen() {
+		return nil, false
+	}
+
+	switch oid {
 	case types.T_bool:
 		val := types.DecodeBool(data)
 		return &plan.Literal{
 			Value: &plan.Literal_Bval{Bval: val},
-		}, nil
+		}, true
+
+	case types.T_bit:
+		val := types.DecodeUint64(data)
+		return &plan.Literal{
+			Value: &plan.Literal_U64Val{U64Val: val},
+		}, true
 
 	case types.T_int8:
 		val := types.DecodeInt8(data)
 		return &plan.Literal{
 			Value: &plan.Literal_I32Val{I32Val: int32(val)},
-		}, nil
+		}, true
 
 	case types.T_int16:
 		val := types.DecodeInt16(data)
 		return &plan.Literal{
 			Value: &plan.Literal_I32Val{I32Val: int32(val)},
-		}, nil
+		}, true
 
 	case types.T_int32:
 		val := types.DecodeInt32(data)
 		return &plan.Literal{
 			Value: &plan.Literal_I32Val{I32Val: val},
-		}, nil
+		}, true
 
 	case types.T_int64:
 		val := types.DecodeInt64(data)
 		return &plan.Literal{
 			Value: &plan.Literal_I64Val{I64Val: val},
-		}, nil
+		}, true
 
 	case types.T_uint8:
 		val := types.DecodeUint8(data)
 		return &plan.Literal{
 			Value: &plan.Literal_U32Val{U32Val: uint32(val)},
-		}, nil
+		}, true
 
 	case types.T_uint16:
 		val := types.DecodeUint16(data)
 		return &plan.Literal{
 			Value: &plan.Literal_U32Val{U32Val: uint32(val)},
-		}, nil
+		}, true
 
 	case types.T_uint32:
 		val := types.DecodeUint32(data)
 		return &plan.Literal{
 			Value: &plan.Literal_U32Val{U32Val: val},
-		}, nil
+		}, true
 
 	case types.T_uint64:
 		val := types.DecodeUint64(data)
 		return &plan.Literal{
 			Value: &plan.Literal_U64Val{U64Val: val},
-		}, nil
+		}, true
 
 	case types.T_float32:
 		val := types.DecodeFloat32(data)
 		return &plan.Literal{
 			Value: &plan.Literal_Fval{Fval: val},
-		}, nil
+		}, true
 
 	case types.T_float64:
 		val := types.DecodeFloat64(data)
 		return &plan.Literal{
 			Value: &plan.Literal_Dval{Dval: val},
-		}, nil
-
-	case types.T_varchar, types.T_char, types.T_text:
-		return &plan.Literal{
-			Value: &plan.Literal_Sval{Sval: string(data)},
-		}, nil
+		}, true
 
 	case types.T_date:
 		val := types.DecodeDate(data)
 		return &plan.Literal{
 			Value: &plan.Literal_Dateval{Dateval: int32(val)},
-		}, nil
+		}, true
+
+	case types.T_time:
+		val := types.DecodeTime(data)
+		return &plan.Literal{
+			Value: &plan.Literal_Timeval{Timeval: int64(val)},
+		}, true
 
 	case types.T_datetime:
 		val := types.DecodeDatetime(data)
 		return &plan.Literal{
 			Value: &plan.Literal_Datetimeval{Datetimeval: int64(val)},
-		}, nil
+		}, true
 
 	case types.T_timestamp:
 		val := types.DecodeTimestamp(data)
 		return &plan.Literal{
 			Value: &plan.Literal_Timestampval{Timestampval: int64(val)},
-		}, nil
+		}, true
 
 	case types.T_decimal64:
 		val := types.DecodeDecimal64(data)
 		return &plan.Literal{
 			Value: &plan.Literal_Decimal64Val{Decimal64Val: &plan.Decimal64{A: int64(val)}},
-		}, nil
+		}, true
 
 	case types.T_decimal128:
 		val := types.DecodeDecimal128(data)
@@ -866,9 +947,9 @@ func getConstantFromBytes(data []byte, typ plan.Type) (*plan.Literal, error) {
 				A: int64(val.B0_63),
 				B: int64(val.B64_127),
 			}},
-		}, nil
+		}, true
 
 	default:
-		return nil, nil
+		return nil, false
 	}
 }

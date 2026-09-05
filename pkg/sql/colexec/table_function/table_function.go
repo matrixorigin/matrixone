@@ -176,6 +176,8 @@ func (tableFunction *TableFunction) Prepare(proc *process.Process) error {
 		tblArg.ctr.state, err = checkConstraintsPrepare(proc, tblArg)
 	case "mo_current_roles":
 		tblArg.ctr.state, err = currentRolesPrepare(proc, tblArg)
+	case subscriptionTablesFunctionName, subscriptionColumnsFunctionName:
+		tblArg.ctr.state, err = subscriptionMetadataPrepare(proc, tblArg)
 	case "fulltext_index_scan":
 		tblArg.ctr.state, err = fulltextIndexScanPrepare(proc, tblArg)
 	case "fulltext_index_tokenize":

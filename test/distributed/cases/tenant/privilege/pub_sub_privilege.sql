@@ -26,6 +26,16 @@ create user if not exists sub_reader identified by '111' default role sub_reader
 
 -- grant privileges to role
 grant connect on account * to sub_reader_role;
+-- @session
+
+-- sub_reader user: subscription metadata is hidden without database/table privileges
+-- @session:id=2&user=acc_priv_test:sub_reader:sub_reader_role&password=111
+select count(*) from information_schema.tables where table_schema = 'sub_db';
+select count(*) from information_schema.columns where table_schema = 'sub_db';
+-- @session
+
+-- grant metadata and data privileges through the reader's active role
+-- @session:id=1&user=acc_priv_test:root&password=111
 grant show databases on account * to sub_reader_role;
 grant show tables on database sub_db to sub_reader_role;
 grant select on table sub_db.* to sub_reader_role with grant option;
@@ -37,6 +47,10 @@ select * from sub_db.t1 order by a;
 use sub_db;
 select * from t1 order by a;
 show tables;
+select table_schema, table_name from information_schema.tables
+where table_schema = 'sub_db' order by table_name;
+select table_schema, table_name, column_name, ordinal_position from information_schema.columns
+where table_schema = 'sub_db' order by table_name, ordinal_position;
 -- @session
 
 -- cleanup: acc_priv_test admin

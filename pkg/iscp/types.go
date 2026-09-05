@@ -90,6 +90,7 @@ type IterationContext struct {
 	jobNames  []string
 	jobIDs    []uint64
 	lsn       []uint64
+	stages    []int8
 	fromTS    types.TS
 	toTS      types.TS
 }
@@ -108,16 +109,23 @@ const (
 	JobStage_Running
 )
 
+// atomicInitLifecycleVersion marks job generations handled with the invariant
+// that InitSQL effects and the Init -> Running status transition share one
+// transaction. An absent/zero value means that invariant cannot be proven after
+// a restart; this includes legacy rows and fresh jobs not yet handled durably.
+const atomicInitLifecycleVersion uint64 = 1
+
 type JobStatus struct {
-	LSN       uint64
-	Stage     int8
-	TaskID    uint64
-	From      types.TS
-	To        types.TS
-	StartAt   types.TS
-	EndAt     types.TS
-	ErrorCode int
-	ErrorMsg  string
+	LSN              uint64
+	Stage            int8
+	LifecycleVersion uint64 `json:",omitempty"`
+	TaskID           uint64
+	From             types.TS
+	To               types.TS
+	StartAt          types.TS
+	EndAt            types.TS
+	ErrorCode        int
+	ErrorMsg         string
 }
 
 type InitWatermark struct {

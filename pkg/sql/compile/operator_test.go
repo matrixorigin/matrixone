@@ -40,6 +40,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergetop"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/multi_update"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/order"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/partition"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/preinsert"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/rightdedupjoin"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/shuffle"
@@ -460,6 +461,22 @@ func TestDupOperatorPartitionMultiUpdate(t *testing.T) {
 	if result == nil {
 		t.Fatal("dupOperator returned nil for PartitionMultiUpdate")
 	}
+}
+
+func TestPartitionConstructionAndDuplicationPreserveHashConfiguration(t *testing.T) {
+	node := &plan.Node{
+		PartitionAlgorithm: plan.Node_PARTITION_ALGORITHM_HASH,
+		SpillMem:           4096,
+		OrderBy:            []*plan.OrderBySpec{{Flag: plan.OrderBySpec_DESC}},
+	}
+	op := constructPartition(node)
+	require.Equal(t, node.PartitionAlgorithm, op.Algorithm)
+	require.Equal(t, node.SpillMem, op.SpillMem)
+
+	duplicated := dupOperator(op, 0, 1).(*partition.Partition)
+	defer duplicated.Release()
+	require.Equal(t, op.Algorithm, duplicated.Algorithm)
+	require.Equal(t, op.SpillMem, duplicated.SpillMem)
 }
 
 func TestHasPartitionedUpdateTargetChecksEveryMainContext(t *testing.T) {

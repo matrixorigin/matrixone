@@ -261,6 +261,7 @@ func TestFilterFencedIterationRemovesOnlyFencedJobs(t *testing.T) {
 		types.BuildTS(1, 0),
 		types.BuildTS(2, 0),
 	)
+	iter.stages = []int8{JobStage_Init, JobStage_Running}
 	require.NoError(t, exec.CancelAndDrainJobConsumer(context.Background(), 1, 2, "index_idx01", 10))
 
 	filtered := exec.filterFencedIteration(iter)
@@ -269,6 +270,7 @@ func TestFilterFencedIterationRemovesOnlyFencedJobs(t *testing.T) {
 	require.Equal(t, []string{"index_idx02"}, filtered.jobNames)
 	require.Equal(t, []uint64{20}, filtered.jobIDs)
 	require.Equal(t, []uint64{200}, filtered.lsn)
+	require.Equal(t, []int8{JobStage_Running}, filtered.stages)
 	require.True(t, filtered.fromTS.EQ(&iter.fromTS))
 	require.True(t, filtered.toTS.EQ(&iter.toTS))
 }
