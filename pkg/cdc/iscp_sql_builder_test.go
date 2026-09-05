@@ -32,7 +32,7 @@ func TestISCPLogSQLBuilderEscapesLiteralValues(t *testing.T) {
 	require.Contains(t, insertSQL, `"Path":"a\\\\b"`)
 	require.Contains(t, insertSQL, "can''t refresh")
 
-	updateSQL := CDCSQLBuilder.ISCPLogUpdateResultSQL(1, 2, jobName, 3, types.BuildTS(7, 8), jobStatus, 4, 9)
+	updateSQL := CDCSQLBuilder.ISCPLogUpdateResultSQL(1, 2, jobName, 3, types.BuildTS(7, 8), jobStatus, 4, 0, 3, 9)
 	require.Contains(t, updateSQL, "materialized_view_db_mv''quoted")
 	require.Contains(t, updateSQL, "can''t refresh")
 
