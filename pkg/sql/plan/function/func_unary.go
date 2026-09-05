@@ -468,14 +468,39 @@ func OrdString(val []byte) int64 {
 }
 
 func Ord(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) (err error) {
-	if ivecs[0].GetIsBin() {
-		return opUnaryBytesToFixed[int64](ivecs, result, proc, length, func(v []byte) int64 {
-			return int64(StringSingle(v))
+	if !ivecs[0].HasBinaryStringRows() {
+		binary := types.StaticStringDomain(*ivecs[0].GetType()) == types.StringDomainBinary || ivecs[0].GetIsBinaryString()
+		return opUnaryBytesToFixed[int64](ivecs, result, proc, length, func(value []byte) int64 {
+			if binary {
+				return int64(StringSingle(value))
+			}
+			return OrdString(value)
 		}, selectList)
 	}
-	return opUnaryBytesToFixed[int64](ivecs, result, proc, length, func(v []byte) int64 {
-		return OrdString(v)
-	}, selectList)
+
+	result.UseOptFunctionParamFrame(1)
+	rs := vector.MustFunctionResult[int64](result)
+	p := vector.OptGetBytesParamFromWrapper(rs, 0, ivecs[0])
+	values := vector.MustFixedColNoTypeCheck[int64](rs.GetResultVector())
+	nsp := rs.GetResultVector().GetNulls()
+
+	for i := uint64(0); i < uint64(length); i++ {
+		if selectList != nil && selectList.Contains(i) {
+			nsp.Add(i)
+			continue
+		}
+		value, isNull := p.GetStrValue(i)
+		if isNull {
+			nsp.Add(i)
+			continue
+		}
+		if ivecs[0].GetIsBinaryStringAt(int(i)) {
+			values[i] = int64(StringSingle(value))
+		} else {
+			values[i] = OrdString(value)
+		}
+	}
+	return nil
 }
 
 var (

@@ -362,6 +362,7 @@ type PrepareStmt struct {
 	hasLagLeadParams           bool
 	paramKinds                 []vector.PrepareParamKind
 	paramMetadata              []bool
+	paramBinaryStrings         []bool
 	// jsonComparisonParamPositions is computed once per prepared-plan
 	// generation. Only these parameters need an exact SQL type in Process
 	// metadata; paramConcreteTypes is a reusable execution buffer.

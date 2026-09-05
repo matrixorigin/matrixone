@@ -17,6 +17,7 @@ package function
 import (
 	"context"
 	"regexp"
+	"strings"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -138,7 +139,7 @@ func Test_BuiltIn_RegexpReplaceStartsAtRequestedPosition(t *testing.T) {
 }
 
 func Test_BuiltIn_RegexpBinaryPositions(t *testing.T) {
-	for _, oid := range []types.T{types.T_binary, types.T_varbinary} {
+	for _, oid := range []types.T{types.T_binary, types.T_varbinary, types.T_blob} {
 		t.Run(oid.String(), func(t *testing.T) {
 			proc := testutil.NewProcess(t)
 			subjectType := types.New(oid, 6, 0)
@@ -152,8 +153,6 @@ func Test_BuiltIn_RegexpBinaryPositions(t *testing.T) {
 				},
 				NewFunctionTestResult(types.T_int64.ToType(), false, []int64{4}, nil),
 				newOpBuiltInRegexp().builtInRegexpInstr)
-			instr.parameters[0].SetIsBin(true)
-			instr.parameters[1].SetIsBin(true)
 			ok, info := instr.Run()
 			require.True(t, ok, info)
 
@@ -167,8 +166,6 @@ func Test_BuiltIn_RegexpBinaryPositions(t *testing.T) {
 				},
 				NewFunctionTestResult(types.T_int64.ToType(), false, []int64{7}, nil),
 				newOpBuiltInRegexp().builtInRegexpInstr)
-			instrEnd.parameters[0].SetIsBin(true)
-			instrEnd.parameters[1].SetIsBin(true)
 			ok, info = instrEnd.Run()
 			require.True(t, ok, info)
 
@@ -180,8 +177,6 @@ func Test_BuiltIn_RegexpBinaryPositions(t *testing.T) {
 				},
 				NewFunctionTestResult(types.T_varbinary.ToType(), false, []string{"中"}, nil),
 				newOpBuiltInRegexp().builtInRegexpSubstr)
-			substr.parameters[0].SetIsBin(true)
-			substr.parameters[1].SetIsBin(true)
 			ok, info = substr.Run()
 			require.True(t, ok, info)
 
@@ -195,11 +190,221 @@ func Test_BuiltIn_RegexpBinaryPositions(t *testing.T) {
 				},
 				NewFunctionTestResult(types.T_varbinary.ToType(), false, []string{"中X"}, nil),
 				newOpBuiltInRegexp().builtInRegexpReplace)
-			replace.parameters[0].SetIsBin(true)
-			replace.parameters[1].SetIsBin(true)
-			replace.parameters[2].SetIsBin(true)
 			ok, info = replace.Run()
 			require.True(t, ok, info)
+		})
+	}
+}
+
+func Test_BuiltIn_RegexpBinaryMatcherStartsAtEveryByte(t *testing.T) {
+	op := newOpBuiltInRegexp()
+	subject := string([]byte{0xe4, 0xb8, 0xad, 0xff})
+
+	for pos, want := range [][]byte{{0xe4}, {0xb8}, {0xad}, {0xff}} {
+		matched, got, err := op.regMap.regularSubstrWithMode(".", subject, int64(pos+1), 1, true)
+		require.NoError(t, err)
+		require.True(t, matched)
+		require.Equal(t, want, []byte(got), "position %d", pos+1)
+	}
+
+	got, err := op.regMap.regularReplaceWithMode(".*", "中中", "X", 2, 1, true)
+	require.NoError(t, err)
+	require.Equal(t, []byte{0xe4, 'X'}, []byte(got))
+
+	got, err = op.regMap.regularReplaceWithMode(".", string([]byte{0xe4}), "中", 1, 0, true)
+	require.NoError(t, err)
+	require.Equal(t, "中", got)
+
+	for pos := int64(2); pos <= 3; pos++ {
+		matched, got, err := op.regMap.regularSubstrWithMode("^|.", "中", pos, 1, true)
+		require.NoError(t, err)
+		require.True(t, matched)
+		require.Equal(t, []byte{[]byte("中")[pos-1]}, []byte(got), "position %d", pos)
+	}
+
+	invalid := string([]byte{0xff, 0xfe})
+	for pos, want := range [][]byte{{0xff}, {0xfe}} {
+		matched, got, err := op.regMap.regularSubstrWithMode(".", invalid, int64(pos+1), 1, true)
+		require.NoError(t, err)
+		require.True(t, matched)
+		require.Equal(t, want, []byte(got))
+	}
+}
+
+func Test_BuiltIn_RegexpAnchorsRemainRelativeToOriginalSubject(t *testing.T) {
+	op := newOpBuiltInRegexp()
+
+	matched, _, err := op.regMap.regularSubstrWithMode("^", "abc", 2, 1, false)
+	require.NoError(t, err)
+	require.False(t, matched)
+
+	position, err := op.regMap.regularInstrWithMode("^", "abc", 2, 1, 0, false)
+	require.NoError(t, err)
+	require.Zero(t, position)
+
+	for _, tc := range []struct {
+		pattern string
+		value   string
+		pos     int64
+		want    string
+		matched bool
+	}{
+		{pattern: "$", value: "abc", pos: 2, want: "", matched: true},
+		{pattern: "(?m)^b", value: "a\nb", pos: 3, want: "b", matched: true},
+		{pattern: `\bb`, value: "ab b", pos: 2, want: "b", matched: true},
+	} {
+		matched, got, err := op.regMap.regularSubstrWithMode(tc.pattern, tc.value, tc.pos, 1, false)
+		require.NoError(t, err)
+		require.Equal(t, tc.matched, matched, tc.pattern)
+		require.Equal(t, tc.want, got, tc.pattern)
+	}
+}
+
+func Test_BuiltIn_RegexpUsesRowStringDomainAndSurvivesRebind(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	op := newOpBuiltInRegexp()
+	inputs := []FunctionTestInput{
+		NewFunctionTestInput(types.T_varchar.ToType(), []string{"中中", "中中"}, nil),
+		NewFunctionTestInput(types.T_varchar.ToType(), []string{"中", "中"}, nil),
+		NewFunctionTestInput(types.T_int64.ToType(), []int64{2, 2}, nil),
+	}
+
+	instr := NewFunctionTestCase(proc, inputs,
+		NewFunctionTestResult(types.T_int64.ToType(), false, []int64{4, 2}, nil),
+		op.builtInRegexpInstr)
+	require.NoError(t, instr.parameters[0].SetRuntimeStringDomainAtWithMP(0, types.RuntimeStringBinary, proc.Mp()))
+	ok, info := instr.Run()
+	require.True(t, ok, info)
+
+	substr := NewFunctionTestCase(proc, inputs,
+		NewFunctionTestResult(types.T_varchar.ToType(), false, []string{"中", "中"}, nil),
+		op.builtInRegexpSubstr)
+	require.NoError(t, substr.parameters[0].SetRuntimeStringDomainAtWithMP(0, types.RuntimeStringBinary, proc.Mp()))
+	ok, info = substr.Run()
+	require.True(t, ok, info)
+	require.True(t, substr.GetResultVectorDirectly().GetIsBinaryStringAt(0))
+	require.False(t, substr.GetResultVectorDirectly().GetIsBinaryStringAt(1))
+
+	// Reuse one operator and result wrapper as prepared execution does. Resetting
+	// the parameter domain must change semantics and clear the old result domain.
+	substr.parameters[0].SetIsBinaryString(false)
+	substr.expected.wanted = []string{"中", "中"}
+	ok, info = substr.Run()
+	require.True(t, ok, info)
+	require.False(t, substr.GetResultVectorDirectly().GetIsBinaryStringAt(0))
+	require.False(t, substr.GetResultVectorDirectly().GetIsBinaryStringAt(1))
+
+	substr.parameters[0].SetIsBinaryString(true)
+	ok, info = substr.Run()
+	require.True(t, ok, info)
+	require.True(t, substr.GetResultVectorDirectly().GetIsBinaryStringAt(0))
+
+	replace := NewFunctionTestCase(proc,
+		[]FunctionTestInput{
+			NewFunctionTestInput(types.T_varchar.ToType(), []string{"中中", "中中"}, nil),
+			NewFunctionTestInput(types.T_varchar.ToType(), []string{"中", "中"}, nil),
+			NewFunctionTestInput(types.T_varchar.ToType(), []string{"X", "X"}, nil),
+			NewFunctionTestInput(types.T_int64.ToType(), []int64{2, 2}, nil),
+			NewFunctionTestInput(types.T_int64.ToType(), []int64{1, 1}, nil),
+		},
+		NewFunctionTestResult(types.T_varchar.ToType(), false, []string{"中X", "中X"}, nil),
+		op.builtInRegexpReplace)
+	require.NoError(t, replace.parameters[0].SetRuntimeStringDomainAtWithMP(0, types.RuntimeStringBinary, proc.Mp()))
+	ok, info = replace.Run()
+	require.True(t, ok, info)
+	require.True(t, replace.GetResultVectorDirectly().GetIsBinaryStringAt(0))
+	require.False(t, replace.GetResultVectorDirectly().GetIsBinaryStringAt(1))
+}
+
+func Test_BuiltIn_RegexpHonorsSelectList(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	maskedSecond := &FunctionSelectList{AnyNull: true, SelectList: []bool{true, false}}
+	for _, tc := range []struct {
+		name     string
+		inputs   []FunctionTestInput
+		expected FunctionTestResult
+		fn       fEvalFn
+	}{
+		{
+			name: "instr",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(), []string{"a", "a"}, nil),
+				NewFunctionTestInput(types.T_varchar.ToType(), []string{"a", "["}, nil),
+			},
+			expected: NewFunctionTestResult(types.T_int64.ToType(), false, []int64{1, 0}, []bool{false, true}),
+			fn:       newOpBuiltInRegexp().builtInRegexpInstr,
+		},
+		{
+			name: "substr",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(), []string{"a", "a"}, nil),
+				NewFunctionTestInput(types.T_varchar.ToType(), []string{"a", "["}, nil),
+			},
+			expected: NewFunctionTestResult(types.T_varchar.ToType(), false, []string{"a", ""}, []bool{false, true}),
+			fn:       newOpBuiltInRegexp().builtInRegexpSubstr,
+		},
+		{
+			name: "replace",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(), []string{"a", "a"}, nil),
+				NewFunctionTestInput(types.T_varchar.ToType(), []string{"a", "["}, nil),
+				NewFunctionTestInput(types.T_varchar.ToType(), []string{"X", "X"}, nil),
+			},
+			expected: NewFunctionTestResult(types.T_varchar.ToType(), false, []string{"X", ""}, []bool{false, true}),
+			fn:       newOpBuiltInRegexp().builtInRegexpReplace,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ft := NewFunctionTestCase(proc, tc.inputs, tc.expected, tc.fn).WithSelectList(maskedSecond)
+			ok, info := ft.Run()
+			require.True(t, ok, info)
+		})
+	}
+}
+
+func TestRegexpFunctionsPreserveBinaryOverloadDomain(t *testing.T) {
+	for _, oid := range []types.T{types.T_binary, types.T_varbinary, types.T_blob} {
+		subject := types.New(oid, 32, 0)
+		for _, tc := range []struct {
+			name string
+			args []types.Type
+		}{
+			{name: "ord", args: []types.Type{subject}},
+			{name: "regexp_instr", args: []types.Type{subject, subject}},
+			{name: "regexp_substr", args: []types.Type{subject, subject}},
+			{name: "regexp_replace", args: []types.Type{subject, subject, subject}},
+		} {
+			resolved, err := GetFunctionByName(context.Background(), tc.name, tc.args)
+			require.NoError(t, err)
+			_, needsCast := resolved.ShouldDoImplicitTypeCast()
+			require.False(t, needsCast, "%s(%s)", tc.name, oid)
+			if tc.name == "regexp_substr" || tc.name == "regexp_replace" {
+				require.Equal(t, types.StringDomainBinary, types.StaticStringDomain(resolved.GetReturnType()))
+			}
+		}
+	}
+}
+
+func BenchmarkRegexpReplaceModes(b *testing.B) {
+	text := strings.Repeat("abc中", 1024)
+	ascii := strings.Repeat("abcx", 1024)
+	for _, tc := range []struct {
+		name   string
+		value  string
+		binary bool
+	}{
+		{name: "text_utf8", value: text},
+		{name: "binary_ascii", value: ascii, binary: true},
+		{name: "binary_utf8_bytes", value: text, binary: true},
+	} {
+		b.Run(tc.name, func(b *testing.B) {
+			op := newOpBuiltInRegexp()
+			b.ReportAllocs()
+			for i := 0; i < b.N; i++ {
+				if _, err := op.regMap.regularReplaceWithMode(".", tc.value, "X", 1, 0, tc.binary); err != nil {
+					b.Fatal(err)
+				}
+			}
 		})
 	}
 }
@@ -536,15 +741,15 @@ func Test_BuiltIn_DynamicRegexpPatternCacheOwnsKeys(t *testing.T) {
 // next data block. It finds another four-byte pattern whose map hash metadata
 // collides with "aaaa", making a borrowed, mutated map key deterministically
 // retrieve the regexp compiled for the preceding block.
-func findRegexpCacheHashCollision(t *testing.T, cache map[string]*regexp.Regexp, pattern []byte) string {
+func findRegexpCacheHashCollision(t *testing.T, cache map[regexpCacheKey]*regexp.Regexp, pattern []byte) string {
 	t.Helper()
 	require.Equal(t, "aaaa", string(pattern))
 
 	// Keep one stable entry in the map: Go may randomize a map's hash seed when
 	// its last entry is deleted, which would invalidate the collision found here.
-	cache["sentinel"] = regexp.MustCompile("sentinel")
+	cache[regexpCacheKey{pattern: "sentinel"}] = regexp.MustCompile("sentinel")
 	key := functionUtil.QuickBytesToStr(pattern)
-	cache[key] = regexp.MustCompile(key)
+	cache[regexpCacheKey{pattern: key}] = regexp.MustCompile(key)
 	for value := 1; value < 26*26*26*26; value++ {
 		n := value
 		for i := len(pattern) - 1; i >= 0; i-- {
@@ -553,8 +758,9 @@ func findRegexpCacheHashCollision(t *testing.T, cache map[string]*regexp.Regexp,
 		}
 
 		candidate := functionUtil.QuickBytesToStr(pattern)
-		if cached, ok := cache[candidate]; ok && !cached.MatchString(candidate) {
-			delete(cache, candidate)
+		candidateKey := regexpCacheKey{pattern: candidate}
+		if cached, ok := cache[candidateKey]; ok && !cached.MatchString(candidate) {
+			delete(cache, candidateKey)
 			require.Len(t, cache, 1)
 			return string(pattern)
 		}

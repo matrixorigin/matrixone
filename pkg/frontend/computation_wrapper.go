@@ -897,6 +897,16 @@ func binaryProtocolPrepareParamKind(
 	}
 }
 
+func binaryProtocolPrepareParamIsBinaryString(mysqlType defines.MysqlType) bool {
+	switch mysqlType {
+	case defines.MYSQL_TYPE_BLOB, defines.MYSQL_TYPE_TINY_BLOB,
+		defines.MYSQL_TYPE_MEDIUM_BLOB, defines.MYSQL_TYPE_LONG_BLOB:
+		return true
+	default:
+		return false
+	}
+}
+
 func applyBinaryDirectResultDecimalTypes(
 	ctx context.Context,
 	paramVals []any,
@@ -1405,6 +1415,7 @@ func initExecuteStmtParamWithResolverInSession(
 			clear(prepareStmt.paramKinds)
 		}
 		hasParamKind := false
+		hasBinaryString := false
 		hasConcreteType := false
 		if cap(prepareStmt.paramConcreteTypes) < paramCount {
 			prepareStmt.paramConcreteTypes = make([]types.T, paramCount)
@@ -1412,9 +1423,17 @@ func initExecuteStmtParamWithResolverInSession(
 			prepareStmt.paramConcreteTypes = prepareStmt.paramConcreteTypes[:paramCount]
 			clear(prepareStmt.paramConcreteTypes)
 		}
+		if cap(prepareStmt.paramBinaryStrings) < paramCount {
+			prepareStmt.paramBinaryStrings = make([]bool, paramCount)
+		} else {
+			prepareStmt.paramBinaryStrings = prepareStmt.paramBinaryStrings[:paramCount]
+			clear(prepareStmt.paramBinaryStrings)
+		}
 		directPositionIndex := 0
 		for i := 0; i < paramCount && i*2+1 < len(prepareStmt.ParamTypes); i++ {
 			mysqlType := defines.MysqlType(prepareStmt.ParamTypes[i*2])
+			prepareStmt.paramBinaryStrings[i] = binaryProtocolPrepareParamIsBinaryString(mysqlType)
+			hasBinaryString = hasBinaryString || prepareStmt.paramBinaryStrings[i]
 			isUnsigned := prepareStmt.ParamTypes[i*2+1]&0x80 != 0
 			kind := binaryProtocolPrepareParamKind(
 				mysqlType, isUnsigned, prepareStmt.params.GetRawBytesAt(i))
@@ -1445,10 +1464,15 @@ func initExecuteStmtParamWithResolverInSession(
 		if hasConcreteType {
 			prepareStmt.paramMetadata = cwft.proc.SetPrepareParamsWithReusableTypedMeta(
 				prepareStmt.params, nil, prepareStmt.paramKinds,
-				prepareStmt.paramConcreteTypes, prepareStmt.paramMetadata)
+				prepareStmt.paramConcreteTypes, prepareStmt.paramMetadata,
+				prepareStmt.paramBinaryStrings)
 		} else if hasParamKind {
 			prepareStmt.paramMetadata = cwft.proc.SetPrepareParamsWithReusableMeta(
-				prepareStmt.params, nil, prepareStmt.paramKinds, prepareStmt.paramMetadata)
+				prepareStmt.params, nil, prepareStmt.paramKinds, prepareStmt.paramMetadata,
+				prepareStmt.paramBinaryStrings)
+		} else if hasBinaryString {
+			cwft.proc.SetPrepareParamsWithMetadata(
+				prepareStmt.params, nil, prepareStmt.paramBinaryStrings)
 		} else {
 			cwft.proc.SetPrepareParams(prepareStmt.params)
 		}
@@ -1489,7 +1513,7 @@ func initExecuteStmtParamWithResolverInSession(
 		if len(execPlan.Args) != numParams {
 			return nil, nil, nil, originSQL, false, moerr.NewInvalidInput(reqCtx, "Incorrect arguments to EXECUTE")
 		}
-		params, paramVals, paramIsBin, paramKinds, paramTypes, err := buildExecuteUserParams(
+		params, paramVals, paramIsBin, paramBinaryString, paramKinds, paramTypes, err := buildExecuteUserParams(
 			cwft.proc, execPlan.Args, prepareStmt.jsonComparisonParamPositions)
 		if err != nil {
 			return nil, nil, nil, originSQL, false, err
@@ -1500,9 +1524,9 @@ func initExecuteStmtParamWithResolverInSession(
 		}
 		if paramTypes != nil {
 			cwft.proc.SetOwnedPrepareParamsWithTypedMeta(
-				params, paramIsBin, paramKinds, paramTypes)
+				params, paramIsBin, paramKinds, paramTypes, paramBinaryString)
 		} else {
-			cwft.proc.SetOwnedPrepareParamsWithMeta(params, paramIsBin, paramKinds)
+			cwft.proc.SetOwnedPrepareParamsWithMeta(params, paramIsBin, paramKinds, paramBinaryString)
 		}
 		cwft.paramVals = paramVals
 	} else {
@@ -2305,6 +2329,7 @@ func buildExecuteUserParams(
 	params *vector.Vector,
 	paramVals []any,
 	paramIsBin []bool,
+	paramBinaryString []bool,
 	paramKinds []vector.PrepareParamKind,
 	paramTypes []types.T,
 	err error,
@@ -2317,6 +2342,7 @@ func buildExecuteUserParams(
 	}()
 	paramVals = make([]any, len(args))
 	paramIsBin = make([]bool, len(args))
+	paramBinaryString = make([]bool, len(args))
 	paramKinds = make([]vector.PrepareParamKind, len(args))
 	for i, arg := range args {
 		exprImpl := arg.Expr.(*plan.Expr_V)
@@ -2328,6 +2354,14 @@ func buildExecuteUserParams(
 		resolveIsBin := proc.GetResolveVariableIsBinFunc()
 		if resolveIsBin != nil {
 			paramIsBin[i], err = resolveIsBin(exprImpl.V.Name, exprImpl.V.System, exprImpl.V.Global)
+			if err != nil {
+				return
+			}
+		}
+		resolveBinaryString := proc.GetResolveVariableBinaryStringFunc()
+		if resolveBinaryString != nil {
+			paramBinaryString[i], err = resolveBinaryString(
+				exprImpl.V.Name, exprImpl.V.System, exprImpl.V.Global)
 			if err != nil {
 				return
 			}
@@ -2364,30 +2398,39 @@ func buildExecuteUserParams(
 			PrepareParamKind:    paramKinds[i],
 			EnableNumericPrefix: currentProtocolVersion(proc) >= defines.MORPCVersion30,
 		}
-		if paramIsBin[i] {
+		if paramBinaryString[i] && arg.Typ.Id != 0 {
+			paramValue.SourceType = executeArgumentSourceType(arg.Typ)
+			paramValue.HasSourceType = true
+		} else if paramBinaryString[i] {
+			paramValue.SourceType = types.T_varbinary.ToType()
+			paramValue.HasSourceType = true
+		} else if paramIsBin[i] {
 			// User variables assigned from binary literals retain a binary SQL
 			// result domain even when the EXECUTE argument itself is untyped.
 			paramValue.SourceType = types.T_varbinary.ToType()
 			paramValue.HasSourceType = true
 		} else if arg.Typ.Id != 0 {
-			sourceOID := types.T(arg.Typ.Id)
-			if arg.Typ.Charset == uint32(types.CharsetBinary) {
-				switch sourceOID {
-				case types.T_char:
-					sourceOID = types.T_binary
-				case types.T_varchar:
-					sourceOID = types.T_varbinary
-				case types.T_text:
-					sourceOID = types.T_blob
-				}
-			}
-			paramValue.SourceType = types.NewWithCharset(
-				sourceOID, arg.Typ.Width, arg.Typ.Scale, uint8(arg.Typ.Charset))
+			paramValue.SourceType = executeArgumentSourceType(arg.Typ)
 			paramValue.HasSourceType = true
 		}
 		paramVals[i] = paramValue
 	}
 	return
+}
+
+func executeArgumentSourceType(typ plan.Type) types.Type {
+	sourceOID := types.T(typ.Id)
+	if typ.Charset == uint32(types.CharsetBinary) {
+		switch sourceOID {
+		case types.T_char:
+			sourceOID = types.T_binary
+		case types.T_varchar:
+			sourceOID = types.T_varbinary
+		case types.T_text:
+			sourceOID = types.T_blob
+		}
+	}
+	return types.NewWithCharset(sourceOID, typ.Width, typ.Scale, uint8(typ.Charset))
 }
 
 func shouldCachePrepareCompile(p *plan.Plan) bool {

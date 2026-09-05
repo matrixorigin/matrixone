@@ -823,7 +823,6 @@ func TestOrdBinaryUsesFirstOctet(t *testing.T) {
 				},
 				NewFunctionTestResult(types.T_int64.ToType(), false, []int64{0xC3, 0xE4, 0}, nil),
 				Ord)
-			tc.parameters[0].SetIsBin(true)
 			ok, info := tc.Run()
 			require.True(t, ok, info)
 		})
