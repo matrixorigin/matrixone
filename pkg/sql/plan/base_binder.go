@@ -3268,7 +3268,8 @@ func validateJSONValueTargetSyntax(ctx context.Context, target *tree.T) error {
 	name := strings.ToLower(target.InternalType.FamilyString)
 	switch name {
 	case "float", "double", "real":
-		if target.InternalType.DisplayWith != tree.DefaultDisplayWidth || target.InternalType.Scale != tree.NotDefineDec {
+		if (target.InternalType.DisplayWith != tree.NotDefineDisplayWidth &&
+			target.InternalType.DisplayWith != tree.DefaultDisplayWidth) || target.InternalType.Scale != tree.NotDefineDec {
 			return moerr.NewInvalidInputf(ctx, "JSON_VALUE RETURNING %s does not accept precision or scale", name)
 		}
 	case "year":
