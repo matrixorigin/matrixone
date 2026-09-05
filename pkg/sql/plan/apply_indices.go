@@ -2153,6 +2153,9 @@ func (builder *QueryBuilder) applyIndicesForFiltersRegularIndex(nodeID int32, no
 	if len(node.FilterList) == 0 || len(node.TableDef.Indexes) == 0 {
 		return nodeID
 	}
+	if functionalID, applied := builder.applyFunctionalIndexEquality(nodeID, node); applied {
+		return functionalID
+	}
 
 	forceIndex := builder.scanHintsForceIndexes(node)
 	for i := range node.FilterList { // if already have filter on first pk column and have a good selectivity, no need to go index
@@ -2320,6 +2323,73 @@ func (builder *QueryBuilder) applyIndicesForFiltersRegularIndex(nodeID int32, no
 
 	//no index applied
 	return nodeID
+}
+
+// applyFunctionalIndexEquality handles the deliberately narrow v1 functional
+// index rule. The generated expression is replaced only in a private clone of
+// the equality used to probe the index table; the original predicate remains
+// on the base-table scan as a residual, so malformed/stale metadata can never
+// change query results. Range, IN, OR and covering/index-only paths are left to
+// the ordinary planner and therefore fail closed.
+func (builder *QueryBuilder) applyFunctionalIndexEquality(nodeID int32, node *plan.Node) (int32, bool) {
+	if builder == nil || node == nil || node.TableDef == nil || len(node.BindingTags) == 0 {
+		return nodeID, false
+	}
+	indexes := make([]*IndexDef, 0)
+	for _, idxDef := range node.TableDef.Indexes {
+		if idxDef == nil || !idxDef.TableExist || !isFunctionalIndexDef(node.TableDef, idxDef) {
+			continue
+		}
+		indexes = append(indexes, idxDef)
+	}
+	indexes = builder.filterRegularIndexesByScanHints(node, indexes)
+	if len(indexes) == 0 {
+		return nodeID, false
+	}
+	scanSnapshot := node.ScanSnapshot
+	if scanSnapshot == nil {
+		scanSnapshot = &Snapshot{}
+	}
+	for _, idxDef := range indexes {
+		generated, hiddenPos, ok := functionalIndexQueryExpr(node.TableDef, idxDef)
+		if !ok {
+			continue
+		}
+		for filterIdx, filter := range node.FilterList {
+			fn := filter.GetF()
+			if fn == nil || fn.Func == nil || fn.Func.ObjName != "=" || len(fn.Args) != 2 {
+				continue
+			}
+			columnArg, constantArg := fn.Args[0], fn.Args[1]
+			if columnArg == nil || constantArg == nil {
+				continue
+			}
+			if isRuntimeConstExpr(columnArg) && !isRuntimeConstExpr(constantArg) {
+				columnArg, constantArg = constantArg, columnArg
+			}
+			if isRuntimeConstExpr(columnArg) || !isRuntimeConstExpr(constantArg) || !functionalExpressionMatches(generated, columnArg) {
+				continue
+			}
+			probe := DeepCopyExpr(filter)
+			probeFn := probe.GetF()
+			if probeFn == nil || len(probeFn.Args) != 2 {
+				continue
+			}
+			if isRuntimeConstExpr(probeFn.Args[0]) {
+				probeFn.Args[0], probeFn.Args[1] = probeFn.Args[1], probeFn.Args[0]
+			}
+			probeFn.Args[0] = GetColExpr(node.TableDef.Cols[hiddenPos].Typ, node.BindingTags[0], hiddenPos)
+			original := node.FilterList[filterIdx]
+			node.FilterList[filterIdx] = probe
+			joinedID, indexScanID := builder.applyIndexJoin(idxDef, node, EqualIndexCondition, []int32{int32(filterIdx)}, scanSnapshot)
+			node.FilterList[filterIdx] = original
+			if indexScanID != -1 {
+				builder.applyExtraFiltersOnIndex(idxDef, node, builder.qry.Nodes[indexScanID], []int32{int32(filterIdx)})
+				return joinedID, true
+			}
+		}
+	}
+	return nodeID, false
 }
 
 func (builder *QueryBuilder) applyExtraFiltersOnIndex(idxDef *IndexDef, node *plan.Node, idxTableNode *plan.Node, filterIdx []int32) {

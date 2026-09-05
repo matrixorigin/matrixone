@@ -16,6 +16,7 @@ package plan
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"strings"
@@ -79,6 +80,15 @@ func constructCreateTableSQL(
 	sourceSubscription *SubscriptionMeta,
 ) (string, tree.Statement, error) {
 	var err error
+	if tableDef != nil {
+		validationCtx := context.Background()
+		if ctx != nil {
+			validationCtx = ctx.GetContext()
+		}
+		if err := validateFunctionalIndexMetadata(validationCtx, tableDef); err != nil {
+			return "", nil, err
+		}
+	}
 	var createStr string
 	sqlMode := ""
 	if ctx != nil {
@@ -389,25 +399,35 @@ func constructCreateTableSQL(
 				}
 				indexStr += "("
 				rewriteIndexStr += "("
-				i := 0
-				for _, part := range indexdef.Parts {
-					if catalog.IsAlias(part) {
-						continue
-					}
-					if i > 0 {
-						indexStr += ","
-						rewriteIndexStr += ","
-					}
+				if origin, ok := functionalIndexOrigin(tableDef, indexdef); ok {
+					// Functional indexes are backed by a reserved hidden generated
+					// column. Render the original expression and never leak that
+					// implementation name into SHOW CREATE/clone DDL.
+					indexStr += "(" + origin + ")"
+					rewriteIndexStr += "(" + origin + ")"
+				} else if hasFunctionalIndexColumnPart(indexdef) {
+					return "", nil, moerr.NewInternalError(ctx.GetContext(), "functional index has incomplete generated-column metadata")
+				} else {
+					i := 0
+					for _, part := range indexdef.Parts {
+						if catalog.IsAlias(part) {
+							continue
+						}
+						if i > 0 {
+							indexStr += ","
+							rewriteIndexStr += ","
+						}
 
-					originPart := colNameToOriginName[part]
-					indexStr += sqlquote.Ident(originPart)
-					rewriteIndexStr += sqlquote.Ident(originPart)
-					if length, ok := prefixLengths[part]; ok {
-						prefixLength := fmt.Sprintf("(%d)", length)
-						indexStr += prefixLength
-						rewriteIndexStr += prefixLength
+						originPart := colNameToOriginName[part]
+						indexStr += sqlquote.Ident(originPart)
+						rewriteIndexStr += sqlquote.Ident(originPart)
+						if length, ok := prefixLengths[part]; ok {
+							prefixLength := fmt.Sprintf("(%d)", length)
+							indexStr += prefixLength
+							rewriteIndexStr += prefixLength
+						}
+						i++
 					}
-					i++
 				}
 
 				indexStr += ")"

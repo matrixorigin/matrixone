@@ -1219,7 +1219,7 @@ func checkTableColumnNameValid(name string) bool {
 	if name == catalog.Row_ID || name == catalog.CPrimaryKeyColName ||
 		name == catalog.TableTailAttrDeleteRowID || name == catalog.TableTailAttrAborted ||
 		name == catalog.TableTailAttrPKVal || name == catalog.TableTailAttrCommitTs ||
-		catalog.IsAlias(name) {
+		catalog.IsAlias(name) || catalog.IsFunctionalIndexColumnName(name) {
 		return false
 	}
 	return true

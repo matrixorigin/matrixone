@@ -2358,6 +2358,45 @@ func TestBuildCreateIndexStatementsFromMoIndexes_FullTextParserAndCatalogOrder(t
 	}, got)
 }
 
+func TestBuildCreateIndexStatementsFromMoIndexes_FunctionalIndex(t *testing.T) {
+	internalName := catalog.FunctionalIndexColumnPrefix + "0123456789abcdef0123456789abcdef"
+	view := &LogicalTableView{
+		Headers: append([]string{"object", "block", "row"}, moIndexesHeaders...),
+		Rows: [][]string{func() []string {
+			data := make([]string, len(moIndexesHeaders))
+			set := func(header, value string) {
+				for i, h := range moIndexesHeaders {
+					if h == header {
+						data[i] = value
+						return
+					}
+				}
+				t.Fatalf("missing mo_indexes header %s", header)
+			}
+			set("id", "1")
+			set("table_id", "42")
+			set("name", "idx_doc_sku")
+			set("type", "MULTIPLE")
+			set(catalog.IndexAlgoName, "")
+			set("column_name", internalName)
+			set("ordinal_position", "1")
+			set("hidden", "1")
+			return append([]string{"obj", "0", "1"}, data...)
+		}()},
+	}
+
+	got, err := buildCreateIndexStatementsFromMoIndexesWithGenerated(
+		view, 42, "docs", map[string]string{internalName: "json_unquote(json_extract(doc, '$.sku'))"},
+	)
+	require.NoError(t, err)
+	require.Equal(t, []string{
+		"ALTER TABLE `docs` ADD KEY `idx_doc_sku`((json_unquote(json_extract(doc, '$.sku'))));",
+	}, got)
+
+	_, err = buildCreateIndexStatementsFromMoIndexesWithGenerated(view, 42, "docs", nil)
+	require.Error(t, err)
+}
+
 func TestDecodeMoColumnEncodedSQLType_TemporalScale(t *testing.T) {
 	sqlType, ok := decodeMoColumnEncodedSQLType(encodedSQLType(t, types.New(types.T_time, 0, 6)))
 	require.True(t, ok)
