@@ -507,7 +507,11 @@ func TestEnumToJSONQuotesDisplayValueDuringBinding(t *testing.T) {
 
 				expr := pl.GetQuery().Nodes[1].ProjectList[0]
 				require.Equal(t, int32(types.T_json), expr.Typ.Id, sql)
-				quoted := expr.GetF()
+				cast := expr.GetF()
+				require.NotNil(t, cast, sql)
+				require.Equal(t, "cast", cast.Func.ObjName, sql)
+				require.Len(t, cast.Args, 2, sql)
+				quoted := cast.Args[0].GetF()
 				require.NotNil(t, quoted, sql)
 				require.Equal(t, "json_quote", quoted.Func.ObjName, sql)
 				require.Len(t, quoted.Args, 1, sql)
@@ -782,17 +786,20 @@ func TestEnumDisplayValueToJSONUsesJSONQuoteInPlannerCasts(t *testing.T) {
 	expr, err := makePlan2CastExpr(ctx, DeepCopyExpr(displayExpr), jsonType)
 	require.NoError(t, err)
 	require.Equal(t, int32(types.T_json), expr.Typ.Id)
-	require.Equal(t, "json_quote", expr.GetF().Func.ObjName)
+	require.Equal(t, "cast", expr.GetF().Func.ObjName)
+	require.Equal(t, "json_quote", expr.GetF().Args[0].GetF().Func.ObjName)
 
 	expr, err = forceAssignmentCastExpr(ctx, DeepCopyExpr(displayExpr), jsonType)
 	require.NoError(t, err)
 	require.Equal(t, int32(types.T_json), expr.Typ.Id)
-	require.Equal(t, "json_quote", expr.GetF().Func.ObjName)
+	require.Equal(t, "cast", expr.GetF().Func.ObjName)
+	require.Equal(t, "json_quote", expr.GetF().Args[0].GetF().Func.ObjName)
 
 	expr, err = forceCastExpr2(ctx, DeepCopyExpr(displayExpr), types.T_json.ToType(), &plan.Expr{Typ: jsonType})
 	require.NoError(t, err)
 	require.Equal(t, int32(types.T_json), expr.Typ.Id)
-	require.Equal(t, "json_quote", expr.GetF().Func.ObjName)
+	require.Equal(t, "cast", expr.GetF().Func.ObjName)
+	require.Equal(t, "json_quote", expr.GetF().Args[0].GetF().Func.ObjName)
 }
 
 func TestRawMySQLSpecialTypeToJSONUsesDisplayValue(t *testing.T) {
@@ -815,9 +822,9 @@ func TestRawMySQLSpecialTypeToJSONUsesDisplayValue(t *testing.T) {
 		)
 		require.NoError(t, err)
 		require.True(t, rewritten)
-		require.Equal(t, "json_quote", got.GetF().Func.ObjName)
-		require.Len(t, got.GetF().Args, 1)
-		require.True(t, isEnumOrSetDisplayValueExpr(got.GetF().Args[0]))
+		require.Equal(t, "cast", got.GetF().Func.ObjName)
+		require.Equal(t, "json_quote", got.GetF().Args[0].GetF().Func.ObjName)
+		require.True(t, isEnumOrSetDisplayValueExpr(got.GetF().Args[0].GetF().Args[0]))
 	}
 }
 
@@ -833,15 +840,18 @@ func TestSetDisplayValueToJSONUsesJSONQuoteInPlannerCasts(t *testing.T) {
 
 	expr, err := makePlan2CastExpr(ctx, DeepCopyExpr(displayExpr), jsonType)
 	require.NoError(t, err)
-	require.Equal(t, "json_quote", expr.GetF().Func.ObjName)
+	require.Equal(t, "cast", expr.GetF().Func.ObjName)
+	require.Equal(t, "json_quote", expr.GetF().Args[0].GetF().Func.ObjName)
 
 	expr, err = forceAssignmentCastExpr(ctx, DeepCopyExpr(displayExpr), jsonType)
 	require.NoError(t, err)
-	require.Equal(t, "json_quote", expr.GetF().Func.ObjName)
+	require.Equal(t, "cast", expr.GetF().Func.ObjName)
+	require.Equal(t, "json_quote", expr.GetF().Args[0].GetF().Func.ObjName)
 
 	expr, err = forceCastExpr2(ctx, DeepCopyExpr(displayExpr), types.T_json.ToType(), &plan.Expr{Typ: jsonType})
 	require.NoError(t, err)
-	require.Equal(t, "json_quote", expr.GetF().Func.ObjName)
+	require.Equal(t, "cast", expr.GetF().Func.ObjName)
+	require.Equal(t, "json_quote", expr.GetF().Args[0].GetF().Func.ObjName)
 }
 
 func TestSetDisplayValueNumericCastUsesStoredBitmap(t *testing.T) {

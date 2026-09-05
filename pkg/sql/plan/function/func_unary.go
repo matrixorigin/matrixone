@@ -986,14 +986,42 @@ func Empty(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *pr
 
 func JsonQuote(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	single := func(str string) ([]byte, error) {
-		bj, err := types.ParseStringToByteJson(strconv.Quote(str))
-		if err != nil {
-			return nil, err
+		if !utf8.ValidString(str) {
+			return nil, moerr.NewInvalidInput(proc.Ctx, "invalid utf-8 string for json_quote")
 		}
-		return bj.Marshal()
+		return appendJSONQuotedString(nil, str), nil
 	}
 
 	return opUnaryStrToBytesWithErrorCheck(ivecs, result, proc, length, single, selectList)
+}
+
+func appendJSONQuotedString(dst []byte, str string) []byte {
+	const hex = "0123456789abcdef"
+	dst = append(dst, '"')
+	for i := 0; i < len(str); i++ {
+		c := str[i]
+		switch c {
+		case '"', '\\':
+			dst = append(dst, '\\', c)
+		case '\b':
+			dst = append(dst, '\\', 'b')
+		case '\f':
+			dst = append(dst, '\\', 'f')
+		case '\n':
+			dst = append(dst, '\\', 'n')
+		case '\r':
+			dst = append(dst, '\\', 'r')
+		case '\t':
+			dst = append(dst, '\\', 't')
+		default:
+			if c < 0x20 {
+				dst = append(dst, '\\', 'u', '0', '0', hex[c>>4], hex[c&0x0f])
+			} else {
+				dst = append(dst, c)
+			}
+		}
+	}
+	return append(dst, '"')
 }
 
 func JsonUnquote(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {

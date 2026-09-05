@@ -1,32 +1,108 @@
 select json_quote('a');
-json_quote(a)
+➤ json_quote(a)[12,8,0]  𝄀
 "a"
 select json_quote('a"');
-json_quote(a")
+➤ json_quote(a")[12,14,0]  𝄀
 "a\""
 select json_quote('a"b');
-json_quote(a"b)
+➤ json_quote(a"b)[12,20,0]  𝄀
 "a\"b"
 select json_quote(null);
-json_quote(null)
+➤ json_quote(null)[12,8,0]  𝄀
 null
 create table t1 (a varchar(10));
 insert into t1 values ('a'), ('a"'), ('a"b'), (null);
 select json_quote(a) from t1;
-json_quote(a)
-"a"
-"a\""
-"a\"b"
+➤ json_quote(a)[12,62,0]  𝄀
+"a"  𝄀
+"a\""  𝄀
+"a\"b"  𝄀
 null
 select json_quote('xax') from t1;
-json_quote(xax)
-"xax"
-"xax"
-"xax"
+➤ json_quote(xax)[12,20,0]  𝄀
+"xax"  𝄀
+"xax"  𝄀
+"xax"  𝄀
 "xax"
 select json_quote(null) from t1;
-json_quote(null)
+➤ json_quote(null)[12,8,0]  𝄀
+null  𝄀
+null  𝄀
+null  𝄀
 null
+select hex(json_quote(char(65, 0, 1, 31, 66)));
+➤ hex(json_quote(char(65, 0, 1, 31, 66)))[12,65535,0]  𝄀
+22415C75303030305C75303030315C75303031664222
+select hex(json_quote(char(65, 127, 66)));
+➤ hex(json_quote(char(65, 127, 66)))[12,65535,0]  𝄀
+22417F4222
+select hex(json_quote('你好'));
+➤ hex(json_quote(你好))[12,65535,0]  𝄀
+22E4BDA0E5A5BD22
+select char_length(json_quote('abc'));
+➤ char_length(json_quote(abc))[-5,64,0]  𝄀
+5
+select concat(json_quote('abc'), 'x');
+➤ concat(json_quote(abc), x)[12,21,0]  𝄀
+"abc"x
+select json_quote('abc') = '"abc"', json_quote('abc') = 'abc';
+➤ json_quote(abc) = "abc"[-7,1,0]  ¦  json_quote(abc) = abc[-7,1,0]  𝄀
+1  ¦  0
+select json_unquote(json_quote('a"b\\c'));
+➤ json_unquote(json_quote(a"b\\c))[12,65535,0]  𝄀
+a"b\c
+prepare json_quote_stmt from 'select json_quote(?)';
+set @json_quote_value = 'a"b';
+execute json_quote_stmt using @json_quote_value;
+➤ json_quote(?)[-1,98300,0]  𝄀
+"a\"b"
+deallocate prepare json_quote_stmt;
+prepare json_quote_length_stmt from 'select length(json_quote(?))';
+set @json_quote_value = repeat('a', 16383);
+execute json_quote_length_stmt using @json_quote_value;
+➤ length(json_quote(?))[-5,64,0]  𝄀
+16385
+set @json_quote_value = repeat('a', 16384);
+execute json_quote_length_stmt using @json_quote_value;
+➤ length(json_quote(?))[-5,64,0]  𝄀
+16386
+set @json_quote_value = repeat(char(1), 16384);
+execute json_quote_length_stmt using @json_quote_value;
+➤ length(json_quote(?))[-5,64,0]  𝄀
+98306
+deallocate prepare json_quote_length_stmt;
+drop table if exists json_quote_ctas;
+create table json_quote_ctas as select json_quote('abc') as quoted;
+select data_type, character_maximum_length from information_schema.columns where table_schema = database() and table_name = 'json_quote_ctas' and column_name = 'quoted';
+➤ data_type[12,65535,0]  ¦  character_maximum_length[-5,64,0]  𝄀
+varchar  ¦  20
+select quoted, hex(quoted), char_length(quoted) from json_quote_ctas;
+➤ quoted[12,20,0]  ¦  hex(quoted)[12,65535,0]  ¦  char_length(quoted)[-5,64,0]  𝄀
+"abc"  ¦  2261626322  ¦  5
+drop table json_quote_ctas;
+drop table if exists json_quote_null_ctas;
+create table json_quote_null_ctas as select json_quote(null) as quoted;
+select data_type, character_maximum_length from information_schema.columns where table_schema = database() and table_name = 'json_quote_null_ctas' and column_name = 'quoted';
+➤ data_type[12,65535,0]  ¦  character_maximum_length[-5,64,0]  𝄀
+varchar  ¦  2
+select quoted from json_quote_null_ctas;
+➤ quoted[12,8,0]  𝄀
 null
-null
-null
+drop table json_quote_null_ctas;
+drop table if exists json_quote_text_ctas;
+drop table if exists json_quote_text_source;
+create table json_quote_text_source (v text);
+insert into json_quote_text_source values (repeat(char(1), 65535));
+select length(v), length(json_quote(v)), hex(left(json_quote(v), 7)), hex(right(json_quote(v), 7)) from json_quote_text_source;
+➤ length(v)[-5,64,0]  ¦  length(json_quote(v))[-5,64,0]  ¦  hex(left(json_quote(v), 7))[12,65535,0]  ¦  hex(right(json_quote(v), 7))[12,65535,0]  𝄀
+65535  ¦  393212  ¦  225C7530303031  ¦  5C753030303122
+create table json_quote_text_ctas as select json_quote(v) as quoted from json_quote_text_source;
+select data_type, character_maximum_length from information_schema.columns where table_schema = database() and table_name = 'json_quote_text_ctas' and column_name = 'quoted';
+➤ data_type[12,65535,0]  ¦  character_maximum_length[-5,64,0]  𝄀
+text  ¦  2147483647
+select length(quoted), hex(left(quoted, 7)), hex(right(quoted, 7)) from json_quote_text_ctas;
+➤ length(quoted)[-5,64,0]  ¦  hex(left(quoted, 7))[12,65535,0]  ¦  hex(right(quoted, 7))[12,65535,0]  𝄀
+393212  ¦  225C7530303031  ¦  5C753030303122
+drop table json_quote_text_ctas;
+drop table json_quote_text_source;
+drop table t1;
