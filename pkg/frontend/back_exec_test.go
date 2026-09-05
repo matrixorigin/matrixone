@@ -55,6 +55,19 @@ func TestBindBackExecSession(t *testing.T) {
 	require.Equal(t, "real_tmp1", realName)
 }
 
+func TestBackSessionInheritsCNLabels(t *testing.T) {
+	ses := newFeatureLimitTestSession(t)
+	ses.requestLabel = map[string]string{"account": "tp", "role": "tp"}
+
+	backSes := (&backSession{}).initFeSes(ses, nil, "", nil)
+	require.Equal(t, ses.requestLabel, backSes.getCNLabels())
+
+	ses.requestLabel["role"] = "ap"
+	require.Equal(t, "tp", backSes.getCNLabels()["role"])
+	backSes.getCNLabels()["account"] = "other"
+	require.Equal(t, "tp", ses.requestLabel["account"])
+}
+
 func TestBackSessionInheritsForeignKeyChecks(t *testing.T) {
 	ctx := context.Background()
 	ses := newFeatureLimitTestSession(t)

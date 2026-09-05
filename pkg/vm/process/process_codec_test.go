@@ -93,6 +93,7 @@ func newCodecTestProcess(t *testing.T) (*Process, client.TxnOperator) {
 		SessionId:                           uuid.MustParse("11111111-2222-3333-4444-555555555555"),
 		ExplicitZeroTemporalCastReturnsNull: true,
 		SqlMode:                             "STRICT_TRANS_TABLES",
+		CNLabels:                            map[string]string{"account": "tp", "role": "tp"},
 	}
 	sp := NewStmtProfile(uuid.MustParse("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"), uuid.MustParse("bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"))
 	sp.SetTxnId([]byte("txn-profile-123456"))
@@ -145,6 +146,7 @@ func TestProcessCodecHelpers(t *testing.T) {
 			MatrixoneNativeMode:                 true,
 			ExplicitZeroTemporalCastReturnsNull: true,
 			SqlMode:                             "STRICT_ALL_TABLES",
+			CnLabels:                            map[string]string{"role": "tp"},
 		})
 		require.NoError(t, err)
 		require.Equal(t, "u", info.User)
@@ -153,6 +155,7 @@ func TestProcessCodecHelpers(t *testing.T) {
 		require.True(t, info.LockWaitTimeoutSet)
 		require.True(t, info.ExplicitZeroTemporalCastReturnsNull)
 		require.Equal(t, "STRICT_ALL_TABLES", info.SqlMode)
+		require.Equal(t, map[string]string{"role": "tp"}, info.CNLabels)
 		require.Equal(t, "UTC", info.TimeZone.String())
 
 		info, err = ConvertToProcessSessionInfo(pipeline.SessionInfo{TimeZone: []byte("bad")})
@@ -250,6 +253,7 @@ func TestBuildProcessInfoAndMockProcessInfoWithPro(t *testing.T) {
 	require.True(t, info.SessionInfo.MatrixoneNativeMode)
 	require.True(t, info.SessionInfo.ExplicitZeroTemporalCastReturnsNull)
 	require.Equal(t, "STRICT_TRANS_TABLES", info.SessionInfo.SqlMode)
+	require.Equal(t, map[string]string{"account": "tp", "role": "tp"}, info.SessionInfo.CnLabels)
 	require.True(t, info.SessionInfo.LockWaitTimeoutSet)
 	require.Equal(t, pipeline.SessionLoggerInfo_Warn, info.SessionLogger.LogLevel)
 
@@ -299,6 +303,7 @@ func TestCodecServiceEncodeDecodeAndLookup(t *testing.T) {
 	require.Equal(t, info.SessionInfo.MatrixoneNativeMode, decodedProc.Base.SessionInfo.MatrixOneNativeMode)
 	require.True(t, decodedProc.Base.SessionInfo.ExplicitZeroTemporalCastReturnsNull)
 	require.Equal(t, info.SessionInfo.SqlMode, decodedProc.Base.SessionInfo.SqlMode)
+	require.Equal(t, info.SessionInfo.CnLabels, decodedProc.Base.SessionInfo.CNLabels)
 	require.Equal(t, info.SessionInfo.LockWaitTimeoutSet, decodedProc.Base.SessionInfo.LockWaitTimeoutSet)
 	require.NotNil(t, decodedProc.GetPrepareParams())
 	require.Equal(t, 2, decodedProc.GetPrepareParams().Length())
@@ -309,6 +314,17 @@ func TestCodecServiceEncodeDecodeAndLookup(t *testing.T) {
 	require.Equal(t, vector.PrepareParamNone, decodedProc.GetPrepareParamKind(1))
 	require.Equal(t, int64(42), decodedProc.GetAffectedRows())
 	require.True(t, decodedProc.GetStmtProfile().GetStatementIgnore())
+	// A remote scope can become the parent of another nested/remote statement.
+	// Its second-hop process snapshot must retain an independently owned selector.
+	info.SessionInfo.CnLabels["role"] = "ap"
+	require.Equal(t, "tp", decodedProc.Base.SessionInfo.CNLabels["role"])
+	decodedProc.Ctx = defines.AttachAccountId(decodedProc.Ctx, uint32(42))
+	secondHop, err := decodedProc.BuildProcessInfo("select nested")
+	require.NoError(t, err)
+	require.Equal(t, map[string]string{"account": "tp", "role": "tp"}, secondHop.SessionInfo.CnLabels)
+	secondHop.SessionInfo.CnLabels["account"] = "other"
+	require.Equal(t, "tp", decodedProc.Base.SessionInfo.CNLabels["account"])
+
 	decodedParams := decodedProc.GetPrepareParams()
 	require.NotPanics(t, decodedProc.Free)
 	require.Nil(t, decodedParams.GetData())

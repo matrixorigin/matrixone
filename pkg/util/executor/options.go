@@ -15,6 +15,7 @@
 package executor
 
 import (
+	"maps"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -327,6 +328,17 @@ func (opts Options) WithResolveVariableFunc(fn func(varName string, isSystemVar,
 
 func (opts Options) ResolveVariableFunc() func(varName string, isSystemVar, isGlobalVar bool) (interface{}, error) {
 	return opts.resolveVariableFunc
+}
+
+// WithCNLabels captures the parent statement's immutable compute-pool selector.
+func (opts Options) WithCNLabels(labels map[string]string) Options {
+	opts.cnLabels = maps.Clone(labels)
+	return opts
+}
+
+// CNLabels returns an independently owned selector for a nested compile.
+func (opts Options) CNLabels() map[string]string {
+	return maps.Clone(opts.cnLabels)
 }
 
 // WithFrontend marks the SQL execution as a frontend session-bound

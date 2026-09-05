@@ -128,7 +128,10 @@ type SessionInfo struct {
 	ExplicitZeroTemporalCastReturnsNull bool
 	// SqlMode is captured on the initiating CN and used when a remote process has
 	// no session variable resolver.
-	SqlMode        string
+	SqlMode string
+	// CNLabels is the immutable compute-pool selector captured from the parent
+	// statement and carried to remote and nested execution.
+	CNLabels       map[string]string
 	StorageEngine  engine.Engine
 	QueryId        []string
 	ResultColTypes []types.Type

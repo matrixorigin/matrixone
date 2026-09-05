@@ -681,6 +681,9 @@ message SessionInfo {
   bool matrixone_native_mode = 12;
   bool explicit_zero_temporal_cast_returns_null = 13;
   string sql_mode = 14;
+  // Immutable CN label selector inherited by nested/internal SQL. Remote
+  // processes must retain it so child queries cannot escape the parent pool.
+  map<string, string> cn_labels = 15;
 }
 
 message SessionLoggerInfo {

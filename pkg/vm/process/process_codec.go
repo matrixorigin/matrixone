@@ -16,6 +16,7 @@ package process
 
 import (
 	"context"
+	"maps"
 	"math"
 	"time"
 
@@ -111,6 +112,7 @@ func (proc *Process) BuildProcessInfo(
 			LockWaitTimeoutSet:  proc.Base.SessionInfo.LockWaitTimeoutSet,
 			MatrixoneNativeMode: proc.Base.SessionInfo.MatrixOneNativeMode,
 			SqlMode:             resolveSqlMode(proc),
+			CnLabels:            maps.Clone(proc.Base.SessionInfo.CNLabels),
 		}
 		nullifyZeroTemporal, err := ResolveExplicitZeroTemporalCastReturnsNull(proc)
 		if err != nil {
@@ -338,6 +340,7 @@ func ConvertToProcessSessionInfo(
 		MatrixOneNativeMode:                 sei.MatrixoneNativeMode,
 		ExplicitZeroTemporalCastReturnsNull: sei.ExplicitZeroTemporalCastReturnsNull,
 		SqlMode:                             sei.SqlMode,
+		CNLabels:                            maps.Clone(sei.CnLabels),
 	}
 	t := time.Time{}
 	err := t.UnmarshalBinary(sei.TimeZone)

@@ -34,6 +34,20 @@ func TestOptionsStreaming(t *testing.T) {
 	require.True(t, err_chan == errors)
 }
 
+func TestOptionsCNLabelsUseIndependentSnapshots(t *testing.T) {
+	labels := map[string]string{"account": "tp", "role": "tp"}
+	opts := Options{}.WithCNLabels(labels)
+
+	labels["role"] = "ap"
+	first := opts.CNLabels()
+	require.Equal(t, map[string]string{"account": "tp", "role": "tp"}, first)
+
+	first["account"] = "other"
+	require.Equal(t, "tp", opts.CNLabels()["account"])
+	require.Nil(t, (Options{}).CNLabels())
+	require.NotNil(t, (Options{}).WithCNLabels(map[string]string{}).CNLabels())
+}
+
 func TestOptionsLockWaitTimeout(t *testing.T) {
 	var opts Options
 	require.False(t, opts.HasLockWaitTimeout())

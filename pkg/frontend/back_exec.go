@@ -17,6 +17,7 @@ package frontend
 import (
 	"context"
 	"fmt"
+	"maps"
 	"regexp"
 	"strconv"
 	"strings"
@@ -1061,7 +1062,7 @@ func (backSes *backSession) initFeSes(
 	backSes.allResultSet = nil
 	backSes.resultBatches = nil
 	backSes.derivedStmt = false
-	backSes.label = make(map[string]string)
+	backSes.label = maps.Clone(ses.getCNLabels())
 	backSes.timeZone = ses.GetTimeZone()
 	backSes.respr = defResper
 	backSes.service = ses.GetService()

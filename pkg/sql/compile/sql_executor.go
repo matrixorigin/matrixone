@@ -477,7 +477,7 @@ func (exec *txnExecutor) Exec(
 		proc,
 		stmts[0],
 		false,
-		nil,
+		exec.opts.CNLabels(),
 		receiveAt,
 	)
 	c.SetOriginSQL(sql)

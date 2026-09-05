@@ -73,6 +73,7 @@ type Options struct {
 	keepTxnAlive            bool
 	lockWaitTimeout         time.Duration
 	lockWaitTimeoutSet      bool
+	cnLabels                map[string]string
 	// isFrontend records whether the caller is a frontend
 	// session-bound invocation. Go zero value (false) means
 	// background: every caller of the internal SQL executor is

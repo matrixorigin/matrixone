@@ -1558,6 +1558,23 @@ func newShuffleJoinTestNode(dop int32) *plan.Node {
 	}
 }
 
+func TestNewCompileCapturesCNLabelsForNestedExecution(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	labels := map[string]string{"account": "tp", "role": "tp"}
+	c := NewCompile("local:6001", "db", "select 1", "tenant", "user", nil, proc, nil, false, labels, time.Now())
+	defer c.Release()
+
+	require.Equal(t, labels, c.cnLabel)
+	require.Equal(t, labels, proc.Base.SessionInfo.CNLabels)
+
+	labels["role"] = "ap"
+	require.Equal(t, "tp", c.cnLabel["role"])
+	require.Equal(t, "tp", proc.Base.SessionInfo.CNLabels["role"])
+
+	c.cnLabel["account"] = "other"
+	require.Equal(t, "tp", proc.Base.SessionInfo.CNLabels["account"])
+}
+
 // TestNewCompileTxnOffsetForInternalSql verifies the statement-boundary
 // contract of NewCompile and Compile.Reset (issue #25557): a compile of a
 // user statement advances the workspace snapshot write offset, while an

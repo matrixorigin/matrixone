@@ -138,7 +138,10 @@ func NewCompile(
 	c.stmt = stmt
 	c.addr = addr
 	c.isInternal = isInternal
-	c.cnLabel = cnLabel
+	c.cnLabel = cloneCNLabels(cnLabel)
+	// SessionInfo is shared by local child processes and serialized for remote
+	// scopes. Keep a separate snapshot because Compile.Release clears cnLabel.
+	c.proc.Base.SessionInfo.CNLabels = cloneCNLabels(cnLabel)
 	c.startAt = startAt
 	c.disableRetry = false
 	c.ncpu = system.GoMaxProcs()
