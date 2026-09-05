@@ -30,6 +30,8 @@ infile{"filepath"='$resources/external_table_file/aaa.csv','format'='csv'}
 fields terminated by ',';
 create function issue_27103_live_src.f_control() returns int language sql as
 'select count(*) from issue_27103_live_src.control_t';
+create function issue_27103_live_src.py_add(x int) returns int language python as
+'return x + 1' handler 'py_add';
 create function issue_27103_live_src.f_external() returns int language sql as
 'select count(*) from issue_27103_live_src.ext_t';
 create function issue_27103_live_src.f_transitive() returns int language sql as
@@ -63,6 +65,8 @@ select f_control() as live_independent_function_result;
 call issue_27103_live_dst.p_control();
 select count(*) as live_independent_functions from mo_catalog.mo_user_defined_function
 where db = 'issue_27103_live_dst' and name = 'f_control';
+select count(*) as live_opaque_python_functions from mo_catalog.mo_user_defined_function
+where db = 'issue_27103_live_dst' and name = 'py_add';
 select count(*) as live_external_functions from mo_catalog.mo_user_defined_function
 where db = 'issue_27103_live_dst' and name in ('f_external', 'f_transitive', 'f_view');
 select count(*) as live_independent_procedures from mo_catalog.mo_stored_procedure
@@ -79,6 +83,8 @@ infile{"filepath"='$resources/external_table_file/aaa.csv','format'='csv'}
 fields terminated by ',';
 create function issue_27103_snapshot_src.f_control() returns int language sql as
 'select count(*) from issue_27103_snapshot_src.control_t';
+create function issue_27103_snapshot_src.py_add(x int) returns int language python as
+'return x + 1' handler 'py_add';
 create function issue_27103_snapshot_src.f_external() returns int language sql as
 'select count(*) from issue_27103_snapshot_src.ext_t';
 create function issue_27103_snapshot_src.f_transitive() returns int language sql as
@@ -115,6 +121,8 @@ select f_control() as snapshot_independent_function_result;
 call issue_27103_snapshot_dst.p_control();
 select count(*) as snapshot_independent_functions from mo_catalog.mo_user_defined_function
 where db = 'issue_27103_snapshot_dst' and name = 'f_control';
+select count(*) as snapshot_opaque_python_functions from mo_catalog.mo_user_defined_function
+where db = 'issue_27103_snapshot_dst' and name = 'py_add';
 select count(*) as snapshot_external_functions from mo_catalog.mo_user_defined_function
 where db = 'issue_27103_snapshot_dst' and name in ('f_external', 'f_transitive', 'f_view');
 select count(*) as snapshot_independent_procedures from mo_catalog.mo_stored_procedure

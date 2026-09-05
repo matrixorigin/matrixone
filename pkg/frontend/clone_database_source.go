@@ -120,6 +120,14 @@ type cloneDatabaseDependencyNode struct {
 	key  string
 }
 
+type cloneRoutineDependencyStatus uint8
+
+const (
+	cloneRoutineDependenciesInspected cloneRoutineDependencyStatus = iota
+	cloneRoutineDependenciesOpaque
+	cloneRoutineDependenciesUninspectable
+)
+
 func newCloneRoutineReferences() cloneRoutineReferences {
 	return cloneRoutineReferences{
 		tables:     make(map[string]struct{}),
@@ -316,9 +324,9 @@ func collectCloneDatabaseOmissionSet(
 	addRoutineDependencies := func(
 		routineNode cloneDatabaseDependencyNode,
 		references cloneRoutineReferences,
-		inspectable bool,
+		status cloneRoutineDependencyStatus,
 	) {
-		if !inspectable {
+		if status == cloneRoutineDependenciesUninspectable {
 			enqueue(routineNode)
 		}
 		for tableKey := range references.tables {
@@ -341,7 +349,7 @@ func collectCloneDatabaseOmissionSet(
 		}
 	}
 	for _, definition := range source.userDefinedFuncs {
-		references, inspectable, err := collectCloneRoutineReferences(
+		references, status, err := collectCloneRoutineReferences(
 			ctx, definition.body, definition.lang, definition.sqlMode,
 			source.srcResolveDBName, lowerCaseTableNames, true,
 		)
@@ -353,10 +361,10 @@ func collectCloneDatabaseOmissionSet(
 			key: cloneRoutineFamilyKey(
 				cloneRoutineFunctionKind, source.srcResolveDBName, definition.name, lowerCaseTableNames,
 			),
-		}, references, inspectable)
+		}, references, status)
 	}
 	for _, definition := range source.storedProcedures {
-		references, inspectable, err := collectCloneRoutineReferences(
+		references, status, err := collectCloneRoutineReferences(
 			ctx, definition.body, definition.lang, definition.sqlMode,
 			source.srcResolveDBName, lowerCaseTableNames, false,
 		)
@@ -368,7 +376,7 @@ func collectCloneDatabaseOmissionSet(
 			key: cloneRoutineFamilyKey(
 				cloneRoutineProcedureKind, source.srcResolveDBName, definition.name, lowerCaseTableNames,
 			),
-		}, references, inspectable)
+		}, references, status)
 	}
 
 	for len(queue) > 0 {
@@ -427,10 +435,17 @@ func collectCloneRoutineReferences(
 	srcDBName string,
 	lowerCaseTableNames int64,
 	isFunction bool,
-) (cloneRoutineReferences, bool, error) {
+) (cloneRoutineReferences, cloneRoutineDependencyStatus, error) {
 	references := newCloneRoutineReferences()
 	if !strings.EqualFold(lang, string(tree.SQL)) {
-		return references, false, nil
+		if isFunction {
+			// Non-SQL UDFs are persisted as opaque bodies. Imported packages are
+			// rejected by validateCloneUserDefinedFunctions before this graph is
+			// built; accepted inline UDFs do not contain SQL relation metadata for
+			// this walker to inspect.
+			return references, cloneRoutineDependenciesOpaque, nil
+		}
+		return references, cloneRoutineDependenciesUninspectable, nil
 	}
 
 	parseBody := body
@@ -447,11 +462,12 @@ func collectCloneRoutineReferences(
 	if err != nil {
 		if parseAsExpression {
 			// Existing scalar UDF clone support does not parse these bodies. Keep
-			// that compatibility behavior, but let the caller omit an
-			// uninspectable routine whenever the clone already omits a relation.
-			return references, false, nil
+			// that compatibility behavior, but let the caller omit this
+			// uninspectable SQL routine whenever the clone already omits a
+			// relation.
+			return references, cloneRoutineDependenciesUninspectable, nil
 		}
-		return references, false, err
+		return references, cloneRoutineDependenciesUninspectable, err
 	}
 	defer freeStatements(statements)
 
@@ -483,16 +499,20 @@ func collectCloneRoutineReferences(
 			&references, srcDBName, lowerCaseTableNames,
 		),
 	})
-	return references, remappable && !unsupported, nil
+	if !remappable || unsupported {
+		return references, cloneRoutineDependenciesUninspectable, nil
+	}
+	return references, cloneRoutineDependenciesInspected, nil
 }
 
 // filterCloneDatabaseRoutines keeps independent routine families and omits
 // families whose direct or transitive dependencies cannot exist in the target.
-// A non-SQL or otherwise uninspectable routine is omitted when the source has
-// an omitted relation; persisting it would report success while retaining a
-// dependency that this clone cannot verify. UDF overloads are one family here:
-// call sites do not carry enough resolved type information for this metadata
-// pass to distinguish overloads safely.
+// SQL routines whose bodies cannot be inspected are omitted when the source
+// has an omitted relation. Supported non-SQL UDFs are opaque but cloneable and
+// are preserved after validateCloneUserDefinedFunctions rejects imported
+// package bodies. UDF overloads are one family here: call sites do not carry
+// enough resolved type information for this metadata pass to distinguish
+// overloads safely.
 func filterCloneDatabaseRoutines(
 	ctx context.Context,
 	source cloneDatabaseSource,

@@ -574,6 +574,7 @@ func TestFilterCloneDatabaseRoutinesSkipsUncloneableDependencies(t *testing.T) {
 			{name: "f_cte_shadow", lang: "sql", body: "with ext_t as (select 1 as n) select n from ext_t"},
 			{name: "f_cte_view", lang: "sql", body: "select * from source_db.cte_v"},
 			{name: "f_independent", lang: "sql", body: "1 + 1"},
+			{name: "py_add", lang: "python", body: `{"handler":"py_add","import":false,"body":"return x + 1"}`},
 		},
 		storedProcedures: []storedProcedureDefinition{
 			{name: "p_external", lang: "sql", body: "begin select * from source_db.ext_t; end"},
@@ -589,7 +590,7 @@ func TestFilterCloneDatabaseRoutinesSkipsUncloneableDependencies(t *testing.T) {
 		context.Background(), source, 1,
 	)
 	require.NoError(t, err)
-	require.Equal(t, []string{"f_cte_shadow", "f_cte_view", "f_independent"}, routineNames(functions))
+	require.Equal(t, []string{"f_cte_shadow", "f_cte_view", "f_independent", "py_add"}, routineNames(functions))
 	require.Equal(t, []string{"p_dml_cte_shadow", "p_independent"}, procedureNames(procedures))
 
 	t.Run("same-name overloads are conservatively one family", func(t *testing.T) {
@@ -737,15 +738,15 @@ func TestCollectCloneRoutineReferencesScopesCTEs(t *testing.T) {
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			references, inspectable, err := collectCloneRoutineReferences(
+			references, status, err := collectCloneRoutineReferences(
 				context.Background(), test.body, "sql", "", "source_db", 1, !test.isProcedure,
 			)
 			require.NoError(t, err)
 			if test.wantUninspectable {
-				require.False(t, inspectable)
+				require.Equal(t, cloneRoutineDependenciesUninspectable, status)
 				return
 			}
-			require.True(t, inspectable)
+			require.Equal(t, cloneRoutineDependenciesInspected, status)
 			for _, table := range test.wantTables {
 				require.Contains(t, references.tables, cloneDatabaseObjectKey("source_db", table, 1))
 			}
@@ -758,6 +759,24 @@ func TestCollectCloneRoutineReferencesScopesCTEs(t *testing.T) {
 			require.Len(t, references.functions, len(test.wantFunctions))
 		})
 	}
+}
+
+func TestCollectCloneRoutineReferencesPreservesInlineNonSQLUDFs(t *testing.T) {
+	references, status, err := collectCloneRoutineReferences(
+		context.Background(),
+		`{"handler":"py_add","import":false,"body":"return x + 1"}`,
+		"python", "", "source_db", 1, true,
+	)
+	require.NoError(t, err)
+	require.Equal(t, cloneRoutineDependenciesOpaque, status)
+	require.Empty(t, references.tables)
+	require.Empty(t, references.functions)
+
+	_, status, err = collectCloneRoutineReferences(
+		context.Background(), "opaque", "python", "", "source_db", 1, false,
+	)
+	require.NoError(t, err)
+	require.Equal(t, cloneRoutineDependenciesUninspectable, status)
 }
 
 func routineNames(functions []userDefinedFunctionDefinition) []string {
