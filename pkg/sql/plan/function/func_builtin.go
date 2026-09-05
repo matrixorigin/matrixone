@@ -760,15 +760,18 @@ func internalNumericPrecision(typ types.Type) (int64, bool) {
 		}
 		return 1, true
 	case types.T_float32:
-		// FLOAT's default precision is 12 decimal digits. An explicit M is
-		// retained in Type.Width and takes precedence.
-		if typ.Width > 0 {
+		// FLOAT(p) uses p only to select FLOAT versus DOUBLE; it does not
+		// define the INFORMATION_SCHEMA precision.  Only FLOAT(M,D) carries
+		// an explicit decimal precision, which is represented by a non-negative
+		// scale together with the display width.
+		if typ.Scale >= 0 && typ.Width > 0 {
 			return int64(typ.Width), true
 		}
 		return 12, true
 	case types.T_float64:
-		// DOUBLE's default precision is 22 decimal digits.
-		if typ.Width > 0 {
+		// DOUBLE(p) likewise uses p only as a storage-type selector.  Preserve
+		// the width only for an explicit DOUBLE(M,D) declaration.
+		if typ.Scale >= 0 && typ.Width > 0 {
 			return int64(typ.Width), true
 		}
 		return 22, true

@@ -54,6 +54,7 @@ func TestIssue25103InformationSchemaMetadata(t *testing.T) {
 		execSQLRequire(t, ctx, db, "create table `"+dbName+"`.child ("+
 			"id bigint unsigned primary key, pid int, "+
 			"c_dec decimal(20, 6), c_char char(8), c_varchar varchar(32), "+
+			"c_float8 float(8), c_float25 float(25), c_float82 float(8, 2), "+
 			"c_time time(6), c_datetime datetime(3), c_timestamp timestamp(6), "+
 			"constraint fk_parent foreign key (pid) references `"+dbName+"`.parent(id))")
 
@@ -61,7 +62,7 @@ func TestIssue25103InformationSchemaMetadata(t *testing.T) {
 select column_name, character_maximum_length, numeric_precision, numeric_scale, datetime_precision
 from information_schema.columns
 where table_schema = ? and table_name = 'child'
-  and column_name in ('id', 'pid', 'c_dec', 'c_char', 'c_varchar', 'c_time', 'c_datetime', 'c_timestamp')
+  and column_name in ('id', 'pid', 'c_dec', 'c_char', 'c_varchar', 'c_float8', 'c_float25', 'c_float82', 'c_time', 'c_datetime', 'c_timestamp')
 order by ordinal_position`, schemaName)
 		require.NoError(t, err)
 		defer func() { require.NoError(t, rows.Close()) }()
@@ -83,6 +84,9 @@ order by ordinal_position`, schemaName)
 			"c_dec":       {values: [4]int64{0, 20, 6, 0}, valid: [4]bool{false, true, true, false}},
 			"c_char":      {values: [4]int64{8, 0, 0, 0}, valid: [4]bool{true, false, false, false}},
 			"c_varchar":   {values: [4]int64{32, 0, 0, 0}, valid: [4]bool{true, false, false, false}},
+			"c_float8":    {values: [4]int64{0, 12, 0, 0}, valid: [4]bool{false, true, false, false}},
+			"c_float25":   {values: [4]int64{0, 22, 0, 0}, valid: [4]bool{false, true, false, false}},
+			"c_float82":   {values: [4]int64{0, 8, 2, 0}, valid: [4]bool{false, true, true, false}},
 			"c_time":      {values: [4]int64{0, 0, 0, 6}, valid: [4]bool{false, false, false, true}},
 			"c_datetime":  {values: [4]int64{0, 0, 0, 3}, valid: [4]bool{false, false, false, true}},
 			"c_timestamp": {values: [4]int64{0, 0, 0, 6}, valid: [4]bool{false, false, false, true}},
