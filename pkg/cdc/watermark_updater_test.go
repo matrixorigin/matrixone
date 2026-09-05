@@ -32,6 +32,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	ie "github.com/matrixorigin/matrixone/pkg/util/internalExecutor"
+	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/testutils"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -409,20 +410,89 @@ func TestWatermarkUpdater_DeleteTaskWatermarksDrainsAndFencesCache(t *testing.T)
 	otherTS := types.BuildTS(20, 1)
 	require.NoError(t, updater.UpdateWatermarkOnly(ctx, &taskKey, &taskTS))
 	require.NoError(t, updater.UpdateWatermarkOnly(ctx, &otherKey, &otherTS))
+	require.NoError(t, updater.ForceFlush(ctx))
 
-	require.NoError(t, updater.DeleteTaskWatermarks(ctx, taskKey.AccountId, taskKey.TaskId))
+	taskFence := NewOwnerFenceForGeneration(time.UnixMicro(10), func(context.Context) error { return nil })
+	otherFence := NewOwnerFenceForGeneration(time.UnixMicro(20), func(context.Context) error { return nil })
+	circuitGaugeOwned := false
+	t.Cleanup(func() {
+		if circuitGaugeOwned {
+			v2.CdcWatermarkCircuitOpenGauge.Dec()
+		}
+	})
+	claimOnlyKey := WatermarkKey{
+		AccountId: 1,
+		TaskId:    taskKey.TaskId,
+		DBName:    "db",
+		TableName: "claim-only-table",
+	}
+	generationOnlyKey := WatermarkKey{
+		AccountId: 1,
+		TaskId:    taskKey.TaskId,
+		DBName:    "db",
+		TableName: "generation-only-table",
+	}
+	updater.Lock()
+	updater.cacheUncommittedGeneration[taskKey] = 10
+	updater.cacheCommittingGeneration[taskKey] = 10
+	updater.cacheCommittedGeneration[taskKey] = 10
+	updater.cacheUncommittedFence[taskKey] = taskFence
+	updater.cacheCommittingFence[taskKey] = taskFence
+	updater.activeWatermarkFence[taskKey] = taskFence
+	updater.errorMetadataCache[taskKey] = &ErrorMetadata{Message: "terminal cleanup"}
+	updater.commitFailureCount[taskKey] = watermarkCommitMaxRetries
+	updater.commitCircuitOpen[taskKey] = time.Now()
+	v2.CdcWatermarkCircuitOpenGauge.Inc()
+	circuitGaugeOwned = true
+	updater.activeWatermarkFence[claimOnlyKey] = taskFence
+	updater.cacheCommittedGeneration[generationOnlyKey] = 10
+	updater.cacheCommittedGeneration[otherKey] = 20
+	updater.activeWatermarkFence[otherKey] = otherFence
+	updater.Unlock()
+
+	deleteErr := updater.DeleteTaskWatermarks(ctx, taskKey.AccountId, taskKey.TaskId)
 
 	updater.RLock()
 	_, taskUncommitted := updater.cacheUncommitted[taskKey]
 	_, taskCommitting := updater.cacheCommitting[taskKey]
 	_, taskCommitted := updater.cacheCommitted[taskKey]
+	_, taskUncommittedGeneration := updater.cacheUncommittedGeneration[taskKey]
+	_, taskCommittingGeneration := updater.cacheCommittingGeneration[taskKey]
+	_, taskGeneration := updater.cacheCommittedGeneration[taskKey]
+	_, taskUncommittedFence := updater.cacheUncommittedFence[taskKey]
+	_, taskCommittingFence := updater.cacheCommittingFence[taskKey]
+	_, taskFenceExists := updater.activeWatermarkFence[taskKey]
+	_, taskErrorMetadata := updater.errorMetadataCache[taskKey]
+	_, taskFailureCount := updater.commitFailureCount[taskKey]
+	_, taskCircuit := updater.commitCircuitOpen[taskKey]
+	_, claimOnlyFenceExists := updater.activeWatermarkFence[claimOnlyKey]
+	_, generationOnlyExists := updater.cacheCommittedGeneration[generationOnlyKey]
 	otherCommitted, otherExists := updater.cacheCommitted[otherKey]
+	otherGeneration := updater.cacheCommittedGeneration[otherKey]
+	retainedOtherFence := updater.activeWatermarkFence[otherKey]
 	updater.RUnlock()
+	if !taskCircuit {
+		circuitGaugeOwned = false
+	}
+	require.NoError(t, deleteErr)
 	require.False(t, taskUncommitted)
 	require.False(t, taskCommitting)
 	require.False(t, taskCommitted)
+	require.False(t, taskUncommittedGeneration)
+	require.False(t, taskCommittingGeneration)
+	require.False(t, taskGeneration)
+	require.False(t, taskUncommittedFence)
+	require.False(t, taskCommittingFence)
+	require.False(t, taskFenceExists)
+	require.False(t, taskErrorMetadata)
+	require.False(t, taskFailureCount)
+	require.False(t, taskCircuit)
+	require.False(t, claimOnlyFenceExists)
+	require.False(t, generationOnlyExists)
 	require.True(t, otherExists)
 	require.Equal(t, otherTS, otherCommitted)
+	require.Equal(t, uint64(20), otherGeneration)
+	require.Same(t, otherFence, retainedOtherFence)
 
 	exec.mu.Lock()
 	require.Equal(t, CDCSQLBuilder.DeleteWatermarkSQL(taskKey.AccountId, taskKey.TaskId), exec.lastSQL)
@@ -3177,39 +3247,77 @@ func TestCDCWatermarkUpdater_wrapCronJob_OrphanKeysCleanup(t *testing.T) {
 
 	key1 := WatermarkKey{AccountId: 1, TaskId: "task1", DBName: "db1", TableName: "t1"}
 	key2 := WatermarkKey{AccountId: 1, TaskId: "task2", DBName: "db2", TableName: "t2"}
+	key3 := WatermarkKey{AccountId: 1, TaskId: "task3", DBName: "db3", TableName: "t3"}
 	watermark1 := types.BuildTS(1000, 1)
 	watermark2 := types.BuildTS(2000, 1)
+	activeFence := NewOwnerFenceForGeneration(time.UnixMicro(2), func(context.Context) error { return nil })
+	bufferedFence := NewOwnerFenceForGeneration(time.UnixMicro(1), func(context.Context) error { return nil })
+	circuitGaugeOwned := false
+	t.Cleanup(func() {
+		if circuitGaugeOwned {
+			v2.CdcWatermarkCircuitOpenGauge.Dec()
+		}
+	})
 
 	updater.Lock()
 	updater.cacheCommitted[key1] = watermark1
 	updater.cacheCommitted[key2] = watermark2
+	updater.cacheCommitted[key3] = watermark2
 	updater.cacheUncommitted[key2] = watermark2
 	updater.cacheCommitting[key2] = watermark2
+	updater.cacheCommittedGeneration[key2] = 2
+	updater.cacheCommittedGeneration[key3] = 2
+	updater.cacheUncommittedGeneration[key2] = 1
+	updater.cacheCommittingGeneration[key2] = 1
+	updater.cacheUncommittedFence[key2] = bufferedFence
+	updater.cacheCommittingFence[key2] = bufferedFence
+	updater.activeWatermarkFence[key3] = activeFence
 	updater.errorMetadataCache[key2] = &ErrorMetadata{Message: "test"}
 	updater.commitCircuitOpen[key2] = time.Now()
 	updater.commitFailureCount[key2] = 5
+	v2.CdcWatermarkCircuitOpenGauge.Inc()
+	circuitGaugeOwned = true
 	updater.Unlock()
 
 	job := func(ctx context.Context) {}
 	wrappedJob := updater.wrapCronJob(job)
-	time.Sleep(time.Millisecond * 10)
 	wrappedJob(context.Background())
 
 	// key1 should remain (valid)
 	updater.RLock()
 	_, exists1 := updater.cacheCommitted[key1]
 	_, exists2 := updater.cacheCommitted[key2]
+	retainedActiveWatermark, exists3 := updater.cacheCommitted[key3]
 	_, existsUncommitted := updater.cacheUncommitted[key2]
 	_, existsCommitting := updater.cacheCommitting[key2]
+	_, existsCommittedGeneration := updater.cacheCommittedGeneration[key2]
+	_, existsUncommittedGeneration := updater.cacheUncommittedGeneration[key2]
+	_, existsCommittingGeneration := updater.cacheCommittingGeneration[key2]
+	_, existsUncommittedFence := updater.cacheUncommittedFence[key2]
+	_, existsCommittingFence := updater.cacheCommittingFence[key2]
+	retainedActiveGeneration := updater.cacheCommittedGeneration[key3]
+	retainedActiveFence := updater.activeWatermarkFence[key3]
 	_, existsErrMeta := updater.errorMetadataCache[key2]
 	_, existsCircuit := updater.commitCircuitOpen[key2]
 	_, existsFailureCount := updater.commitFailureCount[key2]
 	updater.RUnlock()
+	if !existsCircuit {
+		circuitGaugeOwned = false
+	}
 
 	require.True(t, exists1)
 	require.False(t, exists2)
+	require.True(t, exists3)
+	require.Equal(t, watermark2, retainedActiveWatermark)
 	require.False(t, existsUncommitted)
 	require.False(t, existsCommitting)
+	require.False(t, existsCommittedGeneration)
+	require.False(t, existsUncommittedGeneration)
+	require.False(t, existsCommittingGeneration)
+	require.False(t, existsUncommittedFence)
+	require.False(t, existsCommittingFence)
+	require.Equal(t, uint64(2), retainedActiveGeneration)
+	require.Same(t, activeFence, retainedActiveFence)
 	require.False(t, existsErrMeta)
 	require.False(t, existsCircuit)
 	require.False(t, existsFailureCount)
@@ -3311,10 +3419,21 @@ func TestCDCWatermarkUpdater_wrapCronJob_ValidWatermarkMetrics(t *testing.T) {
 
 // TestCDCWatermarkUpdater_wrapCronJob_OrphanDoubleCheck tests TOCTOU race condition handling
 func TestCDCWatermarkUpdater_wrapCronJob_OrphanDoubleCheck(t *testing.T) {
+	key := WatermarkKey{AccountId: 1, TaskId: "task1", DBName: "db1", TableName: "t1"}
+	orphanWatermark := types.BuildTS(1000, 1)
+	replacementWatermark := types.BuildTS(2000, 1)
+	replacementFence := NewOwnerFenceForGeneration(time.UnixMicro(2), func(context.Context) error { return nil })
+	var updater *CDCWatermarkUpdater
 	mockExec := &mockExecutorForWrapCronJob{
 		queryFunc: func(ctx context.Context, sql string, opts ie.SessionOverrideOptions) ie.InternalExecResult {
 			if strings.Contains(sql, "INNER JOIN") {
-				// No valid watermarks
+				// Replace the local generation after the cron job snapshots its
+				// candidates but before it removes the catalog-orphaned entry.
+				updater.Lock()
+				updater.cacheCommitted[key] = replacementWatermark
+				updater.cacheCommittedGeneration[key] = 2
+				updater.activeWatermarkFence[key] = replacementFence
+				updater.Unlock()
 				return &InternalExecResultForTest{
 					affectedRows: 0,
 					resultSet: &MysqlResultSetForTest{
@@ -3334,33 +3453,28 @@ func TestCDCWatermarkUpdater_wrapCronJob_OrphanDoubleCheck(t *testing.T) {
 			}
 		},
 	}
-	updater := NewCDCWatermarkUpdater("test-double-check", mockExec, WithExportStatsInterval(time.Millisecond))
+	updater = NewCDCWatermarkUpdater("test-double-check", mockExec, WithExportStatsInterval(time.Millisecond))
 	updater.stats.lastExportTime = time.Now().Add(-time.Hour)
 
-	key := WatermarkKey{AccountId: 1, TaskId: "task1", DBName: "db1", TableName: "t1"}
-	watermark := types.BuildTS(1000, 1)
-
 	updater.Lock()
-	updater.cacheCommitted[key] = watermark
+	updater.cacheCommitted[key] = orphanWatermark
+	updater.cacheCommittedGeneration[key] = 1
 	updater.Unlock()
 
-	// Simulate key being removed between collection and cleanup
-	job := func(ctx context.Context) {
-		// Remove key during job execution (simulating race condition)
-		updater.Lock()
-		delete(updater.cacheCommitted, key)
-		updater.Unlock()
-	}
-
-	wrappedJob := updater.wrapCronJob(job)
-	time.Sleep(time.Millisecond * 10)
+	wrappedJob := updater.wrapCronJob(func(context.Context) {})
 	wrappedJob(context.Background())
 
-	// Key should be removed (double-check should handle it)
+	// The catalog result described the old local generation. It must not remove
+	// the replacement that was published while the query was in flight.
 	updater.RLock()
-	_, exists := updater.cacheCommitted[key]
+	retainedWatermark, exists := updater.cacheCommitted[key]
+	retainedGeneration := updater.cacheCommittedGeneration[key]
+	retainedFence := updater.activeWatermarkFence[key]
 	updater.RUnlock()
-	require.False(t, exists)
+	require.True(t, exists)
+	require.Equal(t, replacementWatermark, retainedWatermark)
+	require.Equal(t, uint64(2), retainedGeneration)
+	require.Same(t, replacementFence, retainedFence)
 }
 
 // TestCDCWatermarkUpdater_wrapCronJob_MultipleKeysMixed tests multiple keys with mixed valid/orphan

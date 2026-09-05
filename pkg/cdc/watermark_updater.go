@@ -522,47 +522,11 @@ func (u *CDCWatermarkUpdater) onJobs(jobs ...any) {
 			}
 			u.committingErrMsgBuffer = append(u.committingErrMsgBuffer, job)
 		case JT_CDC_RemoveCachedWM:
-			var inCommitted bool
 			u.Lock()
-			if _, ok := u.cacheCommitted[*job.Key]; ok {
-				delete(u.cacheCommitted, *job.Key)
-				inCommitted = true
-			}
-			delete(u.cacheUncommitted, *job.Key)
-			delete(u.cacheCommitting, *job.Key)
-			delete(u.cacheUncommittedGeneration, *job.Key)
-			delete(u.cacheCommittingGeneration, *job.Key)
-			delete(u.cacheCommittedGeneration, *job.Key)
-			delete(u.cacheUncommittedFence, *job.Key)
-			delete(u.cacheCommittingFence, *job.Key)
-			delete(u.activeWatermarkFence, *job.Key)
-			delete(u.errorMetadataCache, *job.Key)
-			if openedAt, opened := u.commitCircuitOpen[*job.Key]; opened {
-				if time.Since(openedAt) < watermarkCircuitBreakPeriod {
-					v2.CdcWatermarkCircuitEventCounter.WithLabelValues("reset").Inc()
-					v2.CdcWatermarkCircuitOpenGauge.Dec()
-				}
-				delete(u.commitCircuitOpen, *job.Key)
-			}
-			delete(u.commitFailureCount, *job.Key)
+			inCommitted := u.removeWatermarkStateLocked(*job.Key)
 			u.Unlock()
 
-			// Clean up all metrics for this table to prevent stale metrics
-			// This handles the gap where wrapCronJob only cleans metrics for keys still in cache
-			tableLabel := job.Key.String()
-			v2.CdcWatermarkLagSeconds.DeleteLabelValues(tableLabel)
-			v2.CdcWatermarkLagRatio.DeleteLabelValues(tableLabel)
-			v2.CdcTableLastActivityTimestamp.DeleteLabelValues(tableLabel)
-			v2.CdcTableStuckGauge.DeleteLabelValues(tableLabel)
-			v2.CdcWatermarkUpdateCounter.DeleteLabelValues(tableLabel, "commit")
-			v2.CdcWatermarkUpdateCounter.DeleteLabelValues(tableLabel, "heartbeat")
-			v2.CdcHeartbeatCounter.DeleteLabelValues(tableLabel)
-			v2.CdcTableNoProgressCounter.DeleteLabelValues(tableLabel)
-			// Clean up non-retryable error metrics for all error types
-			errorTypes := []string{"network", "commit", "table_relation", "sinker", "max_retry_exceeded", "unknown"}
-			for _, et := range errorTypes {
-				v2.CdcTableNonRetryableErrorGauge.DeleteLabelValues(tableLabel, et)
-			}
+			u.removeWatermarkMetrics(*job.Key)
 
 			job.DoneWithErr(nil)
 
@@ -743,12 +707,7 @@ func (u *CDCWatermarkUpdater) persistBatchUpdateWM() (errMsg string, err error) 
 				skippedDueToCircuit = true
 				continue
 			}
-			if _, existed := u.commitCircuitOpen[key]; existed {
-				v2.CdcWatermarkCircuitEventCounter.WithLabelValues("reset").Inc()
-				v2.CdcWatermarkCircuitOpenGauge.Dec()
-			}
-			delete(u.commitCircuitOpen, key)
-			delete(u.commitFailureCount, key)
+			u.resetWatermarkCircuitLocked(key)
 			logutil.Info(
 				"cdc.watermark.commit.circuit_reset",
 				zap.String("key", key.String()),
@@ -810,12 +769,7 @@ func (u *CDCWatermarkUpdater) persistBatchUpdateWM() (errMsg string, err error) 
 		delete(u.cacheCommitting, key)
 		delete(u.cacheCommittingGeneration, key)
 		delete(u.cacheCommittingFence, key)
-		delete(u.commitFailureCount, key)
-		if _, opened := u.commitCircuitOpen[key]; opened {
-			delete(u.commitCircuitOpen, key)
-			v2.CdcWatermarkCircuitEventCounter.WithLabelValues("reset").Inc()
-			v2.CdcWatermarkCircuitOpenGauge.Dec()
-		}
+		u.resetWatermarkCircuitLocked(key)
 	}
 	committingCount := len(u.cacheCommitting)
 	legacyWatermarks := make(map[WatermarkKey]types.TS)
@@ -916,8 +870,7 @@ func (u *CDCWatermarkUpdater) persistBatchUpdateWM() (errMsg string, err error) 
 				// A replacement in this process has already published a newer
 				// replay generation. The durable SQL was also fenced by that row;
 				// never let the obsolete completion poison the shared local cache.
-				delete(u.commitFailureCount, key)
-				delete(u.commitCircuitOpen, key)
+				u.resetWatermarkCircuitLocked(key)
 				continue
 			}
 		}
@@ -966,12 +919,7 @@ func (u *CDCWatermarkUpdater) persistBatchUpdateWM() (errMsg string, err error) 
 			} else {
 				delete(u.cacheCommittedGeneration, key)
 			}
-			if _, existed := u.commitCircuitOpen[key]; existed {
-				v2.CdcWatermarkCircuitEventCounter.WithLabelValues("reset").Inc()
-				v2.CdcWatermarkCircuitOpenGauge.Dec()
-			}
-			delete(u.commitFailureCount, key)
-			delete(u.commitCircuitOpen, key)
+			u.resetWatermarkCircuitLocked(key)
 			committedCount++
 		}
 	}
@@ -1810,12 +1758,7 @@ func (u *CDCWatermarkUpdater) UpdateWatermarkErrMsg(
 	err = job.GetResult().Err
 	if err == nil {
 		u.Lock()
-		if _, existed := u.commitCircuitOpen[*key]; existed {
-			v2.CdcWatermarkCircuitEventCounter.WithLabelValues("reset").Inc()
-			v2.CdcWatermarkCircuitOpenGauge.Dec()
-			delete(u.commitCircuitOpen, *key)
-		}
-		delete(u.commitFailureCount, *key)
+		u.resetWatermarkCircuitLocked(*key)
 		u.Unlock()
 	}
 	return
@@ -2002,12 +1945,7 @@ func (u *CDCWatermarkUpdater) activateWatermarkFenceLocked(key WatermarkKey, fen
 		delete(u.cacheCommittingGeneration, key)
 		delete(u.cacheCommittingFence, key)
 	}
-	delete(u.commitFailureCount, key)
-	if _, opened := u.commitCircuitOpen[key]; opened {
-		delete(u.commitCircuitOpen, key)
-		v2.CdcWatermarkCircuitEventCounter.WithLabelValues("reset").Inc()
-		v2.CdcWatermarkCircuitOpenGauge.Dec()
-	}
+	u.resetWatermarkCircuitLocked(key)
 	u.activeWatermarkFence[key] = fence
 	return true
 }
@@ -2043,6 +1981,60 @@ func shouldRetainBufferedWatermark(
 	return retryFence == nil || !retryFence.supersedes(existingFence)
 }
 
+// resetWatermarkCircuitLocked releases both sides of the circuit-breaker
+// accounting contract. The caller must hold u.Lock.
+func (u *CDCWatermarkUpdater) resetWatermarkCircuitLocked(key WatermarkKey) {
+	if _, opened := u.commitCircuitOpen[key]; opened {
+		delete(u.commitCircuitOpen, key)
+		v2.CdcWatermarkCircuitEventCounter.WithLabelValues("reset").Inc()
+		v2.CdcWatermarkCircuitOpenGauge.Dec()
+	}
+	delete(u.commitFailureCount, key)
+}
+
+// removeWatermarkProgressLocked removes every cache entry derived from a
+// watermark row. It intentionally leaves activeWatermarkFence alone: only a
+// stream or task lifecycle owner can prove that an active generation has
+// stopped. The caller must hold u.Lock.
+func (u *CDCWatermarkUpdater) removeWatermarkProgressLocked(key WatermarkKey) bool {
+	_, inCommitted := u.cacheCommitted[key]
+	delete(u.cacheUncommitted, key)
+	delete(u.cacheCommitting, key)
+	delete(u.cacheCommitted, key)
+	delete(u.cacheUncommittedGeneration, key)
+	delete(u.cacheCommittingGeneration, key)
+	delete(u.cacheCommittedGeneration, key)
+	delete(u.cacheUncommittedFence, key)
+	delete(u.cacheCommittingFence, key)
+	delete(u.errorMetadataCache, key)
+	u.resetWatermarkCircuitLocked(key)
+	return inCommitted
+}
+
+// removeWatermarkStateLocked additionally retires the active generation. Use
+// it only after the stream or task lifecycle has fenced new work. The caller
+// must hold u.Lock.
+func (u *CDCWatermarkUpdater) removeWatermarkStateLocked(key WatermarkKey) bool {
+	inCommitted := u.removeWatermarkProgressLocked(key)
+	delete(u.activeWatermarkFence, key)
+	return inCommitted
+}
+
+func (u *CDCWatermarkUpdater) removeWatermarkMetrics(key WatermarkKey) {
+	tableLabel := key.String()
+	v2.CdcWatermarkLagSeconds.DeleteLabelValues(tableLabel)
+	v2.CdcWatermarkLagRatio.DeleteLabelValues(tableLabel)
+	v2.CdcTableLastActivityTimestamp.DeleteLabelValues(tableLabel)
+	v2.CdcTableStuckGauge.DeleteLabelValues(tableLabel)
+	v2.CdcWatermarkUpdateCounter.DeleteLabelValues(tableLabel, "commit")
+	v2.CdcWatermarkUpdateCounter.DeleteLabelValues(tableLabel, "heartbeat")
+	v2.CdcHeartbeatCounter.DeleteLabelValues(tableLabel)
+	v2.CdcTableNoProgressCounter.DeleteLabelValues(tableLabel)
+	for _, errorType := range []string{"network", "commit", "table_relation", "sinker", "max_retry_exceeded", "unknown"} {
+		v2.CdcTableNonRetryableErrorGauge.DeleteLabelValues(tableLabel, errorType)
+	}
+}
+
 func (u *CDCWatermarkUpdater) RemoveCachedWM(
 	ctx context.Context,
 	key *WatermarkKey,
@@ -2070,47 +2062,11 @@ func (u *CDCWatermarkUpdater) RemoveCachedWM(
 }
 
 func (u *CDCWatermarkUpdater) removeCachedWMSynchronously(key *WatermarkKey, logSkip bool) {
-	var inCommitted bool
 	u.Lock()
-	if _, ok := u.cacheCommitted[*key]; ok {
-		delete(u.cacheCommitted, *key)
-		inCommitted = true
-	}
-	delete(u.cacheUncommitted, *key)
-	delete(u.cacheCommitting, *key)
-	delete(u.cacheUncommittedGeneration, *key)
-	delete(u.cacheCommittingGeneration, *key)
-	delete(u.cacheCommittedGeneration, *key)
-	delete(u.cacheUncommittedFence, *key)
-	delete(u.cacheCommittingFence, *key)
-	delete(u.activeWatermarkFence, *key)
-	delete(u.errorMetadataCache, *key)
-	if openedAt, opened := u.commitCircuitOpen[*key]; opened {
-		if time.Since(openedAt) < watermarkCircuitBreakPeriod {
-			v2.CdcWatermarkCircuitEventCounter.WithLabelValues("reset").Inc()
-			v2.CdcWatermarkCircuitOpenGauge.Dec()
-		}
-		delete(u.commitCircuitOpen, *key)
-	}
-	delete(u.commitFailureCount, *key)
+	inCommitted := u.removeWatermarkStateLocked(*key)
 	u.Unlock()
 
-	// Clean up all metrics for this table to prevent stale metrics
-	// Same as JT_CDC_RemoveCachedWM in onJobs
-	tableLabel := key.String()
-	v2.CdcWatermarkLagSeconds.DeleteLabelValues(tableLabel)
-	v2.CdcWatermarkLagRatio.DeleteLabelValues(tableLabel)
-	v2.CdcTableLastActivityTimestamp.DeleteLabelValues(tableLabel)
-	v2.CdcTableStuckGauge.DeleteLabelValues(tableLabel)
-	v2.CdcWatermarkUpdateCounter.DeleteLabelValues(tableLabel, "commit")
-	v2.CdcWatermarkUpdateCounter.DeleteLabelValues(tableLabel, "heartbeat")
-	v2.CdcHeartbeatCounter.DeleteLabelValues(tableLabel)
-	v2.CdcTableNoProgressCounter.DeleteLabelValues(tableLabel)
-	// Clean up non-retryable error metrics for all error types
-	errorTypes := []string{"network", "commit", "table_relation", "sinker", "max_retry_exceeded", "unknown"}
-	for _, et := range errorTypes {
-		v2.CdcTableNonRetryableErrorGauge.DeleteLabelValues(tableLabel, et)
-	}
+	u.removeWatermarkMetrics(*key)
 
 	if !u.shouldLogFallback(key) {
 		return
@@ -2124,6 +2080,19 @@ func (u *CDCWatermarkUpdater) removeCachedWMSynchronously(key *WatermarkKey, log
 		logutil.Info("cdc.watermark.remove_cached_success", fields...)
 	} else if logSkip {
 		logutil.Info("cdc.watermark.remove_cached_skip", fields...)
+	}
+}
+
+func collectTaskWatermarkKeys[V any](
+	dst map[WatermarkKey]struct{},
+	src map[WatermarkKey]V,
+	accountID uint64,
+	taskID string,
+) {
+	for key := range src {
+		if key.AccountId == accountID && key.TaskId == taskID {
+			dst[key] = struct{}{}
+		}
 	}
 }
 
@@ -2192,60 +2161,26 @@ func (u *CDCWatermarkUpdater) DeleteTaskWatermarks(
 
 	keysToClean := make(map[WatermarkKey]struct{})
 	u.Lock()
-	for key := range u.cacheUncommitted {
-		if key.AccountId == accountID && key.TaskId == taskID {
-			keysToClean[key] = struct{}{}
-			delete(u.cacheUncommitted, key)
-		}
-	}
-	for key := range u.cacheCommitting {
-		if key.AccountId == accountID && key.TaskId == taskID {
-			keysToClean[key] = struct{}{}
-			delete(u.cacheCommitting, key)
-		}
-	}
-	for key := range u.cacheCommitted {
-		if key.AccountId == accountID && key.TaskId == taskID {
-			keysToClean[key] = struct{}{}
-			delete(u.cacheCommitted, key)
-		}
-	}
-	for key := range u.errorMetadataCache {
-		if key.AccountId == accountID && key.TaskId == taskID {
-			keysToClean[key] = struct{}{}
-			delete(u.errorMetadataCache, key)
-		}
-	}
-	for key := range u.commitFailureCount {
-		if key.AccountId == accountID && key.TaskId == taskID {
-			keysToClean[key] = struct{}{}
-			delete(u.commitFailureCount, key)
-		}
-	}
-	for key := range u.commitCircuitOpen {
-		if key.AccountId == accountID && key.TaskId == taskID {
-			keysToClean[key] = struct{}{}
-			v2.CdcWatermarkCircuitEventCounter.WithLabelValues("reset").Inc()
-			v2.CdcWatermarkCircuitOpenGauge.Dec()
-			delete(u.commitCircuitOpen, key)
-		}
+	collectTaskWatermarkKeys(keysToClean, u.cacheUncommitted, accountID, taskID)
+	collectTaskWatermarkKeys(keysToClean, u.cacheCommitting, accountID, taskID)
+	collectTaskWatermarkKeys(keysToClean, u.cacheCommitted, accountID, taskID)
+	collectTaskWatermarkKeys(keysToClean, u.cacheUncommittedGeneration, accountID, taskID)
+	collectTaskWatermarkKeys(keysToClean, u.cacheCommittingGeneration, accountID, taskID)
+	collectTaskWatermarkKeys(keysToClean, u.cacheCommittedGeneration, accountID, taskID)
+	collectTaskWatermarkKeys(keysToClean, u.cacheUncommittedFence, accountID, taskID)
+	collectTaskWatermarkKeys(keysToClean, u.cacheCommittingFence, accountID, taskID)
+	collectTaskWatermarkKeys(keysToClean, u.activeWatermarkFence, accountID, taskID)
+	collectTaskWatermarkKeys(keysToClean, u.errorMetadataCache, accountID, taskID)
+	collectTaskWatermarkKeys(keysToClean, u.commitFailureCount, accountID, taskID)
+	collectTaskWatermarkKeys(keysToClean, u.commitCircuitOpen, accountID, taskID)
+	for key := range keysToClean {
+		u.removeWatermarkStateLocked(key)
 	}
 	u.Unlock()
 
 	for key := range keysToClean {
-		tableLabel := key.String()
-		v2.CdcWatermarkLagSeconds.DeleteLabelValues(tableLabel)
-		v2.CdcWatermarkLagRatio.DeleteLabelValues(tableLabel)
-		v2.CdcTableLastActivityTimestamp.DeleteLabelValues(tableLabel)
-		v2.CdcTableStuckGauge.DeleteLabelValues(tableLabel)
-		v2.CdcWatermarkUpdateCounter.DeleteLabelValues(tableLabel, "commit")
-		v2.CdcWatermarkUpdateCounter.DeleteLabelValues(tableLabel, "heartbeat")
-		v2.CdcHeartbeatCounter.DeleteLabelValues(tableLabel)
-		v2.CdcTableNoProgressCounter.DeleteLabelValues(tableLabel)
-		for _, errorType := range []string{"network", "commit", "table_relation", "sinker", "max_retry_exceeded", "unknown"} {
-			v2.CdcTableNonRetryableErrorGauge.DeleteLabelValues(tableLabel, errorType)
-		}
-		u.fallbackLog.Delete(tableLabel)
+		u.removeWatermarkMetrics(key)
+		u.fallbackLog.Delete(key.String())
 	}
 
 	u.persistMu.Lock()
@@ -2435,12 +2370,19 @@ func (u *CDCWatermarkUpdater) wrapCronJob(job func(ctx context.Context)) func(ct
 			defaultExpectedLagSeconds := 3.0
 
 			// Collect keys to check BEFORE releasing lock (to avoid iterating during query)
+			type cachedWatermarkProgress struct {
+				watermark  types.TS
+				generation uint64
+			}
 			cachedKeys := make([]WatermarkKey, 0, len(u.cacheCommitted))
-			cachedWatermarks := make(map[WatermarkKey]types.TS, len(u.cacheCommitted))
+			cachedProgress := make(map[WatermarkKey]cachedWatermarkProgress, len(u.cacheCommitted))
 			for key, watermark := range u.cacheCommitted {
 				if !watermark.IsEmpty() {
 					cachedKeys = append(cachedKeys, key)
-					cachedWatermarks[key] = watermark
+					cachedProgress[key] = cachedWatermarkProgress{
+						watermark:  watermark,
+						generation: u.cacheCommittedGeneration[key],
+					}
 				}
 			}
 			u.RUnlock()
@@ -2479,21 +2421,11 @@ func (u *CDCWatermarkUpdater) wrapCronJob(job func(ctx context.Context)) func(ct
 			keysToRemove := make([]WatermarkKey, 0)
 			for _, key := range cachedKeys {
 				tableLabel := key.String()
-				watermark := cachedWatermarks[key]
+				watermark := cachedProgress[key].watermark
 
 				if !queryFailed && !validWatermarks[tableLabel] {
 					// Watermark not in database (orphan)
 					keysToRemove = append(keysToRemove, key)
-					// Clean up metrics by deleting label values (avoids cardinality explosion)
-					v2.CdcWatermarkLagSeconds.DeleteLabelValues(tableLabel)
-					v2.CdcWatermarkLagRatio.DeleteLabelValues(tableLabel)
-					v2.CdcTableLastActivityTimestamp.DeleteLabelValues(tableLabel)
-					v2.CdcTableStuckGauge.DeleteLabelValues(tableLabel)
-					// Clean up non-retryable error metrics for all error types
-					errorTypes := []string{"network", "commit", "table_relation", "sinker", "max_retry_exceeded", "unknown"}
-					for _, et := range errorTypes {
-						v2.CdcTableNonRetryableErrorGauge.DeleteLabelValues(tableLabel, et)
-					}
 					continue
 				}
 
@@ -2513,37 +2445,36 @@ func (u *CDCWatermarkUpdater) wrapCronJob(job func(ctx context.Context)) func(ct
 
 			// Remove orphan keys from cache with double-check to handle race condition
 			if len(keysToRemove) > 0 {
+				removedKeys := make([]WatermarkKey, 0, len(keysToRemove))
 				u.Lock()
 				for _, key := range keysToRemove {
-					// Double-check: Verify key still exists and wasn't re-added
-					// This handles TOCTOU race where a new task with same key was created
-					if _, stillExists := u.cacheCommitted[key]; !stillExists {
-						continue // Already removed or never existed
+					// A restart can replace the generation while the catalog query is
+					// in flight. Only retire the exact progress snapshot classified as
+					// orphan; the task lifecycle remains the sole owner of the active
+					// fence.
+					current, stillExists := u.cacheCommitted[key]
+					cached := cachedProgress[key]
+					if !stillExists || !current.Equal(&cached.watermark) ||
+						u.cacheCommittedGeneration[key] != cached.generation {
+						continue
 					}
-
-					delete(u.cacheCommitted, key)
-					delete(u.cacheUncommitted, key)
-					delete(u.cacheCommitting, key)
-					delete(u.cacheCommittedGeneration, key)
-					delete(u.cacheUncommittedGeneration, key)
-					delete(u.cacheCommittingGeneration, key)
-					delete(u.cacheUncommittedFence, key)
-					delete(u.cacheCommittingFence, key)
-					delete(u.errorMetadataCache, key)
-
-					// Clean up circuit breaker related caches
-					// Always decrement gauge when circuit exists (fixes gauge leak for old circuits)
-					if _, opened := u.commitCircuitOpen[key]; opened {
-						v2.CdcWatermarkCircuitEventCounter.WithLabelValues("reset").Inc()
-						v2.CdcWatermarkCircuitOpenGauge.Dec()
-						delete(u.commitCircuitOpen, key)
+					if u.activeWatermarkFence[key] != nil {
+						// A catalog snapshot cannot prove that a live local
+						// generation has stopped. Its stream/task lifecycle owner
+						// will perform the full cleanup after fencing producers.
+						continue
 					}
-					delete(u.commitFailureCount, key)
+					u.removeWatermarkProgressLocked(key)
+					removedKeys = append(removedKeys, key)
 				}
 				u.Unlock()
+				for _, key := range removedKeys {
+					u.removeWatermarkMetrics(key)
+					u.fallbackLog.Delete(key.String())
+				}
 				logutil.Debug(
 					"cdc.watermark.cleanup_orphan_cache",
-					zap.Int("removed-count", len(keysToRemove)),
+					zap.Int("removed-count", len(removedKeys)),
 				)
 			}
 
