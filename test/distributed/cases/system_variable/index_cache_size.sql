@@ -1,7 +1,7 @@
 -- @suit
 
 -- @case
--- @desc:max_index_cache_size / max_gpu_index_cache_size are operator variables: GLOBAL scope only, defaulting to an arena ceiling rather than to unlimited
+-- @desc:max_index_cache_size / max_gpu_index_cache_size are operator variables: GLOBAL scope only, defaulting to 0 meaning the governor derives the budget from the machine
 -- @label:bvt
 
 -- Isolated by ACCOUNT. SET GLOBAL is per-account, so a dedicated account keeps two
@@ -14,9 +14,11 @@ create account acc_idx_var admin_name 'admin' identified by '123456';
 
 -- @session:id=1&user=acc_idx_var:admin&password=123456
 
--- Defaults are the per-arena ceilings, not 0: the advertised maximum is a number an
--- operator can read, and an unconfigured deployment is charged and evictable rather than
--- unbounded. Host is far larger than device because RAM and VRAM are orders of magnitude apart.
+-- Both default to 0, which means "no operator limit". It does NOT mean unbounded: the
+-- governor then derives each arena's budget from this machine -- a share of total RAM for
+-- host, a CUDA query of the devices present for device -- so an unconfigured deployment is
+-- still charged and still evictable. A fixed non-zero default would have been a number that
+-- describes no particular machine, and would have taken priority over the derived one.
 select @@global.max_index_cache_size;
 select @@global.max_gpu_index_cache_size;
 
@@ -49,8 +51,9 @@ set global max_index_cache_size = 2199023255552;
 select @@global.max_index_cache_size;
 select @@global.max_gpu_index_cache_size;
 
--- 0 is still accepted; the governor resolves it to the arena ceiling rather than to
--- genuinely unbounded, because an upgraded cluster keeps a persisted 0.
+-- Setting 0 explicitly returns to the default: no operator limit, budget derived from the
+-- machine. Never genuinely unbounded, which matters because an upgraded cluster carries a
+-- persisted 0 from before these variables existed.
 set global max_index_cache_size = 0;
 select @@global.max_index_cache_size;
 set global max_gpu_index_cache_size = 0;

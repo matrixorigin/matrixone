@@ -39,7 +39,8 @@ prepare wait_ready from @wait_sql;
 execute wait_ready;
 deallocate prepare wait_ready;
 
--- Baseline at the default ceiling, which never binds.
+-- Baseline at the default: 0, no operator limit, budget derived from the machine -- which on
+-- any machine that can run a CN is far above one small index, so it does not bind.
 select @@global.max_index_cache_size;
 select id from t order by l2_distance(v, '[0,0,0]') asc limit 2;
 
@@ -64,7 +65,8 @@ select id from t order by l2_distance(v, '[9,9,9]') asc limit 1;
 -- row inserted now is not in the index yet and the answer would depend on CDC timing, not on
 -- the cap. Index freshness is covered by the vector cases; this one is about the bound.
 
--- 0 resolves to the arena ceiling, not to unbounded; the answers do not change.
+-- Back to 0: no operator limit, budget derived from the machine, not unbounded. The answers
+-- do not change.
 set global max_index_cache_size = 0;
 select @@global.max_index_cache_size;
 select id from t order by l2_distance(v, '[0,0,0]') asc limit 2;

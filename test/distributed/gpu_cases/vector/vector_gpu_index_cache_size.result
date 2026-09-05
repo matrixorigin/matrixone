@@ -19,7 +19,7 @@ create index c2 using cagra on t2(v) op_type 'vector_l2_ops';
 create index c3 using cagra on t3(v) op_type 'vector_l2_ops';
 select @@global.max_gpu_index_cache_size;
 ➤ @@global.max_gpu_index_cache_size[-1,16383,0]  𝄀
-1546188226560
+0
 select id from t1 order by l2_distance(v, '[3,3,3,3,3,3,3,3]') asc limit 1;
 ➤ id[-5,64,0]  𝄀
 3
@@ -62,8 +62,8 @@ select a.id, b.id from
 2  ¦  8
 select @@global.max_index_cache_size;
 ➤ @@global.max_index_cache_size[-1,16383,0]  𝄀
-70368744177664
-set global max_gpu_index_cache_size = 1546188226560;
+0
+set global max_gpu_index_cache_size = 0;
 select id from t1 order by l2_distance(v, '[3,3,3,3,3,3,3,3]') asc limit 1;
 ➤ id[-5,64,0]  𝄀
 3

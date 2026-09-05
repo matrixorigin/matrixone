@@ -52,7 +52,7 @@ create index c1 using cagra on t1(v) op_type 'vector_l2_ops';
 create index c2 using cagra on t2(v) op_type 'vector_l2_ops';
 create index c3 using cagra on t3(v) op_type 'vector_l2_ops';
 
--- The default is the device ceiling, which never binds.
+-- The default is 0: no operator limit, budget derived from the GPUs present. It does not bind.
 select @@global.max_gpu_index_cache_size;
 select id from t1 order by l2_distance(v, '[3,3,3,3,3,3,3,3]') asc limit 1;
 select id from t2 order by l2_distance(v, '[3,3,3,3,3,3,3,3]') asc limit 1;
@@ -85,8 +85,8 @@ select a.id, b.id from
 -- The host arena is independent: bounding VRAM must not disturb it.
 select @@global.max_index_cache_size;
 
--- Back to the default ceiling; answers unchanged.
-set global max_gpu_index_cache_size = 1546188226560;
+-- Back to the default, 0; answers unchanged.
+set global max_gpu_index_cache_size = 0;
 select id from t1 order by l2_distance(v, '[3,3,3,3,3,3,3,3]') asc limit 1;
 select id from t3 order by l2_distance(v, '[9,9,9,9,9,9,9,9]') asc limit 1;
 

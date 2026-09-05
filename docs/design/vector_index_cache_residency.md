@@ -115,6 +115,14 @@ arrival fits and admitting it blind would be the guess this removes;
 failing there would not un-spend it. The result is memoized with the value, so a
 failing probe does not land on the query path once per miss.
 
+The error is carried **per arena**, and refuses only an arrival that occupies the
+arena that could not be sized. A CN whose GPU cannot be queried still knows its
+own RAM exactly, so hnsw and fulltext2 keep loading there; only cagra/ivfpq, which
+need the number that is missing, are refused. Joining the two errors instead —
+with the device cap left at its default, so the failed probe is always consulted —
+took the whole CN out of service for host-only indexes, permanently, because the
+sizing result is memoized.
+
 **No GPU is not a failure.** `count == 0` means the device arena does not apply,
 so it gets no budget and `enforce` skips it — nothing charges device bytes
 without a device. Only a GPU that exists and cannot be queried is an error.
@@ -196,6 +204,31 @@ The check runs *after* the reclaim, so a cache merely full of cold entries admit
 the newcomer normally. Only genuine overload — nothing idle left to give —
 refuses.
 
+**An arrival that would be the arena's only occupant is always admitted**, however
+large: there is nobody to protect, no eviction could have made room, and refusing
+would fail a query that a cache with no policy at all would have served. This is
+what keeps the budget from changing which workloads are possible — a single index
+bigger than the budget still loads; what the budget bounds is how many stay
+resident *together*.
+
+That exemption is decided against residency **and arrivals in flight**. A load
+that has passed admission is not resident yet — its entry is in the map but not
+`STATUS_LOADED` — so on residency alone every member of a concurrent burst reads
+an empty arena and every one of them takes the exemption meant for a lone index.
+Each arrival therefore registers a *reservation* before it reclaims, and counts
+the reservations **ahead of it in line** (an increasing sequence number) as
+occupied bytes. Ordering by arrival is what makes the outcome first-come,
+first-served rather than mutual refusal: if each counted the other, two loads that
+fit one at a time would refuse each other and neither would run. The reservation
+is released on every exit from `Load` — success, failure, or panic.
+
+Choosing an idle victim is likewise a **claim, not a check**. The pass takes the
+victim's search lock with `TryLock` and holds it through removal and destroy, so a
+search arriving a moment after the decision cannot turn the free victim into the
+blocking destroy the check existed to avoid. Asking `TryLock`/`Unlock` and
+destroying later answered a question about the past — and with no busy fallback
+left, the pass had already committed to that victim.
+
 Rule (3) is not only fairness. `evictEntry` destroys synchronously and `Destroy`
 takes the victim's write lock, so taking a busy victim parks the cache **miss**
 that triggered the eviction behind the very search it interrupted. Preempting a
@@ -243,10 +276,29 @@ nothing until a first miss has populated the memo. Per-tenant caps still take
 effect at that tenant's next miss.
 
 Per-victim eviction detail is logged at DEBUG, not INFO. Two indexes alternating
-under a tight cap evict on every miss, and one INFO line per victim turns a
-steady state into a log storm. Each reclaim pass logs one aggregated line
-instead, and `EvictionStats()` exposes cumulative entries and bytes — the
-counters are the thing to alert on.
+under a tight cap evict on every miss, and one INFO line per victim turns a steady
+state into a log storm. Whole passes are at DEBUG too; INFO gets at most one line
+per arena per 10s, carrying the totals since start rather than that pass alone. A
+binding cap is a steady state, not an event, so the condition stays visible while
+the volume stays bounded. `EvictionStats()` exposes cumulative entries and bytes,
+loses nothing to that sampling, and is the thing to alert on.
+
+### 5.5 Invalidation: the current generation, and everything
+
+`Remove` drops the **current** generation only. It is the append path: every
+algorithm's `sync.go` calls it on each CDC/ISCP flush, and an append cannot change
+what a named snapshot returns — a snapshot generation is a read at a past
+timestamp. Clearing history there threw every snapshot generation away on every
+flush, so a workload that both writes and reads snapshots reloaded continuously.
+
+`RemoveAllGenerations` drops the current entry **and** every
+`<index table>@<physical>-<logical>` generation of it. That is the DDL path —
+CREATE, DROP INDEX, DROP TABLE, DROP DATABASE — where the index table itself is
+going away or being rebuilt, so its history is no longer readable. Without it a
+drop left every historical generation resident until its TTL expired, pinning VRAM
+for the cuVS algorithms and charging bytes for an index that no longer exists;
+no exact-key evict matches those keys, and the staleness sweep deliberately skips
+them, an immutable generation never being "stale".
 
 ## 6. Sizing
 

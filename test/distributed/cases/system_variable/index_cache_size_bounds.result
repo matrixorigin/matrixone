@@ -19,7 +19,7 @@ execute wait_ready;
 deallocate prepare wait_ready;
 select @@global.max_index_cache_size;
 ➤ @@global.max_index_cache_size[-1,16383,0]  𝄀
-70368744177664
+0
 select id from t order by l2_distance(v, '[0,0,0]') asc limit 2;
 ➤ id[-5,64,0]  𝄀
 1  𝄀

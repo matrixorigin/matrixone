@@ -3827,9 +3827,10 @@ var gSysVarsDefs = map[string]SystemVariable{
 	},
 	// HOST memory byte budget for the vector/fulltext index cache, read per account. The
 	// value on the SYS account (id 0) caps every tenant's resident indexes on the CN
-	// together; the value on a tenant caps that tenant alone. 0 means "not set by an
-	// operator"; the governor resolves an unset budget to the arena ceiling below, so the
-	// cache is always accounted and always evictable.
+	// together; the value on a tenant caps that tenant alone. 0 -- the default -- means "not
+	// set by an operator", and the governor then DERIVES the budget from this machine: a
+	// share of total RAM, read from /proc/meminfo and any cgroup limit. So the cache is
+	// always accounted and always evictable, without an operator having to pick a number.
 	//
 	// Device memory has its own budget, max_gpu_index_cache_size: a CN has far more RAM than
 	// VRAM, so one number cannot express both.
@@ -3839,28 +3840,27 @@ var gSysVarsDefs = map[string]SystemVariable{
 		Dynamic:           true,
 		SetVarHintApplies: false,
 		Type:              InitSystemVariableIntType("max_index_cache_size", 0, math.MaxInt64, false),
-		// 64 TiB: above the memory of any machine a CN runs on (high-end boards reach ~4 TiB,
-		// enterprise servers a few dozen TB), so the default never refuses a load a real
-		// deployment could serve. It is not a sizing choice -- it exists so the advertised
-		// maximum is a number an operator can read. 0 is still accepted, and the governor
-		// resolves it to this same ceiling -- an upgraded cluster keeps a persisted 0, so 0
-		// cannot be allowed to mean genuinely unbounded.
-		Default: int64(64 << 40),
+		// 0, meaning unset. The advertised default used to be a fixed 64 TiB ceiling, which
+		// said nothing true about any particular machine and, being non-zero, took priority
+		// over the derived budget -- so on a bootstrapped cluster the machine-derived sizing
+		// never applied. Defaulting to 0 makes the variable say what the governor does: no
+		// operator limit, budget derived from this host.
+		Default: int64(0),
 	},
 	// DEVICE (VRAM) byte budget for the index cache, the GPU counterpart of
 	// max_index_cache_size and read per account the same way: SYS caps the CN, a tenant's
 	// value caps that tenant. Only the cuVS algorithms (cagra, ivfpq) charge against it.
-	// 0 means "not set by an operator" and resolves to the device ceiling below.
+	// 0 -- the default -- means "not set by an operator", and the governor derives the budget
+	// from the GPUs actually present. A CN with no GPU derives 0 and charges nothing here.
 	"max_gpu_index_cache_size": {
 		Name:              "max_gpu_index_cache_size",
 		Scope:             ScopeGlobal,
 		Dynamic:           true,
 		SetVarHintApplies: false,
 		Type:              InitSystemVariableIntType("max_gpu_index_cache_size", 0, math.MaxInt64, false),
-		// 1440 GiB: eight GPUs pooled over NVLink, the largest single-node VRAM pool built
-		// today. Far below the host default because the two arenas are orders of magnitude
-		// apart -- a number sized for RAM would be meaningless as a VRAM bound.
-		Default: int64(1440 << 30),
+		// 0, meaning unset: the budget comes from a CUDA query of the devices on this CN, not
+		// from a constant that guesses at somebody's GPU count. See max_index_cache_size.
+		Default: int64(0),
 	},
 	"probe_limit": {
 		Name:              "probe_limit",
