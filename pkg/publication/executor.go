@@ -1346,12 +1346,7 @@ func deleteSnapshotWithLifecycleGate(
 		}
 	}()
 
-	gate, err := exec(
-		ctx,
-		databranchutils.LineageOwnerLifecycleLockSQLForTxn(txn),
-		cnUUID,
-		txn,
-	)
+	gate, err := exec(ctx, databranchutils.LineageOwnerLifecycleLockSQL(), cnUUID, txn)
 	gate.Close()
 	if err != nil {
 		return err

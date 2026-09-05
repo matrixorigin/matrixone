@@ -195,7 +195,6 @@ func TestGetDataBranchMutationExecutorRollsBackOnAdmissionFailure(t *testing.T) 
 func TestValidateDataBranchLineageOwnerLifecycleAtCommitFastFailsStableWrite(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	txnOp := mock_frontend.NewMockTxnOperator(ctrl)
-	txnOp.EXPECT().Txn().Return(txn.TxnMeta{}).Times(2)
 	sqlExecutor := &lineageLifecycleCommitSQLExecutor{}
 	require.NoError(t, validateDataBranchLineageOwnerLifecycleWithExecutor(
 		context.Background(), sqlExecutor, txnOp, time.UTC,

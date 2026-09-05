@@ -29,13 +29,53 @@ import (
 )
 
 func lockDataBranchLineageOwnerLifecycle(ctx context.Context, bh BackgroundExec) error {
-	lockCtx := defines.AttachAccountId(ctx, catalog.System_Account)
-	err := databranchutils.LockLineageOwnerLifecycle(backgroundExecTxnOperator(bh), func(sql string) error {
-		bh.ClearExecResultSet()
-		return bh.Exec(lockCtx, sql)
+	return databranchutils.LockLineageOwnerLifecycle(func(sql string) error {
+		return execDataBranchLineageOwnerLifecycleSQL(ctx, bh, sql)
 	})
+}
+
+func execDataBranchLineageOwnerLifecycleSQL(
+	ctx context.Context,
+	bh BackgroundExec,
+	sql string,
+) error {
+	lockCtx := defines.AttachAccountId(ctx, catalog.System_Account)
+	bh.ClearExecResultSet()
+	err := bh.Exec(lockCtx, sql)
 	bh.ClearExecResultSet()
 	return err
+}
+
+func lockDataBranchLineageOwnerLifecycleForFeatureAdmission(
+	ctx context.Context,
+	bh BackgroundExec,
+) error {
+	txnOp := backgroundExecTxnOperator(bh)
+	gateSQL := databranchutils.LineageOwnerLifecycleLockSQLForTxn(txnOp)
+	if err := execDataBranchLineageOwnerLifecycleSQL(ctx, bh, gateSQL); err != nil {
+		return err
+	}
+	if gateSQL == databranchutils.LineageOwnerLifecyclePessimisticLockSQL() {
+		if backExec, ok := bh.(*backExec); ok && backExec != nil && backExec.backSes != nil {
+			backExec.backSes.lineageOwnerLifecycleWritePending = true
+		}
+	}
+	return nil
+}
+
+func writePendingDataBranchLineageOwnerLifecycle(
+	ctx context.Context,
+	bh BackgroundExec,
+) error {
+	backExec, ok := bh.(*backExec)
+	if !ok || backExec == nil || backExec.backSes == nil ||
+		!backExec.backSes.lineageOwnerLifecycleWritePending {
+		return nil
+	}
+	backExec.backSes.lineageOwnerLifecycleWritePending = false
+	return execDataBranchLineageOwnerLifecycleSQL(
+		ctx, bh, databranchutils.LineageOwnerLifecycleLockSQL(),
+	)
 }
 
 func backgroundExecTxnOperator(bh BackgroundExec) client.TxnOperator {
@@ -74,6 +114,10 @@ func validateDataBranchLineageOwnerLifecycleWithExecutor(
 	txnOp client.TxnOperator,
 	timeZone *time.Location,
 ) error {
+	// Commit validation intentionally retains the write barrier for pessimistic
+	// transactions. The write dependency detects an owner writer that completed
+	// after this transaction mutated branch catalogs; a row-locking read would
+	// only serialize the statement and would let the stale transaction commit.
 	opts := executor.Options{}.
 		WithDisableIncrStatement().
 		WithTxn(txnOp).
@@ -85,7 +129,7 @@ func validateDataBranchLineageOwnerLifecycleWithExecutor(
 			WithAccountID(catalog.System_Account))
 	result, err := sqlExecutor.Exec(
 		ctx,
-		databranchutils.LineageOwnerLifecycleLockSQLForTxn(txnOp),
+		databranchutils.LineageOwnerLifecycleLockSQL(),
 		opts,
 	)
 	if err != nil {
@@ -111,5 +155,5 @@ func admitFeatureLimitedLineageOwnerMutation(
 			return err
 		}
 	}
-	return lockDataBranchLineageOwnerLifecycle(ctx, bh)
+	return lockDataBranchLineageOwnerLifecycleForFeatureAdmission(ctx, bh)
 }

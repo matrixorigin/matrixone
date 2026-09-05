@@ -159,10 +159,7 @@ func compactExpiredAlterDataBranchLineageBatchWithExecutor(
 		}
 
 		gateOpts := statementOpts.WithWaitPolicy(lock.WaitPolicy_FastFail)
-		gate, err := txn.Exec(
-			databranchutils.LineageOwnerLifecycleLockSQLForTxn(txn.Txn()),
-			gateOpts,
-		)
+		gate, err := txn.Exec(databranchutils.LineageOwnerLifecycleLockSQL(), gateOpts)
 		if err != nil {
 			return err
 		}

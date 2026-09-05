@@ -21,13 +21,14 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 )
 
-// LineageOwnerLifecycleLockSQL returns the write barrier for optimistic
-// transactions. It writes the bootstrap-created SNAPSHOT feature registry row,
-// which exists before any snapshot, PITR, or data-branch lineage row can be
-// created. The write-write conflict makes an optimistic transaction retry when
-// an owner publication crosses the barrier concurrently. updated_at is assigned
-// explicitly so crossing the barrier does not change the feature registry's
-// observable metadata.
+// LineageOwnerLifecycleLockSQL returns the lifecycle write barrier. It writes
+// the bootstrap-created SNAPSHOT feature registry row, which exists before any
+// snapshot, PITR, or data-branch lineage row can be created. The write-write
+// conflict makes an optimistic owner publication retry when a concurrent
+// publication crosses the barrier. Commit-time validation also uses this write
+// barrier for pessimistic transactions to detect a completed owner writer.
+// updated_at is assigned explicitly so crossing the barrier does not change the
+// feature registry's observable metadata.
 func LineageOwnerLifecycleLockSQL() string {
 	return fmt.Sprintf(
 		"update %s.%s set scope_spec = scope_spec, updated_at = updated_at where feature_code = 'SNAPSHOT'",
@@ -59,6 +60,6 @@ func LineageOwnerLifecycleLockSQLForTxn(txnOp client.TxnOperator) string {
 // LockLineageOwnerLifecycle crosses the stable write barrier through the
 // caller's transaction. The caller must keep that transaction open through
 // the owner mutation, restore, or lineage-GC decision that it protects.
-func LockLineageOwnerLifecycle(txnOp client.TxnOperator, exec func(string) error) error {
-	return exec(LineageOwnerLifecycleLockSQLForTxn(txnOp))
+func LockLineageOwnerLifecycle(exec func(string) error) error {
+	return exec(LineageOwnerLifecycleLockSQL())
 }

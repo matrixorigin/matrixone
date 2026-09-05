@@ -120,6 +120,9 @@ func featureLimitCheckerForAccount(
 
 	defer func() {
 		sqlRet.Close()
+		if err == nil {
+			err = writePendingDataBranchLineageOwnerLifecycle(ctx, bh)
+		}
 	}()
 
 	// Feature limits are admission-control state. The owning mutation installs

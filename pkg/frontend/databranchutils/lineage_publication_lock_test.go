@@ -52,7 +52,7 @@ func TestLineageOwnerLifecycleLockSerializesEmptyProbe(t *testing.T) {
 	ownerDone := make(chan error, 1)
 	go func() {
 		locked := false
-		err := LockLineageOwnerLifecycle(nil, func(string) error {
+		err := LockLineageOwnerLifecycle(func(string) error {
 			stableRow.Lock()
 			locked = true
 			close(ownerLocked)
@@ -85,7 +85,7 @@ func TestLineageOwnerLifecycleLockSerializesEmptyProbe(t *testing.T) {
 	}
 	alterDone := make(chan alterResult, 1)
 	go func() {
-		err := LockLineageOwnerLifecycle(nil, func(string) error {
+		err := LockLineageOwnerLifecycle(func(string) error {
 			stableRow.Lock()
 			return nil
 		})
