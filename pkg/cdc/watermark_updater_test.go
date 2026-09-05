@@ -1587,18 +1587,20 @@ func TestCDCWatermarkUpdaterPartitionsStableMonotonicWatermarks(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, 2, exec.execCalls)
 	require.Len(t, exec.sqls, 2)
-	if strings.Contains(exec.sqls[0], "CASE WHEN") {
+	if strings.HasPrefix(exec.sqls[0], "UPDATE `mo_catalog`.`mo_cdc_watermark` AS w") {
 		exec.sqls[0], exec.sqls[1] = exec.sqls[1], exec.sqls[0]
 	}
-	require.NotContains(t, exec.sqls[0], "CASE WHEN")
+	require.Contains(t, exec.sqls[0], "INSERT INTO")
 	require.Contains(t, exec.sqls[0], "'legacy'")
-	require.Contains(t, exec.sqls[1], "CASE WHEN")
+	require.True(t, strings.HasPrefix(exec.sqls[1], "UPDATE `mo_catalog`.`mo_cdc_watermark` AS w"))
+	require.NotContains(t, exec.sqls[1], "INSERT INTO")
+	require.NotContains(t, exec.sqls[1], "ON DUPLICATE KEY")
 	require.Contains(t, exec.sqls[1], "SUBSTRING_INDEX")
 	require.Contains(t, exec.sqls[1], "source_table_id")
 	require.Contains(t, exec.sqls[1], "22 AS source_table_id")
 	require.Contains(t, exec.sqls[1], "123 AS owner_generation")
 	require.NotContains(t, exec.sqls[1], "mo_cdc_snapshot")
-	require.Contains(t, exec.sqls[1], "VALUES(owner_generation) = owner_generation")
+	require.Contains(t, exec.sqls[1], "v.owner_generation = w.owner_generation")
 	stmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL, exec.sqls[1], 1)
 	require.NoError(t, err)
 	stmt.Free()

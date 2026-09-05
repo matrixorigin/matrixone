@@ -55,7 +55,7 @@ func (e *takeoverCheckpointExecutor) Exec(_ context.Context, sql string, _ ie.Se
 		}
 		return nil
 	}
-	if strings.HasPrefix(sql, "INSERT INTO `mo_catalog`.`mo_cdc_watermark`") {
+	if strings.HasPrefix(sql, "UPDATE `mo_catalog`.`mo_cdc_watermark` AS w") {
 		if e.onCheckpoint != nil {
 			callback := e.onCheckpoint
 			e.onCheckpoint = nil
@@ -89,6 +89,78 @@ func (e *takeoverCheckpointExecutor) Query(_ context.Context, sql string, _ ie.S
 }
 
 func (*takeoverCheckpointExecutor) ApplySessionOverride(ie.SessionOverrideOptions) {}
+
+type restartDeletedCheckpointExecutor struct {
+	rowExists        bool
+	ownerGeneration  uint64
+	durableWatermark types.TS
+	beforeCheckpoint func()
+}
+
+func (e *restartDeletedCheckpointExecutor) Exec(_ context.Context, sql string, _ ie.SessionOverrideOptions) error {
+	isInsert := strings.HasPrefix(sql, "INSERT INTO `mo_catalog`.`mo_cdc_watermark`")
+	isUpdate := strings.HasPrefix(sql, "UPDATE `mo_catalog`.`mo_cdc_watermark` AS w")
+	if !isInsert && !isUpdate {
+		return strconv.ErrSyntax
+	}
+	if e.beforeCheckpoint != nil {
+		callback := e.beforeCheckpoint
+		e.beforeCheckpoint = nil
+		callback()
+	}
+	match := watermarkOwnerNumber.FindStringSubmatch(sql)
+	if len(match) != 2 {
+		return strconv.ErrSyntax
+	}
+	candidate, err := strconv.ParseUint(match[1], 10, 64)
+	if err != nil {
+		return err
+	}
+	if !e.rowExists {
+		if isInsert {
+			e.rowExists = true
+			e.ownerGeneration = candidate
+			e.durableWatermark = types.BuildTS(200, 0)
+		}
+		return nil
+	}
+	if candidate == e.ownerGeneration {
+		e.durableWatermark = types.BuildTS(200, 0)
+	}
+	return nil
+}
+
+func (e *restartDeletedCheckpointExecutor) Query(context.Context, string, ie.SessionOverrideOptions) ie.InternalExecResult {
+	return &InternalExecResultForTest{err: strconv.ErrSyntax}
+}
+
+func (*restartDeletedCheckpointExecutor) ApplySessionOverride(ie.SessionOverrideOptions) {}
+
+func TestRestartDeletedWatermarkCannotBeRecreatedByStableCheckpoint(t *testing.T) {
+	ctx := context.Background()
+	owner := NewOwnerFenceForGeneration(time.UnixMicro(100), func(context.Context) error { return nil })
+	store := &restartDeletedCheckpointExecutor{
+		rowExists:       true,
+		ownerGeneration: owner.GenerationToken(),
+	}
+	updater := NewCDCWatermarkUpdater(t.Name(), store)
+	key := &WatermarkKey{AccountId: 1, TaskId: "task1", DBName: "db1", TableName: "table1"}
+	watermark := types.BuildTS(200, 0)
+	require.NoError(t, updater.UpdateWatermarkOnly(
+		WithWatermarkOwnerFence(ctx, owner, 11), key, &watermark))
+	store.beforeCheckpoint = func() {
+		// The async writer has already passed its owner precheck. Model RESTART
+		// committing the deliberate watermark deletion before this SQL executes.
+		store.rowExists = false
+		store.ownerGeneration = 0
+		store.durableWatermark = types.TS{}
+	}
+	updater.committingBuffer = append(updater.committingBuffer, NewCommittingWMJob(ctx))
+	_, err := updater.execBatchUpdateWM()
+	require.NoError(t, err)
+	require.False(t, store.rowExists, "a delayed stable checkpoint recreated the RESTART-deleted row")
+	require.True(t, store.durableWatermark.IsEmpty())
+}
 
 func TestSnapshotTakeoverRejectsPreviousOwnerCheckpoint(t *testing.T) {
 	ctx := context.Background()

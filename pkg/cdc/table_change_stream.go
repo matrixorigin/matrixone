@@ -920,6 +920,21 @@ func (s *TableChangeStream) acquireInitialSnapshotPermit(ctx context.Context) (*
 	if !s.initialSyncPending.Load() || s.initialSnapshotLimiter == nil {
 		return nil, nil
 	}
+	if s.dataProcessor != nil && s.dataProcessor.hasPendingSnapshotGroup() {
+		if permit, ok := s.initialSnapshotLimiter.tryAcquire(); ok {
+			if s.progressTracker != nil {
+				s.progressTracker.SetState("reading")
+			}
+			return permit, nil
+		}
+		// Staged batches retain limiter permits, so blocking for another permit
+		// could deadlock when several streams hold partial groups. Commit this
+		// bounded group without a watermark, releasing both target ownership and
+		// permits, before joining the normal FIFO.
+		if err := s.dataProcessor.commitPendingSnapshotGroup(ctx); err != nil {
+			return nil, err
+		}
+	}
 
 	if s.progressTracker != nil {
 		s.progressTracker.SetState("waiting_for_initial_snapshot_batch_slot")

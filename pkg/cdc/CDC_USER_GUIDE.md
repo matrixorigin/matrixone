@@ -2986,8 +2986,11 @@ Split large initial snapshots into multiple transactions.
 - `true`: Uses retry-safe grouped target transactions (up to eight engine
   batches, with a 512 MiB measured-allocation grouping threshold). One
   indivisible engine batch may exceed 512 MiB, so the current V1 implementation
-  does not treat that threshold as an absolute byte cap. All
-  retries read that source-table generation's stable snapshot timestamp, and the watermark
+  does not treat that threshold as an absolute byte cap. MatrixOne collects each
+  bounded source group before opening its target transaction, so waiting for the
+  source cannot retain the target ownership lock. Admission backpressure may
+  flush a smaller group to release CN memory permits. All retries read that
+  source-table generation's stable snapshot timestamp, and the watermark
   advances only after the complete snapshot succeeds.
 - `false`: Uses one atomic target transaction for the complete initial
   snapshot. This avoids partial target visibility but may consume substantially
@@ -3035,9 +3038,12 @@ target table is reset under the task/table ownership lock before replay. Missing
 epoch metadata paired with an existing stable-task watermark fails closed; do
 not manually delete rows from `mo_cdc_snapshot`.
 
-Stable-task watermark persistence is monotonic at the catalog SQL boundary.
-This prevents a delayed write from an old CN from replacing a newer watermark
-after takeover. Legacy tasks retain their existing stale-read rewind behavior.
+Stable-task progress persistence is monotonic and update-only at the catalog
+SQL boundary. Pipeline startup creates and claims the progress row; later
+checkpoints cannot recreate a row deleted by `RESTART`. This prevents a delayed
+write from an old CN from replacing or resurrecting progress after takeover. Do
+not manually delete stable-task watermark rows. Legacy tasks retain their
+existing stale-read rewind behavior.
 
 ---
 

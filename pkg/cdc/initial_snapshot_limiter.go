@@ -167,6 +167,35 @@ func (l *InitialSnapshotLimiter) acquire(ctx context.Context) (*snapshotPermit, 
 	}
 }
 
+// tryAcquire admits without joining the FIFO. It is used only by a stream that
+// already owns a staged snapshot group: if no slot is immediately available,
+// that stream commits its partial group and releases its existing permits before
+// entering the ordinary FIFO. Never bypass an existing waiter.
+func (l *InitialSnapshotLimiter) tryAcquire() (*snapshotPermit, bool) {
+	l.mu.Lock()
+	if l.waiters != 0 || l.unobserved != 0 {
+		l.mu.Unlock()
+		return nil, false
+	}
+	l.mu.Unlock()
+
+	// Match acquire: memory discovery can touch procfs/cgroupfs and must not hold
+	// the limiter mutex needed by permit release.
+	available, measured := l.memoryAvailable()
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if l.waiters != 0 || l.unobserved != 0 ||
+		l.inFlight >= l.concurrencyLocked(available, measured) {
+		return nil, false
+	}
+	l.inFlight++
+	l.unobserved++
+	return &snapshotPermit{
+		release: l.release,
+		observe: l.observeBatchBytes,
+	}, true
+}
+
 func (l *InitialSnapshotLimiter) cancelTicket(ticket uint64) {
 	l.mu.Lock()
 	l.canceledTickets[ticket] = struct{}{}

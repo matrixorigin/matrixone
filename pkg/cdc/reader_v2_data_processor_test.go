@@ -38,6 +38,40 @@ type mockDataProcessorSinker struct {
 	sinkCalls   []*DecoderOutput
 }
 
+// targetOwnershipProbeSinker models the one-owner target lock without SQL. A
+// failed nonblocking acquisition makes the test fail through Sinker.Error.
+type targetOwnershipProbeSinker struct {
+	*mockDataProcessorSinker
+	token chan struct{}
+	owns  bool
+}
+
+func newTargetOwnershipProbeSinker(token chan struct{}) *targetOwnershipProbeSinker {
+	return &targetOwnershipProbeSinker{
+		mockDataProcessorSinker: &mockDataProcessorSinker{mockSinker: &mockSinker{}},
+		token:                   token,
+	}
+}
+
+func (s *targetOwnershipProbeSinker) SendBegin() {
+	s.mockDataProcessorSinker.SendBegin()
+	select {
+	case <-s.token:
+		s.owns = true
+	default:
+		s.err = moerr.NewInternalErrorNoCtx("target ownership is still held")
+	}
+}
+
+func (s *targetOwnershipProbeSinker) releaseTargetOwnership() error {
+	s.releaseCalled = true
+	if s.owns {
+		s.owns = false
+		s.token <- struct{}{}
+	}
+	return s.releaseErr
+}
+
 func (m *mockDataProcessorSinker) Sink(ctx context.Context, data *DecoderOutput) {
 	m.sinkCalls = append(m.sinkCalls, data)
 }
@@ -398,6 +432,11 @@ func TestDataProcessor_ProcessChange_Snapshot_WithSplitTxn(t *testing.T) {
 	defer mpool.DeleteMPool(mp)
 
 	sinker := &mockDataProcessorSinker{mockSinker: &mockSinker{}}
+	defer func() {
+		for _, output := range sinker.sinkCalls {
+			output.Close()
+		}
+	}()
 	updater := newMockWatermarkUpdater()
 	txnMgr := NewTransactionManager(sinker, updater, 1, "task1", "db1", "table1")
 	packerPool := fileservice.NewPool(
@@ -412,6 +451,7 @@ func TestDataProcessor_ProcessChange_Snapshot_WithSplitTxn(t *testing.T) {
 		1, 0, 1, 0, true, // initSnapshotSplitTxn = true
 		1, "task1", "db1", "table1",
 	)
+	defer dp.Cleanup()
 
 	fromTs := types.TS{}
 	toTs := (&fromTs).Next()
@@ -432,8 +472,65 @@ func TestDataProcessor_ProcessChange_Snapshot_WithSplitTxn(t *testing.T) {
 	err = dp.ProcessChange(ctx, data)
 
 	assert.NoError(t, err)
+	assert.False(t, sinker.beginCalled, "source collection must not hold a target transaction")
+	assert.Empty(t, sinker.sinkCalls)
+	assert.True(t, dp.hasPendingSnapshotGroup())
+
+	require.NoError(t, dp.ProcessChange(ctx, &ChangeData{Type: ChangeTypeNoMoreData}))
 	assert.True(t, sinker.beginCalled)
-	assert.Equal(t, 1, len(sinker.sinkCalls))
+	assert.Equal(t, 2, len(sinker.sinkCalls))
+	assert.Equal(t, OutputTypeSnapshot, sinker.sinkCalls[0].outputTyp)
+	assert.True(t, sinker.sinkCalls[1].noMoreData)
+}
+
+func TestSplitSnapshotSourceWaitDoesNotBlockReplacementTargetOwnership(t *testing.T) {
+	ctx := context.Background()
+	targetToken := make(chan struct{}, 1)
+	targetToken <- struct{}{}
+	oldSinker := newTargetOwnershipProbeSinker(targetToken)
+	oldTxnMgr := NewTransactionManager(oldSinker, newMockWatermarkUpdater(), 1, "task1", "db1", "table1")
+	mp, err := mpool.NewMPool(t.Name(), 0, mpool.NoFixed)
+	require.NoError(t, err)
+	t.Cleanup(func() { mpool.DeleteMPool(mp) })
+	pool := fileservice.NewPool(1, func() *types.Packer { return types.NewPacker() },
+		func(p *types.Packer) { p.Reset() }, func(p *types.Packer) { p.Close() })
+	oldProcessor := NewDataProcessor(oldSinker, oldTxnMgr, mp, pool, 1, 0, 1, 0, true,
+		1, "task1", "db1", "table1")
+	defer oldProcessor.Cleanup()
+	to := types.BuildTS(2, 0)
+	oldProcessor.SetTransactionRange(types.TS{}, to)
+	require.NoError(t, oldProcessor.ProcessChange(ctx, &ChangeData{
+		Type:        ChangeTypeSnapshot,
+		InsertBatch: buildBatch(t, mp, []int32{1}, to),
+	}))
+	require.False(t, oldSinker.owns)
+	require.Nil(t, oldTxnMgr.GetTracker())
+
+	// Model the old collector waiting indefinitely for its next source batch.
+	// The replacement must acquire target ownership before that wait is released.
+	collectorWaiting := make(chan struct{})
+	releaseCollector := make(chan struct{})
+	collectorDone := make(chan struct{})
+	go func() {
+		close(collectorWaiting)
+		<-releaseCollector
+		close(collectorDone)
+	}()
+	<-collectorWaiting
+
+	replacementSinker := newTargetOwnershipProbeSinker(targetToken)
+	replacementTxnMgr := NewTransactionManager(
+		replacementSinker, newMockWatermarkUpdater(), 1, "task1", "db1", "table1")
+	require.NoError(t, replacementTxnMgr.BeginTransaction(ctx, types.TS{}, to))
+	require.True(t, replacementSinker.owns)
+	select {
+	case <-collectorDone:
+		t.Fatal("old source collector was released before replacement ownership")
+	default:
+	}
+	require.NoError(t, replacementTxnMgr.EnsureCleanup(ctx))
+	close(releaseCollector)
+	<-collectorDone
 }
 
 func TestDataProcessor_SplitSnapshotCommitsBoundedGroupsWithoutWatermark(t *testing.T) {
@@ -454,20 +551,63 @@ func TestDataProcessor_SplitSnapshotCommitsBoundedGroupsWithoutWatermark(t *test
 			InsertBatch: buildBatch(t, h.mp, []int32{int32(i + 1)}, to),
 		}))
 	}
-	assert.NotNil(t, h.txnMgr.GetTracker())
+	assert.Nil(t, h.txnMgr.GetTracker(), "the ninth batch is staged without holding target ownership")
 	assert.False(t, h.update.updateCalled)
 	expectedOps := []string{"begin"}
 	for i := 0; i < initialSnapshotTxnBatchLimit; i++ {
 		expectedOps = append(expectedOps, "sink")
 	}
-	expectedOps = append(expectedOps, "commit", "dummy", "begin", "sink")
+	expectedOps = append(expectedOps, "commit", "dummy")
 	assert.Equal(t, expectedOps, h.sinker.opsSnapshot())
 
 	require.NoError(t, h.dp.ProcessChange(ctx, &ChangeData{Type: ChangeTypeNoMoreData}))
 	assert.True(t, h.update.updateCalled)
 	assert.Nil(t, h.txnMgr.GetTracker())
-	expectedOps = append(expectedOps, "sink", "dummy", "commit", "dummy")
+	expectedOps = append(expectedOps, "begin", "sink", "sink", "dummy", "commit", "dummy")
 	assert.Equal(t, expectedOps, h.sinker.opsSnapshot())
+}
+
+func TestSplitSnapshotBackpressureFlushesBeforePermitWait(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	limiter := newInitialSnapshotLimiter(1, 1, 1, 100, func() (uint64, bool) {
+		return 400, true
+	})
+	permit, err := limiter.acquire(ctx)
+	require.NoError(t, err)
+	permit.ObserveBatchBytes(100)
+
+	mp, err := mpool.NewMPool(t.Name(), 0, mpool.NoFixed)
+	require.NoError(t, err)
+	t.Cleanup(func() { mpool.DeleteMPool(mp) })
+	pool := fileservice.NewPool(1, func() *types.Packer { return types.NewPacker() },
+		func(p *types.Packer) { p.Reset() }, func(p *types.Packer) { p.Close() })
+	sinker := newTransactionalSnapshotSinker()
+	updater := newMockWatermarkUpdater()
+	txnMgr := NewTransactionManager(sinker, updater, 1, "task1", "db1", "table1")
+	dp := NewDataProcessor(sinker, txnMgr, mp, pool, 1, 0, 1, 0, true,
+		1, "task1", "db1", "table1")
+	defer dp.Cleanup()
+	to := types.BuildTS(2, 0)
+	dp.SetTransactionRange(types.TS{}, to)
+	require.NoError(t, dp.ProcessChange(ctx, &ChangeData{
+		Type:           ChangeTypeSnapshot,
+		InsertBatch:    buildBatch(t, mp, []int32{1}, to),
+		snapshotPermit: permit,
+	}))
+	require.True(t, dp.hasPendingSnapshotGroup())
+	require.Nil(t, txnMgr.GetTracker(), "staging source data acquired target ownership")
+
+	stream := &TableChangeStream{initialSnapshotLimiter: limiter, dataProcessor: dp}
+	stream.initialSyncPending.Store(true)
+	next, err := stream.acquireInitialSnapshotPermit(ctx)
+	require.NoError(t, err)
+	require.NotNil(t, next)
+	next.Release()
+	require.False(t, dp.hasPendingSnapshotGroup())
+	require.Nil(t, txnMgr.GetTracker())
+	require.Equal(t, []string{"begin", "sink", "commit", "dummy"}, sinker.opsSnapshot())
+	require.Equal(t, map[int32]struct{}{1: {}}, sinker.durableKeys())
 }
 
 func TestDataProcessor_PartialSnapshotRetryReplaysStableEpoch(t *testing.T) {
@@ -489,6 +629,7 @@ func TestDataProcessor_PartialSnapshotRetryReplaysStableEpoch(t *testing.T) {
 		1, 0, 1, 0, true,
 		1, "task1", "db1", "table1",
 	)
+	defer dp.Cleanup()
 
 	from := types.TS{}
 	firstTo := types.BuildTS(2, 0)
@@ -511,6 +652,7 @@ func TestDataProcessor_PartialSnapshotRetryReplaysStableEpoch(t *testing.T) {
 	require.ErrorIs(t, dp.ProcessChange(ctx, &ChangeData{Type: ChangeTypeSnapshot}), readErr)
 	require.NoError(t, txnMgr.EnsureCleanup(ctx))
 	dp.Cleanup()
+	sinker.ClearError()
 	assert.Equal(t, expectedCommittedGroup, sinker.durableKeys(), "rollback changed a committed group")
 
 	// A retry must use the same durable source epoch, so it contains keys 1 and
@@ -738,7 +880,7 @@ func TestDataProcessor_IntermediateSnapshotCommitFailureDoesNotAdvanceWatermark(
 	})
 	h.dp.SetTransactionRange(types.TS{}, types.BuildTS(2, 0))
 
-	for i := 0; i < initialSnapshotTxnBatchLimit; i++ {
+	for i := 0; i < initialSnapshotTxnBatchLimit-1; i++ {
 		require.NoError(t, h.dp.ProcessChange(ctx, &ChangeData{
 			Type:        ChangeTypeSnapshot,
 			InsertBatch: buildBatch(t, h.mp, []int32{int32(i + 1)}, types.BuildTS(2, 0)),
@@ -749,7 +891,7 @@ func TestDataProcessor_IntermediateSnapshotCommitFailureDoesNotAdvanceWatermark(
 	h.sinker.setCommitError(commitErr)
 	next := &ChangeData{
 		Type:        ChangeTypeSnapshot,
-		InsertBatch: buildBatch(t, h.mp, []int32{9}, types.BuildTS(2, 0)),
+		InsertBatch: buildBatch(t, h.mp, []int32{8}, types.BuildTS(2, 0)),
 	}
 	require.ErrorIs(t, h.dp.ProcessChange(ctx, next), commitErr)
 	next.Clean(h.mp)

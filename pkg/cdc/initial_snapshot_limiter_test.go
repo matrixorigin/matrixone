@@ -185,6 +185,52 @@ func TestInitialSnapshotLimiterFallbackAndCancellation(t *testing.T) {
 	second.Release()
 }
 
+func TestInitialSnapshotLimiterTryAcquireRespectsCapacityAndFIFO(t *testing.T) {
+	limiter := newInitialSnapshotLimiter(1, 2, 2, 100, func() (uint64, bool) {
+		return 800, true
+	})
+	first, err := limiter.acquire(context.Background())
+	require.NoError(t, err)
+	first.ObserveBatchBytes(100)
+	second, ok := limiter.tryAcquire()
+	require.True(t, ok)
+	second.ObserveBatchBytes(100)
+	_, ok = limiter.tryAcquire()
+	require.False(t, ok, "try-acquire exceeded the adaptive capacity")
+	first.Release()
+	second.Release()
+
+	fifo := newInitialSnapshotLimiter(1, 1, 1, 100, func() (uint64, bool) {
+		return 400, true
+	})
+	held, err := fifo.acquire(context.Background())
+	require.NoError(t, err)
+	held.ObserveBatchBytes(100)
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	waiting := make(chan *snapshotPermit, 1)
+	go func() {
+		permit, acquireErr := fifo.acquire(ctx)
+		if acquireErr == nil {
+			waiting <- permit
+		}
+	}()
+	require.Eventually(t, func() bool {
+		fifo.mu.Lock()
+		defer fifo.mu.Unlock()
+		return fifo.waiters == 1
+	}, time.Second, time.Millisecond)
+	_, ok = fifo.tryAcquire()
+	require.False(t, ok, "try-acquire bypassed an existing FIFO waiter")
+	held.Release()
+	select {
+	case permit := <-waiting:
+		permit.Release()
+	case <-ctx.Done():
+		t.Fatal("FIFO waiter was not admitted")
+	}
+}
+
 func TestInitialSnapshotLimiterReleaseWakesWaiter(t *testing.T) {
 	limiter := newInitialSnapshotLimiter(1, 1, 1, 100, func() (uint64, bool) {
 		return 0, false

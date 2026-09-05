@@ -72,7 +72,8 @@ The implementation must preserve all of the following:
    certify target data changed by a replacement.
 9. **Serialized takeover.** Target effects from two owners of the same CDC
    task/table are serialized with a target-side advisory lock. The lock covers
-   an actual DDL or transaction interval, not pipeline idle time.
+   an actual DDL or transaction interval, not source collection or pipeline
+   idle time.
 10. **Durable generation detection.** Every stable pipeline start reloads the
     epoch for its current source table ID. An epoch row for a retired ID causes
     an incomplete fresh generation to reset the target before replay.
@@ -137,6 +138,15 @@ owner equality condition is false. Only after this ordering point may target
 initialization or replay begin. Keeping ownership on the watermark row avoids
 inventing snapshot-epoch rows for modes that intentionally have no initial
 snapshot.
+
+Stable progress checkpoint writes are update-only: pipeline startup owns
+creation of the progress row. This is required because `RESTART` deliberately
+deletes watermark rows. If an old owner passed its preflight before that
+deletion, a progress upsert could otherwise recreate the deleted row after the
+restart. An update instead affects zero rows, so the retired generation cannot
+resurrect progress. Unexpected manual deletion can therefore cause replay after
+process restart, but cannot advance or fabricate durable progress; operators
+must not manually delete stable-task watermark rows.
 
 `S` is the current source transaction snapshot when that table generation is
 discovered, capped by an explicit `EndTs` before persistence. It is not task
@@ -207,18 +217,28 @@ Only the FIFO head samples procfs/cgroup state, and sampling occurs outside the
 limiter mutex. Release and cancellation therefore do not wait behind filesystem
 I/O.
 
+A stream may retain several admitted batches while staging one target group. It
+uses a nonblocking admission attempt that never bypasses FIFO waiters. If no
+slot is immediately available, it commits the partial group and releases those
+permits before joining the FIFO. This prevents multiple streams with partial
+groups from consuming every permit and then waiting on one another.
+
 ### Target transaction groups
 
 For an initial snapshot at `S`:
 
-1. Begin a target transaction when the first non-empty batch arrives.
+1. Stage source batches for one bounded group without opening a target
+   transaction or acquiring the target advisory lock.
 2. Before adding a batch that would exceed eight batches or cross 512 MiB,
-   validate the owner and commit the current group without a watermark.
-3. Release the target advisory lock after that committed transaction. The next
-   group reacquires it and validates the same immutable owner claim.
-4. At `NoMoreData`, commit the final group, validate ownership again, enqueue a
+   flush the current group. A group also flushes when admission backpressure
+   prevents immediately acquiring another source-batch permit.
+3. Only after the complete group has been collected, acquire the target lock,
+   validate the owner, begin a transaction, send the staged batches, and commit
+   without a watermark. Release the lock immediately after that transaction.
+4. The next group repeats collection without retaining the target lock.
+5. At `NoMoreData`, commit the final group, validate ownership again, enqueue a
    fenced watermark update to `S`, and release the target lock.
-5. For an empty snapshot or empty incremental round, enqueue only the fenced
+6. For an empty snapshot or empty incremental round, enqueue only the fenced
    watermark; no target lock or synchronous taskservice heartbeat is needed.
 
 The asynchronous watermark writer validates one shared immutable owner fence
@@ -228,8 +248,8 @@ taskservice/storage result leaves them retryable instead of misclassifying the
 owner as stale. Values from a newer generation that arrive concurrently remain
 in the uncommitted cache for its next flush. Because claim validation and SQL
 cannot be one transaction across taskservice and the watermark updater,
-stable-task upserts require the watermark row's `owner_generation` to match the
-buffered claim. They then compare
+stable-task updates require the existing watermark row's `owner_generation` to
+match the buffered claim. They then compare
 `(source_table_id, physical, logical)` in SQL: higher source generation wins
 unconditionally, and timestamps are monotonic only within one generation. A
 replacement on the same CN also removes non-durable cache tiers owned by the
@@ -282,6 +302,7 @@ executes the protected DDL or transaction.
 The lock is effect-scoped:
 
 - initialization holds it across create/use/drop/create and then releases it;
+- source collection and bounded-group staging never hold it;
 - each data transaction reacquires it before `BEGIN`;
 - commit failure and rollback release it;
 - successful intermediate commits release it immediately;

@@ -269,26 +269,29 @@ const (
 		"ON t.account_id = v.account_id AND t.task_id = v.task_id " +
 		"ON DUPLICATE KEY UPDATE watermark = VALUES(watermark)"
 
-	CDCGuardedMonotonicWatermarkUpdateTemplate = "INSERT INTO " +
-		"`mo_catalog`.`mo_cdc_watermark` " +
-		"(account_id, task_id, db_name, table_name, watermark, source_table_id, owner_generation) " +
-		"SELECT v.account_id, v.task_id, v.db_name, v.table_name, v.watermark, v.source_table_id, v.owner_generation " +
-		"FROM ( %s ) AS v " +
+	// Stable progress checkpoints are update-only. Startup owns creation of the
+	// progress row; keeping that ownership exclusive means a delayed old owner
+	// cannot recreate a row that RESTART deliberately deleted after the owner's
+	// preflight check.
+	CDCGuardedMonotonicWatermarkUpdateTemplate = "UPDATE " +
+		"`mo_catalog`.`mo_cdc_watermark` AS w " +
+		"INNER JOIN ( %s ) AS v ON " +
+		"w.account_id = v.account_id AND w.task_id = v.task_id AND " +
+		"w.db_name = v.db_name AND w.table_name = v.table_name " +
 		"INNER JOIN (SELECT account_id, task_id FROM `mo_catalog`.`mo_cdc_task` WHERE %s FOR UPDATE) AS t " +
-		"ON t.account_id = v.account_id AND t.task_id = v.task_id " +
-		"ON DUPLICATE KEY UPDATE watermark = CASE WHEN VALUES(owner_generation) = owner_generation AND (" +
-		"VALUES(source_table_id) > source_table_id OR (" +
-		"VALUES(source_table_id) = source_table_id AND (" +
-		"CAST(SUBSTRING_INDEX(VALUES(watermark), '-', 1) AS BIGINT) > " +
-		"CAST(SUBSTRING_INDEX(watermark, '-', 1) AS BIGINT) OR (" +
-		"CAST(SUBSTRING_INDEX(VALUES(watermark), '-', 1) AS BIGINT) = " +
-		"CAST(SUBSTRING_INDEX(watermark, '-', 1) AS BIGINT) AND " +
-		"CAST(SUBSTRING_INDEX(VALUES(watermark), '-', -1) AS BIGINT) > " +
-		"CAST(SUBSTRING_INDEX(watermark, '-', -1) AS BIGINT))))) " +
-		"THEN VALUES(watermark) ELSE watermark END, " +
-		"source_table_id = CASE WHEN VALUES(owner_generation) = owner_generation AND " +
-		"VALUES(source_table_id) > source_table_id THEN VALUES(source_table_id) ELSE source_table_id END, " +
-		"owner_generation = owner_generation"
+		"ON t.account_id = w.account_id AND t.task_id = w.task_id " +
+		"SET w.watermark = CASE WHEN v.owner_generation = w.owner_generation AND (" +
+		"v.source_table_id > w.source_table_id OR (" +
+		"v.source_table_id = w.source_table_id AND (" +
+		"CAST(SUBSTRING_INDEX(v.watermark, '-', 1) AS BIGINT) > " +
+		"CAST(SUBSTRING_INDEX(w.watermark, '-', 1) AS BIGINT) OR (" +
+		"CAST(SUBSTRING_INDEX(v.watermark, '-', 1) AS BIGINT) = " +
+		"CAST(SUBSTRING_INDEX(w.watermark, '-', 1) AS BIGINT) AND " +
+		"CAST(SUBSTRING_INDEX(v.watermark, '-', -1) AS BIGINT) > " +
+		"CAST(SUBSTRING_INDEX(w.watermark, '-', -1) AS BIGINT))))) " +
+		"THEN v.watermark ELSE w.watermark END, " +
+		"w.source_table_id = CASE WHEN v.owner_generation = w.owner_generation AND " +
+		"v.source_table_id > w.source_table_id THEN v.source_table_id ELSE w.source_table_id END"
 
 	CDCGuardedWatermarkErrorUpdateTemplate = "INSERT INTO " +
 		"`mo_catalog`.`mo_cdc_watermark` " +

@@ -70,6 +70,11 @@ type DataProcessor struct {
 	initSnapshotSplitTxn bool
 	snapshotTxnBatches   int
 	snapshotTxnBytes     uint64
+	// snapshotGroup stages a bounded stable-epoch group before opening the
+	// target transaction. Source collection must never run while the target
+	// advisory lock is held: a taskservice-partitioned old owner could otherwise
+	// block its replacement behind that session indefinitely.
+	snapshotGroup []*DecoderOutput
 
 	// Logging context
 	accountId uint64
@@ -189,37 +194,34 @@ func (dp *DataProcessor) processSnapshot(ctx context.Context, data *ChangeData) 
 	}
 
 	batchBytes := uint64(data.InsertBatch.Allocated())
-	if dp.shouldRotateSnapshotTxn(batchBytes) {
-		if err := dp.txnManager.CommitTransactionWithoutWatermark(ctx); err != nil {
-			logutil.Error(
-				"cdc.data_processor.commit_snapshot_group_failed",
-				zap.String("task-id", dp.taskId),
-				zap.String("db", dp.dbName),
-				zap.String("table", dp.tableName),
-				zap.Int("group-batches", dp.snapshotTxnBatches),
-				zap.Uint64("group-bytes", dp.snapshotTxnBytes),
-				zap.Error(err),
-			)
-			return err
+	if dp.initSnapshotSplitTxn {
+		// The next batch is already owned, so rotate before staging it when adding
+		// it would cross the transaction bound. The current group has no target
+		// transaction yet; flushing is the only interval that owns the target lock.
+		if dp.shouldRotateSnapshotTxn(batchBytes) {
+			if err := dp.commitPendingSnapshotGroup(ctx); err != nil {
+				return err
+			}
 		}
-		dp.resetSnapshotTxnGroup()
+		dp.stageSnapshot(data, batchBytes)
+		// Do not wait for a ninth permit while retaining all eight permits. The byte
+		// case also flushes promptly once the indivisible current batch reaches the
+		// bound. Partial groups may be flushed earlier by admission backpressure.
+		if dp.snapshotTxnBatches >= initialSnapshotTxnBatchLimit ||
+			dp.snapshotTxnBytes >= uint64(initialSnapshotTxnByteLimit) {
+			if err := dp.commitPendingSnapshotGroup(ctx); err != nil {
+				return err
+			}
+		}
+		dp.logSnapshotComplete(rows)
+		return nil
 	}
 
-	tracker := dp.txnManager.GetTracker()
-	if tracker == nil || !tracker.hasBegin {
-		if err := dp.txnManager.BeginTransaction(ctx, dp.fromTs, dp.toTs); err != nil {
-			logutil.Error(
-				"cdc.data_processor.begin_transaction_failed",
-				zap.String("task-id", dp.taskId),
-				zap.String("db", dp.dbName),
-				zap.String("table", dp.tableName),
-				zap.Error(err),
-			)
-			return err
-		}
+	if err := dp.beginSnapshotTransaction(ctx); err != nil {
+		return err
 	}
 
-	// Send snapshot data to sinker
+	// Legacy atomic snapshots preserve the existing immediate transfer path.
 	dp.sinker.Sink(ctx, &DecoderOutput{
 		outputTyp:      OutputTypeSnapshot,
 		checkpointBat:  data.InsertBatch,
@@ -238,6 +240,12 @@ func (dp *DataProcessor) processSnapshot(ctx context.Context, data *ChangeData) 
 	// because snapshot data might span multiple batches.
 	// Watermark should only be updated when ALL snapshot data is processed (in processNoMoreData)
 
+	dp.logSnapshotComplete(rows)
+
+	return nil
+}
+
+func (dp *DataProcessor) logSnapshotComplete(rows int) {
 	logutil.Debug(
 		"cdc.data_processor.process_snapshot_complete",
 		zap.String("task-id", dp.taskId),
@@ -247,8 +255,88 @@ func (dp *DataProcessor) processSnapshot(ctx context.Context, data *ChangeData) 
 		zap.String("from-ts", dp.fromTs.ToString()),
 		zap.String("to-ts", dp.toTs.ToString()),
 	)
+}
 
+func (dp *DataProcessor) beginSnapshotTransaction(ctx context.Context) error {
+	tracker := dp.txnManager.GetTracker()
+	if tracker != nil && tracker.hasBegin {
+		return nil
+	}
+	if err := dp.txnManager.BeginTransaction(ctx, dp.fromTs, dp.toTs); err != nil {
+		logutil.Error(
+			"cdc.data_processor.begin_transaction_failed",
+			zap.String("task-id", dp.taskId),
+			zap.String("db", dp.dbName),
+			zap.String("table", dp.tableName),
+			zap.Error(err),
+		)
+		return err
+	}
 	return nil
+}
+
+func (dp *DataProcessor) stageSnapshot(data *ChangeData, batchBytes uint64) {
+	dp.snapshotGroup = append(dp.snapshotGroup, &DecoderOutput{
+		outputTyp:      OutputTypeSnapshot,
+		checkpointBat:  data.InsertBatch,
+		fromTs:         dp.fromTs,
+		toTs:           dp.toTs,
+		mp:             dp.mp,
+		snapshotPermit: data.snapshotPermit,
+	})
+	data.InsertBatch = nil
+	data.snapshotPermit = nil
+	dp.snapshotTxnBatches++
+	dp.snapshotTxnBytes += batchBytes
+}
+
+// sendPendingSnapshotGroup opens the target effect interval only after source
+// collection has produced the complete bounded group. On successful return all
+// staged batches have transferred to the sinker, while the target transaction
+// remains active for the caller to commit with or without a watermark.
+func (dp *DataProcessor) sendPendingSnapshotGroup(ctx context.Context) error {
+	if len(dp.snapshotGroup) == 0 {
+		return nil
+	}
+	if err := dp.beginSnapshotTransaction(ctx); err != nil {
+		return err
+	}
+	for i, output := range dp.snapshotGroup {
+		dp.sinker.Sink(ctx, output)
+		dp.snapshotGroup[i] = nil
+	}
+	dp.snapshotGroup = dp.snapshotGroup[:0]
+	return nil
+}
+
+// commitPendingSnapshotGroup completes an intermediate stable-epoch group
+// without advancing the watermark. The transaction manager synchronously
+// drains the sink command queue before releasing target ownership.
+func (dp *DataProcessor) commitPendingSnapshotGroup(ctx context.Context) error {
+	if len(dp.snapshotGroup) == 0 {
+		return nil
+	}
+	if err := dp.sendPendingSnapshotGroup(ctx); err != nil {
+		return err
+	}
+	if err := dp.txnManager.CommitTransactionWithoutWatermark(ctx); err != nil {
+		logutil.Error(
+			"cdc.data_processor.commit_snapshot_group_failed",
+			zap.String("task-id", dp.taskId),
+			zap.String("db", dp.dbName),
+			zap.String("table", dp.tableName),
+			zap.Int("group-batches", dp.snapshotTxnBatches),
+			zap.Uint64("group-bytes", dp.snapshotTxnBytes),
+			zap.Error(err),
+		)
+		return err
+	}
+	dp.resetSnapshotTxnGroup()
+	return nil
+}
+
+func (dp *DataProcessor) hasPendingSnapshotGroup() bool {
+	return len(dp.snapshotGroup) > 0
 }
 
 func (dp *DataProcessor) shouldRotateSnapshotTxn(nextBatchBytes uint64) bool {
@@ -394,6 +482,11 @@ func (dp *DataProcessor) processTailDone(ctx context.Context, data *ChangeData) 
 
 // processNoMoreData processes end of data (send heartbeat and commit)
 func (dp *DataProcessor) processNoMoreData(ctx context.Context) error {
+	// Stable snapshots stage source batches without a target transaction. Open
+	// the final effect interval only now, after collection has terminated.
+	if err := dp.sendPendingSnapshotGroup(ctx); err != nil {
+		return err
+	}
 	// Send heartbeat (no more data marker)
 	dp.sinker.Sink(ctx, &DecoderOutput{
 		noMoreData: true,
@@ -512,6 +605,13 @@ func (dp *DataProcessor) Cleanup() {
 		dp.deleteAtmBatch.Close()
 		dp.deleteAtmBatch = nil
 	}
+	for i, output := range dp.snapshotGroup {
+		if output != nil {
+			output.Close()
+			dp.snapshotGroup[i] = nil
+		}
+	}
+	dp.snapshotGroup = nil
 	dp.resetSnapshotTxnGroup()
 
 	logutil.Debug(
