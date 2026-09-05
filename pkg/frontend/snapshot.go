@@ -1983,6 +1983,7 @@ func isExternalTable(tblInfo *tableInfo) bool {
 }
 
 func shouldSkipRestoreTableInBulk(tblInfo *tableInfo) bool {
+	// Database clone follows the same bulk-restore policy as snapshot and PITR.
 	return isExternalTable(tblInfo)
 }
 
