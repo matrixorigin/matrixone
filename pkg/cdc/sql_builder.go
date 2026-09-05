@@ -330,7 +330,8 @@ const (
 		`AND job_name = '%s'` +
 		`AND job_id = %d ` +
 		`AND job_state != 4 ` +
-		`AND  JSON_EXTRACT(job_status, '$.LSN') = '%d'`
+		`AND JSON_EXTRACT(job_status, '$.LSN') = '%d' ` +
+		`AND CAST(COALESCE(JSON_UNQUOTE(JSON_EXTRACT(job_status, '$.Stage')), '0') AS SIGNED) <= %d`
 	CDCUpdateMOISCPLogJobSpecSqlTemplate = `UPDATE mo_catalog.mo_iscp_log SET ` +
 		`job_spec = '%s'` +
 		`WHERE` +
@@ -1037,6 +1038,7 @@ func (b cdcSQLBuilder) ISCPLogUpdateResultSQL(
 	jobID uint64,
 	newWatermark types.TS,
 	jobStatus string,
+	jobStage int8,
 	jobState int8,
 	expectPrevLSN uint64,
 ) string {
@@ -1045,6 +1047,63 @@ func (b cdcSQLBuilder) ISCPLogUpdateResultSQL(
 		jobState,
 		newWatermark.ToString(),
 		jobStatus,
+		accountID,
+		tableID,
+		jobName,
+		jobID,
+		expectPrevLSN,
+		jobStage,
+	)
+}
+
+// ISCPLogRepairLegacyWatermarkStageSQL repairs the exact durable state emitted
+// by the old watermark-only path: it replaced JobStatus with a zero value whose
+// only non-zero field was LSN. A genuine InitSQL failure has a non-empty error,
+// so it must stay in Init and remain retryable instead of being promoted here.
+func (b cdcSQLBuilder) ISCPLogRepairLegacyWatermarkStageSQL(
+	completedState int8,
+	runningStage int8,
+) string {
+	return fmt.Sprintf(
+		"UPDATE mo_catalog.mo_iscp_log SET "+
+			"job_status = JSON_SET(job_status, '$.Stage', %d) "+
+			"WHERE job_state = %d "+
+			"AND JSON_EXTRACT(job_status, '$.Stage') = '0' "+
+			"AND CAST(JSON_UNQUOTE(JSON_EXTRACT(job_status, '$.LSN')) AS UNSIGNED) > 0 "+
+			"AND COALESCE(JSON_EXTRACT(job_status, '$.ErrorCode'), '0') = '0' "+
+			"AND COALESCE(JSON_UNQUOTE(JSON_EXTRACT(job_status, '$.ErrorMsg')), '') = ''",
+		runningStage,
+		completedState,
+	)
+}
+
+// ISCPLogAdvanceWatermarkSQL advances progress without replacing job_status.
+// Lifecycle fields such as Stage belong to the iteration state machine and
+// must survive this maintenance-only update.
+func (b cdcSQLBuilder) ISCPLogAdvanceWatermarkSQL(
+	accountID uint32,
+	tableID uint64,
+	jobName string,
+	jobID uint64,
+	newWatermark types.TS,
+	nextLSN uint64,
+	jobState int8,
+	expectPrevLSN uint64,
+) string {
+	return fmt.Sprintf(
+		"UPDATE mo_catalog.mo_iscp_log SET "+
+			"job_state = %d, "+
+			"watermark = '%s', "+
+			"job_status = JSON_SET(job_status, '$.LSN', %d) "+
+			"WHERE account_id = %d "+
+			"AND table_id = %d "+
+			"AND job_name = '%s'"+
+			"AND job_id = %d "+
+			"AND job_state != 4 "+
+			"AND JSON_EXTRACT(job_status, '$.LSN') = '%d'",
+		jobState,
+		newWatermark.ToString(),
+		nextLSN,
 		accountID,
 		tableID,
 		jobName,

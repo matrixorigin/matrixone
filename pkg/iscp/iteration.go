@@ -687,6 +687,7 @@ func FlushStatus(
 		jobID,
 		watermark,
 		statusJson,
+		jobStatus.Stage,
 		state,
 		prevLSN,
 	)

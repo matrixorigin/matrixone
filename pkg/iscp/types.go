@@ -90,6 +90,7 @@ type IterationContext struct {
 	jobNames  []string
 	jobIDs    []uint64
 	lsn       []uint64
+	stages    []int8
 	fromTS    types.TS
 	toTS      types.TS
 }

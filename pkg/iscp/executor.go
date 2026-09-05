@@ -418,11 +418,7 @@ func (exec *ISCPTaskExecutor) repairAbandonedJobs(ctx context.Context) (err erro
 	txnOp, err := exec.cnTxnClient.New(ctxWithTimeout, nowTs, createByOpt)
 	if txnOp != nil {
 		defer func() {
-			if err != nil {
-				err = errors.Join(err, txnOp.Rollback(ctxWithTimeout))
-				return
-			}
-			err = txnOp.Commit(ctxWithTimeout)
+			err = finishISCPTransaction(ctx, txnOp, err)
 		}()
 	}
 	if err != nil {
@@ -432,11 +428,25 @@ func (exec *ISCPTaskExecutor) repairAbandonedJobs(ctx context.Context) (err erro
 	if err != nil {
 		return
 	}
-	result, err := ExecWithResult(ctxWithTimeout, sql, exec.cnUUID, txnOp)
+	// Before ISCP watermark updates became field-preserving, they replaced the
+	// whole JobStatus with {LSN: next}. Repair only that unambiguous completed,
+	// non-error shape. In particular, do not promote genuine InitSQL failures:
+	// those carry ErrorCode/ErrorMsg and must remain retryable in Init.
+	repairSQL := cdc.CDCSQLBuilder.ISCPLogRepairLegacyWatermarkStageSQL(
+		ISCPJobState_Completed,
+		JobStage_Running,
+	)
+	result, err := ExecWithResult(ctxWithTimeout, repairSQL, exec.cnUUID, txnOp)
 	if err != nil {
 		return
 	}
-	defer result.Close()
+	result.Close()
+
+	result, err = ExecWithResult(ctxWithTimeout, sql, exec.cnUUID, txnOp)
+	if err != nil {
+		return
+	}
+	result.Close()
 	return nil
 }
 
@@ -928,18 +938,20 @@ func (exec *ISCPTaskExecutor) addOrUpdateRecoveredJob(
 	dropAt types.Timestamp,
 	notPrint bool,
 ) error {
+	persistedState := state
 	// The repair transaction may commit before its logtail is visible to the
 	// next read snapshot. Normalize the same states in memory so correctness
 	// does not depend on asynchronous logtail catch-up.
 	if state == ISCPJobState_Pending || state == ISCPJobState_Running {
 		state = ISCPJobState_Completed
 	}
-	return exec.addOrUpdateJob(
+	return exec.addOrUpdateJobWithPersistedState(
 		accountID,
 		tableID,
 		jobName,
 		jobID,
 		state,
+		persistedState,
 		watermarkStr,
 		jobSpecStr,
 		jobStatusStr,
@@ -997,6 +1009,34 @@ func (exec *ISCPTaskExecutor) addOrUpdateJob(
 	dropAt types.Timestamp,
 	notPrint bool,
 ) error {
+	return exec.addOrUpdateJobWithPersistedState(
+		accountID,
+		tableID,
+		jobName,
+		jobID,
+		state,
+		state,
+		watermarkStr,
+		jobSpecStr,
+		jobStatusStr,
+		dropAt,
+		notPrint,
+	)
+}
+
+func (exec *ISCPTaskExecutor) addOrUpdateJobWithPersistedState(
+	accountID uint32,
+	tableID uint64,
+	jobName string,
+	jobID uint64,
+	state int8,
+	persistedState int8,
+	watermarkStr string,
+	jobSpecStr []byte,
+	jobStatusStr []byte,
+	dropAt types.Timestamp,
+	notPrint bool,
+) error {
 	// SQL NULL is represented by Timestamp(0) for active jobs. A non-NULL zero
 	// timestamp still means dropped, so normalize it to a GC-safe timestamp.
 	if dropAt == types.ZeroTimestamp {
@@ -1031,6 +1071,7 @@ func (exec *ISCPTaskExecutor) addOrUpdateJob(
 	if err != nil {
 		return err
 	}
+	repairLegacyWatermarkStage(persistedState, jobStatus)
 	var table *TableEntry
 	table, ok := exec.getTable(accountID, tableID)
 	if !ok {
@@ -1053,6 +1094,22 @@ func (exec *ISCPTaskExecutor) addOrUpdateJob(
 		exec.RemoveJobFence(fenceKey)
 	}
 	return nil
+}
+
+// repairLegacyWatermarkStage mirrors the durable startup repair in memory.
+// The repair transaction can commit before its logtail is visible to the
+// replay snapshot, so startup correctness must not depend on catch-up timing.
+func repairLegacyWatermarkStage(state int8, status *JobStatus) bool {
+	if state != ISCPJobState_Completed ||
+		status == nil ||
+		status.Stage != JobStage_Init ||
+		status.LSN == 0 ||
+		status.ErrorCode != 0 ||
+		status.ErrorMsg != "" {
+		return false
+	}
+	status.Stage = JobStage_Running
+	return true
 }
 
 func (exec *ISCPTaskExecutor) GCInMemoryJob(threshold time.Duration) {
@@ -1144,7 +1201,7 @@ func (exec *ISCPTaskExecutor) getDirtyTables(
 	)
 	return
 }
-func (exec *ISCPTaskExecutor) FlushWatermarkForAllTables(ttl time.Duration) error {
+func (exec *ISCPTaskExecutor) FlushWatermarkForAllTables(ttl time.Duration) (err error) {
 	tables := exec.getAllTables()
 	if len(tables) == 0 {
 		return nil
@@ -1153,22 +1210,39 @@ func (exec *ISCPTaskExecutor) FlushWatermarkForAllTables(ttl time.Duration) erro
 	if err != nil {
 		return err
 	}
+	return exec.flushWatermarkForAllTablesWithTxn(ttl, txn)
+}
+
+func (exec *ISCPTaskExecutor) flushWatermarkForAllTablesWithTxn(
+	ttl time.Duration,
+	txn client.TxnOperator,
+) (err error) {
+	tables := exec.getAllTables()
 	ctx, cancel := context.WithTimeout(exec.ctx, time.Minute*5)
 	defer cancel()
+	var pending map[*TableEntry][]watermarkFlushReservation
 	defer func() {
+		err = finishISCPTransaction(exec.ctx, txn, err)
 		if err != nil {
-			err2 := txn.Rollback(ctx)
-			if err2 != nil {
-				logutil.Errorf("flush watermark for all tables rollback failed, err: %v", err2)
+			for table, reservations := range pending {
+				table.rollbackWatermarkFlushes(reservations)
 			}
-		} else {
-			err = txn.Commit(ctx)
 		}
 	}()
 	jobCount := 0
 	for _, table := range tables {
-		flushCount := table.tryFlushWatermark(ctx, txn, ttl)
-		jobCount += flushCount
+		reservations, flushErr := table.tryFlushWatermark(ctx, txn, ttl)
+		if len(reservations) > 0 {
+			if pending == nil {
+				pending = make(map[*TableEntry][]watermarkFlushReservation)
+			}
+			pending[table] = reservations
+			jobCount += len(reservations)
+		}
+		if flushErr != nil {
+			err = flushErr
+			return err
+		}
 	}
 	logutil.Info(
 		"ISCP-Task flush watermark",

@@ -167,6 +167,7 @@ func (t *TableEntry) getCandidate() (iter []*IterationContext, minFromTS types.T
 				jobNames:  []string{sinker.jobName},
 				jobIDs:    []uint64{sinker.jobID},
 				lsn:       []uint64{sinker.currentLSN + 1},
+				stages:    []int8{sinker.stage},
 				fromTS:    types.TS{},
 				toTS:      types.TS{},
 			})
@@ -188,6 +189,7 @@ func (t *TableEntry) getCandidate() (iter []*IterationContext, minFromTS types.T
 					iter.jobNames = append(iter.jobNames, sinker.jobName)
 					iter.jobIDs = append(iter.jobIDs, sinker.jobID)
 					iter.lsn = append(iter.lsn, sinker.currentLSN+1)
+					iter.stages = append(iter.stages, sinker.stage)
 					foundIteration = true
 					break
 				}
@@ -200,6 +202,7 @@ func (t *TableEntry) getCandidate() (iter []*IterationContext, minFromTS types.T
 				jobNames:  []string{sinker.jobName},
 				jobIDs:    []uint64{sinker.jobID},
 				lsn:       []uint64{sinker.currentLSN + 1},
+				stages:    []int8{sinker.stage},
 				fromTS:    from,
 				toTS:      to,
 			}
@@ -265,20 +268,52 @@ func (t *TableEntry) UpdateWatermark(iter *IterationContext) {
 	}
 }
 
+type watermarkFlushReservation struct {
+	jobKey            JobKey
+	currentLSN        uint64
+	previousPersisted types.TS
+	flushedWatermark  types.TS
+}
+
 func (t *TableEntry) tryFlushWatermark(
 	ctx context.Context,
 	txn client.TxnOperator,
 	threshold time.Duration,
-) (flushCount int) {
+) (reservations []watermarkFlushReservation, err error) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	for _, jobEntry := range t.jobs {
-		needFlush, err := jobEntry.tryFlushWatermark(ctx, txn, threshold)
-		if needFlush && err == nil {
-			flushCount++
+	for jobKey, jobEntry := range t.jobs {
+		previousPersisted := jobEntry.persistedWatermark
+		needFlush, flushErr := jobEntry.tryFlushWatermark(ctx, txn, threshold)
+		if flushErr != nil {
+			return reservations, flushErr
+		}
+		if needFlush {
+			reservations = append(reservations, watermarkFlushReservation{
+				jobKey:            jobKey,
+				currentLSN:        jobEntry.currentLSN,
+				previousPersisted: previousPersisted,
+				flushedWatermark:  jobEntry.watermark,
+			})
 		}
 	}
-	return flushCount
+	return reservations, nil
+}
+
+func (t *TableEntry) rollbackWatermarkFlushes(reservations []watermarkFlushReservation) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	for _, reservation := range reservations {
+		jobEntry := t.jobs[reservation.jobKey]
+		if jobEntry == nil ||
+			jobEntry.currentLSN != reservation.currentLSN ||
+			jobEntry.state != ISCPJobState_Pending ||
+			!jobEntry.persistedWatermark.EQ(&reservation.flushedWatermark) {
+			continue
+		}
+		jobEntry.state = ISCPJobState_Completed
+		jobEntry.persistedWatermark = reservation.previousPersisted
+	}
 }
 
 func (t *TableEntry) String() string {

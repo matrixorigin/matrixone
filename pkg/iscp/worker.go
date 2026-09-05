@@ -177,12 +177,7 @@ func (w *worker) onItem(iterCtx *IterationContext) {
 		SubmitRetryDuration,
 	)
 	if err != nil {
-		statuses := make([]*JobStatus, len(iterCtx.jobNames))
-		for i := range statuses {
-			statuses[i] = &JobStatus{
-				ErrorMsg: err.Error(),
-			}
-		}
+		statuses := jobStatusesForIterationError(iterCtx, err)
 		preLSN := make([]uint64, len(iterCtx.lsn))
 		for i := range iterCtx.lsn {
 			preLSN[i] = iterCtx.lsn[i] - 1
@@ -217,6 +212,21 @@ func (w *worker) onItem(iterCtx *IterationContext) {
 			)
 		}
 	}
+}
+
+func jobStatusesForIterationError(iterCtx *IterationContext, err error) []*JobStatus {
+	statuses := make([]*JobStatus, len(iterCtx.jobNames))
+	for i := range statuses {
+		stage := int8(JobStage_Init)
+		if len(iterCtx.stages) == len(iterCtx.jobNames) {
+			stage = iterCtx.stages[i]
+		}
+		statuses[i] = &JobStatus{
+			ErrorMsg: err.Error(),
+			Stage:    stage,
+		}
+	}
+	return statuses
 }
 
 func (w *worker) Stop() {

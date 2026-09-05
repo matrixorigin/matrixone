@@ -24,6 +24,8 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/txn/client"
+	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/stretchr/testify/require"
 )
 
@@ -233,6 +235,7 @@ func TestTableEntryDoesNotShareInitIterations(t *testing.T) {
 	iters, _ = table.getCandidate()
 	require.Len(t, iters, 1)
 	require.ElementsMatch(t, []string{"index_ft", "index_hv"}, iters[0].jobNames)
+	require.Equal(t, []int8{JobStage_Running, JobStage_Running}, iters[0].stages)
 }
 
 func TestPublishRebuiltStateReplacesAbandonedGeneration(t *testing.T) {
@@ -340,7 +343,7 @@ func TestTryFlushWatermarkSerializesWithReaders(t *testing.T) {
 	done := make(chan struct{})
 	go func() {
 		close(started)
-		table.tryFlushWatermark(context.Background(), nil, time.Hour)
+		_, _ = table.tryFlushWatermark(context.Background(), nil, time.Hour)
 		close(done)
 	}()
 	<-started
@@ -380,6 +383,235 @@ func TestTryFlushWatermarkSerializesWithReaders(t *testing.T) {
 	}
 }
 
+func TestTryFlushWatermarkPreservesRunningStage(t *testing.T) {
+	oldExecWithResult := ExecWithResult
+	t.Cleanup(func() { ExecWithResult = oldExecWithResult })
+
+	table := NewTableEntry(&ISCPTaskExecutor{}, 1, 2, 3, "db", "table")
+	job := NewJobEntryWithStatus(
+		table,
+		"index_idx",
+		&JobSpec{},
+		&JobStatus{LSN: 5, Stage: JobStage_Running},
+		1,
+		types.BuildTS(1, 0),
+		ISCPJobState_Completed,
+		0,
+	)
+	job.watermark = types.BuildTS(2, 0)
+	table.jobs[JobKey{JobName: job.jobName, JobID: job.jobID}] = job
+
+	var updateSQL string
+	ExecWithResult = func(_ context.Context, sql string, _ string, _ client.TxnOperator) (executor.Result, error) {
+		updateSQL = sql
+		return executor.Result{AffectedRows: 1}, nil
+	}
+
+	flushed, err := job.tryFlushWatermark(context.Background(), nil, 0)
+	require.NoError(t, err)
+	require.True(t, flushed)
+	require.Contains(t, updateSQL, "job_status = JSON_SET(job_status, '$.LSN', 6)")
+	require.Contains(t, updateSQL, ") WHERE account_id")
+	require.NotContains(t, updateSQL, "$.Stage")
+	require.Equal(t, ISCPJobState_Pending, job.state)
+	require.True(t, job.persistedWatermark.EQ(&job.watermark))
+}
+
+func TestTryFlushWatermarkRejectsLostCAS(t *testing.T) {
+	oldExecWithResult := ExecWithResult
+	t.Cleanup(func() { ExecWithResult = oldExecWithResult })
+
+	table := NewTableEntry(&ISCPTaskExecutor{}, 1, 2, 3, "db", "table")
+	job := NewJobEntryWithStatus(
+		table,
+		"index_idx",
+		&JobSpec{},
+		&JobStatus{LSN: 5, Stage: JobStage_Running},
+		1,
+		types.BuildTS(1, 0),
+		ISCPJobState_Completed,
+		0,
+	)
+	job.watermark = types.BuildTS(2, 0)
+	persistedBefore := job.persistedWatermark
+
+	ExecWithResult = func(_ context.Context, _ string, _ string, _ client.TxnOperator) (executor.Result, error) {
+		return executor.Result{AffectedRows: 0}, nil
+	}
+
+	flushed, err := job.tryFlushWatermark(context.Background(), nil, 0)
+	require.Error(t, err)
+	require.True(t, flushed)
+	require.Equal(t, ISCPJobState_Completed, job.state)
+	require.True(t, job.persistedWatermark.EQ(&persistedBefore))
+}
+
+func TestRollbackWatermarkFlushRestoresRetryableState(t *testing.T) {
+	oldExecWithResult := ExecWithResult
+	t.Cleanup(func() { ExecWithResult = oldExecWithResult })
+
+	table := NewTableEntry(&ISCPTaskExecutor{}, 1, 2, 3, "db", "table")
+	jobKey := JobKey{JobName: "index_idx", JobID: 1}
+	job := NewJobEntryWithStatus(
+		table,
+		jobKey.JobName,
+		&JobSpec{},
+		&JobStatus{LSN: 5, Stage: JobStage_Running},
+		jobKey.JobID,
+		types.BuildTS(1, 0),
+		ISCPJobState_Completed,
+		0,
+	)
+	job.watermark = types.BuildTS(2, 0)
+	table.jobs[jobKey] = job
+
+	ExecWithResult = func(_ context.Context, _ string, _ string, _ client.TxnOperator) (executor.Result, error) {
+		return executor.Result{AffectedRows: 1}, nil
+	}
+	reservations, err := table.tryFlushWatermark(context.Background(), nil, 0)
+	require.NoError(t, err)
+	require.Len(t, reservations, 1)
+	require.Equal(t, ISCPJobState_Pending, job.state)
+	require.True(t, job.persistedWatermark.EQ(&job.watermark))
+
+	table.rollbackWatermarkFlushes(reservations)
+
+	require.Equal(t, ISCPJobState_Completed, job.state)
+	expectedPersisted := types.BuildTS(1, 0)
+	require.True(t, job.persistedWatermark.EQ(&expectedPersisted))
+
+	// A delayed transaction error must not undo a newer catalog replay.
+	job.currentLSN = 6
+	job.persistedWatermark = types.BuildTS(3, 0)
+	table.rollbackWatermarkFlushes(reservations)
+	require.Equal(t, uint64(6), job.currentLSN)
+	expectedPersisted = types.BuildTS(3, 0)
+	require.True(t, job.persistedWatermark.EQ(&expectedPersisted))
+}
+
+func newWatermarkFlushTestJob(
+	exec *ISCPTaskExecutor,
+	tableID uint64,
+	jobName string,
+) *JobEntry {
+	table := NewTableEntry(exec, 1, 2, tableID, "db", "table")
+	job := NewJobEntryWithStatus(
+		table,
+		jobName,
+		&JobSpec{},
+		&JobStatus{LSN: 5, Stage: JobStage_Running},
+		1,
+		types.BuildTS(1, 0),
+		ISCPJobState_Completed,
+		0,
+	)
+	job.watermark = types.BuildTS(2, 0)
+	table.jobs[JobKey{JobName: jobName, JobID: 1}] = job
+	exec.setTable(table)
+	return job
+}
+
+func TestFlushWatermarkForAllTablesRollsBackLocalStateOnCommitError(t *testing.T) {
+	oldExecWithResult := ExecWithResult
+	t.Cleanup(func() { ExecWithResult = oldExecWithResult })
+
+	exec := &ISCPTaskExecutor{ctx: context.Background(), tables: newISCPTableTree()}
+	job := newWatermarkFlushTestJob(exec, 3, "index_idx")
+	ExecWithResult = func(_ context.Context, _ string, _ string, _ client.TxnOperator) (executor.Result, error) {
+		return executor.Result{AffectedRows: 1}, nil
+	}
+	commitErr := errors.New("commit failed")
+	txn := &iscpTxnForTest{commitErr: commitErr}
+
+	err := exec.flushWatermarkForAllTablesWithTxn(0, txn)
+
+	require.ErrorIs(t, err, commitErr)
+	require.True(t, txn.committed)
+	require.False(t, txn.rolledBack)
+	require.Equal(t, ISCPJobState_Completed, job.state)
+	expected := types.BuildTS(1, 0)
+	require.True(t, job.persistedWatermark.EQ(&expected))
+}
+
+func TestFlushWatermarkForAllTablesCommitsLocalState(t *testing.T) {
+	oldExecWithResult := ExecWithResult
+	t.Cleanup(func() { ExecWithResult = oldExecWithResult })
+
+	exec := &ISCPTaskExecutor{ctx: context.Background(), tables: newISCPTableTree()}
+	job := newWatermarkFlushTestJob(exec, 3, "index_idx")
+	ExecWithResult = func(_ context.Context, _ string, _ string, _ client.TxnOperator) (executor.Result, error) {
+		return executor.Result{AffectedRows: 1}, nil
+	}
+	txn := &iscpTxnForTest{}
+
+	err := exec.flushWatermarkForAllTablesWithTxn(0, txn)
+
+	require.NoError(t, err)
+	require.True(t, txn.committed)
+	require.False(t, txn.rolledBack)
+	require.Equal(t, ISCPJobState_Pending, job.state)
+	expected := types.BuildTS(2, 0)
+	require.True(t, job.persistedWatermark.EQ(&expected))
+}
+
+func TestFlushWatermarkForAllTablesRollsBackPartialTransaction(t *testing.T) {
+	oldExecWithResult := ExecWithResult
+	t.Cleanup(func() { ExecWithResult = oldExecWithResult })
+
+	exec := &ISCPTaskExecutor{ctx: context.Background(), tables: newISCPTableTree()}
+	first := newWatermarkFlushTestJob(exec, 3, "first")
+	second := newWatermarkFlushTestJob(exec, 4, "second")
+	wantErr := errors.New("second update failed")
+	calls := 0
+	ExecWithResult = func(_ context.Context, _ string, _ string, _ client.TxnOperator) (executor.Result, error) {
+		calls++
+		if calls == 2 {
+			return executor.Result{}, wantErr
+		}
+		return executor.Result{AffectedRows: 1}, nil
+	}
+	txn := &iscpTxnForTest{}
+
+	err := exec.flushWatermarkForAllTablesWithTxn(0, txn)
+
+	require.ErrorIs(t, err, wantErr)
+	require.Equal(t, 2, calls)
+	require.False(t, txn.committed)
+	require.True(t, txn.rolledBack)
+	for _, job := range []*JobEntry{first, second} {
+		require.Equal(t, ISCPJobState_Completed, job.state)
+		expected := types.BuildTS(1, 0)
+		require.True(t, job.persistedWatermark.EQ(&expected))
+	}
+}
+
+func TestRepairLegacyWatermarkStageOnlyRepairsUnambiguousState(t *testing.T) {
+	tests := []struct {
+		name   string
+		state  int8
+		status *JobStatus
+		want   bool
+	}{
+		{name: "legacy watermark", state: ISCPJobState_Completed, status: &JobStatus{LSN: 5}, want: true},
+		{name: "new job", state: ISCPJobState_Completed, status: &JobStatus{}, want: false},
+		{name: "worker init failure", state: ISCPJobState_Completed, status: &JobStatus{LSN: 5, ErrorMsg: "init failed"}, want: false},
+		{name: "consumer init failure", state: ISCPJobState_Completed, status: &JobStatus{LSN: 5, ErrorCode: 1, ErrorMsg: "init failed"}, want: false},
+		{name: "permanent init failure", state: ISCPJobState_Error, status: &JobStatus{LSN: 5}, want: false},
+		{name: "already running", state: ISCPJobState_Completed, status: &JobStatus{LSN: 5, Stage: JobStage_Running}, want: false},
+		{name: "nil status", state: ISCPJobState_Completed, status: nil, want: false},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			repaired := repairLegacyWatermarkStage(test.state, test.status)
+			require.Equal(t, test.want, repaired)
+			if test.status != nil && test.want {
+				require.Equal(t, int8(JobStage_Running), test.status.Stage)
+			}
+		})
+	}
+}
+
 func TestISCPRecoveryNormalizesPreRepairSnapshot(t *testing.T) {
 	exec := &ISCPTaskExecutor{
 		ctx:    context.Background(),
@@ -387,8 +619,10 @@ func TestISCPRecoveryNormalizesPreRepairSnapshot(t *testing.T) {
 	}
 	spec, err := MarshalJobSpec(&JobSpec{
 		ConsumerInfo: ConsumerInfo{
+			InitSQL:  "create table init_marker(a int)",
 			SrcTable: TableInfo{DBID: 2, TableID: 3, DBName: "db", TableName: "table"},
 		},
+		TriggerSpec: TriggerSpec{JobType: TriggerType_Default},
 	})
 	require.NoError(t, err)
 	status, err := MarshalJobStatus(&JobStatus{LSN: 5})
@@ -402,16 +636,36 @@ func TestISCPRecoveryNormalizesPreRepairSnapshot(t *testing.T) {
 	}
 
 	require.NoError(t, exec.addOrUpdateRecoveredJob(
-		1, 3, "pending", 4, ISCPJobState_Pending, "10-0",
+		1, 3, "legacy", 4, ISCPJobState_Completed, "10-0",
 		encodeJSON(spec), encodeJSON(status), 0, true,
 	))
 	require.NoError(t, exec.addOrUpdateRecoveredJob(
-		1, 3, "error", 5, ISCPJobState_Error, "10-0",
+		1, 3, "pending", 5, ISCPJobState_Pending, "10-0",
+		encodeJSON(spec), encodeJSON(status), 0, true,
+	))
+	require.NoError(t, exec.addOrUpdateRecoveredJob(
+		1, 3, "error", 6, ISCPJobState_Error, "10-0",
 		encodeJSON(spec), encodeJSON(status), 0, true,
 	))
 
 	table, ok := exec.getTable(1, 3)
 	require.True(t, ok)
-	require.Equal(t, ISCPJobState_Completed, table.jobs[JobKey{JobName: "pending", JobID: 4}].state)
-	require.Equal(t, ISCPJobState_Error, table.jobs[JobKey{JobName: "error", JobID: 5}].state)
+	recovered := table.jobs[JobKey{JobName: "legacy", JobID: 4}]
+	require.Equal(t, ISCPJobState_Completed, recovered.state)
+	require.Equal(t, int8(JobStage_Running), recovered.stage)
+	require.Equal(t, ISCPJobState_Completed, table.jobs[JobKey{JobName: "pending", JobID: 5}].state)
+	require.Equal(t, int8(JobStage_Init), table.jobs[JobKey{JobName: "pending", JobID: 5}].stage)
+	require.Equal(t, ISCPJobState_Error, table.jobs[JobKey{JobName: "error", JobID: 6}].state)
+
+	// A restart snapshot that still predates the repair transaction must not
+	// schedule InitSQL again; its next candidate continues in Running.
+	iters, _ := table.getCandidate()
+	require.Len(t, iters, 2)
+	for _, iter := range iters {
+		if iter.jobNames[0] == "legacy" {
+			require.Equal(t, []int8{JobStage_Running}, iter.stages)
+			return
+		}
+	}
+	t.Fatal("legacy job was not scheduled after recovery")
 }

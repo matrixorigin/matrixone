@@ -16,12 +16,28 @@ package iscp
 
 import (
 	"context"
+	"errors"
 	"runtime"
 	"sync"
 	"testing"
 
 	"github.com/stretchr/testify/require"
 )
+
+func TestJobStatusesForIterationErrorPreservesStages(t *testing.T) {
+	iter := &IterationContext{
+		jobNames: []string{"initializing", "running"},
+		stages:   []int8{JobStage_Init, JobStage_Running},
+	}
+
+	statuses := jobStatusesForIterationError(iter, errors.New("iteration failed"))
+
+	require.Len(t, statuses, 2)
+	require.Equal(t, int8(JobStage_Init), statuses[0].Stage)
+	require.Equal(t, int8(JobStage_Running), statuses[1].Stage)
+	require.Equal(t, "iteration failed", statuses[0].ErrorMsg)
+	require.Equal(t, "iteration failed", statuses[1].ErrorMsg)
+}
 
 func TestWorkerStopImmediatelyAfterConstruction(t *testing.T) {
 	previous := runtime.GOMAXPROCS(1)
