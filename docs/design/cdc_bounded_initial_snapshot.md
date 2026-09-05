@@ -1,10 +1,12 @@
 # Bounded and retry-safe CDC initial snapshots
 
-Status: implementation design under review for MatrixOne PR #27939. The
-daemon-completion ownership defect demonstrated at
+Status: approved for implementation in MatrixOne PR #27939 by XuPeng-SH in
+[review 5120209126](https://github.com/matrixorigin/matrixone/pull/27939#pullrequestreview-5120209126)
+after reviewing the exact protocol/code revision at `7fa37b9d61`. This
+status-only update records the R3 decision; it does not change the protocol.
+The daemon-completion ownership defect demonstrated at
 `64a946ca54858db0d4d5c378f5e93450ded20e82` is corrected by the generation-owned
 completion implementation and regression tests described below.
-Independent design approval is still required by the repository's R3 process.
 
 ## Scope
 
