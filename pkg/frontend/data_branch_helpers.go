@@ -45,6 +45,8 @@ import (
 
 var snapConditionRegex = regexp.MustCompile(`\{[^}]+}`)
 
+const dataBranchApplyTablePrefix = "__mo_diff_"
+
 func isDataBranchFloatType(typ types.Type) bool {
 	return typ.Oid == types.T_float32 || typ.Oid == types.T_float64
 }
@@ -125,8 +127,7 @@ func compareDataBranchPrimaryKeyInVectors(
 }
 
 func containsDataBranchTempTableName(sqlLower string) bool {
-	return containsTempTableMarker(sqlLower, "__mo_diff_del_") ||
-		containsTempTableMarker(sqlLower, "__mo_diff_ins_")
+	return containsTempTableMarker(sqlLower, dataBranchApplyTablePrefix)
 }
 
 func dataBranchTempSQLNeedsBackExec(sqlLower string) bool {
