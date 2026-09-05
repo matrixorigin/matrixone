@@ -4776,7 +4776,7 @@ type Instruction struct {
 	PartitionAlgorithm plan.Node_PartitionAlgorithm `protobuf:"varint,59,opt,name=partition_algorithm,json=partitionAlgorithm,proto3,enum=plan.Node_PartitionAlgorithm" json:"partition_algorithm,omitempty"`
 	// PROJECTION only: vector-level expansion metadata for planner-generated
 	// ROLLUP/CUBE grouping sets. Older CNs ignore these fields, so planning is
-	// gated by MORPCVersion48 until every participant understands them.
+	// gated by MORPCVersion49 until every participant understands them.
 	ProjectionGroupingFlags    []bool   `protobuf:"varint,60,rep,packed,name=projection_grouping_flags,json=projectionGroupingFlags,proto3" json:"projection_grouping_flags,omitempty"`
 	ProjectionGroupingSetCount int32    `protobuf:"varint,61,opt,name=projection_grouping_set_count,json=projectionGroupingSetCount,proto3" json:"projection_grouping_set_count,omitempty"`
 	XXX_NoUnkeyedLiteral       struct{} `json:"-"`

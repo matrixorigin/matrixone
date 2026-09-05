@@ -598,7 +598,7 @@ each PR's final implementation diff.
   readers may stop independently, admission prices one write plus every full
   branch scan with declared row widths and a twofold margin, and an 8 GiB
   planner ceiling bounds spill exposure. It also checks every CTE join ancestor
-  for an exact preserved hash-build path, adds v46 send/receive rollback fences,
+  for an exact preserved hash-build path, adds v48 send/receive rollback fences,
   and restores the independent Parquet fanout capability to its v45 owner.
 - v6 advances the aligned series to `in-progress`.  Branch-local numeric
   placeholders are integration metadata assigned against the merge base; the

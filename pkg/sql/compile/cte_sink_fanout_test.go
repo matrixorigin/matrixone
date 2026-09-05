@@ -21,6 +21,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/dispatch"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/merge"
@@ -28,6 +29,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+	"github.com/matrixorigin/matrixone/pkg/vm/message"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -165,15 +167,26 @@ func TestPipelineAttemptAlwaysClosesMaterializedSources(t *testing.T) {
 			c := NewMockCompile(t)
 			c.pn = &plan.Plan{Plan: &plan.Plan_Query{Query: &plan.Query{}}}
 			c.lockMeta = NewLockMeta()
+			c.MessageBoard = message.NewMessageBoard()
 			source := materialized.NewSource(2)
 			c.materializedSources = map[int32]*materialized.Source{0: source}
+			require.NoError(t, c.ensureAllocationAccountLifecycle(func(
+				mpool.AllocationAccountTerminalSnapshot,
+			) {
+			}))
+			_, err := c.beginAllocationAccountAttempt()
+			require.NoError(t, err)
+			t.Cleanup(func() {
+				require.NoError(t, c.finishAllocationAccountAttempt())
+			})
 
-			err := c.runPipelineAttempt(func() error { return test.run(c, source) })
+			err = c.runPipelineAttempt(func() error { return test.run(c, source) })
 			if test.wantErr == nil {
 				require.NoError(t, err)
 			} else {
 				require.ErrorIs(t, err, test.wantErr)
 			}
+			require.NoError(t, c.finishAllocationAccountAttempt())
 
 			// A prepared compile reuses this Source. Every attempt outcome must
 			// leave the next generation equivalent to a fresh source.
@@ -188,14 +201,25 @@ func TestPipelineAttemptAlwaysClosesMaterializedSources(t *testing.T) {
 func TestPipelineAttemptClosesMaterializedSourcesAfterPanic(t *testing.T) {
 	c := NewMockCompile(t)
 	c.lockMeta = NewLockMeta()
+	c.MessageBoard = message.NewMessageBoard()
 	source := materialized.NewSource(1)
 	c.materializedSources = map[int32]*materialized.Source{0: source}
+	require.NoError(t, c.ensureAllocationAccountLifecycle(func(
+		mpool.AllocationAccountTerminalSnapshot,
+	) {
+	}))
+	_, err := c.beginAllocationAccountAttempt()
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		require.NoError(t, c.finishAllocationAccountAttempt())
+	})
 	wantPanic := "pipeline panic"
 
 	func() {
 		defer func() { require.Equal(t, wantPanic, recover()) }()
 		_ = c.runPipelineAttempt(func() error { panic(wantPanic) })
 	}()
+	require.NoError(t, c.finishAllocationAccountAttempt())
 
 	require.NoError(t, source.Begin(c.proc.Mp()))
 	source.Finish(nil)
