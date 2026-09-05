@@ -17,6 +17,7 @@ package bootstrap
 import (
 	"context"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"strings"
 	"testing"
@@ -147,11 +148,13 @@ func TestMaintainOrphanObjectPrivilegesFinishesTenantHighWaterBeforeAdvancing(t 
 	state := service.upgrade.orphanPrivilegeMaintenanceState
 	require.True(t, state.tenantSelected)
 	require.Equal(t, maintenancePhysicalKey(candidatePage[len(candidatePage)-1]), state.tenantScan.Cursor)
+	require.Equal(t, uint64(1), state.tenantCommittedPages)
 	require.Equal(t, 1, lookupCount)
 
 	require.NoError(t, service.maintainOrphanObjectPrivileges(t.Context()))
 	state = service.upgrade.orphanPrivilegeMaintenanceState
 	require.False(t, state.tenantSelected)
+	require.Zero(t, state.tenantCommittedPages)
 	require.Equal(t, int32(11), state.accountCursor)
 	require.Equal(t, 1, lookupCount, "an incomplete finite tenant scan must continue without reselecting its account")
 }
@@ -184,6 +187,22 @@ func TestOrphanPrivilegeMaintenanceRoundFreezesHighWater(t *testing.T) {
 	state := service.upgrade.orphanPrivilegeMaintenanceState
 	require.True(t, state.roundInitialized)
 	require.Equal(t, int32(12), state.roundHighWater)
+}
+
+func TestOrphanPrivilegeMaintenanceLongRunningWarningInterval(t *testing.T) {
+	for _, test := range []struct {
+		pages uint64
+		warn  bool
+	}{
+		{pages: 0},
+		{pages: 1},
+		{pages: orphanPrivilegeMaintenanceLongRunningPageInterval - 1},
+		{pages: orphanPrivilegeMaintenanceLongRunningPageInterval, warn: true},
+		{pages: orphanPrivilegeMaintenanceLongRunningPageInterval + 1},
+		{pages: 2 * orphanPrivilegeMaintenanceLongRunningPageInterval, warn: true},
+	} {
+		require.Equal(t, test.warn, shouldWarnLongRunningOrphanPrivilegeMaintenance(test.pages), test.pages)
+	}
 }
 
 func TestOrphanPrivilegeMaintenanceRestartSeedAvoidsFixedZeroBias(t *testing.T) {
@@ -316,6 +335,85 @@ func TestMaintainOrphanObjectPrivilegesAdvancesAfterTenantError(t *testing.T) {
 	require.Equal(t, 2, lookupCount)
 }
 
+func TestMaintainOrphanObjectPrivilegesHandlesCommittedPostWaitError(t *testing.T) {
+	const tenantID = int32(10)
+	postCommitWaitErr := errors.New("injected post-commit logtail wait failure")
+	candidates := make([]v4_0_6.OrphanPrivilegeKey, 1000)
+	for i := range candidates {
+		candidates[i] = v4_0_6.OrphanPrivilegeKey{
+			RoleID: 1, ObjectType: "database", ObjectID: uint64(i + 1),
+			PrivilegeID: 1, PrivilegeLevel: "d",
+		}
+	}
+	committedDelete := false
+	pendingDelete := false
+	deleteCalls := 0
+	txn := executor.NewMemTxnExecutor(func(sql string) (executor.Result, error) {
+		switch {
+		case sql == "select account_id from mo_catalog.mo_account order by account_id desc limit 1":
+			return buildMaintenanceAccountRows(tenantID), nil
+		case strings.HasPrefix(sql, "select account_id from mo_catalog.mo_account where"):
+			return buildMaintenanceAccountRows(tenantID), nil
+		case strings.Contains(sql, "order by __mo_cpkey_col desc"):
+			if committedDelete {
+				return executor.Result{}, nil
+			}
+			return buildMaintenancePrivilegeRows(t, candidates[len(candidates)-1]), nil
+		case strings.HasPrefix(sql,
+			"select role_id,obj_type,obj_id,privilege_id,privilege_level,hex(__mo_cpkey_col) "):
+			require.False(t, committedDelete)
+			return buildMaintenancePrivilegeRows(t, candidates...), nil
+		case strings.HasPrefix(sql, "select dat_id from mo_catalog.mo_database"):
+			return executor.Result{}, nil
+		case strings.HasPrefix(sql, "delete from mo_catalog.mo_role_privs"):
+			deleteCalls++
+			pendingDelete = true
+			return executor.Result{AffectedRows: uint64(len(candidates))}, nil
+		default:
+			return executor.Result{}, fmt.Errorf("unexpected sql: %s", sql)
+		}
+	}, nil)
+	sqlExec := &maintenancePostCommitErrorExecutor{
+		txn:             txn,
+		postCommitCall:  2,
+		postCommitError: postCommitWaitErr,
+		onCommit: func() {
+			if pendingDelete {
+				committedDelete = true
+				pendingDelete = false
+			}
+		},
+	}
+	service := newServiceForTest(
+		"",
+		&memLocker{},
+		clock.NewHLCClock(func() int64 { return 0 }, 0),
+		nil,
+		sqlExec,
+		func(s *service) {},
+	)
+	service.upgrade.orphanPrivilegeMaintenanceStart = func() string { return "" }
+
+	err := service.maintainOrphanObjectPrivileges(t.Context())
+	require.ErrorIs(t, err, postCommitWaitErr)
+	require.True(t, committedDelete,
+		"the DELETE commit precedes the visibility wait that returned the error")
+	require.Equal(t, 1, deleteCalls)
+	state := service.upgrade.orphanPrivilegeMaintenanceState
+	require.False(t, state.tenantSelected)
+	require.Zero(t, state.tenantScan,
+		"an ExecTxn error must not publish the closure-local physical cursor")
+	require.Equal(t, tenantID+1, state.accountCursor,
+		"the terminal error deliberately advances account scheduling")
+
+	// A later round can select the tenant again. The already committed exact
+	// DELETE makes this rescan an idempotent empty completion.
+	service.upgrade.orphanPrivilegeMaintenanceState.tenantSelected = true
+	service.upgrade.orphanPrivilegeMaintenanceState.tenantID = tenantID
+	require.NoError(t, service.maintainOrphanObjectPrivileges(t.Context()))
+	require.Equal(t, 1, deleteCalls)
+}
+
 func TestTenantUpgradePassRunsMaintenanceOnlyAfterFinalVersion(t *testing.T) {
 	for _, test := range []struct {
 		name       string
@@ -429,6 +527,40 @@ func TestMaintainOrphanObjectPrivilegesSkipsConcurrentLocalPass(t *testing.T) {
 	service.upgrade.orphanPrivilegeMaintenanceRunning.Store(true)
 
 	require.NoError(t, service.maintainOrphanObjectPrivileges(t.Context()))
+}
+
+type maintenancePostCommitErrorExecutor struct {
+	txn             executor.TxnExecutor
+	calls           int
+	postCommitCall  int
+	postCommitError error
+	onCommit        func()
+}
+
+func (e *maintenancePostCommitErrorExecutor) Exec(
+	context.Context,
+	string,
+	executor.Options,
+) (executor.Result, error) {
+	return executor.Result{}, errors.New("unexpected non-transactional exec")
+}
+
+func (e *maintenancePostCommitErrorExecutor) ExecTxn(
+	_ context.Context,
+	execFunc func(executor.TxnExecutor) error,
+	_ executor.Options,
+) error {
+	e.calls++
+	if err := execFunc(e.txn); err != nil {
+		return err
+	}
+	if e.onCommit != nil {
+		e.onCommit()
+	}
+	if e.calls == e.postCommitCall {
+		return e.postCommitError
+	}
+	return nil
 }
 
 func buildMaintenanceObjectIDRows(ids ...uint64) executor.Result {

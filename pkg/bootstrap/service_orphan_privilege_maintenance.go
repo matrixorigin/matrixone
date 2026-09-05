@@ -29,7 +29,10 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
+	"go.uber.org/zap"
 )
+
+const orphanPrivilegeMaintenanceLongRunningPageInterval = 64
 
 // orphanPrivilegeMaintenanceState is intentionally process-local. An account
 // round freezes account IDs at roundHighWater and walks the ring from roundStart
@@ -48,9 +51,10 @@ type orphanPrivilegeMaintenanceState struct {
 	accountCursor    int32
 	wrapped          bool
 
-	tenantSelected bool
-	tenantID       int32
-	tenantScan     v4_0_6.OrphanPrivilegeScan
+	tenantSelected       bool
+	tenantID             int32
+	tenantCommittedPages uint64
+	tenantScan           v4_0_6.OrphanPrivilegeScan
 }
 
 func newOrphanPrivilegeMaintenanceRestartSeed() uint64 {
@@ -183,8 +187,10 @@ func (s *service) maintainOrphanObjectPrivileges(ctx context.Context) error {
 		return err
 	}, maintenanceOptions)
 	if err != nil {
-		// A dropped/broken tenant must not hold the finite account round. Its
-		// rolled-back scan is retried when a later round visits the account.
+		// The error may precede commit or come from the post-commit visibility
+		// wait. Do not publish the closure-local physical cursor in either case.
+		// Exact deletes make a possibly committed page safe to rescan later; move
+		// account scheduling forward so one failing tenant does not hold the round.
 		s.advanceOrphanPrivilegeMaintenanceAccount(tenantID)
 		return err
 	}
@@ -192,6 +198,12 @@ func (s *service) maintainOrphanObjectPrivileges(ctx context.Context) error {
 		s.advanceOrphanPrivilegeMaintenanceAccount(tenantID)
 	} else {
 		state.tenantScan = nextScan
+		state.tenantCommittedPages++
+		if shouldWarnLongRunningOrphanPrivilegeMaintenance(state.tenantCommittedPages) {
+			s.logger.Warn("orphan object privilege maintenance tenant remains active",
+				zap.Int32("tenant", tenantID),
+				zap.Uint64("committed-pages", state.tenantCommittedPages))
+		}
 	}
 	return nil
 }
@@ -207,8 +219,9 @@ func (s *service) selectNextOrphanPrivilegeMaintenanceTenant(ctx context.Context
 		WithWaitCommittedLogApplied().
 		WithTimeZone(time.Local)
 	err := s.exec.ExecTxn(ctx, func(txn executor.TxnExecutor) error {
-		// ExecTxn may retry this closure. Never carry lookup progress from a
-		// rolled-back attempt into the next transaction snapshot.
+		// Keep lookup progress closure-local. Selection is published only after
+		// the complete ExecTxn call, including its requested visibility wait,
+		// returns nil.
 		next = current
 		found = false
 		option := executor.StatementOption{}.WithAccountID(catalog.System_Account)
@@ -249,6 +262,7 @@ func (s *service) selectNextOrphanPrivilegeMaintenanceTenant(ctx context.Context
 		}
 		if found {
 			next.tenantSelected = true
+			next.tenantCommittedPages = 0
 			next.tenantScan = v4_0_6.OrphanPrivilegeScan{}
 		} else {
 			finishOrphanPrivilegeMaintenanceRound(&next)
@@ -317,9 +331,14 @@ func loadOrphanPrivilegeMaintenanceAccount(
 	return accountID, found, decodeErr
 }
 
+func shouldWarnLongRunningOrphanPrivilegeMaintenance(committedPages uint64) bool {
+	return committedPages > 0 && committedPages%orphanPrivilegeMaintenanceLongRunningPageInterval == 0
+}
+
 func (s *service) advanceOrphanPrivilegeMaintenanceAccount(tenantID int32) {
 	state := &s.upgrade.orphanPrivilegeMaintenanceState
 	state.tenantSelected = false
+	state.tenantCommittedPages = 0
 	state.tenantScan = v4_0_6.OrphanPrivilegeScan{}
 
 	if tenantID == math.MaxInt32 {
