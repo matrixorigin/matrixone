@@ -105,6 +105,7 @@ func TestJsonLength(t *testing.T) {
 		s, info := fcTC.Run()
 		require.True(t, s, info)
 	})
+
 }
 
 func TestJsonKeys(t *testing.T) {
@@ -677,20 +678,44 @@ func TestJsonValue(t *testing.T) {
 		require.True(t, s, info)
 	})
 
-	t.Run("object and array matches return null", func(t *testing.T) {
+	t.Run("object and array matches return json text", func(t *testing.T) {
 		tc := tcTemp{
 			info: "json_value non scalar",
 			inputs: []FunctionTestInput{
 				NewFunctionTestInput(types.T_varchar.ToType(),
-					[]string{`{"a":[1]}`, `{"a":{"b":1}}`, `{"a":true}`},
-					[]bool{false, false, false}),
+					[]string{`{"a":[1]}`, `{"a":{"b":1}}`, `[1,2]`, `{}`, `[]`, `[{}]`, `{"a":true}`},
+					[]bool{false, false, false, false, false, false, false}),
 				NewFunctionTestInput(types.T_varchar.ToType(),
-					[]string{`$.a`, `$.a`, `$.a`},
-					[]bool{false, false, false}),
+					[]string{`$.a`, `$.a`, `$`, `$`, `$`, `$[*]`, `$.a`},
+					[]bool{false, false, false, false, false, false, false}),
 			},
 			expect: NewFunctionTestResult(types.T_varchar.ToType(), false,
-				[]string{"", "", "true"},
-				[]bool{true, true, false}),
+				[]string{`[1]`, `{"b": 1}`, `[1, 2]`, `{}`, `[]`, `{}`, "true"},
+				[]bool{false, false, false, false, false, false, false}),
+		}
+		fcTC := NewFunctionTestCase(proc, tc.inputs, tc.expect, JsonValue)
+		s, info := fcTC.Run()
+		require.True(t, s, info)
+	})
+
+	t.Run("json typed object and array matches return json text", func(t *testing.T) {
+		documents := []string{`{"a":[12]}`, `{"a":{"k":1}}`}
+		encoded := make([]string, len(documents))
+		for i, document := range documents {
+			bj, err := types.ParseStringToByteJson(document)
+			require.NoError(t, err)
+			data, err := bj.Marshal()
+			require.NoError(t, err)
+			encoded[i] = string(data)
+		}
+		tc := tcTemp{
+			info: "json_value typed non scalar",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_json.ToType(), encoded, []bool{false, false}),
+				NewFunctionTestInput(types.T_varchar.ToType(), []string{`$.a`, `$.a`}, []bool{false, false}),
+			},
+			expect: NewFunctionTestResult(types.T_varchar.ToType(), false,
+				[]string{`[12]`, `{"k": 1}`}, []bool{false, false}),
 		}
 		fcTC := NewFunctionTestCase(proc, tc.inputs, tc.expect, JsonValue)
 		s, info := fcTC.Run()
@@ -739,6 +764,25 @@ func TestJsonValue(t *testing.T) {
 		fcTC := NewFunctionTestCase(proc, tc.inputs, tc.expect, JsonValue)
 		s, info := fcTC.Run()
 		require.True(t, s, info)
+	})
+
+	t.Run("invalid document and path return errors", func(t *testing.T) {
+		for _, inputs := range [][]FunctionTestInput{
+			{
+				NewFunctionTestInput(types.T_varchar.ToType(), []string{`not json`}, []bool{false}),
+				NewFunctionTestInput(types.T_varchar.ToType(), []string{`$.a`}, []bool{false}),
+			},
+			{
+				NewFunctionTestInput(types.T_varchar.ToType(), []string{`{"a":1}`}, []bool{false}),
+				NewFunctionTestInput(types.T_varchar.ToType(), []string{`$[`}, []bool{false}),
+			},
+		} {
+			tc := NewFunctionTestCase(proc, inputs,
+				NewFunctionTestResult(types.T_varchar.ToType(), false, []string{""}, []bool{false}),
+				JsonValue)
+			s, _ := tc.Run()
+			require.False(t, s)
+		}
 	})
 }
 
