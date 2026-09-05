@@ -2203,28 +2203,6 @@ func Test_BuiltIn_Math(t *testing.T) {
 
 	{
 		tc := tcTemp{
-			info: "test cot(0) returns out-of-range error",
-			inputs: []FunctionTestInput{
-				NewFunctionTestInput(types.T_float64.ToType(),
-					[]float64{
-						0,
-					},
-					nil),
-			},
-			expect: NewFunctionTestResult(types.T_float64.ToType(), true,
-				[]float64{0}, nil),
-		}
-		tcc := NewFunctionTestCase(proc, tc.inputs, tc.expect, builtInCot)
-		succeed, info := tcc.Run()
-		require.True(t, succeed, tc.info, info)
-
-		require.NoError(t, tcc.result.PreExtendAndReset(tcc.fnLength))
-		_, err := tcc.DebugRun()
-		require.ErrorContains(t, err, "DOUBLE value is out of range in 'cot(0)'")
-	}
-
-	{
-		tc := tcTemp{
 			info: "test atan",
 			inputs: []FunctionTestInput{
 				NewFunctionTestInput(types.T_float64.ToType(),
@@ -2428,6 +2406,107 @@ func Test_BuiltIn_Math(t *testing.T) {
 		tcc := NewFunctionTestCase(proc, tc.inputs, tc.expect, builtInLog10)
 		succeed, info := tcc.Run()
 		require.True(t, succeed, tc.info, info)
+	}
+}
+
+func TestBuiltInExpAndCotInvalidResultsReturnNull(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	testCases := []struct {
+		name   string
+		input  FunctionTestInput
+		values []float64
+		nulls  []bool
+		fn     fEvalFn
+	}{
+		{
+			name:   "exp isolates overflow at the finite boundary",
+			input:  NewFunctionTestInput(types.T_float64.ToType(), []float64{0, 709, 710, -1000, 1}, nil),
+			values: []float64{1, math.Exp(709), 0, 0, math.E},
+			nulls:  []bool{false, false, true, false, false},
+			fn:     builtInExp,
+		},
+		{
+			name:   "constant exp overflow fills the batch with null",
+			input:  NewFunctionTestConstInput(types.T_float64.ToType(), []float64{710, 710, 710}, nil),
+			values: []float64{0, 0, 0},
+			nulls:  []bool{true, true, true},
+			fn:     builtInExp,
+		},
+		{
+			name:   "cot isolates positive and negative zero",
+			input:  NewFunctionTestInput(types.T_float64.ToType(), []float64{-1, math.Copysign(0, -1), 0, 1}, nil),
+			values: []float64{math.Tan(math.Pi/2 + 1), 0, 0, math.Tan(math.Pi/2 - 1)},
+			nulls:  []bool{false, true, true, false},
+			fn:     builtInCot,
+		},
+		{
+			name:   "constant cot zero fills the batch with null",
+			input:  NewFunctionTestConstInput(types.T_float64.ToType(), []float64{0, 0, 0}, nil),
+			values: []float64{0, 0, 0},
+			nulls:  []bool{true, true, true},
+			fn:     builtInCot,
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			tcc := NewFunctionTestCase(
+				proc,
+				[]FunctionTestInput{tc.input},
+				NewFunctionTestResult(types.T_float64.ToType(), false, tc.values, tc.nulls),
+				tc.fn,
+			)
+			succeed, info := tcc.Run()
+			require.True(t, succeed, info)
+		})
+	}
+}
+
+func TestBuiltInExpAndCotRespectSelectList(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	testCases := []struct {
+		name  string
+		input []float64
+		value float64
+		fn    fEvalFn
+	}{
+		{
+			name:  "exp skips masked overflow",
+			input: []float64{710, 1},
+			value: math.E,
+			fn:    builtInExp,
+		},
+		{
+			name:  "cot skips masked zero",
+			input: []float64{0, 1},
+			value: math.Tan(math.Pi/2 - 1),
+			fn:    builtInCot,
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			tcc := NewFunctionTestCase(
+				proc,
+				[]FunctionTestInput{NewFunctionTestInput(types.T_float64.ToType(), tc.input, nil)},
+				NewFunctionTestResult(types.T_float64.ToType(), false, nil, nil),
+				tc.fn,
+			)
+			require.NoError(t, tcc.result.PreExtendAndReset(tcc.fnLength))
+
+			selectList := &FunctionSelectList{
+				AnyNull:    true,
+				SelectList: []bool{false, true},
+			}
+			require.NoError(t, tc.fn(tcc.parameters, tcc.result, proc, tcc.fnLength, selectList))
+
+			resultVec := tcc.result.GetResultVector()
+			require.True(t, resultVec.GetNulls().Contains(0))
+			resultParam := vector.GenerateFunctionFixedTypeParameter[float64](resultVec)
+			value, isNull := resultParam.GetValue(1)
+			require.False(t, isNull)
+			require.InDelta(t, tc.value, value, 1e-15)
+		})
 	}
 }
 

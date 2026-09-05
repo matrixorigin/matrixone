@@ -7,6 +7,14 @@ select exp(log(sqrt(10))*2);
 SELECT EXP(2);
 SELECT EXP(-2);
 SELECT EXP(0);
+SELECT EXP(1000);
+SELECT EXP(709) IS NOT NULL, EXP(710) IS NULL, EXP(-1000) = 0;
+
+DROP TABLE IF EXISTS t_issue28137_exp;
+CREATE TABLE t_issue28137_exp(id INT, v DOUBLE);
+INSERT INTO t_issue28137_exp VALUES (1, 0), (2, 710), (3, 1), (4, NULL);
+SELECT id, EXP(v) IS NULL FROM t_issue28137_exp ORDER BY id;
+DROP TABLE t_issue28137_exp;
 
 
 #EXTREME VALUE,科学计数
@@ -62,4 +70,3 @@ create table t1(a float,  b float);
 insert into t1 values(14.413, 43.413), (8.123, 0.409);
 select b from t1 group by b having exp(b)>0;
 drop table t1;
-

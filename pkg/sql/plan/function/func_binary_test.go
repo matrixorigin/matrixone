@@ -5419,35 +5419,56 @@ func TestPower(t *testing.T) {
 	}
 }
 
-func TestPowerOutOfRange(t *testing.T) {
+func TestPowerInvalidResultsReturnNull(t *testing.T) {
+	proc := testutil.NewProcess(t)
 	testCases := []struct {
 		name      string
-		bases     []float64
-		exponents []float64
+		bases     FunctionTestInput
+		exponents FunctionTestInput
+		values    []float64
+		nulls     []bool
 	}{
-		{name: "negative base with fractional exponent", bases: []float64{-2}, exponents: []float64{0.5}},
-		{name: "zero base with negative exponent", bases: []float64{0}, exponents: []float64{-1}},
-		{name: "invalid value after valid value", bases: []float64{2, -2}, exponents: []float64{3, 0.5}},
+		{
+			name:      "vector inputs isolate invalid rows",
+			bases:     NewFunctionTestInput(types.T_float64.ToType(), []float64{2, -2, 0, 10, -2, 4}, nil),
+			exponents: NewFunctionTestInput(types.T_float64.ToType(), []float64{3, 0.5, -1, 400, 3, 0.5}, nil),
+			values:    []float64{8, 0, 0, 0, -8, 2},
+			nulls:     []bool{false, true, true, true, false, false},
+		},
+		{
+			name:      "constant base with vector exponents",
+			bases:     NewFunctionTestConstInput(types.T_float64.ToType(), []float64{-2, -2, -2}, nil),
+			exponents: NewFunctionTestInput(types.T_float64.ToType(), []float64{0.5, 2, 3}, nil),
+			values:    []float64{0, 4, -8},
+			nulls:     []bool{true, false, false},
+		},
+		{
+			name:      "vector bases with constant exponent",
+			bases:     NewFunctionTestInput(types.T_float64.ToType(), []float64{0, 2, -2}, nil),
+			exponents: NewFunctionTestConstInput(types.T_float64.ToType(), []float64{-1, -1, -1}, nil),
+			values:    []float64{0, 0.5, -0.5},
+			nulls:     []bool{true, false, false},
+		},
+		{
+			name:      "constant invalid result fills the batch with null",
+			bases:     NewFunctionTestConstInput(types.T_float64.ToType(), []float64{-2, -2, -2}, nil),
+			exponents: NewFunctionTestConstInput(types.T_float64.ToType(), []float64{0.5, 0.5, 0.5}, nil),
+			values:    []float64{0, 0, 0},
+			nulls:     []bool{true, true, true},
+		},
 	}
 
-	proc := testutil.NewProcess(t)
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
 			tcc := NewFunctionTestCase(
 				proc,
-				[]FunctionTestInput{
-					NewFunctionTestInput(types.T_float64.ToType(), tc.bases, nil),
-					NewFunctionTestInput(types.T_float64.ToType(), tc.exponents, nil),
-				},
-				NewFunctionTestResult(types.T_float64.ToType(), true, []float64{0}, nil),
+				[]FunctionTestInput{tc.bases, tc.exponents},
+				NewFunctionTestResult(types.T_float64.ToType(), false, tc.values, tc.nulls),
 				Power,
 			)
 
-			require.NoError(t, tcc.result.PreExtendAndReset(tcc.fnLength))
-			_, err := tcc.DebugRun()
-			require.Error(t, err)
-			require.True(t, moerr.IsMoErrCode(err, moerr.ErrOutOfRange))
-			require.ErrorContains(t, err, "DOUBLE value is out of range")
+			succeed, info := tcc.Run()
+			require.True(t, succeed, info)
 		})
 	}
 }

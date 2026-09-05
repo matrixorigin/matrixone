@@ -7513,37 +7513,15 @@ func evalRight(str string, length int64) string {
 	return string(runeStr[strLength-rightLength:])
 }
 
-func Power(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int, selectList *FunctionSelectList) (err error) {
-	p1 := vector.GenerateFunctionFixedTypeParameter[float64](ivecs[0])
-	p2 := vector.GenerateFunctionFixedTypeParameter[float64](ivecs[1])
-	rs := vector.MustFunctionResult[float64](result)
-
-	for i := uint64(0); i < uint64(length); i++ {
-		if selectList != nil && (selectList.IgnoreAllRow() ||
-			(!selectList.ShouldEvalAllRow() && selectList.Contains(i))) {
-			if err = rs.Append(0, true); err != nil {
-				return err
-			}
-			continue
+func Power(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return opBinaryFixedFixedToFixedWithNullOnError[float64, float64, float64](ivecs, result, proc, length, func(v1, v2 float64) (float64, error) {
+		res := math.Pow(v1, v2)
+		if math.IsNaN(res) || math.IsInf(res, 0) {
+			return 0, moerr.NewOutOfRangeNoCtxf(
+				"float64", "DOUBLE value is out of range in 'pow(%v,%v)'", v1, v2)
 		}
-		v1, null1 := p1.GetValue(i)
-		v2, null2 := p2.GetValue(i)
-		if null1 || null2 {
-			if err = rs.Append(0, true); err != nil {
-				return err
-			}
-		} else {
-			res := math.Pow(v1, v2)
-			if math.IsNaN(res) || math.IsInf(res, 0) {
-				return moerr.NewOutOfRangeNoCtxf(
-					"float64", "DOUBLE value is out of range in 'pow(%v,%v)'", v1, v2)
-			}
-			if err = rs.Append(res, false); err != nil {
-				return err
-			}
-		}
-	}
-	return nil
+		return res, nil
+	}, selectList)
 }
 
 func TimeDiff[T types.Time | types.Datetime](ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) (err error) {
