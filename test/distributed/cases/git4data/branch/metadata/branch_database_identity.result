@@ -1,0 +1,97 @@
+drop database if exists issue26068_empty_src;
+drop database if exists issue26068_empty_dst;
+drop database if exists issue26068_view_src;
+drop database if exists issue26068_view_dst;
+drop database if exists issue26068_sequence_src;
+drop database if exists issue26068_sequence_dst;
+drop database if exists issue26068_dropall_src;
+drop database if exists issue26068_dropall_dst;
+drop database if exists issue26068_local_table_src;
+drop database if exists issue26068_local_table_dst;
+drop database if exists issue26068_ordinary_empty;
+create database issue26068_empty_src;
+data branch create database issue26068_empty_dst from issue26068_empty_src;
+select dat_type from mo_catalog.mo_database where datname = 'issue26068_empty_dst';
+➤ dat_type[12,32,0]  𝄀
+data-branch
+data branch delete database issue26068_empty_dst;
+select count(*) as empty_branch_exists from mo_catalog.mo_database where datname = 'issue26068_empty_dst';
+➤ empty_branch_exists[-5,64,0]  𝄀
+0
+create database issue26068_view_src;
+create view issue26068_view_src.v as select 1 as n;
+select * from issue26068_view_src.v;
+➤ n[-5,64,0]  𝄀
+1
+data branch create database issue26068_view_dst from issue26068_view_src;
+select * from issue26068_view_dst.v;
+➤ n[-5,64,0]  𝄀
+1
+data branch delete database issue26068_view_dst;
+select count(*) as view_branch_exists from mo_catalog.mo_database where datname = 'issue26068_view_dst';
+➤ view_branch_exists[-5,64,0]  𝄀
+0
+create database issue26068_sequence_src;
+create sequence issue26068_sequence_src.s increment 3 start with 7;
+select count(*) as source_sequences from mo_catalog.mo_tables
+where reldatabase = 'issue26068_sequence_src' and relkind = 'S';
+➤ source_sequences[-5,64,0]  𝄀
+1
+data branch create database issue26068_sequence_dst from issue26068_sequence_src;
+select count(*) as cloned_sequences from mo_catalog.mo_tables
+where reldatabase = 'issue26068_sequence_dst' and relkind = 'S';
+➤ cloned_sequences[-5,64,0]  𝄀
+1
+data branch delete database issue26068_sequence_dst;
+select count(*) as sequence_branch_exists from mo_catalog.mo_database where datname = 'issue26068_sequence_dst';
+➤ sequence_branch_exists[-5,64,0]  𝄀
+0
+create database issue26068_dropall_src;
+create table issue26068_dropall_src.t1(id int primary key);
+create table issue26068_dropall_src.t2(id int primary key);
+select count(*) as source_tables from mo_catalog.mo_tables
+where reldatabase = 'issue26068_dropall_src' and relname in ('t1', 't2');
+➤ source_tables[-5,64,0]  𝄀
+2
+data branch create database issue26068_dropall_dst from issue26068_dropall_src;
+select count(*) as cloned_tables from mo_catalog.mo_tables
+where reldatabase = 'issue26068_dropall_dst' and relname in ('t1', 't2');
+➤ cloned_tables[-5,64,0]  𝄀
+2
+drop table issue26068_dropall_dst.t1;
+drop table issue26068_dropall_dst.t2;
+data branch delete database issue26068_dropall_dst;
+select count(*) as dropped_table_branch_exists from mo_catalog.mo_database where datname = 'issue26068_dropall_dst';
+➤ dropped_table_branch_exists[-5,64,0]  𝄀
+0
+create database issue26068_local_table_src;
+data branch create database issue26068_local_table_dst from issue26068_local_table_src;
+create table issue26068_local_table_dst.local_t(id int primary key);
+data branch delete database issue26068_local_table_dst;
+internal error: DATA BRANCH DELETE target issue26068_local_table_dst.local_t is not an active branch table
+select count(*) as protected_local_table from mo_catalog.mo_tables
+where reldatabase = 'issue26068_local_table_dst' and relname = 'local_t';
+➤ protected_local_table[-5,64,0]  𝄀
+1
+drop table issue26068_local_table_dst.local_t;
+data branch delete database issue26068_local_table_dst;
+select count(*) as local_table_branch_exists from mo_catalog.mo_database where datname = 'issue26068_local_table_dst';
+➤ local_table_branch_exists[-5,64,0]  𝄀
+0
+create database issue26068_ordinary_empty;
+data branch delete database issue26068_ordinary_empty;
+internal error: DATA BRANCH DELETE target issue26068_ordinary_empty is not an active branch database
+select count(*) as ordinary_empty_exists from mo_catalog.mo_database where datname = 'issue26068_ordinary_empty';
+➤ ordinary_empty_exists[-5,64,0]  𝄀
+1
+drop database if exists issue26068_empty_src;
+drop database if exists issue26068_empty_dst;
+drop database if exists issue26068_view_src;
+drop database if exists issue26068_view_dst;
+drop database if exists issue26068_sequence_src;
+drop database if exists issue26068_sequence_dst;
+drop database if exists issue26068_dropall_src;
+drop database if exists issue26068_dropall_dst;
+drop database if exists issue26068_local_table_src;
+drop database if exists issue26068_local_table_dst;
+drop database if exists issue26068_ordinary_empty;

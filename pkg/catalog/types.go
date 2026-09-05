@@ -500,6 +500,7 @@ const (
 	SystemColNoConstraint = "n"
 
 	SystemDBTypeSubscription = "subscription"
+	SystemDBTypeDataBranch   = "data-branch"
 
 	MOPartitionMetadata = "mo_partition_metadata"
 	MOPartitionTables   = "mo_partition_tables"
