@@ -1,9 +1,9 @@
 # Historical orphan object privilege maintenance
 
 - Design version: **v1**
-- Status: **proposed — implementation review blocked pending independent approval**
-- Approved design revision: **pending**
-- Independent review decision: **pending**
+- Status: **approved**
+- Approved design revision: `1aea9ce32bdfcaea14ab4942229e2f870398866b`
+- Independent review decision: **PASS**, recorded 2026-09-04
 - Owning issue: [#27836](https://github.com/matrixorigin/matrixone/issues/27836)
 - Related forward-cleanup issue: [#27723](https://github.com/matrixorigin/matrixone/issues/27723)
 - Implementation PR: [#28120](https://github.com/matrixorigin/matrixone/pull/28120)
@@ -353,7 +353,7 @@ Selected because it preserves schema/wire compatibility, repairs late data, boun
 
 ## 16. Decision log
 
-Proposed decisions requiring independent approval:
+Approved decisions:
 
 1. Historical cleanup is recurring markerless maintenance, not a durable migration.
 2. Healthy-process finite completion satisfies deterministic liveness; restart liveness is explicitly probabilistic with no finite count bound.
@@ -372,14 +372,14 @@ There are no deferred implementation choices in this v1 proposal. The following 
 - per-CN duplicate I/O versus task-framework singleton ownership;
 - no dynamic disable/progress metric versus additional operational state.
 
-Until an independent reviewer approves an exact Git revision of this document, implementation review remains blocked.
+An independent reviewer approved design revision `1aea9ce32bdfcaea14ab4942229e2f870398866b` with decision PASS on 2026-09-04. Material changes to ownership, persistence, restart semantics, resource budgets, planner/storage eligibility, rollout, or stopping require updating this document and re-reviewing the affected decisions.
 
 ```text
 Change scope: complete issue #27836 implementation in PR #28120
 Trigger: >500 production lines + background lifecycle + authorization/tenant boundary + restart/retry + shared planner/storage contract
-Design: this document v1; status PROPOSED; reviewed revision pending
-Blocking findings: independent design review/approval not yet recorded
-Decision log: sections 3-16
-Decision: REQUEST_CHANGES (approval gate not yet satisfied)
-Implementation deviations: to be checked after design approval
+Design: this document v1; status APPROVED; reviewed revision 1aea9ce32bdfcaea14ab4942229e2f870398866b
+Blocking findings: none
+Decision log: sections 3-16; decisions 1-8 approved with their documented tradeoffs
+Decision: PASS (independent review recorded 2026-09-04)
+Implementation deviations: none identified against the approved revision
 ```
