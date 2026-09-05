@@ -511,6 +511,7 @@ func (c *Compile) clear() {
 	c.ignorePublish = false
 	c.adjustTableExtraFunc = nil
 	c.disableDropAutoIncrement = false
+	c.skipDataBranchReclaim = false
 	c.keepAutoIncrement = 0
 	c.disableLock = false
 	c.icebergScanPlanner = nil
