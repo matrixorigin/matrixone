@@ -38,11 +38,23 @@ type sumDecimal64FastExec struct {
 func (*sumDecimal64FastExec) sourcePreservingMerge() {}
 
 func (exec *sumDecimal64FastExec) windowSlidingSupported() bool {
-	return exec.isSum && !exec.IsDistinct()
+	return !exec.IsDistinct()
 }
 
 func (exec *sumDecimal64FastExec) addWindowRow(row int, vectors []*vector.Vector) error {
-	return exec.Fill(0, row, vectors)
+	vec := vectors[0]
+	if windowRowIsNull(vec, row) {
+		return nil
+	}
+	if vec.IsConst() {
+		row = 0
+	}
+	raw := vector.MustFixedColNoTypeCheck[types.Decimal64](vec)[row]
+	value := types.Decimal128{B0_63: uint64(raw), B64_127: uint64(int64(raw) >> 63)}
+	sums := chunkArr[types.Decimal128](exec.state[0].vecs[0])
+	sums[0] = sums[0].Add128Unchecked(value)
+	vector.MustFixedColNoTypeCheck[int64](exec.state[0].vecs[1])[0]++
+	return nil
 }
 
 func (exec *sumDecimal64FastExec) removeWindowRow(row int, vectors []*vector.Vector) error {
@@ -55,7 +67,7 @@ func (exec *sumDecimal64FastExec) removeWindowRow(row int, vectors []*vector.Vec
 	}
 	cnts := vector.MustFixedColNoTypeCheck[int64](exec.state[0].vecs[1])
 	if cnts[0] <= 0 {
-		return moerr.NewInternalErrorNoCtx("sliding SUM state is empty")
+		return moerr.NewInternalErrorNoCtx("sliding SUM/AVG state is empty")
 	}
 	raw := vector.MustFixedColNoTypeCheck[types.Decimal64](vec)[row]
 	value := types.Decimal128{B0_63: uint64(raw), B64_127: uint64(int64(raw) >> 63)}
@@ -388,7 +400,7 @@ func (exec *sumDecimal64FastExec) Flush() (_ []*vector.Vector, retErr error) {
 			cntVec.Free(exec.mp)
 			exec.state[i].vecs[1] = nil
 
-			sumVec.GetType().Scale = resultType.Scale
+			*sumVec.GetType() = resultType
 			vecs[i] = sumVec
 			exec.state[i].vecs[0] = nil
 			exec.state[i].length = 0
@@ -755,7 +767,7 @@ func (exec *sumDecimal128FastExec) Flush() (_ []*vector.Vector, retErr error) {
 			cntVec.Free(exec.mp)
 			exec.state[i].vecs[1] = nil
 
-			sumVec.GetType().Scale = resultType.Scale
+			*sumVec.GetType() = resultType
 			vecs[i] = sumVec
 			exec.state[i].vecs[0] = nil
 			exec.state[i].length = 0

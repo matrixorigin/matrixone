@@ -461,8 +461,11 @@ func mergeDiffs(
 	return
 }
 
-// resolveProjectedIdxes resolves the user-specified COLUMNS list to a subset
-// of visibleIdxes. Returns nil if no COLUMNS clause was specified.
+// resolveProjectedIdxes resolves the user-specified COLUMNS list to the
+// effective visible output columns. Explicit primary-key columns are emitted
+// first, in primary-key order, followed by the requested columns in request
+// order. A fake primary key represents all visible columns and is not added to
+// a projection. Returns nil if no COLUMNS clause was specified.
 func resolveProjectedIdxes(columns tree.IdentifierList, tblStuff tableStuff) ([]int, error) {
 	if columns == nil {
 		return nil, nil
@@ -473,8 +476,18 @@ func resolveProjectedIdxes(columns tree.IdentifierList, tblStuff tableStuff) ([]
 		nameToIdx[strings.ToLower(tblStuff.def.colNames[idx])] = idx
 	}
 
-	projected := make([]int, 0, len(columns))
-	seen := make(map[int]bool, len(columns))
+	projected := make([]int, 0, len(columns)+len(tblStuff.def.pkColIdxes))
+	seen := make(map[int]bool, len(columns)+len(tblStuff.def.pkColIdxes))
+	if tblStuff.def.pkKind != fakeKind {
+		for _, idx := range tblStuff.def.pkColIdxes {
+			if seen[idx] {
+				continue
+			}
+			seen[idx] = true
+			projected = append(projected, idx)
+		}
+	}
+
 	for _, col := range columns {
 		idx, ok := nameToIdx[strings.ToLower(string(col))]
 		if !ok {

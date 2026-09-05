@@ -437,6 +437,35 @@ var CollectChanges = func(ctx context.Context, rel engine.Relation, fromTs, toTs
 	return rel.CollectChanges(ctx, fromTs, toTs, false, mp)
 }
 
+// finishISCPTransaction is the single commit/rollback boundary for ISCP-owned
+// transactions. Cleanup must remain possible after the operation context is
+// canceled, and neither commit nor rollback failures may be converted to
+// success.
+func finishISCPTransaction(ctx context.Context, txnOp client.TxnOperator, err error) error {
+	if txnOp == nil {
+		return err
+	}
+	// Cancellation before the commit point is a failed operation, even when the
+	// last statement happened to return first. Use the detached cleanup context
+	// below to roll back instead of accidentally committing canceled work.
+	if err == nil {
+		err = ctx.Err()
+	}
+	cleanupCtx, cancel := context.WithTimeoutCause(
+		context.WithoutCancel(ctx),
+		time.Minute*5,
+		moerr.NewInternalErrorNoCtx("iscp transaction finish timeout"),
+	)
+	defer cancel()
+	if err != nil {
+		if rollbackErr := txnOp.Rollback(cleanupCtx); rollbackErr != nil {
+			return errors.Join(err, rollbackErr)
+		}
+		return err
+	}
+	return txnOp.Commit(cleanupCtx)
+}
+
 func batchRowCount(bat *batch.Batch) int {
 	if bat == nil || len(bat.Vecs) == 0 {
 		return 0
@@ -458,11 +487,11 @@ func getTxn(
 		0)
 	op, err := cnTxnClient.New(ctx, nowTs, createByOpt)
 	if err != nil {
-		return nil, err
+		return nil, finishISCPTransaction(ctx, op, err)
 	}
 	err = cnEngine.New(ctx, op)
 	if err != nil {
-		return nil, errors.Join(err, op.Rollback(ctx))
+		return nil, finishISCPTransaction(ctx, op, err)
 	}
 	return op, nil
 }
@@ -508,7 +537,12 @@ func checkLease(
 	if err != nil {
 		return
 	}
-	defer txn.Commit(ctxWithTimeout)
+	defer func() {
+		err = finishISCPTransaction(ctxWithTimeout, txn, err)
+		if err != nil {
+			ok = false
+		}
+	}()
 
 	var runner string
 	runner, err = GetTaskRunner(ctxWithTimeout, cnUUID, txn)

@@ -232,6 +232,8 @@ func (ndesc *NodeDescribeImpl) GetNodeBasicInfo(ctx context.Context, options *Ex
 		pname = "Partition"
 		if ndesc.Node.Limit != nil && ndesc.Node.PartitionByCount > 0 {
 			pname = "Partition Top N"
+		} else if ndesc.Node.PartitionAlgorithm == plan.Node_PARTITION_ALGORITHM_HASH {
+			pname = "Hash Partition"
 		}
 	case plan.Node_UNION:
 		pname = "Union"

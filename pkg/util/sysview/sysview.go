@@ -76,13 +76,20 @@ var (
 )
 
 func InitInformationSchemaSysTablesForProtocol(protocol int64) []string {
-	if protocol >= defines.MORPCVersion41 {
+	if protocol >= defines.MORPCVersion46 {
 		return InitInformationSchemaSysTables
 	}
 
 	includeCheckConstraints := protocol >= defines.MORPCVersion16
+	includeCurrentRoles := protocol >= defines.MORPCVersion41
 	sqls := make([]string, 0, len(InitInformationSchemaSysTables))
 	for _, sql := range InitInformationSchemaSysTables {
+		switch sql {
+		case InformationSchemaTablesDDL:
+			sql = InformationSchemaTablesV41DDL
+		case InformationSchemaColumnsDDL:
+			sql = InformationSchemaColumnsV41DDL
+		}
 		if !includeCheckConstraints {
 			switch sql {
 			case InformationSchemaCheckConstraintsDDL:
@@ -91,7 +98,10 @@ func InitInformationSchemaSysTablesForProtocol(protocol int64) []string {
 				sql = InformationSchemaTableConstraintsLegacyDDL
 			}
 		}
-		sqls = append(sqls, informationSchemaMetadataVisibilityCompatibilityDDL(sql))
+		if !includeCurrentRoles {
+			sql = informationSchemaMetadataVisibilityCompatibilityDDL(sql)
+		}
+		sqls = append(sqls, sql)
 	}
 	return sqls
 }

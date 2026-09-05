@@ -1999,6 +1999,30 @@ func Test_DMLOperatorSerializationRoundtrip(t *testing.T) {
 		require.Equal(t, planpb.OrderBySpec_DESC, restoredOp.OrderBySpecs[0].Flag)
 	})
 
+	t.Run("HashPartition_AlgorithmAndSpillThreshold", func(t *testing.T) {
+		op := &partition.Partition{
+			Algorithm: planpb.Node_PARTITION_ALGORITHM_HASH,
+			SpillMem:  8192,
+			OrderBySpecs: []*planpb.OrderBySpec{{
+				Expr: &planpb.Expr{Typ: planpb.Type{Id: int32(types.T_int64)}},
+			}},
+		}
+		_, pipeInstr, err := convertToPipelineInstruction(op, proc, ctx, 1)
+		require.NoError(t, err)
+		require.Equal(t, planpb.Node_PARTITION_ALGORITHM_HASH, pipeInstr.PartitionAlgorithm)
+		require.Equal(t, int64(8192), pipeInstr.SpillMem)
+
+		wireBytes, err := pipeInstr.Marshal()
+		require.NoError(t, err)
+		wireInstr := new(pipeline.Instruction)
+		require.NoError(t, wireInstr.Unmarshal(wireBytes))
+		restored, err := convertToVmOperator(wireInstr, ctx, nil)
+		require.NoError(t, err)
+		restoredPartition := restored.(*partition.Partition)
+		require.Equal(t, planpb.Node_PARTITION_ALGORITHM_HASH, restoredPartition.Algorithm)
+		require.Equal(t, int64(8192), restoredPartition.SpillMem)
+	})
+
 	t.Run("HashBuild_SpillThreshold", func(t *testing.T) {
 		for _, threshold := range []int64{0, 4096} {
 			op := &hashbuild.HashBuild{SpillThreshold: threshold}
