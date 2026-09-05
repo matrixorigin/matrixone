@@ -112,7 +112,7 @@ MySQL 会在部分 text-subject + invalid binary auxiliary coercion 上执行 ch
 - `internal_column_character_set` 改为读取序列化 `Type.Charset`（binary OID仍权威），并让 `information_schema.columns` 对现有四种 identity 映射到上表名称。它不再把 `Scale` 当 charset。
 - CTAS继续复制 planner result type；不按 observed row 或 runtime sidecar缩窄/改域。`DESC`、information_schema 与 direct `CHARSET/COLLATION` 必须对同一静态 expression一致。
 - SQL `EXECUTE ... USING` 物化同时保留 assignment-time `SourceType` 与独立的 `RuntimeStringDomain`；typed non-NULL、typed NULL、重复执行和 prepared-plan cache复用均不得把三态 provenance压回静态域。
-- remote pipeline sender与receiver对所有已改变的 Function ID执行 MORPC v48 fail-closed barrier，包括 `POSITION`、`INTERNAL_CHAR_SIZE` 和 `INTERNAL_COLUMN_CHARACTER_SET`；主干v46已用于subscription-aware information-schema metadata，v47已用于window hash partition，本 PR连续发布v48完整capability；catalog upgrade barrier只控制view物化，不能代替executor barrier。
+- remote pipeline sender与receiver对所有已改变的 Function ID执行 MORPC v48 fail-closed barrier，包括 `POSITION`、`INTERNAL_CHAR_SIZE` 和 `INTERNAL_COLUMN_CHARACTER_SET`；主干v46已用于subscription-aware information-schema metadata，v47已用于window hash partition，本 PR连续发布v48完整capability；catalog upgrade barrier只控制view物化，不能代替executor barrier。新租户初始化同样必须分层：v41使用local COLUMNS+旧identity，v46/v47使用subscription COLUMNS+旧identity，只有v48使用subscription COLUMNS+新identity。
 
 ## 7. 边界、失败与性能
 
@@ -138,7 +138,7 @@ MySQL 会在部分 text-subject + invalid binary auxiliary coercion 上执行 ch
 | resolver不擦除 binary family；auxiliary不切域 | return/type-checker table UT：source text/binary × needle/replacement/pad text/binary |
 | length/ORD/position | focused executor UT：text/binary最近控制、empty/NULL、0/1/-1/越界、4-byte UTF-8、invalid bytes |
 | slice/reverse/case/trim | table UT：static text + runtime binary、static binary + runtime text、mixed rows、const与mask |
-| insert/pad/replace | direct-writer UT：byte/rune unit、invalid bytes、先执行 result limit、utf8mb4 target上限为64MiB/4 characters、范围内空 pad扩展返回非 NULL空串、空 pad截断与已有 #27218 width controls |
+| insert/pad/replace | direct-writer UT：byte/rune unit、invalid bytes；pad先区分截断与扩展，截断按实际保留bytes，空pad扩展返回非NULL空串，非空pad扩展按source bytes + missing characters × charset max width做overflow-safe admission；覆盖utf8mb4 16,777,216/16,777,217与utf8mb3 22,369,622边界及已有#27218 width controls |
 | LIKE | matcher UT + executor mixed-row UT：`_` 的 character/byte差异、`%`、escape、invalid bytes、独立 DP/convolution oracle、dual-modulus collision、late/equal-frequency与不同稀有字节multi-segment adversary、match-wide budget fallback、deterministic mid-match cancellation、constant-pattern scratch复用、MPool failure/no-leak及scaling benchmark；REGEXP测试不改 |
 | result provenance | nested consumer UT：变换结果再进 `CHAR_LENGTH`；无 metadata fast path断言不分配 sidecar |
 | CHARSET/COLLATION | static type table UT；runtime mixed override不改变名称；legacy fallback控制 |

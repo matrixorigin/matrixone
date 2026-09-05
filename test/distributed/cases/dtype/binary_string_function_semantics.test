@@ -29,6 +29,8 @@ select lpad('a', 16777216, '') is null as text_lpad_at_limit,
        lpad('a', 16777217, '') is null as text_lpad_over_limit,
        rpad('a', 16777217, '') is null as text_rpad_over_limit,
        lpad(_binary 'a', 16777217, _binary '') is null as binary_lpad_same_target;
+select lpad(repeat('a', 100), 16777217, '') is null as text_lpad_partial_extension,
+       rpad(repeat('a', 100), 16777217, '') is null as text_rpad_partial_extension;
 select lpad('a', 67108865, '') is null as text_lpad_overflow,
        rpad('a', 67108865, '') is null as text_rpad_overflow,
        lpad(_binary 'a', 67108865, _binary '') is null as binary_lpad_overflow,

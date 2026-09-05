@@ -254,6 +254,8 @@ func TestInitInformationSchemaSysTablesForProtocol(t *testing.T) {
 			assert.Len(t, localCatalog, len(InitInformationSchemaSysTables))
 			assert.Contains(t, localCatalog, InformationSchemaTablesV41DDL)
 			assert.Contains(t, localCatalog, InformationSchemaColumnsV41DDL)
+			assert.Contains(t, InformationSchemaColumnsV41DDL, "WHEN 1 then 'utf8' WHEN 2 then 'binary'")
+			assert.NotContains(t, InformationSchemaColumnsV41DDL, "WHEN 3 then 'utf8mb4'")
 			assert.NotContains(t, strings.Join(localCatalog, "\n"), "mo_subscription_tables()")
 			assert.NotContains(t, strings.Join(localCatalog, "\n"), "mo_subscription_columns()")
 			assert.Contains(t, strings.Join(localCatalog, "\n"), "mo_current_roles()")
@@ -263,8 +265,25 @@ func TestInitInformationSchemaSysTablesForProtocol(t *testing.T) {
 		})
 	}
 
-	latest := InitInformationSchemaSysTablesForProtocol(defines.MORPCVersion46)
+	for _, protocol := range []int64{defines.MORPCVersion46, defines.MORPCVersion47} {
+		t.Run(fmt.Sprintf("subscription-legacy-identity-v%d", protocol), func(t *testing.T) {
+			subscriptionLegacyIdentity := InitInformationSchemaSysTablesForProtocol(protocol)
+			assert.Len(t, subscriptionLegacyIdentity, len(InitInformationSchemaSysTables))
+			assert.Contains(t, subscriptionLegacyIdentity, InformationSchemaTablesDDL)
+			assert.Contains(t, subscriptionLegacyIdentity, InformationSchemaColumnsV46DDL)
+			joined := strings.Join(subscriptionLegacyIdentity, "\n")
+			assert.Contains(t, joined, "mo_subscription_tables()")
+			assert.Contains(t, joined, "mo_subscription_columns()")
+			assert.NotContains(t, joined, "WHEN 3 then 'utf8mb4'")
+			for _, sql := range subscriptionLegacyIdentity {
+				assertInformationSchemaInitSQLParses(t, sql)
+			}
+		})
+	}
+
+	latest := InitInformationSchemaSysTablesForProtocol(defines.MORPCVersion48)
 	assert.Equal(t, InitInformationSchemaSysTables, latest)
+	assert.Contains(t, strings.Join(latest, "\n"), "WHEN 3 then 'utf8mb4'")
 }
 
 func assertInformationSchemaInitSQLParses(t *testing.T, sql string) {

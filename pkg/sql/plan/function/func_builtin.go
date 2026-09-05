@@ -1627,16 +1627,17 @@ func builtInCurrentUserName(_ []*vector.Vector, result vector.FunctionResultWrap
 }
 
 func padResultByteLength(src string, tgtLen int64, pad string, maxBytes int64) (int, bool) {
-	return padResultByteLengthWithCharacterLimit(src, tgtLen, pad, maxBytes, maxBytes/utf8.UTFMax)
+	return padResultByteLengthWithCharacterWidth(src, tgtLen, pad, maxBytes, utf8.UTFMax)
 }
 
-func padResultByteLengthWithCharacterLimit(
+func padResultByteLengthWithCharacterWidth(
 	src string,
 	tgtLen int64,
 	pad string,
-	maxBytes, maxCharacters int64,
+	maxBytes int64,
+	maxBytesPerCharacter int,
 ) (int, bool) {
-	if tgtLen < 0 || tgtLen > int64(^uint(0)>>1) || tgtLen > maxCharacters {
+	if tgtLen < 0 || tgtLen > int64(^uint(0)>>1) || tgtLen > maxBytes {
 		return 0, true
 	}
 	srcRunes, padRunes := utf8.RuneCountInString(src), utf8.RuneCountInString(pad)
@@ -1647,15 +1648,19 @@ func padResultByteLengthWithCharacterLimit(
 		bytes = encodedRunePrefixBytes(src, target)
 	case target == srcRunes:
 		bytes = int64(len(src))
-	case padRunes == 0:
-		return 0, false
 	default:
 		srcBytes := int64(len(src))
-		padBytes := int64(len(pad))
 		if srcBytes > maxBytes {
 			return 0, true
 		}
 		missing := target - srcRunes
+		if maxBytesPerCharacter > 0 && int64(missing) > (maxBytes-srcBytes)/int64(maxBytesPerCharacter) {
+			return 0, true
+		}
+		if padRunes == 0 {
+			return 0, false
+		}
+		padBytes := int64(len(pad))
 		full, partial := missing/padRunes, missing%padRunes
 		if padBytes != 0 && int64(full) > (maxBytes-srcBytes)/padBytes {
 			return 0, true
@@ -1720,12 +1725,11 @@ func writePadResult(dst []byte, src string, target int, pad string, left bool) {
 	}
 }
 
-func maxPadTextResultCharacters(sourceType *types.Type, maxBytes int64) int64 {
-	maxBytesPerCharacter := int64(utf8.UTFMax)
+func maxPadTextCharacterWidth(sourceType *types.Type) int {
 	if sourceType.Charset == types.CharsetLegacy {
-		maxBytesPerCharacter = 3
+		return 3
 	}
-	return maxBytes / maxBytesPerCharacter
+	return utf8.UTFMax
 }
 
 func maxStringFunctionResultLength(result vector.FunctionResultWrapper) int64 {
@@ -1799,7 +1803,7 @@ func builtInPad(
 	p3 := vector.GenerateFunctionStrParameter(parameters[2])
 	rs := vector.MustFunctionResult[types.Varlena](result)
 	maxResultLen := maxStringFunctionResultLength(result)
-	maxTextCharacters := maxPadTextResultCharacters(parameters[0].GetType(), maxResultLen)
+	maxTextCharacterWidth := maxPadTextCharacterWidth(parameters[0].GetType())
 	uniformBinary, perRow := stringDomainMode(parameters[0])
 
 	for row := uint64(0); row < uint64(length); row++ {
@@ -1824,8 +1828,8 @@ func builtInPad(
 		if binary {
 			resultBytes, shouldNull = padBinaryResultByteLength(source, target, pad, maxResultLen)
 		} else {
-			resultBytes, shouldNull = padResultByteLengthWithCharacterLimit(
-				string(source), target, string(pad), maxResultLen, maxTextCharacters)
+			resultBytes, shouldNull = padResultByteLengthWithCharacterWidth(
+				string(source), target, string(pad), maxResultLen, maxTextCharacterWidth)
 		}
 		if shouldNull {
 			if err := rs.AppendBytes(nil, true); err != nil {

@@ -557,6 +557,9 @@ func (compiled *compiledByteLikePattern) findSegment(
 	if anchorStart == anchorEnd {
 		return from, nil
 	}
+	if anchorFrequency == 0 {
+		return -1, nil
+	}
 	valueLength := limit - from
 	candidateCount := valueLength - segmentLength + 1
 	segmentHasOne := slices.Contains(compiled.kinds[start:end], byteLikeOne)
@@ -587,6 +590,9 @@ func (compiled *compiledByteLikePattern) findSegment(
 			}
 		}
 		found := bytes.Index(value[searchAt:lastAnchorAt+len(anchor)], anchor)
+		if err := compiled.byteLikeCancellationError(); err != nil {
+			return -1, err
+		}
 		if found < 0 {
 			return -1, nil
 		}

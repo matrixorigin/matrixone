@@ -16,8 +16,8 @@ package function
 
 import (
 	"math"
+	"strings"
 	"testing"
-	"unicode/utf8"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
@@ -417,15 +417,34 @@ func TestPadResultByteLengthEnforcesEncodedBudget(t *testing.T) {
 	_, rejected = padResultByteLength("a", int64(types.MaxVarcharLen)+1, "", int64(types.MaxVarcharLen))
 	require.True(t, rejected)
 
-	utf8mb4MaxCharacters := int64(types.MaxBlobLen / utf8.UTFMax)
-	length, rejected = padResultByteLength("a", utf8mb4MaxCharacters, "", int64(types.MaxBlobLen))
+	const utf8mb4Boundary = int64(16_777_216)
+	length, rejected = padResultByteLength("a", utf8mb4Boundary, "a", int64(types.MaxBlobLen))
+	require.False(t, rejected)
+	require.Equal(t, int(utf8mb4Boundary), length)
+	_, rejected = padResultByteLength("a", utf8mb4Boundary+1, "a", int64(types.MaxBlobLen))
+	require.True(t, rejected)
+	_, rejected = padResultByteLength("a", utf8mb4Boundary+1, "", int64(types.MaxBlobLen))
+	require.True(t, rejected)
+	length, rejected = padResultByteLength(strings.Repeat("a", 100), utf8mb4Boundary+1, "", int64(types.MaxBlobLen))
 	require.False(t, rejected)
 	require.Zero(t, length)
-	_, rejected = padResultByteLength("a", utf8mb4MaxCharacters+1, "", int64(types.MaxBlobLen))
+
+	longSource := strings.Repeat("a", 17_000_000)
+	length, rejected = padResultByteLength(longSource, utf8mb4Boundary+1, "", int64(types.MaxBlobLen))
+	require.False(t, rejected)
+	require.Equal(t, int(utf8mb4Boundary+1), length)
+
+	const utf8mb3Boundary = int64(22_369_622)
+	length, rejected = padResultByteLengthWithCharacterWidth(
+		"a", utf8mb3Boundary, "a", int64(types.MaxBlobLen), 3)
+	require.False(t, rejected)
+	require.Equal(t, int(utf8mb3Boundary), length)
+	_, rejected = padResultByteLengthWithCharacterWidth(
+		"a", utf8mb3Boundary+1, "a", int64(types.MaxBlobLen), 3)
 	require.True(t, rejected)
 
 	legacy := types.NewWithCharset(types.T_text, 0, 0, types.CharsetLegacy)
-	require.Equal(t, int64(types.MaxBlobLen/3), maxPadTextResultCharacters(&legacy, int64(types.MaxBlobLen)))
+	require.Equal(t, 3, maxPadTextCharacterWidth(&legacy))
 }
 
 func TestExpandingTextResultsUseTextCapacity(t *testing.T) {

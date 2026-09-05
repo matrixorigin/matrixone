@@ -474,14 +474,15 @@ func TestPadWithEmptyPadReturnsNonNullEmptyOrTruncatedValue(t *testing.T) {
 		typ        types.Type
 		resultType types.Type
 		maxTarget  int64
+		overIsNull bool
 	}{
 		{
 			name: "text", typ: types.T_varchar.ToType(), resultType: types.T_text.ToType(),
-			maxTarget: int64(types.MaxBlobLen / utf8.UTFMax),
+			maxTarget: int64(types.MaxBlobLen / utf8.UTFMax), overIsNull: true,
 		},
 		{
 			name: "binary", typ: types.T_varbinary.ToType(), resultType: types.T_blob.ToType(),
-			maxTarget: int64(types.MaxBlobLen),
+			maxTarget: int64(types.MaxBlobLen), overIsNull: true,
 		},
 	} {
 		t.Run(test.name, func(t *testing.T) {
@@ -513,7 +514,10 @@ func TestPadWithEmptyPadReturnsNonNullEmptyOrTruncatedValue(t *testing.T) {
 					require.Equal(t, []byte("ab"), resultVector.GetBytesAt(1))
 					require.False(t, resultVector.IsNull(2))
 					require.Empty(t, resultVector.GetBytesAt(2))
-					require.True(t, resultVector.IsNull(3))
+					require.Equal(t, test.overIsNull, resultVector.IsNull(3))
+					if !test.overIsNull {
+						require.Empty(t, resultVector.GetBytesAt(3))
+					}
 				})
 			}
 		})
@@ -946,6 +950,31 @@ func TestByteLikeGlobalDirectBudgetBoundsMultiSegmentVerification(t *testing.T) 
 	require.Greater(t, directVerificationWork, budget.remaining)
 }
 
+func TestByteLikeAnchorSearchChecksCancellationAfterIndex(t *testing.T) {
+	for _, test := range []struct {
+		name  string
+		value []byte
+	}{
+		{name: "negative result", value: append(bytes.Repeat([]byte{'b'}, 64<<10), bytes.Repeat([]byte{'a'}, 64<<10)...)},
+		{name: "positive result", value: append(bytes.Repeat([]byte{'b'}, 128<<10), 'a', 'b')},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			mp := mpool.MustNewZero()
+			compiled, err := compileByteLikePattern([]byte("ab"), nil, false, mp)
+			require.NoError(t, err)
+			defer compiled.free()
+			cancelContext := newByteLikeCancelAfterChecksContext(4)
+			compiled.ctx = cancelContext
+			frequency := [256]int{'a': bytes.Count(test.value, []byte{'a'}), 'b': bytes.Count(test.value, []byte{'b'})}
+
+			_, err = compiled.findSegment(
+				0, len(compiled.kinds), test.value, 0, len(test.value), &frequency, nil)
+			require.ErrorIs(t, err, context.Canceled)
+			require.True(t, cancelContext.canceled)
+		})
+	}
+}
+
 func TestByteLikeDirectVerificationHonorsMidMatchCancellation(t *testing.T) {
 	value, pattern := makeDirectMultiSegmentByteLike(32, 8_192)
 	mp := mpool.MustNewZero()
@@ -1131,6 +1160,13 @@ func TestByteLikeConvolutionAllocationFailureDoesNotLeak(t *testing.T) {
 		sparsePattern, bytes.Repeat([]byte{'a'}, sparseSegmentLength+1), nil, false, sparseLimited)
 	require.Error(t, err)
 	require.Zero(t, sparseLimited.CurrNB())
+
+	matched, err := byteLike(
+		sparsePattern, bytes.Repeat([]byte{'b'}, sparseSegmentLength+1), nil, false, sparseLimited)
+	require.NoError(t, err)
+	require.False(t, matched)
+	require.Zero(t, sparseLimited.CurrNB(),
+		"an absent anchor must reject before allocating sparse literal-position scratch")
 }
 
 func TestByteLikeConstantPatternReusesConvolutionScratchAcrossRows(t *testing.T) {
