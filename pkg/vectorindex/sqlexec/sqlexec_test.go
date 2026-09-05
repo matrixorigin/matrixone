@@ -23,6 +23,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/sql/schedule"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/stretchr/testify/assert"
@@ -33,12 +34,15 @@ type MockSQLExecutor struct {
 }
 
 type labelCapturingSQLExecutor struct {
-	execLabels []map[string]string
-	txnLabels  []map[string]string
+	execLabels  []map[string]string
+	txnLabels   []map[string]string
+	execIntents []schedule.SchedulingIntent
+	txnIntents  []schedule.SchedulingIntent
 }
 
 func (m *labelCapturingSQLExecutor) Exec(_ context.Context, _ string, opts executor.Options) (executor.Result, error) {
 	m.execLabels = append(m.execLabels, opts.CNLabels())
+	m.execIntents = append(m.execIntents, opts.QuerySchedulingIntent())
 	return executor.Result{}, nil
 }
 
@@ -48,6 +52,7 @@ func (m *labelCapturingSQLExecutor) ExecTxn(
 	opts executor.Options,
 ) error {
 	m.txnLabels = append(m.txnLabels, opts.CNLabels())
+	m.txnIntents = append(m.txnIntents, opts.QuerySchedulingIntent())
 	return nil
 }
 
@@ -111,6 +116,10 @@ func TestProcessBackedSQLPropagatesCNLabels(t *testing.T) {
 	proc := testutil.NewProcessWithMPool(t, service, mpool.MustNewZero())
 	proc.Ctx = context.WithValue(context.Background(), defines.TenantIDKey{}, uint32(42))
 	proc.Base.SessionInfo.CNLabels = map[string]string{"account": "tp", "role": "tp"}
+	intent := schedule.SchedulingIntent{
+		Explicit: true, PoolFallback: schedule.PoolFallbackStrict, EmptyWorkerPolicy: schedule.EmptyWorkerFail,
+	}
+	proc.Base.SessionInfo.QuerySchedulingIntent = intent
 	sqlproc := NewSqlProcess(proc)
 
 	_, err := RunSql(sqlproc, "select 1")
@@ -129,6 +138,8 @@ func TestProcessBackedSQLPropagatesCNLabels(t *testing.T) {
 	expected := map[string]string{"account": "tp", "role": "tp"}
 	require.Equal(t, []map[string]string{expected, expected, nil}, capturing.execLabels)
 	require.Equal(t, []map[string]string{expected}, capturing.txnLabels)
+	require.Equal(t, []schedule.SchedulingIntent{intent, intent, {}}, capturing.execIntents)
+	require.Equal(t, []schedule.SchedulingIntent{intent}, capturing.txnIntents)
 
 	proc.Base.SessionInfo.CNLabels["role"] = "ap"
 	require.Equal(t, "tp", capturing.execLabels[0]["role"])

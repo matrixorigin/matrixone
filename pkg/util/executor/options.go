@@ -25,6 +25,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/lock"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
+	"github.com/matrixorigin/matrixone/pkg/sql/schedule"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 )
 
@@ -339,6 +340,17 @@ func (opts Options) WithCNLabels(labels map[string]string) Options {
 // CNLabels returns an independently owned selector for a nested compile.
 func (opts Options) CNLabels() map[string]string {
 	return maps.Clone(opts.cnLabels)
+}
+
+// WithQuerySchedulingIntent preserves the parent statement's placement and
+// fail-closed policy for nested SQL.
+func (opts Options) WithQuerySchedulingIntent(intent schedule.SchedulingIntent) Options {
+	opts.querySchedulingIntent = intent
+	return opts
+}
+
+func (opts Options) QuerySchedulingIntent() schedule.SchedulingIntent {
+	return opts.querySchedulingIntent
 }
 
 // WithFrontend marks the SQL execution as a frontend session-bound

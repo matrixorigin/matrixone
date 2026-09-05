@@ -459,6 +459,9 @@ func (c *Compile) evaluateQueryPlacement(
 
 func (c *Compile) SetQuerySchedulingIntent(intent schedule.SchedulingIntent) {
 	c.querySchedulingIntent = intent
+	if c.proc != nil && c.proc.Base != nil {
+		c.proc.Base.SessionInfo.QuerySchedulingIntent = intent
+	}
 }
 
 func (c *Compile) effectiveQuerySchedulingIntent() schedule.SchedulingIntent {

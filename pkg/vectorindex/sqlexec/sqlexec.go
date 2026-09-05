@@ -182,6 +182,7 @@ func RunSql(sqlproc *SqlProcess, sql string) (executor.Result, error) {
 			WithTimeZone(proc.GetSessionInfo().TimeZone).
 			WithAccountID(accountId).
 			WithCNLabels(proc.GetSessionInfo().CNLabels).
+			WithQuerySchedulingIntent(proc.GetSessionInfo().QuerySchedulingIntent).
 			WithResolveVariableFunc(proc.GetResolveVariableFunc()).
 			WithFrontend(proc.Base.IsFrontend).
 			WithStatementOption(executor.StatementOption{}.WithDisableLog())
@@ -276,6 +277,7 @@ func RunStreamingSql(
 			WithAccountID(accountId).
 			WithStreaming(stream_chan, error_chan).
 			WithCNLabels(proc.GetSessionInfo().CNLabels).
+			WithQuerySchedulingIntent(proc.GetSessionInfo().QuerySchedulingIntent).
 			WithResolveVariableFunc(proc.GetResolveVariableFunc()).
 			WithFrontend(proc.Base.IsFrontend).
 			WithStatementOption(executor.StatementOption{}.WithDisableLog())
@@ -337,6 +339,7 @@ func RunTxn(sqlproc *SqlProcess, execFunc func(executor.TxnExecutor) error) erro
 			WithTimeZone(proc.GetSessionInfo().TimeZone).
 			WithAccountID(accountId).
 			WithCNLabels(proc.GetSessionInfo().CNLabels).
+			WithQuerySchedulingIntent(proc.GetSessionInfo().QuerySchedulingIntent).
 			WithResolveVariableFunc(proc.GetResolveVariableFunc()).
 			WithFrontend(proc.Base.IsFrontend)
 		return exec.ExecTxn(topContext, execFunc, opts)

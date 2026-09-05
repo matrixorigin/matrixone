@@ -57,6 +57,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/shuffle"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/schedule"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/vm"
@@ -1573,6 +1574,35 @@ func TestNewCompileCapturesCNLabelsForNestedExecution(t *testing.T) {
 
 	c.cnLabel["account"] = "other"
 	require.Equal(t, "tp", proc.Base.SessionInfo.CNLabels["account"])
+}
+
+func TestNestedCompilePreservesStrictPoolFailure(t *testing.T) {
+	parentProc := testutil.NewProcess(t)
+	labels := map[string]string{"account": "tp", "role": "tp"}
+	parent := NewCompile("local:6001", "db", "outer", "tenant", "user", nil, parentProc, nil, false, labels, time.Now())
+	defer parent.Release()
+	intent := schedule.SchedulingIntent{
+		Explicit:          true,
+		PoolFallback:      schedule.PoolFallbackStrict,
+		EmptyWorkerPolicy: schedule.EmptyWorkerFail,
+	}
+	parent.SetQuerySchedulingIntent(intent)
+
+	opts := executor.Options{}.
+		WithCNLabels(parentProc.Base.SessionInfo.CNLabels).
+		WithQuerySchedulingIntent(parentProc.Base.SessionInfo.QuerySchedulingIntent)
+	nestedProc := testutil.NewProcess(t)
+	nested := NewCompile(
+		"local:6001", "db", "nested", "tenant", "user", nil, nestedProc, nil, true, opts.CNLabels(), time.Now())
+	defer nested.Release()
+	nested.SetQuerySchedulingIntent(opts.QuerySchedulingIntent())
+	nested.execType = plan2.ExecTypeAP_MULTICN
+	nested.e = &schedulerProviderTestEngine{schedulerTestEngine: &schedulerTestEngine{}}
+
+	_, err := nested.scheduleQueryWorkers()
+	require.ErrorContains(t, err, schedule.ReasonNoCandidateCN)
+	require.Equal(t, labels, nested.cnLabel)
+	require.Equal(t, intent, nested.querySchedulingIntent)
 }
 
 // TestNewCompileTxnOffsetForInternalSql verifies the statement-boundary

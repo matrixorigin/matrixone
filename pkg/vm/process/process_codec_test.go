@@ -29,6 +29,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
 	txnpb "github.com/matrixorigin/matrixone/pkg/pb/txn"
+	"github.com/matrixorigin/matrixone/pkg/sql/schedule"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
@@ -94,6 +95,12 @@ func newCodecTestProcess(t *testing.T) (*Process, client.TxnOperator) {
 		ExplicitZeroTemporalCastReturnsNull: true,
 		SqlMode:                             "STRICT_TRANS_TABLES",
 		CNLabels:                            map[string]string{"account": "tp", "role": "tp"},
+		QuerySchedulingIntent: schedule.SchedulingIntent{
+			Explicit: true, PoolFallback: schedule.PoolFallbackStrict, EmptyWorkerPolicy: schedule.EmptyWorkerFail,
+			WorkerSet: schedule.WorkerSetPolicy{
+				Mode: schedule.WorkerSetMax, MaxWorkers: 2, SelectionKey: "stmt", AlgorithmVersion: schedule.WorkerSelectionAlgorithmV1,
+			},
+		},
 	}
 	sp := NewStmtProfile(uuid.MustParse("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"), uuid.MustParse("bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"))
 	sp.SetTxnId([]byte("txn-profile-123456"))
@@ -254,6 +261,7 @@ func TestBuildProcessInfoAndMockProcessInfoWithPro(t *testing.T) {
 	require.True(t, info.SessionInfo.ExplicitZeroTemporalCastReturnsNull)
 	require.Equal(t, "STRICT_TRANS_TABLES", info.SessionInfo.SqlMode)
 	require.Equal(t, map[string]string{"account": "tp", "role": "tp"}, info.SessionInfo.CnLabels)
+	require.Equal(t, proc.Base.SessionInfo.QuerySchedulingIntent, decodeQuerySchedulingIntent(info.SessionInfo.QuerySchedulingIntent))
 	require.True(t, info.SessionInfo.LockWaitTimeoutSet)
 	require.Equal(t, pipeline.SessionLoggerInfo_Warn, info.SessionLogger.LogLevel)
 
@@ -304,6 +312,7 @@ func TestCodecServiceEncodeDecodeAndLookup(t *testing.T) {
 	require.True(t, decodedProc.Base.SessionInfo.ExplicitZeroTemporalCastReturnsNull)
 	require.Equal(t, info.SessionInfo.SqlMode, decodedProc.Base.SessionInfo.SqlMode)
 	require.Equal(t, info.SessionInfo.CnLabels, decodedProc.Base.SessionInfo.CNLabels)
+	require.Equal(t, proc.Base.SessionInfo.QuerySchedulingIntent, decodedProc.Base.SessionInfo.QuerySchedulingIntent)
 	require.Equal(t, info.SessionInfo.LockWaitTimeoutSet, decodedProc.Base.SessionInfo.LockWaitTimeoutSet)
 	require.NotNil(t, decodedProc.GetPrepareParams())
 	require.Equal(t, 2, decodedProc.GetPrepareParams().Length())
@@ -322,6 +331,7 @@ func TestCodecServiceEncodeDecodeAndLookup(t *testing.T) {
 	secondHop, err := decodedProc.BuildProcessInfo("select nested")
 	require.NoError(t, err)
 	require.Equal(t, map[string]string{"account": "tp", "role": "tp"}, secondHop.SessionInfo.CnLabels)
+	require.Equal(t, proc.Base.SessionInfo.QuerySchedulingIntent, decodeQuerySchedulingIntent(secondHop.SessionInfo.QuerySchedulingIntent))
 	secondHop.SessionInfo.CnLabels["account"] = "other"
 	require.Equal(t, "tp", decodedProc.Base.SessionInfo.CNLabels["account"])
 

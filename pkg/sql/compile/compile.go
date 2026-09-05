@@ -142,6 +142,7 @@ func NewCompile(
 	// SessionInfo is shared by local child processes and serialized for remote
 	// scopes. Keep a separate snapshot because Compile.Release clears cnLabel.
 	c.proc.Base.SessionInfo.CNLabels = cloneCNLabels(cnLabel)
+	c.proc.Base.SessionInfo.QuerySchedulingIntent = schedule.SchedulingIntent{}
 	c.startAt = startAt
 	c.disableRetry = false
 	c.ncpu = system.GoMaxProcs()
@@ -7220,6 +7221,8 @@ func (c *Compile) runSqlWithResultAndOptions(
 		WithTimeZone(c.proc.GetSessionInfo().TimeZone).
 		WithLowerCaseTableNames(&lower).
 		WithStatementOption(options).
+		WithCNLabels(c.proc.GetSessionInfo().CNLabels).
+		WithQuerySchedulingIntent(c.proc.GetSessionInfo().QuerySchedulingIntent).
 		WithResolveVariableFunc(c.proc.GetResolveVariableFunc()).
 		WithFrontend(c.proc.Base.IsFrontend)
 

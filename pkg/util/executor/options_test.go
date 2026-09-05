@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/sql/schedule"
 	"github.com/stretchr/testify/require"
 )
 
@@ -46,6 +47,24 @@ func TestOptionsCNLabelsUseIndependentSnapshots(t *testing.T) {
 	require.Equal(t, "tp", opts.CNLabels()["account"])
 	require.Nil(t, (Options{}).CNLabels())
 	require.NotNil(t, (Options{}).WithCNLabels(map[string]string{}).CNLabels())
+}
+
+func TestOptionsQuerySchedulingIntent(t *testing.T) {
+	intent := schedule.SchedulingIntent{
+		Explicit:          true,
+		RequestedPool:     "account:tp",
+		PoolFallback:      schedule.PoolFallbackStrict,
+		EmptyWorkerPolicy: schedule.EmptyWorkerFail,
+		CurrentCNPolicy:   schedule.CurrentCNPreferred,
+		WorkerSet: schedule.WorkerSetPolicy{
+			Mode:             schedule.WorkerSetMax,
+			MaxWorkers:       2,
+			SelectionKey:     "statement-id",
+			AlgorithmVersion: schedule.WorkerSelectionAlgorithmV1,
+		},
+	}
+	require.Equal(t, intent, (Options{}).WithQuerySchedulingIntent(intent).QuerySchedulingIntent())
+	require.Equal(t, schedule.SchedulingIntent{}, (Options{}).QuerySchedulingIntent())
 }
 
 func TestOptionsLockWaitTimeout(t *testing.T) {

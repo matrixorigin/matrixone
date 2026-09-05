@@ -480,6 +480,7 @@ func (exec *txnExecutor) Exec(
 		exec.opts.CNLabels(),
 		receiveAt,
 	)
+	c.SetQuerySchedulingIntent(exec.opts.QuerySchedulingIntent())
 	c.SetOriginSQL(sql)
 	c.adjustTableExtraFunc = exec.opts.AdjustTableExtraFunc()
 	c.disableDropAutoIncrement = statementOption.DisableDropIncrStatement()
