@@ -73,6 +73,18 @@ func (v *Vector) MarshalSelectedRowsTo(w io.Writer, rows []int32) error {
 	})
 }
 
+// MarshalRowRangeTo writes one contiguous half-open row range without first
+// allocating a row-index slice. Large spill batches use it to split records
+// while keeping the split path bounded by the encoded output buffer alone.
+func (v *Vector) MarshalRowRangeTo(w io.Writer, start, end int) error {
+	if v == nil || start < 0 || end < start || end > v.Length() {
+		return moerr.NewInvalidInputNoCtx("invalid selected vector row range")
+	}
+	return v.marshalSelectedRowsTo(w, end-start, nil, func(i int) int {
+		return start + i
+	})
+}
+
 // MarshalSelectedFlagsTo is the flag-selection form used by aggregate state.
 // It returns the encoded row count so callers can validate their record plan.
 func (v *Vector) MarshalSelectedFlagsTo(w io.Writer, flags []uint8) (int, error) {

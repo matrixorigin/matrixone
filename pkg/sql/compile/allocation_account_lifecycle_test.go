@@ -25,7 +25,9 @@ import (
 	"github.com/golang/mock/gomock"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
@@ -38,6 +40,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/order"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/product"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/top"
+	"github.com/matrixorigin/matrixone/pkg/sql/internal/materialized"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
@@ -517,6 +520,56 @@ func TestAllocationAccountTransportParticipantsDoNotActivateLifecycle(t *testing
 	require.ErrorIs(t, c.attachRuntimeAllocationOwners([]*Scope{{
 		RootOp: active,
 	}}), mpool.ErrAllocationAccountInvariant)
+}
+
+func TestMaterializedSourceActivatesAllocationLifecycle(t *testing.T) {
+	c := &Compile{
+		proc:                testutil.NewProcess(t),
+		MessageBoard:        message.NewMessageBoard(),
+		materializedSources: map[int32]*materialized.Source{1: materialized.NewSource(1)},
+	}
+	require.NoError(t, c.ensureAllocationAccountLifecycle(func(
+		mpool.AllocationAccountTerminalSnapshot,
+	) {
+	}))
+	require.NotNil(t, c.allocationControllerProvider)
+	require.NotNil(t, c.allocationAccountRegistry)
+	attempt, err := c.beginAllocationAccountAttempt()
+	require.NoError(t, err)
+	require.NotNil(t, attempt)
+	require.NotNil(t, attempt.account)
+	require.NoError(t, c.finishAllocationAccountAttempt())
+}
+
+func TestCompileClearClosesMaterializedSourceBeforeAccountTerminal(t *testing.T) {
+	c, _ := newRunLifecycleCompile(t)
+	proc := c.proc
+	source := materialized.NewSource(1)
+	var exported []mpool.AllocationAccountTerminalSnapshot
+	c.materializedSources = map[int32]*materialized.Source{1: source}
+	require.NoError(t, c.ensureAllocationAccountLifecycle(func(
+		snapshot mpool.AllocationAccountTerminalSnapshot,
+	) {
+		exported = append(exported, snapshot)
+	}))
+	attempt, err := c.beginAllocationAccountAttempt()
+	require.NoError(t, err)
+	require.NoError(t, source.Begin(proc.Mp(), materialized.SpillConfig{
+		AllocationAccount: attempt.account,
+	}))
+	input := batch.NewWithSize(1)
+	input.Vecs[0] = vector.NewVec(types.T_int64.ToType())
+	require.NoError(t, vector.AppendFixed(input.Vecs[0], int64(7), false, proc.Mp()))
+	input.SetRowCount(1)
+	require.NoError(t, source.Append(input))
+	input.Clean(proc.Mp())
+	require.Positive(t, attempt.account.Snapshot().Used)
+
+	c.clear()
+
+	require.Len(t, exported, 1)
+	require.Equal(t, mpool.AllocationAccountTerminalValid, exported[0].State)
+	require.Zero(t, exported[0].Used)
 }
 
 func TestAllocationAccountCollectsProductConsumerAndHashBuild(t *testing.T) {

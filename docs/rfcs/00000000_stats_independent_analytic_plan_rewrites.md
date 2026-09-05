@@ -1,6 +1,6 @@
 - Status: in-progress
 - Start Date: 2026-09-01
-- Design revision: v6 (2026-09-02)
+- Design revision: v7 (2026-09-04)
 - Authors: MatrixOne optimizer team
 - Implementation PRs: [#27914](https://github.com/matrixorigin/matrixone/pull/27914), [#27915](https://github.com/matrixorigin/matrixone/pull/27915), [#27934](https://github.com/matrixorigin/matrixone/pull/27934)
 - Issue for this RFC: [#26768](https://github.com/matrixorigin/matrixone/issues/26768)
@@ -59,7 +59,8 @@ Not in scope:
 - a general memo or cost-based rewrite search;
 - runtime adaptive plans;
 - making inaccurate statistics a semantic proof;
-- sharing recursive, correlated, volatile, or partially consumed producers;
+- sharing recursive, correlated, volatile producers, or a producer without one
+  guaranteed complete legacy evaluation witness;
 - moving a `SINGLE` join or its cardinality check across another join;
 - computed-key distribution equivalence or inferred uniqueness;
 - partial `SUM` below a join until an aggregate-state merge contract can prove
@@ -84,9 +85,14 @@ the pre-existing plan.
    and column positions through supported projection shapes.
 6. **Uniqueness:** row-preservation or non-multiplication claims require a
    complete declared primary-key equality; estimates never substitute for it.
-7. **Consumption:** a materialized producer is shared only when every reader
-   drains it, or when the producer is the bounded statement-local
-   `mo_current_roles` closure.
+7. **Consumption:** an eagerly materialized CTE is shared only when at least
+   one legacy occurrence is guaranteed to drain the complete producer. A
+   witness behind joins is kept on the exact build path of every
+   planner-approved full-build join ancestor. Other readers may stop early
+   because the source supports independent release. The bounded statement-local
+   `mo_current_roles` closure, optionally through direct one-column identity
+   projections only, remains the sole no-witness exception.
+   Grouping-set output uses the same independently readable bounded source.
 8. **Determinism:** recursive, external, side-effecting, volatile, and unknown
    operators remain on the old path.
 9. **Bounded resources:** planner work, plan growth, materialized memory, spill,
@@ -156,34 +162,110 @@ fixed, and the scalar annotation does not recost the tree.
 ### Multi-reference CTE reuse
 
 An eligible CTE has at least two reachable, type-compatible occurrences, a
-deterministic non-correlated non-recursive producer, and complete consumer
-drain. The ordinary in-memory admission is 32 MiB. A predicate-aware or proven
-hash-build source may use the existing spill owner, with an 8 GiB planner
-ceiling; statement/CN accounting remains authoritative.
+deterministic non-correlated non-recursive producer, and at least one complete
+legacy evaluation witness. The ordinary in-memory admission is 32 MiB. A
+predicate-aware or proven hash-build source may use the existing spill owner,
+with an 8 GiB planner ceiling; statement/CN accounting remains authoritative.
+Variable-width spill additionally requires a known declared row capacity well
+below the 64 MiB record limit. The source recursively splits a wider multi-row
+producer batch into independently readable records; a schema whose one row can
+approach the record limit keeps the inline plan. Total storage admission uses
+the larger of the statistical row width and this declared-capacity width, so a
+narrow average cannot disguise a bounded but much wider materialized result.
+Planner-introduced sources reserve their estimated retained memory and their
+full estimated bytes against one statement-local spill ledger. Spill is
+reserved even below 64 MiB because the source also has a bounded in-memory
+batch count, which estimated row counts cannot prove will be respected. The
+cumulative reservation must fit `processLimitationSize`, the
+explicit `processLimitationSpillSize` when set, and the 8 GiB planner ceiling;
+otherwise the corresponding CTE or grouping-set rewrite is skipped.
 
 Consumer predicates remain in place. If every consumer constrains a common
 producer column with deterministic total predicates, their remapped
 disjunction may also bound the producer. Output expressions are shared only
 when their full row-and-column evaluation domain is already required or they
-are structurally total. A `LIMIT`, `OFFSET`, Top-N projection boundary,
-fallible cast/function, incomplete predicate copy, or consumer join that can
-reduce the evaluation domain rejects sharing.
+are structurally total. A fallible cast/function or incomplete predicate copy
+that expands the producer's evaluation domain rejects sharing. When the exact
+union of consumer row domains cannot be proved, every producer expression must
+also be structurally total, including filters, joins, projections, grouping
+keys, aggregate arguments, HAVING and ordering: inline predicate pushdown may
+have avoided evaluating any of them on rows which eager materialization would
+visit. A zero/dynamic
+`LIMIT`, a limit on a non-blocking operator, `APPLY`, sampling, or a consumer
+join that can skip this exact input cannot establish the required witness;
+sharing remains possible only when another occurrence supplies one. A positive
+literal limit is a witness only on hash aggregation or sort, which must consume
+their complete input before producing the first row; `OFFSET` alone does not
+shorten a fully consumed stream. A consumer predicate hidden above a projection
+or other tag-remapping boundary makes the row-domain proof inexact unless that
+boundary is explicitly inverted; it is never treated as an unfiltered consumer.
 
-A consumer admitted as the equality-SEMI hash input receives a physical
-hash-build marker. Later costing must preserve that build role; otherwise the
-complete-drain proof is invalid.
+A witness admitted as an equality INNER/SEMI hash input, or as the logical
+right build of a non-right LEFT hash/loop join, receives a physical build
+marker. Every join ancestor is checked even after an aggregate or sort
+established a local drain, because an empty hash build can skip its probe
+subtree entirely. CROSS, full outer, probe-side, conflicting build
+dependencies, and unknown join shapes cannot establish a witness. Later join
+ordering and costing must keep the marked subtree on each physical build path;
+otherwise the complete-evaluation proof is invalid. Non-witness readers may
+stop early only because their independent source release cannot block the
+producer or another reader. A predeclared runtime-filter dependency, fixed join
+order, or direct function-scan build that pins the opposite child rejects that
+witness path.
 
 ### Grouping-set input sharing
 
 Only the internal `UNION ALL` created by one `ROLLUP`, `CUBE`, or `GROUPING
 SETS` binding is eligible. User-written `UNION ALL` is excluded. Branches must
 have identical typed group expressions and aggregate state shapes,
-deterministic expressions, complete consumption, and positive cost.
+deterministic expressions, and positive cost. Determinism and CTE totality
+checks cover expressions stored outside the ordinary node expression lists as
+well, including `VALUES` expressions carried by `RowsetData`.
 
 The selected form evaluates input expressions once, emits one derived batch
 per grouping set, uses NULL vectors for inactive keys, and adds a hidden set id
-to keep equal values from different sets distinct. It retains at most one
-input batch plus the current derived batch.
+to keep equal values from different sets distinct. The expansion operator
+retains at most one input batch plus the current derived batch. The reduced
+aggregate output is then written once to the bounded materialized source and
+read independently by every branch. A lazy `UNION ALL`, `LIMIT`, `OFFSET`, or
+cancellation may stop any branch without backpressuring the producer or other
+readers; last-owner release reclaims memory and spill state.
+
+Admission accounts for the actual fanout shape: one output write plus one full
+output scan per grouping branch. The comparison uses the number of branches,
+estimated producer work, declared input/output row widths (including Varlena
+cells and variable-width payload capacity), and a twofold safety margin.
+Unknown, invalid, overflowing, or marginal estimates keep the legacy plan.
+Estimated materialized output above 8 GiB is rejected before execution; the
+statement/CN resource owner remains authoritative below that planner ceiling.
+The declared width of one output row must also stay well below the shared
+source's 64 MiB spill-record bound; larger or unknown rows retain the legacy
+branches, while wider multi-row batches are split by the source.
+Grouping-set sources share the same cumulative planner reservation with CTE
+sources, so several individually bounded rewrites cannot silently exceed an
+explicit statement memory or spill cap. Spill admission includes record,
+vector, nullable-bitmap, and transient-provenance framing at the legal worst
+case of one record per estimated row; a payload-only estimate is not a valid
+upper bound when operators emit small batches. The source contract accepts
+only finalized positional batches: SQL-invisible `Attrs` are dropped before
+retention or spill, and aggregate-state `ExtraBuf` is rejected rather than
+silently lost on the in-memory clone path. Transient spill encode/decode
+buffers use the statement/CN execution-memory ledger; the recursive-only
+`cte_max_memory_bytes` quota is not reused by non-recursive shared sources.
+Retained clones and spill-decoded vector storage use the same execution
+allocation account until their owner releases them. Oversized batches are
+encoded directly from bounded row ranges, without first compacting a second
+copy of the whole producer batch.
+
+A finite top-level `sql_select_limit` can prevent lazy `UNION ALL` branches
+from starting. Ordinary finite caps and all dynamic prepared caps therefore
+keep both shared-source rewrites disabled: the cap is materialized only after
+optimization and cannot participate in the logical drain proof.
+
+Grouping-set sharing also requires a legacy full-drain witness and total
+grouping/aggregate expressions. This prevents its eager producer step from
+evaluating a grouping extension that an outer LIMIT or conditional join input
+would never reach, or from evaluating a previously inactive fallible key.
 
 Runtime-empty input is not equivalent to the absence of grouping sets.  If and
 only if an all-rolled grouping set exists, projection emits one key-only
@@ -194,13 +276,27 @@ and `GROUPING()` bits remain correct.  An empty input with no all-rolled set
 emits no row.  The rollup sentinel is separate from SQL NULL and duplicate
 grouping sets retain their duplicate output rows.
 
+Grouping provenance is scoped to the grouping extension that created it.
+Dynamic grouping distinguishes its own rollup sentinel from an ordinary SQL
+NULL; it therefore cannot consume a sentinel inherited from an inner
+ROLLUP/CUBE/GROUPING SETS relation without splitting one outer SQL NULL group
+into two. Until relational boundaries explicitly normalize inherited grouping
+provenance, an input subtree that can expose a grouping sentinel keeps the
+legacy outer plan. A grouping-set candidate whose output feeds another grouping
+extension also keeps its legacy shape, because materializing the inner sentinel
+can change how that outer legacy branch hashes it. The proof follows both child
+edges and materialized source steps, and captures consumer ancestry before any
+candidate rewrite, so rewrite order cannot bypass either guard.
+
 The vector grouping representation is gated by one newly allocated cumulative
 MORPC version `N`.  The numeric value is an integration property, not a semantic
 design constant: at final rebase the later branch takes the next contiguous
 unowned version.  Peers below `N` get the historical branch-per-grouping-set
 plan.  The protobuf fields are append-only and mixed-version tests use the
-actual `N-1` predecessor.  Two live branches must never ship with the same
-numeric version owner.
+actual `N-1` predecessor. Sender and receiver recursively reject v`N` grouping
+metadata when the negotiated runtime version has rolled back below `N`, so a
+prepared or cached plan cannot bypass the planning-time gate. Two live branches
+must never ship with the same numeric version owner.
 
 ### Existential MARK and OR-of-EXISTS
 
@@ -301,7 +397,9 @@ tenant boundary.
 
 Grouping-set sharing adds append-only pipeline fields and is never planned
 below its final uniquely allocated version `N`; an `N-1` or older deployment
-receives the complete legacy branch plan.  Scalar filtering adds the optional
+receives the complete legacy branch plan. Send and receive boundaries also
+fail closed if a plan containing those fields is transmitted after a runtime
+protocol rollback. Scalar filtering adds the optional
 `RuntimeFilterSpec.scalar_predicate` plan field.  A new executor receiving an
 old plan sees false.  An old executor ignores the unknown field; non-empty
 unsupported state cannot synthesize the exact one-value payload and therefore
@@ -333,7 +431,13 @@ optional runtime filter.
   spill files, FD accounting, cancellation, reset, and cleanup paths.
 - Grouping expansion owns only vectors for the retained input batch and current
   grouping set. Projection, Group, and MergeGroup release them on reset, free,
-  and error.
+  and error. The reduced aggregate output uses the shared materialized source:
+  up to 64 MiB or 4096 batches remain resident, overflow requires statement-
+  admitted query-scoped spill bytes and one admitted file descriptor, and the
+  8 GiB planner ceiling prevents obviously uneconomic plans. Reader release,
+  cancellation, reset, and the last owner close both memory and spill state;
+  retained and decoded vector allocations remain charged to the execution
+  account for their complete ownership interval.
 - The scalar runtime filter adds at most one fixed-cardinality value payload per
   eligible filter.  It reuses the existing query-scoped message owner and adds
   no goroutine, queue, retry, or persistent cache.
@@ -359,6 +463,9 @@ must preserve raw artifacts and exact revisions.
 - no rejected/control query may gain reachable scans, joins, or materialized
   producers;
 - no accepted CTE may exceed the 32 MiB resident or 8 GiB spill-planner bound;
+- no accepted grouping-set materialization may exceed its 64 MiB/4096-batch
+  resident bounds or 8 GiB spill-planner bound, and its modeled saved producer
+  byte-work must exceed output write/read traffic by the twofold margin;
 - grouping-set sharing must reduce repeated detailed inputs and must not create
   more aggregate states than the legacy branches;
 - outer/existential rewrites must not increase fact-scan count;
@@ -380,8 +487,8 @@ claimed as a performance pass.
 
 | Rule | White-box/typed proof | Black-box acceptance | Mandatory unchanged controls |
 |---|---|---|---|
-| CTE reuse | reachability, drain, type, determinism, row-domain, memory/spill and build-role tests | public SQL duplicate/NULL/result checks; spill/reset/error paths | recursive/correlated/volatile/fallible/early-stop/unreachable/incompatible producers |
-| grouping sets | internal-origin marker, typed branch compatibility, final MORPC `N-1/N` plan boundary, codec round trips | distributed ROLLUP/CUBE/GROUPING SETS results with SQL NULL, rollup sentinel, duplicates, runtime-empty input, and spill | user UNION ALL, incompatible state/type, old protocol, partial consumer, no all-rolled set |
+| CTE reuse | reachability, complete-evaluation witness, type, determinism, row-domain, memory/spill and build-role tests | public SQL duplicate/NULL/result checks; spill/reset/error/partial-reader paths | no-witness empty-build probe, recursive/correlated/volatile/fallible/unreachable/incompatible producers |
+| grouping sets | internal-origin marker, typed branch compatibility, inherited-sentinel exclusion, byte-aware fanout/storage gate, final MORPC `N-1/N` plan and send/receive boundaries, codec round trips | distributed ROLLUP/CUBE/GROUPING SETS results with SQL NULL, rollup sentinel, duplicates, nested grouping extensions, runtime-empty input, early-stop readers, and spill | user UNION ALL, incompatible state/type, inherited grouping provenance, old protocol, unknown/wide variable row, high-cardinality output, no all-rolled set |
 | MARK/OR EXISTS | positive marker ownership, totality, typed keys, and reachable `UNION ALL + SEMI` tests | independent EXISTS/OR results with duplicates, NULLs, multiple/composite arms | NOT/IN/ANY/projected/mixed/volatile/fallible/non-equality/correlated/different-key markers |
 | scalar filter | retained `SINGLE`, actual-cardinality state machine, final physical probe lineage | scalar 0/1/>1-row results/errors; empty/NULL/one-value sibling error and volatile controls | correlated, build-side and swapped-build lineage, outer/nested-single/project/window/barrier/limit/unsafe predicate |
 | DNF key | exact total common-key, complete relation walk, residual retention | differential DNF results/errors with NULLs and duplicates | single-table range DNF, missing-arm key, computed/fallible/incompatible/volatile/ambiguous key |
@@ -485,6 +592,14 @@ each PR's final implementation diff.
 
 ## Decision log
 
+- v7 aligns the accepted contract with independently released bounded
+  materialization: one guaranteed CTE legacy drain preserves eager producer
+  evaluation while other readers may stop safely. For grouping output,
+  readers may stop independently, admission prices one write plus every full
+  branch scan with declared row widths and a twofold margin, and an 8 GiB
+  planner ceiling bounds spill exposure. It also checks every CTE join ancestor
+  for an exact preserved hash-build path, adds v48 send/receive rollback fences,
+  and restores the independent Parquet fanout capability to its v45 owner.
 - v6 advances the aligned series to `in-progress`.  Branch-local numeric
   placeholders are integration metadata assigned against the merge base; the
   reviewed compatibility contract is the predecessor fallback and its boundary

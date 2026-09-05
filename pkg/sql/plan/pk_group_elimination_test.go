@@ -1299,7 +1299,9 @@ func TestPrimaryKeyGroupEliminationPreservesInactiveGroupingSetsWithoutAggregate
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			logical, err := runOneStmt(NewMockOptimizer(false), t, test.sql)
+			optimizer := NewMockOptimizer(false)
+			useLegacyGroupingSetPlan(t, optimizer)
+			logical, err := runOneStmt(optimizer, t, test.sql)
 			require.NoError(t, err)
 			agg := firstReachableNode(logical.GetQuery(), planpb.Node_AGG)
 			require.NotNil(t, agg)
