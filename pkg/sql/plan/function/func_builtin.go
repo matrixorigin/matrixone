@@ -725,6 +725,61 @@ func internalTextMetadataLength(typ types.Type) int64 {
 	return int64(types.MaxStringSize)
 }
 
+// internalNumericPrecision returns the number of significant decimal digits
+// that MySQL exposes in INFORMATION_SCHEMA.COLUMNS.NUMERIC_PRECISION. The
+// width stored in a MatrixOne Type is a bit width for integer columns, so it
+// cannot be used directly for this metadata field.
+func internalNumericPrecision(typ types.Type) (int64, bool) {
+	switch typ.Oid {
+	case types.T_bool, types.T_int8, types.T_uint8:
+		return 3, true
+	case types.T_int16, types.T_uint16:
+		return 5, true
+	case types.T_int32:
+		// MEDIUMINT is represented as T_int32 with a 24-bit width.
+		if typ.Width == 24 {
+			return 7, true
+		}
+		return 10, true
+	case types.T_uint32:
+		// MEDIUMINT UNSIGNED is represented as T_uint32 with a 24-bit width.
+		if typ.Width == 24 {
+			return 8, true
+		}
+		return 10, true
+	case types.T_int64:
+		return 19, true
+	case types.T_uint64:
+		return 20, true
+	case types.T_year:
+		return 4, true
+	case types.T_bit:
+		// BIT defaults to BIT(1) when no length is supplied.
+		if typ.Width > 0 {
+			return int64(typ.Width), true
+		}
+		return 1, true
+	case types.T_float32:
+		// FLOAT's default precision is 12 decimal digits. An explicit M is
+		// retained in Type.Width and takes precedence.
+		if typ.Width > 0 {
+			return int64(typ.Width), true
+		}
+		return 12, true
+	case types.T_float64:
+		// DOUBLE's default precision is 22 decimal digits.
+		if typ.Width > 0 {
+			return int64(typ.Width), true
+		}
+		return 22, true
+	case types.T_decimal64, types.T_decimal128, types.T_decimal256:
+		if typ.Width > 0 {
+			return int64(typ.Width), true
+		}
+	}
+	return 0, false
+}
+
 func builtInInternalNumericPrecision(parameters []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int, selectList *FunctionSelectList) error {
 	p1 := vector.GenerateFunctionStrParameter(parameters[0])
 	rs := vector.MustFunctionResult[int64](result)
@@ -739,8 +794,8 @@ func builtInInternalNumericPrecision(parameters []*vector.Vector, result vector.
 			if err := typ.Unmarshal(v); err != nil {
 				return err
 			}
-			if typ.Oid.IsDecimal() {
-				if err := rs.Append(int64(typ.Width), false); err != nil {
+			if precision, ok := internalNumericPrecision(typ); ok {
+				if err := rs.Append(precision, false); err != nil {
 					return err
 				}
 				continue
@@ -767,8 +822,8 @@ func builtInInternalNumericScale(parameters []*vector.Vector, result vector.Func
 			if err := typ.Unmarshal(v); err != nil {
 				return err
 			}
-			if typ.Oid.IsDecimal() {
-				if err := rs.Append(int64(typ.Scale), false); err != nil {
+			if scale, ok := internalNumericScale(typ); ok {
+				if err := rs.Append(scale, false); err != nil {
 					return err
 				}
 				continue
@@ -779,6 +834,31 @@ func builtInInternalNumericScale(parameters []*vector.Vector, result vector.Func
 		}
 	}
 	return nil
+}
+
+func internalNumericScale(typ types.Type) (int64, bool) {
+	switch typ.Oid {
+	case types.T_bool,
+		types.T_int8, types.T_uint8,
+		types.T_int16, types.T_uint16,
+		types.T_int32, types.T_uint32,
+		types.T_int64, types.T_uint64,
+		types.T_year:
+		return 0, true
+	case types.T_decimal64, types.T_decimal128, types.T_decimal256:
+		scale := typ.Scale
+		if scale < 0 {
+			scale = 0
+		}
+		return int64(scale), true
+	case types.T_float32, types.T_float64:
+		// MySQL exposes scale for the non-standard FLOAT(M,D)/DOUBLE(M,D)
+		// forms, but leaves it NULL when D is omitted.
+		if typ.Scale >= 0 {
+			return int64(typ.Scale), true
+		}
+	}
+	return 0, false
 }
 
 func builtInInternalDatetimeScale(parameters []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int, selectList *FunctionSelectList) error {
@@ -795,8 +875,13 @@ func builtInInternalDatetimeScale(parameters []*vector.Vector, result vector.Fun
 			if err := typ.Unmarshal(v); err != nil {
 				return err
 			}
-			if typ.Oid == types.T_datetime {
-				if err := rs.Append(int64(typ.Scale), false); err != nil {
+			switch typ.Oid {
+			case types.T_time, types.T_datetime, types.T_timestamp:
+				scale := typ.Scale
+				if scale < 0 {
+					scale = 0
+				}
+				if err := rs.Append(int64(scale), false); err != nil {
 					return err
 				}
 				continue

@@ -453,8 +453,8 @@ ifnull_null_first  ¦  DECIMAL(2,1)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
 ifnull_nullable_col  ¦  DECIMAL(11,1)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
 ifnull_notnull_col  ¦  DECIMAL(11,1)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
 coalesce_null_first  ¦  VARCHAR(2)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
-coalesce_nullable_col  ¦  BIGINT(0)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
-coalesce_notnull_col  ¦  BIGINT(0)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
+coalesce_nullable_col  ¦  BIGINT(0)  ¦  NO  ¦    ¦  19  ¦  0  ¦    𝄀
+coalesce_notnull_col  ¦  BIGINT(0)  ¦  NO  ¦    ¦  19  ¦  0  ¦    𝄀
 greatest_const  ¦  DATE(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 greatest_nullable_col  ¦  DATE(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 greatest_notnull_col  ¦  DATE(0)  ¦  YES  ¦    ¦  null  ¦    ¦  
@@ -467,8 +467,8 @@ ifnull_null_first  ¦  DECIMAL(2,1)  ¦  NO  ¦  null  ¦  2  ¦  1  𝄀
 ifnull_nullable_col  ¦  DECIMAL(11,1)  ¦  NO  ¦  null  ¦  11  ¦  1  𝄀
 ifnull_notnull_col  ¦  DECIMAL(11,1)  ¦  NO  ¦  null  ¦  11  ¦  1  𝄀
 coalesce_null_first  ¦  VARCHAR(2)  ¦  NO  ¦  2  ¦  null  ¦  null  𝄀
-coalesce_nullable_col  ¦  BIGINT(0)  ¦  NO  ¦  null  ¦  null  ¦  null  𝄀
-coalesce_notnull_col  ¦  BIGINT(0)  ¦  NO  ¦  null  ¦  null  ¦  null  𝄀
+coalesce_nullable_col  ¦  BIGINT(0)  ¦  NO  ¦  null  ¦  19  ¦  0  𝄀
+coalesce_notnull_col  ¦  BIGINT(0)  ¦  NO  ¦  null  ¦  19  ¦  0  𝄀
 greatest_const  ¦  DATE(0)  ¦  YES  ¦  null  ¦  null  ¦  null  𝄀
 greatest_nullable_col  ¦  DATE(0)  ¦  YES  ¦  null  ¦  null  ¦  null  𝄀
 greatest_notnull_col  ¦  DATE(0)  ¦  YES  ¦  null  ¦  null  ¦  null
