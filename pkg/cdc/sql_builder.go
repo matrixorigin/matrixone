@@ -323,14 +323,19 @@ const (
 	CDCUpdateMOISCPLogSqlTemplate = `UPDATE mo_catalog.mo_iscp_log SET ` +
 		`job_state = %d,` +
 		`watermark = '%s',` +
-		`job_status = '%s'` +
+		`job_status = JSON_SET('%s', '$.Stage', ` +
+		`GREATEST(CAST(COALESCE(JSON_UNQUOTE(JSON_EXTRACT(job_status, '$.Stage')), '0') AS SIGNED), %d), ` +
+		`'$.LifecycleVersion', ` +
+		`GREATEST(CAST(COALESCE(JSON_UNQUOTE(JSON_EXTRACT(job_status, '$.LifecycleVersion')), '0') AS UNSIGNED), %d))` +
 		`WHERE` +
 		` account_id = %d ` +
 		`AND table_id = %d ` +
 		`AND job_name = '%s'` +
 		`AND job_id = %d ` +
 		`AND job_state != 4 ` +
-		`AND  JSON_EXTRACT(job_status, '$.LSN') = '%d'`
+		`AND JSON_EXTRACT(job_status, '$.LSN') = '%d' ` +
+		`AND (%d = 4 OR ` +
+		`CAST(COALESCE(JSON_UNQUOTE(JSON_EXTRACT(job_status, '$.Stage')), '0') AS SIGNED) <= %d)`
 	CDCUpdateMOISCPLogJobSpecSqlTemplate = `UPDATE mo_catalog.mo_iscp_log SET ` +
 		`job_spec = '%s'` +
 		`WHERE` +
@@ -1021,12 +1026,12 @@ func (b cdcSQLBuilder) ISCPLogInsertSQL(
 		CDCSQLTemplates[CDCInsertMOISCPLogSqlTemplate_Idx].SQL,
 		accountID,
 		tableID,
-		jobName,
+		escapeSQLString(jobName),
 		jobID,
-		jobSpec,
+		escapeSQLString(jobSpec),
 		jobState,
 		watermark.ToString(),
-		jobStatus,
+		escapeSQLString(jobStatus),
 	)
 }
 
@@ -1037,6 +1042,8 @@ func (b cdcSQLBuilder) ISCPLogUpdateResultSQL(
 	jobID uint64,
 	newWatermark types.TS,
 	jobStatus string,
+	jobStage int8,
+	jobLifecycleVersion uint64,
 	jobState int8,
 	expectPrevLSN uint64,
 ) string {
@@ -1044,10 +1051,52 @@ func (b cdcSQLBuilder) ISCPLogUpdateResultSQL(
 		CDCSQLTemplates[CDCUpdateMOISCPLogSqlTemplate_Idx].SQL,
 		jobState,
 		newWatermark.ToString(),
-		jobStatus,
+		escapeSQLString(jobStatus),
+		jobStage,
+		jobLifecycleVersion,
 		accountID,
 		tableID,
-		jobName,
+		escapeSQLString(jobName),
+		jobID,
+		expectPrevLSN,
+		jobState,
+		jobStage,
+	)
+}
+
+// ISCPLogAdvanceWatermarkSQL advances progress without replacing job_status.
+// Lifecycle fields such as Stage belong to the iteration state machine and
+// must survive this maintenance-only update.
+func (b cdcSQLBuilder) ISCPLogAdvanceWatermarkSQL(
+	accountID uint32,
+	tableID uint64,
+	jobName string,
+	jobID uint64,
+	newWatermark types.TS,
+	nextLSN uint64,
+	jobStage int8,
+	jobState int8,
+	expectPrevLSN uint64,
+) string {
+	return fmt.Sprintf(
+		"UPDATE mo_catalog.mo_iscp_log SET "+
+			"job_state = %d, "+
+			"watermark = '%s', "+
+			"job_status = JSON_SET(job_status, '$.LSN', %d, '$.Stage', "+
+			"GREATEST(CAST(COALESCE(JSON_UNQUOTE(JSON_EXTRACT(job_status, '$.Stage')), '0') AS SIGNED), %d)) "+
+			"WHERE account_id = %d "+
+			"AND table_id = %d "+
+			"AND job_name = '%s'"+
+			"AND job_id = %d "+
+			"AND job_state != 4 "+
+			"AND JSON_EXTRACT(job_status, '$.LSN') = '%d'",
+		jobState,
+		newWatermark.ToString(),
+		nextLSN,
+		jobStage,
+		accountID,
+		tableID,
+		escapeSQLString(jobName),
 		jobID,
 		expectPrevLSN,
 	)
@@ -1063,7 +1112,7 @@ func (b cdcSQLBuilder) ISCPLogUpdateDropAtSQL(
 		CDCSQLTemplates[CDCUpdateMOISCPLogDropAtSqlTemplate_Idx].SQL,
 		accountID,
 		tableID,
-		jobName,
+		escapeSQLString(jobName),
 		jobID,
 	)
 }
@@ -1077,10 +1126,10 @@ func (b cdcSQLBuilder) ISCPLogUpdateJobSpecSQL(
 ) string {
 	return fmt.Sprintf(
 		CDCSQLTemplates[CDCUpdateMOISCPLogJobSpecSqlTemplate_Idx].SQL,
-		jobSpec,
+		escapeSQLString(jobSpec),
 		accountID,
 		tableID,
-		jobName,
+		escapeSQLString(jobName),
 		jobID,
 	)
 }
@@ -1105,7 +1154,7 @@ func (b cdcSQLBuilder) ISCPLogSelectByTableSQL(
 		CDCSQLTemplates[CDCSelectMOISCPLogByTableSqlTemplate_Idx].SQL,
 		accountID,
 		tableID,
-		jobName,
+		escapeSQLString(jobName),
 	)
 }
 
