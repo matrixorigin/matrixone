@@ -19,6 +19,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -30,13 +31,15 @@ import (
 type mockWatermarkUpdaterWithTracking struct {
 	watermarks map[string]types.TS
 	errorCalls []errorCall
+	operations []string
 	mu         sync.Mutex
 	failClear  bool // if true, clearing errors will fail
 }
 
 type errorCall struct {
-	errMsg   string
-	errorCtx *ErrorContext
+	errMsg          string
+	errorCtx        *ErrorContext
+	ownerGeneration uint64
 }
 
 func newMockWatermarkUpdaterWithTracking() *mockWatermarkUpdaterWithTracking {
@@ -50,6 +53,7 @@ func (m *mockWatermarkUpdaterWithTracking) RemoveCachedWM(ctx context.Context, k
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	delete(m.watermarks, m.keyString(key))
+	m.operations = append(m.operations, "remove")
 	return nil
 }
 
@@ -58,9 +62,15 @@ func (m *mockWatermarkUpdaterWithTracking) UpdateWatermarkErrMsg(ctx context.Con
 	defer m.mu.Unlock()
 
 	// Track the call
+	m.operations = append(m.operations, "error")
+	var ownerGeneration uint64
+	if fence, _ := ctx.Value(watermarkOwnerFenceContextKey{}).(*OwnerFence); fence != nil {
+		ownerGeneration = fence.GenerationToken()
+	}
 	m.errorCalls = append(m.errorCalls, errorCall{
-		errMsg:   errMsg,
-		errorCtx: errorCtx,
+		errMsg:          errMsg,
+		errorCtx:        errorCtx,
+		ownerGeneration: ownerGeneration,
 	})
 
 	// Simulate failure if configured
@@ -146,6 +156,26 @@ func TestClearErrorOnFirstSuccess(t *testing.T) {
 		// Verify error was cleared
 		assert.Equal(t, 1, updater.getClearErrorCallCount(), "Error should be cleared on first success")
 		assert.True(t, stream.hasSucceeded.Load(), "hasSucceeded flag should be set")
+	})
+
+	t.Run("StableSuccessCarriesOwnerGeneration", func(t *testing.T) {
+		updater := newMockWatermarkUpdaterWithTracking()
+		fence := NewOwnerFenceForGeneration(
+			time.UnixMicro(123), func(context.Context) error { return nil })
+		stream := &TableChangeStream{
+			watermarkUpdater: updater,
+			watermarkKey: &WatermarkKey{
+				AccountId: 1, TaskId: "task1", DBName: "db1", TableName: "t1",
+			},
+			tableInfo:  &DbTableInfo{SourceTblId: 11},
+			ownerFence: fence,
+		}
+
+		stream.clearErrorOnFirstSuccess(context.Background())
+
+		require.Len(t, updater.errorCalls, 1)
+		require.Empty(t, updater.errorCalls[0].errMsg)
+		require.Equal(t, uint64(123), updater.errorCalls[0].ownerGeneration)
 	})
 
 	t.Run("MultipleSuccessOnlyClearsOnce", func(t *testing.T) {
@@ -311,6 +341,35 @@ func TestTableChangeStreamCleanupDoesNotPersistOwnerLoss(t *testing.T) {
 	updater.mu.Lock()
 	defer updater.mu.Unlock()
 	require.Empty(t, updater.errorCalls, "obsolete owner must not poison shared table err_msg")
+}
+
+func TestTableChangeStreamCleanupPersistsOwnedErrorBeforeRetiringState(t *testing.T) {
+	updater := newMockWatermarkUpdaterWithTracking()
+	key := &WatermarkKey{AccountId: 1, TaskId: "task1", DBName: "db1", TableName: "t1"}
+	updater.watermarks[updater.keyString(key)] = types.BuildTS(10, 0)
+	fence := NewOwnerFenceForGeneration(
+		time.UnixMicro(123), func(context.Context) error { return nil })
+	stream := &TableChangeStream{
+		accountId:        1,
+		taskId:           "task1",
+		tableInfo:        &DbTableInfo{SourceDbName: "db1", SourceTblName: "t1", SourceTblId: 11},
+		sinker:           newTableStreamRecordingSinker(),
+		watermarkUpdater: updater,
+		watermarkKey:     key,
+		ownerFence:       fence,
+		runningReaders:   &sync.Map{},
+		runningReaderKey: "db1.t1",
+		lastError:        moerr.NewInternalErrorNoCtx("source failed"),
+		retryable:        true,
+	}
+	stream.wg.Add(1)
+	stream.cleanup(context.Background())
+
+	updater.mu.Lock()
+	defer updater.mu.Unlock()
+	require.Equal(t, []string{"error", "remove"}, updater.operations)
+	require.Len(t, updater.errorCalls, 1)
+	require.Equal(t, uint64(123), updater.errorCalls[0].ownerGeneration)
 }
 
 // TestHasSucceededAtomicBehavior verifies atomic.Bool behavior

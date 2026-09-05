@@ -6663,6 +6663,10 @@ func (opts *CDCCreateTaskOptions) ValidateAndFill(
 	// an initial snapshot.
 	if !opts.NoFull {
 		cdc.FinalizeInitialSnapshotOptions(extraOpts)
+		_, stable := extraOpts[cdc.CDCTaskExtraOptions_InitialSnapshotProtocol]
+		if err = validateStableInitialSnapshotCompileProtocol(ctx, c, stable); err != nil {
+			return
+		}
 	}
 
 	var extraOptsBytes []byte
@@ -6673,6 +6677,24 @@ func (opts *CDCCreateTaskOptions) ValidateAndFill(
 	opts.ExtraOpts = string(extraOptsBytes)
 
 	return
+}
+
+func validateStableInitialSnapshotCompileProtocol(
+	ctx context.Context,
+	c *Compile,
+	stable bool,
+) error {
+	protocolVersion := int64(defines.MORPCVersion4)
+	if c != nil && c.proc != nil {
+		if rt := moruntime.ServiceRuntime(c.proc.GetService()); rt != nil {
+			if value, ok := rt.GetGlobalVariables(moruntime.MOProtocolVersion); ok {
+				if version, valid := value.(int64); valid {
+					protocolVersion = version
+				}
+			}
+		}
+	}
+	return cdc.ValidateStableInitialSnapshotProtocol(ctx, stable, protocolVersion)
 }
 
 func CDCStrToTime(tsStr string, tz *time.Location) (ts time.Time, err error) {

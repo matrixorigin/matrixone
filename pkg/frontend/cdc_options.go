@@ -26,7 +26,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/cdc"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/task"
 	"github.com/matrixorigin/matrixone/pkg/taskservice"
 )
@@ -277,14 +276,7 @@ func validateStableInitialSnapshotProtocol(
 	stable bool,
 	protocolVersion int64,
 ) error {
-	if !stable || protocolVersion >= defines.MORPCVersion48 {
-		return nil
-	}
-	return moerr.NewNotSupportedf(
-		ctx,
-		"bounded CDC initial snapshots require all CNs to support protocol version %d",
-		defines.MORPCVersion48,
-	)
+	return cdc.ValidateStableInitialSnapshotProtocol(ctx, stable, protocolVersion)
 }
 
 func (opts *CDCCreateTaskOptions) BuildTaskMetadata() task.TaskMetadata {

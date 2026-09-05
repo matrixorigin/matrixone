@@ -2686,7 +2686,16 @@ func (exec *CDCTaskExecutor) handleNewTablesForGeneration(
 			zap.String("source-db", newTableInfo.SourceDbName),
 			zap.String("source-table", newTableInfo.SourceTblName),
 		)
-		if err = exec.addExecPipelineForTable(ctx, newTableInfo, txnOp); err != nil {
+		var pipelineOwnerFence *cdc.OwnerFence
+		if exec.stableInitialSnapshot {
+			// Capture one immutable identity for both pipeline effects and any
+			// diagnostic produced while constructing that pipeline. Re-reading the
+			// current fence after a failure could lend a replacement generation's
+			// identity to obsolete work.
+			pipelineOwnerFence = exec.currentDaemonClaimFence()
+		}
+		if err = exec.addExecPipelineForTable(
+			ctx, newTableInfo, txnOp, pipelineOwnerFence); err != nil {
 			logutil.Error(
 				"cdc.frontend.task.add_exec_pipeline_failed",
 				zap.String("task-name", exec.spec.TaskName),
@@ -2707,7 +2716,11 @@ func (exec *CDCTaskExecutor) handleNewTablesForGeneration(
 			}
 			// Persist data/setup errors, and retain transient fence/epoch backend
 			// failures as retryable rather than permanently failing the table.
-			if exec.watermarkUpdater != nil {
+			// A stable diagnostic without the exact pipeline fence would silently
+			// fall back to the legacy upsert and escape generation ownership. If the
+			// fence itself is missing, leave reporting to the task-level startup error.
+			if exec.watermarkUpdater != nil &&
+				(!exec.stableInitialSnapshot || pipelineOwnerFence != nil) {
 				watermarkKey := cdc.WatermarkKey{
 					AccountId: uint64(exec.spec.Accounts[0].GetId()),
 					TaskId:    exec.spec.TaskId,
@@ -2720,7 +2733,10 @@ func (exec *CDCTaskExecutor) handleNewTablesForGeneration(
 						cdc.IsRetryableTargetLockError(err) ||
 						cdc.IsRetryableConnectionError(err),
 				}
-				if updateErr := exec.watermarkUpdater.UpdateWatermarkErrMsg(ctx, &watermarkKey, err.Error(), errorCtx); updateErr != nil {
+				errorUpdateCtx := cdc.WithWatermarkOwnerFence(
+					ctx, pipelineOwnerFence, newTableInfo.SourceTblId)
+				if updateErr := exec.watermarkUpdater.UpdateWatermarkErrMsg(
+					errorUpdateCtx, &watermarkKey, err.Error(), errorCtx); updateErr != nil {
 					logutil.Warn(
 						"cdc.frontend.task.persist_table_error_failed",
 						zap.String("table", key),
@@ -2982,6 +2998,7 @@ func (exec *CDCTaskExecutor) addExecPipelineForTable(
 	ctx context.Context,
 	info *cdc.DbTableInfo,
 	txnOp client.TxnOperator,
+	ownerFence *cdc.OwnerFence,
 ) (err error) {
 	// for ut
 	if objectio.CDCAddExecConsumeTruncateInjected() {
@@ -3008,9 +3025,7 @@ func (exec *CDCTaskExecutor) addExecPipelineForTable(
 	var initialSnapshotEpoch types.TS
 	var initialSnapshotPending bool
 	var compactSnapshotEpochs bool
-	var ownerFence *cdc.OwnerFence
 	if exec.stableInitialSnapshot {
-		ownerFence = exec.currentDaemonClaimFence()
 		if ownerFence == nil {
 			return moerr.NewInternalErrorNoCtx("stable CDC executor has no daemon claim fence")
 		}

@@ -88,6 +88,7 @@ type TableChangeStream struct {
 	// initialSnapshotEpoch is non-zero only for tasks whose persisted protocol
 	// guarantees that every partial-snapshot retry uses the same source image.
 	initialSnapshotEpoch types.TS
+	ownerFence           *OwnerFence
 
 	// Column indices (for AtomicBatch)
 	insTsColIdx           int
@@ -409,6 +410,7 @@ var NewTableChangeStream = func(
 		noFull:                    noFull,
 		initialSnapshotLimiter:    opts.initialSnapshotLimiter,
 		initialSnapshotEpoch:      opts.initialSnapshotEpoch,
+		ownerFence:                opts.ownerFence,
 		registered:                make(chan struct{}),
 		insTsColIdx:               insTsColIdx,
 		insCompositedPkColIdx:     insCompositedPkColIdx,
@@ -720,22 +722,6 @@ func (s *TableChangeStream) cleanup(ctx context.Context) {
 		)
 	}()
 
-	// Remove watermark cache
-	removeStart := time.Now()
-	if err := s.watermarkUpdater.RemoveCachedWM(ctx, s.watermarkKey); err != nil {
-		logutil.Error(
-			"cdc.table_stream.remove_cached_watermark_failed",
-			zap.String("table", s.tableInfo.String()),
-			zap.Error(err),
-		)
-	} else {
-		logutil.Debug(
-			"cdc.table_stream.remove_cached_watermark_done",
-			zap.String("table", s.tableInfo.String()),
-			zap.Duration("cost", time.Since(removeStart)),
-		)
-	}
-
 	// Persist error message if any
 	// Read lastError and retryable atomically for consistency
 	s.stateMu.Lock()
@@ -749,13 +735,34 @@ func (s *TableChangeStream) cleanup(ctx context.Context) {
 			IsPauseOrCancel: IsPauseOrCancelError(lastError.Error()),
 		}
 
-		if err := s.watermarkUpdater.UpdateWatermarkErrMsg(ctx, s.watermarkKey, lastError.Error(), errorCtx); err != nil {
+		errorUpdateCtx := s.withWatermarkOwnerFence(ctx)
+		if err := s.watermarkUpdater.UpdateWatermarkErrMsg(
+			errorUpdateCtx, s.watermarkKey, lastError.Error(), errorCtx); err != nil {
 			logutil.Error(
 				"cdc.table_stream.update_watermark_errmsg_failed",
 				zap.String("table", s.tableInfo.String()),
 				zap.Error(err),
 			)
 		}
+	}
+
+	// Retire local ownership state only after the final diagnostic write. Stable
+	// diagnostics are update-only and do not need to read the progress row, while
+	// this ordering also keeps legacy error persistence from rehydrating a cache
+	// that this stream has already retired.
+	removeStart := time.Now()
+	if err := s.watermarkUpdater.RemoveCachedWM(ctx, s.watermarkKey); err != nil {
+		logutil.Error(
+			"cdc.table_stream.remove_cached_watermark_failed",
+			zap.String("table", s.tableInfo.String()),
+			zap.Error(err),
+		)
+	} else {
+		logutil.Debug(
+			"cdc.table_stream.remove_cached_watermark_done",
+			zap.String("table", s.tableInfo.String()),
+			zap.Duration("cost", time.Since(removeStart)),
+		)
 	}
 
 	// Close sinker
@@ -1283,7 +1290,9 @@ func (s *TableChangeStream) clearErrorOnFirstSuccess(ctx context.Context) {
 		return
 	}
 	// Clear error asynchronously (preserves lazy batch processing design)
-	if err := s.watermarkUpdater.UpdateWatermarkErrMsg(ctx, s.watermarkKey, "", nil); err != nil {
+	errorUpdateCtx := s.withWatermarkOwnerFence(ctx)
+	if err := s.watermarkUpdater.UpdateWatermarkErrMsg(
+		errorUpdateCtx, s.watermarkKey, "", nil); err != nil {
 		s.hasSucceeded.Store(false)
 		logutil.Warn(
 			"cdc.table_stream.clear_error_failed",
@@ -1292,6 +1301,14 @@ func (s *TableChangeStream) clearErrorOnFirstSuccess(ctx context.Context) {
 		)
 		// Don't fail the operation if error clearing fails
 	}
+}
+
+func (s *TableChangeStream) withWatermarkOwnerFence(ctx context.Context) context.Context {
+	var sourceTableID uint64
+	if s.tableInfo != nil {
+		sourceTableID = s.tableInfo.SourceTblId
+	}
+	return WithWatermarkOwnerFence(ctx, s.ownerFence, sourceTableID)
 }
 
 // processWithTxn processes changes within a transaction

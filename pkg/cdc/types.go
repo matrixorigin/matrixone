@@ -32,6 +32,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/readutil"
@@ -301,6 +302,24 @@ func FinalizeInitialSnapshotOptions(extraOpts map[string]any) {
 		extraOpts[CDCTaskExtraOptions_InitialSnapshotProtocol] =
 			CDCInitialSnapshotProtocolStableEpoch
 	}
+}
+
+// ValidateStableInitialSnapshotProtocol is the common creation barrier for all
+// frontend and compiler entry points. The stable executor depends on catalog
+// fields installed only after the cluster-wide protocol reaches v48.
+func ValidateStableInitialSnapshotProtocol(
+	ctx context.Context,
+	stable bool,
+	protocolVersion int64,
+) error {
+	if !stable || protocolVersion >= defines.MORPCVersion48 {
+		return nil
+	}
+	return moerr.NewNotSupportedf(
+		ctx,
+		"bounded CDC initial snapshots require all CNs to support protocol version %d",
+		defines.MORPCVersion48,
+	)
 }
 
 // UsesStableEpochInitialSnapshot reports whether persisted task options require

@@ -87,9 +87,11 @@ The implementation must preserve all of the following:
     `(source_table_id, timestamp)`, not a timestamp alone. A higher source table
     ID replaces the retired generation even when its timestamp is lower; an old
     owner can never overwrite progress from a higher source table ID.
-12. **Control-plane errors are not data errors.** Losing an owner fence stops
-    only the obsolete execution generation and is never stored in shared table
-    `err_msg`. A transient fence-backend failure remains retryable.
+12. **Generation-owned diagnostics.** Every stable-task `err_msg` set or clear
+    is update-only and durably conditional on the same `owner_generation` as
+    progress. Losing an owner fence stops only the obsolete execution generation;
+    it can neither publish its own error nor overwrite a replacement's diagnostic.
+    A transient fence-backend failure remains retryable.
 13. **Bounded generation metadata.** Once target initialization for generation
     `G` succeeds, snapshot epochs below `G` are deleted. Table IDs are monotonic,
     so an obsolete owner can delete only generations older than itself and can
@@ -275,6 +277,18 @@ previous fence and replaces the active in-memory fence, preventing either stale
 cache priority or a rejected old SQL completion from poisoning the replacement.
 Legacy updates are emitted in a separate batch and keep their historical rewind
 behavior.
+
+Stable error writes and first-success clears use the same immutable claim token.
+They first validate the exact taskservice claim, covering a control request whose
+replacement has not reached watermark admission yet. Their SQL then joins only
+an existing watermark row whose `owner_generation` equals that token; it never
+upserts, closing takeover after the validation. Together these close both
+directions of the takeover race:
+an obsolete reader cannot make a healthy replacement appear failed, and it
+cannot erase the replacement's real error. Stream cleanup persists the final
+owned diagnostic before retiring local watermark/error state, so the diagnostic
+path cannot read a just-retired progress row back into the CN cache. Legacy tasks
+retain their historical error upsert because they have no durable owner column.
 
 `InitSnapshotSplitTxn=false` and unmarked legacy tasks keep one atomic initial
 snapshot transaction.
@@ -667,6 +681,10 @@ Empty polling rounds no longer synchronously heartbeat taskservice per table.
 Fenced watermarks are buffered and one shared claim is checked per active task
 generation per asynchronous flush. This avoids work proportional to
 `table_count / polling_frequency` while retaining the final persistence fence.
+The first successful round performs one exact-claim read before clearing a
+diagnostic, and terminal error publication performs one more; neither repeats
+on ordinary successful polling rounds or scales with rows/batches. Stable error
+publication also skips the legacy cache-miss watermark read.
 Stable and legacy keys share the CN updater but are emitted as separate SQL
 batches only when both kinds are present in one flush. Stable upserts add four
 small timestamp component casts plus source and owner generation comparisons
@@ -763,7 +781,9 @@ Deterministic tests must cover:
 - completed-task restart bypassing the initial-snapshot limiter while incomplete
   and recreated generations remain admitted;
 - owner loss during pipeline creation and target commit without shared
-  `err_msg`, plus retryable transient fence failures;
+  `err_msg`, stale-owner error set/clear rejection, update-only missing-row
+  behavior, cleanup-after-diagnostic cache retirement, and retryable transient
+  fence failures;
 - repeated table generations retaining a bounded epoch set, including a delayed
   older cleanup that cannot delete a newer anchor and a known-stale detector
   that cannot add another low-generation row;

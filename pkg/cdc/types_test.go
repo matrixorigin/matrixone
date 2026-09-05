@@ -30,6 +30,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 )
 
@@ -884,6 +885,16 @@ func TestUsesStableEpochInitialSnapshot(t *testing.T) {
 	assert.False(t, UsesStableEpochInitialSnapshot(`{"InitSnapshotSplitTxn":true}`))
 	assert.False(t, UsesStableEpochInitialSnapshot(`{"_InitialSnapshotProtocol":"future"}`))
 	assert.False(t, UsesStableEpochInitialSnapshot(`not-json`))
+}
+
+func TestValidateStableInitialSnapshotProtocol(t *testing.T) {
+	require.NoError(t, ValidateStableInitialSnapshotProtocol(
+		context.Background(), false, defines.MORPCVersion47))
+	require.NoError(t, ValidateStableInitialSnapshotProtocol(
+		context.Background(), true, defines.MORPCVersion48))
+	err := ValidateStableInitialSnapshotProtocol(
+		context.Background(), true, defines.MORPCVersion47)
+	require.ErrorContains(t, err, "protocol version 48")
 }
 
 func TestActiveRoutine_ClosePause(t *testing.T) {

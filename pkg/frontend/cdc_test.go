@@ -4409,9 +4409,12 @@ func TestCdcTask_handleNewTables_addpipeline(t *testing.T) {
 				},
 			},
 		},
-		exclude:        regexp.MustCompile("db1.tb1"),
-		cnEngine:       eng,
-		runningReaders: &sync.Map{},
+		exclude:               regexp.MustCompile("db1.tb1"),
+		cnEngine:              eng,
+		runningReaders:        &sync.Map{},
+		stableInitialSnapshot: true,
+		claimFence: cdc.NewOwnerFenceForGeneration(
+			time.UnixMicro(123), func(context.Context) error { return nil }),
 	}
 
 	mp := map[uint32]cdc.TblMap{
@@ -5721,7 +5724,7 @@ func TestCdcTask_addExecPipelineForTable(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	assert.NoError(t, cdcTask.addExecPipelineForTable(ctx, info, txnOperator))
+	assert.NoError(t, cdcTask.addExecPipelineForTable(ctx, info, txnOperator, nil))
 
 	// Get the created reader from runningReaders and wait for it to complete
 	// This ensures the goroutine finishes before test cleanup

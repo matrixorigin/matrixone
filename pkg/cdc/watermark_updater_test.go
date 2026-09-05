@@ -34,6 +34,7 @@ import (
 	ie "github.com/matrixorigin/matrixone/pkg/util/internalExecutor"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/testutils"
+	dto "github.com/prometheus/client_model/go"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -51,6 +52,7 @@ type retryableMockExecutor struct {
 	failRemaining int
 	failOnCall    int
 	execCalls     int
+	queryCalls    int
 	lastSQL       string
 	sqls          []string
 	onExec        func()
@@ -147,6 +149,9 @@ func (m *retryableMockExecutor) Exec(_ context.Context, sql string, _ ie.Session
 }
 
 func (m *retryableMockExecutor) Query(_ context.Context, _ string, _ ie.SessionOverrideOptions) ie.InternalExecResult {
+	m.mu.Lock()
+	m.queryCalls++
+	m.mu.Unlock()
 	return &InternalExecResultForTest{}
 }
 
@@ -1972,6 +1977,186 @@ func TestCDCWatermarkUpdater_constructBatchUpdateWMErrMsgSQL(t *testing.T) {
 	assert.Contains(t, realSql, "ON DUPLICATE KEY UPDATE err_msg = VALUES(err_msg)")
 	assert.Contains(t, realSql, "SELECT 1 AS account_id")
 	assert.Contains(t, realSql, "SELECT 2, 'test', 'db2', 't2', ''")
+}
+
+func TestCDCWatermarkUpdaterConstructOwnedErrorUpdateSQL(t *testing.T) {
+	u := NewCDCWatermarkUpdater(t.Name(), newWmMockSQLExecutor())
+	key := &WatermarkKey{AccountId: 7, TaskId: "stable", DBName: "db", TableName: "tbl"}
+	fence := NewOwnerFenceForGeneration(
+		time.UnixMicro(123), func(context.Context) error { return nil })
+	job := NewUpdateWMErrMsgJob(
+		WithWatermarkOwnerFence(context.Background(), fence, 11), key, "failed")
+
+	sqls := u.constructBatchUpdateWMErrMsgSQLs([]*UpdaterJob{job})
+	require.Len(t, sqls, 1)
+	require.True(t, strings.HasPrefix(sqls[0], "UPDATE `mo_catalog`.`mo_cdc_watermark` AS w"))
+	require.Contains(t, sqls[0], "w.owner_generation = v.owner_generation")
+	require.Contains(t, sqls[0], "123 AS owner_generation")
+	require.Contains(t, sqls[0], "SET w.err_msg = v.err_msg")
+	require.NotContains(t, sqls[0], "INSERT INTO")
+	require.NotContains(t, sqls[0], "ON DUPLICATE KEY")
+}
+
+func TestCDCWatermarkUpdaterRejectsOwnerErrorWithoutDurableGeneration(t *testing.T) {
+	u := NewCDCWatermarkUpdater(t.Name(), newWmMockSQLExecutor())
+	key := &WatermarkKey{AccountId: 7, TaskId: "stable", DBName: "db", TableName: "tbl"}
+	fence := NewOwnerFence(func(context.Context) error { return nil })
+
+	err := u.UpdateWatermarkErrMsg(
+		WithWatermarkOwnerFence(context.Background(), fence, 11),
+		key,
+		"failed",
+		&ErrorContext{IsRetryable: true},
+	)
+	require.ErrorContains(t, err, "durable owner generation")
+}
+
+func TestCDCWatermarkUpdaterOwnedErrorDoesNotReadMissingProgress(t *testing.T) {
+	exec := &retryableMockExecutor{}
+	u := NewCDCWatermarkUpdater(t.Name(), exec, WithCronJobInterval(time.Hour))
+	u.Start()
+	defer u.Stop()
+	key := &WatermarkKey{AccountId: 7, TaskId: "stable", DBName: "db", TableName: "tbl"}
+	fence := NewOwnerFenceForGeneration(
+		time.UnixMicro(123), func(context.Context) error { return nil })
+	u.activeWatermarkFence[*key] = fence
+
+	require.NoError(t, u.UpdateWatermarkErrMsg(
+		WithWatermarkOwnerFence(context.Background(), fence, 11),
+		key,
+		"failed",
+		&ErrorContext{IsRetryable: true},
+	))
+	exec.mu.Lock()
+	defer exec.mu.Unlock()
+	require.Equal(t, 0, exec.queryCalls)
+	require.Equal(t, 1, exec.execCalls)
+	require.NotContains(t, exec.lastSQL, "INSERT INTO")
+}
+
+func TestCDCWatermarkUpdaterRetiredOwnerCannotMutateLocalErrorState(t *testing.T) {
+	u := NewCDCWatermarkUpdater(t.Name(), newWmMockSQLExecutor())
+	key := &WatermarkKey{AccountId: 7, TaskId: "stable", DBName: "db", TableName: "tbl"}
+	oldFence := NewOwnerFenceForGeneration(
+		time.UnixMicro(123), func(context.Context) error { return nil })
+	newFence := NewOwnerFenceForGeneration(
+		time.UnixMicro(124), func(context.Context) error { return nil })
+	existing := &ErrorMetadata{Message: "new owner error", RetryCount: 1, IsRetryable: true}
+	u.activeWatermarkFence[*key] = newFence
+	u.errorMetadataCache[*key] = existing
+	oldCtx := WithWatermarkOwnerFence(context.Background(), oldFence, 11)
+
+	require.NoError(t, u.UpdateWatermarkErrMsg(
+		oldCtx, key, "old owner error", &ErrorContext{IsRetryable: true}))
+	require.Same(t, existing, u.errorMetadataCache[*key])
+	require.NoError(t, u.UpdateWatermarkErrMsg(oldCtx, key, "", nil))
+	require.Same(t, existing, u.errorMetadataCache[*key])
+}
+
+func TestCDCWatermarkUpdaterLostClaimCannotMutateErrorBeforeReplacementClaim(t *testing.T) {
+	u := NewCDCWatermarkUpdater(t.Name(), newWmMockSQLExecutor())
+	key := &WatermarkKey{AccountId: 7, TaskId: "stable", DBName: "db", TableName: "tbl"}
+	lostFence := NewOwnerFenceForGeneration(time.UnixMicro(123), func(ctx context.Context) error {
+		return moerr.NewInvalidTask(ctx, "old-cn", 1)
+	})
+	existing := &ErrorMetadata{Message: "current diagnostic", RetryCount: 1, IsRetryable: true}
+	u.activeWatermarkFence[*key] = lostFence
+	u.errorMetadataCache[*key] = existing
+	lostCtx := WithWatermarkOwnerFence(context.Background(), lostFence, 11)
+
+	require.NoError(t, u.UpdateWatermarkErrMsg(
+		lostCtx, key, "ordinary source error", &ErrorContext{IsRetryable: true}))
+	require.Same(t, existing, u.errorMetadataCache[*key])
+	require.NoError(t, u.UpdateWatermarkErrMsg(lostCtx, key, "", nil))
+	require.Same(t, existing, u.errorMetadataCache[*key])
+}
+
+func TestCDCWatermarkUpdaterDiagnosticOwnerCheckBackendFailureIsRetryable(t *testing.T) {
+	u := NewCDCWatermarkUpdater(t.Name(), newWmMockSQLExecutor())
+	key := &WatermarkKey{AccountId: 7, TaskId: "stable", DBName: "db", TableName: "tbl"}
+	backendErr := moerr.NewInternalErrorNoCtx("taskservice unavailable")
+	fence := NewOwnerFenceForGeneration(time.UnixMicro(123), func(context.Context) error {
+		return backendErr
+	})
+	err := u.UpdateWatermarkErrMsg(
+		WithWatermarkOwnerFence(context.Background(), fence, 11),
+		key,
+		"ordinary source error",
+		&ErrorContext{IsRetryable: true},
+	)
+	require.Error(t, err)
+	require.True(t, IsRetryableOwnerFenceError(err))
+	require.NotContains(t, u.errorMetadataCache, *key)
+
+	timeoutFence := NewOwnerFenceForGeneration(time.UnixMicro(124), func(context.Context) error {
+		return context.DeadlineExceeded
+	})
+	err = u.UpdateWatermarkErrMsg(
+		WithWatermarkOwnerFence(context.Background(), timeoutFence, 11),
+		key,
+		"ordinary source error",
+		&ErrorContext{IsRetryable: true},
+	)
+	require.Error(t, err)
+	require.True(t, IsRetryableOwnerFenceError(err))
+}
+
+func TestCDCWatermarkUpdaterCanceledOwnerCheckDoesNotPublishDiagnostic(t *testing.T) {
+	u := NewCDCWatermarkUpdater(t.Name(), newWmMockSQLExecutor())
+	key := &WatermarkKey{AccountId: 7, TaskId: "stable", DBName: "db", TableName: "tbl"}
+	fence := NewOwnerFenceForGeneration(time.UnixMicro(123), func(ctx context.Context) error {
+		return ctx.Err()
+	})
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	require.NoError(t, u.UpdateWatermarkErrMsg(
+		WithWatermarkOwnerFence(ctx, fence, 11),
+		key,
+		"shutdown error",
+		&ErrorContext{IsRetryable: true},
+	))
+	require.NotContains(t, u.errorMetadataCache, *key)
+}
+
+func TestCDCWatermarkUpdaterReplacementDropsPreviousErrorRetryState(t *testing.T) {
+	u := NewCDCWatermarkUpdater(t.Name(), newWmMockSQLExecutor())
+	key := WatermarkKey{AccountId: 7, TaskId: "stable", DBName: "db", TableName: "tbl"}
+	oldFence := NewOwnerFenceForGeneration(
+		time.UnixMicro(123), func(context.Context) error { return nil })
+	newFence := NewOwnerFenceForGeneration(
+		time.UnixMicro(124), func(context.Context) error { return nil })
+	u.activeWatermarkFence[key] = oldFence
+	u.errorMetadataCache[key] = &ErrorMetadata{RetryCount: MaxRetryCount}
+
+	require.True(t, u.activateWatermarkFenceLocked(key, newFence))
+	require.NotContains(t, u.errorMetadataCache, key)
+}
+
+func TestCDCWatermarkUpdaterErrorMetricClassificationIsExclusive(t *testing.T) {
+	u := NewCDCWatermarkUpdater(t.Name(), &retryableMockExecutor{}, WithCronJobInterval(time.Hour))
+	u.Start()
+	defer u.Stop()
+	key := &WatermarkKey{AccountId: 7, TaskId: t.Name(), DBName: "db", TableName: "tbl"}
+	fence := NewOwnerFenceForGeneration(
+		time.UnixMicro(123), func(context.Context) error { return nil })
+	u.activeWatermarkFence[*key] = fence
+	ctx := WithWatermarkOwnerFence(context.Background(), fence, 11)
+	readGauge := func(errorType string) float64 {
+		metric := &dto.Metric{}
+		require.NoError(t, v2.CdcTableNonRetryableErrorGauge.WithLabelValues(
+			key.String(), errorType).Write(metric))
+		return metric.GetGauge().GetValue()
+	}
+
+	require.NoError(t, u.UpdateWatermarkErrMsg(
+		ctx, key, "connection failed", &ErrorContext{}))
+	require.Equal(t, float64(1), readGauge("network"))
+
+	require.NoError(t, u.UpdateWatermarkErrMsg(
+		ctx, key, "commit failed", &ErrorContext{}))
+	require.Zero(t, readGauge("network"))
+	require.Equal(t, float64(1), readGauge("commit"))
 }
 
 func TestCDCWatermarkUpdater_GuardedWatermarkSQLIsBoundedAndDeterministic(t *testing.T) {

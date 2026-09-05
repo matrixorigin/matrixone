@@ -158,10 +158,11 @@ type WatermarkResult struct {
 
 type UpdaterJob struct {
 	tasks.Job
-	Key       *WatermarkKey
-	Watermark types.TS
-	ErrMsg    string
-	done      chan struct{}
+	Key        *WatermarkKey
+	Watermark  types.TS
+	ErrMsg     string
+	OwnerFence *OwnerFence
+	done       chan struct{}
 }
 
 func (job *UpdaterJob) Init(ctx context.Context, id string, typ tasks.JobType, exec tasks.JobExecutor) {
@@ -267,6 +268,7 @@ func NewUpdateWMErrMsgJob(
 	)
 	job.Key = key
 	job.ErrMsg = errMsg
+	job.OwnerFence, _ = ctx.Value(watermarkOwnerFenceContextKey{}).(*OwnerFence)
 	return job
 }
 
@@ -511,13 +513,18 @@ func (u *CDCWatermarkUpdater) onJobs(jobs ...any) {
 				job.DoneWithErr(nil)
 				continue
 			}
-			if _, err := u.GetFromCache(context.Background(), job.Key); err != nil {
-				if !errors.Is(err, ErrNoWatermarkFound) {
-					job.DoneWithErr(err)
-					continue
-				}
-				if _, exists := u.readKeysBuffer[*job.Key]; !exists {
-					u.readKeysBuffer[*job.Key] = WatermarkResult{}
+			// Stable rows are created exclusively by startup and diagnostics are
+			// update-only. Do not read/recreate progress here: cleanup may already
+			// have retired the local cache, and reading it back would leak stale state.
+			if job.OwnerFence == nil {
+				if _, err := u.GetFromCache(context.Background(), job.Key); err != nil {
+					if !errors.Is(err, ErrNoWatermarkFound) {
+						job.DoneWithErr(err)
+						continue
+					}
+					if _, exists := u.readKeysBuffer[*job.Key]; !exists {
+						u.readKeysBuffer[*job.Key] = WatermarkResult{}
+					}
 				}
 			}
 			u.committingErrMsgBuffer = append(u.committingErrMsgBuffer, job)
@@ -1077,6 +1084,23 @@ func watermarkErrorRowSQL(row guardedWatermarkRow, withAliases bool) string {
 	return builder.String()
 }
 
+func watermarkOwnedErrorRowSQL(row guardedWatermarkRow, withAliases bool) string {
+	var builder strings.Builder
+	builder.Grow(160 + len(row.taskID) + len(row.dbName) + len(row.tableName) + len(row.value))
+	writeWatermarkRowPrefix(&builder, row, withAliases)
+	writeQuotedSQLString(&builder, row.value)
+	if withAliases {
+		builder.WriteString(" AS err_msg, ")
+	} else {
+		builder.WriteString(", ")
+	}
+	builder.WriteString(strconv.FormatUint(row.ownerGeneration, 10))
+	if withAliases {
+		builder.WriteString(" AS owner_generation")
+	}
+	return builder.String()
+}
+
 func watermarkInsertRowSQL(row guardedWatermarkRow, withAliases bool) string {
 	var builder strings.Builder
 	overhead := 40
@@ -1245,18 +1269,28 @@ func (u *CDCWatermarkUpdater) constructBatchUpdateMonotonicWMSQLs(
 func (u *CDCWatermarkUpdater) constructBatchUpdateWMErrMsgSQLs(
 	jobs []*UpdaterJob,
 ) []string {
-	rows := make([]guardedWatermarkRow, 0, len(jobs))
+	legacyRows := make([]guardedWatermarkRow, 0, len(jobs))
+	ownedRows := make([]guardedWatermarkRow, 0, len(jobs))
 	for _, job := range jobs {
-		rows = append(rows, guardedWatermarkRow{
+		row := guardedWatermarkRow{
 			accountID: job.Key.AccountId,
 			taskID:    job.Key.TaskId,
 			dbName:    job.Key.DBName,
 			tableName: job.Key.TableName,
 			value:     job.ErrMsg,
-		})
+		}
+		if job.OwnerFence != nil {
+			row.ownerGeneration = job.OwnerFence.GenerationToken()
+			ownedRows = append(ownedRows, row)
+		} else {
+			legacyRows = append(legacyRows, row)
+		}
 	}
-	return buildGuardedWatermarkSQLBatches(rows, watermarkErrorRowSQL,
+	result := buildGuardedWatermarkSQLBatches(legacyRows, watermarkErrorRowSQL,
 		CDCSQLBuilder.GuardedWatermarkErrorUpdateSQL)
+	return append(result, buildGuardedWatermarkSQLBatches(
+		ownedRows, watermarkOwnedErrorRowSQL,
+		CDCSQLBuilder.GuardedOwnedWatermarkErrorUpdateSQL)...)
 }
 
 func (u *CDCWatermarkUpdater) execAddWM() (errMsg string, err error) {
@@ -1599,18 +1633,40 @@ func (u *CDCWatermarkUpdater) UpdateWatermarkErrMsg(
 	if _, deleted := u.deletedTasks.Load(key.TaskId); deleted {
 		return nil
 	}
+	incomingFence, fenced := ctx.Value(watermarkOwnerFenceContextKey{}).(*OwnerFence)
+	if fenced && incomingFence != nil && incomingFence.GenerationToken() == 0 {
+		return moerr.NewInternalErrorNoCtx(
+			"owner-fenced CDC watermark error update requires a durable owner generation")
+	}
+	if fenced && incomingFence != nil {
+		// The durable owner column closes takeover after this check, while this
+		// exact-claim validation also observes a Pause/Restart request before its
+		// replacement has reached watermark admission. Neither fence is sufficient
+		// alone across that two-system handoff.
+		if fenceErr := incomingFence.Check(ctx); fenceErr != nil {
+			if IsOwnerFenceLostError(fenceErr) {
+				return nil
+			}
+			// Caller cancellation is lifecycle cleanup. A backend timeout while
+			// the caller remains live is instead retryable and must stay visible.
+			if ctx.Err() != nil && errors.Is(fenceErr, ctx.Err()) {
+				return nil
+			}
+			return fenceErr
+		}
+	}
 	// 1. Clear error: remove cache and persist empty string
 	if errMsg == "" {
 		u.Lock()
-		delete(u.errorMetadataCache, *key)
-		u.Unlock()
-
-		// Clear metric when error is cleared
-		tableLabel := key.String()
-		errorTypes := []string{"network", "commit", "table_relation", "sinker", "max_retry_exceeded", "unknown"}
-		for _, et := range errorTypes {
-			v2.CdcTableNonRetryableErrorGauge.WithLabelValues(tableLabel, et).Set(0)
+		if fenced && incomingFence != nil {
+			if active := u.activeWatermarkFence[*key]; active != nil && active != incomingFence {
+				u.Unlock()
+				return nil
+			}
 		}
+		delete(u.errorMetadataCache, *key)
+		clearWatermarkErrorGauge(*key)
+		u.Unlock()
 
 		job := NewUpdateWMErrMsgJob(ctx, key, "")
 		if _, err = u.queue.Enqueue(job); err != nil {
@@ -1667,6 +1723,12 @@ func (u *CDCWatermarkUpdater) UpdateWatermarkErrMsg(
 
 	// 4. Read from memory cache (NO SQL query - preserves batch processing design)
 	u.RLock()
+	if fenced && incomingFence != nil {
+		if active := u.activeWatermarkFence[*key]; active != nil && active != incomingFence {
+			u.RUnlock()
+			return nil
+		}
+	}
 	oldMetadata, exists := u.errorMetadataCache[*key]
 	u.RUnlock()
 
@@ -1704,28 +1766,27 @@ func (u *CDCWatermarkUpdater) UpdateWatermarkErrMsg(
 	}
 	newMetadata.Message = truncateUTF8Runes(newMetadata.Message, CDCWatermarkErrMsgMaxLen)
 
-	// 6.5. Update metric if non-retryable error
-	if !newMetadata.IsRetryable {
-		tableLabel := key.String()
-		errorType := extractErrorType(newMetadata.Message)
-		v2.CdcTableNonRetryableErrorGauge.WithLabelValues(tableLabel, errorType).Set(1)
-	} else {
-		// Clear metric for retryable errors (they may become non-retryable later)
-		// Reset all possible error_type labels for this table
-		tableLabel := key.String()
-		errorTypes := []string{"network", "commit", "table_relation", "sinker", "max_retry_exceeded", "unknown"}
-		for _, et := range errorTypes {
-			v2.CdcTableNonRetryableErrorGauge.WithLabelValues(tableLabel, et).Set(0)
-		}
-	}
-
 	// 7. Update memory cache (like UpdateWatermarkOnly - no SQL)
 	u.Lock()
 	if _, deleted := u.deletedTasks.Load(key.TaskId); deleted {
 		u.Unlock()
 		return nil
 	}
+	if fenced && incomingFence != nil {
+		if active := u.activeWatermarkFence[*key]; active != nil && active != incomingFence {
+			u.Unlock()
+			return nil
+		}
+	}
 	u.errorMetadataCache[*key] = newMetadata
+	// Keep diagnostics and their observable state in the same owner-ordered
+	// critical section. Otherwise a retired owner can publish a gauge after its
+	// replacement has already cleared the old generation's cache.
+	clearWatermarkErrorGauge(*key)
+	if !newMetadata.IsRetryable {
+		v2.CdcTableNonRetryableErrorGauge.WithLabelValues(
+			key.String(), extractErrorType(newMetadata.Message)).Set(1)
+	}
 	u.Unlock()
 
 	// 8. Format and persist (async via job queue)
@@ -1786,7 +1847,8 @@ type watermarkOwnerFenceContextKey struct{}
 type watermarkSourceTableIDContextKey struct{}
 
 // WithWatermarkOwnerFence binds the exact daemon claim to an asynchronous
-// watermark update. The final SQL writer rechecks this same closure.
+// watermark progress or diagnostic update. Stable diagnostic callers must use
+// this context so both set and clear remain generation-owned.
 func WithWatermarkOwnerFence(
 	ctx context.Context,
 	fence *OwnerFence,
@@ -1945,9 +2007,28 @@ func (u *CDCWatermarkUpdater) activateWatermarkFenceLocked(key WatermarkKey, fen
 		delete(u.cacheCommittingGeneration, key)
 		delete(u.cacheCommittingFence, key)
 	}
+	if active := u.activeWatermarkFence[key]; active != nil && active != fence {
+		// Retry counts belong to one executor generation. Carrying an old owner's
+		// cache into its replacement can prematurely turn a fresh transient error
+		// into a permanent failure.
+		delete(u.errorMetadataCache, key)
+	}
 	u.resetWatermarkCircuitLocked(key)
 	u.activeWatermarkFence[key] = fence
 	return true
+}
+
+var watermarkErrorMetricTypes = [...]string{
+	"network", "commit", "table_relation", "sinker", "max_retry_exceeded", "unknown",
+}
+
+// clearWatermarkErrorGauge resets every possible classification for one table.
+// Callers that coordinate this with owner state hold u.Lock.
+func clearWatermarkErrorGauge(key WatermarkKey) {
+	tableLabel := key.String()
+	for _, errorType := range watermarkErrorMetricTypes {
+		v2.CdcTableNonRetryableErrorGauge.WithLabelValues(tableLabel, errorType).Set(0)
+	}
 }
 
 func watermarkProgressIsNewer(

@@ -302,6 +302,20 @@ const (
 		"ON t.account_id = v.account_id AND t.task_id = v.task_id " +
 		"ON DUPLICATE KEY UPDATE err_msg = VALUES(err_msg)"
 
+	// Stable-task diagnostics belong to the same daemon generation as their
+	// progress. Keep this path update-only so an obsolete owner cannot recreate a
+	// watermark row removed by RESTART, and compare owner_generation in the
+	// durable statement so a preflight check cannot race with takeover.
+	CDCGuardedOwnedWatermarkErrorUpdateTemplate = "UPDATE " +
+		"`mo_catalog`.`mo_cdc_watermark` AS w " +
+		"INNER JOIN ( %s ) AS v ON " +
+		"w.account_id = v.account_id AND w.task_id = v.task_id AND " +
+		"w.db_name = v.db_name AND w.table_name = v.table_name AND " +
+		"w.owner_generation = v.owner_generation " +
+		"INNER JOIN (SELECT account_id, task_id FROM `mo_catalog`.`mo_cdc_task` WHERE %s FOR UPDATE) AS t " +
+		"ON t.account_id = w.account_id AND t.task_id = w.task_id " +
+		"SET w.err_msg = v.err_msg"
+
 	CDCUpdateWatermarkSqlTemplate = "UPDATE " +
 		"`mo_catalog`.`mo_cdc_watermark` " +
 		"SET watermark='%s' " +
@@ -1094,6 +1108,10 @@ func (b cdcSQLBuilder) GuardedMonotonicWatermarkUpdateSQL(selectValues, taskPred
 
 func (b cdcSQLBuilder) GuardedWatermarkErrorUpdateSQL(selectValues, taskPredicate string) string {
 	return fmt.Sprintf(CDCGuardedWatermarkErrorUpdateTemplate, selectValues, taskPredicate)
+}
+
+func (b cdcSQLBuilder) GuardedOwnedWatermarkErrorUpdateSQL(selectValues, taskPredicate string) string {
+	return fmt.Sprintf(CDCGuardedOwnedWatermarkErrorUpdateTemplate, selectValues, taskPredicate)
 }
 
 // ------------------------------------------------------------------------------------------------

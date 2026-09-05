@@ -22,9 +22,12 @@ import (
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/cdc"
+	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/task"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/taskservice"
+	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/stretchr/testify/require"
 )
 
@@ -91,6 +94,34 @@ func TestCDCCreateTaskMetadataUsesCapabilityFence(t *testing.T) {
 	require.Equal(t, task.TaskCode_InitCdc, noFull.Executor)
 }
 
+func TestValidateStableInitialSnapshotCompileProtocol(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	c := &Compile{proc: proc}
+	rt := moruntime.ServiceRuntime(proc.GetService())
+	original, hadOriginal := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
+	defer func() {
+		if hadOriginal {
+			rt.SetGlobalVariables(moruntime.MOProtocolVersion, original)
+		} else {
+			rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCLatestVersion)
+		}
+	}()
+
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion47)
+	require.ErrorContains(t, validateStableInitialSnapshotCompileProtocol(
+		context.Background(), c, true), "protocol version 48")
+	require.NoError(t, validateStableInitialSnapshotCompileProtocol(
+		context.Background(), c, false))
+
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion48)
+	require.NoError(t, validateStableInitialSnapshotCompileProtocol(
+		context.Background(), c, true))
+
+	// Missing runtime/process information fails closed for stable creation.
+	require.Error(t, validateStableInitialSnapshotCompileProtocol(
+		context.Background(), nil, true))
+}
+
 func TestDeleteManyWatermarkRetainsSnapshotEpochOnRestart(t *testing.T) {
 	keys := map[taskservice.CDCTaskKey]struct{}{
 		{AccountId: 7, TaskId: "task"}: {},
@@ -116,6 +147,17 @@ func TestDeleteManyWatermarkRetainsSnapshotEpochOnRestart(t *testing.T) {
 func TestCDCStableWatermarkUpsertParses(t *testing.T) {
 	sql := cdc.CDCSQLBuilder.OnDuplicateUpdateMonotonicWatermarkSQL(
 		"(1, 'task', 'db', 'tbl', '100-2')",
+	)
+	statements, err := mysql.Parse(context.Background(), sql, 1)
+	require.NoError(t, err)
+	require.Len(t, statements, 1)
+}
+
+func TestCDCStableWatermarkErrorUpdateParses(t *testing.T) {
+	sql := cdc.CDCSQLBuilder.GuardedOwnedWatermarkErrorUpdateSQL(
+		"SELECT 1 AS account_id, 'task' AS task_id, 'db' AS db_name, "+
+			"'tbl' AS table_name, 'failed' AS err_msg, 123 AS owner_generation",
+		"(account_id = 1 AND task_id = 'task')",
 	)
 	statements, err := mysql.Parse(context.Background(), sql, 1)
 	require.NoError(t, err)
