@@ -43,13 +43,12 @@ func TestISCPLogUpdateResultSQLLetsTerminalErrorWinWithoutRegressingStage(t *tes
 	require.Contains(t, sql, "GREATEST(CAST(COALESCE(JSON_UNQUOTE(JSON_EXTRACT(job_status, '$.Stage')), '0') AS SIGNED), 0)")
 }
 
-func TestISCPLogRepairLegacyWatermarkStageSQLIsConservative(t *testing.T) {
-	sql := CDCSQLBuilder.ISCPLogRepairLegacyWatermarkStageSQL(3, 1)
+func TestISCPLogAdvanceWatermarkSQLCarriesMonotonicStage(t *testing.T) {
+	sql := CDCSQLBuilder.ISCPLogAdvanceWatermarkSQL(
+		1, 2, "job", 3, types.BuildTS(4, 0), 5, 1, 3, 4,
+	)
 
-	require.Contains(t, sql, "job_status = JSON_SET(job_status, '$.Stage', 1)")
-	require.Contains(t, sql, "job_state = 3")
-	require.Contains(t, sql, "JSON_EXTRACT(job_status, '$.Stage') = '0'")
-	require.Contains(t, sql, "CAST(JSON_UNQUOTE(JSON_EXTRACT(job_status, '$.LSN')) AS UNSIGNED) > 0")
-	require.Contains(t, sql, "JSON_EXTRACT(job_status, '$.ErrorCode')")
-	require.Contains(t, sql, "JSON_EXTRACT(job_status, '$.ErrorMsg')")
+	require.Contains(t, sql, "JSON_SET(job_status, '$.LSN', 5, '$.Stage'")
+	require.Contains(t, sql, "GREATEST(CAST(COALESCE(JSON_UNQUOTE(JSON_EXTRACT(job_status, '$.Stage')), '0') AS SIGNED), 1)")
+	require.Contains(t, sql, "JSON_EXTRACT(job_status, '$.LSN') = '4'")
 }

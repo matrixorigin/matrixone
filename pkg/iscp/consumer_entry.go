@@ -237,6 +237,7 @@ func (jobEntry *JobEntry) tryFlushWatermark(
 		jobEntry.jobID,
 		jobEntry.watermark,
 		jobEntry.currentLSN+1,
+		jobEntry.stage,
 		ISCPJobState_Completed,
 		jobEntry.currentLSN,
 	)

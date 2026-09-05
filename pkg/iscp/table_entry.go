@@ -265,6 +265,9 @@ func (t *TableEntry) UpdateWatermark(iter *IterationContext) error {
 	}
 	t.mu.Lock()
 	defer t.mu.Unlock()
+	// Validate the complete shared iteration before advancing any member. Init
+	// owns a lifecycle transition and may only be completed by the worker after
+	// InitSQL succeeds; a clean-table maintenance pass cannot prove that.
 	for i, jobName := range iter.jobNames {
 		jobEntry := t.jobs[JobKey{
 			JobName: jobName,
@@ -274,9 +277,21 @@ func (t *TableEntry) UpdateWatermark(iter *IterationContext) error {
 			return moerr.NewInternalErrorNoCtxf(
 				"ISCP job %s/%d no longer exists", jobName, iter.jobIDs[i])
 		}
-		if err := jobEntry.UpdateWatermark(iter.fromTS, iter.toTS, t.exec.option.FlushWatermarkInterval); err != nil {
-			return err
+		if jobEntry.stage == JobStage_Init {
+			return moerr.NewInternalErrorNoCtxf(
+				"ISCP job %s/%d cannot advance watermark before initialization",
+				jobName, iter.jobIDs[i])
 		}
+		expectedFrom := jobEntry.watermark.Next()
+		if !expectedFrom.EQ(&iter.fromTS) {
+			// No member has been advanced yet, so fencing a discontinuity cannot
+			// leave a shared iteration partially applied in memory.
+			return jobEntry.UpdateWatermark(
+				iter.fromTS, iter.toTS, t.exec.option.FlushWatermarkInterval)
+		}
+	}
+	for i, jobName := range iter.jobNames {
+		t.jobs[JobKey{JobName: jobName, JobID: iter.jobIDs[i]}].watermark = iter.toTS
 	}
 	return nil
 }

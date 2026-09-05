@@ -703,9 +703,9 @@ func TestTryFlushWatermarkPreservesRunningStage(t *testing.T) {
 	flushed, err := job.tryFlushWatermark(context.Background(), nil, 0)
 	require.NoError(t, err)
 	require.True(t, flushed)
-	require.Contains(t, updateSQL, "job_status = JSON_SET(job_status, '$.LSN', 6)")
+	require.Contains(t, updateSQL, "job_status = JSON_SET(job_status, '$.LSN', 6, '$.Stage'")
+	require.Contains(t, updateSQL, "AS SIGNED), 1)")
 	require.Contains(t, updateSQL, ") WHERE account_id")
-	require.NotContains(t, updateSQL, "$.Stage")
 	require.Equal(t, ISCPJobState_Pending, job.state)
 	require.True(t, job.persistedWatermark.EQ(&job.watermark))
 }
@@ -879,34 +879,7 @@ func TestFlushWatermarkForAllTablesRollsBackPartialTransaction(t *testing.T) {
 	}
 }
 
-func TestRepairLegacyWatermarkStageOnlyRepairsUnambiguousState(t *testing.T) {
-	tests := []struct {
-		name   string
-		state  int8
-		status *JobStatus
-		want   bool
-	}{
-		{name: "legacy watermark", state: ISCPJobState_Completed, status: &JobStatus{LSN: 5}, want: true},
-		{name: "new job", state: ISCPJobState_Completed, status: &JobStatus{}, want: false},
-		{name: "worker init failure", state: ISCPJobState_Completed, status: &JobStatus{LSN: 5, ErrorMsg: "init failed"}, want: false},
-		{name: "consumer init failure", state: ISCPJobState_Completed, status: &JobStatus{LSN: 5, ErrorCode: 1, ErrorMsg: "init failed"}, want: false},
-		{name: "permanent init failure", state: ISCPJobState_Error, status: &JobStatus{LSN: 5}, want: false},
-		{name: "already running", state: ISCPJobState_Completed, status: &JobStatus{LSN: 5, Stage: JobStage_Running}, want: false},
-		{name: "nil status", state: ISCPJobState_Completed, status: nil, want: false},
-	}
-
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			repaired := repairLegacyWatermarkStage(test.state, test.status)
-			require.Equal(t, test.want, repaired)
-			if test.status != nil && test.want {
-				require.Equal(t, int8(JobStage_Running), test.status.Stage)
-			}
-		})
-	}
-}
-
-func TestISCPRecoveryNormalizesPreRepairSnapshot(t *testing.T) {
+func TestISCPRecoveryPreservesAmbiguousInitStage(t *testing.T) {
 	exec := &ISCPTaskExecutor{
 		ctx:    context.Background(),
 		tables: newISCPTableTree(),
@@ -946,22 +919,97 @@ func TestISCPRecoveryNormalizesPreRepairSnapshot(t *testing.T) {
 	require.True(t, ok)
 	recovered := table.jobs[JobKey{JobName: "legacy", JobID: 4}]
 	require.Equal(t, ISCPJobState_Completed, recovered.state)
-	require.Equal(t, int8(JobStage_Running), recovered.stage)
+	// Completed + Init + LSN>0 is ambiguous: an old watermark flush can
+	// produce it after successful initialization, but a fresh start-from-now
+	// job can also produce it before InitSQL. Recovery must not guess success.
+	require.Equal(t, int8(JobStage_Init), recovered.stage)
 	require.Equal(t, ISCPJobState_Completed, table.jobs[JobKey{JobName: "pending", JobID: 5}].state)
 	require.Equal(t, int8(JobStage_Init), table.jobs[JobKey{JobName: "pending", JobID: 5}].stage)
 	require.Equal(t, ISCPJobState_Error, table.jobs[JobKey{JobName: "error", JobID: 6}].state)
 
-	// A restart snapshot that still predates the repair transaction must not
-	// schedule InitSQL again; its next candidate continues in Running.
+	// The ambiguous job remains eligible for real initialization after restart.
 	iters, _ := table.getCandidate()
 	require.Len(t, iters, 2)
 	for _, iter := range iters {
 		if iter.jobNames[0] == "legacy" {
-			require.Equal(t, []int8{JobStage_Running}, iter.stages)
+			require.Equal(t, []int8{JobStage_Init}, iter.stages)
 			return
 		}
 	}
 	t.Fatal("legacy job was not scheduled after recovery")
+}
+
+func TestInitIterationCannotUseCleanTableWatermarkPath(t *testing.T) {
+	exec := newRuntimeTestExecutor()
+	table := NewTableEntry(exec, 1, 2, 3, "db", "table")
+	spec := &JobSpec{
+		ConsumerInfo: ConsumerInfo{InitSQL: "rebuild index"},
+		TriggerSpec:  TriggerSpec{JobType: TriggerType_Default},
+	}
+	watermark := types.BuildTS(10, 0)
+	_, err := table.AddOrUpdateSinker(
+		context.Background(), "index_idx", spec, &JobStatus{}, 1,
+		watermark, ISCPJobState_Completed, 0,
+	)
+	require.NoError(t, err)
+
+	iters, _ := table.getCandidate()
+	require.Len(t, iters, 1)
+	iter := iters[0]
+	require.False(t, iter.fromTS.IsEmpty())
+	require.Equal(t, []int8{JobStage_Init}, iter.stages)
+
+	// A clean table at the same retention boundary would skip a normal tail
+	// iteration. Init still enters the worker because it has lifecycle work.
+	require.True(t, shouldProcessIteration(iter, false, iter.fromTS, nil))
+	running := *iter
+	running.stages = []int8{JobStage_Running}
+	require.False(t, shouldProcessIteration(&running, false, running.fromTS, nil))
+
+	before := table.jobs[JobKey{JobName: "index_idx", JobID: 1}].watermark
+	iter.toTS = types.BuildTS(20, 0)
+	err = table.UpdateWatermark(iter)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "before initialization")
+	require.True(t, table.jobs[JobKey{JobName: "index_idx", JobID: 1}].watermark.EQ(&before))
+}
+
+func TestUpdateWatermarkValidatesSharedIterationBeforeAdvancing(t *testing.T) {
+	oldFlush := FlushJobStatusOnIterationState
+	t.Cleanup(func() { FlushJobStatusOnIterationState = oldFlush })
+
+	exec := newRuntimeTestExecutor()
+	table := NewTableEntry(exec, 1, 2, 3, "db", "table")
+	for i, name := range []string{"first", "stale"} {
+		watermark := types.BuildTS(10-int64(i), 0)
+		_, err := table.AddOrUpdateSinker(
+			context.Background(), name,
+			&JobSpec{TriggerSpec: TriggerSpec{JobType: TriggerType_Default}},
+			&JobStatus{LSN: 5, Stage: JobStage_Running}, uint64(i+1),
+			watermark, ISCPJobState_Completed, 0,
+		)
+		require.NoError(t, err)
+	}
+	FlushJobStatusOnIterationState = func(
+		context.Context, string, engine.Engine, client.TxnClient,
+		uint32, uint64, []string, []uint64, []uint64, []*JobStatus,
+		types.TS, int8, []uint64,
+	) error {
+		return nil
+	}
+
+	first := table.jobs[JobKey{JobName: "first", JobID: 1}]
+	firstBefore := first.watermark
+	iter := &IterationContext{
+		jobNames: []string{"first", "stale"},
+		jobIDs:   []uint64{1, 2},
+		fromTS:   first.watermark.Next(),
+		toTS:     types.BuildTS(20, 0),
+	}
+
+	require.NoError(t, table.UpdateWatermark(iter))
+	require.True(t, first.watermark.EQ(&firstBefore))
+	require.Equal(t, ISCPJobState_Error, table.jobs[JobKey{JobName: "stale", JobID: 2}].state)
 }
 
 func TestReconcileIterationStagesPreventsStaleCatalogInit(t *testing.T) {

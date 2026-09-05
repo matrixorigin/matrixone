@@ -428,21 +428,7 @@ func (exec *ISCPTaskExecutor) repairAbandonedJobs(ctx context.Context) (err erro
 	if err != nil {
 		return
 	}
-	// Before ISCP watermark updates became field-preserving, they replaced the
-	// whole JobStatus with {LSN: next}. Repair only that unambiguous completed,
-	// non-error shape. In particular, do not promote genuine InitSQL failures:
-	// those carry ErrorCode/ErrorMsg and must remain retryable in Init.
-	repairSQL := cdc.CDCSQLBuilder.ISCPLogRepairLegacyWatermarkStageSQL(
-		ISCPJobState_Completed,
-		JobStage_Running,
-	)
-	result, err := ExecWithResult(ctxWithTimeout, repairSQL, exec.cnUUID, txnOp)
-	if err != nil {
-		return
-	}
-	result.Close()
-
-	result, err = ExecWithResult(ctxWithTimeout, sql, exec.cnUUID, txnOp)
+	result, err := ExecWithResult(ctxWithTimeout, sql, exec.cnUUID, txnOp)
 	if err != nil {
 		return
 	}
@@ -531,12 +517,7 @@ func (exec *ISCPTaskExecutor) run(ctx context.Context, worker Worker) {
 					iter.toTS = types.BuildTS(iter.fromTS.Physical()+DefaultMaxChangeInterval.Nanoseconds(), 0)
 				}
 				// For initialized iterctx (fromTS is empty), do not check whether the table has changed
-				var ok bool
-				if iter.fromTS.IsEmpty() || getDirtyTablesFailed || iter.fromTS.LT(&minTS) {
-					ok = true
-				} else {
-					_, ok = tables[iter.tableID]
-				}
+				ok := shouldProcessIteration(iter, getDirtyTablesFailed, minTS, tables)
 				table, tableExists := exec.getTable(iter.accountID, iter.tableID)
 				if !tableExists {
 					logutil.Error(
@@ -612,6 +593,38 @@ func (exec *ISCPTaskExecutor) run(ctx context.Context, worker Worker) {
 func shouldReplayISCPLog(err error) bool {
 	return err != nil &&
 		(moerr.IsMoErrCode(err, moerr.ErrStaleRead) || errors.Is(err, errISCPStatusCASLost))
+}
+
+// An Init iteration owns a lifecycle transition, not only a source-table
+// range. It must reach the worker even when the source table is clean so only
+// successful InitSQL can advance its Stage to Running.
+func shouldProcessIteration(
+	iter *IterationContext,
+	getDirtyTablesFailed bool,
+	minTS types.TS,
+	dirtyTables map[uint64]struct{},
+) bool {
+	if iter == nil {
+		return false
+	}
+	if iterationNeedsInit(iter) || iter.fromTS.IsEmpty() ||
+		getDirtyTablesFailed || iter.fromTS.LT(&minTS) {
+		return true
+	}
+	_, ok := dirtyTables[iter.tableID]
+	return ok
+}
+
+func iterationNeedsInit(iter *IterationContext) bool {
+	if iter == nil || len(iter.stages) != len(iter.jobNames) {
+		return false
+	}
+	for _, stage := range iter.stages {
+		if stage == JobStage_Init {
+			return true
+		}
+	}
+	return false
 }
 
 // For UT
@@ -954,20 +967,18 @@ func (exec *ISCPTaskExecutor) addOrUpdateRecoveredJob(
 	dropAt types.Timestamp,
 	notPrint bool,
 ) error {
-	persistedState := state
 	// The repair transaction may commit before its logtail is visible to the
 	// next read snapshot. Normalize the same states in memory so correctness
 	// does not depend on asynchronous logtail catch-up.
 	if state == ISCPJobState_Pending || state == ISCPJobState_Running {
 		state = ISCPJobState_Completed
 	}
-	return exec.addOrUpdateJobWithPersistedState(
+	return exec.addOrUpdateJob(
 		accountID,
 		tableID,
 		jobName,
 		jobID,
 		state,
-		persistedState,
 		watermarkStr,
 		jobSpecStr,
 		jobStatusStr,
@@ -1025,34 +1036,6 @@ func (exec *ISCPTaskExecutor) addOrUpdateJob(
 	dropAt types.Timestamp,
 	notPrint bool,
 ) error {
-	return exec.addOrUpdateJobWithPersistedState(
-		accountID,
-		tableID,
-		jobName,
-		jobID,
-		state,
-		state,
-		watermarkStr,
-		jobSpecStr,
-		jobStatusStr,
-		dropAt,
-		notPrint,
-	)
-}
-
-func (exec *ISCPTaskExecutor) addOrUpdateJobWithPersistedState(
-	accountID uint32,
-	tableID uint64,
-	jobName string,
-	jobID uint64,
-	state int8,
-	persistedState int8,
-	watermarkStr string,
-	jobSpecStr []byte,
-	jobStatusStr []byte,
-	dropAt types.Timestamp,
-	notPrint bool,
-) error {
 	// SQL NULL is represented by Timestamp(0) for active jobs. A non-NULL zero
 	// timestamp still means dropped, so normalize it to a GC-safe timestamp.
 	if dropAt == types.ZeroTimestamp {
@@ -1087,7 +1070,6 @@ func (exec *ISCPTaskExecutor) addOrUpdateJobWithPersistedState(
 	if err != nil {
 		return err
 	}
-	repairLegacyWatermarkStage(persistedState, jobStatus)
 	var table *TableEntry
 	table, ok := exec.getTable(accountID, tableID)
 	if !ok {
@@ -1113,22 +1095,6 @@ func (exec *ISCPTaskExecutor) addOrUpdateJobWithPersistedState(
 		exec.RemoveJobFence(fenceKey)
 	}
 	return nil
-}
-
-// repairLegacyWatermarkStage mirrors the durable startup repair in memory.
-// The repair transaction can commit before its logtail is visible to the
-// replay snapshot, so startup correctness must not depend on catch-up timing.
-func repairLegacyWatermarkStage(state int8, status *JobStatus) bool {
-	if state != ISCPJobState_Completed ||
-		status == nil ||
-		status.Stage != JobStage_Init ||
-		status.LSN == 0 ||
-		status.ErrorCode != 0 ||
-		status.ErrorMsg != "" {
-		return false
-	}
-	status.Stage = JobStage_Running
-	return true
 }
 
 func (exec *ISCPTaskExecutor) GCInMemoryJob(threshold time.Duration) {
