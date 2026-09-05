@@ -34,6 +34,17 @@ type addAsyncErrStorage struct {
 	err error
 }
 
+type validateDaemonErrStorage struct {
+	TaskStorage
+	err error
+}
+
+func (s *validateDaemonErrStorage) ValidateDaemonTask(
+	context.Context, task.DaemonTask,
+) (bool, error) {
+	return false, s.err
+}
+
 func (s *addAsyncErrStorage) AddAsyncTask(context.Context, ...task.AsyncTask) (int, error) {
 	return 0, s.err
 }
@@ -693,6 +704,37 @@ func TestHeartbeatDaemonTask(t *testing.T) {
 	assert.False(t, ts[0].LastHeartbeat.IsZero())
 	assert.Equal(t, task.TaskStatus_CancelRequested, ts[0].TaskStatus)
 	assert.Equal(t, updateAt, ts[0].UpdateAt)
+}
+
+func TestValidateDaemonTask(t *testing.T) {
+	ctx := context.Background()
+	store := NewMemTaskStorage()
+	service := NewTaskService(runtime.DefaultRuntime(), store)
+	claim := newTestDaemonTask(1, "claim")
+	claim.TaskRunner = "runner-1"
+	claim.LastRun = time.Now().UTC().Truncate(time.Microsecond)
+	mustAddTestDaemonTask(t, store, 1, claim)
+
+	assert.NoError(t, service.ValidateDaemonTask(ctx, claim))
+
+	wrongRunner := claim
+	wrongRunner.TaskRunner = "runner-2"
+	err := service.ValidateDaemonTask(ctx, wrongRunner)
+	assert.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidTask))
+
+	wrongGeneration := claim
+	wrongGeneration.LastRun = claim.LastRun.Add(time.Microsecond)
+	err = service.ValidateDaemonTask(ctx, wrongGeneration)
+	assert.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidTask))
+	assert.NoError(t, service.Close())
+
+	backendErr := errors.New("validate backend failed")
+	service = NewTaskService(runtime.DefaultRuntime(), &validateDaemonErrStorage{
+		TaskStorage: NewMemTaskStorage(),
+		err:         backendErr,
+	})
+	assert.ErrorIs(t, service.ValidateDaemonTask(ctx, claim), backendErr)
+	assert.NoError(t, service.Close())
 }
 
 func TestAddCdcTask1(t *testing.T) {

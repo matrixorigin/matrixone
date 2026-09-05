@@ -154,6 +154,7 @@ type Executor struct {
 	targetLockName     string
 	targetLockIdentity string
 	targetOwnerFence   func(context.Context) error
+	targetWaitCheck    func(context.Context) error
 
 	// Connection info (for reconnection)
 	user, password string
@@ -233,7 +234,9 @@ func (e *Executor) BeginTx(ctx context.Context) error {
 		return err
 	}
 	if e.targetOwnerFence != nil && e.targetLockConn == nil {
-		if err := e.AcquireTargetLock(ctx, e.targetLockIdentity, e.targetOwnerFence); err != nil {
+		if err := e.AcquireTargetLock(
+			ctx, e.targetLockIdentity, e.targetOwnerFence, e.targetWaitCheck,
+		); err != nil {
 			return err
 		}
 	}
@@ -572,6 +575,7 @@ func (e *Executor) AcquireTargetLock(
 	ctx context.Context,
 	identity string,
 	ownerFence func(context.Context) error,
+	waitCheck func(context.Context) error,
 ) error {
 	if ownerFence == nil {
 		return nil
@@ -587,6 +591,7 @@ func (e *Executor) AcquireTargetLock(
 	}
 	e.targetLockIdentity = identity
 	e.targetOwnerFence = ownerFence
+	e.targetWaitCheck = waitCheck
 	if err := e.ensureConnection(ctx); err != nil {
 		return err
 	}
@@ -606,18 +611,29 @@ func (e *Executor) AcquireTargetLock(
 			// the session was lost, the server already released the lock.
 			releaseCtx, cancel := context.WithTimeout(context.Background(), time.Second)
 			var ignored sql.NullInt64
-			_ = lockConn.QueryRowContext(
+			releaseErr := lockConn.QueryRowContext(
 				releaseCtx,
 				"SELECT RELEASE_LOCK(?)",
 				lockName,
 			).Scan(&ignored)
 			cancel()
+			if releaseErr != nil {
+				discardTargetLockConn(lockConn)
+			}
 			_ = lockConn.Close()
 		}
 	}()
 
 	for {
-		if err = ownerFence(ctx); err != nil {
+		// Waiting does not expose a target effect, so avoid a remote owner
+		// validation on every one-second lock poll. Local lifecycle checks still
+		// make pause, cancel, and caller cancellation terminate the wait.
+		if waitCheck != nil {
+			err = waitCheck(ctx)
+		} else {
+			err = ctx.Err()
+		}
+		if err != nil {
 			return err
 		}
 		var acquired sql.NullInt64
@@ -637,6 +653,9 @@ func (e *Executor) AcquireTargetLock(
 	e.targetLockConn = lockConn
 	e.targetLockName = lockName
 	releaseOnError = false
+	// This fresh read after GET_LOCK is the ownership/effect linearization
+	// point. A replacement waits behind this effect interval; an old waiter
+	// that wakes after takeover fails here before it can touch the target.
 	if err = ownerFence(ctx); err != nil {
 		return joinErrorsPreservingSingle(err, e.releaseTargetLock())
 	}
@@ -660,6 +679,13 @@ func (e *Executor) releaseTargetLock() error {
 		"SELECT RELEASE_LOCK(?)",
 		lockName,
 	).Scan(&released)
+	if releaseErr != nil {
+		// sql.Conn.Close normally returns the physical session to the pool. If
+		// RELEASE_LOCK had an ambiguous transport/timeout failure, force the
+		// session out of the pool so a possibly-held advisory lock cannot leak
+		// into unrelated future work.
+		discardTargetLockConn(lockConn)
+	}
 	closeErr := lockConn.Close()
 	// NULL means the pinned connection was already lost; the server releases
 	// session locks on disconnect, so there is no remaining ownership to leak.
@@ -667,6 +693,10 @@ func (e *Executor) releaseTargetLock() error {
 		releaseErr = moerr.NewInternalErrorNoCtx("target ownership lock was not held by its executor")
 	}
 	return joinErrorsPreservingSingle(releaseErr, closeErr)
+}
+
+func discardTargetLockConn(conn *sql.Conn) {
+	_ = conn.Raw(func(any) error { return driver.ErrBadConn })
 }
 
 // ReleaseTargetLock ends one externally visible effect interval while keeping

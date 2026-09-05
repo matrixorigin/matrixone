@@ -234,6 +234,20 @@ func (mr *MockTaskServiceMockRecorder) HeartbeatDaemonTask(ctx, task any) *gomoc
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "HeartbeatDaemonTask", reflect.TypeOf((*MockTaskService)(nil).HeartbeatDaemonTask), ctx, task)
 }
 
+// ValidateDaemonTask mocks base method.
+func (m *MockTaskService) ValidateDaemonTask(ctx context.Context, task task.DaemonTask) error {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "ValidateDaemonTask", ctx, task)
+	ret0, _ := ret[0].(error)
+	return ret0
+}
+
+// ValidateDaemonTask indicates an expected call of ValidateDaemonTask.
+func (mr *MockTaskServiceMockRecorder) ValidateDaemonTask(ctx, task any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ValidateDaemonTask", reflect.TypeOf((*MockTaskService)(nil).ValidateDaemonTask), ctx, task)
+}
+
 // QueryAsyncTask mocks base method.
 func (m *MockTaskService) QueryAsyncTask(arg0 context.Context, arg1 ...taskservice.Condition) ([]task.AsyncTask, error) {
 	m.ctrl.T.Helper()
@@ -770,6 +784,21 @@ func (m *MockTaskStorage) HeartbeatDaemonTask(ctx context.Context, task []task.D
 func (mr *MockTaskStorageMockRecorder) HeartbeatDaemonTask(ctx, task any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "HeartbeatDaemonTask", reflect.TypeOf((*MockTaskStorage)(nil).HeartbeatDaemonTask), ctx, task)
+}
+
+// ValidateDaemonTask mocks base method.
+func (m *MockTaskStorage) ValidateDaemonTask(ctx context.Context, task task.DaemonTask) (bool, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "ValidateDaemonTask", ctx, task)
+	ret0, _ := ret[0].(bool)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// ValidateDaemonTask indicates an expected call of ValidateDaemonTask.
+func (mr *MockTaskStorageMockRecorder) ValidateDaemonTask(ctx, task any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ValidateDaemonTask", reflect.TypeOf((*MockTaskStorage)(nil).ValidateDaemonTask), ctx, task)
 }
 
 // PingContext mocks base method.

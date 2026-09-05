@@ -599,6 +599,16 @@ func (s *memTaskStorage) HeartbeatDaemonTask(ctx context.Context, tasks []task.D
 	return n, nil
 }
 
+func (s *memTaskStorage) ValidateDaemonTask(
+	ctx context.Context,
+	t task.DaemonTask,
+) (bool, error) {
+	s.RLock()
+	defer s.RUnlock()
+	current, ok := s.daemonTasks[t.ID]
+	return ok && current.TaskRunner == t.TaskRunner && current.LastRun.Equal(t.LastRun), nil
+}
+
 func (s *memTaskStorage) nextIDLocked() uint64 {
 	s.id++
 	return s.id

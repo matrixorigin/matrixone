@@ -246,8 +246,10 @@ For an initial snapshot at `S`:
    validate the owner, begin a transaction, send the staged batches, and commit
    without a watermark. Release the lock immediately after that transaction.
 4. The next group repeats collection without retaining the target lock.
-5. At `NoMoreData`, commit the final group, validate ownership again, enqueue a
-   fenced watermark update to `S`, and release the target lock.
+5. At `NoMoreData`, commit the final group, enqueue a fenced watermark update
+   to `S`, and release the target lock. The same single post-lock validation
+   covers this effect interval; the watermark has separate local and durable
+   generation guards.
 6. For an empty snapshot or empty incremental round, enqueue only the fenced
    watermark; no target lock or synchronous taskservice heartbeat is needed.
 
@@ -283,9 +285,11 @@ next durable check.
 The durable column is `timestamp(6)`, and token generation truncates the clock
 to microseconds before applying the strictly-monotonic increment. Both fresh
 bootstrap and the protocol-gated catalog upgrade install that precision. The
-taskservice SQL connection uses matched-row semantics (`CLIENT_FOUND_ROWS`):
-an identical heartbeat still proves ownership, while a different runner or
-generation matches zero rows. No extra read or retry is needed per fence.
+task runner remains the only periodic lease renewer. Effect fencing performs a
+read-only, autocommit lookup for the exact `(task_id, task_runner, last_run)`
+tuple; it neither begins an explicit transaction nor changes `last_heartbeat`.
+A missing row is explicit supersession, while a storage error leaves ownership
+unknown and is retryable.
 
 Claim checks use a five-second timeout. A transient periodic-heartbeat storage
 or network error is not proof of supersession; the runner keeps the generation
@@ -305,9 +309,13 @@ metadata. Other owner-fence backend errors are wrapped as retryable failures.
 
 For each task/table, the sink derives a MySQL-compatible advisory-lock name
 from `(account, task, sink database, sink table)`. It polls `GET_LOCK` in
-one-second intervals, checking pause/cancel and the immutable daemon claim
-before each attempt and again after acquisition. The same pinned target session
-executes the protected DDL or transaction.
+one-second intervals. Before each poll it checks only local context, pause, and
+cancel state, so waiting cannot create task-row traffic and still terminates
+within one poll after a control event. Immediately after acquisition it
+performs exactly one fresh read-only validation of the immutable daemon claim.
+The same pinned target session then executes all protected DDL or one
+transaction; there are no redundant per-statement or pre/post-commit claim
+checks.
 
 The lock is effect-scoped:
 
@@ -320,11 +328,24 @@ The lock is effect-scoped:
   accepted by the updater;
 - close performs idempotent best-effort cleanup.
 
+If `RELEASE_LOCK` returns an ambiguous transport or timeout error, closing a
+`database/sql.Conn` alone is insufficient because it may return the physical
+session to the pool with the user lock still held. The executor marks that
+driver connection bad before close, forcing physical-session discard. A clear
+zero/NULL response means this session owns no lock and needs no such action.
+
 This boundary is deliberate. A taskservice-partitioned old CN that is idle or
 stuck collecting the next source batch owns no target lock, so a replacement is
 not blocked forever. If old SQL is actively in flight, the replacement waits;
 after acquisition it validates its newer claim before any effect. An old waiter
 that wakes later validates its obsolete claim and releases without target work.
+
+If Resume/Restart publishes a replacement on the same CN, an old fence also
+fails an in-process identity check before reaching taskservice. If an old target
+commit was already in flight, `UpdateWatermarkOnly` compares the incoming fence
+with the active local fence and refuses to repopulate cache state cleared by the
+replacement. Cross-CN delayed checkpoints are rejected by the watermark row's
+durable owner-generation predicate.
 
 The lock serializes generations of the same CDC task/table. It does not prevent
 an operator from configuring a different CDC task to write the same physical
@@ -576,7 +597,7 @@ groups.
 | Read or SQL failure before group commit | earlier groups; empty watermark | rollback active group and replay `S` |
 | Crash or ambiguous result after intermediate commit | group may be present; empty watermark | replay `S`; `REPLACE` converges |
 | Source DELETE or PK change during retry | partial snapshot at `S` | replay `S`, then apply `(S, next]` mutation |
-| Final target commit succeeds but owner changed | complete target may exist; no new watermark from old owner | old fence fails, replacement replays `S` |
+| Final target commit succeeds while owner changes | complete target may exist; old buffered watermark is locally or durably fenced | replacement reacquires the lock and replays `S`; its effect is last |
 | Old watermark SQL passes its first check, then stalls across takeover | replacement may be ready to replay | replacement claims the same watermark row before replay; either it observes the old checkpoint first or the old checkpoint loses its owner equality check |
 | Epoch metadata is missing beside current-generation progress | target image is not attributable to a durable epoch | fail before creating an epoch; repeated admission remains rejected |
 | Watermark SQL persistence fails | target committed; fenced value remains retryable | retry async persistence or replay after restart |
@@ -585,7 +606,10 @@ groups.
 | Old owner idle after taskservice partition | no target lock | replacement can acquire lock and old generation fails its next fence |
 | Old owner blocked in target SQL | active transaction and lock | replacement waits; old cleanup releases; replacement revalidates then replays |
 | Old owner waits behind replacement | replacement effect completes first | old post-acquire claim check fails before DDL/DML |
-| Resume/Restart on same runner | old pipelines retain old fence | future pipelines use new token; old effects fail closed |
+| Pause/cancel while waiting for target lock | no target effect from the waiter | local check stops within one one-second poll; pinned connection is released |
+| Owner validation times out or taskservice is unavailable after lock acquisition | no target effect has started | release advisory lock and connection; classify as retryable, not superseded |
+| Advisory-lock release response is lost | server may or may not have released it | clear executor ownership and discard the physical session instead of returning it to the pool |
+| Resume/Restart on same runner | old pipelines retain old fence | local identity check rejects future old effects; delayed old watermark admission is ignored |
 | Transient heartbeat backend error | claim not proven stale | retain local generation and retry heartbeat |
 | Transient owner-fence check error | claim state unknown | retain/retry the operation and buffered watermark; do not publish a permanent table error |
 | Explicit owner-fence loss | obsolete execution generation | clean up local target state and stop without writing shared table `err_msg` |
@@ -599,11 +623,22 @@ For `N` source snapshot batches, target commit count changes from approximately
 grouping threshold creates smaller groups. Compared with a whole-table
 transaction, target transaction state is bounded.
 
-Each non-empty group adds target advisory-lock acquisition/release and daemon
-claim checks. At the #27863 scale this is tens of short control operations over
-a multi-minute scan, not one operation per row or SQL statement. Releasing per
-group is preferred over a pipeline-lifetime lock because it bounds takeover
-wait when source collection stalls.
+Each non-empty group adds target advisory-lock acquisition/release and exactly
+one read-only daemon-claim lookup after lock acquisition. It adds zero daemon
+row writes and no explicit taskservice transaction. At the #27863 snapshot
+scale this is tens of short control operations over a multi-minute scan, not
+one operation per row or SQL statement. Releasing per group is preferred over
+a pipeline-lifetime lock because it bounds takeover wait when source collection
+stalls.
+
+The same rule applies to the incremental tail. With a continuously non-empty
+table at the default 200 ms interval, claim traffic is at most five read-only
+lookups per second per table. The rejected implementation performed four
+heartbeat UPDATE transactions per effect (before/during target lock and
+before/after commit), or about twenty serialized task-row writes per second per
+busy table. For 100 busy tables this removes roughly 2,000 task-row write
+transactions per second and leaves about 500 exact-claim reads. One fresh read
+cannot be removed without weakening the post-takeover stale-waiter guarantee.
 
 Empty polling rounds no longer synchronously heartbeat taskservice per table.
 Fenced watermarks are buffered and one shared claim is checked per active task
@@ -629,6 +664,23 @@ immediately upward and decays gradually; this favors avoiding repeated
 wide-batch oversubscription over maximizing concurrency after a transient wide
 batch.
 
+Validation of the steady-state owner-fence correction on 2026-09-05:
+
+- deterministic 100-effect call-rate coverage observes exactly 100 read-only
+  claim validations, with SQL-mock expectations proving no validation
+  transaction or heartbeat UPDATE;
+- post-acquire stale owner, target-lock wait cancellation, ambiguous lock
+  release, same-CN retired-fence watermark admission, and cross-owner target
+  ordering all pass focused tests;
+- `pkg/cdc`, `pkg/taskservice`, `pkg/frontend`, and `pkg/cnservice` pass their
+  complete normal suites; the first three pass their complete race suites;
+- the focused concurrency/unhappy set passes 100 race repetitions, and scoped
+  golangci-lint reports zero new issues.
+
+These deterministic checks prove operation count and ordering, not production
+network latency. The issue-scale snapshot result below remains the available
+live throughput evidence; no new multi-CN tail benchmark is claimed.
+
 ## Alternatives rejected
 
 - **One transaction for the whole table:** retry-safe but unbounded and ignores
@@ -641,6 +693,12 @@ batch.
   an idle, partitioned, or source-stuck old owner block a replacement forever.
 - **Release the lock before an active transaction finishes:** improves liveness
   by violating target serialization and is therefore unsafe.
+- **Cache owner validation for a local TTL:** lowers read count but is unsafe
+  across CN clock skew. An old owner can retain a locally valid lease, wake
+  after the replacement releases the target lock, and write last.
+- **Use heartbeat UPDATE as the effect check:** proves exact ownership but turns
+  every table effect into a write transaction on the same daemon-task row;
+  heartbeat renewal belongs to the task runner, not the data path.
 - **Hard byte reservation below `collector.Next`:** the next engine batch size
   is unknown. Enforcing it requires a source-side batch-splitting contract,
   which this change does not have.
@@ -687,7 +745,12 @@ Deterministic tests must cover:
   older cleanup that cannot delete a newer anchor and a known-stale detector
   that cannot add another low-generation row;
 - target-lock exclusion, release after every transaction, reacquisition,
-  rollback/error cleanup, and stale waiter rejection;
+  rollback/error cleanup, stale waiter rejection, local cancellation during
+  polling, one owner validation per acquisition, and zero owner validations
+  while the lock is busy;
+- exact read-only task claim matching, no explicit validation transaction,
+  backend-error propagation, and no redundant refreshable-storage ping;
+- same-CN delayed post-commit watermark admission after replacement publication;
 - transient heartbeat retention versus explicit supersession cancellation;
 - legacy atomic fallback, six-column insert compatibility, v47/v48 catalog and
   creation barriers, and old-CN executor rejection.

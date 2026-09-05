@@ -163,19 +163,24 @@ func createMysqlSinker2(
 	// 3. Execute DDL initialization (same as old version)
 	ctx := context.Background()
 	var targetOwnerFence func(context.Context) error
+	var targetWaitCheck func(context.Context) error
 	if ownerFence != nil {
-		targetOwnerFence = func(fenceCtx context.Context) error {
+		targetWaitCheck = func(waitCtx context.Context) error {
+			if err := waitCtx.Err(); err != nil {
+				return err
+			}
 			if ar != nil {
 				select {
 				case <-ar.Pause:
-					return moerr.NewInternalError(fenceCtx, "task paused while waiting for target ownership")
+					return moerr.NewInternalError(waitCtx, "task paused while waiting for target ownership")
 				case <-ar.Cancel:
-					return moerr.NewInternalError(fenceCtx, "task cancelled while waiting for target ownership")
+					return moerr.NewInternalError(waitCtx, "task cancelled while waiting for target ownership")
 				default:
 				}
 			}
-			return ownerFence.Check(fenceCtx)
+			return nil
 		}
+		targetOwnerFence = ownerFence.Check
 		lockIdentity := fmt.Sprintf(
 			"%d\x00%s\x00%s\x00%s",
 			accountId,
@@ -183,7 +188,9 @@ func createMysqlSinker2(
 			dbTblInfo.SinkDbName,
 			dbTblInfo.SinkTblName,
 		)
-		if err = executor.AcquireTargetLock(ctx, lockIdentity, targetOwnerFence); err != nil {
+		if err = executor.AcquireTargetLock(
+			ctx, lockIdentity, targetOwnerFence, targetWaitCheck,
+		); err != nil {
 			executor.Close()
 			return nil, err
 		}
@@ -197,12 +204,6 @@ func createMysqlSinker2(
 
 	// CREATE DATABASE
 	createDbSQL := fmt.Sprintf("CREATE DATABASE IF NOT EXISTS `%s`", dbTblInfo.SinkDbName)
-	if targetOwnerFence != nil {
-		if err = targetOwnerFence(ctx); err != nil {
-			executor.Close()
-			return nil, err
-		}
-	}
 	err = executor.ExecSQL(ctx, ar, addPadding(createDbSQL), false)
 	if err != nil {
 		executor.Close()
@@ -211,12 +212,6 @@ func createMysqlSinker2(
 
 	// USE DATABASE
 	useDbSQL := fmt.Sprintf("USE `%s`", dbTblInfo.SinkDbName)
-	if targetOwnerFence != nil {
-		if err = targetOwnerFence(ctx); err != nil {
-			executor.Close()
-			return nil, err
-		}
-	}
 	err = executor.ExecSQL(ctx, ar, addPadding(useDbSQL), false)
 	if err != nil {
 		executor.Close()
@@ -226,12 +221,6 @@ func createMysqlSinker2(
 	// DROP TABLE if table ID changed (truncate scenario)
 	if dbTblInfo.IdChanged {
 		dropTableSQL := fmt.Sprintf("DROP TABLE IF EXISTS `%s`", dbTblInfo.SinkTblName)
-		if targetOwnerFence != nil {
-			if err = targetOwnerFence(ctx); err != nil {
-				executor.Close()
-				return nil, err
-			}
-		}
 		err = executor.ExecSQL(ctx, ar, addPadding(dropTableSQL), false)
 		if err != nil {
 			executor.Close()
@@ -266,12 +255,6 @@ func createMysqlSinker2(
 		createSql = strings.Replace(createSql, "CREATE TABLE", "CREATE TABLE IF NOT EXISTS", 1)
 	}
 
-	if targetOwnerFence != nil {
-		if err = targetOwnerFence(ctx); err != nil {
-			executor.Close()
-			return nil, err
-		}
-	}
 	err = executor.ExecSQL(ctx, ar, addPadding(createSql), false)
 	if err != nil {
 		executor.Close()

@@ -1991,6 +1991,67 @@ func TestHeartbeatDaemonTaskBranchesInSqlMock(t *testing.T) {
 	})
 }
 
+func TestValidateDaemonTaskIsReadOnlyAndExact(t *testing.T) {
+	ctx := context.Background()
+	claim := newDaemonTaskForTest(1, task.TaskStatus_Running, "runner-1")
+	claim.LastRun = time.Now().UTC().Truncate(time.Microsecond)
+
+	t.Run("matched", func(t *testing.T) {
+		storage, mock := newMockStorage(t)
+		mock.ExpectQuery(validateDaemonTask).
+			WithArgs(claim.ID, claim.TaskRunner, claim.LastRun).
+			WillReturnRows(sqlmock.NewRows([]string{"found"}).AddRow(1))
+		valid, err := storage.ValidateDaemonTask(ctx, claim)
+		require.NoError(t, err)
+		require.True(t, valid)
+		mock.ExpectClose()
+		require.NoError(t, storage.Close())
+		require.NoError(t, mock.ExpectationsWereMet())
+	})
+
+	t.Run("superseded", func(t *testing.T) {
+		storage, mock := newMockStorage(t)
+		mock.ExpectQuery(validateDaemonTask).
+			WithArgs(claim.ID, claim.TaskRunner, claim.LastRun).
+			WillReturnRows(sqlmock.NewRows([]string{"found"}))
+		valid, err := storage.ValidateDaemonTask(ctx, claim)
+		require.NoError(t, err)
+		require.False(t, valid)
+		mock.ExpectClose()
+		require.NoError(t, storage.Close())
+		require.NoError(t, mock.ExpectationsWereMet())
+	})
+
+	t.Run("backend error", func(t *testing.T) {
+		storage, mock := newMockStorage(t)
+		backendErr := errors.New("query failed")
+		mock.ExpectQuery(validateDaemonTask).
+			WithArgs(claim.ID, claim.TaskRunner, claim.LastRun).
+			WillReturnError(backendErr)
+		valid, err := storage.ValidateDaemonTask(ctx, claim)
+		require.ErrorIs(t, err, backendErr)
+		require.False(t, valid)
+		mock.ExpectClose()
+		require.NoError(t, storage.Close())
+		require.NoError(t, mock.ExpectationsWereMet())
+	})
+
+	t.Run("null generation", func(t *testing.T) {
+		storage, mock := newMockStorage(t)
+		withoutGeneration := claim
+		withoutGeneration.LastRun = time.Time{}
+		mock.ExpectQuery(validateDaemonTask).
+			WithArgs(claim.ID, claim.TaskRunner, nil).
+			WillReturnRows(sqlmock.NewRows([]string{"found"}).AddRow(1))
+		valid, err := storage.ValidateDaemonTask(ctx, withoutGeneration)
+		require.NoError(t, err)
+		require.True(t, valid)
+		mock.ExpectClose()
+		require.NoError(t, storage.Close())
+		require.NoError(t, mock.ExpectationsWereMet())
+	})
+}
+
 func TestAddCDCTaskBranchesInSqlMock(t *testing.T) {
 	ctx := context.Background()
 	d := newCdcInfo(t)

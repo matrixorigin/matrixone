@@ -596,6 +596,8 @@ func TestRefreshTaskStorageErrNotReadyBranches(t *testing.T) {
 	require.ErrorIs(t, err, ErrNotReady)
 	_, err = s.HeartbeatDaemonTask(ctx, []task.DaemonTask{newTestDaemonTask(1, "d3")})
 	require.ErrorIs(t, err, ErrNotReady)
+	_, err = s.ValidateDaemonTask(ctx, newTestDaemonTask(1, "d3"))
+	require.ErrorIs(t, err, ErrNotReady)
 	_, err = s.AddSQLTask(ctx, newTestSQLTask("task-1", 1))
 	require.ErrorIs(t, err, ErrNotReady)
 	_, err = s.UpdateSQLTask(ctx, []SQLTask{newTestSQLTask("task-2", 1)})
@@ -646,8 +648,10 @@ func (f taskStorageFactoryFunc) Create(address string) (TaskStorage, error) {
 
 type trackedTaskStorage struct {
 	TaskStorage
-	closeCount atomic.Int64
-	closeErr   error
+	closeCount    atomic.Int64
+	pingCount     atomic.Int64
+	validateCount atomic.Int64
+	closeErr      error
 }
 
 func newTrackedTaskStorage() *trackedTaskStorage {
@@ -658,4 +662,41 @@ func (s *trackedTaskStorage) Close() error {
 	s.closeCount.Add(1)
 	_ = s.TaskStorage.Close()
 	return s.closeErr
+}
+
+func (s *trackedTaskStorage) PingContext(ctx context.Context) error {
+	s.pingCount.Add(1)
+	return s.TaskStorage.PingContext(ctx)
+}
+
+func (s *trackedTaskStorage) ValidateDaemonTask(
+	ctx context.Context, claim task.DaemonTask,
+) (bool, error) {
+	s.validateCount.Add(1)
+	return s.TaskStorage.ValidateDaemonTask(ctx, claim)
+}
+
+func TestRefreshTaskStorageValidationDoesNotDoubleRoundTrip(t *testing.T) {
+	defer leaktest.AfterTest(t)()
+	ctx := context.Background()
+	store := newTrackedTaskStorage()
+	claim := newTestDaemonTask(1, "claim")
+	claim.TaskRunner = "runner-1"
+	claim.LastRun = time.Now().UTC().Truncate(time.Microsecond)
+	_, err := store.AddDaemonTask(ctx, claim)
+	require.NoError(t, err)
+
+	refreshable := newRefreshableTaskStorage(
+		runtime.DefaultRuntime(),
+		func(context.Context, bool) (string, error) { return "s1", nil },
+		&testStorageFactory{stores: map[string]TaskStorage{"s1": store}},
+	).(*refreshableTaskStorage)
+	defer func() { require.NoError(t, refreshable.Close()) }()
+
+	valid, err := refreshable.ValidateDaemonTask(ctx, claim)
+	require.NoError(t, err)
+	require.True(t, valid)
+	require.Equal(t, int64(1), store.validateCount.Load())
+	require.Zero(t, store.pingCount.Load(),
+		"validation is already a database round trip and must not be preceded by ping")
 }

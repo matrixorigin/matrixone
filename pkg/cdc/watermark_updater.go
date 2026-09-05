@@ -1897,6 +1897,15 @@ func (u *CDCWatermarkUpdater) UpdateWatermarkOnly(
 		return moerr.NewInternalErrorNoCtx(
 			"owner-fenced CDC watermark update requires a durable owner generation")
 	}
+	// A same-process restart can publish a replacement fence while the retired
+	// pipeline is finishing a target commit. Do not let that delayed completion
+	// repopulate local progress after ClaimWatermarkOwner cleared it. Cross-CN
+	// stale writes are independently rejected by the durable SQL owner fence.
+	if fenced && incomingFence != nil {
+		if active := u.activeWatermarkFence[*key]; active != nil && active != incomingFence {
+			return nil
+		}
+	}
 	if fenced && incomingFence != nil && !u.shouldBufferStableWatermarkLocked(
 		*key, *watermark, incomingGeneration, incomingFence) {
 		return nil

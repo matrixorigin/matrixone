@@ -686,9 +686,18 @@ func (exec *CDCTaskExecutor) UpdateDaemonTaskClaim(claim task.DaemonTask) {
 	var fence *cdc.OwnerFence
 	if service != nil {
 		fence = cdc.NewOwnerFenceForGeneration(claimCopy.LastRun, func(ctx context.Context) error {
+			// Resume/Restart on this CN publishes a new immutable fence before
+			// starting replacement work. Reject a delayed old pipeline locally,
+			// including the rare case where durable timestamps compare equal.
+			exec.claimMu.RLock()
+			current := exec.claimFence
+			exec.claimMu.RUnlock()
+			if current != fence {
+				return moerr.NewInvalidTask(ctx, claimCopy.TaskRunner, claimCopy.ID)
+			}
 			fenceCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
 			defer cancel()
-			return service.HeartbeatDaemonTask(fenceCtx, claimCopy)
+			return service.ValidateDaemonTask(fenceCtx, claimCopy)
 		})
 	}
 	exec.claimTask = &claimCopy

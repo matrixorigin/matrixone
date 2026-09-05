@@ -1742,6 +1742,31 @@ func TestCDCWatermarkUpdaterOrdersProgressByGenerationBeforeTimestamp(t *testing
 	require.Equal(t, uint64(12), updater.cacheUncommittedGeneration[*key])
 }
 
+func TestCDCWatermarkUpdaterRejectsRetiredSameProcessOwnerAfterCommit(t *testing.T) {
+	updater := NewCDCWatermarkUpdater(t.Name(), &retryableMockExecutor{})
+	key := &WatermarkKey{AccountId: 1, TaskId: "task", DBName: "db", TableName: "tbl"}
+	oldFence := NewOwnerFenceForGeneration(time.Unix(100, 0), func(context.Context) error { return nil })
+	newFence := NewOwnerFenceForGeneration(time.Unix(200, 0), func(context.Context) error { return nil })
+
+	updater.Lock()
+	require.True(t, updater.activateWatermarkFenceLocked(*key, oldFence))
+	require.True(t, updater.activateWatermarkFenceLocked(*key, newFence))
+	updater.Unlock()
+
+	// The old target commit may finish after same-CN Resume/Restart published
+	// the new fence. It must not recreate local progress that takeover cleared.
+	stale := types.BuildTS(200, 0)
+	require.NoError(t, updater.UpdateWatermarkOnly(
+		WithWatermarkOwnerFence(context.Background(), oldFence, 12), key, &stale))
+	require.NotContains(t, updater.cacheUncommitted, *key)
+
+	fresh := types.BuildTS(100, 0)
+	require.NoError(t, updater.UpdateWatermarkOnly(
+		WithWatermarkOwnerFence(context.Background(), newFence, 12), key, &fresh))
+	require.Equal(t, fresh, updater.cacheUncommitted[*key])
+	require.Same(t, newFence, updater.cacheUncommittedFence[*key])
+}
+
 func TestCDCWatermarkUpdaterRejectsOwnerFenceWithoutSourceGeneration(t *testing.T) {
 	updater := NewCDCWatermarkUpdater(t.Name(), &retryableMockExecutor{})
 	key := &WatermarkKey{AccountId: 1, TaskId: "task", DBName: "db", TableName: "tbl"}

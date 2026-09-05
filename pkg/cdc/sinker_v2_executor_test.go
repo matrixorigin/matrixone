@@ -20,6 +20,7 @@ import (
 	"database/sql/driver"
 	"encoding/binary"
 	"errors"
+	"fmt"
 	"io"
 	"net"
 	"strconv"
@@ -284,8 +285,9 @@ func TestExecutorTargetOwnershipLock(t *testing.T) {
 			context.Background(),
 			"account/task/db/table",
 			func(context.Context) error { checks++; return nil },
+			nil,
 		))
-		require.Equal(t, 2, checks)
+		require.Equal(t, 1, checks)
 		require.NotNil(t, executor.targetLockConn)
 
 		mock.ExpectBegin()
@@ -309,7 +311,7 @@ func TestExecutorTargetOwnershipLock(t *testing.T) {
 			WithArgs(sqlmock.AnyArg()).
 			WillReturnRows(sqlmock.NewRows([]string{"released"}).AddRow(1))
 		require.NoError(t, executor.RollbackTx(context.Background()))
-		require.Equal(t, 4, checks)
+		require.Equal(t, 2, checks)
 
 		mock.ExpectClose()
 		require.NoError(t, executor.Close())
@@ -328,23 +330,102 @@ func TestExecutorTargetOwnershipLock(t *testing.T) {
 			WithArgs(sqlmock.AnyArg()).
 			WillReturnRows(sqlmock.NewRows([]string{"released"}).AddRow(1))
 		mock.ExpectClose()
-		checks := 0
 		err = executor.AcquireTargetLock(
 			context.Background(),
 			"account/task/db/table",
 			func(ctx context.Context) error {
-				checks++
-				if checks == 2 {
-					return moerr.NewInvalidTask(ctx, "old-owner", 1)
-				}
-				return nil
+				return moerr.NewInvalidTask(ctx, "old-owner", 1)
 			},
+			nil,
 		)
 		require.Error(t, err)
 		require.Nil(t, executor.targetLockConn)
 		require.NoError(t, executor.Close())
 		require.NoError(t, mock.ExpectationsWereMet())
 	})
+
+	t.Run("cancelled waiter stops without remote validation", func(t *testing.T) {
+		db, mock, err := sqlmock.New()
+		require.NoError(t, err)
+		executor := &Executor{conn: db}
+
+		mock.ExpectQuery("SELECT GET_LOCK").
+			WithArgs(sqlmock.AnyArg(), targetLockPollSeconds).
+			WillReturnRows(sqlmock.NewRows([]string{"acquired"}).AddRow(0))
+		mock.ExpectQuery("SELECT RELEASE_LOCK").
+			WithArgs(sqlmock.AnyArg()).
+			WillReturnRows(sqlmock.NewRows([]string{"released"}).AddRow(0))
+		mock.ExpectClose()
+		waitChecks := 0
+		ownerChecks := 0
+		err = executor.AcquireTargetLock(
+			context.Background(),
+			"account/task/db/table",
+			func(context.Context) error { ownerChecks++; return nil },
+			func(ctx context.Context) error {
+				waitChecks++
+				if waitChecks == 2 {
+					return context.Canceled
+				}
+				return nil
+			},
+		)
+		require.ErrorIs(t, err, context.Canceled)
+		require.Equal(t, 2, waitChecks)
+		require.Zero(t, ownerChecks)
+		require.Nil(t, executor.targetLockConn)
+		require.NoError(t, executor.Close())
+		require.NoError(t, mock.ExpectationsWereMet())
+	})
+
+	t.Run("ambiguous release discards the pinned session", func(t *testing.T) {
+		db, mock, err := sqlmock.New()
+		require.NoError(t, err)
+		executor := &Executor{conn: db}
+
+		mock.ExpectQuery("SELECT GET_LOCK").
+			WithArgs(sqlmock.AnyArg(), targetLockPollSeconds).
+			WillReturnRows(sqlmock.NewRows([]string{"acquired"}).AddRow(1))
+		require.NoError(t, executor.AcquireTargetLock(
+			context.Background(), "account/task/db/table",
+			func(context.Context) error { return nil }, nil,
+		))
+		releaseErr := errors.New("release response lost")
+		mock.ExpectQuery("SELECT RELEASE_LOCK").
+			WithArgs(sqlmock.AnyArg()).
+			WillReturnError(releaseErr)
+		require.ErrorIs(t, executor.ReleaseTargetLock(), releaseErr)
+		require.Nil(t, executor.targetLockConn)
+
+		require.NoError(t, executor.Close())
+		require.NoError(t, mock.ExpectationsWereMet())
+	})
+}
+
+func TestExecutorTargetOwnerValidationCallRate(t *testing.T) {
+	const effects = 100
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	executor := &Executor{conn: db}
+	ownerChecks := 0
+	for i := 0; i < effects; i++ {
+		mock.ExpectQuery("SELECT GET_LOCK").
+			WithArgs(sqlmock.AnyArg(), targetLockPollSeconds).
+			WillReturnRows(sqlmock.NewRows([]string{"acquired"}).AddRow(1))
+		require.NoError(t, executor.AcquireTargetLock(
+			context.Background(), fmt.Sprintf("account/task/db/table-%d", i),
+			func(context.Context) error { ownerChecks++; return nil }, nil,
+		))
+		mock.ExpectQuery("SELECT RELEASE_LOCK").
+			WithArgs(sqlmock.AnyArg()).
+			WillReturnRows(sqlmock.NewRows([]string{"released"}).AddRow(1))
+		require.NoError(t, executor.ReleaseTargetLock())
+	}
+	require.Equal(t, effects, ownerChecks,
+		"steady-state effect count must equal read-only claim validation count")
+	mock.ExpectClose()
+	require.NoError(t, executor.Close())
+	require.NoError(t, mock.ExpectationsWereMet())
 }
 
 func TestTargetOwnershipSerializesBlockedOldCommitAndTakeover(t *testing.T) {
@@ -359,7 +440,7 @@ func TestTargetOwnershipSerializesBlockedOldCommitAndTakeover(t *testing.T) {
 		WithArgs(sqlmock.AnyArg(), targetLockPollSeconds).
 		WillReturnRows(sqlmock.NewRows([]string{"acquired"}).AddRow(1))
 	require.NoError(t, oldExec.AcquireTargetLock(
-		context.Background(), "same-task-table", func(context.Context) error { return nil }))
+		context.Background(), "same-task-table", func(context.Context) error { return nil }, nil))
 	oldMock.ExpectBegin()
 	require.NoError(t, oldExec.BeginTx(context.Background()))
 	oldMock.ExpectExec("fakeSql").WillReturnResult(sqlmock.NewResult(0, 1))
@@ -377,6 +458,7 @@ func TestTargetOwnershipSerializesBlockedOldCommitAndTakeover(t *testing.T) {
 		WillReturnRows(sqlmock.NewRows([]string{"acquired"}).AddRow(1))
 	newWaiting := make(chan struct{})
 	oldReleased := make(chan struct{})
+	var newWaitChecks atomic.Int32
 	var newFenceCalls atomic.Int32
 	newAcquireDone := make(chan error, 1)
 	go func() {
@@ -384,7 +466,11 @@ func TestTargetOwnershipSerializesBlockedOldCommitAndTakeover(t *testing.T) {
 			context.Background(),
 			"same-task-table",
 			func(context.Context) error {
-				if newFenceCalls.Add(1) == 2 {
+				newFenceCalls.Add(1)
+				return nil
+			},
+			func(context.Context) error {
+				if newWaitChecks.Add(1) == 2 {
 					close(newWaiting)
 					<-oldReleased
 				}
@@ -425,6 +511,8 @@ func TestTargetOwnershipSerializesBlockedOldCommitAndTakeover(t *testing.T) {
 	require.NoError(t, newExec.Close())
 
 	require.Equal(t, map[string]struct{}{"replacement-key": {}}, target)
+	require.Equal(t, int32(1), newFenceCalls.Load(),
+		"lock polling must not multiply remote owner validations")
 	require.NoError(t, oldMock.ExpectationsWereMet())
 	require.NoError(t, newMock.ExpectationsWereMet())
 }

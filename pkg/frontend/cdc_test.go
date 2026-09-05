@@ -567,7 +567,7 @@ type testTaskService struct {
 	heartbeatDaemonTaskFn func(context.Context, task.DaemonTask) error
 }
 
-func TestDaemonClaimFenceIsImmutableAcrossGenerationUpdate(t *testing.T) {
+func TestDaemonClaimFenceRejectsRetiredLocalGeneration(t *testing.T) {
 	var (
 		mu   sync.Mutex
 		seen []time.Time
@@ -593,9 +593,10 @@ func TestDaemonClaimFenceIsImmutableAcrossGenerationUpdate(t *testing.T) {
 
 	require.NotSame(t, firstFence, secondFence)
 	require.Same(t, secondFence, exec.currentDaemonClaimFence())
-	require.NoError(t, firstFence.Check(context.Background()))
+	require.True(t, cdc.IsOwnerFenceLostError(firstFence.Check(context.Background())))
 	require.NoError(t, secondFence.Check(context.Background()))
-	require.Equal(t, []time.Time{first.LastRun, second.LastRun}, seen)
+	require.Equal(t, []time.Time{second.LastRun}, seen,
+		"retired local generations must fail before a taskservice round trip")
 }
 
 func TestClassifyStableSnapshotRestart(t *testing.T) {
@@ -827,6 +828,13 @@ func (ts *testTaskService) UpdateDaemonTaskStatus(
 }
 
 func (ts *testTaskService) HeartbeatDaemonTask(ctx context.Context, task task.DaemonTask) error {
+	if ts.heartbeatDaemonTaskFn != nil {
+		return ts.heartbeatDaemonTaskFn(ctx, task)
+	}
+	panic("implement me")
+}
+
+func (ts *testTaskService) ValidateDaemonTask(ctx context.Context, task task.DaemonTask) error {
 	if ts.heartbeatDaemonTaskFn != nil {
 		return ts.heartbeatDaemonTaskFn(ctx, task)
 	}

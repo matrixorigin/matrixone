@@ -371,6 +371,17 @@ func (s *taskService) HeartbeatDaemonTask(ctx context.Context, t task.DaemonTask
 	return nil
 }
 
+func (s *taskService) ValidateDaemonTask(ctx context.Context, t task.DaemonTask) error {
+	valid, err := s.store.ValidateDaemonTask(ctx, t)
+	if err != nil {
+		return err
+	}
+	if !valid {
+		return moerr.NewInvalidTask(ctx, t.TaskRunner, t.ID)
+	}
+	return nil
+}
+
 func (s *taskService) TruncateCompletedTasks(ctx context.Context) error {
 	_, err := s.store.DeleteAsyncTask(ctx, WithTaskStatusCond(task.TaskStatus_Completed))
 	return err

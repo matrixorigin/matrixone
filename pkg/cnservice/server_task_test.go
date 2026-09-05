@@ -282,6 +282,11 @@ func (ts *testTS) HeartbeatDaemonTask(ctx context.Context, task task.DaemonTask)
 	panic("implement me")
 }
 
+func (ts *testTS) ValidateDaemonTask(ctx context.Context, task task.DaemonTask) error {
+	//TODO implement me
+	panic("implement me")
+}
+
 func (ts *testTS) StartScheduleCronTask() {
 }
 

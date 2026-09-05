@@ -207,9 +207,11 @@ func (s *recordingSinker) ClearError() {
 
 // mockWatermarkUpdater for testing
 type mockWatermarkUpdater struct {
-	watermarks      map[string]types.TS
-	updateCalled    bool
-	getFromCacheErr error
+	watermarks             map[string]types.TS
+	updateCalled           bool
+	updateOwnerFence       *OwnerFence
+	updateSourceGeneration uint64
+	getFromCacheErr        error
 }
 
 func newMockWatermarkUpdater() *mockWatermarkUpdater {
@@ -249,6 +251,8 @@ func (m *mockWatermarkUpdater) GetOrAddCommitted(ctx context.Context, key *Water
 
 func (m *mockWatermarkUpdater) UpdateWatermarkOnly(ctx context.Context, key *WatermarkKey, watermark *types.TS) error {
 	m.updateCalled = true
+	m.updateOwnerFence, _ = ctx.Value(watermarkOwnerFenceContextKey{}).(*OwnerFence)
+	m.updateSourceGeneration, _ = ctx.Value(watermarkSourceTableIDContextKey{}).(uint64)
 	m.watermarks[m.keyString(key)] = *watermark
 	return nil
 }
@@ -413,40 +417,27 @@ func TestTransactionManager_CommitPropagatesTargetReleaseFailure(t *testing.T) {
 	require.True(t, tm.GetTracker().NeedsRollback())
 }
 
-func TestTransactionManagerOwnerFence(t *testing.T) {
+func TestTransactionManagerCarriesOwnerFenceToWatermark(t *testing.T) {
 	ctx := context.Background()
-
-	t.Run("takeover before commit blocks target", func(t *testing.T) {
-		sinker := &mockSinker{}
-		updater := newMockWatermarkUpdater()
-		tm := NewTransactionManager(sinker, updater, 1, "task1", "db1", "table1")
-		tm.SetOwnerFence(NewOwnerFence(func(fenceCtx context.Context) error {
-			return moerr.NewInvalidTask(fenceCtx, "old-owner", 1)
-		}))
-		require.NoError(t, tm.BeginTransaction(ctx, types.TS{}, types.BuildTS(2, 0)))
-		require.Error(t, tm.CommitTransaction(ctx))
-		require.False(t, sinker.commitCalled)
-		require.False(t, updater.updateCalled)
+	sinker := &mockSinker{}
+	updater := newMockWatermarkUpdater()
+	tm := NewTransactionManager(sinker, updater, 1, "task1", "db1", "table1")
+	checks := 0
+	fence := NewOwnerFenceForGeneration(time.UnixMicro(1), func(context.Context) error {
+		checks++
+		return nil
 	})
-
-	t.Run("takeover during commit blocks watermark", func(t *testing.T) {
-		sinker := &mockSinker{}
-		updater := newMockWatermarkUpdater()
-		tm := NewTransactionManager(sinker, updater, 1, "task1", "db1", "table1")
-		checks := 0
-		tm.SetOwnerFence(NewOwnerFence(func(fenceCtx context.Context) error {
-			checks++
-			if checks == 2 {
-				return moerr.NewInvalidTask(fenceCtx, "old-owner", 1)
-			}
-			return nil
-		}))
-		require.NoError(t, tm.BeginTransaction(ctx, types.TS{}, types.BuildTS(2, 0)))
-		require.Error(t, tm.CommitTransaction(ctx))
-		require.True(t, sinker.commitCalled)
-		require.False(t, updater.updateCalled)
-		require.True(t, sinker.releaseCalled)
-	})
+	tm.SetOwnerFence(fence)
+	tm.SetWatermarkGeneration(12)
+	require.NoError(t, tm.BeginTransaction(ctx, types.TS{}, types.BuildTS(2, 0)))
+	require.NoError(t, tm.CommitTransaction(ctx))
+	require.True(t, sinker.commitCalled)
+	require.True(t, updater.updateCalled)
+	require.Same(t, fence, updater.updateOwnerFence)
+	require.Equal(t, uint64(12), updater.updateSourceGeneration)
+	require.True(t, sinker.releaseCalled)
+	require.Zero(t, checks,
+		"target-lock acquisition owns synchronous validation; commit must not add hot-path checks")
 }
 
 func TestTransactionManager_CommitTransaction_WithoutBegin(t *testing.T) {
