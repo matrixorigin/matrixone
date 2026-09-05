@@ -286,10 +286,11 @@ in full. Post-load charging cannot bound that: by then the memory is spent.
 ivfflat was that shape. Its estimate now comes from the configuration, which names
 every factor: `Lists × Dimensions` elements of the centroid element type, plus the
 slice header `GoBruteForceIndex` keeps per centroid row. It is charged to the arena
-the load will actually use — `NewBruteForceIndex` sends float32 centroids to cuVS
-when the effective GPU mode is on, so the same estimate becomes device bytes there
-and host bytes otherwise. The products are overflow-checked rather than wrapped,
-and the exact figure replaces the estimate at `chargeAndEnforce`.
+the load will actually use — the build-tagged `NewBruteForceIndex` dispatch sends
+float32 centroids to cuVS only when the GPU build is present and effective GPU mode
+is on, so the same estimate becomes device bytes there and host bytes otherwise.
+The products are overflow-checked rather than wrapped, and the exact figure replaces
+the estimate at `chargeAndEnforce`.
 
 #### Choosing a victim is a claim, not a check
 
