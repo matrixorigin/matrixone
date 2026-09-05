@@ -64,6 +64,7 @@ where table_schema = ? and table_name = 'child'
   and column_name in ('id', 'pid', 'c_dec', 'c_char', 'c_varchar', 'c_time', 'c_datetime', 'c_timestamp')
 order by ordinal_position`, schemaName)
 		require.NoError(t, err)
+		defer func() { require.NoError(t, rows.Close()) }()
 		metadata := make(map[string][4]sql.NullInt64)
 		for rows.Next() {
 			var name string
@@ -72,7 +73,6 @@ order by ordinal_position`, schemaName)
 			metadata[name] = [4]sql.NullInt64{characterLength, numericPrecision, numericScale, datetimePrecision}
 		}
 		require.NoError(t, rows.Err())
-		require.NoError(t, rows.Close())
 		type columnMetadata struct {
 			values [4]int64
 			valid  [4]bool
