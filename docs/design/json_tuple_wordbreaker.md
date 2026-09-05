@@ -459,9 +459,9 @@ allowed to be slightly stale. fulltext2 is maintained asynchronously by ISCP: a
 row written inside the maintenance lag satisfies the predicate but has no
 posting yet, so an unconditional probe would silently drop it.
 
-The optimizer therefore asks, per query, whether the index's durable state has
-reached the read snapshot, and injects the probe only if the answer is a
-definite yes:
+The optimizer therefore asks, per query, whether the index's durable watermark
+has reached the read snapshot (lowered by a configurable delay; § 10.2), and
+injects the probe only if the answer is a definite yes:
 
 - `pkg/indexplugin/coverage` — `Request` (CN, txn, base table id, index, snapshot)
   and a one-method `Hooks`. It is an **optional** capability in the shape of
@@ -505,32 +505,22 @@ silently cap the faster class. Measured on a live cluster, an idle indexed
 table's persisted watermark now advances every ~10s (the executor's poll
 cadence) instead of hourly.
 
-### 10.2 Remaining gap: the comparison, not the cadence
+### 10.2 The comparison: a bounded delay
 
-A fresh watermark is necessary but not sufficient, and the reason is structural
-rather than a tuning problem. The gate asks `watermark >= snapshot`, and an
-asynchronous consumer's watermark **trails** the present by construction: at any
-flush interval, a query reading at `now` sees a watermark from one poll cycle
-ago and declines. Shortening the interval moves the lag from an hour to seconds
-but never to zero, so the probe still stays off for a live query. (It does fire
-for a read whose snapshot is older than the watermark — an explicit past
-`AS OF TIMESTAMP`, or a long-running transaction.)
+An asynchronous consumer's watermark trails the present by construction: a query
+reading at `now` sees a watermark from at most one poll-plus-flush cycle ago, so a
+strict `watermark >= snapshot` never holds for a current read. The gate compares
+the watermark against the snapshot lowered by a delay:
 
-What actually licenses the probe is weaker than what is currently asked:
+    covered  ⟺  watermark >= snapshot - delay
 
-    covered  ⟺  no base-table change exists in (watermark, snapshot]
-
-and the clean-table watermark already means "verified no changes up to W", so
-the window left to check is only the last poll cycle. Answering it needs a
-per-table "did this change after W?" query. `disttae.GetChangedTableList` is
-exactly that primitive — it is what ISCP itself polls with — but calling it from
-the planner costs a round trip per planned query. The cheaper shape is to answer
-from the CN's own partition state, which is authoritative for what is visible at
-the read snapshot and needs no RPC; it has no ready-made "max change timestamp"
-accessor today.
-
-Until that half is built, the protocol is in place, the watermark it reads is
-fresh, and the gate is safe — it declines rather than dropping rows.
+`delay` is the `fulltext_index_scan_watermark_delay` session variable (seconds),
+default `2 * (DefaultSyncTaskInterval + DefaultIndexFlushWatermarkInterval)` (twice
+the ISCP poll tick plus the index watermark-flush interval). `QueryBuilder.indexCoversSnapshot`
+reads the variable and lowers the snapshot before calling `CoversSnapshot`, which
+does the `watermark >= (lowered snapshot)` comparison. `delay = 0` restores the
+strict gate; a larger value tolerates a longer maintenance lag. The original
+json_extract predicate is retained and re-evaluated on every row the probe returns.
 
 ## 11. Range probes
 

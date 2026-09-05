@@ -18,6 +18,7 @@ import (
 	"encoding/json"
 	"math"
 	"strings"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/container/bytejson"
 
@@ -346,20 +347,11 @@ func (builder *QueryBuilder) addJSONFulltextProbes(scanNode *plan.Node) {
 	}
 }
 
-// indexCoversSnapshot reports whether idx may be used as a MANDATORY filter for
-// this query.
-//
-// A synchronously maintained index always may: its hidden tables move with the
-// source DML. An ASYNC one may not by default — its postings trail the base
-// table, so a row written inside the maintenance lag satisfies the retained
-// predicate but has no posting, and the ANDed probe would remove it before the
-// predicate ever ran. That is a wrong answer, not a stale score.
-//
-// For an async index the algorithm is asked, through the optional coverage
-// capability, whether its durable state has reached this query's read snapshot.
-// Everything here FAILS CLOSED: no plugin capability, no process, no
-// transaction, a lookup error, or a watermark behind the snapshot all decline
-// the probe and leave the query to the retained predicate alone.
+// indexCoversSnapshot reports whether idx may back a mandatory probe. A
+// synchronous index always may. An async index is checked via the coverage hook
+// against the read snapshot lowered by the fulltext_index_scan_watermark_delay
+// session variable. Returns false on nil builder/compCtx/process/transaction or a
+// lookup error.
 func (builder *QueryBuilder) indexCoversSnapshot(scanNode *plan.Node, idx *plan.IndexDef) bool {
 	algo := catalog.ToLower(idx.IndexAlgo)
 	if !indexplugin.AlwaysAsync(algo, idx.IndexAlgoParams) {
@@ -376,20 +368,43 @@ func (builder *QueryBuilder) indexCoversSnapshot(scanNode *plan.Node, idx *plan.
 	if txn == nil {
 		return false
 	}
-	covered, err := indexplugin.CoversSnapshot(proc.Ctx, algo, coverage.Request{
+	bar := asyncCoverageBar(types.TimestampToTS(txn.SnapshotTS()), builder.fulltextIndexScanDelay())
+	// proc.Ctx is canceled during planning; use the top context.
+	covered, err := indexplugin.CoversSnapshot(proc.GetTopContext(), algo, coverage.Request{
 		CNUUID:   proc.GetService(),
 		Txn:      txn,
 		TableID:  scanNode.TableDef.TblId,
 		IndexDef: idx,
-		Snapshot: types.TimestampToTS(txn.SnapshotTS()),
+		Snapshot: bar,
 	})
 	if err != nil {
-		// a freshness check that cannot answer is not a query error; it just
-		// means no acceleration
 		logutil.Debugf("json index probe: coverage check failed for %s: %v", idx.IndexName, err)
 		return false
 	}
 	return covered
+}
+
+// fulltextIndexScanDelay returns the fulltext_index_scan_watermark_delay session
+// variable as a duration; 0 on a resolve error or unexpected type.
+func (builder *QueryBuilder) fulltextIndexScanDelay() time.Duration {
+	v, err := builder.compCtx.ResolveVariable("fulltext_index_scan_watermark_delay", true, false)
+	if err != nil {
+		return 0
+	}
+	secs, ok := v.(int64)
+	if !ok {
+		return 0
+	}
+	return time.Duration(secs) * time.Second
+}
+
+// asyncCoverageBar lowers ts by delay. Underflow clamps to ts.
+func asyncCoverageBar(ts types.TS, delay time.Duration) types.TS {
+	p := ts.Physical() - int64(delay)
+	if p <= 0 || p >= ts.Physical() {
+		return ts
+	}
+	return types.BuildTS(p, ts.Logical())
 }
 
 // findJSONTupleIndex returns the fulltext2 index over exactly colPos whose

@@ -153,6 +153,7 @@ func (m *MockCompilerContext) ResolveVariable(varName string, isSystemVar, isGlo
 	vars["foreign_key_checks"] = int64(1)
 	vars["sort_spill_mem"] = int64(0)
 	vars["lower_case_table_names"] = int64(1)
+	vars["fulltext_index_scan_watermark_delay"] = int64(30)
 
 	// Vector-index build/search variables (resolved by the hnsw/ivf/ivfpq/cagra
 	// plugin DDL and search paths).
