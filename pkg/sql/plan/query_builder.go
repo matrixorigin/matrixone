@@ -22,6 +22,7 @@ import (
 	"maps"
 	"reflect"
 	"slices"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -10799,7 +10800,7 @@ func formatSelectExpressionHeading(expr tree.Expr) (string, headingProvenance) {
 		expr = paren.Expr
 	}
 	heading := tree.String(expr, dialect.MYSQL)
-	if !containsDateTimeFormatHeading(heading) {
+	if !containsDateTimeFormatExpr(expr) {
 		return heading, headingProvenance{}
 	}
 
@@ -10807,64 +10808,304 @@ func formatSelectExpressionHeading(expr tree.Expr) (string, headingProvenance) {
 	return formatted, captureHeadingProvenance(expr, formatted)
 }
 
-func containsDateTimeFormatHeading(heading string) bool {
-	return containsASCIIInsensitive(heading, "date_format(") ||
-		containsASCIIInsensitive(heading, "time_format(")
-}
-
-func containsASCIIInsensitive(value, needle string) bool {
-	if len(needle) == 0 || len(needle) > len(value) {
+func isDateTimeFormatFunc(expr *tree.FuncExpr) bool {
+	if expr == nil || expr.FuncName == nil {
 		return false
 	}
-	for i := 0; i <= len(value)-len(needle); i++ {
-		matched := true
-		for j := range needle {
-			left, right := value[i+j], needle[j]
-			if left >= 'A' && left <= 'Z' {
-				left += 'a' - 'A'
-			}
-			if right >= 'A' && right <= 'Z' {
-				right += 'a' - 'A'
-			}
-			if left != right {
-				matched = false
-				break
-			}
-		}
-		if matched {
+	name := expr.FuncName.Origin()
+	return strings.EqualFold(name, "date_format") || strings.EqualFold(name, "time_format")
+}
+
+// containsDateTimeFormatExpr looks for actual DATE_FORMAT/TIME_FORMAT AST
+// calls.  It deliberately does not use Expr.Accept: a few legal expression
+// nodes (for example IntervalExpr, VarExpr, ExprList and Subquery) still have
+// intentionally unimplemented Accept methods.  Keeping this walk local also
+// avoids treating a string literal that merely contains "DATE_FORMAT(" as a
+// format call.
+func containsDateTimeFormatExpr(expr tree.Expr) bool {
+	if expr == nil {
+		return false
+	}
+
+	switch node := expr.(type) {
+	case *tree.FuncExpr:
+		if isDateTimeFormatFunc(node) {
 			return true
 		}
+		for _, child := range node.Exprs {
+			if containsDateTimeFormatExpr(child) {
+				return true
+			}
+		}
+		for _, order := range node.OrderBy {
+			if order != nil && containsDateTimeFormatExpr(order.Expr) {
+				return true
+			}
+		}
+		if node.WindowSpec != nil {
+			for _, child := range node.WindowSpec.PartitionBy {
+				if containsDateTimeFormatExpr(child) {
+					return true
+				}
+			}
+			for _, order := range node.WindowSpec.OrderBy {
+				if order != nil && containsDateTimeFormatExpr(order.Expr) {
+					return true
+				}
+			}
+			if node.WindowSpec.Frame != nil {
+				for _, bound := range []*tree.FrameBound{
+					node.WindowSpec.Frame.Start,
+					node.WindowSpec.Frame.End,
+				} {
+					if bound != nil && containsDateTimeFormatExpr(bound.Expr) {
+						return true
+					}
+				}
+			}
+		}
+	case *tree.BinaryExpr:
+		return containsDateTimeFormatExpr(node.Left) || containsDateTimeFormatExpr(node.Right)
+	case *tree.UnaryExpr:
+		return containsDateTimeFormatExpr(node.Expr)
+	case *tree.ComparisonExpr:
+		return containsDateTimeFormatExpr(node.Left) ||
+			containsDateTimeFormatExpr(node.Right) ||
+			containsDateTimeFormatExpr(node.Escape)
+	case *tree.AndExpr:
+		return containsDateTimeFormatExpr(node.Left) || containsDateTimeFormatExpr(node.Right)
+	case *tree.XorExpr:
+		return containsDateTimeFormatExpr(node.Left) || containsDateTimeFormatExpr(node.Right)
+	case *tree.OrExpr:
+		return containsDateTimeFormatExpr(node.Left) || containsDateTimeFormatExpr(node.Right)
+	case *tree.NotExpr:
+		return containsDateTimeFormatExpr(node.Expr)
+	case *tree.IsNullExpr:
+		return containsDateTimeFormatExpr(node.Expr)
+	case *tree.IsNotNullExpr:
+		return containsDateTimeFormatExpr(node.Expr)
+	case *tree.IsUnknownExpr:
+		return containsDateTimeFormatExpr(node.Expr)
+	case *tree.IsNotUnknownExpr:
+		return containsDateTimeFormatExpr(node.Expr)
+	case *tree.IsTrueExpr:
+		return containsDateTimeFormatExpr(node.Expr)
+	case *tree.IsNotTrueExpr:
+		return containsDateTimeFormatExpr(node.Expr)
+	case *tree.IsFalseExpr:
+		return containsDateTimeFormatExpr(node.Expr)
+	case *tree.IsNotFalseExpr:
+		return containsDateTimeFormatExpr(node.Expr)
+	case *tree.ExprList:
+		for _, child := range node.Exprs {
+			if containsDateTimeFormatExpr(child) {
+				return true
+			}
+		}
+	case *tree.ParenExpr:
+		return containsDateTimeFormatExpr(node.Expr)
+	case *tree.SerialExtractExpr:
+		return containsDateTimeFormatExpr(node.SerialExpr) || containsDateTimeFormatExpr(node.IndexExpr)
+	case *tree.CastExpr:
+		return containsDateTimeFormatExpr(node.Expr)
+	case *tree.BitCastExpr:
+		return containsDateTimeFormatExpr(node.Expr)
+	case *tree.Tuple:
+		for _, child := range node.Exprs {
+			if containsDateTimeFormatExpr(child) {
+				return true
+			}
+		}
+	case *tree.RangeCond:
+		return containsDateTimeFormatExpr(node.Left) ||
+			containsDateTimeFormatExpr(node.From) ||
+			containsDateTimeFormatExpr(node.To)
+	case *tree.CaseExpr:
+		if containsDateTimeFormatExpr(node.Expr) || containsDateTimeFormatExpr(node.Else) {
+			return true
+		}
+		for _, when := range node.Whens {
+			if when != nil && (containsDateTimeFormatExpr(when.Cond) || containsDateTimeFormatExpr(when.Val)) {
+				return true
+			}
+		}
+	case *tree.IntervalExpr:
+		return containsDateTimeFormatExpr(node.Expr)
+	case *tree.DefaultVal:
+		return containsDateTimeFormatExpr(node.Expr)
+	case *tree.VarExpr:
+		return containsDateTimeFormatExpr(node.Expr)
+	case *tree.SampleExpr:
+		columns, _ := node.GetColumns()
+		for _, child := range columns {
+			if containsDateTimeFormatExpr(child) {
+				return true
+			}
+		}
+	case *tree.FullTextMatchExpr:
+		for _, keyPart := range node.KeyParts {
+			if keyPart != nil && containsDateTimeFormatExpr(keyPart.Expr) {
+				return true
+			}
+		}
+		return containsDateTimeFormatExpr(node.Pattern)
 	}
 	return false
 }
 
 type headingLiteralCapture struct {
-	literals []string
-	markers  []string
+	literals   map[string]string
+	markerList []string
 }
 
-func (capture *headingLiteralCapture) Enter(expr tree.Expr) (tree.Expr, bool) {
-	num, ok := expr.(*tree.NumVal)
-	if !ok || num.ValType != tree.P_char {
-		return expr, false
+func (capture *headingLiteralCapture) replace(num *tree.NumVal) tree.Expr {
+	if capture.literals == nil {
+		capture.literals = make(map[string]string)
 	}
-	marker := fmt.Sprintf("__mo_heading_literal_%p_%d__", capture, len(capture.markers))
-	capture.literals = append(capture.literals,
-		tree.StringWithOpts(num, dialect.MYSQL, tree.WithSingleQuoteString()))
-	capture.markers = append(capture.markers,
-		tree.StringWithOpts(tree.NewNumVal(marker, marker, false, tree.P_char), dialect.MYSQL, tree.WithSingleQuoteString()))
-	return tree.NewNumVal(marker, marker, false, tree.P_char), true
+	marker := fmt.Sprintf("__mo_heading_literal_%p_%d__", capture, len(capture.markerList))
+	markerExpr := tree.NewNumVal(marker, marker, false, tree.P_char)
+	markerText := tree.StringWithOpts(markerExpr, dialect.MYSQL, tree.WithSingleQuoteString())
+	capture.literals[markerText] = tree.StringWithOpts(num, dialect.MYSQL, tree.WithSingleQuoteString())
+	capture.markerList = append(capture.markerList, markerText)
+	return markerExpr
 }
 
-func (capture *headingLiteralCapture) Exit(expr tree.Expr) (tree.Expr, bool) {
-	return expr, true
+// captureHeadingLiterals rewrites only the cloned AST.  It is intentionally a
+// hand-written walk for the same reason as containsDateTimeFormatExpr: the
+// generic visitor panics for several valid expression nodes.
+func captureHeadingLiterals(expr tree.Expr, capture *headingLiteralCapture) tree.Expr {
+	if expr == nil {
+		return nil
+	}
+
+	switch node := expr.(type) {
+	case *tree.NumVal:
+		if node.ValType == tree.P_char {
+			return capture.replace(node)
+		}
+	case *tree.FuncExpr:
+		for i := range node.Exprs {
+			node.Exprs[i] = captureHeadingLiterals(node.Exprs[i], capture)
+		}
+		for _, order := range node.OrderBy {
+			if order != nil {
+				order.Expr = captureHeadingLiterals(order.Expr, capture)
+			}
+		}
+		if node.WindowSpec != nil {
+			for i := range node.WindowSpec.PartitionBy {
+				node.WindowSpec.PartitionBy[i] = captureHeadingLiterals(node.WindowSpec.PartitionBy[i], capture)
+			}
+			for _, order := range node.WindowSpec.OrderBy {
+				if order != nil {
+					order.Expr = captureHeadingLiterals(order.Expr, capture)
+				}
+			}
+			if node.WindowSpec.Frame != nil {
+				for _, bound := range []*tree.FrameBound{
+					node.WindowSpec.Frame.Start,
+					node.WindowSpec.Frame.End,
+				} {
+					if bound != nil {
+						bound.Expr = captureHeadingLiterals(bound.Expr, capture)
+					}
+				}
+			}
+		}
+	case *tree.BinaryExpr:
+		node.Left = captureHeadingLiterals(node.Left, capture)
+		node.Right = captureHeadingLiterals(node.Right, capture)
+	case *tree.UnaryExpr:
+		node.Expr = captureHeadingLiterals(node.Expr, capture)
+	case *tree.ComparisonExpr:
+		node.Left = captureHeadingLiterals(node.Left, capture)
+		node.Right = captureHeadingLiterals(node.Right, capture)
+		node.Escape = captureHeadingLiterals(node.Escape, capture)
+	case *tree.AndExpr:
+		node.Left = captureHeadingLiterals(node.Left, capture)
+		node.Right = captureHeadingLiterals(node.Right, capture)
+	case *tree.XorExpr:
+		node.Left = captureHeadingLiterals(node.Left, capture)
+		node.Right = captureHeadingLiterals(node.Right, capture)
+	case *tree.OrExpr:
+		node.Left = captureHeadingLiterals(node.Left, capture)
+		node.Right = captureHeadingLiterals(node.Right, capture)
+	case *tree.NotExpr:
+		node.Expr = captureHeadingLiterals(node.Expr, capture)
+	case *tree.IsNullExpr:
+		node.Expr = captureHeadingLiterals(node.Expr, capture)
+	case *tree.IsNotNullExpr:
+		node.Expr = captureHeadingLiterals(node.Expr, capture)
+	case *tree.IsUnknownExpr:
+		node.Expr = captureHeadingLiterals(node.Expr, capture)
+	case *tree.IsNotUnknownExpr:
+		node.Expr = captureHeadingLiterals(node.Expr, capture)
+	case *tree.IsTrueExpr:
+		node.Expr = captureHeadingLiterals(node.Expr, capture)
+	case *tree.IsNotTrueExpr:
+		node.Expr = captureHeadingLiterals(node.Expr, capture)
+	case *tree.IsFalseExpr:
+		node.Expr = captureHeadingLiterals(node.Expr, capture)
+	case *tree.IsNotFalseExpr:
+		node.Expr = captureHeadingLiterals(node.Expr, capture)
+	case *tree.ExprList:
+		for i := range node.Exprs {
+			node.Exprs[i] = captureHeadingLiterals(node.Exprs[i], capture)
+		}
+	case *tree.ParenExpr:
+		node.Expr = captureHeadingLiterals(node.Expr, capture)
+	case *tree.SerialExtractExpr:
+		node.SerialExpr = captureHeadingLiterals(node.SerialExpr, capture)
+		node.IndexExpr = captureHeadingLiterals(node.IndexExpr, capture)
+	case *tree.CastExpr:
+		node.Expr = captureHeadingLiterals(node.Expr, capture)
+	case *tree.BitCastExpr:
+		node.Expr = captureHeadingLiterals(node.Expr, capture)
+	case *tree.Tuple:
+		for i := range node.Exprs {
+			node.Exprs[i] = captureHeadingLiterals(node.Exprs[i], capture)
+		}
+	case *tree.RangeCond:
+		node.Left = captureHeadingLiterals(node.Left, capture)
+		node.From = captureHeadingLiterals(node.From, capture)
+		node.To = captureHeadingLiterals(node.To, capture)
+	case *tree.CaseExpr:
+		node.Expr = captureHeadingLiterals(node.Expr, capture)
+		for _, when := range node.Whens {
+			if when != nil {
+				when.Cond = captureHeadingLiterals(when.Cond, capture)
+				when.Val = captureHeadingLiterals(when.Val, capture)
+			}
+		}
+		node.Else = captureHeadingLiterals(node.Else, capture)
+	case *tree.IntervalExpr:
+		node.Expr = captureHeadingLiterals(node.Expr, capture)
+	case *tree.DefaultVal:
+		node.Expr = captureHeadingLiterals(node.Expr, capture)
+	case *tree.VarExpr:
+		node.Expr = captureHeadingLiterals(node.Expr, capture)
+	case *tree.SampleExpr:
+		columns, isStar := node.GetColumns()
+		for i := range columns {
+			columns[i] = captureHeadingLiterals(columns[i], capture)
+		}
+		node.SetColumns(columns, isStar)
+	case *tree.FullTextMatchExpr:
+		for _, keyPart := range node.KeyParts {
+			if keyPart != nil {
+				keyPart.Expr = captureHeadingLiterals(keyPart.Expr, capture)
+			}
+		}
+		node.Pattern = captureHeadingLiterals(node.Pattern, capture)
+	}
+	return expr
 }
 
 func captureHeadingProvenance(expr tree.Expr, formatted string) headingProvenance {
 	capture := &headingLiteralCapture{}
 	cloned := cloneTreeExpr(expr)
-	rewritten, ok := cloned.Accept(capture)
-	if !ok || len(capture.markers) == 0 {
+	rewritten := captureHeadingLiterals(cloned, capture)
+	if len(capture.markerList) == 0 {
 		// A dynamic format expression has no SQL string literal to preserve.
 		// Returning no provenance keeps the established identifier normalization
 		// for the complete rendered heading instead of treating identifiers as
@@ -10872,19 +11113,27 @@ func captureHeadingProvenance(expr tree.Expr, formatted string) headingProvenanc
 		return headingProvenance{}
 	}
 	withMarkers := tree.StringWithOpts(rewritten, dialect.MYSQL, tree.WithSingleQuoteString())
-	parts := make([]headingPart, 0, len(capture.markers)*2+1)
-	searchFrom := 0
-	for i, marker := range capture.markers {
-		markerPos := strings.Index(withMarkers[searchFrom:], marker)
-		if markerPos < 0 {
+	type markerPosition struct {
+		marker string
+		pos    int
+	}
+	positions := make([]markerPosition, 0, len(capture.markerList))
+	for _, marker := range capture.markerList {
+		pos := strings.Index(withMarkers, marker)
+		if pos < 0 {
 			return headingProvenance{}
 		}
-		markerPos += searchFrom
-		if markerPos > searchFrom {
-			parts = append(parts, headingPart{text: withMarkers[searchFrom:markerPos]})
+		positions = append(positions, markerPosition{marker: marker, pos: pos})
+	}
+	sort.Slice(positions, func(i, j int) bool { return positions[i].pos < positions[j].pos })
+	parts := make([]headingPart, 0, len(positions)*2+1)
+	searchFrom := 0
+	for _, marker := range positions {
+		if marker.pos > searchFrom {
+			parts = append(parts, headingPart{text: withMarkers[searchFrom:marker.pos]})
 		}
-		parts = append(parts, headingPart{text: capture.literals[i], literal: true})
-		searchFrom = markerPos + len(marker)
+		parts = append(parts, headingPart{text: capture.literals[marker.marker], literal: true})
+		searchFrom = marker.pos + len(marker.marker)
 	}
 	if searchFrom < len(withMarkers) {
 		parts = append(parts, headingPart{text: withMarkers[searchFrom:]})

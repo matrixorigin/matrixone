@@ -24,6 +24,7 @@ import (
 	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/stretchr/testify/require"
 )
 
@@ -147,6 +148,70 @@ func TestBuildCTASPreservesNestedDateFormatHeading(t *testing.T) {
 	require.Len(t, visible, 2)
 	require.Equal(t, "concat(date_format(col2, '%M'), 'X')", visible[0].Name)
 	require.Equal(t, "concat(date_format(col2, '%m'), 'X')", visible[1].Name)
+}
+
+func TestBuildCTASDateFormatHeadingWithIntervalOperand(t *testing.T) {
+	ctx := newDateFormatCompilerContext()
+	requireCTASColumnName(t, ctx,
+		"create table time02 as select date_format(col2 + interval 1 day, '%M') from time01",
+		"date_format(col2 + interval 1 day, '%M')")
+}
+
+func TestDateFormatHeadingTraversalHandlesUnsupportedExprNodes(t *testing.T) {
+	tests := []struct {
+		name        string
+		sql         string
+		wantHeading string
+		wantParts   bool
+	}{
+		{
+			name:        "interval operand",
+			sql:         "select date_format(col2 + interval 1 day, '%M') from time01",
+			wantHeading: "date_format(col2 + INTERVAL 1 day, '%M')",
+			wantParts:   true,
+		},
+		{
+			name:        "user variable wrapper",
+			sql:         "select concat(date_format(col2, '%M'), @suffix) from time01",
+			wantHeading: "concat(date_format(col2, '%M'), @suffix)",
+			wantParts:   true,
+		},
+		{
+			name:        "subquery operand",
+			sql:         "select date_format((select col2 from time01), '%M') from time01",
+			wantHeading: "date_format((select col2 from time01), '%M')",
+			wantParts:   true,
+		},
+		{
+			name:        "literal text is not a function call",
+			sql:         "select 'DATE_FORMAT(col2, %M)' from time01",
+			wantHeading: "DATE_FORMAT(col2, %M)",
+			wantParts:   false,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			expr := parseSelectHeadingExpr(t, test.sql)
+			require.NotPanics(t, func() {
+				heading, provenance := formatSelectExpressionHeading(expr)
+				require.Equal(t, test.wantHeading, heading)
+				require.Equal(t, test.wantParts, len(provenance.parts) > 0)
+			})
+		})
+	}
+}
+
+func parseSelectHeadingExpr(t *testing.T, sql string) tree.Expr {
+	t.Helper()
+	stmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL, sql, 1)
+	require.NoError(t, err)
+	selectStmt, ok := stmt.(*tree.Select)
+	require.True(t, ok)
+	selectClause, ok := selectStmt.Select.(*tree.SelectClause)
+	require.True(t, ok)
+	require.NotEmpty(t, selectClause.Exprs)
+	return selectClause.Exprs[0].Expr
 }
 
 func TestBuildCTASLowercasesApostropheInQuotedAlias(t *testing.T) {
