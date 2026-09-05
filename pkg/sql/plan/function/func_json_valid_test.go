@@ -18,16 +18,20 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/bytejson"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
+	"github.com/xeipuuv/gojsonschema"
 )
 
 func initJsonValidTestCase() []tcTemp {
@@ -382,6 +386,148 @@ func TestJsonSchemaValid(t *testing.T) {
 	})
 }
 
+func TestJsonSchemaMySQLDraft4Dialect(t *testing.T) {
+	proc := testutil.NewProcess(t)
+
+	schemas := []string{
+		`{"const":1}`,
+		`{"if":{"type":"integer"},"then":{"minimum":5},"else":{"pattern":"^x$"}}`,
+		`{"format":"email"}`,
+		`{"minimum":5,"exclusiveMinimum":true}`,
+		`{"minimum":5,"exclusiveMinimum":true}`,
+		`{"exclusiveMinimum":5}`,
+		`{"exclusiveMinimum":5}`,
+		`{"maximum":5,"exclusiveMaximum":true}`,
+		`{"exclusiveMaximum":5}`,
+		`{"$schema":"http://json-schema.org/draft-07/schema#","const":1}`,
+		`{"type":"integer","minimum":5}`,
+		`{"type":"integer","minimum":5}`,
+		`{"type":"object","properties":{"format":{"type":"string"}}}`,
+		`{"enum":[{"format":"email","exclusiveMinimum":5}]}`,
+	}
+	documents := []string{
+		`2`,
+		`2`,
+		`"not-an-email"`,
+		`5`,
+		`6`,
+		`5`,
+		`6`,
+		`5`,
+		`5`,
+		`2`,
+		`2`,
+		`5`,
+		`{"format":1}`,
+		`{"format":"email","exclusiveMinimum":5}`,
+	}
+	want := []bool{
+		true,
+		true,
+		true,
+		false,
+		true,
+		true,
+		true,
+		false,
+		true,
+		true,
+		false,
+		true,
+		false,
+		true,
+	}
+
+	t.Run("row schemas", func(t *testing.T) {
+		tc := tcTemp{
+			info: "json_schema_valid MySQL Draft 4 row schemas",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(), schemas, make([]bool, len(schemas))),
+				NewFunctionTestInput(types.T_varchar.ToType(), documents, make([]bool, len(documents))),
+			},
+			expect: NewFunctionTestResult(types.T_bool.ToType(), false, want, make([]bool, len(want))),
+		}
+		fcTC := NewFunctionTestCase(proc, tc.inputs, tc.expect, JsonSchemaValid)
+		s, info := fcTC.Run()
+		require.True(t, s, info)
+	})
+
+	t.Run("constant schema", func(t *testing.T) {
+		tc := tcTemp{
+			info: "json_schema_valid MySQL Draft 4 constant schema",
+			inputs: []FunctionTestInput{
+				NewFunctionTestConstInput(types.T_varchar.ToType(), []string{`{"$schema":"http://json-schema.org/draft-07/schema#","const":1,"format":"email"}`}, []bool{false}),
+				NewFunctionTestInput(types.T_varchar.ToType(), []string{`2`, `"not-an-email"`}, []bool{false, false}),
+			},
+			expect: NewFunctionTestResult(types.T_bool.ToType(), false, []bool{true, true}, []bool{false, false}),
+		}
+		fcTC := NewFunctionTestCase(proc, tc.inputs, tc.expect, JsonSchemaValid)
+		s, info := fcTC.Run()
+		require.True(t, s, info)
+	})
+
+	t.Run("validation report", func(t *testing.T) {
+		validReport := mustJsonBinaryString(t, `{"valid":true}`)
+		tc := tcTemp{
+			info: "json_schema_validation_report MySQL Draft 4",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(), []string{schemas[0], schemas[1], schemas[2], schemas[5]}, []bool{false, false, false, false}),
+				NewFunctionTestInput(types.T_varchar.ToType(), []string{documents[0], documents[1], documents[2], documents[5]}, []bool{false, false, false, false}),
+			},
+			expect: NewFunctionTestResult(types.T_json.ToType(), false, []string{validReport, validReport, validReport, validReport}, []bool{false, false, false, false}),
+		}
+		fcTC := NewFunctionTestCase(proc, tc.inputs, tc.expect, JsonSchemaValidationReport)
+		s, info := fcTC.Run()
+		require.True(t, s, info)
+	})
+
+	t.Run("json inputs", func(t *testing.T) {
+		tc := tcTemp{
+			info: "json_schema_valid MySQL Draft 4 JSON inputs",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_json.ToType(), []string{mustJsonBinaryString(t, `{"format":"email"}`)}, []bool{false}),
+				NewFunctionTestInput(types.T_json.ToType(), []string{mustJsonBinaryString(t, `"not-an-email"`)}, []bool{false}),
+			},
+			expect: NewFunctionTestResult(types.T_bool.ToType(), false, []bool{true}, []bool{false}),
+		}
+		fcTC := NewFunctionTestCase(proc, tc.inputs, tc.expect, JsonSchemaValid)
+		s, info := fcTC.Run()
+		require.True(t, s, info)
+	})
+}
+
+func TestNormalizeMySQLDraft4SchemaPositions(t *testing.T) {
+	decoder := json.NewDecoder(strings.NewReader(`{
+		"format":"email",
+		"exclusiveMinimum":5,
+		"properties":{"format":{"type":"string"}},
+		"enum":[{"format":"email","exclusiveMinimum":5}],
+		"default":{"format":"email","exclusiveMinimum":5},
+		"const":{"format":"email","exclusiveMinimum":5},
+		"unknown":{"format":"email","exclusiveMinimum":5}
+	}`))
+	decoder.UseNumber()
+	var schema any
+	require.NoError(t, decoder.Decode(&schema))
+
+	normalizeMySQLDraft4Schema(schema)
+	root := schema.(map[string]any)
+	require.NotContains(t, root, "format")
+	require.NotContains(t, root, "exclusiveMinimum")
+	require.Contains(t, root["properties"].(map[string]any), "format")
+
+	for _, literal := range []any{
+		root["enum"].([]any)[0],
+		root["default"],
+		root["const"],
+		root["unknown"],
+	} {
+		obj := literal.(map[string]any)
+		require.Equal(t, "email", obj["format"])
+		require.Equal(t, json.Number("5"), obj["exclusiveMinimum"])
+	}
+}
+
 func TestJsonSchemaMixedOverloads(t *testing.T) {
 	ctx := context.Background()
 	for _, fn := range []string{"json_schema_valid", "json_schema_validation_report"} {
@@ -532,25 +678,25 @@ func TestJsonSchemaRefKeywordDetection(t *testing.T) {
 		require.True(t, s, info)
 	})
 
-	t.Run("enum value with ref key is allowed", func(t *testing.T) {
+	t.Run("non-string ref values in literals are allowed", func(t *testing.T) {
 		tc := tcTemp{
-			info: "json_schema_valid enum ref value",
+			info: "json_schema_valid non-string literal ref values",
 			inputs: []FunctionTestInput{
 				NewFunctionTestInput(types.T_varchar.ToType(),
-					[]string{`{"enum":[{"$ref":"literal"}]}`},
-					[]bool{false}),
+					[]string{`{"enum":[{"$ref":1}]}`, `{"unknown":{"$ref":false}}`},
+					[]bool{false, false}),
 				NewFunctionTestInput(types.T_varchar.ToType(),
-					[]string{`{"$ref":"literal"}`},
-					[]bool{false}),
+					[]string{`{"$ref":1}`, `1`},
+					[]bool{false, false}),
 			},
-			expect: NewFunctionTestResult(types.T_bool.ToType(), false, []bool{true}, []bool{false}),
+			expect: NewFunctionTestResult(types.T_bool.ToType(), false, []bool{true, true}, []bool{false, false}),
 		}
 		fcTC := NewFunctionTestCase(proc, tc.inputs, tc.expect, JsonSchemaValid)
 		s, info := fcTC.Run()
 		require.True(t, s, info)
 	})
 
-	t.Run("schema ref keyword is rejected", func(t *testing.T) {
+	t.Run("local schema ref keyword is supported", func(t *testing.T) {
 		tc := tcTemp{
 			info: "json_schema_valid ref keyword",
 			inputs: []FunctionTestInput{
@@ -561,12 +707,428 @@ func TestJsonSchemaRefKeywordDetection(t *testing.T) {
 					[]string{`{"a":"ok"}`},
 					[]bool{false}),
 			},
+			expect: NewFunctionTestResult(types.T_bool.ToType(), false, []bool{true}, []bool{false}),
+		}
+		fcTC := NewFunctionTestCase(proc, tc.inputs, tc.expect, JsonSchemaValid)
+		s, info := fcTC.Run()
+		require.True(t, s, info)
+	})
+
+	t.Run("non-string ref at schema position is rejected", func(t *testing.T) {
+		tc := tcTemp{
+			info: "json_schema_valid non-string schema ref",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(),
+					[]string{`{"properties":{"a":{"$ref":1}}}`},
+					[]bool{false}),
+				NewFunctionTestInput(types.T_varchar.ToType(),
+					[]string{`{"a":1}`},
+					[]bool{false}),
+			},
 			expect: NewFunctionTestResult(types.T_bool.ToType(), true, []bool{false}, []bool{false}),
 		}
 		fcTC := NewFunctionTestCase(proc, tc.inputs, tc.expect, JsonSchemaValid)
 		s, info := fcTC.Run()
 		require.True(t, s, info)
 	})
+}
+
+func TestJsonSchemaStringRefDetection(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	functions := []struct {
+		name    string
+		retType types.Type
+		fn      fEvalFn
+	}{
+		{name: "json_schema_valid", retType: types.T_bool.ToType(), fn: JsonSchemaValid},
+		{name: "json_schema_validation_report", retType: types.T_json.ToType(), fn: JsonSchemaValidationReport},
+	}
+	schemas := []struct {
+		name   string
+		schema string
+	}{
+		{name: "allOf invalid object", schema: `{"allOf":{"$ref":"https://example.invalid/schema"}}`},
+		{name: "anyOf invalid object", schema: `{"anyOf":{"$ref":"https://example.invalid/schema"}}`},
+		{name: "oneOf invalid object", schema: `{"oneOf":{"$ref":"https://example.invalid/schema"}}`},
+		{name: "properties invalid container", schema: `{"properties":{"$ref":"https://example.invalid/schema"}}`},
+		{name: "if ignored keyword", schema: `{"if":{"$ref":"https://example.invalid/schema"}}`},
+		{name: "$defs ignored keyword", schema: `{"$defs":{"ignored":{"$ref":"file:///tmp/schema.json"}}}`},
+		{name: "enum literal", schema: `{"enum":[{"$ref":"literal"}]}`},
+		{name: "const literal", schema: `{"const":{"$ref":"literal"}}`},
+		{name: "default literal", schema: `{"default":{"$ref":"literal"}}`},
+		{name: "unknown keyword", schema: `{"unknown":{"$ref":"literal"}}`},
+	}
+
+	for _, function := range functions {
+		for _, schemaCase := range schemas {
+			for _, constant := range []bool{false, true} {
+				name := fmt.Sprintf("%s/%s/constant=%t", function.name, schemaCase.name, constant)
+				t.Run(name, func(t *testing.T) {
+					schemaInput := NewFunctionTestInput(types.T_varchar.ToType(), []string{schemaCase.schema}, []bool{false})
+					if constant {
+						schemaInput = NewFunctionTestConstInput(types.T_varchar.ToType(), []string{schemaCase.schema}, []bool{false})
+					}
+					tc := NewFunctionTestCase(proc,
+						[]FunctionTestInput{
+							schemaInput,
+							NewFunctionTestInput(types.T_varchar.ToType(), []string{`1`}, []bool{false}),
+						},
+						NewFunctionTestResult(function.retType, false, nil, nil), function.fn)
+					require.NoError(t, tc.result.PreExtendAndReset(tc.fnLength))
+					err := tc.fn(tc.parameters, tc.result, tc.proc, tc.fnLength, nil)
+					require.Error(t, err)
+					require.True(t, moerr.IsMoErrCode(err, moerr.ErrNotSupported), err)
+					require.Contains(t, err.Error(), mysqlJSONSchemaExternalRefReason)
+				})
+			}
+		}
+	}
+}
+
+func TestJsonSchemaLocalReferences(t *testing.T) {
+	tests := []struct {
+		name   string
+		schema string
+		doc    string
+		valid  bool
+	}{
+		{
+			name:   "definitions",
+			schema: `{"$ref":"#/definitions/value","definitions":{"value":{"type":"integer"}}}`,
+			doc:    `1`,
+			valid:  true,
+		},
+		{
+			name:   "defs",
+			schema: `{"properties":{"value":{"$ref":"#/$defs/integer"}},"$defs":{"integer":{"type":"integer"}}}`,
+			doc:    `{"value":"no"}`,
+			valid:  false,
+		},
+		{
+			name:   "defs target uses Draft 4 normalization",
+			schema: `{"$ref":"#/$defs/value","$defs":{"value":{"type":"string","format":"email"}}}`,
+			doc:    `"not-an-email"`,
+			valid:  true,
+		},
+		{
+			name:   "escaped pointer token",
+			schema: `{"$ref":"#/definitions/a~1b~0c","definitions":{"a/b~c":{"type":"string"}}}`,
+			doc:    `"ok"`,
+			valid:  true,
+		},
+		{
+			name:   "percent encoded pointer token",
+			schema: `{"$ref":"#/definitions/a%20b","definitions":{"a b":{"type":"string"}}}`,
+			doc:    `"ok"`,
+			valid:  true,
+		},
+		{
+			name:   "array target",
+			schema: `{"$ref":"#/$defs/choices/0","$defs":{"choices":[{"type":"string"}]}}`,
+			doc:    `"ok"`,
+			valid:  true,
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			schema, err := types.ParseStringToByteJson(test.schema)
+			require.NoError(t, err)
+			compiled, err := compileMySQLDraft4Schema(context.Background(), "json_schema_valid", schema)
+			require.NoError(t, err)
+			result, err := compiled.Validate(gojsonschema.NewStringLoader(test.doc))
+			require.NoError(t, err)
+			require.Equal(t, test.valid, result.Valid())
+		})
+	}
+}
+
+func TestJsonSchemaLocalReferenceErrors(t *testing.T) {
+	tests := []struct {
+		name   string
+		schema string
+		code   uint16
+		reason string
+	}{
+		{name: "external http", schema: `{"$ref":"https://example.invalid/schema"}`, code: moerr.ErrNotSupported, reason: mysqlJSONSchemaExternalRefReason},
+		{name: "external file", schema: `{"$ref":"file:///tmp/schema.json"}`, code: moerr.ErrNotSupported, reason: mysqlJSONSchemaExternalRefReason},
+		{name: "external relative path", schema: `{"$ref":"schema.json"}`, code: moerr.ErrNotSupported, reason: mysqlJSONSchemaExternalRefReason},
+		{name: "external absolute path", schema: `{"$ref":"/tmp/schema.json"}`, code: moerr.ErrNotSupported, reason: mysqlJSONSchemaExternalRefReason},
+		{name: "external scheme relative", schema: `{"$ref":"//example.invalid/schema"}`, code: moerr.ErrNotSupported, reason: mysqlJSONSchemaExternalRefReason},
+		{name: "external urn", schema: `{"$ref":"urn:example:schema"}`, code: moerr.ErrNotSupported, reason: mysqlJSONSchemaExternalRefReason},
+		{name: "external query", schema: `{"$ref":"https://example.invalid/schema?x=1"}`, code: moerr.ErrNotSupported, reason: mysqlJSONSchemaExternalRefReason},
+		{name: "anchor", schema: `{"$ref":"#anchor"}`, code: moerr.ErrNotSupported, reason: mysqlJSONSchemaExternalRefReason},
+		{name: "empty", schema: `{"$ref":""}`, code: moerr.ErrNotSupported, reason: mysqlJSONSchemaExternalRefReason},
+		{name: "bad percent", schema: `{"$ref":"#/%ZZ"}`, code: moerr.ErrInvalidArg, reason: mysqlJSONSchemaRefSyntaxReason},
+		{name: "bad escape", schema: `{"$ref":"#/bad~2escape"}`, code: moerr.ErrInvalidArg, reason: mysqlJSONSchemaRefSyntaxReason},
+		{name: "missing target", schema: `{"$ref":"#/definitions/missing","definitions":{}}`, code: moerr.ErrInvalidArg, reason: mysqlJSONSchemaRefTargetReason},
+		{name: "non-string", schema: `{"$ref":1}`, code: moerr.ErrInvalidArg, reason: mysqlJSONSchemaRefStringReason},
+		{name: "array leading zero", schema: `{"$ref":"#/definitions/choices/01","definitions":{"choices":[{}]}}`, code: moerr.ErrInvalidArg, reason: mysqlJSONSchemaRefSyntaxReason},
+		{name: "array negative index", schema: `{"$ref":"#/$defs/choices/-1","$defs":{"choices":[{}]}}`, code: moerr.ErrInvalidArg, reason: mysqlJSONSchemaRefSyntaxReason},
+		{name: "array plus index", schema: `{"$ref":"#/$defs/choices/+1","$defs":{"choices":[{},{}]}}`, code: moerr.ErrInvalidArg, reason: mysqlJSONSchemaRefSyntaxReason},
+		{name: "array out of bounds", schema: `{"$ref":"#/$defs/choices/2","$defs":{"choices":[{}]}}`, code: moerr.ErrInvalidArg, reason: mysqlJSONSchemaRefTargetReason},
+		{name: "external base", schema: `{"id":"https://example.invalid/root.json","$ref":"#/definitions/value","definitions":{"value":{"type":"integer"}}}`, code: moerr.ErrNotSupported, reason: mysqlJSONSchemaExternalRefReason},
+		{name: "external base in target", schema: `{"properties":{"value":{"$ref":"#/$defs/value"}},"$defs":{"value":{"id":"https://example.invalid/value.json","$ref":"#/definitions/integer"}},"definitions":{"integer":{"type":"integer"}}}`, code: moerr.ErrNotSupported, reason: mysqlJSONSchemaExternalRefReason},
+		{name: "external base in literal", schema: `{"enum":[{"id":"https://example.invalid/value.json","$ref":"#/definitions/value"}],"definitions":{"value":{"type":"integer"}}}`, code: moerr.ErrNotSupported, reason: mysqlJSONSchemaExternalRefReason},
+		{name: "direct cycle", schema: `{"$ref":"#/definitions/node","definitions":{"node":{"$ref":"#/definitions/node"}}}`, code: moerr.ErrInvalidArg, reason: mysqlJSONSchemaRefCycleReason},
+		{name: "indirect cycle", schema: `{"$ref":"#/$defs/a","$defs":{"a":{"$ref":"#/$defs/b"},"b":{"$ref":"#/$defs/a"}}}`, code: moerr.ErrInvalidArg, reason: mysqlJSONSchemaRefCycleReason},
+		{name: "instance recursive cycle", schema: `{"properties":{"child":{"$ref":"#/$defs/node"}},"$defs":{"node":{"type":"object","properties":{"child":{"$ref":"#/$defs/node"}}}}}`, code: moerr.ErrInvalidArg, reason: mysqlJSONSchemaRefCycleReason},
+		{name: "empty allOf", schema: `{"allOf":[]}`, code: moerr.ErrInvalidArg, reason: "allOf must contain at least one schema"},
+		{name: "empty anyOf", schema: `{"anyOf":[]}`, code: moerr.ErrInvalidArg, reason: "anyOf must contain at least one schema"},
+		{name: "empty oneOf", schema: `{"oneOf":[]}`, code: moerr.ErrInvalidArg, reason: "oneOf must contain at least one schema"},
+		{name: "invalid combinator local", schema: `{"allOf":{"$ref":"#/definitions/value"},"definitions":{"value":{"type":"integer"}}}`, code: moerr.ErrInvalidArg, reason: "of an array"},
+		{name: "invalid combinator external precedence", schema: `{"allOf":{"$ref":"https://example.invalid/schema"}}`, code: moerr.ErrNotSupported, reason: mysqlJSONSchemaExternalRefReason},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			schema, err := types.ParseStringToByteJson(test.schema)
+			require.NoError(t, err)
+			_, err = compileMySQLDraft4Schema(context.Background(), "json_schema_valid", schema)
+			require.Error(t, err)
+			require.True(t, moerr.IsMoErrCode(err, test.code), err)
+			require.Contains(t, err.Error(), test.reason)
+		})
+	}
+}
+
+func TestJsonSchemaLocalReferenceLiteralAndSibling(t *testing.T) {
+	for _, schemaText := range []string{
+		`{"enum":[{"$ref":"#/definitions/value"}],"definitions":{"value":{"type":"integer"}}}`,
+		`{"$ref":"#/definitions/value","type":"string","definitions":{"value":{"type":"integer"}}}`,
+	} {
+		schema, err := types.ParseStringToByteJson(schemaText)
+		require.NoError(t, err)
+		compiled, err := compileMySQLDraft4Schema(context.Background(), "json_schema_valid", schema)
+		require.NoError(t, err)
+		result, err := compiled.Validate(gojsonschema.NewStringLoader(`{"$ref":"#/definitions/value"}`))
+		require.NoError(t, err)
+		if strings.Contains(schemaText, `"enum"`) {
+			require.True(t, result.Valid())
+		} else {
+			require.False(t, result.Valid())
+		}
+	}
+}
+
+func TestJsonSchemaDraft4CombinatorCardinality(t *testing.T) {
+	for _, schemaText := range []string{
+		`{"enum":[{"allOf":[]}]}`,
+		`{"$ref":"#/definitions/value","allOf":[],"definitions":{"value":{"type":"integer"}}}`,
+	} {
+		schema, err := types.ParseStringToByteJson(schemaText)
+		require.NoError(t, err)
+		compiled, err := compileMySQLDraft4Schema(context.Background(), "json_schema_valid", schema)
+		require.NoError(t, err)
+		result, err := compiled.Validate(gojsonschema.NewStringLoader(`1`))
+		require.NoError(t, err)
+		if strings.Contains(schemaText, `"enum"`) {
+			require.False(t, result.Valid())
+		} else {
+			require.True(t, result.Valid())
+		}
+	}
+}
+
+func TestJsonSchemaLocalReferencesThroughSQLFunctions(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	schemaText := `{"properties":{"id":{"$ref":"#/definitions/id"}},"definitions":{"id":{"type":"integer"}}}`
+	validDoc := `{"id":3}`
+	invalidDoc := `{"id":"bad"}`
+	for _, args := range [][]types.Type{
+		{types.T_varchar.ToType(), types.T_varchar.ToType()},
+		{types.T_json.ToType(), types.T_json.ToType()},
+		{types.T_varchar.ToType(), types.T_json.ToType()},
+		{types.T_json.ToType(), types.T_varchar.ToType()},
+	} {
+		t.Run(fmt.Sprintf("schema=%s/document=%s", args[0].Oid, args[1].Oid), func(t *testing.T) {
+			schemaValue := schemaText
+			validValue, invalidValue := validDoc, invalidDoc
+			if args[0].Oid == types.T_json {
+				schemaValue = mustJsonBinaryString(t, schemaText)
+			}
+			if args[1].Oid == types.T_json {
+				validValue = mustJsonBinaryString(t, validDoc)
+				invalidValue = mustJsonBinaryString(t, invalidDoc)
+			}
+			for _, function := range []struct {
+				name string
+				ret  types.Type
+				fn   fEvalFn
+			}{
+				{name: "valid", ret: types.T_bool.ToType(), fn: JsonSchemaValid},
+				{name: "report", ret: types.T_json.ToType(), fn: JsonSchemaValidationReport},
+			} {
+				t.Run(function.name, func(t *testing.T) {
+					tc := tcTemp{
+						info: "json schema local refs through SQL function",
+						inputs: []FunctionTestInput{
+							NewFunctionTestInput(args[0], []string{schemaValue, schemaValue}, []bool{false, false}),
+							NewFunctionTestInput(args[1], []string{validValue, invalidValue}, []bool{false, false}),
+						},
+					}
+					if function.name == "valid" {
+						tc.expect = NewFunctionTestResult(function.ret, false, []bool{true, false}, []bool{false, false})
+					} else {
+						tc.expect = NewFunctionTestResult(function.ret, false, []string{
+							mustJsonBinaryString(t, `{"valid":true}`),
+							mustJsonBinaryString(t, `{"document-location":"$.id","reason":"Invalid type. Expected: integer, given: string","schema-failed-keyword":"type","schema-location":"#/type","valid":false}`),
+						}, []bool{false, false})
+					}
+					fcTC := NewFunctionTestCase(proc, tc.inputs, tc.expect, function.fn)
+					s, info := fcTC.Run()
+					require.True(t, s, info)
+				})
+			}
+		})
+	}
+}
+
+func TestJsonSchemaDeniedReferenceLoader(t *testing.T) {
+	factory := &mysqlDraft4DenyFactory{}
+	loader := &mysqlDraft4RootLoader{
+		JSONLoader: gojsonschema.NewRawLoader(map[string]any{
+			"$ref": "https://example.invalid/schema",
+		}),
+		factory: factory,
+	}
+	schemaLoader := gojsonschema.NewSchemaLoader()
+	schemaLoader.AutoDetect = false
+	schemaLoader.Validate = false
+	schemaLoader.Draft = gojsonschema.Draft4
+	_, err := schemaLoader.Compile(loader)
+	require.Error(t, err)
+	require.ErrorIs(t, err, errMySQLJSONSchemaExternalLoad)
+	require.Equal(t, 1, factory.calls)
+}
+
+func TestJsonSchemaExternalReferenceDoesNotPerformNetworkIO(t *testing.T) {
+	requests := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		requests++
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer server.Close()
+	schema, err := types.ParseStringToByteJson(fmt.Sprintf(`{"$ref":%q}`, server.URL+"/schema.json"))
+	require.NoError(t, err)
+	_, err = compileMySQLDraft4Schema(context.Background(), "json_schema_valid", schema)
+	require.Error(t, err)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrNotSupported), err)
+	require.Equal(t, 0, requests)
+}
+
+type cancelAfterErrContext struct {
+	context.Context
+	calls int
+}
+
+func (c *cancelAfterErrContext) Err() error {
+	c.calls++
+	if c.calls > 3 {
+		return context.Canceled
+	}
+	return nil
+}
+
+func TestJsonSchemaReferenceDepthAndCancellation(t *testing.T) {
+	deep := `{"type":"object"}`
+	for i := 0; i < mysqlJSONSchemaMaxDepth-1; i++ {
+		deep = `{"x":` + deep + `}`
+	}
+	schema, err := types.ParseStringToByteJson(deep)
+	require.NoError(t, err)
+	_, err = compileMySQLDraft4Schema(context.Background(), "json_schema_valid", schema)
+	require.NoError(t, err)
+	deep = `{"x":` + deep + `}`
+	schema, err = types.ParseStringToByteJson(deep)
+	require.NoError(t, err)
+	_, err = compileMySQLDraft4Schema(context.Background(), "json_schema_valid", schema)
+	require.Error(t, err)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidArg), err)
+	require.Contains(t, err.Error(), mysqlJSONSchemaDepthReason)
+
+	cancelled, cancel := context.WithCancel(context.Background())
+	cancel()
+	schema, err = types.ParseStringToByteJson(`{"type":"integer"}`)
+	require.NoError(t, err)
+	_, err = compileMySQLDraft4Schema(cancelled, "json_schema_valid", schema)
+	require.ErrorIs(t, err, context.Canceled)
+
+	var manyProperties map[string]any
+	manyProperties = make(map[string]any, 128)
+	for i := 0; i < 128; i++ {
+		manyProperties[fmt.Sprintf("p%d", i)] = map[string]any{"type": "integer"}
+	}
+	cancelDuringPreflight := &cancelAfterErrContext{Context: context.Background()}
+	manySchemaBytes, marshalErr := json.Marshal(map[string]any{"properties": manyProperties})
+	require.NoError(t, marshalErr)
+	manySchema, parseErr := types.ParseSliceToByteJson(manySchemaBytes)
+	require.NoError(t, parseErr)
+	_, err = compileMySQLDraft4Schema(cancelDuringPreflight, "json_schema_valid", manySchema)
+	require.ErrorIs(t, err, context.Canceled)
+}
+
+func TestJsonSchemaExpansionDepthBoundaries(t *testing.T) {
+	for _, edgeCount := range []int{mysqlJSONSchemaMaxDepth - 2, mysqlJSONSchemaMaxDepth - 1, mysqlJSONSchemaMaxDepth} {
+		index := &mysqlJSONSchemaIndex{nodes: make(map[string]*mysqlJSONSchemaNode)}
+		for i := 0; i <= edgeCount; i++ {
+			pointer := fmt.Sprintf("#/%d", i)
+			index.nodes[pointer] = &mysqlJSONSchemaNode{value: map[string]any{}}
+			if i < edgeCount {
+				index.nodes[pointer].edges = []string{fmt.Sprintf("#/%d", i+1)}
+			}
+		}
+		index.nodes["#"] = index.nodes["#/0"]
+		err := mysqlValidateSchemaRefGraph(context.Background(), index)
+		if edgeCount <= mysqlJSONSchemaMaxDepth-1 {
+			require.NoError(t, err)
+		} else {
+			require.EqualError(t, err, mysqlJSONSchemaExpansionReason)
+		}
+	}
+}
+
+func TestJsonSchemaPreflightVisitCounts(t *testing.T) {
+	schemaText := `{"type":"object","properties":{"a":{"$ref":"#/definitions/value"},"b":{"$ref":"#/definitions/value"}},"definitions":{"value":{"type":"integer"}},"unknown":{"$ref":"#/definitions/value"}}`
+	var schema any
+	decoder := json.NewDecoder(strings.NewReader(schemaText))
+	require.NoError(t, decoder.Decode(&schema))
+	index, err := mysqlIndexSchemaJSON(context.Background(), schema)
+	require.NoError(t, err)
+	refs, err := mysqlScanSchemaStringRefs(context.Background(), index)
+	require.NoError(t, err)
+	_, err = mysqlScanEffectiveSchemaRefs(context.Background(), "json_schema_valid", index, refs)
+	require.NoError(t, err)
+	require.Equal(t, len(index.nodes), index.nodeVisits)
+	require.Equal(t, 3, index.refOccurrences)
+	// Every containment edge is indexed once and each of the two effective
+	// refs adds exactly one expansion edge. The unknown ref is literal.
+	containmentEdges := 0
+	for _, node := range index.nodes {
+		containmentEdges += len(node.containment)
+	}
+	require.Equal(t, containmentEdges+2, index.edgeVisits)
+	require.Equal(t, 2, index.refEdges)
+}
+
+func BenchmarkJsonSchemaLocalReferencePreflight(b *testing.B) {
+	for _, count := range []int{1, 100, 1000} {
+		b.Run(fmt.Sprintf("refs=%d", count), func(b *testing.B) {
+			properties := make(map[string]any, count)
+			for i := 0; i < count; i++ {
+				properties[fmt.Sprintf("value%d", i)] = map[string]any{"$ref": "#/definitions/value"}
+			}
+			schema := map[string]any{
+				"type":        "object",
+				"properties":  properties,
+				"definitions": map[string]any{"value": map[string]any{"type": "integer"}},
+			}
+			b.ReportAllocs()
+			for i := 0; i < b.N; i++ {
+				if err := mysqlAnalyzeDraft4Schema(context.Background(), "json_schema_valid", schema); err != nil {
+					b.Fatal(err)
+				}
+			}
+		})
+	}
 }
 
 func TestJsonConstructorTypeChecking(t *testing.T) {
