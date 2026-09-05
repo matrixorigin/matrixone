@@ -23,10 +23,14 @@ import (
 )
 
 type remapDbContext struct {
-	databases            map[string]string
-	lowerCaseTableNames  int64
-	remapUseDatabase     bool
-	unsupported          *bool
+	databases           map[string]string
+	lowerCaseTableNames int64
+	remapUseDatabase    bool
+	unsupported         *bool
+	// cteNames is populated only while dependency collection/remapping walks a
+	// SELECT. It prevents an unqualified CTE reference from being collected as
+	// a source table while preserving qualified references such as db.cte.
+	cteNames             map[string]struct{}
 	collectTableName     func(*tree.TableName)
 	collectProcedureName func(*tree.ProcedureName)
 	collectFunctionName  func(*tree.UnresolvedName)
@@ -35,6 +39,34 @@ type remapDbContext struct {
 func (remap remapDbContext) lookup(database string) (string, bool) {
 	target, ok := remap.databases[tree.NewCStr(database, remap.lowerCaseTableNames).Compare()]
 	return target, ok
+}
+
+func (remap remapDbContext) withVisibleCTEs(ctes ...*tree.CTE) remapDbContext {
+	if len(ctes) == 0 {
+		return remap
+	}
+	scoped := remap
+	scoped.cteNames = make(map[string]struct{}, len(remap.cteNames)+len(ctes))
+	for name := range remap.cteNames {
+		scoped.cteNames[name] = struct{}{}
+	}
+	for _, cte := range ctes {
+		if cte == nil || cte.Name == nil || cte.Name.Alias == "" {
+			continue
+		}
+		scoped.cteNames[tree.NewCStr(
+			string(cte.Name.Alias), remap.lowerCaseTableNames,
+		).Compare()] = struct{}{}
+	}
+	return scoped
+}
+
+func (remap remapDbContext) isVisibleCTE(name string) bool {
+	if len(remap.cteNames) == 0 {
+		return false
+	}
+	_, ok := remap.cteNames[tree.NewCStr(name, remap.lowerCaseTableNames).Compare()]
+	return ok
 }
 
 // applyRemapDb substitutes the database of qualified table and column
@@ -521,10 +553,18 @@ func remapDbInWith(w *tree.With, remap remapDbContext) {
 	if w == nil {
 		return
 	}
+	recursiveScope := remap.withVisibleCTEs(w.CTEs...)
+	sequentialScope := remap
 	for _, cte := range w.CTEs {
-		if cte != nil {
-			remapDbInStmt(cte.Stmt, remap)
+		if cte == nil {
+			continue
 		}
+		cteScope := sequentialScope
+		if w.IsRecursive {
+			cteScope = recursiveScope
+		}
+		remapDbInStmt(cte.Stmt, cteScope)
+		sequentialScope = sequentialScope.withVisibleCTEs(cte)
 	}
 }
 
@@ -533,10 +573,14 @@ func remapDbInSelect(sel *tree.Select, remap remapDbContext) {
 		return
 	}
 	remapDbInWith(sel.With, remap)
-	remapDbInSelectStatement(sel.Select, remap)
-	remapDbInTimeWindow(sel.TimeWindow, remap)
-	remapDbInOrderBy(sel.OrderBy, remap)
-	remapDbInLimit(sel.Limit, remap)
+	scoped := remap
+	if sel.With != nil {
+		scoped = remap.withVisibleCTEs(sel.With.CTEs...)
+	}
+	remapDbInSelectStatement(sel.Select, scoped)
+	remapDbInTimeWindow(sel.TimeWindow, scoped)
+	remapDbInOrderBy(sel.OrderBy, scoped)
+	remapDbInLimit(sel.Limit, scoped)
 }
 
 func remapDbInSelectStatement(s tree.SelectStatement, remap remapDbContext) {
@@ -933,7 +977,8 @@ func remapTableName(tn *tree.TableName, remap remapDbContext) {
 	if tn == nil {
 		return
 	}
-	if remap.collectTableName != nil {
+	if remap.collectTableName != nil && tn.ObjectName != "" &&
+		(tn.ExplicitSchema || !remap.isVisibleCTE(string(tn.ObjectName))) {
 		remap.collectTableName(tn)
 	}
 	if tn.ExplicitSchema {

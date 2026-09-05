@@ -122,7 +122,12 @@ func cloneDatabaseObjectKey(databaseName, objectName string, lowerCaseTableNames
 	)
 }
 
-func cloneRoutineKey(kind, databaseName, routineName string, lowerCaseTableNames int64) string {
+// cloneRoutineFamilyKey intentionally identifies a SQL routine family by kind,
+// database, and name. The dependency walker does not resolve UDF overloads at
+// every call site, so omitting one overload conservatively omits the whole
+// same-name family instead of risking a copied overload that still references
+// omitted metadata.
+func cloneRoutineFamilyKey(kind, databaseName, routineName string, lowerCaseTableNames int64) string {
 	return kind + KeySep + cloneDatabaseObjectKey(databaseName, routineName, lowerCaseTableNames)
 }
 
@@ -159,6 +164,7 @@ func collectCloneViewTableDependencies(
 		)
 	}
 	remapDbInSelect(createView.AsSource, remapDbContext{
+		lowerCaseTableNames: lowerCaseTableNames,
 		collectTableName: func(name *tree.TableName) {
 			databaseName := tblInfo.dbName
 			if name.ExplicitSchema {
@@ -186,6 +192,9 @@ func omittedCloneDatabaseObjects(
 		if tblInfo != nil && !isCloneableCloneDatabaseTable(tblInfo) {
 			omitted[cloneDatabaseSourceObjectKey(source, tblInfo, lowerCaseTableNames)] = struct{}{}
 		}
+	}
+	if len(omitted) == 0 {
+		return omitted, nil
 	}
 	viewDependencies := make(map[string]map[string]struct{}, len(source.viewMap))
 	for _, tblInfo := range source.viewMap {
@@ -279,7 +288,7 @@ func collectCloneRoutineReferences(
 			if name.Name.ExplicitSchema {
 				databaseName = string(name.Name.SchemaName)
 			}
-			references.procedures[cloneRoutineKey(
+			references.procedures[cloneRoutineFamilyKey(
 				cloneRoutineProcedureKind, databaseName,
 				string(name.Name.ObjectName), lowerCaseTableNames,
 			)] = struct{}{}
@@ -294,7 +303,7 @@ func collectCloneRoutineReferences(
 			} else if name.NumParts >= 2 {
 				databaseName = name.TblNameOrigin()
 			}
-			references.functions[cloneRoutineKey(
+			references.functions[cloneRoutineFamilyKey(
 				cloneRoutineFunctionKind, databaseName,
 				name.ColNameOrigin(), lowerCaseTableNames,
 			)] = struct{}{}
@@ -303,11 +312,13 @@ func collectCloneRoutineReferences(
 	return references, remappable && !unsupported, nil
 }
 
-// filterCloneDatabaseRoutines keeps independent routines and omits routines
-// whose direct or transitive dependencies cannot exist in the target. A
-// non-SQL or otherwise uninspectable routine is omitted when the source has an
-// omitted relation; persisting it would report success while retaining a
-// dependency that this clone cannot verify.
+// filterCloneDatabaseRoutines keeps independent routine families and omits
+// families whose direct or transitive dependencies cannot exist in the target.
+// A non-SQL or otherwise uninspectable routine is omitted when the source has
+// an omitted relation; persisting it would report success while retaining a
+// dependency that this clone cannot verify. UDF overloads are one family here:
+// call sites do not carry enough resolved type information for this metadata
+// pass to distinguish overloads safely.
 func filterCloneDatabaseRoutines(
 	ctx context.Context,
 	source cloneDatabaseSource,
@@ -325,14 +336,14 @@ func filterCloneDatabaseRoutines(
 	functionKeys := make(map[string]struct{}, len(source.userDefinedFuncs))
 	procedureKeys := make(map[string]struct{}, len(source.storedProcedures))
 	for _, definition := range source.userDefinedFuncs {
-		key := cloneRoutineKey(
+		key := cloneRoutineFamilyKey(
 			cloneRoutineFunctionKind, source.srcResolveDBName, definition.name, lowerCaseTableNames,
 		)
 		functionKeys[key] = struct{}{}
 		dependencies = append(dependencies, cloneRoutineDependency{key: key})
 	}
 	for _, definition := range source.storedProcedures {
-		key := cloneRoutineKey(
+		key := cloneRoutineFamilyKey(
 			cloneRoutineProcedureKind, source.srcResolveDBName, definition.name, lowerCaseTableNames,
 		)
 		procedureKeys[key] = struct{}{}
@@ -418,7 +429,7 @@ func filterCloneDatabaseRoutines(
 
 	filteredFunctions := make([]userDefinedFunctionDefinition, 0, len(source.userDefinedFuncs))
 	for _, definition := range source.userDefinedFuncs {
-		key := cloneRoutineKey(
+		key := cloneRoutineFamilyKey(
 			cloneRoutineFunctionKind, source.srcResolveDBName, definition.name, lowerCaseTableNames,
 		)
 		if _, skipped := skippedRoutines[key]; !skipped {
@@ -427,7 +438,7 @@ func filterCloneDatabaseRoutines(
 	}
 	filteredProcedures := make([]storedProcedureDefinition, 0, len(source.storedProcedures))
 	for _, definition := range source.storedProcedures {
-		key := cloneRoutineKey(
+		key := cloneRoutineFamilyKey(
 			cloneRoutineProcedureKind, source.srcResolveDBName, definition.name, lowerCaseTableNames,
 		)
 		if _, skipped := skippedRoutines[key]; !skipped {
