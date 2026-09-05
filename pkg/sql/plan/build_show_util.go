@@ -16,6 +16,7 @@ package plan
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"strings"
@@ -79,6 +80,15 @@ func constructCreateTableSQL(
 	sourceSubscription *SubscriptionMeta,
 ) (string, tree.Statement, error) {
 	var err error
+	if tableDef != nil {
+		validationCtx := context.Background()
+		if ctx != nil {
+			validationCtx = ctx.GetContext()
+		}
+		if err := validateFunctionalIndexMetadata(validationCtx, tableDef); err != nil {
+			return "", nil, err
+		}
+	}
 	var createStr string
 	sqlMode := ""
 	if ctx != nil {

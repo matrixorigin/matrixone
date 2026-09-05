@@ -139,6 +139,13 @@ func TestFunctionalIndexDefRequiresCompleteHiddenGeneratedColumn(t *testing.T) {
 
 	table.Cols[0].GeneratedCol = nil
 	require.False(t, isFunctionalIndexDef(table, table.Indexes[0]))
+	table.Cols[0].GeneratedCol = &plan.GeneratedCol{
+		Expr:         &plan.Expr{Typ: Type{Id: int32(types.T_int64)}, Expr: &plan.Expr_Col{Col: &plan.ColRef{ColPos: 0}}},
+		OriginString: "lower(name)",
+		IsStored:     true,
+	}
+	require.False(t, isFunctionalIndexDef(table, table.Indexes[0]))
+	require.Error(t, validateFunctionalIndexMetadata(context.Background(), table))
 
 	table.Cols[0].GeneratedCol = &plan.GeneratedCol{
 		Expr:         &plan.Expr{Typ: Type{Id: int32(types.T_int64)}},
@@ -146,6 +153,9 @@ func TestFunctionalIndexDefRequiresCompleteHiddenGeneratedColumn(t *testing.T) {
 	}
 	table.Indexes[0].Parts = append(table.Indexes[0].Parts, "b")
 	require.False(t, isFunctionalIndexDef(table, table.Indexes[0]))
+	require.Error(t, validateFunctionalIndexMetadata(context.Background(), table))
+	table.Indexes[0].Parts = table.Indexes[0].Parts[:2]
+	table.Indexes = nil
 	require.Error(t, validateFunctionalIndexMetadata(context.Background(), table))
 }
 
