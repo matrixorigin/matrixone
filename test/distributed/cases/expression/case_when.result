@@ -453,8 +453,8 @@ ifnull_null_first  ¦  DECIMAL(2,1)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
 ifnull_nullable_col  ¦  DECIMAL(11,1)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
 ifnull_notnull_col  ¦  DECIMAL(11,1)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
 coalesce_null_first  ¦  VARCHAR(2)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
-coalesce_nullable_col  ¦  BIGINT(0)  ¦  NO  ¦    ¦  19  ¦  0  ¦    𝄀
-coalesce_notnull_col  ¦  BIGINT(0)  ¦  NO  ¦    ¦  19  ¦  0  ¦    𝄀
+coalesce_nullable_col  ¦  BIGINT(0)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
+coalesce_notnull_col  ¦  BIGINT(0)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
 greatest_const  ¦  DATE(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 greatest_nullable_col  ¦  DATE(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 greatest_notnull_col  ¦  DATE(0)  ¦  YES  ¦    ¦  null  ¦    ¦  
