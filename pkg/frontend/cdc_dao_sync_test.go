@@ -39,6 +39,8 @@ type mockQueryClient struct {
 	newReqCalls  int
 	sendCalls    int
 	releaseCalls int
+	requests     []querypb.CmdMethod
+	syncTS       []timestamp.Timestamp
 }
 
 func newMockQueryClient() *mockQueryClient {
@@ -54,6 +56,10 @@ func (m *mockQueryClient) ServiceID() string {
 
 func (m *mockQueryClient) SendMessage(ctx context.Context, address string, req *querypb.Request) (*querypb.Response, error) {
 	m.sendCalls++
+	m.requests = append(m.requests, req.CmdMethod)
+	if req.SycnCommit != nil {
+		m.syncTS = append(m.syncTS, req.SycnCommit.LatestCommitTS)
+	}
 	if err, ok := m.sendError[address]; ok && err != nil {
 		return nil, err
 	}

@@ -350,15 +350,16 @@ func getSQLTaskService(ctx context.Context, ses *Session) (taskservice.TaskServi
 	return ts, nil
 }
 
-// SQL task metadata is written through task storage, which may connect through another CN.
-// Sync the current CN to the cluster's latest commit ts before returning to the session.
+// SQL task metadata is written and read through task storage, whose connection
+// pool may target any CN. Publish the cluster's latest commit timestamp to every
+// CN so an immediate metadata read cannot open an older snapshot on a different
+// CN from the one that committed the write.
 func syncSQLTaskMetadataCommitTimestamp(ctx context.Context, ses *Session) {
 	if ses == nil || ses.proc == nil || ses.proc.Base == nil {
 		return
 	}
 	qc := ses.proc.Base.QueryClient
-	txnClient := ses.proc.Base.TxnClient
-	if qc == nil || txnClient == nil {
+	if qc == nil {
 		return
 	}
 	cluster := clusterservice.GetMOCluster(qc.ServiceID())
@@ -406,8 +407,27 @@ func syncSQLTaskMetadataCommitTimestamp(ctx context.Context, ses *Session) {
 		qc.Release(resp)
 	}
 
-	if hasTS {
-		txnClient.SyncLatestCommitTS(maxCommitTS)
+	if !hasTS {
+		return
+	}
+
+	for _, addr := range addresses {
+		req := qc.NewRequest(querypb.CmdMethod_SyncCommit)
+		req.SycnCommit = &querypb.SyncCommitRequest{LatestCommitTS: maxCommitTS}
+		ctxReq, cancel := context.WithTimeoutCause(ctx, 5*time.Second, moerr.CauseSyncLatestCommitT)
+		resp, err := qc.SendMessage(ctxReq, addr, req)
+		cancel()
+		if err != nil {
+			logutil.Warn(
+				"sql task publish commit timestamp failed",
+				zap.String("address", addr),
+				zap.Error(err),
+			)
+			continue
+		}
+		if resp != nil {
+			qc.Release(resp)
+		}
 	}
 }
 
