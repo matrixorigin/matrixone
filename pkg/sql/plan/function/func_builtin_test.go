@@ -198,6 +198,132 @@ func TestBuiltInInternalCharMetadataUsesEncodedWidth(t *testing.T) {
 	}
 }
 
+func TestBuiltInInternalNumericPrecisionUsesMySQLDigits(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	typesToEncode := []types.Type{
+		types.T_int8.ToType(),
+		types.T_uint8.ToType(),
+		types.T_int16.ToType(),
+		types.T_uint16.ToType(),
+		types.T_int32.ToType(),
+		types.T_uint32.ToType(),
+		types.New(types.T_int32, 24, -1),
+		types.New(types.T_uint32, 24, -1),
+		types.T_int64.ToType(),
+		types.T_uint64.ToType(),
+		types.New(types.T_bit, 5, 0),
+		types.New(types.T_bit, 0, 0),
+		types.New(types.T_float32, -1, -1),
+		types.New(types.T_float32, 8, -1),
+		types.New(types.T_float32, 8, 2),
+		types.New(types.T_float64, -1, -1),
+		types.New(types.T_float64, 25, -1),
+		types.New(types.T_float64, 18, 6),
+		types.New(types.T_decimal128, 20, 6),
+		types.T_year.ToType(),
+		types.T_date.ToType(),
+		types.T_varchar.ToType(),
+	}
+	encoded := make([]string, len(typesToEncode))
+	for i := range typesToEncode {
+		data, err := typesToEncode[i].Marshal()
+		require.NoError(t, err)
+		encoded[i] = string(data)
+	}
+
+	tc := NewFunctionTestCase(
+		proc,
+		[]FunctionTestInput{
+			NewFunctionTestInput(types.T_varchar.ToType(), encoded, nil),
+		},
+		NewFunctionTestResult(
+			types.T_int64.ToType(),
+			false,
+			[]int64{3, 3, 5, 5, 10, 10, 7, 7, 19, 20, 5, 1, 12, 12, 8, 22, 22, 18, 20, 0, 0, 0},
+			[]bool{false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, true, true, true},
+		),
+		builtInInternalNumericPrecision,
+	)
+	ok, info := tc.Run()
+	require.True(t, ok, info)
+}
+
+func TestBuiltInInternalNumericScaleUsesMySQLSemantics(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	typesToEncode := []types.Type{
+		types.T_bool.ToType(),
+		types.T_int32.ToType(),
+		types.T_uint64.ToType(),
+		types.New(types.T_decimal128, 20, 6),
+		types.New(types.T_decimal128, 20, -1),
+		types.New(types.T_float32, -1, -1),
+		types.New(types.T_float32, 8, 2),
+		types.New(types.T_float64, -1, -1),
+		types.New(types.T_float64, 18, 6),
+		types.New(types.T_bit, 5, 0),
+		types.T_year.ToType(),
+		types.T_date.ToType(),
+		types.T_varchar.ToType(),
+	}
+	encoded := make([]string, len(typesToEncode))
+	for i := range typesToEncode {
+		data, err := typesToEncode[i].Marshal()
+		require.NoError(t, err)
+		encoded[i] = string(data)
+	}
+
+	tc := NewFunctionTestCase(
+		proc,
+		[]FunctionTestInput{
+			NewFunctionTestInput(types.T_varchar.ToType(), encoded, nil),
+		},
+		NewFunctionTestResult(
+			types.T_int64.ToType(),
+			false,
+			[]int64{0, 0, 0, 6, 0, 0, 2, 0, 6, 0, 0, 0, 0},
+			[]bool{false, false, false, false, false, true, false, true, false, true, true, true, true},
+		),
+		builtInInternalNumericScale,
+	)
+	ok, info := tc.Run()
+	require.True(t, ok, info)
+}
+
+func TestBuiltInInternalDatetimeScaleIncludesAllTemporalTypes(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	typesToEncode := []types.Type{
+		types.New(types.T_time, 6, 6),
+		types.New(types.T_datetime, 3, 3),
+		types.New(types.T_timestamp, 6, 6),
+		types.New(types.T_datetime, 0, -1),
+		types.T_date.ToType(),
+		types.T_year.ToType(),
+		types.T_int32.ToType(),
+	}
+	encoded := make([]string, len(typesToEncode))
+	for i := range typesToEncode {
+		data, err := typesToEncode[i].Marshal()
+		require.NoError(t, err)
+		encoded[i] = string(data)
+	}
+
+	tc := NewFunctionTestCase(
+		proc,
+		[]FunctionTestInput{
+			NewFunctionTestInput(types.T_varchar.ToType(), encoded, nil),
+		},
+		NewFunctionTestResult(
+			types.T_int64.ToType(),
+			false,
+			[]int64{6, 3, 6, 0, 0, 0, 0},
+			[]bool{false, false, false, false, true, true, true},
+		),
+		builtInInternalDatetimeScale,
+	)
+	ok, info := tc.Run()
+	require.True(t, ok, info)
+}
+
 func TestBuiltInNameConst(t *testing.T) {
 	proc := testutil.NewProcess(t)
 
