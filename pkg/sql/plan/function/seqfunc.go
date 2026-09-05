@@ -458,6 +458,10 @@ func Currval(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *
 		return moerr.NewInternalError(proc.Ctx, "Currval: txn operator is nil")
 	}
 
+	// A vector may contain repeated sequence names. Resolve each effective
+	// database once per batch; hidden view arguments can vary by row, so cache
+	// by database name rather than assuming one database for the whole vector.
+	databasesByName := make(map[string]engine.Database, 1)
 	for i := uint64(0); i < uint64(length); i++ {
 		v, null := ivec.GetStrValue(i)
 		db, dbNull := sequenceDatabase(proc.GetSessionInfo().Database, databases, i)
@@ -466,9 +470,14 @@ func Currval(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *
 				return
 			}
 		} else {
-			dbHandler, dbErr := e.Database(proc.Ctx, db, txn)
-			if dbErr != nil {
-				return dbErr
+			dbHandler, ok := databasesByName[db]
+			if !ok {
+				var dbErr error
+				dbHandler, dbErr = e.Database(proc.Ctx, db, txn)
+				if dbErr != nil {
+					return dbErr
+				}
+				databasesByName[db] = dbHandler
 			}
 			var rel engine.Relation
 			rel, err = dbHandler.Relation(proc.Ctx, string(v), nil)
