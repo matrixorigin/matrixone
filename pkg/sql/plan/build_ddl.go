@@ -2559,6 +2559,17 @@ func buildCreateTable(
 		if catalog.IsHiddenTable(createTable.TableDef.Name) {
 			kind = ""
 		}
+		// ALTER TABLE ... COPY rebuilds the table from regenerated DDL, which cannot carry
+		// relkind. The replica must keep the original's kind rather than the one derived
+		// above from its (temporary) name, or a table whose kind is the only thing hiding it
+		// -- an index metadata table, a fulltext store -- becomes visible to every
+		// relkind-keyed filter after any ALTER. The caller supplies it via
+		// StatementOption.WithKeepRelKind; "" is a legitimate value, hence the presence flag.
+		if v := ctx.GetContext().Value(defines.RelKindKey{}); v != nil {
+			if keep, ok := v.(string); ok {
+				kind = keep
+			}
+		}
 		createSQL := createTableSQLForCatalog(ctx, stmt)
 		properties := []*plan.Property{
 			{

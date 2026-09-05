@@ -23,6 +23,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex"
 	veccache "github.com/matrixorigin/matrixone/pkg/vectorindex/cache"
@@ -46,6 +47,8 @@ type hnswSearchState struct {
 	limit     uint64
 	keys      []int64
 	distances []float64
+	// Named-snapshot read TS, from tf.ScanSnapshot (#27927).
+	scanSnapshot *plan.Snapshot
 	// holding one call batch, tokenizedState owns it.
 	batch *batch.Batch
 }
@@ -72,6 +75,7 @@ func (u *hnswSearchState) reset(tf *TableFunction, proc *process.Process) {
 	if u.batch != nil {
 		u.batch.CleanOnlyData()
 	}
+	u.scanSnapshot = nil
 }
 
 func (u *hnswSearchState) call(tf *TableFunction, proc *process.Process) (vm.CallResult, error) {
@@ -149,6 +153,8 @@ func hnswSearchPrepare(proc *process.Process, arg *TableFunction) (tvfState, err
 // start calling tvf on nthRow and put the result in u.batch.  Note that current tokenize impl will
 // always return one batch per nthRow.
 func (u *hnswSearchState) start(tf *TableFunction, proc *process.Process, nthRow int, analyzer process.Analyzer) (err error) {
+
+	u.scanSnapshot = tf.ScanSnapshot
 
 	if !u.inited {
 		if len(tf.Params) > 0 {
@@ -275,8 +281,16 @@ func runHnswSearch[T types.RealNumbers](proc *process.Process, u *hnswSearchStat
 		Limit:        uint(searchLimit),
 		OrigFuncName: u.tblcfg.OrigFuncName,
 	}
+	// Named-snapshot search (#27927): sp.SnapshotTS makes the index-load SQL run on a txn
+	// cloned at that TS, and the cache key carries the same TS so the historical index is a
+	// separate cache entry from the current one.
+	sp := sqlexec.NewSqlProcess(proc)
+	cacheKey := u.tblcfg.IndexTable
+	if ets := sp.ApplyScanSnapshot(u.scanSnapshot); ets != nil {
+		cacheKey = veccache.SnapshotKey(u.tblcfg.IndexTable, *ets)
+	}
 	var keys any
-	keys, u.distances, err = veccache.Cache.Search(sqlexec.NewSqlProcess(proc), u.tblcfg.IndexTable, algo, fa, rt)
+	keys, u.distances, err = veccache.Cache.Search(sp, cacheKey, algo, fa, rt)
 	if err != nil {
 		return err
 	}

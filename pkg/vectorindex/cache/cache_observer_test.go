@@ -54,6 +54,7 @@ func (m *observerMock) OnCacheInvalidated(reason string) {
 		<-m.allowInvalidation
 	}
 }
+func (m *observerMock) GetIndexSize() (int64, int64) { return 0, 0 }
 func (m *observerMock) Destroy() {
 	if m.destroyStarted != nil {
 		close(m.destroyStarted)

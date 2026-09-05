@@ -83,6 +83,14 @@ type Fulltext2Search struct {
 	loadedTs   int64
 	loadedTail int64
 	genValid   bool
+
+	// preloadNdoc is the base doc count read by Preload, so GetIndexSize can report what the
+	// following Load will cost before any base is mapped, and so Load can run the heap-budget
+	// check without repeating the aggregate. Superseded by the loaded segments once Load
+	// succeeds. preloaded distinguishes "Preload ran and counted zero docs" from "Preload
+	// never ran" -- a caller may reach Load directly.
+	preloadNdoc int64
+	preloaded   bool
 }
 
 var _ veccache.VectorIndexSearchIf = (*Fulltext2Search)(nil)
@@ -97,12 +105,30 @@ func NewFulltext2Search(cfg TableConfig) *Fulltext2Search {
 // tag=1 CdcTail delta frames (+ delete set), assembled into a queryable Index with
 // global stats and per-pk liveness. An index created on an empty table has no tag=0
 // base, so segs may hold only tail segments (or be empty → a loaded, doc-less index).
+// Preload counts the docs across every tag=0 base -- the quantity the heap cost is derived
+// from -- without loading or mapping any of them, so the cache can reclaim room for this index
+// before Load claims it.
+func (s *Fulltext2Search) Preload(sqlproc *sqlexec.SqlProcess) error {
+	ndoc, err := baseDocCount(sqlproc, s.cfg)
+	if err != nil {
+		return err
+	}
+	s.preloadNdoc, s.preloaded = ndoc, true
+	return nil
+}
+
 func (s *Fulltext2Search) Load(sqlproc *sqlexec.SqlProcess) error {
 	// Fail fast on the QUERY path if the bases' per-doc metadata won't fit the heap
 	// budget, rather than OOM-killing the CN (which takes down every query on the node).
 	// This guard is on Load, NOT LoadAllBases, so CompactSegments (MERGE) — the remedy —
 	// stays exempt and can still load the bases to reclaim dead docs.
-	if err := checkBaseLoadBudget(sqlproc, s.cfg); err != nil {
+	// Reuse Preload's count when it ran: checkBaseLoadBudget would otherwise repeat the
+	// SUM(nrow) aggregate that Preload already paid for, on every cache miss.
+	if s.preloaded {
+		if err := checkBaseLoadBudgetFor(sqlproc, s.cfg, s.preloadNdoc); err != nil {
+			return err
+		}
+	} else if err := checkBaseLoadBudget(sqlproc, s.cfg); err != nil {
 		return err
 	}
 	bases, err := LoadAllBases(sqlproc, s.cfg)
@@ -129,6 +155,26 @@ func (s *Fulltext2Search) Load(sqlproc *sqlexec.SqlProcess) error {
 		}
 	}
 	return nil
+}
+
+// GetIndexSize reports the Go-heap cost of the loaded index, charged with the SAME per-doc
+// model checkBaseLoadBudget uses to admit the load in the first place (estBytesPerDocHeap), so
+// the governor bounds exactly the quantity that gate measured. Base posting blocks are excluded
+// for the same reason they are excluded there: they are views into a shared read-only mmap --
+// reclaimable OS page cache, not heap, and they cannot OOM the CN. Nothing here is device
+// resident, so the device figure is 0.
+func (s *Fulltext2Search) GetIndexSize() (hostBytes, deviceBytes int64) {
+	if !s.loaded || s.idx == nil {
+		// Between Preload and Load: report what Load is about to cost.
+		return s.preloadNdoc * estBytesPerDocHeap, 0
+	}
+	var ndoc int64
+	for _, seg := range s.idx.segments {
+		if seg != nil {
+			ndoc += seg.N
+		}
+	}
+	return ndoc * estBytesPerDocHeap, 0
 }
 
 // IsStale reports whether the underlying index has changed since this entry was loaded, by

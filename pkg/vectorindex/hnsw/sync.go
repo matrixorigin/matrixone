@@ -53,7 +53,20 @@ type HnswSync[T types.RealNumbers] struct {
 	current *HnswModel[T]
 	last    *HnswModel[T]
 	idxname string
+
+	// tmpDir is the LOCAL fileservice scratch volume, resolved once at construction: the
+	// model-creating helpers below have no SqlProcess in scope, and this type is what
+	// pkg/iscp drives the CDC sync through.
+	tmpDir string
+
+	// buildTS is the data version the synced generations reflect, supplied by the ISCP
+	// consumer from the iteration it is applying. 0 means unknown.
+	buildTS int64
 }
+
+// SetBuildTS records the data version this sync's generations will reflect: the upper bound of
+// the change range being applied. The ISCP consumer takes it from DataRetriever.GetToTS.
+func (s *HnswSync[T]) SetBuildTS(ts int64) { s.buildTS = ts }
 
 func (s *HnswSync[T]) RunOnce(sqlproc *sqlexec.SqlProcess, cdc *vectorindex.VectorIndexCdc[T]) (err error) {
 
@@ -71,13 +84,26 @@ func (s *HnswSync[T]) RunOnce(sqlproc *sqlexec.SqlProcess, cdc *vectorindex.Vect
 	return nil
 }
 
+// syncSpillDir prefers the directory the caller resolved. A CDC sync is driven from pkg/iscp on
+// a SqlContext with no process.Process, so hnswSpillDir cannot find a FileService from the
+// SqlProcess alone; the ISCP writer resolves it from the executor's root FileService and passes
+// it in, exactly as the fulltext2 consumer does for its tail spills. The sqlproc fallback covers
+// any caller that does have a Process.
+func syncSpillDir(sqlproc *sqlexec.SqlProcess, spillDir string) string {
+	if spillDir != "" {
+		return spillDir
+	}
+	return hnswSpillDir(sqlproc)
+}
+
 func NewHnswSync[T types.RealNumbers](sqlproc *sqlexec.SqlProcess,
 	db string,
 	tbl string,
 	idxname string,
 	idxdefs []*plan.IndexDef,
 	vectype int32,
-	dimension int32) (*HnswSync[T], error) {
+	dimension int32,
+	spillDir string) (*HnswSync[T], error) {
 	var err error
 
 	var idxtblcfg vectorindex.IndexTableConfig
@@ -185,7 +211,8 @@ func NewHnswSync[T types.RealNumbers](sqlproc *sqlexec.SqlProcess,
 	// assume CDC run in single thread
 	// model id for CDC is cdc:1:0:timestamp
 	uid := fmt.Sprintf("%s:%d:%d", "cdc", 1, 0)
-	sync := &HnswSync[T]{indexes: indexes, idxcfg: idxcfg, tblcfg: idxtblcfg, uid: uid, idxname: idxname}
+	sync := &HnswSync[T]{indexes: indexes, idxcfg: idxcfg, tblcfg: idxtblcfg, uid: uid, idxname: idxname,
+		tmpDir: syncSpillDir(sqlproc, spillDir)}
 	// Monotonic metadata timestamp (the cross-CN cache-freshness generation) — strictly greater
 	// than every existing model row, not a bare wall-clock value. See nextTimestamp. (Save
 	// recomputes it just before writing; this initial value keeps the uid:ts model id unique.)
@@ -414,7 +441,7 @@ func (s *HnswSync[T]) setupModel(sqlproc *sqlexec.SqlProcess, maxcap uint) error
 	if len(s.indexes) == 0 {
 		// create a new model and do insert
 		id := s.getModelId()
-		newmodel, err := NewHnswModelForBuild[T](id, s.idxcfg, int(s.tblcfg.ThreadsBuild), maxcap)
+		newmodel, err := NewHnswModelForBuild[T](id, s.idxcfg, int(s.tblcfg.ThreadsBuild), maxcap, s.tmpDir)
 		if err != nil {
 			return err
 		}
@@ -428,7 +455,7 @@ func (s *HnswSync[T]) setupModel(sqlproc *sqlexec.SqlProcess, maxcap uint) error
 			//os.Stderr.WriteString(fmt.Sprintf("full len %d, cap %d\n", idxlen, last.MaxCapacity))
 			id := s.getModelId()
 			// model is already full, create a new model for insert
-			newmodel, err := NewHnswModelForBuild[T](id, s.idxcfg, int(s.tblcfg.ThreadsBuild), maxcap)
+			newmodel, err := NewHnswModelForBuild[T](id, s.idxcfg, int(s.tblcfg.ThreadsBuild), maxcap, s.tmpDir)
 			if err != nil {
 				return err
 			}
@@ -608,7 +635,12 @@ func (s *HnswSync[T]) nextTimestamp() int64 {
 func (s *HnswSync[T]) Save(sqlproc *sqlexec.SqlProcess) error {
 	// save to files and then save to database
 	s.ts = s.nextTimestamp()
-	sqls, err := s.ToSql(s.ts)
+	// build_ts is the upper bound of the change range this sync applied -- the data version the
+	// rewritten generation now reflects -- which the ISCP consumer sets via SetBuildTS. It is
+	// deliberately NOT this transaction's SnapshotTS: that is >= the applied range and would
+	// claim coverage of changes committed after the range was collected but never applied.
+	// 0 when no consumer supplied one (a direct caller outside ISCP), meaning unknown.
+	sqls, err := s.ToSql(s.ts, s.buildTS)
 	if err != nil {
 		return err
 	}
@@ -686,7 +718,7 @@ func (s *HnswSync[T]) getLastModel(sqlproc *sqlexec.SqlProcess, maxcap uint) (*H
 
 		id := s.getModelId()
 		// model is already full, create a new model for insert
-		newmodel, err := NewHnswModelForBuild[T](id, s.idxcfg, int(s.tblcfg.ThreadsBuild), maxcap)
+		newmodel, err := NewHnswModelForBuild[T](id, s.idxcfg, int(s.tblcfg.ThreadsBuild), maxcap, s.tmpDir)
 		if err != nil {
 			return nil, err
 		}
@@ -707,7 +739,7 @@ func (s *HnswSync[T]) getLastModelAndIncrForSync(sqlproc *sqlexec.SqlProcess, ma
 	if full {
 		id := s.getModelId()
 		// model is already full, create a new model for insert
-		newmodel, err := NewHnswModelForBuild[T](id, s.idxcfg, int(s.tblcfg.ThreadsBuild), maxcap)
+		newmodel, err := NewHnswModelForBuild[T](id, s.idxcfg, int(s.tblcfg.ThreadsBuild), maxcap, s.tmpDir)
 		if err != nil {
 			return nil, false, err
 		}
@@ -727,7 +759,9 @@ func (s *HnswSync[T]) getLastModelAndIncrForSync(sqlproc *sqlexec.SqlProcess, ma
 // generate SQL to update the secondary index tables
 // 1. sync the metadata table
 // 2. sync the index file to index table
-func (s *HnswSync[T]) ToSql(ts int64) ([]string, error) {
+// ToSql emits the CDC sync's inserts. ts orders the generations (wall clock); buildTS is the
+// transaction SnapshotTS the content reflects.
+func (s *HnswSync[T]) ToSql(ts int64, buildTS int64) ([]string, error) {
 
 	if len(s.indexes) == 0 {
 		return []string{}, nil
@@ -776,7 +810,8 @@ func (s *HnswSync[T]) ToSql(ts int64) ([]string, error) {
 		}
 		fs := finfo.Size()
 
-		metas = append(metas, fmt.Sprintf("('%s', '%s', %d, %d)", idx.Id, chksum, ts, fs))
+		metas = append(metas, fmt.Sprintf("('%s', '%s', %d, %d, %d, %d)",
+			idx.Id, chksum, ts, fs, idx.Len.Load(), buildTS))
 		ts++
 	}
 

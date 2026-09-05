@@ -74,7 +74,7 @@ type ivfpqBuilder interface {
 	AddRow(id int64, vecBytes []byte) error
 	SetFilterColumns(colMetaJSON string)
 	AddFilterChunk(colIdx uint32, data []byte, nullBitmap []uint32, nrows uint64) error
-	ToInsertSql(ts int64) ([]string, error)
+	ToInsertSql(ts int64, buildTS int64) ([]string, error)
 	// DeviceDemand is what EACH device must hold to serve this index, valid after
 	// ToInsertSql. end() checks it against the hardware so CREATE cannot succeed
 	// for an index no query could ever load.
@@ -136,7 +136,7 @@ func (u *ivfpqCreateState) end(tf *TableFunction, proc *process.Process) error {
 
 	ts := time.Now().UnixMicro()
 	if u.builder != nil {
-		sqls, err = u.builder.ToInsertSql(ts)
+		sqls, err = u.builder.ToInsertSql(ts, buildSnapshotTS(proc))
 	}
 	// No builder selected → init didn't set one. Nothing to do for the cuvs
 	// side; the CDC tail (if any) below still emits.
@@ -621,7 +621,7 @@ func (u *ivfpqCreateState) start(tf *TableFunction, proc *process.Process, nthRo
 		// than /tmp: each tar is a whole sub-index, so a large build writes GB
 		// through it, and LOCAL is the provisioned data volume. "" when no LOCAL
 		// fileservice is attached, which os.MkdirTemp reads as $TMPDIR.
-		spillDir := vimemory.HostSpillDir(proc.Ctx, proc.Base.FileService)
+		spillDir := vimemory.HostSpillDir(proc.Ctx, proc.Base.FileService, proc.GetService())
 		if spillDir == "" {
 			logutil.Infof("IVFPQ create: no LOCAL fileservice; index tars will use $TMPDIR")
 		}

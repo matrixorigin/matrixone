@@ -227,6 +227,8 @@ func (builder *QueryBuilder) applyIndicesForSortUsingIvfpq(nodeID int32, vecCtx 
 		},
 		BindingTags:     []int32{tableFuncTag},
 		TblFuncExprList: tableFuncExprs,
+		// Named-snapshot read TS for the TVF (#27927).
+		ScanSnapshot: DeepCopySnapshot(vecCtx.scanNode.ScanSnapshot),
 	}
 	tableFuncNodeID := builder.appendNode(tableFuncNode, ctx)
 

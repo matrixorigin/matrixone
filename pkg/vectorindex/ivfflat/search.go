@@ -64,6 +64,12 @@ type IvfflatSearch[T types.RealNumbers] struct {
 	Tblcfg        vectorindex.IndexTableConfig
 	Index         *IvfflatSearchIndex[T]
 	ThreadsSearch int64
+
+	// preloadHostBytes/preloadDeviceBytes publish the configured centroid
+	// footprint before Load materializes the brute-force index. The cache reads
+	// these through GetIndexSize between Preload and Load.
+	preloadHostBytes   int64
+	preloadDeviceBytes int64
 }
 
 func (idx *IvfflatSearchIndex[T]) LoadCentroids(proc *sqlexec.SqlProcess, idxcfg vectorindex.IndexConfig, tblcfg vectorindex.IndexTableConfig, nthread int64) error {
@@ -1131,9 +1137,61 @@ func (s *IvfflatSearch[T]) Destroy() {
 		s.Index.Destroy()
 	}
 	s.Index = nil
+	s.preloadHostBytes, s.preloadDeviceBytes = 0, 0
 }
 
-// load index from database (implement VectorIndexSearch.LoadFromDatabase)
+// Preload publishes the configured centroid footprint without materializing
+// any vectors. IVF-FLAT's resident part is a fixed lists*dimensions matrix,
+// so the cache can reserve room before Load allocates it. The estimate is
+// conservative for incomplete metadata: it reserves the configured shape;
+// Load still validates the rows and may use less.
+func (s *IvfflatSearch[T]) Preload(sqlproc *sqlexec.SqlProcess) error {
+	s.preloadHostBytes, s.preloadDeviceBytes = 0, 0
+	lists, dimensions := s.Idxcfg.Ivfflat.Lists, s.Idxcfg.Ivfflat.Dimensions
+	if lists == 0 || dimensions == 0 {
+		return nil
+	}
+
+	// Ask the dispatch itself which arena the centroids will land in. Deciding it here from
+	// the session mode alone was wrong on a non-gpu build, where NewBruteForceIndex ignores
+	// gpu_mode entirely and always builds a CPU index: a session with gpu_mode=1 would have
+	// reserved DEVICE bytes for a load that allocates HOST ones, leaving both arenas wrong.
+	var resolver func(string, bool, bool) (interface{}, error)
+	if sqlproc != nil && (sqlproc.Proc != nil || sqlproc.SqlCtx != nil) {
+		resolver = sqlproc.GetResolveVariableFunc()
+	}
+	useGPU := brute_force.DispatchesToDevice[T](gpumode.EffectiveGpuMode(resolver))
+
+	elementSize := uint64(util.UnsafeSizeOf[T]())
+	maxUint64 := ^uint64(0)
+	if uint64(lists) != 0 && uint64(dimensions) > maxUint64/uint64(lists) {
+		return moerr.NewInternalErrorNoCtx("IVFFLAT centroid size overflows platform capacity")
+	}
+	elements := uint64(lists) * uint64(dimensions)
+	if elements != 0 && elements > maxUint64/elementSize {
+		return moerr.NewInternalErrorNoCtx("IVFFLAT centroid size overflows platform capacity")
+	}
+	bytes := elements * elementSize
+	maxInt64 := uint64(^uint64(0) >> 1)
+	if bytes > maxInt64 {
+		return moerr.NewInternalErrorNoCtx("IVFFLAT centroid size exceeds int64 capacity")
+	}
+
+	if useGPU {
+		s.preloadDeviceBytes = int64(bytes)
+		return nil
+	}
+
+	// GoBruteForceIndex retains one slice header per centroid row in addition
+	// to the vector payload. This matches its GetIndexSize implementation.
+	rowHeaders := uint64(lists) * uint64(util.UnsafeSizeOf[[]T]())
+	if rowHeaders > maxInt64-bytes {
+		return moerr.NewInternalErrorNoCtx("IVFFLAT centroid size exceeds int64 capacity")
+	}
+	s.preloadHostBytes = int64(bytes + rowHeaders)
+	return nil
+}
+
 func (s *IvfflatSearch[T]) Load(sqlproc *sqlexec.SqlProcess) error {
 
 	idx := &IvfflatSearchIndex[T]{}
@@ -1144,6 +1202,20 @@ func (s *IvfflatSearch[T]) Load(sqlproc *sqlexec.SqlProcess) error {
 	}
 	s.Index = idx
 	return nil
+}
+
+// GetIndexSize reports the centroids, the only part of an IVFFLAT index the cache holds
+// resident: the entries stay in the index table and are read per query. Centroids is itself a
+// VectorIndexSearchIf (a brute-force index over the centroid vectors), so both arenas come
+// straight from it -- in GPU mode those centroids are device resident.
+func (s *IvfflatSearch[T]) GetIndexSize() (hostBytes, deviceBytes int64) {
+	if s.Index == nil {
+		return s.preloadHostBytes, s.preloadDeviceBytes
+	}
+	if s.Index.Centroids == nil {
+		return 0, 0
+	}
+	return s.Index.Centroids.GetIndexSize()
 }
 
 // check config and update some parameters such as ef_search

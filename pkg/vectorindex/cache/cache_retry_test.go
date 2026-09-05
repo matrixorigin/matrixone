@@ -61,6 +61,8 @@ func (m *permanentInvalidStateLoadSearch) Load(*sqlexec.SqlProcess) error {
 	return moerr.NewInternalErrorNoCtx("bounded probe terminator")
 }
 
+func (m *permanentInvalidStateLoadSearch) Preload(*sqlexec.SqlProcess) error { return nil }
+func (m *permanentInvalidStateLoadSearch) GetIndexSize() (int64, int64)      { return 0, 0 }
 func (m *permanentInvalidStateLoadSearch) Destroy() {
 	m.destroys.Add(1)
 }
@@ -83,6 +85,8 @@ func (m *blockedInvalidStateLoadSearch) Load(*sqlexec.SqlProcess) error {
 	return NewRetryableLoadError(moerr.NewInvalidStateNoCtx("load superseded"))
 }
 
+func (m *blockedInvalidStateLoadSearch) Preload(*sqlexec.SqlProcess) error { return nil }
+func (m *blockedInvalidStateLoadSearch) GetIndexSize() (int64, int64)      { return 0, 0 }
 func (m *blockedInvalidStateLoadSearch) Destroy() {
 	m.destroys.Add(1)
 }
@@ -108,6 +112,8 @@ func (m *retryingLoadSearch) Load(*sqlexec.SqlProcess) error {
 	return nil
 }
 
+func (m *retryingLoadSearch) Preload(*sqlexec.SqlProcess) error { return nil }
+func (m *retryingLoadSearch) GetIndexSize() (int64, int64)      { return 0, 0 }
 func (m *retryingLoadSearch) Destroy() {
 	m.destroys.Add(1)
 }

@@ -113,7 +113,16 @@ const maxInsertTuples = 500
 // base (sync CREATE/REINDEX build); tag=1 is a CDC delta. sqlproc resolves the LOCAL
 // SSD spill dir (falls back to /tmp when none is attached). The returned cleanup MUST
 // run after the SQLs execute (they read the temp file at execution).
-func (s *Segment) ToInsertSqls(sqlproc *sqlexec.SqlProcess, cfg TableConfig, ts int64, tag int) (sqls []string, cleanup func(), err error) {
+// ToInsertSqls persists this segment. buildTS is the base-table version the segment's content
+// reflects, recorded as metadata.build_ts; 0 means unknown.
+//
+// It is a parameter rather than something derived here because the two callers know different
+// things and the tag cannot tell them apart -- both write tag=0. A CREATE builds from the source
+// table inside this transaction, so its SnapshotTS is exactly the version captured. A MERGE
+// merges existing index segments and never reads the source table, so the compaction
+// transaction's SnapshotTS would claim coverage the content does not have; and since its inputs
+// include unversioned CDC tails there is no version to name, so it passes 0.
+func (s *Segment) ToInsertSqls(sqlproc *sqlexec.SqlProcess, cfg TableConfig, ts int64, tag int, buildTS int64) (sqls []string, cleanup func(), err error) {
 	buf, err := s.Serialize()
 	if err != nil {
 		return nil, nil, err
@@ -137,12 +146,14 @@ func (s *Segment) ToInsertSqls(sqlproc *sqlexec.SqlProcess, cfg TableConfig, ts 
 	}
 
 	metaTbl := sqlquote.QualifiedIdent(cfg.DbName, cfg.MetadataTable)
-	sqls = append(sqls, fmt.Sprintf("INSERT INTO %s (%s, %s, %s, %s, %s, %s) VALUES (%s, %d, %s, %d, %d, %d)",
+	sqls = append(sqls, fmt.Sprintf("INSERT INTO %s (%s, %s, %s, %s, %s, %s, %s) VALUES (%s, %d, %s, %d, %d, %d, %d)",
 		metaTbl,
 		catalog.FullText2Index_TblCol_Metadata_Index_Id, catalog.FullText2Index_TblCol_Metadata_Timestamp,
 		catalog.FullText2Index_TblCol_Metadata_Checksum, catalog.FullText2Index_TblCol_Metadata_Filesize,
 		catalog.FullText2Index_TblCol_Metadata_Recency, catalog.FullText2Index_TblCol_Metadata_Nrow,
-		sqlquote.String(s.Id), ts, sqlquote.String(checksum), filesize, s.Recency, s.N))
+		catalog.FullText2Index_TblCol_Metadata_Build_Ts,
+		sqlquote.String(s.Id), ts, sqlquote.String(checksum), filesize, s.Recency, s.N,
+		buildTS))
 	sqls = append(sqls, fileChunkInsertSqls(cfg, s.Id, 0, path, 0, int(filesize), tag)...)
 	return sqls, cleanup, nil
 }
@@ -291,13 +302,24 @@ const estBytesPerDocHeap = 256
 // - live Go heap (cgroup-aware). Turns a node-killing OOM into a clear, actionable
 // error suggesting compaction.
 func checkBaseLoadBudget(sqlproc *sqlexec.SqlProcess, cfg TableConfig) error {
+	ndoc, err := baseDocCount(sqlproc, cfg)
+	if err != nil {
+		return err
+	}
+	return checkBaseLoadBudgetFor(sqlproc, cfg, ndoc)
+}
+
+// baseDocCount sums the doc count over every tag=0 base, the quantity both the load budget and
+// the index cache's size estimate are derived from. Split out so Preload can read it before any
+// base is loaded.
+func baseDocCount(sqlproc *sqlexec.SqlProcess, cfg TableConfig) (int64, error) {
 	// CAST AS SIGNED so the sum reads back as int64 regardless of how SUM types its
 	// result (GetFixedAtNoTypeCheck[int64] would misread a decimal vector).
 	sql := fmt.Sprintf("SELECT CAST(COALESCE(SUM(%s), 0) AS SIGNED) FROM %s",
 		catalog.FullText2Index_TblCol_Metadata_Nrow, sqlquote.QualifiedIdent(cfg.DbName, cfg.MetadataTable))
 	res, err := runSql(sqlproc, sql)
 	if err != nil {
-		return err
+		return 0, err
 	}
 	defer res.Close()
 	var ndoc int64
@@ -307,6 +329,11 @@ func checkBaseLoadBudget(sqlproc *sqlexec.SqlProcess, cfg TableConfig) error {
 		}
 		ndoc = vector.GetFixedAtNoTypeCheck[int64](bat.Vecs[0], 0)
 	}
+	return ndoc, nil
+}
+
+// checkBaseLoadBudgetFor is the budget decision itself, over an already-counted ndoc.
+func checkBaseLoadBudgetFor(sqlproc *sqlexec.SqlProcess, cfg TableConfig, ndoc int64) error {
 	need := ndoc * estBytesPerDocHeap
 	avail := int64(system.MemoryTotal())*8/10 - int64(system.MemoryGolang())
 	if need > avail {

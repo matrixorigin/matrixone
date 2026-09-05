@@ -23,6 +23,7 @@ import (
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
@@ -105,6 +106,111 @@ type SqlProcess struct {
 	// SQL/table-function arguments must never populate these fields.
 	AccountIDOverride *uint32
 	DatabaseOverride  string
+
+	// The named snapshot's owning tenant, bound by ApplyScanSnapshot. Kept SEPARATE from
+	// AccountIDOverride rather than written into it: both answer "which account do the
+	// index-table reads resolve under", they can disagree, and a shared field makes the
+	// answer depend on which setter ran last. resolveAccountID states the precedence once,
+	// so no call order can change it.
+	SnapshotAccountID *uint32
+
+	// Optional named-snapshot read timestamp. When set (and historical), the
+	// internal SQL runs against a txn cloned at this TS, so index-table reads
+	// return the snapshot's historical state instead of the current one
+	// (fulltext/fulltext2 MATCH on a named snapshot, #27941). nil => current TS.
+	SnapshotTS *timestamp.Timestamp
+}
+
+// EffectiveSnapshotTS returns the historical read timestamp this SqlProcess will
+// actually time-travel to -- i.e. the TS txnForRun clones the read txn at -- or nil
+// when the read runs at the current txn (no SnapshotTS, an empty TS, or a TS not
+// earlier than the current one). It is the SINGLE source of truth for "is this a
+// historical read": any caller that keys a cache by the snapshot (e.g. the
+// fulltext2 TS-suffixed cache key) MUST derive that key from this, so the key can
+// never disagree with the clone decision. A disagreement would cache a historical
+// index under the current key and serve it to current queries (#27941).
+func (s *SqlProcess) EffectiveSnapshotTS() *timestamp.Timestamp {
+	if s.SnapshotTS == nil || s.Proc == nil {
+		return nil
+	}
+	txnOp := s.Proc.GetTxnOperator()
+	if txnOp == nil {
+		return nil
+	}
+	ts := *s.SnapshotTS
+	if ts.IsEmpty() || !ts.Less(txnOp.Txn().SnapshotTS) {
+		return nil
+	}
+	return s.SnapshotTS
+}
+
+// BuildSnapshotTS returns the transaction SnapshotTS (physical) this process reads at -- the
+// base-table version an index generation built here reflects, recorded in the metadata's build_ts.
+//
+// It is deliberately NOT the wall clock the metadata's "timestamp" column carries: that one only
+// orders generations, is skewable across CNs, and cannot be compared against a named snapshot's
+// TS to decide whether a generation actually covers the data a {snapshot = ...} read wants.
+//
+// 0 when there is no transaction to ask, which readers treat as unknown.
+func (s *SqlProcess) BuildSnapshotTS() int64 {
+	if s == nil {
+		return 0
+	}
+	var op client.TxnOperator
+	switch {
+	case s.Proc != nil:
+		op = s.Proc.GetTxnOperator()
+	case s.SqlCtx != nil:
+		op = s.SqlCtx.TxnOperator
+	}
+	if op == nil {
+		return 0
+	}
+	return op.Txn().SnapshotTS.PhysicalTime
+}
+
+// ApplyScanSnapshot threads a planner-resolved named snapshot onto this SqlProcess and returns
+// the effective historical read timestamp, or nil when the snapshot is not historical relative
+// to the current txn -- in which case nothing is bound and the read proceeds as an ordinary
+// current-state read.
+//
+// It carries BOTH halves of the snapshot identity, which is the reason this is one helper rather
+// than a field assignment at each call site: the timestamp, so index-table reads run on a txn
+// cloned at it, and the snapshot's owning TENANT, so those reads resolve under the account that
+// owns the data. Binding the timestamp alone is a correctness bug for a cross-account snapshot:
+// an account-level snapshot carries Tenant.TenantID = the snapshot's account (see
+// planSnapshotFromRecord), so a sys session reading acc1's snapshot would scan the base table as
+// acc1 while resolving __mo_index_secondary_... as account 0 -- table-not-found, or silently
+// empty results. The compile layer binds the same pair under the same condition; see the
+// ScanSnapshot branch in Compile's table-scan path.
+//
+// snap comes from the PLANNER (plan.TableFunction.ScanSnapshot), never from a table-function
+// argument, which is what makes setting the trusted AccountIDOverride here legitimate.
+func (s *SqlProcess) ApplyScanSnapshot(snap *plan.Snapshot) *timestamp.Timestamp {
+	if snap == nil {
+		return nil
+	}
+	s.SnapshotTS = snap.TS
+	ets := s.EffectiveSnapshotTS()
+	if ets == nil {
+		return nil
+	}
+	if snap.Tenant != nil {
+		id := snap.Tenant.TenantID
+		s.SnapshotAccountID = &id
+	}
+	return ets
+}
+
+// txnForRun returns the txn operator the internal SQL should run under: a clone
+// pinned at the historical snapshot TS when EffectiveSnapshotTS reports one, else
+// the process's current txn.
+func (s *SqlProcess) txnForRun(proc *process.Process) client.TxnOperator {
+	txnOp := proc.GetTxnOperator()
+	if ets := s.EffectiveSnapshotTS(); ets != nil && txnOp != nil {
+		return txnOp.CloneSnapshotOp(*ets)
+	}
+	return txnOp
 }
 
 func NewSqlProcess(proc *process.Process) *SqlProcess {
@@ -121,9 +227,52 @@ func (s *SqlProcess) WithExecutionIdentity(accountID uint32, database string) *S
 	return s
 }
 
-func (s *SqlProcess) executionAccountID(defaultAccountID uint32) uint32 {
+// resolveAccountID is the ONE place the account an internal read resolves under is decided.
+//
+// Precedence, highest first:
+//
+//  1. AccountIDOverride -- a trusted execution identity from the planner. For a SUBSCRIBED
+//     table this is the PUBLISHER, which owns both the base table and its index tables.
+//  2. SnapshotAccountID -- the named snapshot's owning tenant.
+//  3. nil -- the caller's own account, read from the process context.
+//
+// The publisher outranks the snapshot because it is the account the index tables actually
+// live in. A snapshot's tenant is only the same account by coincidence: planSnapshotFromRecord
+// sets it to the snapshotted account for an ACCOUNT-level snapshot, to the CALLER's account
+// for a database- or table-level one, and to 0 for a cluster-level one -- none of which owns a
+// subscribed table's indexes. This mirrors the engine's own base-table scan, which binds
+// ScanSnapshot.Tenant and then lets PubInfo override it
+// (Compile.getCompileTableScanDataSourceTxn), so the index SQL resolves as the same account as
+// the scan it belongs to.
+func (s *SqlProcess) resolveAccountID() *uint32 {
 	if s.AccountIDOverride != nil {
-		return *s.AccountIDOverride
+		return s.AccountIDOverride
+	}
+	return s.SnapshotAccountID
+}
+
+// EffectiveAccountID is the account this SqlProcess actually EXECUTES as, per resolveAccountID:
+// the publisher when a subscribed table bound an execution identity, else the snapshot's owning
+// tenant when ApplyScanSnapshot bound one, else the caller's own account.
+//
+// GetAccountID reads the original process context and therefore answers "who asked", which is
+// the wrong owner for a cross-account snapshot read: SYS reading tenant 42's index runs its
+// index-table SQL as 42 (executionContext / executionStatementOption both honour the override),
+// so anything attributing the resulting resident state -- the cache's byte governor -- must
+// attribute it to 42 as well, not to 0.
+func (s *SqlProcess) EffectiveAccountID() (uint32, error) {
+	if s == nil {
+		return 0, moerr.NewInternalErrorNoCtx("nil SqlProcess")
+	}
+	if id := s.resolveAccountID(); id != nil {
+		return *id, nil
+	}
+	return s.GetAccountID()
+}
+
+func (s *SqlProcess) executionAccountID(defaultAccountID uint32) uint32 {
+	if id := s.resolveAccountID(); id != nil {
+		return *id
 	}
 	return defaultAccountID
 }
@@ -136,16 +285,16 @@ func (s *SqlProcess) executionDatabase(defaultDatabase string) string {
 }
 
 func (s *SqlProcess) executionContext(ctx context.Context) context.Context {
-	if s.AccountIDOverride != nil {
-		return defines.AttachAccountId(ctx, *s.AccountIDOverride)
+	if id := s.resolveAccountID(); id != nil {
+		return defines.AttachAccountId(ctx, *id)
 	}
 	return ctx
 }
 
 func (s *SqlProcess) executionStatementOption() executor.StatementOption {
 	option := executor.StatementOption{}.WithDisableLog()
-	if s.AccountIDOverride != nil {
-		option = option.WithAccountID(*s.AccountIDOverride)
+	if id := s.resolveAccountID(); id != nil {
+		option = option.WithAccountID(*id)
 	}
 	return option
 }
@@ -226,7 +375,7 @@ func RunSql(sqlproc *SqlProcess, sql string) (executor.Result, error) {
 			// All runSql and runSqlWithResult is a part of input sql, can not incr statement.
 			// All these sub-sql's need to be rolled back and retried en masse when they conflict in pessimistic mode
 			WithDisableIncrStatement().
-			WithTxn(proc.GetTxnOperator()).
+			WithTxn(sqlproc.txnForRun(proc)).
 			WithDatabase(sqlproc.executionDatabase(proc.GetSessionInfo().Database)).
 			WithTimeZone(proc.GetSessionInfo().TimeZone).
 			WithAccountID(accountId).
@@ -322,7 +471,7 @@ func RunStreamingSql(
 			// All runSql and runSqlWithResult is a part of input sql, can not incr statement.
 			// All these sub-sql's need to be rolled back and retried en masse when they conflict in pessimistic mode
 			WithDisableIncrStatement().
-			WithTxn(proc.GetTxnOperator()).
+			WithTxn(sqlproc.txnForRun(proc)).
 			WithDatabase(sqlproc.executionDatabase(proc.GetSessionInfo().Database)).
 			WithTimeZone(proc.GetSessionInfo().TimeZone).
 			WithAccountID(accountId).
@@ -385,7 +534,7 @@ func RunTxn(sqlproc *SqlProcess, execFunc func(executor.TxnExecutor) error) erro
 			// All runSql and runSqlWithResult is a part of input sql, can not incr statement.
 			// All these sub-sql's need to be rolled back and retried en masse when they conflict in pessimistic mode
 			WithDisableIncrStatement().
-			WithTxn(proc.GetTxnOperator()).
+			WithTxn(sqlproc.txnForRun(proc)).
 			WithDatabase(proc.GetSessionInfo().Database).
 			WithTimeZone(proc.GetSessionInfo().TimeZone).
 			WithAccountID(accountId).

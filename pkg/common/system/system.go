@@ -93,6 +93,23 @@ func CgroupMemoryLimit() uint64 {
 	return normalizeCgroupLimit(limit)
 }
 
+// NormalizeMemoryCapacity maps a raw memory-capacity reading onto the value
+// used by the sizing callers. Zero means that no finite capacity was
+// discovered. In particular, cgroup v1 reports PAGE_COUNTER_MAX (and some
+// kernels report LONG_MAX) for an unlimited hierarchy; treating either as a
+// real capacity turns an automatic budget into an effectively infinite one.
+//
+// This is exported because callers that combine MemoryTotal with
+// CgroupMemoryLimit must apply the same normalization to both sources. A
+// physical host cannot have a finite memory capacity anywhere near this
+// sentinel, so values at or above it are unambiguously invalid for sizing.
+func NormalizeMemoryCapacity(limit uint64) uint64 {
+	if limit == 0 || limit >= cgroupV1Unlimited {
+		return 0
+	}
+	return limit
+}
+
 // normalizeCgroupLimit maps a raw cgroup limit onto "0 means no bound".
 //
 // The gosigar fallback above returns v1's unlimited sentinel verbatim -- its own
@@ -104,7 +121,7 @@ func normalizeCgroupLimit(limit int64) uint64 {
 	if limit <= 0 || uint64(limit) >= cgroupV1Unlimited {
 		return 0
 	}
-	return uint64(limit)
+	return NormalizeMemoryCapacity(uint64(limit))
 }
 
 func hierarchicalCgroupMemoryLimit(pid int) uint64 {
@@ -591,6 +608,23 @@ func shouldRefreshQuotaConfig() bool {
 	return now-last >= int64(quotaRefreshDebounceSeconds)*int64(time.Second)
 }
 
+func hostMemoryTotal() (uint64, bool) {
+	s := gosigar.ConcreteSigar{}
+	mem, err := s.GetMem()
+	if err != nil {
+		logutil.Errorf("failed to get host memory stats: %v", err)
+		return 0, false
+	}
+	return mem.Total, true
+}
+
+func effectiveContainerMemoryTotal(limit int64, hostTotal uint64) uint64 {
+	if normalized := normalizeCgroupLimit(limit); normalized > 0 {
+		return normalized
+	}
+	return NormalizeMemoryCapacity(hostTotal)
+}
+
 // refreshQuotaConfig get CPU/Mem config from dev. If run in container, get it from the cgroup config.
 // Tips: Currently, the callings are serial in two places: 1) init; 2) runWatchCgroupConfig
 func refreshQuotaConfig() {
@@ -609,17 +643,30 @@ func refreshQuotaConfig() {
 		limit, err := cgroup.GetMemLimit(pid)
 		if err != nil {
 			logutil.Errorf("failed to get cgroup mem limit: %v", err)
+			if total, ok := hostMemoryTotal(); ok {
+				if normalized := NormalizeMemoryCapacity(total); normalized > 0 {
+					memoryTotal.Store(normalized)
+				}
+			}
 		} else {
-			memoryTotal.Store(uint64(limit))
+			if normalized := normalizeCgroupLimit(limit); normalized > 0 {
+				memoryTotal.Store(normalized)
+			} else {
+				// An unlimited cgroup is not a 9.2 EB machine. Keep the host
+				// capacity as the total so automatic consumers still have a
+				// finite sizing input; CgroupMemoryLimit independently remains
+				// zero and therefore does not impose a bound.
+				if total, ok := hostMemoryTotal(); ok {
+					if effective := effectiveContainerMemoryTotal(limit, total); effective > 0 {
+						memoryTotal.Store(effective)
+					}
+				}
+			}
 		}
 	} else {
 		cpuNum.Store(int32(runtime.NumCPU()))
-		s := gosigar.ConcreteSigar{}
-		mem, err := s.GetMem()
-		if err != nil {
-			logutil.Errorf("failed to get memory stats: %v", err)
-		} else {
-			memoryTotal.Store(mem.Total)
+		if total, ok := hostMemoryTotal(); ok {
+			memoryTotal.Store(total)
 		}
 	}
 }

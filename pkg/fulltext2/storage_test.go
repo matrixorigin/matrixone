@@ -157,7 +157,7 @@ func TestToInsertSqls(t *testing.T) {
 	seg.Recency = 3
 
 	// nil sqlproc ⇒ createLocalSpillFile falls back to an os temp file.
-	sqls, cleanup, err := seg.ToInsertSqls(nil, cfg, 12345, int(vectorindex.Tag_ModelChunk))
+	sqls, cleanup, err := seg.ToInsertSqls(nil, cfg, 12345, int(vectorindex.Tag_ModelChunk), 0)
 	require.NoError(t, err)
 	require.NotNil(t, cleanup)
 	defer cleanup()

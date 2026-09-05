@@ -1,0 +1,51 @@
+set experimental_fulltext2_index = 1;
+drop database if exists ft2_snap_case;
+create database ft2_snap_case;
+use ft2_snap_case;
+create table t(id bigint primary key, body text);
+insert into t values (1,'historic alpha'),(2,'shared token');
+create fulltext2 index idx on t(body);
+set @ft2_index = (
+select index_table_name from mo_catalog.mo_indexes
+where name = 'idx' and algo = 'fulltext2' and algo_table_type = 'ftv2_index'
+and table_id in (select rel_id from mo_catalog.mo_tables where reldatabase = database() and relname = 't')
+limit 1
+);
+set @wait_base_sql = concat(
+'select count(*) > 0 as ready from `', database(), '`.`', @ft2_index,
+'` where tag = 0');
+prepare wait_base from @wait_base_sql;
+execute wait_base;
+➤ ready[-7,1,0]  𝄀
+1
+deallocate prepare wait_base;
+set @capture_sql = concat(
+'select coalesce(max(chunk_id), -1) into @tail_baseline from `', database(), '`.`', @ft2_index,
+'` where index_id = ''cdc_tail'' and tag = 1');
+prepare capture from @capture_sql;
+execute capture;
+deallocate prepare capture;
+create snapshot ft2_snap_case_sp for account;
+update t set body='current beta' where id=1;
+insert into t values (3,'current beta');
+set @wait_upd_sql = concat(
+'select coalesce(max(chunk_id), -1) > @tail_baseline as ready from `', database(), '`.`', @ft2_index,
+'` where index_id = ''cdc_tail'' and tag = 1');
+prepare wait_upd from @wait_upd_sql;
+execute wait_upd;
+➤ ready[-7,1,0]  𝄀
+1
+deallocate prepare wait_upd;
+select id from t where match(body) against('+alpha' in boolean mode);
+➤ id[-5,64,0]
+select id from t where match(body) against('+beta' in boolean mode) order by id;
+➤ id[-5,64,0]  𝄀
+1  𝄀
+3
+select id, body from t {snapshot='ft2_snap_case_sp'} where match(body) against('+alpha' in boolean mode);
+➤ id[-5,64,0]  ¦  body[-1,16383,0]  𝄀
+1  ¦  historic alpha
+select id from t {snapshot='ft2_snap_case_sp'} where match(body) against('+beta' in boolean mode);
+➤ id[-5,64,0]
+drop snapshot ft2_snap_case_sp;
+drop database ft2_snap_case;

@@ -138,8 +138,19 @@ func NewGpuAdhocBruteForceIndex[T cuvs.VectorType](dataset [][]T,
 	}, nil
 }
 
+// Preload has nothing to measure: the dataset is supplied at construction.
+func (idx *GpuAdhocBruteForceIndex[T]) Preload(sqlproc *sqlexec.SqlProcess) error { return nil }
+
 func (idx *GpuAdhocBruteForceIndex[T]) Load(sqlproc *sqlexec.SqlProcess) error {
 	return nil
+}
+
+// GetIndexSize reports the flattened dataset this ad-hoc index holds. The bytes are charged to
+// the HOST arena only: the dataset lives in Go memory and is uploaded per search, so nothing is
+// device RESIDENT between queries -- the transient device copy is bounded by the search itself,
+// not by this cache entry's lifetime.
+func (idx *GpuAdhocBruteForceIndex[T]) GetIndexSize() (hostBytes, deviceBytes int64) {
+	return int64(len(idx.dataset)) * int64(util.UnsafeSizeOf[T]()), 0
 }
 
 // SearchFloat32 implements VectorIndexSearchIf — writes results into caller-provided slices.
@@ -274,6 +285,26 @@ func NewBruteForceIndex[T types.ArrayElement](dataset [][]T,
 	}
 }
 
+// DispatchesToDevice reports whether NewBruteForceIndex would build a DEVICE-resident index
+// for element type T under gpuMode. It exists so a caller sizing an index BEFORE it is built
+// charges the arena the build will actually use: the answer depends on the build tag as well as
+// the session, and duplicating either half in the caller is how the two drift apart.
+//
+// It mirrors the dispatch below exactly -- cuVS brute force stores float32 and Float16 only,
+// everything else falls through to the pure-Go CPU index.
+func DispatchesToDevice[T types.ArrayElement](gpuMode bool) bool {
+	if !gpuMode {
+		return false
+	}
+	var zero T
+	switch any(zero).(type) {
+	case float32, types.Float16:
+		return true
+	default:
+		return false
+	}
+}
+
 func NewGpuBruteForceIndex[T cuvs.VectorType](dataset [][]T,
 	dimension uint,
 	m metric.MetricType,
@@ -329,11 +360,23 @@ func NewGpuBruteForceIndex[T cuvs.VectorType](dataset [][]T,
 	}, nil
 }
 
+// Preload has nothing to measure: count and dimension are fixed at construction, so the device
+// cost is known before Build claims it.
+func (idx *GpuBruteForceIndex[T]) Preload(sqlproc *sqlexec.SqlProcess) error { return nil }
+
 func (idx *GpuBruteForceIndex[T]) Load(sqlproc *sqlexec.SqlProcess) (err error) {
 	if idx.index == nil {
 		return moerr.NewInternalErrorNoCtx("GpuBruteForce not initialized")
 	}
 	return idx.index.Build()
+}
+
+// GetIndexSize reports the dataset cuVS holds on the GPU: count * dimension * sizeof(T). It is
+// charged to the DEVICE arena only -- unlike GpuAdhocBruteForceIndex, which keeps its vectors in
+// Go memory and uploads per search, this index owns a built device-resident cuVS index for the
+// whole life of the cache entry, and the Go copy is released at build time.
+func (idx *GpuBruteForceIndex[T]) GetIndexSize() (hostBytes, deviceBytes int64) {
+	return 0, int64(idx.count) * int64(idx.dimension) * int64(util.UnsafeSizeOf[T]())
 }
 
 // SearchFloat32 implements VectorIndexSearchIf — writes results into caller-provided slices.
