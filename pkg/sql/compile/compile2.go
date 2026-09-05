@@ -453,22 +453,22 @@ func (c *Compile) Run(_ uint64) (queryResult *util2.RunResult, err error) {
 			allocationAttempt, err = runC.beginAllocationAccountAttempt()
 		}
 		if err == nil {
-			err = runC.prePipelineInitializer()
-		}
-		if err == nil {
-			preRunWall = carriedPreRunWall + time.Since(preRunOnceStart)
-			attemptPreRunWall = preRunWall
-			runC.MessageBoard.BeforeRunonce()
-			// Calculate time spent between the start and runOnce execution
-			if !isInExecutor {
-				stats.StoreCompilePreRunOnceDuration(time.Since(preRunOnceStart))
-			}
-			coordinatorPhaseStart = time.Time{}
-			coordinatorPhaseBase = 0
+			err = runC.runPipelineAttempt(func() error {
+				preRunWall = carriedPreRunWall + time.Since(preRunOnceStart)
+				attemptPreRunWall = preRunWall
+				runC.MessageBoard.BeforeRunonce()
+				// Calculate time spent between the start and runOnce execution
+				if !isInExecutor {
+					stats.StoreCompilePreRunOnceDuration(time.Since(preRunOnceStart))
+				}
+				coordinatorPhaseStart = time.Time{}
+				coordinatorPhaseBase = 0
 
-			if err = runC.runOnce(); err == nil {
-				err = runC.proc.GetQueryContextError()
-			}
+				if runErr := runC.runOnce(); runErr != nil {
+					return runErr
+				}
+				return runC.proc.GetQueryContextError()
+			})
 			if err == nil {
 				if runC.anal != nil {
 					runC.anal.retryTimes = retryTimes
