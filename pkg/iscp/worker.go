@@ -275,6 +275,13 @@ func jobStatusesForIterationError(iterCtx *IterationContext, err error) []*JobSt
 			ErrorMsg: err.Error(),
 			Stage:    stage,
 		}
+		// For an Init iteration, this CAS can succeed only when the atomic
+		// InitSQL/status transaction did not commit: a committed transaction
+		// already advanced the LSN. Persisting the marker here therefore makes
+		// a later retry/restart safe without guessing the commit outcome.
+		if stage == JobStage_Init {
+			statuses[i].LifecycleVersion = atomicInitLifecycleVersion
+		}
 	}
 	return statuses
 }

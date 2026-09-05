@@ -182,6 +182,7 @@ func (r *DataRetrieverImpl) UpdateWatermark(ctx context.Context,
 		r.status.To,
 		statusJson,
 		r.status.Stage,
+		r.status.LifecycleVersion,
 		ISCPJobState_Completed,
 		r.status.LSN,
 	)

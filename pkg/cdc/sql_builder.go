@@ -324,7 +324,9 @@ const (
 		`job_state = %d,` +
 		`watermark = '%s',` +
 		`job_status = JSON_SET('%s', '$.Stage', ` +
-		`GREATEST(CAST(COALESCE(JSON_UNQUOTE(JSON_EXTRACT(job_status, '$.Stage')), '0') AS SIGNED), %d))` +
+		`GREATEST(CAST(COALESCE(JSON_UNQUOTE(JSON_EXTRACT(job_status, '$.Stage')), '0') AS SIGNED), %d), ` +
+		`'$.LifecycleVersion', ` +
+		`GREATEST(CAST(COALESCE(JSON_UNQUOTE(JSON_EXTRACT(job_status, '$.LifecycleVersion')), '0') AS UNSIGNED), %d))` +
 		`WHERE` +
 		` account_id = %d ` +
 		`AND table_id = %d ` +
@@ -1041,6 +1043,7 @@ func (b cdcSQLBuilder) ISCPLogUpdateResultSQL(
 	newWatermark types.TS,
 	jobStatus string,
 	jobStage int8,
+	jobLifecycleVersion uint64,
 	jobState int8,
 	expectPrevLSN uint64,
 ) string {
@@ -1050,6 +1053,7 @@ func (b cdcSQLBuilder) ISCPLogUpdateResultSQL(
 		newWatermark.ToString(),
 		escapeSQLString(jobStatus),
 		jobStage,
+		jobLifecycleVersion,
 		accountID,
 		tableID,
 		escapeSQLString(jobName),

@@ -165,11 +165,7 @@ func ExecuteIterationWithRuntime(
 		}
 	}
 	if needInit {
-		completedStatus := *prevStatus[0]
-		completedStatus.LSN = iterCtx.lsn[0]
-		completedStatus.Stage = JobStage_Running
-		completedStatus.ErrorCode = 0
-		completedStatus.ErrorMsg = ""
+		completedStatus := atomicInitCompletionStatus(prevStatus[0], iterCtx.lsn[0])
 		err = runInitSQLWithRuntime(
 			ctx,
 			runtime,
@@ -378,6 +374,17 @@ func jobNeedsInitSQL(jobSpec *JobSpec, status *JobStatus) bool {
 		status != nil &&
 		status.Stage == JobStage_Init &&
 		jobSpec.ConsumerInfo.InitSQL != ""
+}
+
+func atomicInitCompletionStatus(previous *JobStatus, nextLSN uint64) JobStatus {
+	completed := *previous
+	completed.LSN = nextLSN
+	completed.Stage = JobStage_Running
+	completed.LifecycleVersion = max(
+		completed.LifecycleVersion, atomicInitLifecycleVersion)
+	completed.ErrorCode = 0
+	completed.ErrorMsg = ""
+	return completed
 }
 
 func runISCPTaskIterationConsumers(
@@ -706,6 +713,7 @@ func FlushStatus(
 		watermark,
 		statusJson,
 		jobStatus.Stage,
+		jobStatus.LifecycleVersion,
 		state,
 		prevLSN,
 	)

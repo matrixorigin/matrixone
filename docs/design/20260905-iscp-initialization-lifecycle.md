@@ -3,7 +3,7 @@
 - Status: Review required
 - Tracking issue: [#28175](https://github.com/matrixorigin/matrixone/issues/28175)
 - Implementation PR: [#28176](https://github.com/matrixorigin/matrixone/pull/28176)
-- Design revision: 1
+- Design revision: 2
 - Last updated: 2026-09-05
 
 ## 1. Problem and evidence
@@ -56,6 +56,7 @@ The catalog row is the durable authority. CN memory is a replayable cache.
 | `job_id` | generation identity | never reused for a replacement job |
 | `job_state` | scheduler admission/result state | `Error` is terminal for the generation |
 | `job_status.Stage` | initialization lifecycle | monotonic `Init -> Running` only |
+| `job_status.LifecycleVersion` | initialization commit protocol | monotonic; missing/zero means atomic handling is not durably proven |
 | `job_status.LSN` | conditional-write generation | every progress owner advances from one expected LSN |
 | `watermark` | source progress included in derived state | never regresses for a live generation |
 | error fields | durable failure evidence | maintenance preserves them |
@@ -67,7 +68,9 @@ Required invariants:
 3. A watermark-only flush updates the existing JSON; it cannot reconstruct or
    clear lifecycle/error fields.
 4. A full status write persists `max(durable Stage, incoming Stage)` and rejects
-   a non-terminal stale writer that presents a lower stage.
+   a non-terminal stale writer that presents a lower stage. It also persists
+   `max(durable LifecycleVersion, incoming LifecycleVersion)` so an error or
+   ordinary status cannot erase protocol evidence.
 5. Every status mutation compares the exact job ID and previous LSN. Zero
    affected rows means ownership was lost, not success and not a retryable
    transport failure.
@@ -103,7 +106,7 @@ Completed/Init/LSN=n
   -> worker admission (local Pending, immutable LSN=n+1)
   -> begin one transaction
   -> execute all InitSQL statements
-  -> CAS status from LSN=n to Completed/Running/LSN=n+1
+  -> CAS status from LSN=n to Completed/Running/LSN=n+1/LifecycleVersion=1
   -> commit both effects
 ```
 
@@ -112,6 +115,13 @@ cannot expose only one side of the transaction. A retry after an ambiguous
 commit first reads the catalog: if the transaction committed, the persisted
 LSN/stage makes the old iteration lose CAS before any ordinary consumer effect;
 if it aborted, initialization is safe to retry.
+
+When an `Init` iteration returns an error, its compensating status write also
+carries `LifecycleVersion=1`. That write can commit only if the atomic
+transaction did not advance the expected LSN. It is therefore durable evidence
+that a later retry is safe even when the original Commit call returned an
+ambiguous error. Registration itself does not set this marker because the CN
+creating the row need not be the active executor.
 
 ### 4.2 Ordinary and maintenance progress
 
@@ -140,13 +150,19 @@ returned and success logs are emitted only after Commit succeeds.
 
 ## 5. Legacy ambiguity and migration
 
-Old code can persist this shape:
+Old code can persist each of these shapes after `InitSQL` commits:
 
 ```text
-job_state=Completed, Stage=Init, LSN>0, no error, InitSQL present
+job_state=Completed, Stage=Init, LSN=0, InitSQL present
+job_state=Completed, Stage=Init, LSN>0, InitSQL present
+job_state=Completed, Stage=Init, retry/error fields present, InitSQL present
 ```
 
-It has two indistinguishable histories:
+The first is produced by a crash between the old InitSQL transaction and its
+first status transaction. The second can also be produced by the old
+watermark-only writer. The third is possible when InitSQL commits, its status
+flush fails, and the worker subsequently persists the iteration error. Each
+shape has two indistinguishable histories:
 
 - initialization committed and a later watermark flush erased `Running`; or
 - a `startFromNow` job advanced progress before initialization executed.
@@ -154,10 +170,24 @@ It has two indistinguishable histories:
 Promoting the first history is correct but skips required initialization in the
 second. Re-executing is correct for the second but can corrupt non-idempotent
 derived state in the first. There is no remaining catalog evidence that can
-select safely. Startup therefore changes only this exact shape to terminal
-`Error` in the same repair transaction and requires explicit job/index
-recreation. New jobs (`LSN=0`), `Running` jobs, jobs without InitSQL, and rows
-with retry/error evidence are controls and remain untouched.
+select safely.
+
+The atomic executor therefore persists `LifecycleVersion=1` only through the
+completion or error-CAS paths described in section 4.1. The version is evidence
+about the executor that handled the initialization, not the CN that registered
+the job. Startup changes every unversioned `Completed/Init` row with InitSQL to
+terminal `Error` in the same repair transaction and requires explicit job/index
+recreation. LSN and error fields are intentionally not used as evidence: old
+code could write every combination after InitSQL committed. Versioned `Init`
+jobs, `Running` jobs, jobs without InitSQL, and already-terminal rows are
+controls and remain untouched.
+
+A freshly registered unversioned job is safe to run while it is observed by the
+same upgraded executor generation: exclusive task ownership proves no legacy
+executor handled it. If that generation stops before it persists completion or
+error evidence, recovery cannot distinguish the fresh row from the legacy
+crash shape and quarantines it. This rare availability cost is deliberate; the
+only alternatives are guessing or adding a cross-version activation protocol.
 
 The repair is idempotent: terminal rows no longer match. Recovery applies the
 same classification in memory because the repair commit can precede local
@@ -165,19 +195,26 @@ logtail visibility. Already-corrupted derived data is never declared healthy.
 
 ## 6. Upgrade, downgrade, and mixed versions
 
-No schema or wire change is introduced. Old binaries can parse every resulting
-row. `Error` was already terminal and every legacy status update is guarded by
-`job_state != Error`, so a committed quarantine fences later old status writes.
+No catalog column or wire change is introduced. The existing JSON document gains
+an additive `LifecycleVersion` field; old binaries can parse it but their full
+status writes do not preserve it. `Error` was already terminal and every legacy
+status update is guarded by `job_state != Error`, so a committed quarantine
+fences later old status writes.
 
 Strict forward prevention begins when the active ISCP task owner runs the new
 writer. During a rolling interval an old owner can still execute the old
 watermark statement before ownership transfers; code in a new binary cannot
 retroactively constrain that statement. Deployment must therefore either:
 
-1. backport the field-preserving watermark write to every version that can own
-   ISCP during the rollout; or
-2. drain/transfer the singleton ISCP active routine to an upgraded CN before
-   relying on the invariant.
+1. backport the atomic initialization protocol and marker-preserving status
+   writes to every version that can own ISCP during the rollout; or
+2. drain/transfer the singleton ISCP active routine to an upgraded CN and
+   prevent task ownership from returning to an old CN until rollout completes.
+
+Merely transferring ownership once is insufficient: an old owner can ignore or
+erase the additive marker and reintroduce the split-transaction window. The
+marker is never written by registration, so a new DDL CN cannot falsely certify
+a job that is still handled by an old executor during roll-forward.
 
 The taskservice active-routine handoff is the existing writer-serialization
 boundary; this change does not add a second lease or process-global version
@@ -202,7 +239,7 @@ SELECT account_id, table_id, job_name, job_id, job_status
 FROM mo_catalog.mo_iscp_log
 WHERE job_state = 4
   AND JSON_UNQUOTE(JSON_EXTRACT(job_status, '$.ErrorMsg')) =
-      'ambiguous legacy ISCP initialization state; recreate the ISCP job';
+      'ambiguous ISCP initialization state without atomic lifecycle evidence; recreate the ISCP job';
 ```
 
 For index jobs, drop and recreate the affected index after confirming that the
@@ -214,7 +251,8 @@ retained until the normal job-drop/GC lifecycle removes it.
 
 - Row processing, change collection, index algorithms, and data batches are
   unchanged.
-- A normal full status update adds bounded JSON stage extraction/comparison.
+- A normal full status update adds bounded JSON stage and lifecycle-version
+  extraction/comparison.
 - A maintenance flush remains one conditional update per eligible job in the
   existing shared transaction and avoids serializing/deserializing status in Go.
 - Startup adds one O(number of ISCP jobs) catalog predicate evaluation. It
@@ -245,12 +283,12 @@ observed corruption path.
 Rejected as incomplete. It loses error fields and any future lifecycle fields;
 in-place JSON mutation has one durable owner and composes with schema evolution.
 
-### Add a new catalog column or distributed capability service
+### Add a catalog column or distributed capability service
 
-Rejected for this repair. Existing row identity, terminal state, transaction
-conflicts, and task ownership are sufficient. A new schema/protocol would
-increase upgrade and rollback risk without recovering the missing historical
-evidence.
+Rejected for this repair. An additive marker in the existing JSON status is
+enough to distinguish generations created under the atomic protocol. A catalog
+DDL change or capability service would increase upgrade and rollback risk
+without recovering the missing historical evidence.
 
 ### Keep ambiguous rows only in a CN-local quarantine
 
@@ -271,7 +309,8 @@ Deterministic unit tests must prove:
 - partial/failed maintenance transactions restore only their own reservations;
 - replay, lease-check, repair, and GC commit failures are surfaced rather than
   converted into false success;
-- legacy ambiguity and every nearest control classify identically in SQL and Go;
+- legacy ambiguity (`LSN=0`, advanced LSN, and retry/error fields) and every
+  nearest versioned/non-Init/terminal control classify identically in SQL and Go;
 - quotes and backslashes in persisted status/spec/name values cannot break the
   generated catalog SQL.
 
@@ -290,8 +329,8 @@ path regression.
 
 ## 11. Decision log
 
-- Lifecycle evidence is stored with progress in the existing JSON row; no new
-  schema or protocol is introduced.
+- Lifecycle evidence is stored as an additive version in the existing JSON row;
+  no catalog DDL or wire protocol is introduced.
 - Initialization and its durable completion use one transaction.
 - Historical ambiguity fails closed and is recoverable only by job recreation.
 - Mixed-version strictness starts at upgraded task ownership; backport or

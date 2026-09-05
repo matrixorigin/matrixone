@@ -24,23 +24,36 @@ import (
 func TestISCPLogUpdateResultSQLRejectsStageRegression(t *testing.T) {
 	sql := CDCSQLBuilder.ISCPLogUpdateResultSQL(
 		1, 2, "job", 3, types.BuildTS(4, 0),
-		`{"LSN":5,"Stage":1}`, 1, 3, 4,
+		`{"LSN":5,"Stage":1,"LifecycleVersion":1}`, 1, 1, 3, 4,
 	)
 
 	require.Contains(t, sql, "JSON_EXTRACT(job_status, '$.LSN') = '4'")
 	require.Contains(t, sql, "CAST(COALESCE(JSON_UNQUOTE(JSON_EXTRACT(job_status, '$.Stage')), '0') AS SIGNED) <= 1")
 	require.Contains(t, sql, "AND (3 = 4 OR")
 	require.Contains(t, sql, "GREATEST(CAST(COALESCE(JSON_UNQUOTE(JSON_EXTRACT(job_status, '$.Stage')), '0') AS SIGNED), 1)")
+	require.Contains(t, sql, "GREATEST(CAST(COALESCE(JSON_UNQUOTE(JSON_EXTRACT(job_status, '$.LifecycleVersion')), '0') AS UNSIGNED), 1)")
 }
 
 func TestISCPLogUpdateResultSQLLetsTerminalErrorWinWithoutRegressingStage(t *testing.T) {
 	sql := CDCSQLBuilder.ISCPLogUpdateResultSQL(
 		1, 2, "job", 3, types.BuildTS(4, 0),
-		`{"LSN":5,"Stage":0}`, 0, 4, 4,
+		`{"LSN":5,"Stage":0,"LifecycleVersion":1}`, 0, 1, 4, 4,
 	)
 
 	require.Contains(t, sql, "AND (4 = 4 OR")
 	require.Contains(t, sql, "GREATEST(CAST(COALESCE(JSON_UNQUOTE(JSON_EXTRACT(job_status, '$.Stage')), '0') AS SIGNED), 0)")
+}
+
+func TestISCPLogUpdateResultSQLPreservesDurableLifecycleVersion(t *testing.T) {
+	sql := CDCSQLBuilder.ISCPLogUpdateResultSQL(
+		1, 2, "job", 3, types.BuildTS(4, 0),
+		`{"LSN":5,"Stage":1}`, 1, 0, 3, 4,
+	)
+
+	// Ordinary and synthesized statuses may omit the marker. The catalog value
+	// remains authoritative and cannot be replaced by the incoming zero value.
+	require.Contains(t, sql,
+		"GREATEST(CAST(COALESCE(JSON_UNQUOTE(JSON_EXTRACT(job_status, '$.LifecycleVersion')), '0') AS UNSIGNED), 0)")
 }
 
 func TestISCPLogAdvanceWatermarkSQLCarriesMonotonicStage(t *testing.T) {
@@ -67,7 +80,7 @@ func TestISCPLogSQLBuildersEscapeStringLiterals(t *testing.T) {
 	require.Contains(t, insertSQL, `'{"ErrorMsg":"can''t open C:\\\\data","LSN":5,"Stage":1}'`)
 
 	updateSQL := CDCSQLBuilder.ISCPLogUpdateResultSQL(
-		1, 2, jobName, 3, watermark, jobStatus, 1, 1, 4,
+		1, 2, jobName, 3, watermark, jobStatus, 1, 1, 1, 4,
 	)
 	require.Contains(t, updateSQL, `JSON_SET('{"ErrorMsg":"can''t open C:\\\\data","LSN":5,"Stage":1}'`)
 	require.Contains(t, updateSQL, `job_name = 'job_''name\\path'`)

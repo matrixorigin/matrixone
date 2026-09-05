@@ -40,6 +40,8 @@ func TestJobStatusesForIterationErrorPreservesStages(t *testing.T) {
 	require.Len(t, statuses, 2)
 	require.Equal(t, int8(JobStage_Init), statuses[0].Stage)
 	require.Equal(t, int8(JobStage_Running), statuses[1].Stage)
+	require.Equal(t, uint64(atomicInitLifecycleVersion), statuses[0].LifecycleVersion)
+	require.Zero(t, statuses[1].LifecycleVersion)
 	require.Equal(t, "iteration failed", statuses[0].ErrorMsg)
 	require.Equal(t, "iteration failed", statuses[1].ErrorMsg)
 }

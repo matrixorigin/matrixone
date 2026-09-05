@@ -950,23 +950,40 @@ func TestFlushWatermarkForAllTablesRollsBackPartialTransaction(t *testing.T) {
 	}
 }
 
-func TestAmbiguousLegacyInitQuarantineSQLIsConservative(t *testing.T) {
-	sql := ambiguousLegacyInitQuarantineSQL()
+func TestUnprovenInitQuarantineSQLIsConservative(t *testing.T) {
+	sql := unprovenInitQuarantineSQL()
 
 	require.Contains(t, sql, fmt.Sprintf("SET job_state = %d", ISCPJobState_Error))
 	require.Contains(t, sql, fmt.Sprintf("'$.ErrorCode', %d", PermanentErrorThreshold))
 	require.Contains(t, sql, fmt.Sprintf("WHERE job_state = %d", ISCPJobState_Completed))
 	require.Contains(t, sql, "JSON_EXTRACT(job_status, '$.Stage')")
-	require.Contains(t, sql, "JSON_EXTRACT(job_status, '$.LSN')")
-	require.Contains(t, sql, "JSON_EXTRACT(job_status, '$.ErrorCode')")
-	require.Contains(t, sql, "JSON_EXTRACT(job_status, '$.ErrorMsg')")
+	require.Contains(t, sql, "JSON_EXTRACT(job_status, '$.LifecycleVersion')")
+	require.Contains(t, sql, fmt.Sprintf("AS SIGNED) < %d", atomicInitLifecycleVersion))
 	require.Contains(t, sql, "JSON_EXTRACT(job_spec, '$.InitSQL')")
+	// Legacy LSN and error fields do not identify which half of the old
+	// split-transaction initialization committed, so they must not exempt a row.
+	require.NotContains(t, sql, "JSON_EXTRACT(job_status, '$.LSN')")
+	require.NotContains(t, sql, "JSON_EXTRACT(job_status, '$.ErrorCode')")
+	require.NotContains(t, sql, "JSON_EXTRACT(job_status, '$.ErrorMsg')")
 }
 
-func TestAmbiguousLegacyInitClassification(t *testing.T) {
+func TestUnprovenInitClassification(t *testing.T) {
 	spec := &JobSpec{ConsumerInfo: ConsumerInfo{InitSQL: "init"}}
-	status := &JobStatus{LSN: 1, Stage: JobStage_Init}
-	require.True(t, isAmbiguousLegacyInit(ISCPJobState_Completed, spec, status))
+	ambiguous := []struct {
+		name   string
+		status *JobStatus
+	}{
+		{"crash after init commit before first status", &JobStatus{Stage: JobStage_Init}},
+		{"legacy watermark advanced", &JobStatus{LSN: 1, Stage: JobStage_Init}},
+		{"status flush failed after init commit", &JobStatus{LSN: 1, Stage: JobStage_Init, ErrorMsg: "retry"}},
+		{"legacy error code", &JobStatus{LSN: 1, Stage: JobStage_Init, ErrorCode: 1}},
+	}
+	for _, test := range ambiguous {
+		t.Run(test.name, func(t *testing.T) {
+			require.True(t, isUnprovenInit(ISCPJobState_Completed, spec, test.status))
+		})
+	}
+	status := ambiguous[1].status
 
 	controls := []struct {
 		name   string
@@ -974,10 +991,8 @@ func TestAmbiguousLegacyInitClassification(t *testing.T) {
 		spec   *JobSpec
 		status *JobStatus
 	}{
-		{"new job", ISCPJobState_Completed, spec, &JobStatus{Stage: JobStage_Init}},
+		{"atomic retry", ISCPJobState_Completed, spec, &JobStatus{LSN: 1, Stage: JobStage_Init, LifecycleVersion: atomicInitLifecycleVersion, ErrorMsg: "retry"}},
 		{"initialized", ISCPJobState_Completed, spec, &JobStatus{LSN: 1, Stage: JobStage_Running}},
-		{"retryable error", ISCPJobState_Completed, spec, &JobStatus{LSN: 1, Stage: JobStage_Init, ErrorMsg: "retry"}},
-		{"status error code", ISCPJobState_Completed, spec, &JobStatus{LSN: 1, Stage: JobStage_Init, ErrorCode: 1}},
 		{"no init sql", ISCPJobState_Completed, &JobSpec{}, status},
 		{"terminal", ISCPJobState_Error, spec, status},
 		{"nil spec", ISCPJobState_Completed, nil, status},
@@ -985,7 +1000,7 @@ func TestAmbiguousLegacyInitClassification(t *testing.T) {
 	}
 	for _, control := range controls {
 		t.Run(control.name, func(t *testing.T) {
-			require.False(t, isAmbiguousLegacyInit(control.state, control.spec, control.status))
+			require.False(t, isUnprovenInit(control.state, control.spec, control.status))
 		})
 	}
 }
@@ -1003,9 +1018,15 @@ func TestISCPRecoveryQuarantinesAmbiguousInitStage(t *testing.T) {
 		TriggerSpec: TriggerSpec{JobType: TriggerType_Default},
 	})
 	require.NoError(t, err)
-	status, err := MarshalJobStatus(&JobStatus{LSN: 5})
+	legacyStatus, err := MarshalJobStatus(&JobStatus{LSN: 5})
 	require.NoError(t, err)
-	retryStatus, err := MarshalJobStatus(&JobStatus{LSN: 5, ErrorMsg: "retry initialization"})
+	legacyZeroStatus, err := MarshalJobStatus(&JobStatus{})
+	require.NoError(t, err)
+	legacyRetryStatus, err := MarshalJobStatus(&JobStatus{LSN: 5, ErrorMsg: "retry initialization"})
+	require.NoError(t, err)
+	atomicRetryStatus, err := MarshalJobStatus(&JobStatus{
+		LSN: 5, LifecycleVersion: atomicInitLifecycleVersion, ErrorMsg: "retry initialization",
+	})
 	require.NoError(t, err)
 	encodeJSON := func(value string) []byte {
 		byteJSON, encodeErr := types.ParseStringToByteJson(value)
@@ -1017,42 +1038,48 @@ func TestISCPRecoveryQuarantinesAmbiguousInitStage(t *testing.T) {
 
 	require.NoError(t, exec.addOrUpdateRecoveredJob(
 		1, 3, "legacy", 4, ISCPJobState_Completed, "10-0",
-		encodeJSON(spec), encodeJSON(status), 0, true,
+		encodeJSON(spec), encodeJSON(legacyStatus), 0, true,
 	))
 	require.NoError(t, exec.addOrUpdateRecoveredJob(
-		1, 3, "pending", 5, ISCPJobState_Pending, "10-0",
-		encodeJSON(spec), encodeJSON(status), 0, true,
+		1, 3, "legacy-lsn-zero", 5, ISCPJobState_Completed, "10-0",
+		encodeJSON(spec), encodeJSON(legacyZeroStatus), 0, true,
 	))
 	require.NoError(t, exec.addOrUpdateRecoveredJob(
-		1, 3, "error", 6, ISCPJobState_Error, "10-0",
-		encodeJSON(spec), encodeJSON(status), 0, true,
+		1, 3, "pending", 6, ISCPJobState_Pending, "10-0",
+		encodeJSON(spec), encodeJSON(legacyStatus), 0, true,
 	))
 	require.NoError(t, exec.addOrUpdateRecoveredJob(
-		1, 3, "retryable", 7, ISCPJobState_Completed, "10-0",
-		encodeJSON(spec), encodeJSON(retryStatus), 0, true,
+		1, 3, "error", 7, ISCPJobState_Error, "10-0",
+		encodeJSON(spec), encodeJSON(legacyStatus), 0, true,
+	))
+	require.NoError(t, exec.addOrUpdateRecoveredJob(
+		1, 3, "legacy-retryable", 8, ISCPJobState_Completed, "10-0",
+		encodeJSON(spec), encodeJSON(legacyRetryStatus), 0, true,
+	))
+	require.NoError(t, exec.addOrUpdateRecoveredJob(
+		1, 3, "atomic-retryable", 9, ISCPJobState_Completed, "10-0",
+		encodeJSON(spec), encodeJSON(atomicRetryStatus), 0, true,
 	))
 
 	table, ok := exec.getTable(1, 3)
 	require.True(t, ok)
 	recovered := table.jobs[JobKey{JobName: "legacy", JobID: 4}]
 	require.Equal(t, ISCPJobState_Error, recovered.state)
-	// Completed + Init + LSN>0 is ambiguous: an old watermark flush can
-	// produce it after successful initialization, but a fresh start-from-now
-	// job can also produce it before InitSQL. Recovery must neither guess success
-	// nor execute a possibly non-idempotent InitSQL again.
+	// No unversioned Init row can prove whether the old InitSQL transaction
+	// committed. Recovery must neither guess success nor execute a possibly
+	// non-idempotent InitSQL again.
 	require.Equal(t, int8(JobStage_Init), recovered.stage)
-	require.Equal(t, ISCPJobState_Error, table.jobs[JobKey{JobName: "pending", JobID: 5}].state)
-	require.Equal(t, int8(JobStage_Init), table.jobs[JobKey{JobName: "pending", JobID: 5}].stage)
-	require.Equal(t, ISCPJobState_Error, table.jobs[JobKey{JobName: "error", JobID: 6}].state)
-	retryable := table.jobs[JobKey{JobName: "retryable", JobID: 7}]
-	require.Equal(t, ISCPJobState_Completed, retryable.state)
-	require.Equal(t, uint64(5), retryable.currentLSN)
-	require.Equal(t, int8(JobStage_Init), retryable.stage)
+	require.Equal(t, ISCPJobState_Error, table.jobs[JobKey{JobName: "legacy-lsn-zero", JobID: 5}].state)
+	require.Equal(t, ISCPJobState_Error, table.jobs[JobKey{JobName: "pending", JobID: 6}].state)
+	require.Equal(t, int8(JobStage_Init), table.jobs[JobKey{JobName: "pending", JobID: 6}].stage)
+	require.Equal(t, ISCPJobState_Error, table.jobs[JobKey{JobName: "error", JobID: 7}].state)
+	require.Equal(t, ISCPJobState_Error, table.jobs[JobKey{JobName: "legacy-retryable", JobID: 8}].state)
 
-	// Only the record carrying explicit retry evidence remains schedulable.
+	// Only generations carrying durable atomic-protocol evidence remain
+	// schedulable, including a genuine retry after an atomic rollback.
 	iters, _ := table.getCandidate()
 	require.Len(t, iters, 1)
-	require.Equal(t, []string{"retryable"}, iters[0].jobNames)
+	require.Equal(t, []string{"atomic-retryable"}, iters[0].jobNames)
 	require.Equal(t, []int8{JobStage_Init}, iters[0].stages)
 }
 

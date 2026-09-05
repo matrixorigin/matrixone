@@ -433,6 +433,32 @@ func mustMarshalJobStatus(t *testing.T, lsn uint64, stage int8) string {
 	return string(jobStatus)
 }
 
+func TestAtomicInitCompletionStatusCarriesDurableEvidence(t *testing.T) {
+	previous := &JobStatus{
+		LSN:              7,
+		Stage:            JobStage_Init,
+		LifecycleVersion: atomicInitLifecycleVersion + 1,
+		TaskID:           9,
+		ErrorCode:        2,
+		ErrorMsg:         "old error",
+	}
+
+	completed := atomicInitCompletionStatus(previous, 8)
+
+	require.Equal(t, uint64(8), completed.LSN)
+	require.Equal(t, int8(JobStage_Running), completed.Stage)
+	require.Equal(t, atomicInitLifecycleVersion+1, completed.LifecycleVersion)
+	require.Equal(t, uint64(9), completed.TaskID)
+	require.Zero(t, completed.ErrorCode)
+	require.Empty(t, completed.ErrorMsg)
+	// Building the completion must not mutate the snapshot read from catalog.
+	require.Equal(t, uint64(7), previous.LSN)
+	require.Equal(t, int8(JobStage_Init), previous.Stage)
+
+	legacy := atomicInitCompletionStatus(&JobStatus{}, 1)
+	require.Equal(t, atomicInitLifecycleVersion, legacy.LifecycleVersion)
+}
+
 func encodeJSONRows(t *testing.T, rows []string) [][]byte {
 	t.Helper()
 	encodedRows := make([][]byte, len(rows))
