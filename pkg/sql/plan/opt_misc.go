@@ -1071,19 +1071,24 @@ func (builder *QueryBuilder) rewriteDistinctToAGG(nodeID int32) {
 }
 
 // reuse removeSimpleProjections to delete this plan node
-func (builder *QueryBuilder) rewriteEffectlessAggToProject(nodeID int32) {
+func (builder *QueryBuilder) rewriteEffectlessAggToProject(nodeID int32) int32 {
 	remap := make(map[[2]int32]*plan.Expr)
-	builder.rewriteEffectlessAggToProjectImpl(nodeID, false, remap)
-	if len(remap) == 0 {
-		return
+	rewritten := make(map[int32]struct{})
+	builder.rewriteEffectlessAggToProjectImpl(nodeID, false, remap, rewritten)
+	if len(rewritten) == 0 {
+		return nodeID
 	}
-	builder.applyEffectlessAggRemap(nodeID, remap)
+	if len(remap) > 0 {
+		builder.applyEffectlessAggRemap(nodeID, remap)
+	}
+	return builder.removeConstantSortAfterSingletonGroup(nodeID, rewritten)
 }
 
 func (builder *QueryBuilder) rewriteEffectlessAggToProjectImpl(
 	nodeID int32,
 	limitDemand bool,
 	remap map[[2]int32]*plan.Expr,
+	rewritten map[int32]struct{},
 ) {
 	node := builder.qry.Nodes[nodeID]
 	childLimitDemand := false
@@ -1109,7 +1114,7 @@ func (builder *QueryBuilder) rewriteEffectlessAggToProjectImpl(
 	}
 	if len(node.Children) > 0 {
 		for _, child := range node.Children {
-			builder.rewriteEffectlessAggToProjectImpl(child, childLimitDemand, remap)
+			builder.rewriteEffectlessAggToProjectImpl(child, childLimitDemand, remap, rewritten)
 		}
 	}
 	if node.NodeType != plan.Node_AGG {
@@ -1265,6 +1270,119 @@ func (builder *QueryBuilder) rewriteEffectlessAggToProjectImpl(
 	node.GroupingFlag = nil
 	node.GroupByHashKey = nil
 	node.SpillMem = 0
+	rewritten[nodeID] = struct{}{}
+}
+
+// removeConstantSortAfterSingletonGroup removes only Sorts whose complete key
+// tuple is proven constant by a Project produced in the same singleton-group
+// rewrite pass. Keeping the provenance set local to this pass prevents the rule
+// from becoming an unrelated global constant-ORDER-BY canonicalization.
+func (builder *QueryBuilder) removeConstantSortAfterSingletonGroup(
+	nodeID int32,
+	rewritten map[int32]struct{},
+) int32 {
+	node := builder.qry.Nodes[nodeID]
+	for i, childID := range node.Children {
+		node.Children[i] = builder.removeConstantSortAfterSingletonGroup(childID, rewritten)
+	}
+
+	if node.NodeType != plan.Node_SORT || len(node.Children) != 1 ||
+		node.Limit == nil || node.RankOption != nil || len(node.OrderBy) == 0 ||
+		builder.sqlCalcFoundRows {
+		return nodeID
+	}
+
+	childID := node.Children[0]
+	child := builder.qry.Nodes[childID]
+	if child.RankOption != nil {
+		return nodeID
+	}
+	usesSingletonGroup := false
+	for _, order := range node.OrderBy {
+		if order == nil || order.Expr == nil {
+			return nodeID
+		}
+		constant, usesSingleton := builder.isConstantSingletonGroupOrderExpr(
+			order.Expr, childID, rewritten,
+		)
+		if !constant {
+			return nodeID
+		}
+		usesSingletonGroup = usesSingletonGroup || usesSingleton
+	}
+	if !usesSingletonGroup {
+		return nodeID
+	}
+
+	limit, offset, ok := composePagination(
+		child.Limit, child.Offset, node.Limit, node.Offset,
+	)
+	if !ok {
+		return nodeID
+	}
+	child.Limit, child.Offset = limit, offset
+	return childID
+}
+
+func (builder *QueryBuilder) isConstantSingletonGroupOrderExpr(
+	expr *plan.Expr,
+	nodeID int32,
+	rewritten map[int32]struct{},
+) (constant, usesSingletonGroup bool) {
+	resolved := DeepCopyExpr(expr)
+	for {
+		node := builder.qry.Nodes[nodeID]
+		if node.NodeType == plan.Node_FILTER {
+			if len(node.Children) != 1 {
+				return false, false
+			}
+			// Filter changes row membership but forwards the input bindings. The
+			// pagination window remains above it when Sort is bypassed, so tracing
+			// a key through this node neither reorders nor suppresses its predicate.
+			nodeID = node.Children[0]
+			continue
+		}
+		if node.NodeType != plan.Node_PROJECT || len(node.BindingTags) != 1 ||
+			len(node.Children) != 1 {
+			break
+		}
+		if !containsTag(resolved, node.BindingTags[0]) {
+			// A key may contain an independent safe constant alongside a key
+			// derived from COUNT(*). The Sort as a whole still has to establish
+			// singleton-group provenance before it can be removed.
+			break
+		}
+
+		projectMap := make(map[[2]int32]*plan.Expr, len(node.ProjectList))
+		for i, project := range node.ProjectList {
+			if project == nil {
+				return false, false
+			}
+			projectMap[[2]int32{node.BindingTags[0], int32(i)}] = project
+		}
+		resolved = replaceColumnsForExpr(resolved, projectMap)
+
+		if _, ok := rewritten[nodeID]; ok {
+			usesSingletonGroup = true
+			break
+		}
+		nodeID = node.Children[0]
+	}
+
+	if !rule.IsConstant(resolved, false) {
+		return false, usesSingletonGroup
+	}
+	if resolved.GetLit() != nil {
+		return true, usesSingletonGroup
+	}
+	folded, err := ConstantFold(
+		batch.EmptyForConstFoldBatch,
+		DeepCopyExpr(resolved),
+		builder.compCtx.GetProcess(),
+		false,
+		true,
+	)
+	return err == nil && folded != nil && folded.GetLit() != nil, usesSingletonGroup
 }
 
 func (builder *QueryBuilder) singleRowAggregateExpr(
@@ -1716,6 +1834,15 @@ func singleRowCastIsTotal(source, target plan.Type) bool {
 	if isSameColumnType(source, target) {
 		return !sourceID.IsDecimal() || validDecimalPlanType(source)
 	}
+	// CHAR comparison binding casts text operands to the fixed CHAR domain.
+	// With the same charset and a target at least as wide as the declared
+	// source, that cast cannot reject or truncate any source value.
+	if targetID == types.T_char &&
+		(sourceID == types.T_char || sourceID == types.T_varchar) &&
+		source.Charset == target.Charset && source.Width > 0 &&
+		target.Width >= source.Width {
+		return true
+	}
 	if sourceID.IsDecimal() {
 		if !validDecimalPlanType(source) {
 			return false
@@ -2117,11 +2244,19 @@ func handleOptimizerHints(str string, builder *QueryBuilder) {
 		builder.optimizerHints.disableRightJoin = value
 	case "disableRightSingleRF":
 		builder.optimizerHints.disableRightSingleRF = value
+	case "subqueryPredicatePlanning":
+		builder.optimizerHints.subqueryPredicatePlanning = value
 	case "printShuffle":
 		builder.optimizerHints.printShuffle = value
 	case "skipDedup":
 		builder.optimizerHints.skipDedup = value
+	case "outerAntiPlanning":
+		builder.optimizerHints.outerAntiPlanning = value
 	}
+}
+
+func (builder *QueryBuilder) subqueryPredicatePlanningDisabled() bool {
+	return builder.optimizerHints != nil && builder.optimizerHints.subqueryPredicatePlanning == 1
 }
 
 func (builder *QueryBuilder) parseOptimizeHints() {

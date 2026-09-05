@@ -412,6 +412,13 @@ func splitAndBindCondition(astExpr tree.Expr, expandAlias ExpandAliasMode, ctx *
 		if err != nil {
 			return nil, err
 		}
+		// WHERE, HAVING and JOIN ON are executable scalar boundaries. Check
+		// before boolean coercion so an interval pseudo-value reports the real
+		// contract violation instead of an incidental INTERVAL-to-BOOL cast
+		// overload error.
+		if err = rejectStandaloneIntervalExpr(ctx.binder.GetContext(), expr, "predicate"); err != nil {
+			return nil, err
+		}
 		needCast := true
 		fn := expr.GetF()
 		if fn != nil {
@@ -458,11 +465,12 @@ func splitAstConjunction(astExpr tree.Expr) []tree.Expr {
 // IN/OR trees the old Marshal path walked every expression twice (ProtoSize
 // + writeTo) per lookup and dominated CPU; hashing traverses once with no
 // allocation and collisions are rare enough that Equal rarely runs.
-func applyDistributivity(ctx context.Context, expr *plan.Expr) *plan.Expr {
+func applyDistributivity(ctx context.Context, expr *plan.Expr, exposeCrossTableKeys ...bool) *plan.Expr {
+	exposeCrossTable := len(exposeCrossTableKeys) == 0 || exposeCrossTableKeys[0]
 	switch exprImpl := expr.Expr.(type) {
 	case *plan.Expr_F:
 		for i, arg := range exprImpl.F.Args {
-			exprImpl.F.Args[i] = applyDistributivity(ctx, arg)
+			exprImpl.F.Args[i] = applyDistributivity(ctx, arg, exposeCrossTable)
 		}
 
 		if exprImpl.F.Func.ObjName != "or" {
@@ -483,26 +491,34 @@ func applyDistributivity(ctx context.Context, expr *plan.Expr) *plan.Expr {
 		rightBuckets := make(map[uint64][]*rightEntry, len(rightConds))
 		rightEntries := make([]*rightEntry, len(rightConds))
 
-		relPos := int32(-1)
+		rightRelations := make(map[int32]struct{}, 2)
+		rightRelationsKnown := true
+		legacyRelPos := int32(-1)
 		for i, cond := range rightConds {
 			h := exprStructuralHash(cond)
 			entry := &rightEntry{cond: cond, side: JoinSideRight}
 			rightEntries[i] = entry
 			rightBuckets[h] = append(rightBuckets[h], entry)
-
-			args := cond.GetF().GetArgs()
-			if len(args) != 2 {
-				continue
-			}
-			if col := args[0].GetCol(); col != nil {
-				if relPos == -1 {
-					relPos = col.RelPos
-				} else if relPos != col.RelPos {
-					relPos = -2
+			rightRelationsKnown = collectExprRelations(cond, rightRelations) && rightRelationsKnown
+			if !exposeCrossTable {
+				args := cond.GetF().GetArgs()
+				if len(args) == 2 {
+					if col := args[0].GetCol(); col != nil {
+						if legacyRelPos == -1 {
+							legacyRelPos = col.RelPos
+						} else if legacyRelPos != col.RelPos {
+							legacyRelPos = -2
+						}
+					}
 				}
 			}
 		}
-		if relPos >= 0 {
+		// Keep single-table DNF intact for composite-key range folding. The old
+		// first-argument heuristic missed columns hidden in BETWEEN/IN and the
+		// second side of equalities, so a cross-table DNF could be mistaken for
+		// a single-table predicate and hide a common hash-join key.
+		if exposeCrossTable && rightRelationsKnown && len(rightRelations) == 1 ||
+			!exposeCrossTable && legacyRelPos >= 0 {
 			return expr
 		}
 
@@ -538,6 +554,13 @@ func applyDistributivity(ctx context.Context, expr *plan.Expr) *plan.Expr {
 		if len(commonConds) == 0 {
 			return expr
 		}
+		// Factoring evaluates a common predicate before the residual OR. That is
+		// only observationally equivalent when the common predicate is total and
+		// side-effect-free; otherwise it can expose an error or volatile call on
+		// rows for which the original expression short-circuited.
+		if exposeCrossTable && !areTruncationSafePredicates(commonConds) {
+			return expr
+		}
 
 		expr, _ = combinePlanConjunction(ctx, commonConds)
 
@@ -554,6 +577,65 @@ func applyDistributivity(ctx context.Context, expr *plan.Expr) *plan.Expr {
 	}
 
 	return expr
+}
+
+func collectExprRelations(expr *plan.Expr, relations map[int32]struct{}) bool {
+	if expr == nil {
+		return true
+	}
+	switch item := expr.Expr.(type) {
+	case *plan.Expr_Col:
+		if item.Col == nil || item.Col.RelPos < 0 {
+			return false
+		}
+		relations[item.Col.RelPos] = struct{}{}
+	case *plan.Expr_Corr:
+		if item.Corr == nil || item.Corr.RelPos < 0 {
+			return false
+		}
+		relations[item.Corr.RelPos] = struct{}{}
+	case *plan.Expr_F:
+		if item.F != nil {
+			for _, arg := range item.F.Args {
+				if !collectExprRelations(arg, relations) {
+					return false
+				}
+			}
+		}
+	case *plan.Expr_List:
+		if item.List != nil {
+			for _, arg := range item.List.List {
+				if !collectExprRelations(arg, relations) {
+					return false
+				}
+			}
+		}
+	case *plan.Expr_W:
+		if item.W != nil {
+			if !collectExprRelations(item.W.WindowFunc, relations) {
+				return false
+			}
+			for _, arg := range item.W.PartitionBy {
+				if !collectExprRelations(arg, relations) {
+					return false
+				}
+			}
+			for _, order := range item.W.OrderBy {
+				if !collectExprRelations(order.Expr, relations) {
+					return false
+				}
+			}
+		}
+	case *plan.Expr_Sub:
+		if item.Sub != nil && !collectExprRelations(item.Sub.Child, relations) {
+			return false
+		}
+	case *plan.Expr_Lit:
+		if item.Lit != nil && !collectExprRelations(item.Lit.Src, relations) {
+			return false
+		}
+	}
+	return true
 }
 
 func unionSlice(left, right []string) []string {
@@ -1619,7 +1701,11 @@ func constantFoldWithPreparedExactSource(
 	preservePreparedExactSource bool,
 ) (*plan.Expr, error) {
 	if expr.Typ.Id == int32(types.T_interval) {
-		panic(moerr.NewInternalError(proc.Ctx, "not supported type INTERVAL"))
+		// INTERVAL is an executable argument type but has no standalone scalar
+		// constant-fold representation. Keep it unchanged so callers can fold an
+		// enclosing temporal expression or let a public scalar boundary reject it
+		// without turning a bound expression into a planner panic.
+		return expr, nil
 	}
 
 	// If it is Expr_List, perform constant folding on its elements
@@ -4144,8 +4230,8 @@ func preparedFunctionResultDependsOnRuntimeParam(expr *plan.Expr) bool {
 		for _, candidate := range preparedRuntimeParamTypeCandidates() {
 			candidateArgs := append([]types.Type(nil), argTypes...)
 			candidateArgs[paramArg] = candidate
-			resolved, err := function.GetFunctionByName(context.Background(), fn.Func.GetObjName(), candidateArgs)
-			if err != nil {
+			resolved, ok := function.GetFunctionByNameWithoutError(fn.Func.GetObjName(), candidateArgs)
+			if !ok {
 				continue
 			}
 			if resolved.GetEncodedOverloadID() != fn.Func.GetObj() || !resolved.GetReturnType().Eq(makeTypeByPlan2Expr(expr)) {

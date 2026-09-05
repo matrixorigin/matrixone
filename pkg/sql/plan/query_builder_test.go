@@ -202,7 +202,103 @@ func TestMongoDBExternalScanPruningKeepsResidualColumnsAndPlansPushdown(t *testi
 	require.Equal(t, "mo-residual:ff", scanNode.ExternScan.MongodbScan.ResidualFilterDigest)
 }
 
-func TestMongoDBExternalScanCatalogStateAndPrepare(t *testing.T) {
+func TestMongoDBExternalScanAddsHiddenQuerySelectorColumn(t *testing.T) {
+	newMock := func() *MockOptimizer {
+		mock := NewMockOptimizer(false)
+		mock.ctxt.dbs["telemetry_source"] = true
+		mock.ctxt.objects["events_external"] = &plan.ObjectRef{
+			DbName: "telemetry_source", ObjName: "events_external", Obj: 42,
+		}
+		mapping := sqlmongodb.TableMapping{
+			Connection: "telemetry_source", Database: "telemetry", Collection: "events",
+			SchemaMode: sqlmongodb.SchemaExplicit, Conversion: sqlmongodb.ConversionStrict, MaxParallelism: 1,
+			Columns: []sqlmongodb.ColumnMapping{
+				{Name: "device_id", Path: "device_id", TypeID: int32(types.T_varchar), Width: 20, Conversion: sqlmongodb.ConversionStrict},
+				{Name: "measurement", Path: "measurement", TypeID: int32(types.T_float64), Conversion: sqlmongodb.ConversionTryNull},
+			},
+		}
+		mock.ctxt.tables["events_external"] = &plan.TableDef{
+			Name: "events_external", TableType: catalog.SystemExternalRel,
+			FeatureFlag: features.MongoDBExternal,
+			Createsql:   sqlmongodb.BuildCreateSQLEnvelope(mapping),
+			Cols: []*plan.ColDef{
+				{Name: "device_id", Typ: plan.Type{Id: int32(types.T_varchar), Width: 20}},
+				{Name: "measurement", Typ: plan.Type{Id: int32(types.T_float64)}},
+			},
+		}
+		return mock
+	}
+	findScan := func(t *testing.T, logicalPlan *plan.Plan) *plan.Node {
+		t.Helper()
+		for _, node := range logicalPlan.GetQuery().Nodes {
+			if node.NodeType == plan.Node_EXTERNAL_SCAN {
+				return node
+			}
+		}
+		require.FailNow(t, "missing MongoDB external scan")
+		return nil
+	}
+
+	t.Run("hidden from select star but retained for selector", func(t *testing.T) {
+		logicalPlan, err := runOneStmt(newMock(), t,
+			`select * from telemetry_source.events_external where __mo_query = '{"filter":{"device_id":"pump-1"}}'`)
+		require.NoError(t, err)
+		scanNode := findScan(t, logicalPlan)
+		require.NotEmpty(t, scanNode.TableDef.Cols)
+		queryColumn := scanNode.TableDef.Cols[len(scanNode.TableDef.Cols)-1]
+		require.Equal(t, catalog.ExternalQuery, queryColumn.Name)
+		require.Equal(t, catalog.ExternalQueryColId, queryColumn.ColId)
+		require.Len(t, scanNode.FilterList, 1)
+
+		root := logicalPlan.GetQuery().Nodes[logicalPlan.GetQuery().Steps[0]]
+		require.Len(t, root.ProjectList, 2, "SELECT * must not expose __mo_query")
+	})
+
+	t.Run("explicit projection remains addressable", func(t *testing.T) {
+		logicalPlan, err := runOneStmt(newMock(), t,
+			`select __mo_query from telemetry_source.events_external where __mo_query = '{"pipeline":[{"$count":"measurement"}]}'`)
+		require.NoError(t, err)
+		scanNode := findScan(t, logicalPlan)
+		require.Len(t, scanNode.TableDef.Cols, 1)
+		require.Equal(t, catalog.ExternalQuery, scanNode.TableDef.Cols[0].Name)
+		require.True(t, catalog.IsForeignQueryCol(
+			scanNode.TableDef.Cols[0].Name, scanNode.TableDef.Cols[0].ColId))
+		require.Nil(t, scanNode.ExternScan.MongodbScan.PushedPredicate,
+			"the synthetic selector must never be translated as a mapped MongoDB field")
+	})
+
+	t.Run("legacy mapped query column remains unambiguous", func(t *testing.T) {
+		mock := newMock()
+		mapping := sqlmongodb.TableMapping{
+			Connection: "telemetry_source", Database: "telemetry", Collection: "legacy_events",
+			SchemaMode: sqlmongodb.SchemaExplicit, Conversion: sqlmongodb.ConversionStrict, MaxParallelism: 1,
+			Columns: []sqlmongodb.ColumnMapping{
+				{Name: catalog.ExternalQuery, Path: "legacy_query", TypeID: int32(types.T_varchar), Width: 64, Conversion: sqlmongodb.ConversionStrict},
+			},
+		}
+		mock.ctxt.tables["events_external"] = &plan.TableDef{
+			Name: "events_external", TableType: catalog.SystemExternalRel,
+			FeatureFlag: features.MongoDBExternal,
+			Createsql:   sqlmongodb.BuildCreateSQLEnvelope(mapping),
+			Cols: []*plan.ColDef{{
+				Name: catalog.ExternalQuery, ColId: 7,
+				Typ: plan.Type{Id: int32(types.T_varchar), Width: 64},
+			}},
+		}
+
+		logicalPlan, err := runOneStmt(mock, t,
+			`select __mo_query from telemetry_source.events_external where __mo_query = 'legacy-value'`)
+		require.NoError(t, err)
+		scanNode := findScan(t, logicalPlan)
+		require.Len(t, scanNode.TableDef.Cols, 1)
+		require.Equal(t, uint64(7), scanNode.TableDef.Cols[0].ColId)
+		require.False(t, catalog.IsForeignQueryCol(scanNode.TableDef.Cols[0].Name, scanNode.TableDef.Cols[0].ColId))
+		require.Len(t, scanNode.FilterList, 1,
+			"the legacy mapped column remains an ordinary MatrixOne predicate")
+	})
+}
+
+func TestMongoDBExternalScanRejectsInvalidCatalogState(t *testing.T) {
 	newMock := func(createSQL string) *MockOptimizer {
 		mock := NewMockOptimizer(false)
 		mock.ctxt.dbs["telemetry_source"] = true
@@ -5129,31 +5225,68 @@ func TestDistinctAggregatePromotedCharCanonicalizesWhenGroupingSetsSkipRewrite(t
 }
 
 func TestWindowPadSpaceKeysUseCanonicalArguments(t *testing.T) {
-	value := "coalesce(cast(n_name as char(8)), cast(n_comment as varchar(8)))"
-	logicPlan, err := runOneStmt(NewMockOptimizer(true), t,
-		"select count(*) over (partition by "+value+"), "+
-			"dense_rank() over (order by "+value+") from nation")
-	require.NoError(t, err)
+	for _, tc := range []struct {
+		name       string
+		value      string
+		charColumn bool
+	}{
+		{
+			name:  "promoted char value",
+			value: "coalesce(cast(n_name as char(8)), cast(n_comment as varchar(8)))",
+		},
+		{
+			name:       "direct char column",
+			value:      "n_name",
+			charColumn: true,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			mock := NewMockOptimizer(true)
+			if tc.charColumn {
+				table := DeepCopyTableDef(mock.ctxt.tables["nation"], true)
+				table.Cols[1].Typ = plan.Type{Id: int32(types.T_char), Width: 8}
+				mock.ctxt.tables["nation"] = table
+			}
 
-	var partition *plan.Node
-	var rankedWindow *plan.WindowSpec
-	for _, node := range logicPlan.GetQuery().Nodes {
-		if node.NodeType == plan.Node_PARTITION && len(node.OrderBy) == 1 {
-			partition = node
-		}
-		if node.NodeType == plan.Node_WINDOW {
-			for _, item := range node.WinSpecList {
-				if window := item.GetW(); window != nil && window.Name == "dense_rank" {
-					rankedWindow = window
+			logicPlan, err := runOneStmt(mock, t,
+				"select count(*) over (partition by "+tc.value+"), "+
+					"dense_rank() over (order by "+tc.value+"), "+
+					"sum(n_regionkey) over (order by "+tc.value+
+					" range between unbounded preceding and current row) from nation")
+			require.NoError(t, err)
+
+			var partition *plan.Node
+			windowsByName := make(map[string]*plan.WindowSpec)
+			for _, node := range logicPlan.GetQuery().Nodes {
+				if node.NodeType == plan.Node_PARTITION && len(node.OrderBy) == 1 {
+					partition = node
+				}
+				if node.NodeType == plan.Node_WINDOW {
+					for _, item := range node.WinSpecList {
+						if window := item.GetW(); window != nil {
+							windowsByName[window.Name] = window
+						}
+					}
 				}
 			}
-		}
+			require.NotNil(t, partition)
+			requireWindowPadSpaceComparisonCast(t, partition.OrderBy[0].Expr)
+
+			for _, name := range []string{"dense_rank", "sum"} {
+				window := windowsByName[name]
+				require.NotNil(t, window)
+				require.Len(t, window.OrderBy, 1)
+				requireWindowPadSpaceComparisonCast(t, window.OrderBy[0].Expr)
+			}
+		})
 	}
-	require.NotNil(t, partition)
-	require.True(t, isCastOverload(partition.OrderBy[0].Expr, 2))
-	require.NotNil(t, rankedWindow)
-	require.Len(t, rankedWindow.OrderBy, 1)
-	require.True(t, isCastOverload(rankedWindow.OrderBy[0].Expr, 2))
+}
+
+func requireWindowPadSpaceComparisonCast(t *testing.T, expr *plan.Expr) {
+	t.Helper()
+	require.NotNil(t, expr)
+	require.True(t, isCastOverload(expr, 2), expr.String())
+	require.Equal(t, int32(types.T_varchar), expr.Typ.Id)
 }
 
 func TestGroupConcatOrderByIsBoundPerAggregate(t *testing.T) {

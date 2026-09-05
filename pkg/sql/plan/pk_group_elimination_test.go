@@ -20,8 +20,10 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 )
 
@@ -408,6 +410,9 @@ func TestSingleRowCastIsTotal(t *testing.T) {
 	typ := func(oid types.T) planpb.Type {
 		return planpb.Type{Id: int32(oid)}
 	}
+	stringType := func(oid types.T, width int32, charset uint32) planpb.Type {
+		return planpb.Type{Id: int32(oid), Width: width, Charset: charset}
+	}
 	decimal := func(oid types.T, width, scale int32) planpb.Type {
 		return planpb.Type{Id: int32(oid), Width: width, Scale: scale}
 	}
@@ -426,6 +431,12 @@ func TestSingleRowCastIsTotal(t *testing.T) {
 		{"malformed decimal source", decimal(types.T_decimal64, 19, 2), typ(types.T_float64), false},
 		{"malformed decimal target", decimal(types.T_decimal64, 7, 2), decimal(types.T_decimal64, 19, 2), false},
 		{"same malformed decimal", decimal(types.T_decimal64, 19, 2), decimal(types.T_decimal64, 19, 2), false},
+		{"varchar to wider char", stringType(types.T_varchar, 17, uint32(types.CharsetUTF8)), stringType(types.T_char, 25, uint32(types.CharsetUTF8)), true},
+		{"char widening", stringType(types.T_char, 10, uint32(types.CharsetUTF8)), stringType(types.T_char, 25, uint32(types.CharsetUTF8)), true},
+		{"varchar to narrower char", stringType(types.T_varchar, 25, uint32(types.CharsetUTF8)), stringType(types.T_char, 10, uint32(types.CharsetUTF8)), false},
+		{"unbounded varchar to char", stringType(types.T_varchar, 0, uint32(types.CharsetUTF8)), stringType(types.T_char, 25, uint32(types.CharsetUTF8)), false},
+		{"varchar to char charset change", stringType(types.T_varchar, 17, uint32(types.CharsetUTF8MB4Bin)), stringType(types.T_char, 25, uint32(types.CharsetUTF8)), false},
+		{"text to char", stringType(types.T_text, 17, uint32(types.CharsetUTF8)), stringType(types.T_char, 25, uint32(types.CharsetUTF8)), false},
 		{"text to integer", typ(types.T_varchar), typ(types.T_int64), false},
 		{"float widening", typ(types.T_float32), typ(types.T_float64), true},
 		{"float narrowing", typ(types.T_float64), typ(types.T_float32), false},
@@ -705,33 +716,269 @@ func TestPrimaryKeyGroupEliminationKeepsAggregateFreeLegacyPathUnbounded(t *test
 		"the bounded-demand gate applies only to aggregate-bearing rewrites")
 }
 
-func TestPrimaryKeyGroupEliminationWithOrderRemovesHashButNotScan(t *testing.T) {
-	logical, err := runOneStmt(
+func TestPrimaryKeyGroupEliminationRemovesProvenConstantOrder(t *testing.T) {
+	tests := []struct {
+		name       string
+		sql        string
+		wantLimit  uint64
+		wantOffset uint64
+	}{
+		{
+			name:      "aggregate alias",
+			sql:       "select empno, count(*) c from constraint_test.emp group by empno order by c desc limit 10",
+			wantLimit: 10,
+		},
+		{
+			name:      "foldable expression",
+			sql:       "select empno, count(*) c from constraint_test.emp group by empno order by c + 1 limit 7",
+			wantLimit: 7,
+		},
+		{
+			name:      "multiple constant keys",
+			sql:       "select empno, count(*) c from constraint_test.emp group by empno order by c desc, c + 1 asc, (1 + 1) limit 6",
+			wantLimit: 6,
+		},
+		{
+			name:      "deterministic cast",
+			sql:       "select empno, count(*) c from constraint_test.emp group by empno order by cast(c as signed) limit 3",
+			wantLimit: 3,
+		},
+		{
+			name:      "interval consumed by temporal function",
+			sql:       "select empno, count(*) c from constraint_test.emp group by empno order by date_add('2026-01-01', interval c day) limit 3",
+			wantLimit: 3,
+		},
+		{
+			name:      "null companion key",
+			sql:       "select empno, count(*) c from constraint_test.emp group by empno order by c, null limit 2",
+			wantLimit: 2,
+		},
+		{
+			name:       "offset",
+			sql:        "select empno, count(*) c from constraint_test.emp group by empno order by c limit 5 offset 3",
+			wantLimit:  5,
+			wantOffset: 3,
+		},
+		{
+			name:      "always true having",
+			sql:       "select empno, count(*) c from constraint_test.emp group by empno having count(*) = 1 order by c limit 4",
+			wantLimit: 4,
+		},
+		{
+			name:      "zero limit",
+			sql:       "select empno, count(*) c from constraint_test.emp group by empno order by c limit 0",
+			wantLimit: 0,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			logical, err := runOneStmt(NewMockOptimizer(false), t, test.sql)
+			require.NoError(t, err)
+
+			query := logical.GetQuery()
+			require.False(t, reachableNodeType(query, planpb.Node_AGG))
+			require.False(t, reachableNodeType(query, planpb.Node_SORT))
+			scan := firstReachableNode(query, planpb.Node_TABLE_SCAN)
+			require.NotNil(t, scan)
+			require.NotNil(t, scan.Limit)
+			require.Equal(t, test.wantLimit, scan.Limit.GetLit().GetU64Val())
+			if test.wantOffset == 0 {
+				require.Nil(t, scan.Offset)
+			} else {
+				require.NotNil(t, scan.Offset)
+				require.Equal(t, test.wantOffset, scan.Offset.GetLit().GetU64Val())
+			}
+		})
+	}
+}
+
+func TestPrimaryKeyGroupEliminationKeepsNonConstantOrObservableOrder(t *testing.T) {
+	tests := []struct {
+		name string
+		sql  string
+	}{
+		{
+			name: "mixed row key",
+			sql:  "select empno, count(*) c from constraint_test.emp group by empno order by c, empno limit 10",
+		},
+		{
+			name: "nullable count",
+			sql:  "select empno, count(comm) c from constraint_test.emp group by empno order by c limit 10",
+		},
+		{
+			name: "row value aggregate",
+			sql:  "select empno, min(empno) c from constraint_test.emp group by empno order by c limit 10",
+		},
+		{
+			name: "varying sum",
+			sql:  "select empno, sum(sal) c from constraint_test.emp group by empno order by c limit 10",
+		},
+		{
+			name: "volatile expression",
+			sql:  "select empno, count(*) c from constraint_test.emp group by empno order by c + rand() limit 10",
+		},
+		{
+			name: "division by zero",
+			sql:  "select empno, count(*) c from constraint_test.emp group by empno order by c / 0 limit 10",
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			logical, err := runOneStmt(NewMockOptimizer(false), t, test.sql)
+			require.NoError(t, err)
+
+			query := logical.GetQuery()
+			require.True(t, reachableNodeType(query, planpb.Node_SORT))
+			scan := firstReachableNode(query, planpb.Node_TABLE_SCAN)
+			require.NotNil(t, scan)
+			require.Nil(t, scan.Limit, "a retained Sort must keep its full input stream")
+			require.Nil(t, scan.Offset)
+		})
+	}
+}
+
+func TestPrimaryKeyGroupEliminationKeepsPreparedOrderParameter(t *testing.T) {
+	prepared, err := runOneStmt(
 		NewMockOptimizer(false),
 		t,
-		"select empno, count(*) c from constraint_test.emp group by empno order by c desc limit 10",
+		"prepare pk_group_order from 'select empno, count(*) c from constraint_test.emp group by empno order by c + ? limit 10'",
 	)
 	require.NoError(t, err)
 
-	query := logical.GetQuery()
-	require.False(t, reachableNodeType(query, planpb.Node_AGG))
+	query := prepared.GetDcl().GetPrepare().GetPlan().GetQuery()
+	require.NotNil(t, query)
 	require.True(t, reachableNodeType(query, planpb.Node_SORT))
 	scan := firstReachableNode(query, planpb.Node_TABLE_SCAN)
 	require.NotNil(t, scan)
-	require.Nil(t, scan.Limit, "Sort remains a semantic barrier to scan LIMIT")
+	require.Nil(t, scan.Limit)
+}
+
+func TestPrimaryKeyGroupEliminationSupportsPreparedConstantOrderPagination(t *testing.T) {
+	prepared, err := runOneStmt(
+		NewMockOptimizer(false),
+		t,
+		"prepare pk_group_order_page from 'select empno, count(*) c from constraint_test.emp group by empno order by c limit ? offset ?'",
+	)
+	require.NoError(t, err)
+
+	query := prepared.GetDcl().GetPrepare().GetPlan().GetQuery()
+	require.NotNil(t, query)
+	require.False(t, reachableNodeType(query, planpb.Node_AGG))
+	require.False(t, reachableNodeType(query, planpb.Node_SORT))
+	scan := firstReachableNode(query, planpb.Node_TABLE_SCAN)
+	require.NotNil(t, scan)
+	require.Equal(t, "cast", scan.Limit.GetF().Func.ObjName)
+	require.Equal(t, int32(0), scan.Limit.GetF().Args[0].GetP().Pos)
+	require.Equal(t, "cast", scan.Offset.GetF().Func.ObjName)
+	require.Equal(t, int32(1), scan.Offset.GetF().Args[0].GetP().Pos)
+}
+
+func TestPrimaryKeyGroupEliminationRejectsStandaloneIntervalOrder(t *testing.T) {
+	tests := []string{
+		"select empno, count(*) c from constraint_test.emp group by empno order by interval c day limit 10",
+		"select empno, count(*) c from constraint_test.emp group by empno order by interval (c + 1) day limit 10",
+		"select empno, count(*) c from constraint_test.emp group by empno order by c, interval 1 day limit 10",
+		"select empno from constraint_test.emp order by interval 1 day",
+	}
+	for _, sql := range tests {
+		t.Run(sql, func(t *testing.T) {
+			ctx := NewMockCompilerContext(false)
+			stmt, err := mysql.ParseOne(ctx.GetContext(), sql, 1)
+			require.NoError(t, err)
+			defer stmt.Free()
+
+			_, err = NewBaseOptimizer(ctx).Optimize(stmt, false)
+			require.Error(t, err)
+			require.True(t, moerr.IsMoErrCode(err, moerr.ErrNotSupported), err)
+			require.ErrorContains(t, err, "standalone INTERVAL expression in ORDER BY")
+		})
+	}
+}
+
+func TestConstantSingletonGroupSortRemovalPreservesRootAndBarriers(t *testing.T) {
+	newBuilder := func() (*QueryBuilder, map[int32]struct{}) {
+		int64Type := planpb.Type{Id: int32(types.T_int64), NotNullable: true}
+		valueScan := &planpb.Node{NodeId: 0, NodeType: planpb.Node_VALUE_SCAN}
+		singletonProject := &planpb.Node{
+			NodeId: 1, NodeType: planpb.Node_PROJECT, Children: []int32{0},
+			BindingTags: []int32{11},
+			ProjectList: []*planpb.Expr{makePlan2Int64ConstExprWithType(1)},
+		}
+		selectProject := &planpb.Node{
+			NodeId: 2, NodeType: planpb.Node_PROJECT, Children: []int32{1},
+			BindingTags: []int32{12},
+			ProjectList: []*planpb.Expr{GetColExpr(int64Type, 11, 0)},
+		}
+		sort := &planpb.Node{
+			NodeId: 3, NodeType: planpb.Node_SORT, Children: []int32{2},
+			OrderBy: []*planpb.OrderBySpec{{Expr: GetColExpr(int64Type, 12, 0)}},
+			Limit:   makePlan2Uint64ConstExprWithType(10),
+		}
+		return &QueryBuilder{qry: &planpb.Query{
+			Nodes: []*planpb.Node{valueScan, singletonProject, selectProject, sort},
+		}}, map[int32]struct{}{1: {}}
+	}
+
+	t.Run("sort root is replaced", func(t *testing.T) {
+		builder, rewritten := newBuilder()
+		rootID := builder.removeConstantSortAfterSingletonGroup(3, rewritten)
+		require.Equal(t, int32(2), rootID)
+		require.NotNil(t, builder.qry.Nodes[2].Limit)
+		require.Equal(t, uint64(10), builder.qry.Nodes[2].Limit.GetLit().GetU64Val())
+	})
+
+	t.Run("rank option retains sort", func(t *testing.T) {
+		builder, rewritten := newBuilder()
+		builder.qry.Nodes[3].RankOption = &planpb.RankOption{Mode: "force"}
+		require.Equal(t, int32(3), builder.removeConstantSortAfterSingletonGroup(3, rewritten))
+	})
+
+	t.Run("unrelated constant order retains sort", func(t *testing.T) {
+		builder, rewritten := newBuilder()
+		builder.qry.Nodes[3].OrderBy[0].Expr = makePlan2Int64ConstExprWithType(1)
+		require.Equal(t, int32(3), builder.removeConstantSortAfterSingletonGroup(3, rewritten),
+			"the singleton-group pass must not become a global constant-order rewrite")
+		require.Nil(t, builder.qry.Nodes[2].Limit)
+	})
+
+	t.Run("unsupported constant type retains sort without panic", func(t *testing.T) {
+		builder, rewritten := newBuilder()
+		builder.compCtx = NewMockCompilerContext(false)
+		builder.qry.Nodes[3].OrderBy[0].Expr = &planpb.Expr{
+			Typ: planpb.Type{Id: int32(types.T_interval)},
+			Expr: &planpb.Expr_List{List: &planpb.ExprList{List: []*planpb.Expr{
+				GetColExpr(planpb.Type{Id: int32(types.T_int64), NotNullable: true}, 12, 0),
+				makePlan2StringConstExprWithType("day"),
+			}}},
+		}
+		require.Equal(t, int32(3), builder.removeConstantSortAfterSingletonGroup(3, rewritten))
+		require.Nil(t, builder.qry.Nodes[2].Limit)
+	})
+
+	t.Run("unsafe pagination composition retains sort", func(t *testing.T) {
+		builder, rewritten := newBuilder()
+		builder.qry.Nodes[2].Limit = makePlan2Uint64ConstExprWithType(1)
+		builder.qry.Nodes[3].Offset = makePlan2Uint64ConstExprWithType(1)
+		require.Equal(t, int32(3), builder.removeConstantSortAfterSingletonGroup(3, rewritten))
+		require.Equal(t, uint64(1), builder.qry.Nodes[2].Limit.GetLit().GetU64Val())
+	})
 }
 
 func TestPrimaryKeyGroupEliminationPreservesSQLCalcFoundRowsStream(t *testing.T) {
 	logical, err := runOneStmt(
 		NewMockOptimizer(false),
 		t,
-		"select sql_calc_found_rows empno, count(*) from constraint_test.emp group by empno limit 10",
+		"select sql_calc_found_rows empno, count(*) c from constraint_test.emp group by empno order by c limit 10",
 	)
 	require.NoError(t, err)
 
 	query := logical.GetQuery()
 	require.False(t, reachableNodeType(query, planpb.Node_AGG),
 		"a complete primary key still proves one row per SQL group")
+	require.True(t, reachableNodeType(query, planpb.Node_SORT),
+		"FOUND_ROWS() retains the complete ordered input owner")
 	scan := firstReachableNode(query, planpb.Node_TABLE_SCAN)
 	require.NotNil(t, scan)
 	require.Nil(t, scan.Limit,

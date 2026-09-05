@@ -1025,11 +1025,20 @@ func (ses *Session) optimizerStatsKey(tableID uint64) optimizerStatsTableKey {
 }
 
 type optimizerStatsCacheTag struct {
-	key     optimizerStatsTableKey
-	version uint64
+	key               optimizerStatsTableKey
+	version           uint64
+	tableDefVersion   uint32
+	tableVersionBound bool
 }
 
 func (ses *Session) getStatsCacheWithVersion(key optimizerStatsTableKey) (*plan2.StatsCache, uint64) {
+	return ses.getStatsCacheForTableDefVersion(key, nil)
+}
+
+func (ses *Session) getStatsCacheForTableDefVersion(
+	key optimizerStatsTableKey,
+	tableDefVersion *uint32,
+) (*plan2.StatsCache, uint64) {
 	ses.statsCacheMu.Lock()
 	defer ses.statsCacheMu.Unlock()
 	ses.initStatsCacheLocked()
@@ -1043,7 +1052,10 @@ func (ses *Session) getStatsCacheWithVersion(key optimizerStatsTableKey) (*plan2
 		// generation. Once any publication has happened, an untagged entry is
 		// conservatively stale.
 		ses.statsCacheVersions[key.tableID] = optimizerStatsCacheTag{key: key, version: version}
-	} else if tag.key != key || tag.version != version {
+	} else if tag.key != key || tag.version != version ||
+		(tag.tableVersionBound &&
+			(tableDefVersion == nil || tag.tableDefVersion != *tableDefVersion)) ||
+		(tableDefVersion != nil && !tag.tableVersionBound) {
 		ses.statsCache.Delete(key.tableID)
 		delete(ses.statsCacheVersions, key.tableID)
 	}
@@ -1055,6 +1067,15 @@ func (ses *Session) cacheStatsIfCurrent(
 	version uint64,
 	stats *pbstats.StatsInfo,
 ) bool {
+	return ses.cacheStatsForTableDefVersionIfCurrent(key, version, nil, stats)
+}
+
+func (ses *Session) cacheStatsForTableDefVersionIfCurrent(
+	key optimizerStatsTableKey,
+	version uint64,
+	tableDefVersion *uint32,
+	stats *pbstats.StatsInfo,
+) bool {
 	ses.statsCacheMu.Lock()
 	defer ses.statsCacheMu.Unlock()
 	if currentOptimizerStatsVersion(ses.GetService(), key) != version {
@@ -1064,13 +1085,19 @@ func (ses *Session) cacheStatsIfCurrent(
 	if ses.statsCache.SetAndReportReset(key.tableID, stats) {
 		clear(ses.statsCacheVersions)
 	}
-	ses.statsCacheVersions[key.tableID] = optimizerStatsCacheTag{key: key, version: version}
+	tag := optimizerStatsCacheTag{key: key, version: version}
+	if tableDefVersion != nil {
+		tag.tableDefVersion = *tableDefVersion
+		tag.tableVersionBound = true
+	}
+	ses.statsCacheVersions[key.tableID] = tag
 	return true
 }
 
-func (ses *Session) cachePublishedStats(
+func (ses *Session) cachePublishedStatsForTableDefVersion(
 	key optimizerStatsTableKey,
 	version uint64,
+	tableDefVersion *uint32,
 	stats *pbstats.StatsInfo,
 ) {
 	ses.statsCacheMu.Lock()
@@ -1079,7 +1106,12 @@ func (ses *Session) cachePublishedStats(
 	if ses.statsCache.SetAndReportReset(key.tableID, stats) {
 		clear(ses.statsCacheVersions)
 	}
-	ses.statsCacheVersions[key.tableID] = optimizerStatsCacheTag{key: key, version: version}
+	tag := optimizerStatsCacheTag{key: key, version: version}
+	if tableDefVersion != nil {
+		tag.tableDefVersion = *tableDefVersion
+		tag.tableVersionBound = true
+	}
+	ses.statsCacheVersions[key.tableID] = tag
 }
 
 func (ses *Session) initStatsCacheLocked() {
@@ -1337,7 +1369,22 @@ func (ses *Session) sqlModeHasOnlyFullGroupBy() bool {
 	return ok && has
 }
 
-func (ses *Session) updateSqlModeCaches(oldNative, oldOnlyFullGroupBy bool, val interface{}) {
+func (ses *Session) sqlModeHasEnableBoolSumAvg() bool {
+	if ses == nil {
+		return false
+	}
+	value, err := ses.GetSessionSysVar("sql_mode")
+	if err != nil {
+		return false
+	}
+	has, ok := sqlModeHasEnableBoolSumAvgValue(value)
+	return ok && has
+}
+
+// updateSqlModeCaches evicts cached plans when a sql_mode token that shapes
+// the plan changes membership. Every token the planner reads at bind time
+// must be compared here: the cache is keyed by SQL text alone.
+func (ses *Session) updateSqlModeCaches(oldNative, oldOnlyFullGroupBy, oldBoolSumAvg bool, val interface{}) {
 	ses.updateSqlModeNoAutoValueOnZero(val)
 	newNative, ok := sqlModeHasMatrixOneNativeValue(val)
 	if !ok {
@@ -1347,7 +1394,12 @@ func (ses *Session) updateSqlModeCaches(oldNative, oldOnlyFullGroupBy bool, val 
 	if !ok {
 		return
 	}
-	if oldNative != newNative || oldOnlyFullGroupBy != newOnlyFullGroupBy {
+	newBoolSumAvg, ok := sqlModeHasEnableBoolSumAvgValue(val)
+	if !ok {
+		return
+	}
+	if oldNative != newNative || oldOnlyFullGroupBy != newOnlyFullGroupBy ||
+		oldBoolSumAvg != newBoolSumAvg {
 		ses.cleanCache()
 	}
 }
@@ -2523,16 +2575,22 @@ func (ses *Session) AuthenticateUser(ctx context.Context, userInput string, dbNa
 	ses.UpdateDebugString()
 
 	ses.Debugf(ctx, "check special user")
-	// check the special user for initialization
-	if isSpecial, pwdBytes, specialAccount := isSpecialUser(tenant.GetUser()); isSpecial && specialAccount.IsMoAdminRole() {
+	isSpecial, pwdBytes, specialAccount := isSpecialUser(tenant.GetUser())
+	isBootstrapSpecial := isSpecial && specialAccount.IsMoAdminRole()
+	// Internal special users bootstrap the service before catalog access is
+	// available. External special users are normal client connections and must
+	// observe the same fresh catalog boundary as every other public session.
+	if !isBootstrapSpecial || !ses.isInternal {
+		if err = ses.prepareAuthenticationSnapshot(ctx); err != nil {
+			return nil, err
+		}
+	}
+	if isBootstrapSpecial {
 		ses.SetTenantInfo(specialAccount)
 		if len(ses.requestLabel) == 0 {
 			ses.requestLabel = db_holder.GetLabelSelector()
 		}
 		return GetPassWord(HashPassWordWithByte(pwdBytes))
-	}
-	if err = ses.prepareAuthenticationSnapshot(ctx); err != nil {
-		return nil, err
 	}
 
 	bh := ses.GetBackgroundExec(ctx, &BackgroundExecOption{

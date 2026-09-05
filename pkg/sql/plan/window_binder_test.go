@@ -32,10 +32,10 @@ import (
 )
 
 type stubWindowBinder struct {
-	bindExprFunc                   func(tree.Expr, int32, bool) (*planpb.Expr, error)
-	bindFuncExprFunc               func(string, []tree.Expr, int32) (*planpb.Expr, error)
-	bindPreparedRowsFrameBoundFunc func(tree.Expr) (*planpb.Expr, error)
-	makeFrameValueFunc             func(tree.Expr, *planpb.Type) (*planpb.Expr, error)
+	bindExprFunc                     func(tree.Expr, int32, bool) (*planpb.Expr, error)
+	bindFuncExprFunc                 func(string, []tree.Expr, int32) (*planpb.Expr, error)
+	bindPreparedWindowFrameBoundFunc func(tree.Expr, *planpb.Type) (*planpb.Expr, error)
+	makeFrameValueFunc               func(tree.Expr, *planpb.Type) (*planpb.Expr, error)
 }
 
 func (b *stubWindowBinder) BindExpr(expr tree.Expr, depth int32, isRoot bool) (*planpb.Expr, error) {
@@ -50,8 +50,8 @@ func (b *stubWindowBinder) bindPreparedNumericFuncExpr(name string, args []tree.
 	return b.bindFuncExprImplByAstExpr(name, args, depth)
 }
 
-func (b *stubWindowBinder) bindPreparedRowsFrameBound(expr tree.Expr) (*planpb.Expr, error) {
-	return b.bindPreparedRowsFrameBoundFunc(expr)
+func (b *stubWindowBinder) bindPreparedWindowFrameBound(expr tree.Expr, typ *planpb.Type) (*planpb.Expr, error) {
+	return b.bindPreparedWindowFrameBoundFunc(expr, typ)
 }
 
 func (b *stubWindowBinder) makeFrameConstValue(expr tree.Expr, typ *planpb.Type) (*planpb.Expr, error) {
@@ -338,7 +338,25 @@ func TestPreparedNthValueAcceptsPositionalOffset(t *testing.T) {
 	require.NotNil(t, preparedOffset.GetP())
 }
 
-func TestPreparedWindowRangeFrameMarkersAreUnsupported(t *testing.T) {
+func TestPreparedWindowRangeFrameMarkers(t *testing.T) {
+	optimizer := NewMockOptimizer(false)
+	stmts, err := parsers.Parse(
+		optimizer.CurrentContext().GetContext(),
+		dialect.MYSQL,
+		"select sum(n_nationkey) over (order by n_nationkey range ? preceding) from nation",
+		1,
+	)
+	require.NoError(t, err)
+
+	queryPlan, err := BuildPlan(optimizer.CurrentContext(), stmts[0], true)
+	require.NoError(t, err)
+	window := firstWindowSpec(t, queryPlan)
+	requirePreparedWindowFrameParam(t, window.Frame.Start.Val, types.T_int32, 1)
+	require.Equal(t, planpb.FrameBound_CURRENT_ROW, window.Frame.End.Type)
+	require.Nil(t, window.Frame.End.Val)
+}
+
+func TestPreparedWindowRangeFrameMarkersInBothBounds(t *testing.T) {
 	optimizer := NewMockOptimizer(false)
 	stmts, err := parsers.Parse(
 		optimizer.CurrentContext().GetContext(),
@@ -348,8 +366,25 @@ func TestPreparedWindowRangeFrameMarkersAreUnsupported(t *testing.T) {
 	)
 	require.NoError(t, err)
 
+	queryPlan, err := BuildPlan(optimizer.CurrentContext(), stmts[0], true)
+	require.NoError(t, err)
+	window := firstWindowSpec(t, queryPlan)
+	requirePreparedWindowFrameParam(t, window.Frame.Start.Val, types.T_int32, 1)
+	requirePreparedWindowFrameParam(t, window.Frame.End.Val, types.T_int32, 2)
+}
+
+func TestPreparedWindowRangeFrameMarkerRequiresNumericOrder(t *testing.T) {
+	optimizer := NewMockOptimizer(false)
+	stmts, err := parsers.Parse(
+		optimizer.CurrentContext().GetContext(),
+		dialect.MYSQL,
+		"select sum(n_nationkey) over (order by cast('2026-01-01' as date) range ? preceding) from nation",
+		1,
+	)
+	require.NoError(t, err)
+
 	_, err = BuildPlan(optimizer.CurrentContext(), stmts[0], true)
-	require.ErrorContains(t, err, "prepared parameter markers in RANGE window frames")
+	require.ErrorContains(t, err, "parameterized RANGE frame requires a numeric ORDER BY expression")
 }
 
 func TestPreparedWindowIntervalFrameMarkersAreUnsupported(t *testing.T) {
@@ -706,6 +741,71 @@ func TestBuildPlanNamedWindows(t *testing.T) {
 	})
 }
 
+func TestBuildPlanDefaultValueWindowFrames(t *testing.T) {
+	tests := []struct {
+		name         string
+		sql          string
+		frameType    planpb.FrameClause_FrameType
+		endType      planpb.FrameBound_BoundType
+		endUnbounded bool
+	}{
+		{
+			name:      "first value uses ordered default frame",
+			sql:       "select first_value(n_nationkey) over (order by n_regionkey) from nation",
+			frameType: planpb.FrameClause_RANGE,
+			endType:   planpb.FrameBound_CURRENT_ROW,
+		},
+		{
+			name:      "last value uses ordered default frame",
+			sql:       "select last_value(n_nationkey) over (order by n_regionkey) from nation",
+			frameType: planpb.FrameClause_RANGE,
+			endType:   planpb.FrameBound_CURRENT_ROW,
+		},
+		{
+			name:      "nth value uses ordered default frame",
+			sql:       "select nth_value(n_nationkey, 2) over (order by n_regionkey) from nation",
+			frameType: planpb.FrameClause_RANGE,
+			endType:   planpb.FrameBound_CURRENT_ROW,
+		},
+		{
+			name:         "lag remains frame independent",
+			sql:          "select lag(n_nationkey) over (order by n_regionkey) from nation",
+			frameType:    planpb.FrameClause_ROWS,
+			endType:      planpb.FrameBound_FOLLOWING,
+			endUnbounded: true,
+		},
+		{
+			name:         "lead remains frame independent",
+			sql:          "select lead(n_nationkey) over (order by n_regionkey) from nation",
+			frameType:    planpb.FrameClause_ROWS,
+			endType:      planpb.FrameBound_FOLLOWING,
+			endUnbounded: true,
+		},
+		{
+			name: "explicit full frame is preserved",
+			sql: `select last_value(n_nationkey) over (
+				order by n_regionkey rows between unbounded preceding and unbounded following
+			) from nation`,
+			frameType:    planpb.FrameClause_ROWS,
+			endType:      planpb.FrameBound_FOLLOWING,
+			endUnbounded: true,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			queryPlan, err := buildNamedWindowPlan(t, tc.sql)
+			require.NoError(t, err)
+			window := firstWindowSpec(t, queryPlan)
+			require.Equal(t, tc.frameType, window.Frame.Type)
+			require.Equal(t, planpb.FrameBound_PRECEDING, window.Frame.Start.Type)
+			require.True(t, window.Frame.Start.UnBounded)
+			require.Equal(t, tc.endType, window.Frame.End.Type)
+			require.Equal(t, tc.endUnbounded, window.Frame.End.UnBounded)
+		})
+	}
+}
+
 func TestPreparedNamedWindowParameterMetadata(t *testing.T) {
 	tests := []struct {
 		name string
@@ -1046,8 +1146,12 @@ func TestResolveNamedWindowDefinitionsReportsFirstDefinitionError(t *testing.T) 
 }
 
 func requirePreparedRowsFrameParam(t *testing.T, expr *planpb.Expr, pos int32) {
+	requirePreparedWindowFrameParam(t, expr, types.T_uint64, pos)
+}
+
+func requirePreparedWindowFrameParam(t *testing.T, expr *planpb.Expr, typ types.T, pos int32) {
 	t.Helper()
-	require.Equal(t, int32(types.T_uint64), expr.Typ.Id)
+	require.Equal(t, int32(typ), expr.Typ.Id)
 	cast := expr.GetF()
 	require.NotNil(t, cast)
 	require.Equal(t, "cast", cast.Func.ObjName)

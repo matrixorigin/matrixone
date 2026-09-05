@@ -156,6 +156,7 @@ func TestDeepCopyRuntimeFilterSpecPreservesPayloadContract(t *testing.T) {
 		BuildExpr:           MakePlan2Int64ConstExprWithType(1),
 		NotOnPk:             true,
 		UseMembershipFilter: true,
+		ScalarPredicate:     true,
 		KeyEncoding:         planpb.RuntimeFilterKeyEncoding_RUNTIME_FILTER_KEY_FLOAT_ZERO_CLOSED_V1,
 		ProbeType: &planpb.Type{
 			Id:         4,
@@ -176,6 +177,7 @@ func TestDeepCopyRuntimeFilterSpecPreservesPayloadContract(t *testing.T) {
 	require.Equal(t, source.UpperLimit, cloned.UpperLimit)
 	require.Equal(t, source.NotOnPk, cloned.NotOnPk)
 	require.Equal(t, source.UseMembershipFilter, cloned.UseMembershipFilter)
+	require.True(t, cloned.ScalarPredicate)
 	require.Equal(t, source.KeyEncoding, cloned.KeyEncoding)
 	require.Equal(t, source.ProbeType, cloned.ProbeType)
 	require.NotSame(t, source.ProbeType, cloned.ProbeType)
@@ -225,6 +227,7 @@ func TestDeepCopyNodePreservesFuzzyRuntimeFilterDecision(t *testing.T) {
 		FuzzyBuildSide:          planpb.Node_FUZZY_BUILD_SIDE_SINK,
 		IfInsertFromUnique:      true,
 		SpillMem:                64 << 10,
+		PartitionAlgorithm:      planpb.Node_PARTITION_ALGORITHM_HASH,
 		PhysicalEqualityKeyList: []*planpb.Expr{physicalKey},
 		RuntimeFilterProbeList:  []*planpb.RuntimeFilterSpec{probeSpec},
 		RuntimeFilterBuildList:  []*planpb.RuntimeFilterSpec{buildSpec},
@@ -239,6 +242,7 @@ func TestDeepCopyNodePreservesFuzzyRuntimeFilterDecision(t *testing.T) {
 	require.Equal(t, source.FuzzyBuildSide, cloned.FuzzyBuildSide)
 	require.Equal(t, source.IfInsertFromUnique, cloned.IfInsertFromUnique)
 	require.Equal(t, source.SpillMem, cloned.SpillMem)
+	require.Equal(t, source.PartitionAlgorithm, cloned.PartitionAlgorithm)
 	require.Equal(t, source.PhysicalEqualityKeyList, cloned.PhysicalEqualityKeyList)
 	require.Equal(t, source.RuntimeFilterProbeList,
 		cloned.RuntimeFilterProbeList)
@@ -257,12 +261,14 @@ func TestDeepCopyNodePreservesFuzzyRuntimeFilterDecision(t *testing.T) {
 
 	cloned.FuzzyBuildSide = planpb.Node_FUZZY_BUILD_SIDE_TABLE
 	cloned.SpillMem = 1
+	cloned.PartitionAlgorithm = planpb.Node_PARTITION_ALGORITHM_SORT
 	cloned.PhysicalEqualityKeyList[0].Typ.Scale = 9
 	cloned.RuntimeFilterBuildList[0].BuildExpr.Typ.Scale = 9
 	cloned.Fuzzymessage.ParentUniqueCols[0].Name = "changed"
 	require.Equal(t, planpb.Node_FUZZY_BUILD_SIDE_SINK,
 		source.FuzzyBuildSide)
 	require.Equal(t, int64(64<<10), source.SpillMem)
+	require.Equal(t, planpb.Node_PARTITION_ALGORITHM_HASH, source.PartitionAlgorithm)
 	require.NotEqual(t,
 		cloned.PhysicalEqualityKeyList[0].Typ.Scale,
 		source.PhysicalEqualityKeyList[0].Typ.Scale)

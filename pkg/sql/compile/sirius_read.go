@@ -23,6 +23,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/substrait"
+	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	disttaesidecar "github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/sidecar"
 )
@@ -78,7 +79,7 @@ func (c *Compile) CompileSiriusRead(ctx context.Context, queryPlan *planpb.Plan,
 	// rest of this compile. A logical mutation frontier replaces the former
 	// positional write-list offsets; callers must not reconstruct workspace
 	// visibility from physical storage layout.
-	readView := txnReadViewForOperator(txnOp, c.TxnReadView)
+	readView := client.WorkspaceReadViewForOperator(txnOp, c.TxnReadView)
 	priorWrites := readView.MaxMutationID() != 0
 	if !readOnly || priorWrites {
 		return nil, substrait.NotEligible(substrait.EligibilityTransaction, "transaction is not an admissible read-only snapshot")

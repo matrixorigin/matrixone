@@ -318,6 +318,7 @@ func DeepCopyNode(node *plan.Node) *plan.Node {
 		RecursiveUnionDistinct: node.RecursiveUnionDistinct,
 		FilterIsBarrier:        node.FilterIsBarrier,
 		PartitionByCount:       node.PartitionByCount,
+		PartitionAlgorithm:     node.PartitionAlgorithm,
 		DedupInputKeysUnique:   node.DedupInputKeysUnique,
 		EmitCompressedRowCount: node.EmitCompressedRowCount,
 		SpillMem:               node.SpillMem,
@@ -1053,6 +1054,7 @@ func DeepCopyRuntimeFilterSpec(rf *plan.RuntimeFilterSpec) *plan.RuntimeFilterSp
 		UseMembershipFilter: rf.UseMembershipFilter,
 		KeyEncoding:         rf.KeyEncoding,
 		ProbeType:           DeepCopyType(rf.ProbeType),
+		ScalarPredicate:     rf.ScalarPredicate,
 		KeyComponentProbeTypes: slices.Clone(
 			rf.KeyComponentProbeTypes,
 		),

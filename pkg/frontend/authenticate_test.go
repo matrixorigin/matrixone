@@ -508,26 +508,55 @@ func Test_createTablesInMoCatalogOfGeneralTenant(t *testing.T) {
 	})
 }
 
+func TestMoRoleGrantHasGranteeLookupIndex(t *testing.T) {
+	require.Contains(t, MoCatalogMoRoleGrantDDL,
+		"key idx_mo_role_grant_grantee_id(grantee_id)")
+}
+
 func Test_createTablesInInformationSchemaOfGeneralTenant_UsesProtocolAwareViews(t *testing.T) {
 	tests := []struct {
-		name              string
-		protocol          int64
-		wantCheckView     bool
-		wantLatestTable   bool
-		wantLegacyTable   bool
-		wantCheckFunction bool
+		name                   string
+		protocol               int64
+		wantCheckFunction      bool
+		wantCurrentRoles       bool
+		wantCompatibilityRoles bool
+		wantCanonicalViews     bool
 	}{
 		{
-			name:            "mixed version protocol uses legacy table constraints",
-			protocol:        defines.MORPCVersion15,
-			wantLegacyTable: true,
+			name:                   "pre check-constraint protocol uses compatibility roles",
+			protocol:               defines.MORPCVersion15,
+			wantCompatibilityRoles: true,
 		},
 		{
-			name:              "latest protocol uses check constraints views",
-			protocol:          defines.MORPCVersion16,
-			wantCheckView:     true,
-			wantLatestTable:   true,
-			wantCheckFunction: true,
+			name:                   "protocol 16 uses check constraints and compatibility roles",
+			protocol:               defines.MORPCVersion16,
+			wantCheckFunction:      true,
+			wantCompatibilityRoles: true,
+		},
+		{
+			name:                   "protocol 32 does not install current-role table function views",
+			protocol:               defines.MORPCVersion32,
+			wantCheckFunction:      true,
+			wantCompatibilityRoles: true,
+		},
+		{
+			name:                   "protocol 34 does not alias the current-role capability",
+			protocol:               defines.MORPCVersion34,
+			wantCheckFunction:      true,
+			wantCompatibilityRoles: true,
+		},
+		{
+			name:                   "protocol 35 does not alias the current-role capability",
+			protocol:               defines.MORPCVersion35,
+			wantCheckFunction:      true,
+			wantCompatibilityRoles: true,
+		},
+		{
+			name:               "protocol 41 installs canonical full role closure views",
+			protocol:           defines.MORPCVersion41,
+			wantCheckFunction:  true,
+			wantCurrentRoles:   true,
+			wantCanonicalViews: true,
 		},
 	}
 
@@ -558,10 +587,12 @@ func Test_createTablesInInformationSchemaOfGeneralTenant_UsesProtocolAwareViews(
 
 				require.NoError(t, createTablesInInformationSchemaOfGeneralTenant(context.Background(), bh, ""))
 
-				require.Equal(t, test.wantCheckView, containsSQL(executed, sysview.InformationSchemaCheckConstraintsDDL))
-				require.Equal(t, test.wantLatestTable, containsSQL(executed, sysview.InformationSchemaTableConstraintsDDL))
-				require.Equal(t, test.wantLegacyTable, containsSQL(executed, sysview.InformationSchemaTableConstraintsLegacyDDL))
 				require.Equal(t, test.wantCheckFunction, containsSQLFragment(executed, "mo_check_constraints()"))
+				require.Equal(t, test.wantCurrentRoles, containsSQLFragment(executed, "mo_current_roles()"))
+				require.Equal(t, test.wantCompatibilityRoles,
+					containsSQLFragment(executed, "FROM mo_catalog.mo_role_grant rg"))
+				require.Equal(t, test.wantCanonicalViews,
+					containsSQL(executed, sysview.InformationSchemaTableConstraintsDDL))
 			})
 		})
 	}
@@ -10440,6 +10471,38 @@ func TestInitProcedurePersistsCreationSQLMode(t *testing.T) {
 	require.Contains(t, createSQL, "'PIPES_AS_CONCAT'")
 }
 
+func TestInitProcedurePersistsDefaultBoolSumAvgSQLMode(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	bh := &backgroundExecTest{}
+	bh.init()
+	bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
+	defer bhStub.Reset()
+
+	cp := &tree.CreateProcedure{
+		Name: tree.NewProcedureName("procedure_default_sql_mode", tree.ObjectNamePrefix{}),
+		Lang: "sql",
+		Body: "begin select 1; end",
+	}
+	ses := newSes(determinePrivilegeSetOfStatement(cp), ctrl)
+	ses.SetDatabaseName("test_procedure")
+	bh.sql2result[getSqlForCheckProcedureExistence(string(cp.Name.Name.ObjectName), ses.GetDatabaseName())] =
+		newMrsForPasswordOfUser([][]interface{}{})
+
+	require.NoError(t, InitProcedure(ses.GetTxnHandler().GetConnCtx(), ses, ses.GetTenantInfo(), cp))
+
+	var createSQL string
+	for _, sql := range bh.executedSQLs {
+		if strings.HasPrefix(sql, "insert into mo_catalog.mo_stored_procedure") {
+			createSQL = sql
+			break
+		}
+	}
+	require.NotEmpty(t, createSQL)
+	require.Contains(t, createSQL, mysqlparser.SQLModeEnableBoolSumAvg)
+}
+
 func TestInitProcedurePersistsDeclaredArgumentType(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
@@ -11892,6 +11955,71 @@ func Test_doDropAccount(t *testing.T) {
 		})
 		convey.So(err, convey.ShouldBeError)
 	})
+}
+
+func TestGetSqlForDropAccountSQLTasks(t *testing.T) {
+	require.Equal(t, []string{
+		"select account_id from mo_catalog.mo_account where account_id = 42 for update;",
+		"update mo_task.sql_task set enabled = 0, updated_at = current_timestamp where account_id = 42;",
+		"delete from mo_task.sys_async_task where task_parent_id in (" +
+			"select concat('sql-task:', task_id) from mo_task.sql_task where account_id = 42 " +
+			"union select concat('sql-task:', task_id) from mo_task.sql_task_run where account_id = 42);",
+		"delete from mo_task.sql_task_run where account_id = 42;",
+		"delete from mo_task.sql_task where account_id = 42;",
+	}, getSqlForDropAccountSQLTasks(42))
+}
+
+func TestSQLTaskCleanupIndexesExistInBootstrapDDL(t *testing.T) {
+	require.Contains(t, MoTaskSQLTaskDDL, "index idx_account_id (account_id)")
+	require.Contains(t, MoTaskSQLTaskRunDDL, "index idx_account_id (account_id)")
+	require.Contains(t, MoTaskSysAsyncTaskDDL, "index idx_task_parent_id (task_parent_id)")
+}
+
+func TestDoDropAccountSQLTaskCleanupFailureRollsBack(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	bh := &backgroundExecTest{}
+	bh.init()
+	bh.sql2result["begin;"] = nil
+	bh.sql2result["rollback;"] = nil
+
+	stmt := &tree.DropAccount{Name: boxExprStr("task_cleanup_failure")}
+	ses := newSes(determinePrivilegeSetOfStatement(stmt), ctrl)
+	pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
+	pu.SV.SetDefaultValues()
+	pu.SV.KillRountinesInterval = 0
+	ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
+	ctx = defines.AttachAccountId(ctx, 0)
+	ses.rm = newTestRoutineManager(t, ctx)
+
+	lockSQL, err := getSqlForLockMoAccountNameFormat(ctx, "task_cleanup_failure")
+	require.NoError(t, err)
+	bh.sql2result[lockSQL] = nil
+	checkSQL, err := getSqlForCheckTenant(ctx, "task_cleanup_failure")
+	require.NoError(t, err)
+	bh.sql2result[checkSQL] = newMrsForGetAllAccounts([][]interface{}{
+		{uint64(42), "task_cleanup_failure", "open", uint64(1), nil},
+	})
+
+	cleanupSQL := getSqlForDropAccountSQLTasks(42)
+	cleanupErr := errors.New("injected SQL task cleanup failure")
+	bh.sql2err[cleanupSQL[2]] = cleanupErr
+
+	err = doDropAccount(ses.GetTxnHandler().GetTxnCtx(), bh, ses, &dropAccount{
+		Name: "task_cleanup_failure",
+	})
+	require.ErrorIs(t, err, cleanupErr)
+	require.Equal(t, []string{
+		"begin;",
+		databranchutils.LineageOwnerLifecycleLockSQL(),
+		lockSQL,
+		checkSQL,
+		cleanupSQL[0],
+		cleanupSQL[1],
+		cleanupSQL[2],
+		"rollback;",
+	}, bh.executedSQLs)
 }
 
 func Test_doDropAccount_InTransaction(t *testing.T) {

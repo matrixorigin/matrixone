@@ -1228,6 +1228,14 @@ func (txn *activeTxn) closeWithContextInternal(
 					} else {
 						l.unlock(txn, cs, commitTS, mutations...)
 					}
+					// The completion log reads cs through slice(). Keep that read
+					// before a successful detach releases the cowSlice owner.
+					logTxnUnlockTableCompleted(
+						logger,
+						txn,
+						table,
+						cs,
+					)
 					if err != nil {
 						errMu.Lock()
 						if firstErr == nil {
@@ -1237,12 +1245,6 @@ func (txn *activeTxn) closeWithContextInternal(
 					} else if detachSuccessful || (directLocalUnlock && !local) {
 						txn.removeClosedLockTable(group, table, cs)
 					}
-					logTxnUnlockTableCompleted(
-						logger,
-						txn,
-						table,
-						cs,
-					)
 					if parallelUnlock {
 						wg.Done()
 					}
@@ -1381,6 +1383,27 @@ func (txn *activeTxn) fenceByBindChangedLocked(bind pb.LockTable, logger *log.MO
 	intent, intentOK := h.tableBindIntents[bind.Table]
 	if (!actualOK || !actual.Changed(bind)) &&
 		(!intentOK || !intent.Changed(bind)) {
+		return false
+	}
+
+	txn.markBindChangedLocked(logger)
+	return true
+}
+
+func (txn *activeTxn) fenceByExactBindLocked(bind pb.LockTable, logger *log.MOLogger) bool {
+	if txn.bindChanged {
+		return false
+	}
+	h, ok := txn.lockHolders[bind.Group]
+	if !ok {
+		return false
+	}
+	key := makeRemoteBindKey(bind)
+	actual, actualOK := h.tableBinds[bind.Table]
+	intent, intentOK := h.tableBindIntents[bind.Table]
+	actualMatches := actualOK && makeRemoteBindKey(actual) == key
+	intentMatches := intentOK && makeRemoteBindKey(intent) == key
+	if !actualMatches && !intentMatches {
 		return false
 	}
 

@@ -1011,6 +1011,14 @@ message Node {
     FUZZY_BUILD_SIDE_SINK = 2;
   }
 
+  // Physical implementation for ordinary window PARTITION nodes. SORT is the
+  // zero value so plans produced before this field existed retain the legacy
+  // execution path.
+  enum PartitionAlgorithm {
+    PARTITION_ALGORITHM_SORT = 0;
+    PARTITION_ALGORITHM_HASH = 1;
+  }
+
   NodeType node_type = 1;
   int32 node_id = 2;
   Stats stats = 3;
@@ -1196,6 +1204,10 @@ message Node {
   // ASOF/ASOF_LEFT only: right input column used to choose the latest
   // qualifying predecessor after equality-key lookup.
   int32 asof_right_col = 86;
+
+  // PARTITION only: optimizer-selected implementation for ordinary window
+  // partitioning. Partition Top-N ignores this field.
+  PartitionAlgorithm partition_algorithm = 90;
 }
 
 message SnapshotExtraInfo {
@@ -1351,6 +1363,24 @@ message MongoScan {
   // during compilation. It remains distinct from the catalog mapping_id so a
   // cached logical plan can be compiled more than once without identity drift.
   uint64 table_id = 15;
+  // user_query_* is the validated, credential-free BSON representation selected
+  // by an explicit __mo_query predicate. kind is 1 for filter and 2 for pipeline;
+  // zero keeps the ordinary Find path unchanged.
+  int32 user_query_kind = 16;
+  bytes user_filter_bson = 17;
+  repeated bytes user_pipeline_stage_bson = 18;
+  // Only the digest and validated BSON cross the plan/pipeline boundary. The
+  // original query text can contain sensitive literals and must not appear in
+  // protobuf diagnostics. Execution reconstructs canonical Extended JSON from
+  // BSON only when __mo_query is explicitly projected.
+  string user_query_digest = 19;
+  // include_query_column asks MongoScan to append the synthetic __mo_query
+  // value to its converted batch. It is set only when a residual or projection
+  // still consumes that hidden column.
+  bool include_query_column = 20;
+  // empty_result records that query-level pruning rejected the only derived
+  // user query. Execution validates catalog identity but opens no source cursor.
+  bool empty_result = 21;
 }
 
 message MongoColumnMapping {
@@ -1491,6 +1521,11 @@ message RuntimeFilterSpec {
   // leave legacy expr unset. Probe specs continue to use expr for scan-side
   // evaluation.
   Expr build_expr = 10;
+  // The producer is the materialized result of an uncorrelated scalar
+  // subquery. The executor may publish an exact filter only after observing
+  // exactly one row; multiple rows must fail open so the SINGLE operator can
+  // enforce cardinality at its original logical scope.
+  bool scalar_predicate = 11;
 }
 
 message IdList {

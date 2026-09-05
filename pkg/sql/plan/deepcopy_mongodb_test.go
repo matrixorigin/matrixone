@@ -89,8 +89,12 @@ func TestMongoScanDeepCopyAndCredentialFreeProto(t *testing.T) {
 		MongodbScan: &pb.MongoScan{
 			TableId: 99, MappingId: 1, MappingVersion: 4, ConnectionId: 2, ConnectionVersion: 3,
 			Database: "telemetry", Collection: "events", ProjectedPaths: []string{"meta.device_id"},
-			Columns:         []*pb.MongoColumnMapping{{Name: "device_id", Path: "meta.device_id"}},
-			PushedPredicate: &pb.MongoPredicate{Op: pb.MongoPredicateOp_MONGO_PREDICATE_EQUAL, Path: "meta.device_id", ValueBson: []byte{1, 2, 3}},
+			Columns:            []*pb.MongoColumnMapping{{Name: "device_id", Path: "meta.device_id"}},
+			PushedPredicate:    &pb.MongoPredicate{Op: pb.MongoPredicateOp_MONGO_PREDICATE_EQUAL, Path: "meta.device_id", ValueBson: []byte{1, 2, 3}},
+			UserQueryKind:      1,
+			UserFilterBson:     []byte{4, 5, 6},
+			UserQueryDigest:    strings.Repeat("a", 64),
+			IncludeQueryColumn: true,
 		},
 	}}
 	copied := DeepCopyNode(original)
@@ -98,9 +102,12 @@ func TestMongoScanDeepCopyAndCredentialFreeProto(t *testing.T) {
 	copied.ExternScan.MongodbScan.Columns[0].Path = "changed"
 	copied.ExternScan.MongodbScan.ProjectedPaths[0] = "changed"
 	copied.ExternScan.MongodbScan.PushedPredicate.ValueBson[0] = 9
+	copied.ExternScan.MongodbScan.UserFilterBson[0] = 9
 	require.Equal(t, "meta.device_id", original.ExternScan.MongodbScan.Columns[0].Path)
 	require.Equal(t, "meta.device_id", original.ExternScan.MongodbScan.ProjectedPaths[0])
 	require.Equal(t, byte(1), original.ExternScan.MongodbScan.PushedPredicate.ValueBson[0])
+	require.Equal(t, byte(4), original.ExternScan.MongodbScan.UserFilterBson[0])
+	require.True(t, copied.ExternScan.MongodbScan.IncludeQueryColumn)
 
 	payload, err := proto.Marshal(original)
 	require.NoError(t, err)
@@ -110,4 +117,44 @@ func TestMongoScanDeepCopyAndCredentialFreeProto(t *testing.T) {
 	decoded := new(pb.Node)
 	require.NoError(t, proto.Unmarshal(payload, decoded))
 	require.Equal(t, original, decoded)
+}
+
+func TestMongoScanTextDiagnosticsRedactUserQueryBSON(t *testing.T) {
+	const secretField = "password"
+	const secretValue = "super-secret-value"
+	for _, test := range []struct {
+		name      string
+		source    string
+		operation string
+	}{
+		{
+			name:      "filter",
+			source:    `{"filter":{"password":"super-secret-value"}}`,
+			operation: "find-filter",
+		},
+		{
+			name:      "pipeline",
+			source:    `{"pipeline":[{"$match":{"password":"super-secret-value"}}]}`,
+			operation: "aggregate",
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			query, err := sqlmongodb.ParseUserQuery(t.Context(), test.source)
+			require.NoError(t, err)
+			scan := new(pb.MongoScan)
+			require.NoError(t, sqlmongodb.ApplyUserQueryToPlan(t.Context(), query, scan))
+			digest := query.Digest[:12]
+			for _, diagnostic := range []string{
+				scan.String(),
+				(&pb.ExternScan{MongodbScan: scan}).String(),
+				(&pb.Node{ExternScan: &pb.ExternScan{MongodbScan: scan}}).String(),
+			} {
+				require.NotContains(t, diagnostic, secretField)
+				require.NotContains(t, diagnostic, secretValue)
+				require.Contains(t, diagnostic, "operation:\""+test.operation+"\"")
+				require.Contains(t, diagnostic, "query_digest:\""+digest+"\"")
+				require.Contains(t, diagnostic, "<redacted>")
+			}
+		})
+	}
 }

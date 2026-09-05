@@ -636,9 +636,9 @@ create table string05 as select trim(col1), ltrim(col1), rtrim(col1) from string
 show create table string05;
 ➤ Table[12,-1,0]  ¦  Create Table[12,-1,0]  𝄀
 string05  ¦  CREATE TABLE `string05` (
-  `trim(col1)` varchar(65535) DEFAULT NULL,
-  `ltrim(col1)` varchar(65535) DEFAULT NULL,
-  `rtrim(col1)` varchar(65535) DEFAULT NULL
+  `trim(col1)` varchar(40) DEFAULT NULL,
+  `ltrim(col1)` varchar(40) DEFAULT NULL,
+  `rtrim(col1)` varchar(40) DEFAULT NULL
 )
 select * from string05;
 ➤ trim(col1)[12,-1,0]  ¦  ltrim(col1)[12,-1,0]  ¦  rtrim(col1)[12,-1,0]  𝄀
@@ -688,8 +688,8 @@ create table string09 as select substring(col1, 3, 4), reverse(col2) from string
 show create table string09;
 ➤ Table[12,-1,0]  ¦  Create Table[12,-1,0]  𝄀
 string09  ¦  CREATE TABLE `string09` (
-  `substring(col1, 3, 4)` varchar(65535) DEFAULT NULL,
-  `reverse(col2)` varchar(65535) DEFAULT NULL
+  `substring(col1, 3, 4)` varchar(40) DEFAULT NULL,
+  `reverse(col2)` varchar(1) DEFAULT NULL
 )
 select * from string09;
 ➤ substring(col1, 3, 4)[12,-1,0]  ¦  reverse(col2)[12,-1,0]  𝄀

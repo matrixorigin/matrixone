@@ -1074,37 +1074,50 @@ func TestTxnHandlerDoesNotOwnKafkaProgress(t *testing.T) {
 }
 
 func TestFinishTxnRollsBackWhenRequestIsCancelled(t *testing.T) {
-	ctrl := gomock.NewController(t)
-	ctx := defines.AttachAccountId(context.Background(), sysAccountID)
-	ses := newTestSession(t, ctrl)
-	defer ses.Close()
-	eng := mock_frontend.NewMockEngine(ctrl)
-	eng.EXPECT().Hints().Return(engine.Hints{
-		CommitOrRollbackTimeout: time.Second,
-	}).AnyTimes()
-	ses.txnHandler.storage = eng
+	for _, tc := range []struct {
+		name string
+		stmt tree.Statement
+	}{
+		{name: "insert", stmt: &tree.Insert{}},
+		// LOAD DATA executes its fanout scopes before the frontend owns the
+		// statement terminal action.  A canceled request must therefore take
+		// the same no-commit/rollback path after those scopes have returned.
+		{name: "load data", stmt: &tree.Load{}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctrl := gomock.NewController(t)
+			ctx := defines.AttachAccountId(context.Background(), sysAccountID)
+			ses := newTestSession(t, ctrl)
+			defer ses.Close()
+			eng := mock_frontend.NewMockEngine(ctrl)
+			eng.EXPECT().Hints().Return(engine.Hints{
+				CommitOrRollbackTimeout: time.Second,
+			}).AnyTimes()
+			ses.txnHandler.storage = eng
 
-	txnOp := newTestTxnOp()
-	txnOp.meta = txn.TxnMeta{
-		ID:     []byte{1, 2, 3, 4},
-		Status: txn.TxnStatus_Active,
+			txnOp := newTestTxnOp()
+			txnOp.meta = txn.TxnMeta{
+				ID:     []byte{1, 2, 3, 4},
+				Status: txn.TxnStatus_Active,
+			}
+			txnOp.wp.readonly = false
+			ses.txnHandler.txnOp = txnOp
+			ses.txnHandler.txnCtx = ctx
+			ses.txnHandler.shareTxn = false
+
+			reqCtx, cancel := context.WithCancel(ctx)
+			cancel()
+			execCtx := newTestExecCtx(reqCtx, ctrl)
+			execCtx.ses = ses
+			execCtx.stmt = tc.stmt
+			execCtx.txnOpt = FeTxnOption{autoCommit: true}
+
+			err := finishTxnFunc(ses, nil, execCtx)
+			require.ErrorIs(t, err, context.Canceled)
+			require.Equal(t, 0, txnOp.commitCalls)
+			require.Equal(t, 1, txnOp.rollbackCalls)
+		})
 	}
-	txnOp.wp.readonly = false
-	ses.txnHandler.txnOp = txnOp
-	ses.txnHandler.txnCtx = ctx
-	ses.txnHandler.shareTxn = false
-
-	reqCtx, cancel := context.WithCancel(ctx)
-	cancel()
-	execCtx := newTestExecCtx(reqCtx, ctrl)
-	execCtx.ses = ses
-	execCtx.stmt = &tree.Insert{}
-	execCtx.txnOpt = FeTxnOption{autoCommit: true}
-
-	err := finishTxnFunc(ses, nil, execCtx)
-	require.ErrorIs(t, err, context.Canceled)
-	require.Equal(t, 0, txnOp.commitCalls)
-	require.Equal(t, 1, txnOp.rollbackCalls)
 }
 
 func TestLineageOwnerLifecycleValidationCoversEveryTerminalCommitPath(t *testing.T) {

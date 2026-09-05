@@ -385,10 +385,10 @@ type Compile struct {
 
 	filterExprExes []colexec.ExpressionExecutor
 
-	// compiledRightSingleNodes records semantic right-SINGLE nodes actually
-	// visited by compilePlanScope. It is statement-local and remains empty for
-	// queries without right-SINGLE joins.
-	compiledRightSingleNodes []int32
+	// compiledLocalRuntimeFilterNodes records SINGLE nodes with current-CN
+	// runtime-filter producers which were actually visited by compilePlanScope.
+	// It is statement-local and excludes physically pruned subtrees.
+	compiledLocalRuntimeFilterNodes []int32
 
 	needLockMeta bool
 	needBlock    bool
@@ -413,6 +413,7 @@ type Compile struct {
 
 	adjustTableExtraFunc     func(*api.SchemaExtra) error
 	disableDropAutoIncrement bool
+	skipDataBranchReclaim    bool
 	keepAutoIncrement        uint64
 	ignorePublish            bool
 	ignoreCheckExperimental  bool

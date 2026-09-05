@@ -71,6 +71,10 @@ func IsSnapshotNotFound(err error) bool {
 	return errors.As(err, &target)
 }
 
+func NewSnapshotNotFoundError(ctx context.Context, snapshotName string) error {
+	return moerr.NewInvalidInputf(ctx, "snapshot '%s' not found", snapshotName)
+}
+
 func NewQueryBuilder(queryType plan.Query_StatementType, ctx CompilerContext, isPrepareStatement bool, skipStats bool) *QueryBuilder {
 	//
 	// There is a class of variables that controls SQL behavior.  To add such a variable, first
@@ -92,6 +96,7 @@ func NewQueryBuilder(queryType plan.Query_StatementType, ctx CompilerContext, is
 
 	var mysqlCompatible bool
 	var mysqlFullGroupByCompat bool
+	var boolSumAvgCompat bool
 
 	mode, err := ctx.ResolveVariable("sql_mode", true, false)
 	if err == nil {
@@ -99,6 +104,7 @@ func NewQueryBuilder(queryType plan.Query_StatementType, ctx CompilerContext, is
 			onlyFullGroupBy := mysql.HasSQLMode(modeStr, "ONLY_FULL_GROUP_BY")
 			mysqlCompatible = !onlyFullGroupBy
 			mysqlFullGroupByCompat = onlyFullGroupBy && !mysql.HasMatrixOneNativeSQLMode(modeStr)
+			boolSumAvgCompat = mysql.HasEnableBoolSumAvgSQLMode(modeStr)
 		}
 	}
 
@@ -152,6 +158,7 @@ func NewQueryBuilder(queryType plan.Query_StatementType, ctx CompilerContext, is
 		nextBindTag:              0,
 		mysqlCompatible:          mysqlCompatible,
 		mysqlFullGroupByCompat:   mysqlFullGroupByCompat,
+		boolSumAvgCompat:         boolSumAvgCompat,
 		aggSpillMem:              aggSpillMem,
 		joinSpillMem:             joinSpillMem,
 		sortSpillMem:             sortSpillMem,
@@ -163,9 +170,10 @@ func NewQueryBuilder(queryType plan.Query_StatementType, ctx CompilerContext, is
 		optimizationHistory:      make([]string, 0),
 		// -1 means "no old-row delete maintenance" (set only on ODKU into an
 		// irregular-index table); step 0 is a valid index so it cannot be the zero value.
-		irregularMaintDeleteStep: -1,
-		returningSourceStep:      -1,
-		returningFilterPos:       -1,
+		irregularMaintDeleteStep:           -1,
+		irregularMaintInsertOnlySourceStep: -1,
+		returningSourceStep:                -1,
+		returningFilterPos:                 -1,
 	}
 }
 
@@ -3640,12 +3648,19 @@ func (builder *QueryBuilder) createQuery() (*Query, error) {
 		}
 		builder.skipStats = builder.canSkipStats()
 		builder.rewriteDistinctToAGG(rootID)
-		builder.rewriteEffectlessAggToProject(rootID)
+		rootID = builder.rewriteEffectlessAggToProject(rootID)
 		rootID = builder.optimizeFilters(rootID)
 		// WHERE predicates are initially represented by a Filter between AGG
 		// and TABLE_SCAN.  Revisit the proof after filter pushdown so a unique
 		// grouped scan can be eliminated without moving LIMIT below HAVING.
-		builder.rewriteEffectlessAggToProject(rootID)
+		rootID = builder.rewriteEffectlessAggToProject(rootID)
+		if !builder.outerAntiPlanningDisabled() {
+			var antiRewritten bool
+			rootID, antiRewritten = builder.rewriteLeftJoinNullFiltersToAnti(rootID, make(map[int32]int))
+			if antiRewritten {
+				ReCalcNodeStats(rootID, builder, true, true, true)
+			}
+		}
 		if err = builder.checkPlanningCanceled(); err != nil {
 			return nil, err
 		}
@@ -3738,6 +3753,7 @@ func (builder *QueryBuilder) createQuery() (*Query, error) {
 		builder.pushdownVectorIndexTopToTableScan(rootID)
 		builder.removeSimpleProjections(rootID, plan.Node_UNKNOWN, false, colRefCnt)
 		reCalcNodeStatsAfterSwap(rootID, builder, true, false, false)
+		builder.determineWindowPartitionAlgorithms(rootID)
 		builder.deduplicateBlockFilters(rootID)
 		builder.forceJoinOnOneCN(rootID, false)
 		// after this ,never call ReCalcNodeStats again !!!
@@ -3755,7 +3771,7 @@ func (builder *QueryBuilder) createQuery() (*Query, error) {
 			}
 		}
 	}
-	applySharedLockTableFallback(builder)
+	applyLockTableFallback(builder)
 
 	for i := range builder.qry.Steps {
 		rootID := builder.qry.Steps[i]
@@ -3777,6 +3793,9 @@ func (builder *QueryBuilder) createQuery() (*Query, error) {
 			return nil, err
 		}
 		builder.qry.Steps[i] = builder.removeUnnecessaryProjections(rootID)
+		if !builder.subqueryPredicatePlanningDisabled() {
+			builder.generateScalarPredicateRuntimeFilters(builder.qry.Steps[i])
+		}
 	}
 
 	// Expose the SINK column remap so irregular-index maintenance sub-plans built
@@ -4428,6 +4447,9 @@ func (builder *QueryBuilder) buildUnionWithResultLen(
 
 			expr, err = builder.rewriteMySQLSpecialOrderByExpr(ctx, expr)
 			if err != nil {
+				return 0, err
+			}
+			if err = rejectStandaloneIntervalOrderExpr(builder.GetContext(), expr); err != nil {
 				return 0, err
 			}
 
@@ -5633,6 +5655,26 @@ func (builder *QueryBuilder) bindSelect(stmt *tree.Select, ctx *BindContext, isR
 	if len(ctx.groups) == 0 && len(ctx.aggregates) > 0 {
 		ctx.hasSingleRow = true
 	}
+
+	// All aggregate consumers in this query block are bound now. Compact exact
+	// affine SUM families before aggregate arguments are flattened and the AGG
+	// node fixes their physical slot layout.
+	affineOrderBys := slices.Clone(boundOrderBys)
+	if boundTimeWindowOrderBy != nil {
+		affineOrderBys = append(affineOrderBys, boundTimeWindowOrderBy)
+	}
+	builder.rewriteAffineSumFamilies(
+		ctx,
+		[][]*plan.Expr{
+			ctx.projects,
+			ctx.windows,
+			ctx.times,
+			boundHavingList,
+			fillVals,
+			fillCols,
+		},
+		affineOrderBys,
+	)
 
 	// Flatten aggregate argument subqueries before building the AGG node.
 	if !ctx.sampleFunc.hasSampleFunc && !ctx.bindingRecurStmt() {
@@ -8249,6 +8291,18 @@ func (builder *QueryBuilder) bindGroupBy(
 			},
 		}
 	}
+	if clause != nil && astTimeWindow == nil && !clause.Apart &&
+		!clause.Cube && !clause.GroupingSets && !clause.Rollup {
+		var logicalGroupByAst map[string]int32
+		if ctx.sampleFunc.hasSampleFunc {
+			logicalGroupByAst = make(map[string]int32, len(ctx.groupByAst))
+			for key, pos := range ctx.groupByAst {
+				logicalGroupByAst[key] = pos
+			}
+		}
+		elideStableLiteralGroupBy(ctx)
+		preserveElidedGroupByForSample(ctx, logicalGroupByAst)
+	}
 	return
 }
 
@@ -8290,6 +8344,9 @@ func (builder *QueryBuilder) bindProjection(
 	resultLen = len(ctx.projects)
 	ctx.projectSemanticKeys = ctx.projectSemanticKeys[:0]
 	for i, proj := range ctx.projects {
+		if err = rejectStandaloneIntervalExpr(builder.GetContext(), proj, "SELECT list"); err != nil {
+			return
+		}
 		exprKey, keyErr := projectExprKey(proj)
 		if keyErr != nil {
 			err = keyErr
@@ -9482,6 +9539,9 @@ func (builder *QueryBuilder) bindOrderBy(
 
 		expr, err = builder.rewriteMySQLSpecialOrderByExpr(ctx, expr)
 		if err != nil {
+			return nil, err
+		}
+		if err = rejectStandaloneIntervalOrderExpr(builder.GetContext(), expr); err != nil {
 			return nil, err
 		}
 
@@ -11756,23 +11816,35 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, t
 					},
 				}
 				tableDef.Cols = append(tableDef.Cols, col)
-			} else if externType == plan.ExternType_FOREIGN_TB {
+			} else if externType == plan.ExternType_FOREIGN_TB || externType == plan.ExternType_MONGODB_TB {
 				// The hidden query-text column: `__mo_query = '<text>'`
-				// predicates select what is sent to the foreign source, and
+				// predicates select what is sent to the foreign/MongoDB source, and
 				// each returned row carries the text that produced it. Must
 				// stay the LAST column (the query-level filter classifier
-				// requires it).
-				col := &ColDef{
-					ColId: catalog.ExternalQueryColId,
-					Name:  catalog.ExternalQuery,
-					Typ: plan.Type{
-						Id:      int32(types.T_varchar),
-						Width:   types.MaxVarcharLen,
-						Table:   table,
-						Charset: uint32(types.CharsetUTF8),
-					},
+				// requires it). An older external table may already have a
+				// mapped, real column of the same name. Keep that legacy column
+				// addressable instead of making the binding ambiguous; the explicit
+				// query carrier is unavailable for that colliding schema.
+				hasLegacyQueryColumn := false
+				for _, existing := range tableDef.Cols {
+					if existing != nil && strings.EqualFold(existing.Name, catalog.ExternalQuery) {
+						hasLegacyQueryColumn = true
+						break
+					}
 				}
-				tableDef.Cols = append(tableDef.Cols, col)
+				if !hasLegacyQueryColumn {
+					col := &ColDef{
+						ColId: catalog.ExternalQueryColId,
+						Name:  catalog.ExternalQuery,
+						Typ: plan.Type{
+							Id:      int32(types.T_varchar),
+							Width:   types.MaxVarcharLen,
+							Table:   table,
+							Charset: uint32(types.CharsetUTF8),
+						},
+					}
+					tableDef.Cols = append(tableDef.Cols, col)
+				}
 			} else if externType == plan.ExternType_KAFKA_TB {
 				// Synthetic Kafka columns: four per-message metadata columns
 				// and three WHERE-only read controls (their conjuncts are
@@ -11943,64 +12015,15 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, t
 				currentAccountID = uint32(sub.AccountId)
 				builder.qry.Nodes[nodeID].NotCacheable = true
 			}
-			if currentAccountID != catalog.System_Account {
-				// add account filter for system table scan
-				if dbName == catalog.MO_CATALOG && tableName == catalog.MO_DATABASE {
-					modatabaseFilter := util.BuildMoDataBaseFilter(uint64(currentAccountID))
-					ctx.binder = NewWhereBinder(builder, ctx)
-					accountFilterExprs, err := splitAndBindCondition(modatabaseFilter, NoAlias, ctx)
-					if err != nil {
-						return 0, err
-					}
-					builder.qry.Nodes[nodeID].FilterList = accountFilterExprs
-				} else if dbName == catalog.MO_SYSTEM_METRICS && (tableName == catalog.MO_METRIC || tableName == catalog.MO_SQL_STMT_CU) {
-					motablesFilter := util.BuildSysMetricFilter(uint64(currentAccountID))
-					ctx.binder = NewWhereBinder(builder, ctx)
-					accountFilterExprs, err := splitAndBindCondition(motablesFilter, NoAlias, ctx)
-					if err != nil {
-						return 0, err
-					}
-					builder.qry.Nodes[nodeID].FilterList = accountFilterExprs
-				} else if dbName == catalog.MO_SYSTEM && tableName == catalog.MO_STATEMENT {
-					motablesFilter := util.BuildSysStatementInfoFilter(uint64(currentAccountID))
-					ctx.binder = NewWhereBinder(builder, ctx)
-					accountFilterExprs, err := splitAndBindCondition(motablesFilter, NoAlias, ctx)
-					if err != nil {
-						return 0, err
-					}
-					builder.qry.Nodes[nodeID].FilterList = accountFilterExprs
-				} else if dbName == catalog.MO_CATALOG && tableName == catalog.MO_TABLES {
-					motablesFilter := util.BuildMoTablesFilter(uint64(currentAccountID))
-					ctx.binder = NewWhereBinder(builder, ctx)
-					accountFilterExprs, err := splitAndBindCondition(motablesFilter, NoAlias, ctx)
-					if err != nil {
-						return 0, err
-					}
-					builder.qry.Nodes[nodeID].FilterList = accountFilterExprs
-				} else if dbName == catalog.MO_CATALOG && tableName == catalog.MO_COLUMNS {
-					moColumnsFilter := util.BuildMoColumnsFilter(uint64(currentAccountID))
-					ctx.binder = NewWhereBinder(builder, ctx)
-					accountFilterExprs, err := splitAndBindCondition(moColumnsFilter, NoAlias, ctx)
-					if err != nil {
-						return 0, err
-					}
-					builder.qry.Nodes[nodeID].FilterList = accountFilterExprs
-				} else if util.TableIsClusterTable(midNode.GetTableDef().GetTableType()) {
-					ctx.binder = NewWhereBinder(builder, ctx)
-					left := tree.NewUnresolvedColName(util.GetClusterTableAttributeName())
-					right := tree.NewNumVal(uint64(currentAccountID), strconv.Itoa(int(currentAccountID)), false, tree.P_uint64)
-					//account_id = the accountId of the non-sys account
-					accountFilter := &tree.ComparisonExpr{
-						Op:    tree.EQUAL,
-						Left:  left,
-						Right: right,
-					}
-					accountFilterExprs, err := splitAndBindCondition(accountFilter, NoAlias, ctx)
-					if err != nil {
-						return 0, err
-					}
-					builder.qry.Nodes[nodeID].FilterList = accountFilterExprs
+			if accountFilter := util.BuildTableScanAccountFilter(
+				currentAccountID, dbName, tableName, midNode.GetTableDef().GetTableType(),
+			); accountFilter != nil {
+				ctx.binder = NewWhereBinder(builder, ctx)
+				accountFilterExprs, err := splitAndBindCondition(accountFilter, NoAlias, ctx)
+				if err != nil {
+					return 0, err
 				}
+				builder.qry.Nodes[nodeID].FilterList = accountFilterExprs
 			}
 		}
 		return
@@ -12043,7 +12066,7 @@ func (builder *QueryBuilder) refreshMongoScanPushdown(node *plan.Node) error {
 	scan := node.ExternScan.MongodbScan
 	names := make([]string, 0, len(node.TableDef.Cols))
 	for _, column := range node.TableDef.Cols {
-		if column != nil && !column.Hidden {
+		if column != nil && !column.Hidden && !catalog.IsForeignQueryCol(column.Name, column.ColId) {
 			names = append(names, column.Name)
 		}
 	}
@@ -12593,6 +12616,12 @@ func (builder *QueryBuilder) buildTableFunction(tbl *tree.TableFunction, ctx *Bi
 			nodeId, err = builder.buildMoCache(tbl, ctx, exprs, nil)
 		case "mo_check_constraints":
 			nodeId, err = builder.buildCheckConstraints(tbl, ctx, exprs, nil)
+		case "mo_current_roles":
+			nodeId, err = builder.buildCurrentRoles(tbl, ctx, exprs, nil)
+		case subscriptionTablesFunctionName:
+			nodeId, err = builder.buildSubscriptionTables(tbl, ctx, exprs, nil)
+		case subscriptionColumnsFunctionName:
+			nodeId, err = builder.buildSubscriptionColumns(tbl, ctx, exprs, nil)
 		case "fulltext_index_scan":
 			nodeId, err = builder.buildFullTextIndexScan(tbl, ctx, exprs, nil)
 		case "fulltext_index_tokenize":

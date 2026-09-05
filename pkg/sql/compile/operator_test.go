@@ -40,6 +40,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergetop"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/multi_update"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/order"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/partition"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/preinsert"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/rightdedupjoin"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/shuffle"
@@ -135,6 +136,25 @@ func TestJoinHashBuildTopologyPinsSpillToSingleConsumer(t *testing.T) {
 			shuffle.Release()
 		})
 	}
+}
+
+func TestLoopJoinBuildCarriesScalarRuntimeFilter(t *testing.T) {
+	join := loopjoin.NewArgument()
+	defer join.Release()
+	join.JoinMapTag = 1
+	spec := &plan.RuntimeFilterSpec{
+		Tag: 42, UpperLimit: 1, ScalarPredicate: true,
+	}
+
+	op := constructJoinBuildOperator(
+		&Compile{}, join, 1, []*plan.RuntimeFilterSpec{spec})
+	build, ok := op.(*hashbuild.HashBuild)
+	require.True(t, ok)
+	defer build.Release()
+
+	require.False(t, build.NeedHashMap)
+	require.True(t, build.RuntimeFilterSpec.ScalarPredicate)
+	require.Same(t, spec, build.RuntimeFilterSpec)
 }
 
 func TestConstructFuzzyFilterUsesFinalizedBuildSide(t *testing.T) {
@@ -441,6 +461,22 @@ func TestDupOperatorPartitionMultiUpdate(t *testing.T) {
 	if result == nil {
 		t.Fatal("dupOperator returned nil for PartitionMultiUpdate")
 	}
+}
+
+func TestPartitionConstructionAndDuplicationPreserveHashConfiguration(t *testing.T) {
+	node := &plan.Node{
+		PartitionAlgorithm: plan.Node_PARTITION_ALGORITHM_HASH,
+		SpillMem:           4096,
+		OrderBy:            []*plan.OrderBySpec{{Flag: plan.OrderBySpec_DESC}},
+	}
+	op := constructPartition(node)
+	require.Equal(t, node.PartitionAlgorithm, op.Algorithm)
+	require.Equal(t, node.SpillMem, op.SpillMem)
+
+	duplicated := dupOperator(op, 0, 1).(*partition.Partition)
+	defer duplicated.Release()
+	require.Equal(t, op.Algorithm, duplicated.Algorithm)
+	require.Equal(t, op.SpillMem, duplicated.SpillMem)
 }
 
 func TestHasPartitionedUpdateTargetChecksEveryMainContext(t *testing.T) {
@@ -827,15 +863,18 @@ func TestProjectedMongoColumnsUsesExternalScanLayout(t *testing.T) {
 		{Name: "pump"},
 		{Name: "__mo_hidden", Hidden: true},
 	}}
-	projected, err := projectedMongoColumns(t.Context(), columns, tableDef)
+	projected, err := projectedMongoColumns(t.Context(), columns, tableDef, false)
 	require.NoError(t, err)
 	require.Equal(t, []sqlmongodb.ColumnMapping{columns[2], columns[1]}, projected)
 
-	_, err = projectedMongoColumns(t.Context(), columns, &plan.TableDef{Cols: []*plan.ColDef{{Name: "missing"}}})
+	_, err = projectedMongoColumns(t.Context(), columns, &plan.TableDef{Cols: []*plan.ColDef{{Name: "missing"}}}, false)
 	require.Error(t, err)
-	_, err = projectedMongoColumns(t.Context(), columns, nil)
+	_, err = projectedMongoColumns(t.Context(), columns, nil, false)
 	require.Error(t, err)
-	_, err = projectedMongoColumns(t.Context(), columns, &plan.TableDef{Cols: []*plan.ColDef{{Name: "hidden", Hidden: true}}})
+	queryOnly, err := projectedMongoColumns(t.Context(), columns, &plan.TableDef{Cols: []*plan.ColDef{{Name: "hidden", Hidden: true}}}, true)
+	require.NoError(t, err)
+	require.Empty(t, queryOnly)
+	_, err = projectedMongoColumns(t.Context(), columns, &plan.TableDef{Cols: []*plan.ColDef{{Name: "hidden", Hidden: true}}}, false)
 	require.Error(t, err)
 }
 

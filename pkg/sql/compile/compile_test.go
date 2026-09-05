@@ -58,6 +58,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/hashbuild"
 	limitop "github.com/matrixorigin/matrixone/pkg/sql/colexec/limit"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/merge"
+	orderop "github.com/matrixorigin/matrixone/pkg/sql/colexec/order"
 	partitionop "github.com/matrixorigin/matrixone/pkg/sql/colexec/partition"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/projection"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/shuffle"
@@ -90,6 +91,41 @@ func TestHasOrderedGroupConcat(t *testing.T) {
 	ordered.GroupBy = nil
 	ordered.AggList[0].GetF().AggConfigType = plan.AggregateConfigType_AGG_CONFIG_NONE
 	require.False(t, hasOrderedGroupConcat(ordered))
+}
+
+func TestCompileMongoDBQueryDiagnosticsAreRedacted(t *testing.T) {
+	for _, sql := range []string{
+		`select * from mongo_events where __mo_query = '{"filter":{"password":"super-secret-value"}}'`,
+		`select * from mongo_events where __MO_QUERY = '{"pipeline":[{"$match":{"api_key":"super-secret-value"}}]}'`,
+	} {
+		t.Run(sql[:20], func(t *testing.T) {
+			proc := testutil.NewProcess(t)
+			ctrl := gomock.NewController(t)
+			_, txnOp := newTestTxnClientAndOp(ctrl)
+			proc.Base.TxnOperator = txnOp
+			compile := NewCompile("test", "test", sql, "", "", nil, proc, nil, false, nil, time.Now())
+			t.Cleanup(compile.Release)
+
+			compile.SetOriginSQL(sql)
+			for _, diagnostic := range []string{compile.sql, compile.originSQL} {
+				require.Equal(t, "<redacted MongoDB __mo_query statement>", diagnostic)
+				require.NotContains(t, diagnostic, "password")
+				require.NotContains(t, diagnostic, "api_key")
+				require.NotContains(t, diagnostic, "super-secret-value")
+			}
+
+			info, err := proc.BuildProcessInfo(compile.sql)
+			require.NoError(t, err)
+			diagnostic := info.String()
+			require.Contains(t, diagnostic, "redacted MongoDB")
+			require.NotContains(t, diagnostic, "password")
+			require.NotContains(t, diagnostic, "api_key")
+			require.NotContains(t, diagnostic, "super-secret-value")
+
+			require.NoError(t, compile.Reset(proc, time.Now(), nil, sql))
+			require.Equal(t, "<redacted MongoDB __mo_query statement>", compile.sql)
+		})
+	}
 }
 
 func TestFilterScanStorageExprsExcludesVolatilePredicates(t *testing.T) {
@@ -2088,6 +2124,57 @@ func TestCompilePartitionTopNPhysicalTopology(t *testing.T) {
 	})
 }
 
+func TestCompileHashPartitionPhysicalTopology(t *testing.T) {
+	c := newCompileForShuffleGroupTest(t)
+	node := &plan.Node{
+		NodeType:           plan.Node_PARTITION,
+		PartitionAlgorithm: plan.Node_PARTITION_ALGORITHM_HASH,
+		SpillMem:           4096,
+		OrderBy: []*plan.OrderBySpec{{
+			Expr: &plan.Expr{Typ: plan.Type{Id: int32(types.T_int64)}, Expr: &plan.Expr_Col{Col: &plan.ColRef{ColPos: 0}}},
+		}},
+	}
+	left := newShuffleGroupInputScope(t, 1)
+	right := newShuffleGroupInputScope(t, 1)
+
+	result := c.compilePartition(node, []*Scope{left, right})
+
+	require.Len(t, result, 1)
+	physical, ok := result[0].RootOp.(*partitionop.Partition)
+	require.True(t, ok)
+	require.Equal(t, plan.Node_PARTITION_ALGORITHM_HASH, physical.Algorithm)
+	require.Equal(t, int64(4096), physical.SpillMem)
+	require.Len(t, result[0].PreScopes, 2)
+	for _, input := range result[0].PreScopes {
+		// newMergeScope adds a Connector over the previous input root. HASH must
+		// leave that previous root untouched instead of adding local Order.
+		require.IsType(t, &colexec.MockOperator{}, input.RootOp.GetOperatorBase().GetChildren(0))
+	}
+}
+
+func TestCompileHashPartitionGatedByProtocolVersion(t *testing.T) {
+	c := newCompileForShuffleGroupTest(t)
+	rt := runtime.ServiceRuntime(c.proc.GetService())
+	defer rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCLatestVersion)
+
+	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion46)
+	require.False(t, c.supportsRemoteHashPartition())
+	node := &plan.Node{
+		NodeType:           plan.Node_PARTITION,
+		PartitionAlgorithm: plan.Node_PARTITION_ALGORITHM_HASH,
+		OrderBy: []*plan.OrderBySpec{{
+			Expr: &plan.Expr{Typ: plan.Type{Id: int32(types.T_int64)}, Expr: &plan.Expr_Col{Col: &plan.ColRef{ColPos: 0}}},
+		}},
+	}
+	legacy := c.compilePartition(node, []*Scope{newShuffleGroupInputScope(t, 1)})
+	require.Len(t, legacy, 1)
+	require.Equal(t, plan.Node_PARTITION_ALGORITHM_SORT, legacy[0].RootOp.(*partitionop.Partition).Algorithm)
+	require.IsType(t, &orderop.Order{}, legacy[0].PreScopes[0].RootOp.GetOperatorBase().GetChildren(0))
+
+	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion47)
+	require.True(t, c.supportsRemoteHashPartition())
+}
+
 func TestCompileOrderedSetPercentileUsesSingleStageForNonShuffleMerge(t *testing.T) {
 	c := newCompileForShuffleGroupTest(t)
 	aggNode, nodes := newShuffleGroupTestNodes(16)
@@ -2906,7 +2993,7 @@ func TestNewCompileTxnReadViewForInternalSql(t *testing.T) {
 	})
 }
 
-func TestTxnReadViewForOperator(t *testing.T) {
+func TestWorkspaceReadViewForOperator(t *testing.T) {
 	t.Run("base operator keeps the statement view", func(t *testing.T) {
 		ctrl := gomock.NewController(t)
 		defer ctrl.Finish()
@@ -2917,7 +3004,7 @@ func TestTxnReadViewForOperator(t *testing.T) {
 		txnOp.EXPECT().IsSnapOp().Return(false)
 
 		statementView := client.NewWorkspaceReadView(1, 2, 3)
-		require.Equal(t, statementView, txnReadViewForOperator(txnOp, statementView))
+		require.Equal(t, statementView, client.WorkspaceReadViewForOperator(txnOp, statementView))
 	})
 
 	t.Run("snapshot operator uses its isolated workspace view", func(t *testing.T) {
@@ -2932,6 +3019,6 @@ func TestTxnReadViewForOperator(t *testing.T) {
 		txnOp.EXPECT().GetWorkspace().Return(ws)
 		txnOp.EXPECT().IsSnapOp().Return(true)
 
-		require.Equal(t, snapshotView, txnReadViewForOperator(txnOp, statementView))
+		require.Equal(t, snapshotView, client.WorkspaceReadViewForOperator(txnOp, statementView))
 	})
 }

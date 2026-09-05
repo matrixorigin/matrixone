@@ -324,6 +324,28 @@ func (v WorkspaceReadView) IsZero() bool {
 	return v.workspaceID == 0 && v.revision == 0 && v.maxMutationID == 0
 }
 
+// WorkspaceReadViewForOperator binds a statement visibility boundary to the
+// transaction operator that will execute the read. A historical snapshot
+// operator owns an isolated read-only workspace, so it must use that
+// workspace's current view instead of a view published by the parent
+// transaction.
+func WorkspaceReadViewForOperator(
+	op TxnOperator,
+	statementView WorkspaceReadView,
+) WorkspaceReadView {
+	if op == nil {
+		return NoWorkspaceReadView()
+	}
+	workspace := op.GetWorkspace()
+	if workspace == nil {
+		return NoWorkspaceReadView()
+	}
+	if op.IsSnapOp() {
+		return workspace.CurrentReadView()
+	}
+	return statementView
+}
+
 // WorkspaceWriteMark identifies one statement execution attempt and the
 // mutation frontier at which it started. Adjust and retry use this stable mark
 // instead of a positional write-list offset.
@@ -445,6 +467,8 @@ type Workspace interface {
 type TxnOverview struct {
 	// CreateAt create at
 	CreateAt time.Time
+	// AccountID is the account that created the transaction.
+	AccountID uint32
 	// Meta txn metadata
 	Meta txn.TxnMeta
 	// UserTxn true if is a user transaction

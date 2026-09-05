@@ -5181,7 +5181,12 @@ func reduceSinkSinkScanNodes(qry *Query) {
 	// merge one sink to one sinkScan
 	pointToNodeMap := make(map[int32][]*sinkScanMeta)
 	for sinkNodeId, meta := range sinks {
-		if len(meta.scans) == 1 && !meta.scans[0].preNodeIsUnion && !meta.scans[0].recursive {
+		if len(meta.scans) == 1 &&
+			// Replacing all of a multi-input parent's children with the sink input
+			// would drop its other branches (for example, the tokenizer side of an
+			// APPLY). This direct fold is valid only for a unary consumer.
+			len(qry.Nodes[meta.scans[0].preNodeId].Children) == 1 &&
+			!meta.scans[0].preNodeIsUnion && !meta.scans[0].recursive {
 			// one sink to one sinkScan
 			sinkNode := qry.Nodes[sinkNodeId]
 			sinkScanPreNode := qry.Nodes[meta.scans[0].preNodeId]

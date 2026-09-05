@@ -16,6 +16,7 @@ package v4_0_6
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -37,15 +38,34 @@ import (
 )
 
 func TestUpgradeEntries(t *testing.T) {
-	require.Len(t, tenantUpgEntries, 21)
-	require.Len(t, clusterUpgEntries, 3)
+	require.Len(t, tenantUpgEntries, 34)
+	require.Len(t, clusterUpgEntries, 7)
 	require.Equal(t, retireKafkaSinkDaemonTasks.UpgSql, clusterUpgEntries[0].UpgSql)
 	require.Equal(t, catalog.MO_VIEW_DEPENDENCIES, clusterUpgEntries[1].TableName)
 	require.Equal(t, catalog.MO_VIEW_REFRESH, clusterUpgEntries[2].TableName)
-	for _, entry := range clusterUpgEntries[1:] {
+	for _, entry := range clusterUpgEntries[1:3] {
 		require.Equal(t, versions.CREATE_NEW_TABLE, entry.UpgType)
 		require.Contains(t, strings.ToLower(entry.UpgSql), "create cluster table mo_catalog.mo_view_")
 	}
+	for _, tc := range []struct {
+		entry     versions.UpgradeEntry
+		tableName string
+		indexName string
+		column    string
+	}{
+		{clusterUpgEntries[3], catalog.MOSQLTask, "idx_account_id", "account_id"},
+		{clusterUpgEntries[4], catalog.MOSQLTaskRun, "idx_account_id", "account_id"},
+		{clusterUpgEntries[5], catalog.MOSysAsyncTask, "idx_task_parent_id", "task_parent_id"},
+	} {
+		require.Equal(t, tc.tableName, tc.entry.TableName)
+		require.Equal(t, versions.ADD_INDEX, tc.entry.UpgType)
+		require.Equal(t,
+			fmt.Sprintf("create index %s on %s.%s(%s)", tc.indexName, catalog.MOTaskDB, tc.tableName, tc.column),
+			tc.entry.UpgSql)
+	}
+	require.Equal(t, cleanupLegacyOrphanSQLTaskChildren.UpgSql, clusterUpgEntries[6].UpgSql)
+	require.Equal(t, versions.MODIFY_METADATA, clusterUpgEntries[6].UpgType)
+	require.Equal(t, int64(defines.MORPCVersion42), clusterUpgEntries[6].RequiredProtocolVersion)
 	require.Equal(t, mongodb.TableConnections, tenantUpgEntries[0].TableName)
 	require.Equal(t, mongodb.TableMappings, tenantUpgEntries[1].TableName)
 	for _, entry := range tenantUpgEntries[:2] {
@@ -74,26 +94,28 @@ func TestUpgradeEntries(t *testing.T) {
 	require.Equal(t, "COLUMNS", columns.TableName)
 	require.Equal(t, versions.MODIFY_VIEW, columns.UpgType)
 	require.Equal(t, sysview.InformationSchemaColumnsDDL, columns.UpgSql)
+	require.Equal(t, int64(defines.MORPCVersion46), columns.RequiredProtocolVersion)
 	require.Contains(t, strings.ToLower(columns.PreSql), "drop view if exists information_schema.columns")
 	checkConstraints := tenantUpgEntries[11]
 	require.Equal(t, sysview.InformationDBConst, checkConstraints.Schema)
 	require.Equal(t, "CHECK_CONSTRAINTS", checkConstraints.TableName)
 	require.Equal(t, versions.CREATE_VIEW, checkConstraints.UpgType)
 	require.Equal(t, sysview.InformationSchemaCheckConstraintsDDL, checkConstraints.UpgSql)
-	require.Equal(t, int64(defines.MORPCVersion16), checkConstraints.RequiredProtocolVersion)
+	require.Equal(t, int64(defines.MORPCVersion41), checkConstraints.RequiredProtocolVersion)
 	require.Contains(t, strings.ToLower(checkConstraints.PreSql), "drop view if exists information_schema.check_constraints")
 	tableConstraints := tenantUpgEntries[12]
 	require.Equal(t, sysview.InformationDBConst, tableConstraints.Schema)
 	require.Equal(t, "TABLE_CONSTRAINTS", tableConstraints.TableName)
 	require.Equal(t, versions.MODIFY_VIEW, tableConstraints.UpgType)
 	require.Equal(t, sysview.InformationSchemaTableConstraintsDDL, tableConstraints.UpgSql)
-	require.Equal(t, int64(defines.MORPCVersion16), tableConstraints.RequiredProtocolVersion)
+	require.Equal(t, int64(defines.MORPCVersion41), tableConstraints.RequiredProtocolVersion)
 	require.Contains(t, strings.ToLower(tableConstraints.PreSql), "drop view if exists information_schema.table_constraints")
 	hideInternalColumns := tenantUpgEntries[13]
 	require.Equal(t, sysview.InformationDBConst, hideInternalColumns.Schema)
 	require.Equal(t, "COLUMNS", hideInternalColumns.TableName)
 	require.Equal(t, versions.MODIFY_VIEW, hideInternalColumns.UpgType)
 	require.Equal(t, sysview.InformationSchemaColumnsDDL, hideInternalColumns.UpgSql)
+	require.Equal(t, int64(defines.MORPCVersion46), hideInternalColumns.RequiredProtocolVersion)
 	require.Contains(t, strings.ToLower(hideInternalColumns.PreSql), "drop view if exists information_schema.columns")
 	userDefinedFunctions := tenantUpgEntries[14]
 	require.Equal(t, versions.DROP_INDEX, userDefinedFunctions.UpgType)
@@ -126,6 +148,7 @@ func TestUpgradeEntries(t *testing.T) {
 	require.Equal(t, sysview.InformationSchemaCollationCharacterSetApplicabilityDDL, collationApplicability.UpgSql)
 	require.Contains(t, strings.ToLower(collationApplicability.PreSql),
 		"drop view if exists information_schema.collation_character_set_applicability")
+
 	unsignedColumns := tenantUpgEntries[19]
 	require.Equal(t, versions.MODIFY_METADATA, unsignedColumns.UpgType)
 	require.Equal(t, catalog.MO_CATALOG, unsignedColumns.Schema)
@@ -139,6 +162,131 @@ func TestUpgradeEntries(t *testing.T) {
 	require.Equal(t, sysview.InformationSchemaStatisticsDDL, statistics.UpgSql)
 	require.Contains(t, strings.ToLower(statistics.PreSql),
 		"drop view if exists information_schema.statistics")
+	for _, entry := range tenantUpgEntries {
+		ddl := entry.UpgSql + entry.PostSql
+		if strings.Contains(ddl, "mo_subscription_tables()") ||
+			strings.Contains(ddl, "mo_subscription_columns()") {
+			require.Equal(t, int64(defines.MORPCVersion46), entry.RequiredProtocolVersion,
+				"view upgrade %s must wait for subscription metadata functions", entry.TableName)
+		} else if strings.Contains(ddl, "mo_current_roles()") {
+			require.Equal(t, int64(defines.MORPCVersion41), entry.RequiredProtocolVersion,
+				"view upgrade %s must wait for mo_current_roles", entry.TableName)
+		}
+	}
+	roleGrantIndex := tenantUpgEntries[21]
+	require.Equal(t, versions.ADD_INDEX, roleGrantIndex.UpgType)
+	require.Equal(t, catalog.MO_CATALOG, roleGrantIndex.Schema)
+	require.Equal(t, "mo_role_grant", roleGrantIndex.TableName)
+	require.Equal(t, int64(defines.MORPCVersion41), roleGrantIndex.RequiredProtocolVersion)
+	require.Contains(t, strings.ToLower(roleGrantIndex.UpgSql),
+		"index idx_mo_role_grant_grantee_id on mo_catalog.mo_role_grant(grantee_id)")
+
+	metadataViews := []struct {
+		name string
+		ddl  string
+	}{
+		{name: "TABLES", ddl: sysview.InformationSchemaTablesDDL},
+		{name: "COLUMNS", ddl: sysview.InformationSchemaColumnsDDL},
+		{name: "STATISTICS", ddl: sysview.InformationSchemaStatisticsDDL},
+		{name: "TABLE_CONSTRAINTS", ddl: sysview.InformationSchemaTableConstraintsDDL},
+		{name: "KEY_COLUMN_USAGE", ddl: sysview.InformationSchemaKeyColumnUsageDDL},
+		{name: "REFERENTIAL_CONSTRAINTS", ddl: sysview.InformationSchemaReferentialConstraintsDDL},
+		{name: "CHECK_CONSTRAINTS", ddl: sysview.InformationSchemaCheckConstraintsDDL},
+		{name: "VIEWS", ddl: sysview.InformationSchemaViewsDDL},
+		{name: "PARTITIONS", ddl: sysview.InformationSchemaPartitionsDDL},
+		{name: "SCHEMATA", ddl: sysview.InformationSchemaSchemataDDL},
+	}
+	for i, view := range metadataViews {
+		entry := tenantUpgEntries[22+i]
+		require.Equal(t, sysview.InformationDBConst, entry.Schema)
+		require.Equal(t, view.name, entry.TableName)
+		require.Equal(t, versions.MODIFY_VIEW, entry.UpgType)
+		require.Equal(t, view.ddl, entry.UpgSql)
+		expectedProtocol := int64(defines.MORPCVersion41)
+		if view.name == "TABLES" || view.name == "COLUMNS" {
+			expectedProtocol = defines.MORPCVersion46
+		}
+		require.Equal(t, expectedProtocol, entry.RequiredProtocolVersion)
+		require.Contains(t, strings.ToLower(entry.PreSql),
+			"drop view if exists information_schema."+strings.ToLower(view.name))
+	}
+
+	tablePrivileges := tenantUpgEntries[22+len(metadataViews)]
+	require.Equal(t, sysview.InformationDBConst, tablePrivileges.Schema)
+	require.Equal(t, "TABLE_PRIVILEGES", tablePrivileges.TableName)
+	require.Equal(t, versions.MODIFY_VIEW, tablePrivileges.UpgType)
+	require.Equal(t, int64(defines.MORPCVersion41), tablePrivileges.RequiredProtocolVersion)
+	require.Contains(t, strings.ToLower(tablePrivileges.PreSql),
+		"drop table if exists information_schema.table_privileges")
+	require.Contains(t, strings.ToLower(tablePrivileges.UpgSql),
+		"drop view if exists information_schema.table_privileges")
+	require.Equal(t, sysview.InformationSchemaTablePrivilegesDDL, tablePrivileges.PostSql)
+}
+
+func TestInformationSchemaMetadataVisibilityUpgradeChecks(t *testing.T) {
+	views := []struct {
+		name string
+		ddl  string
+	}{
+		{name: "TABLES", ddl: sysview.InformationSchemaTablesDDL},
+		{name: "COLUMNS", ddl: sysview.InformationSchemaColumnsDDL},
+		{name: "STATISTICS", ddl: sysview.InformationSchemaStatisticsDDL},
+		{name: "TABLE_CONSTRAINTS", ddl: sysview.InformationSchemaTableConstraintsDDL},
+		{name: "KEY_COLUMN_USAGE", ddl: sysview.InformationSchemaKeyColumnUsageDDL},
+		{name: "REFERENTIAL_CONSTRAINTS", ddl: sysview.InformationSchemaReferentialConstraintsDDL},
+		{name: "CHECK_CONSTRAINTS", ddl: sysview.InformationSchemaCheckConstraintsDDL},
+		{name: "VIEWS", ddl: sysview.InformationSchemaViewsDDL},
+		{name: "PARTITIONS", ddl: sysview.InformationSchemaPartitionsDDL},
+		{name: "SCHEMATA", ddl: sysview.InformationSchemaSchemataDDL},
+	}
+	checkErr := errors.New("check metadata view definition failed")
+
+	for _, view := range views {
+		for _, state := range []struct {
+			name       string
+			exists     bool
+			definition string
+			checkErr   error
+			want       bool
+		}{
+			{name: "current", exists: true, definition: view.ddl, want: true},
+			{name: "old", exists: true, definition: "old view definition"},
+			{name: "missing", definition: view.ddl},
+			{name: "error", checkErr: checkErr},
+		} {
+			t.Run(view.name+"/"+state.name, func(t *testing.T) {
+				oldCheck := versions.CheckViewDefinition
+				versions.CheckViewDefinition = func(
+					txn executor.TxnExecutor,
+					accountID uint32,
+					schema string,
+					viewName string,
+				) (bool, string, error) {
+					require.Nil(t, txn)
+					require.Equal(t, uint32(42), accountID)
+					require.Equal(t, sysview.InformationDBConst, schema)
+					require.Equal(t, view.name, viewName)
+					return state.exists, state.definition, state.checkErr
+				}
+				defer func() { versions.CheckViewDefinition = oldCheck }()
+
+				entry := upgradeInformationSchemaMetadataVisibilityView(view.name, view.ddl)
+				ok, err := entry.CheckFunc(nil, 42)
+				if state.checkErr != nil {
+					require.ErrorIs(t, err, state.checkErr)
+					require.False(t, ok)
+					return
+				}
+				require.NoError(t, err)
+				require.Equal(t, state.want, ok)
+			})
+		}
+	}
+	allocatorIndex := tenantUpgEntries[33]
+	require.Equal(t, versions.ADD_INDEX, allocatorIndex.UpgType)
+	require.Equal(t, catalog.MO_CATALOG, allocatorIndex.Schema)
+	require.Equal(t, "mo_iceberg_catalogs", allocatorIndex.TableName)
+	require.Contains(t, strings.ToLower(allocatorIndex.UpgSql), "create index catalog_id_allocator")
 }
 
 func TestMoColumnsUnsignedBackfillPredicate(t *testing.T) {
@@ -247,7 +395,7 @@ func TestUserDefinedFunctionArgumentTypesBackfillRejectsOversizedSignature(t *te
 }
 
 func TestForeignKeyMetadataTenantUpgradeEntries(t *testing.T) {
-	require.Len(t, tenantUpgEntries, 21)
+	require.Len(t, tenantUpgEntries, 34)
 
 	for i, column := range []string{"referenced_index_name", "on_delete_origin", "on_update_origin"} {
 		entry := tenantUpgEntries[2+i]
@@ -485,7 +633,7 @@ func TestTenantViewDefinitionChecks(t *testing.T) {
 		upgradeInformationSchemaCheckConstraints(),
 		upgradeInformationSchemaTableConstraints(),
 		upgradeInformationSchemaCollationCharacterSetApplicability(),
-		upgradeInformationSchemaStatistics(),
+		upgradeInformationSchemaTablePrivileges(),
 	}
 
 	for _, entry := range entries {
@@ -494,8 +642,12 @@ func TestTenantViewDefinitionChecks(t *testing.T) {
 			if entry.PostSql != "" {
 				targetDefinition = entry.PostSql
 			}
+			expectedViewName := entry.TableName
+			if entry.TableName == "TABLE_PRIVILEGES" {
+				expectedViewName = "table_privileges"
+			}
 			stub := gostub.Stub(&versions.CheckViewDefinition, func(_ executor.TxnExecutor, accountID uint32, schema, viewName string) (bool, string, error) {
-				if accountID != 42 || schema != sysview.InformationDBConst || viewName != entry.TableName {
+				if accountID != 42 || schema != sysview.InformationDBConst || viewName != expectedViewName {
 					t.Fatalf("unexpected view check arguments: account=%d schema=%s view=%s", accountID, schema, viewName)
 				}
 				return true, targetDefinition, nil
@@ -587,6 +739,10 @@ func TestKeyColumnUsageViewUpgradeIsOrderedAndIdempotent(t *testing.T) {
 
 	var executed []string
 	txnExecutor := newVersionTxnExecutor(t, func(sql string) (executor.Result, error) {
+		if strings.Contains(strings.ToLower(sql), "getprotocolversion") {
+			return newProtocolVersionResultValue(t,
+				`{"method":"GETPROTOCOLVERSION","result":"cn-a:41,cn-b:41"}`), nil
+		}
 		executed = append(executed, sql)
 		if sql == entry.PostSql {
 			upgraded = true
@@ -600,6 +756,64 @@ func TestKeyColumnUsageViewUpgradeIsOrderedAndIdempotent(t *testing.T) {
 	executed = nil
 	require.NoError(t, entry.Upgrade(txnExecutor, 42))
 	require.Empty(t, executed)
+}
+
+func TestTablePrivilegesViewUpgradeConvergesAndIsIdempotent(t *testing.T) {
+	for _, test := range []struct {
+		name       string
+		exists     bool
+		definition string
+		wantDDL    bool
+	}{
+		{name: "missing object", wantDDL: true},
+		{name: "legacy base table", wantDDL: true},
+		{name: "stale view", exists: true, definition: "old view definition", wantDDL: true},
+		{name: "canonical view", exists: true, definition: sysview.InformationSchemaTablePrivilegesDDL},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			entry := upgradeInformationSchemaTablePrivileges()
+			upgraded := false
+			stub := gostub.Stub(&versions.CheckViewDefinition, func(
+				_ executor.TxnExecutor,
+				accountID uint32,
+				schema string,
+				viewName string,
+			) (bool, string, error) {
+				require.Equal(t, uint32(42), accountID)
+				require.Equal(t, sysview.InformationDBConst, schema)
+				require.Equal(t, "table_privileges", viewName)
+				if upgraded {
+					return true, sysview.InformationSchemaTablePrivilegesDDL, nil
+				}
+				return test.exists, test.definition, nil
+			})
+			defer stub.Reset()
+
+			var executed []string
+			txnExecutor := newVersionTxnExecutor(t, func(sql string) (executor.Result, error) {
+				if strings.Contains(strings.ToLower(sql), "getprotocolversion") {
+					return newProtocolVersionResultValue(t,
+						`{"method":"GETPROTOCOLVERSION","result":"cn-a:41,cn-b:41"}`), nil
+				}
+				executed = append(executed, sql)
+				if sql == entry.PostSql {
+					upgraded = true
+				}
+				return executor.Result{}, nil
+			})
+
+			require.NoError(t, entry.Upgrade(txnExecutor, 42))
+			if test.wantDDL {
+				require.Equal(t, []string{entry.PreSql, entry.UpgSql, entry.PostSql}, executed)
+			} else {
+				require.Empty(t, executed)
+			}
+
+			executed = nil
+			require.NoError(t, entry.Upgrade(txnExecutor, 42))
+			require.Empty(t, executed)
+		})
+	}
 }
 
 func TestVersionHandleLifecycleWithNoLegacyDefinitions(t *testing.T) {
@@ -623,8 +837,18 @@ func TestVersionHandleLifecycleWithNoLegacyDefinitions(t *testing.T) {
 				return true, sysview.InformationSchemaTableConstraintsDDL, nil
 			case "COLUMNS":
 				return true, sysview.InformationSchemaColumnsDDL, nil
+			case "TABLES":
+				return true, sysview.InformationSchemaTablesDDL, nil
 			case "STATISTICS":
 				return true, sysview.InformationSchemaStatisticsDDL, nil
+			case "VIEWS":
+				return true, sysview.InformationSchemaViewsDDL, nil
+			case "PARTITIONS":
+				return true, sysview.InformationSchemaPartitionsDDL, nil
+			case "SCHEMATA":
+				return true, sysview.InformationSchemaSchemataDDL, nil
+			case "table_privileges":
+				return true, sysview.InformationSchemaTablePrivilegesDDL, nil
 			default:
 				return false, "", errors.New("unexpected view")
 			}
@@ -634,7 +858,8 @@ func TestVersionHandleLifecycleWithNoLegacyDefinitions(t *testing.T) {
 		var executed []string
 		txnExecutor := newVersionTxnExecutor(t, func(sql string) (executor.Result, error) {
 			if strings.Contains(strings.ToLower(sql), "getprotocolversion") {
-				return newProtocolVersionResult(t), nil
+				return newProtocolVersionResultValue(t,
+					`{"method":"GETPROTOCOLVERSION","result":"cn-a:42,cn-b:42"}`), nil
 			}
 			executed = append(executed, sql)
 			return executor.Result{}, nil
@@ -1122,18 +1347,6 @@ func newHistoricalCreateSQLResult(t *testing.T, createSQL string) executor.Resul
 	return result.GetResult()
 }
 
-func newProtocolVersionResult(t *testing.T) executor.Result {
-	t.Helper()
-	mp := mpool.MustNewZeroNoFixed()
-	t.Cleanup(func() { mpool.DeleteMPool(mp) })
-	result := executor.NewMemResult([]types.Type{types.T_varchar.ToType()}, mp)
-	result.NewBatchWithRowCount(1)
-	if err := executor.AppendStringRows(result, 0, []string{`{"method":"GETPROTOCOLVERSION","result":"cn-a:13, cn-b:13"}`}); err != nil {
-		t.Fatalf("append protocol version result: %v", err)
-	}
-	return result.GetResult()
-}
-
 func newLegacyForeignKeyIndexResult(t *testing.T, rows [][]string) executor.Result {
 	t.Helper()
 	mp := mpool.MustNewZeroNoFixed()
@@ -1268,4 +1481,96 @@ func TestRetireKafkaSinkDaemonTasks(t *testing.T) {
 	require.NoError(t, retireKafkaSinkDaemonTasks.Upgrade(txn, catalog.System_Account))
 	require.Equal(t, []string{checkSQL}, executed,
 		"an already-retired cluster must not execute the update again")
+}
+
+func TestCleanupLegacyOrphanSQLTaskChildren(t *testing.T) {
+	entry := cleanupLegacyOrphanSQLTaskChildren
+	checkSQL := "select 1 from mo_task.sys_async_task where " +
+		legacyOrphanSQLTaskChildPredicate + " limit 1"
+
+	require.Equal(t, catalog.MOTaskDB, entry.Schema)
+	require.Equal(t, catalog.MOSysAsyncTask, entry.TableName)
+	require.Equal(t, versions.MODIFY_METADATA, entry.UpgType)
+	require.Equal(t, int64(defines.MORPCVersion42), entry.RequiredProtocolVersion)
+	require.Equal(t,
+		"delete from mo_task.sys_async_task where "+legacyOrphanSQLTaskChildPredicate,
+		entry.UpgSql)
+	require.Contains(t, entry.UpgSql, "task_parent_id like 'sql-task:%'")
+	require.Contains(t, entry.UpgSql, "from mo_task.sql_task ")
+	require.Contains(t, entry.UpgSql, "from mo_task.sql_task_run")
+
+	t.Run("older CN blocks cleanup", func(t *testing.T) {
+		deleted := false
+		txn := newVersionTxnExecutor(t, func(sql string) (executor.Result, error) {
+			switch sql {
+			case checkSQL:
+				result := executor.NewMemResult(nil, nil)
+				result.NewBatchWithRowCount(1)
+				return result.GetResult(), nil
+			case "SELECT mo_ctl('cn', 'GetProtocolVersion', '')":
+				return newProtocolVersionResultValue(t,
+					`{"method":"GETPROTOCOLVERSION","result":"cn-a:42,cn-b:41"}`), nil
+			case entry.UpgSql:
+				deleted = true
+			}
+			return executor.Result{}, nil
+		})
+
+		require.Error(t, entry.Upgrade(txn, catalog.System_Account))
+		require.False(t, deleted)
+	})
+
+	t.Run("empty snapshot still waits for older CN", func(t *testing.T) {
+		var executed []string
+		txn := newVersionTxnExecutor(t, func(sql string) (executor.Result, error) {
+			executed = append(executed, sql)
+			if sql == "SELECT mo_ctl('cn', 'GetProtocolVersion', '')" {
+				return newProtocolVersionResultValue(t,
+					`{"method":"GETPROTOCOLVERSION","result":"cn-a:42,cn-b:41"}`), nil
+			}
+			return executor.Result{}, nil
+		})
+
+		require.Error(t, entry.Upgrade(txn, catalog.System_Account))
+		require.Equal(t, []string{
+			checkSQL,
+			"SELECT mo_ctl('cn', 'GetProtocolVersion', '')",
+		}, executed)
+	})
+
+	t.Run("all CNs ready and cleanup is idempotent", func(t *testing.T) {
+		hasOrphan := true
+		var executed []string
+		txn := newVersionTxnExecutor(t, func(sql string) (executor.Result, error) {
+			executed = append(executed, sql)
+			switch sql {
+			case checkSQL:
+				if hasOrphan {
+					result := executor.NewMemResult(nil, nil)
+					result.NewBatchWithRowCount(1)
+					return result.GetResult(), nil
+				}
+			case "SELECT mo_ctl('cn', 'GetProtocolVersion', '')":
+				return newProtocolVersionResultValue(t,
+					`{"method":"GETPROTOCOLVERSION","result":"cn-a:42,cn-b:42"}`), nil
+			case entry.UpgSql:
+				hasOrphan = false
+			}
+			return executor.Result{}, nil
+		})
+
+		require.NoError(t, entry.Upgrade(txn, catalog.System_Account))
+		require.Equal(t, []string{
+			checkSQL,
+			"SELECT mo_ctl('cn', 'GetProtocolVersion', '')",
+			entry.UpgSql,
+		}, executed)
+
+		executed = nil
+		require.NoError(t, entry.Upgrade(txn, catalog.System_Account))
+		require.Equal(t, []string{
+			checkSQL,
+			"SELECT mo_ctl('cn', 'GetProtocolVersion', '')",
+		}, executed)
+	})
 }

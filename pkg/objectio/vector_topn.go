@@ -18,6 +18,7 @@ import (
 	"container/heap"
 	"context"
 	"fmt"
+	"math"
 	"slices"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -80,6 +81,13 @@ func TopNVector(
 	if err != nil {
 		return nil, nil, err
 	}
+	rangeActive := orderByLimit.LowerBoundType != plan.BoundType_UNBOUNDED ||
+		orderByLimit.UpperBoundType != plan.BoundType_UNBOUNDED
+	if orderByLimit.LowerBoundType != plan.BoundType_UNBOUNDED && math.IsNaN(orderByLimit.LowerBound) ||
+		orderByLimit.UpperBoundType != plan.BoundType_UNBOUNDED && math.IsNaN(orderByLimit.UpperBound) {
+		orderByLimit.DistHeap = orderByLimit.DistHeap[:0]
+		return []int64{}, []float64{}, nil
+	}
 
 	var distOf func(colBytes []byte) (float64, error)
 	switch orderByLimit.Typ {
@@ -109,6 +117,9 @@ func TopNVector(
 		dist64, err := distOf(vecCol.GetBytesAt(int(row)))
 		if err != nil {
 			return nil, nil, err
+		}
+		if rangeActive && math.IsNaN(dist64) {
+			continue
 		}
 
 		if orderByLimit.LowerBoundType == plan.BoundType_INCLUSIVE {

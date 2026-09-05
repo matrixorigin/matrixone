@@ -86,7 +86,7 @@ func TestBackendRequestLifecycleMetricsEndToEnd(t *testing.T) {
 				b.metrics.requestCompletedCounters[requestOutcomeSuccess])
 			durationBefore, _ := observerHistogram(t, b.metrics.requestDurationHistogram)
 
-			ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+			ctx, cancel := context.WithTimeout(t.Context(), time.Second)
 			defer cancel()
 			f, err := b.Send(ctx, newTestMessage(1))
 			require.NoError(t, err)
@@ -558,6 +558,162 @@ func TestReadTimeout(t *testing.T) {
 			assert.NotEqual(t, backendClosed, err)
 		},
 		WithBackendReadTimeout(time.Millisecond*200),
+	)
+}
+
+func TestReadTimeoutDoesNotChargeIdleTimeToNewRequest(t *testing.T) {
+	rb := &remoteBackend{livenessEpoch: time.Now().Add(-2 * time.Second)}
+	rb.options.bufferSize = 2
+	rb.options.readTimeout = time.Second
+
+	// Preserve ordinary backends' existing idle-timeout behavior. The special
+	// case below applies only once a unary request has actually been flushed.
+	require.False(t, rb.keepDataConnectionAfterReadTimeout(
+		context.Background(), context.DeadlineExceeded))
+	rb.mu.activeStreams = map[uint64]*stream{1: {}}
+	require.False(t, rb.keepDataConnectionAfterReadTimeout(
+		context.Background(), context.DeadlineExceeded),
+		"a stream with no flushed message must retain the ordinary backend's timeout semantics")
+	clear(rb.mu.activeStreams)
+	internal := &Future{send: RPCMessage{internal: true}}
+	internal.writtenAt.Store(rb.livenessTick())
+	rb.mu.futures = map[uint64]*Future{1: internal}
+	require.False(t, rb.keepDataConnectionAfterReadTimeout(
+		context.Background(), context.DeadlineExceeded),
+		"internal traffic must not extend the user-request read window")
+	oneWay := &Future{oneWay: true}
+	oneWay.send.createAt = time.Now()
+	rb.mu.futures = map[uint64]*Future{1: oneWay}
+	require.False(t, rb.keepDataConnectionAfterReadTimeout(
+		context.Background(), context.DeadlineExceeded),
+		"one-way traffic must not create a response read window")
+	inFlight := &Future{}
+	inFlight.send.createAt = time.Now()
+	rb.mu.futures = map[uint64]*Future{1: inFlight}
+	require.True(t, rb.keepDataConnectionAfterReadTimeout(
+		context.Background(), context.DeadlineExceeded),
+		"an admitted request must not inherit the remainder of an idle read window")
+	inFlight.send.createAt = time.Now().Add(-rb.options.readTimeout)
+	require.False(t, rb.keepDataConnectionAfterReadTimeout(
+		context.Background(), context.DeadlineExceeded),
+		"a request stuck before flush must not renew the connection beyond one admission window")
+	inFlight.send.createAt = time.Now()
+	inFlight.waiting.Store(true)
+	require.False(t, rb.keepDataConnectionAfterReadTimeout(
+		context.Background(), context.DeadlineExceeded),
+		"a terminal send failure must not extend the read window")
+
+	// If a request arrived during that old read window, it owns a fresh window
+	// measured from its write, rather than the remainder of the idle window.
+	pending := &Future{}
+	pending.writtenAt.Store(rb.livenessTick())
+	pending.waiting.Store(true)
+	rb.mu.futures = map[uint64]*Future{1: pending}
+	require.True(t, rb.keepDataConnectionAfterReadTimeout(
+		context.Background(), context.DeadlineExceeded))
+	canceledCtx, cancel := context.WithCancel(context.Background())
+	cancel()
+	require.False(t, rb.keepDataConnectionAfterReadTimeout(
+		canceledCtx, context.DeadlineExceeded),
+		"backend cancellation must win over a fresh request window")
+
+	// A backend without an independent liveness probe still closes once a full
+	// request-owned window has elapsed without progress.
+	pending.writtenAt.Store(rb.livenessTick() - rb.options.readTimeout.Nanoseconds())
+	require.False(t, rb.keepDataConnectionAfterReadTimeout(
+		context.Background(), context.DeadlineExceeded))
+	rb.atomic.lastStreamFlushAt.Store(rb.livenessTick())
+	require.False(t, rb.keepDataConnectionAfterReadTimeout(
+		context.Background(), context.DeadlineExceeded),
+		"fresh stream traffic must not rescue a generation with an expired unary request")
+	fresh := &Future{}
+	fresh.send.createAt = time.Now()
+	rb.mu.futures[2] = fresh
+	require.False(t, rb.keepDataConnectionAfterReadTimeout(
+		context.Background(), context.DeadlineExceeded),
+		"new admissions must not keep an already-stalled request generation alive")
+	require.False(t, rb.keepDataConnectionAfterReadTimeout(
+		context.Background(), errors.New("connection reset")))
+
+	// Stream traffic owns one window from its most recent successful flush, so
+	// a stream message admitted late in an idle read window is not charged the
+	// idle time; once that window elapses the idle-close behavior returns.
+	clear(rb.mu.futures)
+	rb.atomic.lastStreamFlushAt.Store(rb.livenessTick())
+	require.True(t, rb.keepDataConnectionAfterReadTimeout(
+		context.Background(), context.DeadlineExceeded),
+		"a freshly flushed stream message owns one complete read window")
+	failed := &Future{}
+	failed.waiting.Store(true)
+	rb.mu.futures[1] = failed
+	require.True(t, rb.keepDataConnectionAfterReadTimeout(
+		context.Background(), context.DeadlineExceeded),
+		"a terminal unary send failure owns no response window and must not suppress a live stream")
+	rb.atomic.lastStreamFlushAt.Store(
+		rb.livenessTick() - rb.options.readTimeout.Nanoseconds())
+	require.False(t, rb.keepDataConnectionAfterReadTimeout(
+		context.Background(), context.DeadlineExceeded),
+		"an expired stream window must not keep a silent connection open")
+}
+
+func TestReadTimeoutTracksRequestsWithoutLivenessProbe(t *testing.T) {
+	requestReceived := make(chan struct{})
+	var received sync.Once
+	testBackendSend(t,
+		func(_ goetty.IOSession, message interface{}, _ uint64) error {
+			if !message.(RPCMessage).internal {
+				received.Do(func() { close(requestReceived) })
+			}
+			return nil
+		},
+		func(b *remoteBackend) {
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+			defer cancel()
+			f, err := b.Send(ctx, newTestMessage(1))
+			require.NoError(t, err)
+			defer f.Close()
+			require.NoError(t, f.waitSendCompleted())
+
+			select {
+			case <-requestReceived:
+			case <-ctx.Done():
+				t.Fatal("request did not reach server")
+			}
+			require.NotZero(t, f.writtenAt.Load(),
+				"a flushed request must carry its flush stamp")
+			require.Equal(t, f.writtenAt.Load(), b.pendingRequestReadWindow(),
+				"read-timeout accounting must not depend on a liveness probe")
+		},
+		WithBackendReadTimeout(200*time.Millisecond),
+	)
+}
+
+func TestReadTimeoutTracksStreamWritesWithoutLivenessProbe(t *testing.T) {
+	testBackendSend(t,
+		func(_ goetty.IOSession, _ interface{}, _ uint64) error {
+			// no response: only the write-side stamp is under test
+			return nil
+		},
+		func(b *remoteBackend) {
+			st, err := b.NewStream(false)
+			require.NoError(t, err)
+			defer func() {
+				require.NoError(t, st.Close(false))
+			}()
+
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+			defer cancel()
+			// Send returns only after the flush completed, so the stamp is
+			// already published.
+			require.NoError(t, st.Send(ctx, &testMessage{id: st.ID()}))
+
+			require.NotZero(t, b.atomic.lastStreamFlushAt.Load(),
+				"a flushed stream message must open a stream read window")
+			require.True(t, b.keepDataConnectionAfterReadTimeout(
+				context.Background(), context.DeadlineExceeded),
+				"a stream message admitted late in an idle read window must not be charged the idle time")
+		},
+		WithBackendReadTimeout(200*time.Millisecond),
 	)
 }
 
@@ -1133,7 +1289,7 @@ func TestIndependentControlBackendPreservesSlowDataRequest(t *testing.T) {
 
 	dataFactory := NewGoettyBasedBackendFactory(
 		newTestCodec(),
-		// keepDataConnectionAfterProbe gives the probe one fifth of this timeout.
+		// keepDataConnectionAfterReadTimeout gives the probe one fifth of this timeout.
 		// The probe gets a full second without making the test wait for a timeout.
 		WithBackendReadTimeout(dataReadTimeout),
 		WithBackendLivenessProbe(func(ctx context.Context, _ string) error {
@@ -1182,7 +1338,7 @@ func TestIndependentControlBackendPreservesSlowDataRequest(t *testing.T) {
 	dataBackend.livenessMu.Unlock()
 	// Drive the read-timeout branch directly. Waiting for a real socket deadline
 	// only tests the clock and was the source of this test's CI flakiness.
-	require.True(t, dataBackend.keepDataConnectionAfterProbe(ctx, context.DeadlineExceeded))
+	require.True(t, dataBackend.keepDataConnectionAfterReadTimeout(ctx, context.DeadlineExceeded))
 	require.False(t, dataBackend.admissionAvailable(),
 		"a successful control probe must drain the stalled data backend")
 	require.Zero(t, client.closeIdleBackends(),

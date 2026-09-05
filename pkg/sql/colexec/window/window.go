@@ -34,6 +34,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sort"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/rule"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -84,7 +85,7 @@ func (window *Window) Prepare(proc *process.Process) (err error) {
 		if expr == nil || expr.GetW() == nil {
 			continue
 		}
-		runtimeFrames[i], err = materializeRowsFrame(proc, expr.GetW().Frame)
+		runtimeFrames[i], err = materializeWindowFrame(proc, expr.GetW().Frame)
 		if err != nil {
 			return err
 		}
@@ -109,19 +110,19 @@ func (window *Window) Prepare(proc *process.Process) (err error) {
 	return nil
 }
 
-func materializeRowsFrame(proc *process.Process, planned *plan.FrameClause) (*plan.FrameClause, error) {
+func materializeWindowFrame(proc *process.Process, planned *plan.FrameClause) (*plan.FrameClause, error) {
 	if planned == nil {
 		return nil, nil
 	}
 
 	runtimeFrame := &plan.FrameClause{Type: planned.Type}
 	var err error
-	if planned.Type == plan.FrameClause_ROWS {
-		runtimeFrame.Start, err = materializeRowsBound(proc, planned.Start)
+	if planned.Type == plan.FrameClause_ROWS || planned.Type == plan.FrameClause_RANGE {
+		runtimeFrame.Start, err = materializeWindowBound(proc, planned.Start, planned.Type)
 		if err != nil {
 			return nil, err
 		}
-		runtimeFrame.End, err = materializeRowsBound(proc, planned.End)
+		runtimeFrame.End, err = materializeWindowBound(proc, planned.End, planned.Type)
 		if err != nil {
 			return nil, err
 		}
@@ -144,9 +145,18 @@ func cloneFrameBound(planned *plan.FrameBound) *plan.FrameBound {
 	}
 }
 
-func materializeRowsBound(proc *process.Process, planned *plan.FrameBound) (*plan.FrameBound, error) {
+func materializeWindowBound(
+	proc *process.Process,
+	planned *plan.FrameBound,
+	frameType plan.FrameClause_FrameType,
+) (*plan.FrameBound, error) {
 	runtimeBound := cloneFrameBound(planned)
 	if planned == nil || planned.Val == nil || planned.Val.GetLit() != nil {
+		return runtimeBound, nil
+	}
+	// Temporal RANGE bounds are normalized interval expression lists at bind
+	// time. They are already immutable constants, not deferred parameters.
+	if frameType == plan.FrameClause_RANGE && planned.Val.GetList() != nil {
 		return runtimeBound, nil
 	}
 	if proc == nil || proc.GetPrepareParams() == nil {
@@ -169,23 +179,59 @@ func materializeRowsBound(proc *process.Process, planned *plan.FrameBound) (*pla
 	if vec.IsNull(0) {
 		return nil, moerr.NewInvalidInput(proc.Ctx, "window frame bound cannot be NULL")
 	}
-	if vec.GetType().Oid != types.T_uint64 {
+	if frameType == plan.FrameClause_ROWS && vec.GetType().Oid != types.T_uint64 {
 		return nil, moerr.NewInvalidInputf(
 			proc.Ctx,
 			"window frame bound must evaluate to uint64, got %s",
 			vec.GetType().String(),
 		)
 	}
+	if frameType == plan.FrameClause_RANGE {
+		if err = validateRangeFrameBound(proc.Ctx, vec); err != nil {
+			return nil, err
+		}
+	}
 
 	runtimeBound.Val = &plan.Expr{
-		Typ: plan.Type{Id: int32(types.T_uint64)},
-		Expr: &plan.Expr_Lit{Lit: &plan.Literal{
-			Value: &plan.Literal_U64Val{
-				U64Val: vector.MustFixedColWithTypeCheck[uint64](vec)[0],
-			},
-		}},
+		Typ:  planned.Val.Typ,
+		Expr: &plan.Expr_Lit{Lit: rule.GetConstantValue(vec, false, 0)},
 	}
 	return runtimeBound, nil
+}
+
+func validateRangeFrameBound(ctx context.Context, vec *vector.Vector) error {
+	valid := true
+	switch vec.GetType().Oid {
+	case types.T_bit, types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64:
+	case types.T_int8:
+		valid = vector.MustFixedColWithTypeCheck[int8](vec)[0] >= 0
+	case types.T_int16:
+		valid = vector.MustFixedColWithTypeCheck[int16](vec)[0] >= 0
+	case types.T_int32:
+		valid = vector.MustFixedColWithTypeCheck[int32](vec)[0] >= 0
+	case types.T_int64:
+		valid = vector.MustFixedColWithTypeCheck[int64](vec)[0] >= 0
+	case types.T_float32:
+		value := vector.MustFixedColWithTypeCheck[float32](vec)[0]
+		valid = value >= 0 && !math.IsInf(float64(value), 0) && !math.IsNaN(float64(value))
+	case types.T_float64:
+		value := vector.MustFixedColWithTypeCheck[float64](vec)[0]
+		valid = value >= 0 && !math.IsInf(value, 0) && !math.IsNaN(value)
+	case types.T_decimal64:
+		valid = !vector.MustFixedColWithTypeCheck[types.Decimal64](vec)[0].Sign()
+	case types.T_decimal128:
+		valid = !vector.MustFixedColWithTypeCheck[types.Decimal128](vec)[0].Sign()
+	default:
+		return moerr.NewInvalidInputf(
+			ctx,
+			"window RANGE frame bound must be numeric, got %s",
+			vec.GetType().String(),
+		)
+	}
+	if !valid {
+		return moerr.NewInvalidInput(ctx, "window RANGE frame bound must be a finite non-negative numeric value")
+	}
+	return nil
 }
 
 func (ctr *container) frameAt(idx int, planned *plan.FrameClause) *plan.FrameClause {
@@ -474,7 +520,7 @@ func (ctr *container) processAggregateFuncRange(
 		aggexec.MergePreservesSource(ctr.batAggs[idx]) {
 		return ctr.processCumulativeAggregateFuncRange(idx, ap, proc, outputStart, outputEnd)
 	}
-	if boundedSlidingRowsFrame(frame) &&
+	if (boundedSlidingRowsFrame(frame) || boundedSlidingRangeFrame(frame, ctr.orderVecs)) &&
 		aggexec.MergePreservesSource(ctr.batAggs[idx]) &&
 		aggexec.SupportsWindowSliding(ctr.batAggs[idx]) {
 		return ctr.processSlidingAggregateFuncRange(idx, ap, proc, outputStart, outputEnd, frame)
@@ -592,6 +638,53 @@ func boundedSlidingRowsFrame(frame *plan.FrameClause) bool {
 	return ok
 }
 
+// boundedSlidingRangeFrame recognizes a contiguous, finite RANGE frame whose
+// boundaries move monotonically and which always contains the current peer
+// group. Floating-point order keys stay on the ordinary evaluator because NaN
+// ordering is not suitable for inverse aggregation. TIMESTAMP stays there too:
+// session-civil frames can be disjoint across a daylight-saving-time fold.
+func boundedSlidingRangeFrame(frame *plan.FrameClause, orderVecs []colexec.ExprEvalVector) bool {
+	if frame == nil || frame.Type != plan.FrameClause_RANGE ||
+		frame.Start == nil || frame.End == nil ||
+		len(orderVecs) != 1 || len(orderVecs[0].Vec) != 1 || orderVecs[0].Vec[0] == nil ||
+		!finiteRangeStart(frame.Start) || !finiteRangeEnd(frame.End) {
+		return false
+	}
+
+	switch orderVecs[0].Vec[0].GetType().Oid {
+	case types.T_bit,
+		types.T_int8, types.T_int16, types.T_int32, types.T_int64,
+		types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64,
+		types.T_decimal64, types.T_decimal128,
+		types.T_date, types.T_datetime, types.T_time:
+		return true
+	default:
+		return false
+	}
+}
+
+func finiteRangeStart(bound *plan.FrameBound) bool {
+	switch bound.Type {
+	case plan.FrameBound_CURRENT_ROW:
+		return !bound.UnBounded
+	case plan.FrameBound_PRECEDING:
+		return !bound.UnBounded && bound.Val != nil
+	default:
+		return false
+	}
+}
+
+func finiteRangeEnd(bound *plan.FrameBound) bool {
+	switch bound.Type {
+	case plan.FrameBound_CURRENT_ROW:
+		return !bound.UnBounded
+	case plan.FrameBound_FOLLOWING:
+		return !bound.UnBounded && bound.Val != nil
+	default:
+		return false
+	}
+}
+
 func largestPartitionSize(partitions []int64, rowCount int) (int, bool) {
 	if rowCount < 0 {
 		return 0, false
@@ -624,10 +717,25 @@ func partitionEnd(partitions []int64, partition int, rowCount int) int {
 	return int(partitions[partition+1])
 }
 
-// processCumulativeAggregateFuncRange advances one aggregate state per input
-// row and snapshots it into the corresponding output group. This changes
-// fixed-size cumulative aggregates such as SUM from O(partitionRows^2) Fill
-// calls to O(partitionRows), while retaining state across output chunks.
+// cumulativePartitionUsesRunning compares the prefix Fill calls saved by a
+// running aggregate with the AggBatchSize physical state chunk initialized for
+// that partition. Small partitions stay on the direct evaluator; large
+// partitions use one running state. Evaluating this per partition avoids both
+// allocation churn on high-cardinality inputs and quadratic work in mixed
+// inputs that contain a few large partitions.
+func cumulativePartitionUsesRunning(start, end int) bool {
+	rows := end - start
+	if rows <= 1 {
+		return false
+	}
+	savedFills := uint64(rows) * uint64(rows-1) / 2
+	return savedFills > uint64(aggexec.AggBatchSize)
+}
+
+// processCumulativeAggregateFuncRange evaluates small partitions directly and
+// advances one retained aggregate state for each large partition. The running
+// state changes large cumulative aggregates from O(partitionRows^2) Fill calls
+// to O(partitionRows), while remaining valid across output chunks.
 func (ctr *container) processCumulativeAggregateFuncRange(
 	idx int,
 	ap *Window,
@@ -645,33 +753,49 @@ func (ctr *container) processCumulativeAggregateFuncRange(
 		}
 	}()
 
-	if ctr.runningAgg == nil {
-		ctr.runningAgg, retErr = ctr.newAggregateExecutor(idx, ap, proc, 1)
-		if retErr != nil {
-			return nil, retErr
-		}
-	}
-
 	n := ctr.bat.RowCount()
+	currentPartitionStart := 0
+	if len(ctr.ps) > 0 {
+		currentPartitionStart = int(ctr.ps[ctr.runningPartition])
+	}
 	currentPartitionEnd := partitionEnd(ctr.ps, ctr.runningPartition, n)
 	for j := outputStart; j < outputEnd; j++ {
 		if err := checkCanceled(proc, j-outputStart); err != nil {
 			return nil, err
 		}
 		if j == currentPartitionEnd {
-			ctr.runningAgg.Free()
-			ctr.runningAgg, retErr = ctr.newAggregateExecutor(idx, ap, proc, 1)
-			if retErr != nil {
-				return nil, retErr
+			if ctr.runningAgg != nil {
+				ctr.runningAgg.Free()
+				ctr.runningAgg = nil
 			}
 			ctr.runningPartition++
+			currentPartitionStart = j
 			currentPartitionEnd = partitionEnd(ctr.ps, ctr.runningPartition, n)
 		}
-		if err := ctr.runningAgg.Fill(0, j, ctr.aggVecs[idx].Vec); err != nil {
-			return nil, err
-		}
-		if err := ctr.batAggs[idx].Merge(ctr.runningAgg, j-outputStart, 0); err != nil {
-			return nil, err
+
+		group := j - outputStart
+		if cumulativePartitionUsesRunning(currentPartitionStart, currentPartitionEnd) {
+			if ctr.runningAgg == nil {
+				ctr.runningAgg, retErr = ctr.newAggregateExecutor(idx, ap, proc, 1)
+				if retErr != nil {
+					return nil, retErr
+				}
+			}
+			if err := ctr.runningAgg.Fill(0, j, ctr.aggVecs[idx].Vec); err != nil {
+				return nil, err
+			}
+			if err := ctr.batAggs[idx].Merge(ctr.runningAgg, group, 0); err != nil {
+				return nil, err
+			}
+		} else {
+			for k := currentPartitionStart; k <= j; k++ {
+				if err := checkCanceled(proc, k-currentPartitionStart); err != nil {
+					return nil, err
+				}
+				if err := ctr.batAggs[idx].Fill(group, k, ctr.aggVecs[idx].Vec); err != nil {
+					return nil, err
+				}
+			}
 		}
 		ctr.runningNextRow = j + 1
 	}
@@ -691,9 +815,11 @@ func (ctr *container) processCumulativeAggregateFuncRange(
 	return vec, nil
 }
 
-// processSlidingAggregateFuncRange retains one aggregate for a finite
-// PRECEDING/CURRENT ROW frame. Each row adds the new right edge and removes the
-// expired left edge, reducing bounded SUM evaluation from O(N*W) to O(N).
+// processSlidingAggregateFuncRange retains one aggregate for a bounded ROWS or
+// RANGE frame. Each boundary change adds the new right edge and removes the
+// expired left edge, reducing bounded SUM/AVG evaluation from O(N*W) to O(N).
+// RANGE peers share boundaries, so their binary searches and state changes are
+// performed once per peer group rather than once per output row.
 func (ctr *container) processSlidingAggregateFuncRange(
 	idx int,
 	ap *Window,
@@ -728,6 +854,7 @@ func (ctr *container) processSlidingAggregateFuncRange(
 		partitionStart = int(ctr.ps[ctr.runningPartition])
 	}
 	currentPartitionEnd := partitionEnd(ctr.ps, ctr.runningPartition, n)
+	edgeWork := 0
 	for j := outputStart; j < outputEnd; j++ {
 		if err := checkCanceled(proc, j-outputStart); err != nil {
 			return nil, err
@@ -743,31 +870,48 @@ func (ctr *container) processSlidingAggregateFuncRange(
 			currentPartitionEnd = partitionEnd(ctr.ps, ctr.runningPartition, n)
 			ctr.runningLeft = partitionStart
 			ctr.runningRight = partitionStart
+			ctr.runningPeerEnd = partitionStart
 		}
 
-		left, right, err := ctr.buildInterval(proc, j, partitionStart, currentPartitionEnd, frame)
-		if err != nil {
-			return nil, err
-		}
-		left = max(left, partitionStart)
-		right = min(right, currentPartitionEnd)
-		if left < ctr.runningLeft || right < ctr.runningRight || left >= right {
-			return nil, moerr.NewInternalErrorNoCtx("invalid sliding window interval")
-		}
+		if frame.Type != plan.FrameClause_RANGE || j >= ctr.runningPeerEnd {
+			left, right, err := ctr.buildInterval(proc, j, partitionStart, currentPartitionEnd, frame)
+			if err != nil {
+				return nil, err
+			}
+			left = max(left, partitionStart)
+			right = min(right, currentPartitionEnd)
+			if left < ctr.runningLeft || right < ctr.runningRight || left >= right {
+				return nil, moerr.NewInternalErrorNoCtx("invalid sliding window interval")
+			}
 
-		for row := ctr.runningLeft; row < left; row++ {
-			if err = aggexec.RemoveWindowRow(ctr.runningAgg, row, ctr.aggVecs[idx].Vec); err != nil {
-				return nil, err
+			for row := ctr.runningLeft; row < left; row++ {
+				if err = checkCanceled(proc, edgeWork); err != nil {
+					return nil, err
+				}
+				edgeWork++
+				if err = aggexec.RemoveWindowRow(ctr.runningAgg, row, ctr.aggVecs[idx].Vec); err != nil {
+					return nil, err
+				}
+			}
+			for row := ctr.runningRight; row < right; row++ {
+				if err = checkCanceled(proc, edgeWork); err != nil {
+					return nil, err
+				}
+				edgeWork++
+				if err = aggexec.AddWindowRow(ctr.runningAgg, row, ctr.aggVecs[idx].Vec); err != nil {
+					return nil, err
+				}
+			}
+			ctr.runningLeft = left
+			ctr.runningRight = right
+			if frame.Type == plan.FrameClause_RANGE {
+				_, ctr.runningPeerEnd = buildPeerInterval(ctr.os, j, partitionStart, currentPartitionEnd)
+				if ctr.runningPeerEnd <= j {
+					return nil, moerr.NewInternalErrorNoCtx("invalid sliding window peer interval")
+				}
 			}
 		}
-		for row := ctr.runningRight; row < right; row++ {
-			if err = aggexec.AddWindowRow(ctr.runningAgg, row, ctr.aggVecs[idx].Vec); err != nil {
-				return nil, err
-			}
-		}
-		ctr.runningLeft = left
-		ctr.runningRight = right
-		if err = ctr.batAggs[idx].Merge(ctr.runningAgg, j-outputStart, 0); err != nil {
+		if err := ctr.batAggs[idx].Merge(ctr.runningAgg, j-outputStart, 0); err != nil {
 			return nil, err
 		}
 		ctr.runningNextRow = j + 1
@@ -2244,14 +2388,11 @@ func searchLeftWithLocation(loc *time.Location, start, end, rowIdx int, vec *vec
 			left = genericSearchLeft(start, end-1, col, col[rowIdx], genericEqual[uint8], cmpl)
 		} else {
 			c := uint8(expr.Expr.(*plan.Expr_Lit).Lit.Value.(*plan.Literal_U8Val).U8Val)
-			if plus {
-				left = genericSearchLeft(start, end-1, col, col[rowIdx]+c, genericEqual[uint8], cmpl)
-			} else {
-				if col[rowIdx] <= c {
-					return start, nil
-				}
-				left = genericSearchLeft(start, end-1, col, col[rowIdx]-c, genericEqual[uint8], cmpl)
+			bound, aboveDomain, ok := unsignedRangeBound(col[rowIdx], c, !plus)
+			if !ok {
+				return outOfDomainRangeBoundary(start, end, aboveDomain, desc), nil
 			}
+			left = genericSearchLeft(start, end-1, col, bound, genericEqual[uint8], cmpl)
 		}
 	case types.T_uint16:
 		col := vector.MustFixedColNoTypeCheck[uint16](vec)
@@ -2263,14 +2404,11 @@ func searchLeftWithLocation(loc *time.Location, start, end, rowIdx int, vec *vec
 			left = genericSearchLeft(start, end-1, col, col[rowIdx], genericEqual[uint16], cmpl)
 		} else {
 			c := uint16(expr.Expr.(*plan.Expr_Lit).Lit.Value.(*plan.Literal_U16Val).U16Val)
-			if plus {
-				left = genericSearchLeft(start, end-1, col, col[rowIdx]+c, genericEqual[uint16], cmpl)
-			} else {
-				if col[rowIdx] <= c {
-					return start, nil
-				}
-				left = genericSearchLeft(start, end-1, col, col[rowIdx]-c, genericEqual[uint16], cmpl)
+			bound, aboveDomain, ok := unsignedRangeBound(col[rowIdx], c, !plus)
+			if !ok {
+				return outOfDomainRangeBoundary(start, end, aboveDomain, desc), nil
 			}
+			left = genericSearchLeft(start, end-1, col, bound, genericEqual[uint16], cmpl)
 		}
 	case types.T_uint32:
 		col := vector.MustFixedColNoTypeCheck[uint32](vec)
@@ -2282,14 +2420,11 @@ func searchLeftWithLocation(loc *time.Location, start, end, rowIdx int, vec *vec
 			left = genericSearchLeft(start, end-1, col, col[rowIdx], genericEqual[uint32], cmpl)
 		} else {
 			c := expr.Expr.(*plan.Expr_Lit).Lit.Value.(*plan.Literal_U32Val).U32Val
-			if plus {
-				left = genericSearchLeft(start, end-1, col, col[rowIdx]+c, genericEqual[uint32], cmpl)
-			} else {
-				if col[rowIdx] <= c {
-					return start, nil
-				}
-				left = genericSearchLeft(start, end-1, col, col[rowIdx]-c, genericEqual[uint32], cmpl)
+			bound, aboveDomain, ok := unsignedRangeBound(col[rowIdx], c, !plus)
+			if !ok {
+				return outOfDomainRangeBoundary(start, end, aboveDomain, desc), nil
 			}
+			left = genericSearchLeft(start, end-1, col, bound, genericEqual[uint32], cmpl)
 		}
 	case types.T_uint64:
 		col := vector.MustFixedColNoTypeCheck[uint64](vec)
@@ -2771,14 +2906,11 @@ func searchRightWithLocation(loc *time.Location, start, end, rowIdx int, vec *ve
 			right = genericSearchEqualRight(rowIdx, end-1, col, col[rowIdx], genericEqual[uint8])
 		} else {
 			c := uint8(expr.Expr.(*plan.Expr_Lit).Lit.Value.(*plan.Literal_U8Val).U8Val)
-			if sub {
-				if col[rowIdx] <= c {
-					return start, nil
-				}
-				right = genericSearchRight(start, end-1, col, col[rowIdx]-c, genericEqual[uint8], cmpl)
-			} else {
-				right = genericSearchRight(start, end-1, col, col[rowIdx]+c, genericEqual[uint8], cmpl)
+			bound, aboveDomain, ok := unsignedRangeBound(col[rowIdx], c, sub)
+			if !ok {
+				return outOfDomainRangeBoundary(start, end, aboveDomain, desc), nil
 			}
+			right = genericSearchRight(start, end-1, col, bound, genericEqual[uint8], cmpl)
 		}
 	case types.T_uint16:
 		col := vector.MustFixedColNoTypeCheck[uint16](vec)
@@ -2790,14 +2922,11 @@ func searchRightWithLocation(loc *time.Location, start, end, rowIdx int, vec *ve
 			right = genericSearchEqualRight(rowIdx, end-1, col, col[rowIdx], genericEqual[uint16])
 		} else {
 			c := uint16(expr.Expr.(*plan.Expr_Lit).Lit.Value.(*plan.Literal_U16Val).U16Val)
-			if sub {
-				if col[rowIdx] <= c {
-					return start, nil
-				}
-				right = genericSearchRight(start, end-1, col, col[rowIdx]-c, genericEqual[uint16], cmpl)
-			} else {
-				right = genericSearchRight(start, end-1, col, col[rowIdx]+c, genericEqual[uint16], cmpl)
+			bound, aboveDomain, ok := unsignedRangeBound(col[rowIdx], c, sub)
+			if !ok {
+				return outOfDomainRangeBoundary(start, end, aboveDomain, desc), nil
 			}
+			right = genericSearchRight(start, end-1, col, bound, genericEqual[uint16], cmpl)
 		}
 	case types.T_uint32:
 		col := vector.MustFixedColNoTypeCheck[uint32](vec)
@@ -2809,14 +2938,11 @@ func searchRightWithLocation(loc *time.Location, start, end, rowIdx int, vec *ve
 			right = genericSearchEqualRight(rowIdx, end-1, col, col[rowIdx], genericEqual[uint32])
 		} else {
 			c := expr.Expr.(*plan.Expr_Lit).Lit.Value.(*plan.Literal_U32Val).U32Val
-			if sub {
-				if col[rowIdx] <= c {
-					return start, nil
-				}
-				right = genericSearchRight(start, end-1, col, col[rowIdx]-c, genericEqual[uint32], cmpl)
-			} else {
-				right = genericSearchRight(start, end-1, col, col[rowIdx]+c, genericEqual[uint32], cmpl)
+			bound, aboveDomain, ok := unsignedRangeBound(col[rowIdx], c, sub)
+			if !ok {
+				return outOfDomainRangeBoundary(start, end, aboveDomain, desc), nil
 			}
+			right = genericSearchRight(start, end-1, col, bound, genericEqual[uint32], cmpl)
 		}
 	case types.T_uint64:
 		col := vector.MustFixedColNoTypeCheck[uint64](vec)
@@ -3055,20 +3181,28 @@ func searchRightWithLocation(loc *time.Location, start, end, rowIdx int, vec *ve
 	return right + 1, nil
 }
 
-// uint64RangeBound computes a finite RANGE search key without allowing
+type unsignedRangeInteger interface {
+	~uint8 | ~uint16 | ~uint32 | ~uint64
+}
+
+// unsignedRangeBound computes a finite RANGE search key without allowing
 // unsigned arithmetic to wrap into the opposite end of the type domain.
 // aboveDomain distinguishes addition overflow from subtraction underflow.
-func uint64RangeBound(value, offset uint64, subtract bool) (bound uint64, aboveDomain bool, ok bool) {
+func unsignedRangeBound[T unsignedRangeInteger](value, offset T, subtract bool) (bound T, aboveDomain bool, ok bool) {
 	if subtract {
 		if value < offset {
 			return 0, false, false
 		}
 		return value - offset, false, true
 	}
-	if value > math.MaxUint64-offset {
+	if value > ^T(0)-offset {
 		return 0, true, false
 	}
 	return value + offset, false, true
+}
+
+func uint64RangeBound(value, offset uint64, subtract bool) (bound uint64, aboveDomain bool, ok bool) {
+	return unsignedRangeBound(value, offset, subtract)
 }
 
 type signedRangeInteger interface {

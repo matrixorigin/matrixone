@@ -250,6 +250,43 @@ func TestBoundedSlidingWindowCancellationReleasesState(t *testing.T) {
 	require.Zero(t, proc.Mp().CurrNB())
 }
 
+func TestBoundedSlidingRangeWindowCancellationReleasesState(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	const rows = 128
+	values := make([]int32, rows)
+	for i := range values {
+		values[i] = 1
+	}
+	bat := makeInt32Batch(proc.Mp(), values)
+	spec := makeWindowSpec()
+	spec.GetW().Frame = makeBoundedRangeFrame(2, 2)
+	arg := &Window{
+		WinSpecList: []*plan.Expr{spec},
+		Aggs: []aggexec.AggFuncExecExpression{
+			newTypedAvgAggExpr(t, 0, types.T_int32.ToType()),
+		},
+	}
+	arg.ctr.bat = bat
+	arg.ctr.os = []int64{0}
+	arg.ctr.orderVecs = []colexec.ExprEvalVector{{Vec: []*vector.Vector{bat.Vecs[0]}}}
+	arg.ctr.aggVecs = []colexec.ExprEvalVector{{Vec: []*vector.Vector{bat.Vecs[0]}}}
+
+	// One peer fills the complete frame while evaluating its first row. Cancel
+	// on the first inner-loop poll to prove a large peer remains interruptible.
+	proc.Ctx = newCancelAfterDoneChecksContext(proc.Ctx, 2)
+	result, err := arg.ctr.processAggregateFuncRange(0, arg, proc, 0, rows)
+	if result != nil {
+		result.Free(proc.Mp())
+	}
+	require.ErrorIs(t, err, context.Canceled)
+	require.Nil(t, arg.ctr.batAggs)
+	require.Nil(t, arg.ctr.runningAgg)
+
+	bat.Clean(proc.Mp())
+	proc.Free()
+	require.Zero(t, proc.Mp().CurrNB())
+}
+
 func TestWindowCallHonorsPreCancellation(t *testing.T) {
 	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
 	ctx, cancel := context.WithCancel(proc.Ctx)
@@ -318,19 +355,56 @@ func makeFiniteCumulativeFrame(preceding uint64) *plan.FrameClause {
 	}
 }
 
+func makeBoundedRangeFrame(preceding, following int32) *plan.FrameClause {
+	return &plan.FrameClause{
+		Type: plan.FrameClause_RANGE,
+		Start: &plan.FrameBound{
+			Type: plan.FrameBound_PRECEDING,
+			Val: &plan.Expr{Expr: &plan.Expr_Lit{Lit: &plan.Literal{
+				Value: &plan.Literal_I32Val{I32Val: preceding},
+			}}},
+		},
+		End: &plan.FrameBound{
+			Type: plan.FrameBound_FOLLOWING,
+			Val: &plan.Expr{Expr: &plan.Expr_Lit{Lit: &plan.Literal{
+				Value: &plan.Literal_I32Val{I32Val: following},
+			}}},
+		},
+	}
+}
+
 func makePreparedRowsBoundExpr(t *testing.T, pos int32) *plan.Expr {
+	return makePreparedWindowBoundExpr(t, pos, types.T_uint64.ToType())
+}
+
+func makePreparedWindowBoundExpr(t *testing.T, pos int32, target types.Type) *plan.Expr {
 	t.Helper()
 	param := &plan.Expr{
 		Typ:  plan.Type{Id: int32(types.T_text)},
 		Expr: &plan.Expr_P{P: &plan.ParamRef{Pos: pos}},
 	}
-	targetType := plan.Type{Id: int32(types.T_uint64), NotNullable: true}
+	targetType := plan.Type{Id: int32(target.Oid), Width: target.Width, Scale: target.Scale, NotNullable: true}
 	expr, err := plan2.BindFuncExprImplByPlanExpr(context.Background(), "cast", []*plan.Expr{
 		param,
 		{Typ: targetType, Expr: &plan.Expr_T{T: &plan.TargetType{}}},
 	})
 	require.NoError(t, err)
 	return expr
+}
+
+func makePreparedRangeFrame(t *testing.T, startPos, endPos int32, target types.Type) *plan.FrameClause {
+	t.Helper()
+	return &plan.FrameClause{
+		Type: plan.FrameClause_RANGE,
+		Start: &plan.FrameBound{
+			Type: plan.FrameBound_PRECEDING,
+			Val:  makePreparedWindowBoundExpr(t, startPos, target),
+		},
+		End: &plan.FrameBound{
+			Type: plan.FrameBound_FOLLOWING,
+			Val:  makePreparedWindowBoundExpr(t, endPos, target),
+		},
+	}
 }
 
 func makePreparedRowsFrame(t *testing.T, startPos, endPos int32) *plan.FrameClause {
@@ -418,6 +492,40 @@ func TestWindowPrepareMaterializesRowsFrameBounds(t *testing.T) {
 	require.Zero(t, proc.Mp().CurrNB())
 }
 
+func TestWindowPrepareMaterializesRangeFrameBounds(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	planned := makePreparedRangeFrame(t, 0, 1, types.T_int32.ToType())
+	arg := makeWindowWithFrame(planned)
+	firstParams := setWindowPrepareParams(t, proc, stringPtr("1"), stringPtr("2"))
+
+	require.NoError(t, arg.Prepare(proc))
+	require.Len(t, arg.ctr.runtimeFrames, 1)
+	require.NotSame(t, planned, arg.ctr.runtimeFrames[0])
+	require.Equal(t, int32(1), arg.ctr.runtimeFrames[0].Start.Val.GetLit().GetI32Val())
+	require.Equal(t, int32(2), arg.ctr.runtimeFrames[0].End.Val.GetLit().GetI32Val())
+	requirePreparedRowsBoundUnchanged(t, planned.Start.Val, 0)
+	requirePreparedRowsBoundUnchanged(t, planned.End.Val, 1)
+
+	arg.Reset(proc, false, nil)
+	require.Nil(t, arg.ctr.runtimeFrames)
+
+	proc.SetPrepareParams(nil)
+	firstParams.Free(proc.Mp())
+	secondParams := setWindowPrepareParams(t, proc, stringPtr("3"), stringPtr("4"))
+	require.NoError(t, arg.Prepare(proc))
+	require.Equal(t, int32(3), arg.ctr.runtimeFrames[0].Start.Val.GetLit().GetI32Val())
+	require.Equal(t, int32(4), arg.ctr.runtimeFrames[0].End.Val.GetLit().GetI32Val())
+	requirePreparedRowsBoundUnchanged(t, planned.Start.Val, 0)
+	requirePreparedRowsBoundUnchanged(t, planned.End.Val, 1)
+
+	arg.Free(proc, false, nil)
+	require.Nil(t, arg.ctr.runtimeFrames)
+	proc.SetPrepareParams(nil)
+	secondParams.Free(proc.Mp())
+	proc.Free()
+	require.Zero(t, proc.Mp().CurrNB())
+}
+
 func TestWindowPrepareValidatesRowsFrameBounds(t *testing.T) {
 	tests := []struct {
 		name       string
@@ -472,6 +580,136 @@ func TestWindowPrepareValidatesRowsFrameBounds(t *testing.T) {
 			}
 			proc.Free()
 			require.Zero(t, proc.Mp().CurrNB())
+		})
+	}
+}
+
+func TestWindowPrepareValidatesRangeFrameBounds(t *testing.T) {
+	tests := []struct {
+		name       string
+		value      *string
+		missing    bool
+		emptyParam bool
+		want       int32
+		wantErr    bool
+	}{
+		{name: "zero", value: stringPtr("0"), want: 0},
+		{name: "maximum", value: stringPtr("2147483647"), want: math.MaxInt32},
+		{name: "negative", value: stringPtr("-1"), wantErr: true},
+		{name: "fractional", value: stringPtr("1.5"), wantErr: true},
+		{name: "null", value: nil, wantErr: true},
+		{name: "overflow", value: stringPtr("2147483648"), wantErr: true},
+		{name: "conversion failure", value: stringPtr("not-a-number"), wantErr: true},
+		{name: "missing vector", missing: true, wantErr: true},
+		{name: "missing element", emptyParam: true, wantErr: true},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+			planned := makePreparedRangeFrame(t, 0, 0, types.T_int32.ToType())
+			arg := makeWindowWithFrame(planned)
+			var params *vector.Vector
+			switch {
+			case test.missing:
+				proc.SetPrepareParams(nil)
+			case test.emptyParam:
+				params = setWindowPrepareParams(t, proc)
+			default:
+				params = setWindowPrepareParams(t, proc, test.value)
+			}
+
+			err := arg.Prepare(proc)
+			if test.wantErr {
+				require.Error(t, err)
+				require.Nil(t, arg.ctr.runtimeFrames)
+			} else {
+				require.NoError(t, err)
+				require.Equal(t, test.want, arg.ctr.runtimeFrames[0].Start.Val.GetLit().GetI32Val())
+				require.Equal(t, test.want, arg.ctr.runtimeFrames[0].End.Val.GetLit().GetI32Val())
+			}
+			requirePreparedRowsBoundUnchanged(t, planned.Start.Val, 0)
+			requirePreparedRowsBoundUnchanged(t, planned.End.Val, 0)
+
+			arg.Free(proc, false, nil)
+			proc.SetPrepareParams(nil)
+			if params != nil {
+				params.Free(proc.Mp())
+			}
+			proc.Free()
+			require.Zero(t, proc.Mp().CurrNB())
+		})
+	}
+}
+
+func TestValidateRangeFrameBound(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer func() {
+		require.Zero(t, mp.CurrNB())
+	}()
+
+	newVec := func(typ types.Type, value any) *vector.Vector {
+		var vec *vector.Vector
+		var err error
+		switch value := value.(type) {
+		case uint8:
+			vec, err = vector.NewConstFixed(typ, value, 1, mp)
+		case int8:
+			vec, err = vector.NewConstFixed(typ, value, 1, mp)
+		case int16:
+			vec, err = vector.NewConstFixed(typ, value, 1, mp)
+		case int32:
+			vec, err = vector.NewConstFixed(typ, value, 1, mp)
+		case int64:
+			vec, err = vector.NewConstFixed(typ, value, 1, mp)
+		case float32:
+			vec, err = vector.NewConstFixed(typ, value, 1, mp)
+		case float64:
+			vec, err = vector.NewConstFixed(typ, value, 1, mp)
+		case types.Decimal64:
+			vec, err = vector.NewConstFixed(typ, value, 1, mp)
+		case types.Decimal128:
+			vec, err = vector.NewConstFixed(typ, value, 1, mp)
+		case bool:
+			vec, err = vector.NewConstFixed(typ, value, 1, mp)
+		default:
+			t.Fatalf("unsupported test value type %T", value)
+		}
+		require.NoError(t, err)
+		return vec
+	}
+
+	tests := []struct {
+		name    string
+		typ     types.Type
+		value   any
+		wantErr bool
+	}{
+		{name: "unsigned", typ: types.T_uint8.ToType(), value: uint8(1)},
+		{name: "int8", typ: types.T_int8.ToType(), value: int8(1)},
+		{name: "int16", typ: types.T_int16.ToType(), value: int16(1)},
+		{name: "int32", typ: types.T_int32.ToType(), value: int32(-1), wantErr: true},
+		{name: "int64", typ: types.T_int64.ToType(), value: int64(1)},
+		{name: "float32", typ: types.T_float32.ToType(), value: float32(1.5)},
+		{name: "float32 infinity", typ: types.T_float32.ToType(), value: float32(math.Inf(1)), wantErr: true},
+		{name: "float64", typ: types.T_float64.ToType(), value: float64(1.5)},
+		{name: "float64 nan", typ: types.T_float64.ToType(), value: math.NaN(), wantErr: true},
+		{name: "decimal64", typ: types.T_decimal64.ToType(), value: types.Decimal64(1)},
+		{name: "decimal64 negative", typ: types.T_decimal64.ToType(), value: types.Decimal64Min, wantErr: true},
+		{name: "decimal128", typ: types.T_decimal128.ToType(), value: types.Decimal128FromInt64(1)},
+		{name: "decimal128 negative", typ: types.T_decimal128.ToType(), value: types.Decimal128FromInt64(-1), wantErr: true},
+		{name: "non-numeric", typ: types.T_bool.ToType(), value: true, wantErr: true},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			vec := newVec(test.typ, test.value)
+			defer vec.Free(mp)
+			if test.wantErr {
+				require.Error(t, validateRangeFrameBound(context.Background(), vec))
+			} else {
+				require.NoError(t, validateRangeFrameBound(context.Background(), vec))
+			}
 		})
 	}
 }
@@ -533,6 +771,35 @@ func TestWindowPrepareHandlesNilAndLiteralFrameBounds(t *testing.T) {
 	require.Zero(t, proc.Mp().CurrNB())
 }
 
+func TestWindowPreparePreservesRangeIntervalBounds(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	interval := &plan.Expr{
+		Typ: plan.Type{Id: int32(types.T_interval)},
+		Expr: &plan.Expr_List{List: &plan.ExprList{List: []*plan.Expr{
+			plan2.MakePlan2Int64ConstExprWithType(1),
+			plan2.MakePlan2Int64ConstExprWithType(int64(types.Day)),
+		}}},
+	}
+	planned := &plan.FrameClause{
+		Type: plan.FrameClause_RANGE,
+		Start: &plan.FrameBound{
+			Type: plan.FrameBound_PRECEDING,
+			Val:  interval,
+		},
+		End: &plan.FrameBound{Type: plan.FrameBound_CURRENT_ROW},
+	}
+	arg := makeWindowWithFrame(planned)
+
+	require.NoError(t, arg.Prepare(proc))
+	require.Len(t, arg.ctr.runtimeFrames, 1)
+	require.NotSame(t, planned, arg.ctr.runtimeFrames[0])
+	require.Same(t, interval, arg.ctr.runtimeFrames[0].Start.Val)
+
+	arg.Free(proc, false, nil)
+	proc.Free()
+	require.Zero(t, proc.Mp().CurrNB())
+}
+
 func TestWindowPrepareFrameBoundsStayUnpublishedAfterLaterError(t *testing.T) {
 	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
 	planned := makePreparedRowsFrame(t, 0, 0)
@@ -567,6 +834,48 @@ func TestWindowPrepareFrameBoundsFeedAggregateConsumer(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, []int64{30, 60, 90, 70},
 		vector.MustFixedColWithTypeCheck[int64](result.Batch.Vecs[1]))
+	requirePreparedRowsBoundUnchanged(t, planned.Start.Val, 0)
+	requirePreparedRowsBoundUnchanged(t, planned.End.Val, 1)
+
+	arg.Free(proc, false, nil)
+	op.Free(proc, false, nil)
+	proc.SetPrepareParams(nil)
+	params.Free(proc.Mp())
+	proc.Free()
+	require.Zero(t, proc.Mp().CurrNB())
+}
+
+func TestWindowPrepareRangeFrameBoundsFeedAggregateConsumer(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	planned := makePreparedRangeFrame(t, 0, 1, types.T_int32.ToType())
+	spec := &plan.Expr{
+		Expr: &plan.Expr_W{W: &plan.WindowSpec{
+			Name:       "sum",
+			WindowFunc: newFunExpr("sum"),
+			OrderBy: []*plan.OrderBySpec{{
+				Expr: newColExprWithType(1, types.T_int32.ToType()),
+				Flag: plan.OrderBySpec_ASC,
+			}},
+			Frame: planned,
+		}},
+	}
+	arg := &Window{
+		WinSpecList: []*plan.Expr{spec},
+		Aggs:        []aggexec.AggFuncExecExpression{newAggExprAt(0)},
+	}
+	bat := batch.NewWithSize(2)
+	bat.Vecs[0] = testutil.MakeInt32Vector([]int32{10, 20, 30}, nil, proc.Mp())
+	bat.Vecs[1] = testutil.MakeInt32Vector([]int32{1, 3, 4}, nil, proc.Mp())
+	bat.SetRowCount(3)
+	op := colexec.NewMockOperator().WithBatchs([]*batch.Batch{bat})
+	arg.AppendChild(op)
+	params := setWindowPrepareParams(t, proc, stringPtr("1"), stringPtr("1"))
+
+	require.NoError(t, arg.Prepare(proc))
+	result, err := vm.Exec(arg, proc)
+	require.NoError(t, err)
+	require.Equal(t, []int64{10, 50, 50},
+		vector.MustFixedColWithTypeCheck[int64](result.Batch.Vecs[2]))
 	requirePreparedRowsBoundUnchanged(t, planned.Start.Val, 0)
 	requirePreparedRowsBoundUnchanged(t, planned.End.Val, 1)
 
@@ -800,6 +1109,44 @@ func TestBoundedSlidingRowsFrameEligibility(t *testing.T) {
 	}
 }
 
+func TestBoundedSlidingRangeFrameEligibility(t *testing.T) {
+	intOrder := vector.NewVec(types.T_int32.ToType())
+	floatOrder := vector.NewVec(types.T_float64.ToType())
+	timestampOrder := vector.NewVec(types.T_timestamp.ToType())
+	validFrame := makeBoundedRangeFrame(2, 2)
+
+	tests := []struct {
+		name      string
+		frame     *plan.FrameClause
+		orderVecs []colexec.ExprEvalVector
+		want      bool
+	}{
+		{name: "bounded integer", frame: validFrame,
+			orderVecs: []colexec.ExprEvalVector{{Vec: []*vector.Vector{intOrder}}}, want: true},
+		{name: "float", frame: validFrame,
+			orderVecs: []colexec.ExprEvalVector{{Vec: []*vector.Vector{floatOrder}}}},
+		{name: "timestamp", frame: validFrame,
+			orderVecs: []colexec.ExprEvalVector{{Vec: []*vector.Vector{timestampOrder}}}},
+		{name: "multiple order keys", frame: validFrame, orderVecs: []colexec.ExprEvalVector{
+			{Vec: []*vector.Vector{intOrder}}, {Vec: []*vector.Vector{intOrder}},
+		}},
+		{name: "no materialized order vector", frame: validFrame},
+		{name: "unbounded start", frame: &plan.FrameClause{
+			Type:  plan.FrameClause_RANGE,
+			Start: &plan.FrameBound{Type: plan.FrameBound_PRECEDING, UnBounded: true},
+			End:   &plan.FrameBound{Type: plan.FrameBound_CURRENT_ROW},
+		}, orderVecs: []colexec.ExprEvalVector{{Vec: []*vector.Vector{intOrder}}}},
+		{name: "rows", frame: makeFiniteCumulativeFrame(2),
+			orderVecs: []colexec.ExprEvalVector{{Vec: []*vector.Vector{intOrder}}}},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			require.Equal(t, test.want, boundedSlidingRangeFrame(test.frame, test.orderVecs))
+		})
+	}
+}
+
 func makeWindowSpec() *plan.Expr {
 	return &plan.Expr{
 		Typ: plan.Type{},
@@ -857,6 +1204,20 @@ func newAggExprAt(pos int32) aggexec.AggFuncExecExpression {
 
 func newTypedSumAggExpr(t *testing.T, pos int32, typ types.Type) aggexec.AggFuncExecExpression {
 	e, err := function.GetFunctionByName(context.Background(), "sum", []types.Type{typ})
+	require.NoError(t, err)
+	return aggexec.MakeAggFunctionExpression(
+		e.GetEncodedOverloadID(), false, []*plan.Expr{newColExprWithType(pos, typ)}, nil)
+}
+
+func newTypedAvgAggExpr(t testing.TB, pos int32, typ types.Type) aggexec.AggFuncExecExpression {
+	e, err := function.GetFunctionByName(context.Background(), "avg", []types.Type{typ})
+	require.NoError(t, err)
+	return aggexec.MakeAggFunctionExpression(
+		e.GetEncodedOverloadID(), false, []*plan.Expr{newColExprWithType(pos, typ)}, nil)
+}
+
+func newTypedMaxAggExpr(t testing.TB, pos int32, typ types.Type) aggexec.AggFuncExecExpression {
+	e, err := function.GetFunctionByName(context.Background(), "max", []types.Type{typ})
 	require.NoError(t, err)
 	return aggexec.MakeAggFunctionExpression(
 		e.GetEncodedOverloadID(), false, []*plan.Expr{newColExprWithType(pos, typ)}, nil)
@@ -1617,6 +1978,70 @@ func TestCumulativeAggregateResetsAtPartitionBoundary(t *testing.T) {
 	require.Zero(t, proc.Mp().CurrNB())
 }
 
+func TestCumulativeMaxUsesRunningAggregateAcrossChunks(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	values := make([]int32, 512)
+	want := make([]int32, len(values))
+	for i := range values {
+		values[i] = int32(256 - i%256)
+		want[i] = 256
+	}
+	bat := makeInt32Batch(proc.Mp(), values)
+	spec := makeWindowSpec()
+	spec.GetW().Frame = makeCumulativeFrame()
+	arg := &Window{
+		WinSpecList: []*plan.Expr{spec},
+		Aggs:        []aggexec.AggFuncExecExpression{newTypedMaxAggExpr(t, 0, types.T_int32.ToType())},
+	}
+	ctr := &container{
+		bat:     bat,
+		ps:      []int64{0, 256},
+		aggVecs: []colexec.ExprEvalVector{{Vec: []*vector.Vector{bat.Vecs[0]}}},
+	}
+
+	first, err := ctr.processAggregateFuncRange(0, arg, proc, 0, 200)
+	require.NoError(t, err)
+	require.Equal(t, want[:200], vector.MustFixedColWithTypeCheck[int32](first))
+	require.NotNil(t, ctr.runningAgg, "cumulative MIN/MAX must retain one running state")
+	first.Free(proc.Mp())
+
+	second, err := ctr.processAggregateFuncRange(0, arg, proc, 200, 300)
+	require.NoError(t, err)
+	require.Equal(t, want[200:300], vector.MustFixedColWithTypeCheck[int32](second))
+	require.NotNil(t, ctr.runningAgg)
+	second.Free(proc.Mp())
+
+	third, err := ctr.processAggregateFuncRange(0, arg, proc, 300, len(values))
+	require.NoError(t, err)
+	require.Equal(t, want[300:], vector.MustFixedColWithTypeCheck[int32](third))
+	require.Nil(t, ctr.runningAgg)
+	third.Free(proc.Mp())
+
+	bat.Clean(proc.Mp())
+	proc.Free()
+	require.Zero(t, proc.Mp().CurrNB())
+}
+
+func TestCumulativePartitionUsesRunning(t *testing.T) {
+	for _, test := range []struct {
+		name       string
+		start, end int
+		want       bool
+	}{
+		{name: "empty", start: 4, end: 4},
+		{name: "singleton", start: 3, end: 4},
+		{name: "below state chunk cost", end: 128},
+		{name: "above state chunk cost", end: 129, want: true},
+		{name: "large", end: 256, want: true},
+		{name: "large nonzero start", start: 17, end: 273, want: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			require.Equal(t, test.want,
+				cumulativePartitionUsesRunning(test.start, test.end))
+		})
+	}
+}
+
 func TestBoundedSlidingSumAcrossOutputChunks(t *testing.T) {
 	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
 	rows := colexec.DefaultBatchSize*2 + 17
@@ -1810,6 +2235,171 @@ func TestBoundedSlidingSumSupportsDecimal64Arguments(t *testing.T) {
 	bat.Clean(proc.Mp())
 	proc.Free()
 	require.Zero(t, proc.Mp().CurrNB())
+}
+
+func TestBoundedSlidingRangeAvgAcrossPeersAndOutputChunks(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	values := []int32{1, 1, 2, 4, 4, 7}
+	bat := makeInt32Batch(proc.Mp(), values)
+	spec := makeWindowSpec()
+	spec.GetW().Frame = makeBoundedRangeFrame(2, 2)
+	arg := &Window{
+		WinSpecList: []*plan.Expr{spec},
+		Aggs: []aggexec.AggFuncExecExpression{
+			newTypedAvgAggExpr(t, 0, types.T_int32.ToType()),
+		},
+	}
+	ctr := &container{
+		bat:       bat,
+		os:        []int64{0, 2, 3, 5},
+		orderVecs: []colexec.ExprEvalVector{{Vec: []*vector.Vector{bat.Vecs[0]}}},
+		aggVecs:   []colexec.ExprEvalVector{{Vec: []*vector.Vector{bat.Vecs[0]}}},
+	}
+
+	var got []float64
+	for _, output := range [][2]int{{0, 1}, {1, 4}, {4, len(values)}} {
+		result, err := ctr.processAggregateFuncRange(0, arg, proc, output[0], output[1])
+		require.NoError(t, err)
+		got = append(got, vector.MustFixedColWithTypeCheck[float64](result)...)
+		result.Free(proc.Mp())
+		if output[1] < len(values) {
+			require.NotNil(t, ctr.runningAgg)
+		}
+	}
+
+	require.InDeltaSlice(t, []float64{4.0 / 3, 4.0 / 3, 2.4, 10.0 / 3, 10.0 / 3, 7}, got, 1e-12)
+	require.Nil(t, ctr.runningAgg)
+	require.Zero(t, ctr.runningPeerEnd)
+
+	bat.Clean(proc.Mp())
+	proc.Free()
+	require.Zero(t, proc.Mp().CurrNB())
+}
+
+func TestBoundedSlidingRangeAvgOrderShapes(t *testing.T) {
+	tests := []struct {
+		name       string
+		aggValues  []int32
+		orderValue []int32
+		orderNulls []uint64
+		partitions []int64
+		peers      []int64
+		desc       bool
+		want       []float64
+	}{
+		{
+			name:       "descending peers",
+			aggValues:  []int32{7, 4, 4, 2, 1, 1},
+			orderValue: []int32{7, 4, 4, 2, 1, 1},
+			peers:      []int64{0, 1, 3, 4},
+			desc:       true,
+			want:       []float64{7, 10.0 / 3, 10.0 / 3, 2.4, 4.0 / 3, 4.0 / 3},
+		},
+		{
+			name:       "partition reset",
+			aggValues:  []int32{1, 2, 2, 4, 1, 1, 3, 5},
+			orderValue: []int32{1, 2, 2, 4, 1, 1, 3, 5},
+			partitions: []int64{0, 4},
+			peers:      []int64{0, 1, 3, 4, 6, 7},
+			want:       []float64{5.0 / 3, 2.25, 2.25, 8.0 / 3, 5.0 / 3, 5.0 / 3, 2.5, 4},
+		},
+		{
+			name:       "null order peers",
+			aggValues:  []int32{10, 20, 1, 2},
+			orderValue: []int32{0, 0, 1, 2},
+			orderNulls: []uint64{0, 1},
+			peers:      []int64{0, 2, 3},
+			want:       []float64{15, 15, 1.5, 1.5},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+			bat := batch.NewWithSize(2)
+			bat.Vecs[0] = testutil.MakeInt32Vector(test.aggValues, nil, proc.Mp())
+			bat.Vecs[1] = testutil.MakeInt32Vector(test.orderValue, test.orderNulls, proc.Mp())
+			bat.SetRowCount(len(test.aggValues))
+			spec := makeWindowSpec()
+			spec.GetW().Frame = makeBoundedRangeFrame(2, 2)
+			arg := &Window{
+				WinSpecList: []*plan.Expr{spec},
+				Aggs: []aggexec.AggFuncExecExpression{
+					newTypedAvgAggExpr(t, 0, types.T_int32.ToType()),
+				},
+			}
+			ctr := &container{
+				bat:       bat,
+				ps:        test.partitions,
+				os:        test.peers,
+				desc:      []bool{test.desc},
+				orderVecs: []colexec.ExprEvalVector{{Vec: []*vector.Vector{bat.Vecs[1]}}},
+				aggVecs:   []colexec.ExprEvalVector{{Vec: []*vector.Vector{bat.Vecs[0]}}},
+			}
+
+			result, err := ctr.processAggregateFuncRange(0, arg, proc, 0, bat.RowCount())
+			require.NoError(t, err)
+			require.InDeltaSlice(t, test.want,
+				vector.MustFixedColWithTypeCheck[float64](result), 1e-12)
+			require.Nil(t, ctr.runningAgg)
+
+			result.Free(proc.Mp())
+			bat.Clean(proc.Mp())
+			proc.Free()
+			require.Zero(t, proc.Mp().CurrNB())
+		})
+	}
+}
+
+func TestBoundedSlidingRangeSumUint8MaximumBoundary(t *testing.T) {
+	frame := &plan.FrameClause{
+		Type: plan.FrameClause_RANGE,
+		Start: &plan.FrameBound{Type: plan.FrameBound_PRECEDING, Val: &plan.Expr{Expr: &plan.Expr_Lit{Lit: &plan.Literal{
+			Value: &plan.Literal_U8Val{U8Val: 2},
+		}}}},
+		End: &plan.FrameBound{Type: plan.FrameBound_FOLLOWING, Val: &plan.Expr{Expr: &plan.Expr_Lit{Lit: &plan.Literal{
+			Value: &plan.Literal_U8Val{U8Val: 2},
+		}}}},
+	}
+	for _, test := range []struct {
+		name   string
+		values []uint8
+		desc   bool
+		want   []uint64
+	}{
+		{name: "ascending", values: []uint8{252, 253, 254, 255}, want: []uint64{759, 1014, 1014, 762}},
+		{name: "descending", values: []uint8{255, 254, 253, 252}, desc: true, want: []uint64{762, 1014, 1014, 759}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+			bat := batch.NewWithSize(1)
+			bat.Vecs[0] = testutil.MakeUint8Vector(test.values, nil, proc.Mp())
+			bat.SetRowCount(len(test.values))
+			arg := &Window{
+				WinSpecList: []*plan.Expr{{Expr: &plan.Expr_W{W: &plan.WindowSpec{Frame: frame}}}},
+				Aggs: []aggexec.AggFuncExecExpression{
+					newTypedSumAggExpr(t, 0, types.T_uint8.ToType()),
+				},
+			}
+			ctr := &container{
+				bat:       bat,
+				os:        []int64{0, 1, 2, 3},
+				desc:      []bool{test.desc},
+				orderVecs: []colexec.ExprEvalVector{{Vec: []*vector.Vector{bat.Vecs[0]}}},
+				aggVecs:   []colexec.ExprEvalVector{{Vec: []*vector.Vector{bat.Vecs[0]}}},
+			}
+
+			result, err := ctr.processAggregateFuncRange(0, arg, proc, 0, bat.RowCount())
+			require.NoError(t, err)
+			require.Equal(t, test.want, vector.MustFixedColWithTypeCheck[uint64](result))
+			require.Nil(t, ctr.runningAgg)
+
+			result.Free(proc.Mp())
+			bat.Clean(proc.Mp())
+			proc.Free()
+			require.Zero(t, proc.Mp().CurrNB())
+		})
+	}
 }
 
 func TestCumulativeAggregatePreservesNullSemantics(t *testing.T) {
@@ -2719,6 +3309,23 @@ func uint64RangeOffset(value uint64) *plan.Expr {
 	}}}
 }
 
+func unsignedRangeOffset(oid types.T, value uint64) *plan.Expr {
+	lit := &plan.Literal{}
+	switch oid {
+	case types.T_uint8:
+		lit.Value = &plan.Literal_U8Val{U8Val: uint32(value)}
+	case types.T_uint16:
+		lit.Value = &plan.Literal_U16Val{U16Val: uint32(value)}
+	case types.T_uint32:
+		lit.Value = &plan.Literal_U32Val{U32Val: uint32(value)}
+	case types.T_uint64:
+		lit.Value = &plan.Literal_U64Val{U64Val: value}
+	default:
+		panic("unsupported unsigned RANGE type")
+	}
+	return &plan.Expr{Expr: &plan.Expr_Lit{Lit: lit}}
+}
+
 func TestUint64RangeBound(t *testing.T) {
 	for _, tc := range []struct {
 		name        string
@@ -2827,6 +3434,88 @@ func TestBuildRangeIntervalUint64Boundaries(t *testing.T) {
 		require.NoError(t, err)
 		require.Equal(t, 2, start)
 		require.Equal(t, 4, end)
+	})
+}
+
+func testBuildRangeIntervalUnsignedBoundaries[T unsignedRangeInteger](
+	t *testing.T,
+	mp *mpool.MPool,
+	oid types.T,
+	maxValue T,
+) {
+	t.Helper()
+	currentToFollowing := &plan.FrameClause{
+		Type:  plan.FrameClause_RANGE,
+		Start: &plan.FrameBound{Type: plan.FrameBound_CURRENT_ROW},
+		End: &plan.FrameBound{
+			Type: plan.FrameBound_FOLLOWING,
+			Val:  unsignedRangeOffset(oid, 1),
+		},
+	}
+	precedingToCurrent := &plan.FrameClause{
+		Type: plan.FrameClause_RANGE,
+		Start: &plan.FrameBound{
+			Type: plan.FrameBound_PRECEDING,
+			Val:  unsignedRangeOffset(oid, 1),
+		},
+		End: &plan.FrameBound{Type: plan.FrameBound_CURRENT_ROW},
+	}
+	zeroPreceding := &plan.FrameClause{
+		Type: plan.FrameClause_RANGE,
+		Start: &plan.FrameBound{
+			Type: plan.FrameBound_PRECEDING,
+			Val:  unsignedRangeOffset(oid, 0),
+		},
+		End: &plan.FrameBound{
+			Type: plan.FrameBound_PRECEDING,
+			Val:  unsignedRangeOffset(oid, 0),
+		},
+	}
+	check := func(t *testing.T, values []T, desc bool, row int, frame *plan.FrameClause, wantStart, wantEnd int) {
+		t.Helper()
+		vec := makeFixedVec(t, mp, oid, values)
+		defer vec.Free(mp)
+		ctr := &container{
+			orderVecs: []colexec.ExprEvalVector{{Vec: []*vector.Vector{vec}}},
+			desc:      []bool{desc},
+		}
+		start, end, err := ctr.buildRangeInterval(row, 0, len(values), frame)
+		require.NoError(t, err)
+		require.Equal(t, wantStart, start)
+		require.Equal(t, wantEnd, end)
+	}
+
+	var zeroValue T
+	asc := []T{zeroValue, maxValue}
+	desc := []T{maxValue, zeroValue}
+
+	// ASC addition overflow, subtraction underflow, and exact-zero PRECEDING
+	// retain the correct rows without wrapping or turning zero into underflow.
+	check(t, asc, false, 1, currentToFollowing, 1, 2)
+	check(t, asc, false, 0, precedingToCurrent, 0, 1)
+	check(t, asc, false, 0, zeroPreceding, 0, 1)
+
+	// DESC swaps the arithmetic direction but keeps the same frame invariant.
+	check(t, desc, true, 1, currentToFollowing, 1, 2)
+	check(t, desc, true, 0, precedingToCurrent, 0, 1)
+	check(t, desc, true, 1, zeroPreceding, 1, 2)
+}
+
+func TestBuildRangeIntervalUnsignedBoundaries(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer func() { require.Equal(t, int64(0), mp.CurrNB()) }()
+
+	t.Run("uint8", func(t *testing.T) {
+		testBuildRangeIntervalUnsignedBoundaries(t, mp, types.T_uint8, uint8(math.MaxUint8))
+	})
+	t.Run("uint16", func(t *testing.T) {
+		testBuildRangeIntervalUnsignedBoundaries(t, mp, types.T_uint16, uint16(math.MaxUint16))
+	})
+	t.Run("uint32", func(t *testing.T) {
+		testBuildRangeIntervalUnsignedBoundaries(t, mp, types.T_uint32, uint32(math.MaxUint32))
+	})
+	t.Run("uint64", func(t *testing.T) {
+		testBuildRangeIntervalUnsignedBoundaries(t, mp, types.T_uint64, uint64(math.MaxUint64))
 	})
 }
 

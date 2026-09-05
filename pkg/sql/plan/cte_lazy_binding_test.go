@@ -16,12 +16,15 @@ package plan
 
 import (
 	"math"
+	"strings"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/internal/materialized"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+	"github.com/matrixorigin/matrixone/pkg/util/sysview"
 	"github.com/stretchr/testify/require"
 )
 
@@ -99,6 +102,18 @@ func countReachableNodeType(query *Query, nodeType planpb.Node_NodeType) int {
 	count := 0
 	for nodeID := range cteReachablePlanNodes(query) {
 		if query.Nodes[nodeID].NodeType == nodeType {
+			count++
+		}
+	}
+	return count
+}
+
+func countReachableTableFunction(query *Query, name string) int {
+	count := 0
+	for nodeID := range cteReachablePlanNodes(query) {
+		node := query.Nodes[nodeID]
+		if node.NodeType == planpb.Node_FUNCTION_SCAN && node.TableDef != nil &&
+			node.TableDef.TblFunc != nil && node.TableDef.TblFunc.Name == name {
 			count++
 		}
 	}
@@ -673,7 +688,6 @@ func TestCTEReuseMemoryGuard(t *testing.T) {
 
 func TestCTEReuseRejectsExternalAndSideEffectingNodes(t *testing.T) {
 	for _, nodeType := range []planpb.Node_NodeType{
-		planpb.Node_FUNCTION_SCAN,
 		planpb.Node_EXTERNAL_SCAN,
 		planpb.Node_EXTERNAL_FUNCTION,
 		planpb.Node_LOCK_OP,
@@ -689,6 +703,151 @@ func TestCTEReuseRejectsExternalAndSideEffectingNodes(t *testing.T) {
 			builder := &QueryBuilder{qry: &Query{Nodes: []*Node{{NodeType: nodeType}}}}
 			require.False(t, builder.cteSubtreeIsDeterministic(0, make(map[int32]bool)))
 		})
+	}
+}
+
+func TestCTEReuseSharesOnlyStatementStableCurrentRolesFunction(t *testing.T) {
+	currentRoles := func() *planpb.Node {
+		return &planpb.Node{
+			NodeType: planpb.Node_FUNCTION_SCAN,
+			TableDef: &planpb.TableDef{TblFunc: &planpb.TableFunction{Name: "mo_current_roles"}},
+		}
+	}
+
+	builder := &QueryBuilder{qry: &Query{Nodes: []*Node{currentRoles()}}}
+	require.True(t, builder.cteSubtreeIsDeterministic(0, make(map[int32]bool)))
+	require.True(t, builder.cteSubtreeIsCurrentRoleClosure(0, make(map[int32]bool)))
+	require.True(t, currentRoleClosureOutput([]planpb.Type{{Id: int32(types.T_int64)}}))
+	require.False(t, currentRoleClosureOutput([]planpb.Type{{Id: int32(types.T_varchar)}}))
+
+	builder.qry.Nodes[0].TableDef.TblFunc.Name = "generate_series"
+	require.False(t, builder.cteSubtreeIsDeterministic(0, make(map[int32]bool)))
+
+	builder.qry.Nodes[0] = currentRoles()
+	builder.qry.Nodes[0].TblFuncExprList = []*planpb.Expr{{}}
+	require.False(t, builder.cteSubtreeIsDeterministic(0, make(map[int32]bool)))
+
+	builder.qry.Nodes = append(builder.qry.Nodes, &planpb.Node{NodeType: planpb.Node_VALUE_SCAN})
+	builder.qry.Nodes[0] = currentRoles()
+	builder.qry.Nodes[0].Children = []int32{1}
+	require.False(t, builder.cteSubtreeIsDeterministic(0, make(map[int32]bool)))
+
+	builder.qry.Nodes = []*Node{
+		currentRoles(),
+		{
+			NodeType:    planpb.Node_PROJECT,
+			Children:    []int32{0},
+			ProjectList: []*planpb.Expr{{Typ: planpb.Type{Id: int32(types.T_int64)}}},
+		},
+	}
+	require.True(t, builder.cteSubtreeIsCurrentRoleClosure(1, make(map[int32]bool)))
+	builder.qry.Nodes[1].ProjectList[0].Typ.Id = int32(types.T_varchar)
+	require.False(t, builder.cteSubtreeIsCurrentRoleClosure(1, make(map[int32]bool)))
+}
+
+func TestCTEReuseCurrentRolesExemptionRejectsAmplifyingSubtree(t *testing.T) {
+	purePlan, err := runOneStmt(NewMockOptimizer(false), t, `
+		WITH c AS (SELECT role_id FROM mo_current_roles() role_closure)
+		SELECT a.role_id FROM c a JOIN c b ON a.role_id = b.role_id LIMIT 1`)
+	require.NoError(t, err)
+	require.Equal(t, 1, countReachableNodeType(purePlan.GetQuery(), planpb.Node_SINK))
+	require.Equal(t, 1, countReachableTableFunction(purePlan.GetQuery(), "mo_current_roles"))
+
+	earlyStopQueries := []struct {
+		name string
+		sql  string
+	}{
+		{
+			name: "limit union",
+			sql: `
+				WITH c AS (
+					SELECT l.l_comment, r.role_id
+					FROM lineitem l CROSS JOIN mo_current_roles() r
+				)
+				(SELECT role_id FROM c LIMIT 1)
+				UNION ALL
+				(SELECT role_id FROM c LIMIT 1)`,
+		},
+		{
+			name: "semi join",
+			sql: `
+				WITH c AS (
+					SELECT l.l_comment, r.role_id
+					FROM lineitem l CROSS JOIN mo_current_roles() r
+				)
+				SELECT role_id FROM c a
+				WHERE EXISTS (SELECT 1 FROM c b WHERE a.role_id = b.role_id)`,
+		},
+	}
+	for _, test := range earlyStopQueries {
+		t.Run(test.name, func(t *testing.T) {
+			amplifiedPlan, err := runOneStmt(NewMockOptimizer(false), t, test.sql)
+			require.NoError(t, err)
+			require.Zero(t, countReachableNodeType(amplifiedPlan.GetQuery(), planpb.Node_SINK),
+				"an early-terminating amplifying subtree must retain the guarded inline plan")
+			require.Equal(t, 2, countReachableTableFunction(amplifiedPlan.GetQuery(), "mo_current_roles"))
+		})
+	}
+
+	variableWidthPlan, err := runOneStmt(NewMockOptimizer(false), t, `
+		WITH c AS (
+			SELECT l.l_comment, r.role_id
+			FROM lineitem l CROSS JOIN mo_current_roles() r
+		)
+		SELECT count(*) FROM c a JOIN c b ON a.role_id = b.role_id`)
+	require.NoError(t, err)
+	require.Zero(t, countReachableNodeType(variableWidthPlan.GetQuery(), planpb.Node_SINK),
+		"a full-drain variable-width subtree must retain the materialization memory guard")
+}
+
+func TestInformationSchemaMetadataPlansShareCurrentRolesOnce(t *testing.T) {
+	views := []struct {
+		name string
+		ddl  string
+	}{
+		{name: "TABLES", ddl: sysview.InformationSchemaTablesV41DDL},
+		{name: "COLUMNS", ddl: sysview.InformationSchemaColumnsV41DDL},
+		{name: "STATISTICS", ddl: sysview.InformationSchemaStatisticsDDL},
+		{name: "CHECK_CONSTRAINTS", ddl: sysview.InformationSchemaCheckConstraintsDDL},
+		{name: "VIEWS", ddl: sysview.InformationSchemaViewsDDL},
+		{name: "SCHEMATA", ddl: sysview.InformationSchemaSchemataDDL},
+	}
+	for _, view := range views {
+		t.Run(view.name, func(t *testing.T) {
+			as := strings.Index(view.ddl, " AS ")
+			require.Greater(t, as, 0)
+			logicPlan, err := runOneStmt(NewMockOptimizer(false), t, view.ddl[as+4:])
+			require.NoError(t, err)
+			query := logicPlan.GetQuery()
+			require.Equal(t, 1, countReachableTableFunction(query, "mo_current_roles"))
+			require.Equal(t, 1, countReachableNodeType(query, planpb.Node_SINK),
+				"the role closure must have one statement-local producer")
+		})
+	}
+}
+
+func BenchmarkInformationSchemaSchemataPlanSharesCurrentRoles(b *testing.B) {
+	as := strings.Index(sysview.InformationSchemaSchemataDDL, " AS ")
+	if as <= 0 {
+		b.Fatal("SCHEMATA DDL has no AS clause")
+	}
+	sql := sysview.InformationSchemaSchemataDDL[as+4:]
+	ctx := NewMockOptimizer(false).CurrentContext()
+
+	b.ReportAllocs()
+	for i := 0; i < b.N; i++ {
+		statements, err := mysql.Parse(ctx.GetContext(), sql, 1)
+		if err != nil {
+			b.Fatal(err)
+		}
+		logicPlan, err := BuildPlan(ctx, statements[0], false)
+		statements[0].Free()
+		if err != nil {
+			b.Fatal(err)
+		}
+		if scans := countReachableTableFunction(logicPlan.GetQuery(), "mo_current_roles"); scans != 1 {
+			b.Fatalf("expected one reachable mo_current_roles scan, got %d", scans)
+		}
 	}
 }
 

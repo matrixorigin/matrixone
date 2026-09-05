@@ -21,6 +21,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/driver/entry"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func Test_SkipCmd(t *testing.T) {
@@ -137,6 +138,20 @@ func Test_LogEntry2(t *testing.T) {
 	assert.Equal(t, []uint64{1, 2, 3}, skipCmd.GetDSNSlice())
 	assert.Equal(t, []uint64{3, 2, 1}, skipCmd.GetPSNSlice())
 	assert.Equal(t, 3, skipCmd.ElementCount())
+}
+
+func TestLogEntryWriterErrorCompletesOwnedEntriesExactlyOnce(t *testing.T) {
+	w := NewLogEntryWriter()
+	e := entry.NewEmptyEntry()
+	require.NoError(t, w.AppendEntry(e))
+
+	errExpected := fmt.Errorf("append failed")
+	w.NotifyDone(errExpected)
+	// A wait-loop cleanup may run after the fail-stop notification. The writer
+	// must treat that second terminal notification as a no-op.
+	w.NotifyDone(nil)
+	assert.ErrorIs(t, e.WaitDone(), errExpected)
+	e.Entry.Free()
 }
 
 func TestCompatibility1(t *testing.T) {

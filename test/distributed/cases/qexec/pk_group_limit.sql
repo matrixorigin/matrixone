@@ -25,6 +25,70 @@ group by id
 order by id
 limit 4;
 
+-- COUNT(*) is 1 for every complete-PK singleton group. Its all-tie ordering is
+-- removable, including OFFSET, while public cardinality remains unchanged.
+select count(*) from (
+    select id, count(*) c
+    from t
+    group by id
+    order by c desc
+    limit 2 offset 1
+) q;
+
+-- HAVING is evaluated before bounded demand. Constant true admits every
+-- singleton group; constant false admits none.
+select count(*) from (
+    select id, count(*) c
+    from t
+    group by id
+    having count(*) = 1
+    order by c
+    limit 10
+) q;
+
+select count(*) from (
+    select id, count(*) c
+    from t
+    group by id
+    having count(*) <> 1
+    order by c
+    limit 10
+) q;
+
+-- A row-dependent tie breaker and nullable COUNT are counterexamples: their
+-- Sort cannot be removed by the constant-key proof.
+select id, count(*) c
+from t
+group by id
+order by c desc, id desc
+limit 2;
+
+select id, count(nullable_v) c
+from t
+group by id
+order by c
+limit 1;
+
+select id, sum(v) c
+from t
+group by id
+order by c desc
+limit 1;
+
+-- INTERVAL is an internal (value, unit) representation, not a standalone
+-- scalar. Public scalar/key boundaries reject it normally instead of allowing
+-- planner or executor panics; a temporal consumer remains valid.
+select interval 1 day;
+select interval 1 day is null;
+select count(interval 1 day) from t;
+select id from t group by interval 1 day;
+select id from t order by interval 1 day;
+select row_number() over (partition by interval 1 day) from t limit 1;
+select row_number() over (order by interval 1 day) from t limit 1;
+select id, count(*) c from t group by id order by interval c day limit 10;
+select date_add('2026-01-01', interval 1 day);
+select count(date_add('2026-01-01', interval 1 day)) from t;
+
 -- Bounded demand remains above WHERE and HAVING semantics.
 select count(*) from (
     select id, count(*) as c

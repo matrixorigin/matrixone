@@ -49,6 +49,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/window"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
+	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	metricv2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace/statistic"
 	"github.com/matrixorigin/matrixone/pkg/vm"
@@ -1784,7 +1785,7 @@ func (s *Scope) buildReaders(c *Compile) (readers []engine.Reader, err error) {
 			err = resolveErr
 			return
 		}
-		s.TxnReadView = txnReadViewForOperator(txnOp, c.TxnReadView)
+		s.TxnReadView = client.WorkspaceReadViewForOperator(txnOp, c.TxnReadView)
 
 		var mainRds []engine.Reader
 

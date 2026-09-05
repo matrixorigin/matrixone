@@ -1,0 +1,45 @@
+set global enable_privilege_cache = off;
+drop account if exists analyze_stats_tenant_a;
+drop account if exists analyze_stats_tenant_b;
+create account analyze_stats_tenant_a admin_name = 'root' identified by '111';
+create account analyze_stats_tenant_b admin_name = 'root' identified by '111';
+use mo_catalog;
+drop table if exists analyze_stats_domain_guard;
+create cluster table analyze_stats_domain_guard(v int);
+insert into analyze_stats_domain_guard values
+(100, 0),
+(1, 0),
+(2, 0),
+(3, 0),
+(4, 0);
+update analyze_stats_domain_guard
+set account_id = (select account_id from mo_account where account_name = 'analyze_stats_tenant_a')
+where v in (1, 2);
+update analyze_stats_domain_guard
+set account_id = (select account_id from mo_account where account_name = 'analyze_stats_tenant_b')
+where v in (3, 4);
+analyze table analyze_stats_domain_guard(v);
+table_name    mode    coverage    columns_analyzed    population_rows    population_exact    sample_rows    sample_blocks    sample_bytes    status    message
+mo_catalog.analyze_stats_domain_guard    AUTO    SNAPSHOT_VISIBLE_V1    1    5    1    5    1    140    OK    q=1/1
+select table_cnt, json_extract(ndv_map, '$.v') as v_ndv
+from table_stats('mo_catalog.analyze_stats_domain_guard', 'get', 'normal') g;
+table_cnt	v_ndv
+5	5
+use mo_catalog;
+analyze table analyze_stats_domain_guard(v);
+not supported: ANALYZE TABLE cannot publish statistics for an account-filtered table
+select table_cnt, json_extract(ndv_map, '$.v') as v_ndv
+from table_stats('mo_catalog.analyze_stats_domain_guard', 'get', 'normal') g;
+table_cnt	v_ndv
+5	5
+use mo_catalog;
+analyze table analyze_stats_domain_guard(v);
+not supported: ANALYZE TABLE cannot publish statistics for an account-filtered table
+select table_cnt, json_extract(ndv_map, '$.v') as v_ndv
+from table_stats('mo_catalog.analyze_stats_domain_guard', 'get', 'normal') g;
+table_cnt	v_ndv
+5	5
+drop table analyze_stats_domain_guard;
+drop account analyze_stats_tenant_a;
+drop account analyze_stats_tenant_b;
+set global enable_privilege_cache = on;

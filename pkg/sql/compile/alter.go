@@ -283,6 +283,7 @@ func (c *Compile) lockDataBranchLineageOwnerLifecycle() error {
 func (c *Compile) prepareAlterDataBranchLineage(
 	oldTableID uint64,
 	databaseName, tableName string,
+	statement string,
 ) (alterDataBranchLineagePlan, error) {
 	participates, err := c.alterTableParticipatesInDataBranch(oldTableID)
 	if err != nil {
@@ -302,7 +303,7 @@ func (c *Compile) prepareAlterDataBranchLineage(
 			op := c.proc.GetTxnOperator()
 			opts := op.TxnOptions()
 			if err = validateAlterDataBranchLineageTxn(
-				opts.GetByBegin(), opts.GetAutocommit(), op.Txn().IsPessimistic(),
+				statement, opts.GetByBegin(), opts.GetAutocommit(), op.Txn().IsPessimistic(),
 			); err != nil {
 				return alterDataBranchLineagePlan{}, err
 			}
@@ -334,10 +335,10 @@ func (c *Compile) prepareAlterDataBranchLineage(
 	}, nil
 }
 
-func validateAlterDataBranchLineageTxn(byBegin, autocommit, _ bool) error {
+func validateAlterDataBranchLineageTxn(statement string, byBegin, autocommit, _ bool) error {
 	if isExplicitAlterTxn(byBegin, autocommit) {
-		return moerr.NewNotSupportedNoCtx(
-			"ALTER on a data-branch lineage is not supported inside an explicit transaction",
+		return moerr.NewNotSupportedNoCtxf(
+			"%s on a data-branch lineage is not supported inside an explicit transaction", statement,
 		)
 	}
 	return nil
@@ -1176,7 +1177,7 @@ func (s *Scope) alterTableCopy(c *Compile, cleanup *alterAutoIncrementResetClean
 	if err = c.lockDataBranchLineageOwnerLifecycle(); err != nil {
 		return err
 	}
-	lineagePlan, err = c.prepareAlterDataBranchLineage(oldId, dbName, tblName)
+	lineagePlan, err = c.prepareAlterDataBranchLineage(oldId, dbName, tblName, "ALTER")
 	if err != nil {
 		return err
 	}

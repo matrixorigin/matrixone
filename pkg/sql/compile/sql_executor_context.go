@@ -37,13 +37,15 @@ import (
 )
 
 var _ plan.CompilerContext = new(compilerContext)
+var _ plan.TableDefStatsCompilerContext = new(compilerContext)
 
 type compilerContext struct {
-	ctx        context.Context
-	defaultDB  string
-	engine     engine.Engine
-	proc       *process.Process
-	statsCache *plan.StatsCache
+	ctx                context.Context
+	defaultDB          string
+	engine             engine.Engine
+	proc               *process.Process
+	statsCache         *plan.StatsCache
+	statsCacheVersions map[uint64]uint32
 
 	buildAlterView       bool
 	dbOfView, nameOfView string
@@ -148,6 +150,26 @@ func (c *compilerContext) ResolveAccountIds(accountNames []string) ([]uint32, er
 }
 
 func (c *compilerContext) Stats(obj *plan.ObjectRef, snapshot *plan.Snapshot) (*pb.StatsInfo, error) {
+	return c.statsWithTableDefVersion(obj, snapshot, nil)
+}
+
+func (c *compilerContext) StatsWithTableDef(
+	obj *plan.ObjectRef,
+	tableDef *plan.TableDef,
+	snapshot *plan.Snapshot,
+) (*pb.StatsInfo, error) {
+	if tableDef == nil {
+		return c.statsWithTableDefVersion(obj, snapshot, nil)
+	}
+	version := tableDef.Version
+	return c.statsWithTableDefVersion(obj, snapshot, &version)
+}
+
+func (c *compilerContext) statsWithTableDefVersion(
+	obj *plan.ObjectRef,
+	snapshot *plan.Snapshot,
+	tableDefVersion *uint32,
+) (*pb.StatsInfo, error) {
 	stats := statistic.StatsInfoFromContext(c.GetContext())
 	start := time.Now()
 	defer func() {
@@ -155,13 +177,19 @@ func (c *compilerContext) Stats(obj *plan.ObjectRef, snapshot *plan.Snapshot) (*
 	}()
 
 	tableID := uint64(obj.Obj)
+	cachedVersion, versioned := c.statsCacheVersions[tableID]
+	if (tableDefVersion == nil && versioned) ||
+		(tableDefVersion != nil && (!versioned || cachedVersion != *tableDefVersion)) {
+		c.GetStatsCache().Delete(tableID)
+		delete(c.statsCacheVersions, tableID)
+	}
 
-	// Fast path: return cached result if visited within 3 seconds AND stats is valid
-	// Stats is valid if AccurateObjectNumber > 0 (meaning we have real data)
+	// Fast path: return a recent real observation. An explicit table-wide scan
+	// can observe committed rows before the first object is flushed.
 	if w := c.GetStatsCache().Get(tableID); w.Exists() {
 		if time.Now().Unix()-w.GetLastVisit() < 3 {
 			s := w.GetStats()
-			if s != nil && s.AccurateObjectNumber > 0 {
+			if plan.StatsInfoUsable(s) {
 				return s, nil
 			}
 			// Stats is nil or empty, need to re-check
@@ -175,7 +203,15 @@ func (c *compilerContext) Stats(obj *plan.ObjectRef, snapshot *plan.Snapshot) (*
 	}
 
 	// Cache the result
-	c.GetStatsCache().Set(tableID, result)
+	if c.GetStatsCache().SetAndReportReset(tableID, result) {
+		clear(c.statsCacheVersions)
+	}
+	if tableDefVersion != nil {
+		if c.statsCacheVersions == nil {
+			c.statsCacheVersions = make(map[uint64]uint32)
+		}
+		c.statsCacheVersions[tableID] = *tableDefVersion
+	}
 
 	return result, nil
 }
@@ -202,7 +238,7 @@ func (c *compilerContext) doStatsHeavyWork(obj *plan.ObjectRef, snapshot *plan.S
 	if err != nil {
 		return nil, err
 	}
-	if stats != nil && stats.AccurateObjectNumber > 0 {
+	if plan.StatsInfoUsable(stats) {
 		return stats, nil
 	}
 	// Return nil for empty table, calcScanStats will use DefaultStats()
@@ -456,6 +492,20 @@ func (c *compilerContext) Resolve(dbName string, tableName string, snapshot *pla
 }
 
 func (c *compilerContext) ResolveVariable(varName string, isSystemVar bool, isGlobalVar bool) (interface{}, error) {
+	// CTAS follow-up compilation replays the user's own statement and carries
+	// the original frontend compiler context. A variable that shaped the plan
+	// of that statement must shape the replay identically, for the same reason
+	// Resolve delegates: the two compilations cannot be allowed to diverge.
+	// Variables read as values are already folded in before the replay; the
+	// ones that reach here decide how the query compiles, so answering nil
+	// silently compiles the replay under different rules than the statement
+	// the user ran.
+	//
+	// Internal SQL with no attached frontend context keeps the nil default: it
+	// has no user session whose variables could apply.
+	if delegate := getInternalExecutorCompilerContext(c.ctx); delegate != nil && delegate != c {
+		return delegate.ResolveVariable(varName, isSystemVar, isGlobalVar)
+	}
 	return nil, nil
 }
 
