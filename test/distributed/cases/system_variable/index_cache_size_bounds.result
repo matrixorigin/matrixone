@@ -7,6 +7,9 @@ use idx_cap_db;
 create table t(id bigint primary key, v vecf32(3));
 insert into t values (1,'[0,0,0]'), (2,'[1,1,1]'), (3,'[9,9,9]');
 create index h using hnsw on t(v) op_type 'vector_l2_ops';
+create table u(id bigint primary key, v vecf32(3));
+insert into u values (1,'[0,0,0]'), (2,'[1,1,1]'), (3,'[9,9,9]');
+create index h2 using hnsw on u(v) op_type 'vector_l2_ops';
 set @meta = (select index_table_name from mo_catalog.mo_indexes
 where name = 'h' and algo = 'hnsw' and algo_table_type = 'hnsw_meta'
 and table_id in (select rel_id from mo_catalog.mo_tables where reldatabase = database() and relname = 't')
@@ -17,6 +20,16 @@ execute wait_ready;
 ➤ ready[-7,1,0]  𝄀
 1
 deallocate prepare wait_ready;
+set @meta2 = (select index_table_name from mo_catalog.mo_indexes
+where name = 'h2' and algo = 'hnsw' and algo_table_type = 'hnsw_meta'
+and table_id in (select rel_id from mo_catalog.mo_tables where reldatabase = database() and relname = 'u')
+limit 1);
+set @wait_sql2 = concat('select count(*) >= 1 as ready from `', database(), '`.`', @meta2, '`');
+prepare wait_ready2 from @wait_sql2;
+execute wait_ready2;
+➤ ready[-7,1,0]  𝄀
+1
+deallocate prepare wait_ready2;
 select @@global.max_index_cache_size;
 ➤ @@global.max_index_cache_size[-1,16383,0]  𝄀
 0
@@ -36,11 +49,15 @@ select id from t order by l2_distance(v, '[0,0,0]') asc limit 2;
 ➤ id[-5,64,0]  𝄀
 1  𝄀
 2
+select id from u order by l2_distance(v, '[0,0,0]') asc limit 2;
+➤ id[-5,64,0]  𝄀
+1  𝄀
+2
 select id from t order by l2_distance(v, '[0,0,0]') asc limit 2;
 ➤ id[-5,64,0]  𝄀
 1  𝄀
 2
-select id from t order by l2_distance(v, '[9,9,9]') asc limit 1;
+select id from u order by l2_distance(v, '[9,9,9]') asc limit 1;
 ➤ id[-5,64,0]  𝄀
 3
 set global max_index_cache_size = 0;

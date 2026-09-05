@@ -619,7 +619,7 @@ type VectorIndexCache struct {
 	hkTicks        int         // HouseKeeping tick counter, gates the IsStale sweep cadence
 	staleChecking  atomic.Bool // single-flight guard for the async freshness sweep
 	sysLimit       sysLimitCache
-	acctLimits     sync.Map     // accountID -> acctLimitEntry, for cross-account snapshot reads
+	acctLimits     sync.Map     // accountID -> acctLimitEntry, for warm tenant-cap refreshes
 	evictions      atomic.Int64 // governor evictions since start, for EvictionStats
 	evictedBytes   atomic.Int64
 
@@ -630,12 +630,15 @@ type VectorIndexCache struct {
 	inflight   sync.Map // key -> *arrival
 	arrivalSeq atomic.Uint64
 
-	// The automatic per-arena budget, derived once from this machine's capacity. Computed
-	// lazily because it probes the host and the GPUs; see defaults.go.
-	defaultLimitOnce      sync.Once
-	defaultLimit          caps
-	defaultLimitHostErr   error
-	defaultLimitDeviceErr error
+	// The automatic per-arena budget. Host capacity is refreshed on every
+	// sizing pass so a live cgroup downsize is enforced without restarting the
+	// CN. Device probing remains lazy because GPU capacity is stable for the
+	// lifetime of a process; see defaults.go.
+	defaultLimitMu          sync.Mutex
+	defaultLimit            caps
+	defaultLimitHostErr     error
+	defaultLimitDeviceErr   error
+	defaultLimitDeviceReady bool
 }
 
 func NewVectorIndexCache() *VectorIndexCache {

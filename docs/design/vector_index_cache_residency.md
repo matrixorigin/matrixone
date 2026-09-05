@@ -1,6 +1,6 @@
 # Named-snapshot index reads and index-cache residency
 
-- Status: Review required
+- Status: Implementation complete — design revision under review
 - Issues: [#27941](https://github.com/matrixorigin/matrixone/issues/27941),
   [#27927](https://github.com/matrixorigin/matrixone/issues/27927)
 - Implementation: branch `bug_27941`
@@ -27,7 +27,8 @@ The contract this design implements:
    pollutes, the current-generation entry; concurrent same-snapshot readers still
    share one load.
 3. **Bounded residency.** Resident index bytes are bounded by an operator-set
-   budget, per tenant and CN-wide, without failing ordinary queries.
+   budget, per tenant and CN-wide; idle entries are reclaimed and a new load is
+   rejected only when admitting it would require preempting a live query.
 4. **No silent unbounding.** An unset budget is derived from the machine, and a
    capacity that cannot be read is an *error* rather than an invented number
    (§5.1); a catalog outage keeps the last known cap. Nothing quietly disables
@@ -104,18 +105,20 @@ what the CN actually has:
 | host | 90% of RAM, or of the cgroup limit when it is lower |
 | device | 90% of each GPU's total, summed |
 
-**There is no fallback.** When capacity cannot be read, sizing returns an *error*
-rather than a number. A budget invented from nothing describes no real machine,
-and §5.3 refuses arrivals that exceed the budget — so guessing low silently fails
-queries and guessing high silently over-commits. Neither is better than naming
-the missing input, and the error says which variable to set.
+**There is no guessed fallback.** When capacity cannot be read, sizing returns an
+*error* rather than a number. A budget invented from nothing describes no real
+machine, and §5.3 cannot safely decide whether an arrival fits — so the error
+names the variable to set. A cgroup v1 unlimited sentinel is normalized before
+this calculation; it is not treated as a many-exabyte host.
 
 `limits()` therefore returns an error, and its two callers treat it differently
-on purpose: `makeRoom` **refuses** the load, because it cannot decide whether the
-arrival fits and admitting it blind would be the guess this removes;
-`chargeAndEnforce` **logs and skips**, because the load has already happened and
-failing there would not un-spend it. The result is memoized with the value, so a
-failing probe does not land on the query path once per miss.
+on purpose: `makeRoom` **refuses** only an arrival that occupies an arena whose
+capacity cannot be sized, because it cannot decide whether that arrival can be
+admitted safely; `chargeAndEnforce` **logs and skips**, because the load has
+already happened and failing there would not un-spend it. Host sizing is
+refreshed on each pass so a live cgroup reduction is visible; GPU probing is
+memoized because device capacity is stable. A failed catalog/probe result keeps
+the last known value where one exists.
 
 The error is carried **per arena**, and refuses only an arrival that occupies the
 arena that could not be sized. A CN whose GPU cannot be queried still knows its
@@ -168,7 +171,10 @@ a tenant's value caps that tenant, and the **SYS account's** value caps the whol
 CN. The SYS value cannot be read through the caller's resolver, which resolves
 for the calling tenant; it is read from the catalog as the SYS account on a
 **fresh context** (`RunSqlAutoCommit` rebinds `TenantIDKey`), memoized for 15s so
-`SET GLOBAL` takes effect without a restart.
+`SET GLOBAL` takes effect without a restart. The last-used CN service is retained,
+allowing housekeeping to refresh the catalog row and enforce a changed value on
+a warm cache. Tenant rows used by resident entries are retained per account and
+refreshed by the same path.
 
 The memo stamps every attempt, success or failure. Without that, a catalog outage
 defeats it entirely: each cache miss re-attempts a 10s-timeout query, twice per
@@ -195,10 +201,11 @@ flight to make room. The cache behaves the same way:
 
 1. Reclaim every **idle** entry the budget requires. That is the cache doing its
    job — an idle entry is holding bytes nobody is using.
-2. If the arrival still does not fit, **refuse it**. `makeRoom` returns an error,
-   the entry is torn down before `Load` allocates anything, and the caller gets
-   `index cache is full: …` naming the budget, what is held, what was needed, and
-   that nothing idle was left to reclaim.
+2. If the arrival still does not fit alongside a resident or earlier arrival,
+   **refuse it**. `makeRoom` returns an error, the entry is torn down before
+   `Load` allocates anything, and the caller gets `index cache is full: …`
+   naming the budget, what is held, what was needed, and that nothing idle was
+   left to reclaim.
 3. **Never evict a busy entry for an arrival.** A search in flight is a live
    request and it wins.
 
@@ -209,9 +216,9 @@ refuses.
 **An arrival that would be the arena's only occupant is always admitted**, however
 large: there is nobody to protect, no eviction could have made room, and refusing
 would fail a query that a cache with no policy at all would have served. This is
-what keeps the budget from changing which workloads are possible — a single index
-bigger than the budget still loads; what the budget bounds is how many stay
-resident *together*.
+what keeps a single oversized index usable. The budget bounds how many indexes
+stay resident *together*; an oversized entry can remain above the nominal cap
+until a competing arrival or housekeeping pass evicts it.
 
 That exemption is decided against residency **and arrivals in flight**. A load
 that has passed admission is not resident yet — its entry is in the map but not
@@ -237,19 +244,13 @@ that triggered the eviction behind the very search it interrupted. Preempting a
 live query does not even buy the newcomer its memory promptly.
 
 An earlier revision did the opposite on both counts: reclaim fell back to busy
-victims once idle ones ran out, and an oversized index was admitted regardless on
-the grounds that "refusing would fail ordinary SQL on a cache accounting rule".
-The combination is the worst of both — the arrival evicts the warm working set,
-then cannot be retained itself, so the warm set is destroyed for an entry that is
-discarded. Nobody wins. An error is honest; silent thrashing is not.
-
-The cost of this choice, stated plainly: **a query that used to succeed can now
-return an error.** An index larger than the budget is refused rather than served
-slowly, which also means the "map a file larger than RAM" capability (§6.1) is
-not available to the *cache* — mapping still works, but retaining such an index
-does not. That is deliberate. The budget's job is to bound how many indexes stay
-hot, and an operator who wants a bigger one raises
-`max_index_cache_size` / `max_gpu_index_cache_size`, which the error names.
+victims once idle ones ran out, and concurrent zero-sized arrivals all took the
+sole-occupant bypass. The result was either killing a live query or letting N
+cold loads allocate against a budget sized for one. The current reservation and
+idle-claim rules make the trade explicit: a lone oversized index is usable, an
+arrival that would displace a live query is rejected, and an operator who wants
+several large indexes resident raises `max_index_cache_size` /
+`max_gpu_index_cache_size`.
 
 Victims are coldest-first (`ExpireAt` slides on every search, so it is already an
 LRU ordering), with two refinements:
@@ -272,10 +273,14 @@ indefinitely, so an operator lowering `max_index_cache_size` on a busy CN would
 see nothing shrink until traffic happened to miss. The 15s memo bounds how stale
 the *value* is, not when it is next *applied*.
 
-Housekeeping applies the memoized **CN-wide** value only — it has no session, so
-it can neither read the catalog nor resolve a tenant's variables, and it does
-nothing until a first miss has populated the memo. Per-tenant caps still take
-effect at that tenant's next miss.
+Housekeeping refreshes the **CN-wide** catalog row using the service captured by
+the last miss, then applies the new value to the warm cache. When an arena is
+unset at SYS scope, housekeeping derives that arena again from the current
+machine/cgroup capacity, so a live cgroup downsize is enforced without a
+restart. Resident accounts likewise retain their service and cap memo; each
+memoized tenant row is refreshed and applied independently. An account that has
+never loaded an index has no warm residency to enforce, so its first miss is the
+normal application path.
 
 Per-victim eviction detail is logged at DEBUG, not INFO. Two indexes alternating
 under a tight cap evict on every miss, and one INFO line per victim turns a steady
@@ -312,7 +317,7 @@ them, an immutable generation never being "stale".
 |---|---|---|
 | hnsw | `nrow × 8 + FileSize` (same before and after load) | 0 |
 | fulltext2 | `ndoc × estBytesPerDocHeap` | 0 |
-| ivfflat | delegates to its centroid index | delegates |
+| ivfflat | centroid matrix + one slice header per centroid (CPU) | centroid matrix (GPU) |
 | cagra / ivfpq | `HostComponentBytes` | `Σ DeviceComponentBytes` |
 | brute force | dataset bytes | GPU variant only |
 
@@ -372,6 +377,16 @@ keep it, at the cost of per-mapping RSS accounting; not attempted here.
 **cagra/ivfpq use the load gate's own measurement.** `cuvs.MeasureTar` already
 splits a packed artifact into device- and host-resident components; the tar's
 total is the wrong number for either budget.
+
+**ivfflat reserves before loading.** Its resident state is the brute-force
+index over the configured centroid matrix, so `Preload` computes
+`lists × dimensions × sizeof(centroid)` plus the Go slice headers for the CPU
+path, or the device matrix bytes for the cuVS path. `GetIndexSize` returns this
+estimate before `Load` and the exact resident figure afterward. Reserving this
+known footprint is important even though the centroid rows are read from the
+catalog during `Load`: without it, concurrent cold IVF keys all look like
+zero-byte arrivals and can allocate simultaneously through the sole-occupant
+bypass.
 
 ### 6.2 Provenance: `nrow` and `build_ts`
 
@@ -483,7 +498,9 @@ cagra/ivfpq do the real split — fetch, `MeasureTar`, and the device gate all m
 to `Preload`. The gate stays interleaved with the fetch loop so a doomed index is
 still refused as soon as the running total says so, rather than after downloading
 the remaining gigabytes. hnsw moves its metadata read; fulltext2 moves its doc
-count. ivfflat is a no-op: its centroid size is not knowable before loading them.
+count. ivfflat computes its configured centroid matrix footprint in `Preload`,
+including the CPU slice-header overhead, so concurrent cold IVF loads also take
+part in the reservation order.
 
 ## 8. Concurrency
 

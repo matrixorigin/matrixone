@@ -35,11 +35,10 @@ package cache
 // never summed when charged -- evicting a host-only index to relieve device pressure would
 // free no VRAM at all.
 //
-// The bound is enforced by EVICTION, not refusal. A refusal would fail an ordinary query on a
-// cache accounting rule, and there is nothing special about a named-snapshot generation here:
-// every resident index is charged and every resident index is evictable. Eviction reuses the
-// existing claim path (beginEviction / evictEntry), which Search already retries around, so
-// reclaiming an entry under a live query is safe.
+// The bound is enforced by EVICTION whenever an idle victim exists. If only busy entries (or
+// earlier reservations) remain, admission refuses the new load rather than preempting a live
+// query. Every resident index is charged and every idle resident is evictable. Eviction reuses
+// the existing claim path (beginEviction / evictEntry), which Search already retries around.
 //
 // The just-loaded entry is never the one evicted: its caller is about to search it.
 
@@ -117,6 +116,10 @@ type sysLimitCache struct {
 	// serialized on mu, turning an outage into a per-miss stall.
 	value   caps
 	fetched time.Time
+	// service is the CN UUID used for the last read. HouseKeeping has no
+	// session to supply one, so retain it for the refresh that makes a warm
+	// cache observe a later SET GLOBAL.
+	service string
 }
 
 // caps is one budget pair: the bytes allowed in each arena, 0 meaning unlimited.
@@ -447,8 +450,7 @@ func (c *VectorIndexCache) limits(sqlproc *sqlexec.SqlProcess) (caps, caps, sizi
 	//
 	// Both halves matter. Returning the error unconditionally would refuse every load even when
 	// both variables are configured -- so the remedy the error names ("set max_index_cache_size")
-	// would not work, and since the probe result is memoized for the process, the CN would be
-	// bricked until restart. Keeping the two arenas' errors apart matters just as much: a GPU
+	// would not work. Keeping the two arenas' errors apart matters just as much: a GPU
 	// that cannot be queried says nothing about host memory, and joining them would refuse every
 	// hnsw and fulltext2 load on a CN whose RAM is perfectly well known.
 	if sys.host > 0 && sys.device > 0 {
@@ -474,16 +476,18 @@ func (c *VectorIndexCache) limits(sqlproc *sqlexec.SqlProcess) (caps, caps, sizi
 }
 
 // accountCacheLimit reads ONE account's caps from the catalog, memoized per account for
-// sysLimitTTL. Used for a cross-account snapshot read, where the resident bytes belong to the
-// snapshot's owning tenant and the session resolver -- which answers for the caller -- cannot
-// produce that tenant's cap.
+// sysLimitTTL. It is used for a cross-account snapshot read, where the resident bytes belong to
+// the snapshot's owning tenant and the session resolver -- which answers for the caller --
+// cannot produce that tenant's cap. The same memo is refreshed by housekeeping for warm entries
+// loaded through the normal resolver path.
 //
-// Deliberately simpler than sysCacheLimit: a miss returns the unconfigured caps rather than
-// holding a lock across the query. The SYS read is on every miss and must not stall a cold
-// start; this one is on the cross-account snapshot path only, so a concurrent duplicate query
-// is cheaper than the machinery to avoid it.
+// A concurrent duplicate query is cheaper than holding a cache-wide lock across a catalog query;
+// the last known value is retained if the refresh fails.
 func (c *VectorIndexCache) accountCacheLimit(sqlproc *sqlexec.SqlProcess, accountID uint32) caps {
-	cnUUID := sqlproc.GetService()
+	return c.accountCacheLimitForService(sqlproc.GetService(), accountID)
+}
+
+func (c *VectorIndexCache) accountCacheLimitForService(cnUUID string, accountID uint32) caps {
 	if cnUUID == "" {
 		return caps{}
 	}
@@ -491,7 +495,7 @@ func (c *VectorIndexCache) accountCacheLimit(sqlproc *sqlexec.SqlProcess, accoun
 	var last caps
 	if v, ok := c.acctLimits.Load(accountID); ok {
 		e := v.(acctLimitEntry)
-		if time.Since(e.fetched) < sysLimitTTL {
+		if time.Since(e.fetched) < sysLimitTTL && (e.service == "" || e.service == cnUUID) {
 			return e.value
 		}
 		last = e.value
@@ -507,13 +511,13 @@ func (c *VectorIndexCache) accountCacheLimit(sqlproc *sqlexec.SqlProcess, accoun
 		// as the catalog stays unreachable (every window would re-stamp the zero). Only the
 		// attempt time is refreshed, so an unreachable catalog is retried at the TTL cadence
 		// rather than on every miss.
-		c.acctLimits.Store(accountID, acctLimitEntry{value: last, fetched: time.Now()})
+		c.acctLimits.Store(accountID, acctLimitEntry{value: last, fetched: time.Now(), service: cnUUID})
 		return last
 	}
 	defer res.Close()
 
 	value := capsFromVarRows(res)
-	c.acctLimits.Store(accountID, acctLimitEntry{value: value, fetched: time.Now()})
+	c.acctLimits.Store(accountID, acctLimitEntry{value: value, fetched: time.Now(), service: cnUUID})
 	return value
 }
 
@@ -521,6 +525,7 @@ func (c *VectorIndexCache) accountCacheLimit(sqlproc *sqlexec.SqlProcess, accoun
 type acctLimitEntry struct {
 	value   caps
 	fetched time.Time
+	service string
 }
 
 // hasSession reports whether sqlproc can be asked anything at all. SqlProcess delegates to
@@ -549,24 +554,47 @@ func (c *VectorIndexCache) tenantCacheLimits(sqlproc *sqlexec.SqlProcess) caps {
 	if resolve == nil {
 		return caps{}
 	}
-	return caps{
-		host:   resolveByteVar(resolve, maxIndexCacheSizeVar),
-		device: resolveByteVar(resolve, maxGpuIndexCacheSizeVar),
+	host, hostOK := resolveByteVar(resolve, maxIndexCacheSizeVar)
+	device, deviceOK := resolveByteVar(resolve, maxGpuIndexCacheSizeVar)
+	value := caps{host: host, device: device}
+	// Remember the account and CN for the housekeeping refresh. The resolver
+	// path is what makes SET GLOBAL visible immediately on a miss; retaining
+	// the same account here lets a later housekeeping pass apply a changed
+	// tenant cap even while the cache remains warm. A catalog refresh failure
+	// keeps this last known value, so it never falls open.
+	if account, err := sqlproc.EffectiveAccountID(); err == nil {
+		if service := sqlproc.GetService(); service != "" {
+			// A resolver failure is not permission to forget a previously
+			// enforced tenant cap. Preserve only the arena that failed; a
+			// legitimate SET GLOBAL ... = 0 still replaces it with zero.
+			if previous, ok := c.acctLimits.Load(account); ok {
+				old := previous.(acctLimitEntry)
+				if !hostOK {
+					value.host = old.value.host
+				}
+				if !deviceOK {
+					value.device = old.value.device
+				}
+			}
+			c.acctLimits.Store(account, acctLimitEntry{value: value, fetched: time.Now(), service: service})
+		}
 	}
+	return value
 }
 
-// resolveByteVar reads one global-scope byte budget, 0 for anything it cannot read as a
-// non-negative int64.
-func resolveByteVar(resolve func(string, bool, bool) (interface{}, error), name string) int64 {
+// resolveByteVar reads one global-scope byte budget. The boolean distinguishes a legitimate
+// zero (SET GLOBAL ... = 0) from an unreadable or malformed value, so warm-cache memoization does
+// not erase a previously enforced cap on a transient resolver failure.
+func resolveByteVar(resolve func(string, bool, bool) (interface{}, error), name string) (int64, bool) {
 	val, err := resolve(name, true, true)
 	if err != nil || val == nil {
-		return 0
+		return 0, false
 	}
 	n, ok := val.(int64)
 	if !ok || n < 0 {
-		return 0
+		return 0, false
 	}
-	return n
+	return n, true
 }
 
 // sysCacheLimit reads the SYS account's cap, memoized for sysLimitTTL.
@@ -582,56 +610,7 @@ func (c *VectorIndexCache) sysCacheLimit(sqlproc *sqlexec.SqlProcess) caps {
 	if cnUUID == "" {
 		return caps{}
 	}
-
-	c.sysLimit.mu.Lock()
-	if !c.sysLimit.fetched.IsZero() && time.Since(c.sysLimit.fetched) < sysLimitTTL {
-		value := c.sysLimit.value
-		c.sysLimit.mu.Unlock()
-		return value
-	}
-	// Stamp the attempt and claim the refresh, so a failing catalog is retried at the same
-	// cadence as a healthy one rather than on every miss, and only one caller queries per
-	// window.
-	firstFetch := c.sysLimit.fetched.IsZero()
-	c.sysLimit.fetched = time.Now()
-	last := c.sysLimit.value
-
-	// A REFRESH releases the lock across the query: every concurrent miss already has a
-	// last-known cap to use, so parking them behind a catalog that can take the full timeout
-	// buys nothing.
-	//
-	// The FIRST fetch keeps it. There is no last-known value yet -- c.sysLimit.value is the
-	// zero caps, which every reader would interpret as "unlimited" -- so releasing here would
-	// let every concurrent miss bypass the governor entirely until the query returns. That
-	// window is CN startup, when the cache is cold and loads arrive together, i.e. exactly
-	// when the cap matters most. Waiting for the real value is the lesser cost.
-	if !firstFetch {
-		c.sysLimit.mu.Unlock()
-	} else {
-		defer c.sysLimit.mu.Unlock()
-	}
-
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-	res, err := runSysSql(ctx, cnUUID, catalog.System_Account, "", sysLimitSQL)
-	if err != nil {
-		// Keep the last known good value; a catalog blip must not unbound the cache. With no
-		// value ever read, that is the zero caps -- which limits() then resolves to the arena
-		// ceiling, so an unreadable catalog leaves the cache governed rather than unlimited.
-		logutil.Warnf("index cache governor: reading the sys index cache caps failed: %v", err)
-		return last
-	}
-	defer res.Close()
-
-	value := capsFromVarRows(res)
-	if firstFetch {
-		c.sysLimit.value = value // still holding the lock
-	} else {
-		c.sysLimit.mu.Lock()
-		c.sysLimit.value = value
-		c.sysLimit.mu.Unlock()
-	}
-	return value
+	return c.refreshSysLimit(cnUUID)
 }
 
 // snapshotResidents lists every charged, live entry with its account and coldness. Entries
@@ -849,35 +828,144 @@ func (c *VectorIndexCache) EvictionStats() (entries int64, bytes int64) {
 	return c.evictions.Load(), c.evictedBytes.Load()
 }
 
-// enforceMemoizedCaps applies the LAST KNOWN CN-wide caps from the housekeeping ticker, so a
-// lowered SET GLOBAL takes effect on a cache that is merely warm.
+// enforceMemoizedCaps refreshes and applies the memoized CN-wide and tenant caps from the
+// housekeeping ticker, so a lowered SET GLOBAL takes effect on a cache that is merely warm.
 //
 // Without it the caps are consulted only on a miss, and a hot working set renews its TTL
 // indefinitely: an operator lowering max_index_cache_size on a busy CN would see nothing shrink
 // until traffic happened to miss. The 15s memo TTL does not help -- it bounds how stale the
 // VALUE is, not when it is next applied.
 //
-// Uses the memoized value only: housekeeping has no session, so it cannot read the catalog or
-// resolve a tenant's variables. That makes this the CN-wide (SYS) bound only, and only once the
-// first miss has populated it; per-tenant caps still apply at the next miss for that tenant.
-// A cache that has never been asked for a limit is left alone rather than enforced against the
-// absolute ceiling, which no housekeeping pass could usefully act on anyway.
+// The last successful miss records the CN service and account, allowing housekeeping to refresh
+// the catalog rows without borrowing a tenant-bound session. A cache that has never been asked
+// for a limit still gets the automatic machine/cgroup ceiling, so a live cgroup downsize is
+// enforced even before the next miss. Tenant rows are refreshed only for accounts that have
+// already used this cache; an account's first miss remains the normal application path.
 func (c *VectorIndexCache) enforceMemoizedCaps() {
+	c.refreshMemoizedSysLimit()
+	c.refreshMemoizedAccountLimits()
+
 	c.sysLimit.mu.Lock()
-	sys := c.sysLimit.value
-	fetched := c.sysLimit.fetched
+	sysOverride := c.sysLimit.value
 	c.sysLimit.mu.Unlock()
 
-	if fetched.IsZero() || sys.unset() {
+	// Resolve each arena independently, exactly as limits() does on a miss. An
+	// explicit SYS value wins; an unset arena falls back to the current host/GPU
+	// automatic budget. This is the path that makes cgroup reductions effective
+	// for a warm cache.
+	auto, hostErr, deviceErr := c.defaultLimits()
+	var sys caps
+	if sysOverride.host > 0 {
+		sys.host = sysOverride.host
+	} else if hostErr == nil {
+		sys.host = auto.host
+	}
+	if sysOverride.device > 0 {
+		sys.device = sysOverride.device
+	} else if deviceErr == nil {
+		sys.device = auto.device
+	}
+	if !sys.unset() {
+		// NOBODY is asking for room on a housekeeping pass, so no account should pay first.
+		// enforce()'s pay-first sub-pass filters residents on this id; passing System_Account made
+		// account-0 entries (a sys session's, and every sessionless idxcron load, which is charged
+		// there) the only ones a binding CN-wide cap ever reclaimed, however warm, while a colder
+		// tenant's entries survived. A sentinel no resident can carry makes that sub-pass a no-op
+		// and leaves the widened pass to reclaim strictly coldest-first.
+		c.enforce(noAskingAccount, caps{}, sys, "")
+	}
+
+	// Apply refreshed tenant caps separately. The SYS pass above already handled
+	// the CN-wide bound; using an account-only pass avoids making one tenant's
+	// cap look like a second CN-wide limit.
+	c.acctLimits.Range(func(key, value any) bool {
+		account, ok := key.(uint32)
+		if !ok {
+			return true
+		}
+		entry, ok := value.(acctLimitEntry)
+		if !ok || entry.value.unset() {
+			return true
+		}
+		c.enforce(account, entry.value, caps{}, "")
+		return true
+	})
+}
+
+// refreshMemoizedSysLimit refreshes the SYS catalog row when its TTL has expired. The service
+// was captured by the last session-bound read, so this path does not need (and must not invent)
+// a tenant session on the housekeeping goroutine.
+func (c *VectorIndexCache) refreshMemoizedSysLimit() {
+	c.sysLimit.mu.Lock()
+	service := c.sysLimit.service
+	fetched := c.sysLimit.fetched
+	c.sysLimit.mu.Unlock()
+	if service == "" || fetched.IsZero() || time.Since(fetched) < sysLimitTTL {
 		return
 	}
-	// NOBODY is asking for room on a housekeeping pass, so no account should pay first.
-	// enforce()'s pay-first sub-pass filters residents on this id; passing System_Account made
-	// account-0 entries (a sys session's, and every sessionless idxcron load, which is charged
-	// there) the only ones a binding CN-wide cap ever reclaimed, however warm, while a colder
-	// tenant's entries survived -- inverting the coldest-first ordering housekeeping exists to
-	// apply. A sentinel no resident can carry makes that sub-pass a no-op and leaves the
-	// widened pass to reclaim strictly coldest-first. enforce() protects nothing here (no key
-	// is being loaded) and skips entries already claimed for eviction.
-	c.enforce(noAskingAccount, caps{}, sys, "")
+	c.refreshSysLimit(service)
+}
+
+// refreshSysLimit is the session-free implementation shared by housekeeping and the regular
+// miss path. It preserves the last known value while a refresh is in flight or fails.
+func (c *VectorIndexCache) refreshSysLimit(cnUUID string) caps {
+	c.sysLimit.mu.Lock()
+	knownService := c.sysLimit.service
+	if cnUUID != "" {
+		c.sysLimit.service = cnUUID
+	}
+	if !c.sysLimit.fetched.IsZero() && time.Since(c.sysLimit.fetched) < sysLimitTTL &&
+		(knownService == "" || cnUUID == "" || knownService == cnUUID) {
+		value := c.sysLimit.value
+		c.sysLimit.mu.Unlock()
+		return value
+	}
+	firstFetch := c.sysLimit.fetched.IsZero()
+	c.sysLimit.fetched = time.Now()
+	last := c.sysLimit.value
+	if !firstFetch {
+		c.sysLimit.mu.Unlock()
+	} else {
+		defer c.sysLimit.mu.Unlock()
+	}
+	if cnUUID == "" {
+		return last
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	res, err := runSysSql(ctx, cnUUID, catalog.System_Account, "", sysLimitSQL)
+	if err != nil {
+		logutil.Warnf("index cache governor: reading the sys index cache caps failed: %v", err)
+		return last
+	}
+	defer res.Close()
+
+	value := capsFromVarRows(res)
+	if firstFetch {
+		c.sysLimit.value = value
+	} else {
+		c.sysLimit.mu.Lock()
+		c.sysLimit.value = value
+		c.sysLimit.mu.Unlock()
+	}
+	return value
+}
+
+// refreshMemoizedAccountLimits refreshes every tenant account that has already participated in
+// a cache load. It is intentionally best-effort and TTL-gated: a catalog failure keeps the last
+// known cap, while an account that has never loaded an index has no warm residency to enforce.
+func (c *VectorIndexCache) refreshMemoizedAccountLimits() {
+	c.acctLimits.Range(func(key, value any) bool {
+		account, ok := key.(uint32)
+		if !ok {
+			return true
+		}
+		entry, ok := value.(acctLimitEntry)
+		if !ok || entry.service == "" || entry.fetched.IsZero() || time.Since(entry.fetched) < sysLimitTTL {
+			return true
+		}
+		c.accountCacheLimitForService(entry.service, account)
+		return true
+	})
 }

@@ -22,21 +22,21 @@ import (
 // automaticCachePercent is the share of physical capacity an unconfigured cache may retain.
 //
 // It is deliberately HIGH. The budget's job is to bound how MANY indexes stay hot, not to
-// reserve headroom: an arrival that does not fit is refused outright (see makeRoom), so a
-// conservative fraction does not protect memory -- it just refuses the largest indexes a
-// deployment legitimately wants to cache. A 1M-row CAGRA index is ~7.8 GB; at half of an 8 GB
-// card it could never be admitted at all.
+// reserve headroom: idle entries are reclaimed and only an arrival that would displace a live
+// query is refused (see makeRoom). A 1M-row CAGRA index is ~7.8 GB; at half of an 8 GB card it
+// could never coexist with another index even though it remains usable as a sole occupant.
 const automaticCachePercent = 90
 
 // automaticHostLimit derives the host budget from what the machine actually has, preferring a
 // cgroup limit when it is the tighter of the two.
 //
-// There is NO fallback. A budget invented when the input is missing would be a number
-// describing no real machine, and the governor refuses arrivals that exceed the budget -- so
-// guessing low silently fails queries and guessing high silently over-commits. Neither is
-// better than reporting that the sizing input is unavailable and letting the operator set the
-// variable.
+// There is NO guessed fallback. A budget invented when the input is missing would be a number
+// describing no real machine, and the governor cannot safely decide whether an arrival fits --
+// so the sizing error names the variable the operator can set. A cgroup v1 unlimited sentinel is
+// normalized before this calculation and never becomes an effectively infinite budget.
 func automaticHostLimit(total, cgroup uint64) (int64, error) {
+	total = system.NormalizeMemoryCapacity(total)
+	cgroup = system.NormalizeMemoryCapacity(cgroup)
 	if cgroup > 0 && (total == 0 || cgroup < total) {
 		total = cgroup
 	}
@@ -77,24 +77,28 @@ func automaticDeviceCapacity(countDevices func() (int, error), totalMem func(int
 	return int64(max(total, 1)), nil
 }
 
-// defaultLimits is the automatic budget for this machine, derived once, with the two arenas'
-// errors kept SEPARATE.
+// defaultLimits is the automatic budget for this machine, with the two arenas'
+// errors kept SEPARATE. Host sizing is deliberately refreshed on every call:
+// cgroup limits can change while the CN is alive, and keeping the first value
+// forever would let a warm cache exceed a newly lowered memory limit. Device
+// probing is still memoized because GPU capacity does not change at runtime.
 //
 // Separate because they are independent failures with independent blast radii: a GPU probe that
 // fails says nothing about host memory, and joining them would let an unreadable card refuse
 // every hnsw and fulltext2 load on a CN whose RAM is perfectly well known. limits() surfaces an
 // arena's error only when that arena actually needs deriving.
-//
-// Memoized because probing does not become more likely to succeed on the next miss, and
-// retrying per load would put a failing syscall on the query path. That is only acceptable
-// because the remedy works: setting the arena's variable makes limits() stop consulting this
-// at all, so an operator recovers without restarting the CN.
 func (c *VectorIndexCache) defaultLimits() (caps, error, error) {
-	c.defaultLimitOnce.Do(func() {
-		host, herr := automaticHostLimit(system.MemoryTotal(), system.CgroupMemoryLimit())
+	c.defaultLimitMu.Lock()
+	defer c.defaultLimitMu.Unlock()
+
+	host, herr := automaticHostLimit(system.MemoryTotal(), system.CgroupMemoryLimit())
+	c.defaultLimit.host = host
+	c.defaultLimitHostErr = herr
+	if !c.defaultLimitDeviceReady {
 		device, derr := automaticDeviceLimit()
-		c.defaultLimit = caps{host: host, device: device}
-		c.defaultLimitHostErr, c.defaultLimitDeviceErr = herr, derr
-	})
+		c.defaultLimit.device = device
+		c.defaultLimitDeviceErr = derr
+		c.defaultLimitDeviceReady = true
+	}
 	return c.defaultLimit, c.defaultLimitHostErr, c.defaultLimitDeviceErr
 }

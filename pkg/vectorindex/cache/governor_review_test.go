@@ -26,6 +26,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
@@ -134,6 +135,76 @@ func TestGovernorHousekeepingAppliesALoweredCap(t *testing.T) {
 
 	require.False(t, isResident(c, keys[0]), "the coldest is reclaimed without waiting for a miss")
 	require.True(t, isResident(c, keys[1]), "and the pass stops once under the cap")
+}
+
+// A warm cache must refresh the SYS catalog row itself. Merely copying a value
+// that a previous miss happened to memoize does not observe SET GLOBAL after
+// the memo TTL expires.
+func TestGovernorHousekeepingRefreshesWarmSysCap(t *testing.T) {
+	c := newBoundCache(t)
+	mp := mpool.MustNewZero()
+	capBytes := "500"
+	withSysSql(t, c, func(_ context.Context, _ string, account uint32, _ string, _ string) (executor.Result, error) {
+		if account != catalog.System_Account {
+			return varRows(t, mp), nil
+		}
+		return varRows(t, mp, maxIndexCacheSizeVar, capBytes), nil
+	})
+
+	sp := sysProc()
+	first := "__mo_index_secondary_refresh_a"
+	second := "__mo_index_secondary_refresh_b"
+	loadInto(t, c, sp, first, 200, 0)
+	loadInto(t, c, sp, second, 200, 0)
+	entryOf(t, c, first).ExpireAt.Store(time.Now().Add(time.Minute).UnixMicro())
+	entryOf(t, c, second).ExpireAt.Store(time.Now().Add(2 * time.Minute).UnixMicro())
+
+	capBytes = "250"
+	c.sysLimit.mu.Lock()
+	c.sysLimit.fetched = time.Now().Add(-2 * sysLimitTTL)
+	c.sysLimit.mu.Unlock()
+	c.HouseKeeping()
+
+	require.False(t, isResident(c, first), "housekeeping refreshes and applies the lowered SYS cap")
+	require.True(t, isResident(c, second), "the colder entry is reclaimed first")
+}
+
+// Tenant caps have the same warm-cache obligation as SYS caps. A miss records
+// the account/service pair; housekeeping must refresh that catalog row and
+// apply the lower value without waiting for a new key.
+func TestGovernorHousekeepingRefreshesWarmTenantCap(t *testing.T) {
+	c := newBoundCache(t)
+	mp := mpool.MustNewZero()
+	tenantCap := "500"
+	sp := govProc(t, c, 7, hostCap(500), caps{})
+	withSysSql(t, c, func(_ context.Context, _ string, account uint32, _ string, _ string) (executor.Result, error) {
+		switch account {
+		case catalog.System_Account:
+			return varRows(t, mp), nil
+		case 7:
+			return varRows(t, mp, maxIndexCacheSizeVar, tenantCap), nil
+		default:
+			return varRows(t, mp), nil
+		}
+	})
+
+	first := "__mo_index_secondary_tenant_refresh_a"
+	second := "__mo_index_secondary_tenant_refresh_b"
+	loadInto(t, c, sp, first, 200, 0)
+	loadInto(t, c, sp, second, 200, 0)
+	entryOf(t, c, first).ExpireAt.Store(time.Now().Add(time.Minute).UnixMicro())
+	entryOf(t, c, second).ExpireAt.Store(time.Now().Add(2 * time.Minute).UnixMicro())
+
+	tenantCap = "250"
+	v, ok := c.acctLimits.Load(uint32(7))
+	require.True(t, ok)
+	e := v.(acctLimitEntry)
+	e.fetched = time.Now().Add(-2 * sysLimitTTL)
+	c.acctLimits.Store(uint32(7), e)
+	c.HouseKeeping()
+
+	require.False(t, isResident(c, first), "housekeeping refreshes and applies the lowered tenant cap")
+	require.True(t, isResident(c, second), "the colder tenant entry is reclaimed first")
 }
 
 // Each ARENA has to reach a positive cap on its own. enforce() skips an arena whose tenant and
@@ -386,12 +457,6 @@ func TestGovernorBoundsMappedBytesAcrossGenerations(t *testing.T) {
 func TestGovernorSizingFailureDoesNotRefuseConfiguredOrUnrelatedArenas(t *testing.T) {
 	t.Run("a configured cap does not consult the failed probe", func(t *testing.T) {
 		c := newBoundCache(t)
-		// Poison BOTH arenas' probes.
-		c.defaultLimitOnce.Do(func() {
-			c.defaultLimitHostErr = moerr.NewInternalErrorNoCtx("host probe failed")
-			c.defaultLimitDeviceErr = moerr.NewInternalErrorNoCtx("device probe failed")
-		})
-
 		sp := govProc(t, c, 1, caps{}, caps{host: 1 << 30, device: 1 << 30})
 		_, sys, serrs := c.limits(sp)
 		require.NoError(t, serrs.host, "both arenas are configured, so nothing needs deriving")
@@ -404,16 +469,18 @@ func TestGovernorSizingFailureDoesNotRefuseConfiguredOrUnrelatedArenas(t *testin
 		// Only the DEVICE probe failed; host sizing is fine. Crucially the GPU cap is NOT
 		// configured -- that is the state a GPU build with a failing CUDA query is actually in,
 		// and preconfiguring it would mean the poisoned probe is never consulted at all.
-		c.defaultLimitOnce.Do(func() {
-			c.defaultLimit = caps{host: 1 << 30}
-			c.defaultLimitDeviceErr = moerr.NewInternalErrorNoCtx("device probe failed")
-		})
+		c.defaultLimitMu.Lock()
+		c.defaultLimitDeviceErr = moerr.NewInternalErrorNoCtx("device probe failed")
+		c.defaultLimitDeviceReady = true
+		c.defaultLimitMu.Unlock()
 
 		sp := govProc(t, c, 1, caps{}, caps{}) // nothing configured, either arena
 		_, sys, serrs := c.limits(sp)
 		require.NoError(t, serrs.host, "the host arena derived fine")
 		require.Error(t, serrs.device, "and the device failure is reported, not hidden")
-		require.EqualValues(t, 1<<30, sys.host)
+		auto, hostErr, _ := c.defaultLimits()
+		require.NoError(t, hostErr)
+		require.EqualValues(t, auto.host, sys.host)
 
 		// The load is host-only, so the device failure is none of its business.
 		_, _, err := c.Search(sp, "__mo_index_secondary_hostonly",
@@ -424,10 +491,10 @@ func TestGovernorSizingFailureDoesNotRefuseConfiguredOrUnrelatedArenas(t *testin
 
 	t.Run("a device-using load still gets the device failure", func(t *testing.T) {
 		c := newBoundCache(t)
-		c.defaultLimitOnce.Do(func() {
-			c.defaultLimit = caps{host: 1 << 30}
-			c.defaultLimitDeviceErr = moerr.NewInternalErrorNoCtx("device probe failed")
-		})
+		c.defaultLimitMu.Lock()
+		c.defaultLimitDeviceErr = moerr.NewInternalErrorNoCtx("device probe failed")
+		c.defaultLimitDeviceReady = true
+		c.defaultLimitMu.Unlock()
 		sp := govProc(t, c, 1, caps{}, caps{})
 
 		_, _, err := c.Search(sp, "__mo_index_secondary_gpuload",

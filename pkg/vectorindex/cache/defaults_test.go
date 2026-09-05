@@ -36,7 +36,7 @@ func TestAutomaticHostLimit(t *testing.T) {
 		{name: "unlimited-cgroup", total: 8 << 30, cgroup: ^uint64(0), want: (8 << 30) / 100 * 90},
 		{name: "container-only", cgroup: 2 << 30, want: (2 << 30) / 100 * 90},
 		{name: "tiny", total: 1, want: 1},
-		{name: "overflow", total: ^uint64(0), want: maxRepresentableBudget},
+		{name: "invalid-capacity-sentinel", total: ^uint64(0), wantErr: true},
 		{name: "unknown", wantErr: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

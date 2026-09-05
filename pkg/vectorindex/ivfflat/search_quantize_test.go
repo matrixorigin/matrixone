@@ -19,6 +19,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/common/util"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -258,6 +259,28 @@ func TestIvfflatSearchLifecycleWrappers(t *testing.T) {
 	require.NotNil(t, s.Index)
 	s.Destroy()
 	require.Nil(t, s.Index)
+}
+
+// The cache must see the IVF-FLAT centroid footprint before Load. Otherwise
+// concurrent cold keys all pass the governor's zero-size fast path and then
+// materialize together against a budget sized for one entry.
+func TestIvfflatPreloadPublishesCentroidFootprint(t *testing.T) {
+	idxcfg := vectorindex.IndexConfig{}
+	idxcfg.Ivfflat.Lists = 4
+	idxcfg.Ivfflat.Dimensions = 3
+	idxcfg.Ivfflat.CentroidType = int32(types.T_array_float32)
+	s := NewIvfflatSearch[float32](idxcfg, vectorindex.IndexTableConfig{})
+
+	require.NoError(t, s.Preload(nil))
+	want := int64(4*3*util.UnsafeSizeOf[float32]() + 4*util.UnsafeSizeOf[[]float32]())
+	host, device := s.GetIndexSize()
+	require.Equal(t, want, host)
+	require.Zero(t, device)
+
+	s.Destroy()
+	host, device = s.GetIndexSize()
+	require.Zero(t, host)
+	require.Zero(t, device)
 }
 
 // TestScoreFromQuantized verifies that the distance the entries query measures in

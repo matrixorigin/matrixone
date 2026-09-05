@@ -473,3 +473,19 @@ func TestNormalizeCgroupLimit(t *testing.T) {
 	require.Equal(t, uint64(cgroupV1Unlimited-1), normalizeCgroupLimit(int64(cgroupV1Unlimited)-1),
 		"just below the sentinel is still a real limit")
 }
+
+func TestNormalizeMemoryCapacity(t *testing.T) {
+	require.Zero(t, NormalizeMemoryCapacity(0), "unknown capacity")
+	require.Zero(t, NormalizeMemoryCapacity(cgroupV1Unlimited), "v1 PAGE_COUNTER_MAX")
+	require.Zero(t, NormalizeMemoryCapacity(^uint64(0)), "invalid oversized capacity")
+	require.Equal(t, uint64(4<<30), NormalizeMemoryCapacity(4<<30), "a real capacity survives")
+}
+
+func TestEffectiveContainerMemoryTotal(t *testing.T) {
+	require.Equal(t, uint64(4<<30), effectiveContainerMemoryTotal(4<<30, 256<<30),
+		"a finite cgroup limit wins over the host")
+	require.Equal(t, uint64(256<<30), effectiveContainerMemoryTotal(int64(cgroupV1Unlimited), 256<<30),
+		"an unlimited v1 value falls back to host capacity")
+	require.Equal(t, uint64(256<<30), effectiveContainerMemoryTotal(-1, 256<<30),
+		"an unavailable cgroup value falls back to host capacity")
+}
