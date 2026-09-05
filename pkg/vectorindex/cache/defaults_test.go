@@ -36,7 +36,7 @@ func TestAutomaticHostLimit(t *testing.T) {
 		{name: "unlimited-cgroup", total: 8 << 30, cgroup: ^uint64(0), want: (8 << 30) / 100 * 90},
 		{name: "container-only", cgroup: 2 << 30, want: (2 << 30) / 100 * 90},
 		{name: "tiny", total: 1, want: 1},
-		{name: "overflow", total: ^uint64(0), want: absoluteHostCacheCeiling},
+		{name: "overflow", total: ^uint64(0), want: maxRepresentableBudget},
 		{name: "unknown", wantErr: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -62,7 +62,7 @@ func TestAutomaticDeviceCapacity(t *testing.T) {
 		wantErr          bool
 	}{
 		{name: "two-devices", count: 2, memory: 8 << 30, want: 2 * ((8 << 30) / 100 * 90)},
-		{name: "overflow", count: 2, memory: ^uint64(0), want: absoluteDeviceCacheCeiling},
+		{name: "overflow", count: 2, memory: ^uint64(0), want: maxRepresentableBudget},
 		// No GPU is not a failure: the arena does not apply, so it gets no budget.
 		{name: "no-device", count: 0, want: 0},
 		{name: "count-error", count: 1, countErr: errors.New("count"), wantErr: true},

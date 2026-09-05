@@ -24,7 +24,7 @@ package cache
 //
 // All four apply; whichever binds first evicts. 0 means "not set by an operator", not
 // "unbounded": when no cap is set anywhere the governor substitutes the arena ceiling
-// (absoluteHostCacheCeiling / absoluteDeviceCacheCeiling), so the accounting always runs and
+// derived from the machine, so the accounting always runs and
 // every entry stays evictable. The ceilings sit above any real machine, so an unconfigured
 // deployment is not constrained by them -- what they remove is the state where the governor
 // short-circuits and residency has no bound at all.
@@ -46,6 +46,7 @@ package cache
 import (
 	"context"
 	"fmt"
+	"math"
 	"sort"
 	"strconv"
 	"strings"
@@ -71,33 +72,19 @@ const (
 	// index load, so the cadence is about bounding SET GLOBAL latency, not query cost.
 	sysLimitTTL = 15 * time.Second
 
-	// absoluteHostCacheCeiling / absoluteDeviceCacheCeiling MIRROR the defaults of
-	// max_index_cache_size / max_gpu_index_cache_size (pkg/frontend/variables.go). The
-	// variable default gives a NEW deployment a readable advertised maximum; these give the
-	// same bound to everything the default cannot reach -- an upgraded cluster whose 0 is
-	// already persisted, an explicit 0, and the sessionless load paths. Each is sized above
-	// the physical maximum of its own arena, so neither ever refuses a load a real deployment
-	// could serve:
+	// maxRepresentableBudget keeps a derived budget inside int64. It is NOT policy and not a
+	// hardware figure -- the budget comes from the machine (defaults.go).
 	//
-	//   host   -- high-end boards reach ~4 TiB and enterprise servers a few dozen TB.
-	//   device -- a single card is tens of GB; the ceiling is 8 cards pooled over NVLink,
-	//             ~1,440 GB, which is the largest single-node VRAM pool built today.
+	// It exists because the arithmetic is unsigned and the result is signed. A bogus capacity
+	// reading (a device reporting nonsense, a corrupt cgroup value) yields
+	// total/100*percent above math.MaxInt64, and int64() of that WRAPS NEGATIVE -- and a
+	// negative cap reads as "unset" everywhere in the governor, i.e. unbounded. Clamping is
+	// what stops an absurd input from silently switching the cache off.
 	//
-	// They are separate because the two arenas are orders of magnitude apart: one number
-	// sized for host RAM would be meaningless as a VRAM bound.
-	//
-	// Its purpose is not to size the cache. It is to remove "unlimited" as a reachable state:
-	// with a zero cap the governor short-circuits before enforce(), so nothing is charged,
-	// nothing is enumerated, and residency is genuinely unbounded -- one resident generation
-	// per distinct snapshot timestamp, with no ceiling of any kind. With a finite ceiling the
-	// accounting always runs and the eviction path is always live, so an operator lowering
-	// SET GLOBAL max_index_cache_size gets a governed cache rather than switching one on.
-	//
-	// It does NOT make an unconfigured deployment safe on its own: a machine will exhaust its
-	// own memory long before this binds. Configuring max_index_cache_size is still what bounds
-	// a cache to a machine.
-	absoluteHostCacheCeiling   int64 = 64 << 40   // 64 TiB
-	absoluteDeviceCacheCeiling int64 = 1440 << 30 // 1440 GiB: 8 pooled GPUs
+	// An earlier revision put 64 TiB / 1440 GiB here and used them as the DEFAULT budget, which
+	// meant the cap never bound and the admission path was unreachable. Do not reintroduce a
+	// hardware-shaped number: this is a representability bound, nothing more.
+	maxRepresentableBudget int64 = math.MaxInt64
 )
 
 // sysLimitSQL reads both of the SYS account's caps straight from the catalog, in one query.
@@ -264,11 +251,27 @@ func (c *VectorIndexCache) makeRoom(sqlproc *sqlexec.SqlProcess, key string, ent
 //
 // It re-snapshots rather than trusting the pre-reclaim numbers: the reclaim pass may have freed
 // exactly enough, and a concurrent load may have taken some of it back.
+//
+// A refusal only ever protects SOMEBODY ELSE. That is the whole content of the rule: an
+// overloaded server refuses a new request to protect the requests it is already serving, not
+// because the new one is large. So an arrival that would be the arena's ONLY occupant is always
+// admitted, however big -- there is nobody to protect, no eviction could have made room, and
+// refusing would simply fail a query that a cache with no policy at all would have served.
+//
+// This is what keeps the budget from changing which workloads are possible. A single index
+// larger than the budget still loads, exactly as before; what the budget bounds is how many
+// indexes stay resident TOGETHER. Without this an operator's index would become unloadable the
+// moment it outgrew a number derived from the machine, which is a capacity limit dressed up as
+// a cache policy.
 func (c *VectorIndexCache) overBudget(account uint32, tenant, sys caps, key string, incoming caps) error {
 	_, perAccount, total := c.snapshotResidents(key)
 	for _, a := range []arena{arenaHost, arenaDevice} {
 		want := incoming.of(a)
 		if want <= 0 {
+			continue
+		}
+		// Sole occupant of this arena: nothing to protect, so nothing to refuse for.
+		if total.of(a) == 0 {
 			continue
 		}
 		if limit := tenant.of(a); limit > 0 && perAccount[account].of(a)+want > limit {

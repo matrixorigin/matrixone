@@ -415,3 +415,26 @@ func TestGovernorSizingFailureDoesNotRefuseConfiguredOrUnrelatedArenas(t *testin
 		require.True(t, isResident(c, "__mo_index_secondary_hostonly"))
 	})
 }
+
+// The refusal still has teeth: it fires when admitting WOULD hurt someone. A busy incumbent
+// cannot be reclaimed (a search is in flight on it) and must not be preempted, so an arrival
+// that does not fit alongside it is refused rather than served at its expense.
+func TestGovernorRefusesOnlyToProtectABusyIncumbent(t *testing.T) {
+	c := newBoundCache(t)
+	sp := govProc(t, c, 1, hostCap(250), caps{})
+
+	// An incumbent with a search parked mid-flight: not idle, so not reclaimable.
+	busy := "__mo_index_secondary_busy_incumbent"
+	held := &mappedHeavy{countingSearch: countingSearch{host: 200},
+		searching: make(chan struct{}), release: make(chan struct{})}
+	go func() { _, _, _ = c.Search(sp, busy, held, nil, vectorindex.RuntimeConfig{}) }()
+	<-held.searching
+	defer close(held.release)
+
+	_, _, err := c.Search(sp, "__mo_index_secondary_arrival",
+		&countingSearch{host: 200}, nil, vectorindex.RuntimeConfig{})
+	require.Error(t, err, "200+200 exceeds 250 and the incumbent is busy, so the arrival is refused")
+	require.Contains(t, err.Error(), "index cache is full")
+	require.True(t, isResident(c, busy), "the live search is never sacrificed for an arrival")
+	require.False(t, isResident(c, "__mo_index_secondary_arrival"))
+}

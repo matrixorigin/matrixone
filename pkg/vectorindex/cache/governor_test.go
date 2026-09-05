@@ -228,7 +228,7 @@ func TestGovernorArenasAreBudgetedSeparately(t *testing.T) {
 		entryOf(t, c, deviceOnly).ExpireAt.Store(1)
 
 		// 150 host bytes against a host cap of 100, with the device budget unset: refused.
-		loadRefused(t, c, sp, "__mo_index_secondary_hostheavy", 150, 0)
+		loadInto(t, c, sp, "__mo_index_secondary_hostheavy", 150, 0) // alone in the host arena
 
 		require.True(t, isResident(c, deviceOnly),
 			"max_index_cache_size bounds RAM; a device-only entry frees none of it")
@@ -243,7 +243,7 @@ func TestGovernorArenasAreBudgetedSeparately(t *testing.T) {
 		entryOf(t, c, hostOnly).ExpireAt.Store(1)
 
 		// 150 device bytes against a device cap of 100, with the host budget unset: refused.
-		loadRefused(t, c, sp, "__mo_index_secondary_devheavy", 0, 150)
+		loadInto(t, c, sp, "__mo_index_secondary_devheavy", 0, 150) // alone in the device arena
 
 		require.True(t, isResident(c, hostOnly),
 			"max_gpu_index_cache_size bounds VRAM; a host-only entry frees none of it")
@@ -272,7 +272,7 @@ func TestGovernorIgnoresZeroSizedEntries(t *testing.T) {
 	loadInto(t, c, sp, free, 0, 0)
 	entryOf(t, c, free).ExpireAt.Store(1)
 
-	loadRefused(t, c, sp, "__mo_index_secondary_big", 500, 0)
+	loadInto(t, c, sp, "__mo_index_secondary_big", 500, 0) // alone: the zero-byte entry holds nothing
 	require.True(t, isResident(c, free), "evicting a zero-byte entry would free nothing")
 }
 
@@ -519,26 +519,20 @@ func TestGovernorMakesRoomWhenIncomingFillsTheCap(t *testing.T) {
 
 			require.False(t, isResident(c, victim),
 				"the idle victim is reclaimed regardless, and before Load")
-			if incoming <= 250 {
-				require.NoError(t, err, "it fits once the idle victim is gone")
-				require.False(t, newcomer.watchAtLoad,
-					"the victim must be gone before Load, not reclaimed after it")
-				require.True(t, isResident(c, "__mo_index_secondary_newcomer"))
-			} else {
-				require.Error(t, err, "it does not fit even with the cache emptied of idle entries")
-				require.Contains(t, err.Error(), "index cache is full")
-				require.False(t, isResident(c, "__mo_index_secondary_newcomer"))
-			}
+			require.NoError(t, err, "the arrival is alone once the idle victim is gone")
+			require.False(t, newcomer.watchAtLoad,
+				"the victim must be gone before Load, not reclaimed after it")
+			require.True(t, isResident(c, "__mo_index_secondary_newcomer"))
 		})
 	}
 }
 
-// An index larger than the whole budget still loads: the governor empties what it can and gets
-// out of the way rather than failing a query on an accounting rule.
-// An arrival that does not fit even after every idle entry is reclaimed is REFUSED. The cache
-// behaves like an overloaded server: the new request gets an error, and the requests already in
-// flight are not killed to seat it.
-func TestGovernorOversizedIndexIsRefused(t *testing.T) {
+// An oversized arrival that would be the arena's ONLY occupant is admitted, however big.
+// A refusal only ever protects somebody else; with the cache emptied of idle entries there is
+// nobody to protect, no eviction could have made room, and refusing would fail a query that a
+// cache with no policy at all would have served. The budget bounds how many indexes stay
+// resident TOGETHER -- it must not decide which single index is loadable.
+func TestGovernorOversizedIndexAloneIsAdmitted(t *testing.T) {
 	c := newBoundCache(t)
 	sp := govProc(t, c, 1, hostCap(250), caps{})
 
@@ -546,14 +540,12 @@ func TestGovernorOversizedIndexIsRefused(t *testing.T) {
 	loadInto(t, c, sp, old, 200, 0)
 	entryOf(t, c, old).ExpireAt.Store(1)
 
-	_, _, err := c.Search(sp, "__mo_index_secondary_huge",
-		&countingSearch{host: 10_000}, nil, vectorindex.RuntimeConfig{})
-	require.Error(t, err, "10k against a 250 byte budget cannot be seated")
-	require.Contains(t, err.Error(), "index cache is full")
-	require.Contains(t, err.Error(), "nothing idle is left to reclaim")
+	huge := "__mo_index_secondary_huge"
+	_, _, err := c.Search(sp, huge, &countingSearch{host: 10_000}, nil, vectorindex.RuntimeConfig{})
+	require.NoError(t, err, "40x the budget still loads when it is the only occupant")
 
 	require.False(t, isResident(c, old), "everything idle is still reclaimed first")
-	require.False(t, isResident(c, "__mo_index_secondary_huge"), "and the refused load leaves nothing behind")
+	require.True(t, isResident(c, huge), "and the arrival is seated")
 }
 
 // caps.less floors at zero and leaves an unset arena unlimited.

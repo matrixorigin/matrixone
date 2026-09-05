@@ -46,7 +46,7 @@ func automaticHostLimit(total, cgroup uint64) (int64, error) {
 			"set max_index_cache_size explicitly")
 	}
 	share := total / 100 * automaticCachePercent
-	return int64(max(uint64(1), min(share, uint64(absoluteHostCacheCeiling)))), nil
+	return int64(max(uint64(1), min(share, uint64(maxRepresentableBudget)))), nil
 }
 
 // automaticDeviceCapacity sums the per-device share across the GPUs this CN can see.
@@ -72,7 +72,7 @@ func automaticDeviceCapacity(countDevices func() (int, error), totalMem func(int
 		}
 		// Saturate before summing physical devices, not query simulation aliases.
 		share := n / 100 * automaticCachePercent
-		total += min(share, uint64(absoluteDeviceCacheCeiling)-total)
+		total += min(share, uint64(maxRepresentableBudget)-total)
 	}
 	return int64(max(total, 1)), nil
 }
