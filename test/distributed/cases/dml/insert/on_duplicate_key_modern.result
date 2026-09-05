@@ -336,12 +336,12 @@ insert into t_odku_onupdate_check(id, v) values (1, 10);
 insert into t_odku_onupdate_check(id, v) values (1, 10) on duplicate key update v = v;
 select row_count(), id, v, updated_at from t_odku_onupdate_check order by id;
 ➔ row_count()[-5,64,0]  ¦  id[4,32,0]  ¦  v[4,32,0]  ¦  updated_at[13,0,0]  𝄀
-0  ¦  1  ¦  10  ¦  2000-01-01 00:00:00
+1  ¦  1  ¦  10  ¦  2000-01-01 00:00:00
 insert into t_odku_onupdate_check(id, v) values (1, 10), (2, 20) on duplicate key update v = v;
 select row_count(), id, v, updated_at from t_odku_onupdate_check order by id;
 ➔ row_count()[-5,64,0]  ¦  id[4,32,0]  ¦  v[4,32,0]  ¦  updated_at[13,0,0]  𝄀
-1  ¦  1  ¦  10  ¦  2000-01-01 00:00:00  𝄀
-1  ¦  2  ¦  20  ¦  2000-01-01 00:00:00
+2  ¦  1  ¦  10  ¦  2000-01-01 00:00:00  𝄀
+2  ¦  2  ¦  20  ¦  2000-01-01 00:00:00
 insert into t_odku_onupdate_check(id, v) values (1, 11) on duplicate key update v = values(v);
 constraint violation: Check constraint 'chk_old_timestamp' is violated
 select id, v, updated_at from t_odku_onupdate_check order by id;
@@ -457,7 +457,7 @@ insert into t_odku_repeat_count values (1, 10)
 on duplicate key update v = values(v);
 select row_count(), id, v from t_odku_repeat_count;
 ➤ row_count()[-5,64,0]  ¦  id[4,32,0]  ¦  v[4,32,0]  𝄀
-0  ¦  1  ¦  10
+1  ¦  1  ¦  10
 select count(*) from t_odku_repeat_count force index(iv) where v = 10;
 ➤ count(*)[-5,64,0]  𝄀
 1
@@ -507,7 +507,7 @@ on duplicate key update v = values(v);
 select row_count(), v, updated_at = '2000-01-01 00:00:00.000000' as auto_unchanged
 from t_odku_repeat_onupdate;
 ➤ row_count()[-5,64,0]  ¦  v[4,32,0]  ¦  auto_unchanged[-7,1,0]  𝄀
-0  ¦  10  ¦  1
+1  ¦  10  ¦  1
 drop table t_odku_repeat_onupdate;
 create table t_odku_fk_uk_parent(pid int primary key);
 create table t_odku_fk_uk_child(

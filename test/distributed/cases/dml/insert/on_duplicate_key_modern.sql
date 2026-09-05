@@ -315,8 +315,9 @@ drop table if exists t_odku_mfk_p1;
 drop table if exists t_odku_mfk_p2;
 
 -- ODKU no-op on a table with an implicit ON UPDATE CURRENT_TIMESTAMP column:
--- the auto-update column must not defeat no-op detection (affected rows = 0),
--- and it must not advance when nothing else changes.
+-- the auto-update column must not defeat physical no-op detection or advance.
+-- Under mo-tester's CLIENT_FOUND_ROWS connection the logical affected count is
+-- one even though no row is written.
 drop table if exists t_odku_onupdate;
 create table t_odku_onupdate (
   id int primary key,
@@ -335,8 +336,9 @@ drop table if exists t_odku_onupdate;
 
 -- A synthesized ON UPDATE value must not reach CHECK evaluation for a pure
 -- no-op. The mixed batch also proves that restoring the old image does not
--- suppress an unrelated insert. A real change still evaluates CHECK against
--- the new timestamp and is rejected.
+-- suppress an unrelated insert. CLIENT_FOUND_ROWS counts the no-op conflict as
+-- one; a real change still evaluates CHECK against the new timestamp and is
+-- rejected.
 drop table if exists t_odku_onupdate_check;
 create table t_odku_onupdate_check (
   id int primary key,
@@ -475,7 +477,8 @@ drop table t_odku_order_generated;
 
 -- The logical-action stream and the final physical image are distinct. A
 -- change followed by a restore still has four affected rows and must preserve
--- an implicit ON UPDATE effect; a pure no-op must neither count nor update it.
+-- an implicit ON UPDATE effect; a pure no-op must not update it and contributes
+-- one logical affected row under CLIENT_FOUND_ROWS.
 drop table if exists t_odku_repeat_onupdate;
 create table t_odku_repeat_onupdate(
   id int primary key,
