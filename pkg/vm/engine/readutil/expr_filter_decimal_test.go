@@ -19,6 +19,8 @@ import (
 	"strconv"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/container/bytejson"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
@@ -356,6 +358,140 @@ func TestDecimalZoneMapScaleAwareComparisons(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestJSONZoneMapValueComparisonsFailOpen(t *testing.T) {
+	columnType := types.T_json
+	low := encodeReadutilJSON(t, `false`)
+	high := encodeReadutilJSON(t, `true`)
+	zm := index.NewZM(columnType, 0)
+	index.UpdateZM(zm, low)
+	index.UpdateZM(zm, high)
+
+	for name, match := range map[string]zoneMapMatch{
+		"lt":      anyLTByBound(zm, low, nil, columnType),
+		"le":      anyLEByBound(zm, low, nil, columnType),
+		"gt":      anyGTByBound(zm, high, nil, columnType),
+		"ge":      anyGEByBound(zm, high, nil, columnType),
+		"equal":   intersectsBound(zm, low, nil, columnType),
+		"between": anyBetweenBounds(zm, low, high, nil, nil, columnType),
+	} {
+		t.Run(name, func(t *testing.T) {
+			require.False(t, match.comparable)
+			require.True(t, match.mayMatch())
+			require.False(t, match.excludes())
+		})
+	}
+
+	for hint := uint8(0); hint < 4; hint++ {
+		match := inRangeBounds(zm, low, high, nil, nil, hint, columnType)
+		require.Falsef(t, match.comparable, "range hint %d", hint)
+		require.Truef(t, match.mayMatch(), "range hint %d", hint)
+	}
+
+	mp := mpool.MustNewZero()
+	vec := vector.NewVec(types.T_json.ToType())
+	require.NoError(t, vector.AppendBytes(vec, low, false, mp))
+	match := anyInVector(zm, vec, columnType)
+	require.False(t, match.comparable)
+	require.True(t, match.mayMatch())
+	vec.Free(mp)
+	require.Zero(t, mp.CurrNB())
+}
+
+func TestCompileFilterExprJSONZoneMapsFailOpen(t *testing.T) {
+	jsonType := plan.Type{Id: int32(types.T_json)}
+	operations := []struct {
+		name   string
+		op     string
+		bounds []string
+		hints  []uint8
+	}{
+		{name: "lt", op: "<", bounds: []string{"25"}},
+		{name: "le", op: "<=", bounds: []string{"25"}},
+		{name: "gt", op: ">", bounds: []string{"15"}},
+		{name: "ge", op: ">=", bounds: []string{"15"}},
+		{name: "eq", op: "=", bounds: []string{"20"}},
+		{name: "between", op: "between", bounds: []string{"15", "25"}},
+		{name: "in_range", op: "in_range", bounds: []string{"15", "25"}, hints: []uint8{0, 1, 2, 3}},
+		{name: "in", op: "in", bounds: []string{"20", "25"}},
+	}
+
+	for _, operation := range operations {
+		hints := operation.hints
+		if len(hints) == 0 {
+			hints = []uint8{0}
+		}
+		for _, hint := range hints {
+			name := operation.name
+			if operation.op == "in_range" {
+				name += "/hint_" + strconv.Itoa(int(hint))
+			}
+			t.Run(name, func(t *testing.T) {
+				tableDef := decimalTableDef(jsonType, false)
+				tableDef.Cols[0].ClusterBy = true
+				expr := sortedUnknownFilter(t, jsonType, operation.op, operation.bounds, hint)
+				fastFilter, _, _, blockFilter, seek, canCompile, _ := CompileFilterExpr(expr, tableDef, nil)
+				require.True(t, canCompile)
+				require.NotNil(t, fastFilter)
+				require.NotNil(t, blockFilter)
+
+				stats := objectio.NewObjectStats()
+				require.NoError(t, objectio.SetObjectStatsSortKeyZoneMap(
+					stats, sortedUnknownZoneMap(t, jsonType, "10", "30")))
+				selected, err := fastFilter(stats)
+				require.NoError(t, err)
+				require.True(t, selected, "JSON object zone map must fail open")
+
+				dataMeta := objectio.BuildMetaData(3, 1)
+				dataMeta.MustGetColumn(0).SetZoneMap(sortedUnknownZoneMap(t, jsonType, "10", "30"))
+				for block, value := range []string{"10", "20", "30"} {
+					dataMeta.GetBlockMeta(uint32(block)).MustGetColumn(0).SetZoneMap(
+						sortedUnknownZoneMap(t, jsonType, value))
+					quickBreak, selected, err := blockFilter(block, dataMeta.GetBlockMeta(uint32(block)), nil)
+					require.NoError(t, err)
+					require.False(t, quickBreak, "JSON block zone map must not stop the scan")
+					require.True(t, selected, "JSON block zone map must fail open")
+				}
+				if seek != nil {
+					require.Equal(t, 0, seek(dataMeta), "JSON zone maps must not skip leading blocks")
+				}
+			})
+		}
+	}
+}
+
+func TestCompileFilterExprJSONIsNullUsesNullCount(t *testing.T) {
+	jsonType := plan.Type{Id: int32(types.T_json)}
+	tableDef := decimalTableDef(jsonType, false)
+	expr := sortedUnknownFilter(t, jsonType, "isnull", []string{"unused"}, 0)
+	_, _, _, blockFilter, _, canCompile, _ := CompileFilterExpr(expr, tableDef, nil)
+	require.True(t, canCompile)
+	require.NotNil(t, blockFilter)
+
+	dataMeta := objectio.BuildMetaData(1, 1)
+	block := dataMeta.GetBlockMeta(0)
+	block.MustGetColumn(0).SetZoneMap(sortedUnknownZoneMap(t, jsonType, "value"))
+	block.MustGetColumn(0).SetNullCnt(0)
+	quickBreak, selected, err := blockFilter(0, block, nil)
+	require.NoError(t, err)
+	require.False(t, quickBreak)
+	require.False(t, selected)
+
+	block.MustGetColumn(0).SetNullCnt(1)
+	quickBreak, selected, err = blockFilter(0, block, nil)
+	require.NoError(t, err)
+	require.False(t, quickBreak)
+	require.True(t, selected)
+}
+
+func encodeReadutilJSON(t *testing.T, input string) []byte {
+	t.Helper()
+	value, err := bytejson.ParseFromString(input)
+	require.NoError(t, err)
+	encoded, err := types.EncodeJson(value)
+	require.NoError(t, err)
+	return encoded
 }
 
 var zoneMapMatchSink zoneMapMatch

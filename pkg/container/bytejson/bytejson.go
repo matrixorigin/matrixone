@@ -507,6 +507,9 @@ type binaryJSONValueView struct {
 }
 
 func binaryJSONValue(bj ByteJson) (binaryJSONValueView, bool) {
+	if !isValidByteJsonStringEncoding(bj.Data) {
+		return binaryJSONValueView{}, false
+	}
 	switch bj.Type {
 	case TpCodeBlob:
 		payload := bj.GetString()
@@ -518,6 +521,10 @@ func binaryJSONValue(bj ByteJson) (binaryJSONValueView, bool) {
 					legacyEncoded: encoded,
 				}, true
 			}
+			return binaryJSONValueView{}, false
+		}
+		if _, ok := base64DecodedLen(payload); !ok {
+			return binaryJSONValueView{}, false
 		}
 		return binaryJSONValueView{
 			subtype:       binaryJSONBlob,

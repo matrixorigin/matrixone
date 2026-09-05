@@ -285,6 +285,66 @@ func TestCanonicalJSONMatchesScalarEquality(t *testing.T) {
 	}
 }
 
+func TestCanonicalJSONRejectsOversizedLiteralEquality(t *testing.T) {
+	valid := mustEncodeJSON(t, "null")
+	oversized := mustEncodeByteJSON(t, bytejson.ByteJson{
+		Type: bytejson.TpCodeLiteral,
+		Data: []byte{bytejson.LiteralNull, 0xff},
+	})
+
+	require.NotZero(t, bytejson.CompareByteJson(types.DecodeJson(valid), types.DecodeJson(oversized)))
+	require.NotEqual(t, AppendCanonicalJSON(nil, valid), AppendCanonicalJSON(nil, oversized))
+}
+
+func TestCanonicalJSONMalformedValuesUseRawFallback(t *testing.T) {
+	nanData := make([]byte, 8)
+	binary.LittleEndian.PutUint64(nanData, math.Float64bits(math.NaN()))
+	malformed := []bytejson.ByteJson{
+		{Type: bytejson.TpCodeInt64, Data: []byte{1}},
+		{Type: bytejson.TpCodeFloat64, Data: nanData},
+		{Type: bytejson.TpCodeDecimal},
+		{Type: bytejson.TpCodeArray, Data: []byte{1}},
+		{Type: bytejson.TpCodeObject, Data: []byte{1}},
+	}
+
+	for i, value := range malformed {
+		encoded := append([]byte{byte(value.Type)}, value.Data...)
+		require.NotPanics(t, func() {
+			key := AppendCanonicalJSON(nil, encoded)
+			require.Equal(t, len(key), CanonicalJSONSize(encoded), "value %d", i)
+			require.Equal(t, append([]byte{canonicalJSONMalformedMarker}, encoded...), key,
+				"value %d must retain its raw type/data key", i)
+		})
+	}
+}
+
+func TestCanonicalJSONMalformedDomainCannotAliasValidKey(t *testing.T) {
+	valid := mustEncodeJSON(t, "1")
+	validKey := AppendCanonicalJSON(nil, valid)
+	malformed := append([]byte(nil), validKey...)
+	require.NotZero(t, bytejson.CompareByteJson(types.DecodeJson(valid), types.DecodeJson(malformed)))
+	require.NotEqual(t, validKey, AppendCanonicalJSON(nil, malformed))
+}
+
+func TestCanonicalJSONRejectsNonMinimalUvarintEquality(t *testing.T) {
+	minimal := stringByteJSON(bytejson.TpCodeString, "")
+	nonMinimal := bytejson.ByteJson{Type: bytejson.TpCodeString, Data: []byte{0x80, 0}}
+	require.NotZero(t, bytejson.CompareByteJson(minimal, nonMinimal))
+	require.NotEqual(t,
+		AppendCanonicalJSON(nil, mustEncodeByteJSON(t, minimal)),
+		AppendCanonicalJSON(nil, mustEncodeByteJSON(t, nonMinimal)),
+	)
+
+	minimalNested, err := bytejson.CreateByteJSON([]any{minimal})
+	require.NoError(t, err)
+	nonMinimalNested, err := bytejson.CreateByteJSON([]any{nonMinimal})
+	require.NoError(t, err)
+	require.NotZero(t, bytejson.CompareByteJson(minimalNested, nonMinimalNested))
+	minimalKey := AppendCanonicalJSON(nil, mustEncodeByteJSON(t, minimalNested))
+	nonMinimalKey := AppendCanonicalJSON(nil, mustEncodeByteJSON(t, nonMinimalNested))
+	require.NotEqual(t, minimalKey, nonMinimalKey)
+}
+
 func TestCanonicalVecF32Contract(t *testing.T) {
 	negativeZero := float32(math.Copysign(0, -1))
 	positive := types.ArrayToBytes([]float32{1, 0, 3})
