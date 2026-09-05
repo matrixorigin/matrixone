@@ -1666,33 +1666,34 @@ func (s *Scope) buildReaders(c *Compile) (readers []engine.Reader, err error) {
 	// receive runtime filter and optimize the datasource.
 	var runtimeFilterList []receivedRuntimeFilter
 	var blockFilterList []*plan.Expr
-	var emptyScan bool
-	runtimeFilterList, emptyScan, err = s.waitForRuntimeFilters(c)
+	var runtimeFilterDrop bool
+	runtimeFilterList, runtimeFilterDrop, err = s.waitForRuntimeFilters(c)
 	if err != nil {
 		return
 	}
 	if s.DataSource.node != nil && s.DataSource.node.NodeType == plan.Node_VECTOR_INDEX_SCAN {
-		if emptyScan {
+		if runtimeFilterDrop {
 			return []engine.Reader{new(readutil.EmptyReader)}, nil
 		}
 		return s.buildVectorIndexReaders(runtimeFilterList)
 	}
 	for i := range s.DataSource.FilterList {
 		if plan2.IsFalseExpr(s.DataSource.FilterList[i]) {
-			emptyScan = true
-			break
+			return newEmptyReaders(s.NodeInfo.Mcpu), nil
 		}
 	}
-	if emptyScan {
-		return newEmptyReaders(s.NodeInfo.Mcpu), nil
-	}
-	blockFilterList, err = s.handleRuntimeFilters(c, runtimeFilterList)
-	if err != nil {
-		return
-	}
-	err = s.getRelData(c, blockFilterList)
-	if err != nil {
-		return
+	// DROP lets us skip persisted range expansion, but a secondary-index runtime
+	// filter may not cover transaction-workspace or committed in-memory rows.
+	// Keep building relation readers so those rows remain visible to the scan.
+	if !runtimeFilterDrop {
+		blockFilterList, err = s.handleRuntimeFilters(c, runtimeFilterList)
+		if err != nil {
+			return
+		}
+		err = s.getRelData(c, blockFilterList)
+		if err != nil {
+			return
+		}
 	}
 
 	switch {

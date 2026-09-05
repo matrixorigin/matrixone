@@ -2676,6 +2676,7 @@ type mockRelationForMembershipFilter struct {
 	engine.Relation
 	capturedHint      engine.FilterHint
 	buildReadersCalls int
+	readers           []engine.Reader
 }
 
 func (m *mockRelationForMembershipFilter) BuildReaders(
@@ -2691,7 +2692,7 @@ func (m *mockRelationForMembershipFilter) BuildReaders(
 ) ([]engine.Reader, error) {
 	m.buildReadersCalls++
 	m.capturedHint = filterHint
-	return []engine.Reader{}, nil
+	return m.readers, nil
 }
 
 func (m *mockRelationForMembershipFilter) Ranges(
@@ -2723,7 +2724,7 @@ func TestBuildReadersStaticFalseReturnsEmptyReaders(t *testing.T) {
 	require.Zero(t, relation.buildReadersCalls)
 }
 
-func TestBuildReadersRuntimeFilterDropReturnsEmptyReaders(t *testing.T) {
+func TestBuildReadersRuntimeFilterDropKeepsWorkspaceReaders(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	board := message.NewMessageBoard()
 	defer board.Reset()
@@ -2733,7 +2734,10 @@ func TestBuildReadersRuntimeFilterDropReturnsEmptyReaders(t *testing.T) {
 		plan2.GetColExpr(plan.Type{Id: int32(types.T_int64)}, 1, 0),
 		false,
 	)
-	relation := &mockRelationForMembershipFilter{}
+	workspaceReader := new(readutil.EmptyReader)
+	relation := &mockRelationForMembershipFilter{
+		readers: []engine.Reader{workspaceReader},
+	}
 	scope := &Scope{
 		Proc: proc,
 		DataSource: &Source{
@@ -2750,11 +2754,9 @@ func TestBuildReadersRuntimeFilterDropReturnsEmptyReaders(t *testing.T) {
 
 	readers, err := scope.buildReaders(c)
 	require.NoError(t, err)
-	require.Len(t, readers, 2)
-	for _, reader := range readers {
-		require.IsType(t, &readutil.EmptyReader{}, reader)
-	}
-	require.Zero(t, relation.buildReadersCalls)
+	require.Len(t, readers, 1)
+	require.Same(t, workspaceReader, readers[0])
+	require.Equal(t, 1, relation.buildReadersCalls)
 }
 
 func TestBuildScanParallelRunUsesEmptyReadersForFalseFilter(t *testing.T) {
