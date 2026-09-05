@@ -5008,6 +5008,7 @@ func bindFuncExprImplByPlanExpr(
 		returnType = function.ConvertReturnTypeForBinder(argsType)
 	}
 	adjustControlFlowMetadata(name, args, argsType, &returnType, argsCastType)
+	adjustDateFormatMetadata(name, args, &returnType)
 
 	// Optimization: avoid casting columns in comparisons to preserve index usage
 	switch name {
@@ -5793,6 +5794,89 @@ func adjustControlFlowMetadata(name string, args []*Expr, argTypes []types.Type,
 			argsCastType[idx] = *returnType
 		}
 	}
+}
+
+// adjustDateFormatMetadata starts with MySQL's format-dependent result length
+// for a literal DATE_FORMAT/TIME_FORMAT pattern and widens directives where
+// MatrixOne's temporal domain can produce longer values. Dynamic patterns
+// retain the overload's conservative VARCHAR capacity because their output
+// bound is not known at bind time.
+func adjustDateFormatMetadata(name string, args []*Expr, returnType *types.Type) {
+	if (name != "date_format" && name != "time_format") ||
+		len(args) != 2 || returnType.Oid != types.T_varchar {
+		return
+	}
+	format := args[1].GetLit()
+	if format == nil || format.Isnull {
+		return
+	}
+	value, ok := format.Value.(*plan.Literal_Sval)
+	if !ok {
+		return
+	}
+	returnType.Width = mysqlDateFormatWidth(name, value.Sval)
+}
+
+func mysqlDateFormatWidth(name, format string) int32 {
+	width := int64(0)
+	add := func(value int64) {
+		width = min(width+value, int64(types.MaxVarcharLen))
+	}
+	isTimeFormat := name == "time_format"
+	// timeFormat prefixes one sign for every non-empty format when its input
+	// is negative. The input sign is not known while binding, so reserve it
+	// even when the individual directive has a fixed-width result.
+	if isTimeFormat && format != "" {
+		add(1)
+	}
+	maxTimeHourWidth := int64(len(strconv.FormatInt(int64(types.MaxHourInTime), 10)))
+	for i := 0; i < len(format); i++ {
+		if format[i] != '%' || i == len(format)-1 {
+			add(1)
+			continue
+		}
+		i++
+		switch format[i] {
+		case 'M', 'W':
+			add(64)
+		case 'D', 'Y', 'x', 'X':
+			add(4)
+		case 'a', 'b':
+			add(32)
+		case 'j':
+			add(3)
+		case 'U', 'u', 'V':
+			if isTimeFormat {
+				add(2)
+			} else {
+				// MatrixOne preserves MySQL's 613566757 zero-date week
+				// sentinel, which is wider than an ordinary two-digit week.
+				add(9)
+			}
+		case 'v', 'y', 'm', 'd', 'h', 'I', 'i', 'l', 'p', 'S', 's', 'c', 'e':
+			add(2)
+		case 'k', 'H':
+			if isTimeFormat {
+				add(maxTimeHourWidth)
+			} else {
+				add(7)
+			}
+		case 'r':
+			add(11)
+		case 'T':
+			if isTimeFormat {
+				// The hour is not restricted to two digits for MatrixOne TIME.
+				add(maxTimeHourWidth + int64(len(":59:59")))
+			} else {
+				add(8)
+			}
+		case 'f':
+			add(6)
+		default:
+			add(1)
+		}
+	}
+	return int32(width)
 }
 
 func timeWindowIntervalUsesMicrosecond(expr *Expr) bool {

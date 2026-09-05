@@ -357,12 +357,13 @@ type QueryBuilder struct {
 	// detached CTE contexts cannot lose the private system-function owner.
 	persistedViewTarget string
 
-	ctxByNode             []*BindContext
-	windowValidationScans []*plan.Node
-	nameByColRef          map[[2]int32]string
-	protectedScans        map[int32]int
-	updateTargetScans     map[int32]struct{}
-	projectSpecialGuards  map[int32]*specialIndexGuard
+	ctxByNode               []*BindContext
+	headingProvenanceByNode map[int32]headingProvenanceMap
+	windowValidationScans   []*plan.Node
+	nameByColRef            map[[2]int32]string
+	protectedScans          map[int32]int
+	updateTargetScans       map[int32]struct{}
+	projectSpecialGuards    map[int32]*specialIndexGuard
 	// projectAnchoredSorts holds Top-K SORT node ids that a PROJECT directly above them
 	// will anchor the vector rewrite on. applyIndices walks children first, so without
 	// this the SORT-anchored entry point would claim the classic
@@ -582,12 +583,13 @@ type CTERef struct {
 }
 
 type cteOccurrence struct {
-	rootID       int32
-	rootTag      int32
-	ctx          *BindContext
-	headings     []string
-	types        []plan.Type
-	isCorrelated bool
+	rootID            int32
+	rootTag           int32
+	ctx               *BindContext
+	headings          []string
+	headingProvenance headingProvenanceMap
+	types             []plan.Type
+	isCorrelated      bool
 }
 
 type CteBindState struct {
@@ -620,6 +622,95 @@ const (
 type aliasItem struct {
 	idx     int32
 	astExpr tree.Expr
+}
+
+// headingPart keeps the syntax provenance needed when a CTAS heading is
+// normalized. Identifier text is lower-cased, while SQL string literals keep
+// their spelling because format strings are case-sensitive. Keeping the
+// segments separate avoids trying to infer syntax from apostrophes in the
+// rendered heading (an apostrophe is valid identifier data too).
+type headingPart struct {
+	text    string
+	literal bool
+}
+
+type headingProvenance struct {
+	parts []headingPart
+}
+
+// headingProvenanceMap stores only output columns whose headings contain
+// case-sensitive SQL string literals. Most planner outputs have no such
+// metadata, so keeping this map nil avoids allocating one empty entry per
+// heading (and avoids copying a full-width slice through every boundary).
+type headingProvenanceMap map[int32]headingProvenance
+
+func cloneHeadingProvenance(provenance headingProvenance) headingProvenance {
+	if len(provenance.parts) == 0 {
+		return headingProvenance{}
+	}
+	return headingProvenance{parts: append([]headingPart(nil), provenance.parts...)}
+}
+
+func headingProvenanceEqual(left, right headingProvenance) bool {
+	if len(left.parts) != len(right.parts) {
+		return false
+	}
+	for i := range left.parts {
+		if left.parts[i] != right.parts[i] {
+			return false
+		}
+	}
+	return true
+}
+
+func cloneHeadingProvenances(provenances headingProvenanceMap) headingProvenanceMap {
+	if len(provenances) == 0 {
+		return nil
+	}
+	cloned := make(headingProvenanceMap, len(provenances))
+	for i, provenance := range provenances {
+		if len(provenance.parts) == 0 {
+			continue
+		}
+		cloned[i] = cloneHeadingProvenance(provenance)
+	}
+	if len(cloned) == 0 {
+		return nil
+	}
+	return cloned
+}
+
+func mergeHeadingProvenances(
+	dst *headingProvenanceMap,
+	src headingProvenanceMap,
+	offset int32,
+) {
+	if len(src) == 0 {
+		return
+	}
+	if *dst == nil {
+		*dst = make(headingProvenanceMap, len(src))
+	}
+	for index, provenance := range src {
+		if len(provenance.parts) == 0 {
+			continue
+		}
+		(*dst)[offset+index] = cloneHeadingProvenance(provenance)
+	}
+}
+
+func truncateHeadingProvenances(provenances *headingProvenanceMap, length int32) {
+	if len(*provenances) == 0 {
+		return
+	}
+	for index := range *provenances {
+		if index >= length {
+			delete(*provenances, index)
+		}
+	}
+	if len(*provenances) == 0 {
+		*provenances = nil
+	}
 }
 
 type orderResolutionMetadata struct {
@@ -689,6 +780,15 @@ type BindContext struct {
 	//cte in binding or bound already
 	boundCtes map[string]*CTERef
 	headings  []string
+	// headingProvenance records only output positions with structural SQL
+	// literal segments in an expression heading. CTAS uses it to preserve
+	// case-sensitive format strings without confusing apostrophes that are part
+	// of identifier text with string delimiters.
+	headingProvenance headingProvenanceMap
+	// generatedHeadingProvenance is keyed by output ordinal for the
+	// ROLLUP/window rewrite. An ordinal avoids case-folding collisions between
+	// headings such as DATE_FORMAT(..., '%M') and DATE_FORMAT(..., '%m').
+	generatedHeadingProvenance headingProvenanceMap
 
 	// captureViewStarExpansion is enabled only while binding a CREATE/ALTER
 	// VIEW definition. Ordinary SELECT planning must not clone its select list
@@ -1007,9 +1107,13 @@ type Binding struct {
 	// lower case: used for binding/lookup
 	cols []string
 	// original case: only for SELECT * display, must be same length as cols (or empty)
-	originCols  []string
-	colIsHidden []bool
-	types       []*plan.Type
+	originCols []string
+	// headingProvenance carries expression-heading syntax through a derived
+	// table/CTE so SELECT * can retain the original literal spelling. It is
+	// sparse and keyed by column ordinal.
+	headingProvenance headingProvenanceMap
+	colIsHidden       []bool
+	types             []*plan.Type
 	// mysqlSpecialOrderTypes is aligned with cols. A non-nil entry means that
 	// the string column is a pure display of the recorded ENUM/SET storage
 	// type, and may therefore use definition-order semantics when ordered.
