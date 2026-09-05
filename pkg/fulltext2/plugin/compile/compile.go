@@ -133,7 +133,7 @@ func buildAndRegisterCDC(ctx compileplugin.CompileContext, storeDef, metaDef *pl
 				return err
 			}
 		}
-		cache.Cache.Remove(storeDef.IndexTableName)
+		cache.Cache.RemoveAllGenerations(storeDef.IndexTableName, "ddl")
 	}
 	// buildFromSource clears the prior tag=0 bases (idempotent) and rebuilds them.
 	if err := buildFromSource(ctx, storeDef, metaDef, origTable, db); err != nil {
