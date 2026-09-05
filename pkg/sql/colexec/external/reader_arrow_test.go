@@ -35,6 +35,7 @@ import (
 	"github.com/apache/arrow-go/v18/arrow/memory"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/container/arrowbridge"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -46,6 +47,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	metric "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/vm"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/minio/minio-go/v7"
 	"github.com/minio/minio-go/v7/pkg/credentials"
 	promtestutil "github.com/prometheus/client_golang/prometheus/testutil"
@@ -76,7 +78,7 @@ func TestExternalArrowLoadFileAndStream(t *testing.T) {
 			require.NoError(t, err)
 			account, err := registry.Open(64 << 20)
 			require.NoError(t, err)
-			proc := testutil.NewProc(t)
+			proc := newArrowLoadTestProc(t)
 			proc.Base.SessionInfo.TimeZone = nil // reader must use its UTC fallback
 
 			arg := NewArgument().WithEs(externalArrowParam(fs, path, int64(len(fileBytes)), container))
@@ -141,7 +143,7 @@ func TestExternalArrowForceMaterialize(t *testing.T) {
 	require.NoError(t, err)
 	account, err := registry.Open(64 << 20)
 	require.NoError(t, err)
-	proc := testutil.NewProc(t)
+	proc := newArrowLoadTestProc(t)
 	param := externalArrowParam(fs, path, int64(len(fileBytes)), tree.ARROW_CONTAINER_FILE)
 	param.ArrowForceMaterialize = true
 	arg := NewArgument().WithEs(param)
@@ -191,7 +193,7 @@ func TestArrowLoadErrorCategory(t *testing.T) {
 }
 
 func TestArrowReaderOpenRejectsMissingFileParam(t *testing.T) {
-	proc := testutil.NewProc(t)
+	proc := newArrowLoadTestProc(t)
 	reader := new(ArrowReader)
 	_, err := reader.Open(&ExternalParam{
 		ExParamConst: ExParamConst{Extern: &tree.ExternParam{}},
@@ -268,7 +270,8 @@ func TestExternalArrowLoadFromLocalMinIOAndRejectsObjectChange(t *testing.T) {
 	require.NoError(t, err)
 	account, err := registry.Open(64 << 20)
 	require.NoError(t, err)
-	proc := testutil.NewProc(t)
+	proc := newArrowLoadTestProc(t)
+	proc.Ctx.Value(config.ParameterUnitKey).(*config.ParameterUnit).SV.ArrowLoad.S3Enabled = true
 	path := "etl:load.arrow"
 	arg := NewArgument().WithEs(externalArrowParam(fs, path, int64(len(payload)), tree.ARROW_CONTAINER_FILE))
 	require.NoError(t, arg.SetAllocationAccount(account))
@@ -302,7 +305,7 @@ func TestExternalArrowLoadFromLocalMinIOAndRejectsObjectChange(t *testing.T) {
 	require.NoError(t, err)
 	account, err = registry.Open(64 << 20)
 	require.NoError(t, err)
-	proc = testutil.NewProc(t)
+	proc = newArrowLoadTestProc(t)
 	param := externalArrowParam(fs, identityPath, int64(len(payload)), tree.ARROW_CONTAINER_FILE)
 	param.Fileparam.FileIndex = 1
 	param.Fileparam.Filepath = identityPath
@@ -417,7 +420,7 @@ func TestExternalArrowSkipsZeroRowRecordBatches(t *testing.T) {
 			require.NoError(t, err)
 			account, err := registry.Open(64 << 20)
 			require.NoError(t, err)
-			proc := testutil.NewProc(t)
+			proc := newArrowLoadTestProc(t)
 			arg := NewArgument().WithEs(externalArrowParam(fs, path, int64(len(payload)), container))
 			require.NoError(t, arg.SetAllocationAccount(account))
 			require.NoError(t, arg.Prepare(proc))
@@ -444,7 +447,7 @@ func TestExternalArrowSkipsZeroRowRecordBatches(t *testing.T) {
 }
 
 func TestExternalArrowPrepareFailsClosedBeforeIO(t *testing.T) {
-	proc := testutil.NewProc(t)
+	proc := newArrowLoadTestProc(t)
 	for _, test := range []struct {
 		name       string
 		externType int32
@@ -466,6 +469,44 @@ func TestExternalArrowPrepareFailsClosedBeforeIO(t *testing.T) {
 			arg.Release()
 		})
 	}
+}
+
+func TestExternalArrowPrepareEnforcesWorkerRolloutGate(t *testing.T) {
+	proc := newArrowLoadTestProc(t)
+	defer proc.Free()
+	settings := proc.Ctx.Value(config.ParameterUnitKey).(*config.ParameterUnit).SV
+
+	param := externalArrowParam(nil, "worker-gate.arrow", 1, tree.ARROW_CONTAINER_FILE)
+	param.Extern.Parallel = true
+	arg := NewArgument().WithEs(param)
+	err := arg.Prepare(proc)
+	require.ErrorContains(t, err, "distributed Arrow LOAD is disabled")
+	require.Nil(t, arg.reader)
+	arg.Release()
+
+	settings.ArrowLoad.DistributedEnabled = true
+	registry, err := mpool.NewAllocationAccountRegistry(1, 128)
+	require.NoError(t, err)
+	account, err := registry.Open(64 << 20)
+	require.NoError(t, err)
+	arg = NewArgument().WithEs(param)
+	require.NoError(t, arg.SetAllocationAccount(account))
+	require.NoError(t, arg.Prepare(proc))
+	arg.Free(proc, false, nil)
+	require.NoError(t, arg.ClearAllocationAccount(account))
+	arg.Release()
+	account.Seal()
+	_, err = registry.Finalize(account)
+	require.NoError(t, err)
+
+	settings.ArrowLoad.DistributedEnabled = false
+	param = externalArrowParam(nil, "s3-gate.arrow", 1, tree.ARROW_CONTAINER_FILE)
+	param.Extern.ScanType = tree.S3
+	arg = NewArgument().WithEs(param)
+	err = arg.Prepare(proc)
+	require.ErrorContains(t, err, "S3 or stage is disabled")
+	require.Nil(t, arg.reader)
+	arg.Release()
 }
 
 func TestExternalArrowAllocationAccountContract(t *testing.T) {
@@ -591,7 +632,7 @@ func TestExternalArrowFileRecordBatchShard(t *testing.T) {
 	require.NoError(t, err)
 	account, err := registry.Open(64 << 20)
 	require.NoError(t, err)
-	proc := testutil.NewProc(t)
+	proc := newArrowLoadTestProc(t)
 	param := externalArrowParam(fs, path, int64(len(payload)), tree.ARROW_CONTAINER_FILE)
 	param.ArrowRecordBatchShards = []*pipeline.ArrowRecordBatchShard{{
 		FileIndex: 0, RecordBatchStart: 1, RecordBatchEnd: 2,
@@ -616,7 +657,7 @@ func TestExternalArrowFileRecordBatchShard(t *testing.T) {
 }
 
 func TestExternalArrowConversionPlanVersionAndFingerprintFailClosed(t *testing.T) {
-	proc := testutil.NewProc(t)
+	proc := newArrowLoadTestProc(t)
 	for _, test := range []struct {
 		name        string
 		version     uint32
@@ -660,7 +701,7 @@ func TestExternalArrowRejectsPlannedFingerprintMismatchBeforeRecordRead(t *testi
 	require.NoError(t, err)
 	account, err := registry.Open(64 << 20)
 	require.NoError(t, err)
-	proc := testutil.NewProc(t)
+	proc := newArrowLoadTestProc(t)
 	param := externalArrowParam(fs, path, int64(len(payload)), tree.ARROW_CONTAINER_FILE)
 	param.ArrowSchemaFingerprint = make([]byte, 32)
 	arg := NewArgument().WithEs(param)
@@ -700,7 +741,7 @@ func TestExternalArrowFailurePathsReleaseAllocationAccount(t *testing.T) {
 			require.NoError(t, err)
 			account, err := registry.Open(test.limit)
 			require.NoError(t, err)
-			proc := testutil.NewProc(t)
+			proc := newArrowLoadTestProc(t)
 			arg := NewArgument().WithEs(externalArrowParam(
 				fs, path, int64(len(payload)), tree.ARROW_CONTAINER_FILE,
 			))
@@ -861,6 +902,16 @@ func externalArrowParam(fs fileservice.FileService, path string, size int64, con
 		},
 		ExParam: ExParam{Fileparam: &ExFileparam{}, Filter: &FilterParam{}},
 	}
+}
+
+func newArrowLoadTestProc(t *testing.T) *process.Process {
+	t.Helper()
+	proc := testutil.NewProc(t)
+	frontend := &config.FrontendParameters{}
+	frontend.SetDefaultValues()
+	proc.Ctx = context.WithValue(proc.Ctx, config.ParameterUnitKey,
+		config.NewParameterUnit(frontend, nil, nil, nil))
+	return proc
 }
 
 func makeExternalArrowIPC(t *testing.T, container string) []byte {

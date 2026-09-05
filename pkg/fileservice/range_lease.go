@@ -232,15 +232,17 @@ func (r *conditionalFileServiceRangeReader) ReadRangeLeaseWithIdentity(
 		if err != nil {
 			return err
 		}
-		defer reader.Close()
-		if _, err = io.ReadFull(reader, destination); err != nil {
-			return err
+		var readErr error
+		if _, readErr = io.ReadFull(reader, destination); readErr == nil {
+			var probe [1]byte
+			if n, probeErr := reader.Read(probe[:]); n != 0 || (probeErr != nil && !errors.Is(probeErr, io.EOF)) {
+				readErr = moerr.NewUnexpectedEOFNoCtx(path)
+			}
 		}
-		var probe [1]byte
-		if n, readErr := reader.Read(probe[:]); n != 0 || (readErr != nil && !errors.Is(readErr, io.EOF)) {
-			return moerr.NewUnexpectedEOFNoCtx(path)
-		}
-		return nil
+		// Conditional providers can report an object-generation mismatch only
+		// while finalizing the response. Do not commit the range reservation
+		// until that Close result has been observed.
+		return errors.Join(readErr, reader.Close())
 	})
 }
 

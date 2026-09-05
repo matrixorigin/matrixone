@@ -122,6 +122,12 @@ func (external *External) Prepare(proc *process.Process) error {
 			param.Extern.FileService = proc.Base.FileService
 		}
 	}
+	if param.Extern.FileService == nil {
+		// Decoded remote parameters carry path/configuration but not the local
+		// FileService interface. Install the executing CN's service before the
+		// rollout gate so aliases are classified against that worker's backend.
+		param.Extern.FileService = proc.Base.FileService
+	}
 	if param.ForeignScan != nil && param.ForeignScan.Kind == foreignScanKindESQL {
 		param.ESQLTemporalUTC = true
 	}
@@ -132,6 +138,19 @@ func (external *External) Prepare(proc *process.Process) error {
 		(param.Extern.ExternType != int32(plan.ExternType_LOAD) ||
 			param.ArrowExecutionScope != pipeline.ArrowExecutionScope_ArrowLoadData) {
 		return moerr.NewNotSupported(proc.Ctx, "Arrow format is supported only by LOAD DATA")
+	}
+	if param.Extern.Format == tree.ARROW {
+		// A remote External is reconstructed on the executing CN.  The compile
+		// gate on the coordinator is therefore not sufficient: each worker must
+		// enforce its own rollout configuration before it opens the source.
+		settings, err := plan2.RequireArrowLoadEnabled(proc, param.Extern)
+		if err != nil {
+			return err
+		}
+		if param.Extern.Parallel && !settings.DistributedEnabled {
+			return moerr.NewNotSupported(proc.Ctx,
+				"distributed Arrow LOAD is disabled by configuration")
+		}
 	}
 	if param.Extern.ExternType == int32(plan.ExternType_LOAD) &&
 		(param.Extern.Parallel || param.Extern.ParallelLoadRequested) {
@@ -383,7 +402,14 @@ func (external *External) Call(proc *process.Process) (vm.CallResult, error) {
 	}
 
 	if fileFinished {
-		external.reader.Close()
+		if err := external.reader.Close(); err != nil {
+			external.fileOpened = false
+			param.Fileparam.End = true
+			if external.ctr.buf != nil {
+				external.ctr.buf.CleanOnlyData()
+			}
+			return result, err
+		}
 		external.finishCurrentFile(param)
 	}
 

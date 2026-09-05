@@ -46,7 +46,11 @@ func (p *Plan) MaxOutputRows(
 	if schemaFingerprint(recordSchema) != p.schemaFingerprint {
 		return 0, moerr.NewInvalidInput(ctx, "Arrow record schema does not match the bound schema")
 	}
-	if err := validateRecordColumns(ctx, record, recordSchema, p.columns); err != nil {
+	// ReadBatch validates a newly received immutable record once before it is
+	// split into output windows.  Keep this hot path to structural checks: a
+	// full validity-bitmap scan here for every window turns one large record
+	// into quadratic work. Convert validates each selected window instead.
+	if err := validateRecordShape(ctx, record, recordSchema, p.columns); err != nil {
 		return 0, err
 	}
 	available := record.NumRows() - start
@@ -92,6 +96,41 @@ func validateRecordColumns(
 	schema *arrow.Schema,
 	columns []columnPlan,
 ) error {
+	if err := validateRecordShape(ctx, record, schema, columns); err != nil {
+		return err
+	}
+	for _, binding := range columns {
+		column := record.Column(binding.source)
+		if _, err := validateArrowArrayValidity(ctx, column); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// ValidateRecord validates an immutable record once before a caller splits it
+// into output windows. It includes validity metadata; window conversion still
+// validates its own sliced arrays so a standalone Convert remains safe.
+func (p *Plan) ValidateRecord(ctx context.Context, record arrow.RecordBatch) error {
+	if p == nil || record == nil {
+		return moerr.NewInvalidInput(ctx, "invalid Arrow record")
+	}
+	recordSchema := record.Schema()
+	if recordSchema == nil {
+		return moerr.NewInvalidInput(ctx, "Arrow record schema is nil")
+	}
+	if schemaFingerprint(recordSchema) != p.schemaFingerprint {
+		return moerr.NewInvalidInput(ctx, "Arrow record schema does not match the bound schema")
+	}
+	return validateRecordColumns(ctx, record, recordSchema, p.columns)
+}
+
+func validateRecordShape(
+	ctx context.Context,
+	record arrow.RecordBatch,
+	schema *arrow.Schema,
+	columns []columnPlan,
+) error {
 	if record.NumCols() != int64(len(columns)) {
 		return moerr.NewInvalidInputf(ctx, "Arrow record has %d columns, expected %d", record.NumCols(), len(columns))
 	}
@@ -109,9 +148,6 @@ func validateRecordColumns(
 			column.DataType() == nil || column.DataType().Fingerprint() != schema.Field(binding.source).Type.Fingerprint() {
 			return moerr.NewInvalidInputf(ctx,
 				"Arrow column %q data type does not match the bound schema", binding.target.Name)
-		}
-		if _, err := validateArrowArrayValidity(ctx, column); err != nil {
-			return err
 		}
 	}
 	return nil

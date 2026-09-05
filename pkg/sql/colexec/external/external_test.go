@@ -19,6 +19,7 @@ import (
 	"compress/zlib"
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"os"
 	"path/filepath"
@@ -408,7 +409,7 @@ func TestPrepareSetsLoadEmptyNumericAsZeroForParallelRequestedLoad(t *testing.T)
 }
 
 func TestPrepareAllocatesArrowVectorsByPhysicalColumnIndex(t *testing.T) {
-	proc := testutil.NewProc(t)
+	proc := newArrowLoadTestProc(t)
 	defer proc.Free()
 
 	fs, err := fileservice.NewMemoryFS("arrow-prepare", fileservice.DisabledCacheConfig, nil)
@@ -444,6 +445,34 @@ func TestPrepareAllocatesArrowVectorsByPhysicalColumnIndex(t *testing.T) {
 	require.NoError(t, err)
 }
 
+type closeErrorExternalReader struct{ err error }
+
+func (r *closeErrorExternalReader) Open(*ExternalParam, *process.Process) (bool, error) {
+	return false, nil
+}
+
+func (r *closeErrorExternalReader) ReadBatch(context.Context, *batch.Batch, *process.Process, process.Analyzer) (bool, error) {
+	return true, nil
+}
+
+func (r *closeErrorExternalReader) Close() error { return r.err }
+
+func TestExternalCallPropagatesTerminalReaderCloseError(t *testing.T) {
+	proc := testutil.NewProc(t)
+	defer proc.Free()
+	param := &ExternalParam{
+		ExParamConst: ExParamConst{Extern: &tree.ExternParam{ExParamConst: tree.ExParamConst{ScanType: tree.INLINE}}},
+		ExParam:      ExParam{Fileparam: &ExFileparam{}},
+	}
+	external := &External{Es: param, reader: &closeErrorExternalReader{err: errors.New("deferred stream close failed")}, fileOpened: true}
+	external.OpAnalyzer = process.NewAnalyzer(0, true, true, "external-close-test")
+
+	_, err := external.Call(proc)
+	require.ErrorContains(t, err, "deferred stream close failed")
+	require.False(t, external.fileOpened)
+	require.True(t, param.Fileparam.End)
+}
+
 func TestExternalPrepareRejectsMissingFileParam(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	defer proc.Free()
@@ -471,7 +500,7 @@ func TestExternalPrepareRejectsMissingFileParam(t *testing.T) {
 }
 
 func TestExternalPrepareRejectsInvalidAttrIndexWithoutPartialState(t *testing.T) {
-	proc := testutil.NewProcess(t)
+	proc := newArrowLoadTestProc(t)
 	defer proc.Free()
 
 	fs, err := fileservice.NewMemoryFS("arrow-prepare-invalid-attr", fileservice.DisabledCacheConfig, nil)
