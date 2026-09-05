@@ -152,6 +152,11 @@ func (s *Segment) decodeSegment(data []byte) error {
 		return err
 	}
 	s.dict = dict
+	// Structural corruption may have a matching outer checksum (for example, a bad
+	// writer or restored blob). Keep loading for backward-compatible safe-miss
+	// behavior, but enable header-only DF only when every FST target is accepted by
+	// the same parser as LookupLoaded.
+	s.headerDFSafe = s.validateLoadedPostingsDirectory()
 	// s.N is set by decodeDocmap (loaded segments have pks==nil, so len(s.pks) is 0).
 	return nil
 }
@@ -561,6 +566,20 @@ func (s *Segment) decodePostings(ranking, blocks, positions []byte) error {
 // Returns (nil,false) on a corrupt/out-of-bounds entry (defense-in-depth on already-CRC'd
 // data).
 func (s *Segment) decodeTermEntry(off int) (*termPostings, bool) {
+	return s.parseTermEntry(off, true)
+}
+
+// validateTermEntry parses the complete directory entry without allocating the
+// transient block metadata slices returned to search cursors.
+func (s *Segment) validateTermEntry(off int) bool {
+	_, ok := s.parseTermEntry(off, false)
+	return ok
+}
+
+// parseTermEntry is the single structural parser for loaded posting-directory
+// entries. materialize=false performs exactly the same bounds/varint walk while
+// retaining only O(1) scalar state.
+func (s *Segment) parseTermEntry(off int, materialize bool) (*termPostings, bool) {
 	r := s.ranking
 	if off < 0 || off >= len(r) {
 		return nil, false
@@ -604,55 +623,90 @@ func (s *Segment) decodeTermEntry(off int) (*termPostings, bool) {
 		return nil, false
 	}
 	df, nblk := int(dfu), int(nblku)
-	tp := &termPostings{ndoc: df, maxTf: termMaxTf, minDocLen: int32(minDLu)}
+	var tp *termPostings
+	if materialize {
+		tp = &termPostings{ndoc: df, maxTf: termMaxTf, minDocLen: int32(minDLu)}
+	}
 	if nblk == 0 {
 		return tp, true
 	}
-	tp.blockLastDoc = make([]int64, nblk)
-	tp.blockMaxTf = make([]uint8, nblk)
-	tp.blockMinDocLn = make([]int32, nblk)
-	tp.blockOff = make([]int64, nblk+1)    // byte offsets RELATIVE to this term's blockData
-	tp.blockPosOff = make([]int64, nblk+1) // byte offsets RELATIVE to this term's posRaw
-	var prevLast, cb, cpos int64
+	if materialize {
+		tp.blockLastDoc = make([]int64, nblk)
+		tp.blockMaxTf = make([]uint8, nblk)
+		tp.blockMinDocLn = make([]int32, nblk)
+		tp.blockOff = make([]int64, nblk+1)    // byte offsets RELATIVE to this term's blockData
+		tp.blockPosOff = make([]int64, nblk+1) // byte offsets RELATIVE to this term's posRaw
+	}
+	var prevLast int64
+	var cb, cpos uint64
 	for b := 0; b < nblk; b++ {
 		gap, ok := uv()
 		if !ok {
 			return nil, false
 		}
 		prevLast += int64(gap)
-		tp.blockLastDoc[b] = prevLast
+		if materialize {
+			tp.blockLastDoc[b] = prevLast
+		}
 		if p >= len(r) {
 			return nil, false
 		}
-		tp.blockMaxTf[b] = r[p]
+		blockMaxTf := r[p]
 		p++
 		mdl, ok := uv()
 		if !ok {
 			return nil, false
 		}
-		tp.blockMinDocLn[b] = int32(mdl)
 		blkLen, ok := uv()
-		if !ok || blkLen > uint64(len(s.blocks)) {
+		if !ok || cb > uint64(len(s.blocks)) || blkLen > uint64(len(s.blocks))-cb {
 			return nil, false
 		}
-		tp.blockOff[b] = cb
-		cb += int64(blkLen)
 		posLen, ok := uv()
-		if !ok || posLen > uint64(len(s.positions)) {
+		if !ok || cpos > uint64(len(s.positions)) || posLen > uint64(len(s.positions))-cpos {
 			return nil, false
 		}
-		tp.blockPosOff[b] = cpos
-		cpos += int64(posLen)
+		if materialize {
+			tp.blockMaxTf[b] = blockMaxTf
+			tp.blockMinDocLn[b] = int32(mdl)
+			tp.blockOff[b] = int64(cb)
+			tp.blockPosOff[b] = int64(cpos)
+		}
+		cb += blkLen
+		cpos += posLen
 	}
-	tp.blockOff[nblk] = cb
-	tp.blockPosOff[nblk] = cpos
-	// blockData/posRaw are views into the mmap sections at this term's stored bases.
-	if int64(baseB)+cb > int64(len(s.blocks)) || int64(baseP)+cpos > int64(len(s.positions)) {
+	if baseB > uint64(len(s.blocks)) || cb > uint64(len(s.blocks))-baseB ||
+		baseP > uint64(len(s.positions)) || cpos > uint64(len(s.positions))-baseP {
 		return nil, false
 	}
-	tp.blockData = s.blocks[baseB : int64(baseB)+cb]
-	tp.posRaw = s.positions[baseP : int64(baseP)+cpos]
+	if !materialize {
+		return nil, true
+	}
+	tp.blockOff[nblk] = int64(cb)
+	tp.blockPosOff[nblk] = int64(cpos)
+	// blockData/posRaw are views into the mmap sections at this term's stored bases.
+	tp.blockData = s.blocks[int(baseB):int(baseB+cb)]
+	tp.posRaw = s.positions[int(baseP):int(baseP+cpos)]
 	return tp, true
+}
+
+// validateLoadedPostingsDirectory validates every FST-reachable entry once at
+// load. A single corrupt entry conservatively disables the header-only DF fast
+// path for the segment; searches retain the prior per-term safe-miss behavior.
+func (s *Segment) validateLoadedPostingsDirectory() bool {
+	if s.dict == nil || len(s.ranking) < 1+8 || s.ranking[0] != postingsFormatV1 {
+		return false
+	}
+	nterms := binary.LittleEndian.Uint64(s.ranking[1 : 1+8])
+	if nterms != uint64(s.dict.len()) {
+		return false
+	}
+	valid, err := s.dict.everyValue(func(off uint64) bool {
+		if off > uint64(^uint(0)>>1) {
+			return false
+		}
+		return s.validateTermEntry(int(off))
+	})
+	return err == nil && valid
 }
 
 // deriveTermStats fills tp's raw, scorer-agnostic score-UB fields from its
@@ -718,4 +772,37 @@ func (s *Segment) LookupLoaded(term string) (*termPostings, bool) {
 		return nil, false
 	}
 	return s.decodeTermEntry(int(off))
+}
+
+// lookupLoadedDF resolves an exact term on a loaded, fully-live segment and reads
+// only the document-frequency varint at the FST entry offset. The rest of the
+// directory (block max metadata and block/position ranges) is deliberately left
+// untouched: a clean segment can use its raw posting df without decoding it.
+// The fast path is enabled only after every FST target in the loaded segment has
+// passed the full structural parser. Dirty segments must use LookupLoaded because
+// their postings have to be streamed against the liveness bitmap.
+func (s *Segment) lookupLoadedDF(term string) (int, bool) {
+	if s.dict == nil || !s.headerDFSafe {
+		return 0, false
+	}
+	off, ok, err := s.dict.get(term)
+	if err != nil || !ok {
+		return 0, false
+	}
+	return s.termDFAt(off)
+}
+
+// termDFAt reads the first field of one loaded posting-directory entry. It is
+// kept separate from the FST lookup so the header parse itself remains a
+// trivially allocation-free operation; the FST's byte-key conversion remains
+// unchanged until the later offset-cache stage is justified by profiling.
+func (s *Segment) termDFAt(off uint64) (int, bool) {
+	if off >= uint64(len(s.ranking)) {
+		return 0, false
+	}
+	df, n := binary.Uvarint(s.ranking[int(off):])
+	if n <= 0 || df == 0 || df > uint64(len(s.blocks)) || df > uint64(^uint(0)>>1) {
+		return 0, false
+	}
+	return int(df), true
 }
