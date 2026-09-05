@@ -1,9 +1,9 @@
 # Historical orphan object privilege maintenance
 
-- Design version: **v1**
-- Status: **approved**
-- Approved design revision: `1aea9ce32bdfcaea14ab4942229e2f870398866b`
-- Independent review decision: **PASS**, recorded 2026-09-04
+- Design version: **v2**
+- Status: **proposed — implementation review blocked pending traceable independent approval**
+- Approved design revision: **pending**
+- Independent review decision: **pending; must identify the reviewer and link a GitHub review/comment**
 - Owning issue: [#27836](https://github.com/matrixorigin/matrixone/issues/27836)
 - Related forward-cleanup issue: [#27723](https://github.com/matrixorigin/matrixone/issues/27723)
 - Implementation PR: [#28120](https://github.com/matrixorigin/matrixone/pull/28120)
@@ -27,13 +27,13 @@ The approved #27723 design cannot cover this work. Its non-goal explicitly assig
 
 Before #27745, successful object DROP could leave `mo_catalog.mo_role_privs` rows whose `obj_id` no longer exists in `mo_database.dat_id` or `mo_tables.rel_logical_id`. Logical object IDs are not reused, so no known privilege escalation follows, but repeated DDL churn leaves permanent catalog bloat.
 
-A direct `DELETE ... NOT EXISTS ... LIMIT 1000` bounds deleted rows but not inspected or scanned rows. A logical five-column keyset query also does not imply bounded physical work: on 10,036 rows it allowed the Table Scan to input about 8,241 rows for a limited page. A process-local cursor starting at the minimum can additionally replay the same live prefix after every process restart.
+A direct `DELETE ... NOT EXISTS ... LIMIT 1000` bounds deleted rows but not inspected or scanned rows. A logical five-column keyset query also does not imply bounded physical work: on 10,036 rows it allowed the Table Scan to input about 8,241 rows for a limited page. A process-local cursor starting at the minimum can additionally replay the same live prefix after every process restart. Finally, a fixed physical high-water is only a key bound, not a frozen snapshot: rows inserted in later page snapshots between the cursor and high-water extend the active traversal.
 
 The design must therefore distinguish:
 
 1. **semantic page size** — at most 1,000 privilege candidates classified by one transaction;
 2. **physical scan work** — ordered limit must reach the storage reader on the existing physical key;
-3. **healthy-process completion** — a frozen finite tenant/account set must close;
+3. **healthy-process completion** — a fixed tenant key bound closes only under finite ahead-of-cursor insertion, after which account traversal can continue;
 4. **restart behavior** — process-local progress is lost and has no finite-restart convergence bound.
 
 ## 3. Definitions
@@ -42,7 +42,7 @@ The design must therefore distinguish:
 - **Confirmed orphan**: a supported concrete database/relation grant with nonzero `obj_id` for which the corresponding logical ID is absent in the same tenant transaction snapshot.
 - **Physical key**: `mo_role_privs.__mo_cpkey_col`, the existing serialized five-column primary key.
 - **Account round**: a finite traversal whose account high-water is frozen when the round begins.
-- **Tenant ring**: a finite traversal of keys visible up to a frozen physical high-water, split around a selected start threshold.
+- **Tenant ring**: a traversal of page snapshots bounded above by one fixed physical high-water key and split around a selected start threshold; the key domain is fixed, but its row set is not.
 - **Maintenance page transaction**: one target-tenant transaction that examines no more than 1,000 candidates and deletes only confirmed orphans from that candidate set.
 - **Healthy process**: a service process that remains running long enough for its periodic owner to execute successive pages without losing process-local state.
 - **Restart opportunity**: a new process generation that reaches final-version maintenance and selects the relevant tenant.
@@ -56,7 +56,7 @@ The design must therefore distinguish:
 3. Keep every statement tenant-local and prevent cross-tenant deletion.
 4. Inspect and delete from at most 1,000 privilege candidates per maintenance transaction.
 5. Bound physical candidate/high-water scans through the existing composite primary key without adding catalog indexes or hidden index tables.
-6. Complete finite frozen account and tenant rings while a process remains healthy.
+6. Complete the frozen account ring and a selected tenant ring while a process remains healthy and inserts ahead of the tenant cursor are finite.
 7. Remain idempotent under retries, duplicate CN execution, late tenant creation, restore, and mixed-version writers.
 8. Keep normal tenant upgrades higher priority than historical maintenance.
 
@@ -73,7 +73,7 @@ The design must therefore distinguish:
 ### 4.3 Fixed constraints
 
 - page size is 1,000 candidates;
-- progress is process-local and published only after transaction commit;
+- tenant physical progress is process-local and published only after page transaction commit; account scheduling has separate lookup-commit and terminal-page-failure transitions;
 - normal upgrade tasks run first;
 - catalog schema and snapshot format remain unchanged;
 - multiple CNs may execute the same logical work;
@@ -87,15 +87,17 @@ The design must therefore distinguish:
 2. DELETE keys are a subset of that page and use the complete five-column logical primary key.
 3. Every live-object lookup and DELETE executes with the selected account ID; relation lookup also checks `account_id = current_account_id()`.
 4. `obj_id = 0`, unknown object/scope encodings, and recognized rows with a live logical ID are preserved.
-5. A failed/retried transaction publishes neither cursor progress nor completion.
+5. A failed/retried page transaction publishes neither DELETE results nor tenant physical cursor/completion. A terminal page failure may deliberately advance the separate account cursor after rollback, isolating that tenant until a later round.
 6. Physical reader-limit pushdown is enabled only when every scan predicate is a folded literal range on the same hidden physical primary key. Any residual or non-folded runtime expression disables reader truncation.
 7. A maintenance error cannot fail or roll back an already committed normal tenant upgrade; the two activities use separate transactions.
 
 ### 5.2 Liveness semantics
 
-- **Healthy-process guarantee**: after selecting a tenant with `N` rows at or below its frozen high-water, its two-segment physical ring finishes in at most `ceil(N/1000) + 2` page attempts that commit successfully. The additive bound covers segment transition and an exact-full-page terminal probe. The account round is finite because its account high-water does not move.
+- **Conditional healthy-process guarantee**: let `N0` be the rows at or below the fixed high-water when the tenant starts, and let `A` be the finite total number of later rows inserted ahead of the cursor and within the unvisited ring segments. After those rows become visible, the ring finishes in at most `ceil((N0+A)/1000) + 2` successful page attempts, excluding transaction attempts that fail. The additive bound covers splitting around the start and a terminal probe.
+- **Sustained-write limitation**: if writers keep adding a full candidate page ahead of the committed cursor and below high-water before each tick, the tenant can remain selected forever. That CN then does not advance to later accounts. High-water prevents keys above the bound from extending the traversal, but does not prevent this within-bound starvation.
+- **Account-round limitation**: the account key domain is frozen, but the round is finite only if every selected tenant eventually completes or produces a terminal error. Other CNs may start elsewhere, but no cluster-level owner guarantees that they cover the blocked CN’s later accounts.
 - **Restart limitation**: process restart discards account and tenant progress. New account/key starts have full support, so under independent entropy and infinitely many eligible restart opportunities each fixed existing tenant/key is visited with probability one. There is no deterministic finite-restart bound.
-- **Issue acceptance interpretation**: “safe to resume after interruption” means retries/restarts cannot publish false progress, corrupt grants, or make cleanup non-idempotent. It does **not** mean deterministic continuation from the last committed key. This interpretation is an explicit accepted tradeoff only after independent design approval.
+- **Issue acceptance interpretation**: “safe to resume after interruption” means retries/restarts cannot publish false tenant progress, corrupt grants, or make cleanup non-idempotent. It does **not** mean deterministic continuation from the last committed key, immunity to sustained within-bound inserts, or guaranteed account fairness. These are explicit tradeoffs requiring traceable independent design approval.
 
 ## 6. Selected architecture
 
@@ -133,13 +135,13 @@ using ordered account lookup. New accounts above the high-water wait for the nex
 
 When an account is selected, a physical start threshold is generated. Half of starts use a valid serialized key shape with magnitude-distributed numeric fields, improving reachability around common small IDs. Half use a full-support byte distribution over lengths `[0, 956]`, ensuring every finite physical key has nonzero start probability independent of table cardinality.
 
-The first page freezes the maximum physical key. The tenant traverses:
+The first page fixes the maximum physical key as an upper bound. It does not retain that transaction snapshot. Each later page can observe rows newly inserted below the bound. The tenant traverses:
 
 ```text
 [start, high-water] then [physical minimum, start)
 ```
 
-Candidate/high-water SQL orders only by `__mo_cpkey_col`. Cursor and high-water are validated hex strings with a 956-byte decoded maximum. The cursor advances to the last examined physical key even if all candidates are live or conservatively preserved.
+Candidate/high-water SQL orders only by `__mo_cpkey_col`. Cursor and high-water are validated hex strings with a 956-byte decoded maximum. The cursor advances to the last examined physical key even if all candidates are live or conservatively preserved. A finite number of inserts ahead of the cursor adds finite work; a sustained full-page insert stream below high-water can prevent segment completion and retain this tenant indefinitely.
 
 ### 6.5 Candidate classification
 
@@ -157,7 +159,7 @@ A maintenance wake can execute:
 2. when no tenant is selected, one system-account lookup transaction;
 3. one target-tenant maintenance page transaction.
 
-The account transaction commit is the publication point for account selection/start state. The tenant page transaction commit is the publication point for deletes and the next in-memory key cursor. Process-local state is assigned only after `ExecTxn` succeeds.
+The account lookup transaction commit is the publication point for successful account selection/start state. The tenant page transaction commit is the publication point for deletes and the next in-memory physical cursor. `ExecTxn` retries publish neither kind of tentative state. If all retries of a tenant page fail, the service intentionally advances the account cursor outside that failed page transaction; this is failure-isolation scheduling progress, not successful tenant scan progress, and the tenant is eligible again in a later account round.
 
 ### 7.2 Retry
 
@@ -176,8 +178,8 @@ Duplicate classification is safe because object IDs are not reused and DELETE is
 ### 7.4 Failure isolation
 
 - missing/dropped/broken tenant: page fails, local account advances, later rounds may retry;
-- candidate/live lookup/delete failure: page rolls back, no cursor is published;
-- account lookup failure: account state does not advance;
+- candidate/live lookup/delete failure: page rolls back, no tenant physical cursor is published; after the executor returns the terminal error, local account scheduling advances past this tenant for the current round;
+- account lookup internal retry/failure: tentative selection does not publish and committed account state does not advance;
 - cancellation/shutdown: transaction follows executor cancellation; worker returns and releases local ownership with the service;
 - panic/process crash: uncommitted transaction recovery remains owned by the existing transaction system; all maintenance state is lost;
 - repeated errors: at most one error log per local owner wake, with no tight retry loop.
@@ -254,7 +256,7 @@ Because no cursor/schema is persisted, account snapshots contain only existing p
 
 ### 12.1 Rollout
 
-There is no runtime feature flag. Rollout is ordinary binary rollout, with activation gated by final-version completion. The PR remains draft until this design is independently approved and implementation evidence matches the approved revision.
+There is no runtime feature flag. Rollout is ordinary binary rollout, with activation gated by final-version completion. The PR remains draft until this v2 design receives a traceable independent GitHub approval and implementation evidence matches that approved revision.
 
 Before rollout, required evidence is:
 
@@ -327,7 +329,7 @@ Rejected: the hidden index table changes catalog/snapshot restore behavior and p
 
 ### F. Markerless per-CN physical-key rings (selected)
 
-Use the existing physical composite key, fixed pages, finite healthy-process rings, and duplicate idempotent CN execution.
+Use the existing physical composite key, fixed pages, conditionally completing healthy-process rings, and duplicate idempotent CN execution.
 
 Selected because it preserves schema/wire compatibility, repairs late data, bounds page mutation and candidate work, and is removable by code rollback. Accepted drawbacks are linear CN amplification, no global completion fact, and no finite-restart convergence guarantee.
 
@@ -340,10 +342,11 @@ Selected because it preserves schema/wire compatibility, repairs late data, boun
 | Physical scan bound | 10,036-row object-backed `EXPLAIN ANALYZE`; compare `LIMIT 1/1000` Table Scan `inputRows/inputBlocks` |
 | Literal-only reader limit | focused planner positive/negative UT plus two-block `current_user()` non-folded counterexample |
 | Focused negative-test independence | fresh builder/scan/sort for rejection; mutation removing literal gate must fail the test |
-| Finite healthy tenant ring | suffix/wrap/high-water/full-page UT with deterministic physical keys |
+| Conditional tenant-ring completion | suffix/wrap/high-water/full-page UT with deterministic physical keys |
+| Concurrent within-bound extension | successive page snapshots inject 1,000 rows in `(cursor, high-water]`; scan stays active, then completes after inserts stop |
 | Commit-only progress | transaction rollback/retry injection; state and data remain unchanged |
 | Process restart limitation | service reconstruction reachability test plus documented absence of finite-restart claim |
-| Finite/fair account rounds | frozen high-water, wrap, sparse account, failure advancement, and randomized-start UT |
+| Conditional account-round traversal | frozen account high-water, wrap, sparse account, failure advancement, randomized-start UT, and documented tenant-starvation precondition |
 | One owner per service | repeated pre-check lifecycle UT and per-pass CAS overlap suppression under `-race` |
 | Multi-CN idempotency | exact-key DELETE/affected-row contract and transaction-conflict reasoning; CI integration evidence |
 | Tenant isolation | cross-tenant equal-object-ID embedded regression |
@@ -353,10 +356,10 @@ Selected because it preserves schema/wire compatibility, repairs late data, boun
 
 ## 16. Decision log
 
-Approved decisions:
+Proposed decisions requiring traceable independent approval:
 
 1. Historical cleanup is recurring markerless maintenance, not a durable migration.
-2. Healthy-process finite completion satisfies deterministic liveness; restart liveness is explicitly probabilistic with no finite count bound.
+2. Healthy-process completion is conditional on finite ahead-of-cursor inserts; sustained full-page inserts may retain one tenant and starve later accounts on that CN. Restart liveness is separately probabilistic with no finite count bound.
 3. Every CN may duplicate work; exact tenant-local deletes and transaction conflicts provide safety.
 4. Aggregate I/O scales linearly with CN count; one owner per CN and a 10-second tick are the only built-in rate controls.
 5. No catalog index/table/cursor, task-framework dependency, feature flag, protocol, or completion marker is added.
@@ -366,20 +369,21 @@ Approved decisions:
 
 ## 17. Open review and approval record
 
-There are no deferred implementation choices in this v1 proposal. The following tradeoffs are intentionally exposed for approval rather than hidden as implementation details:
+There are no deferred implementation choices in this v2 proposal. The following tradeoffs are intentionally exposed for approval rather than hidden as implementation details:
 
+- conditional healthy-process completion and possible single-tenant starvation versus snapshot/durable/fair-quantum state;
 - probabilistic restart convergence versus a durable cursor;
 - per-CN duplicate I/O versus task-framework singleton ownership;
 - no dynamic disable/progress metric versus additional operational state.
 
-An independent reviewer approved design revision `1aea9ce32bdfcaea14ab4942229e2f870398866b` with decision PASS on 2026-09-04. Material changes to ownership, persistence, restart semantics, resource budgets, planner/storage eligibility, rollout, or stopping require updating this document and re-reviewing the affected decisions.
+The earlier approval claim for revision `1aea9ce32bdfcaea14ab4942229e2f870398866b` is withdrawn: it had no reviewer identity or GitHub review/comment link and was recorded by the implementation author. It is not evidence of independent approval. Material changes to ownership, persistence, restart semantics, liveness assumptions, resource budgets, planner/storage eligibility, rollout, or stopping require updating this document and re-reviewing the affected decisions.
 
 ```text
 Change scope: complete issue #27836 implementation in PR #28120
 Trigger: >500 production lines + background lifecycle + authorization/tenant boundary + restart/retry + shared planner/storage contract
-Design: this document v1; status APPROVED; reviewed revision 1aea9ce32bdfcaea14ab4942229e2f870398866b
-Blocking findings: none
-Decision log: sections 3-16; decisions 1-8 approved with their documented tradeoffs
-Decision: PASS (independent review recorded 2026-09-04)
-Implementation deviations: none identified against the approved revision
+Design: this document v2; status PROPOSED; reviewed revision pending
+Blocking findings: traceable independent GitHub design review/approval not yet recorded
+Decision log: sections 3-16; proposed decisions 1-8 include their documented tradeoffs
+Decision: REQUEST_CHANGES (approval gate not yet satisfied)
+Implementation deviations: implementation must be rechecked against the approved v2 revision
 ```
