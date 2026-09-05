@@ -15,6 +15,7 @@
 package ivfflat
 
 import (
+	"context"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -26,7 +27,9 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
+	"github.com/matrixorigin/matrixone/pkg/util/gpumode"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex"
+	"github.com/matrixorigin/matrixone/pkg/vectorindex/brute_force"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/metric"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/quantizer"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/sqlexec"
@@ -264,22 +267,38 @@ func TestIvfflatSearchLifecycleWrappers(t *testing.T) {
 // The cache must see the IVF-FLAT centroid footprint before Load. Otherwise
 // concurrent cold keys all pass the governor's zero-size fast path and then
 // materialize together against a budget sized for one entry.
+//
+// The estimate must also land in the arena the LOAD will use, which depends on the build tag as
+// well as the session: NewBruteForceIndex sends float32 centroids to cuVS only in a gpu build
+// with gpu_mode on, and ignores gpu_mode entirely otherwise. Asserting one arena unconditionally
+// passes on one flavour and fails on the other -- so the expectation is taken from the same
+// predicate the dispatch uses.
 func TestIvfflatPreloadPublishesCentroidFootprint(t *testing.T) {
+	const lists, dims = 4, 3
 	idxcfg := vectorindex.IndexConfig{}
-	idxcfg.Ivfflat.Lists = 4
-	idxcfg.Ivfflat.Dimensions = 3
+	idxcfg.Ivfflat.Lists = lists
+	idxcfg.Ivfflat.Dimensions = dims
 	idxcfg.Ivfflat.CentroidType = int32(types.T_array_float32)
 	s := NewIvfflatSearch[float32](idxcfg, vectorindex.IndexTableConfig{})
 
 	require.NoError(t, s.Preload(nil))
-	want := int64(4*3*util.UnsafeSizeOf[float32]() + 4*util.UnsafeSizeOf[[]float32]())
 	host, device := s.GetIndexSize()
-	require.Equal(t, want, host)
-	require.Zero(t, device)
+
+	vectors := int64(lists * dims * util.UnsafeSizeOf[float32]())
+	if brute_force.DispatchesToDevice[float32](gpumode.EffectiveGpuMode(nil)) {
+		// A cuVS brute-force index holds the flattened vectors and nothing on the host, which
+		// is exactly what GpuBruteForceIndex.GetIndexSize reports after the load.
+		require.Zero(t, host)
+		require.Equal(t, vectors, device)
+	} else {
+		// GoBruteForceIndex keeps one slice header per centroid row beside the vectors.
+		require.Equal(t, vectors+int64(lists*util.UnsafeSizeOf[[]float32]()), host)
+		require.Zero(t, device)
+	}
 
 	s.Destroy()
 	host, device = s.GetIndexSize()
-	require.Zero(t, host)
+	require.Zero(t, host, "a destroyed entry reserves nothing")
 	require.Zero(t, device)
 }
 
@@ -466,4 +485,45 @@ func TestIncludeExactPkSearchAppliesQueryQuantizerAndRestoresDistance(t *testing
 	require.Contains(t, capturedSQL, "`__mo_index_pri_col` IN (42)")
 	require.NotContains(t, capturedSQL, "ORDER BY vec_dist")
 	require.True(t, rt.SearchCursor.Exhausted)
+}
+
+// A session may ask for GPU mode on a build that has no GPU dispatch at all. The estimate must
+// follow the DISPATCH, not the request: a non-gpu build's NewBruteForceIndex ignores gpu_mode and
+// returns a CPU index, so reserving device bytes there leaves both arenas wrong -- device holding
+// a reservation nothing will occupy, host holding none for what actually allocates.
+func TestIvfflatPreloadFollowsTheDispatchNotTheSessionRequest(t *testing.T) {
+	const lists, dims = 4, 3
+	idxcfg := vectorindex.IndexConfig{}
+	idxcfg.Ivfflat.Lists = lists
+	idxcfg.Ivfflat.Dimensions = dims
+	idxcfg.Ivfflat.CentroidType = int32(types.T_array_float32)
+
+	gpuOn := &sqlexec.SqlProcess{SqlCtx: &sqlexec.SqlContext{
+		Ctx: context.Background(),
+		ResolveVariableFunc: func(name string, _, _ bool) (interface{}, error) {
+			if name == "gpu_mode" {
+				return int8(1), nil
+			}
+			return nil, nil
+		},
+	}}
+
+	s := NewIvfflatSearch[float32](idxcfg, vectorindex.IndexTableConfig{})
+	require.NoError(t, s.Preload(gpuOn))
+	host, device := s.GetIndexSize()
+
+	if brute_force.DispatchesToDevice[float32](true) {
+		require.Zero(t, host, "a gpu build honours the request")
+		require.Positive(t, device)
+	} else {
+		require.Positive(t, host, "a non-gpu build cannot, so the bytes are charged where they land")
+		require.Zero(t, device)
+	}
+
+	// float64 never reaches cuVS on any build.
+	f64 := NewIvfflatSearch[float64](idxcfg, vectorindex.IndexTableConfig{})
+	require.NoError(t, f64.Preload(gpuOn))
+	host, device = f64.GetIndexSize()
+	require.Positive(t, host)
+	require.Zero(t, device, "float64 centroids stay on the CPU path whatever the session asks")
 }

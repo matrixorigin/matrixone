@@ -1152,17 +1152,15 @@ func (s *IvfflatSearch[T]) Preload(sqlproc *sqlexec.SqlProcess) error {
 		return nil
 	}
 
-	// NewBruteForceIndex dispatches float32 centroids to cuVS only when the
-	// effective session mode enables GPU; float64 stays on the CPU path.
-	var zero T
-	useGPU := false
-	if _, ok := any(zero).(float32); ok {
-		var resolver func(string, bool, bool) (interface{}, error)
-		if sqlproc != nil && (sqlproc.Proc != nil || sqlproc.SqlCtx != nil) {
-			resolver = sqlproc.GetResolveVariableFunc()
-		}
-		useGPU = gpumode.EffectiveGpuMode(resolver)
+	// Ask the dispatch itself which arena the centroids will land in. Deciding it here from
+	// the session mode alone was wrong on a non-gpu build, where NewBruteForceIndex ignores
+	// gpu_mode entirely and always builds a CPU index: a session with gpu_mode=1 would have
+	// reserved DEVICE bytes for a load that allocates HOST ones, leaving both arenas wrong.
+	var resolver func(string, bool, bool) (interface{}, error)
+	if sqlproc != nil && (sqlproc.Proc != nil || sqlproc.SqlCtx != nil) {
+		resolver = sqlproc.GetResolveVariableFunc()
 	}
+	useGPU := brute_force.DispatchesToDevice[T](gpumode.EffectiveGpuMode(resolver))
 
 	elementSize := uint64(util.UnsafeSizeOf[T]())
 	maxUint64 := ^uint64(0)

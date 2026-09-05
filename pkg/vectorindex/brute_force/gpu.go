@@ -285,6 +285,26 @@ func NewBruteForceIndex[T types.ArrayElement](dataset [][]T,
 	}
 }
 
+// DispatchesToDevice reports whether NewBruteForceIndex would build a DEVICE-resident index
+// for element type T under gpuMode. It exists so a caller sizing an index BEFORE it is built
+// charges the arena the build will actually use: the answer depends on the build tag as well as
+// the session, and duplicating either half in the caller is how the two drift apart.
+//
+// It mirrors the dispatch below exactly -- cuVS brute force stores float32 and Float16 only,
+// everything else falls through to the pure-Go CPU index.
+func DispatchesToDevice[T types.ArrayElement](gpuMode bool) bool {
+	if !gpuMode {
+		return false
+	}
+	var zero T
+	switch any(zero).(type) {
+	case float32, types.Float16:
+		return true
+	default:
+		return false
+	}
+}
+
 func NewGpuBruteForceIndex[T cuvs.VectorType](dataset [][]T,
 	dimension uint,
 	m metric.MetricType,
