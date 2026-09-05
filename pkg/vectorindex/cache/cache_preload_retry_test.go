@@ -18,6 +18,7 @@
 package cache
 
 import (
+	"context"
 	"sync/atomic"
 	"testing"
 
@@ -144,7 +145,7 @@ func TestPreloadRefusesEvictingEntry(t *testing.T) {
 
 // awaitDestroyed on an entry with no destroyed channel returns immediately.
 func TestAwaitDestroyedNoChannel(t *testing.T) {
-	(&VectorIndexSearch{}).awaitDestroyed()
+	(&VectorIndexSearch{}).awaitDestroyed(context.Background())
 }
 
 // --- retryableLoadError ----------------------------------------------------

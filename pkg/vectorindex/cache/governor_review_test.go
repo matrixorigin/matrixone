@@ -16,6 +16,9 @@ package cache
 
 import (
 	"context"
+	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/vectorindex"
+	"github.com/matrixorigin/matrixone/pkg/vectorindex/sqlexec"
 	"testing"
 	"time"
 
@@ -138,26 +141,31 @@ func TestGovernorHousekeepingAppliesALoweredCap(t *testing.T) {
 func TestGovernorResolvesEachArenaIndependently(t *testing.T) {
 	c := newBoundCache(t)
 
-	// Host zeroed at BOTH scopes, device left at its default ceiling.
-	sp := govProc(t, c, 1, caps{host: 0, device: absoluteDeviceCacheCeiling},
-		caps{host: 0, device: absoluteDeviceCacheCeiling})
-	_, sys := c.limits(sp)
-	require.EqualValues(t, c.defaultLimits().host, sys.host,
-		"an explicit host 0 resolves to the host ceiling even though the device arena is set")
-	require.EqualValues(t, absoluteDeviceCacheCeiling, sys.device,
-		"and the set device arena is left alone")
+	auto, aerr, aerr2 := c.defaultLimits()
+	require.NoError(t, aerr2)
+	require.NoError(t, aerr)
+
+	// Host zeroed at BOTH scopes, device set. Each arena resolves on its own.
+	sp := govProc(t, c, 1, caps{host: 0, device: auto.device},
+		caps{host: 0, device: auto.device})
+	_, sys, lerr := c.limits(sp)
+	require.NoError(t, lerr)
+	require.EqualValues(t, auto.host, sys.host,
+		"an explicit host 0 resolves to the automatic host budget even though device is set")
+	require.EqualValues(t, auto.device, sys.device, "and the set device arena is left alone")
 
 	// The mirror: device zeroed, host set.
-	sp = govProc(t, c, 1, caps{host: absoluteHostCacheCeiling, device: 0},
-		caps{host: absoluteHostCacheCeiling, device: 0})
-	_, sys = c.limits(sp)
-	require.EqualValues(t, c.defaultLimits().device, sys.device,
+	sp = govProc(t, c, 1, caps{host: auto.host, device: 0}, caps{host: auto.host, device: 0})
+	_, sys, lerr = c.limits(sp)
+	require.NoError(t, lerr)
+	require.EqualValues(t, auto.device, sys.device,
 		"an explicit device 0 resolves to the automatic device budget")
-	require.EqualValues(t, absoluteHostCacheCeiling, sys.host)
+	require.EqualValues(t, auto.host, sys.host)
 
 	// An operator-chosen value is never overwritten by a ceiling.
 	sp = govProc(t, c, 1, caps{}, caps{host: 4096, device: 8192})
-	_, sys = c.limits(sp)
+	_, sys, lerr = c.limits(sp)
+	require.NoError(t, lerr)
 	require.EqualValues(t, 4096, sys.host, "a real cap survives the resolution")
 	require.EqualValues(t, 8192, sys.device)
 }
@@ -224,4 +232,186 @@ func TestGovernorHousekeepingEvictsColdestNotTheSysAccount(t *testing.T) {
 
 	require.False(t, isResident(c, coldTenant), "the coldest entry is reclaimed, whoever owns it")
 	require.True(t, isResident(c, warmSys), "and the warm account-0 entry is not sacrificed for it")
+}
+
+// destroyedAlgo always reports the entry as gone, which is what an evicted generation looks
+// like to a searcher that loaded the map value just before the claim.
+type destroyedAlgo struct{ countingSearch }
+
+func (d *destroyedAlgo) Search(*sqlexec.SqlProcess, any, vectorindex.RuntimeConfig) (any, []float64, error) {
+	return nil, nil, moerr.NewInvalidStateNoCtx("Index destroyed")
+}
+
+func (d *destroyedAlgo) SearchInto(*sqlexec.SqlProcess, any, vectorindex.RuntimeConfig, *vectorindex.SearchOutput) error {
+	return moerr.NewInvalidStateNoCtx("Index destroyed")
+}
+
+func cancellableProc(ctx context.Context) *sqlexec.SqlProcess {
+	return &sqlexec.SqlProcess{SqlCtx: &sqlexec.SqlContext{
+		Ctx: ctx, CNUuid: "gov-test-cn", AccountId: 1,
+		ResolveVariableFunc: func(string, bool, bool) (interface{}, error) { return int64(0), nil },
+	}}
+}
+
+// A reader that finds an entry mid-eviction must not inherit an UNRELATED goroutine's runtime.
+// awaitDestroyed waited on the teardown unconditionally, and Destroy takes the write lock -- so
+// the caller was parked behind another query's in-flight search for an entry it shares nothing
+// with, unable to honour its own cancellation. Here the entry stays resident and claimed with a
+// read lock held, so nothing will ever close `destroyed`; the caller must still return.
+func TestSearchCancelledReaderDoesNotWaitForAnUnrelatedReader(t *testing.T) {
+	c := newBoundCache(t)
+	key := "__mo_index_secondary_evicting"
+
+	victim := newVectorIndexSearch(&destroyedAlgo{})
+	c.IndexMap.Store(key, victim)
+	victim.Status.Store(STATUS_LOADED)
+	require.True(t, victim.beginEviction(false), "claim the entry, as an evictor would")
+
+	victim.Mutex.RLock()
+	defer victim.Mutex.RUnlock()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	done := make(chan error, 1)
+	go func() {
+		_, _, err := c.Search(cancellableProc(ctx), key, &countingSearch{}, nil, vectorindex.RuntimeConfig{})
+		done <- err
+	}()
+
+	select {
+	case err := <-done:
+		require.ErrorIs(t, err, context.Canceled,
+			"the cancelled caller returns its own error, not a stranger's teardown")
+	case <-time.After(5 * time.Second):
+		t.Fatal("cancelled request is stuck waiting for the old entry's unrelated reader")
+	}
+}
+
+// The same for the box-free twin, which carries its own copy of the retry loop.
+func TestSearchIntoCancelledReaderDoesNotWaitForAnUnrelatedReader(t *testing.T) {
+	c := newBoundCache(t)
+	key := "__mo_index_secondary_evicting_into"
+
+	victim := newVectorIndexSearch(&destroyedAlgo{})
+	c.IndexMap.Store(key, victim)
+	victim.Status.Store(STATUS_LOADED)
+	require.True(t, victim.beginEviction(false))
+
+	victim.Mutex.RLock()
+	defer victim.Mutex.RUnlock()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	done := make(chan error, 1)
+	go func() {
+		var out vectorindex.SearchOutput
+		done <- c.SearchInto(cancellableProc(ctx), key, &countingSearch{}, nil, vectorindex.RuntimeConfig{}, &out)
+	}()
+
+	select {
+	case err := <-done:
+		require.ErrorIs(t, err, context.Canceled)
+	case <-time.After(5 * time.Second):
+		t.Fatal("cancelled SearchInto is stuck waiting for the old entry's unrelated reader")
+	}
+}
+
+// mappedHeavy is the hnsw shape: a tiny allocation and a model file that dominates it. usearch's
+// memory_usage() reports ~1.2% of a viewed index, so charging only that let N named-snapshot
+// generations retain N whole models while the governor saw a hundredth of them.
+type mappedHeavy struct {
+	countingSearch
+	searching chan struct{} // closed while a search is in flight, if non-nil
+	release   chan struct{}
+}
+
+func (m *mappedHeavy) Search(*sqlexec.SqlProcess, any, vectorindex.RuntimeConfig) (any, []float64, error) {
+	if m.searching != nil {
+		close(m.searching)
+		<-m.release
+	}
+	return []int64{1}, []float64{1}, nil
+}
+
+// N+1 generations whose FileSize dominates cannot exceed the budget, and the one with a search
+// in flight is never taken to achieve that.
+func TestGovernorBoundsMappedBytesAcrossGenerations(t *testing.T) {
+	c := newBoundCache(t)
+
+	// Each generation costs 100: a tiny allocation plus a model file that is nearly all of it.
+	const per, budget = int64(100), int64(250)
+	sp := govProc(t, c, 1, hostCap(budget), caps{})
+
+	// A busy generation: its search is parked, so it must never be evicted.
+	busy := "__mo_index_secondary_gen_busy"
+	held := &mappedHeavy{countingSearch: countingSearch{host: per},
+		searching: make(chan struct{}), release: make(chan struct{})}
+	go func() { _, _, _ = c.Search(sp, busy, held, nil, vectorindex.RuntimeConfig{}) }()
+	<-held.searching
+	defer close(held.release)
+
+	// Fill with idle generations, then keep adding: the budget must hold across all of them.
+	admitted := 0
+	for i := 0; i < 6; i++ {
+		key := fmt.Sprintf("__mo_index_secondary_gen%d", i)
+		_, _, err := c.Search(sp, key, &countingSearch{host: per}, nil, vectorindex.RuntimeConfig{})
+		if err == nil {
+			admitted++
+			entryOf(t, c, key).ExpireAt.Store(int64(i + 1)) // idle and cold
+		}
+		_, _, total := c.snapshotResidents("")
+		require.LessOrEqual(t, total.host, budget,
+			"resident mapped bytes must never exceed the budget, however many generations arrive")
+	}
+
+	require.Positive(t, admitted, "generations that fit are still admitted")
+	require.True(t, isResident(c, busy), "the generation with a search in flight is never a victim")
+}
+
+// A sizing failure must not refuse loads it has no bearing on.
+//
+// Two independent bugs met here. limits() returned the defaultLimits error BEFORE testing
+// whether the operator had already set the caps, so the remedy the error names ("set
+// max_index_cache_size") did not work -- and because the probe result is memoized on a
+// process-global cache, the CN stayed bricked until restart. And the two arenas' errors were
+// joined, so a GPU that could not be queried refused every hnsw and fulltext2 load on a CN
+// whose RAM was perfectly well known.
+func TestGovernorSizingFailureDoesNotRefuseConfiguredOrUnrelatedArenas(t *testing.T) {
+	t.Run("a configured cap does not consult the failed probe", func(t *testing.T) {
+		c := newBoundCache(t)
+		// Poison BOTH arenas' probes.
+		c.defaultLimitOnce.Do(func() {
+			c.defaultLimitHostErr = moerr.NewInternalErrorNoCtx("host probe failed")
+			c.defaultLimitDeviceErr = moerr.NewInternalErrorNoCtx("device probe failed")
+		})
+
+		sp := govProc(t, c, 1, caps{}, caps{host: 1 << 30, device: 1 << 30})
+		_, sys, err := c.limits(sp)
+		require.NoError(t, err, "both arenas are configured, so nothing needs deriving")
+		require.EqualValues(t, 1<<30, sys.host)
+		require.EqualValues(t, 1<<30, sys.device)
+	})
+
+	t.Run("a device probe failure does not refuse a host-only load", func(t *testing.T) {
+		c := newBoundCache(t)
+		// Only the DEVICE probe failed; host sizing is fine.
+		c.defaultLimitOnce.Do(func() {
+			c.defaultLimit = caps{host: 1 << 30}
+			c.defaultLimitDeviceErr = moerr.NewInternalErrorNoCtx("device probe failed")
+		})
+
+		// Host configured is not even required: the host arena derives cleanly.
+		sp := govProc(t, c, 1, caps{}, caps{device: 1 << 30})
+		_, sys, err := c.limits(sp)
+		require.NoError(t, err, "the host arena derived fine; the GPU says nothing about RAM")
+		require.EqualValues(t, 1<<30, sys.host)
+
+		// And a host-only index still loads.
+		_, _, serr := c.Search(sp, "__mo_index_secondary_hostonly",
+			&countingSearch{host: 4096}, nil, vectorindex.RuntimeConfig{})
+		require.NoError(t, serr, "an unreadable GPU must not refuse a CPU index")
+		require.True(t, isResident(c, "__mo_index_secondary_hostonly"))
+	})
 }

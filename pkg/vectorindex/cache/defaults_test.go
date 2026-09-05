@@ -4,7 +4,7 @@
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
 //
-//     http://www.apache.org/licenses/LICENSE-2.0
+//      http://www.apache.org/licenses/LICENSE-2.0
 //
 // Unless required by applicable law or agreed to in writing, software
 // distributed under the License is distributed on an "AS IS" BASIS,
@@ -16,51 +16,85 @@ package cache
 
 import (
 	"errors"
-	"github.com/stretchr/testify/require"
 	"testing"
+
+	"github.com/stretchr/testify/require"
 )
 
-func TestAutomaticCacheLimits(t *testing.T) {
+// The budget is a share of what the machine has -- and when that cannot be read, an ERROR
+// rather than an invented number. A guessed budget is refused-or-over-committed silently;
+// naming the missing input lets the operator set the variable.
+func TestAutomaticHostLimit(t *testing.T) {
 	for _, tc := range []struct {
 		name          string
 		total, cgroup uint64
 		want          int64
+		wantErr       bool
 	}{
-		{"host", 8 << 30, 0, 2 << 30}, {"container", 8 << 30, 2 << 30, 512 << 20},
-		{"unlimited-cgroup", 8 << 30, ^uint64(0), 2 << 30},
-		{"container-only", 0, 2 << 30, 512 << 20}, {"unknown", 0, 0, fallbackCacheBytes},
-		{"tiny", 1, 0, 1}, {"overflow", ^uint64(0), 0, absoluteHostCacheCeiling},
+		{name: "host", total: 8 << 30, want: (8 << 30) / 100 * 90},
+		{name: "container", total: 8 << 30, cgroup: 2 << 30, want: (2 << 30) / 100 * 90},
+		{name: "unlimited-cgroup", total: 8 << 30, cgroup: ^uint64(0), want: (8 << 30) / 100 * 90},
+		{name: "container-only", cgroup: 2 << 30, want: (2 << 30) / 100 * 90},
+		{name: "tiny", total: 1, want: 1},
+		{name: "overflow", total: ^uint64(0), want: absoluteHostCacheCeiling},
+		{name: "unknown", wantErr: true},
 	} {
-		t.Run(tc.name, func(t *testing.T) { require.Equal(t, tc.want, automaticHostLimit(tc.total, tc.cgroup)) })
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := automaticHostLimit(tc.total, tc.cgroup)
+			if tc.wantErr {
+				require.Error(t, err, "an unreadable machine is reported, never guessed")
+				require.Contains(t, err.Error(), "max_index_cache_size")
+				return
+			}
+			require.NoError(t, err)
+			require.Equal(t, tc.want, got)
+		})
 	}
+}
+
+func TestAutomaticDeviceCapacity(t *testing.T) {
 	for _, tc := range []struct {
 		name             string
 		count            int
 		countErr, memErr error
 		memory           uint64
 		want             int64
+		wantErr          bool
 	}{
-		{"two-devices", 2, nil, nil, 8 << 30, 8 << 30},
-		{"no-device", 0, nil, nil, 0, fallbackCacheBytes},
-		{"count-error", 1, errors.New("count"), nil, 0, fallbackCacheBytes},
-		{"memory-error", 1, nil, errors.New("memory"), 0, fallbackCacheBytes},
-		{"unknown-memory", 1, nil, nil, 0, fallbackCacheBytes},
-		{"overflow", 2, nil, nil, ^uint64(0), absoluteDeviceCacheCeiling},
+		{name: "two-devices", count: 2, memory: 8 << 30, want: 2 * ((8 << 30) / 100 * 90)},
+		{name: "overflow", count: 2, memory: ^uint64(0), want: absoluteDeviceCacheCeiling},
+		// No GPU is not a failure: the arena does not apply, so it gets no budget.
+		{name: "no-device", count: 0, want: 0},
+		{name: "count-error", count: 1, countErr: errors.New("count"), wantErr: true},
+		{name: "memory-error", count: 1, memErr: errors.New("memory"), wantErr: true},
+		{name: "unknown-memory", count: 1, memory: 0, wantErr: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			got := automaticDeviceCapacity(func() (int, error) { return tc.count, tc.countErr },
+			got, err := automaticDeviceCapacity(
+				func() (int, error) { return tc.count, tc.countErr },
 				func(int) (uint64, error) { return tc.memory, tc.memErr })
+			if tc.wantErr {
+				require.Error(t, err)
+				require.Contains(t, err.Error(), "max_gpu_index_cache_size")
+				return
+			}
+			require.NoError(t, err)
 			require.Equal(t, tc.want, got)
 		})
 	}
 }
 
+// A tenant cannot raise its own ceiling past the CN-wide one: the CN budget is resolved from
+// the SYS value alone, and enforce applies both.
 func TestTenantOverrideCannotBypassAutomaticCNLimit(t *testing.T) {
 	c := newBoundCache(t)
-	defaults := c.defaultLimits()
+	defaults, err, err2 := c.defaultLimits()
+	require.NoError(t, err2)
+	require.NoError(t, err)
+
 	sp := govProc(t, c, 1, caps{host: defaults.host * 2, device: defaults.device * 2}, caps{})
-	tenant, sys := c.limits(sp)
-	require.Equal(t, defaults, sys)
+	tenant, sys, err := c.limits(sp)
+	require.NoError(t, err)
+	require.Equal(t, defaults, sys, "the CN budget ignores what the tenant asked for")
 	require.Greater(t, tenant.host, sys.host)
-	require.Greater(t, tenant.device, sys.device)
 }

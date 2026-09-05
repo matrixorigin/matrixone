@@ -139,24 +139,6 @@ func TestHnswSearchFloat32(t *testing.T) {
 	}
 }
 
-func TestGetIndexSizeUsesNativeMemoryUsage(t *testing.T) {
-	idx, err := usearch.NewIndex(usearch.DefaultConfig(3))
-	require.NoError(t, err)
-	defer idx.Destroy()
-	require.NoError(t, idx.Reserve(2))
-	require.NoError(t, idx.Add(1, []float32{1, 2, 3}))
-	want, err := idx.MemoryUsage()
-	require.NoError(t, err)
-	require.Positive(t, want)
-	s := &HnswSearch[float32]{Indexes: []*HnswModel[float32]{
-		{Index: idx, FileSize: 99 << 20},
-		{FileSize: 99 << 20}, nil,
-	}}
-	host, device := s.GetIndexSize()
-	require.Equal(t, int64(want), host, "charge the loaded native allocation, not serialized file bytes")
-	require.Zero(t, device)
-}
-
 func TestHnswSearchFloat32_BadQueryType(t *testing.T) {
 	m := mpool.MustNewZero()
 	proc := testutil.NewProcessWithMPool(t, "", m)
@@ -549,13 +531,36 @@ func TestSearchIntoUnsupported(t *testing.T) {
 	require.ErrorContains(t, (&HnswSearch[float32]{}).SearchInto(nil, nil, vectorindex.RuntimeConfig{}, nil), "not supported")
 }
 
-// An unloaded model is charged after Load. FileSize includes mmap pages and
-// must not be mistaken for heap/native bookkeeping.
-func TestGetIndexSizeBeforeLoadDoesNotChargeMappedFile(t *testing.T) {
+// Before Load the models carry metadata only, so GetIndexSize estimates from nrow rather than
+// reporting 0 -- that estimate is what lets the cache reclaim room for an hnsw load ahead of it.
+// The per-row constant is measured against usearch's own memory_usage(); see
+// hnswViewedBytesPerRow.
+// The pre-load estimate is BOTH terms, on the same basis the post-load charge uses: nrow
+// predicts usearch's allocation (measured within 0.4% of MemoryUsage) and FileSize is the
+// mapping. Estimating on the same basis is what makes the reservation match the charge.
+func TestGetIndexSizeEstimatesFromNrowBeforeLoad(t *testing.T) {
+	const file = int64(13 << 20)
 	s := &HnswSearch[float32]{Indexes: []*HnswModel[float32]{
-		nil, {Id: "legacy", FileSize: 13 << 20},
+		{Id: "a", Nrow: 20000, FileSize: file},
+		{Id: "b", Nrow: 5000},
 	}}
 	host, device := s.GetIndexSize()
-	require.Zero(t, host)
-	require.Zero(t, device)
+	require.EqualValues(t, 25000*hnswViewedBytesPerRow+file, host,
+		"pre-load cost is the allocation estimate PLUS the mapping it will take")
+	require.EqualValues(t, 0, device, "hnsw is never device resident")
+}
+
+// A generation written before the nrow column existed reports 0, and the entry is charged after
+// its load instead. It must not fall back to FileSize, which over-states the host cost ~80x.
+// A generation written before the nrow column existed contributes nothing for the allocation
+// term -- but its mapping is real and its size is known, so FileSize is still charged. Charging
+// zero here is what let N such generations sit resident while the governor saw none of them.
+func TestGetIndexSizeUnknownNrowStillChargesTheMapping(t *testing.T) {
+	const file = int64(13 << 20)
+	s := &HnswSearch[float32]{Indexes: []*HnswModel[float32]{
+		{Id: "legacy", Nrow: 0, FileSize: file},
+	}}
+	host, _ := s.GetIndexSize()
+	require.EqualValues(t, file, host,
+		"an unknown row count drops only the allocation term, never the mapping")
 }

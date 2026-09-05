@@ -16,4 +16,7 @@
 
 package cache
 
-func automaticDeviceLimit() int64 { return fallbackCacheBytes }
+// No cuVS in this build, so there is no device arena to budget: nothing can ever charge device
+// bytes. Zero leaves it unset and enforce skips it, which is exactly right -- naming a number
+// would describe hardware this binary cannot use.
+func automaticDeviceLimit() (int64, error) { return 0, nil }

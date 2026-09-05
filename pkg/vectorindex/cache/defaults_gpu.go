@@ -18,6 +18,6 @@ package cache
 
 import "github.com/matrixorigin/matrixone/pkg/cuvs"
 
-func automaticDeviceLimit() int64 {
+func automaticDeviceLimit() (int64, error) {
 	return automaticDeviceCapacity(cuvs.GetGpuDeviceCount, cuvs.DeviceTotalMem)
 }

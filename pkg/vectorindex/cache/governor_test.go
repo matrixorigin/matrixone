@@ -77,6 +77,16 @@ func stubSysLimit(t *testing.T, c *VectorIndexCache, value caps) {
 }
 
 // loadInto puts one sized entry into the cache under key, as account would have loaded it.
+// loadRefused drives a load the admission policy is expected to REJECT: it does not fit even
+// after every idle entry has been reclaimed, and live entries are never preempted for it.
+func loadRefused(t *testing.T, c *VectorIndexCache, sp *sqlexec.SqlProcess, key string, host, device int64) {
+	t.Helper()
+	_, _, err := c.Search(sp, key, &countingSearch{host: host, device: device}, nil, vectorindex.RuntimeConfig{})
+	require.Error(t, err, "an arrival that cannot be seated is refused, not admitted")
+	require.Contains(t, err.Error(), "index cache is full")
+	require.False(t, isResident(c, key), "and it leaves nothing behind")
+}
+
 func loadInto(t *testing.T, c *VectorIndexCache, sp *sqlexec.SqlProcess, key string, host, device int64) *countingSearch {
 	t.Helper()
 	algo := &countingSearch{host: host, device: device}
@@ -115,35 +125,42 @@ func TestGovernorUnsetCapChargesButDoesNotEvict(t *testing.T) {
 
 	keys := []string{"__mo_index_secondary_a", "__mo_index_secondary_b", "__mo_index_secondary_c"}
 	for _, k := range keys {
-		loadInto(t, c, sp, k, 1, 0)
+		loadInto(t, c, sp, k, 1<<30, 0)
 	}
 	for _, k := range keys {
-		require.True(t, isResident(c, k), "%q must survive: three bytes fit the automatic budget", k)
-		require.EqualValues(t, 1, entryOf(t, c, k).hostBytes.Load(),
+		require.True(t, isResident(c, k), "%q must survive: 3 GiB is far below the ceiling", k)
+		require.EqualValues(t, 1<<30, entryOf(t, c, k).hostBytes.Load(),
 			"%q is charged even with nothing configured", k)
 	}
 
 	// And the governor sees them: snapshotResidents is what every eviction pass walks.
 	list, perAccount, total := c.snapshotResidents("")
 	require.Len(t, list, len(keys), "an unconfigured cache is still enumerated")
-	require.EqualValues(t, len(keys), total.host)
-	require.EqualValues(t, len(keys), perAccount[1].host)
+	require.EqualValues(t, int64(len(keys))<<30, total.host)
+	require.EqualValues(t, int64(len(keys))<<30, perAccount[1].host)
 }
 
 // The fallback is a real, finite cap: an entry above the ceiling is still admitted (the
 // governor never fails a query on an accounting rule) but the pass runs rather than being
 // skipped, so colder entries are reclaimed.
-func TestGovernorAbsoluteCeilingIsFiniteNotUnlimited(t *testing.T) {
+func TestGovernorUnconfiguredBudgetsAShareOfTheMachine(t *testing.T) {
 	c := newBoundCache(t)
 	sp := govProc(t, c, 1, caps{}, caps{})
 
-	tenant, sys := c.limits(sp)
+	tenant, sys, lerr := c.limits(sp)
+	require.NoError(t, lerr)
 	require.True(t, tenant.unset(), "nothing configured for the tenant")
-	require.False(t, sys.unset(), "but the CN-wide fallback is set, not unlimited")
-	require.EqualValues(t, c.defaultLimits().host, sys.host)
-	require.EqualValues(t, c.defaultLimits().device, sys.device)
-	require.Less(t, absoluteDeviceCacheCeiling, absoluteHostCacheCeiling,
-		"VRAM's physical maximum is far below host RAM's, so one number cannot serve both")
+	require.False(t, sys.unset(), "but the CN-wide budget is set, not unlimited")
+	auto, hostErr, devErr := c.defaultLimits()
+	require.NoError(t, hostErr)
+	require.NoError(t, devErr)
+	require.Equal(t, auto, sys,
+		"an unconfigured CN budgets a share of what this machine actually has")
+	require.Positive(t, sys.host, "a host budget always exists")
+	// NOT asserted positive: the device arena only applies where there IS a device. A CPU build
+	// (and a GPU build on a machine with no card) budgets 0 for it, which is correct rather
+	// than missing -- nothing can charge device bytes, so an unset arena costs nothing. The
+	// equality above already pins whichever value this build produces.
 }
 
 // Over the tenant cap, the coldest entry of that tenant is reclaimed and the entry that was
@@ -210,8 +227,8 @@ func TestGovernorArenasAreBudgetedSeparately(t *testing.T) {
 		loadInto(t, c, sp, deviceOnly, 0, 5000)
 		entryOf(t, c, deviceOnly).ExpireAt.Store(1)
 
-		// 150 host bytes against a host cap of 100, with the device budget unset.
-		loadInto(t, c, sp, "__mo_index_secondary_hostheavy", 150, 0)
+		// 150 host bytes against a host cap of 100, with the device budget unset: refused.
+		loadRefused(t, c, sp, "__mo_index_secondary_hostheavy", 150, 0)
 
 		require.True(t, isResident(c, deviceOnly),
 			"max_index_cache_size bounds RAM; a device-only entry frees none of it")
@@ -225,8 +242,8 @@ func TestGovernorArenasAreBudgetedSeparately(t *testing.T) {
 		loadInto(t, c, sp, hostOnly, 5000, 0)
 		entryOf(t, c, hostOnly).ExpireAt.Store(1)
 
-		// 150 device bytes against a device cap of 100, with the host budget unset.
-		loadInto(t, c, sp, "__mo_index_secondary_devheavy", 0, 150)
+		// 150 device bytes against a device cap of 100, with the host budget unset: refused.
+		loadRefused(t, c, sp, "__mo_index_secondary_devheavy", 0, 150)
 
 		require.True(t, isResident(c, hostOnly),
 			"max_gpu_index_cache_size bounds VRAM; a host-only entry frees none of it")
@@ -255,7 +272,7 @@ func TestGovernorIgnoresZeroSizedEntries(t *testing.T) {
 	loadInto(t, c, sp, free, 0, 0)
 	entryOf(t, c, free).ExpireAt.Store(1)
 
-	loadInto(t, c, sp, "__mo_index_secondary_big", 500, 0)
+	loadRefused(t, c, sp, "__mo_index_secondary_big", 500, 0)
 	require.True(t, isResident(c, free), "evicting a zero-byte entry would free nothing")
 }
 
@@ -499,19 +516,29 @@ func TestGovernorMakesRoomWhenIncomingFillsTheCap(t *testing.T) {
 
 			newcomer := &observeAtLoad{countingSearch: countingSearch{host: incoming}, c: c, watch: victim}
 			_, _, err := c.Search(sp, "__mo_index_secondary_newcomer", newcomer, nil, vectorindex.RuntimeConfig{})
-			require.NoError(t, err)
 
-			require.False(t, newcomer.watchAtLoad,
-				"the victim must be gone before Load, not reclaimed after it")
-			require.Equal(t, incoming <= 250, isResident(c, "__mo_index_secondary_newcomer"),
-				"retain an exact-fit entry; retire an oversized entry after its successful query")
+			require.False(t, isResident(c, victim),
+				"the idle victim is reclaimed regardless, and before Load")
+			if incoming <= 250 {
+				require.NoError(t, err, "it fits once the idle victim is gone")
+				require.False(t, newcomer.watchAtLoad,
+					"the victim must be gone before Load, not reclaimed after it")
+				require.True(t, isResident(c, "__mo_index_secondary_newcomer"))
+			} else {
+				require.Error(t, err, "it does not fit even with the cache emptied of idle entries")
+				require.Contains(t, err.Error(), "index cache is full")
+				require.False(t, isResident(c, "__mo_index_secondary_newcomer"))
+			}
 		})
 	}
 }
 
 // An index larger than the whole budget still loads: the governor empties what it can and gets
 // out of the way rather than failing a query on an accounting rule.
-func TestGovernorOversizedIndexStillLoads(t *testing.T) {
+// An arrival that does not fit even after every idle entry is reclaimed is REFUSED. The cache
+// behaves like an overloaded server: the new request gets an error, and the requests already in
+// flight are not killed to seat it.
+func TestGovernorOversizedIndexIsRefused(t *testing.T) {
 	c := newBoundCache(t)
 	sp := govProc(t, c, 1, hostCap(250), caps{})
 
@@ -519,9 +546,14 @@ func TestGovernorOversizedIndexStillLoads(t *testing.T) {
 	loadInto(t, c, sp, old, 200, 0)
 	entryOf(t, c, old).ExpireAt.Store(1)
 
-	loadInto(t, c, sp, "__mo_index_secondary_huge", 10_000, 0)
-	require.False(t, isResident(c, old), "everything reclaimable is reclaimed")
-	require.False(t, isResident(c, "__mo_index_secondary_huge"), "the successful load is retired after use")
+	_, _, err := c.Search(sp, "__mo_index_secondary_huge",
+		&countingSearch{host: 10_000}, nil, vectorindex.RuntimeConfig{})
+	require.Error(t, err, "10k against a 250 byte budget cannot be seated")
+	require.Contains(t, err.Error(), "index cache is full")
+	require.Contains(t, err.Error(), "nothing idle is left to reclaim")
+
+	require.False(t, isResident(c, old), "everything idle is still reclaimed first")
+	require.False(t, isResident(c, "__mo_index_secondary_huge"), "and the refused load leaves nothing behind")
 }
 
 // caps.less floors at zero and leaves an unset arena unlimited.
@@ -738,15 +770,16 @@ type invalidStateSearch struct {
 }
 
 func (m *invalidStateSearch) Search(*sqlexec.SqlProcess, any, vectorindex.RuntimeConfig) (any, []float64, error) {
-	if m.calls.Add(1) > 1 {
-		return nil, nil, moerr.NewInternalErrorNoCtx("unexpected backend retry")
+	if m.calls.Add(1) == 1 {
+		return nil, nil, moerr.NewInvalidStateNoCtx("txn client is in pause state")
 	}
-	return nil, nil, moerr.NewInvalidStateNoCtx("txn client is in pause state")
+	return []int64{1}, []float64{2.0}, nil
 }
 
-// A backend error is not evidence of cache eviction. Retrying a permanent error
-// spins forever; waiting for an unclaimed destruction hangs forever.
-func TestSearchReturnsBackendInvalidState(t *testing.T) {
+// An ErrInvalidState that did NOT come from eviction must not block the retry. The entry is still
+// STATUS_LOADED and in the map, so nothing will ever close its destroyed channel; an unguarded
+// wait there hangs the query goroutine forever with no cancellation.
+func TestSearchRetryDoesNotWaitWhenNothingIsBeingDestroyed(t *testing.T) {
 	c := newBoundCache(t)
 	algo := &invalidStateSearch{}
 
@@ -758,11 +791,11 @@ func TestSearchReturnsBackendInvalidState(t *testing.T) {
 
 	select {
 	case err := <-done:
-		require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidState))
+		require.NoError(t, err, "the retry must reach the second, succeeding Search")
 	case <-time.After(20 * time.Second):
 		t.Fatal("Search blocked on a teardown that will never happen")
 	}
-	require.EqualValues(t, 1, algo.calls.Load())
+	require.EqualValues(t, 2, algo.calls.Load())
 }
 
 // The FIRST sys-cap read has no last-known value to fall back on: c.sysLimit.value is still
