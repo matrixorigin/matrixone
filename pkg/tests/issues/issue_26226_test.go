@@ -41,6 +41,8 @@ func TestIssue26226ViewDistinctUsesVisibleSetValue(t *testing.T) {
 		waitForViewMetadataActivation(t, ctx, cn.ServiceID())
 
 		const db = "issue_26226"
+		const lastViewDDL = "create view " + db + ".v_recursive as with recursive d(flags) as " +
+			"(select flags from " + db + ".t union all select flags from d where false) select flags from d"
 		for _, stmt := range []string{
 			"drop database if exists " + db,
 			"create database " + db,
@@ -56,7 +58,7 @@ func TestIssue26226ViewDistinctUsesVisibleSetValue(t *testing.T) {
 			"create view " + db + ".v_cte as with d as (select id, flags from " + db + ".t) select flags from d where id = 2",
 			"create view " + db + ".v_union as select flags from " + db + ".t union all select flags from " + db + ".t",
 			"create view " + db + ".v_union_distinct as select flags from " + db + ".t union select flags from " + db + ".t",
-			"create view " + db + ".v_recursive as with recursive d(flags) as (select flags from " + db + ".t union all select flags from d where false) select flags from d",
+			lastViewDDL,
 			"create table " + db + ".copied as select flags from " + db + ".v_raw",
 			"create table " + db + ".copied_derived as select flags from " + db + ".v_derived",
 			"create table " + db + ".copied_cte as select flags from " + db + ".v_cte",
@@ -81,6 +83,20 @@ func TestIssue26226ViewDistinctUsesVisibleSetValue(t *testing.T) {
 			"create table " + db + ".defaults_union as select e, s, n from " + db + ".defaults_src union all select e, s, n from " + db + ".defaults_src",
 		} {
 			execSQLRequire(t, ctx, dbConn, stmt)
+			if stmt == lastViewDDL {
+				// Embedded issue tests reuse fixed CN service IDs. Under coverage load,
+				// the runtime admission fence can become visible just before catalog
+				// bootstrap finishes its initial reconciliation. Do not consume the
+				// newly-created Views until all of their durable definitions are current.
+				require.Eventually(t, func() bool {
+					var current int
+					err := dbConn.QueryRowContext(ctx,
+						"select count(*) from mo_catalog.mo_view_refresh "+
+							"where target_database_name = ? and status = 'CURRENT'",
+						db).Scan(&current)
+					return err == nil && current == 11
+				}, time.Minute, 100*time.Millisecond)
+			}
 		}
 		defer func() {
 			cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 30*time.Second)
