@@ -729,10 +729,21 @@ func (s *TableChangeStream) cleanup(ctx context.Context) {
 	retryable := s.retryable
 	s.stateMu.Unlock()
 
+	cleanupMode := WatermarkCleanupAll
 	if lastError != nil && !IsOwnerFenceLostError(lastError) {
+		isControlSignal := IsPauseOrCancelError(lastError.Error())
 		errorCtx := &ErrorContext{
 			IsRetryable:     retryable,
-			IsPauseOrCancel: IsPauseOrCancelError(lastError.Error()),
+			IsPauseOrCancel: isControlSignal,
+		}
+		if !isControlSignal {
+			// Retry metadata belongs to the logical stream failure sequence, not
+			// to one reader instance. Keep it while retiring this reader so the
+			// replacement pipeline advances the existing retry count. Preserve
+			// the task-generation fence with the diagnostic: a genuinely newer
+			// owner then clears both atomically during activation, while terminal
+			// task cleanup remains the full cleanup owner.
+			cleanupMode = WatermarkCleanupKeepDiagnostic
 		}
 
 		errorUpdateCtx := s.withWatermarkOwnerFence(ctx)
@@ -746,12 +757,13 @@ func (s *TableChangeStream) cleanup(ctx context.Context) {
 		}
 	}
 
-	// Retire local ownership state only after the final diagnostic write. Stable
+	// Retire local progress only after the final diagnostic write. Stable
 	// diagnostics are update-only and do not need to read the progress row, while
 	// this ordering also keeps legacy error persistence from rehydrating a cache
 	// that this stream has already retired.
 	removeStart := time.Now()
-	if err := s.watermarkUpdater.RemoveCachedWM(ctx, s.watermarkKey); err != nil {
+	if err := s.watermarkUpdater.RemoveCachedWM(
+		ctx, s.watermarkKey, cleanupMode); err != nil {
 		logutil.Error(
 			"cdc.table_stream.remove_cached_watermark_failed",
 			zap.String("table", s.tableInfo.String()),

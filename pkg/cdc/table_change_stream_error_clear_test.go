@@ -29,11 +29,12 @@ import (
 
 // mockWatermarkUpdaterWithTracking tracks UpdateWatermarkErrMsg calls
 type mockWatermarkUpdaterWithTracking struct {
-	watermarks map[string]types.TS
-	errorCalls []errorCall
-	operations []string
-	mu         sync.Mutex
-	failClear  bool // if true, clearing errors will fail
+	watermarks   map[string]types.TS
+	errorCalls   []errorCall
+	operations   []string
+	cleanupModes []WatermarkCleanupMode
+	mu           sync.Mutex
+	failClear    bool // if true, clearing errors will fail
 }
 
 type errorCall struct {
@@ -49,11 +50,14 @@ func newMockWatermarkUpdaterWithTracking() *mockWatermarkUpdaterWithTracking {
 	}
 }
 
-func (m *mockWatermarkUpdaterWithTracking) RemoveCachedWM(ctx context.Context, key *WatermarkKey) error {
+func (m *mockWatermarkUpdaterWithTracking) RemoveCachedWM(
+	ctx context.Context, key *WatermarkKey, mode WatermarkCleanupMode,
+) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	delete(m.watermarks, m.keyString(key))
 	m.operations = append(m.operations, "remove")
+	m.cleanupModes = append(m.cleanupModes, mode)
 	return nil
 }
 
@@ -370,6 +374,29 @@ func TestTableChangeStreamCleanupPersistsOwnedErrorBeforeRetiringState(t *testin
 	require.Equal(t, []string{"error", "remove"}, updater.operations)
 	require.Len(t, updater.errorCalls, 1)
 	require.Equal(t, uint64(123), updater.errorCalls[0].ownerGeneration)
+	require.Equal(t, []WatermarkCleanupMode{WatermarkCleanupKeepDiagnostic}, updater.cleanupModes)
+}
+
+func TestTableChangeStreamCleanupDoesNotRetainControlDiagnostic(t *testing.T) {
+	updater := newMockWatermarkUpdaterWithTracking()
+	key := &WatermarkKey{AccountId: 1, TaskId: "task1", DBName: "db1", TableName: "t1"}
+	stream := &TableChangeStream{
+		accountId:        1,
+		taskId:           "task1",
+		tableInfo:        &DbTableInfo{SourceDbName: "db1", SourceTblName: "t1", SourceTblId: 11},
+		sinker:           newTableStreamRecordingSinker(),
+		watermarkUpdater: updater,
+		watermarkKey:     key,
+		runningReaders:   &sync.Map{},
+		runningReaderKey: "db1.t1",
+		lastError:        moerr.NewInternalErrorNoCtx("paused"),
+	}
+	stream.wg.Add(1)
+	stream.cleanup(context.Background())
+
+	updater.mu.Lock()
+	defer updater.mu.Unlock()
+	require.Equal(t, []WatermarkCleanupMode{WatermarkCleanupAll}, updater.cleanupModes)
 }
 
 // TestHasSucceededAtomicBehavior verifies atomic.Bool behavior

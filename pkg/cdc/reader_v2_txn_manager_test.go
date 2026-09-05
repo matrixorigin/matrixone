@@ -220,7 +220,9 @@ func newMockWatermarkUpdater() *mockWatermarkUpdater {
 	}
 }
 
-func (m *mockWatermarkUpdater) RemoveCachedWM(ctx context.Context, key *WatermarkKey) error {
+func (m *mockWatermarkUpdater) RemoveCachedWM(
+	ctx context.Context, key *WatermarkKey, mode WatermarkCleanupMode,
+) error {
 	delete(m.watermarks, m.keyString(key))
 	return nil
 }

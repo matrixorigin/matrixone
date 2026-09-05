@@ -101,7 +101,9 @@ func (m *watermarkUpdaterStub) withUpdateError(fn func(call int) error) *waterma
 	return m
 }
 
-func (m *watermarkUpdaterStub) RemoveCachedWM(ctx context.Context, key *WatermarkKey) error {
+func (m *watermarkUpdaterStub) RemoveCachedWM(
+	ctx context.Context, key *WatermarkKey, mode WatermarkCleanupMode,
+) error {
 	if m.skipRemove {
 		return nil
 	}

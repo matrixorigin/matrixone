@@ -158,11 +158,12 @@ type WatermarkResult struct {
 
 type UpdaterJob struct {
 	tasks.Job
-	Key        *WatermarkKey
-	Watermark  types.TS
-	ErrMsg     string
-	OwnerFence *OwnerFence
-	done       chan struct{}
+	Key         *WatermarkKey
+	Watermark   types.TS
+	ErrMsg      string
+	OwnerFence  *OwnerFence
+	CleanupMode WatermarkCleanupMode
+	done        chan struct{}
 }
 
 func (job *UpdaterJob) Init(ctx context.Context, id string, typ tasks.JobType, exec tasks.JobExecutor) {
@@ -275,6 +276,7 @@ func NewUpdateWMErrMsgJob(
 func NewRemoveCachedWMJob(
 	ctx context.Context,
 	key *WatermarkKey,
+	mode WatermarkCleanupMode,
 ) *UpdaterJob {
 	job := new(UpdaterJob)
 	job.Init(
@@ -284,6 +286,7 @@ func NewRemoveCachedWMJob(
 		nil,
 	)
 	job.Key = key
+	job.CleanupMode = mode
 	return job
 }
 
@@ -530,10 +533,20 @@ func (u *CDCWatermarkUpdater) onJobs(jobs ...any) {
 			u.committingErrMsgBuffer = append(u.committingErrMsgBuffer, job)
 		case JT_CDC_RemoveCachedWM:
 			u.Lock()
-			inCommitted := u.removeWatermarkStateLocked(*job.Key)
+			keepDiagnostic := job.CleanupMode == WatermarkCleanupKeepDiagnostic
+			var inCommitted bool
+			if keepDiagnostic {
+				inCommitted = u.retireWatermarkProgressLocked(*job.Key)
+			} else {
+				inCommitted = u.removeWatermarkStateLocked(*job.Key)
+			}
 			u.Unlock()
 
-			u.removeWatermarkMetrics(*job.Key)
+			if keepDiagnostic {
+				u.removeWatermarkProgressMetrics(*job.Key)
+			} else {
+				u.removeWatermarkMetrics(*job.Key)
+			}
 
 			job.DoneWithErr(nil)
 
@@ -2012,6 +2025,7 @@ func (u *CDCWatermarkUpdater) activateWatermarkFenceLocked(key WatermarkKey, fen
 		// cache into its replacement can prematurely turn a fresh transient error
 		// into a permanent failure.
 		delete(u.errorMetadataCache, key)
+		clearWatermarkErrorGauge(key)
 	}
 	u.resetWatermarkCircuitLocked(key)
 	u.activeWatermarkFence[key] = fence
@@ -2073,11 +2087,11 @@ func (u *CDCWatermarkUpdater) resetWatermarkCircuitLocked(key WatermarkKey) {
 	delete(u.commitFailureCount, key)
 }
 
-// removeWatermarkProgressLocked removes every cache entry derived from a
-// watermark row. It intentionally leaves activeWatermarkFence alone: only a
-// stream or task lifecycle owner can prove that an active generation has
-// stopped. The caller must hold u.Lock.
-func (u *CDCWatermarkUpdater) removeWatermarkProgressLocked(key WatermarkKey) bool {
+// retireWatermarkProgressLocked removes every progress cache entry derived
+// from a watermark row. It intentionally leaves diagnostic state and
+// activeWatermarkFence alone: those have distinct lifecycle owners. The caller
+// must hold u.Lock.
+func (u *CDCWatermarkUpdater) retireWatermarkProgressLocked(key WatermarkKey) bool {
 	_, inCommitted := u.cacheCommitted[key]
 	delete(u.cacheUncommitted, key)
 	delete(u.cacheCommitting, key)
@@ -2087,8 +2101,17 @@ func (u *CDCWatermarkUpdater) removeWatermarkProgressLocked(key WatermarkKey) bo
 	delete(u.cacheCommittedGeneration, key)
 	delete(u.cacheUncommittedFence, key)
 	delete(u.cacheCommittingFence, key)
-	delete(u.errorMetadataCache, key)
 	u.resetWatermarkCircuitLocked(key)
+	return inCommitted
+}
+
+// removeWatermarkProgressLocked removes progress and diagnostic state. Orphan
+// and task cleanup use this full form because no replacement stream owns the
+// diagnostic. Failed-stream retirement uses retireWatermarkProgressLocked so
+// retry state survives admission of the replacement pipeline.
+func (u *CDCWatermarkUpdater) removeWatermarkProgressLocked(key WatermarkKey) bool {
+	inCommitted := u.retireWatermarkProgressLocked(key)
+	delete(u.errorMetadataCache, key)
 	return inCommitted
 }
 
@@ -2101,7 +2124,7 @@ func (u *CDCWatermarkUpdater) removeWatermarkStateLocked(key WatermarkKey) bool 
 	return inCommitted
 }
 
-func (u *CDCWatermarkUpdater) removeWatermarkMetrics(key WatermarkKey) {
+func (u *CDCWatermarkUpdater) removeWatermarkProgressMetrics(key WatermarkKey) {
 	tableLabel := key.String()
 	v2.CdcWatermarkLagSeconds.DeleteLabelValues(tableLabel)
 	v2.CdcWatermarkLagRatio.DeleteLabelValues(tableLabel)
@@ -2111,14 +2134,24 @@ func (u *CDCWatermarkUpdater) removeWatermarkMetrics(key WatermarkKey) {
 	v2.CdcWatermarkUpdateCounter.DeleteLabelValues(tableLabel, "heartbeat")
 	v2.CdcHeartbeatCounter.DeleteLabelValues(tableLabel)
 	v2.CdcTableNoProgressCounter.DeleteLabelValues(tableLabel)
+}
+
+func (u *CDCWatermarkUpdater) removeWatermarkErrorMetrics(key WatermarkKey) {
+	tableLabel := key.String()
 	for _, errorType := range []string{"network", "commit", "table_relation", "sinker", "max_retry_exceeded", "unknown"} {
 		v2.CdcTableNonRetryableErrorGauge.DeleteLabelValues(tableLabel, errorType)
 	}
 }
 
+func (u *CDCWatermarkUpdater) removeWatermarkMetrics(key WatermarkKey) {
+	u.removeWatermarkProgressMetrics(key)
+	u.removeWatermarkErrorMetrics(key)
+}
+
 func (u *CDCWatermarkUpdater) RemoveCachedWM(
 	ctx context.Context,
 	key *WatermarkKey,
+	mode WatermarkCleanupMode,
 ) (err error) {
 	if err = u.ForceFlush(ctx); err != nil {
 		logutil.Warn(
@@ -2128,10 +2161,10 @@ func (u *CDCWatermarkUpdater) RemoveCachedWM(
 		)
 		// Continue even if flush fails
 	}
-	job := NewRemoveCachedWMJob(ctx, key)
+	job := NewRemoveCachedWMJob(ctx, key, mode)
 	if _, err = u.queue.Enqueue(job); err != nil {
 		if errors.Is(err, sm.ErrClose) {
-			u.removeCachedWMSynchronously(key, true)
+			u.removeCachedWMSynchronously(key, mode, true)
 			return nil
 		}
 		job.DoneWithErr(err)
@@ -2142,12 +2175,26 @@ func (u *CDCWatermarkUpdater) RemoveCachedWM(
 	return
 }
 
-func (u *CDCWatermarkUpdater) removeCachedWMSynchronously(key *WatermarkKey, logSkip bool) {
+func (u *CDCWatermarkUpdater) removeCachedWMSynchronously(
+	key *WatermarkKey,
+	mode WatermarkCleanupMode,
+	logSkip bool,
+) {
 	u.Lock()
-	inCommitted := u.removeWatermarkStateLocked(*key)
+	keepDiagnostic := mode == WatermarkCleanupKeepDiagnostic
+	var inCommitted bool
+	if keepDiagnostic {
+		inCommitted = u.retireWatermarkProgressLocked(*key)
+	} else {
+		inCommitted = u.removeWatermarkStateLocked(*key)
+	}
 	u.Unlock()
 
-	u.removeWatermarkMetrics(*key)
+	if keepDiagnostic {
+		u.removeWatermarkProgressMetrics(*key)
+	} else {
+		u.removeWatermarkMetrics(*key)
+	}
 
 	if !u.shouldLogFallback(key) {
 		return

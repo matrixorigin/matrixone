@@ -52,9 +52,21 @@ type ErrorContext struct {
 	IsPauseOrCancel bool // Whether this is a pause/cancel control signal (optional, auto-detected if not set)
 }
 
+// WatermarkCleanupMode separates stream progress ownership from diagnostic
+// ownership. A failed stream must retire its progress while retaining retry
+// metadata and its task-generation fence for a replacement pipeline in the
+// same daemon generation. Task deletion, successful completion, and
+// control-only shutdown still remove all state.
+type WatermarkCleanupMode uint8
+
+const (
+	WatermarkCleanupAll WatermarkCleanupMode = iota
+	WatermarkCleanupKeepDiagnostic
+)
+
 // WatermarkUpdater manages CDC watermarks
 type WatermarkUpdater interface {
-	RemoveCachedWM(ctx context.Context, key *WatermarkKey) (err error)
+	RemoveCachedWM(ctx context.Context, key *WatermarkKey, mode WatermarkCleanupMode) (err error)
 	UpdateWatermarkErrMsg(ctx context.Context, key *WatermarkKey, errMsg string, errorCtx *ErrorContext) (err error)
 	GetFromCache(ctx context.Context, key *WatermarkKey) (watermark types.TS, err error)
 	GetOrAddCommitted(ctx context.Context, key *WatermarkKey, watermark *types.TS) (ret types.TS, err error)

@@ -91,7 +91,10 @@ The implementation must preserve all of the following:
     is update-only and durably conditional on the same `owner_generation` as
     progress. Losing an owner fence stops only the obsolete execution generation;
     it can neither publish its own error nor overwrite a replacement's diagnostic.
-    A transient fence-backend failure remains retryable.
+    A transient fence-backend failure remains retryable. Reader retirement keeps
+    the bounded retry record for a replacement pipeline in the same daemon
+    generation. The matching owner fence remains with that diagnostic so owner
+    replacement can remove both atomically; terminal task cleanup also removes it.
 13. **Bounded generation metadata.** Once target initialization for generation
     `G` succeeds, snapshot epochs below `G` are deleted. Table IDs are monotonic,
     so an obsolete owner can delete only generations older than itself and can
@@ -286,9 +289,12 @@ upserts, closing takeover after the validation. Together these close both
 directions of the takeover race:
 an obsolete reader cannot make a healthy replacement appear failed, and it
 cannot erase the replacement's real error. Stream cleanup persists the final
-owned diagnostic before retiring local watermark/error state, so the diagnostic
-path cannot read a just-retired progress row back into the CN cache. Legacy tasks
-retain their historical error upsert because they have no durable owner column.
+owned diagnostic before retiring local progress state. It retains the one bounded
+diagnostic record and its task-generation fence so a replacement pipeline in the
+same daemon generation advances the existing retry count instead of restarting
+at one. Publishing a newer owner fence atomically drops the old record, and
+terminal task cleanup removes both progress and diagnostics. Legacy tasks retain
+their historical error upsert because they have no durable owner column.
 
 `InitSnapshotSplitTxn=false` and unmarked legacy tasks keep one atomic initial
 snapshot transaction.
@@ -684,7 +690,9 @@ generation per asynchronous flush. This avoids work proportional to
 The first successful round performs one exact-claim read before clearing a
 diagnostic, and terminal error publication performs one more; neither repeats
 on ordinary successful polling rounds or scales with rows/batches. Stable error
-publication also skips the legacy cache-miss watermark read.
+publication also skips the legacy cache-miss watermark read. Failed-stream
+retirement retains at most one existing diagnostic record per table and adds no
+SQL, queue operation, allocation proportional to history, or hot-path work.
 Stable and legacy keys share the CN updater but are emitted as separate SQL
 batches only when both kinds are present in one flush. Stable upserts add four
 small timestamp component casts plus source and owner generation comparisons
@@ -782,8 +790,9 @@ Deterministic tests must cover:
   and recreated generations remain admitted;
 - owner loss during pipeline creation and target commit without shared
   `err_msg`, stale-owner error set/clear rejection, update-only missing-row
-  behavior, cleanup-after-diagnostic cache retirement, and retryable transient
-  fence failures;
+  behavior, cleanup-after-diagnostic progress retirement, retry counts advancing
+  across replacement pipelines through the non-retryable boundary, diagnostic
+  gauge retention, full task cleanup, and retryable transient fence failures;
 - repeated table generations retaining a bounded epoch set, including a delayed
   older cleanup that cannot delete a newer anchor and a known-stale detector
   that cannot add another low-generation row;

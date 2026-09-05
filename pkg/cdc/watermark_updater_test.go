@@ -908,7 +908,7 @@ func TestWatermarkUpdater_RemoveCachedWM_Idempotent(t *testing.T) {
 
 	require.NoError(t, updater.UpdateWatermarkOnly(ctx, &key, &ts))
 	require.NoError(t, updater.ForceFlush(ctx))
-	require.NoError(t, updater.RemoveCachedWM(ctx, &key))
+	require.NoError(t, updater.RemoveCachedWM(ctx, &key, WatermarkCleanupAll))
 
 	updater.RLock()
 	_, committedExists := updater.cacheCommitted[key]
@@ -922,7 +922,7 @@ func TestWatermarkUpdater_RemoveCachedWM_Idempotent(t *testing.T) {
 	require.False(t, committingExists)
 	require.False(t, errMetaExists)
 
-	require.NoError(t, updater.RemoveCachedWM(ctx, &key))
+	require.NoError(t, updater.RemoveCachedWM(ctx, &key, WatermarkCleanupAll))
 }
 
 func TestWatermarkUpdater_RemoveCachedWM_NoExisting(t *testing.T) {
@@ -944,7 +944,7 @@ func TestWatermarkUpdater_RemoveCachedWM_NoExisting(t *testing.T) {
 		TableName: "tbl",
 	}
 
-	require.NoError(t, updater.RemoveCachedWM(ctx, &key))
+	require.NoError(t, updater.RemoveCachedWM(ctx, &key, WatermarkCleanupAll))
 }
 
 func TestWatermarkUpdater_RemoveCachedWM_AfterStopUsesFallback(t *testing.T) {
@@ -978,7 +978,7 @@ func TestWatermarkUpdater_RemoveCachedWM_AfterStopUsesFallback(t *testing.T) {
 	updater.commitFailureCount[key] = 2
 	updater.Unlock()
 
-	require.NoError(t, updater.RemoveCachedWM(ctx, &key))
+	require.NoError(t, updater.RemoveCachedWM(ctx, &key, WatermarkCleanupAll))
 
 	updater.RLock()
 	_, inCommitted := updater.cacheCommitted[key]
@@ -998,6 +998,49 @@ func TestWatermarkUpdater_RemoveCachedWM_AfterStopUsesFallback(t *testing.T) {
 
 	_, logExists := updater.fallbackLog.Load(key.String())
 	require.True(t, logExists)
+}
+
+func TestWatermarkUpdater_RemoveCachedWM_AfterStopRetainsOwnedDiagnostic(t *testing.T) {
+	updater := NewCDCWatermarkUpdater(t.Name(), &retryableMockExecutor{})
+	updater.Start()
+	updater.Stop()
+
+	key := WatermarkKey{
+		AccountId: 7, TaskId: t.Name(), DBName: "db", TableName: "tbl",
+	}
+	t.Cleanup(func() { updater.removeWatermarkMetrics(key) })
+	ts := types.BuildTS(70, 2)
+	fence := NewOwnerFenceForGeneration(
+		time.UnixMicro(123), func(context.Context) error { return nil })
+	metadata := &ErrorMetadata{
+		IsRetryable: false,
+		RetryCount:  MaxRetryCount + 1,
+		Message:     "max retry exceeded",
+	}
+
+	updater.Lock()
+	updater.cacheCommitted[key] = ts
+	updater.activeWatermarkFence[key] = fence
+	updater.errorMetadataCache[key] = metadata
+	v2.CdcTableNonRetryableErrorGauge.WithLabelValues(
+		key.String(), "max_retry_exceeded").Set(1)
+	updater.Unlock()
+
+	require.NoError(t, updater.RemoveCachedWM(
+		context.Background(), &key, WatermarkCleanupKeepDiagnostic))
+
+	updater.RLock()
+	_, hasProgress := updater.cacheCommitted[key]
+	retainedFence := updater.activeWatermarkFence[key]
+	retainedMetadata := updater.errorMetadataCache[key]
+	updater.RUnlock()
+	require.False(t, hasProgress)
+	require.Same(t, fence, retainedFence)
+	require.Same(t, metadata, retainedMetadata)
+	metric := &dto.Metric{}
+	require.NoError(t, v2.CdcTableNonRetryableErrorGauge.WithLabelValues(
+		key.String(), "max_retry_exceeded").Write(metric))
+	require.Equal(t, float64(1), metric.GetGauge().GetValue())
 }
 
 func TestWatermarkUpdater_UpdateErrMsg_AfterStopUsesFallback(t *testing.T) {
@@ -1100,7 +1143,7 @@ func TestWatermarkUpdater_CircuitBreakerHelpers(t *testing.T) {
 	require.Equal(t, uint32(watermarkCommitMaxRetries), updater.GetCommitFailureCount(&key))
 
 	exec.failRemaining = 0
-	require.NoError(t, updater.RemoveCachedWM(ctx, &key))
+	require.NoError(t, updater.RemoveCachedWM(ctx, &key, WatermarkCleanupAll))
 	require.False(t, updater.IsCircuitBreakerOpen(&key))
 	require.Equal(t, uint32(0), updater.GetCommitFailureCount(&key))
 }
@@ -2121,16 +2164,83 @@ func TestCDCWatermarkUpdaterCanceledOwnerCheckDoesNotPublishDiagnostic(t *testin
 
 func TestCDCWatermarkUpdaterReplacementDropsPreviousErrorRetryState(t *testing.T) {
 	u := NewCDCWatermarkUpdater(t.Name(), newWmMockSQLExecutor())
-	key := WatermarkKey{AccountId: 7, TaskId: "stable", DBName: "db", TableName: "tbl"}
+	key := WatermarkKey{AccountId: 7, TaskId: t.Name(), DBName: "db", TableName: "tbl"}
+	t.Cleanup(func() { u.removeWatermarkErrorMetrics(key) })
 	oldFence := NewOwnerFenceForGeneration(
 		time.UnixMicro(123), func(context.Context) error { return nil })
 	newFence := NewOwnerFenceForGeneration(
 		time.UnixMicro(124), func(context.Context) error { return nil })
 	u.activeWatermarkFence[key] = oldFence
 	u.errorMetadataCache[key] = &ErrorMetadata{RetryCount: MaxRetryCount}
+	v2.CdcTableNonRetryableErrorGauge.WithLabelValues(
+		key.String(), "max_retry_exceeded").Set(1)
 
 	require.True(t, u.activateWatermarkFenceLocked(key, newFence))
 	require.NotContains(t, u.errorMetadataCache, key)
+	metric := &dto.Metric{}
+	require.NoError(t, v2.CdcTableNonRetryableErrorGauge.WithLabelValues(
+		key.String(), "max_retry_exceeded").Write(metric))
+	require.Zero(t, metric.GetGauge().GetValue())
+}
+
+func TestCDCWatermarkUpdaterFailedStreamRetirementPreservesRetryState(t *testing.T) {
+	u := NewCDCWatermarkUpdater(
+		t.Name(), &retryableMockExecutor{}, WithCronJobInterval(time.Hour))
+	u.Start()
+	t.Cleanup(u.Stop)
+
+	key := &WatermarkKey{
+		AccountId: 7, TaskId: t.Name(), DBName: "db", TableName: "tbl",
+	}
+	t.Cleanup(func() {
+		require.NoError(t, u.RemoveCachedWM(
+			context.Background(), key, WatermarkCleanupAll))
+	})
+	fence := NewOwnerFenceForGeneration(
+		time.UnixMicro(123), func(context.Context) error { return nil })
+	ctx := WithWatermarkOwnerFence(context.Background(), fence, 11)
+
+	for want := 1; want <= MaxRetryCount+1; want++ {
+		u.Lock()
+		require.True(t, u.activateWatermarkFenceLocked(*key, fence))
+		u.Unlock()
+
+		require.NoError(t, u.UpdateWatermarkErrMsg(
+			ctx, key, "persistent failure", &ErrorContext{IsRetryable: true}))
+
+		u.RLock()
+		metadata := u.errorMetadataCache[*key]
+		u.RUnlock()
+		require.NotNil(t, metadata)
+		require.Equal(t, want, metadata.RetryCount)
+		require.Equal(t, want <= MaxRetryCount, metadata.IsRetryable)
+
+		require.NoError(t, u.RemoveCachedWM(
+			context.Background(), key, WatermarkCleanupKeepDiagnostic))
+		u.RLock()
+		retained := u.errorMetadataCache[*key]
+		active := u.activeWatermarkFence[*key]
+		u.RUnlock()
+		require.NotNil(t, retained)
+		require.Equal(t, want, retained.RetryCount)
+		require.Same(t, fence, active)
+	}
+
+	metric := &dto.Metric{}
+	require.NoError(t, v2.CdcTableNonRetryableErrorGauge.WithLabelValues(
+		key.String(), "max_retry_exceeded").Write(metric))
+	require.Equal(t, float64(1), metric.GetGauge().GetValue())
+
+	require.NoError(t, u.RemoveCachedWM(
+		context.Background(), key, WatermarkCleanupAll))
+	u.RLock()
+	_, retained := u.errorMetadataCache[*key]
+	u.RUnlock()
+	require.False(t, retained)
+	metric.Reset()
+	require.NoError(t, v2.CdcTableNonRetryableErrorGauge.WithLabelValues(
+		key.String(), "max_retry_exceeded").Write(metric))
+	require.Zero(t, metric.GetGauge().GetValue())
 }
 
 func TestCDCWatermarkUpdaterErrorMetricClassificationIsExclusive(t *testing.T) {
@@ -2664,7 +2774,7 @@ func TestCDCWatermarkUpdater_RemoveThenUpdateErrMsg(t *testing.T) {
 
 	require.NoError(t, updater.UpdateWatermarkOnly(ctx, key, &wm))
 	require.NoError(t, updater.ForceFlush(ctx))
-	require.NoError(t, updater.RemoveCachedWM(ctx, key))
+	require.NoError(t, updater.RemoveCachedWM(ctx, key, WatermarkCleanupAll))
 
 	// UpdateWatermarkErrMsg is expected to succeed even after RemoveCachedWM; current implementation returns ErrNoWatermarkFound.
 	err := updater.UpdateWatermarkErrMsg(ctx, key, "boom", nil)
