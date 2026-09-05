@@ -681,6 +681,7 @@ func TestRefreshTaskStorageValidationDoesNotDoubleRoundTrip(t *testing.T) {
 	ctx := context.Background()
 	store := newTrackedTaskStorage()
 	claim := newTestDaemonTask(1, "claim")
+	claim.TaskStatus = task.TaskStatus_Running
 	claim.TaskRunner = "runner-1"
 	claim.LastRun = time.Now().UTC().Truncate(time.Microsecond)
 	_, err := store.AddDaemonTask(ctx, claim)

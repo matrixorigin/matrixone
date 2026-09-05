@@ -382,6 +382,23 @@ func (s *taskService) ValidateDaemonTask(ctx context.Context, t task.DaemonTask)
 	return nil
 }
 
+// daemonTaskStatusAuthorizesEffect ties status authority to the immutable claim
+// snapshot captured by one executor generation. A normal Running generation
+// loses authority as soon as a control request is durable. Resume/Restart first
+// publish a new last_run while deliberately retaining their request status until
+// startup succeeds, so only that new request-generation may use the transitional
+// status and remain valid after its status is promoted to Running.
+func daemonTaskStatusAuthorizesEffect(claimStatus, currentStatus task.TaskStatus) bool {
+	switch claimStatus {
+	case task.TaskStatus_Running:
+		return currentStatus == task.TaskStatus_Running
+	case task.TaskStatus_ResumeRequested, task.TaskStatus_RestartRequested:
+		return currentStatus == claimStatus || currentStatus == task.TaskStatus_Running
+	default:
+		return false
+	}
+}
+
 func (s *taskService) TruncateCompletedTasks(ctx context.Context) error {
 	_, err := s.store.DeleteAsyncTask(ctx, WithTaskStatusCond(task.TaskStatus_Completed))
 	return err

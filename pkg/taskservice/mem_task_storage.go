@@ -606,7 +606,10 @@ func (s *memTaskStorage) ValidateDaemonTask(
 	s.RLock()
 	defer s.RUnlock()
 	current, ok := s.daemonTasks[t.ID]
-	return ok && current.TaskRunner == t.TaskRunner && current.LastRun.Equal(t.LastRun), nil
+	return ok &&
+		daemonTaskStatusAuthorizesEffect(t.TaskStatus, current.TaskStatus) &&
+		current.TaskRunner == t.TaskRunner &&
+		current.LastRun.Equal(t.LastRun), nil
 }
 
 func (s *memTaskStorage) nextIDLocked() uint64 {

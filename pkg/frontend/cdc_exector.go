@@ -678,6 +678,11 @@ func (exec *CDCTaskExecutor) UpdateDaemonTaskClaim(claim task.DaemonTask) {
 		exec.claimTask.ID == claim.ID &&
 		exec.claimTask.TaskRunner == claim.TaskRunner &&
 		exec.claimTask.LastRun.Equal(claim.LastRun) {
+		// Status is an authority phase within one immutable generation. Keep the
+		// same fence pointer (existing pipelines own it), but advance the snapshot
+		// used by future durable checks, notably RestartRequested -> Running.
+		claimCopy := claim
+		exec.claimTask = &claimCopy
 		exec.claimMu.Unlock()
 		return
 	}
@@ -687,17 +692,24 @@ func (exec *CDCTaskExecutor) UpdateDaemonTaskClaim(claim task.DaemonTask) {
 	if service != nil {
 		fence = cdc.NewOwnerFenceForGeneration(claimCopy.LastRun, func(ctx context.Context) error {
 			// Resume/Restart on this CN publishes a new immutable fence before
-			// starting replacement work. Reject a delayed old pipeline locally,
-			// including the rare case where durable timestamps compare equal.
+			// starting replacement work. Reject a delayed old pipeline locally.
+			// taskservice canonicalizes and monotonically advances the persisted
+			// microsecond last_run token, so status-only publication is the only
+			// path that intentionally retains this fence pointer.
 			exec.claimMu.RLock()
-			current := exec.claimFence
+			currentFence := exec.claimFence
+			currentClaim := exec.claimTask
+			var validationClaim task.DaemonTask
+			if currentClaim != nil {
+				validationClaim = *currentClaim
+			}
 			exec.claimMu.RUnlock()
-			if current != fence {
+			if currentFence != fence || currentClaim == nil {
 				return moerr.NewInvalidTask(ctx, claimCopy.TaskRunner, claimCopy.ID)
 			}
 			fenceCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
 			defer cancel()
-			return service.ValidateDaemonTask(fenceCtx, claimCopy)
+			return service.ValidateDaemonTask(fenceCtx, validationClaim)
 		})
 	}
 	exec.claimTask = &claimCopy
@@ -2686,6 +2698,13 @@ func (exec *CDCTaskExecutor) handleNewTablesForGeneration(
 			if cdc.IsOwnerFenceLostError(err) {
 				return err
 			}
+			// Pause, cancel, restart, or CN shutdown can cancel this callback
+			// while target initialization is in flight. The obsolete callback is
+			// lifecycle cleanup, not a table-data failure; never persist it into
+			// shared err_msg state owned by a later generation.
+			if ctx.Err() != nil || !exec.isCurrentCallbackGeneration(callbackGeneration) {
+				return err
+			}
 			// Persist data/setup errors, and retain transient fence/epoch backend
 			// failures as retryable rather than permanently failing the table.
 			if exec.watermarkUpdater != nil {
@@ -2697,7 +2716,9 @@ func (exec *CDCTaskExecutor) handleNewTablesForGeneration(
 				}
 				errorCtx := &cdc.ErrorContext{
 					IsRetryable: cdc.IsRetryableSnapshotEpochError(err) ||
-						cdc.IsRetryableOwnerFenceError(err),
+						cdc.IsRetryableOwnerFenceError(err) ||
+						cdc.IsRetryableTargetLockError(err) ||
+						cdc.IsRetryableConnectionError(err),
 				}
 				if updateErr := exec.watermarkUpdater.UpdateWatermarkErrMsg(ctx, &watermarkKey, err.Error(), errorCtx); updateErr != nil {
 					logutil.Warn(
@@ -3102,6 +3123,7 @@ func (exec *CDCTaskExecutor) addExecPipelineForTable(
 
 	// step 2. new sinker
 	sinker, err := cdc.NewSinker(
+		ctx,
 		exec.sinkUri,
 		uint64(exec.spec.Accounts[0].GetId()),
 		exec.spec.TaskId,
@@ -3116,6 +3138,13 @@ func (exec *CDCTaskExecutor) addExecPipelineForTable(
 	)
 	info.SetOwnerFence(nil)
 	if err != nil {
+		return err
+	}
+	// Sink initialization owns target DDL. A lifecycle transition can race the
+	// final successful statement, so reject publication after initialization as
+	// well as relying on the statement context itself.
+	if err = ctx.Err(); err != nil {
+		sinker.Close()
 		return err
 	}
 	if exec.stableInitialSnapshot && compactSnapshotEpochs {

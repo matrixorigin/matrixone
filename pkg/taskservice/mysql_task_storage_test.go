@@ -1999,7 +1999,7 @@ func TestValidateDaemonTaskIsReadOnlyAndExact(t *testing.T) {
 	t.Run("matched", func(t *testing.T) {
 		storage, mock := newMockStorage(t)
 		mock.ExpectQuery(validateDaemonTask).
-			WithArgs(claim.ID, claim.TaskRunner, claim.LastRun).
+			WithArgs(claim.ID, claim.TaskRunner, claim.TaskStatus, task.TaskStatus_Running, claim.LastRun).
 			WillReturnRows(sqlmock.NewRows([]string{"found"}).AddRow(1))
 		valid, err := storage.ValidateDaemonTask(ctx, claim)
 		require.NoError(t, err)
@@ -2012,7 +2012,7 @@ func TestValidateDaemonTaskIsReadOnlyAndExact(t *testing.T) {
 	t.Run("superseded", func(t *testing.T) {
 		storage, mock := newMockStorage(t)
 		mock.ExpectQuery(validateDaemonTask).
-			WithArgs(claim.ID, claim.TaskRunner, claim.LastRun).
+			WithArgs(claim.ID, claim.TaskRunner, claim.TaskStatus, task.TaskStatus_Running, claim.LastRun).
 			WillReturnRows(sqlmock.NewRows([]string{"found"}))
 		valid, err := storage.ValidateDaemonTask(ctx, claim)
 		require.NoError(t, err)
@@ -2026,7 +2026,7 @@ func TestValidateDaemonTaskIsReadOnlyAndExact(t *testing.T) {
 		storage, mock := newMockStorage(t)
 		backendErr := errors.New("query failed")
 		mock.ExpectQuery(validateDaemonTask).
-			WithArgs(claim.ID, claim.TaskRunner, claim.LastRun).
+			WithArgs(claim.ID, claim.TaskRunner, claim.TaskStatus, task.TaskStatus_Running, claim.LastRun).
 			WillReturnError(backendErr)
 		valid, err := storage.ValidateDaemonTask(ctx, claim)
 		require.ErrorIs(t, err, backendErr)
@@ -2041,11 +2041,38 @@ func TestValidateDaemonTaskIsReadOnlyAndExact(t *testing.T) {
 		withoutGeneration := claim
 		withoutGeneration.LastRun = time.Time{}
 		mock.ExpectQuery(validateDaemonTask).
-			WithArgs(claim.ID, claim.TaskRunner, nil).
+			WithArgs(claim.ID, claim.TaskRunner, claim.TaskStatus, task.TaskStatus_Running, nil).
 			WillReturnRows(sqlmock.NewRows([]string{"found"}).AddRow(1))
 		valid, err := storage.ValidateDaemonTask(ctx, withoutGeneration)
 		require.NoError(t, err)
 		require.True(t, valid)
+		mock.ExpectClose()
+		require.NoError(t, storage.Close())
+		require.NoError(t, mock.ExpectationsWereMet())
+	})
+
+	t.Run("restart startup authority", func(t *testing.T) {
+		storage, mock := newMockStorage(t)
+		startupClaim := claim
+		startupClaim.TaskStatus = task.TaskStatus_RestartRequested
+		mock.ExpectQuery(validateDaemonTask).
+			WithArgs(startupClaim.ID, startupClaim.TaskRunner, task.TaskStatus_RestartRequested, task.TaskStatus_Running, startupClaim.LastRun).
+			WillReturnRows(sqlmock.NewRows([]string{"found"}).AddRow(1))
+		valid, err := storage.ValidateDaemonTask(ctx, startupClaim)
+		require.NoError(t, err)
+		require.True(t, valid)
+		mock.ExpectClose()
+		require.NoError(t, storage.Close())
+		require.NoError(t, mock.ExpectationsWereMet())
+	})
+
+	t.Run("ineligible captured status does not query", func(t *testing.T) {
+		storage, mock := newMockStorage(t)
+		pausedClaim := claim
+		pausedClaim.TaskStatus = task.TaskStatus_Paused
+		valid, err := storage.ValidateDaemonTask(ctx, pausedClaim)
+		require.NoError(t, err)
+		require.False(t, valid)
 		mock.ExpectClose()
 		require.NoError(t, storage.Close())
 		require.NoError(t, mock.ExpectationsWereMet())

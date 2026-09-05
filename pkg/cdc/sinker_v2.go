@@ -110,6 +110,7 @@ var _ Sinker = (*mysqlSinker2)(nil)
 // This is the main entry point for creating CDC sink, replacing the old CreateMysqlSinker
 // Defined as var for test mocking
 var CreateMysqlSinker2 = func(
+	ctx context.Context,
 	sinkUri UriInfo,
 	accountId uint64,
 	taskId string,
@@ -123,12 +124,13 @@ var CreateMysqlSinker2 = func(
 	sendSqlTimeout string,
 ) (Sinker, error) {
 	return createMysqlSinker2(
-		sinkUri, accountId, taskId, dbTblInfo, watermarkUpdater, tableDef,
+		ctx, sinkUri, accountId, taskId, dbTblInfo, watermarkUpdater, tableDef,
 		retryTimes, retryDuration, ar, maxSqlLength, sendSqlTimeout, nil,
 	)
 }
 
 func createMysqlSinker2(
+	ctx context.Context,
 	sinkUri UriInfo,
 	accountId uint64,
 	taskId string,
@@ -150,6 +152,7 @@ func createMysqlSinker2(
 
 	// 2. Create Executor (replaces Sink in old architecture)
 	executor, err := NewExecutor(
+		ctx,
 		sinkUri.User, sinkUri.Password,
 		sinkUri.Ip, sinkUri.Port,
 		retryTimes, retryDuration,
@@ -160,8 +163,9 @@ func createMysqlSinker2(
 		return nil, err
 	}
 
-	// 3. Execute DDL initialization (same as old version)
-	ctx := context.Background()
+	// 3. Execute DDL initialization (same as old version). Stable tasks pass
+	// the table-callback lifecycle context so pause/cancel can interrupt target
+	// lock acquisition and initialization SQL.
 	var targetOwnerFence func(context.Context) error
 	var targetWaitCheck func(context.Context) error
 	if ownerFence != nil {
@@ -1026,7 +1030,8 @@ func (s *mysqlSinker2) SetError(err error) {
 	// depend on their identity, and converting them to a plain moerr would turn
 	// supersession into shared table failure metadata.
 	if _, ok := err.(*moerr.Error); !ok &&
-		!IsOwnerFenceLostError(err) && !IsRetryableOwnerFenceError(err) {
+		!IsOwnerFenceLostError(err) && !IsRetryableOwnerFenceError(err) &&
+		!IsRetryableTargetLockError(err) && !IsRetryableConnectionError(err) {
 		err = moerr.ConvertGoError(context.Background(), err)
 	}
 

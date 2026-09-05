@@ -24,6 +24,7 @@ import (
 )
 
 var NewSinker = func(
+	ctx context.Context,
 	sinkUri UriInfo,
 	accountId uint64,
 	taskId string,
@@ -43,13 +44,14 @@ var NewSinker = func(
 
 	if ownerFence := dbTblInfo.OwnerFence(); ownerFence != nil {
 		return createMysqlSinker2(
-			sinkUri, accountId, taskId, dbTblInfo, watermarkUpdater, tableDef,
+			ctx, sinkUri, accountId, taskId, dbTblInfo, watermarkUpdater, tableDef,
 			retryTimes, retryDuration, ar, maxSqlLength, sendSqlTimeout, ownerFence,
 		)
 	}
 
 	// Retain the mockable entry point for legacy callers and unit tests.
 	return CreateMysqlSinker2(
+		ctx,
 		sinkUri,
 		accountId,
 		taskId,

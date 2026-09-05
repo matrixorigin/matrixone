@@ -461,8 +461,13 @@ func Test_handleCreateCdc(t *testing.T) {
 	})
 	defer stubCheckPitr.Reset()
 
-	stubOpenDbConn := gostub.Stub(&cdc.OpenDbConn, func(user, password string, ip string, port int, timeout string) (*sql.DB, error) {
-		return nil, nil
+	stubOpenDbConn := gostub.Stub(&cdc.OpenDbConn, func(_ context.Context, user, password string, ip string, port int, timeout string) (*sql.DB, error) {
+		db, mock, dbErr := sqlmock.New()
+		if dbErr != nil {
+			return nil, dbErr
+		}
+		mock.ExpectClose()
+		return db, nil
 	})
 	defer stubOpenDbConn.Reset()
 
@@ -505,8 +510,13 @@ func Test_doCreateCdc_invalidStartTs(t *testing.T) {
 	})
 	defer stubCheckPitr.Reset()
 
-	stubOpenDbConn := gostub.Stub(&cdc.OpenDbConn, func(_, _, _ string, _ int, _ string) (*sql.DB, error) {
-		return nil, nil
+	stubOpenDbConn := gostub.Stub(&cdc.OpenDbConn, func(_ context.Context, _, _, _ string, _ int, _ string) (*sql.DB, error) {
+		db, mock, dbErr := sqlmock.New()
+		if dbErr != nil {
+			return nil, dbErr
+		}
+		mock.ExpectClose()
+		return db, nil
 	})
 	defer stubOpenDbConn.Reset()
 
@@ -569,20 +579,22 @@ type testTaskService struct {
 
 func TestDaemonClaimFenceRejectsRetiredLocalGeneration(t *testing.T) {
 	var (
-		mu   sync.Mutex
-		seen []time.Time
+		mu           sync.Mutex
+		seen         []time.Time
+		seenStatuses []task.TaskStatus
 	)
 	service := &testTaskService{
 		heartbeatDaemonTaskFn: func(_ context.Context, claim task.DaemonTask) error {
 			mu.Lock()
 			seen = append(seen, claim.LastRun)
+			seenStatuses = append(seenStatuses, claim.TaskStatus)
 			mu.Unlock()
 			return nil
 		},
 	}
 	exec := &CDCTaskExecutor{taskService: service}
-	first := task.DaemonTask{LastRun: time.Unix(100, 0)}
-	second := task.DaemonTask{LastRun: time.Unix(200, 0)}
+	first := task.DaemonTask{LastRun: time.Unix(100, 0), TaskStatus: task.TaskStatus_Running}
+	second := task.DaemonTask{LastRun: time.Unix(200, 0), TaskStatus: task.TaskStatus_RestartRequested}
 
 	exec.UpdateDaemonTaskClaim(first)
 	firstFence := exec.currentDaemonClaimFence()
@@ -597,6 +609,8 @@ func TestDaemonClaimFenceRejectsRetiredLocalGeneration(t *testing.T) {
 	require.NoError(t, secondFence.Check(context.Background()))
 	require.Equal(t, []time.Time{second.LastRun}, seen,
 		"retired local generations must fail before a taskservice round trip")
+	require.Equal(t, []task.TaskStatus{task.TaskStatus_Running}, seenStatuses,
+		"the same fence must advance from startup request authority to Running")
 }
 
 func TestClassifyStableSnapshotRestart(t *testing.T) {
@@ -4814,6 +4828,7 @@ func TestCdcTask_RestartClearsPermanentTableErrorAndRecovers(t *testing.T) {
 	stubSinker := gostub.Stub(
 		&cdc.NewSinker,
 		func(
+			context.Context,
 			cdc.UriInfo,
 			uint64,
 			string,
@@ -5681,6 +5696,7 @@ func TestCdcTask_addExecPipelineForTable(t *testing.T) {
 	stubSinker := gostub.Stub(
 		&cdc.NewSinker,
 		func(
+			context.Context,
 			cdc.UriInfo,
 			uint64,
 			string,

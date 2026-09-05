@@ -100,6 +100,47 @@ func IsRetryableOwnerFenceError(err error) bool {
 	return errors.As(err, &target)
 }
 
+// RetryableTargetLockError means target ownership could not be established
+// because the target lock service or its transport failed. It is distinct from
+// owner loss: the daemon claim may still be current, and a later attempt may
+// safely retry before any target effect has started.
+type RetryableTargetLockError struct{ err error }
+
+func (e *RetryableTargetLockError) Error() string { return e.err.Error() }
+func (e *RetryableTargetLockError) Unwrap() error { return e.err }
+
+func IsRetryableTargetLockError(err error) bool {
+	var target *RetryableTargetLockError
+	return errors.As(err, &target)
+}
+
+func newRetryableTargetLockError(err error) error {
+	if err == nil || IsRetryableTargetLockError(err) {
+		return err
+	}
+	return &RetryableTargetLockError{err: err}
+}
+
+// RetryableConnectionError identifies a failed external SQL connection attempt
+// after configuration was parsed successfully. Rebuilding a CDC pipeline may
+// succeed once the target or network recovers, and no target effect has begun.
+type RetryableConnectionError struct{ err error }
+
+func (e *RetryableConnectionError) Error() string { return e.err.Error() }
+func (e *RetryableConnectionError) Unwrap() error { return e.err }
+
+func IsRetryableConnectionError(err error) bool {
+	var target *RetryableConnectionError
+	return errors.As(err, &target)
+}
+
+func newRetryableConnectionError(err error) error {
+	if err == nil || IsRetryableConnectionError(err) {
+		return err
+	}
+	return &RetryableConnectionError{err: err}
+}
+
 func NewOwnerFence(check func(context.Context) error) *OwnerFence {
 	return NewOwnerFenceForGeneration(time.Time{}, check)
 }

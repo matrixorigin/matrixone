@@ -33,6 +33,24 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 )
 
+func TestRetryableTargetLockError(t *testing.T) {
+	cause := errors.New("target unavailable")
+	err := newRetryableTargetLockError(cause)
+	require.True(t, IsRetryableTargetLockError(err))
+	require.ErrorIs(t, err, cause)
+	require.Same(t, err, newRetryableTargetLockError(err))
+	require.Nil(t, newRetryableTargetLockError(nil))
+}
+
+func TestRetryableConnectionError(t *testing.T) {
+	cause := errors.New("target unavailable")
+	err := newRetryableConnectionError(cause)
+	require.True(t, IsRetryableConnectionError(err))
+	require.ErrorIs(t, err, cause)
+	require.Same(t, err, newRetryableConnectionError(err))
+	require.Nil(t, newRetryableConnectionError(nil))
+}
+
 func TestOwnerFenceErrorClassification(t *testing.T) {
 	t.Run("superseded claim is lifecycle control", func(t *testing.T) {
 		fence := NewOwnerFence(func(ctx context.Context) error {

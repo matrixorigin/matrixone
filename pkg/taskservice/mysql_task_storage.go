@@ -155,7 +155,7 @@ var (
 		"end_at=? where task_id=?"
 
 	heartbeatDaemonTask = "update sys_daemon_task set last_heartbeat=? where task_id=? and task_runner=? and last_run=?"
-	validateDaemonTask  = "select 1 from sys_daemon_task where task_id=? and task_runner=? and last_run <=> ? limit 1"
+	validateDaemonTask  = "select 1 from sys_daemon_task where task_id=? and task_runner=? and task_status in (?,?) and last_run <=> ? limit 1"
 
 	deleteDaemonTask = "delete from sys_daemon_task where 1=1"
 
@@ -1984,12 +1984,17 @@ func (m *mysqlTaskStorage) ValidateDaemonTask(
 	if taskFrameworkDisabled() {
 		return false, nil
 	}
+	if !daemonTaskStatusAuthorizesEffect(t.TaskStatus, t.TaskStatus) {
+		return false, nil
+	}
 	var found int
 	err := m.db.QueryRowContext(
 		ctx,
 		validateDaemonTask,
 		t.ID,
 		t.TaskRunner,
+		t.TaskStatus,
+		task.TaskStatus_Running,
 		nullTime(t.LastRun),
 	).Scan(&found)
 	if errors.Is(err, sql.ErrNoRows) {

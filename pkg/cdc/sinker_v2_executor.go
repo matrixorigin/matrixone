@@ -182,6 +182,7 @@ type Executor struct {
 
 // NewExecutor creates a new Executor with database connection
 func NewExecutor(
+	ctx context.Context,
 	user, password string,
 	ip string,
 	port int,
@@ -201,7 +202,7 @@ func NewExecutor(
 	}
 	e.debugTxnRecorder.doRecord = doRecord
 
-	if err := e.Connect(); err != nil {
+	if err := e.Connect(ctx); err != nil {
 		return nil, err
 	}
 
@@ -211,8 +212,8 @@ func NewExecutor(
 }
 
 // Connect establishes a database connection
-func (e *Executor) Connect() error {
-	conn, err := OpenDbConn(e.user, e.password, e.ip, e.port, e.timeout)
+func (e *Executor) Connect(ctx context.Context) error {
+	conn, err := OpenDbConn(ctx, e.user, e.password, e.ip, e.port, e.timeout)
 	if err != nil {
 		return err
 	}
@@ -564,7 +565,10 @@ func (e *Executor) HasActiveTx() bool {
 	return e.tx != nil
 }
 
-const targetLockPollSeconds = 1
+const (
+	targetLockPollSeconds      = 1
+	targetLockPollQueryTimeout = 2 * time.Second
+)
 
 // AcquireTargetLock establishes the target-side ownership linearization point
 // for one CDC task/table. A replacement owner cannot execute DDL or begin a
@@ -601,7 +605,10 @@ func (e *Executor) AcquireTargetLock(
 	lockName := "mo_cdc_" + hex.EncodeToString(sum[:])[:57]
 	lockConn, err := e.conn.Conn(ctx)
 	if err != nil {
-		return err
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return ctxErr
+		}
+		return newRetryableConnectionError(err)
 	}
 	releaseOnError := true
 	defer func() {
@@ -624,29 +631,76 @@ func (e *Executor) AcquireTargetLock(
 		}
 	}()
 
-	for {
+	checkWait := func() error {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		if waitCheck != nil {
+			return waitCheck(ctx)
+		}
+		return nil
+	}
+	acquiredLock := false
+	for !acquiredLock {
 		// Waiting does not expose a target effect, so avoid a remote owner
 		// validation on every one-second lock poll. Local lifecycle checks still
 		// make pause, cancel, and caller cancellation terminate the wait.
-		if waitCheck != nil {
-			err = waitCheck(ctx)
-		} else {
-			err = ctx.Err()
-		}
-		if err != nil {
+		if err = checkWait(); err != nil {
 			return err
 		}
+
+		// The configured CDC SQL timeout may be disabled or much longer than the
+		// task-control deadline. Bound each advisory-lock poll independently so a
+		// broken target cannot strand a paused/cancelled generation indefinitely.
+		pollCtx, cancelPoll := context.WithTimeout(ctx, targetLockPollQueryTimeout)
 		var acquired sql.NullInt64
-		if err = lockConn.QueryRowContext(
-			ctx,
+		err = lockConn.QueryRowContext(
+			pollCtx,
 			"SELECT GET_LOCK(?, ?)",
 			lockName,
 			targetLockPollSeconds,
-		).Scan(&acquired); err != nil {
+		).Scan(&acquired)
+		pollCtxErr := pollCtx.Err()
+		cancelPoll()
+		if err != nil {
+			// Prefer the lifecycle reason when it raced with the SQL result. It is
+			// actionable by the caller and must not be persisted as a table error.
+			if waitErr := checkWait(); waitErr != nil {
+				return waitErr
+			}
+			if errors.Is(pollCtxErr, context.DeadlineExceeded) {
+				return newRetryableTargetLockError(moerr.NewInternalErrorf(
+					ctx,
+					"target ownership lock poll exceeded %s",
+					targetLockPollQueryTimeout,
+				))
+			}
+			return newRetryableTargetLockError(err)
+		}
+
+		// The owner may be paused/cancelled while GET_LOCK is in flight. Check
+		// again even after success, before treating the lock as effect authority.
+		if err = checkWait(); err != nil {
 			return err
 		}
-		if acquired.Valid && acquired.Int64 == 1 {
-			break
+		if !acquired.Valid {
+			return newRetryableTargetLockError(moerr.NewInternalError(
+				ctx,
+				"target ownership lock acquisition returned NULL",
+			))
+		}
+		switch acquired.Int64 {
+		case 1:
+			acquiredLock = true
+		case 0:
+			// The current target owner still holds the lock. Poll again after the
+			// lifecycle check at the top of the loop.
+		default:
+			return newRetryableTargetLockError(moerr.NewInternalErrorf(
+				ctx,
+				"target ownership lock acquisition returned unexpected value %d",
+				acquired.Int64,
+			))
 		}
 	}
 
@@ -739,7 +793,7 @@ func (e *Executor) ensureConnection(ctx context.Context) error {
 		return nil
 	}
 
-	if err := e.Connect(); err != nil {
+	if err := e.Connect(ctx); err != nil {
 		return err
 	}
 

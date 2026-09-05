@@ -123,6 +123,10 @@ The CDC system consists of five main components that work together to achieve re
 - Provides circuit breaker to prevent retry storms
 - Handles connection management and reconnection
 - Tracks transaction state (IDLE, ACTIVE, COMMITTED, ROLLED_BACK)
+- For stable-epoch tasks, admits target DDL/transactions only for the exact
+  status-bound daemon generation (including a newly claimed Resume/Restart
+  startup); target-lock waits and connection setup stop on pause, cancel,
+  supersession, or shutdown
 
 **Key Behaviors**:
 - Uses command channel pattern: commands are sent asynchronously, executed by consumer goroutine

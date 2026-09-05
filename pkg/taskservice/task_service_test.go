@@ -711,6 +711,7 @@ func TestValidateDaemonTask(t *testing.T) {
 	store := NewMemTaskStorage()
 	service := NewTaskService(runtime.DefaultRuntime(), store)
 	claim := newTestDaemonTask(1, "claim")
+	claim.TaskStatus = task.TaskStatus_Running
 	claim.TaskRunner = "runner-1"
 	claim.LastRun = time.Now().UTC().Truncate(time.Microsecond)
 	mustAddTestDaemonTask(t, store, 1, claim)
@@ -726,6 +727,50 @@ func TestValidateDaemonTask(t *testing.T) {
 	wrongGeneration.LastRun = claim.LastRun.Add(time.Microsecond)
 	err = service.ValidateDaemonTask(ctx, wrongGeneration)
 	assert.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidTask))
+
+	for _, status := range []task.TaskStatus{
+		task.TaskStatus_Created,
+		task.TaskStatus_Completed,
+		task.TaskStatus_Paused,
+		task.TaskStatus_Error,
+		task.TaskStatus_Canceled,
+		task.TaskStatus_ResumeRequested,
+		task.TaskStatus_PauseRequested,
+		task.TaskStatus_CancelRequested,
+		task.TaskStatus_RestartRequested,
+	} {
+		updated := claim
+		updated.TaskStatus = status
+		_, updateErr := store.UpdateDaemonTask(ctx, []task.DaemonTask{updated})
+		assert.NoError(t, updateErr)
+		err = service.ValidateDaemonTask(ctx, claim)
+		assert.Truef(t, moerr.IsMoErrCode(err, moerr.ErrInvalidTask), "status %s must not authorize effects", status)
+	}
+
+	for i, status := range []task.TaskStatus{
+		task.TaskStatus_ResumeRequested,
+		task.TaskStatus_RestartRequested,
+	} {
+		startupClaim := claim
+		startupClaim.TaskStatus = status
+		startupClaim.LastRun = claim.LastRun.Add(time.Duration(i+1) * time.Microsecond)
+		_, updateErr := store.UpdateDaemonTask(ctx, []task.DaemonTask{startupClaim})
+		assert.NoError(t, updateErr)
+		assert.NoErrorf(t, service.ValidateDaemonTask(ctx, startupClaim), "%s startup generation must authorize effects", status)
+
+		promoted := startupClaim
+		promoted.TaskStatus = task.TaskStatus_Running
+		_, updateErr = store.UpdateDaemonTask(ctx, []task.DaemonTask{promoted})
+		assert.NoError(t, updateErr)
+		assert.NoErrorf(t, service.ValidateDaemonTask(ctx, startupClaim), "%s generation must remain valid after Running publication", status)
+
+		revoked := promoted
+		revoked.TaskStatus = task.TaskStatus_PauseRequested
+		_, updateErr = store.UpdateDaemonTask(ctx, []task.DaemonTask{revoked})
+		assert.NoError(t, updateErr)
+		err = service.ValidateDaemonTask(ctx, startupClaim)
+		assert.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidTask))
+	}
 	assert.NoError(t, service.Close())
 
 	backendErr := errors.New("validate backend failed")

@@ -66,10 +66,14 @@ The implementation must preserve all of the following:
 8. **Exact execution ownership.** Every target effect and buffered watermark is
    tied to the immutable daemon claim generation that created its pipeline. An
    old pipeline cannot borrow a newer Resume/Restart token from the same
-   in-process executor. Before target replay, each owner publishes its monotonic
-   daemon-claim generation in the table watermark row. Stable watermark SQL
-   matches that generation on the same row, so a delayed old writer cannot
-   certify target data changed by a replacement.
+   in-process executor. A captured Running claim authorizes effects only while
+   its durable daemon state remains `Running`; retaining runner and `last_run`
+   after a control request does not retain authority. Resume/Restart may use
+   their request status only after publishing a new `last_run`, and that new
+   generation remains valid when promoted to Running. Before target replay, each
+   owner publishes its monotonic daemon-claim generation in the table watermark
+   row. Stable watermark SQL matches that generation on the same row, so a
+   delayed old writer cannot certify target data changed by a replacement.
 9. **Serialized takeover.** Target effects from two owners of the same CDC
    task/table are serialized with a target-side advisory lock. The lock covers
    an actual DDL or transaction interval, not source collection or pipeline
@@ -286,9 +290,12 @@ The durable column is `timestamp(6)`, and token generation truncates the clock
 to microseconds before applying the strictly-monotonic increment. Both fresh
 bootstrap and the protocol-gated catalog upgrade install that precision. The
 task runner remains the only periodic lease renewer. Effect fencing performs a
-read-only, autocommit lookup for the exact `(task_id, task_runner, last_run)`
-tuple; it neither begins an explicit transaction nor changes `last_heartbeat`.
-A missing row is explicit supersession, while a storage error leaves ownership
+read-only, autocommit lookup for the exact `(task_id, task_runner, last_run)` and
+the statuses authorized by the captured claim. A Running claim accepts only
+current Running. A claim captured after Resume/Restart advanced `last_run`
+accepts its matching request status and the later Running publication. All
+other combinations lose effect authority. Validation neither begins an explicit
+transaction nor changes `last_heartbeat`. A storage error leaves ownership
 unknown and is retryable.
 
 Claim checks use a five-second timeout. A transient periodic-heartbeat storage
@@ -309,13 +316,18 @@ metadata. Other owner-fence backend errors are wrapped as retryable failures.
 
 For each task/table, the sink derives a MySQL-compatible advisory-lock name
 from `(account, task, sink database, sink table)`. It polls `GET_LOCK` in
-one-second intervals. Before each poll it checks only local context, pause, and
-cancel state, so waiting cannot create task-row traffic and still terminates
-within one poll after a control event. Immediately after acquisition it
-performs exactly one fresh read-only validation of the immutable daemon claim.
-The same pinned target session then executes all protected DDL or one
-transaction; there are no redundant per-statement or pre/post-commit claim
-checks.
+one-second intervals. The sink initialization, connection attempts, and lock
+polls inherit the table-callback lifecycle context. Each connection attempt has
+a ten-second ceiling and each lock query has a two-second hard deadline,
+independent of the user-configured DML timeout. Before
+and after every poll it checks local context, pause, and cancel state, so a
+successful response racing a control event cannot become effect authority. A
+zero response alone means lock contention and continues polling; NULL,
+unexpected values, query failure, and the hard deadline exit as retryable lock
+failures rather than spinning. Immediately after acquisition it performs
+exactly one fresh read-only validation of the immutable daemon claim. The same
+pinned target session then executes all protected DDL or one transaction; there
+are no redundant per-statement or pre/post-commit claim checks.
 
 The lock is effect-scoped:
 
@@ -577,6 +589,7 @@ under the existing remote evidence directory above.
 | Source batch | collector; then the non-nil `ChangeData` field until explicitly transferred | untransferred `ChangeData.Clean`, processor-group cleanup, `AtomicBatch.Close`, or sink command completion |
 | Target transaction | sink executor | commit, rollback, or close |
 | Target advisory lock | sink executor for one effect interval | post-commit release, rollback/error, DDL completion, or close |
+| Target connection attempt | one sink initialization or explicit connection check | publish live pool on success; close on ping/cancellation failure and close probe-only pools immediately |
 | Stable epoch row | task/table source generation and replay endpoint | next successfully initialized higher table generation, terminal task cleanup, or orphan cleanup |
 | Watermark owner generation | latest admitted daemon claim for one task/table | next stable owner claim or watermark-row cleanup |
 | Owner fence | executor generation | immutable object becomes unreachable after all old pipelines stop |
@@ -606,7 +619,12 @@ groups.
 | Old owner idle after taskservice partition | no target lock | replacement can acquire lock and old generation fails its next fence |
 | Old owner blocked in target SQL | active transaction and lock | replacement waits; old cleanup releases; replacement revalidates then replays |
 | Old owner waits behind replacement | replacement effect completes first | old post-acquire claim check fails before DDL/DML |
-| Pause/cancel while waiting for target lock | no target effect from the waiter | local check stops within one one-second poll; pinned connection is released |
+| Pause/cancel while a target-lock poll is queued or in flight | no target effect from the waiter | callback-context cancellation interrupts the query; the post-query check rejects a racing success and releases the pinned session |
+| Target connection setup stalls with DML timeout disabled | no target effect has started | each attempt ends within ten seconds; pause/cancel interrupts it earlier, failed handles are closed, and pipeline setup remains retryable |
+| Target lock query loses its response | lock ownership may be ambiguous | the independent two-second deadline ends the attempt; best-effort same-session release runs and an ambiguous release discards the physical connection |
+| `GET_LOCK` returns NULL or an unexpected value | no trusted target authority | exit after one query as retryable; do not busy-loop on an error response |
+| Daemon status becomes PauseRequested/Paused/CancelRequested/Canceled with the same runner/generation | tuple remains but a captured Running claim is revoked | status-aware validation rejects DDL/DML and cleanup does not persist a table-data error |
+| Resume/Restart publishes a new generation while retaining its request status | replacement must initialize before Running can be published | only the newly captured request-generation is admitted; the old Running generation fails status/token matching, and the replacement remains valid after promotion |
 | Owner validation times out or taskservice is unavailable after lock acquisition | no target effect has started | release advisory lock and connection; classify as retryable, not superseded |
 | Advisory-lock release response is lost | server may or may not have released it | clear executor ownership and discard the physical session instead of returning it to the pool |
 | Resume/Restart on same runner | old pipelines retain old fence | local identity check rejects future old effects; delayed old watermark admission is ignored |
@@ -746,10 +764,16 @@ Deterministic tests must cover:
   that cannot add another low-generation row;
 - target-lock exclusion, release after every transaction, reacquisition,
   rollback/error cleanup, stale waiter rejection, local cancellation during
-  polling, one owner validation per acquisition, and zero owner validations
-  while the lock is busy;
-- exact read-only task claim matching, no explicit validation transaction,
-  backend-error propagation, and no redundant refreshable-storage ping;
+  an in-flight or just-successful poll, hard per-poll deadline, one-query
+  NULL/unexpected-result rejection, one owner validation per acquisition, and
+  zero owner validations while the lock is busy;
+- exact read-only status-and-generation authority matching, including rejection
+  of every control/terminal status for an old Running claim and admission of only
+  the newly published Resume/Restart startup generation, no explicit validation
+  transaction, backend-error propagation, and no redundant refreshable-storage
+  ping;
+- cancellation-aware connection retry/Ping and closure of failed or probe-only
+  database handles;
 - same-CN delayed post-commit watermark admission after replacement publication;
 - transient heartbeat retention versus explicit supersession cancellation;
 - legacy atomic fallback, six-column insert compatibility, v47/v48 catalog and

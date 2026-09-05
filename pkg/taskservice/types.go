@@ -708,10 +708,11 @@ type TaskService interface {
 	) (int, error)
 	// HeartbeatDaemonTask sends heartbeat to daemon task.
 	HeartbeatDaemonTask(ctx context.Context, task task.DaemonTask) error
-	// ValidateDaemonTask checks that the exact runner/generation still owns the
-	// daemon task without renewing its lease. It is safe for effect-fencing hot
-	// paths where turning every validation into a heartbeat would create a
-	// serialized write hotspot on the task row.
+	// ValidateDaemonTask checks that the exact runner/generation still has its
+	// captured Running or Resume/Restart-startup authority to produce external
+	// effects, without renewing its lease. It is safe for effect-fencing hot paths where
+	// turning every validation into a heartbeat would create a serialized write
+	// hotspot on the task row.
 	ValidateDaemonTask(ctx context.Context, task task.DaemonTask) error
 
 	// StartScheduleCronTask start schedule cron tasks. A timer will be started to pull the latest CronTask
@@ -824,8 +825,8 @@ type TaskStorage interface {
 	QueryDaemonTask(ctx context.Context, condition ...Condition) ([]task.DaemonTask, error)
 	// HeartbeatDaemonTask update the last heartbeat field of the task.
 	HeartbeatDaemonTask(ctx context.Context, task []task.DaemonTask) (int, error)
-	// ValidateDaemonTask reports whether the exact runner/generation still owns
-	// the task without mutating its heartbeat.
+	// ValidateDaemonTask reports whether the exact runner/generation retains its
+	// captured effect-eligible status without mutating its heartbeat.
 	ValidateDaemonTask(ctx context.Context, task task.DaemonTask) (bool, error)
 	// AddCDCTask insert cdcTask and daemonTask
 	AddCDCTask(context.Context, task.DaemonTask, func(context.Context, SqlExecutor) (int, error)) (int, error)

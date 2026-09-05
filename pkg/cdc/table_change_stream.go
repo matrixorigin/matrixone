@@ -1072,6 +1072,12 @@ func (s *TableChangeStream) determineRetryable(err error) bool {
 	if IsRetryableOwnerFenceError(err) {
 		return true
 	}
+	if IsRetryableTargetLockError(err) {
+		return true
+	}
+	if IsRetryableConnectionError(err) {
+		return true
+	}
 	if IsOwnerFenceLostError(err) {
 		return false
 	}

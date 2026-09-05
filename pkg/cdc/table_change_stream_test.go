@@ -3101,6 +3101,22 @@ func TestTableChangeStream_DetermineRetryable_TableNotFoundError(t *testing.T) {
 	}
 }
 
+func TestTableChangeStream_DetermineRetryable_TargetLockFailure(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+	stream := createTestStream(mp, &DbTableInfo{
+		SourceDbName:  "db1",
+		SourceTblName: "t1",
+		SourceTblId:   1,
+	})
+	require.True(t, stream.determineRetryable(
+		newRetryableTargetLockError(errors.New("target unavailable")),
+	))
+	require.True(t, stream.determineRetryable(
+		newRetryableConnectionError(errors.New("target unavailable")),
+	))
+}
+
 // TestTableChangeStream_TableNotFoundError_Integration verifies end-to-end behavior
 // when "can not find table by id" error occurs during collection.
 func TestTableChangeStream_TableNotFoundError_Integration(t *testing.T) {

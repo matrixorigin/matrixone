@@ -112,11 +112,17 @@ func (opts *CDCCreateTaskOptions) ValidateAndFill(
 		); err != nil {
 			return
 		}
-		if _, err = cdc.OpenDbConn(
+		sourceConn, sourceConnErr := cdc.OpenDbConn(
+			ctx,
 			opts.SrcUriInfo.User, opts.SrcUriInfo.Password, opts.SrcUriInfo.Ip, opts.SrcUriInfo.Port, cdc.CDCDefaultSendSqlTimeout,
-		); err != nil {
+		)
+		if sourceConnErr != nil {
 			err = moerr.NewInternalErrorf(ctx, ""+
-				"failed to connect to source, please check the connection, err: %v", err)
+				"failed to connect to source, please check the connection, err: %v", sourceConnErr)
+			return
+		}
+		if closeErr := sourceConn.Close(); closeErr != nil {
+			err = moerr.NewInternalErrorf(ctx, "failed to close source connection check: %v", closeErr)
 			return
 		}
 	}
@@ -141,10 +147,16 @@ func (opts *CDCCreateTaskOptions) ValidateAndFill(
 		); err != nil {
 			return
 		}
-		if _, err = cdc.OpenDbConn(
+		sinkConn, sinkConnErr := cdc.OpenDbConn(
+			ctx,
 			opts.SinkUriInfo.User, opts.SinkUriInfo.Password, opts.SinkUriInfo.Ip, opts.SinkUriInfo.Port, cdc.CDCDefaultSendSqlTimeout,
-		); err != nil {
-			err = moerr.NewInternalErrorf(ctx, "failed to connect to sink, please check the connection, err: %v", err)
+		)
+		if sinkConnErr != nil {
+			err = moerr.NewInternalErrorf(ctx, "failed to connect to sink, please check the connection, err: %v", sinkConnErr)
+			return
+		}
+		if closeErr := sinkConn.Close(); closeErr != nil {
+			err = moerr.NewInternalErrorf(ctx, "failed to close sink connection check: %v", closeErr)
 			return
 		}
 	}
