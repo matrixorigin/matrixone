@@ -40,6 +40,9 @@ func (bj ByteJson) String() string {
 
 func (bj ByteJson) Unquote() (string, error) {
 	if bj.Type == TpCodeBlob {
+		if _, _, ok := mysqlOpaqueValue(bj.GetString()); ok {
+			return string(bj.GetString()), nil
+		}
 		if payload, ok := bj.persistedBitPayload(); ok {
 			return base64.StdEncoding.EncodeToString(payload), nil
 		}
@@ -214,12 +217,15 @@ func (bj ByteJson) to(buf []byte) ([]byte, error) {
 		buf = append(buf, '"')
 	case TpCodeBlob:
 		buf = append(buf, '"')
-		if payload, ok := bj.persistedBitPayload(); ok {
+		data := bj.GetString()
+		if _, _, ok := mysqlOpaqueValue(data); ok {
+			buf = append(buf, data...)
+		} else if payload, ok := bj.persistedBitPayload(); ok {
 			start := len(buf)
 			buf = append(buf, make([]byte, base64.StdEncoding.EncodedLen(len(payload)))...)
 			base64.StdEncoding.Encode(buf[start:], payload)
 		} else {
-			buf = append(buf, bj.GetString()...)
+			buf = append(buf, data...)
 		}
 		buf = append(buf, '"')
 	case TpCodeOpaque, TpCodeBit:
@@ -367,13 +373,62 @@ func (bj ByteJson) getValEntry(off int) ByteJson {
 	return ByteJson{Type: TpCode(tpCode), Data: bj.Data[valOff : valOff+dataBytes]}
 }
 
-const persistedBitPrefix = "~mo:json-bit:v1:"
+const (
+	persistedBitPrefix = "~mo:json-bit:v1:"
+	mysqlOpaquePrefix  = "base64:type"
+)
+
+// NewMySQLOpaque creates the JSON representation MySQL uses for binary SQL
+// values. TpCodeBlob keeps the value readable by pre-TpCodeOpaque readers;
+// the standard text prefix retains the original MySQL field type.
+func NewMySQLOpaque(fieldType uint8, payload []byte) ByteJson {
+	return ByteJson{
+		Type: TpCodeBlob,
+		Data: appendBinaryString(nil, mysqlOpaqueText(fieldType, payload)),
+	}
+}
+
+func mysqlOpaqueText(fieldType uint8, payload []byte) string {
+	encodedLen := base64.StdEncoding.EncodedLen(len(payload))
+	buf := make([]byte, 0, len(mysqlOpaquePrefix)+3+1+encodedLen)
+	buf = append(buf, mysqlOpaquePrefix...)
+	buf = strconv.AppendUint(buf, uint64(fieldType), 10)
+	buf = append(buf, ':')
+	start := len(buf)
+	buf = append(buf, make([]byte, encodedLen)...)
+	base64.StdEncoding.Encode(buf[start:], payload)
+	return string(buf)
+}
+
+func mysqlOpaqueValue(payload []byte) (uint8, []byte, bool) {
+	if !bytes.HasPrefix(payload, []byte(mysqlOpaquePrefix)) {
+		return 0, nil, false
+	}
+	rest := payload[len(mysqlOpaquePrefix):]
+	colon := bytes.IndexByte(rest, ':')
+	if colon <= 0 {
+		return 0, nil, false
+	}
+	fieldType, err := strconv.ParseUint(string(rest[:colon]), 10, 8)
+	if err != nil {
+		return 0, nil, false
+	}
+	encoded := rest[colon+1:]
+	if _, ok := base64DecodedLen(encoded); !ok {
+		return 0, nil, false
+	}
+	return uint8(fieldType), encoded, true
+}
 
 func (bj ByteJson) persistedBitPayload() ([]byte, bool) {
 	if bj.Type != TpCodeBlob {
 		return nil, false
 	}
 	payload := bj.GetString()
+	if fieldType, encoded, ok := mysqlOpaqueValue(payload); ok && fieldType == 16 {
+		raw, err := base64.StdEncoding.DecodeString(string(encoded))
+		return raw, err == nil
+	}
 	if !bytes.HasPrefix(payload, []byte(persistedBitPrefix)) {
 		return nil, false
 	}
@@ -406,8 +461,9 @@ func (bj ByteJson) requiresLegacyBinaryEncoding() bool {
 
 // appendLegacyCompatibleJSON writes only type codes understood by readers
 // predating TpCodeOpaque and TpCodeBit. Opaque values use the legacy BLOB
-// representation; BIT values use a tagged BLOB payload whose subtype new
-// readers recover through TYPE, display, and comparison operations.
+// representation; BIT values keep the legacy sentinel so existing CAST AS JSON
+// display remains unchanged. Constructors that require MySQL's type16 tag use
+// NewMySQLOpaque directly and therefore do not enter this conversion.
 func appendLegacyCompatibleJSON(buf []byte, bj ByteJson) (TpCode, []byte, error) {
 	switch bj.Type {
 	case TpCodeOpaque:
@@ -490,8 +546,8 @@ func appendLegacyCompatibleValueEntry(buf []byte, docOff, valEntryOff int, bj By
 type binaryJSONSubtype uint8
 
 const (
-	binaryJSONBit binaryJSONSubtype = iota
-	binaryJSONBlob
+	binaryJSONBit  binaryJSONSubtype = 16
+	binaryJSONBlob binaryJSONSubtype = 252
 )
 
 const (
@@ -510,6 +566,13 @@ func binaryJSONValue(bj ByteJson) (binaryJSONValueView, bool) {
 	switch bj.Type {
 	case TpCodeBlob:
 		payload := bj.GetString()
+		if fieldType, encoded, ok := mysqlOpaqueValue(payload); ok {
+			return binaryJSONValueView{
+				subtype:       binaryJSONSubtype(fieldType),
+				legacyEncoded: encoded,
+				fallbackRaw:   payload,
+			}, true
+		}
 		if bytes.HasPrefix(payload, []byte(persistedBitPrefix)) {
 			encoded := payload[len(persistedBitPrefix):]
 			if _, ok := base64DecodedLen(encoded); ok {

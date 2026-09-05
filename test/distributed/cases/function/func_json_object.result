@@ -15,21 +15,21 @@ select json_object('d64', cast(12345.67 as decimal(10,2)), 'd128', cast(9876.543
 {"d128": 9876.5432100000, "d64": 12345.67}
 select json_object(cast('2021-02-01' as date), cast('11:11:11' as time));
 ➤ json_object(cast(2021-02-01 as date), cast(11:11:11 as time))[-1,2147483647,0]  𝄀
-{"2021-02-01": "11:11:11"}
+{"2021-02-01": "11:11:11.000000"}
 select json_object('ts', cast('2022-01-01 01:02:03' as datetime));
 ➤ json_object(ts, cast(2022-01-01 01:02:03 as datetime))[-1,2147483647,0]  𝄀
-{"ts": "2022-01-01 01:02:03"}
+{"ts": "2022-01-01 01:02:03.000000"}
 select json_object('uid', cast('550e8400-e29b-41d4-a716-446655440000' as uuid));
 ➤ json_object(uid, cast(550e8400-e29b-41d4-a716-446655440000 as uuid))[-1,2147483647,0]  𝄀
 {"uid": "550e8400-e29b-41d4-a716-446655440000"}
 select json_object('year', cast('2021' as year));
 ➤ json_object(year, cast(2021 as year))[-1,2147483647,0]  𝄀
-{"year": "2021"}
+{"year": 2021}
 select json_object('bit1', cast(1 as bit), 'bit0', cast(0 as bit));
 Data truncation: data out of range: data type int0, value 1
 select json_object('binary', cast('hello' as binary(10)), 'varbin', cast('world' as varbinary));
 ➤ json_object(binary, cast(hello as binary(10)), varbin, cast(world as varbinary))[-1,2147483647,0]  𝄀
-{"binary": "aGVsbG8AAAAAAA==", "varbin": "d29ybGQ="}
+{"binary": "base64:type254:aGVsbG8AAAAAAA==", "varbin": "base64:type15:d29ybGQ="}
 select json_object('vec32', cast('[1.0,2.0,3.0]' as vecf32(3)), 'vec64', cast('[1.5,2.5,3.5]' as vecf64(3)));
 ➤ json_object(vec32, cast([1.0,2.0,3.0] as vecf32(3)), vec64, cast([1.5,2.5,3.5] as vecf64(3)))[-1,2147483647,0]  𝄀
 {"vec32": [1, 2, 3], "vec64": [1.5, 2.5, 3.5]}
@@ -116,29 +116,29 @@ select id, json_object('c1', c1, 'vc', vc, 't', t) from jot;
 3  ¦  {"c1": "z", "t": "txt", "vc": null}
 select id, json_object('bin', bin, 'vbin', vbin) from jot;
 ➤ id[4,32,0]  ¦  json_object(bin, bin, vbin, vbin)[-1,2147483647,0]  𝄀
-1  ¦  {"bin": "aGVsbG8AAAAAAA==", "vbin": "d29ybGQ="}  𝄀
+1  ¦  {"bin": "base64:type254:aGVsbG8AAAAAAA==", "vbin": "base64:type15:d29ybGQ="}  𝄀
 2  ¦  {"bin": null, "vbin": null}  𝄀
-3  ¦  {"bin": "eDAweEZGAAAAAA==", "vbin": null}
+3  ¦  {"bin": "base64:type254:eDAweEZGAAAAAA==", "vbin": null}
 select id, json_object('bit', bitcol) from jot;
 ➤ id[4,32,0]  ¦  json_object(bit, bitcol)[-1,2147483647,0]  𝄀
-1  ¦  {"bit": "AQ=="}  𝄀
+1  ¦  {"bit": "base64:type16:AQ=="}  𝄀
 2  ¦  {"bit": null}  𝄀
-3  ¦  {"bit": "AA=="}
+3  ¦  {"bit": "base64:type16:AA=="}
 select id, json_object('date', td, 'time', tt, 'dt', tdt) from jot;
 ➤ id[4,32,0]  ¦  json_object(date, td, time, tt, dt, tdt)[-1,2147483647,0]  𝄀
-1  ¦  {"date": "2021-02-01", "dt": "2021-02-01 11:11:11", "time": "11:11:11"}  𝄀
+1  ¦  {"date": "2021-02-01", "dt": "2021-02-01 11:11:11.000000", "time": "11:11:11.000000"}  𝄀
 2  ¦  {"date": null, "dt": null, "time": null}  𝄀
-3  ¦  {"date": "2021-12-31", "dt": "2021-12-31 23:59:59", "time": "23:59:59"}
+3  ¦  {"date": "2021-12-31", "dt": "2021-12-31 23:59:59.000000", "time": "23:59:59.000000"}
 select id, json_object('ts', ts) from jot;
 ➤ id[4,32,0]  ¦  json_object(ts, ts)[-1,2147483647,0]  𝄀
-1  ¦  {"ts": "2022-01-01 01:02:03"}  𝄀
+1  ¦  {"ts": "2022-01-01 01:02:03.000000"}  𝄀
 2  ¦  {"ts": null}  𝄀
-3  ¦  {"ts": "2022-12-31 23:59:59"}
+3  ¦  {"ts": "2022-12-31 23:59:59.000000"}
 select id, json_object('yr', yr) from jot;
 ➤ id[4,32,0]  ¦  json_object(yr, yr)[-1,2147483647,0]  𝄀
-1  ¦  {"yr": "2021"}  𝄀
+1  ¦  {"yr": 2021}  𝄀
 2  ¦  {"yr": null}  𝄀
-3  ¦  {"yr": "1999"}
+3  ¦  {"yr": 1999}
 select id, json_object('uid', uid) from jot;
 ➤ id[4,32,0]  ¦  json_object(uid, uid)[-1,2147483647,0]  𝄀
 1  ¦  {"uid": "550e8400-e29b-41d4-a716-446655440000"}  𝄀
@@ -159,11 +159,38 @@ select id, json_object('vf32', vf32, 'vf64', vf64) from jot;
 1  ¦  {"vf32": [1, 2, 3], "vf64": [1.5, 2.5, 3.5]}  𝄀
 2  ¦  {"vf32": null, "vf64": null}  𝄀
 3  ¦  {"vf32": [4, 5, 6], "vf64": [3, 2, 1]}
+select json_type(json_extract(json_object('year', cast('2024' as year)), '$.year')), json_contains(json_object('year', cast('2024' as year)), '2024', '$.year'), json_contains(json_object('year', cast('2024' as year)), '"2024"', '$.year');
+➤ json_type(json_extract(json_object(year, cast(2024 as year)), $.year))[12,65535,0]  ¦  json_contains(json_object(year, cast(2024 as year)), 2024, $.year)[-5,64,0]  ¦  json_contains(json_object(year, cast(2024 as year)), "2024", $.year)[-5,64,0]  𝄀
+INTEGER  ¦  1  ¦  0
+select json_unquote(json_extract(json_object('t0', cast('04:05:06' as time(0)), 't6', cast('04:05:06.123456' as time(6))), '$.t0')), json_unquote(json_extract(json_object('t0', cast('04:05:06' as time(0)), 't6', cast('04:05:06.123456' as time(6))), '$.t6'));
+➤ json_unquote(json_extract(json_object(t0, cast(04:05:06 as time), t6, cast(04:05:06.123456 as time(6))), $.t0))[12,65535,0]  ¦  json_unquote(json_extract(json_object(t0, cast(04:05:06 as time), t6, cast(04:05:06.123456 as time(6))), $.t6))[12,65535,0]  𝄀
+04:05:06.000000  ¦  04:05:06.123456
+select json_unquote(json_extract(json_object('bin', cast(x'00ff' as binary(2)), 'varbin', cast(x'00ff' as varbinary), 'blob', cast(x'00ff' as blob), 'bit', cast(b'1010' as bit(4))), '$.bin')), json_unquote(json_extract(json_object('bin', cast(x'00ff' as binary(2)), 'varbin', cast(x'00ff' as varbinary), 'blob', cast(x'00ff' as blob), 'bit', cast(b'1010' as bit(4))), '$.varbin')), json_unquote(json_extract(json_object('bin', cast(x'00ff' as binary(2)), 'varbin', cast(x'00ff' as varbinary), 'blob', cast(x'00ff' as blob), 'bit', cast(b'1010' as bit(4))), '$.blob')), json_unquote(json_extract(json_object('bin', cast(x'00ff' as binary(2)), 'varbin', cast(x'00ff' as varbinary), 'blob', cast(x'00ff' as blob), 'bit', cast(b'1010' as bit(4))), '$.bit'));
+➤ json_unquote(json_extract(json_object(bin, cast(0x00ff as binary(2)), varbin, cast(0x00ff as varbinary), blob, cast(0x00ff as blob), bit, cast(0b1010 as bit(4))), $.bin))[12,65535,0]  ¦  json_unquote(json_extract(json_object(bin, cast(0x00ff as binary(2)), varbin, cast(0x00ff as varbinary), blob, cast(0x00ff as blob), bit, cast(0b1010 as bit(4))), $.varbin))[12,65535,0]  ¦  json_unquote(json_extract(json_object(bin, cast(0x00ff as binary(2)), varbin, cast(0x00ff as varbinary), blob, cast(0x00ff as blob), bit, cast(0b1010 as bit(4))), $.blob))[12,65535,0]  ¦  json_unquote(json_extract(json_object(bin, cast(0x00ff as binary(2)), varbin, cast(0x00ff as varbinary), blob, cast(0x00ff as blob), bit, cast(0b1010 as bit(4))), $.bit))[12,65535,0]  𝄀
+base64:type254:AP8=  ¦  base64:type15:AP8=  ¦  base64:type252:AP8=  ¦  base64:type16:Cg==
+select json_extract(json_object('g', st_geomfromtext('POINT(1 2)')), '$.g') = convert(st_geomfromtext('POINT(1 2)'), json);
+➤ json_extract(json_object(g, st_geomfromtext(POINT(1 2))), $.g) = cast(st_geomfromtext(POINT(1 2)) as json)[-7,1,0]  𝄀
+1
+set time_zone = '+00:00';
+select json_unquote(json_extract(json_object('ts', ts), '$.ts')) from jot where id = 1;
+➤ json_unquote(json_extract(json_object(ts, ts), $.ts))[12,65535,0]  𝄀
+2021-12-31 17:02:03.000000
+set time_zone = '+08:00';
+select json_unquote(json_extract(json_object('ts', ts), '$.ts')) from jot where id = 1;
+➤ json_unquote(json_extract(json_object(ts, ts), $.ts))[12,65535,0]  𝄀
+2022-01-01 01:02:03.000000
+set @json_object_year = '2024';
+set @json_object_time = '04:05:06.123456';
+prepare json_object_typed from 'select json_object(''year'', cast(? as year), ''time'', cast(? as time(6)))';
+execute json_object_typed using @json_object_year, @json_object_time;
+➤ json_object(year, cast(? as year), time, cast(? as time(6)))[-1,2147483647,0]  𝄀
+{"time": "04:05:06.123456", "year": 2024}
+deallocate prepare json_object_typed;
 select id, json_object('id', id, 'b', b, 'bi', bi, 'f', f, 'd', d, 'd64', d64, 'd128', d128, 'd256', d256, 'c1', c1, 'vc', vc, 't', t, 'bin', bin, 'vbin', vbin, 'bit', bitcol, 'date', td, 'time', tt, 'dt', tdt, 'ts', ts, 'yr', yr, 'uid', uid, 'js', js, 'vf32', vf32, 'vf64', vf64) from jot;
 ➤ id[4,32,0]  ¦  json_object(id, id, b, b, bi, bi, f, f, d, d, d64, d64, d128, d128, d256, d256, c1, c1, vc, vc, t, t, bin, bin, vbin, vbin, bit, bitcol, date, td, time, tt, dt, tdt, ts, ts, yr, yr, uid, uid, js, js, vf32, vf32, vf64, vf64)[-1,2147483647,0]  𝄀
-1  ¦  {"b": true, "bi": 11111111111111, "bin": "aGVsbG8AAAAAAA==", "bit": "AQ==", "c1": "a", "d": 0.2222222, "d128": 3.1415926536, "d256": 3.14159265358979323846, "d64": 3.140, "date": "2021-02-01", "dt": "2021-02-01 11:11:11", "f": 0.10000000149011612, "id": 1, "js": {"a": 1, "b": [1, 2, 3], "c": {"d": "hello"}}, "t": "tttttttt", "time": "11:11:11", "ts": "2022-01-01 01:02:03", "uid": "550e8400-e29b-41d4-a716-446655440000", "vbin": "d29ybGQ=", "vc": "vvvv", "vf32": [1, 2, 3], "vf64": [1.5, 2.5, 3.5], "yr": "2021"}  𝄀
+1  ¦  {"b": true, "bi": 11111111111111, "bin": "base64:type254:aGVsbG8AAAAAAA==", "bit": "base64:type16:AQ==", "c1": "a", "d": 0.2222222, "d128": 3.1415926536, "d256": 3.14159265358979323846, "d64": 3.140, "date": "2021-02-01", "dt": "2021-02-01 11:11:11.000000", "f": 0.10000000149011612, "id": 1, "js": {"a": 1, "b": [1, 2, 3], "c": {"d": "hello"}}, "t": "tttttttt", "time": "11:11:11.000000", "ts": "2022-01-01 01:02:03.000000", "uid": "550e8400-e29b-41d4-a716-446655440000", "vbin": "base64:type15:d29ybGQ=", "vc": "vvvv", "vf32": [1, 2, 3], "vf64": [1.5, 2.5, 3.5], "yr": 2021}  𝄀
 2  ¦  {"b": false, "bi": null, "bin": null, "bit": null, "c1": null, "d": null, "d128": null, "d256": null, "d64": null, "date": null, "dt": null, "f": null, "id": 2, "js": null, "t": null, "time": null, "ts": null, "uid": null, "vbin": null, "vc": null, "vf32": null, "vf64": null, "yr": null}  𝄀
-3  ¦  {"b": true, "bi": 2, "bin": "eDAweEZGAAAAAA==", "bit": "AA==", "c1": "z", "d": 2.5, "d128": 0.1234567890, "d256": 1.23456789012345678901, "d64": 99.999, "date": "2021-12-31", "dt": "2021-12-31 23:59:59", "f": 1.5, "id": 3, "js": {"foo": "bar", "nested": {"x": null}, "zoo": [1, 2, 3]}, "t": "txt", "time": "23:59:59", "ts": "2022-12-31 23:59:59", "uid": "660e8400-e29b-41d4-a716-446655440001", "vbin": null, "vc": null, "vf32": [4, 5, 6], "vf64": [3, 2, 1], "yr": "1999"}
+3  ¦  {"b": true, "bi": 2, "bin": "base64:type254:eDAweEZGAAAAAA==", "bit": "base64:type16:AA==", "c1": "z", "d": 2.5, "d128": 0.1234567890, "d256": 1.23456789012345678901, "d64": 99.999, "date": "2021-12-31", "dt": "2021-12-31 23:59:59.000000", "f": 1.5, "id": 3, "js": {"foo": "bar", "nested": {"x": null}, "zoo": [1, 2, 3]}, "t": "txt", "time": "23:59:59.000000", "ts": "2022-12-31 23:59:59.000000", "uid": "660e8400-e29b-41d4-a716-446655440001", "vbin": null, "vc": null, "vf32": [4, 5, 6], "vf64": [3, 2, 1], "yr": 1999}
 select json_object();
 ➤ json_object()[-1,2147483647,0]  𝄀
 {}
