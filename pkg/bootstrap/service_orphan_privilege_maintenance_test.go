@@ -26,10 +26,14 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/matrixorigin/matrixone/pkg/bootstrap/versions/v4_0_6"
+	molog "github.com/matrixorigin/matrixone/pkg/common/log"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/txn/clock"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
+	"go.uber.org/zap"
+	"go.uber.org/zap/zaptest/observer"
 )
 
 func TestMaintainOrphanObjectPrivilegesFiniteAccountRound(t *testing.T) {
@@ -205,6 +209,76 @@ func TestOrphanPrivilegeMaintenanceLongRunningWarningInterval(t *testing.T) {
 	}
 }
 
+func TestMaintainOrphanObjectPrivilegesEmitsLongRunningWarning(t *testing.T) {
+	const tenantID = int32(10)
+	candidates := make([]v4_0_6.OrphanPrivilegeKey, 1000)
+	for i := range candidates {
+		candidates[i] = v4_0_6.OrphanPrivilegeKey{
+			RoleID: int32(i), ObjectType: "account", PrivilegeLevel: "*",
+		}
+	}
+	highWater := v4_0_6.OrphanPrivilegeKey{
+		RoleID: 2000, ObjectType: "account", PrivilegeLevel: "*",
+	}
+
+	for _, test := range []struct {
+		committedPagesAfterPage uint64
+		warn                    bool
+	}{
+		{committedPagesAfterPage: orphanPrivilegeMaintenanceLongRunningPageInterval - 1},
+		{committedPagesAfterPage: orphanPrivilegeMaintenanceLongRunningPageInterval, warn: true},
+		{committedPagesAfterPage: orphanPrivilegeMaintenanceLongRunningPageInterval + 1},
+	} {
+		t.Run(fmt.Sprintf("pages-%d", test.committedPagesAfterPage), func(t *testing.T) {
+			core, observed := observer.New(zap.WarnLevel)
+			service := newServiceForTest(
+				"",
+				&memLocker{},
+				clock.NewHLCClock(func() int64 { return 0 }, 0),
+				nil,
+				executor.NewMemExecutor(func(sql string) (executor.Result, error) {
+					if strings.HasPrefix(sql,
+						"select role_id,obj_type,obj_id,privilege_id,privilege_level,hex(__mo_cpkey_col) ") {
+						return buildMaintenancePrivilegeRows(t, candidates...), nil
+					}
+					return executor.Result{}, fmt.Errorf("unexpected sql: %s", sql)
+				}),
+				func(s *service) {},
+			)
+			service.logger = molog.GetServiceLogger(
+				zap.New(core), metadata.ServiceType_CN, "warning-test").Named("upgrade-framework")
+			service.upgrade.orphanPrivilegeMaintenanceState = orphanPrivilegeMaintenanceState{
+				roundInitialized:     true,
+				roundHighWater:       tenantID,
+				roundStart:           tenantID,
+				accountCursor:        tenantID,
+				tenantSelected:       true,
+				tenantID:             tenantID,
+				tenantCommittedPages: test.committedPagesAfterPage - 1,
+				tenantScan: v4_0_6.OrphanPrivilegeScan{
+					Initialized: true,
+					HighWater:   maintenancePhysicalKey(highWater),
+				},
+			}
+
+			require.NoError(t, service.maintainOrphanObjectPrivileges(t.Context()))
+			require.Equal(t, test.committedPagesAfterPage,
+				service.upgrade.orphanPrivilegeMaintenanceState.tenantCommittedPages)
+			entries := observed.All()
+			if !test.warn {
+				require.Empty(t, entries)
+				return
+			}
+			require.Len(t, entries, 1)
+			require.Equal(t, zap.WarnLevel, entries[0].Level)
+			require.Equal(t, "orphan object privilege maintenance tenant remains active", entries[0].Message)
+			fields := entries[0].ContextMap()
+			require.EqualValues(t, tenantID, fields["tenant"])
+			require.EqualValues(t, test.committedPagesAfterPage, fields["committed-pages"])
+		})
+	}
+}
+
 func TestOrphanPrivilegeMaintenanceRestartSeedAvoidsFixedZeroBias(t *testing.T) {
 	const highWater = int32(127)
 	starts := make(map[int32]struct{})
@@ -318,10 +392,13 @@ func TestMaintainOrphanObjectPrivilegesAdvancesAfterTenantError(t *testing.T) {
 		func(s *service) {},
 	)
 	service.upgrade.orphanPrivilegeMaintenanceState = orphanPrivilegeMaintenanceState{
-		roundInitialized: true,
-		roundHighWater:   12,
-		roundStart:       10,
-		accountCursor:    10,
+		roundInitialized:     true,
+		roundHighWater:       12,
+		roundStart:           10,
+		accountCursor:        10,
+		tenantSelected:       true,
+		tenantID:             10,
+		tenantCommittedPages: orphanPrivilegeMaintenanceLongRunningPageInterval - 1,
 	}
 
 	require.ErrorContains(t, service.maintainOrphanObjectPrivileges(t.Context()), "injected candidate scan failure")
@@ -329,10 +406,11 @@ func TestMaintainOrphanObjectPrivilegesAdvancesAfterTenantError(t *testing.T) {
 	require.Equal(t, int32(11), state.accountCursor,
 		"a broken tenant must not starve later accounts in the frozen round")
 	require.False(t, state.tenantSelected)
+	require.Zero(t, state.tenantCommittedPages)
 	require.False(t, service.upgrade.orphanPrivilegeMaintenanceRunning.Load())
 
 	require.NoError(t, service.maintainOrphanObjectPrivileges(t.Context()))
-	require.Equal(t, 2, lookupCount)
+	require.Equal(t, 1, lookupCount)
 }
 
 func TestMaintainOrphanObjectPrivilegesHandlesCommittedPostWaitError(t *testing.T) {
