@@ -2896,16 +2896,9 @@ func JsonSchemaValid(ivecs []*vector.Vector, result vector.FunctionResultWrapper
 		if err != nil {
 			return moerr.NewInvalidArg(proc.Ctx, "json_schema_valid", "invalid schema JSON")
 		}
-		if err := validateSchemaObject(proc.Ctx, "json_schema_valid", schemaBJ); err != nil {
-			return err
-		}
-		if schemaHasRefKeyword(schemaBJ) {
-			return moerr.NewNotSupportedf(proc.Ctx, "json_schema_valid: $ref is not supported")
-		}
-		schemaJSON, _ := schemaBJ.MarshalJSON()
-		compiled, err = gojsonschema.NewSchema(gojsonschema.NewBytesLoader(schemaJSON))
+		compiled, err = compileMySQLDraft4Schema(proc.Ctx, "json_schema_valid", schemaBJ)
 		if err != nil {
-			return moerr.NewInvalidArg(proc.Ctx, "json_schema_valid", err.Error())
+			return err
 		}
 	}
 
@@ -2974,16 +2967,9 @@ func JsonSchemaValidationReport(ivecs []*vector.Vector, result vector.FunctionRe
 		if err != nil {
 			return moerr.NewInvalidArg(proc.Ctx, "json_schema_validation_report", "invalid schema JSON")
 		}
-		if err := validateSchemaObject(proc.Ctx, "json_schema_validation_report", schemaBJ); err != nil {
-			return err
-		}
-		if schemaHasRefKeyword(schemaBJ) {
-			return moerr.NewNotSupportedf(proc.Ctx, "json_schema_validation_report: $ref is not supported")
-		}
-		schemaJSON, _ := schemaBJ.MarshalJSON()
-		compiled, err = gojsonschema.NewSchema(gojsonschema.NewBytesLoader(schemaJSON))
+		compiled, err = compileMySQLDraft4Schema(proc.Ctx, "json_schema_validation_report", schemaBJ)
 		if err != nil {
-			return moerr.NewInvalidArg(proc.Ctx, "json_schema_validation_report", err.Error())
+			return err
 		}
 	}
 
@@ -3048,6 +3034,177 @@ func validateSchemaObject(ctx context.Context, fnName string, schemaBJ bytejson.
 	return nil
 }
 
+func compileMySQLDraft4Schema(ctx context.Context, fnName string, schemaBJ bytejson.ByteJson) (*gojsonschema.Schema, error) {
+	if err := validateSchemaObject(ctx, fnName, schemaBJ); err != nil {
+		return nil, err
+	}
+
+	schemaJSON, err := schemaBJ.MarshalJSON()
+	if err != nil {
+		return nil, moerr.NewInvalidArg(ctx, fnName, err.Error())
+	}
+	decoder := json.NewDecoder(bytes.NewReader(schemaJSON))
+	decoder.UseNumber()
+	var schema any
+	if err := decoder.Decode(&schema); err != nil {
+		return nil, moerr.NewInvalidArg(ctx, fnName, err.Error())
+	}
+
+	if mysqlSchemaHasStringRef(schema) {
+		return nil, moerr.NewNotSupportedf(ctx, "%s: $ref is not supported", fnName)
+	}
+	normalizeMySQLDraft4Schema(schema)
+	if mysqlDraft4SchemaHasRef(schema) {
+		return nil, moerr.NewNotSupportedf(ctx, "%s: $ref is not supported", fnName)
+	}
+	schemaJSON, err = json.Marshal(schema)
+	if err != nil {
+		return nil, moerr.NewInvalidArg(ctx, fnName, err.Error())
+	}
+
+	loader := gojsonschema.NewSchemaLoader()
+	loader.AutoDetect = false
+	loader.Validate = false
+	loader.Draft = gojsonschema.Draft4
+	compiled, err := loader.Compile(gojsonschema.NewBytesLoader(schemaJSON))
+	if err != nil {
+		return nil, moerr.NewInvalidArg(ctx, fnName, err.Error())
+	}
+	return compiled, nil
+}
+
+func mysqlSchemaHasStringRef(value any) bool {
+	switch value := value.(type) {
+	case map[string]any:
+		if _, ok := value["$ref"].(string); ok {
+			return true
+		}
+		for _, child := range value {
+			if mysqlSchemaHasStringRef(child) {
+				return true
+			}
+		}
+	case []any:
+		for _, child := range value {
+			if mysqlSchemaHasStringRef(child) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func normalizeMySQLDraft4Schema(schema any) {
+	obj, ok := schema.(map[string]any)
+	if !ok {
+		return
+	}
+
+	// MySQL's Draft 4 implementation treats format as an annotation.
+	delete(obj, "format")
+	for _, key := range []string{"exclusiveMinimum", "exclusiveMaximum"} {
+		if _, ok := obj[key].(json.Number); ok {
+			// Numeric exclusive bounds were introduced after Draft 4 and are
+			// ignored by MySQL instead of being rejected as malformed Draft 4.
+			delete(obj, key)
+		}
+	}
+
+	for _, key := range []string{"properties", "patternProperties", "definitions"} {
+		normalizeMySQLDraft4NamedSchemas(obj[key])
+	}
+	if dependencies, ok := obj["dependencies"].(map[string]any); ok {
+		for _, dependency := range dependencies {
+			normalizeMySQLDraft4Schema(dependency)
+		}
+	}
+	for _, key := range []string{"additionalItems", "additionalProperties", "not"} {
+		normalizeMySQLDraft4Schema(obj[key])
+	}
+	for _, key := range []string{"allOf", "anyOf", "oneOf", "items"} {
+		normalizeMySQLDraft4SchemaOrArray(obj[key])
+	}
+}
+
+func normalizeMySQLDraft4NamedSchemas(value any) {
+	named, ok := value.(map[string]any)
+	if !ok {
+		return
+	}
+	for _, schema := range named {
+		normalizeMySQLDraft4Schema(schema)
+	}
+}
+
+func normalizeMySQLDraft4SchemaOrArray(value any) {
+	if schemas, ok := value.([]any); ok {
+		for _, schema := range schemas {
+			normalizeMySQLDraft4Schema(schema)
+		}
+		return
+	}
+	normalizeMySQLDraft4Schema(value)
+}
+
+func mysqlDraft4SchemaHasRef(schema any) bool {
+	obj, ok := schema.(map[string]any)
+	if !ok {
+		return false
+	}
+	if _, ok := obj["$ref"]; ok {
+		return true
+	}
+
+	for _, key := range []string{"properties", "patternProperties", "definitions"} {
+		if mysqlDraft4NamedSchemasHaveRef(obj[key]) {
+			return true
+		}
+	}
+	if dependencies, ok := obj["dependencies"].(map[string]any); ok {
+		for _, dependency := range dependencies {
+			if mysqlDraft4SchemaHasRef(dependency) {
+				return true
+			}
+		}
+	}
+	for _, key := range []string{"additionalItems", "additionalProperties", "not"} {
+		if mysqlDraft4SchemaHasRef(obj[key]) {
+			return true
+		}
+	}
+	for _, key := range []string{"allOf", "anyOf", "oneOf", "items"} {
+		if mysqlDraft4SchemaOrArrayHasRef(obj[key]) {
+			return true
+		}
+	}
+	return false
+}
+
+func mysqlDraft4NamedSchemasHaveRef(value any) bool {
+	named, ok := value.(map[string]any)
+	if !ok {
+		return false
+	}
+	for _, schema := range named {
+		if mysqlDraft4SchemaHasRef(schema) {
+			return true
+		}
+	}
+	return false
+}
+
+func mysqlDraft4SchemaOrArrayHasRef(value any) bool {
+	if schemas, ok := value.([]any); ok {
+		for _, schema := range schemas {
+			if mysqlDraft4SchemaHasRef(schema) {
+				return true
+			}
+		}
+		return false
+	}
+	return mysqlDraft4SchemaHasRef(value)
+}
+
 func hasEvaluableJsonSchemaDoc(p vector.FunctionParameterWrapper[types.Varlena], length int, selectList *FunctionSelectList) bool {
 	for i := uint64(0); i < uint64(length); i++ {
 		if selectList.Contains(i) {
@@ -3099,17 +3256,12 @@ func doJsonSchemaValidateCached(p1, p2 vector.FunctionParameterWrapper[types.Var
 	if err != nil {
 		return nil, moerr.NewInvalidArg(proc.Ctx, fnName, "invalid schema JSON")
 	}
-	if err := validateSchemaObject(proc.Ctx, fnName, schemaBJ); err != nil {
+	compiled, err = compileMySQLDraft4Schema(proc.Ctx, fnName, schemaBJ)
+	if err != nil {
 		return nil, err
 	}
-	if schemaHasRefKeyword(schemaBJ) {
-		return nil, moerr.NewNotSupportedf(proc.Ctx, "%s: $ref is not supported", fnName)
-	}
-	schemaJSON, _ := schemaBJ.MarshalJSON()
-
-	sl := gojsonschema.NewBytesLoader(schemaJSON)
 	dl := gojsonschema.NewBytesLoader(docJSON)
-	validationResult, err := gojsonschema.Validate(sl, dl)
+	validationResult, err := compiled.Validate(dl)
 	if err != nil {
 		return nil, moerr.NewInvalidArg(proc.Ctx, fnName, err.Error())
 	}
@@ -3172,97 +3324,6 @@ func bestEffortSchemaLocation(err gojsonschema.ResultError) string {
 		return "#"
 	}
 	return "#/" + keyword
-}
-
-func schemaHasRefKeyword(bj bytejson.ByteJson) bool {
-	return schemaHasRefKeywordInSchema(bj)
-}
-
-func schemaHasRefKeywordInSchema(bj bytejson.ByteJson) bool {
-	if bj.Type != bytejson.TpCodeObject {
-		return false
-	}
-	cnt := bj.GetElemCnt()
-	for i := 0; i < cnt; i++ {
-		key := string(bj.GetObjectKey(i))
-		val := bj.GetObjectVal(i)
-		if key == "$ref" {
-			return true
-		}
-		if schemaKeywordContainsNamedSchemas(key) {
-			if schemaHasRefKeywordInNamedSchemas(val) {
-				return true
-			}
-			continue
-		}
-		if schemaKeywordContainsSchema(key) {
-			if schemaHasRefKeywordInSchema(val) {
-				return true
-			}
-			continue
-		}
-		if schemaKeywordContainsSchemaOrSchemaArray(key) {
-			if schemaHasRefKeywordInSchemaOrSchemaArray(val) {
-				return true
-			}
-		}
-	}
-	return false
-}
-
-func schemaKeywordContainsNamedSchemas(key string) bool {
-	switch key {
-	case "properties", "patternProperties", "$defs", "definitions", "dependentSchemas", "dependencies":
-		return true
-	default:
-		return false
-	}
-}
-
-func schemaKeywordContainsSchema(key string) bool {
-	switch key {
-	case "additionalItems", "additionalProperties", "contains", "else", "if", "not", "propertyNames", "then", "unevaluatedItems", "unevaluatedProperties":
-		return true
-	default:
-		return false
-	}
-}
-
-func schemaKeywordContainsSchemaOrSchemaArray(key string) bool {
-	switch key {
-	case "allOf", "anyOf", "items", "oneOf", "prefixItems":
-		return true
-	default:
-		return false
-	}
-}
-
-func schemaHasRefKeywordInNamedSchemas(bj bytejson.ByteJson) bool {
-	if bj.Type != bytejson.TpCodeObject {
-		return false
-	}
-	cnt := bj.GetElemCnt()
-	for i := 0; i < cnt; i++ {
-		if schemaHasRefKeywordInSchema(bj.GetObjectVal(i)) {
-			return true
-		}
-	}
-	return false
-}
-
-func schemaHasRefKeywordInSchemaOrSchemaArray(bj bytejson.ByteJson) bool {
-	switch bj.Type {
-	case bytejson.TpCodeObject:
-		return schemaHasRefKeywordInSchema(bj)
-	case bytejson.TpCodeArray:
-		cnt := bj.GetElemCnt()
-		for i := 0; i < cnt; i++ {
-			if schemaHasRefKeywordInSchema(bj.GetArrayElem(i)) {
-				return true
-			}
-		}
-	}
-	return false
 }
 
 // JSON_VALUE(json_doc, path) → VARCHAR

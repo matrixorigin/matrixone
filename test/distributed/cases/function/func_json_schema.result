@@ -114,3 +114,51 @@ json_schema_validation_report(json_object(type, object, properties, json_object(
 {"document-location": "$.a", "reason": "Invalid type. Expected: number, given: string", "schema-failed-keyword": "type", "schema-location": "#/type", "valid": false}
 {"document-location": "$", "reason": "a is required", "schema-failed-keyword": "required", "schema-location": "#/required", "valid": false}
 drop table t1;
+select json_schema_valid('{"const":1}', '2');
+json_schema_valid({"const":1}, 2)
+1
+select json_schema_validation_report('{"const":1}', '2');
+json_schema_validation_report({"const":1}, 2)
+{"valid": true}
+select json_schema_valid('{"if":{"type":"integer"},"then":{"minimum":5},"else":{"pattern":"^x$"}}', '2');
+json_schema_valid({"if":{"type":"integer"},"then":{"minimum":5},"else":{"pattern":"^x$"}}, 2)
+1
+select json_schema_valid('{"format":"email"}', '"not-an-email"');
+json_schema_valid({"format":"email"}, "not-an-email")
+1
+select json_schema_valid('{"minimum":5,"exclusiveMinimum":true}', '5');
+json_schema_valid({"minimum":5,"exclusiveMinimum":true}, 5)
+0
+select json_schema_valid('{"minimum":5,"exclusiveMinimum":true}', '6');
+json_schema_valid({"minimum":5,"exclusiveMinimum":true}, 6)
+1
+select json_schema_valid('{"exclusiveMinimum":5}', '5');
+json_schema_valid({"exclusiveMinimum":5}, 5)
+1
+select json_schema_valid('{"exclusiveMinimum":5}', '6');
+json_schema_valid({"exclusiveMinimum":5}, 6)
+1
+select json_schema_valid('{"$schema":"http://json-schema.org/draft-07/schema#","const":1}', '2');
+json_schema_valid({"$schema":"http://json-schema.org/draft-07/schema#","const":1}, 2)
+1
+select json_schema_valid('{"allOf":{"$ref":"https://example.invalid/schema"}}', '1');
+not supported: json_schema_valid: $ref is not supported
+select json_schema_validation_report('{"allOf":{"$ref":"https://example.invalid/schema"}}', '1');
+not supported: json_schema_validation_report: $ref is not supported
+select json_schema_valid('{"if":{"$ref":"https://example.invalid/schema"}}', '1');
+not supported: json_schema_valid: $ref is not supported
+select json_schema_validation_report('{"$defs":{"ignored":{"$ref":"file:///tmp/schema.json"}}}', '1');
+not supported: json_schema_validation_report: $ref is not supported
+select json_schema_valid('{"enum":[{"$ref":"literal"}]}', '{"$ref":"literal"}');
+not supported: json_schema_valid: $ref is not supported
+select json_schema_valid('{"enum":[{"$ref":1}]}', '{"$ref":1}');
+json_schema_valid({"enum":[{"$ref":1}]}, {"$ref":1})
+1
+drop table if exists json_schema_draft4_rows;
+create table json_schema_draft4_rows (id int primary key, s varchar(1024), d json);
+insert into json_schema_draft4_rows values (1, '{"format":"email"}', '"not-an-email"'), (2, '{"type":"integer","minimum":5}', '2');
+select id, json_schema_valid(s, d), json_schema_validation_report(s, d) from json_schema_draft4_rows order by id;
+id	json_schema_valid(s, d)	json_schema_validation_report(s, d)
+1	1	{"valid": true}
+2	0	{"document-location": "$", "reason": "Must be greater than or equal to 5", "schema-failed-keyword": "minimum", "schema-location": "#/minimum", "valid": false}
+drop table json_schema_draft4_rows;

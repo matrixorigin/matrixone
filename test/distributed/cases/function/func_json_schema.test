@@ -85,3 +85,30 @@ insert into t1 values ('{"a":1}'), ('{"a":"not_number"}'), ('{"b":2}');
 select json_schema_valid(json_object('type', 'object', 'properties', json_object('a', json_object('type', 'number')), 'required', json_array('a')), j) from t1;
 select json_schema_validation_report(json_object('type', 'object', 'properties', json_object('a', json_object('type', 'number')), 'required', json_array('a')), j) from t1;
 drop table t1;
+
+-- MySQL Draft 4 dialect compatibility
+select json_schema_valid('{"const":1}', '2');
+select json_schema_validation_report('{"const":1}', '2');
+select json_schema_valid('{"if":{"type":"integer"},"then":{"minimum":5},"else":{"pattern":"^x$"}}', '2');
+select json_schema_valid('{"format":"email"}', '"not-an-email"');
+select json_schema_valid('{"minimum":5,"exclusiveMinimum":true}', '5');
+select json_schema_valid('{"minimum":5,"exclusiveMinimum":true}', '6');
+select json_schema_valid('{"exclusiveMinimum":5}', '5');
+select json_schema_valid('{"exclusiveMinimum":5}', '6');
+select json_schema_valid('{"$schema":"http://json-schema.org/draft-07/schema#","const":1}', '2');
+
+-- MySQL checks recognized combinator references before validating the container shape
+select json_schema_valid('{"allOf":{"$ref":"https://example.invalid/schema"}}', '1');
+select json_schema_validation_report('{"allOf":{"$ref":"https://example.invalid/schema"}}', '1');
+
+-- MySQL discovers string $ref values throughout the complete JSON tree
+select json_schema_valid('{"if":{"$ref":"https://example.invalid/schema"}}', '1');
+select json_schema_validation_report('{"$defs":{"ignored":{"$ref":"file:///tmp/schema.json"}}}', '1');
+select json_schema_valid('{"enum":[{"$ref":"literal"}]}', '{"$ref":"literal"}');
+select json_schema_valid('{"enum":[{"$ref":1}]}', '{"$ref":1}');
+
+drop table if exists json_schema_draft4_rows;
+create table json_schema_draft4_rows (id int primary key, s varchar(1024), d json);
+insert into json_schema_draft4_rows values (1, '{"format":"email"}', '"not-an-email"'), (2, '{"type":"integer","minimum":5}', '2');
+select id, json_schema_valid(s, d), json_schema_validation_report(s, d) from json_schema_draft4_rows order by id;
+drop table json_schema_draft4_rows;
