@@ -144,7 +144,7 @@ func (t *combinedTxnTable) BuildReaders(
 	expr *plan.Expr,
 	relData engine.RelData,
 	num int,
-	txnOffset int,
+	readView client.WorkspaceReadView,
 	orderBy bool,
 	policy engine.TombstoneApplyPolicy,
 	filterHint engine.FilterHint,
@@ -174,7 +174,7 @@ func (t *combinedTxnTable) BuildReaders(
 				expr,
 				nil,
 				num,
-				txnOffset,
+				readView,
 				orderBy,
 				policy,
 				filterHint,
@@ -197,7 +197,7 @@ func (t *combinedTxnTable) BuildReaders(
 			expr,
 			data,
 			num,
-			txnOffset,
+			readView,
 			orderBy,
 			policy,
 			filterHint,
@@ -234,7 +234,7 @@ func (t *combinedTxnTable) BuildShardingReaders(
 	expr *plan.Expr,
 	relData engine.RelData,
 	num int,
-	txnOffset int,
+	readView client.WorkspaceReadView,
 	orderBy bool,
 	policy engine.TombstoneApplyPolicy,
 ) ([]engine.Reader, error) {
@@ -305,7 +305,7 @@ func (t *combinedTxnTable) Size(
 
 func (t *combinedTxnTable) CollectTombstones(
 	ctx context.Context,
-	txnOffset int,
+	readView client.WorkspaceReadView,
 	policy engine.TombstoneCollectPolicy,
 ) (engine.Tombstoner, error) {
 	tables, err := t.tablesFunc()
@@ -315,7 +315,7 @@ func (t *combinedTxnTable) CollectTombstones(
 
 	var tombstone engine.Tombstoner
 	for _, rel := range tables {
-		t, err := rel.CollectTombstones(ctx, txnOffset, policy)
+		t, err := rel.CollectTombstones(ctx, readView, policy)
 		if err != nil {
 			return nil, err
 		}

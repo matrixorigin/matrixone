@@ -33,6 +33,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/table_function"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
+	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -318,13 +319,13 @@ func TestVectorSourceEvaluatesArgumentsAndUsesSearchPlugin(t *testing.T) {
 	require.ErrorContains(t, err, "requires a process, transaction, and storage engine")
 }
 
-func TestApplyCarriesStatementTxnOffsetIntoVectorSource(t *testing.T) {
+func TestApplyCarriesStatementReadViewIntoVectorSource(t *testing.T) {
 	proc := testutil.NewProc(t)
 	apply := NewArgument()
 	apply.VectorIndexScan = vectorSourceSpec()
 	apply.VectorAttrs = []string{"pkid"}
 	apply.Typs = []types.Type{types.T_int64.ToType()}
-	apply.TxnOffset = 17
+	apply.TxnReadView = client.NewWorkspaceReadView(1, 2, 17)
 	t.Cleanup(func() {
 		apply.Free(proc, false, nil)
 		apply.Release()
@@ -333,7 +334,7 @@ func TestApplyCarriesStatementTxnOffsetIntoVectorSource(t *testing.T) {
 	require.NoError(t, apply.Prepare(proc))
 	source, ok := apply.Source.(*vectorSource)
 	require.True(t, ok)
-	require.Equal(t, 17, source.txnOffset)
+	require.Equal(t, apply.TxnReadView, source.txnReadView)
 }
 
 func TestApplyPreparedVectorSourceRebindsPreFiltersPerGeneration(t *testing.T) {

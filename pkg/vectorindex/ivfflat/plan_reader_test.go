@@ -37,6 +37,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
+	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/cache"
@@ -1263,6 +1264,11 @@ func TestRelationScannerExecutesTypedReaderLifecycle(t *testing.T) {
 	eng := mock_frontend.NewMockEngine(ctrl)
 	db := mock_frontend.NewMockDatabase(ctrl)
 	rel := mock_frontend.NewMockRelation(ctrl)
+	workspace := mock_frontend.NewMockWorkspace(ctrl)
+	txnOperator := mock_frontend.NewMockTxnOperator(ctrl)
+	txnOperator.EXPECT().GetWorkspace().Return(workspace)
+	txnOperator.EXPECT().IsSnapOp().Return(false)
+	proc.Base.TxnOperator = txnOperator
 	proc.Base.SessionInfo.StorageEngine = eng
 
 	tableDef := &plan.TableDef{
@@ -1274,11 +1280,13 @@ func TestRelationScannerExecutesTypedReaderLifecycle(t *testing.T) {
 		Name2ColIndex: map[string]int32{"version": 0, "id": 1},
 	}
 	reader := &fixedRelationReader{rows: [][2]int64{{7, 11}, {7, 12}}}
-	eng.EXPECT().Database(gomock.Any(), "db", nil).Return(db, nil)
+	readView := client.NewWorkspaceReadView(1, 2, 3)
+	eng.EXPECT().Database(gomock.Any(), "db", txnOperator).Return(db, nil)
 	db.EXPECT().Relation(gomock.Any(), "entries", proc).Return(rel, nil)
 	rel.EXPECT().GetTableDef(gomock.Any()).Return(tableDef)
 	rel.EXPECT().Ranges(gomock.Any(), gomock.Any()).DoAndReturn(
 		func(_ context.Context, param engine.RangesParam) (engine.RelData, error) {
+			require.Equal(t, readView, param.TxnReadView)
 			require.Equal(t, engine.DataCollectPolicy(engine.Policy_CollectCommittedPersistedData), param.Policy)
 			require.Equal(t, int32(2), param.Rsp.CNCNT)
 			require.Equal(t, int32(1), param.Rsp.CNIDX)
@@ -1286,7 +1294,7 @@ func TestRelationScannerExecutesTypedReaderLifecycle(t *testing.T) {
 			return nil, nil
 		})
 	rel.EXPECT().BuildReaders(
-		gomock.Any(), proc, nil, gomock.Nil(), 1, 0, false,
+		gomock.Any(), proc, nil, gomock.Nil(), 1, readView, false,
 		gomock.Any(), gomock.Any()).Return([]engine.Reader{reader}, nil)
 
 	scanner := &relationScanner{
@@ -1294,6 +1302,7 @@ func TestRelationScannerExecutesTypedReaderLifecycle(t *testing.T) {
 		partitionCount: 2,
 		partitionIndex: 1,
 		ownsInMemory:   false,
+		txnReadView:    readView,
 	}
 	res, err := scanner.ScanRelation(sqlexec.RelationScanRequest{
 		Schema:  "db",
@@ -1359,6 +1368,50 @@ func TestRelationScannerUsesSnapshotCloneAndPublisherAccount(t *testing.T) {
 	require.NoError(t, err)
 	_, err = reader.(*planReader).scanner.ScanRelation(sqlexec.RelationScanRequest{Schema: "db", Table: "entries"})
 	require.ErrorContains(t, err, "snapshot relation unavailable")
+	require.Same(t, clone, proc.GetCloneTxnOperator())
+}
+
+func TestRelationScannerUsesSnapshotWorkspaceReadView(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	proc := testutil.NewProc(t)
+	t.Cleanup(proc.Free)
+
+	original := mock_frontend.NewMockTxnOperator(ctrl)
+	clone := mock_frontend.NewMockTxnOperator(ctrl)
+	cloneWorkspace := mock_frontend.NewMockWorkspace(ctrl)
+	proc.Base.TxnOperator = original
+	snapshotTS := timestamp.Timestamp{PhysicalTime: 8}
+	statementView := client.NewWorkspaceReadView(1, 2, 3)
+	snapshotView := client.NewWorkspaceReadView(4, 5, 0)
+	original.EXPECT().Txn().Return(txn.TxnMeta{SnapshotTS: timestamp.Timestamp{PhysicalTime: 10}})
+	original.EXPECT().CloneSnapshotOp(snapshotTS).Return(clone)
+	clone.EXPECT().GetWorkspace().Return(cloneWorkspace)
+	clone.EXPECT().IsSnapOp().Return(true)
+	cloneWorkspace.EXPECT().CurrentReadView().Return(snapshotView)
+
+	eng := mock_frontend.NewMockEngine(ctrl)
+	db := mock_frontend.NewMockDatabase(ctrl)
+	rel := mock_frontend.NewMockRelation(ctrl)
+	proc.Base.SessionInfo.StorageEngine = eng
+	eng.EXPECT().Database(gomock.Any(), "db", clone).Return(db, nil)
+	db.EXPECT().Relation(gomock.Any(), "entries", proc).Return(rel, nil)
+	rel.EXPECT().GetTableDef(gomock.Any()).Return(&plan.TableDef{Name: "entries"})
+	rel.EXPECT().Ranges(gomock.Any(), gomock.Any()).DoAndReturn(
+		func(_ context.Context, param engine.RangesParam) (engine.RelData, error) {
+			require.Equal(t, snapshotView, param.TxnReadView)
+			return nil, nil
+		})
+	rel.EXPECT().BuildReaders(
+		gomock.Any(), proc, gomock.Any(), gomock.Any(), 1, snapshotView, false,
+		gomock.Any(), gomock.Any()).Return([]engine.Reader{}, nil)
+
+	res, err := (&relationScanner{
+		proc:        proc,
+		snapshot:    &plan.Snapshot{TS: &snapshotTS},
+		txnReadView: statementView,
+	}).ScanRelation(sqlexec.RelationScanRequest{Schema: "db", Table: "entries"})
+	require.NoError(t, err)
+	defer res.Close()
 	require.Same(t, clone, proc.GetCloneTxnOperator())
 }
 
@@ -1492,7 +1545,7 @@ func TestRelationScannerFiltersBeforeApplyingTopLimit(t *testing.T) {
 	rel.EXPECT().GetTableDef(gomock.Any()).Return(tableDef)
 	rel.EXPECT().Ranges(gomock.Any(), gomock.Any()).Return(nil, nil)
 	rel.EXPECT().BuildReaders(
-		gomock.Any(), proc, gomock.Any(), gomock.Nil(), 1, 0, false,
+		gomock.Any(), proc, gomock.Any(), gomock.Nil(), 1, client.NoWorkspaceReadView(), false,
 		gomock.Any(), gomock.Any()).Return([]engine.Reader{reader}, nil)
 
 	filter, err := ivfFuncExpr(proc.Ctx, "=", ivfInt64Expr(1), ivfInt64Expr(1))
@@ -1546,7 +1599,7 @@ func TestRelationScannerDefersWideVectorUntilAfterIncludeFilter(t *testing.T) {
 	rel.EXPECT().GetTableDef(gomock.Any()).Return(tableDef)
 	rel.EXPECT().Ranges(gomock.Any(), gomock.Any()).Return(nil, nil)
 	rel.EXPECT().BuildReaders(
-		gomock.Any(), proc, gomock.Any(), gomock.Nil(), 1, 0, false,
+		gomock.Any(), proc, gomock.Any(), gomock.Nil(), 1, client.NoWorkspaceReadView(), false,
 		gomock.Any(), gomock.Any()).Return([]engine.Reader{reader}, nil)
 
 	filter, err := ivfFuncExpr(proc.Ctx, "=",
@@ -1628,7 +1681,7 @@ func TestRelationScannerFallsBackWhenReaderCannotDelayVectorLoading(t *testing.T
 	rel.EXPECT().GetTableDef(gomock.Any()).Return(tableDef)
 	rel.EXPECT().Ranges(gomock.Any(), gomock.Any()).Return(nil, nil)
 	rel.EXPECT().BuildReaders(
-		gomock.Any(), proc, gomock.Any(), gomock.Nil(), 1, 0, false,
+		gomock.Any(), proc, gomock.Any(), gomock.Nil(), 1, client.NoWorkspaceReadView(), false,
 		gomock.Any(), gomock.Any()).Return([]engine.Reader{reader}, nil)
 
 	filter, err := ivfFuncExpr(proc.Ctx, "=",

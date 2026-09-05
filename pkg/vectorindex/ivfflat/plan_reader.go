@@ -33,6 +33,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
+	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/cache"
@@ -87,7 +88,7 @@ func NewPlanReader(proc *process.Process, spec *plan.VectorIndexScan, req search
 		partitionCount: req.Identity.PartitionCount,
 		partitionIndex: req.Identity.PartitionIndex,
 		ownsInMemory:   ownsInMemoryPartition(req.Identity.PartitionCount, req.Identity.PartitionIndex),
-		txnOffset:      req.Identity.TxnOffset,
+		txnReadView:    req.Identity.TxnReadView,
 		snapshot:       cloneIvfSnapshot(req.Identity.Snapshot),
 	}
 	if req.Identity.PhysicalAccountID != nil {
@@ -564,7 +565,7 @@ type relationScanner struct {
 	partitionCount int32
 	partitionIndex int32
 	ownsInMemory   bool
-	txnOffset      int
+	txnReadView    client.WorkspaceReadView
 }
 
 var _ sqlexec.RelationScanExecutor = (*relationScanner)(nil)
@@ -611,7 +612,7 @@ func (s *relationScanner) ScanRelation(req sqlexec.RelationScanRequest) (res exe
 	if req.PartitionCount <= 0 {
 		partitionIndex = s.partitionIndex
 	}
-	txnOffset := s.txnOffset
+	readView := client.WorkspaceReadViewForOperator(txn, s.txnReadView)
 
 	rsp := &engine.RangesShuffleParam{
 		Node:              &plan.Node{NodeType: plan.Node_TABLE_SCAN, TableDef: tableDef},
@@ -623,7 +624,7 @@ func (s *relationScanner) ScanRelation(req sqlexec.RelationScanRequest) (res exe
 	policy := relationScanPolicy(partitionCount, s.ownsInMemory)
 	relData, err := rel.Ranges(ctx, engine.RangesParam{
 		BlockFilters: req.BlockFilters,
-		TxnOffset:    txnOffset,
+		TxnReadView:  readView,
 		Policy:       policy,
 		Rsp:          rsp,
 	})
@@ -636,7 +637,7 @@ func (s *relationScanner) ScanRelation(req sqlexec.RelationScanRequest) (res exe
 		req.Filter,
 		relData,
 		1,
-		txnOffset,
+		readView,
 		req.IndexParam != nil && !req.PostFilterTopOnly,
 		engine.Policy_CheckAll,
 		req.FilterHint,

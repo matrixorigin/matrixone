@@ -23,6 +23,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/stretchr/testify/require"
 )
@@ -51,7 +52,7 @@ func TestCollectTombstonesIsLocalErr(t *testing.T) {
 	runIsLocalErrTests(
 		t,
 		func(tbl *txnTableDelegate) {
-			_, err := tbl.CollectTombstones(context.Background(), 0, 0)
+			_, err := tbl.CollectTombstones(context.Background(), client.WorkspaceReadView{}, 0)
 			require.Error(t, err)
 		},
 	)
@@ -74,7 +75,7 @@ func TestBuildReadersIsLocalErr(t *testing.T) {
 			_, err := tbl.BuildReaders(
 				context.Background(),
 				nil, nil, nil,
-				0, 0,
+				0, client.WorkspaceReadView{},
 				false, 0, engine.FilterHint{})
 			require.Error(t, err)
 		},

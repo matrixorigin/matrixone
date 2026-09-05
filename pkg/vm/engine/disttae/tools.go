@@ -17,10 +17,8 @@ package disttae
 import (
 	"context"
 	"fmt"
-	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -28,105 +26,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
-	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
-	"github.com/matrixorigin/matrixone/pkg/pb/txn"
-	"github.com/matrixorigin/matrixone/pkg/txn/client"
-	"github.com/matrixorigin/matrixone/pkg/txn/trace"
 )
-
-func genWriteReqs(
-	ctx context.Context,
-	txnCommit *Transaction,
-) ([]txn.TxnRequest, error) {
-	writes, tablesInVain, op := txnCommit.writes, txnCommit.tablesInVain, txnCommit.op
-	var pkChkByTN int8
-	if v := ctx.Value(defines.PkCheckByTN{}); v != nil {
-		pkChkByTN = v.(int8)
-	}
-	var tnID string
-	var tn metadata.TNService
-	entries := make([]*api.Entry, 0, len(writes))
-	for _, e := range writes {
-		if tnID == "" {
-			tnID = e.tnStore.ServiceID
-			tn = e.tnStore
-		}
-		if tnID != "" && tnID != e.tnStore.ServiceID {
-			panic(fmt.Sprintf("txnCommit contains entries from different TNs, %s != %s", tnID, e.tnStore.ServiceID))
-		}
-		if e.bat == nil || e.bat.IsEmpty() {
-			continue
-		}
-		e.pkChkByTN = pkChkByTN
-		pe, err := toPBEntry(e)
-		if err != nil {
-			return nil, err
-		}
-		// --sql
-		// create table t (a int);
-		// begin;
-		// alter table t comment 'will come back';
-		// drop table t;
-		// commit;
-		//
-		// the txn wrote a delete & insert batch due to alter, and the insert batch was cancelled by dropping.
-		// the table should be dropped in TN, so we need to reset the delete batch to normal delete.
-		isAlter, typ, id, name := noteSplitAlter(e.note)
-		if _, deleted := tablesInVain[id]; deleted && isAlter && typ == DELETE {
-			// reset to normal delete, this will lead to dropping table in TN
-			e.note = noteForDrop(id, name)
-		} else if isAlter {
-			// To tell TN, this is an update due to alter, do not touch catalog
-			pe.TableName = "alter"
-		}
-
-		entries = append(entries, pe)
-	}
-
-	requireAutoIncrEpochFence := requiresAutoIncrEpochFenceCommit(entries)
-	if requireAutoIncrEpochFence {
-		if !client.RequireAutoIncrEpochFenceCommit(txnCommit.op) {
-			return nil, moerr.NewNotSupported(ctx, "transaction operator cannot enforce AUTO_INCREMENT epochs")
-		}
-	}
-
-	if len(entries) == 0 {
-		return nil, nil
-	}
-	trace.GetService(txnCommit.proc.GetService()).TxnCommit(op, entries)
-	reqs := make([]txn.TxnRequest, 0, len(entries))
-	payload, err := types.Encode(&api.PrecommitWriteCmd{
-		EntryList:           entries,
-		SyncProtectionJobId: txnCommit.GetSyncProtectionJobID(),
-	})
-	if err != nil {
-		return nil, err
-	}
-	for _, info := range tn.Shards {
-		reqs = append(reqs, txn.TxnRequest{
-			CNRequest: &txn.CNOpRequest{
-				OpCode:  uint32(api.OpCode_OpPreCommit),
-				Payload: payload,
-				Target: metadata.TNShard{
-					TNShardRecord: metadata.TNShardRecord{
-						ShardID: info.ShardID,
-					},
-					ReplicaID: info.ReplicaID,
-					Address:   tn.TxnServiceAddress,
-				},
-			},
-			Options: &txn.TxnRequestOptions{
-				RetryCodes: []int32{
-					// tn shard not found
-					int32(moerr.ErrTNShardNotFound),
-				},
-				RetryInterval: int64(time.Second),
-			},
-		})
-	}
-	return reqs, nil
-}
 
 func requiresAutoIncrEpochFenceCommit(entries []*api.Entry) bool {
 	for _, entry := range entries {

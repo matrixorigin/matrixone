@@ -157,7 +157,7 @@ func TestWorkspaceNotDuplicated(t *testing.T) {
 
 	// Test handleDbRelContext with existing workspace
 	// This will try to access database/relation, but we only care about workspace check
-	_, _, _, _ = c.handleDbRelContext(testNode, true)
+	_, _, _, _, _ = c.handleDbRelContext(testNode, true)
 	// May error on database access, but AddWorkspace should NOT be called
 	// The key assertion is that AddWorkspace was not called (verified by mock expectation)
 }

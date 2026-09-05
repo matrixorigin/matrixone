@@ -22,6 +22,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/table_function"
+	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -58,10 +59,11 @@ type Apply struct {
 	TableFunction   *table_function.TableFunction
 	VectorIndexScan *plan.VectorIndexScan
 	VectorAttrs     []string
-	// TxnOffset is the statement boundary used by correlated vector scans.
-	// APPLY must preserve it across every provider row and remote generation.
-	TxnOffset int
-	Source    AppliedSource
+	// TxnReadView is the immutable statement boundary used by correlated vector
+	// scans. Remote generations intentionally receive NoWorkspaceReadView because
+	// a read view belongs only to the CN workspace that published it.
+	TxnReadView client.WorkspaceReadView
+	Source      AppliedSource
 	vm.OperatorBase
 }
 

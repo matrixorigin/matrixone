@@ -102,8 +102,10 @@ func Test_BasicInsertDelete(t *testing.T) {
 		require.NoError(t, testutil.WriteToRelation(ctx, txn, relation, bat1, false, true))
 
 		var bat2 *batch.Batch
-		txn.GetWorkspace().(*disttae.Transaction).ForEachTableWrites(
-			relation.GetDBID(ctx), relation.GetTableID(ctx), 1, func(entry disttae.Entry) {
+		dtxn := txn.GetWorkspace().(*disttae.Transaction)
+		require.NoError(t, dtxn.VisitTableMutations(
+			ctx, txn.GetWorkspace().CurrentReadView(),
+			relation.GetDBID(ctx), relation.GetTableID(ctx), func(entry disttae.Entry) {
 				waitedDeletes := vector.MustFixedColWithTypeCheck[types.Rowid](entry.Bat().GetVector(0))
 				waitedDeletes = waitedDeletes[:rowsCount/2]
 				bat2 = batch.NewWithSize(1)
@@ -111,7 +113,7 @@ func Test_BasicInsertDelete(t *testing.T) {
 				bat2.Vecs[0] = vector.NewVec(types.T_Rowid.ToType())
 				require.NoError(t, vector.AppendFixedList[types.Rowid](bat2.Vecs[0], waitedDeletes, nil, mp))
 				bat2.SetRowCount(len(waitedDeletes))
-			})
+			}))
 		require.NoError(t, testutil.WriteToRelation(ctx, txn, relation, bat2, true, true))
 		require.NoError(t, txn.Commit(ctx))
 	}
@@ -330,10 +332,10 @@ func Test_Issue25557MidTxnDumpKeepsWorkspaceVisibility(t *testing.T) {
 	fault.Enable()
 	defer fault.Disable()
 	require.NoError(t, fault.AddFaultPoint(
-		ctx, objectio.FJ_CNReenterSnapshotOffsetOnGetTable, ":::", "echo", 1, "", false))
+		ctx, objectio.FJ_CNReenterWorkspaceReadViewOnGetTable, ":::", "echo", 1, "", false))
 	defer func() {
 		_, err := fault.RemoveFaultPoint(
-			ctx, objectio.FJ_CNReenterSnapshotOffsetOnGetTable)
+			ctx, objectio.FJ_CNReenterWorkspaceReadViewOnGetTable)
 		require.NoError(t, err)
 	}()
 
@@ -343,17 +345,17 @@ func Test_Issue25557MidTxnDumpKeepsWorkspaceVisibility(t *testing.T) {
 
 	_, relation, txn, err = disttaeEngine.GetTable(ctx, databaseName, tableName)
 	require.NoError(t, err)
+	statementReadView := txn.GetWorkspace().PublishReadView()
 
 	// Do NOT end the statement yet: the boundary must stay at the statement
 	// start even though the dump ran an internal SQL in between.
 	require.NoError(t, testutil.WriteToRelation(ctx, txn, relation, bat1, false, false))
 
-	// the internal SQL must not advance the statement boundary, so the
-	// statement keeps not seeing its own writes
-	require.Equal(t, 0, txn.GetWorkspace().GetSnapshotWriteOffset(),
-		"internal SQL must not advance snapshotWriteOffset")
+	// The internal SQL must not publish the statement boundary, so the
+	// statement keeps not seeing its own writes.
 	require.Equal(t, 0, issue25557ReadRowCount(
-		t, ctx, disttaeEngine, txn, relation, schema, primaryKeyIdx, mp),
+		t, ctx, disttaeEngine, txn, relation, schema, primaryKeyIdx, mp,
+		statementReadView),
 		"a statement must not see its own writes")
 
 	// the write workspace threshold guarantees the insert was flushed to S3
@@ -385,8 +387,17 @@ func issue25557ReadRowCount(
 	schema *catalog2.Schema,
 	primaryKeyIdx int,
 	mp *mpool.MPool,
+	readViews ...client.WorkspaceReadView,
 ) int {
-	reader, err := testutil.GetRelationReader(ctx, e, txn, relation, nil, mp, t)
+	var reader engine.Reader
+	var err error
+	if len(readViews) == 0 {
+		reader, err = testutil.GetRelationReader(ctx, e, txn, relation, nil, mp, t)
+	} else {
+		require.Len(t, readViews, 1)
+		reader, err = testutil.GetRelationReaderWithReadView(
+			ctx, e, txn, relation, nil, mp, t, readViews[0])
+	}
 	require.NoError(t, err)
 	total := 0
 	ret := testutil.EmptyBatchFromSchema(schema, primaryKeyIdx)
@@ -405,11 +416,8 @@ func issue25557ReadRowCount(
 // Test_Issue25557MultiEntryDumpCompaction covers the many-to-one workspace
 // compaction case: two raw INSERT entries of one table, written in the same
 // statement, are merged into a single S3 entry by a mid-statement dump. A
-// snapshot offset captured by the (fault-injected) internal SQL inside the
-// dump-resolution window must not exceed the compacted workspace: on the
-// broken code the captured offset is 2 while one entry remains, and the
-// same-transaction read panics with index out of range in
-// ForEachTableWrites.
+// immutable read view captured by the (fault-injected) internal SQL inside the
+// dump-resolution window must remain valid after the physical compaction.
 func Test_Issue25557MultiEntryDumpCompaction(t *testing.T) {
 	var (
 		err          error
@@ -475,16 +483,17 @@ func Test_Issue25557MultiEntryDumpCompaction(t *testing.T) {
 	fault.Enable()
 	defer fault.Disable()
 	require.NoError(t, fault.AddFaultPoint(
-		ctx, objectio.FJ_CNReenterSnapshotOffsetOnGetTable, "3:3::", "echo", 1, "", false))
+		ctx, objectio.FJ_CNReenterWorkspaceReadViewOnGetTable, "3:3::", "echo", 1, "", false))
 	defer func() {
 		_, err := fault.RemoveFaultPoint(
-			ctx, objectio.FJ_CNReenterSnapshotOffsetOnGetTable)
+			ctx, objectio.FJ_CNReenterWorkspaceReadViewOnGetTable)
 		require.NoError(t, err)
 	}()
 
 	_, relation, txn, err = disttaeEngine.GetTable(ctx, databaseName, tableName)
 	require.NoError(t, err)
 
+	statementReadView := txn.GetWorkspace().PublishReadView()
 	txn.GetWorkspace().StartStatement()
 	require.NoError(t, relation.Write(ctx, bat1))
 	// crosses the threshold: the dump compacts both raw entries into one S3
@@ -496,12 +505,9 @@ func Test_Issue25557MultiEntryDumpCompaction(t *testing.T) {
 	// writes; on the broken code this read panics with index out of range
 	// because the captured offset (2) exceeds the compacted workspace (1).
 	require.Equal(t, 0, issue25557ReadRowCount(
-		t, ctx, disttaeEngine, txn, relation, schema, primaryKeyIdx, mp),
+		t, ctx, disttaeEngine, txn, relation, schema, primaryKeyIdx, mp,
+		statementReadView),
 		"a statement must not see its own writes")
-
-	// the internal SQL must not advance the statement boundary
-	require.Equal(t, 0, txn.GetWorkspace().GetSnapshotWriteOffset(),
-		"internal SQL must not advance snapshotWriteOffset")
 
 	require.NoError(t, testutil.EndThisStatement(ctx, txn))
 	require.Equal(t, totalRows, issue25557ReadRowCount(
@@ -586,10 +592,10 @@ func Test_Issue25557DumpWindowAppendKeepsPrefix(t *testing.T) {
 	defer fault.Disable()
 	// every getTable simulates the internal-SQL leg
 	require.NoError(t, fault.AddFaultPoint(
-		ctx, objectio.FJ_CNReenterSnapshotOffsetOnGetTable, ":::", "echo", 1, "", false))
+		ctx, objectio.FJ_CNReenterWorkspaceReadViewOnGetTable, ":::", "echo", 1, "", false))
 	defer func() {
 		_, err := fault.RemoveFaultPoint(
-			ctx, objectio.FJ_CNReenterSnapshotOffsetOnGetTable)
+			ctx, objectio.FJ_CNReenterWorkspaceReadViewOnGetTable)
 		require.NoError(t, err)
 	}()
 	// only the first dump (table A's) parks inside its resolution window
@@ -618,6 +624,7 @@ func Test_Issue25557DumpWindowAppendKeepsPrefix(t *testing.T) {
 	relationB, err := dbB.Relation(ctx, tableBName, nil)
 	require.NoError(t, err)
 
+	statementReadView := txn.GetWorkspace().PublishReadView()
 	txn.GetWorkspace().StartStatement()
 
 	// table A's write triggers the dump, which parks inside the resolution
@@ -653,15 +660,15 @@ func Test_Issue25557DumpWindowAppendKeepsPrefix(t *testing.T) {
 		t.Fatal("table A's write did not finish: dump deadlocked")
 	}
 
-	// the statement boundary must still be at the statement start: table B's
-	// raw entry must not have slipped into the visible prefix
-	require.Equal(t, 0, txn.GetWorkspace().GetSnapshotWriteOffset(),
-		"internal SQL must not advance snapshotWriteOffset")
+	// The statement boundary must still be at the statement start: table B's
+	// raw entry must not have slipped into the visible view.
 	require.Equal(t, 0, issue25557ReadRowCount(
-		t, ctx, disttaeEngine, txn, relationB, schemaB, primaryKeyIdx, mp),
+		t, ctx, disttaeEngine, txn, relationB, schemaB, primaryKeyIdx, mp,
+		statementReadView),
 		"a statement must not see its own writes (table B)")
 	require.Equal(t, 0, issue25557ReadRowCount(
-		t, ctx, disttaeEngine, txn, relationA, schemaA, primaryKeyIdx, mp),
+		t, ctx, disttaeEngine, txn, relationA, schemaA, primaryKeyIdx, mp,
+		statementReadView),
 		"a statement must not see its own writes (table A)")
 
 	require.NoError(t, testutil.EndThisStatement(ctx, txn))
@@ -740,10 +747,10 @@ func Test_Issue25557ObjectCompactionNoDeadlock(t *testing.T) {
 	fault.Enable()
 	defer fault.Disable()
 	require.NoError(t, fault.AddFaultPoint(
-		ctx, objectio.FJ_CNReenterSnapshotOffsetOnGetTable, ":::", "echo", 1, "", false))
+		ctx, objectio.FJ_CNReenterWorkspaceReadViewOnGetTable, ":::", "echo", 1, "", false))
 	defer func() {
 		_, err := fault.RemoveFaultPoint(
-			ctx, objectio.FJ_CNReenterSnapshotOffsetOnGetTable)
+			ctx, objectio.FJ_CNReenterWorkspaceReadViewOnGetTable)
 		require.NoError(t, err)
 	}()
 
@@ -759,8 +766,10 @@ func Test_Issue25557ObjectCompactionNoDeadlock(t *testing.T) {
 	require.NoError(t, table.Write(ctx, containers.ToCNBatch(bat)))
 
 	entryCnt := 0
-	txn.GetWorkspace().(*disttae.Transaction).ForEachTableWrites(
-		table.GetDBID(ctx), table.GetTableID(ctx), 1, func(entry disttae.Entry) {
+	dtxn := txn.GetWorkspace().(*disttae.Transaction)
+	require.NoError(t, dtxn.VisitTableMutations(
+		ctx, txn.GetWorkspace().CurrentReadView(),
+		table.GetDBID(ctx), table.GetTableID(ctx), func(entry disttae.Entry) {
 			if entry.Bat() == nil ||
 				entry.Bat().RowCount() == 0 ||
 				entry.FileName() == "" {
@@ -779,7 +788,7 @@ func Test_Issue25557ObjectCompactionNoDeadlock(t *testing.T) {
 					tombstoneBat.Vecs[0], rid, false, mp))
 			}
 			tombstoneBat.SetRowCount(deleteCnt)
-		})
+		}))
 	require.Equal(t, 1, entryCnt)
 
 	// deleting rows of the uncommitted block feeds txn.deletedBlocks, so the
@@ -878,10 +887,10 @@ func Test_Issue25557MultiEntryDeleteDumpAtCommit(t *testing.T) {
 	fault.Enable()
 	defer fault.Disable()
 	require.NoError(t, fault.AddFaultPoint(
-		ctx, objectio.FJ_CNReenterSnapshotOffsetOnGetTable, ":::", "echo", 1, "", false))
+		ctx, objectio.FJ_CNReenterWorkspaceReadViewOnGetTable, ":::", "echo", 1, "", false))
 	defer func() {
 		_, err := fault.RemoveFaultPoint(
-			ctx, objectio.FJ_CNReenterSnapshotOffsetOnGetTable)
+			ctx, objectio.FJ_CNReenterWorkspaceReadViewOnGetTable)
 		require.NoError(t, err)
 	}()
 
@@ -1081,15 +1090,17 @@ func Test_MultiTxnInsertDelete(t *testing.T) {
 
 		localPKs := vector.MustFixedColWithTypeCheck[int64](bat2.Vecs[primaryKeyIdx])
 		localPKOffset := 0
-		txn.GetWorkspace().(*disttae.Transaction).ForEachTableWrites(
-			relation.GetDBID(ctx), relation.GetTableID(ctx), 1, func(entry disttae.Entry) {
+		dtxn := txn.GetWorkspace().(*disttae.Transaction)
+		require.NoError(t, dtxn.VisitTableMutations(
+			ctx, txn.GetWorkspace().CurrentReadView(),
+			relation.GetDBID(ctx), relation.GetTableID(ctx), func(entry disttae.Entry) {
 				waitedDeletes := vector.MustFixedColWithTypeCheck[types.Rowid](entry.Bat().GetVector(0))
 				require.NoError(t, vector.AppendFixedList[types.Rowid](tombstoneBat.Vecs[0], waitedDeletes, nil, mp))
 				require.NoError(t, vector.AppendFixedList[int64](
 					tombstoneBat.Vecs[1], localPKs[localPKOffset:localPKOffset+len(waitedDeletes)], nil, mp))
 				localPKOffset += len(waitedDeletes)
 				tombstoneBat.SetRowCount(tombstoneBat.RowCount() + len(waitedDeletes))
-			})
+			}))
 
 		bat, err := tombstoneBat.Window(5, 15)
 		require.NoError(t, err)
@@ -1515,8 +1526,10 @@ func Test_BasicRollbackStatement(t *testing.T) {
 
 	{
 		var tombstoneBat *batch.Batch
-		txn.GetWorkspace().(*disttae.Transaction).ForEachTableWrites(
-			relation.GetDBID(ctx), relation.GetTableID(ctx), 1, func(entry disttae.Entry) {
+		dtxn := txn.GetWorkspace().(*disttae.Transaction)
+		require.NoError(t, dtxn.VisitTableMutations(
+			ctx, txn.GetWorkspace().CurrentReadView(),
+			relation.GetDBID(ctx), relation.GetTableID(ctx), func(entry disttae.Entry) {
 				waitedDeletes := vector.MustFixedColWithTypeCheck[types.Rowid](entry.Bat().GetVector(0))
 				waitedDeletes = waitedDeletes[:rowsCount/2]
 				tombstoneBat = batch.NewWithSize(1)
@@ -1524,7 +1537,7 @@ func Test_BasicRollbackStatement(t *testing.T) {
 				tombstoneBat.Vecs[0] = vector.NewVec(types.T_Rowid.ToType())
 				require.NoError(t, vector.AppendFixedList[types.Rowid](tombstoneBat.Vecs[0], waitedDeletes, nil, mp))
 				tombstoneBat.SetRowCount(len(waitedDeletes))
-			})
+			}))
 
 		tombstoneBat2, err := tombstoneBat.Window(0, 5)
 		require.NoError(t, err)
@@ -1889,15 +1902,17 @@ func Test_MultiTxnRollbackStatement(t *testing.T) {
 
 		localPKs := vector.MustFixedColWithTypeCheck[int64](bat2.Vecs[primaryKeyIdx])
 		localPKOffset := 0
-		txn.GetWorkspace().(*disttae.Transaction).ForEachTableWrites(
-			relation.GetDBID(ctx), relation.GetTableID(ctx), 1, func(entry disttae.Entry) {
+		dtxn := txn.GetWorkspace().(*disttae.Transaction)
+		require.NoError(t, dtxn.VisitTableMutations(
+			ctx, txn.GetWorkspace().CurrentReadView(),
+			relation.GetDBID(ctx), relation.GetTableID(ctx), func(entry disttae.Entry) {
 				waitedDeletes := vector.MustFixedColWithTypeCheck[types.Rowid](entry.Bat().GetVector(0))
 				require.NoError(t, vector.AppendFixedList[types.Rowid](tombstoneBat.Vecs[0], waitedDeletes, nil, mp))
 				require.NoError(t, vector.AppendFixedList[int64](
 					tombstoneBat.Vecs[1], localPKs[localPKOffset:localPKOffset+len(waitedDeletes)], nil, mp))
 				localPKOffset += len(waitedDeletes)
 				tombstoneBat.SetRowCount(tombstoneBat.RowCount() + len(waitedDeletes))
-			})
+			}))
 
 		tb1, err := tombstoneBat.Window(5, 15)
 		require.NoError(t, err)
@@ -2174,8 +2189,10 @@ func Test_DeleteUncommittedBlock(t *testing.T) {
 		require.NoError(t, err)
 
 		entryCnt := 0
-		txn.GetWorkspace().(*disttae.Transaction).ForEachTableWrites(
-			table.GetDBID(ctx), table.GetTableID(ctx), 1, func(entry disttae.Entry) {
+		dtxn := txn.GetWorkspace().(*disttae.Transaction)
+		require.NoError(t, dtxn.VisitTableMutations(
+			ctx, txn.GetWorkspace().CurrentReadView(),
+			table.GetDBID(ctx), table.GetTableID(ctx), func(entry disttae.Entry) {
 				if entry.Bat() == nil ||
 					entry.Bat().RowCount() == 0 ||
 					entry.FileName() == "" {
@@ -2194,7 +2211,7 @@ func Test_DeleteUncommittedBlock(t *testing.T) {
 				}
 				bat2.SetRowCount(deleteCnt)
 
-			})
+			}))
 		require.Equal(t, 1, entryCnt)
 		//delete 100 rows
 		require.NoError(t, table.Delete(ctx, bat2, catalog.Row_ID))
@@ -2532,28 +2549,6 @@ func TestGCFiles(t *testing.T) {
 			require.NoError(t, err)
 		}
 
-		for i := range files {
-			objectio.SetObjectStatsBlkCnt(&files[i], 1)
-			objectio.SetObjectStatsRowCnt(&files[i], 1)
-			bat := colexec.AllocCNS3ResultBat(false)
-			colexec.ExpandObjectStatsToBatch(p.Mp, false, bat, true, files[i])
-			err = txn.WriteFile(
-				disttae.INSERT,
-				0, 0, 0,
-				"", "", "0x1",
-				bat, disttae.DNStore{},
-			)
-
-			require.NoError(t, err)
-			bat.Clean(p.Mp)
-		}
-
-		err = txn.GCObjsByIdxRange(0, len(files)-1)
-		if j == 1 {
-			require.Error(t, err)
-		} else {
-			require.NoError(t, err)
-		}
 	}
 }
 
@@ -2634,8 +2629,7 @@ func Test_WorkspaceForceDumpOnGlobalAccumulation(t *testing.T) {
 	require.NoError(t, ws.IncrStatementID(ctx, false))
 
 	// Simulate DisableIncrStatement for the repeated writes: write multiple batches
-	// without any additional IncrStatementID or StartStatement/EndStatement calls,
-	// but still call UpdateSnapshotWriteOffset between writes (as NewCompile does).
+	// without any additional IncrStatementID or StartStatement/EndStatement calls.
 	var maxInMemSize uint64
 	forceDumpTriggered := false
 
@@ -2645,8 +2639,9 @@ func Test_WorkspaceForceDumpOnGlobalAccumulation(t *testing.T) {
 			defer bat.Close()
 			cnBat := containers.ToCNBatch(bat)
 
-			// Simulate NewCompile → UpdateSnapshotWriteOffset
-			ws.UpdateSnapshotWriteOffset()
+			// Internal SQL captures all current mutations without publishing the
+			// outer statement boundary.
+			_ = ws.CurrentReadView()
 
 			err = relation.Write(ctx, cnBat)
 			require.NoError(t, err)
@@ -2787,7 +2782,7 @@ func Test_WorkspaceForceDumpNoIncrStatement(t *testing.T) {
 			defer bat.Close()
 			cnBat := containers.ToCNBatch(bat)
 
-			ws.UpdateSnapshotWriteOffset()
+			_ = ws.CurrentReadView()
 
 			err = relation.Write(ctx, cnBat)
 			require.NoError(t, err)

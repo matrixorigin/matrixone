@@ -26,6 +26,7 @@ import (
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/sql/schedule"
+	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/readutil"
 	"github.com/stretchr/testify/require"
@@ -621,20 +622,22 @@ func TestNormalizeVectorIndexScanSnapshot(t *testing.T) {
 	require.NotSame(t, topLevelSnapshot, node.VectorIndexScan.ScanSnapshot)
 }
 
-func TestUpdateScopeTxnOffsetRefreshesApplyOperators(t *testing.T) {
-	rootApply := &apply.Apply{TxnOffset: 3}
-	preScopeApply := &apply.Apply{TxnOffset: 3}
+func TestUpdateScopeTxnReadViewRefreshesApplyOperators(t *testing.T) {
+	initial := client.NewWorkspaceReadView(1, 2, 3)
+	next := client.NewWorkspaceReadView(1, 3, 9)
+	rootApply := &apply.Apply{TxnReadView: initial}
+	preScopeApply := &apply.Apply{TxnReadView: initial}
 	scope := &Scope{
-		TxnOffset: 3,
-		RootOp:    rootApply,
-		PreScopes: []*Scope{{TxnOffset: 3, RootOp: preScopeApply}},
+		TxnReadView: initial,
+		RootOp:      rootApply,
+		PreScopes:   []*Scope{{TxnReadView: initial, RootOp: preScopeApply}},
 	}
 
-	UpdateScopeTxnOffset(scope, 9)
-	require.Equal(t, 9, scope.TxnOffset)
-	require.Equal(t, 9, rootApply.TxnOffset)
-	require.Equal(t, 9, scope.PreScopes[0].TxnOffset)
-	require.Equal(t, 9, preScopeApply.TxnOffset)
+	UpdateScopeTxnReadView(scope, next)
+	require.Equal(t, next, scope.TxnReadView)
+	require.Equal(t, next, rootApply.TxnReadView)
+	require.Equal(t, next, scope.PreScopes[0].TxnReadView)
+	require.Equal(t, next, preScopeApply.TxnReadView)
 }
 
 func TestGenerateNodesKeepsLargeScanOnCurrentCNWhenNoWorkers(t *testing.T) {

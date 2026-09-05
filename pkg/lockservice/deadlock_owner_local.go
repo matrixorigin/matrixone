@@ -94,9 +94,10 @@ func (l *localLockTable) detectOwnerLocalDeadlockLocked(
 
 func ownerLocalHolderKeys(lock Lock) []ownerLocalTxnKey {
 	holders := make([]ownerLocalTxnKey, 0, lock.holders.size())
-	for _, holder := range lock.holders.txns {
+	lock.holders.iter(func(holder pb.WaitTxn) bool {
 		holders = append(holders, newOwnerLocalTxnKey(holder))
-	}
+		return true
+	})
 	return holders
 }
 

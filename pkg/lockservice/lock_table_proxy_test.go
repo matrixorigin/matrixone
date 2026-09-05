@@ -1400,7 +1400,7 @@ func dumpProxyHandoffWait(t *testing.T, owner *localLockTable, proxy *localLockT
 		lock, found := owner.mu.store.Get(row)
 		var state string
 		if found {
-			state = fmt.Sprintf("holders=%v", lock.holders.txns)
+			state = fmt.Sprintf("holders=%s", lock.holders.String())
 			lock.waiters.iter(func(w *waiter) bool {
 				state += fmt.Sprintf(" waiter=%x status=%d notifications=%d", w.txn.TxnID, w.getStatus(), len(w.c))
 				return true

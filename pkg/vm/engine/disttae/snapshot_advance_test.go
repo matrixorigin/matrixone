@@ -22,10 +22,10 @@ import (
 	"github.com/golang/mock/gomock"
 	"github.com/stretchr/testify/require"
 
-	"github.com/matrixorigin/matrixone/pkg/container/types"
 	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
+	"github.com/matrixorigin/matrixone/pkg/testutil"
 )
 
 func TestAdvanceSnapshotBranches(t *testing.T) {
@@ -42,10 +42,9 @@ func TestAdvanceSnapshotBranches(t *testing.T) {
 
 		workspace := &Transaction{op: op}
 		require.NoError(t, workspace.AdvanceSnapshot(ctx, target))
-		require.True(t, workspace.transfer.lastTransferred.IsEmpty())
 	})
 
-	t.Run("RC initializes transfer boundary and preserves update error", func(t *testing.T) {
+	t.Run("RC preserves local transfer state on update error", func(t *testing.T) {
 		ctrl := gomock.NewController(t)
 		op := mock_frontend.NewMockTxnOperator(ctrl)
 		initial := timestamp.Timestamp{PhysicalTime: 10}
@@ -56,10 +55,45 @@ func TestAdvanceSnapshotBranches(t *testing.T) {
 		op.EXPECT().SnapshotTS().Return(initial)
 		op.EXPECT().UpdateSnapshot(ctx, target).Return(updateErr)
 
-		workspace := &Transaction{op: op}
+		workspace := &Transaction{op: op, workspace: newTxnWorkspace()}
 		err := workspace.AdvanceSnapshot(ctx, target)
 		require.ErrorIs(t, err, updateErr)
-		require.Equal(t, types.TimestampToTS(initial), workspace.transfer.lastTransferred)
-		require.False(t, workspace.start.IsZero())
+		rcState := workspace.workspace.rcState()
+		require.True(t, rcState.lastTransferred.IsEmpty())
+		require.Empty(t, rcState.snapshots)
+		require.False(t, rcState.pendingTransfer)
+		require.True(t, workspace.start.IsZero())
 	})
+}
+
+func TestIncrStatementIDRCSnapshotErrorDoesNotPublishBoundary(t *testing.T) {
+	ctx := context.Background()
+	ctrl := gomock.NewController(t)
+	op := mock_frontend.NewMockTxnOperator(ctrl)
+	initial := timestamp.Timestamp{PhysicalTime: 10}
+	updateErr := errors.New("update snapshot failed")
+	op.EXPECT().EnterIncrStmt()
+	op.EXPECT().ExitIncrStmt()
+	op.EXPECT().Txn().Return(txn.TxnMeta{Isolation: txn.TxnIsolation_RC})
+	op.EXPECT().SnapshotTS().Return(initial)
+	op.EXPECT().UpdateSnapshot(ctx, timestamp.Timestamp{}).Return(updateErr)
+
+	ws := &Transaction{
+		op:                      op,
+		proc:                    testutil.NewProc(t),
+		workspace:               newTxnWorkspace(),
+		writeWorkspaceThreshold: 1,
+	}
+	ws.StartStatement()
+	err := ws.IncrStatementID(ctx, false)
+	require.ErrorIs(t, err, updateErr)
+	require.Equal(t, uint64(0), ws.workspace.journal.current.statementID)
+	require.Equal(t, uint64(1), ws.workspace.journal.current.attemptID)
+	rcState := ws.workspace.rcState()
+	require.Empty(t, rcState.snapshots)
+	require.True(t, rcState.lastTransferred.IsEmpty())
+	require.False(t, rcState.pendingTransfer)
+	require.True(t, ws.start.IsZero())
+	require.Equal(t, uint64(0), ws.workspace.revision)
+	require.NoError(t, ws.workspace.close(ws.proc.Mp()))
 }

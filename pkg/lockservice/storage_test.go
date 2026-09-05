@@ -213,8 +213,10 @@ func newTestLock(txnID []byte) Lock {
 }
 
 func firstHolder(h *holders) []byte {
-	for _, v := range h.txns {
-		return v.TxnID
-	}
-	return nil
+	var txnID []byte
+	h.iter(func(v pb.WaitTxn) bool {
+		txnID = v.TxnID
+		return false
+	})
+	return txnID
 }

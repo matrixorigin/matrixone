@@ -15,7 +15,6 @@
 package disttae
 
 import (
-	"bytes"
 	"context"
 	"math"
 	"math/rand"
@@ -155,8 +154,9 @@ type unsupportedAutoIncrEpochTxnOperator struct {
 func TestAutoIncrEpochWritePathsRejectBeforeWorkspaceMutation(t *testing.T) {
 	newTxn := func(t *testing.T) *Transaction {
 		return &Transaction{
-			op:   &unsupportedAutoIncrEpochTxnOperator{},
-			proc: testutil.NewProc(t),
+			op:        &unsupportedAutoIncrEpochTxnOperator{},
+			proc:      testutil.NewProc(t),
+			workspace: newTxnWorkspace(),
 		}
 	}
 
@@ -167,8 +167,8 @@ func TestAutoIncrEpochWritePathsRejectBeforeWorkspaceMutation(t *testing.T) {
 			INSERT, "", 1, 2, 3, "db", "tbl", nil, DNStore{}, 1, true,
 		)
 		require.True(t, moerr.IsMoErrCode(err, moerr.ErrNotSupported), err)
-		require.Empty(t, txn.writes)
-		require.Zero(t, txn.workspaceSize)
+		require.Zero(t, txn.workspace.activeMutationCount())
+		require.Zero(t, txn.workspace.usageSnapshot().totalBytes)
 	})
 
 	t.Run("file", func(t *testing.T) {
@@ -177,9 +177,9 @@ func TestAutoIncrEpochWritePathsRejectBeforeWorkspaceMutation(t *testing.T) {
 			INSERT, 1, 2, 3, "db", "tbl", "file", nil, DNStore{}, 1, true,
 		)
 		require.True(t, moerr.IsMoErrCode(err, moerr.ErrNotSupported), err)
-		require.Empty(t, txn.writes)
+		require.Zero(t, txn.workspace.activeMutationCount())
 		require.False(t, txn.hasS3Op.Load())
-		require.Zero(t, txn.workspaceSize)
+		require.Zero(t, txn.workspace.usageSnapshot().totalBytes)
 	})
 
 	t.Run("skip transfer file", func(t *testing.T) {
@@ -188,9 +188,9 @@ func TestAutoIncrEpochWritePathsRejectBeforeWorkspaceMutation(t *testing.T) {
 			INSERT, 1, 2, 3, "db", "tbl", "file", nil, DNStore{}, 1, true,
 		)
 		require.True(t, moerr.IsMoErrCode(err, moerr.ErrNotSupported), err)
-		require.Empty(t, txn.writes)
+		require.Zero(t, txn.workspace.activeMutationCount())
 		require.False(t, txn.hasS3Op.Load())
-		require.Zero(t, txn.workspaceSize)
+		require.Zero(t, txn.workspace.usageSnapshot().totalBytes)
 	})
 }
 
@@ -201,45 +201,6 @@ func TestWorkspaceFlushKeySeparatesAutoIncrEpochs(t *testing.T) {
 		{tableKey: base, autoIncrEpoch: 0, autoIncrEpochKnown: true}:  1,
 	}
 	require.Len(t, batches, 2)
-}
-
-func Test_GetUncommittedS3Tombstone(t *testing.T) {
-	var statsList []objectio.ObjectStats
-	for i := 0; i < 3; i++ {
-		row := types.RandomRowid()
-		stats := objectio.NewObjectStatsWithObjectID(row.BorrowObjectID(), false, false, true)
-		objectio.SetObjectStatsRowCnt(stats, uint32(10+i*10))
-		statsList = append(statsList, *stats)
-	}
-
-	txn := &Transaction{
-		cn_flushed_s3_tombstone_object_stats_list: new(sync.Map),
-	}
-
-	txn.cn_flushed_s3_tombstone_object_stats_list.Store(statsList[0], nil)
-	txn.cn_flushed_s3_tombstone_object_stats_list.Store(statsList[1], nil)
-	txn.cn_flushed_s3_tombstone_object_stats_list.Store(statsList[2], nil)
-
-	objectSlice := objectio.ObjectStatsSlice{}
-
-	require.NoError(t, txn.getUncommittedS3Tombstone(func(stats *objectio.ObjectStats) {
-		objectSlice.Append(stats[:])
-	}))
-	require.Equal(t, len(statsList), objectSlice.Len())
-
-	txn.cn_flushed_s3_tombstone_object_stats_list.Range(func(key, value any) bool {
-		ss := key.(objectio.ObjectStats)
-		found := false
-		for i := range objectSlice.Len() {
-			if bytes.Equal(ss[:], objectSlice.Get(i)[:]) {
-				found = true
-				break
-			}
-		}
-
-		require.True(t, found)
-		return true
-	})
 }
 
 func Test_BatchAllocNewRowIds(t *testing.T) {
@@ -323,39 +284,32 @@ func Test_BatchAllocNewRowIds(t *testing.T) {
 		require.Error(t, err)
 	})
 
-	var deletedBlocks *deletedBlocks
-	require.Equal(t, 0, deletedBlocks.size())
 }
 
-func TestWriteBatchRecordsPKCheckState(t *testing.T) {
+func TestWriteBatchPublishesClosedPKCheckDescriptor(t *testing.T) {
 	proc := testutil.NewProc(t)
 	op := newTxnOperatorForTest(t)
 
-	t.Run("insert without engine falls back", func(t *testing.T) {
-		txn := &Transaction{proc: proc, op: op}
+	t.Run("insert without engine is rejected before publication", func(t *testing.T) {
+		txn := &Transaction{proc: proc, op: op, workspace: newTxnWorkspace()}
 		bat := newInt64BatchForTest(t, proc, []string{"pk"}, []int64{1, 2})
 
 		_, err := txn.WriteBatch(INSERT, "", 0, 1, 42, "db", "tbl", bat, DNStore{})
-		require.NoError(t, err)
-		require.Len(t, txn.writes, 1)
-		require.False(t, txn.writes[0].pkCheckReady)
-		require.Equal(t, -1, txn.writes[0].pkCheckPos)
-		require.False(t, txn.writes[0].autoIncrEpochKnown)
-
+		require.ErrorContains(t, err, "without transaction engine")
+		require.Zero(t, txn.workspace.activeMutationCount())
 		bat.Clean(proc.Mp())
+		closeWorkspaceForTest(t, txn)
 	})
 
-	t.Run("delete without engine falls back", func(t *testing.T) {
-		txn := &Transaction{proc: proc, op: op}
+	t.Run("delete without engine is rejected before publication", func(t *testing.T) {
+		txn := &Transaction{proc: proc, op: op, workspace: newTxnWorkspace()}
 		bat := newDeleteBatchForTest(t, proc, []int64{1})
 
 		_, err := txn.WriteBatch(DELETE, "", 0, 1, 42, "db", "tbl", bat, DNStore{})
-		require.NoError(t, err)
-		require.Len(t, txn.writes, 1)
-		require.False(t, txn.writes[0].pkCheckReady)
-		require.Equal(t, -1, txn.writes[0].pkCheckPos)
-
+		require.ErrorContains(t, err, "without transaction engine")
+		require.Zero(t, txn.workspace.activeMutationCount())
 		bat.Clean(proc.Mp())
+		closeWorkspaceForTest(t, txn)
 	})
 
 	t.Run("insert with active pk table resolves position", func(t *testing.T) {
@@ -364,11 +318,11 @@ func TestWriteBatchRecordsPKCheckState(t *testing.T) {
 
 		_, err := txn.WriteBatch(INSERT, "", 1, 7, 42, "db", "tbl", bat, DNStore{})
 		require.NoError(t, err)
-		require.Len(t, txn.writes, 1)
-		require.True(t, txn.writes[0].pkCheckReady)
-		require.Equal(t, 1, txn.writes[0].pkCheckPos)
-
-		bat.Clean(txn.proc.Mp())
+		entries := workspaceEntriesForTest(t, txn)
+		require.Len(t, entries, 1)
+		require.True(t, entries[0].pkCheck.enabled)
+		require.Equal(t, 1, entries[0].pkCheck.vectorPos)
+		closeWorkspaceForTest(t, txn)
 	})
 
 	t.Run("user write records planned AUTO_INCREMENT epoch", func(t *testing.T) {
@@ -377,46 +331,52 @@ func TestWriteBatchRecordsPKCheckState(t *testing.T) {
 
 		_, err := txn.writeBatchWithAutoIncrEpoch(context.Background(), INSERT, "", 1, 7, 42, "db", "tbl", bat, DNStore{}, 7)
 		require.NoError(t, err)
-		require.Len(t, txn.writes, 1)
-		require.Equal(t, uint32(7), txn.writes[0].autoIncrEpoch)
-		require.True(t, txn.writes[0].autoIncrEpochKnown)
-
-		bat.Clean(txn.proc.Mp())
+		entries := workspaceEntriesForTest(t, txn)
+		require.Len(t, entries, 1)
+		require.Equal(t, uint32(7), entries[0].autoIncrEpoch)
+		require.True(t, entries[0].autoIncrEpochKnown)
+		closeWorkspaceForTest(t, txn)
 	})
 
-	t.Run("missing pk attr keeps legacy fallback", func(t *testing.T) {
+	t.Run("missing pk attr is rejected before publication", func(t *testing.T) {
 		txn := newTransactionWithActivePKTableForTest(t, "pk")
 		bat := newInt64BatchForTest(t, txn.proc, []string{"other"}, []int64{1, 2})
 
 		_, err := txn.WriteBatch(INSERT, "", 1, 7, 42, "db", "tbl", bat, DNStore{})
-		require.NoError(t, err)
-		require.Len(t, txn.writes, 1)
-		require.False(t, txn.writes[0].pkCheckReady)
-		require.Equal(t, -1, txn.writes[0].pkCheckPos)
-
+		require.ErrorContains(t, err, "primary-key column pk not found")
+		require.Zero(t, txn.workspace.activeMutationCount())
 		bat.Clean(txn.proc.Mp())
+		closeWorkspaceForTest(t, txn)
 	})
 }
 
 func TestTransactionCheckDupUsesWriteEntryPKMetadata(t *testing.T) {
-	t.Run("insert duplicate", func(t *testing.T) {
+	newTxn := func(t *testing.T, proc *process.Process, entries ...Entry) *Transaction {
+		t.Helper()
 		txn := &Transaction{
-			op:          newTxnOperatorForTest(t),
-			tableOps:    newTableOps(),
-			databaseOps: newDbOps(),
-			writes: []Entry{
-				{
-					typ:          INSERT,
-					tableId:      42,
-					databaseId:   7,
-					tableName:    "tbl",
-					databaseName: "db",
-					bat:          newInt64BatchForTest(t, testutil.NewProc(t), []string{"pk"}, []int64{1, 1}),
-					pkCheckPos:   0,
-					pkCheckReady: true,
-				},
-			},
+			op:        newTxnOperatorForTest(t),
+			proc:      proc,
+			workspace: newTxnWorkspace(),
 		}
+		for _, entry := range entries {
+			appendWorkspaceEntryForTest(txn, entry)
+		}
+		t.Cleanup(func() { closeWorkspaceForTest(t, txn) })
+		return txn
+	}
+
+	t.Run("insert duplicate", func(t *testing.T) {
+		proc := testutil.NewProc(t)
+		txn := newTxn(t, proc,
+			Entry{
+				typ:          INSERT,
+				tableId:      42,
+				databaseId:   7,
+				tableName:    "tbl",
+				databaseName: "db",
+				bat:          newInt64BatchForTest(t, proc, []string{"pk"}, []int64{1, 1}),
+				pkCheck:      workspacePKCheck{vectorPos: 0, enabled: true},
+			})
 
 		err := txn.checkDup(context.Background())
 		require.Error(t, err)
@@ -425,23 +385,16 @@ func TestTransactionCheckDupUsesWriteEntryPKMetadata(t *testing.T) {
 
 	t.Run("delete duplicate", func(t *testing.T) {
 		proc := testutil.NewProc(t)
-		txn := &Transaction{
-			op:          newTxnOperatorForTest(t),
-			tableOps:    newTableOps(),
-			databaseOps: newDbOps(),
-			writes: []Entry{
-				{
-					typ:          DELETE,
-					tableId:      42,
-					databaseId:   7,
-					tableName:    "tbl",
-					databaseName: "db",
-					bat:          newDeleteBatchForTest(t, proc, []int64{3, 3}),
-					pkCheckPos:   1,
-					pkCheckReady: true,
-				},
-			},
-		}
+		txn := newTxn(t, proc,
+			Entry{
+				typ:          DELETE,
+				tableId:      42,
+				databaseId:   7,
+				tableName:    "tbl",
+				databaseName: "db",
+				bat:          newDeleteBatchForTest(t, proc, []int64{3, 3}),
+				pkCheck:      workspacePKCheck{vectorPos: 1, enabled: true},
+			})
 
 		err := txn.checkDup(context.Background())
 		require.Error(t, err)
@@ -450,162 +403,82 @@ func TestTransactionCheckDupUsesWriteEntryPKMetadata(t *testing.T) {
 
 	t.Run("no pk check and unique", func(t *testing.T) {
 		proc := testutil.NewProc(t)
-		txn := &Transaction{
-			op:          newTxnOperatorForTest(t),
-			tableOps:    newTableOps(),
-			databaseOps: newDbOps(),
-			writes: []Entry{
-				{
-					typ:          INSERT,
-					tableId:      42,
-					databaseId:   7,
-					tableName:    "tbl",
-					databaseName: "db",
-					bat:          newInt64BatchForTest(t, proc, []string{"pk"}, []int64{1, 2}),
-					pkCheckPos:   -1,
-					pkCheckReady: true,
-				},
-				{
-					typ:          DELETE,
-					tableId:      42,
-					databaseId:   7,
-					tableName:    "tbl",
-					databaseName: "db",
-					bat:          newDeleteBatchForTest(t, proc, []int64{4, 5}),
-					pkCheckPos:   1,
-					pkCheckReady: true,
-				},
+		txn := newTxn(t, proc,
+			Entry{
+				typ:          INSERT,
+				tableId:      42,
+				databaseId:   7,
+				tableName:    "tbl",
+				databaseName: "db",
+				bat:          newInt64BatchForTest(t, proc, []string{"pk"}, []int64{1, 2}),
 			},
-		}
+			Entry{
+				typ:          DELETE,
+				tableId:      42,
+				databaseId:   7,
+				tableName:    "tbl",
+				databaseName: "db",
+				bat:          newDeleteBatchForTest(t, proc, []int64{4, 5}),
+				pkCheck:      workspacePKCheck{vectorPos: 1, enabled: true},
+			})
 
 		require.NoError(t, txn.checkDup(context.Background()))
 	})
 
-	t.Run("out of range falls back to legacy", func(t *testing.T) {
-		txn := newTransactionWithActivePKTableForTest(t, "pk")
-		txn.writes = []Entry{
-			{
+	t.Run("out of range descriptor fails invariant", func(t *testing.T) {
+		proc := testutil.NewProc(t)
+		txn := newTxn(t, proc)
+		appendWorkspaceEntryForTest(txn, Entry{
+			typ:          INSERT,
+			accountId:    1,
+			tableId:      42,
+			databaseId:   7,
+			tableName:    "tbl",
+			databaseName: "db",
+			bat:          newInt64BatchForTest(t, proc, []string{"pk"}, []int64{9, 9}),
+			pkCheck:      workspacePKCheck{vectorPos: 3, enabled: true},
+		})
+
+		err := txn.checkDup(context.Background())
+		require.ErrorContains(t, err, "descriptor out of range")
+	})
+
+	t.Run("entry without pk check is excluded", func(t *testing.T) {
+		proc := testutil.NewProc(t)
+		txn := newTxn(t, proc,
+			Entry{
 				typ:          INSERT,
 				accountId:    1,
 				tableId:      42,
 				databaseId:   7,
 				tableName:    "tbl",
 				databaseName: "db",
-				bat:          newInt64BatchForTest(t, txn.proc, []string{"pk"}, []int64{9, 9}),
-				pkCheckPos:   3,
-				pkCheckReady: true,
-			},
-		}
-
-		err := txn.checkDup(context.Background())
-		require.Error(t, err)
-		require.True(t, moerr.IsMoErrCode(err, moerr.ErrDuplicateEntry))
-	})
-
-	t.Run("legacy insert with rowid duplicate", func(t *testing.T) {
-		txn := newTransactionWithActivePKTableForTest(t, "pk")
-		txn.writes = []Entry{
-			{
-				typ:          INSERT,
-				accountId:    1,
-				tableId:      42,
-				databaseId:   7,
-				tableName:    "tbl",
-				databaseName: "db",
-				bat:          newInsertBatchWithRowIDForTest(t, txn.proc, []int64{8, 8}),
-				pkCheckReady: false,
-			},
-		}
-
-		err := txn.checkDup(context.Background())
-		require.Error(t, err)
-		require.True(t, moerr.IsMoErrCode(err, moerr.ErrDuplicateEntry))
-	})
-
-	t.Run("legacy delete duplicate", func(t *testing.T) {
-		txn := newTransactionWithActivePKTableForTest(t, "pk")
-		txn.writes = []Entry{
-			{
-				typ:          DELETE,
-				accountId:    1,
-				tableId:      42,
-				databaseId:   7,
-				tableName:    "tbl",
-				databaseName: "db",
-				bat:          newDeleteBatchForTest(t, txn.proc, []int64{6, 6}),
-				pkCheckReady: false,
-			},
-		}
-
-		err := txn.checkDup(context.Background())
-		require.Error(t, err)
-		require.True(t, moerr.IsMoErrCode(err, moerr.ErrDuplicateEntry))
-	})
-
-	t.Run("legacy delete without pk vector", func(t *testing.T) {
-		txn := newTransactionWithActivePKTableForTest(t, "pk")
-		txn.writes = []Entry{
-			{
-				typ:          DELETE,
-				accountId:    1,
-				tableId:      42,
-				databaseId:   7,
-				tableName:    "tbl",
-				databaseName: "db",
-				bat:          newInt64BatchForTest(t, txn.proc, []string{"pk"}, []int64{1}),
-				pkCheckReady: false,
-			},
-		}
-
+				bat:          newInt64BatchForTest(t, proc, []string{"value"}, []int64{6, 6}),
+			})
+		candidates, err := txn.workspace.pkCandidateEntries(txn.workspace.currentReadView())
+		require.NoError(t, err)
+		require.Empty(t, candidates.entries)
+		candidates.Close()
 		require.NoError(t, txn.checkDup(context.Background()))
 	})
-}
 
-func TestAdjustUpdateOrderLockedUsesAdjustedWriteOffset(t *testing.T) {
-	t.Run("in range stale offset", func(t *testing.T) {
-		txn := &Transaction{
-			statementID:       1,
-			adjustWriteOffset: 1,
-			writes: []Entry{
-				{typ: INSERT, tableId: 99},
-				{typ: INSERT, tableId: 1},
-				{typ: DELETE, tableId: 1},
-				{typ: INSERT, tableId: 2, fileName: "flushed"},
-			},
-		}
-
-		require.NotPanics(t, func() {
-			require.NoError(t, txn.adjustUpdateOrderLocked(2))
+	t.Run("delete without exact descriptor is excluded", func(t *testing.T) {
+		proc := testutil.NewProc(t)
+		txn := newTxn(t, proc, Entry{
+			typ:          DELETE,
+			accountId:    1,
+			tableId:      42,
+			databaseId:   7,
+			tableName:    "tbl",
+			databaseName: "db",
+			bat:          newInt64BatchForTest(t, proc, []string{"pk"}, []int64{1}),
 		})
 
-		require.Len(t, txn.writes, 4)
-		require.Equal(t, INSERT, txn.writes[0].typ)
-		require.Equal(t, uint64(99), txn.writes[0].tableId)
-		require.Equal(t, DELETE, txn.writes[1].typ)
-		require.Equal(t, INSERT, txn.writes[2].typ)
-		require.Equal(t, INSERT, txn.writes[3].typ)
-	})
-
-	t.Run("out of range stale offset", func(t *testing.T) {
-		txn := &Transaction{
-			statementID:       1,
-			adjustWriteOffset: 1,
-			writes: []Entry{
-				{typ: INSERT, tableId: 99},
-				{typ: INSERT, tableId: 1},
-				{typ: DELETE, tableId: 1},
-			},
-		}
-
-		require.NotPanics(t, func() {
-			require.NoError(t, txn.adjustUpdateOrderLocked(4))
-		})
-
-		require.Len(t, txn.writes, 3)
-		require.Equal(t, INSERT, txn.writes[0].typ)
-		require.Equal(t, uint64(99), txn.writes[0].tableId)
-		require.Equal(t, DELETE, txn.writes[1].typ)
-		require.Equal(t, INSERT, txn.writes[2].typ)
+		candidates, err := txn.workspace.pkCandidateEntries(txn.workspace.currentReadView())
+		require.NoError(t, err)
+		require.Empty(t, candidates.entries)
+		candidates.Close()
+		require.NoError(t, txn.checkDup(context.Background()))
 	})
 }
 
@@ -629,7 +502,7 @@ func TestTransactionGetTableNilGuards(t *testing.T) {
 func TestTxnTableWriteTnPartitionHonorsCanceledContext(t *testing.T) {
 	txn := newTransactionWithActivePKTableForTest(t, "pk")
 	txn.tnStores = []DNStore{{}}
-	tbl := txn.tableOps.existAndActive(genTableKey(1, "tbl", 7, "db"))
+	tbl := txn.workspace.activeTable(genTableKey(1, "tbl", 7, "db"))
 	require.NotNil(t, tbl)
 	tbl.extraInfo = &api.SchemaExtra{}
 	bat := newDeleteBatchForTest(t, txn.proc, []int64{1})
@@ -639,14 +512,14 @@ func TestTxnTableWriteTnPartitionHonorsCanceledContext(t *testing.T) {
 	cancel()
 	err := tbl.writeTnPartition(ctx, bat)
 	require.ErrorIs(t, err, context.Canceled)
-	require.Empty(t, txn.writes)
+	require.Zero(t, txn.workspace.activeMutationCount())
 }
 
 func TestTxnTableDeleteHonorsCanceledContext(t *testing.T) {
 	txn := newTransactionWithActivePKTableForTest(t, "pk")
 	txn.op.(*mock_frontend.MockTxnOperator).EXPECT().IsSnapOp().Return(false)
 	txn.tnStores = []DNStore{{}}
-	tbl := txn.tableOps.existAndActive(genTableKey(1, "tbl", 7, "db"))
+	tbl := txn.workspace.activeTable(genTableKey(1, "tbl", 7, "db"))
 	require.NotNil(t, tbl)
 	tbl.extraInfo = &api.SchemaExtra{}
 	bat := newDeleteBatchForTest(t, txn.proc, []int64{1})
@@ -656,43 +529,44 @@ func TestTxnTableDeleteHonorsCanceledContext(t *testing.T) {
 	cancel()
 	err := tbl.Delete(ctx, bat, "")
 	require.ErrorIs(t, err, context.Canceled)
-	require.Empty(t, txn.writes)
+	require.Zero(t, txn.workspace.activeMutationCount())
 }
 
-func TestResolvePKCheckPosForWriteEarlyExit(t *testing.T) {
+func TestResolveWorkspacePKMetadataForWriteEarlyExit(t *testing.T) {
 	txn := &Transaction{}
 
-	pos, ready, err := txn.resolvePKCheckPosForWrite(context.Background(), INSERT, 0, "db", "tbl", 1, nil)
+	check, index, err := txn.resolveWorkspacePKMetadataForWrite(
+		context.Background(), INSERT, 0, "db", "tbl", 1, nil)
 	require.NoError(t, err)
-	require.True(t, ready)
-	require.Equal(t, -1, pos)
+	require.False(t, check.enabled)
+	require.False(t, index.enabled)
 
 	proc := testutil.NewProc(t)
 	bat := newInt64BatchForTest(t, proc, []string{"pk"}, []int64{1})
 
-	pos, ready, err = txn.resolvePKCheckPosForWrite(context.Background(), ALTER, 0, "db", "tbl", 1, bat)
+	check, index, err = txn.resolveWorkspacePKMetadataForWrite(
+		context.Background(), ALTER, 0, "db", "tbl", 1, bat)
 	require.NoError(t, err)
-	require.True(t, ready)
-	require.Equal(t, -1, pos)
+	require.False(t, check.enabled)
+	require.False(t, index.enabled)
 
-	pos, ready, err = txn.resolvePKCheckPosForWrite(context.Background(), INSERT, 0, "db", "tbl", catalog.MO_TABLES_ID, bat)
+	check, index, err = txn.resolveWorkspacePKMetadataForWrite(
+		context.Background(), INSERT, 0, "db", "tbl", catalog.MO_TABLES_ID, bat)
 	require.NoError(t, err)
-	require.True(t, ready)
-	require.Equal(t, -1, pos)
+	require.False(t, check.enabled)
+	require.False(t, index.enabled)
 
-	pos, ready, err = txn.resolvePKCheckPosForWrite(context.Background(), INSERT, 0, "db", "tbl", 42, bat)
-	require.NoError(t, err)
-	require.False(t, ready)
-	require.Equal(t, -1, pos)
+	_, _, err = txn.resolveWorkspacePKMetadataForWrite(
+		context.Background(), INSERT, 0, "db", "tbl", 42, bat)
+	require.ErrorContains(t, err, "without transaction engine")
 }
 
 func TestMergeTxnWorkspaceKeepsCatalogBeforeDependentData(t *testing.T) {
 	proc := testutil.NewProc(t)
 	txn := &Transaction{
-		op:          newTxnOperatorForTest(t),
-		proc:        proc,
-		tableOps:    newTableOps(),
-		databaseOps: newDbOps(),
+		op:        newTxnOperatorForTest(t),
+		proc:      proc,
+		workspace: newTxnWorkspace(),
 	}
 
 	const (
@@ -700,13 +574,7 @@ func TestMergeTxnWorkspaceKeepsCatalogBeforeDependentData(t *testing.T) {
 		criticalTableID = uint64(5768603)
 	)
 
-	defer func() {
-		for i := range txn.writes {
-			if txn.writes[i].bat != nil {
-				txn.releaseWorkspaceEntryBatchLocked(i)
-			}
-		}
-	}()
+	defer closeWorkspaceForTest(t, txn)
 
 	// Two entries on the same table are enough to create a nil hole during merge.
 	// The remaining distinct-table inserts push the merge count over the threshold
@@ -747,7 +615,8 @@ func TestMergeTxnWorkspaceKeepsCatalogBeforeDependentData(t *testing.T) {
 	require.NoError(t, txn.mergeTxnWorkspaceLocked(context.Background()))
 
 	createIdx, dataIdx := -1, -1
-	for i, e := range txn.writes {
+	entries := workspaceEntriesForTest(t, txn)
+	for i, e := range entries {
 		if e.tableId == catalog.MO_TABLES_ID && e.note == noteForCreate(criticalTableID, "critical") {
 			createIdx = i
 		}
@@ -764,9 +633,8 @@ func TestMergeTxnWorkspaceDeduplicatesDeleteSelections(t *testing.T) {
 	proc := testutil.NewProc(t)
 	bat := newInsertBatchWithRowIDForTest(t, proc, []int64{10, 20, 30, 40})
 	txn := &Transaction{
-		proc:            proc,
-		deletedBlocks:   &deletedBlocks{offsets: make(map[types.Blockid][]int64)},
-		batchSelectList: make(map[*batch.Batch][]int64),
+		proc:      proc,
+		workspace: newTxnWorkspace(),
 	}
 	txn.appendWorkspaceEntryLocked(Entry{
 		typ:        INSERT,
@@ -774,18 +642,25 @@ func TestMergeTxnWorkspaceDeduplicatesDeleteSelections(t *testing.T) {
 		databaseId: 7,
 		bat:        bat,
 	})
-	defer txn.releaseWorkspaceEntryBatchLocked(0)
+	defer closeWorkspaceForTest(t, txn)
 
 	// Two internal delete passes select the same rows. Their raw event count
 	// equals the batch row count, but only half of the rows are deleted.
-	txn.addBatchSelectionsLocked(bat, []int64{1, 3})
-	txn.addBatchSelectionsLocked(bat, []int64{1, 3})
-	require.Equal(t, []int64{1, 3}, txn.batchSelectList[bat])
+	entry := workspaceEntriesForTest(t, txn)[0]
+	txn.addWorkspaceEntrySelectionsLocked(&entry, []int64{1, 3})
+	txn.addWorkspaceEntrySelectionsLocked(&entry, []int64{1, 3})
+	selections, err := txn.workspace.mutationSelections(entry.workspaceMutationID)
+	require.NoError(t, err)
+	require.Equal(t, []int64{1, 3}, selections)
 
 	require.NoError(t, txn.mergeTxnWorkspaceLocked(context.Background()))
-	require.Equal(t, 2, bat.RowCount())
-	require.Equal(t, []int64{10, 30}, vector.MustFixedColWithTypeCheck[int64](bat.Vecs[1]))
-	require.Equal(t, 2, txn.approximateInMemInsertCnt)
+	entry = workspaceEntriesForTest(t, txn)[0]
+	require.Equal(t, 4, entry.bat.RowCount())
+	require.Equal(t, []int64{10, 20, 30, 40},
+		vector.MustFixedColWithTypeCheck[int64](entry.bat.Vecs[1]))
+	require.Equal(t, []int64{1, 3},
+		mustMutationSelections(t, txn.workspace, entry.workspaceMutationID))
+	require.Equal(t, 4, txn.workspace.usageSnapshot().inMemoryInsertRows)
 	require.NoError(t, txn.checkWorkspaceAccountingLocked())
 }
 
@@ -795,88 +670,211 @@ func TestIssue25589RollbackLastStatementRestoresWorkspaceAccounting(t *testing.T
 	op.EXPECT().EnterRollbackStmt()
 	op.EXPECT().ExitRollbackStmt()
 	txn := &Transaction{
-		op:              op,
-		proc:            proc,
-		tableCache:      new(sync.Map),
-		tableOps:        newTableOps(),
-		databaseOps:     newDbOps(),
-		batchSelectList: make(map[*batch.Batch][]int64),
-		deletedBlocks:   &deletedBlocks{offsets: make(map[types.Blockid][]int64)},
-		isCCPRTxn:       true,
+		op:         op,
+		proc:       proc,
+		workspace:  newTxnWorkspace(),
+		tableCache: new(sync.Map),
+		isCCPRTxn:  true,
 	}
 
 	committed := newInsertBatchWithRowIDForTest(t, proc, []int64{1, 2})
 	rolledBack := newInsertBatchWithRowIDForTest(t, proc, []int64{3, 4, 5})
 	rolledBackDelete := newDeleteBatchForTest(t, proc, []int64{1, 2})
 	txn.appendWorkspaceEntryLocked(Entry{typ: INSERT, databaseId: 7, tableId: 42, bat: committed})
+	txn.workspace.advanceStatement()
 	txn.appendWorkspaceEntryLocked(Entry{typ: INSERT, databaseId: 7, tableId: 42, bat: rolledBack})
 	txn.appendWorkspaceEntryLocked(Entry{typ: DELETE, databaseId: 7, tableId: 42, bat: rolledBackDelete})
-	txn.statementID = 1
-	txn.offsets = []int{1}
-
 	require.NoError(t, txn.RollbackLastStatement(context.Background()))
-	require.Len(t, txn.writes, 1)
-	require.Same(t, committed, txn.writes[0].bat)
-	require.Equal(t, uint64(committed.Size()), txn.workspaceSize)
-	require.Equal(t, uint64(committed.Size()), txn.approximateInMemInsertSize)
-	require.Equal(t, committed.RowCount(), txn.approximateInMemInsertCnt)
-	require.Zero(t, txn.approximateInMemDeleteCnt)
+	entries := workspaceEntriesForTest(t, txn)
+	require.Len(t, entries, 1)
+	require.Same(t, committed, entries[0].bat)
+	usage := txn.workspace.usageSnapshot()
+	require.Equal(t, uint64(committed.Size()), usage.totalBytes)
+	require.Equal(t, uint64(committed.Size()), usage.inMemoryInsertBytes)
+	require.Equal(t, committed.RowCount(), usage.inMemoryInsertRows)
+	require.Zero(t, usage.inMemoryDeleteRows)
 	require.NoError(t, txn.checkWorkspaceAccountingLocked())
 
-	txn.releaseWorkspaceEntryBatchLocked(0)
+	closeWorkspaceForTest(t, txn)
 }
 
 func TestIssue25589MergeTxnWorkspaceRestoresAccountingForTablesInVain(t *testing.T) {
 	proc := testutil.NewProc(t)
 	bat := newInsertBatchWithRowIDForTest(t, proc, []int64{1, 2, 3})
 	txn := &Transaction{
-		proc:            proc,
-		tablesInVain:    map[uint64]int{42: 1},
-		batchSelectList: make(map[*batch.Batch][]int64),
-		deletedBlocks:   &deletedBlocks{offsets: make(map[types.Blockid][]int64)},
+		proc:      proc,
+		workspace: newTxnWorkspace(),
 	}
 	txn.appendWorkspaceEntryLocked(Entry{typ: INSERT, databaseId: 7, tableId: 42, bat: bat})
+	require.NoError(t, txn.workspace.markTableDropped(0, 7, 42))
 
 	require.NoError(t, txn.mergeTxnWorkspaceLocked(context.Background()))
-	require.Nil(t, txn.writes[0].bat)
-	require.Zero(t, txn.workspaceSize)
-	require.Zero(t, txn.approximateInMemInsertSize)
-	require.Zero(t, txn.approximateInMemInsertCnt)
+	require.Zero(t, txn.workspace.activeMutationCount())
+	usage := txn.workspace.usageSnapshot()
+	require.Zero(t, usage.totalBytes)
+	require.Zero(t, usage.inMemoryInsertBytes)
+	require.Zero(t, usage.inMemoryInsertRows)
 	require.NoError(t, txn.checkWorkspaceAccountingLocked())
+	closeWorkspaceForTest(t, txn)
 }
 
 func TestIssue25589MergeTxnWorkspaceRestoresAccountingAfterShrink(t *testing.T) {
 	proc := testutil.NewProc(t)
 	bat := newInsertBatchWithRowIDForTest(t, proc, []int64{1, 2, 3, 4})
 	txn := &Transaction{
-		proc:            proc,
-		tablesInVain:    make(map[uint64]int),
-		batchSelectList: map[*batch.Batch][]int64{bat: {1, 3}},
-		deletedBlocks:   &deletedBlocks{offsets: make(map[types.Blockid][]int64)},
+		proc:      proc,
+		workspace: newTxnWorkspace(),
 	}
 	txn.appendWorkspaceEntryLocked(Entry{typ: INSERT, databaseId: 7, tableId: 42, bat: bat})
+	entry := workspaceEntriesForTest(t, txn)[0]
+	txn.addWorkspaceEntrySelectionsLocked(&entry, []int64{1, 3})
 
 	require.NoError(t, txn.mergeTxnWorkspaceLocked(context.Background()))
-	require.Equal(t, 2, bat.RowCount())
-	require.Equal(t, uint64(bat.Size()), txn.workspaceSize)
-	require.Equal(t, uint64(bat.Size()), txn.approximateInMemInsertSize)
-	require.Equal(t, bat.RowCount(), txn.approximateInMemInsertCnt)
+	entry = workspaceEntriesForTest(t, txn)[0]
+	usage := txn.workspace.usageSnapshot()
+	require.Equal(t, 4, entry.bat.RowCount())
+	require.Equal(t, []int64{1, 3},
+		mustMutationSelections(t, txn.workspace, entry.workspaceMutationID))
+	require.Equal(t, uint64(entry.bat.Size()), usage.totalBytes)
+	require.Equal(t, uint64(entry.bat.Size()), usage.inMemoryInsertBytes)
+	require.Equal(t, entry.bat.RowCount(), usage.inMemoryInsertRows)
 	require.NoError(t, txn.checkWorkspaceAccountingLocked())
 
-	txn.releaseWorkspaceEntryBatchLocked(0)
+	closeWorkspaceForTest(t, txn)
+}
+
+func TestMergeTxnWorkspaceDoesNotCompactAcrossStatementAttempts(t *testing.T) {
+	proc := testutil.NewProc(t)
+	txn := &Transaction{
+		proc:      proc,
+		workspace: newTxnWorkspace(),
+	}
+	txn.currentRowId.SetSegment(colexec.TxnWorkspaceSegment)
+	defer closeWorkspaceForTest(t, txn)
+
+	for i := 0; i < workspaceCompactionSealRows; i++ {
+		txn.appendWorkspaceEntryLocked(Entry{
+			typ: INSERT, databaseId: 7, tableId: 42,
+			bat: newInsertBatchWithRowIDForTest(t, proc, []int64{int64(i)}),
+		})
+	}
+	txn.workspace.advanceStatement()
+	currentValues := make([]int64, workspaceCompactionSealRows)
+	for i := range currentValues {
+		currentValues[i] = int64(workspaceCompactionSealRows + i)
+	}
+	txn.appendWorkspaceEntryLocked(Entry{
+		typ: INSERT, databaseId: 7, tableId: 42,
+		bat: newInsertBatchWithRowIDForTest(t, proc, currentValues),
+	})
+
+	require.NoError(t, txn.mergeTxnWorkspaceLocked(context.Background()))
+	entries, err := txn.workspace.commitEntries()
+	require.NoError(t, err)
+	defer entries.Close()
+	require.Len(t, entries.entries, 2)
+	require.Equal(t, uint64(0), entries.entries[0].statementID)
+	require.Equal(t, uint64(1), entries.entries[0].attemptID)
+	require.Equal(t, uint64(1), entries.entries[1].statementID)
+	require.Equal(t, uint64(1), entries.entries[1].attemptID)
+	require.Equal(t, workspaceCompactionSealRows, entries.entries[0].bat.RowCount())
+	require.Equal(t, workspaceCompactionSealRows, entries.entries[1].bat.RowCount())
+}
+
+func TestIncrStatementIDCompactsCompletedAttemptDuringRetryPreparation(t *testing.T) {
+	proc := testutil.NewProc(t)
+	op := newTxnOperatorForTest(t)
+	op.EXPECT().EnterRollbackStmt()
+	op.EXPECT().ExitRollbackStmt()
+	op.EXPECT().EnterIncrStmt()
+	op.EXPECT().ExitIncrStmt()
+	txn := &Transaction{
+		op:                      op,
+		proc:                    proc,
+		workspace:               newTxnWorkspace(),
+		tableCache:              new(sync.Map),
+		isCCPRTxn:               true,
+		writeWorkspaceThreshold: math.MaxUint64,
+	}
+	txn.currentRowId.SetSegment(colexec.TxnWorkspaceSegment)
+	defer closeWorkspaceForTest(t, txn)
+
+	// Leave enough small batches in a completed statement to trigger the
+	// transaction-level compaction performed by IncrStatementID. The current
+	// statement then fails without adding its own writes.
+	for i := 0; i < workspaceCompactionSealRows; i++ {
+		txn.appendWorkspaceEntryLocked(Entry{
+			typ: INSERT, databaseId: 7, tableId: 42,
+			bat: newInsertBatchWithRowIDForTest(t, proc, []int64{int64(i)}),
+		})
+	}
+	_, err := txn.workspace.advanceStatement()
+	require.NoError(t, err)
+	txn.StartStatement()
+	require.NoError(t, txn.RollbackLastStatement(context.Background()))
+	require.Equal(t, statementAttemptRolledBack, txn.workspace.journal.current.state)
+	require.True(t, txn.workspace.journal.retryPending)
+
+	// Retry preparation compacts the completed statement before opening the
+	// next attempt. This is the exact ordering used by compile retry handling.
+	require.NoError(t, txn.IncrStatementID(context.Background(), false))
+	require.Equal(t, uint64(1), txn.workspace.journal.current.statementID)
+	require.Equal(t, uint64(2), txn.workspace.journal.current.attemptID)
+	require.Equal(t, statementAttemptOpen, txn.workspace.journal.current.state)
+
+	entries, err := txn.workspace.commitEntries()
+	require.NoError(t, err)
+	require.Len(t, entries.entries, 1)
+	require.Equal(t, workspaceCompactionSealRows, entries.entries[0].bat.RowCount())
+	require.Equal(t, uint64(0), entries.entries[0].statementID)
+	require.Equal(t, uint64(1), entries.entries[0].attemptID)
+	entries.Close()
+	txn.EndStatement()
+}
+
+func TestMergeTxnWorkspaceKeepsOlderMutationRollbackable(t *testing.T) {
+	proc := testutil.NewProc(t)
+	bat := newInsertBatchWithRowIDForTest(t, proc, []int64{10, 20, 30, 40})
+	txn := &Transaction{
+		proc:      proc,
+		workspace: newTxnWorkspace(),
+	}
+	defer closeWorkspaceForTest(t, txn)
+
+	txn.appendWorkspaceEntryLocked(Entry{
+		typ: INSERT, databaseId: 7, tableId: 42, bat: bat,
+	})
+	txn.workspace.advanceStatement()
+	entry := workspaceEntriesForTest(t, txn)[0]
+	txn.addWorkspaceEntrySelectionsLocked(&entry, []int64{1, 3})
+
+	require.NoError(t, txn.mergeTxnWorkspaceLocked(context.Background()))
+	entry = workspaceEntriesForTest(t, txn)[0]
+	require.Equal(t, 4, entry.bat.RowCount())
+	require.Equal(t, []int64{1, 3},
+		mustMutationSelections(t, txn.workspace, entry.workspaceMutationID))
+
+	rolledBack, err := txn.workspace.rollbackCurrentAttempt()
+	require.NoError(t, err)
+	require.Empty(t, rolledBack.mutationIDs)
+	rolledBack.Close()
+
+	entry = workspaceEntriesForTest(t, txn)[0]
+	require.Equal(t, 4, entry.bat.RowCount())
+	require.Empty(t,
+		mustMutationSelections(t, txn.workspace, entry.workspaceMutationID))
+	require.NoError(t, txn.checkWorkspaceAccountingLocked())
 }
 
 func TestIssue25589MergeTxnWorkspacePreservesAccountingWhenCombiningBatches(t *testing.T) {
 	proc := testutil.NewProc(t)
 	txn := &Transaction{
-		proc:            proc,
-		tablesInVain:    make(map[uint64]int),
-		batchSelectList: make(map[*batch.Batch][]int64),
-		deletedBlocks:   &deletedBlocks{offsets: make(map[types.Blockid][]int64)},
+		proc:      proc,
+		workspace: newTxnWorkspace(),
 	}
 	txn.currentRowId.SetSegment(colexec.TxnWorkspaceSegment)
 
-	for i := 0; i < 30; i++ {
+	for i := 0; i < workspaceCompactionSealRows; i++ {
 		txn.appendWorkspaceEntryLocked(Entry{
 			typ:        INSERT,
 			databaseId: 7,
@@ -884,29 +882,80 @@ func TestIssue25589MergeTxnWorkspacePreservesAccountingWhenCombiningBatches(t *t
 			bat:        newInsertBatchWithRowIDForTest(t, proc, []int64{int64(i)}),
 		})
 	}
+	_, err := txn.workspace.advanceStatement()
+	require.NoError(t, err)
 
 	require.NoError(t, txn.mergeTxnWorkspaceLocked(context.Background()))
-	require.Len(t, txn.writes, 1)
-	require.Equal(t, 30, txn.writes[0].bat.RowCount())
-	require.Equal(t, uint64(txn.writes[0].bat.Size()), txn.workspaceSize)
-	require.Equal(t, uint64(txn.writes[0].bat.Size()), txn.approximateInMemInsertSize)
-	require.Equal(t, 30, txn.approximateInMemInsertCnt)
+	entries := workspaceEntriesForTest(t, txn)
+	require.Len(t, entries, 1)
+	usage := txn.workspace.usageSnapshot()
+	require.Equal(t, workspaceCompactionSealRows, entries[0].bat.RowCount())
+	require.Equal(t, uint64(entries[0].bat.Size()), usage.totalBytes)
+	require.Equal(t, uint64(entries[0].bat.Size()), usage.inMemoryInsertBytes)
+	require.Equal(t, workspaceCompactionSealRows, usage.inMemoryInsertRows)
 	require.NoError(t, txn.checkWorkspaceAccountingLocked())
 
-	txn.releaseWorkspaceEntryBatchLocked(0)
+	closeWorkspaceForTest(t, txn)
+}
+
+func TestMergeTxnWorkspaceSealsImmutablePayloadOnlyOnce(t *testing.T) {
+	proc := testutil.NewProc(t)
+	txn := &Transaction{
+		proc:      proc,
+		workspace: newTxnWorkspace(),
+	}
+	txn.currentRowId.SetSegment(colexec.TxnWorkspaceSegment)
+	defer closeWorkspaceForTest(t, txn)
+
+	appendRows := func(start, count int) {
+		for i := 0; i < count; i++ {
+			txn.appendWorkspaceEntryLocked(Entry{
+				typ: INSERT, databaseId: 7, tableId: 42,
+				bat: newInsertBatchWithRowIDForTest(
+					t, proc, []int64{int64(start + i)}),
+			})
+		}
+		_, err := txn.workspace.advanceStatement()
+		require.NoError(t, err)
+	}
+
+	appendRows(0, workspaceCompactionSealRows)
+	require.NoError(t, txn.mergeTxnWorkspaceLocked(context.Background()))
+	entries := workspaceEntriesForTest(t, txn)
+	require.Len(t, entries, 1)
+	require.Equal(t, workspaceCompactionSealRows, entries[0].bat.RowCount())
+	sealedBatch := entries[0].bat
+	sealedMutationID := entries[0].workspaceMutationID
+	require.False(t, txn.workspace.pendingCompactions.contains(sealedMutationID))
+
+	// A sub-threshold tail must remain pending without reopening or copying the
+	// immutable payload that was already sealed by the previous plan.
+	appendRows(workspaceCompactionSealRows, workspaceCompactionSealRows-1)
+	require.NoError(t, txn.mergeTxnWorkspaceLocked(context.Background()))
+	entries = workspaceEntriesForTest(t, txn)
+	require.Len(t, entries, workspaceCompactionSealRows)
+	require.Same(t, sealedBatch, entries[0].bat)
+	require.False(t, txn.workspace.pendingCompactions.contains(sealedMutationID))
+
+	// The next row seals only the pending tail. The first payload stays at the
+	// same generation, which bounds compaction copying to once per logical row.
+	appendRows(2*workspaceCompactionSealRows-1, 1)
+	require.NoError(t, txn.mergeTxnWorkspaceLocked(context.Background()))
+	entries = workspaceEntriesForTest(t, txn)
+	require.Len(t, entries, 2)
+	require.Same(t, sealedBatch, entries[0].bat)
+	require.Equal(t, workspaceCompactionSealRows, entries[0].bat.RowCount())
+	require.Equal(t, workspaceCompactionSealRows, entries[1].bat.RowCount())
+	require.NoError(t, txn.checkWorkspaceAccountingLocked())
 }
 
 func TestIssue25589DumpInsertRestoresWorkspaceAccounting(t *testing.T) {
 	colexec.NewServer("")
 	txn := newTransactionWithActivePKTableForTest(t, "pk")
-	tbl := txn.tableOps.existAndActive(genTableKey(1, "tbl", 7, "db"))
+	tbl := txn.workspace.activeTable(genTableKey(1, "tbl", 7, "db"))
 	require.NotNil(t, tbl)
 	tbl.tableDef.Cols[0].Typ = pbplan.Type{Id: int32(types.T_int64)}
 	txn.tnStores = []DNStore{{}}
-	txn.batchSelectList = make(map[*batch.Batch][]int64)
-	txn.tablesInVain = make(map[uint64]int)
-	txn.deletedBlocks = &deletedBlocks{offsets: make(map[types.Blockid][]int64)}
-	txn.cnObjsSummary = make(map[types.Objectid]Summary)
 	txn.currentRowId.SetSegment(colexec.TxnWorkspaceSegment)
 	txn.appendWorkspaceEntryLocked(Entry{
 		typ:          INSERT,
@@ -922,25 +971,25 @@ func TestIssue25589DumpInsertRestoresWorkspaceAccounting(t *testing.T) {
 	require.NoError(t, err)
 	var pkCount int
 	txn.Lock()
-	err = txn.dumpInsertBatchLocked(context.Background(), fs, 0, &pkCount)
+	err = txn.dumpInsertBatchLocked(
+		context.Background(), fs, workspaceDumpAll(false), &pkCount)
 	txn.Unlock()
 	require.NoError(t, err)
 	require.Equal(t, 3, pkCount)
-	require.Zero(t, txn.approximateInMemInsertSize)
-	require.Zero(t, txn.approximateInMemInsertCnt)
+	usage := txn.workspace.usageSnapshot()
+	require.Zero(t, usage.inMemoryInsertBytes)
+	require.Zero(t, usage.inMemoryInsertRows)
 	require.NoError(t, txn.checkWorkspaceAccountingLocked())
 
-	for i := range txn.writes {
-		txn.releaseWorkspaceEntryBatchLocked(i)
-	}
+	closeWorkspaceForTest(t, txn)
 }
 
 func TestIssue25589SoftDeleteObjectUsesWorkspaceAccounting(t *testing.T) {
 	proc := testutil.NewProc(t)
 	txn := &Transaction{
-		proc:            proc,
-		tnStores:        []DNStore{{}},
-		batchSelectList: make(map[*batch.Batch][]int64),
+		proc:      proc,
+		workspace: newTxnWorkspace(),
+		tnStores:  []DNStore{{}},
 	}
 	op := newTxnOperatorForTestWithWorkspace(t, txn)
 	op.EXPECT().IsSnapOp().Return(false)
@@ -963,21 +1012,23 @@ func TestIssue25589SoftDeleteObjectUsesWorkspaceAccounting(t *testing.T) {
 		rowID.BorrowObjectID(),
 		false,
 	))
-	require.Len(t, txn.writes, 1)
-	require.Equal(t, SOFT_DELETE_OBJECT, txn.writes[0].typ)
-	require.Equal(t, uint64(txn.writes[0].bat.Size()), txn.workspaceSize)
-	require.Zero(t, txn.approximateInMemInsertSize)
-	require.Zero(t, txn.approximateInMemInsertCnt)
-	require.Zero(t, txn.approximateInMemDeleteCnt)
+	entries := workspaceEntriesForTest(t, txn)
+	require.Len(t, entries, 1)
+	usage := txn.workspace.usageSnapshot()
+	require.Equal(t, SOFT_DELETE_OBJECT, entries[0].typ)
+	require.Equal(t, uint64(entries[0].bat.Size()), usage.totalBytes)
+	require.Zero(t, usage.inMemoryInsertBytes)
+	require.Zero(t, usage.inMemoryInsertRows)
+	require.Zero(t, usage.inMemoryDeleteRows)
 	require.NoError(t, txn.checkWorkspaceAccountingLocked())
 
-	txn.releaseWorkspaceEntryBatchLocked(0)
+	closeWorkspaceForTest(t, txn)
 }
 
-func TestResolvePKCheckPosForWriteWithActiveTxnTable(t *testing.T) {
+func TestResolveWorkspacePKMetadataForWriteWithActiveTxnTable(t *testing.T) {
 	txn := newTransactionWithActivePKTableForTest(t, "pk")
 
-	pos, ready, err := txn.resolvePKCheckPosForWrite(
+	check, index, err := txn.resolveWorkspacePKMetadataForWrite(
 		context.Background(),
 		INSERT,
 		1,
@@ -987,10 +1038,12 @@ func TestResolvePKCheckPosForWriteWithActiveTxnTable(t *testing.T) {
 		newInt64BatchForTest(t, txn.proc, []string{"pk"}, []int64{1}),
 	)
 	require.NoError(t, err)
-	require.True(t, ready)
-	require.Equal(t, 0, pos)
+	require.True(t, check.enabled)
+	require.Equal(t, 0, check.vectorPos)
+	require.True(t, index.enabled)
+	require.Equal(t, 0, index.vectorPos)
 
-	pos, ready, err = txn.resolvePKCheckPosForWrite(
+	check, index, err = txn.resolveWorkspacePKMetadataForWrite(
 		context.Background(),
 		INSERT,
 		1,
@@ -1000,10 +1053,12 @@ func TestResolvePKCheckPosForWriteWithActiveTxnTable(t *testing.T) {
 		newInt64BatchForTest(t, txn.proc, []string{"PK"}, []int64{1}),
 	)
 	require.NoError(t, err)
-	require.True(t, ready)
-	require.Equal(t, 0, pos)
+	require.True(t, check.enabled)
+	require.Equal(t, 0, check.vectorPos)
+	require.True(t, index.enabled)
+	require.Equal(t, 0, index.vectorPos)
 
-	pos, ready, err = txn.resolvePKCheckPosForWrite(
+	check, index, err = txn.resolveWorkspacePKMetadataForWrite(
 		context.Background(),
 		DELETE,
 		1,
@@ -1013,10 +1068,11 @@ func TestResolvePKCheckPosForWriteWithActiveTxnTable(t *testing.T) {
 		newDeleteBatchForTest(t, txn.proc, []int64{1}),
 	)
 	require.NoError(t, err)
-	require.True(t, ready)
-	require.Equal(t, 1, pos)
+	require.True(t, check.enabled)
+	require.Equal(t, 1, check.vectorPos)
+	require.False(t, index.enabled)
 
-	pos, ready, err = txn.resolvePKCheckPosForWrite(
+	_, _, err = txn.resolveWorkspacePKMetadataForWrite(
 		context.Background(),
 		INSERT,
 		1,
@@ -1025,24 +1081,50 @@ func TestResolvePKCheckPosForWriteWithActiveTxnTable(t *testing.T) {
 		42,
 		newInt64BatchForTest(t, txn.proc, []string{"other"}, []int64{1}),
 	)
-	require.NoError(t, err)
-	require.False(t, ready)
-	require.Equal(t, -1, pos)
+	require.ErrorContains(t, err, "primary-key column pk not found")
+
+	_, _, err = txn.resolveWorkspacePKMetadataForWrite(
+		context.Background(),
+		DELETE,
+		1,
+		"db",
+		"tbl",
+		42,
+		newInt64BatchForTest(t, txn.proc, []string{"pk"}, []int64{1}),
+	)
+	require.ErrorContains(t, err, "has no primary-key vector")
 }
 
-func TestWriteFileLockedMarksPKCheckReady(t *testing.T) {
+func TestResolveWorkspacePKMetadataIndexesCompositePrimaryKey(t *testing.T) {
+	txn := newTransactionWithActivePKTableForTest(t, catalog.CPrimaryKeyColName)
+	bat := newInt64BatchForTest(
+		t, txn.proc, []string{catalog.CPrimaryKeyColName}, []int64{1})
+
+	check, index, err := txn.resolveWorkspacePKMetadataForWrite(
+		context.Background(), INSERT, 1, "db", "tbl", 42, bat)
+	require.NoError(t, err)
+	// Composite keys are checked by their constituent-key path, not by the
+	// generic transaction-local duplicate checker.
+	require.False(t, check.enabled)
+	// The hidden composite-key vector is nevertheless the canonical key for
+	// current-state point reads and must be indexed.
+	require.True(t, index.enabled)
+	require.Equal(t, 0, index.vectorPos)
+}
+
+func TestWriteFileLockedDoesNotRequestPKCheck(t *testing.T) {
 	proc := testutil.NewProc(t)
-	txn := &Transaction{proc: proc}
+	txn := &Transaction{proc: proc, workspace: newTxnWorkspace()}
 	bat := newInt64BatchForTest(t, proc, []string{"pk"}, []int64{1})
 
 	err := txn.WriteFileLocked(ALTER, 0, 1, 2, "db", "tbl", "file", bat, DNStore{})
 	require.NoError(t, err)
-	require.Len(t, txn.writes, 1)
-	require.True(t, txn.writes[0].pkCheckReady)
-	require.Equal(t, -1, txn.writes[0].pkCheckPos)
+	entries := workspaceEntriesForTest(t, txn)
+	require.Len(t, entries, 1)
+	require.False(t, entries[0].pkCheck.enabled)
 
 	bat.Clean(proc.Mp())
-	txn.writes[0].bat.Clean(proc.Mp())
+	closeWorkspaceForTest(t, txn)
 }
 
 func newTxnOperatorForTest(t *testing.T) *mock_frontend.MockTxnOperator {
@@ -1070,10 +1152,9 @@ func newTransactionWithActivePKTableForTest(
 	t.Helper()
 	proc := testutil.NewProc(t)
 	txn := &Transaction{
-		proc:        proc,
-		engine:      &Engine{},
-		tableOps:    newTableOps(),
-		databaseOps: newDbOps(),
+		proc:      proc,
+		engine:    &Engine{},
+		workspace: newTxnWorkspace(),
 	}
 	op := newTxnOperatorForTestWithWorkspace(t, txn)
 	txn.op = op
@@ -1083,25 +1164,27 @@ func newTransactionWithActivePKTableForTest(
 		databaseId:   7,
 		databaseName: "db",
 	}
-	txn.databaseOps.addCreateDatabase(genDatabaseKey(1, "db"), 0, db)
-	txn.tableOps.addCreateTable(
-		genTableKey(1, "tbl", 7, "db"),
-		0,
-		&txnTable{
-			accountId: 1,
-			tableId:   42,
-			tableName: "tbl",
-			db:        db,
-			tableDef: &pbplan.TableDef{
-				Cols: []*pbplan.ColDef{
-					{Name: pkName},
-				},
-				Pkey: &pbplan.PrimaryKeyDef{
-					PkeyColName: pkName,
-				},
+	require.NoError(t, txn.workspace.addDatabaseOp(genDatabaseKey(1, "db"), INSERT, db.databaseId, db))
+	tbl := &txnTable{
+		accountId: 1,
+		tableId:   42,
+		tableName: "tbl",
+		db:        db,
+		tableDef: &pbplan.TableDef{
+			Cols: []*pbplan.ColDef{
+				{Name: pkName},
+			},
+			Pkey: &pbplan.PrimaryKeyDef{
+				PkeyColName: pkName,
 			},
 		},
-	)
+	}
+	require.NoError(t, txn.workspace.addTableOp(
+		genTableKey(1, "tbl", 7, "db"),
+		INSERT,
+		tbl.tableId,
+		tbl,
+	))
 	return txn
 }
 
@@ -1862,88 +1945,11 @@ func TestDupVectorWithoutNulls_ConcurrentSafety(t *testing.T) {
 	require.True(t, orig.HasNull())
 }
 
-// TestSnapshotWriteOffset_NormalPath verifies that the normal (non-reentrant)
-// code path still works with correct locking.
-func TestSnapshotWriteOffset_NormalPath(t *testing.T) {
-	t.Run("Update", func(t *testing.T) {
-		txn := &Transaction{
-			writes: []Entry{{}, {}, {}, {}},
-		}
-		txn.UpdateSnapshotWriteOffset()
-		require.Equal(t, 4, txn.GetSnapshotWriteOffset())
-	})
-
-	t.Run("Get", func(t *testing.T) {
-		txn := &Transaction{}
-		txn.snapshotWriteOffset.Store(99)
-		offset := txn.GetSnapshotWriteOffset()
-		require.Equal(t, 99, offset)
-	})
-}
-
-// TestSnapshotWriteOffset_BlocksWhenAnotherGoroutineHoldsLock verifies that
-// a non-holder goroutine blocks on Lock() instead of bypassing it. Run with
-// -race.
-func TestSnapshotWriteOffset_BlocksWhenAnotherGoroutineHoldsLock(t *testing.T) {
-	txn := &Transaction{
-		writes: make([]Entry, 3),
-	}
-
-	locked := make(chan struct{})
-	blocking := make(chan struct{})
-	holderFinished := make(chan struct{})
-
-	go func() {
-		txn.Lock()
-		close(locked)
-		// Signal that we're about to wait; the Sleep gives the main goroutine
-		// time to reach Lock(). This is a best-effort synchronization and a
-		// false test pass is acceptable (the test would still prove
-		// UpdateSnapshotWriteOffset returns the correct final offset).
-		close(blocking)
-		time.Sleep(200 * time.Millisecond)
-		txn.writes = txn.writes[:1]
-		close(holderFinished)
-		txn.Unlock()
-	}()
-
-	<-locked
-	<-blocking
-	txn.UpdateSnapshotWriteOffset()
-	<-holderFinished
-
-	require.Equal(t, 1, txn.GetSnapshotWriteOffset(),
-		"non-holder must capture offset after holder's mutation")
-}
-
-// TestSnapshotWriteOffset_ConcurrentAccess verifies that concurrent accessor
-// calls from many goroutines are race-free. Run with -race.
-func TestSnapshotWriteOffset_ConcurrentAccess(t *testing.T) {
-	txn := &Transaction{
-		writes: make([]Entry, 10),
-	}
-	txn.snapshotWriteOffset.Store(5)
-
-	var wg sync.WaitGroup
-	for i := 0; i < 100; i++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			offset := txn.GetSnapshotWriteOffset()
-			require.GreaterOrEqual(t, offset, 0)
-			txn.UpdateSnapshotWriteOffset()
-		}()
-	}
-
-	wg.Wait()
-	require.Equal(t, 10, txn.GetSnapshotWriteOffset())
-}
-
-// enableReenterSnapshotOffsetFault turns on the fault that makes getTable
+// enableReenterWorkspaceReadViewFault turns on the fault that makes getTable
 // simulate the internal-SQL leg of the issue #25557 deadlock chain (locking
-// the transaction and capturing the workspace write offset) and then fail
+// the transaction and capturing the workspace read view) and then fail
 // with an injected error.
-func enableReenterSnapshotOffsetFault(t *testing.T) {
+func enableReenterWorkspaceReadViewFault(t *testing.T) {
 	fault.Enable()
 	t.Cleanup(func() {
 		// Fault injection is a process-level global switch. Removing the
@@ -1952,14 +1958,14 @@ func enableReenterSnapshotOffsetFault(t *testing.T) {
 		// failures.
 		fault.Disable()
 	})
-	rmFault, err := objectio.SimpleInject(objectio.FJ_CNReenterSnapshotOffsetOnGetTable)
+	rmFault, err := objectio.SimpleInject(objectio.FJ_CNReenterWorkspaceReadViewOnGetTable)
 	require.NoError(t, err)
 	t.Cleanup(rmFault)
 }
 
 // enableRogueUpdateOnGetTableFault turns on the iarg=2 variant of the fault:
 // besides the internal-SQL simulation, getTable performs a rogue
-// UpdateSnapshotWriteOffset — a statement-boundary advance the fixed
+// PublishReadView — a statement-boundary advance the fixed
 // internal SQL never does — and then fails with the injected error.
 func enableRogueUpdateOnGetTableFault(t *testing.T) {
 	fault.Enable()
@@ -1967,11 +1973,11 @@ func enableRogueUpdateOnGetTableFault(t *testing.T) {
 		fault.Disable()
 	})
 	require.NoError(t, fault.AddFaultPoint(
-		context.Background(), objectio.FJ_CNReenterSnapshotOffsetOnGetTable,
+		context.Background(), objectio.FJ_CNReenterWorkspaceReadViewOnGetTable,
 		":::", "echo", 2, "", false))
 	t.Cleanup(func() {
 		_, _ = fault.RemoveFaultPoint(
-			context.Background(), objectio.FJ_CNReenterSnapshotOffsetOnGetTable)
+			context.Background(), objectio.FJ_CNReenterWorkspaceReadViewOnGetTable)
 	})
 }
 
@@ -1982,28 +1988,21 @@ func enableRogueUpdateOnGetTableFault(t *testing.T) {
 func newDumpableTxnForTest(t *testing.T) *Transaction {
 	proc := testutil.NewProc(t)
 	txn := &Transaction{
-		proc:   proc,
-		engine: &Engine{},
-		writes: []Entry{
-			{
-				typ:          INSERT,
-				accountId:    0,
-				tableId:      42, // must not be a catalog table id
-				databaseId:   7,
-				tableName:    "tbl",
-				databaseName: "db",
-				bat:          newInt64BatchForTest(t, proc, []string{"pk"}, []int64{1, 2}),
-			},
-		},
+		proc:      proc,
+		engine:    &Engine{},
+		workspace: newTxnWorkspace(),
 	}
+	txn.appendWorkspaceEntryLocked(Entry{
+		typ:          INSERT,
+		accountId:    0,
+		tableId:      42, // must not be a catalog table id
+		databaseId:   7,
+		tableName:    "tbl",
+		databaseName: "db",
+		bat:          newInt64BatchForTest(t, proc, []string{"pk"}, []int64{1, 2}),
+	})
 	t.Cleanup(func() {
-		// If the dump aborts before consuming the entries, their batches
-		// are still owned by the workspace; release them here.
-		for i := range txn.writes {
-			if txn.writes[i].bat != nil {
-				txn.writes[i].bat.Clean(proc.Mp())
-			}
-		}
+		closeWorkspaceForTest(t, txn)
 	})
 	return txn
 }
@@ -2014,8 +2013,8 @@ func newDumpableTxnForTest(t *testing.T) *Transaction {
 // workspace entries the compaction is about to rewrite.
 func requireBoundaryUntouched(t *testing.T, txn *Transaction) {
 	t.Helper()
-	require.Equal(t, 0, txn.GetSnapshotWriteOffset(),
-		"internal SQL must not advance snapshotWriteOffset")
+	require.True(t, txn.workspace.publishedReadView().IsZero(),
+		"internal SQL must not publish a new workspace read view")
 }
 
 // TestIssue25557_DumpBatchReentrantGetTableDoesNotDeadlock covers the
@@ -2029,22 +2028,22 @@ func requireBoundaryUntouched(t *testing.T, txn *Transaction) {
 // the internal SQL re-entered txn.Lock() on the same goroutine and
 // self-deadlocked.
 func TestIssue25557_DumpBatchReentrantGetTableDoesNotDeadlock(t *testing.T) {
-	enableReenterSnapshotOffsetFault(t)
+	enableReenterWorkspaceReadViewFault(t)
 	txn := newDumpableTxnForTest(t)
-	preDumpLen := len(txn.writes)
+	preDumpLen := txn.workspace.activeMutationCount()
 
 	errCh := make(chan error, 1)
 	go func() {
-		errCh <- txn.dumpBatch(context.Background(), 0)
+		errCh <- txn.dumpBatch(context.Background(), workspaceDumpAll(false))
 	}()
 
 	select {
 	case err := <-errCh:
 		// The injected error proves getTable was reached and the simulated
 		// internal SQL locked the workspace instead of deadlocking.
-		require.ErrorContains(t, err, "reenter snapshot write offset")
+		require.ErrorContains(t, err, "reenter workspace read view")
 		requireBoundaryUntouched(t, txn)
-		require.Len(t, txn.writes, preDumpLen,
+		require.Equal(t, preDumpLen, txn.workspace.activeMutationCount(),
 			"an aborted dump must leave the workspace untouched")
 	case <-time.After(10 * time.Second):
 		t.Fatal("dumpBatch deadlocked when getTable ran the internal-SQL " +
@@ -2063,9 +2062,9 @@ func TestIssue25557_DumpBatchReentrantGetTableDoesNotDeadlock(t *testing.T) {
 // This is the reproducer shape from the PR #25560 review: a fix scoped to
 // the dumpBatch wrapper does not cover this path.
 func TestIssue25557_LockedDumpInsertBatchReentrantGetTableDoesNotDeadlock(t *testing.T) {
-	enableReenterSnapshotOffsetFault(t)
+	enableReenterWorkspaceReadViewFault(t)
 	txn := newDumpableTxnForTest(t)
-	preDumpLen := len(txn.writes)
+	preDumpLen := txn.workspace.activeMutationCount()
 
 	fs, err := colexec.GetSharedFSFromProc(txn.proc)
 	require.NoError(t, err)
@@ -2076,14 +2075,14 @@ func TestIssue25557_LockedDumpInsertBatchReentrantGetTableDoesNotDeadlock(t *tes
 		defer txn.Unlock()
 		var pkCount int
 		errCh <- txn.dumpInsertBatchLocked(
-			context.Background(), fs, 0, &pkCount)
+			context.Background(), fs, workspaceDumpAll(false), &pkCount)
 	}()
 
 	select {
 	case err := <-errCh:
-		require.ErrorContains(t, err, "reenter snapshot write offset")
+		require.ErrorContains(t, err, "reenter workspace read view")
 		requireBoundaryUntouched(t, txn)
-		require.Len(t, txn.writes, preDumpLen,
+		require.Equal(t, preDumpLen, txn.workspace.activeMutationCount(),
 			"an aborted dump must leave the workspace untouched")
 	case <-time.After(10 * time.Second):
 		t.Fatal("dumpInsertBatchLocked deadlocked when getTable ran the " +
@@ -2095,32 +2094,27 @@ func TestIssue25557_LockedDumpInsertBatchReentrantGetTableDoesNotDeadlock(t *tes
 // delete flush path, which has the same getTable -> internal SQL shape as
 // the insert path.
 func TestIssue25557_DumpDeleteBatchReentrantGetTableDoesNotDeadlock(t *testing.T) {
-	enableReenterSnapshotOffsetFault(t)
+	enableReenterWorkspaceReadViewFault(t)
 
 	proc := testutil.NewProc(t)
 	txn := &Transaction{
-		proc:   proc,
-		engine: &Engine{},
-		writes: []Entry{
-			{
-				typ:          DELETE,
-				accountId:    0,
-				tableId:      42, // must not be a catalog table id
-				databaseId:   7,
-				tableName:    "tbl",
-				databaseName: "db",
-				bat:          newDeleteBatchForTest(t, proc, []int64{1, 2}),
-			},
-		},
+		proc:      proc,
+		engine:    &Engine{},
+		workspace: newTxnWorkspace(),
 	}
-	t.Cleanup(func() {
-		for i := range txn.writes {
-			if txn.writes[i].bat != nil {
-				txn.writes[i].bat.Clean(proc.Mp())
-			}
-		}
+	txn.appendWorkspaceEntryLocked(Entry{
+		typ:          DELETE,
+		accountId:    0,
+		tableId:      42, // must not be a catalog table id
+		databaseId:   7,
+		tableName:    "tbl",
+		databaseName: "db",
+		bat:          newDeleteBatchForTest(t, proc, []int64{1, 2}),
 	})
-	preDumpLen := len(txn.writes)
+	t.Cleanup(func() {
+		closeWorkspaceForTest(t, txn)
+	})
+	preDumpLen := txn.workspace.activeMutationCount()
 
 	fs, err := colexec.GetSharedFSFromProc(txn.proc)
 	require.NoError(t, err)
@@ -2129,14 +2123,15 @@ func TestIssue25557_DumpDeleteBatchReentrantGetTableDoesNotDeadlock(t *testing.T
 	go func() {
 		txn.Lock()
 		defer txn.Unlock()
-		errCh <- txn.dumpDeleteBatchLocked(context.Background(), fs, 0)
+		errCh <- txn.dumpDeleteBatchLocked(
+			context.Background(), fs, workspaceDumpAll(false))
 	}()
 
 	select {
 	case err := <-errCh:
-		require.ErrorContains(t, err, "reenter snapshot write offset")
+		require.ErrorContains(t, err, "reenter workspace read view")
 		requireBoundaryUntouched(t, txn)
-		require.Len(t, txn.writes, preDumpLen,
+		require.Equal(t, preDumpLen, txn.workspace.activeMutationCount(),
 			"an aborted dump must leave the workspace untouched")
 	case <-time.After(10 * time.Second):
 		t.Fatal("dumpDeleteBatchLocked deadlocked when getTable ran the " +
@@ -2149,50 +2144,62 @@ func TestIssue25557_DumpDeleteBatchReentrantGetTableDoesNotDeadlock(t *testing.T
 // advance the statement boundary inside the window (which the fixed internal
 // SQL never does — simulated here by the iarg=2 fault variant), it can only
 // capture a consistent pre-compaction workspace, because the dump does not
-// mutate txn.writes before the window closes.
+// mutate the logical workspace before the window closes.
 func TestIssue25557_RogueBoundaryAdvanceCapturesConsistentState(t *testing.T) {
 	enableRogueUpdateOnGetTableFault(t)
 	txn := newDumpableTxnForTest(t)
-	preDumpLen := len(txn.writes)
+	preDumpLen := txn.workspace.activeMutationCount()
 
 	errCh := make(chan error, 1)
 	go func() {
-		errCh <- txn.dumpBatch(context.Background(), 0)
+		errCh <- txn.dumpBatch(context.Background(), workspaceDumpAll(false))
 	}()
 
 	select {
 	case err := <-errCh:
-		require.ErrorContains(t, err, "reenter snapshot write offset")
-		require.Equal(t, preDumpLen, txn.GetSnapshotWriteOffset(),
-			"a boundary advanced inside the window must cover the complete "+
+		require.ErrorContains(t, err, "reenter workspace read view")
+		published := txn.workspace.publishedReadView()
+		require.Equal(t, uint64(preDumpLen), published.MaxMutationID(),
+			"a view published inside the window must cover the complete "+
 				"pre-dump workspace")
-		require.Len(t, txn.writes, preDumpLen)
-		// the captured boundary must be safe for every reader
+		require.Equal(t, preDumpLen, txn.workspace.activeMutationCount())
+		// The captured logical read view must be safe for every reader.
 		seen := 0
-		txn.ForEachTableWrites(7, 42, txn.GetSnapshotWriteOffset(), func(Entry) {
+		require.NoError(t, txn.ForEachTableMutation(txn.CurrentReadView(), 0, 7, 42, func(workspaceEntryView) {
 			seen++
-		})
+		}))
 		require.Equal(t, preDumpLen, seen)
 	case <-time.After(10 * time.Second):
 		t.Fatal("dumpBatch deadlocked on the rogue-update fault variant")
 	}
 }
 
-// TestForEachTableWrites_StaleOffsetBeyondLengthIsSafe verifies the
-// defensive bounds check: an offset captured before a workspace compaction
-// may exceed the current length of txn.writes and must not panic.
-func TestForEachTableWrites_StaleOffsetBeyondLengthIsSafe(t *testing.T) {
+// TestForEachTableMutationStableReadViewSurvivesRetirement verifies that a
+// reader no longer depends on a mutable workspace slice position.
+func TestForEachTableMutationStableReadViewSurvivesRetirement(t *testing.T) {
+	proc := testutil.NewProc(t)
 	txn := &Transaction{
-		writes: []Entry{
-			{databaseId: 7, tableId: 42},
-		},
+		proc:      proc,
+		workspace: newTxnWorkspace(),
 	}
+	mutationID := txn.appendWorkspaceEntryLocked(Entry{
+		databaseId: 7,
+		tableId:    42,
+		bat:        newInt64BatchForTest(t, proc, []string{"pk"}, []int64{1}),
+	})
+	view := txn.CurrentReadView()
+	require.NoError(t, txn.workspace.retireMutation(mutationID))
 
 	seen := 0
-	require.NotPanics(t, func() {
-		txn.ForEachTableWrites(7, 42, 3, func(Entry) {
-			seen++
-		})
-	})
+	require.NoError(t, txn.ForEachTableMutation(view, 0, 7, 42, func(workspaceEntryView) {
+		seen++
+	}))
 	require.Equal(t, 1, seen)
+
+	seen = 0
+	require.NoError(t, txn.ForEachTableMutation(txn.CurrentReadView(), 0, 7, 42, func(workspaceEntryView) {
+		seen++
+	}))
+	require.Zero(t, seen)
+	require.NoError(t, txn.workspace.close(proc.Mp()))
 }

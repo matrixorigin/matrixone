@@ -24,7 +24,6 @@ import (
 	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
-	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
@@ -98,7 +97,7 @@ func (r *readerPathCaptureRelation) BuildReaders(
 	_ *plan.Expr,
 	relData engine.RelData,
 	_ int,
-	_ int,
+	_ client.WorkspaceReadView,
 	_ bool,
 	_ engine.TombstoneApplyPolicy,
 	filterHint engine.FilterHint,
@@ -133,21 +132,38 @@ func TestBuildReadersChoosesOwnerByScanPlacement(t *testing.T) {
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
+			ctrl := gomock.NewController(t)
 			proc := testutil.NewProcess(t)
-			captureEngine := new(readerPathCaptureEngine)
-			captureRelation := new(readerPathCaptureRelation)
+			txnOperator := mock_frontend.NewMockTxnOperator(ctrl)
+			txnOperator.EXPECT().GetWorkspace().Return(&Ws{}).AnyTimes()
+			txnOperator.EXPECT().IsSnapOp().Return(false).AnyTimes()
+			proc.Base.TxnOperator = txnOperator
+
+			tableDef := &plan.TableDef{Name: "t"}
+			node := &plan.Node{
+				ObjRef:   &plan.ObjectRef{SchemaName: "db", ObjName: tableDef.Name},
+				TableDef: tableDef,
+				Stats:    &plan.Stats{BlockNum: 1},
+			}
+			captureRelation := &readerPathCaptureRelation{
+				rangesData: readutil.NewBlockListRelationData(0),
+			}
+			captureEngine := &readerPathCaptureEngine{
+				database: &readerPathCaptureDatabase{relation: captureRelation},
+			}
 			scope := &Scope{
 				Proc:     proc,
 				IsRemote: test.isRemote,
 				DataSource: &Source{
 					Rel:                captureRelation,
-					TableDef:           &plan.TableDef{Name: "t"},
-					FilterList:         []*plan.Expr{plan2.MakeFalseExpr()},
+					node:               node,
+					TableDef:           tableDef,
 					RuntimeFilterSpecs: []*plan.RuntimeFilterSpec{},
 				},
 				NodeInfo: engine.Node{
 					Mcpu:  1,
 					CNCNT: test.cnCount,
+					Data:  readutil.NewBlockListRelationData(0),
 				},
 			}
 			compile := NewMockCompile(t)
@@ -237,6 +253,7 @@ func TestDecodedSingleRemoteScopeBuildsRelationReader(t *testing.T) {
 			remoteProc.Ctx = defines.AttachAccountId(remoteProc.Ctx, 99)
 			txnOperator := mock_frontend.NewMockTxnOperator(ctrl)
 			txnOperator.EXPECT().GetWorkspace().Return(&Ws{}).AnyTimes()
+			txnOperator.EXPECT().IsSnapOp().Return(false).AnyTimes()
 			remoteProc.Base.TxnOperator = txnOperator
 			decodeCtx := &scopeContext{regs: make(map[*process.WaitRegister]int32)}
 			decodeCtx.root = decodeCtx

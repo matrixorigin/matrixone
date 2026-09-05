@@ -29,6 +29,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
+	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 )
 
@@ -459,7 +460,8 @@ func (h *VisibleStateChangesHandle) buildSnapshotReaders(ctx context.Context, re
 	if err != nil {
 		return nil, err
 	}
-	readers, err := rel.BuildReaders(ctx, h.tbl.proc.Load(), nil, relData, 1, 0, false,
+	readers, err := rel.BuildReaders(ctx, h.tbl.proc.Load(), nil, relData, 1,
+		client.NoWorkspaceReadView(), false,
 		engine.Policy_CheckCommittedOnly, engine.FilterHint{})
 	if err != nil {
 		for _, reader := range readers {

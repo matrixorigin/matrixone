@@ -138,7 +138,7 @@ func (r *stubRelation) GetTableDef(ctx context.Context) *plan.TableDef {
 
 func (r *stubRelation) CollectTombstones(
 	ctx context.Context,
-	txnOffset int,
+	readView client.WorkspaceReadView,
 	policy engine.TombstoneCollectPolicy,
 ) (engine.Tombstoner, error) {
 	r.collectTombstonesCall++

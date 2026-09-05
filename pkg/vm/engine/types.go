@@ -1058,7 +1058,7 @@ type RangesShuffleParam struct {
 type RangesParam struct {
 	BlockFilters       []*plan.Expr //Slice of expressions used to filter zonemap
 	PreAllocBlocks     int          //estimated count of blocks
-	TxnOffset          int          //Transaction offset used to specify the starting position for reading data.
+	TxnReadView        client.WorkspaceReadView
 	Policy             DataCollectPolicy
 	Rsp                *RangesShuffleParam
 	DontSupportRelData bool
@@ -1067,7 +1067,7 @@ type RangesParam struct {
 var DefaultRangesParam RangesParam = RangesParam{
 	BlockFilters:       nil,
 	PreAllocBlocks:     2,
-	TxnOffset:          0,
+	TxnReadView:        client.NoWorkspaceReadView(),
 	Policy:             Policy_CollectAllData,
 	DontSupportRelData: true,
 }
@@ -1078,7 +1078,7 @@ type Relation interface {
 
 	Ranges(context.Context, RangesParam) (RelData, error)
 
-	CollectTombstones(ctx context.Context, txnOffset int, policy TombstoneCollectPolicy) (Tombstoner, error)
+	CollectTombstones(ctx context.Context, readView client.WorkspaceReadView, policy TombstoneCollectPolicy) (Tombstoner, error)
 
 	// StarCount returns the total number of visible rows at the current transaction snapshot.
 	// Optimized for COUNT(*) queries by using metadata (total rows - deleted rows)
@@ -1136,7 +1136,7 @@ type Relation interface {
 		expr *plan.Expr,
 		relData RelData,
 		num int,
-		txnOffset int,
+		readView client.WorkspaceReadView,
 		orderBy bool,
 		policy TombstoneApplyPolicy,
 		filterHint FilterHint,
@@ -1148,7 +1148,7 @@ type Relation interface {
 		expr *plan.Expr,
 		relData RelData,
 		num int,
-		txnOffset int,
+		readView client.WorkspaceReadView,
 		orderBy bool,
 		policy TombstoneApplyPolicy,
 	) ([]Reader, error)

@@ -26,6 +26,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
+	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/overfetch"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
@@ -165,6 +166,7 @@ func TestPrepareScalarKeepsTemplateImmutableAcrossParameters(t *testing.T) {
 
 func TestIdentityUsesPublisherBeforeSnapshotTenant(t *testing.T) {
 	currentSnapshot := timestamp.Timestamp{PhysicalTime: 10}
+	readView := client.NewWorkspaceReadView(1, 2, 17)
 	spec := &plan.VectorIndexScan{
 		SourceTable: &plan.ObjectRef{PubInfo: &plan.PubInfo{TenantId: 42}},
 		ScanSnapshot: &plan.Snapshot{
@@ -172,22 +174,22 @@ func TestIdentityUsesPublisherBeforeSnapshotTenant(t *testing.T) {
 			Tenant: &plan.SnapshotTenant{TenantID: 99},
 		},
 	}
-	identity, err := Identity(spec, currentSnapshot, 17, 3, 2)
+	identity, err := Identity(spec, currentSnapshot, readView, 3, 2)
 	require.NoError(t, err)
 	require.Equal(t, uint32(42), *identity.PhysicalAccountID)
-	require.Equal(t, 17, identity.TxnOffset)
+	require.Equal(t, readView, identity.TxnReadView)
 	require.Equal(t, int32(3), identity.PartitionCount)
 	require.Equal(t, int32(2), identity.PartitionIndex)
 	require.NotSame(t, spec.ScanSnapshot, identity.Snapshot)
 
 	spec.SourceTable.PubInfo = nil
-	identity, err = Identity(spec, currentSnapshot, 0, 0, 0)
+	identity, err = Identity(spec, currentSnapshot, client.NoWorkspaceReadView(), 0, 0)
 	require.NoError(t, err)
 	require.Equal(t, uint32(99), *identity.PhysicalAccountID)
 	require.Equal(t, int32(1), identity.PartitionCount)
 
 	spec.SourceTable.PubInfo = &plan.PubInfo{TenantId: -1}
-	_, err = Identity(spec, currentSnapshot, 0, 1, 0)
+	_, err = Identity(spec, currentSnapshot, client.NoWorkspaceReadView(), 1, 0)
 	require.ErrorContains(t, err, "invalid publisher tenant")
 }
 
@@ -205,7 +207,7 @@ func TestIdentityKeepsCurrentTxnForNonHistoricalSnapshot(t *testing.T) {
 				Tenant: &plan.SnapshotTenant{TenantID: 99},
 			},
 		}
-		identity, err := Identity(spec, currentSnapshot, 0, 1, 0)
+		identity, err := Identity(spec, currentSnapshot, client.NoWorkspaceReadView(), 1, 0)
 		require.NoError(t, err)
 		require.Nil(t, identity.Snapshot)
 		require.Nil(t, identity.PhysicalAccountID)
@@ -218,7 +220,7 @@ func TestIdentityKeepsCurrentTxnForNonHistoricalSnapshot(t *testing.T) {
 			TS:     &timestamp.Timestamp{PhysicalTime: 11},
 			Tenant: &plan.SnapshotTenant{TenantID: 99},
 		},
-	}, currentSnapshot, 0, 1, 0)
+	}, currentSnapshot, client.NoWorkspaceReadView(), 1, 0)
 	require.NoError(t, err)
 	require.Nil(t, identity.Snapshot)
 	require.Equal(t, uint32(publisherID), *identity.PhysicalAccountID)
@@ -236,7 +238,7 @@ func TestExecutionRejectsInvalidRuntimeState(t *testing.T) {
 	require.Error(t, nilExecution.EvalBatch(batch.EmptyForConstFoldBatch, proc))
 	require.Nil(t, nilExecution.Spec())
 	nilExecution.Close()
-	_, err = Identity(nil, timestamp.Timestamp{}, 0, 1, 0)
+	_, err = Identity(nil, timestamp.Timestamp{}, client.NoWorkspaceReadView(), 1, 0)
 	require.ErrorContains(t, err, "missing metadata")
 
 	base := func() *plan.VectorIndexScan {

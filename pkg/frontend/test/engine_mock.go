@@ -218,6 +218,58 @@ func (mr *MockTableDefMockRecorder) tableDef() *gomock.Call {
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "tableDef", reflect.TypeOf((*MockTableDef)(nil).tableDef))
 }
 
+// MockconstraintProtoMarshaler is a mock of constraintProtoMarshaler interface.
+type MockconstraintProtoMarshaler struct {
+	ctrl     *gomock.Controller
+	recorder *MockconstraintProtoMarshalerMockRecorder
+}
+
+// MockconstraintProtoMarshalerMockRecorder is the mock recorder for MockconstraintProtoMarshaler.
+type MockconstraintProtoMarshalerMockRecorder struct {
+	mock *MockconstraintProtoMarshaler
+}
+
+// NewMockconstraintProtoMarshaler creates a new mock instance.
+func NewMockconstraintProtoMarshaler(ctrl *gomock.Controller) *MockconstraintProtoMarshaler {
+	mock := &MockconstraintProtoMarshaler{ctrl: ctrl}
+	mock.recorder = &MockconstraintProtoMarshalerMockRecorder{mock}
+	return mock
+}
+
+// EXPECT returns an object that allows the caller to indicate expected use.
+func (m *MockconstraintProtoMarshaler) EXPECT() *MockconstraintProtoMarshalerMockRecorder {
+	return m.recorder
+}
+
+// MarshalTo mocks base method.
+func (m *MockconstraintProtoMarshaler) MarshalTo(arg0 []byte) (int, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "MarshalTo", arg0)
+	ret0, _ := ret[0].(int)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// MarshalTo indicates an expected call of MarshalTo.
+func (mr *MockconstraintProtoMarshalerMockRecorder) MarshalTo(arg0 interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "MarshalTo", reflect.TypeOf((*MockconstraintProtoMarshaler)(nil).MarshalTo), arg0)
+}
+
+// ProtoSize mocks base method.
+func (m *MockconstraintProtoMarshaler) ProtoSize() int {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "ProtoSize")
+	ret0, _ := ret[0].(int)
+	return ret0
+}
+
+// ProtoSize indicates an expected call of ProtoSize.
+func (mr *MockconstraintProtoMarshalerMockRecorder) ProtoSize() *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ProtoSize", reflect.TypeOf((*MockconstraintProtoMarshaler)(nil).ProtoSize))
+}
+
 // MockConstraint is a mock of Constraint interface.
 type MockConstraint struct {
 	ctrl     *gomock.Controller
@@ -1068,33 +1120,33 @@ func (mr *MockRelationMockRecorder) ApproxObjectsNum(ctx interface{}) *gomock.Ca
 }
 
 // BuildReaders mocks base method.
-func (m *MockRelation) BuildReaders(ctx context.Context, proc any, expr *plan.Expr, relData engine.RelData, num, txnOffset int, orderBy bool, policy engine.TombstoneApplyPolicy, filterHint engine.FilterHint) ([]engine.Reader, error) {
+func (m *MockRelation) BuildReaders(ctx context.Context, proc any, expr *plan.Expr, relData engine.RelData, num int, readView client.WorkspaceReadView, orderBy bool, policy engine.TombstoneApplyPolicy, filterHint engine.FilterHint) ([]engine.Reader, error) {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "BuildReaders", ctx, proc, expr, relData, num, txnOffset, orderBy, policy, filterHint)
+	ret := m.ctrl.Call(m, "BuildReaders", ctx, proc, expr, relData, num, readView, orderBy, policy, filterHint)
 	ret0, _ := ret[0].([]engine.Reader)
 	ret1, _ := ret[1].(error)
 	return ret0, ret1
 }
 
 // BuildReaders indicates an expected call of BuildReaders.
-func (mr *MockRelationMockRecorder) BuildReaders(ctx, proc, expr, relData, num, txnOffset, orderBy, policy, filterHint interface{}) *gomock.Call {
+func (mr *MockRelationMockRecorder) BuildReaders(ctx, proc, expr, relData, num, readView, orderBy, policy, filterHint interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "BuildReaders", reflect.TypeOf((*MockRelation)(nil).BuildReaders), ctx, proc, expr, relData, num, txnOffset, orderBy, policy, filterHint)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "BuildReaders", reflect.TypeOf((*MockRelation)(nil).BuildReaders), ctx, proc, expr, relData, num, readView, orderBy, policy, filterHint)
 }
 
 // BuildShardingReaders mocks base method.
-func (m *MockRelation) BuildShardingReaders(ctx context.Context, proc any, expr *plan.Expr, relData engine.RelData, num, txnOffset int, orderBy bool, policy engine.TombstoneApplyPolicy) ([]engine.Reader, error) {
+func (m *MockRelation) BuildShardingReaders(ctx context.Context, proc any, expr *plan.Expr, relData engine.RelData, num int, readView client.WorkspaceReadView, orderBy bool, policy engine.TombstoneApplyPolicy) ([]engine.Reader, error) {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "BuildShardingReaders", ctx, proc, expr, relData, num, txnOffset, orderBy, policy)
+	ret := m.ctrl.Call(m, "BuildShardingReaders", ctx, proc, expr, relData, num, readView, orderBy, policy)
 	ret0, _ := ret[0].([]engine.Reader)
 	ret1, _ := ret[1].(error)
 	return ret0, ret1
 }
 
 // BuildShardingReaders indicates an expected call of BuildShardingReaders.
-func (mr *MockRelationMockRecorder) BuildShardingReaders(ctx, proc, expr, relData, num, txnOffset, orderBy, policy interface{}) *gomock.Call {
+func (mr *MockRelationMockRecorder) BuildShardingReaders(ctx, proc, expr, relData, num, readView, orderBy, policy interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "BuildShardingReaders", reflect.TypeOf((*MockRelation)(nil).BuildShardingReaders), ctx, proc, expr, relData, num, txnOffset, orderBy, policy)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "BuildShardingReaders", reflect.TypeOf((*MockRelation)(nil).BuildShardingReaders), ctx, proc, expr, relData, num, readView, orderBy, policy)
 }
 
 // CollectChanges mocks base method.
@@ -1127,18 +1179,18 @@ func (mr *MockRelationMockRecorder) CollectObjectList(ctx, from, to, bat, mp int
 }
 
 // CollectTombstones mocks base method.
-func (m *MockRelation) CollectTombstones(ctx context.Context, txnOffset int, policy engine.TombstoneCollectPolicy) (engine.Tombstoner, error) {
+func (m *MockRelation) CollectTombstones(ctx context.Context, readView client.WorkspaceReadView, policy engine.TombstoneCollectPolicy) (engine.Tombstoner, error) {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "CollectTombstones", ctx, txnOffset, policy)
+	ret := m.ctrl.Call(m, "CollectTombstones", ctx, readView, policy)
 	ret0, _ := ret[0].(engine.Tombstoner)
 	ret1, _ := ret[1].(error)
 	return ret0, ret1
 }
 
 // CollectTombstones indicates an expected call of CollectTombstones.
-func (mr *MockRelationMockRecorder) CollectTombstones(ctx, txnOffset, policy interface{}) *gomock.Call {
+func (mr *MockRelationMockRecorder) CollectTombstones(ctx, readView, policy interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "CollectTombstones", reflect.TypeOf((*MockRelation)(nil).CollectTombstones), ctx, txnOffset, policy)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "CollectTombstones", reflect.TypeOf((*MockRelation)(nil).CollectTombstones), ctx, readView, policy)
 }
 
 // CopyTableDef mocks base method.
@@ -1999,11 +2051,11 @@ func (mr *MockEngineMockRecorder) AllocateIDByKey(ctx, key interface{}) *gomock.
 // BuildBlockReaders mocks base method.
 func (m *MockEngine) BuildBlockReaders(ctx context.Context, proc any, ts timestamp.Timestamp, expr *plan.Expr, def *plan.TableDef, relData engine.RelData, num int, filterHint ...engine.FilterHint) ([]engine.Reader, error) {
 	m.ctrl.T.Helper()
-	args := []interface{}{ctx, proc, ts, expr, def, relData, num}
-	for _, hint := range filterHint {
-		args = append(args, hint)
+	varargs := []interface{}{ctx, proc, ts, expr, def, relData, num}
+	for _, a := range filterHint {
+		varargs = append(varargs, a)
 	}
-	ret := m.ctrl.Call(m, "BuildBlockReaders", args...)
+	ret := m.ctrl.Call(m, "BuildBlockReaders", varargs...)
 	ret0, _ := ret[0].([]engine.Reader)
 	ret1, _ := ret[1].(error)
 	return ret0, ret1
@@ -2012,9 +2064,8 @@ func (m *MockEngine) BuildBlockReaders(ctx context.Context, proc any, ts timesta
 // BuildBlockReaders indicates an expected call of BuildBlockReaders.
 func (mr *MockEngineMockRecorder) BuildBlockReaders(ctx, proc, ts, expr, def, relData, num interface{}, filterHint ...interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	args := []interface{}{ctx, proc, ts, expr, def, relData, num}
-	args = append(args, filterHint...)
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "BuildBlockReaders", reflect.TypeOf((*MockEngine)(nil).BuildBlockReaders), args...)
+	varargs := append([]interface{}{ctx, proc, ts, expr, def, relData, num}, filterHint...)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "BuildBlockReaders", reflect.TypeOf((*MockEngine)(nil).BuildBlockReaders), varargs...)
 }
 
 // Create mocks base method.
@@ -2333,6 +2384,43 @@ func (m *MockCatalogCacheGCer) GCCatalogCache(ctx context.Context, ago time.Dura
 func (mr *MockCatalogCacheGCerMockRecorder) GCCatalogCache(ctx, ago interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GCCatalogCache", reflect.TypeOf((*MockCatalogCacheGCer)(nil).GCCatalogCache), ctx, ago)
+}
+
+// MockAutoIncrEpochFenceSupporter is a mock of AutoIncrEpochFenceSupporter interface.
+type MockAutoIncrEpochFenceSupporter struct {
+	ctrl     *gomock.Controller
+	recorder *MockAutoIncrEpochFenceSupporterMockRecorder
+}
+
+// MockAutoIncrEpochFenceSupporterMockRecorder is the mock recorder for MockAutoIncrEpochFenceSupporter.
+type MockAutoIncrEpochFenceSupporterMockRecorder struct {
+	mock *MockAutoIncrEpochFenceSupporter
+}
+
+// NewMockAutoIncrEpochFenceSupporter creates a new mock instance.
+func NewMockAutoIncrEpochFenceSupporter(ctrl *gomock.Controller) *MockAutoIncrEpochFenceSupporter {
+	mock := &MockAutoIncrEpochFenceSupporter{ctrl: ctrl}
+	mock.recorder = &MockAutoIncrEpochFenceSupporterMockRecorder{mock}
+	return mock
+}
+
+// EXPECT returns an object that allows the caller to indicate expected use.
+func (m *MockAutoIncrEpochFenceSupporter) EXPECT() *MockAutoIncrEpochFenceSupporterMockRecorder {
+	return m.recorder
+}
+
+// SupportsAutoIncrEpochFence mocks base method.
+func (m *MockAutoIncrEpochFenceSupporter) SupportsAutoIncrEpochFence() bool {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "SupportsAutoIncrEpochFence")
+	ret0, _ := ret[0].(bool)
+	return ret0
+}
+
+// SupportsAutoIncrEpochFence indicates an expected call of SupportsAutoIncrEpochFence.
+func (mr *MockAutoIncrEpochFenceSupporterMockRecorder) SupportsAutoIncrEpochFence() *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "SupportsAutoIncrEpochFence", reflect.TypeOf((*MockAutoIncrEpochFenceSupporter)(nil).SupportsAutoIncrEpochFence))
 }
 
 // MockMembershipFilter is a mock of MembershipFilter interface.

@@ -122,7 +122,7 @@ func TestCombinedTxnTable_BuildShardingReaders(t *testing.T) {
 			nil,
 			nil,
 			0,
-			0,
+			client.WorkspaceReadView{},
 			false,
 			engine.Policy_SkipCommittedS3,
 		)
@@ -889,7 +889,7 @@ func TestCombinedTxnTable_BuildReaders(t *testing.T) {
 		rel2Called := false
 
 		mockRel1 := &mockRelation{
-			buildReadersFunc: func(ctx context.Context, proc any, expr *plan.Expr, relData engine.RelData, num int, txnOffset int, orderBy bool, policy engine.TombstoneApplyPolicy, filterHint engine.FilterHint) ([]engine.Reader, error) {
+			buildReadersFunc: func(ctx context.Context, proc any, expr *plan.Expr, relData engine.RelData, num int, readView client.WorkspaceReadView, orderBy bool, policy engine.TombstoneApplyPolicy, filterHint engine.FilterHint) ([]engine.Reader, error) {
 				rel1Called = true
 				assert.Nil(t, relData)
 				assert.Equal(t, 1, num)
@@ -897,7 +897,7 @@ func TestCombinedTxnTable_BuildReaders(t *testing.T) {
 			},
 		}
 		mockRel2 := &mockRelation{
-			buildReadersFunc: func(ctx context.Context, proc any, expr *plan.Expr, relData engine.RelData, num int, txnOffset int, orderBy bool, policy engine.TombstoneApplyPolicy, filterHint engine.FilterHint) ([]engine.Reader, error) {
+			buildReadersFunc: func(ctx context.Context, proc any, expr *plan.Expr, relData engine.RelData, num int, readView client.WorkspaceReadView, orderBy bool, policy engine.TombstoneApplyPolicy, filterHint engine.FilterHint) ([]engine.Reader, error) {
 				rel2Called = true
 				assert.Nil(t, relData)
 				return []engine.Reader{reader2}, nil
@@ -910,7 +910,7 @@ func TestCombinedTxnTable_BuildReaders(t *testing.T) {
 			},
 		}
 
-		result, err := table.BuildReaders(ctx, nil, nil, nil, 1, 0, false, engine.Policy_CheckAll, engine.FilterHint{})
+		result, err := table.BuildReaders(ctx, nil, nil, nil, 1, client.WorkspaceReadView{}, false, engine.Policy_CheckAll, engine.FilterHint{})
 		assert.NoError(t, err)
 		assert.Equal(t, []engine.Reader{reader1, reader2}, result)
 		assert.True(t, rel1Called)
@@ -924,7 +924,7 @@ func TestCombinedTxnTable_BuildReaders(t *testing.T) {
 			},
 		}
 
-		result, err := table.BuildReaders(ctx, nil, nil, nil, 1, 0, false, engine.Policy_CheckAll, engine.FilterHint{})
+		result, err := table.BuildReaders(ctx, nil, nil, nil, 1, client.WorkspaceReadView{}, false, engine.Policy_CheckAll, engine.FilterHint{})
 		assert.Error(t, err)
 		assert.Nil(t, result)
 		assert.Equal(t, assert.AnError, err)
@@ -932,7 +932,7 @@ func TestCombinedTxnTable_BuildReaders(t *testing.T) {
 
 	t.Run("RelationBuildReadersError", func(t *testing.T) {
 		mockRel := &mockRelation{
-			buildReadersFunc: func(ctx context.Context, proc any, expr *plan.Expr, relData engine.RelData, num int, txnOffset int, orderBy bool, policy engine.TombstoneApplyPolicy, filterHint engine.FilterHint) ([]engine.Reader, error) {
+			buildReadersFunc: func(ctx context.Context, proc any, expr *plan.Expr, relData engine.RelData, num int, readView client.WorkspaceReadView, orderBy bool, policy engine.TombstoneApplyPolicy, filterHint engine.FilterHint) ([]engine.Reader, error) {
 				return nil, assert.AnError
 			},
 		}
@@ -943,7 +943,7 @@ func TestCombinedTxnTable_BuildReaders(t *testing.T) {
 			},
 		}
 
-		result, err := table.BuildReaders(ctx, nil, nil, nil, 1, 0, false, engine.Policy_CheckAll, engine.FilterHint{})
+		result, err := table.BuildReaders(ctx, nil, nil, nil, 1, client.WorkspaceReadView{}, false, engine.Policy_CheckAll, engine.FilterHint{})
 		assert.Error(t, err)
 		assert.Nil(t, result)
 		assert.Equal(t, assert.AnError, err)
@@ -972,7 +972,7 @@ func TestCombinedTxnTable_BuildReaders(t *testing.T) {
 			nil,
 			relData,
 			3,
-			0,
+			client.WorkspaceReadView{},
 			false,
 			engine.Policy_CheckAll,
 			engine.FilterHint{},
@@ -992,7 +992,7 @@ func TestCombinedTxnTable_BuildReaders(t *testing.T) {
 			nil,
 			nil,
 			2,
-			0,
+			client.WorkspaceReadView{},
 			false,
 			engine.Policy_CheckAll,
 			engine.FilterHint{},
@@ -1018,7 +1018,7 @@ func TestCombinedTxnTableBuildReadersPreparesMembershipFilterOnce(t *testing.T) 
 		_ *plan.Expr,
 		_ engine.RelData,
 		_ int,
-		_ int,
+		_ client.WorkspaceReadView,
 		_ bool,
 		_ engine.TombstoneApplyPolicy,
 		hint engine.FilterHint,
@@ -1049,7 +1049,7 @@ func TestCombinedTxnTableBuildReadersPreparesMembershipFilterOnce(t *testing.T) 
 		nil,
 		nil,
 		1,
-		0,
+		client.WorkspaceReadView{},
 		false,
 		engine.Policy_CheckAll,
 		engine.FilterHint{MembershipFilterBytes: payload},
@@ -1453,12 +1453,12 @@ func TestCombinedTxnTable_CollectTombstones(t *testing.T) {
 		}
 
 		mockRel1 := &mockRelation{
-			collectTombstonesFunc: func(ctx context.Context, txnOffset int, policy engine.TombstoneCollectPolicy) (engine.Tombstoner, error) {
+			collectTombstonesFunc: func(ctx context.Context, readView client.WorkspaceReadView, policy engine.TombstoneCollectPolicy) (engine.Tombstoner, error) {
 				return mockTombstone1, nil
 			},
 		}
 		mockRel2 := &mockRelation{
-			collectTombstonesFunc: func(ctx context.Context, txnOffset int, policy engine.TombstoneCollectPolicy) (engine.Tombstoner, error) {
+			collectTombstonesFunc: func(ctx context.Context, readView client.WorkspaceReadView, policy engine.TombstoneCollectPolicy) (engine.Tombstoner, error) {
 				return mockTombstone2, nil
 			},
 		}
@@ -1469,7 +1469,7 @@ func TestCombinedTxnTable_CollectTombstones(t *testing.T) {
 			},
 		}
 
-		result, err := table.CollectTombstones(context.Background(), 0, engine.Policy_CollectAllTombstones)
+		result, err := table.CollectTombstones(context.Background(), client.WorkspaceReadView{}, engine.Policy_CollectAllTombstones)
 		assert.NoError(t, err)
 		assert.NotNil(t, result)
 		// After merging, the first tombstone should have both properties
@@ -1485,7 +1485,7 @@ func TestCombinedTxnTable_CollectTombstones(t *testing.T) {
 			},
 		}
 
-		result, err := table.CollectTombstones(context.Background(), 0, engine.Policy_CollectAllTombstones)
+		result, err := table.CollectTombstones(context.Background(), client.WorkspaceReadView{}, engine.Policy_CollectAllTombstones)
 		assert.Error(t, err)
 		assert.Nil(t, result)
 		assert.Equal(t, assert.AnError, err)
@@ -1494,7 +1494,7 @@ func TestCombinedTxnTable_CollectTombstones(t *testing.T) {
 	// Test case 3: Error from individual table's CollectTombstones
 	t.Run("Error from individual table", func(t *testing.T) {
 		mockRel := &mockRelation{
-			collectTombstonesFunc: func(ctx context.Context, txnOffset int, policy engine.TombstoneCollectPolicy) (engine.Tombstoner, error) {
+			collectTombstonesFunc: func(ctx context.Context, readView client.WorkspaceReadView, policy engine.TombstoneCollectPolicy) (engine.Tombstoner, error) {
 				return nil, assert.AnError
 			},
 		}
@@ -1505,7 +1505,7 @@ func TestCombinedTxnTable_CollectTombstones(t *testing.T) {
 			},
 		}
 
-		result, err := table.CollectTombstones(context.Background(), 0, engine.Policy_CollectAllTombstones)
+		result, err := table.CollectTombstones(context.Background(), client.WorkspaceReadView{}, engine.Policy_CollectAllTombstones)
 		assert.Error(t, err)
 		assert.Nil(t, result)
 		assert.Equal(t, assert.AnError, err)
@@ -1519,7 +1519,7 @@ func TestCombinedTxnTable_CollectTombstones(t *testing.T) {
 			},
 		}
 
-		result, err := table.CollectTombstones(context.Background(), 0, engine.Policy_CollectAllTombstones)
+		result, err := table.CollectTombstones(context.Background(), client.WorkspaceReadView{}, engine.Policy_CollectAllTombstones)
 		assert.NoError(t, err)
 		assert.Nil(t, result)
 	})
@@ -1532,7 +1532,7 @@ func TestCombinedTxnTable_CollectTombstones(t *testing.T) {
 		}
 
 		mockRel := &mockRelation{
-			collectTombstonesFunc: func(ctx context.Context, txnOffset int, policy engine.TombstoneCollectPolicy) (engine.Tombstoner, error) {
+			collectTombstonesFunc: func(ctx context.Context, readView client.WorkspaceReadView, policy engine.TombstoneCollectPolicy) (engine.Tombstoner, error) {
 				return mockTombstone, nil
 			},
 		}
@@ -1543,7 +1543,7 @@ func TestCombinedTxnTable_CollectTombstones(t *testing.T) {
 			},
 		}
 
-		result, err := table.CollectTombstones(context.Background(), 0, engine.Policy_CollectAllTombstones)
+		result, err := table.CollectTombstones(context.Background(), client.WorkspaceReadView{}, engine.Policy_CollectAllTombstones)
 		assert.NoError(t, err)
 		assert.NotNil(t, result)
 		assert.True(t, result.HasAnyInMemoryTombstone())
@@ -2248,14 +2248,14 @@ type mockRelation struct {
 	getColumMetadataScanInfoFunc        func(ctx context.Context, name string, visitTombstone bool) ([]*plan.MetadataScanInfo, error)
 	getNonAppendableObjectStatsFunc     func(ctx context.Context) ([]objectio.ObjectStats, error)
 	approxObjectsNumFunc                func(ctx context.Context) int
-	collectTombstonesFunc               func(ctx context.Context, txnOffset int, policy engine.TombstoneCollectPolicy) (engine.Tombstoner, error)
+	collectTombstonesFunc               func(ctx context.Context, readView client.WorkspaceReadView, policy engine.TombstoneCollectPolicy) (engine.Tombstoner, error)
 	sizeFunc                            func(ctx context.Context, columnName string) (uint64, error)
 	rowsFunc                            func(ctx context.Context) (uint64, error)
 	statsFunc                           func(ctx context.Context, sync bool) (*statsinfo.StatsInfo, error)
 	starCountFunc                       func(ctx context.Context) (uint64, error)
 	estimateCommittedTombstoneCountFunc func(ctx context.Context) (int, error)
 	collectChangesFunc                  func(ctx context.Context, from, to types.TS, skipDeletes bool, mp *mpool.MPool) (engine.ChangesHandle, error)
-	buildReadersFunc                    func(ctx context.Context, proc any, expr *plan.Expr, relData engine.RelData, num int, txnOffset int, orderBy bool, policy engine.TombstoneApplyPolicy, filterHint engine.FilterHint) ([]engine.Reader, error)
+	buildReadersFunc                    func(ctx context.Context, proc any, expr *plan.Expr, relData engine.RelData, num int, readView client.WorkspaceReadView, orderBy bool, policy engine.TombstoneApplyPolicy, filterHint engine.FilterHint) ([]engine.Reader, error)
 }
 
 func (m *mockRelation) Ranges(ctx context.Context, param engine.RangesParam) (engine.RelData, error) {
@@ -2263,14 +2263,14 @@ func (m *mockRelation) Ranges(ctx context.Context, param engine.RangesParam) (en
 }
 
 // Implement other required methods with empty implementations
-func (m *mockRelation) BuildReaders(ctx context.Context, proc any, expr *plan.Expr, relData engine.RelData, num int, txnOffset int, orderBy bool, policy engine.TombstoneApplyPolicy, filterHint engine.FilterHint) ([]engine.Reader, error) {
+func (m *mockRelation) BuildReaders(ctx context.Context, proc any, expr *plan.Expr, relData engine.RelData, num int, readView client.WorkspaceReadView, orderBy bool, policy engine.TombstoneApplyPolicy, filterHint engine.FilterHint) ([]engine.Reader, error) {
 	if m.buildReadersFunc != nil {
-		return m.buildReadersFunc(ctx, proc, expr, relData, num, txnOffset, orderBy, policy, filterHint)
+		return m.buildReadersFunc(ctx, proc, expr, relData, num, readView, orderBy, policy, filterHint)
 	}
 	return nil, nil
 }
 
-func (m *mockRelation) BuildShardingReaders(ctx context.Context, proc any, expr *plan.Expr, relData engine.RelData, num int, txnOffset int, orderBy bool, policy engine.TombstoneApplyPolicy) ([]engine.Reader, error) {
+func (m *mockRelation) BuildShardingReaders(ctx context.Context, proc any, expr *plan.Expr, relData engine.RelData, num int, readView client.WorkspaceReadView, orderBy bool, policy engine.TombstoneApplyPolicy) ([]engine.Reader, error) {
 	return nil, nil
 }
 
@@ -2295,9 +2295,9 @@ func (m *mockRelation) Size(ctx context.Context, columnName string) (uint64, err
 	return 0, nil
 }
 
-func (m *mockRelation) CollectTombstones(ctx context.Context, txnOffset int, policy engine.TombstoneCollectPolicy) (engine.Tombstoner, error) {
+func (m *mockRelation) CollectTombstones(ctx context.Context, readView client.WorkspaceReadView, policy engine.TombstoneCollectPolicy) (engine.Tombstoner, error) {
 	if m.collectTombstonesFunc != nil {
-		return m.collectTombstonesFunc(ctx, txnOffset, policy)
+		return m.collectTombstonesFunc(ctx, readView, policy)
 	}
 	return nil, nil
 }

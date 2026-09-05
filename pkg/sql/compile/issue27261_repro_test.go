@@ -24,15 +24,17 @@ import (
 	mock_morpc "github.com/matrixorigin/matrixone/pkg/common/morpc/mock_morpc"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/defines"
+	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/connector"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/table_scan"
-	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
+	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	metricv2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/readutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	promtestutil "github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/stretchr/testify/require"
@@ -55,13 +57,46 @@ type issue27261BlockingRelation struct {
 	once    sync.Once
 }
 
+type issue27261Engine struct {
+	engine.Engine
+	database engine.Database
+}
+
+func (e *issue27261Engine) Database(
+	context.Context,
+	string,
+	client.TxnOperator,
+) (engine.Database, error) {
+	return e.database, nil
+}
+
+type issue27261Database struct {
+	engine.Database
+	relation engine.Relation
+}
+
+func (db *issue27261Database) Relation(
+	context.Context,
+	string,
+	any,
+) (engine.Relation, error) {
+	return db.relation, nil
+}
+
+func (r *issue27261BlockingRelation) Ranges(
+	context.Context,
+	engine.RangesParam,
+) (engine.RelData, error) {
+	return readutil.NewBlockListRelationData(0), nil
+}
+
 func (r *issue27261BlockingRelation) BuildReaders(
 	ctx context.Context,
 	_ any,
 	_ *plan.Expr,
 	_ engine.RelData,
 	_ int,
-	_ int,
+	_ client.WorkspaceReadView,
 	_ bool,
 	_ engine.TombstoneApplyPolicy,
 	_ engine.FilterHint,
@@ -75,6 +110,35 @@ func (op *issue27261BlockingScan) Call(proc *process.Process) (vm.CallResult, er
 	op.once.Do(func() { close(op.started) })
 	<-proc.Ctx.Done()
 	return vm.CancelResult, proc.Ctx.Err()
+}
+
+func issue27261ReaderBuildFixture(
+	ctrl *gomock.Controller,
+	proc *process.Process,
+	relation engine.Relation,
+) (*Compile, *plan.Node) {
+	txnOperator := mock_frontend.NewMockTxnOperator(ctrl)
+	txnOperator.EXPECT().GetWorkspace().Return(&Ws{}).AnyTimes()
+	txnOperator.EXPECT().IsSnapOp().Return(false).AnyTimes()
+	proc.Base.TxnOperator = txnOperator
+
+	tableDef := &plan.TableDef{Name: "issue27261_reader_build"}
+	node := &plan.Node{
+		NodeType: plan.Node_TABLE_SCAN,
+		ObjRef: &plan.ObjectRef{
+			SchemaName: "issue27261",
+			ObjName:    tableDef.Name,
+		},
+		TableDef: tableDef,
+		Stats:    &plan.Stats{},
+	}
+	compile := &Compile{
+		proc: proc,
+		e: &issue27261Engine{
+			database: &issue27261Database{relation: relation},
+		},
+	}
+	return compile, node
 }
 
 // This is a deterministic reduction of the production failure. A normal
@@ -177,16 +241,19 @@ func TestIssue27261StopSendingDuringParallelReaderBuildStaysGraceful(t *testing.
 	require.NoError(t, completedScope.Run(compile))
 
 	relation := &issue27261BlockingRelation{started: make(chan struct{})}
+	compile, node := issue27261ReaderBuildFixture(ctrl, rootProc, relation)
 	scan := table_scan.NewArgument()
 	blockedConnector := connector.NewArgument().WithReg(reg)
 	blockedConnector.AppendChild(scan)
 	blockedScope := &Scope{
 		Proc:     rootProc.NewContextChildProc(0),
 		RootOp:   blockedConnector,
-		NodeInfo: engine.Node{Mcpu: 2},
+		NodeInfo: engine.Node{Mcpu: 2, CNCNT: 1},
 		DataSource: &Source{
-			Rel:        relation,
-			FilterList: []*plan.Expr{plan2.MakeFalseExpr()},
+			Rel:                relation,
+			node:               node,
+			TableDef:           node.TableDef,
+			RuntimeFilterSpecs: []*plan.RuntimeFilterSpec{},
 		},
 	}
 
@@ -228,6 +295,7 @@ func TestParallelReaderBuildPreservesQueryCancellation(t *testing.T) {
 	)
 	cleanupCountBefore := promtestutil.ToFloat64(cleanupCounter)
 
+	ctrl := gomock.NewController(t)
 	rootProc := testutil.NewProcess(t)
 	queryCtx := rootProc.Base.GetContextBase().BuildQueryCtx(rootProc.GetTopContext())
 	_, cancelQuery := process.GetQueryCtxFromProc(rootProc)
@@ -236,21 +304,24 @@ func TestParallelReaderBuildPreservesQueryCancellation(t *testing.T) {
 
 	reg := process.NewPipelineEdge(1, 1)
 	relation := &issue27261BlockingRelation{started: make(chan struct{})}
+	compile, node := issue27261ReaderBuildFixture(ctrl, rootProc, relation)
 	scan := table_scan.NewArgument()
 	conn := connector.NewArgument().WithReg(reg)
 	conn.AppendChild(scan)
 	scope := &Scope{
 		Proc:     rootProc.NewContextChildProc(0),
 		RootOp:   conn,
-		NodeInfo: engine.Node{Mcpu: 2},
+		NodeInfo: engine.Node{Mcpu: 2, CNCNT: 1},
 		DataSource: &Source{
-			Rel:        relation,
-			FilterList: []*plan.Expr{plan2.MakeFalseExpr()},
+			Rel:                relation,
+			node:               node,
+			TableDef:           node.TableDef,
+			RuntimeFilterSpecs: []*plan.RuntimeFilterSpec{},
 		},
 	}
 
 	result := make(chan error, 1)
-	go func() { result <- scope.ParallelRun(&Compile{proc: rootProc}) }()
+	go func() { result <- scope.ParallelRun(compile) }()
 
 	select {
 	case <-relation.started:

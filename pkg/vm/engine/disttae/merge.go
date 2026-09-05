@@ -31,6 +31,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
+	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/readutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
@@ -94,13 +95,19 @@ func newCNMergeTask(
 
 	source, err := tbl.buildLocalDataSource(
 		ctx,
-		0,
+		client.NoWorkspaceReadView(),
 		relData,
 		engine.Policy_CheckAll,
 		engine.GeneralLocalDataSource)
 	if err != nil {
 		return nil, err
 	}
+	sourceOwned := true
+	defer func() {
+		if sourceOwned {
+			source.Close()
+		}
+	}()
 
 	attrs := make([]string, 0, len(tbl.seqnums))
 	for i := range len(tbl.tableDef.Cols) - 1 {
@@ -131,7 +138,7 @@ func newCNMergeTask(
 		arena = objectio.GetArena(objectio.ArenaLarge)
 	}
 
-	return &cnMergeTask{
+	task := &cnMergeTask{
 		taskId:        gTaskID.Add(1),
 		host:          tbl,
 		snapshot:      snapshot,
@@ -147,7 +154,9 @@ func newCNMergeTask(
 		targetObjSize: targetObjSize,
 		segmentID:     objectio.NewSegmentid(),
 		arena:         arena,
-	}, nil
+	}
+	sourceOwned = false
+	return task, nil
 }
 
 func (t *cnMergeTask) HasBigDelEvent() bool {
@@ -238,6 +247,10 @@ func (t *cnMergeTask) GetMPool() *mpool.MPool {
 func (t *cnMergeTask) HostHintName() string { return "CN" }
 
 func (t *cnMergeTask) Release() {
+	if t.ds != nil {
+		t.ds.Close()
+		t.ds = nil
+	}
 	if t.arena != nil {
 		t.arena.Reset()
 		objectio.PutArena(t.arena)

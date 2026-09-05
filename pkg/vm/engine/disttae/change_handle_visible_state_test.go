@@ -30,6 +30,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	pbplan "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
+	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/stretchr/testify/require"
 )
@@ -197,12 +198,12 @@ func TestNewVisibleStateChangesHandle(t *testing.T) {
 		afterRel.EXPECT().GetTableDef(gomock.Any()).Return(tableDef),
 		beforeRel.EXPECT().Ranges(gomock.Any(), gomock.Any()).Return(nil, nil),
 		beforeRel.EXPECT().BuildReaders(
-			gomock.Any(), gomock.Any(), nil, gomock.Any(), 1, 0, false,
+			gomock.Any(), gomock.Any(), nil, gomock.Any(), 1, client.NoWorkspaceReadView(), false,
 			gomock.Eq(engine.TombstoneApplyPolicy(engine.Policy_CheckCommittedOnly)), engine.FilterHint{},
 		).Return([]engine.Reader{beforeReader}, nil),
 		afterRel.EXPECT().Ranges(gomock.Any(), gomock.Any()).Return(nil, nil),
 		afterRel.EXPECT().BuildReaders(
-			gomock.Any(), gomock.Any(), nil, gomock.Any(), 1, 0, false,
+			gomock.Any(), gomock.Any(), nil, gomock.Any(), 1, client.NoWorkspaceReadView(), false,
 			gomock.Eq(engine.TombstoneApplyPolicy(engine.Policy_CheckCommittedOnly)), engine.FilterHint{},
 		).Return([]engine.Reader{afterReader}, nil),
 	)
@@ -363,7 +364,7 @@ func TestVisibleStateChangesHandleBuildSnapshotReadersErrors(t *testing.T) {
 		partial := &scriptedReader{}
 		rel.EXPECT().Ranges(gomock.Any(), gomock.Any()).Return(nil, nil)
 		rel.EXPECT().BuildReaders(
-			gomock.Any(), gomock.Any(), nil, gomock.Any(), 1, 0, false,
+			gomock.Any(), gomock.Any(), nil, gomock.Any(), 1, client.NoWorkspaceReadView(), false,
 			gomock.Eq(engine.TombstoneApplyPolicy(engine.Policy_CheckCommittedOnly)), engine.FilterHint{},
 		).Return([]engine.Reader{partial}, wantErr)
 
