@@ -22,7 +22,9 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
@@ -42,6 +44,25 @@ func mockSchema(colCnt int, pkIdx int) ([]string, []types.Type, []uint16) {
 		seq = append(seq, uint16(i))
 	}
 	return attrs, typs, seq
+}
+
+func TestSinkerWriteOwnedRejectsBorrowedBackingBeforeStaging(t *testing.T) {
+	data := types.EncodeSlice([]int64{7})
+	lease, err := vector.NewRefCountedBufferLease(data, int64(cap(data)), nil)
+	require.NoError(t, err)
+	vec, err := vector.NewBorrowedFixedVector(types.T_int64.ToType(), 1, data, lease)
+	require.NoError(t, err)
+	lease.Release()
+	bat := batch.NewOffHeap([]string{"v"})
+	bat.Vecs[0] = vec
+	bat.SetRowCount(1)
+
+	owned, err := new(Sinker).WriteOwned(context.Background(), bat)
+	require.False(t, owned)
+	require.ErrorContains(t, err, "unique-owned vector backing")
+	require.True(t, vec.HasBorrowedBacking())
+	bat.Clean(nil)
+	require.Nil(t, lease.Bytes())
 }
 
 func TestNewSinker(t *testing.T) {

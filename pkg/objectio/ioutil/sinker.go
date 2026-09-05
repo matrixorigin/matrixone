@@ -1056,6 +1056,19 @@ func (sinker *Sinker) WriteOwned(
 	ctx context.Context,
 	data *batch.Batch,
 ) (owned bool, err error) {
+	if data == nil {
+		return false, moerr.NewInvalidInput(ctx, "Sinker.WriteOwned requires a batch")
+	}
+	for index, vec := range data.Vecs {
+		if vec == nil {
+			return false, moerr.NewInvalidInputf(ctx,
+				"Sinker.WriteOwned batch has a nil vector at column %d", index)
+		}
+		if vec.HasBorrowedBacking() || vec.NeedDup() {
+			return false, moerr.NewInvalidInputf(ctx,
+				"Sinker.WriteOwned requires unique-owned vector backing at column %d", index)
+		}
+	}
 	if data.RowCount() != objectio.BlockMaxRows {
 		return false, sinker.Write(ctx, data)
 	}

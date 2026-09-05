@@ -1696,6 +1696,7 @@ func TestConstructExternalLegacyPathDoesNotSetIcebergRuntime(t *testing.T) {
 		[]int64{128},
 		makeWholeFileOffsets(1),
 		true,
+		pipeline.ArrowExecutionScope_UnknownArrowExecutionScope,
 	)
 
 	require.Equal(t, int32(plan.ExternType_EXTERNAL_TB), op.Es.Extern.ExternType)

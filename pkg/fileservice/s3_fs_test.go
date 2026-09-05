@@ -173,6 +173,19 @@ func TestObjectCopyCapabilityFallbacks(t *testing.T) {
 	require.Error(t, err)
 }
 
+func TestIsS3BackedFileServiceResolvesWrappers(t *testing.T) {
+	s3 := &S3FS{name: "archive"}
+	local := dummyFileService{name: "local"}
+	services, err := NewFileServices("local", local, s3)
+	require.NoError(t, err)
+
+	require.True(t, IsS3BackedFileService(services, "archive:input.arrow"))
+	require.True(t, IsS3BackedFileService(SubPath(s3, "tenant"), "input.arrow"))
+	require.False(t, IsS3BackedFileService(services, "local:input.arrow"))
+	require.False(t, IsS3BackedFileService(services, "missing:input.arrow"))
+	require.False(t, IsS3BackedFileService(nil, "archive:input.arrow"))
+}
+
 func TestObjectCopyRejectsIncompatibleEndpoints(t *testing.T) {
 	copied, err := (&AwsSDKv2{endpoint: "https://s3-b.example.com"}).CopyObject(
 		context.Background(), &AwsSDKv2{endpoint: "https://s3-a.example.com"}, "src", "dst",

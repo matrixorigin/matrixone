@@ -15,6 +15,7 @@
 package compile
 
 import (
+	"bytes"
 	"cmp"
 	"context"
 	"encoding/hex"
@@ -29,6 +30,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/apache/arrow-go/v18/arrow"
 	"github.com/google/uuid"
 	"github.com/parquet-go/parquet-go"
 
@@ -39,6 +41,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/system"
 	commonutil "github.com/matrixorigin/matrixone/pkg/common/util"
 	"github.com/matrixorigin/matrixone/pkg/config"
+	"github.com/matrixorigin/matrixone/pkg/container/arrowbridge"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -58,6 +61,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/deletion"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/dispatch"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/external"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/external/arrowio"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/fill"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/filter"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/group"
@@ -2386,13 +2390,57 @@ func (c *Compile) getReadWriteParallelFlag(param *tree.ExternParam, fileList []s
 	if !param.Parallel {
 		return false, false
 	}
-	if param.Format == tree.PARQUET {
+	if param.Format == tree.PARQUET || param.Format == tree.ARROW {
 		return false, true
 	}
 	if param.Local || crt.GetCompressType(param.CompressType, fileList[0]) != tree.NOCOMPRESS {
 		return false, true
 	}
 	return true, true
+}
+
+func (c *Compile) arrowExecutionScope(node *plan.Node, param *tree.ExternParam) pipeline.ArrowExecutionScope {
+	if c == nil || param == nil || param.Format != tree.ARROW || node == nil || node.ExternScan == nil ||
+		c.anal == nil || c.anal.qry == nil {
+		return pipeline.ArrowExecutionScope_UnknownArrowExecutionScope
+	}
+	if c.anal.qry.LoadTag && c.anal.qry.StmtType == plan.Query_INSERT &&
+		node.ExternScan.Type == int32(plan.ExternType_LOAD) {
+		return pipeline.ArrowExecutionScope_ArrowLoadData
+	}
+	return pipeline.ArrowExecutionScope_UnknownArrowExecutionScope
+}
+
+func (c *Compile) requireArrowLoadEnabled(
+	param *tree.ExternParam,
+) (config.ArrowLoadParameters, error) {
+	var proc *process.Process
+	if c != nil {
+		proc = c.proc
+	}
+	return plan2.RequireArrowLoadEnabled(proc, param)
+}
+
+func arrowParamForRollout(
+	param *tree.ExternParam,
+	settings config.ArrowLoadParameters,
+) *tree.ExternParam {
+	if param == nil {
+		return param
+	}
+	// Rollout settings are sampled once while the statement is compiled. A
+	// private copy prevents a service-level change, or another compile using the
+	// parser-owned value, from changing policy halfway through one generation.
+	parallel := param.Parallel && settings.DistributedEnabled
+	if parallel == param.Parallel &&
+		settings.ForceMaterialize == param.ArrowForceMaterialize {
+		return param
+	}
+	rollout := new(tree.ExternParam)
+	*rollout = *param
+	rollout.Parallel = parallel
+	rollout.ArrowForceMaterialize = settings.ForceMaterialize
+	return rollout
 }
 
 func (c *Compile) getExternalFileListAndSize(node *plan.Node, param *tree.ExternParam) (fileList []string, fileSize []int64, err error) {
@@ -2428,7 +2476,8 @@ func (c *Compile) getExternalFileListAndSize(node *plan.Node, param *tree.Extern
 			return nil, nil, err
 		}
 	case int32(plan.ExternType_LOAD):
-		if param.Format == tree.PARQUET && strings.ContainsAny(strings.TrimSpace(param.Filepath), "*?[") {
+		if (param.Format == tree.PARQUET || param.Format == tree.ARROW) &&
+			strings.ContainsAny(strings.TrimSpace(param.Filepath), "*?[") {
 			fileList, fileSize, err = plan2.ReadDir(param)
 			if err != nil {
 				return nil, nil, err
@@ -2695,6 +2744,17 @@ func (c *Compile) compileExternScanWithPlanNodeID(node *plan.Node, planNodeID in
 	if err != nil {
 		return nil, err
 	}
+	if param.Format == tree.ARROW &&
+		c.arrowExecutionScope(node, param) != pipeline.ArrowExecutionScope_ArrowLoadData {
+		return nil, moerr.NewNotSupported(c.proc.Ctx, "Arrow format is supported only by LOAD DATA")
+	}
+	if param.Format == tree.ARROW {
+		settings, gateErr := c.requireArrowLoadEnabled(param)
+		if gateErr != nil {
+			return nil, gateErr
+		}
+		param = arrowParamForRollout(param, settings)
+	}
 
 	strictSqlMode = effectiveExternalStrictMode(c.proc, param, strictSqlMode)
 	if param.ScanType == tree.INLINE {
@@ -2724,6 +2784,23 @@ func (c *Compile) compileExternScanWithPlanNodeID(node *plan.Node, planNodeID in
 
 		ret.Proc = c.proc.NewNoContextChildProc(0)
 		return []*Scope{ret}, nil
+	}
+	var arrowRuntime *arrowCompileRuntime
+	if param.Format == tree.ARROW {
+		arrowRuntime, err = c.planArrowCompileRuntime(node, param, fileList, fileSize)
+		if err != nil {
+			return nil, err
+		}
+		if len(fileList) == 1 && len(arrowRuntime.shardsByPath[fileList[0]]) > 1 {
+			return c.compileExternScanArrowRecordBatchFanout(
+				node, param, fileList[0], fileSize[0], strictSqlMode, arrowRuntime,
+			)
+		}
+		if param.Parallel && len(fileList) > 1 {
+			return c.compileExternScanWholeFileFanout(
+				node, param, fileList, fileSize, strictSqlMode, false, arrowRuntime,
+			)
+		}
 	}
 
 	if param.HivePartitioning {
@@ -2759,9 +2836,9 @@ func (c *Compile) compileExternScanWithPlanNodeID(node *plan.Node, planNodeID in
 	if readParallel && writeParallel {
 		return c.compileExternScanParallelReadWrite(node, param, fileList, fileSize, strictSqlMode)
 	} else if writeParallel {
-		return c.compileExternScanParallelWrite(node, param, fileList, fileSize, strictSqlMode)
+		return c.compileExternScanParallelWrite(node, param, fileList, fileSize, strictSqlMode, arrowRuntime)
 	} else {
-		return c.compileExternScanSerialReadWrite(node, param, fileList, fileSize, strictSqlMode)
+		return c.compileExternScanSerialReadWrite(node, param, fileList, fileSize, strictSqlMode, arrowRuntime)
 	}
 }
 
@@ -2810,7 +2887,7 @@ func (c *Compile) compileDatastreamScan(node *plan.Node, strictSqlMode bool) ([]
 
 	scope := c.constructScopeForExternal(c.addr, false)
 	currentFirstFlag := c.anal.isFirst
-	op := constructExternal(node, param, c.proc.Ctx, nil, nil, nil, strictSqlMode)
+	op := constructExternal(node, param, c.proc.Ctx, nil, nil, nil, strictSqlMode, c.arrowExecutionScope(node, param))
 	op.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
 	scope.setRootOperator(op)
 	c.anal.isFirst = false
@@ -2887,7 +2964,7 @@ func (c *Compile) compileForeignScan(node *plan.Node, strictSqlMode bool) ([]*Sc
 
 	scope := c.constructScopeForExternal(c.addr, false)
 	currentFirstFlag := c.anal.isFirst
-	op := constructExternal(node, param, c.proc.Ctx, queryList, fileSize, nil, strictSqlMode)
+	op := constructExternal(node, param, c.proc.Ctx, queryList, fileSize, nil, strictSqlMode, c.arrowExecutionScope(node, param))
 	op.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
 	scope.setRootOperator(op)
 	c.anal.isFirst = false
@@ -2934,7 +3011,7 @@ func (c *Compile) compileKafkaScan(node *plan.Node, strictSqlMode bool) ([]*Scop
 
 	scope := c.constructScopeForExternal(c.addr, false)
 	currentFirstFlag := c.anal.isFirst
-	op := constructExternal(node, param, c.proc.Ctx, nil, nil, nil, strictSqlMode)
+	op := constructExternal(node, param, c.proc.Ctx, nil, nil, nil, strictSqlMode, c.arrowExecutionScope(node, param))
 	op.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
 	scope.setRootOperator(op)
 	c.anal.isFirst = false
@@ -3233,7 +3310,7 @@ func (c *Compile) getLoadWriteS3ParallelSize(node *plan.Node, cpuNum int) int {
 func (c *Compile) compileExternValueScan(node *plan.Node, param *tree.ExternParam, strictSqlMode bool) ([]*Scope, error) {
 	s := c.constructScopeForExternal(c.addr, false)
 	currentFirstFlag := c.anal.isFirst
-	op := constructExternal(node, param, c.proc.Ctx, nil, nil, nil, strictSqlMode)
+	op := constructExternal(node, param, c.proc.Ctx, nil, nil, nil, strictSqlMode, c.arrowExecutionScope(node, param))
 	op.SetIdx(c.anal.curNodeIdx)
 	op.SetIsFirst(currentFirstFlag)
 	s.setRootOperator(op)
@@ -3242,7 +3319,7 @@ func (c *Compile) compileExternValueScan(node *plan.Node, param *tree.ExternPara
 }
 
 // construct one thread to read the file data, then dispatch to mcpu thread to get the filedata for insert
-func (c *Compile) compileExternScanParallelWrite(node *plan.Node, param *tree.ExternParam, fileList []string, fileSize []int64, strictSqlMode bool) ([]*Scope, error) {
+func (c *Compile) compileExternScanParallelWrite(node *plan.Node, param *tree.ExternParam, fileList []string, fileSize []int64, strictSqlMode bool, arrowRuntime ...*arrowCompileRuntime) ([]*Scope, error) {
 	loadEmptyNumericAsZero := param.ExternType == int32(plan.ExternType_LOAD) &&
 		(param.Parallel || param.ParallelLoadRequested)
 	param.Parallel = false
@@ -3254,7 +3331,7 @@ func (c *Compile) compileExternScanParallelWrite(node *plan.Node, param *tree.Ex
 	}
 	scope := c.constructScopeForExternal(c.addr, false)
 	currentFirstFlag := c.anal.isFirst
-	extern := constructExternal(node, param, c.proc.Ctx, fileList, fileSize, fileOffsetTmp, strictSqlMode)
+	extern := constructExternal(node, param, c.proc.Ctx, fileList, fileSize, fileOffsetTmp, strictSqlMode, c.arrowExecutionScope(node, param), arrowRuntime...)
 	parallelLoad := true
 	if len(fileList) > 0 && crt.GetCompressType(param.CompressType, fileList[0]) != tree.NOCOMPRESS {
 		parallelLoad = false
@@ -3334,6 +3411,356 @@ type parquetRowGroupSegment struct {
 	load      int64
 }
 
+const (
+	arrowConversionPlanVersion          = arrowbridge.ConversionPlanVersion
+	arrowPlanningAccountLimit    uint64 = 64 << 20
+	arrowPlanningAllocationSlots        = 65_536
+	arrowMaxPlannedShards               = 4_096
+)
+
+type arrowCompileRuntime struct {
+	identitiesByPath      map[string]*pipeline.ArrowObjectIdentity
+	shardsByPath          map[string][]*pipeline.ArrowRecordBatchShard
+	schemaFingerprint     []byte
+	conversionPlanVersion uint32
+}
+
+func (r *arrowCompileRuntime) identitiesFor(fileList []string) []*pipeline.ArrowObjectIdentity {
+	if r == nil || len(r.identitiesByPath) == 0 {
+		return nil
+	}
+	identities := make([]*pipeline.ArrowObjectIdentity, 0, len(fileList))
+	for localIndex, path := range fileList {
+		identity := r.identitiesByPath[path]
+		if identity == nil {
+			continue
+		}
+		clone := *identity
+		clone.FileIndex = int32(localIndex)
+		identities = append(identities, &clone)
+	}
+	return identities
+}
+
+func (r *arrowCompileRuntime) shardsFor(fileList []string) []*pipeline.ArrowRecordBatchShard {
+	if r == nil || len(r.shardsByPath) == 0 {
+		return nil
+	}
+	var shards []*pipeline.ArrowRecordBatchShard
+	for localIndex, path := range fileList {
+		for _, shard := range r.shardsByPath[path] {
+			if shard == nil {
+				continue
+			}
+			clone := *shard
+			clone.FileIndex = int32(localIndex)
+			clone.RequiredDictionaryBlockIndices = append([]int32(nil), shard.RequiredDictionaryBlockIndices...)
+			shards = append(shards, &clone)
+		}
+	}
+	return shards
+}
+
+func (r *arrowCompileRuntime) forShard(
+	path string,
+	shard *pipeline.ArrowRecordBatchShard,
+) *arrowCompileRuntime {
+	if r == nil || shard == nil {
+		return nil
+	}
+	result := &arrowCompileRuntime{
+		identitiesByPath:      make(map[string]*pipeline.ArrowObjectIdentity, 1),
+		shardsByPath:          make(map[string][]*pipeline.ArrowRecordBatchShard, 1),
+		schemaFingerprint:     append([]byte(nil), r.schemaFingerprint...),
+		conversionPlanVersion: r.conversionPlanVersion,
+	}
+	if identity := r.identitiesByPath[path]; identity != nil {
+		clone := *identity
+		result.identitiesByPath[path] = &clone
+	}
+	clone := *shard
+	clone.FileIndex = 0
+	clone.RequiredDictionaryBlockIndices = append([]int32(nil), shard.RequiredDictionaryBlockIndices...)
+	result.shardsByPath[path] = []*pipeline.ArrowRecordBatchShard{&clone}
+	return result
+}
+
+func (c *Compile) planArrowCompileRuntime(
+	node *plan.Node,
+	param *tree.ExternParam,
+	fileList []string,
+	fileSize []int64,
+) (_ *arrowCompileRuntime, retErr error) {
+	ctx := c.proc.Ctx
+	registry, err := mpool.NewAllocationAccountRegistry(1, arrowPlanningAllocationSlots)
+	if err != nil {
+		return nil, err
+	}
+	account, err := registry.Open(arrowPlanningAccountLimit)
+	if err != nil {
+		return nil, err
+	}
+	defer func() {
+		account.Seal()
+		_, finalizeErr := registry.Finalize(account)
+		if finalizeErr != nil {
+			retErr = errors.Join(retErr, finalizeErr)
+		}
+	}()
+	admission, err := fileservice.NewAllocationAccountRangeAdmission(
+		account,
+		mpool.AllocationOwnerExternal,
+		2,
+		mpool.AllocationCapacityClassDefault,
+	)
+	if err != nil {
+		return nil, err
+	}
+	runtime := &arrowCompileRuntime{
+		identitiesByPath:      make(map[string]*pipeline.ArrowObjectIdentity, len(fileList)),
+		shardsByPath:          make(map[string][]*pipeline.ArrowRecordBatchShard),
+		conversionPlanVersion: arrowConversionPlanVersion,
+	}
+	attrs := buildArrowExternalAttrs(node)
+	targets, err := external.BuildArrowTargets(ctx, attrs, node.TableDef.Cols)
+	if err != nil {
+		return nil, err
+	}
+	matchMode := arrowbridge.MatchByName
+	if param.ArrowMatchByPosition {
+		matchMode = arrowbridge.MatchByPosition
+	}
+	container, err := arrowCompileContainer(param.ArrowContainer)
+	if err != nil {
+		return nil, err
+	}
+	for fileIndex, filePath := range fileList {
+		if fileIndex >= len(fileSize) || fileSize[fileIndex] < 0 {
+			return nil, moerr.NewInvalidInputf(ctx, "Arrow file %d has no valid planned size", fileIndex)
+		}
+		fs, readPath, err := plan2.GetForETLWithType(param, filePath)
+		if err != nil {
+			return nil, err
+		}
+		identityFS, ok := fs.(fileservice.ObjectIdentityFileService)
+		if !ok {
+			if param.ScanType == tree.S3 {
+				return nil, moerr.NewNotSupported(ctx, "S3 Arrow LOAD requires versioned or conditional object reads")
+			}
+		} else {
+			identity, err := identityFS.StatFileIdentity(ctx, readPath)
+			if err != nil {
+				return nil, err
+			}
+			if err := identity.Validate(); err != nil {
+				return nil, err
+			}
+			if identity.Size != fileSize[fileIndex] {
+				return nil, errors.Join(fileservice.ErrObjectChanged,
+					moerr.NewInternalErrorNoCtxf("Arrow object %d size changed from %d to %d",
+						fileIndex, fileSize[fileIndex], identity.Size))
+			}
+			lastModified := int64(0)
+			if !identity.LastModified.IsZero() {
+				lastModified = identity.LastModified.UnixNano()
+			}
+			runtime.identitiesByPath[filePath] = &pipeline.ArrowObjectIdentity{
+				FileIndex: int32(fileIndex), VersionId: identity.VersionID, Etag: identity.ETag,
+				Size: identity.Size, LastModifiedUnixNano: lastModified,
+			}
+		}
+		var expectedIdentity *fileservice.ObjectIdentity
+		if planned := runtime.identitiesByPath[filePath]; planned != nil {
+			expectedIdentity = &fileservice.ObjectIdentity{
+				VersionID: planned.VersionId, ETag: planned.Etag, Size: planned.Size,
+			}
+			if planned.LastModifiedUnixNano != 0 {
+				expectedIdentity.LastModified = time.Unix(0, planned.LastModifiedUnixNano).UTC()
+			}
+		}
+		actualContainer := container
+		if actualContainer == arrowio.ContainerAuto {
+			actualContainer, err = arrowio.DetectContainer(
+				ctx, fs, readPath, fileSize[fileIndex], admission,
+				arrowio.Options{ExpectedIdentity: expectedIdentity},
+			)
+			if err != nil {
+				return nil, err
+			}
+		}
+
+		var schema *arrow.Schema
+		var filePlan *arrowio.FilePlan
+		switch actualContainer {
+		case arrowio.ContainerFile:
+			filePlan, err = arrowio.InspectFile(
+				ctx, fs, readPath, fileSize[fileIndex], admission,
+				arrowio.Options{ExpectedIdentity: expectedIdentity},
+			)
+			if err != nil {
+				return nil, err
+			}
+			schema = filePlan.Schema
+		case arrowio.ContainerStream:
+			reader, openErr := arrowio.Open(
+				ctx, fs, readPath, fileSize[fileIndex], actualContainer, admission,
+				arrowio.Options{ExpectedIdentity: expectedIdentity},
+			)
+			if openErr != nil {
+				return nil, openErr
+			}
+			schema = reader.Schema()
+			if closeErr := reader.Close(); closeErr != nil {
+				return nil, closeErr
+			}
+		default:
+			return nil, moerr.NewInvalidInputf(ctx, "invalid Arrow IPC container %d", actualContainer)
+		}
+		// Compile and execution must fingerprint the same explicit LOAD policy;
+		// exact result protocols use a separate binder and version contract.
+		conversionPlan, err := arrowbridge.BindLoad(ctx, schema, targets, matchMode)
+		if err != nil {
+			return nil, err
+		}
+		fingerprint := conversionPlan.Fingerprint()
+		if len(runtime.schemaFingerprint) == 0 {
+			runtime.schemaFingerprint = append([]byte(nil), fingerprint[:]...)
+		} else if !bytes.Equal(runtime.schemaFingerprint, fingerprint[:]) {
+			return nil, moerr.NewInvalidInputf(ctx,
+				"Arrow schema and conversion contract for object %d differs from earlier objects", fileIndex)
+		}
+		if filePlan != nil && param.Parallel && len(fileList) == 1 && len(filePlan.RecordBatches) > 1 {
+			desiredShards := len(c.getHiveFileFanoutNodes(
+				param, min(len(filePlan.RecordBatches), arrowMaxPlannedShards),
+			))
+			if desiredShards > 1 {
+				runtime.shardsByPath[filePath], err = buildArrowRecordBatchShards(
+					fileIndex, filePlan, desiredShards,
+				)
+				if err != nil {
+					return nil, err
+				}
+			}
+		}
+	}
+	return runtime, nil
+}
+
+func arrowCompileContainer(value string) (arrowio.Container, error) {
+	switch value {
+	case "", tree.ARROW_CONTAINER_AUTO:
+		return arrowio.ContainerAuto, nil
+	case tree.ARROW_CONTAINER_FILE:
+		return arrowio.ContainerFile, nil
+	case tree.ARROW_CONTAINER_STREAM:
+		return arrowio.ContainerStream, nil
+	default:
+		return 0, moerr.NewInvalidInputNoCtxf("invalid Arrow IPC container %q", value)
+	}
+}
+
+func buildArrowRecordBatchShards(
+	fileIndex int,
+	filePlan *arrowio.FilePlan,
+	desired int,
+) ([]*pipeline.ArrowRecordBatchShard, error) {
+	if filePlan == nil || desired <= 0 || len(filePlan.RecordBatches) == 0 {
+		return nil, moerr.NewInvalidInputNoCtx("invalid Arrow record-batch shard plan")
+	}
+	desired = min(desired, len(filePlan.RecordBatches), arrowMaxPlannedShards)
+	shards := make([]*pipeline.ArrowRecordBatchShard, 0, desired)
+	var remainingWireBytes int64
+	for _, record := range filePlan.RecordBatches {
+		if record.WireBytes < 0 || record.WireBytes > math.MaxInt64-remainingWireBytes {
+			return nil, moerr.NewInvalidInputNoCtx("Arrow record-batch wire size overflows")
+		}
+		remainingWireBytes += record.WireBytes
+	}
+	start := 0
+	for shardIndex := 0; shardIndex < desired; shardIndex++ {
+		remainingRecords := len(filePlan.RecordBatches) - start
+		remainingShards := desired - shardIndex
+		end := start + 1
+		if remainingShards > 1 {
+			divisor := int64(remainingShards)
+			targetBytes := remainingWireBytes / divisor
+			if remainingWireBytes%divisor != 0 {
+				targetBytes++
+			}
+			var shardBytes int64
+			lastAllowedEnd := len(filePlan.RecordBatches) - remainingShards + 1
+			for end <= lastAllowedEnd {
+				shardBytes += filePlan.RecordBatches[end-1].WireBytes
+				if shardBytes >= targetBytes || end == lastAllowedEnd {
+					break
+				}
+				end++
+			}
+		} else {
+			end = start + remainingRecords
+		}
+		fileShard, rows, wireBytes, err := filePlan.Shard(start, end)
+		if err != nil {
+			return nil, err
+		}
+		shards = append(shards, &pipeline.ArrowRecordBatchShard{
+			FileIndex: int32(fileIndex), RecordBatchStart: fileShard.RecordBatchStart,
+			RecordBatchEnd: fileShard.RecordBatchEnd,
+			RequiredDictionaryBlockIndices: append(
+				[]int32(nil), fileShard.RequiredDictionaryBlockIndices...,
+			),
+			EstimatedRows: rows, EstimatedWireBytes: wireBytes,
+		})
+		for _, record := range filePlan.RecordBatches[start:end] {
+			remainingWireBytes -= record.WireBytes
+		}
+		start = end
+	}
+	return shards, nil
+}
+
+func (c *Compile) compileExternScanArrowRecordBatchFanout(
+	node *plan.Node,
+	param *tree.ExternParam,
+	filePath string,
+	fileSize int64,
+	strictSQLMode bool,
+	runtime *arrowCompileRuntime,
+) ([]*Scope, error) {
+	shards := runtime.shardsByPath[filePath]
+	if len(shards) <= 1 {
+		return nil, moerr.NewInvalidInput(c.proc.Ctx, "Arrow record-batch fanout requires multiple shards")
+	}
+	nodes := c.getHiveFileFanoutNodes(param, len(shards))
+	if len(nodes) != len(shards) {
+		return nil, moerr.NewInternalErrorf(c.proc.Ctx,
+			"Arrow planned %d record-batch shards for %d workers", len(shards), len(nodes))
+	}
+	stageNodes := c.queryWorkerStageNodes()
+	scopes := make([]*Scope, 0, len(shards))
+	currentFirstFlag := c.anal.isFirst
+	for index, shard := range shards {
+		shardParam := new(tree.ExternParam)
+		*shardParam = *param
+		shardParam.Parallel = false
+		remote := param.ScanType == tree.S3 && len(stageNodes) > 0
+		scope := c.constructScopeForExternalNode(nodes[index], remote)
+		scope.NodeInfo.Mcpu = 1
+		scope.IsLoad = true
+		op := constructExternal(
+			node, shardParam, c.proc.Ctx,
+			[]string{filePath}, []int64{fileSize}, makeWholeFileOffsets(1),
+			strictSQLMode, c.arrowExecutionScope(node, shardParam),
+			runtime.forShard(filePath, shard),
+		)
+		op.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
+		scope.setRootOperator(op)
+		scopes = append(scopes, scope)
+	}
+	c.anal.isFirst = false
+	return scopes, nil
+}
+
 type icebergDataFileScopeShard struct {
 	node      engine.Node
 	fileList  []string
@@ -3362,13 +3789,13 @@ func (c *Compile) compileExternScanParquetLoadFileFanout(node *plan.Node, param 
 	return c.compileExternScanWholeFileFanout(node, param, fileList, fileSize, strictSqlMode, true)
 }
 
-func (c *Compile) compileExternScanWholeFileFanout(node *plan.Node, param *tree.ExternParam, fileList []string, fileSize []int64, strictSqlMode bool, parquetWholeFileFanout bool) ([]*Scope, error) {
+func (c *Compile) compileExternScanWholeFileFanout(node *plan.Node, param *tree.ExternParam, fileList []string, fileSize []int64, strictSqlMode bool, parquetWholeFileFanout bool, arrowRuntime ...*arrowCompileRuntime) ([]*Scope, error) {
 	nodes := c.getHiveFileFanoutNodes(param, len(fileList))
 	shards := splitHiveFileShards(fileList, fileSize, nodes)
 	if len(shards) <= 1 {
 		serialParam := *param
 		serialParam.Parallel = false
-		return c.compileExternScanSerialReadWrite(node, &serialParam, fileList, fileSize, strictSqlMode)
+		return c.compileExternScanSerialReadWrite(node, &serialParam, fileList, fileSize, strictSqlMode, arrowRuntime...)
 	}
 
 	ss := make([]*Scope, 0, len(shards))
@@ -3392,6 +3819,8 @@ func (c *Compile) compileExternScanWholeFileFanout(node *plan.Node, param *tree.
 			shard.fileList, shard.fileSize,
 			makeWholeFileOffsets(len(shard.fileList)),
 			strictSqlMode,
+			c.arrowExecutionScope(node, shardParam),
+			arrowRuntime...,
 		)
 		op.Es.ParquetWholeFileFanout = parquetWholeFileFanout
 		op.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
@@ -3439,6 +3868,7 @@ func (c *Compile) compileExternScanIcebergShard(
 		shard.fileList, shard.fileSize,
 		makeWholeFileOffsets(len(shard.fileList)),
 		strictSqlMode,
+		c.arrowExecutionScope(node, param),
 	)
 	if err := attachIcebergRuntimeToExternal(c.proc.Ctx, op, runtime, shard.dataTasks); err != nil {
 		return nil, err
@@ -3486,6 +3916,7 @@ func (c *Compile) compileExternScanParquetRowGroupFanout(
 			shard.fileList, shard.fileSize,
 			makeWholeFileOffsets(len(shard.fileList)),
 			strictSqlMode,
+			c.arrowExecutionScope(node, shardParam),
 		)
 		op.Es.ParquetRowGroupShards = shard.rowGroupShards
 		op.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
@@ -4351,7 +4782,7 @@ func (c *Compile) compileExternScanParallelReadWrite(node *plan.Node, param *tre
 		}
 		logutil.Infof("compileExternScanParallelReadWrite, len of cnList is %d, cn addr is %s, mcpu is %d, filepath is %s, file size is %d", len(stageNodes), stageNodes[i].Addr, scope.NodeInfo.Mcpu, param.ExParamConst.Filepath, param.ExParamConst.FileSize)
 		logutil.Infof("compileExternScanParallelReadWrite, %v\n", fileOffsetTmp)
-		op := constructExternal(node, param, c.proc.Ctx, fileList, fileSize, fileOffsetTmp, strictSqlMode)
+		op := constructExternal(node, param, c.proc.Ctx, fileList, fileSize, fileOffsetTmp, strictSqlMode, c.arrowExecutionScope(node, param))
 		op.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
 		scope.setRootOperator(op)
 		pre += count
@@ -4364,7 +4795,7 @@ func (c *Compile) compileExternScanParallelReadWrite(node *plan.Node, param *tre
 	return ss, nil
 }
 
-func (c *Compile) compileExternScanSerialReadWrite(node *plan.Node, param *tree.ExternParam, fileList []string, fileSize []int64, strictSqlMode bool) ([]*Scope, error) {
+func (c *Compile) compileExternScanSerialReadWrite(node *plan.Node, param *tree.ExternParam, fileList []string, fileSize []int64, strictSqlMode bool, arrowRuntime ...*arrowCompileRuntime) ([]*Scope, error) {
 	ss := make([]*Scope, 1)
 	ss[0] = c.constructScopeForExternal(c.addr, param.Parallel)
 
@@ -4376,7 +4807,7 @@ func (c *Compile) compileExternScanSerialReadWrite(node *plan.Node, param *tree.
 		fileOffsetTmp[j].Offset = make([]int64, 0)
 		fileOffsetTmp[j].Offset = append(fileOffsetTmp[j].Offset, []int64{param.FileStartOff, -1}...)
 	}
-	op := constructExternal(node, param, c.proc.Ctx, fileList, fileSize, fileOffsetTmp, strictSqlMode)
+	op := constructExternal(node, param, c.proc.Ctx, fileList, fileSize, fileOffsetTmp, strictSqlMode, c.arrowExecutionScope(node, param), arrowRuntime...)
 	op.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
 	ss[0].setRootOperator(op)
 	c.anal.isFirst = false
@@ -7131,6 +7562,19 @@ func supportsRemoteParquetWholeFileFanout(service string) bool {
 	}
 	protocolVersion, ok := version.(int64)
 	return ok && protocolVersion >= defines.MORPCVersion45
+}
+
+func supportsRemoteArrowLoadPipeline(service string) bool {
+	rt := moruntime.ServiceRuntime(service)
+	if rt == nil {
+		return false
+	}
+	version, ok := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
+	if !ok {
+		return false
+	}
+	protocolVersion, ok := version.(int64)
+	return ok && protocolVersion >= defines.MORPCVersion48
 }
 
 func (c *Compile) canCompileShuffleGroup(node *plan.Node) bool {

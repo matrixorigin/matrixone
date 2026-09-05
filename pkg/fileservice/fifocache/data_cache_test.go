@@ -16,6 +16,7 @@ package fifocache
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strconv"
 	"strings"
@@ -195,5 +196,60 @@ func TestDataCacheCallbacksReceiveCapturedLogicalSize(t *testing.T) {
 	}
 	if postEvict != want {
 		t.Fatalf("post-evict sizes = %+v, want %+v", postEvict, want)
+	}
+}
+
+func TestDataCachePinAdmissionPrecedesRetain(t *testing.T) {
+	var events []string
+	cache := NewDataCache(
+		fscache.ConstCapacity(1024),
+		nil,
+		func(context.Context, fscache.CacheKey, fscache.Data, int64) {
+			events = append(events, "retain")
+		},
+		nil,
+	)
+	key := fscache.CacheKey{Path: "foo", Sz: 3}
+	if _, err := cache.Set(context.Background(), key, testBytes(make([]byte, 3, 8))); err != nil {
+		t.Fatal(err)
+	}
+
+	data, release, ok, err := cache.GetWithPinAdmission(
+		context.Background(), key,
+		func(capacity int64) (func(), error) {
+			if capacity != 8 {
+				t.Fatalf("admitted capacity = %d, want 8", capacity)
+			}
+			events = append(events, "admit")
+			return func() { events = append(events, "release") }, nil
+		},
+	)
+	if err != nil || !ok || data == nil {
+		t.Fatalf("admitted get = (%v, %v, %v), want cache hit", data, ok, err)
+	}
+	if fmt.Sprint(events) != "[admit retain]" {
+		t.Fatalf("callback order = %v, want admission before retain", events)
+	}
+	release()
+	if fmt.Sprint(events) != "[admit retain release]" {
+		t.Fatalf("callback order after release = %v", events)
+	}
+
+	rejected := errors.New("rejected")
+	rejectedRelease := 0
+	_, _, ok, err = cache.GetWithPinAdmission(
+		context.Background(), key,
+		func(int64) (func(), error) {
+			return func() { rejectedRelease++ }, rejected
+		},
+	)
+	if !errors.Is(err, rejected) || ok {
+		t.Fatalf("rejected get = (ok=%v, err=%v)", ok, err)
+	}
+	if rejectedRelease != 1 {
+		t.Fatalf("rejected admission release count = %d, want 1", rejectedRelease)
+	}
+	if fmt.Sprint(events) != "[admit retain release]" {
+		t.Fatalf("rejected admission unexpectedly retained data: %v", events)
 	}
 }

@@ -2512,10 +2512,14 @@ func buildCreateTable(
 	} else if stmt.Param != nil {
 		for i := 0; i < len(stmt.Param.Option); i += 2 {
 			switch strings.ToLower(stmt.Param.Option[i]) {
-			case "endpoint", "region", "access_key_id", "secret_access_key", "bucket", "filepath", "compression", "format", "jsondata", "provider", "role_arn", "external_id", "hive_partitioning", "hive_partition_columns", ExternalWriteFilePatternKey, CSVCommentKey:
+			case "endpoint", "region", "access_key_id", "secret_access_key", "bucket", "filepath", "compression", "format", "jsondata", "provider", "role_arn", "external_id", "hive_partitioning", "hive_partition_columns", "arrow_container", ExternalWriteFilePatternKey, CSVCommentKey:
 			default:
 				return nil, moerr.NewBadConfigf(ctx.GetContext(), "the keyword '%s' is not support", strings.ToLower(stmt.Param.Option[i]))
 			}
+		}
+		if strings.EqualFold(getRawOption(stmt.Param.Option, "format"), tree.ARROW) ||
+			strings.EqualFold(stmt.Param.Format, tree.ARROW) {
+			return nil, moerr.NewNotSupported(ctx.GetContext(), "Arrow format is supported only by LOAD DATA")
 		}
 
 		if err := validateWriteFilePattern(ctx.GetContext(), stmt.Param, createTable.TableDef); err != nil {

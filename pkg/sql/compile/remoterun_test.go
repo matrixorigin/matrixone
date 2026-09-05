@@ -1371,6 +1371,88 @@ func TestParquetWholeFileFanoutRemoteProtocolValidationAtSendAndReceiveBoundarie
 	require.ErrorContains(t, err, "MORPC protocol version 45")
 }
 
+func TestArrowLoadRemoteProtocolValidationAtSendAndReceiveBoundaries(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	rt := moruntime.ServiceRuntime(proc.GetService())
+	previous, hadPrevious := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
+	t.Cleanup(func() {
+		if hadPrevious {
+			rt.SetGlobalVariables(moruntime.MOProtocolVersion, previous)
+		} else {
+			rt.CompareAndDeleteGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion46)
+		}
+	})
+
+	scope := &Scope{Proc: proc, RootOp: external.NewArgument().WithEs(
+		&external.ExternalParam{
+			ExParamConst: external.ExParamConst{ArrowExecutionScope: pipeline.ArrowExecutionScope_ArrowLoadData},
+			ExParam:      external.ExParam{Fileparam: &external.ExFileparam{}, Filter: &external.FilterParam{}},
+		},
+	)}
+
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion48)
+	data, err := encodeRemoteScope(scope, proc)
+	require.NoError(t, err)
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion47)
+	_, err = encodeRemoteScope(scope, proc)
+	require.ErrorContains(t, err, "MORPC protocol version 48")
+	_, err = decodeScope(data, proc, true, nil)
+	require.ErrorContains(t, err, "MORPC protocol version 48")
+}
+
+func TestExternalScanArrowRuntimeRoundtrip(t *testing.T) {
+	ctx := &scopeContext{id: 1, root: &scopeContext{}, parent: &scopeContext{}}
+	proc := &process.Process{Base: &process.BaseProcess{}}
+	identities := []*pipeline.ArrowObjectIdentity{{
+		FileIndex: 1, VersionId: "version-7", Etag: "etag-7", Size: 8192,
+		LastModifiedUnixNano: 1234,
+	}}
+	shards := []*pipeline.ArrowRecordBatchShard{{
+		FileIndex: 1, RecordBatchStart: 2, RecordBatchEnd: 5,
+		RequiredDictionaryBlockIndices: []int32{0, 3},
+		EstimatedRows:                  100, EstimatedWireBytes: 4096,
+	}}
+	fingerprint := []byte("01234567890123456789012345678901")
+	op := external.NewArgument().WithEs(&external.ExternalParam{
+		ExParamConst: external.ExParamConst{
+			ArrowExecutionScope:        pipeline.ArrowExecutionScope_ArrowLoadData,
+			ArrowForceMaterialize:      true,
+			ArrowObjectIdentities:      identities,
+			ArrowRecordBatchShards:     shards,
+			ArrowSchemaFingerprint:     fingerprint,
+			ArrowConversionPlanVersion: arrowConversionPlanVersion,
+			FileList:                   []string{"s3://bucket/part.arrow"},
+			FileSize:                   []int64{8192},
+			FileOffsetTotal:            []*pipeline.FileOffset{{Offset: []int64{0, -1}}},
+		},
+		ExParam: external.ExParam{Fileparam: &external.ExFileparam{}, Filter: &external.FilterParam{}},
+	})
+
+	_, instruction, err := convertToPipelineInstruction(op, proc, ctx, 1)
+	require.NoError(t, err)
+	require.Equal(t, pipeline.ArrowExecutionScope_ArrowLoadData, instruction.ExternalScan.ArrowExecutionScope)
+	require.True(t, instruction.ExternalScan.ArrowForceMaterialize)
+	require.Equal(t, identities, instruction.ExternalScan.ArrowObjectIdentities)
+	require.Equal(t, shards, instruction.ExternalScan.ArrowRecordBatchShards)
+	require.Equal(t, fingerprint, instruction.ExternalScan.ArrowSchemaFingerprint)
+	require.Equal(t, arrowConversionPlanVersion, instruction.ExternalScan.ArrowConversionPlanVersion)
+
+	wire, err := instruction.Marshal()
+	require.NoError(t, err)
+	wireInstruction := new(pipeline.Instruction)
+	require.NoError(t, wireInstruction.Unmarshal(wire))
+
+	restored, err := convertToVmOperator(wireInstruction, ctx, nil)
+	require.NoError(t, err)
+	restoredExternal := restored.(*external.External)
+	require.Equal(t, pipeline.ArrowExecutionScope_ArrowLoadData, restoredExternal.Es.ArrowExecutionScope)
+	require.True(t, restoredExternal.Es.ArrowForceMaterialize)
+	require.Equal(t, identities, restoredExternal.Es.ArrowObjectIdentities)
+	require.Equal(t, shards, restoredExternal.Es.ArrowRecordBatchShards)
+	require.Equal(t, fingerprint, restoredExternal.Es.ArrowSchemaFingerprint)
+	require.Equal(t, arrowConversionPlanVersion, restoredExternal.Es.ArrowConversionPlanVersion)
+}
+
 func TestExternalScanIcebergRuntimeRoundtrip(t *testing.T) {
 	ctx := &scopeContext{
 		id:     1,

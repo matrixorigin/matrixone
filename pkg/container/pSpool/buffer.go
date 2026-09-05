@@ -59,7 +59,8 @@ func (b *spoolBuffer) putCacheID(mp *mpool.MPool, id uint32, bat *batch.Batch) {
 		// 1. const vector size was too small,
 		// 2. vector doesn't own its data and area,
 		// we don't need to cache it.
-		if !vec.IsConst() && !vec.NeedDup() {
+		if !vec.IsConst() && !vec.NeedDup() &&
+			vec.CanDetach(vector.BackingData) && vec.CanDetach(vector.BackingArea) {
 			data := vector.DetachVectorData(vec)
 			area := vector.DetachVectorArea(vec)
 			if data.Capacity() != 0 {

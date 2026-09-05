@@ -1,0 +1,2465 @@
+// Copyright 2026 Matrix Origin
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//      http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+package arrowbridge
+
+import (
+	"context"
+	"math/big"
+	"reflect"
+	"testing"
+	"time"
+	"unsafe"
+
+	"github.com/apache/arrow-go/v18/arrow"
+	"github.com/apache/arrow-go/v18/arrow/array"
+	"github.com/apache/arrow-go/v18/arrow/decimal128"
+	"github.com/apache/arrow-go/v18/arrow/memory"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/stretchr/testify/require"
+)
+
+func TestBindByNameAndPosition(t *testing.T) {
+	schema := arrow.NewSchema([]arrow.Field{
+		{Name: "B", Type: arrow.PrimitiveTypes.Int64},
+		{Name: "a", Type: arrow.BinaryTypes.String},
+	}, nil)
+	targets := []TargetColumn{
+		{Name: "A", Type: types.T_varchar.ToType(), MOIndex: 1, AttrName: "a_out"},
+		{Name: "b", Type: types.T_int64.ToType(), MOIndex: 0, AttrName: "b_out"},
+	}
+	plan, err := Bind(context.Background(), schema, targets, MatchByName)
+	require.NoError(t, err)
+	require.Equal(t, []string{"b_out", "a_out"}, plan.attrs)
+	require.Equal(t, 0, plan.columns[0].source)
+	require.Equal(t, 1, plan.columns[1].source)
+
+	positionTargets := []TargetColumn{
+		{Name: "first", Type: types.T_int64.ToType()},
+		{Name: "second", Type: types.T_varchar.ToType()},
+	}
+	positionPlan, err := Bind(context.Background(), schema, positionTargets, MatchByPosition)
+	require.NoError(t, err)
+	require.Equal(t, []string{"first", "second"}, positionPlan.attrs)
+}
+
+func TestAppendDictionaryNullSupportsEveryTargetStorageClass(t *testing.T) {
+	// Dictionary NULLs bypass their physical Arrow value type. Exercise every
+	// MatrixOne storage representation so a nullable dictionary remains a
+	// logical NULL regardless of the target column type.
+	for _, oid := range []types.T{
+		types.T_varchar,
+		types.T_bool, types.T_bit,
+		types.T_int8, types.T_int16, types.T_int32, types.T_int64,
+		types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64,
+		types.T_float32, types.T_float64,
+		types.T_year, types.T_enum,
+		types.T_decimal64, types.T_decimal128, types.T_decimal256,
+		types.T_uuid, types.T_TS, types.T_Rowid, types.T_Blockid,
+		types.T_date, types.T_time, types.T_datetime, types.T_timestamp,
+	} {
+		t.Run(oid.String(), func(t *testing.T) {
+			mp := mpool.MustNewZero()
+			vec := vector.NewVec(oid.ToType())
+			require.NoError(t, appendDictionaryNull(vec, oid.ToType(), mp))
+			require.Equal(t, 1, vec.Length())
+			require.True(t, vec.IsNull(0))
+			vec.Free(mp)
+			require.Equal(t, int64(0), mp.CurrNB())
+		})
+	}
+}
+
+func TestCheckedDictionaryIndexAcceptsEveryArrowIndexWidth(t *testing.T) {
+	tests := []struct {
+		name  string
+		build func(memory.Allocator) arrow.Array
+	}{
+		{"int8", func(alloc memory.Allocator) arrow.Array {
+			b := array.NewInt8Builder(alloc)
+			defer b.Release()
+			b.Append(0)
+			return b.NewArray()
+		}},
+		{"int16", func(alloc memory.Allocator) arrow.Array {
+			b := array.NewInt16Builder(alloc)
+			defer b.Release()
+			b.Append(0)
+			return b.NewArray()
+		}},
+		{"int32", func(alloc memory.Allocator) arrow.Array {
+			b := array.NewInt32Builder(alloc)
+			defer b.Release()
+			b.Append(0)
+			return b.NewArray()
+		}},
+		{"int64", func(alloc memory.Allocator) arrow.Array {
+			b := array.NewInt64Builder(alloc)
+			defer b.Release()
+			b.Append(0)
+			return b.NewArray()
+		}},
+		{"uint8", func(alloc memory.Allocator) arrow.Array {
+			b := array.NewUint8Builder(alloc)
+			defer b.Release()
+			b.Append(0)
+			return b.NewArray()
+		}},
+		{"uint16", func(alloc memory.Allocator) arrow.Array {
+			b := array.NewUint16Builder(alloc)
+			defer b.Release()
+			b.Append(0)
+			return b.NewArray()
+		}},
+		{"uint32", func(alloc memory.Allocator) arrow.Array {
+			b := array.NewUint32Builder(alloc)
+			defer b.Release()
+			b.Append(0)
+			return b.NewArray()
+		}},
+		{"uint64", func(alloc memory.Allocator) arrow.Array {
+			b := array.NewUint64Builder(alloc)
+			defer b.Release()
+			b.Append(0)
+			return b.NewArray()
+		}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			alloc := memory.NewCheckedAllocator(memory.NewGoAllocator())
+			indices := test.build(alloc)
+			valuesBuilder := array.NewInt64Builder(alloc)
+			valuesBuilder.Append(7)
+			values := valuesBuilder.NewArray()
+			valuesBuilder.Release()
+			dictionaryType := &arrow.DictionaryType{IndexType: indices.DataType(), ValueType: values.DataType()}
+			dictionary := array.NewDictionaryArray(dictionaryType, indices, values)
+
+			index, err := checkedDictionaryIndex(context.Background(), dictionary, 0, values.Len())
+			require.NoError(t, err)
+			require.Equal(t, 0, index)
+
+			dictionary.Release()
+			indices.Release()
+			values.Release()
+			alloc.AssertSize(t, 0)
+		})
+	}
+}
+
+func TestCheckedDictionaryIndexRejectsNegativeAndOverflowedValues(t *testing.T) {
+	tests := []struct {
+		name  string
+		build func(memory.Allocator) arrow.Array
+		err   string
+	}{
+		{"negative", func(alloc memory.Allocator) arrow.Array {
+			b := array.NewInt8Builder(alloc)
+			defer b.Release()
+			b.Append(-1)
+			return b.NewArray()
+		}, "outside"},
+		{"overflow", func(alloc memory.Allocator) arrow.Array {
+			b := array.NewUint64Builder(alloc)
+			defer b.Release()
+			b.Append(^uint64(0))
+			return b.NewArray()
+		}, "overflows"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			alloc := memory.NewCheckedAllocator(memory.NewGoAllocator())
+			indices := test.build(alloc)
+			valuesBuilder := array.NewInt64Builder(alloc)
+			valuesBuilder.Append(7)
+			values := valuesBuilder.NewArray()
+			valuesBuilder.Release()
+			dictionaryType := &arrow.DictionaryType{IndexType: indices.DataType(), ValueType: values.DataType()}
+			dictionary := array.NewDictionaryArray(dictionaryType, indices, values)
+
+			_, err := checkedDictionaryIndex(context.Background(), dictionary, 0, values.Len())
+			require.ErrorContains(t, err, test.err)
+
+			dictionary.Release()
+			indices.Release()
+			values.Release()
+			alloc.AssertSize(t, 0)
+		})
+	}
+}
+
+func TestAppendDictionaryNullRejectsUnknownTarget(t *testing.T) {
+	vec := new(vector.Vector)
+	require.ErrorContains(t, appendDictionaryNull(vec, types.T_any.ToType(), mpool.MustNewZero()), "unknown")
+}
+
+func TestAppendDictionaryValuePreservesPrimitiveArrowValues(t *testing.T) {
+	tests := []struct {
+		name   string
+		target types.T
+		build  func(memory.Allocator) arrow.Array
+	}{
+		{"int8", types.T_int8, func(alloc memory.Allocator) arrow.Array {
+			b := array.NewInt8Builder(alloc)
+			defer b.Release()
+			b.Append(7)
+			return b.NewArray()
+		}},
+		{"int16", types.T_int16, func(alloc memory.Allocator) arrow.Array {
+			b := array.NewInt16Builder(alloc)
+			defer b.Release()
+			b.Append(7)
+			return b.NewArray()
+		}},
+		{"int32", types.T_int32, func(alloc memory.Allocator) arrow.Array {
+			b := array.NewInt32Builder(alloc)
+			defer b.Release()
+			b.Append(7)
+			return b.NewArray()
+		}},
+		{"int64", types.T_int64, func(alloc memory.Allocator) arrow.Array {
+			b := array.NewInt64Builder(alloc)
+			defer b.Release()
+			b.Append(7)
+			return b.NewArray()
+		}},
+		{"uint8", types.T_uint8, func(alloc memory.Allocator) arrow.Array {
+			b := array.NewUint8Builder(alloc)
+			defer b.Release()
+			b.Append(7)
+			return b.NewArray()
+		}},
+		{"uint16", types.T_uint16, func(alloc memory.Allocator) arrow.Array {
+			b := array.NewUint16Builder(alloc)
+			defer b.Release()
+			b.Append(7)
+			return b.NewArray()
+		}},
+		{"uint32", types.T_uint32, func(alloc memory.Allocator) arrow.Array {
+			b := array.NewUint32Builder(alloc)
+			defer b.Release()
+			b.Append(7)
+			return b.NewArray()
+		}},
+		{"uint64", types.T_uint64, func(alloc memory.Allocator) arrow.Array {
+			b := array.NewUint64Builder(alloc)
+			defer b.Release()
+			b.Append(7)
+			return b.NewArray()
+		}},
+		{"float32", types.T_float32, func(alloc memory.Allocator) arrow.Array {
+			b := array.NewFloat32Builder(alloc)
+			defer b.Release()
+			b.Append(7)
+			return b.NewArray()
+		}},
+		{"float64", types.T_float64, func(alloc memory.Allocator) arrow.Array {
+			b := array.NewFloat64Builder(alloc)
+			defer b.Release()
+			b.Append(7)
+			return b.NewArray()
+		}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			alloc := memory.NewCheckedAllocator(memory.NewGoAllocator())
+			values := test.build(alloc)
+			mp := mpool.MustNewZero()
+			vec := vector.NewVec(test.target.ToType())
+
+			copied, err := appendDictionaryValue(context.Background(), vec, values, conversionMaterializeBool, 0, 0, false, test.target.ToType(), mp, time.UTC)
+			require.NoError(t, err)
+			require.Zero(t, copied)
+			require.Equal(t, 1, vec.Length())
+
+			vec.Free(mp)
+			values.Release()
+			require.Zero(t, mp.CurrNB())
+			alloc.AssertSize(t, 0)
+		})
+	}
+}
+
+func TestAppendDictionaryValuePreservesVariableWidthArrowValues(t *testing.T) {
+	tests := []struct {
+		name  string
+		build func(memory.Allocator) arrow.Array
+	}{
+		{"string", func(alloc memory.Allocator) arrow.Array {
+			b := array.NewStringBuilder(alloc)
+			defer b.Release()
+			b.Append("value")
+			return b.NewArray()
+		}},
+		{"large_string", func(alloc memory.Allocator) arrow.Array {
+			b := array.NewLargeStringBuilder(alloc)
+			defer b.Release()
+			b.Append("value")
+			return b.NewArray()
+		}},
+		{"binary", func(alloc memory.Allocator) arrow.Array {
+			b := array.NewBinaryBuilder(alloc, arrow.BinaryTypes.Binary)
+			defer b.Release()
+			b.Append([]byte("value"))
+			return b.NewArray()
+		}},
+		{"large_binary", func(alloc memory.Allocator) arrow.Array {
+			b := array.NewBinaryBuilder(alloc, arrow.BinaryTypes.LargeBinary)
+			defer b.Release()
+			b.Append([]byte("value"))
+			return b.NewArray()
+		}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			alloc := memory.NewCheckedAllocator(memory.NewGoAllocator())
+			values := test.build(alloc)
+			mp := mpool.MustNewZero()
+			target := types.New(types.T_varchar, 16, 0)
+			vec := vector.NewVec(target)
+
+			_, err := appendDictionaryValue(context.Background(), vec, values, conversionBorrowVarlen, 0, 0, false, target, mp, time.UTC)
+			require.NoError(t, err)
+			require.Equal(t, 1, vec.Length())
+
+			vec.Free(mp)
+			values.Release()
+			require.Zero(t, mp.CurrNB())
+			alloc.AssertSize(t, 0)
+		})
+	}
+}
+
+func TestArrowTemporalHelpersRejectOutOfRangeValues(t *testing.T) {
+	maxInt64 := int64(^uint64(0) >> 1)
+	_, err := timestampToMicros(maxInt64, arrow.Second)
+	require.Error(t, err)
+	_, err = timestampToMicros(maxInt64, arrow.Millisecond)
+	require.Error(t, err)
+	_, err = arrowMicrosToTimestamp(maxSupportedUnixMicros+1, true, time.UTC)
+	require.Error(t, err)
+	_, err = arrowMicrosToDatetime(maxSupportedUnixMicros+1, true, time.UTC)
+	require.Error(t, err)
+}
+
+func TestAppendDictionaryValueConvertsDateAndTimeValues(t *testing.T) {
+	tests := []struct {
+		name   string
+		target types.T
+		build  func(memory.Allocator) arrow.Array
+	}{
+		{"date32_to_date", types.T_date, func(alloc memory.Allocator) arrow.Array {
+			b := array.NewDate32Builder(alloc)
+			defer b.Release()
+			b.Append(0)
+			return b.NewArray()
+		}},
+		{"date32_to_datetime", types.T_datetime, func(alloc memory.Allocator) arrow.Array {
+			b := array.NewDate32Builder(alloc)
+			defer b.Release()
+			b.Append(0)
+			return b.NewArray()
+		}},
+		{"date64_to_date", types.T_date, func(alloc memory.Allocator) arrow.Array {
+			b := array.NewDate64Builder(alloc)
+			defer b.Release()
+			b.Append(0)
+			return b.NewArray()
+		}},
+		{"date64_to_datetime", types.T_datetime, func(alloc memory.Allocator) arrow.Array {
+			b := array.NewDate64Builder(alloc)
+			defer b.Release()
+			b.Append(0)
+			return b.NewArray()
+		}},
+		{"time64", types.T_time, func(alloc memory.Allocator) arrow.Array {
+			b := array.NewTime64Builder(alloc, &arrow.Time64Type{Unit: arrow.Microsecond})
+			defer b.Release()
+			b.Append(1)
+			return b.NewArray()
+		}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			alloc := memory.NewCheckedAllocator(memory.NewGoAllocator())
+			values := test.build(alloc)
+			mp := mpool.MustNewZero()
+			vec := vector.NewVec(test.target.ToType())
+
+			copied, err := appendDictionaryValue(context.Background(), vec, values, conversionMaterializeBool, 0, 0, false, test.target.ToType(), mp, time.UTC)
+			require.NoError(t, err)
+			require.Zero(t, copied)
+			require.Equal(t, 1, vec.Length())
+
+			vec.Free(mp)
+			values.Release()
+			require.Zero(t, mp.CurrNB())
+			alloc.AssertSize(t, 0)
+		})
+	}
+}
+
+func TestAppendDictionaryValueHandlesDecimalAndRejectsInvalidTemporalValues(t *testing.T) {
+	t.Run("decimal", func(t *testing.T) {
+		alloc := memory.NewCheckedAllocator(memory.NewGoAllocator())
+		decimalType := &arrow.Decimal128Type{Precision: 18, Scale: 2}
+		builder := array.NewDecimal128Builder(alloc, decimalType)
+		builder.Append(decimal128.FromBigInt(big.NewInt(7)))
+		values := builder.NewArray()
+		builder.Release()
+		mp := mpool.MustNewZero()
+		target := types.New(types.T_decimal128, 18, 2)
+		vec := vector.NewVec(target)
+
+		copied, err := appendDictionaryValue(context.Background(), vec, values, conversionMaterializeBool, 0, 0, false, target, mp, time.UTC)
+		require.NoError(t, err)
+		require.Zero(t, copied)
+		require.Equal(t, 1, vec.Length())
+
+		vec.Free(mp)
+		values.Release()
+		require.Zero(t, mp.CurrNB())
+		alloc.AssertSize(t, 0)
+	})
+
+	for _, test := range []struct {
+		name   string
+		target types.T
+		build  func(memory.Allocator) arrow.Array
+		err    string
+	}{
+		{"fractional_date64", types.T_date, func(alloc memory.Allocator) arrow.Array {
+			b := array.NewDate64Builder(alloc)
+			defer b.Release()
+			b.Append(1)
+			return b.NewArray()
+		}, "integral"},
+		{"out_of_range_time64", types.T_time, func(alloc memory.Allocator) arrow.Array {
+			b := array.NewTime64Builder(alloc, &arrow.Time64Type{Unit: arrow.Microsecond})
+			defer b.Release()
+			b.Append(-1)
+			return b.NewArray()
+		}, "outside"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			alloc := memory.NewCheckedAllocator(memory.NewGoAllocator())
+			values := test.build(alloc)
+			mp := mpool.MustNewZero()
+			vec := vector.NewVec(test.target.ToType())
+
+			_, err := appendDictionaryValue(context.Background(), vec, values, conversionMaterializeBool, 0, 0, false, test.target.ToType(), mp, time.UTC)
+			require.ErrorContains(t, err, test.err)
+
+			vec.Free(mp)
+			values.Release()
+			require.Zero(t, mp.CurrNB())
+			alloc.AssertSize(t, 0)
+		})
+	}
+
+	t.Run("unsupported_value_type", func(t *testing.T) {
+		alloc := memory.NewCheckedAllocator(memory.NewGoAllocator())
+		builder := array.NewDurationBuilder(alloc, &arrow.DurationType{Unit: arrow.Microsecond})
+		builder.Append(1)
+		values := builder.NewArray()
+		builder.Release()
+		mp := mpool.MustNewZero()
+		vec := vector.NewVec(types.T_int64.ToType())
+
+		_, err := appendDictionaryValue(context.Background(), vec, values, conversionMaterializeBool, 0, 0, false, types.T_int64.ToType(), mp, time.UTC)
+		require.ErrorContains(t, err, "invalid Arrow dictionary values")
+
+		vec.Free(mp)
+		values.Release()
+		require.Zero(t, mp.CurrNB())
+		alloc.AssertSize(t, 0)
+	})
+}
+
+func TestPlanFingerprintCoversSchemaMetadataAndConversionContract(t *testing.T) {
+	ctx := context.Background()
+	fieldMetadata := arrow.NewMetadata([]string{"field-key"}, []string{"field-value"})
+	schemaMetadata := arrow.NewMetadata([]string{"schema-key"}, []string{"schema-value"})
+	baseSchema := arrow.NewSchema([]arrow.Field{{
+		Name: "v", Type: arrow.BinaryTypes.String, Nullable: true, Metadata: fieldMetadata,
+	}}, &schemaMetadata)
+	baseTarget := []TargetColumn{{
+		Name: "v", AttrName: "v", Type: types.New(types.T_varchar, 100, 0), NotNull: false,
+	}}
+	base, err := Bind(ctx, baseSchema, baseTarget, MatchByName)
+	require.NoError(t, err)
+	require.NotEqual(t, [32]byte{}, base.Fingerprint())
+
+	// Metadata ordering is not a semantic schema change.
+	reorderedMetadata := arrow.NewMetadata(
+		[]string{"second", "schema-key"}, []string{"two", "schema-value"},
+	)
+	reorderedSchema := arrow.NewSchema([]arrow.Field{{
+		Name: "v", Type: arrow.BinaryTypes.String, Nullable: true, Metadata: fieldMetadata,
+	}}, &reorderedMetadata)
+	reorderedBaseMetadata := arrow.NewMetadata(
+		[]string{"schema-key", "second"}, []string{"schema-value", "two"},
+	)
+	reorderedBaseSchema := arrow.NewSchema([]arrow.Field{{
+		Name: "v", Type: arrow.BinaryTypes.String, Nullable: true, Metadata: fieldMetadata,
+	}}, &reorderedBaseMetadata)
+	first, err := Bind(ctx, reorderedSchema, baseTarget, MatchByName)
+	require.NoError(t, err)
+	second, err := Bind(ctx, reorderedBaseSchema, baseTarget, MatchByName)
+	require.NoError(t, err)
+	require.Equal(t, first.Fingerprint(), second.Fingerprint())
+
+	changedFieldMetadata := arrow.NewMetadata([]string{"field-key"}, []string{"changed"})
+	changedSchema := arrow.NewSchema([]arrow.Field{{
+		Name: "v", Type: arrow.BinaryTypes.String, Nullable: true, Metadata: changedFieldMetadata,
+	}}, &schemaMetadata)
+	changed, err := Bind(ctx, changedSchema, baseTarget, MatchByName)
+	require.NoError(t, err)
+	require.NotEqual(t, base.Fingerprint(), changed.Fingerprint())
+
+	widerTarget := append([]TargetColumn(nil), baseTarget...)
+	widerTarget[0].Type = types.New(types.T_varchar, 101, 0)
+	wider, err := Bind(ctx, baseSchema, widerTarget, MatchByName)
+	require.NoError(t, err)
+	require.NotEqual(t, base.Fingerprint(), wider.Fingerprint())
+
+	position, err := Bind(ctx, baseSchema, baseTarget, MatchByPosition)
+	require.NoError(t, err)
+	require.NotEqual(t, base.Fingerprint(), position.Fingerprint())
+}
+
+func TestBindRejectsAmbiguousMissingAndUnsupported(t *testing.T) {
+	ctx := context.Background()
+	_, err := Bind(ctx, arrow.NewSchema([]arrow.Field{
+		{Name: "A", Type: arrow.PrimitiveTypes.Int64},
+		{Name: "a", Type: arrow.PrimitiveTypes.Int64},
+	}, nil), []TargetColumn{
+		{Name: "a", Type: types.T_int64.ToType()},
+		{Name: "x", Type: types.T_int64.ToType()},
+	}, MatchByName)
+	require.ErrorContains(t, err, "ambiguous")
+
+	_, err = Bind(ctx, arrow.NewSchema([]arrow.Field{{Name: "a", Type: arrow.PrimitiveTypes.Int64}}, nil),
+		[]TargetColumn{{Name: "missing", Type: types.T_int64.ToType()}}, MatchByName)
+	require.ErrorContains(t, err, "missing")
+
+	_, err = Bind(ctx, arrow.NewSchema([]arrow.Field{{Name: "a", Type: arrow.PrimitiveTypes.Int64}}, nil),
+		[]TargetColumn{{Name: "a", Type: types.T_int32.ToType()}}, MatchByName)
+	require.ErrorContains(t, err, "no exact long-term conversion")
+
+	_, err = Bind(ctx, arrow.NewSchema([]arrow.Field{{Name: "a", Type: arrow.PrimitiveTypes.Int64}}, nil),
+		[]TargetColumn{{Name: "a", Type: types.T_int64.ToType()}, {Name: "b", Type: types.T_int64.ToType()}}, MatchByName)
+	require.ErrorContains(t, err, "target has 2")
+}
+
+func TestBindRejectsDuplicateOutputIndexWhenAttributeNameIsEmpty(t *testing.T) {
+	schema := arrow.NewSchema([]arrow.Field{
+		{Name: "", Type: arrow.PrimitiveTypes.Int64},
+		{Name: "", Type: arrow.PrimitiveTypes.Int64},
+		{Name: "third", Type: arrow.PrimitiveTypes.Int64},
+	}, nil)
+	_, err := BindLoad(context.Background(), schema, []TargetColumn{
+		{Name: "", Type: types.T_int64.ToType(), MOIndex: 0},
+		{Name: "", Type: types.T_int64.ToType(), MOIndex: 0},
+		{Name: "third", Type: types.T_int64.ToType(), MOIndex: 1},
+	}, MatchByPosition)
+	require.ErrorContains(t, err, "duplicate MatrixOne output column index 0")
+}
+
+func TestBindRejectsMalformedFixedTargetSize(t *testing.T) {
+	target := types.T_int64.ToType()
+	target.Size = 1
+	_, err := BindLoad(context.Background(), arrow.NewSchema([]arrow.Field{{
+		Name: "value", Type: arrow.PrimitiveTypes.Int64,
+	}}, nil), []TargetColumn{{Name: "value", Type: target}}, MatchByName)
+	require.ErrorContains(t, err, "invalid MatrixOne target type size")
+}
+
+func TestBindBoundsTotalFieldsAndNestingBeforeFingerprint(t *testing.T) {
+	allowed := arrow.DataType(arrow.PrimitiveTypes.Int64)
+	for range MaxNestingDepth - 1 {
+		allowed = arrow.ListOf(allowed)
+	}
+	_, err := Bind(context.Background(), arrow.NewSchema([]arrow.Field{{Name: "v", Type: allowed}}, nil),
+		[]TargetColumn{{Name: "v", Type: types.T_json.ToType()}}, MatchByName)
+	require.ErrorContains(t, err, "no exact long-term conversion",
+		"a schema at the limit must reach ordinary type validation")
+
+	tooDeep := arrow.ListOf(allowed)
+	_, err = Bind(context.Background(), arrow.NewSchema([]arrow.Field{{Name: "v", Type: tooDeep}}, nil),
+		[]TargetColumn{{Name: "v", Type: types.T_json.ToType()}}, MatchByName)
+	require.ErrorContains(t, err, "nesting depth exceeds")
+
+	children := make([]arrow.Field, MaxFields)
+	for index := range children {
+		children[index] = arrow.Field{Name: "f", Type: arrow.PrimitiveTypes.Int8}
+	}
+	tooMany := arrow.StructOf(children...)
+	_, err = Bind(context.Background(), arrow.NewSchema([]arrow.Field{{Name: "v", Type: tooMany}}, nil),
+		[]TargetColumn{{Name: "v", Type: types.T_json.ToType()}}, MatchByName)
+	require.ErrorContains(t, err, "total field count exceeds")
+}
+
+func TestFixedBorrowValidityLifetimeAndWindow(t *testing.T) {
+	alloc := memory.NewCheckedAllocator(memory.NewGoAllocator())
+	builder := array.NewInt64Builder(alloc)
+	builder.AppendValues([]int64{10, 20, 30, 40}, []bool{true, false, true, true})
+	base := builder.NewArray()
+	builder.Release()
+	sliced := array.NewSlice(base, 1, 4)
+	schema := arrow.NewSchema([]arrow.Field{{Name: "v", Type: arrow.PrimitiveTypes.Int64, Nullable: true}}, nil)
+	record := array.NewRecordBatch(schema, []arrow.Array{sliced}, 3)
+	plan, err := Bind(context.Background(), schema, []TargetColumn{{Name: "v", Type: types.T_int64.ToType()}}, MatchByName)
+	require.NoError(t, err)
+	mp := mpool.MustNewZero()
+
+	bat, stats, err := plan.Convert(context.Background(), record, mp, ConvertOptions{})
+	require.NoError(t, err)
+	require.Equal(t, int64(24), stats.BorrowedPayloadBytes)
+	require.Equal(t, int64(24), stats.EligiblePayloadBytes)
+	require.Equal(t, int64(1), stats.BorrowedColumns)
+	require.Zero(t, stats.MaterializedColumns)
+	require.Zero(t, stats.PinAmplificationFallbacks)
+	require.Zero(t, stats.UnalignedFallbacks)
+	require.True(t, bat.Vecs[0].HasBorrowedBacking())
+	require.True(t, bat.Vecs[0].GetNulls().HasBorrowedValidity())
+	expectedData := sliced.Data().Buffers()[1].Bytes()[sliced.Data().Offset()*8:]
+	require.Equal(t,
+		uintptr(unsafe.Pointer(unsafe.SliceData(expectedData))),
+		uintptr(unsafe.Pointer(unsafe.SliceData(bat.Vecs[0].GetData()))),
+	)
+	require.Equal(t, []int64{20, 30, 40}, vector.MustFixedColNoTypeCheck[int64](bat.Vecs[0]))
+	require.True(t, bat.Vecs[0].IsNull(0))
+	require.True(t, bat.Vecs[0].GetNulls().HasBorrowedValidity(), "Contains must preserve the validity view")
+
+	window, err := bat.Vecs[0].Window(1, 3)
+	require.NoError(t, err)
+	record.Release()
+	sliced.Release()
+	base.Release()
+	bat.Clean(mp)
+	require.Equal(t, []int64{30, 40}, vector.MustFixedColNoTypeCheck[int64](window))
+	require.False(t, window.IsNull(0))
+	window.Free(mp)
+	require.Equal(t, int64(0), mp.CurrNB())
+	alloc.AssertSize(t, 0)
+}
+
+func TestExactFixedWidthTypeMatrixBorrowsPayload(t *testing.T) {
+	tests := []struct {
+		name   string
+		source arrow.DataType
+		target types.Type
+		append func(array.Builder)
+	}{
+		{name: "int8", source: arrow.PrimitiveTypes.Int8, target: types.T_int8.ToType(), append: func(b array.Builder) { b.(*array.Int8Builder).Append(-8) }},
+		{name: "int16", source: arrow.PrimitiveTypes.Int16, target: types.T_int16.ToType(), append: func(b array.Builder) { b.(*array.Int16Builder).Append(-16) }},
+		{name: "int32", source: arrow.PrimitiveTypes.Int32, target: types.T_int32.ToType(), append: func(b array.Builder) { b.(*array.Int32Builder).Append(-32) }},
+		{name: "int64", source: arrow.PrimitiveTypes.Int64, target: types.T_int64.ToType(), append: func(b array.Builder) { b.(*array.Int64Builder).Append(-64) }},
+		{name: "uint8", source: arrow.PrimitiveTypes.Uint8, target: types.T_uint8.ToType(), append: func(b array.Builder) { b.(*array.Uint8Builder).Append(8) }},
+		{name: "uint16", source: arrow.PrimitiveTypes.Uint16, target: types.T_uint16.ToType(), append: func(b array.Builder) { b.(*array.Uint16Builder).Append(16) }},
+		{name: "uint32", source: arrow.PrimitiveTypes.Uint32, target: types.T_uint32.ToType(), append: func(b array.Builder) { b.(*array.Uint32Builder).Append(32) }},
+		{name: "uint64", source: arrow.PrimitiveTypes.Uint64, target: types.T_uint64.ToType(), append: func(b array.Builder) { b.(*array.Uint64Builder).Append(64) }},
+		{name: "float32", source: arrow.PrimitiveTypes.Float32, target: types.T_float32.ToType(), append: func(b array.Builder) { b.(*array.Float32Builder).Append(3.25) }},
+		{name: "float64", source: arrow.PrimitiveTypes.Float64, target: types.T_float64.ToType(), append: func(b array.Builder) { b.(*array.Float64Builder).Append(6.5) }},
+		{
+			name:   "decimal128",
+			source: &arrow.Decimal128Type{Precision: 18, Scale: 2},
+			target: types.New(types.T_decimal128, 18, 2),
+			append: func(b array.Builder) { b.(*array.Decimal128Builder).Append(decimal128.FromI64(-12345)) },
+		},
+		{
+			name:   "time64 microsecond",
+			source: &arrow.Time64Type{Unit: arrow.Microsecond},
+			target: types.New(types.T_time, 0, 6),
+			append: func(b array.Builder) { b.(*array.Time64Builder).Append(12_345_678) },
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			alloc := memory.NewCheckedAllocator(memory.NewGoAllocator())
+			builder := array.NewBuilder(alloc, test.source)
+			test.append(builder)
+			values := builder.NewArray()
+			builder.Release()
+			schema := arrow.NewSchema([]arrow.Field{{Name: "v", Type: test.source}}, nil)
+			record := array.NewRecordBatch(schema, []arrow.Array{values}, 1)
+			plan, err := Bind(context.Background(), schema, []TargetColumn{{Name: "v", Type: test.target}}, MatchByName)
+			require.NoError(t, err)
+			mp := mpool.MustNewZero()
+
+			bat, stats, err := plan.Convert(context.Background(), record, mp, ConvertOptions{})
+			require.NoError(t, err)
+			require.True(t, bat.Vecs[0].HasBorrowedBacking())
+			require.Equal(t, int64(test.target.TypeSize()), stats.BorrowedPayloadBytes)
+			require.Equal(t, int64(test.target.TypeSize()), stats.EligiblePayloadBytes)
+			require.Equal(t, int64(1), stats.BorrowedColumns)
+			require.Zero(t, stats.MaterializedColumns)
+			require.Zero(t, stats.MaterializedPayloadBytes)
+			sourceData := values.Data().Buffers()[1].Bytes()
+			require.Equal(t,
+				uintptr(unsafe.Pointer(unsafe.SliceData(sourceData))),
+				uintptr(unsafe.Pointer(unsafe.SliceData(bat.Vecs[0].GetData()))),
+			)
+
+			record.Release()
+			values.Release()
+			bat.Clean(mp)
+			require.Zero(t, mp.CurrNB())
+			alloc.AssertSize(t, 0)
+		})
+	}
+}
+
+func TestDecimalExactLayoutContractRejectsRescale(t *testing.T) {
+	schema := arrow.NewSchema([]arrow.Field{{
+		Name: "d", Type: &arrow.Decimal128Type{Precision: 18, Scale: 2},
+	}}, nil)
+	_, err := Bind(context.Background(), schema, []TargetColumn{{
+		Name: "d", Type: types.New(types.T_decimal128, 18, 3),
+	}}, MatchByName)
+	require.ErrorContains(t, err, "no exact long-term conversion")
+}
+
+func TestBindRejectsInvalidDecimal128Precision(t *testing.T) {
+	schema := arrow.NewSchema([]arrow.Field{{
+		Name: "d", Type: &arrow.Decimal128Type{Precision: decimal128.MaxPrecision + 1, Scale: 0},
+	}}, nil)
+	_, err := Bind(context.Background(), schema, []TargetColumn{{
+		Name: "d", Type: types.New(types.T_decimal128, decimal128.MaxPrecision+1, 0),
+	}}, MatchByName)
+	require.ErrorContains(t, err, "precision")
+}
+
+func TestDecimalExactLayoutRejectsValuePrecisionOverflow(t *testing.T) {
+	alloc := memory.NewCheckedAllocator(memory.NewGoAllocator())
+	decimalType := &arrow.Decimal128Type{Precision: 18, Scale: 2}
+	builder := array.NewDecimal128Builder(alloc, decimalType)
+	// The raw scaled value has 19 digits and cannot fit DECIMAL(18,2).
+	builder.Append(decimal128.FromBigInt(big.NewInt(1_000_000_000_000_000_000)))
+	values := builder.NewArray()
+	builder.Release()
+	schema := arrow.NewSchema([]arrow.Field{{Name: "d", Type: decimalType}}, nil)
+	record := array.NewRecordBatch(schema, []arrow.Array{values}, 1)
+	plan, err := Bind(context.Background(), schema, []TargetColumn{{Name: "d", Type: types.New(types.T_decimal128, 18, 2)}}, MatchByName)
+	require.NoError(t, err)
+	mp := mpool.MustNewZero()
+	_, _, err = plan.Convert(context.Background(), record, mp, ConvertOptions{})
+	require.ErrorContains(t, err, "precision")
+	require.Zero(t, mp.CurrNB())
+	record.Release()
+	values.Release()
+	alloc.AssertSize(t, 0)
+}
+
+func TestDictionaryDecimalPrecisionOverflow(t *testing.T) {
+	alloc := memory.NewCheckedAllocator(memory.NewGoAllocator())
+	decimalType := &arrow.Decimal128Type{Precision: 18, Scale: 2}
+	valueBuilder := array.NewDecimal128Builder(alloc, decimalType)
+	valueBuilder.Append(decimal128.FromBigInt(big.NewInt(1_000_000_000_000_000_000)))
+	values := valueBuilder.NewArray()
+	valueBuilder.Release()
+	indexBuilder := array.NewInt8Builder(alloc)
+	indexBuilder.Append(0)
+	indices := indexBuilder.NewArray()
+	indexBuilder.Release()
+	dictType := &arrow.DictionaryType{IndexType: arrow.PrimitiveTypes.Int8, ValueType: decimalType}
+	dictionary := array.NewDictionaryArray(dictType, indices, values)
+	indices.Release()
+	values.Release()
+	schema := arrow.NewSchema([]arrow.Field{{Name: "d", Type: dictType}}, nil)
+	record := array.NewRecordBatch(schema, []arrow.Array{dictionary}, 1)
+	plan, err := Bind(context.Background(), schema, []TargetColumn{{Name: "d", Type: types.New(types.T_decimal128, 18, 2)}}, MatchByName)
+	require.NoError(t, err)
+	mp := mpool.MustNewZero()
+	_, _, err = plan.Convert(context.Background(), record, mp, ConvertOptions{})
+	require.ErrorContains(t, err, "precision")
+	require.Zero(t, mp.CurrNB())
+	record.Release()
+	dictionary.Release()
+	alloc.AssertSize(t, 0)
+}
+
+func TestFixedExplicitCOW(t *testing.T) {
+	alloc := memory.NewCheckedAllocator(memory.NewGoAllocator())
+	builder := array.NewInt32Builder(alloc)
+	builder.AppendValues([]int32{1, 2}, nil)
+	arr := builder.NewArray()
+	builder.Release()
+	schema := arrow.NewSchema([]arrow.Field{{Name: "v", Type: arrow.PrimitiveTypes.Int32}}, nil)
+	record := array.NewRecordBatch(schema, []arrow.Array{arr}, 2)
+	plan, err := Bind(context.Background(), schema, []TargetColumn{{Name: "v", Type: types.T_int32.ToType()}}, MatchByName)
+	require.NoError(t, err)
+	mp := mpool.MustNewZero()
+	bat, _, err := plan.Convert(context.Background(), record, mp, ConvertOptions{})
+	require.NoError(t, err)
+	require.NoError(t, bat.Vecs[0].MaterializeOwned(mp))
+	require.False(t, bat.Vecs[0].HasBorrowedBacking())
+	vector.SetFixedAtWithTypeCheck(bat.Vecs[0], 0, int32(9))
+	require.Equal(t, []int32{9, 2}, vector.MustFixedColNoTypeCheck[int32](bat.Vecs[0]))
+	record.Release()
+	arr.Release()
+	bat.Clean(mp)
+	require.Equal(t, int64(0), mp.CurrNB())
+	alloc.AssertSize(t, 0)
+}
+
+func TestMaterializedConversionUsesStatementAllocationSelection(t *testing.T) {
+	registry, err := mpool.NewAllocationAccountRegistry(1, 32)
+	require.NoError(t, err)
+	account, err := registry.Open(1 << 20)
+	require.NoError(t, err)
+	selection, err := vector.NewAllocationAccountSelection(
+		account, mpool.AllocationOwnerExternal, 20, 21, 22, 23,
+	)
+	require.NoError(t, err)
+	allocator := memory.NewGoAllocator()
+	builder := array.NewBooleanBuilder(allocator)
+	builder.AppendValues([]bool{true, false, true}, []bool{true, false, true})
+	values := builder.NewArray()
+	builder.Release()
+	schema := arrow.NewSchema([]arrow.Field{{Name: "v", Type: arrow.FixedWidthTypes.Boolean, Nullable: true}}, nil)
+	record := array.NewRecordBatch(schema, []arrow.Array{values}, 3)
+	plan, err := Bind(context.Background(), schema, []TargetColumn{{
+		Name: "v", Type: types.T_bool.ToType(),
+	}}, MatchByName)
+	require.NoError(t, err)
+	mp := mpool.MustNewZero()
+	bat, _, err := plan.Convert(context.Background(), record, mp, ConvertOptions{Allocation: selection})
+	require.NoError(t, err)
+	require.Same(t, selection, bat.Vecs[0].AllocationAccountSelection())
+	require.Positive(t, account.Snapshot().Used)
+	record.Release()
+	values.Release()
+	bat.Clean(mp)
+	require.Zero(t, account.Snapshot().Used)
+	account.Seal()
+	_, err = registry.Finalize(account)
+	require.NoError(t, err)
+}
+
+func TestConvertReleasesUnpublishedVectorWhenPreExtendIsRejected(t *testing.T) {
+	registry, err := mpool.NewAllocationAccountRegistry(1, 16)
+	require.NoError(t, err)
+	// One byte cannot admit either a fixed-width value buffer or a varlena
+	// descriptor. This deterministically fails while the new vector is still
+	// owned by the conversion helper rather than by the output batch.
+	account, err := registry.Open(1)
+	require.NoError(t, err)
+	selection, err := vector.NewAllocationAccountSelection(
+		account, mpool.AllocationOwnerExternal, 20, 21, 22, 23,
+	)
+	require.NoError(t, err)
+
+	allocator := memory.NewCheckedAllocator(memory.NewGoAllocator())
+	builder := array.NewInt64Builder(allocator)
+	builder.Append(42)
+	values := builder.NewArray()
+	builder.Release()
+	schema := arrow.NewSchema([]arrow.Field{{Name: "v", Type: arrow.PrimitiveTypes.Int64}}, nil)
+	record := array.NewRecordBatch(schema, []arrow.Array{values}, 1)
+	plan, err := BindLoad(context.Background(), schema, []TargetColumn{{
+		Name: "v", Type: types.T_int64.ToType(),
+	}}, MatchByName)
+	require.NoError(t, err)
+
+	mp := mpool.MustNewZero()
+	bat, _, err := plan.Convert(context.Background(), record, mp, ConvertOptions{
+		Allocation:       selection,
+		ForceMaterialize: true,
+	})
+	require.Error(t, err)
+	require.Nil(t, bat)
+	require.Zero(t, account.Snapshot().Used)
+	require.Zero(t, mp.CurrNB())
+
+	record.Release()
+	values.Release()
+	allocator.AssertSize(t, 0)
+	account.Seal()
+	_, err = registry.Finalize(account)
+	require.NoError(t, err)
+}
+
+func TestConvertReleasesBorrowedVarlenVectorWhenDescriptorAdmissionIsRejected(t *testing.T) {
+	registry, err := mpool.NewAllocationAccountRegistry(1, 16)
+	require.NoError(t, err)
+	account, err := registry.Open(1)
+	require.NoError(t, err)
+	selection, err := vector.NewAllocationAccountSelection(
+		account, mpool.AllocationOwnerExternal, 20, 21, 22, 23,
+	)
+	require.NoError(t, err)
+
+	allocator := memory.NewCheckedAllocator(memory.NewGoAllocator())
+	builder := array.NewStringBuilder(allocator)
+	builder.Append("a borrowed Arrow value that is longer than the inline threshold")
+	values := builder.NewArray()
+	builder.Release()
+	schema := arrow.NewSchema([]arrow.Field{{Name: "v", Type: arrow.BinaryTypes.String}}, nil)
+	record := array.NewRecordBatch(schema, []arrow.Array{values}, 1)
+	plan, err := BindLoad(context.Background(), schema, []TargetColumn{{
+		Name: "v", Type: types.T_varchar.ToType(),
+	}}, MatchByName)
+	require.NoError(t, err)
+
+	mp := mpool.MustNewZero()
+	bat, _, err := plan.Convert(context.Background(), record, mp, ConvertOptions{
+		Allocation:          selection,
+		MaxPinAmplification: 100,
+	})
+	require.Error(t, err)
+	require.Nil(t, bat)
+	require.Zero(t, account.Snapshot().Used)
+	require.Zero(t, mp.CurrNB())
+
+	record.Release()
+	values.Release()
+	allocator.AssertSize(t, 0)
+	account.Seal()
+	_, err = registry.Finalize(account)
+	require.NoError(t, err)
+}
+
+func TestVarlenBorrowLongInlineShortAndLifetime(t *testing.T) {
+	alloc := memory.NewCheckedAllocator(memory.NewGoAllocator())
+	builder := array.NewStringBuilder(alloc)
+	long := "this payload is definitely longer than twenty three bytes"
+	builder.AppendValues([]string{"tiny", long, "also tiny"}, []bool{true, true, false})
+	arr := builder.NewArray()
+	builder.Release()
+	schema := arrow.NewSchema([]arrow.Field{{Name: "s", Type: arrow.BinaryTypes.String, Nullable: true}}, nil)
+	record := array.NewRecordBatch(schema, []arrow.Array{arr}, 3)
+	plan, err := Bind(context.Background(), schema, []TargetColumn{{Name: "s", Type: types.T_varchar.ToType()}}, MatchByName)
+	require.NoError(t, err)
+	mp := mpool.MustNewZero()
+
+	bat, stats, err := plan.Convert(context.Background(), record, mp, ConvertOptions{MaxPinAmplification: 100})
+	require.NoError(t, err)
+	require.Equal(t, int64(len(long)), stats.BorrowedPayloadBytes)
+	require.Equal(t, int64(len(long)), stats.EligiblePayloadBytes)
+	require.Equal(t, int64(len("tiny")), stats.MaterializedPayloadBytes)
+	require.Equal(t, int64(1), stats.BorrowedColumns)
+	require.Zero(t, stats.MaterializedColumns)
+	require.True(t, bat.Vecs[0].HasBorrowedBacking())
+	descriptors, area := vector.MustVarlenaRawData(bat.Vecs[0])
+	require.True(t, descriptors[0].IsSmall())
+	require.False(t, descriptors[1].IsSmall())
+	require.Equal(t, uintptr(unsafe.Pointer(unsafe.SliceData(arr.(*array.String).ValueBytes()))),
+		uintptr(unsafe.Pointer(unsafe.SliceData(area))))
+	require.Equal(t, "tiny", string(bat.Vecs[0].GetBytesAt(0)))
+	require.Equal(t, long, string(bat.Vecs[0].GetBytesAt(1)))
+	require.True(t, bat.Vecs[0].IsNull(2))
+
+	record.Release()
+	arr.Release()
+	require.Equal(t, long, string(bat.Vecs[0].GetBytesAt(1)), "vector lease must outlive Arrow record")
+	bat.Clean(mp)
+	require.Equal(t, int64(0), mp.CurrNB())
+	alloc.AssertSize(t, 0)
+}
+
+func TestVarlenPinAmplificationMaterializes(t *testing.T) {
+	alloc := memory.NewCheckedAllocator(memory.NewGoAllocator())
+	builder := array.NewStringBuilder(alloc)
+	long := "a single long payload longer than twenty three bytes"
+	builder.Append(long)
+	arr := builder.NewArray()
+	builder.Release()
+	schema := arrow.NewSchema([]arrow.Field{{Name: "s", Type: arrow.BinaryTypes.String}}, nil)
+	record := array.NewRecordBatch(schema, []arrow.Array{arr}, 1)
+	plan, err := Bind(context.Background(), schema, []TargetColumn{{Name: "s", Type: types.T_varchar.ToType()}}, MatchByName)
+	require.NoError(t, err)
+	mp := mpool.MustNewZero()
+
+	bat, stats, err := plan.Convert(context.Background(), record, mp, ConvertOptions{MaxPinAmplification: 0.0001})
+	require.NoError(t, err)
+	require.False(t, bat.Vecs[0].HasBorrowedBacking())
+	require.Zero(t, stats.BorrowedPayloadBytes)
+	require.Equal(t, int64(len(long)), stats.EligiblePayloadBytes)
+	require.Equal(t, int64(len(long)), stats.MaterializedPayloadBytes)
+	require.Equal(t, int64(1), stats.MaterializedColumns)
+	require.Equal(t, int64(1), stats.PinAmplificationFallbacks)
+	require.Equal(t, long, string(bat.Vecs[0].GetBytesAt(0)))
+	record.Release()
+	arr.Release()
+	bat.Clean(mp)
+	require.Equal(t, int64(0), mp.CurrNB())
+	alloc.AssertSize(t, 0)
+}
+
+func TestFixedBinaryConversionPadsToDeclaredWidth(t *testing.T) {
+	for _, forceMaterialize := range []bool{false, true} {
+		t.Run(map[bool]string{false: "normal", true: "forced-materialize"}[forceMaterialize], func(t *testing.T) {
+			alloc := memory.NewCheckedAllocator(memory.NewGoAllocator())
+			builder := array.NewBinaryBuilder(alloc, arrow.BinaryTypes.Binary)
+			value := []byte("payload-longer-than-inline")
+			builder.Append(value)
+			arr := builder.NewArray()
+			builder.Release()
+			schema := arrow.NewSchema([]arrow.Field{{Name: "b", Type: arrow.BinaryTypes.Binary}}, nil)
+			record := array.NewRecordBatch(schema, []arrow.Array{arr}, 1)
+			target := types.New(types.T_binary, int32(len(value)+3), 0)
+			plan, err := BindLoad(context.Background(), schema,
+				[]TargetColumn{{Name: "b", Type: target}}, MatchByName)
+			require.NoError(t, err)
+			mp := mpool.MustNewZero()
+
+			bat, _, err := plan.Convert(context.Background(), record, mp, ConvertOptions{
+				ForceMaterialize:    forceMaterialize,
+				MaxPinAmplification: 100,
+			})
+			require.NoError(t, err)
+			expected := append(append([]byte(nil), value...), 0, 0, 0)
+			require.Equal(t, expected, bat.Vecs[0].GetBytesAt(0))
+			require.False(t, bat.Vecs[0].HasBorrowedBacking(),
+				"padding requires an owned MatrixOne value")
+
+			bat.Clean(mp)
+			record.Release()
+			arr.Release()
+			require.Zero(t, mp.CurrNB())
+			alloc.AssertSize(t, 0)
+		})
+	}
+
+	t.Run("dictionary", func(t *testing.T) {
+		alloc := memory.NewCheckedAllocator(memory.NewGoAllocator())
+		indicesBuilder := array.NewInt8Builder(alloc)
+		indicesBuilder.Append(0)
+		indices := indicesBuilder.NewArray()
+		indicesBuilder.Release()
+		valuesBuilder := array.NewBinaryBuilder(alloc, arrow.BinaryTypes.Binary)
+		valuesBuilder.Append([]byte("ab"))
+		values := valuesBuilder.NewArray()
+		valuesBuilder.Release()
+		dictionaryType := &arrow.DictionaryType{
+			IndexType: arrow.PrimitiveTypes.Int8,
+			ValueType: arrow.BinaryTypes.Binary,
+		}
+		dictionary := array.NewDictionaryArray(dictionaryType, indices, values)
+		schema := arrow.NewSchema([]arrow.Field{{Name: "b", Type: dictionaryType}}, nil)
+		record := array.NewRecordBatch(schema, []arrow.Array{dictionary}, 1)
+		plan, err := BindLoad(context.Background(), schema, []TargetColumn{{
+			Name: "b", Type: types.New(types.T_binary, 4, 0),
+		}}, MatchByName)
+		require.NoError(t, err)
+		mp := mpool.MustNewZero()
+
+		bat, _, err := plan.Convert(context.Background(), record, mp, ConvertOptions{})
+		require.NoError(t, err)
+		require.Equal(t, []byte{'a', 'b', 0, 0}, bat.Vecs[0].GetBytesAt(0))
+
+		bat.Clean(mp)
+		record.Release()
+		dictionary.Release()
+		indices.Release()
+		values.Release()
+		require.Zero(t, mp.CurrNB())
+		alloc.AssertSize(t, 0)
+	})
+}
+
+func TestForceMaterializeBorrowEligibleColumns(t *testing.T) {
+	alloc := memory.NewCheckedAllocator(memory.NewGoAllocator())
+	ints := array.NewInt64Builder(alloc)
+	ints.AppendValues([]int64{10, 20}, nil)
+	intValues := ints.NewArray()
+	ints.Release()
+	strings := array.NewStringBuilder(alloc)
+	long := "a payload deliberately longer than twenty three bytes"
+	strings.AppendValues([]string{long, long}, nil)
+	stringValues := strings.NewArray()
+	strings.Release()
+	schema := arrow.NewSchema([]arrow.Field{
+		{Name: "i", Type: arrow.PrimitiveTypes.Int64},
+		{Name: "s", Type: arrow.BinaryTypes.String},
+	}, nil)
+	record := array.NewRecordBatch(schema, []arrow.Array{intValues, stringValues}, 2)
+	plan, err := Bind(context.Background(), schema, []TargetColumn{
+		{Name: "i", Type: types.T_int64.ToType()},
+		{Name: "s", Type: types.T_varchar.ToType()},
+	}, MatchByName)
+	require.NoError(t, err)
+	mp := mpool.MustNewZero()
+
+	borrowed, borrowedStats, err := plan.Convert(context.Background(), record, mp, ConvertOptions{})
+	require.NoError(t, err)
+	require.Equal(t, int64(2), borrowedStats.BorrowedColumns)
+	require.Zero(t, borrowedStats.MaterializedColumns)
+	require.Equal(t, int64(16+2*len(long)), borrowedStats.EligiblePayloadBytes)
+	require.Equal(t, borrowedStats.EligiblePayloadBytes, borrowedStats.BorrowedPayloadBytes)
+
+	materialized, materializedStats, err := plan.Convert(
+		context.Background(), record, mp, ConvertOptions{ForceMaterialize: true},
+	)
+	require.NoError(t, err)
+	require.Zero(t, materializedStats.BorrowedColumns)
+	require.Equal(t, int64(2), materializedStats.MaterializedColumns)
+	require.Equal(t, borrowedStats.EligiblePayloadBytes, materializedStats.EligiblePayloadBytes)
+	require.Equal(t, borrowedStats.EligiblePayloadBytes, materializedStats.MaterializedPayloadBytes)
+	require.Zero(t, materializedStats.PinAmplificationFallbacks)
+	require.False(t, materialized.Vecs[0].HasBorrowedBacking())
+	require.False(t, materialized.Vecs[1].HasBorrowedBacking())
+
+	borrowed.Clean(mp)
+	materialized.Clean(mp)
+	record.Release()
+	intValues.Release()
+	stringValues.Release()
+	require.Zero(t, mp.CurrNB())
+	alloc.AssertSize(t, 0)
+}
+
+func TestVarlenSliceOffsetsAreNormalized(t *testing.T) {
+	alloc := memory.NewCheckedAllocator(memory.NewGoAllocator())
+	builder := array.NewBinaryBuilder(alloc, arrow.BinaryTypes.Binary)
+	one := []byte("discarded-prefix-that-is-long")
+	two := []byte("the-kept-value-is-longer-than-inline")
+	three := []byte("another-kept-value-longer-than-inline")
+	builder.AppendValues([][]byte{one, two, three}, nil)
+	base := builder.NewArray()
+	builder.Release()
+	sliced := array.NewSlice(base, 1, 3)
+	schema := arrow.NewSchema([]arrow.Field{{Name: "b", Type: arrow.BinaryTypes.Binary}}, nil)
+	record := array.NewRecordBatch(schema, []arrow.Array{sliced}, 2)
+	plan, err := Bind(context.Background(), schema, []TargetColumn{{Name: "b", Type: types.T_varbinary.ToType()}}, MatchByName)
+	require.NoError(t, err)
+	mp := mpool.MustNewZero()
+	bat, _, err := plan.Convert(context.Background(), record, mp, ConvertOptions{MaxPinAmplification: 100})
+	require.NoError(t, err)
+	require.Equal(t, two, bat.Vecs[0].GetBytesAt(0))
+	require.Equal(t, three, bat.Vecs[0].GetBytesAt(1))
+	desc, _ := vector.MustVarlenaRawData(bat.Vecs[0])
+	offset, _ := desc[0].OffsetLen()
+	require.Zero(t, offset)
+	record.Release()
+	sliced.Release()
+	base.Release()
+	bat.Clean(mp)
+	alloc.AssertSize(t, 0)
+}
+
+func TestVarlenRejectsInvalidUTF8AndLength(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		value  string
+		target types.Type
+	}{
+		{name: "utf8", value: string([]byte{0xff}), target: types.T_varchar.ToType()},
+		{name: "length", value: "abcd", target: types.New(types.T_varchar, 3, 0)},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			alloc := memory.NewCheckedAllocator(memory.NewGoAllocator())
+			builder := array.NewStringBuilder(alloc)
+			builder.Append(tc.value)
+			arr := builder.NewArray()
+			builder.Release()
+			schema := arrow.NewSchema([]arrow.Field{{Name: "s", Type: arrow.BinaryTypes.String}}, nil)
+			record := array.NewRecordBatch(schema, []arrow.Array{arr}, 1)
+			plan, err := Bind(context.Background(), schema, []TargetColumn{{Name: "s", Type: tc.target}}, MatchByName)
+			require.NoError(t, err)
+			mp := mpool.MustNewZero()
+			_, _, err = plan.Convert(context.Background(), record, mp, ConvertOptions{})
+			require.Error(t, err)
+			require.Equal(t, int64(0), mp.CurrNB())
+			record.Release()
+			arr.Release()
+			alloc.AssertSize(t, 0)
+		})
+	}
+}
+
+func TestVarlenRejectsNegativeOffsetsWithoutPanicking(t *testing.T) {
+	alloc := memory.NewCheckedAllocator(memory.NewGoAllocator())
+	offsets := memory.NewBufferBytes(arrow.Int32Traits.CastToBytes([]int32{-1, 0}))
+	values := memory.NewBufferBytes([]byte{'x'})
+	data := array.NewData(arrow.BinaryTypes.String, 1, []*memory.Buffer{nil, offsets, values}, nil, 0, 0)
+	valuesArray := array.NewStringData(data)
+	schema := arrow.NewSchema([]arrow.Field{{Name: "s", Type: arrow.BinaryTypes.String}}, nil)
+	record := array.NewRecordBatch(schema, []arrow.Array{valuesArray}, 1)
+	plan, err := Bind(context.Background(), schema, []TargetColumn{{Name: "s", Type: types.T_varchar.ToType()}}, MatchByName)
+	require.NoError(t, err)
+	mp := mpool.MustNewZero()
+
+	var rows int
+	require.NotPanics(t, func() {
+		rows, err = plan.MaxOutputRows(context.Background(), record, 0, 1, 1<<20)
+	})
+	require.Error(t, err)
+	require.Zero(t, rows)
+
+	var converted *batch.Batch
+	require.NotPanics(t, func() {
+		converted, _, err = plan.Convert(context.Background(), record, mp, ConvertOptions{})
+	})
+	require.Error(t, err)
+	require.Nil(t, converted)
+	require.Zero(t, mp.CurrNB())
+
+	record.Release()
+	valuesArray.Release()
+	offsets.Release()
+	values.Release()
+	data.Release()
+	alloc.AssertSize(t, 0)
+}
+
+func TestRejectsMismatchedArrowNullCount(t *testing.T) {
+	alloc := memory.NewCheckedAllocator(memory.NewGoAllocator())
+	validity := memory.NewBufferBytes([]byte{0xff})
+	values := memory.NewBufferBytes(arrow.Int64Traits.CastToBytes([]int64{7}))
+	data := array.NewData(arrow.PrimitiveTypes.Int64, 1, []*memory.Buffer{validity, values}, nil, 1, 0)
+	valuesArray := array.NewInt64Data(data)
+	schema := arrow.NewSchema([]arrow.Field{{Name: "v", Type: arrow.PrimitiveTypes.Int64, Nullable: true}}, nil)
+	record := array.NewRecordBatch(schema, []arrow.Array{valuesArray}, 1)
+	plan, err := Bind(context.Background(), schema, []TargetColumn{{Name: "v", Type: types.T_int64.ToType()}}, MatchByName)
+	require.NoError(t, err)
+	mp := mpool.MustNewZero()
+
+	// Output budgeting deliberately performs only O(columns) structural checks.
+	// ArrowReader validates this immutable record once before splitting it, so
+	// repeated windows cannot rescan the complete validity bitmap.
+	rows, err := plan.MaxOutputRows(context.Background(), record, 0, 1, 1<<20)
+	require.NoError(t, err)
+	require.Equal(t, 1, rows)
+	err = plan.ValidateRecord(context.Background(), record)
+	require.ErrorContains(t, err, "validity bitmap")
+
+	converted, _, err := plan.Convert(context.Background(), record, mp, ConvertOptions{})
+	require.ErrorContains(t, err, "validity bitmap")
+	require.Nil(t, converted)
+	require.Zero(t, mp.CurrNB())
+
+	record.Release()
+	valuesArray.Release()
+	validity.Release()
+	values.Release()
+	data.Release()
+	alloc.AssertSize(t, 0)
+}
+
+func TestNullArrowColumnConvertsWithoutValidityBuffer(t *testing.T) {
+	alloc := memory.NewCheckedAllocator(memory.NewGoAllocator())
+	values := array.NewNull(2)
+	schema := arrow.NewSchema([]arrow.Field{{Name: "v", Type: arrow.Null}}, nil)
+	record := array.NewRecordBatch(schema, []arrow.Array{values}, 2)
+	plan, err := Bind(context.Background(), schema, []TargetColumn{{Name: "v", Type: types.T_varchar.ToType()}}, MatchByName)
+	require.NoError(t, err)
+	mp := mpool.MustNewZero()
+
+	converted, _, err := plan.Convert(context.Background(), record, mp, ConvertOptions{})
+	require.NoError(t, err)
+	require.Equal(t, 2, converted.RowCount())
+	require.True(t, converted.Vecs[0].IsNull(0))
+	require.True(t, converted.Vecs[0].IsNull(1))
+
+	converted.Clean(mp)
+	record.Release()
+	values.Release()
+	require.Zero(t, mp.CurrNB())
+	alloc.AssertSize(t, 0)
+}
+
+func TestDictionaryRejectsMalformedIndicesWithoutPanicking(t *testing.T) {
+	alloc := memory.NewCheckedAllocator(memory.NewGoAllocator())
+	valueBuilder := array.NewInt64Builder(alloc)
+	valueBuilder.Append(7)
+	values := valueBuilder.NewArray()
+	valueBuilder.Release()
+	indicesData := array.NewData(arrow.PrimitiveTypes.Int8, 1, []*memory.Buffer{nil, nil}, nil, 0, 0)
+	indices := array.NewInt8Data(indicesData)
+	dictType := &arrow.DictionaryType{IndexType: arrow.PrimitiveTypes.Int8, ValueType: arrow.PrimitiveTypes.Int64}
+	dictionary := array.NewDictionaryArray(dictType, indices, values)
+	indices.Release()
+	values.Release()
+	schema := arrow.NewSchema([]arrow.Field{{Name: "v", Type: dictType}}, nil)
+	record := array.NewRecordBatch(schema, []arrow.Array{dictionary}, 1)
+	plan, err := Bind(context.Background(), schema, []TargetColumn{{Name: "v", Type: types.T_int64.ToType()}}, MatchByName)
+	require.NoError(t, err)
+	mp := mpool.MustNewZero()
+
+	var converted *batch.Batch
+	require.NotPanics(t, func() {
+		converted, _, err = plan.Convert(context.Background(), record, mp, ConvertOptions{})
+	})
+	require.Error(t, err)
+	require.Nil(t, converted)
+	require.Zero(t, mp.CurrNB())
+
+	record.Release()
+	dictionary.Release()
+	indicesData.Release()
+	alloc.AssertSize(t, 0)
+}
+
+func TestVarlenIgnoresUnobservableNullPayload(t *testing.T) {
+	alloc := memory.NewCheckedAllocator(memory.NewGoAllocator())
+	builder := array.NewStringBuilder(alloc)
+	builder.AppendValues(
+		[]string{string([]byte{0xff}), "visible"},
+		[]bool{false, true},
+	)
+	values := builder.NewArray()
+	builder.Release()
+	schema := arrow.NewSchema([]arrow.Field{{
+		Name: "s", Type: arrow.BinaryTypes.String, Nullable: true,
+	}}, nil)
+	record := array.NewRecordBatch(schema, []arrow.Array{values}, 2)
+	plan, err := Bind(context.Background(), schema, []TargetColumn{{
+		Name: "s", Type: types.New(types.T_varchar, 7, 0),
+	}}, MatchByName)
+	require.NoError(t, err)
+	mp := mpool.MustNewZero()
+	converted, _, err := plan.Convert(context.Background(), record, mp, ConvertOptions{})
+	require.NoError(t, err)
+	require.True(t, converted.Vecs[0].IsNull(0))
+	require.Equal(t, "visible", string(converted.Vecs[0].GetBytesAt(1)))
+
+	converted.Clean(mp)
+	record.Release()
+	values.Release()
+	require.Zero(t, mp.CurrNB())
+	alloc.AssertSize(t, 0)
+}
+
+func TestMaterializedBoolAndDates(t *testing.T) {
+	alloc := memory.NewCheckedAllocator(memory.NewGoAllocator())
+	boolBuilder := array.NewBooleanBuilder(alloc)
+	boolBuilder.AppendValues([]bool{true, false}, []bool{true, false})
+	bools := boolBuilder.NewArray()
+	boolBuilder.Release()
+	date32Builder := array.NewDate32Builder(alloc)
+	date32Builder.AppendValues([]arrow.Date32{0, 1}, nil)
+	date32s := date32Builder.NewArray()
+	date32Builder.Release()
+	date64Builder := array.NewDate64Builder(alloc)
+	date64Builder.AppendValues([]arrow.Date64{0, 86_400_000}, nil)
+	date64s := date64Builder.NewArray()
+	date64Builder.Release()
+	schema := arrow.NewSchema([]arrow.Field{
+		{Name: "b", Type: arrow.FixedWidthTypes.Boolean, Nullable: true},
+		{Name: "d32", Type: arrow.FixedWidthTypes.Date32},
+		{Name: "d64", Type: arrow.FixedWidthTypes.Date64},
+	}, nil)
+	record := array.NewRecordBatch(schema, []arrow.Array{bools, date32s, date64s}, 2)
+	plan, err := Bind(context.Background(), schema, []TargetColumn{
+		{Name: "b", Type: types.T_bool.ToType()},
+		{Name: "d32", Type: types.T_date.ToType()},
+		{Name: "d64", Type: types.T_date.ToType()},
+	}, MatchByName)
+	require.NoError(t, err)
+	mp := mpool.MustNewZero()
+	bat, stats, err := plan.Convert(context.Background(), record, mp, ConvertOptions{})
+	require.NoError(t, err)
+	require.Zero(t, stats.BorrowedPayloadBytes)
+	require.Equal(t, []bool{true, false}, vector.MustFixedColNoTypeCheck[bool](bat.Vecs[0]))
+	require.True(t, bat.Vecs[0].IsNull(1))
+	expectedDates := []types.Date{
+		types.DaysFromUnixEpochToDate(0),
+		types.DaysFromUnixEpochToDate(1),
+	}
+	require.Equal(t, expectedDates, vector.MustFixedColNoTypeCheck[types.Date](bat.Vecs[1]))
+	require.Equal(t, expectedDates, vector.MustFixedColNoTypeCheck[types.Date](bat.Vecs[2]))
+	bat.Clean(mp)
+	record.Release()
+	bools.Release()
+	date32s.Release()
+	date64s.Release()
+	require.Equal(t, int64(0), mp.CurrNB())
+	alloc.AssertSize(t, 0)
+}
+
+func TestTemporalValidationAndTime64Borrow(t *testing.T) {
+	t.Run("date32 target date range", func(t *testing.T) {
+		alloc := memory.NewCheckedAllocator(memory.NewGoAllocator())
+		builder := array.NewDate32Builder(alloc)
+		// 10000-01-01 is a representable Arrow Date32 value but is outside
+		// MatrixOne's storable DATE range.
+		builder.Append(arrow.Date32(time.Date(10000, 1, 1, 0, 0, 0, 0, time.UTC).Unix() / (24 * 60 * 60)))
+		arr := builder.NewArray()
+		builder.Release()
+		schema := arrow.NewSchema([]arrow.Field{{Name: "d", Type: arrow.FixedWidthTypes.Date32}}, nil)
+		record := array.NewRecordBatch(schema, []arrow.Array{arr}, 1)
+		plan, err := Bind(context.Background(), schema, []TargetColumn{{Name: "d", Type: types.T_date.ToType()}}, MatchByName)
+		require.NoError(t, err)
+		mp := mpool.MustNewZero()
+		_, _, err = plan.Convert(context.Background(), record, mp, ConvertOptions{})
+		require.ErrorContains(t, err, "out of MatrixOne range")
+		require.Zero(t, mp.CurrNB())
+		record.Release()
+		arr.Release()
+		alloc.AssertSize(t, 0)
+	})
+
+	t.Run("date64 target date range", func(t *testing.T) {
+		alloc := memory.NewCheckedAllocator(memory.NewGoAllocator())
+		builder := array.NewDate64Builder(alloc)
+		builder.Append(arrow.Date64(time.Date(10000, 1, 1, 0, 0, 0, 0, time.UTC).UnixMilli()))
+		arr := builder.NewArray()
+		builder.Release()
+		schema := arrow.NewSchema([]arrow.Field{{Name: "d", Type: arrow.FixedWidthTypes.Date64}}, nil)
+		record := array.NewRecordBatch(schema, []arrow.Array{arr}, 1)
+		plan, err := Bind(context.Background(), schema, []TargetColumn{{Name: "d", Type: types.T_date.ToType()}}, MatchByName)
+		require.NoError(t, err)
+		mp := mpool.MustNewZero()
+		_, _, err = plan.Convert(context.Background(), record, mp, ConvertOptions{})
+		require.ErrorContains(t, err, "out of MatrixOne range")
+		require.Zero(t, mp.CurrNB())
+		record.Release()
+		arr.Release()
+		alloc.AssertSize(t, 0)
+	})
+
+	t.Run("date64 fractional day", func(t *testing.T) {
+		alloc := memory.NewCheckedAllocator(memory.NewGoAllocator())
+		builder := array.NewDate64Builder(alloc)
+		builder.Append(1)
+		arr := builder.NewArray()
+		builder.Release()
+		schema := arrow.NewSchema([]arrow.Field{{Name: "d", Type: arrow.FixedWidthTypes.Date64}}, nil)
+		record := array.NewRecordBatch(schema, []arrow.Array{arr}, 1)
+		plan, err := Bind(context.Background(), schema, []TargetColumn{{Name: "d", Type: types.T_date.ToType()}}, MatchByName)
+		require.NoError(t, err)
+		mp := mpool.MustNewZero()
+		_, _, err = plan.Convert(context.Background(), record, mp, ConvertOptions{})
+		require.ErrorContains(t, err, "integral representable day")
+		require.Equal(t, int64(0), mp.CurrNB())
+		record.Release()
+		arr.Release()
+		alloc.AssertSize(t, 0)
+	})
+
+	t.Run("time64 range", func(t *testing.T) {
+		alloc := memory.NewCheckedAllocator(memory.NewGoAllocator())
+		timeType := &arrow.Time64Type{Unit: arrow.Microsecond}
+		builder := array.NewTime64Builder(alloc, timeType)
+		builder.Append(arrow.Time64(24 * 60 * 60 * 1_000_000))
+		arr := builder.NewArray()
+		builder.Release()
+		schema := arrow.NewSchema([]arrow.Field{{Name: "t", Type: timeType}}, nil)
+		target := types.T_time.ToType()
+		target.Scale = 6
+		plan, err := Bind(context.Background(), schema, []TargetColumn{{Name: "t", Type: target}}, MatchByName)
+		require.NoError(t, err)
+		mp := mpool.MustNewZero()
+		record := array.NewRecordBatch(schema, []arrow.Array{arr}, 1)
+		_, _, err = plan.Convert(context.Background(), record, mp, ConvertOptions{})
+		require.ErrorContains(t, err, "outside [0,24h)")
+		require.Equal(t, int64(0), mp.CurrNB())
+		record.Release()
+		arr.Release()
+		alloc.AssertSize(t, 0)
+	})
+}
+
+func TestDictionaryDateRangeAndNullPayload(t *testing.T) {
+	alloc := memory.NewCheckedAllocator(memory.NewGoAllocator())
+	valueBuilder := array.NewDate32Builder(alloc)
+	valueBuilder.AppendValues(
+		[]arrow.Date32{arrow.Date32(time.Date(10000, 1, 1, 0, 0, 0, 0, time.UTC).Unix() / (24 * 60 * 60))},
+		[]bool{false},
+	)
+	values := valueBuilder.NewArray()
+	valueBuilder.Release()
+	indexBuilder := array.NewInt8Builder(alloc)
+	indexBuilder.Append(0)
+	indices := indexBuilder.NewArray()
+	indexBuilder.Release()
+	dictType := &arrow.DictionaryType{IndexType: arrow.PrimitiveTypes.Int8, ValueType: arrow.FixedWidthTypes.Date32}
+	dictionary := array.NewDictionaryArray(dictType, indices, values)
+	indices.Release()
+	values.Release()
+	schema := arrow.NewSchema([]arrow.Field{{Name: "d", Type: dictType, Nullable: true}}, nil)
+	record := array.NewRecordBatch(schema, []arrow.Array{dictionary}, 1)
+	plan, err := Bind(context.Background(), schema, []TargetColumn{{Name: "d", Type: types.T_date.ToType()}}, MatchMode(MatchByName))
+	require.NoError(t, err)
+	mp := mpool.MustNewZero()
+	bat, _, err := plan.Convert(context.Background(), record, mp, ConvertOptions{})
+	require.NoError(t, err, "a logical NULL must ignore the dictionary payload")
+	require.True(t, bat.Vecs[0].IsNull(0))
+	bat.Clean(mp)
+	record.Release()
+	dictionary.Release()
+	alloc.AssertSize(t, 0)
+}
+
+func TestDictionaryNullValuesConvertToLogicalNulls(t *testing.T) {
+	alloc := memory.NewCheckedAllocator(memory.NewGoAllocator())
+	indexBuilder := array.NewInt8Builder(alloc)
+	indexBuilder.AppendValues([]int8{0, 0}, nil)
+	indices := indexBuilder.NewArray()
+	indexBuilder.Release()
+	values := array.NewNull(1)
+	dictType := &arrow.DictionaryType{IndexType: arrow.PrimitiveTypes.Int8, ValueType: arrow.Null}
+	dictionary := array.NewDictionaryArray(dictType, indices, values)
+	indices.Release()
+	values.Release()
+	schema := arrow.NewSchema([]arrow.Field{{Name: "v", Type: dictType, Nullable: true}}, nil)
+	record := array.NewRecordBatch(schema, []arrow.Array{dictionary}, 2)
+	plan, err := Bind(context.Background(), schema, []TargetColumn{{Name: "v", Type: types.T_int64.ToType()}}, MatchByName)
+	require.NoError(t, err)
+	mp := mpool.MustNewZero()
+	bat, _, err := plan.Convert(context.Background(), record, mp, ConvertOptions{})
+	require.NoError(t, err)
+	require.True(t, bat.Vecs[0].IsNull(0))
+	require.True(t, bat.Vecs[0].IsNull(1))
+	bat.Clean(mp)
+	record.Release()
+	dictionary.Release()
+	alloc.AssertSize(t, 0)
+}
+
+func TestDictionaryNullValuesConvertToVarlenLogicalNulls(t *testing.T) {
+	alloc := memory.NewCheckedAllocator(memory.NewGoAllocator())
+	indexBuilder := array.NewInt8Builder(alloc)
+	indexBuilder.Append(0)
+	indices := indexBuilder.NewArray()
+	indexBuilder.Release()
+	values := array.NewNull(1)
+	dictType := &arrow.DictionaryType{IndexType: arrow.PrimitiveTypes.Int8, ValueType: arrow.Null}
+	dictionary := array.NewDictionaryArray(dictType, indices, values)
+	indices.Release()
+	values.Release()
+	schema := arrow.NewSchema([]arrow.Field{{Name: "v", Type: dictType, Nullable: true}}, nil)
+	record := array.NewRecordBatch(schema, []arrow.Array{dictionary}, 1)
+	plan, err := Bind(context.Background(), schema, []TargetColumn{{Name: "v", Type: types.T_varchar.ToType()}}, MatchByName)
+	require.NoError(t, err)
+	mp := mpool.MustNewZero()
+	bat, _, err := plan.Convert(context.Background(), record, mp, ConvertOptions{})
+	require.NoError(t, err)
+	require.True(t, bat.Vecs[0].IsNull(0))
+	bat.Clean(mp)
+	record.Release()
+	dictionary.Release()
+	alloc.AssertSize(t, 0)
+}
+
+func TestDictionaryNullValuesSupportAllFixedTargets(t *testing.T) {
+	targets := []struct {
+		name string
+		typ  types.Type
+	}{
+		{name: "bit", typ: types.T_bit.ToType()},
+		{name: "year", typ: types.T_year.ToType()},
+		{name: "enum", typ: types.T_enum.ToType()},
+		{name: "decimal64", typ: types.T_decimal64.ToType()},
+		{name: "decimal256", typ: types.T_decimal256.ToType()},
+		{name: "uuid", typ: types.T_uuid.ToType()},
+		{name: "transaction timestamp", typ: types.T_TS.ToType()},
+		{name: "rowid", typ: types.T_Rowid.ToType()},
+		{name: "blockid", typ: types.T_Blockid.ToType()},
+	}
+	for _, target := range targets {
+		t.Run(target.name, func(t *testing.T) {
+			alloc := memory.NewCheckedAllocator(memory.NewGoAllocator())
+			indexBuilder := array.NewInt8Builder(alloc)
+			indexBuilder.Append(0)
+			indices := indexBuilder.NewArray()
+			indexBuilder.Release()
+			values := array.NewNull(1)
+			dictType := &arrow.DictionaryType{IndexType: arrow.PrimitiveTypes.Int8, ValueType: arrow.Null}
+			dictionary := array.NewDictionaryArray(dictType, indices, values)
+			indices.Release()
+			values.Release()
+			schema := arrow.NewSchema([]arrow.Field{{Name: "v", Type: dictType, Nullable: true}}, nil)
+			record := array.NewRecordBatch(schema, []arrow.Array{dictionary}, 1)
+			plan, err := Bind(context.Background(), schema, []TargetColumn{{Name: "v", Type: target.typ}}, MatchByName)
+			require.NoError(t, err)
+			mp := mpool.MustNewZero()
+			bat, _, err := plan.Convert(context.Background(), record, mp, ConvertOptions{})
+			require.NoError(t, err)
+			require.True(t, bat.Vecs[0].IsNull(0))
+			bat.Clean(mp)
+			record.Release()
+			dictionary.Release()
+			alloc.AssertSize(t, 0)
+		})
+	}
+}
+
+func TestDictionaryNullIndexWithEmptyValues(t *testing.T) {
+	alloc := memory.NewCheckedAllocator(memory.NewGoAllocator())
+	indexBuilder := array.NewInt8Builder(alloc)
+	indexBuilder.AppendValues([]int8{0}, []bool{false})
+	indices := indexBuilder.NewArray()
+	indexBuilder.Release()
+	valueBuilder := array.NewInt64Builder(alloc)
+	values := valueBuilder.NewArray()
+	valueBuilder.Release()
+	dictType := &arrow.DictionaryType{IndexType: arrow.PrimitiveTypes.Int8, ValueType: arrow.PrimitiveTypes.Int64}
+	dictionary := array.NewDictionaryArray(dictType, indices, values)
+	indices.Release()
+	values.Release()
+	schema := arrow.NewSchema([]arrow.Field{{Name: "v", Type: dictType, Nullable: true}}, nil)
+	record := array.NewRecordBatch(schema, []arrow.Array{dictionary}, 1)
+	plan, err := Bind(context.Background(), schema, []TargetColumn{{Name: "v", Type: types.T_int64.ToType()}}, MatchByName)
+	require.NoError(t, err)
+	mp := mpool.MustNewZero()
+	bat, _, err := plan.Convert(context.Background(), record, mp, ConvertOptions{})
+	require.NoError(t, err)
+	require.True(t, bat.Vecs[0].IsNull(0))
+	bat.Clean(mp)
+	record.Release()
+	dictionary.Release()
+	alloc.AssertSize(t, 0)
+}
+
+func TestMaterializedWidenTimeDateTimeAndNull(t *testing.T) {
+	alloc := memory.NewCheckedAllocator(memory.NewGoAllocator())
+	intBuilder := array.NewInt8Builder(alloc)
+	intBuilder.AppendValues([]int8{-1, 2}, nil)
+	ints := intBuilder.NewArray()
+	intBuilder.Release()
+	timeType := &arrow.Time32Type{Unit: arrow.Millisecond}
+	timeBuilder := array.NewTime32Builder(alloc, timeType)
+	timeBuilder.AppendValues([]arrow.Time32{1_000, 1_234}, nil)
+	times := timeBuilder.NewArray()
+	timeBuilder.Release()
+	dateBuilder := array.NewDate32Builder(alloc)
+	dateBuilder.AppendValues([]arrow.Date32{0, 1}, nil)
+	dates := dateBuilder.NewArray()
+	dateBuilder.Release()
+	nulls := array.NewNull(2)
+	schema := arrow.NewSchema([]arrow.Field{
+		{Name: "i", Type: arrow.PrimitiveTypes.Int8},
+		{Name: "t", Type: timeType},
+		{Name: "d", Type: arrow.FixedWidthTypes.Date32},
+		{Name: "n", Type: arrow.Null, Nullable: true},
+	}, nil)
+	timeTarget := types.T_time.ToType()
+	timeTarget.Scale = 3
+	plan, err := Bind(context.Background(), schema, []TargetColumn{
+		{Name: "i", Type: types.T_int64.ToType()},
+		{Name: "t", Type: timeTarget},
+		{Name: "d", Type: types.T_datetime.ToType()},
+		{Name: "n", Type: types.T_varchar.ToType()},
+	}, MatchByName)
+	require.NoError(t, err)
+	record := array.NewRecordBatch(schema, []arrow.Array{ints, times, dates, nulls}, 2)
+	mp := mpool.MustNewZero()
+
+	bat, _, err := plan.Convert(context.Background(), record, mp, ConvertOptions{})
+	require.NoError(t, err)
+	require.Equal(t, []int64{-1, 2}, vector.MustFixedColNoTypeCheck[int64](bat.Vecs[0]))
+	require.Equal(t, []types.Time{types.Time(1_000_000), types.Time(1_234_000)},
+		vector.MustFixedColNoTypeCheck[types.Time](bat.Vecs[1]))
+	require.Equal(t, []string{"1970-01-01 00:00:00", "1970-01-02 00:00:00"}, []string{
+		vector.MustFixedColNoTypeCheck[types.Datetime](bat.Vecs[2])[0].String(),
+		vector.MustFixedColNoTypeCheck[types.Datetime](bat.Vecs[2])[1].String(),
+	})
+	require.True(t, bat.Vecs[3].IsNull(0))
+	require.True(t, bat.Vecs[3].IsNull(1))
+
+	bat.Clean(mp)
+	record.Release()
+	ints.Release()
+	times.Release()
+	dates.Release()
+	nulls.Release()
+	alloc.AssertSize(t, 0)
+}
+
+func TestCheckedWideningTypeMatrix(t *testing.T) {
+	tests := []struct {
+		source arrow.DataType
+		target types.Type
+	}{
+		{source: arrow.PrimitiveTypes.Int8, target: types.T_int16.ToType()},
+		{source: arrow.PrimitiveTypes.Int8, target: types.T_int32.ToType()},
+		{source: arrow.PrimitiveTypes.Int8, target: types.T_int64.ToType()},
+		{source: arrow.PrimitiveTypes.Int16, target: types.T_int32.ToType()},
+		{source: arrow.PrimitiveTypes.Int16, target: types.T_int64.ToType()},
+		{source: arrow.PrimitiveTypes.Int32, target: types.T_int64.ToType()},
+		{source: arrow.PrimitiveTypes.Uint8, target: types.T_uint16.ToType()},
+		{source: arrow.PrimitiveTypes.Uint8, target: types.T_uint32.ToType()},
+		{source: arrow.PrimitiveTypes.Uint8, target: types.T_uint64.ToType()},
+		{source: arrow.PrimitiveTypes.Uint16, target: types.T_uint32.ToType()},
+		{source: arrow.PrimitiveTypes.Uint16, target: types.T_uint64.ToType()},
+		{source: arrow.PrimitiveTypes.Uint32, target: types.T_uint64.ToType()},
+		{source: arrow.PrimitiveTypes.Float32, target: types.T_float64.ToType()},
+	}
+
+	for _, test := range tests {
+		name := test.source.String() + " to " + test.target.String()
+		t.Run(name, func(t *testing.T) {
+			alloc := memory.NewCheckedAllocator(memory.NewGoAllocator())
+			builder := array.NewBuilder(alloc, test.source)
+			switch typed := builder.(type) {
+			case *array.Int8Builder:
+				typed.Append(-7)
+			case *array.Int16Builder:
+				typed.Append(-7)
+			case *array.Int32Builder:
+				typed.Append(-7)
+			case *array.Uint8Builder:
+				typed.Append(7)
+			case *array.Uint16Builder:
+				typed.Append(7)
+			case *array.Uint32Builder:
+				typed.Append(7)
+			case *array.Float32Builder:
+				typed.Append(1.25)
+			default:
+				t.Fatalf("missing source builder %T", builder)
+			}
+			values := builder.NewArray()
+			builder.Release()
+			schema := arrow.NewSchema([]arrow.Field{{Name: "v", Type: test.source}}, nil)
+			record := array.NewRecordBatch(schema, []arrow.Array{values}, 1)
+			plan, err := Bind(context.Background(), schema, []TargetColumn{{Name: "v", Type: test.target}}, MatchByName)
+			require.NoError(t, err)
+			mp := mpool.MustNewZero()
+
+			bat, stats, err := plan.Convert(context.Background(), record, mp, ConvertOptions{})
+			require.NoError(t, err)
+			require.False(t, bat.Vecs[0].HasBorrowedBacking())
+			require.Equal(t, int64(test.target.TypeSize()), stats.MaterializedPayloadBytes)
+			switch test.target.Oid {
+			case types.T_int16:
+				require.Equal(t, []int16{-7}, vector.MustFixedColNoTypeCheck[int16](bat.Vecs[0]))
+			case types.T_int32:
+				require.Equal(t, []int32{-7}, vector.MustFixedColNoTypeCheck[int32](bat.Vecs[0]))
+			case types.T_int64:
+				require.Equal(t, []int64{-7}, vector.MustFixedColNoTypeCheck[int64](bat.Vecs[0]))
+			case types.T_uint16:
+				require.Equal(t, []uint16{7}, vector.MustFixedColNoTypeCheck[uint16](bat.Vecs[0]))
+			case types.T_uint32:
+				require.Equal(t, []uint32{7}, vector.MustFixedColNoTypeCheck[uint32](bat.Vecs[0]))
+			case types.T_uint64:
+				require.Equal(t, []uint64{7}, vector.MustFixedColNoTypeCheck[uint64](bat.Vecs[0]))
+			case types.T_float64:
+				require.Equal(t, []float64{1.25}, vector.MustFixedColNoTypeCheck[float64](bat.Vecs[0]))
+			}
+
+			bat.Clean(mp)
+			record.Release()
+			values.Release()
+			require.Zero(t, mp.CurrNB())
+			alloc.AssertSize(t, 0)
+		})
+	}
+}
+
+func TestMaterializedTimeRejectsPrecisionLoss(t *testing.T) {
+	alloc := memory.NewCheckedAllocator(memory.NewGoAllocator())
+	timeType := &arrow.Time32Type{Unit: arrow.Millisecond}
+	builder := array.NewTime32Builder(alloc, timeType)
+	builder.Append(1)
+	values := builder.NewArray()
+	builder.Release()
+	schema := arrow.NewSchema([]arrow.Field{{Name: "t", Type: timeType}}, nil)
+	target := types.T_time.ToType()
+	target.Scale = 2
+	plan, err := Bind(context.Background(), schema, []TargetColumn{{Name: "t", Type: target}}, MatchByName)
+	require.NoError(t, err)
+	record := array.NewRecordBatch(schema, []arrow.Array{values}, 1)
+	mp := mpool.MustNewZero()
+	_, _, err = plan.Convert(context.Background(), record, mp, ConvertOptions{})
+	require.ErrorContains(t, err, "precision")
+	require.Zero(t, mp.CurrNB())
+	record.Release()
+	values.Release()
+	alloc.AssertSize(t, 0)
+}
+
+func TestTimestampTimezoneSemantics(t *testing.T) {
+	location, err := time.LoadLocation("Asia/Shanghai")
+	require.NoError(t, err)
+	for _, tc := range []struct {
+		name       string
+		timezone   string
+		target     types.Type
+		input      arrow.Timestamp
+		expected   string
+		timestampS int64
+	}{
+		{name: "wall clock to timestamp", timezone: "", target: types.T_timestamp.ToType(), input: arrow.Timestamp((8*60*60 + 1) * 1_000_000), expected: "1970-01-01 08:00:01.000000", timestampS: 1},
+		{name: "wall clock to datetime", timezone: "", target: types.T_datetime.ToType(), expected: "1970-01-01 00:00:00"},
+		{name: "instant to datetime", timezone: "UTC", target: types.T_datetime.ToType(), expected: "1970-01-01 08:00:00"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			alloc := memory.NewCheckedAllocator(memory.NewGoAllocator())
+			timestampType := &arrow.TimestampType{Unit: arrow.Microsecond, TimeZone: tc.timezone}
+			builder := array.NewTimestampBuilder(alloc, timestampType)
+			builder.Append(tc.input)
+			arr := builder.NewArray()
+			builder.Release()
+			schema := arrow.NewSchema([]arrow.Field{{Name: "ts", Type: timestampType}}, nil)
+			record := array.NewRecordBatch(schema, []arrow.Array{arr}, 1)
+			plan, err := Bind(context.Background(), schema, []TargetColumn{{Name: "ts", Type: tc.target}}, MatchByName)
+			require.NoError(t, err)
+			mp := mpool.MustNewZero()
+			bat, _, err := plan.Convert(context.Background(), record, mp, ConvertOptions{Location: location})
+			require.NoError(t, err)
+			if tc.target.Oid == types.T_timestamp {
+				value := vector.MustFixedColNoTypeCheck[types.Timestamp](bat.Vecs[0])[0]
+				require.Equal(t, tc.timestampS, value.Unix())
+				require.Contains(t, value.String2(location, 6), tc.expected)
+			} else {
+				value := vector.MustFixedColNoTypeCheck[types.Datetime](bat.Vecs[0])[0]
+				require.Equal(t, tc.expected, value.String())
+			}
+			bat.Clean(mp)
+			record.Release()
+			arr.Release()
+			require.Equal(t, int64(0), mp.CurrNB())
+			alloc.AssertSize(t, 0)
+		})
+	}
+}
+
+func TestBindRejectsInvalidTimestampTimezone(t *testing.T) {
+	schema := arrow.NewSchema([]arrow.Field{{
+		Name: "ts",
+		Type: &arrow.TimestampType{Unit: arrow.Microsecond, TimeZone: "not/a-real-timezone"},
+	}}, nil)
+
+	_, err := Bind(context.Background(), schema, []TargetColumn{{
+		Name: "ts",
+		Type: types.T_datetime.ToType(),
+	}}, MatchByName)
+	require.ErrorContains(t, err, "timezone")
+}
+
+func TestBindRejectsInvalidTimeUnit(t *testing.T) {
+	for _, test := range []struct {
+		name string
+		typ  arrow.DataType
+	}{
+		{name: "time32", typ: &arrow.Time32Type{Unit: arrow.TimeUnit(99)}},
+		{name: "time64", typ: &arrow.Time64Type{Unit: arrow.TimeUnit(99)}},
+		{name: "timestamp", typ: &arrow.TimestampType{Unit: arrow.TimeUnit(99)}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			schema := arrow.NewSchema([]arrow.Field{{Name: "t", Type: test.typ}}, nil)
+			var err error
+			require.NotPanics(t, func() {
+				_, err = Bind(context.Background(), schema, []TargetColumn{{
+					Name: "t", Type: types.T_time.ToType(),
+				}}, MatchByName)
+			})
+			require.ErrorContains(t, err, "time unit")
+		})
+	}
+}
+
+func TestTimestampUnitAndPrecisionMatrix(t *testing.T) {
+	for _, test := range []struct {
+		name  string
+		unit  arrow.TimeUnit
+		value arrow.Timestamp
+	}{
+		{name: "second", unit: arrow.Second, value: 2},
+		{name: "millisecond", unit: arrow.Millisecond, value: 2_000},
+		{name: "microsecond", unit: arrow.Microsecond, value: 2_000_000},
+		{name: "nanosecond exact", unit: arrow.Nanosecond, value: 2_000_000_000},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			alloc := memory.NewCheckedAllocator(memory.NewGoAllocator())
+			timestampType := &arrow.TimestampType{Unit: test.unit}
+			builder := array.NewTimestampBuilder(alloc, timestampType)
+			builder.Append(test.value)
+			values := builder.NewArray()
+			builder.Release()
+			schema := arrow.NewSchema([]arrow.Field{{Name: "ts", Type: timestampType}}, nil)
+			target := types.New(types.T_datetime, 0, 6)
+			plan, err := Bind(context.Background(), schema, []TargetColumn{{Name: "ts", Type: target}}, MatchByName)
+			require.NoError(t, err)
+			record := array.NewRecordBatch(schema, []arrow.Array{values}, 1)
+			mp := mpool.MustNewZero()
+
+			bat, _, err := plan.Convert(context.Background(), record, mp, ConvertOptions{})
+			require.NoError(t, err)
+			require.Equal(t, "1970-01-01 00:00:02", vector.MustFixedColNoTypeCheck[types.Datetime](bat.Vecs[0])[0].String())
+
+			bat.Clean(mp)
+			record.Release()
+			values.Release()
+			alloc.AssertSize(t, 0)
+		})
+	}
+
+	for _, test := range []struct {
+		name    string
+		unit    arrow.TimeUnit
+		value   arrow.Timestamp
+		scale   int32
+		valid   bool
+		errText string
+	}{
+		{name: "nanosecond precision loss", unit: arrow.Nanosecond, value: 1, scale: 6, valid: true, errText: "out of range"},
+		{name: "target precision loss", unit: arrow.Millisecond, value: 1, scale: 2, valid: true, errText: "precision"},
+		{name: "overflow", unit: arrow.Second, value: arrow.Timestamp(^uint64(0) >> 1), scale: 6, valid: true, errText: "out of range"},
+		{name: "null payload ignored", unit: arrow.Second, value: arrow.Timestamp(^uint64(0) >> 1), scale: 6, valid: false},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			alloc := memory.NewCheckedAllocator(memory.NewGoAllocator())
+			timestampType := &arrow.TimestampType{Unit: test.unit}
+			builder := array.NewTimestampBuilder(alloc, timestampType)
+			builder.AppendValues([]arrow.Timestamp{test.value}, []bool{test.valid})
+			values := builder.NewArray()
+			builder.Release()
+			schema := arrow.NewSchema([]arrow.Field{{Name: "ts", Type: timestampType, Nullable: true}}, nil)
+			target := types.New(types.T_timestamp, 0, test.scale)
+			plan, err := Bind(context.Background(), schema, []TargetColumn{{Name: "ts", Type: target}}, MatchByName)
+			require.NoError(t, err)
+			record := array.NewRecordBatch(schema, []arrow.Array{values}, 1)
+			mp := mpool.MustNewZero()
+
+			bat, _, err := plan.Convert(context.Background(), record, mp, ConvertOptions{})
+			if test.errText != "" {
+				require.ErrorContains(t, err, test.errText)
+				require.Nil(t, bat)
+			} else {
+				require.NoError(t, err)
+				require.True(t, bat.Vecs[0].IsNull(0))
+				bat.Clean(mp)
+			}
+			require.Zero(t, mp.CurrNB())
+			record.Release()
+			values.Release()
+			alloc.AssertSize(t, 0)
+		})
+	}
+
+	invalidScale := types.New(types.T_timestamp, 0, 7)
+	_, err := Bind(context.Background(), arrow.NewSchema([]arrow.Field{{
+		Name: "ts", Type: &arrow.TimestampType{Unit: arrow.Microsecond},
+	}}, nil), []TargetColumn{{Name: "ts", Type: invalidScale}}, MatchByName)
+	require.ErrorContains(t, err, "no exact long-term conversion")
+}
+
+func TestDictionaryGatherMaterializesAndPropagatesLogicalNulls(t *testing.T) {
+	alloc := memory.NewCheckedAllocator(memory.NewGoAllocator())
+	indicesBuilder := array.NewInt8Builder(alloc)
+	indicesBuilder.AppendValues([]int8{0, 1, 0, 2}, []bool{true, true, false, true})
+	indices := indicesBuilder.NewArray()
+	indicesBuilder.Release()
+	valuesBuilder := array.NewStringBuilder(alloc)
+	long := "dictionary payload longer than MatrixOne inline varlena"
+	valuesBuilder.AppendValues([]string{long, "ignored", "tiny"}, []bool{true, false, true})
+	values := valuesBuilder.NewArray()
+	valuesBuilder.Release()
+	dictionaryType := &arrow.DictionaryType{IndexType: arrow.PrimitiveTypes.Int8, ValueType: arrow.BinaryTypes.String}
+	dictionary := array.NewDictionaryArray(dictionaryType, indices, values)
+	schema := arrow.NewSchema([]arrow.Field{{Name: "s", Type: dictionaryType, Nullable: true}}, nil)
+	record := array.NewRecordBatch(schema, []arrow.Array{dictionary}, 4)
+	plan, err := Bind(context.Background(), schema,
+		[]TargetColumn{{Name: "s", Type: types.T_varchar.ToType()}}, MatchByName)
+	require.NoError(t, err)
+	mp := mpool.MustNewZero()
+
+	bat, stats, err := plan.Convert(context.Background(), record, mp, ConvertOptions{})
+	require.NoError(t, err)
+	require.False(t, bat.Vecs[0].HasBorrowedBacking(), "dictionary indices must be gathered")
+	require.Equal(t, int64(len(long)+len("tiny")), stats.MaterializedPayloadBytes)
+	require.Equal(t, long, string(bat.Vecs[0].GetBytesAt(0)))
+	require.True(t, bat.Vecs[0].IsNull(1), "a null dictionary value is a logical null")
+	require.True(t, bat.Vecs[0].IsNull(2), "a null dictionary index is a logical null")
+	require.Equal(t, "tiny", string(bat.Vecs[0].GetBytesAt(3)))
+
+	notNullPlan, err := Bind(context.Background(), schema,
+		[]TargetColumn{{Name: "s", Type: types.T_varchar.ToType(), NotNull: true}}, MatchByName)
+	require.NoError(t, err)
+	_, _, err = notNullPlan.Convert(context.Background(), record, mp, ConvertOptions{})
+	require.ErrorContains(t, err, "NOT NULL")
+
+	bat.Clean(mp)
+	record.Release()
+	dictionary.Release()
+	indices.Release()
+	values.Release()
+	require.Equal(t, int64(0), mp.CurrNB())
+	alloc.AssertSize(t, 0)
+}
+
+func TestDictionaryFixedWidthAndTemporalGather(t *testing.T) {
+	alloc := memory.NewCheckedAllocator(memory.NewGoAllocator())
+	indicesBuilder := array.NewUint16Builder(alloc)
+	indicesBuilder.AppendValues([]uint16{1, 0}, nil)
+	indices := indicesBuilder.NewArray()
+	indicesBuilder.Release()
+	intBuilder := array.NewInt64Builder(alloc)
+	intBuilder.AppendValues([]int64{11, 22}, nil)
+	intValues := intBuilder.NewArray()
+	intBuilder.Release()
+	dateBuilder := array.NewDate64Builder(alloc)
+	dateBuilder.AppendValues([]arrow.Date64{0, 86_400_000}, nil)
+	dateValues := dateBuilder.NewArray()
+	dateBuilder.Release()
+	intType := &arrow.DictionaryType{IndexType: arrow.PrimitiveTypes.Uint16, ValueType: arrow.PrimitiveTypes.Int64}
+	dateType := &arrow.DictionaryType{IndexType: arrow.PrimitiveTypes.Uint16, ValueType: arrow.FixedWidthTypes.Date64}
+	intDictionary := array.NewDictionaryArray(intType, indices, intValues)
+	dateDictionary := array.NewDictionaryArray(dateType, indices, dateValues)
+	schema := arrow.NewSchema([]arrow.Field{
+		{Name: "i", Type: intType},
+		{Name: "d", Type: dateType},
+	}, nil)
+	record := array.NewRecordBatch(schema, []arrow.Array{intDictionary, dateDictionary}, 2)
+	plan, err := Bind(context.Background(), schema, []TargetColumn{
+		{Name: "i", Type: types.T_int64.ToType()},
+		{Name: "d", Type: types.T_date.ToType()},
+	}, MatchByName)
+	require.NoError(t, err)
+	mp := mpool.MustNewZero()
+
+	bat, stats, err := plan.Convert(context.Background(), record, mp, ConvertOptions{})
+	require.NoError(t, err)
+	require.Equal(t, []int64{22, 11}, vector.MustFixedColNoTypeCheck[int64](bat.Vecs[0]))
+	require.Equal(t, []types.Date{
+		types.DaysFromUnixEpochToDate(1),
+		types.DaysFromUnixEpochToDate(0),
+	}, vector.MustFixedColNoTypeCheck[types.Date](bat.Vecs[1]))
+	require.Equal(t, int64(2*(types.T_int64.ToType().TypeSize()+types.T_date.ToType().TypeSize())), stats.MaterializedPayloadBytes)
+
+	bat.Clean(mp)
+	record.Release()
+	intDictionary.Release()
+	dateDictionary.Release()
+	indices.Release()
+	intValues.Release()
+	dateValues.Release()
+	alloc.AssertSize(t, 0)
+}
+
+func TestDictionaryTimestampUsesCanonicalRangePrecisionAndNullSemantics(t *testing.T) {
+	tests := []struct {
+		name    string
+		unit    arrow.TimeUnit
+		value   arrow.Timestamp
+		valid   bool
+		scale   int32
+		errText string
+	}{
+		{name: "valid millisecond", unit: arrow.Millisecond, value: 1_000, valid: true, scale: 3},
+		{name: "target precision loss", unit: arrow.Millisecond, value: 1_001, valid: true, scale: 2, errText: "precision"},
+		{name: "nanosecond precision loss", unit: arrow.Nanosecond, value: 1, valid: true, scale: 6, errText: "out of range"},
+		{name: "overflow", unit: arrow.Second, value: arrow.Timestamp(^uint64(0) >> 1), valid: true, scale: 6, errText: "out of range"},
+		{name: "null payload ignored", unit: arrow.Second, value: arrow.Timestamp(^uint64(0) >> 1), valid: false, scale: 6},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			alloc := memory.NewCheckedAllocator(memory.NewGoAllocator())
+			indicesBuilder := array.NewInt8Builder(alloc)
+			indicesBuilder.Append(0)
+			indices := indicesBuilder.NewArray()
+			indicesBuilder.Release()
+
+			timestampType := &arrow.TimestampType{Unit: test.unit}
+			valuesBuilder := array.NewTimestampBuilder(alloc, timestampType)
+			valuesBuilder.AppendValues([]arrow.Timestamp{test.value}, []bool{test.valid})
+			values := valuesBuilder.NewArray()
+			valuesBuilder.Release()
+			dictionaryType := &arrow.DictionaryType{
+				IndexType: arrow.PrimitiveTypes.Int8,
+				ValueType: timestampType,
+			}
+			dictionary := array.NewDictionaryArray(dictionaryType, indices, values)
+			schema := arrow.NewSchema([]arrow.Field{{Name: "ts", Type: dictionaryType, Nullable: true}}, nil)
+			record := array.NewRecordBatch(schema, []arrow.Array{dictionary}, 1)
+			plan, err := Bind(context.Background(), schema, []TargetColumn{{
+				Name: "ts",
+				Type: types.New(types.T_timestamp, 0, test.scale),
+			}}, MatchByName)
+			require.NoError(t, err)
+			mp := mpool.MustNewZero()
+
+			bat, _, err := plan.Convert(context.Background(), record, mp, ConvertOptions{})
+			if test.errText != "" {
+				require.ErrorContains(t, err, test.errText)
+				require.Nil(t, bat)
+			} else {
+				require.NoError(t, err)
+				if test.valid {
+					require.False(t, bat.Vecs[0].IsNull(0))
+				} else {
+					require.True(t, bat.Vecs[0].IsNull(0))
+				}
+				bat.Clean(mp)
+			}
+			require.Zero(t, mp.CurrNB())
+
+			record.Release()
+			dictionary.Release()
+			indices.Release()
+			values.Release()
+			alloc.AssertSize(t, 0)
+		})
+	}
+}
+
+func TestDictionaryRejectsMalformedIndicesAndNestedValues(t *testing.T) {
+	for _, test := range []struct {
+		name      string
+		indexType arrow.DataType
+		build     func(memory.Allocator) arrow.Array
+	}{
+		{
+			name:      "negative signed index",
+			indexType: arrow.PrimitiveTypes.Int16,
+			build: func(alloc memory.Allocator) arrow.Array {
+				builder := array.NewInt16Builder(alloc)
+				defer builder.Release()
+				builder.Append(-1)
+				return builder.NewArray()
+			},
+		},
+		{
+			name:      "too large unsigned index",
+			indexType: arrow.PrimitiveTypes.Uint64,
+			build: func(alloc memory.Allocator) arrow.Array {
+				builder := array.NewUint64Builder(alloc)
+				defer builder.Release()
+				builder.Append(9)
+				return builder.NewArray()
+			},
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			alloc := memory.NewCheckedAllocator(memory.NewGoAllocator())
+			indices := test.build(alloc)
+			valuesBuilder := array.NewInt32Builder(alloc)
+			valuesBuilder.Append(7)
+			values := valuesBuilder.NewArray()
+			valuesBuilder.Release()
+			dictionaryType := &arrow.DictionaryType{IndexType: test.indexType, ValueType: arrow.PrimitiveTypes.Int32}
+			dictionary := array.NewDictionaryArray(dictionaryType, indices, values)
+			schema := arrow.NewSchema([]arrow.Field{{Name: "i", Type: dictionaryType}}, nil)
+			record := array.NewRecordBatch(schema, []arrow.Array{dictionary}, 1)
+			plan, err := Bind(context.Background(), schema,
+				[]TargetColumn{{Name: "i", Type: types.T_int32.ToType()}}, MatchByName)
+			require.NoError(t, err)
+			mp := mpool.MustNewZero()
+
+			require.NotPanics(t, func() {
+				_, _, err = plan.Convert(context.Background(), record, mp, ConvertOptions{})
+			})
+			require.ErrorContains(t, err, "outside")
+			require.Equal(t, int64(0), mp.CurrNB())
+
+			record.Release()
+			dictionary.Release()
+			indices.Release()
+			values.Release()
+			alloc.AssertSize(t, 0)
+		})
+	}
+
+	nested := &arrow.DictionaryType{
+		IndexType: arrow.PrimitiveTypes.Int8,
+		ValueType: &arrow.DictionaryType{IndexType: arrow.PrimitiveTypes.Int8, ValueType: arrow.BinaryTypes.String},
+	}
+	_, err := Bind(context.Background(), arrow.NewSchema([]arrow.Field{{Name: "s", Type: nested}}, nil),
+		[]TargetColumn{{Name: "s", Type: types.T_varchar.ToType()}}, MatchByName)
+	require.ErrorContains(t, err, "nested")
+}
+
+func TestMaxOutputRowsHonorsByteBudgetAndProgress(t *testing.T) {
+	alloc := memory.NewCheckedAllocator(memory.NewGoAllocator())
+	intBuilder := array.NewInt64Builder(alloc)
+	intBuilder.AppendValues([]int64{1, 2, 3, 4}, nil)
+	ints := intBuilder.NewArray()
+	intBuilder.Release()
+	stringBuilder := array.NewStringBuilder(alloc)
+	value := "0123456789012345678901234567890123456789"
+	require.Len(t, value, 40)
+	stringBuilder.AppendValues([]string{value, value, value, value}, nil)
+	strings := stringBuilder.NewArray()
+	stringBuilder.Release()
+	schema := arrow.NewSchema([]arrow.Field{
+		{Name: "i", Type: arrow.PrimitiveTypes.Int64},
+		{Name: "s", Type: arrow.BinaryTypes.String},
+	}, nil)
+	record := array.NewRecordBatch(schema, []arrow.Array{ints, strings}, 4)
+	plan, err := Bind(context.Background(), schema, []TargetColumn{
+		{Name: "i", Type: types.T_int64.ToType()},
+		{Name: "s", Type: types.T_varchar.ToType()},
+	}, MatchByName)
+	require.NoError(t, err)
+
+	const rowBytes = uint64(8 + types.VarlenaSize + 40)
+	rows, err := plan.MaxOutputRows(context.Background(), record, 0, 4, 2*rowBytes)
+	require.NoError(t, err)
+	require.Equal(t, 2, rows)
+	rows, err = plan.MaxOutputRows(context.Background(), record, 1, 3, rowBytes)
+	require.NoError(t, err)
+	require.Equal(t, 1, rows)
+	rows, err = plan.MaxOutputRows(context.Background(), record, 0, 4, 1)
+	require.NoError(t, err)
+	require.Equal(t, 1, rows, "one oversized row must still make progress")
+
+	record.Release()
+	ints.Release()
+	strings.Release()
+	alloc.AssertSize(t, 0)
+}
+
+func TestMaxOutputRowsRejectsMismatchedColumnRows(t *testing.T) {
+	alloc := memory.NewCheckedAllocator(memory.NewGoAllocator())
+	builder := array.NewStringBuilder(alloc)
+	builder.Append("one")
+	values := builder.NewArray()
+	builder.Release()
+	schema := arrow.NewSchema([]arrow.Field{{Name: "value", Type: arrow.BinaryTypes.String}}, nil)
+	record := &mismatchedRowsRecordBatch{
+		RecordBatch: array.NewRecordBatch(schema, []arrow.Array{values}, 1),
+		rows:        2,
+	}
+	plan, err := BindLoad(context.Background(), schema, []TargetColumn{{
+		Name: "value", Type: types.T_varchar.ToType(),
+	}}, MatchByName)
+	require.NoError(t, err)
+
+	var rows int
+	require.NotPanics(t, func() {
+		rows, err = plan.MaxOutputRows(context.Background(), record, 0, 2, 1024)
+	})
+	require.Zero(t, rows)
+	require.ErrorContains(t, err, "rows")
+
+	record.Release()
+	values.Release()
+	alloc.AssertSize(t, 0)
+}
+
+type mismatchedRowsRecordBatch struct {
+	arrow.RecordBatch
+	rows int64
+}
+
+func (r *mismatchedRowsRecordBatch) NumRows() int64 {
+	return r.rows
+}
+
+func TestMaxOutputRowsRejectsNilRecordSchema(t *testing.T) {
+	schema := arrow.NewSchema([]arrow.Field{{Name: "value", Type: arrow.PrimitiveTypes.Int64}}, nil)
+	values := array.NewInt64Builder(memory.NewGoAllocator())
+	values.Append(1)
+	record := &nilSchemaRecordBatch{
+		RecordBatch: array.NewRecordBatch(schema, []arrow.Array{values.NewArray()}, 1),
+	}
+	values.Release()
+	plan, err := BindLoad(context.Background(), schema, []TargetColumn{{
+		Name: "value", Type: types.T_int64.ToType(),
+	}}, MatchByName)
+	require.NoError(t, err)
+
+	var rows int
+	require.NotPanics(t, func() {
+		rows, err = plan.MaxOutputRows(context.Background(), record, 0, 1, 1024)
+	})
+	require.Zero(t, rows)
+	require.ErrorContains(t, err, "schema")
+	record.Release()
+}
+
+func TestConvertRejectsNilRecordSchema(t *testing.T) {
+	schema := arrow.NewSchema([]arrow.Field{{Name: "value", Type: arrow.PrimitiveTypes.Int64}}, nil)
+	values := array.NewInt64Builder(memory.NewGoAllocator())
+	values.Append(1)
+	record := &nilSchemaRecordBatch{
+		RecordBatch: array.NewRecordBatch(schema, []arrow.Array{values.NewArray()}, 1),
+	}
+	values.Release()
+	plan, err := BindLoad(context.Background(), schema, []TargetColumn{{
+		Name: "value", Type: types.T_int64.ToType(),
+	}}, MatchByName)
+	require.NoError(t, err)
+
+	mp := mpool.MustNewZero()
+	var converted *batch.Batch
+	require.NotPanics(t, func() {
+		converted, _, err = plan.Convert(context.Background(), record, mp, ConvertOptions{})
+	})
+	require.Nil(t, converted)
+	require.ErrorContains(t, err, "schema")
+	record.Release()
+}
+
+func TestConvertRejectsNilRecordColumn(t *testing.T) {
+	schema := arrow.NewSchema([]arrow.Field{{Name: "value", Type: arrow.PrimitiveTypes.Int64}}, nil)
+	values := array.NewInt64Builder(memory.NewGoAllocator())
+	values.Append(1)
+	record := &nilColumnRecordBatch{
+		RecordBatch: array.NewRecordBatch(schema, []arrow.Array{values.NewArray()}, 1),
+	}
+	values.Release()
+	plan, err := BindLoad(context.Background(), schema, []TargetColumn{{
+		Name: "value", Type: types.T_int64.ToType(),
+	}}, MatchByName)
+	require.NoError(t, err)
+
+	rows, budgetErr := plan.MaxOutputRows(context.Background(), record, 0, 1, 1024)
+	require.Zero(t, rows)
+	require.ErrorContains(t, budgetErr, "column")
+
+	mp := mpool.MustNewZero()
+	var converted *batch.Batch
+	require.NotPanics(t, func() {
+		converted, _, err = plan.Convert(context.Background(), record, mp, ConvertOptions{})
+	})
+	require.Nil(t, converted)
+	require.ErrorContains(t, err, "column")
+	record.Release()
+}
+
+func TestConvertRejectsRecordColumnTypeDrift(t *testing.T) {
+	schema := arrow.NewSchema([]arrow.Field{{Name: "value", Type: arrow.PrimitiveTypes.Int64}}, nil)
+	intValues := array.NewInt64Builder(memory.NewGoAllocator())
+	intValues.Append(1)
+	record := &driftedTypeRecordBatch{
+		RecordBatch: array.NewRecordBatch(schema, []arrow.Array{intValues.NewArray()}, 1),
+	}
+	intValues.Release()
+	floatValues := array.NewFloat64Builder(memory.NewGoAllocator())
+	floatValues.Append(1.5)
+	record.column = floatValues.NewArray()
+	floatValues.Release()
+	plan, err := BindLoad(context.Background(), schema, []TargetColumn{{
+		Name: "value", Type: types.T_int64.ToType(),
+	}}, MatchByName)
+	require.NoError(t, err)
+
+	mp := mpool.MustNewZero()
+	var converted *batch.Batch
+	require.NotPanics(t, func() {
+		converted, _, err = plan.Convert(context.Background(), record, mp, ConvertOptions{})
+	})
+	require.Nil(t, converted)
+	require.ErrorContains(t, err, "data type")
+	record.Release()
+	record.column.Release()
+}
+
+func TestConvertRejectsMalformedRecordSchema(t *testing.T) {
+	schema := arrow.NewSchema([]arrow.Field{{Name: "value", Type: arrow.PrimitiveTypes.Int64}}, nil)
+	values := array.NewInt64Builder(memory.NewGoAllocator())
+	values.Append(1)
+	record := &customSchemaRecordBatch{
+		RecordBatch: array.NewRecordBatch(schema, []arrow.Array{values.NewArray()}, 1),
+		schema:      schemaWithNilFieldType(schema),
+	}
+	values.Release()
+	plan, err := BindLoad(context.Background(), schema, []TargetColumn{{
+		Name: "value", Type: types.T_int64.ToType(),
+	}}, MatchByName)
+	require.NoError(t, err)
+
+	rows, budgetErr := plan.MaxOutputRows(context.Background(), record, 0, 1, 1024)
+	require.Zero(t, rows)
+	require.ErrorContains(t, budgetErr, "schema")
+
+	mp := mpool.MustNewZero()
+	var converted *batch.Batch
+	require.NotPanics(t, func() {
+		converted, _, err = plan.Convert(context.Background(), record, mp, ConvertOptions{})
+	})
+	require.Nil(t, converted)
+	require.ErrorContains(t, err, "schema")
+	record.Release()
+}
+
+func schemaWithNilFieldType(schema *arrow.Schema) *arrow.Schema {
+	malformed := *schema
+	fields := malformed.Fields()
+	fields[0].Type = nil
+	privateFields := reflect.ValueOf(&malformed).Elem().FieldByName("fields")
+	reflect.NewAt(privateFields.Type(), unsafe.Pointer(privateFields.UnsafeAddr())).Elem().Set(reflect.ValueOf(fields))
+	return &malformed
+}
+
+type nilSchemaRecordBatch struct {
+	arrow.RecordBatch
+}
+
+func (r *nilSchemaRecordBatch) Schema() *arrow.Schema {
+	return nil
+}
+
+type nilColumnRecordBatch struct {
+	arrow.RecordBatch
+}
+
+func (r *nilColumnRecordBatch) Column(int) arrow.Array {
+	return nil
+}
+
+type driftedTypeRecordBatch struct {
+	arrow.RecordBatch
+	column arrow.Array
+}
+
+func (r *driftedTypeRecordBatch) Column(int) arrow.Array {
+	return r.column
+}
+
+type customSchemaRecordBatch struct {
+	arrow.RecordBatch
+	schema *arrow.Schema
+}
+
+func (r *customSchemaRecordBatch) Schema() *arrow.Schema {
+	return r.schema
+}
+
+func TestConvertRollbackSchemaDriftNotNullAndCancel(t *testing.T) {
+	alloc := memory.NewCheckedAllocator(memory.NewGoAllocator())
+	intsBuilder := array.NewInt64Builder(alloc)
+	intsBuilder.AppendValues([]int64{1, 2}, nil)
+	ints := intsBuilder.NewArray()
+	intsBuilder.Release()
+	stringsBuilder := array.NewStringBuilder(alloc)
+	stringsBuilder.AppendValues([]string{"ok", "bad"}, []bool{true, false})
+	strings := stringsBuilder.NewArray()
+	stringsBuilder.Release()
+	schema := arrow.NewSchema([]arrow.Field{
+		{Name: "i", Type: arrow.PrimitiveTypes.Int64},
+		{Name: "s", Type: arrow.BinaryTypes.String, Nullable: true},
+	}, nil)
+	record := array.NewRecordBatch(schema, []arrow.Array{ints, strings}, 2)
+	plan, err := Bind(context.Background(), schema, []TargetColumn{
+		{Name: "i", Type: types.T_int64.ToType()},
+		{Name: "s", Type: types.T_varchar.ToType(), NotNull: true},
+	}, MatchByName)
+	require.NoError(t, err)
+	mp := mpool.MustNewZero()
+	_, _, err = plan.Convert(context.Background(), record, mp, ConvertOptions{})
+	require.ErrorContains(t, err, "NOT NULL")
+	require.Equal(t, int64(0), mp.CurrNB())
+
+	driftSchema := arrow.NewSchema([]arrow.Field{
+		{Name: "i", Type: arrow.PrimitiveTypes.Int64},
+		{Name: "renamed", Type: arrow.BinaryTypes.String, Nullable: true},
+	}, nil)
+	driftRecord := array.NewRecordBatch(driftSchema, []arrow.Array{ints, strings}, 2)
+	_, _, err = plan.Convert(context.Background(), driftRecord, mp, ConvertOptions{})
+	require.ErrorContains(t, err, "does not match")
+
+	canceled, cancel := context.WithCancel(context.Background())
+	cancel()
+	_, _, err = plan.Convert(canceled, record, mp, ConvertOptions{})
+	require.ErrorIs(t, err, context.Canceled)
+	require.Equal(t, int64(0), mp.CurrNB())
+
+	driftRecord.Release()
+	record.Release()
+	ints.Release()
+	strings.Release()
+	alloc.AssertSize(t, 0)
+}

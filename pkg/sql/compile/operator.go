@@ -1355,26 +1355,30 @@ func constructProjection(node *plan.Node) *projection.Projection {
 	return arg
 }
 
-func constructExternal(node *plan.Node, param *tree.ExternParam, ctx context.Context, fileList []string, FileSize []int64, fileOffset []*pipeline.FileOffset, strictSqlMode bool) *external.External {
+func constructExternal(node *plan.Node, param *tree.ExternParam, ctx context.Context, fileList []string, FileSize []int64, fileOffset []*pipeline.FileOffset, strictSqlMode bool, arrowScope pipeline.ArrowExecutionScope, arrowRuntime ...*arrowCompileRuntime) *external.External {
 	attrs := buildExternalAttrs(node)
-
-	return external.NewArgument().WithEs(
+	if param != nil && param.Format == tree.ARROW {
+		attrs = buildArrowExternalAttrs(node)
+	}
+	op := external.NewArgument().WithEs(
 		&external.ExternalParam{
 			ExParamConst: external.ExParamConst{
-				Attrs:           attrs,
-				Cols:            node.TableDef.Cols,
-				ColumnListLen:   externalColumnListLen(node),
-				Extern:          param,
-				FileOffsetTotal: fileOffset,
-				CreateSql:       node.TableDef.Createsql,
-				Ctx:             ctx,
-				FileList:        fileList,
-				FileSize:        FileSize,
-				ClusterTable:    node.GetClusterTable(),
-				StrictSqlMode:   strictSqlMode,
-				DatastreamScan:  node.ExternScan.GetDatastreamScan(),
-				ForeignScan:     node.ExternScan.GetForeignScan(),
-				KafkaScan:       node.ExternScan.GetKafkaScan(),
+				ArrowExecutionScope:   arrowScope,
+				ArrowForceMaterialize: param.ArrowForceMaterialize,
+				Attrs:                 attrs,
+				Cols:                  node.TableDef.Cols,
+				ColumnListLen:         externalColumnListLen(node),
+				Extern:                param,
+				FileOffsetTotal:       fileOffset,
+				CreateSql:             node.TableDef.Createsql,
+				Ctx:                   ctx,
+				FileList:              fileList,
+				FileSize:              FileSize,
+				ClusterTable:          node.GetClusterTable(),
+				StrictSqlMode:         strictSqlMode,
+				DatastreamScan:        node.ExternScan.GetDatastreamScan(),
+				ForeignScan:           node.ExternScan.GetForeignScan(),
+				KafkaScan:             node.ExternScan.GetKafkaScan(),
 				LoadEmptyNumericAsZero: param.ExternType == int32(plan.ExternType_LOAD) &&
 					(param.Parallel || param.ParallelLoadRequested),
 			},
@@ -1386,6 +1390,39 @@ func constructExternal(node *plan.Node, param *tree.ExternParam, ctx context.Con
 			},
 		},
 	)
+	if len(arrowRuntime) > 0 && arrowRuntime[0] != nil {
+		op.Es.ArrowObjectIdentities = arrowRuntime[0].identitiesFor(fileList)
+		op.Es.ArrowRecordBatchShards = arrowRuntime[0].shardsFor(fileList)
+		op.Es.ArrowSchemaFingerprint = append([]byte(nil), arrowRuntime[0].schemaFingerprint...)
+		op.Es.ArrowConversionPlanVersion = arrowRuntime[0].conversionPlanVersion
+	}
+	return op
+}
+
+// buildArrowExternalAttrs uses the LOAD binder's positive source-column map.
+// Generated/default/hidden target columns remain owned by the ordinary
+// projection/insert pipeline and must never be invented by the Arrow decoder.
+func buildArrowExternalAttrs(node *plan.Node) []plan.ExternAttr {
+	if node == nil || node.TableDef == nil || node.ExternScan == nil {
+		return nil
+	}
+	mapping := node.ExternScan.TbColToDataCol
+	attrs := make([]plan.ExternAttr, 0, len(mapping))
+	for i, col := range node.TableDef.Cols {
+		if col == nil || col.Hidden || col.GeneratedCol != nil {
+			continue
+		}
+		fieldIndex, ok := mapping[col.Name]
+		if !ok || fieldIndex < 0 {
+			continue
+		}
+		attrs = append(attrs, plan.ExternAttr{
+			ColName:       col.Name,
+			ColIndex:      int32(i),
+			ColFieldIndex: fieldIndex,
+		})
+	}
+	return attrs
 }
 
 func buildExternalAttrs(node *plan.Node) []plan.ExternAttr {

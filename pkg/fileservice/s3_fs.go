@@ -63,6 +63,7 @@ type S3FS struct {
 // <KeyPrefix>/<file path> -> file content
 
 var _ FileService = new(S3FS)
+var _ ObjectIdentityFileService = new(S3FS)
 
 func NewS3FS(
 	ctx context.Context,
@@ -246,6 +247,19 @@ func resolveS3CopySource(fs FileService, filePath string) (*S3FS, string, error)
 	}
 }
 
+// IsS3BackedFileService reports whether filePath resolves to an S3FS through
+// the supplied FileService. Callers that enforce storage-specific policy must
+// resolve FileServices and SubPath wrappers instead of relying on the visible
+// service name: deployments may give an S3-backed service an arbitrary name.
+// Resolution is metadata-only and never opens the object store.
+func IsS3BackedFileService(fs FileService, filePath string) bool {
+	if fs == nil {
+		return false
+	}
+	s3, _, err := resolveS3CopySource(fs, filePath)
+	return err == nil && s3 != nil
+}
+
 func (s *S3FS) AllocateCacheData(ctx context.Context, size int) fscache.Data {
 	if s.memCache != nil {
 		return s.memCache.AllocateCacheData(ctx, size)
@@ -379,6 +393,58 @@ func (s *S3FS) StatFile(ctx context.Context, filePath string) (*DirEntry, error)
 		IsDir: false,
 		Size:  size,
 	}, nil
+}
+
+func (s *S3FS) StatFileIdentity(ctx context.Context, filePath string) (ObjectIdentity, error) {
+	if err := ctx.Err(); err != nil {
+		return ObjectIdentity{}, err
+	}
+	path, err := parseFilePathAtService(filePath, s.name)
+	if err != nil {
+		return ObjectIdentity{}, err
+	}
+	storage, ok := s.storage.(objectStorageIdentityReader)
+	if !ok {
+		return ObjectIdentity{}, moerr.NewNotSupported(ctx, "object storage identity")
+	}
+	identity, err := storage.StatObjectIdentity(ctx, s.pathToKey(path.File))
+	if err != nil {
+		return ObjectIdentity{}, err
+	}
+	if err := identity.Validate(); err != nil {
+		return ObjectIdentity{}, err
+	}
+	return identity, nil
+}
+
+func (s *S3FS) OpenReadWithIdentity(
+	ctx context.Context,
+	filePath string,
+	offset, size int64,
+	expected ObjectIdentity,
+) (io.ReadCloser, error) {
+	if err := expected.Validate(); err != nil {
+		return nil, err
+	}
+	if offset < 0 || size == 0 || size < -1 || offset > expected.Size ||
+		(size > 0 && size > expected.Size-offset) {
+		return nil, moerr.NewInvalidInput(ctx, "conditional read is outside the fixed object identity")
+	}
+	path, err := parseFilePathAtService(filePath, s.name)
+	if err != nil {
+		return nil, err
+	}
+	storage, ok := s.storage.(objectStorageIdentityReader)
+	if !ok {
+		return nil, moerr.NewNotSupported(ctx, "conditional object storage read")
+	}
+	min := offset
+	var max *int64
+	if size > 0 {
+		end := offset + size
+		max = &end
+	}
+	return storage.ReadObjectWithIdentity(ctx, s.pathToKey(path.File), &min, max, expected)
 }
 
 func (s *S3FS) PrefetchFile(ctx context.Context, filePath string) error {

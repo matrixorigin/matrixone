@@ -287,6 +287,101 @@ type MongoDBParameters struct {
 	enableDefaulted  bool
 }
 
+const (
+	arrowLoadEnabledConfigured uint8 = 1 << iota
+	arrowLoadS3EnabledConfigured
+	arrowLoadDistributedEnabledConfigured
+)
+
+// ArrowLoadParameters controls the LOAD-only Arrow IPC surface. Local files are
+// available by default. S3-backed sources and distributed execution require an
+// explicit deployment opt-in until their aggregate resource admission and
+// release-readiness gates are accepted.
+//
+// configuredFields distinguishes an omitted TOML key from an explicit false.
+// defaultsApplied makes repeated service validation idempotent, so a later
+// programmatic false is not silently changed back to true.
+type ArrowLoadParameters struct {
+	Enabled            bool `toml:"enabled" user_setting:"advanced"`
+	S3Enabled          bool `toml:"s3-enabled" user_setting:"advanced"`
+	DistributedEnabled bool `toml:"distributed-enabled" user_setting:"advanced"`
+	// ForceMaterialize disables the Arrow-to-MO borrow path without disabling
+	// Arrow LOAD itself. It is a rollout diagnostic and emergency fallback, not
+	// the normal execution policy, so its zero value keeps borrowing enabled.
+	ForceMaterialize bool `toml:"force-materialize" user_setting:"advanced"`
+
+	configuredFields uint8
+	defaultsApplied  bool
+}
+
+// NewArrowLoadParameters returns the default local-only Arrow LOAD settings.
+// Callers that adjust a programmatic service configuration should start from
+// this value so an explicit setting survives later validation and defaulting
+// passes.
+func NewArrowLoadParameters() *ArrowLoadParameters {
+	parameters := &ArrowLoadParameters{}
+	parameters.SetDefaultValues()
+	return parameters
+}
+
+// UnmarshalTOML records explicit opt-outs while preserving defaults for omitted
+// keys. BurntSushi TOML matches field names case-insensitively, so conflicting
+// case variants are rejected instead of making the selected value ambiguous.
+func (parameters *ArrowLoadParameters) UnmarshalTOML(value interface{}) error {
+	table, ok := value.(map[string]interface{})
+	if !ok {
+		return moerr.NewBadConfigNoCtx("arrow-load configuration must be a TOML table")
+	}
+
+	var configured uint8
+	for key := range table {
+		var field uint8
+		var name string
+		switch {
+		case strings.EqualFold(key, "enabled"):
+			field, name = arrowLoadEnabledConfigured, "enabled"
+		case strings.EqualFold(key, "s3-enabled"):
+			field, name = arrowLoadS3EnabledConfigured, "s3-enabled"
+		case strings.EqualFold(key, "distributed-enabled"):
+			field, name = arrowLoadDistributedEnabledConfigured, "distributed-enabled"
+		default:
+			continue
+		}
+		if configured&field != 0 {
+			return moerr.NewBadConfigNoCtxf(
+				"arrow-load configuration contains conflicting %s keys", name,
+			)
+		}
+		configured |= field
+	}
+
+	var encoded bytes.Buffer
+	if err := btoml.NewEncoder(&encoded).Encode(table); err != nil {
+		return err
+	}
+	type plainArrowLoadParameters ArrowLoadParameters
+	decoded := plainArrowLoadParameters(*parameters)
+	if _, err := btoml.Decode(encoded.String(), &decoded); err != nil {
+		return err
+	}
+	*parameters = ArrowLoadParameters(decoded)
+	parameters.configuredFields |= configured
+	return nil
+}
+
+// SetDefaultValues enables local Arrow LOAD. S3-backed sources and distributed
+// execution remain fail-closed unless their corresponding TOML key explicitly
+// opts in.
+func (parameters *ArrowLoadParameters) SetDefaultValues() {
+	if parameters.defaultsApplied {
+		return
+	}
+	if parameters.configuredFields&arrowLoadEnabledConfigured == 0 {
+		parameters.Enabled = true
+	}
+	parameters.defaultsApplied = true
+}
+
 // NewMongoDBParameters returns MongoDB parameters with defaults that must be
 // established before TOML decoding. Initializing Enable here lets an explicit
 // false from either TOML or programmatic configuration remain meaningful when
@@ -660,8 +755,9 @@ type FrontendParameters struct {
 	// globally for new sessions with SET GLOBAL sidecar_url = '...'.
 	SidecarURL string `toml:"sidecarUrl" user_setting:"advanced"`
 
-	Iceberg IcebergParameters `toml:"iceberg" user_setting:"advanced"`
-	MongoDB MongoDBParameters `toml:"mongodb" user_setting:"advanced"`
+	Iceberg   IcebergParameters   `toml:"iceberg" user_setting:"advanced"`
+	MongoDB   MongoDBParameters   `toml:"mongodb" user_setting:"advanced"`
+	ArrowLoad ArrowLoadParameters `toml:"arrow-load" user_setting:"advanced"`
 }
 
 func (fp *FrontendParameters) SetDefaultValues() {
@@ -821,6 +917,7 @@ func (fp *FrontendParameters) SetDefaultValues() {
 
 	fp.Iceberg.SetDefaultValues()
 	fp.MongoDB.SetDefaultValues()
+	fp.ArrowLoad.SetDefaultValues()
 }
 
 func (fp *FrontendParameters) SetMaxMessageSize(size uint64) {

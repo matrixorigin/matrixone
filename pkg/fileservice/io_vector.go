@@ -35,6 +35,9 @@ func (i *IOVector) Release() {
 		if entry.CachedData != nil {
 			entry.CachedData.Release()
 		}
+		if entry.releaseCachedData != nil {
+			entry.releaseCachedData()
+		}
 		if entry.releaseData != nil {
 			entry.releaseData()
 		}
@@ -47,6 +50,10 @@ func (i *IOVector) ReleaseReadResultOnError() {
 		if entry.CachedData != nil {
 			entry.CachedData.Release()
 			entry.CachedData = nil
+		}
+		if entry.releaseCachedData != nil {
+			entry.releaseCachedData()
+			entry.releaseCachedData = nil
 		}
 		if entry.done && entry.releaseData != nil {
 			entry.releaseData()
