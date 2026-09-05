@@ -67,8 +67,9 @@ const (
 	maxGpuIndexCacheSizeVar = "max_gpu_index_cache_size"
 
 	// sysLimitTTL bounds how stale the SYS account's value may be. The read costs one
-	// auto-commit SQL and only ever runs on a cache MISS, which has just paid for a full
-	// index load, so the cadence is about bounding SET GLOBAL latency, not query cost.
+	// auto-commit SQL and runs on a cache miss or a TTL-gated housekeeping refresh; the
+	// miss has just paid for a full index load, while housekeeping keeps warm-cache policy
+	// changes from waiting for another miss.
 	sysLimitTTL = 15 * time.Second
 
 	// maxRepresentableBudget keeps a derived budget inside int64. It is NOT policy and not a
