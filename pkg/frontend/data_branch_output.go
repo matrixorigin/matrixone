@@ -264,9 +264,9 @@ func newApplyBatchInfo(
 	return &applyBatchInfo{
 		dbName:                 tblStuff.baseRel.GetTableDef(ctx).DbName,
 		baseTable:              tblStuff.baseRel.GetTableName(),
-		deleteTable:            fmt.Sprintf("__mo_diff_del_%s_%d", sessionTag, seq),
-		insertTable:            fmt.Sprintf("__mo_diff_ins_%s_%d", sessionTag, seq),
-		updateTable:            fmt.Sprintf("__mo_diff_upd_%s_%d", sessionTag, seq),
+		deleteTable:            fmt.Sprintf(dataBranchApplyTablePrefix+"del_%s_%d", sessionTag, seq),
+		insertTable:            fmt.Sprintf(dataBranchApplyTablePrefix+"ins_%s_%d", sessionTag, seq),
+		updateTable:            fmt.Sprintf(dataBranchApplyTablePrefix+"upd_%s_%d", sessionTag, seq),
 		deleteKeyNames:         deleteKeyNames,
 		deleteStageNames:       deleteStageNames,
 		deleteKeyTypes:         deleteKeyTypes,
