@@ -170,3 +170,28 @@ func TestGenInsertMOIndexesSqlPersistsInvisibleIndex(t *testing.T) {
 	require.NoError(t, err)
 	require.Contains(t, sql, "'', '', '', 0, 0, '', 'a', 1, "+NULL_VALUE+", "+NULL_VALUE)
 }
+
+func TestGenInsertMOIndexesSqlMarksFunctionalKeyPartHidden(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	mockEngine := mock_frontend.NewMockEngine(ctrl)
+	mockEngine.EXPECT().AllocateIDByKey(gomock.Any(), ALLOCID_INDEX_KEY).Return(uint64(272512), nil)
+
+	proc := testutil.NewProc(t)
+	hiddenName := catalog.FunctionalIndexColumnPrefix + "0123456789abcdef0123456789abcdef"
+	tableDef := &plan.TableDef{
+		Name2ColIndex: map[string]int32{hiddenName: 0},
+		Cols:          []*plan.ColDef{{Name: hiddenName, OriginName: hiddenName}},
+	}
+	ct := &engine.ConstraintDef{Cts: []engine.Constraint{&engine.IndexDef{Indexes: []*plan.IndexDef{{
+		IndexName:  "idx_expr",
+		Parts:      []string{hiddenName, catalog.CreateAlias("id")},
+		TableExist: true,
+	}}}}}
+
+	sql, err := genInsertMOIndexesSql(mockEngine, proc, "123456", 272466, ct, tableDef)
+	require.NoError(t, err)
+	require.Contains(t, sql, "1, 1, '', '"+hiddenName+"', 1")
+	require.Contains(t, sql, "1, 0, '', '__mo_alias_id', 2")
+}

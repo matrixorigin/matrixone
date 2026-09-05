@@ -175,9 +175,35 @@ func TestShowKeysUsesMySQLIndexOrder(t *testing.T) {
 			}
 			require.Len(t, sortNodes, 1)
 			require.Len(t, sortNodes[0].GetOrderBy(), 3)
-			require.Equal(t, "case", sortNodes[0].GetOrderBy()[0].GetExpr().GetF().GetFunc().GetObjName())
-			require.Equal(t, "MIN(idx.id)", sortNodes[0].GetOrderBy()[1].GetExpr().GetCol().GetName())
-			require.Equal(t, "idx.ordinal_position", sortNodes[0].GetOrderBy()[2].GetExpr().GetCol().GetName())
+			nodes := logicPlan.GetQuery().GetNodes()
+			resolveSortExpr := func(spec *plan.OrderBySpec) *plan.Expr {
+				expr := spec.GetExpr()
+				nodeID := sortNodes[0].GetChildren()[0]
+				for step := 0; step < len(nodes); step++ {
+					col := expr.GetCol()
+					if col == nil || col.GetRelPos() != 0 || col.GetColPos() < 0 || int(col.GetColPos()) >= len(nodes[nodeID].GetProjectList()) {
+						break
+					}
+					expr = nodes[nodeID].GetProjectList()[col.GetColPos()]
+					children := nodes[nodeID].GetChildren()
+					if len(children) == 0 {
+						break
+					}
+					nodeID = children[0]
+				}
+				return expr
+			}
+			firstOrderExpr := resolveSortExpr(sortNodes[0].GetOrderBy()[0])
+			require.NotNil(t, firstOrderExpr.GetF())
+			require.Equal(t, "case", firstOrderExpr.GetF().GetFunc().GetObjName())
+			secondOrderExpr := resolveSortExpr(sortNodes[0].GetOrderBy()[1])
+			if secondOrderExpr.GetF() != nil {
+				require.Equal(t, "MIN(idx.id)", secondOrderExpr.GetF().GetFunc().GetObjName())
+			} else {
+				require.Equal(t, "MIN(idx.id)", secondOrderExpr.GetCol().GetName())
+			}
+			thirdOrderExpr := resolveSortExpr(sortNodes[0].GetOrderBy()[2])
+			require.Equal(t, "idx.ordinal_position", thirdOrderExpr.GetCol().GetName())
 		})
 	}
 }

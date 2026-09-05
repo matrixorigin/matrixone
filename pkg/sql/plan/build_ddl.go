@@ -3073,6 +3073,9 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 			}
 			pksMap := map[string]bool{}
 			for _, key := range def.KeyParts {
+				if key == nil || key.Expr != nil || key.ColName == nil {
+					return moerr.NewNotSupported(ctx.GetContext(), "functional expressions are not supported in PRIMARY KEY")
+				}
 				name := key.ColName.ColName() // name of primary key column
 				if _, ok := pksMap[name]; ok {
 					return moerr.NewInvalidInputf(ctx.GetContext(), "duplicate column name '%s' in primary key", key.ColName.ColNameOrigin())
@@ -3088,16 +3091,14 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 				pksMap[name] = true
 			}
 		case *tree.Index:
-			err := checkIndexKeypartSupportability(ctx.GetContext(), def.KeyParts)
-			if err != nil {
-				return err
-			}
-			if err = checkSpatialIndexColumnSupport(ctx, def, colMap); err != nil {
-				return err
-			}
-
 			secondaryIndexInfos = append(secondaryIndexInfos, def)
 			for _, key := range def.KeyParts {
+				if key == nil || key.Expr != nil {
+					continue
+				}
+				if key.ColName == nil {
+					return moerr.NewInvalidInput(ctx.GetContext(), "index key part is missing a column or expression")
+				}
 				name := key.ColName.ColName()
 
 				if col, ok := colMap[name]; ok {
@@ -3107,6 +3108,11 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 				}
 			}
 		case *tree.UniqueIndex:
+			for _, key := range def.KeyParts {
+				if key != nil && key.Expr != nil {
+					return moerr.NewNotSupported(ctx.GetContext(), "functional expressions are not supported in UNIQUE indexes")
+				}
+			}
 			err := checkIndexKeypartSupportability(ctx.GetContext(), def.KeyParts)
 			if err != nil {
 				return err
@@ -3123,6 +3129,11 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 				}
 			}
 		case *tree.FullTextIndex:
+			for _, key := range def.KeyParts {
+				if key != nil && key.Expr != nil {
+					return moerr.NewNotSupported(ctx.GetContext(), "functional expressions are not supported in FULLTEXT indexes")
+				}
+			}
 			err := checkIndexKeypartSupportability(ctx.GetContext(), def.KeyParts)
 			if err != nil {
 				return err
@@ -3473,10 +3484,50 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 		}
 	}
 
-	// check Constraint Name (include index/ unique)
+	// Resolve names before lowering expression key parts. An unnamed inline
+	// functional index needs a unique stable name for its private column; the
+	// same helper also preserves the existing duplicate-name diagnostics.
 	err = checkConstraintNames(uniqueIndexInfos, secondaryIndexInfos, ctx.GetContext())
 	if err != nil {
 		return err
+	}
+
+	// Lower expression key parts only after all user and generated columns have
+	// been bound. This keeps forward references consistent with generated
+	// columns while leaving the original CREATE TABLE AST untouched for
+	// rel_createsql/SHOW CREATE TABLE.
+	for i, indexInfo := range secondaryIndexInfos {
+		hasExpr := false
+		for _, keyPart := range indexInfo.KeyParts {
+			if keyPart != nil && keyPart.Expr != nil {
+				hasExpr = true
+				break
+			}
+		}
+		if hasExpr {
+			if stmt.Temporary {
+				return moerr.NewNotSupported(ctx.GetContext(), "functional indexes are not supported on temporary tables")
+			}
+			if stmt.IsClusterTable {
+				return moerr.NewNotSupported(ctx.GetContext(), "functional indexes are not supported on cluster tables")
+			}
+			secondaryIndexInfos[i], err = lowerFunctionalIndex(ctx, indexInfo, createTable.TableDef)
+			if err != nil {
+				return err
+			}
+			for _, col := range createTable.TableDef.Cols {
+				if col != nil {
+					colMap[col.Name] = col
+				}
+			}
+			continue
+		}
+		if err = checkIndexKeypartSupportability(ctx.GetContext(), indexInfo.KeyParts); err != nil {
+			return err
+		}
+		if err = checkSpatialIndexColumnSupport(ctx, indexInfo, colMap); err != nil {
+			return err
+		}
 	}
 
 	// build index table
@@ -5194,6 +5245,29 @@ func buildCreateIndex(stmt *tree.CreateIndex, ctx CompilerContext) (*Plan, error
 	if _, found := resolveIndexName(tableDef.Indexes, indexName); found {
 		return nil, moerr.NewDuplicateKey(ctx.GetContext(), indexName)
 	}
+	// Standalone CREATE INDEX has to rebuild the base table when the key part
+	// owns a hidden generated column. Route it through the atomic COPY path so
+	// backfill, index-table creation, and catalog writes commit together.
+	if hasFunctionalIndexKeyPart(stmt.KeyParts) {
+		if stmt.IndexCat != tree.INDEX_CATEGORY_NONE {
+			return nil, moerr.NewNotSupported(ctx.GetContext(), "functional expressions are supported only by regular BTREE indexes")
+		}
+		keyType := tree.INDEX_TYPE_INVALID
+		if stmt.IndexOption != nil {
+			keyType = stmt.IndexOption.IType
+		}
+		return buildAlterTableCopy(&tree.AlterTable{
+			Table: stmt.Table,
+			Options: tree.AlterTableOptions{
+				tree.NewAlterOptionAdd(&tree.Index{
+					Name:        indexName,
+					KeyParts:    stmt.KeyParts,
+					KeyType:     keyType,
+					IndexOption: stmt.IndexOption,
+				}),
+			},
+		}, ctx)
+	}
 	// build index
 	var ftIdx *tree.FullTextIndex
 	var uIdx *tree.UniqueIndex
@@ -5463,6 +5537,18 @@ func buildDropIndex(stmt *tree.DropIndex, ctx CompilerContext) (*Plan, error) {
 		}
 	} else if err := checkDropReferencedKeyForeignKeyDependency(ctx, tableDef, dropIndex.IndexName, nil); err != nil {
 		return nil, err
+	}
+	if found {
+		for _, indexDef := range tableDef.Indexes {
+			if indexDef != nil && indexDef.IndexName == dropIndex.IndexName && hasFunctionalIndexColumnPart(indexDef) {
+				return buildAlterTableCopy(&tree.AlterTable{
+					Table: stmt.TableName,
+					Options: tree.AlterTableOptions{
+						&tree.AlterOptionDrop{Typ: tree.AlterTableDropIndex, Name: tree.Identifier(dropIndex.IndexName)},
+					},
+				}, ctx)
+			}
+		}
 	}
 
 	return &Plan{
@@ -5948,6 +6034,9 @@ func buildAlterTableInplace(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, 
 				if err := checkCreateIndexTableType(ctx.GetContext(), tableDef); err != nil {
 					return nil, err
 				}
+				if hasFunctionalIndexKeyPart(def.KeyParts) {
+					return nil, moerr.NewNotSupported(ctx.GetContext(), "functional expressions are not supported in UNIQUE indexes")
+				}
 				if err := checkIndexKeypartSupportability(
 					ctx.GetContext(),
 					def.KeyParts,
@@ -5996,6 +6085,9 @@ func buildAlterTableInplace(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, 
 			case *tree.FullTextIndex:
 				if err := checkCreateIndexTableType(ctx.GetContext(), tableDef); err != nil {
 					return nil, err
+				}
+				if hasFunctionalIndexKeyPart(def.KeyParts) {
+					return nil, moerr.NewNotSupported(ctx.GetContext(), "functional expressions are not supported in FULLTEXT indexes")
 				}
 				if err := checkIndexKeypartSupportability(
 					ctx.GetContext(),
@@ -6047,6 +6139,9 @@ func buildAlterTableInplace(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, 
 			case *tree.Index:
 				if err := checkCreateIndexTableType(ctx.GetContext(), tableDef); err != nil {
 					return nil, err
+				}
+				if hasFunctionalIndexKeyPart(def.KeyParts) {
+					return nil, moerr.NewNotSupported(ctx.GetContext(), "functional indexes require ALGORITHM=COPY")
 				}
 				if err := checkIndexKeypartSupportability(
 					ctx.GetContext(),

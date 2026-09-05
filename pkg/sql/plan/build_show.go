@@ -874,6 +874,9 @@ func buildShowIndex(stmt *tree.ShowIndex, ctx CompilerContext) (*Plan, error) {
 	if tableDef == nil {
 		return nil, moerr.NewNoSuchTable(ctx.GetContext(), dbName, tblName)
 	}
+	if err := validateFunctionalIndexMetadata(ctx.GetContext(), tableDef); err != nil {
+		return nil, err
+	}
 
 	ddlType := plan.DataDefinition_SHOW_INDEX
 
@@ -893,7 +896,7 @@ func buildShowIndex(stmt *tree.ShowIndex, ctx CompilerContext) (*Plan, error) {
 		"if(`idx`.`type` IN ('PRIMARY', 'UNIQUE'), 0, 1) as `Non_unique`, " +
 		"`idx`.`name` as `Key_name`, " +
 		"`idx`.`ordinal_position` as `Seq_in_index`, " +
-		"`idx`.`column_name` as `Column_name`, " +
+		"if(`idx`.`hidden` = 1, NULL, `idx`.`column_name`) as `Column_name`, " +
 		"'A' as `Collation`, 0 as `Cardinality`, " +
 		"'NULL' as `Sub_part`, " +
 		"'NULL' as `Packed`, " +
@@ -903,7 +906,7 @@ func buildShowIndex(stmt *tree.ShowIndex, ctx CompilerContext) (*Plan, error) {
 		"`idx`.`comment` as `Index_comment`, " +
 		"`idx`.`algo_params` as `Index_params`, " +
 		"if(`idx`.`is_visible` = 1, 'YES', 'NO') as `Visible`, " +
-		"`idx`.`column_name` as `Expression` " +
+		"if(`idx`.`hidden` = 1, mo_show_visible_bin(`tcl`.`attr_generated`, 5), `idx`.`column_name`) as `Expression` " +
 		"from `%s`.`mo_indexes` `idx` left join `%s`.`mo_columns` `tcl` " +
 		"on (`idx`.`table_id` = `tcl`.`att_relname_id` and `idx`.`column_name` = `tcl`.`attname`) " +
 		"where `tcl`.`att_database` = '%s' AND " +
@@ -933,7 +936,7 @@ func buildShowIndex(stmt *tree.ShowIndex, ctx CompilerContext) (*Plan, error) {
 		//| tbl   |          1 | idx1     |            1 | embedding   | A         |           0 | NULL     | NULL   | YES  | ivfflat    |         |               | {"lists":"2","op_type":"vector_l2_ops"} | YES     | NULL       |
 		//+-------+------------+----------+--------------+-------------+-----------+-------------+----------+--------+------+------------+---------+---------------+-----------------------------------------+---------+------------+
 		"GROUP BY `tcl`.`att_relname`, `idx`.`type`, `idx`.`name`, `idx`.`ordinal_position`, " +
-		"`idx`.`column_name`, `tcl`.`attnotnull`, `idx`.`algo`, `idx`.`comment`, " +
+		"`idx`.`column_name`, `idx`.`hidden`, `tcl`.`attnotnull`, `tcl`.`attr_generated`, `idx`.`algo`, `idx`.`comment`, " +
 		"`idx`.`algo_params`, `idx`.`is_visible` " +
 		// Match MySQL's index classes, then preserve catalog creation order within each class.
 		// MIN(id) supplies one stable key without defeating the GROUP BY deduplication above.

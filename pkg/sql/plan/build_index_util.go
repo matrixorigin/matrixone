@@ -118,7 +118,14 @@ func setEmptyUniqueIndexName(namesMap map[string]bool, indexConstr *tree.UniqueI
 // setEmptyIndexName Set name for index constraint with an empty name
 func setEmptyIndexName(namesMap map[string]bool, indexConstr *tree.Index) {
 	if indexConstr.Name == "" && len(indexConstr.KeyParts) > 0 {
-		colName := indexConstr.KeyParts[0].ColName.ColName()
+		// MySQL permits an unnamed functional key part in an inline CREATE
+		// TABLE/ALTER TABLE definition. There is no column name to derive the
+		// constraint name from, so use a stable generic seed and retain the
+		// existing numeric-suffix collision rule.
+		colName := "functional_index"
+		if keyPart := indexConstr.KeyParts[0]; keyPart != nil && keyPart.ColName != nil {
+			colName = keyPart.ColName.ColName()
+		}
 		constrName := colName
 		i := 2
 		if IndexNamesEqual(constrName, "PRIMARY") {
@@ -155,12 +162,13 @@ func setEmptyFullTextIndexName(namesMap map[string]bool, indexConstr *tree.FullT
 	}
 }
 
-// TODO
-// Currently, using expression as index keyparts are not supported in matrixone
 func checkIndexKeypartSupportability(context context.Context, keyParts []*tree.KeyPart) error {
 	for _, key := range keyParts {
+		if key == nil {
+			return moerr.NewInvalidInput(context, "index key part is nil")
+		}
 		if key.Expr != nil {
-			return moerr.NewInternalError(context, "unsupported index which using expression as keypart")
+			return moerr.NewNotSupported(context, "functional index expression was not lowered")
 		}
 	}
 	return nil
