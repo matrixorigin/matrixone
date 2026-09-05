@@ -165,7 +165,7 @@ func TestUpgradeEntries(t *testing.T) {
 	for _, entry := range tenantUpgEntries {
 		ddl := entry.UpgSql + entry.PostSql
 		if entry.TableName == "VIEWS" {
-			require.Equal(t, int64(defines.MORPCVersion47), entry.RequiredProtocolVersion,
+			require.Equal(t, int64(defines.MORPCVersion48), entry.RequiredProtocolVersion,
 				"view upgrade %s must wait for mo_view_definition", entry.TableName)
 		} else if strings.Contains(ddl, "mo_subscription_tables()") ||
 			strings.Contains(ddl, "mo_subscription_columns()") {
@@ -209,7 +209,7 @@ func TestUpgradeEntries(t *testing.T) {
 		if view.name == "TABLES" || view.name == "COLUMNS" {
 			expectedProtocol = defines.MORPCVersion46
 		} else if view.name == "VIEWS" {
-			expectedProtocol = defines.MORPCVersion47
+			expectedProtocol = defines.MORPCVersion48
 		}
 		require.Equal(t, expectedProtocol, entry.RequiredProtocolVersion)
 		require.Contains(t, strings.ToLower(entry.PreSql),

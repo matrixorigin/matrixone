@@ -275,7 +275,7 @@ func TestInitInformationSchemaSysTablesForProtocol(t *testing.T) {
 		assertInformationSchemaInitSQLParses(t, sql)
 	}
 
-	latest := InitInformationSchemaSysTablesForProtocol(defines.MORPCVersion47)
+	latest := InitInformationSchemaSysTablesForProtocol(defines.MORPCVersion48)
 	assert.Equal(t, InitInformationSchemaSysTables, latest)
 }
 
