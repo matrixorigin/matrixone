@@ -114,8 +114,9 @@ const (
 	ErrFtMatchingKeyNotFound uint16 = 20327
 	// Keep ErrCantChangeTxn and the upstream fulltext error code stable; this code is
 	// allocated separately for SELECT ... INTO statements returning multiple rows.
-	ErrTooManyRows            uint16 = 20328
-	ErrMultiUpdateKeyConflict uint16 = 20329
+	ErrTooManyRows                         uint16 = 20328
+	ErrMultiUpdateKeyConflict              uint16 = 20329
+	ErrInvalidBitwiseAggregateOperandsSize uint16 = 20330
 
 	// Group 4: unexpected state and io errors
 	ErrInvalidState                             uint16 = 20400
@@ -465,8 +466,9 @@ var errorMsgRefer = map[uint16]moErrorMsgItem{
 	ErrInvalidGroupFuncUse:  {ER_INVALID_GROUP_FUNC_USE, []string{MySQLDefaultSqlState}, "Invalid use of group function"},
 	// Maps to MySQL's ER_FT_MATCHING_KEY_NOT_FOUND (1191), which rejects the same no-index
 	// CREATE / ALTER / CREATE OR REPLACE VIEW, so clients see the code and text they expect.
-	ErrFtMatchingKeyNotFound:  {ER_FT_MATCHING_KEY_NOT_FOUND, []string{MySQLDefaultSqlState}, FtMatchingKeyNotFoundMsg},
-	ErrMultiUpdateKeyConflict: {ER_MULTI_UPDATE_KEY_CONFLICT, []string{MySQLDefaultSqlState}, "Primary key/partition key update is not allowed since the table is updated both as '%-.192s' and '%-.192s'."},
+	ErrFtMatchingKeyNotFound:               {ER_FT_MATCHING_KEY_NOT_FOUND, []string{MySQLDefaultSqlState}, FtMatchingKeyNotFoundMsg},
+	ErrMultiUpdateKeyConflict:              {ER_MULTI_UPDATE_KEY_CONFLICT, []string{MySQLDefaultSqlState}, "Primary key/partition key update is not allowed since the table is updated both as '%-.192s' and '%-.192s'."},
+	ErrInvalidBitwiseAggregateOperandsSize: {ER_INVALID_BITWISE_AGGREGATE_OPERANDS_SIZE, []string{MySQLDefaultSqlState}, "Aggregate bitwise functions cannot accept arguments longer than 511 bytes; consider using the SUBSTRING() function"},
 
 	// Group 4: unexpected state or file io error
 	ErrInvalidState:                             {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "invalid state %s"},
@@ -1128,6 +1130,10 @@ func NewWindowInvalidUse(ctx context.Context, function string) *Error {
 
 func NewInvalidGroupFuncUse(ctx context.Context) *Error {
 	return newError(ctx, ErrInvalidGroupFuncUse)
+}
+
+func NewInvalidBitwiseAggregateOperandsSize(ctx context.Context) *Error {
+	return newError(ctx, ErrInvalidBitwiseAggregateOperandsSize)
 }
 
 func NewInvalidTypeForJSON(ctx context.Context, argument int, function string) *Error {

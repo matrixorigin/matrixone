@@ -33,6 +33,17 @@ const (
 	bitOr
 )
 
+// MaxBitwiseAggregateOperandBytes is the largest binary-string operand width
+// accepted by MySQL's bitwise aggregate functions.
+const MaxBitwiseAggregateOperandBytes int32 = 511
+
+// IsBitwiseAggregateOperandTooWide reports whether a binary-string operand
+// exceeds the width accepted by MySQL's bitwise aggregate functions.
+func IsBitwiseAggregateOperandTooWide(param types.Type) bool {
+	return (param.Oid == types.T_binary || param.Oid == types.T_varbinary) &&
+		param.Width > MaxBitwiseAggregateOperandBytes
+}
+
 type bitOpExecFixed[T types.Ints | types.UInts] struct {
 	aggExec
 	op bitOp
