@@ -16,6 +16,7 @@ package iscp
 
 import (
 	"context"
+	"errors"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -150,7 +151,7 @@ func (w *worker) onItem(iterCtx *IterationContext) {
 	if iterCtx == nil {
 		return
 	}
-	err := retry(
+	err := retryISCPTaskIteration(
 		w.ctx,
 		func() error {
 			err := ExecuteIterationWithRuntime(
@@ -162,7 +163,16 @@ func (w *worker) onItem(iterCtx *IterationContext) {
 				iterCtx,
 				w.mp,
 			)
-			if err != nil {
+			// A failed status CAS means a newer catalog owner already won. Retrying
+			// this immutable iteration cannot succeed and used to pin a worker for
+			// up to an hour; the normal logtail loop will merge the winner.
+			if isSupersededIteration(err) {
+				logutil.Info(
+					"ISCP-Task iteration superseded",
+					zap.Uint64("tableID", iterCtx.tableID),
+					zap.Strings("jobs", iterCtx.jobNames),
+				)
+			} else if err != nil {
 				logutil.Error(
 					"ISCP-Task execute iteration failed",
 					zap.Uint64("tableID", iterCtx.tableID),
@@ -172,9 +182,6 @@ func (w *worker) onItem(iterCtx *IterationContext) {
 			}
 			return err
 		},
-		SubmitRetryTimes,
-		DefaultRetryInterval,
-		SubmitRetryDuration,
 	)
 	if err != nil {
 		statuses := jobStatusesForIterationError(iterCtx, err)
@@ -212,6 +219,26 @@ func (w *worker) onItem(iterCtx *IterationContext) {
 			)
 		}
 	}
+}
+
+func isSupersededIteration(err error) bool {
+	return errors.Is(err, errISCPStatusCASLost)
+}
+
+func retryISCPTaskIteration(ctx context.Context, execute func() error) error {
+	return retry(
+		ctx,
+		func() error {
+			err := execute()
+			if isSupersededIteration(err) {
+				return nil
+			}
+			return err
+		},
+		SubmitRetryTimes,
+		DefaultRetryInterval,
+		SubmitRetryDuration,
+	)
 }
 
 func jobStatusesForIterationError(iterCtx *IterationContext, err error) []*JobStatus {

@@ -39,6 +39,18 @@ func TestJobStatusesForIterationErrorPreservesStages(t *testing.T) {
 	require.Equal(t, "iteration failed", statuses[1].ErrorMsg)
 }
 
+func TestSupersededIterationStopsRetry(t *testing.T) {
+	attempts := 0
+	err := retryISCPTaskIteration(context.Background(), func() error {
+		attempts++
+		return newISCPStatusCASLostError("test", "job", 1, 0)
+	})
+
+	require.NoError(t, err)
+	require.Equal(t, 1, attempts)
+	require.False(t, isSupersededIteration(errors.New("temporary failure")))
+}
+
 func TestWorkerStopImmediatelyAfterConstruction(t *testing.T) {
 	previous := runtime.GOMAXPROCS(1)
 	defer runtime.GOMAXPROCS(previous)

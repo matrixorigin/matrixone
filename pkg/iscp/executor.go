@@ -397,6 +397,37 @@ func (exec *ISCPTaskExecutor) stopLocked() {
 	exec.worker = nil
 }
 
+const ambiguousLegacyInitError = "ambiguous legacy ISCP initialization state; recreate the ISCP job"
+
+func ambiguousLegacyInitQuarantineSQL() string {
+	return fmt.Sprintf(
+		`UPDATE mo_catalog.mo_iscp_log
+        SET job_state = %d,
+            job_status = JSON_SET(
+                job_status,
+                '$.ErrorCode', %d,
+                '$.ErrorMsg', '%s')
+        WHERE job_state = %d
+          AND CAST(COALESCE(JSON_UNQUOTE(JSON_EXTRACT(job_status, '$.Stage')), '0') AS SIGNED) = %d
+          AND CAST(COALESCE(JSON_UNQUOTE(JSON_EXTRACT(job_status, '$.LSN')), '0') AS UNSIGNED) > 0
+          AND CAST(COALESCE(JSON_UNQUOTE(JSON_EXTRACT(job_status, '$.ErrorCode')), '0') AS SIGNED) = 0
+          AND COALESCE(JSON_UNQUOTE(JSON_EXTRACT(job_status, '$.ErrorMsg')), '') = ''
+          AND COALESCE(JSON_UNQUOTE(JSON_EXTRACT(job_spec, '$.InitSQL')), '') != '';`,
+		ISCPJobState_Error,
+		PermanentErrorThreshold,
+		ambiguousLegacyInitError,
+		ISCPJobState_Completed,
+		JobStage_Init,
+	)
+}
+
+func isAmbiguousLegacyInit(state int8, jobSpec *JobSpec, jobStatus *JobStatus) bool {
+	return state == ISCPJobState_Completed &&
+		jobSpec != nil && jobSpec.ConsumerInfo.InitSQL != "" &&
+		jobStatus != nil && jobStatus.Stage == JobStage_Init && jobStatus.LSN > 0 &&
+		jobStatus.ErrorCode == 0 && jobStatus.ErrorMsg == ""
+}
+
 func (exec *ISCPTaskExecutor) repairAbandonedJobs(ctx context.Context) (err error) {
 	ctxWithTimeout, cancel := context.WithTimeout(ctx, time.Minute*5)
 	defer cancel()
@@ -433,6 +464,28 @@ func (exec *ISCPTaskExecutor) repairAbandonedJobs(ctx context.Context) (err erro
 		return
 	}
 	result.Close()
+
+	// Before this fix, a watermark-only flush could produce Completed + Init +
+	// LSN>0 without an error both after a successful initialization and before a
+	// legitimate start-from-now initialization. The two histories are identical
+	// on disk, so neither promotion nor re-execution is safe. Quarantine this
+	// legacy-only shape and require explicit job recreation.
+	result, err = ExecWithResult(
+		ctxWithTimeout,
+		ambiguousLegacyInitQuarantineSQL(),
+		exec.cnUUID,
+		txnOp,
+	)
+	if err != nil {
+		return
+	}
+	defer result.Close()
+	if result.AffectedRows > 0 {
+		logutil.Warn(
+			"ISCP-Task quarantined ambiguous legacy initialization state",
+			zap.Uint64("jobCount", result.AffectedRows),
+		)
+	}
 	return nil
 }
 
@@ -973,7 +1026,7 @@ func (exec *ISCPTaskExecutor) addOrUpdateRecoveredJob(
 	if state == ISCPJobState_Pending || state == ISCPJobState_Running {
 		state = ISCPJobState_Completed
 	}
-	return exec.addOrUpdateJob(
+	return exec.addOrUpdateJobInternal(
 		accountID,
 		tableID,
 		jobName,
@@ -984,6 +1037,7 @@ func (exec *ISCPTaskExecutor) addOrUpdateRecoveredJob(
 		jobStatusStr,
 		dropAt,
 		notPrint,
+		true,
 	)
 }
 
@@ -1036,6 +1090,34 @@ func (exec *ISCPTaskExecutor) addOrUpdateJob(
 	dropAt types.Timestamp,
 	notPrint bool,
 ) error {
+	return exec.addOrUpdateJobInternal(
+		accountID,
+		tableID,
+		jobName,
+		jobID,
+		state,
+		watermarkStr,
+		jobSpecStr,
+		jobStatusStr,
+		dropAt,
+		notPrint,
+		false,
+	)
+}
+
+func (exec *ISCPTaskExecutor) addOrUpdateJobInternal(
+	accountID uint32,
+	tableID uint64,
+	jobName string,
+	jobID uint64,
+	state int8,
+	watermarkStr string,
+	jobSpecStr []byte,
+	jobStatusStr []byte,
+	dropAt types.Timestamp,
+	notPrint bool,
+	recovering bool,
+) error {
 	// SQL NULL is represented by Timestamp(0) for active jobs. A non-NULL zero
 	// timestamp still means dropped, so normalize it to a GC-safe timestamp.
 	if dropAt == types.ZeroTimestamp {
@@ -1069,6 +1151,14 @@ func (exec *ISCPTaskExecutor) addOrUpdateJob(
 	jobStatus, err := UnmarshalJobStatus(jobStatusStr)
 	if err != nil {
 		return err
+	}
+	// The durable quarantine transaction can commit before its logtail is
+	// visible to the recovery snapshot. Mirror only that deterministic terminal
+	// decision in memory; never guess that initialization succeeded.
+	if recovering && isAmbiguousLegacyInit(state, jobSpec, jobStatus) {
+		state = ISCPJobState_Error
+		jobStatus.ErrorCode = PermanentErrorThreshold
+		jobStatus.ErrorMsg = ambiguousLegacyInitError
 	}
 	var table *TableEntry
 	table, ok := exec.getTable(accountID, tableID)

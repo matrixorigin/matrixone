@@ -879,7 +879,47 @@ func TestFlushWatermarkForAllTablesRollsBackPartialTransaction(t *testing.T) {
 	}
 }
 
-func TestISCPRecoveryPreservesAmbiguousInitStage(t *testing.T) {
+func TestAmbiguousLegacyInitQuarantineSQLIsConservative(t *testing.T) {
+	sql := ambiguousLegacyInitQuarantineSQL()
+
+	require.Contains(t, sql, fmt.Sprintf("SET job_state = %d", ISCPJobState_Error))
+	require.Contains(t, sql, fmt.Sprintf("'$.ErrorCode', %d", PermanentErrorThreshold))
+	require.Contains(t, sql, fmt.Sprintf("WHERE job_state = %d", ISCPJobState_Completed))
+	require.Contains(t, sql, "JSON_EXTRACT(job_status, '$.Stage')")
+	require.Contains(t, sql, "JSON_EXTRACT(job_status, '$.LSN')")
+	require.Contains(t, sql, "JSON_EXTRACT(job_status, '$.ErrorCode')")
+	require.Contains(t, sql, "JSON_EXTRACT(job_status, '$.ErrorMsg')")
+	require.Contains(t, sql, "JSON_EXTRACT(job_spec, '$.InitSQL')")
+}
+
+func TestAmbiguousLegacyInitClassification(t *testing.T) {
+	spec := &JobSpec{ConsumerInfo: ConsumerInfo{InitSQL: "init"}}
+	status := &JobStatus{LSN: 1, Stage: JobStage_Init}
+	require.True(t, isAmbiguousLegacyInit(ISCPJobState_Completed, spec, status))
+
+	controls := []struct {
+		name   string
+		state  int8
+		spec   *JobSpec
+		status *JobStatus
+	}{
+		{"new job", ISCPJobState_Completed, spec, &JobStatus{Stage: JobStage_Init}},
+		{"initialized", ISCPJobState_Completed, spec, &JobStatus{LSN: 1, Stage: JobStage_Running}},
+		{"retryable error", ISCPJobState_Completed, spec, &JobStatus{LSN: 1, Stage: JobStage_Init, ErrorMsg: "retry"}},
+		{"status error code", ISCPJobState_Completed, spec, &JobStatus{LSN: 1, Stage: JobStage_Init, ErrorCode: 1}},
+		{"no init sql", ISCPJobState_Completed, &JobSpec{}, status},
+		{"terminal", ISCPJobState_Error, spec, status},
+		{"nil spec", ISCPJobState_Completed, nil, status},
+		{"nil status", ISCPJobState_Completed, spec, nil},
+	}
+	for _, control := range controls {
+		t.Run(control.name, func(t *testing.T) {
+			require.False(t, isAmbiguousLegacyInit(control.state, control.spec, control.status))
+		})
+	}
+}
+
+func TestISCPRecoveryQuarantinesAmbiguousInitStage(t *testing.T) {
 	exec := &ISCPTaskExecutor{
 		ctx:    context.Background(),
 		tables: newISCPTableTree(),
@@ -893,6 +933,8 @@ func TestISCPRecoveryPreservesAmbiguousInitStage(t *testing.T) {
 	})
 	require.NoError(t, err)
 	status, err := MarshalJobStatus(&JobStatus{LSN: 5})
+	require.NoError(t, err)
+	retryStatus, err := MarshalJobStatus(&JobStatus{LSN: 5, ErrorMsg: "retry initialization"})
 	require.NoError(t, err)
 	encodeJSON := func(value string) []byte {
 		byteJSON, encodeErr := types.ParseStringToByteJson(value)
@@ -914,29 +956,33 @@ func TestISCPRecoveryPreservesAmbiguousInitStage(t *testing.T) {
 		1, 3, "error", 6, ISCPJobState_Error, "10-0",
 		encodeJSON(spec), encodeJSON(status), 0, true,
 	))
+	require.NoError(t, exec.addOrUpdateRecoveredJob(
+		1, 3, "retryable", 7, ISCPJobState_Completed, "10-0",
+		encodeJSON(spec), encodeJSON(retryStatus), 0, true,
+	))
 
 	table, ok := exec.getTable(1, 3)
 	require.True(t, ok)
 	recovered := table.jobs[JobKey{JobName: "legacy", JobID: 4}]
-	require.Equal(t, ISCPJobState_Completed, recovered.state)
+	require.Equal(t, ISCPJobState_Error, recovered.state)
 	// Completed + Init + LSN>0 is ambiguous: an old watermark flush can
 	// produce it after successful initialization, but a fresh start-from-now
-	// job can also produce it before InitSQL. Recovery must not guess success.
+	// job can also produce it before InitSQL. Recovery must neither guess success
+	// nor execute a possibly non-idempotent InitSQL again.
 	require.Equal(t, int8(JobStage_Init), recovered.stage)
-	require.Equal(t, ISCPJobState_Completed, table.jobs[JobKey{JobName: "pending", JobID: 5}].state)
+	require.Equal(t, ISCPJobState_Error, table.jobs[JobKey{JobName: "pending", JobID: 5}].state)
 	require.Equal(t, int8(JobStage_Init), table.jobs[JobKey{JobName: "pending", JobID: 5}].stage)
 	require.Equal(t, ISCPJobState_Error, table.jobs[JobKey{JobName: "error", JobID: 6}].state)
+	retryable := table.jobs[JobKey{JobName: "retryable", JobID: 7}]
+	require.Equal(t, ISCPJobState_Completed, retryable.state)
+	require.Equal(t, uint64(5), retryable.currentLSN)
+	require.Equal(t, int8(JobStage_Init), retryable.stage)
 
-	// The ambiguous job remains eligible for real initialization after restart.
+	// Only the record carrying explicit retry evidence remains schedulable.
 	iters, _ := table.getCandidate()
-	require.Len(t, iters, 2)
-	for _, iter := range iters {
-		if iter.jobNames[0] == "legacy" {
-			require.Equal(t, []int8{JobStage_Init}, iter.stages)
-			return
-		}
-	}
-	t.Fatal("legacy job was not scheduled after recovery")
+	require.Len(t, iters, 1)
+	require.Equal(t, []string{"retryable"}, iters[0].jobNames)
+	require.Equal(t, []int8{JobStage_Init}, iters[0].stages)
 }
 
 func TestInitIterationCannotUseCleanTableWatermarkPath(t *testing.T) {
