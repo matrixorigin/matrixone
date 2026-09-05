@@ -3522,6 +3522,7 @@ func schemaHasRefKeywordInSchemaOrSchemaArray(bj bytejson.ByteJson) bool {
 func jsonValueLegacy(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	result.UseOptFunctionParamFrame(2)
 	rs := vector.MustFunctionResult[types.Varlena](result)
+	defaultTarget := types.NewWithCharset(types.T_varchar, 512, 0, types.CharsetUTF8MB4Bin)
 	p1 := vector.OptGetBytesParamFromWrapper(rs, 0, ivecs[0])
 	p2 := vector.OptGetBytesParamFromWrapper(rs, 1, ivecs[1])
 
@@ -3585,7 +3586,13 @@ func jsonValueLegacy(ivecs []*vector.Vector, result vector.FunctionResultWrapper
 		if err != nil {
 			return err
 		}
-		rs.AppendMustBytesValue([]byte(s))
+		value, err := jsonValueTextBytes(s, defaultTarget)
+		if err != nil {
+			appendJSONValueWarning(proc, err, true)
+			rs.AppendMustNullForBytesResult()
+			continue
+		}
+		rs.AppendMustBytesValue(value)
 	}
 	return nil
 }
