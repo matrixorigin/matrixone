@@ -551,6 +551,250 @@ func TestRewriteCloneUserDefinedFunctionBodies(t *testing.T) {
 	require.Equal(t, "select count(*) from SOURCE_DB.control_t where id = $1", functions[0].body)
 }
 
+func TestFilterCloneDatabaseRoutinesSkipsUncloneableDependencies(t *testing.T) {
+	source := cloneDatabaseSource{
+		srcResolveDBName: "source_db",
+		srcTblInfos: []*tableInfo{
+			{dbName: "source_db", tblName: "ext_t", relKind: catalog.SystemExternalRel},
+		},
+		viewMap: map[string]*tableInfo{
+			genKey("source_db", "ext_v"): {
+				dbName: "source_db", tblName: "ext_v", typ: view,
+				createSql: "create view source_db.ext_v as select * from source_db.ext_t",
+			},
+			genKey("source_db", "cte_v"): {
+				dbName: "source_db", tblName: "cte_v", typ: view,
+				createSql: "create view source_db.cte_v as with ext_t as (select 1 as n) select n from ext_t",
+			},
+		},
+		userDefinedFuncs: []userDefinedFunctionDefinition{
+			{name: "f_external", lang: "sql", body: "select count(*) from source_db.ext_t"},
+			{name: "f_transitive", lang: "sql", body: "f_external()"},
+			{name: "f_view", lang: "sql", body: "select * from source_db.ext_v"},
+			{name: "f_cte_shadow", lang: "sql", body: "with ext_t as (select 1 as n) select n from ext_t"},
+			{name: "f_cte_view", lang: "sql", body: "select * from source_db.cte_v"},
+			{name: "f_independent", lang: "sql", body: "1 + 1"},
+			{name: "py_add", lang: "python", body: `{"handler":"py_add","import":false,"body":"return x + 1"}`},
+		},
+		storedProcedures: []storedProcedureDefinition{
+			{name: "p_external", lang: "sql", body: "begin select * from source_db.ext_t; end"},
+			{name: "p_transitive", lang: "sql", body: "begin call p_external(); end"},
+			{name: "p_dml_cte_shadow", lang: "sql", body: "begin with ext_t as (select 1 as n) insert into source_db.sink select n from ext_t; end"},
+			{name: "p_returning_external", lang: "sql", body: "begin update source_db.control_t set id = id returning f_external(id); end"},
+			{name: "p_use_other_db", lang: "sql", body: "begin use other_db; select * from ext_t; end"},
+			{name: "p_independent", lang: "sql", body: "begin select 1; end"},
+		},
+	}
+
+	functions, procedures, err := filterCloneDatabaseRoutines(
+		context.Background(), source, 1,
+	)
+	require.NoError(t, err)
+	require.Equal(t, []string{"f_cte_shadow", "f_cte_view", "f_independent", "py_add"}, routineNames(functions))
+	require.Equal(t, []string{"p_dml_cte_shadow", "p_independent"}, procedureNames(procedures))
+
+	t.Run("same-name overloads are conservatively one family", func(t *testing.T) {
+		overloadSource := cloneDatabaseSource{
+			srcResolveDBName: "source_db",
+			srcTblInfos: []*tableInfo{{
+				dbName: "source_db", tblName: "ext_t", relKind: catalog.SystemExternalRel,
+			}},
+			userDefinedFuncs: []userDefinedFunctionDefinition{
+				{name: "f_overloaded", argTypes: `["int"]`, lang: "sql", body: "select * from source_db.ext_t"},
+				{name: "f_overloaded", argTypes: `["varchar"]`, lang: "sql", body: "1 + 1"},
+				{name: "f_overloaded_caller", lang: "sql", body: "f_overloaded(1)"},
+			},
+		}
+
+		functions, procedures, err := filterCloneDatabaseRoutines(
+			context.Background(), overloadSource, 1,
+		)
+		require.NoError(t, err)
+		require.Empty(t, functions)
+		require.Empty(t, procedures)
+	})
+}
+
+func TestCloneDatabaseOmissionSetPropagatesRoutineDependenciesToViews(t *testing.T) {
+	source := cloneDatabaseSource{
+		srcResolveDBName: "source_db",
+		srcTblInfos: []*tableInfo{
+			{dbName: "source_db", tblName: "ext_t", relKind: catalog.SystemExternalRel},
+		},
+		viewMap: map[string]*tableInfo{
+			genKey("source_db", "udf_v"): {
+				dbName: "source_db", tblName: "udf_v", typ: view,
+				createSql: "create view source_db.udf_v as select f_external()",
+			},
+			genKey("source_db", "udf_chain_v"): {
+				dbName: "source_db", tblName: "udf_chain_v", typ: view,
+				createSql: "create view source_db.udf_chain_v as select * from source_db.udf_v",
+			},
+			genKey("source_db", "independent_v"): {
+				dbName: "source_db", tblName: "independent_v", typ: view,
+				createSql: "create view source_db.independent_v as select 1 as n",
+			},
+		},
+		userDefinedFuncs: []userDefinedFunctionDefinition{
+			{name: "f_external", lang: "sql", body: "select count(*) from source_db.ext_t"},
+			{name: "f_view", lang: "sql", body: "select * from source_db.udf_v"},
+			{name: "f_independent", lang: "sql", body: "1 + 1"},
+		},
+	}
+
+	omissions, err := collectCloneDatabaseOmissionSet(context.Background(), source, 1)
+	require.NoError(t, err)
+	require.Contains(t, omissions.objects, cloneDatabaseObjectKey("source_db", "udf_v", 1))
+	require.Contains(t, omissions.objects, cloneDatabaseObjectKey("source_db", "udf_chain_v", 1))
+	require.Contains(t, omissions.functions, cloneRoutineFamilyKey(
+		cloneRoutineFunctionKind, "source_db", "f_external", 1,
+	))
+	require.Contains(t, omissions.functions, cloneRoutineFamilyKey(
+		cloneRoutineFunctionKind, "source_db", "f_view", 1,
+	))
+	require.NotContains(t, omissions.objects, cloneDatabaseObjectKey("source_db", "independent_v", 1))
+	require.NotContains(t, omissions.functions, cloneRoutineFamilyKey(
+		cloneRoutineFunctionKind, "source_db", "f_independent", 1,
+	))
+
+	applyCloneDatabaseOmissionSet(&source, omissions, 1)
+	require.Len(t, source.viewMap, 1)
+	_, independentViewKept := source.viewMap[genKey("source_db", "independent_v")]
+	require.True(t, independentViewKept)
+	require.Equal(t, []string{"f_independent"}, routineNames(source.userDefinedFuncs))
+}
+
+func TestCollectCloneRoutineReferencesScopesCTEs(t *testing.T) {
+	tests := []struct {
+		name              string
+		body              string
+		isProcedure       bool
+		wantTables        []string
+		wantFunctions     []string
+		wantUninspectable bool
+	}{
+		{
+			name: "cte shadows external table",
+			body: "with ext_t as (select 1 as n) select n from ext_t",
+		},
+		{
+			name:       "nested cte keeps qualified source reference",
+			body:       "with ext_t as (select 1 as n) select n from (with ext_t as (select * from source_db.inner_t) select n from ext_t) as nested",
+			wantTables: []string{"inner_t"},
+		},
+		{
+			name: "recursive cte shadows itself",
+			body: "with recursive ext_t as (select 1 as n union all select n + 1 from ext_t where n < 2) select n from ext_t",
+		},
+		{
+			name:       "qualified reference bypasses cte shadow",
+			body:       "with ext_t as (select 1 as n) select n from source_db.ext_t",
+			wantTables: []string{"ext_t"},
+		},
+		{
+			name:        "insert body keeps outer cte scope",
+			body:        "begin with ext_t as (select 1 as n) insert into source_db.sink select n from ext_t; end",
+			isProcedure: true,
+			wantTables:  []string{"sink"},
+		},
+		{
+			name:        "update body keeps outer cte scope",
+			body:        "begin with ext_t as (select 1 as n) update source_db.sink set id = id where id in (select n from ext_t); end",
+			isProcedure: true,
+			wantTables:  []string{"sink"},
+		},
+		{
+			name:        "delete body keeps outer cte scope",
+			body:        "begin with ext_t as (select 1 as n) delete from source_db.sink where id in (select n from ext_t); end",
+			isProcedure: true,
+			wantTables:  []string{"sink"},
+		},
+		{
+			name:        "merge body keeps outer cte scope",
+			body:        "begin with ext_t as (select 1 as n) merge into source_db.sink using ext_t on source_db.sink.id = ext_t.n when matched then update set id = ext_t.n; end",
+			isProcedure: true,
+			wantTables:  []string{"sink"},
+		},
+		{
+			name:        "multi insert body keeps outer cte scope",
+			body:        "begin with ext_t as (select 1 as n) insert all into source_db.sink (id) values (n) select n from ext_t; end",
+			isProcedure: true,
+			wantTables:  []string{"sink"},
+		},
+		{
+			name:          "dml returning collects routine dependency",
+			body:          "begin update source_db.control_t set id = id returning f_external(id); end",
+			isProcedure:   true,
+			wantTables:    []string{"control_t"},
+			wantFunctions: []string{"f_external"},
+		},
+		{
+			name:              "use state fails closed",
+			body:              "begin use other_db; select * from ext_t; end",
+			isProcedure:       true,
+			wantUninspectable: true,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			references, status, err := collectCloneRoutineReferences(
+				context.Background(), test.body, "sql", "", "source_db", 1, !test.isProcedure,
+			)
+			require.NoError(t, err)
+			if test.wantUninspectable {
+				require.Equal(t, cloneRoutineDependenciesUninspectable, status)
+				return
+			}
+			require.Equal(t, cloneRoutineDependenciesInspected, status)
+			for _, table := range test.wantTables {
+				require.Contains(t, references.tables, cloneDatabaseObjectKey("source_db", table, 1))
+			}
+			for _, function := range test.wantFunctions {
+				require.Contains(t, references.functions, cloneRoutineFamilyKey(
+					cloneRoutineFunctionKind, "source_db", function, 1,
+				))
+			}
+			require.Len(t, references.tables, len(test.wantTables))
+			require.Len(t, references.functions, len(test.wantFunctions))
+		})
+	}
+}
+
+func TestCollectCloneRoutineReferencesPreservesInlineNonSQLUDFs(t *testing.T) {
+	references, status, err := collectCloneRoutineReferences(
+		context.Background(),
+		`{"handler":"py_add","import":false,"body":"return x + 1"}`,
+		"python", "", "source_db", 1, true,
+	)
+	require.NoError(t, err)
+	require.Equal(t, cloneRoutineDependenciesOpaque, status)
+	require.Empty(t, references.tables)
+	require.Empty(t, references.functions)
+
+	_, status, err = collectCloneRoutineReferences(
+		context.Background(), "opaque", "python", "", "source_db", 1, false,
+	)
+	require.NoError(t, err)
+	require.Equal(t, cloneRoutineDependenciesUninspectable, status)
+}
+
+func routineNames(functions []userDefinedFunctionDefinition) []string {
+	names := make([]string, len(functions))
+	for i := range functions {
+		names[i] = functions[i].name
+	}
+	return names
+}
+
+func procedureNames(procedures []storedProcedureDefinition) []string {
+	names := make([]string, len(procedures))
+	for i := range procedures {
+		names[i] = procedures[i].name
+	}
+	return names
+}
+
 func TestCloneDatabaseSourceBranchTableCount(t *testing.T) {
 	tests := []struct {
 		name   string
@@ -565,6 +809,7 @@ func TestCloneDatabaseSourceBranchTableCount(t *testing.T) {
 			name: "mixed objects count only receipt-backed tables",
 			tables: []*tableInfo{
 				{tblName: "regular"},
+				{tblName: "external", relKind: catalog.SystemExternalRel},
 				{tblName: "sequence", relKind: catalog.SystemSequenceRel},
 				{tblName: "view", typ: view},
 			},
@@ -680,6 +925,21 @@ func TestLockDataBranchCloneDatabaseSourcesSkipsSourcesWithoutTables(t *testing.
 	} {
 		require.NoError(t, lockDataBranchCloneDatabaseSources(ctx, nil, nil, source))
 	}
+}
+
+func TestCloneDatabaseSourceLifecycleTablesIncludeExternalDependencies(t *testing.T) {
+	source := cloneDatabaseSource{srcTblInfos: []*tableInfo{
+		{tblName: "ordinary"},
+		{tblName: "external", relKind: catalog.SystemExternalRel},
+		{tblName: "view", typ: view},
+	}}
+
+	tables := source.sourceTableInfosForLifecycle()
+	names := make([]string, len(tables))
+	for i, table := range tables {
+		names[i] = table.tblName
+	}
+	require.Equal(t, []string{"ordinary", "external"}, names)
 }
 
 func TestCloneFkTableOrder(t *testing.T) {

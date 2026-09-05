@@ -15,6 +15,7 @@
 package hnsw
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"os"
@@ -22,7 +23,6 @@ import (
 	"sync"
 	"sync/atomic"
 
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/sqlquote"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex"
@@ -149,7 +149,7 @@ func (h *HnswBuild[T]) addFromChannel(sqlproc *sqlexec.SqlProcess) (stream_close
 			return true, nil
 		}
 	case <-procCtx.Done():
-		return false, moerr.NewInternalError(procCtx, "context cancelled")
+		return false, context.Cause(procCtx)
 	}
 
 	// add

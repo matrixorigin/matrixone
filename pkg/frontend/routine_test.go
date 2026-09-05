@@ -20,6 +20,7 @@ import (
 	"encoding/binary"
 	"fmt"
 	"io"
+	"math"
 	"net"
 	"sync"
 	"sync/atomic"
@@ -43,6 +44,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	plan2 "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/query"
+	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/queryservice"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
@@ -1582,14 +1584,22 @@ func TestRoutineHandleSessionCommandClosesPartialTempTableReset(t *testing.T) {
 }
 
 func TestRoutineHandleSessionCommandClosesRollbackFailedReset(t *testing.T) {
-	for name, rollback := range map[string]func(context.Context) error{
-		"storage error": func(context.Context) error { return assert.AnError },
-		"deadline": func(ctx context.Context) error {
-			<-ctx.Done()
-			return context.Cause(ctx)
+	tests := []struct {
+		name                 string
+		rollback             func(context.Context) error
+		cancelDuringRollback bool
+	}{
+		{
+			name:     "storage error",
+			rollback: func(context.Context) error { return assert.AnError },
 		},
-	} {
-		t.Run(name, func(t *testing.T) {
+		{
+			name:                 "canceled during rollback",
+			cancelDuringRollback: true,
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
 			ctrl := gomock.NewController(t)
 			oldSession := newTestSession(t, ctrl)
 			rm, err := NewRoutineManager(context.Background(), "")
@@ -1600,9 +1610,6 @@ func TestRoutineHandleSessionCommandClosesRollbackFailedReset(t *testing.T) {
 			protocol := &disconnectRecordingProtocol{MysqlRrWr: mysqlProtocol}
 			parameters := &config.FrontendParameters{}
 			parameters.SetDefaultValues()
-			if name == "deadline" {
-				parameters.SessionTimeout.Duration = time.Millisecond
-			}
 			routine := NewRoutine(context.Background(), protocol, parameters)
 			oldSession.setRoutineManager(rm)
 			oldSession.setRoutine(routine)
@@ -1627,15 +1634,97 @@ func TestRoutineHandleSessionCommandClosesRollbackFailedReset(t *testing.T) {
 			workspace := mock_frontend.NewMockWorkspace(ctrl)
 			workspace.EXPECT().GetHaveDDL().Return(false)
 			txnOp.EXPECT().GetWorkspace().Return(workspace)
+			rollbackStarted := make(chan struct{})
+			rollback := tc.rollback
+			if tc.cancelDuringRollback {
+				rollback = func(ctx context.Context) error {
+					close(rollbackStarted)
+					<-ctx.Done()
+					return context.Cause(ctx)
+				}
+			}
 			txnOp.EXPECT().Rollback(gomock.Any()).DoAndReturn(rollback)
 			oldSession.txnHandler = InitTxnHandler("", eng, context.Background(), txnOp)
 			oldSession.txnHandler.shareTxn = false
 
-			require.NoError(t, rm.Handler(conn, []byte{byte(COM_RESET_CONNECTION)}))
+			if tc.cancelDuringRollback {
+				handlerDone := make(chan error, 1)
+				go func() {
+					handlerDone <- rm.Handler(conn, []byte{byte(COM_RESET_CONNECTION)})
+				}()
+				handlerFinished := false
+				defer func() {
+					if handlerFinished {
+						return
+					}
+					routine.cancelRoutineFunc()
+					select {
+					case <-handlerDone:
+					case <-time.After(time.Second):
+					}
+				}()
+				select {
+				case <-rollbackStarted:
+				case <-time.After(time.Second):
+					t.Fatal("session reset did not enter transaction rollback")
+				}
+				routine.cancelRoutineFunc()
+				select {
+				case handlerErr := <-handlerDone:
+					handlerFinished = true
+					require.NoError(t, handlerErr)
+				case <-time.After(time.Second):
+					t.Fatal("session reset did not finish after rollback cancellation")
+				}
+			} else {
+				require.NoError(t, rm.Handler(conn, []byte{byte(COM_RESET_CONNECTION)}))
+			}
 			require.Equal(t, 1, protocol.disconnects, "a reset that invalidated its transaction generation must close the physical connection")
 			require.Same(t, oldSession, routine.getSession(), "a failed reset must not publish a replacement generation")
 		})
 	}
+}
+
+func TestRoutineHandleSessionCommandKeepsConnectionWhenDeadlineExpiresBeforeResetMutation(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	oldSession := newTestSession(t, ctrl)
+	rm, err := NewRoutineManager(context.Background(), "")
+	require.NoError(t, err)
+	rm.sessionManager = queryservice.NewSessionManager()
+
+	mysqlProtocol := oldSession.GetResponser().MysqlRrWr().(*MysqlProtocolImpl)
+	protocol := &disconnectRecordingProtocol{MysqlRrWr: mysqlProtocol}
+	parameters := &config.FrontendParameters{}
+	parameters.SetDefaultValues()
+	parameters.SessionTimeout.Duration = 0
+	routine := NewRoutine(context.Background(), protocol, parameters)
+	oldSession.setRoutineManager(rm)
+	oldSession.setRoutine(routine)
+	routine.setSession(oldSession)
+	rm.sessionManager.AddSession(oldSession)
+	conn := mysqlProtocol.GetTcpConnection()
+	rm.setRoutine(conn, mysqlProtocol.ConnectionID(), routine)
+	t.Cleanup(func() {
+		rm.deleteRoutine(conn)
+		rm.sessionManager.RemoveSession(oldSession)
+		oldSession.Close()
+		routine.cancelRoutineFunc()
+		rm.cancelCtx()
+	})
+
+	oldSession.GetTxnHandler().Close()
+	eng := mock_frontend.NewMockEngine(ctrl)
+	eng.EXPECT().Hints().Return(engine.Hints{CommitOrRollbackTimeout: time.Second}).AnyTimes()
+	txnOp := mock_frontend.NewMockTxnOperator(ctrl)
+	txnOp.EXPECT().Txn().Return(txn.TxnMeta{}).AnyTimes()
+	txnOp.EXPECT().SetFootPrints(gomock.Any(), gomock.Any()).AnyTimes()
+	oldSession.txnHandler = InitTxnHandler("", eng, context.Background(), txnOp)
+	oldSession.txnHandler.shareTxn = false
+
+	require.NoError(t, rm.Handler(conn, []byte{byte(COM_RESET_CONNECTION)}))
+	require.NoError(t, context.Cause(routine.getCancelRoutineCtx()), "the command deadline must not cancel the physical connection")
+	require.Zero(t, protocol.disconnects, "a reset whose deadline expires before mutation must keep the physical connection reusable")
+	require.Same(t, oldSession, routine.getSession(), "a reset whose deadline expires before mutation must keep the old session generation")
 }
 
 func mysqlNativePasswordResponse(password, salt []byte) []byte {
@@ -1866,6 +1955,22 @@ func TestMySQLWireResetConnectionPreservesDatabase(t *testing.T) {
 func TestRoutineChangeUserAuthenticatesBeforeReplacingSession(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	oldSession := newTestSession(t, ctrl)
+	txnClient := mock_frontend.NewMockTxnClient(ctrl)
+	txnClient.EXPECT().WaitLogTailAppliedAt(gomock.Any(), gomock.Any()).
+		Times(2).
+		Return(timestamp.Timestamp{PhysicalTime: math.MaxInt64}, nil)
+	pu := getPu("")
+	oldTxnClient, oldStorageEngine := pu.TxnClient, pu.StorageEngine
+	t.Cleanup(func() {
+		pu.TxnClient = oldTxnClient
+		pu.StorageEngine = oldStorageEngine
+	})
+	pu.TxnClient = txnClient
+	pu.StorageEngine = &authenticationBarrierEngine{acquire: func(context.Context) (
+		timestamp.Timestamp, error,
+	) {
+		return timestamp.Timestamp{PhysicalTime: math.MaxInt64}, nil
+	}}
 	rm, err := NewRoutineManager(context.Background(), "")
 	require.NoError(t, err)
 	rm.sessionManager = queryservice.NewSessionManager()

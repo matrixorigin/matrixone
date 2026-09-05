@@ -828,6 +828,99 @@ func TestBitXorWindowSpec(t *testing.T) {
 	require.Equal(t, "bit_xor", identifier.ColName())
 }
 
+func TestValueWindowDefaultModifiers(t *testing.T) {
+	testCases := []struct {
+		name      string
+		sql       string
+		canonical string
+	}{
+		{
+			name:      "LAG RESPECT NULLS",
+			sql:       "select lag(v) respect nulls over (order by id) from t",
+			canonical: "select lag(v) over (order by id) from t",
+		},
+		{
+			name:      "LAG with offset RESPECT NULLS",
+			sql:       "select lag(v, 2) respect nulls over (order by id) from t",
+			canonical: "select lag(v, 2) over (order by id) from t",
+		},
+		{
+			name:      "LAG with offset and default RESPECT NULLS",
+			sql:       "select lag(v, 2, 0) respect nulls over (order by id) from t",
+			canonical: "select lag(v, 2, 0) over (order by id) from t",
+		},
+		{
+			name:      "LEAD RESPECT NULLS",
+			sql:       "select lead(v) respect nulls over (order by id) from t",
+			canonical: "select lead(v) over (order by id) from t",
+		},
+		{
+			name:      "LEAD with offset RESPECT NULLS",
+			sql:       "select lead(v, 2) respect nulls over (order by id) from t",
+			canonical: "select lead(v, 2) over (order by id) from t",
+		},
+		{
+			name:      "LEAD with offset and default RESPECT NULLS",
+			sql:       "select lead(v, 2, 0) respect nulls over (order by id) from t",
+			canonical: "select lead(v, 2, 0) over (order by id) from t",
+		},
+		{
+			name:      "FIRST_VALUE RESPECT NULLS",
+			sql:       "select first_value(v) respect nulls over (order by id) from t",
+			canonical: "select first_value(v) over (order by id) from t",
+		},
+		{
+			name:      "LAST_VALUE RESPECT NULLS",
+			sql:       "select last_value(v) respect nulls over (order by id) from t",
+			canonical: "select last_value(v) over (order by id) from t",
+		},
+		{
+			name:      "NTH_VALUE RESPECT NULLS",
+			sql:       "select nth_value(v, 2) respect nulls over (order by id) from t",
+			canonical: "select nth_value(v, 2) over (order by id) from t",
+		},
+		{
+			name:      "NTH_VALUE FROM FIRST",
+			sql:       "select nth_value(v, 2) from first over (order by id) from t",
+			canonical: "select nth_value(v, 2) over (order by id) from t",
+		},
+		{
+			name:      "NTH_VALUE FROM FIRST RESPECT NULLS",
+			sql:       "select nth_value(v, 2) from first respect nulls over (order by id) from t",
+			canonical: "select nth_value(v, 2) over (order by id) from t",
+		},
+		{
+			name:      "RESPECT remains a non-reserved identifier",
+			sql:       "select respect from t",
+			canonical: "select respect from t",
+		},
+		{
+			name:      "RESPECT remains a generic function name",
+			sql:       "select respect()",
+			canonical: "select respect()",
+		},
+	}
+
+	for _, testCase := range testCases {
+		t.Run(testCase.name, func(t *testing.T) {
+			stmt, err := ParseOne(context.Background(), testCase.sql, 1)
+			require.NoError(t, err)
+			defer stmt.Free()
+			require.Equal(t, testCase.canonical, tree.String(stmt, dialect.MYSQL))
+		})
+	}
+
+	for _, sql := range []string{
+		"select lag(v) ignore nulls over (order by id) from t",
+		"select nth_value(v, 2) from last over (order by id) from t",
+	} {
+		t.Run("reject "+sql, func(t *testing.T) {
+			_, err := ParseOne(context.Background(), sql, 1)
+			require.Error(t, err)
+		})
+	}
+}
+
 func TestNamedWindowClause(t *testing.T) {
 	sql := "select sum(v) over win, rank() over (base_win order by v) from t " +
 		"window win as (partition by g order by v), base_win as (partition by g)"
@@ -2499,34 +2592,34 @@ var (
 			output: "select userID as user, MAX(score) as max from t1 group by userID order by user",
 		}, {
 			input:  "load data infile 'test/loadfile5' ignore INTO TABLE T.A FIELDS TERMINATED BY  ',' (@,@,c,d,e,f)",
-			output: "load data infile test/loadfile5 ignore into table t.a fields terminated by , (, , c, d, e, f)",
+			output: "load data infile 'test/loadfile5' ignore into table t.a fields terminated by , (, , c, d, e, f)",
 		}, {
 			input:  "load data infile '/root/lineorder_flat_10.tbl' into table lineorder_flat FIELDS TERMINATED BY '' OPTIONALLY ENCLOSED BY '' LINES TERMINATED BY '';",
-			output: "load data infile /root/lineorder_flat_10.tbl into table lineorder_flat fields terminated by '' optionally enclosed by '' lines terminated by ''",
+			output: "load data infile '/root/lineorder_flat_10.tbl' into table lineorder_flat fields terminated by '' optionally enclosed by '' lines terminated by ''",
 		}, {
 			input:  "load data local infile 'data' replace into table db.a (a, b, @vc, @vd) set a = @vc != 0, d = @vd != 1",
-			output: "load data local infile data replace into table db.a (a, b, @vc, @vd) set a = @vc != 0, d = @vd != 1",
+			output: "load data local infile 'data' replace into table db.a (a, b, @vc, @vd) set a = @vc != 0, d = @vd != 1",
 		}, {
 			input:  "load data local infile 'data' replace into table db.a lines starting by '#' terminated by '\t' ignore 2 lines",
-			output: "load data local infile data replace into table db.a lines starting by # terminated by \t ignore 2 lines",
+			output: "load data local infile 'data' replace into table db.a lines starting by # terminated by \t ignore 2 lines",
 		}, {
 			input:  "load data local infile 'data' replace into table db.a lines starting by '#' terminated by '\t' ignore 2 rows",
-			output: "load data local infile data replace into table db.a lines starting by # terminated by \t ignore 2 lines",
+			output: "load data local infile 'data' replace into table db.a lines starting by # terminated by \t ignore 2 lines",
 		}, {
 			input:  "load data local infile 'data' replace into table db.a lines terminated by '\t' starting by '#' ignore 2 lines",
-			output: "load data local infile data replace into table db.a lines starting by # terminated by \t ignore 2 lines",
+			output: "load data local infile 'data' replace into table db.a lines starting by # terminated by \t ignore 2 lines",
 		}, {
 			input:  "load data local infile 'data' replace into table db.a lines terminated by '\t' starting by '#' ignore 2 rows",
-			output: "load data local infile data replace into table db.a lines starting by # terminated by \t ignore 2 lines",
+			output: "load data local infile 'data' replace into table db.a lines starting by # terminated by \t ignore 2 lines",
 		}, {
 			input:  "load data infile 'data.txt' into table db.a fields terminated by '\t' escaped by '\t'",
-			output: "load data infile data.txt into table db.a fields terminated by \t escaped by \t",
+			output: "load data infile 'data.txt' into table db.a fields terminated by \t escaped by \t",
 		}, {
 			input:  "load data infile 'data.txt' into table db.a fields terminated by '\t' enclosed by '\t' escaped by '\t'",
-			output: "load data infile data.txt into table db.a fields terminated by \t enclosed by \t escaped by \t",
+			output: "load data infile 'data.txt' into table db.a fields terminated by \t enclosed by \t escaped by \t",
 		}, {
 			input:  "load data infile 'data.txt' into table db.a",
-			output: "load data infile data.txt into table db.a",
+			output: "load data infile 'data.txt' into table db.a",
 		}, {
 			input: "load data infile {'filepath'='data.txt', 'compression'='auto'} into table db.a",
 		}, {
@@ -2548,16 +2641,16 @@ var (
 			output: "create external table t (a int) url s3option {'endpoint'='s3.us-west-2.amazonaws.com', 'access_key_id'='******', 'secret_access_key'='******', 'bucket'='test', 'filepath'='*.txt', 'region'='us-west-2'}",
 		}, {
 			input:  "load data infile 'test/loadfile5' ignore INTO TABLE T.A FIELDS TERMINATED BY  ',' (@,@,c,d,e,f)",
-			output: "load data infile test/loadfile5 ignore into table t.a fields terminated by , (, , c, d, e, f)",
+			output: "load data infile 'test/loadfile5' ignore into table t.a fields terminated by , (, , c, d, e, f)",
 		}, {
 			input:  "load data infile '/root/lineorder_flat_10.tbl' into table lineorder_flat FIELDS TERMINATED BY '' OPTIONALLY ENCLOSED BY '' LINES TERMINATED BY '';",
-			output: "load data infile /root/lineorder_flat_10.tbl into table lineorder_flat fields terminated by '' optionally enclosed by '' lines terminated by ''",
+			output: "load data infile '/root/lineorder_flat_10.tbl' into table lineorder_flat fields terminated by '' optionally enclosed by '' lines terminated by ''",
 		}, {
 			input:  "load data infile '/root/lineorder_flat_10.tbl' into table lineorder_flat FIELDS TERMINATED BY '' OPTIONALLY ENCLOSED BY '' LINES TERMINATED BY '' parallel 'true';",
-			output: "load data infile /root/lineorder_flat_10.tbl into table lineorder_flat fields terminated by '' optionally enclosed by '' lines terminated by '' parallel true strict true ",
+			output: "load data infile '/root/lineorder_flat_10.tbl' into table lineorder_flat fields terminated by '' optionally enclosed by '' lines terminated by '' parallel 'true' strict 'true' ",
 		}, {
 			input:  "load data infile '/root/lineorder_flat_10.tbl' into table lineorder_flat FIELDS TERMINATED BY '' OPTIONALLY ENCLOSED BY '' LINES TERMINATED BY '' parallel 'true' strict 'true';",
-			output: "load data infile /root/lineorder_flat_10.tbl into table lineorder_flat fields terminated by '' optionally enclosed by '' lines terminated by '' parallel true strict true ",
+			output: "load data infile '/root/lineorder_flat_10.tbl' into table lineorder_flat fields terminated by '' optionally enclosed by '' lines terminated by '' parallel 'true' strict 'true' ",
 		}, {
 			input: "load data infile {'filepath'='data.txt', 'compression'='auto'} into table db.a",
 		}, {
@@ -3796,11 +3889,11 @@ var (
 		},
 		{
 			input:  "load data infile 'test/loadfile5' ignore INTO TABLE T.A FIELDS TERMINATED BY  ',' (@,@,c,d,e,f)",
-			output: "load data infile test/loadfile5 ignore into table t.a fields terminated by , (, , c, d, e, f)",
+			output: "load data infile 'test/loadfile5' ignore into table t.a fields terminated by , (, , c, d, e, f)",
 		},
 		{
 			input:  "load data infile 'data.txt' into table db.a fields terminated by '\t' escaped by '\t'",
-			output: "load data infile data.txt into table db.a fields terminated by \t escaped by \t",
+			output: "load data infile 'data.txt' into table db.a fields terminated by \t escaped by \t",
 		},
 		{
 			input:  `create function helloworld () returns int language sql as 'select id from test_table limit 1'`,
@@ -5086,6 +5179,10 @@ var (
 		{
 			input:  "analyze table t1",
 			output: "analyze table t1",
+		},
+		{
+			input:  "analyze table t1 (a, b), t2 fullscan",
+			output: "analyze table t1(a, b), t2 fullscan",
 		},
 		// Issue #23122: CHECK TABLE
 		{

@@ -341,6 +341,8 @@ func dupOperatorWithContext(sourceOp vm.Operator, index int, maxParallel int, du
 		op.Limit = t.Limit
 		op.PartitionByCount = t.PartitionByCount
 		op.PreReduce = t.PreReduce
+		op.Algorithm = t.Algorithm
+		op.SpillMem = t.SpillMem
 		op.SetInfo(&info)
 		return op
 	case vm.Window:
@@ -438,6 +440,7 @@ func dupOperatorWithContext(sourceOp vm.Operator, index int, maxParallel int, du
 					FileSize:               t.Es.FileSize,
 					FileOffsetTotal:        t.Es.FileOffsetTotal,
 					ParquetRowGroupShards:  t.Es.ParquetRowGroupShards,
+					ParquetWholeFileFanout: t.Es.ParquetWholeFileFanout,
 					Extern:                 t.Es.Extern,
 					StrictSqlMode:          t.Es.StrictSqlMode,
 					ParallelLoad:           t.Es.ParallelLoad,
@@ -2134,6 +2137,8 @@ func constructPartition(node *plan.Node) *partition.Partition {
 	arg.OrderBySpecs = node.OrderBy
 	arg.Limit = node.Limit
 	arg.PartitionByCount = node.PartitionByCount
+	arg.Algorithm = node.PartitionAlgorithm
+	arg.SpillMem = node.SpillMem
 	return arg
 }
 

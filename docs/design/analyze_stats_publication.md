@@ -1,9 +1,15 @@
 # ANALYZE Statistics Publication and Plan-Cache Freshness
 
+> The publication, schema-fencing, and cache-invalidation contracts in this
+> document remain active. The collection path is superseded by
+> `docs/rfcs/20260904_manual_analyze_sampled_stats.md`, which performs bounded
+> storage sampling instead of a derived full-table aggregate plus metadata
+> refresh.
+
 - Status: mandatory design review pending (stateful cache/concurrency lifecycle)
 - Tracking issue: [matrixorigin/matrixone#27728](https://github.com/matrixorigin/matrixone/issues/27728)
 - Implementation PR: [matrixorigin/matrixone#27758](https://github.com/matrixorigin/matrixone/pull/27758)
-- Last updated: 2026-08-28
+- Last updated: 2026-09-04
 
 ## 1. Problem and evidence
 
@@ -158,6 +164,13 @@ consumers, temporary tables, views, and non-persistent relation kinds. These
 paths preserve the legacy derived ANALYZE result and do not claim a current
 engine-cache boundary.
 
+The same rule applies when a non-system account's physical scan receives an
+implicit planner account filter (cluster tables and the tenant-filtered system
+tables). Such a statement observes only a subset of a system-owned physical
+table, so it returns the tenant-visible ANALYZE result without refreshing the
+shared statistics key. The planner and publication gate share one account-
+filter classifier rather than maintaining separate table lists.
+
 An ANALYZE whose statement starts with an active transaction also preserves the
 legacy result without global publication. The derived SQL can see the
 transaction workspace, whereas `GlobalStats` is committed-object state. Mixing
@@ -176,7 +189,9 @@ derived ANALYZE query succeeds
   -> subscribe current partition and resolve current table definition
   -> submit visible-object tasks
   -> wait for every task result or rejection
-  -> atomically replace GlobalStats entry and wake engine waiters
+  -> under the catalog table-change read lock, validate the observation's
+     schema version and atomically replace GlobalStats entry
+  -> wake engine waiters
   -> commit engine refresh scheduling metadata
   -> release engine stripe
   -> advance frontend table generation
@@ -188,7 +203,8 @@ derived ANALYZE query succeeds
 There are two related linearization points:
 
 - the engine data publication point is replacement of `statsInfoMap[key]` after
-  all object tasks succeed;
+  all object tasks succeed and while the catalog schema version remains locked
+  against concurrent table changes;
 - the frontend reuse boundary is advancement of the table generation while the
   frontend publication stripe is still held.
 
@@ -315,7 +331,12 @@ ignored cancellation and returned `nil`. The enclosing refresh applies the same
 owner-lifecycle predicate at admission and cache publication, including the
 zero-object path that does not traverse objects at all. A successful refresh
 linearizes at the final lifecycle and generation checks performed while the
-publication lock is held.
+publication lock is held. The request and engine-owner cancellation predicates
+are checked in that same critical section immediately before the cache swap,
+with no intervening blocking operation. Cancellation observed there wins and
+leaves the last-good cache and frontend generation unchanged. If the cache swap
+wins first, the publication is complete and a later cancellation does not roll
+it back.
 
 Cancellation and deadline errors remain cancellation/deadline errors at the
 public refresh boundary. Other object/metadata failures may be wrapped with
@@ -439,6 +460,9 @@ checks on affected plan-cache hits.
 | slow generation-N read cannot overwrite N+1 | session-cache race UT |
 | plan build spanning publication is not cached | plan-cache generation UT |
 | physical account/view/temporary/transaction rules | focused frontend table-driven UT and ANALYZE BVT |
+| system account plus two tenant subsets cannot cross-publish cluster-table statistics | multi-session ANALYZE BVT |
+| validate-V1/ALTER-V2/publication cannot publish a stale observation | catalog lock and barrier-based engine UT |
+| cancellation at the final publication fence preserves last-good stats and its schema binding | publication phase-barrier UT |
 | no-dependency and 1/4/16-dependency cache-hit cost | allocation/latency benchmarks |
 | SQL-visible existing-session plan changes after ANALYZE | recorded real-service validation and explain-plan assertion |
 
