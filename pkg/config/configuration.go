@@ -293,9 +293,10 @@ const (
 	arrowLoadDistributedEnabledConfigured
 )
 
-// ArrowLoadParameters controls the LOAD-only Arrow IPC surface. Local files,
-// S3-backed sources, and distributed execution are available by default; the
-// three enable fields remain explicit kill switches for deployment rollback.
+// ArrowLoadParameters controls the LOAD-only Arrow IPC surface. Local files are
+// available by default. S3-backed sources and distributed execution require an
+// explicit deployment opt-in until their aggregate resource admission and
+// release-readiness gates are accepted.
 //
 // configuredFields distinguishes an omitted TOML key from an explicit false.
 // defaultsApplied makes repeated service validation idempotent, so a later
@@ -313,9 +314,10 @@ type ArrowLoadParameters struct {
 	defaultsApplied  bool
 }
 
-// NewArrowLoadParameters returns the default-on Arrow LOAD settings. Callers
-// that adjust a programmatic service configuration should start from this value
-// so an explicit false survives later validation and defaulting passes.
+// NewArrowLoadParameters returns the default local-only Arrow LOAD settings.
+// Callers that adjust a programmatic service configuration should start from
+// this value so an explicit setting survives later validation and defaulting
+// passes.
 func NewArrowLoadParameters() *ArrowLoadParameters {
 	parameters := &ArrowLoadParameters{}
 	parameters.SetDefaultValues()
@@ -367,20 +369,15 @@ func (parameters *ArrowLoadParameters) UnmarshalTOML(value interface{}) error {
 	return nil
 }
 
-// SetDefaultValues enables every supported Arrow LOAD source and execution
-// mode unless the corresponding TOML key was explicitly configured.
+// SetDefaultValues enables local Arrow LOAD. S3-backed sources and distributed
+// execution remain fail-closed unless their corresponding TOML key explicitly
+// opts in.
 func (parameters *ArrowLoadParameters) SetDefaultValues() {
 	if parameters.defaultsApplied {
 		return
 	}
 	if parameters.configuredFields&arrowLoadEnabledConfigured == 0 {
 		parameters.Enabled = true
-	}
-	if parameters.configuredFields&arrowLoadS3EnabledConfigured == 0 {
-		parameters.S3Enabled = true
-	}
-	if parameters.configuredFields&arrowLoadDistributedEnabledConfigured == 0 {
-		parameters.DistributedEnabled = true
 	}
 	parameters.defaultsApplied = true
 }

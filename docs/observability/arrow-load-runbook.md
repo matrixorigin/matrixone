@@ -7,25 +7,26 @@ Pipeline view when dashboard integration is deployed.
 
 ## Availability and rollback controls
 
-Arrow IPC File, Arrow IPC Stream, S3/stage sources, and distributed execution
-are enabled by default. A CN needs no `[cn.frontend.arrow-load]` section for
-ordinary Arrow LOAD use.
+Arrow IPC File and Arrow IPC Stream from local/shared FileService paths are
+enabled by default. S3/stage sources and distributed execution are fail-closed
+until explicitly enabled in every participating CN. A CN needs no
+`[cn.frontend.arrow-load]` section for ordinary local Arrow LOAD use.
 
-The settings remain available as deployment kill switches. Specify only the
-rollback needed for an incident; for example, this configuration stops new
-Arrow statements while leaving the implementation installed:
+The settings are availability gates; `enabled` is also a deployment kill switch.
+Specify the rollback needed for an incident; for example, this configuration
+stops new Arrow statements while leaving the implementation installed:
 
 ```toml
 [cn.frontend.arrow-load]
 enabled = false
 ```
 
-`s3-enabled=false` rejects direct S3-compatible and S3-backed stage sources
-while retaining local Arrow LOAD. `distributed-enabled=false` makes a requested
-parallel Arrow LOAD execute serially. `force-materialize=true` retains Arrow
-LOAD but disables the borrowed Arrow backing optimization. Omitted enable fields
-default to `true`; explicit `false` values survive repeated configuration
-validation and service restart.
+`s3-enabled=true` admits direct S3-compatible and S3-backed stage sources.
+`distributed-enabled=true` admits distributed execution; otherwise a requested
+parallel Arrow LOAD executes serially. `force-materialize=true` retains Arrow
+LOAD but disables the borrowed Arrow backing optimization. Omitted `s3-enabled`
+and `distributed-enabled` fields default to `false`; explicit opt-ins survive
+repeated configuration validation and service restart.
 
 The current implementation charges every raw range, cache pin, and decoded
 Arrow allocation to the shared statement account and limits each cache pin to
@@ -33,8 +34,8 @@ Arrow allocation to the shared statement account and limits each cache pin to
 still a release blocker. `mo_arrow_load_pinned_bytes` observes process usage; it
 is not an admission controller and must not be treated as that missing quota.
 
-Deployments that have not accepted a source or execution mode may opt out before
-starting CNs. During rollback, stop admitting new Arrow statements by disabling
+Deployments may opt in to a source or execution mode only after accepting its
+release gates. During rollback, stop admitting new Arrow statements by disabling
 `enabled`; allow already admitted statements to drain or cancel them through the
 normal query lifecycle. Do not switch an executing statement to a different
 object generation or conversion policy.

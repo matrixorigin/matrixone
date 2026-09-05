@@ -67,13 +67,18 @@ func TestRequireArrowLoadEnabled(t *testing.T) {
 		},
 		ExParam: tree.ExParam{FileService: services},
 	}
-	require.NoError(t, requireArrowLoadGateError(proc, directS3))
-	require.NoError(t, requireArrowLoadGateError(proc, dynamicMinIO))
-	require.NoError(t, requireArrowLoadGateError(proc, aliasedS3))
+	require.ErrorContains(t, requireArrowLoadGateError(proc, directS3), "S3 or stage")
+	require.ErrorContains(t, requireArrowLoadGateError(proc, dynamicMinIO), "S3 or stage")
+	require.ErrorContains(t, requireArrowLoadGateError(proc, aliasedS3), "S3 or stage")
 
 	frontend.ArrowLoad.Enabled = false
 	require.ErrorContains(t, requireArrowLoadGateError(proc, local), "disabled by configuration")
 	frontend.ArrowLoad.Enabled = true
+
+	frontend.ArrowLoad.S3Enabled = true
+	require.NoError(t, requireArrowLoadGateError(proc, directS3))
+	require.NoError(t, requireArrowLoadGateError(proc, dynamicMinIO))
+	require.NoError(t, requireArrowLoadGateError(proc, aliasedS3))
 
 	frontend.ArrowLoad.S3Enabled = false
 	require.ErrorContains(t, requireArrowLoadGateError(proc, directS3), "S3 or stage")

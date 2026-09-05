@@ -21,22 +21,21 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestArrowLoadDefaultsAndProgrammaticOptOut(t *testing.T) {
+func TestArrowLoadDefaultsAndProgrammaticOptIn(t *testing.T) {
 	var frontend FrontendParameters
 	frontend.SetDefaultValues()
 	require.True(t, frontend.ArrowLoad.Enabled)
-	require.True(t, frontend.ArrowLoad.S3Enabled)
-	require.True(t, frontend.ArrowLoad.DistributedEnabled)
+	require.False(t, frontend.ArrowLoad.S3Enabled)
+	require.False(t, frontend.ArrowLoad.DistributedEnabled)
 	require.False(t, frontend.ArrowLoad.ForceMaterialize)
 
 	parameters := NewArrowLoadParameters()
-	parameters.Enabled = false
-	parameters.S3Enabled = false
-	parameters.DistributedEnabled = false
+	parameters.S3Enabled = true
+	parameters.DistributedEnabled = true
 	parameters.SetDefaultValues()
-	require.False(t, parameters.Enabled)
-	require.False(t, parameters.S3Enabled)
-	require.False(t, parameters.DistributedEnabled)
+	require.True(t, parameters.Enabled)
+	require.True(t, parameters.S3Enabled)
+	require.True(t, parameters.DistributedEnabled)
 }
 
 func TestArrowLoadTOMLDefaultsAndExplicitOptOut(t *testing.T) {
@@ -48,21 +47,21 @@ func TestArrowLoadTOMLDefaultsAndExplicitOptOut(t *testing.T) {
 		distributedEnabled bool
 		forceMaterialize   bool
 	}{
-		{name: "section omitted", enabled: true, s3Enabled: true, distributedEnabled: true},
+		{name: "section omitted", enabled: true},
 		{
 			name: "enable fields omitted", input: "[arrow-load]\nforce-materialize = true\n",
-			enabled: true, s3Enabled: true, distributedEnabled: true, forceMaterialize: true,
+			enabled: true, forceMaterialize: true,
 		},
 		{
-			name: "explicit opt out", input: `[arrow-load]
-enabled = false
-s3-enabled = false
-distributed-enabled = false
+			name: "explicit opt in", input: `[arrow-load]
+s3-enabled = true
+distributed-enabled = true
 `,
+			enabled: true, s3Enabled: true, distributedEnabled: true,
 		},
 		{
-			name: "one case-insensitive opt out", input: "[arrow-load]\nS3-ENABLED = false\n",
-			enabled: true, distributedEnabled: true,
+			name: "one case-insensitive opt in", input: "[arrow-load]\nS3-ENABLED = true\n",
+			enabled: true, s3Enabled: true,
 		},
 	} {
 		t.Run(test.name, func(t *testing.T) {

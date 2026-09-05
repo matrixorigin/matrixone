@@ -26,10 +26,10 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-// RequireArrowLoadEnabled checks the LOAD-only Arrow kill switches. Arrow LOAD
-// is available by default, but planner callers still check explicit deployment
-// opt-outs before probing source objects; compile checks again before building
-// execution scopes so a rejected source cannot enter the pipeline.
+// RequireArrowLoadEnabled checks the LOAD-only Arrow gates. Local Arrow LOAD is
+// available by default; S3-backed sources require an explicit deployment opt-in.
+// Planner callers check before probing source objects, and compile checks again
+// before building execution scopes so a rejected source cannot enter the pipeline.
 func RequireArrowLoadEnabled(
 	proc *process.Process,
 	param *tree.ExternParam,

@@ -32,15 +32,15 @@ import (
 
 // TestArrowLoadBVT is the embedded public-path BVT suite for `LOAD DATA ...
 // format='arrow'` (issue #23684, design doc sections 14 and 18). It runs every
-// subtest against one dedicated 1-CN cluster without Arrow-specific settings
-// and uses the real MySQL protocol rather than the internal executor. The local,
-// stage, MinIO, File, and Stream cases therefore prove default availability.
+// subtest against one dedicated 1-CN cluster with S3 explicitly enabled and uses
+// the real MySQL protocol rather than the internal executor. Local File and Stream
+// remain available by default; S3/stage cases prove the explicit opt-in surface.
 // It proves type-matrix correctness, option/DDL rejection, multi-object
 // atomicity, explicit transactions, cross-session visibility, and local gate
 // behavior. Standard distributed CI, mixed binaries, and real cloud providers
 // remain separate release evidence.
 func TestArrowLoadBVT(t *testing.T) {
-	c := startArrowLoadClusterWithDefaults(t, 1)
+	c := startArrowLoadCluster(t, 1, true, true, false)
 	db := openArrowLoadDB(t, c, 0)
 	mustExec(t, db, "create database if not exists arrow_bvt")
 	mustExec(t, db, "use arrow_bvt")
@@ -136,11 +136,12 @@ func TestArrowLoadGateDisabled(t *testing.T) {
 	require.Equal(t, int64(0), queryCount(t, db, "select count(*) from t"))
 }
 
-// TestArrowLoadGateS3Disabled proves the S3 sub-gate fails closed before any
-// network I/O. Dummy, unreachable credentials are sufficient proof of the ordering:
-// the statement must be rejected by configuration rather than attempting HeadObject.
+// TestArrowLoadGateS3Disabled proves the default S3 sub-gate fails closed before
+// any network I/O. Dummy, unreachable credentials are sufficient proof of the
+// ordering: the statement must be rejected by configuration rather than
+// attempting HeadObject.
 func TestArrowLoadGateS3Disabled(t *testing.T) {
-	c := startArrowLoadCluster(t, 1, true /*enabled*/, false /*s3Enabled*/, true /*distributedEnabled*/)
+	c := startArrowLoadClusterWithDefaults(t, 1)
 	db := openArrowLoadDB(t, c, 0)
 	mustExec(t, db, "create database if not exists arrow_s3_gate_off")
 	mustExec(t, db, "use arrow_s3_gate_off")
