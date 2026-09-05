@@ -185,9 +185,11 @@ External Tables and Dependent Objects
 
 Database cloning intentionally omits external tables because their data and
 files are managed outside MatrixOne. Views, SQL functions, and stored
-procedures that directly or transitively depend on an omitted external table
-or an omitted dependent view are omitted as well. Independent SQL routine
-families are copied and rewritten for the target database. UDF overloads with
+procedures that directly or transitively depend on an omitted external table,
+view, or routine are omitted as well. This closure is applied in both
+directions, so a view that calls an omitted SQL function is omitted before view
+restoration. Independent SQL routine families are copied and rewritten for the
+target database. UDF overloads with
 the same database, name, and kind are treated as one family: if dependency
 inspection omits one overload, the whole family is omitted because clone-time
 metadata inspection does not resolve overload types at every call site.

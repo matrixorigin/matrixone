@@ -35,6 +35,8 @@ create function issue_27103_live_src.f_external() returns int language sql as
 create function issue_27103_live_src.f_transitive() returns int language sql as
 'issue_27103_live_src.f_external()';
 create view issue_27103_live_src.ext_v as select * from issue_27103_live_src.ext_t;
+use issue_27103_live_src;
+create view issue_27103_live_src.udf_v as select f_external();
 create function issue_27103_live_src.f_view() returns int language sql as
 'select count(*) from issue_27103_live_src.ext_v';
 create procedure issue_27103_live_src.p_control() 'begin select count(*) as answer from issue_27103_live_src.control_t; end';
@@ -52,6 +54,8 @@ select count(*) as live_target_external_tables from mo_catalog.mo_tables
 where reldatabase = 'issue_27103_live_dst' and relkind = 'e';
 select count(*) as live_target_external_views from mo_catalog.mo_tables
 where reldatabase = 'issue_27103_live_dst' and relkind = 'v' and relname = 'ext_v';
+select count(*) as live_target_omitted_udf_views from mo_catalog.mo_tables
+where reldatabase = 'issue_27103_live_dst' and relkind = 'v' and relname = 'udf_v';
 select count(*) as live_target_control_tables from mo_catalog.mo_tables
 where reldatabase = 'issue_27103_live_dst' and relname = 'control_t' and relkind = 'r';
 use issue_27103_live_dst;
@@ -80,6 +84,8 @@ create function issue_27103_snapshot_src.f_external() returns int language sql a
 create function issue_27103_snapshot_src.f_transitive() returns int language sql as
 'issue_27103_snapshot_src.f_external()';
 create view issue_27103_snapshot_src.ext_v as select * from issue_27103_snapshot_src.ext_t;
+use issue_27103_snapshot_src;
+create view issue_27103_snapshot_src.udf_v as select f_external();
 create function issue_27103_snapshot_src.f_view() returns int language sql as
 'select count(*) from issue_27103_snapshot_src.ext_v';
 create procedure issue_27103_snapshot_src.p_control() 'begin select count(*) as answer from issue_27103_snapshot_src.control_t; end';
@@ -100,6 +106,8 @@ select count(*) as snapshot_target_external_tables from mo_catalog.mo_tables
 where reldatabase = 'issue_27103_snapshot_dst' and relkind = 'e';
 select count(*) as snapshot_target_external_views from mo_catalog.mo_tables
 where reldatabase = 'issue_27103_snapshot_dst' and relkind = 'v' and relname = 'ext_v';
+select count(*) as snapshot_target_omitted_udf_views from mo_catalog.mo_tables
+where reldatabase = 'issue_27103_snapshot_dst' and relkind = 'v' and relname = 'udf_v';
 select count(*) as snapshot_target_control_tables from mo_catalog.mo_tables
 where reldatabase = 'issue_27103_snapshot_dst' and relname = 'control_t' and relkind = 'r';
 use issue_27103_snapshot_dst;

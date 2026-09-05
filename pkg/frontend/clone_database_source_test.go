@@ -614,6 +614,55 @@ func TestFilterCloneDatabaseRoutinesSkipsUncloneableDependencies(t *testing.T) {
 	})
 }
 
+func TestCloneDatabaseOmissionSetPropagatesRoutineDependenciesToViews(t *testing.T) {
+	source := cloneDatabaseSource{
+		srcResolveDBName: "source_db",
+		srcTblInfos: []*tableInfo{
+			{dbName: "source_db", tblName: "ext_t", relKind: catalog.SystemExternalRel},
+		},
+		viewMap: map[string]*tableInfo{
+			genKey("source_db", "udf_v"): {
+				dbName: "source_db", tblName: "udf_v", typ: view,
+				createSql: "create view source_db.udf_v as select f_external()",
+			},
+			genKey("source_db", "udf_chain_v"): {
+				dbName: "source_db", tblName: "udf_chain_v", typ: view,
+				createSql: "create view source_db.udf_chain_v as select * from source_db.udf_v",
+			},
+			genKey("source_db", "independent_v"): {
+				dbName: "source_db", tblName: "independent_v", typ: view,
+				createSql: "create view source_db.independent_v as select 1 as n",
+			},
+		},
+		userDefinedFuncs: []userDefinedFunctionDefinition{
+			{name: "f_external", lang: "sql", body: "select count(*) from source_db.ext_t"},
+			{name: "f_view", lang: "sql", body: "select * from source_db.udf_v"},
+			{name: "f_independent", lang: "sql", body: "1 + 1"},
+		},
+	}
+
+	omissions, err := collectCloneDatabaseOmissionSet(context.Background(), source, 1)
+	require.NoError(t, err)
+	require.Contains(t, omissions.objects, cloneDatabaseObjectKey("source_db", "udf_v", 1))
+	require.Contains(t, omissions.objects, cloneDatabaseObjectKey("source_db", "udf_chain_v", 1))
+	require.Contains(t, omissions.functions, cloneRoutineFamilyKey(
+		cloneRoutineFunctionKind, "source_db", "f_external", 1,
+	))
+	require.Contains(t, omissions.functions, cloneRoutineFamilyKey(
+		cloneRoutineFunctionKind, "source_db", "f_view", 1,
+	))
+	require.NotContains(t, omissions.objects, cloneDatabaseObjectKey("source_db", "independent_v", 1))
+	require.NotContains(t, omissions.functions, cloneRoutineFamilyKey(
+		cloneRoutineFunctionKind, "source_db", "f_independent", 1,
+	))
+
+	applyCloneDatabaseOmissionSet(&source, omissions, 1)
+	require.Len(t, source.viewMap, 1)
+	_, independentViewKept := source.viewMap[genKey("source_db", "independent_v")]
+	require.True(t, independentViewKept)
+	require.Equal(t, []string{"f_independent"}, routineNames(source.userDefinedFuncs))
+}
+
 func TestCollectCloneRoutineReferencesScopesCTEs(t *testing.T) {
 	tests := []struct {
 		name              string

@@ -1302,9 +1302,18 @@ func handleCloneDatabaseWithSource(
 		}
 	}
 
-	// Sort views before filtering routines. The sort marks views whose
-	// definitions depend on omitted external relations, allowing the routine
-	// filter to apply the same omission contract transitively.
+	lowerCaseTableNames := parserLowerCaseTableNames(ses)
+	// Build one omission closure before sorting views. Views and routines can
+	// depend on each other, so filtering routines after view planning would
+	// allow a view to bind an omitted UDF and fail during restoration.
+	omissions, err := collectCloneDatabaseOmissionSet(
+		reqCtx, source, lowerCaseTableNames,
+	)
+	if err != nil {
+		return
+	}
+	applyCloneDatabaseOmissionSet(&source, omissions, lowerCaseTableNames)
+
 	if len(source.viewMap) != 0 {
 		viewSnapshot := prepareCloneViewSnapshot(source.snapshot, restoreSnapshotTS)
 		fromAccount := source.opAccountId
@@ -1319,11 +1328,6 @@ func handleCloneDatabaseWithSource(
 		}
 	}
 
-	if source.userDefinedFuncs, source.storedProcedures, err = filterCloneDatabaseRoutines(
-		reqCtx, source, parserLowerCaseTableNames(ses),
-	); err != nil {
-		return
-	}
 	if err = validateCloneUserDefinedFunctions(source.userDefinedFuncs); err != nil {
 		return
 	}
@@ -1332,7 +1336,7 @@ func handleCloneDatabaseWithSource(
 		source.userDefinedFuncs,
 		source.srcResolveDBName,
 		stmt.DstDatabase.String(),
-		parserLowerCaseTableNames(ses),
+		lowerCaseTableNames,
 	); err != nil {
 		return
 	}
@@ -1341,7 +1345,7 @@ func handleCloneDatabaseWithSource(
 		source.storedProcedures,
 		source.srcResolveDBName,
 		stmt.DstDatabase.String(),
-		parserLowerCaseTableNames(ses),
+		lowerCaseTableNames,
 	); err != nil {
 		return
 	}

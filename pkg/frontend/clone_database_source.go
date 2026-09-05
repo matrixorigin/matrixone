@@ -98,8 +98,9 @@ func (source *cloneDatabaseSource) branchTableCount() int64 {
 }
 
 const (
-	cloneRoutineFunctionKind  = "function"
-	cloneRoutineProcedureKind = "procedure"
+	cloneRoutineFunctionKind    = "function"
+	cloneRoutineProcedureKind   = "procedure"
+	cloneDatabaseObjectNodeKind = "object"
 )
 
 type cloneRoutineReferences struct {
@@ -108,11 +109,23 @@ type cloneRoutineReferences struct {
 	functions  map[string]struct{}
 }
 
-type cloneRoutineDependency struct {
-	key         string
-	references  cloneRoutineReferences
-	inspectable bool
-	skipped     bool
+type cloneDatabaseOmissionSet struct {
+	objects    map[string]struct{}
+	functions  map[string]struct{}
+	procedures map[string]struct{}
+}
+
+type cloneDatabaseDependencyNode struct {
+	kind string
+	key  string
+}
+
+func newCloneRoutineReferences() cloneRoutineReferences {
+	return cloneRoutineReferences{
+		tables:     make(map[string]struct{}),
+		procedures: make(map[string]struct{}),
+		functions:  make(map[string]struct{}),
+	}
 }
 
 func cloneDatabaseObjectKey(databaseName, objectName string, lowerCaseTableNames int64) string {
@@ -139,26 +152,48 @@ func cloneDatabaseSourceObjectKey(source cloneDatabaseSource, tblInfo *tableInfo
 	return cloneDatabaseObjectKey(databaseName, tblInfo.tblName, lowerCaseTableNames)
 }
 
-func collectCloneViewTableDependencies(
+func collectCloneFunctionReference(
+	references *cloneRoutineReferences,
+	defaultDBName string,
+	lowerCaseTableNames int64,
+) func(*tree.UnresolvedName) {
+	return func(name *tree.UnresolvedName) {
+		if name == nil || name.NumParts == 0 {
+			return
+		}
+		databaseName := defaultDBName
+		if name.NumParts >= 3 {
+			databaseName = name.DbNameOrigin()
+		} else if name.NumParts >= 2 {
+			databaseName = name.TblNameOrigin()
+		}
+		references.functions[cloneRoutineFamilyKey(
+			cloneRoutineFunctionKind, databaseName,
+			name.ColNameOrigin(), lowerCaseTableNames,
+		)] = struct{}{}
+	}
+}
+
+func collectCloneViewDependencies(
 	ctx context.Context,
 	tblInfo *tableInfo,
 	lowerCaseTableNames int64,
-) (map[string]struct{}, error) {
-	dependencies := make(map[string]struct{})
+) (cloneRoutineReferences, error) {
+	references := newCloneRoutineReferences()
 	statements, err := parseViewCreateSQLForRestore(ctx, tblInfo, lowerCaseTableNames)
 	if err != nil {
-		return nil, err
+		return references, err
 	}
 	defer freeStatements(statements)
 	if len(statements) != 1 {
-		return nil, moerr.NewInternalErrorNoCtxf(
+		return references, moerr.NewInternalErrorNoCtxf(
 			"clone view SQL for %s.%s produced %d statements",
 			tblInfo.dbName, tblInfo.tblName, len(statements),
 		)
 	}
 	createView, ok := statements[0].(*tree.CreateView)
 	if !ok {
-		return nil, moerr.NewInternalErrorNoCtxf(
+		return references, moerr.NewInternalErrorNoCtxf(
 			"clone view SQL for %s.%s is %T, expected *tree.CreateView",
 			tblInfo.dbName, tblInfo.tblName, statements[0],
 		)
@@ -170,64 +205,229 @@ func collectCloneViewTableDependencies(
 			if name.ExplicitSchema {
 				databaseName = string(name.SchemaName)
 			}
-			dependencies[cloneDatabaseObjectKey(
+			references.tables[cloneDatabaseObjectKey(
 				databaseName, string(name.ObjectName), lowerCaseTableNames,
 			)] = struct{}{}
 		},
+		collectFunctionName: collectCloneFunctionReference(
+			&references, tblInfo.dbName, lowerCaseTableNames,
+		),
 	})
-	return dependencies, nil
+	return references, nil
 }
 
-// omittedCloneDatabaseObjects returns the relation objects that will not be
-// present in the target. View sorting must run before this helper so that a
-// view whose definition depends on an omitted external relation is included
-// in the same omission set as the external relation itself.
-func omittedCloneDatabaseObjects(
+// collectCloneDatabaseOmissionSet builds one closure over tables, views,
+// functions, and procedures. A routine can depend on a view, and a view can
+// depend on a routine; keeping these edges in one graph prevents either
+// restoration order from publishing metadata whose dependency was omitted.
+// Reverse edges let each omission propagate to its direct dependents once,
+// rather than rescanning every object for every level of a dependency chain.
+func collectCloneDatabaseOmissionSet(
 	ctx context.Context,
 	source cloneDatabaseSource,
 	lowerCaseTableNames int64,
-) (map[string]struct{}, error) {
-	omitted := make(map[string]struct{})
+) (cloneDatabaseOmissionSet, error) {
+	omissions := cloneDatabaseOmissionSet{
+		objects:    make(map[string]struct{}),
+		functions:  make(map[string]struct{}),
+		procedures: make(map[string]struct{}),
+	}
+	dependents := make(map[cloneDatabaseDependencyNode]map[cloneDatabaseDependencyNode]struct{})
+	queue := make([]cloneDatabaseDependencyNode, 0)
+
+	enqueue := func(node cloneDatabaseDependencyNode) {
+		var omissionsForKind map[string]struct{}
+		switch node.kind {
+		case cloneDatabaseObjectNodeKind:
+			omissionsForKind = omissions.objects
+		case cloneRoutineFunctionKind:
+			omissionsForKind = omissions.functions
+		case cloneRoutineProcedureKind:
+			omissionsForKind = omissions.procedures
+		default:
+			return
+		}
+		if _, alreadyOmitted := omissionsForKind[node.key]; alreadyOmitted {
+			return
+		}
+		omissionsForKind[node.key] = struct{}{}
+		queue = append(queue, node)
+	}
+	addDependency := func(dependent, dependency cloneDatabaseDependencyNode) {
+		if dependents[dependency] == nil {
+			dependents[dependency] = make(map[cloneDatabaseDependencyNode]struct{})
+		}
+		dependents[dependency][dependent] = struct{}{}
+	}
+
 	for _, tblInfo := range source.srcTblInfos {
 		if tblInfo != nil && !isCloneableCloneDatabaseTable(tblInfo) {
-			omitted[cloneDatabaseSourceObjectKey(source, tblInfo, lowerCaseTableNames)] = struct{}{}
+			enqueue(cloneDatabaseDependencyNode{
+				kind: cloneDatabaseObjectNodeKind,
+				key:  cloneDatabaseSourceObjectKey(source, tblInfo, lowerCaseTableNames),
+			})
 		}
 	}
-	if len(omitted) == 0 {
-		return omitted, nil
+	for _, tblInfo := range source.viewMap {
+		if tblInfo != nil && tblInfo.unservable {
+			enqueue(cloneDatabaseDependencyNode{
+				kind: cloneDatabaseObjectNodeKind,
+				key:  cloneDatabaseSourceObjectKey(source, tblInfo, lowerCaseTableNames),
+			})
+		}
 	}
-	viewDependencies := make(map[string]map[string]struct{}, len(source.viewMap))
+	if len(queue) == 0 {
+		return omissions, nil
+	}
+
 	for _, tblInfo := range source.viewMap {
 		if tblInfo == nil {
 			continue
 		}
 		viewKey := cloneDatabaseSourceObjectKey(source, tblInfo, lowerCaseTableNames)
-		if tblInfo.unservable {
-			omitted[viewKey] = struct{}{}
-		}
-		dependencies, err := collectCloneViewTableDependencies(ctx, tblInfo, lowerCaseTableNames)
+		dependencies, err := collectCloneViewDependencies(ctx, tblInfo, lowerCaseTableNames)
 		if err != nil {
-			return nil, err
+			return omissions, err
 		}
-		viewDependencies[viewKey] = dependencies
-	}
-	changed := true
-	for changed {
-		changed = false
-		for viewKey, dependencies := range viewDependencies {
-			if _, alreadyOmitted := omitted[viewKey]; alreadyOmitted {
-				continue
-			}
-			for dependency := range dependencies {
-				if _, dependencyOmitted := omitted[dependency]; dependencyOmitted {
-					omitted[viewKey] = struct{}{}
-					changed = true
-					break
-				}
-			}
+		viewNode := cloneDatabaseDependencyNode{
+			kind: cloneDatabaseObjectNodeKind,
+			key:  viewKey,
+		}
+		for tableKey := range dependencies.tables {
+			addDependency(viewNode, cloneDatabaseDependencyNode{
+				kind: cloneDatabaseObjectNodeKind,
+				key:  tableKey,
+			})
+		}
+		for functionKey := range dependencies.functions {
+			addDependency(viewNode, cloneDatabaseDependencyNode{
+				kind: cloneRoutineFunctionKind,
+				key:  functionKey,
+			})
+		}
+		for procedureKey := range dependencies.procedures {
+			addDependency(viewNode, cloneDatabaseDependencyNode{
+				kind: cloneRoutineProcedureKind,
+				key:  procedureKey,
+			})
 		}
 	}
-	return omitted, nil
+
+	addRoutineDependencies := func(
+		routineNode cloneDatabaseDependencyNode,
+		references cloneRoutineReferences,
+		inspectable bool,
+	) {
+		if !inspectable {
+			enqueue(routineNode)
+		}
+		for tableKey := range references.tables {
+			addDependency(routineNode, cloneDatabaseDependencyNode{
+				kind: cloneDatabaseObjectNodeKind,
+				key:  tableKey,
+			})
+		}
+		for functionKey := range references.functions {
+			addDependency(routineNode, cloneDatabaseDependencyNode{
+				kind: cloneRoutineFunctionKind,
+				key:  functionKey,
+			})
+		}
+		for procedureKey := range references.procedures {
+			addDependency(routineNode, cloneDatabaseDependencyNode{
+				kind: cloneRoutineProcedureKind,
+				key:  procedureKey,
+			})
+		}
+	}
+	for _, definition := range source.userDefinedFuncs {
+		references, inspectable, err := collectCloneRoutineReferences(
+			ctx, definition.body, definition.lang, definition.sqlMode,
+			source.srcResolveDBName, lowerCaseTableNames, true,
+		)
+		if err != nil {
+			return omissions, err
+		}
+		addRoutineDependencies(cloneDatabaseDependencyNode{
+			kind: cloneRoutineFunctionKind,
+			key: cloneRoutineFamilyKey(
+				cloneRoutineFunctionKind, source.srcResolveDBName, definition.name, lowerCaseTableNames,
+			),
+		}, references, inspectable)
+	}
+	for _, definition := range source.storedProcedures {
+		references, inspectable, err := collectCloneRoutineReferences(
+			ctx, definition.body, definition.lang, definition.sqlMode,
+			source.srcResolveDBName, lowerCaseTableNames, false,
+		)
+		if err != nil {
+			return omissions, err
+		}
+		addRoutineDependencies(cloneDatabaseDependencyNode{
+			kind: cloneRoutineProcedureKind,
+			key: cloneRoutineFamilyKey(
+				cloneRoutineProcedureKind, source.srcResolveDBName, definition.name, lowerCaseTableNames,
+			),
+		}, references, inspectable)
+	}
+
+	for len(queue) > 0 {
+		node := queue[0]
+		queue = queue[1:]
+		for dependent := range dependents[node] {
+			enqueue(dependent)
+		}
+	}
+	return omissions, nil
+}
+
+// omittedCloneDatabaseObjects retains the relation-only view of the omission
+// graph for callers that only need the catalog objects absent from the target.
+func omittedCloneDatabaseObjects(
+	ctx context.Context,
+	source cloneDatabaseSource,
+	lowerCaseTableNames int64,
+) (map[string]struct{}, error) {
+	omissions, err := collectCloneDatabaseOmissionSet(ctx, source, lowerCaseTableNames)
+	return omissions.objects, err
+}
+
+func applyCloneDatabaseOmissionSet(
+	source *cloneDatabaseSource,
+	omissions cloneDatabaseOmissionSet,
+	lowerCaseTableNames int64,
+) {
+	filteredFunctions := make([]userDefinedFunctionDefinition, 0, len(source.userDefinedFuncs))
+	for _, definition := range source.userDefinedFuncs {
+		key := cloneRoutineFamilyKey(
+			cloneRoutineFunctionKind, source.srcResolveDBName, definition.name, lowerCaseTableNames,
+		)
+		if _, skipped := omissions.functions[key]; !skipped {
+			filteredFunctions = append(filteredFunctions, definition)
+		}
+	}
+	filteredProcedures := make([]storedProcedureDefinition, 0, len(source.storedProcedures))
+	for _, definition := range source.storedProcedures {
+		key := cloneRoutineFamilyKey(
+			cloneRoutineProcedureKind, source.srcResolveDBName, definition.name, lowerCaseTableNames,
+		)
+		if _, skipped := omissions.procedures[key]; !skipped {
+			filteredProcedures = append(filteredProcedures, definition)
+		}
+	}
+	filteredViews := make(map[string]*tableInfo, len(source.viewMap))
+	for key, view := range source.viewMap {
+		if view == nil {
+			continue
+		}
+		viewKey := cloneDatabaseSourceObjectKey(*source, view, lowerCaseTableNames)
+		if _, skipped := omissions.objects[viewKey]; !skipped {
+			filteredViews[key] = view
+		}
+	}
+	source.userDefinedFuncs = filteredFunctions
+	source.storedProcedures = filteredProcedures
+	source.viewMap = filteredViews
 }
 
 func collectCloneRoutineReferences(
@@ -239,11 +439,7 @@ func collectCloneRoutineReferences(
 	lowerCaseTableNames int64,
 	isFunction bool,
 ) (cloneRoutineReferences, bool, error) {
-	references := cloneRoutineReferences{
-		tables:     make(map[string]struct{}),
-		procedures: make(map[string]struct{}),
-		functions:  make(map[string]struct{}),
-	}
+	references := newCloneRoutineReferences()
 	if !strings.EqualFold(lang, string(tree.SQL)) {
 		return references, false, nil
 	}
@@ -294,21 +490,9 @@ func collectCloneRoutineReferences(
 				string(name.Name.ObjectName), lowerCaseTableNames,
 			)] = struct{}{}
 		},
-		collectFunctionName: func(name *tree.UnresolvedName) {
-			if name == nil || name.NumParts == 0 {
-				return
-			}
-			databaseName := srcDBName
-			if name.NumParts >= 3 {
-				databaseName = name.DbNameOrigin()
-			} else if name.NumParts >= 2 {
-				databaseName = name.TblNameOrigin()
-			}
-			references.functions[cloneRoutineFamilyKey(
-				cloneRoutineFunctionKind, databaseName,
-				name.ColNameOrigin(), lowerCaseTableNames,
-			)] = struct{}{}
-		},
+		collectFunctionName: collectCloneFunctionReference(
+			&references, srcDBName, lowerCaseTableNames,
+		),
 	})
 	return references, remappable && !unsupported, nil
 }
@@ -325,128 +509,12 @@ func filterCloneDatabaseRoutines(
 	source cloneDatabaseSource,
 	lowerCaseTableNames int64,
 ) ([]userDefinedFunctionDefinition, []storedProcedureDefinition, error) {
-	omittedObjects, err := omittedCloneDatabaseObjects(ctx, source, lowerCaseTableNames)
+	omissions, err := collectCloneDatabaseOmissionSet(ctx, source, lowerCaseTableNames)
 	if err != nil {
 		return nil, nil, err
 	}
-	if len(omittedObjects) == 0 {
-		return slices.Clone(source.userDefinedFuncs), slices.Clone(source.storedProcedures), nil
-	}
-
-	dependencies := make([]cloneRoutineDependency, 0, len(source.userDefinedFuncs)+len(source.storedProcedures))
-	functionKeys := make(map[string]struct{}, len(source.userDefinedFuncs))
-	procedureKeys := make(map[string]struct{}, len(source.storedProcedures))
-	for _, definition := range source.userDefinedFuncs {
-		key := cloneRoutineFamilyKey(
-			cloneRoutineFunctionKind, source.srcResolveDBName, definition.name, lowerCaseTableNames,
-		)
-		functionKeys[key] = struct{}{}
-		dependencies = append(dependencies, cloneRoutineDependency{key: key})
-	}
-	for _, definition := range source.storedProcedures {
-		key := cloneRoutineFamilyKey(
-			cloneRoutineProcedureKind, source.srcResolveDBName, definition.name, lowerCaseTableNames,
-		)
-		procedureKeys[key] = struct{}{}
-		dependencies = append(dependencies, cloneRoutineDependency{key: key})
-	}
-
-	dependencyIndex := 0
-	for _, definition := range source.userDefinedFuncs {
-		references, inspectable, err := collectCloneRoutineReferences(
-			ctx, definition.body, definition.lang, definition.sqlMode,
-			source.srcResolveDBName, lowerCaseTableNames, true,
-		)
-		if err != nil {
-			return nil, nil, err
-		}
-		dependencies[dependencyIndex].references = references
-		dependencies[dependencyIndex].inspectable = inspectable
-		dependencyIndex++
-	}
-	for _, definition := range source.storedProcedures {
-		references, inspectable, err := collectCloneRoutineReferences(
-			ctx, definition.body, definition.lang, definition.sqlMode,
-			source.srcResolveDBName, lowerCaseTableNames, false,
-		)
-		if err != nil {
-			return nil, nil, err
-		}
-		dependencies[dependencyIndex].references = references
-		dependencies[dependencyIndex].inspectable = inspectable
-		dependencyIndex++
-	}
-
-	skippedRoutines := make(map[string]struct{})
-	for i := range dependencies {
-		dependency := &dependencies[i]
-		if !dependency.inspectable {
-			dependency.skipped = true
-		} else {
-			for tableKey := range dependency.references.tables {
-				if _, ok := omittedObjects[tableKey]; ok {
-					dependency.skipped = true
-					break
-				}
-			}
-		}
-		if dependency.skipped {
-			skippedRoutines[dependency.key] = struct{}{}
-		}
-	}
-
-	changed := true
-	for changed {
-		changed = false
-		for i := range dependencies {
-			dependency := &dependencies[i]
-			if dependency.skipped {
-				continue
-			}
-			for functionKey := range dependency.references.functions {
-				if _, known := functionKeys[functionKey]; known {
-					if _, skipped := skippedRoutines[functionKey]; skipped {
-						dependency.skipped = true
-						break
-					}
-				}
-			}
-			if !dependency.skipped {
-				for procedureKey := range dependency.references.procedures {
-					if _, known := procedureKeys[procedureKey]; known {
-						if _, skipped := skippedRoutines[procedureKey]; skipped {
-							dependency.skipped = true
-							break
-						}
-					}
-				}
-			}
-			if dependency.skipped {
-				skippedRoutines[dependency.key] = struct{}{}
-				changed = true
-			}
-		}
-	}
-
-	filteredFunctions := make([]userDefinedFunctionDefinition, 0, len(source.userDefinedFuncs))
-	for _, definition := range source.userDefinedFuncs {
-		key := cloneRoutineFamilyKey(
-			cloneRoutineFunctionKind, source.srcResolveDBName, definition.name, lowerCaseTableNames,
-		)
-		if _, skipped := skippedRoutines[key]; !skipped {
-			filteredFunctions = append(filteredFunctions, definition)
-		}
-	}
-	filteredProcedures := make([]storedProcedureDefinition, 0, len(source.storedProcedures))
-	for _, definition := range source.storedProcedures {
-		key := cloneRoutineFamilyKey(
-			cloneRoutineProcedureKind, source.srcResolveDBName, definition.name, lowerCaseTableNames,
-		)
-		if _, skipped := skippedRoutines[key]; !skipped {
-			filteredProcedures = append(filteredProcedures, definition)
-		}
-	}
-	return filteredFunctions, filteredProcedures, nil
+	applyCloneDatabaseOmissionSet(&source, omissions, lowerCaseTableNames)
+	return source.userDefinedFuncs, source.storedProcedures, nil
 }
 
 func collectCloneDatabaseSource(
