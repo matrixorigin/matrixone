@@ -16,10 +16,12 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"os"
 	"path/filepath"
+	"sync"
 	"syscall"
 	"time"
 
@@ -37,8 +39,22 @@ var (
 )
 
 var (
-	dynamicCNServicePIDs     []int
-	dynamicCNServiceCommands [][]string
+	dynamicCNMu                  sync.RWMutex
+	dynamicCNServicePIDs         []int
+	dynamicCNServiceCommands     [][]string
+	dynamicChaosTester           *chaos.ChaosTester
+	launchStartDynamicCNServices = startDynamicCNServices
+	dynamicForkExec              = syscall.ForkExec
+	dynamicKill                  = syscall.Kill
+	dynamicListenAndServe        = http.ListenAndServe
+	dynamicWaitProcess           = func(pid int) error {
+		p, err := os.FindProcess(pid)
+		if err != nil {
+			return err
+		}
+		_, err = p.Wait()
+		return err
+	}
 )
 
 func startDynamicCluster(
@@ -53,7 +69,11 @@ func startDynamicCluster(
 	if _, err := startTNServiceCluster(ctx, cfg.TNServiceConfigsFiles, stopper, shutdownC); err != nil {
 		return err
 	}
-	if err := startDynamicCNServices("./mo-data", cfg.Dynamic); err != nil {
+	// Register the dynamic-CN cleanup before starting the first child.  A
+	// partial startup must be cleaned by the same ordered supervisor path when
+	// a later child (or the chaos tester) fails to start.
+	serviceLifecycle.setDynamicCNStop(stopAllDynamicCNServicesGracefully)
+	if err := launchStartDynamicCNServices("./mo-data", cfg.Dynamic); err != nil {
 		return err
 	}
 	if *withProxy {
@@ -81,12 +101,16 @@ func startDynamicBuiltinProxy(serviceCount int, proxyOwns6001 bool) error {
 	if !shouldStartDynamicBuiltinProxy(serviceCount, proxyOwns6001) {
 		return nil
 	}
-	cnProxy = launchNewProxy("0.0.0.0:6001", logutil.GetGlobalLogger().Named("mysql-proxy"))
+	proxy := launchNewProxy("0.0.0.0:6001", logutil.GetGlobalLogger().Named("mysql-proxy"))
 	for i := 0; i < serviceCount; i++ {
 		port := baseFrontendPort + i
-		cnProxy.AddUpStream(fmt.Sprintf("127.0.0.1:%d", port), time.Second*10)
+		proxy.AddUpStream(fmt.Sprintf("127.0.0.1:%d", port), time.Second*10)
 	}
-	return cnProxy.Start()
+	if err := proxy.Start(); err != nil {
+		return err
+	}
+	cnProxy = proxy
+	return nil
 }
 
 func shouldStartDynamicBuiltinProxy(serviceCount int, proxyOwns6001 bool) bool {
@@ -100,15 +124,20 @@ func startDynamicCNServices(
 		return err
 	}
 
+	dynamicCNMu.Lock()
 	dynamicCNServiceCommands = make([][]string, cfg.ServiceCount)
 	dynamicCNServicePIDs = make([]int, cfg.ServiceCount)
+	dynamicCNMu.Unlock()
 	for i := 0; i < cfg.ServiceCount; i++ {
-		dynamicCNServiceCommands[i] = []string{
+		command := []string{
 			os.Args[0],
 			"-cfg", "./mo-data/cn-" + fmt.Sprintf("%d", i) + ".toml",
 			"-max-processor", fmt.Sprintf("%d", cfg.CpuCount),
 			"-debug-http", fmt.Sprintf("127.0.0.1:606%d", i),
 		}
+		dynamicCNMu.Lock()
+		dynamicCNServiceCommands[i] = command
+		dynamicCNMu.Unlock()
 		if err := startDynamicCNByIndex(i); err != nil {
 			return err
 		}
@@ -119,7 +148,18 @@ func startDynamicCNServices(
 	cfg.Chaos.Restart.KillFunc = stopDynamicCNByIndex
 	cfg.Chaos.Restart.RestartFunc = startDynamicCNByIndex
 	chaosTester := chaos.NewChaosTester(cfg.Chaos)
-	return chaosTester.Start()
+	dynamicCNMu.Lock()
+	dynamicChaosTester = chaosTester
+	dynamicCNMu.Unlock()
+	if err := chaosTester.Start(); err != nil {
+		dynamicCNMu.Lock()
+		if dynamicChaosTester == chaosTester {
+			dynamicChaosTester = nil
+		}
+		dynamicCNMu.Unlock()
+		return err
+	}
+	return nil
 }
 
 func genDynamicCNConfigs(
@@ -201,7 +241,14 @@ func startDynamicCtlHTTPServer(addr string) error {
 			}
 
 			index := format.MustParseStringInt(cn)
-			if index < 0 || index >= len(dynamicCNServiceCommands) {
+			dynamicCNMu.RLock()
+			valid := index >= 0 && index < len(dynamicCNServiceCommands)
+			pid := 0
+			if valid {
+				pid = dynamicCNServicePIDs[index]
+			}
+			dynamicCNMu.RUnlock()
+			if !valid {
 				resp.WriteHeader(http.StatusBadRequest)
 				resp.Write([]byte("invalid request"))
 				return
@@ -209,7 +256,7 @@ func startDynamicCtlHTTPServer(addr string) error {
 
 			switch action {
 			case "start":
-				if dynamicCNServicePIDs[index] != 0 {
+				if pid != 0 {
 					resp.WriteHeader(http.StatusBadRequest)
 					resp.Write([]byte("already started"))
 					return
@@ -220,17 +267,16 @@ func startDynamicCtlHTTPServer(addr string) error {
 					resp.Write([]byte("OK"))
 				}
 			case "stop":
-				if dynamicCNServicePIDs[index] == 0 {
+				if pid == 0 {
 					resp.WriteHeader(http.StatusBadRequest)
 					resp.Write([]byte("already stopped"))
 					return
 				}
 
-				if err := syscall.Kill(dynamicCNServicePIDs[index], syscall.SIGKILL); err != nil {
+				if err := stopDynamicCNByIndex(index); err != nil {
 					resp.Write([]byte(err.Error()))
 				} else {
 					resp.Write([]byte("OK"))
-					dynamicCNServicePIDs[index] = 0
 				}
 			default:
 				resp.WriteHeader(http.StatusBadRequest)
@@ -239,13 +285,31 @@ func startDynamicCtlHTTPServer(addr string) error {
 			}
 		})
 	go func() {
-		http.ListenAndServe(*httpListenAddr, nil)
+		dynamicListenAndServe(*httpListenAddr, nil)
 	}()
 	return nil
 }
 
 func stopDynamicCNByIndex(index int) error {
-	return syscall.Kill(dynamicCNServicePIDs[index], syscall.SIGKILL)
+	dynamicCNMu.RLock()
+	if index < 0 || index >= len(dynamicCNServicePIDs) {
+		dynamicCNMu.RUnlock()
+		return errors.New("invalid dynamic cn index")
+	}
+	pid := dynamicCNServicePIDs[index]
+	dynamicCNMu.RUnlock()
+	if pid == 0 {
+		return errors.New("dynamic cn is not running")
+	}
+	if err := dynamicKill(pid, syscall.SIGKILL); err != nil {
+		return err
+	}
+	dynamicCNMu.Lock()
+	if dynamicCNServicePIDs[index] == pid {
+		dynamicCNServicePIDs[index] = 0
+	}
+	dynamicCNMu.Unlock()
+	return nil
 }
 
 func startDynamicCNByIndex(index int) error {
@@ -253,9 +317,18 @@ func startDynamicCNByIndex(index int) error {
 	if err != nil {
 		return err
 	}
-	pid, err := syscall.ForkExec(
-		dynamicCNServiceCommands[index][0],
-		dynamicCNServiceCommands[index],
+	dynamicCNMu.Lock()
+	defer dynamicCNMu.Unlock()
+	if index < 0 || index >= len(dynamicCNServiceCommands) {
+		return errors.New("invalid dynamic cn index")
+	}
+	if dynamicCNServicePIDs[index] != 0 {
+		return errors.New("dynamic cn is already running")
+	}
+	command := append([]string(nil), dynamicCNServiceCommands[index]...)
+	pid, err := dynamicForkExec(
+		command[0],
+		command,
 		&syscall.ProcAttr{
 			Dir: pwd,
 			Env: os.Environ(),
@@ -271,8 +344,52 @@ func startDynamicCNByIndex(index int) error {
 	return nil
 }
 
-func stopAllDynamicCNServices() {
-	for _, pid := range dynamicCNServicePIDs {
-		syscall.Kill(pid, syscall.SIGKILL)
+// stopAllDynamicCNServicesGracefully is used only by the ordered shutdown
+// path; stopDynamicCNByIndex remains the abrupt-exit helper for chaos tests.
+func stopAllDynamicCNServicesGracefully(ctx context.Context) error {
+	dynamicCNMu.Lock()
+	chaosTester := dynamicChaosTester
+	dynamicChaosTester = nil
+	pids := append([]int(nil), dynamicCNServicePIDs...)
+	dynamicCNMu.Unlock()
+	var errs error
+	if chaosTester != nil {
+		errs = errors.Join(errs, chaosTester.Stop())
 	}
+	type result struct {
+		index int
+		err   error
+	}
+	results := make(chan result, len(pids))
+	count := 0
+	for i, pid := range pids {
+		if pid == 0 {
+			continue
+		}
+		count++
+		if err := dynamicKill(pid, syscall.SIGTERM); err != nil {
+			results <- result{index: i, err: err}
+			continue
+		}
+		go func(index, childPID int) {
+			results <- result{index: index, err: dynamicWaitProcess(childPID)}
+		}(i, pid)
+	}
+	for i := 0; i < count; i++ {
+		select {
+		case r := <-results:
+			if r.err != nil {
+				errs = errors.Join(errs, r.err)
+			} else {
+				dynamicCNMu.Lock()
+				if r.index < len(dynamicCNServicePIDs) && dynamicCNServicePIDs[r.index] == pids[r.index] {
+					dynamicCNServicePIDs[r.index] = 0
+				}
+				dynamicCNMu.Unlock()
+			}
+		case <-ctx.Done():
+			return errors.Join(errs, ctx.Err())
+		}
+	}
+	return errs
 }

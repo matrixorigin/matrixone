@@ -18,8 +18,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"syscall"
 	"testing"
 	"time"
 
@@ -38,16 +41,19 @@ type testProxy struct {
 	address   string
 	upstreams []string
 	startErr  error
+	stopErr   error
 	started   bool
 }
 
 func (p *testProxy) Start() error {
-	p.started = true
+	if p.startErr == nil {
+		p.started = true
+	}
 	return p.startErr
 }
 
 func (p *testProxy) Stop() error {
-	return nil
+	return p.stopErr
 }
 
 func (p *testProxy) AddUpStream(address string, _ time.Duration) {
@@ -91,19 +97,322 @@ func setLaunchTestHooks(t *testing.T) {
 	oldNewProxy := launchNewProxy
 	oldNewClient := launchNewHAKeeperClient
 	oldSleep := launchSleep
+	oldStartDynamicCNServices := launchStartDynamicCNServices
+	oldDynamicForkExec := dynamicForkExec
+	oldDynamicKill := dynamicKill
+	oldDynamicListenAndServe := dynamicListenAndServe
+	oldDynamicWaitProcess := dynamicWaitProcess
+	dynamicCNMu.Lock()
+	oldDynamicPIDs := append([]int(nil), dynamicCNServicePIDs...)
+	oldDynamicCommands := append([][]string(nil), dynamicCNServiceCommands...)
+	oldDynamicChaosTester := dynamicChaosTester
+	dynamicCNMu.Unlock()
 	oldLaunchFile := *launchFile
 	oldWithProxy := *withProxy
 	oldCNProxy := cnProxy
+	oldServiceLifecycle := serviceLifecycle
 	t.Cleanup(func() {
 		launchStartService = oldStartService
 		launchStartDynamic = oldStartDynamic
 		launchNewProxy = oldNewProxy
 		launchNewHAKeeperClient = oldNewClient
 		launchSleep = oldSleep
+		launchStartDynamicCNServices = oldStartDynamicCNServices
+		dynamicForkExec = oldDynamicForkExec
+		dynamicKill = oldDynamicKill
+		dynamicListenAndServe = oldDynamicListenAndServe
+		dynamicWaitProcess = oldDynamicWaitProcess
+		dynamicCNMu.Lock()
+		dynamicCNServicePIDs = oldDynamicPIDs
+		dynamicCNServiceCommands = oldDynamicCommands
+		dynamicChaosTester = oldDynamicChaosTester
+		dynamicCNMu.Unlock()
 		*launchFile = oldLaunchFile
 		*withProxy = oldWithProxy
 		cnProxy = oldCNProxy
+		serviceLifecycle = oldServiceLifecycle
 	})
+}
+
+func TestStartDynamicClusterRegistersCleanupBeforeChildStartup(t *testing.T) {
+	setLaunchTestHooks(t)
+	logConfig := writeLaunchTestFile(t, "log.toml", "service-type=\"LOG\"\n")
+	tnConfig := writeLaunchTestFile(t, "tn.toml", "service-type=\"TN\"\n")
+	cfg := &LaunchConfig{
+		LogServiceConfigFiles: []string{logConfig},
+		TNServiceConfigsFiles: []string{tnConfig},
+		Dynamic:               Dynamic{ServiceCount: 2},
+	}
+	launchStartService = func(context.Context, *Config, *stopper.Stopper, chan struct{}) error {
+		return nil
+	}
+	launchStartDynamicCNServices = func(string, Dynamic) error {
+		return errors.New("second dynamic CN failed to start")
+	}
+	serviceLifecycle = newServiceSupervisor()
+	err := startDynamicCluster(context.Background(), cfg, nil, nil)
+	require.Error(t, err)
+	require.NotNil(t, serviceLifecycle.dynamicCNStop,
+		"partial dynamic startup must be owned by supervisor cleanup")
+}
+
+func TestDynamicClusterPartialStartupIsOwnedAndCleaned(t *testing.T) {
+	for _, failAt := range []int{0, 1, 2} {
+		t.Run(fmt.Sprintf("child-%d", failAt), func(t *testing.T) {
+			setLaunchTestHooks(t)
+			baseDir := t.TempDir()
+			template := writeLaunchTestFile(t, "cn-template.toml", "%d\n%d\n%d\n%d\n%d\n%d\n")
+			logConfig := writeLaunchTestFile(t, "log.toml", "service-type=\"LOG\"\n")
+			tnConfig := writeLaunchTestFile(t, "tn.toml", "service-type=\"TN\"\n")
+			cfg := &LaunchConfig{
+				LogServiceConfigFiles: []string{logConfig},
+				TNServiceConfigsFiles: []string{tnConfig},
+				Dynamic: Dynamic{
+					ServiceCount: 3,
+					CpuCount:     1,
+					CNTemplate:   template,
+				},
+			}
+			launchStartService = func(context.Context, *Config, *stopper.Stopper, chan struct{}) error {
+				return nil
+			}
+			launchStartDynamicCNServices = func(_ string, dynamic Dynamic) error {
+				return startDynamicCNServices(baseDir, dynamic)
+			}
+
+			forkCount := 0
+			dynamicForkExec = func(string, []string, *syscall.ProcAttr) (int, error) {
+				if forkCount == failAt {
+					return 0, errors.New("fork failed")
+				}
+				forkCount++
+				return 1000 + forkCount, nil
+			}
+			type killedProcess struct {
+				pid    int
+				signal syscall.Signal
+			}
+			var killed []killedProcess
+			dynamicKill = func(pid int, signal syscall.Signal) error {
+				killed = append(killed, killedProcess{pid: pid, signal: signal})
+				return nil
+			}
+			dynamicWaitProcess = func(int) error { return nil }
+			serviceLifecycle = newServiceSupervisor()
+
+			err := startDynamicCluster(context.Background(), cfg, nil, nil)
+			require.ErrorContains(t, err, "fork failed")
+			require.NotNil(t, serviceLifecycle.dynamicCNStop)
+			require.NoError(t, serviceLifecycle.shutdown(context.Background()))
+			require.Len(t, killed, failAt)
+			for i, process := range killed {
+				require.Equal(t, 1001+i, process.pid)
+				require.Equal(t, syscall.SIGTERM, process.signal)
+			}
+			dynamicCNMu.RLock()
+			defer dynamicCNMu.RUnlock()
+			for i := 0; i < failAt; i++ {
+				require.Zero(t, dynamicCNServicePIDs[i])
+			}
+		})
+	}
+}
+
+func TestDynamicProxyStartFailureStillCleansStartedChildren(t *testing.T) {
+	setLaunchTestHooks(t)
+	baseDir := t.TempDir()
+	template := writeLaunchTestFile(t, "cn-template.toml", "%d\n%d\n%d\n%d\n%d\n%d\n")
+	logConfig := writeLaunchTestFile(t, "log.toml", "service-type=\"LOG\"\n")
+	tnConfig := writeLaunchTestFile(t, "tn.toml", "service-type=\"TN\"\n")
+	cfg := &LaunchConfig{
+		LogServiceConfigFiles: []string{logConfig},
+		TNServiceConfigsFiles: []string{tnConfig},
+		Dynamic:               Dynamic{ServiceCount: 1, CpuCount: 1, CNTemplate: template},
+	}
+	launchStartService = func(context.Context, *Config, *stopper.Stopper, chan struct{}) error { return nil }
+	launchStartDynamicCNServices = func(_ string, dynamic Dynamic) error {
+		return startDynamicCNServices(baseDir, dynamic)
+	}
+	dynamicForkExec = func(string, []string, *syscall.ProcAttr) (int, error) { return 91, nil }
+	failedProxy := &testProxy{startErr: errors.New("listen: address already in use")}
+	launchNewProxy = func(string, *zap.Logger) goetty.Proxy { return failedProxy }
+	var killedPID int
+	var signal syscall.Signal
+	dynamicKill = func(pid int, got syscall.Signal) error {
+		killedPID = pid
+		signal = got
+		return nil
+	}
+	dynamicWaitProcess = func(int) error { return nil }
+	serviceLifecycle = newServiceSupervisor()
+
+	err := startDynamicCluster(context.Background(), cfg, nil, nil)
+	require.ErrorContains(t, err, "address already in use")
+	require.False(t, failedProxy.started)
+	require.NoError(t, serviceLifecycle.shutdown(context.Background()))
+	require.Equal(t, 91, killedPID)
+	require.Equal(t, syscall.SIGTERM, signal)
+}
+
+func TestDynamicCNServicesStartsConfiguredChaosTester(t *testing.T) {
+	setLaunchTestHooks(t)
+	t.Cleanup(func() {
+		dynamicCNMu.Lock()
+		chaosTester := dynamicChaosTester
+		dynamicCNMu.Unlock()
+		if chaosTester != nil {
+			_ = chaosTester.Stop()
+		}
+	})
+	template := writeLaunchTestFile(t, "cn-template.toml", "")
+	cfg := Dynamic{
+		CNTemplate: template,
+	}
+	cfg.Chaos.Enable = true
+	require.NoError(t, startDynamicCNServices(t.TempDir(), cfg))
+	dynamicCNMu.RLock()
+	chaosTester := dynamicChaosTester
+	dynamicCNMu.RUnlock()
+	require.NotNil(t, chaosTester)
+	require.NoError(t, stopAllDynamicCNServicesGracefully(context.Background()))
+}
+
+func TestDynamicWaitProcessRejectsInvalidPID(t *testing.T) {
+	setLaunchTestHooks(t)
+	require.Error(t, dynamicWaitProcess(-1))
+}
+
+func TestDynamicCNStartStopLifecycleErrors(t *testing.T) {
+	setLaunchTestHooks(t)
+	dynamicCNMu.Lock()
+	dynamicCNServiceCommands = [][]string{{"mo-service", "-cfg", "cn.toml"}}
+	dynamicCNServicePIDs = []int{0}
+	dynamicCNMu.Unlock()
+
+	require.ErrorContains(t, startDynamicCNByIndex(-1), "invalid")
+	require.ErrorContains(t, stopDynamicCNByIndex(1), "invalid")
+	require.ErrorContains(t, stopDynamicCNByIndex(0), "not running")
+
+	dynamicForkExec = func(string, []string, *syscall.ProcAttr) (int, error) { return 42, nil }
+	require.NoError(t, startDynamicCNByIndex(0))
+	require.ErrorContains(t, startDynamicCNByIndex(0), "already running")
+
+	killErr := errors.New("kill failed")
+	dynamicKill = func(int, syscall.Signal) error { return killErr }
+	require.ErrorIs(t, stopDynamicCNByIndex(0), killErr)
+	dynamicKill = func(pid int, signal syscall.Signal) error {
+		require.Equal(t, 42, pid)
+		require.Equal(t, syscall.SIGKILL, signal)
+		return nil
+	}
+	require.NoError(t, stopDynamicCNByIndex(0))
+}
+
+func TestDynamicCNControlHTTPRoutesRequests(t *testing.T) {
+	setLaunchTestHooks(t)
+	oldListenAddr := *httpListenAddr
+	oldMux := http.DefaultServeMux
+	t.Cleanup(func() {
+		*httpListenAddr = oldListenAddr
+		http.DefaultServeMux = oldMux
+	})
+	http.DefaultServeMux = http.NewServeMux()
+	*httpListenAddr = "127.0.0.1:bad"
+	serverDone := make(chan struct{})
+	dynamicListenAndServe = func(string, http.Handler) error {
+		close(serverDone)
+		return nil
+	}
+	require.NoError(t, startDynamicCtlHTTPServer("127.0.0.1:bad"))
+	select {
+	case <-serverDone:
+	case <-time.After(time.Second):
+		t.Fatal("dynamic control server did not start")
+	}
+
+	request := func(path string) *httptest.ResponseRecorder {
+		req := httptest.NewRequest(http.MethodGet, path, nil)
+		resp := httptest.NewRecorder()
+		http.DefaultServeMux.ServeHTTP(resp, req)
+		return resp
+	}
+
+	resp := request("/dynamic/cn")
+	require.Equal(t, http.StatusBadRequest, resp.Code)
+	require.Equal(t, "invalid request", resp.Body.String())
+
+	dynamicCNMu.Lock()
+	dynamicCNServiceCommands = [][]string{{"mo-service", "-cfg", "cn.toml"}}
+	dynamicCNServicePIDs = []int{42}
+	dynamicCNMu.Unlock()
+	resp = request("/dynamic/cn?cn=9&action=start")
+	require.Equal(t, http.StatusBadRequest, resp.Code)
+	resp = request("/dynamic/cn?cn=0&action=start")
+	require.Equal(t, http.StatusBadRequest, resp.Code)
+	require.Equal(t, "already started", resp.Body.String())
+
+	dynamicCNMu.Lock()
+	dynamicCNServicePIDs[0] = 0
+	dynamicCNMu.Unlock()
+	dynamicForkExec = func(string, []string, *syscall.ProcAttr) (int, error) {
+		return 0, errors.New("fork failed")
+	}
+	resp = request("/dynamic/cn?cn=0&action=start")
+	require.Equal(t, "fork failed", resp.Body.String())
+	dynamicForkExec = func(string, []string, *syscall.ProcAttr) (int, error) {
+		return 43, nil
+	}
+	resp = request("/dynamic/cn?cn=0&action=start")
+	require.Equal(t, "OK", resp.Body.String())
+
+	dynamicKill = func(int, syscall.Signal) error { return errors.New("kill failed") }
+	resp = request("/dynamic/cn?cn=0&action=stop")
+	require.Equal(t, "kill failed", resp.Body.String())
+	dynamicKill = func(int, syscall.Signal) error { return nil }
+	resp = request("/dynamic/cn?cn=0&action=stop")
+	require.Equal(t, "OK", resp.Body.String())
+	resp = request("/dynamic/cn?cn=0&action=stop")
+	require.Equal(t, http.StatusBadRequest, resp.Code)
+	require.Equal(t, "already stopped", resp.Body.String())
+	resp = request("/dynamic/cn?cn=0&action=restart")
+	require.Equal(t, http.StatusBadRequest, resp.Code)
+	require.Equal(t, "invalid request", resp.Body.String())
+}
+
+func TestStopAllDynamicCNServicesGracefullyWaitsAndHonorsContext(t *testing.T) {
+	setLaunchTestHooks(t)
+	dynamicCNMu.Lock()
+	dynamicCNServicePIDs = []int{0, 41, 42}
+	dynamicCNMu.Unlock()
+	dynamicKill = func(int, syscall.Signal) error { return nil }
+	dynamicWaitProcess = func(pid int) error {
+		if pid == 42 {
+			return errors.New("wait failed")
+		}
+		return nil
+	}
+	err := stopAllDynamicCNServicesGracefully(context.Background())
+	require.ErrorContains(t, err, "wait failed")
+	dynamicCNMu.RLock()
+	require.Zero(t, dynamicCNServicePIDs[1])
+	require.Equal(t, 42, dynamicCNServicePIDs[2])
+	dynamicCNMu.RUnlock()
+
+	dynamicCNMu.Lock()
+	dynamicCNServicePIDs = []int{43}
+	dynamicCNMu.Unlock()
+	release := make(chan struct{})
+	waitDone := make(chan struct{})
+	dynamicWaitProcess = func(int) error {
+		<-release
+		close(waitDone)
+		return nil
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	require.ErrorIs(t, stopAllDynamicCNServicesGracefully(ctx), context.Canceled)
+	close(release)
+	<-waitDone
 }
 
 func TestStartClusterUsesConfiguredProxy(t *testing.T) {
@@ -490,6 +799,21 @@ func TestStartDynamicBuiltinProxyOwnership(t *testing.T) {
 	require.NoError(t, startDynamicBuiltinProxy(2, false))
 	require.True(t, proxy.started)
 	require.Equal(t, []string{"127.0.0.1:16001", "127.0.0.1:16002"}, proxy.upstreams)
+}
+
+func TestStartDynamicBuiltinProxyDoesNotPublishFailedProxy(t *testing.T) {
+	setLaunchTestHooks(t)
+	old := &testProxy{}
+	cnProxy = old
+	failed := &testProxy{startErr: errors.New("listen: address already in use")}
+	launchNewProxy = func(string, *zap.Logger) goetty.Proxy { return failed }
+
+	err := startDynamicBuiltinProxy(1, false)
+	require.Error(t, err)
+	require.Same(t, old, cnProxy,
+		"a proxy that failed Start must not replace the published proxy")
+	require.False(t, failed.started,
+		"failed proxy must not be visible to lifecycle cleanup")
 }
 
 func TestV1LaunchWithProxyOwnsLegacyPort(t *testing.T) {

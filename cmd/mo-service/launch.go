@@ -183,13 +183,14 @@ func startCNServiceCluster(
 	owns6001 := len(proxyOwns6001) > 0 && proxyOwns6001[0]
 	if shouldStartBuiltinCNProxy(len(upstreams), *withProxy, owns6001) {
 		// Keep the legacy 6001 entrypoint when the configured Proxy does not own it.
-		cnProxy = launchNewProxy("0.0.0.0:6001", logutil.GetGlobalLogger().Named("mysql-proxy"))
+		proxy := launchNewProxy("0.0.0.0:6001", logutil.GetGlobalLogger().Named("mysql-proxy"))
 		for _, address := range upstreams {
-			cnProxy.AddUpStream(address, time.Second*10)
+			proxy.AddUpStream(address, time.Second*10)
 		}
-		if err := cnProxy.Start(); err != nil {
+		if err := proxy.Start(); err != nil {
 			return err
 		}
+		cnProxy = proxy
 	}
 	return nil
 }
