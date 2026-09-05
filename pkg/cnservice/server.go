@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"compress/gzip"
 	"context"
+	"crypto/sha256"
 	"encoding/hex"
 	"errors"
 	"fmt"
@@ -1416,9 +1417,10 @@ func resolveTxnTraceDataPath(rootDir, serviceID string) (string, error) {
 }
 
 func txnTraceDirectoryKey(serviceID string) string {
-	// A lowercase lossless encoding keeps byte-distinct service IDs in distinct
-	// directories on filesystems that fold case or normalize Unicode names.
-	return txnTraceDirectoryKeyPrefix + hex.EncodeToString([]byte(serviceID))
+	// A fixed-length lowercase hash keeps the directory component below common
+	// filesystem limits while remaining stable for the same CN service ID.
+	digest := sha256.Sum256([]byte(serviceID))
+	return txnTraceDirectoryKeyPrefix + hex.EncodeToString(digest[:])
 }
 
 func (s *service) initTxnTraceService() {

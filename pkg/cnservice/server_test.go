@@ -16,12 +16,14 @@ package cnservice
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/hex"
 	"errors"
 	"fmt"
 	"net"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -739,6 +741,33 @@ func TestServiceCloseWaitsForTraceProducers(t *testing.T) {
 	)
 }
 
+func txnTraceTestDirectoryKey(serviceID string) string {
+	digest := sha256.Sum256([]byte(serviceID))
+	return "cn-" + hex.EncodeToString(digest[:])
+}
+
+func TestInitTxnTraceServiceAcceptsMaximumServiceID(t *testing.T) {
+	serviceID := strings.Repeat("é", 63) + "x"
+	require.Equal(t, 127, len(serviceID))
+	root := t.TempDir()
+	moruntime.SetupServiceBasedRuntime(serviceID, moruntime.DefaultRuntime())
+	cfg := &Config{UUID: serviceID}
+	cfg.Txn.Trace.BufferSize = 8
+	cfg.Txn.Trace.Enable = false
+	s := &service{cfg: cfg}
+	s.options.traceDataPath = root
+	t.Cleanup(func() {
+		require.NoError(t, s.closeTxnTraceService())
+	})
+
+	s.initTxnTraceService()
+
+	key := txnTraceTestDirectoryKey(serviceID)
+	require.Len(t, key, len("cn-")+sha256.Size*2)
+	require.LessOrEqual(t, len(key), 255)
+	require.DirExists(t, filepath.Join(root, key))
+}
+
 func TestInitTxnTraceServiceUsesCNOwnedDirectory(t *testing.T) {
 	for _, enable := range []bool{false, true} {
 		t.Run(fmt.Sprintf("enable=%t", enable), func(t *testing.T) {
@@ -768,7 +797,7 @@ func TestInitTxnTraceServiceUsesCNOwnedDirectory(t *testing.T) {
 					require.FileExists(t, marker)
 				}
 
-				dir := filepath.Join(root, "cn-"+hex.EncodeToString([]byte(id)))
+				dir := filepath.Join(root, txnTraceTestDirectoryKey(id))
 				require.DirExists(t, dir)
 				marker := filepath.Join(dir, fmt.Sprintf("owner-%d", i))
 				require.NoError(t, os.WriteFile(marker, []byte(id), 0644))
@@ -780,7 +809,7 @@ func TestInitTxnTraceServiceUsesCNOwnedDirectory(t *testing.T) {
 			require.FileExists(t, markers[0])
 			require.NoFileExists(t, markers[1])
 			require.FileExists(t, markers[2])
-			require.DirExists(t, filepath.Join(root, "cn-"+hex.EncodeToString([]byte(ids[1]))))
+			require.DirExists(t, filepath.Join(root, txnTraceTestDirectoryKey(ids[1])))
 		})
 	}
 }
@@ -812,7 +841,7 @@ func TestInitTxnTraceServiceUsesFilesystemDistinctDirectoryKeys(t *testing.T) {
 				require.NoError(t, err)
 				require.Equal(
 					t,
-					filepath.Join(root, "cn-"+hex.EncodeToString([]byte(id))),
+					filepath.Join(root, txnTraceTestDirectoryKey(id)),
 					path,
 				)
 				paths = append(paths, path)
@@ -873,7 +902,7 @@ func TestInitTxnTraceServiceFailurePreservesSiblingDirectory(t *testing.T) {
 
 	first := newService("trace-dir-cn-a")
 	first.initTxnTraceService()
-	marker := filepath.Join(root, "cn-"+hex.EncodeToString([]byte(first.cfg.UUID)), "owner")
+	marker := filepath.Join(root, txnTraceTestDirectoryKey(first.cfg.UUID), "owner")
 	require.NoError(t, os.WriteFile(marker, []byte(first.cfg.UUID), 0644))
 
 	require.NoError(t, os.Chmod(root, 0555))
