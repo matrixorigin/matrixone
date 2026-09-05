@@ -632,6 +632,80 @@ func TestBindViewWithoutStoredSQLModeUsesLegacyPipeConcat(t *testing.T) {
 	require.False(t, exprContainsFunc(projectExpr, "or"))
 }
 
+func TestBindViewSequenceFunctionsUseStoredDatabase(t *testing.T) {
+	for _, test := range []struct {
+		name         string
+		expr         string
+		wantArgs     int
+		wantOverload int32
+		wantIsCalled *bool
+	}{
+		{name: "nextval", expr: "nextval('ab.cd')", wantArgs: 2, wantOverload: 1},
+		{name: "currval", expr: "currval('ab.cd')", wantArgs: 2, wantOverload: 1},
+		{name: "setval_default", expr: "setval('ab.cd', '50')", wantArgs: 4, wantOverload: 2, wantIsCalled: ptrTo(true)},
+		{name: "setval_is_called", expr: "setval('ab.cd', '50', false)", wantArgs: 4, wantOverload: 2, wantIsCalled: ptrTo(false)},
+		{name: "setval_string_is_called", expr: "setval('ab.cd', '50', 'false')", wantArgs: 4, wantOverload: 2, wantIsCalled: ptrTo(false)},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			builder, nodeID := buildViewForSQLModeTest(t, "v_sequence", ViewData{
+				Stmt:            "create view v_sequence as select " + test.expr + " as n",
+				DefaultDatabase: "view_db",
+				SecurityType:    "DEFINER",
+			})
+
+			functionExpr := builder.qry.Nodes[nodeID].ProjectList[0].GetF()
+			require.NotNil(t, functionExpr)
+			functionName := strings.Split(test.name, "_")[0]
+			require.Equal(t, functionName, functionExpr.Func.GetObjName())
+			require.Len(t, functionExpr.Args, test.wantArgs)
+			_, overloadID := function.DecodeOverloadID(functionExpr.Func.Obj)
+			require.Equal(t, test.wantOverload, overloadID)
+			// A dot is legal in a sequence identifier.  Keep the sequence name
+			// intact and carry the view database separately.
+			require.Equal(t, "ab.cd", functionExpr.Args[0].GetLit().GetSval())
+			require.Equal(t, "view_db", functionExpr.Args[test.wantArgs-1].GetLit().GetSval())
+			if test.wantIsCalled != nil {
+				require.Equal(t, *test.wantIsCalled, functionExpr.Args[2].GetLit().GetBval())
+			}
+		})
+	}
+}
+
+func TestSequenceDatabaseArgumentIsInternal(t *testing.T) {
+	_, err := runOneStmt(NewMockOptimizer(false), t, "select nextval('seq1', 'db1')")
+	require.ErrorContains(t, err, "invalid argument function nextval")
+
+	_, err = runOneStmt(NewMockOptimizer(false), t, "select currval('seq1', 'db1')")
+	require.ErrorContains(t, err, "invalid argument function currval")
+
+	_, err = runOneStmt(NewMockOptimizer(false), t, "select setval('seq1', '50', false, 'db1')")
+	require.ErrorContains(t, err, "invalid argument function setval")
+
+	for _, test := range []struct {
+		name         string
+		sql          string
+		wantArgs     int
+		wantOverload int32
+	}{
+		{name: "two arguments", sql: "select setval('seq1', '50')", wantArgs: 2, wantOverload: 0},
+		{name: "quoted boolean", sql: "select setval('seq1', '50', 'false')", wantArgs: 3, wantOverload: 1},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			queryPlan, buildErr := runOneStmt(NewMockOptimizer(false), t, test.sql)
+			require.NoError(t, buildErr)
+			setvalPlanExpr := findPlanFunctionExpr(queryPlan, "setval")
+			require.NotNil(t, setvalPlanExpr)
+			setvalExpr := setvalPlanExpr.GetF()
+			require.Len(t, setvalExpr.Args, test.wantArgs)
+			_, overloadID := function.DecodeOverloadID(setvalExpr.Func.Obj)
+			require.Equal(t, test.wantOverload, overloadID)
+			if test.wantArgs == 3 {
+				require.Equal(t, int32(types.T_bool), setvalExpr.Args[2].Typ.Id)
+			}
+		})
+	}
+}
+
 func TestBindViewUsesStoredLowerCaseTableNames(t *testing.T) {
 	storedCaseSensitive := int64(0)
 	for _, test := range []struct {

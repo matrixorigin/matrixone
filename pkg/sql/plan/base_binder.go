@@ -3530,6 +3530,33 @@ func (b *baseBinder) bindFuncExprImplByAstExpr(name string, astArgs []tree.Expr,
 	if coerceErr != nil {
 		return nil, coerceErr
 	}
+	// Sequence functions resolve their relation at execution time.  A view,
+	// however, must resolve unqualified object names in the database in which
+	// the view was created, not in the caller's current database.  BindContext
+	// carries that database only while a view body is being expanded, so retain
+	// it as an internal trailing argument in the executable expression.
+	if minArgs, maxArgs, isSequence := sequenceFunctionPublicArity(name); isSequence {
+		// Keep the internal database argument out of the SQL surface.  The
+		// public sequence functions continue to accept only their documented
+		// arities.
+		if len(args) < minArgs || len(args) > maxArgs {
+			argTypes := make([]types.Type, len(args))
+			for i := range args {
+				argTypes[i] = makeTypeByPlan2Expr(args[i])
+			}
+			return nil, moerr.NewInvalidArg(b.GetContext(), fmt.Sprintf("function %s", name), argTypes)
+		}
+		if b.ctx != nil && b.ctx.defaultDatabase != "" {
+			// Normalize SETVAL's optional is_called argument before appending the
+			// database.  A single four-argument internal overload avoids a
+			// three-varchar overload that would steal public calls such as
+			// SETVAL('seq', '50', 'false') from the boolean overload.
+			if strings.EqualFold(name, "setval") && len(args) == 2 {
+				args = append(args, makePlan2BoolConstExprWithType(true))
+			}
+			args = append(args, makePlan2StringConstExprWithType(b.ctx.defaultDatabase))
+		}
+	}
 	if name == "avg" && len(astArgs) == 1 && len(args) == 1 {
 		// MySQL derives AVG's exact result from an integer literal/constant
 		// expression's decimal precision, not from the physical BIGINT container
@@ -3651,6 +3678,17 @@ func (b *baseBinder) bindFuncExprImplByAstExpr(name string, astArgs []tree.Expr,
 	}
 
 	return bindFuncExprImplUdf(b, name, udf, astArgs, args, depth)
+}
+
+func sequenceFunctionPublicArity(name string) (minArgs, maxArgs int, ok bool) {
+	switch strings.ToLower(name) {
+	case "nextval", "currval":
+		return 1, 1, true
+	case "setval":
+		return 2, 3, true
+	default:
+		return 0, 0, false
+	}
 }
 
 func (b *baseBinder) setAvgIntegerLiteralPrecision(astExpr tree.Expr, arg *plan.Expr) {
@@ -6956,9 +6994,7 @@ func appendPadSpaceComparisonCastIfNeeded(ctx context.Context, expr *Expr) (*Exp
 }
 
 // appendPadSpaceWindowKeyCastIfNeeded canonicalizes direct CHAR window keys
-// into the same PAD SPACE comparison domain as promoted string keys. Ordinary
-// predicates deliberately keep their existing CHAR comparison binding so that
-// optimizer key recognition is unchanged outside window planning.
+// into the same PAD SPACE comparison domain as promoted string keys.
 func appendPadSpaceWindowKeyCastIfNeeded(ctx context.Context, expr *Expr) (*Expr, error) {
 	if isCastOverload(expr, 2) {
 		return expr, nil
