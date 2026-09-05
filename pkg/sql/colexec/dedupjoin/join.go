@@ -934,8 +934,12 @@ func (ctr *container) applyUpdateExpressions(
 }
 
 func (ctr *container) stabilizeUpdateVectors(proc *process.Process) error {
-	if len(ctr.stableUpdateVecs) != len(ctr.joinBat1.Vecs) {
-		ctr.stableUpdateVecs = make([][]*vector.Vector, len(ctr.joinBat1.Vecs))
+	// The probe and finalize phases can expose different join-batch widths. Keep
+	// the existing per-column pools when the batch grows (and harmlessly retain
+	// any trailing pools when it shrinks); replacing the outer slice would lose
+	// ownership of already allocated vectors and leak them until process exit.
+	if missing := len(ctr.joinBat1.Vecs) - len(ctr.stableUpdateVecs); missing > 0 {
+		ctr.stableUpdateVecs = append(ctr.stableUpdateVecs, make([][]*vector.Vector, missing)...)
 	}
 	ctr.stableSources = ctr.stableSources[:0]
 	for _, pos := range ctr.stableCols {
@@ -1001,6 +1005,24 @@ func odkuPhysicalChanged(
 	cols []int32,
 ) bool {
 	return anyActionChanged && snapshotChanged(before, after, cols)
+}
+
+// restorePureNoOpImage discards implicit ON UPDATE/generated values when none
+// of the user's ordered assignments changed the row. Besides avoiding a
+// physical write, restoring the real stored image ensures every downstream
+// consumer (CHECK/FK/index maintenance/RETURNING) observes the same no-op row.
+func restorePureNoOpImage(
+	anyActionChanged bool,
+	before []*vector.Vector,
+	after *batch.Batch,
+	cols []int32,
+) {
+	if anyActionChanged {
+		return
+	}
+	for i, pos := range cols {
+		after.Vecs[pos] = before[i]
+	}
 }
 
 func odkuValuesEqual(left, right *vector.Vector) bool {
@@ -1215,6 +1237,8 @@ func (ctr *container) probe(bat *batch.Batch, ap *DedupJoin, proc *process.Proce
 					// logical action changed the row, compare every assigned/generated
 					// column so a later action that restores explicit columns does not
 					// accidentally discard a real implicit-column change.
+					restorePureNoOpImage(
+						anyActionChanged, ctr.groupBeforeVecs, ctr.joinBat1, ap.UpdateColIdxList)
 					physicalChanged = odkuPhysicalChanged(
 						anyActionChanged, ctr.groupBeforeVecs, ctr.joinBat1, ap.UpdateColIdxList)
 					for j, rp := range ap.Result {

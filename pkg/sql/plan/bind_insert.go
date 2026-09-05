@@ -539,7 +539,10 @@ func (builder *QueryBuilder) appendOnDupIrregularMaintSource(
 		maintStep = builder.appendStep(selectedSinkID)
 	}
 	insertOnlyBaseStep := maintStep
-	if physicalChangedPos >= 0 {
+	// A changed-row derivative is useful only to affected indexes. Creating it
+	// for an insert-only maintenance plan leaves an orphan SINK step, which the
+	// compiler correctly rejects because it has no receiver.
+	if physicalChangedPos >= 0 && len(irregularIndexes) > 0 {
 		changedScanID := builder.appendTaggedSinkScan(bindCtx, maintStep, finalProjTag)
 		changedScan := builder.qry.Nodes[changedScanID]
 		if int(physicalChangedPos) >= len(changedScan.ProjectList) ||

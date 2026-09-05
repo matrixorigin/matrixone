@@ -7811,6 +7811,11 @@ func (c *Compile) compileSinkScanNode(node *plan.Node, curNodeIdx int32) ([]*Sco
 func (c *Compile) compileSinkNode(node *plan.Node, ss []*Scope, step int32) ([]*Scope, error) {
 	receivers := c.getStepRegs(step)
 	if len(receivers) == 0 {
+		// compileSinkNode takes ownership of its input scopes. A malformed/orphan
+		// sink is rejected before they are attached to an output scope, so release
+		// them here; otherwise the reuse finalizer turns this plan error into a CN
+		// panic and restart.
+		ReleaseScopes(ss)
 		return nil, moerr.NewInternalError(c.proc.Ctx, "no data receiver for sink node")
 	}
 

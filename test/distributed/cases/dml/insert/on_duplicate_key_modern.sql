@@ -333,6 +333,26 @@ insert into t_odku_onupdate(id, v) values (1, 99) on duplicate key update v = va
 select v, updated_at > @ts0 as ts_advanced from t_odku_onupdate where id = 1;
 drop table if exists t_odku_onupdate;
 
+-- A synthesized ON UPDATE value must not reach CHECK evaluation for a pure
+-- no-op. The mixed batch also proves that restoring the old image does not
+-- suppress an unrelated insert. A real change still evaluates CHECK against
+-- the new timestamp and is rejected.
+drop table if exists t_odku_onupdate_check;
+create table t_odku_onupdate_check (
+  id int primary key,
+  v int,
+  updated_at timestamp default '2000-01-01 00:00:00' on update current_timestamp,
+  constraint chk_old_timestamp check (updated_at < '2020-01-01 00:00:00')
+);
+insert into t_odku_onupdate_check(id, v) values (1, 10);
+insert into t_odku_onupdate_check(id, v) values (1, 10) on duplicate key update v = v;
+select row_count(), id, v, updated_at from t_odku_onupdate_check order by id;
+insert into t_odku_onupdate_check(id, v) values (1, 10), (2, 20) on duplicate key update v = v;
+select row_count(), id, v, updated_at from t_odku_onupdate_check order by id;
+insert into t_odku_onupdate_check(id, v) values (1, 11) on duplicate key update v = values(v);
+select id, v, updated_at from t_odku_onupdate_check order by id;
+drop table if exists t_odku_onupdate_check;
+
 -- same, plus a stored generated column derived from the ON UPDATE column:
 -- its recomputed value must not defeat no-op detection either.
 drop table if exists t_odku_onupdate_gen;

@@ -127,4 +127,39 @@ func TestODKUPhysicalChangeSeparatesImplicitColumnsFromNoOp(t *testing.T) {
 	require.False(t, odkuPhysicalChanged(
 		false, []*vector.Vector{oldValue, oldTimestamp}, final, []int32{0, 1}),
 		"a pure no-op must not fire an implicit ON UPDATE expression")
+	restorePureNoOpImage(false, []*vector.Vector{oldValue, oldTimestamp}, final, []int32{0, 1})
+	require.Same(t, oldValue, final.Vecs[0])
+	require.Same(t, oldTimestamp, final.Vecs[1],
+		"downstream CHECK and index consumers must see the stored timestamp")
+}
+
+func TestODKUStableVectorPoolSurvivesJoinBatchWidthChange(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	baseline := proc.Mp().CurrNB()
+	typ := types.T_varchar.ToType()
+	first := vector.NewVec(typ)
+	second := vector.NewVec(typ)
+	extra := vector.NewVec(types.T_int32.ToType())
+	require.NoError(t, vector.AppendBytes(first, []byte("first allocation"), false, proc.Mp()))
+	require.NoError(t, vector.AppendBytes(second, []byte("second allocation"), false, proc.Mp()))
+	require.NoError(t, vector.AppendFixed(extra, int32(1), false, proc.Mp()))
+
+	ctr := container{stableCols: []int32{0}}
+	ctr.joinBat1 = &batch.Batch{Vecs: []*vector.Vector{first}}
+	ctr.joinBat1.SetRowCount(1)
+	require.NoError(t, ctr.stabilizeUpdateVectors(proc))
+	owned := ctr.stableUpdateVecs[0][0]
+
+	ctr.joinBat1 = &batch.Batch{Vecs: []*vector.Vector{second, extra}}
+	ctr.joinBat1.SetRowCount(1)
+	require.NoError(t, ctr.stabilizeUpdateVectors(proc))
+	require.Contains(t, ctr.stableUpdateVecs[0], owned,
+		"widening the join batch must preserve ownership of prior scratch vectors")
+
+	ctr.cleanStableUpdateVecs(proc)
+	first.Free(proc.Mp())
+	second.Free(proc.Mp())
+	extra.Free(proc.Mp())
+	require.Equal(t, baseline, proc.Mp().CurrNB())
+	proc.Free()
 }

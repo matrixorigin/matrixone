@@ -325,6 +325,30 @@ select v, updated_at > @ts0 as ts_advanced from t_odku_onupdate where id = 1;
 ➤ v[4,32,0]  ¦  ts_advanced[-7,1,0]  𝄀
 99  ¦  1
 drop table if exists t_odku_onupdate;
+drop table if exists t_odku_onupdate_check;
+create table t_odku_onupdate_check (
+id int primary key,
+v int,
+updated_at timestamp default '2000-01-01 00:00:00' on update current_timestamp,
+constraint chk_old_timestamp check (updated_at < '2020-01-01 00:00:00')
+);
+insert into t_odku_onupdate_check(id, v) values (1, 10);
+insert into t_odku_onupdate_check(id, v) values (1, 10) on duplicate key update v = v;
+select row_count(), id, v, updated_at from t_odku_onupdate_check order by id;
+➔ row_count()[-5,64,0]  ¦  id[4,32,0]  ¦  v[4,32,0]  ¦  updated_at[13,0,0]  𝄀
+0  ¦  1  ¦  10  ¦  2000-01-01 00:00:00
+insert into t_odku_onupdate_check(id, v) values (1, 10), (2, 20) on duplicate key update v = v;
+select row_count(), id, v, updated_at from t_odku_onupdate_check order by id;
+➔ row_count()[-5,64,0]  ¦  id[4,32,0]  ¦  v[4,32,0]  ¦  updated_at[13,0,0]  𝄀
+1  ¦  1  ¦  10  ¦  2000-01-01 00:00:00  𝄀
+1  ¦  2  ¦  20  ¦  2000-01-01 00:00:00
+insert into t_odku_onupdate_check(id, v) values (1, 11) on duplicate key update v = values(v);
+constraint violation: Check constraint 'chk_old_timestamp' is violated
+select id, v, updated_at from t_odku_onupdate_check order by id;
+➔ id[4,32,0]  ¦  v[4,32,0]  ¦  updated_at[13,0,0]  𝄀
+1  ¦  10  ¦  2000-01-01 00:00:00  𝄀
+2  ¦  20  ¦  2000-01-01 00:00:00
+drop table if exists t_odku_onupdate_check;
 drop table if exists t_odku_onupdate_gen;
 create table t_odku_onupdate_gen (
 id int primary key,
