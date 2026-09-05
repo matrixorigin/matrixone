@@ -578,6 +578,9 @@ func TestFilterCloneDatabaseRoutinesSkipsUncloneableDependencies(t *testing.T) {
 		storedProcedures: []storedProcedureDefinition{
 			{name: "p_external", lang: "sql", body: "begin select * from source_db.ext_t; end"},
 			{name: "p_transitive", lang: "sql", body: "begin call p_external(); end"},
+			{name: "p_dml_cte_shadow", lang: "sql", body: "begin with ext_t as (select 1 as n) insert into source_db.sink select n from ext_t; end"},
+			{name: "p_returning_external", lang: "sql", body: "begin update source_db.control_t set id = id returning f_external(id); end"},
+			{name: "p_use_other_db", lang: "sql", body: "begin use other_db; select * from ext_t; end"},
 			{name: "p_independent", lang: "sql", body: "begin select 1; end"},
 		},
 	}
@@ -587,7 +590,7 @@ func TestFilterCloneDatabaseRoutinesSkipsUncloneableDependencies(t *testing.T) {
 	)
 	require.NoError(t, err)
 	require.Equal(t, []string{"f_cte_shadow", "f_cte_view", "f_independent"}, routineNames(functions))
-	require.Equal(t, []string{"p_independent"}, procedureNames(procedures))
+	require.Equal(t, []string{"p_dml_cte_shadow", "p_independent"}, procedureNames(procedures))
 
 	t.Run("same-name overloads are conservatively one family", func(t *testing.T) {
 		overloadSource := cloneDatabaseSource{
@@ -613,9 +616,12 @@ func TestFilterCloneDatabaseRoutinesSkipsUncloneableDependencies(t *testing.T) {
 
 func TestCollectCloneRoutineReferencesScopesCTEs(t *testing.T) {
 	tests := []struct {
-		name       string
-		body       string
-		wantTables []string
+		name              string
+		body              string
+		isProcedure       bool
+		wantTables        []string
+		wantFunctions     []string
+		wantUninspectable bool
 	}{
 		{
 			name: "cte shadows external table",
@@ -635,19 +641,72 @@ func TestCollectCloneRoutineReferencesScopesCTEs(t *testing.T) {
 			body:       "with ext_t as (select 1 as n) select n from source_db.ext_t",
 			wantTables: []string{"ext_t"},
 		},
+		{
+			name:        "insert body keeps outer cte scope",
+			body:        "begin with ext_t as (select 1 as n) insert into source_db.sink select n from ext_t; end",
+			isProcedure: true,
+			wantTables:  []string{"sink"},
+		},
+		{
+			name:        "update body keeps outer cte scope",
+			body:        "begin with ext_t as (select 1 as n) update source_db.sink set id = id where id in (select n from ext_t); end",
+			isProcedure: true,
+			wantTables:  []string{"sink"},
+		},
+		{
+			name:        "delete body keeps outer cte scope",
+			body:        "begin with ext_t as (select 1 as n) delete from source_db.sink where id in (select n from ext_t); end",
+			isProcedure: true,
+			wantTables:  []string{"sink"},
+		},
+		{
+			name:        "merge body keeps outer cte scope",
+			body:        "begin with ext_t as (select 1 as n) merge into source_db.sink using ext_t on source_db.sink.id = ext_t.n when matched then update set id = ext_t.n; end",
+			isProcedure: true,
+			wantTables:  []string{"sink"},
+		},
+		{
+			name:        "multi insert body keeps outer cte scope",
+			body:        "begin with ext_t as (select 1 as n) insert all into source_db.sink (id) values (n) select n from ext_t; end",
+			isProcedure: true,
+			wantTables:  []string{"sink"},
+		},
+		{
+			name:          "dml returning collects routine dependency",
+			body:          "begin update source_db.control_t set id = id returning f_external(id); end",
+			isProcedure:   true,
+			wantTables:    []string{"control_t"},
+			wantFunctions: []string{"f_external"},
+		},
+		{
+			name:              "use state fails closed",
+			body:              "begin use other_db; select * from ext_t; end",
+			isProcedure:       true,
+			wantUninspectable: true,
+		},
 	}
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			references, inspectable, err := collectCloneRoutineReferences(
-				context.Background(), test.body, "sql", "", "source_db", 1, true,
+				context.Background(), test.body, "sql", "", "source_db", 1, !test.isProcedure,
 			)
 			require.NoError(t, err)
+			if test.wantUninspectable {
+				require.False(t, inspectable)
+				return
+			}
 			require.True(t, inspectable)
 			for _, table := range test.wantTables {
 				require.Contains(t, references.tables, cloneDatabaseObjectKey("source_db", table, 1))
 			}
+			for _, function := range test.wantFunctions {
+				require.Contains(t, references.functions, cloneRoutineFamilyKey(
+					cloneRoutineFunctionKind, "source_db", function, 1,
+				))
+			}
 			require.Len(t, references.tables, len(test.wantTables))
+			require.Len(t, references.functions, len(test.wantFunctions))
 		})
 	}
 }

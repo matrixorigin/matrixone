@@ -192,8 +192,11 @@ the same database, name, and kind are treated as one family: if dependency
 inspection omits one overload, the whole family is omitted because clone-time
 metadata inspection does not resolve overload types at every call site.
 Routines whose bodies cannot be structurally inspected are also omitted when
-the source contains an omitted relation. Explicit single-table cloning of an
-external table remains unsupported.
+the source contains an omitted relation. Executable ``USE`` statements are
+treated as uninspectable for this purpose because control-flow branches can
+make more than one default database reachable; this avoids assigning an
+unqualified reference to the wrong database. Explicit single-table cloning of
+an external table remains unsupported.
 
 Schema-Only Cloning
 ~~~~~~~~~~~~~~~~~~~

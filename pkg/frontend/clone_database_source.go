@@ -272,8 +272,9 @@ func collectCloneRoutineReferences(
 
 	unsupported := false
 	remappable := remapDbInStatements(statements, remapDbContext{
-		lowerCaseTableNames: lowerCaseTableNames,
-		unsupported:         &unsupported,
+		lowerCaseTableNames:   lowerCaseTableNames,
+		unsupported:           &unsupported,
+		rejectUseStateChanges: true,
 		collectTableName: func(name *tree.TableName) {
 			databaseName := srcDBName
 			if name.ExplicitSchema {
