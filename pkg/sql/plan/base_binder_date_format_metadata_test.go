@@ -202,6 +202,149 @@ func TestDateFormatHeadingTraversalHandlesUnsupportedExprNodes(t *testing.T) {
 	}
 }
 
+func TestDateFormatHeadingTraversalCoversExpressionShapes(t *testing.T) {
+	dateExpr := func() tree.Expr {
+		return parseSelectHeadingExpr(t, "select date_format(col2, '%M') from time01")
+	}
+	plainExpr := func() tree.Expr {
+		return tree.NewNumVal("1", "1", false, tree.P_int64)
+	}
+	wrapFunc := func(expr tree.Expr) tree.Expr {
+		return &tree.FuncExpr{Exprs: tree.Exprs{expr}}
+	}
+
+	cases := []struct {
+		name  string
+		build func() tree.Expr
+	}{
+		{name: "function order by", build: func() tree.Expr {
+			return &tree.FuncExpr{
+				OrderBy: tree.OrderBy{tree.NewOrder(dateExpr(), tree.Ascending, tree.DefaultNullsPosition, false)},
+			}
+		}},
+		{name: "window partition", build: func() tree.Expr {
+			return &tree.FuncExpr{WindowSpec: &tree.WindowSpec{PartitionBy: tree.Exprs{dateExpr()}}}
+		}},
+		{name: "window order by", build: func() tree.Expr {
+			return &tree.FuncExpr{WindowSpec: &tree.WindowSpec{
+				OrderBy: tree.OrderBy{tree.NewOrder(dateExpr(), tree.Ascending, tree.DefaultNullsPosition, false)},
+			}}
+		}},
+		{name: "window frame", build: func() tree.Expr {
+			return &tree.FuncExpr{WindowSpec: &tree.WindowSpec{Frame: &tree.FrameClause{
+				HasEnd: true,
+				Start:  &tree.FrameBound{Expr: dateExpr()},
+				End:    &tree.FrameBound{Expr: dateExpr()},
+			}}}
+		}},
+		{name: "unary", build: func() tree.Expr {
+			return &tree.UnaryExpr{Expr: dateExpr()}
+		}},
+		{name: "comparison escape", build: func() tree.Expr {
+			return &tree.ComparisonExpr{Left: plainExpr(), Right: plainExpr(), Escape: dateExpr()}
+		}},
+		{name: "and", build: func() tree.Expr {
+			return &tree.AndExpr{Left: plainExpr(), Right: dateExpr()}
+		}},
+		{name: "xor", build: func() tree.Expr {
+			return &tree.XorExpr{Left: plainExpr(), Right: dateExpr()}
+		}},
+		{name: "or", build: func() tree.Expr {
+			return &tree.OrExpr{Left: plainExpr(), Right: dateExpr()}
+		}},
+		{name: "not", build: func() tree.Expr {
+			return &tree.NotExpr{Expr: dateExpr()}
+		}},
+		{name: "is null", build: func() tree.Expr {
+			return tree.NewIsNullExpr(dateExpr())
+		}},
+		{name: "is not null", build: func() tree.Expr {
+			return tree.NewIsNotNullExpr(dateExpr())
+		}},
+		{name: "is unknown", build: func() tree.Expr {
+			return tree.NewIsUnknownExpr(dateExpr())
+		}},
+		{name: "is not unknown", build: func() tree.Expr {
+			return tree.NewIsNotUnknownExpr(dateExpr())
+		}},
+		{name: "is true", build: func() tree.Expr {
+			return tree.NewIsTrueExpr(dateExpr())
+		}},
+		{name: "is not true", build: func() tree.Expr {
+			return tree.NewIsNotTrueExpr(dateExpr())
+		}},
+		{name: "is false", build: func() tree.Expr {
+			return tree.NewIsFalseExpr(dateExpr())
+		}},
+		{name: "is not false", build: func() tree.Expr {
+			return tree.NewIsNotFalseExpr(dateExpr())
+		}},
+		{name: "expression list", build: func() tree.Expr {
+			return &tree.ExprList{Exprs: tree.Exprs{dateExpr(), plainExpr()}}
+		}},
+		{name: "paren", build: func() tree.Expr {
+			return tree.NewParentExpr(dateExpr())
+		}},
+		{name: "serial extract", build: func() tree.Expr {
+			return tree.NewSerialExtractExpr(dateExpr(), plainExpr(), nil)
+		}},
+		{name: "cast", build: func() tree.Expr {
+			return tree.NewCastExpr(dateExpr(), nil)
+		}},
+		{name: "bit cast", build: func() tree.Expr {
+			return tree.NewBitCastExpr(dateExpr(), nil)
+		}},
+		{name: "tuple", build: func() tree.Expr {
+			return tree.NewTuple(tree.Exprs{dateExpr(), plainExpr()})
+		}},
+		{name: "range", build: func() tree.Expr {
+			return tree.NewRangeCond(false, dateExpr(), plainExpr(), plainExpr())
+		}},
+		{name: "case when", build: func() tree.Expr {
+			return tree.NewCaseExpr(nil, []*tree.When{tree.NewWhen(plainExpr(), dateExpr())}, plainExpr())
+		}},
+		{name: "interval", build: func() tree.Expr {
+			node := tree.NewIntervalExpr(tree.INTERVAL_TYPE_DAY)
+			node.Expr = dateExpr()
+			return node
+		}},
+		{name: "default", build: func() tree.Expr {
+			return tree.NewDefaultVal(dateExpr())
+		}},
+		{name: "variable", build: func() tree.Expr {
+			return tree.NewVarExpr("value", false, false, dateExpr())
+		}},
+		{name: "sample", build: func() tree.Expr {
+			node, err := tree.NewSamplePercentFuncExpression1(1, false, tree.Exprs{dateExpr()})
+			require.NoError(t, err)
+			return node
+		}},
+		{name: "fulltext key and pattern", build: func() tree.Expr {
+			return &tree.FullTextMatchExpr{
+				KeyParts: []*tree.KeyPart{{Expr: dateExpr()}},
+				Pattern:  plainExpr(),
+			}
+		}},
+	}
+
+	for _, test := range cases {
+		t.Run(test.name, func(t *testing.T) {
+			expr := test.build()
+			require.True(t, containsDateTimeFormatExpr(expr))
+			capture := &headingLiteralCapture{}
+			require.NotPanics(t, func() {
+				captureHeadingLiterals(expr, capture)
+			})
+			require.NotEmpty(t, capture.markerList)
+		})
+	}
+
+	// Ensure the function branch itself is covered without a function name and
+	// that the ordinary wrapper helper remains panic-free with an empty child.
+	require.False(t, isDateTimeFormatFunc(&tree.FuncExpr{}))
+	require.True(t, containsDateTimeFormatExpr(wrapFunc(dateExpr())))
+}
+
 func parseSelectHeadingExpr(t *testing.T, sql string) tree.Expr {
 	t.Helper()
 	stmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL, sql, 1)
