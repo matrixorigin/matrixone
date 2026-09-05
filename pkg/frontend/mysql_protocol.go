@@ -206,6 +206,20 @@ func (ds *debugStats) AddFlushBytes(b uint64) {
 	ds.writeBytes += b
 }
 
+func (mp *MysqlProtocolImpl) SetWriteDeadline(deadline time.Time) error {
+	if mp == nil || mp.tcpConn == nil || mp.tcpConn.RawConn() == nil {
+		return moerr.NewInternalErrorNoCtx("MySQL connection is unavailable")
+	}
+	return mp.tcpConn.RawConn().SetWriteDeadline(deadline)
+}
+
+func (mp *MysqlProtocolImpl) CloseExpiredAuthorityConnection() error {
+	if mp == nil || mp.tcpConn == nil {
+		return nil
+	}
+	return mp.tcpConn.Disconnect()
+}
+
 type MysqlProtocolImpl struct {
 	m sync.Mutex
 

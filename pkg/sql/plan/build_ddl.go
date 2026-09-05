@@ -252,9 +252,11 @@ func genViewTableDef(
 
 	// check view statement
 	var stmtPlan *Plan
+	var outputHeadings []string
 	var outputColumnProvenance []OutputColumnProvenance
 	var expandedSelectLists map[*tree.SelectClause]tree.SelectExprs
 	captureColumnTypes := func(bindCtx *BindContext) {
+		outputHeadings = append(outputHeadings[:0], bindCtx.headings...)
 		outputColumnProvenance = make([]OutputColumnProvenance, len(bindCtx.headings))
 		for i := range outputColumnProvenance {
 			outputColumnProvenance[i] = bindCtx.outputColumnProvenanceForProject(int32(i))
@@ -293,6 +295,14 @@ func genViewTableDef(
 	cols := make([]*plan.ColDef, len(projectList))
 	for idx, expr := range projectList {
 		name := query.Headings[idx]
+		if idx < len(outputHeadings) && getNumOfCharacters(outputHeadings[idx]) <= MaxIdentifierLength {
+			// Optimizer remapping may qualify column references while rewriting an
+			// expression. Implicit view column names are defined by the bound SELECT
+			// list, not by that internal representation. Keep the optimized heading
+			// as a compatibility fallback when binding qualification makes the bound
+			// heading exceed the identifier limit.
+			name = outputHeadings[idx]
+		}
 		originName := ""
 		if len(colNames) > 0 {
 			originName = string(colNames[idx])
@@ -1361,6 +1371,7 @@ func genAsSelectCols(ctx CompilerContext, stmt *tree.Select, isPrepareStmt bool)
 	var err error
 	var rootId int32
 	builder := NewQueryBuilder(plan.Query_SELECT, ctx, isPrepareStmt, false)
+	builder.deriveViewMetadata = true
 	bindCtx := NewBindContext(builder, nil)
 
 	if s, ok := stmt.Select.(*tree.ParenSelect); ok {

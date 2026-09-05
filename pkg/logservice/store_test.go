@@ -886,6 +886,14 @@ func TestStopReplicaCanResetHAKeeperReplicaID(t *testing.T) {
 	runStoreTest(t, fn)
 }
 
+func TestLogHeartbeatAdvertisesViewMetadataRefreshSupport(t *testing.T) {
+	runStoreTest(t, func(t *testing.T, store *store) {
+		heartbeat := store.getHeartbeatMessage()
+		require.True(t, heartbeat.ViewMetadataAdmissionSupported)
+		require.True(t, heartbeat.ViewMetadataRefreshSupported)
+	})
+}
+
 func hasShard(s *store, shardID uint64) bool {
 	hb := s.getHeartbeatMessage()
 	for _, info := range hb.Replicas {

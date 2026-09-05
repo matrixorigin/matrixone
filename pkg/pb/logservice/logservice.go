@@ -280,6 +280,7 @@ func (s *LogState) updateStores(hb LogStoreHeartbeat, tick uint64) {
 	if hb.StoreIncarnation != "" {
 		storeInfo.StoreIncarnation = hb.StoreIncarnation
 	}
+	storeInfo.ViewMetadataRefreshSupported = hb.ViewMetadataRefreshSupported
 	s.Stores[hb.UUID] = storeInfo
 }
 

@@ -28,6 +28,7 @@ import (
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	pbtxn "github.com/matrixorigin/matrixone/pkg/pb/txn"
+	"github.com/matrixorigin/matrixone/pkg/sql/compile"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	txnclient "github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/util/metric"
@@ -174,6 +175,22 @@ func finishTxnFunc(ses FeSession, execErr error, execCtx *ExecCtx) (err error) {
 		if execErr == nil {
 			execErr = requestContextErr(execCtx)
 		}
+		var commitEpochLease *compile.ViewMetadataEpochLease
+		if execErr == nil && ses.GetTxnHandler().ViewMetadataAuthorityRequired() {
+			commitEpochLease, execErr = compile.AcquireViewMetadataEpochLease(
+				execCtx.reqCtx, ses.GetService())
+			if commitEpochLease != nil {
+				defer commitEpochLease.Release()
+			}
+			if execErr == nil && commitEpochLease != nil &&
+				ses.GetTxnHandler().ViewMetadataEpoch() != commitEpochLease.Epoch() {
+				execErr = moerr.NewInternalError(execCtx.reqCtx,
+					"View metadata admission epoch changed during transaction")
+			}
+			if execErr == nil {
+				execErr = validateCurrentViewMetadataAuthority(ses)
+			}
+		}
 		if execErr != nil {
 			return rollbackTxnFunc(ses, execErr, execCtx)
 		}
@@ -195,7 +212,10 @@ func finishTxnFunc(ses FeSession, execErr error, execCtx *ExecCtx) (err error) {
 		if execErr == nil {
 			if requestErr := requestContextErr(execCtx); requestErr != nil {
 				execErr = requestErr
-			} else {
+			} else if execCtx.viewMetadataSensitive {
+				execErr = validateViewMetadataLeaseAuthority(execCtx)
+			}
+			if execErr == nil {
 				err = commitTxnFunc(ses, execCtx)
 				if err == nil {
 					return err
@@ -226,6 +246,7 @@ type FeTxnOption struct {
 	// transaction created to execute the SET statement itself.
 	activeTxnAtStart      bool
 	activeTxnAtStartKnown bool
+	viewMetadataSensitive bool
 	// forcePessimisticObjectLifecycle marks statements that delete catalog
 	// objects and therefore must share GRANT's pessimistic lifecycle protocol.
 	forcePessimisticObjectLifecycle bool
@@ -238,6 +259,7 @@ func (opt *FeTxnOption) Close() {
 	opt.byRollback = false
 	opt.activeTxnAtStart = false
 	opt.activeTxnAtStartKnown = false
+	opt.viewMetadataSensitive = false
 	opt.forcePessimisticObjectLifecycle = false
 }
 
@@ -270,7 +292,9 @@ type TxnHandler struct {
 	txnCtx       context.Context
 	txnCtxCancel context.CancelFunc
 
-	shareTxn bool
+	shareTxn                      bool
+	viewMetadataEpoch             uint64
+	viewMetadataAuthorityRequired bool
 
 	//the server status
 	serverStatus uint32
@@ -302,16 +326,35 @@ func InitTxnHandler(service string, storage engine.Engine, connCtx context.Conte
 		connCtx = context.Background()
 	}
 	ret := &TxnHandler{
-		service:      service,
-		storage:      &engine.EntireEngine{Engine: storage},
-		connCtx:      connCtx,
-		txnOp:        txnOp,
-		shareTxn:     txnOp != nil,
-		serverStatus: defaultServerStatus,
-		optionBits:   defaultOptionBits,
+		service:           service,
+		storage:           &engine.EntireEngine{Engine: storage},
+		connCtx:           connCtx,
+		txnOp:             txnOp,
+		shareTxn:          txnOp != nil,
+		viewMetadataEpoch: compile.ViewMetadataEpoch(service),
+		serverStatus:      defaultServerStatus,
+		optionBits:        defaultOptionBits,
 	}
 	ret.txnCtx, ret.txnCtxCancel = context.WithCancel(connCtx)
 	return ret
+}
+
+func (th *TxnHandler) ViewMetadataEpoch() uint64 {
+	th.mu.Lock()
+	defer th.mu.Unlock()
+	return th.viewMetadataEpoch
+}
+
+func (th *TxnHandler) MarkViewMetadataAuthorityRequired() {
+	th.mu.Lock()
+	defer th.mu.Unlock()
+	th.viewMetadataAuthorityRequired = true
+}
+
+func (th *TxnHandler) ViewMetadataAuthorityRequired() bool {
+	th.mu.Lock()
+	defer th.mu.Unlock()
+	return th.viewMetadataAuthorityRequired
 }
 
 func (th *TxnHandler) Close() {
@@ -602,6 +645,18 @@ func (th *TxnHandler) createUnsafe(execCtx *ExecCtx) (err error) {
 			incTransactionErrorsCounter(tenant, tenantId, metric.SQLTypeBegin)
 		}
 	}()
+	var epochLease *compile.ViewMetadataEpochLease
+	if execCtx.txnOpt.byBegin || !execCtx.txnOpt.autoCommit ||
+		execCtx.txnOpt.viewMetadataSensitive {
+		epochLease, err = compile.AcquireViewMetadataEpochLease(
+			execCtx.reqCtx, execCtx.ses.GetService())
+		if err != nil {
+			return err
+		}
+		if epochLease != nil {
+			defer epochLease.Release()
+		}
+	}
 	createdGeneration := false
 	defer func() {
 		panicValue := recover()
@@ -655,6 +710,12 @@ func (th *TxnHandler) createUnsafe(execCtx *ExecCtx) (err error) {
 		err = disttae.CheckTxnIsValid(th.txnOp)
 		if err != nil {
 			return err
+		}
+		th.viewMetadataAuthorityRequired = false
+		if epochLease == nil {
+			th.viewMetadataEpoch = 0
+		} else {
+			th.viewMetadataEpoch = epochLease.Epoch()
 		}
 	}
 	return err
@@ -927,6 +988,23 @@ func (th *TxnHandler) commitUnsafe(execCtx *ExecCtx) error {
 		moerr.CauseCommitUnsafe,
 	)
 	defer cancel()
+	if th.viewMetadataAuthorityRequired {
+		deadline, required, deadlineErr := compile.ViewMetadataAuthorityDeadline(execCtx.ses.GetService())
+		if deadlineErr != nil {
+			return deadlineErr
+		}
+		if required {
+			if rt := moruntime.ServiceRuntime(execCtx.ses.GetService()); rt != nil && rt.Clock() != nil {
+				// TN accepts ordinary commit deadlines through MaxClockOffset to
+				// tolerate cross-node skew. Authority fencing cannot consume that
+				// grace after HAKeeper may already have replaced this CN owner.
+				deadline = deadline.Add(-rt.Clock().MaxOffset())
+			}
+			var authorityCancel context.CancelFunc
+			ctx2, authorityCancel = context.WithDeadline(ctx2, deadline)
+			defer authorityCancel()
+		}
+	}
 	if sess, ok := execCtx.ses.(*Session); ok {
 		if token := sess.currentRunSQLToken(); token != 0 {
 			ctx2 = txnclient.WithRunSQLSkipToken(ctx2, token)

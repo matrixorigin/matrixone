@@ -774,6 +774,12 @@ type service struct {
 	udfService       udf.Service
 	bootstrapMu      sync.RWMutex
 	bootstrapService bootstrap.Service
+	// viewMetadataBootstrap lets heartbeat observe bootstrap readiness without
+	// waiting for the long-running bootstrap lifecycle lock.
+	viewMetadataBootstrap atomic.Pointer[bootstrapReadiness]
+	// viewMetadataReady latches exact final catalog readiness after the
+	// bootstrap service is retired. Readiness is monotonic for one CN process.
+	viewMetadataReady atomic.Bool
 
 	bootstrapUpgradeContext      context.Context
 	bootstrapUpgradeResult       chan error
@@ -801,6 +807,7 @@ type service struct {
 	viewMetadataAdmissionMuWaiters  atomic.Int32
 	viewMetadataAdmission           atomic.Pointer[logservicepb.ViewMetadataAdmission]
 	viewMetadataCatalogFencedEpoch  atomic.Uint64
+	viewMetadataRevalidatedEpoch    atomic.Uint64
 	viewMetadataEpochFence          *compile.ViewMetadataEpochFence
 	viewMetadataAdmissionUpdated    chan struct{}
 	viewMetadataCatalogFenceMu      sync.Mutex
@@ -808,6 +815,9 @@ type service struct {
 	viewMetadataIngressReady        atomic.Bool
 	viewMetadataGenerationRevoked   atomic.Bool
 	viewMetadataRevocationOnce      sync.Once
+	viewMetadataAuthorityMu         sync.Mutex
+	viewMetadataAuthorityTimer      *time.Timer
+	viewMetadataAuthorityVersion    uint64
 
 	viewMetadataCatalogFenceStartupWaiting atomic.Bool
 	// beforeViewMetadataAdmissionHandoff is a deterministic test barrier.
@@ -858,6 +868,10 @@ type service struct {
 	}
 
 	CNMemoryThrottler rscthrottler.RSCThrottler
+}
+
+type bootstrapReadiness struct {
+	service bootstrap.Service
 }
 
 func dumpCnConfig(cfg Config) (map[string]*logservicepb.ConfigItem, error) {

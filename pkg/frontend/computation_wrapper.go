@@ -132,12 +132,13 @@ type TxnComputationWrapper struct {
 	// A reusable logical plan and its generation snapshot are one immutable
 	// binding. cachedPlan* identifies the session-cache slot so a definition
 	// retry can atomically publish its replacement generation.
-	planSnapshotTS       timestamp.Timestamp
-	hasPlanSnapshotTS    bool
-	planGenerationReused bool
-	cachedPlanSQL        string
-	cachedPlanIndex      int
-	cachedPlanGeneration *plan.Plan
+	planSnapshotTS               timestamp.Timestamp
+	hasPlanSnapshotTS            bool
+	planGenerationReused         bool
+	viewMetadataColumnsDependent bool
+	cachedPlanSQL                string
+	cachedPlanIndex              int
+	cachedPlanGeneration         *plan.Plan
 }
 
 func InitTxnComputationWrapper(
@@ -196,6 +197,14 @@ func (cwft *TxnComputationWrapper) Plan() *plan.Plan {
 	return cwft.plan
 }
 
+func (cwft *TxnComputationWrapper) markViewMetadataColumnsDependent() {
+	cwft.viewMetadataColumnsDependent = true
+}
+
+func (cwft *TxnComputationWrapper) viewMetadataPlanNeedsLease() bool {
+	return cwft.viewMetadataColumnsDependent
+}
+
 func (cwft *TxnComputationWrapper) PlanSnapshotTS() (timestamp.Timestamp, bool) {
 	if !cwft.hasPlanSnapshotTS {
 		return timestamp.Timestamp{}, false
@@ -213,6 +222,7 @@ func (cwft *TxnComputationWrapper) ResetPlanAndStmt(stmt tree.Statement) {
 	cwft.planSnapshotTS = timestamp.Timestamp{}
 	cwft.hasPlanSnapshotTS = false
 	cwft.planGenerationReused = false
+	cwft.viewMetadataColumnsDependent = false
 	cwft.cachedPlanSQL = ""
 	cwft.cachedPlanIndex = 0
 	cwft.cachedPlanGeneration = nil
@@ -1153,6 +1163,7 @@ func initExecuteStmtParamWithResolverInSession(
 		return nil, nil, nil, "", false, err
 	}
 	cwft.preparedStmt = prepareStmt
+	cwft.viewMetadataColumnsDependent = prepareStmt.viewMetadataColumnsDependent
 	// Carry the binding database through execute-time authorization, lifecycle
 	// admission, and ownership cleanup. All three must address the same object.
 	execCtx.effectiveTxnDefaultDatabase = prepareStmt.defaultDatabase
@@ -1273,6 +1284,8 @@ func initExecuteStmtParamWithResolverInSession(
 		preparePlan = newPreparePlan
 		executionPlan = preparePlan.Plan
 		prepareStmt.PreparePlan = newPlan
+		prepareStmt.viewMetadataColumnsDependent = cwft.viewMetadataColumnsDependent ||
+			viewMetadataStatementMustRetainLease(prepareStmt.PrepareStmt)
 		prepareStmt.directResultParamPositions = plan2.PreparedPlanDirectResultParamPositions(executionPlan)
 		prepareStmt.directResultParamPositionsSet = true
 		prepareStmt.jsonComparisonParamPositions =

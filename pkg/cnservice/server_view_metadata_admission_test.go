@@ -1165,3 +1165,369 @@ func TestCNViewMetadataAdmissionDoesNotAckFailedCatalogFence(t *testing.T) {
 	require.Equal(t, uint64(6), s.viewMetadataEpochFence.Epoch())
 	require.Zero(t, s.viewMetadataCatalogFencedEpoch.Load())
 }
+
+func TestViewMetadataAdmissionWaitTimeoutUsesAuthoritativeOwnerExpiry(t *testing.T) {
+	require.Equal(t, 30*time.Second, viewMetadataAdmissionWaitTimeout(0, nil))
+	require.Equal(t, 5*time.Second,
+		viewMetadataAdmissionWaitTimeout(5*time.Second, nil))
+	require.Equal(t, 36*time.Second, viewMetadataAdmissionWaitTimeout(
+		5*time.Second,
+		&logservicepb.ViewMetadataAdmission{
+			OwnerExpiryRemainingTicks: 301,
+			TickPerSecond:             10,
+		}))
+}
+
+func TestCNViewMetadataAdmissionPublishesRefreshOnlyAfterCatalogFence(t *testing.T) {
+	s := &service{
+		viewMetadataAdmissionGeneration: 7,
+		viewMetadataEpochFence:          compile.NewViewMetadataEpochFence(),
+		viewMetadataAdmissionUpdated:    make(chan struct{}, 1),
+	}
+	err := s.applyViewMetadataAdmission(context.Background(),
+		&logservicepb.ViewMetadataAdmission{
+			Generation:         7,
+			Epoch:              3,
+			CatalogFencedEpoch: 3,
+			RefreshReady:       true,
+			RefreshEnabled:     true,
+		})
+	require.NoError(t, err)
+	require.Equal(t, uint64(3), s.viewMetadataCatalogFencedEpoch.Load())
+	require.True(t, s.viewMetadataEpochFence.RefreshEnabled())
+
+	lease, acquired, err := s.viewMetadataEpochFence.AcquireRefresh(context.Background())
+	require.NoError(t, err)
+	require.True(t, acquired)
+	require.Equal(t, uint64(3), lease.Epoch())
+	lease.Release()
+}
+
+func TestCNViewMetadataAdmissionCanceledAdvanceKeepsRefreshSealed(t *testing.T) {
+	fence := compile.NewViewMetadataEpochFence()
+	require.NoError(t, fence.Advance(context.Background(), 1))
+	require.True(t, fence.MarkCatalogFenced(1))
+	require.True(t, fence.MarkRefreshReady(1))
+	require.True(t, fence.EnableRefresh(1))
+	blocker, err := fence.Acquire(context.Background())
+	require.NoError(t, err)
+	s := &service{
+		viewMetadataAdmissionGeneration: 7,
+		viewMetadataEpochFence:          fence,
+		viewMetadataAdmissionUpdated:    make(chan struct{}, 1),
+	}
+	snapshot := &logservicepb.ViewMetadataAdmission{
+		Generation:           7,
+		Epoch:                2,
+		RevalidationRequired: true,
+		CatalogFencedEpoch:   2,
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	require.ErrorIs(t, s.applyViewMetadataAdmission(ctx, snapshot), context.Canceled)
+	require.False(t, fence.RefreshEnabled())
+	_, _, err = fence.AcquireRefresh(ctx)
+	require.ErrorIs(t, err, context.Canceled)
+
+	blocker.Release()
+	require.NoError(t, s.applyViewMetadataAdmission(context.Background(), snapshot))
+	require.Equal(t, uint64(2), fence.Epoch())
+	require.False(t, fence.RefreshEnabled())
+}
+
+func TestCNViewMetadataAdmissionRejectsRefreshEnableBeforeCatalogFence(t *testing.T) {
+	s := &service{
+		viewMetadataAdmissionGeneration: 7,
+		viewMetadataEpochFence:          compile.NewViewMetadataEpochFence(),
+		viewMetadataAdmissionUpdated:    make(chan struct{}, 1),
+	}
+	err := s.applyViewMetadataAdmission(context.Background(),
+		&logservicepb.ViewMetadataAdmission{
+			Generation:     7,
+			Epoch:          3,
+			RefreshReady:   true,
+			RefreshEnabled: true,
+		})
+	require.Error(t, err)
+	require.False(t, s.viewMetadataEpochFence.RefreshEnabled())
+}
+
+func TestViewMetadataAuthorityLeaseDurationExpiresBeforeHAKeeper(t *testing.T) {
+	require.Zero(t, viewMetadataAuthorityLeaseDuration(0, 10))
+	require.Zero(t, viewMetadataAuthorityLeaseDuration(10, 0))
+	require.Equal(t, time.Nanosecond, viewMetadataAuthorityLeaseDuration(1, 10))
+	require.Equal(t, 30*time.Second,
+		viewMetadataAuthorityLeaseDuration(301, 10))
+}
+
+func TestCNViewMetadataAuthorityDistinguishesDisabledFromExpired(t *testing.T) {
+	t.Run("disabled snapshot does not arm authority", func(t *testing.T) {
+		s := &service{
+			viewMetadataAdmissionGeneration: 7,
+			viewMetadataEpochFence:          compile.NewViewMetadataEpochFence(),
+		}
+
+		s.renewViewMetadataAuthorityLease(&logservicepb.ViewMetadataAdmission{
+			Generation: 7,
+		}, 0)
+
+		deadline, required, err := s.viewMetadataEpochFence.AuthorityDeadline()
+		require.NoError(t, err)
+		require.False(t, required)
+		require.True(t, deadline.IsZero())
+		lease, enabled, err := s.viewMetadataEpochFence.AcquireRefresh(context.Background())
+		require.NoError(t, err)
+		require.False(t, enabled)
+		lease.Release()
+	})
+
+	for _, test := range []struct {
+		name     string
+		snapshot logservicepb.ViewMetadataAdmission
+	}{
+		{
+			name: "enabled snapshot without lease fails closed",
+			snapshot: logservicepb.ViewMetadataAdmission{
+				Generation: 8,
+				Enabled:    true,
+			},
+		},
+		{
+			name: "refresh-enabled snapshot without lease fails closed",
+			snapshot: logservicepb.ViewMetadataAdmission{
+				Generation:     8,
+				RefreshEnabled: true,
+			},
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			s := &service{
+				viewMetadataAdmissionGeneration: 8,
+				viewMetadataEpochFence:          compile.NewViewMetadataEpochFence(),
+			}
+			t.Cleanup(func() {
+				s.viewMetadataAuthorityMu.Lock()
+				defer s.viewMetadataAuthorityMu.Unlock()
+				if s.viewMetadataAuthorityTimer != nil {
+					s.viewMetadataAuthorityTimer.Stop()
+				}
+			})
+
+			s.renewViewMetadataAuthorityLease(&test.snapshot, 0)
+
+			_, required, err := s.viewMetadataEpochFence.AuthorityDeadline()
+			require.ErrorIs(t, err, context.Canceled)
+			require.True(t, required)
+
+			// The next valid generation-scoped heartbeat must recover the same
+			// fence without restarting the CN.
+			s.renewViewMetadataAuthorityLease(&logservicepb.ViewMetadataAdmission{
+				Generation:          8,
+				AuthorityLeaseTicks: 301,
+				TickPerSecond:       10,
+			}, 0)
+			lease, enabled, err := s.viewMetadataEpochFence.AcquireRefresh(context.Background())
+			require.NoError(t, err)
+			require.False(t, enabled)
+			lease.Release()
+		})
+	}
+
+	t.Run("armed authority cannot be downgraded to disabled", func(t *testing.T) {
+		s := &service{
+			viewMetadataAdmissionGeneration: 9,
+			viewMetadataEpochFence:          compile.NewViewMetadataEpochFence(),
+		}
+		t.Cleanup(func() {
+			s.viewMetadataAuthorityMu.Lock()
+			defer s.viewMetadataAuthorityMu.Unlock()
+			if s.viewMetadataAuthorityTimer != nil {
+				s.viewMetadataAuthorityTimer.Stop()
+			}
+		})
+		s.renewViewMetadataAuthorityLease(&logservicepb.ViewMetadataAdmission{
+			Generation:          9,
+			AuthorityLeaseTicks: 301,
+			TickPerSecond:       10,
+		}, 0)
+
+		s.renewViewMetadataAuthorityLease(&logservicepb.ViewMetadataAdmission{
+			Generation: 9,
+		}, 0)
+
+		_, required, err := s.viewMetadataEpochFence.AuthorityDeadline()
+		require.ErrorIs(t, err, context.Canceled)
+		require.True(t, required)
+	})
+}
+
+func TestCNViewMetadataAuthorityExpirySealsOnlyMetadataIngress(t *testing.T) {
+	mo := &admissionRevocationMOServer{stopped: make(chan struct{})}
+	closeRequested := make(chan struct{})
+	s := &service{
+		cfg:                             &Config{UUID: "authority-partition"},
+		logger:                          zap.NewNop(),
+		mo:                              mo,
+		viewMetadataAdmissionGeneration: 19,
+		viewMetadataEpochFence:          compile.NewViewMetadataEpochFence(),
+		viewMetadataCloseFn: func() error {
+			close(closeRequested)
+			return nil
+		},
+	}
+	s.viewMetadataIngressReady.Store(true)
+	require.NoError(t, s.viewMetadataEpochFence.Advance(context.Background(), 1))
+	require.True(t, s.viewMetadataEpochFence.MarkCatalogFenced(1))
+	require.True(t, s.viewMetadataEpochFence.MarkRefreshReady(1))
+	require.True(t, s.viewMetadataEpochFence.EnableRefresh(1))
+	blockedReader, _, err := s.viewMetadataEpochFence.AcquireRefresh(context.Background())
+	require.NoError(t, err)
+	defer blockedReader.Release()
+
+	s.renewViewMetadataAuthorityLease(&logservicepb.ViewMetadataAdmission{
+		Generation:          19,
+		RefreshEnabled:      true,
+		AuthorityLeaseTicks: 301,
+		TickPerSecond:       10,
+	}, 0)
+	s.viewMetadataAuthorityMu.Lock()
+	version := s.viewMetadataAuthorityVersion
+	s.viewMetadataAuthorityMu.Unlock()
+	deadline, required, err := s.viewMetadataEpochFence.AuthorityDeadline()
+	require.NoError(t, err)
+	require.True(t, required)
+	// Deterministically model a HAKeeper-only partition lasting through the
+	// local authority deadline while the metadata reader remains blocked.
+	s.expireViewMetadataAuthority(version, deadline)
+
+	require.ErrorIs(t, blockedReader.ValidateAuthority(), context.Canceled)
+	_, _, err = s.viewMetadataEpochFence.AcquireRefresh(context.Background())
+	require.ErrorIs(t, err, context.Canceled)
+	ordinaryLease, err := s.viewMetadataEpochFence.Acquire(context.Background())
+	require.NoError(t, err)
+	ordinaryLease.Release()
+
+	require.False(t, s.viewMetadataGenerationRevoked.Load())
+	require.True(t, s.viewMetadataIngressReady.Load())
+	select {
+	case <-mo.stopped:
+		t.Fatal("authority expiry stopped ordinary SQL ingress")
+	default:
+	}
+	select {
+	case <-closeRequested:
+		t.Fatal("authority expiry requested full CN closure")
+	default:
+	}
+
+	s.renewViewMetadataAuthorityLease(&logservicepb.ViewMetadataAdmission{
+		Generation:          19,
+		RefreshEnabled:      true,
+		AuthorityLeaseTicks: 301,
+		TickPerSecond:       10,
+	}, 0)
+	recovered, enabled, err := s.viewMetadataEpochFence.AcquireRefresh(context.Background())
+	require.NoError(t, err)
+	require.True(t, enabled)
+	recovered.Release()
+}
+
+func TestCNViewMetadataAuthorityPartitionContainsAndRecoversMultipleCNs(t *testing.T) {
+	const cnCount = 3
+	services := make([]*service, 0, cnCount)
+	versions := make([]uint64, 0, cnCount)
+	deadlines := make([]time.Time, 0, cnCount)
+	for index := range cnCount {
+		s := &service{
+			cfg:                             &Config{UUID: fmt.Sprintf("partition-cn-%d", index)},
+			logger:                          zap.NewNop(),
+			viewMetadataAdmissionGeneration: uint64(index + 1),
+			viewMetadataEpochFence:          compile.NewViewMetadataEpochFence(),
+		}
+		s.viewMetadataIngressReady.Store(true)
+		require.NoError(t, s.viewMetadataEpochFence.Advance(context.Background(), 1))
+		require.True(t, s.viewMetadataEpochFence.MarkCatalogFenced(1))
+		require.True(t, s.viewMetadataEpochFence.MarkRefreshReady(1))
+		require.True(t, s.viewMetadataEpochFence.EnableRefresh(1))
+		s.renewViewMetadataAuthorityLease(&logservicepb.ViewMetadataAdmission{
+			Generation:          s.viewMetadataAdmissionGeneration,
+			RefreshEnabled:      true,
+			AuthorityLeaseTicks: 301,
+			TickPerSecond:       10,
+		}, 0)
+		s.viewMetadataAuthorityMu.Lock()
+		versions = append(versions, s.viewMetadataAuthorityVersion)
+		s.viewMetadataAuthorityMu.Unlock()
+		deadline, required, err := s.viewMetadataEpochFence.AuthorityDeadline()
+		require.NoError(t, err)
+		require.True(t, required)
+		deadlines = append(deadlines, deadline)
+		services = append(services, s)
+	}
+
+	// Model one HAKeeper partition reaching every CN's local deadline.
+	for index, s := range services {
+		s.expireViewMetadataAuthority(versions[index], deadlines[index])
+		_, _, err := s.viewMetadataEpochFence.AcquireRefresh(context.Background())
+		require.ErrorIs(t, err, context.Canceled)
+		ordinary, err := s.viewMetadataEpochFence.Acquire(context.Background())
+		require.NoError(t, err)
+		ordinary.Release()
+		require.True(t, s.viewMetadataIngressReady.Load())
+		require.False(t, s.viewMetadataGenerationRevoked.Load())
+	}
+
+	// A successful heartbeat independently reopens metadata on every CN. A
+	// delayed callback from the partitioned lease must not seal the renewal.
+	for index, s := range services {
+		s.renewViewMetadataAuthorityLease(&logservicepb.ViewMetadataAdmission{
+			Generation:          s.viewMetadataAdmissionGeneration,
+			RefreshEnabled:      true,
+			AuthorityLeaseTicks: 301,
+			TickPerSecond:       10,
+		}, 0)
+		s.expireViewMetadataAuthority(versions[index], deadlines[index])
+		lease, enabled, err := s.viewMetadataEpochFence.AcquireRefresh(context.Background())
+		require.NoError(t, err)
+		require.True(t, enabled)
+		lease.Release()
+		s.viewMetadataAuthorityMu.Lock()
+		if s.viewMetadataAuthorityTimer != nil {
+			s.viewMetadataAuthorityTimer.Stop()
+		}
+		s.viewMetadataAuthorityMu.Unlock()
+	}
+}
+
+func TestCNViewMetadataAdmissionWaitsPastDiscoveryForOwnerExpiry(t *testing.T) {
+	cfg := &Config{}
+	cfg.HAKeeper.DiscoveryTimeout.Duration = 20 * time.Millisecond
+	s := &service{
+		cfg:                             cfg,
+		logger:                          zap.NewNop(),
+		viewMetadataAdmissionGeneration: 17,
+		viewMetadataEpochFence:          compile.NewViewMetadataEpochFence(),
+		viewMetadataAdmissionUpdated:    make(chan struct{}, 1),
+	}
+	s.viewMetadataAdmission.Store(&logservicepb.ViewMetadataAdmission{
+		Enabled:                   true,
+		Generation:                17,
+		OwnerExpiryRemainingTicks: 1,
+		TickPerSecond:             1,
+	})
+	done := make(chan error, 1)
+	go func() { done <- s.waitForViewMetadataAdmission() }()
+	time.Sleep(50 * time.Millisecond)
+	select {
+	case err := <-done:
+		t.Fatalf("CN admission ignored authoritative owner expiry: %v", err)
+	default:
+	}
+	s.viewMetadataAdmission.Store(&logservicepb.ViewMetadataAdmission{
+		Enabled:    true,
+		Generation: 17,
+		Admitted:   true,
+	})
+	s.viewMetadataAdmissionUpdated <- struct{}{}
+	require.NoError(t, <-done)
+}

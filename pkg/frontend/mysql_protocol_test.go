@@ -4007,6 +4007,24 @@ func TestMysqlProtocolImpl_Disconnect(t *testing.T) {
 var _ MysqlRrWr = &testMysqlWriter{}
 
 // testMysqlWriter works for the background transaction that does not use the network protocol.
+func TestMysqlProtocolAuthorityWriteDeadlineSurvivesPausedWriter(t *testing.T) {
+	server, client := net.Pipe()
+	defer server.Close()
+	defer client.Close()
+	proto := &MysqlProtocolImpl{tcpConn: &Conn{conn: server}}
+	require.NoError(t, proto.SetWriteDeadline(time.Now().Add(20*time.Millisecond)))
+
+	// Model a process pause after the deadline is installed but before the
+	// packet owner writes. The net.Conn owner rejects the resumed write without
+	// depending on a Go timer callback or a second frontend check.
+	time.Sleep(40 * time.Millisecond)
+	_, err := server.Write([]byte{1})
+	require.Error(t, err)
+	var netErr net.Error
+	require.ErrorAs(t, err, &netErr)
+	require.True(t, netErr.Timeout())
+}
+
 type testMysqlWriter struct {
 	username              string
 	database              string
@@ -4014,6 +4032,7 @@ type testMysqlWriter struct {
 	mod                   int
 	makeColumnDefDataFunc func(context.Context, []*planPb.ColDef) ([][]byte, error)
 	writeEOFOrOKFunc      func(uint16, uint16) error
+	writeDeadlines        []time.Time
 }
 
 func (fp *testMysqlWriter) WriteResultSetRow2(mrs *MysqlResultSet, colSlices *ColumnSlices, count uint64) error {
@@ -4233,6 +4252,11 @@ func (fp *testMysqlWriter) Disconnect() error {
 }
 
 func (fp *testMysqlWriter) WriteLocalInfileRequest(filename string) error {
+	return nil
+}
+
+func (fp *testMysqlWriter) SetWriteDeadline(deadline time.Time) error {
+	fp.writeDeadlines = append(fp.writeDeadlines, deadline)
 	return nil
 }
 

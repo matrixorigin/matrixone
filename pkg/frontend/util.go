@@ -2248,11 +2248,12 @@ type UserInput struct {
 	// rewritePolicyMaterialized means sql already carries the frozen policy as
 	// a leading hint. Nested ANALYZE queries use it to enable hint decoding
 	// without injecting the same rules a second time.
-	rewritePolicyMaterialized bool
-	preparePlan               *plan.Plan // binary protocol execute
-	sqlSourceType             []string
-	isRestore                 bool
-	isBinaryProtExecute       bool
+	rewritePolicyMaterialized    bool
+	preparePlan                  *plan.Plan // binary protocol execute
+	viewMetadataColumnsDependent bool
+	sqlSourceType                []string
+	isRestore                    bool
+	isBinaryProtExecute          bool
 	// preparedDefaultDatabase is captured from COM_STMT_EXECUTE before txn
 	// admission; binary execution passes the inner AST rather than tree.Execute.
 	preparedDefaultDatabase string

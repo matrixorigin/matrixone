@@ -11010,6 +11010,27 @@ func (builder *QueryBuilder) bindView(
 	obj *ObjectRef,
 	schema, table string,
 ) (nodeID int32, err error) {
+	// Historical snapshots carry their own View TableDef and do not have a
+	// relation ID in the current lifecycle catalog. Only current-catalog CTAS
+	// derives persisted output metadata from this path.
+	if builder.deriveViewMetadata && !IsSnapshotValid(snapshot) {
+		ownerAccountID, accountErr := builder.compCtx.GetAccountId()
+		if accountErr != nil {
+			return 0, accountErr
+		}
+		if obj.PubInfo != nil {
+			ownerAccountID = uint32(obj.PubInfo.TenantId)
+		}
+		if checker, ok := builder.compCtx.(interface {
+			EnsureViewMetadataCurrent(string, string, uint32, uint64) error
+		}); ok {
+			if err = checker.EnsureViewMetadataCurrent(
+				schema, table, ownerAccountID, tableDef.TblId); err != nil {
+				return 0, err
+			}
+		}
+	}
+
 	viewDefString := tableDef.ViewSql.View
 	if viewDefString == "" {
 		return 0, nil

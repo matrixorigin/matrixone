@@ -17,6 +17,7 @@ package plan
 import (
 	"context"
 	"math"
+	"sync"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -27,6 +28,70 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/stretchr/testify/require"
 )
+
+func TestConcurrentPlannerOwnsFlattenedExistsConstants(t *testing.T) {
+	queries := []string{
+		"select exists (select 1), not exists (select 1)",
+		"select exists (select 1 from nation), not exists (select 1 from region)",
+	}
+
+	const workersPerQuery = 8
+	plans := make(chan *Plan, len(queries)*workersPerQuery)
+	errs := make(chan error, len(queries)*workersPerQuery)
+	start := make(chan struct{})
+	var wg sync.WaitGroup
+	for _, query := range queries {
+		for range workersPerQuery {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				<-start
+				ctx := NewMockCompilerContext(true)
+				stmt, err := parsers.ParseOne(ctx.GetContext(), dialect.MYSQL, query, 1)
+				if err != nil {
+					errs <- err
+					return
+				}
+				defer stmt.Free()
+				built, err := BuildPlan(ctx, stmt, false)
+				if err != nil {
+					errs <- err
+					return
+				}
+				plans <- built
+			}()
+		}
+	}
+	close(start)
+	wg.Wait()
+	close(errs)
+	close(plans)
+	for err := range errs {
+		require.NoError(t, err)
+	}
+
+	seen := make(map[*plan.Expr]struct{})
+	planCount := 0
+	for built := range plans {
+		planCount++
+		boolConstants := 0
+		for _, node := range built.GetQuery().Nodes {
+			for _, exprs := range [][]*plan.Expr{node.ProjectList, node.OnList} {
+				for _, expr := range exprs {
+					if expr.GetLit() == nil || expr.Typ.Id != int32(types.T_bool) {
+						continue
+					}
+					boolConstants++
+					_, shared := seen[expr]
+					require.False(t, shared, "mutable boolean constant escaped into multiple plans")
+					seen[expr] = struct{}{}
+				}
+			}
+		}
+		require.GreaterOrEqual(t, boolConstants, 2)
+	}
+	require.Equal(t, len(queries)*workersPerQuery, planCount)
+}
 
 func TestCanPullupDeepCorrelatedPredicates(t *testing.T) {
 	for _, tc := range []struct {
@@ -2115,7 +2180,8 @@ func TestPrepareCorrelatedScalarAggregatePostJoinProjection(t *testing.T) {
 		aggregates:   aggregates,
 	}
 
-	postJoinProjection, ok, err := builder.prepareCorrelatedScalarAggregatePostJoinProjection(1, ctx, []*plan.Expr{constTrue})
+	postJoinProjection, ok, err := builder.prepareCorrelatedScalarAggregatePostJoinProjection(
+		1, ctx, []*plan.Expr{makePlan2BoolConstExprWithType(true)})
 	require.NoError(t, err)
 	require.True(t, ok)
 	require.Len(t, builder.qry.Nodes[1].ProjectList, len(aggregates)+1)
@@ -2255,7 +2321,8 @@ func TestPrepareCorrelatedScalarAggregatePostJoinProjectionRejectsUnsupportedSha
 			builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true), false, true)
 			builder.qry.Nodes = nodes
 
-			postJoinProjection, ok, err := builder.prepareCorrelatedScalarAggregatePostJoinProjection(1, ctx, []*plan.Expr{constTrue})
+			postJoinProjection, ok, err := builder.prepareCorrelatedScalarAggregatePostJoinProjection(
+				1, ctx, []*plan.Expr{makePlan2BoolConstExprWithType(true)})
 			if tt.wantErr {
 				require.Error(t, err)
 				return
@@ -2283,7 +2350,8 @@ func TestPrepareCorrelatedScalarAggregatePostJoinProjectionRejectsUnsupportedDir
 		results:      []*plan.Expr{GetColExpr(aggregate.Typ, 21, 0)},
 	}
 
-	postJoinProjection, ok, err := builder.prepareCorrelatedScalarAggregatePostJoinProjection(0, ctx, []*plan.Expr{constTrue})
+	postJoinProjection, ok, err := builder.prepareCorrelatedScalarAggregatePostJoinProjection(
+		0, ctx, []*plan.Expr{makePlan2BoolConstExprWithType(true)})
 	require.Error(t, err)
 	require.False(t, ok)
 	require.Nil(t, postJoinProjection)

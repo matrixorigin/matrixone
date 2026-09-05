@@ -69,7 +69,9 @@ const MoViewDependenciesDDL = `create cluster table mo_catalog.mo_view_dependenc
 		index idx_view_dependency_source_logical(source_account_id, source_database_id,
 			source_logical_id),
 		index idx_view_dependency_source_name(source_account_id, source_database_name_key,
-			source_relation_name_key)
+			source_relation_name_key),
+		index idx_view_dependency_target_name(account_id, target_database_name(256),
+			target_relation_name(256))
 )`
 
 const MoViewRefreshDDL = `create cluster table mo_catalog.mo_view_refresh (
@@ -89,5 +91,7 @@ const MoViewRefreshDDL = `create cluster table mo_catalog.mo_view_refresh (
 		attempts int unsigned not null default 0,
 		primary key(account_id, target_relation_id),
 		index idx_view_refresh_pending(status, next_retry_at, account_id,
-			target_relation_id)
+			target_relation_id),
+		index idx_view_refresh_target_name(account_id, target_database_name(256),
+			target_relation_name(256))
 )`

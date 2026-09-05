@@ -21,9 +21,11 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/common/sqlquote"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -80,36 +82,188 @@ type viewRefreshIdentityKey struct {
 	logicalID  uint64
 }
 
-var viewMetadataRefreshEnabled = func(string) bool {
-	return false
+var viewMetadataRefreshEnabled = func(serviceID string) bool {
+	rt := moruntime.ServiceRuntime(serviceID)
+	if rt == nil {
+		return false
+	}
+	value, ok := rt.GetGlobalVariables(ViewMetadataEpochFenceRuntimeKey)
+	if !ok {
+		return false
+	}
+	fence, ok := value.(*ViewMetadataEpochFence)
+	return ok && fence.RefreshEnabled()
 }
 
-// ViewMetadataRefreshEnabled is intentionally false in this inactive lifecycle
-// layer. A later prerequisite owns the durable membership epoch and admission
-// fence; only the subsequent activation layer may replace this gate.
-func ViewMetadataRefreshEnabled(string) bool {
-	return false
+// ViewMetadataRefreshEnabled reports whether HAKeeper authorized the current
+// durable membership epoch after catalog revalidation completed.
+func ViewMetadataRefreshEnabled(serviceID string) bool {
+	return viewMetadataRefreshEnabled(serviceID)
+}
+
+// ViewMetadataEpoch returns the current durable admission epoch observed by
+// this CN. Epoch zero preserves legacy behavior before the admission runtime is
+// installed.
+func ViewMetadataEpoch(serviceID string) uint64 {
+	rt := moruntime.ServiceRuntime(serviceID)
+	if rt == nil {
+		return 0
+	}
+	value, ok := rt.GetGlobalVariables(ViewMetadataEpochFenceRuntimeKey)
+	if !ok {
+		return 0
+	}
+	fence, ok := value.(*ViewMetadataEpochFence)
+	if !ok {
+		return 0
+	}
+	return fence.Epoch()
+}
+
+var viewMetadataRecoveryEnabled = func(serviceID string) bool {
+	rt := moruntime.ServiceRuntime(serviceID)
+	if rt == nil {
+		return false
+	}
+	value, ok := rt.GetGlobalVariables(ViewMetadataEpochFenceRuntimeKey)
+	if !ok {
+		return false
+	}
+	fence, ok := value.(*ViewMetadataEpochFence)
+	return ok && fence.RecoveryAllowed()
+}
+
+// AcquireViewMetadataEpochLease serializes transaction snapshot creation with
+// epoch publication so the frontend can reject a later sensitive statement
+// whose transaction belongs to an older epoch.
+func AcquireViewMetadataEpochLease(
+	ctx context.Context,
+	serviceID string,
+) (*ViewMetadataEpochLease, error) {
+	rt := moruntime.ServiceRuntime(serviceID)
+	if rt == nil {
+		return nil, nil
+	}
+	value, ok := rt.GetGlobalVariables(ViewMetadataEpochFenceRuntimeKey)
+	if !ok {
+		return nil, nil
+	}
+	fence, ok := value.(*ViewMetadataEpochFence)
+	if !ok {
+		return nil, moerr.NewInternalError(ctx, "invalid View metadata epoch fence")
+	}
+	return fence.Acquire(ctx)
+}
+
+// AcquireViewMetadataProvisionalLease serializes relation planning with epoch
+// publication. It ignores authority expiry so ordinary SQL remains available,
+// but stays sealed while a requested epoch has not been published.
+func AcquireViewMetadataProvisionalLease(
+	ctx context.Context,
+	serviceID string,
+) (*ViewMetadataEpochLease, error) {
+	rt := moruntime.ServiceRuntime(serviceID)
+	if rt == nil {
+		return nil, nil
+	}
+	value, ok := rt.GetGlobalVariables(ViewMetadataEpochFenceRuntimeKey)
+	if !ok {
+		return nil, nil
+	}
+	fence, ok := value.(*ViewMetadataEpochFence)
+	if !ok {
+		return nil, moerr.NewInternalError(ctx, "invalid View metadata epoch fence")
+	}
+	return fence.AcquireProvisional(ctx)
+}
+
+func ViewMetadataAuthorityDeadline(serviceID string) (time.Time, bool, error) {
+	rt := moruntime.ServiceRuntime(serviceID)
+	if rt == nil {
+		return time.Time{}, false, nil
+	}
+	value, ok := rt.GetGlobalVariables(ViewMetadataEpochFenceRuntimeKey)
+	if !ok {
+		return time.Time{}, false, nil
+	}
+	fence, ok := value.(*ViewMetadataEpochFence)
+	if !ok {
+		return time.Time{}, false, moerr.NewInternalErrorNoCtx("invalid View metadata epoch fence")
+	}
+	return fence.AuthorityDeadline()
+}
+
+func ValidateViewMetadataAuthority(serviceID string) error {
+	rt := moruntime.ServiceRuntime(serviceID)
+	if rt == nil {
+		return nil
+	}
+	value, ok := rt.GetGlobalVariables(ViewMetadataEpochFenceRuntimeKey)
+	if !ok {
+		return nil
+	}
+	fence, ok := value.(*ViewMetadataEpochFence)
+	if !ok {
+		return moerr.NewInternalErrorNoCtx("invalid View metadata epoch fence")
+	}
+	return fence.ValidateAuthority()
+}
+
+// AcquireViewMetadataRefreshLease serializes a lifecycle-sensitive public
+// statement with admission epoch changes. acquired=false means durable catalog
+// predicates, rather than an enabled epoch, own the result.
+func AcquireViewMetadataRefreshLease(
+	ctx context.Context,
+	serviceID string,
+) (*ViewMetadataEpochLease, bool, error) {
+	rt := moruntime.ServiceRuntime(serviceID)
+	if rt == nil {
+		return nil, false, nil
+	}
+	value, ok := rt.GetGlobalVariables(ViewMetadataEpochFenceRuntimeKey)
+	if !ok {
+		return nil, false, nil
+	}
+	fence, ok := value.(*ViewMetadataEpochFence)
+	if !ok {
+		return nil, false, moerr.NewInternalError(ctx, "invalid View metadata epoch fence")
+	}
+	return fence.AcquireRefresh(ctx)
 }
 
 // viewMetadataRefreshAvailable closes the capability-disabled window before a
-// lifecycle DDL is allowed to skip incremental maintenance. The marker writes
-// use the caller's DDL transaction, so a fast false-to-true capability change
-// cannot make an untracked mutation visible without a durable revalidation.
+// lifecycle DDL decides whether incremental maintenance is possible. Once the
+// lifecycle catalog exists, the current DDL must publish its own metadata even
+// while admission is disabled; the revalidation marker only covers mutations
+// from older binaries that cannot do so.
 func (c *Compile) viewMetadataRefreshAvailable() (bool, error) {
 	if viewMetadataRefreshEnabled(c.proc.GetService()) {
 		return true, nil
 	}
+	ready, err := c.requireViewMetadataRevalidationIfCatalogReady()
+	if err != nil || !ready {
+		return ready, err
+	}
+	// Catalog capability and HAKeeper admission are separate. Skipping here can
+	// expose a newly created View without a CURRENT row if admission is renewed
+	// before legacy discovery reaches it, making otherwise valid metadata fail
+	// closed. A capable CN therefore maintains the row whenever the catalog is
+	// ready, regardless of its current admission lease.
+	return true, nil
+}
+
+func (c *Compile) requireViewMetadataRevalidationIfCatalogReady() (bool, error) {
 	if err := c.requireViewMetadataRevalidationInTxn(); err != nil {
 		// During an offset upgrade the SQL listener can become available before
-		// the lifecycle tables. Preserve the pre-feature behavior only for this
-		// typed catalog-readiness condition; every other failure aborts the DDL.
+		// the lifecycle tables. Preserve pre-feature behavior only for this typed
+		// catalog-readiness condition; every other failure aborts the mutation.
 		if moerr.IsMoErrCode(err, moerr.ErrNoSuchTable) ||
 			moerr.IsMoErrCode(err, moerr.ErrBadDB) {
 			return false, nil
 		}
 		return false, err
 	}
-	return false, nil
+	return true, nil
 }
 
 func (c *Compile) requireViewMetadataRevalidationInTxn() error {
@@ -816,27 +970,50 @@ func SeedMissingViewMetadataSQL(generation uint64) string {
 }
 
 // ReconcileAccountViewMetadataSQL removes lifecycle rows whose target View no
-// longer exists after an account restore, then seeds restored Views that have
-// no refresh row. Sentinel rows are intentionally preserved.
+// longer exists after restore, then seeds restored Views that have no refresh
+// row. Existing targets and their affected-closure generations are preserved.
 func ReconcileAccountViewMetadataSQL(accountID uint32, generation uint64) []string {
+	return ReconcileScopedViewMetadataSQL(accountID, "", "", generation)
+}
+
+// ReconcileScopedViewMetadataSQL limits foreground restore cleanup to the
+// restored table/database. Empty names retain account-restore behavior.
+func ReconcileScopedViewMetadataSQL(
+	accountID uint32,
+	databaseName string,
+	relationName string,
+	generation uint64,
+) []string {
+	targetScope := ""
+	tableScope := ""
+	if databaseName != "" {
+		escapedDatabase := sqlquote.EscapeString(databaseName)
+		targetScope += fmt.Sprintf(" and target_database_name='%s'", escapedDatabase)
+		tableScope += fmt.Sprintf(" and t.reldatabase='%s'", escapedDatabase)
+	}
+	if relationName != "" {
+		escapedRelation := sqlquote.EscapeString(relationName)
+		targetScope += fmt.Sprintf(" and target_relation_name='%s'", escapedRelation)
+		tableScope += fmt.Sprintf(" and t.relname='%s'", escapedRelation)
+	}
 	existingView := fmt.Sprintf(
 		"select 1 from %s.%s t where t.account_id=%d and t.rel_id=target_relation_id and t.relkind='%s'",
 		catalog.MO_CATALOG, catalog.MO_TABLES, accountID, catalog.SystemViewRel)
 	return []string{
-		fmt.Sprintf("delete from %s.%s where account_id=%d and target_relation_id<>0 and not exists (%s)",
-			catalog.MO_CATALOG, catalog.MO_VIEW_DEPENDENCIES, accountID, existingView),
-		fmt.Sprintf("delete from %s.%s where account_id=%d and target_relation_id<>0 and not exists (%s)",
-			catalog.MO_CATALOG, catalog.MO_VIEW_REFRESH, accountID, existingView),
+		fmt.Sprintf("delete from %s.%s where account_id=%d and target_relation_id<>0%s and not exists (%s)",
+			catalog.MO_CATALOG, catalog.MO_VIEW_DEPENDENCIES, accountID, targetScope, existingView),
+		fmt.Sprintf("delete from %s.%s where account_id=%d and target_relation_id<>0%s and not exists (%s)",
+			catalog.MO_CATALOG, catalog.MO_VIEW_REFRESH, accountID, targetScope, existingView),
 		fmt.Sprintf(
 			"insert into %s.%s (%s) select t.account_id,t.reldatabase_id,t.rel_id,"+
 				"coalesce(nullif(t.rel_logical_id,0),t.rel_id),t.reldatabase,t.relname,%d,0,'%s',"+
 				"0,null,'',0,null,0 from %s.%s t left join %s.%s r on "+
-				"t.account_id=r.account_id and t.rel_id=r.target_relation_id where t.account_id=%d "+
+				"t.account_id=r.account_id and t.rel_id=r.target_relation_id where t.account_id=%d%s "+
 				"and t.relkind='%s' and t.reldatabase not in ('%s') and r.target_relation_id is null",
 			catalog.MO_CATALOG, catalog.MO_VIEW_REFRESH, catalog.MoViewRefreshColumns,
 			generation, catalog.ViewRefreshStatusDiscovering,
 			catalog.MO_CATALOG, catalog.MO_TABLES, catalog.MO_CATALOG, catalog.MO_VIEW_REFRESH,
-			accountID, catalog.SystemViewRel, strings.Join(catalog.SystemDatabases, "','")),
+			accountID, tableScope, catalog.SystemViewRel, strings.Join(catalog.SystemDatabases, "','")),
 	}
 }
 
