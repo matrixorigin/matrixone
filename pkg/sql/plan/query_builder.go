@@ -1446,6 +1446,14 @@ func (builder *QueryBuilder) remapAllColRefsForConsumer(
 			for _, expr := range node.DedupJoinCtx.UpdateColExprList {
 				increaseRefCnt(expr, 1, colRefCnt)
 			}
+			for _, col := range []*plan.ColRef{
+				node.DedupJoinCtx.AffectedRowsCol,
+				node.DedupJoinCtx.PhysicalChangedRowsCol,
+			} {
+				if col != nil {
+					colRefCnt[[2]int32{col.RelPos, col.ColPos}]++
+				}
+			}
 
 			// OldColCaptureList: build_placeholder points to the build-side
 			// (right child) NULL column whose slot will receive the captured
@@ -1527,6 +1535,18 @@ func (builder *QueryBuilder) remapAllColRefsForConsumer(
 				remapInfo.srcExprIdx = idx
 				err := builder.remapColRefForExpr(expr, internalMap, &remapInfo)
 				if err != nil {
+					return nil, err
+				}
+			}
+			for _, col := range []*plan.ColRef{
+				node.DedupJoinCtx.AffectedRowsCol,
+				node.DedupJoinCtx.PhysicalChangedRowsCol,
+			} {
+				if col == nil {
+					continue
+				}
+				colRefCnt[[2]int32{col.RelPos, col.ColPos}]--
+				if err := builder.remapSingleColRef(col, internalMap, &remapInfo); err != nil {
 					return nil, err
 				}
 			}
@@ -3149,6 +3169,11 @@ func (builder *QueryBuilder) remapAllColRefsForConsumer(
 			if updateCtx.ChangedRowsCol != nil {
 				colRefCnt[[2]int32{updateCtx.ChangedRowsCol.RelPos, updateCtx.ChangedRowsCol.ColPos}]++
 			}
+			for _, col := range []*plan.ColRef{updateCtx.AffectedRowsWeightCol, updateCtx.PhysicalChangedRowsCol} {
+				if col != nil {
+					colRefCnt[[2]int32{col.RelPos, col.ColPos}]++
+				}
+			}
 
 			for _, col := range updateCtx.AffectedRowsCols {
 				colRefCnt[[2]int32{col.RelPos, col.ColPos}]++
@@ -3191,6 +3216,15 @@ func (builder *QueryBuilder) remapAllColRefsForConsumer(
 				colRefCnt[[2]int32{col.RelPos, col.ColPos}]--
 				err := builder.remapSingleColRef(col, childRemapping.globalToLocal, &remapInfo)
 				if err != nil {
+					return nil, err
+				}
+			}
+			for _, col := range []*plan.ColRef{updateCtx.AffectedRowsWeightCol, updateCtx.PhysicalChangedRowsCol} {
+				if col == nil {
+					continue
+				}
+				colRefCnt[[2]int32{col.RelPos, col.ColPos}]--
+				if err := builder.remapSingleColRef(col, childRemapping.globalToLocal, &remapInfo); err != nil {
 					return nil, err
 				}
 			}

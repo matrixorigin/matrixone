@@ -393,6 +393,98 @@ select id, u, v, updated_at > @ts_sec as ts_advanced from t_odku_sec_uk order by
 drop table if exists t_odku_sec_uk;
 drop table if exists t_odku_fk_uk_child;
 drop table if exists t_odku_fk_uk_parent;
+drop table if exists t_odku_order_count;
+create table t_odku_order_count(id int primary key, a int, b int);
+insert into t_odku_order_count values (1, 10, 20);
+insert into t_odku_order_count values (1, 100, 200)
+on duplicate key update a = a + 1, b = a;
+select row_count(), id, a, b from t_odku_order_count;
+➤ row_count()[-5,64,0]  ¦  id[4,32,0]  ¦  a[4,32,0]  ¦  b[4,32,0]  𝄀
+2  ¦  1  ¦  11  ¦  11
+update t_odku_order_count set a = 10, b = 20 where id = 1;
+insert into t_odku_order_count values (1, 100, 200)
+on duplicate key update a = a + 1, a = a + 1;
+select row_count(), id, a, b from t_odku_order_count;
+➤ row_count()[-5,64,0]  ¦  id[4,32,0]  ¦  a[4,32,0]  ¦  b[4,32,0]  𝄀
+2  ¦  1  ¦  12  ¦  20
+drop table t_odku_order_count;
+drop table if exists t_odku_repeat_count;
+create table t_odku_repeat_count(id int primary key, v int, key iv(v));
+insert into t_odku_repeat_count values (1, 10);
+insert into t_odku_repeat_count values (1, 11), (1, 12), (1, 13)
+on duplicate key update v = values(v);
+select row_count(), id, v from t_odku_repeat_count;
+➤ row_count()[-5,64,0]  ¦  id[4,32,0]  ¦  v[4,32,0]  𝄀
+6  ¦  1  ¦  13
+truncate table t_odku_repeat_count;
+insert into t_odku_repeat_count values (1, 11), (1, 12), (1, 13)
+on duplicate key update v = values(v);
+select row_count(), id, v from t_odku_repeat_count;
+➤ row_count()[-5,64,0]  ¦  id[4,32,0]  ¦  v[4,32,0]  𝄀
+5  ¦  1  ¦  13
+truncate table t_odku_repeat_count;
+insert into t_odku_repeat_count values (1, 10);
+insert into t_odku_repeat_count values (1, 11), (1, 10)
+on duplicate key update v = values(v);
+select row_count(), id, v from t_odku_repeat_count;
+➤ row_count()[-5,64,0]  ¦  id[4,32,0]  ¦  v[4,32,0]  𝄀
+4  ¦  1  ¦  10
+insert into t_odku_repeat_count values (1, 10)
+on duplicate key update v = values(v);
+select row_count(), id, v from t_odku_repeat_count;
+➤ row_count()[-5,64,0]  ¦  id[4,32,0]  ¦  v[4,32,0]  𝄀
+0  ¦  1  ¦  10
+select count(*) from t_odku_repeat_count force index(iv) where v = 10;
+➤ count(*)[-5,64,0]  𝄀
+1
+drop table t_odku_repeat_count;
+drop table if exists t_odku_order_generated;
+create table t_odku_order_generated(
+id int primary key,
+a int,
+b int,
+g int as (a + b),
+constraint ck_odku_order check(a = b),
+key ig(g)
+);
+insert into t_odku_order_generated(id, a, b) values (1, 10, 10);
+insert into t_odku_order_generated(id, a, b) values (1, 99, 99)
+on duplicate key update a = a + 1, b = a;
+select row_count(), id, a, b, g from t_odku_order_generated;
+➤ row_count()[-5,64,0]  ¦  id[4,32,0]  ¦  a[4,32,0]  ¦  b[4,32,0]  ¦  g[4,32,0]  𝄀
+2  ¦  1  ¦  11  ¦  11  ¦  22
+insert into t_odku_order_generated(id, a, b) values (2, 20, 20), (1, 99, 99)
+on duplicate key update a = a + 1, b = a + 2;
+constraint violation: Check constraint 'ck_odku_order' is violated
+select count(*) from t_odku_order_generated;
+➤ count(*)[-5,64,0]  𝄀
+1
+select count(*) from t_odku_order_generated force index(ig) where g = 22;
+➤ count(*)[-5,64,0]  𝄀
+1
+drop table t_odku_order_generated;
+drop table if exists t_odku_repeat_onupdate;
+create table t_odku_repeat_onupdate(
+id int primary key,
+v int,
+updated_at timestamp(6) default '2000-01-01 00:00:00.000000'
+on update current_timestamp(6)
+);
+insert into t_odku_repeat_onupdate values (1, 10, '2000-01-01 00:00:00.000000');
+insert into t_odku_repeat_onupdate(id, v) values (1, 11), (1, 10)
+on duplicate key update v = values(v);
+select row_count(), v, updated_at > '2000-01-01 00:00:00.000000' as auto_updated
+from t_odku_repeat_onupdate;
+➤ row_count()[-5,64,0]  ¦  v[4,32,0]  ¦  auto_updated[-7,1,0]  𝄀
+4  ¦  10  ¦  1
+update t_odku_repeat_onupdate set updated_at = '2000-01-01 00:00:00.000000';
+insert into t_odku_repeat_onupdate(id, v) values (1, 10)
+on duplicate key update v = values(v);
+select row_count(), v, updated_at = '2000-01-01 00:00:00.000000' as auto_unchanged
+from t_odku_repeat_onupdate;
+➤ row_count()[-5,64,0]  ¦  v[4,32,0]  ¦  auto_unchanged[-7,1,0]  𝄀
+0  ¦  10  ¦  1
+drop table t_odku_repeat_onupdate;
 create table t_odku_fk_uk_parent(pid int primary key);
 create table t_odku_fk_uk_child(
 id bigint auto_increment primary key,

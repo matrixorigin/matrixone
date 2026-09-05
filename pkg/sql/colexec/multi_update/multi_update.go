@@ -463,6 +463,9 @@ func filterTargetRows(
 	seen *hashmap.StrHashMap,
 ) (*batch.Batch, bool, uint64, error) {
 	if !updateCtx.DedupByTargetRowID {
+		if updateCtx.AffectedRowsWeightCol != nil || updateCtx.PhysicalChangedRowsCol != nil {
+			return filterODKUPhysicalRows(proc, updateCtx, input)
+		}
 		if len(updateCtx.AffectedRowsCols) > 0 {
 			affectedRows, err := countAffectedRowsBySelectors(proc, updateCtx, input)
 			return input, false, affectedRows, err
@@ -600,6 +603,62 @@ func filterTargetRows(
 	}
 	return filtered, true, filterReportedAffectedRows(
 		updateCtx, semanticAffectedRows, insertAffectedRows(updateCtx, filtered)), nil
+}
+
+func filterODKUPhysicalRows(
+	proc *process.Process,
+	updateCtx *MultiUpdateCtx,
+	input *batch.Batch,
+) (*batch.Batch, bool, uint64, error) {
+	var affectedRows uint64
+	if updateCtx.AffectedRowsWeightCol != nil {
+		col := *updateCtx.AffectedRowsWeightCol
+		if col < 0 || col >= len(input.Vecs) || input.Vecs[col].GetType().Oid != types.T_uint64 {
+			return nil, false, 0, moerr.NewInternalError(proc.Ctx, "invalid ODKU affected-row weight column")
+		}
+		vec := input.Vecs[col]
+		if vec.HasNull() {
+			return nil, false, 0, moerr.NewInternalError(proc.Ctx, "NULL ODKU affected-row weight")
+		}
+		for _, n := range vector.MustFixedColWithTypeCheck[uint64](vec)[:input.RowCount()] {
+			affectedRows += n
+		}
+	}
+	if updateCtx.PhysicalChangedRowsCol == nil {
+		return input, false, affectedRows, nil
+	}
+	col := *updateCtx.PhysicalChangedRowsCol
+	if col < 0 || col >= len(input.Vecs) || input.Vecs[col].GetType().Oid != types.T_bool {
+		return nil, false, 0, moerr.NewInternalError(proc.Ctx, "invalid ODKU physical-change column")
+	}
+	vec := input.Vecs[col]
+	if vec.HasNull() {
+		return nil, false, 0, moerr.NewInternalError(proc.Ctx, "NULL ODKU physical-change marker")
+	}
+	changed := vector.MustFixedColWithTypeCheck[bool](vec)
+	allChanged := true
+	for row := 0; row < input.RowCount(); row++ {
+		if !changed[row] {
+			allChanged = false
+			break
+		}
+	}
+	if allChanged {
+		return input, false, affectedRows, nil
+	}
+	selections := make([]int64, 0, input.RowCount())
+	for row := 0; row < input.RowCount(); row++ {
+		if changed[row] {
+			selections = append(selections, int64(row))
+		}
+	}
+	filtered, err := input.CloneWithoutAllocationAccount(proc.Mp(), true)
+	if err != nil {
+		return nil, false, 0, err
+	}
+	filtered.Shrink(selections, false)
+	filtered.SetRowCount(len(selections))
+	return filtered, true, affectedRows, nil
 }
 
 func filterReportedAffectedRows(

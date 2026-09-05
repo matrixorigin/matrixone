@@ -116,3 +116,50 @@ func TestIsOnDupIncomingColumn(t *testing.T) {
 	require.False(t, isOnDupIncomingColumn(expr, 7, 4))
 	require.False(t, isOnDupIncomingColumn(&planpb.Expr{}, 7, 3))
 }
+
+func TestInsertOnDupPreservesAssignmentOrderAndDuplicates(t *testing.T) {
+	mock := NewMockOptimizer(true)
+	logicPlan, err := runOneStmt(mock, t,
+		"insert into constraint_test.t1(a, b) values (1, 'Alice') "+
+			"on duplicate key update b = concat(b, 'x'), b = concat(b, 'y'), b = concat(b, 'z')")
+	require.NoError(t, err)
+
+	for _, node := range logicPlan.GetQuery().Nodes {
+		if node.NodeType != planpb.Node_JOIN || node.JoinType != planpb.Node_DEDUP ||
+			node.OnDuplicateAction != planpb.Node_UPDATE {
+			continue
+		}
+		require.Equal(t, []int32{1, 1, 1}, node.DedupJoinCtx.UpdateColIdxList)
+		require.Len(t, node.DedupJoinCtx.UpdateColExprList, 3)
+		require.NotNil(t, node.DedupJoinCtx.AffectedRowsCol)
+		require.NotNil(t, node.DedupJoinCtx.PhysicalChangedRowsCol)
+		return
+	}
+	t.Fatal("expected ODKU dedup join")
+}
+
+func TestInsertOnDupCarriesFoundRowsMode(t *testing.T) {
+	for _, tc := range []struct {
+		name                   string
+		countUpdateChangedRows bool
+		wantFoundRows          bool
+	}{
+		{name: "default changed rows", countUpdateChangedRows: true},
+		{name: "client found rows", wantFoundRows: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			mock := NewMockOptimizer(true)
+			mock.CurrentContext().GetProcess().Base.SessionInfo.CountUpdateChangedRows = tc.countUpdateChangedRows
+			logicPlan, err := runOneStmt(mock, t,
+				"insert into constraint_test.t1(a, b) values (1, 'x') on duplicate key update b = values(b)")
+			require.NoError(t, err)
+			for _, node := range logicPlan.GetQuery().Nodes {
+				if node.DedupJoinCtx != nil && node.OnDuplicateAction == planpb.Node_UPDATE {
+					require.Equal(t, tc.wantFoundRows, node.DedupJoinCtx.CountFoundRows)
+					return
+				}
+			}
+			t.Fatal("expected ODKU dedup join")
+		})
+	}
+}

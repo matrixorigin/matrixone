@@ -83,6 +83,32 @@ func TestClonePartitionTargetContextsSuppressesPhysicalAffectedRows(t *testing.T
 		"single-target partition updates still count physical inserts")
 }
 
+func TestClonePartitionContextsConsumeODKUMetadataOnce(t *testing.T) {
+	weightCol, physicalCol := 7, 8
+	contexts := []*MultiUpdateCtx{{
+		ObjRef:                 &plan.ObjectRef{},
+		TableDef:               &plan.TableDef{},
+		InsertCols:             []int{1},
+		DeleteCols:             []int{2, 3},
+		AffectedRowsWeightCol:  &weightCol,
+		PhysicalChangedRowsCol: &physicalCol,
+	}}
+
+	for _, cloned := range [][]*MultiUpdateCtx{
+		clonePartitionTargetContexts(contexts),
+		clonePartitionPhaseContexts(contexts, true),
+		clonePartitionPhaseContexts(contexts, false),
+	} {
+		require.Nil(t, cloned[0].AffectedRowsWeightCol)
+		require.Nil(t, cloned[0].PhysicalChangedRowsCol)
+		require.True(t, cloned[0].SuppressPhysicalAffectedRows)
+		require.Zero(t, physicalInsertAffectedRows(cloned[0], 1),
+			"partition routing must not recount an ODKU weight consumed by the outer operator")
+	}
+	require.Equal(t, weightCol, *contexts[0].AffectedRowsWeightCol)
+	require.Equal(t, physicalCol, *contexts[0].PhysicalChangedRowsCol)
+}
+
 func TestPartitionTargetSelectionPrecedesDirectAndS3Routing(t *testing.T) {
 	for name, action := range map[string]UpdateAction{
 		"direct": UpdateWriteTable,
