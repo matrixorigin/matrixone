@@ -857,6 +857,20 @@ func TestLocalE2EWaitForLifecycleFaultWaitersHonorsDeadline(t *testing.T) {
 	}
 }
 
+func TestLocalE2EWaitForLifecycleFaultWaitersStopsBeforePollingCanceledContext(t *testing.T) {
+	db, mock := newLocalE2ESQLMock(t)
+	defer db.Close()
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	if err := waitForLifecycleFaultWaiters(ctx, db, icebergCreateAfterCatalogLockWaitersFault, 1); !errors.Is(err, context.Canceled) {
+		t.Fatalf("lifecycle fault waiter ignored canceled context: %v", err)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("canceled lifecycle-fault waiter issued a query: %v", err)
+	}
+}
+
 func TestLocalE2EConcurrentCreateMappingAndDropCaseReportsCleanupFailure(t *testing.T) {
 	db, mock := newLocalE2ESQLMock(t)
 	defer db.Close()
