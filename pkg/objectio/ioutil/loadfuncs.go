@@ -386,6 +386,159 @@ func LoadColumnDataByTopN(
 	return sels, dists, fromCache, err
 }
 
+// LoadColumnsDataIntoAndTopN reads residual-filter columns, the vector order
+// column, and deferred result columns in one ObjectIO request. Filter columns
+// are copied before selectTopRows is invoked. The vector and deferred columns
+// stay borrowed from pinned cache entries; after TopN only winner rows from the
+// deferred columns are copied into caller-owned destinations.
+//
+// materializeRows and the rows returned by selectTopRows use physical block
+// coordinates. A non-nil row slice is required from selectTopRows so an empty
+// filtered result cannot be confused with TopN's nil meaning "all rows".
+func LoadColumnsDataIntoAndTopN(
+	ctx context.Context,
+	columns []uint16,
+	typs []types.Type,
+	fs fileservice.FileService,
+	location objectio.Location,
+	destinations []*vector.Vector,
+	materializeRows []int64,
+	topColumn uint16,
+	topType types.Type,
+	deferredColumns []uint16,
+	deferredTypes []types.Type,
+	deferredDestinations []*vector.Vector,
+	selectTopRows func() ([]int64, error),
+	orderByLimit *objectio.IndexReaderTopOp,
+	m *mpool.MPool,
+	policy fileservice.Policy,
+) (sels []int64, dists []float64, fromCache bool, err error) {
+	if len(columns) != len(typs) || len(columns) != len(destinations) {
+		return nil, nil, false, moerr.NewInvalidInputNoCtxf(
+			"object filter column count %d does not match type count %d or destination count %d",
+			len(columns), len(typs), len(destinations),
+		)
+	}
+	if len(deferredColumns) != len(deferredTypes) ||
+		len(deferredColumns) != len(deferredDestinations) {
+		return nil, nil, false, moerr.NewInvalidInputNoCtxf(
+			"deferred object column count %d does not match type count %d or destination count %d",
+			len(deferredColumns), len(deferredTypes), len(deferredDestinations),
+		)
+	}
+	if len(columns) == 0 {
+		return nil, nil, false, moerr.NewInvalidInputNoCtx("no object filter columns for fused topn")
+	}
+	if selectTopRows == nil || orderByLimit == nil {
+		return nil, nil, false, moerr.NewInvalidInputNoCtx("nil fused object topn input")
+	}
+	if m == nil {
+		return nil, nil, false, moerr.NewInvalidInputNoCtx("nil mpool for fused object topn")
+	}
+	for i := range columns {
+		if destinations[i] == nil {
+			return nil, nil, false, moerr.NewInvalidInputNoCtxf(
+				"nil destination for object column %d", columns[i],
+			)
+		}
+		if columns[i] == topColumn {
+			return nil, nil, false, moerr.NewInvalidInputNoCtxf(
+				"object topn column %d is also a filter column", topColumn,
+			)
+		}
+	}
+	for i := range deferredColumns {
+		if deferredDestinations[i] == nil {
+			return nil, nil, false, moerr.NewInvalidInputNoCtxf(
+				"nil destination for deferred object column %d", deferredColumns[i],
+			)
+		}
+		if deferredColumns[i] == topColumn {
+			return nil, nil, false, moerr.NewInvalidInputNoCtxf(
+				"object topn column %d is also a deferred column", topColumn,
+			)
+		}
+		for _, filterColumn := range columns {
+			if deferredColumns[i] == filterColumn {
+				return nil, nil, false, moerr.NewInvalidInputNoCtxf(
+					"deferred object column %d is also a filter column", deferredColumns[i],
+				)
+			}
+		}
+	}
+
+	readColumns := make([]uint16, len(columns)+1+len(deferredColumns))
+	copy(readColumns, columns)
+	readColumns[len(columns)] = topColumn
+	copy(readColumns[len(columns)+1:], deferredColumns)
+	readTypes := make([]types.Type, len(typs)+1+len(deferredTypes))
+	copy(readTypes, typs)
+	readTypes[len(typs)] = topType
+	copy(readTypes[len(typs)+1:], deferredTypes)
+
+	ioVectors, fromCache, err := readColumnsData(
+		ctx,
+		readColumns,
+		readTypes,
+		fs,
+		location,
+		nil,
+		m,
+		policy,
+	)
+	if err != nil {
+		return nil, nil, false, err
+	}
+	defer objectio.ReleaseIOVector(&ioVectors)
+
+	for i := range columns {
+		if materializeRows == nil {
+			err = objectio.CopyCachedVectorAll(
+				destinations[i], ioVectors.Entries[i].CachedData, m,
+			)
+		} else {
+			err = objectio.CopyCachedVectorRows(
+				destinations[i], ioVectors.Entries[i].CachedData, materializeRows, m,
+			)
+		}
+		if err != nil {
+			return nil, nil, false, err
+		}
+	}
+
+	selectedRows, err := selectTopRows()
+	if err != nil {
+		return nil, nil, false, err
+	}
+	if selectedRows == nil {
+		return nil, nil, false, moerr.NewInvalidInputNoCtx(
+			"fused object topn selector returned nil rows",
+		)
+	}
+	sels, dists, err = objectio.SearchCachedVectorTopN(
+		ctx,
+		ioVectors.Entries[len(columns)],
+		selectedRows,
+		orderByLimit,
+	)
+	if err != nil {
+		return nil, nil, false, err
+	}
+	deferredOffset := len(columns) + 1
+	for i := range deferredColumns {
+		err = objectio.CopyCachedVectorRows(
+			deferredDestinations[i],
+			ioVectors.Entries[deferredOffset+i].CachedData,
+			sels,
+			m,
+		)
+		if err != nil {
+			return nil, nil, false, err
+		}
+	}
+	return sels, dists, fromCache, err
+}
+
 // LoadColumnDataBySearchAndCheckTS searches a varlen column and checks whether
 // any selected row's requested commit timestamp lies in (from, to].
 func LoadColumnDataBySearchAndCheckTS(
