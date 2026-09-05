@@ -1459,6 +1459,27 @@ func TestGenViewTableDefCapturesRootSQLOnce(t *testing.T) {
 	require.Equal(t, rootSQL, createSQL)
 }
 
+func TestGenViewTableDefNormalizesJSONValueReturnType(t *testing.T) {
+	const rootSQL = `create view json_value_view as select json_value('{"a":[12]}', '$.a') as extracted`
+	ctx := &rootSQLCompilerContext{
+		MockCompilerContext: NewMockCompilerContext(false),
+		rootSQL:             rootSQL,
+	}
+	stmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL, rootSQL, 1)
+	require.NoError(t, err)
+	defer stmt.Free()
+
+	p, err := BuildPlan(ctx, stmt, false)
+	require.NoError(t, err)
+	tableDef := p.GetDdl().GetCreateView().GetTableDef()
+	require.NotNil(t, tableDef)
+
+	var viewData ViewData
+	require.NoError(t, json.Unmarshal([]byte(tableDef.GetViewSql().GetView()), &viewData))
+	require.Contains(t, viewData.Stmt, "returning char(512)")
+	require.Contains(t, tableDefCreateSQL(tableDef), "returning char(512)")
+}
+
 func TestGenViewTableDefPersistsExpandedStarSelectList(t *testing.T) {
 	const rootSQL = "create view v_star as select * from nation"
 	ctx := &rootSQLCompilerContext{
