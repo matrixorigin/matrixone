@@ -275,7 +275,7 @@ func (s *S3FS) BackingSize(size int) int {
 }
 
 func (s *S3FS) initCaches(ctx context.Context, config CacheConfig) error {
-	caches, err := newFileServiceCaches(ctx, config, s.perfCounterSets, s.name, true, s)
+	caches, err := newFileServiceCaches(ctx, config, s.perfCounterSets, s.name, true)
 	if err != nil {
 		return err
 	}
