@@ -381,17 +381,6 @@ func collectCloneDatabaseOmissionSet(
 	return omissions, nil
 }
 
-// omittedCloneDatabaseObjects retains the relation-only view of the omission
-// graph for callers that only need the catalog objects absent from the target.
-func omittedCloneDatabaseObjects(
-	ctx context.Context,
-	source cloneDatabaseSource,
-	lowerCaseTableNames int64,
-) (map[string]struct{}, error) {
-	omissions, err := collectCloneDatabaseOmissionSet(ctx, source, lowerCaseTableNames)
-	return omissions.objects, err
-}
-
 func applyCloneDatabaseOmissionSet(
 	source *cloneDatabaseSource,
 	omissions cloneDatabaseOmissionSet,
