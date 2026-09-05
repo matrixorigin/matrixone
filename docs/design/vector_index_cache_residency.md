@@ -1,212 +1,540 @@
-# Named-snapshot index reads and bounded cache retention
+# Named-snapshot index reads and index-cache residency
 
+- Status: Review required
 - Issues: [#27941](https://github.com/matrixorigin/matrixone/issues/27941),
   [#27927](https://github.com/matrixorigin/matrixone/issues/27927)
-- Implementation: [#28018](https://github.com/matrixorigin/matrixone/pull/28018)
-- Design review revision: 2026-09-05. CPU validation completed; real-GPU validation pending.
+- Implementation: branch `bug_27941`
 
-## Problem and invariants
+## 1. Problem and contract
 
-A historical base-table scan must not join candidates from a current index.
-The original fulltext/fulltext2/HNSW/CAGRA/IVF-PQ table functions executed their
-nested index SQL in the current transaction. After an update, historical MATCH
-could return a row for a word absent from its historical text; vector top-K
-could return no rows after the historical join rejected current-only candidates.
+A `{snapshot = ...}` query must read the index as it existed at that timestamp.
+Before this work the fulltext/fulltext2 and vector table functions loaded the
+index through the shared `VectorIndexCache` under the *current* transaction, so a
+historical `MATCH` or top-K returned current-index results — or, when the
+current-generation candidates were all inserted after the snapshot, nothing at
+all.
 
-The planner passes ScanSnapshot through the table function. SqlProcess binds
-the historical timestamp and effective execution account together. The index
-SQL clones the transaction at that timestamp. The cache key uses exactly the
-same effective timestamp. A historical load cannot populate the current key.
-Publisher identity takes precedence over snapshot identity for a subscribed
-table, matching the base-table scan. Same-key readers share the load.
+Fixing that introduces a second problem. A historical read cannot share the
+current-generation cache entry, so each distinct snapshot timestamp becomes a
+**separate resident copy of an index**, keyed `<index table>@<physical>-<logical>`.
+Nothing bounded how many such copies a CN held.
 
-Classic fulltext is not an in-memory index cache consumer. IVF-FLAT's relation
-scanner already binds its snapshot; its cache interface must still compile.
+The contract this design implements:
 
-## Accepted limitations
+1. **Historical correctness.** A named-snapshot read resolves and reads the index
+   at the snapshot's timestamp *and* under the snapshot's owning tenant.
+2. **Isolation from the current generation.** A historical load never serves, nor
+   pollutes, the current-generation entry; concurrent same-snapshot readers still
+   share one load.
+3. **Bounded residency.** Resident index bytes are bounded by an operator-set
+   budget, per tenant and CN-wide, without failing ordinary queries.
+4. **No silent unbounding.** A budget that cannot be read falls back to a defined
+   value; an outage does not quietly disable the bound.
+5. **Provenance.** A generation records the base-table version it was built from,
+   so "does this index actually cover the snapshot I asked for" is answerable.
 
-Indexes update asynchronously. Reading their persisted state at a named
-snapshot fixes mixing historical rows with current candidates; it does not
-prove the index had caught up to the base table when that snapshot was taken.
-Tests establish CDC convergence before snapshot creation and before checking
-the current-query control.
+## 2. Scope and non-goals
 
-Cache retention is different from total process memory. mmap pages, query
-workspace, allocator overhead, in-progress loads, and other subsystems are not
-all represented by GetIndexSize. The governor is a target for reusable index
-residency, not an allocator reservation or a promise that concurrent queries
-cannot exhaust RAM/VRAM. Native allocation and per-device admission checks
-remain necessary. A separate system-wide admission controller is out of scope.
+Covers fulltext, fulltext2, hnsw, ivfflat, cagra and ivfpq as cache consumers,
+and fulltext2/hnsw/cagra/ivfpq for metadata provenance.
 
-A valid query larger than the retention target can execute if the algorithm's
-own allocation gates permit it. Its index is transient and is retired after
-its readers return. This can make repeated oversized queries slower; an
-operator can raise the target when the deployment has enough memory.
+Non-goals:
 
-LOCAL spill files retain explicit owner cleanup. HNSW unlinks newly created
-files after successful mmap, so process teardown releases those blocks.
-Files left by a crash before mapping may remain. A configured CN UUID is not
-a process-liveness lease: first-use directory lookup must not delete files
-that an overlapping previous process could still need to open. Safe orphan
-collection needs a separate lifetime/lease contract and is not added here.
+- **Consuming `build_ts`.** This design records it. Detecting and reporting "this
+  generation predates the requested snapshot" is a read-path change left out.
+- **Fulltext v1 provenance.** It has no metadata table — its schema creates only
+  the `(doc_id, pos, word)` postings table — so there is nowhere to record it
+  without inventing one.
+- **Fair-share arithmetic.** Budgets are explicit operator numbers, not computed
+  splits (see §5.3).
+- **Versioning fulltext2/cagra/ivfpq CDC tails.** They write no metadata row at
+  all, so there is nothing to carry a version (§6.2).
 
-## Scope decision and alternatives
+## 3. Historical reads
 
-The PR keeps historical reads, size accounting, pre-load reclamation,
-post-query retirement, and LOCAL-fileservice spill placement. It does not add
-nrow/build_ts columns, change the catalog upgrade identity, or change ALTER
-relkind handling. The unused provenance extension required a migration and
-old/new writer compatibility unrelated to the historical read contract.
+The planner already resolves `{snapshot = ...}` into `TableFunction.ScanSnapshot`,
+carrying a timestamp and, for an account-level snapshot, the owning tenant.
 
-The existing four-column vector metadata and six-column FULLTEXT2 metadata,
-including their writer formats, remain unchanged. No protocol version bump or
-new schema migration is needed for this fix. Upgrading a production cluster
-therefore does not require rewriting every hidden metadata table. Downgrading
-to an older binary reintroduces the historical-read bug, but not a schema
-mismatch. An experimental deployment of an earlier unmerged revision that
-already widened tables is not a supported rollback baseline.
+`SqlProcess.ApplyScanSnapshot` binds **both** halves and returns the effective
+timestamp:
 
-Alternatives considered:
+- `SnapshotTS` makes the nested index-table SQL run on a transaction cloned at
+  that timestamp (`txnForRun`).
+- `AccountIDOverride` makes it resolve under the snapshot's account.
 
-1. Unbounded per-timestamp caching: good reuse but one client can retain many
-   complete historical indexes before TTL runs.
-2. Fixed generation counts and refusal: index sizes vary greatly; a count
-   either wastes capacity or fails unrelated valid queries. Per-index counts
-   do not bound aggregate cache retention.
-3. Query-owned loads only: avoid retention, but lose same-key sharing and
-   ordinary repeated historical-query reuse.
-4. A hard byte admission scheduler: requires accurate allocation and workspace
-   reservations for every backend, query cancellation, fairness, and per-device
-   placement. GetIndexSize estimates cannot provide that contract. Do not
-   disguise an approximate cache policy as this scheduler.
+Binding only the timestamp is a correctness bug, not an omission: for an
+account-level snapshot `planSnapshotFromRecord` sets `Tenant.TenantID` to the
+snapshot's account, so a `sys` session reading another account's snapshot would
+scan the base table as that account while resolving `__mo_index_secondary_...`
+as account 0 — table-not-found, or silently empty results. Every other
+`ScanSnapshot` consumer in the compile layer binds the pair; the table functions
+now do too, through one helper so no call site can bind half of it.
 
-The selected design uses bytes for retention, shares reusable entries, and
-makes entries transient when reclaiming idle entries cannot meet the target.
+It binds only when the timestamp is non-empty and strictly older than the current
+transaction — the same predicate the compile layer wraps its own clone in, so the
+two layers agree on when a read is historical.
 
-## Budget and ownership
+The cache key carries the same effective timestamp, which is what keeps a
+historical generation from serving or polluting the current one.
 
-max_index_cache_size and max_gpu_index_cache_size are dynamic GLOBAL variables.
-GLOBAL is per account in MatrixOne. A tenant's explicit value restricts that
-tenant. The SYS account's value restricts aggregate retention on each CN.
-A tenant cannot raise the CN target by setting its own value or a session value.
+## 4. Why bytes, not counts
 
-Zero selects automatic sizing, rather than an unreachable 64 TiB ceiling:
+The first bound was a count of resident snapshot generations, per index and
+per CN. That is the wrong unit. A server with a hundred tenants each holding a
+small index breaks under any count low enough to bound memory, while any count
+high enough to admit them bounds nothing. Index sizes span orders of magnitude;
+their number says nothing about the memory at risk.
 
-- Host: one quarter of the smaller nonzero host/cgroup limit.
-- GPU: one half of the physical visible devices' aggregate memory.
-- Unavailable capacity measurement: a finite 256 MiB retention target.
+The bound is therefore a **byte** budget, and it is not snapshot-specific: every
+resident index is charged, because a current generation occupies the same memory
+as a historical one.
 
-Automatic limits are initialized once per cache. Operators can explicitly
-resize targets after deployment or vertical resizing. The GPU total is only
-an aggregate retention policy: each backend still validates the demand on
-each actual device, including replicated and simulated placement.
+## 5. The governor
 
-Cached ownership is the account that executes the index read. Cross-account
-snapshots and subscriptions resolve that owner's cap, not the caller's cap.
-Catalog reads retain only service identity and memoized values, never a query
-session or transaction. Successful values survive transient refresh failures.
-The first failed lookup uses the automatic target. Refresh attempts are
-rate-limited to 15 seconds; they use independent, bounded SQL contexts.
+### 5.1 Budgets
 
-## Lifecycle and reclamation
+Two `ScopeGlobal` variables, each defaulting to `0` — which means **"size me from
+this machine"**, not "unlimited". An unconfigured arena resolves to a share of
+what the CN actually has:
 
-The cache map owns a loaded index until one eviction claimant removes it.
-The existing per-entry lock protects loading, searching, and destruction.
-An eviction's teardown signal closes only after destruction finishes, so a
-retry cannot reuse the same algorithm while an old wrapper is destroying it.
+| arena | automatic budget |
+|---|---|
+| host | 90% of RAM, or of the cgroup limit when it is lower |
+| device | 90% of each GPU's total, summed |
 
-On a cache miss:
+**There is no fallback.** When capacity cannot be read, sizing returns an *error*
+rather than a number. A budget invented from nothing describes no real machine,
+and §5.3 refuses arrivals that exceed the budget — so guessing low silently fails
+queries and guessing high silently over-commits. Neither is better than naming
+the missing input, and the error says which variable to set.
 
-1. Preload reads metadata or measures artifacts.
-2. Reclaim idle entries for the estimate.
-3. Load materializes the index and publishes its measured size.
-4. Reclaim again against actual retained bytes, protecting the loader's first
-   search. If the target still cannot be met, mark this entry transient.
-5. Execute the search. Success, error, and panic unwind the read lock before
-   attempting transient retirement.
-6. The last reader that can obtain the entry's write lock removes and destroys
-   the transient entry. New attempts after removal load a fresh generation.
+`limits()` therefore returns an error, and its two callers treat it differently
+on purpose: `makeRoom` **refuses** the load, because it cannot decide whether the
+arrival fits and admitting it blind would be the guess this removes;
+`chargeAndEnforce` **logs and skips**, because the load has already happened and
+failing there would not un-spend it. The result is memoized with the value, so a
+failing probe does not land on the query path once per miss.
 
-Capacity eviction obtains TryLock and holds it through the eviction claim,
-map removal, and destruction. It never unlocks an availability probe and then
-waits for a victim's lock. Busy entries are skipped; there is no second pass
-that synchronously waits on an unrelated query. Protecting each loader through
-its first search also prevents competing misses from evicting one another
-before either query can run. TTL, explicit invalidation, and shutdown retain
-their own existing lifecycle contracts.
+**No GPU is not a failure.** `count == 0` means the device arena does not apply,
+so it gets no budget and `enforce` skips it — nothing charges device bytes
+without a device. Only a GPU that exists and cannot be queried is an error.
 
-Reclaim is coldest-first. At the CN scope the requesting tenant gives up its
-own idle entries before other tenants' entries. Host and device usage are
-separate: a host-only victim cannot relieve VRAM pressure. Atomic size samples
-avoid reading a backend concurrently with its destruction.
+Resolution is **per arena and on the SYS value alone**. Gating it on the tenant
+as well would let a tenant that sets any value at all leave the CN-wide budget at
+`0` for that arena — bypassing the CN limit by naming a bigger one of its own.
+The tenant cap is an *additional* bound applied alongside the CN one (§5.2),
+never a replacement for it.
 
-## Maintenance and performance
+So `0` never means "no limit". That matters most for an **upgraded** cluster: the
+variable's value is persisted in `mo_mysql_compatibility_mode` at bootstrap, so a
+cluster created before this feature keeps a stored `0` forever no matter what the
+code default says. Resolving `0` in the governor — rather than only in the
+variable's default — is what reaches it, along with an explicit
+`set global … = 0` and the sessionless loads (idxcron, internal rebuilds) that
+have no resolver at all.
 
-A warm cache has no misses to refresh a memoized cap. The existing maintenance
-task therefore refreshes SYS policy and then applies it. The policy update
-latency is the maintenance cadence (normally 2.5 minutes), plus the bounded
-catalog query; 15 seconds is a lookup memo lifetime, not a 15-second rollout
-promise. Per-tenant policy changes take effect on that tenant's next miss.
-Maintenance does not retain a user transaction or block the ticker on a new
-catalog read. Existing freshness checks retain their cadence.
+The consequence is that the accounting always runs and the eviction path is
+always live, so lowering `SET GLOBAL` later *governs a warm cache* instead of
+switching accounting on. With a zero cap the governor used to return before
+`enforce()`: nothing charged, nothing enumerated, residency genuinely unbounded
+at one resident generation per distinct snapshot timestamp.
 
-Ordinary hits do not resolve policy, enumerate entries, sort victims, read
-metadata, or create a speculative cache wrapper/channel. They load the existing
-map entry, execute under its read lock, and check whether retirement is needed.
+| variable | arena |
+|---|---|
+| `max_index_cache_size` | host RAM |
+| `max_gpu_index_cache_size` | device VRAM |
 
-A miss enumerates resident entries, O(N), and sorts them, O(N log N), only
-when that arena requires reclamation. Repeated eviction details are DEBUG;
-cumulative eviction counts/bytes are available through EvictionStats.
+They are separate because a CN has far more RAM than VRAM: one number large
+enough to be a sane host budget never binds on the device, and one small enough
+to bound VRAM cripples the host cache. The two sums are never added together, and
+an eviction in one arena never takes an entry that holds nothing in it — evicting
+a host-only index to relieve VRAM pressure frees no VRAM.
 
-HNSW reports usearch MemoryUsage after loading. The persisted model is mmapped
-from the LOCAL fileservice, and its file size is not a substitute for native
-heap bookkeeping. Existing metadata cannot estimate that cost before Load;
-this is an explicit limitation, shared with the existing IVF-FLAT load path,
-rather than a reason to introduce a schema migration. FULLTEXT2 preloads its
-existing document count; CAGRA/IVF-PQ measure host and device artifact components.
-Their permanent hardware gate precedes eviction; the situational free-memory
-gate runs after reclamation and before deserialization.
+### 5.2 Per-tenant and CN-wide
 
-## Validation and rollout
+`SET GLOBAL` in MatrixOne is **per account**, not cluster-wide: `GSysVarsMgr` is
+keyed by account id and `mo_mysql_compatibility_mode` is a per-account table. So
+a tenant's value caps that tenant, and the **SYS account's** value caps the whole
+CN. The SYS value cannot be read through the caller's resolver, which resolves
+for the calling tenant; it is read from the catalog as the SYS account on a
+**fresh context** (`RunSqlAutoCommit` rebinds `TenantIDKey`), memoized for 15s so
+`SET GLOBAL` takes effect without a restart.
 
-Preserve the public historical/current controls for classic fulltext,
-FULLTEXT2, HNSW, CAGRA, and IVF-PQ. Keep public schema-generation tests asserting
-the existing metadata column count and writer shape.
+The memo stamps every attempt, success or failure. Without that, a catalog outage
+defeats it entirely: each cache miss re-attempts a 10s-timeout query, twice per
+miss, serialized on one mutex. The lock is released across the query on a
+*refresh* — every waiter already has a last-known value — but held for the
+**first** fetch, where there is none: releasing it there would hand concurrent
+misses the zero caps, which read as unlimited, and bypass the governor for the
+whole first query at exactly the moment the cache is cold.
 
-Focused cache tests cover:
+Ownership follows the **executing** account, not the calling one. A cross-account
+snapshot read runs its index-table SQL as the snapshot's tenant
+(`ApplyScanSnapshot` binds both the timestamp and the owning tenant), so the
+resident entry is charged to that tenant and governed by *that* tenant's cap. The
+caller's session resolver cannot answer for another account, so the owning
+tenant's value is read from the catalog and memoized per account. Charging the
+caller instead would let a SYS session make tenant data resident under a budget
+the tenant never set.
 
-- same-timestamp sharing and distinct historical/current identities;
-- all victims busy, a busy victim with an idle alternative, and exact-fit versus
-  oversized entries in either arena;
-- retirement on success/error/panic and after the last shared reader;
-- backend invalid-state errors propagated without cache retries, even when
-  post-query retirement has concurrently destroyed the entry;
-- catalog-source cap changes without a miss, refresh failure, tenant ownership,
-  and independent host/device accounting;
-- realistic automatic limits, missing capacity information, integer boundaries,
-  and tenant settings that cannot raise the automatic CN target.
+### 5.3 Admission control: reclaim the idle, refuse the rest
 
-Run owning-package tests and focused race tests for these lifecycle transitions.
-Compare warm-hit allocations and latency before/after; performance measurements
-are benchmarks, not wall-clock assertions in unit tests. Run the snapshot and
-variable BVT cases in normal comparison mode, and state CPU versus real-GPU
-evidence explicitly. Do not infer GPU execution from ordinary CPU CI.
+**The rule is an overloaded HTTP server.** When a server is at capacity it
+returns an error to the *new* request; it does not kill the requests already in
+flight to make room. The cache behaves the same way:
 
-Validation of this revision:
+1. Reclaim every **idle** entry the budget requires. That is the cache doing its
+   job — an idle entry is holding bytes nobody is using.
+2. If the arrival still does not fit, **refuse it**. `makeRoom` returns an error,
+   the entry is torn down before `Load` allocates anything, and the caller gets
+   `index cache is full: …` naming the budget, what is held, what was needed, and
+   that nothing idle was left to reclaim.
+3. **Never evict a busy entry for an arrival.** A search in flight is a live
+   request and it wins.
 
-- Full cache, HNSW, FULLTEXT2, sqlexec and CPU plugin-schema package tests passed.
-- Full cache race run and ten repetitions of the new deterministic cache
-  lifecycle/configuration counterexamples passed. Spill ownership tests also
-  passed ten repetitions under race.
-- Native HNSW tests verify post-load MemoryUsage and file/handle cleanup.
-  Planner/TVF snapshot, compile snapshot transport, IVF-FLAT account/snapshot
-  and ISCP spill-routing tests passed.
-- Public CPU BVT covers classic fulltext, FULLTEXT2 and HNSW historical/current
-  answers, global-variable scope and a one-byte tenant cache target. The
-  low-budget control is an exact scan, so it cannot warm the index and bypass
-  the next-miss policy under test.
-- Warm SearchInto microbenchmark: zero bytes/allocations per hit, versus
-  352 bytes/four allocations with the previous speculative-wrapper pattern.
-  This isolates cache wrapper allocation; it is not a SQL throughput claim.
-- The real CAGRA/IVF-PQ snapshot and admission-order GPU suites remain a
-  pre-merge requirement; a macOS CPU run does not satisfy that gate.
+The check runs *after* the reclaim, so a cache merely full of cold entries admits
+the newcomer normally. Only genuine overload — nothing idle left to give —
+refuses.
+
+Rule (3) is not only fairness. `evictEntry` destroys synchronously and `Destroy`
+takes the victim's write lock, so taking a busy victim parks the cache **miss**
+that triggered the eviction behind the very search it interrupted. Preempting a
+live query does not even buy the newcomer its memory promptly.
+
+An earlier revision did the opposite on both counts: reclaim fell back to busy
+victims once idle ones ran out, and an oversized index was admitted regardless on
+the grounds that "refusing would fail ordinary SQL on a cache accounting rule".
+The combination is the worst of both — the arrival evicts the warm working set,
+then cannot be retained itself, so the warm set is destroyed for an entry that is
+discarded. Nobody wins. An error is honest; silent thrashing is not.
+
+The cost of this choice, stated plainly: **a query that used to succeed can now
+return an error.** An index larger than the budget is refused rather than served
+slowly, which also means the "map a file larger than RAM" capability (§6.1) is
+not available to the *cache* — mapping still works, but retaining such an index
+does not. That is deliberate. The budget's job is to bound how many indexes stay
+hot, and an operator who wants a bigger one raises
+`max_index_cache_size` / `max_gpu_index_cache_size`, which the error names.
+
+Victims are coldest-first (`ExpireAt` slides on every search, so it is already an
+LRU ordering), with two refinements:
+
+- The entry just loaded is never the victim; its caller is about to use it.
+- When the **CN-wide** cap binds, the loading account gives up its own entries
+  first and the pass widens only when it has nothing left. Coldest-first alone
+  lets a tenant that floods the CN evict a quiet neighbour's older entry before
+  its own — the cap held, but the cost of holding it landed on the wrong tenant.
+
+Usage is recomputed from the cache on each pass rather than tracked in a counter,
+which removes a whole class of leak bugs, and is re-snapshotted per arena so one
+arena's evictions are not double-counted by the next.
+
+### 5.4 When a cap takes effect, and what it logs
+
+Caps are consulted on a miss, and also from the housekeeping ticker. Miss-only
+enforcement is not enough on its own: a hot working set renews its TTL
+indefinitely, so an operator lowering `max_index_cache_size` on a busy CN would
+see nothing shrink until traffic happened to miss. The 15s memo bounds how stale
+the *value* is, not when it is next *applied*.
+
+Housekeeping applies the memoized **CN-wide** value only — it has no session, so
+it can neither read the catalog nor resolve a tenant's variables, and it does
+nothing until a first miss has populated the memo. Per-tenant caps still take
+effect at that tenant's next miss.
+
+Per-victim eviction detail is logged at DEBUG, not INFO. Two indexes alternating
+under a tight cap evict on every miss, and one INFO line per victim turns a
+steady state into a log storm. Each reclaim pass logs one aggregated line
+instead, and `EvictionStats()` exposes cumulative entries and bytes — the
+counters are the thing to alert on.
+
+## 6. Sizing
+
+### 6.1 `GetIndexSize() (host, device)`
+
+`VectorIndexSearchIf` reports its resident cost split by arena. Per algorithm:
+
+| algorithm | host | device |
+|---|---|---|
+| hnsw | `nrow × 8 + FileSize` (same before and after load) | 0 |
+| fulltext2 | `ndoc × estBytesPerDocHeap` | 0 |
+| ivfflat | delegates to its centroid index | delegates |
+| cagra / ivfpq | `HostComponentBytes` | `Σ DeviceComponentBytes` |
+| brute force | dataset bytes | GPU variant only |
+
+Two figures are measured rather than assumed:
+
+**hnsw costs its allocation PLUS its mapping.** The search path loads with
+`View()`, which mmaps the model, and usearch's `memory_usage()` skips the node
+and vector bytes for a viewed index. Against usearch's own accounting the cost is
+exactly linear in rows and independent of dimension:
+
+| rows | dim | file | `MemoryUsage()` |
+|---|---|---|---|
+| 5 000 | 32 | 1.4 MB | 41,536 |
+| 5 000 | 512 | 11.0 MB | 41,536 |
+| 20 000 | 32 | 5.5 MB | 161,536 |
+| 20 000 | 512 | 43.9 MB | 161,536 |
+| 50 000 | 128 | 33.0 MB | 401,536 |
+
+The deltas are exactly 8.000 bytes per row over a fixed ~1536-byte per-thread
+term, so `nrow × 8` predicts `MemoryUsage()` closely — within 0.4% at 100k and
+200k rows.
+
+**But that is the allocator, not the cost.** `memory_usage()` counts only what
+usearch allocates; the mapping never appears in it. Measured on a viewed index
+(100k rows, dim 128, 63 MB file):
+
+| quantity | measured | share of file |
+|---|---|---|
+| usearch `MemoryUsage()` | 0.76 MB | 1.2% |
+| page tables (`VmPTE` growth) | 0.14 MB | 0.22% |
+| **resident pages (`VmRSS` growth)** | **67.25 MB** | **107%** |
+
+Charging the allocation alone under-states the entry by ~88×. The mapping is
+nominally reclaimable page cache, but reclaiming it makes the next search fault
+the graph back off disk — "reclaimable" in the sense a buffer pool is, which is
+not a reason to leave it out of a memory budget.
+
+So the charge is **`nrow × 8 + FileSize`**, the same before and after load. Page
+tables are a third, far smaller cost — and per *address space*, not per thread,
+so concurrency does not multiply them — which `FileSize` covers by a wide margin.
+Using one formula on both paths makes the pre-load reservation equal the
+post-load charge; a reservation that under-states the charge lets a load blow a
+budget the reclaim pass just declared satisfied, and that equality is exactly
+what the §5.3 admission decision rests on.
+
+`FileSize` slightly *under*-charges (107% measured against 100% charged; the
+remainder is search scratch). Left as is: `FileSize` is exactly known from the
+metadata row, and the gap is far smaller than the headroom any budget leaves.
+
+What this gives up: `mmap` decouples file size from memory requirement — a 42 GiB
+file maps fine on a 21 GB host, and pages arrive only as touched, which is why
+loading is lazy and a lightly-searched index really is cheaper than its file.
+Charging `FileSize` forfeits that for *cached* indexes, since the budget assumes
+the whole mapping. Charging measured residency instead (`mincore`/`smaps`) would
+keep it, at the cost of per-mapping RSS accounting; not attempted here.
+
+**cagra/ivfpq use the load gate's own measurement.** `cuvs.MeasureTar` already
+splits a packed artifact into device- and host-resident components; the tar's
+total is the wrong number for either budget.
+
+### 6.2 Provenance: `nrow` and `build_ts`
+
+The metadata tables gained two columns, appended last so `SELECT *` keeps
+existing positions and readers guard on `len(bat.Vecs)`.
+
+`build_ts` is the transaction `SnapshotTS` the content was built from. It is
+deliberately distinct from the existing `timestamp` column, which is
+`time.Now()` on the CN: a skewable wall clock that only orders generations and
+cannot be compared with a snapshot's timestamp.
+
+It is recorded **wherever the covered version is known**, which is both halves:
+
+- A **build** reads the source table inside its own transaction, so that
+  transaction's `SnapshotTS` is exactly the version captured.
+- A **CDC sync** applies a change range and rewrites the generation, so the
+  version it now covers is that range's upper bound — `DataRetriever.GetToTS()`,
+  the same `status.To` that `UpdateWatermark` persists. hnsw's consumer supplies
+  it through `HnswSync.SetBuildTS`.
+
+Neither records the writing transaction's own `SnapshotTS`, and for CDC that is a
+soundness point rather than a stylistic one: the sync transaction reads at some
+`S >= To`, and `(To, S]` can hold changes committed after the range was collected
+but never applied. Recording `S` would claim coverage the generation does not
+have — worse than recording nothing, because `build_ts` exists precisely to be
+trusted by a coverage check. `To` claims exactly what was applied.
+
+`0` remains the unknown sentinel: a generation written before the column existed,
+or by a direct non-ISCP caller with no iteration to name.
+
+**Physical only, matching how MatrixOne stores a snapshot.** The column is
+`bigint` holding `TS.Physical()`. `LogicalTime` is not stored and cannot be
+recovered from it — the HLC increments logical only while the physical clock has
+not advanced and resets it to 0 when it does (`HLCClock.now`), so the mapping is
+not injective.
+
+Nothing is lost for the comparison this column exists for. `mo_snapshots.ts` is
+itself a `bigint`, and every reconstruction of a named snapshot's timestamp is
+`timestamp.Timestamp{PhysicalTime: record.ts}` with logical left at 0. A named
+snapshot is therefore physical-only by construction, so `build_ts` carries exactly
+the fidelity MatrixOne stores a snapshot at, and the two are directly comparable.
+
+The equal-physical case resolves favourably rather than ambiguously: with a
+snapshot at `(P, 0)` and a generation at `(P, L>=0)`, `(P, 0) <= (P, L)` always
+holds, so an ordinary `snapshot_ts <= build_ts` is exact for named snapshots.
+
+Only a comparison against some OTHER timestamp — one carrying a non-zero logical,
+which a named snapshot never does — would need to be strict to stay sound. That
+case does not arise on this path.
+
+fulltext2, cagra and ivfpq write no metadata row for a CDC tail at all — tails are
+storage chunks — so for them CDC leaves the base generation's `build_ts` as it
+was, and the tail itself is unversioned. Giving those tails a version would mean
+writing metadata rows for them, which is a larger change than this design makes.
+
+`nrow` gives hnsw a pre-load estimate (§6.1) that no other source provides at the
+right granularity.
+
+**What build_ts buys.** A base generation is built by reading the source table
+inside a transaction at `SnapshotTS = X`, so its content is exactly the base data
+as of X. A snapshot taken **at X** therefore yields a base table and an index that
+provably agree — the index is covered by that snapshot in the strong sense, and
+`build_ts` is what makes X recoverable after the fact.
+
+For any later timestamp Y the agreement depends on what CDC appended in `(X, Y]`,
+and a CDC-appended generation records no coverage, so it is not checkable. In
+other words `build_ts` makes the BASE half of an index verifiable against a
+snapshot; the CDC half is not, and closing that gap means plumbing the ISCP
+iteration's upper bound through `DataRetriever` so a tail can record what it
+covers.
+
+This is the mechanism a future read-path check would rest on: given a request at
+Y, compare Y against the generations resident at Y and report — or refuse — when
+the index demonstrably predates the data the snapshot exposes.
+
+**Upgrade.** Readers tolerating the old four-column shape is not sufficient:
+a CN running this code *writes* six-value rows, so the first CDC sync or rebuild
+against an index created earlier fails on a column-count mismatch. Because each
+metadata table is created per index at `CREATE INDEX`, and `REINDEX` rewrites its
+rows rather than the table, such an index would stay broken for writes forever.
+The v4_0_6 tenant upgrade therefore alters every metadata table an account owns.
+No fixed `UpgSql` can express DDL over a runtime-determined set of tables, so it
+uses the existing escape hatch — a plain function called from
+`HandleTenantUpgrade`, as `upgradeLegacyForeignKeyMetadata` does — leaving the
+shared `UpgradeEntry` framework untouched.
+
+## 7. Reclaiming before the load, not after
+
+Charging only after `Load` means peak residency exceeds the budget by one whole
+index — gigabytes for a cuVS artifact. It also runs *after* each algorithm's own
+memory gate, and those gates sample **free** memory, so entries the governor is
+about to reclaim read as memory that is gone and can veto a load that fits.
+
+`VectorIndexSearchIf` therefore splits into `Preload` and `Load`:
+
+```
+Preload   measure: metadata, artifacts, cost      (entry lock held)
+makeRoom  reclaim for what is about to arrive     (NO lock held)
+Load      materialize                             (entry lock held)
+```
+
+The reclaim happening between two separate locked sections is the reason for
+splitting the interface rather than exposing a `MakeRoom` the algorithms call
+from inside `Load`: `Algo.Load` runs under the entry's write lock, so reclaiming
+there would run the governor's catalog read under a lock held across an entire
+index load, and would block on a victim's lock while holding the loader's.
+
+cagra/ivfpq do the real split — fetch, `MeasureTar`, and the device gate all move
+to `Preload`. The gate stays interleaved with the fetch loop so a doomed index is
+still refused as soon as the running total says so, rather than after downloading
+the remaining gigabytes. hnsw moves its metadata read; fulltext2 moves its doc
+count. ivfflat is a no-op: its centroid size is not knowable before loading them.
+
+## 8. Concurrency
+
+`Search`/`SearchInto` re-wrap the **same caller-supplied algorithm** on every
+retry attempt. A retry could therefore call into an algorithm that an evicting
+goroutine was still inside `Destroy` on — two wrappers, two mutexes, one object.
+Each wrapper now carries a `destroyed` channel closed when its teardown finishes,
+and a retry that reuses the algorithm waits on it first.
+
+That wait cannot hang: an entry becomes unreachable only through a
+`CompareAndDelete` immediately followed by a destroy, at every removal site. It
+is taken **only when a teardown was actually claimed** — `ErrInvalidState` is not
+exclusive to eviction, and an internal SQL raising its own would otherwise leave
+nobody to close the channel.
+
+Relatedly, the governor reads sizes from atomics published under the entry lock,
+never by calling into the algorithm, which a concurrent eviction may be tearing
+down.
+
+## 9. Change inventory
+
+The branch carries two features that share a cause: historical reads created the
+residency class that the governor bounds.
+
+| theme | commits |
+|---|---|
+| Named-snapshot reads (§3) | fulltext, fulltext2, hnsw, cagra, ivfpq + tests |
+| Snapshot tenant binding (§3) | `fix(snapshot)` |
+| Byte governor (§4–5) | `feat(veccache)` ×4, SYS-read fixes |
+| Sizing (§6.1) | `GetIndexSize`, hnsw `MemoryUsage`, cagra/ivfpq arenas |
+| Provenance + upgrade (§6.2) | `feat(index)` |
+| Preload/Load (§7) | `feat(veccache)`, `feat(cagra,ivfpq)` |
+| Concurrency (§8) | `fix(veccache)` ×2 |
+| Spill location | hnsw/ISCP LOCAL fileservice |
+
+If the review prefers smaller units, the natural cut is **§3 (historical reads)**
+as one PR and **§4–8 (residency)** as a second: the former is the bug fix, the
+latter is what makes it safe to run. They are presented together because merging
+§3 alone ships the unbounded-residency problem it creates.
+
+## 10. Validation
+
+- Unit and race: focused adaptive `-race -count=N` on the concurrency paths plus
+  a full owning-package race run; a stress test interleaves loads with eviction.
+- GPU: cagra, ivfpq, brute force and cache suites on real hardware, including the
+  tar-ownership and early-abort tests that cover the `Preload` restructure.
+- Upgrade: a real embedded-cluster test drives the public
+  `HandleTenantUpgrade` — it builds a legacy-shaped metadata table, asserts the
+  current-shape write **fails**, runs the upgrade, and requires the write to
+  succeed and a second run to be a no-op.
+- BVT: named-snapshot cases for fulltext, fulltext2, hnsw, cagra, ivfpq; a case
+  for the two variables; `cases/vector` (2034) and `cases/fulltext2` (701) green.
+
+### 10.1 Both build flavours
+
+The device arena only exists under `//go:build gpu`, so a green run of one
+flavour says nothing about the other. Both are required:
+
+| flavour | result |
+|---|---|
+| `MO_CL_CUDA=1` | 71 packages, `-race` clean on `cache` and `hnsw` |
+| `MO_CL_CUDA=0` | 68 packages |
+
+The CPU run is not ceremonial — it caught a real defect: a test asserting a
+positive device budget, where a CPU build correctly budgets **0** because there
+is no device arena to bound. Switching flavours also requires clearing
+`thirdparties/_jemalloc_build` and running `make clean` in `cgo/`, or the stale
+objects from the other flavour fail the link.
+
+### 10.2 Real-GPU run
+
+Recorded here because these branches are GPU-only: green CPU CI never executes
+them, and the design names CAGRA/IVF-PQ snapshot, admission order and allocation
+refusal as pre-merge requirements. Hardware: **NVIDIA RTX 5070 Laptop, 8151 MiB**,
+single device, `MO_CL_CUDA=1`. Run with `-g -n`.
+
+| case | total | passed |
+|---|---|---|
+| `vector_gpu_index_cache_size` (device arena; 1 MiB cap, three CAGRA indexes) | 36 | 36 |
+| `vector_cagra_snapshot` | 21 | 21 |
+| `vector_ivfpq_snapshot` | 25 | 25 |
+| `vector_gpu_negative` (allocation refusal) | 42 | 42 |
+| `vector_gpu_edge` | 15 | 15 |
+| `vector_cagra_replicated` (simulated placement) | 18 | 18 |
+| `vector_cagra_sharded` (simulated placement) | 30 | 30 |
+
+VRAM sampled across the run. This is the part that distinguishes a real device
+path from a CPU fallback — a fallback is a flat line:
+
+```
+1051 MiB  baseline
+1180 MiB  three CAGRA indexes under the 1 MiB device cap
+1324 MiB  peak
+```
+
+**Why `-n`.** mo-tester compares result-set *metadata* as well as values unless
+`-n` is given. Without it, `vector_cagra_replicated` and `vector_cagra_sharded`
+report 16/18 and 28/30 — and every one of those failures is a column-**length**
+mismatch on `show create table` / `mo_catalog.mo_indexes`, never a value:
+`RSRow` mismatches are zero in both, and the committed `.result` files carry
+`[12,-1,0]` "unknown length" entries where this tester reports real lengths. It
+is a `.result`-generation environment difference, so `-n` is the correct
+comparison here, and the values agreeing at 18/18 and 30/30 is the proof.
+
+**Not covered by this hardware**, and not claimed: multi-device placement is
+exercised in *simulated* placement only, since this box has one GPU, and an 8 GB
+card cannot drive the multi-GiB evict-then-readmit sequence a datacentre card
+would. Raw tester logs are not committed — they are large and machine-specific.
