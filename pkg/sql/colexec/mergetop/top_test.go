@@ -148,6 +148,38 @@ func TestMergeTopMaxUint64LimitReturnsAllRows(t *testing.T) {
 	require.Equal(t, int64(0), tc.proc.Mp().CurrNB())
 }
 
+func TestMergeTopReevaluatesPreparedOrderExpressionForEachBatch(t *testing.T) {
+	paramExpr := &plan.Expr{
+		Typ:  plan.Type{Id: int32(types.T_varchar)},
+		Expr: &plan.Expr_P{P: &plan.ParamRef{Pos: 0}},
+	}
+	tc := newTestCase(t, []bool{false}, []types.Type{types.T_int64.ToType()}, 4,
+		[]*plan.OrderBySpec{{Expr: paramExpr}})
+
+	params := vector.NewVec(types.T_varchar.ToType())
+	require.NoError(t, vector.AppendBytes(params, []byte("same-key"), false, tc.proc.Mp()))
+	tc.proc.SetPrepareParams(params)
+	defer func() {
+		tc.proc.SetPrepareParams(nil)
+		params.Free(tc.proc.Mp())
+		tc.proc.Free()
+		require.Equal(t, int64(0), tc.proc.Mp().CurrNB())
+	}()
+
+	require.NoError(t, tc.arg.Prepare(tc.proc))
+	resetChildren(tc.arg, []*batch.Batch{
+		newBatch(tc.types, tc.proc, 2),
+		newBatch(tc.types, tc.proc, 2),
+	})
+	defer tc.arg.GetChildren(0).Free(tc.proc, false, nil)
+	defer tc.arg.Free(tc.proc, false, nil)
+
+	result, err := vm.Exec(tc.arg, tc.proc)
+	require.NoError(t, err)
+	require.NotNil(t, result.Batch)
+	require.Equal(t, 4, result.Batch.RowCount())
+}
+
 func TestMergeTopFloatNaNLastAndPeerTieBreak(t *testing.T) {
 	tc := newTestCase(t, []bool{false, false}, []types.Type{types.T_float64.ToType(), types.T_int64.ToType()}, 5,
 		[]*plan.OrderBySpec{{Expr: newExpression(0)}, {Expr: newExpression(1)}})

@@ -386,7 +386,8 @@ type ParamExpressionExecutor struct {
 	pos        int
 	typ        types.Type
 
-	folded bool
+	folded     bool
+	foldedNull bool
 }
 
 func (expr *ParamExpressionExecutor) Eval(proc *process.Process, batches []*batch.Batch, selectList []bool) (*vector.Vector, error) {
@@ -401,15 +402,12 @@ func (expr *ParamExpressionExecutor) Eval(proc *process.Process, batches []*batc
 		return expr.maskedNull, nil
 	}
 	if expr.folded {
-		if expr.null != nil {
+		if expr.foldedNull {
 			return expr.null, nil
 		}
-		if expr.vec != nil {
-			return expr.vec, nil
-		}
+		return expr.vec, nil
 	}
 
-	expr.folded = true
 	val, err := proc.GetPrepareParamsAt(expr.pos)
 	if err != nil {
 		return nil, err
@@ -422,6 +420,8 @@ func (expr *ParamExpressionExecutor) Eval(proc *process.Process, batches []*batc
 				return nil, err
 			}
 		}
+		expr.folded = true
+		expr.foldedNull = true
 		return expr.null, nil
 	}
 
@@ -435,6 +435,8 @@ func (expr *ParamExpressionExecutor) Eval(proc *process.Process, batches []*batc
 	if err == nil {
 		expr.vec.SetIsBin(proc.GetPrepareParamIsBin(expr.pos))
 		expr.vec.SetPrepareParamKind(proc.GetPrepareParamKind(expr.pos))
+		expr.folded = true
+		expr.foldedNull = false
 	}
 	return expr.vec, err
 }
@@ -446,9 +448,11 @@ func (expr *ParamExpressionExecutor) EvalWithoutResultReusing(proc *process.Proc
 	}
 	if vec == expr.null {
 		expr.null = nil
-		return vec, nil
+	} else {
+		expr.vec = nil
 	}
-	expr.vec = nil
+	expr.folded = false
+	expr.foldedNull = false
 	return vec, nil
 }
 
