@@ -354,15 +354,6 @@ func compareByteJsonFallback(left, right ByteJson) int {
 	return bytes.Compare(left.Data, right.Data)
 }
 
-func isByteJsonNumeric(tp TpCode) bool {
-	switch tp {
-	case TpCodeInt64, TpCodeUint64, TpCodeFloat64, TpCodeDecimal:
-		return true
-	default:
-		return false
-	}
-}
-
 // ParsedNumeric is an immutable, validated ByteJSON numeric scalar. Its fields
 // are deliberately private so callers can only obtain a usable value through
 // ParseNumeric. It lets a constant operand pay exact normalization once per
