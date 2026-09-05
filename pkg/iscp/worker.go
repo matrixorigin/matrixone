@@ -183,6 +183,11 @@ func (w *worker) onItem(iterCtx *IterationContext) {
 			return err
 		},
 	)
+	// A superseded owner must not write an error over the winner. Composite
+	// failures have already been logged above and must retain their cleanup cause.
+	if errors.Is(err, errISCPStatusCASLost) {
+		return
+	}
 	if err != nil {
 		statuses := jobStatusesForIterationError(iterCtx, err)
 		preLSN := make([]uint64, len(iterCtx.lsn))
@@ -212,7 +217,7 @@ func (w *worker) onItem(iterCtx *IterationContext) {
 			DefaultRetryInterval,
 			SubmitRetryDuration,
 		)
-		if err != nil {
+		if err != nil && !isSupersededIteration(err) {
 			logutil.Error(
 				"ISCP-Task workerflush job status failed",
 				zap.Error(err),
@@ -222,23 +227,41 @@ func (w *worker) onItem(iterCtx *IterationContext) {
 }
 
 func isSupersededIteration(err error) bool {
-	return errors.Is(err, errISCPStatusCASLost)
+	// errors.Is alone also matches Join(CAS, cleanup failure). Only a tree
+	// consisting entirely of CAS losses is a successful superseded outcome.
+	switch e := err.(type) {
+	case *iscpStatusCASLostError:
+		return true
+	case interface{ Unwrap() []error }:
+		causes := e.Unwrap()
+		if len(causes) == 0 {
+			return false
+		}
+		for _, cause := range causes {
+			if !isSupersededIteration(cause) {
+				return false
+			}
+		}
+		return true
+	case interface{ Unwrap() error }:
+		return isSupersededIteration(e.Unwrap())
+	default:
+		return false
+	}
 }
 
 func retryISCPTaskIteration(ctx context.Context, execute func() error) error {
-	return retry(
+	err := retry(
 		ctx,
-		func() error {
-			err := execute()
-			if isSupersededIteration(err) {
-				return nil
-			}
-			return err
-		},
+		execute,
 		SubmitRetryTimes,
 		DefaultRetryInterval,
 		SubmitRetryDuration,
 	)
+	if isSupersededIteration(err) {
+		return nil
+	}
+	return err
 }
 
 func jobStatusesForIterationError(iterCtx *IterationContext, err error) []*JobStatus {

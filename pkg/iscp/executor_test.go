@@ -44,6 +44,36 @@ func TestRetryReturnsCanceledContextBeforeFirstAttempt(t *testing.T) {
 	require.ErrorIs(t, err, context.Canceled)
 }
 
+func TestRetryBackoffHonorsRemainingBudget(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		interval time.Duration
+		work     time.Duration
+		calls    int
+	}{
+		{"exponential backoff", time.Second, 0, 12},
+		{"initial delay exceeds budget", 2 * time.Hour, 0, 1},
+		{"attempt exhausts budget", time.Second, time.Hour, 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				wantErr := errors.New("transient failure")
+				calls := 0
+				start := time.Now()
+				err := retry(context.Background(), func() error {
+					calls++
+					// Virtual work duration, not scheduler synchronization.
+					time.Sleep(tc.work)
+					return wantErr
+				}, SubmitRetryTimes, tc.interval, time.Hour)
+				require.ErrorIs(t, err, wantErr)
+				require.Equal(t, tc.calls, calls)
+				require.Equal(t, time.Hour, time.Since(start))
+			})
+		})
+	}
+}
+
 func TestRetryReturnsCanceledContextWhenRetryTimesZero(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
@@ -635,6 +665,47 @@ func TestShouldReplayISCPLogOnStatusCASLoss(t *testing.T) {
 	require.False(t, shouldReplayISCPLog(errors.New("temporary SQL failure")))
 	require.True(t, shouldReplayISCPLog(
 		newISCPStatusCASLostError("test", "job", 1, 0)))
+}
+
+func TestNestedStatusRetriesStopOnCASLoss(t *testing.T) {
+	cas := newISCPStatusCASLostError("status", "job", 1, 0)
+	cleanup := errors.New("status rollback failed")
+	for _, state := range []int8{ISCPJobState_Completed, ISCPJobState_Error} {
+		for _, failure := range []error{cas, errors.Join(cas, cleanup)} {
+			t.Run(fmt.Sprintf("state=%d/%s", state, failure), func(t *testing.T) {
+				synctest.Test(t, func(t *testing.T) {
+					oldFlush := FlushJobStatusOnIterationState
+					t.Cleanup(func() { FlushJobStatusOnIterationState = oldFlush })
+					writes := 0
+					FlushJobStatusOnIterationState = func(
+						_ context.Context, _ string, _ engine.Engine, _ client.TxnClient,
+						_ uint32, _ uint64, _ []string, _ []uint64, _ []uint64,
+						_ []*JobStatus, _ types.TS, gotState int8, _ []uint64,
+					) error {
+						writes++
+						require.Equal(t, state, gotState)
+						return failure
+					}
+					iter := &IterationContext{jobNames: []string{"job"}, jobIDs: []uint64{1}, lsn: []uint64{2}}
+					start := time.Now()
+					attempts := 0
+					err := retryISCPTaskIteration(context.Background(), func() error {
+						attempts++
+						return flushFinalJobStatusOnIterationState(context.Background(), "", nil, nil,
+							iter, 0, &JobStatus{Stage: JobStage_Running}, types.TS{}, state)
+					})
+					require.Equal(t, 1, writes)
+					require.Equal(t, 1, attempts)
+					require.Zero(t, time.Since(start))
+					if errors.Is(failure, cleanup) {
+						require.ErrorIs(t, err, cleanup)
+					} else {
+						require.NoError(t, err)
+					}
+				})
+			})
+		}
+	}
 }
 
 func TestFlushPermanentErrorMessagePopulatesDefaultStatus(t *testing.T) {

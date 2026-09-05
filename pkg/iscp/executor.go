@@ -645,7 +645,7 @@ func (exec *ISCPTaskExecutor) run(ctx context.Context, worker Worker) {
 
 func shouldReplayISCPLog(err error) bool {
 	return err != nil &&
-		(moerr.IsMoErrCode(err, moerr.ErrStaleRead) || errors.Is(err, errISCPStatusCASLost))
+		(moerr.IsMoErrCode(err, moerr.ErrStaleRead) || isSupersededIteration(err))
 }
 
 // An Init iteration owns a lifecycle transition, not only a source-table
@@ -1376,24 +1376,39 @@ func retry(
 			return ctx.Err()
 		default:
 		}
-		if time.Since(startTime) > totalDuration {
+		if time.Since(startTime) >= totalDuration {
 			break
 		}
 		err = fn()
 		if err == nil {
 			return
 		}
+		// Every status writer shares this boundary, including nested final/error
+		// status retries. No retry can repair an immutable expected LSN. Preserve
+		// the entire error tree so callers cannot lose a rollback failure.
+		if errors.Is(err, errISCPStatusCASLost) {
+			return err
+		}
 		if i == retryTimes-1 {
 			break
 		}
-		timer := time.NewTimer(interval)
+		remaining := totalDuration - time.Since(startTime)
+		if remaining <= 0 {
+			break
+		}
+		timer := time.NewTimer(min(interval, remaining))
 		select {
 		case <-ctx.Done():
 			timer.Stop()
 			return ctx.Err()
 		case <-timer.C:
 		}
-		interval *= 2
+		// Saturate before doubling to avoid overflow and budget overshoot.
+		if interval >= remaining/2 {
+			interval = remaining
+		} else {
+			interval *= 2
+		}
 	}
 	logutil.Errorf("ISCP-Task retry failed, err: %v", err)
 	return

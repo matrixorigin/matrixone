@@ -323,6 +323,7 @@ func ExecuteIterationWithRuntime(
 		delTSColIdx,
 		delCompositedPkColIdx,
 	)
+	var finalErr error
 	for i, status := range statuses {
 		if runtime != nil && runtime.IsJobFenced(NewJobRuntimeKey(iterCtx.accountID, iterCtx.tableID, iterCtx.jobNames[i], iterCtx.jobIDs[i])) {
 			continue
@@ -348,6 +349,7 @@ func ExecuteIterationWithRuntime(
 				state,
 			)
 			if err != nil {
+				finalErr = errors.Join(finalErr, err)
 				logutil.Error(
 					"ISCP-Task iteration flush job status failed",
 					zap.Error(err),
@@ -356,7 +358,7 @@ func ExecuteIterationWithRuntime(
 		}
 	}
 
-	return nil
+	return finalErr
 }
 
 func reconcileIterationStages(iterCtx *IterationContext, statuses []*JobStatus) {
