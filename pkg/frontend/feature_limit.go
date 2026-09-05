@@ -228,11 +228,7 @@ func checkBranchQuotaTxn(bh BackgroundExec) error {
 }
 
 func featureLimitTxnUsesFixedSnapshot(bh BackgroundExec) bool {
-	backExec, ok := bh.(*backExec)
-	if !ok || backExec == nil || backExec.backSes == nil || backExec.backSes.GetTxnHandler() == nil {
-		return false
-	}
-	txnOp := backExec.backSes.GetTxnHandler().GetTxn()
+	txnOp := backgroundExecTxnOperator(bh)
 	return txnOp != nil && !txnOp.Txn().IsRCIsolation()
 }
 

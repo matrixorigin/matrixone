@@ -275,7 +275,7 @@ func (c *Compile) alterTableHasLatestHistoricalBranchSource(
 }
 
 func (c *Compile) lockDataBranchLineageOwnerLifecycle() error {
-	return databranchutils.LockLineageOwnerLifecycle(func(sql string) error {
+	return databranchutils.LockLineageOwnerLifecycle(c.proc.GetTxnOperator(), func(sql string) error {
 		return c.runSqlWithAccountId(sql, int32(catalog.System_Account))
 	})
 }

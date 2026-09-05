@@ -30,12 +30,20 @@ import (
 
 func lockDataBranchLineageOwnerLifecycle(ctx context.Context, bh BackgroundExec) error {
 	lockCtx := defines.AttachAccountId(ctx, catalog.System_Account)
-	err := databranchutils.LockLineageOwnerLifecycle(func(sql string) error {
+	err := databranchutils.LockLineageOwnerLifecycle(backgroundExecTxnOperator(bh), func(sql string) error {
 		bh.ClearExecResultSet()
 		return bh.Exec(lockCtx, sql)
 	})
 	bh.ClearExecResultSet()
 	return err
+}
+
+func backgroundExecTxnOperator(bh BackgroundExec) client.TxnOperator {
+	backExec, ok := bh.(*backExec)
+	if !ok || backExec == nil || backExec.backSes == nil || backExec.backSes.GetTxnHandler() == nil {
+		return nil
+	}
+	return backExec.backSes.GetTxnHandler().GetTxn()
 }
 
 func validateDataBranchLineageOwnerLifecycleAtCommit(
@@ -77,7 +85,7 @@ func validateDataBranchLineageOwnerLifecycleWithExecutor(
 			WithAccountID(catalog.System_Account))
 	result, err := sqlExecutor.Exec(
 		ctx,
-		databranchutils.LineageOwnerLifecycleLockSQL(),
+		databranchutils.LineageOwnerLifecycleLockSQLForTxn(txnOp),
 		opts,
 	)
 	if err != nil {

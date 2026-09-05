@@ -24,6 +24,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/frontend/databranchutils"
 	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
+	pbtxn "github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 )
@@ -36,8 +37,10 @@ func TestDeleteSnapshotWithLifecycleGateIsAtomicAndOrdered(t *testing.T) {
 		commitErr    error
 		wantSQLs     int
 		wantRollback bool
+		txnMode      pbtxn.TxnMode
 	}{
 		{name: "success", wantSQLs: 2},
+		{name: "pessimistic success", wantSQLs: 2, txnMode: pbtxn.TxnMode_Pessimistic},
 		{name: "gate failure", gateErr: errors.New("gate failed"), wantSQLs: 1, wantRollback: true},
 		{name: "delete failure", deleteErr: errors.New("delete failed"), wantSQLs: 2, wantRollback: true},
 		{name: "commit failure", commitErr: errors.New("commit failed"), wantSQLs: 2},
@@ -45,6 +48,7 @@ func TestDeleteSnapshotWithLifecycleGateIsAtomicAndOrdered(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			ctrl := gomock.NewController(t)
 			txn := mock_frontend.NewMockTxnOperator(ctrl)
+			txn.EXPECT().Txn().Return(pbtxn.TxnMeta{Mode: tc.txnMode}).Times(1)
 			var events []string
 			if tc.wantRollback {
 				txn.EXPECT().Rollback(gomock.Any()).DoAndReturn(func(context.Context) error {
@@ -80,7 +84,11 @@ func TestDeleteSnapshotWithLifecycleGateIsAtomicAndOrdered(t *testing.T) {
 				require.Error(t, err)
 			}
 			require.Len(t, sqls, tc.wantSQLs)
-			require.Equal(t, databranchutils.LineageOwnerLifecycleLockSQL(), sqls[0])
+			wantGateSQL := databranchutils.LineageOwnerLifecycleLockSQL()
+			if tc.txnMode == pbtxn.TxnMode_Pessimistic {
+				wantGateSQL = databranchutils.LineageOwnerLifecyclePessimisticLockSQL()
+			}
+			require.Equal(t, wantGateSQL, sqls[0])
 			if tc.wantSQLs == 2 {
 				require.Equal(t,
 					"delete from mo_catalog.mo_snapshots where sname = 'ccpr_''quoted'",

@@ -128,6 +128,17 @@ func TestLockDataBranchLineageOwnerLifecycleUsesSystemAccount(t *testing.T) {
 	)
 }
 
+func TestLineageOwnerLifecycleLockSQLForTxnUsesPessimisticRowLock(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	txnOp := mock_frontend.NewMockTxnOperator(ctrl)
+	txnOp.EXPECT().Txn().Return(txn.TxnMeta{Mode: txn.TxnMode_Pessimistic})
+
+	require.Equal(t,
+		databranchutils.LineageOwnerLifecyclePessimisticLockSQL(),
+		databranchutils.LineageOwnerLifecycleLockSQLForTxn(txnOp),
+	)
+}
+
 func TestGetDataBranchMutationExecutorAdmitsBeforeMutation(t *testing.T) {
 	for _, featureLimited := range []bool{false, true} {
 		t.Run(fmt.Sprintf("feature-limited=%t", featureLimited), func(t *testing.T) {
@@ -184,6 +195,7 @@ func TestGetDataBranchMutationExecutorRollsBackOnAdmissionFailure(t *testing.T) 
 func TestValidateDataBranchLineageOwnerLifecycleAtCommitFastFailsStableWrite(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	txnOp := mock_frontend.NewMockTxnOperator(ctrl)
+	txnOp.EXPECT().Txn().Return(txn.TxnMeta{}).Times(2)
 	sqlExecutor := &lineageLifecycleCommitSQLExecutor{}
 	require.NoError(t, validateDataBranchLineageOwnerLifecycleWithExecutor(
 		context.Background(), sqlExecutor, txnOp, time.UTC,

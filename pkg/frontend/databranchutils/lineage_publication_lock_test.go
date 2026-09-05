@@ -29,6 +29,13 @@ func TestLineageOwnerLifecycleLockSQLUsesStableCatalogWrite(t *testing.T) {
 	)
 }
 
+func TestLineageOwnerLifecyclePessimisticLockSQLUsesRowLock(t *testing.T) {
+	require.Equal(t,
+		"select feature_code from mo_catalog.mo_feature_registry where feature_code = 'SNAPSHOT' for update",
+		LineageOwnerLifecyclePessimisticLockSQL(),
+	)
+}
+
 func TestLineageOwnerLifecycleLockSerializesEmptyProbe(t *testing.T) {
 	var (
 		stableRow sync.Mutex
@@ -45,7 +52,7 @@ func TestLineageOwnerLifecycleLockSerializesEmptyProbe(t *testing.T) {
 	ownerDone := make(chan error, 1)
 	go func() {
 		locked := false
-		err := LockLineageOwnerLifecycle(func(string) error {
+		err := LockLineageOwnerLifecycle(nil, func(string) error {
 			stableRow.Lock()
 			locked = true
 			close(ownerLocked)
@@ -78,7 +85,7 @@ func TestLineageOwnerLifecycleLockSerializesEmptyProbe(t *testing.T) {
 	}
 	alterDone := make(chan alterResult, 1)
 	go func() {
-		err := LockLineageOwnerLifecycle(func(string) error {
+		err := LockLineageOwnerLifecycle(nil, func(string) error {
 			stableRow.Lock()
 			return nil
 		})
