@@ -897,6 +897,39 @@ func binaryProtocolPrepareParamKind(
 	}
 }
 
+// binaryProtocolPrepareParamIsBinaryString identifies protocol domains whose
+// payload is an opaque byte string rather than a character string.  The
+// binary-string sidecar is intentionally independent from PrepareParamKind so
+// a BLOB value cannot be reparsed as a numeric or JSON text value.
+func binaryProtocolPrepareParamIsBinaryString(mysqlType defines.MysqlType) bool {
+	switch mysqlType {
+	case defines.MYSQL_TYPE_BLOB,
+		defines.MYSQL_TYPE_TINY_BLOB,
+		defines.MYSQL_TYPE_MEDIUM_BLOB,
+		defines.MYSQL_TYPE_LONG_BLOB:
+		return true
+	default:
+		return false
+	}
+}
+
+func binaryProtocolPrepareParamBinaryStringMetadata(paramTypes []byte, paramCount int) []bool {
+	if paramCount <= 0 {
+		return nil
+	}
+	metadata := make([]bool, paramCount)
+	hasBinaryString := false
+	for i := 0; i < paramCount && i*2 < len(paramTypes); i++ {
+		metadata[i] = binaryProtocolPrepareParamIsBinaryString(
+			defines.MysqlType(paramTypes[i*2]))
+		hasBinaryString = hasBinaryString || metadata[i]
+	}
+	if !hasBinaryString {
+		return nil
+	}
+	return metadata
+}
+
 func applyBinaryDirectResultDecimalTypes(
 	ctx context.Context,
 	paramVals []any,
@@ -1442,13 +1475,16 @@ func initExecuteStmtParamWithResolverInSession(
 			}
 			hasParamKind = hasParamKind || kind != vector.PrepareParamNone
 		}
+		binaryStringMetadata := binaryProtocolPrepareParamBinaryStringMetadata(
+			prepareStmt.ParamTypes, paramCount)
 		if hasConcreteType {
 			prepareStmt.paramMetadata = cwft.proc.SetPrepareParamsWithReusableTypedMeta(
 				prepareStmt.params, nil, prepareStmt.paramKinds,
-				prepareStmt.paramConcreteTypes, prepareStmt.paramMetadata)
-		} else if hasParamKind {
+				prepareStmt.paramConcreteTypes, prepareStmt.paramMetadata, binaryStringMetadata)
+		} else if hasParamKind || binaryStringMetadata != nil {
 			prepareStmt.paramMetadata = cwft.proc.SetPrepareParamsWithReusableMeta(
-				prepareStmt.params, nil, prepareStmt.paramKinds, prepareStmt.paramMetadata)
+				prepareStmt.params, nil, prepareStmt.paramKinds, prepareStmt.paramMetadata,
+				binaryStringMetadata)
 		} else {
 			cwft.proc.SetPrepareParams(prepareStmt.params)
 		}

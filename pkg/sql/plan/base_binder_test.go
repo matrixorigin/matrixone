@@ -1191,6 +1191,22 @@ func TestBindFuncExprImplByPlanExpr_JsonValid(t *testing.T) {
 	})
 }
 
+func TestBindMemberOfOperator(t *testing.T) {
+	stmt, err := parsers.ParseOne(
+		context.Background(), dialect.MYSQL, "select 1 member of ('[1]')", 1)
+	require.NoError(t, err)
+	defer stmt.Free()
+
+	selectStmt := stmt.(*tree.Select)
+	selectClause := selectStmt.Select.(*tree.SelectClause)
+	binder := NewDefaultBinder(context.Background(), nil, nil, plan.Type{}, nil)
+	bound, err := binder.BindExpr(selectClause.Exprs[0].Expr, 0, false)
+	require.NoError(t, err)
+	require.NotNil(t, bound.GetF())
+	require.Equal(t, "member of", bound.GetF().Func.GetObjName())
+	require.Equal(t, int32(types.T_int64), bound.Typ.Id)
+}
+
 func TestBindFuncExprImplByPlanExpr_DatetimeTimestampComparisonRemainsCrossTyped(t *testing.T) {
 	datetimeColumn := &plan.Expr{
 		Typ: plan.Type{Id: int32(types.T_datetime), Scale: 6},
@@ -1355,6 +1371,18 @@ func TestBindFuncExprImplByPlanExpr_JsonComparisonWithDynamicParam(t *testing.T)
 		err := adjustJsonDynamicParamType(ctx, "=", args)
 		require.NoError(t, err)
 		paramArg := requireExactJSONParam(t, args[1], function.JsonComparisonParamFunctionName)
+		require.Equal(t, int32(types.T_text), paramArg.Typ.Id)
+		require.NotNil(t, paramArg.GetP())
+	})
+
+	t.Run("member of preserves the direct prepared parameter type", func(t *testing.T) {
+		result, err := BindFuncExprImplByPlanExpr(ctx, "member of", []*plan.Expr{
+			makeParamExpr(0), makePlan2StringConstExprWithType("[1]"),
+		})
+		require.NoError(t, err)
+		require.Equal(t, int32(types.T_int64), result.Typ.Id)
+		require.Len(t, result.GetF().Args, 2)
+		paramArg := requireExactJSONParam(t, result.GetF().Args[0], function.JsonComparisonParamFunctionName)
 		require.Equal(t, int32(types.T_text), paramArg.Typ.Id)
 		require.NotNil(t, paramArg.GetP())
 	})

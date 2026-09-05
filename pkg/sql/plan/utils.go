@@ -4576,10 +4576,11 @@ func PreparedPaginationParamPositions(preparePlan *Plan) []int32 {
 	return result
 }
 
-// PreparedJSONComparisonParamPositions returns the direct parameter markers
-// whose runtime SQL type controls a JSON equality comparison. The hidden
-// adapter remains in a cacheable generic plan; execution metadata supplies the
-// concrete type for only these positions.
+// PreparedJSONComparisonParamPositions returns direct parameter markers whose
+// runtime SQL type controls a JSON comparison. The hidden adapter remains in a
+// cacheable generic plan; execution metadata supplies the concrete type for
+// only these positions. The MEMBER OF case is collected defensively for plans
+// assembled directly by callers that bypass the binder's adapter rewrite.
 func PreparedJSONComparisonParamPositions(preparePlan *Plan) []int32 {
 	if preparePlan == nil {
 		return nil
@@ -4617,8 +4618,13 @@ func collectPreparedJSONComparisonParamPositions(
 
 	switch impl := expr.Expr.(type) {
 	case *plan.Expr_F:
-		if impl.F.GetFunc().GetObjName() == function.JsonComparisonParamFunctionName &&
-			len(impl.F.Args) == 1 {
+		functionName := impl.F.GetFunc().GetObjName()
+		if functionName == function.JsonComparisonParamFunctionName && len(impl.F.Args) == 1 {
+			if param := impl.F.Args[0].GetP(); param != nil {
+				positions[param.Pos] = struct{}{}
+			}
+		}
+		if functionName == function.JsonMemberOfFunctionName && len(impl.F.Args) == 2 {
 			if param := impl.F.Args[0].GetP(); param != nil {
 				positions[param.Pos] = struct{}{}
 			}
