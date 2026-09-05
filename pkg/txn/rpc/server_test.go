@@ -340,6 +340,76 @@ func TestCloseConcurrentAndRepeatedReturnsSameError(t *testing.T) {
 	require.Equal(t, int32(1), rpc.closeCalls.Load())
 }
 
+func TestQuiesceAndDrainWaitForAcceptedHandler(t *testing.T) {
+	runTestTxnServer(t, testTN1Addr, func(s *server) {
+		started := make(chan struct{})
+		release := make(chan struct{})
+		s.RegisterMethodHandler(txn.TxnMethod_Read, func(context.Context, *txn.TxnRequest, *txn.TxnResponse) error {
+			close(started)
+			<-release
+			return nil
+		})
+
+		msg := newMessage(&txn.TxnRequest{Method: txn.TxnMethod_Read})
+		require.NoError(t, s.onMessage(context.Background(), msg, 0,
+			newTestClientSession(make(chan morpc.Message, 1))))
+		select {
+		case <-started:
+		case <-time.After(time.Second):
+			require.FailNow(t, "handler did not start")
+		}
+
+		require.NoError(t, s.Quiesce())
+		drainCtx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+		err := s.Drain(drainCtx)
+		require.ErrorIs(t, err, context.DeadlineExceeded)
+		require.ErrorIs(t, err, ErrTxnDrainTimeout)
+		cancel()
+
+		close(release)
+		require.Eventually(t, func() bool {
+			return s.Drain(context.Background()) == nil
+		}, time.Second, time.Millisecond)
+	})
+}
+
+func TestQuiesceCancelsForwardWaitBeforeHandlerEntry(t *testing.T) {
+	rpcServer := &testRPCServer{}
+	s := newBlockedQueueTestServer(t, rpcServer)
+	s.handleState.state = TxnForwardWait
+	s.handleState.forward.waitReady = make(chan struct{})
+	s.handleState.forward.forwardFunc = func(context.Context, *txn.TxnRequest, *txn.TxnResponse) error {
+		t.Fatal("forward handler must not run after quiesce")
+		return nil
+	}
+
+	var canceled atomic.Int32
+	req := &txn.TxnRequest{}
+	s.activeHandlers.Lock()
+	s.activeHandlers.active++
+	s.activeHandlers.Unlock()
+	s.queue <- executor{
+		req:     req,
+		cancel:  func() { canceled.Add(1) },
+		handler: s.handlers[txn.TxnMethod_Read],
+		s:       s,
+	}
+	s.startProcessors()
+	require.Eventually(t, func() bool {
+		s.activeHandlers.Lock()
+		active := s.activeHandlers.active
+		s.activeHandlers.Unlock()
+		return active == 1
+	}, time.Second, time.Millisecond)
+
+	require.NoError(t, s.Quiesce())
+	drainCtx, cancel := context.WithTimeout(context.Background(), time.Second)
+	require.NoError(t, s.Drain(drainCtx))
+	cancel()
+	require.Equal(t, int32(1), canceled.Load())
+	s.stopper.Stop()
+}
+
 func newBlockedQueueTestServer(t *testing.T, rpcServer morpc.RPCServer) *server {
 	t.Helper()
 	rt := newTestRuntime(newTestClock(), logutil.GetPanicLogger())
@@ -352,6 +422,7 @@ func newBlockedQueueTestServer(t *testing.T, rpcServer morpc.RPCServer) *server 
 		stopper:   stopper.NewStopper("txn rpc test"),
 		stoppingC: make(chan struct{}),
 	}
+	s.activeHandlers.zero = make(chan struct{})
 	s.options.maxChannelBufferSize = 1
 	s.handlers[txn.TxnMethod_Read] = func(context.Context, *txn.TxnRequest, *txn.TxnResponse) error {
 		return nil

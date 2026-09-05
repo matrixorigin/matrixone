@@ -18,10 +18,16 @@ import (
 	"context"
 	"sync"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 )
+
+// ErrTxnDrainTimeout means accepted transaction RPCs did not reach a terminal
+// state before the shutdown drain context expired. Storage and its WAL owner
+// must remain alive so recovery can determine any unknown commit outcome.
+var ErrTxnDrainTimeout = moerr.NewInternalErrorNoCtx("txn rpc drain timeout")
 
 // Config config
 type Config = morpc.Config

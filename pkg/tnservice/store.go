@@ -54,6 +54,15 @@ var (
 	retryCreateStorageInterval = time.Second * 5
 )
 
+// txnServerLifecycle is deliberately kept private so adding the ordered
+// shutdown hooks does not change the public rpc.TxnServer contract. The
+// production RPC server implements it; a server without these hooks cannot be
+// safely drained before the TN storage is closed.
+type txnServerLifecycle interface {
+	Quiesce() error
+	Drain(context.Context) error
+}
+
 // WithConfigAdjust set adjust config func
 func WithConfigAdjust(adjustConfigFunc func(c *Config)) Option {
 	return func(s *store) {
@@ -114,6 +123,8 @@ type store struct {
 	replicas            *sync.Map
 	stopper             *stopper.Stopper
 	shutdownC           chan struct{}
+	quiesced            atomic.Bool
+	localHandlers       localHandlerLifecycle
 	heartbeatInFlight   atomic.Bool
 	commandPollNeeded   atomic.Bool
 	commandPollWakeup   chan struct{}
@@ -152,6 +163,87 @@ type store struct {
 	queryService queryservice.QueryService
 
 	queryClient client.QueryClient
+}
+
+// localHandlerLifecycle covers requests dispatched through TxnSender's local
+// fast path.  A sender may cache a handler, so checking quiesced only during
+// lookup is insufficient; every invocation must acquire this lease.
+type localHandlerLifecycle struct {
+	sync.Mutex
+	quiesced bool
+	active   int
+	zero     chan struct{}
+}
+
+func (s *store) quiesceLocalHandlers() {
+	s.localHandlers.Lock()
+	if s.localHandlers.zero == nil {
+		s.localHandlers.zero = make(chan struct{})
+	}
+	s.localHandlers.quiesced = true
+	if s.localHandlers.active == 0 {
+		select {
+		case <-s.localHandlers.zero:
+		default:
+			close(s.localHandlers.zero)
+		}
+	}
+	s.localHandlers.Unlock()
+}
+
+func (s *store) acquireLocalHandler() (func(), bool) {
+	s.localHandlers.Lock()
+	defer s.localHandlers.Unlock()
+	if s.localHandlers.zero == nil {
+		s.localHandlers.zero = make(chan struct{})
+	}
+	if s.localHandlers.quiesced {
+		return nil, false
+	}
+	if s.localHandlers.active == 0 {
+		// A closed zero channel belongs to the previous drain epoch.  Keep a
+		// fresh channel for the handler that is about to become active.
+		select {
+		case <-s.localHandlers.zero:
+			s.localHandlers.zero = make(chan struct{})
+		default:
+		}
+	}
+	s.localHandlers.active++
+	return func() { s.releaseLocalHandler() }, true
+}
+
+func (s *store) releaseLocalHandler() {
+	s.localHandlers.Lock()
+	if s.localHandlers.active > 0 {
+		s.localHandlers.active--
+	}
+	if s.localHandlers.quiesced && s.localHandlers.active == 0 {
+		select {
+		case <-s.localHandlers.zero:
+		default:
+			close(s.localHandlers.zero)
+		}
+	}
+	s.localHandlers.Unlock()
+}
+
+func (s *store) drainLocalHandlers(ctx context.Context) error {
+	s.localHandlers.Lock()
+	if s.localHandlers.zero == nil {
+		s.localHandlers.zero = make(chan struct{})
+		if s.localHandlers.active == 0 {
+			close(s.localHandlers.zero)
+		}
+	}
+	zero := s.localHandlers.zero
+	s.localHandlers.Unlock()
+	select {
+	case <-zero:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
 }
 
 // NewService create TN Service
@@ -250,8 +342,35 @@ func (s *store) Start() error {
 }
 
 func (s *store) Close() error {
-	// Reject new replica calls and cancel active start contexts before waiting
-	// for store tasks. Storage remains open until the RPC server drains below.
+	// Stop accepting new RPCs first, but keep replicas, WAL and storage alive
+	// while already accepted handlers finish. This prevents an in-flight commit
+	// from observing a cancelled replica context before WAL durability settles.
+	s.quiesced.Store(true)
+	s.quiesceLocalHandlers()
+	if s.server != nil {
+		lifecycle, ok := s.server.(txnServerLifecycle)
+		if !ok {
+			return moerr.NewInternalErrorNoCtx("txn server does not support lifecycle drain")
+		}
+		if err := lifecycle.Quiesce(); err != nil {
+			return err
+		}
+		drainCtx, cancel := context.WithTimeout(context.Background(), 4*time.Minute)
+		err := lifecycle.Drain(drainCtx)
+		cancel()
+		if err != nil {
+			return err
+		}
+	}
+	localDrainCtx, localDrainCancel := context.WithTimeout(context.Background(), 4*time.Minute)
+	err := s.drainLocalHandlers(localDrainCtx)
+	localDrainCancel()
+	if err != nil {
+		return err
+	}
+
+	// No handler can acquire a replica after the drain gate. It is now safe to
+	// cancel replica start contexts and close their storage.
 	s.replicas.Range(func(_, value any) bool {
 		r := value.(*replica)
 		r.cancelStart(false)
@@ -260,14 +379,16 @@ func (s *store) Close() error {
 	s.stopper.Stop()
 	s.moCluster.Close()
 
-	var err error
+	err = nil
 	if s.queryService != nil {
 		err = errors.Join(err, s.queryService.Close())
 	}
 	if s.cfg.ShardService.Enable {
 		err = errors.Join(err, s.shardServer.Close())
 	}
-	err = errors.Join(err, s.server.Close())
+	if s.server != nil {
+		err = errors.Join(err, s.server.Close())
+	}
 	s.replicas.Range(func(_, value any) bool {
 		r := value.(*replica)
 		if e := r.close(false); e != nil {

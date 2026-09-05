@@ -17,6 +17,7 @@ package rpc
 import (
 	"context"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"sync"
 	"time"
@@ -146,13 +147,23 @@ type server struct {
 	stoppingC        chan struct{}
 	producers        sync.WaitGroup
 	producerAdmitted func()
+	quiesceOnce      sync.Once
+	quiesceErr       error
 	closeOnce        sync.Once
 	closeErr         error
 	lifecycle        struct {
 		sync.Mutex
 		stopping bool
 	}
+	activeHandlers struct {
+		sync.Mutex
+		active   int
+		draining bool
+		zero     chan struct{}
+	}
 }
+
+const txnServerDrainTimeout = 4 * time.Minute
 
 // NewTxnServer create a txn server. One DNStore corresponds to one TxnServer
 func NewTxnServer(
@@ -167,6 +178,7 @@ func NewTxnServer(
 		stopper: stopper.NewStopper("txn rpc server",
 			stopper.WithLogger(rt.Logger().RawLogger())),
 	}
+	s.activeHandlers.zero = make(chan struct{})
 	s.pool.requests = sync.Pool{
 		New: func() any {
 			return &txn.TxnRequest{}
@@ -217,13 +229,13 @@ func (s *server) Start() error {
 
 func (s *server) Close() error {
 	s.closeOnce.Do(func() {
-		s.lifecycle.Lock()
-		s.lifecycle.stopping = true
-		close(s.stoppingC)
-		s.lifecycle.Unlock()
-
-		s.closeErr = s.rpc.Close()
-		s.producers.Wait()
+		s.closeErr = s.Quiesce()
+		drainCtx, cancel := context.WithTimeout(context.Background(), txnServerDrainTimeout)
+		s.closeErr = errors.Join(s.closeErr, s.Drain(drainCtx))
+		cancel()
+		if s.closeErr != nil {
+			return
+		}
 		s.stopper.Stop()
 
 		for {
@@ -239,6 +251,43 @@ func (s *server) Close() error {
 		}
 	})
 	return s.closeErr
+}
+
+// Quiesce closes the network listener and rejects new requests. Requests that
+// have already entered the queue retain ownership until Drain completes.
+func (s *server) Quiesce() error {
+	s.quiesceOnce.Do(func() {
+		s.lifecycle.Lock()
+		s.lifecycle.stopping = true
+		close(s.stoppingC)
+		s.lifecycle.Unlock()
+
+		s.quiesceErr = s.rpc.Close()
+		s.producers.Wait()
+		s.cleanupQueuedRequests()
+	})
+	return s.quiesceErr
+}
+
+// Drain waits for all requests accepted before Quiesce to reach a terminal
+// state. It deliberately leaves worker goroutines and storage available.
+func (s *server) Drain(ctx context.Context) error {
+	quiesceErr := s.Quiesce()
+	s.activeHandlers.Lock()
+	if !s.activeHandlers.draining {
+		s.activeHandlers.draining = true
+		if s.activeHandlers.active == 0 {
+			close(s.activeHandlers.zero)
+		}
+	}
+	zero := s.activeHandlers.zero
+	s.activeHandlers.Unlock()
+	select {
+	case <-zero:
+		return quiesceErr
+	case <-ctx.Done():
+		return errors.Join(quiesceErr, ErrTxnDrainTimeout, ctx.Err())
+	}
 }
 
 func (s *server) RegisterMethodHandler(m txn.TxnMethod, h TxnRequestHandleFunc) {
@@ -297,7 +346,6 @@ func (s *server) onMessage(
 	if s.producerAdmitted != nil {
 		s.producerAdmitted()
 	}
-
 	t := time.Now()
 	req := executor{
 		t:       t,
@@ -312,9 +360,11 @@ func (s *server) onMessage(
 	case s.queue <- req:
 	case <-ctx.Done():
 		s.cleanupRequest(m, msg.Cancel)
+		s.finishHandler()
 		return nil
 	case <-s.stoppingC:
 		s.cleanupRequest(m, msg.Cancel)
+		s.finishHandler()
 		return moerr.NewStreamClosedNoCtx()
 	}
 	n := len(s.queue)
@@ -334,6 +384,9 @@ func (s *server) beginProducer() bool {
 		return false
 	}
 	s.producers.Add(1)
+	s.activeHandlers.Lock()
+	s.activeHandlers.active++
+	s.activeHandlers.Unlock()
 	return true
 }
 
@@ -348,6 +401,50 @@ func (s *server) cleanupRequest(req *txn.TxnRequest, cancel context.CancelFunc) 
 
 func (s *server) cleanupExecutor(req executor) {
 	s.cleanupRequest(req.req, req.cancel)
+	s.finishHandler()
+}
+
+func (s *server) cleanupQueuedRequests() {
+	for {
+		select {
+		case req := <-s.queue:
+			s.cleanupExecutor(req)
+		default:
+			return
+		}
+	}
+}
+
+func (s *server) isStopping() bool {
+	s.lifecycle.Lock()
+	stopping := s.lifecycle.stopping
+	s.lifecycle.Unlock()
+	return stopping
+}
+
+// beginHandler linearizes the transition from an accepted queue item to the
+// handler.  Once it succeeds the item is counted by Drain; if shutdown has
+// already started, the caller must release it instead of entering a handler.
+func (s *server) beginHandler() bool {
+	s.lifecycle.Lock()
+	stopping := s.lifecycle.stopping
+	s.lifecycle.Unlock()
+	return !stopping
+}
+
+func (s *server) finishHandler() {
+	s.activeHandlers.Lock()
+	if s.activeHandlers.active > 0 {
+		s.activeHandlers.active--
+	}
+	if s.activeHandlers.draining && s.activeHandlers.active == 0 {
+		select {
+		case <-s.activeHandlers.zero:
+		default:
+			close(s.activeHandlers.zero)
+		}
+	}
+	s.activeHandlers.Unlock()
 }
 
 func (s *server) acquireResponse() *txn.TxnResponse {
@@ -374,18 +471,28 @@ func (s *server) handleTxnRequest(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case req := <-s.queue:
+			if !s.beginHandler() {
+				s.cleanupExecutor(req)
+				continue
+			}
 			state, waitReady, newHandler := s.getTxnHandleState()
 			switch state {
 			case TxnForwardWait:
-				wait := true
-				for wait {
-					select {
-					case <-ctx.Done():
-						wait = false
-					case <-waitReady:
-						wait = false
-						req.handler = newHandler
+				select {
+				case <-ctx.Done():
+					s.cleanupExecutor(req)
+					continue
+				case <-s.stoppingC:
+					s.cleanupExecutor(req)
+					continue
+				case <-waitReady:
+					// Quiesce and state promotion can race.  A request that
+					// has not reached the forwarding handler is still cancelable.
+					if s.isStopping() {
+						s.cleanupExecutor(req)
+						continue
 					}
+					req.handler = newHandler
 				}
 
 			case TxnLocalHandle:
@@ -401,6 +508,7 @@ func (s *server) handleTxnRequest(ctx context.Context) {
 						zap.Error(err))
 				}
 			}
+			s.finishHandler()
 		}
 	}
 }
