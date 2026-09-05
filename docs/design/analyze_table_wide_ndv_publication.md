@@ -1,10 +1,16 @@
 # Publish table-wide ANALYZE NDVs to optimizer statistics
 
+- Superseded collection path: `docs/rfcs/20260904_manual_analyze_sampled_stats.md`
 - Status: implemented and validated
 - Tracking issue: [matrixorigin/matrixone#27728](https://github.com/matrixorigin/matrixone/issues/27728)
 - Implementation PR: [matrixorigin/matrixone#28067](https://github.com/matrixorigin/matrixone/pull/28067)
 - Builds on: `docs/design/analyze_stats_publication.md`
 - Last updated: 2026-09-04
+
+The schema-version and cache-publication fences described here remain in use.
+The later sampled-ANALYZE design replaces the derived full-table aggregate and
+metadata-overlay path with bounded storage sampling and coherent-generation
+replacement.
 
 ## 1. Problem
 

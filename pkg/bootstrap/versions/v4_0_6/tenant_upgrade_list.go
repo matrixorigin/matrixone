@@ -83,6 +83,12 @@ func addIcebergCatalogIDAllocatorIndex() versions.UpgradeEntry {
 }
 
 func upgradeInformationSchemaMetadataVisibilityView(viewName, viewDDL string) versions.UpgradeEntry {
+	requiredProtocol := defines.MORPCVersion41
+	if viewName == "TABLES" {
+		requiredProtocol = defines.MORPCVersion46
+	} else if viewName == "COLUMNS" {
+		requiredProtocol = defines.MORPCVersion48
+	}
 	return versions.UpgradeEntry{
 		Schema:                  sysview.InformationDBConst,
 		TableName:               viewName,
@@ -90,7 +96,7 @@ func upgradeInformationSchemaMetadataVisibilityView(viewName, viewDDL string) ve
 		UpgSql:                  viewDDL,
 		CheckFunc:               checkViewDefinition(viewName, viewDDL),
 		PreSql:                  fmt.Sprintf("DROP VIEW IF EXISTS %s.%s;", sysview.InformationDBConst, viewName),
-		RequiredProtocolVersion: defines.MORPCVersion41,
+		RequiredProtocolVersion: requiredProtocol,
 	}
 }
 
@@ -151,7 +157,7 @@ func upgradeInformationSchemaColumns() versions.UpgradeEntry {
 		TableName:               "COLUMNS",
 		UpgType:                 versions.MODIFY_VIEW,
 		UpgSql:                  sysview.InformationSchemaColumnsDDL,
-		RequiredProtocolVersion: defines.MORPCVersion41,
+		RequiredProtocolVersion: defines.MORPCVersion48,
 		CheckFunc: func(txn executor.TxnExecutor, accountID uint32) (bool, error) {
 			exists, viewDef, err := versions.CheckViewDefinition(txn, accountID, sysview.InformationDBConst, "COLUMNS")
 			if err != nil {
@@ -391,7 +397,7 @@ func upgradeInformationSchemaColumnsBinaryStrings() versions.UpgradeEntry {
 		PreSql:                  "DROP VIEW IF EXISTS information_schema.COLUMNS;",
 		UpgSql:                  sysview.InformationSchemaColumnsDDL,
 		CheckFunc:               checkViewDefinition("COLUMNS", sysview.InformationSchemaColumnsDDL),
-		RequiredProtocolVersion: defines.MORPCVersion46,
+		RequiredProtocolVersion: defines.MORPCVersion48,
 	}
 }
 
@@ -405,7 +411,7 @@ func refreshInformationSchemaCharacterSetsUTF8Maxlen() versions.UpgradeEntry {
 		CheckFunc: func(txn executor.TxnExecutor, accountID uint32) (bool, error) {
 			return versions.CheckTableDataExist(txn, accountID, informationSchemaCharacterSetsCheckSQL())
 		},
-		RequiredProtocolVersion: defines.MORPCVersion46,
+		RequiredProtocolVersion: defines.MORPCVersion48,
 	}
 }
 

@@ -621,6 +621,8 @@ message Instruction {
   // PARTITION Top-N only: emit local candidates in dense batches for the
   // global hash reduction rather than as one logical partition per batch.
   bool partition_top_n_pre_reduce = 58;
+  // PARTITION only: planner-selected ordinary window partition algorithm.
+  plan.Node.PartitionAlgorithm partition_algorithm = 59;
 }
 
 message AnalysisList {

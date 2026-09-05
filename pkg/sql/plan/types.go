@@ -352,6 +352,10 @@ type ViewData struct {
 type QueryBuilder struct {
 	qry     *plan.Query
 	compCtx CompilerContext
+	// persistedViewTarget is set structurally by CREATE/ALTER/regeneration
+	// while one persisted view definition is bound. It is statement-local so
+	// detached CTE contexts cannot lose the private system-function owner.
+	persistedViewTarget string
 
 	ctxByNode             []*BindContext
 	windowValidationScans []*plan.Node

@@ -137,11 +137,11 @@ func TestUserDefinedVarMigrationPreservesRuntimeStringDomain(t *testing.T) {
 		"text_override", "你", "", false, typ, vector.PrepareParamNone,
 		false, types.RuntimeStringText))
 
-	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion45)
+	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion47)
 	_, err := ses.snapshotUserDefinedVars(context.Background())
-	require.ErrorContains(t, err, "require MORPC protocol version 46")
+	require.ErrorContains(t, err, "require MORPC protocol version 48")
 
-	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion46)
+	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion48)
 	snapshot, err := ses.snapshotUserDefinedVars(context.Background())
 	require.NoError(t, err)
 	require.Equal(t, uint32(types.RuntimeStringText), snapshot[0].RuntimeStringDomain)

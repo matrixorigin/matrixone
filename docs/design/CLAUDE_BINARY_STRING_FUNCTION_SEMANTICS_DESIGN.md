@@ -112,7 +112,7 @@ MySQL 会在部分 text-subject + invalid binary auxiliary coercion 上执行 ch
 - `internal_column_character_set` 改为读取序列化 `Type.Charset`（binary OID仍权威），并让 `information_schema.columns` 对现有四种 identity 映射到上表名称。它不再把 `Scale` 当 charset。
 - CTAS继续复制 planner result type；不按 observed row 或 runtime sidecar缩窄/改域。`DESC`、information_schema 与 direct `CHARSET/COLLATION` 必须对同一静态 expression一致。
 - SQL `EXECUTE ... USING` 物化同时保留 assignment-time `SourceType` 与独立的 `RuntimeStringDomain`；typed non-NULL、typed NULL、重复执行和 prepared-plan cache复用均不得把三态 provenance压回静态域。
-- remote pipeline sender与receiver对所有已改变的 Function ID执行 MORPC v46 fail-closed barrier，包括 `POSITION`、`INTERNAL_CHAR_SIZE` 和 `INTERNAL_COLUMN_CHARACTER_SET`；v45已由主干 Parquet fanout占用，本 PR必须连续发布 v46完整 capability，不能越过尚未合并的并发能力；catalog upgrade barrier只控制 view物化，不能代替 executor barrier。
+- remote pipeline sender与receiver对所有已改变的 Function ID执行 MORPC v48 fail-closed barrier，包括 `POSITION`、`INTERNAL_CHAR_SIZE` 和 `INTERNAL_COLUMN_CHARACTER_SET`；主干v46已用于subscription-aware information-schema metadata，v47已用于window hash partition，本 PR连续发布v48完整capability；catalog upgrade barrier只控制view物化，不能代替executor barrier。
 
 ## 7. 边界、失败与性能
 
@@ -143,7 +143,7 @@ MySQL 会在部分 text-subject + invalid binary auxiliary coercion 上执行 ch
 | result provenance | nested consumer UT：变换结果再进 `CHAR_LENGTH`；无 metadata fast path断言不分配 sidecar |
 | CHARSET/COLLATION | static type table UT；runtime mixed override不改变名称；legacy fallback控制 |
 | information_schema/CTAS | internal metadata UT + public BVT，核对 binary/general-ci/utf8mb4-bin |
-| protocol | frontend field metadata UT；binary source-derived output为 collation 63，text `_bin` 非63；每个变更 Function ID 的真实 sender encode / receiver decode v45 reject与v46 accept |
+| protocol | frontend field metadata UT；binary source-derived output为 collation 63，text `_bin` 非63；每个变更 Function ID 的真实 sender encode / receiver decode v47 reject与v48 accept |
 | reachable sources | public SQL覆盖 raw/_binary、BINARY/VARBINARY/BLOB、CAST/CONVERT、column、bare variable、SQL PREPARE；COM_STMT用现有 planner/frontend typed parameter fixture |
 | stability | owning package tests、normal BVT同实例两轮、`git diff --check`、mo-self-review change map |
 

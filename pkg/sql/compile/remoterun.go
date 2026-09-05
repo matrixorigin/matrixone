@@ -757,6 +757,8 @@ func convertToPipelineInstruction(op vm.Operator, proc *process.Process, ctx *sc
 		in.Limit = t.Limit
 		in.PartitionByCount = t.PartitionByCount
 		in.PartitionTopNPreReduce = t.PreReduce
+		in.PartitionAlgorithm = t.Algorithm
+		in.SpillMem = t.SpillMem
 	case *product.Product:
 		relList, colList := getRelColList(t.Result)
 		in.Product = &pipeline.Product{
@@ -1341,6 +1343,8 @@ func convertToVmOperator(opr *pipeline.Instruction, ctx *scopeContext, eng engin
 		arg.Limit = opr.Limit
 		arg.PartitionByCount = opr.PartitionByCount
 		arg.PreReduce = opr.PartitionTopNPreReduce
+		arg.Algorithm = opr.PartitionAlgorithm
+		arg.SpillMem = opr.SpillMem
 		op = arg
 	case vm.Product:
 		t := opr.GetProduct()
@@ -2051,7 +2055,7 @@ func validateRemoteBinaryStringPipelineProtocol(
 		value, ok := moruntime.ServiceRuntime(proc.GetService()).
 			GetGlobalVariables(moruntime.MOProtocolVersion)
 		version, versionOK := value.(int64)
-		if ok && versionOK && version >= defines.MORPCVersion46 {
+		if ok && versionOK && version >= defines.MORPCVersion48 {
 			return nil
 		}
 	}
@@ -2062,7 +2066,7 @@ func validateRemoteBinaryStringPipelineProtocol(
 	}
 	return moerr.NewNotSupportedNoCtxf(
 		"binary string function semantics require MORPC protocol version %d",
-		defines.MORPCVersion46)
+		defines.MORPCVersion48)
 }
 
 func validateRemotePadSpacePipelineProtocol(

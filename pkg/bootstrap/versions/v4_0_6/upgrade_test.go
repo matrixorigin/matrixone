@@ -94,6 +94,7 @@ func TestUpgradeEntries(t *testing.T) {
 	require.Equal(t, "COLUMNS", columns.TableName)
 	require.Equal(t, versions.MODIFY_VIEW, columns.UpgType)
 	require.Equal(t, sysview.InformationSchemaColumnsDDL, columns.UpgSql)
+	require.Equal(t, int64(defines.MORPCVersion48), columns.RequiredProtocolVersion)
 	require.Contains(t, strings.ToLower(columns.PreSql), "drop view if exists information_schema.columns")
 	checkConstraints := tenantUpgEntries[11]
 	require.Equal(t, sysview.InformationDBConst, checkConstraints.Schema)
@@ -114,6 +115,7 @@ func TestUpgradeEntries(t *testing.T) {
 	require.Equal(t, "COLUMNS", hideInternalColumns.TableName)
 	require.Equal(t, versions.MODIFY_VIEW, hideInternalColumns.UpgType)
 	require.Equal(t, sysview.InformationSchemaColumnsDDL, hideInternalColumns.UpgSql)
+	require.Equal(t, int64(defines.MORPCVersion48), hideInternalColumns.RequiredProtocolVersion)
 	require.Contains(t, strings.ToLower(hideInternalColumns.PreSql), "drop view if exists information_schema.columns")
 	userDefinedFunctions := tenantUpgEntries[14]
 	require.Equal(t, versions.DROP_INDEX, userDefinedFunctions.UpgType)
@@ -161,7 +163,12 @@ func TestUpgradeEntries(t *testing.T) {
 	require.Contains(t, strings.ToLower(statistics.PreSql),
 		"drop view if exists information_schema.statistics")
 	for _, entry := range tenantUpgEntries {
-		if strings.Contains(entry.UpgSql+entry.PostSql, "mo_current_roles()") {
+		ddl := entry.UpgSql + entry.PostSql
+		if strings.Contains(ddl, "mo_subscription_tables()") ||
+			strings.Contains(ddl, "mo_subscription_columns()") {
+			require.GreaterOrEqual(t, entry.RequiredProtocolVersion, int64(defines.MORPCVersion46),
+				"view upgrade %s must wait for subscription metadata functions", entry.TableName)
+		} else if strings.Contains(ddl, "mo_current_roles()") {
 			require.GreaterOrEqual(t, entry.RequiredProtocolVersion, int64(defines.MORPCVersion41),
 				"view upgrade %s must wait for mo_current_roles", entry.TableName)
 		}
@@ -195,7 +202,13 @@ func TestUpgradeEntries(t *testing.T) {
 		require.Equal(t, view.name, entry.TableName)
 		require.Equal(t, versions.MODIFY_VIEW, entry.UpgType)
 		require.Equal(t, view.ddl, entry.UpgSql)
-		require.Equal(t, int64(defines.MORPCVersion41), entry.RequiredProtocolVersion)
+		expectedProtocol := int64(defines.MORPCVersion41)
+		if view.name == "TABLES" {
+			expectedProtocol = defines.MORPCVersion46
+		} else if view.name == "COLUMNS" {
+			expectedProtocol = defines.MORPCVersion48
+		}
+		require.Equal(t, expectedProtocol, entry.RequiredProtocolVersion)
 		require.Contains(t, strings.ToLower(entry.PreSql),
 			"drop view if exists information_schema."+strings.ToLower(view.name))
 	}
@@ -215,12 +228,12 @@ func TestUpgradeEntries(t *testing.T) {
 	require.Equal(t, "COLUMNS", columnsBinaryStrings.TableName)
 	require.Equal(t, versions.MODIFY_VIEW, columnsBinaryStrings.UpgType)
 	require.Equal(t, sysview.InformationSchemaColumnsDDL, columnsBinaryStrings.UpgSql)
-	require.Equal(t, int64(defines.MORPCVersion46), columnsBinaryStrings.RequiredProtocolVersion)
+	require.Equal(t, int64(defines.MORPCVersion48), columnsBinaryStrings.RequiredProtocolVersion)
 	characterSetsUTF8Maxlen := tenantUpgEntries[len(tenantUpgEntries)-1]
 	require.Equal(t, "CHARACTER_SETS", characterSetsUTF8Maxlen.TableName)
 	require.Equal(t, versions.MODIFY_METADATA, characterSetsUTF8Maxlen.UpgType)
 	require.Equal(t, sysview.InformationSchemaCharacterSetsData, characterSetsUTF8Maxlen.UpgSql)
-	require.Equal(t, int64(defines.MORPCVersion46), characterSetsUTF8Maxlen.RequiredProtocolVersion)
+	require.Equal(t, int64(defines.MORPCVersion48), characterSetsUTF8Maxlen.RequiredProtocolVersion)
 }
 
 func TestInformationSchemaMetadataVisibilityUpgradeChecks(t *testing.T) {

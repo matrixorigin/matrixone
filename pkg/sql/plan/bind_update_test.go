@@ -266,7 +266,8 @@ func TestUpdateIndexLookupBuildSidePreservesNarrowTarget(t *testing.T) {
 		indexStats.TableCnt = float64(tableRows)
 		indexStats.BlockNumber = 2_500
 		indexStats.SizeMap = map[string]uint64{
-			catalog.IndexTableIndexColName: tableRows * 32,
+			catalog.IndexTableIndexColName:   tableRows * 32,
+			catalog.IndexTablePrimaryColName: tableRows * 4,
 		}
 		statsCache := NewStatsCache()
 		statsCache.Set(mainTable.TblId, mainStats)
