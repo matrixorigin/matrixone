@@ -113,8 +113,9 @@ order by id
 limit 4;
 
 -- A singleton aggregate is eliminated only when its row expression is exact
--- over the complete input type domain. Wide DECIMAL AVG and floating-point
--- SUM/AVG retain Aggregate to preserve existing error and signed-zero behavior.
+-- over the complete input type domain. Wide DECIMAL AVG is promoted to
+-- DECIMAL256 so it remains exact; floating-point SUM/AVG retain Aggregate to
+-- preserve existing error and signed-zero behavior.
 create table edge_values (
     id int primary key,
     wide decimal(38, 10),

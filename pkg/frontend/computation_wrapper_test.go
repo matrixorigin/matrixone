@@ -319,6 +319,7 @@ func newPreparedExecuteEnvForSQLWithCompilerContext(
 		PrepareStmt:                stmts[0],
 		NativeMode:                 ses.sqlModeHasMatrixOneNative(),
 		OnlyFullGroupBy:            ses.sqlModeHasOnlyFullGroupBy(),
+		BoolSumAvg:                 ses.sqlModeHasEnableBoolSumAvg(),
 		sqlModeFlagsSet:            true,
 		getFromSendLongData:        make(map[int]struct{}),
 		protocolVersion:            currentProtocolVersion(proc),

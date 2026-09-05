@@ -324,7 +324,7 @@ func TestConsumer(t *testing.T) {
 	sqls := make([]string, 0, 1)
 	stub1 := gostub.Stub(&ExecWithResult, func(_ context.Context, sql string, _ string, _ client.TxnOperator) (executor.Result, error) {
 		sqls = append(sqls, sql)
-		return executor.Result{}, nil
+		return executor.Result{AffectedRows: 1}, nil
 	})
 	defer stub1.Reset()
 
@@ -841,7 +841,7 @@ func TestDataRetrieverUpdateWatermarkTailUsesExecWithResult(t *testing.T) {
 		execSQL = sql
 		require.Equal(t, "cn", cnUUID)
 		require.Equal(t, catalog.System_Account, execCtx.Value(defines.TenantIDKey{}))
-		return executor.Result{}, nil
+		return executor.Result{AffectedRows: 1}, nil
 	})
 	defer stubExec.Reset()
 
@@ -849,6 +849,29 @@ func TestDataRetrieverUpdateWatermarkTailUsesExecWithResult(t *testing.T) {
 	require.Equal(t, uint64(11), status.LSN)
 	require.Contains(t, execSQL, "UPDATE mo_catalog.mo_iscp_log")
 	require.Contains(t, execSQL, "job")
+}
+
+func TestDataRetrieverUpdateWatermarkTailRejectsLostCAS(t *testing.T) {
+	retriever := NewDataRetriever(
+		context.Background(),
+		7,
+		8,
+		"job",
+		9,
+		&JobStatus{Stage: JobStage_Running},
+		11,
+		ISCPDataType_Tail,
+	)
+	stubExec := gostub.Stub(&ExecWithResult, func(context.Context, string, string, client.TxnOperator) (executor.Result, error) {
+		return executor.Result{AffectedRows: 0}, nil
+	})
+	defer stubExec.Reset()
+
+	err := retriever.UpdateWatermark(context.Background(), "cn", nil)
+
+	require.Error(t, err)
+	require.ErrorIs(t, err, errISCPStatusCASLost)
+	require.Contains(t, err.Error(), "affected 0 rows")
 }
 
 func TestDataRetrieverUpdateWatermarkTailExecError(t *testing.T) {

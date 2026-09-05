@@ -8,13 +8,17 @@ insert into t_decimal128_avg_boundary values
 (3, 100000000000000000000000000.0000000000),
 (4, -100000000000000000000000000.0000000000);
 select id, avg(d) from t_decimal128_avg_boundary where id = 1 group by id;
-invalid input: Decimal128 Div overflow: 9999999999999999999999999999.1234567890/1
+➤ id[4,32,0]  ¦  avg(d)[3,42,14]  𝄀
+1  ¦  9999999999999999999999999999.12345678900000
 select id, avg(d) from t_decimal128_avg_boundary where id = 2 group by id limit 1;
-invalid input: Decimal128 Div overflow: -9999999999999999999999999999.1234567890/1
+➤ id[4,32,0]  ¦  avg(d)[3,42,14]  𝄀
+2  ¦  -9999999999999999999999999999.12345678900000
 select id, avg(d) from t_decimal128_avg_boundary where id = 3 group by id;
-invalid input: 100000000000000000000000000.000000000000 beyond the range, can't be converted to Decimal128(38,12).
+➤ id[4,32,0]  ¦  avg(d)[3,42,14]  𝄀
+3  ¦  100000000000000000000000000.00000000000000
 select id, avg(d) from t_decimal128_avg_boundary where id = 4 group by id;
-invalid input: -100000000000000000000000000.000000000000 beyond the range, can't be converted to Decimal128(38,12).
+➤ id[4,32,0]  ¦  avg(d)[3,42,14]  𝄀
+4  ¦  -100000000000000000000000000.00000000000000
 truncate table t_decimal128_avg_boundary;
 insert into t_decimal128_avg_boundary values
 (1, 99999999999999999999999999.1234567890),
@@ -22,7 +26,7 @@ insert into t_decimal128_avg_boundary values
 (1, null),
 (2, null);
 select id, avg(d) from t_decimal128_avg_boundary group by id order by id;
-➤ id[4,32,0]  ¦  avg(d)[3,38,12]  𝄀
-1  ¦  99999999999999999999999999.123456789000  𝄀
+➤ id[4,32,0]  ¦  avg(d)[3,42,14]  𝄀
+1  ¦  99999999999999999999999999.12345678900000  𝄀
 2  ¦  null
 drop database avg_decimal_boundary;

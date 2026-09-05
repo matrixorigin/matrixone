@@ -18,6 +18,7 @@ import (
 	"fmt"
 
 	"github.com/matrixorigin/matrixone/pkg/bootstrap/versions"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/util/sysview"
 )
@@ -28,10 +29,11 @@ var tenantUpgEntries = []versions.UpgradeEntry{
 }
 
 var upg_information_schema_tables = versions.UpgradeEntry{
-	Schema:    sysview.InformationDBConst,
-	TableName: "TABLES",
-	UpgType:   versions.MODIFY_VIEW,
-	UpgSql:    sysview.InformationSchemaTablesDDL,
+	Schema:                  sysview.InformationDBConst,
+	TableName:               "TABLES",
+	UpgType:                 versions.MODIFY_VIEW,
+	UpgSql:                  sysview.InformationSchemaTablesDDL,
+	RequiredProtocolVersion: defines.MORPCVersion46,
 	CheckFunc: func(txn executor.TxnExecutor, accountId uint32) (bool, error) {
 		exists, viewDef, err := versions.CheckViewDefinition(txn, accountId, sysview.InformationDBConst, "TABLES")
 		if err != nil {
@@ -47,10 +49,11 @@ var upg_information_schema_tables = versions.UpgradeEntry{
 }
 
 var upg_information_schema_columns = versions.UpgradeEntry{
-	Schema:    sysview.InformationDBConst,
-	TableName: "COLUMNS",
-	UpgType:   versions.MODIFY_VIEW,
-	UpgSql:    sysview.InformationSchemaColumnsDDL,
+	Schema:                  sysview.InformationDBConst,
+	TableName:               "COLUMNS",
+	UpgType:                 versions.MODIFY_VIEW,
+	UpgSql:                  sysview.InformationSchemaColumnsDDL,
+	RequiredProtocolVersion: defines.MORPCVersion46,
 	CheckFunc: func(txn executor.TxnExecutor, accountId uint32) (bool, error) {
 		exists, viewDef, err := versions.CheckViewDefinition(txn, accountId, sysview.InformationDBConst, "COLUMNS")
 		if err != nil {

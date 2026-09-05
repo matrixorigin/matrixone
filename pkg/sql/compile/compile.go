@@ -511,6 +511,7 @@ func (c *Compile) clear() {
 	c.ignorePublish = false
 	c.adjustTableExtraFunc = nil
 	c.disableDropAutoIncrement = false
+	c.skipDataBranchReclaim = false
 	c.keepAutoIncrement = 0
 	c.disableLock = false
 	c.icebergScanPlanner = nil
@@ -883,28 +884,29 @@ func (c *Compile) printPipeline() {
 // for example
 // 1. lock table.
 // 2. init data source.
-func (c *Compile) prePipelineInitializer() (err error) {
+func (c *Compile) prePipelineInitializer() (startedSources []*materialized.Source, err error) {
 	// do table lock.
 	if err = c.lockMeta.doLock(c.e, c.proc); err != nil {
-		return err
+		return nil, err
 	}
 	if err = c.lockTable(); err != nil {
-		return err
+		return nil, err
 	}
 	if err = c.maybePromoteLoadUniqueIndexes(); err != nil {
-		return err
+		return nil, err
 	}
 
 	// init data source.
 	for _, s := range c.scopes {
 		if err = s.InitAllDataSource(c); err != nil {
-			return err
+			return nil, err
 		}
 	}
 	var spillBudget materialized.SpillBudget
 	if len(c.materializedSources) > 0 {
 		spillBudget = newMaterializedSpillBudget(c.proc)
 	}
+	startedSources = make([]*materialized.Source, 0, len(c.materializedSources))
 	for _, source := range c.materializedSources {
 		if err = source.Begin(c.proc.Mp(), materialized.SpillConfig{FileFactory: func(name string) (*os.File, error) {
 			spillFS, spillErr := c.proc.GetSpillFileService()
@@ -913,10 +915,30 @@ func (c *Compile) prePipelineInitializer() (err error) {
 			}
 			return spillFS.CreateAndRemoveFile(c.proc.Ctx, name)
 		}, Budget: spillBudget}); err != nil {
-			return err
+			return startedSources, err
 		}
+		startedSources = append(startedSources, source)
 	}
-	return nil
+	return startedSources, nil
+}
+
+func closeMaterializedSourceGenerations(sources []*materialized.Source) {
+	for _, source := range sources {
+		source.Close()
+	}
+}
+
+// runPipelineAttempt owns every materialized-source generation opened by its
+// initializer. The callback may start no scopes, return an error, or panic;
+// after it returns, all submitted scope goroutines have quiesced and the
+// attempt closes both executed and statically planned-but-unstarted owners.
+func (c *Compile) runPipelineAttempt(run func() error) (err error) {
+	startedSources, err := c.prePipelineInitializer()
+	defer closeMaterializedSourceGenerations(startedSources)
+	if err != nil {
+		return err
+	}
+	return run()
 }
 
 func newMaterializedSpillBudget(proc *process.Process) materialized.SpillBudget {
@@ -6259,6 +6281,14 @@ func (c *Compile) compilePartition(node *plan.Node, ss []*Scope) []*Scope {
 		c.anal.isFirst = false
 		return []*Scope{rs}
 	}
+	if node.PartitionAlgorithm == plan.Node_PARTITION_ALGORITHM_HASH && c.supportsRemoteHashPartition() {
+		rs := c.newMergeScope(ss)
+		arg := constructPartition(node)
+		arg.SetAnalyzeControl(c.anal.curNodeIdx, c.anal.isFirst)
+		rs.setRootOperator(arg)
+		c.anal.isFirst = false
+		return []*Scope{rs}
+	}
 
 	currentFirstFlag := c.anal.isFirst
 	for i := range ss {
@@ -6276,6 +6306,12 @@ func (c *Compile) compilePartition(node *plan.Node, ss []*Scope) []*Scope {
 
 	currentFirstFlag = c.anal.isFirst
 	arg := constructPartition(node)
+	if node.PartitionAlgorithm == plan.Node_PARTITION_ALGORITHM_HASH {
+		// A mixed-version cluster cannot understand the HASH pipeline field.
+		// Keep both its prerequisite local orders and its coordinator algorithm
+		// on the legacy path.
+		arg.Algorithm = plan.Node_PARTITION_ALGORITHM_SORT
+	}
 	if node.PartitionByCount > 0 {
 		arg.OrderBySpecs = node.OrderBy[:node.PartitionByCount]
 		arg.Limit = nil
@@ -6945,6 +6981,16 @@ func (c *Compile) supportsRemotePartitionTopN() bool {
 	}
 	protocolVersion, ok := version.(int64)
 	return ok && protocolVersion >= defines.MORPCVersion19
+}
+
+func (c *Compile) supportsRemoteHashPartition() bool {
+	version, ok := moruntime.ServiceRuntime(c.proc.GetService()).
+		GetGlobalVariables(moruntime.MOProtocolVersion)
+	if !ok {
+		return false
+	}
+	protocolVersion, ok := version.(int64)
+	return ok && protocolVersion >= defines.MORPCVersion47
 }
 
 func supportsRemoteTextCollationAggregates(service string) bool {

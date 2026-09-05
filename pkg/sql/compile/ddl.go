@@ -53,6 +53,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/lock"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/shardservice"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/lockop"
 	"github.com/matrixorigin/matrixone/pkg/sql/features"
@@ -2565,6 +2566,17 @@ func (c *Compile) reclaimBranchProtectSnapshots(deadTIDs []uint64) (bool, error)
 	)
 }
 
+// reclaimAndCompactBranchProtectSnapshots completes the branch part of a
+// physical-table removal. Replacement paths publish their new lineage edge
+// first, then use this same lifecycle transition as an ordinary DROP.
+func (c *Compile) reclaimAndCompactBranchProtectSnapshots(deadTIDs []uint64) error {
+	branchParticipates, err := c.reclaimBranchProtectSnapshots(deadTIDs)
+	if err != nil || !branchParticipates {
+		return err
+	}
+	return c.compactExpiredAlterDataBranchLineage(time.Time{})
+}
+
 func (s *Scope) CreateView(c *Compile) error {
 	if s.ScopeAnalyzer == nil {
 		s.ScopeAnalyzer = NewScopeAnalyzer()
@@ -3449,7 +3461,6 @@ func (s *Scope) TruncateTable(c *Compile) error {
 	defer s.ScopeAnalyzer.Stop()
 
 	truncate := s.Plan.GetDdl().GetTruncateTable()
-	oldID := truncate.GetTableId()
 	db := truncate.GetDatabase()
 	table := truncate.GetTable()
 
@@ -3469,6 +3480,7 @@ func (s *Scope) TruncateTable(c *Compile) error {
 	if err != nil {
 		return err
 	}
+	oldID := rel.GetTableID(c.proc.Ctx)
 
 	// Check if target table is a CCPR shared table (from publication)
 	if c.shouldBlockCCPRReadOnly(rel.GetTableDef(c.proc.Ctx)) {
@@ -3501,6 +3513,64 @@ func (s *Scope) TruncateTable(c *Compile) error {
 		}
 	}
 
+	// TRUNCATE is a copy-and-swap rebuild: it creates a replacement relation
+	// before the ordinary DROP path retires the old physical generation. Reuse
+	// ALTER's lineage publication protocol so the replacement remains the live
+	// branch child and the old generation stays protected for DIFF/MERGE.
+	lineagePlan := alterDataBranchLineagePlan{}
+	lineageTxnOp := c.proc.GetTxnOperator()
+	lineageSnapshotAdvanced := false
+	lineageCloneTS := int64(0)
+	lineageOriginalSnapshot := timestamp.Timestamp{}
+	lineageRestoreSnapshot := false
+	defer func() {
+		if lineageRestoreSnapshot {
+			lineageTxnOp.SetSnapshotTS(lineageOriginalSnapshot)
+		}
+	}()
+	if shouldAdvanceAlterDataBranchLineageSnapshot(
+		lineageTxnOp.Txn().IsPessimistic(), lineageTxnOp.Txn().IsRCIsolation(),
+	) {
+		lineageOriginalSnapshot = lineageTxnOp.SnapshotTS()
+		lineageRestoreSnapshot = true
+		if lineageCloneTS, err = c.advanceAlterDataBranchLineageSnapshot(); err != nil {
+			return err
+		}
+		lineageSnapshotAdvanced = true
+	}
+	if err = c.lockDataBranchLineageOwnerLifecycle(); err != nil {
+		return err
+	}
+	if lineagePlan, err = c.prepareAlterDataBranchLineage(oldID, db, table, "TRUNCATE"); err != nil {
+		return err
+	}
+	if !lineagePlan.enabled {
+		var hasLatestHistory bool
+		if hasLatestHistory, err = c.alterTableHasLatestHistoricalBranchSource(oldID, db, table); err != nil {
+			return err
+		}
+		if hasLatestHistory {
+			lineagePlan.enabled = true
+			lineagePlan.preserveHistoricalSource = true
+		}
+	}
+	if lineagePlan.enabled {
+		if lineageSnapshotAdvanced {
+			lineagePlan.cloneTS = lineageCloneTS
+		} else {
+			lineagePlan.cloneTS = lineageTxnOp.SnapshotTS().PhysicalTime
+		}
+	}
+	if lineageSnapshotAdvanced {
+		rel, err = dbSource.Relation(c.proc.Ctx, table, nil)
+		if err != nil {
+			return err
+		}
+		if rel.GetTableID(c.proc.Ctx) != oldID {
+			return moerr.NewTxnNeedRetryWithDefChanged(c.proc.Ctx)
+		}
+	}
+
 	// delete from tables => truncate, need keep increment value
 	// Get logicalId from tableDef and pass it when creating the new table
 	tableDef := rel.GetTableDef(c.proc.Ctx)
@@ -3519,6 +3589,11 @@ func (s *Scope) TruncateTable(c *Compile) error {
 		c.addAffectedRows(rows)
 		dropOpts = dropOpts.WithDisableDropIncrStatement()
 		createOpts = createOpts.WithKeepAutoIncrement(oldID)
+	}
+	if lineagePlan.enabled {
+		// The successor edge is published after CREATE obtains its physical ID.
+		// Keep the old edge until then; the shared reclaim below retires it.
+		dropOpts = dropOpts.WithSkipDataBranchReclaim()
 	}
 
 	r, err := c.runSqlWithResultAndOptions(
@@ -3562,6 +3637,16 @@ func (s *Scope) TruncateTable(c *Compile) error {
 		return err
 	}
 	newID := rel.GetTableID(c.proc.Ctx)
+	if lineagePlan.enabled {
+		if err = c.preserveAlterDataBranchLineage(
+			lineagePlan, oldID, newID, db, table,
+		); err != nil {
+			return err
+		}
+		if err = c.reclaimAndCompactBranchProtectSnapshots([]uint64{oldID}); err != nil {
+			return err
+		}
+	}
 
 	for _, ftblId := range truncate.ForeignTbl {
 		_, _, fkRelation, err := c.e.GetRelationById(c.proc.Ctx, c.proc.GetTxnOperator(), ftblId)
@@ -4118,17 +4203,9 @@ func (s *Scope) dropTableSingle(c *Compile, qry *plan.DropTable) error {
 	// `__mo_branch_*` snapshots. This must run synchronously so drop paths have
 	// identical semantics in the frontend and compile-layer paths (design
 	// §5.3 / §9.2).
-	var branchParticipates bool
-	if branchParticipates, err = c.reclaimBranchProtectSnapshots([]uint64{tblID}); err != nil {
-		logutil.Error("reclaim branch protect snapshots failed",
-			zap.Uint64("tblID", tblID),
-			zap.Error(err),
-		)
-		return err
-	}
-	if branchParticipates {
-		if err = c.compactExpiredAlterDataBranchLineage(time.Time{}); err != nil {
-			logutil.Error("compact historical ALTER lineage failed",
+	if !c.skipDataBranchReclaim {
+		if err = c.reclaimAndCompactBranchProtectSnapshots([]uint64{tblID}); err != nil {
+			logutil.Error("reclaim branch protect snapshots failed",
 				zap.Uint64("tblID", tblID),
 				zap.Error(err),
 			)
