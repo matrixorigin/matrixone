@@ -139,6 +139,10 @@ func preparedTextToJSONValueWithType(
 				ctx, "invalid prepared %s JSON value %q", paramType.String(), value)
 		}
 		return parsed, nil
+	case types.T_year:
+		// A prepared YEAR is a numeric MEMBER OF scalar, even though the
+		// ordinary JSON constructor path formats YEAR as a temporal string.
+		return parseUnsigned(16)
 	case types.T_char, types.T_varchar, types.T_text:
 		return value, nil
 	default:

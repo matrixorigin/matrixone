@@ -39,6 +39,13 @@ select 1 member of ('1'), 1 member of ('2');
 select cast('{"a":1}' as json) member of ('{"a":1}');
 ➤ cast({"a":1} as json) member of ({"a":1})[-5,64,0]  𝄀
 1
+select cast(2024 as year) member of ('[2024]'), cast(2024 as year) member of ('["2024"]');
+➤ cast(2024 as year) member of ([2024])[-5,64,0]  ¦  cast(2024 as year) member of (["2024"])[-5,64,0]  𝄀
+1  ¦  0
+select 1 member of (cast('[1]' as binary));
+Invalid data type for JSON data in argument 2 to function member of; a JSON string or JSON type is required.
+select 1 member of (cast('[1]' as varbinary));
+Invalid data type for JSON data in argument 2 to function member of; a JSON string or JSON type is required.
 select 1 member ('[1]'), 1 member of ('[2]');
 ➤ 1 member of ([1])[-5,64,0]  ¦  1 member of ([2])[-5,64,0]  𝄀
 1  ¦  0

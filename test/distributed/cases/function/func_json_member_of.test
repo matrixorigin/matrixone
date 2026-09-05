@@ -24,6 +24,14 @@ drop table member_json;
 select 1 member of ('1'), 1 member of ('2');
 select cast('{"a":1}' as json) member of ('{"a":1}');
 
+-- YEAR is compared as a JSON number, while a quoted JSON string remains distinct.
+select cast('2024' as year) member of ('[2024]'),
+       cast('2024' as year) member of ('["2024"]');
+
+-- Binary-character-set RHS values are not JSON documents.
+select 1 member of (cast('[1]' as binary));
+select 1 member of (cast('[1]' as varbinary));
+
 -- OF is optional and MEMBER remains usable as a non-reserved identifier.
 select 1 member ('[1]'), 1 member of ('[2]');
 select 1 + 1 member of ('[2]') and 3 member of ('[3]');

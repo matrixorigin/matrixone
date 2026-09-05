@@ -17,6 +17,7 @@ package function
 import (
 	"context"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/bytejson"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -33,6 +34,43 @@ const (
 // instead of implicitly converting them to a JSON document.
 func jsonMemberOfLeftSupportsType(oid types.T) bool {
 	return jsonConstructorSupportsType(oid) && !oid.IsArrayRelate()
+}
+
+// The right operand is a JSON document, not an arbitrary MySQL string.  In
+// particular, MySQL rejects BINARY/VARBINARY/BLOB and text values in the
+// binary charset before attempting to parse their bytes as JSON.
+func jsonMemberOfRightSupportsType(typ types.Type) bool {
+	if typ.Oid == types.T_json || typ.Oid == types.T_any {
+		return true
+	}
+	if typ.Oid != types.T_char && typ.Oid != types.T_varchar && typ.Oid != types.T_text {
+		return false
+	}
+	return types.StaticStringDomain(typ) == types.StringDomainText
+}
+
+func jsonMemberOfRightIsBinary(parameter *vector.Vector, row int) bool {
+	if parameter == nil || parameter.IsNull(uint64(row)) {
+		return false
+	}
+	typ := *parameter.GetType()
+	if !jsonMemberOfRightSupportsType(typ) {
+		return true
+	}
+	preparedType := parameter.GetPrepareParamType()
+	switch preparedType {
+	case types.T_binary, types.T_varbinary, types.T_blob:
+		return true
+	}
+	return parameter.GetIsBinaryStringAt(row)
+}
+
+func jsonMemberOfInvalidRightType(proc *process.Process) error {
+	ctx := context.Background()
+	if proc != nil && proc.Ctx != nil {
+		ctx = proc.Ctx
+	}
+	return moerr.NewInvalidTypeForJSON(ctx, 2, jsonMemberOfFunctionName)
 }
 
 // jsonMemberOfCheckFn keeps the left operand typed so SQL strings remain JSON
@@ -53,13 +91,12 @@ func jsonMemberOfCheckFn(_ []overload, inputs []types.Type) checkResult {
 		finalTypes[0] = types.T_varchar.ToType()
 		needsCast = true
 	}
-	if inputs[1].Oid != types.T_json && !inputs[1].Oid.IsMySQLString() {
-		if inputs[1].Oid == types.T_any {
-			finalTypes[1] = types.T_varchar.ToType()
-			needsCast = true
-		} else {
-			return newCheckResultWithInvalidJSONArgument(2)
-		}
+	if !jsonMemberOfRightSupportsType(inputs[1]) {
+		return newCheckResultWithInvalidJSONArgument(2)
+	}
+	if inputs[1].Oid == types.T_any {
+		finalTypes[1] = types.T_varchar.ToType()
+		needsCast = true
 	}
 	if needsCast {
 		return newCheckResultWithCast(0, finalTypes)
@@ -104,6 +141,12 @@ func (operand *jsonMemberOfValueOperand) documentAt(row uint64, proc *process.Pr
 			operand.parameter.GetPrepareParamType(),
 			operand.parameter.GetIsBinaryStringAt(int(row)),
 		)
+	} else if operand.parameter.GetType().Oid == types.T_year {
+		// YEAR is stored as a temporal SQL type, but MEMBER OF compares its
+		// scalar value in the JSON number domain. Keep this local to MEMBER OF;
+		// JSON_ARRAY/JSON_SET intentionally retain their existing temporal
+		// string formatting contract.
+		elem = uint64(vector.GetFixedAtNoTypeCheck[types.MoYear](operand.parameter, int(row)))
 	} else {
 		elem, err = (&opBuiltInJsonArray{}).convertToAny(proc, operand.parameter, int(row))
 	}
@@ -179,6 +222,9 @@ func jsonMemberOf(
 			continue
 		}
 
+		if jsonMemberOfRightIsBinary(parameters[1], int(row)) {
+			return jsonMemberOfInvalidRightType(proc)
+		}
 		rightDocument, rightNull, err := right.documentAt(row, proc)
 		if err != nil {
 			return err
