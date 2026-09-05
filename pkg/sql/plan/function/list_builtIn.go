@@ -130,6 +130,21 @@ func caseConversionReturnType(parameters []types.Type) types.Type {
 	}
 }
 
+func jsonUnquoteReturnType(parameters []types.Type) types.Type {
+	if len(parameters) != 1 {
+		return types.T_varchar.ToType()
+	}
+	source := parameters[0]
+	switch source.Oid {
+	case types.T_char, types.T_varchar:
+		return types.NewWithCharset(types.T_varchar, source.Width, 0, source.Charset)
+	case types.T_text:
+		return types.NewWithCharset(types.T_text, source.Width, 0, source.Charset)
+	default:
+		return types.T_varchar.ToType()
+	}
+}
+
 func replacementStringReturnType(parameters []types.Type) types.Type {
 	if len(parameters) < 3 {
 		return types.T_varchar.ToType()
@@ -1258,7 +1273,12 @@ var supportedStringBuiltIns = []FuncNew{
 		functionId: JSON_UNQUOTE,
 		class:      plan.Function_STRICT,
 		layout:     STANDARD_FUNCTION,
-		checkFn:    fixedTypeMatch,
+		checkFn: func(overloads []overload, inputs []types.Type) checkResult {
+			if len(inputs) == 1 && types.StaticStringDomain(inputs[0]) == types.StringDomainBinary {
+				return newCheckResultWithFailure(failedFunctionParametersWrong)
+			}
+			return collatedTextFixedTypeMatch(overloads, inputs)
+		},
 
 		Overloads: []overload{
 			{
@@ -1274,9 +1294,7 @@ var supportedStringBuiltIns = []FuncNew{
 			{
 				overloadId: 1,
 				args:       []types.T{types.T_varchar},
-				retType: func(parameters []types.Type) types.Type {
-					return types.T_varchar.ToType()
-				},
+				retType:    jsonUnquoteReturnType,
 				newOp: func() executeLogicOfOverload {
 					return JsonUnquote
 				},
@@ -1284,9 +1302,7 @@ var supportedStringBuiltIns = []FuncNew{
 			{
 				overloadId: 2,
 				args:       []types.T{types.T_char},
-				retType: func(parameters []types.Type) types.Type {
-					return types.T_varchar.ToType()
-				},
+				retType:    jsonUnquoteReturnType,
 				newOp: func() executeLogicOfOverload {
 					return JsonUnquote
 				},
@@ -1294,9 +1310,7 @@ var supportedStringBuiltIns = []FuncNew{
 			{
 				overloadId: 3,
 				args:       []types.T{types.T_text},
-				retType: func(parameters []types.Type) types.Type {
-					return types.T_varchar.ToType()
-				},
+				retType:    jsonUnquoteReturnType,
 				newOp: func() executeLogicOfOverload {
 					return JsonUnquote
 				},

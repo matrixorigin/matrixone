@@ -1003,6 +1003,12 @@ func JsonUnquote(ivecs []*vector.Vector, result vector.FunctionResultWrapper, pr
 	}
 
 	stringSingle := func(v []byte) (string, error) {
+		if !utf8.Valid(v) {
+			return "", moerr.NewInvalidInput(proc.Ctx, "invalid utf-8 string for json_unquote")
+		}
+		if len(v) < 2 || v[0] != '"' || v[len(v)-1] != '"' {
+			return string(v), nil
+		}
 		bj, err := types.ParseSliceToByteJson(v)
 		if err != nil {
 			return "", err
