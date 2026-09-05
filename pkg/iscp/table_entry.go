@@ -222,7 +222,10 @@ func (t *TableEntry) getCandidate() (iter []*IterationContext, minFromTS types.T
 // iteration. Validate the complete shared iteration before changing any job so
 // the in-memory transition is all-or-nothing.
 func (t *TableEntry) markIterationPending(iter *IterationContext) error {
-	if iter == nil || len(iter.jobNames) != len(iter.jobIDs) || len(iter.jobNames) != len(iter.lsn) {
+	if iter == nil ||
+		len(iter.jobNames) != len(iter.jobIDs) ||
+		len(iter.jobNames) != len(iter.lsn) ||
+		len(iter.jobNames) != len(iter.stages) {
 		return moerr.NewInternalErrorNoCtx("invalid ISCP iteration")
 	}
 

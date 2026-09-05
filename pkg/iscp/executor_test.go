@@ -302,22 +302,36 @@ func TestMarkIterationPendingIsAtomic(t *testing.T) {
 			0,
 		)
 	}
+	assertUnchanged := func() {
+		require.Equal(t, uint64(5), table.jobs[JobKey{JobName: "job-1", JobID: 1}].currentLSN)
+		require.Equal(t, ISCPJobState_Completed, table.jobs[JobKey{JobName: "job-1", JobID: 1}].state)
+		require.Equal(t, uint64(6), table.jobs[JobKey{JobName: "job-2", JobID: 2}].currentLSN)
+		require.Equal(t, ISCPJobState_Completed, table.jobs[JobKey{JobName: "job-2", JobID: 2}].state)
+	}
+
+	missingStage := &IterationContext{
+		jobNames: []string{"job-1", "job-2"},
+		jobIDs:   []uint64{1, 2},
+		lsn:      []uint64{6, 7},
+		stages:   []int8{JobStage_Running},
+	}
+	require.Error(t, table.markIterationPending(missingStage))
+	assertUnchanged()
 
 	invalid := &IterationContext{
 		jobNames: []string{"job-1", "job-2"},
 		jobIDs:   []uint64{1, 2},
 		lsn:      []uint64{6, 99},
+		stages:   []int8{JobStage_Running, JobStage_Running},
 	}
 	require.Error(t, table.markIterationPending(invalid))
-	require.Equal(t, uint64(5), table.jobs[JobKey{JobName: "job-1", JobID: 1}].currentLSN)
-	require.Equal(t, ISCPJobState_Completed, table.jobs[JobKey{JobName: "job-1", JobID: 1}].state)
-	require.Equal(t, uint64(6), table.jobs[JobKey{JobName: "job-2", JobID: 2}].currentLSN)
-	require.Equal(t, ISCPJobState_Completed, table.jobs[JobKey{JobName: "job-2", JobID: 2}].state)
+	assertUnchanged()
 
 	valid := &IterationContext{
 		jobNames: []string{"job-1", "job-2"},
 		jobIDs:   []uint64{1, 2},
 		lsn:      []uint64{6, 7},
+		stages:   []int8{JobStage_Running, JobStage_Running},
 	}
 	require.NoError(t, table.markIterationPending(valid))
 	require.Equal(t, uint64(6), table.jobs[JobKey{JobName: "job-1", JobID: 1}].currentLSN)
@@ -948,4 +962,59 @@ func TestISCPRecoveryNormalizesPreRepairSnapshot(t *testing.T) {
 		}
 	}
 	t.Fatal("legacy job was not scheduled after recovery")
+}
+
+func TestReconcileIterationStagesPreventsStaleCatalogInit(t *testing.T) {
+	tests := []struct {
+		name        string
+		stages      []int8
+		persisted   int8
+		wantStage   int8
+		wantInitSQL bool
+	}{
+		{
+			name:        "repaired scheduler stage wins over stale catalog snapshot",
+			stages:      []int8{JobStage_Running},
+			persisted:   JobStage_Init,
+			wantStage:   JobStage_Running,
+			wantInitSQL: false,
+		},
+		{
+			name:        "catalog stage never regresses to scheduler init",
+			stages:      []int8{JobStage_Init},
+			persisted:   JobStage_Running,
+			wantStage:   JobStage_Running,
+			wantInitSQL: false,
+		},
+		{
+			name:        "genuine init remains eligible",
+			stages:      []int8{JobStage_Init},
+			persisted:   JobStage_Init,
+			wantStage:   JobStage_Init,
+			wantInitSQL: true,
+		},
+		{
+			name:        "legacy direct caller without stages keeps catalog decision",
+			stages:      nil,
+			persisted:   JobStage_Init,
+			wantStage:   JobStage_Init,
+			wantInitSQL: true,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			iter := &IterationContext{
+				jobNames: []string{"index_idx"},
+				stages:   test.stages,
+			}
+			statuses := []*JobStatus{{Stage: test.persisted}}
+			jobSpec := &JobSpec{ConsumerInfo: ConsumerInfo{InitSQL: "init sql"}}
+
+			reconcileIterationStages(iter, statuses)
+
+			require.Equal(t, test.wantStage, statuses[0].Stage)
+			require.Equal(t, test.wantInitSQL, jobNeedsInitSQL(jobSpec, statuses[0]))
+		})
+	}
 }

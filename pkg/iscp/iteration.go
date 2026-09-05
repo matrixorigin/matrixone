@@ -126,6 +126,12 @@ func ExecuteIterationWithRuntime(
 		}
 		return
 	}
+	// The scheduler stage belongs to the same job generation selected above and
+	// is a monotonic lower bound. A catalog snapshot can still expose the legacy
+	// Stage=Init row after startup repaired it in memory (for example while the
+	// repair commit is catching up through logtail, or during a mixed-version
+	// handoff). Reconcile before deciding whether InitSQL is allowed to run.
+	reconcileIterationStages(iterCtx, prevStatus)
 	preLSN := make([]uint64, len(iterCtx.jobNames))
 	for i := range iterCtx.jobNames {
 		preLSN[i] = iterCtx.lsn[i] - 1
@@ -133,7 +139,7 @@ func ExecuteIterationWithRuntime(
 
 	var needInit bool
 	for i := range prevStatus {
-		if prevStatus[i].Stage == JobStage_Init && jobSpecs[i].ConsumerInfo.InitSQL != "" {
+		if jobNeedsInitSQL(jobSpecs[i], prevStatus[i]) {
 			if len(iterCtx.jobNames) != 1 {
 				errMsg := "init sql is not supported for multiple jobs"
 				FlushPermanentErrorMessage(
@@ -356,6 +362,24 @@ func ExecuteIterationWithRuntime(
 	}
 
 	return nil
+}
+
+func reconcileIterationStages(iterCtx *IterationContext, statuses []*JobStatus) {
+	if iterCtx == nil || len(iterCtx.stages) != len(statuses) {
+		return
+	}
+	for i, status := range statuses {
+		if status != nil && status.Stage < iterCtx.stages[i] {
+			status.Stage = iterCtx.stages[i]
+		}
+	}
+}
+
+func jobNeedsInitSQL(jobSpec *JobSpec, status *JobStatus) bool {
+	return jobSpec != nil &&
+		status != nil &&
+		status.Stage == JobStage_Init &&
+		jobSpec.ConsumerInfo.InitSQL != ""
 }
 
 func runISCPTaskIterationConsumers(
@@ -820,17 +844,37 @@ func (permanentError) Error() string {
 
 var errPermanent error = permanentError{}
 
-var errISCPStatusCASLost = errors.New("iscp status compare-and-swap lost")
+type iscpStatusCASLostError struct {
+	operation    string
+	jobName      string
+	jobID        uint64
+	affectedRows uint64
+}
+
+func (e *iscpStatusCASLostError) Error() string {
+	return fmt.Sprintf(
+		"iscp status compare-and-swap lost: %s affected %d rows for job %s (id=%d), expected 1",
+		e.operation,
+		e.affectedRows,
+		e.jobName,
+		e.jobID,
+	)
+}
+
+func (e *iscpStatusCASLostError) Is(target error) bool {
+	_, ok := target.(*iscpStatusCASLostError)
+	return ok
+}
+
+var errISCPStatusCASLost error = &iscpStatusCASLostError{}
 
 func newISCPStatusCASLostError(operation, jobName string, jobID, affectedRows uint64) error {
-	return fmt.Errorf(
-		"%w: %s affected %d rows for job %s (id=%d), expected 1",
-		errISCPStatusCASLost,
-		operation,
-		affectedRows,
-		jobName,
-		jobID,
-	)
+	return &iscpStatusCASLostError{
+		operation:    operation,
+		jobName:      jobName,
+		jobID:        jobID,
+		affectedRows: affectedRows,
+	}
 }
 
 func FlushPermanentErrorMessage(
