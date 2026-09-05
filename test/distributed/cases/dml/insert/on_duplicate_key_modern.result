@@ -358,3 +358,23 @@ select id, u, v, updated_at > @ts_sec as ts_advanced from t_odku_sec_uk order by
 ➤ id[4,32,0]  ¦  u[4,32,0]  ¦  v[4,32,0]  ¦  ts_advanced[-7,1,0]  𝄀
 1  ¦  10  ¦  6  ¦  1
 drop table if exists t_odku_sec_uk;
+drop table if exists t_odku_fk_uk_child;
+drop table if exists t_odku_fk_uk_parent;
+create table t_odku_fk_uk_parent(pid int primary key);
+create table t_odku_fk_uk_child(
+id bigint auto_increment primary key,
+pid int not null,
+attr_id int not null,
+val varchar(20),
+unique key uk_pid_attr(pid, attr_id),
+foreign key(pid) references t_odku_fk_uk_parent(pid)
+);
+insert into t_odku_fk_uk_parent values (1);
+insert into t_odku_fk_uk_child(pid, attr_id, val) values (1, 5, 'old');
+insert into t_odku_fk_uk_child(pid, attr_id, val) values (1, 5, 'new')
+on duplicate key update val = values(val);
+select id, pid, attr_id, val from t_odku_fk_uk_child order by id;
+➤ id[-5,64,0]  ¦  pid[4,32,0]  ¦  attr_id[4,32,0]  ¦  val[12,20,0]  𝄀
+1  ¦  1  ¦  5  ¦  new
+drop table if exists t_odku_fk_uk_child;
+drop table if exists t_odku_fk_uk_parent;
