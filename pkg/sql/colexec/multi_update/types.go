@@ -170,6 +170,12 @@ type MultiUpdateCtx struct {
 	// ChangedRowsCol is the input bool column containing the final row-image
 	// change marker. Nil requests the legacy matched-row count.
 	ChangedRowsCol *int
+	// AffectedRowsWeightCol is an ODKU-only uint64 column containing the
+	// logical affected rows accumulated before equal input keys collapse.
+	AffectedRowsWeightCol *int
+	// PhysicalChangedRowsCol independently controls whether the final row image
+	// needs storage/index maintenance. Logical counts are collected first.
+	PhysicalChangedRowsCol *int
 	// AffectedRowsCols contains one semantic selector for every writable alias
 	// coalesced into this physical target. DeleteCols[3] independently controls
 	// physical write eligibility, so implicit cascade rows can be written without
@@ -294,7 +300,8 @@ func (update *MultiUpdate) addInsertAffectRows(tableType UpdateTableType, rowCou
 }
 
 func physicalInsertAffectedRows(updateCtx *MultiUpdateCtx, rowCount uint64) uint64 {
-	if updateCtx != nil && (len(updateCtx.AffectedRowsCols) > 0 || updateCtx.SuppressPhysicalAffectedRows) {
+	if updateCtx != nil && (len(updateCtx.AffectedRowsCols) > 0 ||
+		updateCtx.AffectedRowsWeightCol != nil || updateCtx.SuppressPhysicalAffectedRows) {
 		return 0
 	}
 	return rowCount

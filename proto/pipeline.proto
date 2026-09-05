@@ -334,6 +334,11 @@ message DedupJoin {
   bool dedup_build_keep_last = 19;
   repeated int32 dedup_delete_keep_col_idx_list = 20;
   int32 dedup_delete_marker_col_idx = 21;
+  bool has_odku_affected_rows = 22;
+  int32 affected_rows_result_pos = 23;
+  int32 physical_changed_rows_result_pos = 24;
+  repeated int32 update_check_col_idx_list = 25;
+  bool count_found_rows = 26;
 }
 
 message RightDedupJoin {

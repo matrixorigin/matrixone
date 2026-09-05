@@ -315,8 +315,9 @@ drop table if exists t_odku_mfk_p1;
 drop table if exists t_odku_mfk_p2;
 
 -- ODKU no-op on a table with an implicit ON UPDATE CURRENT_TIMESTAMP column:
--- the auto-update column must not defeat no-op detection (affected rows = 0),
--- and it must not advance when nothing else changes.
+-- the auto-update column must not defeat physical no-op detection or advance.
+-- Under mo-tester's CLIENT_FOUND_ROWS connection the logical affected count is
+-- one even though no row is written.
 drop table if exists t_odku_onupdate;
 create table t_odku_onupdate (
   id int primary key,
@@ -332,6 +333,27 @@ select updated_at = @ts0 as ts_unchanged from t_odku_onupdate where id = 1;
 insert into t_odku_onupdate(id, v) values (1, 99) on duplicate key update v = values(v);
 select v, updated_at > @ts0 as ts_advanced from t_odku_onupdate where id = 1;
 drop table if exists t_odku_onupdate;
+
+-- A synthesized ON UPDATE value must not reach CHECK evaluation for a pure
+-- no-op. The mixed batch also proves that restoring the old image does not
+-- suppress an unrelated insert. CLIENT_FOUND_ROWS counts the no-op conflict as
+-- one; a real change still evaluates CHECK against the new timestamp and is
+-- rejected.
+drop table if exists t_odku_onupdate_check;
+create table t_odku_onupdate_check (
+  id int primary key,
+  v int,
+  updated_at timestamp default '2000-01-01 00:00:00' on update current_timestamp,
+  constraint chk_old_timestamp check (updated_at < '2020-01-01 00:00:00')
+);
+insert into t_odku_onupdate_check(id, v) values (1, 10);
+insert into t_odku_onupdate_check(id, v) values (1, 10) on duplicate key update v = v;
+select row_count(), id, v, updated_at from t_odku_onupdate_check order by id;
+insert into t_odku_onupdate_check(id, v) values (1, 10), (2, 20) on duplicate key update v = v;
+select row_count(), id, v, updated_at from t_odku_onupdate_check order by id;
+insert into t_odku_onupdate_check(id, v) values (1, 11) on duplicate key update v = values(v);
+select id, v, updated_at from t_odku_onupdate_check order by id;
+drop table if exists t_odku_onupdate_check;
 
 -- same, plus a stored generated column derived from the ON UPDATE column:
 -- its recomputed value must not defeat no-op detection either.
@@ -396,6 +418,85 @@ drop table if exists t_odku_sec_uk;
 -- primary key exists only on the stored row and must survive the FK lock barrier.
 drop table if exists t_odku_fk_uk_child;
 drop table if exists t_odku_fk_uk_parent;
+
+-- Ordered assignment semantics and logical affected rows survive in-batch key
+-- collapse. ROW_COUNT is checked separately from the final physical row image.
+drop table if exists t_odku_order_count;
+create table t_odku_order_count(id int primary key, a int, b int);
+insert into t_odku_order_count values (1, 10, 20);
+insert into t_odku_order_count values (1, 100, 200)
+  on duplicate key update a = a + 1, b = a;
+select row_count(), id, a, b from t_odku_order_count;
+update t_odku_order_count set a = 10, b = 20 where id = 1;
+insert into t_odku_order_count values (1, 100, 200)
+  on duplicate key update a = a + 1, a = a + 1;
+select row_count(), id, a, b from t_odku_order_count;
+drop table t_odku_order_count;
+
+drop table if exists t_odku_repeat_count;
+create table t_odku_repeat_count(id int primary key, v int, key iv(v));
+insert into t_odku_repeat_count values (1, 10);
+insert into t_odku_repeat_count values (1, 11), (1, 12), (1, 13)
+  on duplicate key update v = values(v);
+select row_count(), id, v from t_odku_repeat_count;
+truncate table t_odku_repeat_count;
+insert into t_odku_repeat_count values (1, 11), (1, 12), (1, 13)
+  on duplicate key update v = values(v);
+select row_count(), id, v from t_odku_repeat_count;
+truncate table t_odku_repeat_count;
+insert into t_odku_repeat_count values (1, 10);
+insert into t_odku_repeat_count values (1, 11), (1, 10)
+  on duplicate key update v = values(v);
+select row_count(), id, v from t_odku_repeat_count;
+insert into t_odku_repeat_count values (1, 10)
+  on duplicate key update v = values(v);
+select row_count(), id, v from t_odku_repeat_count;
+select count(*) from t_odku_repeat_count force index(iv) where v = 10;
+drop table t_odku_repeat_count;
+
+-- Generated columns observe the ordered final row. A later CHECK failure must
+-- roll back both a preceding insert and all base/index maintenance.
+drop table if exists t_odku_order_generated;
+create table t_odku_order_generated(
+  id int primary key,
+  a int,
+  b int,
+  g int as (a + b),
+  constraint ck_odku_order check(a = b),
+  key ig(g)
+);
+insert into t_odku_order_generated(id, a, b) values (1, 10, 10);
+insert into t_odku_order_generated(id, a, b) values (1, 99, 99)
+  on duplicate key update a = a + 1, b = a;
+select row_count(), id, a, b, g from t_odku_order_generated;
+insert into t_odku_order_generated(id, a, b) values (2, 20, 20), (1, 99, 99)
+  on duplicate key update a = a + 1, b = a + 2;
+select count(*) from t_odku_order_generated;
+select count(*) from t_odku_order_generated force index(ig) where g = 22;
+drop table t_odku_order_generated;
+
+-- The logical-action stream and the final physical image are distinct. A
+-- change followed by a restore still has four affected rows and must preserve
+-- an implicit ON UPDATE effect; a pure no-op must not update it and contributes
+-- one logical affected row under CLIENT_FOUND_ROWS.
+drop table if exists t_odku_repeat_onupdate;
+create table t_odku_repeat_onupdate(
+  id int primary key,
+  v int,
+  updated_at timestamp(6) default '2000-01-01 00:00:00.000000'
+    on update current_timestamp(6)
+);
+insert into t_odku_repeat_onupdate values (1, 10, '2000-01-01 00:00:00.000000');
+insert into t_odku_repeat_onupdate(id, v) values (1, 11), (1, 10)
+  on duplicate key update v = values(v);
+select row_count(), v, updated_at > '2000-01-01 00:00:00.000000' as auto_updated
+  from t_odku_repeat_onupdate;
+update t_odku_repeat_onupdate set updated_at = '2000-01-01 00:00:00.000000';
+insert into t_odku_repeat_onupdate(id, v) values (1, 10)
+  on duplicate key update v = values(v);
+select row_count(), v, updated_at = '2000-01-01 00:00:00.000000' as auto_unchanged
+  from t_odku_repeat_onupdate;
+drop table t_odku_repeat_onupdate;
 create table t_odku_fk_uk_parent(pid int primary key);
 create table t_odku_fk_uk_child(
   id bigint auto_increment primary key,

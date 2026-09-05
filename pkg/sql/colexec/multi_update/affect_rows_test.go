@@ -52,6 +52,71 @@ func TestInsertAffectedRowsUsesChangedRowsMarker(t *testing.T) {
 	require.EqualValues(t, 4, insertAffectedRows(&MultiUpdateCtx{}, input))
 }
 
+func TestFilterODKUPhysicalRowsSeparatesLogicalCount(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	defer proc.Free()
+
+	weights := vector.NewVec(types.T_uint64.ToType())
+	physical := vector.NewVec(types.T_bool.ToType())
+	defer weights.Free(proc.Mp())
+	defer physical.Free(proc.Mp())
+	for _, value := range []uint64{6, 4, 0} {
+		require.NoError(t, vector.AppendFixed(weights, value, false, proc.Mp()))
+	}
+	for _, value := range []bool{true, false, false} {
+		require.NoError(t, vector.AppendFixed(physical, value, false, proc.Mp()))
+	}
+	input := batch.NewWithSize(2)
+	input.Vecs[0], input.Vecs[1] = weights, physical
+	input.SetRowCount(3)
+	weightCol, physicalCol := 0, 1
+
+	filtered, owned, affected, err := filterODKUPhysicalRows(proc, &MultiUpdateCtx{
+		AffectedRowsWeightCol:  &weightCol,
+		PhysicalChangedRowsCol: &physicalCol,
+	}, input)
+	require.NoError(t, err)
+	require.True(t, owned)
+	defer filtered.Clean(proc.Mp())
+	require.EqualValues(t, 10, affected)
+	require.Equal(t, 1, filtered.RowCount(), "restored/no-op rows must count logically but not be written")
+}
+
+func TestFilterODKUPhysicalRowsFastPathAndMalformedMetadata(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	defer proc.Free()
+	weights := vector.NewVec(types.T_uint64.ToType())
+	physical := vector.NewVec(types.T_bool.ToType())
+	defer weights.Free(proc.Mp())
+	defer physical.Free(proc.Mp())
+	for _, value := range []uint64{1, 2} {
+		require.NoError(t, vector.AppendFixed(weights, value, false, proc.Mp()))
+	}
+	for range 2 {
+		require.NoError(t, vector.AppendFixed(physical, true, false, proc.Mp()))
+	}
+	input := batch.NewWithSize(2)
+	input.Vecs[0], input.Vecs[1] = weights, physical
+	input.SetRowCount(2)
+	weightCol, physicalCol := 0, 1
+	ctx := &MultiUpdateCtx{
+		AffectedRowsWeightCol:  &weightCol,
+		PhysicalChangedRowsCol: &physicalCol,
+	}
+
+	filtered, owned, affected, err := filterODKUPhysicalRows(proc, ctx, input)
+	require.NoError(t, err)
+	require.False(t, owned)
+	require.Same(t, input, filtered, "all changed rows must not pay for a clone/selection")
+	require.EqualValues(t, 3, affected)
+
+	badWeightCol := 1
+	_, _, _, err = filterODKUPhysicalRows(proc, &MultiUpdateCtx{
+		AffectedRowsWeightCol: &badWeightCol,
+	}, input)
+	require.ErrorContains(t, err, "invalid ODKU affected-row weight column")
+}
+
 // TestUpsertAffectRowsAccounting pins the MySQL-compatible affected-rows
 // accounting for the main table: a plain UPDATE counts the matched row once
 // (INSERT side only), while an upsert (REPLACE / INSERT ... ON DUPLICATE KEY

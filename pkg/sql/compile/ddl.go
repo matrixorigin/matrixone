@@ -864,9 +864,13 @@ func (s *Scope) alterTableInplace(c *Compile, cleanup *alterAutoIncrementResetCl
 					if indexdef.IndexName == constraintName {
 						//1. drop index table
 						if indexdef.TableExist {
-							if err := c.runSqlWithOptions(
-								"DROP TABLE "+sqlquote.QualifiedIdent(dbName, indexdef.IndexTableName),
-								executor.StatementOption{}.WithDisableLog(),
+							// ALTER already owns the parent and index storage locks. A
+							// nested DROP TABLE tries to acquire the hidden table's catalog
+							// lock after those storage locks, reversing the DML lock order
+							// and allowing a cross-index wait cycle. Use the same
+							// parent-owned deletion path as standalone DROP INDEX.
+							if err := c.dropIndexChildRelation(
+								dbSource, indexdef.IndexTableName, oTableDef.GetIsTemporary(),
 							); err != nil {
 								return err
 							}
@@ -881,12 +885,6 @@ func (s *Scope) alterTableInplace(c *Compile, cleanup *alterAutoIncrementResetCl
 						notDroppedIndex = append(notDroppedIndex, indexdef)
 						newIndexes = append(newIndexes, extra.IndexTables[idx])
 					}
-				}
-
-				// drop index cdc task
-				err = DropIndexCdcTask(c, oTableDef, dbName, tblName, constraintName)
-				if err != nil {
-					return err
 				}
 
 				// unregister index update

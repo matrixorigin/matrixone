@@ -2380,6 +2380,7 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext)
 			localProjList[deletePkPos].Typ,
 			rowNumberPos,
 			activePos,
+			-1,
 			indexes,
 			nil,
 			-1,

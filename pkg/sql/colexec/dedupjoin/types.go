@@ -242,7 +242,13 @@ type container struct {
 	joinBat2 *batch.Batch
 	cfs2     []func(*vector.Vector, *vector.Vector, int64, int) error
 
-	savedVecs []*vector.Vector
+	savedVecs        []*vector.Vector
+	actionBeforeVecs []*vector.Vector
+	groupBeforeVecs  []*vector.Vector
+	stableUpdateVecs [][]*vector.Vector
+	stableCols       []int32
+	stableSources    []*vector.Vector
+	stableDests      []*vector.Vector
 
 	evecs []evalVector
 	vecs  []*vector.Vector
@@ -304,6 +310,11 @@ type DedupJoin struct {
 	DedupDeleteKeepColIdxList []int32
 	UpdateColIdxList          []int32
 	UpdateColExprList         []*plan.Expr
+	HasODKUAffectedRows       bool
+	AffectedRowsResultPos     int32
+	PhysicalChangedResultPos  int32
+	UpdateCheckColIdxList     []int32
+	CountFoundRows            bool
 
 	// OldColCapturePlaceholderIdxList / OldColCaptureProbeIdxList are parallel
 	// arrays. For each i, when probe hits a build bucket the probe-side column
@@ -454,6 +465,7 @@ func (dedupJoin *DedupJoin) Reset(proc *process.Process, pipelineFailed bool, er
 	ctr.cleanResultBatches(proc)
 	ctr.cleanBucketState(proc)
 	ctr.cleanExprExecutor()
+	ctr.cleanStableUpdateVecs(proc)
 	if ctr.spillEngine != nil {
 		ctr.spillEngine.Cleanup(proc)
 		ctr.spillEngine = nil
@@ -475,6 +487,7 @@ func (dedupJoin *DedupJoin) Free(proc *process.Process, pipelineFailed bool, err
 	ctr.cleanBucketState(proc)
 	ctr.cleanBatch(proc)
 	ctr.cleanExprExecutor()
+	ctr.cleanStableUpdateVecs(proc)
 	if ctr.spillEngine != nil {
 		ctr.spillEngine.Cleanup(proc)
 		ctr.spillEngine = nil
@@ -493,6 +506,20 @@ func (ctr *container) cleanExprExecutor() {
 		}
 	}
 	ctr.exprExecs = nil
+}
+
+func (ctr *container) cleanStableUpdateVecs(proc *process.Process) {
+	for _, candidates := range ctr.stableUpdateVecs {
+		for _, vec := range candidates {
+			vec.Free(proc.Mp())
+		}
+	}
+	ctr.stableUpdateVecs = nil
+	ctr.stableCols = nil
+	ctr.stableSources = nil
+	ctr.stableDests = nil
+	ctr.actionBeforeVecs = nil
+	ctr.groupBeforeVecs = nil
 }
 
 func (ctr *container) cleanBuf(proc *process.Process) {

@@ -729,6 +729,10 @@ message DedupJoinCtx {
   // dedup_build_keep_last is set only by REPLACE INTO. It allows duplicate
   // keys on the DEDUP JOIN build side and keeps the last source row.
   bool dedup_build_keep_last = 5;
+  ColRef affected_rows_col = 6;
+  ColRef physical_changed_rows_col = 7;
+  repeated int32 update_check_col_idx_list = 8;
+  bool count_found_rows = 9;
 }
 
 message UpdateCtx {
@@ -746,6 +750,8 @@ message UpdateCtx {
   int32 target_update_ctx_idx = 15;
   repeated ColRef affected_rows_cols = 16 [(gogoproto.nullable) = false];
   ColRef changed_rows_col = 17;
+  ColRef affected_rows_weight_col = 18;
+  ColRef physical_changed_rows_col = 19;
 }
 
 message InsertCtx {

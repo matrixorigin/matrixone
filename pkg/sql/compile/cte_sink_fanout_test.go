@@ -178,6 +178,20 @@ func TestMaterializedCTESinkGroupsShuffleBucketsByCN(t *testing.T) {
 	}
 }
 
+func TestCompileSinkNodeReleasesProducerWhenReceiverIsMissing(t *testing.T) {
+	c := NewMockCompile(t)
+	c.nodeRegs = make(map[[2]int32]*process.WaitRegister)
+	c.stepRegs = make(map[int32][][2]int32)
+	producer := generateScopeWithRootOperator(c.proc, []vm.OpType{vm.TableScan})
+
+	scopes, err := c.compileSinkNode(&plan.Node{NodeType: plan.Node_SINK}, []*Scope{producer}, 0)
+	require.Nil(t, scopes)
+	require.ErrorContains(t, err, "no data receiver for sink node")
+	// No cleanup is intentionally registered here: compileSinkNode owns and
+	// releases producer on this error path. The reuse checker catches leaks or
+	// double releases when the package tests finish.
+}
+
 func TestMaterializedCTEStepGuards(t *testing.T) {
 	c := NewMockCompile(t)
 	tests := []struct {

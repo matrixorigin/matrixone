@@ -1531,6 +1531,25 @@ func Test_DMLOperatorSerializationRoundtrip(t *testing.T) {
 		}
 	})
 
+	t.Run("ODKU metadata rejects mixed-version remote execution", func(t *testing.T) {
+		op := &dedupjoin.DedupJoin{
+			Conditions:          [][]*plan.Expr{nil, nil},
+			HasODKUAffectedRows: true,
+		}
+		rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCLatestVersion)
+		_, instruction, err := convertToPipelineInstruction(op, proc, ctx, 1)
+		require.NoError(t, err)
+		data, err := (&pipeline.Pipeline{InstructionList: []*pipeline.Instruction{instruction}}).Marshal()
+		require.NoError(t, err)
+
+		rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion47)
+		_, _, err = convertToPipelineInstruction(op, proc, ctx, 1)
+		require.ErrorContains(t, err, "MORPC protocol version 48")
+		_, err = decodeScope(data, proc, true, nil)
+		require.ErrorContains(t, err, "MORPC protocol version 48")
+		rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCLatestVersion)
+	})
+
 	t.Run("FuzzyFilter_RuntimeFilterPairContract", func(t *testing.T) {
 		probeType := &planpb.Type{
 			Id:    int32(types.T_decimal64),
@@ -1843,19 +1862,23 @@ func Test_DMLOperatorSerializationRoundtrip(t *testing.T) {
 
 	t.Run("MultiUpdate_PartitionCols", func(t *testing.T) {
 		changedRowsCol := 7
+		affectedRowsWeightCol := 11
+		physicalChangedRowsCol := 12
 		op := &multi_update.MultiUpdate{
 			MultiUpdateCtx: []*multi_update.MultiUpdateCtx{
 				{
-					ObjRef:             &plan.ObjectRef{ObjName: "t1"},
-					TableDef:           &plan.TableDef{Name: "t1"},
-					InsertCols:         []int{0, 1, 2},
-					DeleteCols:         []int{3, 4, 8},
-					PartitionCols:      []int{5, 6},
-					InsertPkColIdx:     1,
-					DedupByTargetRowID: true,
-					TargetUpdateCtxIdx: 0,
-					ChangedRowsCol:     &changedRowsCol,
-					AffectedRowsCols:   []int{9, 10},
+					ObjRef:                 &plan.ObjectRef{ObjName: "t1"},
+					TableDef:               &plan.TableDef{Name: "t1"},
+					InsertCols:             []int{0, 1, 2},
+					DeleteCols:             []int{3, 4, 8},
+					PartitionCols:          []int{5, 6},
+					InsertPkColIdx:         1,
+					DedupByTargetRowID:     true,
+					TargetUpdateCtxIdx:     0,
+					ChangedRowsCol:         &changedRowsCol,
+					AffectedRowsCols:       []int{9, 10},
+					AffectedRowsWeightCol:  &affectedRowsWeightCol,
+					PhysicalChangedRowsCol: &physicalChangedRowsCol,
 				},
 			},
 			Action: multi_update.UpdateWriteTable,
@@ -1876,6 +1899,8 @@ func Test_DMLOperatorSerializationRoundtrip(t *testing.T) {
 		require.NotNil(t, restoredOp.MultiUpdateCtx[0].ChangedRowsCol)
 		require.Equal(t, 7, *restoredOp.MultiUpdateCtx[0].ChangedRowsCol)
 		require.Equal(t, []int{9, 10}, restoredOp.MultiUpdateCtx[0].AffectedRowsCols)
+		require.Equal(t, 11, *restoredOp.MultiUpdateCtx[0].AffectedRowsWeightCol)
+		require.Equal(t, 12, *restoredOp.MultiUpdateCtx[0].PhysicalChangedRowsCol)
 		require.True(t, restoredOp.IsRemote)
 		require.False(t, restoredOp.CountDeleteAffectRows,
 			"CountDeleteAffectRows must stay false when the source op did not set it")
@@ -1967,18 +1992,39 @@ func Test_DMLOperatorSerializationRoundtrip(t *testing.T) {
 		require.Equal(t, int32(9), restoredPreInsert.TargetRowIDCol)
 	})
 
-	t.Run("DedupJoin_DedupBuildKeepLast", func(t *testing.T) {
+	t.Run("DedupJoin_DedupBuildKeepLastAndODKUMetadata", func(t *testing.T) {
 		op := &dedupjoin.DedupJoin{
-			Conditions:         [][]*plan.Expr{nil, nil},
-			DedupBuildKeepLast: true,
+			Conditions:               [][]*plan.Expr{nil, nil},
+			DedupBuildKeepLast:       true,
+			HasODKUAffectedRows:      true,
+			AffectedRowsResultPos:    4,
+			PhysicalChangedResultPos: 5,
+			UpdateCheckColIdxList:    []int32{1, 3},
+			CountFoundRows:           true,
 		}
 		_, pipeInstr, err := convertToPipelineInstruction(op, proc, ctx, 1)
 		require.NoError(t, err)
 		require.True(t, pipeInstr.DedupJoin.DedupBuildKeepLast)
+		require.True(t, pipeInstr.DedupJoin.HasOdkuAffectedRows)
+		require.Equal(t, int32(4), pipeInstr.DedupJoin.AffectedRowsResultPos)
+		require.Equal(t, int32(5), pipeInstr.DedupJoin.PhysicalChangedRowsResultPos)
+		require.Equal(t, []int32{1, 3}, pipeInstr.DedupJoin.UpdateCheckColIdxList)
+		require.True(t, pipeInstr.DedupJoin.CountFoundRows)
 
-		restored, err := convertToVmOperator(pipeInstr, ctx, nil)
+		wire, err := pipeInstr.Marshal()
 		require.NoError(t, err)
-		require.True(t, restored.(*dedupjoin.DedupJoin).DedupBuildKeepLast)
+		decoded := new(pipeline.Instruction)
+		require.NoError(t, decoded.Unmarshal(wire))
+
+		restored, err := convertToVmOperator(decoded, ctx, nil)
+		require.NoError(t, err)
+		restoredDedup := restored.(*dedupjoin.DedupJoin)
+		require.True(t, restoredDedup.DedupBuildKeepLast)
+		require.True(t, restoredDedup.HasODKUAffectedRows)
+		require.Equal(t, int32(4), restoredDedup.AffectedRowsResultPos)
+		require.Equal(t, int32(5), restoredDedup.PhysicalChangedResultPos)
+		require.Equal(t, []int32{1, 3}, restoredDedup.UpdateCheckColIdxList)
+		require.True(t, restoredDedup.CountFoundRows)
 	})
 
 	t.Run("MergeOrder_SpillThreshold", func(t *testing.T) {

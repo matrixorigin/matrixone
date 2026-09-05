@@ -116,6 +116,14 @@ func DeepCopyUpdateCtxList(updateCtxList []*plan.UpdateCtx) []*plan.UpdateCtx {
 			changedRowsCol := *ctx.ChangedRowsCol
 			result[i].ChangedRowsCol = &changedRowsCol
 		}
+		if ctx.AffectedRowsWeightCol != nil {
+			col := *ctx.AffectedRowsWeightCol
+			result[i].AffectedRowsWeightCol = &col
+		}
+		if ctx.PhysicalChangedRowsCol != nil {
+			col := *ctx.PhysicalChangedRowsCol
+			result[i].PhysicalChangedRowsCol = &col
+		}
 	}
 
 	return result
@@ -227,11 +235,21 @@ func DeepCopyDedupJoinCtx(ctx *plan.DedupJoinCtx) *plan.DedupJoinCtx {
 		return nil
 	}
 	newCtx := &plan.DedupJoinCtx{
-		OldColList:         slices.Clone(ctx.OldColList),
-		UpdateColIdxList:   slices.Clone(ctx.UpdateColIdxList),
-		UpdateColExprList:  DeepCopyExprList(ctx.UpdateColExprList),
-		OldColCaptureList:  slices.Clone(ctx.OldColCaptureList),
-		DedupBuildKeepLast: ctx.DedupBuildKeepLast,
+		OldColList:            slices.Clone(ctx.OldColList),
+		UpdateColIdxList:      slices.Clone(ctx.UpdateColIdxList),
+		UpdateColExprList:     DeepCopyExprList(ctx.UpdateColExprList),
+		OldColCaptureList:     slices.Clone(ctx.OldColCaptureList),
+		DedupBuildKeepLast:    ctx.DedupBuildKeepLast,
+		UpdateCheckColIdxList: slices.Clone(ctx.UpdateCheckColIdxList),
+		CountFoundRows:        ctx.CountFoundRows,
+	}
+	if ctx.AffectedRowsCol != nil {
+		col := *ctx.AffectedRowsCol
+		newCtx.AffectedRowsCol = &col
+	}
+	if ctx.PhysicalChangedRowsCol != nil {
+		col := *ctx.PhysicalChangedRowsCol
+		newCtx.PhysicalChangedRowsCol = &col
 	}
 
 	return newCtx

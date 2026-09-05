@@ -61,6 +61,7 @@ func fulltextODKUPlanShape(t *testing.T, sql string) (hiddenScans map[string]int
 	require.NoError(t, err)
 	query := logicPlan.GetQuery()
 	require.NotNil(t, query)
+	assertEverySinkStepHasConsumer(t, query)
 
 	hiddenScans = make(map[string]int)
 	reachable := reachableODKUPlanNodes(query)
@@ -146,6 +147,23 @@ func TestOnDuplicateIrregularMaintenanceUsesOnlyEligibleRows(t *testing.T) {
 		require.Zero(t, tokenizers)
 		require.Zero(t, newRowsOnlyFilters, "CDC-only fulltext must not get a filtered source with no inline consumer")
 	})
+}
+
+func assertEverySinkStepHasConsumer(t *testing.T, query *planpb.Query) {
+	t.Helper()
+	consumerCount := make([]int, len(query.Steps))
+	for _, node := range query.Nodes {
+		for _, sourceStep := range node.SourceStep {
+			if sourceStep >= 0 && int(sourceStep) < len(consumerCount) {
+				consumerCount[sourceStep]++
+			}
+		}
+	}
+	for step, rootID := range query.Steps {
+		if query.Nodes[rootID].NodeType == planpb.Node_SINK {
+			require.Positive(t, consumerCount[step], "sink step %d must have a receiver", step)
+		}
+	}
 }
 
 func TestSplitIrregularIndexesKeepsLogicalIndexGroupsTogether(t *testing.T) {

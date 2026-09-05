@@ -148,6 +148,7 @@ func TestDedupJoinUpdateRestoresProbeVectors(t *testing.T) {
 				OnDuplicateAction:       plan.Node_UPDATE,
 				UpdateColIdxList:        []int32{1},
 				UpdateColExprList:       []*plan.Expr{updateExpr},
+				UpdateCheckColIdxList:   []int32{1},
 				DelColIdx:               -1,
 				DedupDeleteMarkerColIdx: -1,
 				JoinMapTag:              curTag,

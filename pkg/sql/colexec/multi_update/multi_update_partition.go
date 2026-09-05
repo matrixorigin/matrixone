@@ -379,8 +379,11 @@ func clonePartitionTargetContexts(contexts []*MultiUpdateCtx) []*MultiUpdateCtx 
 		// semantic selectors were present; ordinary single-target updates still
 		// derive affected rows from their physical inserts.
 		cloned[i].DedupByTargetRowID = false
-		cloned[i].SuppressPhysicalAffectedRows = len(cloned[i].AffectedRowsCols) > 0
+		cloned[i].SuppressPhysicalAffectedRows = len(cloned[i].AffectedRowsCols) > 0 ||
+			cloned[i].AffectedRowsWeightCol != nil
 		cloned[i].AffectedRowsCols = nil
+		cloned[i].AffectedRowsWeightCol = nil
+		cloned[i].PhysicalChangedRowsCol = nil
 	}
 	return cloned
 }
@@ -395,8 +398,11 @@ func clonePartitionPhaseContexts(
 		// Partition-key moves share the selection result across delete and
 		// insert phases, so neither phase may count semantic selectors again.
 		cloned[i].DedupByTargetRowID = false
-		cloned[i].SuppressPhysicalAffectedRows = len(cloned[i].AffectedRowsCols) > 0
+		cloned[i].SuppressPhysicalAffectedRows = len(cloned[i].AffectedRowsCols) > 0 ||
+			cloned[i].AffectedRowsWeightCol != nil
 		cloned[i].AffectedRowsCols = nil
+		cloned[i].AffectedRowsWeightCol = nil
+		cloned[i].PhysicalChangedRowsCol = nil
 		if deletePhase {
 			cloned[i].InsertCols = nil
 		} else {
@@ -625,6 +631,8 @@ func (ctx *MultiUpdateCtx) clone() *MultiUpdateCtx {
 		DedupByTargetRowID:           ctx.DedupByTargetRowID,
 		TargetUpdateCtxIdx:           ctx.TargetUpdateCtxIdx,
 		ChangedRowsCol:               ctx.ChangedRowsCol,
+		AffectedRowsWeightCol:        ctx.AffectedRowsWeightCol,
+		PhysicalChangedRowsCol:       ctx.PhysicalChangedRowsCol,
 		AffectedRowsCols:             append([]int(nil), ctx.AffectedRowsCols...),
 		SuppressPhysicalAffectedRows: ctx.SuppressPhysicalAffectedRows,
 		TargetTableID:                ctx.TargetTableID,
