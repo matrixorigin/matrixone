@@ -127,7 +127,8 @@ func (dp *DataProcessor) SetTransactionRange(fromTs, toTs types.TS) {
 }
 
 // ProcessChange processes a single ChangeData
-// Returns error if processing fails
+// Returns error if processing fails. The caller retains ownership of every
+// non-nil batch in data; a successful ownership transfer clears that field.
 func (dp *DataProcessor) ProcessChange(ctx context.Context, data *ChangeData) error {
 	// Check sinker error from last round
 	if err := dp.sinker.Error(); err != nil {
@@ -230,11 +231,10 @@ func (dp *DataProcessor) processSnapshot(ctx context.Context, data *ChangeData) 
 		mp:             dp.mp,
 		snapshotPermit: data.snapshotPermit,
 	})
+	data.InsertBatch = nil
 	data.snapshotPermit = nil
 	dp.snapshotTxnBatches++
 	dp.snapshotTxnBytes += batchBytes
-
-	// Note: We don't clean data.InsertBatch here because Sink() takes ownership
 
 	// Note: For initSnapshotSplitTxn mode, we DON'T update watermark after each batch
 	// because snapshot data might span multiple batches.
@@ -357,6 +357,8 @@ func (dp *DataProcessor) resetSnapshotTxnGroup() {
 
 // processTailWip processes tail work-in-progress data (accumulate)
 func (dp *DataProcessor) processTailWip(ctx context.Context, data *ChangeData) error {
+	hasInsert := data.InsertBatch != nil
+	hasDelete := data.DeleteBatch != nil
 	insertRows := 0
 	deleteRows := 0
 	if data.InsertBatch != nil {
@@ -391,6 +393,8 @@ func (dp *DataProcessor) processTailWip(ctx context.Context, data *ChangeData) e
 	// Append to atomic batches
 	dp.insertAtmBatch.Append(packer, data.InsertBatch, dp.insTsColIdx, dp.insCompositedPkColIdx)
 	dp.deleteAtmBatch.Append(packer, data.DeleteBatch, dp.delTsColIdx, dp.delCompositedPkColIdx)
+	data.InsertBatch = nil
+	data.DeleteBatch = nil
 
 	logutil.Debug(
 		"cdc.data_processor.process_tail_wip",
@@ -398,8 +402,8 @@ func (dp *DataProcessor) processTailWip(ctx context.Context, data *ChangeData) e
 		zap.Uint64("account-id", dp.accountId),
 		zap.String("db", dp.dbName),
 		zap.String("table", dp.tableName),
-		zap.Bool("has-insert", data.InsertBatch != nil),
-		zap.Bool("has-delete", data.DeleteBatch != nil),
+		zap.Bool("has-insert", hasInsert),
+		zap.Bool("has-delete", hasDelete),
 		zap.Int("insert-rows", dp.insertAtmBatch.RowCount()),
 		zap.Int("delete-rows", dp.deleteAtmBatch.RowCount()),
 	)
@@ -425,6 +429,8 @@ func (dp *DataProcessor) processTailDone(ctx context.Context, data *ChangeData) 
 	// Append to atomic batches
 	dp.insertAtmBatch.Append(packer, data.InsertBatch, dp.insTsColIdx, dp.insCompositedPkColIdx)
 	dp.deleteAtmBatch.Append(packer, data.DeleteBatch, dp.delTsColIdx, dp.delCompositedPkColIdx)
+	data.InsertBatch = nil
+	data.DeleteBatch = nil
 
 	// Begin transaction if not already begun
 	tracker := dp.txnManager.GetTracker()

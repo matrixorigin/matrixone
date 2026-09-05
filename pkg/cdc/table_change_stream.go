@@ -1555,27 +1555,27 @@ func (s *TableChangeStream) processWithTxn(
 			}
 		}
 
+		// Capture observability before ProcessChange transfers batch ownership.
+		// ChangeData.Clean below only releases fields the processor did not consume.
+		var rows uint64
+		if changeData.InsertBatch != nil {
+			rows = uint64(changeData.InsertBatch.RowCount())
+		}
+		if changeData.DeleteBatch != nil {
+			rows += uint64(changeData.DeleteBatch.RowCount())
+		}
+
 		// Process change
 		if err = s.dataProcessor.ProcessChange(ctx, changeData); err != nil {
-			changeData.releaseSnapshotPermit()
+			changeData.Clean(s.mp)
 			s.progressTracker.EndRound(false, err)
 			return err
 		}
-		// ProcessChange transfers snapshot permits with batch ownership. This is a
-		// no-op after a successful transfer and covers all early-return paths.
-		changeData.releaseSnapshotPermit()
+		changeData.Clean(s.mp)
 
 		// Track batch processing
 		if changeData.Type != ChangeTypeNoMoreData {
 			batchCount++
-			var rows uint64
-			if changeData.InsertBatch != nil {
-				rows = uint64(changeData.InsertBatch.RowCount())
-			}
-			if changeData.DeleteBatch != nil {
-				rows += uint64(changeData.DeleteBatch.RowCount())
-			}
-
 			// Record batch with estimated size
 			s.progressTracker.RecordBatch(rows, rows*100) // Rough estimate: 100 bytes per row
 

@@ -783,6 +783,19 @@ type immediateChangesHandle struct {
 	closed  bool
 }
 
+type beforeNextChangesHandle struct {
+	engine.ChangesHandle
+	before func()
+}
+
+func (h *beforeNextChangesHandle) Next(
+	ctx context.Context,
+	mp *mpool.MPool,
+) (*batch.Batch, *batch.Batch, engine.ChangesHandle_Hint, error) {
+	h.before()
+	return h.ChangesHandle.Next(ctx, mp)
+}
+
 func newImmediateChangesHandle(batches []changeBatch) *immediateChangesHandle {
 	return &immediateChangesHandle{batches: batches}
 }
@@ -1472,6 +1485,7 @@ func TestTableChangeStream_BeginFailureDoesNotRollback(t *testing.T) {
 	require.NotNil(t, tracker, "tracker should be created even if begin fails")
 	require.False(t, tracker.NeedsRollback(), "tracker should not require rollback when begin fails")
 	require.False(t, tracker.IsCompleted(), "tracker should remain incomplete after begin failure")
+	require.Zero(t, h.MP().OnHeapCurrNB()+h.MP().CurrNB(), "failed TailDone must have one cleanup owner")
 }
 
 func TestTableChangeStream_BeginFailure_NetworkError_Retryable(t *testing.T) {
@@ -2448,6 +2462,60 @@ func TestTableChangeStream_StableInitialSnapshotEpochAndTailBoundary(t *testing.
 	assert.Equal(t, epoch, calls[0].to)
 	assert.Equal(t, epoch, calls[1].from)
 	assert.Equal(t, types.BuildTS(120, 0), calls[1].to)
+}
+
+func TestTableChangeStream_StableSnapshotRecordsTransferredRows(t *testing.T) {
+	h := newTableStreamHarness(
+		t,
+		withHarnessInitSnapshotSplitTxn(true),
+		withHarnessInitialSnapshotEpoch(types.BuildTS(80, 0)),
+		withHarnessWatermarkUpdater(newWatermarkUpdaterStub(), nil),
+	)
+	h.Stream().start.Done() // The test invokes processOneRound directly, not Run.
+	h.SetCollectFactory(func(_, to types.TS) (engine.ChangesHandle, error) {
+		return newImmediateChangesHandle([]changeBatch{{
+			insert: createTestBatch(t, h.MP(), to, []int32{1, 2, 3}),
+			hint:   engine.ChangesHandle_Snapshot,
+		}}), nil
+	})
+
+	require.NoError(t, h.Stream().processOneRound(h.Context(), h.NewActiveRoutine()))
+	require.Equal(t, uint64(3), h.Stream().progressTracker.totalRowsProcessed.Load())
+}
+
+func TestTableChangeStream_SnapshotRotationFailureCleansIncomingBatch(t *testing.T) {
+	h := newTableStreamHarness(
+		t,
+		withHarnessInitSnapshotSplitTxn(true),
+		withHarnessInitialSnapshotEpoch(types.BuildTS(80, 0)),
+		withHarnessWatermarkUpdater(newWatermarkUpdaterStub(), nil),
+	)
+	h.Stream().start.Done() // The test invokes processOneRound directly, not Run.
+
+	commitErr := moerr.NewInternalErrorNoCtx("target commit failed")
+	h.SetCollectFactory(func(_, to types.TS) (engine.ChangesHandle, error) {
+		first := createTestBatch(t, h.MP(), to, []int32{1})
+		incoming := createTestBatch(t, h.MP(), to, []int32{2})
+		nextCalls := 0
+		return &beforeNextChangesHandle{
+			ChangesHandle: newImmediateChangesHandle([]changeBatch{
+				{insert: first, hint: engine.ChangesHandle_Snapshot},
+				{insert: incoming, hint: engine.ChangesHandle_Snapshot},
+			}),
+			before: func() {
+				nextCalls++
+				if nextCalls == 2 {
+					// Force rotation without allocating a 512 MiB test batch.
+					h.Stream().dataProcessor.snapshotTxnBytes = uint64(initialSnapshotTxnByteLimit) - 1
+					h.Sinker().setCommitError(commitErr)
+				}
+			},
+		}, nil
+	})
+
+	require.ErrorIs(t, h.Stream().processOneRound(h.Context(), h.NewActiveRoutine()), commitErr)
+	h.Sinker().releaseOutputs()
+	require.Zero(t, h.MP().OnHeapCurrNB()+h.MP().CurrNB())
 }
 
 func TestTableChangeStream_RecreatedGenerationStartsFromEmptyPosition(t *testing.T) {

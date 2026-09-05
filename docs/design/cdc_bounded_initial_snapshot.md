@@ -203,6 +203,16 @@ through `ChangeData`, `DecoderOutput`, and the sink command, and is released by
 the terminal owner. Error and cancellation paths either transfer or release it
 exactly once.
 
+Batch ownership is represented by the `ChangeData` fields, not inferred from a
+successful or failed method return. A non-nil field remains caller-owned. Every
+processor path that transfers a batch to a snapshot group, `AtomicBatch`, or
+sinker clears the corresponding field immediately. After every processing
+attempt, the table stream calls `ChangeData.Clean`; it therefore releases only
+untransferred batches and permits. This rule covers errors both before and after
+partial transfer without a second cleanup branch or asynchronous double-free.
+Rows needed for metrics are captured before transfer, so observability never
+reads a batch that an asynchronous sink may already have released.
+
 The limiter is FIFO and chooses concurrency in `[1, 8]` from:
 
 `available cgroup/host memory / 4 / learned batch-size estimate`.
@@ -542,8 +552,8 @@ under the existing remote evidence directory above.
 
 | Resource | Acquired by | Terminal release |
 | --- | --- | --- |
-| Snapshot permit | reader before `collector.Next` | collector error, non-snapshot result, decoder cleanup, or sink command completion |
-| Source batch | collector | sink command completion or reader cleanup |
+| Snapshot permit | reader before `collector.Next` | collector error, non-snapshot result, untransferred `ChangeData.Clean`, or sink command completion |
+| Source batch | collector; then the non-nil `ChangeData` field until explicitly transferred | untransferred `ChangeData.Clean`, processor-group cleanup, `AtomicBatch.Close`, or sink command completion |
 | Target transaction | sink executor | commit, rollback, or close |
 | Target advisory lock | sink executor for one effect interval | post-commit release, rollback/error, DDL completion, or close |
 | Stable epoch row | task/table source generation and replay endpoint | next successfully initialized higher table generation, terminal task cleanup, or orphan cleanup |

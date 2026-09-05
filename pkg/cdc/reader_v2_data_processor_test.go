@@ -1143,6 +1143,7 @@ func TestDataProcessor_ProcessTailDone_BeginFailureRetainsBatches(t *testing.T) 
 	err := h.dp.ProcessChange(ctx, data)
 	require.ErrorIs(t, err, beginErr)
 
+	assert.Nil(t, data.InsertBatch, "AtomicBatch owns the appended batch after Begin fails")
 	assert.NotNil(t, h.dp.insertAtmBatch)
 	assert.Equal(t, []string{"begin"}, h.sinker.opsSnapshot())
 	assert.Len(t, h.sinker.sinkCallsSnapshot(), 0)
@@ -1527,6 +1528,7 @@ func TestDataProcessor_SinkerErrorRecovery(t *testing.T) {
 	// Process should succeed now
 	err = h.dp.ProcessChange(ctx, data)
 	require.NoError(t, err)
+	require.Nil(t, data.InsertBatch, "sinker owns the snapshot batch after transfer")
 
 	// Verify sinker was called
 	calls := h.sinker.sinkCallsSnapshot()
