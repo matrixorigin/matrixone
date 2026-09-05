@@ -1,0 +1,78 @@
+-- MySQL-style non-unique single-expression functional-index regression suite.
+drop database if exists functional_index;
+create database functional_index;
+use functional_index;
+create table fi_inline (
+id int primary key,
+doc json,
+name varchar(32),
+qty int,
+key idx_sku ((json_unquote(json_extract(doc, '$.sku'))))
+);
+insert into fi_inline (id, doc, name, qty) values
+(1, '{"sku":"alpha"}', 'Alice', 2),
+(2, '{"sku":"beta"}', 'Bob', 4),
+(3, '{"sku":null}', 'Carol', 6),
+(4, '{"other":"missing"}', 'Dora', 8);
+select id, json_unquote(json_extract(doc, '$.sku')) as sku from fi_inline order by id;
+id    sku
+1    alpha
+2    beta
+3    null
+4    null
+-- @regex("KEY `idx_sku`.*json_unquote", true)
+-- @regex("__mo_fi_", false)
+show create table fi_inline;
+Table    Create Table
+fi_inline    CREATE TABLE `fi_inline` (\n  `id` int NOT NULL,\n  `doc` json DEFAULT NULL,\n  `name` varchar(32) DEFAULT NULL,\n  `qty` int DEFAULT NULL,\n  PRIMARY KEY (`id`),\n  KEY `idx_sku` ((json_unquote(json_extract(doc, '$.sku'))))\n)
+-- @regex("idx_sku.*NULL.*json_unquote", true)
+show index from fi_inline;
+Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Index_comment    Index_params    Visible    Expression
+fi_inline    0    PRIMARY    1    id    A    0    NULL    NULL                        YES    id
+fi_inline    1    idx_sku    1    NULL    A    0    NULL    NULL    YES                    YES    json_unquote(json_extract(doc, '$.sku'))
+-- @regex("Index Table Scan.*idx_sku", true)
+explain select id from fi_inline where json_unquote(json_extract(doc, '$.sku')) = 'alpha';
+  ->  Index Table Scan on fi_inline.idx_sku
+select id from fi_inline where json_unquote(json_extract(doc, '$.sku')) = 'alpha';
+id
+1
+create index idx_name_lower on fi_inline ((lower(name)));
+alter table fi_inline add index idx_qty_plus ((qty + 1));
+insert into fi_inline (id, doc, name, qty) values (5, '{"sku":"gamma"}', 'Eve', 10);
+update fi_inline set doc = '{"sku":"delta"}', qty = 11 where id = 1;
+delete from fi_inline where id = 2;
+replace into fi_inline (id, doc, name, qty) values (3, '{"sku":"epsilon"}', 'Carol', 12);
+insert into fi_inline (id, doc, name, qty) values (1, '{"sku":"zeta"}', 'Alice', 13) on duplicate key update doc = values(doc), qty = values(qty);
+select id, json_unquote(json_extract(doc, '$.sku')) as sku, qty from fi_inline order by id;
+id    sku    qty
+1    zeta    13
+3    epsilon    12
+4    null    8
+5    gamma    10
+drop index idx_name_lower on fi_inline;
+alter table fi_inline drop index idx_qty_plus;
+drop index idx_sku on fi_inline;
+-- @regex("__mo_fi_", false)
+show create table fi_inline;
+Table    Create Table
+fi_inline    CREATE TABLE `fi_inline` (\n  `id` int NOT NULL,\n  `doc` json DEFAULT NULL,\n  `name` varchar(32) DEFAULT NULL,\n  `qty` int DEFAULT NULL,\n  PRIMARY KEY (`id`)\n)
+select count(*) from mo_catalog.mo_columns where attrelname = 'fi_inline' and attdatabase = 'functional_index' and attname like '__mo_fi_%';
+➤ count(*)[-5,64,0]  𝄀
+0
+select count(*) from mo_catalog.mo_indexes where table_id = (select rel_id from mo_catalog.mo_tables where relname = 'fi_inline' and reldatabase = 'functional_index') and column_name like '__mo_fi_%';
+➤ count(*)[-5,64,0]  𝄀
+0
+-- Stable rejection matrix.
+-- @regex("functional", true)
+create table fi_unique (id int primary key, a int, unique key uq ((a + 1)));
+functional expressions are not supported in UNIQUE indexes
+-- @regex("functional", true)
+create table fi_composite (id int primary key, a int, b int, key bad ((a + 1), b));
+functional indexes require exactly one expression key part
+-- @regex("unsupported type", true)
+create table fi_json (id int primary key, doc json, key bad ((json_extract(doc, '$.sku'))));
+functional index expression returns unsupported type JSON
+-- @regex("functional", true)
+create temporary table fi_temp (id int, a int, key bad ((a + 1)));
+functional indexes are not supported on temporary tables
+drop database functional_index;

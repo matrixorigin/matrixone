@@ -311,8 +311,14 @@ func genInsertMOIndexesSql(eg engine.Engine, proc *process.Process, databaseId s
 					}
 					fmt.Fprintf(buffer, "%d, ", visible)
 
-					// 10. index vec_hidden
-					fmt.Fprintf(buffer, "%d, ", INDEX_HIDDEN_NO)
+					// 10. index vec_hidden. A functional key part is backed by
+					// a reserved hidden generated column; keep the physical name
+					// in mo_indexes while marking it hidden for SHOW INDEX.
+					hidden := INDEX_HIDDEN_NO
+					if catalog.IsFunctionalIndexColumnName(catalog.ResolveAlias(part)) {
+						hidden = INDEX_HIDDEN_YES
+					}
+					fmt.Fprintf(buffer, "%d, ", hidden)
 
 					// 11. index vec_comment
 					fmt.Fprintf(buffer, "%s, ", sqlquote.String(indexDef.Comment))

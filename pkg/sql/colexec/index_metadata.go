@@ -339,7 +339,11 @@ func buildInsertIndexMetaBatch(tableId uint64, databaseId uint64, ct *engine.Con
 					if err != nil {
 						return nil, err
 					}
-					err = vector.AppendFixed(vec_hidden, int8(0), false, proc.Mp())
+					hidden := int8(0)
+					if catalog.IsFunctionalIndexColumnName(part) {
+						hidden = 1
+					}
+					err = vector.AppendFixed(vec_hidden, hidden, false, proc.Mp())
 					if err != nil {
 						return nil, err
 					}
