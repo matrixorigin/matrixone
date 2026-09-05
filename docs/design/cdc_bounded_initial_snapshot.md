@@ -567,8 +567,11 @@ No throughput gain is claimed for this correction. The performance constraint
 is no added per-row/per-batch work and no new polling loop, retained completion
 history, or blocking control-path dependency. This correction restores the
 existing claim-ownership contract without a new catalog schema or persisted
-protocol. Delivery of the requested bug fix is not independent approval of the
-whole stable-epoch feature; the whole PR's design/merge gate remains open.
+protocol. Delivery of the requested bug fix did not independently approve the
+whole stable-epoch feature. The subsequent R3 decision recorded in the Status
+section approved the complete design and closed the design/merge gate for
+implementation revision `7fa37b9d61`; this paragraph records that chronology
+and does not reopen the gate.
 
 The follow-up pre-Attach/Failed-state control recovery correction was validated
 against PR head `8d031b3cd5517d1367c2e59be1c24a3aa353fc78`: the original eight
