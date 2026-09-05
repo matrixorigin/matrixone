@@ -57,17 +57,23 @@ vectors are borrowed only until winner physical row numbers are known, then only
 winner rows are copied to caller-owned destinations.  `ReleaseIOVector` is the
 single release owner on every success and error path.
 
-The per-reader heap is created by the reader and discarded with that reader; it
-is not shared across scans.  Its retained winner state is O(K), while the
-selection is bounded by the block's physical row count B.  At most one fused
-request pins `P + 1 + D` columns for a block, where P is predicate columns and D
-is deferred projected columns.  For a 1024-d `float64` vector the vector payload
-is `8192 * B` bytes before ObjectIO/cache representation overhead; predicate and
-deferred payloads add their encoded column sizes.  Concurrent scans multiply
-the pinned-request bound by their concurrent block reads, so the existing
-ObjectIO cache/admission policy remains the capacity control.  Fusion trades one
-request's wider pin set for removal of the second deferred read and avoids
-materializing non-winners into caller-owned vectors.
+The per-reader distance heap is created by the reader and discarded with that
+reader; it is not shared across scans. Its row/distance companion is a second
+max heap bounded to `min(B, K)`: an accepted candidate replaces the companion's
+current worst entry rather than being appended to a historical result slice.
+After the shared distance cutoff is final, entries above that cutoff are removed
+and the remaining rows are restored to physical input order. Thus both distance
+and row/distance winner state are O(K), even for a strictly descending sequence
+where every row improves the cutoff. The selection is bounded by the block's
+physical row count B. At most one fused request pins `P + 1 + D` columns for a
+block, where P is predicate columns and D is deferred projected columns. For a
+1024-d `float64` vector the vector payload is `8192 * B` bytes before
+ObjectIO/cache representation overhead; predicate and deferred payloads add
+their encoded column sizes. Concurrent scans multiply the pinned-request bound
+by their concurrent block reads, so the existing ObjectIO cache/admission policy
+remains the capacity control. Fusion trades one request's wider pin set for
+removal of the second deferred read and avoids materializing non-winners into
+caller-owned vectors.
 
 ## Alternatives and operations
 
@@ -88,9 +94,11 @@ the optional interface.
 
 ## Verification and acceptance
 
-Focused ObjectIO tests cover fused-input validation and release/error behavior;
-`pkg/vm/engine/readutil` covers merge-reader selection; `pkg/vectorindex/ivfflat`
-covers supported/unsafe range, DESC, and membership controls.  Existing
+Focused ObjectIO tests cover fused-input validation, release/error behavior, and
+an adversarial descending-distance sequence that proves the row/distance
+companion never exceeds K capacity; `pkg/vm/engine/readutil` covers merge-reader
+selection; `pkg/vectorindex/ivfflat` covers supported/unsafe range, DESC, and
+membership controls. Existing
 `test/distributed/cases/vector/vector_ivfflat_include_*` cases cover the public
 INCLUDE SQL path.  These are functional acceptance tests; they are not a
 substitute for the scale gate below.
